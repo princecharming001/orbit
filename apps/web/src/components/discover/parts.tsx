@@ -99,98 +99,54 @@ const SORTS: { id: FeedSort; label: string; hint: string; title: string }[] = [
   { id: 'odds', label: 'Reply odds', hint: 'will they answer', title: SCORE_MEANING.odds },
 ];
 
-/** Good or better on a meter: four of its five segments lit. */
-export const GOOD_OR_BETTER = 0.6;
-
 /**
- * The filters above the feed: sort by the overall score or by one meter (each says what it means), and keep only the
- * people who are Good or better on it. Replaces the one-line legend; the same words are on each chip.
+ * The sort above the feed: the overall score or one meter, each saying what it means, as a light segmented control
+ * (the chosen one a white pill on a soft track). Replaces the one-line legend; the same words are on each option.
  */
 export function FeedFilters({
   sort,
-  goodOnly,
-  shown,
   total,
   onSort,
-  onGoodOnly,
 }: {
   sort: FeedSort;
-  goodOnly: boolean;
-  shown: number;
   total: number;
   onSort: (s: FeedSort) => void;
-  onGoodOnly: (on: boolean) => void;
 }) {
   const current = SORTS.find((s) => s.id === sort)!;
   return (
     <div className="mb-3" data-testid="discover-filters">
-      <div className="flex flex-wrap items-center gap-1.5">
-        <div
-          role="radiogroup"
-          aria-label="Sort people by"
-          className="inline-flex flex-wrap items-center gap-1 rounded-full border border-line bg-canvas p-1"
-        >
-          {SORTS.map((s) => {
-            const on = s.id === sort;
-            return (
-              <button
-                key={s.id}
-                type="button"
-                role="radio"
-                aria-checked={on}
-                title={s.title}
-                onClick={() => onSort(s.id)}
-                className={cx(
-                  'h-8 px-3 rounded-full text-[13px] inline-flex items-center gap-1.5 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40',
-                  on ? 'bg-ink text-white' : 'text-ink-2 hover:bg-canvas-2 hover:text-ink',
-                )}
-                data-testid={`discover-sort-${s.id}`}
-              >
-                <span className="font-medium">{s.label}</span>
-                <span className={cx('hidden @[48rem]:inline', on ? 'text-white/70' : 'text-ink-3')}>
-                  {s.hint}
-                </span>
-              </button>
-            );
-          })}
-        </div>
-        <button
-          type="button"
-          role="switch"
-          aria-checked={goodOnly}
-          onClick={() => onGoodOnly(!goodOnly)}
-          title={`Only people who are Good or Strong on ${sort === 'best' ? 'the overall score' : current.label}`}
-          className={cx(
-            'h-10 px-3.5 rounded-full border text-[13px] inline-flex items-center gap-2 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40',
-            goodOnly
-              ? 'border-accent bg-accent-soft text-accent'
-              : 'border-line bg-canvas text-ink-2 hover:text-ink',
-          )}
-          data-testid="discover-good-only"
-        >
-          <span
-            className={cx(
-              'w-3.5 h-3.5 rounded-[4px] border inline-flex items-center justify-center',
-              goodOnly ? 'border-accent bg-accent text-white' : 'border-ink-3/50',
-            )}
-            aria-hidden
-          >
-            {goodOnly && (
-              <svg viewBox="0 0 12 12" className="w-2.5 h-2.5">
-                <path d="M2.5 6.2 5 8.5l4.5-5" fill="none" stroke="currentColor" strokeWidth="2" />
-              </svg>
-            )}
-          </span>
-          Good or better
-        </button>
+      <div
+        role="radiogroup"
+        aria-label="Sort people by"
+        className="inline-flex flex-wrap items-center gap-1 rounded-full border border-line-2 bg-canvas-2 p-1"
+      >
+        {SORTS.map((s) => {
+          const on = s.id === sort;
+          return (
+            <button
+              key={s.id}
+              type="button"
+              role="radio"
+              aria-checked={on}
+              title={s.title}
+              onClick={() => onSort(s.id)}
+              className={cx(
+                'h-8 px-3 rounded-full text-[13px] inline-flex items-center gap-1.5 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40',
+                on ? 'bg-canvas text-ink shadow-[var(--shadow-pill)]' : 'text-ink-2 hover:text-ink',
+              )}
+              data-testid={`discover-sort-${s.id}`}
+            >
+              <span className="font-medium">{s.label}</span>
+              <span className="hidden @[48rem]:inline text-ink-3">{s.hint}</span>
+            </button>
+          );
+        })}
       </div>
       <p className="mt-2 text-[12px] text-ink-3" data-testid="discover-legend" aria-live="polite">
         {sort === 'best'
           ? 'Best first, by Match, Reach and Reply odds together'
           : `Sorted by ${current.title}`}
-        {goodOnly
-          ? ` · ${shown} of ${total} are Good or better`
-          : ` · ${total} ${total === 1 ? 'person' : 'people'}`}
+        {` · ${total} ${total === 1 ? 'person' : 'people'}`}
       </p>
     </div>
   );

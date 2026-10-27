@@ -2490,7 +2490,7 @@ test.describe('Discover: a feed of new people', () => {
       await expect(meter).toHaveAttribute('aria-valuetext', new RegExp(`^${value} out of 100`));
     }
     await expect(page.getByTestId('discover-legend')).toContainText('Reply odds');
-    // the filters: sort by one meter (highest first), keep only Good or better on it, and back to everyone
+    // the sort: by one meter (highest first), and back to best first
     const feed = page.getByTestId('discover-feed');
     const reachOf = async () =>
       (await feed
@@ -2501,12 +2501,8 @@ test.describe('Discover: a feed of new people', () => {
     await expect(page.getByTestId('discover-sort-reach')).toHaveAttribute('aria-checked', 'true');
     const sortedReach = await reachOf();
     expect(sortedReach).toEqual([...sortedReach].sort((x, y) => y - x));
-    await page.getByTestId('discover-good-only').click();
-    await expect(page.getByTestId('discover-legend')).toContainText('Good or better');
-    for (const v of await reachOf()) expect(v).toBeGreaterThan(60);
     await page.getByTestId('discover-sort-best').click();
-    await page.getByTestId('discover-good-only').click();
-    await expect(page).not.toHaveURL(/by=|good=/);
+    await expect(page).not.toHaveURL(/by=/);
     // nobody is suggested with nothing behind them, and no pick is justified by a count of mutual connections
     await expect(page.getByTestId('discover-feed')).not.toContainText(
       /That's all Orbit knows|Not much known/,

@@ -13,7 +13,7 @@ import {
   type NetworkHandlers,
   SuggestedRow,
 } from '../components/discover/cards';
-import { CardSkeleton, FeedFilters, type FeedSort, GOOD_OR_BETTER } from '../components/discover/parts';
+import { CardSkeleton, FeedFilters, type FeedSort } from '../components/discover/parts';
 import { LinkedInImportButton } from '../components/LinkedInImport';
 import { StrengthDots } from '../components/people/shared';
 import { TargetPlanCard } from '../components/TargetPlanCard';
@@ -348,18 +348,13 @@ function DiscoverFeed({ tabs }: { tabs?: ReactNode }) {
         : 'Nobody in your network matches your goals yet. Add people at your target companies or connect LinkedIn.';
   const shownHere = (c: DiscoverCard) => c.kind !== 'found' || !goneHere.has(c.entry.memberId);
   const allFeed: DiscoverCard[] = (view?.feed ?? []).filter(shownHere);
-  // the filter bar: sort by the overall score or one meter, and keep only Good or better on it (kept in the address)
+  // the sort: the overall score or one meter (kept in the address)
   const sortParam = params.get('by');
   const sortBy: FeedSort =
     sortParam === 'match' || sortParam === 'reach' || sortParam === 'odds' ? sortParam : 'best';
-  const goodOnly = params.get('good') === '1';
   const metricOf = (c: DiscoverCard) => (sortBy === 'best' ? c.metrics.score : c.metrics[sortBy]);
-  const sorted = sortBy === 'best' ? allFeed : [...allFeed].sort((a, b) => metricOf(b) - metricOf(a));
-  // compared as the card shows it (a whole percent), so a card reading 60 never passes "better than 60"
-  const feed = goodOnly
-    ? sorted.filter((c) => Math.round(metricOf(c) * 100) > Math.round(GOOD_OR_BETTER * 100))
-    : sorted;
-  const setFilter = (key: 'by' | 'good', value: string | undefined) => {
+  const feed = sortBy === 'best' ? allFeed : [...allFeed].sort((a, b) => metricOf(b) - metricOf(a));
+  const setFilter = (key: 'by', value: string | undefined) => {
     const next = new URLSearchParams(params);
     if (value) next.set(key, value);
     else next.delete(key);
@@ -476,24 +471,9 @@ function DiscoverFeed({ tabs }: { tabs?: ReactNode }) {
           </h2>
           <FeedFilters
             sort={sortBy}
-            goodOnly={goodOnly}
-            shown={feed.length}
             total={allFeed.length}
             onSort={(s) => setFilter('by', s === 'best' ? undefined : s)}
-            onGoodOnly={(on) => setFilter('good', on ? '1' : undefined)}
           />
-          {goodOnly && !feed.length && allFeed.length > 0 && (
-            <p className="mb-3 text-[13px] text-ink-2" data-testid="discover-filter-empty">
-              Nobody here is Good or better on that yet.{' '}
-              <button
-                type="button"
-                className="underline underline-offset-4 hover:text-ink"
-                onClick={() => setFilter('good', undefined)}
-              >
-                Show everyone
-              </button>
-            </p>
-          )}
           <div
             role="feed"
             aria-busy={loading}
