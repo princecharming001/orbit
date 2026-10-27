@@ -791,13 +791,17 @@ function HowItWorks({ google }: { google: boolean }) {
           <ol className="relative space-y-1.5 text-[12px]">
             <span className="absolute left-[5px] top-2 bottom-2 w-px bg-line" aria-hidden />
             {[
-              { when: 'Tue 1:55', what: 'Prep deck ready', tone: 'bg-accent' },
-              { when: 'Tue 2:00', what: 'Chat with Omar', tone: 'bg-ink' },
-              { when: 'Wed', what: 'Thank-you drafted', tone: 'bg-good' },
-              { when: 'Later', what: 'Check-in if quiet', tone: 'bg-warn' },
+              { when: 'Tue 1:55', what: 'Prep deck ready', tone: 'var(--color-accent)' },
+              { when: 'Tue 2:00', what: 'Chat with Elon', tone: 'var(--color-ink)' },
+              { when: 'Wed', what: 'Thank-you drafted', tone: 'var(--color-good)' },
+              { when: 'Later', what: 'Check-in if quiet', tone: 'var(--color-warn)' },
             ].map((e) => (
               <li key={e.what} className="relative flex items-center gap-2.5">
-                <span className={cx('w-[11px] h-[11px] rounded-full ring-2 ring-canvas shrink-0', e.tone)} />
+                <span
+                  className="glass-dot w-[12px] h-[12px] shrink-0"
+                  style={{ ['--dot' as string]: e.tone }}
+                  aria-hidden
+                />
                 <span className="w-[62px] shrink-0 text-ink-3 tabular">{e.when}</span>
                 <span className="text-ink truncate">{e.what}</span>
               </li>
