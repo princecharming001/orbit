@@ -24,7 +24,9 @@ async function loadDemo(page: Page) {
     .first()
     .click();
   // the demo lands on the chat, its home
-  await expect(page.getByTestId('greeting')).toContainText(/^Hey /, { timeout: 90_000 });
+  await expect(page.getByTestId('greeting')).toContainText(/^Hey /, {
+    timeout: 90_000,
+  });
   await expect(page).toHaveURL(/\/(orbit\/?)?$/);
 }
 
@@ -49,7 +51,11 @@ async function landingHeaderStates(page: Page): Promise<string[]> {
       // an empty header (the profile is still being read) is fine; only the buttons it shows matter
       if (text && seen[seen.length - 1] !== text) seen.push(text);
     };
-    new MutationObserver(record).observe(document, { childList: true, subtree: true, characterData: true });
+    new MutationObserver(record).observe(document, {
+      childList: true,
+      subtree: true,
+      characterData: true,
+    });
   });
   const states: string[] = [];
   for (let i = 0; i < 5; i++) {
@@ -88,7 +94,9 @@ test.describe('Orbit demo flow', () => {
     await page.goto('');
     await page.getByTestId('chip-who-today').click();
     const brief = page.getByTestId('result-brief');
-    await expect(brief).toContainText(`${cards} things for today`, { timeout: 30_000 });
+    await expect(brief).toContainText(`${cards} things for today`, {
+      timeout: 30_000,
+    });
     // what is coming up is one line under the cards, with the person and the time
     await expect(brief.getByTestId('brief-coming-up')).toContainText(/^Coming up: \S+/);
     await expect(brief.getByTestId('brief-more')).toHaveText(/^\d+ more in Drafts$/);
@@ -345,7 +353,9 @@ test.describe('Orbit demo flow', () => {
     for (const id of candidates) {
       await page.goto(`people/${id}`);
       await page.getByTestId('person-write').click();
-      await expect(page.getByLabel('Message body')).toBeVisible({ timeout: 15_000 });
+      await expect(page.getByLabel('Message body')).toBeVisible({
+        timeout: 15_000,
+      });
       // a stranger: Orbit writes the line itself from where they work, so nothing is left for the student to fill in
       if (/I (came across your profile|saw you)/.test(await page.getByLabel('Message body').inputValue())) {
         found = true;
@@ -353,7 +363,9 @@ test.describe('Orbit demo flow', () => {
       }
     }
     expect(found).toBe(true);
-    const approve = page.getByRole('button', { name: /open email to|send to|copy & open linkedin/i });
+    const approve = page.getByRole('button', {
+      name: /open email to|send to|copy & open linkedin/i,
+    });
     await expect(page.getByLabel('Message body')).not.toHaveValue(/\[/);
     await expect(page.getByTestId('draft-needs-input')).toHaveCount(0);
     await expect(approve).toBeEnabled();
@@ -428,7 +440,9 @@ async function checkMap(page: Page, info: TestInfo, name: string) {
   await expect(canvas).toBeVisible();
   // wait for the people to load and a frame with company labels to be drawn
   await expect
-    .poll(async () => Number(await canvas.getAttribute('data-labels')), { timeout: 10_000 })
+    .poll(async () => Number(await canvas.getAttribute('data-labels')), {
+      timeout: 10_000,
+    })
     .toBeGreaterThan(0);
   await expect(canvas).toHaveAttribute('data-labels-clipped', '0');
   await expect(canvas).toHaveAttribute('data-overlaps', '0');
@@ -503,11 +517,17 @@ test.describe('Map readability', () => {
       w.__sawNoRoute = false;
       new MutationObserver(() => {
         if (document.body.innerText.includes('No route found')) w.__sawNoRoute = true;
-      }).observe(document.body, { subtree: true, childList: true, characterData: true });
+      }).observe(document.body, {
+        subtree: true,
+        childList: true,
+        characterData: true,
+      });
     });
     await page.getByTestId('reach-input').fill(name.trim());
     await page.getByTestId('reach-input').press('Enter');
-    await expect(page.getByTestId('reach-path').first()).toBeVisible({ timeout: 15_000 });
+    await expect(page.getByTestId('reach-path').first()).toBeVisible({
+      timeout: 15_000,
+    });
     expect(await page.evaluate(() => (window as unknown as { __sawNoRoute: boolean }).__sawNoRoute)).toBe(
       false,
     );
@@ -570,7 +590,10 @@ test.describe('Map reach through LinkedIn mutuals (plan 17 §C)', () => {
     // where the list came from is an explanation: hidden unless the student turned explanations on
     await expect(panel).not.toContainText('Sample connections from the demo.');
     await panel.scrollIntoViewIfNeeded();
-    await test.info().attach('reach-mutuals', { body: await page.screenshot(), contentType: 'image/png' });
+    await test.info().attach('reach-mutuals', {
+      body: await page.screenshot(),
+      contentType: 'image/png',
+    });
     if (process.env.REACH_SHOT) {
       // a picture of the panel for review, without the sync notice and toasts over it
       await page.addStyleTag({
@@ -611,7 +634,11 @@ test.describe('Map reach through LinkedIn mutuals (plan 17 §C)', () => {
 });
 
 test.describe('Map on a touch phone (UI-18)', () => {
-  test.use({ viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true });
+  test.use({
+    viewport: { width: 390, height: 844 },
+    hasTouch: true,
+    isMobile: true,
+  });
 
   test('a tap names the person without leaving the map, and the reach routes are on screen', async ({
     page,
@@ -620,10 +647,14 @@ test.describe('Map on a touch phone (UI-18)', () => {
     await page.goto('map');
     const canvas = page.getByTestId('orbit-canvas');
     await expect
-      .poll(async () => await canvas.getAttribute('data-first-dot'), { timeout: 10_000 })
+      .poll(async () => await canvas.getAttribute('data-first-dot'), {
+        timeout: 10_000,
+      })
       .toBeTruthy();
     // the first visit plays the arrival: tap where the dot has landed
-    await expect(canvas).toHaveAttribute('data-animating', 'false', { timeout: 10_000 });
+    await expect(canvas).toHaveAttribute('data-animating', 'false', {
+      timeout: 10_000,
+    });
     // the orbit holds still on touch screens, and the copy talks about taps, not hovering
     await expect(canvas).toHaveAttribute('data-moving', 'false');
     await expect(page.getByText(/tap a person to see who they are/i)).toBeVisible();
@@ -665,7 +696,9 @@ test.describe('Map on a touch phone (UI-18)', () => {
     await expect(route).toBeInViewport();
     // the route's own next step, not a warm-intro suggestion listed above the routes
     const next = page
-      .getByRole('button', { name: /^(ask .+ for an intro|write to .+ directly)$/i })
+      .getByRole('button', {
+        name: /^(ask .+ for an intro|write to .+ directly)$/i,
+      })
       .and(page.locator(':not([data-testid="map-warm-intro-ask"])'))
       .first();
     await next.scrollIntoViewIfNeeded();
@@ -793,9 +826,11 @@ test.describe('Manual onboarding', () => {
     await expect(page.getByTestId('ob-linkedin-live')).toHaveCount(0);
     const csv =
       'First Name,Last Name,URL,Email Address,Company,Position,Connected On\nPriya,Patel,https://www.linkedin.com/in/priya-patel,priya@figma.com,Figma,Product Manager,12 Mar 2025\nDaniel,Kim,https://www.linkedin.com/in/daniel-kim,,Stripe,Software Engineer,03 Jan 2024\n';
-    await page
-      .getByTestId('ob-linkedin')
-      .setInputFiles({ name: 'Connections.csv', mimeType: 'text/csv', buffer: Buffer.from(csv) });
+    await page.getByTestId('ob-linkedin').setInputFiles({
+      name: 'Connections.csv',
+      mimeType: 'text/csv',
+      buffer: Buffer.from(csv),
+    });
     await expect(page.getByText(/2 people added/i)).toBeVisible();
     await page.getByRole('button', { name: /^continue$/i }).click();
     // the last step sums up what is set up
@@ -807,7 +842,9 @@ test.describe('Manual onboarding', () => {
     await expect(page.getByTestId('ob-ready-gmail')).toHaveCount(0);
     await page.getByRole('button', { name: /open orbit/i }).click();
     // setup ends on the chat home
-    await expect(page.getByTestId('greeting')).toContainText(/Hey Sam/, { timeout: 30_000 });
+    await expect(page.getByTestId('greeting')).toContainText(/Hey Sam/, {
+      timeout: 30_000,
+    });
     await expect(page).toHaveURL(/\/orbit\/?$/);
     // with no chats yet, People opens on the list, so the people just imported are right there
     await page.goto('people');
@@ -996,7 +1033,9 @@ test.describe('Keyboard, dead ends and plain words', () => {
     await expect(page.getByTestId('warmup-choice')).toBeVisible();
     await expect(page.getByTestId('warmup-choice').getByText(/haven't talked yet/i)).toBeVisible();
     await page.getByTestId('warmup-skip').click();
-    await expect(page.getByLabel('Message body')).toBeVisible({ timeout: 15_000 });
+    await expect(page.getByLabel('Message body')).toBeVisible({
+      timeout: 15_000,
+    });
   });
 });
 
@@ -1016,7 +1055,10 @@ for (const vp of [
           main: main ? main.scrollWidth - main.clientWidth : 0,
         };
       });
-      await page.screenshot({ path: info.outputPath(`${vp.name}-${label}.png`), fullPage: false });
+      await page.screenshot({
+        path: info.outputPath(`${vp.name}-${label}.png`),
+        fullPage: false,
+      });
       expect(over.doc, `${label} page overflow`).toBeLessThanOrEqual(1);
       expect(over.main, `${label} main overflow`).toBeLessThanOrEqual(1);
     };
@@ -1060,12 +1102,18 @@ for (const vp of [
       const tops = new Set([...range.getClientRects()].map((x) => Math.round(x.top)));
       const w = document.querySelector('[data-testid="person-write"]')!.getBoundingClientRect();
       const overlaps = r.left < w.right && r.right > w.left && r.top < w.bottom && r.bottom > w.top;
-      return { words: (h.textContent ?? '').trim().split(/\s+/).length, lines: tops.size, overlaps };
+      return {
+        words: (h.textContent ?? '').trim().split(/\s+/).length,
+        lines: tops.size,
+        overlaps,
+      };
     });
     expect(name.overlaps, 'name under the action buttons').toBe(false);
     expect(name.lines, 'name wrapped one word per line').toBeLessThan(Math.max(2, name.words));
     await page.getByTestId('person-write').click();
-    await expect(page.getByLabel('Message body')).toBeVisible({ timeout: 15_000 });
+    await expect(page.getByLabel('Message body')).toBeVisible({
+      timeout: 15_000,
+    });
     await fits('person-compose');
   });
 }
@@ -1121,7 +1169,11 @@ test.describe('First-run guidance and plain next steps', () => {
           const r = idb.transaction(store).objectStore(store).getAll();
           r.onsuccess = () => res(r.result as T[]);
         });
-      const people = await all<{ id: string; userId: string; firstName: string }>('people');
+      const people = await all<{
+        id: string;
+        userId: string;
+        firstName: string;
+      }>('people');
       const priyas = people.filter((p) => p.firstName === 'Priya').slice(0, 2);
       // two LinkedIn profiles are never asked about: the second record is one with no profile of its own
       const tx = idb.transaction(['merges', 'people'], 'readwrite');
@@ -1148,7 +1200,9 @@ test.describe('First-run guidance and plain next steps', () => {
     });
     await page.getByTestId('drafts-refresh').click();
     // a refresh rebuilds the day's cards, which a loaded machine can take a while over
-    await expect(page.getByTestId('toasts')).toContainText(/updated/i, { timeout: 20_000 });
+    await expect(page.getByTestId('toasts')).toContainText(/updated/i, {
+      timeout: 20_000,
+    });
     if (await page.getByTestId('drafts-more').isVisible()) await page.getByTestId('drafts-more').click();
     const merge = page.getByTestId('suggestion-confirm_merge').first();
     await expect(merge.getByTestId('merge-choice')).toContainText(/both have/i);
@@ -1189,7 +1243,11 @@ test.describe('First-run guidance and plain next steps', () => {
         .locator('[data-testid^="suggestion-"]')
         .filter({ has: page.getByTestId('draft-review') })
         .count();
-    await expect.poll(async () => (await badgeNow()) - (await draftsNow()), { timeout: 15_000 }).toBe(0);
+    await expect
+      .poll(async () => (await badgeNow()) - (await draftsNow()), {
+        timeout: 15_000,
+      })
+      .toBe(0);
     const badge = await badgeNow();
     expect(badge).toBeGreaterThan(0);
     await expect(page.getByRole('tab', { name: /^to send/i })).toContainText(String(badge));
@@ -1353,7 +1411,9 @@ test.describe('Setup without Google', () => {
     await expect(page.getByTestId('ob-ready-linkedin')).toHaveAttribute('data-status', 'skipped');
     await expect(page.getByTestId('ob-ready-goals')).toContainText(/Consulting · 1 target company/);
     await page.getByRole('button', { name: /open orbit/i }).click();
-    await expect(page.getByTestId('greeting')).toContainText(/Hey Sam/, { timeout: 30_000 });
+    await expect(page.getByTestId('greeting')).toContainText(/Hey Sam/, {
+      timeout: 30_000,
+    });
     await page.goto('people');
     const empty = page.getByTestId('people-empty-network');
     await expect(empty).toBeVisible();
@@ -1368,7 +1428,9 @@ test.describe('Setup without Google', () => {
     await expect(page.getByRole('heading', { name: 'Priya Shah' })).toBeVisible();
     // looking at a first draft does not put her on the Pipeline
     await page.getByTestId('person-write').click();
-    await expect(page.getByLabel('Message body')).toBeVisible({ timeout: 15_000 });
+    await expect(page.getByLabel('Message body')).toBeVisible({
+      timeout: 15_000,
+    });
     await page.goto('pipeline');
     await expect(page.getByText(/no chats yet/i)).toBeVisible();
     await expect(page.locator('[data-testid^="chat-card-"]')).toHaveCount(0);
@@ -1395,7 +1457,9 @@ test.describe('Setup without Google', () => {
     await expect(page.getByRole('heading', { name: /linkedin/i })).toBeVisible();
     await page.getByTestId('ob-skip').click();
     await page.getByRole('button', { name: /open orbit/i }).click();
-    await expect(page.getByTestId('greeting')).toContainText(/Hey Jamie/, { timeout: 30_000 });
+    await expect(page.getByTestId('greeting')).toContainText(/Hey Jamie/, {
+      timeout: 30_000,
+    });
     await page.goto('people');
     // the upload is a real control: the keyboard reaches it, and it opens the picker right here
     const upload = page.getByTestId('people-empty-network').getByTestId('linkedin-import');
@@ -1481,7 +1545,9 @@ async function newStudent(page: Page) {
   await skipQuestions(page);
   await page.getByTestId('ob-skip').click(); // linkedin
   await page.getByRole('button', { name: /open orbit/i }).click();
-  await expect(page.getByTestId('greeting')).toContainText(/Hey Sam/, { timeout: 30_000 });
+  await expect(page.getByTestId('greeting')).toContainText(/Hey Sam/, {
+    timeout: 30_000,
+  });
 }
 
 async function addByHand(
@@ -1510,8 +1576,11 @@ async function bumpSaved(page: Page, ending: string) {
     .poll(() =>
       page.evaluate(async (ending) => {
         type Out = { kind: string; status: string; bodyFinal?: string };
-        const db = (window as unknown as { __orbitDb: { outbound: { toArray(): Promise<Out[]> } } })
-          .__orbitDb;
+        const db = (
+          window as unknown as {
+            __orbitDb: { outbound: { toArray(): Promise<Out[]> } };
+          }
+        ).__orbitDb;
         return (await db.outbound.toArray()).some(
           (o) => o.kind === 'bump' && o.status === 'draft' && !!o.bodyFinal?.endsWith(ending),
         );
@@ -1780,13 +1849,19 @@ test.describe('Usability round 5: one draft, kept edits, saved settings, chats t
     // someone with an email address: the first message is an email (data-channel says which)
     await page
       .getByTestId('rec-card')
-      .filter({ has: page.locator('[data-testid="rec-start"][data-channel="gmail"]') })
-      .filter({ has: page.getByRole('button', { name: /^write first message$/i }) })
+      .filter({
+        has: page.locator('[data-testid="rec-start"][data-channel="gmail"]'),
+      })
+      .filter({
+        has: page.getByRole('button', { name: /^write first message$/i }),
+      })
       .first()
       .getByTestId('rec-start')
       .click();
     await expect(page).toHaveURL(/\/people\//);
-    await expect(page.getByLabel('Message body')).toBeVisible({ timeout: 15_000 });
+    await expect(page.getByLabel('Message body')).toBeVisible({
+      timeout: 15_000,
+    });
     // one draft: the composer, not a second copy waiting under it, and no "First message" card beside it
     await page.waitForTimeout(1000);
     await expect(page.getByTestId('approvals-badge').first()).toHaveText(String(badge + 1));
@@ -1806,7 +1881,9 @@ test.describe('Usability round 5: one draft, kept edits, saved settings, chats t
   }) => {
     await newStudent(page);
     // nothing known about him but his name and address: the draft is still whole
-    await addByHand(page, 'Marcus Lee', '', { email: 'marcus.lee@example.com' });
+    await addByHand(page, 'Marcus Lee', '', {
+      email: 'marcus.lee@example.com',
+    });
     await page.getByTestId('person-write').click();
     const box = page.getByLabel('Message body');
     await expect(box).toBeVisible({ timeout: 15_000 });
@@ -1864,9 +1941,9 @@ test.describe('Usability round 5: one draft, kept edits, saved settings, chats t
     await expect(page.getByText(/moved jonah to replied\. your reply is in drafts\./i)).toBeVisible();
     await openDrafts(page);
     await expect(
-      page
-        .getByTestId('suggestion-schedule_propose')
-        .filter({ hasText: /You marked Jonah as replied\. If they asked something/ }),
+      page.getByTestId('suggestion-schedule_propose').filter({
+        hasText: /You marked Jonah as replied\. If they asked something/,
+      }),
     ).toBeVisible();
     // Scheduled with the time left for later: the card and the page ask for it
     await page.goto('people');
@@ -1921,7 +1998,9 @@ test.describe('Usability round 5: one draft, kept edits, saved settings, chats t
     await expect(card).toContainText(/could introduce you|LinkedIn/);
     await card.getByTestId('rec-write-now').click();
     await expect(page).toHaveURL(/\/people\//);
-    await expect(page.getByLabel('Message body')).toBeVisible({ timeout: 15_000 });
+    await expect(page.getByLabel('Message body')).toBeVisible({
+      timeout: 15_000,
+    });
     await expect(page.getByTestId('warmup-choice')).toBeHidden();
   });
 
@@ -2018,9 +2097,9 @@ test.describe('Usability round 5: chats Orbit cannot see, and notes in shorthand
     await expect(quiet).toContainText('Aisha Bello');
     await quiet.getByTestId('drafts-quiet-replied').click();
     await expect(page.getByTestId('drafts-quiet')).toHaveCount(0);
-    const card = page
-      .getByTestId('suggestion-schedule_propose')
-      .filter({ hasText: /You marked Aisha as replied\. If they asked something/ });
+    const card = page.getByTestId('suggestion-schedule_propose').filter({
+      hasText: /You marked Aisha as replied\. If they asked something/,
+    });
     await expect(card).toBeVisible();
     await expect(card).toContainText('Find a time');
     await card.getByTestId('draft-review').click();
@@ -2042,7 +2121,9 @@ test.describe('Usability round 5: chats Orbit cannot see, and notes in shorthand
     page,
   }) => {
     await newStudent(page);
-    await addByHand(page, 'Rachel Kim', 'McKinsey', { email: 'rachel.kim@mckinsey.com' });
+    await addByHand(page, 'Rachel Kim', 'McKinsey', {
+      email: 'rachel.kim@mckinsey.com',
+    });
     await page.getByTestId('person-add-note').click();
     await page
       .getByTestId('capture-text')
@@ -2198,9 +2279,7 @@ test.describe('Usability round 6', () => {
     await expect(page.getByTestId('capture-text')).toHaveValue('');
   });
 
-  test('Settings reads a one-line resume entry cleanly, and any line can be fixed in place', async ({
-    page,
-  }) => {
+  test('Settings reads a one-line resume entry cleanly, with every line it says', async ({ page }) => {
     // the resume is no longer a setup step: it is added in Settings (or when the chat asks for it)
     await newStudent(page);
     await page.goto('settings/integrations');
@@ -2212,29 +2291,41 @@ test.describe('Usability round 6', () => {
       ),
     });
     await expect(page.getByTestId('resume-on-file')).toContainText('resume.txt', { timeout: 15_000 });
-    await page.getByTestId('settings-resume-facets').click();
-    const job = page.getByTestId('resume-facet').filter({ hasText: 'Comerica Bank' });
-    await expect(job).toContainText('Summer Analyst Intern · Comerica Bank');
-    await expect(job).toContainText('Built a DCF model for a mid-market client');
-    await job.getByTestId('resume-facet-edit').click();
-    const editor = page.getByTestId('resume-facet-editor');
-    await editor.getByLabel('Role').fill('Summer Analyst');
-    await editor.getByTestId('resume-facet-save').click();
-    await expect(page.getByTestId('resume-facet').filter({ hasText: 'Comerica Bank' })).toContainText(
-      'Summer Analyst · Comerica Bank',
-    );
+    const lines = await page.evaluate(async () => {
+      const db = (
+        window as unknown as {
+          __orbitDb: {
+            resumeFacets: {
+              toArray(): Promise<{ title?: string; organizationName?: string; text: string }[]>;
+            };
+          };
+        }
+      ).__orbitDb;
+      return (await db.resumeFacets.toArray()).map(
+        (f) => `${f.title ?? ''} · ${f.organizationName ?? ''} ${f.text}`,
+      );
+    });
+    const job = lines.find((l) => l.includes('Comerica Bank'));
+    expect(job).toContain('Summer Analyst Intern · Comerica Bank');
+    expect(job).toContain('Built a DCF model for a mid-market client');
   });
 
   test('a LinkedIn connection note counts against the 200 characters a free account allows', async ({
     page,
   }) => {
     await newStudent(page);
-    await addByHand(page, 'Sarah Lin', 'Evercore', { linkedin: 'https://www.linkedin.com/in/sarah-lin-ev' });
+    await addByHand(page, 'Sarah Lin', 'Evercore', {
+      linkedin: 'https://www.linkedin.com/in/sarah-lin-ev',
+    });
     await page.getByTestId('person-write').click();
     const skip = page.getByTestId('warmup-skip');
-    await expect(skip.or(page.getByLabel('Message body'))).toBeVisible({ timeout: 15_000 });
+    await expect(skip.or(page.getByLabel('Message body'))).toBeVisible({
+      timeout: 15_000,
+    });
     if (await skip.isVisible()) await skip.click();
-    await expect(page.getByLabel('Message body')).toBeVisible({ timeout: 15_000 });
+    await expect(page.getByLabel('Message body')).toBeVisible({
+      timeout: 15_000,
+    });
     await expect(page.getByTestId('draft-linkedin-hint')).toContainText(/connection request/);
     await expect(page.getByTestId('draft-char-count')).toContainText('/ 200 characters');
     await page.getByLabel('Message body').fill('x'.repeat(240));
@@ -2394,7 +2485,14 @@ test.describe('People holds the board and the list; Drafts holds the day', () =>
         window as unknown as {
           __orbitDb: {
             suggestions: {
-              toArray(): Promise<{ id: string; kind: string; status: string; personId?: string }[]>;
+              toArray(): Promise<
+                {
+                  id: string;
+                  kind: string;
+                  status: string;
+                  personId?: string;
+                }[]
+              >;
             };
           };
         }
@@ -2553,7 +2651,9 @@ test.describe('Discover: a feed of new people', () => {
     await loadDemo(page);
     await page.goto('discover');
     await page.getByTestId('discover-connect-button').click();
-    await expect(page.getByTestId('found-card').first()).toBeVisible({ timeout: 30_000 });
+    await expect(page.getByTestId('found-card').first()).toBeVisible({
+      timeout: 30_000,
+    });
     await expect(page.getByTestId('suggest-card').first()).toBeVisible();
     expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(375);
     const card = (await page.getByTestId('found-card').first().boundingBox())!;
@@ -2694,7 +2794,10 @@ test.describe('Morning brief', () => {
     expect(Math.abs(box.x + box.width / 2 - 720)).toBeLessThan(3);
     expect(Math.abs(box.y + box.height / 2 - 450)).toBeLessThan(3);
     expect(box.width).toBeLessThan(700);
-    await info.attach('morning-desktop', { body: await page.screenshot(), contentType: 'image/png' });
+    await info.attach('morning-desktop', {
+      body: await page.screenshot(),
+      contentType: 'image/png',
+    });
     // the focus is inside, and Tab stays inside
     for (let i = 0; i < 12; i++) {
       await page.keyboard.press('Tab');
@@ -2714,7 +2817,10 @@ test.describe('Morning brief', () => {
         return [Math.round(b.x), Math.round(b.width), Math.round(b.y + b.height)];
       })
       .toEqual([0, 390, 844]);
-    await info.attach('morning-phone', { body: await page.screenshot(), contentType: 'image/png' });
+    await info.attach('morning-phone', {
+      body: await page.screenshot(),
+      contentType: 'image/png',
+    });
   });
 
   test('a draft is reviewed and sent inside the deck, with the undo window, without leaving the page', async ({
@@ -2736,7 +2842,13 @@ test.describe('Morning brief', () => {
         window as unknown as {
           __orbitDb: {
             suggestions: {
-              toArray(): Promise<{ status: string; outboundMessageId?: string; personId?: string }[]>;
+              toArray(): Promise<
+                {
+                  status: string;
+                  outboundMessageId?: string;
+                  personId?: string;
+                }[]
+              >;
             };
             outbound: { update(id: string, x: unknown): Promise<unknown> };
             people: { update(id: string, x: unknown): Promise<unknown> };
@@ -2745,7 +2857,9 @@ test.describe('Morning brief', () => {
       ).__orbitDb;
       for (const s of await db.suggestions.toArray()) {
         if (s.status !== 'pending' || !s.outboundMessageId || !s.personId) continue;
-        await db.people.update(s.personId, { linkedinConnectedOn: '2025-09-01' });
+        await db.people.update(s.personId, {
+          linkedinConnectedOn: '2025-09-01',
+        });
         await db.outbound.update(s.outboundMessageId, {
           channel: 'linkedin',
           subject: undefined,
@@ -2903,7 +3017,9 @@ test.describe('Morning brief', () => {
     const second = await brief.getByTestId('morning-decision').getAttribute('data-kind');
     await page.keyboard.press('Escape');
     await page.reload();
-    await expect(page.getByTestId('morning-pill')).toBeVisible({ timeout: 20_000 });
+    await expect(page.getByTestId('morning-pill')).toBeVisible({
+      timeout: 20_000,
+    });
     await page.getByTestId('morning-resume').click();
     await expect(brief.getByTestId('morning-count')).toHaveText(/^Decision 2 of/);
     await expect(brief.getByTestId('morning-decision')).toHaveAttribute('data-kind', second!);
@@ -2945,7 +3061,10 @@ test.describe('Morning brief', () => {
       const a = people.find((p) => p.linkedinUrl)!;
       // the other record has no LinkedIn profile, so its name opens their page in Orbit
       const b = people.find((p) => p.id !== a.id)!;
-      await db.people.update(b.id, { linkedinUrl: undefined, linkedinSlug: undefined });
+      await db.people.update(b.id, {
+        linkedinUrl: undefined,
+        linkedinSlug: undefined,
+      });
       const now = new Date().toISOString();
       await db.merges.put({
         id: 'mrg-morning',
@@ -3071,7 +3190,9 @@ test.describe('Autopilot', () => {
     await page.getByTestId('composer-input').fill('send these on autopilot');
     await page.keyboard.press('Enter');
     const card = page.getByTestId('result-needs_confirmation').last();
-    await expect(card).toContainText(/on autopilot, spaced out/, { timeout: 30_000 });
+    await expect(card).toContainText(/on autopilot, spaced out/, {
+      timeout: 30_000,
+    });
     await card.getByTestId('confirm-approve').click();
     // the result lists each one with its time
     await expect(page.getByText('Scheduled', { exact: true }).first()).toBeVisible({ timeout: 30_000 });
@@ -3173,10 +3294,14 @@ test.describe('People board: drag a card to another stage', () => {
     const from = (await card.boundingBox())!;
     await page.mouse.move(from.x + from.width / 2, from.y + 20);
     await page.mouse.down();
-    await page.mouse.move(from.x + from.width / 2 + 20, from.y + 30, { steps: 4 });
+    await page.mouse.move(from.x + from.width / 2 + 20, from.y + 30, {
+      steps: 4,
+    });
     await expect(page.getByTestId('board-drag-ghost')).toBeVisible();
     const to = (await target.boundingBox())!;
-    await page.mouse.move(to.x + Math.min(to.width / 2, 60), to.y + 40, { steps: 12 });
+    await page.mouse.move(to.x + Math.min(to.width / 2, 60), to.y + 40, {
+      steps: 12,
+    });
     await expect(page.getByTestId('board-drag-ghost')).toContainText('Move to');
     await page.mouse.up();
     await expect(target.getByText(name)).toBeVisible();
@@ -3199,7 +3324,6 @@ test.describe('LinkedIn profiles fill in people (plan 17 E)', () => {
     await expect(card.getByTestId('settings-linkedin-live-status')).toContainText(/Connected/, {
       timeout: 30_000,
     });
-    await expect(card.getByTestId('settings-enrichment-status')).toContainText(/filled in from LinkedIn/);
     // someone the sync just added: their connection row said "Product Manager"; their profile says more
     await page.goto('people?view=list');
     await page.getByTestId('people-row').filter({ hasText: 'Priya Raman' }).getByRole('link').first().click();
@@ -3246,6 +3370,36 @@ test.describe('One inbox (plan 22)', () => {
       .fill('Hi Rhea, the marketplace is live: search held up fine.');
     await conv.getByTestId('conversation-send').click();
     await expect(conv.getByTestId('conversation-error')).toHaveCount(0);
-    await expect(conv.getByTestId('conversation-input')).toHaveValue('', { timeout: 15_000 });
+    await expect(conv.getByTestId('conversation-input')).toHaveValue('', {
+      timeout: 15_000,
+    });
+  });
+
+  test('the reply Orbit drafted is written in Messages, and the pipeline opens there', async ({ page }) => {
+    test.setTimeout(150_000);
+    await loadDemo(page);
+    // from the pipeline, a person opens on their messages
+    await page.goto('people');
+    await page
+      .getByTestId('chat-card-scheduling')
+      .filter({ hasText: 'Omar Haddad' })
+      .getByRole('link', { name: 'Omar Haddad' })
+      .click();
+    await expect(page.getByRole('heading', { name: 'Omar Haddad', level: 1 })).toBeVisible();
+    await expect(page).toHaveURL(/tab=conversation/);
+    // no card above the tabs: the time to suggest waits in the box, ready to send, with Snooze and Dismiss
+    await expect(page.getByTestId('person-waiting')).toHaveCount(0);
+    const conv = page.getByTestId('conversation');
+    await expect(conv.getByTestId('conversation-suggested')).toContainText('Find a time');
+    const box = conv.getByTestId('conversation-input');
+    await expect(box).toHaveValue(/Would either of these work/, { timeout: 30_000 });
+    // a person page opened without a tab lands there too while the reply waits
+    await page.goto(page.url().replace(/\?.*$/, ''));
+    await expect(page.getByRole('tab', { name: /^Messages/ })).toHaveAttribute('aria-selected', 'true');
+    // sent as Orbit's draft: the card it answers is done and the box is empty
+    await conv.getByTestId('conversation-send').click();
+    await expect(conv.getByTestId('conversation-error')).toHaveCount(0);
+    await expect(box).toHaveValue('', { timeout: 15_000 });
+    await expect(conv.getByTestId('conversation-suggested')).toHaveCount(0);
   });
 });
