@@ -404,6 +404,78 @@ const answerOf = (r: CompanyRow): CompanyAnswer => ({
   logoUrl: r.logoUrl,
 });
 
+/** Where a company's LinkedIn page would be if it is at its own name ("SpaceX" -> spacex), for names of 3+ letters. */
+const pageAddress = (name: string): string | undefined => {
+  const slug = companyNameKey(name).replace(/[^a-z0-9]+/g, '');
+  return slug.length >= 3 ? slug : undefined;
+};
+
+/** A company found on LinkedIn, before its logo is kept. */
+interface FoundCompany {
+  id: string;
+  name?: string;
+  publicIdentifier?: string;
+  /** LinkedIn's own logo link (it expires) */
+  logo?: string;
+}
+
+/**
+ * The company whose LinkedIn page is at the asked name itself ("SpaceX" at /company/spacex), when that page's name is
+ * exactly the one asked for; nothing otherwise.
+ */
+async function companyAtOwnName(
+  deps: ConnectorDeps,
+  accountId: string,
+  name: string,
+  doFetch: typeof fetch,
+): Promise<FoundCompany | undefined> {
+  const key = companyNameKey(name);
+  const slug = pageAddress(name);
+  if (!slug) return undefined;
+  const page = await unipileCompany(deps, { accountId, identifier: slug }, doFetch);
+  if (!('company' in page) || !page.company?.id) return undefined;
+  if (companyNameKey(page.company.name) !== key) return undefined;
+  return {
+    id: page.company.id,
+    name: page.company.name,
+    publicIdentifier: page.company.publicIdentifier,
+    logo: page.company.logoUrl,
+  };
+}
+
+/** Copy a found company's logo into Orbit's storage and keep the company for everyone; the answer for the student. */
+async function keepCompany(
+  cache: CompanyCache | undefined,
+  key: string,
+  c: FoundCompany,
+  doFetch: typeof fetch,
+  now: Date,
+): Promise<CompanyAnswer> {
+  let kept: string | undefined;
+  if (c.logo && cache) {
+    try {
+      const res = await doFetch(c.logo);
+      const type = res.headers.get('content-type') ?? 'image/jpeg';
+      const bytes = await res.arrayBuffer();
+      if (res.ok && type.startsWith('image/') && bytes.byteLength && bytes.byteLength <= LOGO_MAX_BYTES)
+        kept = await cache.storeLogo(c.id, bytes, type);
+    } catch {
+      // the logo did not copy: the student gets LinkedIn's link for now, and the company is looked up again later
+    }
+  }
+  const row: CompanyRow = {
+    key,
+    status: 'found',
+    companyId: c.id,
+    publicIdentifier: c.publicIdentifier,
+    name: c.name,
+    logoUrl: kept,
+    checkedAt: now.toISOString(),
+  };
+  if (kept) await cache?.put(row).catch(() => undefined);
+  return { ...answerOf(row), logoUrl: kept ?? c.logo };
+}
+
 /**
  * Logos and LinkedIn ids for many companies at once (`names`, up to 60). Every company any student has found before is
  * answered from the shared cache with no LinkedIn read; up to COMPANIES_PER_CALL new ones are looked up on LinkedIn
@@ -450,9 +522,20 @@ async function companiesRoute(
       break;
     }
     looked++;
+    // a well-known company's page is usually at its own name (linkedin.com/company/spacex), while a search for it
+    // can list only its namesakes: that page first, kept only when its name is exactly the one asked for
+    if (pageAddress(name)) {
+      const atName = await companyAtOwnName(deps, accountId, name, ctx.doFetch).catch(() => undefined);
+      if (atName) {
+        companies[name] = await keepCompany(cache, key, atName, ctx.doFetch, now);
+        continue;
+      }
+      if (!(await ctx.spend('company', 'logos'))) {
+        stopped = 'limit';
+        break;
+      }
+    }
     const found = await companyByName(deps, accountId, name, ctx.doFetch);
-    if (body.debug === true && !('id' in found))
-      (companies as Record<string, unknown>)[`${name}:debug`] = found;
     if (!('id' in found)) {
       if (found.reason === 'throttled') {
         stopped = 'throttled';
@@ -464,43 +547,26 @@ async function companiesRoute(
       companies[name] = answerOf(row);
       continue;
     }
-    // the search usually names the company and may carry its logo; its page is read only when it does not
-    let logo = licdn(found.item.logo) ?? licdn(found.item.profile_picture_url);
-    let publicIdentifier = text(found.item.public_identifier, 160);
-    let display = text(found.item.name, 160);
-    if (!logo && (await ctx.spend('company', 'logos'))) {
+    // the search result names the company and carries its logo; its page is read only when it does not
+    let c: FoundCompany = {
+      id: found.id,
+      name: text(found.item.name, 160),
+      publicIdentifier: text(found.item.public_identifier, 160),
+      logo: licdn(found.item.logo),
+    };
+    if (!c.logo && (await ctx.spend('company', 'logos'))) {
       const page = await unipileCompany(deps, { accountId, identifier: found.id }, ctx.doFetch).catch(
         () => undefined,
       );
-      if (page && 'company' in page && page.company) {
-        logo = page.company.logoUrl;
-        publicIdentifier = page.company.publicIdentifier ?? publicIdentifier;
-        display = page.company.name ?? display;
-      }
+      if (page && 'company' in page && page.company)
+        c = {
+          id: found.id,
+          name: page.company.name ?? c.name,
+          publicIdentifier: page.company.publicIdentifier ?? c.publicIdentifier,
+          logo: page.company.logoUrl,
+        };
     }
-    let kept: string | undefined;
-    if (logo && cache) {
-      try {
-        const res = await ctx.doFetch(logo);
-        const type = res.headers.get('content-type') ?? 'image/jpeg';
-        const bytes = await res.arrayBuffer();
-        if (res.ok && type.startsWith('image/') && bytes.byteLength && bytes.byteLength <= LOGO_MAX_BYTES)
-          kept = await cache.storeLogo(found.id, bytes, type);
-      } catch {
-        // the logo did not copy: the company is still kept, and its LinkedIn link is answered for now
-      }
-    }
-    const row: CompanyRow = {
-      key,
-      status: 'found',
-      companyId: found.id,
-      publicIdentifier,
-      name: display,
-      logoUrl: kept,
-      checkedAt: now.toISOString(),
-    };
-    if (kept) await cache?.put(row).catch(() => undefined);
-    companies[name] = { ...answerOf(row), logoUrl: kept ?? logo };
+    companies[name] = await keepCompany(cache, key, c, ctx.doFetch, now);
   }
   return {
     ok: true,
@@ -2629,10 +2695,7 @@ async function companyByName(
   accountId: string,
   name: string,
   doFetch: typeof fetch,
-): Promise<
-  | { id: string; item: Record<string, unknown> }
-  | { ok: false; reason: string; message: string; fields?: unknown }
-> {
+): Promise<{ id: string; item: Record<string, unknown> } | { ok: false; reason: string; message: string }> {
   const q = new URLSearchParams({ account_id: accountId, limit: '10' });
   const res = await doFetch(`${deps.unipileBase}/api/v1/linkedin/search?${q}`, {
     method: 'POST',
@@ -2670,10 +2733,6 @@ async function companyByName(
         ok: false,
         reason: 'ambiguous',
         message: 'LinkedIn has more than one company of that name.',
-        // TEMP: which fields a company search result carries (for choosing between namesakes)
-        fields: same
-          .slice(0, 3)
-          .map((c) => ({ keys: Object.keys(c), followers: followers(c), name: c.name })),
       }
     : { ok: false, reason: 'not_found', message: 'LinkedIn could not find that company.' };
 }

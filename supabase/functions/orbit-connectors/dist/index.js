@@ -820,6 +820,48 @@ var answerOf = (r) => ({
   name: r.name,
   logoUrl: r.logoUrl
 });
+var pageAddress = (name) => {
+  const slug = companyNameKey(name).replace(/[^a-z0-9]+/g, "");
+  return slug.length >= 3 ? slug : void 0;
+};
+async function companyAtOwnName(deps, accountId, name, doFetch) {
+  const key = companyNameKey(name);
+  const slug = pageAddress(name);
+  if (!slug) return void 0;
+  const page = await unipileCompany(deps, { accountId, identifier: slug }, doFetch);
+  if (!("company" in page) || !page.company?.id) return void 0;
+  if (companyNameKey(page.company.name) !== key) return void 0;
+  return {
+    id: page.company.id,
+    name: page.company.name,
+    publicIdentifier: page.company.publicIdentifier,
+    logo: page.company.logoUrl
+  };
+}
+async function keepCompany(cache, key, c, doFetch, now) {
+  let kept;
+  if (c.logo && cache) {
+    try {
+      const res = await doFetch(c.logo);
+      const type = res.headers.get("content-type") ?? "image/jpeg";
+      const bytes = await res.arrayBuffer();
+      if (res.ok && type.startsWith("image/") && bytes.byteLength && bytes.byteLength <= LOGO_MAX_BYTES)
+        kept = await cache.storeLogo(c.id, bytes, type);
+    } catch {
+    }
+  }
+  const row = {
+    key,
+    status: "found",
+    companyId: c.id,
+    publicIdentifier: c.publicIdentifier,
+    name: c.name,
+    logoUrl: kept,
+    checkedAt: now.toISOString()
+  };
+  if (kept) await cache?.put(row).catch(() => void 0);
+  return { ...answerOf(row), logoUrl: kept ?? c.logo };
+}
 async function companiesRoute(deps, body, ctx) {
   const accountId = String(body.accountId ?? "");
   const names2 = (Array.isArray(body.names) ? body.names : []).map((n) => text(n, 160)).filter((n) => !!n).slice(0, 60);
@@ -848,55 +890,48 @@ async function companiesRoute(deps, body, ctx) {
       break;
     }
     looked++;
+    if (pageAddress(name)) {
+      const atName = await companyAtOwnName(deps, accountId, name, ctx.doFetch).catch(() => void 0);
+      if (atName) {
+        companies[name] = await keepCompany(cache, key, atName, ctx.doFetch, now);
+        continue;
+      }
+      if (!await ctx.spend("company", "logos")) {
+        stopped = "limit";
+        break;
+      }
+    }
     const found = await companyByName(deps, accountId, name, ctx.doFetch);
-    if (body.debug === true && !("id" in found))
-      companies[`${name}:debug`] = found;
     if (!("id" in found)) {
       if (found.reason === "throttled") {
         stopped = "throttled";
         break;
       }
       if (found.reason !== "ambiguous" && found.reason !== "not_found") continue;
-      const row2 = { key, status: found.reason, checkedAt: now.toISOString() };
-      await cache?.put(row2).catch(() => void 0);
-      companies[name] = answerOf(row2);
+      const row = { key, status: found.reason, checkedAt: now.toISOString() };
+      await cache?.put(row).catch(() => void 0);
+      companies[name] = answerOf(row);
       continue;
     }
-    let logo = licdn(found.item.logo) ?? licdn(found.item.profile_picture_url);
-    let publicIdentifier = text(found.item.public_identifier, 160);
-    let display = text(found.item.name, 160);
-    if (!logo && await ctx.spend("company", "logos")) {
+    let c = {
+      id: found.id,
+      name: text(found.item.name, 160),
+      publicIdentifier: text(found.item.public_identifier, 160),
+      logo: licdn(found.item.logo)
+    };
+    if (!c.logo && await ctx.spend("company", "logos")) {
       const page = await unipileCompany(deps, { accountId, identifier: found.id }, ctx.doFetch).catch(
         () => void 0
       );
-      if (page && "company" in page && page.company) {
-        logo = page.company.logoUrl;
-        publicIdentifier = page.company.publicIdentifier ?? publicIdentifier;
-        display = page.company.name ?? display;
-      }
+      if (page && "company" in page && page.company)
+        c = {
+          id: found.id,
+          name: page.company.name ?? c.name,
+          publicIdentifier: page.company.publicIdentifier ?? c.publicIdentifier,
+          logo: page.company.logoUrl
+        };
     }
-    let kept;
-    if (logo && cache) {
-      try {
-        const res = await ctx.doFetch(logo);
-        const type = res.headers.get("content-type") ?? "image/jpeg";
-        const bytes = await res.arrayBuffer();
-        if (res.ok && type.startsWith("image/") && bytes.byteLength && bytes.byteLength <= LOGO_MAX_BYTES)
-          kept = await cache.storeLogo(found.id, bytes, type);
-      } catch {
-      }
-    }
-    const row = {
-      key,
-      status: "found",
-      companyId: found.id,
-      publicIdentifier,
-      name: display,
-      logoUrl: kept,
-      checkedAt: now.toISOString()
-    };
-    if (kept) await cache?.put(row).catch(() => void 0);
-    companies[name] = { ...answerOf(row), logoUrl: kept ?? logo };
+    companies[name] = await keepCompany(cache, key, c, ctx.doFetch, now);
   }
   return {
     ok: true,
@@ -2456,9 +2491,7 @@ async function companyByName(deps, accountId, name, doFetch) {
   return same.length ? {
     ok: false,
     reason: "ambiguous",
-    message: "LinkedIn has more than one company of that name.",
-    // TEMP: which fields a company search result carries (for choosing between namesakes)
-    fields: same.slice(0, 3).map((c) => ({ keys: Object.keys(c), followers: followers(c), name: c.name }))
+    message: "LinkedIn has more than one company of that name."
   } : { ok: false, reason: "not_found", message: "LinkedIn could not find that company." };
 }
 async function unipileCompany(deps, body, doFetch) {

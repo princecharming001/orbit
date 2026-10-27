@@ -57,6 +57,8 @@ function harness(over: Partial<ConnectorDeps> = {}) {
       }
       if (url.includes('/api/v1/linkedin/company/')) {
         pages.push(url);
+        // Stripe's page is at its own name (and its id); no one else has a page at theirs
+        if (!/\/company\/(stripe|2135371)\?/.test(url)) return new Response('{}', { status: 404 });
         return new Response(
           JSON.stringify({
             id: '2135371',
@@ -90,13 +92,15 @@ describe('/companies', () => {
       publicIdentifier: 'stripe',
       logoUrl: 'https://logos.test/2135371.png',
     });
-    expect(searches).toEqual(['Stripe']);
+    // found at its own page address: no search at all
+    expect(searches).toEqual([]);
     expect(pages).toHaveLength(1);
     expect(cache.rows.get('stripe')?.logoUrl).toBe('https://logos.test/2135371.png');
     // another student, another day: no LinkedIn read at all
     const again = await (await handler(post({ accountId: 'a1', token: TOKEN, names: ['stripe'] }))).json();
     expect(again.companies.stripe.status).toBe('found');
-    expect(searches).toHaveLength(1);
+    expect(searches).toEqual([]);
+    expect(pages).toHaveLength(1);
   });
 
   it('keeps a name LinkedIn has several of, or none of, so nobody searches it again for a month', async () => {
