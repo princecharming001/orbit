@@ -2,7 +2,7 @@ import type { Goal, MemoryItem } from '@orbit/core';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { Download, LogOut, Trash2 } from 'lucide-react';
 import { useCallback, useEffect, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import { db } from '../../db/schema';
 import { deleteAccount, exportAccount, signOutHere } from '../../engine/accountMode';
 import { activeGoals, GOAL_KIND_LABELS } from '../../engine/goals';
@@ -22,7 +22,6 @@ import {
   dismissResumeProposal,
   resumeProposal,
 } from '../../engine/resume';
-import { isAccountMode, startGoogleSignIn } from '../../integrations/orbitApi';
 import { useAccount } from '../../state/account';
 import { useSession } from '../../state/session';
 import { Button, Card, cx, Input, Label, relDate, Select, Spinner, Textarea, useToast } from '../../ui';
@@ -40,22 +39,53 @@ function download(json: string, name: string) {
   }
 }
 
-function SignInCard() {
+/**
+ * An account kept in this browser (never signed in to an Orbit account): Google may well be connected here already,
+ * so nothing asks for it again. An Orbit account is a separate, server-side account, and signing in to it from here
+ * would hide everything kept in this browser, so these sections say plainly what runs where instead.
+ */
+function BrowserAccount() {
+  const { user } = useSession();
   return (
-    <Card data-testid="settings-account-signin">
-      <div className="font-medium">Orbit account</div>
-      <p className="text-[13px] text-ink-2 mt-1">
-        Sign in with Google so Orbit can read your email on its server, keep your network current while this
-        tab is closed, research people and find new ones. You approve every message before it goes anywhere.
+    <Card data-testid="settings-browser-account">
+      <div className="font-medium">Your account</div>
+      {user?.email && (
+        <p className="text-[13.5px] text-ink-2 mt-1" data-testid="settings-account-email">
+          {user.email}
+        </p>
+      )}
+      <p className="text-[12.5px] text-ink-3 mt-1">
+        Kept in this browser. Download or delete it under{' '}
+        <Link to="/settings/privacy" className="underline underline-offset-2 hover:text-ink">
+          Data &amp; privacy
+        </Link>
+        .
       </p>
-      <Button
-        variant="primary"
-        className="mt-3"
-        onClick={() => startGoogleSignIn()}
-        data-testid="settings-google-signin"
-      >
-        Continue with Google
-      </Button>
+    </Card>
+  );
+}
+
+/** The postal address commercial email carries (kept in this browser, so it works with any account). */
+function PostalAddressCard({ userId, sales, initial }: { userId: string; sales: boolean; initial?: string }) {
+  const [postal, setPostal] = useState(initial ?? '');
+  return (
+    <Card>
+      <Label htmlFor="settings-postal" hint={sales ? 'Required for sales email' : 'For sales email'}>
+        Postal address
+      </Label>
+      <p className="text-[12.5px] text-ink-3 mb-2">
+        The law asks commercial email to carry the sender's postal address. Orbit adds it to sales messages
+        and will not send a sales email without it.
+      </p>
+      <Textarea
+        id="settings-postal"
+        rows={2}
+        value={postal}
+        onChange={(e) => setPostal(e.target.value)}
+        onBlur={() => setPostalAddress(userId, postal)}
+        placeholder="123 College Ave, Ithaca, NY 14850"
+        data-testid="settings-postal"
+      />
     </Card>
   );
 }
@@ -69,7 +99,7 @@ export function AccountSection() {
   const [confirmText, setConfirmText] = useState('');
   const [busy, setBusy] = useState<string>();
   const [error, setError] = useState<string>();
-  if (!account.signedIn) return <SignInCard />;
+  if (!account.signedIn) return <BrowserAccount />;
   const doExport = async () => {
     setBusy('export');
     setError(undefined);
@@ -172,14 +202,26 @@ export function OutreachSection() {
   const settings = useLiveQuery(() => (user ? outreachSettings(user.id) : undefined), [user?.id]);
   const goals = useLiveQuery(() => (user ? activeGoals(user.id) : []), [user?.id]) ?? [];
   const [until, setUntil] = useState('');
-  const [postal, setPostal] = useState<string>();
   const [error, setError] = useState<string>();
   useEffect(() => {
-    if (settings && postal === undefined) setPostal(settings.postalAddress ?? '');
     if (settings?.quietUntil) setUntil(settings.quietUntil);
-  }, [settings, postal]);
+  }, [settings]);
   if (!user || !settings) return null;
-  if (!account.signedIn) return <SignInCard />;
+  const sales = goals.some((g) => g.kind === 'sales');
+  // an account kept in this browser: the student sends every message; sending on its own runs on the server
+  if (!account.signedIn)
+    return (
+      <div className="space-y-4" data-testid="settings-outreach">
+        <Card data-testid="settings-outreach-browser">
+          <div className="font-medium">How much Orbit may do</div>
+          <p className="text-[13px] text-ink-2 mt-1">
+            You approve and send every message yourself. Sending on its own and pausing outreach run on
+            Orbit's server, which an account kept in this browser does not use.
+          </p>
+        </Card>
+        <PostalAddressCard userId={user.id} sales={sales} initial={settings.postalAddress} />
+      </div>
+    );
   const level = (settings.autonomyLevel ?? 0) as AutonomyLevel;
   const choose = async (l: AutonomyLevel, goal?: Goal) => {
     setError(undefined);
@@ -187,7 +229,6 @@ export function OutreachSection() {
     if (!r.ok) setError(r.message);
     else toast.push({ text: `${goal ? `${goal.title}: ` : ''}${AUTONOMY_TEXT[l].title}.` });
   };
-  const sales = goals.some((g) => g.kind === 'sales');
   const today = new Date().toISOString().slice(0, 10);
   return (
     <div className="space-y-4" data-testid="settings-outreach">
@@ -285,24 +326,7 @@ export function OutreachSection() {
           ) : null}
         </div>
       </Card>
-      <Card>
-        <Label htmlFor="settings-postal" hint={sales ? 'Required for sales email' : 'For sales email'}>
-          Postal address
-        </Label>
-        <p className="text-[12.5px] text-ink-3 mb-2">
-          The law asks commercial email to carry the sender's postal address. Orbit adds it to sales messages
-          and will not send a sales email without it.
-        </p>
-        <Textarea
-          id="settings-postal"
-          rows={2}
-          value={postal ?? ''}
-          onChange={(e) => setPostal(e.target.value)}
-          onBlur={() => setPostalAddress(user.id, postal ?? '')}
-          placeholder="123 College Ave, Ithaca, NY 14850"
-          data-testid="settings-postal"
-        />
-      </Card>
+      <PostalAddressCard userId={user.id} sales={sales} initial={settings.postalAddress} />
       {error ? (
         <p className="text-[13px] text-bad" role="alert">
           {error}
@@ -341,8 +365,6 @@ export function MemorySection() {
     return new Map(rows.filter((p) => !!p).map((p) => [p!.id, p!.displayName]));
   }, [items]);
   if (!user) return null;
-  // signed out of an account-mode build with nothing kept here yet: the account is where memory lives
-  if (isAccountMode() && !account.signedIn && !localItems?.length) return <SignInCard />;
   return (
     <div className="space-y-4">
       <ResumeProfileOffer userId={user.id} />
