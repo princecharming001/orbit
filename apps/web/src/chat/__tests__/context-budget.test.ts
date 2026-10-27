@@ -89,7 +89,8 @@ describe('the context of one turn, demo account', () => {
     const snap = await buildSnapshot(user.id, NOW, { lastUserText: 'who should I meet this week?' });
     note('snapshot (tokens)', (await countTokens({ text: snap.text })) - base);
     note('snapshot (chars)', snap.text.length);
-    expect(estimateTokens(snap.text)).toBeLessThanOrEqual(700);
+    // 700 plus the Resume line (at most 520 characters), so the chat knows the student's background every turn
+    expect(estimateTokens(snap.text)).toBeLessThanOrEqual(800);
 
     const ctx = () => makeCtx(user, { caller: 'llm' });
     const samples: [string, Record<string, unknown>][] = [

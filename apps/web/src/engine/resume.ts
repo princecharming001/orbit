@@ -222,32 +222,27 @@ export async function currentResumeFacets(userId: string): Promise<ResumeFacet[]
 }
 
 /**
- * The chat's "Resume" line: what the student's current resume says, every kept line, so Orbit knows their background
- * without being asked. Capped so a long resume never crowds out the rest of the snapshot.
+ * The chat's "Resume" line: the summary and each kept entry's headline (role, place, years), so Orbit knows the
+ * student's background in every turn without being asked. Short, since it rides in every turn; the full lines, with
+ * every bullet, come from get_settings.
  */
-export async function resumeContextLine(userId: string, max = 2400): Promise<string | undefined> {
+export async function resumeContextLine(userId: string, max = 520): Promise<string | undefined> {
   const facets = await currentResumeFacets(userId);
   if (!facets.length) return undefined;
-  const order: ResumeFacet['kind'][] = [
-    'summary',
-    'experience',
-    'education',
-    'project',
-    'skill_group',
-    'interest',
-  ];
-  const parts = [...facets]
+  const summary = facets
+    .find((f) => f.kind === 'summary')
+    ?.text.replace(/\s+/g, ' ')
+    .trim();
+  const order: ResumeFacet['kind'][] = ['experience', 'education', 'project', 'skill_group'];
+  const heads = facets
+    .filter((f) => order.includes(f.kind))
     .sort((a, b) => order.indexOf(a.kind) - order.indexOf(b.kind))
     .map((f) => {
-      const head = [f.title, f.organizationName].filter(Boolean).join(', ');
-      const when =
-        f.startDate || f.endDate
-          ? ` (${f.startDate?.slice(0, 7) ?? ''} to ${f.endDate?.slice(0, 7) ?? 'now'})`
-          : '';
-      const body = f.text.replace(/\s+/g, ' ').trim();
-      return f.kind === 'summary' ? body : `${f.kind}: ${head}${when}${head && body ? ': ' : ''}${body}`;
+      const head = [f.title, f.organizationName].filter(Boolean).join(', ') || f.text.slice(0, 40);
+      const year = f.endDate?.slice(0, 4) ?? (f.startDate ? 'now' : '');
+      return year ? `${head} (${year})` : head;
     });
-  let line = `Resume (the student's own, current): ${parts.join(' | ')}`;
+  let line = `Resume: ${[summary, heads.join('; ')].filter(Boolean).join(' ')} (every line: get_settings)`;
   if (line.length > max) line = `${line.slice(0, max - 1)}…`;
   return line;
 }
