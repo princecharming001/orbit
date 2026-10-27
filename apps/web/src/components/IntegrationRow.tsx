@@ -1,5 +1,5 @@
 import { companyLogoUrl } from '@orbit/core';
-import { type ReactNode, useState } from 'react';
+import { Children, type ReactNode, useState } from 'react';
 import { cx } from '../ui';
 
 /**
@@ -78,9 +78,11 @@ export function IntegrationRow({
   children?: ReactNode;
   testId?: string;
 }) {
+  // `{cond && <x/>}` children are false when nothing shows: only what renders counts, so a bare row stays centred
+  const extra = Children.toArray(children).length > 0;
   return (
     <div className="py-4 first:pt-1 last:pb-1" data-testid={testId}>
-      <div className={cx('flex gap-3', line || children ? 'items-start' : 'items-center')}>
+      <div className={cx('flex gap-3', line || extra ? 'items-start' : 'items-center')}>
         {mark}
         <div className="min-w-0 flex-1">
           <div className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
@@ -88,7 +90,7 @@ export function IntegrationRow({
             {status}
           </div>
           {line && <div className="mt-0.5 text-[12.5px] text-ink-3">{line}</div>}
-          {children && <div className="mt-2.5 text-[13px]">{children}</div>}
+          {extra && <div className="mt-2.5 text-[13px]">{children}</div>}
         </div>
         {actions && <div className="flex shrink-0 flex-wrap items-center justify-end gap-1.5">{actions}</div>}
       </div>

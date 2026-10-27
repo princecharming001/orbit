@@ -1,8 +1,9 @@
 import type { User } from '@orbit/core';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { db, wipeDatabase } from '../db/schema';
+import { retireTwoProfileMerges } from './brief';
 import { importConnectionsCsv, importLinkedInExport, importLiveConnections } from './linkedin';
-import { repairHeadlineCompanies, suggestDuplicateMerges, upsertPerson } from './people';
+import { decideMerge, repairHeadlineCompanies, suggestDuplicateMerges, upsertPerson } from './people';
 
 const user: User = {
   id: 'u1',
@@ -280,6 +281,60 @@ describe('duplicate detection after imports (NRC-20)', () => {
     expect(await suggestDuplicateMerges(user.id)).toBe(0);
     await db.merges.update(merges[0]!.id, { status: 'rejected' });
     expect(await suggestDuplicateMerges(user.id)).toBe(0);
+  });
+
+  /** Two questions about the same pair, as older versions (or two imports at once) left them. */
+  const twoQuestions = async () => {
+    await stored('dl', 'Diego Lizcano', {
+      primaryEmail: 'diego@fullstack.com',
+      emails: ['diego@fullstack.com'],
+    });
+    await stored('dl2', 'Diego Lizcano', {
+      primaryEmail: 'dlizcano@gmail.com',
+      emails: ['dlizcano@gmail.com'],
+    });
+    for (const n of [1, 2]) {
+      await db.merges.add({
+        id: `m${n}`,
+        userId: user.id,
+        personAId: 'dl',
+        personBId: 'dl2',
+        score: 0.9,
+        features: {},
+        status: 'pending',
+        createdAt: `2026-10-23T01:37:0${n}.000Z`,
+      });
+      await db.suggestions.add({
+        id: `s${n}`,
+        userId: user.id,
+        kind: 'confirm_merge',
+        personId: 'dl',
+        status: 'pending',
+        priority: 50,
+        reasonText: 'Are Diego Lizcano and Diego Lizcano the same person?',
+        payload: { mergeId: `m${n}`, otherPersonId: 'dl2' },
+        createdAt: '2026-10-23T09:12:51.000Z',
+      } as never);
+    }
+  };
+
+  it('merging on one of two questions about the same pair closes the other', async () => {
+    await twoQuestions();
+    expect(await decideMerge(user.id, 'm1', true, { suggestionId: 's1' })).toBe('merged');
+    expect(await db.people.get('dl2')).toBeUndefined();
+    expect((await db.suggestions.get('s1'))?.status).toBe('done');
+    // the second question had nothing left to ask: closed, not left with dead buttons
+    expect((await db.suggestions.get('s2'))?.status).toBe('expired');
+    expect((await db.merges.get('m2'))?.status).toBe('stale');
+  });
+
+  it('a repeated question about the same pair is closed as the app opens, the first one stays', async () => {
+    await twoQuestions();
+    await retireTwoProfileMerges(user.id);
+    expect((await db.merges.get('m1'))?.status).toBe('pending');
+    expect((await db.merges.get('m2'))?.status).toBe('stale');
+    expect((await db.suggestions.get('s1'))?.status).toBe('pending');
+    expect((await db.suggestions.get('s2'))?.status).toBe('expired');
   });
 });
 

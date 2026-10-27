@@ -1461,7 +1461,8 @@ export async function regenerateDraft(
 /**
  * Two LinkedIn profiles are two people: a "Possible duplicate" question about them, saved before both profiles were
  * known (or by an older version), is closed and its pair is never asked about again. Runs as the app opens, so what is
- * already in the student's lists is fixed too, not only what is made from now on. Returns how many were closed.
+ * already in the student's lists is fixed too, not only what is made from now on. A second question about the same
+ * pair, or one about a record already merged away, is closed the same way. Returns how many were closed.
  */
 export async function retireTwoProfileMerges(userId: string, now = new Date()): Promise<number> {
   const open = await db.merges
@@ -1470,9 +1471,16 @@ export async function retireTwoProfileMerges(userId: string, now = new Date()): 
     .filter((m) => m.status === 'pending')
     .toArray();
   let closed = 0;
-  for (const m of open) {
+  // one question per pair: older versions (or two imports at once) could ask about the same two people twice
+  const firstFor = new Map<string, string>();
+  for (const m of [...open].sort((x, y) => x.createdAt.localeCompare(y.createdAt))) {
+    const key = [m.personAId, m.personBId].sort().join('|');
     const [a, b] = await Promise.all([db.people.get(m.personAId), db.people.get(m.personBId)]);
-    if (!a || !b || !differentLinkedInProfiles(a, b)) continue;
+    const repeat = firstFor.has(key);
+    if (!repeat) firstFor.set(key, m.id);
+    // a pair that is now one record, or a record that is gone, has nothing left to ask
+    const settled = m.personAId === m.personBId || !a || !b;
+    if (!repeat && !settled && !differentLinkedInProfiles(a, b)) continue;
     await db.merges.update(m.id, { status: 'stale' });
     closed++;
   }

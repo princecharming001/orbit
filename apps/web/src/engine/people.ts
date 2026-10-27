@@ -647,20 +647,37 @@ export async function mergePeople(userId: string, survivorId: string, mergedId: 
           .filter((x) => x.personAId !== mergedId && x.personBId !== mergedId)
           .map((x) => pairKey(x.personAId, x.personBId)),
       );
+      const staled = new Set<string>();
       for (const x of merges) {
         if (x.personAId !== mergedId && x.personBId !== mergedId) continue;
         const other = x.personAId === mergedId ? x.personBId : x.personAId;
         if (other === survivorId) {
-          if (x.status === 'pending') await db.merges.update(x.id, { status: 'stale' });
+          if (x.status === 'pending') {
+            await db.merges.update(x.id, { status: 'stale' });
+            staled.add(x.id);
+          }
           continue;
         }
         const k = pairKey(survivorId, other);
         const a = x.personAId === mergedId ? survivorId : x.personAId;
         const b = x.personBId === mergedId ? survivorId : x.personBId;
         const status = x.status === 'pending' && taken.has(k) ? 'stale' : x.status;
+        if (status === 'stale' && x.status === 'pending') staled.add(x.id);
         await db.merges.update(x.id, { personAId: a, personBId: b, status });
         taken.add(k);
       }
+      // a second question about the same two people (or about a pair now one record) has nothing left to ask
+      if (staled.size)
+        await db.suggestions
+          .where('userId')
+          .equals(userId)
+          .filter(
+            (x) =>
+              x.kind === 'confirm_merge' &&
+              (x.status === 'pending' || x.status === 'snoozed') &&
+              staled.has(x.payload.mergeId as string),
+          )
+          .modify({ status: 'expired', decidedAt: now });
       // rows that list people: threads (and the introductions in them), events, notes (and the facts they read),
       // chats' referrer, intro requests, cards' payloads
       const lists = [
@@ -697,32 +714,35 @@ export async function suggestDuplicateMerges(userId: string, now = new Date()): 
   const visible = people.filter((p) => !p.hiddenAt);
   const pairs = findDuplicatePairs(visible, { orgDomains, doNotMerge: await loadDoNotMerge(userId) });
   if (!pairs.length) return 0;
-  const known = new Set(
-    (await db.merges.where('userId').equals(userId).toArray()).map((m) =>
-      [m.personAId, m.personBId].sort().join('|'),
-    ),
-  );
-  let added = 0;
-  for (const { a, b, score, features } of pairs) {
-    if (score < SUGGEST_THRESHOLD) continue;
-    const key = [a.id, b.id].sort().join('|');
-    if (known.has(key)) continue;
-    known.add(key);
-    // the older record survives a merge, so it is shown first
-    const [first, second] = a.createdAt <= b.createdAt ? [a, b] : [b, a];
-    await db.merges.add({
-      id: newId('mrg'),
-      userId,
-      personAId: first.id,
-      personBId: second.id,
-      score,
-      features: features as unknown as Record<string, number>,
-      status: 'pending',
-      createdAt: now.toISOString(),
-    });
-    added++;
-  }
-  return added;
+  // read again and written in one step: two imports finishing together would otherwise both ask about the same pair
+  return db.transaction('rw', db.merges, async () => {
+    const known = new Set(
+      (await db.merges.where('userId').equals(userId).toArray()).map((m) =>
+        [m.personAId, m.personBId].sort().join('|'),
+      ),
+    );
+    let added = 0;
+    for (const { a, b, score, features } of pairs) {
+      if (score < SUGGEST_THRESHOLD) continue;
+      const key = [a.id, b.id].sort().join('|');
+      if (known.has(key)) continue;
+      known.add(key);
+      // the older record survives a merge, so it is shown first
+      const [first, second] = a.createdAt <= b.createdAt ? [a, b] : [b, a];
+      await db.merges.add({
+        id: newId('mrg'),
+        userId,
+        personAId: first.id,
+        personBId: second.id,
+        score,
+        features: features as unknown as Record<string, number>,
+        status: 'pending',
+        createdAt: now.toISOString(),
+      });
+      added++;
+    }
+    return added;
+  });
 }
 
 export interface ManualPersonInput {

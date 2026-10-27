@@ -565,14 +565,27 @@ const shortDay = (iso: string) =>
   new Date(iso).toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
 
 /** A button as the engine describes it: the main one filled, a page one with its arrow, LinkedIn as a new-tab link. */
+/** A small spinner in the button's own colour: the click landed and its work is running. */
+function Working() {
+  return (
+    <span
+      className="inline-block w-3.5 h-3.5 shrink-0 rounded-full border-2 border-current border-t-transparent animate-spin"
+      aria-hidden
+    />
+  );
+}
+
 function ActionButton({
   a,
   busy,
+  working,
   onClick,
   href,
 }: {
   a: MorningAction;
   busy: boolean;
+  /** this is the button that was pressed and its work is running: it shows so at once */
+  working?: boolean;
   onClick: () => void;
   href?: string;
 }) {
@@ -606,7 +619,9 @@ function ActionButton({
       data-primary={a.primary ? 'true' : undefined}
       data-effect={a.effect}
       data-testid={`morning-action-${a.id}`}
+      aria-busy={working || undefined}
     >
+      {working && <Working />}
       {a.label}
       {a.effect === 'page' && <ArrowUpRight size={14} />}
     </Button>
@@ -642,6 +657,8 @@ function Decision({
   const [error, setError] = useState<string>();
   const [composing, setComposing] = useState(false);
   const [askMerge, setAskMerge] = useState(false);
+  // the button pressed last, so it shows its work at once while the decision is saved
+  const [pressed, setPressed] = useState<MorningActionId>();
   const [openedLinkedIn, setOpenedLinkedIn] = useState(false);
   const person = useLiveQuery(
     () => (s.personId ? db.people.get(s.personId) : undefined),
@@ -650,11 +667,12 @@ function Decision({
   );
   // the second record of a possible duplicate, so both can be seen before deciding
   const otherId = s.kind === 'confirm_merge' ? (s.payload.otherPersonId as string | undefined) : undefined;
-  const other = useLiveQuery(
-    () => (otherId ? db.people.get(otherId) : undefined),
+  const otherRow = useLiveQuery(
+    async () => (otherId ? ((await db.people.get(otherId)) ?? null) : undefined),
     [otherId],
     otherId ? known[otherId] : undefined,
   );
+  const other = otherRow ?? undefined;
   const introducerId =
     s.kind === 'confirm_intro' ? (s.payload.introducerId as string | undefined) : undefined;
   const introducer = useLiveQuery(
@@ -663,8 +681,16 @@ function Decision({
     introducerId ? known[introducerId] : undefined,
   );
   // the card as it is now: a draft written in the deck is on it, not on the deck's copy
-  const live = useLiveQuery(() => db.suggestions.get(s.id), [s.id]);
+  const live = useLiveQuery(async () => (await db.suggestions.get(s.id)) ?? null, [s.id]);
   const draftId = live?.outboundMessageId ?? s.outboundMessageId;
+  // settled somewhere else while the deck was open (another card merged the same two people, a pass closed it): it
+  // says so instead of showing buttons that have nothing left to act on
+  const settled =
+    !result &&
+    (live === null ||
+      live?.status === 'expired' ||
+      live?.status === 'dismissed' ||
+      (s.kind === 'confirm_merge' && (otherRow === null || (!!otherId && otherId === s.personId))));
   const draft = useLiveQuery(() => (draftId ? db.outbound.get(draftId) : undefined), [draftId]);
   const chat = useLiveQuery(() => (s.chatId ? db.chats.get(s.chatId) : undefined), [s.chatId]);
   const stageEvent = useLiveQuery(
@@ -935,7 +961,19 @@ function Decision({
         </div>
       )}
 
-      {decided ? (
+      {settled ? (
+        <div
+          className="mt-4 flex items-center gap-2 rounded-[12px] bg-canvas-2 px-3 py-2.5 text-[13px] text-ink-2"
+          data-testid="morning-settled"
+        >
+          <Check size={15} className="shrink-0" />
+          <span className="min-w-0">
+            {s.kind === 'confirm_merge'
+              ? 'Already settled: these two are one record now. Nothing to decide here.'
+              : 'Already taken care of. Nothing to decide here.'}
+          </span>
+        </div>
+      ) : decided ? (
         <div
           className="mt-4 flex items-center gap-2 rounded-[12px] bg-accent-soft px-3 py-2.5 text-[13px] text-accent"
           data-testid="morning-resolved"
@@ -959,6 +997,7 @@ function Decision({
               disabled={busy}
               data-primary="true"
               data-testid="merge-confirm"
+              aria-busy={busy || undefined}
               onClick={() =>
                 void decide(
                   () => decideMerge(user.id, s.payload.mergeId as string, true, { suggestionId: s.id }),
@@ -967,6 +1006,7 @@ function Decision({
                 )
               }
             >
+              {busy && <Working />}
               Merge them
             </Button>
             <Button onClick={() => setAskMerge(false)}>Cancel</Button>
@@ -986,7 +1026,11 @@ function Decision({
                       ? ((s.payload.url as string | undefined) ?? warmAction?.url)
                       : undefined
                   }
-                  onClick={run[a.id]}
+                  working={busy && pressed === a.id}
+                  onClick={() => {
+                    setPressed(a.id);
+                    run[a.id]();
+                  }}
                 />
               ))}
             </div>

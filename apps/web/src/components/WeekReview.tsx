@@ -326,8 +326,15 @@ function WaitingRow({ s, draft, name }: { s: Suggestion; draft?: OutboundMessage
               setBusy(false);
             }}
             data-testid="week-review-approve"
+            aria-busy={busy || undefined}
           >
-            {sent ? 'Approved' : 'Approve'}
+            {busy && (
+              <span
+                className="inline-block w-3.5 h-3.5 shrink-0 rounded-full border-2 border-current border-t-transparent animate-spin"
+                aria-hidden
+              />
+            )}
+            {sent ? 'Approved' : busy ? 'Approving' : 'Approve'}
           </Button>
         )}
       </div>
