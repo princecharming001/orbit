@@ -37,12 +37,13 @@ const dana = identityCard({
 });
 
 describe('the identity card', () => {
-  it('takes the current employer and two before it, schools (not high school), city, slug and work domain', () => {
+  it('takes the current employer and two before it, schools (high school last), city, slug and work domain', () => {
     expect(dana.employers.map((e) => e.name)).toEqual(['Meta', 'Dropbox', 'Block']);
     expect(dana.employers[0]!.aliases).toEqual(
       expect.arrayContaining(['Meta', 'Facebook', 'Meta Platforms']),
     );
-    expect(dana.schools.map((s) => s.name)).toEqual(['Stanford University']);
+    // high school too, after college: a club or team page naming her school is how niche facts are tied to her
+    expect(dana.schools.map((s) => s.name)).toEqual(['Stanford University', 'Lincoln High School']);
     expect(dana.schools[0]!.aliases).toContain('Stanford');
     expect(dana.city).toBe('San Francisco');
     expect(dana.slug).toBe('dana-liu-4b2');

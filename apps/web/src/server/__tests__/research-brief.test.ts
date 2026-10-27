@@ -199,7 +199,8 @@ describe('the quick brief', () => {
     expect(out.strongPages).toBe(2);
     const c = out.content as unknown as Record<string, { support?: string }[]>;
     expect(c.openers!.every((o) => o.support === 'full')).toBe(true);
-    expect(llm.calls.map((x) => x.task)).toEqual(['dossier', 'support']);
+    // the brief is written on the mid model (claude.ts research_brief), then checked on the fast one
+    expect(llm.calls.map((x) => x.task)).toEqual(['brief', 'support']);
   });
 
   it('removes unsupported claims and keeps partly supported ones out of the openers', async () => {
