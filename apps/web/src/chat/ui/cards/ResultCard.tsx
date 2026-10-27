@@ -527,6 +527,7 @@ function DraftCard({ block, env, actions }: { block: ToolBlock; env: ResultEnvel
         draft={draft}
         busy={busy}
         compact
+        thread
         onApprove={async (body, subject) => {
           setBusy(true);
           try {
@@ -1572,6 +1573,7 @@ function ConfirmCard({
           <DraftEditor
             draft={draft}
             compact
+            thread
             busy={busy || !!c.blockedReason}
             approveLabel="Approve & send"
             onApprove={(body, subject) => approve({ body, subject })}

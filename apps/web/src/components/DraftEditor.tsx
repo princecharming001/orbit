@@ -46,6 +46,7 @@ import { useSession } from '../state/session';
 import { Button, cx, Input, relDate, Textarea, useToast } from '../ui';
 import { copyText, openHandoff, runApproval } from './approve';
 import { ForwardNote } from './ForwardNote';
+import { ThreadContext } from './ThreadContext';
 
 type PromptNeed = Exclude<DraftNeed, 'post' | 'resume'>;
 /** Messages that ask a favour: two of them to one person at once is too much. */
@@ -133,8 +134,11 @@ export function DraftEditor({
   focusOnOpen,
   compact,
   extraActions,
+  thread,
 }: {
   draft: OutboundMessage;
+  /** what was said before, above the message (where nothing else on screen quotes it: a person's page, the chat) */
+  thread?: boolean;
   /**
    * The chat's card: the missing line as one row, the message box capped in height, and at most one status line
    * (the most urgent; the rest one tap away). The pages keep the full editor.
@@ -595,6 +599,9 @@ export function DraftEditor({
     const note = isLinkedIn && connectionNote;
     return (
       <div className="text-[13.5px]">
+        {thread && user && (
+          <ThreadContext userId={user.id} personId={draft.personId} firstName={first} className="mb-2" />
+        )}
         {needs.length > 0 && (
           <div
             className="mb-2 rounded-[10px] border border-warn/30 bg-warn-soft/60 px-2.5 py-2"
@@ -801,6 +808,9 @@ export function DraftEditor({
   }
   return (
     <div>
+      {thread && user && (
+        <ThreadContext userId={user.id} personId={draft.personId} firstName={first} className="mb-3" />
+      )}
       {needs.length > 0 && (
         <div
           className="mb-3 rounded-lg border border-warn/40 bg-warn/5 p-3 text-[13px]"

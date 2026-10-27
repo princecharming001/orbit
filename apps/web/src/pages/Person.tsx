@@ -908,6 +908,7 @@ export function PersonPage() {
           </div>
           <DraftEditor
             draft={draft}
+            thread
             onApprove={send}
             onCancel={({ kept }) => {
               // a first message nobody wrote anything in is dropped; one with the student's words waits for them
