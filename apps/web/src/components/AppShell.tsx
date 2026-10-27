@@ -13,7 +13,6 @@ import {
   Pencil,
   Pin,
   PinOff,
-  Search,
   Settings,
   SquarePen,
   Users,
@@ -29,7 +28,7 @@ import { dailyMaintenance } from '../engine/sync';
 import { draftLists, startedDrafts } from '../engine/today';
 import { PageLoading } from '../pages/lazyPages';
 import { useSession } from '../state/session';
-import { Avatar, calendarDaysBetween, cx, modKeyLabel, Skeleton } from '../ui';
+import { Avatar, calendarDaysBetween, cx, Skeleton } from '../ui';
 import { ActivityLine } from './ActivityLine';
 import { useTrackPlace } from './BackLink';
 import { CommandPalette } from './CommandPalette';
@@ -309,12 +308,6 @@ export function AppShell() {
         <div className={cx('mt-auto pb-3 pt-2 flex flex-col gap-0.5', !expanded && 'items-center')}>
           {/* what Orbit is doing, in one quiet line above the account row (plan 23 §4.7) */}
           <ActivityLine compact={!expanded} className={expanded ? 'mb-1' : undefined} />
-          {railButton(
-            `Search (${modKeyLabel() === 'Ctrl' ? 'Ctrl' : 'Command'} K)`,
-            Search,
-            () => setPalette(true),
-            'rail-search',
-          )}
           {railLink('/settings', 'Settings', Settings)}
           {user && <AccountMenu user={user} gmail={gmail} expanded={expanded} />}
         </div>
@@ -329,17 +322,9 @@ export function AppShell() {
           >
             <Logo /> <span className="font-medium tracking-[-0.01em]">Orbit</span>
           </NavLink>
-          <button
-            onClick={() => setPalette(true)}
-            className="ml-auto w-11 h-11 rounded-md inline-flex items-center justify-center hover:bg-canvas-2"
-            aria-label="Search"
-            title="Search people and actions"
-          >
-            <Search size={18} />
-          </button>
           <NavLink
             to="/notes/new"
-            className="h-11 px-2 rounded-md hover:bg-canvas-2 inline-flex items-center gap-1"
+            className="ml-auto h-11 px-2 rounded-md hover:bg-canvas-2 inline-flex items-center gap-1"
             aria-label="Add note"
             title="Add a note about a conversation"
             data-testid="mobile-add-note"
