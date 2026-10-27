@@ -62,6 +62,14 @@ grant execute on function public.orbit_linkedin_companies_get(text[]) to service
 grant execute on function public.orbit_linkedin_companies_put(text, text, text, text, text, text) to service_role;
 
 -- the logos themselves: public to read (they are LinkedIn's public company logos), written only by the function
-insert into storage.buckets (id, name, public, file_size_limit, allowed_mime_types)
-values ('company-logos', 'company-logos', true, 307200, array['image/png', 'image/jpeg', 'image/webp', 'image/gif'])
-on conflict (id) do update set public = true;
+-- (only where Supabase Storage exists: a bare Postgres, such as the tests' PGlite, has no storage schema)
+do $$
+begin
+  if to_regclass('storage.buckets') is not null then
+    insert into storage.buckets (id, name, public, file_size_limit, allowed_mime_types)
+    values ('company-logos', 'company-logos', true, 307200,
+            array['image/png', 'image/jpeg', 'image/webp', 'image/gif'])
+    on conflict (id) do update set public = true;
+  end if;
+end;
+$$;

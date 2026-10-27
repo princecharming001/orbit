@@ -237,9 +237,11 @@ describe('hop evidence (plan 21 §4, account mode)', () => {
       // only the commented, non-repost post; the reposted and the comment-less posts are not read
       '/posts/7001/comments',
     ]);
-    expect(new URL(s.net.calls[0]!.url).searchParams.get('linkedin_sections')).toBe(
-      'recommendations_received,recommendations_given',
-    );
+    // one parameter per section (Unipile refuses a comma-joined list)
+    expect(new URL(s.net.calls[0]!.url).searchParams.getAll('linkedin_sections')).toEqual([
+      'recommendations_received',
+      'recommendations_given',
+    ]);
     expect(r.reads).toBe(9);
     expect(s.budget.spent).toHaveLength(9);
     expect(s.budget.spent.slice(0, 2)).toEqual(['acc1:profile', 'acc1:posts']);

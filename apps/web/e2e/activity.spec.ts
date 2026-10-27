@@ -42,15 +42,21 @@ test.describe('the status line', () => {
     // nothing it said had a dash in it
     const said = await page.evaluate(() => (window as unknown as { __lines: string[] }).__lines);
     for (const t of said) expect(t).not.toMatch(/[–—]/);
-    // the popover's profile count is the number Settings shows
-    const settingsLine = await card.getByTestId('settings-enrichment-status').innerText();
-    const settingsProfiles = Number(/(\d+) profiles? filled in/.exec(settingsLine)?.[1]);
+    // the popover's profile count is the number Settings shows (read together: profiles may still be landing)
     await line.click();
     const pop = page.getByTestId('activity-popover');
     await expect(pop).toBeVisible();
-    await expect(pop.getByTestId('activity-profiles-filled')).toHaveText(
-      new RegExp(`^${settingsProfiles} profiles? filled in`),
-    );
+    const count = (t: string) => Number(/(\d+) profiles? filled in/.exec(t)?.[1] ?? Number.NaN);
+    await expect
+      .poll(
+        async () => {
+          const settings = count(await card.getByTestId('settings-enrichment-status').innerText());
+          const popover = count(await pop.getByTestId('activity-profiles-filled').innerText());
+          return settings === popover ? 'same' : `${settings} vs ${popover}`;
+        },
+        { timeout: 30_000 },
+      )
+      .toBe('same');
     await expect(pop.getByTestId('activity-count-replies')).toHaveText(/\d+ times?/);
     // click away closes it
     await page.getByRole('heading', { level: 1 }).first().click();

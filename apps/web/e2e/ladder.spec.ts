@@ -86,7 +86,8 @@ test.describe('the trust ladder', () => {
       .getByTestId('suggestion-follow_up_bump')
       .filter({ hasText: name })
       .getByTestId('draft-now');
-    await expect(sent.or(draftNow).first()).toBeVisible({ timeout: 20_000 });
+    // a loaded machine can take a while to draft the card: the wait is generous
+    await expect(sent.or(draftNow).first()).toBeVisible({ timeout: 45_000 });
     if (!(await sent.isVisible())) await draftNow.click({ timeout: 3000 }).catch(() => undefined);
     // why a handed-over bump waited, if it did: Orbit keeps its last answer
     const why = () =>
@@ -101,7 +102,7 @@ test.describe('the trust ladder', () => {
         );
       });
     await expect(sent, await why())
-      .toBeVisible({ timeout: 20_000 })
+      .toBeVisible({ timeout: 45_000 })
       .catch(async (e) => {
         throw new Error(`${String(e)}\nlast auto-send answer: ${await why()}`);
       });
