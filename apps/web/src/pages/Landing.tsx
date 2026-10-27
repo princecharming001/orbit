@@ -483,9 +483,9 @@ export function Landing() {
         </div>
         <div className="max-w-[1280px] mx-auto px-5 md:px-12 pb-8 text-[13px] text-ink-3">
           © {new Date().getFullYear()} Orbit
-          {/* CC BY 2.0 asks for credit where the photo is used (public/people/LICENSE.md) */}
+          {/* their licenses ask for credit where the photos are used (public/people/LICENSE.md) */}
           <span className="block mt-1 text-[11.5px]" data-testid="photo-credit">
-            Photo of Dario Amodei by the UK Prime Minister's Office,{' '}
+            Photos: Sam Altman by TechCrunch,{' '}
             <a
               href="https://creativecommons.org/licenses/by/2.0/"
               target="_blank"
@@ -493,6 +493,15 @@ export function Landing() {
               className="underline underline-offset-2 hover:text-ink"
             >
               CC BY 2.0
+            </a>
+            ; Elon Musk by Debbie Rowe,{' '}
+            <a
+              href="https://creativecommons.org/licenses/by-sa/3.0/"
+              target="_blank"
+              rel="noreferrer noopener"
+              className="underline underline-offset-2 hover:text-ink"
+            >
+              CC BY-SA 3.0
             </a>
           </span>
         </div>
@@ -646,21 +655,41 @@ function GmailIcon() {
   );
 }
 function CalendarIcon() {
+  // Google Calendar's own icon (the 2020 mark, as published on Wikimedia Commons)
   return (
-    <svg viewBox="0 0 24 24" className="w-[18px] h-[18px]" aria-hidden>
-      <rect x="3" y="3" width="18" height="18" rx="3" fill="#fff" stroke="#DADCE0" />
-      <path fill="#4285F4" d="M3 6a3 3 0 0 1 3-3h12a3 3 0 0 1 3 3v2H3z" />
-      <text
-        x="12"
-        y="17.6"
-        textAnchor="middle"
-        fontSize="8.5"
-        fontWeight="700"
-        fill="#1A73E8"
-        fontFamily="Inter, sans-serif"
-      >
-        31
-      </text>
+    <svg viewBox="0 0 200 200" className="w-[18px] h-[18px]" aria-hidden>
+      <g transform="translate(3.75 3.75)">
+        <path
+          fill="#FFFFFF"
+          d="M148.882,43.618l-47.368-5.263l-57.895,5.263L38.355,96.25l5.263,52.632l52.632,6.579l52.632-6.579l5.263-53.947L148.882,43.618z"
+        />
+        <path
+          fill="#1A73E8"
+          d="M65.211,125.276c-3.934-2.658-6.658-6.539-8.145-11.671l9.132-3.763c0.829,3.158,2.276,5.605,4.342,7.342c2.053,1.737,4.553,2.592,7.474,2.592c2.987,0,5.553-0.908,7.697-2.724s3.224-4.132,3.224-6.934c0-2.868-1.132-5.211-3.395-7.026s-5.105-2.724-8.5-2.724h-5.276v-9.039H76.5c2.921,0,5.382-0.789,7.382-2.368c2-1.579,3-3.737,3-6.487c0-2.447-0.895-4.395-2.684-5.855s-4.053-2.197-6.803-2.197c-2.684,0-4.816,0.711-6.395,2.145s-2.724,3.197-3.447,5.276l-9.039-3.763c1.197-3.395,3.395-6.395,6.618-8.987c3.224-2.592,7.342-3.895,12.342-3.895c3.697,0,7.026,0.711,9.974,2.145c2.947,1.434,5.263,3.421,6.934,5.947c1.671,2.539,2.5,5.382,2.5,8.539c0,3.224-0.776,5.947-2.329,8.184c-1.553,2.237-3.461,3.947-5.724,5.145v0.539c2.987,1.25,5.421,3.158,7.342,5.724c1.908,2.566,2.868,5.632,2.868,9.211s-0.908,6.776-2.724,9.579c-1.816,2.803-4.329,5.013-7.513,6.618c-3.197,1.605-6.789,2.421-10.776,2.421C73.408,129.263,69.145,127.934,65.211,125.276z"
+        />
+        <path
+          fill="#1A73E8"
+          d="M121.25,79.961l-9.974,7.25l-5.013-7.605l17.987-12.974h6.895v61.197h-9.895L121.25,79.961z"
+        />
+        <path
+          fill="#EA4335"
+          d="M148.882,196.25l47.368-47.368l-23.684-10.526l-23.684,10.526l-10.526,23.684L148.882,196.25z"
+        />
+        <path fill="#34A853" d="M33.092,172.566l10.526,23.684h105.263v-47.368H43.618L33.092,172.566z" />
+        <path
+          fill="#4285F4"
+          d="M12.039-3.75C3.316-3.75-3.75,3.316-3.75,12.039v136.842l23.684,10.526l23.684-10.526V43.618h105.263l10.526-23.684L148.882-3.75H12.039z"
+        />
+        <path
+          fill="#188038"
+          d="M-3.75,148.882v31.579c0,8.724,7.066,15.789,15.789,15.789h31.579v-47.368H-3.75z"
+        />
+        <path fill="#FBBC04" d="M148.882,43.618v105.263h47.368V43.618l-23.684-10.526L148.882,43.618z" />
+        <path
+          fill="#1967D2"
+          d="M196.25,43.618V12.039c0-8.724-7.066-15.789-15.789-15.789h-31.579v47.368H196.25z"
+        />
+      </g>
     </svg>
   );
 }
@@ -718,16 +747,12 @@ function HowItWorks({ google }: { google: boolean }) {
               You
             </span>
             <span className="flow-line w-9" aria-hidden />
-            <Avatar name="Maya Chen" src={demoFace('Maya')} size={32} />
+            <Avatar name="Sam Altman" src={realFace('sam-altman')} size={32} />
             <span className="flow-line w-9" style={{ ['--flow-delay' as string]: '1.4s' }} aria-hidden />
-            <Avatar
-              name="Dario Amodei"
-              src={`${import.meta.env.BASE_URL}people/dario-amodei.webp`}
-              size={32}
-            />
+            <Avatar name="Elon Musk" src={realFace('elon-musk')} size={32} />
           </div>
           <div className="mt-5 flex items-center justify-center gap-2 text-[12px]">
-            <span className="text-ink-3">Via Maya</span>
+            <span className="text-ink-3">Via Sam</span>
             <Chip tone="good" className="h-[20px] text-[11px]">
               Strong · 74
             </Chip>
@@ -741,8 +766,8 @@ function HowItWorks({ google }: { google: boolean }) {
       visual: (
         <StepPanel>
           <div className="flex items-center gap-2 text-[11.5px] text-ink-3">
-            <Avatar name="Lena Novak" src={demoFace('Lena')} size={18} />
-            To Lena Novak
+            <Avatar name="Elon Musk" src={realFace('elon-musk')} size={18} />
+            To Elon Musk
           </div>
           <p className="mt-1.5 text-[12px] leading-[1.45] text-ink-2 line-clamp-2">
             Thanks for Friday, and for the tip on telling one project story.
@@ -852,6 +877,9 @@ const PROMISES = [
     text: 'Export or delete everything from Settings, any time. Anyone can ask to be left out of research.',
   },
 ] as const;
+
+/** A real public figure's photo (public/people, each credited in the footer under its own license). */
+const realFace = (slug: string) => `${import.meta.env.BASE_URL}people/${slug}.webp`;
 
 /** The demo's made-up people, as a row of faces beside the last call to action. */
 function DemoFaces() {

@@ -1,6 +1,7 @@
-import { ArrowRight, Building2, ChevronRight, Search, Sparkles } from 'lucide-react';
+import { ArrowRight, ChevronRight, Search, Sparkles } from 'lucide-react';
 import { type ReactNode, useEffect, useMemo, useRef, useState } from 'react';
 import { Avatar, cx } from '../../ui';
+import { CompanyLogo } from '../CompanyLogo';
 import { type CardPlace, OrbitMap } from '../OrbitMap';
 import type { FocusSpec } from '../orbitScene';
 import {
@@ -270,9 +271,7 @@ export default function NetworkDemo() {
                       data-testid="landing-map-suggestion"
                     >
                       {s.kind === 'company' ? (
-                        <span className="w-7 h-7 rounded-[8px] border border-line bg-canvas-2 inline-flex items-center justify-center text-ink-2">
-                          <Building2 size={14} />
-                        </span>
+                        <CompanyLogo name={s.name} size={28} decorative className="rounded-[8px]" />
                       ) : (
                         <Avatar
                           name={s.person.displayName}
@@ -481,9 +480,7 @@ function CompanyPanel({ r, onPick }: { r: CompanyResult; onPick: (id: string) =>
   return (
     <div>
       <div className="flex items-center gap-2.5 fade-up">
-        <span className="w-9 h-9 rounded-[10px] border border-line bg-canvas-2 inline-flex items-center justify-center">
-          <Building2 size={16} className="text-ink-2" />
-        </span>
+        <CompanyLogo name={r.name} size={36} decorative className="rounded-[10px]" />
         <div>
           <div className="text-[16px] text-ink">{r.name}</div>
           <div className="text-[12.5px] text-ink-3">
