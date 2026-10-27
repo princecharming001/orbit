@@ -17,6 +17,7 @@ import { SUGGESTION_KIND_LABELS } from '../engine/today';
 import { useSession } from '../state/session';
 import { Button, cx, Skeleton, Textarea, useToast } from '../ui';
 import { runApproval } from './approve';
+import { OutboxStatus } from './DraftEditor';
 import { RepliesChecked } from './RepliesChecked';
 
 type Filter = 'all' | ConversationItem['channel'];
@@ -231,6 +232,12 @@ export function Conversation({ person }: { person: Person }) {
         </ol>
       )}
       <div ref={end} />
+      {/* Orbit's draft went out through the mail app or LinkedIn: whether it was sent is asked here, where it was written */}
+      {suggested && ['queued', 'sending', 'handed_off'].includes(suggested.status) && (
+        <div data-testid="conversation-outbox">
+          <OutboxStatus draft={suggested} />
+        </div>
+      )}
 
       {canSend.length > 0 && channel ? (
         <form
@@ -241,7 +248,7 @@ export function Conversation({ person }: { person: Person }) {
           }}
           data-testid="conversation-reply"
         >
-          {waiting && (
+          {waiting && (!suggested || suggested.status === 'draft') && (
             <SuggestedLine
               s={waiting}
               userId={user.id}

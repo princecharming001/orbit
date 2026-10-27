@@ -1975,6 +1975,8 @@ test.describe('Usability round 5: one draft, kept edits, saved settings, chats t
     await loadDemo(page);
     await page.goto('people');
     await page.getByRole('link', { name: 'Ethan Park' }).first().click();
+    // the pipeline opens their messages; notes are added from the timeline
+    await page.getByRole('tab', { name: /^Timeline/ }).click();
     await page.getByTestId('person-add-note').click();
     await expect(page.getByTestId('capture-booked-later')).toContainText(/keeps the chat booked/i);
     await page.getByTestId('capture-text').fill('Questions for Ethan: how new grads pick a team.');
@@ -3404,6 +3406,8 @@ test.describe('One inbox (plan 22)', () => {
     await conv.getByTestId('conversation-send').click();
     await expect(conv.getByTestId('conversation-error')).toHaveCount(0);
     await expect(box).toHaveValue('', { timeout: 15_000 });
+    // handed to the mail app in the demo: the draft's line gives way to "did it go out?", asked right here
     await expect(conv.getByTestId('conversation-suggested')).toHaveCount(0);
+    await expect(conv.getByTestId('conversation-outbox')).toBeVisible();
   });
 });
