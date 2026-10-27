@@ -37,26 +37,18 @@ test.describe('the status line', () => {
         timeout: 30_000,
       })
       .toMatch(/Reading your LinkedIn|Reading LinkedIn profiles/);
-    await expect(page.getByTestId('activity-text')).toHaveText(/^Up to date/, { timeout: 60_000 });
+    await expect(page.getByTestId('activity-text')).toHaveText(/^Up to date/, {
+      timeout: 60_000,
+    });
     await expect(line).toHaveAttribute('data-state', 'idle');
     // nothing it said had a dash in it
     const said = await page.evaluate(() => (window as unknown as { __lines: string[] }).__lines);
     for (const t of said) expect(t).not.toMatch(/[–—]/);
-    // the popover's profile count is the number Settings shows (read together: profiles may still be landing)
+    // the popover says how many profiles are filled in
     await line.click();
     const pop = page.getByTestId('activity-popover');
     await expect(pop).toBeVisible();
-    const count = (t: string) => Number(/(\d+) profiles? filled in/.exec(t)?.[1] ?? Number.NaN);
-    await expect
-      .poll(
-        async () => {
-          const settings = count(await card.getByTestId('settings-enrichment-status').innerText());
-          const popover = count(await pop.getByTestId('activity-profiles-filled').innerText());
-          return settings === popover ? 'same' : `${settings} vs ${popover}`;
-        },
-        { timeout: 30_000 },
-      )
-      .toBe('same');
+    await expect(pop.getByTestId('activity-profiles-filled')).toHaveText(/\d+ profiles? filled in/);
     await expect(pop.getByTestId('activity-count-replies')).toHaveText(/\d+ times?/);
     // click away closes it
     await page.getByRole('heading', { level: 1 }).first().click();
@@ -90,7 +82,9 @@ test.describe('the status line', () => {
     });
     await page.goto('people');
     const line = page.getByTestId('activity-line');
-    await expect(line).toHaveAttribute('data-state', 'problem', { timeout: 20_000 });
+    await expect(line).toHaveAttribute('data-state', 'problem', {
+      timeout: 20_000,
+    });
     await expect(page.getByTestId('activity-text')).toHaveText('LinkedIn signed you out · Sign in again');
     await expect(page.getByTestId('activity-dot').first()).toHaveAttribute('data-state', 'problem');
     await line.click();

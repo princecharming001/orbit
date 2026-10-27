@@ -12,14 +12,12 @@ import { useLiveQuery } from 'dexie-react-hooks';
 import { Check, Download, FileText, Trash2 } from 'lucide-react';
 import { type ReactNode, useEffect, useRef, useState } from 'react';
 import { Navigate, NavLink, useNavigate, useParams } from 'react-router-dom';
-import { chatMode } from '../chat/agent/mode';
 import { AccountSection, MemorySection, OutreachSection } from '../components/account/AccountSettings';
 import { LinkedInLiveCard, WarmIntrosCard } from '../components/ConnectorCards';
 import { AppMark, IntegrationRow, RowGroup, RowStatus } from '../components/IntegrationRow';
 import { LinkedInImportButton } from '../components/LinkedInImport';
 import { openMorningBrief } from '../components/MorningBrief';
 import { CalcomRow, FathomRow, MeetingAppRow } from '../components/NotesAppRows';
-import { ResumeFacetList } from '../components/ResumeFacets';
 import { OutreachCoach } from '../components/settings/OutreachCoach';
 import { WeeklyTargetSlider } from '../components/WeeklyTargetSlider';
 import { suggestCompanies } from '../data/companies';
@@ -461,7 +459,11 @@ function IntroNoteSection() {
   );
   const problems = text ? checkIntroNote(text, user) : [];
   const example = text
-    ? askLine(user, { firstName: 'Priya', title: 'Software Engineer', org: 'Stripe' })
+    ? askLine(user, {
+        firstName: 'Priya',
+        title: 'Software Engineer',
+        org: 'Stripe',
+      })
     : '';
   return (
     <Section>
@@ -628,7 +630,12 @@ function GoalsForm({ goals, tcs }: { goals: UserGoals; tcs: TargetCompany[] }) {
             value={f.targetRoles}
             onChange={(targetRoles) => setF({ ...f, targetRoles })}
             suggest={roles.suggest}
-            onPick={(s) => setF((cur) => ({ ...cur, targetRoles: roles.pick(cur.targetRoles, s.value) }))}
+            onPick={(s) =>
+              setF((cur) => ({
+                ...cur,
+                targetRoles: roles.pick(cur.targetRoles, s.value),
+              }))
+            }
             minChars={0}
             placeholder="e.g. Product Manager, Software Engineer"
           />
@@ -641,7 +648,10 @@ function GoalsForm({ goals, tcs }: { goals: UserGoals; tcs: TargetCompany[] }) {
             onChange={(targetIndustries) => setF({ ...f, targetIndustries })}
             suggest={industries.suggest}
             onPick={(s) =>
-              setF((cur) => ({ ...cur, targetIndustries: industries.pick(cur.targetIndustries, s.value) }))
+              setF((cur) => ({
+                ...cur,
+                targetIndustries: industries.pick(cur.targetIndustries, s.value),
+              }))
             }
             minChars={0}
             placeholder="e.g. Fintech, Consumer"
@@ -655,7 +665,10 @@ function GoalsForm({ goals, tcs }: { goals: UserGoals; tcs: TargetCompany[] }) {
             onChange={(targetLocations) => setF({ ...f, targetLocations })}
             suggest={locations.suggest}
             onPick={(s) =>
-              setF((cur) => ({ ...cur, targetLocations: locations.pick(cur.targetLocations, s.value) }))
+              setF((cur) => ({
+                ...cur,
+                targetLocations: locations.pick(cur.targetLocations, s.value),
+              }))
             }
             minChars={0}
             placeholder="e.g. New York City, Remote"
@@ -734,7 +747,10 @@ function GoalsForm({ goals, tcs }: { goals: UserGoals; tcs: TargetCompany[] }) {
                   const removed = await removeTargetCompany(t.id);
                   toast.push({
                     text: `Removed ${t.nameRaw} from your targets.`,
-                    action: { label: 'Undo', onClick: () => restoreTargetCompany(removed ?? t) },
+                    action: {
+                      label: 'Undo',
+                      onClick: () => restoreTargetCompany(removed ?? t),
+                    },
                     ttl: 7000,
                   });
                 }}
@@ -853,7 +869,8 @@ function GoogleAccountRow() {
           </RowStatus>
         ) : (
           <RowStatus tone={g ? 'good' : 'muted'} testId="google-via-account-status">
-            <Check size={12} /> Connected{g?.email ? ` as ${g.email}` : ' through your Orbit account'}
+            <Check size={12} /> Connected
+            {g?.email ? ` as ${g.email}` : ' through your Orbit account'}
             {g?.lastSyncedAt ? ` · synced ${relDate(g.lastSyncedAt)}` : ''}
           </RowStatus>
         )
@@ -898,12 +915,6 @@ function Integrations() {
         .sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0],
     [user.id],
   );
-  const facets =
-    useLiveQuery(
-      () => (resume ? db.resumeFacets.where('resumeId').equals(resume.id).toArray() : []),
-      [resume?.id],
-    ) ?? [];
-  const [showFacets, setShowFacets] = useState(false);
   const [clientId, setClientId] = useState(googleClientId() ?? '');
   const [busy, setBusy] = useState<string>();
   const token = currentGoogleToken();
@@ -919,7 +930,11 @@ function Integrations() {
         warning ? { text: warning, tone: 'bad', ttl: 10_000 } : { text: 'Google synced.', tone: 'good' },
       );
     } catch (e) {
-      toast.push({ text: String((e as Error).message ?? e), tone: 'bad', ttl: 7000 });
+      toast.push({
+        text: String((e as Error).message ?? e),
+        tone: 'bad',
+        ttl: 7000,
+      });
       if (google) await markGoogleNeedsReauth(user.id, String((e as Error).message ?? e));
     } finally {
       setBusy(undefined);
@@ -982,7 +997,9 @@ function Integrations() {
                     onChange={async (on) => {
                       if (on) return connect();
                       await disconnectGoogleAccount(user.id);
-                      toast.push({ text: 'Disconnected. Imported mail stays until you delete your data.' });
+                      toast.push({
+                        text: 'Disconnected. Imported mail stays until you delete your data.',
+                      });
                     }}
                     data-testid="settings-google-switch"
                   />
@@ -1096,27 +1113,7 @@ function Integrations() {
               </span>
             </label>
           }
-        >
-          {facets.length > 0 && (
-            <>
-              <button
-                type="button"
-                className="text-[12.5px] underline underline-offset-2 text-ink-3 hover:text-ink"
-                aria-expanded={showFacets}
-                onClick={() => setShowFacets((v) => !v)}
-                data-testid="settings-resume-facets"
-              >
-                {showFacets ? 'Hide what Orbit read' : 'Check what Orbit read'}
-              </button>
-              {showFacets && (
-                <ResumeFacetList
-                  facets={facets}
-                  readBy={resume?.parseSource === 'llm' ? 'Claude' : 'Orbit'}
-                />
-              )}
-            </>
-          )}
-        </IntegrationRow>
+        ></IntegrationRow>
         <ClaudeCard />
         <ResearchCard />
       </RowGroup>
@@ -1153,7 +1150,10 @@ function ResearchCard() {
   );
 }
 
-/** Claude is built in: the row only says so, with today's use. A key saved by an older build can be removed. */
+/**
+ * Claude is built in: the row says so with today's use, and its one switch shows Orbit's reasoning. A key saved by an
+ * older build can be dropped for the built-in one.
+ */
 function ClaudeCard() {
   const tz = useSession().user?.timezone;
   const [prefs, setPrefs] = useState(readPrefs);
@@ -1167,48 +1167,39 @@ function ClaudeCard() {
       mark={<AppMark logo="claude.ai">AI</AppMark>}
       name="Claude"
       status={
-        <RowStatus>
-          <Check size={12} /> {keySaved ? 'Key saved.' : 'Built in.'}
+        <RowStatus testId="ai-chat-row">
+          <Check size={12} /> {keySaved ? 'Key saved.' : 'Built in.'} {usage.requests} of {reqCap} requests
+          today
         </RowStatus>
       }
-    >
-      <div className="space-y-1">
-        <p className="text-[12px] text-ink-3" data-testid="ai-chat-row">
-          {chatMode() === 'llm' ? 'Drafts and chat' : 'Orbit commands only'} · {usage.requests} of {reqCap}{' '}
-          requests today
+      actions={
+        <>
           {keySaved && (
-            <>
-              {' · '}
-              <button
-                type="button"
-                className="underline underline-offset-2 hover:text-ink"
-                onClick={() => setPrefs(writePrefs({ anthropicApiKey: undefined }))}
-                data-testid="ai-remove-key"
-              >
-                Use built-in instead of your key
-              </button>
-            </>
+            <Button
+              size="sm"
+              variant="ghost"
+              onClick={() => setPrefs(writePrefs({ anthropicApiKey: undefined }))}
+              data-testid="ai-remove-key"
+            >
+              Use built-in
+            </Button>
           )}
-        </p>
-        <label className="flex items-center justify-between gap-3 pt-1 text-[12.5px] text-ink-2">
-          <span>
-            Show Orbit's reasoning
-            <span className="block text-[12px] text-ink-3">The grey notes on how Orbit got somewhere</span>
-          </span>
+          <span className="text-[12.5px] text-ink-2">Show reasoning</span>
           <Switch
             checked={!!prefs.showReasoning}
             label="Show Orbit's reasoning"
             onChange={(on) => setPrefs(writePrefs({ showReasoning: on }))}
             data-testid="ai-reasoning-switch"
           />
-        </label>
-        {prefs.lastLlmError && (
-          <p className="text-[12px] text-bad" data-testid="ai-last-error">
-            Last problem, {fmtFailureTime(prefs.lastLlmError.at, tz)}: {prefs.lastLlmError.message} Orbit used
-            its templates instead.
-          </p>
-        )}
-      </div>
+        </>
+      }
+    >
+      {prefs.lastLlmError && (
+        <p className="text-[12px] text-bad" data-testid="ai-last-error">
+          Last problem, {fmtFailureTime(prefs.lastLlmError.at, tz)}: {prefs.lastLlmError.message} Orbit used
+          its templates instead.
+        </p>
+      )}
     </IntegrationRow>
   );
 }
@@ -1343,7 +1334,11 @@ function Limits() {
                 min={0}
                 max={2}
                 value={settings.maxBumps}
-                onChange={(e) => upd({ maxBumps: Math.max(0, Math.min(2, Number(e.target.value))) })}
+                onChange={(e) =>
+                  upd({
+                    maxBumps: Math.max(0, Math.min(2, Number(e.target.value))),
+                  })
+                }
                 className="max-w-[120px]"
               />
             </div>
@@ -1457,7 +1452,9 @@ function Privacy() {
   if (!user) return null;
   const exportAll = async () => {
     const out = await exportAllData();
-    const blob = new Blob([JSON.stringify(out, null, 1)], { type: 'application/json' });
+    const blob = new Blob([JSON.stringify(out, null, 1)], {
+      type: 'application/json',
+    });
     const url = URL.createObjectURL(blob);
     try {
       const a = document.createElement('a');
@@ -1513,8 +1510,8 @@ function Privacy() {
         <h2 className="text-[15px] font-medium">Your copy</h2>
         <p className="text-[13px] text-ink-2 mt-1.5" data-testid="export-contents">
           One file with everything Orbit keeps:{' '}
-          {sources.google || sources.demo ? 'email text and headers, calendar events, ' : ''}people, notes,
-          facts, drafts and what you sent. It does not include your Anthropic key.
+          {sources.google || sources.demo ? 'email text and headers, calendar events, ' : ''}
+          people, notes, facts, drafts and what you sent. It does not include your Anthropic key.
         </p>
         <div className="mt-3 flex flex-wrap gap-2 items-center">
           <Button onClick={exportAll}>

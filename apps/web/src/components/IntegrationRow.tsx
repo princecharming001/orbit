@@ -24,7 +24,7 @@ export function AppMark({
   return (
     <span
       className={cx(
-        'relative mt-0.5 inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-[9px] text-[12px] font-semibold',
+        'relative inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-[9px] text-[12px] font-semibold',
         logo && !failed
           ? dark
             ? 'bg-ink'
@@ -80,7 +80,7 @@ export function IntegrationRow({
 }) {
   return (
     <div className="py-4 first:pt-1 last:pb-1" data-testid={testId}>
-      <div className="flex items-start gap-3">
+      <div className={cx('flex gap-3', line || children ? 'items-start' : 'items-center')}>
         {mark}
         <div className="min-w-0 flex-1">
           <div className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5">

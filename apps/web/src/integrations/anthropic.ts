@@ -64,7 +64,12 @@ function client(): LlmClient | undefined {
   const key = readPrefs().anthropicApiKey;
   if (!key) return undefined;
   if (clientFactory) return clientFactory(key);
-  return new Anthropic({ apiKey: key, dangerouslyAllowBrowser: true, maxRetries: 2, timeout: 120_000 });
+  return new Anthropic({
+    apiKey: key,
+    dangerouslyAllowBrowser: true,
+    maxRetries: 2,
+    timeout: 120_000,
+  });
 }
 
 /**
@@ -204,7 +209,10 @@ export function toLlmError(e: unknown): LlmError {
 }
 
 /** Notification copy for a failure: what happened and what Orbit does instead. */
-export function describeLlmFailure(e: LlmError): { title: string; body: string } {
+export function describeLlmFailure(e: LlmError): {
+  title: string;
+  body: string;
+} {
   const fallback = 'Orbit is using its own templates and rules until this is fixed.';
   switch (e.reason) {
     case 'auth':
@@ -228,7 +236,10 @@ export function describeLlmFailure(e: LlmError): { title: string; body: string }
         body: 'Anthropic is limiting requests on your key. Orbit is using its own templates for now and will try Claude again later.',
       };
     case 'server':
-      return { title: 'Claude had a server error', body: `${e.message} ${fallback}` };
+      return {
+        title: 'Claude had a server error',
+        body: `${e.message} ${fallback}`,
+      };
     case 'refusal':
       return {
         title: 'Claude declined a request',
@@ -255,9 +266,15 @@ export function describeLlmFailure(e: LlmError): { title: string; body: string }
         body: `${e.message} Until then the chat understands a fixed set of commands. Add your own Anthropic key in Settings, Integrations to keep chatting with Claude.`,
       };
     case 'aborted':
-      return { title: 'Stopped', body: 'You stopped this request. Nothing else was changed.' };
+      return {
+        title: 'Stopped',
+        body: 'You stopped this request. Nothing else was changed.',
+      };
     default:
-      return { title: 'Claude request failed', body: `${e.message} ${fallback}` };
+      return {
+        title: 'Claude request failed',
+        body: `${e.message} ${fallback}`,
+      };
   }
 }
 
@@ -281,7 +298,13 @@ export function fmtFailureTime(iso: string, tz: string | undefined): string {
 /** Remember a failure for Settings. A request the student stopped themselves is not a failure. */
 export function recordFailure(e: LlmError): void {
   if (e.reason === 'aborted') return;
-  writePrefs({ lastLlmError: { reason: e.reason, message: e.message, at: new Date().toISOString() } });
+  writePrefs({
+    lastLlmError: {
+      reason: e.reason,
+      message: e.message,
+      at: new Date().toISOString(),
+    },
+  });
 }
 
 // ---------- daily budget ----------
@@ -526,7 +549,11 @@ export async function llmSignal(
     ]),
     confidence: z.number(),
     proposed_times: z.array(
-      z.object({ start_iso: z.string(), end_iso: z.string().nullable(), raw: z.string() }),
+      z.object({
+        start_iso: z.string(),
+        end_iso: z.string().nullable(),
+        raw: z.string(),
+      }),
     ),
     asks_of_user: z.array(z.string()),
     offers: z.array(z.string()),
@@ -623,7 +650,11 @@ export async function llmNoteExtraction(
       }),
     ),
     action_items: z.array(
-      z.object({ owner: z.enum(['user', 'counterpart']), text: z.string(), due_hint: z.string().nullable() }),
+      z.object({
+        owner: z.enum(['user', 'counterpart']),
+        text: z.string(),
+        due_hint: z.string().nullable(),
+      }),
     ),
     offers: z.array(z.string()),
     hooks: z.array(z.string()),
@@ -697,7 +728,12 @@ export async function llmDraft(ctx: DraftContext, template: DraftOutput): Promis
   // or imports: other people's words, so it is wrapped as untrusted data.
   const aboutRecipient = {
     person: ctx.person,
-    facts: ctx.facts.map((f) => ({ id: f.id, type: f.type, text: f.text, when: f.occurredAt })),
+    facts: ctx.facts.map((f) => ({
+      id: f.id,
+      type: f.type,
+      text: f.text,
+      when: f.occurredAt,
+    })),
     connection: ctx.connection,
     thread: ctx.thread,
     target: ctx.target,
@@ -751,7 +787,11 @@ export async function llmDraft(ctx: DraftContext, template: DraftOutput): Promis
     subject: r.subject ?? undefined,
     body: withBcc,
     bodyShort: r.body_short ?? undefined,
-    claims: r.claims.map((c) => ({ text: c.text, factId: c.fact_id ?? undefined, kind: c.kind })),
+    claims: r.claims.map((c) => ({
+      text: c.text,
+      factId: c.fact_id ?? undefined,
+      kind: c.kind,
+    })),
     needsInput: [],
     opening,
     sector: template.sector,
@@ -775,7 +815,7 @@ export async function llmResumeParse(text: string, resumeId: string): Promise<Re
   });
   const r = await runParse(
     'resume',
-    'You parse a resume into facets: each experience, education entry, project, skill group, interest, plus a one-paragraph summary facet written in third person. An education facet is a school the student attended (organization_name is the school, title the degree and field, end_date the graduation month); a job, internship or club is never an education facet, even when the text puts it under an Education heading (PDF exports often run two columns together). Dates as YYYY-MM-DD (first of month) or null. Keywords are 4 to 10 lowercase domain words per facet.',
+    "You read a resume completely and turn every part of it into facets, leaving nothing out: each job, internship, research role, club or leadership position (experience), each school (education), each project, each skill group (technical skills, tools, languages spoken, certifications, and honors or awards each as their own group, titled that way), each interest, plus a one-paragraph summary facet in third person that says what the student has done, what they are strongest at and where they are headed. A facet's text keeps every bullet of that entry, with its numbers, tools, scale and outcomes as written, joined into plain sentences; never shorten an entry to a headline. An education facet is a school the student attended (organization_name is the school, title the degree and field, end_date the graduation month); a job, internship or club is never an education facet, even when the text puts it under an Education heading (PDF exports often run two columns together). Dates as YYYY-MM-DD (first of month) or null. Keywords are 4 to 10 lowercase domain words per facet.",
     (wrap) => wrap('resume', text.slice(0, 30_000)),
     schema,
     'medium',
@@ -803,7 +843,10 @@ export async function llmSummary(
   timeline: string[],
   goals: string,
 ): Promise<{ summary: string; talkingPoints: string[] } | undefined> {
-  const schema = z.object({ summary: z.string(), talking_points: z.array(z.string()) });
+  const schema = z.object({
+    summary: z.string(),
+    talking_points: z.array(z.string()),
+  });
   const r = await runParse(
     'summaries',
     'Write a 3 to 5 sentence summary of what the student knows about this person and 3 to 5 talking points for their next conversation. Use only the facts and timeline provided.',

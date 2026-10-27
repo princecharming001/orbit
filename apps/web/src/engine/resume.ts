@@ -87,7 +87,13 @@ async function readZipEntry(zip: Uint8Array, name: string): Promise<Uint8Array |
   return undefined;
 }
 
-const XML_ENTITIES: Record<string, string> = { amp: '&', lt: '<', gt: '>', quot: '"', apos: "'" };
+const XML_ENTITIES: Record<string, string> = {
+  amp: '&',
+  lt: '<',
+  gt: '>',
+  quot: '"',
+  apos: "'",
+};
 
 /** Plain text of a Word document: one line per paragraph, tabs and line breaks kept. */
 export async function docxToText(bytes: Uint8Array): Promise<string> {
@@ -148,7 +154,10 @@ export async function extractTextFromFile(file: File): Promise<string> {
       let lastY: number | undefined;
       let line = '';
       const lines: string[] = [];
-      for (const item of content.items as { str: string; transform: number[] }[]) {
+      for (const item of content.items as {
+        str: string;
+        transform: number[];
+      }[]) {
         const y = item.transform[5];
         if (lastY !== undefined && Math.abs((y ?? 0) - lastY) > 2) {
           lines.push(line.trim());
@@ -213,6 +222,37 @@ export async function currentResumeFacets(userId: string): Promise<ResumeFacet[]
 }
 
 /**
+ * The chat's "Resume" line: what the student's current resume says, every kept line, so Orbit knows their background
+ * without being asked. Capped so a long resume never crowds out the rest of the snapshot.
+ */
+export async function resumeContextLine(userId: string, max = 2400): Promise<string | undefined> {
+  const facets = await currentResumeFacets(userId);
+  if (!facets.length) return undefined;
+  const order: ResumeFacet['kind'][] = [
+    'summary',
+    'experience',
+    'education',
+    'project',
+    'skill_group',
+    'interest',
+  ];
+  const parts = [...facets]
+    .sort((a, b) => order.indexOf(a.kind) - order.indexOf(b.kind))
+    .map((f) => {
+      const head = [f.title, f.organizationName].filter(Boolean).join(', ');
+      const when =
+        f.startDate || f.endDate
+          ? ` (${f.startDate?.slice(0, 7) ?? ''} to ${f.endDate?.slice(0, 7) ?? 'now'})`
+          : '';
+      const body = f.text.replace(/\s+/g, ' ').trim();
+      return f.kind === 'summary' ? body : `${f.kind}: ${head}${when}${head && body ? ': ' : ''}${body}`;
+    });
+  let line = `Resume (the student's own, current): ${parts.join(' | ')}`;
+  if (line.length > max) line = `${line.slice(0, max - 1)}…`;
+  return line;
+}
+
+/**
  * A model's education line whose place is an employer (a two-column PDF ran a job into the Education column): it is
  * read as a job, so the employer never becomes the student's school.
  */
@@ -226,7 +266,11 @@ function employerNotSchool(f: ResumeFacet): ResumeFacet {
 export async function saveResume(
   user: User,
   file: File,
-): Promise<{ resume: Resume; facets: ResumeFacet[]; proposal?: ResumeProfile }> {
+): Promise<{
+  resume: Resume;
+  facets: ResumeFacet[];
+  proposal?: ResumeProfile;
+}> {
   const text = await extractTextFromFile(file);
   const now = new Date().toISOString();
   await db.resumes.where('userId').equals(user.id).modify({ isCurrent: false });
@@ -265,11 +309,19 @@ export async function saveResume(
   await db.resumeFacets.bulkAdd(facets);
   // the school, majors and year the resume states, offered (never set) where the profile says something else
   const proposal = resumeProfileChanges(user, profileFromResume(facets));
-  if (proposal) await db.kv.put({ key: proposalKey(user.id), value: { resumeId: resume.id, ...proposal } });
+  if (proposal)
+    await db.kv.put({
+      key: proposalKey(user.id),
+      value: { resumeId: resume.id, ...proposal },
+    });
   else await db.kv.delete(proposalKey(user.id));
   // last, so a resume shown as read has its lines and its offer in place (Settings waits for parsedAt)
   await db.resumes.update(resume.id, { parsedAt: now, parseSource: source });
-  return { resume: { ...resume, parsedAt: now, parseSource: source }, facets, proposal };
+  return {
+    resume: { ...resume, parsedAt: now, parseSource: source },
+    facets,
+    proposal,
+  };
 }
 
 // ---- the profile, from the resume ----------------------------------------------------------------------------------
@@ -313,7 +365,11 @@ export async function acceptResumeProposal(
 /** The student said no: the offer stays closed until another resume is uploaded. */
 export async function dismissResumeProposal(userId: string): Promise<void> {
   const row = (await db.kv.get(proposalKey(userId)))?.value as Record<string, unknown> | undefined;
-  if (row) await db.kv.put({ key: proposalKey(userId), value: { ...row, dismissed: true } });
+  if (row)
+    await db.kv.put({
+      key: proposalKey(userId),
+      value: { ...row, dismissed: true },
+    });
 }
 
 /** "school University of Michigan, majors Computer Science, class of 2027", for the chat and the offer card. */
@@ -337,7 +393,12 @@ export async function resumeProposalLine(userId: string): Promise<string | undef
 
 /** Tick or untick a line Orbit read from the resume; an unticked line is never used to describe the student. */
 export async function setResumeFacetUsed(facetId: string, used: boolean): Promise<boolean> {
-  return (await db.resumeFacets.update(facetId, { excluded: !used, confirmed: used })) > 0;
+  return (
+    (await db.resumeFacets.update(facetId, {
+      excluded: !used,
+      confirmed: used,
+    })) > 0
+  );
 }
 
 /** Facet kinds that have a role (or degree) and a place; the rest are one line of text. */
