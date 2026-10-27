@@ -106,6 +106,9 @@ function lastTouchLabel(
 
 const shortDate = (iso: string) =>
   new Date(iso).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+/** A date to show only when it is one ("2026" or "earlier in 2026" from a source reads as Invalid Date). */
+const realDate = (iso: string | undefined) =>
+  iso && !Number.isNaN(Date.parse(iso)) ? shortDate(iso) : undefined;
 
 const TP_ICON: Record<string, string> = {
   email_in: '↙',
@@ -424,8 +427,11 @@ export function PersonPage() {
         kind: 'sent',
       })),
   ].sort((a, b) => b.at.localeCompare(a.at));
+  // what the student learned themselves (notes, emails, their own words): research has its own section above, and
+  // their LinkedIn history its own, so neither is listed again here (drafts still use every fact)
+  const ownFacts = facts.filter((f) => f.sourceTable !== 'dossiers');
   const grouped = new Map<string, typeof facts>();
-  for (const f of facts) grouped.set(f.type, [...(grouped.get(f.type) ?? []), f]);
+  for (const f of ownFacts) grouped.set(f.type, [...(grouped.get(f.type) ?? []), f]);
   // two answers to the same question (two hometowns, two teams): point at both so the wrong one gets deleted
   const conflicts = conflictingFacts(facts);
   const nextEvent = events
@@ -929,7 +935,7 @@ export function PersonPage() {
             items={[
               { value: 'timeline', label: 'Timeline', count: tabsLoading ? undefined : timeline.length },
               { value: 'conversation', label: 'Messages', count: messageCount || undefined },
-              { value: 'facts', label: 'About', count: (!tabsLoading && facts.length) || undefined },
+              { value: 'facts', label: 'About', count: (!tabsLoading && ownFacts.length) || undefined },
               {
                 value: 'connections',
                 label: 'Who they know',
@@ -991,14 +997,14 @@ export function PersonPage() {
               <ResearchDebrief person={person} userId={user.id} />
               <div className="flex items-baseline justify-between gap-3 pt-2">
                 <h2 className="text-[13px] font-medium text-ink">What you've learned yourself</h2>
-                {facts.length > 0 && (
+                {ownFacts.length > 0 && (
                   <span className="text-[12px] text-ink-3">
-                    {facts.length === 1 ? '1 fact' : `${facts.length} facts`}
+                    {ownFacts.length === 1 ? '1 fact' : `${ownFacts.length} facts`}
                   </span>
                 )}
               </div>
               {tabsLoading && <SkeletonText lines={4} testId="facts-loading" />}
-              {!tabsLoading && facts.length === 0 && (
+              {!tabsLoading && ownFacts.length === 0 && (
                 <p className="text-ink-3 text-[12.5px] -mt-2" data-testid="facts-empty">
                   Nothing yet. Facts come in from your emails and meeting notes, or add one below.
                 </p>
@@ -1028,7 +1034,7 @@ export function PersonPage() {
                                     : f.sourceTable === 'dossiers'
                                       ? 'from research'
                                       : 'from Orbit'}
-                            {f.occurredAt ? ` · ${shortDate(f.occurredAt)}` : ''}
+                            {realDate(f.occurredAt) ? ` · ${realDate(f.occurredAt)}` : ''}
                           </span>
                           {conflicts.has(f.id) && (
                             <span className="block text-[12px] text-warn mt-0.5" data-testid="fact-conflict">

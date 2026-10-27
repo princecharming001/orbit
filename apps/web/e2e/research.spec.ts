@@ -22,6 +22,25 @@ const briefs = (page: Page) =>
     });
   });
 
+/** How many live facts research wrote (drafts use them; About lists only what the student learned themselves). */
+const researchFacts = (page: Page) =>
+  page.evaluate(async () => {
+    const open = indexedDB.open('orbit');
+    const idb: IDBDatabase = await new Promise((res, rej) => {
+      open.onsuccess = () => res(open.result);
+      open.onerror = () => rej(open.error);
+    });
+    return new Promise<number>((res) => {
+      const r = idb.transaction('facts').objectStore('facts').getAll();
+      r.onsuccess = () =>
+        res(
+          (r.result as { sourceTable: string; deletedAt?: string }[]).filter(
+            (f) => f.sourceTable === 'dossiers' && !f.deletedAt,
+          ).length,
+        );
+    });
+  });
+
 /** Mark a demo person do-not-contact, as the server's sync or an import would. */
 const markDoNotContact = (page: Page, personId: string) =>
   page.evaluate(async (id) => {
@@ -67,8 +86,9 @@ test.describe('Research', () => {
       'Public professional sources only, every line cited, kept 90 days.',
     );
     await expect(debrief.getByTestId('research-allowance')).toHaveText('Research · 14 left this month');
-    // the brief's supported claims became facts, marked as research
-    await expect(page.getByText('from research').first()).toBeVisible();
+    // the brief's supported claims became facts for drafts, and are not listed again under what you learned yourself
+    await expect.poll(() => researchFacts(page)).toBeGreaterThan(0);
+    await expect(page.getByText('from research')).toHaveCount(0);
 
     // Go deeper: the company's news and hiring, once
     await debrief.getByTestId('research-deeper').click();
@@ -94,7 +114,7 @@ test.describe('Research', () => {
     await page.goto('people/p5?tab=facts');
     await page.getByTestId('research-delete').click();
     await expect(page.getByTestId('research-card')).toBeVisible();
-    await expect(page.getByText('from research')).toHaveCount(0);
+    await expect.poll(() => researchFacts(page)).toBe(0);
     expect(await briefs(page)).toEqual([]);
   });
 
