@@ -1374,7 +1374,7 @@ async function unipileSend(deps, body, doFetch) {
     if (!slug)
       return { ok: false, reason: "bad_request", message: "Orbit has no LinkedIn profile for them." };
     const res2 = await doFetch(
-      `${deps.unipileBase}/api/v1/users/${encodeURIComponent(slug)}?account_id=${encodeURIComponent(accountId)}`,
+      `${deps.unipileBase}/api/v1/users/${encodeURIComponent(slug)}?account_id=${encodeURIComponent(accountId)}&notify=false`,
       { headers: uHeaders(deps) }
     );
     if (res2.status === 404 || res2.status === 422)
@@ -1515,7 +1515,7 @@ async function upstreamError(res) {
   return new Error(`unipile ${res.status}${detail ? `: ${detail}` : ""}`);
 }
 async function sharedConnectionCount(deps, accountId, target, doFetch) {
-  const q = new URLSearchParams({ account_id: accountId });
+  const q = new URLSearchParams({ account_id: accountId, notify: "false" });
   const res = await doFetch(`${deps.unipileBase}/api/v1/users/${encodeURIComponent(target)}?${q}`, {
     headers: uHeaders(deps)
   });
@@ -2410,8 +2410,8 @@ async function unipileProfile(deps, body, doFetch) {
   const sections = (Array.isArray(body.sections) ? body.sections : []).map(String).filter((x) => PROFILE_SECTIONS.has(x));
   const recommendations = body.recommendations === true;
   if (recommendations) sections.push("recommendations_received", "recommendations_given");
-  const q = new URLSearchParams({ account_id: accountId });
-  if (sections.length) q.set("linkedin_sections", [...new Set(sections)].join(","));
+  const q = new URLSearchParams({ account_id: accountId, notify: "false" });
+  for (const sec of new Set(sections)) q.append("linkedin_sections", sec);
   const res = await doFetch(`${deps.unipileBase}/api/v1/users/${encodeURIComponent(identifier)}?${q}`, {
     headers: uHeaders(deps)
   });
@@ -2440,7 +2440,7 @@ async function unipilePhoto(deps, body, doFetch) {
   const accountId = String(body.accountId ?? "");
   const identifier = text(body.identifier, 200);
   if (!identifier) return { ok: false, reason: "bad_request", message: "Say whose photo to fetch." };
-  const q = new URLSearchParams({ account_id: accountId });
+  const q = new URLSearchParams({ account_id: accountId, notify: "false" });
   const res = await doFetch(`${deps.unipileBase}/api/v1/users/${encodeURIComponent(identifier)}?${q}`, {
     headers: uHeaders(deps)
   });

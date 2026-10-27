@@ -181,7 +181,7 @@ describe('Unipile research', () => {
     expect(p.ok && p.value.first_name).toBe('Jane');
     expect(posts.ok && posts.value.map((x) => x.id)).toEqual(['p1']);
     expect(calls[0]!.url).toBe(
-      `${base}/api/v1/users/ACoA1?account_id=acc&linkedin_sections=*_preview%2Cexperience%2Ceducation%2Cabout&notify=false`,
+      `${base}/api/v1/users/ACoA1?account_id=acc&linkedin_sections=*_preview&linkedin_sections=experience&linkedin_sections=education&linkedin_sections=about&notify=false`,
     );
     expect(calls[0]!.headers['X-API-KEY']).toBe('uk');
     expect(calls[1]!.url).toBe(`${base}/api/v1/users/ACoA1/posts?account_id=acc&limit=10`);

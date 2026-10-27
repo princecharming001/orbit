@@ -905,7 +905,8 @@ function createUnipileResearch(opts) {
       if (!configured) return notConfigured();
       const q = query({
         account_id: accountId,
-        linkedin_sections: (o.sections ?? DOSSIER_SECTIONS).join(",") || void 0,
+        // one parameter per section: Unipile refuses several joined with commas
+        linkedin_sections: o.sections ?? DOSSIER_SECTIONS,
         linkedin_api: o.linkedinApi,
         notify: "false"
       });

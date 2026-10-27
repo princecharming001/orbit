@@ -620,7 +620,7 @@ describe('orbit-connectors proxy', () => {
       }),
     );
     expect(await r.json()).toEqual({ ok: true, invited: true, messageId: 'inv1', memberId: 'ACoAA1' });
-    expect(upstream[0]!.url).toBe('https://api1.unipile.com:443/api/v1/users/dana-lee?account_id=acc_1');
+    expect(upstream[0]!.url).toBe('https://api1.unipile.com:443/api/v1/users/dana-lee?account_id=acc_1&notify=false');
     expect(upstream[1]).toMatchObject({
       url: 'https://api1.unipile.com:443/api/v1/users/invite',
       body: { account_id: 'acc_1', provider_id: 'ACoAA1', message: 'Hi Dana' },
@@ -669,7 +669,7 @@ describe('orbit-connectors proxy', () => {
     const r = (await (
       await handler(post('/mutuals', { accountId: 'a1', token: TOKEN.a1, targetMemberId: 'ACoT' }))
     ).json()) as { verified: boolean; count: number; mutuals: { name: string }[] };
-    expect(upstream[0]!.url).toBe('https://api1.unipile.com:443/api/v1/users/ACoT?account_id=a1');
+    expect(upstream[0]!.url).toBe('https://api1.unipile.com:443/api/v1/users/ACoT?account_id=a1&notify=false');
     expect(upstream[1]!.body).toEqual({
       api: 'classic',
       category: 'people',

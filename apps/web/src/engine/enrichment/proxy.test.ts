@@ -129,7 +129,9 @@ describe('enrichment routes of the connector proxy', () => {
     expect(url.pathname).toBe('/api/v1/users/omar-haddad');
     expect(url.searchParams.get('account_id')).toBe('a1');
     // only known sections, joined with commas as Unipile's SDK sends them
-    expect(url.searchParams.get('linkedin_sections')).toBe('experience,education,about');
+    // one parameter per section (Unipile refuses a comma-joined list), and nobody is told they were looked at
+    expect(url.searchParams.getAll('linkedin_sections')).toEqual(['experience', 'education', 'about']);
+    expect(url.searchParams.get('notify')).toBe('false');
     expect(upstream[0]!.headers['X-API-KEY']).toBe('u-key');
     const b = (await res.json()) as { ok: boolean; profile: ReturnType<typeof mapProfile> };
     expect(b.ok).toBe(true);
@@ -320,9 +322,11 @@ describe('enrichment routes of the connector proxy', () => {
     ).text();
     expect(raw).not.toContain('SECRET_');
     const b = JSON.parse(raw) as { profile: Record<string, unknown> };
-    expect(new URL(upstream[0]!.url).searchParams.get('linkedin_sections')).toBe(
-      'experience,recommendations_received,recommendations_given',
-    );
+    expect(new URL(upstream[0]!.url).searchParams.getAll('linkedin_sections')).toEqual([
+      'experience',
+      'recommendations_received',
+      'recommendations_given',
+    ]);
     expect(b.profile.followerCount).toBe(1234);
     expect(b.profile.connectionsCount).toBe(500);
     expect(b.profile.recommendations).toEqual([

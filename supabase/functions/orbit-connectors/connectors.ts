@@ -1146,7 +1146,7 @@ async function unipileSend(deps: ConnectorDeps, body: Record<string, unknown>, d
     if (!slug)
       return { ok: false, reason: 'bad_request', message: 'Orbit has no LinkedIn profile for them.' };
     const res = await doFetch(
-      `${deps.unipileBase}/api/v1/users/${encodeURIComponent(slug)}?account_id=${encodeURIComponent(accountId)}`,
+      `${deps.unipileBase}/api/v1/users/${encodeURIComponent(slug)}?account_id=${encodeURIComponent(accountId)}&notify=false`,
       { headers: uHeaders(deps) },
     );
     if (res.status === 404 || res.status === 422)
@@ -1328,7 +1328,7 @@ async function sharedConnectionCount(
   target: string,
   doFetch: typeof fetch,
 ): Promise<number | undefined> {
-  const q = new URLSearchParams({ account_id: accountId });
+  const q = new URLSearchParams({ account_id: accountId, notify: 'false' });
   const res = await doFetch(`${deps.unipileBase}/api/v1/users/${encodeURIComponent(target)}?${q}`, {
     headers: uHeaders(deps),
   });
@@ -2306,11 +2306,11 @@ async function unipileSearch(deps: ConnectorDeps, body: Record<string, unknown>,
 // ---- Enrichment (plan 17 E): a person's full LinkedIn profile, a company's page, optional web lookups -----------
 //
 // Unipile shapes, checked against its API reference and its official SDK (unipile-node-sdk 1.9.3, ISC licence):
-//   GET /api/v1/users/{provider_id | public_identifier}?account_id=…&linkedin_sections=experience,education,about
+//   GET /api/v1/users/{provider_id | public_identifier}?account_id=…&linkedin_sections=experience&linkedin_sections=…
 //     -> work_experience[] {position, company, company_id, company_url, company_picture_url, current, start, end},
 //        education[] {school, school_id, school_picture_url, degree, field_of_study, start, end}, summary,
 //        contact_info {emails, phones} (1st-degree connections), throttled_sections[], network_distance,
-//        profile_picture_url(_large). The SDK joins several sections with commas, as here.
+//        profile_picture_url(_large). Several sections go as one parameter each (a comma-joined list is refused).
 //   GET /api/v1/linkedin/company/{id | public_identifier | urn}?account_id=… -> {id, name, public_identifier, logo,
 //     website, industry[]}
 // Payloads back to the browser are trimmed to what Orbit keeps.
@@ -2613,8 +2613,11 @@ async function unipileProfile(deps: ConnectorDeps, body: Record<string, unknown>
   const recommendations = body.recommendations === true;
   // both sections: who recommended them and whom they recommended (mapped tolerantly, the text never kept)
   if (recommendations) sections.push('recommendations_received', 'recommendations_given');
-  const q = new URLSearchParams({ account_id: accountId });
-  if (sections.length) q.set('linkedin_sections', [...new Set(sections)].join(','));
+  // notify=false: reading someone's profile never tells them the student looked
+  const q = new URLSearchParams({ account_id: accountId, notify: 'false' });
+  // one linkedin_sections parameter per section: Unipile refuses several joined with commas ("Expected kind
+  // 'StringEnum'"), which failed every read that asked for more than one section
+  for (const sec of new Set(sections)) q.append('linkedin_sections', sec);
   const res = await doFetch(`${deps.unipileBase}/api/v1/users/${encodeURIComponent(identifier)}?${q}`, {
     headers: uHeaders(deps),
   });
@@ -2651,7 +2654,7 @@ async function unipilePhoto(deps: ConnectorDeps, body: Record<string, unknown>, 
   const accountId = String(body.accountId ?? '');
   const identifier = text(body.identifier, 200);
   if (!identifier) return { ok: false, reason: 'bad_request', message: 'Say whose photo to fetch.' };
-  const q = new URLSearchParams({ account_id: accountId });
+  const q = new URLSearchParams({ account_id: accountId, notify: 'false' });
   const res = await doFetch(`${deps.unipileBase}/api/v1/users/${encodeURIComponent(identifier)}?${q}`, {
     headers: uHeaders(deps),
   });

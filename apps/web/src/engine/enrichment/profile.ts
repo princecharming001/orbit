@@ -48,11 +48,30 @@ export function linkedInDate(raw: string | undefined): string | undefined {
   return Number.isNaN(parsed) ? undefined : new Date(parsed).toISOString().slice(0, 10);
 }
 
-/** The position LinkedIn says is current: the latest-started current entry. */
-export function currentPosition(experience: LinkedInPosition[]): LinkedInPosition | undefined {
-  return experience
-    .filter((x) => x.current && x.company)
-    .sort((a, b) => (linkedInDate(b.start) ?? '').localeCompare(linkedInDate(a.start) ?? ''))[0];
+/** Roles people hold beside their main one: advising, ambassador and campus roles, boards, volunteering, scouting. */
+const SIDE_ROLE =
+  /\b(advis[eo]r|ambassador|mentor|board (member|of)|board|volunteer|teaching assistant|learning assistant|tutor|grader|reader|scout|venture partner|investor|angel|member|fellow|judge|moderator|contributor|campus|club|chapter|alumni)\b/i;
+
+/**
+ * Their main current role, as a person reading the profile would tell it, when LinkedIn lists several at once: the one
+ * at the company their own headline names, then a real role over a side one (advisor, ambassador, board seat,
+ * teaching assistant, scout), then the latest started.
+ */
+export function currentPosition(
+  experience: LinkedInPosition[],
+  headline?: string,
+): LinkedInPosition | undefined {
+  const current = experience.filter((x) => x.current && x.company);
+  if (current.length <= 1) return current[0];
+  const head = normalizeCompany(headline ?? '').replace(/\s+/g, ' ');
+  const named = (x: LinkedInPosition) => {
+    const c = normalizeCompany(x.company);
+    return !!c && c.length >= 2 && ` ${head} `.includes(` ${c} `);
+  };
+  const score = (x: LinkedInPosition) => (named(x) ? 4 : 0) + (SIDE_ROLE.test(x.title ?? '') ? -2 : 0);
+  return [...current].sort(
+    (a, b) => score(b) - score(a) || (linkedInDate(b.start) ?? '').localeCompare(linkedInDate(a.start) ?? ''),
+  )[0];
 }
 
 /** A title as a job change would alter it: "Strategy & Ops" and "strategy and ops" are one title. */
@@ -153,7 +172,7 @@ export async function applyLinkedInProfile(
   // 3. their current position, and its company's LinkedIn id and logo
   let jobChange: JobChange | undefined;
   let logo = false;
-  const cur = held(profile, 'experience') ? undefined : currentPosition(profile.experience);
+  const cur = held(profile, 'experience') ? undefined : currentPosition(profile.experience, profile.headline);
   if (cur?.company) {
     const org = await upsertOrganization(cur.company);
     if (org) {
@@ -269,6 +288,7 @@ export async function applyLinkedInProfile(
       profile.experience,
       patch.currentOrganizationId ?? p.currentOrganizationId,
       now,
+      profile.headline,
     );
   if (!held(profile, 'education') && profile.education.length)
     await replaceEducation(user.id, p.id, profile, now, opts.alias);
@@ -331,11 +351,12 @@ async function replaceEmployment(
   experience: LinkedInPosition[],
   currentOrgId: string | undefined,
   now: Date,
+  headline?: string,
 ): Promise<void> {
   const existing = await db.affiliations.where('personId').equals(personId).toArray();
   const work = existing.filter((a) => a.kind === 'employment');
   await db.affiliations.bulkDelete(work.filter((a) => a.source === 'linkedin_profile').map((a) => a.id));
-  const cur = currentPosition(experience);
+  const cur = currentPosition(experience, headline);
   const curStart = linkedInDate(cur?.start);
   for (const a of work.filter((x) => x.source !== 'linkedin_profile')) {
     const same = experience.find(

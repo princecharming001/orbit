@@ -22,7 +22,7 @@
  *   /api/v1/posts/{id}/comments` top-level comments `{id, author_details: {id}, date}`; the profile's `follower_count`,
  *   `connections_count` and, with the recommendations sections, `recommendations.received/given[].actor.provider_id`.
  *   Only ids, dates and counts are mapped out of these: never comment text, post text or a recommendation's body.
- * Assumed (not confirmed): `linkedin_sections` is sent comma-joined in one parameter (as in §5.2); `GET /users/me`
+ * Checked live 2026-10-27: `linkedin_sections` goes as one parameter per section (a comma-joined list is refused); `GET /users/me`
  * exposes Sales Navigator access somewhere under a `sales_navigator`-named field (read tolerantly).
  */
 import {
@@ -345,7 +345,8 @@ export function createUnipileResearch(opts: ProviderOptions): UnipileResearch {
       if (!configured) return notConfigured();
       const q = query({
         account_id: accountId,
-        linkedin_sections: (o.sections ?? DOSSIER_SECTIONS).join(',') || undefined,
+        // one parameter per section: Unipile refuses several joined with commas
+        linkedin_sections: o.sections ?? DOSSIER_SECTIONS,
         linkedin_api: o.linkedinApi,
         notify: 'false',
       });
