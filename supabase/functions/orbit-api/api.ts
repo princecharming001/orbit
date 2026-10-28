@@ -209,6 +209,18 @@ export function makeApiHandler(deps: ApiDeps): (req: Request) => Promise<Respons
           status: 'exception',
           duration_ms: 0,
           error: e instanceof Error ? e.name : 'error',
+          // where it broke, and the engine's own words for range and type errors (never the request's data)
+          error_message:
+            e instanceof RangeError || e instanceof TypeError ? e.message.slice(0, 160) : undefined,
+          error_at:
+            e instanceof Error
+              ? (e.stack ?? '')
+                  .split('\n')
+                  .slice(1, 4)
+                  .map((l) => l.trim().replace(/https?:\/\/\S+\//, ''))
+                  .join(' | ')
+                  .slice(0, 400)
+              : undefined,
           userId,
         });
     }

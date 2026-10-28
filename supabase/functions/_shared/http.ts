@@ -135,6 +135,10 @@ export interface LogLine {
   upstream?: Upstream[];
   cost_usd?: number;
   error?: string;
+  /** a range or type error's engine message, never request data */
+  error_message?: string;
+  /** the top stack frames: function names and bundle positions */
+  error_at?: string;
 }
 
 export type LogSink = (line: string) => void;
