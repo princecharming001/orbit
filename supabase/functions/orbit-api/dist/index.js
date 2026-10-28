@@ -12675,6 +12675,7 @@ function decodeCursor(raw) {
   }
 }
 var PULL_DEFAULT_LIMIT = 500;
+var PULL_FROM = "1970-01-01T00:00:00.000Z";
 var PULL_MAX_LIMIT = 2e3;
 async function syncPull(ctx) {
   const body2 = await readJson(ctx.req, { optional: true });
@@ -12716,7 +12717,9 @@ async function pull(db2, userId, o) {
               ${t.filter ? `and ${t.filter}` : ""}
             order by t.${t.cursor}, t.${t.key}::text
             limit $5`,
-          [userId, pos?.t ?? "-infinity", pos?.k ?? "", o.upTo, o.limit]
+          // a table never pulled starts from a real date: postgres.js turns a timestamptz parameter into a JS Date
+          // first, and '-infinity' is not one (every pull failed with "Invalid time value" once a table had no rows)
+          [userId, pos?.t ?? PULL_FROM, pos?.k ?? "", o.upTo, o.limit]
         );
       })
     ),

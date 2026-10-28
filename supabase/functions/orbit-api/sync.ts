@@ -128,6 +128,8 @@ export function decodeCursor(raw: unknown): Cursor {
 }
 
 export const PULL_DEFAULT_LIMIT = 500;
+/** Where a table's first pull starts: before any row Orbit can hold. */
+export const PULL_FROM = '1970-01-01T00:00:00.000Z';
 export const PULL_MAX_LIMIT = 2000;
 
 export async function syncPull(ctx: Ctx): Promise<Response> {
@@ -178,7 +180,9 @@ export async function pull(
               ${t.filter ? `and ${t.filter}` : ''}
             order by t.${t.cursor}, t.${t.key}::text
             limit $5`,
-          [userId, pos?.t ?? '-infinity', pos?.k ?? '', o.upTo, o.limit],
+          // a table never pulled starts from a real date: postgres.js turns a timestamptz parameter into a JS Date
+          // first, and '-infinity' is not one (every pull failed with "Invalid time value" once a table had no rows)
+          [userId, pos?.t ?? PULL_FROM, pos?.k ?? '', o.upTo, o.limit],
         );
       }),
     ),

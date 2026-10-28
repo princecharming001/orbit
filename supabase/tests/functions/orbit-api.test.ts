@@ -3,7 +3,8 @@ import { memoryTake } from '../../functions/_shared/ratelimit.ts';
 import { createSession } from '../../functions/_shared/session.ts';
 import { type ApiDeps, makeApiHandler } from '../../functions/orbit-api/api.ts';
 import { safeRedirect, upsertGoogleUser } from '../../functions/orbit-api/auth.ts';
-import { decodeCursor, encodeCursor } from '../../functions/orbit-api/sync.ts';
+import { decodeCursor, encodeCursor, pull } from '../../functions/orbit-api/sync.ts';
+import { PULL_TABLES } from '../../functions/orbit-api/tables.ts';
 import { CLIENT_ID, type FakeGoogle, fakeGoogle, jsonRes, recordingFetch } from '../helpers/google.ts';
 import { freshDb, makeUser, type TestDb } from '../helpers/pglite.ts';
 
@@ -900,5 +901,31 @@ describe('/account', () => {
       await t.db.sql`select 1 from vault.secrets where name = ${`google_refresh:${userId}`}`,
     ).toHaveLength(0);
     expect((await handler(req('/auth/me', { token }))).status).toBe(401);
+  });
+});
+
+describe('/sync/pull parameters', () => {
+  it('sends only real dates for timestamptz, as postgres.js needs (a table never pulled starts in 1970)', async () => {
+    const seen: unknown[][] = [];
+    const db = {
+      query: async (_text: string, params: unknown[] = []) => {
+        seen.push(params);
+        return [];
+      },
+      sql: async () => [],
+      begin: async () => {
+        throw new Error('unused');
+      },
+    };
+    await pull(db as never, '00000000-0000-4000-8000-000000000001', {
+      cursor: {},
+      tables: PULL_TABLES,
+      limit: 10,
+      upTo: new Date(),
+    });
+    expect(seen).toHaveLength(PULL_TABLES.length);
+    // postgres.js serializes a timestamptz parameter with new Date(x).toISOString(), which throws on '-infinity'
+    for (const p of seen)
+      for (const i of [1, 3]) expect(() => new Date(p[i] as string).toISOString()).not.toThrow();
   });
 });
