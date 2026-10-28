@@ -108,6 +108,13 @@ function sentence(e: Edge, a: Named, b: Named): string | undefined {
       return org ? `${A} and ${B} both work at ${org} now` : undefined;
     case 'co_tenure': {
       if (!org) return undefined;
+      if (ev.apart) {
+        // disjoint stints: whoever is there now joined after the other left
+        const current = Array.isArray(ev.current) ? (ev.current as string[]) : [];
+        if (current.includes(a.id)) return `${B} worked at ${org} before ${A} joined`;
+        if (current.includes(b.id)) return `${A} worked at ${org} before ${B} joined`;
+        return `${A} and ${B} both worked at ${org}, at different times`;
+      }
       if (ev.datesUnknown) {
         const current = Array.isArray(ev.current) ? (ev.current as string[]) : [];
         if (current.includes(a.id) && !current.includes(b.id))

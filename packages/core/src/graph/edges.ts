@@ -39,6 +39,9 @@ function monthsOverlap(a: Affiliation, b: Affiliation, now: Date): number {
 }
 
 /** True when the known dates prove two stints at the same employer never overlapped. */
+const badDate = (a: Affiliation) =>
+  (!!a.startDate && time(a.startDate) === undefined) || (!!a.endDate && time(a.endDate) === undefined);
+
 function provablyDisjoint(a: Affiliation, b: Affiliation): boolean {
   const aStart = time(a.startDate);
   const bStart = time(b.startDate);
@@ -165,6 +168,16 @@ export function inferEdges(input: EdgeInput): Edge[] {
           ...(peers ? { peers } : {}),
           ...(sameFunction ? { sameFunction } : {}),
         };
+        // the same employer at different times: a slight tie (shared colleagues, the same culture), well under any
+        // overlap and under a past stint with unknown dates
+        const apart = () =>
+          put(A.personId, B.personId, 'co_tenure', 0.12 * sf, {
+            orgName,
+            apart: true,
+            current: [A, B].filter((m) => m.aff.isCurrent).map((m) => m.personId),
+            ...shape,
+            text: `Both worked at ${orgName}, at different times`,
+          });
         const bothCurrent = A.aff.isCurrent && B.aff.isCurrent;
         const current = [A, B].filter((m) => m.aff.isCurrent).map((m) => m.personId);
         // A stint's span is known only with a start date and, unless it is current, an end date. Without both
@@ -182,7 +195,11 @@ export function inferEdges(input: EdgeInput): Edge[] {
           );
         } else if (!spanKnown(A.aff) || !spanKnown(B.aff)) {
           // A past stint with unknown dates: they may well have overlapped, but we cannot say when.
-          if (provablyDisjoint(A.aff, B.aff)) continue;
+          if (provablyDisjoint(A.aff, B.aff)) {
+            // a date that does not parse proves nothing about when they were there
+            if (!badDate(A.aff) && !badDate(B.aff)) apart();
+            continue;
+          }
           put(A.personId, B.personId, 'co_tenure', 0.15 * sf, {
             orgName,
             datesUnknown: true,
@@ -192,7 +209,10 @@ export function inferEdges(input: EdgeInput): Edge[] {
           });
         } else {
           const overlap = monthsOverlap(A.aff, B.aff, now);
-          if (overlap <= 0) continue;
+          if (overlap <= 0) {
+            apart();
+            continue;
+          }
           const starts = [time(A.aff.startDate), time(B.aff.startDate)].filter((t) => t !== undefined);
           const ends = [A.aff, B.aff].map((a) => (a.isCurrent || !a.endDate ? undefined : time(a.endDate)));
           const fromYear = starts.length ? utcYear(Math.max(...starts)) : undefined;

@@ -8521,6 +8521,7 @@ function monthsOverlap(a, b, now) {
   if (Number.isNaN(end)) return 0;
   return Math.max(0, (end - start) / (30 * DAY7));
 }
+var badDate = (a) => !!a.startDate && time(a.startDate) === void 0 || !!a.endDate && time(a.endDate) === void 0;
 function provablyDisjoint(a, b) {
   const aStart = time(a.startDate);
   const bStart = time(b.startDate);
@@ -8632,6 +8633,13 @@ function inferEdges(input) {
           ...peers ? { peers } : {},
           ...sameFunction ? { sameFunction } : {}
         };
+        const apart = () => put(A.personId, B.personId, "co_tenure", 0.12 * sf, {
+          orgName,
+          apart: true,
+          current: [A, B].filter((m) => m.aff.isCurrent).map((m) => m.personId),
+          ...shape,
+          text: `Both worked at ${orgName}, at different times`
+        });
         const bothCurrent = A.aff.isCurrent && B.aff.isCurrent;
         const current = [A, B].filter((m) => m.aff.isCurrent).map((m) => m.personId);
         const spanKnown = (a) => !!a.startDate && (a.isCurrent || !!a.endDate);
@@ -8645,7 +8653,10 @@ function inferEdges(input) {
             { orgName, current, ...shape, text: `Both currently at ${orgName}` }
           );
         } else if (!spanKnown(A.aff) || !spanKnown(B.aff)) {
-          if (provablyDisjoint(A.aff, B.aff)) continue;
+          if (provablyDisjoint(A.aff, B.aff)) {
+            if (!badDate(A.aff) && !badDate(B.aff)) apart();
+            continue;
+          }
           put(A.personId, B.personId, "co_tenure", 0.15 * sf, {
             orgName,
             datesUnknown: true,
@@ -8655,7 +8666,10 @@ function inferEdges(input) {
           });
         } else {
           const overlap = monthsOverlap(A.aff, B.aff, now);
-          if (overlap <= 0) continue;
+          if (overlap <= 0) {
+            apart();
+            continue;
+          }
           const starts = [time(A.aff.startDate), time(B.aff.startDate)].filter((t) => t !== void 0);
           const ends = [A.aff, B.aff].map((a) => a.isCurrent || !a.endDate ? void 0 : time(a.endDate));
           const fromYear = starts.length ? utcYear(Math.max(...starts)) : void 0;
@@ -8865,8 +8879,8 @@ var TIE_HALF_LIFE_YEARS = {
   email_cothread: 2,
   meeting_coattendee: 2,
   introduced_by: 2,
-  linkedin_recommendation: 5,
-  linkedin_mention: 2
+  linkedin_recommendation: 5
+  // a mention in a post counts however old the post is: naming someone publicly says the two know each other
 };
 var ROUTABLE_TIE_KINDS = /* @__PURE__ */ new Set([
   "email_exchange",
@@ -12013,6 +12027,7 @@ function hopEvidence(fromId, tie, toName) {
     case "village_path":
       return `knows ${toName} (via Village)`;
     case "co_tenure": {
+      if (ev.apart) return `also worked at ${org ?? "the same company"}, not at the same time as ${toName}`;
       const from = typeof ev.fromYear === "number" ? ev.fromYear : void 0;
       const to = typeof ev.toYear === "number" ? ev.toYear : void 0;
       const years = from === void 0 ? "" : ev.ongoing ? ` (since ${from})` : to && to !== from ? ` (${from} to ${to})` : ` (${from})`;

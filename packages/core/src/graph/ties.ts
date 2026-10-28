@@ -92,7 +92,7 @@ export const TIE_HALF_LIFE_YEARS: Partial<Record<TieKind, number>> = {
   meeting_coattendee: 2,
   introduced_by: 2,
   linkedin_recommendation: 5,
-  linkedin_mention: 2,
+  // a mention in a post counts however old the post is: naming someone publicly says the two know each other
 };
 
 /** Kinds strong enough to route through whatever the combined confidence (§4.1). */

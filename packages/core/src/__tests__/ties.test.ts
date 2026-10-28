@@ -231,6 +231,44 @@ describe('inferTies (§4.1)', () => {
     expect(c('eve')).toBeCloseTo(0.8 * 0.6, 10);
   });
 
+  it('gives the same employer at different times a slight tie, well under an overlap', () => {
+    const aff = (pid: string, org: string, start: string, end?: string): Affiliation => ({
+      id: `${pid}-${org}`,
+      userId: 'u',
+      personId: pid,
+      kind: 'employment',
+      nameRaw: org,
+      startDate: start,
+      endDate: end,
+      isCurrent: !end,
+      source: 'linkedin_csv',
+    });
+    const edges = inferEdges(
+      input({
+        people: ['ann', 'ben', 'cal', 'dee'].map((p) => person(p)),
+        affiliations: [
+          aff('ann', 'Tiny Co', '2016-01-01', '2018-01-01'),
+          aff('ben', 'Tiny Co', '2021-01-01'),
+          aff('cal', 'Tiny Co', '2017-01-01', '2019-01-01'),
+          aff('dee', 'Other Co', '2016-01-01', '2018-01-01'),
+        ],
+      }),
+    );
+    const edge = (a: string, b: string) => edges.find((e) => e.personAId === a && e.personBId === b);
+    const apart = edge('ann', 'ben')!;
+    expect(apart.type).toBe('co_tenure');
+    expect(apart.evidence).toMatchObject({ apart: true, orgName: 'Tiny Co' });
+    expect(apart.weight).toBeLessThan(edge('ann', 'cal')!.weight);
+    expect(apart.weight).toBeGreaterThan(0);
+    expect(edge('ann', 'dee')).toBeUndefined();
+    expect(describePairHop(person('ann'), person('ben'), [apart])).toContain(
+      'Ann worked at Tiny Co before Ben joined',
+    );
+    const pair = pairsFromEdges(edges, NOW).get('ann|ben')!;
+    expect(pair.weight).toBeLessThan(0.1);
+    expect(isRoutable(pair)).toBe(false);
+  });
+
   it('keeps inferEdges working for existing callers', () => {
     const inp = input({ threads: [thread('t1', ['ann', 'ben'])] });
     const edges = inferEdges(inp);
@@ -263,6 +301,8 @@ describe('combining ties', () => {
     const old = tie('email_exchange', 0.8, 0.95, '2024-10-14T12:00:00Z');
     expect(decayedTieWeight(old, NOW)).toBeCloseTo(0.4, 2);
     expect(decayedTieWeight(tie('co_tenure', 0.8, 0.5, '2010-01-01T00:00:00Z'), NOW)).toBe(0.8);
+    // a mention in a post counts however old the post is
+    expect(decayedTieWeight(tie('linkedin_mention', 0.6, 0.9, '2016-01-01T00:00:00Z'), NOW)).toBe(0.6);
   });
 
   it('routes only confident pairs or real interactions', () => {

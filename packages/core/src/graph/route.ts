@@ -343,6 +343,7 @@ export function hopEvidence(fromId: string, tie: Tie | undefined, toName: string
     case 'village_path':
       return `knows ${toName} (via Village)`;
     case 'co_tenure': {
+      if (ev.apart) return `also worked at ${org ?? 'the same company'}, not at the same time as ${toName}`;
       const from = typeof ev.fromYear === 'number' ? ev.fromYear : undefined;
       const to = typeof ev.toYear === 'number' ? ev.toYear : undefined;
       const years =

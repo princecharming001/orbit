@@ -422,12 +422,19 @@ describe('inferEdges (GRL-09, GRL-10, GRL-16)', () => {
       empAff('b', 'Ramp', { startDate: '2021-01-01', endDate: '2023-01-01' }),
     ]).find((x) => x.type === 'co_tenure')!;
     expect(dated.weight).toBeGreaterThan(e!.weight);
-    // provably disjoint dates: no edge
+    // provably disjoint dates: only the slight different-times tie, weaker still
     const disjoint = infer(people, [
       empAff('a', 'Ramp', { endDate: '2018-01-01' }),
       empAff('b', 'Ramp', { startDate: '2020-01-01', endDate: '2021-01-01' }),
+    ]).find((x) => x.type === 'co_tenure')!;
+    expect(disjoint.evidence.apart).toBe(true);
+    expect(disjoint.weight).toBeLessThan(e!.weight);
+    // a date that does not parse: nothing
+    const garbage = infer(people, [
+      empAff('a', 'Ramp', { startDate: 'sometime' }),
+      empAff('b', 'Ramp', { startDate: '2020-01-01', endDate: '2021-01-01' }),
     ]);
-    expect(disjoint.some((x) => x.type === 'co_tenure')).toBe(false);
+    expect(garbage.some((x) => x.type === 'co_tenure')).toBe(false);
   });
   it('never claims "since YEAR" when one of two colleagues has no start date', () => {
     const a = named('a', 'Ana');
