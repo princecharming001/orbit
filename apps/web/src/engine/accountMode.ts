@@ -35,6 +35,9 @@ export async function adoptAccountUser(a: AccountUser, now = new Date()): Promis
   const doneAt = typeof a.onboarding?.completed_at === 'string' ? a.onboarding.completed_at : undefined;
   let user: User;
   if (existing) {
+    // back to an account this browser had before, but another one synced since: the stored cursor is that other
+    // account's, so this pull starts from the beginning (otherwise everything older than it never comes down)
+    if (previousId !== a.id) await resetSyncState();
     const patch: Partial<User> = {};
     if (doneAt && !existing.onboardingCompletedAt) {
       patch.onboardingCompletedAt = doneAt;

@@ -9,7 +9,8 @@
  *   by Dexie hooks on the tables they live in, wherever in the app the write happens, and go up through POST
  *   /sync/push every few seconds and when the tab is hidden. Rows written by a pull are marked, so they never echo
  *   back.
- * - Status: /sync/status every 3 seconds during setup and every minute after; a change in the counts pulls.
+ * - Status: /sync/status every 3 seconds while setup's import runs and every minute after, never while the tab is
+ *   hidden; a change in the counts pulls. Each pull pushes the outbox first, so it never writes over a local edit.
  *
  * Ids: the server keys rows by uuid. Rows made in this browser carry a prefixed id ("chat_<uuid>"): they go up under
  * the uuid, and the alias is remembered so the copy that comes back on the next pull keeps the local id.
@@ -79,6 +80,7 @@ const PUSH_ORDER = [
 ];
 
 const CURSOR_KEY = 'serverSync.cursor';
+const CURSOR_OWNER_KEY = 'serverSync.cursorUser';
 const ALIAS_KEY = 'serverSync.aliases';
 const MAX_PAGES = 200;
 const PULL_LIMIT = 500;
@@ -203,18 +205,25 @@ function dexieTable(name: string): Table<Record<string, unknown>, string> {
 /**
  * Write rows that came from the server (a pull, or a route's answer) into Dexie, unchanged but for local ids and
  * defaults, without queueing them to go back up. Tie scores also land on the person, whose strength is score / 100.
+ * `pending` holds outbox keys (`${table}:${id}`) whose rows are left as they are: a local edit not yet pushed.
  */
 export async function writeFromServer(
   table: string,
   rows: Record<string, unknown>[] | Goal[],
   userId: string,
   deleted: string[] = [],
+  pending?: Set<string>,
 ): Promise<number> {
   const dexie = DEXIE_OF.get(table);
   if (!dexie || (!rows.length && !deleted.length)) return 0;
   const map = await aliases();
   const t = dexieTable(dexie);
   let ready = (rows as Record<string, unknown>[]).map((r) => withDefaults(table, localize(r, map), userId));
+  // a closeness rating is queued under its person's id, everything else under its own
+  if (pending?.size)
+    ready = ready.filter(
+      (r) => !pending.has(`${table}:${String(table === 'tie_labels' ? r.personId : r.id)}`),
+    );
   // a sourced candidate the server keeps for Find people is not a recommendation from the network yet
   if (table === 'recommendations')
     ready = ready.filter((r) => typeof r.personId === 'string' && typeof r.score === 'number');
@@ -256,6 +265,15 @@ let pulling: Promise<PullOutcome> | undefined;
 /** Pull every page of changes since the stored cursor. One pull at a time. */
 export function pullNow(userId: string, opts: { signal?: AbortSignal } = {}): Promise<PullOutcome> {
   pulling ??= (async () => {
+    // local edits go up first, so the rows that come down already carry them
+    await pushOutbox().catch(() => undefined);
+    // the cursor belongs to the account it was saved for: one saved for another account (or before cursors said whose
+    // they were) is dropped, so this account's pull starts from the beginning and nothing older than it is skipped
+    const owner = (await db.kv.get(CURSOR_OWNER_KEY))?.value;
+    if (owner !== userId) {
+      await db.kv.delete(CURSOR_KEY);
+      await db.kv.put({ key: CURSOR_OWNER_KEY, value: userId });
+    }
     let changed = 0;
     let pages = 0;
     const tables = new Set<string>();
@@ -265,8 +283,17 @@ export function pullNow(userId: string, opts: { signal?: AbortSignal } = {}): Pr
       if (!r.ok) return { ok: false, changed, pages, tables: [...tables], message: r.message };
       pages++;
       const { changes, deleted, hasMore } = r.value;
+      // what is still queued (the push failed, or an edit since): the server's copy of those rows waits
+      await flushQueue();
+      const pending = new Set((await db.outbox.toCollection().primaryKeys()) as string[]);
       for (const { table } of PULL_TARGETS) {
-        const n = await writeFromServer(table, changes?.[table] ?? [], userId, deleted?.[table] ?? []);
+        const n = await writeFromServer(
+          table,
+          changes?.[table] ?? [],
+          userId,
+          deleted?.[table] ?? [],
+          pending,
+        );
         if (n) {
           changed += n;
           tables.add(table);
@@ -285,7 +312,7 @@ export function pullNow(userId: string, opts: { signal?: AbortSignal } = {}): Pr
 /** Forget the cursor and aliases (sign-out, a different account): the next pull starts from the beginning. */
 export async function resetSyncState(): Promise<void> {
   aliasCache = undefined;
-  await db.kv.bulkDelete([CURSOR_KEY, ALIAS_KEY]);
+  await db.kv.bulkDelete([CURSOR_KEY, CURSOR_OWNER_KEY, ALIAS_KEY]);
   await db.outbox.clear();
 }
 
@@ -666,7 +693,13 @@ export function subscribeSyncStatus(fn: (s: SyncStatus | undefined) => void): ()
   };
 }
 
+let lastStatusJson = '';
+
 function setStatus(s: SyncStatus | undefined): void {
+  // the same answer as last time changes nothing on screen
+  const json = JSON.stringify(s ?? null);
+  if (json === lastStatusJson) return;
+  lastStatusJson = json;
   lastStatus = s;
   // the status line: what the server still has queued for this account (the import, the reads it runs)
   const pending = s?.jobs.pending ?? 0;
@@ -692,6 +725,12 @@ export function googleStatus(s: SyncStatus | undefined = lastStatus) {
   return s?.integrations.find((i) => i.provider === 'google');
 }
 
+/** Google's import has finished (both the recent and the older email are in). */
+export function backfillDone(s: SyncStatus | undefined): boolean {
+  const phase = googleStatus(s)?.backfill?.phase;
+  return !!phase && phase !== 'recent' && phase !== 'deep';
+}
+
 // ---- the loop -------------------------------------------------------------------------------------------------------
 
 export const STATUS_EVERY_ONBOARDING_MS = 3_000;
@@ -702,7 +741,7 @@ const DERIVED_EVERY_MS = 5 * 60_000;
 
 export interface SyncLoopOptions {
   user: Pick<User, 'id' | 'onboardingCompletedAt'>;
-  /** setup is in progress: poll every 3 seconds */
+  /** setup is in progress: poll every 3 seconds until Google's import is done */
   onboarding: boolean;
   /** rebuild the brief and suggestions after rows change (the app passes generateBrief) */
   onPulled?: (outcome: PullOutcome) => Promise<void> | void;
@@ -711,8 +750,8 @@ export interface SyncLoopOptions {
 let lastDerived = 0;
 
 /**
- * Start syncing for the signed-in user: a pull at once, the status poll, the outbox flush on a timer and when the tab
- * hides. Returns a stop function.
+ * Start syncing for the signed-in user: a pull at once, the status poll (paused while the tab is hidden), the outbox
+ * flush on a timer and when the tab hides. Returns a stop function.
  */
 export function startServerSync(o: SyncLoopOptions): () => void {
   installOutboxHooks();
@@ -730,15 +769,25 @@ export function startServerSync(o: SyncLoopOptions): () => void {
     const out = await pullNow(o.user.id).catch(() => undefined);
     if (out?.ok) await derived(out).catch(() => undefined);
   };
+  const hidden = () => typeof document !== 'undefined' && document.hidden;
+  let every = o.onboarding ? STATUS_EVERY_ONBOARDING_MS : STATUS_EVERY_MS;
+  let statusTimer: ReturnType<typeof setInterval> | undefined;
   const poll = async () => {
-    if (stopped) return;
+    if (stopped || hidden()) return;
     const s = await refreshSyncStatus().catch(() => undefined);
+    // the import is in: no need to watch it every 3 seconds, even before setup's last step
+    if (every !== STATUS_EVERY_MS && backfillDone(s)) {
+      every = STATUS_EVERY_MS;
+      clearInterval(statusTimer);
+      statusTimer = setInterval(poll, every);
+    }
     const counts = JSON.stringify(s?.counts ?? {});
     if (s && counts !== lastCounts) {
       lastCounts = counts;
       await pull();
     }
   };
+  // an empty outbox makes no request, so the timer runs while hidden too (a send can finish in the background)
   const push = () => {
     if (!stopped) void pushOutbox().catch(() => undefined);
   };
@@ -746,9 +795,10 @@ export function startServerSync(o: SyncLoopOptions): () => void {
     await pull();
     await poll();
   })();
-  const statusTimer = setInterval(poll, o.onboarding ? STATUS_EVERY_ONBOARDING_MS : STATUS_EVERY_MS);
+  statusTimer = setInterval(poll, every);
   const pushTimer = setInterval(push, PUSH_EVERY_MS);
-  const onVisibility = () => push();
+  // hiding sends what is queued; coming back checks the server at once instead of waiting for the next tick
+  const onVisibility = () => (hidden() ? push() : void poll());
   if (typeof document !== 'undefined') document.addEventListener('visibilitychange', onVisibility);
   return () => {
     stopped = true;
@@ -762,6 +812,7 @@ export function startServerSync(o: SyncLoopOptions): () => void {
 export function resetServerSyncForTests(): void {
   aliasCache = undefined;
   lastStatus = undefined;
+  lastStatusJson = '';
   queued = new Map();
   if (queueTimer) clearTimeout(queueTimer);
   queueTimer = undefined;
