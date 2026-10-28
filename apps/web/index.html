@@ -21,7 +21,41 @@
     <title>Orbit</title>
   </head>
   <body>
-    <div id="root"></div>
+    <!--
+      What Orbit is, in the page itself: Google's app verification and anyone without JavaScript read this, not the
+      landing page the app draws. The app replaces it as it starts. Keep it true to the landing and privacy pages.
+    -->
+    <div id="root">
+      <main style="max-width: 720px; margin: 0 auto; padding: 56px 20px 80px; font: 16px/1.6 Inter, ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif; color: #0a0a0a">
+        <p style="margin: 0; font-weight: 600">Orbit</p>
+        <h1 style="font-size: 36px; line-height: 1.15; font-weight: 500; letter-spacing: -0.02em; margin: 28px 0 12px">
+          A networking assistant for college students
+        </h1>
+        <p style="color: #3f3f3c; margin: 0 0 16px">
+          Orbit finds the people worth a coffee chat, drafts every message in your voice, and keeps track of each
+          conversation, from the first note to the thank-you after you talk. Nothing is sent without you.
+        </p>
+        <h2 style="font-size: 19px; font-weight: 600; margin: 36px 0 8px">How Orbit uses your Google account</h2>
+        <p style="color: #3f3f3c; margin: 0 0 8px">
+          Signing in with Google is optional, and each permission is used only for what it says:
+        </p>
+        <ul style="color: #3f3f3c; padding-left: 20px; margin: 0">
+          <li>Gmail (read): messages with the people you network with, to keep track of who you talked to, notice replies, and write follow-ups that fit the conversation.</li>
+          <li>Gmail (send): to send the messages you approve, from your own address.</li>
+          <li>Google Calendar: your events, to know when a chat is booked, prepare you for it, and put chats you schedule on your calendar.</li>
+          <li>Google Contacts: names and email addresses, so people are matched correctly.</li>
+        </ul>
+        <p style="color: #3f3f3c; margin: 16px 0 0">
+          Your Google data is never sold, never used for advertising, and never used to train AI models.
+        </p>
+        <p style="margin: 36px 0 0">
+          <a href="/" style="color: #1f3d33">Open Orbit</a> &middot;
+          <a href="/privacy/" style="color: #1f3d33">Privacy policy</a> &middot;
+          <a href="/terms/" style="color: #1f3d33">Terms of service</a> &middot;
+          Contact: <a href="mailto:anish.polakala@gmail.com" style="color: #1f3d33">anish.polakala@gmail.com</a>
+        </p>
+      </main>
+    </div>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>
