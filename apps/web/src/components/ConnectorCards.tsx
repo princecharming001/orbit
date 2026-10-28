@@ -69,13 +69,22 @@ export function LinkedInLiveCard({ user }: { user: User }) {
       setBusy(undefined);
     }
   };
+  // the dialog stays open with a spinner on its button until the server answers, then says how it went
   const disconnect = async () => {
-    setConfirming(false);
-    const r = await disconnectLinkedInLive(user);
-    if (r.ok)
-      toast.push({
-        text: 'LinkedIn disconnected. Everyone already imported stays.',
-      });
+    setBusy('disconnect');
+    try {
+      const r = await disconnectLinkedInLive(user);
+      setConfirming(false);
+      if (r.ok)
+        toast.push({
+          text: 'LinkedIn disconnected. Everyone already imported stays.',
+        });
+      else toast.push({ text: r.message || "LinkedIn couldn't be disconnected. Try again.", tone: 'bad' });
+    } catch {
+      toast.push({ text: "LinkedIn couldn't be disconnected. Try again.", tone: 'bad' });
+    } finally {
+      setBusy(undefined);
+    }
   };
   return (
     <>
@@ -195,6 +204,7 @@ export function LinkedInLiveCard({ user }: { user: User }) {
             <Button
               variant="primary"
               onClick={disconnect}
+              loading={busy === 'disconnect'}
               data-testid="settings-linkedin-live-confirm-disconnect"
             >
               Disconnect

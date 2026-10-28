@@ -4,7 +4,7 @@ import { type ReactNode, useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import type { ReachCandidate } from '../../engine/graph';
 import { type FoundView, linkedInSearchReady, searchLinkedInLive } from '../../engine/linkedinSearch';
-import { Avatar, cx, Spinner } from '../../ui';
+import { Avatar, cx, Spinner, Working } from '../../ui';
 
 /** LinkedIn is asked once typing pauses this long, and only from this many letters (LinkedIn limits searches a day). */
 const LINKEDIN_PAUSE_MS = 650;
@@ -80,6 +80,7 @@ export function ReachSearch({
   hint,
   linkedIn: withLinkedIn = true,
   autoFocus = true,
+  adding,
 }: {
   user: Pick<User, 'id'>;
   query: string;
@@ -98,6 +99,8 @@ export function ReachSearch({
   hint?: ReactNode | null;
   /** false: only the student's own network (the introductions view searches its people alone) */
   linkedIn?: boolean;
+  /** someone picked from LinkedIn is being added: the list has closed, so the box itself shows the work */
+  adding?: boolean;
   /** false: the box waits to be clicked (the map's own page should not open on a phone's keyboard) */
   autoFocus?: boolean;
 }) {
@@ -200,6 +203,7 @@ export function ReachSearch({
           className="h-11 w-full rounded-full border border-line bg-canvas pl-10 pr-4 text-[14.5px] placeholder:text-ink-3 focus:border-[#bdbab5] focus:outline-none focus:ring-4 focus:ring-ink/[0.06]"
           data-testid="reach-input"
         />
+        {adding && <Working className="absolute right-4 top-1/2 -translate-y-1/2 text-ink-3" />}
       </form>
       {isLink && (
         <p className="px-1 text-[13px] text-ink-3" data-testid="reach-link-hint">

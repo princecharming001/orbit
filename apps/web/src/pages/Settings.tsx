@@ -86,6 +86,8 @@ import {
   Switch,
   Textarea,
   useToast,
+  useWorking,
+  Working,
 } from '../ui';
 import { Suggest } from '../ui/Suggest';
 
@@ -922,6 +924,7 @@ function Integrations() {
   );
   const [clientId, setClientId] = useState(googleClientId() ?? '');
   const [busy, setBusy] = useState<string>();
+  const [readingResume, setReadingResume] = useState(false);
   const token = currentGoogleToken();
   const builtIn = !!envGoogleClientId();
   const connect = async () => {
@@ -1107,17 +1110,37 @@ function Integrations() {
                 type="file"
                 accept=".pdf,.txt,.md,.docx"
                 className="sr-only"
+                disabled={readingResume}
                 onChange={async (e) => {
-                  const f = e.target.files?.[0];
+                  const input = e.target;
+                  const f = input.files?.[0];
                   if (!f) return;
-                  setBusy('Parsing resume…');
-                  await saveResume(user, f);
-                  setBusy(undefined);
-                  toast.push({ text: 'Resume updated.', tone: 'good' });
+                  setReadingResume(true);
+                  try {
+                    await saveResume(user, f);
+                    toast.push({ text: 'Resume updated.', tone: 'good' });
+                  } catch (err) {
+                    toast.push({
+                      text: err instanceof Error && err.message ? err.message : "That file couldn't be read.",
+                      tone: 'bad',
+                    });
+                  } finally {
+                    setReadingResume(false);
+                    // the same file can be picked again after a failure
+                    input.value = '';
+                  }
                 }}
               />
               <span className="inline-flex items-center justify-center gap-1.5 rounded-full font-medium h-8 px-3 text-[13px] bg-canvas border border-line shadow-[var(--shadow-pill)] hover:bg-canvas-2 cursor-pointer">
-                {resume ? 'Replace' : 'Upload'}
+                {readingResume ? (
+                  <>
+                    <Working /> Reading…
+                  </>
+                ) : resume ? (
+                  'Replace'
+                ) : (
+                  'Upload'
+                )}
               </span>
             </label>
           }
@@ -1457,8 +1480,10 @@ function Privacy() {
   const nav = useNavigate();
   const toast = useToast();
   const sources = useSources(user?.id ?? '');
+  const working = useWorking();
   if (!user) return null;
-  const exportAll = async () => {
+  const exportAll = () => working.run('export', 'Gathering your data…', downloadAll);
+  const downloadAll = async () => {
     const out = await exportAllData();
     const blob = new Blob([JSON.stringify(out, null, 1)], {
       type: 'application/json',
@@ -1522,20 +1547,24 @@ function Privacy() {
           people, notes, facts, drafts and what you sent. It does not include your Anthropic key.
         </p>
         <div className="mt-3 flex flex-wrap gap-2 items-center">
-          <Button onClick={exportAll}>
-            <Download size={14} /> Download all my data
+          <Button onClick={exportAll} loading={working.busy === 'export'} disabled={!!working.busy}>
+            {working.busy !== 'export' && <Download size={14} />} Download all my data
           </Button>
           <Button
             variant="ghost"
             className="text-bad hover:bg-bad-soft hover:text-bad"
-            onClick={async () => {
+            loading={working.busy === 'delete'}
+            disabled={!!working.busy}
+            onClick={() => {
               if (!confirm('Delete all Orbit data from this browser? This cannot be undone.')) return;
-              await deleteAllData();
-              await signOut();
-              nav('/');
+              void working.run('delete', 'Deleting your data…', async () => {
+                await deleteAllData();
+                await signOut();
+                nav('/');
+              });
             }}
           >
-            <Trash2 size={14} /> Delete all data
+            {working.busy !== 'delete' && <Trash2 size={14} />} Delete all data
           </Button>
         </div>
       </Section>

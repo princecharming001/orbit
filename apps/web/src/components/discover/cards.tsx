@@ -11,7 +11,7 @@ import {
   outreachChannelFor,
   type RecommendationDismissReason,
 } from '../../engine/recommend';
-import { Avatar, Button, cx } from '../../ui';
+import { Avatar, Button, cx, Working } from '../../ui';
 import { CompanyLogo } from '../CompanyLogo';
 import { RoleLine } from '../SuggestionCard';
 import { DegreeBadge, DismissMenu, ScoreBars, WhyThem } from './parts';
@@ -26,12 +26,16 @@ export function foundActionLabel(c: FoundCard, action: FoundAction = c.action): 
   return 'Start warm-up';
 }
 
+/** The key one card action runs under (`busy`), so the button clicked, and only it, shows the spinner. */
+export const actionKey = (id: string, action: string) => `${id}:${action}`;
+
 const cardShell =
   'group/card relative bg-canvas border rounded-[var(--radius-card)] p-4 fade-up flex flex-col gap-3 h-full transition-shadow hover:shadow-[var(--shadow-card)] min-w-0';
 
 export interface FoundHandlers {
   onAct: (card: FoundCard, action: FoundAction) => void;
   onDismiss: (card: FoundCard, reason: RecommendationDismissReason, label: string) => void;
+  /** the action being worked on (an actionKey); every card's actions wait for it, one at a time */
   busy?: string;
 }
 
@@ -39,7 +43,8 @@ export interface FoundHandlers {
 export function FoundCardView({ card, h }: { card: FoundCard; h: FoundHandlers }) {
   const e = card.entry;
   const first = firstName(card.name);
-  const busy = h.busy === card.id;
+  const busy = !!h.busy;
+  const loading = (a: FoundAction) => h.busy === actionKey(card.id, a);
   const headId = `found-${e.memberId}`;
   const profile = e.profileUrl ? { href: e.profileUrl, target: '_blank', rel: 'noreferrer' } : undefined;
   return (
@@ -73,10 +78,11 @@ export function FoundCardView({ card, h }: { card: FoundCard; h: FoundHandlers }
             aria-label={`Save ${first}`}
             title="Save: add them to your people, to write to later"
             disabled={busy}
+            aria-busy={loading('save') || undefined}
             onClick={() => h.onAct(card, 'save')}
             data-testid="found-save"
           >
-            <Bookmark size={16} />
+            {loading('save') ? <Working /> : <Bookmark size={16} />}
           </button>
         )}
       </div>
@@ -93,6 +99,7 @@ export function FoundCardView({ card, h }: { card: FoundCard; h: FoundHandlers }
           size="sm"
           className="min-w-0 max-w-full truncate"
           disabled={busy}
+          loading={loading(card.action)}
           onClick={() => h.onAct(card, card.action)}
           data-testid="found-primary"
         >
@@ -103,6 +110,7 @@ export function FoundCardView({ card, h }: { card: FoundCard; h: FoundHandlers }
             size="sm"
             variant="ghost"
             disabled={busy}
+            loading={loading('write')}
             onClick={() => h.onAct(card, 'write')}
             data-testid="found-write"
             title="Add them and write the first message now"
@@ -120,6 +128,8 @@ export interface NetworkHandlers {
   onStart: (personId: string, opts?: { skipWarmUp?: boolean }) => void;
   onToggleSave: (card: NetworkCard) => void;
   onDismiss: (card: NetworkCard, reason: RecommendationDismissReason, label: string) => void;
+  /** the start being worked on: actionKey(personId, 'start' or 'write') */
+  busy?: string;
 }
 
 /** Someone already in the student's network, worth reaching now. */
@@ -127,6 +137,7 @@ export function NetworkCardView({ card, h }: { card: NetworkCard; h: NetworkHand
   const { rec: r, person: p, introducer } = card;
   // known from LinkedIn only: a warm-up or an intro first, and Write now for a student who knows them anyway
   const cold = isColdRecommendation(p, r);
+  const busy = !!h.busy;
   return (
     <div
       // every card has the same skeleton, so a row of them lines up: who, why, how strong, how to reach them, and
@@ -196,6 +207,8 @@ export function NetworkCardView({ card, h }: { card: NetworkCard; h: NetworkHand
           <Button
             variant="primary"
             size="sm"
+            disabled={busy}
+            loading={h.busy === actionKey(p.id, 'start')}
             onClick={() => h.onStart(p.id)}
             data-testid="rec-start"
             data-channel={outreachChannelFor(p)}
@@ -208,6 +221,8 @@ export function NetworkCardView({ card, h }: { card: NetworkCard; h: NetworkHand
           <Button
             size="sm"
             variant="ghost"
+            disabled={busy}
+            loading={h.busy === actionKey(p.id, 'write')}
             onClick={() => h.onStart(p.id, { skipWarmUp: true })}
             data-testid="rec-write-now"
             title="Skip the warm-up and write the first message now"
@@ -254,7 +269,8 @@ export function SuggestionCard({
               size="sm"
               variant="primary"
               className="max-w-full truncate"
-              disabled={found.busy === card.id}
+              disabled={!!found.busy}
+              loading={found.busy === actionKey(card.id, card.action)}
               onClick={() => found.onAct(card, card.action)}
               data-testid="suggest-action"
             >
@@ -305,6 +321,8 @@ export function SuggestionCard({
             <Button
               size="sm"
               variant="primary"
+              disabled={!!network.busy}
+              loading={network.busy === actionKey(p.id, 'start')}
               onClick={() => network.onStart(p.id)}
               data-testid="suggest-action"
             >

@@ -27,8 +27,16 @@ export function Button({
   variant = 'secondary',
   size = 'md',
   className,
+  loading,
+  children,
+  disabled,
   ...rest
-}: ButtonHTMLAttributes<HTMLButtonElement> & { variant?: Variant; size?: 'sm' | 'md' | 'lg' }) {
+}: ButtonHTMLAttributes<HTMLButtonElement> & {
+  variant?: Variant;
+  size?: 'sm' | 'md' | 'lg';
+  /** the click is being worked on: a spinner in the button, which stays full strength but takes no second click */
+  loading?: boolean;
+}) {
   const base =
     'inline-flex items-center justify-center gap-1.5 rounded-full font-medium tracking-[0.005em] transition-[background-color,border-color,color,transform] duration-150 active:scale-[0.97] disabled:active:scale-100 disabled:opacity-40 disabled:cursor-not-allowed focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ink/25 focus-visible:ring-offset-1 whitespace-nowrap';
   const sizes = { sm: 'h-8 px-3 text-[13px]', md: 'h-9 px-4 text-[14px]', lg: 'h-11 px-5 text-[15px]' }[size];
@@ -42,7 +50,36 @@ export function Button({
     subtle: 'bg-canvas-2 text-ink hover:bg-line-2',
     danger: 'bg-bad-soft text-bad hover:bg-[#fbdcd8]',
   };
-  return <button className={cx(base, sizes, variants[variant], className)} {...rest} />;
+  return (
+    <button
+      className={cx(
+        base,
+        sizes,
+        variants[variant],
+        loading && 'disabled:opacity-100 cursor-progress',
+        className,
+      )}
+      disabled={disabled || loading}
+      aria-busy={loading || undefined}
+      {...rest}
+    >
+      {loading && <Working />}
+      {children}
+    </button>
+  );
+}
+
+/** A small spinner in the text's own color, for inside a button. */
+export function Working({ className }: { className?: string }) {
+  return (
+    <span
+      className={cx(
+        'inline-block w-3.5 h-3.5 shrink-0 rounded-full border-2 border-current border-t-transparent animate-spin opacity-80',
+        className,
+      )}
+      aria-hidden
+    />
+  );
 }
 
 export function Card({
@@ -629,6 +666,8 @@ interface ToastItem {
   text: string;
   action?: { label: string; onClick: () => void };
   tone?: 'neutral' | 'good' | 'bad';
+  /** something is being worked on: a spinner, and it stays up until it is dismissed or replaced */
+  working?: boolean;
   ttl?: number;
   /** keep the toast when the page changes (it announces what the new page shows) */
   sticky?: boolean;
@@ -650,7 +689,11 @@ export function ToastProvider({ children }: { children: ReactNode }) {
       const id = ++counter.current;
       setItems((xs) => [...xs, { ...t, id, at: Date.now() }].slice(-MAX_TOASTS));
       // short, so it does not sit over the page: only a toast with a button (Undo, Open) may stay longer
-      setTimeout(() => dismiss(id), t.action ? (t.ttl ?? 6000) : Math.min(t.ttl ?? 4000, 5000));
+      // a working toast stays until its work ends (with a minute's limit, so one can never be stuck on screen)
+      setTimeout(
+        () => dismiss(id),
+        t.working ? 60_000 : t.action ? (t.ttl ?? 6000) : Math.min(t.ttl ?? 4000, 5000),
+      );
       return id;
     },
     [dismiss],
@@ -685,6 +728,7 @@ export function ToastProvider({ children }: { children: ReactNode }) {
             )}
             role="status"
           >
+            {t.working && <Working />}
             <span className="min-w-0">{t.text}</span>
             {t.action && (
               <button
@@ -712,6 +756,40 @@ export function ToastProvider({ children }: { children: ReactNode }) {
 }
 export function useToast() {
   return useContext(ToastCtx);
+}
+
+/**
+ * For a click that takes a while (Claude writing a draft, a server call): the screen answers at once with a working
+ * toast ("Writing to Priya…") and `busy` set to the action's key, so its button can show a spinner and take no second
+ * click; a failure says so in a red toast instead of the click seeming to do nothing. The action's own toast (Undo,
+ * Open) replaces the working one when it lands.
+ */
+export function useWorking() {
+  const toast = useToast();
+  const [busy, setBusy] = useState<string>();
+  const running = useRef<string | undefined>(undefined);
+  const run = useCallback(
+    async <T,>(key: string, label: string, fn: () => Promise<T>): Promise<T | undefined> => {
+      if (running.current) return undefined;
+      running.current = key;
+      setBusy(key);
+      const id = toast.push({ text: label, working: true, sticky: true });
+      try {
+        return await fn();
+      } catch (e) {
+        toast.dismiss(id);
+        const m = e instanceof Error ? e.message : '';
+        toast.push({ text: m && m.length < 160 ? m : 'That did not work. Try again.', tone: 'bad' });
+        return undefined;
+      } finally {
+        toast.dismiss(id);
+        running.current = undefined;
+        setBusy(undefined);
+      }
+    },
+    [toast],
+  );
+  return { busy, run };
 }
 
 /** The modifier key a shortcut uses on this computer: the Command key on a Mac, Ctrl elsewhere. */

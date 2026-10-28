@@ -169,12 +169,7 @@ test.describe('account mode (mocked orbit-api)', () => {
     await expect(page.locator('main')).not.toContainText(/export/i);
     await expect.poll(() => api.state.goals.map((g) => g.kind).sort()).toEqual(['fundraising', 'recruiting']);
     await page.getByTestId('ob-skip').click();
-    // Rate a few people (optional): one rating goes to the server
-    await expect(page.getByRole('heading', { name: 'Rate a few people' })).toBeVisible();
-    await expect(page.getByTestId('ob-rate-person')).toHaveCount(3);
-    await page.getByTestId('ob-rate-person').first().getByTestId('closeness-4').click();
-    await expect.poll(() => api.state.labels.get(P1)).toBe(4);
-    await page.getByTestId('ob-rate-done').click();
+    // no Rate step in setup: it is asked in a popup a couple of days later, once Orbit has read enough email
     await expect(page.getByTestId('ob-ready-gmail')).toContainText('Connected as maya@cornell.edu');
     await expect(page.getByTestId('ob-ready-goals')).toContainText(/Product management and Fundraising/i);
     await page.getByRole('button', { name: /open orbit/i }).click();
@@ -204,6 +199,47 @@ test.describe('account mode (mocked orbit-api)', () => {
     await expect(page).toHaveURL(/\/onboarding\/\d/);
   });
 
+  test('Rate a few people is asked in a popup days after setup, and once only', async ({ page }) => {
+    const api = await withFakeApi(page);
+    seedNetwork(api);
+    const at = '2026-10-05T12:00:00.000Z';
+    const more = ['Ana Cole', 'Ben Ito', 'Cy Park'].map((name, i) => ({
+      id: `0b8f6a0e-1111-4c2e-8d1a-00000000001${i}`,
+      userId: api.state.user.id,
+      displayName: name,
+      currentTitle: 'Analyst',
+      currentOrganizationRaw: 'Ramp',
+      primaryEmail: `${name.split(' ')[0]!.toLowerCase()}@ramp.com`,
+      emails: [`${name.split(' ')[0]!.toLowerCase()}@ramp.com`],
+      sources: ['gmail'],
+      tieScore: 30 - i,
+      tieBand: 'light',
+      lastInteractionAt: at,
+      interactionCount: 4,
+      createdAt: at,
+      updatedAt: at,
+    }));
+    (api.state.pages[0]!.changes.people as unknown[]).push(...more);
+    api.state.user.onboarding = { completed_at: at };
+    await page.addInitScript(() => {
+      (window as unknown as { __ORBIT_RATE__: string }).__ORBIT_RATE__ = 'on';
+    });
+    await page.goto('');
+    await page.getByTestId('landing-login').click();
+    await expect(page.getByTestId('greeting')).toBeVisible({ timeout: 20_000 });
+    const prompt = page.getByTestId('rate-prompt');
+    await expect(prompt).toBeVisible({ timeout: 20_000 });
+    await expect(prompt.getByTestId('ob-rate-person')).toHaveCount(6);
+    await prompt.getByTestId('ob-rate-person').first().getByTestId('closeness-4').click();
+    await expect.poll(() => api.state.labels.size).toBe(1);
+    await page.getByTestId('rate-prompt-done').click();
+    await expect(prompt).toHaveCount(0);
+    await page.reload();
+    await expect(page.getByTestId('greeting')).toBeVisible({ timeout: 20_000 });
+    await page.waitForTimeout(1500);
+    await expect(page.getByTestId('rate-prompt')).toHaveCount(0);
+  });
+
   test.describe('signed in', () => {
     async function signedIn(page: Page): Promise<FakeOrbitApi> {
       const api = await withFakeApi(page);
@@ -220,7 +256,6 @@ test.describe('account mode (mocked orbit-api)', () => {
       await page.getByTestId('ob-fn-pm').click();
       await page.getByRole('button', { name: /^continue$/i }).click();
       await skipQuestions(page);
-      await page.getByTestId('ob-skip').click();
       await page.getByTestId('ob-skip').click();
       await page.getByRole('button', { name: /open orbit/i }).click();
       await expect(page.getByTestId('greeting')).toBeVisible({ timeout: 30_000 });

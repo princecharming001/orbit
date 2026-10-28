@@ -2794,9 +2794,14 @@ test.describe('Morning brief', () => {
     await expect(brief).toHaveAttribute('role', 'dialog');
     await expect(brief).toHaveAttribute('aria-modal', 'true');
     await expect(page.getByTestId('morning-backdrop')).toBeVisible();
+    // measured once it has settled: it slides in, and its height grows as its cards load
+    await expect
+      .poll(async () => {
+        const b = (await brief.boundingBox())!;
+        return Math.max(Math.abs(b.x + b.width / 2 - 720), Math.abs(b.y + b.height / 2 - 450));
+      })
+      .toBeLessThan(3);
     const box = (await brief.boundingBox())!;
-    expect(Math.abs(box.x + box.width / 2 - 720)).toBeLessThan(3);
-    expect(Math.abs(box.y + box.height / 2 - 450)).toBeLessThan(3);
     expect(box.width).toBeLessThan(700);
     await info.attach('morning-desktop', {
       body: await page.screenshot(),

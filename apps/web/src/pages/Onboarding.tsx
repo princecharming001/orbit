@@ -42,7 +42,6 @@ import {
 import { Navigate, useLocation, useNavigate, useParams } from 'react-router-dom';
 import { Logo } from '../components/AppShell';
 import { ImportProgress } from '../components/account/ImportProgress';
-import { RatePeople } from '../components/account/RatePeople';
 import { CompanyLogo } from '../components/CompanyLogo';
 import {
   ObBack,
@@ -61,7 +60,7 @@ import { WeeklyTargetSlider } from '../components/WeeklyTargetSlider';
 import { suggestCompanies } from '../data/companies';
 import { suggestSchools } from '../data/schools';
 import { db } from '../db/schema';
-import { finishOnboarding, setOnboardingStep } from '../engine/account';
+import { buildFirstBrief, markOnboardingDone, setOnboardingStep } from '../engine/account';
 import { LINKEDIN_RISK_SENTENCE } from '../engine/consent';
 import { archiveGoal, GOAL_KIND_LABELS, GOAL_KIND_TITLES, listGoals, saveGoal } from '../engine/goals';
 import { connectAndSyncGoogle } from '../engine/integrations';
@@ -100,6 +99,11 @@ import {
 
 export { onboardingPath } from './onboardingPath';
 
+/** A connected LinkedIn: how many came in, or, before the first of them has, that they are on their way. */
+function linkedinSoFar(n: number): string {
+  return n ? connectionsImported(n) : 'Connected, your connections are coming in';
+}
+
 /** A LinkedIn import of either kind: the export file, or the live connection once it exists. */
 function connectionsImported(n: number): string {
   return `${n} ${n === 1 ? 'connection' : 'connections'} imported`;
@@ -122,7 +126,6 @@ export function Onboarding() {
   const did = useLiveQuery(async () => {
     if (!user) return {};
     const ints = await db.integrations.where('userId').equals(user.id).toArray();
-    const rated = await db.tieLabels.where('userId').equals(user.id).count();
     const w = ownWordsOf(await db.goals.get(user.id));
     return {
       [STEP.aim]: !!(w.aim || w.success),
@@ -132,7 +135,6 @@ export function Onboarding() {
       [STEP.job]: !!w.currentJob,
       [STEP.linkedin]: ints.some((i) => isLinkedIn(i.provider)),
       [STEP.gmail]: ints.some((i) => i.provider === 'google'),
-      [STEP.rate]: rated > 0,
     } as Record<number, boolean>;
   }, [user?.id]);
   const google = !!googleClientId();
@@ -174,10 +176,15 @@ export function Onboarding() {
   const from = (location.state as { fromStep?: number } | null)?.fromStep;
   const direction = from !== undefined && from > step ? 'back' : 'forward';
   const finish = async () => {
-    // account mode: the first brief is built from what the server has read so far
-    if (signedIn) await pullNow(user.id).catch(() => undefined);
-    await finishOnboarding(user.id);
+    // Orbit opens at once; the first brief is built behind it (account mode: from what the server has read so far,
+    // pulled first) and shows up on Home as soon as it is ready
+    const fresh = await markOnboardingDone(user.id);
     nav('/');
+    if (!fresh) return;
+    void (async () => {
+      if (signedIn) await pullNow(user.id).catch(() => undefined);
+      await buildFirstBrief(fresh).catch((e) => console.warn('first brief', e));
+    })();
   };
   const statuses = stepStatuses(STEPS, step, did ?? {});
   const onBack = step === STEP.welcome ? undefined : () => back(before(step));
@@ -196,7 +203,6 @@ export function Onboarding() {
   else if (step === STEP.linkedin)
     body = <StepLinkedIn signedIn={signedIn} onNext={() => go(after(STEP.linkedin))} />;
   else if (step === STEP.gmail) body = <StepGmail onNext={() => go(after(STEP.gmail))} />;
-  else if (step === STEP.rate) body = <StepRate onNext={() => go(after(STEP.rate))} />;
   else if (step === STEP.ready)
     body = (
       <StepReady
@@ -372,13 +378,14 @@ function StepYou({ onNext }: { onNext: () => void }) {
     e?.preventDefault();
     if (missing.length || busy) return;
     setBusy(true);
-    await updateProfile(user.id, {
+    // saved here at once; the copy on the account goes up behind the next step, so Continue never waits on the server
+    void updateProfile(user.id, {
       fullName: f.fullName,
       email: f.email.trim().toLowerCase(),
       school: f.school,
       schoolDomain: ownDomain ?? (domain || emailDomain(f.email) || undefined),
       graduationYear: Number(f.graduationYear),
-    });
+    }).catch((err) => console.warn('profile', err));
     onNext();
   };
   const now = new Date();
@@ -643,7 +650,8 @@ function StepGoals({ onNext, onBack }: { onNext: () => void; onBack: () => void 
     <div>
       <BackArrow
         onClick={async () => {
-          await persist();
+          // Back always goes back, even if saving the picks failed
+          await persist().catch((err) => console.warn('goals', err));
           onBack();
         }}
       />
@@ -1335,7 +1343,7 @@ function StepLinkedIn({ onNext, signedIn }: { onNext: () => void; signedIn?: boo
     }
   };
   const doneBefore =
-    !result && earlier ? `${connectionsImported((earlier.syncState as { rows?: number }).rows ?? 0)}.` : '';
+    !result && earlier ? `${linkedinSoFar((earlier.syncState as { rows?: number }).rows ?? 0)}.` : '';
   const done = !!(result || doneBefore);
   return (
     <div>
@@ -1596,28 +1604,6 @@ function StepGmail({ onNext }: { onNext: () => void }) {
   );
 }
 
-/** Account mode: rate how close you are to ten people, so the scores learn your sense of closeness (optional). */
-function StepRate({ onNext }: { onNext: () => void }) {
-  const user = useSession().user!;
-  return (
-    <div>
-      <ObHeader
-        title="Rate a few people"
-        subtitle="How close are you to each? Orbit tunes its closeness scores to your answers. Skip anyone, or the whole step."
-      />
-      <RatePeople userId={user.id} />
-      <div className="mt-8 space-y-3">
-        <ObPrimary onClick={onNext} data-testid="ob-rate-done">
-          Continue
-        </ObPrimary>
-        <ObQuiet onClick={onNext} data-testid="ob-skip">
-          Skip this
-        </ObQuiet>
-      </div>
-    </div>
-  );
-}
-
 /** The start of what the student is going for, in quotes, for the Ready summary. */
 function aimSnippet(aim: string | undefined): string | undefined {
   const t = aim?.replace(/\s+/g, ' ').trim();
@@ -1698,7 +1684,7 @@ function StepReady({
       key: 'linkedin',
       title: 'LinkedIn',
       detail: info?.linkedin
-        ? connectionsImported((info.linkedin.syncState as { rows?: number }).rows ?? 0)
+        ? linkedinSoFar((info.linkedin.syncState as { rows?: number }).rows ?? 0)
         : 'Skipped for now',
       ok: !!info?.linkedin,
       step: STEP.linkedin,

@@ -25,7 +25,7 @@ import { applyStage, decideProposedStage } from '../engine/stages';
 import { SUGGESTION_KIND_LABELS } from '../engine/today';
 import { answerTrustOffer, LADDER_WORDS, type LadderKind } from '../engine/trust';
 import { useSession } from '../state/session';
-import { Avatar, Button, Chip, cx, useToast } from '../ui';
+import { Avatar, Button, Chip, cx, useToast, useWorking } from '../ui';
 import { runApproval } from './approve';
 import { CompanyLogo, PersonCompanyLogo } from './CompanyLogo';
 import { DraftEditor, OutboxStatus } from './DraftEditor';
@@ -57,6 +57,7 @@ export function SuggestionCard({
   const toast = useToast();
   const [open, setOpen] = useState(!!defaultOpen);
   const [busy, setBusy] = useState(false);
+  const working = useWorking();
   const [dismissing, setDismissing] = useState(false);
   const [mergeAsk, setMergeAsk] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
@@ -579,13 +580,24 @@ export function SuggestionCard({
               <Button
                 variant="primary"
                 size="sm"
-                disabled={busy}
-                onClick={() => void answerHeldMeeting(user, s.id, true)}
+                disabled={busy || !!working.busy}
+                loading={working.busy === 'held-yes'}
+                // filing reads the recording's notes with Claude, which takes a moment
+                onClick={() =>
+                  void working.run('held-yes', 'Filing the notes…', () => answerHeldMeeting(user, s.id, true))
+                }
                 data-testid="held-meeting-yes"
               >
                 Yes, file it
               </Button>
-              <Button size="sm" disabled={busy} onClick={() => void answerHeldMeeting(user, s.id, false)}>
+              <Button
+                size="sm"
+                disabled={busy || !!working.busy}
+                loading={working.busy === 'held-no'}
+                onClick={() =>
+                  void working.run('held-no', 'Setting it aside…', () => answerHeldMeeting(user, s.id, false))
+                }
+              >
                 No
               </Button>
             </div>

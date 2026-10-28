@@ -433,9 +433,10 @@ export function DraftEditor({
     // what was typed a moment ago is stored first, so the redraft starts from the student's latest words
     await saveEdits(draft, body, subject);
     const given = Object.fromEntries(needs.map((n) => [n, inputs[n]?.trim()]).filter(([, v]) => v));
+    // a redraft that throws reads as one that failed, so the button never stays on "Adding…"
     const done = await regenerateDraft(user, draft.id, given, new Date(), {
       mine: keepsMine ? body : undefined,
-    });
+    }).catch(() => undefined);
     setRegenerating(false);
     if (!done) {
       setError('Orbit could not redraft this message. Your text is unchanged.');

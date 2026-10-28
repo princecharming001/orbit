@@ -38,6 +38,7 @@ export function WarmIntrosPanel({
   target,
   company,
   onAsk,
+  isAsking,
   className,
 }: {
   user: User;
@@ -45,6 +46,8 @@ export function WarmIntrosPanel({
   company?: string;
   /** draft an intro request from this person to that one (the map's own "Ask X for an intro") */
   onAsk: (connectorId: string, targetId: string, warmth: number) => void;
+  /** that request is being drafted: its button spins */
+  isAsking?: (connectorId: string, targetId: string) => boolean;
   className?: string;
 }) {
   const intros = useWarmIntros(user, target, company);
@@ -78,6 +81,7 @@ export function WarmIntrosPanel({
                   size="sm"
                   className="mt-2"
                   onClick={() => onAsk(w.introducer.personId!, w.targetPersonId!, w.warmth)}
+                  loading={isAsking?.(w.introducer.personId!, w.targetPersonId!)}
                   data-testid="map-warm-intro-ask"
                 >
                   Ask {first} for an intro

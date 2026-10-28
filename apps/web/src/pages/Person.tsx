@@ -73,6 +73,8 @@ import {
   SkeletonText,
   Tabs,
   useToast,
+  useWorking,
+  Working,
 } from '../ui';
 
 /**
@@ -237,7 +239,12 @@ export function PersonPage() {
     (params.get('draft') as MessageKind | null) ?? undefined,
   );
   const [draftId, setDraftId] = useState<string>();
-  const [busy, setBusy] = useState(false);
+  // Claude writing a draft: a working toast at once, the clicked button spins, a failure says so
+  const drafting = useWorking();
+  const [sending, setSending] = useState(false);
+  const busy = !!drafting.busy || sending;
+  // the summary rewrite has its own, so it never holds up writing to them
+  const summarizing = useWorking();
   const [warmUpChoice, setWarmUpChoice] = useState(false);
   const [asking, setAsking] = useState(false);
   const [inviting, setInviting] = useState(false);
@@ -354,7 +361,12 @@ export function PersonPage() {
     drafts
       .filter((d) => d.kind === kind && d.status === 'draft')
       .sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0];
-  const compose = async (kind: MessageKind, opts: { skipWarmUp?: boolean; confirmed?: boolean } = {}) => {
+  /** `key` names the clicked button, so it alone spins (`drafting.busy`). */
+  const compose = async (
+    kind: MessageKind,
+    opts: { skipWarmUp?: boolean; confirmed?: boolean } = {},
+    key = `compose:${kind}`,
+  ) => {
     // a draft the page already has is reopened without a round trip; the engine reads the database for the rest
     const started = openDraftFor(kind);
     if (started) {
@@ -362,8 +374,7 @@ export function PersonPage() {
       setComposing(kind);
       return;
     }
-    setBusy(true);
-    try {
+    await drafting.run(key, `Writing to ${person.firstName}…`, async () => {
       const r = await composeDraft(user, person.id, kind, { ...opts, chat: chat ?? null });
       // A cold LinkedIn-only contact: explain the warm-up and let the student choose before anything starts.
       if (r.kind === 'warmup_choice') {
@@ -383,9 +394,7 @@ export function PersonPage() {
       setDraftId(r.draft.id);
       // the thread may call for another kind (a bump to someone who answered is the scheduling reply)
       setComposing(r.draft.kind);
-    } finally {
-      setBusy(false);
-    }
+    });
   };
   const draft = drafts.find((d) => d.id === draftId);
   /** Drop a draft the student started; `quiet` when nothing of theirs is in it, otherwise with an Undo. */
@@ -404,12 +413,12 @@ export function PersonPage() {
   };
   const send = async (body: string, subject?: string) => {
     if (!draft) return;
-    setBusy(true);
+    setSending(true);
     try {
       // the composer stays open: it shows the undo window, the hand-off confirmation, or why it was not sent
       return await runApproval(user, draft, body, subject, toast, person.firstName);
     } finally {
-      setBusy(false);
+      setSending(false);
     }
   };
   const timeline = [
@@ -634,6 +643,7 @@ export function PersonPage() {
               variant="primary"
               size="sm"
               disabled={busy}
+              loading={drafting.busy === 'write'}
               onClick={() => {
                 // the stage and the calendar together: no check-in minutes after a thank-you
                 const next = composeKindFor(chat, new Date(), {
@@ -651,7 +661,7 @@ export function PersonPage() {
                     tone: 'neutral',
                     ttl: 6000,
                   });
-                else compose(next.kind);
+                else compose(next.kind, {}, 'write');
               }}
               data-testid="person-write"
             >
@@ -778,19 +788,24 @@ export function PersonPage() {
           </p>
           <p>If you already know {person.firstName}, skip it and write now.</p>
           <div className="flex flex-wrap gap-2 pt-1">
+            {/* the choice stays open while Claude writes, so the click shows; it closes once there is something */}
             <Button
               variant="primary"
-              onClick={() => {
+              disabled={busy}
+              loading={drafting.busy === 'warmup'}
+              onClick={async () => {
+                await compose('outreach', { confirmed: true }, 'warmup');
                 setWarmUpChoice(false);
-                compose('outreach', { confirmed: true });
               }}
             >
               Warm up first (recommended)
             </Button>
             <Button
-              onClick={() => {
+              disabled={busy}
+              loading={drafting.busy === 'warmup-skip'}
+              onClick={async () => {
+                await compose('outreach', { confirmed: true, skipWarmUp: true }, 'warmup-skip');
                 setWarmUpChoice(false);
-                compose('outreach', { confirmed: true, skipWarmUp: true });
               }}
               data-testid="warmup-skip"
             >
@@ -920,6 +935,7 @@ export function PersonPage() {
                   <button
                     key={k}
                     disabled={busy || draft.status !== 'draft'}
+                    aria-busy={drafting.busy === `compose:${k}` || undefined}
                     onClick={() => {
                       if (k === composing) return;
                       // the draft being left keeps the student's words (it waits under Waiting on you); an untouched
@@ -930,10 +946,11 @@ export function PersonPage() {
                     }}
                     aria-pressed={composing === k}
                     className={cx(
-                      'px-2.5 h-8 rounded-full border focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40',
+                      'px-2.5 h-8 rounded-full border inline-flex items-center gap-1.5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40',
                       composing === k ? 'border-ink bg-ink text-white' : 'border-line text-ink-2',
                     )}
                   >
+                    {drafting.busy === `compose:${k}` && <Working />}
                     {MESSAGE_KIND_LABELS[k]}
                   </button>
                 ))}
@@ -1170,10 +1187,17 @@ export function PersonPage() {
               </>
             )}
             <button
-              className="mt-3 text-[12px] text-ink-3 underline"
-              onClick={() => refreshPersonSummary(user, person.id)}
+              className="mt-3 text-[12px] text-ink-3 underline inline-flex items-center gap-1.5 disabled:cursor-progress"
+              disabled={!!summarizing.busy}
+              aria-busy={!!summarizing.busy || undefined}
+              onClick={() =>
+                void summarizing.run('summary', `Rewriting the summary of ${person.firstName}…`, () =>
+                  refreshPersonSummary(user, person.id),
+                )
+              }
               title="Rewrite this summary from the latest emails, meetings and notes"
             >
+              {summarizing.busy && <Working />}
               Refresh summary
             </button>
           </Card>

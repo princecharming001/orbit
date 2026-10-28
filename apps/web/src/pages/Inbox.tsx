@@ -38,6 +38,8 @@ import {
   SkeletonRows,
   Tabs,
   useToast,
+  useWorking,
+  Working,
 } from '../ui';
 
 const IN_FLIGHT: OutboundMessage['status'][] = ['queued', 'sending', 'handed_off', 'failed'];
@@ -66,7 +68,9 @@ export function InboxPage() {
   const [tab, setTab] = useState<'pending' | 'scheduled' | 'snoozed' | 'outbox' | 'sent' | 'replies'>();
   const [showLater, setShowLater] = useState(false);
   const [showMore, setShowMore] = useState(false);
-  const [busy, setBusy] = useState(false);
+  // Refresh and "They replied" each wait on Claude: the button spins, a working toast says so, a failure says so
+  const refreshing = useWorking();
+  const replying = useWorking();
   const [picked, setPicked] = useState<string>();
   // wide enough for a list and an open draft side by side (measured on the page, so the chat's side panel counts)
   const rootRef = useRef<HTMLDivElement>(null);
@@ -261,13 +265,10 @@ export function InboxPage() {
             : 'pending');
   const refresh = async () => {
     if (!user) return;
-    setBusy(true);
-    try {
+    await refreshing.run('refresh', 'Reading your latest email, calendar and notes…', async () => {
       await generateBrief(user, 'daily');
       toast.push({ text: 'Updated from your latest email, calendar and notes.' });
-    } finally {
-      setBusy(false);
-    }
+    });
   };
   const nothingToSend =
     !pending.length && !started.length && !handedOff.length && !toWrite.length && !otherCards.length;
@@ -319,14 +320,14 @@ export function InboxPage() {
                 </Button>
               )}
               <Button
-                onClick={refresh}
-                disabled={busy}
+                onClick={() => void refresh()}
+                loading={!!refreshing.busy}
                 title="Rebuild today's cards from your latest email, calendar and notes"
                 aria-label="Refresh"
                 className="px-2.5 @[40rem]:px-3.5"
                 data-testid="drafts-refresh"
               >
-                <RefreshCw size={14} className={busy ? 'animate-spin' : ''} /> <span>Refresh</span>
+                {!refreshing.busy && <RefreshCw size={14} />} <span>Refresh</span>
               </Button>
             </span>
           )
@@ -599,18 +600,24 @@ export function InboxPage() {
                         </div>
                       </div>
                       <button
-                        className="shrink-0 h-8 px-2 rounded-md text-[12px] text-accent hover:bg-canvas-2"
-                        onClick={async () => {
-                          await moveChat(user, c, 'replied', 'user:replied');
+                        className="shrink-0 h-8 px-2 rounded-md text-[12px] text-accent hover:bg-canvas-2 inline-flex items-center gap-1.5"
+                        disabled={!!replying.busy}
+                        aria-busy={replying.busy === c.id || undefined}
+                        onClick={() => {
+                          // the tab shows where the reply lands at once; the toast waits for Claude to write it
                           setTab('pending');
-                          toast.push({
-                            text: `Moved ${p.firstName} to Replied. Your reply to ${p.firstName} is now a draft here.`,
-                            action: { label: 'Show it', onClick: () => nav(`/inbox?person=${p.id}`) },
-                            ttl: 7000,
+                          void replying.run(c.id, `Writing your reply to ${p.firstName}…`, async () => {
+                            await moveChat(user, c, 'replied', 'user:replied');
+                            toast.push({
+                              text: `Moved ${p.firstName} to Replied. Your reply to ${p.firstName} is now a draft here.`,
+                              action: { label: 'Show it', onClick: () => nav(`/inbox?person=${p.id}`) },
+                              ttl: 7000,
+                            });
                           });
                         }}
                         data-testid="drafts-quiet-replied"
                       >
+                        {replying.busy === c.id && <Working />}
                         They replied
                       </button>
                     </li>

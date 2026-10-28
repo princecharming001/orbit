@@ -29,7 +29,9 @@ export async function syncStatus(ctx: Ctx): Promise<Response> {
 }
 
 export async function statusFor(db: Db, userId: string) {
-  const [counts] = await db.sql<Record<string, number>>`
+  // the three reads go out together: this answers the setup screen's poll every few seconds
+  const [[counts], accounts, pending] = await Promise.all([
+    db.sql<Record<string, number>>`
     select
       (select count(*) from orbit.people where user_id = ${userId}::uuid and not is_self
          and deleted_at is null and merged_into is null)::int as people,
@@ -40,25 +42,26 @@ export async function statusFor(db: Db, userId: string) {
       (select count(*) from orbit.ties where user_id = ${userId}::uuid)::int as ties,
       (select count(*) from orbit.goals where user_id = ${userId}::uuid and deleted_at is null and status = 'active')::int as goals,
       (select count(*) from orbit.chats where user_id = ${userId}::uuid and archived_at is null)::int as chats,
-      (select count(*) from orbit.drafts where user_id = ${userId}::uuid and status = 'draft')::int as drafts`;
-  const accounts = await db.sql<{
-    provider: string;
-    status: string;
-    email: string | null;
-    scopes: string[];
-    linked: boolean;
-    sync_state: Record<string, Record<string, unknown>>;
-    last_synced_at: Date | null;
-    last_error: string | null;
-    watch_expires_at: Date | null;
-  }>`
+      (select count(*) from orbit.drafts where user_id = ${userId}::uuid and status = 'draft')::int as drafts`,
+    db.sql<{
+      provider: string;
+      status: string;
+      email: string | null;
+      scopes: string[];
+      linked: boolean;
+      sync_state: Record<string, Record<string, unknown>>;
+      last_synced_at: Date | null;
+      last_error: string | null;
+      watch_expires_at: Date | null;
+    }>`
     select provider, status, email, scopes, external_account_id is not null as linked, sync_state,
            last_synced_at, last_error, watch_expires_at
-      from orbit.integration_accounts where user_id = ${userId}::uuid order by provider`;
-  const pending = await db.query<{ n: number }>(
-    `select (${QUEUES.map((q) => `(select count(*) from pgmq.q_${q} where message->>'userId' = $1)`).join(' + ')})::int as n`,
-    [userId],
-  );
+      from orbit.integration_accounts where user_id = ${userId}::uuid order by provider`,
+    db.query<{ n: number }>(
+      `select (${QUEUES.map((q) => `(select count(*) from pgmq.q_${q} where message->>'userId' = $1)`).join(' + ')})::int as n`,
+      [userId],
+    ),
+  ]);
   const iso = (d: Date | null) => (d ? new Date(d).toISOString() : null);
   return {
     counts: counts ?? {},

@@ -12602,7 +12602,8 @@ async function syncStatus(ctx) {
   return json(200, await statusFor(ctx.db, ctx.userId));
 }
 async function statusFor(db2, userId) {
-  const [counts] = await db2.sql`
+  const [[counts], accounts, pending] = await Promise.all([
+    db2.sql`
     select
       (select count(*) from orbit.people where user_id = ${userId}::uuid and not is_self
          and deleted_at is null and merged_into is null)::int as people,
@@ -12613,15 +12614,16 @@ async function statusFor(db2, userId) {
       (select count(*) from orbit.ties where user_id = ${userId}::uuid)::int as ties,
       (select count(*) from orbit.goals where user_id = ${userId}::uuid and deleted_at is null and status = 'active')::int as goals,
       (select count(*) from orbit.chats where user_id = ${userId}::uuid and archived_at is null)::int as chats,
-      (select count(*) from orbit.drafts where user_id = ${userId}::uuid and status = 'draft')::int as drafts`;
-  const accounts = await db2.sql`
+      (select count(*) from orbit.drafts where user_id = ${userId}::uuid and status = 'draft')::int as drafts`,
+    db2.sql`
     select provider, status, email, scopes, external_account_id is not null as linked, sync_state,
            last_synced_at, last_error, watch_expires_at
-      from orbit.integration_accounts where user_id = ${userId}::uuid order by provider`;
-  const pending = await db2.query(
-    `select (${QUEUES.map((q) => `(select count(*) from pgmq.q_${q} where message->>'userId' = $1)`).join(" + ")})::int as n`,
-    [userId]
-  );
+      from orbit.integration_accounts where user_id = ${userId}::uuid order by provider`,
+    db2.query(
+      `select (${QUEUES.map((q) => `(select count(*) from pgmq.q_${q} where message->>'userId' = $1)`).join(" + ")})::int as n`,
+      [userId]
+    )
+  ]);
   const iso3 = (d) => d ? new Date(d).toISOString() : null;
   return {
     counts: counts ?? {},
@@ -13277,14 +13279,9 @@ var num2 = (name, fallback) => {
 var supabaseUrl = env("SUPABASE_URL");
 var dbUrl = env("SUPABASE_DB_URL");
 var db = dbUrl ? connectDb(dbUrl) : void 0;
-var sessionSecret = await resolveSecret(env, db, "ORBIT_SESSION_SECRET", "orbit_session_secret");
-var unipileWebhookSecret = await resolveSecret(
-  env,
-  db,
-  "ORBIT_UNIPILE_WEBHOOK_SECRET",
-  "orbit_unipile_webhook_secret"
-);
-var [unipileKey, unipileBase, redirectUri] = await Promise.all([
+var [sessionSecret, unipileWebhookSecret, unipileKey, unipileBase, redirectUri] = await Promise.all([
+  resolveSecret(env, db, "ORBIT_SESSION_SECRET", "orbit_session_secret"),
+  resolveSecret(env, db, "ORBIT_UNIPILE_WEBHOOK_SECRET", "orbit_unipile_webhook_secret"),
   providerSecret(env, db, "UNIPILE_API_KEY"),
   providerSecret(env, db, "UNIPILE_BASE_URL"),
   providerSecret(env, db, "ORBIT_GOOGLE_REDIRECT_URI")

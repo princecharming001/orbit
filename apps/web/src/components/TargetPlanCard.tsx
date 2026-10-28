@@ -13,7 +13,7 @@ import { db } from '../db/schema';
 import { setTargetDeadline, setTargetStatus } from '../engine/settings';
 import { draftPlan, postingLine, whenText } from '../engine/targetPlan';
 import { useSession } from '../state/session';
-import { Avatar, Button, Card, cx, Input, Select, useToast } from '../ui';
+import { Avatar, Button, Card, cx, Input, Select, useToast, useWorking } from '../ui';
 import { CompanyLogo } from './CompanyLogo';
 import { RouteBadge } from './map/RouteBadge';
 
@@ -30,7 +30,8 @@ export function TargetPlanCard({ plan, className }: { plan: TargetPlan; classNam
   const toast = useToast();
   const [picking, setPicking] = useState(false);
   const [picked, setPicked] = useState<Set<string>>(new Set());
-  const [busy, setBusy] = useState(false);
+  // Claude writes each draft, which takes a few seconds: the button spins and a working toast says so meanwhile
+  const { busy, run } = useWorking();
   const target = useLiveQuery(() => db.targetCompanies.get(plan.targetCompanyId), [plan.targetCompanyId]);
   const people =
     useLiveQuery(
@@ -58,22 +59,27 @@ export function TargetPlanCard({ plan, className }: { plan: TargetPlan; classNam
   const p = plan.posting;
   const open = plan.steps.filter((s) => s.status === 'proposed' || s.status === 'held');
   const draftAll = async (which?: string[]) => {
-    setBusy(true);
-    try {
-      const r = await draftPlan(user, plan.id, which);
-      toast.push({
-        text:
-          r.drafted === 0
-            ? 'Nothing new to draft.'
-            : `Drafted ${r.drafted === 1 ? 'one message' : `${r.drafted} messages`}${r.held ? `; ${r.held === 1 ? 'one waits' : `${r.held} wait`} for a reply first` : ''}. Nothing is sent until you approve it.`,
-        tone: 'good',
-        ttl: 7000,
-      });
-      if (r.drafted) nav('/inbox');
-    } finally {
-      setBusy(false);
-      setPicking(false);
-    }
+    const n = which?.length ?? open.length;
+    await run(
+      'draft',
+      n === 1 ? `Writing to ${nameOf(which?.[0] ?? open[0]!.personId)}…` : 'Drafting your messages…',
+      async () => {
+        try {
+          const r = await draftPlan(user, plan.id, which);
+          toast.push({
+            text:
+              r.drafted === 0
+                ? 'Nothing new to draft.'
+                : `Drafted ${r.drafted === 1 ? 'one message' : `${r.drafted} messages`}${r.held ? `; ${r.held === 1 ? 'one waits' : `${r.held} wait`} for a reply first` : ''}. Nothing is sent until you approve it.`,
+            tone: 'good',
+            ttl: 7000,
+          });
+          if (r.drafted) nav('/inbox');
+        } finally {
+          setPicking(false);
+        }
+      },
+    );
   };
   return (
     <Card padded className={cx('max-w-[560px] w-full', className)} data-testid="target-plan">
@@ -216,13 +222,14 @@ export function TargetPlanCard({ plan, className }: { plan: TargetPlan; classNam
             <>
               <Button
                 variant="primary"
-                disabled={busy || picked.size === 0}
+                loading={busy === 'draft'}
+                disabled={picked.size === 0}
                 onClick={() => void draftAll([...picked])}
                 data-testid="target-plan-draft-picked"
               >
                 Draft {picked.size || ''}
               </Button>
-              <Button variant="ghost" onClick={() => setPicking(false)}>
+              <Button variant="ghost" disabled={!!busy} onClick={() => setPicking(false)}>
                 Cancel
               </Button>
             </>
@@ -230,7 +237,7 @@ export function TargetPlanCard({ plan, className }: { plan: TargetPlan; classNam
             <>
               <Button
                 variant="primary"
-                disabled={busy}
+                loading={busy === 'draft'}
                 onClick={() => void draftAll()}
                 data-testid="target-plan-draft-all"
               >
@@ -241,7 +248,7 @@ export function TargetPlanCard({ plan, className }: { plan: TargetPlan; classNam
                     : `Draft all ${open.length === 2 ? 'two' : open.length}`}
               </Button>
               <Button
-                disabled={busy}
+                disabled={!!busy}
                 onClick={() => {
                   setPicked(new Set(open.map((s) => s.personId)));
                   setPicking(true);

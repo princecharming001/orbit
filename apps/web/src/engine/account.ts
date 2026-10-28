@@ -67,19 +67,32 @@ export async function setOnboardingStep(userId: string, next: number): Promise<n
 
 /** Finish setup: the student's recommendations and welcome brief are built from what they entered. */
 export async function finishOnboarding(userId: string, now = new Date()): Promise<User | undefined> {
+  const fresh = await markOnboardingDone(userId, now);
+  if (fresh) await buildFirstBrief(fresh, now);
+  return fresh;
+}
+
+/**
+ * The quick half of finishing setup: the student is marked done (here and on the account), so Orbit can open at once.
+ * The slow half, buildFirstBrief, runs after the app is already on screen.
+ */
+export async function markOnboardingDone(userId: string, now = new Date()): Promise<User | undefined> {
   const user = await db.users.get(userId);
   if (!user) return undefined;
   await db.users.update(userId, {
     onboardingStep: ONBOARDING_DONE_STEP,
     onboardingCompletedAt: now.toISOString(),
   });
-  const fresh = (await db.users.get(userId))!;
   // the account remembers it, so signing in on another device goes straight to Orbit
   if (isSignedIn())
     void callApi('/settings/profile', { onboardingCompletedAt: now.toISOString() }).catch(() => {});
-  await recommendationsRefresh(fresh, now);
-  await generateBrief(fresh, 'welcome', now);
-  return fresh;
+  return db.users.get(userId);
+}
+
+/** The student's first recommendations and welcome brief. */
+export async function buildFirstBrief(user: User, now = new Date()): Promise<void> {
+  await recommendationsRefresh(user, now);
+  await generateBrief(user, 'welcome', now);
 }
 
 /** Everything Orbit stores about the network, table by table (the browser-local prefs, with the key, are not here). */

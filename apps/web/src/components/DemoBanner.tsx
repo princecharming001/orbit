@@ -15,9 +15,14 @@ export function DemoBanner() {
   if (user?.id !== DEMO_USER_ID) return null;
   const start = async () => {
     setBusy(true);
-    const u = await leaveDemoForOwnSetup();
-    await setUserId(u.id);
-    nav(onboardingPath(2));
+    try {
+      const u = await leaveDemoForOwnSetup();
+      await setUserId(u.id);
+      nav(onboardingPath(2));
+    } catch (e) {
+      console.error(e);
+      setBusy(false);
+    }
   };
   return (
     <>

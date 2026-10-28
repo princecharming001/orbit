@@ -57,7 +57,7 @@ import { planFromInput } from '../engine/targetPlan';
 import { isJobLink, linkIn } from '../integrations/postings';
 import { useSession } from '../state/session';
 import { useShowReasoning } from '../state/showReasoning';
-import { Avatar, Button, Card, Chip, cx, LinkedInMark, useToast } from '../ui';
+import { Avatar, Button, Card, Chip, cx, LinkedInMark, useToast, useWorking } from '../ui';
 
 type Filter = 'all' | 'targets' | 'alumni' | 'chats' | 'recent' | 'intros';
 
@@ -115,6 +115,8 @@ export function MapPage() {
   const [params, setParams] = useSearchParams();
   const nav = useNavigate();
   const toast = useToast();
+  // one slow click at a time on the map (an intro request, adding someone from LinkedIn), each with its spinner
+  const working = useWorking();
   const reachParam = params.get('reach');
   const touch = useCoarsePointer();
   const [query, setQuery] = useState('');
@@ -599,11 +601,14 @@ export function MapPage() {
   /** Someone found on LinkedIn: they join Orbit (a chat at "to contact"), and the map shows the routes to them. */
   const chooseLinkedIn = async (f: FoundView) => {
     if (!user) return;
-    const r = await addLinkedInFound(user, [f.id]);
-    if (!r.ok) return void toast.push({ text: r.message, tone: 'neutral' });
-    setQuery(f.name);
-    toast.push({ text: `${f.name} is in your Orbit now.`, tone: 'good' });
-    setParams({ reach: r.people[0]!.id });
+    // the server looks them up on LinkedIn first: the box spins and a toast says so meanwhile
+    await working.run(`linkedin:${f.id}`, `Adding ${f.name} to your Orbit…`, async () => {
+      const r = await addLinkedInFound(user, [f.id]);
+      if (!r.ok) return void toast.push({ text: r.message, tone: 'neutral' });
+      setQuery(f.name);
+      toast.push({ text: `${f.name} is in your Orbit now.`, tone: 'good' });
+      setParams({ reach: r.people[0]!.id });
+    });
   };
   const choose = (c: ReachCandidate) => {
     setChoices(undefined);
@@ -749,7 +754,7 @@ export function MapPage() {
     await askIntroVia(path.hops[0]!.toId, target.id, path.score, path.hops);
   };
   // the same intro request for a warm intro path from Village, which names who introduces and to whom
-  const askIntroVia = useAskIntro(user);
+  const { ask: askIntroVia, isAsking } = useAskIntro(user, working);
   const hovered = hover ? byId.get(hover) : undefined;
   const current = paths?.[pathIdx];
   // Village's warm intros to the target: shown on the route through the same person, or as a route of their own
@@ -1013,6 +1018,7 @@ export function MapPage() {
               byId={peopleById}
               onPick={pickSuggestion}
               onPickLinkedIn={(f) => void chooseLinkedIn(f)}
+              adding={!!working.busy?.startsWith('linkedin:')}
               onSubmit={(q) => void runSearch(q)}
               compact={!!(target || companyFocus || choices)}
               placeholder={webMode ? 'Search your introductions' : 'Paste a job link, or a person or company'}
@@ -1302,6 +1308,7 @@ export function MapPage() {
                           variant={selected ? 'primary' : 'secondary'}
                           className={TAP}
                           onClick={() => askIntro(p)}
+                          loading={isAsking(p.hops[0]!.toId, target.id)}
                           data-testid="reach-path-action"
                         >
                           Ask {first?.firstName ?? 'them'} for an intro
@@ -1386,6 +1393,7 @@ export function MapPage() {
                             variant="secondary"
                             className={cx('mt-2', TAP)}
                             onClick={() => askIntroVia(w.introducer.personId!, w.targetPersonId!, w.warmth)}
+                            loading={isAsking(w.introducer.personId, w.targetPersonId)}
                             data-testid="map-warm-intro-ask"
                           >
                             Ask {w.introducer.name.split(' ')[0]} for an intro
@@ -1420,6 +1428,7 @@ export function MapPage() {
                   user={user}
                   target={target}
                   onAsk={(personId, score) => void askIntroVia(personId, target.id, score)}
+                  isAsking={(personId) => isAsking(personId, target.id)}
                 />
               )}
             </>
@@ -1459,6 +1468,7 @@ export function MapPage() {
                   user={user}
                   company={company.org?.name ?? company.label}
                   onAsk={askIntroVia}
+                  isAsking={isAsking}
                 />
               )}
               {(

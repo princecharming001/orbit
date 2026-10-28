@@ -41,7 +41,8 @@ describe('setup steps', () => {
     expect(visibleSteps(true)).toEqual([1, 2, 3, ...QUESTION_STEPS, 4, 5, 6]);
     expect(visibleSteps(false)).toEqual([1, 2, 3, ...QUESTION_STEPS, 4, 6]);
     expect(visibleSteps(false)).not.toContain(STEP.gmail);
-    expect(visibleSteps(false, true)).toEqual([1, 2, 3, ...QUESTION_STEPS, 4, 5.5, 6]);
+    // signed in: no Gmail step (sign-in connected it) and no Rate step (a popup days later asks)
+    expect(visibleSteps(false, true)).toEqual([1, 2, 3, ...QUESTION_STEPS, 4, 6]);
   });
 
   it('puts the five written questions between Goals and LinkedIn, at word addresses', () => {
@@ -54,8 +55,9 @@ describe('setup steps', () => {
     }
     // the numbered addresses are as before
     expect(stepAddress(STEP.welcome)).toBe('0');
-    expect(stepAddress(STEP.rate)).toBe('4.5');
-    expect(stepFromAddress('4.5')).toBe(STEP.rate);
+    expect(stepAddress(STEP.gmail)).toBe('4');
+    // the old Rate step's address lands on Ready
+    expect(resolveStep(stepFromAddress('4.5'), true, true)).toBe(STEP.ready);
     expect(stepFromAddress('2')).toBe(STEP.goals);
     expect(stepFromAddress(undefined)).toBe(STEP.welcome);
     expect(stepFromAddress('nope')).toBeNaN();

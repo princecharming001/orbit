@@ -1080,6 +1080,12 @@ function MoveRow({
     setBusy(true);
     try {
       await fn();
+    } catch (e) {
+      // a failed draft says so, rather than the button going quiet
+      toast.push({
+        text: e instanceof Error && e.message ? e.message : "That didn't work. Try again.",
+        tone: 'bad',
+      });
     } finally {
       setBusy(false);
     }

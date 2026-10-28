@@ -7,6 +7,7 @@ import { AddPersonButton } from '../components/AddPerson';
 import { FindPeople } from '../components/account/FindPeople';
 import { LogoText } from '../components/CompanyLogo';
 import {
+  actionKey,
   FoundCardView,
   type FoundHandlers,
   NetworkCardView,
@@ -26,6 +27,7 @@ import {
   dismissFound,
   type LoadMoreOutcome,
   loadMoreDiscover,
+  type NetworkCard,
   restoreFound,
 } from '../engine/discoverFeed';
 import { connectLinkedInLive, liveLinkedInAvailable } from '../engine/linkedinLive';
@@ -41,7 +43,7 @@ import { planFromInput } from '../engine/targetPlan';
 import { isServerUser } from '../integrations/orbitApi';
 import { isJobLink, linkIn } from '../integrations/postings';
 import { useSession } from '../state/session';
-import { Avatar, Button, EmptyState, Input, PageHeader, Tabs, useToast } from '../ui';
+import { Avatar, Button, EmptyState, Input, PageHeader, Tabs, useToast, useWorking } from '../ui';
 
 /**
  * Discover: an endless feed of people worth a coffee chat. New people first (found on LinkedIn by searches built from
@@ -84,7 +86,10 @@ function DiscoverFeed({ tabs }: { tabs?: ReactNode }) {
   const { user, userId, goals } = useSession();
   const nav = useNavigate();
   const toast = useToast();
-  const [busy, setBusy] = useState(false);
+  // starting someone (Claude writes the first message) and Refresh each take a while: the button spins, a working
+  // toast says what is happening, and a failure says so; Refresh runs apart so a card can start while it works
+  const { busy, run } = useWorking();
+  const refreshing = useWorking();
   // the network list is brought up to date each time the page opens, so someone just added shows up without a Refresh
   const [updating, setUpdating] = useState(true);
   const [params, setParams] = useSearchParams();
@@ -106,7 +111,6 @@ function DiscoverFeed({ tabs }: { tabs?: ReactNode }) {
     }));
     setJob(r.ok ? { state: 'plan', id: r.plan.id } : { state: 'error', message: r.message });
   };
-  const [acting, setActing] = useState<string>();
   // people acted on or dismissed here leave the page at once: the feed is rebuilt from the database, which can lag a
   // few seconds behind while a LinkedIn sync is writing people
   const [goneHere, setGoneHere] = useState<Set<string>>(() => new Set());
@@ -205,27 +209,42 @@ function DiscoverFeed({ tabs }: { tabs?: ReactNode }) {
   }, [q, people]);
   if (!user) return null;
 
-  const start = async (personId: string, opts: { skipWarmUp?: boolean } = {}) => {
+  const start = (personId: string, opts: { skipWarmUp?: boolean } = {}) => {
     const p = people.find((x) => x.id === personId);
-    const r = await startWarmUpOrOutreach(
-      user,
-      personId,
-      outreachChannelFor(p ?? {}),
-      'recommendation',
-      opts,
+    const first = p?.firstName ?? 'them';
+    // the card says whether this starts a warm-up or a first message; a search hit does not know yet
+    const card = [...(view?.feed ?? []), ...(view?.suggestions ?? [])].find(
+      (c): c is NetworkCard => c.kind === 'network' && c.person.id === personId,
     );
-    if (r.draft) nav(`/people/${personId}?open=${r.draft.id}`);
-    else {
-      // stay on the list: the student is still choosing who to meet, and the first step waits in Drafts
-      toast.push({
-        text: `Warm-up started for ${p?.firstName}. The first step is in Drafts.`,
-        tone: 'good',
-        ttl: 8000,
-        action: { label: 'Open in Drafts', onClick: () => nav(`/inbox?person=${personId}`) },
-      });
-    }
+    const label = opts.skipWarmUp
+      ? `Writing to ${first}…`
+      : card?.action === 'warm_up'
+        ? `Starting the warm-up with ${first}…`
+        : card
+          ? `Writing to ${first}…`
+          : `Getting the first step ready for ${first}…`;
+    return run(actionKey(personId, opts.skipWarmUp ? 'write' : 'start'), label, async () => {
+      const r = await startWarmUpOrOutreach(
+        user,
+        personId,
+        outreachChannelFor(p ?? {}),
+        'recommendation',
+        opts,
+      );
+      if (r.draft) nav(`/people/${personId}?open=${r.draft.id}`);
+      else {
+        // stay on the list: the student is still choosing who to meet, and the first step waits in Drafts
+        toast.push({
+          text: `Warm-up started for ${p?.firstName}. The first step is in Drafts.`,
+          tone: 'good',
+          ttl: 8000,
+          action: { label: 'Open in Drafts', onClick: () => nav(`/inbox?person=${personId}`) },
+        });
+      }
+    });
   };
   const networkH: NetworkHandlers = {
+    busy,
     onStart: (id, opts) => void start(id, opts),
     onToggleSave: async (card) => {
       const r = card.rec;
@@ -252,11 +271,16 @@ function DiscoverFeed({ tabs }: { tabs?: ReactNode }) {
     },
   };
   const foundH: FoundHandlers = {
-    busy: acting,
-    onAct: async (card, action) => {
-      setActing(card.id);
-      try {
-        const first = card.entry.name.split(/\s+/)[0];
+    busy,
+    onAct: (card, action) => {
+      const first = card.entry.name.split(/\s+/)[0];
+      const label =
+        action === 'write'
+          ? `Writing to ${first}…`
+          : action === 'warm_up'
+            ? `Starting the warm-up with ${first}…`
+            : `Adding ${first} to your people…`;
+      void run(actionKey(card.id, action), label, async () => {
         const r = await actOnFound(user, card.entry.memberId, action);
         if (!r.ok) {
           toast.push({ text: r.message, tone: 'bad', ttl: 6000 });
@@ -279,9 +303,7 @@ function DiscoverFeed({ tabs }: { tabs?: ReactNode }) {
             ttl: 6000,
             action: { label: 'Open', onClick: () => nav(`/people/${r.personId}`) },
           });
-      } finally {
-        setActing(undefined);
-      }
+      });
     },
     onDismiss: async (card, reason, label) => {
       await dismissFound(user.id, card.entry.memberId, reason);
@@ -303,27 +325,23 @@ function DiscoverFeed({ tabs }: { tabs?: ReactNode }) {
       });
     },
   };
-  const refresh = async () => {
-    setBusy(true);
-    try {
+  const refresh = () =>
+    refreshing.run('refresh', 'Looking for people worth reaching…', async () => {
       await recommendationsRefresh(user, new Date(), { batchSize: NETWORK_BATCH });
       if (view?.connected) await loadMore();
-    } finally {
-      setBusy(false);
-    }
-    const shown = await db.recommendations
-      .where('userId')
-      .equals(user.id)
-      .filter((r) => r.status === 'new' || r.status === 'saved')
-      .count();
-    toast.push({
-      text:
-        shown || view?.found.length
-          ? 'Discover is up to date.'
-          : 'Nobody new yet. Add goals or connect LinkedIn.',
-      ttl: 5000,
+      const shown = await db.recommendations
+        .where('userId')
+        .equals(user.id)
+        .filter((r) => r.status === 'new' || r.status === 'saved')
+        .count();
+      toast.push({
+        text:
+          shown || view?.found.length
+            ? 'Discover is up to date.'
+            : 'Nobody new yet. Add goals or connect LinkedIn.',
+        ttl: 5000,
+      });
     });
-  };
   const connect = async () => {
     setConnecting(true);
     try {
@@ -369,8 +387,8 @@ function DiscoverFeed({ tabs }: { tabs?: ReactNode }) {
         title="Discover"
         subtitle="People worth a coffee chat: new people who fit your goals and the people you write to, and people you already know worth reaching now."
         actions={
-          <Button onClick={refresh} disabled={busy}>
-            <RefreshCw size={14} className={busy ? 'animate-spin' : ''} /> Refresh
+          <Button onClick={() => void refresh()} loading={refreshing.busy === 'refresh'}>
+            {refreshing.busy !== 'refresh' && <RefreshCw size={14} />} Refresh
           </Button>
         }
       />
@@ -418,7 +436,13 @@ function DiscoverFeed({ tabs }: { tabs?: ReactNode }) {
                 </LogoText>
               </div>
               <StrengthDots v={p.strength} />
-              <Button size="sm" variant="primary" onClick={() => start(p.id)}>
+              <Button
+                size="sm"
+                variant="primary"
+                disabled={!!busy}
+                loading={busy === actionKey(p.id, 'start')}
+                onClick={() => void start(p.id)}
+              >
                 Start
               </Button>
             </div>

@@ -127,11 +127,14 @@ export function ReachMutuals({
   user,
   target,
   onAsk,
+  isAsking,
 }: {
   user: User;
   target: Person;
   /** draft an intro request from this person to the target */
   onAsk: (personId: string, score: number) => void;
+  /** the request through this person is being drafted: their button spins */
+  isAsking?: (personId: string) => boolean;
 }) {
   const reasons = useShowReasoning();
   const { result, retry } = useTargetMutuals(user, target);
@@ -302,6 +305,7 @@ export function ReachMutuals({
                   variant="secondary"
                   className={cx('shrink-0', TAP)}
                   onClick={() => onAsk(person.id, score / 100)}
+                  loading={isAsking?.(person.id)}
                   data-testid="reach-mutual-ask"
                 >
                   Ask {mFirst} for an intro

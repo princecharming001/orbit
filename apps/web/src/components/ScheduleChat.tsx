@@ -125,7 +125,7 @@ export function ScheduleChatDialog({
         )}
         {past && <p className="text-[12px] text-warn">Pick a time that has not passed yet.</p>}
         <div className="flex flex-wrap gap-2 pt-1">
-          <Button variant="primary" onClick={save} disabled={busy || past} data-testid="schedule-save">
+          <Button variant="primary" onClick={save} disabled={past} loading={busy} data-testid="schedule-save">
             {canInvite && invite ? 'Save and send invite' : 'Save the time'}
           </Button>
           <Button variant="ghost" onClick={onClose}>

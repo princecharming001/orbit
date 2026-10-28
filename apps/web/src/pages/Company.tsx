@@ -3,7 +3,7 @@ import { useLiveQuery } from 'dexie-react-hooks';
 import { useEffect, useMemo, useState } from 'react';
 import { useInView } from 'react-intersection-observer';
 import { Link, useNavigate, useParams } from 'react-router-dom';
-import { useAskIntro } from '../components/askIntro';
+import { askIntroKey, useAskIntro } from '../components/askIntro';
 import { CompanyLogo } from '../components/CompanyLogo';
 import { RouteBadge } from '../components/map/RouteBadge';
 import { PersonRow } from '../components/PersonRow';
@@ -20,7 +20,7 @@ import {
 import { setTargetStatus } from '../engine/settings';
 import { planForPosting } from '../engine/targetPlan';
 import { useSession } from '../state/session';
-import { Button, Card, cx, NotFound, PageHeader, Skeleton, SkeletonRows, useToast } from '../ui';
+import { Button, Card, cx, NotFound, PageHeader, Skeleton, SkeletonRows, useToast, useWorking } from '../ui';
 
 /** Rows drawn at first and each time the list's end scrolls into view: a big company never draws everyone at once. */
 const PAGE = 40;
@@ -37,7 +37,9 @@ export function CompanyPage() {
   const { user, userId } = useSession();
   const nav = useNavigate();
   const toast = useToast();
-  const askIntro = useAskIntro(user);
+  // one slow click at a time on the page (planning, an intro request, a warm-up), each with its spinner
+  const working = useWorking();
+  const { ask: askIntro } = useAskIntro(user, working);
   // null means "looked it up and it is not there", undefined means "still loading".
   const org = useLiveQuery(async () => (id ? ((await db.organizations.get(id)) ?? null) : null), [id]);
   // a target matches by its organization, or by name when it was added before it had one
@@ -99,10 +101,12 @@ export function CompanyPage() {
   const setAsTarget = async () => {
     if (!user) return;
     // the target and its plan at once (plan 23 §4.2): who to write to there, and when
-    await planForPosting(user, { company: org.name, role: '' });
-    toast.push({
-      text: `${org.name} is a target now. Your plan is at the bottom of the page.`,
-      tone: 'good',
+    await working.run('target', `Planning your way into ${org.name}…`, async () => {
+      await planForPosting(user, { company: org.name, role: '' });
+      toast.push({
+        text: `${org.name} is a target now. Your plan is at the bottom of the page.`,
+        tone: 'good',
+      });
     });
   };
   const act = async (c: CompanyPerson) => {
@@ -112,13 +116,15 @@ export function CompanyPage() {
       return;
     }
     if (c.action === 'warm_up') {
-      const r = await startWarmUpOrOutreach(user, c.person.id, 'linkedin', 'reach');
-      if (r.draft) nav(`/people/${c.person.id}?open=${r.draft.id}`);
-      else
-        toast.push({
-          text: `Warm-up started for ${c.person.firstName}. The first step is in Drafts.`,
-          tone: 'good',
-        });
+      await working.run(actKey(c), `Writing to ${c.person.firstName}…`, async () => {
+        const r = await startWarmUpOrOutreach(user, c.person.id, 'linkedin', 'reach');
+        if (r.draft) nav(`/people/${c.person.id}?open=${r.draft.id}`);
+        else
+          toast.push({
+            text: `Warm-up started for ${c.person.firstName}. The first step is in Drafts.`,
+            tone: 'good',
+          });
+      });
       return;
     }
     nav(`/people/${c.person.id}?draft=outreach`);
@@ -141,7 +147,12 @@ export function CompanyPage() {
           ) : tc ? (
             <TargetChips target={tc} />
           ) : (
-            <Button variant="primary" onClick={setAsTarget} data-testid="company-set-target">
+            <Button
+              variant="primary"
+              onClick={setAsTarget}
+              loading={working.busy === 'target'}
+              data-testid="company-set-target"
+            >
               Set as target
             </Button>
           )
@@ -156,19 +167,23 @@ export function CompanyPage() {
           filter={filter}
           setFilter={setFilter}
           onAct={(c) => void act(c)}
+          busy={working.busy}
         />
       )}
       {tc && plan === null && user && reach && (
         <div className="mt-6">
           <Button
             onClick={() =>
-              void planForPosting(user, {
-                company: org.name,
-                role: tc.role ?? '',
-                team: tc.team,
-                url: tc.postingUrl,
-              })
+              void working.run('plan', `Planning your way into ${org.name}…`, () =>
+                planForPosting(user, {
+                  company: org.name,
+                  role: tc.role ?? '',
+                  team: tc.team,
+                  url: tc.postingUrl,
+                }),
+              )
             }
+            loading={working.busy === 'plan'}
             data-testid="company-make-plan"
           >
             Plan my way in
@@ -220,12 +235,15 @@ function CompanyBody({
   filter,
   setFilter,
   onAct,
+  busy,
 }: {
   name: string;
   reach: CompanyReach;
   filter: Filter;
   setFilter: (f: Filter) => void;
   onAct: (c: CompanyPerson) => void;
+  /** the `useWorking` key being worked on: that person's button spins */
+  busy?: string;
 }) {
   const people = reach.people;
   const counts = useMemo(() => {
@@ -331,6 +349,7 @@ function CompanyBody({
                         variant={c.action === 'save' ? 'secondary' : 'primary'}
                         className="pointer-coarse:min-h-11"
                         onClick={() => onAct(c)}
+                        loading={!!busy && busy === actKey(c)}
                         data-testid="company-person-action"
                       >
                         {actionLabel(c)}
@@ -361,6 +380,13 @@ function CompanyBody({
       )}
     </div>
   );
+}
+
+/** The `useWorking` key of a person's button: their intro request, or their warm-up. */
+function actKey(c: CompanyPerson): string {
+  return c.action === 'ask' && c.route.path
+    ? askIntroKey(c.route.path.hops[0]!.toId, c.person.id)
+    : `warm:${c.person.id}`;
 }
 
 function schoolLine(c: CompanyPerson): string | undefined {

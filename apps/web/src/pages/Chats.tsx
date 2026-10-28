@@ -20,7 +20,7 @@ import {
 import { useFlag } from '../engine/flags';
 import { checkNotes, connectedNotetaker } from '../engine/notesCheck';
 import { useSession } from '../state/session';
-import { Button, Card, cx, PageHeader, Spinner } from '../ui';
+import { Button, Card, cx, PageHeader, SkeletonRows } from '../ui';
 
 /** Everything the view reads, live, so a note landing or a time booked updates the page at once. */
 export function useChatsView() {
@@ -85,8 +85,9 @@ export function ChatsPage() {
   if (!on) return <PageHeader title="Chats" subtitle="Your chats are in Drafts under Coming up for now." />;
   if (!view)
     return (
-      <div className="py-20 flex justify-center">
-        <Spinner />
+      <div className="max-w-[760px]">
+        <PageHeader title="Chats" />
+        <SkeletonRows rows={6} divided />
       </div>
     );
   const empty = !view.days.length && !view.justHappened.length && !view.noTime.length;

@@ -6,10 +6,12 @@ import { type Closeness, peopleToRate, rateCloseness } from '../../engine/closen
 import { Avatar } from '../../ui';
 import { ClosenessPicker } from './ClosenessPicker';
 
-/** Ten people to rate 1 to 5 (setup's optional step); each answer is saved at once. */
+/** Ten people to rate 1 to 5 (the popup a couple of days after setup); each answer is saved at once. */
 export function RatePeople({ userId }: { userId: string }) {
   const [people, setPeople] = useState<Person[]>();
   const [error, setError] = useState<string>();
+  // a tap lights its pill at once; the saved rating takes over when it lands (or the pick is undone with an error)
+  const [picked, setPicked] = useState<Map<string, Closeness>>(new Map());
   const labels = useLiveQuery(() => db.tieLabels.where('userId').equals(userId).toArray(), [userId]) ?? [];
   const byPerson = new Map(labels.map((l) => [l.personId, l.closeness]));
   // chosen once there is someone, so a rated person does not jump off the list; until then it waits for email and
@@ -30,8 +32,16 @@ export function RatePeople({ userId }: { userId: string }) {
     );
   const rate = async (p: Person, c: Closeness) => {
     setError(undefined);
+    setPicked((m) => new Map(m).set(p.id, c));
     const r = await rateCloseness({ id: userId }, p.id, c);
-    if (!r.ok) setError(r.message);
+    if (!r.ok) {
+      setError(r.message);
+      setPicked((m) => {
+        const next = new Map(m);
+        next.delete(p.id);
+        return next;
+      });
+    }
   };
   return (
     <div>
@@ -51,7 +61,11 @@ export function RatePeople({ userId }: { userId: string }) {
                 </div>
               </div>
             </div>
-            <ClosenessPicker name={p.displayName} value={byPerson.get(p.id)} onPick={(c) => rate(p, c)} />
+            <ClosenessPicker
+              name={p.displayName}
+              value={picked.get(p.id) ?? byPerson.get(p.id)}
+              onPick={(c) => rate(p, c)}
+            />
           </li>
         ))}
       </ul>

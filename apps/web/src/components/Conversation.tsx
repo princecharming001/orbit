@@ -297,10 +297,11 @@ export function Conversation({ person }: { person: Person }) {
               type="submit"
               variant="primary"
               size="sm"
-              disabled={busy || !body.trim()}
+              disabled={!body.trim()}
+              loading={busy}
               data-testid="conversation-send"
             >
-              <Send size={13} aria-hidden /> Send
+              {!busy && <Send size={13} aria-hidden />} Send
             </Button>
           </div>
           {error && (

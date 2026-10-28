@@ -24,7 +24,20 @@ import {
 } from '../../engine/resume';
 import { useAccount } from '../../state/account';
 import { useSession } from '../../state/session';
-import { Button, Card, cx, Input, Label, relDate, Select, Spinner, Textarea, useToast } from '../../ui';
+import {
+  Button,
+  Card,
+  cx,
+  Input,
+  Label,
+  relDate,
+  Select,
+  Spinner,
+  Textarea,
+  useToast,
+  useWorking,
+  Working,
+} from '../../ui';
 
 function download(json: string, name: string) {
   const blob = new Blob([json], { type: 'application/json' });
@@ -96,6 +109,7 @@ export function AccountSection() {
   const { signOut } = useSession();
   const nav = useNavigate();
   const toast = useToast();
+  const [signingOut, setSigningOut] = useState(false);
   const [confirmText, setConfirmText] = useState('');
   const [busy, setBusy] = useState<string>();
   const [error, setError] = useState<string>();
@@ -141,13 +155,19 @@ export function AccountSection() {
         </p>
         <Button
           className="mt-3"
+          loading={signingOut}
           onClick={async () => {
-            await signOutHere();
-            toast.push({ text: 'Signed out. Orbit stopped syncing on this device.' });
+            setSigningOut(true);
+            try {
+              await signOutHere();
+              toast.push({ text: 'Signed out. Orbit stopped syncing on this device.' });
+            } finally {
+              setSigningOut(false);
+            }
           }}
           data-testid="settings-sign-out"
         >
-          <LogOut size={14} /> Sign out
+          {!signingOut && <LogOut size={14} />} Sign out
         </Button>
       </Card>
       <Card>
@@ -203,6 +223,9 @@ export function OutreachSection() {
   const goals = useLiveQuery(() => (user ? activeGoals(user.id) : []), [user?.id]) ?? [];
   const [until, setUntil] = useState('');
   const [error, setError] = useState<string>();
+  // the choice shows as made at once; the server confirms it a moment later (or the error says it did not take)
+  const [pending, setPending] = useState<{ l: AutonomyLevel; goalId?: string }>();
+  const working = useWorking();
   useEffect(() => {
     if (settings?.quietUntil) setUntil(settings.quietUntil);
   }, [settings]);
@@ -225,10 +248,16 @@ export function OutreachSection() {
   const level = (settings.autonomyLevel ?? 0) as AutonomyLevel;
   const choose = async (l: AutonomyLevel, goal?: Goal) => {
     setError(undefined);
-    const r = await setAutonomy(user, l, goal?.id);
-    if (!r.ok) setError(r.message);
-    else toast.push({ text: `${goal ? `${goal.title}: ` : ''}${AUTONOMY_TEXT[l].title}.` });
+    setPending({ l, goalId: goal?.id });
+    try {
+      const r = await setAutonomy(user, l, goal?.id);
+      if (!r.ok) setError(r.message);
+      else toast.push({ text: `${goal ? `${goal.title}: ` : ''}${AUTONOMY_TEXT[l].title}.` });
+    } finally {
+      setPending(undefined);
+    }
   };
+  const shown = pending && !pending.goalId ? pending.l : level;
   const today = new Date().toISOString().slice(0, 10);
   return (
     <div className="space-y-4" data-testid="settings-outreach">
@@ -240,15 +269,18 @@ export function OutreachSection() {
               key={l}
               type="button"
               role="radio"
-              aria-checked={level === l}
+              aria-checked={shown === l}
               onClick={() => choose(l)}
               className={cx(
                 'w-full text-left rounded-lg border px-3 py-2.5 transition-colors',
-                level === l ? 'border-ink bg-canvas-2' : 'border-line hover:bg-canvas-2/60',
+                shown === l ? 'border-ink bg-canvas-2' : 'border-line hover:bg-canvas-2/60',
               )}
               data-testid={`autonomy-${l}`}
             >
-              <div className="text-[14px] font-medium">{AUTONOMY_TEXT[l].title}</div>
+              <div className="text-[14px] font-medium flex items-center gap-2">
+                {AUTONOMY_TEXT[l].title}
+                {pending && !pending.goalId && pending.l === l && <Working />}
+              </div>
               <div className="text-[12.5px] text-ink-3">{AUTONOMY_TEXT[l].body}</div>
             </button>
           ))}
@@ -262,7 +294,13 @@ export function OutreachSection() {
                   {g.title} <span className="text-ink-3">· {GOAL_KIND_LABELS[g.kind]}</span>
                 </span>
                 <Select
-                  value={g.autonomyLevel === undefined ? '' : String(g.autonomyLevel)}
+                  value={
+                    pending?.goalId === g.id
+                      ? String(pending.l)
+                      : g.autonomyLevel === undefined
+                        ? ''
+                        : String(g.autonomyLevel)
+                  }
                   onChange={(e) =>
                     e.target.value !== '' && choose(Number(e.target.value) as AutonomyLevel, g)
                   }
@@ -299,12 +337,15 @@ export function OutreachSection() {
             data-testid="settings-pause-until"
           />
           <Button
-            disabled={!until}
-            onClick={async () => {
-              const r = await pauseOutreach(user, until);
-              if (!r.ok) setError(r.message);
-              else toast.push({ text: `Outreach paused until ${until}.` });
-            }}
+            disabled={!until || !!working.busy}
+            loading={working.busy === 'pause'}
+            onClick={() =>
+              working.run('pause', 'Pausing outreach…', async () => {
+                const r = await pauseOutreach(user, until);
+                if (!r.ok) setError(r.message);
+                else toast.push({ text: `Outreach paused until ${until}.` });
+              })
+            }
             data-testid="settings-pause"
           >
             Pause
@@ -312,14 +353,18 @@ export function OutreachSection() {
           {settings.quietUntil ? (
             <Button
               variant="ghost"
-              onClick={async () => {
-                const r = await pauseOutreach(user, null);
-                if (!r.ok) setError(r.message);
-                else {
-                  setUntil('');
-                  toast.push({ text: 'Outreach is back on.' });
-                }
-              }}
+              disabled={!!working.busy}
+              loading={working.busy === 'resume'}
+              onClick={() =>
+                working.run('resume', 'Turning outreach back on…', async () => {
+                  const r = await pauseOutreach(user, null);
+                  if (!r.ok) setError(r.message);
+                  else {
+                    setUntil('');
+                    toast.push({ text: 'Outreach is back on.' });
+                  }
+                })
+              }
             >
               Resume now
             </Button>
@@ -341,6 +386,7 @@ export function MemorySection() {
   const { user } = useSession();
   const account = useAccount();
   const toast = useToast();
+  const [deleting, setDeleting] = useState<string>();
   const onServer = !!user && memoryOnServer(user);
   const [serverItems, setServerItems] = useState<MemoryItem[]>();
   const [error, setError] = useState<string>();
@@ -403,18 +449,25 @@ export function MemorySection() {
                   size="sm"
                   variant="ghost"
                   aria-label={`Delete: ${m.text}`}
+                  loading={deleting === m.id}
+                  disabled={!!deleting}
                   onClick={async () => {
-                    const r = await forget(user, m.id);
-                    if (!r.ok) {
-                      toast.push({ text: r.message });
-                      return;
+                    setDeleting(m.id);
+                    try {
+                      const r = await forget(user, m.id);
+                      if (!r.ok) {
+                        toast.push({ text: r.message, tone: 'bad' });
+                        return;
+                      }
+                      setServerItems((xs) => xs?.filter((x) => x.id !== m.id));
+                      toast.push({ text: 'Deleted from memory.' });
+                    } finally {
+                      setDeleting(undefined);
                     }
-                    setServerItems((xs) => xs?.filter((x) => x.id !== m.id));
-                    toast.push({ text: 'Deleted from memory.' });
                   }}
                   data-testid="memory-delete"
                 >
-                  <Trash2 size={14} />
+                  {deleting !== m.id && <Trash2 size={14} />}
                 </Button>
               </li>
             ))}
@@ -431,6 +484,7 @@ export function MemorySection() {
  */
 export function ResumeProfileOffer({ userId }: { userId: string }) {
   const toast = useToast();
+  const working = useWorking();
   const offer = useLiveQuery(async () => {
     // read again whenever the resume, the profile or the offer changes
     await Promise.all([db.kv.get(`resumeProfile:${userId}`), db.users.get(userId)]);
@@ -448,10 +502,13 @@ export function ResumeProfileOffer({ userId }: { userId: string }) {
         <Button
           size="sm"
           variant="primary"
-          onClick={async () => {
-            await acceptResumeProposal(userId);
-            toast.push({ text: 'Profile updated from your resume.', tone: 'good' });
-          }}
+          loading={working.busy === 'accept'}
+          onClick={() =>
+            working.run('accept', 'Updating your profile…', async () => {
+              await acceptResumeProposal(userId);
+              toast.push({ text: 'Profile updated from your resume.', tone: 'good' });
+            })
+          }
           data-testid="resume-profile-accept"
         >
           Use it

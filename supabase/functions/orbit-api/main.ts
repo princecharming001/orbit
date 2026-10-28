@@ -16,17 +16,13 @@ const num = (name: string, fallback: number) => {
 const supabaseUrl = env('SUPABASE_URL');
 const dbUrl = env('SUPABASE_DB_URL');
 const db = dbUrl ? connectDb(dbUrl) : undefined;
-const sessionSecret = await resolveSecret(env, db, 'ORBIT_SESSION_SECRET', 'orbit_session_secret');
-const unipileWebhookSecret = await resolveSecret(
-  env,
-  db,
-  'ORBIT_UNIPILE_WEBHOOK_SECRET',
-  'orbit_unipile_webhook_secret',
-);
+// read together, so a cold start waits on one round trip to the database, not five in a row.
 // Unipile (account-mode LinkedIn), and where Google sends sign-in back: a function secret, else the value stored in
 // orbit_private.secrets. The redirect stays this function's own address until ORBIT_GOOGLE_REDIRECT_URI is stored
 // (https://tryorbit.today/auth/google/callback, the site page that passes sign-in on, once Google lists it).
-const [unipileKey, unipileBase, redirectUri] = await Promise.all([
+const [sessionSecret, unipileWebhookSecret, unipileKey, unipileBase, redirectUri] = await Promise.all([
+  resolveSecret(env, db, 'ORBIT_SESSION_SECRET', 'orbit_session_secret'),
+  resolveSecret(env, db, 'ORBIT_UNIPILE_WEBHOOK_SECRET', 'orbit_unipile_webhook_secret'),
   providerSecret(env, db, 'UNIPILE_API_KEY'),
   providerSecret(env, db, 'UNIPILE_BASE_URL'),
   providerSecret(env, db, 'ORBIT_GOOGLE_REDIRECT_URI'),

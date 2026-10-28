@@ -26,10 +26,11 @@ import { threadActions, useThread } from '../chat/ui/threadStore';
 import { db } from '../db/schema';
 import { dailyMaintenance } from '../engine/sync';
 import { draftLists, startedDrafts } from '../engine/today';
-import { PageLoading } from '../pages/lazyPages';
+import { PageLoading, preloadPages } from '../pages/lazyPages';
 import { useSession } from '../state/session';
-import { Avatar, calendarDaysBetween, cx, Skeleton } from '../ui';
+import { Avatar, calendarDaysBetween, cx, Skeleton, useToast } from '../ui';
 import { ActivityLine } from './ActivityLine';
+import { RatePrompt } from './account/RatePrompt';
 import { useTrackPlace } from './BackLink';
 import { CommandPalette } from './CommandPalette';
 import { DemoBanner } from './DemoBanner';
@@ -157,6 +158,8 @@ export function AppShell() {
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   }, []);
+  // every page downloads while the app sits idle, so moving between them never waits on the network
+  useEffect(() => preloadPages(), []);
   useEffect(() => {
     if (user?.onboardingCompletedAt) dailyMaintenance(user).catch(console.error);
   }, [user?.id, user?.onboardingCompletedAt]);
@@ -258,6 +261,7 @@ export function AppShell() {
       <MeetingNotesAutoSync />
       <LinkedInProgressBanner />
       <MorningBrief />
+      <RatePrompt />
       <aside
         className={cx(
           'shrink-0 hidden md:flex flex-col h-full border-r border-line bg-canvas transition-[width] duration-300 ease-[cubic-bezier(0.16,1,0.3,1)]',
@@ -373,7 +377,7 @@ export function AppShell() {
                 fillsScreen && 'lg:h-full lg:flex lg:flex-col',
               )}
             >
-              <Suspense fallback={<PageLoading />}>
+              <Suspense fallback={<PageLoading path={pathname} />}>
                 <Outlet />
               </Suspense>
             </div>
@@ -613,8 +617,19 @@ function Recent({ chat }: { chat: ReturnType<typeof threadActions> }) {
     }
     return g;
   }, [items]);
+  const toast = useToast();
   const open = async (id: string) => {
-    await chat.open(id);
+    try {
+      await chat.open(id);
+    } catch {
+      // archived or deleted in another tab since the list was read: say so, and let the list catch up
+      toast.push({ text: 'That conversation is no longer here.', tone: 'bad' });
+      engine
+        .listConversations()
+        .then(setItems)
+        .catch(() => undefined);
+      return;
+    }
     nav('/');
   };
   const commitRename = async () => {

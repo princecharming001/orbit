@@ -25,7 +25,7 @@ import { buildPrep } from '../../engine/prep';
 import { buildPrepDeck, type PrepCard, type PrepCardKind, type PrepLine } from '../../engine/prepDeck';
 import { dossierView } from '../../engine/research';
 import { useSession } from '../../state/session';
-import { Avatar, Button, cx, useToast } from '../../ui';
+import { Avatar, Button, cx, useToast, useWorking } from '../../ui';
 import { DeckLayer, DeckProgress, useDeckFocus, useDeckKeys, useDeckSwipe } from '../../ui/Deck';
 import { CompanyLogo } from '../CompanyLogo';
 
@@ -440,6 +440,8 @@ function Questions({ card, chat, personFirst }: { card: PrepCard; chat?: CoffeeC
 function After({ person, chat, userId }: { person: Person; chat?: CoffeeChat; userId: string }) {
   const { user } = useSession();
   const toast = useToast();
+  // logging waits on Claude writing the thank-you: the button spins and a working toast says so meanwhile
+  const { busy, run } = useWorking();
   const [suggested, setSuggested] = useState('');
   const [added, setAdded] = useState<string[]>([]);
   const [notSaved, setNotSaved] = useState<string[]>([]);
@@ -461,14 +463,17 @@ function After({ person, chat, userId }: { person: Person; chat?: CoffeeChat; us
             size="sm"
             className="mt-2"
             data-testid="prep-log-chat"
-            onClick={async () => {
+            loading={busy === 'log'}
+            onClick={() => {
               if (!user) return;
-              const r = await moveChatGuarded(user, chat, 'completed', 'user:prep');
-              if (r.outcome === 'meeting_ahead')
-                toast.push({
-                  text: 'Your chat is still ahead on your calendar. Log it once it has happened.',
-                });
-              else toast.push({ text: 'Logged. Your thank-you is waiting in Drafts.', tone: 'good' });
+              void run('log', `Writing your thank-you to ${person.firstName}…`, async () => {
+                const r = await moveChatGuarded(user, chat, 'completed', 'user:prep');
+                if (r.outcome === 'meeting_ahead')
+                  toast.push({
+                    text: 'Your chat is still ahead on your calendar. Log it once it has happened.',
+                  });
+                else toast.push({ text: 'Logged. Your thank-you is waiting in Drafts.', tone: 'good' });
+              });
             }}
           >
             Log this chat
