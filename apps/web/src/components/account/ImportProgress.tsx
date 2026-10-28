@@ -1,4 +1,5 @@
 import { Check } from 'lucide-react';
+import { useRef } from 'react';
 import { useSyncStatus } from '../../state/account';
 import { Spinner } from '../../ui';
 
@@ -7,6 +8,8 @@ const fmt = (n: number | null | undefined) => (n ?? 0).toLocaleString('en-US');
 /**
  * The live import line in setup (plan 16 §17): "I'm reading your last 90 days of email first" with what has come in,
  * then the older mail's progress. Account mode only; the sync loop polls /sync/status every 3 seconds meanwhile.
+ * Once the email is in, the card shows only on the step where that happened, not on every page after it (each step
+ * mounts its own card, so a step that opens with the import already done draws nothing).
  */
 export function ImportProgress({ firstName }: { firstName?: string }) {
   const status = useSyncStatus();
@@ -14,6 +17,7 @@ export function ImportProgress({ firstName }: { firstName?: string }) {
   const bf = google?.backfill;
   const messages = status?.counts.messages;
   const people = status?.counts.people;
+  const sawReading = useRef(false);
   let lead: string;
   let detail: string;
   // reading: a spinner and a bar that moves, filled to the count once the older mail has a total
@@ -43,6 +47,8 @@ export function ImportProgress({ firstName }: { firstName?: string }) {
     lead = 'Your email is in.';
     detail = `${fmt(people)} people, ${fmt(status?.counts.ties)} ties.`;
   }
+  if (reading && status) sawReading.current = true;
+  if (!reading && google?.status !== 'needs_reauth' && !sawReading.current) return null;
   return (
     <div
       className="mb-6 rounded-xl border border-[#e6e8ec] bg-white px-4 py-3 text-[13.5px] leading-[1.5]"
