@@ -39,6 +39,7 @@
  * keys only changes this file (Village's lives in _shared/providers/village.ts, shared with the server).
  */
 
+import { timingSafeEqual } from '../_shared/crypto.ts';
 import { clientIp, defaultOrigins } from '../_shared/origins.ts';
 import { type PostingDeps, readPosting } from '../_shared/postings.ts';
 import {
@@ -1094,7 +1095,8 @@ async function unipileNotify(deps: ConnectorDeps, req: Request): Promise<Respons
   const q = new URL(req.url).searchParams;
   const ref = q.get('ref') ?? '';
   const sig = q.get('sig') ?? '';
-  if (!ref || !sig || sig !== (await accountToken(`link:${ref}`, deps.signingKey))) return no(403);
+  if (!ref || !sig || !(await timingSafeEqual(sig, await accountToken(`link:${ref}`, deps.signingKey))))
+    return no(403);
   let b: { status?: unknown; account_id?: unknown; name?: unknown };
   try {
     b = (await req.json()) as typeof b;

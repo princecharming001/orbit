@@ -158,22 +158,39 @@ export async function pull(
   const next: Cursor = { ...o.cursor };
   let hasMore = false;
 
-  for (const t of o.tables) {
-    const pos = o.cursor[t.table] as CursorPos | undefined;
-    const del = t.deletedWhen ? `(${t.deletedWhen})` : 'false';
-    const rows = await db.query<{ row: Row; _ts: string; _k: string; _del: boolean }>(
-      `select to_jsonb(t) as row,
-              to_char(t.${t.cursor} at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') as _ts,
-              t.${t.key}::text as _k, ${del} as _del
-         from orbit.${t.table} t
-        where t.user_id = $1::uuid
-          and (t.${t.cursor}, t.${t.key}::text) > ($2::timestamptz, $3::text)
-          and t.${t.cursor} <= $4::timestamptz
-          ${t.filter ? `and ${t.filter}` : ''}
-        order by t.${t.cursor}, t.${t.key}::text
-        limit $5`,
-      [userId, pos?.t ?? '-infinity', pos?.k ?? '', o.upTo, o.limit],
-    );
+  // every table's page and the audit log go out together (the pool runs a few at a time), not one after another
+  const names = o.tables.map((t) => t.table);
+  const [pages, audits] = await Promise.all([
+    Promise.all(
+      o.tables.map((t) => {
+        const pos = o.cursor[t.table] as CursorPos | undefined;
+        const del = t.deletedWhen ? `(${t.deletedWhen})` : 'false';
+        // columns the browser never gets are dropped here, so they never cross the wire
+        const row = ['to_jsonb(t)', ...(t.omit ?? []).map((c) => `'${c}'`)].join(' - ');
+        return db.query<{ row: Row; _ts: string; _k: string; _del: boolean }>(
+          `select ${row} as row,
+                  to_char(t.${t.cursor} at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') as _ts,
+                  t.${t.key}::text as _k, ${del} as _del
+             from orbit.${t.table} t
+            where t.user_id = $1::uuid
+              and (t.${t.cursor}, t.${t.key}::text) > ($2::timestamptz, $3::text)
+              and t.${t.cursor} <= $4::timestamptz
+              ${t.filter ? `and ${t.filter}` : ''}
+            order by t.${t.cursor}, t.${t.key}::text
+            limit $5`,
+          [userId, pos?.t ?? '-infinity', pos?.k ?? '', o.upTo, o.limit],
+        );
+      }),
+    ),
+    // hard deletes made through /sync/push (and later by jobs) are recorded in the audit log
+    db.sql<{ id: number | string; target_table: string; target_id: string }>`
+      select id, target_table, target_id from orbit.audit_log
+       where user_id = ${userId}::uuid and action = 'sync.delete' and id > ${o.cursor._audit ?? 0}::bigint
+         and target_table = any(${names}::text[])
+       order by id limit 5000`,
+  ]);
+  o.tables.forEach((t, i) => {
+    const rows = pages[i]!;
     if (rows.length === o.limit) hasMore = true;
     const live = rows.filter((r) => !r._del).map((r) => shapeRow(t, r.row));
     const gone = rows.filter((r) => r._del).map((r) => r._k);
@@ -181,15 +198,7 @@ export async function pull(
     if (gone.length) deleted[t.table] = gone;
     const last = rows.at(-1);
     if (last) next[t.table] = { t: last._ts, k: last._k };
-  }
-
-  // hard deletes made through /sync/push (and later by jobs) are recorded in the audit log
-  const names = o.tables.map((t) => t.table);
-  const audits = await db.sql<{ id: number | string; target_table: string; target_id: string }>`
-    select id, target_table, target_id from orbit.audit_log
-     where user_id = ${userId}::uuid and action = 'sync.delete' and id > ${o.cursor._audit ?? 0}::bigint
-       and target_table = any(${names}::text[])
-     order by id limit 5000`;
+  });
   for (const a of audits) (deleted[a.target_table] ??= []).push(a.target_id);
   if (audits.length === 5000) hasMore = true;
   const lastAudit = audits.at(-1);

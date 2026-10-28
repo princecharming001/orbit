@@ -25,7 +25,7 @@ import {
 import { clientIp } from '../_shared/origins.ts';
 import { ipBuckets, memoryTake, sqlTake, type Take, userBuckets } from '../_shared/ratelimit.ts';
 import { type AgentConfig, makeServices, type Services } from '../_shared/services.ts';
-import { authenticate, type SessionConfig, sessionSecretUsable } from '../_shared/session.ts';
+import { checkSession, type SessionConfig, sessionSecretUsable, verifyBearer } from '../_shared/session.ts';
 import { accountDelete, accountExport } from './account.ts';
 import { googleCallback, googleStart, logout, me, refresh, session } from './auth.ts';
 import { cadenceRoutes } from './routes/cadence.ts';
@@ -85,7 +85,19 @@ export interface ApiDeps {
   pullLagMs?: number;
   /** provider keys and test fakes for the agent routes (goals … cadence); Google and Unipile default from env */
   agent?: AgentConfig;
+  /**
+   * reads the Unipile key and base again (a function secret, or the value stored in orbit_private.secrets), for
+   * when they were missing at cold start: one stored later is picked up without waiting for a new isolate
+   */
+  refreshProviderSecrets?: () => Promise<Pick<ApiEnv, 'unipileKey' | 'unipileBase'>>;
 }
+
+/** The values that are set: an undefined one never overwrites a value from somewhere else. */
+const defined = <T extends object>(o: T | undefined): Partial<T> =>
+  Object.fromEntries(Object.entries(o ?? {}).filter(([, v]) => v !== undefined)) as Partial<T>;
+
+/** How often a missing provider secret is looked up again. */
+const SECRET_RETRY_MS = 60_000;
 
 /** What a route handler gets. */
 export interface Ctx {
@@ -183,9 +195,18 @@ export function makeApiHandler(deps: ApiDeps): (req: Request) => Promise<Respons
       googleRedirectUri: deps.env.googleRedirectUri,
       unipileKey: deps.env.unipileKey,
       unipileBase: deps.env.unipileBase,
-      ...deps.agent?.env,
+      ...defined(deps.agent?.env),
     },
   };
+  let secretsTriedAt = 0;
+  async function providerSecrets() {
+    if ((deps.env.unipileKey && deps.env.unipileBase) || !deps.refreshProviderSecrets) return;
+    if (Date.now() - secretsTriedAt < SECRET_RETRY_MS) return;
+    secretsTriedAt = Date.now();
+    const fresh = defined(await deps.refreshProviderSecrets().catch(() => undefined));
+    Object.assign(deps.env, fresh);
+    Object.assign(agent.env ?? {}, fresh);
+  }
 
   return async (req) => {
     const started = Date.now();
@@ -244,12 +265,13 @@ export function makeApiHandler(deps: ApiDeps): (req: Request) => Promise<Respons
       const r = ROUTES[path];
       if (!r) throw notFound();
       if (!r.method.split('|').includes(req.method)) throw new HttpError(405, 'method_not_allowed', r.method);
+      await providerSecrets();
       const missing = missingSecrets(deps, !!r.google);
       if (missing.length) return unconfigured(h, missing);
       const db = deps.db!;
 
       const visitor = (await sha256Hex(`${salt}:${clientIp(req)}`)).slice(0, 32);
-      await limit(ipBuckets('api', visitor, now(), limits.ipPerMinute));
+      const ipLimit = ipBuckets('api', visitor, now(), limits.ipPerMinute);
 
       let services: Services | undefined;
       const ctx: Ctx = {
@@ -266,14 +288,23 @@ export function makeApiHandler(deps: ApiDeps): (req: Request) => Promise<Respons
         services: () => (services ??= makeServices(agent, { db, now })),
       };
       if (r.auth) {
-        const claims = await authenticate(db, ctx.session, req.headers.get('authorization'));
+        // the token's signature is checked here, without the database; a bad one still counts against the IP
+        const claims = await verifyBearer(ctx.session, req.headers.get('authorization')).catch(async (e) => {
+          await limit(ipLimit);
+          throw e;
+        });
         ctx.userId = userId = claims.userId;
         ctx.sessionId = claims.sessionId;
         const who = (await sha256Hex(`${salt}:${claims.userId}`)).slice(0, 32);
-        await limit(
-          userBuckets('api', who, now(), { perMinute: limits.userPerMinute, perDay: limits.userPerDay }),
-        );
-      }
+        // then the session check and one write for every rate limit go out together: one round trip, not three
+        await Promise.all([
+          checkSession(db, ctx.session, claims),
+          limit([
+            ...ipLimit,
+            ...userBuckets('api', who, now(), { perMinute: limits.userPerMinute, perDay: limits.userPerDay }),
+          ]),
+        ]);
+      } else await limit(ipLimit);
       const out = await r.run(ctx);
       // route handlers return bare responses; add CORS and the request id to each
       const headers = new Headers(out.headers);

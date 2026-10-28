@@ -345,7 +345,8 @@ async function tokenCall(cfg, form) {
   const res = await (cfg.fetch ?? fetch)(GOOGLE_TOKEN_URL, {
     method: "POST",
     headers: { "content-type": "application/x-www-form-urlencoded", accept: "application/json" },
-    body: new URLSearchParams(form)
+    body: new URLSearchParams(form),
+    signal: AbortSignal.timeout(15e3)
   });
   let body = {};
   try {
@@ -10398,7 +10399,9 @@ function googleClient(deps) {
               accept: "application/json",
               ...r.body === void 0 ? {} : { "content-type": "application/json" }
             },
-            body: r.body === void 0 ? void 0 : JSON.stringify(r.body)
+            body: r.body === void 0 ? void 0 : JSON.stringify(r.body),
+            // a call Google never answers fails the job (which is retried) instead of holding the worker
+            signal: AbortSignal.timeout(3e4)
           })
         );
         if (res.status === 401) {
@@ -19216,6 +19219,7 @@ function defaultHandlers(opts = {}) {
 var VT_SEC = 120;
 var BATCH = 10;
 var MAX_READS = 5;
+var MAX_READS_UNFINISHED = MAX_READS + 5;
 var DEFAULT_BUDGET_MS = 11e4;
 var backoffSec = (readCt) => 30 * 2 ** Math.max(0, readCt - 1);
 function parse(message) {
@@ -19254,6 +19258,7 @@ async function runTick(deps) {
     for (const q of QUEUES) {
       const batch = await queue.read(q, VT_SEC, BATCH);
       if (!batch.length) continue;
+      const readAt = clock();
       for (let i = 0; i < batch.length; i++) {
         const msg = batch[i];
         if (clock() >= deadline) {
@@ -19261,6 +19266,7 @@ async function runTick(deps) {
           s.stoppedBy = "budget";
           break outer;
         }
+        if (clock() - readAt > VT_SEC * 1e3 / 2) await queue.setVt(q, msg.msgId, VT_SEC);
         await runOne(q, msg.msgId, msg.readCt, msg.message);
         s.processed++;
         s.byQueue[q] = (s.byQueue[q] ?? 0) + 1;
@@ -19293,6 +19299,12 @@ async function runTick(deps) {
       return;
     }
     const job = { ...m, queue: q, msgId, readCt };
+    if (readCt > MAX_READS_UNFINISHED) {
+      await record("error", "never finished");
+      await deadLetter(q, msgId, message, `read ${readCt} times without finishing`);
+      s.failed++;
+      return;
+    }
     if (m.dedupeKey) {
       const dup = await db2.sql`select 1 from orbit.job_runs where dedupe_key = ${m.dedupeKey} and status = 'ok'
         and finished_at > ${now()}::timestamptz - interval '24 hours' limit 1`;

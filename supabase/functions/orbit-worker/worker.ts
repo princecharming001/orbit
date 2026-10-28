@@ -86,6 +86,12 @@ export function defaultHandlers(
 export const VT_SEC = 120;
 export const BATCH = 10;
 export const MAX_READS = 5;
+/**
+ * A message read this many times never reached a clean finish: its runs keep dying with the isolate (a time or
+ * memory limit), which skips the dead-letter path in runOne. It is set aside before it runs again. Above MAX_READS,
+ * since a batch's unrun tail is handed back and read again without failing.
+ */
+export const MAX_READS_UNFINISHED = MAX_READS + 5;
 export const DEFAULT_BUDGET_MS = 110_000;
 
 export const backoffSec = (readCt: number) => 30 * 2 ** Math.max(0, readCt - 1);
@@ -151,6 +157,7 @@ export async function runTick(deps: WorkerDeps): Promise<TickSummary> {
     for (const q of QUEUES) {
       const batch = await queue.read(q, VT_SEC, BATCH);
       if (!batch.length) continue;
+      const readAt = clock();
       for (let i = 0; i < batch.length; i++) {
         const msg = batch[i]!;
         if (clock() >= deadline) {
@@ -159,6 +166,9 @@ export async function runTick(deps: WorkerDeps): Promise<TickSummary> {
           s.stoppedBy = 'budget';
           break outer;
         }
+        // a message waiting behind slow ones is hidden again before it runs, so the next tick cannot pick it up
+        // too and run it twice
+        if (clock() - readAt > (VT_SEC * 1000) / 2) await queue.setVt(q, msg.msgId, VT_SEC);
         await runOne(q, msg.msgId, msg.readCt, msg.message);
         s.processed++;
         s.byQueue[q] = (s.byQueue[q] ?? 0) + 1;
@@ -194,6 +204,12 @@ export async function runTick(deps: WorkerDeps): Promise<TickSummary> {
       return;
     }
     const job: Job = { ...m, queue: q, msgId, readCt };
+    if (readCt > MAX_READS_UNFINISHED) {
+      await record('error', 'never finished');
+      await deadLetter(q, msgId, message, `read ${readCt} times without finishing`);
+      s.failed++;
+      return;
+    }
 
     if (m.dedupeKey) {
       const dup =

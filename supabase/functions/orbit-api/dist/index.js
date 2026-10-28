@@ -106,9 +106,10 @@ function defaultOrigins(origin) {
   return /^http:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin);
 }
 function clientIp(req) {
+  const set = req.headers.get("cf-connecting-ip") ?? req.headers.get("x-real-ip");
+  if (set) return set.trim();
   const xff = req.headers.get("x-forwarded-for");
-  if (xff) return xff.split(",")[0].trim();
-  return req.headers.get("cf-connecting-ip") ?? req.headers.get("x-real-ip") ?? "unknown";
+  return xff ? xff.split(",").at(-1).trim() : "unknown";
 }
 
 // supabase/functions/_shared/http.ts
@@ -511,7 +512,8 @@ async function tokenCall(cfg, form) {
   const res = await (cfg.fetch ?? fetch)(GOOGLE_TOKEN_URL, {
     method: "POST",
     headers: { "content-type": "application/x-www-form-urlencoded", accept: "application/json" },
-    body: new URLSearchParams(form)
+    body: new URLSearchParams(form),
+    signal: AbortSignal.timeout(15e3)
   });
   let body2 = {};
   try {
@@ -1804,17 +1806,18 @@ async function revokeSession(db2, refreshToken, now = /* @__PURE__ */ new Date()
     returning id`;
   return rows.length > 0;
 }
-async function authenticate(db2, cfg, header) {
+async function verifyBearer(cfg, header) {
   const m = /^Bearer\s+(\S+)$/i.exec(header ?? "");
   if (!m) throw unauthorized("sign in first");
-  const claims = await verifyAccess(cfg, m[1]);
+  return verifyAccess(cfg, m[1]);
+}
+async function checkSession(db2, cfg, claims) {
   const now = (cfg.now ?? (() => /* @__PURE__ */ new Date()))();
   const rows = await db2.sql`
     select 1 from orbit.sessions s join orbit.users u on u.id = s.user_id
      where s.id = ${claims.sessionId}::uuid and s.user_id = ${claims.userId}::uuid
        and s.revoked_at is null and s.expires_at > ${now}::timestamptz and u.deleted_at is null`;
   if (!rows.length) throw unauthorized("the session has ended");
-  return claims;
 }
 async function createLoginCode(db2, userId, now = /* @__PURE__ */ new Date()) {
   const code = randomToken(32);
@@ -12695,22 +12698,37 @@ async function pull(db2, userId, o) {
   const deleted = {};
   const next = { ...o.cursor };
   let hasMore = false;
-  for (const t of o.tables) {
-    const pos = o.cursor[t.table];
-    const del = t.deletedWhen ? `(${t.deletedWhen})` : "false";
-    const rows = await db2.query(
-      `select to_jsonb(t) as row,
-              to_char(t.${t.cursor} at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') as _ts,
-              t.${t.key}::text as _k, ${del} as _del
-         from orbit.${t.table} t
-        where t.user_id = $1::uuid
-          and (t.${t.cursor}, t.${t.key}::text) > ($2::timestamptz, $3::text)
-          and t.${t.cursor} <= $4::timestamptz
-          ${t.filter ? `and ${t.filter}` : ""}
-        order by t.${t.cursor}, t.${t.key}::text
-        limit $5`,
-      [userId, pos?.t ?? "-infinity", pos?.k ?? "", o.upTo, o.limit]
-    );
+  const names = o.tables.map((t) => t.table);
+  const [pages, audits] = await Promise.all([
+    Promise.all(
+      o.tables.map((t) => {
+        const pos = o.cursor[t.table];
+        const del = t.deletedWhen ? `(${t.deletedWhen})` : "false";
+        const row = ["to_jsonb(t)", ...(t.omit ?? []).map((c) => `'${c}'`)].join(" - ");
+        return db2.query(
+          `select ${row} as row,
+                  to_char(t.${t.cursor} at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') as _ts,
+                  t.${t.key}::text as _k, ${del} as _del
+             from orbit.${t.table} t
+            where t.user_id = $1::uuid
+              and (t.${t.cursor}, t.${t.key}::text) > ($2::timestamptz, $3::text)
+              and t.${t.cursor} <= $4::timestamptz
+              ${t.filter ? `and ${t.filter}` : ""}
+            order by t.${t.cursor}, t.${t.key}::text
+            limit $5`,
+          [userId, pos?.t ?? "-infinity", pos?.k ?? "", o.upTo, o.limit]
+        );
+      })
+    ),
+    // hard deletes made through /sync/push (and later by jobs) are recorded in the audit log
+    db2.sql`
+      select id, target_table, target_id from orbit.audit_log
+       where user_id = ${userId}::uuid and action = 'sync.delete' and id > ${o.cursor._audit ?? 0}::bigint
+         and target_table = any(${names}::text[])
+       order by id limit 5000`
+  ]);
+  o.tables.forEach((t, i) => {
+    const rows = pages[i];
     if (rows.length === o.limit) hasMore = true;
     const live = rows.filter((r) => !r._del).map((r) => shapeRow(t, r.row));
     const gone = rows.filter((r) => r._del).map((r) => r._k);
@@ -12718,13 +12736,7 @@ async function pull(db2, userId, o) {
     if (gone.length) deleted[t.table] = gone;
     const last = rows.at(-1);
     if (last) next[t.table] = { t: last._ts, k: last._k };
-  }
-  const names = o.tables.map((t) => t.table);
-  const audits = await db2.sql`
-    select id, target_table, target_id from orbit.audit_log
-     where user_id = ${userId}::uuid and action = 'sync.delete' and id > ${o.cursor._audit ?? 0}::bigint
-       and target_table = any(${names}::text[])
-     order by id limit 5000`;
+  });
   for (const a of audits) (deleted[a.target_table] ??= []).push(a.target_id);
   if (audits.length === 5e3) hasMore = true;
   const lastAudit = audits.at(-1);
@@ -13106,6 +13118,8 @@ async function pushDraft(db2, userId, id, row) {
 // supabase/functions/orbit-api/api.ts
 var DEFAULT_APP_URL = "https://tryorbit.today";
 var DEFAULT_LIMITS = { ipPerMinute: 120, userPerMinute: 240, userPerDay: 2e4 };
+var defined = (o) => Object.fromEntries(Object.entries(o ?? {}).filter(([, v]) => v !== void 0));
+var SECRET_RETRY_MS = 6e4;
 var ROUTES = {
   "/auth/google/start": { method: "GET", auth: false, google: true, run: googleStart },
   "/auth/google/callback": { method: "GET", auth: false, google: true, run: googleCallback },
@@ -13168,9 +13182,18 @@ function makeApiHandler(deps) {
       googleRedirectUri: deps.env.googleRedirectUri,
       unipileKey: deps.env.unipileKey,
       unipileBase: deps.env.unipileBase,
-      ...deps.agent?.env
+      ...defined(deps.agent?.env)
     }
   };
+  let secretsTriedAt = 0;
+  async function providerSecrets() {
+    if (deps.env.unipileKey && deps.env.unipileBase || !deps.refreshProviderSecrets) return;
+    if (Date.now() - secretsTriedAt < SECRET_RETRY_MS) return;
+    secretsTriedAt = Date.now();
+    const fresh = defined(await deps.refreshProviderSecrets().catch(() => void 0));
+    Object.assign(deps.env, fresh);
+    Object.assign(agent.env ?? {}, fresh);
+  }
   return async (req) => {
     const started = Date.now();
     const rid = requestId(req);
@@ -13217,11 +13240,12 @@ function makeApiHandler(deps) {
       const r = ROUTES[path];
       if (!r) throw notFound();
       if (!r.method.split("|").includes(req.method)) throw new HttpError(405, "method_not_allowed", r.method);
+      await providerSecrets();
       const missing = missingSecrets(deps, !!r.google);
       if (missing.length) return unconfigured(h, missing);
       const db2 = deps.db;
       const visitor = (await sha256Hex(`${salt2}:${clientIp(req)}`)).slice(0, 32);
-      await limit(ipBuckets("api", visitor, now(), limits.ipPerMinute));
+      const ipLimit = ipBuckets("api", visitor, now(), limits.ipPerMinute);
       let services;
       const ctx = {
         req,
@@ -13237,14 +13261,21 @@ function makeApiHandler(deps) {
         services: () => services ??= makeServices(agent, { db: db2, now })
       };
       if (r.auth) {
-        const claims = await authenticate(db2, ctx.session, req.headers.get("authorization"));
+        const claims = await verifyBearer(ctx.session, req.headers.get("authorization")).catch(async (e) => {
+          await limit(ipLimit);
+          throw e;
+        });
         ctx.userId = userId = claims.userId;
         ctx.sessionId = claims.sessionId;
         const who = (await sha256Hex(`${salt2}:${claims.userId}`)).slice(0, 32);
-        await limit(
-          userBuckets("api", who, now(), { perMinute: limits.userPerMinute, perDay: limits.userPerDay })
-        );
-      }
+        await Promise.all([
+          checkSession(db2, ctx.session, claims),
+          limit([
+            ...ipLimit,
+            ...userBuckets("api", who, now(), { perMinute: limits.userPerMinute, perDay: limits.userPerDay })
+          ])
+        ]);
+      } else await limit(ipLimit);
       const out = await r.run(ctx);
       const headers = new Headers(out.headers);
       for (const [k, v] of Object.entries(h)) if (!headers.has(k)) headers.set(k, v);
@@ -13305,6 +13336,13 @@ Deno.serve(
     },
     db,
     agent: { env: agentEnvFrom(env) },
+    refreshProviderSecrets: async () => {
+      const [unipileKey2, unipileBase2] = await Promise.all([
+        providerSecret(env, db, "UNIPILE_API_KEY"),
+        providerSecret(env, db, "UNIPILE_BASE_URL")
+      ]);
+      return { unipileKey: unipileKey2, unipileBase: unipileBase2 };
+    },
     log: makeLogger(salt),
     salt,
     limits: {

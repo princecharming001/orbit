@@ -1,6 +1,6 @@
 /** The integration routes of orbit-api (§12.3): Google sync, LinkedIn hosted auth, status and sync. */
 import type { LinkedinStatusResponse, QueuedResponse } from '@orbit/core/server/api';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { memoryTake } from '../../functions/_shared/ratelimit.ts';
 import { createSession } from '../../functions/_shared/session.ts';
 import { type ApiDeps, makeApiHandler } from '../../functions/orbit-api/api.ts';
@@ -167,6 +167,34 @@ describe('/linkedin/*', () => {
     expect(r.headers.get('x-orbit-connector')).toBe('unconfigured');
     expect(((await r.json()) as { error: { missing: string[] } }).error.missing).toEqual(['UNIPILE_API_KEY']);
     expect((await handler(post('/linkedin/sync', token))).status).toBe(503);
+  });
+
+  it('picks up a Unipile key stored after the function started, without a new isolate', async () => {
+    const unipile = new FakeUnipile();
+    let stored: string | undefined;
+    const handler = makeApiHandler({
+      env: {
+        sessionSecret: SECRET,
+        appUrl: APP,
+        unipileBase: 'https://api.unipile.test',
+        unipileWebhookSecret: 'unipile-hook-placeholder',
+      },
+      db: t.db,
+      fetch: unipile.fetch,
+      take: memoryTake(),
+      refreshProviderSecrets: async () => ({ unipileKey: stored, unipileBase: undefined }),
+    });
+    const { token } = await signedIn(['openid']);
+    expect((await handler(post('/linkedin/sync', token))).status).toBe(503);
+    // stored now; the next lookup is at most a minute later
+    stored = 'unipile-placeholder';
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(Date.now() + 61_000);
+    try {
+      expect((await handler(post('/linkedin/sync', token))).status).not.toBe(503);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('status counts relations; sync queues the LinkedIn job once connected', async () => {

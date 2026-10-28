@@ -174,6 +174,8 @@ export function googleClient(deps: GoogleClientDeps): GoogleClient {
               ...(r.body === undefined ? {} : { 'content-type': 'application/json' }),
             },
             body: r.body === undefined ? undefined : JSON.stringify(r.body),
+            // a call Google never answers fails the job (which is retried) instead of holding the worker
+            signal: AbortSignal.timeout(30_000),
           }),
         );
         if (res.status === 401) {

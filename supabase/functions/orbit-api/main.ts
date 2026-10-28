@@ -46,6 +46,13 @@ Deno.serve(
     },
     db,
     agent: { env: agentEnvFrom(env) },
+    refreshProviderSecrets: async () => {
+      const [unipileKey, unipileBase] = await Promise.all([
+        providerSecret(env, db, 'UNIPILE_API_KEY'),
+        providerSecret(env, db, 'UNIPILE_BASE_URL'),
+      ]);
+      return { unipileKey, unipileBase };
+    },
     log: makeLogger(salt),
     salt,
     limits: {

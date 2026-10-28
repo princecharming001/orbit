@@ -140,16 +140,26 @@ export async function revokeSession(db: Db, refreshToken: string, now = new Date
  * live (so logout and account deletion take effect before the hour is up).
  */
 export async function authenticate(db: Db, cfg: SessionConfig, header: string | null): Promise<AccessClaims> {
+  const claims = await verifyBearer(cfg, header);
+  await checkSession(db, cfg, claims);
+  return claims;
+}
+
+/** The access token's claims, checked by signature and expiry only (no database). */
+export async function verifyBearer(cfg: SessionConfig, header: string | null): Promise<AccessClaims> {
   const m = /^Bearer\s+(\S+)$/i.exec(header ?? '');
   if (!m) throw unauthorized('sign in first');
-  const claims = await verifyAccess(cfg, m[1]!);
+  return verifyAccess(cfg, m[1]!);
+}
+
+/** The session behind verified claims is still live (not signed out, expired or deleted). */
+export async function checkSession(db: Db, cfg: SessionConfig, claims: AccessClaims): Promise<void> {
   const now = (cfg.now ?? (() => new Date()))();
   const rows = await db.sql`
     select 1 from orbit.sessions s join orbit.users u on u.id = s.user_id
      where s.id = ${claims.sessionId}::uuid and s.user_id = ${claims.userId}::uuid
        and s.revoked_at is null and s.expires_at > ${now}::timestamptz and u.deleted_at is null`;
   if (!rows.length) throw unauthorized('the session has ended');
-  return claims;
 }
 
 // ---- login codes ------------------------------------------------------------------------------------------------

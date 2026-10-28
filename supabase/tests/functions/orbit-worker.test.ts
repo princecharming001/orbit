@@ -145,6 +145,19 @@ describe('runTick', () => {
     expect(await left('orbit_sync')).toBe(0);
   });
 
+  it('sets aside a message whose runs keep dying before they finish, without running it again', async () => {
+    const ran = vi.fn(async () => {});
+    await sqlQueue(t.db).enqueue({ kind: 'heavy', userId: null, payload: {} }, { queue: 'orbit_sync' });
+    // eleven reads that never reached the handler's finish (the isolate died each time)
+    await t.pg.exec('update pgmq.q_orbit_sync set read_ct = 10');
+    const s = await runTick({ db: t.db, handlers: { heavy: ran } });
+    expect(ran).not.toHaveBeenCalled();
+    expect(s.deadLettered).toBe(1);
+    expect(await left('orbit_sync')).toBe(0);
+    const [dl] = await t.db.sql<{ error: string }>`select error from orbit.dead_letters`;
+    expect(dl!.error).toBe('read 11 times without finishing');
+  });
+
   it('§9.4 test 2: a failing handler is retried with growing timeouts and dead-lettered after 6 reads', async () => {
     const failing: JobHandler = async () => {
       throw new Error('upstream 500');

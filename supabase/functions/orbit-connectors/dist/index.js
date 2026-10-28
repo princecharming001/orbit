@@ -344,6 +344,19 @@ function postgrestPostingCache(url2, serviceKey2, doFetch = fetch) {
   };
 }
 
+// supabase/functions/_shared/crypto.ts
+var enc = new TextEncoder();
+async function sha256Bytes(text2) {
+  return new Uint8Array(await crypto.subtle.digest("SHA-256", enc.encode(text2)));
+}
+async function timingSafeEqual(a, b) {
+  if (typeof a !== "string" || typeof b !== "string" || !b) return false;
+  const [x, y] = await Promise.all([sha256Bytes(a), sha256Bytes(b)]);
+  let diff = 0;
+  for (let i = 0; i < x.length; i++) diff |= x[i] ^ y[i];
+  return diff === 0;
+}
+
 // supabase/functions/_shared/origins.ts
 var PUBLISHED = /* @__PURE__ */ new Set([
   "https://tryorbit.today",
@@ -355,9 +368,10 @@ function defaultOrigins(origin) {
   return /^http:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin);
 }
 function clientIp(req) {
+  const set = req.headers.get("cf-connecting-ip") ?? req.headers.get("x-real-ip");
+  if (set) return set.trim();
   const xff = req.headers.get("x-forwarded-for");
-  if (xff) return xff.split(",")[0].trim();
-  return req.headers.get("cf-connecting-ip") ?? req.headers.get("x-real-ip") ?? "unknown";
+  return xff ? xff.split(",").at(-1).trim() : "unknown";
 }
 
 // supabase/functions/_shared/providers/request.ts
@@ -1326,7 +1340,8 @@ async function unipileNotify(deps, req) {
   const q = new URL(req.url).searchParams;
   const ref = q.get("ref") ?? "";
   const sig = q.get("sig") ?? "";
-  if (!ref || !sig || sig !== await accountToken(`link:${ref}`, deps.signingKey)) return no(403);
+  if (!ref || !sig || !await timingSafeEqual(sig, await accountToken(`link:${ref}`, deps.signingKey)))
+    return no(403);
   let b;
   try {
     b = await req.json();

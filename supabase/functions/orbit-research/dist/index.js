@@ -991,9 +991,10 @@ function defaultOrigins(origin) {
   return /^http:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin);
 }
 function clientIp(req) {
+  const set = req.headers.get("cf-connecting-ip") ?? req.headers.get("x-real-ip");
+  if (set) return set.trim();
   const xff = req.headers.get("x-forwarded-for");
-  if (xff) return xff.split(",")[0].trim();
-  return req.headers.get("cf-connecting-ip") ?? req.headers.get("x-real-ip") ?? "unknown";
+  return xff ? xff.split(",").at(-1).trim() : "unknown";
 }
 
 // supabase/functions/orbit-claude/proxy.ts

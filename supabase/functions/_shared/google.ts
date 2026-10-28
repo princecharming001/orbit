@@ -95,6 +95,7 @@ async function tokenCall(cfg: GoogleConfig, form: Record<string, string>): Promi
     method: 'POST',
     headers: { 'content-type': 'application/x-www-form-urlencoded', accept: 'application/json' },
     body: new URLSearchParams(form),
+    signal: AbortSignal.timeout(15_000),
   });
   let body: Record<string, unknown> = {};
   try {

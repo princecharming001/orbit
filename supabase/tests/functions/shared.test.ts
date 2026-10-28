@@ -184,8 +184,16 @@ describe('http', () => {
     expect(requestId(new Request('https://x', { headers: { 'x-request-id': 'bad id<>' } }))).toMatch(
       /^[0-9a-f-]{36}$/,
     );
-    expect(clientIp(new Request('https://x', { headers: { 'x-forwarded-for': '1.2.3.4, 5.6.7.8' } }))).toBe(
-      '1.2.3.4',
+    // the platform's own header wins over x-forwarded-for, whose first entry the caller can write
+    expect(
+      clientIp(
+        new Request('https://x', {
+          headers: { 'x-forwarded-for': '6.6.6.6, 5.6.7.8', 'cf-connecting-ip': '1.2.3.4' },
+        }),
+      ),
+    ).toBe('1.2.3.4');
+    expect(clientIp(new Request('https://x', { headers: { 'x-forwarded-for': '6.6.6.6, 5.6.7.8' } }))).toBe(
+      '5.6.7.8',
     );
   });
 
