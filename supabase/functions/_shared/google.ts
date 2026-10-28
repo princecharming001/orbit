@@ -30,6 +30,21 @@ export const PHASE1_SCOPES = [
 /** Asked incrementally the first time the user books a call from Orbit. */
 export const CALENDAR_EVENTS_SCOPE = `${G}calendar.events`;
 
+/**
+ * Where Google sends sign-in back: a page on Orbit's own site (apps/web/public/auth/google/callback) that passes the
+ * code on to this server, so every domain on the consent screen is one Orbit can show it owns. A local app keeps the
+ * server's own address.
+ */
+export function googleRedirectUri(
+  appUrl: string | undefined,
+  functionsUrl: string | undefined,
+): string | undefined {
+  const site = (appUrl || 'https://tryorbit.today').replace(/\/+$/, '');
+  if (/^https:\/\//.test(site) && !/\/\/(localhost|127\.0\.0\.1)\b/.test(site))
+    return `${site}/auth/google/callback`;
+  return functionsUrl ? `${functionsUrl}/orbit-api/auth/google/callback` : undefined;
+}
+
 export interface GoogleConfig {
   clientId: string;
   clientSecret: string;

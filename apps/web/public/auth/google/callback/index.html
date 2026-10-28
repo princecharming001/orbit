@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <!-- the sign-in code in the address is never sent on to another site as a referrer -->
+    <meta name="referrer" content="no-referrer" />
+    <meta name="robots" content="noindex" />
+    <title>Signing you in · Orbit</title>
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+    <style>
+      :root { --ink: #0a0a0a; --ink-3: #74746f; --page: #fbfaf8; --accent: #1f3d33; }
+      body {
+        margin: 0;
+        min-height: 100vh;
+        display: grid;
+        place-items: center;
+        background: var(--page);
+        color: var(--ink);
+        font: 15px/1.6 Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+      }
+      p { margin: 0; color: var(--ink-3); }
+      a { color: var(--accent); }
+    </style>
+  </head>
+  <body>
+    <main>
+      <p id="msg">Signing you in to Orbit…</p>
+    </main>
+    <script>
+      // Google sends sign-in back to Orbit's own domain (so the consent screen can name Orbit); the code and state are
+      // passed on, unchanged, to Orbit's server, which checks the state it stored and finishes signing in.
+      (function () {
+        var server = 'https://nxibeiykcgxpbmkeadth.supabase.co/functions/v1/orbit-api/auth/google/callback';
+        var q = window.location.search;
+        if (/[?&]state=/.test(q)) window.location.replace(server + q);
+        else document.getElementById('msg').innerHTML = 'This link has expired. <a href="/">Back to Orbit</a> to sign in again.';
+      })();
+    </script>
+    <noscript><p>Orbit needs JavaScript to finish signing in.</p></noscript>
+  </body>
+</html>

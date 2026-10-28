@@ -3,6 +3,7 @@
  * scripts/build-functions.mjs; index.ts loads that bundle. Deploy with verify_jwt off (Orbit checks its own tokens).
  */
 import { connectDb } from '../_shared/db.ts';
+import { googleRedirectUri } from '../_shared/google.ts';
 import { makeLogger } from '../_shared/http.ts';
 import { resolveSecret } from '../_shared/secrets.ts';
 import { agentEnvFrom } from '../_shared/services.ts';
@@ -32,7 +33,7 @@ Deno.serve(
       googleClientSecret: env('ORBIT_GOOGLE_CLIENT_SECRET'),
       googleRedirectUri:
         env('ORBIT_GOOGLE_REDIRECT_URI') ??
-        (supabaseUrl ? `${supabaseUrl}/functions/v1/orbit-api/auth/google/callback` : undefined),
+        googleRedirectUri(env('ORBIT_APP_URL'), supabaseUrl ? `${supabaseUrl}/functions/v1` : undefined),
       sessionSecret,
       appUrl: env('ORBIT_APP_URL'),
       unipileKey: env('UNIPILE_API_KEY'),

@@ -329,6 +329,12 @@ var PHASE1_SCOPES = [
   `${G}contacts.readonly`
 ];
 var CALENDAR_EVENTS_SCOPE = `${G}calendar.events`;
+function googleRedirectUri(appUrl, functionsUrl) {
+  const site = (appUrl || "https://tryorbit.today").replace(/\/+$/, "");
+  if (/^https:\/\//.test(site) && !/\/\/(localhost|127\.0\.0\.1)\b/.test(site))
+    return `${site}/auth/google/callback`;
+  return functionsUrl ? `${functionsUrl}/orbit-api/auth/google/callback` : void 0;
+}
 var GoogleError = class extends Error {
   constructor(status, code) {
     super(`google ${status} ${code}`);
@@ -1505,7 +1511,7 @@ function agentEnvFrom(get) {
     villageBase: get("VILLAGE_BASE_URL"),
     googleClientId: get("ORBIT_GOOGLE_CLIENT_ID"),
     googleClientSecret: get("ORBIT_GOOGLE_CLIENT_SECRET"),
-    googleRedirectUri: get("ORBIT_GOOGLE_REDIRECT_URI") ?? (supabaseUrl ? `${supabaseUrl}/functions/v1/orbit-api/auth/google/callback` : void 0)
+    googleRedirectUri: get("ORBIT_GOOGLE_REDIRECT_URI") ?? googleRedirectUri(get("ORBIT_APP_URL"), supabaseUrl ? `${supabaseUrl}/functions/v1` : void 0)
   };
 }
 

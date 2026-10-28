@@ -47,7 +47,7 @@ export const DEFAULT_APP_URL = 'https://tryorbit.today';
 export interface ApiEnv {
   googleClientId?: string;
   googleClientSecret?: string;
-  /** defaults to <SUPABASE_URL>/functions/v1/orbit-api/auth/google/callback */
+  /** defaults to <ORBIT_APP_URL>/auth/google/callback, the site page that passes sign-in on (google.ts) */
   googleRedirectUri?: string;
   sessionSecret?: string;
   /** where the SPA lives; sign-in finishes at <app>/auth/done */
