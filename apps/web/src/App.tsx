@@ -5,6 +5,7 @@ import type { ChatEngine } from './chat/types';
 import { ChatWithPanel } from './chat/ui/ChatWithPanel';
 import { AppShell } from './components/AppShell';
 import { AccountSync } from './components/account/AccountSync';
+import { ErrorBoundary } from './components/ErrorBoundary';
 import { LegacyRedirect } from './legacyRoutes';
 import { AuthApp } from './pages/AuthApp';
 import { AuthDone } from './pages/AuthDone';
@@ -65,6 +66,12 @@ function Home() {
   );
 }
 
+/** The boundary around every route, cleared when the student moves to another page. */
+function RoutesBoundary({ children }: { children: React.ReactNode }) {
+  const { pathname } = useLocation();
+  return <ErrorBoundary resetKey={pathname}>{children}</ErrorBoundary>;
+}
+
 export function App({ chatEngine }: { chatEngine?: ChatEngine }) {
   return (
     <BrowserRouter basename={import.meta.env.BASE_URL.replace(/\/$/, '')}>
@@ -73,44 +80,46 @@ export function App({ chatEngine }: { chatEngine?: ChatEngine }) {
           <ToastProvider>
             <AccountSync />
             <Suspense fallback={<PageLoading />}>
-              <Routes>
-                {/* the landing page stays reachable for someone signed in (a bookmark, the demo's way back) */}
-                <Route path="/welcome" element={<Landing />} />
-                {/* Log in: Google with Orbit accounts, the profiles saved in this browser without them */}
-                <Route path="/login" element={<LogInPage />} />
-                {/* public: anyone can ask Orbit never to research them (docs/plan/20 §5) */}
-                <Route path="/remove-me" element={<RemoveMePage />} />
-                {/* Google sign-in comes back here in account mode (orbit-api redirects with #code or #error) */}
-                <Route path="/auth/done" element={<AuthDone />} />
-                <Route path="/auth/app" element={<AuthApp />} />
-                <Route
-                  path="/onboarding/:step"
-                  element={
-                    <Gate>
-                      <Onboarding />
-                    </Gate>
-                  }
-                />
-                <Route element={<Home />}>
-                  <Route index element={<ChatWithPanel />} />
-                  {/* Today's cards are in Drafts and its brief in the chat; the Pipeline is the People board */}
-                  <Route path="/today" element={<LegacyRedirect />} />
-                  <Route path="/pipeline" element={<LegacyRedirect />} />
-                  <Route path="/people" element={<People />} />
-                  <Route path="/people/:id" element={<PersonPage />} />
-                  <Route path="/companies/:id" element={<CompanyPage />} />
-                  <Route path="/map" element={<MapPage />} />
-                  <Route path="/discover" element={<Discover />} />
-                  <Route path="/inbox" element={<InboxPage />} />
-                  <Route path="/chats" element={<ChatsPage />} />
-                  {/* the nav calls this page Drafts: a typed or bookmarked /drafts lands there too */}
-                  <Route path="/drafts" element={<Navigate to="/inbox" replace />} />
-                  <Route path="/notes/new" element={<NotesNew />} />
-                  <Route path="/settings" element={<SettingsPage />} />
-                  <Route path="/settings/:section" element={<SettingsPage />} />
-                </Route>
-                <Route path="*" element={<Navigate to="/" replace />} />
-              </Routes>
+              <RoutesBoundary>
+                <Routes>
+                  {/* the landing page stays reachable for someone signed in (a bookmark, the demo's way back) */}
+                  <Route path="/welcome" element={<Landing />} />
+                  {/* Log in: Google with Orbit accounts, the profiles saved in this browser without them */}
+                  <Route path="/login" element={<LogInPage />} />
+                  {/* public: anyone can ask Orbit never to research them (docs/plan/20 §5) */}
+                  <Route path="/remove-me" element={<RemoveMePage />} />
+                  {/* Google sign-in comes back here in account mode (orbit-api redirects with #code or #error) */}
+                  <Route path="/auth/done" element={<AuthDone />} />
+                  <Route path="/auth/app" element={<AuthApp />} />
+                  <Route
+                    path="/onboarding/:step"
+                    element={
+                      <Gate>
+                        <Onboarding />
+                      </Gate>
+                    }
+                  />
+                  <Route element={<Home />}>
+                    <Route index element={<ChatWithPanel />} />
+                    {/* Today's cards are in Drafts and its brief in the chat; the Pipeline is the People board */}
+                    <Route path="/today" element={<LegacyRedirect />} />
+                    <Route path="/pipeline" element={<LegacyRedirect />} />
+                    <Route path="/people" element={<People />} />
+                    <Route path="/people/:id" element={<PersonPage />} />
+                    <Route path="/companies/:id" element={<CompanyPage />} />
+                    <Route path="/map" element={<MapPage />} />
+                    <Route path="/discover" element={<Discover />} />
+                    <Route path="/inbox" element={<InboxPage />} />
+                    <Route path="/chats" element={<ChatsPage />} />
+                    {/* the nav calls this page Drafts: a typed or bookmarked /drafts lands there too */}
+                    <Route path="/drafts" element={<Navigate to="/inbox" replace />} />
+                    <Route path="/notes/new" element={<NotesNew />} />
+                    <Route path="/settings" element={<SettingsPage />} />
+                    <Route path="/settings/:section" element={<SettingsPage />} />
+                  </Route>
+                  <Route path="*" element={<Navigate to="/" replace />} />
+                </Routes>
+              </RoutesBoundary>
             </Suspense>
           </ToastProvider>
         </ChatEngineProvider>

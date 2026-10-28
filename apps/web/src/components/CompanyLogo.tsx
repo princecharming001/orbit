@@ -72,12 +72,15 @@ export function CompanyLogo({
   useEffect(() => {
     if (orgs && !own && companyName && inViewRef.current) wantCompanyLogo(companyName);
   });
+  // the school list and the icon are looked for once the tile is near the screen
+  const { ref, inView } = useInView({ triggerOnce: true, rootMargin: '200px', fallbackInView: true });
+  inViewRef.current = inView;
   // a school the short list does not know: the full school list, also for short names that do not read like one
-  // ("sjsu", "UCSC"), once the tile is near the screen
+  // ("sjsu", "UCSC"); the list loads and is indexed once, and each name is answered once
   const [schoolDomain, setSchoolDomain] = useState<string>();
   useEffect(() => {
     setSchoolDomain(undefined);
-    if (known || !companyName) return;
+    if (known || !companyName || !inView) return;
     let live = true;
     findSchoolDomain(companyName)
       .then((d) => live && setSchoolDomain(d))
@@ -85,13 +88,10 @@ export function CompanyLogo({
     return () => {
       live = false;
     };
-  }, [known, companyName]);
+  }, [known, companyName, inView]);
   const d = known ?? schoolDomain;
   // a school by its name, by the school list, or by its address: its own site icon stands in for a LinkedIn logo
   const school = named || !!schoolDomain || (!!d && /\.edu$|\.ac\.[a-z]{2}$/.test(d));
-  // the icon is looked for once the tile is near the screen
-  const { ref, inView } = useInView({ triggerOnce: true, rootMargin: '200px', fallbackInView: true });
-  inViewRef.current = inView;
   const [found, setFound] = useState<{ domain: string; src: string | null }>();
   useEffect(() => {
     if (!d || own || !inView) return;

@@ -423,6 +423,22 @@ describe('push', () => {
     });
   });
 
+  it('pushes a local edit before pulling, and never writes the server copy over one still queued', async () => {
+    await db.people.update(P1, { tags: ['payments'] });
+    api.state.pages.push({ changes: { people: [personRow(P1, 'Priya Shah', { tags: ['stale'] })] } });
+    await pullNow(user.id);
+    const routes = api.routes();
+    expect(routes.lastIndexOf('/sync/push')).toBeLessThan(routes.lastIndexOf('/sync/pull'));
+    expect(api.state.pushed.at(-1)).toMatchObject({ table: 'people', id: P1 });
+    // the push failed for now: the edit stays queued and the pulled row leaves it alone
+    await db.people.update(P1, { tags: ['fintech'] });
+    api.state.rejectPush.set(P1, 'failed');
+    api.state.pages.push({ changes: { people: [personRow(P1, 'Priya Shah', { tags: ['stale'] })] } });
+    await pullNow(user.id);
+    expect((await db.people.get(P1))?.tags).toEqual(['fintech']);
+    expect(await db.outbox.count()).toBe(1);
+  });
+
   it('keeps everything queued when the server cannot be reached', async () => {
     await db.people.update(P1, { tags: ['a'] });
     api.state.access.clear();

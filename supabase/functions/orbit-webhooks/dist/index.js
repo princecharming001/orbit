@@ -54,7 +54,9 @@ function connectDb(url, max = 4) {
     prepare: false,
     types: pgTypes,
     max,
-    idle_timeout: 20,
+    // kept open across the app's polls (every 3 to 60 s): a new connection costs TCP, TLS and the password
+    // handshake across regions, about 0.6 s, which was most of /sync/status's time with a 20 s idle timeout
+    idle_timeout: 240,
     connect_timeout: 10,
     onnotice: () => {
     }

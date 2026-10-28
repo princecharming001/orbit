@@ -688,6 +688,9 @@ export function syncStatusNow(): SyncStatus | undefined {
 
 export function subscribeSyncStatus(fn: (s: SyncStatus | undefined) => void): () => void {
   statusListeners.add(fn);
+  // listeners hear only changes, so a new one starts from the latest answer (one that came between its render and
+  // this call would otherwise never reach it)
+  fn(lastStatus);
   return () => {
     statusListeners.delete(fn);
   };

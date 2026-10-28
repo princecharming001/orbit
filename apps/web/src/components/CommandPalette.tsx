@@ -65,6 +65,7 @@ export function CommandPalette({ open, onClose }: { open: boolean; onClose: () =
     <Modal open={open} onClose={onClose} title="Search people and actions" width={560}>
       <input
         ref={ref}
+        aria-label="Search people and actions"
         value={q}
         onChange={(e) => {
           setQ(e.target.value);

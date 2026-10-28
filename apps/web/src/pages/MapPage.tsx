@@ -589,8 +589,19 @@ export function MapPage() {
       label: org?.name ?? label,
     });
     setParams({ reach: '1', company: label });
-    const found = await reachCompany(userId, orgIdOrName);
-    if (viewReq.current === req) setCompany({ ...found, label });
+    try {
+      const found = await reachCompany(userId, orgIdOrName);
+      if (viewReq.current === req) setCompany({ ...found, label });
+    } catch {
+      if (viewReq.current !== req) return;
+      // the lookup failed: the panel stops saying it is looking, and a toast says so (the next search takes it down)
+      setCompanyFocus(undefined);
+      clearMiss();
+      missToast.current = toast.push({
+        text: `Orbit could not look up ${label} just now. Try again.`,
+        ttl: 5000,
+      });
+    }
   };
   // a company link opened directly (or a reload) focuses that company again
   const companyParam = params.get('company');

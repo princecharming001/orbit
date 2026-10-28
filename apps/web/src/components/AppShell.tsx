@@ -34,6 +34,7 @@ import { RatePrompt } from './account/RatePrompt';
 import { useTrackPlace } from './BackLink';
 import { CommandPalette } from './CommandPalette';
 import { DemoBanner } from './DemoBanner';
+import { ErrorBoundary } from './ErrorBoundary';
 import { LinkedInAutoSync } from './LinkedInAutoSync';
 import { LinkedInProgressBanner } from './LinkedInProgressBanner';
 import { MeetingNotesAutoSync } from './MeetingNotesAutoSync';
@@ -356,7 +357,9 @@ export function AppShell() {
           className={cx('flex-1 min-h-0 bg-page', isChat ? 'overflow-hidden' : 'overflow-y-auto scroll-thin')}
         >
           {isChat ? (
-            <Outlet />
+            <ErrorBoundary resetKey={pathname}>
+              <Outlet />
+            </ErrorBoundary>
           ) : (
             <div
               // a soft fade as the student moves between sections (keyed on the section, so a person page to the
@@ -378,7 +381,9 @@ export function AppShell() {
               )}
             >
               <Suspense fallback={<PageLoading path={pathname} />}>
-                <Outlet />
+                <ErrorBoundary resetKey={pathname}>
+                  <Outlet />
+                </ErrorBoundary>
               </Suspense>
             </div>
           )}
@@ -483,7 +488,8 @@ export function AppShell() {
           </button>
         </nav>
       </div>
-      <CommandPalette open={palette} onClose={() => setPalette(false)} />
+      {/* mounted only while open: its live query reads every person and would re-run on every write */}
+      {palette && <CommandPalette open onClose={() => setPalette(false)} />}
     </div>
   );
 }

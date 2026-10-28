@@ -430,14 +430,21 @@ export function DraftEditor({
       opening: draft.opening,
       claims: draft.claims,
     };
-    // what was typed a moment ago is stored first, so the redraft starts from the student's latest words
-    await saveEdits(draft, body, subject);
-    const given = Object.fromEntries(needs.map((n) => [n, inputs[n]?.trim()]).filter(([, v]) => v));
-    // a redraft that throws reads as one that failed, so the button never stays on "Adding…"
-    const done = await regenerateDraft(user, draft.id, given, new Date(), {
-      mine: keepsMine ? body : undefined,
-    }).catch(() => undefined);
-    setRegenerating(false);
+    let done: Awaited<ReturnType<typeof regenerateDraft>> | undefined;
+    try {
+      // what was typed a moment ago is stored first, so the redraft starts from the student's latest words
+      await saveEdits(draft, body, subject);
+      const given = Object.fromEntries(needs.map((n) => [n, inputs[n]?.trim()]).filter(([, v]) => v));
+      // a redraft that throws reads as one that failed, so the button never stays on "Adding…"
+      done = await regenerateDraft(user, draft.id, given, new Date(), {
+        mine: keepsMine ? body : undefined,
+      }).catch(() => undefined);
+    } catch {
+      // the save before it failed: nothing was redrafted, and the message below says so
+      done = undefined;
+    } finally {
+      setRegenerating(false);
+    }
     if (!done) {
       setError('Orbit could not redraft this message. Your text is unchanged.');
       return;

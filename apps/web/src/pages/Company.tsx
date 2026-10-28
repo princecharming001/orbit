@@ -61,6 +61,7 @@ export function CompanyPage() {
     [userId, org?.id],
   );
   const [reach, setReach] = useState<CompanyReach>();
+  const [reachFailed, setReachFailed] = useState(false);
   // the plan for this target, newest first (plan 23 §4.1)
   const plan = useLiveQuery(
     async () =>
@@ -73,7 +74,16 @@ export function CompanyPage() {
   );
   const [filter, setFilter] = useState<Filter>('all');
   useEffect(() => {
-    if (userId && org) reachCompany(userId, org.id).then(setReach);
+    if (!userId || !org) return;
+    // an answer for the company this page showed before is dropped; a failure ends the skeleton
+    let live = true;
+    setReachFailed(false);
+    reachCompany(userId, org.id)
+      .then((r) => live && setReach(r))
+      .catch(() => live && setReachFailed(true));
+    return () => {
+      live = false;
+    };
   }, [userId, org?.id]);
   if (org === undefined)
     return (
@@ -158,7 +168,11 @@ export function CompanyPage() {
           )
         }
       />
-      {!reach ? (
+      {reachFailed && !reach ? (
+        <p className="text-[13px] text-ink-3" data-testid="company-reach-error">
+          Orbit could not work out who you can reach here. Reload the page to try again.
+        </p>
+      ) : !reach ? (
         <SkeletonRows rows={6} divided testId="company-reach-loading" />
       ) : (
         <CompanyBody

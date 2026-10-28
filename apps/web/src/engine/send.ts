@@ -890,21 +890,24 @@ export async function sendDueQueued(
   while (draining) await draining.catch(() => undefined);
   const run = (async () => {
     const out: { id: string; ok: boolean; error?: string }[] = [];
+    // by the status index: this runs every second, and most rows are drafts or long sent
     const due = await db.outbound
-      .where('userId')
-      .equals(user.id)
-      .filter((o) => (o.status === 'queued' || o.status === 'sending') && !!o.sendAt)
+      .where('status')
+      .anyOf('queued', 'sending')
+      .filter((o) => o.userId === user.id && !!o.sendAt)
       .toArray();
-    // autopilot keeps a gap between its sends: the last one it sent, if any
-    let lastAuto = (
-      await db.outbound
-        .where('userId')
-        .equals(user.id)
-        .filter((o) => !!o.autopilot && o.status === 'sent' && !!o.sentAt)
-        .toArray()
-    )
-      .map((o) => new Date(o.sentAt!))
-      .sort((a, b) => b.getTime() - a.getTime())[0];
+    // autopilot keeps a gap between its sends: the last one it sent, if any (read only when one is waiting)
+    let lastAuto = due.some((o) => o.autopilot && o.status === 'queued')
+      ? (
+          await db.outbound
+            .where('status')
+            .equals('sent')
+            .filter((o) => o.userId === user.id && !!o.autopilot && !!o.sentAt)
+            .toArray()
+        )
+          .map((o) => new Date(o.sentAt!))
+          .sort((a, b) => b.getTime() - a.getTime())[0]
+      : undefined;
     // the last slot handed out in this run, so the sends it moves line up one after another
     let cursor: Date | undefined;
     for (const o of due.sort((a, b) => a.sendAt!.localeCompare(b.sendAt!))) {

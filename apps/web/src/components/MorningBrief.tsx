@@ -103,6 +103,7 @@ export function MorningBrief() {
   const [i, setI] = useState(0);
   const [results, setResults] = useState<Record<string, Result>>({});
   const [last, setLast] = useState<Last>();
+  const toast = useToast();
   // the student went to another page from the deck: the pill says it brings them back
   const [away, setAway] = useState(false);
   const ready = !!user?.onboardingCompletedAt && !pathname.startsWith('/onboarding');
@@ -311,7 +312,14 @@ export function MorningBrief() {
     if (!last) return;
     const l = last;
     setLast(undefined);
-    await l.undo();
+    try {
+      await l.undo();
+    } catch {
+      // nothing was taken back: the Undo stays offered
+      setLast(l);
+      toast.push({ text: 'That undo did not go through. Try again.', ttl: 5000 });
+      return;
+    }
     unrecord(l.sid);
     const at = slides.findIndex((x) => x.kind === 'decide' && x.s.id === l.sid);
     if (at >= 0) go(at);

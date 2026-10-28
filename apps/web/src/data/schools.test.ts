@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { cycleOptions, listField, suggestFrom } from './options';
-import { schoolDomainFor, suggestSchools } from './schools';
+import { findSchoolDomain, fold, loadSchools, schoolDomainFor, suggestSchools } from './schools';
 
 describe('school suggestions', () => {
   it('finds schools by name, nickname and domain, big ones first', async () => {
@@ -19,6 +19,33 @@ describe('school suggestions', () => {
     expect((await suggestSchools('oxford')).map((s) => s.value)).toContain('University of Oxford');
     expect((await suggestSchools('x')).length).toBe(0);
     expect(await schoolDomainFor('University of California, Berkeley')).toBe('berkeley.edu');
+  });
+});
+
+describe('school domain by name', () => {
+  // the lookup before it was indexed: a scan of the whole list per name
+  async function scan(name: string) {
+    const q = fold(name).replace(/^the /, '');
+    if (!q) return undefined;
+    const all = await loadSchools();
+    const byName = all.find((s) => s.domain && fold(s.name).replace(/^the /, '') === q);
+    if (byName) return byName.domain;
+    const byAlias = all.filter((s) => s.domain && s.aliases.some((a) => fold(a) === q));
+    return byAlias.length === 1 ? byAlias[0]!.domain : undefined;
+  }
+
+  it('answers exactly as a scan of the list does', async () => {
+    const all = await loadSchools();
+    const names = [
+      ...all.filter((_, i) => i % 100 === 0).flatMap((s) => [s.name, `The ${s.name}`, ...s.aliases]),
+      'sjsu',
+      'UCSC',
+      'Cal',
+      'Acme Robotics',
+      '',
+    ];
+    for (const n of names) expect(await findSchoolDomain(n), n).toBe(await scan(n));
+    expect(await findSchoolDomain('University of California, Berkeley')).toBe('berkeley.edu');
   });
 });
 

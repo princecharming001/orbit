@@ -17,15 +17,15 @@ import type {
 import { recordToolAction } from './actions';
 import { learnAfterTurn } from './afterTurn';
 import { chipsFor, resolveChip, setupChipsFor } from './chips';
-import { type ChatClient, chatClient } from './client';
-import { type ExecuteFn, runTurn } from './loop';
+// the client and the loop carry the Anthropic SDK: loaded on the first turn that talks to Claude, not with the page
+import type { ChatClient } from './client';
+import type { ExecuteFn } from './loop';
 import { chatMode, chatModeNote } from './mode';
 import { type RouterIntent, routeUtterance } from './router';
 import { routerContextFor } from './routerContext';
 import { threadContextFor } from './routerThread';
 import { ChatStore, conversationNonce } from './store';
 
-export { CHAT_BETAS, MAX_ITERATIONS, MAX_TOKENS, runTurn } from './loop';
 export { chatMode, chatModeNote } from './mode';
 export { ChatStore } from './store';
 
@@ -35,7 +35,7 @@ export interface ChatEngineDeps {
   /** the signed-in student; a getter so the engine follows the session */
   user: User | (() => User);
   store?: ChatStore;
-  client?: () => ChatClient | undefined;
+  client?: () => ChatClient | undefined | Promise<ChatClient | undefined>;
   now?: () => Date;
   /** pins effort 'low' instead of 'medium'; a getter follows the composer's Smart / Quick switch */
   quick?: boolean | (() => boolean);
@@ -52,7 +52,7 @@ export function createChatEngine(deps: ChatEngineDeps): ChatEngine {
   // a File does not survive every storage round trip, so an attachment waiting for approval keeps its live input here
   const liveInputs = new Map<string, unknown>();
   const getUser = () => (typeof deps.user === 'function' ? deps.user() : deps.user);
-  const getClient = deps.client ?? (() => chatClient());
+  const getClient = deps.client ?? (async () => (await import('./client')).chatClient());
 
   const toolContext = (
     conversationId: string,
@@ -299,10 +299,10 @@ export function createChatEngine(deps: ChatEngineDeps): ChatEngine {
         if (e.type === 'done') finished = true;
         onEvent(e);
       };
-      const client = chatMode() === 'router' ? undefined : getClient();
+      const client = chatMode() === 'router' ? undefined : await getClient();
       if (!client) await routerTurn(conversation, trimmed, watch);
       else
-        await runTurn(
+        await (await import('./loop')).runTurn(
           {
             client,
             registry: deps.registry,

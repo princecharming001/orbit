@@ -1,5 +1,14 @@
-import Anthropic from '@anthropic-ai/sdk';
-import { zodOutputFormat } from '@anthropic-ai/sdk/helpers/zod';
+import type Anthropic from '@anthropic-ai/sdk';
+// the error classes alone (a few KB) for the checks below; the client itself loads on the first call (loadSdk)
+import {
+  AnthropicError,
+  APIConnectionError,
+  APIError,
+  APIUserAbortError,
+  AuthenticationError,
+  PermissionDeniedError,
+  RateLimitError,
+} from '@anthropic-ai/sdk/core/error';
 import type {
   ChatTurn,
   DraftContext,
@@ -60,10 +69,18 @@ export function setLlmClientFactoryForTests(f: ((apiKey: string) => LlmClient) |
   clientFactory = f;
 }
 
-function client(): LlmClient | undefined {
+/** The SDK, fetched the first time Claude is asked something: it stays out of the page's first load. */
+let sdk: Promise<typeof import('@anthropic-ai/sdk')> | undefined;
+function loadSdk() {
+  sdk ??= import('@anthropic-ai/sdk');
+  return sdk;
+}
+
+async function client(): Promise<LlmClient | undefined> {
   const key = readPrefs().anthropicApiKey;
   if (!key) return undefined;
   if (clientFactory) return clientFactory(key);
+  const { default: Anthropic } = await loadSdk();
   return new Anthropic({
     apiKey: key,
     dangerouslyAllowBrowser: true,
@@ -95,7 +112,7 @@ export function setSharedLlmClientFactoryForTests(
 }
 
 /** The client for one call through Orbit's shared access, when the student has no key of their own and it is on. */
-function sharedClient(call: SharedCall): LlmClient | undefined {
+async function sharedClient(call: SharedCall): Promise<LlmClient | undefined> {
   if (readPrefs().anthropicApiKey || !sharedClaudeAvailable()) return undefined;
   const token = currentAccessToken();
   const headers: Record<string, string> = {
@@ -104,6 +121,7 @@ function sharedClient(call: SharedCall): LlmClient | undefined {
     ...(token ? { 'x-orbit-session': token } : {}),
   };
   if (sharedFactory) return sharedFactory(call, headers);
+  const { default: Anthropic } = await loadSdk();
   return new Anthropic({
     apiKey: SHARED_PLACEHOLDER,
     baseURL: sharedClaudeUrl(),
@@ -154,9 +172,7 @@ const BAD_OUTPUT_MESSAGE = 'Claude returned an answer Orbit could not read.';
 /** The SDK throws a plain AnthropicError when structured output is not valid JSON or does not match the schema. */
 function isParseFailure(e: unknown): boolean {
   return (
-    e instanceof Anthropic.AnthropicError &&
-    !(e instanceof Anthropic.APIError) &&
-    /structured output|parse/i.test(e.message)
+    e instanceof AnthropicError && !(e instanceof APIError) && /structured output|parse/i.test(e.message)
   );
 }
 
@@ -164,9 +180,9 @@ export function toLlmError(e: unknown): LlmError {
   if (e instanceof LlmError) return e;
   const detail = e instanceof Error ? e.message : String(e);
   // most specific first: the student's own Stop button, then the typed API errors, then the status code
-  if (e instanceof Anthropic.APIUserAbortError) return new LlmError('aborted', 'Stopped.', detail);
+  if (e instanceof APIUserAbortError) return new LlmError('aborted', 'Stopped.', detail);
   // Orbit's shared access marks its own refusals; a daily limit or a missing server key pauses it on this device
-  const shared = e instanceof Anthropic.APIError ? e.headers?.get('x-orbit-limit') : undefined;
+  const shared = e instanceof APIError ? e.headers?.get('x-orbit-limit') : undefined;
   // one kind of call (resumes) used its own daily count: the chat carries on
   if (shared === 'call')
     return new LlmError('shared_limit', "Orbit's shared Claude has done enough of this for today.", detail);
@@ -188,19 +204,19 @@ export function toLlmError(e: unknown): LlmError {
       detail,
     );
   }
-  if (e instanceof Anthropic.AuthenticationError)
+  if (e instanceof AuthenticationError)
     return new LlmError('auth', 'Anthropic rejected the API key.', detail);
-  if (e instanceof Anthropic.PermissionDeniedError)
+  if (e instanceof PermissionDeniedError)
     return new LlmError('permission', 'The API key does not have access to this model.', detail);
-  if (e instanceof Anthropic.RateLimitError)
+  if (e instanceof RateLimitError)
     return new LlmError('rate_limit', 'Anthropic is rate limiting this key.', detail);
-  if (e instanceof Anthropic.APIConnectionError)
+  if (e instanceof APIConnectionError)
     return new LlmError(
       'network',
       'Could not reach Anthropic. The connection may be offline, blocked or too slow.',
       detail,
     );
-  if (e instanceof Anthropic.APIError)
+  if (e instanceof APIError)
     return (e.status ?? 0) >= 500
       ? new LlmError('server', 'Anthropic had a temporary problem on its side.', detail)
       : new LlmError('other', 'Anthropic could not complete the request.', detail);
@@ -420,11 +436,12 @@ async function runParse<T extends z.ZodTypeAny>(
   // Another tab may have removed the key, turned this feature off or used up today's budget.
   await refreshPrefs();
   const own = llmEnabled(feature);
-  const c = own ? client() : opts.shared ? sharedClient(opts.shared) : undefined;
+  const c = own ? await client() : opts.shared ? await sharedClient(opts.shared) : undefined;
   if (!c) return undefined;
   if (!own && opts.shared) maxTokens = Math.min(maxTokens, SHARED_CALL_MAX_TOKENS[opts.shared]);
   const { tag, wrap } = makeWrap(newNonce());
   // runtime helper reads zod/v4 schemas; its .d.ts names the root 'zod' export (v3 in zod 3.25)
+  const { zodOutputFormat } = await import('@anthropic-ai/sdk/helpers/zod');
   const base = zodOutputFormat(schema as never);
   // The SDK parses inside messages.parse and throws without the response, so its usage would be lost. Catch the
   // parse error here instead: the tokens of a truncated or malformed answer still count against the daily cap.
@@ -1007,7 +1024,7 @@ export async function llmExtractMemories(
 }
 
 export async function testApiKey(): Promise<{ ok: boolean; error?: string }> {
-  const c = client();
+  const c = await client();
   if (!c) return { ok: false, error: 'No key saved.' };
   try {
     await c.messages.create({

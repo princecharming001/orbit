@@ -31,7 +31,7 @@ export function loadSchools(): Promise<School[]> {
   return loaded;
 }
 
-const fold = (s: string) =>
+export const fold = (s: string) =>
   s
     .toLowerCase()
     .normalize('NFD')
@@ -87,12 +87,43 @@ export async function schoolDomainFor(name: string): Promise<string | undefined>
  * A school's web domain by the name someone wrote, from the full list: its name, or a name students use for it that
  * belongs to that school alone (a logo for a school the short list in core does not know).
  */
-export async function findSchoolDomain(name: string): Promise<string | undefined> {
+export function findSchoolDomain(name: string): Promise<string | undefined> {
   const q = fold(name).replace(/^the /, '');
-  if (!q) return undefined;
-  const all = await loadSchools();
-  const byName = all.find((s) => s.domain && fold(s.name).replace(/^the /, '') === q);
-  if (byName) return byName.domain;
-  const byAlias = all.filter((s) => s.domain && s.aliases.some((a) => fold(a) === q));
-  return byAlias.length === 1 ? byAlias[0]!.domain : undefined;
+  if (!q) return Promise.resolve(undefined);
+  let answer = domainAnswers.get(q);
+  if (!answer) {
+    answer = domainIndex().then(({ byName, byAlias }) => byName.get(q) ?? byAlias.get(q) ?? undefined);
+    domainAnswers.set(q, answer);
+  }
+  return answer;
+}
+
+/** Answers by cleaned name: every logo tile for the same company asks once. */
+const domainAnswers = new Map<string, Promise<string | undefined>>();
+let indexed: Promise<{ byName: Map<string, string>; byAlias: Map<string, string | null> }> | undefined;
+
+/**
+ * The school list keyed for findSchoolDomain, built once: cleaned name to domain (the first school of that name, as
+ * the list is ordered), and alias to domain, or null when the alias belongs to more than one school.
+ */
+function domainIndex() {
+  indexed ??= loadSchools().then((all) => {
+    const byName = new Map<string, string>();
+    const aliasOwner = new Map<string, School | null>();
+    for (const s of all) {
+      if (!s.domain) continue;
+      const n = fold(s.name).replace(/^the /, '');
+      if (!byName.has(n)) byName.set(n, s.domain);
+      for (const a of s.aliases) {
+        const k = fold(a);
+        const owner = aliasOwner.get(k);
+        if (owner === undefined) aliasOwner.set(k, s);
+        else if (owner !== s) aliasOwner.set(k, null);
+      }
+    }
+    const byAlias = new Map<string, string | null>();
+    for (const [k, owner] of aliasOwner) byAlias.set(k, owner ? owner.domain : null);
+    return { byName, byAlias };
+  });
+  return indexed;
 }
