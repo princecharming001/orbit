@@ -104,7 +104,8 @@ export interface UnipileSync {
   }): Promise<ProviderResult<{ url: string }>>;
 }
 
-export const RELATIONS_LIMIT = 1000;
+/** 200 a page: a 1,000 page took longer to file than a worker run lasts, so the cursor was never saved. */
+export const RELATIONS_LIMIT = 200;
 export const CHATS_LIMIT = 250;
 export const MESSAGES_LIMIT = 100;
 

@@ -5,7 +5,7 @@
  * `relation` (a new_relation the webhook could not store) adds that one person. Otherwise the job walks, resuming
  * from sync_state.linkedin:
  *   1. the account's own member id (users/me), attached to the self person so the user's own messages are known;
- *   2. relations, 1,000 a page until the cursor is null (people, identities, current employer);
+ *   2. relations, 200 a page until the cursor is null (people, identities, current employer);
  *   3. chats of the last 2 years, 250 a page; for chats with at most 3 attendees, the latest 100 messages, stored
  *      as a linkedin thread with the user's own messages outbound.
  * Paging stays at one request a second per account, and one job makes at most 60 requests before it saves

@@ -7027,7 +7027,7 @@ var unipileMessageSchema = z.looseObject({
   deleted: z.union([z.number(), z.boolean()]).nullish()
 });
 var page = (item) => z.looseObject({ items: z.array(item).default([]), cursor: z.string().nullish() });
-var RELATIONS_LIMIT = 1e3;
+var RELATIONS_LIMIT = 200;
 var CHATS_LIMIT = 250;
 var MESSAGES_LIMIT = 100;
 function createUnipileSync(opts) {

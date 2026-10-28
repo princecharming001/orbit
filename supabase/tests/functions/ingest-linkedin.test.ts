@@ -167,7 +167,7 @@ describe('sync.linkedin', () => {
     it('walks relations by cursor, then chats, at one request a second', async () => {
       const rels = env.unipile.calls.filter((c) => c.includes('/users/relations'));
       expect(rels).toHaveLength(2);
-      expect(rels[0]).toContain('limit=1000');
+      expect(rels[0]).toContain('limit=200');
       expect(rels[1]).toContain('cursor=2');
       const chats = env.unipile.calls.find((c) => c.includes('/api/v1/chats?'))!;
       expect(chats).toContain('limit=250');
