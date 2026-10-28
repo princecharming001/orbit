@@ -474,24 +474,26 @@ export function PersonPage() {
                   />
                   {STAGE_LABELS[chat.stage]}
                   <ChevronDown size={12} aria-hidden className="text-ink-3" />
-                  <select
-                    value={chat.stage}
-                    onChange={async (e) => {
-                      const to = e.target.value as CoffeeChat['stage'];
-                      // a chat still ahead is not done yet: ask before drafting a thank-you for it
-                      const r = await moveChatGuarded(user, chat, to, 'user:select');
-                      if (r.outcome === 'meeting_ahead') setEarly(r.meetingAt);
-                      else if (r.outcome === 'applied' && r.needsTime) setAsking(true);
-                    }}
-                    className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
-                    aria-label="Chat stage"
-                  >
-                    {Object.entries(STAGE_LABELS).map(([k, v]) => (
-                      <option key={k} value={k}>
-                        {v}
-                      </option>
-                    ))}
-                  </select>
+                  <div className="absolute inset-0 opacity-0">
+                    <Select
+                      value={chat.stage}
+                      onChange={async (e) => {
+                        const to = e.target.value as CoffeeChat['stage'];
+                        // a chat still ahead is not done yet: ask before drafting a thank-you for it
+                        const r = await moveChatGuarded(user, chat, to, 'user:select');
+                        if (r.outcome === 'meeting_ahead') setEarly(r.meetingAt);
+                        else if (r.outcome === 'applied' && r.needsTime) setAsking(true);
+                      }}
+                      className="h-full w-full"
+                      aria-label="Chat stage"
+                    >
+                      {Object.entries(STAGE_LABELS).map(([k, v]) => (
+                        <option key={k} value={k}>
+                          {v}
+                        </option>
+                      ))}
+                    </Select>
+                  </div>
                 </label>
               )}
             </div>
@@ -1316,25 +1318,18 @@ function AddFact({ personId, userId }: { personId: string; userId: string }) {
       className="flex items-center gap-1.5 h-11 pl-1.5 pr-1.5 rounded-full border border-line bg-canvas focus-within:border-ink-3 focus-within:ring-2 focus-within:ring-accent/20 transition-[box-shadow,border-color]"
       data-testid="add-fact"
     >
-      <label className="relative shrink-0">
-        <span className="sr-only">Kind of fact</span>
-        <select
-          value={type}
-          onChange={(e) => setType(e.target.value as never)}
-          className="appearance-none h-8 rounded-full bg-canvas-2 pl-3 pr-7 text-[12.5px] font-medium text-ink-2 hover:text-ink cursor-pointer focus-visible:outline-none"
-        >
-          {MANUAL_FACT_TYPES.map((t) => (
-            <option key={t} value={t}>
-              {FACT_TYPE_LABELS[t]}
-            </option>
-          ))}
-        </select>
-        <ChevronDown
-          size={13}
-          aria-hidden
-          className="pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 text-ink-3"
-        />
-      </label>
+      <Select
+        value={type}
+        onChange={(e) => setType(e.target.value as never)}
+        aria-label="Kind of fact"
+        className="h-8 shrink-0 rounded-full border-0 bg-canvas-2 text-[12.5px] font-medium text-ink-2 [&_button]:rounded-full [&_button]:pl-3"
+      >
+        {MANUAL_FACT_TYPES.map((t) => (
+          <option key={t} value={t}>
+            {FACT_TYPE_LABELS[t]}
+          </option>
+        ))}
+      </Select>
       <input
         value={text}
         onChange={(e) => setText(e.target.value)}

@@ -9,7 +9,7 @@ import {
 } from 'react';
 import { Link } from 'react-router-dom';
 import type { StepStatus } from '../../pages/onboardingSteps';
-import { cx } from '../../ui';
+import { cx, Select } from '../../ui';
 import { Logo } from '../AppShell';
 
 /**
@@ -216,12 +216,12 @@ export function ObTextArea({ className, ...rest }: ComponentProps<'textarea'>) {
   );
 }
 
+/** A choice from a list: Orbit's own menu (ui/Select), never the system's, sized like the other fields. */
 export function ObSelect({ className, ...rest }: SelectHTMLAttributes<HTMLSelectElement>) {
   return (
-    <select
+    <Select
       className={cx(
-        field,
-        'appearance-none pr-9 bg-[url("data:image/svg+xml,%3Csvg%20xmlns%3D%27http%3A//www.w3.org/2000/svg%27%20width%3D%2716%27%20height%3D%2716%27%20fill%3D%27none%27%20stroke%3D%27%23777169%27%20stroke-width%3D%272%27%20stroke-linecap%3D%27round%27%20stroke-linejoin%3D%27round%27%3E%3Cpath%20d%3D%27m4%206%204%204%204-4%27/%3E%3C/svg%3E")] bg-no-repeat bg-[position:right_12px_center]',
+        'h-11 w-full rounded-[10px] bg-white text-[15px] [&_button]:pl-3.5 [&_button]:pr-3',
         className,
       )}
       {...rest}

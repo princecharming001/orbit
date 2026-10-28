@@ -6,7 +6,7 @@ import { type PointerEvent as ReactPointerEvent, useEffect, useRef, useState } f
 import { createPortal } from 'react-dom';
 import { Link } from 'react-router-dom';
 import { db } from '../../db/schema';
-import { Avatar, cx, relDate, Skeleton } from '../../ui';
+import { Avatar, cx, relDate, Select, Skeleton } from '../../ui';
 import { LogoText } from '../CompanyLogo';
 import { chatTimeLabel } from '../ScheduleChat';
 import { KIND_LABEL } from '../SuggestionCard';
@@ -380,25 +380,27 @@ function BoardCard({
       {/* Move to: a quiet menu in the corner, shown on hover (always on touch); dragging the card does the same */}
       <div className="absolute top-2 right-2 z-10 h-7 w-7 rounded-md text-ink-3 hover:bg-canvas-2 hover:text-ink focus-within:ring-2 focus-within:ring-accent/40 @3xl:opacity-0 group-hover:opacity-100 focus-within:opacity-100 transition-opacity">
         <MoreHorizontal size={16} className="absolute inset-0 m-auto pointer-events-none" aria-hidden />
-        <select
-          value=""
-          onChange={(e) => e.target.value && move(chat, e.target.value as ChatStage)}
-          className="absolute inset-0 h-full w-full cursor-pointer opacity-0"
-          aria-label={`Move ${person.displayName} to another stage`}
-          title="Move to another stage"
-          data-testid="chat-card-move"
-        >
-          <option value="" disabled>
-            Move to…
-          </option>
-          {[...ACTIVE_STAGES, ...CLOSED_STAGES]
-            .filter((s) => s !== chat.stage)
-            .map((s) => (
-              <option key={s} value={s}>
-                {STAGE_LABELS[s]}
-              </option>
-            ))}
-        </select>
+        <div className="absolute inset-0 opacity-0">
+          <Select
+            value=""
+            onChange={(e) => e.target.value && move(chat, e.target.value as ChatStage)}
+            className="h-full w-full"
+            aria-label={`Move ${person.displayName} to another stage`}
+            title="Move to another stage"
+            data-testid="chat-card-move"
+          >
+            <option value="" disabled>
+              Move to…
+            </option>
+            {[...ACTIVE_STAGES, ...CLOSED_STAGES]
+              .filter((s) => s !== chat.stage)
+              .map((s) => (
+                <option key={s} value={s}>
+                  {STAGE_LABELS[s]}
+                </option>
+              ))}
+          </Select>
+        </div>
       </div>
     </div>
   );

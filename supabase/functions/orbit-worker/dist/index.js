@@ -329,12 +329,6 @@ var PHASE1_SCOPES = [
   `${G}contacts.readonly`
 ];
 var CALENDAR_EVENTS_SCOPE = `${G}calendar.events`;
-function googleRedirectUri(appUrl, functionsUrl) {
-  const site = (appUrl || "https://tryorbit.today").replace(/\/+$/, "");
-  if (/^https:\/\//.test(site) && !/\/\/(localhost|127\.0\.0\.1)\b/.test(site))
-    return `${site}/auth/google/callback`;
-  return functionsUrl ? `${functionsUrl}/orbit-api/auth/google/callback` : void 0;
-}
 var GoogleError = class extends Error {
   constructor(status, code) {
     super(`google ${status} ${code}`);
@@ -450,6 +444,17 @@ async function resolveSecret(env2, db2, envName, vaultName) {
   if (!db2) return void 0;
   try {
     const rows = await db2.sql`select orbit.secret(${vaultName}) as v`;
+    return rows[0]?.v || void 0;
+  } catch {
+    return void 0;
+  }
+}
+async function providerSecret(env2, db2, name) {
+  const fromEnv = env2(name);
+  if (fromEnv) return fromEnv;
+  if (!db2) return void 0;
+  try {
+    const rows = await db2.sql`select public.orbit_secret(${name}) as v`;
     return rows[0]?.v || void 0;
   } catch {
     return void 0;
@@ -1511,7 +1516,7 @@ function agentEnvFrom(get) {
     villageBase: get("VILLAGE_BASE_URL"),
     googleClientId: get("ORBIT_GOOGLE_CLIENT_ID"),
     googleClientSecret: get("ORBIT_GOOGLE_CLIENT_SECRET"),
-    googleRedirectUri: get("ORBIT_GOOGLE_REDIRECT_URI") ?? googleRedirectUri(get("ORBIT_APP_URL"), supabaseUrl ? `${supabaseUrl}/functions/v1` : void 0)
+    googleRedirectUri: get("ORBIT_GOOGLE_REDIRECT_URI") ?? (supabaseUrl ? `${supabaseUrl}/functions/v1/orbit-api/auth/google/callback` : void 0)
   };
 }
 
@@ -19419,16 +19424,11 @@ var log = makeLogger(salt);
 var runtime = typeof EdgeRuntime !== "undefined" ? EdgeRuntime : void 0;
 var db = dbUrl ? connectDb(dbUrl, 2) : void 0;
 var cronSecret = await resolveSecret(env, db, "ORBIT_CRON_SECRET", "orbit_cron_secret");
-async function storedClaudeKey() {
-  if (!db) return void 0;
-  try {
-    const [r] = await db.sql`select public.orbit_secret('ORBIT_ANTHROPIC_API_KEY') as v`;
-    return r?.v || void 0;
-  } catch {
-    return void 0;
-  }
-}
-var claudeKey = env("ORBIT_ANTHROPIC_API_KEY") ?? await storedClaudeKey();
+var [claudeKey, unipileKey, unipileBase] = await Promise.all([
+  providerSecret(env, db, "ORBIT_ANTHROPIC_API_KEY"),
+  providerSecret(env, db, "UNIPILE_API_KEY"),
+  providerSecret(env, db, "UNIPILE_BASE_URL")
+]);
 var googleId = env("ORBIT_GOOGLE_CLIENT_ID");
 var googleSecret = env("ORBIT_GOOGLE_CLIENT_SECRET");
 var handlerDeps = {
@@ -19437,7 +19437,7 @@ var handlerDeps = {
     { db, vault: sqlVault(db) }
   ) : void 0,
   gmailTopic: env("GMAIL_PUBSUB_TOPIC"),
-  unipile: { apiKey: env("UNIPILE_API_KEY"), baseUrl: env("UNIPILE_BASE_URL") },
+  unipile: { apiKey: unipileKey, baseUrl: unipileBase },
   claude: makeClaude({ apiKey: claudeKey, db })
 };
 var handlers = defaultHandlers({ ...handlerDeps, agents: { env: agentEnvFrom(env) } });

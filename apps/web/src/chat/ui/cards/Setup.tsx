@@ -255,7 +255,6 @@ function LinkedinWidget({ user, initial }: { user: User; initial?: SetupStatus }
   const [soon, setSoon] = useState(false);
   const [done, setDone] = useState<ImportDone>();
   const [over, setOver] = useState(false);
-  const [showUpload, setShowUpload] = useState(false);
   const run = useCallback(
     async (file: File) => {
       setError(undefined);
@@ -333,7 +332,8 @@ function LinkedinWidget({ user, initial }: { user: User; initial?: SetupStatus }
   const people = status?.people ?? 0;
   const liveOffered = !!live?.available && !soon;
   // with live connect on offer, the export is the secondary path, one tap away
-  const uploadOpen = !liveOffered || showUpload;
+  // with live LinkedIn on offer the file upload is not shown at all: LinkedIn connects through its own sign-in
+  const uploadOpen = !live?.available;
   const dropzone = (
     <label
       className={cx(
@@ -451,34 +451,13 @@ function LinkedinWidget({ user, initial }: { user: User; initial?: SetupStatus }
               {LIVE_SOON}
             </p>
           )}
-          {exportHow}
+          {uploadOpen && exportHow}
         </>
       )}
       {soon && live?.connected && (
         <p className="mt-2 text-[13px] text-ink-2" role="status" data-testid="linkedin-live-soon">
           {LIVE_SOON}
         </p>
-      )}
-      {liveOffered && (
-        <div className="mt-3">
-          {uploadOpen ? (
-            <>
-              <div className="text-[12.5px] font-medium text-ink-3">
-                Or upload your LinkedIn export instead
-              </div>
-              {exportHow}
-            </>
-          ) : (
-            <button
-              type="button"
-              className="text-[13px] font-medium text-ink underline decoration-[#cfcdc9] underline-offset-4 hover:decoration-ink"
-              onClick={() => setShowUpload(true)}
-              data-testid="linkedin-show-upload"
-            >
-              Upload an export instead
-            </button>
-          )}
-        </div>
       )}
       {uploadOpen && dropzone}
       {done && (

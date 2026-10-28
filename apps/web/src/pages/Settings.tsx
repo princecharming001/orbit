@@ -13,6 +13,7 @@ import { Check, Download, FileText, Trash2 } from 'lucide-react';
 import { type ReactNode, useEffect, useRef, useState } from 'react';
 import { Navigate, NavLink, useNavigate, useParams } from 'react-router-dom';
 import { AccountSection, MemorySection, OutreachSection } from '../components/account/AccountSettings';
+import { CompanyLogo } from '../components/CompanyLogo';
 import { LinkedInLiveCard, WarmIntrosCard } from '../components/ConnectorCards';
 import { AppMark, IntegrationRow, RowGroup, RowStatus } from '../components/IntegrationRow';
 import { LinkedInImportButton } from '../components/LinkedInImport';
@@ -37,6 +38,7 @@ import { demoResetPrompt, loadDemo } from '../engine/demo';
 import { useFlag } from '../engine/flags';
 import { connectAndSyncGoogle, disconnectGoogleAccount, markGoogleNeedsReauth } from '../engine/integrations';
 import { askLine, checkIntroNote, introNoteBase, saveIntroNote } from '../engine/introNote';
+import { liveLinkedInAvailable } from '../engine/linkedinLive';
 import { setMorningBrief } from '../engine/morning';
 import { saveOwnWords } from '../engine/ownWords';
 import { saveResume } from '../engine/resume';
@@ -702,7 +704,10 @@ function GoalsForm({ goals, tcs }: { goals: UserGoals; tcs: TargetCompany[] }) {
         <ul className="divide-y divide-line text-[13.5px]">
           {tcs.map((t) => (
             <li key={t.id} className="py-2 flex flex-wrap items-end gap-2">
-              <span className="font-medium min-w-0 flex-1 basis-32 truncate self-center">{t.nameRaw}</span>
+              <span className="font-medium min-w-0 flex-1 basis-32 self-center inline-flex items-center gap-2">
+                <CompanyLogo name={t.nameRaw} size={18} decorative />
+                <span className="truncate">{t.nameRaw}</span>
+              </span>
               <label className="flex flex-col gap-0.5 text-[11px] text-ink-3">
                 Priority
                 <Select
@@ -1032,37 +1037,40 @@ function Integrations() {
           </IntegrationRow>
         )}
         <LinkedInLiveCard user={user} />
-        <IntegrationRow
-          mark={
-            <AppMark logo="linkedin.com" badge="CSV">
-              csv
-            </AppMark>
-          }
-          name="LinkedIn export"
-          status={
-            li ? (
-              <RowStatus>
-                <Check size={12} /> {String((li.syncState as { rows?: number }).rows ?? 0)} connections
-                {li.lastSyncedAt ? ` · imported ${relDate(li.lastSyncedAt)}` : ''}
-              </RowStatus>
-            ) : undefined
-          }
-          line={
-            <>
-              Upload Connections.csv{' '}
-              <details className="inline">
-                <summary className="inline cursor-pointer underline underline-offset-2 hover:text-ink">
-                  How?
-                </summary>
-                <span className="block mt-1">
-                  On LinkedIn: Settings, Data privacy, Get a copy of your data, Connections. Upload the file
-                  it emails you; uploading again updates people, never doubles them.
-                </span>
-              </details>
-            </>
-          }
-          actions={<LinkedInImportButton label="Upload" testId="settings-linkedin" />}
-        />
+        {/* the file upload only for a build without live LinkedIn; with it, LinkedIn connects through its sign-in */}
+        {!liveLinkedInAvailable(user) && (
+          <IntegrationRow
+            mark={
+              <AppMark logo="linkedin.com" badge="CSV">
+                csv
+              </AppMark>
+            }
+            name="LinkedIn export"
+            status={
+              li ? (
+                <RowStatus>
+                  <Check size={12} /> {String((li.syncState as { rows?: number }).rows ?? 0)} connections
+                  {li.lastSyncedAt ? ` · imported ${relDate(li.lastSyncedAt)}` : ''}
+                </RowStatus>
+              ) : undefined
+            }
+            line={
+              <>
+                Upload Connections.csv{' '}
+                <details className="inline">
+                  <summary className="inline cursor-pointer underline underline-offset-2 hover:text-ink">
+                    How?
+                  </summary>
+                  <span className="block mt-1">
+                    On LinkedIn: Settings, Data privacy, Get a copy of your data, Connections. Upload the file
+                    it emails you; uploading again updates people, never doubles them.
+                  </span>
+                </details>
+              </>
+            }
+            actions={<LinkedInImportButton label="Upload" testId="settings-linkedin" />}
+          />
+        )}
         <WarmIntrosCard user={user} />
       </RowGroup>
       <RowGroup title="Meeting notes">

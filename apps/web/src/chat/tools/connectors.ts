@@ -49,7 +49,7 @@ export const syncLinkedinTool = defineTool({
     const status = await readSetupStatus(ctx.user.id, 'linkedin');
     const summary =
       r.reason === 'unconfigured' || !liveLinkedInAvailable(ctx.user)
-        ? `${LIVE_SOON.replace('Upload your export', 'The student can upload their LinkedIn export')} The widget takes it.`
+        ? `${LIVE_SOON} The widget takes a LinkedIn export file too.`
         : 'LinkedIn is not connected live yet. The widget has the Connect LinkedIn button.';
     return { kind: 'setup', data: status, summary, href: '/settings/integrations' };
   },

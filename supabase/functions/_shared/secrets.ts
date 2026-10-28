@@ -22,3 +22,23 @@ export async function resolveSecret(
     return undefined;
   }
 }
+
+/**
+ * A provider's key (Unipile, Anthropic, ...): the function secret when set, else the copy kept in
+ * orbit_private.secrets, read through orbit_secret() (service role only), so a key stored once serves every function.
+ */
+export async function providerSecret(
+  env: (name: string) => string | undefined,
+  db: Db | undefined,
+  name: string,
+): Promise<string | undefined> {
+  const fromEnv = env(name);
+  if (fromEnv) return fromEnv;
+  if (!db) return undefined;
+  try {
+    const rows = await db.sql<{ v: string | null }>`select public.orbit_secret(${name}) as v`;
+    return rows[0]?.v || undefined;
+  } catch {
+    return undefined;
+  }
+}

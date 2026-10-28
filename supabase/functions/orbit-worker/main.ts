@@ -6,7 +6,7 @@ import { makeClaude } from '../_shared/claude.ts';
 import { connectDb } from '../_shared/db.ts';
 import { googleTokenSource } from '../_shared/google.ts';
 import { makeLogger } from '../_shared/http.ts';
-import { resolveSecret } from '../_shared/secrets.ts';
+import { providerSecret, resolveSecret } from '../_shared/secrets.ts';
 import { agentEnvFrom } from '../_shared/services.ts';
 import { sqlVault } from '../_shared/vault.ts';
 import type { HandlerDeps } from './handlers/deps.ts';
@@ -24,18 +24,12 @@ const cronSecret = await resolveSecret(env, db, 'ORBIT_CRON_SECRET', 'orbit_cron
 // Claude for the reply jobs (classify.message and its rapport reading, rapport.backfill; Haiku, low effort): the
 // function secret when set, else the key Orbit's chat proxy reads from orbit_private.secrets. Only these jobs get it:
 // drafting and research keep their own key (agentEnvFrom). Spend goes through the per-user ledger and caps.
-async function storedClaudeKey(): Promise<string | undefined> {
-  if (!db) return undefined;
-  try {
-    const [r] = await db.sql<{
-      v: string | null;
-    }>`select public.orbit_secret('ORBIT_ANTHROPIC_API_KEY') as v`;
-    return r?.v || undefined;
-  } catch {
-    return undefined;
-  }
-}
-const claudeKey = env('ORBIT_ANTHROPIC_API_KEY') ?? (await storedClaudeKey());
+// Unipile (LinkedIn sync) the same way.
+const [claudeKey, unipileKey, unipileBase] = await Promise.all([
+  providerSecret(env, db, 'ORBIT_ANTHROPIC_API_KEY'),
+  providerSecret(env, db, 'UNIPILE_API_KEY'),
+  providerSecret(env, db, 'UNIPILE_BASE_URL'),
+]);
 
 // the ingestion handlers: a provider whose secrets are missing ends its jobs as skipped
 const googleId = env('ORBIT_GOOGLE_CLIENT_ID');
@@ -49,7 +43,7 @@ const handlerDeps: HandlerDeps = {
         )
       : undefined,
   gmailTopic: env('GMAIL_PUBSUB_TOPIC'),
-  unipile: { apiKey: env('UNIPILE_API_KEY'), baseUrl: env('UNIPILE_BASE_URL') },
+  unipile: { apiKey: unipileKey, baseUrl: unipileBase },
   claude: makeClaude({ apiKey: claudeKey, db }),
 };
 const handlers = defaultHandlers({ ...handlerDeps, agents: { env: agentEnvFrom(env) } });

@@ -139,11 +139,24 @@ export async function peopleToRate(userId: string, n = 10): Promise<Person[]> {
     db.tieLabels.where('userId').equals(userId).toArray(),
   ]);
   const rated = new Set(labels.map((l) => l.personId));
-  const pool = people
-    .filter((p) => p.isHuman && !p.hiddenAt && !rated.has(p.id) && localScore(p).score > 0)
+  const open = people.filter((p) => p.isHuman && !p.hiddenAt && !rated.has(p.id));
+  const pool = open
+    .filter((p) => localScore(p).score > 0)
     .sort((a, b) => localScore(b).score - localScore(a).score || a.displayName.localeCompare(b.displayName));
-  if (pool.length <= n) return pool;
-  const out: Person[] = [];
-  for (let i = 0; i < n; i++) out.push(pool[Math.round((i * (pool.length - 1)) / (n - 1))]!);
-  return out;
+  if (pool.length >= n) {
+    const out: Person[] = [];
+    for (let i = 0; i < n; i++) out.push(pool[Math.round((i * (pool.length - 1)) / (n - 1))]!);
+    return out;
+  }
+  // too few with any history (email still loading, or none yet): the student's LinkedIn connections fill the list,
+  // the most recently connected first
+  const inPool = new Set(pool.map((p) => p.id));
+  const connections = open
+    .filter((p) => !inPool.has(p.id) && (!!p.linkedinConnectedOn || p.sources.includes('linkedin_csv')))
+    .sort(
+      (a, b) =>
+        (b.linkedinConnectedOn ?? '').localeCompare(a.linkedinConnectedOn ?? '') ||
+        a.displayName.localeCompare(b.displayName),
+    );
+  return [...pool, ...connections].slice(0, n);
 }

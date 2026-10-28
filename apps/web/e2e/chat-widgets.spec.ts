@@ -58,31 +58,20 @@ test.describe('Chat widgets', () => {
     await expect(page.getByTestId('result-choices')).toHaveCount(0);
   });
 
-  test('the LinkedIn widget takes a file, imports it and links to the people and the map', async ({
-    page,
-  }) => {
+  test('the LinkedIn widget connects live, imports and links to the people and the map', async ({ page }) => {
     await home(page);
     await ask(page, 'setup linkedin');
     const widget = page.getByTestId('setup-linkedin');
-    // the demo can connect live, so the export is the second way in
-    await widget.getByTestId('linkedin-show-upload').click();
-    await expect(widget).toContainText('Settings > Data privacy > Get a copy of your data > Connections');
-    const csv = [
-      'First Name,Last Name,URL,Email Address,Company,Position,Connected On',
-      'Tara,Widgetson,https://www.linkedin.com/in/tara-widgetson,,Brex,Associate Product Manager,01 Oct 2026',
-      'Dev,Widgetson,https://www.linkedin.com/in/dev-widgetson,,Ramp,Software Engineer,02 Oct 2026',
-    ].join('\n');
-    await widget
-      .getByTestId('linkedin-file')
-      .setInputFiles({ name: 'Connections.csv', mimeType: 'text/csv', buffer: Buffer.from(csv) });
-    await expect(page.getByTestId('linkedin-done')).toContainText('2 people added, 0 updated', {
-      timeout: 30_000,
-    });
+    // the demo can connect live, so that is the only way in: no export to upload
+    await expect(widget.getByTestId('linkedin-show-upload')).toHaveCount(0);
+    await expect(widget.getByTestId('linkedin-dropzone')).toHaveCount(0);
+    await widget.getByTestId('linkedin-live-connect').click();
+    await expect(page.getByTestId('linkedin-done')).toContainText(/people added/, { timeout: 30_000 });
     await expect(page.getByRole('link', { name: 'Show the map' })).toBeVisible();
     // the card's links open in the side panel, so the student stays in the chat
     await page.getByRole('link', { name: 'See my people' }).click();
     await expect(page.getByTestId('panel-title')).toHaveText('People');
-    await expect(page.getByTestId('panel').getByText('Tara Widgetson').first()).toBeAttached();
+    await expect(page.getByTestId('panel').getByText('Priya Raman').first()).toBeAttached();
   });
 
   test('the Claude key widget saves and tests a key and never shows it back', async ({ page }) => {

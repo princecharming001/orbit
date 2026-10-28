@@ -244,10 +244,9 @@ describe('setup: LinkedIn live', () => {
     const card = $('[data-testid="setup-linkedin"]')!;
     expect(card.textContent).toMatch(/Connect your LinkedIn/);
     expect($('[data-testid="linkedin-live-connect"]')).not.toBeNull();
-    // the export is one tap away, not in the way
+    // with live LinkedIn on offer there is no export to upload
     expect($('[data-testid="linkedin-dropzone"]')).toBeNull();
-    await act(async () => $('[data-testid="linkedin-show-upload"]')!.click());
-    expect($('[data-testid="linkedin-dropzone"]')).not.toBeNull();
+    expect($('[data-testid="linkedin-show-upload"]')).toBeNull();
     await act(async () => $('[data-testid="linkedin-live-connect"]')!.click());
     await settle(80);
     expect($('[data-testid="linkedin-done"]')?.textContent).toMatch(
@@ -263,16 +262,17 @@ describe('setup: LinkedIn live', () => {
     expect(await db.people.where('userId').equals(userId).count()).toBe(4);
   });
 
-  it('says live sync is switching on soon and keeps the export when the key is not pasted yet', async () => {
+  it('says LinkedIn cannot connect right now, with no export offered, when the key is not pasted yet', async () => {
     setConnectorModeForTests('unconfigured');
     await showWidget('linkedin');
     await act(async () => $('[data-testid="linkedin-live-connect"]')!.click());
     await settle(20);
     expect($('[data-testid="linkedin-live-soon"]')?.textContent).toBe(
-      'Live sync is switching on soon. Upload your export for now.',
+      "LinkedIn can't be connected right now. Try again in a little while, or later from Settings.",
     );
     expect($('[data-testid="linkedin-live-connect"]')).toBeNull();
-    expect($('[data-testid="linkedin-dropzone"]')).not.toBeNull();
+    expect($('[data-testid="linkedin-dropzone"]')).toBeNull();
+    expect($('[data-testid="setup-linkedin"]')!.textContent).not.toMatch(/export/i);
     expect($('[data-testid="linkedin-error"]')).toBeNull();
   });
 });

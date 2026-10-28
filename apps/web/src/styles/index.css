@@ -637,3 +637,23 @@ body {
     animation: none;
   }
 }
+
+/* the email import while it has no total yet: a short bar sliding across, so it reads as working */
+.import-bar-moving {
+  animation: import-bar 1.4s cubic-bezier(0.45, 0, 0.55, 1) infinite;
+}
+@keyframes import-bar {
+  from {
+    transform: translateX(-100%);
+  }
+  to {
+    transform: translateX(300%);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .import-bar-moving {
+    animation: none;
+    width: 100%;
+    opacity: 0.35;
+  }
+}

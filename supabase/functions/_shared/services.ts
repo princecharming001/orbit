@@ -7,7 +7,7 @@
 import type Anthropic from '@anthropic-ai/sdk';
 import { type Claude, makeClaude } from './claude.ts';
 import type { Db } from './db.ts';
-import { type GoogleConfig, googleRedirectUri, googleTokenSource, type TokenSource } from './google.ts';
+import { type GoogleConfig, googleTokenSource, type TokenSource } from './google.ts';
 import { type Apollo, createApollo } from './providers/apollo';
 import { createExa, type Exa } from './providers/exa';
 import { defaultSleep } from './providers/request';
@@ -178,6 +178,6 @@ export function agentEnvFrom(get: (name: string) => string | undefined): AgentEn
     googleClientSecret: get('ORBIT_GOOGLE_CLIENT_SECRET'),
     googleRedirectUri:
       get('ORBIT_GOOGLE_REDIRECT_URI') ??
-      googleRedirectUri(get('ORBIT_APP_URL'), supabaseUrl ? `${supabaseUrl}/functions/v1` : undefined),
+      (supabaseUrl ? `${supabaseUrl}/functions/v1/orbit-api/auth/google/callback` : undefined),
   };
 }

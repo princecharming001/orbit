@@ -113,7 +113,7 @@ export function LinkedInLiveCard({ user }: { user: User }) {
             'Your connections and messages'
           ) : (
             <span data-testid="settings-linkedin-live-unavailable">
-              Not part of this version of Orbit yet. Upload your export instead.
+              Not part of this version of Orbit yet.
             </span>
           )
         }

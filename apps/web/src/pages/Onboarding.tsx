@@ -30,10 +30,12 @@ import {
 import {
   type CSSProperties,
   type FormEvent,
+  type InputHTMLAttributes,
   type KeyboardEvent,
   type ReactNode,
   type RefObject,
   useEffect,
+  useMemo,
   useRef,
   useState,
 } from 'react';
@@ -41,6 +43,7 @@ import { Navigate, useLocation, useNavigate, useParams } from 'react-router-dom'
 import { Logo } from '../components/AppShell';
 import { ImportProgress } from '../components/account/ImportProgress';
 import { RatePeople } from '../components/account/RatePeople';
+import { CompanyLogo } from '../components/CompanyLogo';
 import {
   ObBack,
   ObHeader,
@@ -55,6 +58,7 @@ import {
   OnboardingLayout,
 } from '../components/onboarding/OnboardingLayout';
 import { WeeklyTargetSlider } from '../components/WeeklyTargetSlider';
+import { suggestCompanies } from '../data/companies';
 import { suggestSchools } from '../data/schools';
 import { db } from '../db/schema';
 import { finishOnboarding, setOnboardingStep } from '../engine/account';
@@ -76,6 +80,7 @@ import {
 import { addTargetCompanies } from '../engine/targets';
 import { googleClientId } from '../integrations/google';
 import { startGoogleSignIn } from '../integrations/orbitApi';
+import { postingFromPath, readPosting } from '../integrations/postings';
 import { envGoogleClientId } from '../integrations/prefs';
 import { useAccount } from '../state/account';
 import { useSession } from '../state/session';
@@ -556,6 +561,20 @@ function StepGoals({ onNext, onBack }: { onNext: () => void; onBack: () => void 
   const [companyNote, setCompanyNote] = useState('');
   const [busy, setBusy] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
+  // one component for the whole step: a new one each render would remount the field and lose the cursor
+  const CompanyInput = useMemo(
+    () =>
+      function CompanyField(props: InputHTMLAttributes<HTMLInputElement>) {
+        return (
+          <input
+            {...props}
+            ref={inputRef}
+            className="w-full h-7 bg-transparent px-2 text-[15px] text-ink placeholder:text-[#a59f97] outline-none"
+          />
+        );
+      },
+    [],
+  );
   const loaded = useRef(false);
   useEffect(() => {
     // fill the form once from what is stored; later saves (Back, Continue) must not reset what is being chosen
@@ -571,9 +590,9 @@ function StepGoals({ onNext, onBack }: { onNext: () => void; onBack: () => void 
     setWeekly(storedWeekly);
   }, [storedWeekly]);
   // "Evercore, Lazard" adds two companies
-  const addCompany = async () => {
+  const addCompany = async (picked?: string) => {
     // take the text now and clear the box at once, so a company typed while this one saves is kept
-    const value = company;
+    const value = picked ?? company;
     if (!value.trim()) return;
     setCompany('');
     let r: Awaited<ReturnType<typeof addTargetCompanies>>;
@@ -723,6 +742,7 @@ function StepGoals({ onNext, onBack }: { onNext: () => void; onBack: () => void 
                 >
                   <Star size={13} fill={t.priority === 1 ? 'currentColor' : 'none'} aria-hidden />
                 </button>
+                <CompanyLogo name={t.nameRaw} size={16} decorative className="ml-0.5" />
                 <span className="px-1">{t.nameRaw}</span>
                 <button
                   type="button"
@@ -735,24 +755,35 @@ function StepGoals({ onNext, onBack }: { onNext: () => void; onBack: () => void 
                 </button>
               </span>
             ))}
-            <input
-              ref={inputRef}
+            {/* suggestions with each company's logo as you type; a pick adds it at once, anything typed still counts */}
+            <Suggest
+              className="flex-1 min-w-[9rem]"
+              input={CompanyInput}
               id="ob-company"
               value={company}
-              onChange={(e) => setCompany(e.target.value)}
+              onChange={setCompany}
+              suggest={(q) =>
+                suggestCompanies(
+                  q,
+                  tcs.map((t) => t.nameRaw),
+                )
+              }
+              onPick={(sg) => void addCompany(sg.value)}
               onKeyDown={(e) => {
                 if (e.key !== 'Enter' && e.key !== ',') return;
+                // Enter on a highlighted suggestion picks it (Suggest handles that)
+                if (e.key === 'Enter' && (e.target as HTMLInputElement).getAttribute('aria-activedescendant'))
+                  return;
                 e.preventDefault();
                 addCompany();
               }}
               placeholder={tcs.length ? 'Add another' : `${example}, or a few separated by commas`}
-              className="flex-1 min-w-[9rem] h-7 bg-transparent px-2 text-[15px] text-ink placeholder:text-[#a59f97] outline-none"
               data-testid="ob-company"
             />
             {company.trim() ? (
               <button
                 type="button"
-                onClick={addCompany}
+                onClick={() => addCompany()}
                 className="h-7 px-2.5 rounded-md bg-ink text-white text-[13px] font-medium hover:bg-[#262d3f]"
               >
                 Add
@@ -1107,7 +1138,37 @@ function StepJob({
   }, [goals]);
   useFocusFirst(input, goals !== undefined);
   const job = parseCurrentJob(v);
-  const persist = () => saveOwnWords(user, { currentJob: job });
+  // a pasted link is read (the server reads the page; its address answers when it cannot), so the job shows as
+  // "Product Manager · Stripe" with the company's logo, and is saved by that name
+  const [posting, setPosting] = useState<{ url: string; role: string; company: string }>();
+  const [reading, setReading] = useState(false);
+  const jobUrl = job?.url;
+  useEffect(() => {
+    if (!jobUrl) {
+      setPosting(undefined);
+      setReading(false);
+      return;
+    }
+    let live = true;
+    setReading(true);
+    const t = setTimeout(async () => {
+      const r = await readPosting(user.id, { url: jobUrl }).catch(() => undefined);
+      const p = r?.ok && (r.posting.role || r.posting.company) ? r.posting : postingFromPath(jobUrl);
+      if (!live) return;
+      setPosting(
+        p?.company || p?.role ? { url: jobUrl, role: p.role ?? '', company: p.company ?? '' } : undefined,
+      );
+      setReading(false);
+    }, 400);
+    return () => {
+      live = false;
+      clearTimeout(t);
+    };
+  }, [jobUrl, user.id]);
+  const read = posting && posting.url === jobUrl ? posting : undefined;
+  const named = read ? [read.role, read.company].filter(Boolean).join(' at ') : undefined;
+  const persist = () =>
+    saveOwnWords(user, { currentJob: job && read && !job.text ? { ...job, text: named } : job });
   const save = async (e?: FormEvent) => {
     e?.preventDefault();
     if (busy) return;
@@ -1163,15 +1224,29 @@ function StepJob({
             data-testid="ob-job-preview"
           >
             <span className="mt-0.5 inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-canvas-2 text-ink-2">
-              {job.url ? <LinkIcon size={14} aria-hidden /> : <Briefcase size={14} aria-hidden />}
+              {read?.company ? (
+                <CompanyLogo name={read.company} size={28} decorative />
+              ) : job.url && reading ? (
+                <Spinner />
+              ) : job.url ? (
+                <LinkIcon size={14} aria-hidden />
+              ) : (
+                <Briefcase size={14} aria-hidden />
+              )}
             </span>
             <span className="min-w-0 flex-1">
-              <span className="block truncate text-[14px] font-medium text-ink">{job.text ?? host}</span>
+              <span className="block truncate text-[14px] font-medium text-ink" data-testid="ob-job-title">
+                {job.text ?? (read ? read.role || read.company : reading ? 'Reading the posting…' : host)}
+              </span>
               <span className="block truncate text-[12.5px] text-ink-3">
                 {job.url
                   ? job.text
                     ? host
-                    : 'The posting, saved as a link'
+                    : read
+                      ? [read.role ? read.company : undefined, host].filter(Boolean).join(' · ')
+                      : reading
+                        ? host
+                        : 'The posting, saved as a link'
                   : 'Add the posting link too, if you have it'}
               </span>
             </span>
@@ -1201,10 +1276,10 @@ function StepJob({
 
 function StepLinkedIn({ onNext, signedIn }: { onNext: () => void; signedIn?: boolean }) {
   const user = useSession().user!;
-  // once the live sign-in says it is not switched on, the step stops offering it: no button that can only fail
-  const [liveOff, setLiveOff] = useState(false);
-  const live = (signedIn || liveLinkedInAvailable(user)) && !liveOff;
-  const [showUpload, setShowUpload] = useState(!live);
+  // LinkedIn connects through Unipile's sign-in; the file upload is only for a build with no live LinkedIn at all
+  // (the tests' and a copy run without Orbit's server), never offered beside the live sign-in
+  const live = signedIn || liveLinkedInAvailable(user);
+  const showUpload = !live;
   const [busy, setBusy] = useState<string>();
   const [upBusy, setUpBusy] = useState<string>();
   const [result, setResult] = useState<string>();
@@ -1229,11 +1304,8 @@ function StepLinkedIn({ onNext, signedIn }: { onNext: () => void; signedIn?: boo
         onProgress: (n) => setBusy(`Importing ${n} connections…`),
       });
       if (r.ok) setResult(`${connectionsImported(r.rows)}, ${r.added} of them new.`);
-      else if (r.reason === 'unconfigured') {
-        setNote(r.message);
-        setLiveOff(true);
-        setShowUpload(true);
-      } else if (r.reason === 'error') setError(r.message);
+      else if (r.reason === 'unconfigured') setNote(r.message);
+      else if (r.reason === 'error') setError(r.message);
     } catch (e) {
       setError(String((e as Error).message ?? e));
     } finally {
@@ -1367,11 +1439,6 @@ function StepLinkedIn({ onNext, signedIn }: { onNext: () => void; signedIn?: boo
                 'Connect LinkedIn'
               )}
             </ObPrimary>
-            {!showUpload && (
-              <ObSecondary onClick={() => setShowUpload(true)} data-testid="ob-linkedin-upload">
-                Upload your export instead
-              </ObSecondary>
-            )}
           </>
         ) : null}
         {!done && (

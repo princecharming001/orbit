@@ -162,9 +162,11 @@ test.describe('account mode (mocked orbit-api)', () => {
       await expect(page.locator(`[data-testid="ob-q"][data-step="${step}"]`)).toBeVisible();
       await page.getByTestId('ob-q-skip').click();
     }
-    // LinkedIn: the risk in one sentence before connecting live, the export next to it
+    // LinkedIn: the risk in one sentence before connecting live, and no export anywhere
     await expect(page.getByTestId('ob-linkedin-risk')).toContainText("LinkedIn's terms");
-    await expect(page.getByTestId('ob-linkedin-upload')).toBeVisible();
+    await expect(page.getByTestId('ob-linkedin-live')).toBeVisible();
+    await expect(page.getByTestId('ob-linkedin-upload')).toHaveCount(0);
+    await expect(page.locator('main')).not.toContainText(/export/i);
     await expect.poll(() => api.state.goals.map((g) => g.kind).sort()).toEqual(['fundraising', 'recruiting']);
     await page.getByTestId('ob-skip').click();
     // Rate a few people (optional): one rating goes to the server

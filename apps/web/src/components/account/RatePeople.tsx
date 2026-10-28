@@ -12,15 +12,20 @@ export function RatePeople({ userId }: { userId: string }) {
   const [error, setError] = useState<string>();
   const labels = useLiveQuery(() => db.tieLabels.where('userId').equals(userId).toArray(), [userId]) ?? [];
   const byPerson = new Map(labels.map((l) => [l.personId, l.closeness]));
+  // chosen once there is someone, so a rated person does not jump off the list; until then it waits for email and
+  // LinkedIn to bring people in
+  const candidates = useLiveQuery(
+    () => (people?.length ? undefined : peopleToRate(userId)),
+    [userId, people],
+  );
   useEffect(() => {
-    // chosen once, so a rated person does not jump off the list
-    peopleToRate(userId).then(setPeople);
-  }, [userId]);
+    if (candidates && (!people || (candidates.length && !people.length))) setPeople(candidates);
+  }, [candidates, people]);
   if (!people) return null;
   if (!people.length)
     return (
       <p className="text-center text-[14px] text-ink-3" data-testid="ob-rate-empty">
-        No one to rate yet. Orbit is still reading your email, so you can skip this.
+        No one to rate yet. Orbit is still reading your email and LinkedIn, so you can skip this.
       </p>
     );
   const rate = async (p: Person, c: Closeness) => {

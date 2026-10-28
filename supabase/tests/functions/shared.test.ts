@@ -21,7 +21,6 @@ import {
   exchangeCode,
   type GoogleConfig,
   GoogleError,
-  googleRedirectUri,
   googleTokenSource,
   NeedsReauth,
   pkcePair,
@@ -483,22 +482,5 @@ describe('budget (§13.5)', () => {
       total: string;
     }>`select public.orbit_spend_total('client:abcdefghijklmnop')::text as total`;
     expect(Number(other!.total)).toBe(0);
-  });
-});
-
-describe('where Google sends sign-in back', () => {
-  const fns = 'https://ref.supabase.co/functions/v1';
-  it("is a page on Orbit's own site, so every domain on the consent screen is Orbit's", () => {
-    expect(googleRedirectUri('https://tryorbit.today', fns)).toBe(
-      'https://tryorbit.today/auth/google/callback',
-    );
-    expect(googleRedirectUri('https://tryorbit.today/', fns)).toBe(
-      'https://tryorbit.today/auth/google/callback',
-    );
-    expect(googleRedirectUri(undefined, fns)).toBe('https://tryorbit.today/auth/google/callback');
-  });
-  it("is the server's own address for a local app", () => {
-    expect(googleRedirectUri('http://localhost:5173', fns)).toBe(`${fns}/orbit-api/auth/google/callback`);
-    expect(googleRedirectUri('https://localhost:5173', fns)).toBe(`${fns}/orbit-api/auth/google/callback`);
   });
 });

@@ -13,7 +13,7 @@ import { db } from '../db/schema';
 import { setTargetDeadline, setTargetStatus } from '../engine/settings';
 import { draftPlan, postingLine, whenText } from '../engine/targetPlan';
 import { useSession } from '../state/session';
-import { Avatar, Button, Card, cx, Input, useToast } from '../ui';
+import { Avatar, Button, Card, cx, Input, Select, useToast } from '../ui';
 import { CompanyLogo } from './CompanyLogo';
 import { RouteBadge } from './map/RouteBadge';
 
@@ -97,10 +97,10 @@ export function TargetPlanCard({ plan, className }: { plan: TargetPlan; classNam
             {target && (
               <label className="inline-flex items-center gap-1">
                 <span>Target ·</span>
-                <select
+                <Select
                   value={target.status}
                   onChange={(e) => void setTargetStatus(target.id, e.target.value as never)}
-                  className="bg-transparent text-ink-2 underline underline-offset-2 cursor-pointer"
+                  className="h-7 text-[12.5px] text-ink-2"
                   aria-label="Where the application stands"
                   data-testid="target-plan-status"
                 >
@@ -109,7 +109,7 @@ export function TargetPlanCard({ plan, className }: { plan: TargetPlan; classNam
                       {l.toLowerCase()}
                     </option>
                   ))}
-                </select>
+                </Select>
               </label>
             )}
             {target && (

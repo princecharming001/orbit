@@ -62,9 +62,6 @@ function connectDb(url, max = 4) {
   return wrapPostgres(sql, false);
 }
 
-// supabase/functions/_shared/google.ts
-import { createRemoteJWKSet, jwtVerify } from "npm:jose@6.2.12";
-
 // supabase/functions/_shared/crypto.ts
 var enc = new TextEncoder();
 function base64url(bytes) {
@@ -96,163 +93,6 @@ async function sha256Hex(text2) {
 }
 function isUuid(v) {
   return typeof v === "string" && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(v);
-}
-
-// supabase/functions/_shared/google.ts
-var GOOGLE_AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth";
-var GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token";
-var GOOGLE_REVOKE_URL = "https://oauth2.googleapis.com/revoke";
-var GOOGLE_JWKS_URL = "https://www.googleapis.com/oauth2/v3/certs";
-var GOOGLE_ISSUERS = ["https://accounts.google.com", "accounts.google.com"];
-var G = "https://www.googleapis.com/auth/";
-var PHASE1_SCOPES = [
-  "openid",
-  "email",
-  "profile",
-  `${G}gmail.readonly`,
-  `${G}gmail.send`,
-  `${G}calendar.readonly`,
-  `${G}contacts.other.readonly`,
-  `${G}contacts.readonly`
-];
-var CALENDAR_EVENTS_SCOPE = `${G}calendar.events`;
-function googleRedirectUri(appUrl, functionsUrl) {
-  const site = (appUrl || "https://tryorbit.today").replace(/\/+$/, "");
-  if (/^https:\/\//.test(site) && !/\/\/(localhost|127\.0\.0\.1)\b/.test(site))
-    return `${site}/auth/google/callback`;
-  return functionsUrl ? `${functionsUrl}/orbit-api/auth/google/callback` : void 0;
-}
-var GoogleError = class extends Error {
-  constructor(status, code) {
-    super(`google ${status} ${code}`);
-    this.status = status;
-    this.code = code;
-  }
-};
-var NeedsReauth = class extends Error {
-  constructor() {
-    super("needs_reauth");
-  }
-};
-async function pkcePair() {
-  const verifier = randomToken(32);
-  return { verifier, challenge: base64url(await sha256Bytes(verifier)) };
-}
-function authUrl(cfg, p) {
-  const q = new URLSearchParams({
-    client_id: cfg.clientId,
-    redirect_uri: cfg.redirectUri,
-    response_type: "code",
-    access_type: "offline",
-    prompt: "consent",
-    include_granted_scopes: "true",
-    code_challenge_method: "S256",
-    code_challenge: p.challenge,
-    state: p.state,
-    scope: p.scopes.join(" ")
-  });
-  if (p.loginHint) q.set("login_hint", p.loginHint);
-  return `${GOOGLE_AUTH_URL}?${q}`;
-}
-async function tokenCall(cfg, form) {
-  const res = await (cfg.fetch ?? fetch)(GOOGLE_TOKEN_URL, {
-    method: "POST",
-    headers: { "content-type": "application/x-www-form-urlencoded", accept: "application/json" },
-    body: new URLSearchParams(form)
-  });
-  let body2 = {};
-  try {
-    body2 = await res.json();
-  } catch {
-    body2 = {};
-  }
-  if (!res.ok) throw new GoogleError(res.status, String(body2.error ?? "token_error"));
-  if (typeof body2.access_token !== "string") throw new GoogleError(502, "no_access_token");
-  return body2;
-}
-function exchangeCode(cfg, code, verifier) {
-  return tokenCall(cfg, {
-    grant_type: "authorization_code",
-    code,
-    code_verifier: verifier,
-    client_id: cfg.clientId,
-    client_secret: cfg.clientSecret,
-    redirect_uri: cfg.redirectUri
-  });
-}
-var googleJwks;
-async function verifyIdToken(cfg, idToken) {
-  const keys = cfg.jwks ?? (googleJwks ??= createRemoteJWKSet(new URL(GOOGLE_JWKS_URL)));
-  const { payload } = await jwtVerify(idToken, keys, {
-    issuer: GOOGLE_ISSUERS,
-    audience: cfg.clientId,
-    currentDate: (cfg.now ?? (() => /* @__PURE__ */ new Date()))()
-  });
-  if (typeof payload.sub !== "string" || typeof payload.email !== "string")
-    throw new GoogleError(400, "id_token_claims");
-  const str3 = (v) => typeof v === "string" && v ? v : void 0;
-  return {
-    sub: payload.sub,
-    email: payload.email,
-    emailVerified: payload.email_verified === true || payload.email_verified === "true",
-    name: str3(payload.name),
-    givenName: str3(payload.given_name),
-    familyName: str3(payload.family_name),
-    picture: str3(payload.picture)
-  };
-}
-async function refreshAccessToken(cfg, refreshToken) {
-  try {
-    return await tokenCall(cfg, {
-      grant_type: "refresh_token",
-      refresh_token: refreshToken,
-      client_id: cfg.clientId,
-      client_secret: cfg.clientSecret
-    });
-  } catch (e) {
-    if (e instanceof GoogleError && e.code === "invalid_grant") throw new NeedsReauth();
-    throw e;
-  }
-}
-async function revokeToken(cfg, token) {
-  const res = await (cfg.fetch ?? fetch)(GOOGLE_REVOKE_URL, {
-    method: "POST",
-    headers: { "content-type": "application/x-www-form-urlencoded" },
-    body: new URLSearchParams({ token })
-  });
-  await res.body?.cancel();
-  return res.ok || res.status === 400;
-}
-function googleTokenSource(cfg, deps) {
-  const cache = /* @__PURE__ */ new Map();
-  const clock = () => (cfg.now ?? (() => /* @__PURE__ */ new Date()))().getTime();
-  return {
-    invalidate: (userId) => {
-      cache.delete(userId);
-    },
-    async accessToken(userId) {
-      const hit = cache.get(userId);
-      if (hit && hit.until > clock()) return hit.token;
-      const [acct] = await deps.db.sql`
-        select token_secret_id, status from orbit.integration_accounts
-         where user_id = ${userId}::uuid and provider = 'google'`;
-      if (!acct?.token_secret_id || acct.status === "needs_reauth" || acct.status === "revoked")
-        throw new NeedsReauth();
-      const refresh2 = await deps.vault.get(acct.token_secret_id);
-      if (!refresh2) throw new NeedsReauth();
-      try {
-        const t = await refreshAccessToken(cfg, refresh2);
-        cache.set(userId, { token: t.access_token, until: clock() + Math.max(0, t.expires_in - 300) * 1e3 });
-        return t.access_token;
-      } catch (e) {
-        if (e instanceof NeedsReauth)
-          await deps.db.sql`
-            update orbit.integration_accounts set status = 'needs_reauth', last_error = 'invalid_grant'
-             where user_id = ${userId}::uuid and provider = 'google'`;
-        throw e;
-      }
-    }
-  };
 }
 
 // supabase/functions/_shared/origins.ts
@@ -373,6 +213,17 @@ async function resolveSecret(env2, db2, envName, vaultName) {
   if (!db2) return void 0;
   try {
     const rows = await db2.sql`select orbit.secret(${vaultName}) as v`;
+    return rows[0]?.v || void 0;
+  } catch {
+    return void 0;
+  }
+}
+async function providerSecret(env2, db2, name) {
+  const fromEnv = env2(name);
+  if (fromEnv) return fromEnv;
+  if (!db2) return void 0;
+  try {
+    const rows = await db2.sql`select public.orbit_secret(${name}) as v`;
     return rows[0]?.v || void 0;
   } catch {
     return void 0;
@@ -603,6 +454,158 @@ function flattenNullable(schema) {
     }
   }
   return Object.fromEntries(Object.entries(o).map(([k, v]) => [k, flattenNullable(v)]));
+}
+
+// supabase/functions/_shared/google.ts
+import { createRemoteJWKSet, jwtVerify } from "npm:jose@6.2.12";
+var GOOGLE_AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth";
+var GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token";
+var GOOGLE_REVOKE_URL = "https://oauth2.googleapis.com/revoke";
+var GOOGLE_JWKS_URL = "https://www.googleapis.com/oauth2/v3/certs";
+var GOOGLE_ISSUERS = ["https://accounts.google.com", "accounts.google.com"];
+var G = "https://www.googleapis.com/auth/";
+var PHASE1_SCOPES = [
+  "openid",
+  "email",
+  "profile",
+  `${G}gmail.readonly`,
+  `${G}gmail.send`,
+  `${G}calendar.readonly`,
+  `${G}contacts.other.readonly`,
+  `${G}contacts.readonly`
+];
+var CALENDAR_EVENTS_SCOPE = `${G}calendar.events`;
+var GoogleError = class extends Error {
+  constructor(status, code) {
+    super(`google ${status} ${code}`);
+    this.status = status;
+    this.code = code;
+  }
+};
+var NeedsReauth = class extends Error {
+  constructor() {
+    super("needs_reauth");
+  }
+};
+async function pkcePair() {
+  const verifier = randomToken(32);
+  return { verifier, challenge: base64url(await sha256Bytes(verifier)) };
+}
+function authUrl(cfg, p) {
+  const q = new URLSearchParams({
+    client_id: cfg.clientId,
+    redirect_uri: cfg.redirectUri,
+    response_type: "code",
+    access_type: "offline",
+    prompt: "consent",
+    include_granted_scopes: "true",
+    code_challenge_method: "S256",
+    code_challenge: p.challenge,
+    state: p.state,
+    scope: p.scopes.join(" ")
+  });
+  if (p.loginHint) q.set("login_hint", p.loginHint);
+  return `${GOOGLE_AUTH_URL}?${q}`;
+}
+async function tokenCall(cfg, form) {
+  const res = await (cfg.fetch ?? fetch)(GOOGLE_TOKEN_URL, {
+    method: "POST",
+    headers: { "content-type": "application/x-www-form-urlencoded", accept: "application/json" },
+    body: new URLSearchParams(form)
+  });
+  let body2 = {};
+  try {
+    body2 = await res.json();
+  } catch {
+    body2 = {};
+  }
+  if (!res.ok) throw new GoogleError(res.status, String(body2.error ?? "token_error"));
+  if (typeof body2.access_token !== "string") throw new GoogleError(502, "no_access_token");
+  return body2;
+}
+function exchangeCode(cfg, code, verifier) {
+  return tokenCall(cfg, {
+    grant_type: "authorization_code",
+    code,
+    code_verifier: verifier,
+    client_id: cfg.clientId,
+    client_secret: cfg.clientSecret,
+    redirect_uri: cfg.redirectUri
+  });
+}
+var googleJwks;
+async function verifyIdToken(cfg, idToken) {
+  const keys = cfg.jwks ?? (googleJwks ??= createRemoteJWKSet(new URL(GOOGLE_JWKS_URL)));
+  const { payload } = await jwtVerify(idToken, keys, {
+    issuer: GOOGLE_ISSUERS,
+    audience: cfg.clientId,
+    currentDate: (cfg.now ?? (() => /* @__PURE__ */ new Date()))()
+  });
+  if (typeof payload.sub !== "string" || typeof payload.email !== "string")
+    throw new GoogleError(400, "id_token_claims");
+  const str3 = (v) => typeof v === "string" && v ? v : void 0;
+  return {
+    sub: payload.sub,
+    email: payload.email,
+    emailVerified: payload.email_verified === true || payload.email_verified === "true",
+    name: str3(payload.name),
+    givenName: str3(payload.given_name),
+    familyName: str3(payload.family_name),
+    picture: str3(payload.picture)
+  };
+}
+async function refreshAccessToken(cfg, refreshToken) {
+  try {
+    return await tokenCall(cfg, {
+      grant_type: "refresh_token",
+      refresh_token: refreshToken,
+      client_id: cfg.clientId,
+      client_secret: cfg.clientSecret
+    });
+  } catch (e) {
+    if (e instanceof GoogleError && e.code === "invalid_grant") throw new NeedsReauth();
+    throw e;
+  }
+}
+async function revokeToken(cfg, token) {
+  const res = await (cfg.fetch ?? fetch)(GOOGLE_REVOKE_URL, {
+    method: "POST",
+    headers: { "content-type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({ token })
+  });
+  await res.body?.cancel();
+  return res.ok || res.status === 400;
+}
+function googleTokenSource(cfg, deps) {
+  const cache = /* @__PURE__ */ new Map();
+  const clock = () => (cfg.now ?? (() => /* @__PURE__ */ new Date()))().getTime();
+  return {
+    invalidate: (userId) => {
+      cache.delete(userId);
+    },
+    async accessToken(userId) {
+      const hit = cache.get(userId);
+      if (hit && hit.until > clock()) return hit.token;
+      const [acct] = await deps.db.sql`
+        select token_secret_id, status from orbit.integration_accounts
+         where user_id = ${userId}::uuid and provider = 'google'`;
+      if (!acct?.token_secret_id || acct.status === "needs_reauth" || acct.status === "revoked")
+        throw new NeedsReauth();
+      const refresh2 = await deps.vault.get(acct.token_secret_id);
+      if (!refresh2) throw new NeedsReauth();
+      try {
+        const t = await refreshAccessToken(cfg, refresh2);
+        cache.set(userId, { token: t.access_token, until: clock() + Math.max(0, t.expires_in - 300) * 1e3 });
+        return t.access_token;
+      } catch (e) {
+        if (e instanceof NeedsReauth)
+          await deps.db.sql`
+            update orbit.integration_accounts set status = 'needs_reauth', last_error = 'invalid_grant'
+             where user_id = ${userId}::uuid and provider = 'google'`;
+        throw e;
+      }
+    }
+  };
 }
 
 // supabase/functions/_shared/providers/request.ts
@@ -1675,7 +1678,7 @@ function agentEnvFrom(get2) {
     villageBase: get2("VILLAGE_BASE_URL"),
     googleClientId: get2("ORBIT_GOOGLE_CLIENT_ID"),
     googleClientSecret: get2("ORBIT_GOOGLE_CLIENT_SECRET"),
-    googleRedirectUri: get2("ORBIT_GOOGLE_REDIRECT_URI") ?? googleRedirectUri(get2("ORBIT_APP_URL"), supabaseUrl2 ? `${supabaseUrl2}/functions/v1` : void 0)
+    googleRedirectUri: get2("ORBIT_GOOGLE_REDIRECT_URI") ?? (supabaseUrl2 ? `${supabaseUrl2}/functions/v1/orbit-api/auth/google/callback` : void 0)
   };
 }
 
@@ -13281,17 +13284,22 @@ var unipileWebhookSecret = await resolveSecret(
   "ORBIT_UNIPILE_WEBHOOK_SECRET",
   "orbit_unipile_webhook_secret"
 );
+var [unipileKey, unipileBase, redirectUri] = await Promise.all([
+  providerSecret(env, db, "UNIPILE_API_KEY"),
+  providerSecret(env, db, "UNIPILE_BASE_URL"),
+  providerSecret(env, db, "ORBIT_GOOGLE_REDIRECT_URI")
+]);
 var salt = env("ORBIT_LOG_SALT") ?? ((env("SUPABASE_SERVICE_ROLE_KEY") ?? "").slice(-16) || "orbit");
 Deno.serve(
   makeApiHandler({
     env: {
       googleClientId: env("ORBIT_GOOGLE_CLIENT_ID"),
       googleClientSecret: env("ORBIT_GOOGLE_CLIENT_SECRET"),
-      googleRedirectUri: env("ORBIT_GOOGLE_REDIRECT_URI") ?? googleRedirectUri(env("ORBIT_APP_URL"), supabaseUrl ? `${supabaseUrl}/functions/v1` : void 0),
+      googleRedirectUri: redirectUri ?? (supabaseUrl ? `${supabaseUrl}/functions/v1/orbit-api/auth/google/callback` : void 0),
       sessionSecret,
       appUrl: env("ORBIT_APP_URL"),
-      unipileKey: env("UNIPILE_API_KEY"),
-      unipileBase: env("UNIPILE_BASE_URL"),
+      unipileKey,
+      unipileBase,
       unipileWebhookSecret,
       functionsUrl: supabaseUrl ? `${supabaseUrl}/functions/v1` : void 0
     },

@@ -3,9 +3,8 @@
  * scripts/build-functions.mjs; index.ts loads that bundle. Deploy with verify_jwt off (Orbit checks its own tokens).
  */
 import { connectDb } from '../_shared/db.ts';
-import { googleRedirectUri } from '../_shared/google.ts';
 import { makeLogger } from '../_shared/http.ts';
-import { resolveSecret } from '../_shared/secrets.ts';
+import { providerSecret, resolveSecret } from '../_shared/secrets.ts';
 import { agentEnvFrom } from '../_shared/services.ts';
 import { makeApiHandler } from './api.ts';
 
@@ -24,6 +23,14 @@ const unipileWebhookSecret = await resolveSecret(
   'ORBIT_UNIPILE_WEBHOOK_SECRET',
   'orbit_unipile_webhook_secret',
 );
+// Unipile (account-mode LinkedIn), and where Google sends sign-in back: a function secret, else the value stored in
+// orbit_private.secrets. The redirect stays this function's own address until ORBIT_GOOGLE_REDIRECT_URI is stored
+// (https://tryorbit.today/auth/google/callback, the site page that passes sign-in on, once Google lists it).
+const [unipileKey, unipileBase, redirectUri] = await Promise.all([
+  providerSecret(env, db, 'UNIPILE_API_KEY'),
+  providerSecret(env, db, 'UNIPILE_BASE_URL'),
+  providerSecret(env, db, 'ORBIT_GOOGLE_REDIRECT_URI'),
+]);
 const salt = env('ORBIT_LOG_SALT') ?? ((env('SUPABASE_SERVICE_ROLE_KEY') ?? '').slice(-16) || 'orbit');
 
 Deno.serve(
@@ -32,12 +39,12 @@ Deno.serve(
       googleClientId: env('ORBIT_GOOGLE_CLIENT_ID'),
       googleClientSecret: env('ORBIT_GOOGLE_CLIENT_SECRET'),
       googleRedirectUri:
-        env('ORBIT_GOOGLE_REDIRECT_URI') ??
-        googleRedirectUri(env('ORBIT_APP_URL'), supabaseUrl ? `${supabaseUrl}/functions/v1` : undefined),
+        redirectUri ??
+        (supabaseUrl ? `${supabaseUrl}/functions/v1/orbit-api/auth/google/callback` : undefined),
       sessionSecret,
       appUrl: env('ORBIT_APP_URL'),
-      unipileKey: env('UNIPILE_API_KEY'),
-      unipileBase: env('UNIPILE_BASE_URL'),
+      unipileKey,
+      unipileBase,
       unipileWebhookSecret,
       functionsUrl: supabaseUrl ? `${supabaseUrl}/functions/v1` : undefined,
     },

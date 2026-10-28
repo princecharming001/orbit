@@ -53,7 +53,8 @@ export type LiveSyncResult =
   | { ok: false; reason: 'not_connected' | 'unconfigured' | 'error'; message: string };
 
 /** What the UI says while the Unipile key is not pasted yet. */
-export const LIVE_SOON = 'Live sync is switching on soon. Upload your export for now.';
+export const LIVE_SOON =
+  "LinkedIn can't be connected right now. Try again in a little while, or later from Settings.";
 
 /** A sync older than this is redone when the app opens. */
 export const AUTO_SYNC_AFTER_MS = 24 * 60 * 60 * 1000;
@@ -337,7 +338,7 @@ async function connectViaServer(
       ? {
           ok: false,
           reason: 'unconfigured',
-          message: "Live LinkedIn isn't set up on Orbit's server yet. Upload your export for now.",
+          message: LIVE_SOON,
         }
       : { ok: false, reason: 'error', message: start.message };
   const win =

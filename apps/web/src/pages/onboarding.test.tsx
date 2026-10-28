@@ -161,25 +161,26 @@ describe('the LinkedIn step', () => {
     done();
   });
 
-  it('makes live connect the primary action, with the export one tap away', async () => {
+  it('makes live connect the only way in, with no export anywhere', async () => {
     live.available = true;
-    const { q, done } = await renderSetup('/onboarding/3', STEP.linkedin);
+    const { host, q, done } = await renderSetup('/onboarding/3', STEP.linkedin);
     expect(q('ob-linkedin-live')?.textContent).toBe('Connect LinkedIn');
     expect(q('ob-linkedin')).toBeNull();
-    await act(async () => q('ob-linkedin-upload')!.click());
-    expect(q('ob-linkedin')).not.toBeNull();
+    expect(q('ob-linkedin-upload')).toBeNull();
+    expect(host.textContent).not.toMatch(/export/i);
     done();
   });
 
-  it('says so and opens the upload when live LinkedIn turns out not to be switched on', async () => {
+  it('says so, without offering an export, when live LinkedIn turns out not to be switched on', async () => {
     live.available = true;
     const { host, q, done } = await renderSetup('/onboarding/3', STEP.linkedin);
     await act(async () => q('ob-linkedin-live')!.click());
     await settle();
     expect(host.querySelector('[role="status"]')?.textContent).toMatch(/not switched on yet/);
-    expect(q('ob-linkedin')).not.toBeNull();
-    // the button that just failed is not offered again
-    expect(q('ob-linkedin-live')).toBeNull();
+    expect(q('ob-linkedin')).toBeNull();
+    expect(host.textContent).not.toMatch(/export/i);
+    // the skip stays, so setup can carry on
+    expect(q('ob-skip')).not.toBeNull();
     done();
   });
 

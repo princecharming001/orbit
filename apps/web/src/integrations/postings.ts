@@ -51,6 +51,43 @@ export function postingFromUrl(url: string): PostingInfo | undefined {
   };
 }
 
+/**
+ * What any careers address says when its page cannot be read: the company from the site's own name
+ * ("stripe.com" is Stripe) and the role from the longest worded part of the path
+ * ("/careers/listing/product-manager-new-grad-accelerator/7737124" is "Product Manager New Grad Accelerator").
+ * Job boards that name the company in the path are read by postingFromUrl instead.
+ */
+export function postingFromPath(url: string): PostingInfo | undefined {
+  let u: URL;
+  try {
+    u = new URL(/^https?:\/\//i.test(url) ? url : `https://${url}`);
+  } catch {
+    return undefined;
+  }
+  const board = postingFromUrl(u.toString());
+  const labels = u.hostname.replace(/^www\./, '').split('.');
+  const site = labels.length >= 2 ? labels[labels.length - 2]! : labels[0]!;
+  const company = board?.company ?? (site.length > 1 ? site.charAt(0).toUpperCase() + site.slice(1) : '');
+  const worded = u.pathname
+    .split('/')
+    .map((p) => decodeURIComponent(p))
+    .filter(
+      (p) =>
+        /[a-z]/i.test(p) && /[-_]/.test(p) && !/^(jobs?|careers?|listings?|positions?|openings?)$/i.test(p),
+    )
+    .sort((a, b) => b.length - a.length)[0];
+  const role = worded
+    ? worded
+        .replace(/[-_]+/g, ' ')
+        .replace(/\b\d{4,}\b/g, '')
+        .replace(/\s+/g, ' ')
+        .trim()
+        .replace(/\b([a-z])/g, (c) => c.toUpperCase())
+    : '';
+  if (!company) return undefined;
+  return { company, role, namesOnPage: { recruiters: [], managers: [] }, url: u.toString() };
+}
+
 /** The first link in a message ("here's a posting https://…"). */
 export function linkIn(text: string): string | undefined {
   const m = /(https?:\/\/[^\s<>"')]+|www\.[^\s<>"')]+)/i.exec(text);
