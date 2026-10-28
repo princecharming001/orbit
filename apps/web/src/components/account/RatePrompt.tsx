@@ -25,11 +25,13 @@ export function RatePrompt() {
   const closed = useRef(false);
   const state = useLiveQuery(async () => {
     if (!user) return null;
-    const [seen, rated] = await Promise.all([
+    // the people count is read too, so the check runs again as sync brings people in
+    const [seen, rated, people] = await Promise.all([
       db.kv.get(seenKey(user.id)),
       db.tieLabels.where('userId').equals(user.id).count(),
+      db.people.where('userId').equals(user.id).count(),
     ]);
-    return { seen: !!seen, rated };
+    return { seen: !!seen, rated, people };
   }, [user?.id]);
   const signedIn = account.signedIn && account.user?.id === user?.id;
   useEffect(() => {

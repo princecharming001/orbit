@@ -220,7 +220,8 @@ test.describe('account mode (mocked orbit-api)', () => {
       updatedAt: at,
     }));
     (api.state.pages[0]!.changes.people as unknown[]).push(...more);
-    api.state.user.onboarding = { completed_at: at };
+    // setup finished three days before the tests' clock (Oct 6), past the two days the popup waits
+    api.state.user.onboarding = { completed_at: '2026-10-03T12:00:00.000Z' };
     await page.addInitScript(() => {
       (window as unknown as { __ORBIT_RATE__: string }).__ORBIT_RATE__ = 'on';
     });
@@ -234,7 +235,8 @@ test.describe('account mode (mocked orbit-api)', () => {
     await expect.poll(() => api.state.labels.size).toBe(1);
     await page.getByTestId('rate-prompt-done').click();
     await expect(prompt).toHaveCount(0);
-    await page.reload();
+    // opened again: it is not asked twice
+    await page.goto('');
     await expect(page.getByTestId('greeting')).toBeVisible({ timeout: 20_000 });
     await page.waitForTimeout(1500);
     await expect(page.getByTestId('rate-prompt')).toHaveCount(0);
