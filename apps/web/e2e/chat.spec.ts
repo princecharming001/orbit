@@ -344,9 +344,16 @@ test.describe('Chat home', () => {
   }) => {
     await home(page);
     await page.getByTestId('temporary-toggle').click();
-    await expect(page.getByTestId('temporary-note')).toContainText('not saved');
+    await expect(page.getByTestId('temporary-toggle')).toHaveAttribute('aria-pressed', 'true');
+    // it looks different: its own heading in place of the greeting, a tinted page and a dashed composer
+    await expect(page.getByTestId('temporary-heading')).toContainText('Not saved');
+    await expect(page.getByTestId('greeting')).toHaveCount(0);
+    await expect(page.getByTestId('chat-home')).toHaveAttribute('data-temporary', 'true');
+    await expect(page.getByTestId('composer')).toHaveCSS('border-top-style', 'dashed');
     await ask(page, 'secret question');
     await expect(page.getByTestId('turn-assistant')).toContainText('Try one of the chips');
+    await expect(page.getByTestId('temporary-note')).toContainText('not saved');
+    await expect(page.getByTestId('chat-thread')).toHaveAttribute('data-temporary', 'true');
     const rail = page.getByTestId('rail');
     await expect(rail).toHaveAttribute('data-expanded', 'true');
     await expect.poll(async () => (await rail.boundingBox())!.width).toBe(248);
@@ -359,6 +366,7 @@ test.describe('Chat home', () => {
     // off again: a saved chat
     await page.getByTestId('temporary-toggle').click();
     await expect(page.getByTestId('greeting')).toBeVisible();
+    await expect(page.getByTestId('composer')).toHaveCSS('border-top-style', 'solid');
     await ask(page, 'show my pipeline');
     await expect(page.getByTestId('result-pipeline')).toBeVisible();
     const today = rail.getByTestId('recent-today');

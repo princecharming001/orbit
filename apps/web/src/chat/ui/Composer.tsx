@@ -44,6 +44,7 @@ export function Composer({
   modeNote,
   autoFocus,
   size = 'home',
+  temporary = false,
 }: {
   onSend: (text: string) => void;
   onStop: () => void;
@@ -53,6 +54,8 @@ export function Composer({
   modeNote?: { text: string; href?: string };
   autoFocus?: boolean;
   size?: 'home' | 'thread';
+  /** a temporary chat's composer has a dashed edge, like the pill's icon */
+  temporary?: boolean;
 }) {
   const [text, setText] = useState('');
   const [menu, setMenu] = useState<'attach' | 'mode' | undefined>();
@@ -151,6 +154,7 @@ export function Composer({
       className={cx(
         'glass glass-lift rounded-[28px] w-full mx-auto',
         size === 'home' ? 'max-w-[980px]' : 'max-w-[800px]',
+        temporary && 'border-dashed border-[#b9b5ae]',
       )}
       style={{ padding: '14px 18px 12px' }}
       data-testid="composer"

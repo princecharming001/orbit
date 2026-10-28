@@ -1,5 +1,5 @@
 import { ArrowDown, CircleDashed } from 'lucide-react';
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { type CSSProperties, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { ActivityLine } from '../../components/ActivityLine';
 import { CurrentJobPlan } from '../../components/CurrentJobPlan';
@@ -15,6 +15,11 @@ import { Thread } from './Thread';
 import { threadActions, useThread } from './threadStore';
 
 export const DISCLAIMER = 'Orbit can make mistakes. Nothing is sent without your approval.';
+export const TEMPORARY_LINE =
+  'Not saved to your history, and Orbit won\u2019t remember anything from it. Gone when you close the tab.';
+// a temporary chat sits on a slightly warmer page (ChatGPT dims, Claude's incognito goes dashed: this does a little of
+// both); ink-3 still reads at AA on it
+const TEMPORARY_PAGE = { '--color-page': '#f9f8f6' } as CSSProperties;
 
 /** The chat home: greeting, composer and chips, then the thread once the first message is sent. */
 export function ChatHome() {
@@ -62,12 +67,14 @@ export function ChatHome() {
       mode={mode}
       modeNote={modeNote}
       autoFocus={!inConversation}
+      temporary={thread.temporary}
     />
   );
   const footer = (
     <div className="mt-2 text-center text-[12.5px] text-ink-3 space-y-0.5 px-2" data-testid="composer-footer">
-      {thread.temporary && (
-        <p data-testid="temporary-note">Temporary chat: it is not saved to your history.</p>
+      {/* on the home page the heading says it; in a conversation this line keeps saying it */}
+      {thread.temporary && inConversation && (
+        <p data-testid="temporary-note">Temporary chat: not saved to your history or remembered.</p>
       )}
       {mode === 'router' && modeNote && (
         <p data-testid="router-note">
@@ -91,13 +98,14 @@ export function ChatHome() {
       className={cx(
         'glass glass-hover h-10 rounded-full inline-flex items-center justify-center gap-2 text-[13.5px] font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40',
         compact ? 'w-10 sm:w-auto sm:px-3.5' : 'px-3.5',
-        thread.temporary ? 'text-accent' : 'text-ink-2',
+        // on, it is filled so the mode is plain at a glance
+        thread.temporary ? 'bg-ink! border-ink! text-white hover:bg-ink-2!' : 'text-ink-2',
       )}
       aria-pressed={thread.temporary}
       onClick={() => actions.setTemporary(!thread.temporary)}
       title={
         thread.temporary
-          ? 'Temporary chat on: this chat is not saved'
+          ? 'Temporary chat on: this chat is not saved. Click to turn it off'
           : 'Start a chat that is not saved to your history'
       }
       data-testid="temporary-toggle"
@@ -108,14 +116,30 @@ export function ChatHome() {
   );
   if (!inConversation)
     return (
-      <div className="relative h-full flex flex-col px-4 sm:px-6" data-testid="chat-home">
+      <div
+        className="relative h-full flex flex-col px-4 sm:px-6 bg-page transition-colors"
+        style={thread.temporary ? TEMPORARY_PAGE : undefined}
+        data-temporary={thread.temporary || undefined}
+        data-testid="chat-home"
+      >
         <div className="absolute right-4 top-3 sm:right-6 sm:top-4 z-10">{temporaryPill()}</div>
         <div className="flex-[1.25] min-h-[56px]" />
         <div className="w-full max-w-[980px] mx-auto pt-12">
-          <h1 className="type-greeting text-center mb-6 sm:mb-7 px-2" data-testid="greeting">
-            Hey {first}, what&rsquo;s on your mind today?
-          </h1>
-          {statusLine && (
+          {thread.temporary ? (
+            <div className="text-center mb-6 sm:mb-7 px-2 fade-up" data-testid="temporary-heading">
+              <span className="mx-auto mb-3 grid place-items-center size-11 rounded-full border border-dashed border-[#b9b5ae] text-ink-2">
+                <CircleDashed size={20} aria-hidden />
+              </span>
+              <h1 className="type-greeting">Temporary chat</h1>
+              <p className="mt-2 text-[14px] text-ink-3 max-w-[460px] mx-auto">{TEMPORARY_LINE}</p>
+            </div>
+          ) : (
+            <h1 className="type-greeting text-center mb-6 sm:mb-7 px-2" data-testid="greeting">
+              Hey {first}, what&rsquo;s on your mind today?
+            </h1>
+          )}
+          {/* a temporary chat keeps the page to the chat: no setup lines, plans or connect strip */}
+          {!thread.temporary && statusLine && (
             <p
               className="text-center text-[14px] text-ink-3 -mt-3 mb-5 sm:-mt-4 sm:mb-6"
               data-testid="home-status"
@@ -123,16 +147,18 @@ export function ChatHome() {
               {statusLine}
             </p>
           )}
-          <NextChatLine />
+          {!thread.temporary && <NextChatLine />}
           {/* plan 23 §4.1: the job pasted while setting up, planned once the network is in */}
-          <CurrentJobPlan networkIn={status.ready && !status.empty && status.linkedin} />
+          {!thread.temporary && (
+            <CurrentJobPlan networkIn={status.ready && !status.empty && status.linkedin} />
+          )}
           {/* on a phone the status line has no sidebar: it sits here, quietly (plan 23 §4.7) */}
           <div className="md:hidden flex justify-center -mt-2 mb-3">
             <ActivityLine below className="max-w-[320px]" />
           </div>
           {composer('home')}
           {footer}
-          {showStrip && (
+          {showStrip && !thread.temporary && (
             <ConnectStrip
               linkedin={status.linkedin}
               gmail={status.gmail}
@@ -199,7 +225,12 @@ export function ChatHome() {
       </div>
     );
   return (
-    <div className="relative h-full flex flex-col" data-testid="chat-thread">
+    <div
+      className="relative h-full flex flex-col bg-page transition-colors"
+      style={thread.temporary ? TEMPORARY_PAGE : undefined}
+      data-temporary={thread.temporary || undefined}
+      data-testid="chat-thread"
+    >
       <div className="absolute right-4 top-3 sm:right-6 sm:top-4 z-20">{temporaryPill(true)}</div>
       <div
         ref={scrollRef}
