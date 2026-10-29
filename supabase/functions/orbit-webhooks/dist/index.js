@@ -4241,7 +4241,8 @@ async function attach(ctx, personId, i) {
       location = coalesce(location, ${i.location ?? null}),
       photo_url = coalesce(photo_url, ${i.photoUrl ?? null}),
       sources = case when ${i.source} = any(sources) then sources else sources || ${[i.source]}::text[] end,
-      first_seen_at = least(first_seen_at, ${i.seenAt ?? null}::timestamptz)
+      first_seen_at = least(first_seen_at, ${i.seenAt ?? null}::timestamptz),
+      linkedin_connected_on = coalesce(linkedin_connected_on, ${i.connectedAt ?? null}::timestamptz)
     where id = ${personId}::uuid and user_id = ${ctx.userId}::uuid and not is_self`;
   if (p) {
     if (i.email && !p.emails.includes(normalizeEmail(i.email))) p.emails.push(normalizeEmail(i.email));
@@ -4268,13 +4269,13 @@ async function createPerson(ctx, i) {
   const [row] = await ctx.db.sql`
     insert into orbit.people (user_id, display_name, first_name, last_name, name_norm, primary_email, headline, title,
                               org_id, org_raw, location, photo_url, linkedin_url, linkedin_slug, linkedin_member_id,
-                              relationship_type, sources, first_seen_at)
+                              relationship_type, sources, first_seen_at, linkedin_connected_on)
     values (${ctx.userId}::uuid, ${display}, ${n.first || null}, ${n.last || null},
             ${n.normalized || display.toLowerCase()}, ${email ?? null}, ${i.headline ?? null}, ${i.title ?? null},
             ${orgId}::uuid, ${orgId ? i.companyRaw.trim() : null}, ${i.location ?? null}, ${i.photoUrl ?? null},
             ${urlOf(i) ?? null}, ${slug}, ${i.linkedinMemberId ?? null},
             ${/recruit/i.test(i.title ?? "") ? "recruiter" : null}, ${[i.source]}::text[],
-            ${i.seenAt ?? ctx.now.toISOString()}::timestamptz)
+            ${i.seenAt ?? ctx.now.toISOString()}::timestamptz, ${i.connectedAt ?? null}::timestamptz)
     returning *`;
   const id = row.id;
   await insertIdentities(ctx, id, i);
@@ -4633,7 +4634,9 @@ async function ingestRelations(db2, userId, relations, now) {
       source: "linkedin",
       seenAt: r.connectedAt ?? now.toISOString(),
       identitySource: "linkedin_relation",
-      identityAt: r.connectedAt
+      identityAt: r.connectedAt,
+      // a relation is an accepted connection: the browser counts them as someone the student knows
+      connectedAt: r.connectedAt ?? now.toISOString()
     };
   });
   const res = await resolvePeople(db2, userId, items, { now });

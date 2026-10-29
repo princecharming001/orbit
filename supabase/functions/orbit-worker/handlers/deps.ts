@@ -20,6 +20,8 @@ export interface HandlerDeps {
   clock?: () => number;
   sleep?: (ms: number) => Promise<void>;
   random?: () => number;
+  /** how long a paged sync job works before it saves its place and queues the rest (default 60 s) */
+  jobBudgetMs?: number;
 }
 
 export class JobSkipped extends Error {

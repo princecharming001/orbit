@@ -16152,7 +16152,8 @@ async function attach(ctx, personId, i) {
       location = coalesce(location, ${i.location ?? null}),
       photo_url = coalesce(photo_url, ${i.photoUrl ?? null}),
       sources = case when ${i.source} = any(sources) then sources else sources || ${[i.source]}::text[] end,
-      first_seen_at = least(first_seen_at, ${i.seenAt ?? null}::timestamptz)
+      first_seen_at = least(first_seen_at, ${i.seenAt ?? null}::timestamptz),
+      linkedin_connected_on = coalesce(linkedin_connected_on, ${i.connectedAt ?? null}::timestamptz)
     where id = ${personId}::uuid and user_id = ${ctx.userId}::uuid and not is_self`;
   if (p) {
     if (i.email && !p.emails.includes(normalizeEmail(i.email))) p.emails.push(normalizeEmail(i.email));
@@ -16179,13 +16180,13 @@ async function createPerson(ctx, i) {
   const [row] = await ctx.db.sql`
     insert into orbit.people (user_id, display_name, first_name, last_name, name_norm, primary_email, headline, title,
                               org_id, org_raw, location, photo_url, linkedin_url, linkedin_slug, linkedin_member_id,
-                              relationship_type, sources, first_seen_at)
+                              relationship_type, sources, first_seen_at, linkedin_connected_on)
     values (${ctx.userId}::uuid, ${display}, ${n.first || null}, ${n.last || null},
             ${n.normalized || display.toLowerCase()}, ${email ?? null}, ${i.headline ?? null}, ${i.title ?? null},
             ${orgId}::uuid, ${orgId ? i.companyRaw.trim() : null}, ${i.location ?? null}, ${i.photoUrl ?? null},
             ${urlOf(i) ?? null}, ${slug}, ${i.linkedinMemberId ?? null},
             ${/recruit/i.test(i.title ?? "") ? "recruiter" : null}, ${[i.source]}::text[],
-            ${i.seenAt ?? ctx.now.toISOString()}::timestamptz)
+            ${i.seenAt ?? ctx.now.toISOString()}::timestamptz, ${i.connectedAt ?? null}::timestamptz)
     returning *`;
   const id = row.id;
   await insertIdentities(ctx, id, i);
@@ -18525,7 +18526,7 @@ var unipileMessageSchema = z.looseObject({
   deleted: z.union([z.number(), z.boolean()]).nullish()
 });
 var page = (item) => z.looseObject({ items: z.array(item).default([]), cursor: z.string().nullish() });
-var RELATIONS_LIMIT = 200;
+var RELATIONS_LIMIT = 100;
 var CHATS_LIMIT = 250;
 var MESSAGES_LIMIT = 100;
 function createUnipileSync(opts) {
@@ -18637,7 +18638,9 @@ async function ingestRelations(db2, userId, relations, now) {
       source: "linkedin",
       seenAt: r.connectedAt ?? now.toISOString(),
       identitySource: "linkedin_relation",
-      identityAt: r.connectedAt
+      identityAt: r.connectedAt,
+      // a relation is an accepted connection: the browser counts them as someone the student knows
+      connectedAt: r.connectedAt ?? now.toISOString()
     };
   });
   const res = await resolvePeople(db2, userId, items, { now });
@@ -18738,6 +18741,8 @@ async function storeChat(db2, userId, self, chat, messages, now, ownIds) {
 
 // supabase/functions/orbit-worker/handlers/linkedin.ts
 var REQUESTS_PER_JOB = 60;
+var JOB_BUDGET_MS = 6e4;
+var FRESH_FOR_MS = 20 * 36e5;
 var DAY15 = 864e5;
 var str3 = (v) => typeof v === "string" && v ? v : void 0;
 function linkedinHandlers(deps) {
@@ -18783,7 +18788,12 @@ function linkedinHandlers(deps) {
         return;
       }
       await ctx.queue.setVt(job.queue, job.msgId, LONG_VT_SEC);
+      const clock = deps.clock ?? Date.now;
+      const started = clock();
+      const budgetMs = deps.jobBudgetMs ?? JOB_BUDGET_MS;
+      const overBudget = () => clock() - started >= budgetMs;
       let state = acct.syncState.linkedin ?? {};
+      const fresh = state.stage === "done" && !!state.syncedAt && now.getTime() - Date.parse(state.syncedAt) < FRESH_FOR_MS;
       if (state.stage === "done" || !state.stage) state = { ...state, stage: "relations", cursor: null };
       let requests = 0;
       const call = async (fn) => {
@@ -18817,7 +18827,7 @@ function linkedinHandlers(deps) {
       let finished = false;
       let outOfBudget = false;
       while (!outOfBudget && !finished) {
-        if (requests >= REQUESTS_PER_JOB) {
+        if (requests >= REQUESTS_PER_JOB || overBudget()) {
           outOfBudget = true;
           break;
         }
@@ -18827,6 +18837,12 @@ function linkedinHandlers(deps) {
           const rels = page3.value.items.map(relationFromUnipile).filter((r2) => !!r2);
           const r = await ingestRelations(ctx.db, userId, rels, now);
           for (const pid of r.byMember.values()) touched.add(pid);
+          if (fresh) {
+            state = { ...state, stage: "done", cursor: null };
+            await save2({ stage: "done", cursor: null });
+            finished = true;
+            break;
+          }
           state = page3.value.cursor ? { ...state, cursor: page3.value.cursor } : { ...state, stage: "chats", cursor: null, chatsCursor: null, chatIndex: 0 };
           await save2({
             stage: state.stage,
@@ -18842,7 +18858,7 @@ function linkedinHandlers(deps) {
         const chats = page2.value.items;
         let i = state.chatIndex ?? 0;
         for (; i < chats.length; i++) {
-          if (requests + 2 > REQUESTS_PER_JOB) {
+          if (requests + 2 > REQUESTS_PER_JOB || overBudget()) {
             outOfBudget = true;
             break;
           }

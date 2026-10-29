@@ -257,14 +257,26 @@ export interface PullOutcome {
   pages: number;
   /** which orbit tables changed */
   tables: string[];
+  /** pages remain: the pull stopped at its page cap, and the next pull carries on from the cursor */
+  more?: boolean;
   message?: string;
 }
 
 let pulling: Promise<PullOutcome> | undefined;
 
-/** Pull every page of changes since the stored cursor. One pull at a time. */
+/**
+ * Run `fn` holding the cross-tab pull lock (a Web Lock where the browser has them): two tabs pulling at once read
+ * the same cursor, fetch the same pages and save each other's cursor back over their own.
+ */
+function withPullLock<T>(fn: () => Promise<T>): Promise<T> {
+  const locks = (globalThis.navigator as { locks?: LockManager } | undefined)?.locks;
+  if (locks?.request) return locks.request('orbit-sync-pull', fn) as Promise<T>;
+  return fn();
+}
+
+/** Pull every page of changes since the stored cursor. One pull at a time, in this tab and across tabs. */
 export function pullNow(userId: string, opts: { signal?: AbortSignal } = {}): Promise<PullOutcome> {
-  pulling ??= (async () => {
+  pulling ??= withPullLock(async () => {
     // local edits go up first, so the rows that come down already carry them
     await pushOutbox().catch(() => undefined);
     // the cursor belongs to the account it was saved for: one saved for another account (or before cursors said whose
@@ -276,8 +288,9 @@ export function pullNow(userId: string, opts: { signal?: AbortSignal } = {}): Pr
     }
     let changed = 0;
     let pages = 0;
+    let more = true;
     const tables = new Set<string>();
-    for (; pages < MAX_PAGES; ) {
+    for (; pages < MAX_PAGES && more; ) {
       const cursor = (await db.kv.get(CURSOR_KEY))?.value as string | undefined;
       const r = await callApi('/sync/pull', { cursor, limit: PULL_LIMIT }, opts);
       if (!r.ok) return { ok: false, changed, pages, tables: [...tables], message: r.message };
@@ -300,10 +313,10 @@ export function pullNow(userId: string, opts: { signal?: AbortSignal } = {}): Pr
         }
       }
       await db.kv.put({ key: CURSOR_KEY, value: r.value.cursor });
-      if (!hasMore) break;
+      more = !!hasMore;
     }
-    return { ok: true, changed, pages, tables: [...tables] };
-  })().finally(() => {
+    return { ok: true, changed, pages, tables: [...tables], more };
+  }).finally(() => {
     pulling = undefined;
   });
   return pulling;
@@ -769,7 +782,14 @@ export function startServerSync(o: SyncLoopOptions): () => void {
   };
   const pull = async () => {
     if (stopped) return;
-    const out = await pullNow(o.user.id).catch(() => undefined);
+    let out = await pullNow(o.user.id).catch(() => undefined);
+    // a first pull of a big network runs past the page cap: carry on until the server has nothing more
+    for (let changed = out?.changed ?? 0; out?.ok && out.more && !stopped; ) {
+      const next = await pullNow(o.user.id).catch(() => undefined);
+      if (!next) break;
+      changed += next.changed;
+      out = { ...next, changed, tables: [...new Set([...out.tables, ...next.tables])] };
+    }
     if (out?.ok) await derived(out).catch(() => undefined);
   };
   const hidden = () => typeof document !== 'undefined' && document.hidden;

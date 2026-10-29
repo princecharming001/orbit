@@ -26,7 +26,7 @@ beforeEach(async () => {
 
 const UNIPILE = { apiKey: 'unipile-key-placeholder', baseUrl: 'https://api.unipile.test' };
 
-function setup(configured = true) {
+function setup(configured = true, extra: { jobBudgetMs?: number } = {}) {
   const time = virtualTime(NOW);
   const unipile = new FakeUnipile();
   const handlers = defaultHandlers({
@@ -35,6 +35,7 @@ function setup(configured = true) {
     clock: time.clock,
     sleep: time.sleep,
     random: () => 0,
+    ...extra,
   });
   return { time, unipile, handlers };
 }
@@ -167,7 +168,7 @@ describe('sync.linkedin', () => {
     it('walks relations by cursor, then chats, at one request a second', async () => {
       const rels = env.unipile.calls.filter((c) => c.includes('/users/relations'));
       expect(rels).toHaveLength(2);
-      expect(rels[0]).toContain('limit=200');
+      expect(rels[0]).toContain('limit=100');
       expect(rels[1]).toContain('cursor=2');
       const chats = env.unipile.calls.find((c) => c.includes('/api/v1/chats?'))!;
       expect(chats).toContain('limit=250');
@@ -210,6 +211,13 @@ describe('sync.linkedin', () => {
       const [self] = await t.db.sql<{ linkedin_member_id: string }>`
         select linkedin_member_id from orbit.people where user_id = ${u}::uuid and is_self`;
       expect(self!.linkedin_member_id).toBe('ACoMaya');
+    });
+
+    it('a relation carries the day they connected, so the browser counts them as known', async () => {
+      const priya = await person(u, { member: 'ACoPriya' });
+      const [row] = await t.db.sql<{ connected: Date }>`
+        select linkedin_connected_on as connected from orbit.people where id = ${priya!.id}::uuid`;
+      expect(new Date(row!.connected).toISOString()).toBe(new Date(ago(300)).toISOString());
     });
 
     it('stores chats as threads with the user’s own messages outbound, never inbound (§12.8 test 4)', async () => {
@@ -259,6 +267,64 @@ describe('sync.linkedin', () => {
         { org_raw: 'Blackstone', is_current: true },
         { org_raw: 'Goldman Sachs', is_current: false },
       ]);
+    });
+
+    it('a sync soon after a full pass reads one page of the newest relations and no chats', async () => {
+      // the app asks for a sync on every open; walking 6,000 relations and two years of chats again each time kept
+      // the worker busy for hours and rewrote every person (the browser then pulled them all again)
+      const before = env.unipile.calls.length;
+      env.unipile.chats = [{ id: 'chat-new', attendees: [], messages: [] }];
+      await sync(u, { mode: 'sync' });
+      await drain(t, env.handlers, env.time.now);
+      const calls = env.unipile.calls.slice(before);
+      expect(calls.filter((c) => c.includes('/users/relations'))).toHaveLength(1);
+      expect(calls.filter((c) => c.includes('/api/v1/chats'))).toHaveLength(0);
+      const [a] = await t.db.sql<{ s: { linkedin: { stage: string; syncedAt: string } } }>`
+        select sync_state as s from orbit.integration_accounts where user_id = ${u}::uuid and provider = 'linkedin'`;
+      expect(a!.s.linkedin.stage).toBe('done');
+      // the next pass is still measured from the last full one
+      expect(Date.parse(a!.s.linkedin.syncedAt)).toBeLessThanOrEqual(NOW + 60_000);
+    });
+
+    it('a sync a day later walks everything again', async () => {
+      env.time.advance(21 * 3_600_000);
+      const before = env.unipile.calls.length;
+      await sync(u, { mode: 'sync' });
+      await drain(t, env.handlers, env.time.now);
+      const calls = env.unipile.calls.slice(before);
+      expect(calls.filter((c) => c.includes('/users/relations'))).toHaveLength(1);
+      expect(calls.filter((c) => c.includes('/api/v1/chats?'))).toHaveLength(1);
+    });
+  });
+
+  describe('the time budget', () => {
+    it('a job hands back after its minute, saving its place, and the next one carries on', async () => {
+      // filing a page of relations takes a minute or more; a job that only counted requests overstayed the worker
+      // run, was killed without a trace, and was dead-lettered after eleven tries at the same page
+      const u = await connectedUser(t.db, { linkedinAccount: 'acc-budget' });
+      const env = setup(true, { jobBudgetMs: 1500 });
+      env.unipile.relationsPageSize = 1;
+      env.unipile.relations = ['Ada', 'Ben', 'Cal'].map((n) => ({
+        member_id: `ACo${n}`,
+        public_identifier: n.toLowerCase(),
+        first_name: n,
+        last_name: 'Budget',
+        headline: `Engineer at ${n} Co`,
+        created_at: Date.parse(ago(10)),
+      }));
+      env.unipile.chats = [];
+      await sync(u, { mode: 'sync' });
+      await drain(t, env.handlers, env.time.now);
+      const runs = (await jobRuns(t.db, u)).filter((r) => r.kind === 'sync.linkedin');
+      expect(runs.length).toBeGreaterThanOrEqual(2);
+      expect(runs.every((r) => r.status === 'ok')).toBe(true);
+      expect(env.unipile.calls.filter((c) => c.includes('/users/relations'))).toHaveLength(3);
+      const [n] = await t.db.sql<{ n: number }>`
+        select count(*)::int as n from orbit.people where user_id = ${u}::uuid and linkedin_connected_on is not null`;
+      expect(n!.n).toBe(3);
+      const [a] = await t.db.sql<{ s: { linkedin: { stage: string } } }>`
+        select sync_state as s from orbit.integration_accounts where user_id = ${u}::uuid and provider = 'linkedin'`;
+      expect(a!.s.linkedin.stage).toBe('done');
     });
   });
 });

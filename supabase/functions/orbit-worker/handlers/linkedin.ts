@@ -8,9 +8,13 @@
  *   2. relations, 200 a page until the cursor is null (people, identities, current employer);
  *   3. chats of the last 2 years, 250 a page; for chats with at most 3 attendees, the latest 100 messages, stored
  *      as a linkedin thread with the user's own messages outbound.
- * Paging stays at one request a second per account, and one job makes at most 60 requests before it saves
- * {stage, cursor, chatsCursor, chatIndex} and queues the next one 5 s later. New inbound messages of the last 180
- * days are classified; the people touched are re-scored, and score.user runs when a full pass ends.
+ * Paging stays at one request a second per account, and one job makes at most 60 requests, or works for a minute,
+ * before it saves {stage, cursor, chatsCursor, chatIndex} and queues the next one 5 s later (the time budget matters
+ * more than the count: filing a page of relations is a minute or more, and a worker run that overstays is killed
+ * without a trace, so a job that only counted requests was killed on every attempt and dead-lettered). A pass that
+ * ended in the last 20 hours is not walked again: a sync asked for then reads one page of the newest relations.
+ * New inbound messages of the last 180 days are classified; the people touched are re-scored, and score.user runs
+ * when a full pass ends.
  */
 
 import { CLASSIFY_WINDOW_DAYS } from '../../_shared/ingest/gmail.ts';
@@ -27,6 +31,10 @@ import type { JobContext, JobHandler } from '../worker.ts';
 import { type HandlerDeps, JobSkipped, LONG_VT_SEC } from './deps.ts';
 
 export const REQUESTS_PER_JOB = 60;
+/** a job saves its place and queues the next one after this long */
+export const JOB_BUDGET_MS = 60_000;
+/** a full pass that ended this recently is not walked again */
+export const FRESH_FOR_MS = 20 * 3_600_000;
 const DAY = 86_400_000;
 
 interface LinkedinState {
@@ -35,6 +43,8 @@ interface LinkedinState {
   chatsCursor?: string | null;
   chatIndex?: number;
   selfMemberId?: string;
+  /** when the last full pass ended */
+  syncedAt?: string;
 }
 
 const str = (v: unknown) => (typeof v === 'string' && v ? v : undefined);
@@ -85,7 +95,16 @@ export function linkedinHandlers(deps: HandlerDeps): Record<string, JobHandler> 
       }
 
       await ctx.queue.setVt(job.queue, job.msgId, LONG_VT_SEC);
+      const clock = deps.clock ?? Date.now;
+      const started = clock();
+      const budgetMs = deps.jobBudgetMs ?? JOB_BUDGET_MS;
+      const overBudget = () => clock() - started >= budgetMs;
       let state = (acct.syncState.linkedin ?? {}) as LinkedinState;
+      // a pass that ended recently: the newest relations only (a new connection since), nothing walked again
+      const fresh =
+        state.stage === 'done' &&
+        !!state.syncedAt &&
+        now.getTime() - Date.parse(state.syncedAt) < FRESH_FOR_MS;
       if (state.stage === 'done' || !state.stage) state = { ...state, stage: 'relations', cursor: null };
       let requests = 0;
       const call = async <T>(fn: () => Promise<T>): Promise<T> => {
@@ -123,7 +142,7 @@ export function linkedinHandlers(deps: HandlerDeps): Record<string, JobHandler> 
       let finished = false;
       let outOfBudget = false;
       while (!outOfBudget && !finished) {
-        if (requests >= REQUESTS_PER_JOB) {
+        if (requests >= REQUESTS_PER_JOB || overBudget()) {
           outOfBudget = true;
           break;
         }
@@ -133,6 +152,13 @@ export function linkedinHandlers(deps: HandlerDeps): Record<string, JobHandler> 
           const rels = page.value.items.map(relationFromUnipile).filter((r) => !!r);
           const r = await ingestRelations(ctx.db, userId, rels, now);
           for (const pid of r.byMember.values()) touched.add(pid);
+          if (fresh) {
+            // the last pass stands: its end time keeps the next sync short too
+            state = { ...state, stage: 'done', cursor: null };
+            await save({ stage: 'done', cursor: null });
+            finished = true;
+            break;
+          }
           state = page.value.cursor
             ? { ...state, cursor: page.value.cursor }
             : { ...state, stage: 'chats', cursor: null, chatsCursor: null, chatIndex: 0 };
@@ -151,7 +177,7 @@ export function linkedinHandlers(deps: HandlerDeps): Record<string, JobHandler> 
         const chats = page.value.items;
         let i = state.chatIndex ?? 0;
         for (; i < chats.length; i++) {
-          if (requests + 2 > REQUESTS_PER_JOB) {
+          if (requests + 2 > REQUESTS_PER_JOB || overBudget()) {
             outOfBudget = true;
             break;
           }

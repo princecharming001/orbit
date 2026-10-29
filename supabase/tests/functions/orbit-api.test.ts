@@ -928,4 +928,32 @@ describe('/sync/pull parameters', () => {
     for (const p of seen)
       for (const i of [1, 3]) expect(() => new Date(p[i] as string).toISOString()).not.toThrow();
   });
+
+  it('pages past rows that share one microsecond, keeping the cursor time exact', async () => {
+    // a score run writes every tie score in one statement, so thousands share updated_at to the microsecond; a
+    // cursor time rounded to milliseconds re-sent the same page forever (the browser never got past 2,469 of 7,530)
+    const userId = await makeUser(t.db, { email: 'micro@example.com' });
+    const at = '2026-10-28T20:57:19.794647Z';
+    const ids: string[] = [];
+    for (let i = 0; i < 5; i++) {
+      const [p] = await t.db.sql<{ id: string }>`
+        insert into orbit.people (user_id, display_name, name_norm) values (${userId}::uuid, ${`P${i}`}, ${`p${i}`})
+        returning id`;
+      ids.push(p!.id);
+      await t.db.sql`
+        insert into orbit.tie_scores (user_id, person_id, score, band, features, contributions, model_version, updated_at)
+        values (${userId}::uuid, ${p!.id}::uuid, 8, 'faint', '{}'::jsonb, '{}'::jsonb, 'tie-v2', ${at}::timestamptz)`;
+    }
+    const tables = PULL_TABLES.filter((x) => x.table === 'tie_scores');
+    const upTo = new Date('2026-10-29T00:00:00Z');
+    const seen = new Set<string>();
+    let cursor = {};
+    for (let page = 0; page < 5; page++) {
+      const out = await pull(t.db, userId, { cursor, tables, limit: 2, upTo });
+      for (const r of out.changes.tie_scores ?? []) seen.add(r.personId as string);
+      cursor = decodeCursor(out.cursor);
+      if (!out.hasMore) break;
+    }
+    expect([...seen].sort()).toEqual([...ids].sort());
+  });
 });

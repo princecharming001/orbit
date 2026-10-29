@@ -7027,7 +7027,7 @@ var unipileMessageSchema = z.looseObject({
   deleted: z.union([z.number(), z.boolean()]).nullish()
 });
 var page = (item) => z.looseObject({ items: z.array(item).default([]), cursor: z.string().nullish() });
-var RELATIONS_LIMIT = 200;
+var RELATIONS_LIMIT = 100;
 var CHATS_LIMIT = 250;
 var MESSAGES_LIMIT = 100;
 function createUnipileSync(opts) {
@@ -12715,13 +12715,15 @@ async function pull(db2, userId, o) {
                   t.${t.key}::text as _k, ${del} as _del
              from orbit.${t.table} t
             where t.user_id = $1::uuid
-              and (t.${t.cursor}, t.${t.key}::text) > ($2::timestamptz, $3::text)
+              and (t.${t.cursor}, t.${t.key}::text) > (($2::text)::timestamptz, $3::text)
               and t.${t.cursor} <= $4::timestamptz
               ${t.filter ? `and ${t.filter}` : ""}
             order by t.${t.cursor}, t.${t.key}::text
             limit $5`,
-          // a table never pulled starts from a real date: postgres.js turns a timestamptz parameter into a JS Date
-          // first, and '-infinity' is not one (every pull failed with "Invalid time value" once a table had no rows)
+          // The cursor time goes over as text and is cast in SQL: a timestamptz parameter is turned into a JS Date
+          // by postgres.js first, which keeps milliseconds only, so a page of rows sharing one microsecond (a score
+          // run writes thousands in one statement) came back again and again and the pull never got past it. A
+          // table never pulled starts from a real date ('-infinity' is not one; every pull failed on it once).
           [userId, pos?.t ?? PULL_FROM, pos?.k ?? "", o.upTo, o.limit]
         );
       })

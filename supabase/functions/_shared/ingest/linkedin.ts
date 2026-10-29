@@ -68,6 +68,8 @@ export async function ingestRelations(
       seenAt: r.connectedAt ?? now.toISOString(),
       identitySource: 'linkedin_relation',
       identityAt: r.connectedAt,
+      // a relation is an accepted connection: the browser counts them as someone the student knows
+      connectedAt: r.connectedAt ?? now.toISOString(),
     };
   });
   const res = await resolvePeople(db, userId, items, { now });

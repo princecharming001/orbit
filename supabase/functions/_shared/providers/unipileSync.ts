@@ -104,8 +104,12 @@ export interface UnipileSync {
   }): Promise<ProviderResult<{ url: string }>>;
 }
 
-/** 200 a page: a 1,000 page took longer to file than a worker run lasts, so the cursor was never saved. */
-export const RELATIONS_LIMIT = 200;
+/**
+ * 100 a page: filing a relation (person, identities, employer) is a handful of round trips, so a page is a minute or
+ * two; a 1,000 page took longer than a worker run lasts and its cursor was never saved, and 200 still overran the
+ * job's time budget by a page.
+ */
+export const RELATIONS_LIMIT = 100;
 export const CHATS_LIMIT = 250;
 export const MESSAGES_LIMIT = 100;
 
