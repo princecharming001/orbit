@@ -247,11 +247,12 @@ describe('/linkedin/search', () => {
         );
       }) as typeof fetch,
     });
-    const search = async (q: string) => (await (await handler(post('/linkedin/search', token, { q }))).json()) as {
-      ok: boolean;
-      reason?: string;
-      people?: unknown[];
-    };
+    const search = async (q: string) =>
+      (await (await handler(post('/linkedin/search', token, { q }))).json()) as {
+        ok: boolean;
+        reason?: string;
+        people?: unknown[];
+      };
     expect(await search('Priya')).toEqual({ ok: false, reason: 'not_connected' });
     await t.db.sql`
       insert into orbit.integration_accounts (user_id, provider, external_account_id, status)
