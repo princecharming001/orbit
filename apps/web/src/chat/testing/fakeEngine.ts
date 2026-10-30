@@ -632,7 +632,8 @@ function pick(text: string): Script {
       yield {
         type: 'error',
         kind: 'other',
-        message: 'Failed to fetch dynamically imported module: https://tryorbit.today/assets/client-B8eKyzge.js',
+        message:
+          'Failed to fetch dynamically imported module: https://tryorbit.today/assets/client-B8eKyzge.js',
       };
     };
   const fail = t.match(/fail (no key|cap|refusal|network|other)/);
