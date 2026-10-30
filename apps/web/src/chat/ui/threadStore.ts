@@ -165,13 +165,21 @@ export function applyEvent(turnId: string, e: TurnEvent) {
   }
 }
 
-/** Rebuilds turns from what the engine stored (whole content block arrays, plus the actions by tool_use id). */
+/**
+ * Rebuilds turns from what the engine stored (whole content block arrays, plus the actions by tool_use id). One answer
+ * is often several stored assistant messages (a card, then the reply chips, then the words after a tool result or a
+ * nudge): they read as the one turn they were live, so a conversation opened later reads the way it did then, with no
+ * empty turn and no row of buttons between its parts.
+ */
 export function hydrate(messages: ChatMessage[], actions: ChatAction[]): Turn[] {
   const byId = new Map(actions.map((a) => [a.id, a]));
   const turns: Turn[] = [];
+  // the answer being built: assistant messages join it until the student says something or a line is drawn
+  let open: AssistantTurn | undefined;
   for (const m of [...messages].sort((a, b) => a.seq - b.seq)) {
     if (m.meta === 'snapshot' || m.meta === 'memory') continue;
     if (m.meta === 'decision' || m.meta === 'error') {
+      open = undefined;
       turns.push({
         id: m.id,
         role: m.meta === 'decision' ? 'decision' : 'note',
@@ -182,9 +190,12 @@ export function hydrate(messages: ChatMessage[], actions: ChatAction[]): Turn[] 
     }
     if (m.role === 'user') {
       // the agent's own user-role rows (tool results, a follow-up it asked itself for) have no words of the
-      // student's: nothing to draw, not an empty bubble
+      // student's: nothing to draw, not an empty bubble, and the answer goes on
       const text = textOf(m.content).trim();
-      if (text) turns.push({ id: m.id, role: 'user', text, at: m.createdAt });
+      if (text) {
+        open = undefined;
+        turns.push({ id: m.id, role: 'user', text, at: m.createdAt });
+      }
       continue;
     }
     if (m.role !== 'assistant') continue;
@@ -210,13 +221,16 @@ export function hydrate(messages: ChatMessage[], actions: ChatAction[]): Turn[] 
         });
       }
     }
-    turns.push({
-      id: m.id,
-      role: 'assistant',
-      blocks,
-      status: m.stopReason === 'aborted' ? 'stopped' : 'done',
-      at: m.createdAt,
-    });
+    const stopped = m.stopReason === 'aborted';
+    if (open) {
+      open.blocks.push(...blocks);
+      if (stopped) open.status = 'stopped';
+      continue;
+    }
+    // a message with nothing to draw (only the model's thinking) starts no turn of its own
+    if (!blocks.length && !stopped) continue;
+    open = { id: m.id, role: 'assistant', blocks, status: stopped ? 'stopped' : 'done', at: m.createdAt };
+    turns.push(open);
   }
   return turns;
 }

@@ -20,7 +20,7 @@ import { answerIntroductionQuestion } from '../engine/introductions';
 import { stageNoLabel } from '../engine/morning';
 import { decideMerge, mergeEvidence } from '../engine/people';
 import { currentResumeFacets, sharesOrgNow } from '../engine/resume';
-import { dismissSuggestion, restoreSuggestion, snoozeSuggestion } from '../engine/send';
+import { dismissSuggestion, restoreSuggestion } from '../engine/send';
 import { applyStage, decideProposedStage } from '../engine/stages';
 import { SUGGESTION_KIND_LABELS } from '../engine/today';
 import { answerTrustOffer, LADDER_WORDS, type LadderKind } from '../engine/trust';
@@ -155,14 +155,6 @@ export function SuggestionCard({
             ttl: 6000,
           },
     );
-  };
-  const snooze = async (days: number) => {
-    await snoozeSuggestion(user.id, s, days);
-    toast.push({
-      text: `Snoozed. It comes back in ${days === 7 ? 'a week' : `${days} day${days > 1 ? 's' : ''}`}.`,
-      action: { label: 'Undo', onClick: () => restoreSuggestion(s) },
-      ttl: 6000,
-    });
   };
   const toStage = s.payload.toStage as keyof typeof STAGE_LABELS | undefined;
   const confirmStage = async (accept: boolean) => {
@@ -677,35 +669,13 @@ export function SuggestionCard({
       {!['confirm_stage', 'confirm_merge', 'confirm_intro'].includes(s.kind) && !inFlight && (
         <div className="mt-2 flex flex-wrap items-center gap-0.5 text-[12px]">
           {!dismissing ? (
-            <>
-              <span className="text-ink-3 pl-1 mr-0.5" id={`snooze-${s.id}`}>
-                Snooze
-              </span>
-              {(
-                [
-                  [1, '1 day'],
-                  [3, '3 days'],
-                  [7, '1 week'],
-                ] as const
-              ).map(([d, l]) => (
-                <button
-                  key={d}
-                  className={CARD_SMALL_BUTTON}
-                  onClick={() => snooze(d)}
-                  aria-label={`Snooze for ${l}`}
-                  title={`Hide this card for ${l}; it comes back in Drafts`}
-                >
-                  {l}
-                </button>
-              ))}
-              <button
-                className={cx('ml-auto', CARD_SMALL_BUTTON)}
-                onClick={() => setDismissing(true)}
-                title="Remove this card and tell Orbit why, so it suggests better next time"
-              >
-                Dismiss
-              </button>
-            </>
+            <button
+              className={cx('ml-auto', CARD_SMALL_BUTTON)}
+              onClick={() => setDismissing(true)}
+              title="Remove this card and tell Orbit why, so it suggests better next time"
+            >
+              Dismiss
+            </button>
           ) : (
             <>
               <span className="text-ink-3 mr-1">Why remove it?</span>
@@ -738,7 +708,7 @@ export function SuggestionCard({
   );
 }
 
-/** The small secondary buttons along a card's foot (Snooze, Dismiss): quiet text until hovered, so the draft leads. */
+/** The small secondary buttons along a card's foot (Dismiss): quiet text until hovered, so the draft leads. */
 const CARD_SMALL_BUTTON =
   'px-2 h-10 @[40rem]:h-7 rounded-md text-ink-3 hover:bg-canvas-2 hover:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40';
 

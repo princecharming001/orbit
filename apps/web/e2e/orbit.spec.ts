@@ -955,7 +955,9 @@ test.describe('Keyboard, dead ends and plain words', () => {
     await expect(dialog.getByRole('button', { name: /Go to Today/ })).toHaveCount(0);
     await page.keyboard.press('Escape');
     await expect(dialog).toHaveCount(0);
-    await expect(page.getByRole('button', { name: 'Snooze for 3 days' }).first()).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Dismiss' }).first()).toBeVisible();
+    // cards are no longer snoozed from their foot
+    await expect(page.getByRole('button', { name: /^Snooze for/ })).toHaveCount(0);
     await page.goto('people');
     const card = page.getByTestId('chat-card-warming').first();
     // the name link covers the card; the next-step chip is a second, separate link

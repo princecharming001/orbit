@@ -12,7 +12,21 @@ import { createFakeChatEngine, type FakeChatEngine } from '../testing/fakeEngine
 import { fixturePerson } from '../testing/fixtures';
 import type { ResultKind } from '../types';
 import { ChatHome } from './ChatHome';
-import { applyEvent, getThread, hydrate, resetThread, threadActions } from './threadStore';
+import { dayLabel, inReadingOrder, Thread } from './Thread';
+import {
+  type AssistantTurn,
+  applyEvent,
+  getThread,
+  hydrate,
+  resetThread,
+  threadActions,
+} from './threadStore';
+
+const noActions = {
+  approve: async () => undefined,
+  cancel: async () => {},
+  send: () => {},
+};
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -292,5 +306,96 @@ describe('the chat thread', () => {
     const a = turns[1] as { blocks: { type: string; envelope?: { summary: string } }[] };
     expect(a.blocks.map((b) => b.type)).toEqual(['text', 'tool', 'text']);
     expect(a.blocks[1]!.envelope?.summary).toBe('Three moving.');
+  });
+
+  it('reads an answer stored as several messages as the one turn it was, chips last, no empty turn', async () => {
+    // a real stored answer: the drafts card, the reply chips, an empty message, Orbit's nudge, then the words
+    const at = (s: number) => `2026-10-27T12:00:0${s}Z`;
+    const row = (seq: number, role: 'user' | 'assistant' | 'system', content: unknown, meta?: string) => ({
+      id: `m${seq}`,
+      conversationId: 'c',
+      userId: 'u',
+      seq,
+      role,
+      content,
+      createdAt: at(seq),
+      ...(meta ? { meta } : {}),
+    });
+    const action = (id: string, kind: ResultKind, data: unknown, summary: string) => ({
+      id,
+      conversationId: 'c',
+      userId: 'u',
+      toolName: id,
+      input: {},
+      status: 'done' as const,
+      envelope: { kind, data, summary },
+      createdAt: '',
+      updatedAt: '',
+    });
+    const turns = hydrate(
+      [
+        row(1, 'user', [{ type: 'text', text: 'what drafts do i have left' }]),
+        row(2, 'system', [{ type: 'text', text: 'Today is ...' }], 'snapshot'),
+        row(3, 'assistant', [{ type: 'tool_use', id: 'drafts', name: 'list_drafts', input: {} }]),
+        row(4, 'user', [{ type: 'tool_result', tool_use_id: 'drafts', content: 'ok' }]),
+        row(5, 'assistant', [
+          { type: 'thinking', thinking: '...' },
+          { type: 'tool_use', id: 'chips', name: 'offer_choices', input: {} },
+        ]),
+        row(6, 'user', [{ type: 'tool_result', tool_use_id: 'chips', content: 'ok' }]),
+        row(7, 'assistant', []),
+        row(8, 'system', [{ type: 'text', text: '[Orbit] Your reply had no words' }]),
+        row(9, 'assistant', [{ type: 'text', text: 'You have three drafts left.' }]),
+      ] as never,
+      [
+        action('drafts', 'list', { items: [] }, 'Drafts: 2 to send'),
+        action('chips', 'choices', { options: [{ label: 'Show the reply', message: 'Show the reply' }] }, ''),
+      ] as never,
+    );
+    expect(turns.map((t) => t.role)).toEqual(['user', 'assistant']);
+    const a = turns[1] as AssistantTurn;
+    expect(a.id).toBe('m3');
+    expect(a.blocks.map((b) => (b.type === 'tool' ? b.toolUseId : b.type))).toEqual([
+      'drafts',
+      'chips',
+      'text',
+    ]);
+    // drawn in reading order: the card, the words, then the chips that say what to do next
+    expect(inReadingOrder(a.blocks).map(({ b }) => (b.type === 'tool' ? b.toolUseId : b.type))).toEqual([
+      'drafts',
+      'text',
+      'chips',
+    ]);
+
+    // and on screen: one answer under the question, a day line that names the day, the chips at the end
+    host = document.createElement('div');
+    document.body.appendChild(host);
+    root = createRoot(host);
+    await act(async () => {
+      root!.render(
+        <MemoryRouter>
+          <ToastProvider>
+            <Thread turns={turns} actions={{ ...noActions, retry: () => {} }} running={false} />
+          </ToastProvider>
+        </MemoryRouter>,
+      );
+    });
+    expect($$('[data-testid="turn-assistant"]')).toHaveLength(1);
+    expect($$('[data-testid="turn-actions"]')).toHaveLength(1);
+    expect($$('[data-testid="thread-day"]').map((d) => d.textContent?.trim())).toEqual([
+      dayLabel('2026-10-27T12:00:01Z'),
+    ]);
+    const answer = $$('[data-testid="turn-assistant"]')[0]!;
+    const words = [...answer.querySelectorAll('p')].find((p) => p.textContent?.includes('three drafts'))!;
+    const chips = answer.querySelector('[data-testid="result-choices"]')!;
+    expect(words.compareDocumentPosition(chips) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it('names the day of each part of a chat', () => {
+    const now = new Date('2026-10-30T15:00:00');
+    expect(dayLabel('2026-10-30T09:00:00', now)).toBe('Today');
+    expect(dayLabel('2026-10-29T23:00:00', now)).toBe('Yesterday');
+    expect(dayLabel('2026-10-26T10:00:00', now)).toBe('Monday, Oct 26');
+    expect(dayLabel('2025-12-31T10:00:00', now)).toBe('Wednesday, Dec 31, 2025');
   });
 });

@@ -39,12 +39,21 @@ export function Thread({
   return (
     <DraftOwnersContext.Provider value={owners}>
       <div className="type-body" data-testid="thread">
-        <div className="flex items-center gap-3 text-[13px] font-semibold text-ink-2 mb-4" aria-hidden>
-          Today <span className="flex-1 h-px bg-line" />
-        </div>
         <ol className="space-y-4">
           {turns.map((t, i) => (
             <li key={t.id} className="min-w-0">
+              {/* the day each part of the chat is from: a chat opened days later says so, instead of "Today" */}
+              {(i === 0 || dayLabel(turns[i - 1]!.at) !== dayLabel(t.at)) && (
+                <div
+                  className={cx(
+                    'flex items-center gap-3 text-[13px] font-semibold text-ink-2 mb-4',
+                    i > 0 && 'mt-8',
+                  )}
+                  data-testid="thread-day"
+                >
+                  {dayLabel(t.at)} <span className="flex-1 h-px bg-line" aria-hidden />
+                </div>
+              )}
               {t.role === 'user' ? (
                 <div className="flex justify-end">
                   <div
@@ -86,6 +95,33 @@ export function Thread({
   );
 }
 
+/**
+ * A turn's blocks as they read: everything in the order it came, then the reply chips. The model often offers the
+ * chips before it writes its last words; the chips are what to say next, so they always close the answer.
+ */
+export function inReadingOrder(blocks: Block[]): { b: Block; i: number }[] {
+  const all = blocks.map((b, i) => ({ b, i }));
+  const chips = ({ b }: { b: Block }) => b.type === 'tool' && b.envelope?.kind === 'choices';
+  return [...all.filter((x) => !chips(x)), ...all.filter(chips)];
+}
+
+/** "Today", "Yesterday", "Monday, Oct 26", with the year once it is not this one: the day a part of a chat is from. */
+export function dayLabel(at: string, now = new Date()): string {
+  const d = new Date(at);
+  if (Number.isNaN(d.getTime())) return 'Today';
+  const key = (x: Date) => `${x.getFullYear()}-${x.getMonth()}-${x.getDate()}`;
+  const yesterday = new Date(now);
+  yesterday.setDate(now.getDate() - 1);
+  if (key(d) === key(now)) return 'Today';
+  if (key(d) === key(yesterday)) return 'Yesterday';
+  return d.toLocaleDateString('en-US', {
+    weekday: 'long',
+    month: 'short',
+    day: 'numeric',
+    ...(d.getFullYear() === now.getFullYear() ? {} : { year: 'numeric' }),
+  });
+}
+
 function humanTool(name: string): string {
   const s = name.replace(/_/g, ' ').trim();
   return s.charAt(0).toUpperCase() + s.slice(1);
@@ -125,7 +161,7 @@ function Assistant({
     <div className="group min-w-0" data-testid="turn-assistant" data-status={turn.status}>
       <div aria-live="polite" aria-busy={streaming}>
         <ChoicesContext.Provider value={{ running, laterUserText }}>
-          {turn.blocks.map((b, i) =>
+          {inReadingOrder(turn.blocks).map(({ b, i }) =>
             b.type === 'text' ? (
               <Markdown key={i} text={b.text} />
             ) : b.type === 'progress' ? (

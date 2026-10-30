@@ -141,7 +141,7 @@ test.describe('Side panel (laptop)', () => {
     }
   });
 
-  test('jobs done inside the panel: snooze a card, edit a draft without sending it, start a note', async ({
+  test('jobs done inside the panel: dismiss a card, edit a draft without sending it, start a note', async ({
     page,
   }) => {
     await home(page);
@@ -150,7 +150,8 @@ test.describe('Side panel (laptop)', () => {
     const cards = panel(page).locator('[data-testid^="suggestion-"]');
     await expect(cards.first()).toBeVisible();
     const n = await cards.count();
-    await cards.first().getByRole('button', { name: '1 day' }).click();
+    await cards.first().getByRole('button', { name: 'Dismiss' }).click();
+    await cards.first().getByRole('button', { name: 'Not now' }).click();
     await expect(cards).toHaveCount(n - 1);
 
     // a draft opens and edits in the panel; nothing is sent

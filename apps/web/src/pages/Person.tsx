@@ -51,7 +51,7 @@ import {
   restoreFact,
 } from '../engine/facts';
 import { moveChat } from '../engine/move';
-import { hidePerson, setRelationshipType, unhidePerson } from '../engine/people';
+import { setRelationshipType, unhidePerson } from '../engine/people';
 import { moveChatGuarded } from '../engine/pipeline';
 import { personSummary, toYou } from '../engine/prep';
 import { SUMMARY_RULES_AT } from '../engine/repair';
@@ -690,47 +690,58 @@ export function PersonPage() {
                 >
                   Find an intro
                 </Button>
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  className="w-full justify-start"
-                  title={
-                    person.hiddenAt
-                      ? 'Show this person again in People, Today and the map'
-                      : 'Hide this person from People, Today and the map'
-                  }
-                  onClick={async () => {
-                    if (person.hiddenAt) {
+                {/* someone hidden before can still come back; hiding itself is no longer offered */}
+                {person.hiddenAt && (
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="w-full justify-start"
+                    title="Show this person again in People, Today and the map"
+                    onClick={async () => {
                       await unhidePerson(person.id);
                       toast.push({ text: `${person.firstName} is back in People, Today and the map.` });
-                      return;
-                    }
-                    await hidePerson(person.id);
-                    toast.push({
-                      text: `Hid ${person.displayName}. Find them under Hidden in People.`,
-                      action: { label: 'Undo', onClick: () => unhidePerson(person.id) },
-                      ttl: 7000,
-                    });
-                    nav('/people?view=list');
-                  }}
-                >
-                  {person.hiddenAt ? 'Show again' : 'Hide from lists'}
-                </Button>
-                <label className="flex items-center justify-between gap-2 px-3 py-1.5 text-[12px] text-ink-3">
-                  How you know them
-                  <Select
-                    value={person.relationshipType}
-                    onChange={(e) => setRelationshipType(person.id, e.target.value as never)}
-                    className="h-8 text-[13px] text-ink"
-                    title="Orbit adjusts the tone of drafts and its suggestions to it."
+                    }}
                   >
-                    {Object.entries(RELATIONSHIP_LABELS).map(([k, l]) => (
-                      <option key={k} value={k}>
-                        {k === 'unknown' ? 'Not set' : l}
-                      </option>
-                    ))}
-                  </Select>
-                </label>
+                    Show again
+                  </Button>
+                )}
+                {/* how they know them, as one tap: the chosen one is filled, tapped again it is cleared */}
+                <div
+                  className="mt-1 border-t border-line px-2.5 pt-2.5 pb-1.5"
+                  role="group"
+                  aria-labelledby={`rel-${person.id}`}
+                  data-testid="person-relationship"
+                >
+                  <div className="flex items-baseline justify-between gap-2 mb-2">
+                    <span id={`rel-${person.id}`} className="text-[12px] font-medium text-ink-2">
+                      How you know them
+                    </span>
+                    <span className="text-[11px] text-ink-3">Sets the tone</span>
+                  </div>
+                  <div className="flex flex-wrap gap-1.5">
+                    {Object.entries(RELATIONSHIP_LABELS)
+                      .filter(([k]) => k !== 'unknown')
+                      .map(([k, l]) => {
+                        const on = person.relationshipType === k;
+                        return (
+                          <button
+                            key={k}
+                            type="button"
+                            aria-pressed={on}
+                            onClick={() => setRelationshipType(person.id, (on ? 'unknown' : k) as never)}
+                            className={cx(
+                              'h-7 px-2.5 rounded-full text-[12.5px] transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ink/20',
+                              on
+                                ? 'bg-ink text-white chip-on'
+                                : 'border border-line text-ink-2 hover:text-ink hover:border-[#d4d2ce]',
+                            )}
+                          >
+                            {l}
+                          </button>
+                        );
+                      })}
+                  </div>
+                </div>
               </div>
             </details>
           </div>

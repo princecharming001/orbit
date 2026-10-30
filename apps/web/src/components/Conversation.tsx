@@ -3,7 +3,7 @@
  * LinkedIn, the texts Orbit imported), each marked by channel, and a box at the bottom to answer on the channel picked
  * without leaving Orbit. "Check now" reads Gmail and LinkedIn this second. When Orbit has a message waiting on the
  * student for them (a time to suggest, a thank-you, a follow-up), its draft fills that box, ready to edit and send,
- * with Snooze and Dismiss beside it: the reply is written where the conversation is.
+ * with Dismiss beside it: the reply is written where the conversation is.
  */
 import type { Person, Suggestion } from '@orbit/core';
 import { useLiveQuery } from 'dexie-react-hooks';
@@ -12,7 +12,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { db } from '../db/schema';
 import { draftTypedMessage, ensureDrafts, isMessageSuggestion } from '../engine/brief';
 import { type ConversationItem, conversationWith } from '../engine/conversation';
-import { dismissSuggestion, restoreSuggestion, snoozeSuggestion } from '../engine/send';
+import { dismissSuggestion, restoreSuggestion } from '../engine/send';
 import { SUGGESTION_KIND_LABELS } from '../engine/today';
 import { useSession } from '../state/session';
 import { Button, cx, Skeleton, Textarea, useToast } from '../ui';
@@ -320,19 +320,10 @@ export function Conversation({ person }: { person: Person }) {
   );
 }
 
-/** What the draft in the box is for, with Snooze and Dismiss: the waiting card, folded into the composer. */
+/** What the draft in the box is for, with Dismiss: the waiting card, folded into the composer. */
 function SuggestedLine({ s, userId, onGone }: { s: Suggestion; userId: string; onGone: () => void }) {
   const toast = useToast();
   const label = SUGGESTION_KIND_LABELS[s.kind]?.label ?? 'Suggested';
-  const snooze = async (days: number) => {
-    await snoozeSuggestion(userId, s, days);
-    onGone();
-    toast.push({
-      text: `Snoozed. It comes back in ${days === 7 ? 'a week' : `${days} day${days > 1 ? 's' : ''}`}.`,
-      action: { label: 'Undo', onClick: () => restoreSuggestion(s) },
-      ttl: 6000,
-    });
-  };
   const dismiss = async () => {
     await dismissSuggestion(userId, s, 'not_relevant');
     onGone();
@@ -355,9 +346,6 @@ function SuggestedLine({ s, userId, onGone }: { s: Suggestion; userId: string; o
         </span>
       </span>
       <span className="inline-flex items-center gap-2.5">
-        <button type="button" className={link} onClick={() => snooze(1)} data-testid="conversation-snooze">
-          Snooze a day
-        </button>
         <button type="button" className={link} onClick={dismiss} data-testid="conversation-dismiss">
           Dismiss
         </button>

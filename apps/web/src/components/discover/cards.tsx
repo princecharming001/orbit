@@ -87,13 +87,16 @@ export function FoundCardView({ card, h }: { card: FoundCard; h: FoundHandlers }
         )}
       </div>
       <WhyThem reasons={card.why} testId="found-reason" />
-      <ScoreBars
-        fit={card.metrics.match}
-        reach={card.metrics.reach}
-        odds={card.metrics.odds}
-        testId="found-scores"
-      />
-      <div className="mt-auto pt-3 border-t border-line-2 flex items-center gap-1.5 min-w-0">
+      {/* the meters and the actions sit at the foot, so across a row every card's meters are level */}
+      <div className="mt-auto">
+        <ScoreBars
+          fit={card.metrics.match}
+          reach={card.metrics.reach}
+          odds={card.metrics.odds}
+          testId="found-scores"
+        />
+      </div>
+      <div className="pt-3 border-t border-line-2 flex items-center gap-1.5 min-w-0">
         <Button
           variant="primary"
           size="sm"
@@ -182,20 +185,23 @@ export function NetworkCardView({ card, h }: { card: NetworkCard; h: NetworkHand
         </button>
       </div>
       <WhyThem reasons={card.why} points={card.points} testId="rec-why" />
-      <ScoreBars
-        fit={card.metrics.match}
-        reach={card.metrics.reach}
-        odds={card.metrics.odds}
-        testId="rec-scores"
-      />
-      {/* how to reach them, one quiet line in the same place on every card that needs one (an introducer is
+      {/* how to reach them, one quiet line under the reasons on every card that needs one (an introducer is
           already among the reasons, and the button below) */}
       {card.action === 'warm_up' && (
         <p className="flex items-center gap-2 text-[12.5px] text-ink-2 min-w-0" data-testid="rec-warmup-why">
           <span className="truncate">Known from LinkedIn only, so warm up first</span>
         </p>
       )}
-      <div className="mt-auto pt-3 border-t border-line-2 flex items-center gap-1.5 min-w-0">
+      {/* the meters and the actions sit at the foot, so across a row every card's meters are level */}
+      <div className="mt-auto">
+        <ScoreBars
+          fit={card.metrics.match}
+          reach={card.metrics.reach}
+          odds={card.metrics.odds}
+          testId="rec-scores"
+        />
+      </div>
+      <div className="pt-3 border-t border-line-2 flex items-center gap-1.5 min-w-0">
         {card.action === 'intro' && introducer ? (
           // someone the student knows can introduce them: that beats a warm-up with a stranger
           <Link to={`/map?reach=${p.id}`} data-testid="rec-intro" className="min-w-0">
