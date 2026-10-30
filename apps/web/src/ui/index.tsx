@@ -14,6 +14,7 @@ import {
   useRef,
   useState,
 } from 'react';
+import { createPortal } from 'react-dom';
 import { Link, useLocation } from 'react-router-dom';
 import { photoBroken, photoWanted } from '../engine/photoSignals';
 import { linkedInImageExpired } from '../engine/photos';
@@ -637,13 +638,15 @@ export function Modal({
 }) {
   const ref = useDialog(open, onClose);
   if (!open) return null;
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-      <div className="absolute inset-0 bg-black/25" onClick={keepOnBackdrop ? undefined : onClose} />
+  // drawn at the top of the page: inside a page that animates in (a transform), a fixed layer would be pinned to
+  // that page instead of the window, so the dim and the dialog came out cut off and half off screen
+  return createPortal(
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 overflow-y-auto">
+      <div className="fixed inset-0 bg-black/25" onClick={keepOnBackdrop ? undefined : onClose} />
       <div
         ref={ref}
         tabIndex={-1}
-        className="relative bg-canvas rounded-[16px] border border-line shadow-[0_24px_60px_rgba(0,0,0,0.12)] w-full fade-up focus:outline-none"
+        className="relative my-auto bg-canvas rounded-[16px] border border-line shadow-[0_24px_60px_rgba(0,0,0,0.12)] w-full max-h-[calc(100dvh-32px)] overflow-y-auto pop-in focus:outline-none"
         style={{ maxWidth: width }}
         role="dialog"
         aria-modal="true"
@@ -657,7 +660,8 @@ export function Modal({
         </div>
         <div className="p-5">{children}</div>
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }
 

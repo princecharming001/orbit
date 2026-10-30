@@ -18538,6 +18538,16 @@ var unipileMessageSchema = z.looseObject({
   deleted: z.union([z.number(), z.boolean()]).nullish()
 });
 var page = (item) => z.looseObject({ items: z.array(item).default([]), cursor: z.string().nullish() });
+var unipileSearchItemSchema2 = z.looseObject({
+  id: z.string().nullish(),
+  name: z.string().nullish(),
+  headline: z.string().nullish(),
+  location: z.string().nullish(),
+  public_profile_url: z.string().nullish(),
+  profile_url: z.string().nullish(),
+  profile_picture_url: z.string().nullish(),
+  network_distance: z.union([z.string(), z.number()]).nullish()
+});
 var RELATIONS_LIMIT = 100;
 var CHATS_LIMIT = 250;
 var MESSAGES_LIMIT = 100;
@@ -18602,6 +18612,34 @@ function createUnipileSync(opts) {
         },
         schema: z.looseObject({ url: z.string() })
       });
+    },
+    async searchPeople(accountId, keywords, limit = 8) {
+      if (!configured) return no();
+      const r = await requestJson(opts, {
+        provider: "unipile",
+        url: `${base}/api/v1/linkedin/search${query({ account_id: accountId, limit })}`,
+        method: "POST",
+        headers: headers(),
+        body: { api: "classic", category: "people", keywords, network_distance: [1, 2, 3] },
+        schema: page(unipileSearchItemSchema2)
+      });
+      if (!r.ok) return r;
+      const degree = (d) => {
+        const m = /(\d)/.exec(String(d ?? ""));
+        return m ? Number(m[1]) : void 0;
+      };
+      return {
+        ok: true,
+        value: r.value.items.filter((p) => !!p.id && !!p.name?.trim()).map((p) => ({
+          memberId: p.id,
+          name: p.name.trim(),
+          headline: p.headline?.trim() || void 0,
+          location: p.location?.trim() || void 0,
+          profileUrl: p.public_profile_url || p.profile_url || void 0,
+          pictureUrl: p.profile_picture_url || void 0,
+          distance: degree(p.network_distance)
+        }))
+      };
     }
   };
 }

@@ -1560,6 +1560,7 @@ async function addByHand(
     .getByRole('button', { name: /add a person/i })
     .first()
     .click();
+  await page.getByTestId('add-person-by-hand').click();
   await page.getByTestId('add-person-name').fill(name);
   await page.getByTestId('add-person-company').fill(company);
   if (how.email) await page.getByTestId('add-person-email').fill(how.email);
@@ -2060,6 +2061,7 @@ test.describe('Usability round 5: one draft, kept edits, saved settings, chats t
       .getByRole('button', { name: /add a person/i })
       .first()
       .click();
+    await page.getByTestId('add-person-by-hand').click();
     await page.getByTestId('add-person-name').fill('Rachel Kim');
     await page.mouse.click(8, 790);
     await expect(page.getByTestId('add-person-name')).toHaveValue('Rachel Kim');

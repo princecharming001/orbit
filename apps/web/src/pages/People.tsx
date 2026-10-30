@@ -8,6 +8,7 @@ import {
   STAGE_LABELS,
 } from '@orbit/core';
 import { useLiveQuery } from 'dexie-react-hooks';
+import { Check, ChevronDown, Search } from 'lucide-react';
 import { useMemo, useRef, useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 import { AddPersonButton } from '../components/AddPerson';
@@ -274,8 +275,15 @@ export function People() {
           ))}
         </div>
         {view !== 'companies' && (
-          <details className="text-[13px] w-full @[40rem]:w-auto" data-testid="stage-legend">
-            <summary className="cursor-pointer text-ink-3 hover:text-ink w-fit">Stages</summary>
+          <details className="group/stages text-[13px] w-full @[40rem]:w-auto" data-testid="stage-legend">
+            <summary className="list-none [&::-webkit-details-marker]:hidden cursor-pointer h-9 px-3 rounded-full inline-flex items-center gap-1 text-ink-2 hover:text-ink hover:bg-canvas-2 w-fit transition-colors">
+              Stages
+              <ChevronDown
+                size={14}
+                className="transition-transform group-open/stages:rotate-180"
+                aria-hidden
+              />
+            </summary>
             <dl className="mt-2 grid @[40rem]:grid-cols-2 gap-x-6 gap-y-1.5 rounded-lg bg-canvas-2 p-3">
               {STAGE_ORDER.map((st) => (
                 <div key={st} className="flex gap-2 min-w-0">
@@ -291,17 +299,25 @@ export function People() {
         )}
         {/* views, then search and filters on the same line: one row of controls above the people */}
         <div className="flex flex-wrap items-center gap-2 @[56rem]:ml-auto" data-testid="people-filters">
-          <Input
-            value={q}
-            onChange={(e) => {
-              setQ(e.target.value);
-              setLimit(PAGE);
-            }}
-            placeholder="Search name, company, title"
-            aria-label="Search people"
-            className="w-full @[40rem]:w-56"
-          />
+          <div className="relative w-full @[40rem]:w-60">
+            <Search
+              size={15}
+              className="absolute left-3 top-1/2 -translate-y-1/2 text-ink-3 pointer-events-none"
+              aria-hidden
+            />
+            <Input
+              value={q}
+              onChange={(e) => {
+                setQ(e.target.value);
+                setLimit(PAGE);
+              }}
+              placeholder="Search name, company, title"
+              aria-label="Search people"
+              className="w-full h-9 pl-9 rounded-full"
+            />
+          </div>
           <Select
+            className="h-9 rounded-full"
             value={filter}
             onChange={(e) => {
               setFilter(e.target.value as PeopleFilter);
@@ -325,22 +341,35 @@ export function People() {
             <option value="hidden">Hidden{hiddenCount ? ` (${hiddenCount})` : ''}</option>
           </Select>
           {view === 'list' && (
-            <Select value={sort} onChange={(e) => setSort(e.target.value as never)} aria-label="Sort people">
+            <Select
+              className="h-9 rounded-full"
+              value={sort}
+              onChange={(e) => setSort(e.target.value as never)}
+              aria-label="Sort people"
+            >
               <option value="strength">By closeness</option>
               <option value="recent">Most recent</option>
               <option value="name">By name</option>
               <option value="stage">By stage</option>
             </Select>
           )}
-          <label className="text-[13px] inline-flex items-center gap-1.5">
-            <input
-              type="checkbox"
-              checked={showClosed}
-              onChange={(e) => setShowClosed(e.target.checked)}
-              data-testid="show-closed"
-            />{' '}
+          {/* a toggle pill, the same height as the fields beside it */}
+          <button
+            type="button"
+            role="switch"
+            aria-checked={showClosed}
+            onClick={() => setShowClosed(!showClosed)}
+            className={cx(
+              'h-9 px-3.5 rounded-full text-[13px] inline-flex items-center gap-1.5 border transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ink/20',
+              showClosed
+                ? 'bg-ink text-white border-ink'
+                : 'bg-canvas border-line text-ink-2 hover:text-ink hover:border-[#d4d2ce]',
+            )}
+            data-testid="show-closed"
+          >
+            {showClosed && <Check size={13} aria-hidden />}
             Show closed
-          </label>
+          </button>
         </div>
       </div>
       {loading ? (

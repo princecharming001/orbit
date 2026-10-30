@@ -219,6 +219,66 @@ describe('/linkedin/*', () => {
   });
 });
 
+describe('/linkedin/search', () => {
+  it("finds people on the student's LinkedIn with photo and headline, and stops at the day's cap", async () => {
+    const { userId, token } = await signedIn(['https://www.googleapis.com/auth/gmail.readonly']);
+    const calls: { url: string; body: Record<string, unknown> }[] = [];
+    const handler = makeApiHandler({
+      env: { sessionSecret: SECRET, appUrl: APP, unipileKey: 'k', unipileBase: 'https://api.unipile.test' },
+      db: t.db,
+      take: memoryTake(),
+      fetch: (async (u: RequestInfo | URL, init?: RequestInit) => {
+        calls.push({ url: String(u), body: JSON.parse(String(init?.body ?? '{}')) });
+        return new Response(
+          JSON.stringify({
+            items: [
+              {
+                id: 'ACo1',
+                name: 'Priya Shah',
+                headline: 'Analyst at Evercore',
+                profile_picture_url: 'https://media.licdn.com/p.jpg',
+                public_profile_url: 'https://www.linkedin.com/in/priya-shah',
+                network_distance: 'DISTANCE_2',
+              },
+              { id: 'ACo2', name: '' },
+            ],
+          }),
+          { status: 200 },
+        );
+      }) as typeof fetch,
+    });
+    const search = async (q: string) => (await (await handler(post('/linkedin/search', token, { q }))).json()) as {
+      ok: boolean;
+      reason?: string;
+      people?: unknown[];
+    };
+    expect(await search('Priya')).toEqual({ ok: false, reason: 'not_connected' });
+    await t.db.sql`
+      insert into orbit.integration_accounts (user_id, provider, external_account_id, status)
+      values (${userId}::uuid, 'linkedin', 'acc-9', 'active')`;
+    expect(await search('Priya Shah')).toEqual({
+      ok: true,
+      people: [
+        {
+          memberId: 'ACo1',
+          name: 'Priya Shah',
+          headline: 'Analyst at Evercore',
+          profileUrl: 'https://www.linkedin.com/in/priya-shah',
+          pictureUrl: 'https://media.licdn.com/p.jpg',
+          distance: 2,
+        },
+      ],
+    });
+    expect(calls[0]!.url).toContain('/api/v1/linkedin/search?account_id=acc-9');
+    expect(calls[0]!.body).toMatchObject({ api: 'classic', category: 'people', keywords: 'Priya Shah' });
+    // a day's searches are capped: a typed name settles into one, never one per key
+    await t.db.sql`
+      insert into orbit.audit_log (user_id, actor, action, target_table)
+      select ${userId}::uuid, 'user', 'linkedin.search', 'people' from generate_series(1, 80)`;
+    expect(await search('Priya')).toEqual({ ok: false, reason: 'limit' });
+  });
+});
+
 describe('/sync/status', () => {
   it('reports backfill progress', async () => {
     const { handler } = api();

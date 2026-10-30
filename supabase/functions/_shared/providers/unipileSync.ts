@@ -102,7 +102,32 @@ export interface UnipileSync {
     failureRedirectUrl?: string;
     expiresOn: string;
   }): Promise<ProviderResult<{ url: string }>>;
+  /** LinkedIn's people search from the account, any degree: the people a typed name or role finds, best first */
+  searchPeople(accountId: string, keywords: string, limit?: number): Promise<ProviderResult<UnipileFound[]>>;
 }
+
+/** One person a LinkedIn search found, as the app shows them: photo, name, headline. */
+export interface UnipileFound {
+  memberId: string;
+  name: string;
+  headline?: string;
+  location?: string;
+  profileUrl?: string;
+  pictureUrl?: string;
+  /** 1, 2 or 3: how far out on LinkedIn they are */
+  distance?: number;
+}
+
+const unipileSearchItemSchema = z.looseObject({
+  id: z.string().nullish(),
+  name: z.string().nullish(),
+  headline: z.string().nullish(),
+  location: z.string().nullish(),
+  public_profile_url: z.string().nullish(),
+  profile_url: z.string().nullish(),
+  profile_picture_url: z.string().nullish(),
+  network_distance: z.union([z.string(), z.number()]).nullish(),
+});
 
 /**
  * 100 a page: filing a relation (person, identities, employer) is a handful of round trips, so a page is a minute or
@@ -176,6 +201,36 @@ export function createUnipileSync(opts: ProviderOptions): UnipileSync {
         },
         schema: z.looseObject({ url: z.string() }),
       });
+    },
+    async searchPeople(accountId, keywords, limit = 8) {
+      if (!configured) return no();
+      const r = await requestJson(opts, {
+        provider: 'unipile',
+        url: `${base}/api/v1/linkedin/search${query({ account_id: accountId, limit })}`,
+        method: 'POST',
+        headers: headers(),
+        body: { api: 'classic', category: 'people', keywords, network_distance: [1, 2, 3] },
+        schema: page(unipileSearchItemSchema),
+      });
+      if (!r.ok) return r;
+      const degree = (d: unknown) => {
+        const m = /(\d)/.exec(String(d ?? ''));
+        return m ? Number(m[1]) : undefined;
+      };
+      return {
+        ok: true,
+        value: r.value.items
+          .filter((p) => !!p.id && !!p.name?.trim())
+          .map((p) => ({
+            memberId: p.id!,
+            name: p.name!.trim(),
+            headline: p.headline?.trim() || undefined,
+            location: p.location?.trim() || undefined,
+            profileUrl: p.public_profile_url || p.profile_url || undefined,
+            pictureUrl: p.profile_picture_url || undefined,
+            distance: degree(p.network_distance),
+          })),
+      };
     },
   };
 }

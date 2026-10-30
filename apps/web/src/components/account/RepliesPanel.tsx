@@ -1,7 +1,9 @@
 import type { ReplyClass, ReplyItem, ServerDraft, Slot } from '@orbit/core';
+import { useLiveQuery } from 'dexie-react-hooks';
 import { Linkedin, Mail } from 'lucide-react';
 import { useCallback, useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
+import { db } from '../../db/schema';
 import {
   approveServerDraft,
   blockingQuestions,
@@ -14,7 +16,7 @@ import {
   SLOT_CLASSES,
 } from '../../engine/replies';
 import { useSession } from '../../state/session';
-import { Button, Chip, cx, EmptyState, relDate, Spinner, Textarea, useToast } from '../../ui';
+import { Avatar, Button, Chip, cx, EmptyState, relDate, Spinner, Textarea, useToast } from '../../ui';
 
 const CLASS_TONE: Partial<Record<ReplyClass, 'good' | 'accent' | 'warn' | 'bad' | 'neutral'>> = {
   interested: 'good',
@@ -108,7 +110,6 @@ function ReplyCard({ reply }: { reply: ReplyItem }) {
   const [slots, setSlots] = useState<Slot[]>();
   const [booking, setBooking] = useState<Slot>();
   if (!user) return null;
-  const Icon = reply.channel === 'linkedin' ? Linkedin : Mail;
   const draftIt = async () => {
     setBusy('Drafting…');
     setError(undefined);
@@ -163,132 +164,174 @@ function ReplyCard({ reply }: { reply: ReplyItem }) {
     }
   };
   return (
-    <div className="rounded-[var(--radius-card)] border border-line p-3" data-testid="reply-card">
-      <div className="flex flex-wrap items-center gap-2">
-        <Icon size={14} className="text-ink-3" aria-hidden />
-        {reply.personId ? (
-          <Link to={`/people/${reply.personId}`} className="font-medium hover:underline">
-            {reply.personName}
-          </Link>
-        ) : (
-          <span className="font-medium">{reply.personName}</span>
-        )}
-        <Chip tone={CLASS_TONE[reply.replyClass] ?? 'neutral'}>{REPLY_CLASS_LABELS[reply.replyClass]}</Chip>
-        <span className="text-[12px] text-ink-3 ml-auto">{relDate(reply.receivedAt)}</span>
-      </div>
-      <p className="mt-1.5 text-[13px] text-ink-2 line-clamp-3 whitespace-pre-line">{reply.snippet}</p>
-      {done ? (
-        <p className="mt-2 text-[13px] text-good" role="status" data-testid="reply-approved">
-          {done}
-        </p>
-      ) : draft ? (
-        <div className="mt-3" data-testid="reply-draft">
-          <Textarea
-            value={body}
-            onChange={(e) => setBody(e.target.value)}
-            rows={Math.min(12, Math.max(4, body.split('\n').length + 1))}
-            aria-label={`Your reply to ${reply.personName}`}
-            data-testid="reply-body"
-          />
-          {open.length ? (
-            <p
-              className="mt-2 rounded-lg bg-warn-soft px-3 py-2 text-[13px] text-warn"
-              data-testid="reply-needs-input"
-            >
-              Orbit needs you to answer this in the text before it can go: {open[0]}
-            </p>
-          ) : null}
-          {slots?.length ? (
-            <div className="mt-2" data-testid="reply-slots">
-              <div className="text-[12px] text-ink-3 mb-1">Times you're free</div>
-              <div className="flex flex-wrap gap-1.5">
-                {slots.map((s) => (
-                  <button
-                    key={s.start}
-                    type="button"
-                    className={cx(
-                      'h-7 px-2.5 rounded-full text-[12.5px] border',
-                      booking?.start === s.start
-                        ? 'bg-ink text-white border-ink'
-                        : 'border-line hover:bg-canvas-2',
-                    )}
-                    onClick={() => setBooking(booking?.start === s.start ? undefined : s)}
-                    data-testid="reply-slot"
-                  >
-                    {s.label}
-                  </button>
-                ))}
+    <div
+      className="rounded-[var(--radius-card)] border border-line p-3.5 flex gap-3"
+      data-testid="reply-card"
+    >
+      <ReplyFace reply={reply} />
+      <div className="min-w-0 flex-1">
+        <div className="flex flex-wrap items-center gap-2">
+          {reply.personId ? (
+            <Link to={`/people/${reply.personId}`} className="font-medium hover:underline">
+              {reply.personName}
+            </Link>
+          ) : (
+            <span className="font-medium">{reply.personName}</span>
+          )}
+          <Chip tone={CLASS_TONE[reply.replyClass] ?? 'neutral'}>{REPLY_CLASS_LABELS[reply.replyClass]}</Chip>
+          <span className="text-[12px] text-ink-3 ml-auto">{relDate(reply.receivedAt)}</span>
+        </div>
+        <p className="mt-1.5 text-[13px] text-ink-2 line-clamp-3 whitespace-pre-line">{reply.snippet}</p>
+        {done ? (
+          <p className="mt-2 text-[13px] text-good" role="status" data-testid="reply-approved">
+            {done}
+          </p>
+        ) : draft ? (
+          <div className="mt-3" data-testid="reply-draft">
+            <Textarea
+              value={body}
+              onChange={(e) => setBody(e.target.value)}
+              rows={Math.min(12, Math.max(4, body.split('\n').length + 1))}
+              aria-label={`Your reply to ${reply.personName}`}
+              data-testid="reply-body"
+            />
+            {open.length ? (
+              <p
+                className="mt-2 rounded-lg bg-warn-soft px-3 py-2 text-[13px] text-warn"
+                data-testid="reply-needs-input"
+              >
+                Orbit needs you to answer this in the text before it can go: {open[0]}
+              </p>
+            ) : null}
+            {slots?.length ? (
+              <div className="mt-2" data-testid="reply-slots">
+                <div className="text-[12px] text-ink-3 mb-1">Times you're free</div>
+                <div className="flex flex-wrap gap-1.5">
+                  {slots.map((s) => (
+                    <button
+                      key={s.start}
+                      type="button"
+                      className={cx(
+                        'h-7 px-2.5 rounded-full text-[12.5px] border',
+                        booking?.start === s.start
+                          ? 'bg-ink text-white border-ink'
+                          : 'border-line hover:bg-canvas-2',
+                      )}
+                      onClick={() => setBooking(booking?.start === s.start ? undefined : s)}
+                      data-testid="reply-slot"
+                    >
+                      {s.label}
+                    </button>
+                  ))}
+                </div>
+                {booking ? (
+                  <div className="mt-2 flex flex-wrap items-center gap-2 text-[13px]">
+                    <span>Put {booking.label} on your calendar and invite them?</span>
+                    <Button
+                      size="sm"
+                      onClick={() => book(booking)}
+                      disabled={!!busy}
+                      data-testid="reply-book"
+                    >
+                      Book it
+                    </Button>
+                  </div>
+                ) : null}
               </div>
-              {booking ? (
-                <div className="mt-2 flex flex-wrap items-center gap-2 text-[13px]">
-                  <span>Put {booking.label} on your calendar and invite them?</span>
-                  <Button size="sm" onClick={() => book(booking)} disabled={!!busy} data-testid="reply-book">
-                    Book it
+            ) : null}
+            {confirming ? (
+              <div
+                className="mt-3 rounded-lg border border-line bg-canvas-2 p-3 text-[13px]"
+                data-testid="reply-confirm"
+              >
+                <p>This sends from your own LinkedIn account. Send it?</p>
+                <div className="mt-2 flex gap-2">
+                  <Button
+                    size="sm"
+                    variant="primary"
+                    onClick={() => approve(true)}
+                    disabled={!!busy}
+                    data-testid="reply-confirm-yes"
+                  >
+                    Yes, send it
+                  </Button>
+                  <Button size="sm" variant="ghost" onClick={() => setConfirming(false)}>
+                    Not yet
                   </Button>
                 </div>
-              ) : null}
-            </div>
-          ) : null}
-          {confirming ? (
-            <div
-              className="mt-3 rounded-lg border border-line bg-canvas-2 p-3 text-[13px]"
-              data-testid="reply-confirm"
-            >
-              <p>This sends from your own LinkedIn account. Send it?</p>
-              <div className="mt-2 flex gap-2">
+              </div>
+            ) : (
+              <div className="mt-3 flex flex-wrap items-center gap-2">
                 <Button
                   size="sm"
                   variant="primary"
-                  onClick={() => approve(true)}
-                  disabled={!!busy}
-                  data-testid="reply-confirm-yes"
+                  disabled={!!busy || open.length > 0 || !body.trim()}
+                  onClick={() => (draft.channel === 'linkedin' ? setConfirming(true) : approve())}
+                  data-testid="reply-approve"
                 >
-                  Yes, send it
+                  {busy ? <Spinner className="border-white/30 border-t-white" /> : null} Approve
                 </Button>
-                <Button size="sm" variant="ghost" onClick={() => setConfirming(false)}>
-                  Not yet
-                </Button>
+                <span className="text-[12px] text-ink-3">
+                  {draft.channel === 'linkedin'
+                    ? 'LinkedIn messages always wait for your tap.'
+                    : 'It goes out in your next send window, and you can cancel until then.'}
+                </span>
               </div>
-            </div>
-          ) : (
-            <div className="mt-3 flex flex-wrap items-center gap-2">
-              <Button
-                size="sm"
-                variant="primary"
-                disabled={!!busy || open.length > 0 || !body.trim()}
-                onClick={() => (draft.channel === 'linkedin' ? setConfirming(true) : approve())}
-                data-testid="reply-approve"
-              >
-                {busy ? <Spinner className="border-white/30 border-t-white" /> : null} Approve
-              </Button>
-              <span className="text-[12px] text-ink-3">
-                {draft.channel === 'linkedin'
-                  ? 'LinkedIn messages always wait for your tap.'
-                  : 'It goes out in your next send window, and you can cancel until then.'}
-              </span>
-            </div>
-          )}
-        </div>
-      ) : NO_DRAFT_CLASSES.has(reply.replyClass) ? (
-        <p className="mt-2 text-[12.5px] text-ink-3">
-          They asked not to be contacted, so Orbit won't write to them again.
-        </p>
-      ) : (
-        <Button
-          size="sm"
-          className="mt-2"
-          onClick={draftIt}
-          disabled={!!busy}
-          data-testid="reply-draft-button"
-        >
-          {busy ? <Spinner /> : null} Draft reply
-        </Button>
-      )}
-      {error ? (
-        <p className="mt-2 text-[12.5px] text-bad" role="alert">
-          {error}
-        </p>
-      ) : null}
+            )}
+          </div>
+        ) : NO_DRAFT_CLASSES.has(reply.replyClass) ? (
+          <p className="mt-2 text-[12.5px] text-ink-3">
+            They asked not to be contacted, so Orbit won't write to them again.
+          </p>
+        ) : (
+          <Button
+            size="sm"
+            className="mt-2"
+            onClick={draftIt}
+            disabled={!!busy}
+            data-testid="reply-draft-button"
+          >
+            {busy ? <Spinner /> : null} Draft reply
+          </Button>
+        )}
+        {error ? (
+          <p className="mt-2 text-[12.5px] text-bad" role="alert">
+            {error}
+          </p>
+        ) : null}
+      </div>
     </div>
+  );
+}
+
+/** Their photo, with where they wrote (LinkedIn or email) as a small badge on its corner. */
+function ReplyFace({ reply }: { reply: ReplyItem }) {
+  const person = useLiveQuery(
+    () => (reply.personId ? db.people.get(reply.personId) : undefined),
+    [reply.personId],
+  );
+  const Icon = reply.channel === 'linkedin' ? Linkedin : Mail;
+  const face = (
+    <span className="relative inline-flex shrink-0">
+      <Avatar
+        name={person?.displayName ?? reply.personName}
+        src={person?.photoUrl}
+        id={reply.personId ?? undefined}
+        size={40}
+      />
+      <span
+        className="absolute -right-1 -bottom-1 w-[18px] h-[18px] rounded-full bg-canvas border border-line inline-flex items-center justify-center text-ink-2"
+        title={reply.channel === 'linkedin' ? 'On LinkedIn' : 'By email'}
+      >
+        <Icon size={10} aria-hidden />
+      </span>
+    </span>
+  );
+  return reply.personId ? (
+    <Link to={`/people/${reply.personId}`} className="shrink-0" tabIndex={-1} aria-hidden>
+      {face}
+    </Link>
+  ) : (
+    face
   );
 }

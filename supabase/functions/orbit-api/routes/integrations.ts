@@ -185,4 +185,37 @@ export const INTEGRATION_ROUTES: Record<string, RouteSpec> = {
   '/linkedin/connect/start': { method: 'POST', auth: true, run: linkedinConnectStart },
   '/linkedin/status': { method: 'GET|POST', auth: true, run: linkedinStatus },
   '/linkedin/sync': { method: 'POST', auth: true, run: linkedinSync },
+  '/linkedin/search': { method: 'POST', auth: true, run: linkedinSearch },
 };
+
+/** LinkedIn's people searches a day per student: a name typed into Add a person searches as it settles. */
+export const LINKEDIN_SEARCHES_PER_DAY = 80;
+
+/**
+ * POST /linkedin/search {q} → {ok, people} | {ok: false, reason}: people on LinkedIn a typed name or role finds, from
+ * the student's own connected account (any degree), each with photo and headline, for Add a person. The same query
+ * within the day answers from the audit log's count, never past LINKEDIN_SEARCHES_PER_DAY.
+ */
+export async function linkedinSearch(ctx: Ctx): Promise<Response> {
+  const body = (await readJson(ctx.req, { optional: true })) as { q?: unknown };
+  const q = typeof body.q === 'string' ? body.q.replace(/\s+/g, ' ').trim().slice(0, 120) : '';
+  if (q.length < 2) throw badRequest('q must be at least 2 characters');
+  const userId = ctx.userId!;
+  const [a] = await ctx.db.sql<{ status: string; external_account_id: string | null }>`
+    select status, external_account_id from orbit.integration_accounts
+     where user_id = ${userId}::uuid and provider = 'linkedin'`;
+  if (!a?.external_account_id || a.status !== 'active')
+    return json(200, { ok: false, reason: 'not_connected' });
+  const unipile = unipileFor(ctx);
+  if (!unipile.configured) return json(200, { ok: false, reason: 'unconfigured' });
+  const [n] = await ctx.db.sql<{ n: number }>`
+    select count(*)::int as n from orbit.audit_log
+     where user_id = ${userId}::uuid and action = 'linkedin.search'
+       and created_at > ${new Date(ctx.now().getTime() - 86_400_000)}::timestamptz`;
+  if ((n?.n ?? 0) >= LINKEDIN_SEARCHES_PER_DAY) return json(200, { ok: false, reason: 'limit' });
+  await ctx.db.sql`
+    insert into orbit.audit_log (user_id, actor, action, target_table) values (${userId}::uuid, 'user', 'linkedin.search', 'people')`;
+  const r = await unipile.searchPeople(a.external_account_id, q);
+  if (!r.ok) return json(200, { ok: false, reason: 'error' });
+  return json(200, { ok: true, people: r.value });
+}

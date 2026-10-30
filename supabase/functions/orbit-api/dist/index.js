@@ -7027,6 +7027,16 @@ var unipileMessageSchema = z.looseObject({
   deleted: z.union([z.number(), z.boolean()]).nullish()
 });
 var page = (item) => z.looseObject({ items: z.array(item).default([]), cursor: z.string().nullish() });
+var unipileSearchItemSchema2 = z.looseObject({
+  id: z.string().nullish(),
+  name: z.string().nullish(),
+  headline: z.string().nullish(),
+  location: z.string().nullish(),
+  public_profile_url: z.string().nullish(),
+  profile_url: z.string().nullish(),
+  profile_picture_url: z.string().nullish(),
+  network_distance: z.union([z.string(), z.number()]).nullish()
+});
 var RELATIONS_LIMIT = 100;
 var CHATS_LIMIT = 250;
 var MESSAGES_LIMIT = 100;
@@ -7091,6 +7101,34 @@ function createUnipileSync(opts) {
         },
         schema: z.looseObject({ url: z.string() })
       });
+    },
+    async searchPeople(accountId, keywords, limit = 8) {
+      if (!configured) return no();
+      const r = await requestJson(opts, {
+        provider: "unipile",
+        url: `${base}/api/v1/linkedin/search${query({ account_id: accountId, limit })}`,
+        method: "POST",
+        headers: headers(),
+        body: { api: "classic", category: "people", keywords, network_distance: [1, 2, 3] },
+        schema: page(unipileSearchItemSchema2)
+      });
+      if (!r.ok) return r;
+      const degree = (d) => {
+        const m = /(\d)/.exec(String(d ?? ""));
+        return m ? Number(m[1]) : void 0;
+      };
+      return {
+        ok: true,
+        value: r.value.items.filter((p) => !!p.id && !!p.name?.trim()).map((p) => ({
+          memberId: p.id,
+          name: p.name.trim(),
+          headline: p.headline?.trim() || void 0,
+          location: p.location?.trim() || void 0,
+          profileUrl: p.public_profile_url || p.profile_url || void 0,
+          pictureUrl: p.profile_picture_url || void 0,
+          distance: degree(p.network_distance)
+        }))
+      };
     }
   };
 }
@@ -7227,8 +7265,33 @@ var INTEGRATION_ROUTES = {
   "/google/sync": { method: "POST", auth: true, run: googleSync },
   "/linkedin/connect/start": { method: "POST", auth: true, run: linkedinConnectStart },
   "/linkedin/status": { method: "GET|POST", auth: true, run: linkedinStatus },
-  "/linkedin/sync": { method: "POST", auth: true, run: linkedinSync }
+  "/linkedin/sync": { method: "POST", auth: true, run: linkedinSync },
+  "/linkedin/search": { method: "POST", auth: true, run: linkedinSearch }
 };
+var LINKEDIN_SEARCHES_PER_DAY = 80;
+async function linkedinSearch(ctx) {
+  const body2 = await readJson(ctx.req, { optional: true });
+  const q = typeof body2.q === "string" ? body2.q.replace(/\s+/g, " ").trim().slice(0, 120) : "";
+  if (q.length < 2) throw badRequest("q must be at least 2 characters");
+  const userId = ctx.userId;
+  const [a] = await ctx.db.sql`
+    select status, external_account_id from orbit.integration_accounts
+     where user_id = ${userId}::uuid and provider = 'linkedin'`;
+  if (!a?.external_account_id || a.status !== "active")
+    return json(200, { ok: false, reason: "not_connected" });
+  const unipile = unipileFor(ctx);
+  if (!unipile.configured) return json(200, { ok: false, reason: "unconfigured" });
+  const [n] = await ctx.db.sql`
+    select count(*)::int as n from orbit.audit_log
+     where user_id = ${userId}::uuid and action = 'linkedin.search'
+       and created_at > ${new Date(ctx.now().getTime() - 864e5)}::timestamptz`;
+  if ((n?.n ?? 0) >= LINKEDIN_SEARCHES_PER_DAY) return json(200, { ok: false, reason: "limit" });
+  await ctx.db.sql`
+    insert into orbit.audit_log (user_id, actor, action, target_table) values (${userId}::uuid, 'user', 'linkedin.search', 'people')`;
+  const r = await unipile.searchPeople(a.external_account_id, q);
+  if (!r.ok) return json(200, { ok: false, reason: "error" });
+  return json(200, { ok: true, people: r.value });
+}
 
 // supabase/functions/_shared/memory/memory.ts
 import { z as z4 } from "npm:zod@3.25.76/v4";

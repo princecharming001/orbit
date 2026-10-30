@@ -8,7 +8,7 @@ import type { CoffeeChat, User } from '@orbit/core';
 import { newId, roleFromHeadline } from '@orbit/core';
 import { db } from '../db/schema';
 import { mockLinkedInSearchPage, usesMockConnectors } from '../integrations/connectorsMock';
-import { isServerUser } from '../integrations/orbitApi';
+import { callApi, isServerUser } from '../integrations/orbitApi';
 import {
   type LinkedInFound,
   type LinkedInSearchQuery,
@@ -194,4 +194,53 @@ export async function addLinkedInFound(
     out.map((p) => p.id),
   );
   return { ok: true, people: out };
+}
+
+export type PeopleLookup =
+  | { ok: true; people: FoundView[] }
+  | { ok: false; reason: 'not_connected' | 'limit' | 'unavailable' };
+
+/** One search's answer per query in this session: typing the same name again asks LinkedIn nothing. */
+const lookups = new Map<string, Promise<PeopleLookup>>();
+
+/**
+ * People on LinkedIn a typed name or role finds, for Add a person: photo, name and headline, any degree. With an
+ * account the server searches from the LinkedIn connected there; otherwise the LinkedIn connected in this browser
+ * does (the sample student searches its mock pool). Each result can be added with addLinkedInFound.
+ */
+export function lookUpLinkedInPeople(user: Pick<User, 'id'>, q: string): Promise<PeopleLookup> {
+  const key = `${user.id}|${q.trim().toLowerCase()}`;
+  const hit = lookups.get(key);
+  if (hit) return hit;
+  const run = (async (): Promise<PeopleLookup> => {
+    let people: LinkedInFound[];
+    if (isServerUser(user.id)) {
+      const r = await callApi('/linkedin/search', { q: q.trim() });
+      if (!r.ok) return { ok: false, reason: 'unavailable' };
+      if (!r.value.ok)
+        return {
+          ok: false,
+          reason:
+            r.value.reason === 'not_connected' || r.value.reason === 'limit' ? r.value.reason : 'unavailable',
+        };
+      people = r.value.people;
+    } else {
+      if (!(await linkedInSearchReady(user))) return { ok: false, reason: 'not_connected' };
+      const r = await searchLinkedInLive(user, q);
+      if (!r.ok) return { ok: false, reason: r.limit ? 'limit' : 'unavailable' };
+      people = r.people;
+    }
+    const mine = await db.people.where('userId').equals(user.id).toArray();
+    const known = new Map(mine.filter((p) => p.linkedinMemberId).map((p) => [p.linkedinMemberId!, p.id]));
+    return {
+      ok: true,
+      people: people.map((p) => ({ ...p, id: rememberFound(p), knownPersonId: known.get(p.memberId) })),
+    };
+  })();
+  lookups.set(key, run);
+  // a failure is not kept: the next keystroke may find LinkedIn back
+  void run.then((r) => {
+    if (!r.ok) lookups.delete(key);
+  });
+  return run;
 }

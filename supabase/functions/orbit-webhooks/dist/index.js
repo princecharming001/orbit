@@ -593,6 +593,16 @@ var unipileMessageSchema = z.looseObject({
   hidden: z.union([z.number(), z.boolean()]).nullish(),
   deleted: z.union([z.number(), z.boolean()]).nullish()
 });
+var unipileSearchItemSchema = z.looseObject({
+  id: z.string().nullish(),
+  name: z.string().nullish(),
+  headline: z.string().nullish(),
+  location: z.string().nullish(),
+  public_profile_url: z.string().nullish(),
+  profile_url: z.string().nullish(),
+  profile_picture_url: z.string().nullish(),
+  network_distance: z.union([z.string(), z.number()]).nullish()
+});
 function unipileTime(v) {
   if (v === null || v === void 0 || v === "") return void 0;
   const d = typeof v === "number" ? new Date(v) : /^\d+$/.test(v) ? new Date(Number(v)) : new Date(v);

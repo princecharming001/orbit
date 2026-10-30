@@ -162,6 +162,13 @@ export interface ApiRoutes {
   '/google/sync': [GoogleSyncRequest, QueuedResponse];
   '/linkedin/connect/start': [Record<string, never>, LinkedinConnectStartResponse];
   '/linkedin/status': [Record<string, never>, LinkedinStatusResponse];
+  '/linkedin/search': [
+    { q: string },
+    (
+      | { ok: true; people: import('./unipile').LinkedInFound[] }
+      | { ok: false; reason: 'not_connected' | 'unconfigured' | 'limit' | 'error' }
+    ),
+  ];
   '/linkedin/sync': [Record<string, never>, QueuedResponse];
   '/goals/list': [Record<string, never>, GoalsListResponse];
   '/goals/upsert': [GoalUpsertRequest, GoalUpsertResponse];
