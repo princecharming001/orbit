@@ -46,6 +46,8 @@ export function sectorOf(
     /\b(software|technology|tech|ai|saas|internet)\b/i.test(person.industry ?? '')
   )
     return 'tech';
+  // a professor is asked about their research, never in the register of the student's target industry
+  if (ACADEMIC_TITLE.test(t)) return 'general';
   const f = userFunctions[0];
   if (f === 'ib' || f === 'finance' || f === 'vc' || f === 'quant') return 'finance';
   if (f === 'consulting') return 'consulting';
@@ -53,9 +55,15 @@ export function sectorOf(
   return 'general';
 }
 
+/** A professor, lecturer, dean or other faculty title: an academic, never a junior employee. */
+export const ACADEMIC_TITLE =
+  /\b(professor|prof\.|lecturer|faculty|dean|provost|postdoc(toral)?|principal investigator|department chair)\b/i;
+
 export function seniorityOf(title: string | undefined): Seniority {
   const t = (title ?? '').toLowerCase();
   if (!t) return 'mid';
+  // "Associate Professor" and "Assistant Professor" are faculty, not associates; a postdoc is early in a career
+  if (ACADEMIC_TITLE.test(t)) return /\bpostdoc/.test(t) ? 'mid' : 'senior';
   const execTitle =
     /\b(ceo|cfo|coo|cto|chief|founder|co-founder|partner|managing director|\bmd\b|managing partner|president|general partner|head of|svp|evp)\b/.test(
       t,
@@ -110,9 +118,14 @@ export function isRecruiter(title: string | undefined): boolean {
 export function yearLabel(gradYear: number | undefined, degree: string | undefined, now: Date): string {
   const d = (degree ?? '').toUpperCase();
   const grad = /\b(MBA|MS|MSC|MENG|MA|PHD|JD|MPA|MPP|MFIN)\b/.test(d);
+  // a PhD runs four to seven years: which year it is cannot be told from the graduation year, so it is not said
+  if (/\bPHD\b|\bDPHIL\b|DOCTOR/.test(d)) return 'PhD student';
+  // an associate degree (AA, AS, AAS) is two years: first-year or second-year, never "senior"
+  const twoYear = /^(AA|AS|AAS|AAT|AST|AFA|A\.A\.?|A\.S\.?)$|\bASSOCIATE\b/.test(d.trim());
   if (!gradYear) return grad ? `${d.includes('MBA') ? 'MBA' : 'graduate'} student` : 'student';
   const academicYear = now.getMonth() >= 7 ? now.getFullYear() + 1 : now.getFullYear();
   const left = gradYear - academicYear;
+  if (twoYear) return left >= 1 ? 'first-year' : 'second-year';
   if (grad) {
     const program = d.includes('MBA') ? 'MBA' : d.includes('PHD') ? 'PhD' : "master's";
     if (left >= 1) return `first-year ${program} student`;
@@ -175,20 +188,32 @@ export type FirmKind =
   | 'big_tech'
   | 'startup'
   | 'tech'
+  | 'academic'
   | 'other';
 
+/**
+ * `userFunctions`: the student's targets, for a person Orbit knows nothing about. A student going into venture who
+ * writes to someone with no title or firm on record is asked a venture question, never one about "your bank".
+ */
 export function firmKindOf(
   person: { title?: string; org?: string; industry?: string },
   sector: Sector,
+  userFunctions: string[] = [],
 ): FirmKind {
   const t = person.title ?? '';
+  if (ACADEMIC_TITLE.test(t)) return 'academic';
   // an engineer or a PM at a bank or a trading firm is asked what an engineer is asked
   const known = sector === 'tech' ? undefined : financeFirmKind(person.org);
   if (known) return known;
   if (/\b(quant\w*|trader|trading)\b/i.test(t)) return 'trading';
   if (/\b(venture|general partner)\b/i.test(t) || /\bventure/i.test(person.industry ?? '')) return 'vc';
-  if (sector === 'finance')
-    return /\bprivate equity\b/i.test(`${t} ${person.industry ?? ''}`) ? 'pe' : 'bank';
+  if (sector === 'finance') {
+    if (/\bprivate equity\b/i.test(`${t} ${person.industry ?? ''}`)) return 'pe';
+    // nothing on record says this is a bank: the finance sector came from the student's own target
+    const nothingKnown = !t.trim() && !(person.org ?? '').trim() && !(person.industry ?? '').trim();
+    if (nothingKnown && userFunctions[0] === 'vc') return 'vc';
+    return 'bank';
+  }
   if (sector === 'consulting') return 'consulting';
   if (sector === 'tech') {
     if (BIG_TECH_ORG.test(person.org ?? '')) return 'big_tech';

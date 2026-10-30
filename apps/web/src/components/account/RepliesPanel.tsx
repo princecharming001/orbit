@@ -61,13 +61,7 @@ export function RepliesPanel() {
         <Spinner />
       </div>
     );
-  if (!replies.length)
-    return (
-      <EmptyState
-        title="No replies yet"
-        body="When someone answers your outreach, their reply shows up here with a draft answer in your voice."
-      />
-    );
+  if (!replies.length) return <EmptyState title="No replies yet" />;
   const classes = [...new Set(replies.map((r) => r.replyClass))];
   const shown = filter === 'all' ? replies : replies.filter((r) => r.replyClass === filter);
   return (

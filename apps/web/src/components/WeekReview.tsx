@@ -172,10 +172,7 @@ export function WeekReviewDeck({ onClose }: { onClose: () => void }) {
         >
           <ChevronLeft size={17} />
         </button>
-        <span className="min-w-0 flex-1 truncate text-[11.5px] text-ink-3 hidden md:block" aria-hidden>
-          ← → to move · Esc to close
-        </span>
-        <span className="flex-1 md:hidden" />
+        <span className="flex-1" />
         <Button
           size="sm"
           variant="primary"

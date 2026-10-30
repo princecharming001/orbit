@@ -81,9 +81,6 @@ export function ScheduleChatDialog({
   return (
     <Modal open onClose={onClose} title={`When is your chat with ${firstName}?`}>
       <div className="space-y-3 text-[13.5px]" data-testid="schedule-chat">
-        <p className="text-ink-2">
-          Orbit puts prep in Drafts the day before and reminds you to say thanks after.
-        </p>
         <div className="grid grid-cols-[1fr_auto] gap-3">
           <div>
             <Label htmlFor="schedule-when">Date and time</Label>

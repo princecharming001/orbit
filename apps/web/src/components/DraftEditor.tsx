@@ -99,20 +99,17 @@ const INPUT_PROMPT: Record<PromptNeed, { label: string; hint: string; placeholde
   },
 };
 
-/** The chat's compact editor: a short label beside the field and one line of help under it. */
-const COMPACT_PROMPT: Record<PromptNeed, { label: string; hint: string }> = {
-  connection: {
-    label: WHY_THEM,
-    hint: 'How you found them, what you share, or something of theirs you read.',
-  },
-  update: { label: 'Your update', hint: 'What you did with their advice, or what changed since you spoke.' },
-  news: { label: 'Congrats on', hint: 'Finish "Just saw the news about ...".' },
-  target: { label: 'Intro to', hint: 'Their name, and title and company if you know them.' },
-  answer: { label: 'Your answer', hint: 'One or two sentences in your own words.' },
-  role: { label: 'Role', hint: 'The role and the company you are applying to.' },
-  mutual: { label: 'Who you both know', hint: 'Their name, so they can place the connection.' },
-  posting: { label: 'Posting', hint: 'The link to the role they asked for.' },
-  takeaway: { label: 'What stuck', hint: 'Their advice, a story or a point they made, in a few words.' },
+/** The chat's compact editor: a short label beside the field. */
+const COMPACT_LABEL: Record<PromptNeed, string> = {
+  connection: WHY_THEM,
+  update: 'Your update',
+  news: 'Congrats on',
+  target: 'Intro to',
+  answer: 'Your answer',
+  role: 'Role',
+  mutual: 'Who you both know',
+  posting: 'Posting',
+  takeaway: 'What stuck',
 };
 
 /** The tallest the chat's editor grows before it scrolls, so a long email does not fill the screen. */
@@ -621,7 +618,7 @@ export function DraftEditor({
                   htmlFor={`need-${draft.id}-${n}`}
                   className="text-[12.5px] font-medium text-ink shrink-0"
                 >
-                  {COMPACT_PROMPT[n].label}
+                  {COMPACT_LABEL[n]}
                 </label>
                 <Input
                   id={`need-${draft.id}-${n}`}
@@ -667,11 +664,10 @@ export function DraftEditor({
                 </div>
               </div>
             ) : (
-              (needs.length > 1 || (edited && !hasPlaceholder)) && (
+              edited &&
+              !hasPlaceholder && (
                 <p className="text-[12px] text-ink-3 mt-1.5" data-testid={`draft-input-hint-${needs[0]}`}>
-                  {edited && !hasPlaceholder
-                    ? 'You wrote it in yourself, so it can go. Or add it here and Orbit fits it in.'
-                    : 'Only you can give these. Or edit the bracketed lines below.'}
+                  You wrote it in yourself, so it can go. Or add it here and Orbit fits it in.
                 </p>
               )
             )}
@@ -867,11 +863,11 @@ export function DraftEditor({
               >
                 {regenerating ? 'Adding…' : keepsMine ? 'Add to my message' : 'Redraft with this'}
               </Button>
-              <span className="text-[12px] text-ink-3">
-                {keepsMine
-                  ? 'It goes where the bracketed line is. The rest of your text stays.'
-                  : 'or edit the bracketed line yourself below.'}
-              </span>
+              {keepsMine && (
+                <span className="text-[12px] text-ink-3">
+                  It goes where the bracketed line is. The rest of your text stays.
+                </span>
+              )}
             </div>
           )}
         </div>
@@ -929,11 +925,6 @@ export function DraftEditor({
             onChange={(e) => setSubject(e.target.value)}
             placeholder="Subject"
           />
-        </div>
-      )}
-      {isLinkedIn && connectionNote && (
-        <div className="text-[12px] text-ink-3 mb-2" data-testid="draft-linkedin-hint">
-          Goes with your connection request.
         </div>
       )}
       <Textarea

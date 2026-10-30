@@ -5,7 +5,6 @@
  */
 import type { OutboundMessage } from '@orbit/core';
 import { useEffect, useState } from 'react';
-import { Link } from 'react-router-dom';
 import { db } from '../db/schema';
 import { checkIntroNote } from '../engine/introNote';
 import { useSession } from '../state/session';
@@ -51,13 +50,6 @@ export function ForwardNote({ draft, introducer }: { draft: OutboundMessage; int
           {problems[0]}
         </p>
       )}
-      <p className="text-[12px] text-ink-3 mt-1">
-        Your note, saved.{' '}
-        <Link to="/settings/profile#intro-note" className="underline underline-offset-2 hover:text-ink">
-          Edit it once
-        </Link>{' '}
-        and every ask reuses it.
-      </p>
     </div>
   );
 }

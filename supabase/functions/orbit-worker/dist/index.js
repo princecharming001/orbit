@@ -1546,12 +1546,14 @@ function sectorOf(person, userFunctions = []) {
   if (CONSULTING_TITLE.test(t) && !TECH_TITLE.test(t)) return "consulting";
   if (TECH_TITLE.test(t) || TECH_ORG.test(o) || /\b(software|technology|tech|ai|saas|internet)\b/i.test(person.industry ?? ""))
     return "tech";
+  if (ACADEMIC_TITLE.test(t)) return "general";
   const f = userFunctions[0];
   if (f === "ib" || f === "finance" || f === "vc" || f === "quant") return "finance";
   if (f === "consulting") return "consulting";
   if (f === "swe" || f === "pm" || f === "design" || f === "data") return "tech";
   return "general";
 }
+var ACADEMIC_TITLE = /\b(professor|prof\.|lecturer|faculty|dean|provost|postdoc(toral)?|principal investigator|department chair)\b/i;
 var RECRUITER_TITLE = new RegExp(
   [
     String.raw`\brecruit(?:er|ers|ing|ment)\b`,
@@ -1668,6 +1670,49 @@ var NAMED_DATE_REV = new RegExp(`\\b(\\d{1,2})(?:st|nd|rd|th)? (?:of )?${MONTH_N
 var MONTH_EDGE = new RegExp(
   `\\b(?:(end|start|beginning) of (?:(the|this|next) month\\b|${MONTH_NAME})|next month\\b)`
 );
+
+// packages/core/src/drafts/phrasing.ts
+var SCHOOL_SHORT = {
+  "massachusetts institute of technology": "MIT",
+  "california institute of technology": "Caltech",
+  "georgia institute of technology": "Georgia Tech",
+  "university of pennsylvania": "Penn",
+  "new york university": "NYU",
+  "university of california, berkeley": "Berkeley",
+  "university of california berkeley": "Berkeley",
+  "uc berkeley": "Berkeley",
+  "university of california, los angeles": "UCLA",
+  "university of southern california": "USC",
+  "the ohio state university": "Ohio State",
+  "university of texas at austin": "UT Austin",
+  "the university of texas at austin": "UT Austin",
+  "university of north carolina at chapel hill": "UNC",
+  "university of illinois urbana-champaign": "UIUC",
+  "university of illinois at urbana-champaign": "UIUC",
+  "washington university in st. louis": "WashU",
+  "boston university": "BU",
+  "boston college": "BC",
+  "london school of economics": "LSE",
+  "carnegie mellon university": "Carnegie Mellon",
+  "universidad de los andes": "Los Andes",
+  "london school of economics and political science": "LSE"
+};
+function schoolShort(school) {
+  const t = (school ?? "").replace(/\s+/g, " ").trim();
+  if (!t) return "";
+  if (/\b(inc|llc|ltd|corp|corporation|gmbh|plc|co)\.?$/i.test(t)) return "";
+  const known = SCHOOL_SHORT[t.toLowerCase()];
+  if (known) return known;
+  const iit = t.match(/^Indian Institute of (Technology|Management|Science),? ?(?:\(?([A-Z][\w ]*?)\)?)?$/);
+  if (iit) return `II${iit[1][0]}${iit[2] ? ` ${iit[2].trim()}` : ""}`;
+  const uc = t.match(/^(?:The )?University of California,? (?:at )?([A-Z][\w .'-]+)$/);
+  if (uc) return `UC ${uc[1].trim()}`;
+  const of = t.match(/^(?:The )?University of ([A-Z][\w.&'-]*(?: [A-Z][\w.&'-]*)*?)(?:,.*| at .*| in .*)?$/);
+  if (of) return of[1];
+  const suffix = t.match(/^(?:The )?(.+?) (?:University|College)$/);
+  if (suffix && suffix[1].length >= 3) return suffix[1];
+  return t;
+}
 
 // packages/core/src/pipeline/transitions.ts
 var ACTIVE_STAGES = [
@@ -2077,7 +2122,9 @@ function mentionTarget(clause2) {
     clause2
   );
   if (!m) return void 0;
-  const words4 = m[1].replace(/^["'‘“]+|["'’”]+$/g, "").replace(/\b(in|to|on|with|when|unless|because|anywhere|ever|at all|please)\b.*$/i, "").replace(/^(my|the|that|about|any|a|an|our)\s+/i, "").trim().split(/\s+/).slice(0, 4);
+  const what = m[1].replace(/^that\s+/i, "").replace(/^I\s+(?:go to|attend|am at|study at|went to|transferred from|am|was|have|had)\s+/i, "").replace(/^I'm\s+(?=(an?|the)\s)/i, (x) => /\bstudent\b/i.test(m[1]) ? x : "");
+  if (/^(I|I'm|I am|I go)$/i.test(what.trim())) return void 0;
+  const words4 = what.replace(/^["'‘“]+|["'’”]+$/g, "").replace(/\b(in|to|on|with|when|unless|because|anywhere|ever|at all|please)\b.*$/i, "").replace(/^(my|the|that|about|any|a|an|our)\s+/i, "").trim().split(/\s+/).slice(0, 4);
   const phrase = words4.join(" ").trim();
   if (phrase.length < 2 || VAGUE.has(phrase.toLowerCase())) return void 0;
   return phrase;
@@ -2086,7 +2133,22 @@ function sentence(c) {
   const t = c.trim();
   return `${t.charAt(0).toUpperCase()}${t.slice(1)}`;
 }
-function neverDoChecks(text) {
+var YEAR_NOUN = /\b(I'm|I am)\s+an?\s+(?:(?:first|second|third|fourth|final)-year|freshman|sophomore|junior|senior|undergrad(?:uate)?)\b/i;
+function forbidsStudent(text) {
+  return clauses(text ?? "").some(
+    (c) => NEGATION.test(c) && /\b(say|mention|call me|describe me as|introduce me as|write)\b[^.]*\b(student|undergrad|in school|in college)\b/i.test(
+      c
+    )
+  );
+}
+function forbidsSchool(text) {
+  return clauses(text ?? "").some(
+    (c) => NEGATION.test(c) && /\b(mention|say|name|bring up|reference|include|talk about)\b[^.]*\b(my (school|university|college|uni)|where I (study|go to school))\b/i.test(
+      c
+    )
+  );
+}
+function neverDoChecks(text, subject = {}) {
   if (!text?.trim()) return [];
   const out = [];
   const add2 = (rule, breaks) => out.push({ rule, breaks });
@@ -2103,16 +2165,20 @@ function neverDoChecks(text) {
     if (/\breferr/.test(c) && /\b(ask|asking|request|requesting|mention|for)\b/.test(c))
       add2(rule, (b) => /\breferr(al|als|ed|ing)?\b|\brefer me\b/i.test(b));
     if (/\b(gpa|grades?)\b/.test(c)) add2(rule, (b) => /\bgpa\b|\bgrade point\b/i.test(b));
+    const schoolNames = forbidsSchool(raw) ? (subject.school ?? []).map((n) => n.trim()).filter((n) => n.length >= 2) : [];
+    if (schoolNames.length) add2(rule, (b) => schoolNames.some((n) => hasPhrase(b, n)));
+    if (forbidsStudent(raw)) add2(rule, (b) => /\bstudent\b/i.test(b) || YEAR_NOUN.test(b));
+    if (/\bcommunity college\b/i.test(c)) add2(rule, (b) => /\bcommunity college\b/i.test(b));
     const target = mentionTarget(raw);
-    if (target && !/\b(gpa|grades?|referrals?|exclamation|emojis?)\b/i.test(target))
+    if (target && !/\b(gpa|grades?|referrals?|exclamation|emojis?)\b/i.test(target) && !(schoolNames.length && /^(my )?(school|university|college|uni)$/i.test(target)) && !forbidsStudent(raw))
       add2(rule, (b) => hasPhrase(b, target));
   }
   return out;
 }
-function brokenNeverRules(body, neverDo) {
+function brokenNeverRules(body, neverDo, subject = {}) {
   return [
     ...new Set(
-      neverDoChecks(neverDo).filter((c) => c.breaks(body)).map((c) => c.rule)
+      neverDoChecks(neverDo, subject).filter((c) => c.breaks(body)).map((c) => c.rule)
     )
   ];
 }
@@ -4355,7 +4421,9 @@ function validateDraft(d, opts) {
       issues.push({ code: "ungrounded_claim", detail: c.text, blocking: true });
   if (opts.recipientFirstName && !body.includes(opts.recipientFirstName) && !(opts.recipientFullName && body.includes(opts.recipientFullName)))
     issues.push({ code: "missing_name", detail: opts.recipientFirstName, blocking: true });
-  for (const rule of brokenNeverRules(body, opts.neverDo))
+  const school = opts.school?.trim() ? [opts.school.trim(), schoolShort(opts.school)] : [];
+  for (const rule of brokenNeverRules(`${d.subject ?? ""}
+${body}`, opts.neverDo, { school }))
     issues.push({ code: "never_do", detail: rule, blocking: false });
   if (/\b(ignore (all )?(previous|prior) instructions|system prompt)\b/i.test(body))
     issues.push({ code: "injection", detail: "instruction-like text", blocking: true });
@@ -18548,7 +18616,7 @@ var unipileSearchItemSchema2 = z.looseObject({
   profile_picture_url: z.string().nullish(),
   network_distance: z.union([z.string(), z.number()]).nullish()
 });
-var RELATIONS_LIMIT = 100;
+var RELATIONS_LIMIT = 50;
 var CHATS_LIMIT = 250;
 var MESSAGES_LIMIT = 100;
 function createUnipileSync(opts) {

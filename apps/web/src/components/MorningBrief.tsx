@@ -425,9 +425,7 @@ export function MorningBrief() {
             </button>
           </div>
         ) : (
-          <span className="min-w-0 flex-1 truncate text-[11.5px] text-ink-3 hidden md:block" aria-hidden>
-            ← → to move · Enter for the main button · Esc to minimize
-          </span>
+          <span className="flex-1 hidden md:block" aria-hidden />
         )}
         {!last && <span className="flex-1 md:hidden" />}
         {slide.kind !== 'done' && (
@@ -536,9 +534,6 @@ function Overview({ deck, onLeave }: { deck: MorningDeck; onLeave: (to?: string)
           <Button variant="primary" onClick={() => onLeave('/people')} data-testid="morning-add-people">
             Add people <ArrowUpRight size={14} />
           </Button>
-          <p className="text-[12px] text-ink-3 mt-1.5">
-            Opens People. This brief waits at the bottom of the screen.
-          </p>
         </div>
       )}
     </div>
@@ -833,7 +828,6 @@ function Decision({
   const decided = result && result.o !== 'skipped' && result.o !== 'sent';
   const body = draft ? (draft.bodyFinal ?? draft.bodyDraft) : '';
   const gap = body ? gapLabel(body) : undefined;
-  const primary = actions.find((a) => a.primary);
   const role = person
     ? [person.currentTitle, person.currentOrganizationRaw].filter(Boolean).join(' at ') || person.headline
     : undefined;
@@ -895,9 +889,6 @@ function Decision({
         <p className="mt-3 rounded-[12px] bg-canvas-2 px-3 py-2.5 text-[13px] text-ink-2">
           Step {chat!.warmUp!.actions.indexOf(warmAction) + 1} of {chat!.warmUp!.actions.length}:{' '}
           {warmAction.label}.
-          {openedLinkedIn
-            ? ' When you have done it, mark it done here.'
-            : ' LinkedIn opens in a new tab; this stays open.'}
         </p>
       )}
       {draft && !showEditor && (
@@ -916,11 +907,6 @@ function Decision({
             <span className="text-ink-3">The draft is empty. Open it to write it here.</span>
           )}
         </button>
-      )}
-      {!draftId && actions.some((a) => a.id === 'review') && !showEditor && (
-        <p className="mt-3 text-[13px] text-ink-3">
-          Orbit writes the draft when you open it. Nothing is sent until you approve it.
-        </p>
       )}
 
       {showEditor && draft && (
@@ -961,8 +947,8 @@ function Decision({
           <Check size={15} className="shrink-0" />
           <span className="min-w-0">
             {s.kind === 'confirm_merge'
-              ? 'Already settled: these two are one record now. Nothing to decide here.'
-              : 'Already taken care of. Nothing to decide here.'}
+              ? 'Already settled: these two are one record now.'
+              : 'Already taken care of.'}
           </span>
         </div>
       ) : decided ? (
@@ -1026,11 +1012,6 @@ function Decision({
                 />
               ))}
             </div>
-            {primary && (
-              <p className="text-[12px] text-ink-3 mt-2" data-testid="morning-hint">
-                {primary.hint}.
-              </p>
-            )}
           </>
         )
       )}
@@ -1278,7 +1259,6 @@ function Moves({ deck, user, onLeave }: { deck: MorningDeck; user: User; onLeave
   return (
     <div data-testid="morning-moves">
       <div className="text-[11.5px] uppercase tracking-wide text-ink-3 mt-1.5">Worth doing today</div>
-      <p className="text-[13px] text-ink-2 mt-1">Each one is done right here. Prep opens its own page.</p>
       <ul className="mt-2 divide-y divide-line-2">
         {deck.moves.map((m) => (
           <MoveRow key={m.id} m={m} user={user} known={deck.people[m.personId]} onLeave={onLeave} />

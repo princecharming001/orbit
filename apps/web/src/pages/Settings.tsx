@@ -37,7 +37,7 @@ import { type Allowance, readAllowance, researchSpend } from '../engine/deepRese
 import { demoResetPrompt, loadDemo } from '../engine/demo';
 import { useFlag } from '../engine/flags';
 import { connectAndSyncGoogle, disconnectGoogleAccount, markGoogleNeedsReauth } from '../engine/integrations';
-import { askLine, checkIntroNote, introNoteBase, saveIntroNote } from '../engine/introNote';
+import { checkIntroNote, introNoteBase, saveIntroNote } from '../engine/introNote';
 import { liveLinkedInAvailable } from '../engine/linkedinLive';
 import { setMorningBrief } from '../engine/morning';
 import { saveOwnWords } from '../engine/ownWords';
@@ -246,13 +246,32 @@ function useAutosave<T>(
   return !valid ? 'held' : json === savedJson ? 'saved' : 'saving';
 }
 
-function SaveState({ state, held }: { state: 'saved' | 'saving' | 'held'; held?: string }) {
+/** How an autosaving section stands. `quiet`: a second one on the page says nothing once saved (screen readers still hear it). */
+function SaveState({
+  state,
+  held,
+  quiet,
+}: {
+  state: 'saved' | 'saving' | 'held';
+  held?: string;
+  quiet?: boolean;
+}) {
   return (
-    <p className="text-[12px] text-ink-3 flex items-center gap-1.5" aria-live="polite" data-testid="autosave">
+    <p
+      className={cx(
+        'text-[12px] text-ink-3 flex items-center gap-1.5',
+        quiet && state === 'saved' && 'sr-only',
+      )}
+      aria-live="polite"
+      data-testid="autosave"
+      data-state={state}
+    >
       {state === 'held' ? (
         <span className="text-warn">{held ?? 'Not saved yet.'}</span>
       ) : state === 'saving' ? (
         'Saving…'
+      ) : quiet ? (
+        'Saved'
       ) : (
         <>
           <Check size={13} className="text-good" /> Changes here save as you make them.
@@ -376,12 +395,7 @@ function Profile() {
         </Select>
       </div>
       <div>
-        <Label
-          htmlFor="profile-degree"
-          hint="so messages call you a junior, a senior or an MBA student correctly"
-        >
-          Degree
-        </Label>
+        <Label htmlFor="profile-degree">Degree</Label>
         <Select
           id="profile-degree"
           value={f.degree}
@@ -412,9 +426,7 @@ function Profile() {
         />
       </div>
       <div>
-        <Label htmlFor="profile-tz" hint="times in your messages use it">
-          Time zone
-        </Label>
+        <Label htmlFor="profile-tz">Time zone</Label>
         <Select
           id="profile-tz"
           value={f.timezone}
@@ -462,13 +474,6 @@ function IntroNoteSection() {
     text !== undefined,
   );
   const problems = text ? checkIntroNote(text, user) : [];
-  const example = text
-    ? askLine(user, {
-        firstName: 'Priya',
-        title: 'Software Engineer',
-        org: 'Stripe',
-      })
-    : '';
   return (
     <Section>
       <div id="intro-note" className="scroll-mt-20">
@@ -493,11 +498,6 @@ function IntroNoteSection() {
         {problems.length > 0 && (
           <p className="text-[12.5px] text-warn mt-1" data-testid="settings-intro-note-problem">
             {problems[0]}
-          </p>
-        )}
-        {example && (
-          <p className="text-[12.5px] text-ink-3 mt-1.5">
-            Asking about Priya at Stripe, the last line would read: {example}
           </p>
         )}
       </div>
@@ -599,9 +599,7 @@ function GoalsForm({ goals, tcs }: { goals: UserGoals; tcs: TargetCompany[] }) {
           <SaveState state={state} />
         </div>
         <div className="@[40rem]:col-span-2">
-          <Label htmlFor="goals-cycle" hint="pick one or write your own">
-            Recruiting cycle
-          </Label>
+          <Label htmlFor="goals-cycle">Recruiting cycle</Label>
           <Suggest
             id="goals-cycle"
             value={f.cycleLabel}
@@ -806,16 +804,6 @@ function OwnWordsSection({ goals }: { goals: UserGoals }) {
   );
   return (
     <Section className="space-y-5" data-testid="settings-own-words">
-      <div>
-        <h2 className="text-[15px] font-medium">Your goals</h2>
-        <p className="mt-1 text-[13px] text-ink-3">
-          In your own words, from setup. Orbit reads these before it suggests anyone or writes anything. Leave
-          any of them empty.
-        </p>
-        <div className="mt-2">
-          <SaveState state={state} />
-        </div>
-      </div>
       {OWN_WORDS_ORDER.map((k) => {
         const q = OWN_WORDS_QUESTIONS[k];
         return (
@@ -830,14 +818,11 @@ function OwnWordsSection({ goals }: { goals: UserGoals }) {
               onChange={(e) => setF((cur) => ({ ...cur, [k]: e.target.value }))}
               data-testid={`goals-${k}`}
             />
-            <p className="mt-1 text-[12px] text-ink-3">{q.uses}</p>
           </div>
         );
       })}
       <div>
-        <Label htmlFor="goals-currentJob" hint="a posting link, the company, or both">
-          A job you're going for now
-        </Label>
+        <Label htmlFor="goals-currentJob">A job you're going for now</Label>
         <Input
           id="goals-currentJob"
           value={f.currentJob}
@@ -846,6 +831,7 @@ function OwnWordsSection({ goals }: { goals: UserGoals }) {
           data-testid="goals-currentJob"
         />
       </div>
+      <SaveState state={state} quiet />
     </Section>
   );
 }
@@ -974,9 +960,7 @@ function Integrations() {
               ) : undefined
             }
             line={
-              googleOffered ? (
-                'Email and meetings you already have'
-              ) : (
+              googleOffered ? undefined : (
                 <span data-testid="google-unavailable">
                   Not part of this version of Orbit. Send from your own mail app and press I sent it.
                 </span>
@@ -1386,9 +1370,7 @@ function Limits() {
                 <span>Warm up before messaging strangers on LinkedIn</span>
               </label>
               <div className="mt-3 max-w-xs">
-                <Label htmlFor="lim-wdays" hint="weekends are skipped">
-                  Warm-up length in working days
-                </Label>
+                <Label htmlFor="lim-wdays">Warm-up length in working days</Label>
                 <Input
                   id="lim-wdays"
                   type="number"
@@ -1452,10 +1434,7 @@ function Limits() {
           />
           <span>
             Read the tone of replies
-            <span className="block text-[12.5px] text-ink-3 mt-0.5">
-              Warm replies (asking about you, offering help) raise closeness a little; a request to stop
-              lowers it. Only you see it.
-            </span>
+            <span className="block text-[12.5px] text-ink-3 mt-0.5">Only you see it.</span>
           </span>
         </label>
       </section>

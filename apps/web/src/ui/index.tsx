@@ -891,45 +891,6 @@ export function FunctionPicker({
 }
 
 /**
- * A first-run hint: a short note that explains a page the first time. "Got it" closes it for good (stored with the
- * student's settings, so it does not come back on another visit).
- */
-export function FirstRunHint({
-  id,
-  title,
-  children,
-  dismissed,
-  onDismiss,
-}: {
-  id: string;
-  title: string;
-  children: ReactNode;
-  dismissed: boolean;
-  onDismiss: (id: string) => void;
-}) {
-  if (dismissed) return null;
-  // one quiet line under the page title, not a boxed card: the page itself is what the student came for
-  return (
-    <div
-      className="mb-5 flex items-start gap-2 text-[13px] text-ink-3 leading-relaxed"
-      role="note"
-      aria-label={title}
-      data-testid={`hint-${id}`}
-    >
-      <p className="min-w-0 max-w-[68ch]">{children}</p>
-      <button
-        type="button"
-        onClick={() => onDismiss(id)}
-        className="shrink-0 -mt-0.5 h-7 px-2 rounded-md text-ink-3 hover:text-ink hover:bg-canvas-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
-        data-testid={`hint-${id}-dismiss`}
-      >
-        Got it
-      </button>
-    </div>
-  );
-}
-
-/**
  * An on/off switch, the way most apps show a setting or a connection: the track fills when it is on. It is a button
  * with role switch, so keyboards and screen readers treat it as one.
  */

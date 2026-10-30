@@ -72,7 +72,7 @@ describe('picking people on a list of search results', () => {
     await render(env);
     const boxes = $$('[data-testid="pick-person"]');
     expect(boxes).toHaveLength(3);
-    expect($('[data-testid="selection-count"]')?.textContent).toBe('Pick people to act on them');
+    expect($('[data-testid="selection-count"]')).toBeNull();
     // nothing picked: the usual next steps stay
     expect($('[data-testid="next-steps"]')).not.toBeNull();
     await click(boxes[0]!);
@@ -95,7 +95,7 @@ describe('picking people on a list of search results', () => {
     expect($('[data-testid="selection-count"]')?.textContent).toBe('3 picked');
     expect($('[data-testid="selection-all"]')?.textContent).toBe('None');
     await click($('[data-testid="selection-all"]'));
-    expect($('[data-testid="selection-count"]')?.textContent).toBe('Pick people to act on them');
+    expect($('[data-testid="selection-count"]')).toBeNull();
   });
 });
 

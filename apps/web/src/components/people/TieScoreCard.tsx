@@ -1,5 +1,4 @@
 import type { Person, TieBand } from '@orbit/core';
-import { TIE_BAND_LABELS } from '@orbit/core';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { useEffect, useState } from 'react';
 import { db } from '../../db/schema';
@@ -11,16 +10,13 @@ import {
   scoreViewOf,
 } from '../../engine/closeness';
 import { isServerUser } from '../../integrations/orbitApi';
-import { Card, cx, useToast } from '../../ui';
+import { Card, useToast } from '../../ui';
 import { ClosenessPicker } from '../account/ClosenessPicker';
 
 const BANDS: TieBand[] = ['faint', 'light', 'warm', 'strong', 'close'];
 
-/**
- * The score as five equal steps (Faint, Light, Warm, Strong, Close: 20 points each), filled up to it, with the step
- * it falls in named underneath.
- */
-function ScoreMeter({ score, band }: { score: number; band: TieBand }) {
+/** The score as five equal steps (Faint, Light, Warm, Strong, Close: 20 points each), filled up to it. */
+function ScoreMeter({ score }: { score: number }) {
   const s = Math.max(0, Math.min(100, score));
   return (
     <div className="mt-3" aria-hidden data-testid="person-score-meter">
@@ -36,13 +32,6 @@ function ScoreMeter({ score, band }: { score: number; band: TieBand }) {
             </div>
           );
         })}
-      </div>
-      <div className="mt-1.5 grid grid-cols-5 gap-1 text-[10.5px]">
-        {BANDS.map((b) => (
-          <span key={b} className={cx(b === band ? 'font-medium text-ink' : 'text-ink-3')}>
-            {TIE_BAND_LABELS[b]}
-          </span>
-        ))}
       </div>
     </div>
   );
@@ -93,7 +82,7 @@ export function TieScoreCard({ person, userId }: { person: Person; userId: strin
           {v.label}
         </div>
       </div>
-      <ScoreMeter score={v.score} band={v.band} />
+      <ScoreMeter score={v.score} />
       {v.explanation.length ? (
         <ul className="mt-2 space-y-1 text-[13px] text-ink-2 leading-relaxed" data-testid="person-score-why">
           {v.explanation.slice(0, 5).map((t, i) => (

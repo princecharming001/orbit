@@ -31,8 +31,7 @@ export function ChatHome() {
   const [stripDismissed, dismissStrip] = useConnectStripDismissed(user?.id);
   // an account with nobody in it gets three starter chips; the full set comes once there are people
   const chips = status.ready ? homeChips(engine.chips(), status.empty) : [];
-  // once the strip is dismissed, the line under the greeting stops asking too
-  const statusLine = homeStatusLine(stripDismissed ? { ...status, linkedin: true, gmail: true } : status);
+  const statusLine = homeStatusLine(status);
   const showStrip =
     status.ready &&
     !status.demo &&

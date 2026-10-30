@@ -206,7 +206,7 @@ describe('outreach', () => {
   });
   it('with nothing known about them the draft is still whole: a plain true opening, no gap', () => {
     const r = check(base({ person: { ...base().person, isAlumni: false, org: undefined } }));
-    expect(r.d.body).toMatch(/I came across your profile and thought I'd introduce myself\./);
+    expect(r.d.body).toMatch(/I'd love to learn how you got to where you are\./);
     expect(r.d.body).not.toMatch(/\[/);
     expect(r.d.needsInput).toEqual([]);
     expect(r.blocking, JSON.stringify(r.issues)).toEqual([]);
@@ -245,7 +245,7 @@ describe('outreach', () => {
     expect(r.d.body).toMatch(/Best,\nAlex Rivera\nCornell '28$/);
     expect(r.d.register).toBe('formal');
     // the firm as its people write it (drafts panel round 2: "McKinsey & Company" twice in a note is a tell)
-    expect(r.d.subject).toMatch(/Cornell '28, quick question on Goldman healthcare/);
+    expect(r.d.subject).toMatch(/Cornell '28, question on Goldman healthcare/);
     const sentences = r.d.body
       .split('\n')
       .slice(1)
@@ -335,7 +335,7 @@ describe('outreach', () => {
       }),
     );
     expect(t.d.body).toMatch(/analyst at Stripe/);
-    expect(t.d.subject).toMatch(/Your move from analyst at Stripe to Figma/);
+    expect(t.d.subject).toMatch(/^Your move to Figma$/);
     const ref = check(
       base({ person: { ...base().person, isAlumni: false }, chat: { referrerName: 'Mei Chen' } }),
     );
@@ -514,7 +514,8 @@ describe('outreach', () => {
             expect(r.d.body).not.toMatch(/undefined|null|\{first\}|\{org\}/);
           }
     expect(count).toBe(people.length * kinds.length * 4);
-  });
+    // hundreds of drafts in one test: it gets room on a busy machine
+  }, 15_000);
 });
 
 describe('other kinds', () => {
@@ -587,7 +588,7 @@ describe('other kinds', () => {
     // a note about the firm is the firm's (panel round 3)
     expect(n.body).toMatch(/I saw that Figma is hiring interns in January\. Hope that's shaping up well\./);
     expect(n.body).not.toMatch(/\?/);
-    expect(n.body).toMatch(/No reply needed/);
+    expect(n.body).toMatch(/No need to reply\./);
   });
   it('referral ask in tech asks before the portal and makes it a two-minute task', () => {
     const r = generateDraft(
@@ -747,7 +748,7 @@ describe('audit round 1 regressions', () => {
     // a note that does not say they said it is something the student saw, and an open offer is acted on, not left
     // in the notes (drafts panel round 2)
     // with an offer taken up, the note has one purpose: no line about their team, no "No reply needed" (round 3)
-    expect(n.body).not.toMatch(/hiring interns|No reply needed/);
+    expect(n.body).not.toMatch(/hiring interns|No reply needed|No need to reply/);
     expect(n.body).toMatch(
       /you offered to refer me when the posting goes up\. I'll send the posting as soon as it's live\./,
     );
@@ -1105,7 +1106,7 @@ describe('audit round 1 regressions', () => {
     const t = generateDraft(base({ kind: 'thank_you', chat: { meetingAt: '2026-10-05T19:00:00Z' } }));
     expect(t.subject).toBe('Thank you for yesterday');
     const o = generateDraft(base());
-    expect(o.subject).toMatch(/^Cornell junior, quick question on Figma$/);
+    expect(o.subject).toMatch(/^Cornell junior, question on Figma$/);
     for (const k of ['nurture', 'thank_you', 'congratulate', 'report_back', 'bump', 'schedule'] as const)
       expect(generateDraft(base({ kind: k, news: 'the launch' })).subject ?? '').not.toMatch(
         /^quick question$/i,
@@ -1623,7 +1624,7 @@ describe('audit round 2 regressions', () => {
     );
     expect(sameOrg.body).toMatch(/your new role as a staff engineer at Figma/i);
     expect(sameOrg.body).not.toMatch(/move to Figma|first few weeks/);
-    expect(sameOrg.subject).toBe('Congratulations');
+    expect(sameOrg.subject).toBe('Congratulations on the new role');
     const moved = generateDraft(
       base({
         kind: 'congratulate',
@@ -1646,7 +1647,7 @@ describe('audit round 2 regressions', () => {
     );
     expect(promoted.body).toMatch(/your new role as a senior analytics engineer at Anthropic\b/);
     expect(promoted.body).not.toMatch(/move to|sr\./i);
-    expect(promoted.subject).toBe('Congratulations');
+    expect(promoted.subject).toBe('Congratulations on the new role');
     const vp = generateDraft(
       base({
         kind: 'congratulate',
@@ -1737,7 +1738,7 @@ describe('audit round 2 regressions', () => {
     expect(d.needsInput).toEqual([]);
     expect(d.body).toMatch(/you mentioned last quarter wasn't a good time, so I wanted to try once more/);
     expect(d.body).toMatch(/\b20 minutes/); // an alum: 20
-    expect(d.body).not.toMatch(/\[|No reply needed/);
+    expect(d.body).not.toMatch(/\[|No reply needed|No need to reply/);
   });
 });
 

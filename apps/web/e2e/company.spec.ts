@@ -126,11 +126,6 @@ test.describe('the intro ask with its note', () => {
     expect(askText).toMatch(/note below you could forward/);
     await note.getByTestId('forward-note-copy').click();
     expect(await page.evaluate(() => navigator.clipboard.readText())).toBe(noteText);
-    // the student's lines are saved for every ask, from Settings
-    await expect(note.getByRole('link', { name: 'Edit it once' })).toHaveAttribute(
-      'href',
-      /settings\/profile#intro-note/,
-    );
     // approving: the ask and the note go together, under a rule
     await page
       .getByRole('button', { name: /^(Open email to|Send to|Copy & open LinkedIn)/ })

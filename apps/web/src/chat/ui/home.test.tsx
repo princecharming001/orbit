@@ -107,7 +107,7 @@ describe('the home: gentle for an empty account, the full set once there are peo
     resetThread();
   });
 
-  it('shows three starter chips and a setup line when nobody is in the account', async () => {
+  it('shows three starter chips and no status line when nobody is in the account', async () => {
     await mount();
     expect($('[data-testid="greeting"]')?.textContent).toBe('Hey Alex, what’s on your mind today?');
     expect(chipIds()).toEqual(['chip-linkedin', 'chip-add-person', 'chip-what-can-you-do']);
@@ -116,9 +116,7 @@ describe('the home: gentle for an empty account, the full set once there are peo
       'Add someone I met',
       'What can you do?',
     ]);
-    expect($('[data-testid="home-status"]')?.textContent).toBe(
-      "Let's get you set up. It takes about two minutes.",
-    );
+    expect($('[data-testid="home-status"]')).toBeNull();
     // one row
     expect($('[data-testid="chips"]')?.children).toHaveLength(1);
   });
@@ -203,9 +201,8 @@ describe('the home: connect your apps', () => {
     expect(strip.textContent).toMatch(/Connect your apps/);
     expect($('[data-testid="connect-status-linkedin"]')?.textContent?.trim()).toBe('Not connected');
     expect($('[data-testid="connect-status-google"]')?.textContent?.trim()).toBe('Not connected');
-    expect($('[data-testid="home-status"]')?.textContent).toBe(
-      'Connect LinkedIn and Gmail so I can see who you know.',
-    );
+    // the strip says what is not connected; the line under the greeting does not repeat it
+    expect($('[data-testid="home-status"]')).toBeNull();
     // after the composer, before the chips
     const order = [
       ...host.querySelectorAll(
@@ -258,9 +255,7 @@ describe('the home: connect your apps', () => {
     expect($('[data-testid="connect-status-google"]')?.textContent?.trim()).toBe('Coming soon');
     expect($('[data-testid="connect-gmail"]')).toBeNull();
     expect($('[data-testid="connect-linkedin"]')).not.toBeNull();
-    expect($('[data-testid="home-status"]')?.textContent).toBe(
-      'Connect LinkedIn so I can see everyone you know.',
-    );
+    expect($('[data-testid="home-status"]')).toBeNull();
     act(() => root!.unmount());
     host.remove();
     root = undefined;
@@ -280,7 +275,7 @@ describe('the home: connect your apps', () => {
     expect($('[data-testid="home-status"]')).toBeNull();
   });
 
-  it('stays hidden once dismissed, and the line under the greeting stops asking too', async () => {
+  it('stays hidden once dismissed', async () => {
     await mount();
     await act(async () => $('[data-testid="connect-strip-dismiss"]')!.click());
     expect($('[data-testid="connect-strip"]')).toBeNull();
@@ -343,30 +338,16 @@ describe('home helpers', () => {
     expect(homeStatusLine({ ready: true, empty: false, waiting: 12, ...all })).toBe(
       '12 people are waiting on a message from you.',
     );
-    expect(homeStatusLine({ ready: true, empty: true, waiting: 0, ...all })).toMatch(
-      /^Let's get you set up\./,
-    );
+    expect(homeStatusLine({ ready: true, empty: true, waiting: 0, ...all })).toBeUndefined();
   });
 
-  it('homeStatusLine says what is not connected when nothing is waiting', () => {
+  it('homeStatusLine leaves what is not connected to the connect strip', () => {
     const s = { ready: true, empty: false, waiting: 0, demo: false };
-    expect(homeStatusLine({ ...s, linkedin: false, gmail: false })).toBe(
-      'Connect LinkedIn and Gmail so I can see who you know.',
-    );
-    expect(homeStatusLine({ ...s, linkedin: false, gmail: true })).toBe(
-      'Connect LinkedIn so I can see everyone you know.',
-    );
-    expect(homeStatusLine({ ...s, linkedin: true, gmail: false })).toBe(
-      'Connect Gmail so I can see who you email and send what you approve.',
-    );
-    // someone waiting comes first, and the sample student is never asked
+    expect(homeStatusLine({ ...s, linkedin: false, gmail: false })).toBeUndefined();
+    expect(homeStatusLine({ ...s, linkedin: false, gmail: true })).toBeUndefined();
+    expect(homeStatusLine({ ...s, linkedin: true, gmail: false })).toBeUndefined();
+    // someone waiting is still said
     expect(homeStatusLine({ ...s, waiting: 2, linkedin: false, gmail: false })).toMatch(/^Two people/);
-    expect(homeStatusLine({ ...s, demo: true, linkedin: false, gmail: false })).toBeUndefined();
-    // Gmail is never asked for where it cannot be connected
-    expect(homeStatusLine({ ...s, linkedin: true, gmail: false, gmailAvailable: false })).toBeUndefined();
-    expect(homeStatusLine({ ...s, linkedin: false, gmail: false, gmailAvailable: false })).toBe(
-      'Connect LinkedIn so I can see everyone you know.',
-    );
   });
 
   it('readHomeStatus knows what is connected, the way the Setup line counts it', async () => {

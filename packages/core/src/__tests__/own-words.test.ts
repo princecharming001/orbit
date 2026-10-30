@@ -49,7 +49,7 @@ describe('the student own words (plan 24)', () => {
 
   it('asks every question in plain words, without dashes', () => {
     for (const q of Object.values(OWN_WORDS_QUESTIONS))
-      for (const t of [q.label, q.placeholder, q.uses]) expect(t).not.toMatch(/[—–]/);
+      for (const t of [q.label, q.placeholder]) expect(t).not.toMatch(/[—–]/);
   });
 });
 

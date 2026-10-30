@@ -757,9 +757,7 @@ function RoutesManyCard({ env, actions }: { env: ResultEnvelope; actions: CardAc
                   <WarmIntroRow w={rest[0]} />
                 </ul>
               ) : (
-                <p className="mt-1 text-[12.5px] text-ink-3">
-                  No route through people you know yet. A short, specific note of your own is the way in.
-                </p>
+                <p className="mt-1 text-[12.5px] text-ink-3">No route through people you know yet.</p>
               )}
               {rows.length + rest.length > 1 && (
                 <p className="text-[12px] text-ink-3 mt-0.5">
@@ -1174,9 +1172,7 @@ function CompanyCard({ env, actions }: { env: ResultEnvelope; actions: CardActio
           className={people.length ? 'mt-2 pt-2 border-t border-line-2' : undefined}
           data-testid="company-saved"
         >
-          <div className="text-[12px] text-ink-3 mb-0.5">
-            Saved to contact · not someone you know yet, so routes go through others
-          </div>
+          <div className="text-[12px] text-ink-3 mb-0.5">Saved to contact</div>
           {saved.map((p) => (
             <PersonRow key={p.id} person={p} sub={p.currentTitle} dense />
           ))}
@@ -1544,7 +1540,6 @@ function ConfirmCard({
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2 flex-wrap">
             <Chip tone={c.blockedReason ? 'warn' : 'accent'}>Needs your approval</Chip>
-            {env.continues && <span className="text-[12px] text-ink-3">then Orbit carries on</span>}
           </div>
           <p
             className={cx('mt-1 font-medium', editable ? 'line-clamp-1' : 'line-clamp-3')}

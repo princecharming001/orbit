@@ -281,10 +281,6 @@ function DeepResearch({ person, stored }: { person: Person; stored: Dossier | nu
         </div>
       ) : (
         <>
-          <p className="mt-1.5 text-[13px] text-ink-3 leading-relaxed">
-            Orbit looks {first} up on LinkedIn and the public web: what they work on now, what they said or
-            made lately, what you have in common, and a few openers, every line with its source.
-          </p>
           {blocker ? (
             <p className="mt-3 text-[13px] text-ink-2" data-testid="research-blocked">
               {blocker}{' '}
@@ -635,13 +631,6 @@ function Debrief({
             >
               {deeper.busy ? <Spinner /> : null} {deeper.busy ? 'Going deeper' : 'Go deeper'}
             </Button>
-          )}
-          {deeper && !deeper.busy && (
-            <span className="text-[12px] text-ink-3">
-              {(d.research?.strongPages ?? 1) > 0
-                ? `More about ${first}, and what is happening at their company.`
-                : `Their company's recent news and hiring.`}
-            </span>
           )}
           {deeper?.busy && (
             <span className="text-[12px] text-ink-3" role="status" data-testid="research-deeper-pending">

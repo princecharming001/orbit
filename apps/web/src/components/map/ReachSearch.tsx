@@ -205,26 +205,15 @@ export function ReachSearch({
         />
         {adding && <Working className="absolute right-4 top-1/2 -translate-y-1/2 text-ink-3" />}
       </form>
-      {isLink && (
-        <p className="px-1 text-[13px] text-ink-3" data-testid="reach-link-hint">
-          Press Enter, and Orbit reads the posting and plans your way in.
-        </p>
-      )}
       {!q && !compact && hint !== undefined && hint !== null && (
         <p className="px-1 text-[13px] text-ink-3">{hint}</p>
       )}
-      {!q && !compact && hint === undefined && (
+      {!q && !compact && hint === undefined && !li.ready && (
         <p className="px-1 text-[13px] text-ink-3">
-          Anyone in your network, a company{li.ready ? ', or anyone on LinkedIn' : ''}.
-          {!li.ready && (
-            <>
-              {' '}
-              <Link to="/settings/integrations" className="underline underline-offset-2 hover:text-ink">
-                Connect LinkedIn
-              </Link>{' '}
-              to search everyone.
-            </>
-          )}
+          <Link to="/settings/integrations" className="underline underline-offset-2 hover:text-ink">
+            Connect LinkedIn
+          </Link>{' '}
+          to search everyone.
         </p>
       )}
       {showList && (

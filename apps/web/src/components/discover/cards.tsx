@@ -159,9 +159,6 @@ export function NetworkCardView({ card, h }: { card: NetworkCard; h: NetworkHand
             </Link>
             {/* an alum: their school's logo, named on hover */}
             {p.isAlumni && p.school && <CompanyLogo name={p.school} label={`${p.school} alum`} size={16} />}
-            <span className="shrink-0 px-1.5 h-[18px] inline-flex items-center rounded-full bg-canvas-2 text-[11px] text-ink-3">
-              In your network
-            </span>
           </div>
           <RoleLine title={p.currentTitle} company={p.currentOrganizationRaw} person={p} />
         </div>
@@ -185,13 +182,6 @@ export function NetworkCardView({ card, h }: { card: NetworkCard; h: NetworkHand
         </button>
       </div>
       <WhyThem reasons={card.why} points={card.points} testId="rec-why" />
-      {/* how to reach them, one quiet line under the reasons on every card that needs one (an introducer is
-          already among the reasons, and the button below) */}
-      {card.action === 'warm_up' && (
-        <p className="flex items-center gap-2 text-[12.5px] text-ink-2 min-w-0" data-testid="rec-warmup-why">
-          <span className="truncate">Known from LinkedIn only, so warm up first</span>
-        </p>
-      )}
       {/* the meters and the actions sit at the foot, so across a row every card's meters are level */}
       <div className="mt-auto">
         <ScoreBars

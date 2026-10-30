@@ -31,7 +31,7 @@ export function ResumeFacetList({ facets, readBy }: { facets: ResumeFacet[]; rea
   const [editing, setEditing] = useState<string>();
   return (
     <div className="mt-4">
-      <Label hint="uncheck anything that's wrong, or press Fix to correct it">{`What ${readBy} read from your resume`}</Label>
+      <Label>{`What ${readBy} read from your resume`}</Label>
       <ul className="space-y-2 max-h-80 overflow-y-auto scroll-thin pr-1">
         {facets.map((f) =>
           editing === f.id ? (

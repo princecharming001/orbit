@@ -12,7 +12,7 @@ import { savedProfiles } from '../engine/account';
 import { DEMO_USER_ID } from '../engine/demo';
 import { isAccountMode, startGoogleSignIn } from '../integrations/orbitApi';
 import { useSession } from '../state/session';
-import { Avatar, Button, Spinner } from '../ui';
+import { Avatar, Button, cx, Spinner } from '../ui';
 import { onboardingPath } from './onboardingPath';
 
 export function LogInPage() {
@@ -50,12 +50,8 @@ export function LogInPage() {
           </div>
         ) : profiles.length > 0 ? (
           <div className="mt-8">
-            <p className="text-[14px] text-ink-2">
-              {account
-                ? 'Or open a profile saved in this browser.'
-                : 'Your Orbit lives in this browser. Pick up where you left off.'}
-            </p>
-            <ul className="mt-3 space-y-2" data-testid="login-profiles">
+            {account && <p className="text-[14px] text-ink-2">Or open a profile saved in this browser.</p>}
+            <ul className={cx('space-y-2', account && 'mt-3')} data-testid="login-profiles">
               {profiles.map((u) => (
                 <li key={u.id}>
                   <button

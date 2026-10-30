@@ -84,29 +84,14 @@ export async function readHomeStatus(userId: string, now: Date = new Date()): Pr
 
 const NUMBER_WORDS = ['No', 'One', 'Two', 'Three', 'Four', 'Five', 'Six', 'Seven', 'Eight', 'Nine', 'Ten'];
 
-/** The optional line under the greeting: only when there is something real to say. */
+/** The optional line under the greeting: only when someone is waiting (what to connect is the strip's job). */
 export function homeStatusLine(status: HomeStatus): string | undefined {
-  if (!status.ready) return undefined;
-  if (status.empty) return "Let's get you set up. It takes about two minutes.";
-  if (status.waiting <= 0) return missingAppsLine(status);
+  if (!status.ready || status.empty || status.waiting <= 0) return undefined;
   const n = status.waiting;
   const count = n < NUMBER_WORDS.length ? NUMBER_WORDS[n] : String(n);
   return n === 1
     ? 'One person is waiting on a message from you.'
     : `${count} people are waiting on a message from you.`;
-}
-
-/** What is not connected yet, in one line; undefined when both are (or for the sample student). */
-export function missingAppsLine(
-  status: Pick<HomeStatus, 'linkedin' | 'gmail' | 'demo'> & { gmailAvailable?: boolean },
-): string | undefined {
-  if (status.demo) return undefined;
-  // Gmail only counts as missing where it can be connected: never nag about something the student cannot do
-  const gmailMissing = !status.gmail && status.gmailAvailable !== false;
-  if (!status.linkedin && gmailMissing) return 'Connect LinkedIn and Gmail so I can see who you know.';
-  if (!status.linkedin) return 'Connect LinkedIn so I can see everyone you know.';
-  if (gmailMissing) return 'Connect Gmail so I can see who you email and send what you approve.';
-  return undefined;
 }
 
 export function useHomeStatus(): HomeStatus {

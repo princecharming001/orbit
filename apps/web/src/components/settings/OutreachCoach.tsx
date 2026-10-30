@@ -162,10 +162,6 @@ export function OutreachCoach({ user }: { user: User }) {
             {provenance(card)}
           </span>
         </div>
-        <p className="mt-1 text-[13px] leading-relaxed text-ink-2">
-          See how each kind of message sounds, tell the coach what to change, and fix what it finds in the
-          messages you sent.
-        </p>
       </section>
 
       <Tabs
@@ -173,7 +169,7 @@ export function OutreachCoach({ user }: { user: User }) {
         onChange={(t) => setType(t)}
         items={COACH_TYPES.map((t) => ({ value: t.id, label: t.label, count: counts[t.id] || undefined }))}
       />
-      <p className="-mt-2 mb-3 text-[12.5px] text-ink-3">{info.blurb}</p>
+      {info.blurb && <p className="-mt-2 mb-3 text-[12.5px] text-ink-3">{info.blurb}</p>}
 
       {/* the sample */}
       <section
@@ -202,16 +198,9 @@ export function OutreachCoach({ user }: { user: User }) {
         >
           {shown.body}
         </pre>
-        <div className="flex flex-wrap items-center justify-between gap-2 border-t border-line-2 px-4 py-2 text-[12px] text-ink-3">
-          <span className="min-w-0">
-            {shown === sample
-              ? claudeOn
-                ? 'Orbit’s template in your style. Claude also follows your length and notes.'
-                : 'Orbit’s template in your style. Length and notes apply when Claude writes your drafts.'
-              : 'Written by Claude in your style.'}
-          </span>
-          {claudeOn &&
-            (shown === sample ? (
+        {claudeOn && (
+          <div className="flex flex-wrap items-center justify-end gap-2 border-t border-line-2 px-4 py-2 text-[12px] text-ink-3">
+            {shown === sample ? (
               <button
                 type="button"
                 className="text-accent hover:underline disabled:opacity-50"
@@ -229,8 +218,9 @@ export function OutreachCoach({ user }: { user: User }) {
               >
                 Show the template
               </button>
-            ))}
-        </div>
+            )}
+          </div>
+        )}
       </section>
 
       {/* feedback */}
@@ -297,19 +287,11 @@ export function OutreachCoach({ user }: { user: User }) {
             </span>
           )}
         </div>
-        <p className="mt-1 text-[12.5px] text-ink-3">
-          {review.basis === 'sample'
-            ? `You haven’t sent a ${noun(type)} from Orbit yet, so this reviews the sample above.`
-            : review.sent < 5
-              ? 'Too few sent to read much into the reply rate yet. The notes below still apply.'
-              : `Every ${noun(type)} you sent from Orbit, read the way an expert cold outreacher would.`}
-        </p>
 
         {review.findings.length === 0 ? (
           <p className="mt-4 flex items-start gap-2 text-[13px] text-ink-2" data-testid="coach-all-good">
             <Check size={15} className="mt-0.5 shrink-0 text-good" />
-            Nothing to fix. {review.basis === 'sample' ? 'This sample follows' : 'These follow'} what gets
-            replies: short, a reason to write to them, and one small ask.
+            Nothing to fix.
           </p>
         ) : (
           <ul className="mt-3 divide-y divide-line-2">

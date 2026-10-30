@@ -37,8 +37,6 @@ export interface OwnWordsQuestion {
   key: OwnWordsKey;
   label: string;
   placeholder: string;
-  /** what Orbit does with the answer, said under the field */
-  uses: string;
 }
 
 export const OWN_WORDS_QUESTIONS: Record<OwnWordsKey, OwnWordsQuestion> = {
@@ -47,45 +45,38 @@ export const OWN_WORDS_QUESTIONS: Record<OwnWordsKey, OwnWordsQuestion> = {
     label: 'What are you going for, and why?',
     placeholder:
       "Product roles at fintech startups. I grew up helping run my family's store and want to build tools for small businesses.",
-    uses: 'Orbit uses this to pick who to meet and to explain why in your messages.',
   },
   success: {
     key: 'success',
     label: 'What would make this cycle a win, and by when?',
     placeholder: "Five real conversations with PMs by November, and an offer I'm excited about by February.",
-    uses: 'Your morning brief keeps it in view.',
   },
   story: {
     key: 'story',
     label: 'Your story in two lines',
     placeholder:
       "I'm a junior at Michigan studying economics. Last summer I built pricing models at a fintech startup, and I run our investing club's education program.",
-    uses: 'How your messages introduce you, and how your intro starts in prep.',
   },
   proudOf: {
     key: 'proudOf',
     label: 'What are you good at, or proud of?',
     placeholder: 'Explaining hard ideas simply. I taught 40 first-years how to read a balance sheet.',
-    uses: 'Orbit may use it as the one line that makes you credible.',
   },
   wantToMeet: {
     key: 'wantToMeet',
     label: 'Who do you most want to meet?',
     placeholder: 'Alumni one or two years into product roles, and anyone on the payments team at Stripe.',
-    uses: 'Discover and your recommendations look for these people.',
   },
   networkingHard: {
     key: 'networkingHard',
     label: "What's hard about networking for you right now?",
     placeholder:
       "I freeze on what to say after hello, and asking for someone's time feels like asking a favor.",
-    uses: 'Orbit sets its tone by it.',
   },
   neverDo: {
     key: 'neverDo',
     label: 'Anything Orbit should never do?',
     placeholder: 'Never mention my GPA. No exclamation marks.',
-    uses: 'A rule for every draft and every answer in the chat.',
   },
 };
 

@@ -38,8 +38,6 @@ export interface MapProps {
    * introductions view): whoever was tapped or hovered is let go, so the answer is not hidden behind an older one.
    */
   question?: unknown;
-  /** the layout changed: how many people sit inside grey "+N" dots, so the page explains those only when there are some */
-  onAggregated?: (n: number) => void;
   /** what the map shows, for screen readers */
   label?: string;
   /**
@@ -270,7 +268,6 @@ export function OrbitMap({
   personCard = false,
   rotate = true,
   question,
-  onAggregated,
   label,
   arrival: arrivalMode = 'session',
 }: MapProps) {
@@ -297,9 +294,6 @@ export function OrbitMap({
     return l;
   }, [people, orgs, loading]);
   const overlaps = useMemo(() => countOverlaps(layout.nodes), [layout]);
-  const tellAggregated = useRef(onAggregated);
-  tellAggregated.current = onAggregated;
-  useEffect(() => tellAggregated.current?.(layout.aggregated), [layout]);
   const outsideWedges = useMemo(() => countOutsideWedges(layout), [layout]);
   const byId = useMemo(() => new Map(people.map((p) => [p.id, p])), [people]);
 

@@ -429,8 +429,6 @@ describe('setup: Google', () => {
     await showWidget('google');
     const card = $('[data-testid="setup-google"]')!;
     expect(card.textContent).toMatch(/Connected as alex@example\.edu/);
-    expect(card.textContent).toMatch(/replies/);
-    expect(card.textContent).toMatch(/coffee chats you book/);
     expect(card.textContent).toMatch(/Reconnect and sync now/);
     expect($('[data-testid="google-client-id"]')).toBeNull();
   });

@@ -93,13 +93,10 @@ export function ChatsPage() {
   const empty = !view.days.length && !view.justHappened.length && !view.noTime.length;
   return (
     <div className="max-w-[760px]" data-testid="chats-page">
-      <PageHeader
-        title="Chats"
-        subtitle="Your coffee chats this week and next, and what came back from them."
-      />
+      <PageHeader title="Chats" />
       {empty && (
         <Card padded data-testid="chats-empty">
-          <p className="text-[14px]">No chats booked. When someone agrees to talk, it shows up here.</p>
+          <p className="text-[14px]">No chats booked.</p>
           <Link to="/inbox" className="inline-block mt-3">
             <Button variant="primary">Who's replied?</Button>
           </Link>

@@ -92,9 +92,7 @@ test.describe('Chat home on the real engine (no key)', () => {
     const chips = page.locator('[data-testid^="chip-"]');
     await expect(chips).toHaveCount(3);
     await expect(chips).toHaveText(['Bring in my LinkedIn', 'Add someone I met', 'What can you do?']);
-    await expect(page.getByTestId('home-status')).toHaveText(
-      "Let's get you set up. It takes about two minutes.",
-    );
+    await expect(page.getByTestId('home-status')).toHaveCount(0);
     // "What can you do?" is a plain message: a short answer pointing at LinkedIn, no numbered list
     await page.getByTestId('chip-what-can-you-do').click();
     await expect(page.getByTestId('turn-user').last()).toHaveText('What can you do?');

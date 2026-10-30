@@ -469,7 +469,8 @@ export function PersonPage() {
               <h1 className="text-[22px] font-semibold tracking-[-0.01em] break-words">
                 {person.displayName}
               </h1>
-              {person.isAlumni && <Chip tone="accent">{user.school} alum</Chip>}
+              {/* an alum whose school is already in the line below needs no chip saying it again */}
+              {person.isAlumni && !person.school && <Chip tone="accent">{user.school} alum</Chip>}
               {chat && (
                 // the stage, as a chip that opens the stages to move the chat to
                 <label
@@ -612,7 +613,6 @@ export function PersonPage() {
                   <>
                     <span data-testid="person-chat-past">
                       Your chat was <span className="font-medium">{chatTimeLabel(pastEvent.startAt)}</span>.
-                      How did it go?
                     </span>
                     <Link to={`/notes/new?person=${person.id}`}>
                       <Button size="sm">Add notes</Button>
@@ -797,7 +797,6 @@ export function PersonPage() {
             their profile, then react to or comment on one of their posts over the next few days. Each step
             shows up in Drafts, and the message is drafted when the warm-up is done.
           </p>
-          <p>If you already know {person.firstName}, skip it and write now.</p>
           <div className="flex flex-wrap gap-2 pt-1">
             {/* the choice stays open while Claude writes, so the click shows; it closes once there is something */}
             <Button
@@ -915,12 +914,6 @@ export function PersonPage() {
             <div className="min-w-0">
               <div className="font-medium">
                 {MESSAGE_KIND_LABELS[composing]} · {CHANNEL_LABELS[draft.channel]}
-              </div>
-              <div className="text-[12px] text-ink-3">
-                Orbit picked this kind of message from where your chat stands.
-                {composeKinds(chat?.stage, composing, { referral: referralFits }).length > 1
-                  ? ' Pick another and it rewrites the draft.'
-                  : ''}
               </div>
               {composing === 'outreach' && !hasBrief && !tps.some((t) => t.kind !== 'linkedin_connected') && (
                 <Link
@@ -1051,14 +1044,7 @@ export function PersonPage() {
               </div>
               <LinkedInHistory person={person} />
               <ResearchDebrief person={person} userId={user.id} />
-              <div className="flex items-baseline justify-between gap-3 pt-2">
-                <h2 className="text-[13px] font-medium text-ink">What you've learned yourself</h2>
-                {ownFacts.length > 0 && (
-                  <span className="text-[12px] text-ink-3">
-                    {ownFacts.length === 1 ? '1 fact' : `${ownFacts.length} facts`}
-                  </span>
-                )}
-              </div>
+              <h2 className="text-[13px] font-medium text-ink pt-2">What you've learned yourself</h2>
               {tabsLoading && <SkeletonText lines={4} testId="facts-loading" />}
               {!tabsLoading && ownFacts.length === 0 && (
                 <p className="text-ink-3 text-[12.5px] -mt-2" data-testid="facts-empty">
@@ -1143,10 +1129,7 @@ export function PersonPage() {
             <div className="space-y-2">
               {tabsLoading && <SkeletonRows rows={4} avatar={28} testId="connections-loading" />}
               {!tabsLoading && neighbours.filter(Boolean).length === 0 && (
-                <p className="text-ink-3 text-[13px]">
-                  No inferred connections yet. These appear from shared employers, schools, threads and
-                  meetings.
-                </p>
+                <p className="text-ink-3 text-[13px]">No inferred connections yet.</p>
               )}
               {edges.map((e) => {
                 const other = neighbours.find(
@@ -1180,7 +1163,7 @@ export function PersonPage() {
         </div>
         <div className="space-y-4">
           <TieScoreCard person={person} userId={user.id} />
-          <TextsCard personId={person.id} firstName={person.firstName} />
+          <TextsCard personId={person.id} />
           {isServerUser(user.id) && <DossierCard person={person} userId={user.id} />}
           <Card>
             <div className="font-medium mb-2">Summary</div>
@@ -1394,7 +1377,7 @@ export function closenessWord(v: number): string {
 }
 
 /** Texts with them, from the Mac's Messages: how much, how lately, and the last few messages (kept in this browser). */
-function TextsCard({ personId, firstName }: { personId: string; firstName: string }) {
+function TextsCard({ personId }: { personId: string }) {
   const t = useLiveQuery(() => db.textThreads.get(personId), [personId]);
   if (!t) return null;
   return (
@@ -1420,9 +1403,6 @@ function TextsCard({ personId, firstName }: { personId: string; firstName: strin
           </li>
         ))}
       </ul>
-      <p className="mt-2 text-[11.5px] text-ink-3">
-        {t.inCount} from {firstName || 'them'}, {t.outCount} from you
-      </p>
     </Card>
   );
 }

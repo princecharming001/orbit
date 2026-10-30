@@ -60,9 +60,9 @@ function q(qText: string, short?: string, direct?: string): Question {
 export function questionsFor(
   p: QuestionInput,
   sector: Sector,
-  opts: { late?: boolean; applied?: boolean; major?: string } = {},
+  opts: { late?: boolean; applied?: boolean; major?: string; targetFunctions?: string[] } = {},
 ): Question[] {
-  const kind: FirmKind = firmKindOf(p, sector);
+  const kind: FirmKind = firmKindOf(p, sector, opts.targetFunctions);
   const senior = isSeniorTitle(p.title);
   const exec = seniorityOf(p.title) === 'exec';
   const org = shortOrg(p.org?.trim() || undefined);
@@ -335,6 +335,29 @@ export function questionsFor(
         q(`what your first few months${org ? ` at ${org}` : ''} were like`),
         q("what you'd focus on if you were recruiting again"),
       ];
+    }
+    case 'academic': {
+      // a professor is asked about their research and how students take part in it, never about "your first few
+      // months" there or "the path to" their university
+      const research = (opts.targetFunctions ?? []).includes('research');
+      return research
+        ? [
+            q(
+              'whether you take on undergraduate research assistants, and what you look for in one',
+              'working with your group as a research assistant',
+              'Do you take on undergraduate research assistants, and what do you look for in one?',
+            ),
+          ]
+        : [
+            q(
+              'how your research shows up in the work students go on to do',
+              'how your research connects to the field',
+            ),
+            q(
+              "what you'd tell a student who wants to use your field in their career",
+              'using your field in a career',
+            ),
+          ];
     }
     default:
       return [

@@ -119,6 +119,7 @@ describe('a blank is caught even with its brackets gone', () => {
     ],
     ['Thanks for your note. [ASK USER: your answer]', true],
     ["I came across your profile and thought I'd introduce myself.", false],
+    ["I'd love to learn how you got to where you are.", false],
     ['Here is the link: https://example.com/a[1]', false],
   ])('%s', (text, caught) => {
     expect(!!placeholderIn(text)).toBe(caught);

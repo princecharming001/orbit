@@ -7,7 +7,7 @@ async function pastePosting(page: Page) {
   await page.goto('map');
   const input = page.getByTestId('reach-input');
   await input.fill(LINK);
-  await expect(page.getByTestId('reach-link-hint')).toBeVisible();
+  await expect(input).toHaveValue(LINK);
   await input.press('Enter');
 }
 

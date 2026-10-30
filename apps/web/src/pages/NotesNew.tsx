@@ -263,12 +263,7 @@ export function NotesNew() {
   };
   return (
     <div className="max-w-[760px]">
-      <PageHeader
-        title={existing ? 'Who was this note with?' : 'Add a note'}
-        subtitle={
-          existing ? existing.title : 'What did you learn, what did they offer, what did you promise?'
-        }
-      />
+      <PageHeader title={existing ? 'Who was this note with?' : 'Add a note'} subtitle={existing?.title} />
       <Card className="space-y-4">
         {existing ? (
           <div className="rounded-lg bg-canvas-2 p-3 text-[13px] whitespace-pre-line max-h-64 overflow-y-auto">
@@ -287,11 +282,11 @@ export function NotesNew() {
               data-testid="capture-text"
             />
             <div className="flex flex-wrap items-center gap-3 mt-2 text-[12px] text-ink-3">
-              <span data-testid="capture-draft-hint">
-                {restored && text.trim()
-                  ? 'Your unsaved note from before. Orbit keeps it on this device until you save it.'
-                  : 'Saved on this device as you type.'}
-              </span>
+              {restored && text.trim() && (
+                <span data-testid="capture-draft-hint">
+                  Your unsaved note from before. Orbit keeps it on this device until you save it.
+                </span>
+              )}
               {text.trim() && (
                 <button
                   type="button"
@@ -434,8 +429,7 @@ export function NotesNew() {
             />
             {chatEvent && !whenManual && (
               <p className="mt-1.5 text-[12px] text-ink-3" data-testid="capture-when-chat">
-                The time of your chat with {nameOf(chatEvent.attendeePersonIds[0]!)}. Change it if this note
-                is from another talk.
+                The time of your chat with {nameOf(chatEvent.attendeePersonIds[0]!)}.
               </p>
             )}
             {bookedLater && (
@@ -470,15 +464,6 @@ export function NotesNew() {
                 {l}
               </button>
             ))}
-            {/* a typed note needs no explanation; the other two say what Orbit does differently */}
-            {(source === 'wispr_capture' || source === 'granola_email') && (
-              <span className="basis-full text-[12px] text-ink-3">
-                {source === 'wispr_capture'
-                  ? // plan 23 §4.5: the reading is the same as for typed notes, so the line no longer claims otherwise
-                    'Paste it as you said it. Orbit reads it the same way as a typed note.'
-                  : 'Paste the summary your notetaker app wrote.'}
-              </span>
-            )}
           </div>
         )}
         <div className="flex items-center gap-3">

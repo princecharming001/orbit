@@ -188,8 +188,7 @@ export function Conversation({ person }: { person: Person }) {
 
       {shown.length === 0 ? (
         <p className="text-[13px] text-ink-3" data-testid="conversation-empty">
-          No messages with {person.firstName} yet. Orbit shows email, LinkedIn messages and texts here as they
-          come in.
+          No messages with {person.firstName} yet.
         </p>
       ) : (
         <ol className="space-y-2.5" aria-label={`Messages with ${person.firstName}`}>

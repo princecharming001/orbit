@@ -185,7 +185,7 @@ test.describe('account mode (mocked orbit-api)', () => {
         }),
       )
       .toContain('welcome');
-    await expect(page.getByTestId('home-status')).not.toContainText(/Gmail/);
+    await expect(page.getByTestId('home-status').filter({ hasText: /Gmail/ })).toHaveCount(0);
     await page.goto('people?view=list');
     await expect(page.getByText('Priya Shah').locator('visible=true').first()).toBeVisible();
   });

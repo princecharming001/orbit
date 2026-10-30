@@ -22,19 +22,8 @@ import { type PeopleFilter, type PeopleView, peopleFilterOf, peopleViewOf } from
 import { RepliesChecked } from '../components/RepliesChecked';
 import { db } from '../db/schema';
 import { filterPeople, type PeopleSort } from '../engine/search';
-import { useHints } from '../state/hints';
 import { useSession } from '../state/session';
-import {
-  Button,
-  cx,
-  EmptyState,
-  FirstRunHint,
-  Input,
-  PageHeader,
-  Select,
-  Skeleton,
-  SkeletonRows,
-} from '../ui';
+import { Button, cx, EmptyState, Input, PageHeader, Select, Skeleton, SkeletonRows } from '../ui';
 
 const STAGE_ORDER = [...ACTIVE_STAGES, ...CLOSED_STAGES];
 /** How many people the list draws at once; "Show more" adds as many again. */
@@ -64,7 +53,6 @@ export function People() {
   const [showClosed, setShowClosed] = useState(false);
   const [sort, setSort] = useState<PeopleSort | 'stage'>('strength');
   const [limit, setLimit] = useState(PAGE);
-  const hints = useHints();
   const peopleQ = useLiveQuery(
     () => (userId ? db.people.where('userId').equals(userId).toArray() : []),
     [userId],
@@ -219,21 +207,16 @@ export function People() {
   const subtitle =
     view === 'list' ? (
       filter === 'hidden' ? (
-        `${list.length} hidden ${list.length === 1 ? 'person' : 'people'}. Open one and choose Show again to bring them back.`
+        `${list.length} hidden ${list.length === 1 ? 'person' : 'people'}`
       ) : filtering ? (
         `${list.length} of ${total} people`
       ) : (
         `${total} ${total === 1 ? 'person' : 'people'} in your orbit`
       )
-    ) : view === 'companies' ? (
-      'Every company where you have a chat.'
-    ) : (
+    ) : view === 'companies' ? undefined : (
       // with Gmail or LinkedIn connected Orbit reads replies and meetings itself, every few minutes while the
       // app is open; without them the student moves chats along
-      <>
-        Every coffee chat and where it stands.{' '}
-        <RepliesChecked fallback="Orbit cannot see your inbox: move a card when someone replies." />
-      </>
+      <RepliesChecked fallback="Orbit cannot see your inbox: move a card when someone replies." />
     );
   const quietNote = `Nobody has gone quiet: no one has been waiting more than ${QUIET_DAYS} days for a reply to your last message.`;
   return (
@@ -243,14 +226,6 @@ export function People() {
         subtitle={loading ? <Skeleton className="h-3 w-40 mt-1" /> : subtitle}
         actions={<AddPersonButton />}
       />
-      <FirstRunHint
-        id="pipeline"
-        title="Reading the board"
-        dismissed={hints.seen('pipeline') || chats.length === 0 || view !== 'board'}
-        onDismiss={hints.dismiss}
-      >
-        Each column is a stage. Drag a card to move it; a chip on a card is its next step.
-      </FirstRunHint>
       <div className="flex flex-wrap items-center gap-x-4 gap-y-2 mb-5">
         <div
           className="inline-flex items-center rounded-full border border-line bg-canvas p-0.5 shadow-[var(--shadow-pill)]"
@@ -435,7 +410,7 @@ export function People() {
                   Show more
                 </Button>
                 <span className="text-[12px] text-ink-3">
-                  Showing {limit} of {list.length}. Search to find someone further down.
+                  Showing {limit} of {list.length}
                 </span>
               </div>
             )}
@@ -449,7 +424,6 @@ export function People() {
                   ? 'Nobody has gone quiet'
                   : 'Nobody matches'
             }
-            body={filter === 'quiet' ? quietNote : undefined}
           />
         )
       ) : visibleChats.length === 0 && filter !== 'hidden' ? (

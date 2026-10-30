@@ -151,8 +151,7 @@ function GoogleWidget({ user, initial }: { user: User; initial?: SetupStatus }) 
         <>
           <p className="text-[13.5px] text-ink-2">
             Connected{asEmail}
-            {status.lastSyncedAt ? `, last sync ${relDate(status.lastSyncedAt)}` : ''}. Orbit now sees replies
-            to your messages and the coffee chats you book, and moves your pipeline for you.
+            {status.lastSyncedAt ? `, last sync ${relDate(status.lastSyncedAt)}` : ''}.
             {!status.signedIn &&
               ' Google asks you to sign in again after about an hour, so reconnect to sync now.'}
             {status.needsReauth && ' The last sync did not go through.'}
@@ -399,8 +398,7 @@ function LinkedinWidget({ user, initial }: { user: User; initial?: SetupStatus }
         <div data-testid="linkedin-live-connected">
           <p className="text-[13.5px] text-ink-2">
             Synced live{live.rows !== undefined ? `, ${live.rows} connections` : ''}
-            {live.lastSyncedAt ? `, last sync ${relDate(live.lastSyncedAt)}` : ''}. Orbit syncs again by
-            itself once a day when you open it.
+            {live.lastSyncedAt ? `, last sync ${relDate(live.lastSyncedAt)}` : ''}.
             {live.error ? ' The last sync did not go through.' : ''}
           </p>
           <div className="mt-3 flex flex-wrap items-center gap-2">
@@ -617,10 +615,7 @@ function ResumeWidget({ user, initial }: { user: User; initial?: SetupStatus }) 
   };
   return (
     <Shell what="resume" title="Add your resume">
-      <p className="text-[13.5px] text-ink-2">
-        Orbit reads your resume for what you have done, to find people with a shared background and to
-        describe you in first messages. PDF, Word (.docx) or plain text, up to 10 MB.
-      </p>
+      <p className="text-[13.5px] text-ink-2">PDF, Word (.docx) or plain text, up to 10 MB.</p>
       {status?.onFile && !done && (
         <p className="mt-2 text-[12.5px] text-ink-3" data-testid="resume-status">
           On file: {status.filename}

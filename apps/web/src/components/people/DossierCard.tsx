@@ -147,14 +147,9 @@ export function DossierCard({ person, userId }: { person: Person; userId: string
         </p>
       ) : !v ? (
         <div className="mt-2">
-          <p className="text-[13px] text-ink-3">
-            Orbit can look {person.firstName || 'them'} up: what they work on now, what they said recently,
-            what you have in common, and a few good openers, each with its source.
-          </p>
           <Button
             size="sm"
             variant="primary"
-            className="mt-3"
             onClick={() => research(false)}
             disabled={busy}
             data-testid="dossier-research"

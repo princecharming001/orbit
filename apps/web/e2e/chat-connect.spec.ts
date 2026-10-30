@@ -208,8 +208,8 @@ test.describe('Connect LinkedIn and Gmail, live LinkedIn and warm intros', () =>
     // this build has no Google sign-in set up: Gmail is coming soon, with nothing to press
     await expect(page.getByTestId('connect-status-google')).toHaveText(/Coming soon/);
     await expect(page.getByTestId('connect-gmail')).toHaveCount(0);
-    // an empty account's line under the greeting is the gentle setup one
-    await expect(page.getByTestId('home-status')).toHaveText(/get you set up/);
+    // an empty account has no line under the greeting: the strip says what to connect
+    await expect(page.getByTestId('home-status')).toHaveCount(0);
     await page.getByTestId('connect-linkedin').click();
     await expect(page.getByTestId('turn-user').last()).toHaveText('Connect my LinkedIn.');
     await expect(page.getByTestId('setup-linkedin')).toBeVisible();

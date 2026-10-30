@@ -1,5 +1,6 @@
 import type { MessageKind, PersonFact } from '../types';
 import { brokenNeverRules } from './neverDo';
+import { schoolShort } from './phrasing';
 import type { DraftOutput } from './templates';
 import {
   BANNED_PHRASES,
@@ -59,8 +60,14 @@ export interface ValidateOptions {
   context?: string;
   /** what the other person asked the student in their last message; a reply must not ignore them */
   asks?: string[];
-  /** the student's own never rules (plan 24); a message that visibly breaks one is flagged */
+  /**
+   * the student's own never rules (plan 24): a message that breaks one is flagged. A warning, not a block: the template
+   * keeps the rules itself, a model draft that breaks one is not used (brief.ts), and the student may override their own
+   * rule in an edit
+   */
   neverDo?: string;
+  /** the student's school, so a rule like "don't mention my school" is checked against its name */
+  school?: string;
 }
 
 const NEED_DETAIL: Record<string, string> = {
@@ -261,7 +268,8 @@ export function validateDraft(
     !(opts.recipientFullName && body.includes(opts.recipientFullName))
   )
     issues.push({ code: 'missing_name', detail: opts.recipientFirstName, blocking: true });
-  for (const rule of brokenNeverRules(body, opts.neverDo))
+  const school = opts.school?.trim() ? [opts.school.trim(), schoolShort(opts.school)] : [];
+  for (const rule of brokenNeverRules(`${d.subject ?? ''}\n${body}`, opts.neverDo, { school }))
     issues.push({ code: 'never_do', detail: rule, blocking: false });
   if (/\b(ignore (all )?(previous|prior) instructions|system prompt)\b/i.test(body))
     issues.push({ code: 'injection', detail: 'instruction-like text', blocking: true });

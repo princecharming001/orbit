@@ -421,14 +421,9 @@ export function SuggestionCard({
           )}
           {s.kind === 'warm_up_engage' && warmAction && warmAction.kind !== 'view_profile' && (
             <div className="mt-3 rounded-lg bg-canvas-2 p-3 text-[13px]" data-testid="warmup-helper">
-              <label className="font-medium block" htmlFor={`warm-${s.id}`}>
+              <label className="font-medium block mb-1.5" htmlFor={`warm-${s.id}`}>
                 What was the post about? <span className="font-normal text-ink-3">Optional</span>
               </label>
-              <div className="text-ink-3 text-[12px] mb-1.5">
-                {warmAction.kind === 'comment_post'
-                  ? 'One point it makes, in your own words, not a link. Orbit drafts a short comment that asks a question or adds something, and mentions the post in your first message.'
-                  : 'One point from the post you reacted to, in your own words, not a link. Orbit mentions it in your first message.'}
-              </div>
               <input
                 id={`warm-${s.id}`}
                 className="w-full h-9 rounded-lg border border-line bg-canvas px-3 text-[13px]"
@@ -472,9 +467,6 @@ export function SuggestionCard({
               >
                 Skip this step
               </Button>
-              <span className="basis-full text-[12px] text-ink-3">
-                Either way, the next step shows up here on its day.
-              </span>
             </div>
           )}
           {s.kind === 'prep_brief' && person && (
@@ -545,7 +537,7 @@ export function SuggestionCard({
               data-testid="intro-evidence"
             >
               <span className="text-ink-3">
-                Orbit asks because {introducer?.firstName ?? 'they'} wrote to you both{' '}
+                {introducer?.firstName ?? 'They'} wrote to you both{' '}
                 {new Date(evidence.at).toLocaleDateString('en-US', {
                   weekday: 'short',
                   month: 'short',

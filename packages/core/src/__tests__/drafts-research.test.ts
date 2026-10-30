@@ -82,7 +82,7 @@ describe('the research opener in a first message (docs/plan/20 §6)', () => {
       stranger({ person: { ...stranger().person, headline: undefined, org: undefined } }),
     );
     expect(none.body).not.toMatch(WHY_THEM_GAP);
-    expect(none.body).toMatch(/I came across your profile and thought I'd introduce myself\./);
+    expect(none.body).toMatch(/I'd love to learn how you got to where you are\./);
   });
 
   it('is one sentence, ended, and never a bracketed prompt', () => {

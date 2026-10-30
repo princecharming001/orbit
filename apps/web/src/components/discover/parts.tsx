@@ -177,7 +177,6 @@ export function DismissMenu({
         role="group"
         aria-label="Not a fit? Tell Orbit why"
       >
-        <div className="px-1.5 pb-1.5 text-[12px] text-ink-3">Not a fit? Tell Orbit why</div>
         <div className="flex flex-wrap gap-1">
           {(Object.entries(RECOMMENDATION_DISMISS_REASONS) as [RecommendationDismissReason, string][]).map(
             ([k, l]) => (

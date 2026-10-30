@@ -139,7 +139,7 @@ describe('nurture', () => {
       );
       expect(d.body).not.toMatch(/big part of|because of your|thanks to your/i);
       expect(d.body).not.toMatch(/\?/);
-      expect(d.body).toMatch(/No reply needed/);
+      expect(d.body).toMatch(/No need to reply\./);
     }
   });
   it('never mentions a live deal or a fundraise to a banker or an investor', () => {

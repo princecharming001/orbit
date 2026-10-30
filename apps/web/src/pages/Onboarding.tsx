@@ -289,11 +289,11 @@ function StepWelcome({
           <ObPrimary className="mt-8" onClick={onNext}>
             {signedIn ? 'Continue' : 'Get started'}
           </ObPrimary>
-          <p className="mt-4 text-[13px] text-ink-3">
-            {signedIn
-              ? 'Signed in with Google. A few questions and you are in.'
-              : 'Takes about three minutes. Everything stays in this browser.'}
-          </p>
+          {!signedIn && (
+            <p className="mt-4 text-[13px] text-ink-3">
+              Takes about three minutes. Everything stays in this browser.
+            </p>
+          )}
         </>
       )}
     </div>
@@ -382,10 +382,7 @@ function StepYou({ onNext }: { onNext: () => void }) {
   if (f.graduationYear && !years.includes(Number(f.graduationYear))) years.unshift(Number(f.graduationYear));
   return (
     <form onSubmit={save} noValidate>
-      <ObHeader
-        title="Tell us about you"
-        subtitle="Orbit signs your messages with this and spots alumni from your school."
-      />
+      <ObHeader title="Tell us about you" />
       <div className="space-y-5">
         <div>
           <ObLabel htmlFor="ob-name">Full name</ObLabel>
@@ -492,10 +489,7 @@ function StepYou({ onNext }: { onNext: () => void }) {
             </span>
             {resume && !reading && <Check size={15} className="ml-auto text-good shrink-0" aria-hidden />}
           </label>
-          <p className="mt-1.5 text-[12.5px] text-ink-3">
-            {resumeError ??
-              'Orbit uses it to describe you in first messages and to spot people with your background.'}
-          </p>
+          {resumeError && <p className="mt-1.5 text-[12.5px] text-ink-3">{resumeError}</p>}
         </div>
       </div>
       <ObPrimary type="submit" className="mt-8" disabled={missing.length > 0 || busy || reading}>
@@ -639,10 +633,7 @@ function StepGoals({ onNext, onBack }: { onNext: () => void; onBack: () => void 
           onBack();
         }}
       />
-      <ObHeader
-        title="What are you working toward?"
-        subtitle="Pick all that fit. Orbit uses this to choose who to meet first and how to write to them."
-      />
+      <ObHeader title="What are you working toward?" />
       <div className="space-y-7">
         <div>
           <ObLabel>Goals</ObLabel>
@@ -768,7 +759,7 @@ function StepGoals({ onNext, onBack }: { onNext: () => void; onBack: () => void 
           ) : null}
         </div>
         <div>
-          <ObLabel hint="A goal, not a limit">First messages a week</ObLabel>
+          <ObLabel>First messages a week</ObLabel>
           <WeeklyTargetSlider value={weekly} onChange={setWeekly} testId="ob-pace" limits={limits} />
         </div>
       </div>
@@ -1043,7 +1034,6 @@ function StepQuestions({
                 onChange={(e) => setF((cur) => ({ ...cur, [k]: e.target.value }))}
                 placeholder={q.placeholder}
                 maxLength={OWN_WORDS_MAX}
-                aria-describedby={`ob-q-${k}-uses`}
                 data-testid={`ob-q-${k}`}
               />
               {starters.length ? (
@@ -1055,9 +1045,6 @@ function StepQuestions({
                   testId={`ob-starter-${k}`}
                 />
               ) : null}
-              <p id={`ob-q-${k}-uses`} className="mt-2 text-[12.5px] leading-[1.45] text-ink-3">
-                {q.uses}
-              </p>
             </div>
           );
         })}
@@ -1163,7 +1150,7 @@ function StepJob({
       <ObHeader
         eyebrow={wordsEyebrow(step)}
         title="Going for something right now?"
-        subtitle="Paste the link or the company. Orbit keeps it in mind as you go."
+        subtitle="Paste the link or the company."
       />
       <div className="ob-rise" style={{ '--d': '300ms' } as CSSProperties}>
         <ObLabel htmlFor="ob-q-job" hint="Optional">
@@ -1220,11 +1207,7 @@ function StepJob({
               </span>
             </span>
           </div>
-        ) : (
-          <p className="mt-2 text-[12.5px] leading-[1.45] text-ink-3">
-            A link from a job board, or just the company and the role.
-          </p>
-        )}
+        ) : null}
       </div>
       <div className="ob-rise mt-9 space-y-3" style={{ '--d': '420ms' } as CSSProperties}>
         <ObPrimary type="submit" disabled={busy} data-testid="ob-q-next">
@@ -1483,10 +1466,6 @@ function StepGmail({ onNext }: { onNext: () => void }) {
           data-testid="ob-google-unavailable"
         >
           <p className="font-medium text-ink">Google sign-in is not set up on this copy of Orbit.</p>
-          <p className="text-ink-2 mt-1">
-            That is fine. You can add people by hand or bring in LinkedIn, and approved emails open in your
-            mail app.
-          </p>
         </div>
       )}
       {account && (
@@ -1674,7 +1653,6 @@ function StepReady({
       ok: !!info?.google,
       step: STEP.gmail,
     });
-  const skipped = rows.some((r) => !r.ok);
   return (
     <div data-testid="ob-ready">
       <ObHeader
@@ -1684,11 +1662,6 @@ function StepReady({
           </span>
         }
         title="You're all set"
-        subtitle={
-          skipped
-            ? 'Anything skipped can be added later in Settings, or just ask Orbit in the chat.'
-            : 'Orbit has what it needs to find your first people to meet.'
-        }
       />
       <ObPanel>
         <ul className="stagger divide-y divide-[#eef0f3]">

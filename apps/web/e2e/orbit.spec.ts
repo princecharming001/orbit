@@ -1115,19 +1115,10 @@ for (const vp of [
 }
 
 test.describe('First-run guidance and plain next steps', () => {
-  test('Drafts explains itself once: the hint closes for good, and each draft card says how to review it', async ({
-    page,
-  }) => {
+  test('each draft card says how to review it', async ({ page }) => {
     await loadDemo(page);
     await openDrafts(page);
-    const hint = page.getByTestId('hint-drafts');
-    await expect(hint).toBeVisible();
-    await expect(hint).toContainText(/nothing goes out until you send it yourself/i);
-    await page.getByTestId('hint-drafts-dismiss').click();
-    await expect(hint).toHaveCount(0);
-    await page.reload();
     await expect(page.getByTestId('suggestion-thank_you').first()).toBeVisible();
-    await expect(page.getByTestId('hint-drafts')).toHaveCount(0);
     // the brief in the chat is a count, not a list of every kind of card
     const cards = await page.locator('[data-testid^="suggestion-"]').count();
     await page.goto('');
@@ -1318,14 +1309,9 @@ test.describe('First-run guidance and plain next steps', () => {
     await loadDemo(page);
     await page.goto('people');
     await expect(page.getByTestId('people-view-board')).toHaveAttribute('aria-selected', 'true');
-    await expect(page.getByTestId('hint-pipeline')).toBeVisible();
     await page.getByTestId('stage-legend').locator('summary').click();
     await expect(page.getByTestId('stage-legend')).toContainText(/waiting for a reply/i);
-    await page.getByTestId('hint-pipeline-dismiss').click();
-    await expect(page.getByTestId('hint-pipeline')).toHaveCount(0);
-    await page.reload();
     await expect(page.getByTestId('chat-card-warming').first()).toBeVisible();
-    await expect(page.getByTestId('hint-pipeline')).toHaveCount(0);
     const filter = page.getByLabel('Filter people');
     await expect(filter.getByTestId('filter-quiet')).toHaveText(/^Went quiet \(\d+\)$/);
     await filter.selectOption('quiet');
@@ -1917,8 +1903,9 @@ test.describe('Usability round 5: one draft, kept edits, saved settings, chats t
     // the demo student's own words from setup are there to edit, and save the same way
     await expect(page.getByTestId('goals-neverDo')).toHaveValue(/Never mention my GPA/);
     await page.getByTestId('goals-success').fill('Three chats at Stripe by November.');
-    await expect(page.getByTestId('settings-own-words').getByTestId('autosave')).toContainText(
-      /save as you make them/i,
+    await expect(page.getByTestId('settings-own-words').getByTestId('autosave')).toHaveAttribute(
+      'data-state',
+      'saved',
     );
     await page.reload();
     await expect(page.locator('#goals-locations')).toHaveValue('Chicago');
@@ -2328,7 +2315,6 @@ test.describe('Usability round 6', () => {
     await expect(page.getByLabel('Message body')).toBeVisible({
       timeout: 15_000,
     });
-    await expect(page.getByTestId('draft-linkedin-hint')).toContainText(/connection request/);
     await expect(page.getByTestId('draft-char-count')).toContainText('/ 200 characters');
     await page.getByLabel('Message body').fill('x'.repeat(240));
     await expect(page.getByTestId('draft-char-count')).toContainText(/free account cuts the rest/);

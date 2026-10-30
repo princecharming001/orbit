@@ -14,6 +14,7 @@ import type {
   Sector,
   StyleCard,
 } from '../types';
+import { forbidsSchool, forbidsStudent } from './neverDo';
 import {
   article,
   cap1,
@@ -43,6 +44,7 @@ import {
   strip,
   theirWords,
   titleFunction,
+  typedClause,
 } from './phrasing';
 import { type Question, questionsFor } from './register';
 import {
@@ -55,7 +57,14 @@ import {
   seniorityOf,
   yearLabel,
 } from './sector';
-import { answeredAfterOutreach, askedForUpdate, inboundNeedsAnswer, subjectTopic } from './thread';
+import {
+  answeredAfterOutreach,
+  askedForUpdate,
+  handoffIn,
+  inboundNeedsAnswer,
+  laterIn,
+  subjectTopic,
+} from './thread';
 import {
   calendarDaysBetween,
   fmtTime,
@@ -170,6 +179,11 @@ export interface DraftContext {
     proudOf?: string;
     /** what a message must never do, in their words: a hard rule (see neverDoChecks) */
     neverDo?: string;
+    /**
+     * What the student is going for (plan 16 §2.1): recruiting, raising money, finding a co-founder. Read from the
+     * cycle and their own words when not given (see `goalOf`).
+     */
+    goal?: GoalKind;
     schedulingLink?: string;
     timezone: string;
     pastOrgs?: string[]; // from the resume: employers/orgs the student has been at
@@ -578,13 +592,122 @@ function lookingForPhrase(ctx: DraftContext): string {
       : 'full-time roles';
 }
 
+/**
+ * What the student is going for. An explicit goal wins; otherwise the cycle and their own words say it: "pre-seed
+ * round" is a raise, a co-founder named in what they want (with no job function picked) is a co-founder search.
+ */
+export function goalOf(user: DraftContext['user']): GoalKind {
+  if (user.goal) return user.goal;
+  const cycle = user.cycleLabel ?? '';
+  const aim = user.aim ?? '';
+  if (
+    /\b(pre-?seed|seed|series [a-d]|angel)\b[^.]{0,12}\b(round|raise)\b|\bfund-?rais|\braising (a|an|our|my)\b/i.test(
+      `${cycle} ${aim}`,
+    )
+  )
+    return 'fundraising';
+  if (
+    /\bco-?founders?\b/i.test(cycle) ||
+    (!user.targetFunctions.length && /\bco-?founders?\b/i.test(`${aim} ${user.story ?? ''}`))
+  )
+    return 'cofounder';
+  return 'recruiting';
+}
+
+/** "a pre-seed round", "a seed round", from the cycle the student set; "a first round" when it names none. */
+function roundOf(user: DraftContext['user']): string {
+  const m = `${user.cycleLabel} ${user.aim ?? ''}`.match(/\b(pre-?seed|seed|series [a-d]|angel)\b/i);
+  return m ? `${article(m[1]!.toLowerCase())} ${m[1]!.toLowerCase()} round` : 'a first round';
+}
+
+/** "a technical co-founder" when their words say technical, else "a co-founder". */
+function cofounderOf(user: DraftContext['user']): string {
+  return /\btechnical co-?founder\b/i.test(`${user.cycleLabel} ${user.aim ?? ''} ${user.story ?? ''}`)
+    ? 'a technical co-founder'
+    : 'a co-founder';
+}
+
+/** A career switch the student named in their cycle ("career switch into health tech product"): what they move into. */
+function switchInto(user: DraftContext['user']): string | undefined {
+  return user.cycleLabel
+    ?.match(
+      /\b(?:career switch|career change|switch(?:ing)?|pivot(?:ing)?|mov(?:e|ing))\s+(?:in)?to\s+(.{3,50})$/i,
+    )?.[1]
+    ?.trim();
+}
+
+/**
+ * What the student is after, as the clause after who they are: "recruiting for product management internships this
+ * cycle", "raising a pre-seed round for my company", "looking for a technical co-founder", "switching into health tech
+ * product". A raise or a co-founder search is never written as job hunting.
+ */
+function pursuit(ctx: DraftContext, opts: { late?: boolean } = {}): string {
+  switch (goalOf(ctx.user)) {
+    case 'fundraising':
+      return `raising ${roundOf(ctx.user)} for my company`;
+    case 'cofounder':
+      return `looking for ${cofounderOf(ctx.user)}`;
+    default: {
+      const into = switchInto(ctx.user);
+      if (into) return `switching into ${into}`;
+      return `recruiting for ${lookingForPhrase(ctx)}${opts.late ? '' : ' this cycle'}`;
+    }
+  }
+}
+
+/** The never rules the template itself applies (see `neverDo.ts`): no school name, no "student", no "just". */
+function neverFlags(user: DraftContext['user']): { school: boolean; student: boolean } {
+  return { school: forbidsSchool(user.neverDo), student: forbidsStudent(user.neverDo) };
+}
+
 /** The student in one clause, from structured fields only: "a junior at Cornell studying computer science". */
 function situation(ctx: DraftContext, now: Date): string {
   if (ctx.user.oneLiner) return ctx.user.oneLiner;
   const year = yearLabel(ctx.user.gradYear, ctx.user.degree, now);
   const school = schoolShort(ctx.user.school);
-  const major = ctx.user.majors[0] ? ` studying ${lowerPhrase(ctx.user.majors[0])}` : '';
+  const field = ctx.user.majors[0] ? lowerPhrase(ctx.user.majors[0]) : '';
+  const major = field ? ` studying ${field}` : '';
+  // a student who asked never to be called a student says what they are doing, not what year they are in
+  if (neverFlags(ctx.user).student) {
+    const at = school ? ` at ${school}` : '';
+    if (/\bPhD\b/.test(year)) return `doing a PhD${field ? ` in ${field}` : ''}${at}`;
+    if (/\bMBA\b/.test(year)) return `doing an MBA${at}`;
+    if (field) return `studying ${field}${at}`;
+    return school ? `at ${school}` : 'early in my career';
+  }
   return `${article(year)} ${year}${school ? ` at ${school}` : ''}${major}`;
+}
+
+/** A name typed all in lower case ("kevin park") as a name: "Kevin Park". Any other casing is the student's. */
+export function nameCase(name: string | undefined): string | undefined {
+  if (!name || name !== name.toLowerCase() || !/\p{Ll}/u.test(name)) return name;
+  return name.replace(/(^|[\s'-])(\p{Ll})/gu, (_, sep: string, ch: string) => `${sep}${ch.toUpperCase()}`);
+}
+
+/**
+ * The student's proud-of line (or their story, when that is all they gave) as one sentence in their own words, cleaned
+ * lightly (see `typedClause`): "I rebuilt the food pantry ordering system and cut wait times from 40 minutes to 10."
+ * Undefined when there is nothing usable, or only their field ("Computer Science").
+ */
+function ownLine(ctx: DraftContext, max = 22): string | undefined {
+  const emoji = !!ctx.styleCard.emoji;
+  for (const raw of [ctx.user.proudOf, ctx.user.story]) {
+    let t = typedClause(raw, max, { emoji });
+    if (!t || t.split(' ').length < 4) continue;
+    // a line in the third person or a bare noun phrase ("Organizing a 300-person hackathon ...") is said as theirs
+    if (/^(My|Our)\b/.test(t)) t = lower1(t).replace(/^my\b/, 'My');
+    else if (/^\p{L}+ing\b/u.test(t)) t = `I'm proud of ${lower1(t)}`;
+    else if (
+      /^(Built|Grew|Ran|Led|Won|Made|Started|Founded|Shipped|Created|Organized|Organised|Rebuilt|Launched|Raised|Wrote|Designed|Taught|Got|Finished|Placed)\b/.test(
+        t,
+      )
+    )
+      t = `I ${lower1(t)}`;
+    else if (/^(A|An|The)\b/.test(t) && !/\b(is|was|has|have|are|were)\b/.test(t)) continue;
+    else if (!/^(I|I'm|I've|I'd|My|We|Our)\b/.test(t) && !/\b(I|my)\b/.test(t)) continue;
+    return `${t}.`;
+  }
+  return undefined;
 }
 
 /** The firm's kind for this person (see register.ts). */
@@ -1056,7 +1179,7 @@ export function suggestedWhyThem(p: { headline?: string; title?: string; org?: s
 export function plainWhyThem(commented = false): string {
   return commented
     ? 'I left a comment on your recent post and wanted to say hello properly.'
-    : "I came across your profile and thought I'd introduce myself.";
+    : "I'd love to learn how you got to where you are.";
 }
 
 /** A research opener as the sentence a first message opens with: one sentence, ending in a full stop. */
@@ -1208,7 +1331,7 @@ function opener(
               seed,
               'op-friend',
             )}`
-          : `${reconnectLine(ctx, c, now)} I'm recruiting for ${looking} this cycle.`,
+          : `${reconnectLine(ctx, c, now)} I'm ${pursuit(ctx)}.`,
         claims,
         saidSituation: true,
       };
@@ -1615,7 +1738,7 @@ function firstSentence(body: string): string {
 
 /** The stock lines that stand in for something only true of them (plainWhyThem and the plain check-ins). */
 const STOCK_OPENING =
-  /^(I came across your profile and thought I'd introduce myself|I left a comment on your recent post and wanted to say hello properly|I wanted to check in and see how things are going|Wanted to check in\b|Small ask\.)/;
+  /^(I came across your profile and thought I'd introduce myself|I'd love to learn how you got to where you are|I left a comment on your recent post and wanted to say hello properly|I wanted to check in and see how things are going|Wanted to check in\b|Small ask\.)/;
 
 /** Cut a note to `max` characters at a sentence boundary (or, at worst, a word boundary). Never mid-word. */
 export function fitNote(text: string, max: number): string {
@@ -1738,7 +1861,19 @@ function writtenKind(ctx: DraftContext, now: Date): { kind: MessageKind; reopen?
   return { kind: ctx.kind };
 }
 
-export function generateDraft(ctx: DraftContext): DraftOutput {
+export function generateDraft(input: DraftContext): DraftOutput {
+  // the student as every line writes them: a name typed in lower case is a name, and a school they asked never to
+  // mention is not in the context at all (so no sentence, subject or sign-off can bring it back)
+  const forbidden = forbidsSchool(input.user.neverDo);
+  let ctx: DraftContext = {
+    ...input,
+    user: {
+      ...input.user,
+      firstName: nameCase(input.user.firstName) ?? input.user.firstName,
+      fullName: nameCase(input.user.fullName) ?? input.user.fullName,
+      ...(forbidden ? { school: '' } : {}),
+    },
+  };
   const now = ctx.now ?? new Date();
   const routed = writtenKind(ctx, now);
   if (routed.kind !== ctx.kind)
@@ -1793,7 +1928,12 @@ export function generateDraft(ctx: DraftContext): DraftOutput {
     .slice(0, 2);
   const windowsText = futureWindows.length ? fmtWindows(futureWindows, tz) : undefined;
   const meetingAt = ctx.chat?.meetingAt ?? ctx.chat?.completedAt;
-  const asks = (ctx.thread?.asksOfUser ?? []).map(strip).filter(Boolean).slice(0, 3);
+  const asks = (
+    ctx.thread?.asksOfUser?.length ? ctx.thread.asksOfUser : questionsIn(ctx.thread?.lastInboundBody)
+  )
+    .map(strip)
+    .filter(Boolean)
+    .slice(0, 3);
   const booking = bookingLinkIn(ctx.thread?.lastInboundBody);
   // A reply that asks something (send your resume, which teams) or hands over a booking link is answered first;
   // proposing two times while ignoring the ask is the classic tell of a template.
@@ -1978,7 +2118,7 @@ export function generateDraft(ctx: DraftContext): DraftOutput {
         ? ''
         : ctx.applicationLine || tc
           ? `I'm ${me}.`
-          : `I'm ${me}, recruiting for ${lookingForPhrase(ctx)}${late ? '' : ' this cycle'}.`;
+          : `I'm ${me}, ${pursuit(ctx, { late })}.`;
       const commented =
         !!ctx.chat?.commentedOnPost && !['warmup', 'post'].includes(ctx.connection?.kind ?? '');
       const openText = op?.text ?? research ?? auto?.text ?? plainWhyThem(commented);
@@ -2002,7 +2142,7 @@ export function generateDraft(ctx: DraftContext): DraftOutput {
         op && ctx.user.credibility && !friend && c?.kind !== 'met' && credibilityFits(ctx, sector, firm)
           ? appLine || sit
             ? `I ${softLower(strip(ctx.user.credibility))}.`
-            : `I ${softLower(strip(ctx.user.credibility))}, and I'm recruiting for ${lookingForPhrase(ctx)} this cycle.`
+            : `I ${softLower(strip(ctx.user.credibility))}, and I'm ${pursuit(ctx)}.`
           : '';
       // an introduction made by email is answered on that thread, whatever channel was asked for
       const isLinkedIn = ctx.channel === 'linkedin' && !op?.introReply;
@@ -2016,7 +2156,11 @@ export function generateDraft(ctx: DraftContext): DraftOutput {
       // the firm is named once: a question that repeats it after the opener says "there"
       if (o && `${op?.text ?? ''} ${roleSentence} ${aboutLine}`.includes(o)) qq = thereFor(qq, o);
       const ask = askBlock(minutes, qq, seed, formal, thanksSignoff, { oneQuestion, friend });
-      const lines = join(openText, alsoCommented, sit, roleSentence, appLine, aboutLine, cred);
+      // the student in their own words (what they are proud of, or their story), when nothing else says who they are
+      // beyond school and year: a person writing, not a form
+      const mine = cred || friend || c?.kind === 'met' ? '' : (ownLine(ctx) ?? '');
+      if (mine) claims.push({ text: mine, kind: 'about_user' });
+      const lines = join(openText, alsoCommented, sit, mine, roleSentence, appLine, aboutLine, cred);
       body = `${G}\n\n${lines}\n\n${ask}\n\n${S}`;
       if (op?.introReply) {
         // a reply-all on the introduction: thank the introducer, move them to bcc, then speak to the person
@@ -2206,11 +2350,11 @@ export function generateDraft(ctx: DraftContext): DraftOutput {
         claims.push({ text: 'first bump after their out-of-office', kind: 'logistics' });
       } else {
         const pointer = senior
-          ? " If someone else on your team would be a better person to ask, I'd be grateful for a pointer."
+          ? ' If someone else on your team would be better to ask, a pointer would help a lot.'
           : '';
         body = `${G}\n\n${
           formal
-            ? `${refLine ?? `I wanted to follow up on ${myNote}${about}.`} I would be grateful for ${minutes} minutes${hear} in the coming weeks${senior ? ', or for a pointer to someone better placed' : ''}.`
+            ? `${refLine ?? `I wanted to follow up on ${myNote}${about}.`} Would you have ${minutes} minutes${hear} in the coming weeks${senior ? ', or a pointer to someone better placed' : ''}?`
             : friend
               ? `Bumping this in case it got buried. I'd still love ${minutes} minutes${hear} whenever you have a moment, no rush at all.`
               : refLine
@@ -2218,7 +2362,7 @@ export function generateDraft(ctx: DraftContext): DraftOutput {
                 : pick(
                     [
                       `Floating this back up in case it got buried. I'd still love ${minutes} minutes${hear} whenever it's convenient.${pointer}`,
-                      `Just surfacing ${myNote}${about} in case it got buried. Even ${minutes} minutes${topic ? '' : hear} whenever it's convenient would help${pointer ? `.${pointer}` : ", and I completely understand if the timing isn't right."}`,
+                      `Following up on ${myNote}${about} in case it got buried. Even ${minutes} minutes${topic ? '' : hear} whenever it's convenient would help${pointer ? `.${pointer}` : ", and I completely understand if the timing isn't right."}`,
                       `Following up on ${myNote}${about} in case it got lost. I'd still value ${minutes} minutes${topic ? '' : hear} in the next couple of weeks${pointer ? `.${pointer}` : ", and completely understand if now isn't a good time."}`,
                     ],
                     seed,
@@ -2291,6 +2435,26 @@ export function generateDraft(ctx: DraftContext): DraftOutput {
       break;
     }
     case 'reply': {
+      const said = ctx.thread?.lastInboundBody ?? '';
+      // they handed the student to someone they copied in: thank them, then speak to that person
+      const handoff = handoffIn(said);
+      if (handoff) {
+        const ask = windowsText
+          ? `Would you have ${minutes} minutes in the next couple of weeks to tell me about your team? ${cap1(windowsText)} would both work for me, or send me a time that suits you.`
+          : `Would you have ${minutes} minutes in the next couple of weeks to tell me about your team?`;
+        body = `${G}\n\nThank you for connecting me with ${handoff}, I really appreciate it.\n\nHi ${handoff}, great to meet you. I'm ${me}, ${pursuit(ctx)}. ${ask}\n\n${S}`;
+        claims.push({ text: `${first} handed the student to ${handoff}`, kind: 'shared' });
+        subject = threaded ? undefined : (reSubject ?? 'Re: your note');
+        break;
+      }
+      // "ping me again in January": a short yes, and the student writes again then (no times now, no check-in)
+      const later = laterIn(said);
+      if (later) {
+        body = `${G}\n\nCompletely understand, thank you for letting me know. I'll write again ${later}.\n\n${S}`;
+        claims.push({ text: `they asked to talk ${later}`, kind: 'logistics' });
+        subject = threaded ? undefined : (reSubject ?? 'Re: your note');
+        break;
+      }
       // their words win over the parsed time: "Thursday at 3pm" is confirmed as Thursday at 3pm, even when the stored
       // time says Friday at 11am (a parser slip, an edited message); the words are read again to find the date
       const ref = ctx.thread?.lastInboundAt ? new Date(ctx.thread.lastInboundAt) : undefined;
@@ -2418,6 +2582,25 @@ export function generateDraft(ctx: DraftContext): DraftOutput {
             offeredTimes = true;
           }
         } else questions.push(a.replace(/[.?]+$/, ''));
+      }
+      // what the student's profile already says is answered here: when they graduate, what they are looking for
+      const fromProfile: string[] = [];
+      for (const q of [...questions]) {
+        const a = profileAnswers(q, ctx, now);
+        if (!a.length) continue;
+        for (const x of a) if (!fromProfile.includes(x)) fromProfile.push(x);
+        questions.splice(questions.indexOf(q), 1);
+      }
+      if (fromProfile.length) {
+        parts.push(fromProfile.join(' '));
+        // answered, the reply still moves things on: a call is offered, never forced
+        if (!questions.length && !wantsTimes)
+          parts.push(
+            windowsText
+              ? `Happy to tell you more on a quick call. Would either of these work? ${windowsText}.`
+              : 'Happy to tell you more on a quick call whenever suits you.',
+          );
+        claims.push({ text: `answered from the profile: ${fromProfile.join(' ')}`, kind: 'about_user' });
       }
       if (questions.length) {
         if (ctx.answer?.trim()) parts.push(answerLine(questions[0]!, ctx.answer));
@@ -2665,10 +2848,7 @@ export function generateDraft(ctx: DraftContext): DraftOutput {
         parts.push(`Hope things are going well at ${o}.`);
       const close = next
         ? undefined
-        : (ask ??
-          (congrats
-            ? 'No need to reply, I just wanted to say congratulations.'
-            : 'No reply needed, just wanted to stay in touch.'));
+        : (ask ?? (congrats ? 'No need to reply. I wanted to say congratulations.' : 'No need to reply.'));
       body = `${G}\n\n${parts.join(' ')}${close ? `\n\n${close}` : ''}\n\n${S}`;
       subject = threaded
         ? undefined
@@ -2891,13 +3071,13 @@ export function generateDraft(ctx: DraftContext): DraftOutput {
               : "I haven't submitted through the portal yet, so the referral can go in first. My resume is attached."
             : "My resume is attached so it's easy to pass along.";
       else if (crossFn)
-        askLine = `If you'd be comfortable passing my name to the recruiter or the hiring manager for the role, I'd be grateful. My resume is attached.`;
+        askLine = `Would you be comfortable passing my name to the recruiter or the hiring manager for the role? My resume is attached.`;
       else if (sector === 'tech')
         askLine = applied
           ? 'Would you be willing to add a referral for my application? My resume is attached.'
           : 'Would you be willing to refer me before I submit through the portal? My resume is attached.';
       else
-        askLine = `If you'd be comfortable flagging my name to the recruiting team, I'd be grateful. My resume is attached.`;
+        askLine = `Would you be comfortable flagging my name to the recruiting team? My resume is attached.`;
       if (!introOffer && !needsInput.includes('resume')) needsInput.push('resume');
       // they asked for the posting ("send me the posting"): it goes in, or the student is asked for it, with the
       // team when they made picking one the condition
@@ -2960,7 +3140,6 @@ export function generateDraft(ctx: DraftContext): DraftOutput {
         ctx.connection?.kind === 'shared_employer' && ctx.connection.sharedOrg
           ? ` I noticed you two worked together at ${ctx.connection.sharedOrg}.`
           : '';
-      const intern = isInternCycle(ctx.user.cycleLabel);
       // the topic is said once, in the blurb, with the target's name ("Lucas's move from coverage into the sponsors
       // group", "how Lucas chose the healthcare practice"); the note to the connector only asks
       const blurbTopic = t.why
@@ -2971,7 +3150,7 @@ export function generateDraft(ctx: DraftContext): DraftOutput {
         : tRole
           ? `${tFirst}'s path to ${tRole}${tOrg ? ` at ${tOrg}` : ''}`
           : `${tFirst}'s work${tOrg ? ` at ${tOrg}` : ''}`;
-      const blurb = `"${ctx.user.fullName} is ${me}, recruiting for ${fnLabel} ${intern ? 'internships' : 'roles'}.${cred} would love 15 minutes to hear about ${blurbTopic}."`;
+      const blurb = `"${ctx.user.fullName} is ${me}, ${pursuit(ctx, { late: true })}.${cred} would love 15 minutes to hear about ${blurbTopic}."`;
       // the conversation they had comes first; the ask follows it
       const since = meetingAt ? (sinceLabel(meetingAt, now, tz) ?? whenLabel(meetingAt, now, tz)) : undefined;
       const lead = meetingAt
@@ -2987,7 +3166,7 @@ export function generateDraft(ctx: DraftContext): DraftOutput {
       subject = threaded ? undefined : `Small ask: intro to ${t.name}?`;
       if (t.offered) {
         // following up on an intro they offered: name the offer, make forwarding a two-second task
-        const offerBlurb = `"${ctx.user.fullName} is ${me}, recruiting for ${fnLabel} ${intern ? 'internships' : 'roles'}.${cred} would love 15 minutes to hear about ${t.why ? blurbTopic : `${tFirst}'s work${tOrg ? ` at ${tOrg}` : ''}`}."`;
+        const offerBlurb = `"${ctx.user.fullName} is ${me}, ${pursuit(ctx, { late: true })}.${cred} would love 15 minutes to hear about ${t.why ? blurbTopic : `${tFirst}'s work${tOrg ? ` at ${tOrg}` : ''}`}."`;
         body = `${G}\n\nWhen we spoke, you kindly offered to introduce me to ${t.name}. If that's still easy, here's a short note you could forward so it takes no time:\n\n${offerBlurb}\n\nAnd if the timing isn't right anymore, no worries at all. Thanks again for offering.\n\n${S}`;
         subject = threaded || ctx.thread ? undefined : `Intro to ${t.name}`;
       }
@@ -3017,6 +3196,7 @@ export function generateDraft(ctx: DraftContext): DraftOutput {
   }
   if (subject && BANNED_SUBJECT_PATTERNS.some((re) => re.test(subject!)))
     subject = `${school ? `${school} ${yl}, ` : ''}question about ${org ?? 'your path'}`;
+  if (subject && !/^re:/i.test(subject)) subject = finishSubject(subject, ctx, { school, year: yl });
   if (ctx.channel === 'linkedin' && ctx.kind !== 'outreach') subject = undefined;
   let finalBody = body.replace(/[ \t]+\n/g, '\n').trim();
   // a "Dear" letter is written without contractions throughout, never "Dear Grace, I'm ..."; so is everything from a
@@ -3039,6 +3219,96 @@ export function generateDraft(ctx: DraftContext): DraftOutput {
     ...(writtenChannel ? { channel: writtenChannel } : {}),
     ...(holdUntil ? { holdUntil } : {}),
   };
+}
+
+/** The questions in their message, one per sentence that ends in "?", when the triage step found none. */
+function questionsIn(text: string | undefined): string[] {
+  if (!text) return [];
+  const body = text.split(/\n\s*(?:On .{0,120}wrote:|-{2,}|From: )/)[0]!;
+  return (body.match(/[^.!?\n]+\?/g) ?? []).map((q) => q.trim()).filter((q) => q.split(/\s+/).length >= 3);
+}
+
+/** A question about the student that their profile answers: when they graduate, what they are looking for. */
+function profileAnswers(q: string, ctx: DraftContext, now: Date): string[] {
+  const out: string[] = [];
+  if (
+    /\bgraduat|\bclass of\b|\bwhat year\b|\bfinish(ing)? (school|your degree)\b/i.test(q) &&
+    ctx.user.gradYear
+  ) {
+    const year = ctx.user.gradYear;
+    out.push(
+      year < now.getFullYear() || (year === now.getFullYear() && now.getMonth() > 5)
+        ? `I graduated in ${year}.`
+        : `I graduate in ${year}.`,
+    );
+  }
+  if (
+    /\b(what|which) (kind of |sort of |type of )?(roles?|positions?|jobs?)\b|\bwhat are you looking (at|for)\b|\bwhat kind of (work|job)\b/i.test(
+      q,
+    )
+  )
+    out.unshift(`I'm ${pursuit(ctx)}.`);
+  return out;
+}
+
+/** The most a subject line runs to: a subject reads at a glance in an inbox, and a short one is opened more. */
+const SUBJECT_MAX_WORDS = 6;
+const SUBJECT_LIMIT = 45;
+
+/**
+ * Every new email's subject, finished the same way: no "quick question" (inbox filters and readers both read it as a
+ * pitch), the student's never rules kept (no class year for one who is not to be called a student, no school for one
+ * who asked), a bare "Congratulations" made specific, and at most six words and 45 characters (a "School year, ..."
+ * lead-in goes first, then trailing words).
+ */
+export function finishSubject(
+  subject: string,
+  ctx: Pick<DraftContext, 'user' | 'kind'>,
+  me: { school?: string; year?: string },
+): string {
+  const never = { school: forbidsSchool(ctx.user.neverDo), student: forbidsStudent(ctx.user.neverDo) };
+  let s = subject.replace(/\bquick question\b/gi, (m) => (m[0] === 'Q' ? 'Question' : 'question')).trim();
+  const lead = me.school && me.year ? `${me.school} ${me.year}, ` : undefined;
+  if (lead && s.startsWith(lead)) {
+    const rest = s.slice(lead.length);
+    const keep = never.school
+      ? never.student
+        ? ''
+        : `${cap1(me.year!)}, `
+      : never.student
+        ? `${me.school}, `
+        : lead;
+    s = `${keep}${keep ? rest : cap1(rest)}`;
+  }
+  if (never.student)
+    s = s.replace(/\bFellow (\S+ )?student,\s*/i, '').replace(/^(\p{Ll})/u, (c) => c.toUpperCase());
+  if (/^congratulations$/i.test(s)) s = 'Congratulations on the new role';
+  // the title of a piece they wrote is the one subject that says what this is: it may run a little long
+  if (
+    /^your (post|article|talk|piece|essay|paper|podcast|interview|video|thread|newsletter|book)\b/i.test(s) &&
+    s.length <= 70
+  )
+    return s;
+  // who suggested writing is the strongest subject there is, said whole
+  if (/ suggested I (write|get in touch|reach)/.test(s) && s.length <= SUBJECT_LIMIT) return s;
+  // a move says where they went, never only where they came from
+  const fits = (x: string) => x.split(/\s+/).length <= SUBJECT_MAX_WORDS && x.length <= SUBJECT_LIMIT;
+  const move = s.match(/^Your move from .+ to (.+)$/);
+  if (move && !fits(s)) s = `Your move to ${move[1]}`;
+  // a "School year, ..." lead-in is the first thing to go
+  if (!fits(s) && /^[^,]{2,40}, /.test(s)) s = cap1(s.replace(/^[^,]{2,40}, /, ''));
+  if (!fits(s)) {
+    const words = s.split(/\s+/);
+    while (words.length > 2 && !fits(words.join(' '))) words.pop();
+    // never end on a dangling "to", "on", "about", "your" or "the"
+    while (
+      words.length > 2 &&
+      /^(to|on|about|your|the|a|an|at|of|for|and|my)$/i.test(words[words.length - 1]!)
+    )
+      words.pop();
+    s = words.join(' ');
+  }
+  return s;
 }
 
 /** "He walked me through ..." after "and": "he walked me through ...", keeping "I" and names. */

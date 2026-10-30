@@ -231,9 +231,11 @@ export function SelectionBar({
       aria-label="Picked people"
       data-testid="selection-bar"
     >
-      <span className="text-ink-3" data-testid="selection-count">
-        {count ? `${count} picked` : 'Pick people to act on them'}
-      </span>
+      {count > 0 && (
+        <span className="text-ink-3" data-testid="selection-count">
+          {count} picked
+        </span>
+      )}
       <button
         type="button"
         className="text-ink-3 underline underline-offset-2 hover:text-ink"

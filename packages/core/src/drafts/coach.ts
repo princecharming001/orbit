@@ -22,8 +22,8 @@ export type CoachType = 'cold_email' | 'linkedin_note' | 'linkedin_message' | 'r
 export interface CoachTypeInfo {
   id: CoachType;
   label: string;
-  /** one line on what this kind of message is */
-  blurb: string;
+  /** a line under the tab, only where the channel has a rule worth saying (LinkedIn's character cut) */
+  blurb?: string;
   /** past this the message is too long for the channel (words between greeting and sign-off) */
   maxWords?: number;
   /** past this the message is too long for the channel (characters, LinkedIn) */
@@ -39,35 +39,31 @@ export const COACH_TYPES: readonly CoachTypeInfo[] = [
   {
     id: 'cold_email',
     label: 'Cold email',
-    blurb: 'A first email to someone who does not know you yet.',
     maxWords: 120,
     idealWords: 80,
   },
   {
     id: 'linkedin_note',
     label: 'LinkedIn note',
-    blurb: `The note on a connection request. Free accounts are cut at ${LINKEDIN_NOTE_TARGET} characters.`,
+    blurb: `Free accounts are cut at ${LINKEDIN_NOTE_TARGET} characters.`,
     maxChars: LINKEDIN_NOTE_TARGET,
     idealWords: 35,
   },
   {
     id: 'linkedin_message',
     label: 'LinkedIn message',
-    blurb: 'A message to someone you are already connected with.',
     maxChars: LINKEDIN_DM_MAX,
     idealWords: 50,
   },
   {
     id: 'reply',
     label: 'Reply',
-    blurb: 'Answering someone who wrote back.',
     maxWords: 120,
     idealWords: 60,
   },
   {
     id: 'follow_up',
     label: 'Follow-up',
-    blurb: 'A short bump when a first message got no answer.',
     maxWords: 70,
     idealWords: 40,
   },

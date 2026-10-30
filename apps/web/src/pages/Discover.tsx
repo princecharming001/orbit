@@ -69,10 +69,7 @@ export function Discover() {
   if (tab === 'network') return <DiscoverFeed tabs={tabs} />;
   return (
     <div>
-      <PageHeader
-        title="Discover"
-        subtitle="Search beyond your network for investors, customers, candidates, mentors and collaborators. Orbit ranks them by fit and how easy they are to reach."
-      />
+      <PageHeader title="Discover" />
       {tabs}
       <FindPeople userId={userId} />
     </div>
@@ -385,7 +382,6 @@ function DiscoverFeed({ tabs }: { tabs?: ReactNode }) {
     <div>
       <PageHeader
         title="Discover"
-        subtitle="People worth a coffee chat: new people who fit your goals and the people you write to, and people you already know worth reaching now."
         actions={
           <Button onClick={() => void refresh()} loading={refreshing.busy === 'refresh'}>
             {refreshing.busy !== 'refresh' && <RefreshCw size={14} />} Refresh
@@ -584,12 +580,7 @@ function FeedFooter({
   onMore: () => void;
 }) {
   // only people with a specific reason to meet them are shown: the end of the list says so instead of padding it
-  if (!connected)
-    return (
-      <p className="mt-6 text-center text-[13px] text-ink-3" data-testid="discover-end">
-        That's everyone in your network worth a coffee chat right now.
-      </p>
-    );
+  if (!connected) return null;
   const line = (text: string, testId: string, action?: ReactNode) => (
     <div className="mt-6 flex flex-col items-center gap-2 text-center" data-testid={testId}>
       {text && <p className="text-[13px] text-ink-3 max-w-md">{text}</p>}

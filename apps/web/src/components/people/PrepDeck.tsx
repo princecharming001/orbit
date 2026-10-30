@@ -391,9 +391,7 @@ function Questions({ card, chat, personFirst }: { card: PrepCard; chat?: CoffeeC
   return (
     <>
       <p className="mt-1.5 text-[13px] text-ink-3">
-        {chat
-          ? 'Tick up to three you most want answered. Orbit keeps them with this chat.'
-          : 'Pick three to lead with.'}
+        {chat ? 'Tick up to three you most want answered.' : 'Pick three to lead with.'}
       </p>
       <ol className="mt-3 space-y-2.5" data-testid="prep-questions">
         {card.lines.map((l, k) => (
@@ -456,12 +454,8 @@ function After({ person, chat, userId }: { person: Person; chat?: CoffeeChat; us
     <div className="mt-5 space-y-4 text-[13.5px]">
       {chat && !done && (
         <div className="rounded-[14px] border border-line p-3">
-          <p className="text-ink-2">
-            Had the chat? Log it, and Orbit moves it to Completed and drafts your thank-you.
-          </p>
           <Button
             size="sm"
-            className="mt-2"
             data-testid="prep-log-chat"
             loading={busy === 'log'}
             onClick={() => {

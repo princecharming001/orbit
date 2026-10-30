@@ -51,7 +51,6 @@ export function CurrentJobPlan({ networkIn }: { networkIn: boolean }) {
   if (plan.steps.length && plan.steps.every((s) => s.status !== 'proposed')) return null;
   return (
     <div className="mb-5 flex flex-col items-center" data-testid="current-job-plan">
-      <p className="text-[13px] text-ink-3 mb-2">Your way into the job you pasted</p>
       <TargetPlanCard plan={plan} />
       <Button
         variant="ghost"

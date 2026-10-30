@@ -130,11 +130,11 @@ const unipileSearchItemSchema = z.looseObject({
 });
 
 /**
- * 100 a page: filing a relation (person, identities, employer) is a handful of round trips, so a page is a minute or
- * two; a 1,000 page took longer than a worker run lasts and its cursor was never saved, and 200 still overran the
- * job's time budget by a page.
+ * 50 a page: filing a relation (person, identities, employer) is a handful of round trips, and a page is filed whole
+ * before the job can save its place. 1,000 took longer than a worker run lasts; 100 still overran the platform's limit
+ * on some pages of a 6,000-person first import (three jobs read 11 times without finishing, 10-30).
  */
-export const RELATIONS_LIMIT = 100;
+export const RELATIONS_LIMIT = 50;
 export const CHATS_LIMIT = 250;
 export const MESSAGES_LIMIT = 100;
 

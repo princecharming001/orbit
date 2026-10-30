@@ -399,7 +399,8 @@ test.describe('Map motion', () => {
     await page.waitForTimeout(500);
     expect((await mapSnapshot(page)).focus).toBe('');
     await expect(page).toHaveURL(/\/map$/);
-    await expect(page.getByTestId('map-legend-line')).toHaveText(/everyone you know/i);
+    // nothing searched or filtered: the line under the filters has nothing to say
+    await expect(page.getByTestId('map-legend-line')).toHaveText('');
     // a company search followed at once by a person: the person's route stays
     await search(page, 'Stripe');
     await search(page, 'Maya Chen');
@@ -446,7 +447,7 @@ test.describe('Map motion', () => {
     await expect(page.getByTestId('reach-form')).toHaveClass(/shake-x/);
     // typing again takes the miss down (the search stays open in the panel)
     await page.getByTestId('reach-input').fill('Zzy');
-    await expect(page.getByTestId('map-legend-line')).toHaveText(/find a way in/i);
+    await expect(page.getByTestId('map-legend-line')).not.toContainText('No one matches');
     await expect(page.getByTestId('reach-form')).not.toHaveClass(/shake-x/);
   });
 
@@ -588,10 +589,11 @@ test.describe('Map motion', () => {
         .filter((p) => p.isAlumni && p.isHuman && !p.hiddenAt)
         .map((p) => p.id as string);
     });
-    const all = Object.keys(await mapDots(page)).length;
     await page.getByTestId('map-filter-alumni').click();
     await mapSettled(page);
-    await expect(page.getByText(`${alumni.length} of ${all} people shown`)).toBeVisible();
+    await expect(page.getByTestId('map-legend-line')).toHaveText(
+      new RegExp(`^Showing ${alumni.length} alum`),
+    );
     await mapCanvas(page).focus();
     const seen = new Set<string>();
     for (const key of [
@@ -830,7 +832,7 @@ test.describe('Map motion', () => {
     expect((await mapSnapshot(page)).path).toEqual([]);
     await search(page, 'Ines');
     await expect(page.getByTestId('reach-choice').first()).toBeVisible();
-    await expect(page.getByTestId('map-legend-line')).toHaveText(/lit on the map/);
+    await expect(page.getByTestId('map-legend-line')).not.toContainText('No one matches');
     const ines = await page.evaluate(async () => {
       const db = (
         window as unknown as {
@@ -1240,10 +1242,8 @@ test.describe('Map motion', () => {
     await openMap(page);
     const { 'Maya Chen': maya } = await idsByName(page, ['Maya Chen']);
     expect((await mapSnapshot(page)).spin).toBeGreaterThan(0);
-    // the demo's map has no grey "+N" dots, so the panel does not explain them
+    // the demo's map has no grey "+N" dots
     await expect(mapCanvas(page)).toHaveAttribute('data-aggregated', '0');
-    await expect(page.getByTestId('map-panel')).toContainText('Companies read as wedges');
-    await expect(page.getByTestId('map-panel')).not.toContainText('grey dot');
     const box = (await mapCanvas(page).boundingBox())!;
     const at = (await mapDots(page, [maya]))[maya]!;
     await page.mouse.move(box.x + at.x, box.y + at.y);
@@ -1394,8 +1394,8 @@ test.describe('Map motion with a big network', () => {
     await briefWritten(page);
     await injectPeople(page, 1910);
     await openMap(page);
-    // the panel explains the grey "+N" dots now that the map shows some
-    await expect(page.getByTestId('map-panel')).toContainText('A grey dot with a number');
+    // the map shows grey "+N" dots now
+    await expect(mapCanvas(page)).not.toHaveAttribute('data-aggregated', '0');
     await search(page, 'Google');
     await expect.poll(async () => (await mapSnapshot(page)).focus).toBe('company:n:google');
     await mapSettled(page, 30_000);

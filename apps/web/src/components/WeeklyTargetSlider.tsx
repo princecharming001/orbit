@@ -80,7 +80,7 @@ export function limitNotes(value: number, limits?: WeeklyLimits): { kind: 'cap' 
       weeks < 1 ? 'less than a week at this pace' : `about ${weeks} week${weeks > 1 ? 's' : ''} at this pace`;
     out.push({
       kind: 'pool',
-      text: `${pool} strong match${pool > 1 ? 'es are' : ' is'} lined up now, ${enough}. More come as Orbit reads your network.`,
+      text: `${pool} strong match${pool > 1 ? 'es are' : ' is'} lined up now, ${enough}.`,
     });
   }
   return out;

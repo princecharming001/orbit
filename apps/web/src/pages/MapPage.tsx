@@ -172,8 +172,6 @@ export function MapPage() {
   // a search inside the introductions view: a person or a company the map turns to
   const [webFocus, setWebFocus] = useState<{ id?: string; group?: string; label: string }>();
   const [storyHover, setStoryHover] = useState<string>();
-  /** people the map holds in grey "+N" dots: the panel explains those dots only when the map shows some */
-  const [aggregated, setAggregated] = useState(0);
   const peopleQ = useLiveQuery(
     () => (userId ? db.people.where('userId').equals(userId).toArray() : []),
     [userId],
@@ -846,7 +844,6 @@ export function MapPage() {
         : undefined,
     [webMode, web, webLit, webFocus],
   );
-  const clear = touch ? '' : ' Esc to clear.';
   // one line under the filters that says what the map shows, in words, whenever it changes
   const legend = (() => {
     if (missed && missed.q === query.trim())
@@ -859,18 +856,17 @@ export function MapPage() {
       if (companyFocus)
         return `Showing ${plural(companyCount, 'person', 'people')} at ${companyFocus.label}${
           warmCount ? `, ${warmCount} warm` : ''
-        }.${touch ? '' : ' Drag to turn the orbit, Esc to clear.'}`;
+        }.`;
       if (target) {
         if (paths === undefined) return `Finding routes to ${target.displayName}.`;
-        if (!current) return `No route to ${target.displayName} through your network yet.${clear}`;
+        if (!current) return `No route to ${target.displayName} through your network yet.`;
         if (isColdDirect(current))
-          return `You know ${target.displayName} only slightly, so a note straight to them would be a cold one.${clear}`;
-        if (current.hops.length === 1) return `You know ${target.displayName} directly.${clear}`;
+          return `You know ${target.displayName} only slightly, so a note straight to them would be a cold one.`;
+        if (current.hops.length === 1) return `You know ${target.displayName} directly.`;
         const via = byId.get(current.hops[0]!.toId)?.firstName ?? 'someone';
-        return `Route ${pathIdx + 1} of ${paths.length} to ${target.displayName}, through ${via}.${clear}`;
+        return `Route ${pathIdx + 1} of ${paths.length} to ${target.displayName}, through ${via}.`;
       }
-      if (choices) return 'Several matches, lit on the map. Pick the one you meant.';
-      return 'Type a name or a company to find a way in.';
+      return '';
     }
     switch (filter) {
       case 'targets':
@@ -878,24 +874,23 @@ export function MapPage() {
           targetGroups?.length ?? 0,
           'target company',
           'target companies',
-        )}.${clear}`;
+        )}.`;
       case 'alumni':
-        return `Showing ${plural(highlightIds?.size ?? 0, 'alum', 'alumni')}${user?.school ? ` of ${user.school}` : ''}.${clear}`;
+        return `Showing ${plural(highlightIds?.size ?? 0, 'alum', 'alumni')}${user?.school ? ` of ${user.school}` : ''}.`;
       case 'chats':
-        return `Showing ${plural(highlightIds?.size ?? 0, 'person', 'people')} in your pipeline.${clear}`;
+        return `Showing ${plural(highlightIds?.size ?? 0, 'person', 'people')} in your pipeline.`;
       case 'recent':
-        return `Showing ${plural(highlightIds?.size ?? 0, 'person', 'people')} you were in touch with in the last 90 days.${clear}`;
+        return `Showing ${plural(highlightIds?.size ?? 0, 'person', 'people')} you were in touch with in the last 90 days.`;
       case 'intros':
         if (!web.links.length) return 'No introductions recorded yet.';
-        if (webFocus && !webLit && webFocus.group)
-          return `Showing introductions at ${webFocus.label}.${clear}`;
+        if (webFocus && !webLit && webFocus.group) return `Showing introductions at ${webFocus.label}.`;
         if (webFocus?.id && webLit === webFocus.id)
-          return `Showing the introductions through ${webFocus.label}.${clear}`;
+          return `Showing the introductions through ${webFocus.label}.`;
         return `${plural(web.links.length, 'introduction')} in ${plural(web.roots.length, 'chain')}. Each ring out from You is one more introduction. ${
           touch ? 'Tap' : 'Hover over'
         } a person to light up their chain.`;
       default:
-        return 'Everyone you know, closest in the middle, each company a wedge.';
+        return '';
     }
   })();
   // a chain lit from the map, in words, unless the list already says exactly that
@@ -908,15 +903,7 @@ export function MapPage() {
           <h1 className="text-[24px] font-normal tracking-[-0.02em]">
             {reachMode ? 'Reach' : webMode ? 'Introductions' : 'Your orbit'}
           </h1>
-          <p className="text-[12px] text-ink-3">
-            {reachMode
-              ? 'Who can get you to someone, through people you already know.'
-              : webMode
-                ? 'Who introduced you to whom, generation by generation.'
-                : highlightIds
-                  ? `${highlightIds.size} of ${visible.length} people shown`
-                  : `${visible.length} people`}
-          </p>
+          {!reachMode && !webMode && <p className="text-[12px] text-ink-3">{visible.length} people</p>}
         </div>
         <div className="w-full @[40rem]:w-auto @[40rem]:ml-auto flex items-center gap-2">
           {reachMode && (
@@ -947,7 +934,7 @@ export function MapPage() {
           </div>
         )}
         <p
-          className="w-full text-[12px] text-ink-3 min-h-[18px] mt-0.5"
+          className={cx('w-full text-[12px] text-ink-3', legend && 'min-h-[18px] mt-0.5')}
           aria-live="polite"
           data-testid="map-legend-line"
         >
@@ -988,7 +975,6 @@ export function MapPage() {
             onSelectCluster={openCluster}
             personCard
             question={webFocus}
-            onAggregated={setAggregated}
             onHover={(id, place) => {
               setHover(id);
               if (place) setHoverPlace(place);
@@ -1070,11 +1056,6 @@ export function MapPage() {
               {targetRows && user && (
                 <Card padded>
                   <div className="font-medium text-[13px] mb-2">Target companies</div>
-                  {targetRows.length === 0 && (
-                    <p className="text-[12px] text-ink-3 mb-2">
-                      Add the companies you are aiming for: their wedges light up on the map.
-                    </p>
-                  )}
                   <ul className="space-y-0.5 stagger">
                     {targetRows.map((g) => (
                       <li key={g.key} className="group relative">
@@ -1119,35 +1100,13 @@ export function MapPage() {
                   </div>
                 </Card>
               )}
-              {/* how to read the map: a few quiet lines, not a card */}
-              <div className="text-[12px] text-ink-3 leading-relaxed space-y-1.5 pt-1">
-                <p>
-                  {touch
-                    ? 'Tap a person to see who they are; tap again to open them.'
-                    : 'Hover a person to see who they know; click to open them. Drag to turn the orbit.'}
-                </p>
-                <p>
-                  Companies read as wedges. Inner ring is close ties, outer is new or cold; the thin coloured
-                  ring is pipeline stage.
-                  {aggregated > 0 && ' A grey dot with a number stands for more people at that company.'}
-                </p>
-              </div>
             </>
           )}
           {webMode && (
             <>
-              <div className="text-[13px] text-ink-2">
-                Each line runs from the person who introduced you to the person they introduced you to, and
-                each colour is one chain. A dashed line from You means you know that person directly.
-              </div>
               <Card padded>
                 <div className="font-medium text-[13px] mb-2">Your introductions</div>
-                {stories.length === 0 && (
-                  <p className="text-[12px] text-ink-3">
-                    When someone introduces you by email, or you note who suggested a person, the chain shows
-                    up here and on the map.
-                  </p>
-                )}
+                {stories.length === 0 && <p className="text-[12px] text-ink-3">No introductions yet.</p>}
                 <ul className="space-y-1">
                   {stories.map((s) => (
                     <li key={s.text}>
@@ -1247,9 +1206,7 @@ export function MapPage() {
                 </button>
               )}
               {paths?.length === 0 && (
-                <p className="text-[13px] text-ink-3">
-                  No route found through your network yet. Import more connections or start a warm-up.
-                </p>
+                <p className="text-[13px] text-ink-3">No route found through your network yet.</p>
               )}
               {paths?.map((p, i) => {
                 const first = byId.get(p.hops[0]!.toId);
@@ -1542,7 +1499,7 @@ export function MapPage() {
               )}
               {company.direct.length === 0 && (
                 <p className="text-[13px] text-ink-3" data-testid="company-none">
-                  No one you know works there yet. Plan your way in to find a route.
+                  No one you know works there yet.
                 </p>
               )}
               {(
@@ -1601,9 +1558,11 @@ export function MapPage() {
                   <div className="text-[12.5px] font-medium text-ink-2 mb-1">
                     Routes through people you know
                   </div>
-                  <p className="text-[12px] text-ink-3 mb-1.5" data-testid="company-routes-why">
-                    {WARMER_ROUTES_WHY}
-                  </p>
+                  {reasons && (
+                    <p className="text-[12px] text-ink-3 mb-1.5" data-testid="company-routes-why">
+                      {WARMER_ROUTES_WHY}
+                    </p>
+                  )}
                   <ul className="space-y-1 text-[13px]" data-testid="company-routes">
                     {company.twoHop.map((t) => (
                       <li key={t.target.id}>

@@ -28,8 +28,8 @@ test.describe('Picking people on a card', () => {
     const boxes = list.getByTestId('pick-person');
     await expect(boxes.first()).toBeVisible();
     expect(await boxes.count()).toBeGreaterThan(1);
-    // nothing picked yet: the bar invites, the usual next steps stay
-    await expect(list.getByTestId('selection-count')).toHaveText('Pick people to act on them');
+    // nothing picked yet: no count, the usual next steps stay
+    await expect(list.getByTestId('selection-count')).toHaveCount(0);
     await boxes.nth(0).check();
     await boxes.nth(1).check();
     await expect(list.getByTestId('selection-count')).toHaveText('2 picked');

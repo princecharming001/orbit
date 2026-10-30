@@ -21,7 +21,6 @@ import { moveChat } from '../engine/move';
 import { wentQuiet } from '../engine/pipeline';
 import { draftLists, notYetWritten, startedDrafts, todayCards } from '../engine/today';
 import { isServerUser } from '../integrations/orbitApi';
-import { useHints } from '../state/hints';
 import { useSession } from '../state/session';
 import {
   Avatar,
@@ -30,7 +29,6 @@ import {
   Chip,
   cx,
   EmptyState,
-  FirstRunHint,
   PageHeader,
   relDate,
   Skeleton,
@@ -108,7 +106,6 @@ export function InboxPage() {
   const focusPerson = params.get('person') ?? undefined;
   const toast = useToast();
   const nav = useNavigate();
-  const hints = useHints();
   const now = new Date();
   // before showing the cards, retire anything that stopped being true since they were made
   useEffect(() => {
@@ -276,7 +273,7 @@ export function InboxPage() {
   if (suggestionsQ === undefined || outboundQ === undefined || peopleQ === undefined || chatsQ === undefined)
     return (
       <div ref={rootRef}>
-        <PageHeader title="Drafts" subtitle="What is worth doing today." />
+        <PageHeader title="Drafts" />
         <div
           className={cx(
             'grid gap-6 items-start',
@@ -304,11 +301,7 @@ export function InboxPage() {
     <div ref={rootRef}>
       <PageHeader
         title="Drafts"
-        subtitle={
-          <>
-            What is worth doing today. <RepliesChecked />
-          </>
-        }
+        subtitle={<RepliesChecked />}
         actions={
           // with nobody in Orbit yet there is nothing to refresh
           visiblePeople > 0 && (
@@ -347,16 +340,6 @@ export function InboxPage() {
             </div>
           ))}
         </Card>
-      )}
-      {cards.length > 0 && (
-        <FirstRunHint
-          id="drafts"
-          title="How Drafts works"
-          dismissed={hints.seen('drafts')}
-          onDismiss={hints.dismiss}
-        >
-          Most urgent first. Open a draft to edit it; nothing goes out until you send it yourself.
-        </FirstRunHint>
       )}
       <div
         className={cx(
@@ -415,9 +398,7 @@ export function InboxPage() {
             )}
           {shown === 'pending' && !split && pending.length > 0 && (
             <div className="stagger space-y-3" data-testid="drafts-to-send">
-              {forToday.length === 0 && (
-                <p className="text-[13px] text-ink-3">Nothing to send today. The drafts below can wait.</p>
-              )}
+              {forToday.length === 0 && <p className="text-[13px] text-ink-3">Nothing to send today.</p>}
               {forToday.map((s) => (
                 <SuggestionCard key={s.id} s={s} compact highlight={s.id === focused?.id} />
               ))}
@@ -515,10 +496,7 @@ export function InboxPage() {
                 ))}
               </div>
             ) : (
-              <EmptyState
-                title="Nothing waiting"
-                body="Messages that could not go out wait here to try again."
-              />
+              <EmptyState title="Nothing waiting" />
             ))}
           {shown === 'scheduled' &&
             (scheduled.length ? (
@@ -575,13 +553,12 @@ export function InboxPage() {
           {quiet.length > 0 && user && (
             <Card data-testid="drafts-quiet">
               <div className="font-medium">Waiting on a reply</div>
-              <p className="text-[12px] text-ink-3 mt-0.5 mb-3">
-                You wrote last, a week or more ago.
-                {googleOn
-                  ? ' Orbit suggests a follow-up when one is due.'
-                  : ' Orbit cannot see your inbox or LinkedIn, so when someone answers or accepts, tell it here.'}
-              </p>
-              <ul className="space-y-2.5">
+              {!googleOn && (
+                <p className="text-[12px] text-ink-3 mt-0.5">
+                  Orbit cannot see your inbox or LinkedIn, so when someone answers or accepts, tell it here.
+                </p>
+              )}
+              <ul className="space-y-2.5 mt-3">
                 {quiet.slice(0, 4).map((c) => {
                   const p = byId.get(c.personId)!;
                   return (
@@ -725,9 +702,6 @@ function ToWrite({ people }: { people: Person[] }) {
       data-testid="drafts-to-write"
     >
       <p className="font-medium">Next: write to the people you added</p>
-      <p className="text-ink-3 text-[13px] mt-0.5">
-        Orbit drafts the first message for you to edit. Nothing goes out until you send it yourself.
-      </p>
       <ul className="mt-3 space-y-2">
         {people.map((p) => (
           <li key={p.id} className="flex flex-wrap items-center gap-3">

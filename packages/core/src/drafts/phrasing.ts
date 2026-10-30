@@ -60,6 +60,8 @@ const SCHOOL_SHORT: Record<string, string> = {
   'boston college': 'BC',
   'london school of economics': 'LSE',
   'carnegie mellon university': 'Carnegie Mellon',
+  'universidad de los andes': 'Los Andes',
+  'london school of economics and political science': 'LSE',
 };
 
 /** What students actually call their school: "Cornell", "Michigan", "Penn", "MIT". */
@@ -70,6 +72,9 @@ export function schoolShort(school: string | undefined): string {
   if (/\b(inc|llc|ltd|corp|corporation|gmbh|plc|co)\.?$/i.test(t)) return '';
   const known = SCHOOL_SHORT[t.toLowerCase()];
   if (known) return known;
+  // "Indian Institute of Technology Bombay" is "IIT Bombay", "Indian Institute of Management Ahmedabad" is "IIM Ahmedabad"
+  const iit = t.match(/^Indian Institute of (Technology|Management|Science),? ?(?:\(?([A-Z][\w ]*?)\)?)?$/);
+  if (iit) return `II${iit[1]![0]}${iit[2] ? ` ${iit[2].trim()}` : ''}`;
   const uc = t.match(/^(?:The )?University of California,? (?:at )?([A-Z][\w .'-]+)$/);
   if (uc) return `UC ${uc[1]!.trim()}`;
   const of = t.match(/^(?:The )?University of ([A-Z][\w.&'-]*(?: [A-Z][\w.&'-]*)*?)(?:,.*| at .*| in .*)?$/);
@@ -191,7 +196,7 @@ export interface FactClause {
 }
 
 const LEAD_VERBS =
-  /^(recommended|suggested|advised|urged|said|mentioned|offered|volunteered|agreed|promised|told|explained|noted|shared|talked|walked|described|pointed|emphasized|stressed|argued|ran|grew|moved|worked|joined|left|started|studied|went|spent|built|led|interned|founded|switched|transferred|asked|thinks|thought|believes|believed|loves|wanted|wants|plans|planned|leads|runs|works|manages|managed|prefers|preferred|enjoys|likes|hopes|expects|needs|uses|is|was|has|had|will|would|can|could|recently)$/i;
+  /^(posted|posts|wrote|writes|published|publishes|tweeted|studies|studied|teaches|taught|researches|researched|hosts|hosted|speaks|spoke|covers|covered|invests|invested|co-founded|cofounded|recommended|suggested|advised|urged|said|mentioned|offered|volunteered|agreed|promised|told|explained|noted|shared|talked|walked|described|pointed|emphasized|stressed|argued|ran|grew|moved|worked|joined|left|started|studied|went|spent|built|led|interned|founded|switched|transferred|asked|thinks|thought|believes|believed|loves|wanted|wants|plans|planned|leads|runs|works|manages|managed|prefers|preferred|enjoys|likes|hopes|expects|needs|uses|is|was|has|had|will|would|can|could|recently)$/i;
 const ADVERBS = new Set([
   'also',
   'still',
@@ -501,9 +506,28 @@ function paraphrase(p: string): string {
   if (/^(a|an|one|the|your|my)\b/i.test(rest)) return `your point that it comes down to ${rest}`;
   return p;
 }
+/** Verbs a note written as an instruction opens with ("lead with the result", "always ask for the next step"). */
+const IMPERATIVE =
+  /^(lead|be|make|show|ask|send|use|focus|start|keep|do|try|write|read|talk|apply|practice|practise|prepare|learn|build|get|find|pick|choose|avoid|think|spend|take|put|treat|tell|reach|follow|bring|open|close|frame|quantify|know|have|go|stay|stop|look|lean|own|say|skip|cut|treat|network|email|join|ship|pitch|test|explain|lead)$/i;
+
+/** "lead with the result" is their advice "to lead with the result"; "never pitch first" is "never to pitch first". */
+function imperativeAdvice(text: string): string | undefined {
+  const t = text.trim();
+  const words = t.split(/\s+/);
+  const w0 = (words[0] ?? '').toLowerCase();
+  if (/^(don't|dont|do not)$/.test(w0) || (w0 === 'do' && words[1]?.toLowerCase() === 'not'))
+    return words.length > 2 ? `your advice not to ${t.replace(/^(don'?t|do not)\s+/i, '')}` : undefined;
+  if (w0 === 'never' && words.length > 2) return `your advice never to ${words.slice(1).join(' ')}`;
+  if (w0 === 'always' && words.length > 2 && IMPERATIVE.test(words[1] ?? ''))
+    return `your advice to always ${words.slice(1).join(' ')}`;
+  if (IMPERATIVE.test(w0) && words.length > 2 && !/^(is|are|was|were|has|had)$/i.test(words[1] ?? ''))
+    return `your advice to ${t}`;
+  return undefined;
+}
+
 function pointPhraseRaw(c: FactClause | undefined): string | undefined {
   if (!c) return undefined;
-  if (!c.you) return `your point that ${firstPart(c.text)}`;
+  if (!c.you) return imperativeAdvice(firstPart(c.text)) ?? `your point that ${firstPart(c.text)}`;
   const v = c.verb?.toLowerCase() ?? '';
   let rest = firstPart(c.rest ?? '');
   if (!rest || rest.split(' ').length < 2) return undefined;
@@ -681,3 +705,69 @@ export function promiseText(text: string, firstName?: string): string {
 }
 const PROMISE_OBJECT_NEXT =
   /^(about|to|for|with|if|whether|that|and|or|but|when|before|after|at|on|in|by|from|again|a|an|the|my|your|some|any|this|these|those|how|what|why|where|who|back|up|once|soon|later|next|today|tomorrow|tonight|know|monday|tuesday|wednesday|thursday|friday|saturday|sunday|over)$/i;
+
+const EMOJI =
+  /(?:\p{Extended_Pictographic}|[\u{1F1E6}-\u{1F1FF}]|[\u{1F3FB}-\u{1F3FF}]|\u200D|\uFE0F|\u20E3)/gu;
+
+/** Whether a text has an emoji in it. */
+export const hasEmoji = (s: string) => /\p{Extended_Pictographic}/u.test(s);
+
+/**
+ * Light cleanup of something the student typed, before it goes into a message to someone else: whitespace trimmed
+ * and collapsed, emoji dropped (unless the student writes with them), "i" and "im" written as "I" and "I'm", chat
+ * fillers ("lol", "tbh") dropped, and a sentence that starts in lower case started in upper case. Spelling is left as
+ * they wrote it: the student sees the draft before it goes.
+ */
+export function tidyTyped(text: string | undefined, opts: { emoji?: boolean } = {}): string {
+  let t = (text ?? '').replace(/[‘’]/g, "'");
+  if (!opts.emoji) t = t.replace(EMOJI, ' ');
+  t = t
+    .replace(/\s+/g, ' ')
+    .replace(/\s+([,.;:!?])/g, '$1')
+    .replace(/\b(lol|lmao|tbh|ngl|haha+|imo)\b[.!]*/gi, '')
+    .replace(/\blike (?=\d)/gi, 'about ')
+    .replace(/\bi\b/g, 'I')
+    .replace(/\bim\b/g, "I'm")
+    .replace(/\bive\b/g, "I've")
+    .replace(/\bid\b(?= (love|like|be|rather))/g, "I'd")
+    .replace(/\bdont\b/g, "don't")
+    .replace(/\bcant\b/g, "can't")
+    .replace(/\s+/g, ' ')
+    .replace(/\s+([,.;:!?])/g, '$1')
+    .replace(/^[\s,.;:!?-]+|[\s,;:-]+$/g, '')
+    .trim();
+  return t ? cap1(t) : t;
+}
+
+/**
+ * The student's typed text cut to one sentence and at most `max` words, at a clause boundary when it runs long ("So my
+ * story is kind of long, I started out ..." keeps the part that says something), with no end punctuation.
+ */
+export function typedClause(text: string | undefined, max = 25, opts: { emoji?: boolean } = {}): string {
+  let t = tidyTyped(text, opts);
+  if (!t) return '';
+  // a throat-clearing lead-in ("So my story is kind of long,", "Honestly,") says nothing
+  t = t
+    .replace(
+      /^(so,? )?(my story is (kind of |pretty |a bit )?long|long story short|honestly|basically|well|so)[,:]?\s+/i,
+      '',
+    )
+    .replace(/^I (started out|began)\b/, 'I started');
+  t = (t.split(/(?<=[.!?])\s+/)[0] ?? t).replace(/[.!?]+$/, '');
+  const words = t.split(' ');
+  if (words.length > max) {
+    // the first clause boundary after a few words, else the last boundary that fits, else a word cut
+    const cut = t.match(
+      new RegExp(
+        `^((?:\\S+\\s+){5,${max - 1}}?\\S+?)(?:,\\s+(?:and|but|so|which|where|because|while|then|since|ideally|as)\\b|,\\s|;|\\s+(?:and then|because|which|where|so that)\\s)`,
+      ),
+    );
+    t = cut
+      ? cut[1]!
+      : words
+          .slice(0, max)
+          .join(' ')
+          .replace(/\s+\S+$/, '');
+  }
+  return cap1(t.replace(/[\s,;:]+$/, ''));
+}
