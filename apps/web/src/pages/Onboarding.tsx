@@ -15,18 +15,7 @@ import {
   yearLabel,
 } from '@orbit/core';
 import { useLiveQuery } from 'dexie-react-hooks';
-import {
-  Briefcase,
-  Check,
-  Linkedin,
-  Link as LinkIcon,
-  Mail,
-  Minus,
-  Plus,
-  Star,
-  Upload,
-  X,
-} from 'lucide-react';
+import { Briefcase, Check, Linkedin, Link as LinkIcon, Mail, Minus, Plus, Upload, X } from 'lucide-react';
 import {
   type CSSProperties,
   type FormEvent,
@@ -69,13 +58,7 @@ import { connectLinkedInLive, liveLinkedInAvailable } from '../engine/linkedinLi
 import { type OwnWordsPatch, saveOwnWords } from '../engine/ownWords';
 import { saveResume } from '../engine/resume';
 import { pullNow } from '../engine/serverSync';
-import {
-  removeTargetCompany,
-  saveGoals,
-  setTargetPriority,
-  updateLimits,
-  updateProfile,
-} from '../engine/settings';
+import { removeTargetCompany, saveGoals, updateLimits, updateProfile } from '../engine/settings';
 import { addTargetCompanies } from '../engine/targets';
 import { googleClientId } from '../integrations/google';
 import { startGoogleSignIn } from '../integrations/orbitApi';
@@ -717,7 +700,7 @@ function StepGoals({ onNext, onBack }: { onNext: () => void; onBack: () => void 
           <ObLabel htmlFor="ob-company" hint="Optional">
             Target companies
           </ObLabel>
-          {/* a token field: each company is a chip with its star and remove button, typing adds the next */}
+          {/* a token field: each company is a chip with its logo and remove button, typing adds the next */}
           <div
             className="min-h-11 w-full rounded-[10px] border border-line bg-white px-1.5 py-1.5 flex flex-wrap items-center gap-1.5 transition-[border-color,box-shadow] hover:border-[#d4d2ce] focus-within:border-ink focus-within:ring-[3px] focus-within:ring-ink/[0.08] cursor-text"
             onClick={(e) => {
@@ -727,30 +710,9 @@ function StepGoals({ onNext, onBack }: { onNext: () => void; onBack: () => void 
             {tcs.map((t) => (
               <span
                 key={t.id}
-                className="inline-flex items-center h-7 rounded-md bg-canvas-2 pl-0.5 pr-0.5 text-[13.5px] text-ink"
+                className="inline-flex items-center h-7 rounded-md bg-canvas-2 pl-1.5 pr-0.5 text-[13.5px] text-ink"
               >
-                <button
-                  type="button"
-                  className={cx(
-                    'h-6 w-6 inline-flex items-center justify-center rounded hover:bg-black/[0.06]',
-                    t.priority === 1 ? 'text-[#d99a00]' : 'text-ink-3',
-                  )}
-                  title={
-                    t.priority === 1
-                      ? 'Top priority. Click to make it a normal target'
-                      : 'Mark as top priority'
-                  }
-                  aria-label={
-                    t.priority === 1
-                      ? `Make ${t.nameRaw} a normal target`
-                      : `Mark ${t.nameRaw} as top priority`
-                  }
-                  aria-pressed={t.priority === 1}
-                  onClick={() => setTargetPriority(t.id, t.priority === 1 ? 2 : 1)}
-                >
-                  <Star size={13} fill={t.priority === 1 ? 'currentColor' : 'none'} aria-hidden />
-                </button>
-                <CompanyLogo name={t.nameRaw} size={16} decorative className="ml-0.5" />
+                <CompanyLogo name={t.nameRaw} size={16} decorative />
                 <span className="px-1">{t.nameRaw}</span>
                 <button
                   type="button"
@@ -802,8 +764,6 @@ function StepGoals({ onNext, onBack }: { onNext: () => void; onBack: () => void 
             <p className="text-[12.5px] text-ink-3 mt-1.5" role="status">
               {companyNote}
             </p>
-          ) : tcs.length > 0 ? (
-            <p className="text-[12.5px] text-ink-3 mt-1.5">Star a company to make it a top priority.</p>
           ) : null}
         </div>
         <div>

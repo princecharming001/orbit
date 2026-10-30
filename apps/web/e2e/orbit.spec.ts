@@ -777,12 +777,6 @@ test.describe('Manual onboarding', () => {
     await page.getByRole('button', { name: /^add$/i }).click();
     await expect(page.getByText(/already on your list/i)).toBeVisible();
     await expect(page.getByRole('button', { name: /remove figma/i })).toHaveCount(1);
-    // a company can be starred as a top priority right in the field
-    await page.getByRole('button', { name: /mark figma as top priority/i }).click();
-    await expect(page.getByRole('button', { name: /make figma a normal target/i })).toHaveAttribute(
-      'aria-pressed',
-      'true',
-    );
     await page.getByRole('button', { name: /^continue$/i }).click();
     // the written questions (plan 24): each optional, two at most on a screen, saved on Continue
     await expect(page).toHaveURL(/\/onboarding\/aim$/);
