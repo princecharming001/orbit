@@ -172,7 +172,7 @@ export function AddPersonDialog({
 
   return (
     // a stray tap beside the dialog never throws away what was typed
-    <Modal open onClose={onClose} title="Add a person" keepOnBackdrop={!!q.trim()}>
+    <Modal open onClose={onClose} title="Add a person" keepOnBackdrop={!!q.trim() || byHand}>
       <div data-testid="add-person-form">
         <div className="relative">
           <Search

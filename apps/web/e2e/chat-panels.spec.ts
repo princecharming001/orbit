@@ -167,7 +167,8 @@ test.describe('Side panel (laptop)', () => {
       const db = (
         window as unknown as { __orbitDb: { outbound: { toArray(): Promise<{ status: string }[]> } } }
       ).__orbitDb;
-      return (await db.outbound.toArray()).filter((o) => o.status !== 'draft').length;
+      // a dismissed card's draft is cancelled, not sent
+      return (await db.outbound.toArray()).filter((o) => !['draft', 'cancelled'].includes(o.status)).length;
     });
     expect(sent).toBe(0);
 
