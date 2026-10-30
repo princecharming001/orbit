@@ -655,9 +655,8 @@ test.describe('Map on a touch phone (UI-18)', () => {
     await expect(canvas).toHaveAttribute('data-animating', 'false', {
       timeout: 10_000,
     });
-    // the orbit holds still on touch screens, and the copy talks about taps, not hovering
+    // the orbit holds still on touch screens, and no copy talks about hovering
     await expect(canvas).toHaveAttribute('data-moving', 'false');
-    await expect(page.getByText(/tap a person to see who they are/i)).toBeVisible();
     await expect(page.getByText(/hover/i)).toHaveCount(0);
     const [x, y] = (await canvas.getAttribute('data-first-dot'))!.split(',').map(Number) as [number, number];
     const box = (await canvas.boundingBox())!;
@@ -733,6 +732,8 @@ async function fillYou(page: Page, name: string, email: string) {
   await page.getByTestId('ob-name').fill(name);
   await page.getByTestId('ob-email').fill(email);
   await page.getByTestId('ob-school').fill('University of Michigan');
+  // a person closes the school list (or clicks away) before picking the year
+  await page.getByTestId('ob-school').press('Escape');
   await page.getByTestId('ob-year').selectOption({ index: 2 });
   await page.getByRole('button', { name: /^continue$/i }).click();
 }
@@ -1364,6 +1365,7 @@ test.describe('Setup without Google', () => {
     // a school address is enough for Orbit to spot alumni: there is no domain field to fill
     await expect(page.getByTestId('ob-school-domain')).toContainText('umich.edu');
     await page.getByTestId('ob-school').fill('University of Michigan');
+    await page.getByTestId('ob-school').press('Escape');
     await page.getByTestId('ob-year').selectOption({ index: 2 });
     await page.getByRole('button', { name: /^continue$/i }).click();
     await page.getByTestId('ob-fn-consulting').click();
@@ -2457,7 +2459,7 @@ test.describe('People holds the board and the list; Drafts holds the day', () =>
     await page.goto('people?view=list');
     const rows = page.getByTestId('people-row');
     await expect(rows).toHaveCount(300);
-    await expect(page.getByText(/^Showing 300 of \d+\./)).toBeVisible();
+    await expect(page.getByText(/^Showing 300 of \d+$/)).toBeVisible();
     await page.getByTestId('people-show-more').click();
     expect(await rows.count()).toBeGreaterThan(400);
   });

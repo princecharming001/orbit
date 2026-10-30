@@ -3225,7 +3225,19 @@ export function generateDraft(input: DraftContext): DraftOutput {
 function questionsIn(text: string | undefined): string[] {
   if (!text) return [];
   const body = text.split(/\n\s*(?:On .{0,120}wrote:|-{2,}|From: )/)[0]!;
-  return (body.match(/[^.!?\n]+\?/g) ?? []).map((q) => q.trim()).filter((q) => q.split(/\s+/).length >= 3);
+  return (
+    (body.match(/[^.!?\n]+\?/g) ?? [])
+      .map((q) => q.trim())
+      .filter((q) => q.split(/\s+/).length >= 3)
+      // "Would Thursday at 2pm work?" is a time they offered, which the scheduling reply answers, not a question
+      .filter(
+        (q) =>
+          !TIMES_ASK.test(q) &&
+          !/\b(mon|tues|wednes|thurs|fri|satur|sun)day\b|\b\d{1,2}(:\d{2})?\s?(am|pm)\b|\b(tomorrow|next week|this week)\b/i.test(
+            q,
+          ),
+      )
+  );
 }
 
 /** A question about the student that their profile answers: when they graduate, what they are looking for. */

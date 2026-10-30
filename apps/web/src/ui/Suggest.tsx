@@ -107,8 +107,19 @@ export function Suggest({
       if (wrap.current?.contains(t) || menu.current?.contains(t)) return;
       setOpen(false);
     };
+    // focus moving on (Tab, a picker, a field filled by a keyboard or a script) closes it too: an open list left over
+    // the next field or the Continue button would take the next tap
+    const onFocus = (e: FocusEvent) => {
+      const t = e.target as Node;
+      if (wrap.current?.contains(t) || menu.current?.contains(t)) return;
+      setOpen(false);
+    };
     document.addEventListener('pointerdown', onDown);
-    return () => document.removeEventListener('pointerdown', onDown);
+    document.addEventListener('focusin', onFocus);
+    return () => {
+      document.removeEventListener('pointerdown', onDown);
+      document.removeEventListener('focusin', onFocus);
+    };
   }, [open]);
 
   const pick = (s: Suggestion) => {
@@ -137,6 +148,8 @@ export function Suggest({
           if (e.defaultPrevented) return;
           if (!shown) {
             if (e.key === 'ArrowDown') setOpen(true);
+            // closed before its suggestions arrived: they must not open it again when they do
+            else if (e.key === 'Escape' || e.key === 'Tab') setOpen(false);
             return;
           }
           if (e.key === 'ArrowDown') {
