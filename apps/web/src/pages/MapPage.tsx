@@ -1,4 +1,4 @@
-import type { ExternalCandidate, IntroWeb, OrbitNode, Person, ReachPath } from '@orbit/core';
+import type { ExternalCandidate, IntroWeb, OrbitNode, Person, ReachPath, TargetCompany } from '@orbit/core';
 import {
   buildIntroWeb,
   combinedPairWeights,
@@ -16,6 +16,7 @@ import { useLiveQuery } from 'dexie-react-hooks';
 import { X } from 'lucide-react';
 import { type CSSProperties, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
+import { AddTargetCompany, TargetToggle } from '../components/AddTargetCompany';
 import { useAskIntro } from '../components/askIntro';
 import { CompanyLogo, LogoText } from '../components/CompanyLogo';
 import { MapPersonCard } from '../components/map/MapPersonCard';
@@ -53,6 +54,7 @@ import {
 import { checkHops, checkState, hopEvidenceVersion, subscribeHopEvidence } from '../engine/hopEvidence';
 import { addLinkedInFound, type FoundView } from '../engine/linkedinSearch';
 import { subscribePairNotes } from '../engine/pairNotes';
+import { removeTargetCompany, restoreTargetCompany } from '../engine/settings';
 import { maintenanceRunning, watchMaintenance } from '../engine/sync';
 import { planFromInput } from '../engine/targetPlan';
 import { isJobLink, linkIn } from '../integrations/postings';
@@ -335,6 +337,19 @@ export function MapPage() {
     () => (targetGroups ? new Set(targetGroups.map((g) => g.key)) : undefined),
     [targetGroups],
   );
+  // the panel lists every target company: those with people first, then the ones where no one is known yet, each
+  // with the stored target it comes from (so it can be taken off the list)
+  const targetRows = useMemo(() => {
+    if (!targetGroups) return undefined;
+    const tcOf = (key: string, orgId?: string) =>
+      tcs.find((t) => (!!orgId && t.organizationId === orgId) || `n:${normalizeCompany(t.nameRaw)}` === key);
+    const rows = targetGroups.map((g) => ({ ...g, tc: tcOf(g.key, g.orgId) }));
+    const listed = new Set(rows.map((r) => r.tc?.id).filter(Boolean));
+    for (const t of tcs)
+      if (!listed.has(t.id))
+        rows.push({ key: `tc:${t.id}`, label: t.nameRaw, orgId: t.organizationId, people: [], tc: t });
+    return rows;
+  }, [targetGroups, tcs]);
   // the referral web, built only from recorded introductions, referrals and suggestions
   const web: IntroWeb = useMemo(
     () =>
@@ -586,7 +601,8 @@ export function MapPage() {
     setPaths([]);
     setCompany(undefined);
     setCompanyFocus({
-      key: org ? `n:${org.nameNormalized}` : `n:${normalizeCompany(label)}`,
+      // the wedge's key as the layout makes it (orbitGroupKey), even for a company stored without nameNormalized
+      key: `n:${org?.nameNormalized || normalizeCompany(org?.name ?? label)}`,
       label: org?.name ?? label,
     });
     setParams({ reach: '1', company: label });
@@ -715,11 +731,20 @@ export function MapPage() {
       5000,
     );
   };
+  /** Take a company off the targets, with an Undo that puts it back as it was. */
+  const dropTarget = async (t: TargetCompany) => {
+    const gone = await removeTargetCompany(t.id);
+    if (!gone) return;
+    toast.push({
+      text: `${t.nameRaw} is off your targets.`,
+      action: { label: 'Undo', onClick: () => void restoreTargetCompany(gone) },
+    });
+  };
   const openCluster = (node: OrbitNode) => {
     const g = node.groupKey;
     const group = node.cluster;
     if (!group) return;
-    const org = [...orgMap.values()].find((o) => `n:${o.nameNormalized}` === g);
+    const org = [...orgMap.values()].find((o) => `n:${o.nameNormalized || normalizeCompany(o.name)}` === g);
     // the "+N" dot bursts open on the map, and the panel lists everyone there
     if (org) void openCompany(org.id, org.name);
     else if (group.label !== 'Other companies' && g !== 'independent')
@@ -1042,20 +1067,20 @@ export function MapPage() {
           )}
           {!reachMode && !webMode && (
             <>
-              {targetGroups && (
+              {targetRows && user && (
                 <Card padded>
                   <div className="font-medium text-[13px] mb-2">Target companies</div>
-                  {targetGroups.length === 0 && (
-                    <p className="text-[12px] text-ink-3">
-                      No one at your target companies in your network yet.
+                  {targetRows.length === 0 && (
+                    <p className="text-[12px] text-ink-3 mb-2">
+                      Add the companies you are aiming for: their wedges light up on the map.
                     </p>
                   )}
-                  <ul className="space-y-1">
-                    {targetGroups.map((g) => (
-                      <li key={g.key}>
+                  <ul className="space-y-0.5 stagger">
+                    {targetRows.map((g) => (
+                      <li key={g.key} className="group relative">
                         <button
                           className={cx(
-                            'w-full flex items-center gap-2 text-left text-[13px] rounded-md px-2 py-1.5 hover:bg-canvas-2',
+                            'w-full flex items-center gap-2 text-left text-[13px] rounded-md pl-2 pr-9 py-1.5 hover:bg-canvas-2',
                             TAP,
                           )}
                           onClick={() => void openCompany(g.orgId ?? g.label, g.label)}
@@ -1064,12 +1089,34 @@ export function MapPage() {
                           <CompanyLogo name={g.label} orgId={g.orgId} size={16} decorative />
                           <span className="font-medium truncate">{g.label}</span>
                           <span className="ml-auto text-ink-3 tabular shrink-0">
-                            {plural(g.people.length, 'person', 'people')}
+                            {g.people.length ? plural(g.people.length, 'person', 'people') : 'No one yet'}
                           </span>
                         </button>
+                        {g.tc && (
+                          <button
+                            type="button"
+                            className={cx(
+                              'absolute right-1 top-1/2 -translate-y-1/2 h-6 w-6 inline-flex items-center justify-center rounded text-ink-3 hover:text-ink hover:bg-black/[0.06] transition-opacity',
+                              touch ? '' : 'opacity-0 group-hover:opacity-100 focus-visible:opacity-100',
+                            )}
+                            onClick={() => void dropTarget(g.tc!)}
+                            aria-label={`Take ${g.label} off your targets`}
+                            title={`Take ${g.label} off your targets`}
+                            data-testid="map-target-remove"
+                          >
+                            <X size={13} aria-hidden />
+                          </button>
+                        )}
                       </li>
                     ))}
                   </ul>
+                  <div className="mt-2">
+                    <AddTargetCompany
+                      userId={user.id}
+                      taken={tcs.map((t) => t.nameRaw)}
+                      testId="map-add-target"
+                    />
+                  </div>
                 </Card>
               )}
               {/* how to read the map: a few quiet lines, not a card */}
@@ -1467,14 +1514,23 @@ export function MapPage() {
           )}
           {company && (
             <>
-              <div className="font-medium flex items-center gap-2">
+              <div className="flex items-center gap-2">
                 <CompanyLogo
                   name={company.org?.name ?? company.label}
                   orgId={company.org?.id}
                   size={20}
                   decorative
                 />
-                {company.org?.name ?? company.label}
+                <span className="font-medium truncate">{company.org?.name ?? company.label}</span>
+                {user && (
+                  <TargetToggle
+                    userId={user.id}
+                    name={company.org?.name ?? company.label}
+                    orgId={company.org?.id}
+                    tcs={tcs}
+                    onDrop={(t) => void dropTarget(t)}
+                  />
+                )}
               </div>
               {user && (
                 <WarmIntrosPanel
@@ -1484,57 +1540,65 @@ export function MapPage() {
                   isAsking={isAsking}
                 />
               )}
+              {company.direct.length === 0 && (
+                <p className="text-[13px] text-ink-3" data-testid="company-none">
+                  No one you know works there yet. Plan your way in to find a route.
+                </p>
+              )}
               {(
                 [
-                  ['People you know there now', company.direct],
-                  ['Saved to contact (not someone you know yet)', company.saved],
-                  ['Former employees you know (last five years)', company.former],
+                  ['People you know there', company.direct],
+                  ['Saved to contact', company.saved],
+                  ['Used to work there', company.former],
                 ] as const
-              ).map(([title, list]) => (
-                <div key={title}>
-                  <div className="text-[12px] uppercase tracking-wide text-ink-3 mb-1">
-                    {title} · {list.length}
+              )
+                // a list with no one in it is left out, not shown as an empty heading
+                .filter(([, list]) => list.length > 0)
+                .map(([title, list]) => (
+                  <div key={title}>
+                    <div className="flex items-baseline gap-1.5 text-[12.5px] mb-1.5">
+                      <span className="font-medium text-ink-2">{title}</span>
+                      <span className="text-ink-3 tabular">{list.length}</span>
+                    </div>
+                    <ul className="space-y-1.5">
+                      {(showAll === title ? list : list.slice(0, 6)).map((d) => (
+                        <li key={d.person.id} className="flex items-center gap-2 text-[13px]">
+                          <Avatar
+                            name={d.person.displayName}
+                            src={d.person.photoUrl}
+                            id={d.person.id}
+                            size={22}
+                          />
+                          <button
+                            className={cx('hover:underline truncate text-left', TAP)}
+                            onClick={() => setParams({ reach: d.person.id })}
+                          >
+                            {d.person.displayName}
+                          </button>
+                          {d.person.isAlumni && <Chip>Alum</Chip>}
+                          <span className="ml-auto">
+                            <StrengthDots v={d.strength} />
+                          </span>
+                        </li>
+                      ))}
+                    </ul>
+                    {list.length > 6 && showAll !== title && (
+                      <button
+                        className={cx(
+                          'mt-1.5 text-[12px] text-ink underline decoration-[#cfcdc9] underline-offset-4 hover:decoration-ink',
+                          TAP,
+                        )}
+                        onClick={() => setShowAll(title)}
+                        data-testid="company-show-all"
+                      >
+                        Show all {list.length}
+                      </button>
+                    )}
                   </div>
-                  {list.length === 0 && <p className="text-[12px] text-ink-3">None</p>}
-                  <ul className="space-y-1.5">
-                    {(showAll === title ? list : list.slice(0, 6)).map((d) => (
-                      <li key={d.person.id} className="flex items-center gap-2 text-[13px]">
-                        <Avatar
-                          name={d.person.displayName}
-                          src={d.person.photoUrl}
-                          id={d.person.id}
-                          size={22}
-                        />
-                        <button
-                          className={cx('hover:underline truncate text-left', TAP)}
-                          onClick={() => setParams({ reach: d.person.id })}
-                        >
-                          {d.person.displayName}
-                        </button>
-                        {d.person.isAlumni && <Chip>Alum</Chip>}
-                        <span className="ml-auto">
-                          <StrengthDots v={d.strength} />
-                        </span>
-                      </li>
-                    ))}
-                  </ul>
-                  {list.length > 6 && showAll !== title && (
-                    <button
-                      className={cx(
-                        'mt-1.5 text-[12px] text-ink underline decoration-[#cfcdc9] underline-offset-4 hover:decoration-ink',
-                        TAP,
-                      )}
-                      onClick={() => setShowAll(title)}
-                      data-testid="company-show-all"
-                    >
-                      Show all {list.length}
-                    </button>
-                  )}
-                </div>
-              ))}
+                ))}
               {company.twoHop.length > 0 && (
                 <div>
-                  <div className="text-[12px] uppercase tracking-wide text-ink-3 mb-1">
+                  <div className="text-[12.5px] font-medium text-ink-2 mb-1">
                     Routes through people you know
                   </div>
                   <p className="text-[12px] text-ink-3 mb-1.5" data-testid="company-routes-why">
@@ -1562,25 +1626,30 @@ export function MapPage() {
                   </ul>
                 </div>
               )}
-              {user && (
-                <Button
-                  variant="primary"
-                  size="sm"
-                  className={TAP}
-                  onClick={() => void openJob(company.org?.name ?? company.label)}
-                  data-testid="company-plan"
-                >
-                  Plan my way in
-                </Button>
-              )}
-              {company.org && (
-                <Link
-                  to={`/companies/${company.org.id}`}
-                  className={cx('text-[13px] text-accent inline-flex items-center', TAP)}
-                >
-                  Open company page →
-                </Link>
-              )}
+              <div className="flex flex-wrap items-center gap-x-4 gap-y-2 pt-1">
+                {user && (
+                  <Button
+                    variant="primary"
+                    size="sm"
+                    className={TAP}
+                    onClick={() => void openJob(company.org?.name ?? company.label)}
+                    data-testid="company-plan"
+                  >
+                    Plan my way in
+                  </Button>
+                )}
+                {company.org && (
+                  <Link
+                    to={`/companies/${company.org.id}`}
+                    className={cx(
+                      'text-[13px] text-ink-2 hover:text-ink underline decoration-[#cfcdc9] underline-offset-4 hover:decoration-ink',
+                      TAP,
+                    )}
+                  >
+                    Open company page
+                  </Link>
+                )}
+              </div>
             </>
           )}
         </aside>

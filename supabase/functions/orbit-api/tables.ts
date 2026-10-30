@@ -23,7 +23,14 @@ export interface PullTable {
 }
 
 export const PULL_TABLES: PullTable[] = [
-  { table: 'organizations', key: 'id', cursor: 'updated_at' },
+  {
+    table: 'organizations',
+    key: 'id',
+    cursor: 'updated_at',
+    // an Organization under the browser's names: without nameNormalized a company's wedge key read "n:undefined",
+    // so picking a company never turned the map to it
+    map: (r) => ({ ...r, nameNormalized: r.nameNorm }),
+  },
   {
     table: 'people',
     key: 'id',

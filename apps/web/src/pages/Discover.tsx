@@ -493,11 +493,7 @@ function DiscoverFeed({ tabs }: { tabs?: ReactNode }) {
           <h2 id="discover-feed-h" className="sr-only">
             People to meet
           </h2>
-          <FeedFilters
-            sort={sortBy}
-            total={allFeed.length}
-            onSort={(s) => setFilter('by', s === 'best' ? undefined : s)}
-          />
+          <FeedFilters sort={sortBy} onSort={(s) => setFilter('by', s === 'best' ? undefined : s)} />
           <div
             role="feed"
             aria-busy={loading}

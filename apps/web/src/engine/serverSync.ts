@@ -26,7 +26,7 @@ import type {
   StageEvent,
   User,
 } from '@orbit/core';
-import { chatToRow, noteToRow, stageEventToRow } from '@orbit/core';
+import { chatToRow, normalizeCompany, noteToRow, stageEventToRow } from '@orbit/core';
 import Dexie, { type Table, type Transaction } from 'dexie';
 import { db, type OutboxRow, type TieLabelRow } from '../db/schema';
 import {
@@ -186,9 +186,29 @@ function withDefaults(table: string, row: Record<string, unknown>, userId: strin
       ...stripNulls(r),
     };
   if (table === 'tie_labels' || table === 'tie_scores') return { updatedAt: new Date().toISOString(), ...r };
+  // the map keys a company's wedge by nameNormalized: a server row names it nameNorm
+  if (table === 'organizations')
+    return stripNulls({ ...r, nameNormalized: r.nameNormalized ?? r.nameNorm ?? companyNorm(r.name) });
   if (table === 'drafts' && typeof r.bodyDraft !== 'string' && typeof r.body === 'string')
     return stripNulls({ ...r, bodyDraft: r.body });
   return stripNulls(r);
+}
+
+const companyNorm = (name: unknown) => (typeof name === 'string' ? normalizeCompany(name) : undefined);
+
+/**
+ * Companies pulled before the server named nameNormalized carry only nameNorm, so picking one never turned the map to
+ * its wedge: fill it in once, as a server write (nothing is queued to go back up).
+ */
+export async function repairStoredCompanies(): Promise<number> {
+  return db.transaction('rw', db.organizations, async (tx) => {
+    serverTx.add(tx);
+    return db.organizations
+      .filter((o) => !o.nameNormalized && !!((o as { nameNorm?: string }).nameNorm || o.name))
+      .modify((o) => {
+        o.nameNormalized = (o as { nameNorm?: string }).nameNorm || normalizeCompany(o.name);
+      });
+  });
 }
 
 /** Postgres nulls become absent fields, as the core types expect. */
@@ -771,6 +791,7 @@ let lastDerived = 0;
  */
 export function startServerSync(o: SyncLoopOptions): () => void {
   installOutboxHooks();
+  void repairStoredCompanies().catch(() => undefined);
   let stopped = false;
   let lastCounts = '';
   const derived = async (out: PullOutcome) => {

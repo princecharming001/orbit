@@ -54,7 +54,10 @@ export function WarmIntrosPanel({
   if (!intros?.length) return null;
   return (
     <div className={cx('space-y-1.5', className)} data-testid="map-warm-intros">
-      <div className="text-[12px] uppercase tracking-wide text-ink-3">Warm intros · {intros.length}</div>
+      <div className="flex items-baseline gap-1.5 text-[12.5px]">
+        <span className="font-medium text-ink-2">Warm intros</span>
+        <span className="text-ink-3 tabular">{intros.length}</span>
+      </div>
       <ul className="space-y-2">
         {intros.map((w) => {
           const first = w.introducer.name.split(' ')[0] ?? w.introducer.name;

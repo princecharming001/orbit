@@ -101,18 +101,10 @@ const SORTS: { id: FeedSort; label: string; hint: string; title: string }[] = [
 
 /**
  * The sort above the feed: the overall score or one meter, each saying what it means, as a light segmented control
- * (the chosen one a white pill on a soft track). Replaces the one-line legend; the same words are on each option.
+ * (the chosen one a white pill on a soft track). No line under it: each option says what it sorts by, and its
+ * tooltip says the rest.
  */
-export function FeedFilters({
-  sort,
-  total,
-  onSort,
-}: {
-  sort: FeedSort;
-  total: number;
-  onSort: (s: FeedSort) => void;
-}) {
-  const current = SORTS.find((s) => s.id === sort)!;
+export function FeedFilters({ sort, onSort }: { sort: FeedSort; onSort: (s: FeedSort) => void }) {
   return (
     <div className="mb-3" data-testid="discover-filters">
       <div
@@ -142,12 +134,6 @@ export function FeedFilters({
           );
         })}
       </div>
-      <p className="mt-2 text-[12px] text-ink-3" data-testid="discover-legend" aria-live="polite">
-        {sort === 'best'
-          ? 'Best first, by Match, Reach and Reply odds together'
-          : `Sorted by ${current.title}`}
-        {` · ${total} ${total === 1 ? 'person' : 'people'}`}
-      </p>
     </div>
   );
 }

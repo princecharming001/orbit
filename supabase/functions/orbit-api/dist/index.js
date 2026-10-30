@@ -12507,7 +12507,14 @@ import { z as z5 } from "npm:zod@3.25.76/v4";
 
 // supabase/functions/orbit-api/tables.ts
 var PULL_TABLES = [
-  { table: "organizations", key: "id", cursor: "updated_at" },
+  {
+    table: "organizations",
+    key: "id",
+    cursor: "updated_at",
+    // an Organization under the browser's names: without nameNormalized a company's wedge key read "n:undefined",
+    // so picking a company never turned the map to it
+    map: (r) => ({ ...r, nameNormalized: r.nameNorm })
+  },
   {
     table: "people",
     key: "id",

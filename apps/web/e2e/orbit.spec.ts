@@ -2585,7 +2585,7 @@ test.describe('Discover: a feed of new people', () => {
       expect(lit).toBe(value > 0 ? Math.min(5, Math.max(1, Math.ceil(value / 20))) : 0);
       await expect(meter).toHaveAttribute('aria-valuetext', new RegExp(`^${value} out of 100`));
     }
-    await expect(page.getByTestId('discover-legend')).toContainText('Reply odds');
+    await expect(page.getByTestId('discover-sort-odds')).toContainText('Reply odds');
     // the sort: by one meter (highest first), and back to best first
     const feed = page.getByTestId('discover-feed');
     const reachOf = async () =>

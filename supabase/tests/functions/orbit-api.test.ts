@@ -957,6 +957,19 @@ describe('/sync/pull parameters', () => {
     expect([...seen].sort()).toEqual([...ids].sort());
   });
 
+  it('pulls a company with nameNormalized, the key its wedge on the map goes by', async () => {
+    const userId = await makeUser(t.db, { email: 'wedge@example.com' });
+    await t.db.sql`
+      insert into orbit.organizations (user_id, name, name_norm) values (${userId}::uuid, 'Amazon', 'amazon')`;
+    const out = await pull(t.db, userId, {
+      cursor: {},
+      tables: PULL_TABLES.filter((x) => x.table === 'organizations'),
+      limit: 10,
+      upTo: new Date(Date.now() + 60_000),
+    });
+    expect(out.changes.organizations?.[0]).toMatchObject({ name: 'Amazon', nameNormalized: 'amazon' });
+  });
+
   it('pulls a reply draft with its Gmail thread under the names the browser reads', async () => {
     // without them the browser took a threaded reply for a new email and asked the student for a subject
     const userId = await makeUser(t.db, { email: 'threaded@example.com' });

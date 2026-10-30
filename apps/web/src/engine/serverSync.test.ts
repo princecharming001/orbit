@@ -10,6 +10,7 @@ import {
   pullNow,
   pushOutbox,
   refreshSyncStatus,
+  repairStoredCompanies,
   serverIdOf,
   syncStatusNow,
   writeFromServer,
@@ -108,6 +109,19 @@ describe('pull', () => {
     await pullNow(user.id);
     await flushQueue();
     expect(await db.outbox.count()).toBe(0);
+  });
+
+  it('gives a company its nameNormalized, pulled or already stored, so picking it turns the map to its wedge', async () => {
+    await writeFromServer('organizations', [{ id: 'o1', name: 'Amazon', nameNorm: 'amazon' }], user.id);
+    expect((await db.organizations.get('o1'))?.nameNormalized).toBe('amazon');
+    // a company pulled before the field was named: repaired once, and nothing queued to go back up
+    await db.organizations.put({ id: 'o2', name: 'Stripe', nameNorm: 'stripe' } as never);
+    await flushQueue();
+    const before = await db.outbox.count();
+    expect(await repairStoredCompanies()).toBe(1);
+    expect((await db.organizations.get('o2'))?.nameNormalized).toBe('stripe');
+    await flushQueue();
+    expect(await db.outbox.count()).toBe(before);
   });
 
   it('keeps the status the poll reads', async () => {
