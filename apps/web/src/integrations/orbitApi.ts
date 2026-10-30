@@ -169,6 +169,10 @@ export interface ApiRoutes {
       | { ok: false; reason: 'not_connected' | 'unconfigured' | 'limit' | 'error' }
     ),
   ];
+  '/linkedin/reader': [
+    Record<string, never>,
+    { ok: true; accountId: string; token: string } | { ok: false; reason: 'not_connected' | 'unconfigured' },
+  ];
   '/linkedin/sync': [Record<string, never>, QueuedResponse];
   '/goals/list': [Record<string, never>, GoalsListResponse];
   '/goals/upsert': [GoalUpsertRequest, GoalUpsertResponse];

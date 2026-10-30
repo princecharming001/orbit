@@ -59,6 +59,8 @@ export interface ApiEnv {
   unipileWebhookSecret?: string;
   /** <SUPABASE_URL>/functions/v1, for the URLs providers call back (Unipile's notify_url) */
   functionsUrl?: string;
+  /** what orbit-connectors signs account tokens with (SUPABASE_SERVICE_ROLE_KEY), for /linkedin/reader */
+  connectorsSigningKey?: string;
 }
 
 export interface ApiLimits {

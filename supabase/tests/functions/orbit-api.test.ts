@@ -611,6 +611,32 @@ describe('/sync/push', () => {
     expect(only.results[0]).toMatchObject({ ok: true, row: { title: 'PM' } });
   });
 
+  it('keeps a renewed LinkedIn photo from the browser, and refuses a picture from anywhere else', async () => {
+    const { handler } = harness();
+    const { token, userId } = await signedIn();
+    const [p] = await t.db.sql<{ id: string }>`
+      insert into orbit.people (user_id, display_name, name_norm, strength) values (${userId}::uuid, 'Bo', 'bo', 0.2) returning id`;
+    const fresh =
+      'https://media.licdn.com/dms/image/v2/abc/profile-displayphoto-shrink_200_200/0?e=4102444800&v=beta&t=x';
+    const ok = await push(handler, token, [
+      { table: 'people', op: 'upsert', id: p!.id, row: { displayName: 'Bo', photoUrl: fresh } },
+    ]);
+    expect(ok.results[0]).toMatchObject({ ok: true, row: { photoUrl: fresh } });
+    const bad = await push(handler, token, [
+      {
+        table: 'people',
+        op: 'upsert',
+        id: p!.id,
+        row: { displayName: 'Bo', photoUrl: 'https://evil.example/x.png' },
+      },
+    ]);
+    expect(bad.results[0]!.ok).toBe(false);
+    const [row] = await t.db.sql<{
+      photo_url: string;
+    }>`select photo_url from orbit.people where id = ${p!.id}::uuid`;
+    expect(row!.photo_url).toBe(fresh);
+  });
+
   it('creates a person added in the app, with derived name_norm and sources and their identities', async () => {
     const { handler } = harness();
     const { token, userId } = await signedIn();

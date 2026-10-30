@@ -242,6 +242,17 @@ describe('the chat thread', () => {
     expect($$('[data-testid="turn-user"]')).toHaveLength(5);
   });
 
+  it('says Orbit was updated, with a reload, when a part of the chat a deploy replaced cannot load', async () => {
+    await mount();
+    await act(() => threadActions(engine).send('fail stale'));
+    await settle();
+    const err = $('[data-testid="turn-error"]')!;
+    expect(err.dataset.kind).toBe('updated');
+    expect(err.textContent).toMatch(/Orbit was just updated/);
+    expect(err.textContent).not.toMatch(/dynamically imported/);
+    expect(err.querySelector('[data-testid="turn-error-reload"]')).not.toBeNull();
+  });
+
   it('rebuilds a stored conversation from its content blocks and actions', () => {
     const turns = hydrate(
       [

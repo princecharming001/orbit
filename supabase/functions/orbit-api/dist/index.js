@@ -7041,6 +7041,21 @@ var goalRoutes = {
   "/goals/infer": { method: "POST", auth: true, run: goalsInfer }
 };
 
+// supabase/functions/_shared/accountToken.ts
+async function accountToken(accountId, signingKey) {
+  const key = await crypto.subtle.importKey(
+    "raw",
+    new TextEncoder().encode(signingKey),
+    { name: "HMAC", hash: "SHA-256" },
+    false,
+    ["sign"]
+  );
+  const sig = new Uint8Array(
+    await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(`unipile-account:${accountId}`))
+  );
+  return btoa(String.fromCharCode(...sig)).replace(/=+$/, "").replace(/\+/g, "-").replace(/\//g, "_");
+}
+
 // supabase/functions/_shared/ingest/util.ts
 function slot(d) {
   return d.toISOString().slice(0, 15);
@@ -7334,8 +7349,22 @@ var INTEGRATION_ROUTES = {
   "/linkedin/connect/start": { method: "POST", auth: true, run: linkedinConnectStart },
   "/linkedin/status": { method: "GET|POST", auth: true, run: linkedinStatus },
   "/linkedin/sync": { method: "POST", auth: true, run: linkedinSync },
-  "/linkedin/search": { method: "POST", auth: true, run: linkedinSearch }
+  "/linkedin/search": { method: "POST", auth: true, run: linkedinSearch },
+  "/linkedin/reader": { method: "POST", auth: true, run: linkedinReader }
 };
+async function linkedinReader(ctx) {
+  const [a] = await ctx.db.sql`
+    select status, external_account_id from orbit.integration_accounts
+     where user_id = ${ctx.userId}::uuid and provider = 'linkedin'`;
+  if (!a?.external_account_id || a.status !== "active")
+    return json(200, { ok: false, reason: "not_connected" });
+  if (!ctx.env.connectorsSigningKey) return json(200, { ok: false, reason: "unconfigured" });
+  return json(200, {
+    ok: true,
+    accountId: a.external_account_id,
+    token: await accountToken(a.external_account_id, ctx.env.connectorsSigningKey)
+  });
+}
 var LINKEDIN_SEARCHES_PER_DAY = 80;
 async function linkedinSearch(ctx) {
   const body2 = await readJson(ctx.req, { optional: true });
@@ -12661,8 +12690,25 @@ var PULL_TABLES = [
     })
   },
   { table: "person_identities", key: "id", cursor: "created_at" },
-  { table: "affiliations", key: "id", cursor: "updated_at" },
-  { table: "merge_suggestions", key: "id", cursor: "updated_at" },
+  {
+    table: "affiliations",
+    key: "id",
+    cursor: "updated_at",
+    // an Affiliation: the company as the browser names it, so a role shows where it was and the company's logo
+    map: (r) => ({ ...r, nameRaw: r.orgRaw ?? "", organizationId: r.orgId })
+  },
+  {
+    table: "merge_suggestions",
+    key: "id",
+    cursor: "updated_at",
+    // a MergeSuggestion: the two people and the status under the browser's names (open is pending, merged accepted)
+    map: (r) => ({
+      ...r,
+      personAId: r.personA,
+      personBId: r.personB,
+      status: r.status === "open" ? "pending" : r.status === "merged" ? "accepted" : r.status
+    })
+  },
   { table: "goals", key: "id", cursor: "updated_at", deletedWhen: "t.deleted_at is not null" },
   // the Dexie cache keeps the last 180 days of networking threads only (§11.1)
   {
@@ -12674,6 +12720,8 @@ var PULL_TABLES = [
     map: (r) => ({
       ...r,
       externalThreadId: r.externalId,
+      firstMessageAt: r.firstAt,
+      lastMessageAt: r.lastAt,
       ...r.provider === "linkedin" ? { channel: "linkedin" } : {}
     })
   },
@@ -12694,7 +12742,13 @@ var PULL_TABLES = [
       ...r.provider === "linkedin" ? { channel: "linkedin" } : {}
     })
   },
-  { table: "calendar_events", key: "id", cursor: "updated_at" },
+  // a CalendarEvent: its Google id under the browser's name
+  {
+    table: "calendar_events",
+    key: "id",
+    cursor: "updated_at",
+    map: (r) => ({ ...r, externalEventId: r.externalId })
+  },
   {
     table: "ties",
     key: "id",
@@ -12716,7 +12770,11 @@ var PULL_TABLES = [
     key: "id",
     cursor: "updated_at",
     // a CoffeeChat: the stored camelCase fields spread under the columns
-    map: ({ data, ...rest }) => ({ ...data ?? {}, ...rest })
+    map: ({ data, ...rest }) => ({
+      ...data ?? {},
+      ...rest,
+      ...rest.orgId ? { organizationId: rest.orgId } : {}
+    })
   },
   { table: "stage_events", key: "id", cursor: "updated_at" },
   {
@@ -13016,7 +13074,17 @@ var PUSH = {
       tags: f("tags", "text[]", z5.array(z5.string().max(60)).max(50)),
       relationshipType: f("relationship_type", "text", z5.string().max(40).nullable()),
       hiddenAt: f("hidden_at", "timestamptz", tsS.nullable()),
-      doNotContact: f("do_not_contact", "boolean", z5.boolean())
+      doNotContact: f("do_not_contact", "boolean", z5.boolean()),
+      // a fresh LinkedIn photo (or a Gravatar) the browser fetched for someone whose link had expired or was missing:
+      // only those hosts, so a person's picture is never an arbitrary address
+      photoUrl: f(
+        "photo_url",
+        "text",
+        z5.string().max(2e3).regex(
+          /^https:\/\/([a-z0-9-]+\.)*(licdn\.com|gravatar\.com)\//,
+          "must be a LinkedIn or Gravatar image"
+        ).nullable()
+      )
     },
     // a person added in the app: what the student typed, once; imports keep these up to date afterwards
     insertOnly: {
@@ -13491,7 +13559,8 @@ Deno.serve(
       unipileKey,
       unipileBase,
       unipileWebhookSecret,
-      functionsUrl: supabaseUrl ? `${supabaseUrl}/functions/v1` : void 0
+      functionsUrl: supabaseUrl ? `${supabaseUrl}/functions/v1` : void 0,
+      connectorsSigningKey: env("SUPABASE_SERVICE_ROLE_KEY")
     },
     db,
     agent: { env: agentEnvFrom(env) },

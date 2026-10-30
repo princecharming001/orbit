@@ -136,6 +136,11 @@ jobs:
           # VITE_ORBIT_API is set to https://<ref>.supabase.co/functions/v1/orbit-api, after Orbit's Google OAuth client
           # is configured (plan 16 §21 H2). Empty until then, and the app runs in local mode as before.
           VITE_ORBIT_API: ${{ vars.VITE_ORBIT_API }}
+      # Pages replaces the whole site on a deploy: the live site's files come along, so a tab opened before this deploy
+      # still loads the parts it asks for later (best effort; scripts/keep-previous-assets.mjs)
+      - name: Keep the live site's files for open tabs
+        if: vars.ORBIT_BASE == '/'
+        run: node scripts/keep-previous-assets.mjs https://tryorbit.today/ apps/web/dist
       - uses: actions/configure-pages@v5
         with:
           enablement: true

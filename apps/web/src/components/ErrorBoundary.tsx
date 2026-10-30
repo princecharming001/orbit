@@ -13,7 +13,7 @@ export function isStaleChunk(error: unknown): boolean {
 }
 
 /** Reloads once for a stale chunk; a second stale chunk within a minute shows the message instead of looping. */
-function reloadOnce(): boolean {
+export function reloadOnce(): boolean {
   try {
     const last = Number(sessionStorage.getItem(RELOAD_KEY) ?? 0);
     if (Date.now() - last < 60_000) return false;

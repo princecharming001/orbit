@@ -3,10 +3,17 @@ import ReactDOM from 'react-dom/client';
 import { App } from './App';
 import { fakeEngineRequest } from './chat/testing/flag';
 import type { ChatEngine } from './chat/types';
+import { reloadOnce } from './components/ErrorBoundary';
 import { db } from './db/schema';
 import { isAccountMode, loadSession } from './integrations/orbitApi';
 import { loadPrefs } from './integrations/prefs';
 import './styles/index.css';
+
+// A part of the app this tab loads later was replaced by a deploy since the tab opened: load the new version once
+// (a second miss within a minute is left to the page's own message, so it never loops)
+window.addEventListener('vite:preloadError', (e) => {
+  if (reloadOnce()) e.preventDefault();
+});
 
 // End-to-end tests drive live changes (someone new, a stage change) through the same database the app reads.
 if (navigator.webdriver) (window as unknown as { __orbitDb: typeof db }).__orbitDb = db;

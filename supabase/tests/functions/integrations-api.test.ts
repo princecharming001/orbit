@@ -1,10 +1,12 @@
 /** The integration routes of orbit-api (§12.3): Google sync, LinkedIn hosted auth, status and sync. */
 import type { LinkedinStatusResponse, QueuedResponse } from '@orbit/core/server/api';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
+import { accountToken as sharedAccountToken } from '../../functions/_shared/accountToken.ts';
 import { memoryTake } from '../../functions/_shared/ratelimit.ts';
 import { createSession } from '../../functions/_shared/session.ts';
 import { type ApiDeps, makeApiHandler } from '../../functions/orbit-api/api.ts';
 import { upsertGoogleUser } from '../../functions/orbit-api/auth.ts';
+import { accountToken as connectorsAccountToken } from '../../functions/orbit-connectors/connectors.ts';
 import { FakeUnipile } from '../helpers/fakeApis.ts';
 import { CLIENT_ID } from '../helpers/google.ts';
 import { freshDb, type TestDb } from '../helpers/pglite.ts';
@@ -277,6 +279,53 @@ describe('/linkedin/search', () => {
       insert into orbit.audit_log (user_id, actor, action, target_table)
       select ${userId}::uuid, 'user', 'linkedin.search', 'people' from generate_series(1, 80)`;
     expect(await search('Priya')).toEqual({ ok: false, reason: 'limit' });
+  });
+});
+
+describe('/linkedin/reader', () => {
+  it('hands the student their own LinkedIn account and the token orbit-connectors checks', async () => {
+    const { userId, token } = await signedIn(['https://www.googleapis.com/auth/gmail.readonly']);
+    const handler = makeApiHandler({
+      env: { sessionSecret: SECRET, appUrl: APP, connectorsSigningKey: 'signing-placeholder' },
+      db: t.db,
+      take: memoryTake(),
+    });
+    const reader = async () =>
+      (await (await handler(post('/linkedin/reader', token, { accountId: 'someone-else' }))).json()) as {
+        ok: boolean;
+        reason?: string;
+        accountId?: string;
+        token?: string;
+      };
+    expect(await reader()).toEqual({ ok: false, reason: 'not_connected' });
+    await t.db.sql`
+      insert into orbit.integration_accounts (user_id, provider, external_account_id, status)
+      values (${userId}::uuid, 'linkedin', 'acc-reader', 'active')`;
+    // their own account only, whatever the request names, signed exactly as orbit-connectors signs it
+    expect(await reader()).toEqual({
+      ok: true,
+      accountId: 'acc-reader',
+      token: await connectorsAccountToken('acc-reader', 'signing-placeholder'),
+    });
+    expect(await sharedAccountToken('acc-reader', 'signing-placeholder')).toBe(
+      await connectorsAccountToken('acc-reader', 'signing-placeholder'),
+    );
+  });
+
+  it('says so when the signing key is not set', async () => {
+    const { userId, token } = await signedIn(['https://www.googleapis.com/auth/gmail.readonly']);
+    await t.db.sql`
+      insert into orbit.integration_accounts (user_id, provider, external_account_id, status)
+      values (${userId}::uuid, 'linkedin', 'acc-x', 'active')`;
+    const handler = makeApiHandler({
+      env: { sessionSecret: SECRET, appUrl: APP },
+      db: t.db,
+      take: memoryTake(),
+    });
+    expect(await (await handler(post('/linkedin/reader', token))).json()).toEqual({
+      ok: false,
+      reason: 'unconfigured',
+    });
   });
 });
 

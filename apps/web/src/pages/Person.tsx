@@ -310,7 +310,7 @@ export function PersonPage() {
   }, [person?.id, person?.summary, user, summaryStale]);
   // their LinkedIn profile is read when their page opens, when it is due and today's allowance has room (plan 17 E)
   useEffect(() => {
-    if (person && user && !isServerUser(user.id)) void enrichOnView(user, person.id);
+    if (person && user) void enrichOnView(user, person.id);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [person?.id, user?.id]);
   const wantDraft = params.get('draft') as MessageKind | null;

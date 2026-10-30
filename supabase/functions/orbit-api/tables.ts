@@ -46,8 +46,25 @@ export const PULL_TABLES: PullTable[] = [
     }),
   },
   { table: 'person_identities', key: 'id', cursor: 'created_at' },
-  { table: 'affiliations', key: 'id', cursor: 'updated_at' },
-  { table: 'merge_suggestions', key: 'id', cursor: 'updated_at' },
+  {
+    table: 'affiliations',
+    key: 'id',
+    cursor: 'updated_at',
+    // an Affiliation: the company as the browser names it, so a role shows where it was and the company's logo
+    map: (r) => ({ ...r, nameRaw: r.orgRaw ?? '', organizationId: r.orgId }),
+  },
+  {
+    table: 'merge_suggestions',
+    key: 'id',
+    cursor: 'updated_at',
+    // a MergeSuggestion: the two people and the status under the browser's names (open is pending, merged accepted)
+    map: (r) => ({
+      ...r,
+      personAId: r.personA,
+      personBId: r.personB,
+      status: r.status === 'open' ? 'pending' : r.status === 'merged' ? 'accepted' : r.status,
+    }),
+  },
   { table: 'goals', key: 'id', cursor: 'updated_at', deletedWhen: 't.deleted_at is not null' },
   // the Dexie cache keeps the last 180 days of networking threads only (§11.1)
   {
@@ -59,6 +76,8 @@ export const PULL_TABLES: PullTable[] = [
     map: (r) => ({
       ...r,
       externalThreadId: r.externalId,
+      firstMessageAt: r.firstAt,
+      lastMessageAt: r.lastAt,
       ...(r.provider === 'linkedin' ? { channel: 'linkedin' } : {}),
     }),
   },
@@ -80,7 +99,13 @@ export const PULL_TABLES: PullTable[] = [
       ...(r.provider === 'linkedin' ? { channel: 'linkedin' } : {}),
     }),
   },
-  { table: 'calendar_events', key: 'id', cursor: 'updated_at' },
+  // a CalendarEvent: its Google id under the browser's name
+  {
+    table: 'calendar_events',
+    key: 'id',
+    cursor: 'updated_at',
+    map: (r) => ({ ...r, externalEventId: r.externalId }),
+  },
   {
     table: 'ties',
     key: 'id',
@@ -102,7 +127,11 @@ export const PULL_TABLES: PullTable[] = [
     key: 'id',
     cursor: 'updated_at',
     // a CoffeeChat: the stored camelCase fields spread under the columns
-    map: ({ data, ...rest }) => ({ ...((data as Record<string, unknown>) ?? {}), ...rest }),
+    map: ({ data, ...rest }) => ({
+      ...((data as Record<string, unknown>) ?? {}),
+      ...rest,
+      ...(rest.orgId ? { organizationId: rest.orgId } : {}),
+    }),
   },
   { table: 'stage_events', key: 'id', cursor: 'updated_at' },
   {

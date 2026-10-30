@@ -243,9 +243,10 @@ test.describe('account mode (mocked orbit-api)', () => {
   });
 
   test.describe('signed in', () => {
-    async function signedIn(page: Page): Promise<FakeOrbitApi> {
+    async function signedIn(page: Page, more?: (api: FakeOrbitApi) => void): Promise<FakeOrbitApi> {
       const api = await withFakeApi(page);
       seedNetwork(api);
+      more?.(api);
       await page.goto('');
       await page
         .getByRole('button', { name: /^get started/i })
@@ -286,6 +287,38 @@ test.describe('account mode (mocked orbit-api)', () => {
         'Your talk on fraud models stuck with me.',
       );
       await expect(debrief.getByTestId('debrief-ref').first()).toHaveAttribute('href', /example\.com/);
+    });
+
+    test("About: a role synced from the server shows its company, and LinkedIn's read never hangs", async ({
+      page,
+    }) => {
+      await signedIn(page, (api) => {
+        const changes = api.state.pages[0]!.changes as Record<string, Record<string, unknown>[]>;
+        Object.assign(changes.people![0]!, {
+          linkedinSlug: 'priya-shah',
+          linkedinUrl: 'https://www.linkedin.com/in/priya-shah',
+        });
+        // the server's own names (orgRaw, orgId), as /sync/pull sent them before it renamed them
+        changes.affiliations = [
+          {
+            id: '0b8f6a0e-2222-4c2e-8d1a-000000000001',
+            userId: api.state.user.id,
+            personId: P1,
+            kind: 'employment',
+            title: 'Product Lead',
+            orgRaw: 'Stripe',
+            isCurrent: true,
+            source: 'linkedin',
+          },
+        ];
+      });
+      await page.goto(`people/${P1}`);
+      await page.getByRole('tab', { name: /^about/i }).click();
+      const history = page.getByTestId('linkedin-history');
+      await expect(history.getByTestId('linkedin-role').first()).toContainText('Stripe');
+      // no LinkedIn to read from in this build: it says so, instead of "Reading…" for ever
+      await expect(history.getByTestId('linkedin-history-why')).toBeVisible({ timeout: 15_000 });
+      await expect(history.getByTestId('linkedin-history-status')).not.toContainText('Reading');
     });
 
     test('Discover, Find people: search, see who you know, add one', async ({ page }) => {

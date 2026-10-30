@@ -16,6 +16,7 @@ import type {
   LinkedinStatusResponse,
   QueuedResponse,
 } from '@orbit/core/server/api';
+import { accountToken } from '../../_shared/accountToken.ts';
 import { badRequest, HttpError, json, readJson, unconfigured } from '../../_shared/http.ts';
 import { slot } from '../../_shared/ingest/util.ts';
 import { createUnipileSync } from '../../_shared/providers/unipileSync.ts';
@@ -186,7 +187,28 @@ export const INTEGRATION_ROUTES: Record<string, RouteSpec> = {
   '/linkedin/status': { method: 'GET|POST', auth: true, run: linkedinStatus },
   '/linkedin/sync': { method: 'POST', auth: true, run: linkedinSync },
   '/linkedin/search': { method: 'POST', auth: true, run: linkedinSearch },
+  '/linkedin/reader': { method: 'POST', auth: true, run: linkedinReader },
 };
+
+/**
+ * POST /linkedin/reader → {ok, accountId, token} | {ok: false, reason}: the signed-in student's own LinkedIn account
+ * and its orbit-connectors token, so their browser reads a profile's work history when they open someone's page and
+ * looks companies' logos up, through the same proxy (and the same daily allowances) as an account kept in a browser.
+ * Only ever their own account: the id comes from their integration row, never from the request.
+ */
+export async function linkedinReader(ctx: Ctx): Promise<Response> {
+  const [a] = await ctx.db.sql<{ status: string; external_account_id: string | null }>`
+    select status, external_account_id from orbit.integration_accounts
+     where user_id = ${ctx.userId!}::uuid and provider = 'linkedin'`;
+  if (!a?.external_account_id || a.status !== 'active')
+    return json(200, { ok: false, reason: 'not_connected' });
+  if (!ctx.env.connectorsSigningKey) return json(200, { ok: false, reason: 'unconfigured' });
+  return json(200, {
+    ok: true,
+    accountId: a.external_account_id,
+    token: await accountToken(a.external_account_id, ctx.env.connectorsSigningKey),
+  });
+}
 
 /** LinkedIn's people searches a day per student: a name typed into Add a person searches as it settles. */
 export const LINKEDIN_SEARCHES_PER_DAY = 80;

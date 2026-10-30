@@ -289,6 +289,14 @@ export function createFakeOrbitApi(
         });
       case '/linkedin/sync':
         return json(200, { queued: true });
+      // the student's own LinkedIn account and the proxy's token for it, once LinkedIn is connected
+      case '/linkedin/reader':
+        return json(
+          200,
+          state.linkedin.status === 'active'
+            ? { ok: true, accountId: 'acc_1', token: 'tok_acc_1' }
+            : { ok: false, reason: 'not_connected' },
+        );
       // goals
       case '/goals/list':
         return json(200, { goals: state.goals.filter((g) => !g.deletedAt) });

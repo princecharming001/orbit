@@ -43,6 +43,7 @@ Deno.serve(
       unipileBase,
       unipileWebhookSecret,
       functionsUrl: supabaseUrl ? `${supabaseUrl}/functions/v1` : undefined,
+      connectorsSigningKey: env('SUPABASE_SERVICE_ROLE_KEY'),
     },
     db,
     agent: { env: agentEnvFrom(env) },

@@ -2,6 +2,7 @@ import { Check, Copy, RefreshCw, ThumbsDown, ThumbsUp, TriangleAlert } from 'luc
 import { useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { copyText } from '../../components/approve';
+import { isStaleChunk } from '../../components/ErrorBoundary';
 import { useShowReasoning } from '../../state/showReasoning';
 import { cx, useToast } from '../../ui';
 import { ChoicesContext } from './cards/Choices';
@@ -308,6 +309,30 @@ const ERROR_COPY: Record<ErrorKind, { title: string; link?: { to: string; label:
 };
 
 function ErrorLine({ kind, message }: { kind: ErrorKind; message: string }) {
+  // a part of the chat this tab had not loaded yet was replaced by a deploy: the fix is a reload, said plainly
+  if (isStaleChunk(message))
+    return (
+      <div
+        className="glass glass-strong rounded-[16px] px-4 py-3 my-2 text-[13.5px] flex flex-wrap items-center gap-x-3 gap-y-2"
+        role="alert"
+        data-testid="turn-error"
+        data-kind="updated"
+      >
+        <RefreshCw size={15} className="text-ink-2 shrink-0" aria-hidden />
+        <span className="min-w-0 flex-1">
+          <span className="font-medium">Orbit was just updated.</span>{' '}
+          <span className="text-ink-2">Reload to get the new version, then ask again.</span>
+        </span>
+        <button
+          type="button"
+          onClick={() => window.location.reload()}
+          className="h-8 rounded-full bg-ink px-3.5 text-[13px] font-medium text-white hover:bg-ink/90"
+          data-testid="turn-error-reload"
+        >
+          Reload
+        </button>
+      </div>
+    );
   const c = ERROR_COPY[kind];
   return (
     <div

@@ -18,8 +18,9 @@ import { hasRealName, linkedInSlug, normalizeLinkedInUrl } from '@orbit/core';
 import { db } from '../db/schema';
 import { usesMockConnectors } from '../integrations/connectorsMock';
 import { searchLinkedIn, unipileConfigured } from '../integrations/unipile';
+import { liveAccountFor } from './enrichment/sources';
 import { updateEdgesFor } from './graph';
-import { liveLinkedInAccount, type MutualsResult, mutualsFor } from './linkedinLive';
+import { type MutualsResult, mutualsFor } from './linkedinLive';
 import { freshPhoto } from './photos';
 import { villageAvailable, warmIntrosFor } from './warmIntros';
 
@@ -44,16 +45,16 @@ export async function withMemberId(
   if (person.linkedinMemberId || usesMockConnectors(user.id) || !unipileConfigured()) return person;
   const slug = person.linkedinSlug ?? linkedInSlug(normalizeLinkedInUrl(person.linkedinUrl));
   if (!slug || !hasRealName(person)) return person;
-  const row = await liveLinkedInAccount(user.id);
-  if (!row || row.status === 'revoked' || !row.externalAccountId || !row.accessToken) return person;
+  const live = await liveAccountFor(user, { anyToken: true });
+  if (!live || live === 'mock') return person;
   const key = `${MEMBER_LOOKUP_KV}${user.id}:${person.id}`;
   const day = dayOf(opts.now ?? new Date());
   if ((await db.kv.get(key))?.value === day) return person;
   await db.kv.put({ key, value: day });
   const r = await searchLinkedIn(
-    row.externalAccountId,
+    live.accountId,
     { keywords: `${person.firstName} ${person.lastName}`.trim(), distance: [1, 2, 3] },
-    { token: row.accessToken, signal: opts.signal },
+    { token: live.token, signal: opts.signal },
   );
   if (!r.ok) return person;
   const hit = r.value.people.find((f) => linkedInSlug(normalizeLinkedInUrl(f.profileUrl)) === slug);

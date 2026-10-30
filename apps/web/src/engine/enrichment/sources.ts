@@ -19,9 +19,8 @@ import {
   linkedInProfile,
   type ProviderStatus,
 } from '../../integrations/enrichmentProxy';
-import { isServerUser } from '../../integrations/orbitApi';
+import { callApi, isServerUser } from '../../integrations/orbitApi';
 import { type LinkedInFound, unipileConfigured, unipileProxyCall } from '../../integrations/unipile';
-import { liveLinkedInAccount } from '../linkedinLive';
 
 export interface LinkedInSource {
   kind: 'live' | 'mock';
@@ -37,15 +36,48 @@ export interface LinkedInSource {
   search(keywords: string): Promise<EnrichOutcome<LinkedInFound[]>>;
 }
 
-/** The student's LinkedIn for enrichment, or undefined when it is not connected live (or this is account mode). */
+/** Why there is no LinkedIn to read from: not connected, or Orbit's server could not say. */
+export type NoLinkedIn = 'not_connected' | 'unavailable';
+
+let readerCache:
+  | { userId: string; at: number; value?: { accountId: string; token: string }; why?: NoLinkedIn }
+  | undefined;
+const READER_TTL_MS = 30 * 60_000;
+
+/**
+ * An Orbit account's LinkedIn, as its browser reads it: the server hands over the student's own account id and the
+ * token orbit-connectors checks (POST /linkedin/reader), so a page they open reads that person's work history and the
+ * logo queue looks companies up, through the same proxy as an account kept in a browser. Asked again every half hour.
+ */
+export async function accountLinkedInReader(
+  userId: string,
+): Promise<{ accountId: string; token: string } | NoLinkedIn> {
+  const now = Date.now();
+  if (readerCache?.userId === userId && now - readerCache.at < READER_TTL_MS)
+    return readerCache.value ?? readerCache.why ?? 'unavailable';
+  const r = await callApi('/linkedin/reader', {}).catch(() => undefined);
+  if (r?.ok && r.value.ok) {
+    readerCache = { userId, at: now, value: { accountId: r.value.accountId, token: r.value.token } };
+    return readerCache.value!;
+  }
+  const why: NoLinkedIn =
+    r?.ok && !r.value.ok && r.value.reason === 'not_connected' ? 'not_connected' : 'unavailable';
+  // an answer that it is not connected is kept; a failed call is asked again on the next page opened
+  readerCache = why === 'not_connected' ? { userId, at: now, why } : undefined;
+  return why;
+}
+
+/** Unit-test hook: forget the account's reader. */
+export function forgetAccountLinkedInReader(): void {
+  readerCache = undefined;
+}
+
+/** The student's LinkedIn for enrichment, or undefined when it is not connected live. */
 export async function linkedInSourceFor(user: Pick<User, 'id'>): Promise<LinkedInSource | undefined> {
-  if (isServerUser(user.id)) return undefined;
-  const row = await liveLinkedInAccount(user.id);
-  if (!row || row.status === 'revoked' || !row.externalAccountId) return undefined;
-  if (usesMockConnectors(user.id)) return mockSource(user.id);
-  if (!unipileConfigured() || !row.accessToken) return undefined;
-  const accountId = row.externalAccountId;
-  const token = row.accessToken;
+  const live = await liveAccountFor(user);
+  if (!live) return undefined;
+  if (live === 'mock') return mockSource(user.id);
+  const { accountId, token } = live;
   return {
     kind: 'live',
     profile: (identifier, sections, opts) =>
@@ -72,6 +104,36 @@ export async function linkedInSourceFor(user: Pick<User, 'id'>): Promise<LinkedI
       return { ok: true, value: r.value.people ?? [] };
     },
   };
+}
+
+/**
+ * The account id and token to read LinkedIn with: the server's answer for an Orbit account, this browser's otherwise.
+ * `anyToken`: a browser account without a stored token still answers (the older callers sent none and let the proxy
+ * say so); an Orbit account always has one, from its server.
+ */
+export async function liveAccountFor(
+  user: Pick<User, 'id'>,
+  opts: { anyToken?: boolean } = {},
+): Promise<{ accountId: string; token: string | undefined } | 'mock' | undefined> {
+  if (isServerUser(user.id)) {
+    if (!unipileConfigured()) return undefined;
+    const r = await accountLinkedInReader(user.id);
+    return typeof r === 'string' ? undefined : r;
+  }
+  const row = await liveLinkedInAccount(user.id);
+  if (!row || row.status === 'revoked' || !row.externalAccountId) return undefined;
+  if (usesMockConnectors(user.id)) return 'mock';
+  if (!unipileConfigured() || (!row.accessToken && !opts.anyToken)) return undefined;
+  return { accountId: row.externalAccountId, token: row.accessToken };
+}
+
+/** This browser's live LinkedIn row (read here rather than from linkedinLive, which reads LinkedIn through this file). */
+function liveLinkedInAccount(userId: string) {
+  return db.integrations
+    .where('userId')
+    .equals(userId)
+    .filter((i) => i.provider === 'linkedin_live')
+    .first();
 }
 
 function mockSource(userId: string): LinkedInSource {

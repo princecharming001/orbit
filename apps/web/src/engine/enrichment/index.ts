@@ -118,6 +118,12 @@ export interface RunResult {
   web: number;
   /** why LinkedIn calls stopped early, if they did */
   stopped?: string;
+  /** no LinkedIn to read from (not connected, or Orbit's server could not hand it over) */
+  noLinkedIn?: boolean;
+  /** today's profile reads are used up */
+  limited?: boolean;
+  /** the run itself broke (the proxy did not answer) */
+  failed?: boolean;
 }
 
 const EMPTY: RunResult = { looked: 0, profiles: 0, searched: 0, matched: 0, gravatars: 0, logos: 0, web: 0 };
@@ -136,6 +142,8 @@ interface Ctx {
   /** people with a chat (in any stage) */
   chats: Set<string>;
   reason: 'background' | 'view';
+  /** an Orbit account: its server finds people and merges them, so this browser only reads profiles it opens */
+  account: boolean;
   limits: Record<BudgetKind, number>;
   pause: () => Promise<void>;
   out: RunResult;
@@ -162,7 +170,7 @@ function needsOf(ctx: Ctx, p: Person, rec: EnrichmentRecord, hasChat: boolean): 
     if (li && (age(rec.profileAt, ctx.now) > PROFILE_EVERY_MS || wantsFull)) n.add('profile');
     else if (li && isLinkedInPhoto(p.photoUrl) && linkedInImageExpired(p.photoUrl, ctx.now))
       n.add('photo_refresh');
-  } else {
+  } else if (!ctx.account) {
     if (li && searchable(p, hasChat) && age(rec.searchedAt, ctx.now) > SEARCH_EVERY_MS) n.add('linkedin');
     if (
       ctx.gravatarOn &&
@@ -269,6 +277,7 @@ async function profileStep(
     confidence: 1,
     rec,
     alias: ctx.alias,
+    merge: !ctx.account,
   });
   if (sections.length) settleThrottle(ctx, rec, r.profile);
   if (sections === FULL_SECTIONS && !r.profile.throttled.some((t) => t.startsWith('experience')))
@@ -623,8 +632,9 @@ async function makeContext(user: User, opts: RunOptions): Promise<Ctx | undefine
   const now = opts.now ?? new Date();
   const linkedin = await linkedInSourceFor(user);
   const mock = usesMockConnectors(user.id);
-  // free lookups that leave the browser: never for the demo or a browser under automation
-  const realBrowser = !mock && automationOverride() === 'live';
+  const account = isServerUser(user.id);
+  // free lookups that leave the browser: never for the demo, a browser under automation, or an Orbit account
+  const realBrowser = !mock && !account && automationOverride() === 'live';
   const providers = realBrowser ? await serverProviders(user, now).catch(() => undefined) : undefined;
   // nothing to look anything up with: done before loading the school list
   if (!linkedin && !opts.probe && !realBrowser) return undefined;
@@ -647,6 +657,7 @@ async function makeContext(user: User, opts: RunOptions): Promise<Ctx | undefine
     tiers,
     chats,
     reason: opts.reason ?? 'background',
+    account,
     limits: opts.limits ?? DAILY,
     pause: async () => {
       if (max > 0) await sleep(min + Math.random() * (max - min));
@@ -673,6 +684,9 @@ function schoolsByDomain(): Promise<(d: string) => string | undefined> {
  * while a run is going is looked at next.
  */
 export async function runEnrichment(user: User, opts: RunOptions = {}): Promise<RunResult> {
+  // an opened page is read at once, beside a background run rather than after it (one profile, no burst)
+  if (opts.reason === 'view' && opts.only?.length) return runOnce(user, opts);
+  // an Orbit account's server walks the network; its browser reads only the pages the student opens
   if (isServerUser(user.id)) return { ...EMPTY };
   const active = running.get(user.id);
   if (active) {
@@ -692,9 +706,21 @@ export async function runEnrichment(user: User, opts: RunOptions = {}): Promise<
 
 async function runOnce(user: User, opts: RunOptions): Promise<RunResult> {
   const ctx = await makeContext(user, opts);
-  if (!ctx || (!ctx.linkedin && !ctx.gravatarOn && !ctx.webOn)) return { ...EMPTY };
+  if (!ctx || (!ctx.linkedin && !ctx.gravatarOn && !ctx.webOn))
+    return { ...EMPTY, noLinkedIn: !ctx?.linkedin };
   const b = await readBudget(user.id, ctx.now);
-  if (linkedInPaused(b, ctx.now)) ctx.linkedinStopped = b.pauseReason ?? 'LinkedIn asked Orbit to slow down.';
+  if (linkedInPaused(b, ctx.now)) {
+    ctx.linkedinStopped = b.pauseReason ?? 'LinkedIn asked Orbit to slow down.';
+    if (opts.only) ctx.out.stopped = ctx.linkedinStopped;
+  }
+  if (!ctx.linkedin) ctx.out.noLinkedIn = true;
+  // an opened page with today's profile reads used up: it says so rather than reading forever
+  else if (
+    opts.reason === 'view' &&
+    budgetLeft(b, 'view', ctx.limits) <= 0 &&
+    budgetLeft(b, 'profile', ctx.limits) <= 0
+  )
+    ctx.out.limited = true;
   const chats = ctx.chats;
   const queue = opts.only ? [...opts.only] : await queueFor(ctx, chats);
   const limit = opts.limit ?? Number.POSITIVE_INFINITY;
@@ -726,8 +752,9 @@ async function runOnce(user: User, opts: RunOptions): Promise<RunResult> {
       const people = await db.people.bulkGet(touched);
       const all = opts.only ? [] : await db.people.where('userId').equals(user.id).toArray();
       const orgIds = [...people, ...all].map((p) => p?.currentOrganizationId).filter((x): x is string => !!x);
-      endActivity('enrich');
-      if (orgIds.length) startActivity('enrich-logos', 'Fetching company logos');
+      // a look at one page stays quiet: it never ends or starts the background run's status line
+      if (!opts.only) endActivity('enrich');
+      if (orgIds.length && !opts.only) startActivity('enrich-logos', 'Fetching company logos');
       ctx.out.logos = await refreshLogos(
         orgIds,
         async (identifier) => {
@@ -769,9 +796,21 @@ async function exhausted(ctx: Ctx): Promise<boolean> {
   return !linkedin && !gravatar && !web;
 }
 
-/** The student opened someone's page: look at them now, if they are due and today's allowance has room. */
+const viewing = new Map<string, Promise<RunResult>>();
+
+/**
+ * The student opened someone's page: look at them now, if they are due and today's allowance has room. The page and
+ * its About tab both ask; while one read of that person is going, both get the same answer.
+ */
 export function enrichOnView(user: User, personId: string): Promise<RunResult> {
-  return runEnrichment(user, { only: [personId], reason: 'view' }).catch(() => ({ ...EMPTY }));
+  const key = `${user.id}:${personId}`;
+  const going = viewing.get(key);
+  if (going) return going;
+  const job = runEnrichment(user, { only: [personId], reason: 'view' })
+    .catch(() => ({ ...EMPTY, failed: true }))
+    .finally(() => viewing.delete(key));
+  viewing.set(key, job);
+  return job;
 }
 
 let autoRun = import.meta.env.MODE !== 'test';

@@ -18,6 +18,7 @@
  *   "send it"               a needs_confirmation for send_draft with the draft embedded
  *   "wipe"                  a needs_confirmation whose blockedReason disables Approve
  *   "fail no key" / "fail cap" / "fail refusal" / "fail network" / "fail other"   an error of that kind
+ *   "fail stale"   a part of the chat a deploy replaced since the tab opened
  *   "slow"                  a long turn with progress lines, for Stop
  *   anything else           a short text answer
  */
@@ -626,6 +627,14 @@ function pick(text: string): Script {
   if (t.includes('show choices')) return withChoices;
   const widget = t.match(/setup (google|linkedin|claude|resume)/);
   if (widget) return withSetup(widget[1] === 'claude' ? 'claude_key' : (widget[1] as SetupWhat));
+  if (t.includes('fail stale'))
+    return async function* () {
+      yield {
+        type: 'error',
+        kind: 'other',
+        message: 'Failed to fetch dynamically imported module: https://tryorbit.today/assets/client-B8eKyzge.js',
+      };
+    };
   const fail = t.match(/fail (no key|cap|refusal|network|other)/);
   if (fail) return failing(fail[1]!.replace(' ', '_') as 'no_key' | 'cap' | 'refusal' | 'network' | 'other');
   if (t.includes('slow')) return slow;

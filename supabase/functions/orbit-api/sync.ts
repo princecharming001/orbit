@@ -383,6 +383,20 @@ export const PUSH: Record<string, PushSpec> = {
       relationshipType: f('relationship_type', 'text', z.string().max(40).nullable()),
       hiddenAt: f('hidden_at', 'timestamptz', tsS.nullable()),
       doNotContact: f('do_not_contact', 'boolean', z.boolean()),
+      // a fresh LinkedIn photo (or a Gravatar) the browser fetched for someone whose link had expired or was missing:
+      // only those hosts, so a person's picture is never an arbitrary address
+      photoUrl: f(
+        'photo_url',
+        'text',
+        z
+          .string()
+          .max(2000)
+          .regex(
+            /^https:\/\/([a-z0-9-]+\.)*(licdn\.com|gravatar\.com)\//,
+            'must be a LinkedIn or Gravatar image',
+          )
+          .nullable(),
+      ),
     },
     // a person added in the app: what the student typed, once; imports keep these up to date afterwards
     insertOnly: {

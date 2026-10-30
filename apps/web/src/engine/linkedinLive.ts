@@ -40,6 +40,7 @@ import {
 } from '../integrations/unipile';
 import { endActivity, progressActivity, startActivity } from './activity';
 import { generateBrief, recommendationsRefresh } from './brief';
+import { liveAccountFor } from './enrichment/sources';
 import { importLiveConnections } from './linkedin';
 // (a cycle: linkedinActivity reads the account row from here; neither uses the other while loading)
 import { syncLinkedInActivity } from './linkedinActivity';
@@ -752,8 +753,10 @@ export async function mutualsFor(
   };
   if (usesMockConnectors(user.id))
     return { ok: true, source: 'demo', mutuals: (await mockMutuals(user.id, person)).map(resolve) };
-  const row = await liveLinkedInAccount(user.id);
-  if (!isConnected(row))
+  // an Orbit account's LinkedIn is linked on the server, which hands this browser its account and token: the row kept
+  // here for it carries no token, and asking with that row was refused (403) for every account
+  const live = await liveAccountFor(user, { anyToken: true });
+  if (!live || live === 'mock')
     return {
       ok: false,
       reason: 'not_connected',
@@ -775,7 +778,7 @@ export async function mutualsFor(
   if (kept?.day === day && kept.memberId === person.linkedinMemberId && kept.mutuals)
     return { ok: true, source: 'linkedin', mutuals: kept.mutuals.map(resolve) };
   // not tied to this caller's signal: another panel may be waiting on the same read, and the answer is kept a day
-  const r = await askMutualsOnce(row.externalAccountId!, person.linkedinMemberId, row.accessToken);
+  const r = await askMutualsOnce(live.accountId, person.linkedinMemberId, live.token);
   if (!r.ok && r.status === SEARCH_LIMIT_STATUS)
     return { ok: false, reason: 'limit', message: readsBackAt(opts.now ?? new Date()), mutuals: [] };
   if (!r.ok)

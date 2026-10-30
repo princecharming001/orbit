@@ -12,19 +12,17 @@
  */
 import { looksLikeSchool, normalizeCompany, type User } from '@orbit/core';
 import { db } from '../db/schema';
-import { mockCompanyByName, usesMockConnectors } from '../integrations/connectorsMock';
+import { mockCompanyByName } from '../integrations/connectorsMock';
 import {
   type CompaniesAnswer,
   type CompanyAnswer,
   type EnrichOutcome,
   linkedInCompanies,
 } from '../integrations/enrichmentProxy';
-import { isServerUser } from '../integrations/orbitApi';
-import { unipileConfigured } from '../integrations/unipile';
 import { endActivity, startActivity } from './activity';
 import { adoptCompany } from './enrichment/logos';
+import { liveAccountFor } from './enrichment/sources';
 import { linkedInPaused, pauseLinkedIn, readBudget } from './enrichment/store';
-import { liveLinkedInAccount } from './linkedinLive';
 import { upsertOrganization } from './people';
 
 /** Names sent in one call (the shared list answers all of them; only new ones cost LinkedIn reads). */
@@ -59,10 +57,9 @@ export interface CompanySource {
 }
 
 export async function companySourceFor(user: Pick<User, 'id'>): Promise<CompanySource | undefined> {
-  if (isServerUser(user.id)) return undefined;
-  const row = await liveLinkedInAccount(user.id);
-  if (!row || row.status === 'revoked' || !row.externalAccountId) return undefined;
-  if (usesMockConnectors(user.id))
+  const live = await liveAccountFor(user);
+  if (!live) return undefined;
+  if (live === 'mock')
     return {
       byNames: async (names) => {
         const companies: Record<string, CompanyAnswer> = {};
@@ -81,9 +78,7 @@ export async function companySourceFor(user: Pick<User, 'id'>): Promise<CompanyS
         return { ok: true, value: { companies, pending: 0 } };
       },
     };
-  if (!unipileConfigured() || !row.accessToken) return undefined;
-  const accountId = row.externalAccountId;
-  const token = row.accessToken;
+  const { accountId, token } = live;
   return { byNames: (names) => linkedInCompanies(accountId, names, { token }) };
 }
 
@@ -204,7 +199,7 @@ export function resetLogoQueueForTests(): void {
 
 /** Run the queue while the app is open (a call when a tile asks, then every few seconds while names wait). */
 export function startLogoQueue(user: Pick<User, 'id'>): () => void {
-  if (!autoRun || isServerUser(user.id)) return () => undefined;
+  if (!autoRun) return () => undefined;
   let stopped = false;
   let busy = false;
   let timer: ReturnType<typeof setTimeout> | undefined;

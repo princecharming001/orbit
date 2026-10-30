@@ -12,13 +12,11 @@
 import type { Person, User } from '@orbit/core';
 import { linkedInSlug } from '@orbit/core';
 import { db } from '../db/schema';
-import { mockLinkedInProfile, usesMockConnectors } from '../integrations/connectorsMock';
+import { mockLinkedInProfile } from '../integrations/connectorsMock';
 import { type EnrichOutcome, type LinkedInPhoto, linkedInPhoto } from '../integrations/enrichmentProxy';
-import { isServerUser } from '../integrations/orbitApi';
-import { unipileConfigured } from '../integrations/unipile';
 import { endActivity, startActivity } from './activity';
+import { liveAccountFor } from './enrichment/sources';
 import { allRecords, linkedInPaused, pauseLinkedIn, readBudget } from './enrichment/store';
-import { liveLinkedInAccount } from './linkedinLive';
 import { brokenPhoto, onScreenRank, subscribePhotoSignals } from './photoSignals';
 import { freshPhoto, isGravatarPhoto, isLinkedInPhoto, linkedInImageExpired } from './photos';
 
@@ -74,12 +72,11 @@ export interface PhotoSource {
   photo(identifier: string): Promise<EnrichOutcome<LinkedInPhoto>>;
 }
 
-/** The source for this student, or undefined when there is nothing to fetch with (no live LinkedIn, account mode). */
+/** The source for this student, or undefined when there is nothing to fetch with (no live LinkedIn). */
 export async function photoSourceFor(user: Pick<User, 'id'>): Promise<PhotoSource | undefined> {
-  if (isServerUser(user.id)) return undefined;
-  const row = await liveLinkedInAccount(user.id);
-  if (!row || row.status === 'revoked' || !row.externalAccountId) return undefined;
-  if (usesMockConnectors(user.id))
+  const live = await liveAccountFor(user);
+  if (!live) return undefined;
+  if (live === 'mock')
     return {
       // the demo's own picture only: its made-up member ids are never written onto people
       photo: async (identifier) => {
@@ -89,9 +86,7 @@ export async function photoSourceFor(user: Pick<User, 'id'>): Promise<PhotoSourc
           : { ok: false, reason: 'not_found', message: 'Not in the demo.' };
       },
     };
-  if (!unipileConfigured() || !row.accessToken) return undefined;
-  const accountId = row.externalAccountId;
-  const token = row.accessToken;
+  const { accountId, token } = live;
   return { photo: (identifier) => linkedInPhoto(accountId, identifier, { token }) };
 }
 
@@ -201,7 +196,7 @@ export function resetPhotoQueueForTests(): void {
  * the call that stops it.
  */
 export function startPhotoQueue(user: Pick<User, 'id'>): () => void {
-  if (!autoRun || isServerUser(user.id)) return () => undefined;
+  if (!autoRun) return () => undefined;
   let stopped = false;
   let busy = false;
   let timer: ReturnType<typeof setTimeout> | undefined;

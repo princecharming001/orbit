@@ -38,6 +38,7 @@ import {
   type SyncStatus,
 } from '../integrations/orbitApi';
 import { endActivity, startActivity } from './activity';
+import { linkedInImageExpired } from './photos';
 
 // ---- tables -------------------------------------------------------------------------------------------------------
 
@@ -153,9 +154,44 @@ function nameParts(displayName: string): { first: string; last: string } {
   return { first: parts[0] ?? '', last: parts.slice(1).join(' ') };
 }
 
+/**
+ * Server column names (generic camelCase) and the names the browser's screens read, per table: a row from a server
+ * that does not rename them yet (or one stored before it did) still shows its company, people and dates.
+ */
+const RENAMED: Record<string, [server: string, browser: string][]> = {
+  affiliations: [
+    ['orgRaw', 'nameRaw'],
+    ['orgId', 'organizationId'],
+  ],
+  merge_suggestions: [
+    ['personA', 'personAId'],
+    ['personB', 'personBId'],
+  ],
+  threads: [
+    ['firstAt', 'firstMessageAt'],
+    ['lastAt', 'lastMessageAt'],
+    ['externalId', 'externalThreadId'],
+  ],
+  calendar_events: [['externalId', 'externalEventId']],
+  chats: [['orgId', 'organizationId']],
+};
+const MERGE_STATUS: Record<string, string> = { open: 'pending', merged: 'accepted' };
+
+/** The browser's names filled in from the server's, where only the server's are there. */
+export function withBrowserNames(table: string, row: Record<string, unknown>): Record<string, unknown> {
+  const pairs = RENAMED[table];
+  if (!pairs) return row;
+  const r = { ...row };
+  for (const [from, to] of pairs) if (r[to] === undefined && r[from] != null) r[to] = r[from];
+  if (table === 'affiliations' && typeof r.nameRaw !== 'string') r.nameRaw = '';
+  if (table === 'merge_suggestions' && typeof r.status === 'string')
+    r.status = MERGE_STATUS[r.status] ?? r.status;
+  return r;
+}
+
 /** Fields the browser's screens rely on, filled where a server row leaves them out. */
 function withDefaults(table: string, row: Record<string, unknown>, userId: string): Record<string, unknown> {
-  const r: Record<string, unknown> = { userId, ...row };
+  const r: Record<string, unknown> = { userId, ...withBrowserNames(table, row) };
   if (table === 'people') {
     const name = typeof r.displayName === 'string' ? r.displayName : '';
     const { first, last } = nameParts(name);
@@ -211,6 +247,41 @@ export async function repairStoredCompanies(): Promise<number> {
   });
 }
 
+/**
+ * Rows pulled before the server sent the browser's names (a role's company, a merge suggestion's two people, a
+ * thread's dates) carry only the server's: fill the browser's in once, as a server write. Pulls only send rows that
+ * changed, so without this the old ones would stay blank.
+ */
+export async function repairStoredNames(): Promise<number> {
+  let n = 0;
+  for (const [table, dexie] of [
+    ['affiliations', db.affiliations],
+    ['merge_suggestions', db.merges],
+    ['threads', db.threads],
+    ['calendar_events', db.events],
+    ['chats', db.chats],
+  ] as const) {
+    const t = dexie as unknown as Table<Record<string, unknown>, string>;
+    const [server] = RENAMED[table]![0]!;
+    n += await db.transaction('rw', t, async (tx) => {
+      serverTx.add(tx);
+      return t
+        .filter((r) => r[server] != null || (table === 'merge_suggestions' && r.status === 'open'))
+        .modify((r) => {
+          const fixed = withBrowserNames(table, r);
+          for (const [k, v] of Object.entries(fixed)) if (r[k] !== v) r[k] = v;
+        });
+    });
+  }
+  return n;
+}
+
+/** The photos a person's row may carry up: LinkedIn's image host or Gravatar, as the server accepts. */
+const PUSHABLE_PHOTO = /^https:\/\/([a-z0-9-]+\.)*(licdn\.com|gravatar\.com)\//;
+
+/** What a company row learns in this browser alone (enrichment/logos adoptCompany), never sent by the server. */
+const LOCAL_ORG_FIELDS = ['logoUrl', 'linkedinCompanyId', 'linkedinSlug'];
+
 /** Postgres nulls become absent fields, as the core types expect. */
 function stripNulls(r: Record<string, unknown>): Record<string, unknown> {
   const out: Record<string, unknown> = {};
@@ -251,6 +322,28 @@ export async function writeFromServer(
   const tables = [t, ...(table === 'tie_scores' ? [db.people] : [])];
   await db.transaction('rw', tables, async (tx) => {
     serverTx.add(tx);
+    // a company's LinkedIn logo and id are kept in this browser only (the server has no columns for them): a newer
+    // row of the company from the server keeps them, or every pull would blank the logos the queue just fetched
+    if (table === 'organizations' && ready.length) {
+      const had = await t.bulkGet(ready.map((r) => String(r.id)));
+      ready = ready.map((r, i) => {
+        const old = had[i];
+        if (!old) return r;
+        const kept: Record<string, unknown> = {};
+        for (const k of LOCAL_ORG_FIELDS) if (r[k] === undefined && old[k] !== undefined) kept[k] = old[k];
+        return { ...r, ...kept };
+      });
+    }
+    // a person's photo this browser renewed stays when the server's row has none, or only an expired link
+    if (table === 'people' && ready.length) {
+      const had = await t.bulkGet(ready.map((r) => String(r.id)));
+      ready = ready.map((r, i) => {
+        const mine = had[i]?.photoUrl;
+        const theirs = r.photoUrl;
+        if (typeof mine !== 'string' || mine === theirs || linkedInImageExpired(mine)) return r;
+        return typeof theirs !== 'string' || linkedInImageExpired(theirs) ? { ...r, photoUrl: mine } : r;
+      });
+    }
     if (ready.length) await t.bulkPut(ready);
     if (gone.length) await t.bulkDelete(gone);
     if (table === 'tie_scores')
@@ -597,6 +690,10 @@ async function buildChange(entry: OutboxRow, pairs: [string, string][]): Promise
         'hiddenAt',
         'doNotContact',
       ]);
+      // a photo this browser fetched (an expired LinkedIn link renewed, a missing one found) goes up while it works,
+      // so the next pull, and every other device, shows it instead of initials
+      if (p.photoUrl && PUSHABLE_PHOTO.test(p.photoUrl) && !linkedInImageExpired(p.photoUrl))
+        row.photoUrl = p.photoUrl;
       // someone added in this browser: the server creates them from what was typed (and ignores these afterwards)
       if (sid !== entry.id) Object.assign(row, { displayName: p.displayName }, typedPersonFields(p));
       return { table: 'people', op: 'upsert', id: sid, row };
@@ -792,6 +889,7 @@ let lastDerived = 0;
 export function startServerSync(o: SyncLoopOptions): () => void {
   installOutboxHooks();
   void repairStoredCompanies().catch(() => undefined);
+  void repairStoredNames().catch(() => undefined);
   let stopped = false;
   let lastCounts = '';
   const derived = async (out: PullOutcome) => {

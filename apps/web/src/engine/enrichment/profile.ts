@@ -98,7 +98,14 @@ export async function applyLinkedInProfile(
   user: Pick<User, 'id'>,
   personId: string,
   profile: LinkedInProfile,
-  opts: { now?: Date; confidence?: number; rec?: EnrichmentRecord; alias?: SchoolAlias } = {},
+  opts: {
+    now?: Date;
+    confidence?: number;
+    rec?: EnrichmentRecord;
+    alias?: SchoolAlias;
+    /** join their mail and texts by a shared address (off for an Orbit account, whose server owns merges) */
+    merge?: boolean;
+  } = {},
 ): Promise<ApplyResult | undefined> {
   const now = opts.now ?? new Date();
   const at = now.toISOString();
@@ -111,7 +118,7 @@ export async function applyLinkedInProfile(
   // 1. their mail and texts, by the address or number LinkedIn shares: the same person, joined exactly
   const emails = [...new Set((profile.contact?.emails ?? []).map((e) => normalizeEmail(e)))];
   const phones = [...new Set((profile.contact?.phones ?? []).map(phoneKey).filter((p): p is string => !!p))];
-  if (emails.length || phones.length) {
+  if (opts.merge !== false && (emails.length || phones.length)) {
     const others = await db.people
       .where('userId')
       .equals(user.id)
