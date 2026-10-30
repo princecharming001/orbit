@@ -16,18 +16,23 @@ import type {
   Suggestion,
   User,
   UserSettings,
+  WeekPace,
 } from '@orbit/core';
 import {
   cardReason,
   cleanAnswer,
   differentLinkedInProfiles,
+  isSendingDay,
+  paceLine,
   STAGE_LABELS,
+  todayKey,
   warmUpProgress,
+  weekPace,
 } from '@orbit/core';
 import { db } from '../db/schema';
 import { isMessageSuggestion } from './brief';
 import { type PersonSnapshot, restorePerson, snapshotPerson } from './send';
-import { draftLists, notYetWritten, todayCards, weekStats } from './today';
+import { draftLists, firstsThisWeek, notYetWritten, todayCards, weekStats } from './today';
 
 /** At most this many decisions; the rest wait in Drafts, and the overview and the last slide say how many. */
 export const MORNING_MAX_DECISIONS = 6;
@@ -42,6 +47,10 @@ const TIMELY = new Set<Suggestion['kind']>(['prep_brief', 'schedule_confirm']);
 export interface MorningStats {
   sentThisWeek: number;
   weeklyTarget: number;
+  /** the week as a plan for each day (core pace.ts): today's number, and how the week stands against an even pace */
+  pace: WeekPace;
+  /** that plan in one sentence */
+  paceLine: string;
   /** people who wrote back in the last day */
   replies: number;
   /** coffee chats on the calendar today */
@@ -169,8 +178,50 @@ export function morningHeadline(x: {
   return 'Nothing is waiting on you. A good day to reach out to someone new.';
 }
 
+/** The next working day after today, as the brief says it: "tomorrow", or "on Monday". */
+function nextSendingDay(now: Date, tz: string | undefined, quietDays: number[]): string | undefined {
+  const day = 86_400_000;
+  const today = Date.parse(`${todayKey(now, tz)}T00:00:00Z`);
+  for (let i = 1; i <= 21; i++) {
+    const key = new Date(today + i * day).toISOString().slice(0, 10);
+    if (!isSendingDay(key, quietDays)) continue;
+    if (i === 1) return 'tomorrow';
+    const name = new Date(`${key}T12:00:00Z`).toLocaleDateString('en-US', {
+      weekday: 'long',
+      timeZone: 'UTC',
+    });
+    return i < 7 ? `on ${name}` : `on ${name}, ${key.slice(5).replace('-', '/')}`;
+  }
+  return undefined;
+}
+
+/** How the week stands against its pace, from the outbox and the student's settings. */
+export function paceFor(
+  user: Pick<User, 'timezone' | 'onboardingCompletedAt'>,
+  settings:
+    | Pick<UserSettings, 'weeklyOutreachTarget' | 'quietDays' | 'dailySendCapGmail' | 'dailySendCapLinkedin'>
+    | undefined,
+  sentThisWeek: { sentAt?: string }[],
+  now: Date,
+): { pace: WeekPace; line: string } {
+  const tz = user.timezone || undefined;
+  const today = todayKey(now, tz);
+  const quietDays = settings?.quietDays ?? [];
+  const pace = weekPace({
+    target: settings?.weeklyOutreachTarget ?? 4,
+    sentThisWeek: sentThisWeek.length,
+    sentToday: sentThisWeek.filter((o) => !!o.sentAt && todayKey(new Date(o.sentAt), tz) === today).length,
+    now,
+    tz,
+    quietDays,
+    dailyCap: (settings?.dailySendCapGmail ?? 15) + (settings?.dailySendCapLinkedin ?? 10),
+    startedAt: user.onboardingCompletedAt,
+  });
+  return { pace, line: paceLine(pace, nextSendingDay(now, tz, quietDays)) };
+}
+
 export async function morningDeck(
-  user: Pick<User, 'id' | 'firstName' | 'timezone'>,
+  user: Pick<User, 'id' | 'firstName' | 'timezone' | 'onboardingCompletedAt'>,
   now = new Date(),
 ): Promise<MorningDeck> {
   const [settings, suggestions, outbound, chats, people, briefs, events, recs, goals] = await Promise.all([
@@ -226,6 +277,7 @@ export async function morningDeck(
       if (typeof id === 'string' && byId.has(id)) deckPeople[id] = byId.get(id)!;
 
   const week = weekStats(outbound, chats, people, settings?.weeklyOutreachTarget ?? 4, now);
+  const paced = paceFor(user, settings, firstsThisWeek(outbound, now), now);
   const dayAgo = now.getTime() - 86_400_000;
   const replies = chats.filter(
     (c) =>
@@ -358,6 +410,8 @@ export async function morningDeck(
     stats: {
       sentThisWeek: week.sentThisWeek,
       weeklyTarget: week.weeklyTarget,
+      pace: paced.pace,
+      paceLine: paced.line,
       replies,
       chatsToday: todays.length,
       replyRate: week.replyRate,

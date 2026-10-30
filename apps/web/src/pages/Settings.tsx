@@ -20,7 +20,7 @@ import { LinkedInImportButton } from '../components/LinkedInImport';
 import { openMorningBrief } from '../components/MorningBrief';
 import { CalcomRow, FathomRow, MeetingAppRow } from '../components/NotesAppRows';
 import { OutreachCoach } from '../components/settings/OutreachCoach';
-import { WeeklyTargetSlider } from '../components/WeeklyTargetSlider';
+import { useWeeklyLimits, WeeklyTargetSlider } from '../components/WeeklyTargetSlider';
 import { suggestCompanies } from '../data/companies';
 import {
   cycleOptions,
@@ -1296,6 +1296,7 @@ function TrustLadder() {
 function Limits() {
   const user = useSession().user!;
   const settings = useLiveQuery(async () => (await db.settings.get(user.id)) ?? null, [user.id]);
+  const limits = useWeeklyLimits(user.id);
   const [savedAt, setSavedAt] = useState<number>();
   if (settings === undefined) return <FormLoading fields={6} />;
   if (!settings) return null;
@@ -1320,6 +1321,7 @@ function Limits() {
             value={settings.weeklyOutreachTarget}
             onChange={(v) => upd({ weeklyOutreachTarget: v })}
             testId="settings-weekly"
+            limits={limits}
           />
         </div>
         <details className="@[40rem]:col-span-2 text-[13px]" data-testid="limits-advanced">

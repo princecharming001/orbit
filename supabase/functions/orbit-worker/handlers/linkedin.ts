@@ -13,8 +13,8 @@
  * more than the count: filing a page of relations is a minute or more, and a worker run that overstays is killed
  * without a trace, so a job that only counted requests was killed on every attempt and dead-lettered). A pass that
  * ended in the last 20 hours is not walked again: a sync asked for then reads one page of the newest relations.
- * New inbound messages of the last 180 days are classified; the people touched are re-scored, and score.user runs
- * when a full pass ends.
+ * New inbound messages of the last 180 days are classified (on the first pass as history: listed, never answered by a
+ * draft); the people touched are re-scored, and score.user runs when a full pass ends.
  */
 
 import { CLASSIFY_WINDOW_DAYS } from '../../_shared/ingest/gmail.ts';
@@ -105,6 +105,8 @@ export function linkedinHandlers(deps: HandlerDeps): Record<string, JobHandler> 
         state.stage === 'done' &&
         !!state.syncedAt &&
         now.getTime() - Date.parse(state.syncedAt) < FRESH_FOR_MS;
+      // no full pass has ended yet: what this one reads is the user's history, from before Orbit
+      const firstPass = !state.syncedAt;
       if (state.stage === 'done' || !state.stage) state = { ...state, stage: 'relations', cursor: null };
       let requests = 0;
       const call = async <T>(fn: () => Promise<T>): Promise<T> => {
@@ -222,7 +224,8 @@ export function linkedinHandlers(deps: HandlerDeps): Record<string, JobHandler> 
               await ctx.queue.enqueue({
                 kind: 'classify.message',
                 userId,
-                payload: { messageId: m.id },
+                // the first pass reads the user's history: its replies are listed, none answered by a draft
+                payload: { messageId: m.id, ...(firstPass ? { history: true } : {}) },
                 dedupeKey: `classify:linkedin:${userId}:${m.externalId}`,
               });
         }

@@ -181,6 +181,19 @@ export const REPLY_RATE_MIN_SENT = 3;
  * Today's "This week" numbers: first messages sent since Monday against the weekly goal, the reply rate over the
  * last 30 days (a reply by email, or a chat that moved on), chats done and people in orbit.
  */
+/** First messages sent since Monday: what the weekly target counts. */
+export function firstsThisWeek<T extends Pick<OutboundMessage, 'status' | 'kind' | 'sentAt'>>(
+  outbound: T[],
+  now: Date,
+): T[] {
+  const weekStart = new Date(now);
+  weekStart.setDate(now.getDate() - ((now.getDay() + 6) % 7));
+  weekStart.setHours(0, 0, 0, 0);
+  return outbound.filter(
+    (o) => o.status === 'sent' && o.kind === 'outreach' && !!o.sentAt && new Date(o.sentAt) >= weekStart,
+  );
+}
+
 export function weekStats(
   outbound: Pick<OutboundMessage, 'status' | 'kind' | 'sentAt' | 'personId'>[],
   chats: Pick<CoffeeChat, 'personId' | 'lastInboundAt' | 'stage' | 'completedAt'>[],
@@ -196,11 +209,8 @@ export function weekStats(
   completed: number;
   peopleInOrbit: number;
 } {
-  const weekStart = new Date(now);
-  weekStart.setDate(now.getDate() - ((now.getDay() + 6) % 7));
-  weekStart.setHours(0, 0, 0, 0);
   const firsts = outbound.filter((o) => o.status === 'sent' && o.kind === 'outreach' && !!o.sentAt);
-  const sentThisWeek = firsts.filter((o) => new Date(o.sentAt!) >= weekStart).length;
+  const sentThisWeek = firstsThisWeek(outbound, now).length;
   const sent30 = firsts.filter((o) => now.getTime() - new Date(o.sentAt!).getTime() < 30 * DAY);
   const replied30 = sent30.filter((o) =>
     chats.some(

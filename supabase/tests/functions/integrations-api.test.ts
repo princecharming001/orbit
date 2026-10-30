@@ -235,4 +235,24 @@ describe('/sync/status', () => {
       total: 4000,
     });
   });
+
+  it("says when LinkedIn's first pass is still bringing connections in", async () => {
+    const { handler } = api();
+    const { userId, token } = await signedIn(['https://www.googleapis.com/auth/gmail.readonly']);
+    const status = async (state: Record<string, unknown>) => {
+      await t.db.sql`
+        insert into orbit.integration_accounts (user_id, provider, external_account_id, status, sync_state)
+        values (${userId}::uuid, 'linkedin', 'acc-1', 'active', ${{ linkedin: state }}::jsonb)
+        on conflict (user_id, provider) do update set sync_state = excluded.sync_state`;
+      const r = (await (await handler(post('/sync/status', token))).json()) as {
+        integrations: { provider: string; importing?: boolean }[];
+      };
+      return r.integrations.find((i) => i.provider === 'linkedin')!.importing;
+    };
+    expect(await status({ stage: 'relations', cursor: 'c2' })).toBe(true);
+    expect(await status({ stage: 'chats', chatIndex: 3 })).toBe(true);
+    // a later refresh walks known people again: that is not people arriving
+    expect(await status({ stage: 'relations', syncedAt: '2026-10-29T10:00:00Z' })).toBe(false);
+    expect(await status({ stage: 'done', syncedAt: '2026-10-29T10:00:00Z' })).toBe(false);
+  });
 });

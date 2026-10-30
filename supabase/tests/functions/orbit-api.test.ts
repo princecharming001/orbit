@@ -956,4 +956,26 @@ describe('/sync/pull parameters', () => {
     }
     expect([...seen].sort()).toEqual([...ids].sort());
   });
+
+  it('pulls a reply draft with its Gmail thread under the names the browser reads', async () => {
+    // without them the browser took a threaded reply for a new email and asked the student for a subject
+    const userId = await makeUser(t.db, { email: 'threaded@example.com' });
+    const [p] = await t.db.sql<{ id: string }>`
+      insert into orbit.people (user_id, display_name, name_norm) values (${userId}::uuid, 'Morgan', 'morgan')
+      returning id`;
+    await t.db.sql`
+      insert into orbit.drafts (user_id, person_id, channel, kind, body, thread_external_id, in_reply_to)
+      values (${userId}::uuid, ${p!.id}::uuid, 'gmail', 'reply', 'Thursday works.', '1a0609d78efe4cb0',
+              '<m1@mail.test>')`;
+    const out = await pull(t.db, userId, {
+      cursor: {},
+      tables: PULL_TABLES.filter((x) => x.table === 'drafts'),
+      limit: 10,
+      upTo: new Date(Date.now() + 60_000),
+    });
+    expect(out.changes.drafts?.[0]).toMatchObject({
+      externalThreadId: '1a0609d78efe4cb0',
+      inReplyToMessageId: '<m1@mail.test>',
+    });
+  });
 });

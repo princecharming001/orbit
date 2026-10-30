@@ -101,6 +101,18 @@ describe('the Gmail backfill over a fixture mailbox', () => {
       expect(kinds).toContain(k);
   });
 
+  it('classifies the replies it reads from the history but drafts no answer to them', async () => {
+    // mail from before Orbit: a new account starts with no drafts, however many replies the backfill finds
+    const answerable = await t.db.sql<{ reply_class: string }>`
+      select reply_class from orbit.messages
+       where user_id = ${u}::uuid and direction = 'in'
+         and reply_class in ('interested', 'scheduling', 'question', 'objection', 'referral', 'not_now', 'decline')`;
+    expect(answerable.length).toBeGreaterThan(0);
+    const [n] = await t.db.sql<{ n: number }>`
+      select count(*)::int as n from orbit.drafts where user_id = ${u}::uuid`;
+    expect(n!.n).toBe(0);
+  });
+
   it('asks for metadata first, and full threads only for networking candidates', async () => {
     const lists = env.google.calls.filter((c) => /\/users\/me\/messages\?/.test(c.url));
     expect(new URL(lists[0]!.url).searchParams.get('q')).toBe('newer_than:90d -in:chats');

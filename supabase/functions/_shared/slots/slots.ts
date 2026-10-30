@@ -34,7 +34,7 @@ export interface Busy {
   end: number;
 }
 
-/** "Tue Oct 21, 10:00–10:30 ET" in `tz`. */
+/** "Tue, Oct 21, 10:00 to 10:30 ET" in `tz`: written out, since a dash reads as machine-written in a draft. */
 export function slotLabel(start: Date, end: Date, tz: string): string {
   const day = new Intl.DateTimeFormat('en-US', {
     timeZone: tz,
@@ -49,7 +49,7 @@ export function slotLabel(start: Date, end: Date, tz: string): string {
       minute: '2-digit',
       hourCycle: 'h23',
     }).format(d);
-  return `${day}, ${hm(start)}–${hm(end)} ${zoneAbbrev(start, tz)}`;
+  return `${day}, ${hm(start)} to ${hm(end)} ${zoneAbbrev(start, tz)}`;
 }
 
 /** The slots themselves, pure: the first free slot of each working day, until `count` days have one. */

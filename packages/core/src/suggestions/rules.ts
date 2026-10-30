@@ -21,6 +21,7 @@ import type {
 import { todayKey } from '../util/ids';
 import { warmUpProgress, warmUpStepDue } from '../warmup/rules';
 import { addBusinessDays, businessDaysBetween, localWeekday, nextWorkdayKey } from './calendar';
+import { weekPace } from './pace';
 
 export * from './calendar';
 
@@ -38,6 +39,10 @@ export interface RuleInput {
   recommendations: Recommendation[];
   dismissCounts: Map<string, number>; // `${kind}:${personId}` -> dismissals in 60 days
   outreachSentThisWeek: number;
+  /** of this week's first messages, the ones sent today: the day's plan holds still while they go out */
+  outreachSentToday?: number;
+  /** when setup ended (ISO): first messages are planned from the next working day on */
+  setupDoneAt?: string;
   freeSlotsIso: string[]; // from calendar free/busy
   recentlyContacted: Set<string>; // personIds contacted in last 30d
   recentBriefDate?: string;
@@ -726,10 +731,19 @@ export function generateCandidates(inp: RuleInput): Candidate[] {
       });
     }
   }
-  // new outreach from recommendations (weekly pacing; the week runs Monday to Sunday)
-  const remaining = Math.max(0, inp.settings.weeklyOutreachTarget - inp.outreachSentThisWeek);
-  const weekdayIndex = (now.getDay() + 6) % 7; // Monday = 0 ... Sunday = 6
-  const behind = weekdayIndex >= 2 && remaining > inp.settings.weeklyOutreachTarget / 2;
+  // new outreach from recommendations, at the week's pace (pace.ts): today's share of what the week still needs,
+  // held at the sending limits; nothing on the day setup ends, a weekend, a holiday or a quiet day
+  const pace = weekPace({
+    target: inp.settings.weeklyOutreachTarget,
+    sentThisWeek: inp.outreachSentThisWeek,
+    sentToday: inp.outreachSentToday ?? 0,
+    now,
+    tz: inp.timezone,
+    quietDays: inp.settings.quietDays,
+    dailyCap: inp.settings.dailySendCapGmail + inp.settings.dailySendCapLinkedin,
+    startedAt: inp.setupDoneAt,
+  });
+  const behind = pace.status === 'behind';
   let added = 0;
   // companies where the student already has live threads: a third cold note there waits until one resolves, so
   // contacts do not compare near-identical emails
@@ -744,7 +758,7 @@ export function generateCandidates(inp: RuleInput): Candidate[] {
   for (const r of inp.recommendations
     .filter((r) => r.status === 'new' || r.status === 'saved')
     .sort((a, b) => (b.status === 'saved' ? 1 : 0) - (a.status === 'saved' ? 1 : 0) || b.score - a.score)) {
-    if (added >= Math.min(2, remaining)) break;
+    if (added >= pace.leftToday) break;
     if (inp.chats.some((c) => c.personId === r.personId && c.stage !== 'archived')) continue;
     const p = inp.people.get(r.personId);
     if (!p) continue;
@@ -756,9 +770,10 @@ export function generateCandidates(inp: RuleInput): Candidate[] {
       dedupeKey: `new:${r.personId}:${weekMondayKey(now)}`,
       reasonText:
         joinReasons(r.reasons.map((x) => x.text).slice(0, 2), p.firstName) || 'Good fit for your goals',
-      signals: { score: r.score, recommendationId: r.id },
+      // `paced`: one of today's planned first messages, drafted with the brief even past its few cards
+      signals: { score: r.score, recommendationId: r.id, paced: true },
       payload: { recommendationId: r.id, channel: p.primaryEmail ? 'gmail' : 'linkedin' },
-      urgency: behind ? 0.5 : remaining > 0 ? 0.3 : 0.2,
+      urgency: behind ? 0.5 : 0.3,
       goalRelevance: Math.max(goalRel(r.personId), r.fitScore),
       confidence: 1,
     });

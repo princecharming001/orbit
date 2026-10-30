@@ -98,7 +98,17 @@ export const PULL_TABLES: PullTable[] = [
     map: ({ data, ...rest }) => ({ ...((data as Record<string, unknown>) ?? {}), ...rest }),
   },
   { table: 'stage_events', key: 'id', cursor: 'updated_at' },
-  { table: 'drafts', key: 'id', cursor: 'updated_at' },
+  {
+    table: 'drafts',
+    key: 'id',
+    cursor: 'updated_at',
+    // the browser's OutboundMessage names: a reply carries its Gmail thread, so it goes out in it, under its subject
+    map: (r) => ({
+      ...r,
+      ...(r.threadExternalId ? { externalThreadId: r.threadExternalId } : {}),
+      ...(r.inReplyTo ? { inReplyToMessageId: r.inReplyTo } : {}),
+    }),
+  },
   { table: 'notes', key: 'id', cursor: 'updated_at' },
   { table: 'uploads', key: 'id', cursor: 'updated_at' },
   { table: 'facts', key: 'id', cursor: 'updated_at', deletedWhen: 't.deleted_at is not null' },

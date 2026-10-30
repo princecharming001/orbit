@@ -1,6 +1,8 @@
 /**
- * classify.message {messageId} — or {provider, messageId: <provider's id>} from older webhook payloads — runs the
- * reply classifier of ingest/classify.ts on one stored inbound message (§8.3), then the reply's next step
+ * classify.message {messageId, history?} — or {provider, messageId: <provider's id>} from older webhook payloads — runs
+ * the reply classifier of ingest/classify.ts on one stored inbound message (§8.3), then, unless the message was read
+ * from the user's history (`history`: a backfill, from before Orbit, where only an unsubscribe still counts), the
+ * reply's next step
  * (replies.ts `maybeAutoReply`, §8.4): unsubscribe closes the person's chats and cancels their drafts, a class that
  * needs an answer gets a draft, and at autonomy level 2 a scheduling answer that meets every condition is approved and
  * queued to send. A message that is not stored (yet) or not an inbound human message ends the job quietly. Then how
@@ -44,9 +46,11 @@ export function classifyHandlers(
           payload: { personIds: [personId] },
           dedupeKey: `score.person:${userId}:rapport:${id}`,
         });
-      // idempotent per message, so a retry after a failure here classifies again and picks up where it stopped
+      // idempotent per message, so a retry after a failure here classifies again and picks up where it stopped. A
+      // reply read from the user's history came before Orbit: an unsubscribe still counts, but nothing is drafted
       await maybeAutoReply(ctx.db, userId, id, {
         services: makeServices(agents, { db: ctx.db, now: ctx.now, queue: ctx.queue }),
+        history: p.history === true,
       });
     },
     'rapport.backfill': async (job, ctx) => {

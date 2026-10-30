@@ -27,6 +27,7 @@ import { useClosenessKey } from '../components/map/useCloseness';
 import { type CardPlace, OrbitMap, useCoarsePointer } from '../components/OrbitMap';
 import type { FocusSpec, WebSpec } from '../components/orbitScene';
 import { LINEAGE } from '../components/orbitScene';
+import { PeopleArriving } from '../components/PeopleArriving';
 import { StrengthDots } from '../components/people/shared';
 import { ResizeHandle, useResizableWidth } from '../components/ResizeHandle';
 import { TargetPlanCard } from '../components/TargetPlanCard';
@@ -968,6 +969,7 @@ export function MapPage() {
               if (place) setHoverPlace(place);
             }}
           />
+          {!loading && peopleQ && <PeopleArriving have={peopleQ.length} />}
           {hovered && (
             // one card that follows the focus from dot to dot: it fades in when it first shows, not again with
             // each arrow key

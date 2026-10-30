@@ -395,7 +395,7 @@ describe('weekly keys and pacing (PS-14, PS-17)', () => {
     );
     expect(keys).toEqual(['2026-09-28', '2026-09-28', '2026-09-28', '2026-09-28', '2026-10-05']);
   });
-  it('counts Sunday as behind when nothing went out this week', () => {
+  it('is behind midweek when nothing went out, rests on Sunday, and starts Monday on pace', () => {
     const rec = {
       id: 'r1',
       userId: 'u',
@@ -409,7 +409,9 @@ describe('weekly keys and pacing (PS-14, PS-17)', () => {
       generateCandidates(input({ now, people: [person('yuki')], recommendations: [rec] })).find(
         (c) => c.kind === 'new_outreach',
       );
-    expect(run(new Date('2026-10-04T12:00:00'))?.urgency).toBe(0.5);
+    // the week's pace (pace.ts): first messages go out on working days, so Sunday plans none
+    expect(run(new Date('2026-09-30T12:00:00'))?.urgency).toBe(0.5);
+    expect(run(new Date('2026-10-04T12:00:00'))).toBeUndefined();
     expect(run(new Date('2026-10-05T12:00:00'))?.urgency).toBe(0.3);
   });
 });

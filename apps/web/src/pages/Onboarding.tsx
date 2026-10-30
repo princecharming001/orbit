@@ -45,7 +45,7 @@ import {
   ObTextArea,
   OnboardingLayout,
 } from '../components/onboarding/OnboardingLayout';
-import { WeeklyTargetSlider } from '../components/WeeklyTargetSlider';
+import { useWeeklyLimits, WeeklyTargetSlider } from '../components/WeeklyTargetSlider';
 import { suggestCompanies } from '../data/companies';
 import { suggestSchools } from '../data/schools';
 import { db } from '../db/schema';
@@ -524,6 +524,7 @@ function ambitionFor(weekly: number): 1 | 2 | 3 {
 
 function StepGoals({ onNext, onBack }: { onNext: () => void; onBack: () => void }) {
   const user = useSession().user!;
+  const limits = useWeeklyLimits(user.id);
   // null once read and absent; undefined only while loading
   const goals = useLiveQuery(async () => (await db.goals.get(user.id)) ?? null, [user.id]);
   const tcs =
@@ -768,7 +769,7 @@ function StepGoals({ onNext, onBack }: { onNext: () => void; onBack: () => void 
         </div>
         <div>
           <ObLabel hint="A goal, not a limit">First messages a week</ObLabel>
-          <WeeklyTargetSlider value={weekly} onChange={setWeekly} testId="ob-pace" />
+          <WeeklyTargetSlider value={weekly} onChange={setWeekly} testId="ob-pace" limits={limits} />
         </div>
       </div>
       <ObPrimary

@@ -5483,7 +5483,7 @@ function slotLabel(start, end, tz) {
     minute: "2-digit",
     hourCycle: "h23"
   }).format(d);
-  return `${day2}, ${hm(start)}–${hm(end)} ${zoneAbbrev(start, tz)}`;
+  return `${day2}, ${hm(start)} to ${hm(end)} ${zoneAbbrev(start, tz)}`;
 }
 function pickSlots(busy, opts) {
   const count = opts.count ?? 3;
@@ -16880,6 +16880,7 @@ async function maybeAutoReply(db2, userId, messageId, deps = {}) {
     return { action: "unsubscribed" };
   }
   if (!m.from_person_id) return { action: "none", reason: "unknown_sender" };
+  if (deps.history) return { action: "none", reason: "history" };
   if (!DRAFT_CLASSES.has(cls)) return { action: "none", reason: `class ${cls}` };
   const autoClass = cls === "scheduling";
   const [existing] = await db2.sql`
@@ -16892,6 +16893,13 @@ async function maybeAutoReply(db2, userId, messageId, deps = {}) {
     if (existing.status !== "draft") return { action: "auto_sent", draftId: existing.id };
     draft = existing;
   } else {
+    await db2.sql`
+      update orbit.drafts d set status = 'cancelled', cancel_reason = 'superseded'
+       where d.user_id = ${userId}::uuid and d.kind = 'reply' and d.status = 'draft'
+         and d.updated_at < d.created_at + interval '2 seconds'
+         and d.ask->>'replyToMessageId' in (
+           select id::text from orbit.messages
+            where user_id = ${userId}::uuid and thread_id = ${m.thread_id}::uuid and id <> ${m.id}::uuid)`;
     try {
       draft = (await draftReply(s, userId, m.id, "agent")).draft;
     } catch (e) {
@@ -16995,7 +17003,8 @@ function classifyHandlers(deps, agents = { env: {} }) {
           dedupeKey: `score.person:${userId}:rapport:${id}`
         });
       await maybeAutoReply(ctx.db, userId, id, {
-        services: makeServices(agents, { db: ctx.db, now: ctx.now, queue: ctx.queue })
+        services: makeServices(agents, { db: ctx.db, now: ctx.now, queue: ctx.queue }),
+        history: p.history === true
       });
     },
     "rapport.backfill": async (job, ctx) => {
@@ -18148,7 +18157,7 @@ async function ingestGmail(d, refs) {
     await d.queue.enqueue({
       kind: "classify.message",
       userId,
-      payload: { messageId: c.id },
+      payload: { messageId: c.id, ...d.history ? { history: true } : {} },
       dedupeKey: `classify:gmail:${userId}:${c.externalId}`
     });
   if (touched.size)
@@ -18332,7 +18341,10 @@ function gmailHandlers(deps) {
       maxResults: PAGE_SIZE
     });
     const refs = page2.messages ?? [];
-    await ingestGmail({ db: ctx.db, queue: ctx.queue, api, userId, now, jobKey: `gmail:${job.msgId}` }, refs);
+    await ingestGmail(
+      { db: ctx.db, queue: ctx.queue, api, userId, now, jobKey: `gmail:${job.msgId}`, history: true },
+      refs
+    );
     const done = bf.done + refs.length;
     const estimate = page2.resultSizeEstimate ?? null;
     const total = bf.total ?? (estimate === null ? null : bf.phase === "deep" ? Math.min(estimate, DEEP_CAP) : estimate);
@@ -18794,6 +18806,7 @@ function linkedinHandlers(deps) {
       const overBudget = () => clock() - started >= budgetMs;
       let state = acct.syncState.linkedin ?? {};
       const fresh = state.stage === "done" && !!state.syncedAt && now.getTime() - Date.parse(state.syncedAt) < FRESH_FOR_MS;
+      const firstPass = !state.syncedAt;
       if (state.stage === "done" || !state.stage) state = { ...state, stage: "relations", cursor: null };
       let requests = 0;
       const call = async (fn) => {
@@ -18902,7 +18915,8 @@ function linkedinHandlers(deps) {
               await ctx.queue.enqueue({
                 kind: "classify.message",
                 userId,
-                payload: { messageId: m.id },
+                // the first pass reads the user's history: its replies are listed, none answered by a draft
+                payload: { messageId: m.id, ...firstPass ? { history: true } : {} },
                 dedupeKey: `classify:linkedin:${userId}:${m.externalId}`
               });
         }

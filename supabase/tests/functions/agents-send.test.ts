@@ -501,7 +501,7 @@ describe('replies (§8)', () => {
       '2026-11-30T14:00:00.000Z',
       '2026-12-01T14:00:00.000Z',
     ]);
-    expect(s[0]!.label).toBe('Wed, Nov 25, 10:00–10:30 ET');
+    expect(s[0]!.label).toBe('Wed, Nov 25, 10:00 to 10:30 ET');
   });
 
   it('§8.8 test 3: level 2 auto-sends a confirmation in a two-way Gmail thread, and only there', async () => {
@@ -658,6 +658,98 @@ describe('replies (§8)', () => {
     const [n] = await t.db.sql<{ n: number }>`
       select count(*)::int as n from orbit.drafts where user_id = ${manual.userId}::uuid`;
     expect(n!.n).toBe(1);
+  });
+
+  it('a reply read from the history is listed but not drafted; an unsubscribe there still counts', async () => {
+    const claude = anthropic(() => CONFIRM_REPLY);
+    const withClaude = defaultHandlers({ agents: agentConfig(fakeNet(claude.answer, google())) });
+    const rulesOnly = defaultHandlers({ agents: agentConfig(fakeNet(google()), {}) });
+    const { userId } = await signedInUser(t);
+    const classify = (messageId: string, handlers = withClaude) =>
+      handlers['classify.message']!(
+        {
+          queue: 'orbit_classify',
+          msgId: 0,
+          readCt: 1,
+          kind: 'classify.message',
+          userId,
+          payload: { messageId, history: true },
+        },
+        { db: t.db, queue: sqlQueue(t.db), now: () => new Date() },
+      );
+    const ann = await addPerson(t, userId, { name: 'Ann Diaz', email: 'ann@example.com' });
+    const asked = await addThread(t, userId, ann, [
+      { direction: 'out', at: iso(40 * DAY), body: 'Hi Ann, would you have time for a short call?' },
+      { direction: 'in', at: iso(39 * DAY), body: 'Thursday at 2pm works for me.' },
+    ]);
+    await classify(asked.messageIds[1]!);
+    const [m] = await t.db.sql<{ reply_class: string | null }>`
+      select reply_class from orbit.messages where id = ${asked.messageIds[1]!}::uuid`;
+    expect(m!.reply_class).toBe('scheduling');
+    const [n] = await t.db.sql<{ n: number }>`
+      select count(*)::int as n from orbit.drafts where user_id = ${userId}::uuid`;
+    expect(n!.n).toBe(0);
+
+    const bo = await addPerson(t, userId, { name: 'Bo Lin', email: 'bo@example.com' });
+    const removed = await addThread(t, userId, bo, [
+      { direction: 'out', at: iso(30 * DAY), body: 'Hi Bo, would you have time for a call?' },
+      { direction: 'in', at: iso(29 * DAY), body: 'Please remove me from your list.' },
+    ]);
+    await classify(removed.messageIds[1]!, rulesOnly);
+    const [person] = await t.db.sql<{ do_not_contact: boolean }>`
+      select do_not_contact from orbit.people where id = ${bo}::uuid`;
+    expect(person!.do_not_contact).toBe(true);
+  });
+
+  it('a newer message in the thread retires the untouched draft answering an earlier one, never an edited one', async () => {
+    const net = fakeNet(google());
+    const cfg = agentConfig(net, {});
+    const { userId } = await signedInUser(t);
+    const twoReplies = async (name: string) => {
+      const p = await addPerson(t, userId, {
+        name,
+        email: `${name.split(' ')[0]!.toLowerCase()}@example.com`,
+      });
+      return addThread(t, userId, p, [
+        { direction: 'out', at: iso(4 * DAY), body: 'Would you have time for a short call next week?' },
+        {
+          direction: 'in',
+          at: iso(3 * DAY),
+          body: 'Thursday at 2pm works for me.',
+          replyClass: 'scheduling',
+        },
+        {
+          direction: 'in',
+          at: iso(2 * DAY),
+          body: 'Actually, could we do Friday instead?',
+          replyClass: 'scheduling',
+        },
+      ]);
+    };
+    const status = async (id: string) =>
+      (
+        await t.db.sql<{ status: string; cancel_reason: string | null }>`
+          select status, cancel_reason from orbit.drafts where id = ${id}::uuid`
+      )[0];
+
+    const th = await twoReplies('Cy Moss');
+    const first = await maybeAutoReply(t.db, userId, th.messageIds[1]!, { config: cfg });
+    expect(first.action).toBe('drafted');
+    const second = await maybeAutoReply(t.db, userId, th.messageIds[2]!, { config: cfg });
+    expect(second.action).toBe('drafted');
+    if (first.action !== 'drafted' || second.action !== 'drafted') return;
+    expect(await status(first.draftId)).toEqual({ status: 'cancelled', cancel_reason: 'superseded' });
+    expect(await status(second.draftId)).toEqual({ status: 'draft', cancel_reason: null });
+
+    // a draft the user changed stays: the newer message gets its own draft beside it
+    const edited = await twoReplies('Di Park');
+    const mine = await maybeAutoReply(t.db, userId, edited.messageIds[1]!, { config: cfg });
+    if (mine.action !== 'drafted') throw new Error('expected a draft');
+    await t.db.sql`
+      update orbit.drafts set body = 'Thursday is great, talk then.', created_at = now() - interval '1 minute'
+       where id = ${mine.draftId}::uuid`;
+    await maybeAutoReply(t.db, userId, edited.messageIds[2]!, { config: cfg });
+    expect(await status(mine.draftId)).toEqual({ status: 'draft', cancel_reason: null });
   });
 
   it('classify.message on an unsubscribe closes the chat and cancels pending drafts', async () => {

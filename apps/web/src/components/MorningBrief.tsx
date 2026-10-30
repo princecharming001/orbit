@@ -49,6 +49,7 @@ import { PersonCompanyLogo } from './CompanyLogo';
 import { DraftEditor } from './DraftEditor';
 import { MergePair, PersonNameLink } from './MergePair';
 import { gapLabel, KIND_LABEL } from './SuggestionCard';
+import { WeekPaceCard } from './WeekPaceCard';
 
 /** Anything can open the debrief again (Settings, the command palette): `openMorningBrief()`. */
 export const MORNING_EVENT = 'orbit:morning-brief';
@@ -491,20 +492,12 @@ function Progress({ slides, i, results }: { slides: Slide[]; i: number; results:
   );
 }
 
-function Stat({ label, value, sub, bar }: { label: string; value: ReactNode; sub?: string; bar?: number }) {
+function Stat({ label, value, sub }: { label: string; value: ReactNode; sub?: string }) {
   return (
     <div className="rounded-[14px] bg-canvas-2 px-3.5 py-3">
       <div className="text-[12px] text-ink-3">{label}</div>
       <div className="text-[22px] leading-tight tracking-[-0.02em] tabular mt-0.5">{value}</div>
       {sub && <div className="text-[11.5px] text-ink-3 mt-0.5">{sub}</div>}
-      {bar !== undefined && (
-        <div className="mt-1.5 h-1 rounded-full bg-line overflow-hidden">
-          <div
-            className="h-full rounded-full bg-accent"
-            style={{ width: `${Math.round(Math.min(1, bar) * 100)}%` }}
-          />
-        </div>
-      )}
     </div>
   );
 }
@@ -526,25 +519,16 @@ function Overview({ deck, onLeave }: { deck: MorningDeck; onLeave: (to?: string)
           {deck.goal}
         </p>
       ) : null}
-      <div className="grid grid-cols-2 gap-2 mt-5">
-        <Stat
-          label="First messages this week"
-          value={
-            <>
-              {stats.sentThisWeek}
-              {stats.weeklyTarget > 0 && (
-                <span className="text-[14px] text-ink-3"> / {stats.weeklyTarget}</span>
-              )}
-            </>
-          }
-          bar={stats.weeklyTarget ? stats.sentThisWeek / stats.weeklyTarget : undefined}
-        />
-        <Stat label="Replies since yesterday" value={stats.replies} />
+      <div className="mt-5">
+        <WeekPaceCard pace={stats.pace} line={stats.paceLine} />
+      </div>
+      <div className="grid grid-cols-3 gap-2 mt-2">
+        <Stat label="Replies, last day" value={stats.replies} />
         <Stat label="Chats today" value={stats.chatsToday} />
         {stats.replyRate === undefined ? (
-          <Stat label="Reply rate, 30 days" value="Not yet" sub="Shows after 3 first messages" />
+          <Stat label="Reply rate" value="Not yet" sub="After 3 first messages" />
         ) : (
-          <Stat label="Reply rate, 30 days" value={`${stats.replyRate}%`} />
+          <Stat label="Reply rate" value={`${stats.replyRate}%`} sub="Last 30 days" />
         )}
       </div>
       {deck.peopleCount === 0 && (

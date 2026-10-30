@@ -106,6 +106,8 @@ export interface SyncIntegration {
   lastError: string | null;
   watchExpiresAt: string | null;
   backfill: { phase: string | null; done: number; total: number | null } | null;
+  /** LinkedIn only: its first full pass is still bringing connections in */
+  importing?: boolean;
 }
 
 /** POST /sync/status */

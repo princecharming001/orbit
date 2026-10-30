@@ -166,8 +166,13 @@ async function ruleInput(userId: string, now: Date, scope?: { chatId?: string; p
   const weekStart = new Date(now);
   weekStart.setDate(now.getDate() - ((now.getDay() + 6) % 7));
   weekStart.setHours(0, 0, 0, 0);
-  const outreachSentThisWeek = outbound.filter(
+  const firstsThisWeek = outbound.filter(
     (o) => o.status === 'sent' && o.kind === 'outreach' && o.sentAt && new Date(o.sentAt) >= weekStart,
+  );
+  const outreachSentThisWeek = firstsThisWeek.length;
+  const dayKey = todayKey(now, user?.timezone);
+  const outreachSentToday = firstsThisWeek.filter(
+    (o) => todayKey(new Date(o.sentAt!), user?.timezone) === dayKey,
   ).length;
   const recentlyContacted = new Set(
     outbound
@@ -206,6 +211,8 @@ async function ruleInput(userId: string, now: Date, scope?: { chatId?: string; p
     recommendations,
     dismissCounts,
     outreachSentThisWeek,
+    outreachSentToday,
+    setupDoneAt: user?.onboardingCompletedAt,
     // free time is only known from a calendar: without one, a scheduling draft asks for the student's times instead
     // of offering slots they never chose
     freeSlotsIso: (await calendarKnown(userId)) ? freeSlots(events, now) : [],
@@ -1921,9 +1928,19 @@ export async function generateBrief(user: User, kind: Brief['kind'], now = new D
   const rest = cands
     .filter((c) => !chosen.has(c.dedupeKey))
     .map((c) => ({ ...c, priorityScore: scoreCandidate(c, inp.dismissCounts) }));
-  await upsertSuggestions(user.id, rest, now, briefId, { deferred: true });
+  // today's planned first messages beyond the brief's few cards are today's work too: listed for today and drafted,
+  // so the weekly target is ready to send, not a number on a bar
+  const paced = rest.filter((c) => c.kind === 'new_outreach' && c.signals.paced === true);
+  const todaysFirsts = await upsertSuggestions(user.id, paced, now, briefId);
+  await upsertSuggestions(
+    user.id,
+    rest.filter((c) => !paced.includes(c)),
+    now,
+    briefId,
+    { deferred: true },
+  );
   await addConfirmationCards(user.id, now);
-  for (const s of sugg)
+  for (const s of [...sugg, ...todaysFirsts])
     if (!s.outboundMessageId && DRAFT_KIND[s.kind]) await draftForSuggestion(user, s, now);
   await refreshDatedDrafts(user, now);
   const upcoming = inp.events.filter(

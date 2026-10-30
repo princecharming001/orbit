@@ -65,6 +65,7 @@ export * from './server/api';
 export * from './server/mappers';
 export * from './style/card';
 export { isBusinessDayKey, usHolidayName, usHolidays } from './suggestions/calendar';
+export * from './suggestions/pace';
 export * from './suggestions/rules';
 export * from './text/companyDomain';
 export * from './text/email';

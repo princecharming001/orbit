@@ -101,14 +101,21 @@ export type AutoReplyOutcome =
 
 /**
  * After a reply is classified (P3's classify.message calls this): unsubscribe → do_not_contact and the chat closes;
- * a class that needs an answer → a draft; and at level 2, a scheduling or thanks answer that meets every §8.4
- * condition is approved by the agent and queued to send. Idempotent per message.
+ * a class that needs an answer → a draft (unless the message was read from the user's history, before Orbit; a newer
+ * message in the thread retires the untouched draft answering an earlier one); and at level 2, a scheduling or thanks
+ * answer that meets every §8.4 condition is approved by the agent and queued to send. Idempotent per message.
  */
 export async function maybeAutoReply(
   db: Db,
   userId: string,
   messageId: string,
-  deps: { services?: Services; config?: AgentConfig; now?: () => Date } = {},
+  deps: {
+    services?: Services;
+    config?: AgentConfig;
+    now?: () => Date;
+    /** the message was read from the user's history (a backfill): an unsubscribe counts, nothing is drafted */
+    history?: boolean;
+  } = {},
 ): Promise<AutoReplyOutcome> {
   const s = deps.services ?? makeServices(deps.config ?? { env: {} }, { db, now: deps.now });
   const now = s.now();
@@ -133,6 +140,8 @@ export async function maybeAutoReply(
     return { action: 'unsubscribed' };
   }
   if (!m.from_person_id) return { action: 'none', reason: 'unknown_sender' };
+  // it came before Orbit: the user dealt with it then, or can ask for a draft from the replies list
+  if (deps.history) return { action: 'none', reason: 'history' };
   // thanks needs no answer; an out-of-office is followed up by cadence after the return date
   if (!DRAFT_CLASSES.has(cls)) return { action: 'none', reason: `class ${cls}` };
   const autoClass = cls === 'scheduling';
@@ -147,6 +156,15 @@ export async function maybeAutoReply(
     if (existing.status !== 'draft') return { action: 'auto_sent', draftId: existing.id };
     draft = existing;
   } else {
+    // one answer per conversation: a newer message in the thread retires the draft answering an earlier one, unless
+    // the user already changed it (an edit moves updated_at on)
+    await db.sql`
+      update orbit.drafts d set status = 'cancelled', cancel_reason = 'superseded'
+       where d.user_id = ${userId}::uuid and d.kind = 'reply' and d.status = 'draft'
+         and d.updated_at < d.created_at + interval '2 seconds'
+         and d.ask->>'replyToMessageId' in (
+           select id::text from orbit.messages
+            where user_id = ${userId}::uuid and thread_id = ${m.thread_id}::uuid and id <> ${m.id}::uuid)`;
     try {
       draft = (await draftReply(s, userId, m.id, 'agent')).draft;
     } catch (e) {

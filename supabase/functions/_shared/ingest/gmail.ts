@@ -144,6 +144,11 @@ export interface GmailIngestDeps {
   now: Date;
   /** makes the dedupe key of the score job this batch queues */
   jobKey: string;
+  /**
+   * Mail read from the user's history (the backfill), not mail that just arrived: its replies are classified and
+   * listed, but none gets an answer drafted. They came before Orbit, so a new account starts with no drafts.
+   */
+  history?: boolean;
 }
 
 export interface GmailIngestStats {
@@ -382,7 +387,7 @@ export async function ingestGmail(
     await d.queue.enqueue({
       kind: 'classify.message',
       userId,
-      payload: { messageId: c.id },
+      payload: { messageId: c.id, ...(d.history ? { history: true } : {}) },
       dedupeKey: `classify:gmail:${userId}:${c.externalId}`,
     });
   if (touched.size)

@@ -67,7 +67,12 @@ export async function statusFor(db: Db, userId: string) {
     counts: counts ?? {},
     integrations: accounts.map((a) => {
       const bf = a.sync_state?.gmail?.backfill as Record<string, unknown> | undefined;
+      const li = a.sync_state?.linkedin as Record<string, unknown> | undefined;
       return {
+        // LinkedIn's first full pass is still bringing connections in (a later refresh walks known people again)
+        ...(a.provider === 'linkedin'
+          ? { importing: !!li && !li.syncedAt && typeof li.stage === 'string' && li.stage !== 'done' }
+          : {}),
         provider: a.provider,
         status: a.status,
         email: a.email,

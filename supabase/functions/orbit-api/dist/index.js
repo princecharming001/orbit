@@ -4915,7 +4915,7 @@ function slotLabel(start, end, tz) {
     minute: "2-digit",
     hourCycle: "h23"
   }).format(d);
-  return `${day2}, ${hm(start)}–${hm(end)} ${zoneAbbrev(start, tz)}`;
+  return `${day2}, ${hm(start)} to ${hm(end)} ${zoneAbbrev(start, tz)}`;
 }
 function pickSlots(busy, opts) {
   const count = opts.count ?? 3;
@@ -12581,7 +12581,17 @@ var PULL_TABLES = [
     map: ({ data, ...rest }) => ({ ...data ?? {}, ...rest })
   },
   { table: "stage_events", key: "id", cursor: "updated_at" },
-  { table: "drafts", key: "id", cursor: "updated_at" },
+  {
+    table: "drafts",
+    key: "id",
+    cursor: "updated_at",
+    // the browser's OutboundMessage names: a reply carries its Gmail thread, so it goes out in it, under its subject
+    map: (r) => ({
+      ...r,
+      ...r.threadExternalId ? { externalThreadId: r.threadExternalId } : {},
+      ...r.inReplyTo ? { inReplyToMessageId: r.inReplyTo } : {}
+    })
+  },
   { table: "notes", key: "id", cursor: "updated_at" },
   { table: "uploads", key: "id", cursor: "updated_at" },
   { table: "facts", key: "id", cursor: "updated_at", deletedWhen: "t.deleted_at is not null" },
@@ -12635,7 +12645,10 @@ async function statusFor(db2, userId) {
     counts: counts ?? {},
     integrations: accounts.map((a) => {
       const bf = a.sync_state?.gmail?.backfill;
+      const li = a.sync_state?.linkedin;
       return {
+        // LinkedIn's first full pass is still bringing connections in (a later refresh walks known people again)
+        ...a.provider === "linkedin" ? { importing: !!li && !li.syncedAt && typeof li.stage === "string" && li.stage !== "done" } : {},
         provider: a.provider,
         status: a.status,
         email: a.email,

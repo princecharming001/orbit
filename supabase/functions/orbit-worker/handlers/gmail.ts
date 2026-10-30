@@ -154,7 +154,10 @@ export function gmailHandlers(deps: HandlerDeps): Record<string, JobHandler> {
       maxResults: PAGE_SIZE,
     });
     const refs = page.messages ?? [];
-    await ingestGmail({ db: ctx.db, queue: ctx.queue, api, userId, now, jobKey: `gmail:${job.msgId}` }, refs);
+    await ingestGmail(
+      { db: ctx.db, queue: ctx.queue, api, userId, now, jobKey: `gmail:${job.msgId}`, history: true },
+      refs,
+    );
     const done = bf.done + refs.length;
     const estimate = page.resultSizeEstimate ?? null;
     const total =
