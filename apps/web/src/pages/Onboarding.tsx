@@ -1271,7 +1271,12 @@ function StepLinkedIn({ onNext, signedIn }: { onNext: () => void; signedIn?: boo
       const r = await connectLinkedInLive(user, {
         onProgress: (n) => setBusy(`Importing ${n} connections…`),
       });
-      if (r.ok) setResult(`${connectionsImported(r.rows)}, ${r.added} of them new.`);
+      if (r.ok)
+        setResult(
+          r.rows
+            ? `${connectionsImported(r.rows)} so far. The rest keep coming in the background.`
+            : 'LinkedIn is connected. Your connections are coming in the background.',
+        );
       else if (r.reason === 'unconfigured') setNote(r.message);
       else if (r.reason === 'error') setError(r.message);
     } catch (e) {

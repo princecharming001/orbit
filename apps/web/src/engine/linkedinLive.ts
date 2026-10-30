@@ -366,8 +366,21 @@ async function connectViaServer(
         lastSyncedAt: st.value.lastSyncedAt ?? undefined,
         syncState: { rows: st.value.relations, server: true },
       });
-      opts.onProgress?.(st.value.relations);
-      return { ok: true, rows: st.value.relations, added: st.value.relations };
+      // the server imports after sign-in turns active, so wait for its count to show up and settle before reporting
+      // (returning at once always said 0 connections imported)
+      let rows = st.value.relations;
+      let still = 0;
+      for (let j = 0; j < 45 && still < 3; j++) {
+        opts.onProgress?.(rows);
+        await sleep(2000, opts.signal);
+        if (opts.signal?.aborted) break;
+        const next = await callApi('/linkedin/status', {}, { signal: opts.signal });
+        const n = next.ok ? next.value.relations : rows;
+        still = n > 0 && n === rows ? still + 1 : 0;
+        rows = n;
+      }
+      opts.onProgress?.(rows);
+      return { ok: true, rows, added: rows };
     }
     if (st.ok && (st.value.status === 'error' || st.value.status === 'needs_reauth')) {
       closeQuietly(win);
