@@ -20,7 +20,15 @@ export function facetDetail(f: { title?: string; organizationName?: string; text
     t = t.replace(re, '').trim();
   }
   // what is left of "Treasurer, Club soccer." once the role and the club are shown is a full stop: nothing to show
+  t = t.replace(/^[\s.,;:·-]+/, '');
   return /\w/.test(t) ? t : '';
+}
+
+/** "Software Engineering Intern · Brex": the role and where, when the parse found them. */
+function facetHeading(f: { title?: string; organizationName?: string }): string {
+  return [f.title, f.organizationName !== f.title ? f.organizationName : undefined]
+    .filter(Boolean)
+    .join(' · ');
 }
 
 /**
@@ -30,39 +38,45 @@ export function facetDetail(f: { title?: string; organizationName?: string; text
 export function ResumeFacetList({ facets, readBy }: { facets: ResumeFacet[]; readBy: string }) {
   const [editing, setEditing] = useState<string>();
   return (
-    <div className="mt-4">
-      <Label>{`What ${readBy} read from your resume`}</Label>
-      <ul className="space-y-2 max-h-80 overflow-y-auto scroll-thin pr-1">
+    <div className="mt-1">
+      <p className="mb-2 text-[12px] font-medium text-ink-3">{`What ${readBy} read from your resume`}</p>
+      <ul className="max-h-80 overflow-y-auto scroll-thin rounded-[10px] border border-line-2 divide-y divide-line-2 bg-canvas-2/40">
         {facets.map((f) =>
           editing === f.id ? (
             <FacetEditor key={f.id} facet={f} onDone={() => setEditing(undefined)} />
           ) : (
             <li
               key={f.id}
-              className={`flex items-start gap-2 text-[13px] ${f.excluded ? 'opacity-50' : ''}`}
+              className={`group flex items-start gap-3 px-3 py-2.5 text-[13px] transition-opacity ${f.excluded ? 'opacity-45' : ''}`}
               data-testid="resume-facet"
             >
               <input
                 type="checkbox"
-                className="mt-1"
+                className="mt-[3px] h-3.5 w-3.5 shrink-0 accent-[var(--color-accent)]"
                 checked={!f.excluded}
                 aria-label={`Use ${f.title ?? FACET_LABELS[f.kind] ?? 'this line'}`}
                 data-testid="ob-facet-toggle"
                 onChange={(e) => setResumeFacetUsed(f.id, e.target.checked)}
               />
               <span className="min-w-0 flex-1">
-                <span className="text-ink-3 text-[12px] mr-1.5">{FACET_LABELS[f.kind] ?? 'Other'}</span>
-                <strong className="font-medium">
-                  {[f.title, f.organizationName !== f.title ? f.organizationName : undefined]
-                    .filter(Boolean)
-                    .join(' · ')}
-                </strong>
+                <span className="flex flex-wrap items-baseline gap-x-2">
+                  <strong className="font-medium text-ink">
+                    {facetHeading(f) || (FACET_LABELS[f.kind] ?? 'Other')}
+                  </strong>
+                  {facetHeading(f) && (
+                    <span className="text-[11px] text-ink-3">{FACET_LABELS[f.kind] ?? 'Other'}</span>
+                  )}
+                </span>
                 {/* what they did on its own line, so the employer and the first bullet never run together */}
-                {facetDetail(f) && <span className="block text-ink-2">{facetDetail(f).slice(0, 140)}</span>}
+                {facetDetail(f) && (
+                  <span className="mt-0.5 block text-[12.5px] leading-relaxed text-ink-2 line-clamp-2">
+                    {facetDetail(f)}
+                  </span>
+                )}
               </span>
               <button
                 type="button"
-                className="shrink-0 text-[12px] text-ink-3 underline underline-offset-2 hover:text-ink"
+                className="shrink-0 rounded-md px-1.5 py-0.5 text-[12px] text-ink-3 hover:bg-canvas hover:text-ink"
                 onClick={() => setEditing(f.id)}
                 aria-label={`Fix ${f.title ?? FACET_LABELS[f.kind] ?? 'this line'}`}
                 data-testid="resume-facet-edit"
@@ -87,7 +101,7 @@ function FacetEditor({ facet, onDone }: { facet: ResumeFacet; onDone: () => void
     onDone();
   };
   return (
-    <li className="rounded-lg border border-line p-3 space-y-2 text-[13px]" data-testid="resume-facet-editor">
+    <li className="bg-canvas p-3 space-y-2 text-[13px]" data-testid="resume-facet-editor">
       {role && (
         <div className="grid sm:grid-cols-2 gap-2">
           <div>

@@ -15,7 +15,18 @@ import {
   yearLabel,
 } from '@orbit/core';
 import { useLiveQuery } from 'dexie-react-hooks';
-import { Briefcase, Check, Linkedin, Link as LinkIcon, Mail, Minus, Plus, Upload, X } from 'lucide-react';
+import {
+  Briefcase,
+  Check,
+  FileText,
+  Linkedin,
+  Link as LinkIcon,
+  Mail,
+  Minus,
+  Plus,
+  Upload,
+  X,
+} from 'lucide-react';
 import {
   type CSSProperties,
   type FormEvent,
@@ -459,36 +470,21 @@ function StepYou({ onNext }: { onNext: () => void }) {
           <ObLabel htmlFor="ob-resume" hint="Optional">
             Resume
           </ObLabel>
-          <label
-            className="flex items-center gap-3 h-11 px-3.5 rounded-[10px] border border-dashed border-line bg-white cursor-pointer hover:border-[#cfcdc9] focus-within:ring-[3px] focus-within:ring-ink/15"
-            data-testid="ob-resume"
-          >
-            <input
-              id="ob-resume"
-              type="file"
-              accept=".pdf,.txt,.md,.docx"
-              className="sr-only"
-              onChange={async (e) => {
-                const file = e.target.files?.[0];
-                e.target.value = '';
-                if (!file) return;
-                setResumeError(undefined);
-                setReading(true);
-                try {
-                  await saveResume(user, file);
-                } catch (err) {
-                  setResumeError(err instanceof Error ? err.message : 'Orbit could not read that file.');
-                } finally {
-                  setReading(false);
-                }
-              }}
-            />
-            <Upload size={16} className="text-ink-3 shrink-0" aria-hidden />
-            <span className="text-[14px] text-ink-2 truncate">
-              {reading ? 'Reading your resume…' : resume ? resume.filename : 'Add your resume (PDF or Word)'}
-            </span>
-            {resume && !reading && <Check size={15} className="ml-auto text-good shrink-0" aria-hidden />}
-          </label>
+          <ResumeField
+            resume={resume}
+            reading={reading}
+            onPick={async (file) => {
+              setResumeError(undefined);
+              setReading(true);
+              try {
+                await saveResume(user, file);
+              } catch (err) {
+                setResumeError(err instanceof Error ? err.message : 'Orbit could not read that file.');
+              } finally {
+                setReading(false);
+              }
+            }}
+          />
           {resumeError && <p className="mt-1.5 text-[12.5px] text-ink-3">{resumeError}</p>}
         </div>
       </div>
@@ -499,6 +495,97 @@ function StepYou({ onNext }: { onNext: () => void }) {
         <Missing>Add your {missing.join(', ').replace(/, ([^,]*)$/, ' and $1')} to continue.</Missing>
       )}
     </form>
+  );
+}
+
+/**
+ * The resume on the first step: a drop-in field until a file is picked, then the file as a card with what Orbit read
+ * from it (how many lines, the latest place and the school) and a Replace button. The file input keeps its id either
+ * way, so the label above still opens it.
+ */
+function ResumeField({
+  resume,
+  reading,
+  onPick,
+}: {
+  resume: { id: string; filename: string } | null | undefined;
+  reading: boolean;
+  onPick: (file: File) => void;
+}) {
+  const facets = useLiveQuery(
+    async () => (resume ? await db.resumeFacets.where('resumeId').equals(resume.id).toArray() : []),
+    [resume?.id],
+  );
+  const input = (
+    <input
+      id="ob-resume"
+      type="file"
+      accept=".pdf,.txt,.md,.docx"
+      className="sr-only"
+      disabled={reading}
+      onChange={(e) => {
+        const file = e.target.files?.[0];
+        e.target.value = '';
+        if (file) onPick(file);
+      }}
+    />
+  );
+  if (!resume || reading)
+    return (
+      <label
+        className={cx(
+          'flex items-center gap-3 h-[52px] px-3.5 rounded-[12px] border border-dashed bg-white cursor-pointer transition-colors focus-within:ring-[3px] focus-within:ring-ink/15',
+          reading ? 'border-[#cfcdc9]' : 'border-line hover:border-[#cfcdc9] hover:bg-[#fcfbfa]',
+        )}
+        data-testid="ob-resume"
+      >
+        {input}
+        <span className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-[9px] bg-[#f6f5f3] text-ink-3">
+          {reading ? <Spinner className="h-3.5 w-3.5 border-[1.5px]" /> : <Upload size={15} aria-hidden />}
+        </span>
+        <span className="min-w-0">
+          <span className="block text-[14px] text-ink-2 truncate">
+            {reading ? 'Reading your resume…' : 'Add your resume'}
+          </span>
+          {!reading && <span className="block text-[12px] text-[#a59f97]">PDF or Word, up to 10 MB</span>}
+        </span>
+      </label>
+    );
+  const ext = resume.filename.split('.').pop()?.toUpperCase() ?? '';
+  const used = (facets ?? []).filter((f) => !f.excluded);
+  const latest = used.find((f) => f.kind === 'experience')?.organizationName;
+  const school = used.find((f) => f.kind === 'education')?.organizationName;
+  const highlights = [latest, school].filter(Boolean).join(', ');
+  return (
+    <div
+      className="pop-in flex items-center gap-3 rounded-[12px] border border-line bg-white px-3.5 py-3 shadow-[var(--shadow-card)]"
+      data-testid="ob-resume"
+    >
+      <span
+        className="relative inline-flex h-10 w-10 shrink-0 flex-col items-center justify-center rounded-[10px] bg-[#fff1ec] text-[#d4380d]"
+        aria-hidden
+      >
+        <FileText size={16} strokeWidth={1.75} />
+        <span className="mt-px text-[7.5px] font-bold tracking-wide">
+          {['PDF', 'DOCX', 'TXT', 'MD'].includes(ext) ? ext : 'DOC'}
+        </span>
+      </span>
+      <span className="min-w-0 flex-1">
+        <span className="flex items-center gap-1.5">
+          <span className="truncate text-[14px] font-medium text-ink">{resume.filename}</span>
+          <Check size={14} className="shrink-0 text-good" aria-hidden />
+        </span>
+        <span className="block truncate text-[12.5px] text-ink-3" data-testid="ob-resume-summary">
+          {used.length
+            ? `Read ${used.length} ${used.length === 1 ? 'line' : 'lines'}${highlights ? `, including ${highlights}` : ''}`
+            : 'Saved. Drafts mention what you have done.'}
+        </span>
+      </span>
+      <label className="shrink-0 inline-flex h-8 items-center rounded-full border border-line bg-white px-3 text-[13px] font-medium text-ink-2 cursor-pointer hover:bg-[#f6f5f3] focus-within:ring-[3px] focus-within:ring-ink/15">
+        {input}
+        Replace
+      </label>
+    </div>
   );
 }
 

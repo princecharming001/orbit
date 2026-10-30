@@ -1,4 +1,4 @@
-import type { OwnWordsKey, TargetCompany, RecruitingGoals as UserGoals } from '@orbit/core';
+import type { OwnWordsKey, Resume, TargetCompany, User, RecruitingGoals as UserGoals } from '@orbit/core';
 import {
   currentJobInput,
   OWN_WORDS_MAX,
@@ -9,8 +9,26 @@ import {
   yearLabel,
 } from '@orbit/core';
 import { useLiveQuery } from 'dexie-react-hooks';
-import { Check, Download, FileText, Trash2 } from 'lucide-react';
-import { type ReactNode, useEffect, useRef, useState } from 'react';
+import {
+  Blocks,
+  Brain,
+  Check,
+  ChevronDown,
+  CircleUserRound,
+  Download,
+  FileText,
+  Gauge,
+  type LucideIcon,
+  PenLine,
+  Plus,
+  Send,
+  ShieldCheck,
+  Target,
+  Trash2,
+  Upload,
+  UserRound,
+} from 'lucide-react';
+import { useEffect, useRef, useState } from 'react';
 import { Navigate, NavLink, useNavigate, useParams } from 'react-router-dom';
 import { AccountSection, MemorySection, OutreachSection } from '../components/account/AccountSettings';
 import { CompanyLogo } from '../components/CompanyLogo';
@@ -19,6 +37,14 @@ import { AppMark, IntegrationRow, RowGroup, RowStatus } from '../components/Inte
 import { LinkedInImportButton } from '../components/LinkedInImport';
 import { openMorningBrief } from '../components/MorningBrief';
 import { CalcomRow, FathomRow, MeetingAppRow } from '../components/NotesAppRows';
+import { ResumeFacetList } from '../components/ResumeFacets';
+import {
+  CardFields,
+  SettingsCard,
+  SettingsHeader,
+  SettingsRow,
+  SettingsStack,
+} from '../components/settings/kit';
 import { OutreachCoach } from '../components/settings/OutreachCoach';
 import { useWeeklyLimits, WeeklyTargetSlider } from '../components/WeeklyTargetSlider';
 import { suggestCompanies } from '../data/companies';
@@ -113,6 +139,18 @@ const ACCOUNT_SECTIONS = [
 /** What Orbit remembers from the chat: on the account when signed in, in this browser otherwise. */
 const MEMORY_SECTION = ['memory', 'Memory'] as const;
 
+const SECTION_ICONS: Record<string, LucideIcon> = {
+  profile: UserRound,
+  goals: Target,
+  integrations: Blocks,
+  style: PenLine,
+  limits: Gauge,
+  privacy: ShieldCheck,
+  account: CircleUserRound,
+  outreach: Send,
+  memory: Brain,
+};
+
 function sections(): readonly (readonly [string, string])[] {
   return isAccountMode() ? [...BASE_SECTIONS, ...ACCOUNT_SECTIONS] : [...BASE_SECTIONS, MEMORY_SECTION];
 }
@@ -137,7 +175,7 @@ export function SettingsPage() {
   return (
     <div>
       <PageHeader title="Settings" />
-      <div className="grid @3xl:grid-cols-[200px_minmax(0,1fr)] gap-6 items-start">
+      <div className="grid @3xl:grid-cols-[208px_minmax(0,1fr)] gap-x-10 gap-y-6 items-start">
         {/* on a phone the six sections are one menu, not three rows of buttons */}
         <label className="@3xl:hidden">
           <span className="sr-only">Settings section</span>
@@ -154,39 +192,52 @@ export function SettingsPage() {
             ))}
           </Select>
         </label>
-        <nav className="hidden @3xl:flex @3xl:flex-col @3xl:gap-0.5 min-w-0" aria-label="Settings sections">
-          {SECTIONS.map(([k, l]) => (
-            <NavLink
-              key={k}
-              to={`/settings/${k}`}
-              className={({ isActive }) =>
-                cx(
-                  'h-9 px-3 rounded-lg flex items-center text-[14px] whitespace-nowrap border @3xl:border-0',
-                  isActive || (k === 'profile' && section === 'profile')
-                    ? 'bg-canvas-2 font-medium border-line'
-                    : 'text-ink-2 hover:bg-canvas-2 border-transparent',
-                )
-              }
-            >
-              {l}
-            </NavLink>
-          ))}
+        <nav
+          className="hidden @3xl:flex @3xl:flex-col @3xl:gap-0.5 min-w-0 sticky top-4"
+          aria-label="Settings sections"
+        >
+          {SECTIONS.map(([k, l]) => {
+            const Icon = SECTION_ICONS[k] ?? UserRound;
+            return (
+              <NavLink
+                key={k}
+                to={`/settings/${k}`}
+                className={({ isActive }) =>
+                  cx(
+                    'group h-9 px-2.5 rounded-[9px] flex items-center gap-2.5 text-[13.5px] whitespace-nowrap transition-colors',
+                    isActive
+                      ? 'bg-canvas text-ink font-medium shadow-[var(--shadow-pill)]'
+                      : 'text-ink-2 hover:bg-canvas-2 hover:text-ink',
+                  )
+                }
+              >
+                {({ isActive }) => (
+                  <>
+                    <Icon
+                      size={15}
+                      strokeWidth={1.75}
+                      className={isActive ? 'text-ink' : 'text-ink-3 group-hover:text-ink-2'}
+                      aria-hidden
+                    />
+                    {l}
+                  </>
+                )}
+              </NavLink>
+            );
+          })}
         </nav>
-        <div className="min-w-0">
-          {section === 'profile' && (
-            <>
-              <Profile />
-              <IntroNoteSection />
-            </>
-          )}
-          {section === 'goals' && <Goals />}
-          {section === 'integrations' && <Integrations />}
-          {section === 'style' && <StyleCoach />}
-          {section === 'limits' && <Limits />}
-          {section === 'privacy' && <Privacy />}
-          {section === 'account' && <AccountSection />}
-          {section === 'outreach' && <OutreachSection />}
-          {section === 'memory' && <MemorySection />}
+        <div className="min-w-0 @container max-w-[760px]" key={section}>
+          <div className="page-in">
+            {section === 'profile' && <Profile />}
+            {section === 'goals' && <Goals />}
+            {section === 'integrations' && <Integrations />}
+            {section === 'style' && <StyleCoach />}
+            {section === 'limits' && <Limits />}
+            {section === 'privacy' && <Privacy />}
+            {section === 'account' && <AccountSection />}
+            {section === 'outreach' && <OutreachSection />}
+            {section === 'memory' && <MemorySection />}
+          </div>
         </div>
       </div>
     </div>
@@ -259,7 +310,8 @@ function SaveState({
   return (
     <p
       className={cx(
-        'text-[12px] text-ink-3 flex items-center gap-1.5',
+        'inline-flex h-7 items-center gap-1.5 rounded-full px-2.5 text-[12px] transition-colors',
+        state === 'held' ? 'bg-warn-soft text-warn' : 'bg-canvas-2 text-ink-3',
         quiet && state === 'saved' && 'sr-only',
       )}
       aria-live="polite"
@@ -267,14 +319,16 @@ function SaveState({
       data-state={state}
     >
       {state === 'held' ? (
-        <span className="text-warn">{held ?? 'Not saved yet.'}</span>
+        (held ?? 'Not saved yet.')
       ) : state === 'saving' ? (
-        'Saving…'
+        <>
+          <Spinner className="h-3 w-3 border-[1.5px]" /> Saving…
+        </>
       ) : quiet ? (
         'Saved'
       ) : (
         <>
-          <Check size={13} className="text-good" /> Changes here save as you make them.
+          <Check size={13} className="text-good" /> Changes save as you make them
         </>
       )}
     </p>
@@ -320,140 +374,157 @@ function Profile() {
   const years = Array.from({ length: /PHD/i.test(f.degree) ? 6 : grad ? 2 : 4 }, (_, i) => firstYear + i);
   if (f.graduationYear && !years.includes(f.graduationYear)) years.unshift(f.graduationYear);
   return (
-    <Section className="grid @[40rem]:grid-cols-2 gap-4">
-      <div className="@[40rem]:col-span-2">
-        <SaveState state={state} held="Your name is missing, so nothing on this page is saved yet." />
-      </div>
-      <div className="@[40rem]:col-span-2">
-        <Label htmlFor="profile-name-input">Full name</Label>
-        <Input
-          id="profile-name-input"
-          value={f.fullName}
-          onChange={(e) => setF({ ...f, fullName: e.target.value })}
-          aria-invalid={nameMissing}
-          aria-describedby={nameMissing ? 'profile-name-error' : undefined}
-          data-testid="profile-name"
-        />
-        {nameMissing && (
-          <p id="profile-name-error" className="text-[12px] text-bad mt-1">
-            Your name is used to sign every message. Add it to save.
-          </p>
-        )}
-      </div>
-      <div>
-        <Label htmlFor="profile-email">Email</Label>
-        <Input id="profile-email" value={f.email} onChange={(e) => setF({ ...f, email: e.target.value })} />
-      </div>
-      <div>
-        <Label htmlFor="profile-linkedin">LinkedIn profile link</Label>
-        <Input
-          id="profile-linkedin"
-          value={f.linkedinUrl}
-          onChange={(e) => setF({ ...f, linkedinUrl: e.target.value })}
-        />
-      </div>
-      <div>
-        <Label htmlFor="profile-school">School</Label>
-        <Suggest
-          id="profile-school"
-          value={f.school}
-          onChange={(school) => setF({ ...f, school })}
-          suggest={suggestSchools}
-          minChars={2}
-          onPick={(s) =>
-            void schoolDomainFor(s.value).then(
-              (d) => d && !f.schoolDomain && setF((cur) => ({ ...cur, schoolDomain: d })),
-            )
-          }
-          placeholder="Start typing your school"
-          data-testid="profile-school"
-        />
-      </div>
-      <div>
-        <Label htmlFor="profile-domain">School email domain</Label>
-        <Input
-          id="profile-domain"
-          value={f.schoolDomain}
-          onChange={(e) => setF({ ...f, schoolDomain: e.target.value })}
-        />
-      </div>
-      <div>
-        <Label htmlFor="profile-year">Graduation year</Label>
-        {/* the same choice as in setup, with the year it makes you now */}
-        <Select
-          id="profile-year"
-          value={f.graduationYear ? String(f.graduationYear) : ''}
-          onChange={(e) => setF({ ...f, graduationYear: Number(e.target.value) })}
-          className="w-full"
-        >
-          <option value="">Choose your year</option>
-          {years.map((y) => (
-            <option key={y} value={String(y)}>
-              {y} ({yearLabel(y, f.degree || undefined, now)} now)
-            </option>
-          ))}
-        </Select>
-      </div>
-      <div>
-        <Label htmlFor="profile-degree">Degree</Label>
-        <Select
-          id="profile-degree"
-          value={f.degree}
-          onChange={(e) => setF({ ...f, degree: e.target.value })}
-          className="w-full"
-          data-testid="profile-degree"
-        >
-          <option value="">Not set</option>
-          {['BS', 'BA', 'BBA', 'MS', 'MBA', 'MEng', 'PhD', 'Other'].map((d) => (
-            <option key={d}>{d}</option>
-          ))}
-        </Select>
-      </div>
-      <div>
-        <Label htmlFor="profile-majors">Majors</Label>
-        <Input
-          id="profile-majors"
-          value={f.majors}
-          onChange={(e) => setF({ ...f, majors: e.target.value })}
-        />
-      </div>
-      <div>
-        <Label htmlFor="profile-city">City</Label>
-        <Input
-          id="profile-city"
-          value={f.currentCity}
-          onChange={(e) => setF({ ...f, currentCity: e.target.value })}
-        />
-      </div>
-      <div>
-        <Label htmlFor="profile-tz">Time zone</Label>
-        <Select
-          id="profile-tz"
-          value={f.timezone}
-          onChange={(e) => setF({ ...f, timezone: e.target.value })}
-          className="w-full"
-        >
-          {/* the zones most students are in first, by the name people use; every other zone below */}
-          <optgroup label="United States">
-            {COMMON_ZONES.map(([z, l]) => (
-              <option key={z} value={z}>
-                {l}
-              </option>
-            ))}
-          </optgroup>
-          <optgroup label="Other time zones">
-            {zones
-              .filter((z) => !COMMON_ZONES.some(([c]) => c === z))
-              .sort((x, y) => zoneLabel(x).localeCompare(zoneLabel(y)))
-              .map((z) => (
-                <option key={z} value={z}>
-                  {zoneLabel(z)}
-                </option>
-              ))}
-          </optgroup>
-        </Select>
-      </div>
-    </Section>
+    <>
+      <SettingsHeader
+        title="Profile"
+        description="Who you are, as every draft and intro introduces you."
+        aside={<SaveState state={state} held="Add your name to save." />}
+      />
+      <SettingsStack>
+        <SettingsCard title="You">
+          <CardFields>
+            <div className="@[40rem]:col-span-2">
+              <Label htmlFor="profile-name-input">Full name</Label>
+              <Input
+                id="profile-name-input"
+                value={f.fullName}
+                onChange={(e) => setF({ ...f, fullName: e.target.value })}
+                aria-invalid={nameMissing}
+                aria-describedby={nameMissing ? 'profile-name-error' : undefined}
+                data-testid="profile-name"
+              />
+              {nameMissing && (
+                <p id="profile-name-error" className="text-[12px] text-bad mt-1">
+                  Your name is used to sign every message. Add it to save.
+                </p>
+              )}
+            </div>
+            <div>
+              <Label htmlFor="profile-email">Email</Label>
+              <Input
+                id="profile-email"
+                value={f.email}
+                onChange={(e) => setF({ ...f, email: e.target.value })}
+              />
+            </div>
+            <div>
+              <Label htmlFor="profile-linkedin">LinkedIn profile link</Label>
+              <Input
+                id="profile-linkedin"
+                value={f.linkedinUrl}
+                onChange={(e) => setF({ ...f, linkedinUrl: e.target.value })}
+              />
+            </div>
+            <div>
+              <Label htmlFor="profile-city">City</Label>
+              <Input
+                id="profile-city"
+                value={f.currentCity}
+                onChange={(e) => setF({ ...f, currentCity: e.target.value })}
+              />
+            </div>
+            <div>
+              <Label htmlFor="profile-tz">Time zone</Label>
+              <Select
+                id="profile-tz"
+                value={f.timezone}
+                onChange={(e) => setF({ ...f, timezone: e.target.value })}
+                className="w-full"
+              >
+                {/* the zones most students are in first, by the name people use; every other zone below */}
+                <optgroup label="United States">
+                  {COMMON_ZONES.map(([z, l]) => (
+                    <option key={z} value={z}>
+                      {l}
+                    </option>
+                  ))}
+                </optgroup>
+                <optgroup label="Other time zones">
+                  {zones
+                    .filter((z) => !COMMON_ZONES.some(([c]) => c === z))
+                    .sort((x, y) => zoneLabel(x).localeCompare(zoneLabel(y)))
+                    .map((z) => (
+                      <option key={z} value={z}>
+                        {zoneLabel(z)}
+                      </option>
+                    ))}
+                </optgroup>
+              </Select>
+            </div>
+          </CardFields>
+        </SettingsCard>
+        <SettingsCard title="School">
+          <CardFields>
+            <div>
+              <Label htmlFor="profile-school">School</Label>
+              <Suggest
+                id="profile-school"
+                value={f.school}
+                onChange={(school) => setF({ ...f, school })}
+                suggest={suggestSchools}
+                minChars={2}
+                onPick={(s) =>
+                  void schoolDomainFor(s.value).then(
+                    (d) => d && !f.schoolDomain && setF((cur) => ({ ...cur, schoolDomain: d })),
+                  )
+                }
+                placeholder="Start typing your school"
+                data-testid="profile-school"
+              />
+            </div>
+            <div>
+              <Label htmlFor="profile-domain">School email domain</Label>
+              <Input
+                id="profile-domain"
+                value={f.schoolDomain}
+                onChange={(e) => setF({ ...f, schoolDomain: e.target.value })}
+              />
+            </div>
+            <div>
+              <Label htmlFor="profile-year">Graduation year</Label>
+              {/* the same choice as in setup, with the year it makes you now */}
+              <Select
+                id="profile-year"
+                value={f.graduationYear ? String(f.graduationYear) : ''}
+                onChange={(e) => setF({ ...f, graduationYear: Number(e.target.value) })}
+                className="w-full"
+              >
+                <option value="">Choose your year</option>
+                {years.map((y) => (
+                  <option key={y} value={String(y)}>
+                    {y} ({yearLabel(y, f.degree || undefined, now)} now)
+                  </option>
+                ))}
+              </Select>
+            </div>
+            <div>
+              <Label htmlFor="profile-degree">Degree</Label>
+              <Select
+                id="profile-degree"
+                value={f.degree}
+                onChange={(e) => setF({ ...f, degree: e.target.value })}
+                className="w-full"
+                data-testid="profile-degree"
+              >
+                <option value="">Not set</option>
+                {['BS', 'BA', 'BBA', 'MS', 'MBA', 'MEng', 'PhD', 'Other'].map((d) => (
+                  <option key={d}>{d}</option>
+                ))}
+              </Select>
+            </div>
+            <div>
+              <Label htmlFor="profile-majors">Majors</Label>
+              <Input
+                id="profile-majors"
+                value={f.majors}
+                onChange={(e) => setF({ ...f, majors: e.target.value })}
+              />
+            </div>
+          </CardFields>
+        </SettingsCard>
+        <IntroNoteSection />
+      </SettingsStack>
+    </>
   );
 }
 
@@ -475,33 +546,35 @@ function IntroNoteSection() {
   );
   const problems = text ? checkIntroNote(text, user) : [];
   return (
-    <Section>
-      <div id="intro-note" className="scroll-mt-20">
-        <div className="flex items-center gap-2">
-          <Label htmlFor="intro-note-input">Your three lines</Label>
-          <span className="ml-auto text-[12px] text-ink-3" aria-live="polite" data-testid="intro-note-saved">
-            {state === 'saving' ? 'Saving…' : state === 'saved' ? 'Saved' : ''}
-          </span>
-        </div>
-        <p className="text-[12.5px] text-ink-3 mb-2">
-          The note someone can forward when you ask them for an intro: who you are and what makes you worth 15
-          minutes, about you, with your name. Each ask adds one last line about why that person.
-        </p>
+    <SettingsCard
+      id="intro-note"
+      title="Your three lines"
+      description="The note someone forwards when you ask them for an intro. Each ask adds one last line about why that person."
+      aside={
+        <span className="text-[12px] text-ink-3" aria-live="polite" data-testid="intro-note-saved">
+          {state === 'saving' ? 'Saving…' : state === 'saved' ? 'Saved' : ''}
+        </span>
+      }
+    >
+      <div className="p-5">
+        <label htmlFor="intro-note-input" className="sr-only">
+          Your three lines
+        </label>
         <Textarea
           id="intro-note-input"
           value={text ?? ''}
           onChange={(e) => setText(e.target.value)}
-          rows={3}
+          rows={4}
           className="w-full"
           data-testid="settings-intro-note"
         />
         {problems.length > 0 && (
-          <p className="text-[12.5px] text-warn mt-1" data-testid="settings-intro-note-problem">
+          <p className="text-[12.5px] text-warn mt-1.5" data-testid="settings-intro-note-problem">
             {problems[0]}
           </p>
         )}
       </div>
-    </Section>
+    </SettingsCard>
   );
 }
 
@@ -593,161 +666,155 @@ function GoalsForm({ goals, tcs }: { goals: UserGoals; tcs: TargetCompany[] }) {
     }),
   );
   return (
-    <div className="space-y-4">
-      <Section className="grid @[40rem]:grid-cols-2 gap-4">
-        <div className="@[40rem]:col-span-2">
-          <SaveState state={state} />
-        </div>
-        <div className="@[40rem]:col-span-2">
-          <Label htmlFor="goals-cycle">Recruiting cycle</Label>
-          <Suggest
-            id="goals-cycle"
-            value={f.cycleLabel}
-            onChange={(cycleLabel) => setF({ ...f, cycleLabel })}
-            suggest={(q) =>
-              suggestFrom(
-                cycles.map((c) => c.value),
-                q,
-              ).map((s) => cycles.find((c) => c.value === s.value) ?? s)
-            }
-            initial={cycles}
-            minChars={0}
-            data-testid="goals-cycle"
-          />
-        </div>
-        <div className="@[40rem]:col-span-2">
-          <Label>What kind of work</Label>
-          <FunctionPicker
-            value={f.targetFunctions}
-            onChange={(targetFunctions) => setF({ ...f, targetFunctions })}
-            testIdPrefix="settings-fn"
-          />
-        </div>
-        <div className="@[40rem]:col-span-2">
-          <Label htmlFor="goals-roles" hint="comma-separated">
-            Target roles
-          </Label>
-          <Suggest
-            id="goals-roles"
-            value={f.targetRoles}
-            onChange={(targetRoles) => setF({ ...f, targetRoles })}
-            suggest={roles.suggest}
-            onPick={(s) =>
-              setF((cur) => ({
-                ...cur,
-                targetRoles: roles.pick(cur.targetRoles, s.value),
-              }))
-            }
-            minChars={0}
-            placeholder="e.g. Product Manager, Software Engineer"
-          />
-        </div>
-        <div>
-          <Label htmlFor="goals-industries">Industries</Label>
-          <Suggest
-            id="goals-industries"
-            value={f.targetIndustries}
-            onChange={(targetIndustries) => setF({ ...f, targetIndustries })}
-            suggest={industries.suggest}
-            onPick={(s) =>
-              setF((cur) => ({
-                ...cur,
-                targetIndustries: industries.pick(cur.targetIndustries, s.value),
-              }))
-            }
-            minChars={0}
-            placeholder="e.g. Fintech, Consumer"
-          />
-        </div>
-        <div>
-          <Label htmlFor="goals-locations">Locations</Label>
-          <Suggest
-            id="goals-locations"
-            value={f.targetLocations}
-            onChange={(targetLocations) => setF({ ...f, targetLocations })}
-            suggest={locations.suggest}
-            onPick={(s) =>
-              setF((cur) => ({
-                ...cur,
-                targetLocations: locations.pick(cur.targetLocations, s.value),
-              }))
-            }
-            minChars={0}
-            placeholder="e.g. New York City, Remote"
-          />
-        </div>
-      </Section>
-      <OwnWordsSection goals={goals} />
-      <Section>
-        <Label>Target companies</Label>
-        <div className="flex gap-2 mb-3">
-          <Suggest
-            className="flex-1 min-w-0"
-            value={company}
-            onChange={setCompany}
-            suggest={(q) =>
-              suggestCompanies(
-                q,
-                tcs.map((t) => t.nameRaw),
-              )
-            }
-            minChars={1}
-            placeholder="Add a company"
-            aria-label="Add a target company"
-            onKeyDown={(e) => {
-              if (e.key === 'Enter' && !(e.target as HTMLInputElement).getAttribute('aria-activedescendant'))
-                addCompany();
-            }}
-          />
-          <Button onClick={addCompany}>Add</Button>
-        </div>
-        <ul className="divide-y divide-line text-[13.5px]">
+    <>
+      <SettingsHeader
+        title="Goals"
+        description="What you are recruiting for. Orbit picks people and writes drafts around it."
+        aside={<SaveState state={state} />}
+      />
+      <SettingsStack>
+        <SettingsCard title="What you're going for">
+          <CardFields>
+            <div className="@[40rem]:col-span-2">
+              <Label htmlFor="goals-cycle">Recruiting cycle</Label>
+              <Suggest
+                id="goals-cycle"
+                value={f.cycleLabel}
+                onChange={(cycleLabel) => setF({ ...f, cycleLabel })}
+                suggest={(q) =>
+                  suggestFrom(
+                    cycles.map((c) => c.value),
+                    q,
+                  ).map((s) => cycles.find((c) => c.value === s.value) ?? s)
+                }
+                initial={cycles}
+                minChars={0}
+                data-testid="goals-cycle"
+              />
+            </div>
+            <div className="@[40rem]:col-span-2">
+              <Label>What kind of work</Label>
+              <FunctionPicker
+                value={f.targetFunctions}
+                onChange={(targetFunctions) => setF({ ...f, targetFunctions })}
+                testIdPrefix="settings-fn"
+              />
+            </div>
+            <div className="@[40rem]:col-span-2">
+              <Label htmlFor="goals-roles" hint="comma-separated">
+                Target roles
+              </Label>
+              <Suggest
+                id="goals-roles"
+                value={f.targetRoles}
+                onChange={(targetRoles) => setF({ ...f, targetRoles })}
+                suggest={roles.suggest}
+                onPick={(s) =>
+                  setF((cur) => ({
+                    ...cur,
+                    targetRoles: roles.pick(cur.targetRoles, s.value),
+                  }))
+                }
+                minChars={0}
+                placeholder="e.g. Product Manager, Software Engineer"
+              />
+            </div>
+            <div>
+              <Label htmlFor="goals-industries">Industries</Label>
+              <Suggest
+                id="goals-industries"
+                value={f.targetIndustries}
+                onChange={(targetIndustries) => setF({ ...f, targetIndustries })}
+                suggest={industries.suggest}
+                onPick={(s) =>
+                  setF((cur) => ({
+                    ...cur,
+                    targetIndustries: industries.pick(cur.targetIndustries, s.value),
+                  }))
+                }
+                minChars={0}
+                placeholder="e.g. Fintech, Consumer"
+              />
+            </div>
+            <div>
+              <Label htmlFor="goals-locations">Locations</Label>
+              <Suggest
+                id="goals-locations"
+                value={f.targetLocations}
+                onChange={(targetLocations) => setF({ ...f, targetLocations })}
+                suggest={locations.suggest}
+                onPick={(s) =>
+                  setF((cur) => ({
+                    ...cur,
+                    targetLocations: locations.pick(cur.targetLocations, s.value),
+                  }))
+                }
+                minChars={0}
+                placeholder="e.g. New York City, Remote"
+              />
+            </div>
+          </CardFields>
+        </SettingsCard>
+        <OwnWordsSection goals={goals} />
+        <SettingsCard
+          title="Target companies"
+          description={
+            tcs.length
+              ? `${tcs.length} ${tcs.length === 1 ? 'company' : 'companies'} you're aiming for.`
+              : 'Discover and drafts lean toward the companies you add here.'
+          }
+        >
+          <div className="flex gap-2 p-4 bg-canvas-2/50">
+            <Suggest
+              className="flex-1 min-w-0"
+              value={company}
+              onChange={setCompany}
+              suggest={(q) =>
+                suggestCompanies(
+                  q,
+                  tcs.map((t) => t.nameRaw),
+                )
+              }
+              minChars={1}
+              placeholder="Add a company, like Stripe"
+              aria-label="Add a target company"
+              onKeyDown={(e) => {
+                if (
+                  e.key === 'Enter' &&
+                  !(e.target as HTMLInputElement).getAttribute('aria-activedescendant')
+                )
+                  addCompany();
+              }}
+            />
+            <Button variant="primary" onClick={addCompany} disabled={!company.trim()}>
+              <Plus size={14} /> Add
+            </Button>
+          </div>
+          {tcs.length > 0 && (
+            <div
+              className="hidden @[40rem]:grid grid-cols-[minmax(0,1fr)_128px_136px_148px_32px] gap-3 px-5 py-2 text-[11.5px] font-medium text-ink-3"
+              aria-hidden
+            >
+              <span>Company</span>
+              <span>Priority</span>
+              <span>Application</span>
+              <span>Deadline</span>
+              <span />
+            </div>
+          )}
           {tcs.map((t) => (
-            <li key={t.id} className="py-2 flex flex-wrap items-end gap-2">
-              <span className="font-medium min-w-0 flex-1 basis-32 self-center inline-flex items-center gap-2">
-                <CompanyLogo name={t.nameRaw} size={18} decorative />
+            <div
+              key={t.id}
+              className="grid grid-cols-[minmax(0,1fr)_32px] @[40rem]:grid-cols-[minmax(0,1fr)_128px_136px_148px_32px] items-center gap-x-3 gap-y-2 px-5 py-2.5 text-[13.5px]"
+              data-testid="settings-target-row"
+            >
+              <span className="font-medium min-w-0 inline-flex items-center gap-2.5">
+                <CompanyLogo name={t.nameRaw} size={22} decorative />
                 <span className="truncate">{t.nameRaw}</span>
               </span>
-              <label className="flex flex-col gap-0.5 text-[11px] text-ink-3">
-                Priority
-                <Select
-                  value={t.priority}
-                  onChange={(e) => setTargetPriority(t.id, Number(e.target.value) as 1 | 2 | 3)}
-                  className="h-8 text-[12px] text-ink"
-                  aria-label={`Priority for ${t.nameRaw}`}
-                >
-                  <option value={1}>Top priority</option>
-                  <option value={2}>Normal</option>
-                  <option value={3}>Low</option>
-                </Select>
-              </label>
-              <label className="flex flex-col gap-0.5 text-[11px] text-ink-3">
-                Application
-                <Select
-                  value={t.status}
-                  onChange={(e) => setTargetStatus(t.id, e.target.value as never)}
-                  className="h-8 text-[12px] text-ink"
-                  aria-label={`Application status for ${t.nameRaw}`}
-                >
-                  {Object.entries(TARGET_STATUS_LABELS).map(([k, l]) => (
-                    <option key={k} value={k}>
-                      {l}
-                    </option>
-                  ))}
-                </Select>
-              </label>
-              <label className="flex flex-col gap-0.5 text-[11px] text-ink-3">
-                Deadline
-                <Input
-                  type="date"
-                  value={t.deadline ?? ''}
-                  onChange={(e) => setTargetDeadline(t.id, e.target.value || undefined)}
-                  className="h-8 text-[12px] w-36 text-ink"
-                  aria-label={`Application deadline for ${t.nameRaw}`}
-                />
-              </label>
               <button
-                className="text-ink-3 hover:text-bad p-2 rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
+                type="button"
+                className="@[40rem]:order-last justify-self-end text-ink-3 hover:text-bad hover:bg-bad-soft h-8 w-8 inline-flex items-center justify-center rounded-lg transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
                 onClick={async () => {
                   const removed = await removeTargetCompany(t.id);
                   toast.push({
@@ -764,11 +831,42 @@ function GoalsForm({ goals, tcs }: { goals: UserGoals; tcs: TargetCompany[] }) {
               >
                 <Trash2 size={14} />
               </button>
-            </li>
+              <div className="col-span-2 @[40rem]:col-span-1 @[40rem]:contents grid grid-cols-3 gap-2">
+                <Select
+                  value={t.priority}
+                  onChange={(e) => setTargetPriority(t.id, Number(e.target.value) as 1 | 2 | 3)}
+                  className="h-8 w-full text-[12.5px]"
+                  aria-label={`Priority for ${t.nameRaw}`}
+                >
+                  <option value={1}>Top priority</option>
+                  <option value={2}>Normal</option>
+                  <option value={3}>Low</option>
+                </Select>
+                <Select
+                  value={t.status}
+                  onChange={(e) => setTargetStatus(t.id, e.target.value as never)}
+                  className="h-8 w-full text-[12.5px]"
+                  aria-label={`Application status for ${t.nameRaw}`}
+                >
+                  {Object.entries(TARGET_STATUS_LABELS).map(([k, l]) => (
+                    <option key={k} value={k}>
+                      {l}
+                    </option>
+                  ))}
+                </Select>
+                <Input
+                  type="date"
+                  value={t.deadline ?? ''}
+                  onChange={(e) => setTargetDeadline(t.id, e.target.value || undefined)}
+                  className={cx('h-8 w-full text-[12.5px] px-2', !t.deadline && 'text-ink-3')}
+                  aria-label={`Application deadline for ${t.nameRaw}`}
+                />
+              </div>
+            </div>
           ))}
-        </ul>
-      </Section>
-    </div>
+        </SettingsCard>
+      </SettingsStack>
+    </>
   );
 }
 
@@ -803,36 +901,42 @@ function OwnWordsSection({ goals }: { goals: UserGoals }) {
     }),
   );
   return (
-    <Section className="space-y-5" data-testid="settings-own-words">
-      {OWN_WORDS_ORDER.map((k) => {
-        const q = OWN_WORDS_QUESTIONS[k];
-        return (
-          <div key={k}>
-            <Label htmlFor={`goals-${k}`}>{q.label}</Label>
-            <Textarea
-              id={`goals-${k}`}
-              rows={2}
-              value={f[k]}
-              maxLength={OWN_WORDS_MAX}
-              placeholder={q.placeholder}
-              onChange={(e) => setF((cur) => ({ ...cur, [k]: e.target.value }))}
-              data-testid={`goals-${k}`}
-            />
-          </div>
-        );
-      })}
-      <div>
-        <Label htmlFor="goals-currentJob">A job you're going for now</Label>
-        <Input
-          id="goals-currentJob"
-          value={f.currentJob}
-          placeholder="https://jobs.lever.co/acme/123, or Stripe, PM intern"
-          onChange={(e) => setF((cur) => ({ ...cur, currentJob: e.target.value }))}
-          data-testid="goals-currentJob"
-        />
+    <SettingsCard
+      title="In your own words"
+      description="Drafts borrow these lines, so write them the way you would say them."
+      aside={<SaveState state={state} quiet />}
+      data-testid="settings-own-words"
+    >
+      <div className="space-y-5 p-5">
+        {OWN_WORDS_ORDER.map((k) => {
+          const q = OWN_WORDS_QUESTIONS[k];
+          return (
+            <div key={k}>
+              <Label htmlFor={`goals-${k}`}>{q.label}</Label>
+              <Textarea
+                id={`goals-${k}`}
+                rows={2}
+                value={f[k]}
+                maxLength={OWN_WORDS_MAX}
+                placeholder={q.placeholder}
+                onChange={(e) => setF((cur) => ({ ...cur, [k]: e.target.value }))}
+                data-testid={`goals-${k}`}
+              />
+            </div>
+          );
+        })}
+        <div>
+          <Label htmlFor="goals-currentJob">A job you're going for now</Label>
+          <Input
+            id="goals-currentJob"
+            value={f.currentJob}
+            placeholder="https://jobs.lever.co/acme/123, or Stripe, PM intern"
+            onChange={(e) => setF((cur) => ({ ...cur, currentJob: e.target.value }))}
+            data-testid="goals-currentJob"
+          />
+        </div>
       </div>
-      <SaveState state={state} quiet />
-    </Section>
+    </SettingsCard>
   );
 }
 
@@ -910,7 +1014,6 @@ function Integrations() {
   );
   const [clientId, setClientId] = useState(googleClientId() ?? '');
   const [busy, setBusy] = useState<string>();
-  const [readingResume, setReadingResume] = useState(false);
   const token = currentGoogleToken();
   const builtIn = !!envGoogleClientId();
   const connect = async () => {
@@ -938,10 +1041,22 @@ function Integrations() {
   const viaAccount = isServerUser(user.id);
   const googleOffered = builtIn || !!google;
   // until the accounts are read, a connected service would show as off: the rows show their shape instead
+  const header = (
+    <SettingsHeader
+      title="Integrations"
+      description="Where Orbit finds your people and what it knows about you."
+    />
+  );
   if (accountsQ === undefined)
-    return <SkeletonRows rows={6} avatar={36} divided testId="integrations-loading" />;
+    return (
+      <>
+        {header}
+        <SkeletonRows rows={6} avatar={36} divided testId="integrations-loading" />
+      </>
+    );
   return (
-    <div>
+    <div className="pb-10">
+      {header}
       <RowGroup title="Your network">
         {viaAccount ? (
           <GoogleAccountRow />
@@ -1070,69 +1185,135 @@ function Integrations() {
         <CalcomRow user={user} />
       </RowGroup>
       <RowGroup title="About you">
-        <IntegrationRow
-          mark={
-            <AppMark>
-              <FileText size={15} />
-            </AppMark>
-          }
-          name="Resume"
-          status={
-            <span className="text-[12px]" data-testid="resume-on-file">
-              {resume ? (
-                <span className="text-good inline-flex items-center gap-1">
-                  <Check size={12} /> On file: {resume.filename}, added {relDate(resume.createdAt)}
-                </span>
-              ) : (
-                <span className="text-ink-3">No resume yet</span>
-              )}
-            </span>
-          }
-          actions={
-            <label className="inline-flex rounded-full focus-within:ring-2 focus-within:ring-accent/40">
-              <input
-                type="file"
-                accept=".pdf,.txt,.md,.docx"
-                className="sr-only"
-                disabled={readingResume}
-                onChange={async (e) => {
-                  const input = e.target;
-                  const f = input.files?.[0];
-                  if (!f) return;
-                  setReadingResume(true);
-                  try {
-                    await saveResume(user, f);
-                    toast.push({ text: 'Resume updated.', tone: 'good' });
-                  } catch (err) {
-                    toast.push({
-                      text: err instanceof Error && err.message ? err.message : "That file couldn't be read.",
-                      tone: 'bad',
-                    });
-                  } finally {
-                    setReadingResume(false);
-                    // the same file can be picked again after a failure
-                    input.value = '';
-                  }
-                }}
-              />
-              <span className="inline-flex items-center justify-center gap-1.5 rounded-full font-medium h-8 px-3 text-[13px] bg-canvas border border-line shadow-[var(--shadow-pill)] hover:bg-canvas-2 cursor-pointer">
-                {readingResume ? (
-                  <>
-                    <Working /> Reading…
-                  </>
-                ) : resume ? (
-                  'Replace'
-                ) : (
-                  'Upload'
-                )}
-              </span>
-            </label>
-          }
-        ></IntegrationRow>
+        <ResumeRow user={user} resume={resume} />
         <ClaudeCard />
         <ResearchCard />
       </RowGroup>
     </div>
+  );
+}
+
+/** "PDF", "DOCX": the file's kind, for the tile the resume row shows. */
+function fileKind(filename: string): string {
+  const ext = filename.split('.').pop()?.toLowerCase() ?? '';
+  return ['pdf', 'docx', 'txt', 'md'].includes(ext) ? ext.toUpperCase() : 'DOC';
+}
+
+/**
+ * The resume on file: the file as a tile with its name and date, how many lines Orbit read from it, and (opened) those
+ * lines, each one switchable and fixable, since drafts and intros quote them.
+ */
+function ResumeRow({ user, resume }: { user: User; resume?: Resume }) {
+  const toast = useToast();
+  const [reading, setReading] = useState(false);
+  const [open, setOpen] = useState(false);
+  const facets = useLiveQuery(
+    async () => (resume ? await db.resumeFacets.where('resumeId').equals(resume.id).toArray() : []),
+    [resume?.id],
+  );
+  const used = (facets ?? []).filter((f) => !f.excluded).length;
+  return (
+    <IntegrationRow
+      mark={
+        resume ? (
+          <span
+            className="relative inline-flex h-9 w-9 shrink-0 flex-col items-center justify-center rounded-[10px] bg-[#fff1ec] text-[#d4380d]"
+            aria-hidden
+          >
+            <FileText size={15} strokeWidth={1.75} />
+            <span className="mt-px text-[7.5px] font-bold tracking-wide">{fileKind(resume.filename)}</span>
+          </span>
+        ) : (
+          <AppMark>
+            <FileText size={15} />
+          </AppMark>
+        )
+      }
+      name="Resume"
+      status={
+        <span className="text-[12px]" data-testid="resume-on-file">
+          {resume ? (
+            <span className="text-good inline-flex items-center gap-1">
+              <Check size={12} /> On file
+            </span>
+          ) : (
+            <span className="text-ink-3">No resume yet</span>
+          )}
+        </span>
+      }
+      line={
+        resume ? (
+          <span className="inline-flex flex-wrap items-center gap-x-1.5">
+            <span className="truncate max-w-[22ch] font-medium text-ink-2" data-testid="resume-file-name">
+              {resume.filename}
+            </span>
+            <span aria-hidden>·</span>
+            <span>added {relDate(resume.createdAt)}</span>
+            {facets && facets.length > 0 && (
+              <>
+                <span aria-hidden>·</span>
+                <button
+                  type="button"
+                  onClick={() => setOpen((o) => !o)}
+                  aria-expanded={open}
+                  className="inline-flex items-center gap-0.5 underline-offset-2 hover:text-ink hover:underline"
+                  data-testid="resume-lines-toggle"
+                >
+                  {used} of {facets.length} lines used
+                  <ChevronDown size={13} className={cx('transition-transform', open && 'rotate-180')} />
+                </button>
+              </>
+            )}
+          </span>
+        ) : (
+          'PDF, Word or text, up to 10 MB. Drafts mention what you have done.'
+        )
+      }
+      actions={
+        <label className="inline-flex rounded-full focus-within:ring-2 focus-within:ring-accent/40">
+          <input
+            type="file"
+            accept=".pdf,.txt,.md,.docx"
+            className="sr-only"
+            disabled={reading}
+            onChange={async (e) => {
+              const input = e.target;
+              const f = input.files?.[0];
+              if (!f) return;
+              setReading(true);
+              try {
+                await saveResume(user, f);
+                toast.push({ text: 'Resume updated.', tone: 'good' });
+              } catch (err) {
+                toast.push({
+                  text: err instanceof Error && err.message ? err.message : "That file couldn't be read.",
+                  tone: 'bad',
+                });
+              } finally {
+                setReading(false);
+                // the same file can be picked again after a failure
+                input.value = '';
+              }
+            }}
+          />
+          <span className="inline-flex items-center justify-center gap-1.5 rounded-full font-medium h-8 px-3 text-[13px] bg-canvas border border-line shadow-[var(--shadow-pill)] hover:bg-canvas-2 cursor-pointer">
+            {reading ? (
+              <>
+                <Working /> Reading…
+              </>
+            ) : resume ? (
+              'Replace'
+            ) : (
+              <>
+                <Upload size={13} /> Upload
+              </>
+            )}
+          </span>
+        </label>
+      }
+    >
+      {open && facets && facets.length > 0 && <ResumeFacetList facets={facets} readBy="Orbit" />}
+    </IntegrationRow>
   );
 }
 
@@ -1222,7 +1403,15 @@ function ClaudeCard() {
 /** How drafts sound: the outreach coach, tuned by telling it what to change. */
 function StyleCoach() {
   const user = useSession().user!;
-  return <OutreachCoach user={user} />;
+  return (
+    <div className="pb-10">
+      <SettingsHeader
+        title="Writing style"
+        description="How your drafts sound. Tell the coach what to change and every draft after follows it."
+      />
+      <OutreachCoach user={user} />
+    </div>
+  );
 }
 
 /**
@@ -1237,43 +1426,45 @@ function TrustLadder() {
   if (!on || !settings || !streaks) return null;
   const auto = new Set(settings.autoKinds ?? []);
   return (
-    <section className="space-y-2" data-testid="settings-ladder">
-      <h2 className="text-[13px] font-medium text-ink">What Orbit sends on its own</h2>
-      <p className="text-[12.5px] text-ink-3">
-        After you approve {OFFER_AT} of a kind without changing a word, Orbit offers to send that kind itself,
-        by email, in their morning. You see each one after it goes, and can undo it for a minute.
-      </p>
-      <ul className="divide-y divide-line-2">
-        {LADDER_KINDS.map((k) => {
-          const w = LADDER_WORDS[k];
-          const mine = auto.has(k);
-          return (
-            <li
-              key={k}
-              className="py-2 flex items-center gap-3 text-[13.5px]"
-              data-testid="settings-ladder-row"
+    <SettingsCard
+      title="What Orbit sends on its own"
+      description={`After you approve ${OFFER_AT} of a kind without changing a word, Orbit offers to send that kind itself, by email, in their morning. You see each one after it goes and can undo it for a minute.`}
+      data-testid="settings-ladder"
+      footer={
+        <p className="mr-auto text-[12px] text-ink-3" data-testid="settings-ladder-never">
+          Never on its own: first messages, intro asks, anything on LinkedIn.
+        </p>
+      }
+    >
+      {LADDER_KINDS.map((k) => {
+        const w = LADDER_WORDS[k];
+        const mine = auto.has(k);
+        return (
+          <div
+            key={k}
+            className="flex items-center gap-3 px-5 py-3.5 text-[13.5px]"
+            data-testid="settings-ladder-row"
+          >
+            <span className="font-medium min-w-0 flex-1">{w.title}</span>
+            <span
+              className={cx('text-[12.5px]', mine ? 'text-good' : 'text-ink-3')}
+              data-testid="settings-ladder-state"
             >
-              <span className="font-medium w-40 shrink-0">{w.title}</span>
-              <span className="flex-1 text-ink-3" data-testid="settings-ladder-state">
-                {mine
-                  ? 'Orbit sends'
-                  : streaks[k].unedited >= OFFER_AT
-                    ? 'earned, asks you'
-                    : `${Math.min(streaks[k].unedited, OFFER_AT)} of ${OFFER_AT} approved`}
-              </span>
-              <Switch
-                checked={mine}
-                onChange={(v: boolean) => void setAutoKind(user.id, k, v)}
-                label={`Orbit sends ${w.many} on its own`}
-              />
-            </li>
-          );
-        })}
-      </ul>
-      <p className="text-[12.5px] text-ink-3" data-testid="settings-ladder-never">
-        Never on its own: first messages, intro asks, anything on LinkedIn.
-      </p>
-    </section>
+              {mine
+                ? 'Orbit sends'
+                : streaks[k].unedited >= OFFER_AT
+                  ? 'earned, asks you'
+                  : `${Math.min(streaks[k].unedited, OFFER_AT)} of ${OFFER_AT} approved`}
+            </span>
+            <Switch
+              checked={mine}
+              onChange={(v: boolean) => void setAutoKind(user.id, k, v)}
+              label={`Orbit sends ${w.many} on its own`}
+            />
+          </div>
+        );
+      })}
+    </SettingsCard>
   );
 }
 
@@ -1290,39 +1481,47 @@ function Limits() {
     setSavedAt(Date.now());
   };
   return (
-    <div className="space-y-4">
-      <TrustLadder />
-      <section className="grid @[40rem]:grid-cols-2 gap-4 items-start">
-        <div className="@[40rem]:col-span-2 flex items-baseline justify-between -mb-1">
-          <h2 className="text-[13px] font-medium text-ink">First messages a week</h2>
-          <span className="text-[12.5px] text-good" aria-live="polite">
-            {savedAt ? 'Saved' : ''}
-          </span>
-        </div>
-        <div>
-          <WeeklyTargetSlider
-            id="lim-week"
-            value={settings.weeklyOutreachTarget}
-            onChange={(v) => upd({ weeklyOutreachTarget: v })}
-            testId="settings-weekly"
-            limits={limits}
-          />
-        </div>
-        <details className="@[40rem]:col-span-2 text-[13px]" data-testid="limits-advanced">
-          <summary className="cursor-pointer text-ink-2 w-fit">Sending limits</summary>
-          <div className="grid @[40rem]:grid-cols-2 gap-4 items-start mt-3">
-            <div>
-              <Label htmlFor="lim-cool">Hours between messages to the same person</Label>
-              <Input
-                id="lim-cool"
-                type="number"
-                min={0}
-                value={settings.perPersonCooldownHours}
-                onChange={(e) => upd({ perPersonCooldownHours: Number(e.target.value) })}
-              />
-            </div>
-            <div>
-              <Label htmlFor="lim-gmail">Emails per day, at most</Label>
+    <>
+      <SettingsHeader
+        title="Limits and schedule"
+        description="How many people Orbit drafts for, how fast it sends, and when it checks in."
+        aside={
+          savedAt ? (
+            <span
+              className="inline-flex h-7 items-center gap-1.5 rounded-full bg-canvas-2 px-2.5 text-[12px] text-ink-3"
+              aria-live="polite"
+            >
+              <Check size={13} className="text-good" /> Saved
+            </span>
+          ) : undefined
+        }
+      />
+      <SettingsStack>
+        <SettingsCard title="Weekly pace">
+          <SettingsRow
+            stack
+            label="First messages a week"
+            description="Orbit drafts this many first messages, spread over your sending days."
+          >
+            <WeeklyTargetSlider
+              id="lim-week"
+              value={settings.weeklyOutreachTarget}
+              onChange={(v) => upd({ weeklyOutreachTarget: v })}
+              testId="settings-weekly"
+              limits={limits}
+            />
+          </SettingsRow>
+        </SettingsCard>
+        <SettingsCard
+          title="Sending limits"
+          description="Guard rails that keep your accounts in good standing."
+          data-testid="limits-advanced"
+        >
+          <SettingsRow
+            htmlFor="lim-gmail"
+            label="Emails per day"
+            description="At most, across everyone."
+            control={
               <Input
                 id="lim-gmail"
                 type="number"
@@ -1330,10 +1529,15 @@ function Limits() {
                 max={50}
                 value={settings.dailySendCapGmail}
                 onChange={(e) => upd({ dailySendCapGmail: Number(e.target.value) })}
+                className="w-24 h-9 text-right tabular-nums"
               />
-            </div>
-            <div>
-              <Label htmlFor="lim-li">LinkedIn messages per day, at most</Label>
+            }
+          />
+          <SettingsRow
+            htmlFor="lim-li"
+            label="LinkedIn messages per day"
+            description="At most, across everyone."
+            control={
               <Input
                 id="lim-li"
                 type="number"
@@ -1341,10 +1545,29 @@ function Limits() {
                 max={30}
                 value={settings.dailySendCapLinkedin}
                 onChange={(e) => upd({ dailySendCapLinkedin: Number(e.target.value) })}
+                className="w-24 h-9 text-right tabular-nums"
               />
-            </div>
-            <div className="@[40rem]:col-span-2">
-              <Label htmlFor="lim-bumps">Follow-ups when someone has not replied</Label>
+            }
+          />
+          <SettingsRow
+            htmlFor="lim-cool"
+            label="Hours between messages to one person"
+            control={
+              <Input
+                id="lim-cool"
+                type="number"
+                min={0}
+                value={settings.perPersonCooldownHours}
+                onChange={(e) => upd({ perPersonCooldownHours: Number(e.target.value) })}
+                className="w-24 h-9 text-right tabular-nums"
+              />
+            }
+          />
+          <SettingsRow
+            htmlFor="lim-bumps"
+            label="Follow-ups without a reply"
+            description="None, one or two."
+            control={
               <Input
                 id="lim-bumps"
                 type="number"
@@ -1356,21 +1579,27 @@ function Limits() {
                     maxBumps: Math.max(0, Math.min(2, Number(e.target.value))),
                   })
                 }
-                className="max-w-[120px]"
+                className="w-24 h-9 text-right tabular-nums"
               />
-            </div>
-            <div className="@[40rem]:col-span-2 border-t border-line pt-4">
-              <label className="flex items-start gap-2 text-[13.5px]">
-                <input
-                  type="checkbox"
-                  className="mt-1"
-                  checked={settings.warmUpEnabled}
-                  onChange={(e) => upd({ warmUpEnabled: e.target.checked })}
-                />
-                <span>Warm up before messaging strangers on LinkedIn</span>
-              </label>
-              <div className="mt-3 max-w-xs">
-                <Label htmlFor="lim-wdays">Warm-up length in working days</Label>
+            }
+          />
+          <SettingsRow
+            label="Warm up before messaging strangers on LinkedIn"
+            description="A few days of viewing their profile and reacting to a post, by hand, before the message."
+            control={
+              <Switch
+                checked={settings.warmUpEnabled}
+                onChange={(on) => upd({ warmUpEnabled: on })}
+                label="Warm up before messaging strangers on LinkedIn"
+              />
+            }
+          />
+          {settings.warmUpEnabled && (
+            <SettingsRow
+              htmlFor="lim-wdays"
+              label="Warm-up length"
+              description="In working days."
+              control={
                 <Input
                   id="lim-wdays"
                   type="number"
@@ -1378,67 +1607,70 @@ function Limits() {
                   max={10}
                   value={settings.warmUpDays}
                   onChange={(e) => upd({ warmUpDays: Number(e.target.value) })}
+                  className="w-24 h-9 text-right tabular-nums"
                 />
-              </div>
-            </div>
-          </div>
-        </details>
-      </section>
-      <section className="grid @[40rem]:grid-cols-2 gap-4 items-start border-t border-line-2 pt-6">
-        <h2 className="@[40rem]:col-span-2 text-[13px] font-medium text-ink -mb-1">Morning brief</h2>
-        <div
-          className="@[40rem]:col-span-2 flex flex-wrap items-end gap-x-6 gap-y-3"
-          data-testid="settings-morning"
-        >
-          <label className="flex items-start gap-2 text-[13.5px] max-w-md">
-            <input
-              type="checkbox"
-              className="mt-1"
-              checked={settings.morningBrief !== false}
-              onChange={(e) =>
-                void setMorningBrief(user.id, e.target.checked).then(() => setSavedAt(Date.now()))
               }
-              data-testid="settings-morning-on"
             />
-            <span>Show it once a day</span>
-          </label>
-          <div>
-            <Label htmlFor="lim-brief">From</Label>
-            <Input
-              id="lim-brief"
-              type="time"
-              value={settings.briefTimeLocal ?? '07:00'}
-              onChange={(e) => {
-                const v = e.target.value;
-                if (v) void setBriefTime(user.id, v).then(() => setSavedAt(Date.now()));
-              }}
-              className="w-[120px]"
-            />
-          </div>
-          <Button size="sm" onClick={openMorningBrief} data-testid="settings-morning-show">
-            Show it now
-          </Button>
-        </div>
-      </section>
-      <section className="border-t border-line-2 pt-6" data-testid="settings-closeness">
-        <h2 className="text-[13px] font-medium text-ink mb-3">Closeness</h2>
-        <label className="flex items-start gap-2 text-[13.5px] max-w-md">
-          <input
-            type="checkbox"
-            className="mt-1"
-            checked={settings.readReplyTone !== false}
-            onChange={(e) =>
-              void setReadReplyTone(user.id, e.target.checked).then(() => setSavedAt(Date.now()))
+          )}
+        </SettingsCard>
+        <TrustLadder />
+        <SettingsCard title="Morning brief" data-testid="settings-morning">
+          <SettingsRow
+            label="Show it once a day"
+            description="What to decide today, when you first open Orbit."
+            control={
+              <Switch
+                checked={settings.morningBrief !== false}
+                onChange={(on) => void setMorningBrief(user.id, on).then(() => setSavedAt(Date.now()))}
+                label="Show the morning brief once a day"
+                data-testid="settings-morning-on"
+              />
             }
-            data-testid="settings-reply-tone"
           />
-          <span>
-            Read the tone of replies
-            <span className="block text-[12.5px] text-ink-3 mt-0.5">Only you see it.</span>
-          </span>
-        </label>
-      </section>
-    </div>
+          {settings.morningBrief !== false && (
+            <SettingsRow
+              htmlFor="lim-brief"
+              label="From"
+              description="It waits until this time."
+              control={
+                <Input
+                  id="lim-brief"
+                  type="time"
+                  value={settings.briefTimeLocal ?? '07:00'}
+                  onChange={(e) => {
+                    const v = e.target.value;
+                    if (v) void setBriefTime(user.id, v).then(() => setSavedAt(Date.now()));
+                  }}
+                  className="w-[124px] h-9"
+                />
+              }
+            />
+          )}
+          <SettingsRow
+            label="Today's brief"
+            control={
+              <Button size="sm" onClick={openMorningBrief} data-testid="settings-morning-show">
+                Show it now
+              </Button>
+            }
+          />
+        </SettingsCard>
+        <SettingsCard title="Closeness" data-testid="settings-closeness">
+          <SettingsRow
+            label="Read the tone of replies"
+            description="Warm or short replies change how close someone shows. Only you see it."
+            control={
+              <Switch
+                checked={settings.readReplyTone !== false}
+                onChange={(on) => void setReadReplyTone(user.id, on).then(() => setSavedAt(Date.now()))}
+                label="Read the tone of replies"
+                data-testid="settings-reply-tone"
+              />
+            }
+          />
+        </SettingsCard>
+      </SettingsStack>
+    </>
   );
 }
 
@@ -1481,95 +1713,101 @@ function Privacy() {
     }
     toast.push({ text: 'Export downloaded.', tone: 'good' });
   };
+  const leaves: [string, string, string?][] = [
+    ...(sources.google
+      ? ([['Google', 'your own Gmail and Calendar', 'google.com']] as [string, string, string][])
+      : []),
+    ['Claude', 'only for the features you turn on', 'claude.ai'],
+    ['LinkedIn', 'through Unipile, if you connect it live', 'linkedin.com'],
+    ['Village', 'a name and company per warm-intro lookup', 'village.do'],
+    ['Company logos', "a company's web address, to DuckDuckGo's icon service", 'duckduckgo.com'],
+  ];
   return (
-    <div className="max-w-[720px]">
-      <Section>
-        <h2 className="text-[15px] font-medium">Where your data lives</h2>
-        <p className="text-[13.5px] text-ink-2 mt-1.5">
-          Your people, notes, drafts and settings stay in this browser, not on a server. They leave it only
-          for the connections you use:
-        </p>
-        <ul className="mt-2 text-[13px] text-ink-2 divide-y divide-line-2" data-testid="privacy-leaves">
-          {sources.google && (
-            <li className="py-2 flex justify-between gap-4">
-              <span>Google</span>
-              <span className="text-ink-3 text-right">your own Gmail and Calendar</span>
-            </li>
-          )}
-          <li className="py-2 flex justify-between gap-4">
-            <span>Claude</span>
-            <span className="text-ink-3 text-right">only for the features you turn on</span>
-          </li>
-          <li className="py-2 flex justify-between gap-4">
-            <span>LinkedIn</span>
-            <span className="text-ink-3 text-right">through Unipile, if you connect it live</span>
-          </li>
-          <li className="py-2 flex justify-between gap-4">
-            <span>Village</span>
-            <span className="text-ink-3 text-right">a name and company per warm-intro lookup</span>
-          </li>
-          <li className="py-2 flex justify-between gap-4">
-            <span>Company logos</span>
-            <span className="text-ink-3 text-right">
-              a company's web address, to DuckDuckGo's icon service
-            </span>
-          </li>
-        </ul>
-        <p className="text-[12px] text-ink-3 mt-2">
-          Your Claude key is kept apart from the rest, and only Orbit's own code
-          {sources.google ? " and Google's sign-in" : ''} runs on this page.
-        </p>
-      </Section>
-      <Section>
-        <h2 className="text-[15px] font-medium">Your copy</h2>
-        <p className="text-[13px] text-ink-2 mt-1.5" data-testid="export-contents">
-          One file with everything Orbit keeps:{' '}
-          {sources.google || sources.demo ? 'email text and headers, calendar events, ' : ''}
-          people, notes, facts, drafts and what you sent. It does not include your Anthropic key.
-        </p>
-        <div className="mt-3 flex flex-wrap gap-2 items-center">
-          <Button onClick={exportAll} loading={working.busy === 'export'} disabled={!!working.busy}>
-            {working.busy !== 'export' && <Download size={14} />} Download all my data
-          </Button>
-          <Button
-            variant="ghost"
-            className="text-bad hover:bg-bad-soft hover:text-bad"
-            loading={working.busy === 'delete'}
-            disabled={!!working.busy}
-            onClick={() => {
-              if (!confirm('Delete all Orbit data from this browser? This cannot be undone.')) return;
-              void working.run('delete', 'Deleting your data…', async () => {
-                await deleteAllData();
-                await signOut();
-                nav('/');
-              });
-            }}
-          >
-            {working.busy !== 'delete' && <Trash2 size={14} />} Delete all data
-          </Button>
-        </div>
-      </Section>
-      <DemoResetCard />
-    </div>
+    <>
+      <SettingsHeader
+        title="Data & privacy"
+        description="Your people, notes, drafts and settings stay in this browser, not on a server."
+      />
+      <SettingsStack>
+        <SettingsCard
+          title="What leaves this browser"
+          description="Only for the connections you use."
+          footer={
+            <p className="mr-auto text-[12px] text-ink-3">
+              Your Claude key is kept apart from the rest, and only Orbit's own code
+              {sources.google ? " and Google's sign-in" : ''} runs on this page.
+            </p>
+          }
+        >
+          <ul className="divide-y divide-line-2" data-testid="privacy-leaves">
+            {leaves.map(([name, what, logo]) => (
+              <li key={name} className="flex items-center gap-3 px-5 py-3 text-[13.5px]">
+                <AppMark logo={logo}>{name[0]}</AppMark>
+                <span className="font-medium w-32 shrink-0">{name}</span>
+                <span className="text-ink-3 text-[12.5px] min-w-0">{what}</span>
+              </li>
+            ))}
+          </ul>
+        </SettingsCard>
+        <SettingsCard title="Your data">
+          <SettingsRow
+            label="Download a copy"
+            description={
+              <span data-testid="export-contents">
+                One file with everything Orbit keeps:{' '}
+                {sources.google || sources.demo ? 'email text and headers, calendar events, ' : ''}
+                people, notes, facts, drafts and what you sent. It does not include your Anthropic key.
+              </span>
+            }
+            control={
+              <Button onClick={exportAll} loading={working.busy === 'export'} disabled={!!working.busy}>
+                {working.busy !== 'export' && <Download size={14} />} Download all my data
+              </Button>
+            }
+          />
+        </SettingsCard>
+        <SettingsCard title="Danger zone" tone="danger">
+          <DemoResetRow />
+          <SettingsRow
+            label="Delete all data"
+            description="Everything Orbit keeps in this browser. This cannot be undone."
+            control={
+              <Button
+                variant="ghost"
+                className="text-bad hover:bg-bad-soft hover:text-bad border border-bad/25"
+                loading={working.busy === 'delete'}
+                disabled={!!working.busy}
+                onClick={() => {
+                  if (!confirm('Delete all Orbit data from this browser? This cannot be undone.')) return;
+                  void working.run('delete', 'Deleting your data…', async () => {
+                    await deleteAllData();
+                    await signOut();
+                    nav('/');
+                  });
+                }}
+              >
+                {working.busy !== 'delete' && <Trash2 size={14} />} Delete all data
+              </Button>
+            }
+          />
+        </SettingsCard>
+      </SettingsStack>
+    </>
   );
 }
 
 /** Replace everything with the demo: under Data & privacy, since it deletes what the student entered. */
-function DemoResetCard() {
+function DemoResetRow() {
   const user = useSession().user!;
   const [busy, setBusy] = useState(false);
   return (
-    <Section>
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div>
-          <h2 className="text-[15px] font-medium">Demo data</h2>
-          <p className="text-[13px] text-ink-2 mt-0.5">
-            Swap in a sample network. What you added is deleted.
-          </p>
-        </div>
+    <SettingsRow
+      label="Reset to demo"
+      description="Swap in a sample network. What you added is deleted."
+      control={
         <Button
           variant="ghost"
-          className="text-bad hover:bg-bad-soft hover:text-bad"
+          className="text-bad hover:bg-bad-soft hover:text-bad border border-bad/25"
           disabled={busy}
           onClick={async () => {
             const prompt =
@@ -1584,28 +1822,8 @@ function DemoResetCard() {
         >
           {busy ? 'Loading demo…' : 'Reset to demo'}
         </Button>
-      </div>
-    </Section>
-  );
-}
-
-/** A settings section without a box: a hairline between sections and room around the content. */
-function Section({
-  children,
-  className,
-  'data-testid': testId,
-}: {
-  children: ReactNode;
-  className?: string;
-  'data-testid'?: string;
-}) {
-  return (
-    <section
-      className={cx('py-6 border-b border-line-2 last:border-b-0 first:pt-0', className)}
-      data-testid={testId}
-    >
-      {children}
-    </section>
+      }
+    />
   );
 }
 

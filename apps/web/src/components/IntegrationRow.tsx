@@ -24,7 +24,7 @@ export function AppMark({
   return (
     <span
       className={cx(
-        'relative inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-[9px] text-[12px] font-semibold',
+        'relative inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-[10px] text-[12px] font-semibold',
         logo && !failed
           ? dark
             ? 'bg-ink'
@@ -81,12 +81,12 @@ export function IntegrationRow({
   // `{cond && <x/>}` children are false when nothing shows: only what renders counts, so a bare row stays centred
   const extra = Children.toArray(children).length > 0;
   return (
-    <div className="py-4 first:pt-1 last:pb-1" data-testid={testId}>
+    <div className="px-5 py-4" data-testid={testId}>
       <div className={cx('flex gap-3', line || extra ? 'items-start' : 'items-center')}>
         {mark}
         <div className="min-w-0 flex-1">
           <div className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
-            <span className="text-[14px] font-medium text-ink">{name}</span>
+            <span className="text-[13.5px] font-medium text-ink">{name}</span>
             {status}
           </div>
           {line && <div className="mt-0.5 text-[12.5px] text-ink-3">{line}</div>}
@@ -121,7 +121,7 @@ export function RowStatus({
   );
 }
 
-/** A group heading inside the Integrations card, with an optional short line beside it. */
+/** A group of apps on the Integrations page: its title above, the apps in one card split by hairlines. */
 export function RowGroup({
   title,
   hint,
@@ -132,12 +132,14 @@ export function RowGroup({
   children: ReactNode;
 }) {
   return (
-    <section className="[&:not(:first-child)]:mt-2 [&:not(:first-child)]:border-t [&:not(:first-child)]:border-line [&:not(:first-child)]:pt-4">
-      <div className="flex flex-wrap items-baseline gap-x-2 pb-1">
-        <span className="label-mono">{title}</span>
-        {hint && <span className="text-[12px] text-ink-3">{hint}</span>}
+    <section className="[&:not(:first-child)]:mt-8">
+      <div className="mb-2.5 flex flex-wrap items-baseline gap-x-2 px-0.5">
+        <h3 className="text-[14px] font-semibold text-ink">{title}</h3>
+        {hint && <span className="text-[12.5px] text-ink-3">{hint}</span>}
       </div>
-      <div className="divide-y divide-line-2">{children}</div>
+      <div className="divide-y divide-line-2 overflow-hidden rounded-[14px] border border-line bg-canvas shadow-[var(--shadow-card)]">
+        {children}
+      </div>
     </section>
   );
 }

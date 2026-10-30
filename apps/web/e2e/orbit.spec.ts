@@ -2281,7 +2281,7 @@ test.describe('Usability round 6', () => {
         'Jamie Ortiz\njamie.ortiz@umich.edu\n\nExperience\nSummer Analyst Intern, Comerica Bank, Detroit, MI — June 2026 to August 2026. Built a DCF model for a mid-market\nclient; automated a weekly credit report in Excel.\n\nSkills\nExcel, Python\n',
       ),
     });
-    await expect(page.getByTestId('resume-on-file')).toContainText('resume.txt', { timeout: 15_000 });
+    await expect(page.getByTestId('resume-file-name')).toContainText('resume.txt', { timeout: 15_000 });
     const lines = await page.evaluate(async () => {
       const db = (
         window as unknown as {
@@ -3177,7 +3177,7 @@ test.describe('Chat memory (plan 17 §G)', () => {
         'Sam Okafor\nsam@msu.edu\n\nEDUCATION   Michigan State University   May 2029\nB.S. in Economics\n\nEXPERIENCE   Amma Health Inc.   San Francisco, CA\nSoftware Engineering Intern   Jun 2025 – Aug 2025\n• Built a FHIR ingestion pipeline for new clinics\n',
       ),
     });
-    await expect(page.getByTestId('resume-on-file')).toContainText('resume.txt', { timeout: 15_000 });
+    await expect(page.getByTestId('resume-file-name')).toContainText('resume.txt', { timeout: 15_000 });
     await page.goto('settings/memory');
     const offer = page.getByTestId('resume-profile-offer');
     await expect(offer).toContainText('school Michigan State University');

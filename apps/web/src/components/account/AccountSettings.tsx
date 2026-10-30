@@ -1,6 +1,6 @@
 import type { Goal, MemoryItem } from '@orbit/core';
 import { useLiveQuery } from 'dexie-react-hooks';
-import { Download, LogOut, Trash2 } from 'lucide-react';
+import { Brain, Download, LogOut, Trash2 } from 'lucide-react';
 import { useCallback, useEffect, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { db } from '../../db/schema';
@@ -26,10 +26,8 @@ import { useAccount } from '../../state/account';
 import { useSession } from '../../state/session';
 import {
   Button,
-  Card,
   cx,
   Input,
-  Label,
   relDate,
   Select,
   Spinner,
@@ -38,6 +36,7 @@ import {
   useWorking,
   Working,
 } from '../../ui';
+import { SettingsCard, SettingsHeader, SettingsRow, SettingsStack } from '../settings/kit';
 
 function download(json: string, name: string) {
   const blob = new Blob([json], { type: 'application/json' });
@@ -60,21 +59,40 @@ function download(json: string, name: string) {
 function BrowserAccount() {
   const { user } = useSession();
   return (
-    <Card data-testid="settings-browser-account">
-      <div className="font-medium">Your account</div>
-      {user?.email && (
-        <p className="text-[13.5px] text-ink-2 mt-1" data-testid="settings-account-email">
-          {user.email}
-        </p>
-      )}
-      <p className="text-[12.5px] text-ink-3 mt-1">
-        Kept in this browser. Download or delete it under{' '}
-        <Link to="/settings/privacy" className="underline underline-offset-2 hover:text-ink">
-          Data &amp; privacy
-        </Link>
-        .
-      </p>
-    </Card>
+    <>
+      <SettingsHeader title="Account" description="Who you are signed in as." />
+      <SettingsCard data-testid="settings-browser-account">
+        <SettingsRow
+          label={<AccountIdentity email={user?.email} />}
+          description={
+            <>
+              Kept in this browser. Download or delete it under{' '}
+              <Link to="/settings/privacy" className="underline underline-offset-2 hover:text-ink">
+                Data &amp; privacy
+              </Link>
+              .
+            </>
+          }
+        />
+      </SettingsCard>
+    </>
+  );
+}
+
+/** The signed-in address with a round initial, the way the account row starts. */
+function AccountIdentity({ email }: { email?: string }) {
+  return (
+    <span className="flex items-center gap-3">
+      <span
+        className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-accent-soft text-[13px] font-semibold text-accent uppercase"
+        aria-hidden
+      >
+        {(email ?? '?')[0]}
+      </span>
+      <span className="min-w-0 truncate font-medium" data-testid="settings-account-email">
+        {email}
+      </span>
+    </span>
   );
 }
 
@@ -82,24 +100,30 @@ function BrowserAccount() {
 function PostalAddressCard({ userId, sales, initial }: { userId: string; sales: boolean; initial?: string }) {
   const [postal, setPostal] = useState(initial ?? '');
   return (
-    <Card>
-      <Label htmlFor="settings-postal" hint={sales ? 'Required for sales email' : 'For sales email'}>
-        Postal address
-      </Label>
-      <p className="text-[12.5px] text-ink-3 mb-2">
-        The law asks commercial email to carry the sender's postal address. Orbit adds it to sales messages
-        and will not send a sales email without it.
-      </p>
-      <Textarea
-        id="settings-postal"
-        rows={2}
-        value={postal}
-        onChange={(e) => setPostal(e.target.value)}
-        onBlur={() => setPostalAddress(userId, postal)}
-        placeholder="123 College Ave, Ithaca, NY 14850"
-        data-testid="settings-postal"
-      />
-    </Card>
+    <SettingsCard
+      title="Postal address"
+      description="The law asks commercial email to carry the sender's postal address. Orbit adds it to sales messages and will not send a sales email without it."
+      aside={
+        <span className="text-[12px] text-ink-3">
+          {sales ? 'Required for sales email' : 'For sales email'}
+        </span>
+      }
+    >
+      <div className="p-5">
+        <label htmlFor="settings-postal" className="sr-only">
+          Postal address
+        </label>
+        <Textarea
+          id="settings-postal"
+          rows={2}
+          value={postal}
+          onChange={(e) => setPostal(e.target.value)}
+          onBlur={() => setPostalAddress(userId, postal)}
+          placeholder="123 College Ave, Ithaca, NY 14850"
+          data-testid="settings-postal"
+        />
+      </div>
+    </SettingsCard>
   );
 }
 
@@ -144,72 +168,72 @@ export function AccountSection() {
     }
   };
   return (
-    <div className="space-y-4" data-testid="settings-account">
-      <Card>
-        <div className="font-medium">Signed in</div>
-        <p className="text-[13.5px] text-ink-2 mt-1" data-testid="settings-account-email">
-          {account.user?.email}
-        </p>
-        <p className="text-[12.5px] text-ink-3 mt-1">
-          Signing out stops syncing on this device. What is already here stays until you delete it.
-        </p>
-        <Button
-          className="mt-3"
-          loading={signingOut}
-          onClick={async () => {
-            setSigningOut(true);
-            try {
-              await signOutHere();
-              toast.push({ text: 'Signed out. Orbit stopped syncing on this device.' });
-            } finally {
-              setSigningOut(false);
+    <div data-testid="settings-account">
+      <SettingsHeader title="Account" description="Your Orbit account, and everything it keeps for you." />
+      <SettingsStack>
+        <SettingsCard>
+          <SettingsRow
+            label={<AccountIdentity email={account.user?.email} />}
+            description="Signing out stops syncing on this device. What is already here stays until you delete it."
+            control={
+              <Button
+                loading={signingOut}
+                onClick={async () => {
+                  setSigningOut(true);
+                  try {
+                    await signOutHere();
+                    toast.push({ text: 'Signed out. Orbit stopped syncing on this device.' });
+                  } finally {
+                    setSigningOut(false);
+                  }
+                }}
+                data-testid="settings-sign-out"
+              >
+                {!signingOut && <LogOut size={14} />} Sign out
+              </Button>
             }
-          }}
-          data-testid="settings-sign-out"
-        >
-          {!signingOut && <LogOut size={14} />} Sign out
-        </Button>
-      </Card>
-      <Card>
-        <div className="font-medium">Your data</div>
-        <p className="text-[13px] text-ink-2 mt-1">
-          One file with everything Orbit's server keeps for you: people, threads, notes, drafts, goals and
-          memories. Keep it private.
-        </p>
-        <Button className="mt-3" onClick={doExport} disabled={!!busy} data-testid="settings-account-export">
-          {busy === 'export' ? <Spinner /> : <Download size={14} />} Download my data
-        </Button>
-      </Card>
-      <Card className="border-bad/30">
-        <div className="font-medium text-bad">Delete my account</div>
-        <p className="text-[13px] text-ink-2 mt-1">
-          This removes everything Orbit keeps for you, on its server and in this browser, stops reading your
-          Gmail, and unlinks LinkedIn. It cannot be undone. Type DELETE to confirm.
-        </p>
-        <div className="mt-3 flex flex-wrap items-center gap-2">
-          <Input
-            value={confirmText}
-            onChange={(e) => setConfirmText(e.target.value)}
-            placeholder="DELETE"
-            aria-label="Type DELETE to confirm"
-            className="w-40"
-            data-testid="settings-delete-confirm"
           />
-          <Button
-            variant="danger"
-            disabled={confirmText !== 'DELETE' || !!busy}
-            onClick={doDelete}
-            data-testid="settings-delete-account"
+          <SettingsRow
+            label="Download your data"
+            description="One file with everything Orbit's server keeps for you: people, threads, notes, drafts, goals and memories. Keep it private."
+            control={
+              <Button onClick={doExport} disabled={!!busy} data-testid="settings-account-export">
+                {busy === 'export' ? <Spinner /> : <Download size={14} />} Download my data
+              </Button>
+            }
+          />
+        </SettingsCard>
+        <SettingsCard title="Danger zone" tone="danger">
+          <SettingsRow
+            label="Delete my account"
+            description="Removes everything Orbit keeps for you, on its server and in this browser, stops reading your Gmail and unlinks LinkedIn. It cannot be undone. Type DELETE to confirm."
           >
-            {busy === 'delete' ? <Spinner /> : <Trash2 size={14} />} Delete my account
-          </Button>
-        </div>
-      </Card>
-      {error ? (
-        <p className="text-[13px] text-bad" role="alert">
-          {error}
-        </p>
-      ) : null}
+            <div className="flex flex-wrap items-center gap-2">
+              <Input
+                value={confirmText}
+                onChange={(e) => setConfirmText(e.target.value)}
+                placeholder="DELETE"
+                aria-label="Type DELETE to confirm"
+                className="w-40 h-9"
+                data-testid="settings-delete-confirm"
+              />
+              <Button
+                variant="danger"
+                disabled={confirmText !== 'DELETE' || !!busy}
+                onClick={doDelete}
+                data-testid="settings-delete-account"
+              >
+                {busy === 'delete' ? <Spinner /> : <Trash2 size={14} />} Delete my account
+              </Button>
+            </div>
+          </SettingsRow>
+        </SettingsCard>
+        {error ? (
+          <p className="text-[13px] text-bad" role="alert">
+            {error}
+          </p>
+        ) : null}
+      </SettingsStack>
     </div>
   );
 }
@@ -232,17 +256,22 @@ export function OutreachSection() {
   if (!user || !settings) return null;
   const sales = goals.some((g) => g.kind === 'sales');
   // an account kept in this browser: the student sends every message; sending on its own runs on the server
+  const header = (
+    <SettingsHeader title="Outreach" description="How much Orbit may do on its own, and when it holds off." />
+  );
   if (!account.signedIn)
     return (
-      <div className="space-y-4" data-testid="settings-outreach">
-        <Card data-testid="settings-outreach-browser">
-          <div className="font-medium">How much Orbit may do</div>
-          <p className="text-[13px] text-ink-2 mt-1">
-            You approve and send every message yourself. Sending on its own and pausing outreach run on
-            Orbit's server, which an account kept in this browser does not use.
-          </p>
-        </Card>
-        <PostalAddressCard userId={user.id} sales={sales} initial={settings.postalAddress} />
+      <div data-testid="settings-outreach">
+        {header}
+        <SettingsStack>
+          <SettingsCard title="How much Orbit may do" data-testid="settings-outreach-browser">
+            <p className="px-5 py-4 text-[13px] text-ink-2">
+              You approve and send every message yourself. Sending on its own and pausing outreach run on
+              Orbit's server, which an account kept in this browser does not use.
+            </p>
+          </SettingsCard>
+          <PostalAddressCard userId={user.id} sales={sales} initial={settings.postalAddress} />
+        </SettingsStack>
       </div>
     );
   const level = (settings.autonomyLevel ?? 0) as AutonomyLevel;
@@ -259,40 +288,51 @@ export function OutreachSection() {
   };
   const shown = pending && !pending.goalId ? pending.l : level;
   const today = new Date().toISOString().slice(0, 10);
+  const paused = !!settings.quietUntil && settings.quietUntil >= today;
   return (
-    <div className="space-y-4" data-testid="settings-outreach">
-      <Card>
-        <div className="font-medium">How much Orbit may do</div>
-        <div className="mt-3 space-y-2" role="radiogroup" aria-label="Autonomy">
-          {([0, 1, 2] as const).map((l) => (
-            <button
-              key={l}
-              type="button"
-              role="radio"
-              aria-checked={shown === l}
-              onClick={() => choose(l)}
-              className={cx(
-                'w-full text-left rounded-lg border px-3 py-2.5 transition-colors',
-                shown === l ? 'border-ink bg-canvas-2' : 'border-line hover:bg-canvas-2/60',
-              )}
-              data-testid={`autonomy-${l}`}
-            >
-              <div className="text-[14px] font-medium flex items-center gap-2">
-                {AUTONOMY_TEXT[l].title}
-                {pending && !pending.goalId && pending.l === l && <Working />}
-              </div>
-              <div className="text-[12.5px] text-ink-3">{AUTONOMY_TEXT[l].body}</div>
-            </button>
-          ))}
-        </div>
-        {goals.length ? (
-          <div className="mt-4 space-y-2">
-            <div className="text-[12.5px] text-ink-3">For one goal</div>
-            {goals.map((g) => (
-              <label key={g.id} className="flex flex-wrap items-center justify-between gap-2 text-[13.5px]">
-                <span>
-                  {g.title} <span className="text-ink-3">· {GOAL_KIND_LABELS[g.kind]}</span>
+    <div data-testid="settings-outreach">
+      {header}
+      <SettingsStack>
+        <SettingsCard title="How much Orbit may do">
+          <div className="space-y-2 p-4" role="radiogroup" aria-label="Autonomy">
+            {([0, 1, 2] as const).map((l) => (
+              <button
+                key={l}
+                type="button"
+                role="radio"
+                aria-checked={shown === l}
+                onClick={() => choose(l)}
+                className={cx(
+                  'w-full text-left rounded-[10px] border px-3.5 py-3 flex items-start gap-3 transition-colors',
+                  shown === l ? 'border-ink bg-canvas-2/60' : 'border-line hover:bg-canvas-2/60',
+                )}
+                data-testid={`autonomy-${l}`}
+              >
+                <span
+                  className={cx(
+                    'mt-0.5 h-4 w-4 shrink-0 rounded-full border-[1.5px] inline-flex items-center justify-center',
+                    shown === l ? 'border-ink' : 'border-line',
+                  )}
+                  aria-hidden
+                >
+                  {shown === l && <span className="h-2 w-2 rounded-full bg-ink" />}
                 </span>
+                <span className="min-w-0">
+                  <span className="text-[13.5px] font-medium flex items-center gap-2">
+                    {AUTONOMY_TEXT[l].title}
+                    {pending && !pending.goalId && pending.l === l && <Working />}
+                  </span>
+                  <span className="block text-[12.5px] text-ink-3 mt-0.5">{AUTONOMY_TEXT[l].body}</span>
+                </span>
+              </button>
+            ))}
+          </div>
+          {goals.map((g) => (
+            <SettingsRow
+              key={g.id}
+              label={g.title}
+              description={GOAL_KIND_LABELS[g.kind]}
+              control={
                 <Select
                   value={
                     pending?.goalId === g.id
@@ -314,69 +354,73 @@ export function OutreachSection() {
                     </option>
                   ))}
                 </Select>
-              </label>
-            ))}
-          </div>
-        ) : null}
-      </Card>
-      <Card>
-        <div className="font-medium">Pause outreach</div>
-        <p className="text-[13px] text-ink-2 mt-1">
-          {settings.quietUntil && settings.quietUntil >= today
-            ? `Paused until ${settings.quietUntil}. Nothing is drafted or sent until then.`
-            : 'Going on vacation or exams? Nothing is drafted or sent until the date you pick.'}
-        </p>
-        <div className="mt-3 flex flex-wrap items-center gap-2">
-          <Input
-            type="date"
-            value={until}
-            min={today}
-            onChange={(e) => setUntil(e.target.value)}
-            aria-label="Pause until"
-            className="w-44"
-            data-testid="settings-pause-until"
-          />
-          <Button
-            disabled={!until || !!working.busy}
-            loading={working.busy === 'pause'}
-            onClick={() =>
-              working.run('pause', 'Pausing outreach…', async () => {
-                const r = await pauseOutreach(user, until);
-                if (!r.ok) setError(r.message);
-                else toast.push({ text: `Outreach paused until ${until}.` });
-              })
-            }
-            data-testid="settings-pause"
-          >
-            Pause
-          </Button>
-          {settings.quietUntil ? (
-            <Button
-              variant="ghost"
-              disabled={!!working.busy}
-              loading={working.busy === 'resume'}
-              onClick={() =>
-                working.run('resume', 'Turning outreach back on…', async () => {
-                  const r = await pauseOutreach(user, null);
-                  if (!r.ok) setError(r.message);
-                  else {
-                    setUntil('');
-                    toast.push({ text: 'Outreach is back on.' });
-                  }
-                })
               }
-            >
-              Resume now
-            </Button>
-          ) : null}
-        </div>
-      </Card>
-      <PostalAddressCard userId={user.id} sales={sales} initial={settings.postalAddress} />
-      {error ? (
-        <p className="text-[13px] text-bad" role="alert">
-          {error}
-        </p>
-      ) : null}
+            />
+          ))}
+        </SettingsCard>
+        <SettingsCard title="Pause outreach">
+          <SettingsRow
+            label={paused ? `Paused until ${settings.quietUntil}` : 'Pause until'}
+            description={
+              paused
+                ? 'Nothing is drafted or sent until then.'
+                : 'Going on vacation or exams? Nothing is drafted or sent until the date you pick.'
+            }
+            control={
+              <>
+                <Input
+                  type="date"
+                  value={until}
+                  min={today}
+                  onChange={(e) => setUntil(e.target.value)}
+                  aria-label="Pause until"
+                  className="w-40 h-9"
+                  data-testid="settings-pause-until"
+                />
+                <Button
+                  disabled={!until || !!working.busy}
+                  loading={working.busy === 'pause'}
+                  onClick={() =>
+                    working.run('pause', 'Pausing outreach…', async () => {
+                      const r = await pauseOutreach(user, until);
+                      if (!r.ok) setError(r.message);
+                      else toast.push({ text: `Outreach paused until ${until}.` });
+                    })
+                  }
+                  data-testid="settings-pause"
+                >
+                  Pause
+                </Button>
+                {settings.quietUntil ? (
+                  <Button
+                    variant="ghost"
+                    disabled={!!working.busy}
+                    loading={working.busy === 'resume'}
+                    onClick={() =>
+                      working.run('resume', 'Turning outreach back on…', async () => {
+                        const r = await pauseOutreach(user, null);
+                        if (!r.ok) setError(r.message);
+                        else {
+                          setUntil('');
+                          toast.push({ text: 'Outreach is back on.' });
+                        }
+                      })
+                    }
+                  >
+                    Resume now
+                  </Button>
+                ) : null}
+              </>
+            }
+          />
+        </SettingsCard>
+        <PostalAddressCard userId={user.id} sales={sales} initial={settings.postalAddress} />
+        {error ? (
+          <p className="text-[13px] text-bad" role="alert">
+            {error}
+          </p>
+        ) : null}
+      </SettingsStack>
     </div>
   );
 }
@@ -412,34 +456,44 @@ export function MemorySection() {
   }, [items]);
   if (!user) return null;
   return (
-    <div className="space-y-4">
-      <ResumeProfileOffer userId={user.id} />
-      <Card data-testid="settings-memory">
-        <div className="font-medium">What Orbit remembers</div>
-        <p className="text-[13px] text-ink-2 mt-1">
-          Things you told Orbit that it keeps for later chats, like how you like to meet or the roles you are
-          going for. {onServer ? '' : 'Kept in this browser only. '}Delete anything you'd rather it forgot.
-        </p>
-        {error ? (
-          <p className="mt-3 text-[13px] text-bad" role="alert">
-            {error}
-          </p>
-        ) : !items ? (
-          <div className="mt-3">
-            <Spinner />
-          </div>
-        ) : !items.length ? (
-          <p className="mt-3 text-[13px] text-ink-3" data-testid="memory-empty">
-            Nothing yet. Tell the chat something like "I prefer morning calls" or "I'm targeting PM
-            internships in New York" and it shows up here.
-          </p>
-        ) : (
-          <ul className="mt-3 divide-y divide-line border-t border-line">
-            {items.map((m) => (
-              <li key={m.id} className="py-2.5 flex items-start gap-3" data-testid="memory-item">
+    <>
+      <SettingsHeader
+        title="Memory"
+        description={`Things you told Orbit that it keeps for later chats, like how you like to meet or the roles you are going for.${onServer ? '' : ' Kept in this browser only.'}`}
+      />
+      <SettingsStack>
+        <ResumeProfileOffer userId={user.id} />
+        <SettingsCard
+          title="What Orbit remembers"
+          description="Delete anything you'd rather it forgot."
+          aside={
+            items?.length ? <span className="text-[12px] text-ink-3">{items.length} saved</span> : undefined
+          }
+          data-testid="settings-memory"
+        >
+          {error ? (
+            <p className="px-5 py-4 text-[13px] text-bad" role="alert">
+              {error}
+            </p>
+          ) : !items ? (
+            <div className="px-5 py-4">
+              <Spinner />
+            </div>
+          ) : !items.length ? (
+            <div className="px-5 py-8 text-center" data-testid="memory-empty">
+              <Brain size={20} strokeWidth={1.5} className="mx-auto text-ink-3" aria-hidden />
+              <p className="mt-2 text-[13.5px] font-medium">Nothing yet</p>
+              <p className="mt-1 text-[12.5px] text-ink-3 max-w-sm mx-auto">
+                Tell the chat something like "I prefer morning calls" or "I'm targeting PM internships in New
+                York" and it shows up here.
+              </p>
+            </div>
+          ) : (
+            items.map((m) => (
+              <div key={m.id} className="group px-5 py-3 flex items-start gap-3" data-testid="memory-item">
                 <div className="min-w-0 flex-1">
                   <div className="text-[13.5px] text-ink">{m.text}</div>
-                  <div className="text-[12px] text-ink-3">
+                  <div className="mt-0.5 text-[12px] text-ink-3">
                     {MEMORY_KIND_LABELS[m.kind] ?? 'Note'}
                     {m.personId && people?.get(m.personId) ? ` · ${people.get(m.personId)}` : ''} ·{' '}
                     {relDate(m.lastSeenAt ?? m.createdAt)}
@@ -448,6 +502,7 @@ export function MemorySection() {
                 <Button
                   size="sm"
                   variant="ghost"
+                  className="text-ink-3 hover:text-bad hover:bg-bad-soft"
                   aria-label={`Delete: ${m.text}`}
                   loading={deleting === m.id}
                   disabled={!!deleting}
@@ -469,12 +524,12 @@ export function MemorySection() {
                 >
                   {deleting !== m.id && <Trash2 size={14} />}
                 </Button>
-              </li>
-            ))}
-          </ul>
-        )}
-      </Card>
-    </div>
+              </div>
+            ))
+          )}
+        </SettingsCard>
+      </SettingsStack>
+    </>
   );
 }
 
@@ -492,36 +547,39 @@ export function ResumeProfileOffer({ userId }: { userId: string }) {
   }, [userId]);
   if (!offer) return null;
   return (
-    <Card data-testid="resume-profile-offer">
-      <div className="font-medium">From your resume</div>
-      <p className="text-[13px] text-ink-2 mt-1">
-        Your resume says {describeResumeProfile(offer)}. Use that in your profile? Drafts introduce you with
-        it.
-      </p>
-      <div className="mt-3 flex gap-2">
-        <Button
-          size="sm"
-          variant="primary"
-          loading={working.busy === 'accept'}
-          onClick={() =>
-            working.run('accept', 'Updating your profile…', async () => {
-              await acceptResumeProposal(userId);
-              toast.push({ text: 'Profile updated from your resume.', tone: 'good' });
-            })
-          }
-          data-testid="resume-profile-accept"
-        >
-          Use it
-        </Button>
-        <Button
-          size="sm"
-          variant="ghost"
-          onClick={() => void dismissResumeProposal(userId)}
-          data-testid="resume-profile-dismiss"
-        >
-          Keep my profile
-        </Button>
-      </div>
-    </Card>
+    <SettingsCard
+      data-testid="resume-profile-offer"
+      footer={
+        <>
+          <Button
+            size="sm"
+            variant="ghost"
+            onClick={() => void dismissResumeProposal(userId)}
+            data-testid="resume-profile-dismiss"
+          >
+            Keep my profile
+          </Button>
+          <Button
+            size="sm"
+            variant="primary"
+            loading={working.busy === 'accept'}
+            onClick={() =>
+              working.run('accept', 'Updating your profile…', async () => {
+                await acceptResumeProposal(userId);
+                toast.push({ text: 'Profile updated from your resume.', tone: 'good' });
+              })
+            }
+            data-testid="resume-profile-accept"
+          >
+            Use it
+          </Button>
+        </>
+      }
+    >
+      <SettingsRow
+        label="From your resume"
+        description={`Your resume says ${describeResumeProfile(offer)}. Use that in your profile? Drafts introduce you with it.`}
+      />
+    </SettingsCard>
   );
 }
