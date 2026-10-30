@@ -242,6 +242,23 @@ describe('the chat thread', () => {
     expect($$('[data-testid="turn-user"]')).toHaveLength(5);
   });
 
+  it('shows what Claude searched the web for, and the sources as links, a few first', async () => {
+    await mount();
+    await act(() => threadActions(engine).send('search the web'));
+    await settle();
+    const web = $('[data-testid="web-search"]')!;
+    expect(web.dataset.status).toBe('done');
+    expect(web.textContent).toMatch(/Searched the web for “Stripe internship deadline 2027”/);
+    const links = [...web.querySelectorAll<HTMLAnchorElement>('[data-testid="web-source"]')];
+    expect(links).toHaveLength(4);
+    expect(links[0]!.href).toBe('https://stripe.com/jobs/university');
+    expect(links[0]!.target).toBe('_blank');
+    expect(links[0]!.rel).toContain('noopener');
+    expect(links[1]!.textContent).toMatch(/^example\.com/);
+    expect(web.textContent).toMatch(/1 more/);
+    expect($('[data-testid="turn-assistant"]')!.textContent).toMatch(/opens its 2027 internships/);
+  });
+
   it('says Orbit was updated, with a reload, when a part of the chat a deploy replaced cannot load', async () => {
     await mount();
     await act(() => threadActions(engine).send('fail stale'));

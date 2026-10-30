@@ -16,7 +16,17 @@ export interface ScriptedToolCall {
   chunks?: number;
 }
 
+/** Claude's own web search in a scripted turn: the query, then the results (or an error code) */
+export interface ScriptedWebSearch {
+  id?: string;
+  query: string;
+  results?: { title: string; url: string }[];
+  error?: string;
+}
+
 export interface ScriptTurn {
+  /** web searches Anthropic ran in this turn, before the text */
+  webSearch?: ScriptedWebSearch[];
   /** progress notes streamed as thinking blocks before the text (display 'updates') */
   thinking?: string[];
   text?: string;
@@ -144,6 +154,25 @@ export function encodeTurn(turn: ScriptTurn, requestedModel: string): string[] {
       ...split(note, 2).map((t) => ({ type: 'thinking_delta', thinking: t })),
       { type: 'signature_delta', signature: 'sig_' + nextId('t') },
     ]);
+  for (const w of turn.webSearch ?? []) {
+    const id = w.id ?? nextId('srvtoolu');
+    block({ type: 'server_tool_use', id, name: 'web_search', input: {} }, [
+      { type: 'input_json_delta', partial_json: JSON.stringify({ query: w.query }) },
+    ]);
+    block({
+      type: 'web_search_tool_result',
+      tool_use_id: id,
+      content: w.error
+        ? { type: 'web_search_tool_result_error', error_code: w.error }
+        : (w.results ?? []).map((r) => ({
+            type: 'web_search_result',
+            title: r.title,
+            url: r.url,
+            encrypted_content: 'enc_' + nextId('w'),
+            page_age: null,
+          })),
+    });
+  }
   if (turn.text !== undefined)
     block(
       { type: 'text', text: '', citations: null },

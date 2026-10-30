@@ -179,6 +179,10 @@ export type TurnEvent =
   | { type: 'progress'; text: string }
   | { type: 'tool_start'; toolUseId: string; toolName: string; progress?: string }
   | { type: 'tool_result'; toolUseId: string; envelope: ResultEnvelope }
+  /** Claude searched the web (its query, once known) */
+  | { type: 'web_search'; id: string; query?: string }
+  /** what that search found, or that it failed */
+  | { type: 'web_results'; id: string; sources: { title: string; url: string }[]; failed?: boolean }
   | { type: 'done'; stopReason: string; messageId: string }
   | { type: 'error'; message: string; kind: 'no_key' | 'cap' | 'refusal' | 'network' | 'aborted' | 'other' };
 

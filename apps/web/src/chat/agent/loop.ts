@@ -22,6 +22,7 @@ import type { ChatClient } from './client';
 import { buildSnapshot, memoryLineOf, snapshotIsStale, snapshotKeyOf, snapshotText } from './snapshot';
 import { type ChatStore, conversationNonce, toolResultsOf, toolUsesOf } from './store';
 import { systemBlocks } from './system';
+import { WEB_SEARCH_TOOL, webSources } from './webSearch';
 
 /**
  * One student turn against Claude: the beta tool runner with streaming over the injected tool registry. The loop
@@ -219,6 +220,12 @@ export function buildRunnerTools(
   return built;
 }
 
+/** The client tools then web search, the cache breakpoint moved onto the last one so the whole list stays cached. */
+export function withWebSearch(tools: BetaRunnableTool[]): BetaToolRunnerParams['tools'] {
+  const plain = tools.map(({ cache_control: _c, ...t }) => t as BetaRunnableTool);
+  return [...plain, { ...WEB_SEARCH_TOOL, cache_control: { type: 'ephemeral' } }];
+}
+
 /** The request params, built once per turn. Everything but `messages` is byte-identical across a conversation. */
 export function turnParams(
   deps: Pick<TurnDeps, 'conversation' | 'quick' | 'prefixMismatch'>,
@@ -240,7 +247,7 @@ export function turnParams(
     context_management: { edits: [{ type: 'compact_20260112', instructions: COMPACTION_INSTRUCTIONS }] },
     cache_control: { type: 'ephemeral' },
     system: systemBlocks(nonce),
-    tools,
+    tools: withWebSearch(tools),
     messages,
     stream: true,
     max_iterations: MAX_ITERATIONS,
@@ -453,6 +460,24 @@ export async function runTurn(
             if (block?.type === 'thinking' && block.thinking.trim())
               onEvent({ type: 'progress', text: block.thinking.trim() });
           }
+          // Claude's web search runs on Anthropic's side: the query when its block is complete, the sources when the
+          // result block arrives (it comes whole)
+          if (ev.type === 'content_block_stop') {
+            const block = snapshot.content[ev.index];
+            if (block?.type === 'server_tool_use' && block.name === 'web_search') {
+              const q = (block.input as { query?: unknown } | undefined)?.query;
+              onEvent({ type: 'web_search', id: block.id, query: typeof q === 'string' ? q : undefined });
+            }
+          }
+          if (ev.type === 'content_block_start' && ev.content_block.type === 'web_search_tool_result') {
+            const r = ev.content_block;
+            onEvent({
+              type: 'web_results',
+              id: r.tool_use_id,
+              sources: webSources(r.content),
+              failed: !Array.isArray(r.content),
+            });
+          }
           if (ev.type === 'content_block_start' && ev.content_block.type === 'tool_use') {
             onEvent({
               type: 'tool_start',
@@ -474,7 +499,7 @@ export async function runTurn(
             type: 'progress',
             text: `Answered by ${message.model} after Claude declined part of this.`,
           });
-        if (message.stop_reason === 'pause_turn') console.warn('[orbit chat] unexpected pause_turn');
+        // a long web search pauses the turn: the runner sends it back as it is and the answer carries on
 
         const hasToolUse = message.content.some((b) => b.type === 'tool_use');
         // a truncated tool input often parses as a valid partial object: never run it, and keep it out of history

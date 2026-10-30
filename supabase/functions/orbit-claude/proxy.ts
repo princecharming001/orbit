@@ -135,6 +135,21 @@ function apiError(
   });
 }
 
+/**
+ * The one server tool the chat may use: Claude's web search, a few searches a request (each is billed, and counted in
+ * the user's cap), with nothing else that changes what it reaches or costs.
+ */
+export const WEB_SEARCH = { type: 'web_search_20260209', name: 'web_search', maxUses: 5 } as const;
+const WEB_SEARCH_KEYS = new Set(['type', 'name', 'max_uses', 'cache_control']);
+
+function rejectWebSearch(t: Record<string, unknown>): string | undefined {
+  if (t.name !== WEB_SEARCH.name) return 'Server tools are not available here.';
+  if (typeof t.max_uses !== 'number' || t.max_uses < 1 || t.max_uses > WEB_SEARCH.maxUses)
+    return `Web search needs max_uses between 1 and ${WEB_SEARCH.maxUses}.`;
+  for (const k of Object.keys(t)) if (!WEB_SEARCH_KEYS.has(k)) return `${k} is not available here.`;
+  return undefined;
+}
+
 /** Why a request body may not be forwarded, or undefined when it may. */
 export function rejectBody(body: unknown): string | undefined {
   if (!body || typeof body !== 'object' || Array.isArray(body))
@@ -157,7 +172,10 @@ export function rejectBody(body: unknown): string | undefined {
     if (!Array.isArray(b.tools)) return 'tools must be an array.';
     for (const t of b.tools) {
       const type = t && typeof t === 'object' ? (t as { type?: unknown }).type : undefined;
-      if (type !== undefined && type !== 'custom') return 'Server tools are not available here.';
+      if (type === WEB_SEARCH.type) {
+        const why = rejectWebSearch(t as Record<string, unknown>);
+        if (why) return why;
+      } else if (type !== undefined && type !== 'custom') return 'Server tools are not available here.';
     }
   }
   return undefined;
@@ -316,6 +334,7 @@ export function meter(
   const decoder = new TextDecoder();
   let pending = '';
   let model: string | undefined;
+  let started: Usage = { input_tokens: 0, output_tokens: 0 };
   const safely = async (usd: number) => {
     if (!(usd > 0)) return;
     try {
@@ -338,16 +357,31 @@ export function meter(
     if (d.type === 'message_start' && d.message) {
       model = d.message.model;
       const u = d.message.usage ?? {};
+      started = {
+        input_tokens: u.input_tokens ?? 0,
+        output_tokens: 0,
+        cache_read_input_tokens: u.cache_read_input_tokens ?? 0,
+        cache_creation_input_tokens: u.cache_creation_input_tokens ?? 0,
+      };
+      await safely(answerCost(model, started));
+    } else if (d.type === 'message_delta' && d.usage) {
+      // the totals at the end: the output, the searches, and any input read after the start (a web search's results
+      // are read in further passes), less what message_start already charged
+      const u = d.usage;
+      const more = (n: number | null | undefined, had: number | null | undefined) =>
+        Math.max(0, (n ?? 0) - (had ?? 0));
       await safely(
         answerCost(model, {
-          input_tokens: u.input_tokens ?? 0,
-          output_tokens: 0,
-          cache_read_input_tokens: u.cache_read_input_tokens ?? 0,
-          cache_creation_input_tokens: u.cache_creation_input_tokens ?? 0,
+          input_tokens: more(u.input_tokens, started.input_tokens),
+          output_tokens: u.output_tokens ?? 0,
+          cache_read_input_tokens: more(u.cache_read_input_tokens, started.cache_read_input_tokens),
+          cache_creation_input_tokens: more(
+            u.cache_creation_input_tokens,
+            started.cache_creation_input_tokens,
+          ),
+          server_tool_use: u.server_tool_use,
         }),
       );
-    } else if (d.type === 'message_delta' && d.usage) {
-      await safely(answerCost(model, { input_tokens: 0, output_tokens: d.usage.output_tokens ?? 0 }));
     }
   };
   return body.pipeThrough(

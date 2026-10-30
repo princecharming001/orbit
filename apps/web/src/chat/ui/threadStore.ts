@@ -5,6 +5,7 @@
  */
 import { useSyncExternalStore } from 'react';
 import { SETUP_CHIPS } from '../agent/setupChips';
+import { webSources } from '../agent/webSearch';
 import type {
   ChatAction,
   ChatConversation,
@@ -32,7 +33,15 @@ export interface ToolBlock {
   /** what Approve produced, shown in place of the confirmation */
   outcome?: ResultEnvelope;
 }
-export type Block = TextBlock | ProgressBlock | ToolBlock;
+/** Claude searched the web: what for, and what it found (the sources the answer leans on) */
+export interface WebBlock {
+  type: 'web';
+  id: string;
+  query?: string;
+  sources: { title: string; url: string }[];
+  status: 'searching' | 'done' | 'failed';
+}
+export type Block = TextBlock | ProgressBlock | ToolBlock | WebBlock;
 export type ErrorKind = Extract<TurnEvent, { type: 'error' }>['kind'];
 
 export interface UserTurn {
@@ -152,6 +161,36 @@ export function applyEvent(turnId: string, e: TurnEvent) {
         ),
       }));
       break;
+    case 'web_search':
+      updateTurn(turnId, (t) =>
+        t.blocks.some((b) => b.type === 'web' && b.id === e.id)
+          ? {
+              ...t,
+              blocks: t.blocks.map((b) => (b.type === 'web' && b.id === e.id ? { ...b, query: e.query } : b)),
+            }
+          : {
+              ...t,
+              blocks: [
+                ...t.blocks,
+                { type: 'web', id: e.id, query: e.query, sources: [], status: 'searching' },
+              ],
+            },
+      );
+      break;
+    case 'web_results':
+      updateTurn(turnId, (t) => {
+        const status = e.failed ? ('failed' as const) : ('done' as const);
+        const found = t.blocks.some((b) => b.type === 'web' && b.id === e.id);
+        return {
+          ...t,
+          blocks: found
+            ? t.blocks.map((b) =>
+                b.type === 'web' && b.id === e.id ? { ...b, sources: e.sources, status } : b,
+              )
+            : [...t.blocks, { type: 'web', id: e.id, sources: e.sources, status }],
+        };
+      });
+      break;
     case 'done':
       updateTurn(turnId, (t) => ({ ...t, status: 'done' }));
       break;
@@ -201,9 +240,34 @@ export function hydrate(messages: ChatMessage[], actions: ChatAction[]): Turn[] 
     if (m.role !== 'assistant') continue;
     const blocks: Block[] = [];
     for (const raw of Array.isArray(m.content) ? m.content : [m.content]) {
-      const b = raw as { type?: string; text?: string; id?: string; name?: string };
+      const b = raw as {
+        type?: string;
+        text?: string;
+        id?: string;
+        name?: string;
+        input?: { query?: unknown };
+        tool_use_id?: string;
+        content?: unknown;
+      };
       if (b?.type === 'text' && b.text) blocks.push({ type: 'text', text: b.text });
-      else if (b?.type === 'tool_use' && b.id) {
+      // Claude's web search, as it read live: the query, then the sources it found
+      else if (b?.type === 'server_tool_use' && b.name === 'web_search' && b.id)
+        blocks.push({
+          type: 'web',
+          id: b.id,
+          query: typeof b.input?.query === 'string' ? b.input.query : undefined,
+          sources: [],
+          status: 'searching',
+        });
+      else if (b?.type === 'web_search_tool_result' && b.tool_use_id) {
+        const web = [...(open?.blocks ?? []), ...blocks].find(
+          (x): x is WebBlock => x.type === 'web' && x.id === b.tool_use_id,
+        );
+        const sources = webSources(b.content);
+        const status = Array.isArray(b.content) ? ('done' as const) : ('failed' as const);
+        if (web) Object.assign(web, { sources, status });
+        else blocks.push({ type: 'web', id: b.tool_use_id, sources, status });
+      } else if (b?.type === 'tool_use' && b.id) {
         const a = byId.get(b.id);
         blocks.push({
           type: 'tool',

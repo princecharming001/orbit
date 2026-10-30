@@ -1,4 +1,4 @@
-import { Check, Copy, RefreshCw, ThumbsDown, ThumbsUp, TriangleAlert } from 'lucide-react';
+import { Check, Copy, Globe, RefreshCw, ThumbsDown, ThumbsUp, TriangleAlert } from 'lucide-react';
 import { useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { copyText } from '../../components/approve';
@@ -9,7 +9,7 @@ import { ChoicesContext } from './cards/Choices';
 import { DraftOwnersContext } from './cards/parts';
 import { type CardActions, editingDraftId, ResultCard } from './cards/ResultCard';
 import { Markdown } from './Markdown';
-import type { AssistantTurn, Block, ErrorKind, ToolBlock, Turn } from './threadStore';
+import type { AssistantTurn, Block, ErrorKind, ToolBlock, Turn, WebBlock } from './threadStore';
 
 export interface ThreadActions extends CardActions {
   retry: (turnId: string) => void;
@@ -169,6 +169,8 @@ function Assistant({
               showReasoning ? (
                 <ProgressLine key={i} text={b.text} live={streaming && i === turn.blocks.length - 1} />
               ) : null
+            ) : b.type === 'web' ? (
+              <WebSearchLine key={b.id} block={b} live={streaming} />
             ) : (
               <ToolView key={b.toolUseId} block={b} actions={actions} />
             ),
@@ -273,6 +275,76 @@ function ProgressLine({ text, live }: { text: string; live: boolean }) {
         className={cx('w-1.5 h-1.5 rounded-full shrink-0', live ? 'bg-accent animate-pulse' : 'bg-line')}
       />
       <span className={live ? 'shimmer' : undefined}>{text}</span>
+    </div>
+  );
+}
+
+/** The host of a link, without "www.", for a source chip. */
+function hostOf(url: string): string {
+  try {
+    return new URL(url).hostname.replace(/^www\./, '');
+  } catch {
+    return url;
+  }
+}
+
+const SOURCES_SHOWN = 4;
+
+/**
+ * Claude searched the web: the query while it runs, then what it found as small links to the pages, so the student
+ * can check where an answer came from. A few at first, the rest a tap away.
+ */
+function WebSearchLine({ block, live }: { block: WebBlock; live: boolean }) {
+  const [all, setAll] = useState(false);
+  const q = block.query ? `“${block.query}”` : '';
+  const searching = block.status === 'searching';
+  const shown = all ? block.sources : block.sources.slice(0, SOURCES_SHOWN);
+  return (
+    <div className="my-2" data-testid="web-search" data-status={block.status}>
+      <div className="flex items-center gap-2 text-[12.5px] text-ink-3">
+        <Globe
+          size={13}
+          className={cx('shrink-0', searching && live && 'text-accent animate-pulse')}
+          aria-hidden
+        />
+        <span className={cx('min-w-0 truncate', searching && live && 'shimmer')}>
+          {block.status === 'failed'
+            ? `The web search${q ? ` for ${q}` : ''} did not go through`
+            : searching
+              ? `Searching the web${q ? ` for ${q}` : ''}…`
+              : `Searched the web${q ? ` for ${q}` : ''}`}
+        </span>
+      </div>
+      {shown.length > 0 && (
+        <ul className="mt-1.5 flex flex-wrap gap-1.5" data-testid="web-sources">
+          {shown.map((s) => (
+            <li key={s.url} className="max-w-[260px] min-w-0">
+              <a
+                href={s.url}
+                target="_blank"
+                rel="noopener noreferrer"
+                title={s.title}
+                className="flex items-center gap-1.5 h-7 rounded-full border border-line bg-canvas px-2.5 text-[12px] text-ink-2 hover:bg-canvas-2 hover:text-ink"
+                data-testid="web-source"
+              >
+                <span className="font-medium text-ink truncate">{hostOf(s.url)}</span>
+                <span className="truncate text-ink-3">{s.title === s.url ? '' : s.title}</span>
+              </a>
+            </li>
+          ))}
+          {!all && block.sources.length > SOURCES_SHOWN && (
+            <li>
+              <button
+                type="button"
+                onClick={() => setAll(true)}
+                className="h-7 rounded-full px-2.5 text-[12px] text-ink-3 hover:bg-canvas-2 hover:text-ink"
+              >
+                {block.sources.length - SOURCES_SHOWN} more
+              </button>
+            </li>
+          )}
+        </ul>
+      )}
     </div>
   );
 }

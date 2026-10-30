@@ -296,7 +296,9 @@ describe('Claude mode: scripted model turns calling the real tools', () => {
     expect(engine.mode()).toBe('llm');
     await claude('hi', [], 'Hi Alex.');
     const offered = messageRequests(fake)[0]!.body.tools.map((t: { name: string }) => t.name);
-    expect([...offered].sort()).toEqual(tools.map((t) => t.name).sort());
+    // every registry tool, and Claude's own web search last
+    expect(offered.at(-1)).toBe('web_search');
+    expect([...offered.slice(0, -1)].sort()).toEqual(tools.map((t) => t.name).sort());
   });
 
   it("brief: the model reads today's brief and gets compact cards back", async () => {

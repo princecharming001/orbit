@@ -12,6 +12,7 @@ import { type FakeAnthropic, messageRequests, type ScriptTurn, scriptedFetch } f
 import { makeStubRegistry, type StubRegistry } from '../test/stubRegistry';
 import { offerChoices } from '../tools/widgets';
 import type { ChatConversation, ToolSpec, TurnEvent } from '../types';
+import { type AssistantTurn, hydrate } from '../ui/threadStore';
 
 let user: User;
 let store: ChatStore;
@@ -95,14 +96,22 @@ describe('request shape', () => {
     expect(body.output_config).toEqual({ effort: 'medium' });
     expect(body.tool_choice).toBeUndefined();
     expect(body.max_iterations).toBeUndefined();
-    const names = body.tools.map((t: { name: string }) => t.name);
+    // the client tools sorted, then Claude's own web search, a few searches a request
+    const web = body.tools.at(-1);
+    expect(web).toEqual({
+      type: 'web_search_20260209',
+      name: 'web_search',
+      max_uses: 5,
+      cache_control: { type: 'ephemeral' },
+    });
+    const client = body.tools.slice(0, -1);
+    const names = client.map((t: { name: string }) => t.name);
     expect(names).toEqual([...names].sort());
     // the imports take text or base64 like the real registry, so every tool has a JSON Schema form and is offered
     expect(names).toEqual([...stub.registry.keys()].sort());
     // one cache breakpoint after the last tool, so every conversation shares the cached tool list
-    expect(body.tools.at(-1).cache_control).toEqual({ type: 'ephemeral' });
-    expect(body.tools.slice(0, -1).some((t: { cache_control?: unknown }) => t.cache_control)).toBe(false);
-    for (const t of body.tools) {
+    expect(client.some((t: { cache_control?: unknown }) => t.cache_control)).toBe(false);
+    for (const t of client) {
       // strict on the risky tools (the API allows twenty strict tools); the rest are validated by Zod before they run
       expect(t.strict).toBe(stub.registry.get(t.name)!.kind === 'risky');
       expect(JSON.stringify(t.input_schema)).not.toMatch(/"(minimum|maximum|minLength|maxLength|\$schema)"/);
@@ -389,6 +398,59 @@ describe('tools', () => {
     const pending = await store.getAction('conf_1');
     expect(pending).toMatchObject({ status: 'pending', toolName: 'send_draft', input: { draftId: 'out_1' } });
     expect(pending?.expiresAt).toBeTruthy();
+  });
+});
+
+describe("Claude's web search", () => {
+  it('streams the query and the sources, stores the blocks as they came, and a reopened chat shows them', async () => {
+    const results = [
+      { title: 'Stripe opens 2027 internships', url: 'https://stripe.com/jobs/students' },
+      { title: 'Stripe intern timeline', url: 'https://www.example.com/stripe-timeline' },
+    ];
+    const events = await turn('when do stripe internships open', [
+      {
+        webSearch: [{ id: 'srvtoolu_1', query: 'Stripe 2027 internship applications open', results }],
+        text: 'Stripe opened its 2027 internships in August.',
+      },
+    ]);
+    expect(text(events)).toBe('Stripe opened its 2027 internships in August.');
+    expect(events).toContainEqual({
+      type: 'web_search',
+      id: 'srvtoolu_1',
+      query: 'Stripe 2027 internship applications open',
+    });
+    expect(events).toContainEqual({ type: 'web_results', id: 'srvtoolu_1', sources: results, failed: false });
+    expect(kinds(events).at(-1)).toBe('done');
+    const rows = await store.messages(conversation.id);
+    const assistant = rows.find((r) => r.role === 'assistant')!;
+    const types = (assistant.content as { type: string }[]).map((b) => b.type);
+    expect(types).toEqual(expect.arrayContaining(['server_tool_use', 'web_search_tool_result', 'text']));
+    const turns = hydrate(rows, []);
+    const answer = turns.find((t) => t.role === 'assistant') as AssistantTurn;
+    expect(answer.blocks.find((b) => b.type === 'web')).toMatchObject({
+      query: 'Stripe 2027 internship applications open',
+      sources: results,
+      status: 'done',
+    });
+  });
+
+  it('says so when a search fails, and carries on a turn the search paused', async () => {
+    const events = await turn('any news on ramp', [
+      {
+        webSearch: [{ id: 'srvtoolu_2', query: 'Ramp news', error: 'unavailable' }],
+        stopReason: 'pause_turn',
+      },
+      { text: 'I could not reach the web just now.' },
+    ]);
+    expect(events).toContainEqual({ type: 'web_results', id: 'srvtoolu_2', sources: [], failed: true });
+    expect(text(events)).toBe('I could not reach the web just now.');
+    expect(kinds(events).at(-1)).toBe('done');
+    // the paused answer went back as it came, and the turn finished in a second request
+    const reqs = messageRequests(fake);
+    expect(reqs).toHaveLength(2);
+    const sent = reqs[1]!.body.messages.at(-1);
+    expect(sent.role).toBe('assistant');
+    expect(sent.content.map((b: { type: string }) => b.type)).toContain('server_tool_use');
   });
 });
 

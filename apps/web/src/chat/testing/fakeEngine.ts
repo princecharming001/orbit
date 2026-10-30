@@ -19,6 +19,7 @@
  *   "wipe"                  a needs_confirmation whose blockedReason disables Approve
  *   "fail no key" / "fail cap" / "fail refusal" / "fail network" / "fail other"   an error of that kind
  *   "fail stale"   a part of the chat a deploy replaced since the tab opened
+ *   "search the web"   Claude searches the web, then answers with what it found
  *   "slow"                  a long turn with progress lines, for Stop
  *   anything else           a short text answer
  */
@@ -627,6 +628,22 @@ function pick(text: string): Script {
   if (t.includes('show choices')) return withChoices;
   const widget = t.match(/setup (google|linkedin|claude|resume)/);
   if (widget) return withSetup(widget[1] === 'claude' ? 'claude_key' : (widget[1] as SetupWhat));
+  if (t.includes('search the web'))
+    return async function* () {
+      yield { type: 'web_search', id: 'srvtoolu_fake', query: 'Stripe internship deadline 2027' };
+      yield {
+        type: 'web_results',
+        id: 'srvtoolu_fake',
+        sources: [
+          { title: 'Students at Stripe', url: 'https://stripe.com/jobs/university' },
+          { title: 'Stripe internship guide', url: 'https://www.example.com/stripe' },
+          { title: 'Fintech intern timelines', url: 'https://news.example.org/timelines' },
+          { title: 'Recruiting calendar', url: 'https://calendar.example.edu/2027' },
+          { title: 'Fifth source', url: 'https://five.example.com/x' },
+        ],
+      };
+      yield* say('Stripe opens its 2027 internships in August.');
+    };
   if (t.includes('fail stale'))
     return async function* () {
       yield {

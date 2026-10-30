@@ -221,6 +221,23 @@ describe('Orbit Claude proxy', () => {
     expect(taken).toHaveLength(0);
   });
 
+  it("lets exactly Claude's web search through, a few searches a request, and nothing that widens it", () => {
+    const ok = { type: 'web_search_20260209', name: 'web_search', max_uses: 5 };
+    expect(rejectBody({ ...chatParams, tools: [ok] })).toBeUndefined();
+    expect(
+      rejectBody({ ...chatParams, tools: [{ ...ok, cache_control: { type: 'ephemeral' } }] }),
+    ).toBeUndefined();
+    for (const bad of [
+      { ...ok, max_uses: 6 },
+      { type: 'web_search_20260209', name: 'web_search' },
+      { ...ok, allowed_callers: ['code_execution_20260120'] },
+      { ...ok, name: 'other' },
+      { type: 'web_fetch_20260209', name: 'web_fetch', max_uses: 1 },
+      { type: 'code_execution_20260521', name: 'code_execution' },
+    ])
+      expect(rejectBody({ ...chatParams, tools: [bad] }), JSON.stringify(bad)).toBeTruthy();
+  });
+
   it('turns a used-up day into a rate limit error the app recognises, without retrying', async () => {
     const { client, upstream } = harness({
       take: async (bs) => ({ allowed: false, over: bs[1]!.key }),
@@ -442,6 +459,29 @@ describe('the $30 per-user cap on Orbit’s key', () => {
       await subjectOf(req({ 'x-orbit-session': 'junk', 'x-orbit-client': CLIENT }), 'iphash', SECRET, now),
     ).toBe(`client:${CLIENT}`);
     expect(await subjectOf(req({ 'x-orbit-client': 'short' }), 'iphash', SECRET, now)).toBe('ip:iphash');
+  });
+
+  it('charges each web search, and the input its results add after the start, once', async () => {
+    const events = [
+      {
+        type: 'message_start',
+        message: { model: 'claude-opus-5-5', usage: { input_tokens: 1000, output_tokens: 1 } },
+      },
+      {
+        type: 'message_delta',
+        usage: { input_tokens: 4000, output_tokens: 300, server_tool_use: { web_search_requests: 2 } },
+      },
+    ];
+    const sse = events.map((e) => `event: ${e.type}\ndata: ${JSON.stringify(e)}\n\n`).join('');
+    const charged: number[] = [];
+    await new Response(
+      meter(new Response(sse).body!, true, async (usd) => {
+        charged.push(usd);
+      }),
+    ).text();
+    expect(charged[0]).toBeCloseTo((1000 * 4) / 1e6, 10);
+    // 3,000 more input tokens read with the results, 300 output, and two searches at a cent each
+    expect(charged[1]).toBeCloseTo((3000 * 4 + 300 * 20) / 1e6 + 0.02, 10);
   });
 
   it('prices a JSON answer at the end, and never breaks the answer when the spend store fails', async () => {
