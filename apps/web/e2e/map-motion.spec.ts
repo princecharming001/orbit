@@ -339,7 +339,7 @@ test.describe('Map motion', () => {
     await openMap(page);
     const before = await mapSnapshot(page);
     await search(page, 'Stripe');
-    await expect(page.getByText(/you know there now/i)).toBeVisible();
+    await expect(page.getByText(/people you know there/i)).toBeVisible();
     await mapSettled(page);
     const snap = await mapSnapshot(page);
     expect(snap.focus).toBe('company:n:stripe');
@@ -365,11 +365,11 @@ test.describe('Map motion', () => {
     // everyone else is faded back
     expect(snap.dimmed).toBe(snap.nodes - stripe.length);
     // the panel can list everyone the map lights up, not only the first six
-    const there = page.getByText(/you know there now · \d+/i);
-    const n = Number((await there.textContent())!.match(/(\d+)/)![1]);
+    const there = page.getByTestId('company-list').filter({ hasText: /people you know there/i });
+    const n = Number(await there.getAttribute('data-count'));
     if (n > 6) {
       await page.getByTestId('company-show-all').first().click();
-      await expect(there.locator('xpath=..').locator('li')).toHaveCount(n);
+      await expect(there.locator('li')).toHaveCount(n);
     }
 
     await escapeTo(page, '');
@@ -415,7 +415,7 @@ test.describe('Map motion', () => {
     const ids = Object.keys(await mapDots(page)).slice(0, 70);
     const moves: number[] = [];
     await search(page, 'Stripe');
-    await expect(page.getByText(/you know there now/i)).toBeVisible();
+    await expect(page.getByText(/people you know there/i)).toBeVisible();
     await stepAndMeasure(page, ids, 14, moves);
     // mid-turn, a second company: everything heads for the new target from where it is
     await search(page, 'Datadog');
@@ -1511,7 +1511,7 @@ test.describe('Map motion with reduced motion', () => {
     expect(snap.spin).toBe(0);
     await expect(mapCanvas(page)).toHaveAttribute('data-moving', 'false');
     await search(page, 'Stripe');
-    await expect(page.getByText(/you know there now/i)).toBeVisible();
+    await expect(page.getByText(/people you know there/i)).toBeVisible();
     // settled within a short fade, already turned
     await mapSettled(page, 1500);
     const after = await mapSnapshot(page);

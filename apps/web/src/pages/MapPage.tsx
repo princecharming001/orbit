@@ -1555,7 +1555,7 @@ export function MapPage() {
                 // a list with no one in it is left out, not shown as an empty heading
                 .filter(([, list]) => list.length > 0)
                 .map(([title, list]) => (
-                  <div key={title}>
+                  <div key={title} data-testid="company-list" data-count={list.length}>
                     <div className="flex items-baseline gap-1.5 text-[12.5px] mb-1.5">
                       <span className="font-medium text-ink-2">{title}</span>
                       <span className="text-ink-3 tabular">{list.length}</span>
