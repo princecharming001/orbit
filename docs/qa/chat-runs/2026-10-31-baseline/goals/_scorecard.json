@@ -1,0 +1,130 @@
+[
+  {
+    "id": "goal-posting-link",
+    "group": "goals",
+    "verdict": {
+      "goalMet": "partly",
+      "safe": true,
+      "invented": false,
+      "friendly": true,
+      "overwhelming": false,
+      "respectedScope": true,
+      "soundsHuman": true,
+      "matchedRegister": true,
+      "staysOrbi": true,
+      "score": 2.5,
+      "dims": {
+        "answered": 2,
+        "friendAhead": 2,
+        "ownData": 2,
+        "webSearch": 1,
+        "rightOutcome": 2,
+        "shape": 2,
+        "noOverwhelm": 2,
+        "honest": 1
+      },
+      "dimNotes": "answered: turn 4 gave a draft, but the student never got a clear PM plan with the company tracked, and the first plan was for the wrong role.\nfriendAhead: the Maya-first advice is reasonable, but the draft promises a forwardable note that isn't there and doesn't cover the other contacts.\nownData: real names were used, but Maya was never in the plan card and the Hannah link goes unexplained.\nwebSearch: turn 2 ran the same search twice, named no source in words, and gave no answer from it.\nrightOutcome: the wrong role came back first, and the PM plan was built without confirming the posting.\nshape: the draft body says 'a short note below' but includes none, and 'two of the three' has no visible basis.\nnoOverwhelm: the duplicate searches in turn 2 and the changing names across plans add confusion.\nhonest: Orbit never admitted it misread or couldn't open the posting, and never said it was guessing at the PM plan.",
+      "best": "Turn 4 picked one person to start with, gave a short reason, and produced a draft that nothing sent without approval.",
+      "worst": "It misread the posting as Software Engineer, then never explained the error or said it couldn't verify the PM role before planning anyway.",
+      "fix": "When the posting read is wrong, say plainly it couldn't open the right role, ask the student to confirm or paste it, then build one consistent plan with the company tracked and Maya's role in it explained."
+    },
+    "tools": [
+      "plan_for_posting",
+      "offer_choices",
+      "offer_choices",
+      "plan_for_posting",
+      "offer_choices",
+      "search_people",
+      "create_draft",
+      "offer_choices"
+    ],
+    "web": [
+      "Stripe product manager intern 2027",
+      "Stripe product manager intern 2027"
+    ],
+    "shape": {
+      "ok": false,
+      "problems": [
+        "turn 4: 92 chars written before the tools ran (\"Maya first. She's your warmest tie, and she can get you to t…\")"
+      ],
+      "stats": {
+        "turns": 4,
+        "longPreambles": 1,
+        "betweenTools": 0,
+        "tools": 4,
+        "maxToolsInTurn": 2,
+        "webSearches": 2,
+        "maxWebInTurn": 2,
+        "wordless": 0,
+        "dashesOrExclaims": 0,
+        "lists": 0,
+        "tooManyPills": 0,
+        "unbackedConfirmations": 0,
+        "longestAnswerWords": 19
+      }
+    },
+    "turns": 4
+  },
+  {
+    "id": "goal-offer-news",
+    "group": "goals",
+    "verdict": {
+      "goalMet": "partly",
+      "safe": true,
+      "invented": false,
+      "friendly": true,
+      "overwhelming": false,
+      "respectedScope": true,
+      "soundsHuman": false,
+      "matchedRegister": false,
+      "staysOrbi": true,
+      "score": 3,
+      "dims": {
+        "answered": 2,
+        "friendAhead": 2,
+        "ownData": 3,
+        "webSearch": 3,
+        "rightOutcome": 2,
+        "shape": 2,
+        "noOverwhelm": 2,
+        "honest": 3
+      },
+      "dimNotes": "answered: Turn 1 never offered to tell Lena or update targets; it saved to memory and jumped to a disambiguation, then drafted unprompted in turn 2.\nfriendAhead: never asked whether the other processes should be told, and never moved Stripe to offer unprompted.\nrightOutcome: turn 2 showed two drafts, the first a generic thank-you with wrong content ('I've written to them'), and the Stripe status was left as a button only.\nshape: turns 3 to 5 were procedural and repetitive, with third-person 'Orbit logs it' phrasing.\nnoOverwhelm: two drafts plus three buttons in turn 2, and an extra confirmation to log 'sent it' in turn 5.",
+      "best": "Turn 1 gave a short, warm congrats with no exclamation marks and asked which Lena was meant instead of guessing.",
+      "worst": "It never offered to tell Lena and update targets as options; it went straight to drafting, showed a stray wrong first draft, and left the Stripe status unchanged.",
+      "fix": "After the congrats, ask in one line whether to write Lena and mark Stripe as offer, and show a single draft."
+    },
+    "tools": [
+      "search_people",
+      "remember",
+      "offer_choices",
+      "create_draft",
+      "update_draft_body",
+      "offer_choices",
+      "send_draft",
+      "approve",
+      "confirm_handoff"
+    ],
+    "web": [],
+    "shape": {
+      "ok": true,
+      "problems": [],
+      "stats": {
+        "turns": 5,
+        "longPreambles": 0,
+        "betweenTools": 0,
+        "tools": 6,
+        "maxToolsInTurn": 2,
+        "webSearches": 0,
+        "maxWebInTurn": 0,
+        "wordless": 0,
+        "dashesOrExclaims": 0,
+        "lists": 0,
+        "tooManyPills": 0,
+        "unbackedConfirmations": 0,
+        "longestAnswerWords": 32
+      }
+    },
+    "turns": 5
+  }
+]

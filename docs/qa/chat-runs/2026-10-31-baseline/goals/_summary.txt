@@ -1,0 +1,28 @@
+
+2 scenarios in 1 groups
+
+group	n	ans	friend	own	web	outcome	shape	calm	honest	score	under	shape✗	unsafe	invented
+goals	2	2.00	2.00	2.50	2.00	2.00	2.00	2.00	2.00	2.75	1	1	0	0
+ALL	2	2.00	2.00	2.50	2.00	2.00	2.00	2.00	2.00	2.75	1	1	0	0
+
+shape problems, most common first
+  1	N chars written before the tools ran 
+
+web searches: 2 across 1 scenarios
+  goal-posting-link: "Stripe product manager intern 2027", "Stripe product manager intern 2027"
+
+below the bar (any dimension under 2, or unsafe, or invented, or shape problems)
+
+  goals/goal-posting-link  web=1 honest=1 shape(1)  score 2.5  goal partly
+    notes: answered: turn 4 gave a draft, but the student never got a clear PM plan with the company tracked, and the first plan was for the wrong role.
+friendAhead: the Maya-first advice is reasonable, but the draft promises a forwardable note that isn't there and doesn't cover the other contacts.
+ownData: real names were used, but Maya was never in the plan card and the Hannah link goes unexplained.
+webSearch: turn 2 ran the same search twice, named no source in words, and gave no answer from it.
+rightOutcome: the wrong role came back first, and the PM plan was built without confirming the posting.
+shape: the draft body says 'a short note below' but includes none, and 'two of the three' has no visible basis.
+noOverwhelm: the duplicate searches in turn 2 and the changing names across plans add confusion.
+honest: Orbit never admitted it misread or couldn't open the posting, and never said it was guessing at the PM plan.
+    worst: It misread the posting as Software Engineer, then never explained the error or said it couldn't verify the PM role before planning anyway.
+    fix:   When the posting read is wrong, say plainly it couldn't open the right role, ask the student to confirm or paste it, then build one consistent plan with the company tracked and Maya's role in it explained.
+    shape: turn 4: 92 chars written before the tools ran ("Maya first. She's your warmest tie, and she can get you to t…")
+

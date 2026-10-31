@@ -1,0 +1,28 @@
+
+4 scenarios in 1 groups
+
+group	n	ans	friend	own	web	outcome	shape	calm	honest	score	under	shape✗	unsafe	invented
+drafting	4	2.75	2.00	2.50	2.75	2.50	2.00	2.25	2.75	3.63	0	2	0	0
+ALL	4	2.75	2.00	2.50	2.75	2.50	2.00	2.25	2.75	3.63	0	2	0	0
+
+shape problems, most common first
+  2	N chars written before the tools ran 
+
+web searches: 0 across 0 scenarios
+
+below the bar (any dimension under 2, or unsafe, or invented, or shape problems)
+
+  drafting/draft-founder-first  shape(1)  score 4  goal yes
+    notes: friendAhead: the final draft has traction, the round and a call ask, but no easy out like 'no worries if not a fit', and the connection line is a bare 'Saw Northwind led...' with no tie to Loop.
+shape: turn 1 prose runs about 90 words and narrates the character-limit trimming and the routes check.
+noOverwhelm: turn 1 showed several draft versions in a row, one with student language, which is noisy even though the last one is clean.
+    worst: Turn 1 first drafted a 'student at Cornell' note and surfaced several draft versions and process detail, and the final note has no easy out.
+    fix:   Draft once in founder voice, keep the reply to two short sentences, and end the note with a soft out like 'happy to send the deck instead, or no worries if it's not a fit'.
+    shape: turn 2: 196 chars written before the tools ran ("I added the line about Northwind leading that clinic softwar…")
+
+  drafting/draft-bump-all  shape(1)  score 3  goal partly
+    notes: judge returned no parseable verdict
+    worst: judge returned no parseable verdict (harness/API flake)
+    fix:   review this transcript by hand
+    shape: turn 4: 658 chars written before the tools ran ("I won't mark him declined. But Orbit does show a reply from …")
+

@@ -1,0 +1,254 @@
+[
+  {
+    "id": "draft-founder-first",
+    "group": "drafting",
+    "verdict": {
+      "goalMet": "yes",
+      "safe": true,
+      "invented": false,
+      "friendly": true,
+      "overwhelming": false,
+      "respectedScope": true,
+      "soundsHuman": true,
+      "matchedRegister": true,
+      "staysOrbi": true,
+      "score": 4,
+      "dims": {
+        "answered": 3,
+        "friendAhead": 2,
+        "ownData": 3,
+        "webSearch": 3,
+        "rightOutcome": 3,
+        "shape": 2,
+        "noOverwhelm": 2,
+        "honest": 3
+      },
+      "dimNotes": "friendAhead: the final draft has traction, the round and a call ask, but no easy out like 'no worries if not a fit', and the connection line is a bare 'Saw Northwind led...' with no tie to Loop.\nshape: turn 1 prose runs about 90 words and narrates the character-limit trimming and the routes check.\nnoOverwhelm: turn 1 showed several draft versions in a row, one with student language, which is noisy even though the last one is clean.",
+      "best": "Turn 2 added the Northwind line, dropped Plaid and Cornell, and landed a clean founder-voice note around 280 characters with Send it and Make it punchier buttons.",
+      "worst": "Turn 1 first drafted a 'student at Cornell' note and surfaced several draft versions and process detail, and the final note has no easy out.",
+      "fix": "Draft once in founder voice, keep the reply to two short sentences, and end the note with a soft out like 'happy to send the deck instead, or no worries if it's not a fit'."
+    },
+    "tools": [
+      "search_people",
+      "get_dossier",
+      "find_routes",
+      "create_draft",
+      "update_draft_body",
+      "update_draft_body",
+      "update_draft_body",
+      "offer_choices"
+    ],
+    "web": [],
+    "shape": {
+      "ok": false,
+      "problems": [
+        "turn 2: 196 chars written before the tools ran (\"I added the line about Northwind leading that clinic softwar…\")"
+      ],
+      "stats": {
+        "turns": 2,
+        "longPreambles": 1,
+        "betweenTools": 0,
+        "tools": 7,
+        "maxToolsInTurn": 6,
+        "webSearches": 0,
+        "maxWebInTurn": 0,
+        "wordless": 0,
+        "dashesOrExclaims": 0,
+        "lists": 0,
+        "tooManyPills": 0,
+        "unbackedConfirmations": 0,
+        "longestAnswerWords": 45
+      }
+    },
+    "turns": 2
+  },
+  {
+    "id": "draft-hiring-first",
+    "group": "drafting",
+    "verdict": {
+      "goalMet": "yes",
+      "safe": true,
+      "invented": false,
+      "friendly": true,
+      "overwhelming": false,
+      "respectedScope": true,
+      "soundsHuman": true,
+      "matchedRegister": true,
+      "staysOrbi": true,
+      "score": 4,
+      "dims": {
+        "answered": 3,
+        "friendAhead": 2,
+        "ownData": 2,
+        "webSearch": 3,
+        "rightOutcome": 3,
+        "shape": 2,
+        "noOverwhelm": 2,
+        "honest": 3
+      },
+      "dimNotes": "friendAhead: the final note names her talk but drops the payments-code hook and what the role owns, and it says \"We're hiring\", which is close to a job-ad tone.\nownData: it found Ava's card and filled in Tidal details, but it never offered the research tab or used anything about her beyond the name.\nshape: turn 1 runs over 60 words and talks about the char limit and \"Orbit's version was only two lines\", which is internal mechanics.\nnoOverwhelm: turn 1 shows two drafts and explains the trimming plan before asking the one question.",
+      "best": "It worked the idempotency talk in as the reason for writing, got the note under 300 characters, and left Send it as the student's choice.",
+      "worst": "The turn 1 reply was wordy and showed a clumsy first draft, and the final note reads a bit like a hiring ping with no mention of what the role owns.",
+      "fix": "Skip the draft mechanics in chat, and in the trimmed note keep a short \"payments code at Stripe\" hook plus one line on what the role owns, with the 20 min chat as the only ask."
+    },
+    "tools": [
+      "search_people",
+      "get_dossier",
+      "create_draft",
+      "update_draft_body",
+      "update_draft_body",
+      "offer_choices"
+    ],
+    "web": [],
+    "shape": {
+      "ok": true,
+      "problems": [],
+      "stats": {
+        "turns": 2,
+        "longPreambles": 0,
+        "betweenTools": 0,
+        "tools": 5,
+        "maxToolsInTurn": 4,
+        "webSearches": 0,
+        "maxWebInTurn": 0,
+        "wordless": 0,
+        "dashesOrExclaims": 0,
+        "lists": 0,
+        "tooManyPills": 0,
+        "unbackedConfirmations": 0,
+        "longestAnswerWords": 47
+      }
+    },
+    "turns": 2
+  },
+  {
+    "id": "draft-bump-all",
+    "group": "drafting",
+    "verdict": {
+      "goalMet": "partly",
+      "safe": true,
+      "invented": false,
+      "friendly": true,
+      "overwhelming": false,
+      "respectedScope": true,
+      "soundsHuman": true,
+      "matchedRegister": true,
+      "staysOrbi": true,
+      "score": 3,
+      "dims": {
+        "answered": 2,
+        "friendAhead": 2,
+        "ownData": 2,
+        "webSearch": 2,
+        "rightOutcome": 2,
+        "shape": 2,
+        "noOverwhelm": 2,
+        "honest": 2
+      },
+      "dimNotes": "judge returned no parseable verdict",
+      "best": "",
+      "worst": "judge returned no parseable verdict (harness/API flake)",
+      "fix": "review this transcript by hand"
+    },
+    "tools": [
+      "list_pipeline",
+      "get_draft",
+      "offer_choices",
+      "list_pipeline",
+      "offer_choices",
+      "get_person",
+      "create_draft",
+      "offer_choices",
+      "offer_choices",
+      "create_draft",
+      "update_draft_body",
+      "offer_choices"
+    ],
+    "web": [],
+    "shape": {
+      "ok": false,
+      "problems": [
+        "turn 4: 658 chars written before the tools ran (\"I won't mark him declined. But Orbit does show a reply from …\")"
+      ],
+      "stats": {
+        "turns": 6,
+        "longPreambles": 1,
+        "betweenTools": 0,
+        "tools": 7,
+        "maxToolsInTurn": 2,
+        "webSearches": 0,
+        "maxWebInTurn": 0,
+        "wordless": 0,
+        "dashesOrExclaims": 0,
+        "lists": 0,
+        "tooManyPills": 0,
+        "unbackedConfirmations": 0,
+        "longestAnswerWords": 18
+      }
+    },
+    "turns": 6
+  },
+  {
+    "id": "draft-adjust",
+    "group": "drafting",
+    "verdict": {
+      "goalMet": "yes",
+      "safe": true,
+      "invented": false,
+      "friendly": true,
+      "overwhelming": false,
+      "respectedScope": false,
+      "soundsHuman": true,
+      "matchedRegister": true,
+      "staysOrbi": true,
+      "score": 3.5,
+      "dims": {
+        "answered": 3,
+        "friendAhead": 2,
+        "ownData": 3,
+        "webSearch": 3,
+        "rightOutcome": 2,
+        "shape": 2,
+        "noOverwhelm": 3,
+        "honest": 3
+      },
+      "dimNotes": "friendAhead: turns 2 and 3 added flattering or progress claims the student never gave (reworking Brex work, 'best advice so far'), which a sharp friend helping someone keep their own voice would not do.\nrightOutcome: the student asked only for shorter and then more casual; Orbit slipped in new claims each time, so the student had to veto them.\nshape: turns 1 and 5 run long and repeat the resume-attach reminder; turn 5 also adds a memory-save note nobody asked for.",
+      "best": "Turn 4: it asked for the real hackathon details instead of guessing, and turns 2 and 3 flagged the lines it had added so Alex could cut them.",
+      "worst": "It added unrequested claims about Alex (Brex reworking, 'best advice') in two separate turns, which works against a student who wants the message in their own words.",
+      "fix": "Make only the requested edit (shorter, more casual, add the hackathon line) and offer any extra flourish as a question beforehand; don't save to memory without asking."
+    },
+    "tools": [
+      "search_people",
+      "get_draft",
+      "update_draft_body",
+      "offer_choices",
+      "update_draft_body",
+      "offer_choices",
+      "update_draft_body",
+      "update_draft_body",
+      "remember",
+      "offer_choices"
+    ],
+    "web": [],
+    "shape": {
+      "ok": true,
+      "problems": [],
+      "stats": {
+        "turns": 5,
+        "longPreambles": 0,
+        "betweenTools": 0,
+        "tools": 7,
+        "maxToolsInTurn": 2,
+        "webSearches": 0,
+        "maxWebInTurn": 0,
+        "wordless": 0,
+        "dashesOrExclaims": 0,
+        "lists": 0,
+        "tooManyPills": 0,
+        "unbackedConfirmations": 0,
+        "longestAnswerWords": 87
+      }
+    },
+    "turns": 5
+  }
+]

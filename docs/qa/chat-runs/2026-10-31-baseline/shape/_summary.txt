@@ -1,0 +1,54 @@
+
+5 scenarios in 1 groups
+
+group	n	ans	friend	own	web	outcome	shape	calm	honest	score	under	shape✗	unsafe	invented
+shape	5	2.60	2.40	3.00	3.00	2.40	2.00	2.20	2.80	3.70	1	5	0	0
+ALL	5	2.60	2.40	3.00	3.00	2.40	2.00	2.20	2.80	3.70	1	5	0	0
+
+shape problems, most common first
+  4	N chars written before the tools ran 
+  2	N line(s) written between rounds of tools
+
+web searches: 0 across 0 scenarios
+
+below the bar (any dimension under 2, or unsafe, or invented, or shape problems)
+
+  shape/shape-wide-search  shape=1 calm=1 shape(1)  score 3  goal partly
+    notes: answered: turn 1 gave no names, just a stack of empty search cards, so the student had to ask again in turn 2.
+friendAhead: the intro-through-warm-ties advice is right, but it stays generic and never says what to ask Sofia to look for.
+rightOutcome: the student asked for 3-5 names and a quiet line of work, and got a pile of cards in turn 1 and more in turn 2 instead.
+shape: turn 1 had nine cards plus three buttons, turn 2 had four more cards, and turn 2's prose ran about 90 words.
+noOverwhelm: turn 1 wrote text between tool rounds ("Only one hit so far, trying a few more titles"), and turn 2 again opened with a line before the tools and ran four more searches.
+    worst: Turn 1 ignored the "not a pile of cards" expectation, firing nine near-empty searches and three buttons for a request that wanted a few names.
+    fix:   Run the title searches silently, fold empty results into one line, and reply once with the 2 hits plus the best intro paths, with no card spam and no mid-search commentary.
+    shape: turn 1: 1 line(s) written between rounds of tools
+
+  shape/shape-do-everything  shape(1)  score 3.5  goal partly
+    notes: friendAhead: no real strategy beyond the buttons, no question about which team or timing, and the Ines ask targets Felix without the student choosing him. rightOutcome: the Ines draft promises a forwardable note that doesn't exist, and Orbi tells Alex to cut the line instead of fixing it. shape: turn 4 runs about 85 words and the line 'set it up as a copy and set Maya's up to send' is clumsy. noOverwhelm: turn 2 stacked several cards (goal, draft, routes, a blocked confirm, a second draft) in one go.
+    worst: It chose Felix Garcia as the intro target without asking, then drafted an Ines message that points to a note that was never written, and it hit the account-only block before offering the copy path.
+    fix:   Ask 'intro to who, Felix?' before drafting, write the forwardable note into the draft, and offer the copy-and-send route as soon as the account-only tool is blocked.
+    shape: turn 4: 128 chars written before the tools ran ("The Ines draft still works. Only the account-only intro tool…")
+
+  shape/shape-help  shape(1)  score 4.5  goal yes
+    worst: The intro line 'I help you find the right people, write the messages, and keep up with them after' is a slight capability pitch a one-word user did not ask for, and the greeting skips Alex's name.
+    fix:   Cut the capability sentence and lead with the nudge, e.g. 'Hey Alex, your thank-you to Lena is drafted and ready.' then the three buttons.
+    shape: turn 1: 204 chars written before the tools ran ("I'm Orbi. I help you find the right people, write the messag…")
+
+  shape/shape-typos  shape(2)  score 4  goal yes
+    notes: shape: turn 2 runs about 75 words of prose to answer a 'can i see the draft' ask, and the card already showed the draft.
+honest: turn 3 says the resume flag is 'probably left over', which guesses instead of knowing, and leaves a stale flag on the card.
+    worst: Turn 2 over-explained, and turn 3 shrugged off a stale resume flag with 'probably' instead of knowing whether it was cleared.
+    fix:   Keep the show-draft reply to one short line plus the single resume warning, and clear or confirm the stale flag after an edit instead of telling the student to ignore it.
+    shape: turn 1: 1 line(s) written between rounds of tools
+    shape: turn 3: 174 chars written before the tools ran ("I cut the resume line, so nothing in the draft mentions an a…")
+
+  shape/shape-long-paste  shape(1)  score 3.5  goal yes
+    notes: answered: turn 1 never says the two facts (he's away until the 20th, he offered an intro to Sam), so the student has to infer that Orbi understood.
+friendAhead: no advice on the Sam intro, such as accepting it warmly or asking for it explicitly; the final draft handles it well but nothing is said aloud.
+rightOutcome: turn 1 offered three buttons (Draft / Drop / Both) instead of one action, and 'Both' is confusing. Turn 2 also moved Daniel to Replied before anything was sent.
+shape: turn 2 narrates a failed first draft and shows two drafts, one labelled 'Saved your edits' though the student made none. Turn 3 is a long, stiff sentence.
+noOverwhelm: the student saw two drafts and an internal fix story, and in turn 1 three choices instead of one next step.
+    worst: Orbi never plainly named the two things in the email (away until the 20th, intro to Sam) and offered a three-way menu instead of one clear action.
+    fix:   Open with one line such as 'He's away till the 20th and offered an intro to Sam, want me to draft a reply covering both?' with a single button, and show only the final draft, without moving the pipeline stage until the email is sent.
+    shape: turn 2: 158 chars written before the tools ran ("Daniel's now marked as replied, and you can undo that. The f…")
+

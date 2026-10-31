@@ -1,0 +1,133 @@
+
+15 scenarios in 1 groups
+
+group	n	ans	friend	own	web	outcome	shape	calm	honest	score	under	shape✗	unsafe	invented
+knowledge	15	2.47	1.93	2.40	2.93	2.20	1.73	2.53	2.53	3.33	10	12	0	0
+ALL	15	2.47	1.93	2.40	2.93	2.20	1.73	2.53	2.53	3.33	10	12	0	0
+
+shape problems, most common first
+  15	N chars written before the tools ran 
+  1	N web searches in one turn
+  1	N chars written before the tools ran ("Congrats on the term sheet, that's the hardest part.
+
+The le…")
+  1	a heading or a list in chat prose
+
+web searches: 4 across 1 scenarios
+  know-ib-start: "investment banking summer analyst 2028 recruiting timeline", "investment banking summer analyst 2028 recruiting timeline", "Goldman Sachs Evercore 2028 summer analyst application expected open", "when should sophomores start networking investment banking recruiting accelerated"
+
+below the bar (any dimension under 2, or unsafe, or invented, or shape problems)
+
+  knowledge/know-ib-start  outcome=1 shape=1 shape(1)  score 2  goal yes
+    notes: answered: the timeline only arrived on turn 3, after two turns with no answer. friendAhead: correct and starts with alumni, but skips HireVue, superday and the fact that early programs open this fall. ownData: no Michigan-specific angle beyond the word alumni, and no use of the student's network. webSearch: searches were warranted, but one query ran twice and the results were never turned into an answer on turns 1 and 2. rightOutcome: turn 1 gave a filler line plus buttons and turn 2 was empty, so the student had to ask three times. shape: turn 3 uses bold headings and a list, runs about 90 words, and includes a closing caveat. noOverwhelm: four searches ran with no payoff, and the buttons offered were irrelevant to the question. honest: turn 3 says to check careers pages, but nothing explains the earlier silence beyond a quick sorry.
+    worst: Two turns passed with no answer to a simple timeline question, even though the searches had already run.
+    fix:   After the searches, always write a short answer in the same turn, such as 'Start alumni chats this fall, apps open in spring', and add one next step instead of unrelated buttons.
+    shape: turn 1: 4 web searches in one turn
+
+  knowledge/know-superday  shape(1)  score 4  goal yes
+    notes: shape: turn 1 runs about 170 words across three paragraphs for a casual two-term question, and the last paragraph adds the process order and coffee chats nobody asked for.
+friendAhead: the definitions are correct, but it never ties them to Noah being a sophomore or says what to do now (start reaching out to alumni analysts), so it reads a bit generic.
+matchedRegister: a short, slangy question got a long, fairly formal answer instead of two or three casual lines.
+    worst: It's longer than a casual texting question calls for, and it adds an unrequested process overview and networking pitch.
+    fix:   Give each term in one or two casual sentences, then offer one nudge tied to Noah being a sophomore, like starting with alumni analysts.
+    shape: turn 1: 850 chars written before the tools ran ("HireVue is a video interview you record alone. You get a que…")
+
+  knowledge/know-vc-call  shape=1 shape(2)  score 3.5  goal yes
+    notes: friendAhead: turn 2 skips that associates screen and champion while only partners decide, and the Monday meeting; turn 3 omits the monthly investor update; no mention of warm intros. shape: all three replies run about 90 to 110 words of dense prose, well over the roughly 60-word guide. noOverwhelm: turn 1 packs the call flow, likely questions, round framing and a closing ask into one block.
+    worst: Replies are long, paragraph-style answers to short, casual questions, and they leave out how the screening and champion roles work and the monthly update after the follow-up.
+    fix:   Cut each reply to two or three casual sentences, add that associates screen and only partners decide, and mention the same-day note plus a monthly update.
+    shape: turn 1: 553 chars written before the tools ran ("Nerves are normal before a first partner call, and you're wa…")
+    shape: turn 2: 564 chars written before the tools ran ("It depends on the fund, but usually the partner you meet doe…")
+
+  knowledge/know-seed-round  shape=1 shape(2)  score 3  goal partly
+    notes: answered: turn 2 came back blank, and SAFE versus priced was never explained although it was part of the goal.
+friendAhead: the content is correct (lead role, allocation, pro rata, super pro rata) but it omits SAFE versus priced, a tight raise window, and not naming other investors until it is true.
+rightOutcome: turn 2 had no reply, so the student had to ask again.
+shape: turns 1, 3 and 4 run about 150 to 200 words of multi-paragraph prose, well over the limit for a casual question.
+noOverwhelm: the replies pile several ideas and caveats into one message, although only one next step is offered each time.
+matchedRegister: the student writes short and casual, and Orbi answers with long, dense paragraphs.
+    worst: Turn 2 returned an empty reply to a direct question, and the long answers around it never touched SAFE versus priced.
+    fix:   Guarantee a non-empty reply every turn, cut each answer to about 60 words with one idea, and offer SAFE versus priced as the next step.
+    shape: turn 1: 703 chars written before the tools ran ("Congrats on the term sheet, that's the hardest part.
+
+The le…")
+    shape: turn 4: 850 chars written before the tools ran ("Pro rata is the right to invest in your later rounds so they…")
+
+  knowledge/know-vc-career  shape(2)  score 4  goal yes
+    notes: friendAhead: turn 1 says 'three ways' but then calls banking the most common route, which is a little muddled. It never says plainly that most people don't go straight in. It doesn't mention campus scout or ambassador roles as something to do now, or talking to analysts specifically.
+ownData: only a generic nod to Michigan alums, no named people or goals from the student's account.
+shape: both replies run past 60 words in two paragraphs, which is longer than the student's casual lowercase message called for.
+    worst: The replies are longer and more polished than Noah's casual message called for, and the 'straight out of undergrad is rare' point is blurred by the three-ways framing.
+    fix:   Open with 'honestly pretty rare, most do 2 years of banking or consulting first', mention scout programs as something to do now, and cut each reply to two or three short casual sentences.
+    shape: turn 1: 549 chars written before the tools ran ("Straight out of undergrad is rare but doable. Most people ge…")
+    shape: turn 2: 432 chars written before the tools ran ("I'd keep banking as your main thing and explore VC on the si…")
+
+  knowledge/know-intro-ask  ans=1 friend=1 shape=1 calm=1 shape(1)  score 2.5  goal partly
+    notes: answered: turn 1 never explained how to ask Tom without being weird, it only looked people up and offered buttons, and the double opt-in logic was never stated.
+friendAhead: the final draft has a forwardable-blurb offer and an out, but turn 2 pitched Tom on Loop with metrics, which is the opposite of a clean connector ask, and no coaching was given.
+rightOutcome: the final short ask was right, but turn 2 produced the wrong draft plus extra versions before the student got it.
+shape: turn 2 is a long block of prose explaining internal rewrites and fixes.
+noOverwhelm: turn 2 showed three conflicting drafts, a character-limit warning and a question all at once.
+honest: the drafts said "Saved your edits" when the student had made none. Orbit only owned the mistake in turn 3.
+    worst: In turn 2 it rewrote a plain intro request into a Loop pitch to Tom without being asked, left multiple conflicting drafts, and labeled them as the student's edits.
+    fix:   Draft exactly the intro ask the student requested, with a two-line forwardable blurb, and give a one-line explanation of why you ask the connector first. Never relabel Orbit's own rewrites as the student's edits.
+    shape: turn 3: 107 chars written before the tools ran ("Fair, that one's on me. I rewrote it into a pitch without yo…")
+
+  knowledge/know-coffee-chat  shape=1 shape(2)  score 3  goal yes
+    notes: answered: turns 2 and 3 skipped the question, which cost two extra taps before the questions arrived in turn 4. friendAhead: turn 1 says to prep for 30 minutes instead of asking for 15 and ending on time. The turn 4 list leaves out the 30-second intro, the thank-you within 24 hours, and not sending a resume. ownData: the Michigan detail has no visible source, since the person card showed 0 facts. rightOutcome: Build my full prep produced only a bare person card, not prep. shape: turn 4 is over 60 words with bold labels and bullets, and the buttons in turn 2 are duplicated. soundsHuman and matchedRegister: a casual, nervous student got a formatted list with bold headers, and the phrasing 'I listed five questions' reads like a bot.
+    worst: Turns 2 and 3 never answered 'what should I ask'. The lookup and the prep card were detours, so a nervous student had to ask twice.
+    fix:   Answer 'what do I ask' straight away in a couple of casual sentences, using Arjun's profile only if it has real facts, and add the 30-second intro and the thank-you within a day.
+    shape: turn 1: 320 chars written before the tools ran ("First calls are nerve-wracking for everyone, and Arjun will …")
+    shape: turn 4: a heading or a list in chat prose
+
+  knowledge/know-resume-first  friend=1 shape(2)  score 4  goal yes
+    notes: friendAhead: turn 1 says attaching a resume to a recruiter right away is 'normal and expected', which conflicts with the reference rule of no resume in the first message. The alum advice is right. The 'banks especially' claim is unsupported.
+ownData: the Michigan/Ross example line may come from the profile, but nothing in the transcript shows it, so it is unclear how much stored data was used.
+shape: both replies run to about 60 to 65 words, slightly over the limit.
+    worst: Told Noah that attaching a resume to a recruiter's first email is expected. This undercuts the rule of holding the resume until asked or until after the call, and it may push him to attach it everywhere anyway.
+    fix:   Keep the rule consistent: no resume in the first message to anyone, offer it if they ask or after the call. Note that a formal application is a different case, and trim each reply to about 50 words.
+    shape: turn 1: 304 chars written before the tools ran ("For an alum, usually nah. A first note asking for a coffee c…")
+    shape: turn 2: 308 chars written before the tools ran ("Yeah, that's the move. Put your LinkedIn in your signature s…")
+
+  knowledge/know-exploding-offer  outcome=1 honest=1  score 2  goal partly
+    notes: answered: turn 1 gave direction, but turns 2 and 3 never delivered the draft the student asked for. friendAhead: turn 1 was correct but generic; it did not say to name a specific decision date or to thank and sound excited, and it put the Ramp ask ahead of the Intuit extension. ownData: it used the audit background, but it is unclear whether the Oct 11 date came from stored data. rightOutcome: the draft was requested twice and never produced. honest: turns 2 and 3 were silent, so the student got no acknowledgment or explanation of the failure. It also said 'Saved to memory' without being asked, a minor unrequested action.
+    worst: Orbit went silent twice when the student asked for the Ramp draft, so the main need went unmet and the student was left hanging.
+    fix:   Always return the requested draft, or say plainly that it failed and retry, and in the first reply recommend naming a specific decision date when asking Intuit for the extension.
+
+  knowledge/know-thank-you  shape(1)  score 4  goal yes
+    notes: rightOutcome: turn 3 left the draft still flagged 'needs resume' after the line was cut, so the student is left unsure the fix worked.
+shape: turn 2 restates the draft in prose (about 65 words) when the card already shows it.
+honest: turn 3 says the flag is 'probably left over', a guess about its own tool rather than a clear statement.
+soundsHuman (boolean): turn 3 uses the 'let me know' tell.
+    worst: After cutting the resume line, the draft still showed the resume flag and Orbi could only guess why.
+    fix:   Clear the stale flag when the line is removed, and keep the turn 3 reply to one sure line like 'Done, the resume line is gone.'
+    shape: turn 1: 203 chars written before the tools ran ("Yeah, send one. Even after a 10 minute call, a two-line than…")
+
+  knowledge/know-volume  own=1 shape(1)  score 4  goal yes
+    notes: friendAhead: the 5 to 10 a week range is reasonable, but the reply never says that finance does run higher (10 to 20 a day in the recruiting window) and never ties quality to one line true of that person. ownData: it did not quote the student's weekly target or daily send cap from Settings, so the number is generic, and it assumed bankers without any stated basis. rightOutcome: the buttons are good, but the answer should have been anchored to the student's actual stored target.
+    worst: Gave a generic number instead of quoting Noah's own weekly target and send caps from Settings, and assumed finance without evidence.
+    fix:   Quote Noah's saved weekly target and daily cap, note that finance runs higher during the networking window, and add that each message needs one line only true of that person.
+    shape: turn 1: 218 chars written before the tools ran ("50 a day is spam territory, and bankers can tell a mass emai…")
+
+  knowledge/know-channels  outcome=1 shape(1)  score 3  goal partly
+    notes: answered: turn 1 answers the weird-or-not question, but turn 2 never says which channel to use.
+friendAhead: turn 1 is correct (pick one, wait, then try the other). It skips email-first for alumni or findable addresses, and never says not to send the same message on both.
+ownData: it used the Lena context (talked four hours ago, thank-you drafted) but never used the stored facts to pick a channel.
+rightOutcome: turn 2 only ran a lookup and showed a person card, with no channel recommendation.
+shape: the button row is duplicated in turn 1.
+honest: the 'Send it' button implies Orbi can send the message. It never says the student has to copy and send on LinkedIn themselves.
+    worst: When asked 'which channel for lena?', it only pulled up her card and offered 'Send it' without ever naming a channel.
+    fix:   Answer the channel question directly from the data (for example, email if her address is on record, otherwise LinkedIn), and say the student sends it themselves rather than offering a 'Send it' button.
+    shape: turn 1: 251 chars written before the tools ran ("A little, yeah. Both at once can feel like a lot. Pick one, …")
+
+  knowledge/know-intl-sponsorship  shape=1 shape(2)  score 3.5  goal yes
+    notes: friendAhead: correct on waiting, but never says most large banks do sponsor analysts or that summer roles run on CPT, and it makes the sponsorship check sound more urgent than it is. It also says to ask on a call without naming the analyst-in-same-situation or late-stage recruiter route.
+ownData: no tool use or student data in either turn; the Cornell mention is the only personalization and the buttons only hint at a lookup.
+shape: both replies run about 100 to 120 words in multi-sentence paragraphs where a casual question called for roughly 50.
+noOverwhelm: turn 2 stacks four ways to check (careers page, recruiter email, Cornell list, H-1B data) instead of one or two.
+matchedRegister: the student wrote casually ("tho", "ok") and got dense paragraphs back.
+    worst: Replies were too long and stacked too many options for a casual, quick question, and skipped the reassuring fact that most large banks do sponsor.
+    fix:   Cut each reply to two or three casual sentences: say most big banks sponsor, that it comes up later on a call, and offer a single next step such as checking the student's 3 targets.
+    shape: turn 1: 648 chars written before the tools ran ("I'd wait. A first message is for getting the chat, and leadi…")
+    shape: turn 2: 637 chars written before the tools ran ("Anytime. Start with each bank's careers page, since many say…")
+
