@@ -290,6 +290,11 @@ export interface UserSettings {
   autopilotMode?: 'off' | 'assist' | 'autopilot';
   /** ISO: nothing Orbit would send on its own goes out before then (plan 29 §B2.7); synced as autopilot_paused_until */
   autopilotPausedUntil?: string;
+  /**
+   * The circuit breaker's pauses, one per goal (plan 29 §B2.7): an unsubscribe, two declines in a day, a bounce or a
+   * send error paused that goal's auto sends, with the reason in a sentence; synced as autopilot_paused_goals
+   */
+  autopilotPausedGoals?: Record<string, { reason: string; text: string; until: string | null; at: string }>;
   /** the local Sunday (YYYY-MM-DD) whose weekly review the student last opened or closed (plan 23 §4.8) */
   weekReviewSeenOn?: string;
   /** read the tone of replies for closeness (plan 27); on unless turned off */

@@ -1,4 +1,4 @@
-import type { CalendarEvent, CoffeeChat, OutboundMessage, Person } from '@orbit/core';
+import type { CalendarEvent, CoffeeChat, OutboundMessage, Person, Suggestion } from '@orbit/core';
 import { CHANNEL_LABELS, MESSAGE_KIND_LABELS, warmUpProgress } from '@orbit/core';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { RefreshCw } from 'lucide-react';
@@ -6,6 +6,9 @@ import { useEffect, useRef, useState } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { RepliesPanel } from '../components/account/RepliesPanel';
 import { runApproval } from '../components/approve';
+import { NeedsYou } from '../components/autopilot/NeedsYou';
+import { TomorrowBatch } from '../components/autopilot/TomorrowBatch';
+import { useAutopilotStatus } from '../components/autopilot/useAutopilotStatus';
 import { PersonCompanyLogo } from '../components/CompanyLogo';
 import { DraftEditor, OutboxStatus } from '../components/DraftEditor';
 import { DraftsSplit } from '../components/DraftsSplit';
@@ -84,6 +87,8 @@ export function InboxPage() {
   const split = width >= 1100;
   const sideBySide = split ? width >= 1300 : width >= 896;
   const [params] = useSearchParams();
+  // plan 29 §B1: tomorrow's batch, the replies that need the student, and what went out on its own
+  const autopilot = useAutopilotStatus(user);
   // the week's review, from Sunday evening until the next one (and the notification's link opens it)
   const lastReview = useLiveQuery(
     async () =>
@@ -177,8 +182,10 @@ export function InboxPage() {
       (s.status === 'snoozed' && !!s.snoozedUntil && new Date(s.snoozedUntil) <= now),
   );
   const { cards, more } = todayCards(live, latest, now);
-  const otherCards = cards.filter((s) => !isMessageSuggestion(s.kind));
-  const otherMore = more.filter((s) => !isMessageSuggestion(s.kind));
+  // Needs you and the breaker have their own section above (plan 29 §B1)
+  const own = (s: Suggestion) => s.kind === 'needs_you' || s.kind === 'breaker';
+  const otherCards = cards.filter((s) => !isMessageSuggestion(s.kind) && !own(s));
+  const otherMore = more.filter((s) => !isMessageSuggestion(s.kind) && !own(s));
   // someone added by hand and not written to yet: the next step is to write to them
   const toWrite = notYetWritten(people, chats, outbound, suggestions, now).slice(0, 3);
   const undrafted = pending
@@ -366,6 +373,8 @@ export function InboxPage() {
             ].filter((t) => t.value === 'pending' || t.value === shown || t.count !== 0)}
           />
           {shown === 'replies' && <RepliesPanel />}
+          {shown === 'pending' && user && <NeedsYou user={user} />}
+          {shown === 'pending' && <TomorrowBatch view={autopilot} />}
           {shown === 'pending' && handedOff.length > 0 && (
             <div className="space-y-2 mb-5" data-testid="drafts-handed-off">
               {handedOff.map((o) => (
@@ -549,7 +558,7 @@ export function InboxPage() {
         </div>
         <div className="space-y-4 min-w-0">
           <ComingUp events={events} warming={warming} byId={byId} now={now} />
-          <SentForYou />
+          <SentForYou view={autopilot} />
           {quiet.length > 0 && user && (
             <Card data-testid="drafts-quiet">
               <div className="font-medium">Waiting on a reply</div>

@@ -17,6 +17,13 @@
  */
 import type {
   AutonomyRequest,
+  AutopilotHoldRequest,
+  AutopilotHoldResponse,
+  AutopilotModeRequest,
+  AutopilotModeResponse,
+  AutopilotPauseRequest,
+  AutopilotPauseResponse,
+  AutopilotStatus,
   BookRequest,
   BookResponse,
   DraftApproveRequest,
@@ -68,6 +75,8 @@ import type {
   SourceSearchResponse,
 } from '@orbit/core';
 import { readLocalRow, writeLocalRow } from './prefs';
+  ReplyAnswerRequest,
+  ReplyAnswerResponse,
 
 // ---- the account the server knows ----------------------------------------------------------------------------------
 
@@ -218,6 +227,11 @@ export interface ApiRoutes {
   '/pairs/unclose': [PairCorrectionRequest, PairCorrectionResponse];
 }
 export type ClientRoute = keyof ApiRoutes;
+  '/replies/answer': [ReplyAnswerRequest, ReplyAnswerResponse];
+  '/autopilot/mode': [AutopilotModeRequest, AutopilotModeResponse];
+  '/autopilot/status': [Record<string, never>, AutopilotStatus];
+  '/autopilot/hold': [AutopilotHoldRequest, AutopilotHoldResponse];
+  '/autopilot/pause': [AutopilotPauseRequest, AutopilotPauseResponse];
 
 // ---- results ------------------------------------------------------------------------------------------------------
 

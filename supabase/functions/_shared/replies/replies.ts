@@ -48,6 +48,7 @@ export async function listReplies(db: Db, userId: string, now: Date): Promise<Re
     answer: string | null;
     draft_id: string | null;
     outcome: string | null;
+    offered: { draftId: string; slots: unknown } | null;
   }>`
     select m.id, t.external_id as thread_external_id, m.from_person_id, p.display_name, p.org_raw, o.name as org_name,
            m.from_addr, m.provider, m.reply_class, m.reply_confidence, m.sent_at, m.snippet, m.body_text, m.extraction,
@@ -59,7 +60,12 @@ export async function listReplies(db: Db, userId: string, now: Date): Promise<Re
            (select d.outcome from orbit.drafts d
              where d.user_id = m.user_id and d.status = 'sent' and d.replied_at = m.sent_at
                and d.person_id = m.from_person_id
-             order by d.sent_at desc limit 1) as outcome
+             order by d.sent_at desc limit 1) as outcome,
+           (select jsonb_build_object('draftId', d.id, 'slots', coalesce(d.offered_slots, d.ask->'slots'))
+              from orbit.drafts d
+             where d.user_id = m.user_id and d.status = 'sent' and d.person_id = m.from_person_id
+               and d.sent_at <= m.sent_at and (d.offered_slots is not null or d.ask->'slots' is not null)
+             order by d.sent_at desc limit 1) as offered
       from orbit.messages m
       join orbit.threads t on t.id = m.thread_id
       left join orbit.people p on p.id = m.from_person_id
@@ -83,6 +89,13 @@ export async function listReplies(db: Db, userId: string, now: Date): Promise<Re
     question: questionOf(r.extraction, r.body_text ?? r.snippet ?? ''),
     answer: r.answer,
     outcome: (r.outcome as ReplyItem['outcome']) ?? null,
+    offered:
+      r.offered && Array.isArray(r.offered.slots) && r.offered.slots.length
+        ? {
+            draftId: r.offered.draftId,
+            slots: r.offered.slots.filter((x): x is string => typeof x === 'string'),
+          }
+        : null,
   }));
 }
 

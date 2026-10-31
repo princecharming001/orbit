@@ -27,6 +27,7 @@ import { answerTrustOffer, LADDER_WORDS, type LadderKind } from '../engine/trust
 import { useSession } from '../state/session';
 import { Avatar, Button, Chip, cx, useToast, useWorking } from '../ui';
 import { runApproval } from './approve';
+import { BreakerCard, NeedsYouCard } from './autopilot/NeedsYou';
 import { CompanyLogo, PersonCompanyLogo } from './CompanyLogo';
 import { DraftEditor, OutboxStatus } from './DraftEditor';
 import { MergePair } from './MergePair';
@@ -289,6 +290,9 @@ export function SuggestionCard({
   // soft placeholders where the face, the name and the draft will be, never a card with them simply missing
   const loadingPerson = !!s.personId && personRow === undefined;
   const loadingDraft = !!s.outboundMessageId && draftRow === undefined;
+  // plan 29 §B1: a reply that needs the student, and the breaker's card, have their own shapes
+  if (s.kind === 'needs_you') return <NeedsYouCard s={s} />;
+  if (s.kind === 'breaker') return <BreakerCard s={s} />;
   return (
     <div
       className={cx(

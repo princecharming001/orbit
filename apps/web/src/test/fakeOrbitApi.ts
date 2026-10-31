@@ -283,7 +283,9 @@ export function createFakeOrbitApi(
     if (friendShares) {
       const f = state.friends.find((x) => x.userId === decodeURIComponent(friendShares[1]!));
       if (!f || f.theirMode === 'none') return error(403, 'forbidden', 'not a friend who shares with you');
-      const company = new URL(req.url).searchParams.get('company')?.toLowerCase() ?? '';
+      const company = (
+        new URL(req.url).searchParams.get('company') ?? (typeof body.company === 'string' ? body.company : '')
+      ).toLowerCase();
       const all = visibleShares(f).filter(
         (s) => !company || s.company?.toLowerCase() === company || s.companyDomain?.toLowerCase() === company,
       );
@@ -512,15 +514,38 @@ export function createFakeOrbitApi(
         return json(200, { pausedUntil: until, goalId: null, cancelled });
       }
       case '/replies/answer': {
-        const d = state.drafts.get(String(body.draftId));
-        if (!d) return error(404, 'not_found', 'no such draft');
         const answer = typeof body.answer === 'string' ? body.answer.trim() : '';
         if (!answer) return error(400, 'bad_request', 'an answer is needed');
-        d.body = d.body.replace(/\[ASK USER:[^\]]*\]/g, answer);
-        d.needsInput = [];
-        d.updatedAt = iso(clock);
-        state.autopilot.needsYou = state.autopilot.needsYou.filter((x) => x.draftId !== d.id);
-        return json(200, { draft: d });
+        // by draft, or by the reply's message (the Needs you card knows the message, plan 29 §B2.3)
+        const reply = body.messageId ? state.replies.find((r) => r.messageId === body.messageId) : undefined;
+        const d = body.draftId
+          ? state.drafts.get(String(body.draftId))
+          : reply?.draftId
+            ? state.drafts.get(reply.draftId)
+            : undefined;
+        if (!d && !reply) return error(404, 'not_found', 'no such draft');
+        const draft =
+          d ??
+          draftRow(
+            uuid(),
+            reply!.personId ?? '',
+            'gmail',
+            `Hi ${reply!.personName.split(' ')[0]},\n\nThanks for asking. [ASK USER: ${reply!.question ?? 'their question'}]\n\nBest,\n${state.user.firstName ?? ''}`,
+            clock,
+          );
+        draft.kind = 'reply';
+        draft.body = draft.body.replace(/\[ASK USER:[^\]]*\]/g, answer);
+        draft.needsInput = [];
+        draft.updatedAt = iso(clock);
+        state.drafts.set(draft.id, draft);
+        if (reply) {
+          reply.answer = answer;
+          reply.draftId = draft.id;
+        }
+        state.autopilot.needsYou = state.autopilot.needsYou.filter(
+          (x) => x.draftId !== draft.id && x.messageId !== body.messageId && x.draftId !== body.draftId,
+        );
+        return json(200, { draft });
       }
       case '/voice':
         return json(200, {
@@ -851,8 +876,17 @@ export function createFakeOrbitApi(
             },
           ],
         });
-      case '/calendar/book':
-        return json(200, { eventId: `evt_${uuid()}` });
+      case '/calendar/book': {
+        // the item that offered the slot, or the reply answering it, is booked from here on (plan 29 §B2.3)
+        const eventId = `evt_${uuid()}`;
+        for (const r of state.replies)
+          if (r.offered?.draftId === body.draftId || r.draftId === body.draftId) {
+            r.outcome = 'booked';
+            for (const i of state.autopilot.sentToday)
+              if (i.personId === r.personId || i.personName === r.personName) i.outcome = 'booked';
+          }
+        return json(200, { eventId });
+      }
       // memory
       case '/memory/search': {
         const q = String(body.query ?? '').toLowerCase();
@@ -1351,12 +1385,14 @@ const REPLY_SEEDS: {
     minutesAgo: 70,
   },
   // the time names an offered slot (Thu Oct 8, 11:00 to 11:30 ET), so a confirmed slot can book itself (B2.3)
+  company: string;
   {
     cls: 'scheduling',
     name: 'Lena Novak',
     snippet: 'Thu Oct 8 at 11 works for me. Send a calendar invite and I will be there.',
     minutesAgo: 95,
   },
+    company: 'Stripe',
   {
     cls: 'question',
     name: 'Daniel Okafor',
@@ -1365,18 +1401,21 @@ const REPLY_SEEDS: {
   },
   {
     cls: 'objection',
+    company: 'Ramp',
     name: 'Victor Castro',
     snippet:
       "I'm not sure a referral makes sense before you've applied. Most people go through the portal first.",
     minutesAgo: 200,
   },
   {
+    company: 'Goldman Sachs',
     cls: 'referral',
     name: 'Sofia Bennett',
     snippet: 'Not really my area, but my colleague Raj runs that team. Want me to connect you?',
     minutesAgo: 260,
   },
   {
+    company: 'Datadog',
     cls: 'not_now',
     name: 'Ethan Park',
     snippet: 'Swamped until after the launch. Ping me in November and I will make time.',
@@ -1384,24 +1423,34 @@ const REPLY_SEEDS: {
   },
   {
     cls: 'out_of_office',
+    company: 'Figma',
     name: 'Caleb Weber',
     snippet: 'I am out of the office until October 12 with limited access to email.',
     minutesAgo: 400,
   },
   {
     cls: 'decline',
+    company: 'Anthropic',
     name: 'Jonah Reyes',
     snippet: "I'll pass on this one. Best of luck with the search.",
     minutesAgo: 470,
   },
-  { cls: 'unsubscribe', name: 'Chloe Dubois', snippet: 'Please stop emailing me.', minutesAgo: 540 },
   {
+    cls: 'unsubscribe',
+    name: 'Chloe Dubois',
+    company: 'Ramp',
+    snippet: 'Please stop emailing me.',
+    minutesAgo: 540,
+  },
+  {
+    company: 'Notion',
     cls: 'thanks',
     name: 'Priya Shah',
     snippet: 'Thanks for the note, appreciate you reaching out. Good luck with the rest of the process.',
     minutesAgo: 610,
   },
 ];
+    company: 'Linear',
 
 /**
  * The autopilot bench (plan 29 C2): an inbound reply of every class, and a day on autopilot behind /autopilot/status:
@@ -1409,6 +1458,7 @@ const REPLY_SEEDS: {
  * that needs the student (Daniel's question, with its draft), the rungs and the caps, and three voice notes.
  */
 export function withReplies(
+    company: 'Figma',
   api: FakeOrbitApi,
   user: { id: string; firstName?: string },
   people: { id: string; displayName: string; currentOrganizationRaw?: string }[] = [],
@@ -1434,13 +1484,44 @@ export function withReplies(
   const question = state.replies.find((r) => r.replyClass === 'question')!;
   const qDraft = draftRow(
     'draft_daniel_question',
+    company: own.get(r.name)?.currentOrganizationRaw ?? r.company,
     question.personId ?? '',
     'gmail',
     `Hi Daniel,\n\nThanks for getting back to me. [ASK USER: Have you applied through the portal yet?]\n\nBest,\n${first}`,
     now,
   );
   qDraft.kind = 'reply';
+    ...(r.cls === 'question' ? { question: 'Have you applied through the portal yet?' } : {}),
+    // Lena answers the slots reply Orbit sent (plan 29 §B2.3): the slot she names is one of them
+    ...(r.cls === 'scheduling'
+      ? {
+          offered: {
+            draftId: 'draft_lena_slots',
+            slots: ['2026-10-07T14:00:00Z', '2026-10-08T15:00:00Z', '2026-10-13T18:00:00Z'],
+          },
+        }
+      : {}),
   qDraft.needsInput = ['Have you applied through the portal yet?'];
+  // the goal the breaker pauses, when the student has none of their own yet
+  if (!state.goals.length)
+    state.goals.push({
+      id: 'goal_internships',
+      userId: user.id,
+      kind: 'recruiting',
+      title: 'Summer 2027 internships',
+      targets: {
+        organizations: ['Ramp', 'Figma', 'Linear', 'Notion'],
+        roles: ['PM intern'],
+        geographies: [],
+        people: [],
+      },
+      criteria: {},
+      priority: 2,
+      status: 'active',
+      source: 'user',
+      createdAt: '2026-09-20T12:00:00.000Z',
+      updatedAt: '2026-09-20T12:00:00.000Z',
+    });
   state.drafts.set(qDraft.id, qDraft);
   question.draftId = qDraft.id;
   // the day on autopilot
@@ -1584,6 +1665,7 @@ export function withReplies(
     caps: {
       autoPerDay: 5,
       firstTouchPerWeek: 12,
+        messageId: question.messageId,
       firstTouchPerDay: 3,
       usedToday: 3,
       firstTouchesThisWeek: 5,

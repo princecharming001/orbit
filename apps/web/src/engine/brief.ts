@@ -1884,6 +1884,8 @@ const BRIEF_LABELS: Record<SuggestionKind, (n: number) => string> = {
   confirm_note_match: (n) => `${n} note${n > 1 ? 's' : ''} to match`,
   confirm_intro: (n) => `${n} intro${n > 1 ? 's' : ''} to confirm`,
   trust_offer: (n) => `${n} offer${n > 1 ? 's' : ''} to send on its own`,
+  needs_you: (n) => `${n} repl${n > 1 ? 'ies' : 'y'} that need${n > 1 ? '' : 's'} you`,
+  breaker: (n) => `${n} pause${n > 1 ? 's' : ''} to read`,
 };
 
 /** The one-line summary at the top of Today. It always names a real next step, never "all good" on an empty network. */
@@ -1953,7 +1955,13 @@ export async function generateBrief(user: User, kind: Brief['kind'], now = new D
   const counts = new Map<string, number>();
   for (const s of sugg) counts.set(s.kind, (counts.get(s.kind) ?? 0) + 1);
   const peopleCount = [...inp.people.values()].filter((p) => p.isHuman && !p.hiddenAt).length;
-  const summaryText = briefSummaryText(counts, upcoming.length, peopleCount);
+  // plan 29 §B1: what autopilot did, in one line after the cards
+  const autopilot = await import('./autopilotMode')
+    .then((m) => m.autopilotBriefLine(user.id, now))
+    .catch(() => undefined);
+  const summaryText = autopilot
+    ? `${briefSummaryText(counts, upcoming.length, peopleCount)} ${autopilot}.`
+    : briefSummaryText(counts, upcoming.length, peopleCount);
   const brief: Brief = {
     id: briefId,
     userId: user.id,

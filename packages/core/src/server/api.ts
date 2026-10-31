@@ -307,6 +307,8 @@ export interface ReplyItem {
   /** a question reply (plan 29 §B2.3): what they asked, and the student's answer once given */
   question?: string | null;
   answer?: string | null;
+  /** the slots the student offered this person (plan 29 §B2.3), on the sent draft that carried them */
+  offered?: { draftId: string; slots: string[] } | null;
   /** what the funnel did with it (plan 29 §B2.5): booked, replied, declined */
   outcome?: 'replied' | 'booked' | 'declined' | 'silent' | null;
 }
