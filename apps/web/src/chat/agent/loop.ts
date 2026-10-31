@@ -346,6 +346,10 @@ export async function runTurn(
   // before them the words after are neither shown nor stored
   let closedAfter: string | undefined;
   let muted = '';
+  // a lookup or a web search ran this turn, and the words said since the last one: work with none after it has no
+  // answer (the model may have left it in a thinking note)
+  let worked = false;
+  let spokenAfterWork = '';
 
   const tools = buildRunnerTools(registry, {
     signal,
@@ -356,6 +360,10 @@ export async function runTurn(
         summary: `Cancelled: ${reason}.`,
       });
       let env: ResultEnvelope;
+      if (!CLOSING_TOOLS.has(spec.name)) {
+        worked = true;
+        spokenAfterWork = '';
+      }
       if (signal?.aborted) env = cancelled('user stopped');
       else {
         try {
@@ -459,6 +467,7 @@ export async function runTurn(
             return;
           }
           spoken += delta;
+          spokenAfterWork += delta;
           onEvent({ type: 'text', delta });
         });
         stream.on('streamEvent', (ev, snapshot) => {
@@ -474,6 +483,8 @@ export async function runTurn(
           if (ev.type === 'content_block_stop') {
             const block = snapshot.content[ev.index];
             if (block?.type === 'server_tool_use' && block.name === 'web_search') {
+              worked = true;
+              spokenAfterWork = '';
               const q = (block.input as { query?: unknown } | undefined)?.query;
               onEvent({ type: 'web_search', id: block.id, query: typeof q === 'string' ? q : undefined });
             }
@@ -523,6 +534,7 @@ export async function runTurn(
             // the words before the pills were only a clause of intent ("One sec, checking."): what came after
             // them is the answer itself, not a doubled reply, so it is shown and kept
             spoken += muted;
+            spokenAfterWork += muted;
             onEvent({ type: 'text', delta: muted });
             muted = '';
           } else {
@@ -572,7 +584,10 @@ export async function runTurn(
     }
   }
   await flushResults();
-  if (!spoken.trim() && lastStop === 'end_turn' && !signal?.aborted) {
+  // no words at all, or only a clause of intent ("Let me check the news.") before the work and the pills: the
+  // answer never reached the student (the model may have left it in a thinking note), so it is asked for
+  const onlyClause = worked && !spokenAfterWork.trim();
+  if ((!spoken.trim() || onlyClause) && lastStop === 'end_turn' && !signal?.aborted) {
     const said = await speakUp(
       deps,
       runner.params,
@@ -591,7 +606,7 @@ export async function runTurn(
 const CLOSING_TOOLS = new Set(['offer_choices', 'show_setup']);
 
 const SPEAK_UP =
-  "[Orbit] Your reply had no words, only cards or buttons. Answer the student's last message now in one to three plain, warm sentences from what the tools returned. Do not call any tools, and do not repeat what a card already lists.";
+  "[Orbit] Your reply had no answer in words, only a lookup, cards or buttons. Answer the student's last message now in one to three plain, warm sentences from what the tools and searches returned, naming a source in words when it came from the web. Do not call any tools, and do not repeat what a card already lists.";
 
 /**
  * A turn must never end on cards alone: the prompt asks for words, and this is the backstop when the model still

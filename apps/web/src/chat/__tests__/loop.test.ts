@@ -159,11 +159,11 @@ describe('never a reply without words', () => {
     const reqs = messageRequests(fake);
     const last = reqs.at(-1)!.body;
     expect(last.tool_choice).toEqual({ type: 'none' });
-    expect(JSON.stringify(last.messages.at(-1))).toMatch(/Your reply had no words/);
+    expect(JSON.stringify(last.messages.at(-1))).toMatch(/Your reply had no answer in words/);
     // the nudge and the answer are stored, so the next turn replays a valid history
     const rows = await store.history(conversation.id);
     expect(rows.at(-1)?.role).toBe('assistant');
-    expect(JSON.stringify(rows.at(-2))).toMatch(/Your reply had no words/);
+    expect(JSON.stringify(rows.at(-2))).toMatch(/Your reply had no answer in words/);
   });
 
   it('does not ask again when the turn already said something', async () => {
@@ -750,6 +750,22 @@ describe('a turn ends on the pills', () => {
     );
     const rows = await store.history(conversation.id);
     expect(JSON.stringify(rows)).toMatch(/final round/);
+  });
+
+  it('asks for the answer when the turn only said a clause before its lookups and pills (plan 28)', async () => {
+    const events = await turn(
+      'who replied',
+      [
+        { text: 'Let me check.', toolCalls: [{ id: 'toolu_r', name: 'list_pipeline', input: {} }] },
+        { toolCalls: [pills] },
+        { stopReason: 'end_turn' },
+        { text: 'Two replied, Lena and Omar.' },
+      ],
+      withPills(),
+    );
+    expect(text(events)).toMatch(/Two replied, Lena and Omar\./);
+    expect(messageRequests(fake)).toHaveLength(4);
+    expect(JSON.stringify(messageRequests(fake).at(-1)!.body.messages.at(-1))).toMatch(/no answer in words/);
   });
 
   it('keeps the line when nothing was said before the pills', async () => {

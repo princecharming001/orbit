@@ -148,8 +148,10 @@ export function turnLayout(blocks: Block[]): TurnPiece[] {
   const lookups = ordered.filter(({ b }) => isLookup(b)).length;
   if (lookups < WORK_FOLD_AT) return ordered.map(({ b, i }) => ({ type: 'block', b, i }));
   let lastTool = -1;
+  // the answer is what comes after the last lookup: a card the student acts on (pills, a draft, a setup) after the
+  // words is not work, so the words before it stay out of the fold
   blocks.forEach((b, i) => {
-    if (b.type === 'tool' || b.type === 'web') lastTool = i;
+    if ((b.type === 'tool' && isLookup(b)) || b.type === 'web') lastTool = i;
   });
   const isWork = ({ b, i }: { b: Block; i: number }) =>
     isLookup(b) || b.type === 'progress' || (b.type === 'text' && i < lastTool);

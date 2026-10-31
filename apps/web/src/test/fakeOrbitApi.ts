@@ -595,7 +595,8 @@ export function createFakeOrbitApi(
   };
 
   const fakeFetch: typeof fetch = async (input, init) => {
-    const req = new Request(input as RequestInfo, init);
+    // under jsdom the client's AbortSignal is jsdom's, which undici's Request refuses: the fake never aborts anyway
+    const req = new Request(input as RequestInfo, init ? { ...init, signal: undefined } : init);
     const url = new URL(req.url);
     if (!url.href.startsWith(base)) throw new TypeError('fake orbit-api: unexpected host');
     const route = url.pathname.replace(new URL(base).pathname, '');

@@ -18,7 +18,7 @@ import {
   setOrbitApiBaseForTests,
   setOrbitApiFetchForTests,
 } from '../../../integrations/orbitApi';
-import { clearPrefs, writePrefs } from '../../../integrations/prefs';
+import { clearPrefs, readPrefs, writePrefs } from '../../../integrations/prefs';
 import { setSharedClaudeUrlForTests } from '../../../integrations/shared-claude';
 import { createFakeOrbitApi, type FakeOrbitApi, fakeAccountUser } from '../../../test/fakeOrbitApi';
 import { z } from '../../../zod';
@@ -263,7 +263,7 @@ async function orbitTurn(engine: ChatEngine, conversationId: string, text: strin
     betweenTools: Math.max(0, beforeTools.length - 1),
     pills,
     pending,
-    error: err ? `${err.kind}: ${err.message}` : undefined,
+    error: err ? `${err.kind}: ${err.message}${rawLlmError()}` : undefined,
   };
 }
 
@@ -467,7 +467,8 @@ function screenFor(ex: Exchange): string {
         : `[searched the web for "${w.query ?? ''}": ${w.sources} source${w.sources === 1 ? '' : 's'}]`,
     )
     .join('\n');
-  return [searches, ex.text || '(no words)', cards].filter(Boolean).join('\n');
+  const error = ex.error ? `[Orbit showed an error: ${ex.error}]` : '';
+  return [searches, ex.text || '(no words)', cards, error].filter(Boolean).join('\n');
 }
 
 /**
@@ -715,12 +716,20 @@ const JUDGE_SYSTEM = [
   'Be fair: judge against what a great human networking coach inside an app would do.',
 ].join(' ');
 
-export async function judge(t: Transcript, knownName?: string, reference?: string): Promise<VerdictT> {
+export async function judge(
+  t: Transcript,
+  knownName?: string,
+  reference?: string,
+  student?: string,
+): Promise<VerdictT> {
   const sim = simClient();
   const content = [
     `Persona: ${t.persona}`,
     `Goal: ${t.goal}`,
     knownName ? `The student's name (known to Orbit from their profile): ${knownName}` : '',
+    student
+      ? `What Orbit knows about the student from their own profile (a draft or an answer may use these facts; they are not invented): ${student}`
+      : '',
     reference ? `\nReference notes (what a correct answer knows):\n${reference}` : '',
     `\nTranscript:\n${t.screen}`,
     '\nScore this conversation.',
@@ -879,6 +888,31 @@ export async function judgeRun(screen: string, expected: string): Promise<RunVer
     worst: 'judge returned no parseable verdict (harness/API flake)',
     fix: 'review this transcript by hand',
   };
+}
+
+/** The student's own facts, for the judge: name, school, year, majors and what they wrote in setup. */
+export async function studentFacts(user: User): Promise<string> {
+  const goals = await db.goals.get(user.id);
+  const bits = [
+    user.fullName || user.firstName,
+    [user.school, user.graduationYear ? `class of ${user.graduationYear}` : ''].filter(Boolean).join(', '),
+    user.majors?.length ? `studying ${user.majors.join(', ')}` : '',
+    goals?.cycleLabel ? `cycle: ${goals.cycleLabel}` : '',
+    goals?.targetFunctions?.length ? `targets: ${goals.targetFunctions.join(', ')}` : '',
+    goals?.story ? `their story: ${goals.story}` : '',
+    goals?.aim ? `their aim: ${goals.aim}` : '',
+    goals?.proudOf ? `proud of: ${goals.proudOf}` : '',
+  ].filter(Boolean);
+  return bits.join('. ').replace(/[—–]/g, ',');
+}
+
+/** The last request failure the engine recorded, when it says more than the words the student saw. */
+function rawLlmError(): string {
+  const last = readPrefs().lastLlmError;
+  if (!last || Date.now() - new Date(last.at).getTime() > 120_000) return '';
+  const msg = last.message.replace(/sk-ant-[A-Za-z0-9_-]+/g, 'sk-ant-...');
+  simError('engine', new Error(`${last.reason}: ${msg}`));
+  return ` (${last.reason}: ${msg.slice(0, 300)})`;
 }
 
 /** A harness-side failure, said once per place with any key redacted, so an empty run is never silent. */

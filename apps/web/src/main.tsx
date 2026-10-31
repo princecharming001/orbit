@@ -27,10 +27,12 @@ async function liveKey(): Promise<void> {
   const g = window as unknown as { __ORBIT_ANTHROPIC_KEY__?: unknown };
   if (typeof g.__ORBIT_ANTHROPIC_KEY__ !== 'string' || !g.__ORBIT_ANTHROPIC_KEY__) return;
   const { writePrefs } = await import('./integrations/prefs');
+  // only the chat runs on the model: with drafts on, the demo's playback would write every message through Claude
   writePrefs({
     anthropicApiKey: g.__ORBIT_ANTHROPIC_KEY__,
     llmDailyRequestCap: 500,
     llmDailyTokenCap: 50_000_000,
+    llmFeatures: { drafts: false, chat: true },
   });
   delete g.__ORBIT_ANTHROPIC_KEY__;
 }

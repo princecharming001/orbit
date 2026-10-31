@@ -23,6 +23,7 @@ import {
   saveRun,
   seed,
   shapeCheck,
+  studentFacts,
   teardownSim,
   type VerdictT,
 } from './harness';
@@ -55,7 +56,7 @@ describe.skipIf(!SIM_ENABLED)(`sim: simulated students${only ? ` (${only})` : ''
       const { engine, user } = await seed(s.account, s.api);
       const t = await converse(engine, s.persona, s.goal, s.maxTurns ?? 5);
       const shape = shapeCheck(t, { wide: s.wide, expectWeb: s.expectWeb, noWeb: s.noWeb });
-      const v = await judge(t, user.firstName, s.reference);
+      const v = await judge(t, user.firstName, s.reference, await studentFacts(user));
       const tools = t.turns.flatMap((x) => x.tools.map((tt) => tt.name));
       const web = t.turns.flatMap((x) => x.web.map((w) => w.query ?? ''));
       saveRun(s.id, t, v, shape);
