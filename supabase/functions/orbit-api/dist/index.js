@@ -6099,7 +6099,12 @@ async function listReplies(db2, userId, now) {
            (select d.outcome from orbit.drafts d
              where d.user_id = m.user_id and d.status = 'sent' and d.replied_at = m.sent_at
                and d.person_id = m.from_person_id
-             order by d.sent_at desc limit 1) as outcome
+             order by d.sent_at desc limit 1) as outcome,
+           (select jsonb_build_object('draftId', d.id, 'slots', coalesce(d.offered_slots, d.ask->'slots'))
+              from orbit.drafts d
+             where d.user_id = m.user_id and d.status = 'sent' and d.person_id = m.from_person_id
+               and d.sent_at <= m.sent_at and (d.offered_slots is not null or d.ask->'slots' is not null)
+             order by d.sent_at desc limit 1) as offered
       from orbit.messages m
       join orbit.threads t on t.id = m.thread_id
       left join orbit.people p on p.id = m.from_person_id
@@ -6122,7 +6127,11 @@ async function listReplies(db2, userId, now) {
     draftId: r.draft_id,
     question: questionOf(r.extraction, r.body_text ?? r.snippet ?? ""),
     answer: r.answer,
-    outcome: r.outcome ?? null
+    outcome: r.outcome ?? null,
+    offered: r.offered && Array.isArray(r.offered.slots) && r.offered.slots.length ? {
+      draftId: r.offered.draftId,
+      slots: r.offered.slots.filter((x) => typeof x === "string")
+    } : null
   }));
 }
 function questionOf(extraction, text2) {
@@ -14949,6 +14958,8 @@ var PUSH = {
       relationshipType: f("relationship_type", "text", z5.string().max(40).nullable()),
       hiddenAt: f("hidden_at", "timestamptz", tsS.nullable()),
       doNotContact: f("do_not_contact", "boolean", z5.boolean()),
+      // plan 29 §A1: hidden from friends; the people_unshare trigger drops the projection row at once
+      private: f("private", "boolean", z5.boolean()),
       // a fresh LinkedIn photo (or a Gravatar) the browser fetched for someone whose link had expired or was missing:
       // only those hosts, so a person's picture is never an arbitrary address
       photoUrl: f(

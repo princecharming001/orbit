@@ -3942,6 +3942,7 @@ function personFromRow(r, extra = {}) {
     isHuman: true,
     hiddenAt: u(r.hidden_at),
     doNotContact: r.do_not_contact || void 0,
+    private: r.private || void 0,
     summary: u(r.summary),
     tags: r.tags,
     notes: u(r.notes),
