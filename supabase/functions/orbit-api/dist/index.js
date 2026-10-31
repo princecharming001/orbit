@@ -334,11 +334,10 @@ var PRICES = {
   "claude-sonnet-5-5": { input: 2, output: 10, cacheRead: 0.2, cacheWrite: 2.5 },
   "claude-haiku-5-5": { input: 0.1, output: 0.5, cacheRead: 0.01, cacheWrite: 0.125 }
 };
-var WEB_SEARCH_USD = 0.01;
 function costUsd(model, u2) {
   const p = PRICES[model];
   if (!p) return 0;
-  return (u2.input_tokens * p.input + u2.output_tokens * p.output + (u2.cache_read_input_tokens ?? 0) * p.cacheRead + (u2.cache_creation_input_tokens ?? 0) * p.cacheWrite) / 1e6 + (u2.server_tool_use?.web_search_requests ?? 0) * WEB_SEARCH_USD;
+  return (u2.input_tokens * p.input + u2.output_tokens * p.output + (u2.cache_read_input_tokens ?? 0) * p.cacheRead + (u2.cache_creation_input_tokens ?? 0) * p.cacheWrite) / 1e6;
 }
 
 // supabase/functions/_shared/claude.ts
