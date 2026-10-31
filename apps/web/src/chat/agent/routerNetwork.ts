@@ -264,8 +264,104 @@ export function routeNetwork(text: string, lower: string, h: NetworkHelpers): Ro
           'find routes',
         );
       if (target.candidates.length) return h.ambiguous(m[2]!, target.candidates);
+      // neither is one of the student's people: the introducer may be a friend on Orbit (plan 29), whose ask needs
+      // the note they can forward; a question back, never a guess
+      if (!introducer.person && !introducer.candidates.length)
+        return {
+          kind: 'text',
+          text: `${m[1]} is not in your people. If ${m[1]} is a friend on Orbit, write the two or three line note ${m[1]} can forward (who you are, why ${m[2]}, the ask, an out) and I will ask them; nothing goes to ${m[2]}.`,
+          href: '/friends',
+        };
       return h.nobody(m[2]!);
     }
+  }
+
+  // ---- friends on Orbit (plan 29 Part A) ----
+  if (
+    /^(?:who are my friends(?: on orbit)?|(?:show |list |see )?(?:me )?(?:my )?friends(?: on orbit)?|what (?:can|does) (.+?) see(?: of (?:mine|my network|my people))?|what (?:do|does) (?:my )?friends? see(?: of mine)?)\??$/i.test(
+      text,
+    )
+  )
+    return h.viaTool('list_friends', {}, undefined, 'list friends');
+  {
+    const m = text.match(/^who do i know at (.+?) through (?:a )?friends?\??$/i);
+    if (m) return h.viaTool('list_friends', { company: m[1]!.trim() }, undefined, 'list friends');
+  }
+  {
+    const m = text.match(
+      /^(?:invite|add|send) (?:my friend )?(\S+@\S+\.\S+)(?: to orbit| a friend request)?$|^(?:pool networks with|invite) (?:my friend )?(.+?)(?: to orbit)?$|^send (.+?) a friend request$/i,
+    );
+    if (m) {
+      const email = m[1];
+      if (email)
+        return h.viaTool(
+          'invite_friend',
+          { email: email.replace(/[.,]$/, '') },
+          undefined,
+          'invite a friend',
+        );
+      return {
+        kind: 'text',
+        text: `What is ${(m[2] ?? m[3] ?? 'their').trim()}'s email? The invite goes there, or you can send a link from Friends.`,
+        href: '/friends',
+      };
+    }
+  }
+  {
+    const stop = text.match(/^stop sharing (?:my people |my network )?with (.+)$/i);
+    const all = text.match(/^share everyone i know with (?:my )?friends$/i);
+    const only = text.match(/^share only my (.+?) people with (?:my )?friends$/i);
+    if (stop)
+      return h.viaTool(
+        'set_friend_sharing',
+        { mode: 'none', friendName: stop[1]!.trim() },
+        undefined,
+        'change sharing',
+      );
+    if (all) return h.viaTool('set_friend_sharing', { mode: 'all' }, undefined, 'change sharing');
+    if (only)
+      return h.viaTool(
+        'set_friend_sharing',
+        {
+          mode: 'companies',
+          companies: only[1]!
+            .split(/,| and /)
+            .map((c) => c.trim())
+            .filter(Boolean),
+        },
+        undefined,
+        'change sharing',
+      );
+  }
+  {
+    const m2 = text.match(/^ask (?:my friend )?(.+?) for an intro at (.+)$/i);
+    if (m2) return h.viaTool('list_friends', { company: m2[2]!.trim() }, undefined, 'list friends');
+  }
+  {
+    const m = text.match(/^what is (.+?) asking (?:me )?for\??$/i);
+    if (m)
+      return h.viaTool(
+        'list_friends',
+        {},
+        `${m[1]}'s ask is on the friends page, under the asks; forward it or say not this one there.`,
+        'list friends',
+      );
+    const fwd = text.match(/^forward (.+?)'s (?:note|ask)(?: to (.+))?$/i);
+    if (fwd)
+      return h.viaTool(
+        'respond_to_friend_ask',
+        { action: 'forward', askerName: fwd[1]!.trim() },
+        undefined,
+        'answer an ask',
+      );
+    const no = text.match(/^i(?:'d| would) rather not forward (.+?)'s (?:note|ask)$/i);
+    if (no)
+      return h.viaTool(
+        'respond_to_friend_ask',
+        { action: 'decline', askerName: no[1]!.trim() },
+        undefined,
+        'answer an ask',
+      );
   }
 
   // ---- replies and booking (account mode; without one, the older phrases keep their meaning) ----

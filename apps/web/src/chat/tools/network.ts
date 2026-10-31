@@ -28,6 +28,7 @@ import {
 } from '../../engine/linkedinSearch';
 import { forget, listMemories, MEMORY_KINDS, remember, searchMemories } from '../../engine/memory';
 import { AUTONOMY_TEXT, type AutonomyLevel, pauseOutreach, setAutonomy } from '../../engine/outreach';
+import { askFriendForIntro, friendRouteOf } from '../../engine/friends';
 import { askForIntro, cachedPath } from '../../engine/paths';
 import {
   blockingQuestions,
@@ -737,7 +738,7 @@ export const askForIntroTool = defineTool({
   name: 'ask_for_intro',
   kind: 'risky',
   description:
-    "Call this when the student wants to ask someone on a route for an introduction (pathId from find_routes, which lists each route's id). Orbit drafts the request to the first person on the route and a short note about the student they can forward unchanged. It only drafts: nothing is sent. Needs the student's approval and an Orbit account.",
+    "Call this when the student wants to ask someone on a route for an introduction (pathId from find_routes, which lists each route's id). Orbit drafts the request to the first person on the route and a short note about the student they can forward unchanged. A route through a friend on Orbit (viaFriend) is asked of the friend instead, with the student's saved intro note; without one, ask_friend_for_intro takes the note. It only drafts or asks: nothing is sent. Needs the student's approval and an Orbit account.",
   input: z.object({
     pathId: z.string().describe('The route to use (an id from find_routes).'),
     targetPersonId: z
@@ -752,6 +753,19 @@ export const askForIntroTool = defineTool({
     const c = cachedPath(input.pathId);
     const introducer = c?.path.names?.[c.path.firstHopId];
     const target = c ? c.path.names?.[c.targetPersonId ?? c.path.nodes.at(-1)!] : undefined;
+    // plan 29 §A5: a route through a friend on Orbit is asked of the friend, with the student's own note
+    const friend = c ? friendRouteOf(c.path) : undefined;
+    if (friend) {
+      const note = (await db.settings.get(ctx.user.id))?.introNote?.text;
+      return {
+        text: `Ask ${friend.friend.first}, your friend on Orbit, to introduce you to ${friend.target.name}, with your note for ${friend.friend.first} to forward. It goes to ${friend.friend.first}, never to ${friend.target.first}; nothing is sent until ${friend.friend.first} forwards it.`,
+        blockedReason:
+          blocked ??
+          (note
+            ? undefined
+            : `This route runs through your friend ${friend.friend.first}: use ask_friend_for_intro with the two or three line note ${friend.friend.first} can forward.`),
+      };
+    }
     return {
       text: `Draft a message asking ${introducer ?? 'the first person on that route'} to introduce you to ${target ?? 'them'}, with a short note they can forward. Nothing is sent; the drafts wait in Drafts.`,
       blockedReason: blocked,
@@ -759,6 +773,35 @@ export const askForIntroTool = defineTool({
   },
   async execute(input, ctx) {
     if (!accountReady(ctx)) return needsAccount('Asking for an introduction');
+    const cached = cachedPath(input.pathId);
+    const friend = cached ? friendRouteOf(cached.path) : undefined;
+    if (friend) {
+      const note = (await db.settings.get(ctx.user.id))?.introNote?.text;
+      if (!note)
+        throw new Error(
+          `That route runs through your friend ${friend.friend.first}: ask_friend_for_intro, with the note ${friend.friend.first} can forward, files the ask with them.`,
+        );
+      const a = await askFriendForIntro(
+        ctx.user,
+        friend.friend.userId,
+        friend.target.sharedPersonId ?? '',
+        note,
+      );
+      if (!a.ok) throw new Error(a.message);
+      return ok(
+        'text',
+        { ask: a.value },
+        {
+          askId: a.value.id,
+          friend: a.value.friendName,
+          target: a.value.targetName,
+          sentToTarget: false,
+          status: 'asked',
+        },
+        `Asked ${friend.friend.first} to introduce you to ${a.value.targetName}, with your note to forward. It waits on ${friend.friend.first}; nothing was sent to ${friend.target.first}.`,
+        '/friends',
+      );
+    }
     const r = await askForIntro(ctx.user, input.pathId, input.targetPersonId);
     if (!r.ok) throw new Error(r.message);
     return ok(

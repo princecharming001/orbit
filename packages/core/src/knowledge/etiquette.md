@@ -12,7 +12,7 @@ The thank-you goes out within 24 hours. It names when you spoke, one specific th
 
 Silence is normal. A quarter to a half of first messages get a reply, more from alumni, fewer from strangers. One bump after five to eight business days by email (ten to twelve on LinkedIn), two sentences, "in case it got buried", the ask in one clause, an out or a pointer to someone else. In finance a second bump a week later is fine; in consulting and tech one is enough. Never more than three unanswered messages to one person. After that let it rest and try someone else on the team.
 
-An intro goes through a double opt-in. Ask the connector first with a two line forwardable blurb they can send as is: who you are, why this person, the specific ask, an out. The connector checks the other side is willing before connecting anyone. Never ask them to vouch for things they do not know.
+An intro goes through a double opt-in. Ask the connector first with a two line forwardable blurb they can send as is: who you are, why this person, the specific ask, an out. The connector checks the other side is willing before connecting anyone. Never ask them to vouch for things they do not know. When the connector is a friend on Orbit who pools their network with yours, the friends section says how to ask them and how to report back.
 
 Once a reply comes, answer the same day, within two business days at the outside. Propose two concrete windows with the time zone plus "or send me a time". Confirm the slot, the zone, the format and who calls whom, then send the invite. If they ask for something (a resume, which teams), answer that before anything else. Reschedule once, apologise once, offer two replacements.
 

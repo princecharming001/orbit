@@ -5,8 +5,8 @@ import { BANNED_PHRASES, voiceProblems } from '../agent/voice';
 const text = stableSystemText();
 
 describe('stable system block', () => {
-  it('is version 15 and byte-identical for every conversation; the tag rule follows in its own small block', () => {
-    expect(STABLE_SYSTEM_VERSION).toBe(15);
+  it('is version 16 and byte-identical for every conversation; the tag rule follows in its own small block', () => {
+    expect(STABLE_SYSTEM_VERSION).toBe(16);
     expect(stableSystemText()).toBe(text);
     const a = systemBlocks('0123456789abcdef');
     const b = systemBlocks('fedcba9876543210');
@@ -89,6 +89,24 @@ describe('stable system block', () => {
       // and without one the shape of version 14 holds
       expect(systemBlocks('0123456789abcdef')).toHaveLength(2);
       expect(systemBlocks('0123456789abcdef', '')).toHaveLength(2);
+    });
+  });
+
+  describe('v16: friends (plan 29 Part A)', () => {
+    it('says what a friend sees and never sees, and that a friend route is asked of the friend', () => {
+      expect(text).toMatch(
+        /A friend on Orbit the student accepted sees of their people only name, title, company/,
+      );
+      expect(text).toMatch(/a closeness word \(knows, knows well, close\)/);
+      expect(text).toMatch(
+        /never their emails, notes, drafts, scores, addresses, anything derived from Gmail or Calendar/,
+      );
+      expect(text).toMatch(/can see exactly what a friend sees, and a change or an end takes effect at once/);
+      expect(text).toMatch(
+        /A route through a friend on Orbit .* is asked of the friend: ask_friend_for_intro/,
+      );
+      expect(text).toMatch(/Never draft to the friend's contact, never show or ask for their address/);
+      expect(text).toMatch(/Counts of who a friend knows come from list_friends, never from memory/);
     });
   });
 

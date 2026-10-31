@@ -1393,7 +1393,6 @@ const PLAN29: Scenario[] = [
     reference: FRIENDS_ROUTES,
     noWeb: true,
     minGoal: 'partly',
-    pending: 'plan29',
   },
   {
     id: 'friends-ask-ana-dan',
@@ -1407,7 +1406,6 @@ const PLAN29: Scenario[] = [
     reference: `${FRIENDS_ASK} ${FRIENDS_ROUTES}`,
     noWeb: true,
     minGoal: 'partly',
-    pending: 'plan29',
   },
   {
     id: 'friends-what-ana-sees',
@@ -1420,7 +1418,6 @@ const PLAN29: Scenario[] = [
     reference: FRIENDS_SHARING,
     noWeb: true,
     minGoal: 'yes',
-    pending: 'plan29',
   },
   {
     id: 'friends-invite-email',
@@ -1435,7 +1432,6 @@ const PLAN29: Scenario[] = [
       'Inviting a friend sends one email with a sign-in link (or a link to copy); someone already on Orbit sees a request to accept. The invite is a risky action, so Orbit confirms before it goes, says what accepting shares both ways, and never promises the friend has accepted. At most 20 invites a day.',
     noWeb: true,
     minGoal: 'partly',
-    pending: 'plan29',
   },
   {
     id: 'friends-stop-sharing-ana',
@@ -1449,7 +1445,6 @@ const PLAN29: Scenario[] = [
     reference: `Setting what you share with Ana to nothing yet takes effect at once: Ana stops seeing your people, you still see hers, and the friendship stays. ${FRIENDS_SHARING}`,
     noWeb: true,
     minGoal: 'partly',
-    pending: 'plan29',
   },
   {
     id: 'friends-share-only-companies',
@@ -1463,7 +1458,6 @@ const PLAN29: Scenario[] = [
     reference: `The companies mode shares only people at the chosen companies (Ramp and Stripe here) and nothing else; Orbit says how many people that is from the preview and that it applies at once. ${FRIENDS_SHARING}`,
     noWeb: true,
     minGoal: 'partly',
-    pending: 'plan29',
   },
   {
     id: 'friends-ask-arrives-forward',
@@ -1477,7 +1471,6 @@ const PLAN29: Scenario[] = [
     reference: FRIENDS_FORWARD,
     noWeb: true,
     minGoal: 'partly',
-    pending: 'plan29',
   },
   {
     id: 'friends-ask-decline',
@@ -1491,7 +1484,6 @@ const PLAN29: Scenario[] = [
     reference: `${FRIENDS_FORWARD} Declining is one tap and owes no reason; Orbit does not argue, does not write to Lena, and may offer a kind line to Ana only if the student wants one.`,
     noWeb: true,
     minGoal: 'partly',
-    pending: 'plan29',
   },
   {
     id: 'friends-list',
@@ -1505,7 +1497,6 @@ const PLAN29: Scenario[] = [
     reference: `${FRIENDS_ROUTES} One friend: Ana shares 120 people, 6 at your targets; you share everyone back.`,
     noWeb: true,
     minGoal: 'yes',
-    pending: 'plan29',
   },
   {
     id: 'friends-coverage',
@@ -1519,7 +1510,6 @@ const PLAN29: Scenario[] = [
     reference: `${FRIENDS_ROUTES} Five of the six targets have a path through Ana (Stripe, Figma, Anthropic, Ramp, Notion); Linear does not.`,
     noWeb: true,
     minGoal: 'partly',
-    pending: 'plan29',
   },
   {
     id: 'friends-no-direct-dan',
@@ -1532,7 +1522,6 @@ const PLAN29: Scenario[] = [
     reference: `${FRIENDS_ASK} The student does not know Dan and has no address for him; Orbit says so plainly, never drafts to Dan, and offers the ask to Ana or a cold note only if the student finds an address themselves.`,
     noWeb: true,
     minGoal: 'partly',
-    pending: 'plan29',
   },
   {
     id: 'friends-local-mode',
@@ -1545,7 +1534,6 @@ const PLAN29: Scenario[] = [
     reference: `${FRIENDS_SHARING} Without an account there are no friends to list: the honest answer is that Friends needs an Orbit account because nothing leaves the browser in local mode, and the one next step is the Google sign-in.`,
     noWeb: true,
     minGoal: 'partly',
-    pending: 'plan29',
   },
 
   // ---- autopilot (plan 29 Part B, B7) ----------------------------------------------------------------------------------

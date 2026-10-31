@@ -147,6 +147,10 @@ describe('findPlaybookSection (channel 2) and functionsFromText', () => {
       ['finding a mentor as a freshman', 'advice'],
       ['glossary', 'glossary'],
       ['ib', 'ib'],
+      // plan 29 Part A
+      ['how do I ask a friend on orbit for an intro', 'friends'],
+      ['what can my friend see of my network', 'friends'],
+      ['pool networks with a friend', 'friends'],
     ];
     for (const [topic, id] of cases) expect(findPlaybookSection(topic)?.id, topic).toBe(id);
     expect(findPlaybookSection('zzz qqq')).toBeUndefined();

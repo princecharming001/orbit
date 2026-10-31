@@ -38,6 +38,7 @@ import { db } from '../../db/schema';
 import { conversationWith } from '../../engine/conversation';
 import { DEMO_USER_ID } from '../../engine/demo';
 import { lastInboundOf, liveChatOf, nextMessageKind } from '../../engine/drafts';
+import { friendRouteOf, friendRoutes } from '../../engine/friends';
 import {
   COMPANY_TEAM_LABELS,
   type CompanyReach,
@@ -1183,26 +1184,38 @@ function serverRoutes(ctx: ToolContext, target: Person, res: PathsFindResponse) 
       `/people/${target.id}`,
     );
   const best = routes[0]!;
+  // plan 29 §A5: a route whose first hop is a friend on Orbit is asked of the friend, never drafted to the person
+  const viaFriend = new Map(res.paths.map((p) => [p.id, friendRouteOf(p)] as const).filter((x) => !!x[1]));
+  const bestFriend = viaFriend.get(best.id);
   return ok(
     'routes',
     { target: personRef(target), routes },
     {
       target: personRef(target),
-      routes: routes.map((r) => ({
-        pathId: r.id,
-        chance: r.bandLabel,
-        through: r.names.slice(1, -1),
-        firstHopId: r.firstHopId,
-        reason: wrapped(ctx, 'route', r.reason, 300),
-        otherWays: r.otherWays,
-      })),
+      routes: routes.map((r) => {
+        const f = viaFriend.get(r.id);
+        return {
+          pathId: r.id,
+          chance: r.bandLabel,
+          through: r.names.slice(1, -1),
+          firstHopId: r.firstHopId,
+          reason: wrapped(ctx, 'route', r.reason, 300),
+          otherWays: r.otherWays,
+          ...(f
+            ? {
+                viaFriend: { name: f.friend.name, userId: f.friend.userId, knows: f.phrase },
+                next: 'ask_friend_for_intro with the friend and a note they can forward; never a draft to the person',
+              }
+            : {}),
+        };
+      }),
       sources: res.sources,
       ...(res.direct
         ? { direct: { score: res.direct.score, band: res.direct.band, text: res.direct.text } }
         : {}),
       next: 'ask_for_intro with a pathId drafts the request; it never sends',
     },
-    `${res.direct ? `You know ${target.displayName} directly (${res.direct.score}, ${res.direct.band}), and ` : ''}${plural(routes.length, 'route')} to ${target.displayName}. Best: through ${best.firstHop} (${best.bandLabel.toLowerCase()}).${quiet}`,
+    `${res.direct ? `You know ${target.displayName} directly (${res.direct.score}, ${res.direct.band}), and ` : ''}${plural(routes.length, 'route')} to ${target.displayName}. Best: through ${best.firstHop}${bestFriend ? `, a friend on Orbit who ${bestFriend.phrase}` : ''} (${best.bandLabel.toLowerCase()}).${viaFriend.size ? ' A route through a friend is asked of the friend, with a note they forward.' : ''}${quiet}`,
     `/people/${target.id}`,
   );
 }
@@ -1211,7 +1224,7 @@ export const findRoutes = defineTool({
   name: 'find_routes',
   kind: 'read',
   description:
-    'Call this when the student asks how to reach someone, who could introduce them to a person, for a warm intro to a person or a company, who they know at a company, which former employees of a company are in their network, or wants a company page. Give a personId for routes to a person (each route names the first hop to ask for an intro) or a company name for the people there now, former employees and two-hop routes. Both include warm intro paths from Village when the student has it (warmth in a word, and the hops). A query that is not a clear person or company returns candidates to choose from. With an Orbit account, routes to a person are ranked by the chance the intro happens (likely, possible, long shot), each with a reason and a pathId for ask_for_intro. A company answer also lists the five best ways in with their team, route and score, and links the company page with everyone by team.',
+    'Call this when the student asks how to reach someone, who could introduce them to a person, for a warm intro to a person or a company, who they know at a company (including through friends on Orbit), which former employees of a company are in their network, or wants a company page. Give a personId for routes to a person (each route names the first hop to ask for an intro) or a company name for the people there now, former employees and two-hop routes. Both include warm intro paths from Village when the student has it (warmth in a word, and the hops). A query that is not a clear person or company returns candidates to choose from. With an Orbit account, routes to a person are ranked by the chance the intro happens (likely, possible, long shot), each with a reason and a pathId for ask_for_intro; a route through a friend on Orbit says so (viaFriend) and is asked of the friend with ask_friend_for_intro, never drafted to the person. A company answer also lists the five best ways in with their team, route and score, and links the company page with everyone by team.',
   input: z.object({
     personId: z.string().optional().describe('Routes to this person (from search_people).'),
     personIds: z
@@ -1305,6 +1318,16 @@ export const findRoutes = defineTool({
       }
     const name = reach.org?.name ?? company!;
     const warmIntros = await warmIntrosFor(ctx.user, { company: name }, { signal: ctx.signal });
+    // plan 29 §A5: the people friends on Orbit know there, each a route the friend forwards
+    const throughFriends = (await friendRoutes(ctx.user, { company: name })).map((r) => ({
+      pathId: r.pathId,
+      name: r.target.name,
+      personId: r.target.personId,
+      friend: r.friend.name,
+      friendUserId: r.friend.userId,
+      how: `${r.friend.first} ${r.phrase}`,
+      chance: Math.round(r.p * 100),
+    }));
     const view = {
       company: name,
       organizationId: reach.org?.id,
@@ -1340,12 +1363,16 @@ export const findRoutes = defineTool({
         ]),
       ),
     };
-    const summary = `${name}: ${reach.direct.length ? `${plural(reach.direct.length, 'person', 'people')} you know there now` : 'nobody you know there now'}, ${plural(reach.former.length, 'former employee')} you know${reach.saved.length ? `; ${plural(reach.saved.length, 'person', 'people')} there saved to contact (${reach.saved.map((s) => s.person.displayName).join(', ')}), not someone you know yet` : ''}${reach.twoHop.length ? `, ${plural(reach.twoHop.length, 'route')} through someone closer` : ''}.${warmIntroLine(warmIntros)}`;
+    const friendsLine = throughFriends.length
+      ? ` Through friends: ${throughFriends.map((t) => `${t.name} (${t.how})`).join(', ')}; ask the friend, never the person.`
+      : '';
+    const summary = `${name}: ${reach.direct.length ? `${plural(reach.direct.length, 'person', 'people')} you know there now` : 'nobody you know there now'}, ${plural(reach.former.length, 'former employee')} you know${reach.saved.length ? `; ${plural(reach.saved.length, 'person', 'people')} there saved to contact (${reach.saved.map((s) => s.person.displayName).join(', ')}), not someone you know yet` : ''}${reach.twoHop.length ? `, ${plural(reach.twoHop.length, 'route')} through someone closer` : ''}.${friendsLine}${warmIntroLine(warmIntros)}`;
     return ok(
       'company',
-      { ...view, warmIntros },
+      { ...view, warmIntros, throughFriends },
       {
         ...view,
+        throughFriends: throughFriends.length ? throughFriends : undefined,
         warmIntros: warmIntros.length ? warmIntros.map((w) => warmIntroForModel(w, ctx)) : undefined,
       },
       summary,

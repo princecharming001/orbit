@@ -25,7 +25,8 @@ export type KnowledgeId =
   | 'advice'
   | 'cofounder'
   | 'community'
-  | 'collaboration';
+  | 'collaboration'
+  | 'friends';
 
 export const KNOWLEDGE_IDS: readonly KnowledgeId[] = [
   'etiquette',
@@ -45,6 +46,7 @@ export const KNOWLEDGE_IDS: readonly KnowledgeId[] = [
   'cofounder',
   'community',
   'collaboration',
+  'friends',
 ];
 
 export interface KnowledgeSection {
@@ -428,6 +430,26 @@ const ALIASES: Record<KnowledgeId, string[]> = {
     'academic',
     'research assistant',
     'faculty',
+  ],
+  // plan 29 Part A: asking a friend on Orbit for an introduction, the forwardable blurb, reporting back
+  friends: [
+    'friend',
+    'friends',
+    'friends on orbit',
+    'friend on orbit',
+    'ask a friend',
+    'ask my friend',
+    'through a friend',
+    'through friends',
+    'pool networks',
+    'pool our networks',
+    'pooled network',
+    'what can my friend see',
+    'what does my friend see',
+    'forward my note',
+    'forwardable note',
+    'report back',
+    'reporting back',
   ],
 };
 

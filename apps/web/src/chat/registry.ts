@@ -11,6 +11,7 @@ import { type AnyTool, err, plain, reasonOf, toModel } from './tools/_shared';
 import { accountTools } from './tools/account';
 import { connectorTools } from './tools/connectors';
 import { draftTools } from './tools/drafts';
+import { friendTools } from './tools/friends';
 import { goalFirstTools } from './tools/goalFirst';
 import { networkTools } from './tools/network';
 import { noteTools } from './tools/notes';
@@ -35,6 +36,7 @@ const all: AnyTool[] = [
   ...widgetTools,
   ...networkTools,
   ...goalFirstTools,
+  ...friendTools,
 ].sort((a, b) => a.name.localeCompare(b.name));
 
 for (let i = 1; i < all.length; i++)

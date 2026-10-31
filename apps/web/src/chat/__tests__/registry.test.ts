@@ -232,6 +232,16 @@ describe('every tool parses and executes its example input against the demo', ()
       book_call: { draftId: 'out_1', slotStart: '2026-10-21T14:00:00Z' },
       set_autonomy: { level: 1 },
       forget: { memoryId: 'mem_1' },
+      // plan 29 Part A: friends; in the demo each says it needs an account, the risky ones ask first
+      list_friends: {},
+      invite_friend: { email: 'noah.patel@cornell.edu' },
+      set_friend_sharing: { mode: 'none' },
+      ask_friend_for_intro: {
+        friendName: 'Ana',
+        targetName: 'Dan Lee',
+        note: 'Junior at Cornell on payments.',
+      },
+      respond_to_friend_ask: { action: 'decline', askerName: 'Ana' },
     };
     const missing = tools.map((t) => t.name).filter((n) => !(n in examples));
     expect(missing, 'tools without an example').toEqual([]);

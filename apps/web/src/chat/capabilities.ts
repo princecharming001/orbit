@@ -1885,6 +1885,62 @@ export const CAPABILITIES: readonly Capability[] = [
     kind: 'risky',
     utterances: ['forget that', 'forget everything about Dan', 'delete what you remember about my schedule'],
   },
+  // plan 29 Part A: friends pool their networks as signal, never content
+  {
+    id: 'friend_list',
+    area: 'Networking agent',
+    title: 'See your friends on Orbit, what each shares, and who you can reach through them',
+    kind: 'read',
+    utterances: [
+      'who are my friends on orbit',
+      'who do I know at Stripe through friends',
+      'what can Ana see of mine',
+    ],
+  },
+  {
+    id: 'friend_invite',
+    area: 'Networking agent',
+    title: 'Invite a friend to pool networks',
+    kind: 'risky',
+    utterances: [
+      'invite noah.patel@cornell.edu to orbit',
+      'pool networks with my friend Noah',
+      'send Noah a friend request',
+    ],
+  },
+  {
+    id: 'friend_share',
+    area: 'Networking agent',
+    title: 'Change what you share with friends (everyone, only some companies, nothing yet)',
+    kind: 'write',
+    utterances: [
+      'stop sharing my people with Ana',
+      'share only my Stripe and Ramp people with friends',
+      'share everyone I know with my friends',
+    ],
+  },
+  {
+    id: 'friend_ask',
+    area: 'Networking agent',
+    title: 'Ask a friend to introduce you to someone they know',
+    kind: 'risky',
+    utterances: [
+      'ask Ana to introduce me to Dan Lee',
+      'get me an intro to Priya through Ana',
+      'ask my friend for an intro at Stripe',
+    ],
+  },
+  {
+    id: 'friend_respond',
+    area: 'Networking agent',
+    title: "Forward or decline a friend's intro ask",
+    kind: 'risky',
+    utterances: [
+      "forward Ana's note to Lena",
+      'what is Ana asking me for',
+      "I'd rather not forward Ana's ask",
+    ],
+  },
 ];
 
 export const CAPABILITY_IDS: ReadonlySet<string> = new Set(CAPABILITIES.map((c) => c.id));
