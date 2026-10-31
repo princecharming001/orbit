@@ -550,18 +550,40 @@ export async function runAccountFunnel(user: User, now = new Date()): Promise<Fu
         const b = await bookCall(user, r.offered.draftId, slot);
         if (b.ok && b.eventId) {
           out.booked++;
-          if (chat) await raisePrepCard(user, chat, b.eventId, slot, now);
+          // the event is here at once (the next pull brings the same row), so the prep rule (plan 22) keeps the card
+          // it raises from it; the card's key is the rule's own
+          const evId = `ev_${b.eventId}`;
+          const person = r.personId ? await db.people.get(r.personId) : undefined;
+          if (!(await db.events.get(evId)))
+            await db.events.put({
+              id: evId,
+              userId: user.id,
+              externalEventId: b.eventId,
+              title: `Coffee chat with ${r.personName}`,
+              startAt: new Date(slot).toISOString(),
+              endAt: new Date(Date.parse(slot) + 30 * 60_000).toISOString(),
+              status: 'confirmed',
+              attendees: person?.primaryEmail
+                ? [{ email: person.primaryEmail, displayName: r.personName }]
+                : [],
+              attendeePersonIds: r.personId ? [r.personId] : [],
+              inviteSentAt: now.toISOString(),
+              isCoffeeChat: true,
+              coffeeChatConfidence: 0.95,
+              chatId: chat?.id,
+            });
+          if (chat) await raisePrepCard(user, chat, evId, slot, now);
           else
             await upsertCard(
               user.id,
               {
                 kind: 'prep_brief',
-                dedupeKey: `prep:${b.eventId}`,
+                dedupeKey: `prep:${evId}`,
                 personId: r.personId ?? undefined,
                 priorityScore: 0.9,
-                reasonText: `Call with ${r.personName.split(' ')[0]} is booked for ${new Date(slot).toLocaleString('en-US', { weekday: 'short', hour: 'numeric', minute: '2-digit', timeZone: user.timezone || undefined })}. Prep takes two minutes.`,
-                signals: { startAt: slot },
-                payload: { eventId: b.eventId, personName: r.personName },
+                reasonText: `Chat with ${r.personName.split(' ')[0]} is booked for ${new Date(slot).toLocaleString('en-US', { weekday: 'short', hour: 'numeric', minute: '2-digit', timeZone: user.timezone || undefined })}. Prep takes two minutes.`,
+                signals: { startAt: new Date(slot).toISOString() },
+                payload: { eventId: evId, personName: r.personName },
               },
               now,
             );

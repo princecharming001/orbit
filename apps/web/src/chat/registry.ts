@@ -9,6 +9,7 @@ import { z } from '../zod';
 import { bindingKey, CONFIRM_FAILURE_TEXT, checkConfirmation, createConfirmation } from './confirm';
 import { type AnyTool, err, plain, reasonOf, toModel } from './tools/_shared';
 import { accountTools } from './tools/account';
+import { autopilotTools } from './tools/autopilot';
 import { connectorTools } from './tools/connectors';
 import { draftTools } from './tools/drafts';
 import { friendTools } from './tools/friends';
@@ -37,6 +38,7 @@ const all: AnyTool[] = [
   ...networkTools,
   ...goalFirstTools,
   ...friendTools,
+  ...autopilotTools,
 ].sort((a, b) => a.name.localeCompare(b.name));
 
 for (let i = 1; i < all.length; i++)

@@ -395,6 +395,96 @@ export function routeNetwork(text: string, lower: string, h: NetworkHelpers): Ro
       'list replies',
     );
 
+  // ---- autopilot (plan 29) ----
+  if (
+    /^(?:what did (?:you|orbit) send(?: for me)?(?: today)?|what(?:'s| is) going out tomorrow|what(?:'s| is) (?:in )?tomorrow'?s batch|show (?:me )?(?:the )?autopilot(?: status)?|autopilot status|what needs me|what did autopilot do(?: today)?|did (?:the call with )?\w+ get booked|is autopilot (?:on|paused))\??$/.test(
+      lower,
+    ) ||
+    /^why didn'?t (?:you|orbit) send (?:to|the one to) /.test(lower)
+  )
+    return h.viaTool('autopilot_status', {}, undefined, 'read the autopilot status');
+  if (
+    /^(?:hold (?:tomorrow'?s batch|everything(?: queued)?|the batch|all of them)|don'?t send (?:anything|them) tomorrow)$/.test(
+      lower,
+    )
+  )
+    return h.viaTool('hold_send', { all: true }, undefined, 'hold the batch');
+  {
+    const m =
+      text.match(/^(?:don'?t|do not) send (?:the one|anything|the (?:message|note)) to (.+)$/i) ??
+      text.match(/^hold (?:the (?:one|message|note) to )(.+)$/i);
+    if (m) return h.viaTool('hold_send', { personName: m[1]!.trim() }, undefined, 'hold the send');
+  }
+  {
+    const m =
+      text.match(/^(?:answer|reply to|tell) ([A-Z][\w'-]+(?: [A-Z][\w'-]+)?)(?::| that| -)\s*(.+)$/i) ??
+      text.match(/^tell ([A-Z][\w'-]+) ((?:i am|i'm|yes|no|not yet|we|it|my|the) .+)$/i) ??
+      text.match(/^answer ([A-Z][\w'-]+)\s+(.+)$/);
+    if (m && !/^(?:me|it|them|him|her)$/i.test(m[1]!))
+      return h.viaTool(
+        'answer_reply',
+        { personName: m[1]!.trim(), answer: m[2]!.trim() },
+        undefined,
+        'answer the reply',
+      );
+  }
+  if (
+    /^(?:pause (?:autopilot|everything(?: orbit sends)?|all sends|it all)|stop (?:autopilot|everything|sending))(?: until further notice| for now)?$/.test(
+      lower,
+    )
+  )
+    return h.viaTool('pause_autopilot', {}, undefined, 'pause autopilot');
+  {
+    const m = lower.match(/^pause (?:autopilot|everything) until (.+)$/);
+    if (m) {
+      const until = dateFrom(m[1]!);
+      return until
+        ? h.viaTool('pause_autopilot', { until }, undefined, 'pause autopilot')
+        : h.viaTool('pause_autopilot', {}, undefined, 'pause autopilot');
+    }
+  }
+  if (/^(?:resume|unpause|restart|turn (?:back )?on) autopilot$/.test(lower))
+    return h.viaTool('pause_autopilot', { resume: true }, undefined, 'resume autopilot');
+  {
+    const m = lower.match(
+      /^(?:put (?:my )?(\w+) on autopilot|(?:switch|set|put) (?:me |it |everything )?(?:to |on )?(autopilot|assist)(?: mode)?|turn autopilot (off|on)|autopilot (off|on))$/,
+    );
+    if (m) {
+      const word = m[1];
+      const mode =
+        m[3] === 'off' || m[4] === 'off'
+          ? 'off'
+          : (m[2] ?? (m[3] === 'on' || m[4] === 'on' || word ? 'autopilot' : undefined));
+      if (mode) {
+        const goal = word && !/^(?:everything|all|me|it|outreach)$/.test(word) ? goalNamed(word) : undefined;
+        return h.viaTool(
+          'set_autopilot_mode',
+          { mode, ...(goal ? { goalId: goal.id } : {}) },
+          undefined,
+          'change the mode',
+        );
+      }
+    }
+  }
+  if (
+    /^(?:what have you learned about (?:how i write|my (?:writing|style|voice))|show (?:me )?my voice notes|what do you know about my (?:style|voice|writing))\??$/.test(
+      lower,
+    )
+  )
+    return h.viaTool('list_voice_notes', {}, undefined, 'list voice notes');
+  {
+    const m =
+      text.match(/^(?:forget|drop) (?:the |that )?(?:voice )?note(?: about)?\s*(.*)$/i) ??
+      text.match(/^forget that i (.+)$/i);
+    if (m)
+      return h.viaTool(
+        'forget_voice_note',
+        m[1]?.trim() ? { note: m[1]!.trim() } : {},
+        undefined,
+        'forget the note',
+      );
+  }
+
   // ---- autonomy ----
   {
     const m = lower.match(/^(?:set )?autonomy(?: level)?(?: to)? ([0-2])$/);

@@ -37,12 +37,12 @@ import type {
   FriendAskResponse,
   FriendAsksResponse,
   FriendPreviewResponse,
+  FriendSharesRequest,
+  FriendSharesResponse,
   FriendsAcceptRequest,
   FriendsAcceptResponse,
   FriendsDeclineRequest,
   FriendsEndRequest,
-  FriendSharesRequest,
-  FriendSharesResponse,
   FriendsInviteRequest,
   FriendsInviteResponse,
   FriendsListResponse,
@@ -75,6 +75,8 @@ import type {
   ProfileSettingsResponse,
   QueuedResponse,
   RepliesListResponse,
+  ReplyAnswerRequest,
+  ReplyAnswerResponse,
   ReplyDraftRequest,
   ResearchChooseRequest,
   ResearchGetRequest,
@@ -92,8 +94,6 @@ import type {
   SourceSearchResponse,
 } from '@orbit/core';
 import { readLocalRow, writeLocalRow } from './prefs';
-  ReplyAnswerRequest,
-  ReplyAnswerResponse,
 
 // ---- the account the server knows ----------------------------------------------------------------------------------
 
@@ -227,6 +227,11 @@ export interface ApiRoutes {
   '/drafts/discard': [DraftIdRequest, DraftResponse];
   '/replies/list': [Record<string, never>, RepliesListResponse];
   '/replies/draft': [ReplyDraftRequest, DraftResponse];
+  '/replies/answer': [ReplyAnswerRequest, ReplyAnswerResponse];
+  '/autopilot/mode': [AutopilotModeRequest, AutopilotModeResponse];
+  '/autopilot/status': [Record<string, never>, AutopilotStatus];
+  '/autopilot/hold': [AutopilotHoldRequest, AutopilotHoldResponse];
+  '/autopilot/pause': [AutopilotPauseRequest, AutopilotPauseResponse];
   '/calendar/slots': [SlotsRequest, SlotsResponse];
   '/calendar/book': [BookRequest, BookResponse];
   '/memory/search': [MemorySearchRequest, MemorySearchResponse];
@@ -255,11 +260,6 @@ export interface ApiRoutes {
   '/friends/asks/respond': [FriendAskRespondByIdRequest, FriendAskRespondResponse];
 }
 export type ClientRoute = keyof ApiRoutes;
-  '/replies/answer': [ReplyAnswerRequest, ReplyAnswerResponse];
-  '/autopilot/mode': [AutopilotModeRequest, AutopilotModeResponse];
-  '/autopilot/status': [Record<string, never>, AutopilotStatus];
-  '/autopilot/hold': [AutopilotHoldRequest, AutopilotHoldResponse];
-  '/autopilot/pause': [AutopilotPauseRequest, AutopilotPauseResponse];
 
 // ---- results ------------------------------------------------------------------------------------------------------
 

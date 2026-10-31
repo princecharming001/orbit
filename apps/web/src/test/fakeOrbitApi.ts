@@ -1387,64 +1387,66 @@ export function withFriend(
 const REPLY_SEEDS: {
   cls: ReplyClass;
   name: string;
+  company: string;
   snippet: string;
   minutesAgo: number;
 }[] = [
   {
     cls: 'interested',
     name: 'Maya Chen',
+    company: 'Stripe',
     snippet:
       'This sounds great, happy to help however I can. Tell me a bit more about what you are looking for.',
     minutesAgo: 70,
   },
   // the time names an offered slot (Thu Oct 8, 11:00 to 11:30 ET), so a confirmed slot can book itself (B2.3)
-  company: string;
   {
     cls: 'scheduling',
     name: 'Lena Novak',
+    company: 'Ramp',
     snippet: 'Thu Oct 8 at 11 works for me. Send a calendar invite and I will be there.',
     minutesAgo: 95,
   },
-    company: 'Stripe',
   {
     cls: 'question',
     name: 'Daniel Okafor',
+    company: 'Goldman Sachs',
     snippet: 'Happy to. Quick one first: have you applied through the portal yet? It changes what I can do.',
     minutesAgo: 140,
   },
   {
     cls: 'objection',
-    company: 'Ramp',
     name: 'Victor Castro',
+    company: 'Datadog',
     snippet:
       "I'm not sure a referral makes sense before you've applied. Most people go through the portal first.",
     minutesAgo: 200,
   },
   {
-    company: 'Goldman Sachs',
     cls: 'referral',
     name: 'Sofia Bennett',
+    company: 'Figma',
     snippet: 'Not really my area, but my colleague Raj runs that team. Want me to connect you?',
     minutesAgo: 260,
   },
   {
-    company: 'Datadog',
     cls: 'not_now',
     name: 'Ethan Park',
+    company: 'Anthropic',
     snippet: 'Swamped until after the launch. Ping me in November and I will make time.',
     minutesAgo: 330,
   },
   {
     cls: 'out_of_office',
-    company: 'Figma',
     name: 'Caleb Weber',
+    company: 'Notion',
     snippet: 'I am out of the office until October 12 with limited access to email.',
     minutesAgo: 400,
   },
   {
     cls: 'decline',
-    company: 'Anthropic',
     name: 'Jonah Reyes',
+    company: 'Linear',
     snippet: "I'll pass on this one. Best of luck with the search.",
     minutesAgo: 470,
   },
@@ -1456,14 +1458,13 @@ const REPLY_SEEDS: {
     minutesAgo: 540,
   },
   {
-    company: 'Notion',
     cls: 'thanks',
     name: 'Priya Shah',
+    company: 'Figma',
     snippet: 'Thanks for the note, appreciate you reaching out. Good luck with the rest of the process.',
     minutesAgo: 610,
   },
 ];
-    company: 'Linear',
 
 /**
  * The autopilot bench (plan 29 C2): an inbound reply of every class, and a day on autopilot behind /autopilot/status:
@@ -1471,7 +1472,6 @@ const REPLY_SEEDS: {
  * that needs the student (Daniel's question, with its draft), the rungs and the caps, and three voice notes.
  */
 export function withReplies(
-    company: 'Figma',
   api: FakeOrbitApi,
   user: { id: string; firstName?: string },
   people: { id: string; displayName: string; currentOrganizationRaw?: string }[] = [],
@@ -1486,24 +1486,13 @@ export function withReplies(
     threadId: `thr_${r.cls}_${i}`,
     personId: own.get(r.name)?.id ?? null,
     personName: r.name,
+    company: own.get(r.name)?.currentOrganizationRaw ?? r.company,
     channel: 'gmail' as const,
     replyClass: r.cls,
     confidence: 0.9,
     receivedAt: at(r.minutesAgo),
     snippet: r.snippet,
     draftId: null,
-  }));
-  // Daniel's question waits on the student: the draft carries the gap, Needs you carries the question
-  const question = state.replies.find((r) => r.replyClass === 'question')!;
-  const qDraft = draftRow(
-    'draft_daniel_question',
-    company: own.get(r.name)?.currentOrganizationRaw ?? r.company,
-    question.personId ?? '',
-    'gmail',
-    `Hi Daniel,\n\nThanks for getting back to me. [ASK USER: Have you applied through the portal yet?]\n\nBest,\n${first}`,
-    now,
-  );
-  qDraft.kind = 'reply';
     ...(r.cls === 'question' ? { question: 'Have you applied through the portal yet?' } : {}),
     // Lena answers the slots reply Orbit sent (plan 29 §B2.3): the slot she names is one of them
     ...(r.cls === 'scheduling'
@@ -1514,7 +1503,7 @@ export function withReplies(
           },
         }
       : {}),
-  qDraft.needsInput = ['Have you applied through the portal yet?'];
+  }));
   // the goal the breaker pauses, when the student has none of their own yet
   if (!state.goals.length)
     state.goals.push({
@@ -1535,6 +1524,17 @@ export function withReplies(
       createdAt: '2026-09-20T12:00:00.000Z',
       updatedAt: '2026-09-20T12:00:00.000Z',
     });
+  // Daniel's question waits on the student: the draft carries the gap, Needs you carries the question
+  const question = state.replies.find((r) => r.replyClass === 'question')!;
+  const qDraft = draftRow(
+    'draft_daniel_question',
+    question.personId ?? '',
+    'gmail',
+    `Hi Daniel,\n\nThanks for getting back to me. [ASK USER: Have you applied through the portal yet?]\n\nBest,\n${first}`,
+    now,
+  );
+  qDraft.kind = 'reply';
+  qDraft.needsInput = ['Have you applied through the portal yet?'];
   state.drafts.set(qDraft.id, qDraft);
   question.draftId = qDraft.id;
   // the day on autopilot
@@ -1667,6 +1667,7 @@ export function withReplies(
         status: 'needs_you',
         subject: 'Re: Quick question from a Cornell junior',
         question: 'Have you applied through the portal yet?',
+        messageId: question.messageId,
       }),
     ],
     rungs: [
@@ -1678,7 +1679,6 @@ export function withReplies(
     caps: {
       autoPerDay: 5,
       firstTouchPerWeek: 12,
-        messageId: question.messageId,
       firstTouchPerDay: 3,
       usedToday: 3,
       firstTouchesThisWeek: 5,

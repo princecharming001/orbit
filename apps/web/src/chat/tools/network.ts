@@ -10,6 +10,7 @@ import { db } from '../../db/schema';
 import { calendarInvitesAvailable, sendCalendarInvite } from '../../engine/calendarInvite';
 import { CLOSENESS_LABELS, type Closeness, explainScore, rateCloseness } from '../../engine/closeness';
 import { allowanceLine, readAllowance, researchMode } from '../../engine/deepResearch';
+import { askFriendForIntro, friendRouteOf } from '../../engine/friends';
 import {
   archiveGoal,
   GOAL_KIND_LABELS,
@@ -28,7 +29,6 @@ import {
 } from '../../engine/linkedinSearch';
 import { forget, listMemories, MEMORY_KINDS, remember, searchMemories } from '../../engine/memory';
 import { AUTONOMY_TEXT, type AutonomyLevel, pauseOutreach, setAutonomy } from '../../engine/outreach';
-import { askFriendForIntro, friendRouteOf } from '../../engine/friends';
 import { askForIntro, cachedPath } from '../../engine/paths';
 import {
   blockingQuestions,
@@ -871,6 +871,17 @@ export const draftReplyTool = defineTool({
   progress: 'Drafting a reply',
   async execute(input, ctx) {
     if (!accountReady(ctx)) return needsAccount('Drafting replies');
+    // the class table (plan 29 §B2.3): a question waits for the student's answer, a closed thread gets no reply
+    const known = await listReplies(ctx.user);
+    const item = known.ok ? known.replies.find((x) => x.messageId === input.messageId) : undefined;
+    if (item && (item.replyClass === 'decline' || item.replyClass === 'unsubscribe'))
+      return ok(
+        'text',
+        { closed: true },
+        { closed: true, replyClass: item.replyClass },
+        `${item.personName} ${item.replyClass === 'unsubscribe' ? 'asked to stop' : 'declined'}: the thread is closed and Orbit will not write to them again, so there is nothing to draft.`,
+        '/inbox?tab=replies',
+      );
     const r = await draftReply(ctx.user, input.messageId);
     if (!r.ok) throw new Error(r.message);
     const d = r.draft;

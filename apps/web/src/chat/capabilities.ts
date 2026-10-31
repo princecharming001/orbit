@@ -1885,6 +1885,64 @@ export const CAPABILITIES: readonly Capability[] = [
     kind: 'risky',
     utterances: ['forget that', 'forget everything about Dan', 'delete what you remember about my schedule'],
   },
+  // plan 29 Part B: autopilot (phase 3: the class table, Needs you, the pause; the voice tools say "not yet" until phase 4)
+  {
+    id: 'autopilot_mode',
+    area: 'Networking agent',
+    title: 'Put outreach on autopilot, assist or off (for the account or one goal)',
+    kind: 'risky',
+    utterances: ['put my recruiting on autopilot', 'switch to assist', 'turn autopilot off'],
+  },
+  {
+    id: 'autopilot_status',
+    area: 'Networking agent',
+    title: 'See what autopilot sent today, what goes tomorrow, what is held and why, what needs you',
+    kind: 'read',
+    utterances: ['what did you send today', "what's going out tomorrow", "why didn't you send to Priya"],
+  },
+  {
+    id: 'autopilot_hold',
+    area: 'Networking agent',
+    title: "Hold tomorrow's batch, or one queued message",
+    kind: 'write',
+    utterances: ["hold tomorrow's batch", "don't send the one to Priya", 'hold everything queued'],
+  },
+  {
+    id: 'reply_answer',
+    area: 'Networking agent',
+    title: 'Answer a question a reply asked, in one line, and Orbit drafts the reply around it',
+    kind: 'write',
+    utterances: ['answer Dan: yes, applied Monday', 'tell Priya I am a junior', 'answer Dan: not yet'],
+  },
+  {
+    id: 'autopilot_pause',
+    area: 'Networking agent',
+    title: 'Pause everything Orbit sends on its own, or one goal, and resume',
+    kind: 'write',
+    utterances: ['pause autopilot', 'pause everything until further notice', 'resume autopilot'],
+  },
+  {
+    id: 'voice_notes',
+    area: 'Networking agent',
+    title: 'See what Orbit learned about how you write (not yet: Settings, Voice lands in phase 4)',
+    kind: 'read',
+    utterances: [
+      'what have you learned about how I write',
+      'show my voice notes',
+      'what do you know about my style',
+    ],
+  },
+  {
+    id: 'voice_forget',
+    area: 'Networking agent',
+    title: 'Forget one thing Orbit learned about how you write (not yet: phase 4)',
+    kind: 'write',
+    utterances: [
+      "forget the note about 'Thanks either way'",
+      'forget that I never use exclamation marks',
+      'drop that voice note',
+    ],
+  },
   // plan 29 Part A: friends pool their networks as signal, never content
   {
     id: 'friend_list',

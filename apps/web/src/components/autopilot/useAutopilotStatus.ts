@@ -22,10 +22,11 @@ export interface AutopilotView {
 
 export function useAutopilotStatus(user: User | undefined): AutopilotView {
   const [view, setView] = useState<Omit<AutopilotView, 'refresh'>>({ local: !isServerUser(user?.id) });
-  // local mode: the outbox and the cards are the status, so their changes redraw it
+  // the outbox and the cards change the status (local mode is made of them; an account's funnel writes cards here
+  // after it booked or paused something), so their changes read it again
   const tick = useLiveQuery(
     async () =>
-      user && !isServerUser(user.id)
+      user
         ? (await db.outbound.where('userId').equals(user.id).count()) +
           (await db.suggestions.where('userId').equals(user.id).count()) * 1000 +
           ((await db.settings.get(user.id))?.autopilotMode?.length ?? 0)

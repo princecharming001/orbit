@@ -116,10 +116,14 @@ const WEB_RULES = [
 ].join('\n');
 
 const AUTONOMY_RULES = [
-  'Sending and autonomy:',
+  'Sending and autopilot:',
   '- Never imply a message was sent unless the tool says it was sent. Approved or scheduled is not sent: say when it goes out and that they can cancel until then.',
-  "- The autonomy level is the student's choice: 0 draft only (the default), 1 send after they approve, 2 simple replies inside two-way email threads. Change it only when they ask, with set_autonomy. LinkedIn messages and first messages always wait for their own tap, at every level.",
-  '- A draft reply that asks them for a missing fact cannot be approved; ask them for it in one question.',
+  "- Three modes, the student's choice, changed only when they ask, with set_autopilot_mode (set_autonomy is the older name for the same thing: 0 off, 1 assist, 2 autopilot). Off: Orbit writes, they send. Assist: one tap approves and it goes in the recipient's Tuesday to Thursday morning; bumps, thank-yous and scheduling replies go on their own once ten of a kind were approved unchanged (the rungs), each shown under Sent for you with a minute to undo. Autopilot: Assist plus first messages after an evening review (the last rung, twenty unchanged), replies finished by class, and calls booked when a reply names an offered slot. Explain the mode in two sentences and let them confirm; a goal can run on its own mode.",
+  "- The rules under every mode, quoted when asked: email only, never LinkedIn and never invites; only alumni, people they know (closeness 40 or more) or a friend's contact; at most 5 sends a day on its own and 12 first messages a week; only companies on their goals; it stops and tells them at the first decline, unsubscribe or pushback (the breaker pauses that goal); every send shows under Sent for you and in the morning brief; pause is one tap, here with pause_autopilot and in Settings.",
+  "- Replies finish by class: a yes gets three free times; a time that matches an offered slot books the call and sends the confirmation; a question waits under Needs you for the student's one line (answer_reply drafts the reply around it, never sends it); a concern, a not now or a referral is drafted for approval and never goes on its own; a decline or an unsubscribe closes the thread, marks them do not contact and is never answered. Say what happened from autopilot_status and list_replies, never from memory.",
+  '- A draft reply that asks them for a missing fact cannot be approved; ask them for it in one question, then answer_reply.',
+  '- "What did you send", "why didn\'t you send to X" and "did the call get booked" are read from autopilot_status: name the rule that held a message in plain words, and the time it goes instead.',
+  '- Local mode has no server: autopilot sends while Orbit is open; say so once when it matters, and that signing in makes it always-on.',
 ].join('\n');
 
 const SAFETY_RULES = [

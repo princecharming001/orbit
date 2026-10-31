@@ -50,6 +50,9 @@ export interface Scenario {
 }
 
 /** The chat tools plan 29 §A5 and §B5 name; a pending scenario may expect these before the registry has them. */
+/** Plan 29 tools that exist as honest "not yet" stubs until phase 4 (Settings, Voice): their scenarios stay pending. */
+export const PLAN29_STUBS = ['list_voice_notes', 'forget_voice_note'] as const;
+
 export const PLAN29_TOOLS = [
   'list_friends',
   'invite_friend',
@@ -1550,7 +1553,6 @@ const PLAN29: Scenario[] = [
     reference: AUTOPILOT_MODES,
     noWeb: true,
     minGoal: 'partly',
-    pending: 'plan29',
   },
   {
     id: 'ap-what-sent-today',
@@ -1564,7 +1566,6 @@ const PLAN29: Scenario[] = [
     reference: AUTOPILOT_DAY,
     noWeb: true,
     minGoal: 'yes',
-    pending: 'plan29',
   },
   {
     id: 'ap-hold-tomorrow',
@@ -1578,7 +1579,6 @@ const PLAN29: Scenario[] = [
     reference: `${AUTOPILOT_DAY} Holding is one tap per message and reversible: both of tomorrow's first messages are held, said back by name, and nothing else changes (replies and bumps keep going unless the student pauses everything).`,
     noWeb: true,
     minGoal: 'partly',
-    pending: 'plan29',
   },
   {
     id: 'ap-answer-dan',
@@ -1592,7 +1592,6 @@ const PLAN29: Scenario[] = [
     reference: AUTOPILOT_ANSWER,
     noWeb: true,
     minGoal: 'partly',
-    pending: 'plan29',
   },
   {
     id: 'ap-pause-everything',
@@ -1606,7 +1605,6 @@ const PLAN29: Scenario[] = [
     reference: `Pause is one tap: nothing goes out on its own until the student lifts it, tomorrow's batch is cancelled (two first messages), queued replies wait, and Orbit says what was stopped and how to resume. ${AUTOPILOT_DAY}`,
     noWeb: true,
     minGoal: 'partly',
-    pending: 'plan29',
   },
   {
     id: 'ap-why-not-priya',
@@ -1620,7 +1618,6 @@ const PLAN29: Scenario[] = [
     reference: `${AUTOPILOT_DAY} The answer names the rule that held her (one person per firm per day, Kenji at Figma went this morning) and when she goes instead (Thursday), nothing else.`,
     noWeb: true,
     minGoal: 'yes',
-    pending: 'plan29',
   },
   {
     id: 'ap-what-learned-voice',
@@ -1661,7 +1658,6 @@ const PLAN29: Scenario[] = [
     reference: AUTOPILOT_MODES,
     noWeb: true,
     minGoal: 'yes',
-    pending: 'plan29',
   },
   {
     id: 'ap-linkedin-never',
@@ -1674,7 +1670,6 @@ const PLAN29: Scenario[] = [
     reference: `${AUTOPILOT_MODES} LinkedIn is never sent on its own at any level, invites included; LinkedIn drafts are handed to the student to send with a tap. Said plainly, without apology, with the email side as what autopilot does cover.`,
     noWeb: true,
     minGoal: 'yes',
-    pending: 'plan29',
   },
   {
     id: 'ap-replies-overview',
@@ -1688,7 +1683,6 @@ const PLAN29: Scenario[] = [
     reference: AUTOPILOT_REPLIES,
     noWeb: true,
     minGoal: 'partly',
-    pending: 'plan29',
   },
   {
     id: 'ap-lena-booked',
@@ -1702,7 +1696,6 @@ const PLAN29: Scenario[] = [
     reference: `${AUTOPILOT_REPLIES} Lena named Thu Oct 8 at 11, an offered slot; the confirmation went this morning under Sent for you. Whether the calendar event exists is read from the status or the calendar, never assumed, and the prep card follows.`,
     noWeb: true,
     minGoal: 'partly',
-    pending: 'plan29',
   },
   {
     id: 'ap-unsubscribe-chloe',
@@ -1716,7 +1709,6 @@ const PLAN29: Scenario[] = [
     reference: `${AUTOPILOT_REPLIES} Chloe asked to stop: the thread is closed, she is marked do not contact, no reply goes and none is drafted; the breaker paused first messages at Ramp and told the student. Orbit never suggests writing to her again.`,
     noWeb: true,
     minGoal: 'yes',
-    pending: 'plan29',
   },
   {
     id: 'ap-per-goal',
@@ -1730,7 +1722,6 @@ const PLAN29: Scenario[] = [
     reference: `${AUTOPILOT_MODES} The per-goal switch sets autopilot for one goal and leaves the account mode alone; Orbit names the goal it set, confirms first, and says the rules still apply to it.`,
     noWeb: true,
     minGoal: 'partly',
-    pending: 'plan29',
   },
   {
     id: 'ap-rungs',
@@ -1744,7 +1735,6 @@ const PLAN29: Scenario[] = [
     reference: `${AUTOPILOT_DAY} First messages are the last rung: 14 of 20 unchanged so far, so the batch asks for a tap in the evening until twenty have gone out unchanged; two edits in thirty days re-ask. The numbers come from the status.`,
     noWeb: true,
     minGoal: 'yes',
-    pending: 'plan29',
   },
 ];
 

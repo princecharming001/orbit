@@ -4,7 +4,7 @@ import { createFakeOrbitApi, fakeAccountUser, withFriend, withReplies } from '..
 import { registry } from '../../registry';
 import { NOW } from '../helpers';
 import { seed, shapeCheck, type Transcript, teardownSim } from './harness';
-import { CAMPAIGN_GROUPS, GROUPS, PLAN29_GROUPS, PLAN29_TOOLS, SCENARIOS } from './scenarios';
+import { CAMPAIGN_GROUPS, GROUPS, PLAN29_GROUPS, PLAN29_STUBS, PLAN29_TOOLS, SCENARIOS } from './scenarios';
 
 /** The simulated students need a Claude key to run; this checks, without one, that every scenario can. */
 describe('sim scenarios', () => {
@@ -147,23 +147,31 @@ describe('sim scenarios', () => {
       for (const anyOf of s.expectTools ?? [])
         for (const t of anyOf)
           expect(registry.has(t) || (s.pending === 'plan29' && plan29.has(t)), `${s.id}: ${t}`).toBe(true);
-    // once a plan 29 tool lands, its scenarios come off pending: a pending scenario names at least one tool still missing,
-    // or no tool at all
+    // once a plan 29 tool lands, its scenarios come off pending: a pending scenario names at least one tool still missing
+    // (or one that is still a "not yet" stub), or no tool at all
+    const stubs = new Set<string>(PLAN29_STUBS);
     for (const s of SCENARIOS.filter((x) => x.pending))
       expect(
-        !s.expectTools?.length || s.expectTools.some((anyOf) => anyOf.some((t) => !registry.has(t))),
+        !s.expectTools?.length ||
+          s.expectTools.some((anyOf) => anyOf.some((t) => !registry.has(t) || stubs.has(t))),
         `${s.id} waits on nothing: drop pending`,
       ).toBe(true);
   });
 
-  it('cover plan 29: twelve friends and fifteen autopilot scenarios, each pending, with a reference and no web', () => {
+  it('cover plan 29: twelve friends and fifteen autopilot scenarios, pending only while a tool is missing, with a reference and no web', () => {
     expect(PLAN29_GROUPS).toEqual(['friends', 'autopilot']);
     const friends = SCENARIOS.filter((s) => s.group === 'friends');
     const autopilot = SCENARIOS.filter((s) => s.group === 'autopilot');
     expect(friends).toHaveLength(12);
     expect(autopilot).toHaveLength(15);
+    // phase 3 landed the autopilot tools: only the two voice scenarios still wait (phase 4)
+    expect(
+      autopilot
+        .filter((s) => s.pending)
+        .map((s) => s.id)
+        .sort(),
+    ).toEqual(['ap-forget-note', 'ap-what-learned-voice']);
     for (const s of [...friends, ...autopilot]) {
-      expect(s.pending, s.id).toBe('plan29');
       expect(s.reference?.length ?? 0, s.id).toBeGreaterThan(80);
       expect(s.noWeb, s.id).toBe(true);
       expect(s.reference, s.id).not.toMatch(/[—–!]/);

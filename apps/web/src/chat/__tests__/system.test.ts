@@ -41,7 +41,12 @@ describe('stable system block', () => {
     expect(text).toMatch(/find_people/);
     expect(text).toMatch(/ask_for_intro drafts the request and a note to forward; it never sends/);
     expect(text).toMatch(/Never imply a message was sent unless the tool says it was sent/);
-    expect(text).toMatch(/LinkedIn messages and first messages always wait for their own tap/);
+    // plan 29 §B5: the autonomy rules are written around the three modes, the rungs and Needs you
+    expect(text).toMatch(/Three modes, the student's choice/);
+    expect(text).toMatch(/set_autopilot_mode/);
+    expect(text).toMatch(/email only, never LinkedIn and never invites/);
+    expect(text).toMatch(/a question waits under Needs you/);
+    expect(text).toMatch(/answer_reply drafts the reply around it, never sends it/);
     expect(text).toMatch(
       /You never send, schedule or promise anything on the student's behalf unless a tool confirms the student approved that exact message/,
     );

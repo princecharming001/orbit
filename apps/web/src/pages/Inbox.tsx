@@ -634,7 +634,7 @@ function ComingUp({
   now: Date;
 }) {
   return (
-    <Card>
+    <Card data-testid="coming-up">
       <div className="font-medium mb-3">Coming up</div>
       {!events.length && !warming.length && (
         <p className="text-[13px] text-ink-3">No chats in the next 7 days.</p>

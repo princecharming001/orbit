@@ -416,7 +416,7 @@ describe('autopilot with an account (plan 29 §B5, fake orbit-api)', () => {
     );
     expect(api.state.autopilot.pausedGoals.map((g) => g.goalId)).toEqual(['goal_internships']);
     const prep = cards.find((c) => c.kind === 'prep_brief')!;
-    expect(prep.signals.startAt).toBe('2026-10-08T15:00:00Z');
+    expect(prep.signals.startAt).toBe('2026-10-08T15:00:00.000Z');
     expect(prep.chatId).toBeUndefined();
     // once is enough: the second pass books nothing and raises nothing
     expect(await runAccountFunnel(user, NOW)).toMatchObject({ handled: 0, booked: 0 });
