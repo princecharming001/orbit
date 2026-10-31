@@ -155,7 +155,11 @@ export type SuggestionKind =
   /** "Did Lena introduce you to Sam?": a group email the introduction cues could not call (see possibleIntroduction) */
   | 'confirm_intro'
   /** "Want Orbit to send bumps on its own?": earned by ten approvals of one kind without an edit (plan 23 §4.9) */
-  | 'trust_offer';
+  | 'trust_offer'
+  /** a reply asked something only the student knows (plan 29 §B2.3): the question, and a line to answer it */
+  | 'needs_you'
+  /** the circuit breaker fired (plan 29 §B2.7): who pushed back, and which goal's first messages are paused */
+  | 'breaker';
 export type SuggestionStatus =
   | 'pending'
   | 'approved'

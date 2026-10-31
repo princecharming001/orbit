@@ -1,0 +1,150 @@
+/**
+ * The circuit breaker (plan 29 §B2.7): an unsubscribe, two declines in a day, a bounce or a Gmail send error pauses
+ * what Orbit sends on its own for that goal, and tells the student. The pause is one key in users.settings,
+ * `autopilot_paused_goals`, read by the cadence (nothing of that goal's is approved on its own), the send job (an
+ * approved auto send of that goal waits) and the reply funnel (no auto reply for that goal). The student lifts it
+ * from Settings or the chat (`/autopilot/pause {until: null, goalId}`).
+ */
+import type { Db } from '../db.ts';
+import { raiseCard } from './cards.ts';
+
+export type BreakerReason = 'unsubscribe' | 'declines' | 'bounce' | 'send_error';
+
+export interface GoalPause {
+  reason: BreakerReason | 'student';
+  /** a sentence for the card and the status */
+  text: string;
+  /** ISO, or null when it holds until lifted */
+  until: string | null;
+  at: string;
+}
+
+export type PausedGoals = Record<string, GoalPause>;
+
+/** Declines in one day that trip the breaker. */
+export const DECLINES_PER_DAY = 2;
+
+export function pausedGoalsOf(settings: Record<string, unknown> | null | undefined): PausedGoals {
+  const v = settings?.autopilot_paused_goals;
+  if (!v || typeof v !== 'object' || Array.isArray(v)) return {};
+  const out: PausedGoals = {};
+  for (const [goalId, p] of Object.entries(v as Record<string, unknown>)) {
+    if (!p || typeof p !== 'object') continue;
+    const g = p as Partial<GoalPause>;
+    out[goalId] = {
+      reason: (g.reason as GoalPause['reason']) ?? 'student',
+      text: typeof g.text === 'string' ? g.text : 'Paused',
+      until: typeof g.until === 'string' ? g.until : null,
+      at: typeof g.at === 'string' ? g.at : '',
+    };
+  }
+  return out;
+}
+
+/** True while the goal's auto sends are paused: an entry with no end, or one whose end is still ahead. */
+export function goalPaused(
+  settings: Record<string, unknown> | null | undefined,
+  goalId: string | null,
+  now: Date,
+) {
+  if (!goalId) return false;
+  const p = pausedGoalsOf(settings)[goalId];
+  if (!p) return false;
+  return p.until === null || new Date(p.until).getTime() > now.getTime();
+}
+
+export async function setGoalPause(
+  db: Db,
+  userId: string,
+  goalId: string,
+  pause: GoalPause | null,
+): Promise<PausedGoals> {
+  const [u] = await db.sql<{ settings: Record<string, unknown> }>`
+    select settings from orbit.users where id = ${userId}::uuid`;
+  const goals = pausedGoalsOf(u?.settings);
+  if (pause) goals[goalId] = pause;
+  else delete goals[goalId];
+  await db.sql`
+    update orbit.users set settings = settings || jsonb_build_object('autopilot_paused_goals', ${goals}::jsonb)
+     where id = ${userId}::uuid`;
+  return goals;
+}
+
+const WHAT: Record<BreakerReason, string> = {
+  unsubscribe: 'asked to stop',
+  declines: 'declined, the second today',
+  bounce: 'bounced',
+  send_error: 'could not be sent to',
+};
+
+/**
+ * Trip the breaker for a goal: the pause is written (once; a goal already paused is left as it is), an audit row
+ * says why, and a `breaker` card tells the student: "Chloe Dubois asked to stop. Paused Ramp first messages."
+ */
+export async function tripBreaker(
+  db: Db,
+  userId: string,
+  p: {
+    goalId: string | null;
+    reason: BreakerReason;
+    personId: string | null;
+    personName: string;
+    company?: string | null;
+    messageId?: string | null;
+    now: Date;
+  },
+): Promise<{ tripped: boolean; text: string }> {
+  const [u] = await db.sql<{ settings: Record<string, unknown> }>`
+    select settings from orbit.users where id = ${userId}::uuid`;
+  const goalTitle = p.goalId
+    ? (await db.sql<{ title: string }>`select title from orbit.goals where id = ${p.goalId}::uuid`)[0]?.title
+    : undefined;
+  const where = p.company?.trim() || goalTitle || 'first messages';
+  const text = `${p.personName} ${WHAT[p.reason]}. Paused ${where}${p.company?.trim() || goalTitle ? ' first messages' : ''}.`;
+  if (p.goalId && goalPaused(u?.settings, p.goalId, p.now)) return { tripped: false, text };
+  if (p.goalId)
+    await setGoalPause(db, userId, p.goalId, {
+      reason: p.reason,
+      text,
+      until: null,
+      at: p.now.toISOString(),
+    });
+  await db.sql`
+    insert into orbit.audit_log (user_id, actor, action, target_table, target_id, details)
+    values (${userId}::uuid, 'system', 'autopilot.breaker', 'goals', ${p.goalId ?? userId},
+            ${{ reason: p.reason, personId: p.personId, messageId: p.messageId ?? null, goalId: p.goalId }}::jsonb)`;
+  await raiseCard(db, userId, {
+    kind: 'breaker',
+    dedupeKey: `breaker:${p.goalId ?? 'account'}:${p.messageId ?? p.personId ?? p.now.toISOString()}`,
+    reasonText: `${text} Read it?`,
+    personId: p.personId,
+    messageId: p.messageId ?? null,
+    signals: { reason: p.reason, goalId: p.goalId },
+    payload: { goalId: p.goalId, reason: p.reason, personName: p.personName, company: p.company ?? null },
+    priority: 0.9,
+    now: p.now,
+    notify: {
+      kind: 'system',
+      title: text,
+      link: p.personId ? `/people/${p.personId}` : '/settings/autopilot',
+    },
+  });
+  return { tripped: true, text };
+}
+
+/** Declines from this goal's people today (the person's chats name the goal), for the two-a-day rule. */
+export async function declinesToday(
+  db: Db,
+  userId: string,
+  goalId: string | null,
+  dayStart: Date,
+): Promise<number> {
+  const [r] = await db.sql<{ n: number }>`
+    select count(distinct m.id)::int as n
+      from orbit.messages m
+      join orbit.chats c on c.user_id = m.user_id and c.person_id = m.from_person_id
+     where m.user_id = ${userId}::uuid and m.direction = 'in' and m.reply_class = 'decline'
+       and m.sent_at >= ${dayStart}::timestamptz
+       and (${goalId}::uuid is null or c.goal_id = ${goalId}::uuid)`;
+  return r?.n ?? 0;
+}

@@ -86,7 +86,7 @@ export function composeSystem(p: SystemParams): string {
   if (p.kind === 'reply')
     lines.push(
       '',
-      'Answer what they said. If they proposed times, accept one that is free (given in <free_slots>) or offer those. Keep it shorter than their message unless they asked questions. Never leave a blank, a bracket or a placeholder: the message must be ready to send as written. If a fact is needed that is not in the inputs, write around it (offer to cover it on a call, or ask them) instead of guessing it.',
+      "Answer what they said. If they proposed times, accept one that is free (given in <free_slots>) or offer those. Keep it shorter than their message unless they asked questions. Never leave a blank, a bracket or a placeholder: the message must be ready to send as written. If a fact is needed that is not in the inputs, write around it (offer to cover it on a call, or ask them) instead of guessing it. When <task> carries the user's own answer to what they asked, the reply gives that answer in the user's words and asks nothing back. When <task> says the call is booked, the reply confirms that one time and offers no other.",
     );
   return lines.join('\n');
 }

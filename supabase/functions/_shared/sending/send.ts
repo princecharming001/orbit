@@ -31,6 +31,7 @@ import type { Db } from '../db.ts';
 import { HttpError } from '../http.ts';
 import { iso } from '../rows.ts';
 import type { Services } from '../services.ts';
+import { goalPaused, tripBreaker } from '../replies/breaker.ts';
 import { moveChat } from '../slots/slots.ts';
 import { validZone, zonedTime } from '../zones.ts';
 import { rawMessage } from './mime.ts';
@@ -368,6 +369,12 @@ export async function sendDraft(s: Services, draftId: string): Promise<SendResul
       'autopilot_paused',
       new Date(Math.min(paused.getTime(), now.getTime() + PAUSE_RECHECK_SEC * 1000)),
     );
+  // the breaker's pause for this goal (plan 29 §B2.7): what Orbit approved itself waits as a draft until it is lifted
+  if (agentApproved && !userApproved && goalPaused(u.settings, d.goal_id, now)) {
+    await settle('draft', { error: 'goal_paused' });
+    await audit(db, userId, 'system', 'draft.hold', d.id, { reason: 'goal_paused', goalId: d.goal_id });
+    return { status: 'held', reason: 'goal_paused' };
+  }
   // LinkedIn is never sent on Orbit's own (plan 29 §B6): only a fresh tap below sends it
   if (d.channel === 'linkedin' && agentApproved && !userApproved) {
     await settle('draft', { error: 'linkedin_never_auto' });
@@ -489,6 +496,16 @@ export async function sendDraft(s: Services, draftId: string): Promise<SendResul
     }
     await settle('failed', { error: out.error });
     await audit(db, userId, 'system', 'draft.failed', d.id, { error: out.error });
+    // a Gmail send error trips the breaker for the goal (plan 29 §B2.7): nothing more goes on its own until the
+    // student has looked
+    if (d.channel === 'gmail')
+      await tripBreaker(db, userId, {
+        goalId: d.goal_id,
+        reason: 'send_error',
+        personId: d.person_id,
+        personName: person.display_name,
+        now,
+      }).catch(() => undefined);
     return { status: 'failed', error: out.error };
   }
 

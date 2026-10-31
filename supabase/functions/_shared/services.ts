@@ -36,10 +36,56 @@ export interface AgentEnv {
   googleClientId?: string;
   googleClientSecret?: string;
   googleRedirectUri?: string;
+  /** RESEND_API_KEY (+ RESEND_FROM): the transactional mailer plan 10 §1 names; unset, nothing is mailed */
+  resendKey?: string;
+  resendFrom?: string;
 }
 
 /** gte-small sentence embedding (384 dims, mean-pooled, normalized), or null when the model is not available. */
 export type Embed = (text: string) => Promise<number[] | null>;
+
+/** One transactional email to the student's own address (plan 29 §B2.6); never to anyone else, never a reply's text. */
+export interface MailerMessage {
+  to: string;
+  subject: string;
+  text: string;
+}
+
+export interface Mailer {
+  /** false when no mailer is configured (the message is dropped, never queued) */
+  configured: boolean;
+  send(m: MailerMessage): Promise<{ ok: true; id: string | null } | { ok: false; error: string }>;
+}
+
+export const RESEND_URL = 'https://api.resend.com/emails';
+export const DEFAULT_MAIL_FROM = 'Orbit <orbit@tryorbit.today>';
+
+/** Resend when RESEND_API_KEY is set; otherwise a mailer that says so and sends nothing. */
+export function makeMailer(env: AgentEnv, doFetch: typeof fetch): Mailer {
+  const key = env.resendKey;
+  if (!key) return { configured: false, send: async () => ({ ok: false, error: 'unconfigured' }) };
+  return {
+    configured: true,
+    async send(m) {
+      const res = await doFetch(RESEND_URL, {
+        method: 'POST',
+        headers: { authorization: `Bearer ${key}`, 'content-type': 'application/json' },
+        body: JSON.stringify({
+          from: env.resendFrom || DEFAULT_MAIL_FROM,
+          to: [m.to],
+          subject: m.subject,
+          text: m.text,
+        }),
+      });
+      if (!res.ok) {
+        await res.body?.cancel().catch(() => undefined);
+        return { ok: false, error: `resend ${res.status}` };
+      }
+      const json = (await res.json().catch(() => ({}))) as { id?: string };
+      return { ok: true, id: typeof json.id === 'string' ? json.id : null };
+    },
+  };
+}
 
 export interface AgentConfig {
   env: AgentEnv;
@@ -71,6 +117,8 @@ export interface Services {
   semanticScholar: SemanticScholar;
   village: Village;
   embed: Embed;
+  /** the student's own mailbox (plan 29 §B2.6): a no-op until RESEND_API_KEY is set */
+  mailer: Mailer;
   /** undefined when Orbit's Google client is not configured */
   google?: GoogleConfig;
   tokens?: TokenSource;
@@ -148,6 +196,7 @@ export function makeServices(cfg: AgentConfig, base: { db: Db; now?: () => Date;
       createVillage({ ...p, secretKey: env.villageKey, baseUrl: env.villageBase }),
     ),
     embed: cfg.embed ?? supabaseEmbed(),
+    mailer: makeMailer(env, doFetch),
     google,
     tokens,
   };
@@ -179,5 +228,7 @@ export function agentEnvFrom(get: (name: string) => string | undefined): AgentEn
     googleRedirectUri:
       get('ORBIT_GOOGLE_REDIRECT_URI') ??
       (supabaseUrl ? `${supabaseUrl}/functions/v1/orbit-api/auth/google/callback` : undefined),
+    resendKey: get('RESEND_API_KEY'),
+    resendFrom: get('RESEND_FROM'),
   };
 }

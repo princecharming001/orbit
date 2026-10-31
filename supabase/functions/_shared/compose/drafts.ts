@@ -37,6 +37,9 @@ export type DraftRow = Record<string, unknown> & {
   review_until: Date | string | null;
   auto_rung: string | null;
   outcome: string | null;
+  /** plan 29 §B2.3: the slot starts this draft offered, and what only the student can fill in before it goes */
+  offered_slots: unknown[] | null;
+  needs: string[] | null;
   created_at: Date | string;
   updated_at: Date | string;
 };
@@ -53,6 +56,12 @@ export interface DraftMeta {
   reason?: string;
   /** the compliance footer added to a sales first touch (§7.7) */
   footer?: string;
+  /** the question the draft asks the student ([ASK USER], §8.6), as data */
+  question?: string;
+  /** the student's answer the reply was drafted around (plan 29 §B2.3) */
+  answer?: string;
+  /** the booked time this reply confirms (plan 29 §B2.3) */
+  confirms?: { start: string; label: string };
 }
 
 export function toServerDraft(r: DraftRow): ServerDraft {
@@ -71,7 +80,13 @@ export function toServerDraft(r: DraftRow): ServerDraft {
     validator: r.validator ?? null,
     generatedBy: r.generated_by === 'llm' ? 'llm' : 'template',
     hooks: Array.isArray(r.hooks) ? r.hooks : [],
-    needsInput: askUserMarkers(`${r.subject ?? ''}\n${r.body}`),
+    // the column says what is missing; a marker still in the body (an older draft) says the same
+    needsInput: [
+      ...new Set([
+        ...askUserMarkers(`${r.subject ?? ''}\n${r.body}`),
+        ...(Array.isArray(r.needs) && r.needs.length && r.ask?.question ? [r.ask.question] : []),
+      ]),
+    ],
     createdAt: iso(r.created_at)!,
     updatedAt: iso(r.updated_at)!,
   };

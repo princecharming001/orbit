@@ -27,6 +27,7 @@ import { askUserMarkers } from '../compose/prompts.ts';
 import { nextSendWindow } from '../compose/window.ts';
 import type { Db } from '../db.ts';
 import { HttpError } from '../http.ts';
+import { goalPaused } from '../replies/breaker.ts';
 import { iso, isoRow, num } from '../rows.ts';
 import type { Services } from '../services.ts';
 import { moveChat } from '../slots/slots.ts';
@@ -50,6 +51,10 @@ export interface CadenceState {
   autoKinds: string[];
   /** ISO: Orbit approves nothing on its own before then (users.settings.autopilot_paused_until) */
   pausedUntil?: string;
+  /** users.settings as stored, for the breaker's per-goal pauses (plan 29 §B2.7) */
+  settings: Record<string, unknown>;
+  /** people whose reply asked the student something still unanswered: their bumps wait (plan 29 §B2.3) */
+  awaitingStudent: Set<string>;
 }
 
 /** Everything `cadenceActions` reads, from the user's rows. */
@@ -169,6 +174,10 @@ export async function loadCadence(db: Db, userId: string, now: Date): Promise<Ca
   const nurtured = draftRows
     .filter((d) => d.kind === 'nurture' || d.kind === 'reengage')
     .map((d) => iso(d.created_at)!);
+  // people whose reply asked the student something that is still unanswered (plan 29 §B2.3): no bump meanwhile
+  const awaiting = await db.sql<{ person_id: string }>`
+    select distinct person_id from orbit.suggestions
+     where user_id = ${userId}::uuid and kind = 'needs_you' and status in ('pending', 'snoozed') and person_id is not null`;
   const maxBumps = num(settings.max_bumps, 2);
   const quiet = typeof settings.quiet_until === 'string' ? settings.quiet_until : undefined;
   return {
@@ -185,6 +194,8 @@ export async function loadCadence(db: Db, userId: string, now: Date): Promise<Ca
     timezone: tz,
     chatsById: new Map(chats.map((c) => [c.id, c])),
     goalsById: new Map(goals.map((g) => [g.id, g])),
+    settings,
+    awaitingStudent: new Set(awaiting.map((r) => r.person_id)),
     autonomyLevel: num(u?.autonomy_level, 0),
     autoKinds: Array.isArray(settings.auto_kinds)
       ? (settings.auto_kinds as unknown[]).filter(
@@ -290,6 +301,11 @@ export async function runCadence(s: Services, userId: string): Promise<CadenceSu
         out.skipped++;
         continue;
       }
+      // a reply that asked the student something holds the bumps until they answer (plan 29 §B2.3)
+      if (a.kind === 'bump' && st.awaitingStudent.has(a.personId)) {
+        out.skipped++;
+        continue;
+      }
       if (a.kind === 'thank_you' && pending(a.chatId, a.personId, ['thank_you'], 7 * DAY)) {
         out.skipped++;
         continue;
@@ -322,7 +338,10 @@ export async function runCadence(s: Services, userId: string): Promise<CadenceSu
       // next window on its own, under the browser's conditions; the send job checks it all again at send time
       const goal = a.goalId ? st.goalsById.get(a.goalId) : undefined;
       const level = goal?.autonomyLevel ?? st.autonomyLevel;
-      const paused = !!st.pausedUntil && now.getTime() < new Date(st.pausedUntil).getTime();
+      // the account's pause, and the breaker's for this goal (plan 29 §B2.7)
+      const paused =
+        (!!st.pausedUntil && now.getTime() < new Date(st.pausedUntil).getTime()) ||
+        goalPaused(st.settings, a.goalId ?? null, now);
       const score = st.input.people.get(a.personId)?.score ?? 0;
       if (
         level >= 1 &&

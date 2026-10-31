@@ -151,6 +151,14 @@ export const PULL_TABLES: PullTable[] = [
   { table: 'dossiers', key: 'id', cursor: 'updated_at' },
   { table: 'recommendations', key: 'id', cursor: 'updated_at' },
   { table: 'intro_requests', key: 'id', cursor: 'updated_at' },
+  // plan 29 §B2.3: the cards and notices the reply funnel raises, in the browser's own shapes
+  {
+    table: 'suggestions',
+    key: 'id',
+    cursor: 'updated_at',
+    map: (r) => ({ ...r, outboundMessageId: r.draftId ?? undefined, carriedOver: r.carriedOver ?? 0 }),
+  },
+  { table: 'notifications', key: 'id', cursor: 'updated_at' },
 ];
 
 export const PULL_BY_NAME = new Map(PULL_TABLES.map((t) => [t.table, t]));

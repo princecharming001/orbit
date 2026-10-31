@@ -150,9 +150,12 @@ export async function classifyMessage(
            extraction = ${extraction}::jsonb
      where id = ${m.id}::uuid`;
 
-  // the sent draft this answers
+  // the sent draft this answers, and how it ended (plan 29 §B2.5): declined for a decline or an unsubscribe, replied
+  // otherwise; a booking sets booked later
+  const outcome = cls === 'decline' || cls === 'unsubscribe' ? 'declined' : 'replied';
   await db.sql`
-    update orbit.drafts set replied_at = ${sentAt}::timestamptz, reply_class = ${cls}
+    update orbit.drafts set replied_at = ${sentAt}::timestamptz, reply_class = ${cls},
+           outcome = case when outcome = 'booked' then outcome else ${outcome} end
      where id = (
        select d.id from orbit.drafts d
         where d.user_id = ${userId}::uuid and d.status = 'sent' and d.replied_at is null

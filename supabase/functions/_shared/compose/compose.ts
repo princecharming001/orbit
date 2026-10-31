@@ -74,6 +74,8 @@ export interface ComposeRequest {
   /** why cadence drafted it */
   reason?: string;
   actor?: 'user' | 'agent';
+  /** a reply that confirms a call the funnel just booked (plan 29 §B2.3): that time, and no other */
+  confirmSlot?: { start: string; label: string };
 }
 
 export interface ComposeResult {
@@ -167,7 +169,10 @@ export async function composeDraft(s: Services, req: ComposeRequest): Promise<Co
   const schedulingLink =
     typeof user.settings.scheduling_link === 'string' ? user.settings.scheduling_link : undefined;
   let slots: Slot[] = [];
-  const wantsTimes = replyClass === 'interested' || replyClass === 'scheduling';
+  // the student's answer to a question the reply asked (plan 29 §B2.3), and a booked time to confirm
+  const answer = replyTo?.answer?.trim() || undefined;
+  const confirms = req.kind === 'reply' ? req.confirmSlot : undefined;
+  const wantsTimes = !confirms && (replyClass === 'interested' || replyClass === 'scheduling');
   if (req.kind === 'reply' && wantsTimes) {
     try {
       slots = (await slotsFor(s, req.userId, { personId: person.id, count: 3 })).slots;
@@ -194,6 +199,10 @@ export async function composeDraft(s: Services, req: ComposeRequest): Promise<Co
     topic ? `about: ${topic}` : '',
     req.reason ? `why now: ${req.reason}` : '',
     schedulingLink && wantsTimes ? `scheduling link: ${schedulingLink}` : '',
+    answer ? `${meFirst}'s answer to what they asked, in ${meFirst}'s words: ${answer}` : '',
+    confirms
+      ? `the call is booked for ${confirms.label} and the invite is sent: confirm that time in one line, offer no other times, ask nothing`
+      : '',
   ]
     .filter(Boolean)
     .join('\n');
@@ -241,6 +250,8 @@ export async function composeDraft(s: Services, req: ComposeRequest): Promise<Co
     target ? recipientText(target) : '',
     meFirst,
     user.full_name ?? '',
+    answer ?? '',
+    confirms?.label ?? '',
   ].join('\n');
   const ctx = {
     goal: goalKind,
@@ -313,10 +324,15 @@ export async function composeDraft(s: Services, req: ComposeRequest): Promise<Co
       window,
       replyClass,
       slots,
+      answer,
+      confirms,
     });
     composed = t;
     promptVersion = t.promptVersion;
   }
+  // an answer the student gave fills any marker the model still left; the reply never asks what was answered
+  if (answer && askUserMarkers(composed.body).length)
+    composed = { ...composed, body: composed.body.replace(ASK_USER, answer) };
 
   // the compliance footer on a sales first touch (§7.7, §14.3), outside what the validator counts
   let footer: string | undefined;
@@ -329,6 +345,7 @@ export async function composeDraft(s: Services, req: ComposeRequest): Promise<Co
   const forCheck = composed.body.replace(ASK_USER, '').trim();
   const v = validateComposed({ ...composed, body: forCheck }, ctx);
   const markers = askUserMarkers(composed.body);
+  const needs = markers.length ? ['answer'] : [];
   const issues = v.issues
     .filter((i) => i.blocking)
     .map((i) => `${i.code}: ${i.detail}`)
@@ -340,19 +357,24 @@ export async function composeDraft(s: Services, req: ComposeRequest): Promise<Co
     text: composed.ask.text,
     ...(replyTo ? { replyToMessageId: replyTo.id } : {}),
     ...(slots.length ? { slots: slots.map((x) => x.start) } : {}),
+    ...(confirms ? { slots: [confirms.start], confirms } : {}),
     ...(req.reason ? { reason: req.reason } : {}),
     ...(footer ? { footer } : {}),
+    ...(markers.length ? { question: markers[0] } : {}),
+    ...(answer ? { answer } : {}),
   };
+  const offeredSlots = confirms ? [confirms.start] : slots.length ? slots.map((x) => x.start) : null;
   const level = goal?.autonomy_level ?? user.autonomy_level ?? 0;
   const via = req.via ? { ...req.via } : null;
   const [row] = await db.sql<DraftRow>`
     insert into orbit.drafts (user_id, person_id, chat_id, goal_id, channel, kind, subject, body, ask, hooks, via,
                               thread_external_id, in_reply_to, status, autonomy_level, validator, generated_by,
-                              prompt_version, variant)
+                              prompt_version, variant, offered_slots, needs)
     values (${req.userId}::uuid, ${person.id}::uuid, ${chatId}::uuid, ${goal?.id ?? null}::uuid, ${req.channel},
             ${req.kind}, ${composed.subject}, ${body}, ${meta}::jsonb, ${JSON.stringify(composed.hooks)}::jsonb,
             ${via}::jsonb, ${thread.externalId}, ${replyTo?.rfc_message_id ?? replyTo?.external_id ?? null}, 'draft',
-            ${level}::smallint, ${validator}::jsonb, ${generatedBy}, ${promptVersion}, null)
+            ${level}::smallint, ${validator}::jsonb, ${generatedBy}, ${promptVersion}, null,
+            ${offeredSlots ? JSON.stringify(offeredSlots) : null}::jsonb, ${needs}::text[])
     returning *`;
   await db.sql`
     insert into orbit.audit_log (user_id, actor, action, target_table, target_id, details)
@@ -488,12 +510,14 @@ type ReplyMessage = {
   from_person_id: string | null;
   reply_class: string | null;
   sent_at: Date;
+  /** the student's answer to what the reply asked (plan 29 §B2.3) */
+  answer: string | null;
 };
 
 export async function loadReplyMessage(db: Db, userId: string, messageId: string): Promise<ReplyMessage> {
   if (!/^[0-9a-f-]{36}$/i.test(messageId)) throw new HttpError(400, 'bad_request', 'messageId is required');
   const [m] = await db.sql<ReplyMessage>`
-    select id, thread_id, provider, external_id, rfc_message_id, from_person_id, reply_class, sent_at
+    select id, thread_id, provider, external_id, rfc_message_id, from_person_id, reply_class, sent_at, answer
       from orbit.messages
      where id = ${messageId}::uuid and user_id = ${userId}::uuid and direction = 'in'`;
   if (!m) throw new HttpError(404, 'not_found', 'no such reply');
@@ -583,6 +607,8 @@ function templateMessage(p: {
   window: { notBefore: string; tz: string };
   replyClass?: ReplyClass;
   slots: Slot[];
+  answer?: string;
+  confirms?: { start: string; label: string };
 }): Omit<ComposedMessage, 'validator'> {
   const { req, user, person } = p;
   const me = userFirstName(user);
@@ -644,6 +670,8 @@ function replyTemplate(
     window: { notBefore: string; tz: string };
     replyClass?: ReplyClass;
     slots: Slot[];
+    answer?: string;
+    confirms?: { start: string; label: string };
   },
   me: string,
 ): Omit<ComposedMessage, 'validator'> {
@@ -651,6 +679,42 @@ function replyTemplate(
   const sign = `Best,\n${me}`;
   let middle: string;
   let ask: ComposedMessage['ask'] = { kind: 'none', text: '' };
+  if (p.confirms) {
+    // the call is booked: confirm that time and nothing else
+    middle = `${p.confirms.label} works for me, and the calendar invite is on its way. Looking forward to it.`;
+    return {
+      id: '',
+      goalId: p.goalId,
+      personId: p.person.id,
+      kind: 'reply',
+      channel: p.req.channel,
+      subject: null,
+      body: [hi, middle, sign].join('\n\n'),
+      ask,
+      hooks: [],
+      sendWindow: p.window,
+      promptVersion: 'template-v2',
+      variant: null,
+    };
+  }
+  if (p.answer) {
+    // the student answered what was asked: their words carry the reply
+    middle = `Thanks for asking. ${p.answer.replace(/[.!?]*$/, '')}. Happy to say more whenever works for you.`;
+    return {
+      id: '',
+      goalId: p.goalId,
+      personId: p.person.id,
+      kind: 'reply',
+      channel: p.req.channel,
+      subject: null,
+      body: [hi, middle, sign].join('\n\n'),
+      ask,
+      hooks: [],
+      sendWindow: p.window,
+      promptVersion: 'template-v2',
+      variant: null,
+    };
+  }
   switch (p.replyClass) {
     case 'interested':
     case 'scheduling':

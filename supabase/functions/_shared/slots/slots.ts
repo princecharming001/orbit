@@ -203,6 +203,7 @@ export async function bookSlot(
   userId: string,
   req: { draftId: string; slotStart: string },
   appUrl: string,
+  opts: { actor?: 'user' | 'agent' } = {},
 ): Promise<BookResponse> {
   const [d] = await s.db.sql<{ id: string; person_id: string; chat_id: string | null }>`
     select id, person_id, chat_id from orbit.drafts where id = ${req.draftId}::uuid and user_id = ${userId}::uuid`;
@@ -211,6 +212,13 @@ export async function bookSlot(
   if (Number.isNaN(start.getTime())) throw new HttpError(400, 'bad_request', 'slotStart must be an ISO time');
   if (start.getTime() <= s.now().getTime()) throw new HttpError(409, 'slot_past', 'that time has passed');
   const end = new Date(start.getTime() + SLOT_MINUTES * 60_000);
+  // booked already (the funnel and a tap can meet here): the event that exists is the answer, never a second invite
+  const [had] = await s.db.sql<{ external_id: string }>`
+    select external_id from orbit.calendar_events
+     where user_id = ${userId}::uuid and start_at = ${start}::timestamptz
+       and ${d.person_id}::uuid = any(attendee_person_ids) and coalesce(status, 'confirmed') <> 'cancelled'
+     limit 1`;
+  if (had) return { eventId: had.external_id };
 
   const [acct] = await s.db.sql<{ scopes: string[]; status: string }>`
     select scopes, status from orbit.integration_accounts where user_id = ${userId}::uuid and provider = 'google'`;
@@ -255,7 +263,7 @@ export async function bookSlot(
     on conflict (user_id, external_id) do nothing`;
   await s.db.sql`
     insert into orbit.audit_log (user_id, actor, action, target_table, target_id, details)
-    values (${userId}::uuid, 'user', 'calendar.book', 'drafts', ${d.id}, ${{ start: iso(start) }}::jsonb)`;
+    values (${userId}::uuid, ${opts.actor ?? 'user'}, 'calendar.book', 'drafts', ${d.id}, ${{ start: iso(start) }}::jsonb)`;
   if (d.chat_id) await moveChat(s.db, userId, d.chat_id, 'scheduled', 'call booked', s.now());
   return { eventId };
 }

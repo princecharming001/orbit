@@ -97,6 +97,8 @@ describe('orbit core migration', () => {
       'orbit-health',
       'orbit-incremental',
       'orbit-nightly',
+      // plan 29 §B2.5: the hourly outcome roll, scheduled by 20261101_orbit_autopilot_phase3.sql
+      'orbit-outcomes',
       'orbit-retention',
       'orbit-worker-tick',
     ]);

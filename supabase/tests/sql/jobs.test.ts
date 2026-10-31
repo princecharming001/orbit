@@ -256,6 +256,8 @@ describe('orbit.delete_user (§10.4 test 4)', () => {
         values ('${u}', '${goal}', '{}', 'exa', 0.5, gen_random_uuid());
       insert into orbit.intro_requests (user_id, path, path_score, rank) values ('${u}', '[]', 0.3, 1);
       insert into orbit.memories (user_id, kind, text, source) values ('${u}', 'preference', 't', 'chat');
+      insert into orbit.suggestions (user_id, kind, reason_text, dedupe_key, expires_at) values ('${u}', 'needs_you', 'q', 'k', now());
+      insert into orbit.notifications (user_id, kind, title) values ('${u}', 'system', 't');
       insert into orbit.usage_ledger (user_id, provider, operation, units, cost_usd) values ('${u}', 'anthropic', 'x', 1, 0.01);
       insert into orbit.job_runs (queue, user_id, kind, status) values ('orbit_sync', '${u}', 'noop', 'ok');
       insert into orbit.audit_log (user_id, actor, action) values ('${u}', 'user', 'x');

@@ -296,12 +296,19 @@ export interface ReplyItem {
   threadId: string;
   personId: string | null;
   personName: string;
+  /** the sender's company, when Orbit knows it (plan 29: the breaker names it) */
+  company?: string | null;
   channel: ApiChannel;
   replyClass: ReplyClass;
   confidence: number;
   receivedAt: string;
   snippet: string;
   draftId: string | null;
+  /** a question reply (plan 29 §B2.3): what they asked, and the student's answer once given */
+  question?: string | null;
+  answer?: string | null;
+  /** what the funnel did with it (plan 29 §B2.5): booked, replied, declined */
+  outcome?: 'replied' | 'booked' | 'declined' | 'silent' | null;
 }
 /** POST /replies/list: inbound replies to the student's outreach, newest first, last 30 days */
 export interface RepliesListResponse {
@@ -675,6 +682,10 @@ export interface AutopilotItem {
   question?: string;
   /** the rung that let it go on its own */
   autoRung?: AutopilotRung['kind'];
+  /** how it ended (plan 29 §B2.5): a scheduling reply that booked the call says `booked` */
+  outcome?: 'replied' | 'booked' | 'declined' | 'silent' | null;
+  /** the inbound message this item answers (a reply, or the question under Needs you) */
+  messageId?: string;
 }
 
 /** GET /autopilot/status */
@@ -718,9 +729,13 @@ export interface AutopilotPauseResponse {
   cancelled: number;
 }
 
-/** POST /replies/answer { draftId, answer }: the student's one line fills the question and the reply drafts itself */
+/**
+ * POST /replies/answer { draftId | messageId, answer }: the student's one line answers the question a reply asked
+ * (the Needs you card's message, or a draft that still asks for it) and the reply drafts itself around the answer.
+ */
 export interface ReplyAnswerRequest {
-  draftId: string;
+  draftId?: string;
+  messageId?: string;
   answer: string;
 }
 export interface ReplyAnswerResponse {

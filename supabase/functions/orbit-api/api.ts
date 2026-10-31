@@ -28,6 +28,7 @@ import { type AgentConfig, makeServices, type Services } from '../_shared/servic
 import { checkSession, type SessionConfig, sessionSecretUsable, verifyBearer } from '../_shared/session.ts';
 import { accountDelete, accountExport } from './account.ts';
 import { googleCallback, googleStart, logout, me, refresh, session } from './auth.ts';
+import { autopilotRoutes } from './routes/autopilot.ts';
 import { cadenceRoutes } from './routes/cadence.ts';
 import { calendarRoutes } from './routes/calendar.ts';
 import { draftRoutes } from './routes/drafts.ts';
@@ -155,6 +156,7 @@ const ROUTES: Record<string, Route> = {
   ...memoryRoutes,
   ...settingsRoutes,
   ...cadenceRoutes,
+  ...autopilotRoutes,
 };
 
 /** The secrets a route needs that are not set. */

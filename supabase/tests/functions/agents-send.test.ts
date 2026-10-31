@@ -803,18 +803,25 @@ describe('replies (§8)', () => {
     const at = new Date('2026-10-15T15:00:00Z'); // 11:00 in New York
     const handlers = defaultHandlers({ agents: cfg });
     const queue = sqlQueue(t.db);
-    const classify = (userId: string, messageId: string) =>
-      handlers['classify.message']!(
-        {
+    // plan 29 §B2.3: classify.message queues funnel.reply for an interested or scheduling reply; the funnel drafts
+    const classify = async (userId: string, messageId: string) => {
+      const job = (kind: string) =>
+        ({
           queue: 'orbit_classify',
           msgId: 0,
           readCt: 1,
-          kind: 'classify.message',
+          kind,
           userId,
           payload: { messageId },
-        } satisfies Job,
-        { db: t.db, queue, now: () => at },
-      );
+        }) satisfies Job;
+      await handlers['classify.message']!(job('classify.message'), { db: t.db, queue, now: () => at });
+      const [queued] = await t.db.sql<{ message: { kind: string } }>`
+        select message from pgmq.q_orbit_classify where message->>'userId' = ${userId}
+           and message->>'kind' = 'funnel.reply'`;
+      expect(queued?.message.kind).toBe('funnel.reply');
+      await t.db.sql`delete from pgmq.q_orbit_classify where message->>'userId' = ${userId}`;
+      await handlers['funnel.reply']!(job('funnel.reply'), { db: t.db, queue, now: () => at });
+    };
     const scheduling = async (level: 0 | 2) => {
       const { userId } = await signedInUser(t);
       await t.db.sql`update orbit.users set autonomy_level = ${level}::smallint where id = ${userId}::uuid`;

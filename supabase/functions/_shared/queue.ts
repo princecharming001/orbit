@@ -26,6 +26,8 @@ export const KIND_QUEUE: Record<string, QueueName> = {
   'sync.contacts': 'orbit_sync',
   'sync.linkedin': 'orbit_sync',
   'cadence.user': 'orbit_cadence',
+  'funnel.reply': 'orbit_classify',
+  'outcomes.roll': 'orbit_cadence',
   'health.snapshot': 'orbit_cadence',
   'score.user': 'orbit_score',
   'score.person': 'orbit_score',
