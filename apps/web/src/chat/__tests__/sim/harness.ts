@@ -11,6 +11,7 @@ import type { User } from '@orbit/core';
 import { db, wipeDatabase } from '../../../db/schema';
 import { createLocalUser } from '../../../engine/account';
 import { loadDemo } from '../../../engine/demo';
+import { activeGoals, goalLine } from '../../../engine/goals';
 import {
   clearSession,
   completeSignIn,
@@ -893,6 +894,7 @@ export async function judgeRun(screen: string, expected: string): Promise<RunVer
 /** The student's own facts, for the judge: name, school, year, majors and what they wrote in setup. */
 export async function studentFacts(user: User): Promise<string> {
   const goals = await db.goals.get(user.id);
+  const tracked = await activeGoals(user.id).catch(() => []);
   const bits = [
     user.fullName || user.firstName,
     [user.school, user.graduationYear ? `class of ${user.graduationYear}` : ''].filter(Boolean).join(', '),
@@ -902,6 +904,7 @@ export async function studentFacts(user: User): Promise<string> {
     goals?.story ? `their story: ${goals.story}` : '',
     goals?.aim ? `their aim: ${goals.aim}` : '',
     goals?.proudOf ? `proud of: ${goals.proudOf}` : '',
+    tracked.length ? `tracked goals: ${tracked.map((g) => goalLine(g)).join('; ')}` : '',
   ].filter(Boolean);
   return bits.join('. ').replace(/[—–]/g, ',');
 }
