@@ -73,6 +73,8 @@ const person: Row.People = {
   tags: ['fintech'],
   notes: null,
   do_not_contact: false,
+  // plan 29 §A1: hidden from friends
+  private: false,
   hidden_at: null,
   merged_into: null,
   created_at: AT,

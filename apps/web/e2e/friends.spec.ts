@@ -3,10 +3,9 @@ import { type FakeOrbitApi, withFriend } from '../src/test/fakeOrbitApi';
 import { withFakeApi } from './fakeApi';
 
 /**
- * Friends (plan 29 Part A, A7 acceptance): two Orbit users pool their networks against the fake orbit-api. The flows
- * are written down here as the tests they will become; each is `fixme` until phase 2 lands the Friends tab, the
- * routes and the chat tools (C1). The fake already seeds Ana Okafor (120 shared people, six at the targets) through
- * `withFriend`, so every row has its data the day the screen exists.
+ * Friends (plan 29 Part A, A7 acceptance): two Orbit users pool their networks against the fake orbit-api. The fake
+ * seeds Ana Okafor (120 shared people, six at the targets) through `withFriend`, with one open ask of the student
+ * (Lena Novak at Ramp). Both sides run in one browser: the student is signed in, Ana's side is the fake's state.
  */
 
 /** The demo student's people, as the fake's seed wants them (names only; the join is by name, A2.6). */
@@ -25,15 +24,19 @@ const STUDENT_PEOPLE = [
   },
 ];
 
+/** Signed in to an account that finished setup elsewhere, with Ana as a friend. */
 async function signedInWithAna(page: Page): Promise<FakeOrbitApi> {
   const api = await withFakeApi(page);
   withFriend(api, { id: api.state.user.id, firstName: api.state.user.firstName ?? 'Maya' }, STUDENT_PEOPLE);
+  api.state.user.onboarding = { completed_at: '2026-10-05T12:00:00.000Z' };
   await page.goto('');
+  await page.getByTestId('landing-login').click();
+  await expect(page.getByTestId('greeting')).toBeVisible({ timeout: 20_000 });
   return api;
 }
 
 test.describe('friends (plan 29 A7, fake orbit-api)', () => {
-  test.fixme('A invites B by email, B accepts, A sees "shares N people"', async ({ page }) => {
+  test('A invites B by email, B accepts, A sees "shares N people"', async ({ page }) => {
     const api = await signedInWithAna(page);
     await page.goto('friends');
     await page.getByTestId('friends-invite-email').fill('noah.patel@cornell.edu');
@@ -45,22 +48,21 @@ test.describe('friends (plan 29 A7, fake orbit-api)', () => {
     await expect(page.getByTestId('friend-row').first()).toContainText('6 at your targets');
   });
 
-  test.fixme("A finds a route to B's contact on the Map, drawn through the friend", async ({ page }) => {
+  test("A finds a route to B's contact on the Map, drawn through the friend", async ({ page }) => {
     await signedInWithAna(page);
-    await page.goto('reach/stripe');
+    await page.goto('map?reach=1&company=Stripe');
     const through = page.getByTestId('reach-through-friends');
-    await expect(through).toContainText('Through friends: 2 people');
+    await expect(through).toContainText('Through friends: 2 people', { timeout: 20_000 });
     await expect(through).toContainText('Dan Lee');
     await expect(page.getByTestId('route-badge-friend').first()).toContainText('via Ana');
   });
 
-  test.fixme('A asks B for the intro: the ask goes to Ana with a blurb, never a note to Dan', async ({
-    page,
-  }) => {
+  test('A asks B for the intro: the ask goes to Ana with a blurb, never a note to Dan', async ({ page }) => {
     const api = await signedInWithAna(page);
     await page.goto('friends');
     await page.getByTestId('friend-ask-intro').first().click();
     await page.getByTestId('friend-ask-target').fill('Dan Lee');
+    await expect(page.getByTestId('friend-ask-picked')).toContainText('Dan Lee');
     await page
       .getByTestId('friend-ask-note')
       .fill('Junior at Cornell on payments infra, would love 15 minutes.');
@@ -71,7 +73,7 @@ test.describe('friends (plan 29 A7, fake orbit-api)', () => {
     expect([...api.state.drafts.values()].some((d) => /Dan/.test(d.body))).toBe(false);
   });
 
-  test.fixme("B sees the ask, forwards it, and A's Drafts shows the forwarded card", async ({ page }) => {
+  test("B sees the ask, forwards it, and A's Drafts shows the forwarded card", async ({ page }) => {
     const api = await signedInWithAna(page);
     await page.goto('friends');
     const ask = page.getByTestId('friend-ask-received').first();
@@ -80,36 +82,47 @@ test.describe('friends (plan 29 A7, fake orbit-api)', () => {
     // the forward is a draft the student approves like any other, with Ana in cc
     await expect(page.getByTestId('draft-body')).toContainText("Cc'ing Ana");
     await page.getByTestId('draft-approve').click();
+    await expect(page.getByTestId('friend-forward-approved')).toBeVisible();
     expect(api.state.friendAsks.find((a) => a.id === 'ask_ana_lena')?.status).toBe('forwarded');
     await expect(page.getByTestId('friend-asks-received')).toContainText('forwarded');
   });
 
-  test.fixme('revoke sharing and the route through the friend is gone', async ({ page }) => {
+  test('revoke sharing and the route through the friend is gone', async ({ page }) => {
     const api = await signedInWithAna(page);
     await page.goto('friends');
+    await expect(page.getByTestId('friend-row').first()).toBeVisible();
     await page.getByTestId('friend-share-mode').first().selectOption('none');
     await expect(page.getByTestId('friend-share-preview')).toContainText('Ana sees nothing yet');
-    expect(api.state.friendShareMode).toBe('none');
+    await expect.poll(() => api.state.friendShareMode).toBe('none');
     // the other direction: ending the friendship removes Ana's people from Reach within the same load
     await page.getByTestId('friend-end').first().click();
     await page.getByRole('button', { name: /^end friendship/i }).click();
-    await page.goto('reach/stripe');
+    await expect(page.getByTestId('friends-empty')).toBeVisible();
+    await page.goto('map?reach=1&company=Stripe');
+    await expect(page.getByTestId('company-none')).toBeVisible({ timeout: 20_000 });
     await expect(page.getByTestId('reach-through-friends')).toHaveCount(0);
   });
 
-  test.fixme('the preview equals the projection row for row, and never carries an address', async ({
-    page,
-  }) => {
+  test('the preview equals the projection row for row, and never carries an address', async ({ page }) => {
     const api = await signedInWithAna(page);
     await page.goto('friends');
     await page.getByTestId('friend-share-preview-open').click();
     const rows = page.getByTestId('share-preview-row');
     await expect(rows).toHaveCount(api.state.ownShares.length);
-    for (const row of api.state.ownShares) await expect(page.getByText(row.displayName)).toBeVisible();
+    for (const row of api.state.ownShares)
+      await expect(page.getByText(row.displayName).first()).toBeVisible();
     await expect(page.getByTestId('share-preview')).not.toContainText('@');
   });
 
-  test.fixme('local mode: the tab is one paragraph and the sign-in', async ({ page }) => {
+  test('local mode: the tab is one paragraph and the sign-in', async ({ page }) => {
+    // an account-capable build, nobody signed in: the demo student opens Friends
+    await withFakeApi(page);
+    await page.goto('');
+    await page
+      .getByRole('button', { name: /^try the demo$/i })
+      .first()
+      .click();
+    await expect(page.getByTestId('greeting')).toContainText(/^Hey /, { timeout: 90_000 });
     await page.goto('friends');
     await expect(page.getByTestId('friends-needs-account')).toContainText('Friends pool their networks');
     await expect(page.getByTestId('ob-google-signin')).toBeVisible();

@@ -60,7 +60,6 @@ export function ReceivedAskRow({
   const [body, setBody] = useState('');
   const [approving, setApproving] = useState(false);
   const [approved, setApproved] = useState<string>();
-  const friendFirst = ask.friendName.split(' ')[0];
   const askerFirst = ask.askerName.split(' ')[0];
   const forward = async () => {
     const r = await onRespond(ask, 'forward');
@@ -84,11 +83,10 @@ export function ReceivedAskRow({
       setApproving(false);
     }
   };
-  void friendFirst;
   return (
     <li className="py-3" data-testid="friend-ask-received" data-status={ask.status}>
       <div className="text-[13.5px]">
-        <span className="font-medium">{ask.askerName}</span> wants to meet {ask.targetName}
+        <span className="font-medium">{askerFirst}</span> wants to meet {ask.targetName}
         {ask.targetCompany ? ` at ${ask.targetCompany}` : ''}.{' '}
         {ask.status === 'asked'
           ? `Forward ${askerFirst === 'You' ? 'the' : 'their'} note?`

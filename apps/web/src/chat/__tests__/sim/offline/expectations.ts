@@ -28,7 +28,11 @@ const MAP = ['find_routes', 'open_page', 'get_person', 'get_intro_web'];
 export const CAP_EXPECT: Record<string, Expect> = Object.fromEntries([
   // plan 29 Part A: without a key the router lists the friends or asks for the note the friend forwards; in the demo
   // every friends tool answers that Friends needs an account
-  also('friend_ask', ['list_friends', 'find_routes', 'ask_for_intro', 'create_draft', 'get_intro_web'], ANSWER),
+  also(
+    'friend_ask',
+    ['list_friends', 'find_routes', 'ask_for_intro', 'create_draft', 'get_intro_web'],
+    ANSWER,
+  ),
   also('friend_respond', ['list_friends'], ANSWER),
   also('friend_list', ['find_routes'], ANSWER),
   also('friend_invite', [], ANSWER),
