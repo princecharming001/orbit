@@ -109,6 +109,7 @@ describe('every tool parses and executes its example input against the demo', ()
       get_settings: {},
       get_usage: {},
       explain_stage: { stage: 'followed_up' },
+      lookup_playbook: { topic: 'how does banking recruiting work' },
       open_page: { page: 'person', id: ids.person.id, tab: 'prep' },
       offer_choices: {
         options: [

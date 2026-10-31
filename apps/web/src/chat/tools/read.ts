@@ -16,7 +16,9 @@ import {
   draftWarmUpComment,
   FACT_TYPE_LABELS,
   FUNCTION_LABELS,
+  findPlaybookSection,
   introStories,
+  KNOWLEDGE_IDS,
   MAX_WORDS,
   MESSAGE_KIND_LABELS,
   normalizeCompany,
@@ -1903,6 +1905,56 @@ export const explainStage = defineTool({
   toModel,
 });
 
+export const lookupPlaybook = defineTool({
+  name: 'lookup_playbook',
+  kind: 'read',
+  description:
+    'Call this when the student asks how a process works or what is normal and the playbook block in your context does not cover it: how VC or quant or consulting recruiting works, what a superday or a SAFE is, how a seed round or a first sales call works, how to find a co-founder or ask a professor to collaborate, networking etiquette. Returns one playbook section in plain prose; answer from it in your own words, only the part that matters for this student. Not for current dates, deadlines or news: those go to web_search.',
+  input: z.object({
+    topic: z
+      .string()
+      .describe(
+        'The topic in the student\'s words ("how does vc recruiting work", "what is a superday", "seed round") or a section id: etiquette, glossary, ib, consulting, tech, pm, data-design, vc-job, quant, finance-other, fundraising, sales, hiring, advice, cofounder, community, collaboration.',
+      ),
+  }),
+  capabilities: ['playbook_lookup'],
+  progress: 'Checking the playbook',
+  async execute(input, ctx) {
+    const s = findPlaybookSection(input.topic);
+    if (!s) {
+      const topics = KNOWLEDGE_IDS.join(', ');
+      return ok(
+        'text',
+        { topics: KNOWLEDGE_IDS },
+        { topics: KNOWLEDGE_IDS },
+        `The playbook has no section on that. It covers: ${topics}.`,
+      );
+    }
+    const view = { id: s.id, title: s.title, body: s.body };
+    // with no model to put it in the student's words, the card carries the opening of the section itself
+    const summary = ctx.caller === 'router' ? `${s.title}: ${shortVersion(s.body)}` : `Playbook: ${s.title}.`;
+    return ok('text', view, view, summary);
+  },
+  toModel,
+});
+
+/** The first paragraph's opening sentences, within a few dozen words, for a card read without a model. */
+export function shortVersion(body: string, maxWords = 42): string {
+  const para =
+    body
+      .split(/\n\s*\n/)
+      .find((p) => p.trim())
+      ?.trim() ?? body.trim();
+  const sentences = para.split(/(?<=[.?!])\s+/);
+  let out = '';
+  for (const sentence of sentences) {
+    const next = out ? `${out} ${sentence}` : sentence;
+    if (next.split(/\s+/).length > maxWords) break;
+    out = next;
+  }
+  return out || `${sentences[0]!.split(/\s+/).slice(0, maxWords).join(' ')}.`;
+}
+
 const PAGES = {
   people: '/people',
   person: '/people/:id',
@@ -2051,6 +2103,7 @@ export const readTools: AnyTool[] = [
   getSettings,
   getUsage,
   explainStage,
+  lookupPlaybook,
   openPage,
   draftWarmupComment,
 ];

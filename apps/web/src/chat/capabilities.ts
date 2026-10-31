@@ -17,6 +17,13 @@ export const CAPABILITIES: readonly Capability[] = [
     utterances: ['wsp', 'who are you', 'thanks'],
   },
   {
+    id: 'playbook_lookup',
+    area: 'Networking agent',
+    title: 'Ask how a process works (recruiting timelines, VC calls, seed rounds, etiquette, the glossary)',
+    kind: 'read',
+    utterances: ['how does vc recruiting work', 'what is a superday', 'how do seed rounds work'],
+  },
+  {
     id: 'nav_go',
     area: 'Shell and navigation',
     title: 'Go to a page',

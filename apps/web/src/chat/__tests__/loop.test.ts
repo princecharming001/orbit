@@ -84,10 +84,14 @@ describe('request shape', () => {
     expect(body.fallbacks).toEqual([{ model: 'claude-opus-5' }]);
     expect(body.context_management.edits[0].type).toBe('compact_20260112');
     expect(body.cache_control).toEqual({ type: 'ephemeral' });
-    // the frozen block carries the breakpoint and is the same for everyone; the conversation's tag rule follows
-    expect(body.system).toHaveLength(2);
+    // the frozen block carries the breakpoint and is the same for everyone; the student's playbook block (plan 28)
+    // and the conversation's tag rule follow, neither with a breakpoint of its own
+    expect(body.system).toHaveLength(3);
     expect(body.system[0].cache_control).toEqual({ type: 'ephemeral' });
     expect(body.system[1].cache_control).toBeUndefined();
+    expect(body.system[1].text).toMatch(/^Playbook\. What a sharp friend/);
+    expect(body.system[1].text).toMatch(/## Networking etiquette/);
+    expect(body.system[2].cache_control).toBeUndefined();
     expect(body.thinking).toEqual({
       type: 'adaptive',
       display: 'updates',
@@ -122,7 +126,8 @@ describe('request shape', () => {
     // the system block is frozen: no date, no name, no counts; the volatile snapshot is a system message instead
     expect(body.system[0].text).not.toMatch(/Sam|2026|Today is/);
     expect(body.system[0].text).not.toMatch(/untrusted_[0-9a-f]{16}/);
-    expect(body.system[1].text).toMatch(/untrusted_[0-9a-f]{16}/);
+    expect(body.system[2].text).toMatch(/untrusted_[0-9a-f]{16}/);
+    expect(body.system[1].text).not.toMatch(/untrusted_[0-9a-f]{16}/);
     expect(body.system[0].text).toMatch(/needs_confirmation/);
     expect(body.system[0].text).toMatch(/[Nn]ever claim an action happened/);
     expect(body.system[0].text).toMatch(/Voice:/);

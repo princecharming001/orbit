@@ -1,0 +1,17 @@
+# Selling to your first customers
+
+Sources: Steli Efti and Close on founder led sales; the cold email research summarised in packages/core/src/__tests__/sim-drafts/rubric.ts (Boomerang, Gong, Lavender); growthenginenowoslawski/coldoutboundskills (vendored spam word list); docs/plan/16 §7.3 (sales register). Checked 2026-10-31.
+
+The shape of it. Early sales is founder led: the person who built the thing talks to the people who have the problem. The goal of a first message is a conversation, not a sale. Pick a narrow segment (one kind of company, one role) where the pain is sharp and the buyer can decide, and learn it before writing to it. A buyer is researched before they are written to: their role, what their team does, a trigger (a new role, a funding round, a hiring post, a product launch, a public complaint, a regulation) that makes now the moment.
+
+The first message. Two to four short lines, under eighty words. Line one is the trigger or the specific observation about them, so they know it is not a blast. Line two is what you do in plain words, for people like them, with one concrete result if you have one ("three clinics cut no-shows by a third"). Line three is the ask: a fifteen or twenty minute call, phrased as a question with an out ("worth a quick look?"). No feature list, no attachment, no "I hope this finds you well", no "revolutionary". The subject is two to five plain words about them, never about you. Send from a real name and address. Fifteen to thirty of these a day, each one individually written, beats a hundred from a tool.
+
+Follow-up. Sales is the one place where several follow-ups are normal: a bump after three or four business days, another a week later, a last one a week after that, each adding one new thing (a result, a short case, a question), never guilt. Then stop and come back in a quarter with news. A no is information; ask what would have to be true.
+
+The discovery call. Twenty to thirty minutes. Ask before you show: what they do today, what breaks, what it costs them, who else cares, what they have tried. Show the product for ten minutes against what they said, not a generic demo. End with a concrete next step and a date: a pilot, a second call with the decision maker, a trial. Follow up the same day with a short recap of what they said and the next step.
+
+Pricing and pilots. Charge from the first customer, even a little; free pilots teach you nothing about whether they will pay. A paid pilot with a clear success metric and a date to decide is the standard early deal. Know the budget owner and the procurement path at anything larger than a small business.
+
+Who to talk to. The person whose week your product changes, and the person who can sign: often two people. In a small business they are the same; in a mid sized company write to the operator first and let them bring the buyer. Warm routes (a customer who refers you, an investor's portfolio, an alum at the company) convert far better than cold, and a referral from a happy customer is the best message you will ever send.
+
+What never happens: the same message on email and LinkedIn at once, a pitch to someone who said no last month, a claim about a customer who has not agreed to be named, a discount offered before they asked, more than three unanswered touches in a row, or any line that could be sent to any company. Register: short, concrete, specific, no hype, respectful of their time.

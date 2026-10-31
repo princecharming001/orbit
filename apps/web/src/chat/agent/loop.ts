@@ -19,6 +19,7 @@ import {
 import type { ChatConversation, ResultEnvelope, ToolContext, ToolSpec, TurnEvent } from '../types';
 import { recordToolAction } from './actions';
 import type { ChatClient } from './client';
+import { knowledgeTextFor } from './knowledge';
 import { buildSnapshot, memoryLineOf, snapshotIsStale, snapshotKeyOf, snapshotText } from './snapshot';
 import { type ChatStore, conversationNonce, toolResultsOf, toolUsesOf } from './store';
 import { systemBlocks } from './system';
@@ -226,11 +227,15 @@ export function withWebSearch(tools: BetaRunnableTool[]): BetaToolRunnerParams['
   return [...plain, { ...WEB_SEARCH_TOOL, cache_control: { type: 'ephemeral' } }];
 }
 
-/** The request params, built once per turn. Everything but `messages` is byte-identical across a conversation. */
+/**
+ * The request params, built once per turn. Everything but `messages` is byte-identical across a conversation;
+ * `knowledge` is the student's playbook block (agent/knowledge.ts), which changes only when their goals do.
+ */
 export function turnParams(
   deps: Pick<TurnDeps, 'conversation' | 'quick' | 'prefixMismatch'>,
   tools: BetaRunnableTool[],
   messages: Anthropic.Beta.BetaMessageParam[],
+  knowledge?: string,
 ): BetaToolRunnerParams & { stream: true } {
   const nonce = conversationNonce(deps.conversation.id);
   return {
@@ -246,7 +251,7 @@ export function turnParams(
     fallbacks: FALLBACK_MODELS,
     context_management: { edits: [{ type: 'compact_20260112', instructions: COMPACTION_INSTRUCTIONS }] },
     cache_control: { type: 'ephemeral' },
-    system: systemBlocks(nonce),
+    system: systemBlocks(nonce, knowledge),
     tools: withWebSearch(tools),
     messages,
     stream: true,
@@ -309,6 +314,8 @@ export async function runTurn(
     .join(' ')
     .trim();
   const snapshot = await buildSnapshot(user.id, clock(), { lastUserText });
+  // the playbook for this student's goals, after the frozen block (plan 28); a failure here is never a failed turn
+  const knowledge = await knowledgeTextFor(user.id).catch(() => undefined);
   const previous = await store.lastContextTexts(conversation.id);
   const snapshotStale = snapshotIsStale(
     previous.snapshot ? snapshotKeyOf(previous.snapshot) : undefined,
@@ -392,7 +399,7 @@ export async function runTurn(
     },
   });
 
-  const params = turnParams(deps, tools, messages);
+  const params = turnParams(deps, tools, messages, knowledge);
   let runner = deps.client.beta.messages.toolRunner(params, { signal });
 
   /**

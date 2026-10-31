@@ -5,8 +5,8 @@ import { BANNED_PHRASES, voiceProblems } from '../agent/voice';
 const text = stableSystemText();
 
 describe('stable system block', () => {
-  it('is version 12 and byte-identical for every conversation; the tag rule follows in its own small block', () => {
-    expect(STABLE_SYSTEM_VERSION).toBe(14);
+  it('is version 15 and byte-identical for every conversation; the tag rule follows in its own small block', () => {
+    expect(STABLE_SYSTEM_VERSION).toBe(15);
     expect(stableSystemText()).toBe(text);
     const a = systemBlocks('0123456789abcdef');
     const b = systemBlocks('fedcba9876543210');
@@ -53,6 +53,42 @@ describe('stable system block', () => {
 
   it('keeps nothing volatile in it', () => {
     expect(text).not.toMatch(/\b20\d\d\b|Today is|Alex|\d+ people/);
+  });
+
+  describe('v15: the playbook (plan 28)', () => {
+    it('names every goal kind in the role and says where how-it-works answers come from', () => {
+      expect(text).toMatch(
+        /recruiting, raising a round, selling to first customers, hiring, finding advisors, co-founders and research collaborators/,
+      );
+      expect(text).toMatch(/Knowledge:/);
+      expect(text).toMatch(/A playbook block follows this one: etiquette always/);
+      expect(text).toMatch(
+        /answered from the playbook first, from the student's own data second, and from the web only for a current fact/,
+      );
+      expect(text).toMatch(/lookup_playbook returns any section not in the block/);
+      expect(text).toMatch(/the two or three things that matter for this student right now/);
+      expect(text).toMatch(/Never a syllabus/);
+      expect(text).toMatch(/\[CHANGES YEARLY\] drifts/);
+      expect(text).toMatch(
+        /Never state a date, a deadline or a program name as fact without a current source/,
+      );
+      expect(text).toMatch(/never present it as either/);
+      // the web rule says which questions go where
+      expect(text).toMatch(/is answered from the playbook, not the web/);
+      expect(text).toMatch(/a company's news or a person's current role is checked on the web/);
+    });
+
+    it('puts the student playbook in its own block between the frozen text and the tag rule, uncached on its own', () => {
+      const playbook = 'Playbook. ## Investment banking recruiting\n\nThe timeline runs early.';
+      const blocks = systemBlocks('0123456789abcdef', playbook);
+      expect(blocks).toHaveLength(3);
+      expect(blocks[0]).toEqual({ type: 'text', text, cache_control: { type: 'ephemeral' } });
+      expect(blocks[1]).toEqual({ type: 'text', text: playbook });
+      expect(blocks[2]!.text).toMatch(/0123456789abcdef/);
+      // and without one the shape of version 14 holds
+      expect(systemBlocks('0123456789abcdef')).toHaveLength(2);
+      expect(systemBlocks('0123456789abcdef', '')).toHaveLength(2);
+    });
   });
 
   it('keeps the safety, confirmation and untrusted-content rules', () => {

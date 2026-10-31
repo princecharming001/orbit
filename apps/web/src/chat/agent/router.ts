@@ -1,5 +1,5 @@
 import type { ChatStage, MessageKind } from '@orbit/core';
-import { mayHoldFacts } from '@orbit/core';
+import { findPlaybookSection, mayHoldFacts } from '@orbit/core';
 import { isJobBoardLink, linkIn, saysApplying } from '../../integrations/postings';
 import type { ChoiceOption, ToolSpec } from '../types';
 import { type MatchablePerson, resolvePerson } from './people-match';
@@ -1562,6 +1562,17 @@ function routeInner(raw: string, ctx: RouterContext): RouterIntent {
       return nobody(name);
     }
   }
+
+  // a how-it-works question that names nobody ("how does vc recruiting work", "what is a superday", "when do banks
+  // recruit"): the playbook answers it in plain words (plan 28), the short version here and the whole section with a key
+  if (
+    has('lookup_playbook') &&
+    (/^(?:how|what|when|why|which|is|are|do|does|should|can|whats|hows)\b/.test(lower) ||
+      /\?\s*$/.test(lower)) &&
+    !ctx.people.some((p) => p.displayName && lower.includes(p.displayName.toLowerCase())) &&
+    findPlaybookSection(text)
+  )
+    return viaTool('lookup_playbook', { topic: text }, 'The short version.', 'check the playbook');
 
   // something the student told Orbit about themselves, not a request: acknowledged, not "I didn't catch that".
   // What Orbit keeps of it (a memory, a goal to track) is said under the reply, after the turn (afterTurn.ts).

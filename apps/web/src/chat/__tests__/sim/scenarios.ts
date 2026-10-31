@@ -447,10 +447,11 @@ const intlIb = student(
 );
 
 const IB_TIMELINE = [
-  'Investment banking summer analyst recruiting runs about 18 months before the internship. For a junior-summer seat, most',
-  'bulge brackets and elite boutiques open applications in the spring of sophomore year and fill many seats by that summer,',
-  'so networking should start in the fall of sophomore year, two to four months before applications. Sophomore-summer',
-  'early insight and diversity programs open in the fall of sophomore year. Exact open dates change every year and by',
+  'Investment banking summer analyst recruiting runs about 18 to 21 months before the internship. For a junior-summer',
+  'seat, elite boutiques open applications in September to November of sophomore year and bulge brackets in December',
+  'and January, rolling, with most seats filled by late spring of sophomore year, so networking should start by the',
+  'spring of freshman year or the start of sophomore year. Sophomore insight and diversity programs have deadlines in',
+  'October of sophomore year. Exact open dates change every year and by',
   'bank, so a specific date should come from a current source, not from memory. The process is an online application,',
   'often a HireVue (recorded video interview), first-round calls, then a superday: several back-to-back interviews in one',
   'day, technical and behavioural. Networking means 15-minute calls with analysts and associates, alumni first, asking',

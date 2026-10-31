@@ -1,0 +1,17 @@
+# Quantitative trading and research recruiting
+
+Sources: Wall Street Oasis quant forums; the firms' campus pages (Jane Street, Citadel, Two Sigma, HRT, Optiver, SIG, DRW, IMC); packages/core/src/drafts/register.ts (trading questions). Checked 2026-10-31. Dates change every year and by firm.
+
+The timeline: quant trading and quant research internships recruit early and fast. Firms post summer internships for the following year in July to September and interview in the early fall; many offers are out by October and November, with a smaller second wave in the winter. [CHANGES YEARLY: search the web for the firm's current posting before stating when it opens.] Sophomore and first-year programs exist at several firms (names change) and are a real door. Full-time roles mostly go to returning interns, so the internship matters. Applications go straight through the careers page; referrals help at the resume stage but the process is mostly the tests.
+
+The roles: quant trader (pricing, risk, decisions under time pressure, markets intuition), quant researcher (statistics, modelling, signal research, usually a strong math or CS background, often a master's or PhD for research roles at some firms), software engineer (systems, low latency, infrastructure), and quant developer in between. The student should know which they are applying for; at many firms trading and research are separate applications and the interviews differ.
+
+The process: an online assessment (probability, mental math, pattern questions, sometimes coding), one or two phone or video rounds (probability and expected value, brainteasers, market making games, statistics, for research a programming or modelling question), then a final round of three to five interviews, often on site, including a behavioural conversation. Firms want fast correct reasoning under uncertainty, comfort with being wrong out loud, and genuine interest in markets or in the math. Finance knowledge is not expected; probability and clear thinking are.
+
+Who to talk to: traders and researchers one to three years in, last summer's interns, alumni. A desk head or a partner answers one question by email and only one they alone can answer; nobody senior is asked "what separates the interns who get return offers" by a student with no internship there.
+
+What to ask: how they prepared for the interviews and what the first months were like; how they decided between trading and research; what a typical research problem looks like in the first year; what separates the new hires who do well on their desk; for a computer science student writing to someone senior, what gap they see most often in candidates coming from CS rather than math or statistics. Never "the office" (a quant firm has desks, not offices) and never "your group" (that is a banking word).
+
+Register: short and direct, "Hi" and first name, four or five sentences, a subject that names the firm and the question. Email from the .edu address. Sign with first name, school and class year. One bump after a week, then stop. These firms are small and remember people, so one good note beats three.
+
+Preparation: eight to twelve weeks of probability and expected value drills, mental math daily, the standard interview prep books worked through twice, market making and betting games practised out loud with a friend, and for research roles one or two modelling projects the student can defend. A genuine interest the student can talk about for ten minutes (a market, a game, a statistical puzzle) is what the behavioural round looks for.

@@ -1,0 +1,17 @@
+# Finding mentors and asking for advice
+
+Sources: Harvard OCS and Stanford BEAM guides to informational interviews; Dalton's "The 2-Hour Job Search"; docs/plan/15-outreach-playbook.md §1 and §2. Checked 2026-10-31.
+
+The shape of it. Nobody becomes a mentor because they were asked to be one. Mentors come from a conversation that was worth their time, then a thank-you that showed it landed, then an update a few months later that showed the advice was used. Ask for a conversation, never for mentorship. The people most likely to say yes are alumni, people from the student's hometown or club, people two to ten years ahead who remember being where the student is, and anyone whose talk or writing the student can quote back with a real question. Faculty and advisors count too, and they are asked in office hours, not by cold email.
+
+The first message. Who you are in one line, the real connection, the one question you want their view on (specific enough that they are the right person to answer it), and a fifteen or twenty minute ask with an out. "I'm deciding between X and Y and you did both" is a question; "any advice you have" is not. Fifty to ninety words. Email for alumni and faculty, LinkedIn when there is no address. No resume, no life story.
+
+The call. Fifteen to twenty minutes, the student's to run. Open with a thirty second version of where you are and what you are deciding. Ask two or three questions you prepared, then follow the conversation. Take notes. Ask what they would do in your position and what they wish they had known. End on time, and close with "is there anyone else you would suggest I talk to". Never ask for a job, an internship or a referral on a first call unless they raise it; a request for help comes later, if at all, and only once the relationship has given something back.
+
+After. A thank-you within 24 hours that names one specific thing they said and one thing you will do because of it. Then do it, and tell them in four to eight weeks what happened. That update, with no ask attached, is what turns a call into a relationship; most students skip it and the ones who do not are remembered. Every four to six weeks after that is plenty. When they offer something (an intro, a practice case, a template), take it up with a time within the week.
+
+Switching fields and non traditional paths. For a student changing direction (nursing to product, teaching to data, audit to a startup), the most useful people are those who made the same switch, found through alumni directories and LinkedIn by searching the old field and the new one together. The question to them is how they told their story, what they did to be credible in the new field, and what they would do differently; the question to a hiring manager in the new field is what they would want to see from someone with the student's background.
+
+Freshmen and sophomores. It is early to ask about jobs and exactly right to ask about paths. Three or four conversations a semester with people in fields the student is curious about, each with a thank-you and an update, builds a network before it is needed. Say the year plainly; nobody expects a first-year to have a plan.
+
+What never happens: "can you be my mentor" in a first message, a request for the student's resume to be reviewed, an hour asked for, a call that runs over, a follow-up that only asks for something, or a mentor's advice quoted to them as "you said I should" when they did not. Register: warm, humble, specific, curious, and grateful without flattery.

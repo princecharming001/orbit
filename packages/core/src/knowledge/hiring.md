@@ -1,0 +1,17 @@
+# Hiring your first people
+
+Sources: Y Combinator's guides on hiring early employees; First Round Review on sourcing passive candidates; docs/plan/16 §7.3 (hiring register). Checked 2026-10-31.
+
+The shape of it. Early hires come from the founders' network and from people the founders write to directly, not from job boards. The first ten hires decide the company; each one is worth twenty hours of the founders' time. Write the role down first: what this person will own in the first ninety days, what they must have done before, what you will pay (a range, plus equity), and why someone good would leave a good job for this. If that last line is not convincing, fix the pitch before writing to anyone.
+
+Sourcing. Start with the network: former colleagues, classmates, people met at events, people the current team worked with, the investors' networks, customers. Then passive candidates: people in similar roles at companies one stage ahead, people who shipped something relevant in public, people who commented thoughtfully on your space. A referral from someone the candidate trusts converts far better than a cold note, so ask the team and the investors by name for introductions, with a forwardable blurb about the role.
+
+The first message to a candidate. Short, specific and respectful of their current job. Line one is why them: something they built, wrote or did, not a compliment on their background. Line two is the company and the role in plain words: what you do, the stage, and the one thing that makes this role interesting (the problem, the ownership, the team). Line three is a low pressure ask: "open to hearing about it over a call this week or next?" Never "I came across your profile", never "exciting opportunity", never a job description pasted in, never the salary left as a mystery if they ask. Under a hundred words. One bump after a week, then leave it; people change their minds in six months, so keep a list.
+
+The process. Keep it short and decided: an intro call with a founder (thirty minutes, sell as much as screen), a work sample or paid project that looks like the real job, a conversation with the team, references that you actually call (ask who else to speak to, and ask every reference "would you hire them again"). Decide within a week of the last conversation and say so. Good candidates have other options; the fastest honest process wins. Tell every candidate who does not get the role, kindly and promptly.
+
+The offer. Base, equity (shares and percentage, vesting, strike price, what the last round valued the company at), start date, and the reasons in plain words. Walk them through the equity; most candidates do not know how to read it and will trust whoever explains it honestly. Give a week to decide, be available for questions, and let them talk to the team and an investor if they want. If they say no, ask why and stay in touch.
+
+Who to talk to for advice. Founders a stage ahead who made the hire you are making, the hiring manager at a company you admire, a recruiter friend for market comp. The ask is fifteen minutes on how they found and closed their first engineer or salesperson, not for candidates.
+
+What never happens: a message that reads as a blast, a title inflated to get a yes, an offer that cannot be honoured, poaching from a friend's company without a word to the friend, or a candidate left waiting without an update. Register: direct, warm, specific, respectful of where they are now.

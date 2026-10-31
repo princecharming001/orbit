@@ -43,13 +43,22 @@ export const SIM_DIR = process.env.SIM_DIR ?? '/tmp/orbit-sim';
  */
 const SIM_MODEL = process.env.SIM_MODEL ?? (KEY ? 'claude-sonnet-5-5' : 'claude-opus-5-5');
 
+/**
+ * jsdom's AbortSignal is not Node's: undici's fetch rejects it ("Expected signal to be an instance of AbortSignal"),
+ * and the SDK reports a connection error. The sim's clients fetch without one; nothing here is ever aborted.
+ */
+const simFetch: typeof fetch = (url, init) =>
+  globalThis.fetch(url, init ? { ...init, signal: undefined } : init);
+
 /** The client the simulated student and the judge use: the key's, or Orbit's proxy. */
 export function simClient(): Anthropic {
-  if (KEY) return new Anthropic({ apiKey: KEY, maxRetries: 3, dangerouslyAllowBrowser: true });
+  if (KEY)
+    return new Anthropic({ apiKey: KEY, maxRetries: 3, dangerouslyAllowBrowser: true, fetch: simFetch });
   return makeChatClient(SHARED_KEY, {
     baseURL: PROXY,
     headers: { origin: ORIGIN, 'x-orbit-client': 'orbit-sim' },
     maxRetries: 3,
+    fetch: simFetch,
   });
 }
 
@@ -57,7 +66,7 @@ export function simClient(): Anthropic {
 export function pointChatAtClaude(): void {
   if (KEY) {
     writePrefs({ anthropicApiKey: KEY, llmDailyRequestCap: 5000, llmDailyTokenCap: 500_000_000 });
-    setChatClientFactoryForTests((key: string) => makeChatClient(key, { maxRetries: 3 }));
+    setChatClientFactoryForTests((key: string) => makeChatClient(key, { maxRetries: 3, fetch: simFetch }));
     return;
   }
   setSharedClaudeUrlForTests(PROXY);
@@ -66,6 +75,7 @@ export function pointChatAtClaude(): void {
       baseURL: PROXY,
       headers: { origin: ORIGIN, 'x-orbit-client': 'orbit-sim' },
       maxRetries: 3,
+      fetch: simFetch,
     }),
   );
 }
@@ -549,8 +559,8 @@ async function parseMove(
         output_config: { format: zodOutputFormat(StudentMove as never) },
       });
       if (res.parsed_output) return res.parsed_output as z.infer<typeof StudentMove>;
-    } catch {
-      // parse failed (usually a truncated string); try again
+    } catch (e) {
+      simError('student', e); // usually a truncated string; try again
     }
   }
   return { thought: '', action: 'done' };
@@ -847,8 +857,8 @@ export async function judgeRun(screen: string, expected: string): Promise<RunVer
         output_config: { format: zodOutputFormat(RunVerdict as never) },
       });
       if (res.parsed_output) return res.parsed_output as RunVerdictT;
-    } catch {
-      // a truncated or malformed verdict is a harness hiccup; try again
+    } catch (e) {
+      simError('judge', e); // a truncated or malformed verdict is a harness hiccup; try again
     }
   }
   return {
@@ -863,4 +873,17 @@ export async function judgeRun(screen: string, expected: string): Promise<RunVer
     worst: 'judge returned no parseable verdict (harness/API flake)',
     fix: 'review this transcript by hand',
   };
+}
+
+/** A harness-side failure, said once per place with any key redacted, so an empty run is never silent. */
+const saidErrors = new Set<string>();
+export function simError(where: string, e: unknown): void {
+  const msg = (e instanceof Error ? `${e.name}: ${e.message}` : String(e)).replace(
+    /sk-ant-[A-Za-z0-9_-]+/g,
+    'sk-ant-...',
+  );
+  const key = `${where}:${msg.slice(0, 80)}`;
+  if (saidErrors.has(key)) return;
+  saidErrors.add(key);
+  console.error(`[sim ${where}] ${msg.slice(0, 400)}`);
 }
