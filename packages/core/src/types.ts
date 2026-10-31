@@ -299,6 +299,12 @@ export interface UserSettings {
   weekReviewSeenOn?: string;
   /** read the tone of replies for closeness (plan 27); on unless turned off */
   readReplyTone?: boolean;
+  /**
+   * What the student shares with friends by default (plan 29 §A1): everyone they know, only people at some companies,
+   * or nothing yet; the server's copy is users.settings.friend_share_mode. A friend can have their own setting.
+   */
+  friendShareMode?: 'all' | 'companies' | 'none';
+  friendShareDomains?: string[];
 }
 
 /** What a goal is for (plan 16 §2.1); it changes the register, the ask and the routing rules. */
@@ -568,6 +574,8 @@ export interface Person {
   hiddenAt?: string;
   /** they asked not to be contacted (an `unsubscribe` reply, plan 16 §8.1): nothing is drafted or sent to them */
   doNotContact?: boolean;
+  /** hidden from friends (plan 29 §A1): never in the projection a friend may read, whatever the student shares */
+  private?: boolean;
   summary?: string;
   summaryUpdatedAt?: string;
   talkingPoints?: string[];

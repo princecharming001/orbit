@@ -19,6 +19,7 @@ import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { AddTargetCompany, TargetToggle } from '../components/AddTargetCompany';
 import { useAskIntro } from '../components/askIntro';
 import { CompanyLogo, LogoText } from '../components/CompanyLogo';
+import { ThroughFriends } from '../components/friends/ThroughFriends';
 import { MapPersonCard } from '../components/map/MapPersonCard';
 import { PairNoteMenu } from '../components/map/PairNoteMenu';
 import { ReachMutuals } from '../components/map/ReachMutuals';
@@ -1448,6 +1449,8 @@ export function MapPage() {
                   isAsking={(personId) => isAsking(personId, target.id)}
                 />
               )}
+              {/* plan 29 §A5: friends on Orbit who know them, each a route the friend forwards */}
+              <ThroughFriends user={user} target={{ person: target }} />
             </>
           )}
           {job?.state === 'reading' && (
@@ -1497,6 +1500,11 @@ export function MapPage() {
                   isAsking={isAsking}
                 />
               )}
+              {/* plan 29 §A5: the people friends on Orbit know there */}
+              <ThroughFriends
+                user={user}
+                target={{ company: company.org?.name ?? company.label, domain: company.org?.domains?.[0] }}
+              />
               {company.direct.length === 0 && (
                 <p className="text-[13px] text-ink-3" data-testid="company-none">
                   No one you know works there yet.

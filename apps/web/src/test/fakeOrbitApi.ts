@@ -280,8 +280,14 @@ export function createFakeOrbitApi(
     if (!authed(req)) return error(401, 'unauthorized', 'sign in again');
     // plan 29: routes with a path parameter, matched before the table
     const friendShares = route.match(/^\/friends\/shares\/([^/]+)$/);
-    if (friendShares) {
-      const f = state.friends.find((x) => x.userId === decodeURIComponent(friendShares[1]!));
+    // the body form the client posts: the same answer as the id in the path
+    const sharesFor = friendShares
+      ? decodeURIComponent(friendShares[1]!)
+      : route === '/friends/shares' && typeof body.friendUserId === 'string'
+        ? body.friendUserId
+        : undefined;
+    if (sharesFor) {
+      const f = state.friends.find((x) => x.userId === sharesFor);
       if (!f || f.theirMode === 'none') return error(403, 'forbidden', 'not a friend who shares with you');
       const company = (
         new URL(req.url).searchParams.get('company') ?? (typeof body.company === 'string' ? body.company : '')
@@ -297,8 +303,13 @@ export function createFakeOrbitApi(
       });
     }
     const askRespond = route.match(/^\/friends\/asks\/([^/]+)\/respond$/);
-    if (askRespond) {
-      const ask = state.friendAsks.find((a) => a.id === askRespond[1] && a.friendUserId === state.user.id);
+    const respondTo = askRespond
+      ? askRespond[1]
+      : route === '/friends/asks/respond' && typeof body.id === 'string'
+        ? body.id
+        : undefined;
+    if (respondTo) {
+      const ask = state.friendAsks.find((a) => a.id === respondTo && a.friendUserId === state.user.id);
       if (!ask) return error(404, 'not_found', 'no such ask');
       if (ask.status !== 'asked') return error(409, 'already_answered', 'that ask was answered');
       ask.answeredAt = iso(clock);
@@ -1115,7 +1126,9 @@ function friendView(f: FakeFriend, targets: string[]): Friend {
 
 /** The friend layer of /paths/find (plan 29 A4): p from the closeness word, 1: 0.35, 2: 0.6, 3: 0.85. */
 const CLOSENESS_P: Record<FriendCloseness, number> = { 1: 0.35, 2: 0.6, 3: 0.85 };
-const CLOSENESS_WORD: Record<FriendCloseness, string> = { 1: 'knows', 2: 'knows well', 3: 'is close to' };
+/** "knows Dan", "knows Dan well", "is close to Dan": the phrase the server puts on a friend's hop. */
+const closenessPhrase = (c: FriendCloseness, first: string) =>
+  c === 3 ? `is close to ${first}` : c === 2 ? `knows ${first} well` : `knows ${first}`;
 
 function friendPaths(
   state: FakeState,
@@ -1145,7 +1158,7 @@ function friendPaths(
           p: p2,
           kind: s.closeness === 1 ? 'linkedin_mutual' : 'student_says_close',
           band: p2 >= 0.65 ? 'close' : p2 >= 0.5 ? 'know' : 'connected',
-          phrase: `${CLOSENESS_WORD[s.closeness]} ${s.displayName.split(' ')[0]}`,
+          phrase: closenessPhrase(s.closeness, s.displayName.split(' ')[0]!),
           via,
         },
       ];
@@ -1158,7 +1171,7 @@ function friendPaths(
         band: p >= 0.35 ? 'high' : p >= 0.15 ? 'medium' : 'low',
         firstHopId: friendNode,
         otherWays: 0,
-        reasonText: `${f.name.split(' ')[0]} (friend) ${CLOSENESS_WORD[s.closeness]} ${s.displayName.split(' ')[0]}${s.company ? ` at ${s.company}` : ''}.`,
+        reasonText: `${f.name.split(' ')[0]} (friend) ${closenessPhrase(s.closeness, s.displayName.split(' ')[0]!)}${s.company ? ` at ${s.company}` : ''}.`,
         names: { [friendNode]: f.name, [targetNode]: s.displayName },
       });
     }

@@ -15,6 +15,7 @@ import {
   PinOff,
   Settings,
   SquarePen,
+  UserPlus,
   Users,
   X,
 } from 'lucide-react';
@@ -48,6 +49,8 @@ import { WeekReviewLauncher } from './WeekReview';
 // the chat is home (New chat and the logo open it); People holds the board and the list, Drafts what waits to be sent
 const NAV_TOP = [
   { to: '/people', label: 'People', icon: Users },
+  // plan 29 §A1: friends pool their networks; between People and Drafts on the laptop, inside More on the phone
+  { to: '/friends', label: 'Friends', icon: UserPlus },
   { to: '/inbox', label: 'Drafts', icon: Inbox },
   // plan 23 §4.4: the page a student opens at 2:50 pm, one tap from anywhere
   { to: '/chats', label: 'Chats', icon: CalendarClock },
@@ -58,12 +61,13 @@ const NAV_MORE = [
 ];
 const PHONE_TABS = [
   { to: '/', label: 'Chat', icon: MessageSquare },
-  ...NAV_TOP.filter((n) => n.to !== '/chats'),
+  ...NAV_TOP.filter((n) => n.to !== '/chats' && n.to !== '/friends'),
   { to: '/map', label: 'Map', icon: MapIcon },
 ];
 /** The phone's More sheet: what does not fit in the tab bar. */
 const PHONE_MORE = [
   { to: '/chats', label: 'Chats', icon: CalendarClock },
+  { to: '/friends', label: 'Friends', icon: UserPlus },
   { to: '/discover', label: 'Discover', icon: Compass },
   { to: '/notes/new', label: 'Add note', icon: NotebookPen },
   { to: '/settings', label: 'Settings', icon: Settings },

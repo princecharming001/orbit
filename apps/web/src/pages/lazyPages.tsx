@@ -18,6 +18,7 @@ const load = {
   ChatsPage: () => import('./Chats').then((m) => ({ default: m.ChatsPage })),
   Discover: () => import('./Discover').then((m) => ({ default: m.Discover })),
   CompanyPage: () => import('./Company').then((m) => ({ default: m.CompanyPage })),
+  FriendsPage: () => import('./Friends').then((m) => ({ default: m.FriendsPage })),
   NotesNew: () => import('./NotesNew').then((m) => ({ default: m.NotesNew })),
 };
 export const Landing = lazy(load.Landing);
@@ -32,6 +33,7 @@ export const InboxPage = lazy(load.InboxPage);
 export const ChatsPage = lazy(load.ChatsPage);
 export const Discover = lazy(load.Discover);
 export const CompanyPage = lazy(load.CompanyPage);
+export const FriendsPage = lazy(load.FriendsPage);
 export const NotesNew = lazy(load.NotesNew);
 
 let preloaded = false;
@@ -50,6 +52,7 @@ export function preloadPages(): void {
     load.SettingsPage,
     load.ChatsPage,
     load.CompanyPage,
+    load.FriendsPage,
     load.MapPage,
     load.NotesNew,
   ];
@@ -78,7 +81,7 @@ export function PageLoading({ path = '' }: { path?: string }) {
   const kind =
     /^\/people\/[^/]+/.test(path) || /^\/companies\//.test(path)
       ? 'profile'
-      : /^\/(people|chats|inbox)/.test(path)
+      : /^\/(people|chats|inbox|friends)/.test(path)
         ? 'list'
         : /^\/settings/.test(path)
           ? 'settings'

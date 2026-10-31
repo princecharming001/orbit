@@ -383,6 +383,8 @@ export const PUSH: Record<string, PushSpec> = {
       relationshipType: f('relationship_type', 'text', z.string().max(40).nullable()),
       hiddenAt: f('hidden_at', 'timestamptz', tsS.nullable()),
       doNotContact: f('do_not_contact', 'boolean', z.boolean()),
+      // plan 29 §A1: hidden from friends; the people_unshare trigger drops the projection row at once
+      private: f('private', 'boolean', z.boolean()),
       // a fresh LinkedIn photo (or a Gravatar) the browser fetched for someone whose link had expired or was missing:
       // only those hosts, so a person's picture is never an arbitrary address
       photoUrl: f(

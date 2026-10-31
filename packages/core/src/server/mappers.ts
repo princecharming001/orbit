@@ -144,6 +144,8 @@ export namespace Row {
     notes: string | null;
     do_not_contact: boolean;
     hidden_at: Ts | null;
+    /** plan 29 §A1: hidden from friends; absent on rows from before the column */
+    private?: boolean | null;
     merged_into: Uuid | null;
     created_at: Ts;
     updated_at: Ts;
@@ -668,6 +670,7 @@ export function personFromRow(
     isHuman: true,
     hiddenAt: u(r.hidden_at),
     doNotContact: r.do_not_contact || undefined,
+    private: r.private || undefined,
     summary: u(r.summary),
     tags: r.tags,
     notes: u(r.notes),
@@ -708,6 +711,7 @@ export function personToRow(p: Person, extra: { isSelf?: boolean; timezone?: str
     notes: n(p.notes),
     do_not_contact: !!p.doNotContact,
     hidden_at: n(p.hiddenAt),
+    private: !!p.private,
     merged_into: null,
     created_at: p.createdAt,
     updated_at: p.updatedAt,

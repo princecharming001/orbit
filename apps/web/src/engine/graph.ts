@@ -356,7 +356,9 @@ export interface WarmReachPath extends ReachPath {
   /** kept only because its first hop is a LinkedIn mutual of the target: a weaker route, but a real connection */
   weak?: boolean;
   /** where the last hop's evidence came from, when it is from outside Orbit's own records */
-  via?: 'linkedin_mutual' | 'village_path';
+  via?: 'linkedin_mutual' | 'village_path' | 'friend_path';
+  /** a route through a friend on Orbit (plan 29 §A5): who the friend is */
+  friend?: { userId: string; name: string };
 }
 
 /**

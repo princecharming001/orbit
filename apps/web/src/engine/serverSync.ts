@@ -695,6 +695,8 @@ async function buildChange(entry: OutboxRow, pairs: [string, string][]): Promise
         'relationshipType',
         'hiddenAt',
         'doNotContact',
+        // plan 29 §A1: hidden from friends
+        'private',
       ]);
       // a photo this browser fetched (an expired LinkedIn link renewed, a missing one found) goes up while it works,
       // so the next pull, and every other device, shows it instead of initials

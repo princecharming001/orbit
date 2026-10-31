@@ -45,6 +45,18 @@ export function RouteBadge({
         Direct · {score}
       </Chip>
     );
+  // plan 29 §A5: a route through a friend on Orbit is drawn with the friend's name, like a Village path
+  if ((path as WarmReachPath).via === 'friend_path' && (path as WarmReachPath).friend)
+    return (
+      <Chip
+        className={className}
+        tone="accent"
+        title={`Through ${(path as WarmReachPath).friend!.name}, a friend on Orbit. ${ROUTE_SCORE_WHY}`}
+        data-testid="route-badge-friend"
+      >
+        via {(path as WarmReachPath).friend!.name.split(' ')[0]} · {score}
+      </Chip>
+    );
   if ((path as WarmReachPath).weak)
     return (
       <Chip

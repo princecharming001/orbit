@@ -10,6 +10,8 @@ import type {
   EmailMessage,
   EmailThread,
   FeedbackEvent,
+  Friend,
+  FriendIntroAsk,
   Goal,
   MeetingNote,
   MemoryKind,
@@ -172,6 +174,22 @@ export interface IntroRequestRow {
 }
 
 /**
+ * A friend as the Friends tab lists them (plan 29 §A3): the server's row with its counts, pulled on demand and read
+ * only. `ownerId` is the student whose list it is. Friend projections are never a table here: the few fields a route
+ * needs live in the paths cache only.
+ */
+export interface FriendRow extends Friend {
+  ownerId: string;
+  pulledAt: string;
+}
+
+/** An intro asked of a friend or by one (plan 29 §A4), both directions, pulled on demand. */
+export interface FriendAskRow extends FriendIntroAsk {
+  ownerId: string;
+  pulledAt: string;
+}
+
+/**
  * A change the student made in account mode that the server has not taken yet: the table and the row's id, read
  * fresh when it is pushed, so several edits to one row go up as one change (engine/serverSync.ts).
  */
@@ -321,6 +339,8 @@ export class OrbitDB extends Dexie {
   pairNotes!: EntityTable<PairNote, 'id'>;
   engagement!: EntityTable<EngagementRow, 'id'>;
   targetPlans!: EntityTable<TargetPlan, 'id'>;
+  friends!: EntityTable<FriendRow, 'friendshipId'>;
+  friendAsks!: EntityTable<FriendAskRow, 'id'>;
 
   constructor(name = 'orbit') {
     super(name);
@@ -460,6 +480,12 @@ export class OrbitDB extends Dexie {
     // plan 29 §B3: the outbox carries reviewUntil and autoRung, the settings row autopilotMode and
     // autopilotPausedUntil; none is indexed, so the stores are unchanged and the version marks the shape
     this.version(11).stores({});
+    // plan 29 §A3: the friends list and the asks either way, pulled from the server and read here; the settings row
+    // gains friendShareMode and people gain `private` (neither indexed)
+    this.version(12).stores({
+      friends: 'friendshipId, ownerId, userId',
+      friendAsks: 'id, ownerId, friendshipId, status',
+    });
   }
 }
 

@@ -1,10 +1,11 @@
-import { normalizeCompany, TARGET_STATUS_LABELS, type TargetCompany } from '@orbit/core';
+import { normalizeCompany, TARGET_STATUS_LABELS, type TargetCompany, type User } from '@orbit/core';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { useEffect, useMemo, useState } from 'react';
 import { useInView } from 'react-intersection-observer';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { askIntroKey, useAskIntro } from '../components/askIntro';
 import { CompanyLogo } from '../components/CompanyLogo';
+import { ThroughFriends } from '../components/friends/ThroughFriends';
 import { RouteBadge } from '../components/map/RouteBadge';
 import { PersonRow } from '../components/PersonRow';
 import { TargetPlanCard } from '../components/TargetPlanCard';
@@ -176,6 +177,7 @@ export function CompanyPage() {
         <SkeletonRows rows={6} divided testId="company-reach-loading" />
       ) : (
         <CompanyBody
+          user={user}
           name={org.name}
           reach={reach}
           filter={filter}
@@ -244,6 +246,7 @@ function TargetChips({ target }: { target: TargetCompany }) {
 }
 
 function CompanyBody({
+  user,
   name,
   reach,
   filter,
@@ -251,6 +254,7 @@ function CompanyBody({
   onAct,
   busy,
 }: {
+  user: User | undefined;
   name: string;
   reach: CompanyReach;
   filter: Filter;
@@ -319,6 +323,8 @@ function CompanyBody({
           why="The strongest way in to anyone there, out of 100."
         />
       </dl>
+      {/* plan 29 §A1: "Through friends: 3 people", with names and how well the friend knows each */}
+      <ThroughFriends user={user} target={{ company: name, domain: reach.org?.domains?.[0] }} />
       {people.length > 0 && (
         <div className="flex flex-wrap gap-1.5" role="group" aria-label="Team" data-testid="company-teams">
           <TeamChip on={filter === 'all'} onClick={() => setFilter('all')} label="All teams" />

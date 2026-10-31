@@ -13,6 +13,7 @@ import {
   ChatsPage,
   CompanyPage,
   Discover,
+  FriendsPage,
   InboxPage,
   Landing,
   LogInPage,
@@ -109,6 +110,9 @@ export function App({ chatEngine }: { chatEngine?: ChatEngine }) {
                     <Route path="/companies/:id" element={<CompanyPage />} />
                     <Route path="/map" element={<MapPage />} />
                     <Route path="/discover" element={<Discover />} />
+                    {/* plan 29 Part A: friends pool their networks; a join link lands here with its code */}
+                    <Route path="/friends" element={<FriendsPage />} />
+                    <Route path="/friends/join/:code" element={<FriendsPage />} />
                     <Route path="/inbox" element={<InboxPage />} />
                     <Route path="/chats" element={<ChatsPage />} />
                     {/* the nav calls this page Drafts: a typed or bookmarked /drafts lands there too */}

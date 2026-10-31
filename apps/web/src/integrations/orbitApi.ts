@@ -31,6 +31,23 @@ import type {
   DraftIdRequest,
   DraftResponse,
   DueResponse,
+  FriendAskRequest,
+  FriendAskRespondByIdRequest,
+  FriendAskRespondResponse,
+  FriendAskResponse,
+  FriendAsksResponse,
+  FriendPreviewResponse,
+  FriendsAcceptRequest,
+  FriendsAcceptResponse,
+  FriendsDeclineRequest,
+  FriendsEndRequest,
+  FriendSharesRequest,
+  FriendSharesResponse,
+  FriendsInviteRequest,
+  FriendsInviteResponse,
+  FriendsListResponse,
+  FriendsSettingsRequest,
+  FriendsSettingsResponse,
   GoalsInferRequest,
   GoalsInferResponse,
   GoalsListResponse,
@@ -225,6 +242,17 @@ export interface ApiRoutes {
   '/pairs/unblock': [PairCorrectionRequest, PairCorrectionResponse];
   '/pairs/close': [PairCorrectionRequest, PairCorrectionResponse];
   '/pairs/unclose': [PairCorrectionRequest, PairCorrectionResponse];
+  // friends (plan 29 Part A); every call posts, the id-in-path forms have a body form
+  '/friends': [Record<string, never>, FriendsListResponse];
+  '/friends/invite': [FriendsInviteRequest, FriendsInviteResponse];
+  '/friends/accept': [FriendsAcceptRequest, FriendsAcceptResponse];
+  '/friends/decline': [FriendsDeclineRequest, { ok: boolean }];
+  '/friends/end': [FriendsEndRequest, { ok: boolean }];
+  '/friends/settings': [FriendsSettingsRequest, FriendsSettingsResponse];
+  '/friends/preview': [Record<string, never>, FriendPreviewResponse];
+  '/friends/shares': [FriendSharesRequest, FriendSharesResponse];
+  '/friends/asks': [FriendAskRequest | Record<string, never>, FriendAskResponse | FriendAsksResponse];
+  '/friends/asks/respond': [FriendAskRespondByIdRequest, FriendAskRespondResponse];
 }
 export type ClientRoute = keyof ApiRoutes;
   '/replies/answer': [ReplyAnswerRequest, ReplyAnswerResponse];
