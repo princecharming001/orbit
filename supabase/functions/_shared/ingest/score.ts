@@ -15,6 +15,9 @@
  *   structural    the previous scores of P's routable contacts
  *   label         the user's closeness rating, shown as its band midpoint until new contact
  * Family and partners are floored at 80 (§3.7). score.user also fits the per-user calibration from ≥ 8 labels.
+ * Beside the score, share_score (plan 29 §A2.2): the same history scored with every Google-derived feature zeroed,
+ * the number a friend's closeness word is cut from. It never carries the family floor: a friend sees signal, not who
+ * the student's family is.
  */
 import { ROUTABLE_TIE_KINDS } from '@orbit/core/graph/ties';
 import {
@@ -23,6 +26,7 @@ import {
   gatherRapport,
   scoreTie,
   sharedContext,
+  shareScore,
   TIE_WEIGHTS,
   type TieCalibration,
   type TieHistory,
@@ -313,6 +317,7 @@ export async function scorePeople(
     const h = histories.get(p.id)!;
     const tie = scoreTie(h, now, TIE_WEIGHTS, calibration);
     const score = FLOOR_TYPES.has(relationship.get(p.id) ?? '') ? Math.max(80, tie.score) : tie.score;
+    const share = shareScore(h, now, TIE_WEIGHTS, calibration);
     const exists = !tie.facts.never || h.linkedinConnected || h.intros > 0;
     const lastAt = [
       ...h.messages.filter((m) => !m.automated && m.threadParticipants <= 9).map((m) => m.at),
@@ -323,6 +328,7 @@ export async function scorePeople(
     return {
       id: p.id,
       score,
+      share,
       band: tieBand(score),
       features: tie.features,
       contributions: tie.contributions,
@@ -335,14 +341,14 @@ export async function scorePeople(
   for (const part of chunks(rows, 500)) {
     const json = JSON.stringify(part);
     await db.sql`
-      insert into orbit.tie_scores (user_id, person_id, score, band, features, contributions, explanation,
-                                    model_version, computed_at)
-      select ${userId}::uuid, (r ->> 'id')::uuid, (r ->> 'score')::smallint, r ->> 'band', r -> 'features',
-             r -> 'contributions', array(select jsonb_array_elements_text(r -> 'explanation')), r ->> 'model',
-             ${now}::timestamptz
+      insert into orbit.tie_scores (user_id, person_id, score, share_score, band, features, contributions,
+                                    explanation, model_version, computed_at)
+      select ${userId}::uuid, (r ->> 'id')::uuid, (r ->> 'score')::smallint, (r ->> 'share')::smallint, r ->> 'band',
+             r -> 'features', r -> 'contributions', array(select jsonb_array_elements_text(r -> 'explanation')),
+             r ->> 'model', ${now}::timestamptz
         from jsonb_array_elements(${json}::jsonb) r
       on conflict (user_id, person_id) do update set
-        score = excluded.score, band = excluded.band, features = excluded.features,
+        score = excluded.score, share_score = excluded.share_score, band = excluded.band, features = excluded.features,
         contributions = excluded.contributions, explanation = excluded.explanation,
         model_version = excluded.model_version, computed_at = excluded.computed_at`;
     await db.sql`

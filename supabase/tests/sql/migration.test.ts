@@ -52,6 +52,12 @@ describe('orbit core migration', () => {
       'dead_letters',
       'audit_log',
       'webhook_events',
+      // plan 29 Part A
+      'friend_invites',
+      'friendships',
+      'friend_share_settings',
+      'friend_shares',
+      'friend_intro_asks',
     ])
       expect(names).toContain(name);
     expect(tables.every((r) => r.rls)).toBe(true);
@@ -86,6 +92,8 @@ describe('orbit core migration', () => {
     const jobs = await t.db.sql<{ jobname: string }>`select jobname from cron.job order by jobname`;
     expect(jobs.map((j) => j.jobname)).toEqual([
       'orbit-cadence',
+      // plan 29 §A4: the nightly projection refresh, scheduled by 20261101_orbit_friends.sql
+      'orbit-friends-nightly',
       'orbit-health',
       'orbit-incremental',
       'orbit-nightly',

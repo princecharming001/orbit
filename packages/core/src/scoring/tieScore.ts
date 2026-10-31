@@ -598,6 +598,62 @@ function anyMeeting(h: TieHistory, now: Date): boolean {
   return h.meetings.some((m) => m.attendees <= 8 && (ms(m.at) ?? Number.POSITIVE_INFINITY) <= t);
 }
 
+// ---- what a friend may see of a tie (plan 29 §A2.2) ---------------------------------------------------------------
+
+/**
+ * The features that come from Gmail or Calendar, or from what they say about the student's other contacts: zeroed in
+ * the score a friend's closeness word is built from. What stays is LinkedIn (the connection and post engagement), the
+ * shared context (school, employer, city), the warmth of the student's own notes, and their closeness label.
+ */
+export const SHARE_MASKED_FEATURES: readonly TieFeature[] = [
+  'log_days_last',
+  'log_days_first',
+  'log_out',
+  'log_in',
+  'reciprocity',
+  'log_meetings',
+  'log_threads',
+  'latency',
+  'intros',
+  'structural',
+  'never',
+  'rapport',
+];
+
+/** The features with every Google-derived one at zero. */
+export function shareFeatures(features: TieFeatures): TieFeatures {
+  const out = { ...features };
+  for (const k of SHARE_MASKED_FEATURES) out[k] = 0;
+  return out;
+}
+
+/**
+ * The tie score with nothing Google-derived in it, 0 to 100: the number a friend's "knows, knows well, close" is cut
+ * from (`shareCloseness`). A person known only through email threads lands near the floor, however long the history;
+ * a LinkedIn connection reads as "knows"; the student's own closeness label still stands in for everything, since
+ * it is their own word.
+ */
+export function shareScore(
+  history: TieHistory,
+  now: Date = new Date(),
+  weights: TieWeights = TIE_WEIGHTS,
+  calibration?: TieCalibration,
+): number {
+  const { features } = computeTieFeatures(history, now);
+  const score = scoreFromZ(linearTie(shareFeatures(features), weights), calibration);
+  const label = history.label;
+  if (label && TIE_LABEL_MIDPOINTS[label.closeness] !== undefined)
+    return TIE_LABEL_MIDPOINTS[label.closeness]!;
+  return score;
+}
+
+/** 1 knows, 2 knows well, 3 close (plan 29 §A1), from the share score's band: warm is 2, strong and close are 3. */
+export function shareCloseness(score: number): 1 | 2 | 3 {
+  if (score >= 60) return 3;
+  if (score >= 40) return 2;
+  return 1;
+}
+
 // ---------------------------------------------------------------------------------------------------------------
 // explanation
 
