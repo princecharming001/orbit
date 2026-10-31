@@ -1,27 +1,28 @@
 /**
- * Autopilot: the student approves a set of drafts once, and Orbit sends them itself over the coming days, spaced the
- * way a person writes: weekdays only, inside their sending hours, a different gap each time, never more in a day
- * than their daily limits. Each message is approved like any other (the text is bound and checked), then waits in
- * the outbox with its own time. When its time comes it is checked again (a reply since, a cooldown, a hidden
- * person) and sent, or put back as a draft with the reason. If Orbit was closed, the ones it missed are spread out
- * again instead of going all at once.
+ * Autopilot in the browser (plan 29 §B2.1, local mode and the demo): the student approves a set of drafts once, and
+ * Orbit sends them itself over the coming days, spaced the way a person writes: each in its recipient's morning send
+ * window (core's `nextSendWindow`, the same one the server uses), a different gap each time, never more in a day
+ * than their daily limits. Email only: a LinkedIn message always waits for the student's own tap, at every level.
+ * Each message is approved like any other (the text is bound and checked), then waits in the outbox with its own
+ * time. When its time comes it is checked again (a reply since, a cooldown, a hidden person) and sent, or put back as
+ * a draft with the reason. If Orbit was closed, the ones it missed are spread out again instead of going all at once.
  */
 import type { OutboundMessage, User } from '@orbit/core';
+import { SEND_CAPS } from '@orbit/core';
 import { db } from '../db/schema';
 import { usesMockConnectors } from '../integrations/connectorsMock';
 import { AUTOPILOT_DEFAULT_PER_DAY, planSpread } from './autopilotTime';
-import { linkedInSendActive } from './linkedinLive';
 import { approveAndSend, googleSendActive } from './send';
+import { personZone } from './trust';
 
-/** Autopilot can send this message itself: Gmail with send permission, live LinkedIn, or the demo's simulation. */
+/** The one reason a LinkedIn draft is never scheduled, said the same way everywhere. */
+export const LINKEDIN_WAITS = 'LinkedIn messages always wait for your own tap.';
+
+/** Autopilot can send this message itself: Gmail with send permission, or the demo's simulation. Never LinkedIn. */
 export async function autopilotCanSend(user: User, msg: OutboundMessage): Promise<boolean> {
+  if (msg.channel !== 'gmail') return false;
   if (usesMockConnectors(user.id)) return true;
-  if (msg.channel === 'gmail') return googleSendActive(user.id);
-  if (msg.channel === 'linkedin') {
-    const person = await db.people.get(msg.personId);
-    return !!person && linkedInSendActive(user, person);
-  }
-  return false;
+  return googleSendActive(user.id);
 }
 
 /** Sends already planned by autopilot, soonest first. */
@@ -40,7 +41,16 @@ export interface SchedulePlanItem {
   at: Date;
 }
 
-/** The plan for these drafts: each gets a time, spread out (or at the times given), around what is already planned. */
+/** The recipient's zone when Orbit knows it (kept on them, or read from where they are), else the student's. */
+async function zoneFor(user: Pick<User, 'timezone'>, personId: string): Promise<string> {
+  const person = await db.people.get(personId);
+  return (person && personZone(person)) || user.timezone;
+}
+
+/**
+ * The plan for these drafts: each gets a time in its recipient's next send window, spread out (or at the times given),
+ * around what is already planned. The day's limit is the student's own email cap, or the default, whichever is lower.
+ */
 export async function planSchedule(
   user: User,
   drafts: OutboundMessage[],
@@ -48,15 +58,18 @@ export async function planSchedule(
 ): Promise<SchedulePlanItem[]> {
   const now = opts.now ?? new Date();
   const settings = await db.settings.get(user.id);
-  const cap = Math.min(settings?.dailySendCapGmail ?? 20, settings?.dailySendCapLinkedin ?? 20);
+  const cap = Math.min(settings?.dailySendCapGmail ?? SEND_CAPS.gmailPerDay, SEND_CAPS.gmailPerDay);
   const perDay = Math.max(1, Math.min(cap, opts.perDay ?? AUTOPILOT_DEFAULT_PER_DAY));
   const fixed = drafts.filter((d) => opts.at?.[d.id]);
   const spread = drafts.filter((d) => !opts.at?.[d.id]);
   const taken = (await scheduledSends(user.id)).map((o) => new Date(o.sendAt!));
+  const zones: string[] = [];
+  for (const d of spread) zones.push(await zoneFor(user, d.personId));
   const times = planSpread({
     count: spread.length,
     start: opts.start && opts.start > now ? opts.start : now,
     perDay,
+    zones,
     taken: [...taken, ...fixed.map((d) => opts.at![d.id]!)],
     seed: drafts.length * 31 + Math.floor(now.getTime() / 3_600_000),
   });
@@ -70,7 +83,8 @@ export type ScheduleOutcome = { id: string; ok: true; at: string } | { id: strin
 
 /**
  * Approve each draft for autopilot at its planned time. The engine checks each one as if it were sent then (caps
- * count on the day it goes out); one that cannot go is left as a draft with the reason.
+ * count on the day it goes out); one that cannot go is left as a draft with the reason. LinkedIn drafts are refused
+ * with the reason: they are never sent without a tap.
  */
 export async function scheduleSends(
   user: User,
@@ -84,14 +98,16 @@ export async function scheduleSends(
       out.push({ id: p.id, ok: false, error: 'That draft is gone.' });
       continue;
     }
+    if (msg.channel !== 'gmail') {
+      out.push({ id: p.id, ok: false, error: LINKEDIN_WAITS });
+      continue;
+    }
     if (!(await autopilotCanSend(user, msg))) {
       out.push({
         id: p.id,
         ok: false,
         error:
-          msg.channel === 'gmail'
-            ? 'Autopilot sends email through Gmail. Connect Google with permission to send, in Settings, Integrations.'
-            : 'Autopilot sends LinkedIn messages through live LinkedIn. Connect it in Settings, Integrations.',
+          'Autopilot sends email through Gmail. Connect Google with permission to send, in Settings, Integrations.',
       });
       continue;
     }
@@ -113,15 +129,10 @@ export async function cancelScheduled(userId: string, id: string): Promise<boole
       sendAt: undefined,
       queuedAt: undefined,
       autopilot: undefined,
+      reviewUntil: undefined,
     });
     return true;
   });
 }
 
-export {
-  AUTOPILOT_DEFAULT_PER_DAY,
-  AUTOPILOT_GAP_MIN,
-  AUTOPILOT_WINDOW,
-  nextOpen,
-  planSpread,
-} from './autopilotTime';
+export { AUTOPILOT_DEFAULT_PER_DAY, AUTOPILOT_GAP_MIN, nextOpen, planSpread } from './autopilotTime';

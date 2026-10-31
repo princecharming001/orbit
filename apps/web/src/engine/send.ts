@@ -11,6 +11,7 @@ import type {
 } from '@orbit/core';
 import {
   declineReengage,
+  FIRST_TOUCH_KINDS,
   LINKEDIN_NOTE_MAX,
   linkedinMessageUrl,
   linkedinProfileUrl,
@@ -18,6 +19,7 @@ import {
   maxBumpsFor,
   newId,
   reengageDueAt,
+  SEND_CAPS,
   sectorOf,
   sha256Hex,
   validateDraft,
@@ -39,6 +41,7 @@ import { checkIntroNote } from './introNote';
 import { linkedInSendActive, sendLinkedInLive } from './linkedinLive';
 import { scheduleChatAt, upcomingMeeting } from './move';
 import { evaluateTrigger, recordAlreadyDone } from './stages';
+import { personZone } from './trust';
 
 /** Provider sends wait this long in `queued` so the student can undo (01 §6, 07 §5, 14 §7). */
 export const UNDO_WINDOW_MS = 10_000;
@@ -129,33 +132,49 @@ export async function checkSendAllowed(
   channel: OutboundMessage['channel'],
   kind: OutboundMessage['kind'],
   now = new Date(),
-  opts: { chatId?: string; excludeMessageId?: string } = {},
+  opts: { chatId?: string; excludeMessageId?: string; goalId?: string } = {},
 ): Promise<{ allowed: boolean; reason?: string }> {
   const settings = await db.settings.get(userId);
   const person = await db.people.get(personId);
   if (!person || person.hiddenAt) return { allowed: false, reason: 'This person is hidden.' };
   const dayStart = new Date(now);
   dayStart.setHours(0, 0, 0, 0);
+  // a sales goal's first touches by email have their own, larger day (the cap table, plan 29 §B2.1)
+  const salesFirstTouch =
+    channel === 'gmail' &&
+    FIRST_TOUCH_KINDS.has(kind) &&
+    !!opts.goalId &&
+    (await db.userGoals.get(opts.goalId))?.kind === 'sales';
+  const salesGoalIds = salesFirstTouch
+    ? new Set(
+        (await db.userGoals.where('userId').equals(userId).toArray())
+          .filter((g) => g.kind === 'sales')
+          .map((g) => g.id),
+      )
+    : undefined;
   const sentToday = await db.outbound
     .where('userId')
     .equals(userId)
     .filter((o) => {
       const at = committedAt(o);
-      return (
-        o.id !== opts.excludeMessageId &&
-        COMMITTED.includes(o.status) &&
-        o.channel === channel &&
-        !!at &&
-        new Date(at) >= dayStart
-      );
+      if (o.id === opts.excludeMessageId || !COMMITTED.includes(o.status) || o.channel !== channel || !at)
+        return false;
+      if (new Date(at) < dayStart) return false;
+      return salesGoalIds ? FIRST_TOUCH_KINDS.has(o.kind) && !!o.goalId && salesGoalIds.has(o.goalId) : true;
     })
     .count();
-  const cap =
-    channel === 'linkedin' ? (settings?.dailySendCapLinkedin ?? 10) : (settings?.dailySendCapGmail ?? 15);
+  // the cap table, or the student's own lower limit
+  const cap = salesGoalIds
+    ? SEND_CAPS.gmailSalesFirstTouchesPerDay
+    : channel === 'linkedin'
+      ? Math.min(settings?.dailySendCapLinkedin ?? SEND_CAPS.linkedinPerDay, SEND_CAPS.linkedinPerDay)
+      : Math.min(settings?.dailySendCapGmail ?? SEND_CAPS.gmailPerDay, SEND_CAPS.gmailPerDay);
   if (sentToday >= cap)
     return {
       allowed: false,
-      reason: `Daily limit reached: ${cap} ${channel === 'linkedin' ? 'LinkedIn messages' : 'emails'} today. It resets at midnight.`,
+      reason: salesGoalIds
+        ? `Daily limit reached: ${cap} first sales emails today. It resets at midnight.`
+        : `Daily limit reached: ${cap} ${channel === 'linkedin' ? 'LinkedIn messages' : 'emails'} today. It resets at midnight.`,
     };
   const chat = await chatFor(personId, kind, opts.chatId);
   if (
@@ -570,6 +589,7 @@ export async function approveAndSend(
     {
       chatId: msg.chatId,
       excludeMessageId: msg.id,
+      goalId: msg.goalId,
     },
   );
   if (!allowed.allowed) return { ok: false, error: allowed.reason ?? 'Not allowed' };
@@ -896,8 +916,9 @@ export async function sendDueQueued(
       .anyOf('queued', 'sending')
       .filter((o) => o.userId === user.id && !!o.sendAt)
       .toArray();
+    const waiting = due.some((o) => o.autopilot && o.status === 'queued');
     // autopilot keeps a gap between its sends: the last one it sent, if any (read only when one is waiting)
-    let lastAuto = due.some((o) => o.autopilot && o.status === 'queued')
+    let lastAuto = waiting
       ? (
           await db.outbound
             .where('status')
@@ -908,17 +929,24 @@ export async function sendDueQueued(
           .map((o) => new Date(o.sentAt!))
           .sort((a, b) => b.getTime() - a.getTime())[0]
       : undefined;
+    // the pause (plan 29 §B2.7): nothing Orbit chose a time for goes out before it ends; taps still go
+    const pausedUntil = waiting ? (await db.settings.get(user.id))?.autopilotPausedUntil : undefined;
+    const paused = !!pausedUntil && now.getTime() < Date.parse(pausedUntil);
     // the last slot handed out in this run, so the sends it moves line up one after another
     let cursor: Date | undefined;
     for (const o of due.sort((a, b) => a.sendAt!.localeCompare(b.sendAt!))) {
       const late = now.getTime() - new Date(o.sendAt!).getTime();
       if (o.autopilot && o.status === 'queued') {
         if (late < 0) continue;
+        // the review window (plan 29 §B2.2) and the pause hold it where it is; it goes to the next window after
+        if (paused || (o.reviewUntil && now.getTime() < Date.parse(o.reviewUntil))) continue;
         // missed while Orbit was closed, or too soon after the last one: the next slot, never a burst
         const tooSoon = !!lastAuto && now.getTime() - lastAuto.getTime() < AUTOPILOT_GAP_MIN.min * 60_000;
         if (late > STALE_QUEUE_MS || tooSoon) {
-          // each one moved goes a gap after the one before it
-          const next = nextSlotAfter(cursor ?? lastAuto, now, o.id.length * 97 + now.getUTCHours());
+          // each one moved goes a gap after the one before it, in the recipient's window
+          const person = await db.people.get(o.personId);
+          const zone = (person && personZone(person)) || user.timezone;
+          const next = nextSlotAfter(cursor ?? lastAuto, now, o.id.length * 97 + now.getUTCHours(), zone);
           cursor = next;
           const at = next.toISOString();
           if (at !== o.sendAt)
@@ -929,6 +957,7 @@ export async function sendDueQueued(
         const still = await checkSendAllowed(user.id, o.personId, o.channel, o.kind, now, {
           chatId: o.chatId,
           excludeMessageId: o.id,
+          goalId: o.goalId,
         });
         if (!still.allowed) {
           const m = await transition(o.id, ['queued'], {
@@ -950,6 +979,8 @@ export async function sendDueQueued(
         if (r.ok) {
           lastAuto = now;
           if (!cursor || cursor < now) cursor = now;
+          // plan 29 §B2.7: what Orbit sent on its own is on the record and under Sent for you, with a minute to undo
+          if (o.autoSent) await recordAutoSent(user, claimed, now);
         }
         out.push(r.ok ? { id: o.id, ok: true } : { id: o.id, ok: false, error: r.error });
         continue;
@@ -991,6 +1022,34 @@ export async function sendDueQueued(
     return await run;
   } finally {
     draining = undefined;
+  }
+}
+
+/** The audit row and the notice for a message Orbit sent without a tap (the ladder's kinds, plan 23 §4.9). */
+async function recordAutoSent(user: User, msg: OutboundMessage, now: Date): Promise<void> {
+  try {
+    const person = await db.people.get(msg.personId);
+    const name = person?.firstName ?? 'them';
+    await audit(user.id, 'message.auto_sent', {
+      actor: 'system',
+      objectTable: 'outbound',
+      objectId: msg.id,
+      metadata: {
+        channel: msg.channel,
+        kind: msg.kind,
+        rung: msg.autoRung ?? msg.kind,
+        at: now.toISOString(),
+      },
+    });
+    await notify(
+      user.id,
+      'system',
+      'Sent for you',
+      `Orbit sent ${MESSAGE_KIND_LABELS[msg.kind].toLowerCase()} to ${name}. It is under Sent for you, where you can undo it for a minute.`,
+      '/inbox?tab=sent',
+    );
+  } catch {
+    // the message is out either way; the record is best effort
   }
 }
 

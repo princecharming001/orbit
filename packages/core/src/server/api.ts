@@ -424,6 +424,18 @@ export interface ProfileSettingsRequest {
   about?: OwnWords | null;
   /** read the tone of replies for closeness (plan 27): false turns it off (users.settings.read_reply_tone) */
   readReplyTone?: boolean;
+  /**
+   * the ladder's kinds the student handed to Orbit (plan 23 §4.9, plan 29 §B2.1): the whole list replaces
+   * users.settings.auto_kinds, and the server cadence auto-approves drafts of those kinds
+   */
+  autoKinds?: MessageKind[];
+  /** off, assist or autopilot (plan 29 §B1): users.settings.autopilot_mode, and users.autonomy_level with it */
+  autopilotMode?: 'off' | 'assist' | 'autopilot';
+  /** ISO: Orbit sends nothing on its own before then (users.settings.autopilot_paused_until); null resumes */
+  autopilotPausedUntil?: string | null;
+  /** the student's own daily limits, when lower than the cap table (users.settings.daily_send_cap_gmail, _linkedin) */
+  dailySendCapGmail?: number;
+  dailySendCapLinkedin?: number;
 }
 export interface ProfileSettingsResponse {
   postalAddress: string | null;

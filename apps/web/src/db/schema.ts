@@ -457,6 +457,9 @@ export class OrbitDB extends Dexie {
     this.version(10).stores({
       events: 'id, userId, externalEventId, startAt, chatId, *attendeePersonIds',
     });
+    // plan 29 §B3: the outbox carries reviewUntil and autoRung, the settings row autopilotMode and
+    // autopilotPausedUntil; none is indexed, so the stores are unchanged and the version marks the shape
+    this.version(11).stores({});
   }
 }
 

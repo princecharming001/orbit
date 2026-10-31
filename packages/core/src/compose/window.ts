@@ -60,7 +60,8 @@ export function zonedInstant(key: string, hour: number, minute: number, tz: stri
   return new Date(t);
 }
 
-const addDaysKey = (key: string, n: number) =>
+/** The local date `n` calendar days after `key` (YYYY-MM-DD). */
+export const addDaysKey = (key: string, n: number) =>
   new Date(Date.parse(`${key}T00:00:00Z`) + n * 86_400_000).toISOString().slice(0, 10);
 
 export function sendDayAllowed(key: string, channel: 'gmail' | 'linkedin'): boolean {

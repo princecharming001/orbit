@@ -1,8 +1,10 @@
-import { messageHash } from '@orbit/core/safety/rules';
+import { messageHash, SEND_CAPS } from '@orbit/core/safety/rules';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { fromBase64url } from '../../functions/_shared/crypto.ts';
 import { sqlQueue } from '../../functions/_shared/queue.ts';
 import { maybeAutoReply } from '../../functions/_shared/replies/replies.ts';
+import { sendDraft } from '../../functions/_shared/sending/send.ts';
+import { makeServices } from '../../functions/_shared/services.ts';
 import { pickSlots } from '../../functions/_shared/slots/slots.ts';
 import { defaultHandlers, type Job, runTick } from '../../functions/orbit-worker/worker.ts';
 import {
@@ -132,10 +134,11 @@ describe('sending (§8.5, §14.6, §16)', () => {
     );
   });
 
-  it('schedules for the next send window when no time is given, and the job sends it once due', async () => {
+  it('level 1 (16 §8.3): schedules for the next send window when no time is given, and the job sends it once due', async () => {
     const net = fakeNet(google());
     const call = api(t, net, { env: {} });
     const { userId, token } = await signedInUser(t);
+    await t.db.sql`update orbit.users set autonomy_level = 1 where id = ${userId}::uuid`;
     const p = await addPerson(t, userId, {
       name: 'Omar Hale',
       email: 'omar@example.com',
@@ -185,6 +188,210 @@ describe('sending (§8.5, §14.6, §16)', () => {
         .body.draft.status,
     ).toBe('discarded');
     expect((await call('/drafts/cancel', token, { draftId: c.body.draft.id })).status).toBe(409);
+  });
+
+  it('level 0 (16 §8.3): approving without a time is the student sending, so it goes at once; a goal at level 1 waits for the window', async () => {
+    const net = fakeNet(google());
+    const call = api(t, net, { env: {} });
+    const { userId, token } = await signedInUser(t);
+    const p = await addPerson(t, userId, { name: 'Zed Now', email: 'zed@example.com' });
+    const c = await call<{ draft: { id: string } }>('/drafts/compose', token, {
+      personId: p,
+      kind: 'first_touch',
+      channel: 'gmail',
+    });
+    const r = await call<{ draft: { status: string } }>('/drafts/approve', token, {
+      draftId: c.body.draft.id,
+    });
+    expect(r.body.draft.status).toBe('sent');
+    expect(sends(net)).toHaveLength(1);
+    const [row] = await t.db.sql<{ autonomy_level: number }>`
+      select autonomy_level from orbit.drafts where id = ${c.body.draft.id}::uuid`;
+    expect(Number(row!.autonomy_level)).toBe(0);
+    // the goal's own level wins for its drafts
+    const g = await call<{ goal: { id: string } }>('/goals/upsert', token, {
+      goal: { kind: 'recruiting', title: 'Summer', autonomyLevel: 1 },
+    });
+    const q = await addPerson(t, userId, { name: 'Yara Later', email: 'yara@example.com' });
+    const c2 = await call<{ draft: { id: string } }>('/drafts/compose', token, {
+      personId: q,
+      kind: 'first_touch',
+      channel: 'gmail',
+      goalId: g.body.goal.id,
+    });
+    const r2 = await call<{ draft: { status: string; sendAt: string } }>('/drafts/approve', token, {
+      draftId: c2.body.draft.id,
+    });
+    expect(r2.body.draft.status).toBe('approved');
+    expect(new Date(r2.body.draft.sendAt).getTime()).toBeGreaterThan(Date.now());
+    expect(sends(net)).toHaveLength(1);
+    const [row2] = await t.db.sql<{ autonomy_level: number }>`
+      select autonomy_level from orbit.drafts where id = ${c2.body.draft.id}::uuid`;
+    expect(Number(row2!.autonomy_level)).toBe(1);
+  });
+
+  it('plan 29 §B2.2: the send job waits for review_until, back in the queue rather than dead-lettered, then sends', async () => {
+    const net = fakeNet(google());
+    const call = api(t, net, { env: {} });
+    const { userId, token } = await signedInUser(t);
+    const p = await addPerson(t, userId, { name: 'Rae View', email: 'rae@example.com' });
+    const c = await call<{ draft: { id: string } }>('/drafts/compose', token, {
+      personId: p,
+      kind: 'first_touch',
+      channel: 'gmail',
+    });
+    const id = c.body.draft.id;
+    await call('/drafts/approve', token, { draftId: id, sendAt: new Date(Date.now() + DAY).toISOString() });
+    const review = new Date(Date.now() + 8 * 3_600_000);
+    await t.db
+      .sql`update orbit.drafts set send_at = now() - interval '1 minute', review_until = ${review}::timestamptz
+                   where id = ${id}::uuid`;
+    const s = makeServices(agentConfig(net, {}), { db: t.db });
+    expect(await sendDraft(s, id)).toEqual({ status: 'held', reason: 'review_window' });
+    expect(sends(net)).toHaveLength(0);
+    const [held] = await t.db.sql<{ status: string; error: string; send_at: Date }>`
+      select status, error, send_at from orbit.drafts where id = ${id}::uuid`;
+    expect(held).toMatchObject({ status: 'approved', error: 'review_window' });
+    expect(new Date(held!.send_at).getTime()).toBe(review.getTime());
+    const jobs = await t.db.sql<{ message: { dedupeKey: string } }>`
+      select message from pgmq.q_orbit_send where message->>'userId' = ${userId}`;
+    expect(jobs.some((j) => j.message.dedupeKey.startsWith(`send:${id}:review_window:`))).toBe(true);
+    expect(await t.db.sql`select 1 from orbit.dead_letters`).toHaveLength(0);
+    // the review is over
+    await t.db
+      .sql`update orbit.drafts set send_at = now() - interval '1 minute', review_until = now() - interval '1 minute'
+                   where id = ${id}::uuid`;
+    expect((await sendDraft(s, id)).status).toBe('sent');
+    expect(sends(net)).toHaveLength(1);
+    const audit = await t.db.sql<{ action: string; details: { reason?: string } }>`
+      select action, details from orbit.audit_log where target_id = ${id} order by id`;
+    expect(audit.map((a) => a.action)).toEqual(
+      expect.arrayContaining(['draft.approve', 'draft.hold', 'draft.sent']),
+    );
+    expect(audit.find((a) => a.action === 'draft.hold')!.details.reason).toBe('review_window');
+  });
+
+  it('plan 29 §B2.7: while autopilot_paused_until is ahead, what Orbit chose a time for waits; a level 0 tap goes', async () => {
+    const net = fakeNet(google());
+    const call = api(t, net, { env: {} });
+    const { userId, token } = await signedInUser(t, {
+      settings: { autopilot_paused_until: new Date(Date.now() + DAY).toISOString() },
+    });
+    const p = await addPerson(t, userId, { name: 'Pat Pause', email: 'pat@example.com' });
+    const s = makeServices(agentConfig(net, {}), { db: t.db });
+    // a level 1 approval, its window come
+    const c = await call<{ draft: { id: string } }>('/drafts/compose', token, {
+      personId: p,
+      kind: 'first_touch',
+      channel: 'gmail',
+    });
+    await call('/drafts/approve', token, {
+      draftId: c.body.draft.id,
+      sendAt: new Date(Date.now() + DAY).toISOString(),
+    });
+    await t.db.sql`update orbit.drafts set send_at = now() - interval '1 minute', autonomy_level = 1
+                   where id = ${c.body.draft.id}::uuid`;
+    expect(await sendDraft(s, c.body.draft.id)).toEqual({ status: 'held', reason: 'autopilot_paused' });
+    expect(sends(net)).toHaveLength(0);
+    const [held] = await t.db.sql<{ status: string; error: string; send_at: Date }>`
+      select status, error, send_at from orbit.drafts where id = ${c.body.draft.id}::uuid`;
+    expect(held).toMatchObject({ status: 'approved', error: 'autopilot_paused' });
+    // looked at again within a quarter of an hour, not at the end of the pause
+    expect(new Date(held!.send_at).getTime()).toBeLessThanOrEqual(Date.now() + 15 * 60_000 + 1000);
+    expect(await t.db.sql`select 1 from orbit.dead_letters`).toHaveLength(0);
+    // the pause ends: it goes
+    await t.db.sql`update orbit.users set settings = '{}'::jsonb where id = ${userId}::uuid`;
+    await t.db
+      .sql`update orbit.drafts set send_at = now() - interval '1 minute' where id = ${c.body.draft.id}::uuid`;
+    expect((await sendDraft(s, c.body.draft.id)).status).toBe('sent');
+    // paused again: a level 0 tap is the student sending
+    await t.db
+      .sql`update orbit.users set settings = ${{ autopilot_paused_until: new Date(Date.now() + DAY).toISOString() }}::jsonb
+                   where id = ${userId}::uuid`;
+    const q = await addPerson(t, userId, { name: 'Tap Goes', email: 'tap@example.com' });
+    const c2 = await call<{ draft: { id: string } }>('/drafts/compose', token, {
+      personId: q,
+      kind: 'first_touch',
+      channel: 'gmail',
+    });
+    const r = await call<{ draft: { status: string } }>('/drafts/approve', token, {
+      draftId: c2.body.draft.id,
+    });
+    expect(r.body.draft.status).toBe('sent');
+    expect(sends(net)).toHaveLength(2);
+  });
+
+  it('plan 29 §B2.1: /settings/profile keeps the ladder’s kinds, the mode (with the level), the pause and the limits; /settings/pause sets both pauses', async () => {
+    const call = api(t, fakeNet(), { env: {} });
+    const { userId, token } = await signedInUser(t);
+    const settings = async () =>
+      (
+        await t.db.sql<{ settings: Record<string, unknown>; autonomy_level: number }>`
+          select settings, autonomy_level from orbit.users where id = ${userId}::uuid`
+      )[0]!;
+    expect((await call('/settings/profile', token, { autoKinds: ['bump', 'nurture'] })).status).toBe(400);
+    expect((await call('/settings/profile', token, { autopilotMode: 'full' })).status).toBe(400);
+    expect((await call('/settings/profile', token, { dailySendCapGmail: 40 })).status).toBe(400);
+    expect((await call('/settings/profile', token, { autopilotPausedUntil: 'soon' })).status).toBe(400);
+    const r = await call('/settings/profile', token, {
+      autoKinds: ['bump', 'thank_you', 'bump'],
+      autopilotMode: 'assist',
+      autopilotPausedUntil: '2026-11-03T12:00:00Z',
+      dailySendCapGmail: 8,
+      dailySendCapLinkedin: 4,
+    });
+    expect(r.status).toBe(200);
+    let s = await settings();
+    expect(s.settings).toMatchObject({
+      auto_kinds: ['bump', 'thank_you'],
+      autopilot_mode: 'assist',
+      autopilot_paused_until: '2026-11-03T12:00:00.000Z',
+      daily_send_cap_gmail: 8,
+      daily_send_cap_linkedin: 4,
+    });
+    expect(Number(s.autonomy_level)).toBe(1);
+    await call('/settings/profile', token, {
+      autopilotMode: 'autopilot',
+      autopilotPausedUntil: null,
+      autoKinds: [],
+    });
+    s = await settings();
+    expect(Number(s.autonomy_level)).toBe(2);
+    expect(s.settings.autopilot_paused_until).toBeUndefined();
+    expect(s.settings.auto_kinds).toEqual([]);
+    expect(s.settings.daily_send_cap_gmail).toBe(8);
+    // the pause holds the drafting and what Orbit chose a time for, and resuming lifts both
+    await call('/settings/pause', token, { until: '2026-11-10' });
+    s = await settings();
+    expect(s.settings.quiet_until).toBe('2026-11-10T00:00:00.000Z');
+    expect(s.settings.autopilot_paused_until).toBe('2026-11-10T00:00:00.000Z');
+    await call('/settings/pause', token, { until: null });
+    s = await settings();
+    expect(s.settings.quiet_until).toBeUndefined();
+    expect(s.settings.autopilot_paused_until).toBeUndefined();
+    expect(s.settings.autopilot_mode).toBe('autopilot');
+  });
+
+  it('plan 29 §B2.1: emails by hand stop at the table’s 15 a day, or the student’s own lower limit', async () => {
+    const net = fakeNet(google());
+    const call = api(t, net, { env: {} });
+    const { userId, token } = await signedInUser(t, { settings: { daily_send_cap_gmail: 3 } });
+    const p = await addPerson(t, userId, { name: 'Cap Lee', email: 'cap@example.com' });
+    for (let i = 0; i < 3; i++)
+      await t.db.sql`
+        insert into orbit.drafts (user_id, person_id, channel, kind, body, status, sent_at)
+        values (${userId}::uuid, ${p}::uuid, 'gmail', 'thank_you', 'x', 'sent', now())`;
+    const fresh = await addPerson(t, userId, { name: 'Dee Four', email: 'dee@example.com' });
+    const c = await call<{ draft: { id: string } }>('/drafts/compose', token, {
+      personId: fresh,
+      kind: 'first_touch',
+      channel: 'gmail',
+    });
+    await call('/drafts/approve', token, { draftId: c.body.draft.id, sendAt: new Date().toISOString() });
+    const [d] = await t.db.sql<{ status: string; error: string }>`
+      select status, error from orbit.drafts where id = ${c.body.draft.id}::uuid`;
+    expect(d).toEqual({ status: 'approved', error: 'gmail_daily_cap' });
+    expect(sends(net)).toHaveLength(0);
   });
 
   it('a reply goes out in its Gmail thread with In-Reply-To and References', async () => {
@@ -357,7 +564,7 @@ describe('sending (§8.5, §14.6, §16)', () => {
     expect(sends(net)).toHaveLength(0);
   });
 
-  it('holds sales first touches past 30 a day and LinkedIn messages past 25 a day', async () => {
+  it('holds sales first touches past 30 a day and LinkedIn messages past 10 a day (the cap table in core)', async () => {
     const net = fakeNet(google());
     const call = api(t, net, { env: { unipileKey: 'k', unipileBase: UNIPILE } });
     const { userId, token } = await signedInUser(t, {
@@ -388,7 +595,7 @@ describe('sending (§8.5, §14.6, §16)', () => {
 
     await t.db.sql`insert into orbit.integration_accounts (user_id, provider, external_account_id, status)
       values (${userId}::uuid, 'linkedin', 'acc-2', 'active')`;
-    for (let i = 0; i < 25; i++)
+    for (let i = 0; i < SEND_CAPS.linkedinPerDay; i++)
       await t.db.sql`
         insert into orbit.drafts (user_id, person_id, channel, kind, body, status, sent_at)
         values (${userId}::uuid, ${p}::uuid, 'linkedin', 'reply', 'x', 'sent', now())`;

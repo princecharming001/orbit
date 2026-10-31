@@ -4,6 +4,11 @@
  * the compose service (the template engine when Claude is not configured); stage timers move chats; approved drafts
  * whose time has come are queued to send (dedupe `send:<draftId>`). Nothing happens while `quiet_until` is ahead,
  * nobody gets a fourth unanswered message, and nurture stays at three a week (all enforced in core).
+ *
+ * The ladder on the server (plan 29 §B2.1): a bump or thank-you of a kind the student handed to Orbit
+ * (`users.settings.auto_kinds`, the browser's `settings.autoKinds`) is approved for the recipient's next send window
+ * on its own, under the browser ladder's conditions: the goal or the student at level 1 or more, Gmail, the
+ * validator passed, a tie score of 40 or more, no pause, and fewer than five of Orbit's own sends that day.
  */
 import type {
   CadenceAction,
@@ -13,11 +18,12 @@ import type {
   CadencePerson,
 } from '@orbit/core/pipeline/cadence';
 import { cadenceActions } from '@orbit/core/pipeline/cadence';
-import { messageHash } from '@orbit/core/safety/rules';
+import { AUTO_KINDS, AUTO_SEND_MIN_SCORE, messageHash, SEND_CAPS } from '@orbit/core/safety/rules';
 import type { DueItem } from '@orbit/core/server/api';
 import { chatFromRow, goalFromRow, type Row } from '@orbit/core/server/mappers';
 import type { CoffeeChat, Goal, MessageKind } from '@orbit/core/types';
 import { composeDraft } from '../compose/compose.ts';
+import { askUserMarkers } from '../compose/prompts.ts';
 import { nextSendWindow } from '../compose/window.ts';
 import type { Db } from '../db.ts';
 import { HttpError } from '../http.ts';
@@ -38,12 +44,18 @@ export interface CadenceState {
   timezone: string;
   chatsById: Map<string, CoffeeChat>;
   goalsById: Map<string, Goal>;
+  /** the student's level (16 §8.3); a goal's own level wins for its drafts */
+  autonomyLevel: number;
+  /** the ladder's kinds the student handed to Orbit (users.settings.auto_kinds) */
+  autoKinds: string[];
+  /** ISO: Orbit approves nothing on its own before then (users.settings.autopilot_paused_until) */
+  pausedUntil?: string;
 }
 
 /** Everything `cadenceActions` reads, from the user's rows. */
 export async function loadCadence(db: Db, userId: string, now: Date): Promise<CadenceState> {
-  const [u] = await db.sql<{ timezone: string; settings: Record<string, unknown> }>`
-    select timezone, settings from orbit.users where id = ${userId}::uuid`;
+  const [u] = await db.sql<{ timezone: string; autonomy_level: number; settings: Record<string, unknown> }>`
+    select timezone, autonomy_level, settings from orbit.users where id = ${userId}::uuid`;
   const tz = validZone(u?.timezone) ?? 'America/New_York';
   const settings = u?.settings ?? {};
   const chatRows = await db.sql<Record<string, unknown>>`
@@ -173,7 +185,26 @@ export async function loadCadence(db: Db, userId: string, now: Date): Promise<Ca
     timezone: tz,
     chatsById: new Map(chats.map((c) => [c.id, c])),
     goalsById: new Map(goals.map((g) => [g.id, g])),
+    autonomyLevel: num(u?.autonomy_level, 0),
+    autoKinds: Array.isArray(settings.auto_kinds)
+      ? (settings.auto_kinds as unknown[]).filter(
+          (k): k is string => typeof k === 'string' && (AUTO_KINDS as readonly string[]).includes(k),
+        )
+      : [],
+    pausedUntil:
+      typeof settings.autopilot_paused_until === 'string' ? settings.autopilot_paused_until : undefined,
   };
+}
+
+/** Orbit's own approvals planned for the local day `at` falls on, for the cap of five a day (plan 29 §B2.1). */
+async function autoApprovedOn(db: Db, userId: string, at: Date, tz: string): Promise<number> {
+  const key = new Intl.DateTimeFormat('en-CA', { timeZone: tz }).format(at);
+  const [r] = await db.sql<{ n: number }>`
+    select count(*)::int as n from orbit.drafts
+     where user_id = ${userId}::uuid and auto_rung is not null
+       and status in ('approved', 'scheduled', 'sending', 'sent')
+       and to_char(coalesce(send_at, sent_at, created_at) at time zone ${tz}, 'YYYY-MM-DD') = ${key}`;
+  return r?.n ?? 0;
 }
 
 const toDue = (a: CadenceAction): DueItem => ({
@@ -287,16 +318,20 @@ export async function runCadence(s: Services, userId: string): Promise<CadenceSu
         status: 'draft',
         createdAt: now.toISOString(),
       });
-      // §9.3: a bump is approved for the next window when the goal runs at level 1 and the user pre-approved bumps
+      // the ladder (plan 23 §4.9, plan 29 §B2.1): a kind the student handed to Orbit is approved for the recipient's
+      // next window on its own, under the browser's conditions; the send job checks it all again at send time
       const goal = a.goalId ? st.goalsById.get(a.goalId) : undefined;
-      const preapproved = (chat as (CoffeeChat & { preapprovedBumps?: boolean }) | undefined)
-        ?.preapprovedBumps;
+      const level = goal?.autonomyLevel ?? st.autonomyLevel;
+      const paused = !!st.pausedUntil && now.getTime() < new Date(st.pausedUntil).getTime();
+      const score = st.input.people.get(a.personId)?.score ?? 0;
       if (
-        a.kind === 'bump' &&
+        level >= 1 &&
         channel === 'gmail' &&
-        goal?.autonomyLevel === 1 &&
-        preapproved &&
-        draft.validator?.ok
+        st.autoKinds.includes(a.draftKind) &&
+        draft.validator?.ok &&
+        score >= AUTO_SEND_MIN_SCORE &&
+        !paused &&
+        askUserMarkers(`${draft.subject ?? ''}\n${draft.body}`).length === 0
       ) {
         const sendAt = nextSendWindow(
           now,
@@ -304,13 +339,30 @@ export async function runCadence(s: Services, userId: string): Promise<CadenceSu
           'gmail',
           s.random,
         );
-        await db.sql`
-          update orbit.drafts set status = 'approved', send_at = ${sendAt.notBefore}::timestamptz, autonomy_level = 1
-           where id = ${draft.id}::uuid and status = 'draft'`;
+        const at = new Date(sendAt.notBefore);
+        if ((await autoApprovedOn(db, userId, at, st.timezone)) >= SEND_CAPS.autoPerDay) {
+          out.skipped++;
+          continue;
+        }
+        const hash = messageHash({ channel: draft.channel, subject: draft.subject, body: draft.body });
+        const [approved] = await db.sql<{ id: string }>`
+          update orbit.drafts set status = 'approved', send_at = ${at}::timestamptz,
+                                  autonomy_level = ${level}::smallint, auto_rung = ${a.draftKind}
+           where id = ${draft.id}::uuid and status = 'draft' returning id`;
+        if (!approved) continue;
         await db.sql`
           insert into orbit.audit_log (user_id, actor, action, target_table, target_id, details)
           values (${userId}::uuid, 'agent', 'draft.auto_approve', 'drafts', ${draft.id},
-                  ${{ hash: messageHash({ channel: draft.channel, subject: draft.subject, body: draft.body }), standing: 'preapproved_bumps' }}::jsonb)`;
+                  ${{ hash, standing: 'auto_kinds', rung: a.draftKind, level, send_at: sendAt.notBefore }}::jsonb)`;
+        await s.queue.enqueue(
+          {
+            kind: 'send.draft',
+            userId,
+            payload: { draftId: draft.id },
+            dedupeKey: `send:${draft.id}:${sendAt.notBefore}`,
+          },
+          { delaySec: Math.max(1, Math.ceil((at.getTime() - now.getTime()) / 1000)) },
+        );
         out.approved++;
       }
     } catch (e) {

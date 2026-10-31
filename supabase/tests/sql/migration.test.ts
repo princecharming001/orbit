@@ -59,6 +59,27 @@ describe('orbit core migration', () => {
     expect(policies).toHaveLength(0);
   });
 
+  it('plan 29 §B3: drafts carry review_until, auto_rung and a checked outcome', async () => {
+    const cols = await t.db.sql<{ column_name: string; data_type: string }>`
+      select column_name, data_type from information_schema.columns
+       where table_schema = 'orbit' and table_name = 'drafts'
+         and column_name in ('review_until', 'auto_rung', 'outcome') order by 1`;
+    expect(cols).toEqual([
+      { column_name: 'auto_rung', data_type: 'text' },
+      { column_name: 'outcome', data_type: 'text' },
+      { column_name: 'review_until', data_type: 'timestamp with time zone' },
+    ]);
+    const userId = await makeUser(t.db);
+    const [p] = await t.db.sql<{ id: string }>`
+      insert into orbit.people (user_id, display_name, name_norm) values (${userId}::uuid, 'Out Come', 'out come') returning id`;
+    await expect(
+      t.db.sql`insert into orbit.drafts (user_id, person_id, channel, kind, body, outcome)
+               values (${userId}::uuid, ${p!.id}::uuid, 'gmail', 'bump', 'x', 'ghosted')`,
+    ).rejects.toThrow();
+    await t.db.sql`insert into orbit.drafts (user_id, person_id, channel, kind, body, outcome)
+                   values (${userId}::uuid, ${p!.id}::uuid, 'gmail', 'bump', 'x', 'replied')`;
+  });
+
   it('is re-runnable', async () => {
     await t.pg.exec(migrationSql('20261014_orbit_core.sql'));
     await t.pg.exec(migrationSql('20261014_orbit_cron.sql'));

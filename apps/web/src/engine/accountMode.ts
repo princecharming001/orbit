@@ -3,8 +3,8 @@
  * account's id, so every row the server sends (keyed by that user) belongs to it; signing out keeps the data on this
  * device and stops syncing; deleting the account removes it on the server and here.
  */
-import type { RecruitingGoals, User, UserSettings } from '@orbit/core';
-import { ownWordsOf } from '@orbit/core';
+import type { AutoKind, AutopilotMode, RecruitingGoals, User, UserSettings } from '@orbit/core';
+import { AUTO_KINDS, AUTOPILOT_MODES, ownWordsOf } from '@orbit/core';
 import { getCurrentUserId, setCurrentUserId } from '../db/repo';
 import { db } from '../db/schema';
 import {
@@ -89,6 +89,20 @@ export async function adoptAccountUser(a: AccountUser, now = new Date()): Promis
     fromServer.schedulingLink = a.settings.scheduling_link;
   if (local && Object.keys(fromServer).length)
     await db.settings.update(user.id, fromServer as Partial<UserSettings>);
+  // the one rulebook (plan 29 §B2.1): what the student handed to Orbit, their mode, a pause and their own daily
+  // limits are the server's copy, kept there by every browser they use; this one takes them as they stand
+  const ladder: Partial<UserSettings> = {};
+  const s = a.settings ?? {};
+  if (Array.isArray(s.auto_kinds))
+    ladder.autoKinds = (s.auto_kinds as unknown[]).filter(
+      (k): k is AutoKind => typeof k === 'string' && (AUTO_KINDS as readonly string[]).includes(k),
+    );
+  if (typeof s.autopilot_mode === 'string' && AUTOPILOT_MODES.includes(s.autopilot_mode as AutopilotMode))
+    ladder.autopilotMode = s.autopilot_mode as AutopilotMode;
+  if (typeof s.autopilot_paused_until === 'string') ladder.autopilotPausedUntil = s.autopilot_paused_until;
+  if (typeof s.daily_send_cap_gmail === 'number') ladder.dailySendCapGmail = s.daily_send_cap_gmail;
+  if (typeof s.daily_send_cap_linkedin === 'number') ladder.dailySendCapLinkedin = s.daily_send_cap_linkedin;
+  if (local && Object.keys(ladder).length) await db.settings.update(user.id, ladder);
   // the student's own words from setup (plan 24), on a device that has none yet
   const about = ownWordsOf(a.settings?.about as Partial<RecruitingGoals> | undefined);
   if (Object.keys(about).length && !Object.keys(ownWordsOf(await db.goals.get(user.id))).length)

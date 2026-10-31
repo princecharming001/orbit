@@ -1,5 +1,5 @@
 import type { ProfileSettingsRequest, RecruitingGoals, TargetCompany, User, UserSettings } from '@orbit/core';
-import { cleanAnswer, cleanCurrentJob, OWN_WORDS_KEYS, ownWordsOf } from '@orbit/core';
+import { cleanAnswer, cleanCurrentJob, OWN_WORDS_KEYS, ownWordsOf, SEND_CAPS } from '@orbit/core';
 import { recomputeAllStrengths } from '../db/repo';
 import { db } from '../db/schema';
 import { callApi, isServerUser } from '../integrations/orbitApi';
@@ -194,17 +194,20 @@ export type LimitsPatch = Partial<
 
 const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v));
 
-/** The ranges the Limits page allows for each setting. */
+/** The ranges the Limits page allows for each setting; the daily caps never go above the cap table (plan 29 §B2.1). */
 export const LIMIT_RANGES = {
   weeklyOutreachTarget: [1, 350],
   perPersonCooldownHours: [0, 24 * 90],
-  dailySendCapGmail: [1, 50],
-  dailySendCapLinkedin: [1, 30],
+  dailySendCapGmail: [1, SEND_CAPS.gmailPerDay],
+  dailySendCapLinkedin: [1, SEND_CAPS.linkedinPerDay],
   maxBumps: [0, 2],
   warmUpDays: [2, 10],
 } as const;
 
-/** Save sending limits and the warm-up settings, kept inside the ranges the page allows. */
+/**
+ * Save sending limits and the warm-up settings, kept inside the ranges the page allows. In account mode the daily
+ * caps go up too, so the server's send job honours the student's own lower limit as the browser does.
+ */
 export async function updateLimits(userId: string, patch: LimitsPatch): Promise<UserSettings | undefined> {
   const changes: Partial<UserSettings> = {};
   for (const key of Object.keys(LIMIT_RANGES) as (keyof typeof LIMIT_RANGES)[]) {
@@ -215,6 +218,10 @@ export async function updateLimits(userId: string, patch: LimitsPatch): Promise<
   }
   if (typeof patch.warmUpEnabled === 'boolean') changes.warmUpEnabled = patch.warmUpEnabled;
   if (Object.keys(changes).length) await db.settings.update(userId, changes);
+  const caps: ProfileSettingsRequest = {};
+  if (changes.dailySendCapGmail !== undefined) caps.dailySendCapGmail = changes.dailySendCapGmail;
+  if (changes.dailySendCapLinkedin !== undefined) caps.dailySendCapLinkedin = changes.dailySendCapLinkedin;
+  if (Object.keys(caps).length) await pushProfileSettings(userId, caps);
   return db.settings.get(userId);
 }
 

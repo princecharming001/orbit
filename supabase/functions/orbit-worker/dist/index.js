@@ -5125,7 +5125,26 @@ function checkSend(d, ctx) {
   const approved = !!ctx.approvedHash && ctx.approvedHash === messageHash(d);
   return approved ? all.filter((v) => v.kind === "forbidden") : all;
 }
-var AUTO_SEND_DAILY_CAP = 5;
+var SEND_CAPS = {
+  /** emails a day, by hand */
+  gmailPerDay: 15,
+  /** LinkedIn messages a day, by hand (every one a tap) */
+  linkedinPerDay: 10,
+  /** a sales goal's first touches by email a day: commercial email, with the postal address and the opt-out (§7.7) */
+  gmailSalesFirstTouchesPerDay: 30,
+  /** what Orbit sends on its own, a day */
+  autoPerDay: 5,
+  /** first messages Orbit sends on its own, a day and a week (plan 29 §B6) */
+  autoFirstTouchesPerDay: 3,
+  autoFirstTouchesPerWeek: 12,
+  /** LinkedIn on Orbit's own: never */
+  linkedinAutoPerDay: 0,
+  /** LinkedIn invites (taps only), a day and a week, as the server counts them */
+  linkedinInvitesPerDay: 15,
+  linkedinInvitesPerWeek: 60
+};
+var AUTO_KINDS = ["bump", "thank_you", "schedule"];
+var AUTO_SEND_DAILY_CAP = SEND_CAPS.autoPerDay;
 var AUTO_SEND_MIN_SCORE = 40;
 var AUTO_SEND_CLASSES = /* @__PURE__ */ new Set(["scheduling", "thanks", "out_of_office"]);
 function localHour(d, tz) {
@@ -6545,7 +6564,7 @@ function goalFrom(r) {
 }
 async function loadCadence(db2, userId, now) {
   const [u2] = await db2.sql`
-    select timezone, settings from orbit.users where id = ${userId}::uuid`;
+    select timezone, autonomy_level, settings from orbit.users where id = ${userId}::uuid`;
   const tz = validZone(u2?.timezone) ?? "America/New_York";
   const settings = u2?.settings ?? {};
   const chatRows = await db2.sql`
@@ -6642,8 +6661,22 @@ async function loadCadence(db2, userId, now) {
     },
     timezone: tz,
     chatsById: new Map(chats.map((c) => [c.id, c])),
-    goalsById: new Map(goals.map((g) => [g.id, g]))
+    goalsById: new Map(goals.map((g) => [g.id, g])),
+    autonomyLevel: num(u2?.autonomy_level, 0),
+    autoKinds: Array.isArray(settings.auto_kinds) ? settings.auto_kinds.filter(
+      (k) => typeof k === "string" && AUTO_KINDS.includes(k)
+    ) : [],
+    pausedUntil: typeof settings.autopilot_paused_until === "string" ? settings.autopilot_paused_until : void 0
   };
+}
+async function autoApprovedOn(db2, userId, at, tz) {
+  const key2 = new Intl.DateTimeFormat("en-CA", { timeZone: tz }).format(at);
+  const [r] = await db2.sql`
+    select count(*)::int as n from orbit.drafts
+     where user_id = ${userId}::uuid and auto_rung is not null
+       and status in ('approved', 'scheduled', 'sending', 'sent')
+       and to_char(coalesce(send_at, sent_at, created_at) at time zone ${tz}, 'YYYY-MM-DD') = ${key2}`;
+  return r?.n ?? 0;
 }
 async function runCadence(s, userId) {
   const db2 = s.db;
@@ -6720,21 +6753,41 @@ async function runCadence(s, userId) {
         createdAt: now.toISOString()
       });
       const goal = a.goalId ? st.goalsById.get(a.goalId) : void 0;
-      const preapproved = chat?.preapprovedBumps;
-      if (a.kind === "bump" && channel === "gmail" && goal?.autonomyLevel === 1 && preapproved && draft.validator?.ok) {
+      const level = goal?.autonomyLevel ?? st.autonomyLevel;
+      const paused = !!st.pausedUntil && now.getTime() < new Date(st.pausedUntil).getTime();
+      const score = st.input.people.get(a.personId)?.score ?? 0;
+      if (level >= 1 && channel === "gmail" && st.autoKinds.includes(a.draftKind) && draft.validator?.ok && score >= AUTO_SEND_MIN_SCORE && !paused && askUserMarkers(`${draft.subject ?? ""}
+${draft.body}`).length === 0) {
         const sendAt = nextSendWindow(
           now,
           st.input.people.get(a.personId)?.timeZone ?? st.timezone,
           "gmail",
           s.random
         );
-        await db2.sql`
-          update orbit.drafts set status = 'approved', send_at = ${sendAt.notBefore}::timestamptz, autonomy_level = 1
-           where id = ${draft.id}::uuid and status = 'draft'`;
+        const at = new Date(sendAt.notBefore);
+        if (await autoApprovedOn(db2, userId, at, st.timezone) >= SEND_CAPS.autoPerDay) {
+          out.skipped++;
+          continue;
+        }
+        const hash = messageHash({ channel: draft.channel, subject: draft.subject, body: draft.body });
+        const [approved] = await db2.sql`
+          update orbit.drafts set status = 'approved', send_at = ${at}::timestamptz,
+                                  autonomy_level = ${level}::smallint, auto_rung = ${a.draftKind}
+           where id = ${draft.id}::uuid and status = 'draft' returning id`;
+        if (!approved) continue;
         await db2.sql`
           insert into orbit.audit_log (user_id, actor, action, target_table, target_id, details)
           values (${userId}::uuid, 'agent', 'draft.auto_approve', 'drafts', ${draft.id},
-                  ${{ hash: messageHash({ channel: draft.channel, subject: draft.subject, body: draft.body }), standing: "preapproved_bumps" }}::jsonb)`;
+                  ${{ hash, standing: "auto_kinds", rung: a.draftKind, level, send_at: sendAt.notBefore }}::jsonb)`;
+        await s.queue.enqueue(
+          {
+            kind: "send.draft",
+            userId,
+            payload: { draftId: draft.id },
+            dedupeKey: `send:${draft.id}:${sendAt.notBefore}`
+          },
+          { delaySec: Math.max(1, Math.ceil((at.getTime() - now.getTime()) / 1e3)) }
+        );
         out.approved++;
       }
     } catch (e) {
@@ -10710,13 +10763,23 @@ async function linkedinSend(s, p) {
 }
 
 // supabase/functions/_shared/sending/send.ts
-var CAPS2 = {
-  gmailSalesFirstTouchesPerDay: 30,
-  linkedinMessagesPerDay: 25,
-  linkedinInvitesPerDay: 15,
-  linkedinInvitesPerWeek: 60
-};
 var LINKEDIN_CONFIRM_MS = 15 * 6e4;
+var PAUSE_RECHECK_SEC = 15 * 60;
+async function loadUser(db2, userId) {
+  const [u2] = await db2.sql`
+    select email, full_name, first_name, timezone, autonomy_level, settings from orbit.users where id = ${userId}::uuid`;
+  return u2;
+}
+function aheadOf(settings, key2, now) {
+  const v = settings?.[key2];
+  if (typeof v !== "string") return void 0;
+  const t = new Date(v);
+  return Number.isNaN(t.getTime()) || t.getTime() <= now.getTime() ? void 0 : t;
+}
+function ownCap(settings, key2, tableCap) {
+  const v = Number(settings?.[key2]);
+  return Number.isFinite(v) && v >= 1 ? Math.min(Math.floor(v), tableCap) : tableCap;
+}
 var hashOf = (d) => messageHash({ channel: d.channel, subject: d.subject, body: d.body });
 async function audit(db2, userId, actor, action, draftId, details) {
   await db2.sql`
@@ -10761,12 +10824,29 @@ async function sendDraft(s, draftId) {
              send_at = coalesce(${fields.send_at ?? null}::timestamptz, send_at)
        where id = ${d.id}::uuid`;
   };
+  const later = async (reason2, at) => {
+    await settle("approved", { error: reason2, send_at: at });
+    await s.queue.enqueue(
+      {
+        kind: "send.draft",
+        userId,
+        payload: { draftId: d.id },
+        dedupeKey: `send:${d.id}:${reason2}:${iso(at)}`
+      },
+      { delaySec: Math.max(1, Math.ceil((at.getTime() - now.getTime()) / 1e3)) }
+    );
+    await audit(db2, userId, "system", "draft.hold", d.id, { reason: reason2, until: iso(at) });
+    return { status: "held", reason: reason2 };
+  };
   if (askUserMarkers(`${d.subject ?? ""}
 ${d.body}`).length || placeholderIn(`${d.subject ?? ""}
 ${d.body}`)) {
     await settle("draft", { error: "needs_input" });
     return { status: "held", reason: "needs_input" };
   }
+  const review = d.review_until ? new Date(d.review_until) : void 0;
+  if (review && !Number.isNaN(review.getTime()) && review.getTime() > now.getTime())
+    return later("review_window", review);
   const [person] = await db2.sql`
     select display_name, first_name, primary_email, title, headline, do_not_contact, linkedin_member_id
       from orbit.people where id = ${d.person_id}::uuid`;
@@ -10801,6 +10881,22 @@ ${d.body}`)) {
   const hash = hashOf(d);
   const userApproved = approvals.some((a) => a.action === "draft.approve" && a.details?.hash === hash);
   const agentApproved = approvals.some((a) => a.action === "draft.auto_approve" && a.details?.hash === hash);
+  const u2 = await loadUser(db2, userId);
+  if (!u2) {
+    await settle("failed", { error: "no_user" });
+    return { status: "failed", error: "no_user" };
+  }
+  const paused = aheadOf(u2.settings, "autopilot_paused_until", now);
+  if (paused && (agentApproved && !userApproved || Number(d.autonomy_level) >= 1))
+    return later(
+      "autopilot_paused",
+      new Date(Math.min(paused.getTime(), now.getTime() + PAUSE_RECHECK_SEC * 1e3))
+    );
+  if (d.channel === "linkedin" && agentApproved && !userApproved) {
+    await settle("draft", { error: "linkedin_never_auto" });
+    await audit(db2, userId, "system", "draft.hold", d.id, { reason: "linkedin_never_auto" });
+    return { status: "held", reason: "linkedin_never_auto" };
+  }
   if (d.channel === "linkedin") {
     const fresh = approvals.some(
       (a) => a.action === "draft.confirm" && a.actor === "user" && a.details?.hash === hash && now.getTime() - new Date(a.created_at).getTime() <= LINKEDIN_CONFIRM_MS
@@ -10815,8 +10911,6 @@ ${d.body}`)) {
     await settle("draft", { error: "not_approved" });
     return { status: "held", reason: "not_approved" };
   }
-  const [u2] = await db2.sql`
-    select email, full_name, first_name, timezone, settings from orbit.users where id = ${userId}::uuid`;
   const meta = d.ask ?? {};
   const violations = checkSend(
     { kind: d.kind, channel: d.channel, personId: d.person_id, subject: d.subject, body: d.body },
@@ -10850,12 +10944,13 @@ ${d.body}`)) {
     await settle("draft", { error: "needs_postal_address" });
     return { status: "held", reason: "needs_postal_address" };
   }
-  const cap = await capReached(db2, userId, d, now, u2.timezone);
+  const cap = await capReached(db2, userId, d, now, u2, agentApproved && !userApproved);
   if (cap) {
     const next = new Date(
       nextSendWindow(new Date(now.getTime() + 864e5), u2.timezone, d.channel, s.random).notBefore
     );
     await settle(d.channel === "linkedin" ? "draft" : "approved", { error: cap, send_at: next });
+    await audit(db2, userId, "system", "draft.hold", d.id, { reason: cap, until: iso(next) });
     return { status: "held", reason: cap };
   }
   let out;
@@ -10910,17 +11005,12 @@ ${d.body}`)) {
     update orbit.drafts set status = 'sent', sent_at = ${now}::timestamptz, provider_message_id = ${out.providerMessageId},
                             thread_external_id = ${threadId ?? null}, error = null
      where id = ${d.id}::uuid`;
-  await audit(
-    db2,
-    userId,
-    userApproved ? "user" : "agent",
-    agentApproved && !userApproved ? "draft.auto_sent" : "draft.sent",
-    d.id,
-    {
-      channel: d.channel,
-      kind: d.kind
-    }
-  );
+  const auto = agentApproved && !userApproved;
+  await audit(db2, userId, auto ? "agent" : "user", auto ? "draft.auto_sent" : "draft.sent", d.id, {
+    channel: d.channel,
+    kind: d.kind,
+    ...auto ? { rung: d.auto_rung ?? d.kind, level: Number(d.autonomy_level) } : {}
+  });
   if (d.chat_id) await afterSend(db2, userId, d, now);
   const via = d.via;
   if (d.kind === "intro_request" && via?.introRequestId)
@@ -10944,25 +11034,49 @@ async function afterSend(db2, userId, d, now) {
   if (["identified", "warming"].includes(c.stage) && d.kind !== "forwardable_blurb" && d.kind !== "intro_request")
     await moveChat(db2, userId, d.chat_id, "outreach_sent", `${d.kind} sent`, now);
 }
-async function capReached(db2, userId, d, now, tz) {
-  const zone = validZone(tz) ?? "America/New_York";
+async function capReached(db2, userId, d, now, u2, auto) {
+  const zone = validZone(u2.timezone) ?? "America/New_York";
   const key2 = new Intl.DateTimeFormat("en-CA", { timeZone: zone }).format(now);
   const dayStart2 = zonedTime2(key2, 0, 0, zone);
+  const weekStart = new Date(dayStart2.getTime() - 6 * 864e5);
+  if (auto) {
+    if (d.channel === "linkedin") return "linkedin_never_auto";
+    const [a] = await db2.sql`
+      select count(*) filter (where created_at >= ${dayStart2}::timestamptz)::int as day,
+             count(*) filter (where created_at >= ${dayStart2}::timestamptz
+                                and details->>'kind' in ('first_touch', 'warm_first_touch', 'outreach'))::int as day_first,
+             count(*) filter (where details->>'kind' in ('first_touch', 'warm_first_touch', 'outreach'))::int as week_first
+        from orbit.audit_log
+       where user_id = ${userId}::uuid and action = 'draft.auto_sent' and created_at >= ${weekStart}::timestamptz`;
+    if ((a?.day ?? 0) >= SEND_CAPS.autoPerDay) return "auto_daily_cap";
+    if (FIRST_TOUCH_KINDS.has(d.kind)) {
+      if ((a?.day_first ?? 0) >= SEND_CAPS.autoFirstTouchesPerDay) return "auto_first_touch_daily_cap";
+      if ((a?.week_first ?? 0) >= SEND_CAPS.autoFirstTouchesPerWeek) return "auto_first_touch_weekly_cap";
+    }
+  }
   if (d.channel === "linkedin") {
-    const [r] = await db2.sql`
+    const [r2] = await db2.sql`
       select count(*)::int as n from orbit.drafts
        where user_id = ${userId}::uuid and channel = 'linkedin' and status = 'sent'
          and sent_at >= ${dayStart2}::timestamptz`;
-    return (r?.n ?? 0) >= CAPS2.linkedinMessagesPerDay ? "linkedin_daily_cap" : null;
+    const cap2 = ownCap(u2.settings, "daily_send_cap_linkedin", SEND_CAPS.linkedinPerDay);
+    return (r2?.n ?? 0) >= cap2 ? "linkedin_daily_cap" : null;
   }
   if (await salesFirstTouch(db2, d)) {
-    const [r] = await db2.sql`
+    const [r2] = await db2.sql`
       select count(*)::int as n from orbit.drafts dr join orbit.goals g on g.id = dr.goal_id
        where dr.user_id = ${userId}::uuid and dr.channel = 'gmail' and dr.status = 'sent' and g.kind = 'sales'
          and dr.kind in ('first_touch', 'warm_first_touch', 'outreach') and dr.sent_at >= ${dayStart2}::timestamptz`;
-    return (r?.n ?? 0) >= CAPS2.gmailSalesFirstTouchesPerDay ? "gmail_sales_daily_cap" : null;
+    return (r2?.n ?? 0) >= SEND_CAPS.gmailSalesFirstTouchesPerDay ? "gmail_sales_daily_cap" : null;
   }
-  return null;
+  const [r] = await db2.sql`
+    select count(*)::int as n from orbit.drafts dr
+     where dr.user_id = ${userId}::uuid and dr.channel = 'gmail' and dr.status = 'sent'
+       and dr.sent_at >= ${dayStart2}::timestamptz
+       and not (dr.kind in ('first_touch', 'warm_first_touch', 'outreach')
+                and exists (select 1 from orbit.goals g where g.id = dr.goal_id and g.kind = 'sales'))`;
+  const cap = ownCap(u2.settings, "daily_send_cap_gmail", SEND_CAPS.gmailPerDay);
+  return (r?.n ?? 0) >= cap ? "gmail_daily_cap" : null;
 }
 async function threadSubject(db2, userId, threadExternalId) {
   if (!threadExternalId) return null;

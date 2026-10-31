@@ -8,9 +8,21 @@
  *          users.onboarding.completed_at (set once setup is finished; never cleared), and the student's profile:
  *          users.school, degree, majors, grad_year, current_city (null or '' clears), and the student's own words
  *          about their goals (plan 24) as users.settings.about (the whole set replaces the stored one; null clears),
- *          and readReplyTone (plan 27) as users.settings.read_reply_tone (false only; true removes it), which rescores
+ *          and readReplyTone (plan 27) as users.settings.read_reply_tone (false only; true removes it), which rescores,
+ *          and the one rulebook's settings (plan 29 §B2.1): autoKinds as users.settings.auto_kinds (the whole list),
+ *          autopilotMode as users.settings.autopilot_mode with users.autonomy_level set to match (off 0, assist 1,
+ *          autopilot 2), autopilotPausedUntil as users.settings.autopilot_paused_until (null resumes), and the
+ *          student's own daily limits as daily_send_cap_gmail and daily_send_cap_linkedin
+ *   The pause also sets autopilot_paused_until, so the send job holds what Orbit chose a time for.
  */
 import { cleanAnswer, cleanCurrentJob, OWN_WORDS_KEYS, type OwnWords } from '@orbit/core/ownWords';
+import {
+  AUTO_KINDS,
+  AUTOPILOT_MODE_LEVEL,
+  AUTOPILOT_MODES,
+  type AutopilotMode,
+  SEND_CAPS,
+} from '@orbit/core/safety/rules';
 import type { ProfileSettingsResponse } from '@orbit/core/server/api';
 import { badRequest, HttpError, json } from '../../_shared/http.ts';
 import { sqlQueue } from '../../_shared/queue.ts';
@@ -48,10 +60,12 @@ async function pause(ctx: Ctx): Promise<Response> {
     until = t.toISOString();
   }
   const userId = ctx.userId!;
+  // the same pause holds the drafting (quiet_until) and what Orbit chose a time for (autopilot_paused_until)
   await ctx.db.sql`
     update orbit.users
-       set settings = case when ${until}::text is null then settings - 'quiet_until'
-                           else jsonb_set(settings, '{quiet_until}', to_jsonb(${until}::text)) end
+       set settings = case when ${until}::text is null then (settings - 'quiet_until') - 'autopilot_paused_until'
+                           else settings || jsonb_build_object('quiet_until', ${until}::text,
+                                                                'autopilot_paused_until', ${until}::text) end
      where id = ${userId}::uuid`;
   await ctx.db.sql`
     insert into orbit.audit_log (user_id, actor, action, target_table, target_id, details)
@@ -178,14 +192,55 @@ async function profile(ctx: Ctx): Promise<Response> {
   if (b.readReplyTone !== undefined && typeof b.readReplyTone !== 'boolean')
     throw badRequest('readReplyTone must be true or false');
   const tone = b.readReplyTone as boolean | undefined;
+  // the one rulebook (plan 29 §B2.1): the ladder's kinds, the mode, the pause and the student's own limits
+  let autoKinds: string[] | undefined;
+  if (b.autoKinds !== undefined) {
+    if (
+      !Array.isArray(b.autoKinds) ||
+      !b.autoKinds.every((k) => typeof k === 'string' && (AUTO_KINDS as readonly string[]).includes(k))
+    )
+      throw badRequest(`autoKinds must be a list from ${AUTO_KINDS.join(', ')}`);
+    autoKinds = [...new Set(b.autoKinds as string[])];
+  }
+  let mode: AutopilotMode | undefined;
+  if (b.autopilotMode !== undefined) {
+    if (typeof b.autopilotMode !== 'string' || !AUTOPILOT_MODES.includes(b.autopilotMode as AutopilotMode))
+      throw badRequest('autopilotMode is off, assist or autopilot');
+    mode = b.autopilotMode as AutopilotMode;
+  }
+  let pausedUntil: string | null | undefined;
+  if (b.autopilotPausedUntil !== undefined) {
+    if (b.autopilotPausedUntil === null) pausedUntil = null;
+    else {
+      const t = new Date(String(b.autopilotPausedUntil));
+      if (typeof b.autopilotPausedUntil !== 'string' || Number.isNaN(t.getTime()))
+        throw badRequest('autopilotPausedUntil must be an ISO time or null');
+      pausedUntil = t.toISOString();
+    }
+  }
+  const ownCap = (key: string, max: number): number | undefined => {
+    const v = b[key];
+    if (v === undefined) return undefined;
+    if (!Number.isInteger(v) || Number(v) < 1 || Number(v) > max)
+      throw badRequest(`${key} must be a whole number from 1 to ${max}`);
+    return Number(v);
+  };
+  const capGmail = ownCap('dailySendCapGmail', SEND_CAPS.gmailPerDay);
+  const capLinkedin = ownCap('dailySendCapLinkedin', SEND_CAPS.linkedinPerDay);
   const userId = ctx.userId!;
   // the keys given are replaced (or removed when null); the rest of settings is kept
-  const given: Record<string, string | OwnWords | boolean | null> = {};
+  const given: Record<string, string | string[] | number | OwnWords | boolean | null> = {};
   if (postal !== undefined) given.postal_address = postal;
   if (link !== undefined) given.scheduling_link = link;
   if (about !== undefined) given.about = about;
   // on is the default, so only "off" is stored
   if (tone !== undefined) given.read_reply_tone = tone ? null : false;
+  if (autoKinds !== undefined) given.auto_kinds = autoKinds;
+  if (mode !== undefined) given.autopilot_mode = mode;
+  if (pausedUntil !== undefined) given.autopilot_paused_until = pausedUntil;
+  if (capGmail !== undefined) given.daily_send_cap_gmail = capGmail;
+  if (capLinkedin !== undefined) given.daily_send_cap_linkedin = capLinkedin;
+  const level = mode === undefined ? null : AUTOPILOT_MODE_LEVEL[mode];
   const keep = Object.fromEntries(Object.entries(given).filter(([, v]) => v !== null));
   const [after] = await ctx.db.sql<{
     settings: Record<string, unknown>;
@@ -198,6 +253,7 @@ async function profile(ctx: Ctx): Promise<Response> {
   }>`
     update orbit.users
        set settings = (settings - ${Object.keys(given)}::text[]) || ${keep}::jsonb,
+           autonomy_level = coalesce(${level}::smallint, autonomy_level),
            timezone = coalesce(${tz ?? null}::text, timezone),
            onboarding = case when ${done ?? null}::text is null then onboarding
                              else coalesce(onboarding, '{}'::jsonb) || jsonb_build_object('completed_at', ${done ?? null}::text) end,
@@ -222,6 +278,7 @@ async function profile(ctx: Ctx): Promise<Response> {
     .map(([k]) => k);
   const changed = [
     ...Object.keys(given),
+    ...(level !== null ? ['autonomy_level'] : []),
     ...(tz ? ['timezone'] : []),
     ...(done ? ['onboarding'] : []),
     ...profileFields,

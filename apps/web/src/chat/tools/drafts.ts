@@ -3,7 +3,7 @@ import type { MessageKind, OutboundMessage } from '@orbit/core';
 import { CHANNEL_LABELS, MESSAGE_KIND_LABELS, relTime, WHY_THEM_GAP } from '@orbit/core';
 import { runApproval } from '../../components/approve';
 import { db } from '../../db/schema';
-import { autopilotCanSend, planSchedule, scheduleSends } from '../../engine/autopilot';
+import { autopilotCanSend, LINKEDIN_WAITS, planSchedule, scheduleSends } from '../../engine/autopilot';
 import { type DraftInputs, regenerateDraft } from '../../engine/brief';
 import {
   composeDraft,
@@ -809,7 +809,7 @@ export const scheduleSendsTool = defineTool({
   name: 'schedule_sends',
   kind: 'risky',
   description:
-    'Call this when the student wants Orbit to send drafts for them over time instead of one by one ("send these on autopilot", "spread my emails over the week so they do not look like spam", "send Daniel\'s at 9 tomorrow"). Orbit plans a time for each: weekdays, 9 to 5, a different 25 to 70 minute gap between sends, at most a few a day under their limits. Each one is checked again when its time comes and held back if they replied. Needs Gmail with send permission or live LinkedIn, and the student\'s approval of the plan.',
+    'Call this when the student wants Orbit to send email drafts for them over time instead of one by one ("send these on autopilot", "spread my emails over the week so they do not look like spam", "send Daniel\'s at 9 tomorrow"). Orbit plans a time for each: the recipient\'s Tuesday to Thursday morning (8:00 to 10:30 their time, never a holiday), a different 25 to 70 minute gap between sends, at most a few a day under their limits. Each one is checked again when its time comes and held back if they replied. Email only: LinkedIn messages always wait for the student\'s own tap. Needs Gmail with send permission and the student\'s approval of the plan.',
   input: scheduleInput,
   capabilities: ['draft_schedule_autopilot'],
   progress: 'Planning the sends',
@@ -820,19 +820,24 @@ export const scheduleSendsTool = defineTool({
       .map((p) => `${names.get(p.personId)}: ${fmtWhen(p.at.toISOString(), ctx)}`)
       .join('; ');
     const more = plan.length > 8 ? ` and ${plan.length - 8} more` : '';
-    const skipped = unable.length
-      ? ` ${unable.length} cannot go on autopilot until ${unable[0]!.channel === 'gmail' ? 'Gmail can send' : 'live LinkedIn is connected'}.`
-      : '';
+    const linkedin = unable.filter((d) => d.channel === 'linkedin').length;
+    const noGmail = unable.length - linkedin;
+    const skipped = [
+      linkedin
+        ? ` ${linkedin} LinkedIn ${linkedin === 1 ? 'message stays' : 'messages stay'} for your own tap.`
+        : '',
+      noGmail ? ` ${noGmail} cannot go on autopilot until Gmail can send.` : '',
+    ].join('');
     return {
       text: plan.length
-        ? `Send ${plan.length} message${plan.length === 1 ? '' : 's'} on autopilot, spaced out so they read like you wrote them one at a time: ${lines}${more}. Each is checked again before it goes, and held back if they replied.${skipped}`
+        ? `Send ${plan.length} message${plan.length === 1 ? '' : 's'} on autopilot, each in the recipient's morning window, spaced out so they read like you wrote them one at a time: ${lines}${more}. Each is checked again before it goes, and held back if they replied.${skipped}`
         : `Nothing to put on autopilot.${skipped}`,
       blockedReason: plan.length
         ? undefined
         : unable.length
-          ? unable[0]!.channel === 'gmail'
+          ? noGmail
             ? 'Autopilot sends email through Gmail. Connect Google with permission to send, in Settings, Integrations.'
-            : 'Autopilot sends LinkedIn messages through live LinkedIn. Connect it in Settings, Integrations.'
+            : LINKEDIN_WAITS
           : 'There are no drafts ready to send.',
     };
   },

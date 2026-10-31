@@ -75,7 +75,11 @@ export async function setAutonomy(
   return { ok: true };
 }
 
-/** Pause all outreach until a date (YYYY-MM-DD), or resume with null. */
+/**
+ * Pause all outreach until a date (YYYY-MM-DD), or resume with null. The server keeps it as quiet_until (nothing
+ * drafted) and autopilot_paused_until (nothing Orbit chose a time for is sent, plan 29 §B2.7); the browser's outbox
+ * reads the same pause from its settings row.
+ */
 export async function pauseOutreach(
   user: Pick<User, 'id'>,
   until: string | null,
@@ -85,7 +89,9 @@ export async function pauseOutreach(
     return { ok: false, message: 'Give the date as YYYY-MM-DD.' };
   const r = await callApi('/settings/pause', { until });
   if (!r.ok) return { ok: false, message: r.message };
+  const pausedUntil = until ? new Date(until).toISOString() : undefined;
   await patch(user.id, { quietUntil: until ?? undefined });
+  await db.settings.update(user.id, { autopilotPausedUntil: pausedUntil });
   return { ok: true, until };
 }
 

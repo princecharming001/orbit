@@ -273,6 +273,14 @@ export interface UserSettings {
   introNote?: { text: string; editedAt: string };
   /** kinds of message the student handed to Orbit to send on its own, after earning it (plan 23 §4.9) */
   autoKinds?: MessageKind[];
+  /**
+   * How much Orbit does on its own (plan 29 §B1): off, Orbit writes and the student sends; assist, one tap and it
+   * goes in the recipient's morning window, the ladder's kinds on their own; autopilot, first messages too, after
+   * the evening review. Synced as users.settings.autopilot_mode; off when unset.
+   */
+  autopilotMode?: 'off' | 'assist' | 'autopilot';
+  /** ISO: nothing Orbit would send on its own goes out before then (plan 29 §B2.7); synced as autopilot_paused_until */
+  autopilotPausedUntil?: string;
   /** the local Sunday (YYYY-MM-DD) whose weekly review the student last opened or closed (plan 23 §4.8) */
   weekReviewSeenOn?: string;
   /** read the tone of replies for closeness (plan 27); on unless turned off */
@@ -929,6 +937,10 @@ export interface OutboundMessage {
   draftedAt?: string;
   /** Orbit sent it on its own, a kind the student handed over (plan 23 §4.9): shown under Sent for you */
   autoSent?: boolean;
+  /** the evening review window (plan 29 §B2.2): an autopilot send waits in the outbox at least until then */
+  reviewUntil?: string;
+  /** which rung of the ladder sent it on its own (the kind, or `first_touch` once that rung is earned) */
+  autoRung?: string;
   /**
    * An intro ask's note for the introducer to forward (plan 23 §4.3), kept beside the ask: by email it goes in the
    * same message under a rule; on LinkedIn it becomes its own message the student sends with a tap.

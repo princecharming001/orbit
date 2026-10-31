@@ -29,6 +29,7 @@ afterAll(async () => {
 
 /** A Wednesday, so send days and business-day timers do not depend on when the suite runs. */
 const NOW = new Date('2026-10-14T15:00:00Z');
+let seq = 0;
 const ago = (ms: number) => new Date(NOW.getTime() - ms).toISOString();
 const GMAIL_SEND = 'https://gmail.googleapis.com/gmail/v1/users/me/messages/send';
 const gmail = (c: NetCall) => {
@@ -156,6 +157,68 @@ describe('cadence.user (§9)', () => {
     const later = makeServices(agentConfig(net, {}), { db: t.db, now: () => new Date(NOW.getTime() + DAY) });
     expect((await runCadence(later, userId)).drafted).toBe(0);
     expect(await t.db.sql`select 1 from orbit.drafts where user_id = ${userId}::uuid`).toHaveLength(3);
+  });
+
+  it('plan 29 §B2.1: a bump of a kind in auto_kinds is approved for the window on its own at level 1, with the record; never at level 0, under a score of 40, or while paused', async () => {
+    const net = fakeNet();
+    const s = makeServices(agentConfig(net, {}), { db: t.db, now: () => NOW });
+    const seed = async (settings: Record<string, unknown>, level: number, score = 70) => {
+      const { userId } = await signedInUser(t, { settings });
+      await t.db.sql`update orbit.users set autonomy_level = ${level}::smallint where id = ${userId}::uuid`;
+      const p = await addPerson(t, userId, {
+        name: `Lee Ladder${seq++}`,
+        email: `lee${seq}@example.com`,
+        score,
+      });
+      await addThread(t, userId, p, [
+        { direction: 'out', at: ago(12 * DAY), body: 'Hi Lee, could we talk?' },
+      ]);
+      await outreachChat(userId, p, 12);
+      return { userId, p };
+    };
+    const draftOf = async (userId: string) =>
+      (
+        await t.db.sql<{
+          id: string;
+          status: string;
+          auto_rung: string | null;
+          autonomy_level: number;
+          send_at: Date | null;
+        }>`select id, status, auto_rung, autonomy_level, send_at from orbit.drafts where user_id = ${userId}::uuid`
+      )[0]!;
+
+    const on = await seed({ auto_kinds: ['bump'] }, 1);
+    expect(await runCadence(s, on.userId)).toMatchObject({ drafted: 1, approved: 1 });
+    const d = await draftOf(on.userId);
+    expect(d).toMatchObject({ status: 'approved', auto_rung: 'bump' });
+    expect(Number(d.autonomy_level)).toBe(1);
+    expect(new Date(d.send_at!).getTime()).toBeGreaterThan(NOW.getTime());
+    const audit = await t.db.sql<{ action: string; actor: string; details: Record<string, unknown> }>`
+      select action, actor, details from orbit.audit_log where target_id = ${d.id} and action = 'draft.auto_approve'`;
+    expect(audit).toHaveLength(1);
+    expect(audit[0]).toMatchObject({
+      actor: 'agent',
+      details: { standing: 'auto_kinds', rung: 'bump', level: 1 },
+    });
+    const jobs = await t.db.sql<{ message: { kind: string; payload: { draftId: string } } }>`
+      select message from pgmq.q_orbit_send where message->>'userId' = ${on.userId}`;
+    expect(jobs.map((j) => j.message)).toMatchObject([{ kind: 'send.draft', payload: { draftId: d.id } }]);
+
+    const off = await seed({ auto_kinds: ['bump'] }, 0);
+    expect(await runCadence(s, off.userId)).toMatchObject({ drafted: 1, approved: 0 });
+    expect((await draftOf(off.userId)).status).toBe('draft');
+
+    const notHanded = await seed({}, 1);
+    expect(await runCadence(s, notHanded.userId)).toMatchObject({ drafted: 1, approved: 0 });
+
+    const stranger = await seed({ auto_kinds: ['bump'] }, 1, 30);
+    expect(await runCadence(s, stranger.userId)).toMatchObject({ drafted: 1, approved: 0 });
+
+    const paused = await seed(
+      { auto_kinds: ['bump'], autopilot_paused_until: new Date(NOW.getTime() + DAY).toISOString() },
+      1,
+    );
+    expect(await runCadence(s, paused.userId)).toMatchObject({ drafted: 1, approved: 0 });
   });
 
   it('queues approved drafts whose time has come once, and does nothing while paused', async () => {

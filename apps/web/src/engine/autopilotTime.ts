@@ -1,13 +1,18 @@
-/** When autopilot sends: sending hours, the gaps between sends, and the plan of times. No database, no sending. */
+/**
+ * When autopilot sends (plan 29 §B2.1): the one send window everything else uses, core's `nextSendWindow` (the
+ * recipient's Tuesday to Thursday, 8:00 to 10:30, never a US holiday), with the spread kept from before: a
+ * different 25 to 70 minute gap between sends and at most so many a day. No database, no sending. The 9 to 17
+ * weekday window this file once had is retired; the server's copy of the window answers the same.
+ */
+import { nextSendWindow } from '@orbit/core';
 
-/** Sending hours, local time. */
-export const AUTOPILOT_WINDOW = { start: 9, end: 17 } as const;
 /** Gap between two autopilot sends, in minutes: a random point in this range, so the rhythm is never mechanical. */
 export const AUTOPILOT_GAP_MIN = { min: 25, max: 70 } as const;
 /** The default number a day, under the daily limits. */
 export const AUTOPILOT_DEFAULT_PER_DAY = 6;
 
 const MINUTE = 60_000;
+const DAY = 24 * 60 * MINUTE;
 
 /** A small seeded random, so a plan shown on the Approve card is the plan that runs. */
 function rng(seed: number): () => number {
@@ -18,40 +23,31 @@ function rng(seed: number): () => number {
   };
 }
 
-const weekend = (d: Date) => d.getDay() === 0 || d.getDay() === 6;
+/** The student's local day, which is how the daily limits count (`checkSendAllowed` starts its day at local midnight). */
+const dayKey = (d: Date) => `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}`;
 
-function atHour(d: Date, h: number, m = 0): Date {
-  const x = new Date(d);
-  x.setHours(h, m, 0, 0);
+/** The next moment inside the recipient's send window at or after `from` (jitter included, seeded when given). */
+export function nextOpen(from: Date, zone: string, random: () => number = Math.random): Date {
+  return new Date(nextSendWindow(from, zone, 'gmail', random).notBefore);
+}
+
+/** Local midnight (the student's) after `d`: the first instant of the next day the limits count. */
+function nextLocalDay(d: Date): Date {
+  const x = new Date(d.getTime() + DAY);
+  x.setHours(0, 0, 0, 0);
   return x;
 }
 
-/** The next moment inside sending hours, on a weekday, at or after `from`. */
-export function nextOpen(from: Date): Date {
-  let d = new Date(from);
-  for (let i = 0; i < 14; i++) {
-    if (!weekend(d)) {
-      const open = atHour(d, AUTOPILOT_WINDOW.start);
-      const close = atHour(d, AUTOPILOT_WINDOW.end);
-      if (d < open) return open;
-      if (d < close) return d;
-    }
-    d = atHour(new Date(d.getTime() + 24 * 60 * MINUTE), AUTOPILOT_WINDOW.start);
-  }
-  return d;
-}
-
-const dayKey = (d: Date) => `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}`;
-
 /**
- * Times for `count` sends from `start`: weekdays, inside sending hours, a random gap between each, at most `perDay`
- * a day counting the sends already planned (`taken`). The first one is at least ten minutes away, so the student
- * can still change their mind.
+ * Times for `count` sends from `start`: each in its recipient's next send window, a random gap between each, at most
+ * `perDay` a day counting the sends already planned (`taken`). `zones` gives the recipient zone per send (one zone
+ * for all is fine). The first one is at least ten minutes away, so the student can still change their mind.
  */
 export function planSpread(opts: {
   count: number;
   start: Date;
   perDay: number;
+  zones: string | string[];
   taken?: Date[];
   seed?: number;
 }): Date[] {
@@ -59,28 +55,30 @@ export function planSpread(opts: {
   const perDay = Math.max(1, Math.floor(opts.perDay));
   const used = new Map<string, number>();
   for (const t of opts.taken ?? []) used.set(dayKey(t), (used.get(dayKey(t)) ?? 0) + 1);
+  const zoneOf = (i: number) => (typeof opts.zones === 'string' ? opts.zones : opts.zones[i]!);
   const out: Date[] = [];
-  let at = nextOpen(new Date(opts.start.getTime() + 10 * MINUTE + Math.floor(rand() * 15) * MINUTE));
-  while (out.length < opts.count) {
-    const close = atHour(at, AUTOPILOT_WINDOW.end);
-    if ((used.get(dayKey(at)) ?? 0) >= perDay || at >= close) {
-      // the day is full or over: the next weekday, a little after the window opens
-      at = nextOpen(atHour(new Date(at.getTime() + 24 * 60 * MINUTE), AUTOPILOT_WINDOW.start));
-      at = new Date(at.getTime() + Math.floor(rand() * 40) * MINUTE);
-      continue;
-    }
+  let cursor = new Date(opts.start.getTime() + 10 * MINUTE + Math.floor(rand() * 15) * MINUTE);
+  for (let i = 0; i < opts.count; i++) {
+    const zone = zoneOf(i);
+    // at most a few weeks of full days before giving up on the cap and taking the window anyway
+    let at = nextOpen(cursor, zone, rand);
+    for (let guard = 0; guard < 60 && (used.get(dayKey(at)) ?? 0) >= perDay; guard++)
+      at = nextOpen(nextLocalDay(at), zone, rand);
     out.push(at);
     used.set(dayKey(at), (used.get(dayKey(at)) ?? 0) + 1);
     const gap = AUTOPILOT_GAP_MIN.min + rand() * (AUTOPILOT_GAP_MIN.max - AUTOPILOT_GAP_MIN.min);
-    at = new Date(at.getTime() + Math.round(gap) * MINUTE);
+    cursor = new Date(at.getTime() + Math.round(gap) * MINUTE);
   }
   return out;
 }
 
-/** When the next autopilot send may go: a gap after the last one sent, so a backlog never goes out at once. */
-export function nextSlotAfter(last: Date | undefined, now: Date, seed: number): Date {
+/**
+ * When the next autopilot send may go: a gap after the last one sent, inside the recipient's window, so a backlog
+ * never goes out at once.
+ */
+export function nextSlotAfter(last: Date | undefined, now: Date, seed: number, zone: string): Date {
   const rand = rng(seed);
   const gap = (AUTOPILOT_GAP_MIN.min + rand() * (AUTOPILOT_GAP_MIN.max - AUTOPILOT_GAP_MIN.min)) * MINUTE;
   const earliest = last ? new Date(Math.max(now.getTime(), last.getTime() + gap)) : now;
-  return nextOpen(earliest);
+  return nextOpen(earliest, zone, rand);
 }

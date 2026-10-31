@@ -70,6 +70,7 @@ import { saveOwnWords } from '../engine/ownWords';
 import { saveResume } from '../engine/resume';
 import { googleStatus, refreshSyncStatus, subscribeSyncStatus, syncStatusNow } from '../engine/serverSync';
 import {
+  LIMIT_RANGES,
   removeTargetCompany,
   restoreTargetCompany,
   saveGoals,
@@ -1526,7 +1527,7 @@ function Limits() {
                 id="lim-gmail"
                 type="number"
                 min={1}
-                max={50}
+                max={LIMIT_RANGES.dailySendCapGmail[1]}
                 value={settings.dailySendCapGmail}
                 onChange={(e) => upd({ dailySendCapGmail: Number(e.target.value) })}
                 className="w-24 h-9 text-right tabular-nums"
@@ -1542,7 +1543,7 @@ function Limits() {
                 id="lim-li"
                 type="number"
                 min={1}
-                max={30}
+                max={LIMIT_RANGES.dailySendCapLinkedin[1]}
                 value={settings.dailySendCapLinkedin}
                 onChange={(e) => upd({ dailySendCapLinkedin: Number(e.target.value) })}
                 className="w-24 h-9 text-right tabular-nums"

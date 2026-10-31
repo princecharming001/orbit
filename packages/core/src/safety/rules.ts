@@ -276,9 +276,49 @@ export function sendAllowed(violations: SafetyViolation[]): boolean {
   return violations.length === 0;
 }
 
+// --- the cap table (plan 29 §B2.1): one rulebook for the browser's outbox and the server's send job ---------------
+
+/**
+ * How much may go out, by hand and on Orbit's own. The browser (`checkSendAllowed`) and the server (`sendDraft`)
+ * both read this table; a lower limit the student set for themselves still wins. "By hand" counts every approval,
+ * one tap or a plan approved once; "auto" counts what Orbit sent without a tap at send time (the ladder's kinds, and
+ * later the first messages autopilot writes). LinkedIn is never sent on Orbit's own, at any level.
+ */
+export const SEND_CAPS = {
+  /** emails a day, by hand */
+  gmailPerDay: 15,
+  /** LinkedIn messages a day, by hand (every one a tap) */
+  linkedinPerDay: 10,
+  /** a sales goal's first touches by email a day: commercial email, with the postal address and the opt-out (§7.7) */
+  gmailSalesFirstTouchesPerDay: 30,
+  /** what Orbit sends on its own, a day */
+  autoPerDay: 5,
+  /** first messages Orbit sends on its own, a day and a week (plan 29 §B6) */
+  autoFirstTouchesPerDay: 3,
+  autoFirstTouchesPerWeek: 12,
+  /** LinkedIn on Orbit's own: never */
+  linkedinAutoPerDay: 0,
+  /** LinkedIn invites (taps only), a day and a week, as the server counts them */
+  linkedinInvitesPerDay: 15,
+  linkedinInvitesPerWeek: 60,
+} as const;
+
+/**
+ * The kinds the trust ladder (plan 23 §4.9) can hand to Orbit, in the order it offers them: bumps, then thank-yous,
+ * then scheduling replies. `settings.autoKinds` holds the ones the student handed over; the server reads the same
+ * list as `users.settings.auto_kinds` and auto-approves cadence drafts of those kinds under the same conditions.
+ */
+export const AUTO_KINDS = ['bump', 'thank_you', 'schedule'] as const satisfies readonly MessageKind[];
+export type AutoKind = (typeof AUTO_KINDS)[number];
+
+/** The three modes Settings offers (plan 29 §B1), one per autonomy level: off is 0, assist is 1, autopilot is 2. */
+export type AutopilotMode = 'off' | 'assist' | 'autopilot';
+export const AUTOPILOT_MODES: readonly AutopilotMode[] = ['off', 'assist', 'autopilot'];
+export const AUTOPILOT_MODE_LEVEL: Record<AutopilotMode, 0 | 1 | 2> = { off: 0, assist: 1, autopilot: 2 };
+
 // --- autonomy level 2 (§8.4) --------------------------------------------------------------------------------------
 
-export const AUTO_SEND_DAILY_CAP = 5;
+export const AUTO_SEND_DAILY_CAP = SEND_CAPS.autoPerDay;
 export const AUTO_SEND_MIN_SCORE = 40;
 export const AUTO_SEND_CLASSES: ReadonlySet<ReplyClass> = new Set(['scheduling', 'thanks', 'out_of_office']);
 

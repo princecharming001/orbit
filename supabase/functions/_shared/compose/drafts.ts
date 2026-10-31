@@ -33,6 +33,10 @@ export type DraftRow = Record<string, unknown> & {
   validator: ServerDraft['validator'];
   generated_by: string;
   prompt_version: string | null;
+  /** plan 29 §B3: not sent before this (the evening review), which rung sent it on its own, how it ended */
+  review_until: Date | string | null;
+  auto_rung: string | null;
+  outcome: string | null;
   created_at: Date | string;
   updated_at: Date | string;
 };

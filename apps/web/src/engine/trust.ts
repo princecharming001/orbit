@@ -10,9 +10,11 @@
  * sooner than a minute from now, so there is always a minute to undo it.
  */
 import {
+  AUTO_KINDS,
   AUTO_SEND_DAILY_CAP,
   AUTO_SEND_MIN_SCORE,
-  type MessageKind,
+  type AutoKind,
+  type AutopilotMode,
   nextSendWindow,
   type Person,
   type Suggestion,
@@ -20,11 +22,12 @@ import {
 } from '@orbit/core';
 import { db } from '../db/schema';
 import { flagOn } from './flags';
+import { pushProfileSettings } from './settings';
 import { zoneFromLocation } from './timezone';
 
-/** The kinds the ladder offers, in the order it offers them. */
-export const LADDER_KINDS = ['bump', 'thank_you', 'schedule'] as const satisfies readonly MessageKind[];
-export type LadderKind = (typeof LADDER_KINDS)[number];
+/** The kinds the ladder offers, in the order it offers them (core's list, which the server reads too). */
+export const LADDER_KINDS = AUTO_KINDS;
+export type LadderKind = AutoKind;
 /** Approvals without an edit that earn the offer. */
 export const OFFER_AT = 10;
 /** Edits to a handed-over kind within this many days ask whether to keep it. */
@@ -156,11 +159,7 @@ export async function answerTrustOffer(
   now = new Date(),
 ) {
   const kind = s.payload.messageKind as LadderKind;
-  const settings = await db.settings.get(user.id);
-  const auto = new Set(settings?.autoKinds ?? []);
-  if (yes) auto.add(kind);
-  else auto.delete(kind);
-  await db.settings.update(user.id, { autoKinds: [...auto] });
+  await setAutoKind(user.id, kind, yes);
   await db.suggestions.update(s.id, { status: 'done', decidedAt: now.toISOString() });
   if (yes && s.payload.recheck)
     await db.kv.put({ key: `trust:kept:${user.id}:${kind}`, value: Number(s.signals.edited ?? 0) });
@@ -178,13 +177,32 @@ export async function answerTrustOffer(
   }
 }
 
-/** Turn a kind on or off from Settings. */
+/**
+ * Turn a kind on or off (Settings, or the ladder's card). In account mode the list goes up as
+ * users.settings.auto_kinds too, so the server cadence sends the same kinds on its own (plan 29 §B2.1).
+ */
 export async function setAutoKind(userId: string, kind: LadderKind, on: boolean): Promise<void> {
   const settings = await db.settings.get(userId);
   const auto = new Set(settings?.autoKinds ?? []);
   if (on) auto.add(kind);
   else auto.delete(kind);
-  await db.settings.update(userId, { autoKinds: [...auto] });
+  const autoKinds = [...auto];
+  await db.settings.update(userId, { autoKinds });
+  await pushProfileSettings(userId, { autoKinds });
+}
+
+/**
+ * The mode Settings offers (plan 29 §B1): off, assist or autopilot. Kept here and sent up as
+ * users.settings.autopilot_mode, where the server also sets users.autonomy_level to match (0, 1, 2).
+ */
+export async function setAutopilotMode(userId: string, mode: AutopilotMode): Promise<void> {
+  await db.settings.update(userId, { autopilotMode: mode });
+  await pushProfileSettings(userId, { autopilotMode: mode });
+}
+
+/** The student's mode; off when they never chose one. */
+export async function autopilotMode(userId: string): Promise<AutopilotMode> {
+  return (await db.settings.get(userId))?.autopilotMode ?? 'off';
 }
 
 /** A person's time zone: kept on them, else read from where they are, else undefined. */
@@ -237,8 +255,11 @@ async function autoSendOnce(
 ): Promise<AutoSendOutcome> {
   const settings = await db.settings.get(user.id);
   if (!settings?.autoKinds?.length || !(await flagOn('trustLadder'))) return { sent: false, why: 'off' };
+  // the pause (plan 29 §B2.7): the card waits for the student like any other
+  if (settings.autopilotPausedUntil && now.getTime() < Date.parse(settings.autopilotPausedUntil))
+    return { sent: false, why: 'paused' };
   const msg = messageId ? await db.outbound.get(messageId) : undefined;
-  if (!msg || msg.status !== 'draft') return { sent: false, why: 'no draft' };
+  if (msg?.status !== 'draft') return { sent: false, why: 'no draft' };
   if (!settings.autoKinds.includes(msg.kind)) return { sent: false, why: 'kind not handed over' };
   // LinkedIn never sends without a tap
   if (msg.channel !== 'gmail') return { sent: false, why: 'not Gmail' };
@@ -257,7 +278,7 @@ async function autoSendOnce(
   const { approveAndSend } = await import('./send');
   const r = await approveAndSend(user, msg.id, msg.bodyDraft, msg.subject, now, { scheduleAt: sendAt });
   if (!r.ok) return { sent: false, why: r.error };
-  await db.outbound.update(msg.id, { autoSent: true });
+  await db.outbound.update(msg.id, { autoSent: true, autoRung: msg.kind });
   if (!person.timezone && zone !== user.timezone) await db.people.update(person.id, { timezone: zone });
   return { sent: true, sendAt: sendAt.toISOString() };
 }
