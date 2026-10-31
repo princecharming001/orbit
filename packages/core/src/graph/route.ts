@@ -179,6 +179,12 @@ export interface WarmHop {
   p: number;
   /** the strongest evidence on this hop; 'strength' for the student's own tie */
   kind: TieKind | 'strength';
+  /**
+   * A hop that runs through a friend's pooled network (plan 29 A4): who the friend is. Absent on every other hop. The
+   * student's hop to the friend is their own tie ('strength'); the friend's hop to the person carries the evidence
+   * the friend's closeness word was built from (LinkedIn, or what the friend said themselves).
+   */
+  via?: { kind: 'friend'; userId: string; name: string };
   /** every hop after the first: how well the two know each other (plan 21 §3.7) */
   band?: HopBand;
   /** the pair's evidence has gone quiet (no new sign in eight times its usual gap) */

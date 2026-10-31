@@ -5,7 +5,8 @@ import { saveGoal } from '../../../engine/goals';
 import { addPersonByHand } from '../../../engine/people';
 import { addTargetCompanies } from '../../../engine/targets';
 import { setConnectorsMockForTests } from '../../../integrations/connectorsMock';
-import { type FakeOrbitApi, fakeDossier } from '../../../test/fakeOrbitApi';
+import { type FakeOrbitApi, fakeDossier, withFriend, withReplies } from '../../../test/fakeOrbitApi';
+import { NOW } from '../helpers';
 import type { AccountState, ApiSeed } from './harness';
 
 /**
@@ -41,7 +42,28 @@ export interface Scenario {
   noWeb?: boolean;
   /** the goal needs a wide search (many lookups or several web searches), so the per-turn shape caps are lifted */
   wide?: boolean;
+  /**
+   * The scenario waits on a plan whose tools have not landed (plan 29: friends and autopilot). The run skips it unless
+   * SIM_INCLUDE_PENDING=1, so the suite stays green until the tools exist; the field comes off when they do.
+   */
+  pending?: 'plan29';
 }
+
+/** The chat tools plan 29 §A5 and §B5 name; a pending scenario may expect these before the registry has them. */
+export const PLAN29_TOOLS = [
+  'list_friends',
+  'invite_friend',
+  'set_friend_sharing',
+  'ask_friend_for_intro',
+  'respond_to_friend_ask',
+  'set_autopilot_mode',
+  'autopilot_status',
+  'hold_send',
+  'answer_reply',
+  'pause_autopilot',
+  'list_voice_notes',
+  'forget_voice_note',
+] as const;
 
 // ---- what the fake orbit-api holds for the account scenarios (plan 16 §15.3) ----------------------------------------
 
@@ -205,6 +227,18 @@ const warmRoute: ApiSeed = async (api, user) => {
       names: { [via.id]: via.displayName, [lena.id]: lena.displayName },
     },
   ]);
+};
+
+// ---- plan 29: a friend who pools her network, and a day on autopilot ---------------------------------------------------
+
+/** The demo plus Ana Okafor as a friend (plan 29 C2): 120 shared people, six at the targets, one open ask of the student. */
+const friendAna: ApiSeed = async (api, user) => {
+  withFriend(api, user, await db.people.where('userId').equals(user.id).toArray());
+};
+
+/** The demo plus a reply of every class and a day on autopilot behind /autopilot/status (plan 29 C2). */
+const autopilotDay: ApiSeed = async (api, user) => {
+  withReplies(api, user, await db.people.where('userId').equals(user.id).toArray(), NOW.getTime());
 };
 
 // ---- The chat quality campaign (plan 28): more students, and the questions they really ask -------------------------
@@ -1308,6 +1342,424 @@ const CAMPAIGN: Scenario[] = [
   },
 ];
 
+// ---- Plan 29: friends and autopilot. What a correct answer knows, written once and shared by the rows below -------------
+
+const FRIENDS_SHARING =
+  'A friend sees of your people only: name, title, company, public LinkedIn slug, school, whether they are your alum, and a closeness word (knows, knows well, close) built from LinkedIn, manual labels and your own answers. Never your emails, notes, facts, drafts, stage names, scores, phone numbers, email addresses, home city, LinkedIn connection dates, anything derived from Gmail or Calendar, hidden or private people, or anyone who asked not to be contacted. Sharing is chosen per friend: everyone, only people at chosen companies, or nothing yet; a change or a revoke takes effect at once. A preview shows exactly what the friend sees. Friends is an account feature: in local mode nothing leaves the browser, so the answer is the reason and the sign-in.';
+
+const FRIENDS_ROUTES =
+  'Ana Okafor (Cornell 2025) is a friend who shares 120 people, 6 at the targets: Dan Lee (Stripe, close), Maya Chen (Stripe, knows well; the student also knows Maya), Priya Raman (Figma, knows well), Theo Lindqvist (Anthropic, knows), Nina Kowalski (Ramp, knows well), Isabel Moreno (Notion, knows). Nobody at Linear. A friend route is said as "through Ana" with how well she knows them, ranked with the student\'s own routes by the same chance; the student\'s own Stripe contact is Maya Chen. Counts come from the friend list, never invented.';
+
+const FRIENDS_ASK =
+  "An intro through a friend goes to the friend, never to the friend's contact: the student asks Ana, Ana forwards and cc's the student. The ask carries a two or three line forwardable blurb in the student's words (who they are, why this person, the ask, an out) and double opt-in. Orbit never drafts a note to Dan, never shows or asks for Dan's address, and files the ask in both students' Asks. Creating the ask is risky: confirm before it is filed. After the forward, the student thanks Ana and reports back.";
+
+const FRIENDS_FORWARD =
+  "When a friend asks for an intro to someone the student knows, the student decides: Forward makes a draft to the contact that quotes the friend's note, says why the student is passing it on, cc's the friend and offers an out; the student approves it like any draft, nothing is sent on its own and never on LinkedIn. Not this one declines without a reason being owed. Ana's open ask is for Lena Novak at Ramp, with her blurb about bill pay engineering.";
+
+const AUTOPILOT_MODES =
+  "Three modes. Off: Orbit writes, you send. Assist: you approve each message with one tap and it goes in the recipient's Tuesday to Thursday morning; bumps, thank-yous and scheduling replies go on their own after ten unchanged approvals of a kind, each shown after with a minute to undo. Autopilot: everything in Assist, plus Orbit plans the week to your target, writes first messages, shows them the evening before as Tomorrow's batch and sends them in the morning unless you hold one, answers scheduling and thank-you replies, offers three times when someone says yes, books the call when they pick one, and asks you in chat when a reply needs something only you know. The rules, said plainly: email only, never LinkedIn at any level; only alumni, people you know (closeness 40 or more) or a friend's contact; at most 5 sends a day on its own, 3 first messages a day and 12 a week, never two people at one firm on the same day; only companies on your goals; stops and tells you at the first decline, unsubscribe or pushback; every message under Sent for you with a minute to undo; pause is one tap. First messages are the last rung: until twenty have gone out unchanged, the evening batch asks for a tap. Turning a mode on is a risky change: two sentences and a confirm, nothing sent on the spot. A goal can run on autopilot while the rest stay by hand.";
+
+const AUTOPILOT_DAY =
+  "Today on autopilot, read from the status and never invented: sent 3 (a first message to Kenji Mori at Figma at 8:41 their time, a bump to Ethan Park, a scheduling reply to Lena Novak). Tomorrow's batch: 2 first messages, Grace Liu at Linear and Omar Haddad at Notion, going 8:40 their time, held with one tap until then. Held: Priya Shah at Figma, because Kenji at Figma was written to this morning and autopilot never writes to two people at one firm on the same day; she moves to Thursday. Needs you: Daniel Okafor asked whether you have applied through the portal yet. Rungs: bumps, thank-yous and scheduling replies unlocked at 10 of 10; first messages at 14 of 20, so the batch still asks for a tap in the evening. Caps: 3 of 5 today, 5 of 12 first messages this week. Nothing is paused.";
+
+const AUTOPILOT_REPLIES =
+  'Inbound replies, one of each class: Maya Chen interested; Lena Novak scheduling ("Thu Oct 8 at 11 works", an offered slot, so the call books and the confirmation goes); Daniel Okafor a question (have you applied); Victor Castro an objection (apply through the portal first); Sofia Bennett a referral (her colleague Raj); Ethan Park not now (November); Caleb Weber out of office until October 12; Jonah Reyes a decline; Chloe Dubois unsubscribe; Priya Shah thanks. The next action by class: interested gets the slots reply; a time that matches a slot books and confirms; a question goes to Needs you and the student\'s one line fills the reply; objection, not now and referral are drafts for approval, never sent on their own; decline and unsubscribe close the thread, mark do not contact, no reply, and the student is told; thanks goes on its own only when it carries no question.';
+
+const AUTOPILOT_ANSWER =
+  'Answering a reply that asked a question: the student\'s one line ("yes, applied Monday") fills the gap and the reply drafts itself around it, in the student\'s voice, with nothing added that the student did not say (no dates, no claims, no new commitment); the draft is shown for approval before anything goes. Daniel Okafor asked whether the student has applied through the portal yet.';
+
+const VOICE_NOTES =
+  'Settings, Voice: the card as prose (greets with Hi, signs off Thanks, short sentences, contractions, no exclamation marks, the ask by the second sentence) and what Orbit learned from edits, one line each: "You cut Thanks either way every time", "You never open with the connection line twice in one thread", "You sign with your first name only". Each note can be kept or forgotten; a forgotten note is never re-learned; Relearn from my sent mail runs in the background. Listed from the voice data, never invented, and forgetting one is a change the student asked for, done at once and said back in a line.';
+
+/** Alex, the demo junior, with Ana Okafor as a friend. */
+const FRIEND_PERSONA =
+  'Alex, the demo junior recruiting for product and engineering internships, whose friend Ana Okafor (Cornell 2025) pools her network on Orbit';
+
+/** Alex with recruiting on autopilot since last week. */
+const AUTOPILOT_PERSONA =
+  'Alex, the demo junior who put recruiting on autopilot last week and checks in on it from the chat';
+
+const PLAN29: Scenario[] = [
+  // ---- friends (plan 29 Part A, A7) ------------------------------------------------------------------------------------
+  {
+    id: 'friends-who-at-stripe',
+    group: 'friends',
+    persona: FRIEND_PERSONA,
+    account: 'demo',
+    api: friendAna,
+    goal: 'find out who you know at Stripe, including through friends, and how well',
+    maxTurns: 4,
+    expectTools: [['list_friends', 'find_routes']],
+    reference: FRIENDS_ROUTES,
+    noWeb: true,
+    minGoal: 'partly',
+    pending: 'plan29',
+  },
+  {
+    id: 'friends-ask-ana-dan',
+    group: 'friends',
+    persona: FRIEND_PERSONA,
+    account: 'demo',
+    api: friendAna,
+    goal: 'ask Ana to introduce you to Dan Lee at Stripe, read the blurb she would forward, and approve the ask',
+    maxTurns: 6,
+    expectTools: [['ask_friend_for_intro']],
+    reference: `${FRIENDS_ASK} ${FRIENDS_ROUTES}`,
+    noWeb: true,
+    minGoal: 'partly',
+    pending: 'plan29',
+  },
+  {
+    id: 'friends-what-ana-sees',
+    group: 'friends',
+    persona: FRIEND_PERSONA,
+    account: 'demo',
+    api: friendAna,
+    goal: 'find out exactly what Ana can see of your network and your messages',
+    maxTurns: 3,
+    reference: FRIENDS_SHARING,
+    noWeb: true,
+    minGoal: 'yes',
+    pending: 'plan29',
+  },
+  {
+    id: 'friends-invite-email',
+    group: 'friends',
+    persona: FRIEND_PERSONA,
+    account: 'demo',
+    api: friendAna,
+    goal: 'invite your friend Noah Patel (noah.patel@cornell.edu) to pool networks with you, and confirm when asked',
+    maxTurns: 5,
+    expectTools: [['invite_friend']],
+    reference:
+      'Inviting a friend sends one email with a sign-in link (or a link to copy); someone already on Orbit sees a request to accept. The invite is a risky action, so Orbit confirms before it goes, says what accepting shares both ways, and never promises the friend has accepted. At most 20 invites a day.',
+    noWeb: true,
+    minGoal: 'partly',
+    pending: 'plan29',
+  },
+  {
+    id: 'friends-stop-sharing-ana',
+    group: 'friends',
+    persona: FRIEND_PERSONA,
+    account: 'demo',
+    api: friendAna,
+    goal: 'stop sharing your people with Ana, without ending the friendship',
+    maxTurns: 4,
+    expectTools: [['set_friend_sharing']],
+    reference: `Setting what you share with Ana to nothing yet takes effect at once: Ana stops seeing your people, you still see hers, and the friendship stays. ${FRIENDS_SHARING}`,
+    noWeb: true,
+    minGoal: 'partly',
+    pending: 'plan29',
+  },
+  {
+    id: 'friends-share-only-companies',
+    group: 'friends',
+    persona: FRIEND_PERSONA,
+    account: 'demo',
+    api: friendAna,
+    goal: 'share with Ana only the people you know at Ramp and Stripe, nobody else',
+    maxTurns: 4,
+    expectTools: [['set_friend_sharing']],
+    reference: `The companies mode shares only people at the chosen companies (Ramp and Stripe here) and nothing else; Orbit says how many people that is from the preview and that it applies at once. ${FRIENDS_SHARING}`,
+    noWeb: true,
+    minGoal: 'partly',
+    pending: 'plan29',
+  },
+  {
+    id: 'friends-ask-arrives-forward',
+    group: 'friends',
+    persona: FRIEND_PERSONA,
+    account: 'demo',
+    api: friendAna,
+    goal: 'see what Ana is asking of you, read her note, and forward it to Lena',
+    maxTurns: 6,
+    expectTools: [['respond_to_friend_ask']],
+    reference: FRIENDS_FORWARD,
+    noWeb: true,
+    minGoal: 'partly',
+    pending: 'plan29',
+  },
+  {
+    id: 'friends-ask-decline',
+    group: 'friends',
+    persona: FRIEND_PERSONA,
+    account: 'demo',
+    api: friendAna,
+    goal: "tell Orbit you would rather not forward Ana's ask to Lena this time",
+    maxTurns: 4,
+    expectTools: [['respond_to_friend_ask']],
+    reference: `${FRIENDS_FORWARD} Declining is one tap and owes no reason; Orbit does not argue, does not write to Lena, and may offer a kind line to Ana only if the student wants one.`,
+    noWeb: true,
+    minGoal: 'partly',
+    pending: 'plan29',
+  },
+  {
+    id: 'friends-list',
+    group: 'friends',
+    persona: FRIEND_PERSONA,
+    account: 'demo',
+    api: friendAna,
+    goal: 'ask who your friends on Orbit are and what each of them shares with you',
+    maxTurns: 3,
+    expectTools: [['list_friends']],
+    reference: `${FRIENDS_ROUTES} One friend: Ana shares 120 people, 6 at your targets; you share everyone back.`,
+    noWeb: true,
+    minGoal: 'yes',
+    pending: 'plan29',
+  },
+  {
+    id: 'friends-coverage',
+    group: 'friends',
+    persona: FRIEND_PERSONA,
+    account: 'demo',
+    api: friendAna,
+    goal: 'find out how many of your target companies you can reach through a friend, and which ones you cannot',
+    maxTurns: 4,
+    expectTools: [['list_friends', 'find_routes']],
+    reference: `${FRIENDS_ROUTES} Five of the six targets have a path through Ana (Stripe, Figma, Anthropic, Ramp, Notion); Linear does not.`,
+    noWeb: true,
+    minGoal: 'partly',
+    pending: 'plan29',
+  },
+  {
+    id: 'friends-no-direct-dan',
+    group: 'friends',
+    persona: FRIEND_PERSONA,
+    account: 'demo',
+    api: friendAna,
+    goal: 'ask Orbit to just email Dan Lee at Stripe directly for you, skipping Ana',
+    maxTurns: 4,
+    reference: `${FRIENDS_ASK} The student does not know Dan and has no address for him; Orbit says so plainly, never drafts to Dan, and offers the ask to Ana or a cold note only if the student finds an address themselves.`,
+    noWeb: true,
+    minGoal: 'partly',
+    pending: 'plan29',
+  },
+  {
+    id: 'friends-local-mode',
+    group: 'friends',
+    persona:
+      'Alex, the demo junior trying Orbit without signing in, who heard friends can pool their networks',
+    account: 'demo',
+    goal: 'ask who you could reach through friends and how to set that up',
+    maxTurns: 3,
+    reference: `${FRIENDS_SHARING} Without an account there are no friends to list: the honest answer is that Friends needs an Orbit account because nothing leaves the browser in local mode, and the one next step is the Google sign-in.`,
+    noWeb: true,
+    minGoal: 'partly',
+    pending: 'plan29',
+  },
+
+  // ---- autopilot (plan 29 Part B, B7) ----------------------------------------------------------------------------------
+  {
+    id: 'ap-turn-on',
+    group: 'autopilot',
+    persona:
+      'Alex, the demo junior who is tired of approving every message and wants Orbit to run recruiting',
+    account: 'demo',
+    api: autopilotDay,
+    goal: 'put your recruiting on autopilot; expect to hear what that means first, then confirm',
+    maxTurns: 5,
+    expectTools: [['set_autopilot_mode']],
+    reference: AUTOPILOT_MODES,
+    noWeb: true,
+    minGoal: 'partly',
+    pending: 'plan29',
+  },
+  {
+    id: 'ap-what-sent-today',
+    group: 'autopilot',
+    persona: AUTOPILOT_PERSONA,
+    account: 'demo',
+    api: autopilotDay,
+    goal: 'find out what Orbit sent for you today and what is going out tomorrow',
+    maxTurns: 3,
+    expectTools: [['autopilot_status']],
+    reference: AUTOPILOT_DAY,
+    noWeb: true,
+    minGoal: 'yes',
+    pending: 'plan29',
+  },
+  {
+    id: 'ap-hold-tomorrow',
+    group: 'autopilot',
+    persona: AUTOPILOT_PERSONA,
+    account: 'demo',
+    api: autopilotDay,
+    goal: "hold tomorrow's batch; nothing new should go out in the morning",
+    maxTurns: 4,
+    expectTools: [['hold_send']],
+    reference: `${AUTOPILOT_DAY} Holding is one tap per message and reversible: both of tomorrow's first messages are held, said back by name, and nothing else changes (replies and bumps keep going unless the student pauses everything).`,
+    noWeb: true,
+    minGoal: 'partly',
+    pending: 'plan29',
+  },
+  {
+    id: 'ap-answer-dan',
+    group: 'autopilot',
+    persona: AUTOPILOT_PERSONA,
+    account: 'demo',
+    api: autopilotDay,
+    goal: 'answer Dan: yes, you applied on Monday; read the reply Orbit drafts and approve it',
+    maxTurns: 5,
+    expectTools: [['answer_reply']],
+    reference: AUTOPILOT_ANSWER,
+    noWeb: true,
+    minGoal: 'partly',
+    pending: 'plan29',
+  },
+  {
+    id: 'ap-pause-everything',
+    group: 'autopilot',
+    persona: 'Alex, the demo junior who just got an offer and wants everything to stop while they think',
+    account: 'demo',
+    api: autopilotDay,
+    goal: 'pause everything Orbit sends on its own until further notice',
+    maxTurns: 4,
+    expectTools: [['pause_autopilot', 'pause_outreach']],
+    reference: `Pause is one tap: nothing goes out on its own until the student lifts it, tomorrow's batch is cancelled (two first messages), queued replies wait, and Orbit says what was stopped and how to resume. ${AUTOPILOT_DAY}`,
+    noWeb: true,
+    minGoal: 'partly',
+    pending: 'plan29',
+  },
+  {
+    id: 'ap-why-not-priya',
+    group: 'autopilot',
+    persona: AUTOPILOT_PERSONA,
+    account: 'demo',
+    api: autopilotDay,
+    goal: 'ask why Orbit did not send to Priya today',
+    maxTurns: 3,
+    expectTools: [['autopilot_status']],
+    reference: `${AUTOPILOT_DAY} The answer names the rule that held her (one person per firm per day, Kenji at Figma went this morning) and when she goes instead (Thursday), nothing else.`,
+    noWeb: true,
+    minGoal: 'yes',
+    pending: 'plan29',
+  },
+  {
+    id: 'ap-what-learned-voice',
+    group: 'autopilot',
+    persona: AUTOPILOT_PERSONA,
+    account: 'demo',
+    api: autopilotDay,
+    goal: 'ask what Orbit has learned about how you write',
+    maxTurns: 3,
+    expectTools: [['list_voice_notes']],
+    reference: VOICE_NOTES,
+    noWeb: true,
+    minGoal: 'yes',
+    pending: 'plan29',
+  },
+  {
+    id: 'ap-forget-note',
+    group: 'autopilot',
+    persona: AUTOPILOT_PERSONA,
+    account: 'demo',
+    api: autopilotDay,
+    goal: "tell Orbit to forget the note about cutting 'Thanks either way'; you want to keep saying it",
+    maxTurns: 4,
+    expectTools: [['forget_voice_note']],
+    reference: VOICE_NOTES,
+    noWeb: true,
+    minGoal: 'partly',
+    pending: 'plan29',
+  },
+  {
+    id: 'ap-assist-vs-autopilot',
+    group: 'autopilot',
+    persona: 'Alex, the demo junior reading the Autopilot settings and unsure which mode to pick',
+    account: 'demo',
+    api: autopilotDay,
+    goal: 'ask what the difference between Assist and Autopilot is, in plain words',
+    maxTurns: 3,
+    reference: AUTOPILOT_MODES,
+    noWeb: true,
+    minGoal: 'yes',
+    pending: 'plan29',
+  },
+  {
+    id: 'ap-linkedin-never',
+    group: 'autopilot',
+    persona: 'Alex, the demo junior who wants LinkedIn covered too',
+    account: 'demo',
+    api: autopilotDay,
+    goal: 'ask whether autopilot can send your LinkedIn messages as well',
+    maxTurns: 3,
+    reference: `${AUTOPILOT_MODES} LinkedIn is never sent on its own at any level, invites included; LinkedIn drafts are handed to the student to send with a tap. Said plainly, without apology, with the email side as what autopilot does cover.`,
+    noWeb: true,
+    minGoal: 'yes',
+    pending: 'plan29',
+  },
+  {
+    id: 'ap-replies-overview',
+    group: 'autopilot',
+    persona: AUTOPILOT_PERSONA,
+    account: 'demo',
+    api: autopilotDay,
+    goal: 'ask what replies came in this week and what Orbit did with each',
+    maxTurns: 4,
+    expectTools: [['list_replies', 'autopilot_status']],
+    reference: AUTOPILOT_REPLIES,
+    noWeb: true,
+    minGoal: 'partly',
+    pending: 'plan29',
+  },
+  {
+    id: 'ap-lena-booked',
+    group: 'autopilot',
+    persona: AUTOPILOT_PERSONA,
+    account: 'demo',
+    api: autopilotDay,
+    goal: 'find out whether the call with Lena got booked and when it is',
+    maxTurns: 4,
+    expectTools: [['autopilot_status', 'list_replies']],
+    reference: `${AUTOPILOT_REPLIES} Lena named Thu Oct 8 at 11, an offered slot; the confirmation went this morning under Sent for you. Whether the calendar event exists is read from the status or the calendar, never assumed, and the prep card follows.`,
+    noWeb: true,
+    minGoal: 'partly',
+    pending: 'plan29',
+  },
+  {
+    id: 'ap-unsubscribe-chloe',
+    group: 'autopilot',
+    persona: AUTOPILOT_PERSONA,
+    account: 'demo',
+    api: autopilotDay,
+    goal: 'ask what happened with Chloe Dubois and whether you should write back',
+    maxTurns: 3,
+    expectTools: [['list_replies', 'autopilot_status']],
+    reference: `${AUTOPILOT_REPLIES} Chloe asked to stop: the thread is closed, she is marked do not contact, no reply goes and none is drafted; the breaker paused first messages at Ramp and told the student. Orbit never suggests writing to her again.`,
+    noWeb: true,
+    minGoal: 'yes',
+    pending: 'plan29',
+  },
+  {
+    id: 'ap-per-goal',
+    group: 'autopilot',
+    persona: 'Alex, the demo junior who wants only the internship search automated',
+    account: 'demo',
+    api: autopilotDay,
+    goal: 'run only your internship goal on autopilot and keep everything else by hand',
+    maxTurns: 5,
+    expectTools: [['set_autopilot_mode']],
+    reference: `${AUTOPILOT_MODES} The per-goal switch sets autopilot for one goal and leaves the account mode alone; Orbit names the goal it set, confirms first, and says the rules still apply to it.`,
+    noWeb: true,
+    minGoal: 'partly',
+    pending: 'plan29',
+  },
+  {
+    id: 'ap-rungs',
+    group: 'autopilot',
+    persona: AUTOPILOT_PERSONA,
+    account: 'demo',
+    api: autopilotDay,
+    goal: 'ask why the evening batch still needs a tap from you when autopilot is on',
+    maxTurns: 3,
+    expectTools: [['autopilot_status']],
+    reference: `${AUTOPILOT_DAY} First messages are the last rung: 14 of 20 unchanged so far, so the batch asks for a tap in the evening until twenty have gone out unchanged; two edits in thirty days re-ask. The numbers come from the status.`,
+    noWeb: true,
+    minGoal: 'yes',
+    pending: 'plan29',
+  },
+];
+
 export const SCENARIOS: Scenario[] = [
   // ---- Today and the brief --------------------------------------------------------------------------------
   {
@@ -1867,9 +2319,13 @@ export const SCENARIOS: Scenario[] = [
   },
 
   ...CAMPAIGN,
+  ...PLAN29,
 ];
 
 export const GROUPS = [...new Set(SCENARIOS.map((s) => s.group))];
 
 /** The plan 28 groups, for the scorecard summary and the baseline run. */
 export const CAMPAIGN_GROUPS = [...new Set(CAMPAIGN.map((s) => s.group))];
+
+/** The plan 29 groups (friends and autopilot), pending until their tools land. */
+export const PLAN29_GROUPS = [...new Set(PLAN29.map((s) => s.group))];

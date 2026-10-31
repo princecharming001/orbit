@@ -11,7 +11,7 @@ import type { ReplyClass } from '../email/replyClass';
 import type { WarmPath } from '../graph/route';
 import type { OwnWords } from '../ownWords';
 import type { TieBand } from '../scoring/tieScore';
-import type { Dossier, Goal, GoalKind, MessageKind } from '../types';
+import type { Dossier, Goal, GoalKind, MessageKind, StyleCard } from '../types';
 
 export type ApiChannel = 'gmail' | 'linkedin';
 
@@ -195,7 +195,7 @@ export interface PathsFindResponse {
   paths: (WarmPath & { id: string; names: Record<string, string> })[];
   fallback?: 'cold';
   direct?: { personId: string; score: number; band: string; text: string };
-  /** sources consulted: 'graph', 'linkedin_mutual', 'village' */
+  /** sources consulted: 'graph', 'linkedin_mutual', 'village', 'friends' (plan 29: a hop through a friend's people) */
   sources: string[];
   unconfigured: string[];
   /**
@@ -450,6 +450,306 @@ export interface DueResponse {
   items: DueItem[];
 }
 
+// ---- friends (plan 29 Part A) --------------------------------------------------------------------------------------
+
+/** What one side of a friendship shares with the other: everyone, only people at some companies, or nothing yet. */
+export type FriendShareMode = 'all' | 'companies' | 'none';
+
+/** How well the owner knows a shared person, in a word: 1 knows, 2 knows well, 3 close (plan 29 A1). */
+export type FriendCloseness = 1 | 2 | 3;
+
+/**
+ * One of a friend's shared people as the viewer may see them: name, title, company, public LinkedIn slug, school and
+ * a closeness word. Never an email address, a phone number, a note, a score or anything derived from Gmail or
+ * Calendar (plan 29 A2.2).
+ */
+export interface FriendShare {
+  /** the owner's person id (the projection row); the viewer never has a row for it unless they save the person */
+  personId: string;
+  displayName: string;
+  title: string | null;
+  company: string | null;
+  companyDomain: string | null;
+  linkedinSlug: string | null;
+  school: string | null;
+  /** the person went to the owner's school */
+  isAlumni: boolean;
+  closeness: FriendCloseness;
+}
+
+/** A friend as the Friends tab lists them, with the counts the row shows. */
+export interface Friend {
+  friendshipId: string;
+  userId: string;
+  name: string;
+  school: string | null;
+  gradYear: number | null;
+  avatarUrl: string | null;
+  /** how many people the friend shares with the viewer */
+  shares: number;
+  /** how many of those are at the viewer's target companies */
+  atTargets: number;
+  /** per target company, how many of the friend's people are there */
+  knowsAt: { company: string; count: number }[];
+  /** what the viewer shares back */
+  myMode: FriendShareMode;
+  myCompanyDomains: string[];
+  since: string;
+}
+
+/** An invite or request waiting on someone: sent by the viewer (out) or sent to them (in). */
+export interface FriendInvite {
+  id: string;
+  direction: 'in' | 'out';
+  /** the other side: an email when they are not on Orbit yet, a name when they are */
+  email: string | null;
+  name: string | null;
+  status: 'pending' | 'accepted' | 'declined' | 'expired' | 'revoked';
+  createdAt: string;
+}
+
+/** POST /friends/invite { email? }: an email invite, or a link to copy when no email is given */
+export interface FriendsInviteRequest {
+  email?: string;
+}
+export interface FriendsInviteResponse {
+  code: string;
+  link: string;
+  /** 'requested' when the invitee is already on Orbit (they see a request), 'sent' when the link went by email */
+  status: 'sent' | 'requested' | 'link';
+  invite: FriendInvite;
+}
+/** POST /friends/accept { code | friendshipId, mode }: accepting shares back in the chosen mode */
+export interface FriendsAcceptRequest {
+  code?: string;
+  friendshipId?: string;
+  mode: FriendShareMode;
+  companyDomains?: string[];
+}
+export interface FriendsAcceptResponse {
+  friend: Friend;
+}
+/** POST /friends/decline { code | friendshipId } */
+export interface FriendsDeclineRequest {
+  code?: string;
+  friendshipId?: string;
+}
+/** POST /friends/end { friendshipId }: visibility ends both ways at once */
+export interface FriendsEndRequest {
+  friendshipId: string;
+}
+/** GET /friends */
+export interface FriendsListResponse {
+  friends: Friend[];
+  pending: FriendInvite[];
+}
+/** POST /friends/settings { friendshipId?, mode, companyDomains }: for one friend, or for all when no id */
+export interface FriendsSettingsRequest {
+  friendshipId?: string;
+  mode: FriendShareMode;
+  companyDomains?: string[];
+}
+export interface FriendsSettingsResponse {
+  mode: FriendShareMode;
+  companyDomains: string[];
+  /** how many of the viewer's people the projection now holds */
+  shares: number;
+}
+/** GET /friends/preview: the viewer's own projection, exactly as a friend sees it */
+export interface FriendPreviewResponse {
+  mode: FriendShareMode;
+  companyDomains: string[];
+  shares: FriendShare[];
+  total: number;
+}
+/** GET /friends/shares/:friendUserId?company=: a friend's projection, paged */
+export interface FriendSharesResponse {
+  friendUserId: string;
+  shares: FriendShare[];
+  total: number;
+  nextCursor: string | null;
+}
+
+/** An intro asked of a friend (plan 29 A4): the friend forwards or declines; the target is never written to directly. */
+export interface FriendIntroAsk {
+  id: string;
+  friendshipId: string;
+  askerUserId: string;
+  askerName: string;
+  friendUserId: string;
+  friendName: string;
+  /** the friend's person id (their projection row) */
+  targetPersonId: string;
+  targetName: string;
+  targetCompany: string | null;
+  /** the asker's own row for the same human, when they have one */
+  askerPersonId: string | null;
+  /** the forwardable blurb, in the asker's words */
+  note: string;
+  status: 'asked' | 'forwarded' | 'declined' | 'expired';
+  createdAt: string;
+  answeredAt: string | null;
+  /** the friend's forward draft, once they answered */
+  forwardedDraftId: string | null;
+}
+/** POST /friends/asks { friendUserId, targetPersonId, note } */
+export interface FriendAskRequest {
+  friendUserId: string;
+  targetPersonId: string;
+  note: string;
+}
+export interface FriendAskResponse {
+  ask: FriendIntroAsk;
+}
+/** GET /friends/asks: the asks the viewer made and the asks friends made of them */
+export interface FriendAsksResponse {
+  asked: FriendIntroAsk[];
+  received: FriendIntroAsk[];
+}
+/** POST /friends/asks/:id/respond { action, body? }: forward makes the forward draft on the friend's side */
+export interface FriendAskRespondRequest {
+  action: 'forward' | 'decline';
+  body?: string;
+}
+export interface FriendAskRespondResponse {
+  ask: FriendIntroAsk;
+  /** the forward draft, approved like any draft; null on a decline */
+  draft: ServerDraft | null;
+}
+
+// ---- autopilot and voice (plan 29 Part B) --------------------------------------------------------------------------
+
+/**
+ * The three modes Settings offers (plan 29 B1): off writes only, assist sends what was tapped, autopilot plans too.
+ * core/safety/rules.ts carries the same union for the send rules; index.ts re-exports this one by name so the two
+ * never collide at the package root.
+ */
+export type AutopilotMode = 'off' | 'assist' | 'autopilot';
+
+/** POST /autopilot/mode { mode, goalId? }: for the account, or for one goal */
+export interface AutopilotModeRequest {
+  mode: AutopilotMode;
+  goalId?: string;
+}
+export interface AutopilotModeResponse {
+  mode: AutopilotMode;
+  goalId: string | null;
+}
+
+/** A rung of the trust ladder (plan 23 §4.9, plan 29 B2.2): how many unchanged approvals unlock a kind of send. */
+export interface AutopilotRung {
+  kind: 'bump' | 'thank_you' | 'schedule' | 'first_touch';
+  needed: number;
+  unchanged: number;
+  unlocked: boolean;
+}
+
+/** One message autopilot touched: queued for tomorrow, held, sent today, or waiting on the student. */
+export interface AutopilotItem {
+  draftId: string;
+  personId: string | null;
+  personName: string;
+  company: string | null;
+  kind: MessageKind;
+  replyClass?: ReplyClass;
+  subject: string | null;
+  /** when it goes or went, in the recipient's morning */
+  sendAt: string | null;
+  sentAt: string | null;
+  status: 'queued' | 'held' | 'sent' | 'needs_you' | 'cancelled';
+  /** why it was held or not sent: the rule, in a sentence */
+  reason?: string;
+  /** a reply that asked something only the student knows */
+  question?: string;
+  /** the rung that let it go on its own */
+  autoRung?: AutopilotRung['kind'];
+}
+
+/** GET /autopilot/status */
+export interface AutopilotStatus {
+  mode: AutopilotMode;
+  pausedUntil: string | null;
+  pausedGoals: { goalId: string; title: string; until: string | null; reason: string }[];
+  /** tomorrow's batch: the first messages that go in the morning unless held */
+  queued: AutopilotItem[];
+  held: AutopilotItem[];
+  sentToday: AutopilotItem[];
+  /** replies that asked a question only the student can answer */
+  needsYou: AutopilotItem[];
+  rungs: AutopilotRung[];
+  caps: {
+    autoPerDay: number;
+    firstTouchPerWeek: number;
+    firstTouchPerDay: number;
+    usedToday: number;
+    firstTouchesThisWeek: number;
+  };
+  /** when the evening review opens for tomorrow's batch */
+  reviewUntil: string | null;
+}
+/** POST /autopilot/hold { draftId }: the batch goes without this one */
+export interface AutopilotHoldRequest {
+  draftId: string;
+}
+export interface AutopilotHoldResponse {
+  item: AutopilotItem;
+}
+/** POST /autopilot/pause { until, goalId? }: null lifts the pause; no goal pauses everything */
+export interface AutopilotPauseRequest {
+  until: string | null;
+  goalId?: string;
+}
+export interface AutopilotPauseResponse {
+  pausedUntil: string | null;
+  goalId: string | null;
+  /** queued sends that were cancelled by the pause */
+  cancelled: number;
+}
+
+/** POST /replies/answer { draftId, answer }: the student's one line fills the question and the reply drafts itself */
+export interface ReplyAnswerRequest {
+  draftId: string;
+  answer: string;
+}
+export interface ReplyAnswerResponse {
+  draft: ServerDraft;
+}
+
+/** One thing Orbit learned from the student's edits (plan 29 B2.4), kept or forgotten in Settings → Voice. */
+export interface VoiceNote {
+  id: string;
+  /** one line in the student's words: "You cut 'Thanks either way' every time" */
+  text: string;
+  /** the draft_edits rows behind it */
+  evidence: string[];
+  createdAt: string;
+  keptAt: string | null;
+  /** a forgotten note is never re-learned */
+  forgottenAt: string | null;
+}
+/** GET /voice */
+export interface VoiceResponse {
+  card: StyleCard | null;
+  /** the card as sentences: "You greet with Hi, sign off Thanks, write short, use contractions" */
+  cardProse: string[];
+  notes: VoiceNote[];
+  /** 0 to 3, how much recent drafts sounded like the student; null before the first judge run */
+  soundsLikeYou: number | null;
+  relearnedAt: string | null;
+}
+/** POST /voice/notes { id, action } */
+export interface VoiceNoteRequest {
+  id: string;
+  action: 'keep' | 'forget';
+}
+export interface VoiceNoteResponse {
+  note: VoiceNote;
+}
+/** POST /voice/relearn: rebuilds the card from sent mail; the job runs in the background */
+export interface VoiceRelearnResponse {
+  queued: boolean;
+}
+
 /** Every route path, for both sides' tables and tests. */
 export const API_ROUTES = [
   '/auth/session',
@@ -495,5 +795,25 @@ export const API_ROUTES = [
   '/settings/pause',
   '/settings/profile',
   '/cadence/due',
+  // plan 29 Part A: friends
+  '/friends/invite',
+  '/friends/accept',
+  '/friends/decline',
+  '/friends/end',
+  '/friends',
+  '/friends/settings',
+  '/friends/preview',
+  '/friends/shares/:friendUserId',
+  '/friends/asks',
+  '/friends/asks/:id/respond',
+  // plan 29 Part B: autopilot and voice
+  '/autopilot/mode',
+  '/autopilot/status',
+  '/autopilot/hold',
+  '/autopilot/pause',
+  '/replies/answer',
+  '/voice',
+  '/voice/notes',
+  '/voice/relearn',
 ] as const;
 export type ApiRoute = (typeof API_ROUTES)[number];

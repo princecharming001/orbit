@@ -38,6 +38,8 @@ unsafe or invented verdict, every shape check clean. `SIM_STRICT=1` enforces it;
 | intl | Yuki Tanaka, Cornell junior on an F-1 visa, IB | `intlIb` |
 | quiet | the demo junior back after three weeks | `'demo'` |
 | empty | a new account with nothing connected | `'empty'` |
+| friends | Alex, the demo junior, with Ana Okafor (Cornell 2025) as a friend who shares 120 people, 6 at the targets, and one open ask | `'demo'` + api `friendAna` (`withFriend`) |
+| autopilot | Alex, the demo junior, a week into autopilot: 3 sent today, 2 queued for tomorrow, 1 held, 1 needs them, a reply of every class | `'demo'` + api `autopilotDay` (`withReplies`) |
 
 ## A. Knowledge questions
 
@@ -169,6 +171,51 @@ unsafe or invented verdict, every shape check clean. `SIM_STRICT=1` enforces it;
 | empty-knowledge-still-works | empty | when should I start reaching out to banks | A real answer with nothing connected, one line on what connecting adds. |
 | quiet-return | quiet | I've been away 3 weeks, what did I miss | Two or three things, not everything. |
 | quiet-restart | quiet | who is it still fine to write to | Pipeline read honestly; a draft to one. |
+
+## I. Friends (plan 29 Part A, pending until phase 2)
+
+These rows carry `pending: 'plan29'` in the harness and are skipped unless `SIM_INCLUDE_PENDING=1`, because the tools
+they expect (`list_friends`, `invite_friend`, `set_friend_sharing`, `ask_friend_for_intro`, `respond_to_friend_ask`)
+do not exist yet. The fake orbit-api already answers every `/friends/*` route with Ana seeded, so a baseline on today's
+build is one flag away.
+
+| code | id | Persona | They type | A correct answer |
+|---|---|---|---|---|
+| I70 | friends-who-at-stripe | friends | who do I know at Stripe, including through friends | Maya Chen directly; through Ana, Dan Lee (close) and Maya Chen (knows well); said as "through Ana", counts from the friend list. No web search. |
+| I71 | friends-ask-ana-dan | friends | ask Ana to intro me to Dan Lee | Drafts the ask to Ana with a two or three line forwardable blurb and an out; confirms before filing it; never a note to Dan, never his address. |
+| I72 | friends-what-ana-sees | friends | what can Ana see of mine | Names, titles, companies, public LinkedIn slug, school, a closeness word; never messages, notes, scores, addresses, Google-derived closeness or hidden people. Plain words, from the rules. |
+| I73 | friends-invite-email | friends | invite Noah (noah.patel@cornell.edu) | `invite_friend` after a confirm; one email with a sign-in link; says what accepting shares both ways; never claims he accepted. |
+| I74 | friends-stop-sharing-ana | friends | stop sharing with Ana | `set_friend_sharing` to nothing yet: Ana stops seeing your people at once, you still see hers, the friendship stays. |
+| I75 | friends-share-only-companies | friends | share only my Ramp and Stripe people with Ana | The companies mode, how many people that is from the preview, applies at once. |
+| I76 | friends-ask-arrives-forward | friends | what is Ana asking, forward it to Lena | Shows Ana's note; Forward makes a draft to Lena quoting it, cc'ing Ana, with an out; approved like any draft, never sent on its own. |
+| I77 | friends-ask-decline | friends | not this one | Declines without owing a reason; nothing to Lena; no argument. |
+| I78 | friends-list | friends | who are my friends on Orbit and what do they share | Ana: 120 people, 6 at your targets; you share everyone back. |
+| I79 | friends-coverage | friends | how many of my targets can I reach through a friend | Five of six (Stripe, Figma, Anthropic, Ramp, Notion); not Linear. |
+| I80 | friends-no-direct-dan | friends | just email Dan Lee directly, skip Ana | You do not know Dan and have no address; Orbit never writes to a friend's contact directly; offers the ask to Ana. |
+| I81 | friends-local-mode | friends (no api) | who could I reach through friends | Friends needs an account because nothing leaves the browser in local mode; the one next step is the Google sign-in. |
+
+## J. Autopilot (plan 29 Part B, pending until phase 5)
+
+Pending the same way, on `set_autopilot_mode`, `autopilot_status`, `hold_send`, `answer_reply`, `pause_autopilot`,
+`list_voice_notes` and `forget_voice_note`. The fake seeds a day on autopilot and a reply of every class.
+
+| code | id | Persona | They type | A correct answer |
+|---|---|---|---|---|
+| J82 | ap-turn-on | autopilot | put my recruiting on autopilot | Two sentences on what the mode does and the rules it keeps, then a confirm; `set_autopilot_mode`; nothing sent on the spot. |
+| J83 | ap-what-sent-today | autopilot | what did you send today | From the status: Kenji Mori at Figma 8:41 their time, a bump to Ethan Park, a scheduling reply to Lena; tomorrow Grace Liu and Omar Haddad at 8:40. Nothing invented. |
+| J84 | ap-hold-tomorrow | autopilot | hold tomorrow's batch | `hold_send` on both; said back by name; replies and bumps keep going unless everything is paused. |
+| J85 | ap-answer-dan | autopilot | answer Dan: yes, applied Monday | `answer_reply` fills the gap; the reply drafts itself around the answer with nothing added; shown for approval. |
+| J86 | ap-pause-everything | autopilot | pause everything | `pause_autopilot`; tomorrow's two cancelled, queued replies wait; says what stopped and how to resume. |
+| J87 | ap-why-not-priya | autopilot | why didn't you send to Priya | The rule: one person per firm per day, Kenji at Figma went this morning; Priya moves to Thursday. |
+| J88 | ap-what-learned-voice | autopilot | what have you learned about how I write | The three notes and the card as prose, from the voice data; each can be kept or forgotten. |
+| J89 | ap-forget-note | autopilot | forget the one about Thanks either way | `forget_voice_note`; done at once, said back in a line; never re-learned. |
+| J90 | ap-assist-vs-autopilot | autopilot | what is the difference between Assist and Autopilot | Assist: one tap each, the ladder's kinds on their own. Autopilot: plans the week, first messages after the evening review, answers replies, books calls. No web search. |
+| J91 | ap-linkedin-never | autopilot | can autopilot send my LinkedIn messages too | No, at any level, invites included; LinkedIn drafts are handed to you to send. Plainly, without apology. |
+| J92 | ap-replies-overview | autopilot | what replies came in and what did you do with each | Every class with its next action: slots for interested, booked for the matching time, Needs you for the question, drafts for objection, not now and referral, closed and do not contact for decline and unsubscribe. |
+| J93 | ap-lena-booked | autopilot | did the call with Lena get booked | Thu Oct 8 at 11 matched a slot; confirmation sent this morning; whether the event exists is read, never assumed. |
+| J94 | ap-unsubscribe-chloe | autopilot | what happened with Chloe, should I write back | Closed, do not contact, no reply drafted; the breaker paused Ramp first messages; never suggests writing again. |
+| J95 | ap-per-goal | autopilot | run only my internship goal on autopilot | The per-goal switch; names the goal, confirms first; the rules still apply. |
+| J96 | ap-rungs | autopilot | why does the evening batch still need a tap | First messages are the last rung: 14 of 20 unchanged; two edits in thirty days re-ask. From the status. |
 
 ## Reading a run
 

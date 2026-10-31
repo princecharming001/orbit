@@ -62,6 +62,8 @@ export * from './scoring/rapport';
 export * from './scoring/strength';
 export * from './scoring/tieFit';
 export * from './scoring/tieScore';
+// plan 29: the mode union lives in the api contract and in the send rules; the contract's is the package's
+export type { AutopilotMode } from './server/api';
 export * from './server/api';
 export * from './server/mappers';
 export * from './style/card';

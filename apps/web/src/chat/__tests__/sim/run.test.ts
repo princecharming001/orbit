@@ -9,6 +9,9 @@
  * SIM_STRICT=1 also enforces the plan 28 bar: every judged dimension at 2 or more, the shape checks clean, and a web
  * search where the goal needed one. Without it those are recorded, not enforced (a baseline run).
  *
+ * Scenarios marked `pending` wait on tools that have not landed (plan 29: friends and autopilot); they are skipped
+ * unless SIM_INCLUDE_PENDING=1, which is how that plan's baseline is taken on today's build.
+ *
  * Writes <SIM_DIR>/<id>.md per scenario and <SIM_DIR>/_scorecard.json for the whole run.
  */
 import { writeFileSync } from 'node:fs';
@@ -32,8 +35,12 @@ import { SCENARIOS } from './scenarios';
 const only = process.env.SIM_GROUP;
 const ids = process.env.SIM_ONLY?.split(',').map((x) => x.trim());
 const strict = !!process.env.SIM_STRICT;
+const includePending = !!process.env.SIM_INCLUDE_PENDING;
 const list = SCENARIOS.filter(
-  (s) => (!only || s.group === only || only === 'all') && (!ids || ids.includes(s.id)),
+  (s) =>
+    (!only || s.group === only || only === 'all') &&
+    (!ids || ids.includes(s.id)) &&
+    (includePending || !s.pending),
 );
 const scorecard: {
   id: string;
