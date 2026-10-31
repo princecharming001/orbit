@@ -43,6 +43,8 @@ export const CHAT_BETAS = [
 export const MAX_TOKENS = 16_000;
 export const MAX_ITERATIONS = 12;
 export const FALLBACK_MODELS = [{ model: 'claude-opus-5' }];
+/** Words before the pills that are a clause of intent, not an answer: what follows them is then the reply. */
+const CLAUSE_WORDS = 9;
 /** Consecutive unparseable-tool-JSON failures of one turn before giving up. */
 const MAX_PARSE_RETRIES = 2;
 
@@ -514,6 +516,12 @@ export async function runTurn(
         if (closedAfter?.trim() && muted) {
           if (hasToolUse) {
             // the turn went on to another tool after the pills: the words were not a doubled reply after all
+            spoken += muted;
+            onEvent({ type: 'text', delta: muted });
+            muted = '';
+          } else if (closedAfter.trim().split(/\s+/).length < CLAUSE_WORDS) {
+            // the words before the pills were only a clause of intent ("One sec, checking."): what came after
+            // them is the answer itself, not a doubled reply, so it is shown and kept
             spoken += muted;
             onEvent({ type: 'text', delta: muted });
             muted = '';

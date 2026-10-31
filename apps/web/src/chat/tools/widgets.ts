@@ -10,7 +10,7 @@ export const offerChoices = defineTool({
   name: 'offer_choices',
   kind: 'read',
   description:
-    'Call this after you have written your reply (it goes at the very end), only when the student has natural next steps, to show up to three tap-to-answer buttons under your message. Each option is a short label (the button) and the message sent as the student\'s next turn when they tap it, written in the student\'s own voice ("Let\'s do it", "What else can you do?"). Two or three options, never more; skip it when the reply ends in a question the student must answer in their own words. Nothing changes; typing instead always works.',
+    'Call this after you have written your reply (it goes at the very end), only when the student has natural next steps, to show up to three tap-to-answer buttons under your message. Each option is a short label (the button) and the message sent as the student\'s next turn when they tap it, written in the student\'s own voice ("Let\'s do it", "What else can you do?"). Two or three options, never more; skip it when the reply ends in a question the student must answer in their own words. Never in the same round as a read tool: look things up first, write the reply, then call this on its own. Nothing changes; typing instead always works.',
   input: z.object({
     options: z
       .array(

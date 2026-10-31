@@ -736,6 +736,22 @@ describe('a turn ends on the pills', () => {
     expect(JSON.stringify(rows)).toMatch(/Two replied/);
   });
 
+  it('keeps the answer after the pills when only a clause of intent came before them (plan 28)', async () => {
+    const events = await turn(
+      'what is a superday',
+      [
+        { text: 'One sec, checking.', toolCalls: [pills] },
+        { text: 'A superday is the final round: several back to back interviews in one day.' },
+      ],
+      withPills(),
+    );
+    expect(text(events)).toBe(
+      'One sec, checking.A superday is the final round: several back to back interviews in one day.',
+    );
+    const rows = await store.history(conversation.id);
+    expect(JSON.stringify(rows)).toMatch(/final round/);
+  });
+
   it('keeps the line when nothing was said before the pills', async () => {
     const events = await turn('wsp', [{ toolCalls: [pills] }, { text: 'hey, not much.' }], withPills());
     expect(text(events)).toBe('hey, not much.');

@@ -364,8 +364,14 @@ function BlockView({
   if (b.type === 'progress')
     return showReasoning ? <ProgressLine text={b.text} live={streaming && i === last} /> : null;
   if (b.type === 'web') return <WebSearchLine block={b} live={streaming} />;
+  // a playbook lookup is the assistant reading its own notes: one quiet line, the answer follows in words
+  if (QUIET_TOOLS.has(b.toolName) && b.status !== 'pending' && b.envelope?.kind !== 'error')
+    return <ProgressLine text="Checked the playbook" live={false} />;
   return <ToolView block={b} actions={actions} />;
 }
+
+/** Read tools whose result is for the assistant, not the student: shown as a line, never a card. */
+const QUIET_TOOLS = new Set(['lookup_playbook']);
 
 /** What one folded step says in a line: the tool's own summary, its running label, or the words themselves. */
 function stepText(b: Block): string {

@@ -178,6 +178,7 @@ export function knowledgeBlockText(sections: readonly KnowledgeSection[]): strin
   const head = [
     'Playbook. What a sharp friend who has done this knows, picked for this student. Answer a question about how a process works from it first, in your own words and only the part that matters for them right now; from their own data second; from the web only for a current fact.',
     "A line tagged [CHANGES YEARLY] gives the pattern, not this year's date: say the pattern, then check the date or the program on the web before stating one.",
+    'Answer in under sixty words: the one or two things that matter for this student now, one concept at a time, the rest when they ask. Never a paragraph per concept, never a closing summary line.',
     others.length ? `Other sections, through lookup_playbook: ${others.join(', ')}.` : '',
   ]
     .filter(Boolean)
