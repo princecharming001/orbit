@@ -1,0 +1,370 @@
+[
+  {
+    "id": "draft-founder-first",
+    "group": "drafting",
+    "verdict": {
+      "goalMet": "partly",
+      "safe": true,
+      "invented": false,
+      "friendly": true,
+      "overwhelming": false,
+      "respectedScope": true,
+      "soundsHuman": true,
+      "matchedRegister": true,
+      "staysOrbi": true,
+      "score": 3,
+      "dims": {
+        "answered": 2,
+        "friendAhead": 2,
+        "ownData": 2,
+        "webSearch": 2,
+        "rightOutcome": 2,
+        "shape": 2,
+        "noOverwhelm": 2,
+        "honest": 2
+      },
+      "dimNotes": "judge returned no parseable verdict",
+      "best": "",
+      "worst": "judge returned no parseable verdict (harness/API flake)",
+      "fix": "review this transcript by hand"
+    },
+    "tools": [
+      "search_people",
+      "get_dossier",
+      "get_person",
+      "find_routes",
+      "create_draft",
+      "update_draft_body",
+      "update_draft_body",
+      "offer_choices",
+      "get_draft",
+      "offer_choices"
+    ],
+    "web": [],
+    "shape": {
+      "ok": true,
+      "problems": [],
+      "stats": {
+        "turns": 3,
+        "longPreambles": 0,
+        "betweenTools": 0,
+        "tools": 8,
+        "maxToolsInTurn": 4,
+        "webSearches": 0,
+        "maxWebInTurn": 0,
+        "wordless": 0,
+        "dashesOrExclaims": 0,
+        "lists": 0,
+        "tooManyPills": 0,
+        "unbackedConfirmations": 0,
+        "longestAnswerWords": 63
+      }
+    },
+    "turns": 3
+  },
+  {
+    "id": "draft-sales-first",
+    "group": "drafting",
+    "verdict": {
+      "goalMet": "partly",
+      "safe": true,
+      "invented": false,
+      "friendly": true,
+      "overwhelming": false,
+      "respectedScope": true,
+      "soundsHuman": true,
+      "matchedRegister": true,
+      "staysOrbi": true,
+      "score": 3.5,
+      "dims": {
+        "answered": 3,
+        "friendAhead": 2,
+        "ownData": 2,
+        "webSearch": 2,
+        "rightOutcome": 2,
+        "shape": 3,
+        "noOverwhelm": 3,
+        "honest": 3
+      },
+      "dimNotes": "friendAhead: the draft has no 15-minute ask or easy out, and no hint of why Dana specifically beyond the clinic count; it also gave no tip on how to find her.\nownData: turn 2 pulled in the Cornell student line from the profile even though Priya had said she is selling scheduling software, so Orbi had to fix it in turn 3.\nwebSearch: Orbi never offered or tried a web search to find Dana, even though the student asked it to find her and who runs ops at a clinic group is a current fact.\nrightOutcome: the draft was delivered, but finding Dana stalled at questions and Orbi never suggested a way to find her.",
+      "best": "Orbi gave a clean two-line, one-question email and flagged that it had added 'to clinics' itself so Priya could cut it.",
+      "worst": "It never helped find Dana by searching the web or suggesting LinkedIn, and it built the first draft from the wrong profile identity.",
+      "fix": "After the network check came up empty, offer to search the web for Dana Ruiz's clinic group, or suggest a LinkedIn search for ops leads at multi-clinic groups; add a short 15-minute ask with an out to the draft."
+    },
+    "tools": [
+      "search_people",
+      "offer_choices",
+      "offer_choices"
+    ],
+    "web": [],
+    "shape": {
+      "ok": true,
+      "problems": [],
+      "stats": {
+        "turns": 3,
+        "longPreambles": 0,
+        "betweenTools": 0,
+        "tools": 1,
+        "maxToolsInTurn": 1,
+        "webSearches": 0,
+        "maxWebInTurn": 0,
+        "wordless": 0,
+        "dashesOrExclaims": 0,
+        "lists": 0,
+        "tooManyPills": 0,
+        "unbackedConfirmations": 0,
+        "longestAnswerWords": 47
+      }
+    },
+    "turns": 3
+  },
+  {
+    "id": "draft-hiring-first",
+    "group": "drafting",
+    "verdict": {
+      "goalMet": "yes",
+      "safe": true,
+      "invented": false,
+      "friendly": true,
+      "overwhelming": false,
+      "respectedScope": true,
+      "soundsHuman": true,
+      "matchedRegister": true,
+      "staysOrbi": true,
+      "score": 4,
+      "dims": {
+        "answered": 3,
+        "friendAhead": 2,
+        "ownData": 3,
+        "webSearch": 3,
+        "rightOutcome": 2,
+        "shape": 2,
+        "noOverwhelm": 2,
+        "honest": 3
+      },
+      "dimNotes": "friendAhead: the first draft in turn 2 was off (third-person 'her talk', 'Sam is building', and asked about her 'path to Stripe' instead of the role); the final draft is good but never says what the role owns.\nrightOutcome: two drafts appear and one is labeled 'Saved your edits' although the student edited nothing, which is confusing; the final draft is right.\nshape: turn 2 restates in prose what the draft card already shows, and turn 1 runs a bit over 60 words.\nnoOverwhelm: two drafts plus three buttons at once, when one clean draft and one next step would do.",
+      "best": "Turn 1 asked one pointed question about why Ava specifically, and the final draft used the student's real hook (her idempotency talk), a one-line Tidal pitch and a low-pressure 15 minute ask.",
+      "worst": "The first draft was sloppy (wrong person voice, off-target ask about her path to Stripe) and was shown next to the corrected one, so it looked like a muddle.",
+      "fix": "Show a single polished draft in Sam's voice, add a short clause on what the founding engineer would own, drop the prose restatement, and offer one next step."
+    },
+    "tools": [
+      "search_people",
+      "get_dossier",
+      "get_person",
+      "create_draft",
+      "update_draft_body",
+      "offer_choices"
+    ],
+    "web": [],
+    "shape": {
+      "ok": true,
+      "problems": [],
+      "stats": {
+        "turns": 2,
+        "longPreambles": 0,
+        "betweenTools": 0,
+        "tools": 5,
+        "maxToolsInTurn": 3,
+        "webSearches": 0,
+        "maxWebInTurn": 0,
+        "wordless": 0,
+        "dashesOrExclaims": 0,
+        "lists": 0,
+        "tooManyPills": 0,
+        "unbackedConfirmations": 0,
+        "longestAnswerWords": 49
+      }
+    },
+    "turns": 2
+  },
+  {
+    "id": "draft-phd-first",
+    "group": "drafting",
+    "verdict": {
+      "goalMet": "partly",
+      "safe": true,
+      "invented": false,
+      "friendly": true,
+      "overwhelming": false,
+      "respectedScope": true,
+      "soundsHuman": true,
+      "matchedRegister": true,
+      "staysOrbi": true,
+      "score": 3.5,
+      "dims": {
+        "answered": 3,
+        "friendAhead": 2,
+        "ownData": 2,
+        "webSearch": 3,
+        "rightOutcome": 2,
+        "shape": 2,
+        "noOverwhelm": 2,
+        "honest": 3
+      },
+      "dimNotes": "friendAhead: the final draft cites the 1-WL paper and asks one specific scaling question, but it leaves out the advisor and never asks whether a 20-minute call would be welcome, both of which an academic first touch needs.\nownData: the draft was first signed Alex Rivera, and the student's name Wei and their ownership were only sorted out in turn 6.\nrightOutcome: there is a good draft, but it is stuck in a LinkedIn channel with a length warning, and the first auto-draft was garbled.\nshape: the turn 5 and turn 6 replies run to about 90 to 100 words and pack in several points each.\nnoOverwhelm: turn 5 stacks the draft assumption, the channel problem, the name warning and a request for the email address; turn 6 adds the demo-account note.",
+      "best": "Before drafting, it checked the professor's identity with the student and wrote an email that cites her 1-WL result and asks one precise scaling question.",
+      "worst": "The draft omits the advisor and a 20-minute call ask, and it is stuck as a LinkedIn message that triggers a 300-character warning on what should be an email.",
+      "fix": "Draft it as a formal email from the start, include the student's advisor and a polite offer of a 20-minute call, and cover the missing address in one short line."
+    },
+    "tools": [
+      "search_people",
+      "update_settings",
+      "find_people",
+      "offer_choices",
+      "add_sourced",
+      "create_draft",
+      "update_draft_body",
+      "update_draft_body",
+      "offer_choices"
+    ],
+    "web": [
+      "Professor Elena Park graph neural networks",
+      "Expressive Power of Message Passing GNNs Beyond 1-WL Park",
+      "Elena Park graph neural networks expressive power Weisfeiler-Lehman"
+    ],
+    "shape": {
+      "ok": true,
+      "problems": [],
+      "stats": {
+        "turns": 6,
+        "longPreambles": 0,
+        "betweenTools": 0,
+        "tools": 7,
+        "maxToolsInTurn": 3,
+        "webSearches": 3,
+        "maxWebInTurn": 2,
+        "wordless": 0,
+        "dashesOrExclaims": 0,
+        "lists": 0,
+        "tooManyPills": 0,
+        "unbackedConfirmations": 0,
+        "longestAnswerWords": 100
+      }
+    },
+    "turns": 6
+  },
+  {
+    "id": "draft-bump-all",
+    "group": "drafting",
+    "verdict": {
+      "goalMet": "yes",
+      "safe": true,
+      "invented": false,
+      "friendly": true,
+      "overwhelming": false,
+      "respectedScope": true,
+      "soundsHuman": false,
+      "matchedRegister": true,
+      "staysOrbi": true,
+      "score": 4,
+      "dims": {
+        "answered": 3,
+        "friendAhead": 3,
+        "ownData": 3,
+        "webSearch": 3,
+        "rightOutcome": 3,
+        "shape": 2,
+        "noOverwhelm": 3,
+        "honest": 2
+      },
+      "dimNotes": "shape: turn 2 runs long and packs several facts (Gmail not connected, Jonah timing, Caleb reply) into one reply; turn 1 has some detail too. soundsHuman: 'Logging it now.' then a contradictory 'Tap Approve' reads robotic, and the pattern of repeated card text is stiff. honest: turn 2 says send time is 'whenever you send it' without making clear there is no scheduling, and turn 5 'Logging it now' then needing approval glosses the state slightly; also the turn 5 reminder limit is stated clearly, which is good, but the early 'Logging it now' is misleading.",
+      "best": "Held back the two not-yet-due chats instead of bumping everyone, and drafted one short Daniel nudge that matches the one-bump rule and gave an easy out.",
+      "worst": "Turn 2 crammed Gmail not connected, Jonah timing and Caleb's reply into one reply, and it never offered a real spread of send times or a way to schedule.",
+      "fix": "Say up front that nothing can be scheduled or auto-sent, give one line on when Jonah's is due, and drop the 'Logging it now' line before the approval prompt."
+    },
+    "tools": [
+      "list_pipeline",
+      "get_draft",
+      "offer_choices",
+      "list_pipeline",
+      "offer_choices",
+      "send_draft",
+      "approve",
+      "remember",
+      "confirm_handoff",
+      "approve"
+    ],
+    "web": [],
+    "shape": {
+      "ok": true,
+      "problems": [],
+      "stats": {
+        "turns": 6,
+        "longPreambles": 0,
+        "betweenTools": 0,
+        "tools": 6,
+        "maxToolsInTurn": 2,
+        "webSearches": 0,
+        "maxWebInTurn": 0,
+        "wordless": 0,
+        "dashesOrExclaims": 0,
+        "lists": 0,
+        "tooManyPills": 0,
+        "unbackedConfirmations": 0,
+        "longestAnswerWords": 83
+      }
+    },
+    "turns": 6
+  },
+  {
+    "id": "draft-adjust",
+    "group": "drafting",
+    "verdict": {
+      "goalMet": "yes",
+      "safe": true,
+      "invented": false,
+      "friendly": true,
+      "overwhelming": false,
+      "respectedScope": true,
+      "soundsHuman": true,
+      "matchedRegister": true,
+      "staysOrbi": true,
+      "score": 4.3,
+      "dims": {
+        "answered": 3,
+        "friendAhead": 2,
+        "ownData": 3,
+        "webSearch": 3,
+        "rightOutcome": 3,
+        "shape": 2,
+        "noOverwhelm": 3,
+        "honest": 3
+      },
+      "dimNotes": "shape: turn 1 reply runs past 60 words and the resume reminder is repeated in turns 1 to 3. friendAhead: turn 3 says it 'sounds right for an engineering manager' with no visible basis, and the hackathon line in turn 4 is generic, though it does ask for one specific detail.",
+      "best": "It kept every edit tightly scoped, caught the date mismatch up front, and flagged the resume line each time so nothing unsafe could go out. It also asked for one specific hackathon detail instead of making one up.",
+      "worst": "It nagged about the resume attachment every turn and was wordy in turn 1, which is a bit much for a student texting casually.",
+      "fix": "Mention the resume caveat once, keep the first reply under 60 words, and drop unexplained asides such as the 'engineering manager' remark."
+    },
+    "tools": [
+      "search_people",
+      "get_draft",
+      "offer_choices",
+      "update_draft_body",
+      "offer_choices",
+      "update_draft_body",
+      "offer_choices",
+      "update_draft_body"
+    ],
+    "web": [],
+    "shape": {
+      "ok": true,
+      "problems": [],
+      "stats": {
+        "turns": 4,
+        "longPreambles": 0,
+        "betweenTools": 0,
+        "tools": 5,
+        "maxToolsInTurn": 2,
+        "webSearches": 0,
+        "maxWebInTurn": 0,
+        "wordless": 0,
+        "dashesOrExclaims": 0,
+        "lists": 0,
+        "tooManyPills": 0,
+        "unbackedConfirmations": 0,
+        "longestAnswerWords": 71
+      }
+    },
+    "turns": 4
+  }
+]

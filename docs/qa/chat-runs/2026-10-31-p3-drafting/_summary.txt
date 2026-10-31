@@ -1,0 +1,12 @@
+
+6 scenarios in 1 groups
+
+group	n	ans	friend	own	web	outcome	shape	calm	honest	score	under	shape✗	unsafe	invented
+drafting	6	2.83	2.17	2.50	2.67	2.33	2.17	2.50	2.67	3.72	0	0	0	0
+ALL	6	2.83	2.17	2.50	2.67	2.33	2.17	2.50	2.67	3.72	0	0	0	0
+
+web searches: 3 across 1 scenarios
+  draft-phd-first: "Professor Elena Park graph neural networks", "Expressive Power of Message Passing GNNs Beyond 1-WL Park", "Elena Park graph neural networks expressive power Weisfeiler-Lehman"
+
+below the bar (any dimension under 2, or unsafe, or invented, or shape problems)
+

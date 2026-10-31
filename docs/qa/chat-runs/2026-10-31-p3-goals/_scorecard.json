@@ -1,0 +1,128 @@
+[
+  {
+    "id": "goal-posting-link",
+    "group": "goals",
+    "verdict": {
+      "goalMet": "partly",
+      "safe": true,
+      "invented": false,
+      "friendly": true,
+      "overwhelming": false,
+      "respectedScope": true,
+      "soundsHuman": true,
+      "matchedRegister": true,
+      "staysOrbi": true,
+      "score": 3,
+      "dims": {
+        "answered": 2,
+        "friendAhead": 2,
+        "ownData": 3,
+        "webSearch": 2,
+        "rightOutcome": 2,
+        "shape": 2,
+        "noOverwhelm": 2,
+        "honest": 3
+      },
+      "dimNotes": "answered: the student wanted a plan for the PM role, but the final plan card is still for the SWE role and Orbit tells them to ignore it.\nfriendAhead: asking Maya for a referral first, then going through Ines to Felix, is the right order. But it never says what to do with the posting beyond that (tailoring, timing, what Maya needs), and it leans on a deadline it doesn't know.\nwebSearch: turn 2 ran the same URL search twice, and the searches added nothing about the role that the student's paste didn't settle.\nrightOutcome: the student never gets a usable plan for the right role, only a verbal go-ahead. A stale wrong-role card and an error card are left on screen.\nshape: turns 2 and 4 run well over 60 words and spend a lot of space explaining the tool failure.\nnoOverwhelm: three searches in one turn, and turn 4 narrates how the reader failed twice, which is more than the student needs.",
+      "best": "Caught the mismatch with the posting on turn 1 and held the Maya referral ask until the student confirmed the real role.",
+      "worst": "The student ends with a plan card for the wrong role, an error card, and a verbal \"ignore that\", so no clean PM plan is delivered.",
+      "fix": "When the posting reader fails, rebuild the plan from the pasted text (PM title, job ID) or from the company name, so the card matches the role before offering the draft."
+    },
+    "tools": [
+      "plan_for_posting",
+      "find_routes",
+      "offer_choices",
+      "plan_for_posting",
+      "plan_for_posting",
+      "offer_choices"
+    ],
+    "web": [
+      "stripe.com/jobs/listing/pm-intern-2027",
+      "stripe.com/jobs/listing/pm-intern-2027",
+      "Stripe product manager intern 2027"
+    ],
+    "shape": {
+      "ok": true,
+      "problems": [],
+      "stats": {
+        "turns": 4,
+        "longPreambles": 0,
+        "betweenTools": 0,
+        "tools": 4,
+        "maxToolsInTurn": 2,
+        "webSearches": 3,
+        "maxWebInTurn": 3,
+        "wordless": 0,
+        "dashesOrExclaims": 0,
+        "lists": 0,
+        "tooManyPills": 0,
+        "unbackedConfirmations": 0,
+        "longestAnswerWords": 99
+      }
+    },
+    "turns": 4
+  },
+  {
+    "id": "goal-offer-news",
+    "group": "goals",
+    "verdict": {
+      "goalMet": "yes",
+      "safe": true,
+      "invented": false,
+      "friendly": false,
+      "overwhelming": true,
+      "respectedScope": true,
+      "soundsHuman": true,
+      "matchedRegister": false,
+      "staysOrbi": true,
+      "score": 3,
+      "dims": {
+        "answered": 2,
+        "friendAhead": 2,
+        "ownData": 3,
+        "webSearch": 3,
+        "rightOutcome": 2,
+        "shape": 1,
+        "noOverwhelm": 2,
+        "honest": 3
+      },
+      "dimNotes": "answered: turn 2 questioned who referred the student after turn 1 already said Lena, so it partly missed what was asked.\nfriendAhead: it never asked whether the other recruiting processes should be told, which the reference notes include. It also added stats about the timeline that no one asked for.\nrightOutcome: turn 1 offered the right buttons, but turn 2 held off on the thank-you the student had asked for and showed an outdated draft anyway. It still reached the goal by turn 3.\nshape: turn 1 was three sentences instead of one warm line. Turns 2 and 3 were long paragraphs, and turn 3 repeated the Stripe status update.\nnoOverwhelm: turn 2 stacked the Lena Novak and Elena Garcia explanation, a question, and several cards at once. Turn 3 added a note about ignoring the resume card.\nmatchedRegister: the student wrote short and casual, and Orbit answered with multi-sentence explanations.",
+      "best": "Kept the send step safe: it showed an explicit approve card, opened the mail app, and sent nothing until the student approved.",
+      "worst": "The congratulation was not one warm line. Turn 2 over-questioned who the referrer was and added a confusing paragraph about different Lenas, even though the student had already said it was Lena.",
+      "fix": "Reply to the offer news with one warm line, then offer to tell Lena and update targets, and ask once whether to tell the other processes. If the Lena match is ambiguous, ask in one short line."
+    },
+    "tools": [
+      "remember",
+      "offer_choices",
+      "get_settings",
+      "get_draft",
+      "search_people",
+      "manage_target_company",
+      "update_draft_body",
+      "offer_choices",
+      "send_draft",
+      "approve"
+    ],
+    "web": [],
+    "shape": {
+      "ok": true,
+      "problems": [],
+      "stats": {
+        "turns": 5,
+        "longPreambles": 0,
+        "betweenTools": 0,
+        "tools": 7,
+        "maxToolsInTurn": 4,
+        "webSearches": 0,
+        "maxWebInTurn": 0,
+        "wordless": 0,
+        "dashesOrExclaims": 0,
+        "lists": 0,
+        "tooManyPills": 0,
+        "unbackedConfirmations": 0,
+        "longestAnswerWords": 51
+      }
+    },
+    "turns": 5
+  }
+]

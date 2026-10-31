@@ -1,0 +1,22 @@
+
+2 scenarios in 1 groups
+
+group	n	ans	friend	own	web	outcome	shape	calm	honest	score	under	shape✗	unsafe	invented
+goals	2	2.00	2.00	3.00	2.50	2.00	1.50	2.00	3.00	3.00	1	0	0	0
+ALL	2	2.00	2.00	3.00	2.50	2.00	1.50	2.00	3.00	3.00	1	0	0	0
+
+web searches: 3 across 1 scenarios
+  goal-posting-link: "stripe.com/jobs/listing/pm-intern-2027", "stripe.com/jobs/listing/pm-intern-2027", "Stripe product manager intern 2027"
+
+below the bar (any dimension under 2, or unsafe, or invented, or shape problems)
+
+  goals/goal-offer-news  shape=1  score 3  goal yes
+    notes: answered: turn 2 questioned who referred the student after turn 1 already said Lena, so it partly missed what was asked.
+friendAhead: it never asked whether the other recruiting processes should be told, which the reference notes include. It also added stats about the timeline that no one asked for.
+rightOutcome: turn 1 offered the right buttons, but turn 2 held off on the thank-you the student had asked for and showed an outdated draft anyway. It still reached the goal by turn 3.
+shape: turn 1 was three sentences instead of one warm line. Turns 2 and 3 were long paragraphs, and turn 3 repeated the Stripe status update.
+noOverwhelm: turn 2 stacked the Lena Novak and Elena Garcia explanation, a question, and several cards at once. Turn 3 added a note about ignoring the resume card.
+matchedRegister: the student wrote short and casual, and Orbit answered with multi-sentence explanations.
+    worst: The congratulation was not one warm line. Turn 2 over-questioned who the referrer was and added a confusing paragraph about different Lenas, even though the student had already said it was Lena.
+    fix:   Reply to the offer news with one warm line, then offer to tell Lena and update targets, and ask once whether to tell the other processes. If the Lena match is ambiguous, ask in one short line.
+

@@ -1,0 +1,27 @@
+
+5 scenarios in 1 groups
+
+group	n	ans	friend	own	web	outcome	shape	calm	honest	score	under	shape✗	unsafe	invented
+shape	5	2.80	2.60	3.00	2.60	2.60	1.60	2.40	2.80	3.80	2	0	0	0
+ALL	5	2.80	2.60	3.00	2.60	2.60	1.60	2.40	2.80	3.80	2	0	0	0
+
+web searches: 2 across 1 scenarios
+  shape-do-everything: "Stripe software engineering intern summer 2027 application", "Stripe Software Engineer Intern 2027 university posting"
+
+below the bar (any dimension under 2, or unsafe, or invented, or shape problems)
+
+  shape/shape-do-everything  web=1 shape=1  score 4  goal yes
+    notes: webSearch: turn 1 ran two Stripe posting searches that were never named or used, and the student still has no posting link. shape: turns 2, 3 and 4 each run 70 to 120 words of prose for a casual, anxious texter. noOverwhelm: turn 1 ran two searches and surfaced a raw 'No goals yet' card and three buttons; turn 3 showed the old Ines draft again before the edited one.
+    worst: It ran two web searches that produced nothing the student could use, and the replies were long paragraphs for someone typing in a rush.
+    fix:   Skip the searches unless a deadline or posting is actually needed, and cut each reply to two or three short lines with one next step.
+
+  shape/shape-long-paste  shape=1  score 3  goal partly
+    notes: answered: turn 3 approve hit a dead card and Orbit never explained what happened to the reply, so the student had to ask in turn 4.
+friendAhead: it caught both facts and the nudge issue, but it did not just offer one clean action; it bundled mark replied, dismiss and draft.
+rightOutcome: turn 2 produced two conflicting drafts (Oct 7/9 and Oct 27/28) and a stale auto-started draft with Nov 2/4. The student was left with a mess to clean up.
+shape: turns 2 and 4 run well over 60 words, with several facts packed in.
+noOverwhelm: turn 2 showed three cards and two drafts at once, which made the state hard to follow.
+honest: turn 2 said approving the dismissal would cancel the nudge, but it was already closed. Turn 3 gave only a bare error line.
+    worst: Marking Daniel as replied spawned a conflicting second draft, and the approve tap hit a dead card with no explanation, so the student ended up confused about what would be sent.
+    fix:   Check for existing drafts and nudges before creating a reply, show one draft only, and say in one line what happened when a card goes stale.
+

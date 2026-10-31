@@ -1,0 +1,869 @@
+[
+  {
+    "id": "know-ib-start",
+    "group": "knowledge",
+    "verdict": {
+      "goalMet": "yes",
+      "safe": true,
+      "invented": false,
+      "friendly": true,
+      "overwhelming": false,
+      "respectedScope": true,
+      "soundsHuman": true,
+      "matchedRegister": true,
+      "staysOrbi": true,
+      "score": 4,
+      "dims": {
+        "answered": 3,
+        "friendAhead": 2,
+        "ownData": 2,
+        "webSearch": 3,
+        "rightOutcome": 3,
+        "shape": 2,
+        "noOverwhelm": 2,
+        "honest": 2
+      },
+      "dimNotes": "friendAhead: turn 2 gives a correct timeline but skips the alumni-first call approach (ask about their path, not a job or referral) and the application steps like HireVue and superday in prose.\nownData: used the stored weekly target of 4 and Michigan alumni, but ignored Noah's TMT/M&A aim and the Ross pitch team.\nshape: turn 2 runs about 85 words, and \"The twist is that\" is a slightly performed opener.\nnoOverwhelm: turn 2 packs three time periods and several banks into one block, and the buttons offer three next steps each time.\nhonest: \"per that tracker\" is a vague source, and it never says that open and close dates shift each year and should be re-checked.",
+      "best": "Turn 2 answered the \"what does start now mean\" question concretely: alumni calls and technicals this semester, interviews in spring, and summer/fall as a backup. It matched the reference timeline and turn 3 tied the call volume to Noah's own target setting.",
+      "worst": "The Nov 15 Evercore deadline came from a vaguely named source (\"that tracker\") with no caveat that dates change, so Noah may treat it as certain.",
+      "fix": "Name the source in plain words (\"Evercore's careers page says Nov 15\"), add a short \"dates move, double check\" line, and tell Noah to ask alumni about their group and path rather than for a job."
+    },
+    "tools": [
+      "lookup_playbook",
+      "offer_choices",
+      "offer_choices",
+      "get_settings",
+      "offer_choices"
+    ],
+    "web": [
+      "2028 investment banking summer analyst recruiting timeline",
+      "Summer 2028 investment banking applications"
+    ],
+    "shape": {
+      "ok": true,
+      "problems": [],
+      "stats": {
+        "turns": 3,
+        "longPreambles": 0,
+        "betweenTools": 0,
+        "tools": 2,
+        "maxToolsInTurn": 1,
+        "webSearches": 2,
+        "maxWebInTurn": 2,
+        "wordless": 0,
+        "dashesOrExclaims": 0,
+        "lists": 0,
+        "tooManyPills": 0,
+        "unbackedConfirmations": 0,
+        "longestAnswerWords": 90
+      }
+    },
+    "turns": 3
+  },
+  {
+    "id": "know-superday",
+    "group": "knowledge",
+    "verdict": {
+      "goalMet": "yes",
+      "safe": true,
+      "invented": false,
+      "friendly": true,
+      "overwhelming": false,
+      "respectedScope": true,
+      "soundsHuman": true,
+      "matchedRegister": true,
+      "staysOrbi": true,
+      "score": 4.5,
+      "dims": {
+        "answered": 3,
+        "friendAhead": 2,
+        "ownData": 3,
+        "webSearch": 3,
+        "rightOutcome": 3,
+        "shape": 3,
+        "noOverwhelm": 3,
+        "honest": 3
+      },
+      "dimNotes": "friendAhead: correct and plain, but omits that a superday is several interviews with technical and behavioral questions, and never ties it to Noah's sophomore timing or IB goal. Does say HireVue is the first round, though it can be followed by first-round calls. ownData: fine, since the question needed none of it.",
+      "best": "Explained both terms in two short, plain sentences with no jargon, matching Noah's casual tone.",
+      "worst": "Did not link the answer to Noah's own situation, e.g. that as a sophomore targeting IB he will meet both soon, and the buttons are a mild menu.",
+      "fix": "Add one short line tying it to Noah, like 'you'll hit the HireVue this fall if you apply for junior summer', and offer a single next step instead of three buttons."
+    },
+    "tools": [
+      "offer_choices"
+    ],
+    "web": [],
+    "shape": {
+      "ok": true,
+      "problems": [],
+      "stats": {
+        "turns": 1,
+        "longPreambles": 0,
+        "betweenTools": 0,
+        "tools": 0,
+        "maxToolsInTurn": 0,
+        "webSearches": 0,
+        "maxWebInTurn": 0,
+        "wordless": 0,
+        "dashesOrExclaims": 0,
+        "lists": 0,
+        "tooManyPills": 0,
+        "unbackedConfirmations": 0,
+        "longestAnswerWords": 52
+      }
+    },
+    "turns": 1
+  },
+  {
+    "id": "know-vc-call",
+    "group": "knowledge",
+    "verdict": {
+      "goalMet": "yes",
+      "safe": true,
+      "invented": true,
+      "friendly": true,
+      "overwhelming": false,
+      "respectedScope": true,
+      "soundsHuman": true,
+      "matchedRegister": true,
+      "staysOrbi": true,
+      "score": 3,
+      "dims": {
+        "answered": 2,
+        "friendAhead": 2,
+        "ownData": 2,
+        "webSearch": 3,
+        "rightOutcome": 2,
+        "shape": 2,
+        "noOverwhelm": 3,
+        "honest": 2
+      },
+      "dimNotes": "answered: turn 3 replied with a question instead of how soon and what goes in the note, and only turn 4 fixed it.\nfriendAhead: no monthly investor update after the follow-up, no mention that associates screen while partners decide, and nothing on warm intros or keeping the raise to a tight window.\nownData: turn 1 used Maya's real numbers but added a $2.5M raise that isn't in her profile.\nrightOutcome: turn 3 was a pointless offer to draft the note, which stalled a simple question.\nshape: turns 1 and 4 run past about 60 words, and turn 4 packs five items into one sentence.\nhonest: the $2.5M figure was stated as fact without a basis.",
+      "best": "Turn 1 grounded the advice in Maya's own numbers (40 clinics, $18k MRR, 15% growth, $1.5M lead) and gave a simple structure for the call.",
+      "worst": "Turn 3 dodged the direct question about timing and contents of the follow-up, and turn 1 made up a $2.5M raise size.",
+      "fix": "Answer the question asked first, only use round figures from the profile, and offer the draft or a monthly update as a single follow-up after answering."
+    },
+    "tools": [
+      "offer_choices",
+      "offer_choices",
+      "offer_choices"
+    ],
+    "web": [],
+    "shape": {
+      "ok": true,
+      "problems": [],
+      "stats": {
+        "turns": 4,
+        "longPreambles": 0,
+        "betweenTools": 0,
+        "tools": 0,
+        "maxToolsInTurn": 0,
+        "webSearches": 0,
+        "maxWebInTurn": 0,
+        "wordless": 0,
+        "dashesOrExclaims": 0,
+        "lists": 0,
+        "tooManyPills": 0,
+        "unbackedConfirmations": 0,
+        "longestAnswerWords": 69
+      }
+    },
+    "turns": 4
+  },
+  {
+    "id": "know-seed-round",
+    "group": "knowledge",
+    "verdict": {
+      "goalMet": "yes",
+      "safe": true,
+      "invented": true,
+      "friendly": true,
+      "overwhelming": false,
+      "respectedScope": true,
+      "soundsHuman": true,
+      "matchedRegister": true,
+      "staysOrbi": true,
+      "score": 3.5,
+      "dims": {
+        "answered": 3,
+        "friendAhead": 2,
+        "ownData": 2,
+        "webSearch": 3,
+        "rightOutcome": 3,
+        "shape": 2,
+        "noOverwhelm": 3,
+        "honest": 2
+      },
+      "dimNotes": "friendAhead: turn 4 says a lead term sheet is usually priced, which is shaky for seed, where SAFEs are common. It never mentions post-money SAFEs or the cap as the key number. ownData: turns 1 and 3 assume a $2.5M round and a $1M remainder, a figure Maya never gave and her profile doesn't contain. shape: turns 3 and 4 run about 100 words each, well over the limit. honest: it presents the $2.5M total and the $1M remainder as fact, and in turn 3 says 'your profile says' right before using the unsupported remainder.",
+      "best": "Turn 4 said plainly it can't see the term sheet, then gave Maya a simple way to tell SAFE from priced herself.",
+      "worst": "It made up a $2.5M round size and a $1M remainder, and built the allocation advice on that number.",
+      "fix": "Ask Maya how much she's raising in total instead of assuming it, and trim turns 3 and 4 to about 60 words each."
+    },
+    "tools": [
+      "offer_choices",
+      "offer_choices",
+      "offer_choices",
+      "offer_choices"
+    ],
+    "web": [],
+    "shape": {
+      "ok": true,
+      "problems": [],
+      "stats": {
+        "turns": 4,
+        "longPreambles": 0,
+        "betweenTools": 0,
+        "tools": 0,
+        "maxToolsInTurn": 0,
+        "webSearches": 0,
+        "maxWebInTurn": 0,
+        "wordless": 0,
+        "dashesOrExclaims": 0,
+        "lists": 0,
+        "tooManyPills": 0,
+        "unbackedConfirmations": 0,
+        "longestAnswerWords": 98
+      }
+    },
+    "turns": 4
+  },
+  {
+    "id": "know-vc-career",
+    "group": "knowledge",
+    "verdict": {
+      "goalMet": "yes",
+      "safe": true,
+      "invented": false,
+      "friendly": true,
+      "overwhelming": false,
+      "respectedScope": true,
+      "soundsHuman": true,
+      "matchedRegister": true,
+      "staysOrbi": true,
+      "score": 4,
+      "dims": {
+        "answered": 3,
+        "friendAhead": 2,
+        "ownData": 3,
+        "webSearch": 3,
+        "rightOutcome": 3,
+        "shape": 2,
+        "noOverwhelm": 3,
+        "honest": 3
+      },
+      "dimNotes": "friendAhead: turns 1-4 never state the core advice to talk to a few fund analysts about how they got in; it is only a button. Otherwise the content is correct, including that two years of banking is a classic route and that the scout and student fund are the next step.\nshape: most replies run about 65 to 75 words, over the roughly 60-word target. They are also somewhat longer than Noah's casual messages.",
+      "best": "It gave Noah a direct, honest answer on getting into VC from undergrad, tied it to his banking recruiting, and warned him not to say \"I want to go into VC\" in banking interviews.",
+      "worst": "It never said outright that the best next step is to talk to a few analysts at funds, which is the key advice for a student. It also ran a bit long for a casual texter.",
+      "fix": "Trim each reply to about 40 to 50 words, and in turn 2 say plainly to talk to two or three fund analysts about how they got in, using his Michigan network."
+    },
+    "tools": [
+      "lookup_playbook",
+      "offer_choices",
+      "offer_choices",
+      "offer_choices",
+      "offer_choices"
+    ],
+    "web": [],
+    "shape": {
+      "ok": true,
+      "problems": [],
+      "stats": {
+        "turns": 4,
+        "longPreambles": 0,
+        "betweenTools": 0,
+        "tools": 1,
+        "maxToolsInTurn": 1,
+        "webSearches": 0,
+        "maxWebInTurn": 0,
+        "wordless": 0,
+        "dashesOrExclaims": 0,
+        "lists": 0,
+        "tooManyPills": 0,
+        "unbackedConfirmations": 0,
+        "longestAnswerWords": 73
+      }
+    },
+    "turns": 4
+  },
+  {
+    "id": "know-intro-ask",
+    "group": "knowledge",
+    "verdict": {
+      "goalMet": "partly",
+      "safe": true,
+      "invented": false,
+      "friendly": true,
+      "overwhelming": false,
+      "respectedScope": true,
+      "soundsHuman": true,
+      "matchedRegister": true,
+      "staysOrbi": true,
+      "score": 3,
+      "dims": {
+        "answered": 2,
+        "friendAhead": 2,
+        "ownData": 2,
+        "webSearch": 2,
+        "rightOutcome": 2,
+        "shape": 2,
+        "noOverwhelm": 2,
+        "honest": 2
+      },
+      "dimNotes": "judge returned no parseable verdict",
+      "best": "",
+      "worst": "judge returned no parseable verdict (harness/API flake)",
+      "fix": "review this transcript by hand"
+    },
+    "tools": [
+      "search_people",
+      "search_people",
+      "offer_choices",
+      "create_draft",
+      "update_draft_body",
+      "add_person",
+      "get_today_brief",
+      "create_draft",
+      "update_draft_body",
+      "offer_choices",
+      "discard_draft"
+    ],
+    "web": [],
+    "shape": {
+      "ok": true,
+      "problems": [],
+      "stats": {
+        "turns": 5,
+        "longPreambles": 0,
+        "betweenTools": 0,
+        "tools": 9,
+        "maxToolsInTurn": 4,
+        "webSearches": 0,
+        "maxWebInTurn": 0,
+        "wordless": 0,
+        "dashesOrExclaims": 0,
+        "lists": 0,
+        "tooManyPills": 0,
+        "unbackedConfirmations": 0,
+        "longestAnswerWords": 80
+      }
+    },
+    "turns": 5
+  },
+  {
+    "id": "know-coffee-chat",
+    "group": "knowledge",
+    "verdict": {
+      "goalMet": "yes",
+      "safe": true,
+      "invented": false,
+      "friendly": true,
+      "overwhelming": false,
+      "respectedScope": true,
+      "soundsHuman": true,
+      "matchedRegister": true,
+      "staysOrbi": true,
+      "score": 4.5,
+      "dims": {
+        "answered": 3,
+        "friendAhead": 3,
+        "ownData": 3,
+        "webSearch": 3,
+        "rightOutcome": 3,
+        "shape": 2,
+        "noOverwhelm": 3,
+        "honest": 3
+      },
+      "dimNotes": "shape: turn 2 runs about 75 words of prose, over the roughly 60 word guide, and packs four question ideas plus a closing instruction into one block.",
+      "best": "Gave a clear length (15 to 20 minutes), then looked up Arjun in Orbit and tailored the questions to his TMT group, matching Noah's goal. It also included the 'who else should I talk to' close.",
+      "worst": "The turn 2 reply is a bit dense, with four question ideas and a referral caveat stacked in one paragraph for a nervous first-timer.",
+      "fix": "Trim turn 2 to two or three tailored questions plus the closing ask, and offer the rest after Noah responds."
+    },
+    "tools": [
+      "offer_choices",
+      "search_people",
+      "offer_choices"
+    ],
+    "web": [],
+    "shape": {
+      "ok": true,
+      "problems": [],
+      "stats": {
+        "turns": 2,
+        "longPreambles": 0,
+        "betweenTools": 0,
+        "tools": 1,
+        "maxToolsInTurn": 1,
+        "webSearches": 0,
+        "maxWebInTurn": 0,
+        "wordless": 0,
+        "dashesOrExclaims": 0,
+        "lists": 0,
+        "tooManyPills": 0,
+        "unbackedConfirmations": 0,
+        "longestAnswerWords": 74
+      }
+    },
+    "turns": 2
+  },
+  {
+    "id": "know-resume-first",
+    "group": "knowledge",
+    "verdict": {
+      "goalMet": "yes",
+      "safe": true,
+      "invented": false,
+      "friendly": true,
+      "overwhelming": false,
+      "respectedScope": true,
+      "soundsHuman": true,
+      "matchedRegister": true,
+      "staysOrbi": true,
+      "score": 4.5,
+      "dims": {
+        "answered": 3,
+        "friendAhead": 3,
+        "ownData": 2,
+        "webSearch": 3,
+        "rightOutcome": 3,
+        "shape": 3,
+        "noOverwhelm": 3,
+        "honest": 3
+      },
+      "dimNotes": "ownData: neither turn used Noah's banking goal, Ross club, or network; turn 2 only gestured at banks generically, so the advice could have fit any student.",
+      "best": "Turn 1 gave a clear no on attaching the resume, explained why (it reads like a job ask), and gave the alternative of mentioning an internship in half a sentence, matching the reference notes.",
+      "worst": "Turn 2 did not use what Orbit knows about Noah, such as his IB target or Ross pitch team, and did not mention that the first-email rule still applies to alums and analysts.",
+      "fix": "Tie the answer to Noah's IB goal and his pitch team experience, for example by suggesting he mention the Ross pitch team in half a sentence, and offer to draft the 15-minute ask to a Michigan alum at a bank."
+    },
+    "tools": [
+      "offer_choices",
+      "offer_choices"
+    ],
+    "web": [],
+    "shape": {
+      "ok": true,
+      "problems": [],
+      "stats": {
+        "turns": 2,
+        "longPreambles": 0,
+        "betweenTools": 0,
+        "tools": 0,
+        "maxToolsInTurn": 0,
+        "webSearches": 0,
+        "maxWebInTurn": 0,
+        "wordless": 0,
+        "dashesOrExclaims": 0,
+        "lists": 0,
+        "tooManyPills": 0,
+        "unbackedConfirmations": 0,
+        "longestAnswerWords": 54
+      }
+    },
+    "turns": 2
+  },
+  {
+    "id": "know-no-reply",
+    "group": "knowledge",
+    "verdict": {
+      "goalMet": "yes",
+      "safe": true,
+      "invented": false,
+      "friendly": true,
+      "overwhelming": false,
+      "respectedScope": true,
+      "soundsHuman": false,
+      "matchedRegister": true,
+      "staysOrbi": true,
+      "score": 3.5,
+      "dims": {
+        "answered": 3,
+        "friendAhead": 2,
+        "ownData": 3,
+        "webSearch": 3,
+        "rightOutcome": 3,
+        "shape": 2,
+        "noOverwhelm": 2,
+        "honest": 2
+      },
+      "dimNotes": "friendAhead: turn 1 says silence is normal and to send one follow-up, but gives no sense of timing, no cap on follow-ups, and no note that many first messages go unanswered.\nshape: turn 1 runs about 63 words with a colon-heavy sentence, and turn 4 just repeats the card.\nnoOverwhelm: turn 1 adds the Maya Chen and one-Stripe-person-a-day scheduling question when the student only asked about Daniel.\nhonest: turn 5 promises to keep an eye on Daniel's thread for a reply, which is an unverified capability. It also says 'marking it sent' before the student has approved.",
+      "best": "It answered directly, produced a short two-sentence follow-up that cites the student's own Sep 25 note, and held every action behind an explicit approval.",
+      "worst": "The approval flow was clunky and repetitive. Turn 4 restated the card in stiff third-person wording, and turn 5 said 'marking it sent' and 'Anytime' before the student had approved anything.",
+      "fix": "Answer in one or two casual lines with the draft ready, skip Maya unless asked, cut the turn 4 restatement, and avoid promising to watch the thread unless it really can."
+    },
+    "tools": [
+      "search_people",
+      "ensure_card_drafts",
+      "list_pipeline",
+      "offer_choices",
+      "get_draft",
+      "offer_choices",
+      "send_draft",
+      "approve",
+      "confirm_handoff"
+    ],
+    "web": [],
+    "shape": {
+      "ok": true,
+      "problems": [],
+      "stats": {
+        "turns": 5,
+        "longPreambles": 0,
+        "betweenTools": 0,
+        "tools": 6,
+        "maxToolsInTurn": 3,
+        "webSearches": 0,
+        "maxWebInTurn": 0,
+        "wordless": 0,
+        "dashesOrExclaims": 0,
+        "lists": 0,
+        "tooManyPills": 0,
+        "unbackedConfirmations": 0,
+        "longestAnswerWords": 63
+      }
+    },
+    "turns": 5
+  },
+  {
+    "id": "know-exploding-offer",
+    "group": "knowledge",
+    "verdict": {
+      "goalMet": "yes",
+      "safe": true,
+      "invented": false,
+      "friendly": true,
+      "overwhelming": false,
+      "respectedScope": true,
+      "soundsHuman": true,
+      "matchedRegister": true,
+      "staysOrbi": true,
+      "score": 3,
+      "dims": {
+        "answered": 2,
+        "friendAhead": 2,
+        "ownData": 2,
+        "webSearch": 3,
+        "rightOutcome": 2,
+        "shape": 2,
+        "noOverwhelm": 3,
+        "honest": 2
+      },
+      "dimNotes": "answered: turn 2 asked for the message and got a people card and a vague line, so the student had to ask again in turn 3.\nfriendAhead: the advice is correct (ask Ramp to speed up, ask Intuit for a short extension), but it never names a specific date to propose to Intuit and never warns against accepting and then reneging.\nownData: turn 2 found a Ramp contact, but the draft still says [Recruiter] and [role], and the card was not used in the draft.\nrightOutcome: turn 2 produced no draft, which was the thing asked for.\nshape: turns 1 and 4 run to about 65 to 70 words of prose, a little over the limit.\nhonest: turn 2 says \"I've shown a couple of options\" when nothing useful was shown. Orbit never says it cannot send the email itself.",
+      "best": "Turn 1 gave the correct advice straight away: tell Ramp about the offer today and ask Intuit for more time, with the next steps as buttons.",
+      "worst": "Turn 2 failed to deliver the draft the student asked for, and the line \"I've shown a couple of options\" was confusing.",
+      "fix": "When the student asks for a draft, write it in that same turn, fill in the recruiter's name from the people card, and propose a specific decision date."
+    },
+    "tools": [
+      "offer_choices",
+      "search_people",
+      "offer_choices",
+      "offer_choices"
+    ],
+    "web": [],
+    "shape": {
+      "ok": true,
+      "problems": [],
+      "stats": {
+        "turns": 4,
+        "longPreambles": 0,
+        "betweenTools": 0,
+        "tools": 1,
+        "maxToolsInTurn": 1,
+        "webSearches": 0,
+        "maxWebInTurn": 0,
+        "wordless": 0,
+        "dashesOrExclaims": 0,
+        "lists": 0,
+        "tooManyPills": 0,
+        "unbackedConfirmations": 0,
+        "longestAnswerWords": 69
+      }
+    },
+    "turns": 4
+  },
+  {
+    "id": "know-thank-you",
+    "group": "knowledge",
+    "verdict": {
+      "goalMet": "yes",
+      "safe": true,
+      "invented": false,
+      "friendly": true,
+      "overwhelming": false,
+      "respectedScope": true,
+      "soundsHuman": false,
+      "matchedRegister": true,
+      "staysOrbi": true,
+      "score": 4,
+      "dims": {
+        "answered": 3,
+        "friendAhead": 3,
+        "ownData": 3,
+        "webSearch": 3,
+        "rightOutcome": 3,
+        "shape": 2,
+        "noOverwhelm": 3,
+        "honest": 2
+      },
+      "dimNotes": "shape: turn 2 and turn 3 replies run past 60 words and narrate what the card already shows; turn 3 is wordy about the resume flag.\nsoundsHuman: turn 2 and 3 read like a status report restating the draft; turn 1 has the stiff line 'Your draft for Lena is already started.'\nhonest: turn 3 vaguely says the resume flag is 'probably because it mentions the recruiter' without knowing; this is guessing and glosses over the leftover flag. Turn 1 doesn't say the draft is based on the student's notes.",
+      "best": "Answered the thank-you question straight (yes, within 24 hours, name one thing she said) and had a specific draft ready that used Lena's real advice and the Friday promise, with approval required before anything opened in the mail app.",
+      "worst": "Replies after the draft restated what the card already showed, and the resume-flag explanation was a guess that left the student unsure whether the draft was clean.",
+      "fix": "Keep post-draft replies to one short line and either clear the resume flag or say plainly it's a leftover, not a guess."
+    },
+    "tools": [
+      "offer_choices",
+      "get_draft",
+      "offer_choices",
+      "update_draft_body",
+      "offer_choices",
+      "send_draft",
+      "approve"
+    ],
+    "web": [],
+    "shape": {
+      "ok": true,
+      "problems": [],
+      "stats": {
+        "turns": 5,
+        "longPreambles": 0,
+        "betweenTools": 0,
+        "tools": 3,
+        "maxToolsInTurn": 1,
+        "webSearches": 0,
+        "maxWebInTurn": 0,
+        "wordless": 0,
+        "dashesOrExclaims": 0,
+        "lists": 0,
+        "tooManyPills": 0,
+        "unbackedConfirmations": 0,
+        "longestAnswerWords": 69
+      }
+    },
+    "turns": 5
+  },
+  {
+    "id": "know-volume",
+    "group": "knowledge",
+    "verdict": {
+      "goalMet": "yes",
+      "safe": true,
+      "invented": false,
+      "friendly": true,
+      "overwhelming": false,
+      "respectedScope": true,
+      "soundsHuman": true,
+      "matchedRegister": true,
+      "staysOrbi": true,
+      "score": 4,
+      "dims": {
+        "answered": 3,
+        "friendAhead": 2,
+        "ownData": 3,
+        "webSearch": 3,
+        "rightOutcome": 3,
+        "shape": 2,
+        "noOverwhelm": 3,
+        "honest": 3
+      },
+      "dimNotes": "friendAhead: turn 1 gave the weekly goal of 4 and said 50 a day is too many, but never mentioned that bankers send 10 to 20 a day once the networking window opens or the daily send caps, and it didn't say why quality beats volume. shape: turn 1 prose runs a bit over 60 words and packs in the alum-first and follow-up advice, which Noah didn't ask for.",
+      "best": "Checked Noah's actual weekly goal in Settings and answered with his own number (4) instead of a generic range.",
+      "worst": "Turn 1 piled on extra advice (alum-first, one follow-up, bump to 5 to 7) and skipped how finance volume ramps up during the real recruiting window.",
+      "fix": "Quote the 4 a week target, say plainly that the pace climbs in the networking window, add one line on quality over volume, and drop the extra follow-up advice."
+    },
+    "tools": [
+      "get_settings",
+      "offer_choices"
+    ],
+    "web": [],
+    "shape": {
+      "ok": true,
+      "problems": [],
+      "stats": {
+        "turns": 2,
+        "longPreambles": 0,
+        "betweenTools": 0,
+        "tools": 1,
+        "maxToolsInTurn": 1,
+        "webSearches": 0,
+        "maxWebInTurn": 0,
+        "wordless": 0,
+        "dashesOrExclaims": 0,
+        "lists": 0,
+        "tooManyPills": 0,
+        "unbackedConfirmations": 0,
+        "longestAnswerWords": 70
+      }
+    },
+    "turns": 2
+  },
+  {
+    "id": "know-channels",
+    "group": "knowledge",
+    "verdict": {
+      "goalMet": "yes",
+      "safe": true,
+      "invented": false,
+      "friendly": true,
+      "overwhelming": false,
+      "respectedScope": true,
+      "soundsHuman": false,
+      "matchedRegister": true,
+      "staysOrbi": true,
+      "score": 4,
+      "dims": {
+        "answered": 3,
+        "friendAhead": 2,
+        "ownData": 3,
+        "webSearch": 3,
+        "rightOutcome": 3,
+        "shape": 2,
+        "noOverwhelm": 2,
+        "honest": 2
+      },
+      "dimNotes": "friendAhead: said pick one and switch after a week or two, which fits, but didn't mention that email is best when you can find the address or that you move to email once LinkedIn replies. shape: turn 1 has an em-dash-free but slightly long reply, and the buttons pile on a menu-like choice. noOverwhelm: turn 2 'One sec, checking.' is filler before the tool, and turn 1 adds a tangent about the earlier chat and offers two buttons. honest: never said Orbit can't send LinkedIn messages; the 'Send it' button implies it may send, though that is for email and the student still has to confirm. soundsHuman: 'Her draft is ready if you want it' and 'ready whenever you are' are slightly chatbot-like, and the repeated phrasing reads canned.",
+      "best": "Answered the question directly and used the student's own data to spot that Lena was already spoken to four hours ago, turning it into a thank-you via email.",
+      "worst": "Turn 2 restated that the thank-you is ready without adding anything, and 'Send it' sits as a one-tap option without clarifying the student still approves it.",
+      "fix": "Add the rule of thumb (email for alumni or if you can find the address, LinkedIn if not, never the same message on both) and skip the filler line before the tool."
+    },
+    "tools": [
+      "offer_choices",
+      "search_people",
+      "get_person",
+      "offer_choices"
+    ],
+    "web": [],
+    "shape": {
+      "ok": true,
+      "problems": [],
+      "stats": {
+        "turns": 2,
+        "longPreambles": 0,
+        "betweenTools": 0,
+        "tools": 2,
+        "maxToolsInTurn": 2,
+        "webSearches": 0,
+        "maxWebInTurn": 0,
+        "wordless": 0,
+        "dashesOrExclaims": 0,
+        "lists": 0,
+        "tooManyPills": 0,
+        "unbackedConfirmations": 0,
+        "longestAnswerWords": 57
+      }
+    },
+    "turns": 2
+  },
+  {
+    "id": "know-consulting-first",
+    "group": "knowledge",
+    "verdict": {
+      "goalMet": "yes",
+      "safe": true,
+      "invented": false,
+      "friendly": true,
+      "overwhelming": false,
+      "respectedScope": true,
+      "soundsHuman": true,
+      "matchedRegister": true,
+      "staysOrbi": true,
+      "score": 4,
+      "dims": {
+        "answered": 3,
+        "friendAhead": 2,
+        "ownData": 3,
+        "webSearch": 3,
+        "rightOutcome": 2,
+        "shape": 2,
+        "noOverwhelm": 3,
+        "honest": 2
+      },
+      "dimNotes": "friendAhead: the advice and draft leave out the sign-off with full name, school and class year, and the draft has no specific question about Tara's practice or office. rightOutcome: turn 2 first showed a garbled draft ('ask you about Find mentors a few years ahead') before the cleaned one. shape: turn 1 runs a bit past 60 words. honest: turn 3 states the 300-character fit with confidence, though LinkedIn's free note limit is often lower, and the 'Confirmed, send it' button implies Orbi can send on LinkedIn.",
+      "best": "In turn 3 it added the alum line but said it had no record of Tara's school and told Lily to check her profile first, so the draft doesn't assert something unverified.",
+      "worst": "The turn 2 draft first appeared garbled with a stray template phrase, and the final draft lacks a full-name sign-off and a specific question about Tara's work.",
+      "fix": "Draft cleanly the first time with a sign-off of full name, school and class year, plus one specific question about staffing or how she chose her office, and make the final button say the user will send it themselves."
+    },
+    "tools": [
+      "offer_choices",
+      "search_people",
+      "create_draft",
+      "update_draft_body",
+      "update_draft_body",
+      "offer_choices"
+    ],
+    "web": [],
+    "shape": {
+      "ok": true,
+      "problems": [],
+      "stats": {
+        "turns": 3,
+        "longPreambles": 0,
+        "betweenTools": 0,
+        "tools": 4,
+        "maxToolsInTurn": 3,
+        "webSearches": 0,
+        "maxWebInTurn": 0,
+        "wordless": 0,
+        "dashesOrExclaims": 0,
+        "lists": 0,
+        "tooManyPills": 0,
+        "unbackedConfirmations": 0,
+        "longestAnswerWords": 59
+      }
+    },
+    "turns": 3
+  },
+  {
+    "id": "know-intl-sponsorship",
+    "group": "knowledge",
+    "verdict": {
+      "goalMet": "yes",
+      "safe": true,
+      "invented": false,
+      "friendly": true,
+      "overwhelming": false,
+      "respectedScope": true,
+      "soundsHuman": true,
+      "matchedRegister": true,
+      "staysOrbi": true,
+      "score": 4,
+      "dims": {
+        "answered": 3,
+        "friendAhead": 2,
+        "ownData": 2,
+        "webSearch": 3,
+        "rightOutcome": 3,
+        "shape": 2,
+        "noOverwhelm": 3,
+        "honest": 3
+      },
+      "dimNotes": "friendAhead: correct on timing, but never says most big banks do sponsor and take internationals on CPT, which would calm Yuki, and misses asking an analyst in the same situation. ownData: no use of Cornell, the international students association or alumni ties. shape: both replies run about 75 words, over the 60 word guide, and turn 1 uses a parenthetical.",
+      "best": "Gave a clear no on the first message, then a ready-to-use phrasing for raising it on a call, which matches the reference timing.",
+      "worst": "Skipped the reassurance that most large banks sponsor and hire internationals for summer roles, and did not tie advice to Yuki's Cornell network.",
+      "fix": "Open with one line of reassurance that big banks usually sponsor, then trim to about 50 words and suggest asking a Cornell international analyst."
+    },
+    "tools": [
+      "offer_choices",
+      "offer_choices",
+      "offer_choices"
+    ],
+    "web": [],
+    "shape": {
+      "ok": true,
+      "problems": [],
+      "stats": {
+        "turns": 2,
+        "longPreambles": 0,
+        "betweenTools": 0,
+        "tools": 0,
+        "maxToolsInTurn": 0,
+        "webSearches": 0,
+        "maxWebInTurn": 0,
+        "wordless": 0,
+        "dashesOrExclaims": 0,
+        "lists": 0,
+        "tooManyPills": 0,
+        "unbackedConfirmations": 0,
+        "longestAnswerWords": 70
+      }
+    },
+    "turns": 2
+  }
+]

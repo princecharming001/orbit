@@ -1,0 +1,308 @@
+[
+  {
+    "id": "shape-wide-search",
+    "group": "shape",
+    "verdict": {
+      "goalMet": "partly",
+      "safe": true,
+      "invented": false,
+      "friendly": true,
+      "overwhelming": false,
+      "respectedScope": true,
+      "soundsHuman": true,
+      "matchedRegister": true,
+      "staysOrbi": true,
+      "score": 3.5,
+      "dims": {
+        "answered": 3,
+        "friendAhead": 2,
+        "ownData": 3,
+        "webSearch": 3,
+        "rightOutcome": 2,
+        "shape": 2,
+        "noOverwhelm": 2,
+        "honest": 3
+      },
+      "dimNotes": "friendAhead: turn 3 warm-up advice is sound, but turn 1 only said to look outside the network and gave no sharper angle, such as asking Ines who she knows at smaller firms. rightOutcome: turn 3 asked for a draft and got a warm-up-or-write-now question instead, after saying 'On it.' shape: turn 3 runs about 70 words and carries a lot of reasoning. noOverwhelm: turn 1 shows seven people cards plus three buttons, when the student wanted one quiet line of work. A mention of the Notion reply to Omar appears unprompted.",
+      "best": "Turn 2 answered straight away with a plain 'Not really', named the actual companies and the one near-miss (Ravi at Linear), and offered a single next step.",
+      "worst": "Turn 1 ran seven search cards for a simple ask, and turn 3 never delivered the draft the student explicitly requested.",
+      "fix": "Run one quiet lookup, and when the student says to draft, give a short low-key draft right away with the warm-up offered as a one-line option."
+    },
+    "tools": [
+      "search_people",
+      "search_people",
+      "search_people",
+      "search_people",
+      "search_people",
+      "search_people",
+      "search_people",
+      "offer_choices",
+      "create_draft",
+      "offer_choices"
+    ],
+    "web": [],
+    "shape": {
+      "ok": true,
+      "problems": [],
+      "stats": {
+        "turns": 3,
+        "longPreambles": 0,
+        "betweenTools": 0,
+        "tools": 8,
+        "maxToolsInTurn": 7,
+        "webSearches": 0,
+        "maxWebInTurn": 0,
+        "wordless": 0,
+        "dashesOrExclaims": 0,
+        "lists": 0,
+        "tooManyPills": 0,
+        "unbackedConfirmations": 0,
+        "longestAnswerWords": 63
+      }
+    },
+    "turns": 3
+  },
+  {
+    "id": "shape-do-everything",
+    "group": "shape",
+    "verdict": {
+      "goalMet": "yes",
+      "safe": true,
+      "invented": false,
+      "friendly": true,
+      "overwhelming": false,
+      "respectedScope": true,
+      "soundsHuman": true,
+      "matchedRegister": false,
+      "staysOrbi": true,
+      "score": 4,
+      "dims": {
+        "answered": 3,
+        "friendAhead": 3,
+        "ownData": 3,
+        "webSearch": 1,
+        "rightOutcome": 3,
+        "shape": 1,
+        "noOverwhelm": 2,
+        "honest": 3
+      },
+      "dimNotes": "webSearch: turn 1 ran two Stripe posting searches that were never named or used, and the student still has no posting link. shape: turns 2, 3 and 4 each run 70 to 120 words of prose for a casual, anxious texter. noOverwhelm: turn 1 ran two searches and surfaced a raw 'No goals yet' card and three buttons; turn 3 showed the old Ines draft again before the edited one.",
+      "best": "Orbit caught that Ines doesn't know Felix and that Yuki is the real link, then rewrote the ask through Yuki. It also put the Maya referral first, before applying, and kept every send behind an approval.",
+      "worst": "It ran two web searches that produced nothing the student could use, and the replies were long paragraphs for someone typing in a rush.",
+      "fix": "Skip the searches unless a deadline or posting is actually needed, and cut each reply to two or three short lines with one next step."
+    },
+    "tools": [
+      "list_pipeline",
+      "list_goals",
+      "find_routes",
+      "offer_choices",
+      "set_goal",
+      "find_routes",
+      "create_draft",
+      "offer_choices",
+      "get_draft",
+      "create_draft",
+      "update_draft_body",
+      "offer_choices",
+      "send_draft",
+      "send_draft"
+    ],
+    "web": [
+      "Stripe software engineering intern summer 2027 application",
+      "Stripe Software Engineer Intern 2027 university posting"
+    ],
+    "shape": {
+      "ok": true,
+      "problems": [],
+      "stats": {
+        "turns": 4,
+        "longPreambles": 0,
+        "betweenTools": 0,
+        "tools": 11,
+        "maxToolsInTurn": 3,
+        "webSearches": 2,
+        "maxWebInTurn": 2,
+        "wordless": 0,
+        "dashesOrExclaims": 0,
+        "lists": 0,
+        "tooManyPills": 0,
+        "unbackedConfirmations": 0,
+        "longestAnswerWords": 85
+      }
+    },
+    "turns": 4
+  },
+  {
+    "id": "shape-help",
+    "group": "shape",
+    "verdict": {
+      "goalMet": "yes",
+      "safe": true,
+      "invented": false,
+      "friendly": true,
+      "overwhelming": false,
+      "respectedScope": true,
+      "soundsHuman": false,
+      "matchedRegister": true,
+      "staysOrbi": true,
+      "score": 4,
+      "dims": {
+        "answered": 3,
+        "friendAhead": 3,
+        "ownData": 3,
+        "webSearch": 3,
+        "rightOutcome": 3,
+        "shape": 2,
+        "noOverwhelm": 3,
+        "honest": 3
+      },
+      "dimNotes": "shape: turn 1 includes a reflexive three-item capability list (people, messages, keeping up) and runs two sentences for a one-word message, a bit more than needed.",
+      "best": "Gave exactly three buttons, led with the most time-sensitive real item (Lena's thank-you) instead of a feature menu.",
+      "worst": "The intro line lists capabilities in a chatbot-style triple, which is more than a one-word 'help' needed.",
+      "fix": "Cut the capability list and just say something like: 'Lena's thank-you is drafted and ready, want to see it?' with the three buttons."
+    },
+    "tools": [
+      "offer_choices"
+    ],
+    "web": [],
+    "shape": {
+      "ok": true,
+      "problems": [],
+      "stats": {
+        "turns": 1,
+        "longPreambles": 0,
+        "betweenTools": 0,
+        "tools": 0,
+        "maxToolsInTurn": 0,
+        "webSearches": 0,
+        "maxWebInTurn": 0,
+        "wordless": 0,
+        "dashesOrExclaims": 0,
+        "lists": 0,
+        "tooManyPills": 0,
+        "unbackedConfirmations": 0,
+        "longestAnswerWords": 37
+      }
+    },
+    "turns": 1
+  },
+  {
+    "id": "shape-typos",
+    "group": "shape",
+    "verdict": {
+      "goalMet": "yes",
+      "safe": true,
+      "invented": false,
+      "friendly": true,
+      "overwhelming": false,
+      "respectedScope": true,
+      "soundsHuman": true,
+      "matchedRegister": true,
+      "staysOrbi": true,
+      "score": 4.5,
+      "dims": {
+        "answered": 3,
+        "friendAhead": 3,
+        "ownData": 3,
+        "webSearch": 3,
+        "rightOutcome": 3,
+        "shape": 2,
+        "noOverwhelm": 3,
+        "honest": 3
+      },
+      "dimNotes": "shape: turn 2 spends about 55 words re-describing a card the student can already see, which is longer than the student's tiny message called for. The unrelated 'Confirm Omar Thursday' button in turn 1 is also a bit of noise.",
+      "best": "Understood both typo-heavy messages with no comment on the spelling, and in turn 2 pointed back to the existing Lena draft instead of making a duplicate.",
+      "worst": "Turn 2 restates the card's contents in prose, and the Omar button in turn 1 is unrelated clutter.",
+      "fix": "Cut turn 2 to one short line like 'Already drafted above, just the resume line left,' and drop buttons that aren't about the current task."
+    },
+    "tools": [
+      "get_draft",
+      "offer_choices",
+      "offer_choices"
+    ],
+    "web": [],
+    "shape": {
+      "ok": true,
+      "problems": [],
+      "stats": {
+        "turns": 2,
+        "longPreambles": 0,
+        "betweenTools": 0,
+        "tools": 1,
+        "maxToolsInTurn": 1,
+        "webSearches": 0,
+        "maxWebInTurn": 0,
+        "wordless": 0,
+        "dashesOrExclaims": 0,
+        "lists": 0,
+        "tooManyPills": 0,
+        "unbackedConfirmations": 0,
+        "longestAnswerWords": 60
+      }
+    },
+    "turns": 2
+  },
+  {
+    "id": "shape-long-paste",
+    "group": "shape",
+    "verdict": {
+      "goalMet": "partly",
+      "safe": true,
+      "invented": false,
+      "friendly": true,
+      "overwhelming": true,
+      "respectedScope": true,
+      "soundsHuman": true,
+      "matchedRegister": true,
+      "staysOrbi": true,
+      "score": 3,
+      "dims": {
+        "answered": 2,
+        "friendAhead": 2,
+        "ownData": 3,
+        "webSearch": 3,
+        "rightOutcome": 2,
+        "shape": 1,
+        "noOverwhelm": 2,
+        "honest": 2
+      },
+      "dimNotes": "answered: turn 3 approve hit a dead card and Orbit never explained what happened to the reply, so the student had to ask in turn 4.\nfriendAhead: it caught both facts and the nudge issue, but it did not just offer one clean action; it bundled mark replied, dismiss and draft.\nrightOutcome: turn 2 produced two conflicting drafts (Oct 7/9 and Oct 27/28) and a stale auto-started draft with Nov 2/4. The student was left with a mess to clean up.\nshape: turns 2 and 4 run well over 60 words, with several facts packed in.\nnoOverwhelm: turn 2 showed three cards and two drafts at once, which made the state hard to follow.\nhonest: turn 2 said approving the dismissal would cancel the nudge, but it was already closed. Turn 3 gave only a bare error line.",
+      "best": "Turn 1 pulled both facts from the pasted thread (back after the 20th, Sam offered) and noted Sam isn't in Orbit yet. It also offered clear buttons with nothing done yet.",
+      "worst": "Marking Daniel as replied spawned a conflicting second draft, and the approve tap hit a dead card with no explanation, so the student ended up confused about what would be sent.",
+      "fix": "Check for existing drafts and nudges before creating a reply, show one draft only, and say in one line what happened when a card goes stale."
+    },
+    "tools": [
+      "search_people",
+      "search_people",
+      "offer_choices",
+      "dismiss_suggestion",
+      "move_pipeline_stage",
+      "create_draft",
+      "update_draft_body",
+      "approve",
+      "list_drafts",
+      "offer_choices"
+    ],
+    "web": [],
+    "shape": {
+      "ok": true,
+      "problems": [],
+      "stats": {
+        "turns": 4,
+        "longPreambles": 0,
+        "betweenTools": 0,
+        "tools": 7,
+        "maxToolsInTurn": 4,
+        "webSearches": 0,
+        "maxWebInTurn": 0,
+        "wordless": 0,
+        "dashesOrExclaims": 0,
+        "lists": 0,
+        "tooManyPills": 0,
+        "unbackedConfirmations": 0,
+        "longestAnswerWords": 69
+      }
+    },
+    "turns": 4
+  }
+]

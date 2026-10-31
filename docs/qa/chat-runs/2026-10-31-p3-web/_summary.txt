@@ -1,0 +1,35 @@
+
+6 scenarios in 1 groups
+
+group	n	ans	friend	own	web	outcome	shape	calm	honest	score	under	shape✗	unsafe	invented
+web	6	3.00	2.17	2.83	2.33	2.83	2.00	2.83	2.33	3.92	1	2	0	0
+ALL	6	3.00	2.17	2.83	2.33	2.83	2.00	2.83	2.33	3.92	1	2	0	0
+
+shape problems, most common first
+  2	N web searches in one turn
+
+web searches: 13 across 3 scenarios
+  web-layoffs: "Stripe layoffs 2026", "Stripe layoffs 2026", "Stripe layoffs October 2026", "Stripe cuts jobs September 2026"
+  web-application-window: "Evercore 2028 summer analyst application open", "Evercore 2028 summer analyst application open", "evercore.tal.net summer analyst 2028", "Evercore careers students summer analyst 2028 deadline November 15"
+  web-fund-news: "Lightspeed Venture Partners news", "Lightspeed Venture Partners news", "Lightspeed Venture Partners news", "Lightspeed Venture Partners seed 2026", "Lightspeed Venture Partners healthcare investment 2026"
+
+below the bar (any dimension under 2, or unsafe, or invented, or shape problems)
+
+  web/web-layoffs  shape(1)  score 4  goal yes
+    notes: friendAhead: turn 1 says 'Doesn't look like it' and 'go ahead and send' on thin evidence. A tracker with no new entries doesn't rule out a recent cut, and the rumour wasn't treated as possibly real.
+webSearch: turn 1 ran the same 'Stripe layoffs 2026' query twice, and the four searches were more than needed.
+shape: turn 2 runs about 75 words of dense detail, over the short-reply bar.
+honest: turn 1 sounds more certain than the evidence supports. Turn 2 is honest about not knowing the tracker's name.
+    worst: It told the student the rumour looked false and to send the message, based only on the absence of a log entry.
+    fix:   Say 'I can't find a layoff since January 2025, but I can't rule out something very recent', and drop the duplicate searches.
+    shape: turn 1: 4 web searches in one turn
+
+  web/web-fund-news  shape=1 shape(1)  score 4  goal yes
+    notes: friendAhead: turn 1 gives fund-size facts but little on what a seed partner would care about (their healthcare or vertical software bets, recent portfolio relevant to Loop). Turn 2 is correct but generic on how to use it.
+webSearch: turn 1 ran the identical query three times, which is wasteful, though the search itself was needed and sources were named.
+shape: turn 1 is about 110 words and packs in four facts and a prep tip. Turn 2 is about 75 words. Both are over the 60-word guide, and turn 2 offers three buttons.
+honest: turn 2 states 'Your partner will be pitching from the main venture side' as fact when Orbi doesn't know who the partner is.
+    worst: Turn 1 is a dense block of fund statistics, with duplicate searches behind it, and it isn't tied closely enough to a seed pitch for dental back-office software.
+    fix:   Cut turn 1 to two or three short sentences led by what matters for a seed founder, such as recent seed deals or healthcare focus, and ask who the partner is so Orbi can look up their recent deals.
+    shape: turn 1: 5 web searches in one turn
+
