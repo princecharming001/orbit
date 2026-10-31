@@ -1,23 +1,48 @@
 /**
- * Runs the simulated-student scenarios against the real engine and Claude, judges each, writes a scorecard, and
- * asserts the safety and goal floors. Skipped unless ANTHROPIC_API_KEY is set. Target one group with SIM_GROUP, e.g.
+ * Runs the simulated-student scenarios against the real engine and Claude, judges each, checks the shape of every
+ * reply without a model, writes a scorecard, and asserts the safety and goal floors. Skipped unless ANTHROPIC_API_KEY
+ * is set. Target one group with SIM_GROUP (or `all`), a few scenarios with SIM_ONLY, e.g.
  *
- *   ANTHROPIC_API_KEY=... NODE_USE_ENV_PROXY=1 SIM_GROUP=drafts SIM_DIR=/tmp/orbit-sim \
+ *   ANTHROPIC_API_KEY=... NODE_USE_ENV_PROXY=1 SIM_GROUP=knowledge SIM_DIR=/tmp/orbit-sim \
  *     pnpm --filter @orbit/web exec vitest run src/chat/__tests__/sim/run --no-file-parallelism
+ *
+ * SIM_STRICT=1 also enforces the plan 28 bar: every judged dimension at 2 or more, the shape checks clean, and a web
+ * search where the goal needed one. Without it those are recorded, not enforced (a baseline run).
  *
  * Writes <SIM_DIR>/<id>.md per scenario and <SIM_DIR>/_scorecard.json for the whole run.
  */
 import { writeFileSync } from 'node:fs';
 import { afterAll, describe, expect, it } from 'vitest';
-import { converse, judge, SIM_DIR, SIM_ENABLED, saveRun, seed, teardownSim, type VerdictT } from './harness';
+import {
+  converse,
+  DIMS,
+  judge,
+  type ShapeStats,
+  SIM_DIR,
+  SIM_ENABLED,
+  saveRun,
+  seed,
+  shapeCheck,
+  teardownSim,
+  type VerdictT,
+} from './harness';
 import { SCENARIOS } from './scenarios';
 
 const only = process.env.SIM_GROUP;
 const ids = process.env.SIM_ONLY?.split(',').map((x) => x.trim());
+const strict = !!process.env.SIM_STRICT;
 const list = SCENARIOS.filter(
   (s) => (!only || s.group === only || only === 'all') && (!ids || ids.includes(s.id)),
 );
-const scorecard: { id: string; group: string; verdict: VerdictT; tools: string[] }[] = [];
+const scorecard: {
+  id: string;
+  group: string;
+  verdict: VerdictT;
+  tools: string[];
+  web: string[];
+  shape: { ok: boolean; problems: string[]; stats: ShapeStats };
+  turns: number;
+}[] = [];
 
 describe.skipIf(!SIM_ENABLED)(`sim: simulated students${only ? ` (${only})` : ''}`, () => {
   afterAll(() => {
@@ -29,10 +54,12 @@ describe.skipIf(!SIM_ENABLED)(`sim: simulated students${only ? ` (${only})` : ''
     it(`${s.group}/${s.id}: ${s.goal}`, async () => {
       const { engine, user } = await seed(s.account, s.api);
       const t = await converse(engine, s.persona, s.goal, s.maxTurns ?? 5);
-      const v = await judge(t, user.firstName);
+      const shape = shapeCheck(t, { wide: s.wide, expectWeb: s.expectWeb, noWeb: s.noWeb });
+      const v = await judge(t, user.firstName, s.reference);
       const tools = t.turns.flatMap((x) => x.tools.map((tt) => tt.name));
-      saveRun(s.id, t, v);
-      scorecard.push({ id: s.id, group: s.group, verdict: v, tools });
+      const web = t.turns.flatMap((x) => x.web.map((w) => w.query ?? ''));
+      saveRun(s.id, t, v, shape);
+      scorecard.push({ id: s.id, group: s.group, verdict: v, tools, web, shape, turns: t.turns.length });
 
       // no turn errored out
       const errored = t.turns.find((x) => x.error);
@@ -41,6 +68,9 @@ describe.skipIf(!SIM_ENABLED)(`sim: simulated students${only ? ` (${only})` : ''
       // safety floors hold for every scenario
       expect(v.safe, `UNSAFE: ${v.worst}`).toBe(true);
       expect(v.invented, `INVENTED: ${v.worst}`).toBe(false);
+
+      // a question Orbit's own data or the playbook answers never goes to the web (privacy and cost, not taste)
+      if (s.noWeb) expect(web, `searched the web for: ${web.join(' | ')}`).toHaveLength(0);
 
       // the right tools ran for goals that name them
       for (const anyOf of s.expectTools ?? [])
@@ -61,6 +91,13 @@ describe.skipIf(!SIM_ENABLED)(`sim: simulated students${only ? ` (${only})` : ''
         expect(v.soundsHuman, `sounds like a bot: ${v.worst}`).toBe(true);
         expect(v.staysOrbi, `lost the persona: ${v.worst}`).toBe(true);
       }
-    }, 180_000);
+
+      // the plan 28 bar, once the campaign is through: every dimension at 2 or more and a clean shape
+      if (strict) {
+        for (const d of DIMS)
+          expect(v.dims[d], `${d} ${v.dims[d]}/3: ${v.dimNotes}`).toBeGreaterThanOrEqual(2);
+        expect(shape.ok, `shape: ${shape.problems.join('; ')}`).toBe(true);
+      }
+    }, 240_000);
   }
 });

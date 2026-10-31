@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "dev:live": "VITE_ORBIT_CLAUDE_PROXY=https://nxibeiykcgxpbmkeadth.supabase.co/functions/v1/orbit-claude VITE_ORBIT_LINKEDIN_PROXY=https://nxibeiykcgxpbmkeadth.supabase.co/functions/v1/orbit-connectors VITE_ORBIT_VILLAGE_PROXY=https://nxibeiykcgxpbmkeadth.supabase.co/functions/v1/orbit-connectors vite",
     "build": "tsc --noEmit -p tsconfig.json && vite build && cp dist/index.html dist/404.html",
     "preview": "vite preview --port 4173 --strictPort",
     "typecheck": "tsc --noEmit -p tsconfig.json",

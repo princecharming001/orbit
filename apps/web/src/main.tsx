@@ -18,6 +18,23 @@ window.addEventListener('vite:preloadError', (e) => {
 // End-to-end tests drive live changes (someone new, a stage change) through the same database the app reads.
 if (navigator.webdriver) (window as unknown as { __orbitDb: typeof db }).__orbitDb = db;
 
+// The chat quality bench (plan 28, e2e/chat-live.spec.ts) runs the real model in the real UI: a browser under
+// automation that set `window.__ORBIT_ANTHROPIC_KEY__` before the app loaded gets that key saved as the student's own,
+// the way Settings would save it. Only under automation; a normal browser never has navigator.webdriver, and the key
+// is read once and never written anywhere else.
+async function liveKey(): Promise<void> {
+  if (!navigator.webdriver) return;
+  const g = window as unknown as { __ORBIT_ANTHROPIC_KEY__?: unknown };
+  if (typeof g.__ORBIT_ANTHROPIC_KEY__ !== 'string' || !g.__ORBIT_ANTHROPIC_KEY__) return;
+  const { writePrefs } = await import('./integrations/prefs');
+  writePrefs({
+    anthropicApiKey: g.__ORBIT_ANTHROPIC_KEY__,
+    llmDailyRequestCap: 500,
+    llmDailyTokenCap: 50_000_000,
+  });
+  delete g.__ORBIT_ANTHROPIC_KEY__;
+}
+
 // The chat's scripted engine for the e2e tests: only under automation, only when the first URL asks for it, and
 // loaded as its own chunk so a normal visit never downloads it.
 async function chatEngine(): Promise<ChatEngine | undefined> {
@@ -38,7 +55,13 @@ async function account(): Promise<void> {
   installOutboxHooks();
 }
 
-Promise.all([loadPrefs().catch(() => undefined), chatEngine(), account()]).then(([, engine]) => {
+Promise.all([
+  loadPrefs()
+    .catch(() => undefined)
+    .then(liveKey),
+  chatEngine(),
+  account(),
+]).then(([, engine]) => {
   ReactDOM.createRoot(document.getElementById('root')!).render(
     <React.StrictMode>
       <App chatEngine={engine} />
