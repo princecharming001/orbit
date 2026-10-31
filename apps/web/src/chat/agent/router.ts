@@ -115,6 +115,8 @@ export const KIND_ALIASES: Record<MessageKind, string[]> = {
   first_touch: [],
   warm_first_touch: [],
   forwardable_blurb: [],
+  // plan 29: a friend's ask passed on is made by respond_to_friend_ask, never asked for by name
+  forward_intro: [],
   reengage: [],
   thank_you: ['thank you', 'thank-you', 'thanks', 'thank'],
   bump: ['bump', 'follow up', 'follow-up', 'followup', 'nudge', 'reminder', 'ping'],

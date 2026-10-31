@@ -4761,6 +4761,7 @@ var KIND_QUEUE = {
   "health.snapshot": "orbit_cadence",
   "score.user": "orbit_score",
   "score.person": "orbit_score",
+  friend_shares_refresh: "orbit_score",
   "enrich.dossier": "orbit_enrich",
   "source.search": "orbit_enrich",
   hop_evidence: "orbit_enrich",

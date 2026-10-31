@@ -32,6 +32,7 @@ import { autopilotRoutes } from './routes/autopilot.ts';
 import { cadenceRoutes } from './routes/cadence.ts';
 import { calendarRoutes } from './routes/calendar.ts';
 import { draftRoutes } from './routes/drafts.ts';
+import { friendPatternRoute, friendRoutes } from './routes/friends.ts';
 import { goalRoutes } from './routes/goals.ts';
 import { historyRoutes } from './routes/history.ts';
 import { INTEGRATION_ROUTES } from './routes/integrations.ts';
@@ -157,6 +158,7 @@ const ROUTES: Record<string, Route> = {
   ...settingsRoutes,
   ...cadenceRoutes,
   ...autopilotRoutes,
+  ...friendRoutes,
 };
 
 /** The secrets a route needs that are not set. */
@@ -268,7 +270,9 @@ export function makeApiHandler(deps: ApiDeps): (req: Request) => Promise<Respons
       }
       // browsers send Origin on fetches; other callers (curl, server code) send none and rely on their token
       if (origin && !allowedOrigin) throw new HttpError(403, 'forbidden', 'origin not allowed');
-      const r = ROUTES[path];
+      // the fixed table first; the few routes with an id in the path (plan 29: /friends/shares/:id,
+      // /friends/asks/:id/respond) are matched by pattern
+      const r = ROUTES[path] ?? friendPatternRoute(path);
       if (!r) throw notFound();
       if (!r.method.split('|').includes(req.method)) throw new HttpError(405, 'method_not_allowed', r.method);
       await providerSecrets();

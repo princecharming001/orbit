@@ -20,6 +20,18 @@ import { normalizeEmail, parseName } from '@orbit/core/text/normalize';
 import type { GoalKind, Person } from '@orbit/core/types';
 import { sha256Hex } from '../crypto.ts';
 import type { Db } from '../db.ts';
+import {
+  CLOSENESS_P,
+  closenessPhrase,
+  friendNode,
+  friendPersonNode,
+  isFriendNode,
+  matchShares,
+  type ShareRow,
+  type SharingFriend,
+  sharingFriends,
+  visibleShares,
+} from '../friends/shares.ts';
 import { HttpError } from '../http.ts';
 import { cleanLinkedInUrl, linkedInSlugOf } from '../providers/unipileResearch';
 import { sqlBudget, sqlCache } from '../research/bind.ts';
@@ -170,6 +182,150 @@ export async function loadGraph(db: Db, userId: string, now: Date): Promise<User
     select a_person_id, b_person_id from orbit.blocked_pairs where user_id = ${userId}::uuid`;
   const blocked = new Set(blockedRows.map((b) => pairKeyOf(b.a_person_id, b.b_person_id)));
   return { selfId, people, pairs: combineTies(ties, now), blocked };
+}
+
+// ---- the friend layer (plan 29 §A4) -------------------------------------------------------------------------------
+
+/** What a friend shares with the student, as a route can use it: the row, whose it is, and the student's own person
+ * for the same human when the identity join (§A2.6) found one. */
+export interface FriendShareNode {
+  friend: SharingFriend;
+  share: ShareRow;
+  /** the student's own person id for the same human, else undefined (the share stands as a `friend_person:` node) */
+  matchesPersonId?: string;
+}
+
+export interface FriendLayer {
+  friends: SharingFriend[];
+  shares: FriendShareNode[];
+}
+
+/**
+ * Every active friend who shares with the student, and the rows they share, each joined to the student's own person
+ * when there is one. Read through `sharingFriends` (the one cross-tenant path, guarded by the friendship and the
+ * owner's mode); never the friend's own tables.
+ */
+export async function loadFriendLayer(db: Db, userId: string): Promise<FriendLayer> {
+  const friends = await sharingFriends(db, userId);
+  if (!friends.length) return { friends, shares: [] };
+  const all: { friend: SharingFriend; share: ShareRow }[] = [];
+  for (const friend of friends)
+    for (const share of await visibleShares(db, friend)) all.push({ friend, share });
+  const matches = await matchShares(
+    db,
+    userId,
+    all.map((x) => x.share),
+  );
+  return {
+    friends,
+    shares: all.map((x) => ({ ...x, matchesPersonId: matches.get(x.share.person_id) })),
+  };
+}
+
+/**
+ * Put the friend layer into the student's graph: each friend is a node `friend:<userId>` tied to the student at p 0.9
+ * (a friend is asked, not a stranger), and each share that reaches a target becomes a hop friend → person with p from
+ * the closeness word (1: 0.35, 2: 0.6, 3: 0.85). A share the student does not have themselves stands as a
+ * `friend_person:<id>` node, so a company lookup can list it as a way in; `rankWarmPaths` treats it as any hop.
+ */
+export function applyFriendLayer(g: UserGraph, shares: FriendShareNode[]): void {
+  if (!shares.length) return;
+  const used = new Set<string>();
+  for (const x of shares) {
+    const fid = friendNode(x.friend.userId);
+    if (!used.has(fid)) {
+      used.add(fid);
+      g.people.set(fid, {
+        id: fid,
+        name: x.friend.firstName,
+        displayName: x.friend.name,
+        score: 100,
+        pAsk: 0.9,
+        isAlumni: false,
+        doNotContact: false,
+      });
+    }
+    const target = x.matchesPersonId ?? friendPersonNode(x.share.person_id);
+    if (!x.matchesPersonId && !g.people.has(target))
+      g.people.set(target, {
+        id: target,
+        name: x.share.display_name.split(/\s+/)[0]!,
+        displayName: x.share.display_name,
+        score: 0,
+        isAlumni: false,
+        title: x.share.title ?? undefined,
+        org: x.share.company ?? undefined,
+        linkedinUrl: x.share.linkedin_slug
+          ? `https://www.linkedin.com/in/${x.share.linkedin_slug}`
+          : undefined,
+        doNotContact: false,
+      });
+    const key = pairKeyOf(fid, target);
+    if (g.pairs.has(key)) continue;
+    const p = CLOSENESS_P[x.share.closeness as 1 | 2 | 3] ?? CLOSENESS_P[1];
+    const [a, b] = key.split('|') as [string, string];
+    const tie: Tie = {
+      id: `${key}|student_says_close`,
+      userId: x.friend.userId,
+      aId: a,
+      bId: b,
+      kind: 'student_says_close',
+      weight: p,
+      confidence: 1,
+      evidence: { source: 'friend', closeness: x.share.closeness },
+      lastSeenAt: iso(x.share.updated_at) ?? undefined,
+    };
+    g.pairs.set(key, {
+      aId: a,
+      bId: b,
+      weight: p,
+      confidence: 1,
+      kinds: ['student_says_close'],
+      ties: [tie],
+    });
+  }
+}
+
+/** The shares of the layer that reach one person: joined to that person by identity. */
+export function sharesFor(layer: FriendLayer, personId: string): FriendShareNode[] {
+  return layer.shares.filter((x) => x.matchesPersonId === personId);
+}
+
+/** The shares of the layer at one company, by domain or by name. */
+export function sharesAt(layer: FriendLayer, company: string, domain?: string): FriendShareNode[] {
+  const name = company.trim().toLowerCase();
+  const dom = domain?.trim().toLowerCase();
+  return layer.shares.filter(
+    (x) =>
+      (dom && x.share.company_domain?.toLowerCase() === dom) ||
+      (!!name && x.share.company?.trim().toLowerCase() === name),
+  );
+}
+
+/**
+ * A path whose first hop is a friend says so (plan 29 §A4): both hops carry `via`, the friend's hop reads as their
+ * closeness word, and the reason is the friend's, never a tie score the student does not have.
+ */
+export function decorateFriendPath<P extends WarmPath>(p: P, layer: FriendLayer, targetFirst: string): P {
+  const first = p.nodes[1];
+  if (!first || !isFriendNode(first)) return p;
+  const friend = layer.friends.find((f) => friendNode(f.userId) === first);
+  if (!friend) return p;
+  const last = p.nodes[p.nodes.length - 1]!;
+  const share = layer.shares.find(
+    (x) =>
+      x.friend.userId === friend.userId &&
+      (x.matchesPersonId === last || friendPersonNode(x.share.person_id) === last),
+  );
+  const closeness = (share?.share.closeness ?? 1) as 1 | 2 | 3;
+  const via = { kind: 'friend' as const, userId: friend.userId, name: friend.name };
+  const phrase = closenessPhrase(closeness, targetFirst);
+  const at = share?.share.company ? ` at ${share.share.company}` : '';
+  return {
+    ...p,
+    hops: p.hops.map((h, i) => (i === 0 ? { ...h, via } : i === 1 ? { ...h, via, phrase } : h)),
+    reasonText: `${friend.firstName} (friend) ${phrase}${at}.`,
+  };
 }
 
 /** A local person for a LinkedIn member, URL or slug, or a unique exact name; null when unknown. */
@@ -341,13 +497,18 @@ export async function findPaths(
     }
     await upsertTies(db, ext.ties);
     const g = await loadGraph(db, userId, now);
+    // plan 29 §A4: friends' people at the company join the targets, as the student's own person when they have them
+    const layer = await loadFriendLayer(db, userId);
+    const friendShares = sharesAt(layer, company, domain);
+    applyFriendLayer(g, friendShares);
     const atCompany = await db.sql<{ id: string }>`
       select p.id from orbit.people p left join orbit.organizations o on o.id = p.org_id
        where p.user_id = ${userId}::uuid and p.deleted_at is null and not p.is_self
          and (lower(p.org_raw) = lower(${company}) or lower(o.name) = lower(${company})
               or (${domain ?? null}::text is not null and ${domain ?? ''} = any(o.domains)))`;
     const villageTargets = ext.candidates.map((c) => c.target.personId).filter((x): x is string => !!x);
-    const ids = [...new Set([...atCompany.map((r) => r.id), ...villageTargets])];
+    const friendTargets = friendShares.map((x) => x.matchesPersonId ?? friendPersonNode(x.share.person_id));
+    const ids = [...new Set([...atCompany.map((r) => r.id), ...villageTargets, ...friendTargets])];
     const targets: TargetInfo[] = ids
       .map((id) => g.people.get(id))
       .filter((p): p is GraphPerson => !!p && !p.doNotContact && !looksLikeMinor({ title: p.title }))
@@ -367,12 +528,14 @@ export async function findPaths(
       now,
     });
     const paths: PathsFindResponse['paths'] = [];
-    for (const x of chosen)
-      paths.push({ ...x.path, id: await pathId(userId, x.path.nodes), names: namesOf(g, x.path.nodes) });
+    for (const x of chosen) {
+      const p = decorateFriendPath(x.path, layer, x.target.name ?? 'them');
+      paths.push({ ...p, id: await pathId(userId, p.nodes), names: namesOf(g, p.nodes) });
+    }
     return {
       paths,
       ...(paths.length ? {} : { fallback: 'cold' as const }),
-      sources: sourcesOf(ext),
+      sources: sourcesOf(ext, layer),
       unconfigured: ext.unconfigured,
     };
   }
@@ -414,6 +577,9 @@ export async function findPaths(
     await upsertTies(db, ext.ties);
     g = await loadGraph(db, userId, now);
   }
+  // plan 29 §A4: a friend who shares this person is one more way in, ranked with the rest
+  const layer = await loadFriendLayer(db, userId);
+  applyFriendLayer(g, sharesFor(layer, targetId));
   const r = rankWarmPaths({
     targetId,
     target: {
@@ -429,14 +595,16 @@ export async function findPaths(
     now,
   });
   const paths: PathsFindResponse['paths'] = [];
-  for (const p of r.paths as WarmPath[])
+  for (const raw of r.paths as WarmPath[]) {
+    const p = decorateFriendPath(raw, layer, target.name);
     paths.push({ ...p, id: await pathId(userId, p.nodes), names: namesOf(g, p.nodes) });
+  }
   const hopEvidence = await queueHopEvidence(s, userId, g, targetId, r.paths, ext);
   return {
     paths,
     ...(r.fallback ? { fallback: r.fallback } : {}),
     ...(r.direct ? { direct: { personId: targetId, ...r.direct } } : {}),
-    sources: sourcesOf(ext),
+    sources: sourcesOf(ext, layer),
     unconfigured: ext.unconfigured,
     ...(hopEvidence ? { hopEvidence } : {}),
   };
@@ -527,11 +695,13 @@ async function queueHopEvidence(
   return 'queued';
 }
 
-function sourcesOf(ext: ExternalResult): string[] {
+function sourcesOf(ext: ExternalResult, layer?: FriendLayer): string[] {
   const out = ['graph'];
   const asked = (prefix: string) => !ext.skipped.some((x) => x.startsWith(prefix));
   if (!ext.unconfigured.includes('unipile') && asked('mutuals')) out.push('linkedin_mutual');
   if (!ext.unconfigured.includes('village') && asked('village')) out.push('village');
+  // friends count as a source when at least one shares with the student (plan 29 §A4)
+  if (layer?.friends.length) out.push('friends');
   return out;
 }
 

@@ -387,6 +387,8 @@ export const MAX_WORDS: Record<MessageKind, number> = {
   first_touch: 110,
   warm_first_touch: 110,
   forwardable_blurb: 90,
+  // plan 29 §A4: the friend's own words around the blurb they pass on; the blurb itself is counted
+  forward_intro: 160,
   reengage: 90,
 };
 export const MIN_WORDS: Record<MessageKind, number> = {
@@ -403,6 +405,7 @@ export const MIN_WORDS: Record<MessageKind, number> = {
   first_touch: 50,
   warm_first_touch: 50,
   forwardable_blurb: 35,
+  forward_intro: 30,
   reengage: 30,
 };
 /** LinkedIn's hard cap on a connection note (Premium). */

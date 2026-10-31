@@ -20,6 +20,7 @@ import { calendarHandlers } from './handlers/calendar.ts';
 import { classifyHandlers } from './handlers/classify.ts';
 import { contactsHandlers } from './handlers/contacts.ts';
 import { type HandlerDeps, JobSkipped } from './handlers/deps.ts';
+import { friendHandlers } from './handlers/friends.ts';
 import { gmailHandlers } from './handlers/gmail.ts';
 import { linkedinHandlers } from './handlers/linkedin.ts';
 import { scoreHandlers } from './handlers/score.ts';
@@ -73,6 +74,7 @@ export function defaultHandlers(
     ...contactsHandlers(deps),
     ...linkedinHandlers(deps),
     ...scoreHandlers(deps),
+    ...friendHandlers(),
     ...classifyHandlers(deps, agents),
     ...agentHandlers(agents),
   };

@@ -124,14 +124,22 @@ export interface RoutePerson {
   hidden?: boolean;
   /** they declined an intro request: not used as an intermediary for 90 days */
   declinedIntroAt?: string;
+  /**
+   * A fixed chance the first hop is asked and agrees, in place of pAsk(features): a friend on Orbit (plan 29 §A4) is
+   * asked at 0.9, whatever the student's own history with them says.
+   */
+  pAsk?: number;
 }
 
-/** A route offered from outside the local graph: a LinkedIn mutual or a Village introducer (§4.2 steps 3–4). */
+/**
+ * A route offered from outside the local graph: a LinkedIn mutual, a Village introducer (§4.2 steps 3–4), or a friend
+ * on Orbit who shares the target (plan 29 §A4; `warmth` is the friend's closeness word as a chance, 0.35, 0.6 or 0.85).
+ */
 export interface ExternalCandidate {
-  /** the first hop, resolved to a local person */
+  /** the first hop, resolved to a local person (a friend's node id for `friend_path`) */
   introducerId: string;
-  kind: 'linkedin_mutual' | 'village_path';
-  /** Village warmth, 0–1 */
+  kind: 'linkedin_mutual' | 'village_path' | 'friend_path';
+  /** Village warmth or a friend's closeness, 0–1 */
   warmth?: number;
   seenAt?: string;
 }
@@ -251,26 +259,29 @@ function withExternal(
     const key = pk(c.introducerId, targetId);
     const [a, b] = key.split('|') as [string, string];
     const w = c.kind === 'linkedin_mutual' ? HOP_WEIGHTS.mutual : Math.max(0, Math.min(1, c.warmth ?? 0));
-    const conf = c.kind === 'linkedin_mutual' ? 0.95 : 0.7;
+    // a friend's word on how well they know someone is theirs: taken as given, like the student's own
+    const conf = c.kind === 'linkedin_mutual' ? 0.95 : c.kind === 'friend_path' ? 1 : 0.7;
     const tie: Tie = {
       id: `${key}|${c.kind}`,
       userId: '',
       aId: a,
       bId: b,
-      kind: c.kind,
+      kind: c.kind === 'friend_path' ? 'student_says_close' : c.kind,
       weight: w,
       confidence: conf,
-      evidence: { source: c.kind === 'linkedin_mutual' ? 'unipile' : 'village' },
+      evidence: {
+        source: c.kind === 'linkedin_mutual' ? 'unipile' : c.kind === 'friend_path' ? 'friend' : 'village',
+      },
       lastSeenAt: c.seenAt,
     };
     const cur = out.get(key);
-    if (cur?.kinds.includes(c.kind)) continue;
+    if (cur?.kinds.includes(tie.kind)) continue;
     out.set(key, {
       aId: a,
       bId: b,
       weight: 1 - (1 - (cur?.weight ?? 0)) * (1 - w * conf),
       confidence: 1 - (1 - (cur?.confidence ?? 0)) * (1 - conf),
-      kinds: [...(cur?.kinds ?? []), c.kind],
+      kinds: [...(cur?.kinds ?? []), tie.kind],
       ties: [...(cur?.ties ?? []), tie],
       lastSeenAt: cur?.lastSeenAt,
     });
@@ -484,7 +495,7 @@ function routingGraph(
     const passes = p.score > 0 && p.score >= floor;
     if (!passes && !mutual) continue;
     if (!passes) lifted.add(p.id);
-    const a = pAsk({ ...p, score });
+    const a = p.pAsk !== undefined ? Math.max(0, Math.min(1, p.pAsk)) : pAsk({ ...p, score });
     ask.set(p.id, a);
     scores.set(p.id, score);
     addEdge(g, USER_NODE, p.id, a, 'strength', '', true);

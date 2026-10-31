@@ -10,6 +10,9 @@ export interface MimeInput {
   fromName?: string;
   to: string;
   toName?: string;
+  /** one address in copy (plan 29 §A4: the friend who asked for the intro rides along on the forward) */
+  cc?: string;
+  ccName?: string;
   subject: string;
   body: string;
   inReplyTo?: string | null;
@@ -56,6 +59,7 @@ export function buildMime(m: MimeInput): string {
   const lines = [
     `From: ${address(m.from, m.fromName)}`,
     `To: ${address(m.to, m.toName)}`,
+    ...(m.cc ? [`Cc: ${address(m.cc, m.ccName)}`] : []),
     `Subject: ${headerValue(m.subject)}`,
     `Date: ${(m.date ?? new Date()).toUTCString()}`,
     'MIME-Version: 1.0',

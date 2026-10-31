@@ -1542,6 +1542,7 @@ var KIND_QUEUE = {
   "health.snapshot": "orbit_cadence",
   "score.user": "orbit_score",
   "score.person": "orbit_score",
+  friend_shares_refresh: "orbit_score",
   "enrich.dossier": "orbit_enrich",
   "source.search": "orbit_enrich",
   hop_evidence: "orbit_enrich",
@@ -2755,13 +2756,13 @@ function tokenize(text2) {
     const g = m.groups ?? {};
     const raw = m[0];
     const start = m.index;
-    const end = start + raw.length;
+    const end2 = start + raw.length;
     if (!raw.length) {
       TOKEN_RE.lastIndex++;
       continue;
     }
     let endsSentence = false;
-    const push = (t) => out.push({ ...t, start, end, ...endsSentence ? { endsSentence } : {} });
+    const push = (t) => out.push({ ...t, start, end: end2, ...endsSentence ? { endsSentence } : {} });
     if (g.mdy) {
       const parts = g.mdy.split("/").map((x) => Number.parseInt(x, 10));
       const [mo, d, y] = parts;
@@ -2796,7 +2797,7 @@ function tokenize(text2) {
       continue;
     }
     if (g.day) {
-      endsSentence = raw.endsWith(".") && (FULL_DAY_OR_MONTH.test(raw) || SENTENCE_AFTER_DOT.test(text2.slice(end)));
+      endsSentence = raw.endsWith(".") && (FULL_DAY_OR_MONTH.test(raw) || SENTENCE_AFTER_DOT.test(text2.slice(end2)));
       const word = g.day.replace(/\.$/, "");
       const lower = word.toLowerCase();
       if (AMBIGUOUS_DAY.test(lower) && word[0] !== word[0].toUpperCase()) continue;
@@ -2845,7 +2846,7 @@ function tokenize(text2) {
       const apRaw = (mm[3] ?? mm[4] ?? "").toLowerCase();
       const ap = apRaw.startsWith("a") ? "am" : apRaw.startsWith("p") ? "pm" : void 0;
       const ish = Boolean(mm[5]);
-      const rest = text2.slice(end);
+      const rest = text2.slice(end2);
       if (NOT_TIME_AFTER.test(rest)) continue;
       const bare = !ap && !mm[2] && !ish;
       if (bare && COUNT_RANGE_AFTER.test(rest)) continue;
@@ -2896,8 +2897,8 @@ var ANCHOR_KINDS = /* @__PURE__ */ new Set(["day", "date", "ord", "rel"]);
 function namesOwnDay(text2, toks, i) {
   const from = toks[i].start;
   const stop = /[.!?\n]/.exec(text2.slice(from));
-  const end = stop ? from + stop.index : text2.length;
-  for (let j = i; j < toks.length && toks[j].start < end; j++) if (ANCHOR_KINDS.has(toks[j].k)) return true;
+  const end2 = stop ? from + stop.index : text2.length;
+  for (let j = i; j < toks.length && toks[j].start < end2; j++) if (ANCHOR_KINDS.has(toks[j].k)) return true;
   return false;
 }
 function chunks(text2, toks) {
@@ -2937,13 +2938,13 @@ function resolveHours(t, part) {
   }
   const start = startClock(startAp);
   if (!t.end) return { start };
-  let end = to24(t.end.h, t.end.ap) + t.end.min / 60;
+  let end2 = to24(t.end.h, t.end.ap) + t.end.min / 60;
   if (!t.end.ap) {
-    end = to24(t.end.h, start >= 12 && t.end.h < 12 ? "pm" : void 0) + t.end.min / 60;
-    if (end <= start && t.end.h < 12) end += 12;
+    end2 = to24(t.end.h, start >= 12 && t.end.h < 12 ? "pm" : void 0) + t.end.min / 60;
+    if (end2 <= start && t.end.h < 12) end2 += 12;
   }
-  if (end <= start) return { start };
-  return { start, end };
+  if (end2 <= start) return { start };
+  return { start, end: end2 };
 }
 function weekScopes(text2, toks) {
   const scopes = [];
@@ -2957,8 +2958,8 @@ function weekScopes(text2, toks) {
       blocked: weekIsBlocked(text2, t.start, t.end)
     });
   }
-  return (start, end) => {
-    const after = scopes.find((s) => s.start >= end && s.start - end <= 2);
+  return (start, end2) => {
+    const after = scopes.find((s) => s.start >= end2 && s.start - end2 <= 2);
     if (after) return after.offset;
     let hit;
     for (const s of scopes)
@@ -2968,9 +2969,9 @@ function weekScopes(text2, toks) {
 }
 var WEEK_BLOCKED = /\b(not|cannot|can'?t|won'?t|isn'?t|doesn'?t|busy|booked|slammed|swamped|packed|hectic|away|out|off|traveling|travelling|vacation|pto|leave|conference|offsite|unavailable)\b/i;
 var WEEK_OPEN = /\b(open|free|available|works?|flexible|better|easier|how about|what about)\b/i;
-function weekIsBlocked(text2, start, end) {
+function weekIsBlocked(text2, start, end2) {
   const before = text2.slice(Math.max(0, start - 80), start);
-  const after = text2.slice(end, end + 80);
+  const after = text2.slice(end2, end2 + 80);
   const lo = before.split(/[.;!?\n]|,|\bbut\b|\bthough\b|\bhowever\b/i).pop() ?? "";
   const hi = after.split(/[.;!?\n]|,|\bbut\b|\bthough\b|\bhowever\b/i)[0] ?? "";
   const clause2 = `${lo} ${hi}`;
@@ -3136,7 +3137,7 @@ var NEGATION_LEAD = "^\\s*(?:(?:so|well|honestly|actually|hey|hmm|and|or|ok|okay
 var NEGATIVE_QUESTION = new RegExp(`${NEGATION_LEAD}\\s+(?:we|you|i|it|that|this|there|they)\\b`, "i");
 var NEGATIVE_QUESTION_BARE = new RegExp(`${NEGATION_LEAD}\\s*$`, "i");
 var NOT_BUSY_PHRASE = /\b(?:if (?:not|that|this|those|these|none|neither|it|they|you|so)\b.*$|unless\b.*$|no (?:worries|problem|rush|pressure|stress)|not a problem|not sure|can['’]?t wait|(?:don['’]?t|do not) worry|(?:doesn['’]?t|does not) matter|(?:wouldn['’]?t|don['’]?t) mind|(?:don['’]?t|do not) hesitate|why not|no later than)/gi;
-function busyAround(text2, start, end) {
+function busyAround(text2, start, end2) {
   let lo = 0;
   let hi = text2.length;
   CLAUSE_BREAK.lastIndex = 0;
@@ -3145,14 +3146,14 @@ function busyAround(text2, start, end) {
     const at = m.index;
     const stop = at + m[0].length;
     if (stop <= start) lo = stop;
-    else if (at >= end) {
+    else if (at >= end2) {
       hi = at;
       break;
     }
   }
   let before = text2.slice(lo, start).replace(NEGATIVE_QUESTION, " ");
   if (text2[hi] === "?") before = before.replace(NEGATIVE_QUESTION_BARE, " ");
-  const clause2 = `${before} ${text2.slice(end, hi)}`.replace(NOT_BUSY_PHRASE, " ");
+  const clause2 = `${before} ${text2.slice(end2, hi)}`.replace(NOT_BUSY_PHRASE, " ");
   return BUSY_CLAUSE.test(clause2);
 }
 var HAS_CLAUSE_BREAK = new RegExp(CLAUSE_BREAK.source, "i");
@@ -3237,8 +3238,8 @@ function extractTimes(text2, reference, opts = {}) {
     proposals.push(...r.proposals);
     for (const l of r.leftover) {
       const start = Math.min(l.anchorStart ?? Number.POSITIVE_INFINITY, ...l.times.map((t) => t.start));
-      const end = Math.max(l.anchorEnd ?? 0, ...l.times.map((t) => t.stop));
-      leftovers.push({ draft: l, sentence: sentenceIndexAt(norm2, start), start, end });
+      const end2 = Math.max(l.anchorEnd ?? 0, ...l.times.map((t) => t.stop));
+      leftovers.push({ draft: l, sentence: sentenceIndexAt(norm2, start), start, end: end2 });
     }
   }
   const bySentence = /* @__PURE__ */ new Map();
@@ -3307,11 +3308,11 @@ function extractTimes(text2, reference, opts = {}) {
     );
     if (start.getTime() < reference.getTime()) continue;
     if (start.getTime() - reference.getTime() > 200 * 864e5) continue;
-    const end = endH === void 0 ? void 0 : zonedTimeToUtc(date.y, date.m, date.d, Math.floor(endH), Math.round(endH % 1 * 60), tz);
-    if (out.some((o) => o.startIso === start.toISOString() && o.endIso === end?.toISOString())) continue;
+    const end2 = endH === void 0 ? void 0 : zonedTimeToUtc(date.y, date.m, date.d, Math.floor(endH), Math.round(endH % 1 * 60), tz);
+    if (out.some((o) => o.startIso === start.toISOString() && o.endIso === end2?.toISOString())) continue;
     out.push({
       startIso: start.toISOString(),
-      ...end ? { endIso: end.toISOString() } : {},
+      ...end2 ? { endIso: end2.toISOString() } : {},
       raw: p.raw,
       ...statedZone ? { timeZone: statedZone } : {}
     });
@@ -3700,6 +3701,8 @@ var MAX_WORDS = {
   first_touch: 110,
   warm_first_touch: 110,
   forwardable_blurb: 90,
+  // plan 29 §A4: the friend's own words around the blurb they pass on; the blurb itself is counted
+  forward_intro: 160,
   reengage: 90
 };
 var MIN_WORDS = {
@@ -3716,6 +3719,7 @@ var MIN_WORDS = {
   first_touch: 50,
   warm_first_touch: 50,
   forwardable_blurb: 35,
+  forward_intro: 30,
   reengage: 30
 };
 var LINKEDIN_NOTE_MAX = 300;
@@ -3878,7 +3882,7 @@ function hookLine(i) {
 }
 var paragraphs = (...ps) => ps.filter((p) => p.trim()).join("\n\n");
 function composeFallback(i) {
-  const ask2 = goalAsk(i);
+  const ask3 = goalAsk(i);
   const sign = `Best,
 ${i.user.firstName}`;
   const hi = `Hi ${i.recipient.firstName},`;
@@ -3887,7 +3891,7 @@ ${i.user.firstName}`;
   const targetAt = i.target?.org ? ` at ${i.target.org}` : "";
   let subject = null;
   let body2;
-  let outAsk = { kind: ask2.kind, text: ask2.text };
+  let outAsk = { kind: ask3.kind, text: ask3.text };
   const hooks = i.hook ? [i.hook] : [];
   switch (i.kind) {
     case "first_touch":
@@ -3896,7 +3900,7 @@ ${i.user.firstName}`;
       if (i.channel === "linkedin") {
         body2 = [
           hi,
-          [warm, intro(i), i.hook ? `I read ${i.hook.text}.` : "", ask2.text].filter(Boolean).join(" ")
+          [warm, intro(i), i.hook ? `I read ${i.hook.text}.` : "", ask3.text].filter(Boolean).join(" ")
         ].join("\n");
       } else {
         subject = warm ? `through ${via}` : SUBJECTS[i.goal](i);
@@ -3904,7 +3908,7 @@ ${i.user.firstName}`;
           hi,
           [warm, intro(i), hookLine(i)].filter(Boolean).join(" "),
           goalMiddle(i),
-          ask2.text,
+          ask3.text,
           sign
         );
       }
@@ -3946,7 +3950,7 @@ ${i.user.firstName}`;
     case "bump": {
       body2 = paragraphs(
         hi,
-        `I wanted to bring this back to the top of your inbox. ${ask2.text} If now is not a good time, that is fine.`,
+        `I wanted to bring this back to the top of your inbox. ${ask3.text} If now is not a good time, that is fine.`,
         sign
       );
       break;
@@ -4626,8 +4630,8 @@ async function settleCard(db2, userId, dedupeKey, status2, now) {
 }
 
 // supabase/functions/_shared/replies/breaker.ts
-function pausedGoalsOf(settings) {
-  const v = settings?.autopilot_paused_goals;
+function pausedGoalsOf(settings2) {
+  const v = settings2?.autopilot_paused_goals;
   if (!v || typeof v !== "object" || Array.isArray(v)) return {};
   const out = {};
   for (const [goalId, p] of Object.entries(v)) {
@@ -4642,9 +4646,9 @@ function pausedGoalsOf(settings) {
   }
   return out;
 }
-function goalPaused(settings, goalId, now) {
+function goalPaused(settings2, goalId, now) {
   if (!goalId) return false;
-  const p = pausedGoalsOf(settings)[goalId];
+  const p = pausedGoalsOf(settings2)[goalId];
   if (!p) return false;
   return p.until === null || new Date(p.until).getTime() > now.getTime();
 }
@@ -4962,7 +4966,7 @@ var LEAD_HOURS = 18;
 var HORIZON_BUSINESS_DAYS = 10;
 var FREEBUSY_URL = "https://www.googleapis.com/calendar/v3/freeBusy";
 var EVENTS_URL = "https://www.googleapis.com/calendar/v3/calendars/primary/events";
-function slotLabel(start, end, tz) {
+function slotLabel(start, end2, tz) {
   const day2 = new Intl.DateTimeFormat("en-US", {
     timeZone: tz,
     weekday: "short",
@@ -4975,7 +4979,7 @@ function slotLabel(start, end, tz) {
     minute: "2-digit",
     hourCycle: "h23"
   }).format(d);
-  return `${day2}, ${hm(start)} to ${hm(end)} ${zoneAbbrev(start, tz)}`;
+  return `${day2}, ${hm(start)} to ${hm(end2)} ${zoneAbbrev(start, tz)}`;
 }
 function pickSlots(busy, opts) {
   const count = opts.count ?? 3;
@@ -5095,7 +5099,7 @@ async function bookSlot(s, userId, req, appUrl, opts = {}) {
   const start = new Date(req.slotStart);
   if (Number.isNaN(start.getTime())) throw new HttpError(400, "bad_request", "slotStart must be an ISO time");
   if (start.getTime() <= s.now().getTime()) throw new HttpError(409, "slot_past", "that time has passed");
-  const end = new Date(start.getTime() + SLOT_MINUTES * 6e4);
+  const end2 = new Date(start.getTime() + SLOT_MINUTES * 6e4);
   const [had] = await s.db.sql`
     select external_id from orbit.calendar_events
      where user_id = ${userId}::uuid and start_at = ${start}::timestamptz
@@ -5120,7 +5124,7 @@ async function bookSlot(s, userId, req, appUrl, opts = {}) {
     r = await googleCall(s, userId, `${EVENTS_URL}?sendUpdates=all`, {
       summary: title,
       start: { dateTime: start.toISOString(), timeZone: tz },
-      end: { dateTime: end.toISOString(), timeZone: tz },
+      end: { dateTime: end2.toISOString(), timeZone: tz },
       attendees: [{ email: p.primary_email }]
     });
   } catch (e) {
@@ -5134,7 +5138,7 @@ async function bookSlot(s, userId, req, appUrl, opts = {}) {
   await s.db.sql`
     insert into orbit.calendar_events (user_id, external_id, title, start_at, end_at, status, attendees,
                                        attendee_person_ids, attendee_count, is_one_on_one, chat_id)
-    values (${userId}::uuid, ${eventId}, ${title}, ${start}::timestamptz, ${end}::timestamptz, 'confirmed',
+    values (${userId}::uuid, ${eventId}, ${title}, ${start}::timestamptz, ${end2}::timestamptz, 'confirmed',
             ${JSON.stringify([{ email: p.primary_email }])}::jsonb, ${[d.person_id]}::uuid[], 2, true,
             ${d.chat_id}::uuid)
     on conflict (user_id, external_id) do nothing`;
@@ -5320,8 +5324,8 @@ async function buildUserContext(db2, u2) {
 function facetLines(parsed) {
   if (!parsed) return [];
   const out = [];
-  const list5 = (v) => Array.isArray(v) ? v : [];
-  for (const f2 of list5(parsed.facets)) {
+  const list6 = (v) => Array.isArray(v) ? v : [];
+  for (const f2 of list6(parsed.facets)) {
     const o = f2;
     if (o.excluded === true) continue;
     const t = [o.title ?? o.role, o.org ?? o.organization ?? o.organizationName, o.text].filter(
@@ -5329,17 +5333,17 @@ function facetLines(parsed) {
     );
     if (t.length) out.push(t.join(", "));
   }
-  for (const e of list5(parsed.experiences ?? parsed.experience)) {
+  for (const e of list6(parsed.experiences ?? parsed.experience)) {
     const o = e;
     const t = [o.title, o.org ?? o.company].filter((x) => typeof x === "string");
     if (t.length) out.push(t.join(" at "));
   }
-  for (const e of list5(parsed.education)) {
+  for (const e of list6(parsed.education)) {
     const o = e;
     const t = [o.degree, o.school].filter((x) => typeof x === "string");
     if (t.length) out.push(t.join(", "));
   }
-  const skills = list5(parsed.skills).filter((x) => typeof x === "string");
+  const skills = list6(parsed.skills).filter((x) => typeof x === "string");
   if (skills.length) out.push(`Skills: ${skills.slice(0, 12).join(", ")}`);
   return out.slice(0, 12);
 }
@@ -5569,9 +5573,9 @@ function nextSendWindow(now, tz, channel, random = Math.random) {
   for (let i = 0; i < 21; i++, key = addDaysKey(key, 1)) {
     if (!sendDayAllowed(key, channel)) continue;
     const start = zonedTime(key, WINDOW_START.hour, WINDOW_START.minute, zone).getTime();
-    const end = zonedTime(key, WINDOW_END.hour, WINDOW_END.minute, zone).getTime();
-    if (now.getTime() >= end) continue;
-    const at = Math.min(Math.max(now.getTime(), start) + jitterMs, end);
+    const end2 = zonedTime(key, WINDOW_END.hour, WINDOW_END.minute, zone).getTime();
+    if (now.getTime() >= end2) continue;
+    const at = Math.min(Math.max(now.getTime(), start) + jitterMs, end2);
     return { notBefore: new Date(at).toISOString(), tz: zone };
   }
   return { notBefore: now.toISOString(), tz: zone };
@@ -6001,7 +6005,7 @@ function replyTemplate(p, me2) {
   const sign = `Best,
 ${me2}`;
   let middle;
-  let ask2 = { kind: "none", text: "" };
+  let ask3 = { kind: "none", text: "" };
   if (p.confirms) {
     middle = `${p.confirms.label} works for me, and the calendar invite is on its way. Looking forward to it.`;
     return {
@@ -6012,7 +6016,7 @@ ${me2}`;
       channel: p.req.channel,
       subject: null,
       body: [hi, middle, sign].join("\n\n"),
-      ask: ask2,
+      ask: ask3,
       hooks: [],
       sendWindow: p.window,
       promptVersion: "template-v2",
@@ -6029,7 +6033,7 @@ ${me2}`;
       channel: p.req.channel,
       subject: null,
       body: [hi, middle, sign].join("\n\n"),
-      ask: ask2,
+      ask: ask3,
       hooks: [],
       sendWindow: p.window,
       promptVersion: "template-v2",
@@ -6040,13 +6044,13 @@ ${me2}`;
     case "interested":
     case "scheduling":
       if (p.slots.length) {
-        ask2 = { kind: "call", text: "Would any of these times work for you?" };
-        middle = `Thanks for getting back to me. ${ask2.text}
+        ask3 = { kind: "call", text: "Would any of these times work for you?" };
+        middle = `Thanks for getting back to me. ${ask3.text}
 
 ${p.slots.map((x) => `- ${x.label}`).join("\n")}`;
       } else {
-        ask2 = { kind: "call", text: "What times work best for you over the next week or so?" };
-        middle = `Thanks for getting back to me. ${ask2.text} I'm happy to work around your schedule.`;
+        ask3 = { kind: "call", text: "What times work best for you over the next week or so?" };
+        middle = `Thanks for getting back to me. ${ask3.text} I'm happy to work around your schedule.`;
       }
       break;
     case "thanks":
@@ -6072,7 +6076,7 @@ ${p.slots.map((x) => `- ${x.label}`).join("\n")}`;
     channel: p.req.channel,
     subject: null,
     body: [hi, middle, sign].join("\n\n"),
-    ask: ask2,
+    ask: ask3,
     hooks: [],
     sendWindow: p.window,
     promptVersion: "template-v2",
@@ -6241,8 +6245,8 @@ function item(r, status2, reason) {
     ...r.ask?.replyToMessageId ? { messageId: r.ask.replyToMessageId } : {}
   };
 }
-function modeOf(settings, level) {
-  const m = settings.autopilot_mode;
+function modeOf(settings2, level) {
+  const m = settings2.autopilot_mode;
   if (m === "off" || m === "assist" || m === "autopilot") return m;
   return level >= 2 ? "autopilot" : level === 1 ? "assist" : "off";
 }
@@ -6253,7 +6257,7 @@ async function autopilotStatus(db2, userId, now) {
   const tz = validZone(u2.timezone) ?? "America/New_York";
   const dayStart = zonedTime(new Intl.DateTimeFormat("en-CA", { timeZone: tz }).format(now), 0, 0, tz);
   const weekStart = new Date(dayStart.getTime() - 6 * 864e5);
-  const settings = u2.settings ?? {};
+  const settings2 = u2.settings ?? {};
   const queued2 = await itemRows(db2, userId, "queued", now, dayStart);
   const held = await itemRows(db2, userId, "held", now, dayStart);
   const sentToday = await itemRows(db2, userId, "sent", now, dayStart);
@@ -6290,7 +6294,7 @@ async function autopilotStatus(db2, userId, now) {
                     and a.action = 'draft.approve')
      group by d.kind`;
   const count = (kinds) => approvals.filter((a) => kinds.includes(a.kind)).reduce((s, a) => s + a.n, 0);
-  const autoKinds = Array.isArray(settings.auto_kinds) ? settings.auto_kinds : [];
+  const autoKinds = Array.isArray(settings2.auto_kinds) ? settings2.auto_kinds : [];
   const rungs = ["bump", "thank_you", "schedule", "first_touch"].map((kind) => {
     const n = kind === "first_touch" ? count(FIRST_TOUCH) : count([kind]);
     const needed = RUNG_NEEDED[kind];
@@ -6306,8 +6310,8 @@ async function autopilotStatus(db2, userId, now) {
            count(*) filter (where details->>'kind' in ('first_touch', 'warm_first_touch', 'outreach'))::int as week_first
       from orbit.audit_log
      where user_id = ${userId}::uuid and action = 'draft.auto_sent' and created_at >= ${weekStart}::timestamptz`;
-  const pausedUntil = typeof settings.autopilot_paused_until === "string" && new Date(settings.autopilot_paused_until).getTime() > now.getTime() ? settings.autopilot_paused_until : null;
-  const goalPauses = pausedGoalsOf(settings);
+  const pausedUntil = typeof settings2.autopilot_paused_until === "string" && new Date(settings2.autopilot_paused_until).getTime() > now.getTime() ? settings2.autopilot_paused_until : null;
+  const goalPauses = pausedGoalsOf(settings2);
   const goalIds = Object.keys(goalPauses);
   const titles = goalIds.length ? await db2.sql`
         select id, title from orbit.goals where user_id = ${userId}::uuid and id = any(${goalIds}::uuid[])` : [];
@@ -6322,7 +6326,7 @@ async function autopilotStatus(db2, userId, now) {
   }));
   const reviews = queued2.map((q) => q.send_at).filter((x) => !!x);
   return {
-    mode: modeOf(settings, Number(u2.autonomy_level) || 0),
+    mode: modeOf(settings2, Number(u2.autonomy_level) || 0),
     pausedUntil,
     pausedGoals,
     queued: queued2.map((r) => item(r, "queued")),
@@ -6717,9 +6721,9 @@ function sentCount(chat) {
   return (chat.firstOutreachAt ? 1 : 0) + chat.bumpCount;
 }
 function cadenceActions(inp) {
-  const { now, settings } = inp;
-  const tz = settings.timezone;
-  if (settings.quietUntil && now.getTime() < new Date(settings.quietUntil).getTime()) return [];
+  const { now, settings: settings2 } = inp;
+  const tz = settings2.timezone;
+  if (settings2.quietUntil && now.getTime() < new Date(settings2.quietUntil).getTime()) return [];
   const out = [];
   const due2 = (personId) => {
     const ptz = (personId ? inp.people.get(personId)?.timeZone : void 0) ?? tz;
@@ -6739,7 +6743,7 @@ function cadenceActions(inp) {
     if (!blocked(chat.personId) && room(chat.personId) && sentCount(chat) < MAX_UNANSWERED) {
       const v1 = bumpDue(chat, person2, {
         now,
-        settings: { ...settings, quietDays: [] },
+        settings: { ...settings2, quietDays: [] },
         timezone: tz
       });
       if (v1) {
@@ -6753,7 +6757,7 @@ function cadenceActions(inp) {
         });
       } else if (goal && SECOND_BUMP_GOALS.has(goal.kind) && chat.stage === "outreach_sent" && chat.bumpCount === 1 && (pc?.score ?? 0) < COLD_SCORE && chat.lastOutboundAt && !(chat.lastInboundAt && chat.lastInboundAt >= chat.lastOutboundAt) && maxBumpsFor(
         sectorOf({ title: person2.currentTitle, org: person2.currentOrganizationRaw }),
-        settings.maxBumps
+        settings2.maxBumps
       ) < 2) {
         const bdays = businessDaysBetween(new Date(chat.lastOutboundAt), now, tz);
         if (bdays >= SECOND_BUMP_AFTER_BUSINESS_DAYS)
@@ -6782,7 +6786,7 @@ function cadenceActions(inp) {
         reason: "You met in the last three days and have not thanked them yet",
         dueAt: due2(chat.personId)
       });
-    const timer = stageTimer(chat, person2, settings, now);
+    const timer = stageTimer(chat, person2, settings2, now);
     if (timer)
       out.push({
         kind: "stage_timer",
@@ -6846,7 +6850,7 @@ function cadenceActions(inp) {
   }
   return out;
 }
-function stageTimer(chat, person2, settings, now) {
+function stageTimer(chat, person2, settings2, now) {
   if (!ACTIVE_STAGES.includes(chat.stage)) return void 0;
   const entered = new Date(chat.stageEnteredAt).getTime();
   if (chat.stage === "followed_up" && now.getTime() - entered >= 14 * DAY4)
@@ -6860,14 +6864,14 @@ function stageTimer(chat, person2, settings, now) {
   if (from.getTime() > now.getTime()) return void 0;
   const maxBumps = maxBumpsFor(
     sectorOf({ title: person2.currentTitle, org: person2.currentOrganizationRaw }),
-    settings.maxBumps
+    settings2.maxBumps
   );
   return decideTransition("outreach_sent", {
     type: "timer_no_response",
     bumps: chat.bumpCount,
     maxBumps,
     daysSilent: (now.getTime() - from.getTime()) / DAY4,
-    businessDaysSilent: businessDaysBetween(from, now, settings.timezone)
+    businessDaysSilent: businessDaysBetween(from, now, settings2.timezone)
   });
 }
 
@@ -6948,7 +6952,7 @@ async function loadCadence(db2, userId, now) {
   const [u2] = await db2.sql`
     select timezone, autonomy_level, settings from orbit.users where id = ${userId}::uuid`;
   const tz = validZone(u2?.timezone) ?? "America/New_York";
-  const settings = u2?.settings ?? {};
+  const settings2 = u2?.settings ?? {};
   const chatRows = await db2.sql`
     select * from orbit.chats where user_id = ${userId}::uuid and archived_at is null`;
   const chats = chatRows.map((r) => chatFromRow(isoRow(r)));
@@ -7031,8 +7035,8 @@ async function loadCadence(db2, userId, now) {
   const awaiting = await db2.sql`
     select distinct person_id from orbit.suggestions
      where user_id = ${userId}::uuid and kind = 'needs_you' and status in ('pending', 'snoozed') and person_id is not null`;
-  const maxBumps = num(settings.max_bumps, 2);
-  const quiet = typeof settings.quiet_until === "string" ? settings.quiet_until : void 0;
+  const maxBumps = num(settings2.max_bumps, 2);
+  const quiet = typeof settings2.quiet_until === "string" ? settings2.quiet_until : void 0;
   return {
     input: {
       chats,
@@ -7047,13 +7051,13 @@ async function loadCadence(db2, userId, now) {
     timezone: tz,
     chatsById: new Map(chats.map((c) => [c.id, c])),
     goalsById: new Map(goals.map((g) => [g.id, g])),
-    settings,
+    settings: settings2,
     awaitingStudent: new Set(awaiting.map((r) => r.person_id)),
     autonomyLevel: num(u2?.autonomy_level, 0),
-    autoKinds: Array.isArray(settings.auto_kinds) ? settings.auto_kinds.filter(
+    autoKinds: Array.isArray(settings2.auto_kinds) ? settings2.auto_kinds.filter(
       (k) => typeof k === "string" && AUTO_KINDS.includes(k)
     ) : [],
-    pausedUntil: typeof settings.autopilot_paused_until === "string" ? settings.autopilot_paused_until : void 0
+    pausedUntil: typeof settings2.autopilot_paused_until === "string" ? settings2.autopilot_paused_until : void 0
   };
 }
 var toDue = (a) => ({
@@ -7174,6 +7178,7 @@ function buildMime(m) {
   const lines = [
     `From: ${address(m.from, m.fromName)}`,
     `To: ${address(m.to, m.toName)}`,
+    ...m.cc ? [`Cc: ${address(m.cc, m.ccName)}`] : [],
     `Subject: ${headerValue(m.subject)}`,
     `Date: ${(m.date ?? /* @__PURE__ */ new Date()).toUTCString()}`,
     "MIME-Version: 1.0",
@@ -7309,14 +7314,14 @@ async function effectiveLevel(db2, goalId, userLevel) {
   }
   return Number(userLevel) || 0;
 }
-function aheadOf(settings, key, now) {
-  const v = settings?.[key];
+function aheadOf(settings2, key, now) {
+  const v = settings2?.[key];
   if (typeof v !== "string") return void 0;
   const t = new Date(v);
   return Number.isNaN(t.getTime()) || t.getTime() <= now.getTime() ? void 0 : t;
 }
-function ownCap(settings, key, tableCap) {
-  const v = Number(settings?.[key]);
+function ownCap(settings2, key, tableCap) {
+  const v = Number(settings2?.[key]);
   return Number.isFinite(v) && v >= 1 ? Math.min(Math.floor(v), tableCap) : tableCap;
 }
 var hashOf = (d) => messageHash({ channel: d.channel, subject: d.subject, body: d.body });
@@ -7578,11 +7583,11 @@ ${d.body}`)) {
       approvedHash: userApproved ? hash : void 0
     }
   );
-  const forbidden = violations.find((v) => v.kind === "forbidden");
-  if (forbidden) {
-    await settle("cancelled", { cancel_reason: forbidden.rule });
-    await audit(db2, userId, "system", "draft.blocked", d.id, { rule: forbidden.rule });
-    return { status: "cancelled", reason: forbidden.rule };
+  const forbidden2 = violations.find((v) => v.kind === "forbidden");
+  if (forbidden2) {
+    await settle("cancelled", { cancel_reason: forbidden2.rule });
+    await audit(db2, userId, "system", "draft.blocked", d.id, { rule: forbidden2.rule });
+    return { status: "cancelled", reason: forbidden2.rule };
   }
   if (violations.length) {
     await settle("draft", { error: `needs_approval:${violations.map((v) => v.rule).join(",")}` });
@@ -7609,11 +7614,13 @@ ${d.body}`)) {
     }
     const subject = d.subject ?? await threadSubject(db2, userId, d.thread_external_id) ?? "";
     const refs = d.in_reply_to ?? await lastMessageId(db2, userId, d.thread_external_id);
+    const forward = d.kind === "forward_intro" ? d.via : null;
     const raw = rawMessage({
       from: u2.email,
       fromName: u2.full_name ?? void 0,
       to: person2.primary_email,
       toName: person2.display_name,
+      ...forward?.cc ? { cc: forward.cc, ccName: forward.ccName } : {},
       subject: d.subject ? subject : subject && !/^re:/i.test(subject) ? `Re: ${subject}` : subject,
       body: d.body,
       inReplyTo: refs,
@@ -7671,6 +7678,11 @@ ${d.body}`)) {
   const via = d.via;
   if (d.kind === "intro_request" && via?.introRequestId)
     await db2.sql`update orbit.intro_requests set asked_at = ${now}::timestamptz where id = ${via.introRequestId}::uuid`;
+  if (d.kind === "forward_intro" && via?.friendAskId)
+    await db2.sql`
+      update orbit.friend_intro_asks set status = 'forwarded', forwarded_message_id = ${d.id}::uuid,
+             answered_at = coalesce(answered_at, ${now}::timestamptz)
+       where id = ${via.friendAskId}::uuid and friend_user_id = ${userId}::uuid`;
   return { status: "sent", providerMessageId: out.providerMessageId };
 }
 async function afterSend(db2, userId, d, now) {
@@ -7817,6 +7829,816 @@ var draftRoutes = {
   "/drafts/discard": { method: "POST", auth: true, run: discard }
 };
 
+// supabase/functions/_shared/friends/forward.ts
+function forwardSubject(i) {
+  return `Intro: ${i.askerFirst} and ${i.targetFirst}`;
+}
+function forwardBody(i) {
+  const note2 = i.note.trim().replace(/^["“]+|["”]+$/g, "");
+  return [
+    `Hi ${i.targetFirst},`,
+    `${i.askerName} asked me to put you two in touch. In their words:`,
+    `"${note2}"`,
+    `Cc'ing ${i.askerFirst} so you two can take it from here. No pressure either way, and no need to reply to me.`,
+    i.meFirst
+  ].join("\n\n");
+}
+
+// packages/core/src/scoring/rapport.ts
+var RAPPORT_CUES = [
+  "asks_about_you",
+  "offers_help",
+  "personal_news",
+  "plans_together",
+  "congratulates",
+  "glad_to_hear",
+  "casual",
+  "uses_your_name",
+  "thoughtful",
+  "formal",
+  "distant",
+  "asked_to_stop",
+  "hostile"
+];
+var FUNCTION_CLASSES = {
+  personal: new Set(
+    "i me my mine myself we us our ours ourselves you your yours yourself yourselves he him his she her hers they them their theirs".split(
+      " "
+    )
+  ),
+  impersonal: new Set(
+    "it its itself this that these those something anything everything nothing someone anyone".split(" ")
+  ),
+  articles: new Set("a an the".split(" ")),
+  prepositions: new Set(
+    "about above across after against along among around at before behind below beside between by during for from in inside into near of off on onto out over through to toward under until up upon with within without".split(
+      " "
+    )
+  ),
+  auxiliary: new Set(
+    "am is are was were be been being have has had do does did will would shall should can could may might must i'm you're we're they're it's i've you've we've i'd you'd i'll you'll we'll".split(
+      " "
+    )
+  ),
+  adverbs: new Set(
+    "very really just so too also then now here there even only quite rather almost always never often".split(
+      " "
+    )
+  ),
+  conjunctions: new Set(
+    "and but or so because if although though while whereas unless since nor yet".split(" ")
+  ),
+  negations: new Set(
+    "no not never none nobody nothing neither nor don't can't won't isn't aren't wasn't didn't doesn't".split(
+      " "
+    )
+  ),
+  quantifiers: new Set("all some many much more most few several any each every both lot lots".split(" "))
+};
+var RAPPORT_LLM_GUIDE = `rapport: how the sender feels about the student, separate from their answer to the request.
+- warmth −2..2: 2 = clearly warm and personal (asks about the student, offers help or intros, shares their own news, suggests meeting up); 0 = neutral or businesslike, including short replies such as "ok" or "sounds good"; −2 = distant, annoyed, or asks not to be contacted. A polite decline that wishes the student well is warm, not cold.
+- familiarity: stranger, professional, friendly, or friend, from how they write to the student.
+- effort 0..2: 0 a one-liner, 1 a normal reply, 2 a long, thoughtful reply.
+- cues: any of ${RAPPORT_CUES.join(", ")} that apply.`;
+
+// packages/core/src/scoring/strength.ts
+var ENGAGEMENT = /* @__PURE__ */ new Set([
+  "linkedin_comment_in",
+  "linkedin_comment_out",
+  "linkedin_reaction_in"
+]);
+var AMBIENT = /* @__PURE__ */ new Set(["email_cc", "linkedin_connected", ...ENGAGEMENT]);
+
+// packages/core/src/scoring/tieScore.ts
+var TIE_BAND_LABELS = {
+  faint: "Faint",
+  light: "Light",
+  warm: "Warm",
+  strong: "Strong",
+  close: "Close"
+};
+var TIE_LABEL_MIDPOINTS = { 1: 10, 2: 30, 3: 50, 4: 70, 5: 90 };
+function tieBand(score) {
+  if (score >= 80) return "close";
+  if (score >= 60) return "strong";
+  if (score >= 40) return "warm";
+  if (score >= 20) return "light";
+  return "faint";
+}
+
+// supabase/functions/_shared/friends/shares.ts
+function emailHash(email) {
+  return sha256Hex(`orbit-friend:${normalizeEmail(email)}`);
+}
+function publicShare(r) {
+  return {
+    personId: r.person_id,
+    displayName: r.display_name,
+    title: r.title,
+    company: r.company,
+    companyDomain: r.company_domain,
+    linkedinSlug: r.linkedin_slug,
+    school: r.school,
+    isAlumni: r.is_alumni,
+    closeness: Math.max(1, Math.min(3, Number(r.closeness)))
+  };
+}
+function underMode(rows, mode2, domains) {
+  if (mode2 === "none") return [];
+  if (mode2 === "all") return rows;
+  const want = new Set(domains.map((d) => d.toLowerCase().trim()).filter(Boolean));
+  const names = new Set([...want].map((d) => normalizeCompany(d.replace(/\.[a-z]+$/, ""))).filter(Boolean));
+  return rows.filter(
+    (r) => r.company_domain && want.has(r.company_domain.toLowerCase()) || r.company && names.has(normalizeCompany(r.company))
+  );
+}
+async function sharingFriends(db2, viewerId) {
+  const rows = await db2.sql`
+    select f.id as friendship_id, u.id as user_id, u.full_name, u.first_name, u.email, s.mode, s.company_domains
+      from orbit.friendships f
+      join orbit.users u on u.id = case when f.a = ${viewerId}::uuid then f.b else f.a end
+      join orbit.friend_share_settings s on s.friendship_id = f.id and s.owner_user_id = u.id
+     where f.status = 'active' and (f.a = ${viewerId}::uuid or f.b = ${viewerId}::uuid)
+       and s.mode <> 'none' and u.deleted_at is null`;
+  return rows.map((r) => {
+    const name = r.full_name?.trim() || r.first_name?.trim() || r.email.split("@")[0];
+    return {
+      friendshipId: r.friendship_id,
+      userId: r.user_id,
+      name,
+      firstName: r.first_name?.trim() || name.split(/\s+/)[0],
+      mode: r.mode,
+      domains: r.company_domains ?? []
+    };
+  });
+}
+async function visibleShares(db2, friend) {
+  const rows = await db2.sql`
+    select owner_user_id, person_id, display_name, title, company, company_domain, linkedin_member_id,
+           linkedin_slug, email_hash, school, is_alumni, closeness::int as closeness, updated_at
+      from orbit.friend_shares where owner_user_id = ${friend.userId}::uuid
+     order by display_name`;
+  return underMode(rows, friend.mode, friend.domains);
+}
+async function matchShares(db2, viewerId, shares2) {
+  const out = /* @__PURE__ */ new Map();
+  if (!shares2.length) return out;
+  const people = await db2.sql`
+    select p.id, p.display_name, p.org_raw, o.name as org_name, p.linkedin_member_id, p.linkedin_slug, p.primary_email
+      from orbit.people p left join orbit.organizations o on o.id = p.org_id
+     where p.user_id = ${viewerId}::uuid and not p.is_self and p.deleted_at is null and p.merged_into is null`;
+  const identities = await db2.sql`
+    select person_id, kind, value_norm from orbit.person_identities
+     where user_id = ${viewerId}::uuid and kind in ('email', 'linkedin_member', 'linkedin_slug')`;
+  const byMember = /* @__PURE__ */ new Map();
+  const bySlug = /* @__PURE__ */ new Map();
+  const emails = /* @__PURE__ */ new Map();
+  const byName = /* @__PURE__ */ new Map();
+  for (const p of people) {
+    if (p.linkedin_member_id) byMember.set(p.linkedin_member_id, p.id);
+    if (p.linkedin_slug) bySlug.set(p.linkedin_slug.toLowerCase(), p.id);
+    if (p.primary_email?.includes("@")) emails.set(normalizeEmail(p.primary_email), p.id);
+    const key = `${p.display_name.trim().toLowerCase()}|${normalizeCompany(p.org_name ?? p.org_raw)}`;
+    byName.set(key, [...byName.get(key) ?? [], p.id]);
+  }
+  for (const i of identities) {
+    if (i.kind === "linkedin_member" && !byMember.has(i.value_norm)) byMember.set(i.value_norm, i.person_id);
+    if (i.kind === "linkedin_slug" && !bySlug.has(i.value_norm.toLowerCase()))
+      bySlug.set(i.value_norm.toLowerCase(), i.person_id);
+    if (i.kind === "email" && !emails.has(i.value_norm)) emails.set(i.value_norm, i.person_id);
+  }
+  const wanted = new Set(shares2.map((s) => s.email_hash).filter((h) => !!h));
+  const byHash = /* @__PURE__ */ new Map();
+  if (wanted.size)
+    for (const [email, id] of emails) {
+      const h = await emailHash(email);
+      if (wanted.has(h) && !byHash.has(h)) byHash.set(h, id);
+    }
+  for (const s of shares2) {
+    const hit = s.linkedin_member_id && byMember.get(s.linkedin_member_id) || s.linkedin_slug && bySlug.get(s.linkedin_slug.toLowerCase()) || s.email_hash && byHash.get(s.email_hash) || (() => {
+      if (!s.company) return void 0;
+      const ids = byName.get(`${s.display_name.trim().toLowerCase()}|${normalizeCompany(s.company)}`);
+      return ids?.length === 1 ? ids[0] : void 0;
+    })();
+    if (hit) out.set(s.person_id, hit);
+  }
+  return out;
+}
+var CLOSENESS_P = { 1: 0.35, 2: 0.6, 3: 0.85 };
+function closenessPhrase(closeness, firstName) {
+  return closeness === 3 ? `is close to ${firstName}` : closeness === 2 ? `knows ${firstName} well` : `knows ${firstName}`;
+}
+var friendNode = (userId) => `friend:${userId}`;
+var friendPersonNode = (personId) => `friend_person:${personId}`;
+var isFriendNode = (id) => id.startsWith("friend:");
+
+// supabase/functions/orbit-api/routes/friends.ts
+var INVITES_PER_DAY = 20;
+var ASKS_PER_DAY_PER_FRIEND = 10;
+var INVITE_DAYS = 14;
+var SHARES_PAGE = 50;
+var MODES = ["all", "companies", "none"];
+var DAY_MS = 864e5;
+var forbidden = () => new HttpError(403, "forbidden", "not a friend who shares with you");
+function modeOf2(b, required = true) {
+  const m = b.mode;
+  if (m === void 0 && !required) return void 0;
+  if (typeof m !== "string" || !MODES.includes(m))
+    throw badRequest("mode is all, companies or none");
+  return m;
+}
+function domainsOf(b) {
+  const v = b.companyDomains;
+  if (v === void 0 || v === null) return [];
+  if (!Array.isArray(v) || v.some((d) => typeof d !== "string")) throw badRequest("companyDomains is a list");
+  return [...new Set(v.map((d) => d.trim().toLowerCase()).filter(Boolean))].slice(0, 50);
+}
+function inviteCode() {
+  let code = "";
+  while (code.length < 22) code += randomToken(24).replace(/[^A-Za-z0-9]/g, "");
+  return code.slice(0, 22);
+}
+async function userLite(db2, userId) {
+  const [u2] = await db2.sql`
+    select id, email, full_name, first_name, school, grad_year, avatar_url, settings
+      from orbit.users where id = ${userId}::uuid and deleted_at is null`;
+  if (!u2) throw new HttpError(401, "unauthorized", "sign in again");
+  return { ...u2, settings: u2.settings ?? {} };
+}
+var nameOf = (u2) => u2.full_name?.trim() || u2.first_name?.trim() || u2.email.split("@")[0];
+var firstOf = (u2) => u2.first_name?.trim() || nameOf(u2).split(/\s+/)[0];
+function defaultMode(u2) {
+  const m = u2.settings.friend_share_mode;
+  const d = u2.settings.friend_share_domains;
+  return {
+    mode: typeof m === "string" && MODES.includes(m) ? m : "all",
+    domains: Array.isArray(d) ? d.filter((x) => typeof x === "string") : []
+  };
+}
+async function enqueueRefresh(ctx, userIds) {
+  const q = ctx.services().queue;
+  for (const id of new Set(userIds))
+    await q.enqueue({ kind: "friend_shares_refresh", userId: id, payload: {}, dedupeKey: `friends:refresh:${id}` }).catch(() => void 0);
+}
+async function logAudit(ctx, action, table, targetId, details) {
+  await ctx.db.sql`
+    insert into orbit.audit_log (user_id, actor, action, target_table, target_id, details)
+    values (${ctx.userId}::uuid, 'user', ${action}, ${table}, ${targetId}, ${details}::jsonb)`;
+}
+async function targetNames(db2, userId) {
+  const goals = await db2.sql`
+    select targets from orbit.goals where user_id = ${userId}::uuid and status = 'active' and deleted_at is null`;
+  const out = [];
+  for (const g of goals) for (const o of g.targets?.organizations ?? []) if (!out.includes(o)) out.push(o);
+  return out;
+}
+async function friendView(db2, me2, f2, targets) {
+  const otherId = f2.a === me2 ? f2.b : f2.a;
+  const other = await userLite(db2, otherId);
+  const [theirs] = await db2.sql`
+    select mode, company_domains from orbit.friend_share_settings
+     where friendship_id = ${f2.id}::uuid and owner_user_id = ${otherId}::uuid`;
+  const [mine] = await db2.sql`
+    select mode, company_domains from orbit.friend_share_settings
+     where friendship_id = ${f2.id}::uuid and owner_user_id = ${me2}::uuid`;
+  const friend = {
+    friendshipId: f2.id,
+    userId: otherId,
+    name: nameOf(other),
+    firstName: firstOf(other),
+    mode: theirs?.mode ?? "none",
+    domains: theirs?.company_domains ?? []
+  };
+  const visible = friend.mode === "none" ? [] : await visibleShares(db2, friend);
+  const lower = targets.map((t) => t.toLowerCase());
+  const at = visible.filter((s) => s.company && lower.includes(s.company.toLowerCase()));
+  const knowsAt = targets.map((company) => ({
+    company,
+    count: visible.filter((s) => s.company?.toLowerCase() === company.toLowerCase()).length
+  })).filter((k) => k.count > 0);
+  return {
+    friendshipId: f2.id,
+    userId: otherId,
+    name: friend.name,
+    school: other.school,
+    gradYear: other.grad_year,
+    avatarUrl: other.avatar_url,
+    shares: visible.length,
+    atTargets: at.length,
+    knowsAt,
+    myMode: mine?.mode ?? "none",
+    myCompanyDomains: mine?.company_domains ?? [],
+    since: iso(f2.accepted_at ?? f2.created_at)
+  };
+}
+async function list(ctx) {
+  const db2 = ctx.db;
+  const me2 = ctx.userId;
+  await db2.sql`select orbit.expire_friend_asks()`;
+  const rows = await db2.sql`
+    select id, a, b, status, requested_by, created_at, accepted_at from orbit.friendships
+     where (a = ${me2}::uuid or b = ${me2}::uuid) and status in ('active', 'pending') order by created_at`;
+  const targets = await targetNames(db2, me2);
+  const friends = [];
+  const pending = [];
+  for (const f2 of rows) {
+    if (f2.status === "active") friends.push(await friendView(db2, me2, f2, targets));
+    else if (f2.requested_by !== me2) {
+      const other = await userLite(db2, f2.a === me2 ? f2.b : f2.a);
+      pending.push({
+        id: f2.id,
+        direction: "in",
+        email: null,
+        name: nameOf(other),
+        status: "pending",
+        createdAt: iso(f2.created_at)
+      });
+    } else {
+      const other = await userLite(db2, f2.a === me2 ? f2.b : f2.a);
+      pending.push({
+        id: f2.id,
+        direction: "out",
+        email: null,
+        name: nameOf(other),
+        status: "pending",
+        createdAt: iso(f2.created_at)
+      });
+    }
+  }
+  const invites = await db2.sql`
+    select id, to_email, status, created_at from orbit.friend_invites
+     where from_user_id = ${me2}::uuid and status = 'pending' and to_email is not null
+       and not exists (select 1 from orbit.users u where lower(u.email) = to_email and u.deleted_at is null)
+     order by created_at`;
+  for (const i of invites)
+    pending.push({
+      id: i.id,
+      direction: "out",
+      email: i.to_email,
+      name: null,
+      status: i.status,
+      createdAt: iso(i.created_at)
+    });
+  const out = { friends, pending };
+  return json(200, out);
+}
+async function invite(ctx) {
+  const b = await body(ctx, true);
+  const db2 = ctx.db;
+  const me2 = ctx.userId;
+  const now = ctx.now();
+  const email = typeof b.email === "string" && b.email.trim() ? normalizeEmail(b.email.trim()) : null;
+  if (email && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) throw badRequest("that is not an email address");
+  const u2 = await userLite(db2, me2);
+  if (email && email === normalizeEmail(u2.email)) throw badRequest("that is your own address");
+  const [today] = await db2.sql`
+    select count(*)::int as n from orbit.friend_invites
+     where from_user_id = ${me2}::uuid and created_at > ${new Date(now.getTime() - DAY_MS)}::timestamptz`;
+  if ((today?.n ?? 0) >= INVITES_PER_DAY)
+    throw new HttpError(429, "rate_limited", `at most ${INVITES_PER_DAY} invites a day`);
+  const code = inviteCode();
+  const expires = new Date(now.getTime() + INVITE_DAYS * DAY_MS);
+  const [row] = await db2.sql`
+    insert into orbit.friend_invites (from_user_id, to_email, code, status, created_at, expires_at)
+    values (${me2}::uuid, ${email}, ${code}, 'pending', ${now}::timestamptz, ${expires}::timestamptz)
+    returning id, created_at`;
+  const link = `${ctx.env.appUrl}/friends/join/${code}`;
+  const mine = defaultMode(u2);
+  let status2 = "link";
+  let name = null;
+  if (email) {
+    const [other] = await db2.sql`
+      select id, email, full_name, first_name, school, grad_year, avatar_url, settings from orbit.users
+       where lower(email) = ${email} and deleted_at is null`;
+    if (other) {
+      const [lo, hi] = me2 < other.id ? [me2, other.id] : [other.id, me2];
+      const [existing] = await db2.sql`
+        select id, status from orbit.friendships where a = ${lo}::uuid and b = ${hi}::uuid`;
+      if (existing?.status === "active")
+        throw new HttpError(409, "already_friends", "you are already friends");
+      if (existing?.status === "blocked") throw new HttpError(409, "blocked", "that request cannot be sent");
+      const [f2] = existing ? await db2.sql`
+            update orbit.friendships set status = 'pending', requested_by = ${me2}::uuid, created_at = ${now}::timestamptz,
+                   accepted_at = null, ended_at = null, ended_by = null
+             where id = ${existing.id}::uuid returning id` : await db2.sql`
+            insert into orbit.friendships (a, b, status, requested_by, created_at)
+            values (${lo}::uuid, ${hi}::uuid, 'pending', ${me2}::uuid, ${now}::timestamptz) returning id`;
+      await db2.sql`
+        insert into orbit.friend_share_settings (friendship_id, owner_user_id, mode, company_domains)
+        values (${f2.id}::uuid, ${me2}::uuid, ${mine.mode}, ${mine.domains}::text[])
+        on conflict (friendship_id, owner_user_id) do update set mode = excluded.mode,
+          company_domains = excluded.company_domains, updated_at = now()`;
+      status2 = "requested";
+      name = nameOf(other);
+    } else {
+      const mailer = ctx.services().mailer;
+      if (mailer?.configured) {
+        const r = await mailer.send({
+          to: email,
+          subject: `${firstOf(u2)} wants to pool networks with you on Orbit`,
+          text: [
+            `${nameOf(u2)} invited you to be friends on Orbit.`,
+            "Friends pool their networks: you see who they know and how well, they see yours, and intros happen in one tap. Nothing else crosses: not your messages, notes or contact details.",
+            `Open this link to sign in and accept: ${link}`,
+            `It stops working in ${INVITE_DAYS} days.`
+          ].join("\n\n")
+        });
+        if (r.ok) status2 = "sent";
+      }
+    }
+  }
+  await logAudit(ctx, "friends.invite", "friend_invites", row.id, { status: status2, byEmail: !!email });
+  const out = {
+    code,
+    link,
+    status: status2,
+    invite: {
+      id: row.id,
+      direction: "out",
+      email,
+      name,
+      status: "pending",
+      createdAt: iso(row.created_at)
+    }
+  };
+  return json(200, out);
+}
+async function pendingFor(db2, me2, b) {
+  const friendshipId = optUuid(b, "friendshipId");
+  if (friendshipId) {
+    const [f3] = await db2.sql`
+      select id, a, b, status, requested_by, created_at, accepted_at from orbit.friendships
+       where id = ${friendshipId}::uuid and (a = ${me2}::uuid or b = ${me2}::uuid)`;
+    if (f3?.status !== "pending") throw new HttpError(404, "not_found", "no such request");
+    if (f3.requested_by === me2) throw badRequest("that is your own request");
+    return { friendshipId: f3.id, fromUserId: f3.a === me2 ? f3.b : f3.a };
+  }
+  const code = typeof b.code === "string" ? b.code.trim() : "";
+  if (!code) throw badRequest("code or friendshipId is required");
+  const [inv] = await db2.sql`
+    select id, from_user_id, to_email, status, expires_at from orbit.friend_invites where code = ${code}`;
+  if (inv?.status !== "pending" || new Date(inv.expires_at).getTime() < Date.now())
+    throw new HttpError(404, "not_found", "no such request, or it has expired");
+  if (inv.from_user_id === me2) throw badRequest("that is your own invite");
+  const [u2] = await db2.sql`select email from orbit.users where id = ${me2}::uuid`;
+  if (inv.to_email && u2 && normalizeEmail(u2.email) !== inv.to_email)
+    throw new HttpError(403, "forbidden", "that invite was sent to a different address");
+  const [lo, hi] = me2 < inv.from_user_id ? [me2, inv.from_user_id] : [inv.from_user_id, me2];
+  const [f2] = await db2.sql`
+    select id, status from orbit.friendships where a = ${lo}::uuid and b = ${hi}::uuid`;
+  return {
+    friendshipId: f2?.status === "pending" ? f2.id : void 0,
+    inviteId: inv.id,
+    fromUserId: inv.from_user_id
+  };
+}
+async function accept(ctx) {
+  const b = await body(ctx);
+  const db2 = ctx.db;
+  const me2 = ctx.userId;
+  const now = ctx.now();
+  const mode2 = modeOf2(b);
+  const domains = domainsOf(b);
+  const p = await pendingFor(db2, me2, b);
+  const inviter = await userLite(db2, p.fromUserId);
+  const theirs = defaultMode(inviter);
+  const [lo, hi] = me2 < p.fromUserId ? [me2, p.fromUserId] : [p.fromUserId, me2];
+  const friendshipId = await db2.begin(async (tx) => {
+    let id = p.friendshipId;
+    if (id)
+      await tx.sql`update orbit.friendships set status = 'active', accepted_at = ${now}::timestamptz where id = ${id}::uuid`;
+    else {
+      const [existing] = await tx.sql`
+        select id, status from orbit.friendships where a = ${lo}::uuid and b = ${hi}::uuid`;
+      if (existing?.status === "active")
+        throw new HttpError(409, "already_friends", "you are already friends");
+      if (existing?.status === "blocked")
+        throw new HttpError(409, "blocked", "that request cannot be accepted");
+      const [f3] = existing ? await tx.sql`
+            update orbit.friendships set status = 'active', requested_by = ${p.fromUserId}::uuid,
+                   accepted_at = ${now}::timestamptz, ended_at = null, ended_by = null
+             where id = ${existing.id}::uuid returning id` : await tx.sql`
+            insert into orbit.friendships (a, b, status, requested_by, created_at, accepted_at)
+            values (${lo}::uuid, ${hi}::uuid, 'active', ${p.fromUserId}::uuid, ${now}::timestamptz, ${now}::timestamptz)
+            returning id`;
+      id = f3.id;
+    }
+    await tx.sql`
+      insert into orbit.friend_share_settings (friendship_id, owner_user_id, mode, company_domains)
+      values (${id}::uuid, ${p.fromUserId}::uuid, ${theirs.mode}, ${theirs.domains}::text[])
+      on conflict (friendship_id, owner_user_id) do nothing`;
+    await tx.sql`
+      insert into orbit.friend_share_settings (friendship_id, owner_user_id, mode, company_domains)
+      values (${id}::uuid, ${me2}::uuid, ${mode2}, ${domains}::text[])
+      on conflict (friendship_id, owner_user_id) do update set mode = excluded.mode,
+        company_domains = excluded.company_domains, updated_at = now()`;
+    if (p.inviteId)
+      await tx.sql`update orbit.friend_invites set status = 'accepted', answered_at = ${now}::timestamptz where id = ${p.inviteId}::uuid`;
+    return id;
+  });
+  await enqueueRefresh(ctx, [me2, p.fromUserId]);
+  await logAudit(ctx, "friends.accept", "friendships", friendshipId, { mode: mode2 });
+  const [f2] = await db2.sql`
+    select id, a, b, status, requested_by, created_at, accepted_at from orbit.friendships where id = ${friendshipId}::uuid`;
+  const out = { friend: await friendView(db2, me2, f2, await targetNames(db2, me2)) };
+  return json(200, out);
+}
+async function decline(ctx) {
+  const b = await body(ctx);
+  const db2 = ctx.db;
+  const me2 = ctx.userId;
+  const now = ctx.now();
+  const p = await pendingFor(db2, me2, b);
+  await db2.begin(async (tx) => {
+    if (p.friendshipId) await tx.sql`delete from orbit.friendships where id = ${p.friendshipId}::uuid`;
+    if (p.inviteId)
+      await tx.sql`update orbit.friend_invites set status = 'declined', answered_at = ${now}::timestamptz where id = ${p.inviteId}::uuid`;
+  });
+  await logAudit(ctx, "friends.decline", "friendships", p.friendshipId ?? p.inviteId ?? "", {});
+  return json(200, { ok: true });
+}
+async function end(ctx) {
+  const b = await body(ctx);
+  const db2 = ctx.db;
+  const me2 = ctx.userId;
+  const now = ctx.now();
+  const friendshipId = uuid(b, "friendshipId");
+  const rows = await db2.begin(async (tx) => {
+    const r = await tx.sql`
+      update orbit.friendships set status = 'ended', ended_at = ${now}::timestamptz, ended_by = ${me2}::uuid
+       where id = ${friendshipId}::uuid and (a = ${me2}::uuid or b = ${me2}::uuid) and status in ('active', 'pending')
+       returning id`;
+    if (r.length)
+      await tx.sql`
+        update orbit.friend_intro_asks set status = 'expired', answered_at = ${now}::timestamptz
+         where friendship_id = ${friendshipId}::uuid and status = 'asked'`;
+    return r;
+  });
+  if (!rows.length) throw new HttpError(404, "not_found", "no such friend");
+  await logAudit(ctx, "friends.end", "friendships", friendshipId, {});
+  return json(200, { ok: true });
+}
+async function ownRows(db2, me2) {
+  return db2.sql`
+    select owner_user_id, person_id, display_name, title, company, company_domain, linkedin_member_id,
+           linkedin_slug, email_hash, school, is_alumni, closeness::int as closeness, updated_at
+      from orbit.friend_shares where owner_user_id = ${me2}::uuid order by display_name`;
+}
+async function settings(ctx) {
+  const b = await body(ctx);
+  const db2 = ctx.db;
+  const me2 = ctx.userId;
+  const mode2 = modeOf2(b);
+  const domains = domainsOf(b);
+  const friendshipId = optUuid(b, "friendshipId");
+  if (friendshipId) {
+    const r = await db2.sql`
+      update orbit.friend_share_settings set mode = ${mode2}, company_domains = ${domains}::text[], updated_at = now()
+       where friendship_id = ${friendshipId}::uuid and owner_user_id = ${me2}::uuid
+         and exists (select 1 from orbit.friendships f where f.id = ${friendshipId}::uuid and f.status = 'active'
+                       and (f.a = ${me2}::uuid or f.b = ${me2}::uuid))
+       returning friendship_id as id`;
+    if (!r.length) throw new HttpError(404, "not_found", "no such friend");
+  } else {
+    await db2.sql`
+      update orbit.friend_share_settings set mode = ${mode2}, company_domains = ${domains}::text[], updated_at = now()
+       where owner_user_id = ${me2}::uuid`;
+    await db2.sql`
+      update orbit.users set settings = settings || jsonb_build_object('friend_share_mode', ${mode2}::text,
+                                                                        'friend_share_domains', ${JSON.stringify(domains)}::jsonb)
+       where id = ${me2}::uuid`;
+  }
+  await enqueueRefresh(ctx, [me2]);
+  await logAudit(ctx, "friends.settings", "friend_share_settings", friendshipId ?? me2, { mode: mode2, domains });
+  const out = {
+    mode: mode2,
+    companyDomains: domains,
+    shares: underMode(await ownRows(db2, me2), mode2, domains).length
+  };
+  return json(200, out);
+}
+async function preview(ctx) {
+  const db2 = ctx.db;
+  const me2 = ctx.userId;
+  const u2 = await userLite(db2, me2);
+  const mine = defaultMode(u2);
+  const rows = underMode(await ownRows(db2, me2), mine.mode, mine.domains);
+  const out = {
+    mode: mine.mode,
+    companyDomains: mine.domains,
+    shares: rows.map(publicShare),
+    total: rows.length
+  };
+  return json(200, out);
+}
+async function friendFor(db2, me2, friendUserId) {
+  const [v] = await db2.sql`select orbit.friend_visible(${me2}::uuid, ${friendUserId}::uuid) as v`;
+  if (!v?.v) throw forbidden();
+  const f2 = (await sharingFriends(db2, me2)).find((x) => x.userId === friendUserId);
+  if (!f2) throw forbidden();
+  return f2;
+}
+async function shares(ctx, friendUserId, b = {}) {
+  const db2 = ctx.db;
+  const me2 = ctx.userId;
+  const company = (ctx.url.searchParams.get("company") ?? (typeof b.company === "string" ? b.company : "")).trim().toLowerCase();
+  const cursor = ctx.url.searchParams.get("cursor") ?? (typeof b.cursor === "string" ? b.cursor : null);
+  const offset = cursor && /^c\d+$/.test(cursor) ? Number(cursor.slice(1)) : 0;
+  const friend = await friendFor(db2, me2, friendUserId);
+  const all = (await visibleShares(db2, friend)).filter(
+    (s) => !company || s.company?.toLowerCase() === company || s.company_domain?.toLowerCase() === company
+  );
+  const page2 = all.slice(offset, offset + SHARES_PAGE);
+  const out = {
+    friendUserId,
+    shares: page2.map(publicShare),
+    total: all.length,
+    nextCursor: offset + SHARES_PAGE < all.length ? `c${offset + SHARES_PAGE}` : null
+  };
+  return json(200, out);
+}
+async function sharesFlat(ctx) {
+  const b = await body(ctx);
+  return shares(ctx, uuid(b, "friendUserId"), b);
+}
+async function askView(db2, r) {
+  const [asker, friend] = await Promise.all([userLite(db2, r.asker_user_id), userLite(db2, r.friend_user_id)]);
+  const [t] = await db2.sql`
+    select p.display_name, p.org_raw, o.name as org_name from orbit.people p
+      left join orbit.organizations o on o.id = p.org_id where p.id = ${r.target_person_id}::uuid`;
+  return {
+    id: r.id,
+    friendshipId: r.friendship_id,
+    askerUserId: r.asker_user_id,
+    askerName: nameOf(asker),
+    friendUserId: r.friend_user_id,
+    friendName: nameOf(friend),
+    targetPersonId: r.target_person_id,
+    targetName: t?.display_name ?? "Someone",
+    targetCompany: t?.org_name ?? t?.org_raw ?? null,
+    askerPersonId: r.asker_person_id,
+    note: r.note,
+    status: r.status,
+    createdAt: iso(r.created_at),
+    answeredAt: iso(r.answered_at),
+    forwardedDraftId: r.forwarded_message_id
+  };
+}
+var ASK_COLUMNS = "id, friendship_id, asker_user_id, friend_user_id, target_person_id, asker_person_id, note, status, created_at, answered_at, forwarded_message_id";
+async function listAsks(ctx) {
+  const db2 = ctx.db;
+  const me2 = ctx.userId;
+  await db2.sql`select orbit.expire_friend_asks()`;
+  const rows = await db2.query(
+    `select ${ASK_COLUMNS} from orbit.friend_intro_asks where asker_user_id = $1 or friend_user_id = $1
+      order by created_at desc limit 200`,
+    [me2]
+  );
+  const asked = [];
+  const received = [];
+  for (const r of rows) (r.asker_user_id === me2 ? asked : received).push(await askView(db2, r));
+  const out = { asked, received };
+  return json(200, out);
+}
+async function ask(ctx) {
+  const b = await body(ctx);
+  if (!("friendUserId" in b)) return listAsks(ctx);
+  const db2 = ctx.db;
+  const me2 = ctx.userId;
+  const now = ctx.now();
+  const friendUserId = uuid(b, "friendUserId");
+  const targetPersonId = uuid(b, "targetPersonId");
+  const note2 = text(b, "note", 1200);
+  const friend = await friendFor(db2, me2, friendUserId);
+  const target = (await visibleShares(db2, friend)).find((s) => s.person_id === targetPersonId);
+  if (!target) throw new HttpError(404, "not_found", "that person is not one your friend shares");
+  const [today] = await db2.sql`
+    select count(*)::int as n from orbit.friend_intro_asks
+     where friendship_id = ${friend.friendshipId}::uuid and asker_user_id = ${me2}::uuid
+       and created_at > ${new Date(now.getTime() - DAY_MS)}::timestamptz`;
+  if ((today?.n ?? 0) >= ASKS_PER_DAY_PER_FRIEND)
+    throw new HttpError(429, "rate_limited", `at most ${ASKS_PER_DAY_PER_FRIEND} asks a day per friend`);
+  const [open] = await db2.sql`
+    select id from orbit.friend_intro_asks
+     where friendship_id = ${friend.friendshipId}::uuid and asker_user_id = ${me2}::uuid
+       and target_person_id = ${targetPersonId}::uuid and status = 'asked'`;
+  if (open)
+    throw new HttpError(409, "already_asked", "you already asked for this intro; it is waiting on them");
+  const match = (await matchShares(db2, me2, [target])).get(target.person_id) ?? null;
+  const [row] = await db2.query(
+    `insert into orbit.friend_intro_asks (friendship_id, asker_user_id, friend_user_id, target_person_id, asker_person_id,
+                                          note, status, created_at)
+     values ($1, $2, $3, $4, $5, $6, 'asked', $7) returning ${ASK_COLUMNS}`,
+    [friend.friendshipId, me2, friendUserId, targetPersonId, match, note2, now]
+  );
+  await logAudit(ctx, "friends.ask", "friend_intro_asks", row.id, { friendUserId });
+  const out = { ask: await askView(db2, row) };
+  return json(200, out);
+}
+async function respond(ctx, askId, b) {
+  const db2 = ctx.db;
+  const me2 = ctx.userId;
+  const now = ctx.now();
+  const action = b.action;
+  if (action !== "forward" && action !== "decline") throw badRequest("action is forward or decline");
+  const [r] = await db2.query(
+    `select ${ASK_COLUMNS} from orbit.friend_intro_asks where id = $1 and friend_user_id = $2`,
+    [askId, me2]
+  );
+  if (!r) throw new HttpError(404, "not_found", "no such ask");
+  if (r.status !== "asked") throw new HttpError(409, "already_answered", "that ask was answered");
+  if (action === "decline") {
+    await db2.sql`
+      update orbit.friend_intro_asks set status = 'declined', answered_at = ${now}::timestamptz where id = ${askId}::uuid`;
+    await logAudit(ctx, "friends.ask.decline", "friend_intro_asks", askId, {});
+    const out2 = {
+      ask: await askView(db2, { ...r, status: "declined", answered_at: now }),
+      draft: null
+    };
+    return json(200, out2);
+  }
+  const [target] = await db2.sql`
+    select id, display_name, first_name, primary_email, do_not_contact, hidden_at, private, deleted_at
+      from orbit.people where id = ${r.target_person_id}::uuid and user_id = ${me2}::uuid`;
+  if (!target || target.deleted_at || target.hidden_at || target.private)
+    throw new HttpError(409, "not_shared", "that person is no longer one you share");
+  if (target.do_not_contact) throw new HttpError(409, "do_not_contact", "they asked not to be contacted");
+  if (!target.primary_email)
+    throw new HttpError(
+      409,
+      "no_email",
+      `you have no email address for ${target.display_name}, so there is nothing to forward with`
+    );
+  const [asker, meRow] = await Promise.all([userLite(db2, r.asker_user_id), userLite(db2, me2)]);
+  const targetFirst = target.first_name?.trim() || target.display_name.split(/\s+/)[0];
+  const input = {
+    targetFirst,
+    askerName: nameOf(asker),
+    askerFirst: firstOf(asker),
+    note: r.note,
+    meFirst: firstOf(meRow)
+  };
+  const customBody = typeof b.body === "string" && b.body.trim() ? b.body.trim() : null;
+  const draftId = await db2.begin(async (tx) => {
+    const [d] = await tx.sql`
+      insert into orbit.drafts (user_id, person_id, channel, kind, subject, body, status, via, generated_by, validator)
+      values (${me2}::uuid, ${target.id}::uuid, 'gmail', 'forward_intro', ${forwardSubject(input)},
+              ${customBody ?? forwardBody(input)}, 'draft',
+              ${{ friendAskId: askId, cc: asker.email, ccName: nameOf(asker), askerUserId: r.asker_user_id }}::jsonb,
+              'template', ${{ ok: true, issues: [], words: 0, grade: 5 }}::jsonb)
+      returning id`;
+    await tx.sql`
+      update orbit.friend_intro_asks set status = 'forwarded', answered_at = ${now}::timestamptz,
+             forwarded_message_id = ${d.id}::uuid
+       where id = ${askId}::uuid`;
+    return d.id;
+  });
+  await logAudit(ctx, "friends.ask.forward", "friend_intro_asks", askId, { draftId });
+  const [draft2] = await db2.sql`select * from orbit.drafts where id = ${draftId}::uuid`;
+  const out = {
+    ask: await askView(db2, { ...r, status: "forwarded", answered_at: now, forwarded_message_id: draftId }),
+    draft: toServerDraft(draft2)
+  };
+  return json(200, out);
+}
+async function respondFlat(ctx) {
+  const b = await body(ctx);
+  return respond(ctx, uuid(b, "id"), b);
+}
+function friendPatternRoute(path) {
+  const shareM = /^\/friends\/shares\/([0-9a-f-]{36})$/i.exec(path);
+  if (shareM)
+    return {
+      method: "GET|POST",
+      auth: true,
+      run: async (ctx) => shares(ctx, shareM[1].toLowerCase(), ctx.req.method === "POST" ? await body(ctx, true) : {})
+    };
+  const respondM = /^\/friends\/asks\/([0-9a-f-]{36})\/respond$/i.exec(path);
+  if (respondM)
+    return {
+      method: "POST",
+      auth: true,
+      run: async (ctx) => respond(ctx, respondM[1].toLowerCase(), await body(ctx))
+    };
+  return void 0;
+}
+var friendRoutes = {
+  "/friends": { method: "GET|POST", auth: true, run: list },
+  "/friends/invite": { method: "POST", auth: true, run: invite },
+  "/friends/accept": { method: "POST", auth: true, run: accept },
+  "/friends/decline": { method: "POST", auth: true, run: decline },
+  "/friends/end": { method: "POST", auth: true, run: end },
+  "/friends/settings": { method: "POST", auth: true, run: settings },
+  "/friends/preview": { method: "GET|POST", auth: true, run: preview },
+  "/friends/shares": { method: "POST", auth: true, run: sharesFlat },
+  "/friends/asks": {
+    method: "GET|POST",
+    auth: true,
+    run: (ctx) => ctx.req.method === "GET" ? listAsks(ctx) : ask(ctx)
+  },
+  "/friends/asks/respond": { method: "POST", auth: true, run: respondFlat }
+};
+
 // packages/core/src/types.ts
 var GOAL_KINDS = [
   "recruiting",
@@ -7838,19 +8660,19 @@ var GOAL_INFER_SYSTEM = [
   'If nothing new is stated, return {"goals": []}.'
 ].join("\n");
 var GOAL_TITLE_MAX = 60;
-var list = z3.array(z3.string());
+var list2 = z3.array(z3.string());
 var goalInferSchema = z3.object({
   goals: z3.array(
     z3.object({
       kind: z3.enum(GOAL_KINDS),
       title: z3.string(),
-      targets: z3.object({ organizations: list, roles: list, geographies: list, people: list }),
+      targets: z3.object({ organizations: list2, roles: list2, geographies: list2, people: list2 }),
       criteria: z3.object({
         sector: z3.string().nullable(),
         stage: z3.string().nullable(),
-        seniority: list.nullable(),
-        skills: list.nullable(),
-        keywords: list.nullable()
+        seniority: list2.nullable(),
+        skills: list2.nullable(),
+        keywords: list2.nullable()
       }),
       success_metric: z3.string().nullable(),
       due_at: z3.string().nullable(),
@@ -8832,7 +9654,7 @@ async function add(ctx) {
   );
   return json(200, r);
 }
-async function list2(ctx) {
+async function list3(ctx) {
   const b = await body(ctx, true);
   return json(200, { memories: await listMemories(ctx.db, ctx.userId, optUuid(b, "personId")) });
 }
@@ -8896,7 +9718,7 @@ async function extract(ctx) {
 var memoryRoutes = {
   "/memory/search": { method: "POST", auth: true, run: search },
   "/memory/add": { method: "POST", auth: true, run: add },
-  "/memory/list": { method: "POST", auth: true, run: list2 },
+  "/memory/list": { method: "POST", auth: true, run: list3 },
   "/memory/forget": { method: "POST", auth: true, run: forget },
   "/memory/extract": { method: "POST", auth: true, run: extract }
 };
@@ -9072,14 +9894,6 @@ function seniorityClass(title) {
   if (JUNIOR_OR_MANAGER.test(t)) return 0;
   return void 0;
 }
-
-// packages/core/src/scoring/strength.ts
-var ENGAGEMENT = /* @__PURE__ */ new Set([
-  "linkedin_comment_in",
-  "linkedin_comment_out",
-  "linkedin_reaction_in"
-]);
-var AMBIENT = /* @__PURE__ */ new Set(["email_cc", "linkedin_connected", ...ENGAGEMENT]);
 
 // packages/core/src/graph/ties.ts
 var TIE_KINDS = [
@@ -9507,80 +10321,6 @@ async function upsertTie(db2, userId, t, now) {
        or orbit.ties.last_seen_at is distinct from excluded.last_seen_at`;
 }
 
-// packages/core/src/scoring/rapport.ts
-var RAPPORT_CUES = [
-  "asks_about_you",
-  "offers_help",
-  "personal_news",
-  "plans_together",
-  "congratulates",
-  "glad_to_hear",
-  "casual",
-  "uses_your_name",
-  "thoughtful",
-  "formal",
-  "distant",
-  "asked_to_stop",
-  "hostile"
-];
-var FUNCTION_CLASSES = {
-  personal: new Set(
-    "i me my mine myself we us our ours ourselves you your yours yourself yourselves he him his she her hers they them their theirs".split(
-      " "
-    )
-  ),
-  impersonal: new Set(
-    "it its itself this that these those something anything everything nothing someone anyone".split(" ")
-  ),
-  articles: new Set("a an the".split(" ")),
-  prepositions: new Set(
-    "about above across after against along among around at before behind below beside between by during for from in inside into near of off on onto out over through to toward under until up upon with within without".split(
-      " "
-    )
-  ),
-  auxiliary: new Set(
-    "am is are was were be been being have has had do does did will would shall should can could may might must i'm you're we're they're it's i've you've we've i'd you'd i'll you'll we'll".split(
-      " "
-    )
-  ),
-  adverbs: new Set(
-    "very really just so too also then now here there even only quite rather almost always never often".split(
-      " "
-    )
-  ),
-  conjunctions: new Set(
-    "and but or so because if although though while whereas unless since nor yet".split(" ")
-  ),
-  negations: new Set(
-    "no not never none nobody nothing neither nor don't can't won't isn't aren't wasn't didn't doesn't".split(
-      " "
-    )
-  ),
-  quantifiers: new Set("all some many much more most few several any each every both lot lots".split(" "))
-};
-var RAPPORT_LLM_GUIDE = `rapport: how the sender feels about the student, separate from their answer to the request.
-- warmth −2..2: 2 = clearly warm and personal (asks about the student, offers help or intros, shares their own news, suggests meeting up); 0 = neutral or businesslike, including short replies such as "ok" or "sounds good"; −2 = distant, annoyed, or asks not to be contacted. A polite decline that wishes the student well is warm, not cold.
-- familiarity: stranger, professional, friendly, or friend, from how they write to the student.
-- effort 0..2: 0 a one-liner, 1 a normal reply, 2 a long, thoughtful reply.
-- cues: any of ${RAPPORT_CUES.join(", ")} that apply.`;
-
-// packages/core/src/scoring/tieScore.ts
-var TIE_BAND_LABELS = {
-  faint: "Faint",
-  light: "Light",
-  warm: "Warm",
-  strong: "Strong",
-  close: "Close"
-};
-var TIE_LABEL_MIDPOINTS = { 1: 10, 2: 30, 3: 50, 4: 70, 5: 90 };
-function tieBand(score) {
-  if (score >= 80) return "close";
-  if (score >= 60) return "strong";
-  if (score >= 40) return "warm";
-  if (score >= 20) return "light";
-  return "faint";
-}
-
 // packages/core/src/graph/paths.ts
 function makeGraph() {
   return { nodes: /* @__PURE__ */ new Set(), adj: /* @__PURE__ */ new Map() };
@@ -9762,9 +10502,9 @@ function personalizedPageRank(adj, source, opts = {}) {
       nodes.add(v);
     }
     if (total <= 0) continue;
-    const list5 = [];
-    for (const [v, w] of nbrs) if (w > 0 && Number.isFinite(w)) list5.push({ to: v, p: w / total });
-    out.set(u2, list5);
+    const list6 = [];
+    for (const [v, w] of nbrs) if (w > 0 && Number.isFinite(w)) list6.push({ to: v, p: w / total });
+    out.set(u2, list6);
   }
   let rank2 = /* @__PURE__ */ new Map([[source, 1]]);
   for (let it = 0; it < iterations; it++) {
@@ -9772,12 +10512,12 @@ function personalizedPageRank(adj, source, opts = {}) {
     let restart = alpha;
     for (const [u2, r] of rank2) {
       if (r === 0) continue;
-      const list5 = out.get(u2);
-      if (!list5) {
+      const list6 = out.get(u2);
+      if (!list6) {
         restart += (1 - alpha) * r;
         continue;
       }
-      for (const { to, p } of list5) next.set(to, (next.get(to) ?? 0) + (1 - alpha) * r * p);
+      for (const { to, p } of list6) next.set(to, (next.get(to) ?? 0) + (1 - alpha) * r * p);
     }
     next.set(source, (next.get(source) ?? 0) + restart);
     rank2 = next;
@@ -9843,26 +10583,28 @@ function withExternal(pairs, targetId, candidates) {
     const key = pk(c.introducerId, targetId);
     const [a, b] = key.split("|");
     const w = c.kind === "linkedin_mutual" ? HOP_WEIGHTS.mutual : Math.max(0, Math.min(1, c.warmth ?? 0));
-    const conf = c.kind === "linkedin_mutual" ? 0.95 : 0.7;
+    const conf = c.kind === "linkedin_mutual" ? 0.95 : c.kind === "friend_path" ? 1 : 0.7;
     const tie = {
       id: `${key}|${c.kind}`,
       userId: "",
       aId: a,
       bId: b,
-      kind: c.kind,
+      kind: c.kind === "friend_path" ? "student_says_close" : c.kind,
       weight: w,
       confidence: conf,
-      evidence: { source: c.kind === "linkedin_mutual" ? "unipile" : "village" },
+      evidence: {
+        source: c.kind === "linkedin_mutual" ? "unipile" : c.kind === "friend_path" ? "friend" : "village"
+      },
       lastSeenAt: c.seenAt
     };
     const cur = out.get(key);
-    if (cur?.kinds.includes(c.kind)) continue;
+    if (cur?.kinds.includes(tie.kind)) continue;
     out.set(key, {
       aId: a,
       bId: b,
       weight: 1 - (1 - (cur?.weight ?? 0)) * (1 - w * conf),
       confidence: 1 - (1 - (cur?.confidence ?? 0)) * (1 - conf),
-      kinds: [...cur?.kinds ?? [], c.kind],
+      kinds: [...cur?.kinds ?? [], tie.kind],
       ties: [...cur?.ties ?? [], tie],
       lastSeenAt: cur?.lastSeenAt
     });
@@ -9892,8 +10634,8 @@ function pairIsOld(pair, now) {
     const ev = t.evidence;
     if (ev.ongoing || Array.isArray(ev.current) && ev.current.length === 2) return false;
     if (typeof ev.toYear === "number") {
-      const end = Date.UTC(ev.toYear, 11, 31);
-      newest = Number.isNaN(newest) ? end : Math.max(newest, end);
+      const end2 = Date.UTC(ev.toYear, 11, 31);
+      newest = Number.isNaN(newest) ? end2 : Math.max(newest, end2);
     }
   }
   return !Number.isNaN(newest) && newest < cutoff;
@@ -9994,7 +10736,7 @@ function mutualIntroducers(pairs, targetId, candidates) {
 }
 function routingGraph(input, pairs, now, mutuals = /* @__PURE__ */ new Set()) {
   const g = makeGraph();
-  const ask2 = /* @__PURE__ */ new Map();
+  const ask3 = /* @__PURE__ */ new Map();
   const scores = /* @__PURE__ */ new Map();
   const lifted = /* @__PURE__ */ new Set();
   const floor = firstHopFloor(input.goal);
@@ -10005,8 +10747,8 @@ function routingGraph(input, pairs, now, mutuals = /* @__PURE__ */ new Set()) {
     const passes = p.score > 0 && p.score >= floor;
     if (!passes && !mutual) continue;
     if (!passes) lifted.add(p.id);
-    const a = pAsk({ ...p, score });
-    ask2.set(p.id, a);
+    const a = p.pAsk !== void 0 ? Math.max(0, Math.min(1, p.pAsk)) : pAsk({ ...p, score });
+    ask3.set(p.id, a);
     scores.set(p.id, score);
     addEdge(g, USER_NODE, p.id, a, "strength", "", true);
   }
@@ -10025,7 +10767,7 @@ function routingGraph(input, pairs, now, mutuals = /* @__PURE__ */ new Set()) {
       addEdge(g, pair.bId, pair.aId, Math.min(0.999, ba * HOP_PENALTY), top, "", true);
     }
   }
-  return { g, ask: ask2, scores, lifted };
+  return { g, ask: ask3, scores, lifted };
 }
 function rankWarmPaths(input) {
   const now = input.now ?? /* @__PURE__ */ new Date();
@@ -10045,7 +10787,7 @@ function rankWarmPaths(input) {
   );
   const mutuals = mutualIntroducers(pairs, input.targetId, candidates);
   const rg = routingGraph(input, pairs, now, mutuals);
-  const { g, ask: ask2 } = rg;
+  const { g, ask: ask3 } = rg;
   const rT = targetReceptivity(input.target ?? {});
   const k = input.k ?? 12;
   const maxHops = input.maxHops ?? 3;
@@ -10058,7 +10800,7 @@ function rankWarmPaths(input) {
       const from = nodes[i];
       const to = nodes[i + 1];
       if (i === 0) {
-        const a = ask2.get(to);
+        const a = ask3.get(to);
         hops.push({ fromId: from, toId: to, p: a, kind: "strength" });
         p *= a;
         const last = input.people.get(to)?.lastContactAt;
@@ -10090,7 +10832,7 @@ function rankWarmPaths(input) {
     found.push(score(nodes));
   }
   for (const m of mutuals) {
-    if (!ask2.has(m) || !pairs.has(pk(m, input.targetId))) continue;
+    if (!ask3.has(m) || !pairs.has(pk(m, input.targetId))) continue;
     if (found.some((f2) => f2.nodes.length === 3 && f2.firstHopId === m)) continue;
     found.push(score([USER_NODE, m, input.targetId]));
   }
@@ -10125,13 +10867,13 @@ function rankWarmPaths(input) {
     for (const m of mids) middle.set(m, (middle.get(m) ?? 0) + 1);
     chosen.push(f2);
   }
-  const nameOf = (id) => id === input.targetId ? tName : input.people.get(id)?.name ?? "someone";
+  const nameOf2 = (id) => id === input.targetId ? tName : input.people.get(id)?.name ?? "someone";
   return {
     ...direct ? { direct } : {},
     paths: chosen.map((f2) => ({
       ...f2,
       hops: f2.hops.map(
-        (h, i) => i === 0 ? h : { ...h, phrase: pairPhrase(h.fromId, pairs.get(pk(h.fromId, h.toId)), nameOf(h.toId), now) }
+        (h, i) => i === 0 ? h : { ...h, phrase: pairPhrase(h.fromId, pairs.get(pk(h.fromId, h.toId)), nameOf2(h.toId), now) }
       ),
       otherWays,
       reasonText: reasonText(f2, input, pairs, tName, otherWays, now, rg.scores)
@@ -10156,28 +10898,28 @@ function reasonText(f2, input, pairs, tName, otherWays, now, scores = /* @__PURE
     const weak = f2.weak ? " A weaker route, but a real connection." : "";
     return `Through ${a.name}, a ${closeness} tie (${aScore}): ${a.name} ${how}${also}.${weak}${others}`;
   }
-  const nameOf = (id) => id === input.targetId ? tName : input.people.get(id)?.name ?? "someone";
+  const nameOf2 = (id) => id === input.targetId ? tName : input.people.get(id)?.name ?? "someone";
   const phrases = [];
   for (let i = 1; i < f2.nodes.length - 1; i++) {
     const from = f2.nodes[i];
     const to = f2.nodes[i + 1];
-    phrases.push(pairPhrase(from, pairs.get(pk(from, to)), nameOf(to), now));
+    phrases.push(pairPhrase(from, pairs.get(pk(from, to)), nameOf2(to), now));
   }
   const head = `${a.name} (${TIE_BAND_LABELS[tieBand(aScore)]} · ${aScore}) ${phrases[0]}`;
   const rest = phrases.slice(1).map((p) => `, who ${p}`).join("");
-  return `${head}${rest}.${weakLink(f2, input, pairs, nameOf)}${others}`;
+  return `${head}${rest}.${weakLink(f2, input, pairs, nameOf2)}${others}`;
 }
-function weakLink(f2, input, pairs, nameOf) {
+function weakLink(f2, input, pairs, nameOf2) {
   const later = f2.hops.slice(1);
   if (later.length < 2) return "";
   const weakest = [...later].sort((x, y) => x.p - y.p)[0];
   const band = hopBand(weakest.p);
   if (band !== "connected" && band !== "unclear") return "";
   if (later.every((h) => hopBand(h.p) === band)) return "";
-  const from = input.people.get(weakest.fromId)?.name ?? nameOf(weakest.fromId);
+  const from = input.people.get(weakest.fromId)?.name ?? nameOf2(weakest.fromId);
   const pair = pairs.get(pk(weakest.fromId, weakest.toId));
   const top = pair ? strongestTie(pair, input.now ?? /* @__PURE__ */ new Date()) : void 0;
-  return ` The weak link: ${from} ${hopEvidence(weakest.fromId, top, nameOf(weakest.toId))}.`;
+  return ` The weak link: ${from} ${hopEvidence(weakest.fromId, top, nameOf2(weakest.toId))}.`;
 }
 function rankCompanyTargets(input) {
   const now = input.now ?? /* @__PURE__ */ new Date();
@@ -10693,6 +11435,106 @@ async function loadGraph(db2, userId, now) {
   const blocked = new Set(blockedRows.map((b) => pairKeyOf(b.a_person_id, b.b_person_id)));
   return { selfId, people, pairs: combineTies(ties, now), blocked };
 }
+async function loadFriendLayer(db2, userId) {
+  const friends = await sharingFriends(db2, userId);
+  if (!friends.length) return { friends, shares: [] };
+  const all = [];
+  for (const friend of friends)
+    for (const share of await visibleShares(db2, friend)) all.push({ friend, share });
+  const matches = await matchShares(
+    db2,
+    userId,
+    all.map((x) => x.share)
+  );
+  return {
+    friends,
+    shares: all.map((x) => ({ ...x, matchesPersonId: matches.get(x.share.person_id) }))
+  };
+}
+function applyFriendLayer(g, shares2) {
+  if (!shares2.length) return;
+  const used = /* @__PURE__ */ new Set();
+  for (const x of shares2) {
+    const fid = friendNode(x.friend.userId);
+    if (!used.has(fid)) {
+      used.add(fid);
+      g.people.set(fid, {
+        id: fid,
+        name: x.friend.firstName,
+        displayName: x.friend.name,
+        score: 100,
+        pAsk: 0.9,
+        isAlumni: false,
+        doNotContact: false
+      });
+    }
+    const target = x.matchesPersonId ?? friendPersonNode(x.share.person_id);
+    if (!x.matchesPersonId && !g.people.has(target))
+      g.people.set(target, {
+        id: target,
+        name: x.share.display_name.split(/\s+/)[0],
+        displayName: x.share.display_name,
+        score: 0,
+        isAlumni: false,
+        title: x.share.title ?? void 0,
+        org: x.share.company ?? void 0,
+        linkedinUrl: x.share.linkedin_slug ? `https://www.linkedin.com/in/${x.share.linkedin_slug}` : void 0,
+        doNotContact: false
+      });
+    const key = pairKeyOf(fid, target);
+    if (g.pairs.has(key)) continue;
+    const p = CLOSENESS_P[x.share.closeness] ?? CLOSENESS_P[1];
+    const [a, b] = key.split("|");
+    const tie = {
+      id: `${key}|student_says_close`,
+      userId: x.friend.userId,
+      aId: a,
+      bId: b,
+      kind: "student_says_close",
+      weight: p,
+      confidence: 1,
+      evidence: { source: "friend", closeness: x.share.closeness },
+      lastSeenAt: iso(x.share.updated_at) ?? void 0
+    };
+    g.pairs.set(key, {
+      aId: a,
+      bId: b,
+      weight: p,
+      confidence: 1,
+      kinds: ["student_says_close"],
+      ties: [tie]
+    });
+  }
+}
+function sharesFor(layer, personId) {
+  return layer.shares.filter((x) => x.matchesPersonId === personId);
+}
+function sharesAt(layer, company, domain) {
+  const name = company.trim().toLowerCase();
+  const dom = domain?.trim().toLowerCase();
+  return layer.shares.filter(
+    (x) => dom && x.share.company_domain?.toLowerCase() === dom || !!name && x.share.company?.trim().toLowerCase() === name
+  );
+}
+function decorateFriendPath(p, layer, targetFirst) {
+  const first = p.nodes[1];
+  if (!first || !isFriendNode(first)) return p;
+  const friend = layer.friends.find((f2) => friendNode(f2.userId) === first);
+  if (!friend) return p;
+  const last = p.nodes[p.nodes.length - 1];
+  const share = layer.shares.find(
+    (x) => x.friend.userId === friend.userId && (x.matchesPersonId === last || friendPersonNode(x.share.person_id) === last)
+  );
+  const closeness = share?.share.closeness ?? 1;
+  const via = { kind: "friend", userId: friend.userId, name: friend.name };
+  const phrase = closenessPhrase(closeness, targetFirst);
+  const at = share?.share.company ? ` at ${share.share.company}` : "";
+  return {
+    ...p,
+    hops: p.hops.map((h, i) => i === 0 ? { ...h, via } : i === 1 ? { ...h, via, phrase } : h),
+    reasonText: `${friend.firstName} (friend) ${phrase}${at}.`
+  };
+}
 async function resolvePersonRef(db2, userId, p) {
   const url = cleanLinkedInUrl(p.linkedinUrl);
   const slug = linkedInSlugOf(url);
@@ -10841,13 +11683,17 @@ async function findPaths(s, userId, req) {
     }
     await upsertTies2(db2, ext2.ties);
     const g2 = await loadGraph(db2, userId, now);
+    const layer2 = await loadFriendLayer(db2, userId);
+    const friendShares = sharesAt(layer2, company, domain);
+    applyFriendLayer(g2, friendShares);
     const atCompany = await db2.sql`
       select p.id from orbit.people p left join orbit.organizations o on o.id = p.org_id
        where p.user_id = ${userId}::uuid and p.deleted_at is null and not p.is_self
          and (lower(p.org_raw) = lower(${company}) or lower(o.name) = lower(${company})
               or (${domain ?? null}::text is not null and ${domain ?? ""} = any(o.domains)))`;
     const villageTargets = ext2.candidates.map((c) => c.target.personId).filter((x) => !!x);
-    const ids = [.../* @__PURE__ */ new Set([...atCompany.map((r2) => r2.id), ...villageTargets])];
+    const friendTargets = friendShares.map((x) => x.matchesPersonId ?? friendPersonNode(x.share.person_id));
+    const ids = [.../* @__PURE__ */ new Set([...atCompany.map((r2) => r2.id), ...villageTargets, ...friendTargets])];
     const targets = ids.map((id) => g2.people.get(id)).filter((p) => !!p && !p.doNotContact && !looksLikeMinor({ title: p.title })).map((p) => ({
       id: p.id,
       name: p.name,
@@ -10864,12 +11710,14 @@ async function findPaths(s, userId, req) {
       now
     });
     const paths2 = [];
-    for (const x of chosen)
-      paths2.push({ ...x.path, id: await pathId(userId, x.path.nodes), names: namesOf(g2, x.path.nodes) });
+    for (const x of chosen) {
+      const p = decorateFriendPath(x.path, layer2, x.target.name ?? "them");
+      paths2.push({ ...p, id: await pathId(userId, p.nodes), names: namesOf(g2, p.nodes) });
+    }
     return {
       paths: paths2,
       ...paths2.length ? {} : { fallback: "cold" },
-      sources: sourcesOf(ext2),
+      sources: sourcesOf(ext2, layer2),
       unconfigured: ext2.unconfigured
     };
   }
@@ -10908,6 +11756,8 @@ async function findPaths(s, userId, req) {
     await upsertTies2(db2, ext.ties);
     g = await loadGraph(db2, userId, now);
   }
+  const layer = await loadFriendLayer(db2, userId);
+  applyFriendLayer(g, sharesFor(layer, targetId));
   const r = rankWarmPaths({
     targetId,
     target: {
@@ -10923,14 +11773,16 @@ async function findPaths(s, userId, req) {
     now
   });
   const paths = [];
-  for (const p of r.paths)
+  for (const raw of r.paths) {
+    const p = decorateFriendPath(raw, layer, target.name);
     paths.push({ ...p, id: await pathId(userId, p.nodes), names: namesOf(g, p.nodes) });
+  }
   const hopEvidence2 = await queueHopEvidence(s, userId, g, targetId, r.paths, ext);
   return {
     paths,
     ...r.fallback ? { fallback: r.fallback } : {},
     ...r.direct ? { direct: { personId: targetId, ...r.direct } } : {},
-    sources: sourcesOf(ext),
+    sources: sourcesOf(ext, layer),
     unconfigured: ext.unconfigured,
     ...hopEvidence2 ? { hopEvidence: hopEvidence2 } : {}
   };
@@ -10988,11 +11840,12 @@ async function queueHopEvidence(s, userId, g, targetId, paths, ext) {
   await enqueueHopEvidence(s, userId, targetId, mutuals);
   return "queued";
 }
-function sourcesOf(ext) {
+function sourcesOf(ext, layer) {
   const out = ["graph"];
   const asked = (prefix) => !ext.skipped.some((x) => x.startsWith(prefix));
   if (!ext.unconfigured.includes("unipile") && asked("mutuals")) out.push("linkedin_mutual");
   if (!ext.unconfigured.includes("village") && asked("village")) out.push("village");
+  if (layer?.friends.length) out.push("friends");
   return out;
 }
 function bestReach(g, personId, goal, now) {
@@ -11044,7 +11897,7 @@ async function find(ctx) {
   if (!target || typeof target !== "object" || Array.isArray(target)) throw badRequest("target is required");
   return json(200, await findPaths(ctx.services(), ctx.userId, { target, goalId: optUuid(b, "goalId") }));
 }
-async function ask(ctx) {
+async function ask2(ctx) {
   const b = await body(ctx);
   const introducerId = uuid(b, "introducerPersonId");
   const targetId = uuid(b, "targetPersonId");
@@ -11152,7 +12005,7 @@ async function unclose(ctx) {
 }
 var pathRoutes = {
   "/paths/find": { method: "POST", auth: true, run: find },
-  "/intros/ask": { method: "POST", auth: true, run: ask },
+  "/intros/ask": { method: "POST", auth: true, run: ask2 },
   "/pairs/block": { method: "POST", auth: true, run: block2 },
   "/pairs/unblock": { method: "POST", auth: true, run: unblock },
   "/pairs/close": { method: "POST", auth: true, run: close },
@@ -11160,7 +12013,7 @@ var pathRoutes = {
 };
 
 // supabase/functions/orbit-api/routes/replies.ts
-async function list3(ctx) {
+async function list4(ctx) {
   return json(200, { replies: await listReplies(ctx.db, ctx.userId, ctx.now()) });
 }
 async function draft(ctx) {
@@ -11178,7 +12031,7 @@ async function answer(ctx) {
   return json(200, { draft: toServerDraft(r.draft) });
 }
 var replyRoutes = {
-  "/replies/list": { method: "POST", auth: true, run: list3 },
+  "/replies/list": { method: "POST", auth: true, run: list4 },
   "/replies/draft": { method: "POST", auth: true, run: draft },
   "/replies/answer": { method: "POST", auth: true, run: answer }
 };
@@ -12527,7 +13380,7 @@ async function ensureChat(db2, userId, personId, goalId, now) {
 }
 
 // supabase/functions/orbit-api/routes/source.ts
-var list4 = (v, key) => {
+var list5 = (v, key) => {
   if (v === void 0) return void 0;
   if (!Array.isArray(v) || v.length > 25 || !v.every((x) => typeof x === "string" && x.length <= 200))
     throw badRequest(`filters.${key} must be a list of short strings`);
@@ -12544,12 +13397,12 @@ async function search2(ctx) {
     purpose: b.purpose,
     query: typeof b.query === "string" ? b.query : void 0,
     filters: {
-      organizations: list4(f2.organizations, "organizations"),
-      titles: list4(f2.titles, "titles"),
-      locations: list4(f2.locations, "locations"),
-      schools: list4(f2.schools, "schools"),
-      seniority: list4(f2.seniority, "seniority"),
-      keywords: list4(f2.keywords, "keywords")
+      organizations: list5(f2.organizations, "organizations"),
+      titles: list5(f2.titles, "titles"),
+      locations: list5(f2.locations, "locations"),
+      schools: list5(f2.schools, "schools"),
+      seniority: list5(f2.seniority, "seniority"),
+      keywords: list5(f2.keywords, "keywords")
     },
     limit: typeof b.limit === "number" ? b.limit : void 0
   };
@@ -14393,7 +15246,8 @@ var ROUTES = {
   ...memoryRoutes,
   ...settingsRoutes,
   ...cadenceRoutes,
-  ...autopilotRoutes
+  ...autopilotRoutes,
+  ...friendRoutes
 };
 function missingSecrets(deps, google) {
   const m = [];
@@ -14487,7 +15341,7 @@ function makeApiHandler(deps) {
         return preflight(req, h);
       }
       if (origin && !allowedOrigin) throw new HttpError(403, "forbidden", "origin not allowed");
-      const r = ROUTES[path];
+      const r = ROUTES[path] ?? friendPatternRoute(path);
       if (!r) throw notFound();
       if (!r.method.split("|").includes(req.method)) throw new HttpError(405, "method_not_allowed", r.method);
       await providerSecrets();

@@ -581,6 +581,12 @@ export interface FriendPreviewResponse {
   shares: FriendShare[];
   total: number;
 }
+/** POST /friends/shares { friendUserId, company?, cursor? }: the same page, for clients that post every call */
+export interface FriendSharesRequest {
+  friendUserId: string;
+  company?: string;
+  cursor?: string;
+}
 /** GET /friends/shares/:friendUserId?company=: a friend's projection, paged */
 export interface FriendSharesResponse {
   friendUserId: string;
@@ -629,6 +635,10 @@ export interface FriendAsksResponse {
 export interface FriendAskRespondRequest {
   action: 'forward' | 'decline';
   body?: string;
+}
+/** POST /friends/asks/respond { id, action, body? }: the same answer, with the ask's id in the body */
+export interface FriendAskRespondByIdRequest extends FriendAskRespondRequest {
+  id: string;
 }
 export interface FriendAskRespondResponse {
   ask: FriendIntroAsk;
@@ -831,8 +841,10 @@ export const API_ROUTES = [
   '/friends/settings',
   '/friends/preview',
   '/friends/shares/:friendUserId',
+  '/friends/shares',
   '/friends/asks',
   '/friends/asks/:id/respond',
+  '/friends/asks/respond',
   // plan 29 Part B: autopilot and voice
   '/autopilot/mode',
   '/autopilot/status',

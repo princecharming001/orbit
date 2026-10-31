@@ -1404,6 +1404,7 @@ var KIND_QUEUE = {
   "health.snapshot": "orbit_cadence",
   "score.user": "orbit_score",
   "score.person": "orbit_score",
+  friend_shares_refresh: "orbit_score",
   "enrich.dossier": "orbit_enrich",
   "source.search": "orbit_enrich",
   hop_evidence: "orbit_enrich",
@@ -4024,6 +4025,8 @@ var MAX_WORDS = {
   first_touch: 110,
   warm_first_touch: 110,
   forwardable_blurb: 90,
+  // plan 29 §A4: the friend's own words around the blurb they pass on; the blurb itself is counted
+  forward_intro: 160,
   reengage: 90
 };
 var MIN_WORDS = {
@@ -4040,6 +4043,7 @@ var MIN_WORDS = {
   first_touch: 50,
   warm_first_touch: 50,
   forwardable_blurb: 35,
+  forward_intro: 30,
   reengage: 30
 };
 var LINKEDIN_NOTE_MAX = 300;
@@ -11536,6 +11540,7 @@ function buildMime(m) {
   const lines = [
     `From: ${address(m.from, m.fromName)}`,
     `To: ${address(m.to, m.toName)}`,
+    ...m.cc ? [`Cc: ${address(m.cc, m.ccName)}`] : [],
     `Subject: ${headerValue(m.subject)}`,
     `Date: ${(m.date ?? /* @__PURE__ */ new Date()).toUTCString()}`,
     "MIME-Version: 1.0",
@@ -11859,11 +11864,13 @@ ${d.body}`)) {
     }
     const subject = d.subject ?? await threadSubject(db2, userId, d.thread_external_id) ?? "";
     const refs = d.in_reply_to ?? await lastMessageId(db2, userId, d.thread_external_id);
+    const forward = d.kind === "forward_intro" ? d.via : null;
     const raw = rawMessage({
       from: u2.email,
       fromName: u2.full_name ?? void 0,
       to: person.primary_email,
       toName: person.display_name,
+      ...forward?.cc ? { cc: forward.cc, ccName: forward.ccName } : {},
       subject: d.subject ? subject : subject && !/^re:/i.test(subject) ? `Re: ${subject}` : subject,
       body: d.body,
       inReplyTo: refs,
@@ -11921,6 +11928,11 @@ ${d.body}`)) {
   const via = d.via;
   if (d.kind === "intro_request" && via?.introRequestId)
     await db2.sql`update orbit.intro_requests set asked_at = ${now}::timestamptz where id = ${via.introRequestId}::uuid`;
+  if (d.kind === "forward_intro" && via?.friendAskId)
+    await db2.sql`
+      update orbit.friend_intro_asks set status = 'forwarded', forwarded_message_id = ${d.id}::uuid,
+             answered_at = coalesce(answered_at, ${now}::timestamptz)
+       where id = ${via.friendAskId}::uuid and friend_user_id = ${userId}::uuid`;
   return { status: "sent", providerMessageId: out.providerMessageId };
 }
 async function afterSend(db2, userId, d, now) {
@@ -12652,6 +12664,11 @@ function shareScore(history, now = /* @__PURE__ */ new Date(), weights = TIE_WEI
     return TIE_LABEL_MIDPOINTS[label.closeness];
   return score;
 }
+function shareCloseness(score) {
+  if (score >= 60) return 3;
+  if (score >= 40) return 2;
+  return 1;
+}
 var plural = (n, one, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
 function ago(days) {
   if (days < 1.5) return "a day";
@@ -13059,26 +13076,28 @@ function withExternal(pairs, targetId, candidates) {
     const key2 = pk(c.introducerId, targetId);
     const [a, b] = key2.split("|");
     const w = c.kind === "linkedin_mutual" ? HOP_WEIGHTS.mutual : Math.max(0, Math.min(1, c.warmth ?? 0));
-    const conf = c.kind === "linkedin_mutual" ? 0.95 : 0.7;
+    const conf = c.kind === "linkedin_mutual" ? 0.95 : c.kind === "friend_path" ? 1 : 0.7;
     const tie = {
       id: `${key2}|${c.kind}`,
       userId: "",
       aId: a,
       bId: b,
-      kind: c.kind,
+      kind: c.kind === "friend_path" ? "student_says_close" : c.kind,
       weight: w,
       confidence: conf,
-      evidence: { source: c.kind === "linkedin_mutual" ? "unipile" : "village" },
+      evidence: {
+        source: c.kind === "linkedin_mutual" ? "unipile" : c.kind === "friend_path" ? "friend" : "village"
+      },
       lastSeenAt: c.seenAt
     };
     const cur = out.get(key2);
-    if (cur?.kinds.includes(c.kind)) continue;
+    if (cur?.kinds.includes(tie.kind)) continue;
     out.set(key2, {
       aId: a,
       bId: b,
       weight: 1 - (1 - (cur?.weight ?? 0)) * (1 - w * conf),
       confidence: 1 - (1 - (cur?.confidence ?? 0)) * (1 - conf),
-      kinds: [...cur?.kinds ?? [], c.kind],
+      kinds: [...cur?.kinds ?? [], tie.kind],
       ties: [...cur?.ties ?? [], tie],
       lastSeenAt: cur?.lastSeenAt
     });
@@ -13221,7 +13240,7 @@ function routingGraph(input, pairs, now, mutuals = /* @__PURE__ */ new Set()) {
     const passes = p.score > 0 && p.score >= floor;
     if (!passes && !mutual) continue;
     if (!passes) lifted.add(p.id);
-    const a = pAsk({ ...p, score });
+    const a = p.pAsk !== void 0 ? Math.max(0, Math.min(1, p.pAsk)) : pAsk({ ...p, score });
     ask.set(p.id, a);
     scores.set(p.id, score);
     addEdge(g, USER_NODE, p.id, a, "strength", "", true);
@@ -13394,6 +13413,73 @@ function weakLink(f, input, pairs, nameOf2) {
   const pair = pairs.get(pk(weakest.fromId, weakest.toId));
   const top = pair ? strongestTie(pair, input.now ?? /* @__PURE__ */ new Date()) : void 0;
   return ` The weak link: ${from} ${hopEvidence(weakest.fromId, top, nameOf2(weakest.toId))}.`;
+}
+
+// supabase/functions/_shared/friends/shares.ts
+function emailHash(email) {
+  return sha256Hex(`orbit-friend:${normalizeEmail(email)}`);
+}
+async function refreshFriendShares(db2, ownerId, now) {
+  const rows = await db2.sql`
+    select p.id, p.display_name, p.title, p.headline, p.org_raw, o.name as org_name, o.domains, p.school, p.is_alumni,
+           p.linkedin_member_id, p.linkedin_slug, p.primary_email, ts.share_score::int as share_score,
+           tl.closeness::int as label
+      from orbit.people p
+      left join orbit.organizations o on o.id = p.org_id
+      left join orbit.tie_scores ts on ts.user_id = p.user_id and ts.person_id = p.id
+      left join orbit.tie_labels tl on tl.user_id = p.user_id and tl.person_id = p.id
+     where p.user_id = ${ownerId}::uuid and not p.is_self and p.deleted_at is null and p.merged_into is null
+       and p.hidden_at is null and not p.do_not_contact and not p.private`;
+  const identities = await db2.sql`
+    select person_id, kind, value_norm from orbit.person_identities
+     where user_id = ${ownerId}::uuid and kind in ('email', 'linkedin_member', 'linkedin_slug')`;
+  const byPerson = /* @__PURE__ */ new Map();
+  for (const i of identities) {
+    const cur = byPerson.get(i.person_id) ?? {};
+    if (i.kind === "email" && !cur.email) cur.email = i.value_norm;
+    if (i.kind === "linkedin_member" && !cur.member) cur.member = i.value_norm;
+    if (i.kind === "linkedin_slug" && !cur.slug) cur.slug = i.value_norm;
+    byPerson.set(i.person_id, cur);
+  }
+  const out = [];
+  for (const r of rows) {
+    const ids = byPerson.get(r.id) ?? {};
+    const member = r.linkedin_member_id ?? ids.member ?? null;
+    const slug = (r.linkedin_slug ?? ids.slug)?.toLowerCase() ?? null;
+    const email = r.primary_email ?? ids.email;
+    const hash = email?.includes("@") ? await emailHash(email) : null;
+    if (!member && !slug && !hash) continue;
+    const closeness = r.share_score !== null ? shareCloseness(r.share_score) : r.label && TIE_LABEL_MIDPOINTS[r.label] !== void 0 ? shareCloseness(TIE_LABEL_MIDPOINTS[r.label]) : 1;
+    out.push({
+      owner_user_id: ownerId,
+      person_id: r.id,
+      display_name: r.display_name,
+      title: r.title ?? r.headline ?? null,
+      company: r.org_name ?? r.org_raw ?? null,
+      company_domain: r.domains?.[0]?.toLowerCase() ?? null,
+      linkedin_member_id: member,
+      linkedin_slug: slug,
+      email_hash: hash,
+      school: r.school ?? null,
+      is_alumni: !!r.is_alumni,
+      closeness
+    });
+  }
+  await db2.begin(async (tx) => {
+    await tx.sql`delete from orbit.friend_shares where owner_user_id = ${ownerId}::uuid`;
+    for (let i = 0; i < out.length; i += 500) {
+      const json2 = JSON.stringify(out.slice(i, i + 500));
+      await tx.sql`
+        insert into orbit.friend_shares (owner_user_id, person_id, display_name, title, company, company_domain,
+                                         linkedin_member_id, linkedin_slug, email_hash, school, is_alumni, closeness,
+                                         updated_at)
+        select ${ownerId}::uuid, (r ->> 'person_id')::uuid, r ->> 'display_name', r ->> 'title', r ->> 'company',
+               r ->> 'company_domain', r ->> 'linkedin_member_id', r ->> 'linkedin_slug', r ->> 'email_hash',
+               r ->> 'school', (r ->> 'is_alumni')::boolean, (r ->> 'closeness')::smallint, ${now}::timestamptz
+          from jsonb_array_elements(${json2}::jsonb) r`;
+    }
+  });
+  return out.length;
 }
 
 // supabase/functions/_shared/paths/externalCandidates.ts
@@ -18155,6 +18241,17 @@ function contactsHandlers(deps) {
   };
 }
 
+// supabase/functions/orbit-worker/handlers/friends.ts
+function friendHandlers() {
+  return {
+    friend_shares_refresh: async (job, ctx) => {
+      if (!job.userId) throw new JobSkipped("no_user");
+      await ctx.db.sql`select orbit.expire_friend_asks()`;
+      await refreshFriendShares(ctx.db, job.userId, ctx.now());
+    }
+  };
+}
+
 // supabase/functions/_shared/gmail.ts
 var GMAIL_BASE = "https://gmail.googleapis.com/gmail/v1/users/me";
 var GMAIL_UNITS = {
@@ -20303,6 +20400,7 @@ function defaultHandlers(opts = {}) {
     ...contactsHandlers(deps),
     ...linkedinHandlers(deps),
     ...scoreHandlers(deps),
+    ...friendHandlers(),
     ...classifyHandlers(deps, agents),
     ...agentHandlers(agents)
   };

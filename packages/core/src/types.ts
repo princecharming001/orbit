@@ -200,6 +200,11 @@ export type MessageKind =
   | 'warm_first_touch'
   /** a third-person note the introducer can forward unchanged (≤ 90 words, double opt-in) */
   | 'forwardable_blurb'
+  /**
+   * a friend's intro ask passed on to the student's own contact (plan 29 §A4): the friend's blurb quoted unchanged,
+   * the friend in cc; approved like any draft, never sent on its own, never on LinkedIn
+   */
+  | 'forward_intro'
   /** a genuine update to a dormant tie (score ≥ 30, no contact in 180 days); no ask unless the student wants one */
   | 'reengage';
 export type Sector = 'finance' | 'consulting' | 'tech' | 'general';

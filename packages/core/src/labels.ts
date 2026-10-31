@@ -78,6 +78,7 @@ export const MESSAGE_KIND_LABELS: Record<MessageKind, string> = {
   first_touch: 'First message',
   warm_first_touch: 'First message (warm)',
   forwardable_blurb: 'Note to forward',
+  forward_intro: 'Intro for a friend',
   reengage: 'Reconnect',
 };
 

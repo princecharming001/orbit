@@ -29,9 +29,9 @@ import { askUserMarkers } from '../compose/prompts.ts';
 import { nextSendWindow } from '../compose/window.ts';
 import type { Db } from '../db.ts';
 import { HttpError } from '../http.ts';
+import { goalPaused, tripBreaker } from '../replies/breaker.ts';
 import { iso } from '../rows.ts';
 import type { Services } from '../services.ts';
-import { goalPaused, tripBreaker } from '../replies/breaker.ts';
 import { moveChat } from '../slots/slots.ts';
 import { validZone, zonedTime } from '../zones.ts';
 import { rawMessage } from './mime.ts';
@@ -457,11 +457,15 @@ export async function sendDraft(s: Services, draftId: string): Promise<SendResul
     }
     const subject = d.subject ?? (await threadSubject(db, userId, d.thread_external_id)) ?? '';
     const refs = d.in_reply_to ?? (await lastMessageId(db, userId, d.thread_external_id));
+    // a friend's intro passed on (plan 29 §A4) carries the friend in cc, so the reply reaches them without the
+    // contact's address ever crossing to them
+    const forward = d.kind === 'forward_intro' ? (d.via as { cc?: string; ccName?: string } | null) : null;
     const raw = rawMessage({
       from: u.email,
       fromName: u.full_name ?? undefined,
       to: person.primary_email,
       toName: person.display_name,
+      ...(forward?.cc ? { cc: forward.cc, ccName: forward.ccName } : {}),
       subject: d.subject ? subject : subject && !/^re:/i.test(subject) ? `Re: ${subject}` : subject,
       body: d.body,
       inReplyTo: refs,
@@ -523,9 +527,15 @@ export async function sendDraft(s: Services, draftId: string): Promise<SendResul
     ...(auto ? { rung: d.auto_rung ?? d.kind, level: Number(d.autonomy_level) } : {}),
   });
   if (d.chat_id) await afterSend(db, userId, d, now);
-  const via = d.via as { introRequestId?: string } | null;
+  const via = d.via as { introRequestId?: string; friendAskId?: string } | null;
   if (d.kind === 'intro_request' && via?.introRequestId)
     await db.sql`update orbit.intro_requests set asked_at = ${now}::timestamptz where id = ${via.introRequestId}::uuid`;
+  // the friend's forward went out: the ask on both students' lists says so (plan 29 §A4)
+  if (d.kind === 'forward_intro' && via?.friendAskId)
+    await db.sql`
+      update orbit.friend_intro_asks set status = 'forwarded', forwarded_message_id = ${d.id}::uuid,
+             answered_at = coalesce(answered_at, ${now}::timestamptz)
+       where id = ${via.friendAskId}::uuid and friend_user_id = ${userId}::uuid`;
   return { status: 'sent', providerMessageId: out.providerMessageId };
 }
 
