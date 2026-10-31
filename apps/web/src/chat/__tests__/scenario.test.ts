@@ -263,7 +263,8 @@ Devin,Park,https://www.linkedin.com/in/devin-park-chat,devin@example.com,Ramp,So
     expect(done.kind, done.summary).toBe('settings');
     const after = (await db.settings.get(user.id))!;
     expect(after.weeklyOutreachTarget).toBe(6);
-    expect(after.dailySendCapGmail).toBe(50);
+    // the cap table (plan 29 §B2.1): a request above it is clamped to the most the student may send by hand
+    expect(after.dailySendCapGmail).toBe(15);
     expect(done.summary).toMatch(/kept inside the allowed range/);
     const settings = await run('get_settings', { section: 'limits' });
     expect(

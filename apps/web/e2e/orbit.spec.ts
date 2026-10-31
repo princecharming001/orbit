@@ -3202,7 +3202,7 @@ test.describe('Autopilot', () => {
     await page.getByTestId('composer-input').fill('send these on autopilot');
     await page.keyboard.press('Enter');
     const card = page.getByTestId('result-needs_confirmation').last();
-    await expect(card).toContainText(/on autopilot, spaced out/, {
+    await expect(card).toContainText(/on autopilot, each in the recipient.s morning window, spaced out/, {
       timeout: 30_000,
     });
     await card.getByTestId('confirm-approve').click();
