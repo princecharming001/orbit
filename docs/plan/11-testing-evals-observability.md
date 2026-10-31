@@ -21,6 +21,8 @@ Coverage gate: `packages/core` ≥ 90 percent lines; others ≥ 70 percent.
 
 ## 2. LLM evals (`packages/ai/evals`)
 
+Status (2026-10-31, plan 28): `packages/ai/evals` was never built. The judge that exists is the chat quality bench in `apps/web/src/chat/__tests__/sim/` (a Claude-driven student, a Claude judge scoring eight dimensions, a model-free shape check), run by `scripts/chat-baseline.sh` with a key in the shell and weekly by `.github/workflows/chat-eval.yml`; its scorecards live under `docs/qa/chat-runs/`. The draft rubric is `packages/core/src/__tests__/sim-drafts/` (no model). The table below stays as the target shape for per-task evals.
+
 Each task has `datasets/<task>.jsonl` (input, expected, metadata) and a runner `pnpm eval <task>` that calls the real API (Batch mode where possible) and prints metric, cost and a diff against the last run stored in `evals/results/<task>/<date>.json`. CI runs a 30-item smoke subset per task on prompt or schema changes (budget ≈ $2 per run); the full set runs nightly on `main`.
 
 | Task | Dataset (target size) | Metric | Threshold | Judge |

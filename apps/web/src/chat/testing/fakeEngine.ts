@@ -630,6 +630,9 @@ function pick(text: string): Script {
   const widget = t.match(/setup (google|linkedin|claude|resume)/);
   if (widget) return withSetup(widget[1] === 'claude' ? 'claude_key' : (widget[1] as SetupWhat));
   if (t.includes('small business owners')) return busySearch;
+  if (t.includes('search and look')) return searchAndLook;
+  if (t.includes('when should i start')) return knowledgeAnswer;
+  if (t.includes('our round')) return roundDraft;
   if (t.includes('search the web'))
     return async function* () {
       yield { type: 'web_search', id: 'srvtoolu_fake', query: 'Stripe internship deadline 2027' };
@@ -769,6 +772,62 @@ const busySearch: Script = async function* (ctx) {
   });
   yield* say(
     'Your best three: David, a Bay Area realtor; Craig, who owns an engineering firm; and Ethan, at Christie’s.',
+  );
+  yield { type: 'done', stopReason: 'end_turn', messageId: '' };
+};
+
+/** A how-it-works answer from the playbook (plan 28): words only, no tool and no card. */
+const knowledgeAnswer: Script = async function* () {
+  yield* say(
+    'Banks fill most junior-summer seats during sophomore year, boutiques from September and the big banks from December, so the time to start writing to analysts is now. Want me to find the alumni analysts in your network first?',
+  );
+  yield { type: 'done', stopReason: 'end_turn', messageId: '' };
+};
+
+/** A founder's first note to an investor: a draft card in the fundraising register, never a job-hunting line. */
+const roundDraft: Script = async function* (ctx) {
+  yield { type: 'progress', text: 'Drafting the note' };
+  const base = envelopes(ctx).draft!();
+  const data = base.data as { draft: Record<string, unknown>; person: unknown };
+  const draft = {
+    ...data.draft,
+    id: 'fx_out_round',
+    kind: 'outreach',
+    subject: 'Northwind and a quick look',
+    bodyDraft:
+      'Hi Elad,\n\nNorthwind helps dental clinics cut no-shows, and three clinics in Ithaca are paying for it after two months. I am raising a pre-seed round in January and would value your view on it.\n\nWould you be open to a look?\n\nBest,\nMaya',
+  };
+  yield* tool(`tu_${ctx.nextId()}`, 'create_draft', 'Drafting the note', {
+    ...base,
+    data: { ...data, draft },
+    summary: 'A note to Elad about the round is ready to review.',
+    href: '/inbox?draft=fx_out_round',
+  });
+  yield* say(
+    'Kept it to the company, the traction and one ask. Edit anything, then send it when it reads like you.',
+  );
+  yield { type: 'done', stopReason: 'end_turn', messageId: '' };
+};
+
+/** A web search alongside lookups: the lookups fold into the work line, the search line and its sources stand. */
+const searchAndLook: Script = async function* (ctx) {
+  yield* say('Checking the news and who you know there. ');
+  yield { type: 'web_search', id: 'srvtoolu_mix', query: 'Stripe layoffs 2026' };
+  yield {
+    type: 'web_results',
+    id: 'srvtoolu_mix',
+    sources: [
+      { title: 'Stripe newsroom', url: 'https://stripe.com/newsroom' },
+      { title: 'Stripe headcount, TechCrunch', url: 'https://techcrunch.com/stripe' },
+      { title: 'Layoff tracker', url: 'https://layoffs.example.org/stripe' },
+    ],
+  };
+  const env = envelopes(ctx);
+  yield* tool(`tu_${ctx.nextId()}`, 'search_people', 'Searching your network', env.people!());
+  yield* tool(`tu_${ctx.nextId()}`, 'get_person', 'Looking up the person', env.person!());
+  yield* tool(`tu_${ctx.nextId()}`, 'get_facts', 'Reading your notes', env.facts!());
+  yield* say(
+    'No layoffs at Stripe this year in what the news shows, and you know two people there, Priya and Dan. Want a note to Priya first?',
   );
   yield { type: 'done', stopReason: 'end_turn', messageId: '' };
 };

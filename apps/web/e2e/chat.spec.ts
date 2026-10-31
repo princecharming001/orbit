@@ -503,6 +503,79 @@ test.describe('Chat home', () => {
     await expect(page.getByTestId('result-draft').getByLabel('Message body')).toBeVisible();
   });
 
+  test('a web search shows what was searched and the sources as links, and the answer stands under it', async ({
+    page,
+  }) => {
+    await home(page);
+    await ask(page, 'search the web');
+    const turn = page.getByTestId('turn-assistant');
+    await expect(turn).toContainText('opens its 2027 internships', { timeout: 30_000 });
+    const web = page.getByTestId('web-search');
+    await expect(web).toHaveCount(1);
+    await expect(web).toContainText('Stripe internship deadline 2027');
+    await expect(web.getByTestId('web-source')).toHaveCount(4);
+    await expect(web).toContainText('1 more');
+    // one search is not work to fold, and the answer carries no address: the chips do
+    await expect(page.getByTestId('work-log')).toHaveCount(0);
+    await expect(turn.locator('[data-testid="md"]')).not.toContainText('http');
+    await shot(page, 'e2e-laptop-web-search');
+  });
+
+  test('a part of the chat a deploy replaced says Orbit was updated, with a reload', async ({ page }) => {
+    await home(page);
+    await ask(page, 'fail stale');
+    const err = page.getByTestId('turn-error');
+    await expect(err).toBeVisible({ timeout: 30_000 });
+    await expect(err).toContainText('Orbit was just updated');
+    await expect(err).not.toContainText('dynamically imported');
+    await expect(page.getByTestId('turn-error-reload')).toBeVisible();
+  });
+
+  test('a turn that mixes a web search with lookups folds the lookups and keeps the search line', async ({
+    page,
+  }) => {
+    await home(page);
+    await ask(page, 'search and look');
+    const turn = page.getByTestId('turn-assistant');
+    await expect(turn).toContainText('you know two people there', { timeout: 30_000 });
+    await expect(page.getByTestId('work-log')).toHaveCount(1);
+    await expect(page.getByTestId('work-log')).toContainText('Looked through 3 things');
+    await expect(page.getByTestId('web-search')).toHaveCount(1);
+    await expect(page.getByTestId('web-search')).toContainText('Stripe layoffs 2026');
+    await expect(turn.getByTestId('result-people')).toHaveCount(0);
+    await expect(turn.getByTestId('result-person')).toHaveCount(0);
+    await shot(page, 'e2e-laptop-work-mixed');
+    await page.getByTestId('work-log-toggle').click();
+    await expect(turn.getByTestId('result-people')).toHaveCount(1);
+    await expect(turn.getByTestId('result-person')).toHaveCount(1);
+  });
+
+  test('a how-it-works question is answered in words: no tool, no card, no list', async ({ page }) => {
+    await home(page);
+    await ask(page, 'when should i start reaching out to banks');
+    const turn = page.getByTestId('turn-assistant');
+    await expect(turn).toContainText('sophomore year', { timeout: 30_000 });
+    await expect(turn.locator('[data-testid^="result-"]')).toHaveCount(0);
+    await expect(page.getByTestId('work-log')).toHaveCount(0);
+    const prose = await turn.locator('[data-testid="md"]').innerText();
+    expect(prose).not.toMatch(/[—–!]/);
+    expect(turn.locator('li, h1, h2, h3')).toHaveCount(0);
+    await shot(page, 'e2e-laptop-knowledge');
+  });
+
+  test('a founder writing to an investor gets a draft in the fundraising register', async ({ page }) => {
+    await home(page);
+    await ask(page, 'write to Elad about our round');
+    const turn = page.getByTestId('turn-assistant');
+    await expect(turn).toContainText('one ask', { timeout: 30_000 });
+    const card = turn.getByTestId('result-draft');
+    await expect(card).toHaveCount(1);
+    await expect(card.getByLabel('Message body')).toHaveValue(/Would you be open to a look\?/);
+    await expect(card.getByLabel('Message body')).not.toHaveValue(/recruiting|internship|job/);
+    await expect(card.getByLabel('Subject')).toHaveValue('Northwind and a quick look');
+    await shot(page, 'e2e-laptop-founder-draft');
+  });
+
   for (const [w, h] of [
     [1280, 800],
     [1024, 768],

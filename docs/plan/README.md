@@ -26,7 +26,16 @@ Orbit (working name) is a networking copilot for college students who are recrui
 | 16 | [Networking agent infrastructure](16-network-agent-infrastructure.md) | **current architecture**: Supabase-only server (schema `orbit`, queues, cron, Vault, pgvector), Orbit accounts, server ingestion, tie score 0–100, warm paths, research, sourcing, outbound for every goal, replies and autonomy, cadence, memory, privacy, evals, phases, human actions |
 | 17 | [Network intelligence](17-network-intelligence.md) | one person across Gmail, Messages and LinkedIn, LinkedIn activity in closeness, warm paths, Discover, enrichment, accuracy |
 | 18 | [Automatic stages](18-automatic-stages.md) | cards move on their own: every transition and its trigger, the reply check while the app is open, what is idempotent, the "Checked for replies" line |
+| 19 | [Orbi: the person in the chat](19-orbi-persona.md) | the assistant's persona and voice: a sharp friend a year ahead, length and register matched, one nudge, one question, never praise openers or closers (built 2026-10-23) |
 | 20 | [Deep research](20-deep-research.md) | a cited brief on one person, started only from their About tab: orbit-research, identity scoring, the support check, privacy rules, the monthly allowance, what to deploy |
+| 21 | [Every hop counts](21-hop-strength.md) | how well each person on a warm route knows the next: per-hop strength, route ranking by the weakest link, the "how you know them" lines (built 2026-10-25) |
+| 22 | [The Prep deck](22-prep-deck.md) | everything for a call, swiped through from About: who they are, what to ask, what you said, After the call (built 2026-10-25) |
+| 23 | [Goal first](23-goal-first.md) | Orbit tells you what to do next: a plan from a job posting, the weekly recap, auto-sent cards, upcoming chats (built 2026-10-25) |
+| 24 | [Onboarding in the student's own words](24-onboarding.md) | setup as a conversation: story, aim, proud of, never rules; own words shape every suggestion and draft (built) |
+| 25 | [One inbox](25-one-inbox.md) | every conversation read live inside Orbit: LinkedIn and Gmail threads, Messages and Timeline on a person (built 2026-10-25) |
+| 26 | [Cost and speed](26-cost-and-speed.md) | the audit, ranked: one cached prefix for everyone, token-only cost, smaller snapshots, what each turn costs (batch 1 built 2026-10-26) |
+| 27 | [Closeness that reads the replies](27-reply-warmth.md) | the tone of their replies feeds the tie score: their warmth only, defaults on (built 2026-10-26) |
+| 28 | [Chat quality campaign](28-chat-quality-campaign.md) | the bench (a Claude student, a Claude judge on eight dimensions, a model-free shape check), the playbook the model answers from, the scenario matrix, phases to "flawless" (Phase 1 built 2026-10-31) |
 
 Precedence when documents disagree: **16 > 02 (names) > 03 (schema) > 01 (behaviour) > the subsystem document.** 16 retires the Next.js + Inngest stack of 02, 08 and 09 in favour of Supabase Edge Functions, queues and cron. File a fix against the lower one.
 

@@ -68,6 +68,7 @@ describe('stable system block', () => {
       expect(text).toMatch(/lookup_playbook returns any section not in the block/);
       expect(text).toMatch(/the two or three things that matter for this student right now/);
       expect(text).toMatch(/Never a syllabus/);
+      expect(text).toMatch(/under sixty words, however much the playbook says/);
       expect(text).toMatch(/\[CHANGES YEARLY\] drifts/);
       expect(text).toMatch(
         /Never state a date, a deadline or a program name as fact without a current source/,

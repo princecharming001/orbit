@@ -232,8 +232,14 @@ async function orbitTurn(engine: ChatEngine, conversationId: string, text: strin
       else runs.push({ text: e.delta, toolAfter: false });
       sawToolSinceText = false;
     } else if (e.type === 'tool_start' || e.type === 'tool_result' || e.type === 'web_search') {
-      sawToolSinceText = true;
-      for (const r of runs) r.toolAfter = true;
+      // the pills and the setup card close a turn: the words before them are the answer, not a preamble
+      const closing =
+        (e.type === 'tool_start' && CLOSING_TOOLS.has(e.toolName)) ||
+        (e.type === 'tool_result' && (e.envelope.kind === 'choices' || e.envelope.kind === 'setup'));
+      if (!closing) {
+        sawToolSinceText = true;
+        for (const r of runs) r.toolAfter = true;
+      }
       if (e.type === 'web_search') web.set(e.id, { query: e.query, sources: 0 });
     } else if (e.type === 'web_results') {
       const w = web.get(e.id) ?? { sources: 0 };
@@ -876,6 +882,8 @@ export async function judgeRun(screen: string, expected: string): Promise<RunVer
 }
 
 /** A harness-side failure, said once per place with any key redacted, so an empty run is never silent. */
+/** Tools that end a turn (the prompt makes them the last thing said). */
+const CLOSING_TOOLS = new Set(['offer_choices', 'show_setup']);
 const saidErrors = new Set<string>();
 export function simError(where: string, e: unknown): void {
   const msg = (e instanceof Error ? `${e.name}: ${e.message}` : String(e)).replace(

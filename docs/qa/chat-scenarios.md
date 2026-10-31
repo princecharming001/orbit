@@ -43,7 +43,7 @@ unsafe or invented verdict, every shape check clean. `SIM_STRICT=1` enforces it;
 
 | code | id | Persona | They type | A correct answer |
 |---|---|---|---|---|
-| A1 | know-ib-start | soph-ib | when should I start reaching out to banks | Now: SA recruiting runs ~18 months ahead, applications open spring of sophomore year, network two to four months before; alumni analysts first. Dates that change yearly come from a search, named in words. Offers the first two people to write to. |
+| A1 | know-ib-start | soph-ib | when should I start reaching out to banks | Now: SA recruiting runs 18 to 21 months ahead, boutiques open applications in September to November of sophomore year and bulge brackets in December to January, rolling; network from the spring of freshman year; alumni analysts first. Dates that change yearly come from a search, named in words. Offers the first two people to write to. |
 | A2 | know-superday | soph-ib | what's a superday / a HireVue | Plain two-line definitions. No web search. |
 | A3 | know-vc-call | founder-seed | how do VC calls usually go | 30 minutes, associates screen, partners decide at partner meeting, what they want to hear, same-day follow-up with deck and data room, monthly updates. No web search. |
 | A4 | know-seed-round | founder-seed | how does a seed round actually work | Lead sets terms, others fill, SAFE vs priced, pro rata, parallel conversations, tight window. No web search. |

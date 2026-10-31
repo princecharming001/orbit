@@ -1,0 +1,50 @@
+name: Chat quality eval (real model)
+
+# The chat quality bench (docs/plan/28-chat-quality-campaign.md): every simulated student against the real engine
+# and Claude, judged on eight dimensions, with the shape of every reply checked. It spends tokens, so it never runs
+# on push: by hand, or once a week. The deploy pipeline stays token-free.
+on:
+  workflow_dispatch:
+    inputs:
+      group:
+        description: 'Scenario group (all, knowledge, data, drafting, goals, web, shape, honesty, persona-*)'
+        default: all
+        required: false
+  schedule:
+    - cron: '17 9 * * 1' # Mondays, 09:17 UTC
+
+permissions:
+  contents: read
+
+concurrency:
+  group: chat-eval
+  cancel-in-progress: false
+
+jobs:
+  eval:
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Run the bench
+        env:
+          # the one place a key reaches CI: a repository secret, read by the harness, never printed
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          test -n "$ANTHROPIC_API_KEY" || { echo "ANTHROPIC_API_KEY secret is not set"; exit 2; }
+          scripts/chat-baseline.sh "${{ github.event.inputs.group || 'all' }}" docs/qa/chat-runs/ci
+      - name: Keep the transcripts and the scorecard
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: chat-eval-${{ github.run_id }}
+          path: docs/qa/chat-runs/ci
+          retention-days: 30
+      - name: The bar (plan 28 §5): no dimension average under 2.5, nothing unsafe or invented
+        run: node scripts/chat-eval.mjs docs/qa/chat-runs/ci/_scorecard.json --gate
