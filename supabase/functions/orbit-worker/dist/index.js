@@ -300,6 +300,9 @@ function base64url(bytes) {
   for (const b of bytes) s += String.fromCharCode(b);
   return btoa(s).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
 }
+function randomToken(n = 32) {
+  return base64url(crypto.getRandomValues(new Uint8Array(n)));
+}
 async function sha256Bytes(text) {
   return new Uint8Array(await crypto.subtle.digest("SHA-256", enc.encode(text)));
 }
@@ -318,6 +321,7 @@ function isUuid(v) {
 }
 
 // supabase/functions/_shared/google.ts
+var GOOGLE_AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth";
 var GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token";
 var G = "https://www.googleapis.com/auth/";
 var PHASE1_SCOPES = [
@@ -343,6 +347,26 @@ var NeedsReauth = class extends Error {
     super("needs_reauth");
   }
 };
+async function pkcePair() {
+  const verifier = randomToken(32);
+  return { verifier, challenge: base64url(await sha256Bytes(verifier)) };
+}
+function authUrl(cfg, p) {
+  const q = new URLSearchParams({
+    client_id: cfg.clientId,
+    redirect_uri: cfg.redirectUri,
+    response_type: "code",
+    access_type: "offline",
+    prompt: "consent",
+    include_granted_scopes: "true",
+    code_challenge_method: "S256",
+    code_challenge: p.challenge,
+    state: p.state,
+    scope: p.scopes.join(" ")
+  });
+  if (p.loginHint) q.set("login_hint", p.loginHint);
+  return `${GOOGLE_AUTH_URL}?${q}`;
+}
 async function tokenCall(cfg, form) {
   const res = await (cfg.fetch ?? fetch)(GOOGLE_TOKEN_URL, {
     method: "POST",
@@ -1375,6 +1399,8 @@ var KIND_QUEUE = {
   "sync.contacts": "orbit_sync",
   "sync.linkedin": "orbit_sync",
   "cadence.user": "orbit_cadence",
+  "funnel.reply": "orbit_classify",
+  "outcomes.roll": "orbit_cadence",
   "health.snapshot": "orbit_cadence",
   "score.user": "orbit_score",
   "score.person": "orbit_score",
@@ -1436,6 +1462,33 @@ function sqlVault(db2) {
 }
 
 // supabase/functions/_shared/services.ts
+var RESEND_URL = "https://api.resend.com/emails";
+var DEFAULT_MAIL_FROM = "Orbit <orbit@tryorbit.today>";
+function makeMailer(env2, doFetch) {
+  const key2 = env2.resendKey;
+  if (!key2) return { configured: false, send: async () => ({ ok: false, error: "unconfigured" }) };
+  return {
+    configured: true,
+    async send(m) {
+      const res = await doFetch(RESEND_URL, {
+        method: "POST",
+        headers: { authorization: `Bearer ${key2}`, "content-type": "application/json" },
+        body: JSON.stringify({
+          from: env2.resendFrom || DEFAULT_MAIL_FROM,
+          to: [m.to],
+          subject: m.subject,
+          text: m.text
+        })
+      });
+      if (!res.ok) {
+        await res.body?.cancel().catch(() => void 0);
+        return { ok: false, error: `resend ${res.status}` };
+      }
+      const json2 = await res.json().catch(() => ({}));
+      return { ok: true, id: typeof json2.id === "string" ? json2.id : null };
+    }
+  };
+}
 function supabaseEmbed() {
   let session;
   return async (text) => {
@@ -1494,6 +1547,7 @@ function makeServices(cfg, base) {
       () => createVillage({ ...p, secretKey: env2.villageKey, baseUrl: env2.villageBase })
     ),
     embed: cfg.embed ?? supabaseEmbed(),
+    mailer: makeMailer(env2, doFetch),
     google,
     tokens
   };
@@ -1519,7 +1573,9 @@ function agentEnvFrom(get) {
     villageBase: get("VILLAGE_BASE_URL"),
     googleClientId: get("ORBIT_GOOGLE_CLIENT_ID"),
     googleClientSecret: get("ORBIT_GOOGLE_CLIENT_SECRET"),
-    googleRedirectUri: get("ORBIT_GOOGLE_REDIRECT_URI") ?? (supabaseUrl ? `${supabaseUrl}/functions/v1/orbit-api/auth/google/callback` : void 0)
+    googleRedirectUri: get("ORBIT_GOOGLE_REDIRECT_URI") ?? (supabaseUrl ? `${supabaseUrl}/functions/v1/orbit-api/auth/google/callback` : void 0),
+    resendKey: get("RESEND_API_KEY"),
+    resendFrom: get("RESEND_FROM")
   };
 }
 
@@ -4504,6 +4560,159 @@ ${d.bodyShort ?? ""}`.replace(/\[[^\]]*\]/g, " "),
   return issues;
 }
 
+// packages/core/src/email/nextAction.ts
+var REPLY_NEXT_ACTION = {
+  interested: {
+    action: "draft_slots",
+    drafts: true,
+    auto: "no_question",
+    doNotContact: false,
+    closes: false,
+    tells: false,
+    holdsBumps: false,
+    outcome: "replied",
+    summary: "They are interested: Orbit drafts a reply with three free times. On autopilot it goes on its own when they asked nothing."
+  },
+  scheduling: {
+    action: "book_or_slots",
+    drafts: true,
+    auto: "always",
+    doNotContact: false,
+    closes: false,
+    tells: false,
+    holdsBumps: false,
+    outcome: "replied",
+    summary: "They picked a time: when it matches one Orbit offered and the calendar is still free, the call is booked and the confirmation sent; otherwise a reply with free times."
+  },
+  question: {
+    action: "needs_you",
+    drafts: false,
+    auto: "never",
+    doNotContact: false,
+    closes: false,
+    tells: true,
+    holdsBumps: true,
+    outcome: "replied",
+    summary: "They asked something only you know: it waits under Needs you, and your one-line answer drafts the reply."
+  },
+  objection: {
+    action: "draft",
+    drafts: true,
+    auto: "never",
+    doNotContact: false,
+    closes: false,
+    tells: false,
+    holdsBumps: true,
+    outcome: "replied",
+    summary: "They raised a concern: Orbit drafts a reply for your approval and never sends it on its own."
+  },
+  not_now: {
+    action: "draft",
+    drafts: true,
+    auto: "never",
+    doNotContact: false,
+    closes: false,
+    tells: false,
+    holdsBumps: true,
+    outcome: "replied",
+    summary: "Not now: Orbit drafts a short reply for your approval and comes back when they said to, never on its own."
+  },
+  referral: {
+    action: "draft",
+    drafts: true,
+    auto: "never",
+    doNotContact: false,
+    closes: false,
+    tells: false,
+    holdsBumps: true,
+    outcome: "replied",
+    summary: "They pointed you to someone: Orbit drafts the thank-you and the next ask for your approval."
+  },
+  decline: {
+    action: "close",
+    drafts: false,
+    auto: "never",
+    doNotContact: true,
+    closes: true,
+    tells: true,
+    holdsBumps: true,
+    outcome: "declined",
+    summary: "They declined: the chat closes, Orbit does not write to them again, and you are told."
+  },
+  unsubscribe: {
+    action: "close",
+    drafts: false,
+    auto: "never",
+    doNotContact: true,
+    closes: true,
+    tells: true,
+    holdsBumps: true,
+    outcome: "declined",
+    summary: "They asked to stop: the chat closes, they are marked do not contact, no reply goes, and you are told."
+  },
+  thanks: {
+    action: "acknowledge",
+    drafts: true,
+    auto: "no_question",
+    doNotContact: false,
+    closes: false,
+    tells: false,
+    holdsBumps: false,
+    outcome: "replied",
+    summary: "They said thanks: a short acknowledgement, which goes on its own at autopilot when they asked nothing."
+  },
+  out_of_office: {
+    action: "hold",
+    drafts: false,
+    auto: "always",
+    doNotContact: false,
+    closes: false,
+    tells: false,
+    holdsBumps: true,
+    outcome: "replied",
+    summary: "Out of office: the bumps wait, and the follow-up goes after they are back."
+  },
+  other: {
+    action: "on_request",
+    drafts: false,
+    auto: "never",
+    doNotContact: false,
+    closes: false,
+    tells: false,
+    holdsBumps: false,
+    outcome: "replied",
+    summary: "Orbit could not tell what they meant: ask for a draft when you want one."
+  }
+};
+var DRAFTED_CLASSES = Object.keys(REPLY_NEXT_ACTION).filter(
+  (c) => REPLY_NEXT_ACTION[c].drafts
+);
+var CLOSING_CLASSES = Object.keys(REPLY_NEXT_ACTION).filter(
+  (c) => REPLY_NEXT_ACTION[c].closes
+);
+var ASKING = [
+  /\b(?:let me know|tell me|curious|wondering|wonder)\b[^.!?\n]{0,40}\b(?:if|whether|what|when|where|which|who|how|why)\b/i,
+  /\b(?:i'?d|i would) (?:like|love|want) to (?:know|hear|understand)\b/i,
+  /\b(?:could|can|would) you (?:let me know|tell me|share|send|say|confirm|clarify)\b/i,
+  /\b(?:any (?:idea|chance|thoughts?|sense) (?:if|whether|what|when|where|how|why|on|of))\b/i,
+  /\b(?:quick|one) (?:question|q)\b/i,
+  /\b(?:what|when|where|which|who|how|why) (?:do|does|did|would|will|should|are|is|were|was|have|has|can|could)\b[^.!?\n]*$/im
+];
+function holdsQuestion(text) {
+  const stripped = stripQuotedReply(text ?? "");
+  const body = (splitSignature(stripped).body || stripped).trim();
+  if (!body) return false;
+  const unquoted = body.replace(/"[^"\n]*"/g, "").replace(/“[^”\n]*”/g, "");
+  if (/\?/.test(unquoted)) return true;
+  return ASKING.some((re) => re.test(unquoted));
+}
+function autoReplyClassAllowed(cls, replyHoldsQuestion) {
+  const rule = REPLY_NEXT_ACTION[cls].auto;
+  if (rule === "never") return false;
+  if (rule === "always") return true;
+  return !replyHoldsQuestion;
+}
+
 // packages/core/src/email/triage.ts
 var NETWORKING = /\b(coffee( chat)?|informational( interview| call| chat)?|advice|your (path|journey|experience|story|career|background)|how (you|did you) (got|get|ended up|made the (move|switch)|broke) into|introduc(e|es|ed|ing|tion)|intro\b|catch ?up|mentor(ship)?|alum(ni|nus|na)?|referr?al|(hear|learn) (more )?about (your|the|how|what)|\d{1,2}[- ]?min(ute)?s? (of your time|to (hear|chat|learn|talk))|chat (about|re)\b|pick your brain|would love to (hear|learn|chat|connect)|grab (a )?(coffee|call)|sent you an invite|looking forward to (speaking|chatting|our (call|chat|conversation))|thanks( so much| again)? for (your time|chatting|the (chat|call|conversation))|(great|nice|lovely) (chatting|talking|speaking|to (meet|chat|connect)) with you|looping in|loop in|cc'?(ing|d)\b|(connected|introduced) us|for (making|taking the) time)/gi;
 var OUTREACH = /\b((freshman|sophomore|junior|senior|student|undergrad|grad student|mba student|first[- ]year|second[- ]year) (at|studying|in)\b|came across your (work|profile|post|talk|article|background|team)|(would|will) you be (open|willing|available) to|your (perspective|insights?)|(break(ing)?|get(ting)?) into|learn (more )?from (you|your)|value your (perspective|advice|insight|time)|reach(ing)? out because|(also|fellow) (went to|alum|alumni|[a-z]+ (alum|grad|student))|any chance you'?d have|\d{1,2} minutes|love to (connect|hear|learn|chat)|(quick|brief|short) (call|chat|conversation)|exploring (roles|careers|opportunities|a career)|(15|20|30)[- ]min)/gi;
@@ -5146,7 +5355,7 @@ var SEND_CAPS = {
 var AUTO_KINDS = ["bump", "thank_you", "schedule"];
 var AUTO_SEND_DAILY_CAP = SEND_CAPS.autoPerDay;
 var AUTO_SEND_MIN_SCORE = 40;
-var AUTO_SEND_CLASSES = /* @__PURE__ */ new Set(["scheduling", "thanks", "out_of_office"]);
+var REPLY_AUTO_WITHOUT_QUESTION = /* @__PURE__ */ new Set(["interested", "thanks"]);
 function localHour(d, tz) {
   if (!tz) return d.getUTCHours();
   return Number(
@@ -5160,7 +5369,10 @@ function autonomyAllows(d, ctx) {
   if (d.channel !== "gmail") reasons.push("not Gmail");
   const bothWrote = ctx.history.some((m) => m.direction === "in") && ctx.history.some((m) => m.direction === "out");
   if (!ctx.inThread || !bothWrote) reasons.push("not a reply in a two-way thread");
-  if (!AUTO_SEND_CLASSES.has(ctx.replyClass)) reasons.push(`reply class ${ctx.replyClass}`);
+  if (!autoReplyClassAllowed(ctx.replyClass, !!ctx.replyHoldsQuestion))
+    reasons.push(
+      ctx.replyHoldsQuestion && REPLY_AUTO_WITHOUT_QUESTION.has(ctx.replyClass) ? `reply class ${ctx.replyClass} with a question` : `reply class ${ctx.replyClass}`
+    );
   if (ctx.recipientScore < AUTO_SEND_MIN_SCORE)
     reasons.push(`score ${ctx.recipientScore} below ${AUTO_SEND_MIN_SCORE}`);
   const holds = checkSend(d, { ...ctx, approvedHash: void 0 });
@@ -5557,6 +5769,7 @@ var BUFFER_MIN = 15;
 var LEAD_HOURS = 18;
 var HORIZON_BUSINESS_DAYS = 10;
 var FREEBUSY_URL = "https://www.googleapis.com/calendar/v3/freeBusy";
+var EVENTS_URL = "https://www.googleapis.com/calendar/v3/calendars/primary/events";
 function slotLabel(start, end, tz) {
   const day2 = new Intl.DateTimeFormat("en-US", {
     timeZone: tz,
@@ -5670,6 +5883,75 @@ async function slotsFor(s, userId, opts = {}) {
   return { slots: pickSlots(busy, { now, userTz, labelTz, count, until: timeMax }), tz: labelTz, source };
 }
 var STATE_TTL_MS = 10 * 6e4;
+async function calendarConsentUrl(s, userId, appUrl) {
+  if (!s.google) throw new HttpError(503, "unconfigured", "Google is not configured");
+  const [u2] = await s.db.sql`select email from orbit.users where id = ${userId}::uuid`;
+  const state = randomToken(32);
+  const { verifier, challenge } = await pkcePair();
+  const now = s.now();
+  const scopes = ["openid", "email", CALENDAR_EVENTS_SCOPE];
+  await s.db.sql`
+    insert into orbit.oauth_states (state, code_verifier, redirect_to, user_id, scopes, created_at, expires_at)
+    values (${state}, ${verifier}, ${appUrl}, ${userId}::uuid, ${scopes}::text[], ${now}::timestamptz,
+            ${new Date(now.getTime() + STATE_TTL_MS)}::timestamptz)`;
+  return authUrl(s.google, { state, challenge, scopes, loginHint: u2?.email });
+}
+async function bookSlot(s, userId, req, appUrl, opts = {}) {
+  const [d] = await s.db.sql`
+    select id, person_id, chat_id from orbit.drafts where id = ${req.draftId}::uuid and user_id = ${userId}::uuid`;
+  if (!d) throw new HttpError(404, "not_found", "no such draft");
+  const start = new Date(req.slotStart);
+  if (Number.isNaN(start.getTime())) throw new HttpError(400, "bad_request", "slotStart must be an ISO time");
+  if (start.getTime() <= s.now().getTime()) throw new HttpError(409, "slot_past", "that time has passed");
+  const end = new Date(start.getTime() + SLOT_MINUTES * 6e4);
+  const [had] = await s.db.sql`
+    select external_id from orbit.calendar_events
+     where user_id = ${userId}::uuid and start_at = ${start}::timestamptz
+       and ${d.person_id}::uuid = any(attendee_person_ids) and coalesce(status, 'confirmed') <> 'cancelled'
+     limit 1`;
+  if (had) return { eventId: had.external_id };
+  const [acct] = await s.db.sql`
+    select scopes, status from orbit.integration_accounts where user_id = ${userId}::uuid and provider = 'google'`;
+  if (!acct?.scopes.some((x) => x.endsWith("calendar.events")))
+    return { needsConsent: { url: await calendarConsentUrl(s, userId, appUrl) } };
+  const [p] = await s.db.sql`
+    select display_name, first_name, primary_email from orbit.people where id = ${d.person_id}::uuid`;
+  const [u2] = await s.db.sql`
+    select first_name, full_name, timezone from orbit.users where id = ${userId}::uuid`;
+  if (!p?.primary_email) throw new HttpError(409, "no_email", "this person has no email address to invite");
+  const tz = validZone(u2?.timezone) ?? "America/New_York";
+  const mine = u2?.first_name ?? u2?.full_name?.split(/\s+/)[0] ?? "Me";
+  const theirs = p.first_name ?? p.display_name.split(/\s+/)[0];
+  const title = `${mine} / ${theirs}`;
+  let r;
+  try {
+    r = await googleCall(s, userId, `${EVENTS_URL}?sendUpdates=all`, {
+      summary: title,
+      start: { dateTime: start.toISOString(), timeZone: tz },
+      end: { dateTime: end.toISOString(), timeZone: tz },
+      attendees: [{ email: p.primary_email }]
+    });
+  } catch (e) {
+    if (e instanceof NeedsReauth) throw new HttpError(409, "needs_reauth", "reconnect Google to book");
+    throw e;
+  }
+  if (r.status === 403) return { needsConsent: { url: await calendarConsentUrl(s, userId, appUrl) } };
+  if (r.status !== 200 || typeof r.json.id !== "string")
+    throw new HttpError(502, "upstream", `calendar ${r.status}`);
+  const eventId = r.json.id;
+  await s.db.sql`
+    insert into orbit.calendar_events (user_id, external_id, title, start_at, end_at, status, attendees,
+                                       attendee_person_ids, attendee_count, is_one_on_one, chat_id)
+    values (${userId}::uuid, ${eventId}, ${title}, ${start}::timestamptz, ${end}::timestamptz, 'confirmed',
+            ${JSON.stringify([{ email: p.primary_email }])}::jsonb, ${[d.person_id]}::uuid[], 2, true,
+            ${d.chat_id}::uuid)
+    on conflict (user_id, external_id) do nothing`;
+  await s.db.sql`
+    insert into orbit.audit_log (user_id, actor, action, target_table, target_id, details)
+    values (${userId}::uuid, ${opts.actor ?? "user"}, 'calendar.book', 'drafts', ${d.id}, ${{ start: iso(start) }}::jsonb)`;
+  if (d.chat_id) await moveChat(s.db, userId, d.chat_id, "scheduled", "call booked", s.now());
+  return { eventId };
+}
 async function moveChat(db2, userId, chatId, to, reason2, now, actor = "system") {
   const [c] = await db2.sql`
     select stage from orbit.chats where id = ${chatId}::uuid and user_id = ${userId}::uuid`;
@@ -6043,7 +6325,7 @@ function composeSystem(p) {
   if (p.kind === "reply")
     lines.push(
       "",
-      "Answer what they said. If they proposed times, accept one that is free (given in <free_slots>) or offer those. Keep it shorter than their message unless they asked questions. Never leave a blank, a bracket or a placeholder: the message must be ready to send as written. If a fact is needed that is not in the inputs, write around it (offer to cover it on a call, or ask them) instead of guessing it."
+      "Answer what they said. If they proposed times, accept one that is free (given in <free_slots>) or offer those. Keep it shorter than their message unless they asked questions. Never leave a blank, a bracket or a placeholder: the message must be ready to send as written. If a fact is needed that is not in the inputs, write around it (offer to cover it on a call, or ask them) instead of guessing it. When <task> carries the user's own answer to what they asked, the reply gives that answer in the user's words and asks nothing back. When <task> says the call is booked, the reply confirms that one time and offers no other."
     );
   return lines.join("\n");
 }
@@ -6173,7 +6455,9 @@ async function composeDraft(s, req) {
   const replyClass = replyTo?.reply_class ?? void 0;
   const schedulingLink = typeof user.settings.scheduling_link === "string" ? user.settings.scheduling_link : void 0;
   let slots = [];
-  const wantsTimes = replyClass === "interested" || replyClass === "scheduling";
+  const answer = replyTo?.answer?.trim() || void 0;
+  const confirms = req.kind === "reply" ? req.confirmSlot : void 0;
+  const wantsTimes = !confirms && (replyClass === "interested" || replyClass === "scheduling");
   if (req.kind === "reply" && wantsTimes) {
     try {
       slots = (await slotsFor(s, req.userId, { personId: person.id, count: 3 })).slots;
@@ -6193,7 +6477,9 @@ ${GOAL_REGISTER[goalKind]}` : GOAL_REGISTER[goalKind];
     req.kind === "forwardable_blurb" ? `the intermediary reading it first: ${person.display_name}` : "",
     topic ? `about: ${topic}` : "",
     req.reason ? `why now: ${req.reason}` : "",
-    schedulingLink && wantsTimes ? `scheduling link: ${schedulingLink}` : ""
+    schedulingLink && wantsTimes ? `scheduling link: ${schedulingLink}` : "",
+    answer ? `${meFirst}'s answer to what they asked, in ${meFirst}'s words: ${answer}` : "",
+    confirms ? `the call is booked for ${confirms.label} and the invite is sent: confirm that time in one line, offer no other times, ask nothing` : ""
   ].filter(Boolean).join("\n");
   const examples = await exemplars(
     s,
@@ -6234,7 +6520,9 @@ ${e}`).join("\n\n"),
     slots.map((x) => x.label).join("\n"),
     target ? recipientText(target) : "",
     meFirst,
-    user.full_name ?? ""
+    user.full_name ?? "",
+    answer ?? "",
+    confirms?.label ?? ""
   ].join("\n");
   const ctx = {
     goal: goalKind,
@@ -6304,11 +6592,15 @@ ${e}`).join("\n\n"),
       topic,
       window,
       replyClass,
-      slots
+      slots,
+      answer,
+      confirms
     });
     composed = t;
     promptVersion = t.promptVersion;
   }
+  if (answer && askUserMarkers(composed.body).length)
+    composed = { ...composed, body: composed.body.replace(ASK_USER, answer) };
   let footer;
   if (salesFirstTouch2) {
     const company = typeof user.settings.company === "string" ? user.settings.company.trim() : "";
@@ -6317,6 +6609,7 @@ ${e}`).join("\n\n"),
   const forCheck = composed.body.replace(ASK_USER, "").trim();
   const v = validateComposed({ ...composed, body: forCheck }, ctx);
   const markers = askUserMarkers(composed.body);
+  const needs = markers.length ? ["answer"] : [];
   const issues = v.issues.filter((i) => i.blocking).map((i) => `${i.code}: ${i.detail}`).concat(markers.map((m) => `needs_input: ${m}`));
   const validator = { ok: v.ok && markers.length === 0, issues, words: v.words, grade: v.grade };
   const body = footer ? `${composed.body}
@@ -6327,19 +6620,24 @@ ${footer}` : composed.body;
     text: composed.ask.text,
     ...replyTo ? { replyToMessageId: replyTo.id } : {},
     ...slots.length ? { slots: slots.map((x) => x.start) } : {},
+    ...confirms ? { slots: [confirms.start], confirms } : {},
     ...req.reason ? { reason: req.reason } : {},
-    ...footer ? { footer } : {}
+    ...footer ? { footer } : {},
+    ...markers.length ? { question: markers[0] } : {},
+    ...answer ? { answer } : {}
   };
+  const offeredSlots = confirms ? [confirms.start] : slots.length ? slots.map((x) => x.start) : null;
   const level = goal?.autonomy_level ?? user.autonomy_level ?? 0;
   const via = req.via ? { ...req.via } : null;
   const [row] = await db2.sql`
     insert into orbit.drafts (user_id, person_id, chat_id, goal_id, channel, kind, subject, body, ask, hooks, via,
                               thread_external_id, in_reply_to, status, autonomy_level, validator, generated_by,
-                              prompt_version, variant)
+                              prompt_version, variant, offered_slots, needs)
     values (${req.userId}::uuid, ${person.id}::uuid, ${chatId}::uuid, ${goal?.id ?? null}::uuid, ${req.channel},
             ${req.kind}, ${composed.subject}, ${body}, ${meta}::jsonb, ${JSON.stringify(composed.hooks)}::jsonb,
             ${via}::jsonb, ${thread.externalId}, ${replyTo?.rfc_message_id ?? replyTo?.external_id ?? null}, 'draft',
-            ${level}::smallint, ${validator}::jsonb, ${generatedBy}, ${promptVersion}, null)
+            ${level}::smallint, ${validator}::jsonb, ${generatedBy}, ${promptVersion}, null,
+            ${offeredSlots ? JSON.stringify(offeredSlots) : null}::jsonb, ${needs}::text[])
     returning *`;
   await db2.sql`
     insert into orbit.audit_log (user_id, actor, action, target_table, target_id, details)
@@ -6424,7 +6722,7 @@ async function historyWith(db2, userId, personId) {
 async function loadReplyMessage(db2, userId, messageId) {
   if (!/^[0-9a-f-]{36}$/i.test(messageId)) throw new HttpError(400, "bad_request", "messageId is required");
   const [m] = await db2.sql`
-    select id, thread_id, provider, external_id, rfc_message_id, from_person_id, reply_class, sent_at
+    select id, thread_id, provider, external_id, rfc_message_id, from_person_id, reply_class, sent_at, answer
       from orbit.messages
      where id = ${messageId}::uuid and user_id = ${userId}::uuid and direction = 'in'`;
   if (!m) throw new HttpError(404, "not_found", "no such reply");
@@ -6512,6 +6810,40 @@ function replyTemplate(p, me) {
 ${me}`;
   let middle;
   let ask = { kind: "none", text: "" };
+  if (p.confirms) {
+    middle = `${p.confirms.label} works for me, and the calendar invite is on its way. Looking forward to it.`;
+    return {
+      id: "",
+      goalId: p.goalId,
+      personId: p.person.id,
+      kind: "reply",
+      channel: p.req.channel,
+      subject: null,
+      body: [hi, middle, sign].join("\n\n"),
+      ask,
+      hooks: [],
+      sendWindow: p.window,
+      promptVersion: "template-v2",
+      variant: null
+    };
+  }
+  if (p.answer) {
+    middle = `Thanks for asking. ${p.answer.replace(/[.!?]*$/, "")}. Happy to say more whenever works for you.`;
+    return {
+      id: "",
+      goalId: p.goalId,
+      personId: p.person.id,
+      kind: "reply",
+      channel: p.req.channel,
+      subject: null,
+      body: [hi, middle, sign].join("\n\n"),
+      ask,
+      hooks: [],
+      sendWindow: p.window,
+      promptVersion: "template-v2",
+      variant: null
+    };
+  }
   switch (p.replyClass) {
     case "interested":
     case "scheduling":
@@ -6554,6 +6886,143 @@ ${p.slots.map((x) => `- ${x.label}`).join("\n")}`;
     promptVersion: "template-v2",
     variant: null
   };
+}
+
+// supabase/functions/_shared/replies/cards.ts
+var CARD_TTL_DAYS = 14;
+var CLOSED_AFTER_MS = 4 * 36e5;
+async function raiseCard(db2, userId, c) {
+  const expires = new Date(c.now.getTime() + CARD_TTL_DAYS * 864e5);
+  const [row] = await db2.sql`
+    insert into orbit.suggestions (user_id, kind, person_id, chat_id, draft_id, message_id, priority_score, reason_text,
+                                   signals, payload, status, dedupe_key, expires_at, created_at, updated_at)
+    values (${userId}::uuid, ${c.kind}, ${c.personId ?? null}::uuid, ${c.chatId ?? null}::uuid, ${c.draftId ?? null}::uuid,
+            ${c.messageId ?? null}::uuid, ${c.priority ?? 0.7}::real, ${c.reasonText}, ${c.signals ?? {}}::jsonb,
+            ${c.payload ?? {}}::jsonb, 'pending', ${c.dedupeKey}, ${expires}::timestamptz, ${c.now}::timestamptz,
+            ${c.now}::timestamptz)
+    on conflict (user_id, dedupe_key) do update
+      set reason_text = excluded.reason_text, signals = excluded.signals, payload = excluded.payload,
+          expires_at = excluded.expires_at, updated_at = excluded.updated_at
+    returning id, (xmax = 0) as inserted`;
+  if (row?.inserted && c.notify)
+    await db2.sql`
+      insert into orbit.notifications (user_id, kind, title, body, link, created_at, updated_at)
+      values (${userId}::uuid, ${c.notify.kind}, ${c.notify.title}, ${c.notify.body ?? null}, ${c.notify.link ?? null},
+              ${c.now}::timestamptz, ${c.now}::timestamptz)`;
+  return row.id;
+}
+async function lastSeenAt(db2, userId) {
+  const [r] = await db2.sql`
+    select max(coalesce(last_used_at, created_at)) as at from orbit.sessions
+     where user_id = ${userId}::uuid and revoked_at is null`;
+  return r?.at ? new Date(r.at) : void 0;
+}
+async function mailIfAway(s, userId, p) {
+  if (!s.mailer.configured) return { sent: false, reason: "unconfigured" };
+  const seen = await lastSeenAt(s.db, userId);
+  if (seen && p.now.getTime() - seen.getTime() < CLOSED_AFTER_MS) return { sent: false, reason: "app_open" };
+  const [u2] = await s.db.sql`select email from orbit.users where id = ${userId}::uuid`;
+  if (!u2?.email) return { sent: false, reason: "no_email" };
+  const r = await s.mailer.send({
+    to: u2.email,
+    subject: `${p.personFirstName} asked one thing`,
+    text: `${p.personFirstName} asked one thing. Reply in Orbit.
+
+https://tryorbit.today/inbox`
+  });
+  if (!r.ok) return { sent: false, reason: r.error };
+  await s.db.sql`
+    insert into orbit.audit_log (user_id, actor, action, target_table, target_id, details)
+    values (${userId}::uuid, 'system', 'needs_you.mailed', 'users', ${userId}, ${{ id: r.id }}::jsonb)`;
+  return { sent: true };
+}
+
+// supabase/functions/_shared/replies/breaker.ts
+var DECLINES_PER_DAY = 2;
+function pausedGoalsOf(settings) {
+  const v = settings?.autopilot_paused_goals;
+  if (!v || typeof v !== "object" || Array.isArray(v)) return {};
+  const out = {};
+  for (const [goalId, p] of Object.entries(v)) {
+    if (!p || typeof p !== "object") continue;
+    const g = p;
+    out[goalId] = {
+      reason: g.reason ?? "student",
+      text: typeof g.text === "string" ? g.text : "Paused",
+      until: typeof g.until === "string" ? g.until : null,
+      at: typeof g.at === "string" ? g.at : ""
+    };
+  }
+  return out;
+}
+function goalPaused(settings, goalId, now) {
+  if (!goalId) return false;
+  const p = pausedGoalsOf(settings)[goalId];
+  if (!p) return false;
+  return p.until === null || new Date(p.until).getTime() > now.getTime();
+}
+async function setGoalPause(db2, userId, goalId, pause) {
+  const [u2] = await db2.sql`
+    select settings from orbit.users where id = ${userId}::uuid`;
+  const goals = pausedGoalsOf(u2?.settings);
+  if (pause) goals[goalId] = pause;
+  else delete goals[goalId];
+  await db2.sql`
+    update orbit.users set settings = settings || jsonb_build_object('autopilot_paused_goals', ${goals}::jsonb)
+     where id = ${userId}::uuid`;
+  return goals;
+}
+var WHAT = {
+  unsubscribe: "asked to stop",
+  declines: "declined, the second today",
+  bounce: "bounced",
+  send_error: "could not be sent to"
+};
+async function tripBreaker(db2, userId, p) {
+  const [u2] = await db2.sql`
+    select settings from orbit.users where id = ${userId}::uuid`;
+  const goalTitle = p.goalId ? (await db2.sql`select title from orbit.goals where id = ${p.goalId}::uuid`)[0]?.title : void 0;
+  const where = p.company?.trim() || goalTitle || "first messages";
+  const text = `${p.personName} ${WHAT[p.reason]}. Paused ${where}${p.company?.trim() || goalTitle ? " first messages" : ""}.`;
+  if (p.goalId && goalPaused(u2?.settings, p.goalId, p.now)) return { tripped: false, text };
+  if (p.goalId)
+    await setGoalPause(db2, userId, p.goalId, {
+      reason: p.reason,
+      text,
+      until: null,
+      at: p.now.toISOString()
+    });
+  await db2.sql`
+    insert into orbit.audit_log (user_id, actor, action, target_table, target_id, details)
+    values (${userId}::uuid, 'system', 'autopilot.breaker', 'goals', ${p.goalId ?? userId},
+            ${{ reason: p.reason, personId: p.personId, messageId: p.messageId ?? null, goalId: p.goalId }}::jsonb)`;
+  await raiseCard(db2, userId, {
+    kind: "breaker",
+    dedupeKey: `breaker:${p.goalId ?? "account"}:${p.messageId ?? p.personId ?? p.now.toISOString()}`,
+    reasonText: `${text} Read it?`,
+    personId: p.personId,
+    messageId: p.messageId ?? null,
+    signals: { reason: p.reason, goalId: p.goalId },
+    payload: { goalId: p.goalId, reason: p.reason, personName: p.personName, company: p.company ?? null },
+    priority: 0.9,
+    now: p.now,
+    notify: {
+      kind: "system",
+      title: text,
+      link: p.personId ? `/people/${p.personId}` : "/settings/autopilot"
+    }
+  });
+  return { tripped: true, text };
+}
+async function declinesToday(db2, userId, goalId, dayStart2) {
+  const [r] = await db2.sql`
+    select count(distinct m.id)::int as n
+      from orbit.messages m
+      join orbit.chats c on c.user_id = m.user_id and c.person_id = m.from_person_id
+     where m.user_id = ${userId}::uuid and m.direction = 'in' and m.reply_class = 'decline'
+       and m.sent_at >= ${dayStart2}::timestamptz
+       and (${goalId}::uuid is null or c.goal_id = ${goalId}::uuid)`;
+  return r?.n ?? 0;
 }
 
 // supabase/functions/_shared/cadence/cadence.ts
@@ -6646,6 +7115,9 @@ async function loadCadence(db2, userId, now) {
     });
   }
   const nurtured = draftRows.filter((d) => d.kind === "nurture" || d.kind === "reengage").map((d) => iso(d.created_at));
+  const awaiting = await db2.sql`
+    select distinct person_id from orbit.suggestions
+     where user_id = ${userId}::uuid and kind = 'needs_you' and status in ('pending', 'snoozed') and person_id is not null`;
   const maxBumps = num(settings.max_bumps, 2);
   const quiet = typeof settings.quiet_until === "string" ? settings.quiet_until : void 0;
   return {
@@ -6662,6 +7134,8 @@ async function loadCadence(db2, userId, now) {
     timezone: tz,
     chatsById: new Map(chats.map((c) => [c.id, c])),
     goalsById: new Map(goals.map((g) => [g.id, g])),
+    settings,
+    awaitingStudent: new Set(awaiting.map((r) => r.person_id)),
     autonomyLevel: num(u2?.autonomy_level, 0),
     autoKinds: Array.isArray(settings.auto_kinds) ? settings.auto_kinds.filter(
       (k) => typeof k === "string" && AUTO_KINDS.includes(k)
@@ -6724,6 +7198,10 @@ async function runCadence(s, userId) {
         out.skipped++;
         continue;
       }
+      if (a.kind === "bump" && st.awaitingStudent.has(a.personId)) {
+        out.skipped++;
+        continue;
+      }
       if (a.kind === "thank_you" && pending(a.chatId, a.personId, ["thank_you"], 7 * DAY6)) {
         out.skipped++;
         continue;
@@ -6754,7 +7232,7 @@ async function runCadence(s, userId) {
       });
       const goal = a.goalId ? st.goalsById.get(a.goalId) : void 0;
       const level = goal?.autonomyLevel ?? st.autonomyLevel;
-      const paused = !!st.pausedUntil && now.getTime() < new Date(st.pausedUntil).getTime();
+      const paused = !!st.pausedUntil && now.getTime() < new Date(st.pausedUntil).getTime() || goalPaused(st.settings, a.goalId ?? null, now);
       const score = st.input.people.get(a.personId)?.score ?? 0;
       if (level >= 1 && channel === "gmail" && st.autoKinds.includes(a.draftKind) && draft.validator?.ok && score >= AUTO_SEND_MIN_SCORE && !paused && askUserMarkers(`${draft.subject ?? ""}
 ${draft.body}`).length === 0) {
@@ -8395,6 +8873,599 @@ function enrichDossier(config) {
   };
 }
 
+// supabase/functions/_shared/replies/replies.ts
+var needsYouKey = (messageId) => `needs_you:${messageId}`;
+function questionOf(extraction, text) {
+  const llm = extraction?.llm?.question;
+  if (typeof llm === "string" && llm.trim()) return llm.trim();
+  const own = extraction?.question;
+  if (typeof own === "string" && own.trim()) return own.trim();
+  const body = stripQuotedReply(text);
+  const sentence2 = body.split(/(?<=[.!?])\s+|\n+/).map((s) => s.trim()).find((s) => s.endsWith("?"));
+  return sentence2 ?? (holdsQuestion(body) ? body.trim().slice(0, 200) : null);
+}
+async function draftReply(s, userId, messageId, actor = "user") {
+  const m = await loadReplyMessage(s.db, userId, messageId);
+  if (m.reply_class === "unsubscribe")
+    throw new HttpError(409, "unsubscribe", "they asked not to be contacted; no reply is drafted");
+  if (!m.from_person_id) throw new HttpError(409, "unknown_sender", "Orbit does not know who sent this yet");
+  return composeDraft(s, {
+    userId,
+    personId: m.from_person_id,
+    kind: "reply",
+    channel: m.provider,
+    replyToMessageId: m.id,
+    actor
+  });
+}
+var DRAFT_CLASSES = new Set(
+  Object.keys(REPLY_NEXT_ACTION).filter((c) => REPLY_NEXT_ACTION[c].drafts)
+);
+async function maybeAutoReply(db2, userId, messageId, deps = {}) {
+  const s = deps.services ?? makeServices(deps.config ?? { env: {} }, { db: db2, now: deps.now });
+  const now = s.now();
+  const m = await loadReplyMessage(db2, userId, messageId);
+  const cls = m.reply_class;
+  if (!cls) return { action: "none", reason: "not_classified" };
+  const step = REPLY_NEXT_ACTION[cls];
+  if (cls === "decline" || cls === "unsubscribe") {
+    if (m.from_person_id) await closeOnReply(s, userId, m.id, m.from_person_id, cls, now, deps.history);
+    return cls === "unsubscribe" ? { action: "unsubscribed" } : { action: "closed", reason: "decline" };
+  }
+  if (!m.from_person_id) return { action: "none", reason: "unknown_sender" };
+  if (deps.history) return { action: "none", reason: "history" };
+  if (step.action === "needs_you") {
+    const [full] = await db2.sql`
+      select body_text, snippet, extraction, answer from orbit.messages where id = ${m.id}::uuid`;
+    if (full?.answer) return { action: "none", reason: "answered" };
+    const id = await raiseNeedsYou(s, userId, {
+      messageId: m.id,
+      personId: m.from_person_id,
+      question: questionOf(
+        full?.extraction,
+        full?.body_text ?? full?.snippet ?? ""
+      ) ?? "They asked you something.",
+      now
+    });
+    return { action: "needs_you", suggestionId: id };
+  }
+  if (!step.drafts) return { action: "none", reason: `class ${cls}` };
+  const [existing] = await db2.sql`
+    select * from orbit.drafts
+     where user_id = ${userId}::uuid and ask->>'replyToMessageId' = ${m.id}
+       and status not in ('discarded', 'cancelled')
+     order by created_at desc limit 1`;
+  let draft;
+  if (existing) {
+    if (existing.status !== "draft") return { action: "auto_sent", draftId: existing.id };
+    draft = existing;
+  } else {
+    await db2.sql`
+      update orbit.drafts d set status = 'cancelled', cancel_reason = 'superseded'
+       where d.user_id = ${userId}::uuid and d.kind = 'reply' and d.status = 'draft'
+         and d.updated_at < d.created_at + interval '2 seconds'
+         and d.ask->>'replyToMessageId' in (
+           select id::text from orbit.messages
+            where user_id = ${userId}::uuid and thread_id = ${m.thread_id}::uuid and id <> ${m.id}::uuid)`;
+    try {
+      draft = (await draftReply(s, userId, m.id, "agent")).draft;
+    } catch (e) {
+      if (e instanceof HttpError) return { action: "none", reason: e.code };
+      throw e;
+    }
+  }
+  return approveIfAllowed(s, userId, draft, cls, now);
+}
+async function approveIfAllowed(s, userId, draft, cls, now, extra = {}) {
+  const db2 = s.db;
+  const [u2] = await db2.sql`
+    select email, full_name, autonomy_level, timezone, settings from orbit.users where id = ${userId}::uuid`;
+  const [p] = await db2.sql`
+    select p.timezone, p.title, p.headline, p.do_not_contact, ts.score::int as score
+      from orbit.people p left join orbit.tie_scores ts on ts.person_id = p.id and ts.user_id = p.user_id
+     where p.id = ${draft.person_id}::uuid`;
+  const [g] = draft.goal_id ? await db2.sql`select autonomy_level from orbit.goals where id = ${draft.goal_id}::uuid` : [];
+  const userTz = validZone(u2.timezone) ?? "America/New_York";
+  const dayStart2 = zonedTime2(
+    new Intl.DateTimeFormat("en-CA", { timeZone: userTz }).format(now),
+    0,
+    0,
+    userTz
+  );
+  const [today] = await db2.sql`
+    select count(*)::int as n from orbit.audit_log
+     where user_id = ${userId}::uuid and action = 'draft.auto_approve' and created_at >= ${dayStart2}::timestamptz`;
+  const meta = draft.ask ?? {};
+  const history = await historyWith(db2, userId, draft.person_id);
+  const level = (n) => n === 0 || n === 1 || n === 2 ? n : void 0;
+  const replyTo = meta.replyToMessageId ? (await db2.sql`
+          select body_text, snippet from orbit.messages where id = ${meta.replyToMessageId}::uuid`)[0] : void 0;
+  const verdict = autonomyAllows(
+    {
+      kind: "reply",
+      channel: draft.channel,
+      personId: draft.person_id,
+      subject: draft.subject,
+      body: draft.body
+    },
+    {
+      now,
+      userEmails: [u2.email],
+      userName: u2.full_name ?? "",
+      recipient: {
+        doNotContact: p?.do_not_contact,
+        title: p?.title ?? void 0,
+        headline: p?.headline ?? void 0
+      },
+      history,
+      schedulingLink: typeof u2.settings?.scheduling_link === "string" ? u2.settings.scheduling_link : void 0,
+      offeredSlots: [...meta.slots ?? [], ...extra.offeredSlots ?? []],
+      timeZone: userTz,
+      userAutonomy: level(u2.autonomy_level) ?? 0,
+      goalAutonomy: level(g?.autonomy_level),
+      replyClass: cls,
+      replyHoldsQuestion: holdsQuestion(replyTo?.body_text ?? replyTo?.snippet ?? ""),
+      inThread: !!draft.thread_external_id,
+      recipientScore: p?.score ?? 0,
+      validatorOk: !!draft.validator?.ok,
+      autoSentToday: today?.n ?? 0,
+      recipientTimeZone: validZone(p?.timezone) ?? userTz
+    }
+  );
+  const reasons = [...verdict.reasons];
+  const paused = u2.settings?.autopilot_paused_until;
+  if (typeof paused === "string" && new Date(paused).getTime() > now.getTime())
+    reasons.push("autopilot paused");
+  if (goalPaused(u2.settings, draft.goal_id, now)) reasons.push("goal paused by the breaker");
+  if (askUserMarkers(`${draft.subject ?? ""}
+${draft.body}`).length) reasons.push("needs_input");
+  if (reasons.length) return { action: "drafted", draftId: draft.id, reasons: [...new Set(reasons)] };
+  const [approved] = await db2.sql`
+    update orbit.drafts set status = 'approved', send_at = ${now}::timestamptz, autonomy_level = 2,
+                            auto_rung = ${cls === "scheduling" ? "schedule" : "reply"}
+     where id = ${draft.id}::uuid and status = 'draft' returning id`;
+  if (!approved) return { action: "drafted", draftId: draft.id, reasons: ["changed meanwhile"] };
+  await db2.sql`
+    insert into orbit.audit_log (user_id, actor, action, target_table, target_id, details)
+    values (${userId}::uuid, 'agent', 'draft.auto_approve', 'drafts', ${draft.id},
+            ${{ hash: messageHash({ channel: draft.channel, subject: draft.subject, body: draft.body }), reply_class: cls }}::jsonb)`;
+  await db2.sql`
+    insert into orbit.audit_log (user_id, actor, action, target_table, target_id, details)
+    values (${userId}::uuid, 'agent', 'reply.auto', 'drafts', ${draft.id}, ${{ reply_class: cls }}::jsonb)`;
+  await s.queue.enqueue({
+    kind: "send.draft",
+    userId,
+    payload: { draftId: draft.id },
+    dedupeKey: `send:${draft.id}`
+  });
+  return { action: "auto_sent", draftId: draft.id };
+}
+async function closeOnReply(s, userId, messageId, personId, cls, now, history = false) {
+  const db2 = s.db;
+  const reason2 = cls === "unsubscribe" ? "asked not to be contacted" : "declined";
+  const [p] = await db2.sql`
+    select p.display_name, p.first_name, p.org_raw, o.name as org_name, p.do_not_contact
+      from orbit.people p left join orbit.organizations o on o.id = p.org_id
+     where p.id = ${personId}::uuid and p.user_id = ${userId}::uuid`;
+  if (!p) return;
+  if (!p.do_not_contact) {
+    await db2.sql`update orbit.people set do_not_contact = true where id = ${personId}::uuid and user_id = ${userId}::uuid`;
+    await db2.sql`
+      insert into orbit.audit_log (user_id, actor, action, target_table, target_id, details)
+      values (${userId}::uuid, 'agent', 'person.do_not_contact', 'people', ${personId}, ${{ source: "reply", reply_class: cls }}::jsonb)`;
+  }
+  await db2.sql`
+    update orbit.drafts set status = 'cancelled', cancel_reason = ${cls}
+     where user_id = ${userId}::uuid and person_id = ${personId}::uuid
+       and status in ('draft', 'approved', 'scheduled')`;
+  const chats = await db2.sql`
+    select id, goal_id from orbit.chats where user_id = ${userId}::uuid and person_id = ${personId}::uuid
+       and archived_at is null`;
+  for (const c of chats) await moveChat(db2, userId, c.id, "declined", reason2, now);
+  if (history) return;
+  const goalId = chats.find((c) => c.goal_id)?.goal_id ?? null;
+  const company = p.org_name ?? p.org_raw ?? null;
+  await raiseCard(db2, userId, {
+    kind: "needs_you",
+    dedupeKey: `closed:${messageId}`,
+    reasonText: cls === "unsubscribe" ? `${p.display_name} asked to stop. Orbit closed the thread and will not write to them again.` : `${p.display_name} declined. Orbit closed the thread and will not write to them again.`,
+    personId,
+    chatId: chats[0]?.id ?? null,
+    messageId,
+    signals: { replyClass: cls, closed: true },
+    payload: { replyClass: cls, closed: true, personName: p.display_name, company },
+    priority: 0.6,
+    now,
+    notify: {
+      kind: "reply_received",
+      title: `${p.display_name} ${cls === "unsubscribe" ? "asked to stop" : "declined"}`,
+      link: `/people/${personId}`
+    }
+  });
+  const userTz = validZone(
+    (await db2.sql`select timezone from orbit.users where id = ${userId}::uuid`)[0]?.timezone
+  );
+  const dayStart2 = zonedTime2(
+    new Intl.DateTimeFormat("en-CA", { timeZone: userTz ?? "America/New_York" }).format(now),
+    0,
+    0,
+    userTz ?? "America/New_York"
+  );
+  const trips = cls === "unsubscribe" || await declinesToday(db2, userId, goalId, dayStart2) >= DECLINES_PER_DAY;
+  if (trips)
+    await tripBreaker(db2, userId, {
+      goalId,
+      reason: cls === "unsubscribe" ? "unsubscribe" : "declines",
+      personId,
+      personName: p.display_name,
+      company,
+      messageId,
+      now
+    });
+}
+async function raiseNeedsYou(s, userId, p) {
+  const [person] = await s.db.sql`
+    select display_name, first_name, org_raw from orbit.people where id = ${p.personId}::uuid`;
+  const name = person?.display_name ?? "They";
+  const first = person ? firstNameOf({ first_name: person.first_name, display_name: person.display_name }) : "They";
+  const [chat] = await s.db.sql`
+    select id from orbit.chats where user_id = ${userId}::uuid and person_id = ${p.personId}::uuid and archived_at is null
+     order by updated_at desc limit 1`;
+  const question = p.question.replace(/\s+/g, " ").trim().slice(0, 300);
+  const id = await raiseCard(s.db, userId, {
+    kind: "needs_you",
+    dedupeKey: needsYouKey(p.messageId),
+    reasonText: `${name} asked: "${question}" What should I say?`,
+    personId: p.personId,
+    chatId: chat?.id ?? null,
+    messageId: p.messageId,
+    signals: { replyClass: "question" },
+    payload: { question, personName: name, replyClass: "question" },
+    priority: 0.85,
+    now: p.now,
+    notify: {
+      kind: "reply_received",
+      title: `${first} asked one thing`,
+      body: "Answer it in one line and Orbit drafts the reply.",
+      link: "/inbox?tab=needs_you"
+    }
+  });
+  await mailIfAway(s, userId, { personFirstName: first, now: p.now }).catch(() => void 0);
+  return id;
+}
+
+// supabase/functions/_shared/replies/funnel.ts
+var SLOT_MATCH_MIN = 15;
+var APP_URL = "https://tryorbit.today";
+async function offeredSlotsFor(s, userId, personId, before) {
+  const rows = await s.db.sql`
+    select * from orbit.drafts
+     where user_id = ${userId}::uuid and person_id = ${personId}::uuid and status = 'sent'
+       and sent_at <= ${before}::timestamptz
+       and (offered_slots is not null or ask->'slots' is not null)
+     order by sent_at desc limit 3`;
+  for (const d of rows) {
+    const fromColumn = Array.isArray(d.offered_slots) ? d.offered_slots : [];
+    const fromAsk = Array.isArray(d.ask?.slots) ? d.ask.slots : [];
+    const slots = [...fromColumn, ...fromAsk].filter((x) => typeof x === "string");
+    if (slots.length) return { draft: d, slots: [...new Set(slots)] };
+  }
+  return void 0;
+}
+function matchOfferedSlot(text, offered, reference, timeZone) {
+  const proposed = extractProposedTimes(text, reference, timeZone);
+  for (const p of proposed) {
+    const t = new Date(p.startIso).getTime();
+    const hit = offered.find((o) => Math.abs(new Date(o).getTime() - t) <= SLOT_MATCH_MIN * 6e4);
+    if (hit) return hit;
+  }
+  return void 0;
+}
+async function slotStillFree(s, userId, start, tz) {
+  const end = new Date(start.getTime() + SLOT_MINUTES * 6e4);
+  const from = new Date(start.getTime() - BUFFER_MIN * 6e4);
+  const to = new Date(end.getTime() + BUFFER_MIN * 6e4);
+  let busy;
+  try {
+    busy = await freeBusy(s, userId, from, to, tz);
+  } catch (e) {
+    if (!(e instanceof NeedsReauth) && !(e instanceof HttpError)) throw e;
+    busy = await storedBusy(s.db, userId, from, to);
+  }
+  return !busy.some((b) => start.getTime() < b.end && end.getTime() > b.start);
+}
+async function runReplyFunnel(s, userId, messageId, opts = {}) {
+  const db2 = s.db;
+  const now = s.now();
+  const m = await loadReplyMessage(db2, userId, messageId);
+  if (m.reply_class !== "scheduling" || !m.from_person_id)
+    return maybeAutoReply(db2, userId, messageId, { services: s });
+  const [full] = await db2.sql`
+    select body_text, snippet from orbit.messages where id = ${m.id}::uuid`;
+  const offered = await offeredSlotsFor(s, userId, m.from_person_id, new Date(m.sent_at));
+  if (!offered) return maybeAutoReply(db2, userId, messageId, { services: s });
+  const [u2] = await db2.sql`
+    select timezone, settings from orbit.users where id = ${userId}::uuid`;
+  const [p] = await db2.sql`
+    select timezone, first_name, display_name from orbit.people where id = ${m.from_person_id}::uuid`;
+  const userTz = validZone(u2?.timezone) ?? "America/New_York";
+  const tz = validZone(p?.timezone) ?? userTz;
+  const text = full?.body_text ?? full?.snippet ?? "";
+  const slotStart = matchOfferedSlot(text, offered.slots, new Date(m.sent_at), tz);
+  if (!slotStart) return maybeAutoReply(db2, userId, messageId, { services: s });
+  const start = new Date(slotStart);
+  if (start.getTime() <= now.getTime()) return maybeAutoReply(db2, userId, messageId, { services: s });
+  const [done] = await db2.sql`
+    select external_id from orbit.calendar_events
+     where user_id = ${userId}::uuid and start_at = ${start}::timestamptz
+       and ${m.from_person_id}::uuid = any(attendee_person_ids) and coalesce(status, 'confirmed') <> 'cancelled'`;
+  let eventId = done?.external_id;
+  if (!eventId && !await slotStillFree(s, userId, start, userTz))
+    return maybeAutoReply(db2, userId, messageId, { services: s });
+  if (!eventId) {
+    const booked = await bookSlot(
+      s,
+      userId,
+      { draftId: offered.draft.id, slotStart },
+      opts.appUrl ?? APP_URL,
+      { actor: "agent" }
+    );
+    if (booked.needsConsent) {
+      await maybeAutoReply(db2, userId, messageId, { services: s });
+      return { action: "needs_consent", url: booked.needsConsent.url, slotStart };
+    }
+    eventId = booked.eventId;
+    await db2.sql`update orbit.drafts set outcome = 'booked' where id = ${offered.draft.id}::uuid`;
+    await db2.sql`
+      insert into orbit.audit_log (user_id, actor, action, target_table, target_id, details)
+      values (${userId}::uuid, 'agent', 'call.booked', 'drafts', ${offered.draft.id},
+              ${{ start: iso(start), eventId, messageId: m.id, personId: m.from_person_id }}::jsonb)`;
+  }
+  const label = slotLabel(start, new Date(start.getTime() + SLOT_MINUTES * 6e4), tz);
+  const [existing] = await db2.sql`
+    select * from orbit.drafts
+     where user_id = ${userId}::uuid and ask->>'replyToMessageId' = ${m.id}
+       and status not in ('discarded', 'cancelled')
+     order by created_at desc limit 1`;
+  let draft = existing;
+  if (!draft) {
+    try {
+      draft = (await composeDraft(s, {
+        userId,
+        personId: m.from_person_id,
+        kind: "reply",
+        channel: m.provider,
+        replyToMessageId: m.id,
+        actor: "agent",
+        confirmSlot: { start: slotStart, label }
+      })).draft;
+    } catch (e) {
+      if (e instanceof HttpError)
+        return {
+          action: "booked",
+          eventId,
+          slotStart,
+          draftId: offered.draft.id,
+          confirmation: { action: "none", reason: e.code }
+        };
+      throw e;
+    }
+  }
+  const confirmation = draft.status !== "draft" ? { action: "auto_sent", draftId: draft.id } : goalPaused(u2?.settings, draft.goal_id, now) ? {
+    action: "drafted",
+    draftId: draft.id,
+    reasons: ["goal paused by the breaker"]
+  } : await approveIfAllowed(s, userId, draft, "scheduling", now, { offeredSlots: [slotStart] });
+  return { action: "booked", eventId, slotStart, draftId: draft.id, confirmation };
+}
+
+// supabase/functions/_shared/googleApi.ts
+var UNITS_PER_SECOND = 90;
+var MAX_IN_FLIGHT = 5;
+var MAX_RETRIES = 3;
+var GoogleApiError = class extends Error {
+  constructor(status, reason2) {
+    super(`google ${status} ${reason2}`);
+    this.status = status;
+    this.reason = reason2;
+    this.name = "GoogleApiError";
+  }
+};
+var realSleep = (ms2) => new Promise((r) => setTimeout(r, ms2));
+var QuotaPacer = class {
+  rate;
+  max;
+  clock;
+  sleep;
+  spent = [];
+  inFlight = 0;
+  waiting = [];
+  constructor(o = {}) {
+    this.rate = o.unitsPerSecond ?? UNITS_PER_SECOND;
+    this.max = o.maxInFlight ?? MAX_IN_FLIGHT;
+    this.clock = o.clock ?? Date.now;
+    this.sleep = o.sleep ?? realSleep;
+  }
+  async run(units, fn) {
+    await this.acquire();
+    try {
+      return await this.spend(units, fn);
+    } finally {
+      this.release();
+    }
+  }
+  acquire() {
+    if (this.inFlight < this.max) {
+      this.inFlight++;
+      return Promise.resolve();
+    }
+    return new Promise((r) => this.waiting.push(r));
+  }
+  release() {
+    const next = this.waiting.shift();
+    if (next) next();
+    else this.inFlight--;
+  }
+  /** Records the spend and starts the request in one synchronous step, so the recorded time is the start time. */
+  async spend(units, fn) {
+    const u2 = Math.min(Math.max(0, units), this.rate);
+    for (; ; ) {
+      const now = this.clock();
+      this.spent = this.spent.filter((e) => e.t > now - 1e3);
+      const used = this.spent.reduce((s, e) => s + e.u, 0);
+      if (used + u2 <= this.rate) {
+        this.spent.push({ t: now, u: u2 });
+        return fn();
+      }
+      let over = used + u2 - this.rate;
+      let wait = 1;
+      for (const e of this.spent) {
+        over -= e.u;
+        wait = e.t + 1e3 - now;
+        if (over <= 0) break;
+      }
+      await this.sleep(Math.max(1, wait));
+    }
+  }
+};
+async function reason(res) {
+  try {
+    const body = await res.json();
+    if (typeof body.error === "string") return body.error;
+    return body.error?.errors?.[0]?.reason ?? body.error?.status ?? "error";
+  } catch {
+    return "error";
+  }
+}
+var RATE_REASONS = /* @__PURE__ */ new Set(["rateLimitExceeded", "userRateLimitExceeded", "RESOURCE_EXHAUSTED"]);
+function googleClient(deps) {
+  const doFetch = deps.fetch ?? fetch;
+  const clock = deps.clock ?? Date.now;
+  const sleep = deps.sleep ?? realSleep;
+  const random = deps.random ?? Math.random;
+  const pacers = deps.pacers ?? /* @__PURE__ */ new Map();
+  const pacer = (userId) => {
+    let p = pacers.get(userId);
+    if (!p) {
+      p = new QuotaPacer({ clock, sleep });
+      pacers.set(userId, p);
+    }
+    return p;
+  };
+  return {
+    async request(userId, r) {
+      let refreshed = false;
+      let attempt = 0;
+      for (; ; ) {
+        const token = await deps.tokens.accessToken(userId);
+        const res = await pacer(userId).run(
+          r.units,
+          () => doFetch(r.url, {
+            method: r.method ?? (r.body === void 0 ? "GET" : "POST"),
+            headers: {
+              authorization: `Bearer ${token}`,
+              accept: "application/json",
+              ...r.body === void 0 ? {} : { "content-type": "application/json" }
+            },
+            body: r.body === void 0 ? void 0 : JSON.stringify(r.body),
+            // a call Google never answers fails the job (which is retried) instead of holding the worker
+            signal: AbortSignal.timeout(3e4)
+          })
+        );
+        if (res.status === 401) {
+          await res.body?.cancel();
+          if (!refreshed) {
+            deps.tokens.invalidate(userId);
+            refreshed = true;
+            continue;
+          }
+          if (deps.db)
+            await deps.db.sql`
+              update orbit.integration_accounts set status = 'needs_reauth', last_error = 'unauthorized'
+               where user_id = ${userId}::uuid and provider = 'google'`;
+          throw new NeedsReauth();
+        }
+        if (res.ok) return await res.json();
+        const why = res.status === 429 || res.status >= 500 ? "retry" : await reason(res);
+        const retryable = why === "retry" || res.status === 403 && RATE_REASONS.has(why);
+        if (retryable && attempt < MAX_RETRIES) {
+          const wait = retryAfterMs(res.headers.get("retry-after"), clock()) ?? backoffMs(attempt, random);
+          if (why === "retry") await res.body?.cancel();
+          attempt++;
+          await sleep(wait);
+          continue;
+        }
+        if (why === "retry") await res.body?.cancel();
+        throw new GoogleApiError(res.status, why === "retry" ? `http_${res.status}` : why);
+      }
+    }
+  };
+}
+function qs(params) {
+  const q = new URLSearchParams();
+  for (const [k, v] of Object.entries(params)) {
+    if (v === void 0 || v === null) continue;
+    if (Array.isArray(v)) for (const x of v) q.append(k, x);
+    else q.set(k, String(v));
+  }
+  const s = q.toString();
+  return s ? `?${s}` : "";
+}
+
+// supabase/functions/orbit-worker/handlers/deps.ts
+var JobSkipped = class extends Error {
+  constructor(reason2) {
+    super(reason2);
+    this.reason = reason2;
+    this.name = "JobSkipped";
+  }
+};
+function googleFor(deps) {
+  const pacers = /* @__PURE__ */ new Map();
+  return (db2) => {
+    if (!deps.google) throw new JobSkipped("unconfigured");
+    return googleClient({
+      tokens: deps.google,
+      db: db2,
+      fetch: deps.fetch,
+      clock: deps.clock,
+      sleep: deps.sleep,
+      random: deps.random,
+      pacers
+    });
+  };
+}
+var LONG_VT_SEC = 300;
+
+// supabase/functions/orbit-worker/handlers/funnel.ts
+function funnelReplyHandler(config) {
+  return async (job, ctx) => {
+    if (!job.userId) throw new JobSkipped("no_user");
+    const id = job.payload.messageId;
+    if (!isUuid(id)) throw new JobSkipped("no_message");
+    await runReplyFunnel(
+      makeServices(config, { db: ctx.db, now: ctx.now, queue: ctx.queue }),
+      job.userId,
+      id
+    );
+  };
+}
+async function rollOutcomes(db2, now, userId) {
+  const before = new Date(now.getTime() - QUIET_DAYS * 864e5);
+  const rows = await db2.sql`
+    update orbit.drafts set outcome = 'silent'
+     where status = 'sent' and outcome is null and replied_at is null and sent_at <= ${before}::timestamptz
+       and kind <> 'forwardable_blurb'
+       and (${userId ?? null}::uuid is null or user_id = ${userId ?? null}::uuid)
+    returning id`;
+  return rows.length;
+}
+function outcomesRollHandler() {
+  return async (job, ctx) => {
+    await rollOutcomes(ctx.db, ctx.now(), job.userId ?? void 0);
+  };
+}
+
 // packages/core/src/graph/orgSize.ts
 var KNOWN_SIZES = {};
 var add = (bucket, names) => {
@@ -9085,7 +10156,7 @@ function inferTies(input) {
   for (const p of people)
     for (const e of [p.primaryEmail, ...p.emails]) if (e) byEmail.set(normalizeEmail(e), p.id);
   const ties = /* @__PURE__ */ new Map();
-  const put = (a, b, kind, weight, confidence, evidence, firstSeenAt, lastSeenAt) => {
+  const put = (a, b, kind, weight, confidence, evidence, firstSeenAt, lastSeenAt2) => {
     if (a === b || !ids.has(a) || !ids.has(b)) return;
     const [x, y] = pairKey(a, b);
     const id = `${x}|${y}|${kind}`;
@@ -9101,7 +10172,7 @@ function inferTies(input) {
       confidence: Math.min(1, Math.max(0, confidence)),
       evidence,
       firstSeenAt,
-      lastSeenAt
+      lastSeenAt: lastSeenAt2
     });
   };
   const orgByName = /* @__PURE__ */ new Map();
@@ -10428,184 +11499,6 @@ async function runHopEvidenceJob(s, userId, payload) {
   };
 }
 
-// supabase/functions/_shared/googleApi.ts
-var UNITS_PER_SECOND = 90;
-var MAX_IN_FLIGHT = 5;
-var MAX_RETRIES = 3;
-var GoogleApiError = class extends Error {
-  constructor(status, reason2) {
-    super(`google ${status} ${reason2}`);
-    this.status = status;
-    this.reason = reason2;
-    this.name = "GoogleApiError";
-  }
-};
-var realSleep = (ms2) => new Promise((r) => setTimeout(r, ms2));
-var QuotaPacer = class {
-  rate;
-  max;
-  clock;
-  sleep;
-  spent = [];
-  inFlight = 0;
-  waiting = [];
-  constructor(o = {}) {
-    this.rate = o.unitsPerSecond ?? UNITS_PER_SECOND;
-    this.max = o.maxInFlight ?? MAX_IN_FLIGHT;
-    this.clock = o.clock ?? Date.now;
-    this.sleep = o.sleep ?? realSleep;
-  }
-  async run(units, fn) {
-    await this.acquire();
-    try {
-      return await this.spend(units, fn);
-    } finally {
-      this.release();
-    }
-  }
-  acquire() {
-    if (this.inFlight < this.max) {
-      this.inFlight++;
-      return Promise.resolve();
-    }
-    return new Promise((r) => this.waiting.push(r));
-  }
-  release() {
-    const next = this.waiting.shift();
-    if (next) next();
-    else this.inFlight--;
-  }
-  /** Records the spend and starts the request in one synchronous step, so the recorded time is the start time. */
-  async spend(units, fn) {
-    const u2 = Math.min(Math.max(0, units), this.rate);
-    for (; ; ) {
-      const now = this.clock();
-      this.spent = this.spent.filter((e) => e.t > now - 1e3);
-      const used = this.spent.reduce((s, e) => s + e.u, 0);
-      if (used + u2 <= this.rate) {
-        this.spent.push({ t: now, u: u2 });
-        return fn();
-      }
-      let over = used + u2 - this.rate;
-      let wait = 1;
-      for (const e of this.spent) {
-        over -= e.u;
-        wait = e.t + 1e3 - now;
-        if (over <= 0) break;
-      }
-      await this.sleep(Math.max(1, wait));
-    }
-  }
-};
-async function reason(res) {
-  try {
-    const body = await res.json();
-    if (typeof body.error === "string") return body.error;
-    return body.error?.errors?.[0]?.reason ?? body.error?.status ?? "error";
-  } catch {
-    return "error";
-  }
-}
-var RATE_REASONS = /* @__PURE__ */ new Set(["rateLimitExceeded", "userRateLimitExceeded", "RESOURCE_EXHAUSTED"]);
-function googleClient(deps) {
-  const doFetch = deps.fetch ?? fetch;
-  const clock = deps.clock ?? Date.now;
-  const sleep = deps.sleep ?? realSleep;
-  const random = deps.random ?? Math.random;
-  const pacers = deps.pacers ?? /* @__PURE__ */ new Map();
-  const pacer = (userId) => {
-    let p = pacers.get(userId);
-    if (!p) {
-      p = new QuotaPacer({ clock, sleep });
-      pacers.set(userId, p);
-    }
-    return p;
-  };
-  return {
-    async request(userId, r) {
-      let refreshed = false;
-      let attempt = 0;
-      for (; ; ) {
-        const token = await deps.tokens.accessToken(userId);
-        const res = await pacer(userId).run(
-          r.units,
-          () => doFetch(r.url, {
-            method: r.method ?? (r.body === void 0 ? "GET" : "POST"),
-            headers: {
-              authorization: `Bearer ${token}`,
-              accept: "application/json",
-              ...r.body === void 0 ? {} : { "content-type": "application/json" }
-            },
-            body: r.body === void 0 ? void 0 : JSON.stringify(r.body),
-            // a call Google never answers fails the job (which is retried) instead of holding the worker
-            signal: AbortSignal.timeout(3e4)
-          })
-        );
-        if (res.status === 401) {
-          await res.body?.cancel();
-          if (!refreshed) {
-            deps.tokens.invalidate(userId);
-            refreshed = true;
-            continue;
-          }
-          if (deps.db)
-            await deps.db.sql`
-              update orbit.integration_accounts set status = 'needs_reauth', last_error = 'unauthorized'
-               where user_id = ${userId}::uuid and provider = 'google'`;
-          throw new NeedsReauth();
-        }
-        if (res.ok) return await res.json();
-        const why = res.status === 429 || res.status >= 500 ? "retry" : await reason(res);
-        const retryable = why === "retry" || res.status === 403 && RATE_REASONS.has(why);
-        if (retryable && attempt < MAX_RETRIES) {
-          const wait = retryAfterMs(res.headers.get("retry-after"), clock()) ?? backoffMs(attempt, random);
-          if (why === "retry") await res.body?.cancel();
-          attempt++;
-          await sleep(wait);
-          continue;
-        }
-        if (why === "retry") await res.body?.cancel();
-        throw new GoogleApiError(res.status, why === "retry" ? `http_${res.status}` : why);
-      }
-    }
-  };
-}
-function qs(params) {
-  const q = new URLSearchParams();
-  for (const [k, v] of Object.entries(params)) {
-    if (v === void 0 || v === null) continue;
-    if (Array.isArray(v)) for (const x of v) q.append(k, x);
-    else q.set(k, String(v));
-  }
-  const s = q.toString();
-  return s ? `?${s}` : "";
-}
-
-// supabase/functions/orbit-worker/handlers/deps.ts
-var JobSkipped = class extends Error {
-  constructor(reason2) {
-    super(reason2);
-    this.reason = reason2;
-    this.name = "JobSkipped";
-  }
-};
-function googleFor(deps) {
-  const pacers = /* @__PURE__ */ new Map();
-  return (db2) => {
-    if (!deps.google) throw new JobSkipped("unconfigured");
-    return googleClient({
-      tokens: deps.google,
-      db: db2,
-      fetch: deps.fetch,
-      clock: deps.clock,
-      sleep: deps.sleep,
-      random: deps.random,
-      pacers
-    });
-  };
-}
-var LONG_VT_SEC = 300;
-
 // supabase/functions/orbit-worker/handlers/hops.ts
 function hopEvidenceHandler(config) {
   return async (job, ctx) => {
@@ -10892,6 +11785,11 @@ ${d.body}`)) {
       "autopilot_paused",
       new Date(Math.min(paused.getTime(), now.getTime() + PAUSE_RECHECK_SEC * 1e3))
     );
+  if (agentApproved && !userApproved && goalPaused(u2.settings, d.goal_id, now)) {
+    await settle("draft", { error: "goal_paused" });
+    await audit(db2, userId, "system", "draft.hold", d.id, { reason: "goal_paused", goalId: d.goal_id });
+    return { status: "held", reason: "goal_paused" };
+  }
   if (d.channel === "linkedin" && agentApproved && !userApproved) {
     await settle("draft", { error: "linkedin_never_auto" });
     await audit(db2, userId, "system", "draft.hold", d.id, { reason: "linkedin_never_auto" });
@@ -10998,6 +11896,14 @@ ${d.body}`)) {
     }
     await settle("failed", { error: out.error });
     await audit(db2, userId, "system", "draft.failed", d.id, { error: out.error });
+    if (d.channel === "gmail")
+      await tripBreaker(db2, userId, {
+        goalId: d.goal_id,
+        reason: "send_error",
+        personId: d.person_id,
+        personName: person.display_name,
+        now
+      }).catch(() => void 0);
     return { status: "failed", error: out.error };
   }
   const threadId = out.chatId ?? out.threadId ?? d.thread_external_id;
@@ -11718,6 +12624,33 @@ function scoreTie(history, now = /* @__PURE__ */ new Date(), weights = TIE_WEIGH
 function anyMeeting(h, now) {
   const t = now.getTime() + DAY9;
   return h.meetings.some((m) => m.attendees <= 8 && (ms(m.at) ?? Number.POSITIVE_INFINITY) <= t);
+}
+var SHARE_MASKED_FEATURES = [
+  "log_days_last",
+  "log_days_first",
+  "log_out",
+  "log_in",
+  "reciprocity",
+  "log_meetings",
+  "log_threads",
+  "latency",
+  "intros",
+  "structural",
+  "never",
+  "rapport"
+];
+function shareFeatures(features) {
+  const out = { ...features };
+  for (const k of SHARE_MASKED_FEATURES) out[k] = 0;
+  return out;
+}
+function shareScore(history, now = /* @__PURE__ */ new Date(), weights = TIE_WEIGHTS, calibration) {
+  const { features } = computeTieFeatures(history, now);
+  const score = scoreFromZ(linearTie(shareFeatures(features), weights), calibration);
+  const label = history.label;
+  if (label && TIE_LABEL_MIDPOINTS[label.closeness] !== void 0)
+    return TIE_LABEL_MIDPOINTS[label.closeness];
+  return score;
 }
 var plural = (n, one, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
 function ago(days) {
@@ -13362,6 +14295,8 @@ function agentHandlers(config = { env: {} }) {
     "source.search": sourceSearch(config),
     "send.draft": sendDraftHandler(config),
     "cadence.user": cadenceUser(config),
+    "funnel.reply": funnelReplyHandler(config),
+    "outcomes.roll": outcomesRollHandler(),
     hop_evidence: hopEvidenceHandler(config)
   };
 }
@@ -16894,8 +17829,10 @@ ${lines.join("\n")}
     update orbit.messages set reply_class = ${cls}, reply_confidence = ${confidence}::real,
            extraction = ${extraction}::jsonb
      where id = ${m.id}::uuid`;
+  const outcome = cls === "decline" || cls === "unsubscribe" ? "declined" : "replied";
   await db2.sql`
-    update orbit.drafts set replied_at = ${sentAt}::timestamptz, reply_class = ${cls}
+    update orbit.drafts set replied_at = ${sentAt}::timestamptz, reply_class = ${cls},
+           outcome = case when outcome = 'booked' then outcome else ${outcome} end
      where id = (
        select d.id from orbit.drafts d
         where d.user_id = ${userId}::uuid and d.status = 'sent' and d.replied_at is null
@@ -17014,152 +17951,32 @@ async function backfillRapport(db2, userId, deps) {
   return n;
 }
 
-// supabase/functions/_shared/replies/replies.ts
-async function draftReply(s, userId, messageId, actor = "user") {
-  const m = await loadReplyMessage(s.db, userId, messageId);
-  if (m.reply_class === "unsubscribe")
-    throw new HttpError(409, "unsubscribe", "they asked not to be contacted; no reply is drafted");
-  if (!m.from_person_id) throw new HttpError(409, "unknown_sender", "Orbit does not know who sent this yet");
-  return composeDraft(s, {
-    userId,
-    personId: m.from_person_id,
-    kind: "reply",
-    channel: m.provider,
-    replyToMessageId: m.id,
-    actor
-  });
-}
-var DRAFT_CLASSES = /* @__PURE__ */ new Set([
-  "interested",
-  "scheduling",
-  "question",
-  "objection",
-  "referral",
-  "not_now",
-  "decline"
-]);
-async function maybeAutoReply(db2, userId, messageId, deps = {}) {
-  const s = deps.services ?? makeServices(deps.config ?? { env: {} }, { db: db2, now: deps.now });
-  const now = s.now();
-  const m = await loadReplyMessage(db2, userId, messageId);
-  const cls = m.reply_class;
-  if (!cls) return { action: "none", reason: "not_classified" };
-  if (cls === "unsubscribe") {
-    if (m.from_person_id) {
-      await db2.sql`update orbit.people set do_not_contact = true where id = ${m.from_person_id}::uuid and user_id = ${userId}::uuid`;
-      await db2.sql`
-        update orbit.drafts set status = 'cancelled', cancel_reason = 'unsubscribe'
-         where user_id = ${userId}::uuid and person_id = ${m.from_person_id}::uuid
-           and status in ('draft', 'approved', 'scheduled')`;
-      const chats = await db2.sql`
-        select id from orbit.chats where user_id = ${userId}::uuid and person_id = ${m.from_person_id}::uuid
-           and archived_at is null`;
-      for (const c of chats) await moveChat(db2, userId, c.id, "declined", "asked not to be contacted", now);
-      await db2.sql`
-        insert into orbit.audit_log (user_id, actor, action, target_table, target_id, details)
-        values (${userId}::uuid, 'agent', 'person.do_not_contact', 'people', ${m.from_person_id}, ${{ source: "reply" }}::jsonb)`;
-    }
-    return { action: "unsubscribed" };
-  }
-  if (!m.from_person_id) return { action: "none", reason: "unknown_sender" };
-  if (deps.history) return { action: "none", reason: "history" };
-  if (!DRAFT_CLASSES.has(cls)) return { action: "none", reason: `class ${cls}` };
-  const autoClass = cls === "scheduling";
-  const [existing] = await db2.sql`
-    select * from orbit.drafts
-     where user_id = ${userId}::uuid and ask->>'replyToMessageId' = ${m.id}
-       and status not in ('discarded', 'cancelled')
-     order by created_at desc limit 1`;
-  let draft;
-  if (existing) {
-    if (existing.status !== "draft") return { action: "auto_sent", draftId: existing.id };
-    draft = existing;
-  } else {
-    await db2.sql`
-      update orbit.drafts d set status = 'cancelled', cancel_reason = 'superseded'
-       where d.user_id = ${userId}::uuid and d.kind = 'reply' and d.status = 'draft'
-         and d.updated_at < d.created_at + interval '2 seconds'
-         and d.ask->>'replyToMessageId' in (
-           select id::text from orbit.messages
-            where user_id = ${userId}::uuid and thread_id = ${m.thread_id}::uuid and id <> ${m.id}::uuid)`;
-    try {
-      draft = (await draftReply(s, userId, m.id, "agent")).draft;
-    } catch (e) {
-      if (e instanceof HttpError) return { action: "none", reason: e.code };
-      throw e;
-    }
-  }
-  const [u2] = await db2.sql`
-    select email, full_name, autonomy_level, timezone, settings from orbit.users where id = ${userId}::uuid`;
-  const [p] = await db2.sql`
-    select p.timezone, p.title, p.headline, p.do_not_contact, ts.score::int as score
-      from orbit.people p left join orbit.tie_scores ts on ts.person_id = p.id and ts.user_id = p.user_id
-     where p.id = ${draft.person_id}::uuid`;
-  const [g] = draft.goal_id ? await db2.sql`select autonomy_level from orbit.goals where id = ${draft.goal_id}::uuid` : [];
-  const userTz = validZone(u2.timezone) ?? "America/New_York";
-  const dayStart2 = zonedTime2(
-    new Intl.DateTimeFormat("en-CA", { timeZone: userTz }).format(now),
-    0,
-    0,
-    userTz
-  );
-  const [today] = await db2.sql`
-    select count(*)::int as n from orbit.audit_log
-     where user_id = ${userId}::uuid and action = 'draft.auto_approve' and created_at >= ${dayStart2}::timestamptz`;
-  const meta = draft.ask ?? {};
-  const history = await historyWith(db2, userId, draft.person_id);
-  const level = (n) => n === 0 || n === 1 || n === 2 ? n : void 0;
-  const verdict = autonomyAllows(
-    {
-      kind: "reply",
-      channel: draft.channel,
-      personId: draft.person_id,
-      subject: draft.subject,
-      body: draft.body
-    },
-    {
-      now,
-      userEmails: [u2.email],
-      userName: u2.full_name ?? "",
-      recipient: {
-        doNotContact: p?.do_not_contact,
-        title: p?.title ?? void 0,
-        headline: p?.headline ?? void 0
-      },
-      history,
-      schedulingLink: typeof u2.settings?.scheduling_link === "string" ? u2.settings.scheduling_link : void 0,
-      offeredSlots: meta.slots,
-      timeZone: userTz,
-      userAutonomy: level(u2.autonomy_level) ?? 0,
-      goalAutonomy: level(g?.autonomy_level),
-      replyClass: cls,
-      inThread: !!draft.thread_external_id,
-      recipientScore: p?.score ?? 0,
-      validatorOk: !!draft.validator?.ok,
-      autoSentToday: today?.n ?? 0,
-      recipientTimeZone: validZone(p?.timezone) ?? userTz
-    }
-  );
-  if (!autoClass || !verdict.allowed)
-    return { action: "drafted", draftId: draft.id, reasons: autoClass ? verdict.reasons : [`class ${cls}`] };
-  const [approved] = await db2.sql`
-    update orbit.drafts set status = 'approved', send_at = ${now}::timestamptz, autonomy_level = 2
-     where id = ${draft.id}::uuid and status = 'draft' returning id`;
-  if (!approved) return { action: "drafted", draftId: draft.id, reasons: ["changed meanwhile"] };
-  await db2.sql`
-    insert into orbit.audit_log (user_id, actor, action, target_table, target_id, details)
-    values (${userId}::uuid, 'agent', 'draft.auto_approve', 'drafts', ${draft.id},
-            ${{ hash: messageHash({ channel: draft.channel, subject: draft.subject, body: draft.body }), reply_class: cls }}::jsonb)`;
-  await s.queue.enqueue({
-    kind: "send.draft",
-    userId,
-    payload: { draftId: draft.id },
-    dedupeKey: `send:${draft.id}`
-  });
-  return { action: "auto_sent", draftId: draft.id };
-}
-
 // supabase/functions/orbit-worker/handlers/classify.ts
+var BOUNCE_SENDER = /^(?:mailer-daemon|postmaster|mail delivery (?:subsystem|system)|noreply@.*bounce)/i;
+var BOUNCE_SUBJECT = /\b(?:undeliverable|delivery (?:status notification|failure|has failed)|returned mail|address not found|mail delivery failed)\b/i;
+async function maybeBounce(db2, userId, messageId, now) {
+  const [m] = await db2.sql`
+    select m.from_addr, m.subject, t.external_id as thread_external_id
+      from orbit.messages m join orbit.threads t on t.id = m.thread_id
+     where m.id = ${messageId}::uuid and m.user_id = ${userId}::uuid`;
+  if (!m) return;
+  const from = (m.from_addr ?? "").toLowerCase();
+  if (!BOUNCE_SENDER.test(from) && !BOUNCE_SUBJECT.test(m.subject ?? "")) return;
+  const [d] = await db2.sql`
+    select d.id, d.goal_id, d.person_id, p.display_name
+      from orbit.drafts d join orbit.people p on p.id = d.person_id
+     where d.user_id = ${userId}::uuid and d.status = 'sent' and d.thread_external_id = ${m.thread_external_id}
+     order by d.sent_at desc limit 1`;
+  if (!d) return;
+  await tripBreaker(db2, userId, {
+    goalId: d.goal_id,
+    reason: "bounce",
+    personId: d.person_id,
+    personName: d.display_name,
+    messageId,
+    now
+  });
+}
 function classifyHandlers(deps, agents = { env: {} }) {
   return {
     "classify.message": async (job, ctx) => {
@@ -17175,6 +17992,7 @@ function classifyHandlers(deps, agents = { env: {} }) {
       }
       if (!id) return;
       const r = await classifyMessage(ctx.db, userId, id, { now: ctx.now(), claude: deps.claude });
+      if (r.skipped === "automated" && p.history !== true) await maybeBounce(ctx.db, userId, id, ctx.now());
       if (!r.replyClass) return;
       const { personId } = await readRapport(ctx.db, userId, id, { claude: deps.claude });
       if (personId)
@@ -17184,6 +18002,15 @@ function classifyHandlers(deps, agents = { env: {} }) {
           payload: { personIds: [personId] },
           dedupeKey: `score.person:${userId}:rapport:${id}`
         });
+      if ((r.replyClass === "interested" || r.replyClass === "scheduling") && p.history !== true) {
+        await ctx.queue.enqueue({
+          kind: "funnel.reply",
+          userId,
+          payload: { messageId: id },
+          dedupeKey: `funnel:${id}`
+        });
+        return;
+      }
       await maybeAutoReply(ctx.db, userId, id, {
         services: makeServices(agents, { db: ctx.db, now: ctx.now, queue: ctx.queue }),
         history: p.history === true
@@ -19389,6 +20216,7 @@ async function scorePeople2(db2, userId, opts) {
     const h = histories.get(p.id);
     const tie = scoreTie(h, now, TIE_WEIGHTS, calibration);
     const score = FLOOR_TYPES.has(relationship.get(p.id) ?? "") ? Math.max(80, tie.score) : tie.score;
+    const share = shareScore(h, now, TIE_WEIGHTS, calibration);
     const exists = !tie.facts.never || h.linkedinConnected || h.intros > 0;
     const lastAt = [
       ...h.messages.filter((m) => !m.automated && m.threadParticipants <= 9).map((m) => m.at),
@@ -19397,6 +20225,7 @@ async function scorePeople2(db2, userId, opts) {
     return {
       id: p.id,
       score,
+      share,
       band: tieBand(score),
       features: tie.features,
       contributions: tie.contributions,
@@ -19409,14 +20238,14 @@ async function scorePeople2(db2, userId, opts) {
   for (const part of chunks2(rows, 500)) {
     const json2 = JSON.stringify(part);
     await db2.sql`
-      insert into orbit.tie_scores (user_id, person_id, score, band, features, contributions, explanation,
-                                    model_version, computed_at)
-      select ${userId}::uuid, (r ->> 'id')::uuid, (r ->> 'score')::smallint, r ->> 'band', r -> 'features',
-             r -> 'contributions', array(select jsonb_array_elements_text(r -> 'explanation')), r ->> 'model',
-             ${now}::timestamptz
+      insert into orbit.tie_scores (user_id, person_id, score, share_score, band, features, contributions,
+                                    explanation, model_version, computed_at)
+      select ${userId}::uuid, (r ->> 'id')::uuid, (r ->> 'score')::smallint, (r ->> 'share')::smallint, r ->> 'band',
+             r -> 'features', r -> 'contributions', array(select jsonb_array_elements_text(r -> 'explanation')),
+             r ->> 'model', ${now}::timestamptz
         from jsonb_array_elements(${json2}::jsonb) r
       on conflict (user_id, person_id) do update set
-        score = excluded.score, band = excluded.band, features = excluded.features,
+        score = excluded.score, share_score = excluded.share_score, band = excluded.band, features = excluded.features,
         contributions = excluded.contributions, explanation = excluded.explanation,
         model_version = excluded.model_version, computed_at = excluded.computed_at`;
     await db2.sql`

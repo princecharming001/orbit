@@ -116,9 +116,9 @@ function clientIp(req) {
 
 // supabase/functions/_shared/http.ts
 var HttpError = class extends Error {
-  constructor(status, code, message, headers = {}) {
+  constructor(status2, code, message, headers = {}) {
     super(message ?? code);
-    this.status = status;
+    this.status = status2;
     this.code = code;
     this.headers = headers;
   }
@@ -151,9 +151,9 @@ function preflight(req, h, methods = "GET, POST, OPTIONS") {
     }
   });
 }
-function json(status, body2, headers = {}) {
+function json(status2, body2, headers = {}) {
   return new Response(JSON.stringify(body2), {
-    status,
+    status: status2,
     headers: { "content-type": "application/json", "cache-control": "no-store", ...headers }
   });
 }
@@ -479,9 +479,9 @@ var PHASE1_SCOPES = [
 ];
 var CALENDAR_EVENTS_SCOPE = `${G}calendar.events`;
 var GoogleError = class extends Error {
-  constructor(status, code) {
-    super(`google ${status} ${code}`);
-    this.status = status;
+  constructor(status2, code) {
+    super(`google ${status2} ${code}`);
+    this.status = status2;
     this.code = code;
   }
 };
@@ -1537,6 +1537,8 @@ var KIND_QUEUE = {
   "sync.contacts": "orbit_sync",
   "sync.linkedin": "orbit_sync",
   "cadence.user": "orbit_cadence",
+  "funnel.reply": "orbit_classify",
+  "outcomes.roll": "orbit_cadence",
   "health.snapshot": "orbit_cadence",
   "score.user": "orbit_score",
   "score.person": "orbit_score",
@@ -1599,6 +1601,33 @@ function sqlVault(db2) {
 var googleRefreshName = (userId) => `google_refresh:${userId}`;
 
 // supabase/functions/_shared/services.ts
+var RESEND_URL = "https://api.resend.com/emails";
+var DEFAULT_MAIL_FROM = "Orbit <orbit@tryorbit.today>";
+function makeMailer(env2, doFetch) {
+  const key = env2.resendKey;
+  if (!key) return { configured: false, send: async () => ({ ok: false, error: "unconfigured" }) };
+  return {
+    configured: true,
+    async send(m) {
+      const res = await doFetch(RESEND_URL, {
+        method: "POST",
+        headers: { authorization: `Bearer ${key}`, "content-type": "application/json" },
+        body: JSON.stringify({
+          from: env2.resendFrom || DEFAULT_MAIL_FROM,
+          to: [m.to],
+          subject: m.subject,
+          text: m.text
+        })
+      });
+      if (!res.ok) {
+        await res.body?.cancel().catch(() => void 0);
+        return { ok: false, error: `resend ${res.status}` };
+      }
+      const json2 = await res.json().catch(() => ({}));
+      return { ok: true, id: typeof json2.id === "string" ? json2.id : null };
+    }
+  };
+}
 function supabaseEmbed() {
   let session2;
   return async (text2) => {
@@ -1657,6 +1686,7 @@ function makeServices(cfg, base) {
       () => createVillage({ ...p, secretKey: env2.villageKey, baseUrl: env2.villageBase })
     ),
     embed: cfg.embed ?? supabaseEmbed(),
+    mailer: makeMailer(env2, doFetch),
     google,
     tokens: tokens2
   };
@@ -1682,7 +1712,9 @@ function agentEnvFrom(get2) {
     villageBase: get2("VILLAGE_BASE_URL"),
     googleClientId: get2("ORBIT_GOOGLE_CLIENT_ID"),
     googleClientSecret: get2("ORBIT_GOOGLE_CLIENT_SECRET"),
-    googleRedirectUri: get2("ORBIT_GOOGLE_REDIRECT_URI") ?? (supabaseUrl2 ? `${supabaseUrl2}/functions/v1/orbit-api/auth/google/callback` : void 0)
+    googleRedirectUri: get2("ORBIT_GOOGLE_REDIRECT_URI") ?? (supabaseUrl2 ? `${supabaseUrl2}/functions/v1/orbit-api/auth/google/callback` : void 0),
+    resendKey: get2("RESEND_API_KEY"),
+    resendFrom: get2("RESEND_FROM")
   };
 }
 
@@ -2364,572 +2396,6 @@ async function me(ctx) {
   return json(200, { user });
 }
 
-// packages/core/src/drafts/sector.ts
-var FINANCE_TITLE = /\b(investment bank|banking analyst|ib analyst|analyst, (m&a|tmt|healthcare|fig|leveraged)|associate, (m&a|tmt|healthcare|fig)|vice president|managing director|\bvp\b|\bmd\b|private equity|hedge fund|equity research|capital markets|sales and trading|trading|asset management|wealth management|portfolio manager|\bm&a\b|leveraged finance|\bfig\b|\btmt\b|corporate finance|venture capital|investor)\b/i;
-var FINANCE_ORG = /\b(goldman|morgan stanley|jpmorgan|j\.p\. morgan|bank of america|bofa|citi|barclays|ubs|credit suisse|deutsche bank|evercore|lazard|moelis|pjt|centerview|jefferies|rbc|wells fargo|houlihan|guggenheim|perella|rothschild|blackstone|kkr|apollo|carlyle|tpg|bain capital|jane street|citadel|two sigma|de shaw|point72|millennium|bridgewater|sequoia|a16z|andreessen|accel|benchmark|jump trading|hudson river trading|optiver|susquehanna|drw|imc trading|tower research|akuna|lightspeed venture|founders fund|greylock|kleiner|index ventures|general catalyst|insight partners|tiger global|coatue)\b/i;
-var FINANCE_ORG_WORD = /\b(trading|securities|capital|ventures|venture partners|investments|asset management)\b/i;
-var CONSULTING_TITLE = /\b(consultant|engagement manager|business analyst|associate consultant|case team|principal|partner|senior associate)\b/i;
-var CONSULTING_ORG = /\b(mckinsey|bain|bcg|boston consulting|deloitte|accenture|kearney|oliver wyman|l\.?e\.?k\.?|roland berger|strategy&|pwc|ey|kpmg|ey-parthenon|alixpartners|fti)\b/i;
-var TECH_TITLE = /\b(software|engineer|engineering|developer|\bswe\b|\bsde\b|product manager|product lead|\bpm\b|designer|\bux\b|data scientist|machine learning|\bml\b|research scientist|technical program|devops|infrastructure|platform|frontend|backend|full[- ]?stack|security engineer|solutions engineer|founder|cto)\b/i;
-var TECH_ORG = /\b(google|meta|apple|amazon|microsoft|netflix|stripe|figma|notion|anthropic|openai|airbnb|uber|lyft|doordash|snowflake|databricks|datadog|ramp|brex|linear|vercel|coinbase|robinhood|plaid|square|block|shopify|salesforce|adobe|nvidia|palantir|scale ai|rippling|ramp)\b/i;
-function sectorOf(person2, userFunctions = []) {
-  const t = `${person2.title ?? ""}`;
-  const o = `${person2.org ?? ""} ${person2.industry ?? ""}`;
-  if (FINANCE_ORG.test(o) || FINANCE_ORG_WORD.test(person2.org ?? "") || /\b(fintech|investment bank|banking|private equity|trading|asset management|finance|financial)\b/i.test(
-    person2.industry ?? ""
-  )) {
-    const bankingTitle = /\b(analyst|vice president|managing director)\b/i.test(t) || /\bassociate\b(?!\s+(product|software|design|data|engineer|program))/i.test(t);
-    if (TECH_TITLE.test(t) && !bankingTitle) return "tech";
-    return "finance";
-  }
-  if (CONSULTING_ORG.test(o) || /\bconsulting\b/i.test(person2.industry ?? "")) return "consulting";
-  if (FINANCE_TITLE.test(t) && !TECH_TITLE.test(t) && !TECH_ORG.test(o)) return "finance";
-  if (CONSULTING_TITLE.test(t) && !TECH_TITLE.test(t)) return "consulting";
-  if (TECH_TITLE.test(t) || TECH_ORG.test(o) || /\b(software|technology|tech|ai|saas|internet)\b/i.test(person2.industry ?? ""))
-    return "tech";
-  if (ACADEMIC_TITLE.test(t)) return "general";
-  const f2 = userFunctions[0];
-  if (f2 === "ib" || f2 === "finance" || f2 === "vc" || f2 === "quant") return "finance";
-  if (f2 === "consulting") return "consulting";
-  if (f2 === "swe" || f2 === "pm" || f2 === "design" || f2 === "data") return "tech";
-  return "general";
-}
-var ACADEMIC_TITLE = /\b(professor|prof\.|lecturer|faculty|dean|provost|postdoc(toral)?|principal investigator|department chair)\b/i;
-var RECRUITER_TITLE = new RegExp(
-  [
-    String.raw`\brecruit(?:er|ers|ing|ment)\b`,
-    String.raw`\b(?:talent|technical|tech|recruiting)\s+sourc(?:er|ing)\b`,
-    String.raw`\bsourcer\b`,
-    String.raw`\btalent\s+(?:acquisition|partner|lead|manager|advisor|specialist|team|attraction)\b`,
-    String.raw`\b(?:head|director|vp|vice president|manager)\s*(?:of|,)?\s*talent\b`,
-    String.raw`\b(?:early|emerging)\s+(?:careers?|talent)\b`,
-    String.raw`\b(?:university|campus|college|student)\s+(?:relations|recruiting|programs?\s+(?:lead|manager|coordinator))\b`,
-    String.raw`\b(?:hr|human resources|people)\s+(?:business\s+)?partner\b`,
-    String.raw`\b(?:hr|human resources)\s+(?:generalist|manager|director|lead|specialist|coordinator|associate)\b`,
-    "^(?:hr|human resources)$"
-  ].join("|"),
-  "i"
-);
-function maxBumpsFor(sector, settingsMax) {
-  const cap = sector === "finance" || sector === "consulting" ? 2 : 1;
-  return Math.max(0, Math.min(settingsMax, cap));
-}
-
-// packages/core/src/util/ids.ts
-function todayKey(d, tz) {
-  try {
-    const parts = new Intl.DateTimeFormat("en-CA", {
-      timeZone: tz,
-      year: "numeric",
-      month: "2-digit",
-      day: "2-digit"
-    }).format(d);
-    return parts;
-  } catch {
-    return d.toISOString().slice(0, 10);
-  }
-}
-
-// packages/core/src/suggestions/calendar.ts
-var DAY = 864e5;
-var pad = (n) => String(n).padStart(2, "0");
-var keyOf = (y, m, d) => `${y}-${pad(m)}-${pad(d)}`;
-var dayOfKey = (key) => Math.round(Date.parse(`${key}T00:00:00Z`) / DAY);
-var keyOfDay = (n) => new Date(n * DAY).toISOString().slice(0, 10);
-function nthWeekday(year, month, weekday, n) {
-  if (n > 0) {
-    const first = new Date(Date.UTC(year, month - 1, 1)).getUTCDay();
-    return 1 + (weekday - first + 7) % 7 + (n - 1) * 7;
-  }
-  const lastDate = new Date(Date.UTC(year, month, 0));
-  const last = lastDate.getUTCDay();
-  return lastDate.getUTCDate() - (last - weekday + 7) % 7;
-}
-function observed(year, month, day2) {
-  const dow = new Date(Date.UTC(year, month - 1, day2)).getUTCDay();
-  const shift = dow === 6 ? -1 : dow === 0 ? 1 : 0;
-  return keyOfDay(dayOfKey(keyOf(year, month, day2)) + shift);
-}
-var holidayCache = /* @__PURE__ */ new Map();
-function usHolidays(year) {
-  const hit = holidayCache.get(year);
-  if (hit) return hit;
-  const thanksgiving = nthWeekday(year, 11, 4, 4);
-  const set = /* @__PURE__ */ new Set([
-    observed(year, 1, 1),
-    keyOf(year, 1, nthWeekday(year, 1, 1, 3)),
-    // Martin Luther King Jr. Day
-    keyOf(year, 2, nthWeekday(year, 2, 1, 3)),
-    // Washington's Birthday
-    keyOf(year, 5, nthWeekday(year, 5, 1, -1)),
-    // Memorial Day
-    observed(year, 6, 19),
-    observed(year, 7, 4),
-    keyOf(year, 9, nthWeekday(year, 9, 1, 1)),
-    // Labor Day
-    keyOf(year, 10, nthWeekday(year, 10, 1, 2)),
-    // Columbus Day / Indigenous Peoples' Day
-    observed(year, 11, 11),
-    keyOf(year, 11, thanksgiving),
-    keyOf(year, 11, thanksgiving + 1),
-    observed(year, 12, 25)
-  ]);
-  holidayCache.set(year, set);
-  return set;
-}
-function inWinterFreeze(key) {
-  const m = Number(key.slice(5, 7));
-  const d = Number(key.slice(8, 10));
-  return m === 12 && d >= 20 || m === 1 && d <= 2;
-}
-function isBusinessDayKey(key) {
-  const dow = (/* @__PURE__ */ new Date(`${key}T00:00:00Z`)).getUTCDay();
-  if (dow === 0 || dow === 6) return false;
-  if (inWinterFreeze(key)) return false;
-  return !usHolidays(Number(key.slice(0, 4))).has(key);
-}
-function businessDaysBetween(a, b, tz) {
-  const from = dayOfKey(todayKey(a, tz));
-  const to = dayOfKey(todayKey(b, tz));
-  let n = 0;
-  for (let k = from + 1; k <= to; k++) if (isBusinessDayKey(keyOfDay(k))) n++;
-  return n;
-}
-function addBusinessDays(d, n, tz) {
-  const from = dayOfKey(todayKey(d, tz));
-  let k = from;
-  let left = n;
-  while (left > 0) {
-    k++;
-    if (isBusinessDayKey(keyOfDay(k))) left--;
-  }
-  return new Date(d.getTime() + (k - from) * DAY);
-}
-var MONTH_NAME = "(jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|june?|july?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\\b\\.?";
-var NAMED_DATE = new RegExp(`\\b${MONTH_NAME} (\\d{1,2})(?:st|nd|rd|th)?\\b`);
-var NAMED_DATE_REV = new RegExp(`\\b(\\d{1,2})(?:st|nd|rd|th)? (?:of )?${MONTH_NAME}`);
-var MONTH_EDGE = new RegExp(
-  `\\b(?:(end|start|beginning) of (?:(the|this|next) month\\b|${MONTH_NAME})|next month\\b)`
-);
-
-// packages/core/src/drafts/phrasing.ts
-var SCHOOL_SHORT = {
-  "massachusetts institute of technology": "MIT",
-  "california institute of technology": "Caltech",
-  "georgia institute of technology": "Georgia Tech",
-  "university of pennsylvania": "Penn",
-  "new york university": "NYU",
-  "university of california, berkeley": "Berkeley",
-  "university of california berkeley": "Berkeley",
-  "uc berkeley": "Berkeley",
-  "university of california, los angeles": "UCLA",
-  "university of southern california": "USC",
-  "the ohio state university": "Ohio State",
-  "university of texas at austin": "UT Austin",
-  "the university of texas at austin": "UT Austin",
-  "university of north carolina at chapel hill": "UNC",
-  "university of illinois urbana-champaign": "UIUC",
-  "university of illinois at urbana-champaign": "UIUC",
-  "washington university in st. louis": "WashU",
-  "boston university": "BU",
-  "boston college": "BC",
-  "london school of economics": "LSE",
-  "carnegie mellon university": "Carnegie Mellon",
-  "universidad de los andes": "Los Andes",
-  "london school of economics and political science": "LSE"
-};
-function schoolShort(school) {
-  const t = (school ?? "").replace(/\s+/g, " ").trim();
-  if (!t) return "";
-  if (/\b(inc|llc|ltd|corp|corporation|gmbh|plc|co)\.?$/i.test(t)) return "";
-  const known = SCHOOL_SHORT[t.toLowerCase()];
-  if (known) return known;
-  const iit = t.match(/^Indian Institute of (Technology|Management|Science),? ?(?:\(?([A-Z][\w ]*?)\)?)?$/);
-  if (iit) return `II${iit[1][0]}${iit[2] ? ` ${iit[2].trim()}` : ""}`;
-  const uc = t.match(/^(?:The )?University of California,? (?:at )?([A-Z][\w .'-]+)$/);
-  if (uc) return `UC ${uc[1].trim()}`;
-  const of = t.match(/^(?:The )?University of ([A-Z][\w.&'-]*(?: [A-Z][\w.&'-]*)*?)(?:,.*| at .*| in .*)?$/);
-  if (of) return of[1];
-  const suffix = t.match(/^(?:The )?(.+?) (?:University|College)$/);
-  if (suffix && suffix[1].length >= 3) return suffix[1];
-  return t;
-}
-
-// packages/core/src/pipeline/transitions.ts
-var ACTIVE_STAGES = [
-  "identified",
-  "warming",
-  "outreach_sent",
-  "replied",
-  "scheduling",
-  "scheduled",
-  "completed",
-  "followed_up",
-  "nurturing"
-];
-var CLOSED_STAGES = ["declined", "no_response", "archived"];
-var STAGE_ORDER = [...ACTIVE_STAGES, ...CLOSED_STAGES];
-var ALLOWED = {
-  identified: ["warming", "outreach_sent", "replied", "scheduled", "archived", "declined"],
-  warming: ["outreach_sent", "replied", "identified", "archived", "declined"],
-  outreach_sent: ["replied", "scheduling", "scheduled", "declined", "no_response", "archived", "completed"],
-  replied: ["scheduling", "scheduled", "declined", "completed", "archived", "nurturing"],
-  scheduling: ["scheduled", "declined", "completed", "archived", "replied"],
-  scheduled: ["completed", "scheduling", "declined", "archived"],
-  completed: ["followed_up", "nurturing", "archived", "scheduled"],
-  followed_up: ["nurturing", "archived", "scheduled", "scheduling"],
-  nurturing: ["outreach_sent", "scheduling", "scheduled", "declined", "archived"],
-  declined: ["identified", "archived", "outreach_sent"],
-  no_response: ["identified", "outreach_sent", "replied", "archived"],
-  archived: ["identified"]
-};
-function canTransition(from, to, actor = "system") {
-  if (from === to) return false;
-  if (actor === "user") return true;
-  return ALLOWED[from].includes(to);
-}
-function decideTransition(from, trig) {
-  const d = (to, confidence, reason) => canTransition(from, to) ? { to, confidence, reason } : void 0;
-  switch (trig.type) {
-    case "outbound_sent":
-      if (trig.kind === "outreach" && (from === "identified" || from === "warming" || from === "nurturing" || from === "no_response"))
-        return d("outreach_sent", 1, "outbound:outreach");
-      if (trig.kind === "schedule" && ["outreach_sent", "replied"].includes(from))
-        return d("scheduling", 1, "outbound:schedule");
-      if (trig.kind === "thank_you" && from === "completed") return d("followed_up", 1, "outbound:thank_you");
-      return void 0;
-    case "inbound_signal": {
-      const s = trig.signal;
-      if (s === "reply_decline")
-        return [
-          "outreach_sent",
-          "replied",
-          "scheduling",
-          "scheduled",
-          "nurturing",
-          "warming",
-          "identified"
-        ].includes(from) ? {
-          to: "declined",
-          confidence: Math.min(trig.confidence, 0.79),
-          reason: "inbound_signal:reply_decline"
-        } : void 0;
-      if ((s === "scheduling_proposal" || s === "scheduling_confirmation") && ["identified", "warming", "no_response"].includes(from))
-        return d("replied", trig.confidence, `inbound_signal:${s}`);
-      if (s === "scheduling_proposal")
-        return d("scheduling", trig.confidence, "inbound_signal:scheduling_proposal");
-      if (s === "scheduling_confirmation")
-        return d("scheduling", trig.confidence, "inbound_signal:scheduling_confirmation");
-      if (s === "reschedule" && from === "scheduled")
-        return d("scheduling", trig.confidence, "inbound_signal:reschedule");
-      if ([
-        "reply_positive",
-        "reply_neutral",
-        "question",
-        "referral_offer",
-        "intro_offer",
-        "thank_you"
-      ].includes(s) && ["identified", "warming", "outreach_sent", "no_response"].includes(from))
-        return d("replied", trig.confidence, `inbound_signal:${s}`);
-      return void 0;
-    }
-    case "event_scheduled":
-      return [
-        "identified",
-        "warming",
-        "outreach_sent",
-        "replied",
-        "scheduling",
-        "nurturing",
-        "followed_up"
-      ].includes(from) ? d("scheduled", trig.confidence, "calendar:event_scheduled") : void 0;
-    case "event_ended":
-      return from === "scheduled" ? d("completed", trig.confidence, "calendar:event_ended") : void 0;
-    case "event_cancelled":
-      return from === "scheduled" ? d("scheduling", 1, "calendar:event_cancelled") : void 0;
-    case "note_ingested":
-      return ["outreach_sent", "replied", "scheduling", "scheduled"].includes(from) ? d("completed", trig.confidence, "note:ingested") : void 0;
-    case "timer_followed_up_14d":
-      return from === "followed_up" ? d("nurturing", 1, "timer:followed_up_14d") : void 0;
-    case "timer_completed_14d":
-      return from === "completed" ? d("nurturing", 1, "timer:completed_14d") : void 0;
-    case "timer_no_response": {
-      const exhausted = trig.bumps >= trig.maxBumps && (trig.businessDaysSilent !== void 0 ? trig.businessDaysSilent >= NO_RESPONSE_AFTER_BUMPS_BUSINESS_DAYS : trig.daysSilent >= NO_RESPONSE_AFTER_BUMPS_DAYS);
-      const stale = trig.businessDaysSilent !== void 0 ? trig.businessDaysSilent >= NO_RESPONSE_SILENT_BUSINESS_DAYS : trig.daysSilent >= NO_RESPONSE_SILENT_DAYS;
-      return from === "outreach_sent" && (exhausted || stale) ? d("no_response", 1, exhausted ? "timer:no_response" : "timer:no_response_silent") : void 0;
-    }
-    case "warmup_ready":
-      return void 0;
-  }
-}
-var NO_RESPONSE_AFTER_BUMPS_DAYS = 14;
-var NO_RESPONSE_AFTER_BUMPS_BUSINESS_DAYS = 10;
-var NO_RESPONSE_SILENT_DAYS = 21;
-var NO_RESPONSE_SILENT_BUSINESS_DAYS = 15;
-
-// packages/core/src/suggestions/rules.ts
-var DAY2 = 864e5;
-var THANK_YOU_WINDOW_DAYS = 3;
-var BUMP_AFTER_BUSINESS_DAYS = { gmail: [5, 8], linkedin: [10, 12] };
-function bumpDue(chat, person2, inp) {
-  if (chat.stage !== "outreach_sent" || !chat.lastOutboundAt) return void 0;
-  const since = new Date(chat.lastOutboundAt);
-  if (chat.lastInboundAt && new Date(chat.lastInboundAt) >= since) return void 0;
-  const maxBumps = maxBumpsFor(
-    sectorOf({ title: person2.currentTitle, org: person2.currentOrganizationRaw }),
-    inp.settings.maxBumps
-  );
-  if (chat.bumpCount >= maxBumps) return void 0;
-  const steps = BUMP_AFTER_BUSINESS_DAYS[chat.outreachChannel === "linkedin" ? "linkedin" : "gmail"];
-  const threshold = steps[Math.min(chat.bumpCount, steps.length - 1)];
-  const bdays = businessDaysBetween(since, inp.now, inp.timezone);
-  if (bdays < threshold) return void 0;
-  const holds = [
-    chat.bumpNotBefore ? new Date(chat.bumpNotBefore) : void 0,
-    chat.outOfOfficeUntil ? addBusinessDays(/* @__PURE__ */ new Date(`${chat.outOfOfficeUntil}T12:00:00Z`), 2, inp.timezone) : void 0
-  ].filter((d) => !!d && !Number.isNaN(d.getTime()));
-  const notBefore = holds.length ? new Date(Math.max(...holds.map((d) => d.getTime()))) : void 0;
-  if (notBefore && inp.now < notBefore) return void 0;
-  const backFromOoo = !!notBefore && addBusinessDays(since, threshold, inp.timezone).getTime() < notBefore.getTime();
-  return { bdays, threshold, backFromOoo };
-}
-function thankYouDue(chat, now) {
-  if (!chat.completedAt) return false;
-  const completed = new Date(chat.completedAt).getTime();
-  if (now.getTime() - completed >= THANK_YOU_WINDOW_DAYS * DAY2) return false;
-  if (chat.lastOutboundAt && new Date(chat.lastOutboundAt).getTime() > completed) return false;
-  return true;
-}
-var HARD_URGENT = ["schedule_confirm", "thank_you", "prep_brief", "confirm_stage"];
-var QUIET_DAY_KINDS = [
-  ...HARD_URGENT,
-  "schedule_propose",
-  "action_item_reminder",
-  "warm_up_engage"
-];
-
-// packages/core/src/pipeline/cadence.ts
-var DAY3 = 864e5;
-var QUIET_DAYS = 7;
-var WAITING_STAGES = ["outreach_sent", "replied", "scheduling"];
-function wentQuiet(chat, now = /* @__PURE__ */ new Date()) {
-  if (!WAITING_STAGES.includes(chat.stage) || !chat.lastOutboundAt) return false;
-  if (chat.lastInboundAt && chat.lastInboundAt >= chat.lastOutboundAt) return false;
-  if (chat.stage !== "outreach_sent" && chat.stageEnteredAt > chat.lastOutboundAt) return false;
-  return now.getTime() - new Date(chat.lastOutboundAt).getTime() >= QUIET_DAYS * DAY3;
-}
-var SECOND_BUMP_GOALS = /* @__PURE__ */ new Set(["sales", "fundraising", "hiring"]);
-var SECOND_BUMP_AFTER_BUSINESS_DAYS = 7;
-var MAX_UNANSWERED = 3;
-var NURTURE_DAYS = { close: 60, strong: 90, goal: 30 };
-var NURTURE_PER_WEEK = 3;
-var COLD_SCORE = 40;
-function unansweredCount(personId, messages) {
-  const mine = messages.filter((m) => m.personId === personId).sort((a, b) => a.at.localeCompare(b.at));
-  let n = 0;
-  for (const m of mine) n = m.direction === "in" ? 0 : n + 1;
-  return n;
-}
-function cancelIfReplied(draft2, messages) {
-  const newer = messages.filter((m) => m.personId === draft2.personId && m.direction === "in" && m.at > draft2.createdAt).sort((a, b) => b.at.localeCompare(a.at))[0];
-  return newer ? { cancel: true, reason: "replied", at: newer.at } : { cancel: false };
-}
-function isSendDay(d, tz) {
-  return isBusinessDayKey(todayKey(d, tz));
-}
-function nextSendDay(d, tz) {
-  if (isSendDay(d, tz)) return d;
-  const next = addBusinessDays(d, 1, tz);
-  const key = todayKey(next, tz);
-  const offset = zoneOffsetMs(next, tz);
-  return new Date(Date.parse(`${key}T09:00:00Z`) - offset);
-}
-function zoneOffsetMs(d, tz) {
-  if (!tz) return 0;
-  const parts = new Intl.DateTimeFormat("en-US", {
-    timeZone: tz,
-    hourCycle: "h23",
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-    second: "2-digit"
-  }).formatToParts(d);
-  const get2 = (t) => Number(parts.find((p) => p.type === t)?.value ?? 0);
-  const asUtc = Date.UTC(
-    get2("year"),
-    get2("month") - 1,
-    get2("day"),
-    get2("hour"),
-    get2("minute"),
-    get2("second")
-  );
-  return asUtc - Math.floor(d.getTime() / 1e3) * 1e3;
-}
-var ACTIVE_GOAL = (g) => g.status === "active" && !g.deletedAt;
-function goalOf(chat, goals) {
-  const active = goals.filter(ACTIVE_GOAL);
-  return (chat.goalId ? active.find((g) => g.id === chat.goalId) : void 0) ?? active.find((g) => g.targets.people.includes(chat.personId));
-}
-function sentCount(chat) {
-  return (chat.firstOutreachAt ? 1 : 0) + chat.bumpCount;
-}
-function cadenceActions(inp) {
-  const { now, settings } = inp;
-  const tz = settings.timezone;
-  if (settings.quietUntil && now.getTime() < new Date(settings.quietUntil).getTime()) return [];
-  const out = [];
-  const due2 = (personId) => {
-    const ptz = (personId ? inp.people.get(personId)?.timeZone : void 0) ?? tz;
-    return nextSendDay(now, ptz).toISOString();
-  };
-  const blocked = (personId) => {
-    const p = inp.people.get(personId);
-    return !!p?.person.doNotContact || !!p?.person.hiddenAt;
-  };
-  const room = (personId) => unansweredCount(personId, inp.messages) < MAX_UNANSWERED;
-  for (const chat of inp.chats) {
-    if (chat.archivedAt) continue;
-    const pc = inp.people.get(chat.personId);
-    const person2 = pc?.person ?? { id: chat.personId, firstName: "them" };
-    const goal = goalOf(chat, inp.goals);
-    const base = { chatId: chat.id, personId: chat.personId, ...goal ? { goalId: goal.id } : {} };
-    if (!blocked(chat.personId) && room(chat.personId) && sentCount(chat) < MAX_UNANSWERED) {
-      const v1 = bumpDue(chat, person2, {
-        now,
-        settings: { ...settings, quietDays: [] },
-        timezone: tz
-      });
-      if (v1) {
-        out.push({
-          kind: "bump",
-          ...base,
-          bumpNumber: chat.bumpCount + 1,
-          draftKind: "bump",
-          reason: `No reply in ${v1.bdays} business days${v1.backFromOoo ? ", and they are back from time off" : ""}`,
-          dueAt: due2(chat.personId)
-        });
-      } else if (goal && SECOND_BUMP_GOALS.has(goal.kind) && chat.stage === "outreach_sent" && chat.bumpCount === 1 && (pc?.score ?? 0) < COLD_SCORE && chat.lastOutboundAt && !(chat.lastInboundAt && chat.lastInboundAt >= chat.lastOutboundAt) && maxBumpsFor(
-        sectorOf({ title: person2.currentTitle, org: person2.currentOrganizationRaw }),
-        settings.maxBumps
-      ) < 2) {
-        const bdays = businessDaysBetween(new Date(chat.lastOutboundAt), now, tz);
-        if (bdays >= SECOND_BUMP_AFTER_BUSINESS_DAYS)
-          out.push({
-            kind: "bump",
-            ...base,
-            bumpNumber: 2,
-            draftKind: "bump",
-            reason: `Second and last bump for ${goal.kind}: ${bdays} business days since the first`,
-            dueAt: due2(chat.personId)
-          });
-      }
-    }
-    if (wentQuiet(chat, now))
-      out.push({
-        kind: "went_quiet",
-        ...base,
-        reason: `No answer for ${Math.floor((now.getTime() - new Date(chat.lastOutboundAt).getTime()) / DAY3)} days`,
-        dueAt: now.toISOString()
-      });
-    if ((chat.stage === "completed" || chat.stage === "scheduled") && thankYouDue(chat, now) && !blocked(chat.personId))
-      out.push({
-        kind: "thank_you",
-        ...base,
-        draftKind: "thank_you",
-        reason: "You met in the last three days and have not thanked them yet",
-        dueAt: due2(chat.personId)
-      });
-    const timer = stageTimer(chat, person2, settings, now);
-    if (timer)
-      out.push({
-        kind: "stage_timer",
-        ...base,
-        toStage: timer.to,
-        reason: timer.reason,
-        dueAt: now.toISOString()
-      });
-  }
-  const weekAgo = now.getTime() - 7 * DAY3;
-  const used = (inp.recentNurtureAt ?? []).filter((t) => new Date(t).getTime() > weekAgo).length;
-  const left = Math.max(0, NURTURE_PER_WEEK - used);
-  if (left > 0) {
-    const goalPeople = /* @__PURE__ */ new Map();
-    for (const g of inp.goals.filter(ACTIVE_GOAL)) for (const id of g.targets.people) goalPeople.set(id, g);
-    for (const c of inp.chats) {
-      const g = goalOf(c, inp.goals);
-      if (g && !goalPeople.has(c.personId)) goalPeople.set(c.personId, g);
-    }
-    const busy = new Set(
-      inp.chats.filter((c) => !c.archivedAt && WAITING_STAGES.includes(c.stage)).map((c) => c.personId)
-    );
-    const pending = new Set(
-      inp.drafts.filter((d) => ["draft", "approved", "queued", "scheduled"].includes(d.status)).map((d) => d.personId)
-    );
-    const candidates = [];
-    for (const [id, p] of inp.people) {
-      if (blocked(id) || busy.has(id) || pending.has(id) || !p.nurtureReason || !room(id)) continue;
-      const goal = goalPeople.get(id);
-      const days = goal ? NURTURE_DAYS.goal : p.score >= 80 ? NURTURE_DAYS.close : p.score >= 60 ? NURTURE_DAYS.strong : 0;
-      if (!days) continue;
-      const last = p.lastContactAt ? new Date(p.lastContactAt).getTime() : Number.NEGATIVE_INFINITY;
-      if (now.getTime() - last < days * DAY3) continue;
-      candidates.push({
-        kind: "nurture",
-        personId: id,
-        ...goal ? { goalId: goal.id } : {},
-        draftKind: p.score >= 30 && now.getTime() - last >= 180 * DAY3 ? "reengage" : "nurture",
-        reason: p.nurtureReason,
-        dueAt: due2(id),
-        score: p.score + (goal ? 100 : 0)
-      });
-    }
-    candidates.sort((a, b) => b.score - a.score || a.personId.localeCompare(b.personId));
-    for (const { score: _s, ...c } of candidates.slice(0, left)) out.push(c);
-  }
-  for (const d of inp.drafts) {
-    if (!["approved", "scheduled", "queued"].includes(d.status) || !d.sendAt) continue;
-    if (new Date(d.sendAt).getTime() > now.getTime() || blocked(d.personId)) continue;
-    if (cancelIfReplied(d, inp.messages).cancel || !room(d.personId)) continue;
-    const ptz = inp.people.get(d.personId)?.timeZone ?? tz;
-    if (!isSendDay(now, ptz)) continue;
-    out.push({
-      kind: "send_due",
-      draftId: d.id,
-      personId: d.personId,
-      ...d.chatId ? { chatId: d.chatId } : {},
-      reason: `Scheduled for ${d.sendAt}`,
-      dueAt: d.sendAt
-    });
-  }
-  return out;
-}
-function stageTimer(chat, person2, settings, now) {
-  if (!ACTIVE_STAGES.includes(chat.stage)) return void 0;
-  const entered = new Date(chat.stageEnteredAt).getTime();
-  if (chat.stage === "followed_up" && now.getTime() - entered >= 14 * DAY3)
-    return decideTransition("followed_up", { type: "timer_followed_up_14d" });
-  if (chat.stage === "completed" && now.getTime() - entered >= 14 * DAY3)
-    return decideTransition("completed", { type: "timer_completed_14d" });
-  if (chat.stage !== "outreach_sent" || !chat.lastOutboundAt) return void 0;
-  if (chat.lastInboundAt && chat.lastInboundAt > chat.lastOutboundAt) return void 0;
-  const fromIso = chat.bumpNotBefore && chat.bumpNotBefore > chat.lastOutboundAt ? chat.bumpNotBefore : chat.lastOutboundAt;
-  const from = new Date(fromIso);
-  if (from.getTime() > now.getTime()) return void 0;
-  const maxBumps = maxBumpsFor(
-    sectorOf({ title: person2.currentTitle, org: person2.currentOrganizationRaw }),
-    settings.maxBumps
-  );
-  return decideTransition("outreach_sent", {
-    type: "timer_no_response",
-    bumps: chat.bumpCount,
-    maxBumps,
-    daysSilent: (now.getTime() - from.getTime()) / DAY3,
-    businessDaysSilent: businessDaysBetween(from, now, settings.timezone)
-  });
-}
-
 // packages/core/src/drafts/neverDo.ts
 var NEGATION = /\b(never|don'?t|do not|dont|avoid|no|not|stop|without)\b/i;
 var VAGUE = /* @__PURE__ */ new Set([
@@ -2965,8 +2431,8 @@ function mentionTarget(clause2) {
   if (!m) return void 0;
   const what = m[1].replace(/^that\s+/i, "").replace(/^I\s+(?:go to|attend|am at|study at|went to|transferred from|am|was|have|had)\s+/i, "").replace(/^I'm\s+(?=(an?|the)\s)/i, (x) => /\bstudent\b/i.test(m[1]) ? x : "");
   if (/^(I|I'm|I am|I go)$/i.test(what.trim())) return void 0;
-  const words = what.replace(/^["'‘“]+|["'’”]+$/g, "").replace(/\b(in|to|on|with|when|unless|because|anywhere|ever|at all|please)\b.*$/i, "").replace(/^(my|the|that|about|any|a|an|our)\s+/i, "").trim().split(/\s+/).slice(0, 4);
-  const phrase = words.join(" ").trim();
+  const words2 = what.replace(/^["'‘“]+|["'’”]+$/g, "").replace(/\b(in|to|on|with|when|unless|because|anywhere|ever|at all|please)\b.*$/i, "").replace(/^(my|the|that|about|any|a|an|our)\s+/i, "").trim().split(/\s+/).slice(0, 4);
+  const phrase = words2.join(" ").trim();
   if (phrase.length < 2 || VAGUE.has(phrase.toLowerCase())) return void 0;
   return phrase;
 }
@@ -3022,6 +2488,49 @@ function brokenNeverRules(body2, neverDo, subject = {}) {
       neverDoChecks(neverDo, subject).filter((c) => c.breaks(body2)).map((c) => c.rule)
     )
   ];
+}
+
+// packages/core/src/drafts/phrasing.ts
+var SCHOOL_SHORT = {
+  "massachusetts institute of technology": "MIT",
+  "california institute of technology": "Caltech",
+  "georgia institute of technology": "Georgia Tech",
+  "university of pennsylvania": "Penn",
+  "new york university": "NYU",
+  "university of california, berkeley": "Berkeley",
+  "university of california berkeley": "Berkeley",
+  "uc berkeley": "Berkeley",
+  "university of california, los angeles": "UCLA",
+  "university of southern california": "USC",
+  "the ohio state university": "Ohio State",
+  "university of texas at austin": "UT Austin",
+  "the university of texas at austin": "UT Austin",
+  "university of north carolina at chapel hill": "UNC",
+  "university of illinois urbana-champaign": "UIUC",
+  "university of illinois at urbana-champaign": "UIUC",
+  "washington university in st. louis": "WashU",
+  "boston university": "BU",
+  "boston college": "BC",
+  "london school of economics": "LSE",
+  "carnegie mellon university": "Carnegie Mellon",
+  "universidad de los andes": "Los Andes",
+  "london school of economics and political science": "LSE"
+};
+function schoolShort(school) {
+  const t = (school ?? "").replace(/\s+/g, " ").trim();
+  if (!t) return "";
+  if (/\b(inc|llc|ltd|corp|corporation|gmbh|plc|co)\.?$/i.test(t)) return "";
+  const known = SCHOOL_SHORT[t.toLowerCase()];
+  if (known) return known;
+  const iit = t.match(/^Indian Institute of (Technology|Management|Science),? ?(?:\(?([A-Z][\w ]*?)\)?)?$/);
+  if (iit) return `II${iit[1][0]}${iit[2] ? ` ${iit[2].trim()}` : ""}`;
+  const uc = t.match(/^(?:The )?University of California,? (?:at )?([A-Z][\w .'-]+)$/);
+  if (uc) return `UC ${uc[1].trim()}`;
+  const of = t.match(/^(?:The )?University of ([A-Z][\w.&'-]*(?: [A-Z][\w.&'-]*)*?)(?:,.*| at .*| in .*)?$/);
+  if (of) return of[1];
+  const suffix = t.match(/^(?:The )?(.+?) (?:University|College)$/);
+  if (suffix && suffix[1].length >= 3) return suffix[1];
+  return t;
 }
 
 // packages/core/src/email/when.ts
@@ -3839,6 +3348,133 @@ function stripQuotedReply(body2) {
     kept.pop();
   return kept.join("\n").replace(/\n{3,}/g, "\n\n").trim();
 }
+var CLOSER = /^(?:(?:best|kind|warm|warmest|many|with)(?:\s+(?:regards|wishes|thanks|gratitude))?|regards|thanks?(?:\s+(?:so\s+much|again|a\s+lot|a\s+ton|in\s+advance|for\s+your\s+time))?|thank\s+you(?:\s+(?:so\s+much|again|for\s+your\s+time))?|cheers|sincerely(?:\s+yours)?|yours(?:\s+truly)?|warmly|talk\s+soon|speak\s+soon|take\s+care|all\s+the\s+best|looking\s+forward(?:\s+to\s+it)?|gratefully|respectfully|best\s+of\s+luck)\s*[,.!]*\s*(?:-\s*[A-Z][a-z]+)?$/i;
+var PHONE = /\+?\d[\d\s().-]{7,}\d/;
+var CONTACT = /(\+?\d[\d\s().-]{7,}\d)|(linkedin\.com\/in\/)|(https?:\/\/)|(\bwww\.)|([\w.+-]+@[\w-]+\.[\w.]+)/i;
+var MEETING_URL = /(calendly\.com|\bcal\.com|zoom\.us|meet\.google\.com|teams\.microsoft\.com|teams\.live\.com|savvycal\.com|meetings\.hubspot\.com|webex\.com|doodle\.com|whereby\.com|chilipiper\.com)/i;
+var DISCLAIMER = /(confidential|intended recipient|privileged|disclaimer|pronouns?:)/i;
+var GREETING = /^(hi|hey|hello|dear|good (morning|afternoon|evening))\b[^\n]{0,40}$/i;
+var TITLE_WORDS = /\b(engineer|engineering manager|manager|director|analyst|associate|partner|principal|founder|co-?founder|ceo|cto|coo|cfo|cmo|vp|svp|evp|avp|vice president|president|head of|lead|recruiter|sourcer|consultant|scientist|designer|product manager|pm|intern|student|candidate|professor|lecturer|researcher|fellow|md|managing director|officer|specialist|coordinator|advisor|adviser|counsel|attorney|architect|developer|strategist|controller|trader|banker|economist|editor|chair|dean|ta|teaching assistant|program manager|generalist)\b/i;
+var TEAM_WORDS = /\b(team|group|growth|banking|engineering|marketing|sales|operations|ops|research|strategy|product|design|data|platform|infrastructure|infra|finance|technology|tech|division|coverage|m&a|capital markets|consulting|recruiting|talent|people|legal|security|ads|cloud|payments|analytics|investments?|equity|credit|trading|wealth|risk|ai|ml|machine learning|mobile|web|backend|frontend|core|search|commerce|partnerships|business development|bd|corporate development|communications|policy|healthcare|consumer|enterprise|americas|emea|apac|north america|east|west|university relations|campus)\b/i;
+var NAME_LINE = /^(?:(?:dr|prof|mr|ms|mrs|mx)\.?\s+)?[A-Z][A-Za-z'’-]+(?:\s+(?:[A-Z][A-Za-z'’.-]*|de|del|da|van|von|der|la|le|bin|al))*(?:,?\s+(?:phd|ph\.d\.|mba|cfa|cpa|md|jd|pe|she\/her|he\/him|they\/them))*$/i;
+var ORG_HINT = /\b(inc|llc|llp|ltd|corp|co|company|group|partners|capital|bank|university|college|school|institute|labs?|technologies|systems|ventures|holdings|foundation|associates)\b\.?/i;
+function words(l) {
+  return l.trim() ? l.trim().split(/\s+/).length : 0;
+}
+function sigLike(line) {
+  const l = line.trim();
+  if (!l) return true;
+  if (MOBILE_FOOTER.test(l) || DISCLAIMER.test(l)) return true;
+  if (MEETING_URL.test(l) && words(l) > 1) return false;
+  if (l.includes("?")) return false;
+  const piped = /\s[|•·]\s/.test(l);
+  if (l.length > (piped ? 140 : 100) || words(l) > (piped ? 18 : 10)) return false;
+  if (/[.!]$/.test(l) && words(l) >= 4 && !CONTACT.test(l)) return false;
+  return true;
+}
+function contentBefore(lines, idx) {
+  return lines.slice(0, idx).some((l) => l.trim() && !GREETING.test(l.trim()));
+}
+function findSignatureStart(lines) {
+  const tailStart = Math.max(0, lines.length - 12);
+  for (let i = tailStart; i < lines.length; i++) if (/^--\s*$/.test(lines[i])) return i;
+  const restSigLike = (i) => lines.slice(i + 1).every(sigLike);
+  for (let i = lines.length - 1; i >= tailStart; i--) {
+    const l = lines[i].trim();
+    if (!l) continue;
+    if (CLOSER.test(l)) {
+      if (restSigLike(i) && contentBefore(lines, i)) return i;
+      break;
+    }
+    if (!sigLike(l)) break;
+  }
+  for (let i = tailStart; i < lines.length; i++) {
+    const l = lines[i].trim();
+    if (!l || !sigLike(l) || !restSigLike(i) || !contentBefore(lines, i)) continue;
+    const next = lines.slice(i + 1).find((x) => x.trim()) ?? "";
+    const isName = /^[A-Z][a-z'-]+(\s[A-Z][a-z'.-]*){0,3}$/.test(l);
+    if (isName && (TITLE_WORDS.test(next) || CONTACT.test(next) && !MEETING_URL.test(next))) return i;
+    if (CONTACT.test(l) && !MEETING_URL.test(l) && words(l) <= 5 && !/[.!?]$/.test(l)) return i;
+    if (MOBILE_FOOTER.test(l)) return i;
+  }
+  return -1;
+}
+function splitSignature(body2, opts = {}) {
+  const lines = body2.replace(/\r\n/g, "\n").trimEnd().split("\n");
+  const start = findSignatureStart(lines);
+  if (start < 0) return { body: body2.trim() };
+  const sig = lines.slice(start).join("\n");
+  const info = { body: lines.slice(0, start).join("\n").trim(), signature: sig.trim() };
+  const sigLines = sig.split("\n").map((x) => x.trim()).filter(Boolean);
+  const phone = sigLines.filter((l) => !/https?:\/\/|www\./i.test(l)).join("\n").match(PHONE);
+  if (phone) info.phone = phone[0].trim();
+  const li = sig.match(/(?:https?:\/\/)?(?:www\.)?linkedin\.com\/in\/[A-Za-z0-9_-]+/i);
+  if (li) info.linkedinUrl = li[0];
+  Object.assign(info, parseTitleCompany(sigLines, opts.name));
+  return info;
+}
+function sameAsName(seg, name) {
+  const norm2 = (x) => x.toLowerCase().replace(/^(dr|prof|mr|ms|mrs|mx)\.?\s+/, "").replace(/,.*$/, "").replace(/[^a-z ]/g, "").replace(/\s+/g, " ").trim();
+  const n = norm2(name);
+  const t = norm2(seg);
+  return Boolean(n) && (t === n || n.split(" ").every((w) => t.split(" ").includes(w)));
+}
+function looksLikeName(seg, name) {
+  const t = seg.trim();
+  if (!t || TITLE_WORDS.test(t) || ORG_HINT.test(t) || /\d|@|http|www\./i.test(t)) return false;
+  if (name && sameAsName(t, name)) return true;
+  return NAME_LINE.test(t) && t.split(/\s+/).length <= 5;
+}
+function looksLikeOrg(seg) {
+  const t = seg.trim();
+  if (!t || t.length > 60 || TITLE_WORDS.test(t)) return false;
+  if (/\d|@|https?:|www\.|linkedin|\b(she|he|they)\/(her|him|them)\b|pronouns/i.test(t)) return false;
+  if (CLOSER.test(t) || MOBILE_FOOTER.test(t) || DISCLAIMER.test(t)) return false;
+  return /^[A-Z0-9&]/.test(t) || ORG_HINT.test(t);
+}
+function parseTitleCompany(lines, name) {
+  const rows = lines.map((l) => l.trim()).filter((l) => l && !CLOSER.test(l) && !MOBILE_FOOTER.test(l) && !DISCLAIMER.test(l)).map(
+    (l) => l.split(/\s*[|•·]\s*|\s+[-–]\s+/).map((x) => x.trim()).filter(Boolean)
+  );
+  for (let i = 0; i < rows.length; i++) {
+    const segs = rows[i];
+    while (segs.length && looksLikeName(segs[0].split(",")[0], name) && !TITLE_WORDS.test(segs[0].split(",")[0])) {
+      const first = segs[0];
+      const comma = first.indexOf(",");
+      if (comma > 0 && TITLE_WORDS.test(first.slice(comma + 1))) segs[0] = first.slice(comma + 1).trim();
+      else segs.shift();
+    }
+    const ti = segs.findIndex((x) => TITLE_WORDS.test(x) && !/@\S+\.|https?:/i.test(x) && x.length <= 80);
+    if (ti < 0) continue;
+    let title = segs[ti];
+    let company;
+    const at = /^(.{2,60}?)\s+(?:at|@)\s+(.{2,60})$/i.exec(title);
+    if (at && TITLE_WORDS.test(at[1])) {
+      title = at[1].trim();
+      company = at[2].trim();
+    } else if (title.includes(",")) {
+      const parts = title.split(/\s*,\s*/);
+      const head = [parts[0]];
+      for (const p of parts.slice(1)) {
+        if (!company && !TITLE_WORDS.test(p) && !TEAM_WORDS.test(p) && looksLikeOrg(p)) company = p;
+        else if (!company) head.push(p);
+      }
+      title = head.join(", ");
+    }
+    if (!company) company = segs.slice(ti + 1).find(looksLikeOrg);
+    if (!company)
+      for (const row of rows.slice(i + 1)) {
+        const hit = row.find((x) => !(name && sameAsName(x, name)));
+        if (hit && looksLikeOrg(hit)) {
+          company = hit;
+          break;
+        }
+        if (hit && TITLE_WORDS.test(hit)) break;
+      }
+    return { title: title.replace(/[,.]$/, "").trim(), company: company?.replace(/[,.]$/, "").trim() };
+  }
+  return {};
+}
 function wordCount(s) {
   return s.trim() ? s.trim().split(/\s+/).length : 0;
 }
@@ -3899,6 +3535,154 @@ var FILLER = new Set(
     "|"
   )
 );
+
+// packages/core/src/util/ids.ts
+function todayKey(d, tz) {
+  try {
+    const parts = new Intl.DateTimeFormat("en-CA", {
+      timeZone: tz,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit"
+    }).format(d);
+    return parts;
+  } catch {
+    return d.toISOString().slice(0, 10);
+  }
+}
+
+// packages/core/src/suggestions/calendar.ts
+var DAY = 864e5;
+var pad = (n) => String(n).padStart(2, "0");
+var keyOf = (y, m, d) => `${y}-${pad(m)}-${pad(d)}`;
+var dayOfKey = (key) => Math.round(Date.parse(`${key}T00:00:00Z`) / DAY);
+var keyOfDay = (n) => new Date(n * DAY).toISOString().slice(0, 10);
+function nthWeekday(year, month, weekday, n) {
+  if (n > 0) {
+    const first = new Date(Date.UTC(year, month - 1, 1)).getUTCDay();
+    return 1 + (weekday - first + 7) % 7 + (n - 1) * 7;
+  }
+  const lastDate = new Date(Date.UTC(year, month, 0));
+  const last = lastDate.getUTCDay();
+  return lastDate.getUTCDate() - (last - weekday + 7) % 7;
+}
+function observed(year, month, day2) {
+  const dow = new Date(Date.UTC(year, month - 1, day2)).getUTCDay();
+  const shift = dow === 6 ? -1 : dow === 0 ? 1 : 0;
+  return keyOfDay(dayOfKey(keyOf(year, month, day2)) + shift);
+}
+var holidayCache = /* @__PURE__ */ new Map();
+function usHolidays(year) {
+  const hit = holidayCache.get(year);
+  if (hit) return hit;
+  const thanksgiving = nthWeekday(year, 11, 4, 4);
+  const set = /* @__PURE__ */ new Set([
+    observed(year, 1, 1),
+    keyOf(year, 1, nthWeekday(year, 1, 1, 3)),
+    // Martin Luther King Jr. Day
+    keyOf(year, 2, nthWeekday(year, 2, 1, 3)),
+    // Washington's Birthday
+    keyOf(year, 5, nthWeekday(year, 5, 1, -1)),
+    // Memorial Day
+    observed(year, 6, 19),
+    observed(year, 7, 4),
+    keyOf(year, 9, nthWeekday(year, 9, 1, 1)),
+    // Labor Day
+    keyOf(year, 10, nthWeekday(year, 10, 1, 2)),
+    // Columbus Day / Indigenous Peoples' Day
+    observed(year, 11, 11),
+    keyOf(year, 11, thanksgiving),
+    keyOf(year, 11, thanksgiving + 1),
+    observed(year, 12, 25)
+  ]);
+  holidayCache.set(year, set);
+  return set;
+}
+function inWinterFreeze(key) {
+  const m = Number(key.slice(5, 7));
+  const d = Number(key.slice(8, 10));
+  return m === 12 && d >= 20 || m === 1 && d <= 2;
+}
+function isBusinessDayKey(key) {
+  const dow = (/* @__PURE__ */ new Date(`${key}T00:00:00Z`)).getUTCDay();
+  if (dow === 0 || dow === 6) return false;
+  if (inWinterFreeze(key)) return false;
+  return !usHolidays(Number(key.slice(0, 4))).has(key);
+}
+function businessDaysBetween(a, b, tz) {
+  const from = dayOfKey(todayKey(a, tz));
+  const to = dayOfKey(todayKey(b, tz));
+  let n = 0;
+  for (let k = from + 1; k <= to; k++) if (isBusinessDayKey(keyOfDay(k))) n++;
+  return n;
+}
+function addBusinessDays(d, n, tz) {
+  const from = dayOfKey(todayKey(d, tz));
+  let k = from;
+  let left = n;
+  while (left > 0) {
+    k++;
+    if (isBusinessDayKey(keyOfDay(k))) left--;
+  }
+  return new Date(d.getTime() + (k - from) * DAY);
+}
+var MONTH_NAME = "(jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|june?|july?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\\b\\.?";
+var NAMED_DATE = new RegExp(`\\b${MONTH_NAME} (\\d{1,2})(?:st|nd|rd|th)?\\b`);
+var NAMED_DATE_REV = new RegExp(`\\b(\\d{1,2})(?:st|nd|rd|th)? (?:of )?${MONTH_NAME}`);
+var MONTH_EDGE = new RegExp(
+  `\\b(?:(end|start|beginning) of (?:(the|this|next) month\\b|${MONTH_NAME})|next month\\b)`
+);
+
+// packages/core/src/drafts/sector.ts
+var FINANCE_TITLE = /\b(investment bank|banking analyst|ib analyst|analyst, (m&a|tmt|healthcare|fig|leveraged)|associate, (m&a|tmt|healthcare|fig)|vice president|managing director|\bvp\b|\bmd\b|private equity|hedge fund|equity research|capital markets|sales and trading|trading|asset management|wealth management|portfolio manager|\bm&a\b|leveraged finance|\bfig\b|\btmt\b|corporate finance|venture capital|investor)\b/i;
+var FINANCE_ORG = /\b(goldman|morgan stanley|jpmorgan|j\.p\. morgan|bank of america|bofa|citi|barclays|ubs|credit suisse|deutsche bank|evercore|lazard|moelis|pjt|centerview|jefferies|rbc|wells fargo|houlihan|guggenheim|perella|rothschild|blackstone|kkr|apollo|carlyle|tpg|bain capital|jane street|citadel|two sigma|de shaw|point72|millennium|bridgewater|sequoia|a16z|andreessen|accel|benchmark|jump trading|hudson river trading|optiver|susquehanna|drw|imc trading|tower research|akuna|lightspeed venture|founders fund|greylock|kleiner|index ventures|general catalyst|insight partners|tiger global|coatue)\b/i;
+var FINANCE_ORG_WORD = /\b(trading|securities|capital|ventures|venture partners|investments|asset management)\b/i;
+var CONSULTING_TITLE = /\b(consultant|engagement manager|business analyst|associate consultant|case team|principal|partner|senior associate)\b/i;
+var CONSULTING_ORG = /\b(mckinsey|bain|bcg|boston consulting|deloitte|accenture|kearney|oliver wyman|l\.?e\.?k\.?|roland berger|strategy&|pwc|ey|kpmg|ey-parthenon|alixpartners|fti)\b/i;
+var TECH_TITLE = /\b(software|engineer|engineering|developer|\bswe\b|\bsde\b|product manager|product lead|\bpm\b|designer|\bux\b|data scientist|machine learning|\bml\b|research scientist|technical program|devops|infrastructure|platform|frontend|backend|full[- ]?stack|security engineer|solutions engineer|founder|cto)\b/i;
+var TECH_ORG = /\b(google|meta|apple|amazon|microsoft|netflix|stripe|figma|notion|anthropic|openai|airbnb|uber|lyft|doordash|snowflake|databricks|datadog|ramp|brex|linear|vercel|coinbase|robinhood|plaid|square|block|shopify|salesforce|adobe|nvidia|palantir|scale ai|rippling|ramp)\b/i;
+function sectorOf(person2, userFunctions = []) {
+  const t = `${person2.title ?? ""}`;
+  const o = `${person2.org ?? ""} ${person2.industry ?? ""}`;
+  if (FINANCE_ORG.test(o) || FINANCE_ORG_WORD.test(person2.org ?? "") || /\b(fintech|investment bank|banking|private equity|trading|asset management|finance|financial)\b/i.test(
+    person2.industry ?? ""
+  )) {
+    const bankingTitle = /\b(analyst|vice president|managing director)\b/i.test(t) || /\bassociate\b(?!\s+(product|software|design|data|engineer|program))/i.test(t);
+    if (TECH_TITLE.test(t) && !bankingTitle) return "tech";
+    return "finance";
+  }
+  if (CONSULTING_ORG.test(o) || /\bconsulting\b/i.test(person2.industry ?? "")) return "consulting";
+  if (FINANCE_TITLE.test(t) && !TECH_TITLE.test(t) && !TECH_ORG.test(o)) return "finance";
+  if (CONSULTING_TITLE.test(t) && !TECH_TITLE.test(t)) return "consulting";
+  if (TECH_TITLE.test(t) || TECH_ORG.test(o) || /\b(software|technology|tech|ai|saas|internet)\b/i.test(person2.industry ?? ""))
+    return "tech";
+  if (ACADEMIC_TITLE.test(t)) return "general";
+  const f2 = userFunctions[0];
+  if (f2 === "ib" || f2 === "finance" || f2 === "vc" || f2 === "quant") return "finance";
+  if (f2 === "consulting") return "consulting";
+  if (f2 === "swe" || f2 === "pm" || f2 === "design" || f2 === "data") return "tech";
+  return "general";
+}
+var ACADEMIC_TITLE = /\b(professor|prof\.|lecturer|faculty|dean|provost|postdoc(toral)?|principal investigator|department chair)\b/i;
+var RECRUITER_TITLE = new RegExp(
+  [
+    String.raw`\brecruit(?:er|ers|ing|ment)\b`,
+    String.raw`\b(?:talent|technical|tech|recruiting)\s+sourc(?:er|ing)\b`,
+    String.raw`\bsourcer\b`,
+    String.raw`\btalent\s+(?:acquisition|partner|lead|manager|advisor|specialist|team|attraction)\b`,
+    String.raw`\b(?:head|director|vp|vice president|manager)\s*(?:of|,)?\s*talent\b`,
+    String.raw`\b(?:early|emerging)\s+(?:careers?|talent)\b`,
+    String.raw`\b(?:university|campus|college|student)\s+(?:relations|recruiting|programs?\s+(?:lead|manager|coordinator))\b`,
+    String.raw`\b(?:hr|human resources|people)\s+(?:business\s+)?partner\b`,
+    String.raw`\b(?:hr|human resources)\s+(?:generalist|manager|director|lead|specialist|coordinator|associate)\b`,
+    "^(?:hr|human resources)$"
+  ].join("|"),
+  "i"
+);
+function maxBumpsFor(sector, settingsMax) {
+  const cap = sector === "finance" || sector === "consulting" ? 2 : 1;
+  return Math.max(0, Math.min(settingsMax, cap));
+}
 
 // packages/core/src/drafts/templates.ts
 var MAX_WORDS = {
@@ -4280,11 +4064,11 @@ function unsupportedDetails(body2, context) {
     const sentenceStart = /(^|[.!?:;"]\s+|\n\s*|\(\s*)$/.test(before);
     const phrase = m[0].replace(/'s$/, "").replace(/[.'-]+$/, "");
     if (!phrase || has(phrase)) continue;
-    const words = phrase.split(/\s+/);
-    const unknown = words.filter((w, i) => {
+    const words2 = phrase.split(/\s+/);
+    const unknown = words2.filter((w, i) => {
       const bare = w.replace(/'s$/, "").replace(/[.'-]+$/, "");
       if (!bare || COMMON_CAPS.has(bare.toLowerCase()) || has(bare)) return false;
-      if (i === 0 && sentenceStart && words.length === 1 && /^[A-Z][a-z]+$/.test(bare)) return false;
+      if (i === 0 && sentenceStart && words2.length === 1 && /^[A-Z][a-z]+$/.test(bare)) return false;
       return true;
     });
     if (unknown.length) out.push(phrase);
@@ -4452,6 +4236,153 @@ ${d.bodyShort ?? ""}`.replace(/\[[^\]]*\]/g, " "),
   return issues;
 }
 
+// packages/core/src/email/nextAction.ts
+var REPLY_NEXT_ACTION = {
+  interested: {
+    action: "draft_slots",
+    drafts: true,
+    auto: "no_question",
+    doNotContact: false,
+    closes: false,
+    tells: false,
+    holdsBumps: false,
+    outcome: "replied",
+    summary: "They are interested: Orbit drafts a reply with three free times. On autopilot it goes on its own when they asked nothing."
+  },
+  scheduling: {
+    action: "book_or_slots",
+    drafts: true,
+    auto: "always",
+    doNotContact: false,
+    closes: false,
+    tells: false,
+    holdsBumps: false,
+    outcome: "replied",
+    summary: "They picked a time: when it matches one Orbit offered and the calendar is still free, the call is booked and the confirmation sent; otherwise a reply with free times."
+  },
+  question: {
+    action: "needs_you",
+    drafts: false,
+    auto: "never",
+    doNotContact: false,
+    closes: false,
+    tells: true,
+    holdsBumps: true,
+    outcome: "replied",
+    summary: "They asked something only you know: it waits under Needs you, and your one-line answer drafts the reply."
+  },
+  objection: {
+    action: "draft",
+    drafts: true,
+    auto: "never",
+    doNotContact: false,
+    closes: false,
+    tells: false,
+    holdsBumps: true,
+    outcome: "replied",
+    summary: "They raised a concern: Orbit drafts a reply for your approval and never sends it on its own."
+  },
+  not_now: {
+    action: "draft",
+    drafts: true,
+    auto: "never",
+    doNotContact: false,
+    closes: false,
+    tells: false,
+    holdsBumps: true,
+    outcome: "replied",
+    summary: "Not now: Orbit drafts a short reply for your approval and comes back when they said to, never on its own."
+  },
+  referral: {
+    action: "draft",
+    drafts: true,
+    auto: "never",
+    doNotContact: false,
+    closes: false,
+    tells: false,
+    holdsBumps: true,
+    outcome: "replied",
+    summary: "They pointed you to someone: Orbit drafts the thank-you and the next ask for your approval."
+  },
+  decline: {
+    action: "close",
+    drafts: false,
+    auto: "never",
+    doNotContact: true,
+    closes: true,
+    tells: true,
+    holdsBumps: true,
+    outcome: "declined",
+    summary: "They declined: the chat closes, Orbit does not write to them again, and you are told."
+  },
+  unsubscribe: {
+    action: "close",
+    drafts: false,
+    auto: "never",
+    doNotContact: true,
+    closes: true,
+    tells: true,
+    holdsBumps: true,
+    outcome: "declined",
+    summary: "They asked to stop: the chat closes, they are marked do not contact, no reply goes, and you are told."
+  },
+  thanks: {
+    action: "acknowledge",
+    drafts: true,
+    auto: "no_question",
+    doNotContact: false,
+    closes: false,
+    tells: false,
+    holdsBumps: false,
+    outcome: "replied",
+    summary: "They said thanks: a short acknowledgement, which goes on its own at autopilot when they asked nothing."
+  },
+  out_of_office: {
+    action: "hold",
+    drafts: false,
+    auto: "always",
+    doNotContact: false,
+    closes: false,
+    tells: false,
+    holdsBumps: true,
+    outcome: "replied",
+    summary: "Out of office: the bumps wait, and the follow-up goes after they are back."
+  },
+  other: {
+    action: "on_request",
+    drafts: false,
+    auto: "never",
+    doNotContact: false,
+    closes: false,
+    tells: false,
+    holdsBumps: false,
+    outcome: "replied",
+    summary: "Orbit could not tell what they meant: ask for a draft when you want one."
+  }
+};
+var DRAFTED_CLASSES = Object.keys(REPLY_NEXT_ACTION).filter(
+  (c) => REPLY_NEXT_ACTION[c].drafts
+);
+var CLOSING_CLASSES = Object.keys(REPLY_NEXT_ACTION).filter(
+  (c) => REPLY_NEXT_ACTION[c].closes
+);
+var ASKING = [
+  /\b(?:let me know|tell me|curious|wondering|wonder)\b[^.!?\n]{0,40}\b(?:if|whether|what|when|where|which|who|how|why)\b/i,
+  /\b(?:i'?d|i would) (?:like|love|want) to (?:know|hear|understand)\b/i,
+  /\b(?:could|can|would) you (?:let me know|tell me|share|send|say|confirm|clarify)\b/i,
+  /\b(?:any (?:idea|chance|thoughts?|sense) (?:if|whether|what|when|where|how|why|on|of))\b/i,
+  /\b(?:quick|one) (?:question|q)\b/i,
+  /\b(?:what|when|where|which|who|how|why) (?:do|does|did|would|will|should|are|is|were|was|have|has|can|could)\b[^.!?\n]*$/im
+];
+function holdsQuestion(text2) {
+  const stripped = stripQuotedReply(text2 ?? "");
+  const body2 = (splitSignature(stripped).body || stripped).trim();
+  if (!body2) return false;
+  const unquoted = body2.replace(/"[^"\n]*"/g, "").replace(/“[^”\n]*”/g, "");
+  if (/\?/.test(unquoted)) return true;
+  return ASKING.some((re) => re.test(unquoted));
+}
+
 // packages/core/src/email/triage.ts
 function extractProposedTimes(text2, reference, timeZone) {
   return extractTimes(text2, reference, { timeZone });
@@ -4567,10 +4498,10 @@ function checkIntroAsk(d) {
   return d.kind === "intro_request" || d.kind === "forwardable_blurb" ? [approval("intro_ask_needs_approval", "asking a third party for an introduction is approved")] : [];
 }
 function checkCrossThread(d, ctx) {
-  const words = (s) => s.toLowerCase().match(/[a-z0-9']+/g) ?? [];
-  const body2 = ` ${words(d.body).join(" ")} `;
+  const words2 = (s) => s.toLowerCase().match(/[a-z0-9']+/g) ?? [];
+  const body2 = ` ${words2(d.body).join(" ")} `;
   for (const t of ctx.otherThreads ?? []) {
-    const w = words(t);
+    const w = words2(t);
     for (let i = 0; i + 8 <= w.length; i++) {
       const run = ` ${w.slice(i, i + 8).join(" ")} `;
       if (body2.includes(run))
@@ -4665,71 +4596,110 @@ var AUTOPILOT_MODES = ["off", "assist", "autopilot"];
 var AUTOPILOT_MODE_LEVEL = { off: 0, assist: 1, autopilot: 2 };
 var AUTO_SEND_DAILY_CAP = SEND_CAPS.autoPerDay;
 
-// packages/core/src/server/mappers.ts
-var u = (v) => v === null ? void 0 : v;
-function compact(o) {
+// supabase/functions/_shared/replies/cards.ts
+var CARD_TTL_DAYS = 14;
+var CLOSED_AFTER_MS = 4 * 36e5;
+async function raiseCard(db2, userId, c) {
+  const expires = new Date(c.now.getTime() + CARD_TTL_DAYS * 864e5);
+  const [row] = await db2.sql`
+    insert into orbit.suggestions (user_id, kind, person_id, chat_id, draft_id, message_id, priority_score, reason_text,
+                                   signals, payload, status, dedupe_key, expires_at, created_at, updated_at)
+    values (${userId}::uuid, ${c.kind}, ${c.personId ?? null}::uuid, ${c.chatId ?? null}::uuid, ${c.draftId ?? null}::uuid,
+            ${c.messageId ?? null}::uuid, ${c.priority ?? 0.7}::real, ${c.reasonText}, ${c.signals ?? {}}::jsonb,
+            ${c.payload ?? {}}::jsonb, 'pending', ${c.dedupeKey}, ${expires}::timestamptz, ${c.now}::timestamptz,
+            ${c.now}::timestamptz)
+    on conflict (user_id, dedupe_key) do update
+      set reason_text = excluded.reason_text, signals = excluded.signals, payload = excluded.payload,
+          expires_at = excluded.expires_at, updated_at = excluded.updated_at
+    returning id, (xmax = 0) as inserted`;
+  if (row?.inserted && c.notify)
+    await db2.sql`
+      insert into orbit.notifications (user_id, kind, title, body, link, created_at, updated_at)
+      values (${userId}::uuid, ${c.notify.kind}, ${c.notify.title}, ${c.notify.body ?? null}, ${c.notify.link ?? null},
+              ${c.now}::timestamptz, ${c.now}::timestamptz)`;
+  return row.id;
+}
+async function settleCard(db2, userId, dedupeKey, status2, now) {
+  await db2.sql`
+    update orbit.suggestions set status = ${status2}, decided_at = ${now}::timestamptz, updated_at = ${now}::timestamptz
+     where user_id = ${userId}::uuid and dedupe_key = ${dedupeKey} and status in ('pending', 'snoozed')`;
+}
+
+// supabase/functions/_shared/replies/breaker.ts
+function pausedGoalsOf(settings) {
+  const v = settings?.autopilot_paused_goals;
+  if (!v || typeof v !== "object" || Array.isArray(v)) return {};
   const out = {};
-  for (const [k, v] of Object.entries(o)) if (v !== void 0) out[k] = v;
+  for (const [goalId, p] of Object.entries(v)) {
+    if (!p || typeof p !== "object") continue;
+    const g = p;
+    out[goalId] = {
+      reason: g.reason ?? "student",
+      text: typeof g.text === "string" ? g.text : "Paused",
+      until: typeof g.until === "string" ? g.until : null,
+      at: typeof g.at === "string" ? g.at : ""
+    };
+  }
   return out;
 }
-function goalFromRow(r) {
-  return compact({
-    id: r.id,
-    userId: r.user_id,
-    kind: r.kind,
-    title: r.title,
-    description: u(r.description),
-    targets: r.targets,
-    criteria: r.criteria,
-    successMetric: u(r.success_metric),
-    priority: r.priority,
-    status: r.status,
-    autonomyLevel: u(r.autonomy_level),
-    dueAt: u(r.due_at),
-    source: r.source,
-    evidence: u(r.evidence),
-    createdAt: r.created_at,
-    updatedAt: r.updated_at,
-    deletedAt: u(r.deleted_at)
-  });
+function goalPaused(settings, goalId, now) {
+  if (!goalId) return false;
+  const p = pausedGoalsOf(settings)[goalId];
+  if (!p) return false;
+  return p.until === null || new Date(p.until).getTime() > now.getTime();
 }
-function chatFromRow(r) {
-  const data = r.data;
-  return compact({
-    goalTags: [],
-    source: "manual",
-    bumpCount: 0,
-    priority: 2,
-    ...data,
-    id: r.id,
-    userId: r.user_id,
-    personId: r.person_id,
-    goalId: u(r.goal_id),
-    organizationId: u(r.org_id),
-    stage: r.stage,
-    stageEnteredAt: r.stage_entered_at,
-    archivedAt: u(r.archived_at),
-    createdAt: r.created_at,
-    updatedAt: r.updated_at
-  });
+async function setGoalPause(db2, userId, goalId, pause3) {
+  const [u2] = await db2.sql`
+    select settings from orbit.users where id = ${userId}::uuid`;
+  const goals = pausedGoalsOf(u2?.settings);
+  if (pause3) goals[goalId] = pause3;
+  else delete goals[goalId];
+  await db2.sql`
+    update orbit.users set settings = settings || jsonb_build_object('autopilot_paused_goals', ${goals}::jsonb)
+     where id = ${userId}::uuid`;
+  return goals;
 }
-function dossierFromRow(r) {
-  return compact({
-    id: r.id,
-    userId: r.user_id,
-    personId: r.person_id,
-    goalId: u(r.goal_id),
-    status: r.status,
-    content: u(r.content),
-    sources: r.sources,
-    candidates: u(r.candidates),
-    costUsd: Number(r.cost_usd),
-    model: u(r.model),
-    error: u(r.error),
-    createdAt: r.created_at,
-    updatedAt: r.updated_at,
-    expiresAt: r.expires_at
+var WHAT = {
+  unsubscribe: "asked to stop",
+  declines: "declined, the second today",
+  bounce: "bounced",
+  send_error: "could not be sent to"
+};
+async function tripBreaker(db2, userId, p) {
+  const [u2] = await db2.sql`
+    select settings from orbit.users where id = ${userId}::uuid`;
+  const goalTitle = p.goalId ? (await db2.sql`select title from orbit.goals where id = ${p.goalId}::uuid`)[0]?.title : void 0;
+  const where = p.company?.trim() || goalTitle || "first messages";
+  const text2 = `${p.personName} ${WHAT[p.reason]}. Paused ${where}${p.company?.trim() || goalTitle ? " first messages" : ""}.`;
+  if (p.goalId && goalPaused(u2?.settings, p.goalId, p.now)) return { tripped: false, text: text2 };
+  if (p.goalId)
+    await setGoalPause(db2, userId, p.goalId, {
+      reason: p.reason,
+      text: text2,
+      until: null,
+      at: p.now.toISOString()
+    });
+  await db2.sql`
+    insert into orbit.audit_log (user_id, actor, action, target_table, target_id, details)
+    values (${userId}::uuid, 'system', 'autopilot.breaker', 'goals', ${p.goalId ?? userId},
+            ${{ reason: p.reason, personId: p.personId, messageId: p.messageId ?? null, goalId: p.goalId }}::jsonb)`;
+  await raiseCard(db2, userId, {
+    kind: "breaker",
+    dedupeKey: `breaker:${p.goalId ?? "account"}:${p.messageId ?? p.personId ?? p.now.toISOString()}`,
+    reasonText: `${text2} Read it?`,
+    personId: p.personId,
+    messageId: p.messageId ?? null,
+    signals: { reason: p.reason, goalId: p.goalId },
+    payload: { goalId: p.goalId, reason: p.reason, personName: p.personName, company: p.company ?? null },
+    priority: 0.9,
+    now: p.now,
+    notify: {
+      kind: "system",
+      title: text2,
+      link: p.personId ? `/people/${p.personId}` : "/settings/autopilot"
+    }
   });
+  return { tripped: true, text: text2 };
 }
 
 // packages/core/src/drafts/compose.ts
@@ -4779,14 +4749,14 @@ function prose(body2) {
   );
   const text2 = lines.join(" ");
   const sentences2 = text2.split(/(?<=[.!?])\s+/).map((s) => s.trim()).filter((s) => /[A-Za-z]/.test(s));
-  const words = text2.match(/[A-Za-z][A-Za-z'’-]*/g) ?? [];
-  return { words, sentences: sentences2 };
+  const words2 = text2.match(/[A-Za-z][A-Za-z'’-]*/g) ?? [];
+  return { words: words2, sentences: sentences2 };
 }
 function fleschKincaidGrade(body2) {
-  const { words, sentences: sentences2 } = prose(body2);
-  if (!words.length || !sentences2.length) return 0;
-  const syl = words.reduce((s, w) => s + syllables(w), 0);
-  return 0.39 * (words.length / sentences2.length) + 11.8 * (syl / words.length) - 15.59;
+  const { words: words2, sentences: sentences2 } = prose(body2);
+  if (!words2.length || !sentences2.length) return 0;
+  const syl = words2.reduce((s, w) => s + syllables(w), 0);
+  return 0.39 * (words2.length / sentences2.length) + 11.8 * (syl / words2.length) - 15.59;
 }
 var ASK_PHRASE = /\b(would you|could you|could we|can we|can you|are you open|open to|worth a (quick )?look|happy to (chat|talk|hop)|let me know if|would it be|do you have|are you up for|might you|would love (it )?if you)\b/i;
 function asksIn(body2) {
@@ -4800,7 +4770,7 @@ function validateComposed(msg, ctx) {
   const block3 = (code, detail) => issues.push({ code, detail, blocking: true });
   const body2 = msg.body;
   const lower = body2.toLowerCase();
-  const words = wordsIn(body2);
+  const words2 = wordsIn(body2);
   const grade = Math.round(fleschKincaidGrade(body2) * 10) / 10;
   const v1 = validateDraft(
     {
@@ -4834,10 +4804,10 @@ function validateComposed(msg, ctx) {
         ctx.connectionNote ? "connection_note_too_long" : "linkedin_too_long",
         `${body2.length} characters, at most ${max}`
       );
-    if (FIRST_TOUCH_KINDS.has(msg.kind) && words < 12) block3("words_out_of_range", `${words} words`);
+    if (FIRST_TOUCH_KINDS.has(msg.kind) && words2 < 12) block3("words_out_of_range", `${words2} words`);
   } else {
     const [min, max] = wordRange(msg.kind, ctx.goal);
-    if (words < min || words > max) block3("words_out_of_range", `${words} words, want ${min}–${max}`);
+    if (words2 < min || words2 > max) block3("words_out_of_range", `${words2} words, want ${min}–${max}`);
   }
   if (grade > READING_GRADE_MAX) block3("reading_grade", `grade ${grade}, want ${READING_GRADE_MAX} or lower`);
   const asks = asksIn(body2);
@@ -4892,7 +4862,7 @@ ${body2}`, ctx.inputs))
     seen.add(k);
     return true;
   });
-  return { ok: !deduped.some((i) => i.blocking), issues: deduped, words, grade };
+  return { ok: !deduped.some((i) => i.blocking), issues: deduped, words: words2, grade };
 }
 
 // supabase/functions/_shared/rows.ts
@@ -4959,7 +4929,7 @@ function offsetMs2(d, tz) {
   const asUtc = Date.UTC(p.year, p.month - 1, p.day, p.hour, p.minute);
   return asUtc - Math.floor(d.getTime() / 6e4) * 6e4;
 }
-function zonedTime2(key, hour, minute, tz) {
+function zonedTime(key, hour, minute, tz) {
   const [y, m, d] = key.split("-").map(Number);
   const naive = Date.UTC(y, m - 1, d, hour, minute);
   let t = naive - offsetMs2(new Date(naive), tz);
@@ -5017,8 +4987,8 @@ function pickSlots(busy, opts) {
   for (let i = 0; i < 31 && out.length < count; i++, key = addDaysKey(key, 1)) {
     const dow = weekdayOfKey(key);
     if (dow === 0 || dow === 6 || usHolidays(Number(key.slice(0, 4))).has(key)) continue;
-    const dayStart = zonedTime2(key, DAY_START.hour, DAY_START.minute, opts.userTz).getTime();
-    const dayEnd = zonedTime2(key, DAY_END.hour, DAY_END.minute, opts.userTz).getTime();
+    const dayStart = zonedTime(key, DAY_START.hour, DAY_START.minute, opts.userTz).getTime();
+    const dayEnd = zonedTime(key, DAY_END.hour, DAY_END.minute, opts.userTz).getTime();
     if (dayStart > until) break;
     for (let s = dayStart; s + SLOT_MINUTES * 6e4 <= dayEnd; s += SLOT_MINUTES * 6e4) {
       const e = s + SLOT_MINUTES * 6e4;
@@ -5118,7 +5088,7 @@ async function calendarConsentUrl(s, userId, appUrl) {
             ${new Date(now.getTime() + STATE_TTL_MS2)}::timestamptz)`;
   return authUrl(s.google, { state, challenge, scopes, loginHint: u2?.email });
 }
-async function bookSlot(s, userId, req, appUrl) {
+async function bookSlot(s, userId, req, appUrl, opts = {}) {
   const [d] = await s.db.sql`
     select id, person_id, chat_id from orbit.drafts where id = ${req.draftId}::uuid and user_id = ${userId}::uuid`;
   if (!d) throw new HttpError(404, "not_found", "no such draft");
@@ -5126,6 +5096,12 @@ async function bookSlot(s, userId, req, appUrl) {
   if (Number.isNaN(start.getTime())) throw new HttpError(400, "bad_request", "slotStart must be an ISO time");
   if (start.getTime() <= s.now().getTime()) throw new HttpError(409, "slot_past", "that time has passed");
   const end = new Date(start.getTime() + SLOT_MINUTES * 6e4);
+  const [had] = await s.db.sql`
+    select external_id from orbit.calendar_events
+     where user_id = ${userId}::uuid and start_at = ${start}::timestamptz
+       and ${d.person_id}::uuid = any(attendee_person_ids) and coalesce(status, 'confirmed') <> 'cancelled'
+     limit 1`;
+  if (had) return { eventId: had.external_id };
   const [acct] = await s.db.sql`
     select scopes, status from orbit.integration_accounts where user_id = ${userId}::uuid and provider = 'google'`;
   if (!acct?.scopes.some((x) => x.endsWith("calendar.events")))
@@ -5164,7 +5140,7 @@ async function bookSlot(s, userId, req, appUrl) {
     on conflict (user_id, external_id) do nothing`;
   await s.db.sql`
     insert into orbit.audit_log (user_id, actor, action, target_table, target_id, details)
-    values (${userId}::uuid, 'user', 'calendar.book', 'drafts', ${d.id}, ${{ start: iso(start) }}::jsonb)`;
+    values (${userId}::uuid, ${opts.actor ?? "user"}, 'calendar.book', 'drafts', ${d.id}, ${{ start: iso(start) }}::jsonb)`;
   if (d.chat_id) await moveChat(s.db, userId, d.chat_id, "scheduled", "call booked", s.now());
   return { eventId };
 }
@@ -5412,14 +5388,14 @@ async function exemplars(s, userId, personId, situation, opts = {}) {
   const names = ids.length ? await s.db.sql`
         select first_name, last_name, display_name from orbit.people
          where user_id = ${userId}::uuid and id = any(${ids}::uuid[])` : [];
-  const words = [
+  const words2 = [
     ...new Set(
       names.flatMap((n) => [n.display_name, n.first_name, n.last_name]).filter((x) => !!x?.trim())
     )
   ].sort((a, b) => b.length - a.length);
   return rows.map((r) => {
     let text2 = stripQuotedReply(r.body_text).trim().slice(0, 1200);
-    for (const w of words) text2 = text2.replace(new RegExp(`\\b${escapeRe2(w)}\\b`, "g"), "[name]");
+    for (const w of words2) text2 = text2.replace(new RegExp(`\\b${escapeRe2(w)}\\b`, "g"), "[name]");
     return text2.replace(/^(hi|hey|hello|dear)\s+[A-Z][a-z]+/i, (m) => `${m.split(/\s+/)[0]} [name]`);
   });
 }
@@ -5541,7 +5517,7 @@ function composeSystem(p) {
   if (p.kind === "reply")
     lines.push(
       "",
-      "Answer what they said. If they proposed times, accept one that is free (given in <free_slots>) or offer those. Keep it shorter than their message unless they asked questions. Never leave a blank, a bracket or a placeholder: the message must be ready to send as written. If a fact is needed that is not in the inputs, write around it (offer to cover it on a call, or ask them) instead of guessing it."
+      "Answer what they said. If they proposed times, accept one that is free (given in <free_slots>) or offer those. Keep it shorter than their message unless they asked questions. Never leave a blank, a bracket or a placeholder: the message must be ready to send as written. If a fact is needed that is not in the inputs, write around it (offer to cover it on a call, or ask them) instead of guessing it. When <task> carries the user's own answer to what they asked, the reply gives that answer in the user's words and asks nothing back. When <task> says the call is booked, the reply confirms that one time and offers no other."
     );
   return lines.join("\n");
 }
@@ -5592,8 +5568,8 @@ function nextSendWindow(now, tz, channel, random = Math.random) {
   let key = localParts(now, zone).key;
   for (let i = 0; i < 21; i++, key = addDaysKey(key, 1)) {
     if (!sendDayAllowed(key, channel)) continue;
-    const start = zonedTime2(key, WINDOW_START.hour, WINDOW_START.minute, zone).getTime();
-    const end = zonedTime2(key, WINDOW_END.hour, WINDOW_END.minute, zone).getTime();
+    const start = zonedTime(key, WINDOW_START.hour, WINDOW_START.minute, zone).getTime();
+    const end = zonedTime(key, WINDOW_END.hour, WINDOW_END.minute, zone).getTime();
     if (now.getTime() >= end) continue;
     const at = Math.min(Math.max(now.getTime(), start) + jitterMs, end);
     return { notBefore: new Date(at).toISOString(), tz: zone };
@@ -5604,7 +5580,7 @@ function nextSendWindow(now, tz, channel, random = Math.random) {
 // supabase/functions/_shared/compose/compose.ts
 var OPT_OUT_LINE = "If this isn't relevant, just say so and I won't follow up.";
 var DECLINE_COOLDOWN_DAYS = 180;
-var DAY4 = 864e5;
+var DAY2 = 864e5;
 var GOAL_REGISTER = {
   recruiting: "ask: a 15-minute call about their path or team; register: warm, curious, specific",
   advice: "ask: 15–20 minutes on one named question; register: warm, humble",
@@ -5646,7 +5622,7 @@ async function composeDraft(s, req) {
     const [declined] = await db2.sql`
       select count(*)::int as n from orbit.chats
        where user_id = ${req.userId}::uuid and person_id = ${person2.id}::uuid and stage = 'declined'
-         and stage_entered_at > ${new Date(now.getTime() - DECLINE_COOLDOWN_DAYS * DAY4)}::timestamptz`;
+         and stage_entered_at > ${new Date(now.getTime() - DECLINE_COOLDOWN_DAYS * DAY2)}::timestamptz`;
     if ((declined?.n ?? 0) > 0)
       throw new HttpError(409, "declined_recently", "they declined in the last 180 days");
   }
@@ -5671,7 +5647,9 @@ async function composeDraft(s, req) {
   const replyClass = replyTo?.reply_class ?? void 0;
   const schedulingLink = typeof user.settings.scheduling_link === "string" ? user.settings.scheduling_link : void 0;
   let slots2 = [];
-  const wantsTimes = replyClass === "interested" || replyClass === "scheduling";
+  const answer2 = replyTo?.answer?.trim() || void 0;
+  const confirms = req.kind === "reply" ? req.confirmSlot : void 0;
+  const wantsTimes = !confirms && (replyClass === "interested" || replyClass === "scheduling");
   if (req.kind === "reply" && wantsTimes) {
     try {
       slots2 = (await slotsFor(s, req.userId, { personId: person2.id, count: 3 })).slots;
@@ -5691,7 +5669,9 @@ ${GOAL_REGISTER[goalKind]}` : GOAL_REGISTER[goalKind];
     req.kind === "forwardable_blurb" ? `the intermediary reading it first: ${person2.display_name}` : "",
     topic ? `about: ${topic}` : "",
     req.reason ? `why now: ${req.reason}` : "",
-    schedulingLink && wantsTimes ? `scheduling link: ${schedulingLink}` : ""
+    schedulingLink && wantsTimes ? `scheduling link: ${schedulingLink}` : "",
+    answer2 ? `${meFirst}'s answer to what they asked, in ${meFirst}'s words: ${answer2}` : "",
+    confirms ? `the call is booked for ${confirms.label} and the invite is sent: confirm that time in one line, offer no other times, ask nothing` : ""
   ].filter(Boolean).join("\n");
   const examples = await exemplars(
     s,
@@ -5732,7 +5712,9 @@ ${e}`).join("\n\n"),
     slots2.map((x) => x.label).join("\n"),
     target ? recipientText(target) : "",
     meFirst,
-    user.full_name ?? ""
+    user.full_name ?? "",
+    answer2 ?? "",
+    confirms?.label ?? ""
   ].join("\n");
   const ctx = {
     goal: goalKind,
@@ -5802,11 +5784,15 @@ ${e}`).join("\n\n"),
       topic,
       window,
       replyClass,
-      slots: slots2
+      slots: slots2,
+      answer: answer2,
+      confirms
     });
     composed = t;
     promptVersion = t.promptVersion;
   }
+  if (answer2 && askUserMarkers(composed.body).length)
+    composed = { ...composed, body: composed.body.replace(ASK_USER, answer2) };
   let footer;
   if (salesFirstTouch2) {
     const company = typeof user.settings.company === "string" ? user.settings.company.trim() : "";
@@ -5815,6 +5801,7 @@ ${e}`).join("\n\n"),
   const forCheck = composed.body.replace(ASK_USER, "").trim();
   const v = validateComposed({ ...composed, body: forCheck }, ctx);
   const markers = askUserMarkers(composed.body);
+  const needs = markers.length ? ["answer"] : [];
   const issues = v.issues.filter((i) => i.blocking).map((i) => `${i.code}: ${i.detail}`).concat(markers.map((m) => `needs_input: ${m}`));
   const validator = { ok: v.ok && markers.length === 0, issues, words: v.words, grade: v.grade };
   const body2 = footer ? `${composed.body}
@@ -5825,19 +5812,24 @@ ${footer}` : composed.body;
     text: composed.ask.text,
     ...replyTo ? { replyToMessageId: replyTo.id } : {},
     ...slots2.length ? { slots: slots2.map((x) => x.start) } : {},
+    ...confirms ? { slots: [confirms.start], confirms } : {},
     ...req.reason ? { reason: req.reason } : {},
-    ...footer ? { footer } : {}
+    ...footer ? { footer } : {},
+    ...markers.length ? { question: markers[0] } : {},
+    ...answer2 ? { answer: answer2 } : {}
   };
+  const offeredSlots = confirms ? [confirms.start] : slots2.length ? slots2.map((x) => x.start) : null;
   const level = goal?.autonomy_level ?? user.autonomy_level ?? 0;
   const via = req.via ? { ...req.via } : null;
   const [row] = await db2.sql`
     insert into orbit.drafts (user_id, person_id, chat_id, goal_id, channel, kind, subject, body, ask, hooks, via,
                               thread_external_id, in_reply_to, status, autonomy_level, validator, generated_by,
-                              prompt_version, variant)
+                              prompt_version, variant, offered_slots, needs)
     values (${req.userId}::uuid, ${person2.id}::uuid, ${chatId}::uuid, ${goal?.id ?? null}::uuid, ${req.channel},
             ${req.kind}, ${composed.subject}, ${body2}, ${meta}::jsonb, ${JSON.stringify(composed.hooks)}::jsonb,
             ${via}::jsonb, ${thread.externalId}, ${replyTo?.rfc_message_id ?? replyTo?.external_id ?? null}, 'draft',
-            ${level}::smallint, ${validator}::jsonb, ${generatedBy}, ${promptVersion}, null)
+            ${level}::smallint, ${validator}::jsonb, ${generatedBy}, ${promptVersion}, null,
+            ${offeredSlots ? JSON.stringify(offeredSlots) : null}::jsonb, ${needs}::text[])
     returning *`;
   await db2.sql`
     insert into orbit.audit_log (user_id, actor, action, target_table, target_id, details)
@@ -5922,7 +5914,7 @@ async function historyWith(db2, userId, personId) {
 async function loadReplyMessage(db2, userId, messageId) {
   if (!/^[0-9a-f-]{36}$/i.test(messageId)) throw new HttpError(400, "bad_request", "messageId is required");
   const [m] = await db2.sql`
-    select id, thread_id, provider, external_id, rfc_message_id, from_person_id, reply_class, sent_at
+    select id, thread_id, provider, external_id, rfc_message_id, from_person_id, reply_class, sent_at, answer
       from orbit.messages
      where id = ${messageId}::uuid and user_id = ${userId}::uuid and direction = 'in'`;
   if (!m) throw new HttpError(404, "not_found", "no such reply");
@@ -6010,6 +6002,40 @@ function replyTemplate(p, me2) {
 ${me2}`;
   let middle;
   let ask2 = { kind: "none", text: "" };
+  if (p.confirms) {
+    middle = `${p.confirms.label} works for me, and the calendar invite is on its way. Looking forward to it.`;
+    return {
+      id: "",
+      goalId: p.goalId,
+      personId: p.person.id,
+      kind: "reply",
+      channel: p.req.channel,
+      subject: null,
+      body: [hi, middle, sign].join("\n\n"),
+      ask: ask2,
+      hooks: [],
+      sendWindow: p.window,
+      promptVersion: "template-v2",
+      variant: null
+    };
+  }
+  if (p.answer) {
+    middle = `Thanks for asking. ${p.answer.replace(/[.!?]*$/, "")}. Happy to say more whenever works for you.`;
+    return {
+      id: "",
+      goalId: p.goalId,
+      personId: p.person.id,
+      kind: "reply",
+      channel: p.req.channel,
+      subject: null,
+      body: [hi, middle, sign].join("\n\n"),
+      ask: ask2,
+      hooks: [],
+      sendWindow: p.window,
+      promptVersion: "template-v2",
+      variant: null
+    };
+  }
   switch (p.replyClass) {
     case "interested":
     case "scheduling":
@@ -6052,6 +6078,864 @@ ${p.slots.map((x) => `- ${x.label}`).join("\n")}`;
     promptVersion: "template-v2",
     variant: null
   };
+}
+
+// supabase/functions/_shared/replies/replies.ts
+var REPLY_WINDOW_DAYS = 30;
+var needsYouKey = (messageId) => `needs_you:${messageId}`;
+async function listReplies(db2, userId, now) {
+  const rows = await db2.sql`
+    select m.id, t.external_id as thread_external_id, m.from_person_id, p.display_name, p.org_raw, o.name as org_name,
+           m.from_addr, m.provider, m.reply_class, m.reply_confidence, m.sent_at, m.snippet, m.body_text, m.extraction,
+           m.answer,
+           (select d.id from orbit.drafts d
+             where d.user_id = m.user_id and d.ask->>'replyToMessageId' = m.id::text
+               and d.status not in ('discarded', 'cancelled')
+             order by d.created_at desc limit 1) as draft_id,
+           (select d.outcome from orbit.drafts d
+             where d.user_id = m.user_id and d.status = 'sent' and d.replied_at = m.sent_at
+               and d.person_id = m.from_person_id
+             order by d.sent_at desc limit 1) as outcome
+      from orbit.messages m
+      join orbit.threads t on t.id = m.thread_id
+      left join orbit.people p on p.id = m.from_person_id
+      left join orbit.organizations o on o.id = p.org_id
+     where m.user_id = ${userId}::uuid and m.direction = 'in' and m.reply_class is not null
+       and m.sent_at >= ${new Date(now.getTime() - REPLY_WINDOW_DAYS * 864e5)}::timestamptz
+     order by m.sent_at desc
+     limit 200`;
+  return rows.map((r) => ({
+    messageId: r.id,
+    threadId: r.thread_external_id,
+    personId: r.from_person_id,
+    personName: r.display_name ?? r.from_addr?.split("@")[0] ?? "Someone",
+    company: r.org_name ?? r.org_raw ?? null,
+    channel: r.provider,
+    replyClass: r.reply_class,
+    confidence: num(r.reply_confidence),
+    receivedAt: iso(r.sent_at),
+    snippet: (r.snippet ?? r.body_text ?? "").replace(/\s+/g, " ").trim().slice(0, 200),
+    draftId: r.draft_id,
+    question: questionOf(r.extraction, r.body_text ?? r.snippet ?? ""),
+    answer: r.answer,
+    outcome: r.outcome ?? null
+  }));
+}
+function questionOf(extraction, text2) {
+  const llm = extraction?.llm?.question;
+  if (typeof llm === "string" && llm.trim()) return llm.trim();
+  const own = extraction?.question;
+  if (typeof own === "string" && own.trim()) return own.trim();
+  const body2 = stripQuotedReply(text2);
+  const sentence2 = body2.split(/(?<=[.!?])\s+|\n+/).map((s) => s.trim()).find((s) => s.endsWith("?"));
+  return sentence2 ?? (holdsQuestion(body2) ? body2.trim().slice(0, 200) : null);
+}
+async function draftReply(s, userId, messageId, actor = "user") {
+  const m = await loadReplyMessage(s.db, userId, messageId);
+  if (m.reply_class === "unsubscribe")
+    throw new HttpError(409, "unsubscribe", "they asked not to be contacted; no reply is drafted");
+  if (!m.from_person_id) throw new HttpError(409, "unknown_sender", "Orbit does not know who sent this yet");
+  return composeDraft(s, {
+    userId,
+    personId: m.from_person_id,
+    kind: "reply",
+    channel: m.provider,
+    replyToMessageId: m.id,
+    actor
+  });
+}
+var DRAFT_CLASSES = new Set(
+  Object.keys(REPLY_NEXT_ACTION).filter((c) => REPLY_NEXT_ACTION[c].drafts)
+);
+async function answerReply(s, userId, req) {
+  const db2 = s.db;
+  const answer2 = req.answer.replace(/\s+/g, " ").trim();
+  if (!answer2) throw new HttpError(400, "bad_request", "an answer is needed");
+  if (answer2.length > 600) throw new HttpError(400, "bad_request", "keep the answer under 600 characters");
+  let messageId = req.messageId;
+  if (!messageId && req.draftId) {
+    const [d] = await db2.sql`
+      select ask from orbit.drafts where id = ${req.draftId}::uuid and user_id = ${userId}::uuid`;
+    if (!d) throw new HttpError(404, "not_found", "no such draft");
+    messageId = d.ask?.replyToMessageId;
+  }
+  if (!messageId) throw new HttpError(400, "bad_request", "draftId or messageId is required");
+  const m = await loadReplyMessage(db2, userId, messageId);
+  if (!m.from_person_id) throw new HttpError(409, "unknown_sender", "Orbit does not know who sent this yet");
+  const now = s.now();
+  await db2.sql`
+    update orbit.messages set answer = ${answer2}, answered_at = ${now}::timestamptz
+     where id = ${m.id}::uuid and user_id = ${userId}::uuid`;
+  await db2.sql`
+    update orbit.drafts set status = 'cancelled', cancel_reason = 'answered'
+     where user_id = ${userId}::uuid and status = 'draft' and ask->>'replyToMessageId' = ${m.id}
+       and (cardinality(needs) > 0 or body ~ '\\[ASK USER')`;
+  await settleCard(db2, userId, needsYouKey(m.id), "done", now);
+  await db2.sql`
+    insert into orbit.audit_log (user_id, actor, action, target_table, target_id, details)
+    values (${userId}::uuid, 'user', 'reply.answer', 'messages', ${m.id}, ${{ chars: answer2.length }}::jsonb)`;
+  return draftReply(s, userId, m.id, "user");
+}
+
+// supabase/functions/_shared/autopilot/autopilot.ts
+var FIRST_TOUCH = ["first_touch", "warm_first_touch", "outreach"];
+var RUNG_NEEDED = {
+  bump: 10,
+  thank_you: 10,
+  schedule: 10,
+  first_touch: 20
+};
+var HOLD_REASONS = {
+  review_window: "It waits for your evening review.",
+  autopilot_paused: "Autopilot is paused.",
+  goal_paused: "The breaker paused this goal.",
+  held: "You held it.",
+  needs_input: "It needs one answer from you.",
+  not_approved: "It was never approved.",
+  linkedin_never_auto: "LinkedIn messages always wait for your own tap.",
+  auto_daily_cap: `Orbit already sent ${SEND_CAPS.autoPerDay} on its own today.`,
+  auto_first_touch_daily_cap: `Orbit already sent ${SEND_CAPS.autoFirstTouchesPerDay} first messages on its own today.`,
+  auto_first_touch_weekly_cap: `Orbit already sent ${SEND_CAPS.autoFirstTouchesPerWeek} first messages on its own this week.`,
+  gmail_daily_cap: `Your ${SEND_CAPS.gmailPerDay} emails a day are used up.`
+};
+async function itemRows(db2, userId, mode2, now, dayStart, draftId) {
+  const twoDaysAgo = new Date(now.getTime() - 2 * 864e5);
+  return db2.sql`
+    select d.id, d.person_id, p.display_name, p.org_raw, o.name as org_name, d.kind, d.subject, d.send_at, d.sent_at,
+           d.status, d.error, d.auto_rung, d.outcome, d.ask,
+           (select m.reply_class from orbit.messages m where m.id::text = d.ask->>'replyToMessageId') as reply_class
+      from orbit.drafts d
+      join orbit.people p on p.id = d.person_id
+      left join orbit.organizations o on o.id = p.org_id
+     where d.user_id = ${userId}::uuid
+       and ((${mode2}::text = 'queued' and d.status in ('approved', 'scheduled')
+               and d.send_at is not null and d.send_at > ${now}::timestamptz
+               and (d.auto_rung is not null or d.autonomy_level >= 1))
+         or (${mode2}::text = 'held' and d.status = 'draft' and d.error is not null
+               and d.updated_at >= ${twoDaysAgo}::timestamptz
+               and (d.auto_rung is not null or d.autonomy_level >= 1 or d.error = 'held'))
+         or (${mode2}::text = 'sent' and d.status = 'sent' and d.sent_at >= ${dayStart}::timestamptz
+               and exists (select 1 from orbit.audit_log a where a.target_table = 'drafts' and a.target_id = d.id::text
+                            and a.action = 'draft.auto_sent'))
+         or (${mode2}::text = 'one' and d.id = ${draftId ?? null}::uuid))
+     order by case when ${mode2}::text = 'queued' then d.send_at end asc,
+              case when ${mode2}::text = 'held' then d.updated_at end desc,
+              case when ${mode2}::text = 'sent' then d.sent_at end desc
+     limit 50`;
+}
+function item(r, status2, reason) {
+  return {
+    draftId: r.id,
+    personId: r.person_id,
+    personName: r.display_name,
+    company: r.org_name ?? r.org_raw ?? null,
+    kind: r.kind,
+    ...r.reply_class ? { replyClass: r.reply_class } : {},
+    subject: r.subject,
+    sendAt: iso(r.send_at),
+    sentAt: iso(r.sent_at),
+    status: status2,
+    ...reason ? { reason } : {},
+    ...r.auto_rung ? { autoRung: r.auto_rung } : {},
+    ...r.outcome ? { outcome: r.outcome } : {},
+    ...r.ask?.replyToMessageId ? { messageId: r.ask.replyToMessageId } : {}
+  };
+}
+function modeOf(settings, level) {
+  const m = settings.autopilot_mode;
+  if (m === "off" || m === "assist" || m === "autopilot") return m;
+  return level >= 2 ? "autopilot" : level === 1 ? "assist" : "off";
+}
+async function autopilotStatus(db2, userId, now) {
+  const [u2] = await db2.sql`
+    select timezone, autonomy_level, settings from orbit.users where id = ${userId}::uuid`;
+  if (!u2) throw new HttpError(404, "not_found", "no such user");
+  const tz = validZone(u2.timezone) ?? "America/New_York";
+  const dayStart = zonedTime(new Intl.DateTimeFormat("en-CA", { timeZone: tz }).format(now), 0, 0, tz);
+  const weekStart = new Date(dayStart.getTime() - 6 * 864e5);
+  const settings = u2.settings ?? {};
+  const queued2 = await itemRows(db2, userId, "queued", now, dayStart);
+  const held = await itemRows(db2, userId, "held", now, dayStart);
+  const sentToday = await itemRows(db2, userId, "sent", now, dayStart);
+  const questions = await db2.sql`
+    select m.id, m.from_person_id as person_id, p.display_name, p.org_raw, o.name as org_name, m.sent_at, m.body_text,
+           m.snippet, m.extraction, m.subject,
+           (select d.id from orbit.drafts d where d.user_id = m.user_id and d.ask->>'replyToMessageId' = m.id::text
+              and d.status not in ('discarded', 'cancelled') order by d.created_at desc limit 1) as draft_id
+      from orbit.messages m
+      join orbit.people p on p.id = m.from_person_id
+      left join orbit.organizations o on o.id = p.org_id
+     where m.user_id = ${userId}::uuid and m.direction = 'in' and m.reply_class = 'question' and m.answer is null
+       and m.sent_at >= ${new Date(now.getTime() - 30 * 864e5)}::timestamptz
+       and not p.do_not_contact
+     order by m.sent_at desc limit 20`;
+  const needsYou = questions.map((q) => ({
+    draftId: q.draft_id ?? q.id,
+    personId: q.person_id,
+    personName: q.display_name,
+    company: q.org_name ?? q.org_raw ?? null,
+    kind: "reply",
+    replyClass: "question",
+    subject: q.subject,
+    sendAt: null,
+    sentAt: null,
+    status: "needs_you",
+    question: questionOf(q.extraction, q.body_text ?? q.snippet ?? "") ?? "They asked you something.",
+    messageId: q.id
+  }));
+  const approvals = await db2.sql`
+    select d.kind, count(*)::int as n from orbit.drafts d
+     where d.user_id = ${userId}::uuid and d.status = 'sent' and d.auto_rung is null
+       and exists (select 1 from orbit.audit_log a where a.target_table = 'drafts' and a.target_id = d.id::text
+                    and a.action = 'draft.approve')
+     group by d.kind`;
+  const count = (kinds) => approvals.filter((a) => kinds.includes(a.kind)).reduce((s, a) => s + a.n, 0);
+  const autoKinds = Array.isArray(settings.auto_kinds) ? settings.auto_kinds : [];
+  const rungs = ["bump", "thank_you", "schedule", "first_touch"].map((kind) => {
+    const n = kind === "first_touch" ? count(FIRST_TOUCH) : count([kind]);
+    const needed = RUNG_NEEDED[kind];
+    return {
+      kind,
+      needed,
+      unchanged: Math.min(needed, n),
+      unlocked: kind === "first_touch" ? false : autoKinds.includes(kind)
+    };
+  });
+  const [caps] = await db2.sql`
+    select count(*) filter (where created_at >= ${dayStart}::timestamptz)::int as day,
+           count(*) filter (where details->>'kind' in ('first_touch', 'warm_first_touch', 'outreach'))::int as week_first
+      from orbit.audit_log
+     where user_id = ${userId}::uuid and action = 'draft.auto_sent' and created_at >= ${weekStart}::timestamptz`;
+  const pausedUntil = typeof settings.autopilot_paused_until === "string" && new Date(settings.autopilot_paused_until).getTime() > now.getTime() ? settings.autopilot_paused_until : null;
+  const goalPauses = pausedGoalsOf(settings);
+  const goalIds = Object.keys(goalPauses);
+  const titles = goalIds.length ? await db2.sql`
+        select id, title from orbit.goals where user_id = ${userId}::uuid and id = any(${goalIds}::uuid[])` : [];
+  const pausedGoals = goalIds.filter((id) => {
+    const p = goalPauses[id];
+    return p.until === null || new Date(p.until).getTime() > now.getTime();
+  }).map((id) => ({
+    goalId: id,
+    title: titles.find((t) => t.id === id)?.title ?? "a goal",
+    until: goalPauses[id].until,
+    reason: goalPauses[id].text
+  }));
+  const reviews = queued2.map((q) => q.send_at).filter((x) => !!x);
+  return {
+    mode: modeOf(settings, Number(u2.autonomy_level) || 0),
+    pausedUntil,
+    pausedGoals,
+    queued: queued2.map((r) => item(r, "queued")),
+    held: held.map((r) => item(r, "held", HOLD_REASONS[r.error ?? ""] ?? r.error ?? void 0)),
+    sentToday: sentToday.map((r) => item(r, "sent")),
+    needsYou,
+    rungs,
+    caps: {
+      autoPerDay: SEND_CAPS.autoPerDay,
+      firstTouchPerWeek: SEND_CAPS.autoFirstTouchesPerWeek,
+      firstTouchPerDay: SEND_CAPS.autoFirstTouchesPerDay,
+      usedToday: caps?.day ?? 0,
+      firstTouchesThisWeek: caps?.week_first ?? 0
+    },
+    reviewUntil: reviews.length ? iso(new Date(Math.min(...reviews.map((d) => new Date(d).getTime())) - 8 * 36e5)) : null
+  };
+}
+async function holdSend(db2, userId, draftId, now) {
+  const [row] = await itemRows(db2, userId, "one", now, now, draftId);
+  if (!row) throw new HttpError(404, "not_found", "nothing queued with that id");
+  if (row.status === "sent" || row.status === "sending")
+    throw new HttpError(409, "too_late", "it has already gone out");
+  const [held] = await db2.sql`
+    update orbit.drafts set status = 'draft', error = 'held', cancel_reason = null, send_at = null
+     where id = ${draftId}::uuid and user_id = ${userId}::uuid and status in ('approved', 'scheduled', 'draft')
+    returning id`;
+  if (!held) throw new HttpError(409, "not_holdable", `a ${row.status} draft cannot be held`);
+  await db2.sql`
+    insert into orbit.audit_log (user_id, actor, action, target_table, target_id, details)
+    values (${userId}::uuid, 'user', 'draft.hold', 'drafts', ${draftId}, ${{ reason: "held", at: iso(now) }}::jsonb)`;
+  return item({ ...row, status: "draft", error: "held", send_at: null }, "held", HOLD_REASONS.held);
+}
+async function pauseAutopilot(db2, userId, req, now) {
+  if (req.goalId) {
+    const [g] = await db2.sql`
+      select id from orbit.goals where id = ${req.goalId}::uuid and user_id = ${userId}::uuid and deleted_at is null`;
+    if (!g) throw new HttpError(404, "not_found", "no such goal");
+    const pause3 = req.until === null && req.until !== void 0 ? null : {
+      reason: "student",
+      text: "You paused it",
+      until: req.until ?? null,
+      at: now.toISOString()
+    };
+    await setGoalPause(db2, userId, req.goalId, pause3);
+    await db2.sql`
+      insert into orbit.audit_log (user_id, actor, action, target_table, target_id, details)
+      values (${userId}::uuid, 'user', 'autopilot.pause', 'goals', ${req.goalId}, ${{ until: req.until ?? null }}::jsonb)`;
+    return { pausedUntil: req.until ?? null, goalId: req.goalId, cancelled: 0 };
+  }
+  await db2.sql`
+    update orbit.users
+       set settings = case when ${req.until}::text is null then settings - 'autopilot_paused_until'
+                           else settings || jsonb_build_object('autopilot_paused_until', ${req.until}::text) end
+     where id = ${userId}::uuid`;
+  let cancelled = 0;
+  if (req.until) {
+    const rows = await db2.sql`
+      update orbit.drafts set status = 'draft', error = 'autopilot_paused', send_at = null
+       where user_id = ${userId}::uuid and status in ('approved', 'scheduled') and auto_rung is not null
+         and (send_at is null or send_at > ${now}::timestamptz)
+      returning id`;
+    cancelled = rows.length;
+    for (const r of rows)
+      await db2.sql`
+        insert into orbit.audit_log (user_id, actor, action, target_table, target_id, details)
+        values (${userId}::uuid, 'user', 'draft.hold', 'drafts', ${r.id}, ${{ reason: "autopilot_paused" }}::jsonb)`;
+  }
+  await db2.sql`
+    insert into orbit.audit_log (user_id, actor, action, target_table, target_id, details)
+    values (${userId}::uuid, 'user', 'autopilot.pause', 'users', ${userId}, ${{ until: req.until, cancelled }}::jsonb)`;
+  return { pausedUntil: req.until, goalId: null, cancelled };
+}
+async function setAutopilotMode(db2, userId, req) {
+  const level = AUTOPILOT_MODE_LEVEL[req.mode];
+  if (req.goalId) {
+    const r = await db2.sql`
+      update orbit.goals set autonomy_level = ${level}::smallint
+       where id = ${req.goalId}::uuid and user_id = ${userId}::uuid and deleted_at is null returning id`;
+    if (!r.length) throw new HttpError(404, "not_found", "no such goal");
+  } else
+    await db2.sql`
+      update orbit.users set autonomy_level = ${level}::smallint,
+             settings = settings || jsonb_build_object('autopilot_mode', ${req.mode}::text)
+       where id = ${userId}::uuid`;
+  await db2.sql`
+    insert into orbit.audit_log (user_id, actor, action, target_table, target_id, details)
+    values (${userId}::uuid, 'user', 'settings.autonomy', ${req.goalId ? "goals" : "users"}, ${req.goalId ?? userId},
+            ${{ level, mode: req.mode }}::jsonb)`;
+  return { mode: req.mode, goalId: req.goalId ?? null };
+}
+
+// supabase/functions/orbit-api/routes/body.ts
+var UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+async function body(ctx, optional = false) {
+  return readJson(ctx.req, { optional });
+}
+function uuid(b, key) {
+  const v = b[key];
+  if (typeof v !== "string" || !UUID.test(v)) throw badRequest(`${key} is required`);
+  return v;
+}
+function optUuid(b, key) {
+  const v = b[key];
+  if (v === void 0 || v === null) return void 0;
+  if (typeof v !== "string" || !UUID.test(v)) throw badRequest(`${key} must be an id`);
+  return v;
+}
+function text(b, key, max = 2e3) {
+  const v = b[key];
+  if (typeof v !== "string" || !v.trim()) throw badRequest(`${key} is required`);
+  if (v.length > max) throw badRequest(`${key} is too long`);
+  return v.trim();
+}
+var MAX_TURNS = 6;
+var MAX_TURN_CHARS = 8e3;
+function turns(b) {
+  const v = b.turns;
+  if (!Array.isArray(v) || !v.length) throw badRequest("turns is required");
+  if (v.length > MAX_TURNS) throw badRequest(`at most ${MAX_TURNS} turns`);
+  let chars = 0;
+  const out = v.map((t) => {
+    const r = t;
+    if (!r || r.role !== "user" && r.role !== "assistant" || typeof r.text !== "string")
+      throw badRequest("each turn is {role: user|assistant, text}");
+    chars += r.text.length;
+    return { role: r.role, text: r.text };
+  });
+  if (chars > MAX_TURN_CHARS) throw badRequest(`turns are at most ${MAX_TURN_CHARS} characters in all`);
+  return out;
+}
+
+// supabase/functions/orbit-api/routes/autopilot.ts
+async function mode(ctx) {
+  const b = await body(ctx);
+  if (typeof b.mode !== "string" || !AUTOPILOT_MODES.includes(b.mode))
+    throw badRequest("mode is off, assist or autopilot");
+  return json(
+    200,
+    await setAutopilotMode(ctx.db, ctx.userId, {
+      mode: b.mode,
+      goalId: optUuid(b, "goalId")
+    })
+  );
+}
+async function status(ctx) {
+  if (ctx.req.method === "POST") await ctx.req.body?.cancel();
+  return json(200, await autopilotStatus(ctx.db, ctx.userId, ctx.now()));
+}
+async function hold(ctx) {
+  const b = await body(ctx);
+  return json(200, { item: await holdSend(ctx.db, ctx.userId, uuid(b, "draftId"), ctx.now()) });
+}
+async function pause(ctx) {
+  const b = await body(ctx);
+  let until = null;
+  if (b.until !== null && b.until !== void 0) {
+    const t = new Date(String(b.until));
+    if (typeof b.until !== "string" || Number.isNaN(t.getTime()))
+      throw badRequest("until must be an ISO time or null");
+    until = t.toISOString();
+  }
+  return json(
+    200,
+    await pauseAutopilot(ctx.db, ctx.userId, { until, goalId: optUuid(b, "goalId") }, ctx.now())
+  );
+}
+var autopilotRoutes = {
+  "/autopilot/mode": { method: "POST", auth: true, run: mode },
+  "/autopilot/status": { method: "GET|POST", auth: true, run: status },
+  "/autopilot/hold": { method: "POST", auth: true, run: hold },
+  "/autopilot/pause": { method: "POST", auth: true, run: pause }
+};
+
+// packages/core/src/pipeline/transitions.ts
+var ACTIVE_STAGES = [
+  "identified",
+  "warming",
+  "outreach_sent",
+  "replied",
+  "scheduling",
+  "scheduled",
+  "completed",
+  "followed_up",
+  "nurturing"
+];
+var CLOSED_STAGES = ["declined", "no_response", "archived"];
+var STAGE_ORDER = [...ACTIVE_STAGES, ...CLOSED_STAGES];
+var ALLOWED = {
+  identified: ["warming", "outreach_sent", "replied", "scheduled", "archived", "declined"],
+  warming: ["outreach_sent", "replied", "identified", "archived", "declined"],
+  outreach_sent: ["replied", "scheduling", "scheduled", "declined", "no_response", "archived", "completed"],
+  replied: ["scheduling", "scheduled", "declined", "completed", "archived", "nurturing"],
+  scheduling: ["scheduled", "declined", "completed", "archived", "replied"],
+  scheduled: ["completed", "scheduling", "declined", "archived"],
+  completed: ["followed_up", "nurturing", "archived", "scheduled"],
+  followed_up: ["nurturing", "archived", "scheduled", "scheduling"],
+  nurturing: ["outreach_sent", "scheduling", "scheduled", "declined", "archived"],
+  declined: ["identified", "archived", "outreach_sent"],
+  no_response: ["identified", "outreach_sent", "replied", "archived"],
+  archived: ["identified"]
+};
+function canTransition(from, to, actor = "system") {
+  if (from === to) return false;
+  if (actor === "user") return true;
+  return ALLOWED[from].includes(to);
+}
+function decideTransition(from, trig) {
+  const d = (to, confidence, reason) => canTransition(from, to) ? { to, confidence, reason } : void 0;
+  switch (trig.type) {
+    case "outbound_sent":
+      if (trig.kind === "outreach" && (from === "identified" || from === "warming" || from === "nurturing" || from === "no_response"))
+        return d("outreach_sent", 1, "outbound:outreach");
+      if (trig.kind === "schedule" && ["outreach_sent", "replied"].includes(from))
+        return d("scheduling", 1, "outbound:schedule");
+      if (trig.kind === "thank_you" && from === "completed") return d("followed_up", 1, "outbound:thank_you");
+      return void 0;
+    case "inbound_signal": {
+      const s = trig.signal;
+      if (s === "reply_decline")
+        return [
+          "outreach_sent",
+          "replied",
+          "scheduling",
+          "scheduled",
+          "nurturing",
+          "warming",
+          "identified"
+        ].includes(from) ? {
+          to: "declined",
+          confidence: Math.min(trig.confidence, 0.79),
+          reason: "inbound_signal:reply_decline"
+        } : void 0;
+      if ((s === "scheduling_proposal" || s === "scheduling_confirmation") && ["identified", "warming", "no_response"].includes(from))
+        return d("replied", trig.confidence, `inbound_signal:${s}`);
+      if (s === "scheduling_proposal")
+        return d("scheduling", trig.confidence, "inbound_signal:scheduling_proposal");
+      if (s === "scheduling_confirmation")
+        return d("scheduling", trig.confidence, "inbound_signal:scheduling_confirmation");
+      if (s === "reschedule" && from === "scheduled")
+        return d("scheduling", trig.confidence, "inbound_signal:reschedule");
+      if ([
+        "reply_positive",
+        "reply_neutral",
+        "question",
+        "referral_offer",
+        "intro_offer",
+        "thank_you"
+      ].includes(s) && ["identified", "warming", "outreach_sent", "no_response"].includes(from))
+        return d("replied", trig.confidence, `inbound_signal:${s}`);
+      return void 0;
+    }
+    case "event_scheduled":
+      return [
+        "identified",
+        "warming",
+        "outreach_sent",
+        "replied",
+        "scheduling",
+        "nurturing",
+        "followed_up"
+      ].includes(from) ? d("scheduled", trig.confidence, "calendar:event_scheduled") : void 0;
+    case "event_ended":
+      return from === "scheduled" ? d("completed", trig.confidence, "calendar:event_ended") : void 0;
+    case "event_cancelled":
+      return from === "scheduled" ? d("scheduling", 1, "calendar:event_cancelled") : void 0;
+    case "note_ingested":
+      return ["outreach_sent", "replied", "scheduling", "scheduled"].includes(from) ? d("completed", trig.confidence, "note:ingested") : void 0;
+    case "timer_followed_up_14d":
+      return from === "followed_up" ? d("nurturing", 1, "timer:followed_up_14d") : void 0;
+    case "timer_completed_14d":
+      return from === "completed" ? d("nurturing", 1, "timer:completed_14d") : void 0;
+    case "timer_no_response": {
+      const exhausted = trig.bumps >= trig.maxBumps && (trig.businessDaysSilent !== void 0 ? trig.businessDaysSilent >= NO_RESPONSE_AFTER_BUMPS_BUSINESS_DAYS : trig.daysSilent >= NO_RESPONSE_AFTER_BUMPS_DAYS);
+      const stale = trig.businessDaysSilent !== void 0 ? trig.businessDaysSilent >= NO_RESPONSE_SILENT_BUSINESS_DAYS : trig.daysSilent >= NO_RESPONSE_SILENT_DAYS;
+      return from === "outreach_sent" && (exhausted || stale) ? d("no_response", 1, exhausted ? "timer:no_response" : "timer:no_response_silent") : void 0;
+    }
+    case "warmup_ready":
+      return void 0;
+  }
+}
+var NO_RESPONSE_AFTER_BUMPS_DAYS = 14;
+var NO_RESPONSE_AFTER_BUMPS_BUSINESS_DAYS = 10;
+var NO_RESPONSE_SILENT_DAYS = 21;
+var NO_RESPONSE_SILENT_BUSINESS_DAYS = 15;
+
+// packages/core/src/suggestions/rules.ts
+var DAY3 = 864e5;
+var THANK_YOU_WINDOW_DAYS = 3;
+var BUMP_AFTER_BUSINESS_DAYS = { gmail: [5, 8], linkedin: [10, 12] };
+function bumpDue(chat, person2, inp) {
+  if (chat.stage !== "outreach_sent" || !chat.lastOutboundAt) return void 0;
+  const since = new Date(chat.lastOutboundAt);
+  if (chat.lastInboundAt && new Date(chat.lastInboundAt) >= since) return void 0;
+  const maxBumps = maxBumpsFor(
+    sectorOf({ title: person2.currentTitle, org: person2.currentOrganizationRaw }),
+    inp.settings.maxBumps
+  );
+  if (chat.bumpCount >= maxBumps) return void 0;
+  const steps = BUMP_AFTER_BUSINESS_DAYS[chat.outreachChannel === "linkedin" ? "linkedin" : "gmail"];
+  const threshold = steps[Math.min(chat.bumpCount, steps.length - 1)];
+  const bdays = businessDaysBetween(since, inp.now, inp.timezone);
+  if (bdays < threshold) return void 0;
+  const holds = [
+    chat.bumpNotBefore ? new Date(chat.bumpNotBefore) : void 0,
+    chat.outOfOfficeUntil ? addBusinessDays(/* @__PURE__ */ new Date(`${chat.outOfOfficeUntil}T12:00:00Z`), 2, inp.timezone) : void 0
+  ].filter((d) => !!d && !Number.isNaN(d.getTime()));
+  const notBefore = holds.length ? new Date(Math.max(...holds.map((d) => d.getTime()))) : void 0;
+  if (notBefore && inp.now < notBefore) return void 0;
+  const backFromOoo = !!notBefore && addBusinessDays(since, threshold, inp.timezone).getTime() < notBefore.getTime();
+  return { bdays, threshold, backFromOoo };
+}
+function thankYouDue(chat, now) {
+  if (!chat.completedAt) return false;
+  const completed = new Date(chat.completedAt).getTime();
+  if (now.getTime() - completed >= THANK_YOU_WINDOW_DAYS * DAY3) return false;
+  if (chat.lastOutboundAt && new Date(chat.lastOutboundAt).getTime() > completed) return false;
+  return true;
+}
+var HARD_URGENT = ["schedule_confirm", "thank_you", "prep_brief", "confirm_stage"];
+var QUIET_DAY_KINDS = [
+  ...HARD_URGENT,
+  "schedule_propose",
+  "action_item_reminder",
+  "warm_up_engage"
+];
+
+// packages/core/src/pipeline/cadence.ts
+var DAY4 = 864e5;
+var QUIET_DAYS = 7;
+var WAITING_STAGES = ["outreach_sent", "replied", "scheduling"];
+function wentQuiet(chat, now = /* @__PURE__ */ new Date()) {
+  if (!WAITING_STAGES.includes(chat.stage) || !chat.lastOutboundAt) return false;
+  if (chat.lastInboundAt && chat.lastInboundAt >= chat.lastOutboundAt) return false;
+  if (chat.stage !== "outreach_sent" && chat.stageEnteredAt > chat.lastOutboundAt) return false;
+  return now.getTime() - new Date(chat.lastOutboundAt).getTime() >= QUIET_DAYS * DAY4;
+}
+var SECOND_BUMP_GOALS = /* @__PURE__ */ new Set(["sales", "fundraising", "hiring"]);
+var SECOND_BUMP_AFTER_BUSINESS_DAYS = 7;
+var MAX_UNANSWERED = 3;
+var NURTURE_DAYS = { close: 60, strong: 90, goal: 30 };
+var NURTURE_PER_WEEK = 3;
+var COLD_SCORE = 40;
+function unansweredCount(personId, messages) {
+  const mine = messages.filter((m) => m.personId === personId).sort((a, b) => a.at.localeCompare(b.at));
+  let n = 0;
+  for (const m of mine) n = m.direction === "in" ? 0 : n + 1;
+  return n;
+}
+function cancelIfReplied(draft2, messages) {
+  const newer = messages.filter((m) => m.personId === draft2.personId && m.direction === "in" && m.at > draft2.createdAt).sort((a, b) => b.at.localeCompare(a.at))[0];
+  return newer ? { cancel: true, reason: "replied", at: newer.at } : { cancel: false };
+}
+function isSendDay(d, tz) {
+  return isBusinessDayKey(todayKey(d, tz));
+}
+function nextSendDay(d, tz) {
+  if (isSendDay(d, tz)) return d;
+  const next = addBusinessDays(d, 1, tz);
+  const key = todayKey(next, tz);
+  const offset = zoneOffsetMs(next, tz);
+  return new Date(Date.parse(`${key}T09:00:00Z`) - offset);
+}
+function zoneOffsetMs(d, tz) {
+  if (!tz) return 0;
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: tz,
+    hourCycle: "h23",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit"
+  }).formatToParts(d);
+  const get2 = (t) => Number(parts.find((p) => p.type === t)?.value ?? 0);
+  const asUtc = Date.UTC(
+    get2("year"),
+    get2("month") - 1,
+    get2("day"),
+    get2("hour"),
+    get2("minute"),
+    get2("second")
+  );
+  return asUtc - Math.floor(d.getTime() / 1e3) * 1e3;
+}
+var ACTIVE_GOAL = (g) => g.status === "active" && !g.deletedAt;
+function goalOf(chat, goals) {
+  const active = goals.filter(ACTIVE_GOAL);
+  return (chat.goalId ? active.find((g) => g.id === chat.goalId) : void 0) ?? active.find((g) => g.targets.people.includes(chat.personId));
+}
+function sentCount(chat) {
+  return (chat.firstOutreachAt ? 1 : 0) + chat.bumpCount;
+}
+function cadenceActions(inp) {
+  const { now, settings } = inp;
+  const tz = settings.timezone;
+  if (settings.quietUntil && now.getTime() < new Date(settings.quietUntil).getTime()) return [];
+  const out = [];
+  const due2 = (personId) => {
+    const ptz = (personId ? inp.people.get(personId)?.timeZone : void 0) ?? tz;
+    return nextSendDay(now, ptz).toISOString();
+  };
+  const blocked = (personId) => {
+    const p = inp.people.get(personId);
+    return !!p?.person.doNotContact || !!p?.person.hiddenAt;
+  };
+  const room = (personId) => unansweredCount(personId, inp.messages) < MAX_UNANSWERED;
+  for (const chat of inp.chats) {
+    if (chat.archivedAt) continue;
+    const pc = inp.people.get(chat.personId);
+    const person2 = pc?.person ?? { id: chat.personId, firstName: "them" };
+    const goal = goalOf(chat, inp.goals);
+    const base = { chatId: chat.id, personId: chat.personId, ...goal ? { goalId: goal.id } : {} };
+    if (!blocked(chat.personId) && room(chat.personId) && sentCount(chat) < MAX_UNANSWERED) {
+      const v1 = bumpDue(chat, person2, {
+        now,
+        settings: { ...settings, quietDays: [] },
+        timezone: tz
+      });
+      if (v1) {
+        out.push({
+          kind: "bump",
+          ...base,
+          bumpNumber: chat.bumpCount + 1,
+          draftKind: "bump",
+          reason: `No reply in ${v1.bdays} business days${v1.backFromOoo ? ", and they are back from time off" : ""}`,
+          dueAt: due2(chat.personId)
+        });
+      } else if (goal && SECOND_BUMP_GOALS.has(goal.kind) && chat.stage === "outreach_sent" && chat.bumpCount === 1 && (pc?.score ?? 0) < COLD_SCORE && chat.lastOutboundAt && !(chat.lastInboundAt && chat.lastInboundAt >= chat.lastOutboundAt) && maxBumpsFor(
+        sectorOf({ title: person2.currentTitle, org: person2.currentOrganizationRaw }),
+        settings.maxBumps
+      ) < 2) {
+        const bdays = businessDaysBetween(new Date(chat.lastOutboundAt), now, tz);
+        if (bdays >= SECOND_BUMP_AFTER_BUSINESS_DAYS)
+          out.push({
+            kind: "bump",
+            ...base,
+            bumpNumber: 2,
+            draftKind: "bump",
+            reason: `Second and last bump for ${goal.kind}: ${bdays} business days since the first`,
+            dueAt: due2(chat.personId)
+          });
+      }
+    }
+    if (wentQuiet(chat, now))
+      out.push({
+        kind: "went_quiet",
+        ...base,
+        reason: `No answer for ${Math.floor((now.getTime() - new Date(chat.lastOutboundAt).getTime()) / DAY4)} days`,
+        dueAt: now.toISOString()
+      });
+    if ((chat.stage === "completed" || chat.stage === "scheduled") && thankYouDue(chat, now) && !blocked(chat.personId))
+      out.push({
+        kind: "thank_you",
+        ...base,
+        draftKind: "thank_you",
+        reason: "You met in the last three days and have not thanked them yet",
+        dueAt: due2(chat.personId)
+      });
+    const timer = stageTimer(chat, person2, settings, now);
+    if (timer)
+      out.push({
+        kind: "stage_timer",
+        ...base,
+        toStage: timer.to,
+        reason: timer.reason,
+        dueAt: now.toISOString()
+      });
+  }
+  const weekAgo = now.getTime() - 7 * DAY4;
+  const used = (inp.recentNurtureAt ?? []).filter((t) => new Date(t).getTime() > weekAgo).length;
+  const left = Math.max(0, NURTURE_PER_WEEK - used);
+  if (left > 0) {
+    const goalPeople = /* @__PURE__ */ new Map();
+    for (const g of inp.goals.filter(ACTIVE_GOAL)) for (const id of g.targets.people) goalPeople.set(id, g);
+    for (const c of inp.chats) {
+      const g = goalOf(c, inp.goals);
+      if (g && !goalPeople.has(c.personId)) goalPeople.set(c.personId, g);
+    }
+    const busy = new Set(
+      inp.chats.filter((c) => !c.archivedAt && WAITING_STAGES.includes(c.stage)).map((c) => c.personId)
+    );
+    const pending = new Set(
+      inp.drafts.filter((d) => ["draft", "approved", "queued", "scheduled"].includes(d.status)).map((d) => d.personId)
+    );
+    const candidates = [];
+    for (const [id, p] of inp.people) {
+      if (blocked(id) || busy.has(id) || pending.has(id) || !p.nurtureReason || !room(id)) continue;
+      const goal = goalPeople.get(id);
+      const days = goal ? NURTURE_DAYS.goal : p.score >= 80 ? NURTURE_DAYS.close : p.score >= 60 ? NURTURE_DAYS.strong : 0;
+      if (!days) continue;
+      const last = p.lastContactAt ? new Date(p.lastContactAt).getTime() : Number.NEGATIVE_INFINITY;
+      if (now.getTime() - last < days * DAY4) continue;
+      candidates.push({
+        kind: "nurture",
+        personId: id,
+        ...goal ? { goalId: goal.id } : {},
+        draftKind: p.score >= 30 && now.getTime() - last >= 180 * DAY4 ? "reengage" : "nurture",
+        reason: p.nurtureReason,
+        dueAt: due2(id),
+        score: p.score + (goal ? 100 : 0)
+      });
+    }
+    candidates.sort((a, b) => b.score - a.score || a.personId.localeCompare(b.personId));
+    for (const { score: _s, ...c } of candidates.slice(0, left)) out.push(c);
+  }
+  for (const d of inp.drafts) {
+    if (!["approved", "scheduled", "queued"].includes(d.status) || !d.sendAt) continue;
+    if (new Date(d.sendAt).getTime() > now.getTime() || blocked(d.personId)) continue;
+    if (cancelIfReplied(d, inp.messages).cancel || !room(d.personId)) continue;
+    const ptz = inp.people.get(d.personId)?.timeZone ?? tz;
+    if (!isSendDay(now, ptz)) continue;
+    out.push({
+      kind: "send_due",
+      draftId: d.id,
+      personId: d.personId,
+      ...d.chatId ? { chatId: d.chatId } : {},
+      reason: `Scheduled for ${d.sendAt}`,
+      dueAt: d.sendAt
+    });
+  }
+  return out;
+}
+function stageTimer(chat, person2, settings, now) {
+  if (!ACTIVE_STAGES.includes(chat.stage)) return void 0;
+  const entered = new Date(chat.stageEnteredAt).getTime();
+  if (chat.stage === "followed_up" && now.getTime() - entered >= 14 * DAY4)
+    return decideTransition("followed_up", { type: "timer_followed_up_14d" });
+  if (chat.stage === "completed" && now.getTime() - entered >= 14 * DAY4)
+    return decideTransition("completed", { type: "timer_completed_14d" });
+  if (chat.stage !== "outreach_sent" || !chat.lastOutboundAt) return void 0;
+  if (chat.lastInboundAt && chat.lastInboundAt > chat.lastOutboundAt) return void 0;
+  const fromIso = chat.bumpNotBefore && chat.bumpNotBefore > chat.lastOutboundAt ? chat.bumpNotBefore : chat.lastOutboundAt;
+  const from = new Date(fromIso);
+  if (from.getTime() > now.getTime()) return void 0;
+  const maxBumps = maxBumpsFor(
+    sectorOf({ title: person2.currentTitle, org: person2.currentOrganizationRaw }),
+    settings.maxBumps
+  );
+  return decideTransition("outreach_sent", {
+    type: "timer_no_response",
+    bumps: chat.bumpCount,
+    maxBumps,
+    daysSilent: (now.getTime() - from.getTime()) / DAY4,
+    businessDaysSilent: businessDaysBetween(from, now, settings.timezone)
+  });
+}
+
+// packages/core/src/server/mappers.ts
+var u = (v) => v === null ? void 0 : v;
+function compact(o) {
+  const out = {};
+  for (const [k, v] of Object.entries(o)) if (v !== void 0) out[k] = v;
+  return out;
+}
+function goalFromRow(r) {
+  return compact({
+    id: r.id,
+    userId: r.user_id,
+    kind: r.kind,
+    title: r.title,
+    description: u(r.description),
+    targets: r.targets,
+    criteria: r.criteria,
+    successMetric: u(r.success_metric),
+    priority: r.priority,
+    status: r.status,
+    autonomyLevel: u(r.autonomy_level),
+    dueAt: u(r.due_at),
+    source: r.source,
+    evidence: u(r.evidence),
+    createdAt: r.created_at,
+    updatedAt: r.updated_at,
+    deletedAt: u(r.deleted_at)
+  });
+}
+function chatFromRow(r) {
+  const data = r.data;
+  return compact({
+    goalTags: [],
+    source: "manual",
+    bumpCount: 0,
+    priority: 2,
+    ...data,
+    id: r.id,
+    userId: r.user_id,
+    personId: r.person_id,
+    goalId: u(r.goal_id),
+    organizationId: u(r.org_id),
+    stage: r.stage,
+    stageEnteredAt: r.stage_entered_at,
+    archivedAt: u(r.archived_at),
+    createdAt: r.created_at,
+    updatedAt: r.updated_at
+  });
+}
+function dossierFromRow(r) {
+  return compact({
+    id: r.id,
+    userId: r.user_id,
+    personId: r.person_id,
+    goalId: u(r.goal_id),
+    status: r.status,
+    content: u(r.content),
+    sources: r.sources,
+    candidates: u(r.candidates),
+    costUsd: Number(r.cost_usd),
+    model: u(r.model),
+    error: u(r.error),
+    createdAt: r.created_at,
+    updatedAt: r.updated_at,
+    expiresAt: r.expires_at
+  });
 }
 
 // supabase/functions/_shared/cadence/cadence.ts
@@ -6144,6 +7028,9 @@ async function loadCadence(db2, userId, now) {
     });
   }
   const nurtured = draftRows.filter((d) => d.kind === "nurture" || d.kind === "reengage").map((d) => iso(d.created_at));
+  const awaiting = await db2.sql`
+    select distinct person_id from orbit.suggestions
+     where user_id = ${userId}::uuid and kind = 'needs_you' and status in ('pending', 'snoozed') and person_id is not null`;
   const maxBumps = num(settings.max_bumps, 2);
   const quiet = typeof settings.quiet_until === "string" ? settings.quiet_until : void 0;
   return {
@@ -6160,6 +7047,8 @@ async function loadCadence(db2, userId, now) {
     timezone: tz,
     chatsById: new Map(chats.map((c) => [c.id, c])),
     goalsById: new Map(goals.map((g) => [g.id, g])),
+    settings,
+    awaitingStudent: new Set(awaiting.map((r) => r.person_id)),
     autonomyLevel: num(u2?.autonomy_level, 0),
     autoKinds: Array.isArray(settings.auto_kinds) ? settings.auto_kinds.filter(
       (k) => typeof k === "string" && AUTO_KINDS.includes(k)
@@ -6187,46 +7076,6 @@ async function due(ctx) {
 var cadenceRoutes = {
   "/cadence/due": { method: "POST", auth: true, run: due }
 };
-
-// supabase/functions/orbit-api/routes/body.ts
-var UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-async function body(ctx, optional = false) {
-  return readJson(ctx.req, { optional });
-}
-function uuid(b, key) {
-  const v = b[key];
-  if (typeof v !== "string" || !UUID.test(v)) throw badRequest(`${key} is required`);
-  return v;
-}
-function optUuid(b, key) {
-  const v = b[key];
-  if (v === void 0 || v === null) return void 0;
-  if (typeof v !== "string" || !UUID.test(v)) throw badRequest(`${key} must be an id`);
-  return v;
-}
-function text(b, key, max = 2e3) {
-  const v = b[key];
-  if (typeof v !== "string" || !v.trim()) throw badRequest(`${key} is required`);
-  if (v.length > max) throw badRequest(`${key} is too long`);
-  return v.trim();
-}
-var MAX_TURNS = 6;
-var MAX_TURN_CHARS = 8e3;
-function turns(b) {
-  const v = b.turns;
-  if (!Array.isArray(v) || !v.length) throw badRequest("turns is required");
-  if (v.length > MAX_TURNS) throw badRequest(`at most ${MAX_TURNS} turns`);
-  let chars = 0;
-  const out = v.map((t) => {
-    const r = t;
-    if (!r || r.role !== "user" && r.role !== "assistant" || typeof r.text !== "string")
-      throw badRequest("each turn is {role: user|assistant, text}");
-    chars += r.text.length;
-    return { role: r.role, text: r.text };
-  });
-  if (chars > MAX_TURN_CHARS) throw badRequest(`turns are at most ${MAX_TURN_CHARS} characters in all`);
-  return out;
-}
 
 // supabase/functions/orbit-api/routes/calendar.ts
 async function slots(ctx) {
@@ -6273,8 +7122,14 @@ function toServerDraft(r) {
     validator: r.validator ?? null,
     generatedBy: r.generated_by === "llm" ? "llm" : "template",
     hooks: Array.isArray(r.hooks) ? r.hooks : [],
-    needsInput: askUserMarkers(`${r.subject ?? ""}
+    // the column says what is missing; a marker still in the body (an older draft) says the same
+    needsInput: [
+      .../* @__PURE__ */ new Set([
+        ...askUserMarkers(`${r.subject ?? ""}
 ${r.body}`),
+        ...Array.isArray(r.needs) && r.needs.length && r.ask?.question ? [r.ask.question] : []
+      ])
+    ],
     createdAt: iso(r.created_at),
     updatedAt: iso(r.updated_at)
   };
@@ -6604,9 +7459,9 @@ async function sendDraft(s, draftId) {
     returning *`;
   if (!d) return { status: "skipped", reason: "not_claimed" };
   const userId = d.user_id;
-  const settle = async (status, fields) => {
+  const settle = async (status2, fields) => {
     await db2.sql`
-      update orbit.drafts set status = ${status},
+      update orbit.drafts set status = ${status2},
              error = ${fields.error ?? null},
              cancel_reason = ${fields.cancel_reason ?? null},
              send_at = coalesce(${fields.send_at ?? null}::timestamptz, send_at)
@@ -6680,6 +7535,11 @@ ${d.body}`)) {
       "autopilot_paused",
       new Date(Math.min(paused.getTime(), now.getTime() + PAUSE_RECHECK_SEC * 1e3))
     );
+  if (agentApproved && !userApproved && goalPaused(u2.settings, d.goal_id, now)) {
+    await settle("draft", { error: "goal_paused" });
+    await audit(db2, userId, "system", "draft.hold", d.id, { reason: "goal_paused", goalId: d.goal_id });
+    return { status: "held", reason: "goal_paused" };
+  }
   if (d.channel === "linkedin" && agentApproved && !userApproved) {
     await settle("draft", { error: "linkedin_never_auto" });
     await audit(db2, userId, "system", "draft.hold", d.id, { reason: "linkedin_never_auto" });
@@ -6786,6 +7646,14 @@ ${d.body}`)) {
     }
     await settle("failed", { error: out.error });
     await audit(db2, userId, "system", "draft.failed", d.id, { error: out.error });
+    if (d.channel === "gmail")
+      await tripBreaker(db2, userId, {
+        goalId: d.goal_id,
+        reason: "send_error",
+        personId: d.person_id,
+        personName: person2.display_name,
+        now
+      }).catch(() => void 0);
     return { status: "failed", error: out.error };
   }
   const threadId = out.chatId ?? out.threadId ?? d.thread_external_id;
@@ -6825,7 +7693,7 @@ async function afterSend(db2, userId, d, now) {
 async function capReached(db2, userId, d, now, u2, auto) {
   const zone = validZone(u2.timezone) ?? "America/New_York";
   const key = new Intl.DateTimeFormat("en-CA", { timeZone: zone }).format(now);
-  const dayStart = zonedTime2(key, 0, 0, zone);
+  const dayStart = zonedTime(key, 0, 0, zone);
   const weekStart = new Date(dayStart.getTime() - 6 * 864e5);
   if (auto) {
     if (d.channel === "linkedin") return "linkedin_never_auto";
@@ -7053,8 +7921,8 @@ async function goalsUpsert(ctx) {
   if (typeof g.title !== "string" || !g.title.trim() || g.title.length > 200)
     throw badRequest("goal.title is required");
   const id = optUuid(g, "id");
-  const status = g.status ?? "active";
-  if (!["active", "paused", "done"].includes(status)) throw badRequest("goal.status is not valid");
+  const status2 = g.status ?? "active";
+  if (!["active", "paused", "done"].includes(status2)) throw badRequest("goal.status is not valid");
   const priority = g.priority ?? 2;
   if (![1, 2, 3].includes(priority)) throw badRequest("goal.priority is 1, 2 or 3");
   const autonomy2 = g.autonomyLevel ?? null;
@@ -7072,7 +7940,7 @@ async function goalsUpsert(ctx) {
   const userId = ctx.userId;
   const row = await ctx.db.begin(async (tx) => {
     await tx.sql`select pg_advisory_xact_lock(hashtextextended(${`orbit.goals:${userId}`}, 0))`;
-    if (status === "active") {
+    if (status2 === "active") {
       const [n] = await tx.sql`
         select count(*)::int as n from orbit.goals
          where user_id = ${userId}::uuid and status = 'active' and deleted_at is null
@@ -7088,7 +7956,7 @@ async function goalsUpsert(ctx) {
       const [r2] = await tx.sql`
         update orbit.goals set kind = ${g.kind}, title = ${g.title.trim()}, description = ${g.description ?? null},
                targets = ${targets}::jsonb, criteria = ${criteria}::jsonb, success_metric = ${g.successMetric ?? null},
-               priority = ${priority}::smallint, status = ${status}, autonomy_level = ${autonomy2}::smallint,
+               priority = ${priority}::smallint, status = ${status2}, autonomy_level = ${autonomy2}::smallint,
                due_at = ${g.dueAt ?? null}::date, evidence = coalesce(${g.evidence ?? null}, evidence)
          where id = ${id}::uuid and user_id = ${userId}::uuid and deleted_at is null
         returning *`;
@@ -7100,7 +7968,7 @@ async function goalsUpsert(ctx) {
       insert into orbit.goals (user_id, kind, title, description, targets, criteria, success_metric, priority, status,
                                autonomy_level, due_at, source, evidence)
       values (${userId}::uuid, ${g.kind}, ${g.title.trim()}, ${g.description ?? null}, ${targets}::jsonb,
-              ${criteria}::jsonb, ${g.successMetric ?? null}, ${priority}::smallint, ${status},
+              ${criteria}::jsonb, ${g.successMetric ?? null}, ${priority}::smallint, ${status2},
               ${autonomy2}::smallint, ${g.dueAt ?? null}::date, ${source}, ${g.evidence ?? null})
       returning *`;
     return r;
@@ -7108,7 +7976,7 @@ async function goalsUpsert(ctx) {
   await ctx.db.sql`
     insert into orbit.audit_log (user_id, actor, action, target_table, target_id, details)
     values (${userId}::uuid, 'user', ${id ? "goal.update" : "goal.create"}, 'goals', ${row.id},
-            ${{ kind: g.kind, status }}::jsonb)`;
+            ${{ kind: g.kind, status: status2 }}::jsonb)`;
   return json(200, { goal: goalFrom(row) });
 }
 async function goalsArchive(ctx) {
@@ -7269,7 +8137,15 @@ var PULL_TABLES = [
   { table: "facts", key: "id", cursor: "updated_at", deletedWhen: "t.deleted_at is not null" },
   { table: "dossiers", key: "id", cursor: "updated_at" },
   { table: "recommendations", key: "id", cursor: "updated_at" },
-  { table: "intro_requests", key: "id", cursor: "updated_at" }
+  { table: "intro_requests", key: "id", cursor: "updated_at" },
+  // plan 29 §B2.3: the cards and notices the reply funnel raises, in the browser's own shapes
+  {
+    table: "suggestions",
+    key: "id",
+    cursor: "updated_at",
+    map: (r) => ({ ...r, outboundMessageId: r.draftId ?? void 0, carriedOver: r.carriedOver ?? 0 })
+  },
+  { table: "notifications", key: "id", cursor: "updated_at" }
 ];
 var PULL_BY_NAME = new Map(PULL_TABLES.map((t) => [t.table, t]));
 var camel = (s) => s.replace(/_([a-z0-9])/g, (_, c) => c.toUpperCase());
@@ -7395,7 +8271,7 @@ var unipileMessageSchema = z.looseObject({
   hidden: z.union([z.number(), z.boolean()]).nullish(),
   deleted: z.union([z.number(), z.boolean()]).nullish()
 });
-var page = (item) => z.looseObject({ items: z.array(item).default([]), cursor: z.string().nullish() });
+var page = (item2) => z.looseObject({ items: z.array(item2).default([]), cursor: z.string().nullish() });
 var unipileSearchItemSchema2 = z.looseObject({
   id: z.string().nullish(),
   name: z.string().nullish(),
@@ -7512,15 +8388,15 @@ async function googleAccount(ctx) {
 }
 async function googleSync(ctx) {
   const body2 = await readJson(ctx.req, { optional: true });
-  const mode = body2.mode ?? "incremental";
-  if (mode !== "backfill" && mode !== "incremental") throw badRequest("mode must be backfill or incremental");
+  const mode2 = body2.mode ?? "incremental";
+  if (mode2 !== "backfill" && mode2 !== "incremental") throw badRequest("mode must be backfill or incremental");
   const userId = ctx.userId;
   const acct = await googleAccount(ctx);
   if (!acct?.scopes.some((s) => s.endsWith("gmail.readonly")))
     return queued({ queued: false, reason: "not_connected" });
   if (acct.status !== "active") return queued({ queued: false, reason: acct.status });
   const q = sqlQueue(ctx.db);
-  if (mode === "backfill") {
+  if (mode2 === "backfill") {
     const phase = acct.sync_state?.gmail?.backfill;
     if (phase?.phase && phase.phase !== "complete")
       return queued({ queued: false, reason: "already_running" });
@@ -7603,9 +8479,9 @@ async function linkedinStatus(ctx) {
       join orbit.people p on p.id = pi.person_id
      where pi.user_id = ${userId}::uuid and pi.kind = 'linkedin_member' and pi.source = 'linkedin_relation'
        and p.merged_into is null and p.deleted_at is null`;
-  const status = !a ? "not_connected" : a.status === "active" || a.status === "connecting" || a.status === "needs_reauth" ? a.status : a.status === "revoked" ? "not_connected" : "error";
+  const status2 = !a ? "not_connected" : a.status === "active" || a.status === "connecting" || a.status === "needs_reauth" ? a.status : a.status === "revoked" ? "not_connected" : "error";
   const out = {
-    status,
+    status: status2,
     accountId: a?.external_account_id ?? null,
     lastSyncedAt: a?.last_synced_at ? new Date(a.last_synced_at).toISOString() : null,
     relations: n?.n ?? 0
@@ -10283,51 +11159,6 @@ var pathRoutes = {
   "/pairs/unclose": { method: "POST", auth: true, run: unclose }
 };
 
-// supabase/functions/_shared/replies/replies.ts
-var REPLY_WINDOW_DAYS = 30;
-async function listReplies(db2, userId, now) {
-  const rows = await db2.sql`
-    select m.id, t.external_id as thread_external_id, m.from_person_id, p.display_name, m.from_addr, m.provider,
-           m.reply_class, m.reply_confidence, m.sent_at, m.snippet, m.body_text,
-           (select d.id from orbit.drafts d
-             where d.user_id = m.user_id and d.ask->>'replyToMessageId' = m.id::text
-               and d.status not in ('discarded', 'cancelled')
-             order by d.created_at desc limit 1) as draft_id
-      from orbit.messages m
-      join orbit.threads t on t.id = m.thread_id
-      left join orbit.people p on p.id = m.from_person_id
-     where m.user_id = ${userId}::uuid and m.direction = 'in' and m.reply_class is not null
-       and m.sent_at >= ${new Date(now.getTime() - REPLY_WINDOW_DAYS * 864e5)}::timestamptz
-     order by m.sent_at desc
-     limit 200`;
-  return rows.map((r) => ({
-    messageId: r.id,
-    threadId: r.thread_external_id,
-    personId: r.from_person_id,
-    personName: r.display_name ?? r.from_addr?.split("@")[0] ?? "Someone",
-    channel: r.provider,
-    replyClass: r.reply_class,
-    confidence: num(r.reply_confidence),
-    receivedAt: iso(r.sent_at),
-    snippet: (r.snippet ?? r.body_text ?? "").replace(/\s+/g, " ").trim().slice(0, 200),
-    draftId: r.draft_id
-  }));
-}
-async function draftReply(s, userId, messageId, actor = "user") {
-  const m = await loadReplyMessage(s.db, userId, messageId);
-  if (m.reply_class === "unsubscribe")
-    throw new HttpError(409, "unsubscribe", "they asked not to be contacted; no reply is drafted");
-  if (!m.from_person_id) throw new HttpError(409, "unknown_sender", "Orbit does not know who sent this yet");
-  return composeDraft(s, {
-    userId,
-    personId: m.from_person_id,
-    kind: "reply",
-    channel: m.provider,
-    replyToMessageId: m.id,
-    actor
-  });
-}
-
 // supabase/functions/orbit-api/routes/replies.ts
 async function list3(ctx) {
   return json(200, { replies: await listReplies(ctx.db, ctx.userId, ctx.now()) });
@@ -10337,9 +11168,19 @@ async function draft(ctx) {
   const r = await draftReply(ctx.services(), ctx.userId, messageId);
   return json(200, { draft: toServerDraft(r.draft) });
 }
+async function answer(ctx) {
+  const b = await body(ctx);
+  if (typeof b.answer !== "string") throw badRequest("answer is required");
+  const draftId = optUuid(b, "draftId");
+  const messageId = optUuid(b, "messageId");
+  if (!draftId && !messageId) throw badRequest("draftId or messageId is required");
+  const r = await answerReply(ctx.services(), ctx.userId, { draftId, messageId, answer: b.answer });
+  return json(200, { draft: toServerDraft(r.draft) });
+}
 var replyRoutes = {
   "/replies/list": { method: "POST", auth: true, run: list3 },
-  "/replies/draft": { method: "POST", auth: true, run: draft }
+  "/replies/draft": { method: "POST", auth: true, run: draft },
+  "/replies/answer": { method: "POST", auth: true, run: answer }
 };
 
 // supabase/functions/_shared/research/identity.ts
@@ -10491,12 +11332,12 @@ async function requestDossier(s, userId, req) {
   const now = s.now();
   const row = await dossierRow(s.db, userId, personId);
   if (row && !refresh2) {
-    const status = row.status;
+    const status2 = row.status;
     const fresh = new Date(row.expires_at).getTime() > now.getTime();
-    if ((status === "ready" || status === "partial") && row.content && fresh)
-      return { status, dossier: toDossier(row) };
-    if (status === "needs_disambiguation") return { status, dossier: toDossier(row) };
-    if (status === "pending" && now.getTime() - new Date(row.updated_at).getTime() < 10 * 6e4)
+    if ((status2 === "ready" || status2 === "partial") && row.content && fresh)
+      return { status: status2, dossier: toDossier(row) };
+    if (status2 === "needs_disambiguation") return { status: status2, dossier: toDossier(row) };
+    if (status2 === "pending" && now.getTime() - new Date(row.updated_at).getTime() < 10 * 6e4)
       return { status: "queued", dossier: toDossier(row) };
   }
   await s.db.sql`
@@ -10660,7 +11501,7 @@ async function autonomy(ctx) {
             ${{ level }}::jsonb)`;
   return json(200, { ok: true, level, goalId: goalId ?? null });
 }
-async function pause(ctx) {
+async function pause2(ctx) {
   const b = await body(ctx);
   let until = null;
   if (b.until !== null && b.until !== void 0) {
@@ -10779,11 +11620,11 @@ async function profile(ctx) {
       throw badRequest(`autoKinds must be a list from ${AUTO_KINDS.join(", ")}`);
     autoKinds = [...new Set(b.autoKinds)];
   }
-  let mode;
+  let mode2;
   if (b.autopilotMode !== void 0) {
     if (typeof b.autopilotMode !== "string" || !AUTOPILOT_MODES.includes(b.autopilotMode))
       throw badRequest("autopilotMode is off, assist or autopilot");
-    mode = b.autopilotMode;
+    mode2 = b.autopilotMode;
   }
   let pausedUntil;
   if (b.autopilotPausedUntil !== void 0) {
@@ -10811,11 +11652,11 @@ async function profile(ctx) {
   if (about !== void 0) given.about = about;
   if (tone !== void 0) given.read_reply_tone = tone ? null : false;
   if (autoKinds !== void 0) given.auto_kinds = autoKinds;
-  if (mode !== void 0) given.autopilot_mode = mode;
+  if (mode2 !== void 0) given.autopilot_mode = mode2;
   if (pausedUntil !== void 0) given.autopilot_paused_until = pausedUntil;
   if (capGmail !== void 0) given.daily_send_cap_gmail = capGmail;
   if (capLinkedin !== void 0) given.daily_send_cap_linkedin = capLinkedin;
-  const level = mode === void 0 ? null : AUTOPILOT_MODE_LEVEL[mode];
+  const level = mode2 === void 0 ? null : AUTOPILOT_MODE_LEVEL[mode2];
   const keep = Object.fromEntries(Object.entries(given).filter(([, v]) => v !== null));
   const [after] = await ctx.db.sql`
     update orbit.users
@@ -10873,7 +11714,7 @@ async function profile(ctx) {
 }
 var settingsRoutes = {
   "/settings/autonomy": { method: "POST", auth: true, run: autonomy },
-  "/settings/pause": { method: "POST", auth: true, run: pause },
+  "/settings/pause": { method: "POST", auth: true, run: pause2 },
   "/settings/profile": { method: "POST", auth: true, run: profile }
 };
 
@@ -10950,7 +11791,7 @@ async function gather(calls, relax) {
 function plan(ctx) {
   const g = ctx.input.goal;
   const roles = g.roles ?? [];
-  const words = (...xs) => xs.filter((x) => x?.trim()).join(" ");
+  const words2 = (...xs) => xs.filter((x) => x?.trim()).join(" ");
   const exaPeople = (q, extra = {}) => (r) => exaCall(ctx, { query: q, category: "people", ...extra }, r, "person");
   switch (g.kind) {
     case "recruiting":
@@ -10965,15 +11806,15 @@ function plan(ctx) {
         (r) => apolloCall(ctx, r, {
           person_titles: roles.length ? roles : void 0,
           q_organization_domains_list: g.domains?.length ? g.domains : void 0,
-          q_keywords: g.domains?.length ? g.keywords?.join(" ") : words(...g.orgs ?? [], ...g.keywords ?? [])
+          q_keywords: g.domains?.length ? g.keywords?.join(" ") : words2(...g.orgs ?? [], ...g.keywords ?? [])
         })
       ];
     case "fundraising":
       return [
         exaPeople(
-          words(
+          words2(
             roles[0] ?? "partner",
-            `at a ${words(g.stage) || "venture"} fund investing in`,
+            `at a ${words2(g.stage) || "venture"} fund investing in`,
             g.sector ?? g.keywords?.join(" ")
           ),
           {}
@@ -10981,7 +11822,7 @@ function plan(ctx) {
         (r) => exaCall(
           ctx,
           {
-            query: words(g.stage, "venture fund investing in", g.sector ?? g.keywords?.join(" ")),
+            query: words2(g.stage, "venture fund investing in", g.sector ?? g.keywords?.join(" ")),
             category: "company"
           },
           r,
@@ -10989,7 +11830,7 @@ function plan(ctx) {
         ),
         (r) => apolloCall(ctx, r, {
           person_titles: ["Partner", "Principal", "General Partner", "Investor"],
-          q_keywords: words(g.sector, g.stage, ...g.keywords ?? []) || void 0
+          q_keywords: words2(g.sector, g.stage, ...g.keywords ?? []) || void 0
         })
       ];
     case "sales":
@@ -10997,25 +11838,25 @@ function plan(ctx) {
         (r) => apolloCall(ctx, r, {
           person_titles: roles.length ? roles : void 0,
           organization_num_employees_ranges: g.employeeRanges,
-          q_keywords: words(g.sector, ...g.keywords ?? []) || void 0,
+          q_keywords: words2(g.sector, ...g.keywords ?? []) || void 0,
           q_organization_domains_list: g.domains?.length ? g.domains : void 0
         })
       ];
     case "hiring": {
       const calls = [
         (r) => linkedInCall(ctx, r, {
-          keywords: words(orJoin(roles), ...g.skills ?? []),
+          keywords: words2(orJoin(roles), ...g.skills ?? []),
           pastCompanies: g.pastCompanies,
           school: ctx.input.user.school,
           distance: [2, 3]
         }),
-        exaPeople(words(roles[0], ...g.skills ?? []))
+        exaPeople(words2(roles[0], ...g.skills ?? []))
       ];
       if (roles.some((x) => /engineer|developer|programmer|software|ml|data scientist/i.test(x)))
         calls.push(
           (r) => exaCall(
             ctx,
-            { query: words(roles[0], ...g.skills ?? []), includeDomains: ["github.com"] },
+            { query: words2(roles[0], ...g.skills ?? []), includeDomains: ["github.com"] },
             r,
             "person"
           )
@@ -11024,22 +11865,22 @@ function plan(ctx) {
     }
     case "cofounder":
       return [
-        exaPeople(words(...g.skills ?? [], g.topic, "founder")),
-        (r) => linkedInCall(ctx, r, { keywords: words(...g.skills ?? [], g.topic), distance: [2] })
+        exaPeople(words2(...g.skills ?? [], g.topic, "founder")),
+        (r) => linkedInCall(ctx, r, { keywords: words2(...g.skills ?? [], g.topic), distance: [2] })
       ];
     case "collaboration":
       return [
         (r) => scholarCall(ctx, r),
         (r) => exaCall(
           ctx,
-          { query: words(g.topic, ...g.keywords ?? []), category: "publication" },
+          { query: words2(g.topic, ...g.keywords ?? []), category: "publication" },
           r,
           "person"
         )
       ];
     case "community":
       return [
-        (r) => linkedInCall(ctx, r, { keywords: words(g.topic, ...g.keywords ?? []), distance: [1, 2] })
+        (r) => linkedInCall(ctx, r, { keywords: words2(g.topic, ...g.keywords ?? []), distance: [1, 2] })
       ];
   }
 }
@@ -11217,9 +12058,9 @@ async function linkedInCall(ctx, relax, q) {
   for (let page2 = 0; page2 < LINKEDIN_PAGES && out.length < LINKEDIN_MAX_RESULTS; page2++) {
     const r = await deps.unipile.searchPeople(accountId, body2, { cursor });
     if (!note(ctx, r) || !r.ok) break;
-    for (const item of r.value.items) {
-      if (item.type && item.type !== "PEOPLE") continue;
-      const p = linkedInPerson(item);
+    for (const item2 of r.value.items) {
+      if (item2.type && item2.type !== "PEOPLE") continue;
+      const p = linkedInPerson(item2);
       if (!p.name) continue;
       const h = p.headline ?? "";
       const at = h.match(/^(.+?)\s+(?:at|@)\s+(.+)$/i);
@@ -13500,15 +14341,15 @@ var DraftPatchS = z5.object({
 async function pushDraft(db2, userId, id, row) {
   const p = DraftPatchS.safeParse({ status: row.status, subject: row.subject, body: row.body });
   if (!p.success) throw new ChangeError("invalid", p.error.issues[0]?.message ?? "invalid draft change");
-  const { status, subject, body: body2 } = p.data;
+  const { status: status2, subject, body: body2 } = p.data;
   const hasSubject = "subject" in row;
-  if (!status && !hasSubject && body2 === void 0) throw new ChangeError("invalid", "nothing to change");
+  if (!status2 && !hasSubject && body2 === void 0) throw new ChangeError("invalid", "nothing to change");
   const [r] = await db2.sql`
     update orbit.drafts t set
       subject = case when ${hasSubject}::boolean then ${subject ?? null}::text else t.subject end,
       body = coalesce(${body2 ?? null}::text, t.body),
-      status = coalesce(${status ?? null}::text, t.status),
-      cancel_reason = case when ${status ?? null}::text = 'cancelled' then 'user' else t.cancel_reason end
+      status = coalesce(${status2 ?? null}::text, t.status),
+      cancel_reason = case when ${status2 ?? null}::text = 'cancelled' then 'user' else t.cancel_reason end
      where t.id = ${id}::uuid and t.user_id = ${userId}::uuid and t.status = 'draft'
     returning to_jsonb(t) as row`;
   if (!r) {
@@ -13551,7 +14392,8 @@ var ROUTES = {
   ...calendarRoutes,
   ...memoryRoutes,
   ...settingsRoutes,
-  ...cadenceRoutes
+  ...cadenceRoutes,
+  ...autopilotRoutes
 };
 function missingSecrets(deps, google) {
   const m = [];
