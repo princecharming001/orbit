@@ -45,6 +45,8 @@ export interface LlmUsage {
 export interface LlmErrorRecord {
   reason: string;
   message: string;
+  /** the technical cause (an API status and message), for Settings and the bench; never shown in the chat */
+  detail?: string;
   at: string;
 }
 

@@ -319,6 +319,8 @@ export function recordFailure(e: LlmError): void {
     lastLlmError: {
       reason: e.reason,
       message: e.message,
+      // the technical cause, for Settings and the bench; never shown in the chat
+      ...(e.detail ? { detail: e.detail.slice(0, 500) } : {}),
       at: new Date().toISOString(),
     },
   });

@@ -910,7 +910,10 @@ export async function studentFacts(user: User): Promise<string> {
 function rawLlmError(): string {
   const last = readPrefs().lastLlmError;
   if (!last || Date.now() - new Date(last.at).getTime() > 120_000) return '';
-  const msg = last.message.replace(/sk-ant-[A-Za-z0-9_-]+/g, 'sk-ant-...');
+  const msg = `${last.message}${last.detail ? ` [${last.detail}]` : ''}`.replace(
+    /sk-ant-[A-Za-z0-9_-]+/g,
+    'sk-ant-...',
+  );
   simError('engine', new Error(`${last.reason}: ${msg}`));
   return ` (${last.reason}: ${msg.slice(0, 300)})`;
 }
