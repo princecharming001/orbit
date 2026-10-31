@@ -1,4 +1,5 @@
 import { unsupportedDetails } from '../drafts/validate';
+import { autoReplyClassAllowed } from '../email/nextAction';
 import type { ReplyClass } from '../email/replyClass';
 import { extractProposedTimes } from '../email/triage';
 import { normalizeEmail } from '../text/normalize';
@@ -320,7 +321,15 @@ export const AUTOPILOT_MODE_LEVEL: Record<AutopilotMode, 0 | 1 | 2> = { off: 0, 
 
 export const AUTO_SEND_DAILY_CAP = SEND_CAPS.autoPerDay;
 export const AUTO_SEND_MIN_SCORE = 40;
+/**
+ * The classes whose answer may go on its own, unconditionally or (thanks) when the reply holds no question. The class
+ * table (`email/nextAction.ts`) adds `interested` under the same no-question condition; `autonomyAllows` reads the
+ * table, so the two never disagree.
+ */
 export const AUTO_SEND_CLASSES: ReadonlySet<ReplyClass> = new Set(['scheduling', 'thanks', 'out_of_office']);
+
+/** The classes that go on their own only when the reply holds no question (plan 29 §B2.3). */
+export const REPLY_AUTO_WITHOUT_QUESTION: ReadonlySet<ReplyClass> = new Set(['interested', 'thanks']);
 
 export interface AutonomyContext extends SendContext {
   /** the student's level, and the goal's override when it has one */
@@ -328,6 +337,8 @@ export interface AutonomyContext extends SendContext {
   goalAutonomy?: 0 | 1 | 2;
   /** the class of the reply this message answers */
   replyClass: ReplyClass;
+  /** the reply asked the student something (`holdsQuestion`): an interested or thanks reply then waits for them */
+  replyHoldsQuestion?: boolean;
   /** the message answers inside an existing thread */
   inThread: boolean;
   /** the recipient's tie score */
@@ -349,7 +360,8 @@ function localHour(d: Date, tz?: string): number {
 
 /**
  * Whether level 2 may send this reply without asking (§8.4). All must hold: the effective level is 2; Gmail; a reply
- * inside a thread where both sides have written; a scheduling, thanks or out-of-office follow-up; the recipient's
+ * inside a thread where both sides have written; a class the table lets go on its own (scheduling, an out-of-office
+ * follow-up, and interested or thanks when the reply holds no question); the recipient's
  * score at least 40; no new commitments (money, times beyond the offered slots, attachments, links other than the
  * scheduling link) and no hard-rule violation; the validator passed; fewer than five auto-sends today; and not
  * between 21:00 and 7:00 in the recipient's time zone. `reasons` lists every condition that failed.
@@ -365,7 +377,12 @@ export function autonomyAllows(
   const bothWrote =
     ctx.history.some((m) => m.direction === 'in') && ctx.history.some((m) => m.direction === 'out');
   if (!ctx.inThread || !bothWrote) reasons.push('not a reply in a two-way thread');
-  if (!AUTO_SEND_CLASSES.has(ctx.replyClass)) reasons.push(`reply class ${ctx.replyClass}`);
+  if (!autoReplyClassAllowed(ctx.replyClass, !!ctx.replyHoldsQuestion))
+    reasons.push(
+      ctx.replyHoldsQuestion && REPLY_AUTO_WITHOUT_QUESTION.has(ctx.replyClass)
+        ? `reply class ${ctx.replyClass} with a question`
+        : `reply class ${ctx.replyClass}`,
+    );
   if (ctx.recipientScore < AUTO_SEND_MIN_SCORE)
     reasons.push(`score ${ctx.recipientScore} below ${AUTO_SEND_MIN_SCORE}`);
   const holds = checkSend(d, { ...ctx, approvedHash: undefined });
