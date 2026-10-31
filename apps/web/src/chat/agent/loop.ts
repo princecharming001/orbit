@@ -586,7 +586,7 @@ export async function runTurn(
   await flushResults();
   // no words at all, or only a clause of intent ("Let me check the news.") before the work and the pills: the
   // answer never reached the student (the model may have left it in a thinking note), so it is asked for
-  const onlyClause = worked && !spokenAfterWork.trim();
+  const onlyClause = worked && !spokenAfterWork.trim() && spoken.trim().split(/\s+/).length < CLAUSE_WORDS;
   if ((!spoken.trim() || onlyClause) && lastStop === 'end_turn' && !signal?.aborted) {
     const said = await speakUp(
       deps,
@@ -627,8 +627,11 @@ async function speakUp(
     const messages = params.messages.filter(
       (m) => !(m.role === 'assistant' && Array.isArray(m.content) && m.content.length === 0),
     );
+    // a system message may only follow a user message (or a server tool result): after an assistant message that
+    // ended on a thinking note the nudge goes in as Orbit's own user message, which the prompt reads the same way
+    const last = messages.at(-1);
     const nudge: Anthropic.Beta.BetaMessageParam = {
-      role: 'system',
+      role: last?.role === 'assistant' ? 'user' : 'system',
       content: [{ type: 'text', text: SPEAK_UP }],
     };
     const runner = deps.client.beta.messages.toolRunner(

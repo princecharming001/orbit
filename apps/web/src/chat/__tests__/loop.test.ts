@@ -768,6 +768,29 @@ describe('a turn ends on the pills', () => {
     expect(JSON.stringify(messageRequests(fake).at(-1)!.body.messages.at(-1))).toMatch(/no answer in words/);
   });
 
+  it('a turn that ended on a thinking note after its lookups is asked for the answer, and the history stays valid', async () => {
+    const events = await turn(
+      'did Stripe have layoffs',
+      [
+        { text: 'Checking the news.', toolCalls: [{ id: 'toolu_r', name: 'list_pipeline', input: {} }] },
+        { thinking: ['No layoffs this year.'], stopReason: 'end_turn' },
+        { text: 'No layoffs this year that the news shows.' },
+      ],
+      withPills(),
+    );
+    expect(text(events)).toMatch(/No layoffs this year that the news shows\./);
+    const nudgeReq = messageRequests(fake).at(-1)!.body.messages;
+    // the nudge after an assistant message is a user message: a system message there is refused by the API
+    expect(nudgeReq.at(-1).role).toBe('user');
+    expect(JSON.stringify(nudgeReq.at(-1))).toMatch(/no answer in words/);
+    await turn('thanks', [{ text: 'anytime.' }], withPills());
+    const roles = messageRequests(fake)
+      .at(-1)!
+      .body.messages.map((m: { role: string }) => m.role);
+    for (let i = 1; i < roles.length; i++)
+      if (roles[i] === 'system') expect(roles[i - 1], `system at ${i} after ${roles[i - 1]}`).toBe('user');
+  });
+
   it('keeps the line when nothing was said before the pills', async () => {
     const events = await turn('wsp', [{ toolCalls: [pills] }, { text: 'hey, not much.' }], withPills());
     expect(text(events)).toBe('hey, not much.');

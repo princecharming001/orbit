@@ -192,7 +192,13 @@ export class ChatStore {
   /** The API history: replayable rows mapped verbatim to `BetaMessageParam`. */
   async history(conversationId: string): Promise<BetaMessageParam[]> {
     const rows = await this.replayableRows(conversationId);
-    return rows.map((r) => ({ role: r.role, content: r.content as BetaMessageParam['content'] }));
+    // the API takes a system row only after a user row (or an assistant turn that ended in a server tool result):
+    // an Orbit nudge stored right after an assistant row (one build did that) replays as Orbit's own user message,
+    // which the prompt reads the same way, so an old conversation never refuses every later turn
+    return rows.map((r, i) => ({
+      role: r.role === 'system' && rows[i - 1]?.role === 'assistant' ? 'user' : r.role,
+      content: r.content as BetaMessageParam['content'],
+    }));
   }
 
   /**
