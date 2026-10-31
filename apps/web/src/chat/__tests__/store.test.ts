@@ -138,7 +138,7 @@ describe('append-only messages', () => {
   });
 
   it('replays a nudge stored right after an assistant row as a user message, so the API takes the history', async () => {
-    const c = await store.createConversation({ userId: 'u1', model: 'm' });
+    const c = await store.createConversation({ userId: 'u1', model: 'm', temporary: false });
     await store.append(c.id, { role: 'user', content: [{ type: 'text', text: 'did Stripe have layoffs' }] });
     await store.append(c.id, {
       role: 'assistant',
