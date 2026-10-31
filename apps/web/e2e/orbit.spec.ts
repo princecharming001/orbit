@@ -580,12 +580,14 @@ test.describe('Map reach through LinkedIn mutuals (plan 17 §C)', () => {
     expect(await rows.count()).toBeGreaterThan(1);
     // plan 21: the best way in first — how close the student is to them and how well they know Kenji — so a row
     // never puts someone who knows Kenji less well above someone who knows him better
-    const closeness = await panel.getByTestId('reach-mutual-closeness').allInnerTexts();
     const KNOW = ['unclear with', 'connected to', 'knows', 'close to'];
-    const bands = closeness.map((t) =>
-      KNOW.indexOf(/· (unclear with|connected to|knows|close to) Kenji · \d+$/.exec(t)?.[1] ?? ''),
-    );
-    expect(bands.every((b) => b >= 0)).toBe(true);
+    const bandsNow = async () =>
+      (await panel.getByTestId('reach-mutual-closeness').allInnerTexts()).map((t) =>
+        KNOW.indexOf(/· (unclear with|connected to|knows|close to) Kenji · \d+$/.exec(t)?.[1] ?? ''),
+      );
+    // each row's standing is read a moment after the list shows: wait until every row has one
+    await expect.poll(async () => (await bandsNow()).every((b) => b >= 0), { timeout: 15_000 }).toBe(true);
+    const bands = await bandsNow();
     expect(bands).toEqual([...bands].sort((a, b) => b - a));
     // where the list came from is an explanation: hidden unless the student turned explanations on
     await expect(panel).not.toContainText('Sample connections from the demo.');
