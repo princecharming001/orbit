@@ -321,6 +321,103 @@ test.describe('account mode (mocked orbit-api)', () => {
       await expect(history.getByTestId('linkedin-history-status')).not.toContainText('Reading');
     });
 
+    test("a person's page loads the whole story: old recruiting mail, LinkedIn and a meeting, in Messages and the timeline", async ({
+      page,
+    }) => {
+      const api = await signedIn(page);
+      const u = api.state.user.id;
+      const T1 = '0b8f6a0e-3333-4c2e-8d1a-000000000001';
+      const T2 = '0b8f6a0e-3333-4c2e-8d1a-000000000002';
+      // what /people/history answers for Priya: a recruiting thread from last year the pull never sends (not
+      // networking, older than 180 days), a LinkedIn chat, and a coffee they had
+      api.state.history.set(P1, {
+        threads: [
+          {
+            id: T1,
+            userId: u,
+            provider: 'gmail',
+            externalThreadId: 'g-1',
+            subject: 'Product role at Stripe',
+            participantPersonIds: [P1],
+            participantEmails: [],
+            firstMessageAt: '2025-03-01T15:00:00.000Z',
+            lastMessageAt: '2025-03-01T15:00:00.000Z',
+            messageCount: 1,
+            isNetworking: false,
+            category: 'recruiting_process',
+          },
+          {
+            id: T2,
+            userId: u,
+            provider: 'linkedin',
+            channel: 'linkedin',
+            externalThreadId: 'li-1',
+            participantPersonIds: [P1],
+            participantEmails: [],
+            firstMessageAt: '2026-10-01T15:00:00.000Z',
+            lastMessageAt: '2026-10-01T15:00:00.000Z',
+            messageCount: 1,
+            isNetworking: true,
+          },
+        ],
+        messages: [
+          {
+            id: '0b8f6a0e-4444-4c2e-8d1a-000000000001',
+            userId: u,
+            threadId: T1,
+            direction: 'inbound',
+            fromPersonId: P1,
+            fromEmail: 'priya@stripe.com',
+            toEmails: ['me@example.com'],
+            ccEmails: [],
+            sentAt: '2025-03-01T15:00:00.000Z',
+            subject: 'Product role at Stripe',
+            bodyText: 'Happy to tell you about the PM role whenever suits.',
+            isAutomated: false,
+          },
+          {
+            id: '0b8f6a0e-4444-4c2e-8d1a-000000000002',
+            userId: u,
+            threadId: T2,
+            channel: 'linkedin',
+            direction: 'outbound',
+            fromEmail: '',
+            toEmails: [],
+            ccEmails: [],
+            sentAt: '2026-10-01T15:00:00.000Z',
+            bodyText: 'Thanks for the chat, Priya.',
+            isAutomated: false,
+          },
+        ],
+        events: [
+          {
+            id: '0b8f6a0e-5555-4c2e-8d1a-000000000001',
+            userId: u,
+            externalEventId: 'ev-1',
+            title: 'Coffee with Priya',
+            startAt: '2026-09-15T16:00:00.000Z',
+            endAt: '2026-09-15T16:30:00.000Z',
+            status: 'confirmed',
+            attendees: [],
+            attendeePersonIds: [P1],
+          },
+        ],
+      });
+      await page.goto(`people/${P1}`);
+      const items = page.getByTestId('timeline-item');
+      await expect(items.filter({ hasText: 'Email from Priya: Product role at Stripe' })).toHaveCount(1, {
+        timeout: 15_000,
+      });
+      await expect(items.filter({ hasText: 'Meeting: Coffee with Priya' })).toHaveCount(1);
+      await expect(items.filter({ hasText: 'LinkedIn message to Priya' })).toHaveCount(1);
+      await expect(page.getByTestId('person-header')).not.toContainText('Not in touch yet');
+      await page.getByRole('tab', { name: /^messages/i }).click();
+      const said = page.getByTestId('conversation-message');
+      await expect(said.filter({ hasText: 'Happy to tell you about the PM role' })).toHaveCount(1);
+      await expect(said.filter({ hasText: 'Thanks for the chat, Priya.' })).toHaveCount(1);
+      expect(api.routes()).toContain('/people/history');
+    });
+
     test('Discover, Find people: search, see who you know, add one', async ({ page }) => {
       const api = await signedIn(page);
       api.state.sourced = [

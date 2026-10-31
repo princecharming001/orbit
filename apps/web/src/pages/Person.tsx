@@ -52,6 +52,7 @@ import {
 } from '../engine/facts';
 import { moveChat } from '../engine/move';
 import { setRelationshipType, unhidePerson } from '../engine/people';
+import { loadPersonHistory } from '../engine/personHistory';
 import { moveChatGuarded } from '../engine/pipeline';
 import { personSummary, toYou } from '../engine/prep';
 import { SUMMARY_RULES_AT } from '../engine/repair';
@@ -310,7 +311,11 @@ export function PersonPage() {
   }, [person?.id, person?.summary, user, summaryStale]);
   // their LinkedIn profile is read when their page opens, when it is due and today's allowance has room (plan 17 E)
   useEffect(() => {
-    if (person && user) void enrichOnView(user, person.id);
+    if (person && user) {
+      void enrichOnView(user, person.id);
+      // an Orbit account: their whole history with the student, past the 180 days of networking mail kept here
+      void loadPersonHistory(user, person.id);
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [person?.id, user?.id]);
   const wantDraft = params.get('draft') as MessageKind | null;
@@ -1017,7 +1022,7 @@ export function PersonPage() {
                 timeline.length === 0 && <li className="pl-5 text-ink-3 text-[13px]">No interactions yet.</li>
               )}
               {timeline.slice(0, 100).map((t, i) => (
-                <li key={i} className="pl-5">
+                <li key={i} className="pl-5" data-testid="timeline-item">
                   <span className="absolute -left-[9px] w-[18px] h-[18px] rounded-full bg-canvas border border-line text-[10px] inline-flex items-center justify-center text-ink-3">
                     {t.icon}
                   </span>

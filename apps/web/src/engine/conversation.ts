@@ -210,8 +210,13 @@ export async function conversationWith(userId: string, personId: string): Promis
     for (const m of msgs) {
       if (m.isAutomated) continue;
       if (!linkedIn) {
+        // to them by address, or by the person the server matched the address to (an account's copy of a person
+        // knows one address, the server all of theirs)
+        const sentTo = m as { toPersonIds?: unknown; ccPersonIds?: unknown };
         const toThem =
-          m.direction === 'outbound' && [...m.toEmails, ...m.ccEmails].some((e) => theirs.has(e));
+          m.direction === 'outbound' &&
+          ([...m.toEmails, ...m.ccEmails].some((e) => theirs.has(e.toLowerCase())) ||
+            [sentTo.toPersonIds, sentTo.ccPersonIds].some((v) => Array.isArray(v) && v.includes(personId)));
         const fromThem = m.direction === 'inbound' && m.fromPersonId === personId;
         if (!toThem && !fromThem) continue;
       }

@@ -32,6 +32,7 @@ import { cadenceRoutes } from './routes/cadence.ts';
 import { calendarRoutes } from './routes/calendar.ts';
 import { draftRoutes } from './routes/drafts.ts';
 import { goalRoutes } from './routes/goals.ts';
+import { historyRoutes } from './routes/history.ts';
 import { INTEGRATION_ROUTES } from './routes/integrations.ts';
 import { memoryRoutes } from './routes/memory.ts';
 import { pathRoutes } from './routes/paths.ts';
@@ -144,6 +145,7 @@ const ROUTES: Record<string, Route> = {
   ...INTEGRATION_ROUTES,
   ...goalRoutes,
   ...scoreRoutes,
+  ...historyRoutes,
   ...researchRoutes,
   ...sourceRoutes,
   ...pathRoutes,

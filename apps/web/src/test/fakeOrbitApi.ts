@@ -67,6 +67,15 @@ export interface FakeState {
   proposals: ProposedGoal[];
   due: DueItem[];
   linkedin: { status: string; relations: number };
+  /** what /people/history answers per person (empty lists otherwise) */
+  history: Map<
+    string,
+    {
+      threads: Record<string, unknown>[];
+      messages: Record<string, unknown>[];
+      events: Record<string, unknown>[];
+    }
+  >;
   deleted: boolean;
   /** routes that answer 503 unconfigured */
   unconfigured: Set<string>;
@@ -143,6 +152,7 @@ export function createFakeOrbitApi(
     proposals: [],
     due: [],
     linkedin: { status: 'not_connected', relations: 0 },
+    history: new Map(),
     deleted: false,
     unconfigured: new Set(),
   };
@@ -289,6 +299,12 @@ export function createFakeOrbitApi(
         });
       case '/linkedin/sync':
         return json(200, { queued: true });
+      // everything with one person, for their page
+      case '/people/history':
+        return json(
+          200,
+          state.history.get(String(body.personId)) ?? { threads: [], messages: [], events: [] },
+        );
       // the student's own LinkedIn account and the proxy's token for it, once LinkedIn is connected
       case '/linkedin/reader':
         return json(

@@ -39,6 +39,7 @@ import {
 } from '../integrations/orbitApi';
 import { endActivity, startActivity } from './activity';
 import { linkedInImageExpired } from './photos';
+import { backfillServerTouchpoints, touchpointsFromServer } from './serverTouchpoints';
 
 // ---- tables -------------------------------------------------------------------------------------------------------
 
@@ -358,6 +359,11 @@ export async function writeFromServer(
         });
       }
   });
+  // an Orbit account's timeline: the touchpoints a browser account records while it reads mail and meetings
+  if ((table === 'messages' || table === 'calendar_events') && ready.length)
+    await touchpointsFromServer(userId, table === 'messages' ? { messages: ready } : { events: ready }).catch(
+      (e) => console.warn('[orbit sync] timeline', e),
+    );
   return ready.length + gone.length;
 }
 
@@ -889,7 +895,10 @@ let lastDerived = 0;
 export function startServerSync(o: SyncLoopOptions): () => void {
   installOutboxHooks();
   void repairStoredCompanies().catch(() => undefined);
-  void repairStoredNames().catch(() => undefined);
+  void repairStoredNames()
+    .catch(() => undefined)
+    .then(() => backfillServerTouchpoints(o.user.id))
+    .catch(() => undefined);
   let stopped = false;
   let lastCounts = '';
   const derived = async (out: PullOutcome) => {

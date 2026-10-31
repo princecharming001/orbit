@@ -4583,9 +4583,9 @@ function checkCrossThread(d, ctx) {
 function checkDoNotContact(ctx) {
   return ctx.recipient.doNotContact ? [forbid("do_not_contact", "they asked not to be contacted")] : [];
 }
-function unansweredBefore(history) {
+function unansweredBefore(history2) {
   let n = 0;
-  for (const m of [...history].sort((a, b) => a.at.localeCompare(b.at))) n = m.direction === "in" ? 0 : n + 1;
+  for (const m of [...history2].sort((a, b) => a.at.localeCompare(b.at))) n = m.direction === "in" ? 0 : n + 1;
   return n;
 }
 function checkUnanswered(d, ctx) {
@@ -5616,9 +5616,9 @@ async function composeDraft(s, req) {
   const goal = await resolveGoal(db2, req.userId, req.goalId ?? null, req.chatId ?? null, person2.id);
   const goalKind = goal?.kind ?? "advice";
   const chatId = req.chatId ?? await chatFor(db2, req.userId, person2.id, goal?.id ?? null);
-  const history = await historyWith(db2, req.userId, person2.id);
+  const history2 = await historyWith(db2, req.userId, person2.id);
   const sendsToThem = req.kind !== "forwardable_blurb";
-  if (sendsToThem && req.kind !== "reply" && unansweredBefore(history) >= 3)
+  if (sendsToThem && req.kind !== "reply" && unansweredBefore(history2) >= 3)
     throw new HttpError(409, "unanswered_limit", "three messages already went unanswered");
   const firstTouch = FIRST_TOUCH_KINDS.has(req.kind);
   if (firstTouch) {
@@ -5629,7 +5629,7 @@ async function composeDraft(s, req) {
     if ((declined?.n ?? 0) > 0)
       throw new HttpError(409, "declined_recently", "they declined in the last 180 days");
   }
-  const newRecipient = !history.some((m) => m.direction === "out");
+  const newRecipient = !history2.some((m) => m.direction === "out");
   const salesFirstTouch2 = goalKind === "sales" && firstTouch && req.channel === "gmail" && newRecipient;
   const postal = typeof user.settings.postal_address === "string" ? user.settings.postal_address.trim() : "";
   if (salesFirstTouch2 && !postal)
@@ -6577,11 +6577,11 @@ ${d.body}`)) {
     await settle("failed", { error: "no_person" });
     return { status: "failed", error: "no_person" };
   }
-  const history = await historyWith(db2, userId, d.person_id);
+  const history2 = await historyWith(db2, userId, d.person_id);
   const createdAt = iso(d.created_at);
   const replied = cancelIfReplied(
     { personId: d.person_id, createdAt },
-    history.map((h) => ({
+    history2.map((h) => ({
       personId: d.person_id,
       direction: h.direction,
       at: h.at,
@@ -6632,7 +6632,7 @@ ${d.body}`)) {
         title: person2.title ?? void 0,
         headline: person2.headline ?? void 0
       },
-      history,
+      history: history2,
       schedulingLink: typeof u2.settings?.scheduling_link === "string" ? u2.settings.scheduling_link : void 0,
       offeredSlots: meta.slots,
       timeZone: u2.timezone,
@@ -7040,6 +7040,192 @@ var goalRoutes = {
   "/goals/upsert": { method: "POST", auth: true, run: goalsUpsert },
   "/goals/archive": { method: "POST", auth: true, run: goalsArchive },
   "/goals/infer": { method: "POST", auth: true, run: goalsInfer }
+};
+
+// supabase/functions/orbit-api/tables.ts
+var PULL_TABLES = [
+  {
+    table: "organizations",
+    key: "id",
+    cursor: "updated_at",
+    // an Organization under the browser's names: without nameNormalized a company's wedge key read "n:undefined",
+    // so picking a company never turned the map to it
+    map: (r) => ({ ...r, nameNormalized: r.nameNorm })
+  },
+  {
+    table: "people",
+    key: "id",
+    cursor: "updated_at",
+    deletedWhen: "t.deleted_at is not null or t.merged_into is not null",
+    // a Person: the columns under the names the browser's screens read
+    map: (r) => ({
+      ...r,
+      nameNormalized: r.nameNorm,
+      currentTitle: r.title,
+      currentOrganizationId: r.orgId,
+      currentOrganizationRaw: r.orgRaw
+    })
+  },
+  { table: "person_identities", key: "id", cursor: "created_at" },
+  {
+    table: "affiliations",
+    key: "id",
+    cursor: "updated_at",
+    // an Affiliation: the company as the browser names it, so a role shows where it was and the company's logo
+    map: (r) => ({ ...r, nameRaw: r.orgRaw ?? "", organizationId: r.orgId })
+  },
+  {
+    table: "merge_suggestions",
+    key: "id",
+    cursor: "updated_at",
+    // a MergeSuggestion: the two people and the status under the browser's names (open is pending, merged accepted)
+    map: (r) => ({
+      ...r,
+      personAId: r.personA,
+      personBId: r.personB,
+      status: r.status === "open" ? "pending" : r.status === "merged" ? "accepted" : r.status
+    })
+  },
+  { table: "goals", key: "id", cursor: "updated_at", deletedWhen: "t.deleted_at is not null" },
+  // the Dexie cache keeps the last 180 days of networking threads only (§11.1)
+  {
+    table: "threads",
+    key: "id",
+    cursor: "updated_at",
+    filter: "t.is_networking and coalesce(t.last_at, t.created_at) > now() - interval '180 days'",
+    // LinkedIn threads carry their channel, as the browser's own LinkedIn reader writes them
+    map: (r) => ({
+      ...r,
+      externalThreadId: r.externalId,
+      firstMessageAt: r.firstAt,
+      lastMessageAt: r.lastAt,
+      ...r.provider === "linkedin" ? { channel: "linkedin" } : {}
+    })
+  },
+  {
+    table: "messages",
+    key: "id",
+    cursor: "updated_at",
+    filter: "t.sent_at > now() - interval '180 days' and exists (select 1 from orbit.threads th where th.id = t.thread_id and th.is_networking)",
+    omit: ["embedding"],
+    map: (r) => ({
+      ...r,
+      direction: r.direction === "out" ? "outbound" : "inbound",
+      externalMessageId: r.externalId,
+      fromEmail: r.fromAddr ?? "",
+      toEmails: r.toAddrs ?? [],
+      ccEmails: r.ccAddrs ?? [],
+      bodyText: r.bodyText ?? "",
+      ...r.provider === "linkedin" ? { channel: "linkedin" } : {}
+    })
+  },
+  // a CalendarEvent: its Google id under the browser's name
+  {
+    table: "calendar_events",
+    key: "id",
+    cursor: "updated_at",
+    map: (r) => ({ ...r, externalEventId: r.externalId })
+  },
+  {
+    table: "ties",
+    key: "id",
+    cursor: "updated_at",
+    // an Edge: type = kind, weight = w · c
+    map: (r) => ({
+      ...r,
+      personAId: r.aPersonId,
+      personBId: r.bPersonId,
+      type: r.kind,
+      rawWeight: r.weight,
+      weight: Number(r.weight) * Number(r.confidence)
+    })
+  },
+  { table: "tie_scores", key: "person_id", cursor: "updated_at" },
+  { table: "tie_labels", key: "person_id", cursor: "updated_at" },
+  {
+    table: "chats",
+    key: "id",
+    cursor: "updated_at",
+    // a CoffeeChat: the stored camelCase fields spread under the columns
+    map: ({ data, ...rest }) => ({
+      ...data ?? {},
+      ...rest,
+      ...rest.orgId ? { organizationId: rest.orgId } : {}
+    })
+  },
+  { table: "stage_events", key: "id", cursor: "updated_at" },
+  {
+    table: "drafts",
+    key: "id",
+    cursor: "updated_at",
+    // the browser's OutboundMessage names: a reply carries its Gmail thread, so it goes out in it, under its subject
+    map: (r) => ({
+      ...r,
+      ...r.threadExternalId ? { externalThreadId: r.threadExternalId } : {},
+      ...r.inReplyTo ? { inReplyToMessageId: r.inReplyTo } : {}
+    })
+  },
+  { table: "notes", key: "id", cursor: "updated_at" },
+  { table: "uploads", key: "id", cursor: "updated_at" },
+  { table: "facts", key: "id", cursor: "updated_at", deletedWhen: "t.deleted_at is not null" },
+  { table: "dossiers", key: "id", cursor: "updated_at" },
+  { table: "recommendations", key: "id", cursor: "updated_at" },
+  { table: "intro_requests", key: "id", cursor: "updated_at" }
+];
+var PULL_BY_NAME = new Map(PULL_TABLES.map((t) => [t.table, t]));
+var camel = (s) => s.replace(/_([a-z0-9])/g, (_, c) => c.toUpperCase());
+function toCamel(row) {
+  const out = {};
+  for (const [k, v] of Object.entries(row)) out[camel(k)] = v;
+  return out;
+}
+function shapeRow(t, row) {
+  const r = { ...row };
+  for (const c2 of t.omit ?? []) delete r[c2];
+  const c = toCamel(r);
+  return t.map ? t.map(c) : c;
+}
+
+// supabase/functions/orbit-api/routes/history.ts
+var HISTORY_THREADS = 40;
+var HISTORY_MESSAGES = 400;
+var HISTORY_EVENTS = 40;
+async function history(ctx) {
+  const personId = uuid(await body(ctx), "personId");
+  const userId = ctx.userId;
+  const [p] = await ctx.db.sql`
+    select 1 from orbit.people where id = ${personId}::uuid and user_id = ${userId}::uuid and deleted_at is null`;
+  if (!p) throw new HttpError(404, "not_found", "no such person");
+  const threads = await ctx.db.query(
+    `select to_jsonb(t) as row from orbit.threads t
+      where t.user_id = $1::uuid and $2::uuid = any(t.participant_person_ids)
+      order by coalesce(t.last_at, t.created_at) desc limit $3`,
+    [userId, personId, HISTORY_THREADS]
+  );
+  const ids = threads.map((t) => String(t.row.id));
+  const [messages, events] = await Promise.all([
+    ids.length ? ctx.db.query(
+      `select to_jsonb(m) - 'embedding' as row from orbit.messages m
+            where m.user_id = $1::uuid and m.thread_id = any($2::uuid[])
+            order by m.sent_at desc limit $3`,
+      [userId, ids, HISTORY_MESSAGES]
+    ) : Promise.resolve([]),
+    ctx.db.query(
+      `select to_jsonb(e) as row from orbit.calendar_events e
+        where e.user_id = $1::uuid and $2::uuid = any(e.attendee_person_ids)
+        order by e.start_at desc limit $3`,
+      [userId, personId, HISTORY_EVENTS]
+    )
+  ]);
+  const shape2 = (table, rows) => rows.map((r) => shapeRow(PULL_BY_NAME.get(table), r.row));
+  return json(200, {
+    threads: shape2("threads", threads),
+    messages: shape2("messages", messages),
+    events: shape2("calendar_events", events)
+  });
+}
+var historyRoutes = {
+  "/people/history": { method: "POST", auth: true, run: history }
 };
 
 // supabase/functions/_shared/accountToken.ts
@@ -12665,152 +12851,6 @@ function normalizeEmailForMatch(raw) {
 
 // supabase/functions/orbit-api/sync.ts
 import { z as z5 } from "npm:zod@3.25.76/v4";
-
-// supabase/functions/orbit-api/tables.ts
-var PULL_TABLES = [
-  {
-    table: "organizations",
-    key: "id",
-    cursor: "updated_at",
-    // an Organization under the browser's names: without nameNormalized a company's wedge key read "n:undefined",
-    // so picking a company never turned the map to it
-    map: (r) => ({ ...r, nameNormalized: r.nameNorm })
-  },
-  {
-    table: "people",
-    key: "id",
-    cursor: "updated_at",
-    deletedWhen: "t.deleted_at is not null or t.merged_into is not null",
-    // a Person: the columns under the names the browser's screens read
-    map: (r) => ({
-      ...r,
-      nameNormalized: r.nameNorm,
-      currentTitle: r.title,
-      currentOrganizationId: r.orgId,
-      currentOrganizationRaw: r.orgRaw
-    })
-  },
-  { table: "person_identities", key: "id", cursor: "created_at" },
-  {
-    table: "affiliations",
-    key: "id",
-    cursor: "updated_at",
-    // an Affiliation: the company as the browser names it, so a role shows where it was and the company's logo
-    map: (r) => ({ ...r, nameRaw: r.orgRaw ?? "", organizationId: r.orgId })
-  },
-  {
-    table: "merge_suggestions",
-    key: "id",
-    cursor: "updated_at",
-    // a MergeSuggestion: the two people and the status under the browser's names (open is pending, merged accepted)
-    map: (r) => ({
-      ...r,
-      personAId: r.personA,
-      personBId: r.personB,
-      status: r.status === "open" ? "pending" : r.status === "merged" ? "accepted" : r.status
-    })
-  },
-  { table: "goals", key: "id", cursor: "updated_at", deletedWhen: "t.deleted_at is not null" },
-  // the Dexie cache keeps the last 180 days of networking threads only (§11.1)
-  {
-    table: "threads",
-    key: "id",
-    cursor: "updated_at",
-    filter: "t.is_networking and coalesce(t.last_at, t.created_at) > now() - interval '180 days'",
-    // LinkedIn threads carry their channel, as the browser's own LinkedIn reader writes them
-    map: (r) => ({
-      ...r,
-      externalThreadId: r.externalId,
-      firstMessageAt: r.firstAt,
-      lastMessageAt: r.lastAt,
-      ...r.provider === "linkedin" ? { channel: "linkedin" } : {}
-    })
-  },
-  {
-    table: "messages",
-    key: "id",
-    cursor: "updated_at",
-    filter: "t.sent_at > now() - interval '180 days' and exists (select 1 from orbit.threads th where th.id = t.thread_id and th.is_networking)",
-    omit: ["embedding"],
-    map: (r) => ({
-      ...r,
-      direction: r.direction === "out" ? "outbound" : "inbound",
-      externalMessageId: r.externalId,
-      fromEmail: r.fromAddr ?? "",
-      toEmails: r.toAddrs ?? [],
-      ccEmails: r.ccAddrs ?? [],
-      bodyText: r.bodyText ?? "",
-      ...r.provider === "linkedin" ? { channel: "linkedin" } : {}
-    })
-  },
-  // a CalendarEvent: its Google id under the browser's name
-  {
-    table: "calendar_events",
-    key: "id",
-    cursor: "updated_at",
-    map: (r) => ({ ...r, externalEventId: r.externalId })
-  },
-  {
-    table: "ties",
-    key: "id",
-    cursor: "updated_at",
-    // an Edge: type = kind, weight = w · c
-    map: (r) => ({
-      ...r,
-      personAId: r.aPersonId,
-      personBId: r.bPersonId,
-      type: r.kind,
-      rawWeight: r.weight,
-      weight: Number(r.weight) * Number(r.confidence)
-    })
-  },
-  { table: "tie_scores", key: "person_id", cursor: "updated_at" },
-  { table: "tie_labels", key: "person_id", cursor: "updated_at" },
-  {
-    table: "chats",
-    key: "id",
-    cursor: "updated_at",
-    // a CoffeeChat: the stored camelCase fields spread under the columns
-    map: ({ data, ...rest }) => ({
-      ...data ?? {},
-      ...rest,
-      ...rest.orgId ? { organizationId: rest.orgId } : {}
-    })
-  },
-  { table: "stage_events", key: "id", cursor: "updated_at" },
-  {
-    table: "drafts",
-    key: "id",
-    cursor: "updated_at",
-    // the browser's OutboundMessage names: a reply carries its Gmail thread, so it goes out in it, under its subject
-    map: (r) => ({
-      ...r,
-      ...r.threadExternalId ? { externalThreadId: r.threadExternalId } : {},
-      ...r.inReplyTo ? { inReplyToMessageId: r.inReplyTo } : {}
-    })
-  },
-  { table: "notes", key: "id", cursor: "updated_at" },
-  { table: "uploads", key: "id", cursor: "updated_at" },
-  { table: "facts", key: "id", cursor: "updated_at", deletedWhen: "t.deleted_at is not null" },
-  { table: "dossiers", key: "id", cursor: "updated_at" },
-  { table: "recommendations", key: "id", cursor: "updated_at" },
-  { table: "intro_requests", key: "id", cursor: "updated_at" }
-];
-var PULL_BY_NAME = new Map(PULL_TABLES.map((t) => [t.table, t]));
-var camel = (s) => s.replace(/_([a-z0-9])/g, (_, c) => c.toUpperCase());
-function toCamel(row) {
-  const out = {};
-  for (const [k, v] of Object.entries(row)) out[camel(k)] = v;
-  return out;
-}
-function shapeRow(t, row) {
-  const r = { ...row };
-  for (const c2 of t.omit ?? []) delete r[c2];
-  const c = toCamel(r);
-  return t.map ? t.map(c) : c;
-}
-
-// supabase/functions/orbit-api/sync.ts
 async function syncStatus(ctx) {
   return json(200, await statusFor(ctx.db, ctx.userId));
 }
@@ -13363,6 +13403,7 @@ var ROUTES = {
   ...INTEGRATION_ROUTES,
   ...goalRoutes,
   ...scoreRoutes,
+  ...historyRoutes,
   ...researchRoutes,
   ...sourceRoutes,
   ...pathRoutes,

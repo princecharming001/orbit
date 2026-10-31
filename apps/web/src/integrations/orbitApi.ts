@@ -174,6 +174,14 @@ export interface ApiRoutes {
     { ok: true; accountId: string; token: string } | { ok: false; reason: 'not_connected' | 'unconfigured' },
   ];
   '/linkedin/sync': [Record<string, never>, QueuedResponse];
+  '/people/history': [
+    { personId: string },
+    {
+      threads: Record<string, unknown>[];
+      messages: Record<string, unknown>[];
+      events: Record<string, unknown>[];
+    },
+  ];
   '/goals/list': [Record<string, never>, GoalsListResponse];
   '/goals/upsert': [GoalUpsertRequest, GoalUpsertResponse];
   '/goals/archive': [IdRequest, unknown];
