@@ -160,7 +160,13 @@ test.describe('autopilot (plan 29 B7, fake orbit-api)', () => {
       page.getByTestId('sent-for-you').getByTestId('sent-item').filter({ hasText: 'Lena Novak' }),
     ).toContainText('booked');
     // the call is on the calendar at once; its prep card follows the day before, the way plan 22 raises it
-    await expect(page.getByTestId('coming-up')).toContainText('Lena Novak');
+    // (the next reply check puts it there too, when the first one raced the first sync)
+    await expect(async () => {
+      if (!(await page.getByTestId('coming-up').textContent())?.includes('Lena Novak')) {
+        await page.reload();
+        await expect(page.getByTestId('coming-up')).toContainText('Lena Novak', { timeout: 3000 });
+      }
+    }).toPass({ timeout: 20_000 });
     expect(api.routes()).toContain('/calendar/book');
     const book = api.calls.find((c) => c.route === '/calendar/book')!;
     expect(book.body).toEqual({ draftId: 'draft_lena_slots', slotStart: '2026-10-08T15:00:00Z' });

@@ -495,6 +495,45 @@ export async function runLocalFunnel(user: User, now = new Date()): Promise<Funn
   return out;
 }
 
+/**
+ * The booked call as this browser's event (the next pull brings the server's row too), so Coming up shows it at once
+ * and the prep rule (plan 22) raises its card from it. One event per person and start: an existing one is kept.
+ */
+async function ensureBookedEvent(
+  user: Pick<User, 'id'>,
+  r: ReplyItem,
+  chat: CoffeeChat | undefined,
+  slot: string,
+  eventId: string | undefined,
+  now: Date,
+): Promise<string> {
+  const startAt = new Date(slot).toISOString();
+  const had = await db.events
+    .where('userId')
+    .equals(user.id)
+    .filter((e) => e.startAt === startAt && (!r.personId || e.attendeePersonIds.includes(r.personId)))
+    .first();
+  if (had) return had.id;
+  const id = `ev_${eventId ?? `booked_${r.messageId}`}`;
+  const person = r.personId ? await db.people.get(r.personId) : undefined;
+  await db.events.put({
+    id,
+    userId: user.id,
+    externalEventId: eventId ?? `booked_${r.messageId}`,
+    title: `Coffee chat with ${r.personName}`,
+    startAt,
+    endAt: new Date(Date.parse(slot) + 30 * 60_000).toISOString(),
+    status: 'confirmed',
+    attendees: person?.primaryEmail ? [{ email: person.primaryEmail, displayName: r.personName }] : [],
+    attendeePersonIds: r.personId ? [r.personId] : [],
+    inviteSentAt: now.toISOString(),
+    isCoffeeChat: true,
+    coffeeChatConfidence: 0.95,
+    chatId: chat?.id,
+  });
+  return id;
+}
+
 /** Account mode: the server's replies and status, mirrored as cards here; a named slot booked when the server has not. */
 export async function runAccountFunnel(user: User, now = new Date()): Promise<FunnelSummary> {
   const out: FunnelSummary = { handled: 0, needsYou: 0, closed: 0, booked: 0, breakers: 0 };
@@ -503,6 +542,16 @@ export async function runAccountFunnel(user: User, now = new Date()): Promise<Fu
   const done = await handled(user.id);
   const pausedGoals = new Set(status.ok ? status.status.pausedGoals.map((g) => g.goalId) : []);
   for (const r of replies.replies as ReplyItem[]) {
+    // a call booked before (here, on another device, or by the server's funnel) is on this calendar too
+    if (r.replyClass === 'scheduling' && r.outcome === 'booked' && r.offered?.slots.length) {
+      const slot = matchOfferedSlot(
+        r.snippet,
+        r.offered.slots,
+        new Date(r.receivedAt),
+        user.timezone || undefined,
+      );
+      if (slot) await ensureBookedEvent(user, r, undefined, slot, undefined, now).catch(() => undefined);
+    }
     if (done[r.messageId]) continue;
     done[r.messageId] = now.toISOString();
     out.handled++;
@@ -552,26 +601,7 @@ export async function runAccountFunnel(user: User, now = new Date()): Promise<Fu
           out.booked++;
           // the event is here at once (the next pull brings the same row), so the prep rule (plan 22) keeps the card
           // it raises from it; the card's key is the rule's own
-          const evId = `ev_${b.eventId}`;
-          const person = r.personId ? await db.people.get(r.personId) : undefined;
-          if (!(await db.events.get(evId)))
-            await db.events.put({
-              id: evId,
-              userId: user.id,
-              externalEventId: b.eventId,
-              title: `Coffee chat with ${r.personName}`,
-              startAt: new Date(slot).toISOString(),
-              endAt: new Date(Date.parse(slot) + 30 * 60_000).toISOString(),
-              status: 'confirmed',
-              attendees: person?.primaryEmail
-                ? [{ email: person.primaryEmail, displayName: r.personName }]
-                : [],
-              attendeePersonIds: r.personId ? [r.personId] : [],
-              inviteSentAt: now.toISOString(),
-              isCoffeeChat: true,
-              coffeeChatConfidence: 0.95,
-              chatId: chat?.id,
-            });
+          const evId = await ensureBookedEvent(user, r, chat, slot, b.eventId, now);
           if (chat) await raisePrepCard(user, chat, evId, slot, now);
           else
             await upsertCard(
