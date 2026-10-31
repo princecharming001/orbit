@@ -137,6 +137,25 @@ describe('append-only messages', () => {
     expect(await store.messages(c.id)).toHaveLength(6);
   });
 
+  it('replays a nudge stored right after an assistant row as a user message, so the API takes the history', async () => {
+    const c = await store.createConversation({ userId: 'u1', model: 'm' });
+    await store.append(c.id, { role: 'user', content: [{ type: 'text', text: 'did Stripe have layoffs' }] });
+    await store.append(c.id, {
+      role: 'assistant',
+      content: [{ type: 'thinking', thinking: 'no layoffs', signature: '' }],
+    });
+    await store.append(c.id, {
+      role: 'system',
+      content: [{ type: 'text', text: '[Orbit] Your reply had no answer in words.' }],
+    });
+    await store.append(c.id, { role: 'assistant', content: [{ type: 'text', text: 'None this year.' }] });
+    const h = await store.history(c.id);
+    expect(h.map((m) => m.role)).toEqual(['user', 'assistant', 'user', 'assistant']);
+    expect(JSON.stringify(h[2])).toMatch(/no answer in words/);
+    // the row itself is untouched (append-only)
+    expect((await store.messages(c.id))[2]!.role).toBe('system');
+  });
+
   it('forgets a snapshot that a compaction block stands in for, and reads the last Remembered line', async () => {
     const c = await store.createConversation({ userId: 'u1', model: 'm', temporary: false });
     const snap = (clock: string, more: string) =>
