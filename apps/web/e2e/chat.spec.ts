@@ -196,12 +196,41 @@ test.describe('Chat home', () => {
     expect((attach.args[1] as { name: string }).name).toBe('chat-notes.txt');
   });
 
+  test('a turn that looked many things up reads as one quiet line of work, then the answer', async ({
+    page,
+  }) => {
+    await home(page);
+    await ask(page, 'find me small business owners who live in their texts');
+    const turn = page.getByTestId('turn-assistant');
+    await expect(turn).toContainText('Your best three', { timeout: 30_000 });
+    const work = page.getByTestId('work-log');
+    await expect(work).toHaveCount(1);
+    await expect(work).toContainText('Looked through 6 things');
+    // the lookups and the line between them are folded, the answer is not
+    await expect(turn.getByTestId('result-people')).toHaveCount(0);
+    await expect(turn).not.toContainText('Digging a bit wider');
+    await shot(page, 'e2e-laptop-work-search');
+    await page.getByTestId('work-log-toggle').click();
+    await expect(turn.getByTestId('result-people')).toHaveCount(6);
+    await expect(page.getByTestId('work-log-items')).toContainText('Digging a bit wider');
+  });
+
   test('a scripted conversation renders every result kind', async ({ page }) => {
     await home(page);
     await ask(page, 'show me everything');
     await expect(page.getByTestId('turn-assistant')).toContainText('That is the whole set', {
       timeout: 30_000,
     });
+    // that many lookups read as work: one line, the answer and the cards to act on outside it, the rest a tap away
+    await expect(page.getByTestId('work-log-items')).toHaveCount(0);
+    await expect(page.getByTestId('result-needs_confirmation')).toBeVisible();
+    // the thread auto-scrolled to the end of the answer (opening the work below grows it, as a tap should)
+    const scroller = page.getByTestId('thread-scroll');
+    await expect
+      .poll(() => scroller.evaluate((el) => el.scrollHeight - el.scrollTop - el.clientHeight < 80))
+      .toBe(true);
+    await shot(page, 'e2e-laptop-work-folded');
+    await page.getByTestId('work-log-toggle').click();
     for (const kind of [
       'person',
       'people',
@@ -235,10 +264,7 @@ test.describe('Chat home', () => {
     await shot(page, 'e2e-laptop-conversation');
     expect(await clipped(page, '[data-testid="chat-thread"]')).toEqual([]);
     await noOverflow(page, 'conversation');
-    // the thread auto-scrolled to the end; scrolling up stops that and offers a way back
-    const scroller = page.getByTestId('thread-scroll');
-    const atEnd = await scroller.evaluate((el) => el.scrollHeight - el.scrollTop - el.clientHeight < 80);
-    expect(atEnd).toBe(true);
+    // scrolling up stops the auto-scroll and offers a way back
     await scroller.evaluate((el) => (el.scrollTop = 0));
     await expect(page.getByTestId('jump-latest')).toBeVisible();
     await ask(page, 'hello');

@@ -12,10 +12,11 @@ import { createFakeChatEngine, type FakeChatEngine } from '../testing/fakeEngine
 import { fixturePerson } from '../testing/fixtures';
 import type { ResultKind } from '../types';
 import { ChatHome } from './ChatHome';
-import { dayLabel, inReadingOrder, Thread } from './Thread';
+import { dayLabel, inReadingOrder, Thread, type TurnPiece, turnLayout } from './Thread';
 import {
   type AssistantTurn,
   applyEvent,
+  type Block,
   getThread,
   hydrate,
   resetThread,
@@ -100,6 +101,10 @@ describe('the chat thread', () => {
     await mount();
     await act(() => threadActions(engine).send('show me everything'));
     await settle();
+    // that many lookups read as work: folded into one line, every card a tap away
+    const work = $('[data-testid="work-log"]')!;
+    expect(work.querySelector('[data-testid="work-log-items"]')).toBeNull();
+    act(() => work.querySelector<HTMLButtonElement>('[data-testid="work-log-toggle"]')!.click());
     const kinds: Exclude<ResultKind, 'text'>[] = [
       'person',
       'people',
@@ -125,6 +130,47 @@ describe('the chat thread', () => {
     expect($('[data-testid="turn-assistant"]')?.textContent).toMatch(/That is the whole set/);
     // every card that lives on a page offers the way there
     expect($$('[data-testid="open-in-app"]').length).toBeGreaterThan(8);
+  });
+
+  it('folds a turn that looked many things up into one line, keeping the answer and the cards to act on', () => {
+    const tool = (id: string, kind: ResultKind, summary: string): Block => ({
+      type: 'tool',
+      toolUseId: id,
+      toolName: 'search_people',
+      status: kind === 'needs_confirmation' ? 'pending' : 'done',
+      envelope: { kind, data: {}, summary },
+    });
+    const quick = turnLayout([
+      { type: 'text', text: 'Let me check.' },
+      tool('a', 'drafts', '2 drafts'),
+      { type: 'text', text: 'Two drafts wait.' },
+    ]);
+    expect(quick.map((p) => p.type)).toEqual(['block', 'block', 'block']);
+    const busy = turnLayout([
+      { type: 'text', text: 'Checking your network first.' },
+      tool('1', 'people', 'Nobody at "coach"'),
+      tool('2', 'people', '1 person matches "realtor"'),
+      tool('3', 'people', 'Which "owner"?'),
+      { type: 'text', text: 'A few fits so far. Digging a bit wider.' },
+      tool('4', 'people', 'Which "consultant"?'),
+      tool('5', 'needs_confirmation', 'Save this?'),
+      { type: 'text', text: 'Your best three: David, Craig and Ethan.' },
+    ]);
+    expect(busy.map((p) => p.type)).toEqual(['work', 'block', 'block']);
+    const work = busy[0] as Extract<TurnPiece, { type: 'work' }>;
+    expect(
+      work.items.map(({ b }) => (b.type === 'text' ? b.text : b.type === 'tool' ? b.toolUseId : '')),
+    ).toEqual([
+      'Checking your network first.',
+      '1',
+      '2',
+      '3',
+      'A few fits so far. Digging a bit wider.',
+      '4',
+    ]);
+    const kept = busy.slice(1) as Extract<TurnPiece, { type: 'block' }>[];
+    expect(kept[0]!.b).toMatchObject({ toolUseId: '5' });
+    expect(kept[1]!.b).toMatchObject({ text: 'Your best three: David, Craig and Ethan.' });
   });
 
   it('appends streamed text deltas to one paragraph', async () => {

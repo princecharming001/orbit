@@ -20,6 +20,7 @@
  *   "fail no key" / "fail cap" / "fail refusal" / "fail network" / "fail other"   an error of that kind
  *   "fail stale"   a part of the chat a deploy replaced since the tab opened
  *   "search the web"   Claude searches the web, then answers with what it found
+ *   "small business owners"   a search across the network: six lookups with a line between, then the answer
  *   "slow"                  a long turn with progress lines, for Stop
  *   anything else           a short text answer
  */
@@ -628,6 +629,7 @@ function pick(text: string): Script {
   if (t.includes('show choices')) return withChoices;
   const widget = t.match(/setup (google|linkedin|claude|resume)/);
   if (widget) return withSetup(widget[1] === 'claude' ? 'claude_key' : (widget[1] as SetupWhat));
+  if (t.includes('small business owners')) return busySearch;
   if (t.includes('search the web'))
     return async function* () {
       yield { type: 'web_search', id: 'srvtoolu_fake', query: 'Stripe internship deadline 2027' };
@@ -748,6 +750,26 @@ const everything: Script = async function* (ctx) {
     yield* tool(`tu_${ctx.nextId()}`, toolName, progress, env[kind]!());
   }
   yield* say('That is the whole set. Each card opens its page in the app.');
+  yield { type: 'done', stopReason: 'end_turn', messageId: '' };
+};
+
+/** A search across the network: many lookups, a line between them, then the answer (the work folds into one line). */
+const busySearch: Script = async function* (ctx) {
+  yield* say('Checking your network first. ');
+  const people = envelopes(ctx).people!;
+  for (const word of ['coach', 'realtor', 'owner', 'real estate', 'fitness'])
+    yield* tool(`tu_${ctx.nextId()}`, 'search_people', `Searching for ${word}`, {
+      ...people(),
+      summary: `People matching "${word}"`,
+    });
+  yield* say('A few fits so far. Digging a bit wider. ');
+  yield* tool(`tu_${ctx.nextId()}`, 'search_people', 'Searching for consultant', {
+    ...people(),
+    summary: 'People matching "consultant"',
+  });
+  yield* say(
+    'Your best three: David, a Bay Area realtor; Craig, who owns an engineering firm; and Ethan, at Christie’s.',
+  );
   yield { type: 'done', stopReason: 'end_turn', messageId: '' };
 };
 

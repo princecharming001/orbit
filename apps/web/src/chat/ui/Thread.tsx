@@ -1,4 +1,14 @@
-import { Check, Copy, Globe, RefreshCw, ThumbsDown, ThumbsUp, TriangleAlert } from 'lucide-react';
+import {
+  Check,
+  ChevronDown,
+  Copy,
+  Globe,
+  ListChecks,
+  RefreshCw,
+  ThumbsDown,
+  ThumbsUp,
+  TriangleAlert,
+} from 'lucide-react';
 import { useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { copyText } from '../../components/approve';
@@ -106,6 +116,59 @@ export function inReadingOrder(blocks: Block[]): { b: Block; i: number }[] {
   return [...all.filter((x) => !chips(x)), ...all.filter(chips)];
 }
 
+/** Cards the student acts on or came for: never folded away, however much work came before them. */
+const OUTCOME_KINDS = new Set([
+  'needs_confirmation',
+  'choices',
+  'setup',
+  'draft',
+  'drafts',
+  'plan',
+  'prep',
+  'import',
+]);
+/** A turn that looked this many things up reads as work, then an answer: the lookups fold into one line. */
+export const WORK_FOLD_AT = 3;
+
+export type TurnPiece =
+  | { type: 'block'; b: Block; i: number }
+  /** the folded lookups, with the words said between them, in order */
+  | { type: 'work'; items: { b: Block; i: number }[] };
+
+/**
+ * How a turn reads. A quick answer (a card or two) shows as it came. A turn that looked many things up (a search
+ * across the network, several reads) is work, then an answer: the lookups, the reasoning notes and the words said
+ * between them fold into one quiet line where the work began, and what stays out is the answer (the words after the
+ * last lookup), the cards to act on (a draft, an approval, choices, a setup) and the web's sources.
+ */
+export function turnLayout(blocks: Block[]): TurnPiece[] {
+  const ordered = inReadingOrder(blocks);
+  const isLookup = (b: Block) =>
+    b.type === 'tool' && b.status !== 'pending' && !(b.envelope && OUTCOME_KINDS.has(b.envelope.kind));
+  const lookups = ordered.filter(({ b }) => isLookup(b)).length;
+  if (lookups < WORK_FOLD_AT) return ordered.map(({ b, i }) => ({ type: 'block', b, i }));
+  let lastTool = -1;
+  blocks.forEach((b, i) => {
+    if (b.type === 'tool' || b.type === 'web') lastTool = i;
+  });
+  const isWork = ({ b, i }: { b: Block; i: number }) =>
+    isLookup(b) || b.type === 'progress' || (b.type === 'text' && i < lastTool);
+  const out: TurnPiece[] = [];
+  let work: { type: 'work'; items: { b: Block; i: number }[] } | undefined;
+  for (const x of ordered) {
+    if (!isWork(x)) {
+      out.push({ type: 'block', b: x.b, i: x.i });
+      continue;
+    }
+    if (!work) {
+      work = { type: 'work', items: [] };
+      out.push(work);
+    }
+    work.items.push(x);
+  }
+  return out;
+}
+
 /** "Today", "Yesterday", "Monday, Oct 26", with the year once it is not this one: the day a part of a chat is from. */
 export function dayLabel(at: string, now = new Date()): string {
   const d = new Date(at);
@@ -153,8 +216,10 @@ function Assistant({
     .map((b) => b.text)
     .join('\n\n');
   const lastBlock = turn.blocks[turn.blocks.length - 1];
+  const folded = turnLayout(turn.blocks).some((p) => p.type === 'work');
   const waiting =
     streaming &&
+    !folded &&
     (!lastBlock ||
       lastBlock.type === 'progress' ||
       (lastBlock.type === 'tool' && lastBlock.status === 'running'));
@@ -162,17 +227,25 @@ function Assistant({
     <div className="group min-w-0" data-testid="turn-assistant" data-status={turn.status}>
       <div aria-live="polite" aria-busy={streaming}>
         <ChoicesContext.Provider value={{ running, laterUserText }}>
-          {inReadingOrder(turn.blocks).map(({ b, i }) =>
-            b.type === 'text' ? (
-              <Markdown key={i} text={b.text} />
-            ) : b.type === 'progress' ? (
-              showReasoning ? (
-                <ProgressLine key={i} text={b.text} live={streaming && i === turn.blocks.length - 1} />
-              ) : null
-            ) : b.type === 'web' ? (
-              <WebSearchLine key={b.id} block={b} live={streaming} />
+          {turnLayout(turn.blocks).map((piece) =>
+            piece.type === 'work' ? (
+              <WorkLog
+                key={`work-${piece.items[0]!.i}`}
+                items={piece.items}
+                live={streaming}
+                showReasoning={showReasoning}
+                actions={actions}
+              />
             ) : (
-              <ToolView key={b.toolUseId} block={b} actions={actions} />
+              <BlockView
+                key={blockKey(piece.b, piece.i)}
+                b={piece.b}
+                i={piece.i}
+                last={turn.blocks.length - 1}
+                streaming={streaming}
+                showReasoning={showReasoning}
+                actions={actions}
+              />
             ),
           )}
         </ChoicesContext.Provider>
@@ -265,6 +338,112 @@ function IconButton({
     >
       {children}
     </button>
+  );
+}
+
+const blockKey = (b: Block, i: number) =>
+  b.type === 'tool' ? b.toolUseId : b.type === 'web' ? b.id : `b${i}`;
+
+/** One block of a turn as it reads in the thread. */
+function BlockView({
+  b,
+  i,
+  last,
+  streaming,
+  showReasoning,
+  actions,
+}: {
+  b: Block;
+  i: number;
+  last: number;
+  streaming: boolean;
+  showReasoning: boolean;
+  actions: CardActions;
+}) {
+  if (b.type === 'text') return <Markdown text={b.text} />;
+  if (b.type === 'progress')
+    return showReasoning ? <ProgressLine text={b.text} live={streaming && i === last} /> : null;
+  if (b.type === 'web') return <WebSearchLine block={b} live={streaming} />;
+  return <ToolView block={b} actions={actions} />;
+}
+
+/** What one folded step says in a line: the tool's own summary, its running label, or the words themselves. */
+function stepText(b: Block): string {
+  if (b.type === 'tool') return b.envelope?.summary?.trim() || b.progress || humanTool(b.toolName);
+  if (b.type === 'text' || b.type === 'progress') return b.text.trim();
+  return '';
+}
+
+/**
+ * The work of a turn, folded: while it runs, one line with the step under way; after, "Looked through N things" with
+ * the first few in brief, opening to every card and note in the order they came. The answer stays outside it.
+ */
+function WorkLog({
+  items,
+  live,
+  showReasoning,
+  actions,
+}: {
+  items: { b: Block; i: number }[];
+  live: boolean;
+  showReasoning: boolean;
+  actions: CardActions;
+}) {
+  const [open, setOpen] = useState(false);
+  const tools = items.filter(({ b }) => b.type === 'tool');
+  const steps = tools.map(({ b }) => stepText(b)).filter(Boolean);
+  const backwards = [...items].reverse();
+  const running = backwards.find(({ b }) => b.type === 'tool' && b.status === 'running');
+  const latest = running ?? backwards.find(({ b }) => b.type === 'tool' || b.type === 'text');
+  const now = latest ? stepText(latest.b) : '';
+  const label = live
+    ? 'Working on it'
+    : `Looked through ${tools.length} ${tools.length === 1 ? 'thing' : 'things'}`;
+  return (
+    <div className="my-2" data-testid="work-log" data-open={open || undefined}>
+      <button
+        type="button"
+        onClick={() => setOpen((o) => !o)}
+        aria-expanded={open}
+        className="group/work flex w-full min-w-0 items-center gap-2 rounded-[12px] border border-line bg-canvas px-3 py-2 text-left text-[13px] shadow-[var(--shadow-pill)] hover:bg-canvas-2"
+        data-testid="work-log-toggle"
+      >
+        <ListChecks
+          size={15}
+          className={cx('shrink-0', live ? 'text-accent animate-pulse' : 'text-ink-3')}
+          aria-hidden
+        />
+        <span className="shrink-0 font-medium text-ink">{label}</span>
+        <span
+          className={cx('min-w-0 flex-1 truncate text-ink-3', live && 'shimmer')}
+          data-testid="work-log-now"
+        >
+          {live ? now : steps.slice(0, 3).join(' · ')}
+        </span>
+        <ChevronDown
+          size={15}
+          className={cx('shrink-0 text-ink-3 transition-transform', open && 'rotate-180')}
+          aria-hidden
+        />
+      </button>
+      {open && (
+        <div className="mt-2 border-l-2 border-line-2 pl-3" data-testid="work-log-items">
+          {items.map(({ b, i }) =>
+            b.type === 'text' ? (
+              <p key={`t${i}`} className="my-1.5 text-[13px] text-ink-3">
+                {b.text.trim()}
+              </p>
+            ) : b.type === 'progress' ? (
+              showReasoning ? (
+                <ProgressLine key={`p${i}`} text={b.text} live={false} />
+              ) : null
+            ) : b.type === 'tool' ? (
+              <ToolView key={b.toolUseId} block={b} actions={actions} />
+            ) : null,
+          )}
+        </div>
+      )}
+    </div>
   );
 }
 

@@ -22,7 +22,7 @@
  */
 
 import { clientIp, defaultOrigins } from '../_shared/origins.ts';
-import { costUsd, PRICES, type Usage } from '../_shared/prices.ts';
+import { costUsd, PRICES, type Usage, WEB_SEARCH_USD } from '../_shared/prices.ts';
 
 export { clientIp, defaultOrigins };
 
@@ -318,7 +318,10 @@ export async function subjectOf(
 
 /** The price of an answer, at the chat model's rates when the model is not one Orbit knows (a fallback model). */
 export function answerCost(model: string | undefined, u: Usage): number {
-  return costUsd(model && PRICES[model] ? model : 'claude-opus-5-5', u);
+  return (
+    costUsd(model && PRICES[model] ? model : 'claude-opus-5-5', u) +
+    (u.server_tool_use?.web_search_requests ?? 0) * WEB_SEARCH_USD
+  );
 }
 
 /**
