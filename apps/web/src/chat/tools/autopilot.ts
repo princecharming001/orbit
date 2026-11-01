@@ -176,7 +176,9 @@ export const setAutopilotModeTool = defineTool({
         goalId: input.goalId ?? null,
         local: !isServerUser(ctx.user.id),
       },
-      `${goal ? `For "${goal.title}", ` : ''}Orbit is on ${m.title}. ${m.body}${isServerUser(ctx.user.id) ? '' : ` ${LOCAL_AUTOPILOT_NOTE}`}`,
+      // the student read the rules on the Approve card a moment ago: the result says only what changed, so the reply
+      // after it is one line, never the card again
+      `${goal ? `${goal.title} is` : 'Orbit is'} on ${m.title} now. Pause is one tap, here or in the chat.${isServerUser(ctx.user.id) ? '' : ` ${LOCAL_AUTOPILOT_NOTE}`}`,
       '/settings/autopilot',
     );
   },

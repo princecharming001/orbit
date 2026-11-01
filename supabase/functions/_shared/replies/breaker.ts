@@ -2,8 +2,9 @@
  * The circuit breaker (plan 29 §B2.7): an unsubscribe, two declines in a day, a bounce, a Gmail send error, or a
  * decline or concern answering a first message Orbit sent on its own (§B2.2) pauses what Orbit sends on its own for
  * that goal, and tells the student. The pause is one key in users.settings,
- * `autopilot_paused_goals`, read by the cadence (nothing of that goal's is approved on its own), the send job (an
- * approved auto send of that goal waits) and the reply funnel (no auto reply for that goal). The student lifts it
+ * `autopilot_paused_goals`, read by the cadence and the plan step (no outreach of that goal is approved on its own) and
+ * the send job (an approved auto send of outreach for that goal waits; see breakerHolds). Replies inside a live thread
+ * still finish themselves: the breaker stops new outreach, not answers to people who wrote back. The student lifts it
  * from Settings or the chat (`/autopilot/pause {until: null, goalId}`).
  */
 import type { Db } from '../db.ts';
@@ -40,6 +41,28 @@ export function pausedGoalsOf(settings: Record<string, unknown> | null | undefin
     };
   }
   return out;
+}
+
+/**
+ * What the breaker holds (plan 29 §B2.7, as built 2026-11-01): the outreach Orbit starts on its own for the goal, first
+ * messages, bumps and the notes that open or reopen a conversation. Never a reply inside a thread the other person
+ * kept going by writing back (a scheduling confirmation, the slots for a yes, a thank-you): one person's unsubscribe
+ * must not leave another person's requested call unconfirmed.
+ */
+const OUTREACH_KINDS: ReadonlySet<string> = new Set([
+  'outreach',
+  'first_touch',
+  'warm_first_touch',
+  'bump',
+  'nurture',
+  'reengage',
+  'congratulate',
+  'referral_ask',
+  'intro_request',
+  'report_back',
+]);
+export function breakerHolds(kind: string | null | undefined): boolean {
+  return !kind || OUTREACH_KINDS.has(kind);
 }
 
 /** True while the goal's auto sends are paused: an entry with no end, or one whose end is still ahead. */

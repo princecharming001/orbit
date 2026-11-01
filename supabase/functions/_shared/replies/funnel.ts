@@ -25,7 +25,6 @@ import {
   storedBusy,
 } from '../slots/slots.ts';
 import { validZone } from '../zones.ts';
-import { goalPaused } from './breaker.ts';
 import { type AutoReplyOutcome, approveIfAllowed, maybeAutoReply } from './replies.ts';
 
 /** A named time within this many minutes of an offered slot is that slot. */
@@ -189,12 +188,7 @@ export async function runReplyFunnel(
   const confirmation =
     draft.status !== 'draft'
       ? ({ action: 'auto_sent', draftId: draft.id } as AutoReplyOutcome)
-      : goalPaused(u?.settings, draft.goal_id, now)
-        ? ({
-            action: 'drafted',
-            draftId: draft.id,
-            reasons: ['goal paused by the breaker'],
-          } as AutoReplyOutcome)
-        : await approveIfAllowed(s, userId, draft, 'scheduling', now, { offeredSlots: [slotStart] });
+      : // a confirmation answers someone who picked a time: the breaker (outreach only) never holds it
+        await approveIfAllowed(s, userId, draft, 'scheduling', now, { offeredSlots: [slotStart] });
   return { action: 'booked', eventId, slotStart, draftId: draft.id, confirmation };
 }

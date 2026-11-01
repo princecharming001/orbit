@@ -32,7 +32,7 @@ import { askUserMarkers } from '../compose/prompts.ts';
 import { nextSendWindow } from '../compose/window.ts';
 import type { Db } from '../db.ts';
 import { HttpError } from '../http.ts';
-import { goalPaused, tripBreaker } from '../replies/breaker.ts';
+import { breakerHolds, goalPaused, tripBreaker } from '../replies/breaker.ts';
 import { iso } from '../rows.ts';
 import type { Services } from '../services.ts';
 import { moveChat } from '../slots/slots.ts';
@@ -391,8 +391,9 @@ export async function sendDraft(s: Services, draftId: string): Promise<SendResul
       'autopilot_paused',
       new Date(Math.min(paused.getTime(), now.getTime() + PAUSE_RECHECK_SEC * 1000)),
     );
-  // the breaker's pause for this goal (plan 29 §B2.7): what Orbit approved itself waits as a draft until it is lifted
-  if (agentApproved && !userApproved && goalPaused(u.settings, d.goal_id, now)) {
+  // the breaker's pause for this goal (plan 29 §B2.7): outreach Orbit approved itself waits as a draft until it is
+  // lifted; a reply inside a live thread still goes
+  if (agentApproved && !userApproved && breakerHolds(d.kind) && goalPaused(u.settings, d.goal_id, now)) {
     await settle('draft', { error: 'goal_paused' });
     await audit(db, userId, 'system', 'draft.hold', d.id, { reason: 'goal_paused', goalId: d.goal_id });
     return { status: 'held', reason: 'goal_paused' };

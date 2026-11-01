@@ -298,7 +298,8 @@ describe('the class table on the server (plan 29 §B2.3)', () => {
     expect(breaker.reason_text).toBe('Chloe Dubois asked to stop. Paused Ramp first messages. Read it?');
     expect(breaker.payload).toMatchObject({ goalId: r.goalId, reason: 'unsubscribe', company: 'Ramp' });
     expect((await audit(r.userId)).map((a) => a.action)).toContain('autopilot.breaker');
-    // an interested reply from someone else on the same goal now waits for the student
+    // the breaker holds outreach, never a reply: an interested reply from someone else on the same goal still
+    // finishes itself, while a bump Orbit approved for that goal waits
     const other = await addPerson(t, r.userId, {
       name: 'Grace Liu',
       email: 'grace@example.com',
@@ -310,13 +311,15 @@ describe('the class table on the server (plan 29 §B2.3)', () => {
       { direction: 'out', at: '2026-10-12T15:00:00Z', body: 'Could we talk?' },
       { direction: 'in', at: '2026-10-13T15:30:00Z', body: 'Sure, happy to.', replyClass: 'interested' },
     ]);
-    const held = await maybeAutoReply(t.db, r.userId, th.messageIds[1]!, { services: s });
-    expect(held).toMatchObject({ action: 'drafted', reasons: ['goal paused by the breaker'] });
-    // and the send job holds an agent-approved draft of that goal
-    if (held.action !== 'drafted') return;
-    const [row] = await t.db.sql<{ channel: 'gmail'; subject: string | null; body: string }>`
-      update orbit.drafts set status = 'approved', send_at = ${NOW}::timestamptz, auto_rung = 'reply'
-       where id = ${held.draftId}::uuid returning channel, subject, body`;
+    const answered = await maybeAutoReply(t.db, r.userId, th.messageIds[1]!, { services: s });
+    expect(JSON.stringify(answered)).not.toMatch(/goal paused by the breaker/);
+    if (!('draftId' in answered) || !answered.draftId)
+      throw new Error('the interested reply drafted nothing');
+    // a bump Orbit approved itself for the same goal: the send job holds it
+    const [row] = await t.db.sql<{ id: string; channel: 'gmail'; subject: string | null; body: string }>`
+      update orbit.drafts set status = 'approved', send_at = ${NOW}::timestamptz, auto_rung = 'bump', kind = 'bump'
+       where id = ${answered.draftId}::uuid returning id, channel, subject, body`;
+    const held = { draftId: row!.id };
     await t.db.sql`
       insert into orbit.audit_log (user_id, actor, action, target_table, target_id, details)
       values (${r.userId}::uuid, 'agent', 'draft.auto_approve', 'drafts', ${held.draftId},

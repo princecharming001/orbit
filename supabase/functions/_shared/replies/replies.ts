@@ -20,7 +20,7 @@ import { firstNameOf, iso, num } from '../rows.ts';
 import { type AgentConfig, makeServices, type Services } from '../services.ts';
 import { moveChat } from '../slots/slots.ts';
 import { validZone, zonedTime } from '../zones.ts';
-import { DECLINES_PER_DAY, declinesToday, goalPaused, pushbackOnAutoFirst, tripBreaker } from './breaker.ts';
+import { DECLINES_PER_DAY, declinesToday, pushbackOnAutoFirst, tripBreaker } from './breaker.ts';
 import { mailIfAway, raiseCard, settleCard } from './cards.ts';
 
 export const REPLY_WINDOW_DAYS = 30;
@@ -328,11 +328,11 @@ export async function approveIfAllowed(
     },
   );
   const reasons = [...verdict.reasons];
-  // the pauses (plan 29 §B2.7): the account's, and the breaker's for this goal
+  // the account's pause (plan 29 §B2.7)
   const paused = u!.settings?.autopilot_paused_until;
   if (typeof paused === 'string' && new Date(paused).getTime() > now.getTime())
     reasons.push('autopilot paused');
-  if (goalPaused(u!.settings, draft.goal_id, now)) reasons.push('goal paused by the breaker');
+  // the breaker's goal pause holds outreach only (breakerHolds): a reply to someone who wrote back still finishes
   if (askUserMarkers(`${draft.subject ?? ''}\n${draft.body}`).length) reasons.push('needs_input');
   if (reasons.length) return { action: 'drafted', draftId: draft.id, reasons: [...new Set(reasons)] };
 

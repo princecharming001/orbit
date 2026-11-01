@@ -12170,6 +12170,21 @@ function pausedGoalsOf(settings) {
   }
   return out;
 }
+var OUTREACH_KINDS = /* @__PURE__ */ new Set([
+  "outreach",
+  "first_touch",
+  "warm_first_touch",
+  "bump",
+  "nurture",
+  "reengage",
+  "congratulate",
+  "referral_ask",
+  "intro_request",
+  "report_back"
+]);
+function breakerHolds(kind) {
+  return !kind || OUTREACH_KINDS.has(kind);
+}
 function goalPaused(settings, goalId, now) {
   if (!goalId) return false;
   const p = pausedGoalsOf(settings)[goalId];
@@ -12408,7 +12423,6 @@ async function approveIfAllowed(s, userId, draft, cls, now, extra = {}) {
   const paused = u2.settings?.autopilot_paused_until;
   if (typeof paused === "string" && new Date(paused).getTime() > now.getTime())
     reasons.push("autopilot paused");
-  if (goalPaused(u2.settings, draft.goal_id, now)) reasons.push("goal paused by the breaker");
   if (askUserMarkers(`${draft.subject ?? ""}
 ${draft.body}`).length) reasons.push("needs_input");
   if (reasons.length) return { action: "drafted", draftId: draft.id, reasons: [...new Set(reasons)] };
@@ -14529,11 +14543,10 @@ async function runReplyFunnel(s, userId, messageId, opts = {}) {
       throw e;
     }
   }
-  const confirmation = draft.status !== "draft" ? { action: "auto_sent", draftId: draft.id } : goalPaused(u2?.settings, draft.goal_id, now) ? {
-    action: "drafted",
-    draftId: draft.id,
-    reasons: ["goal paused by the breaker"]
-  } : await approveIfAllowed(s, userId, draft, "scheduling", now, { offeredSlots: [slotStart] });
+  const confirmation = draft.status !== "draft" ? { action: "auto_sent", draftId: draft.id } : (
+    // a confirmation answers someone who picked a time: the breaker (outreach only) never holds it
+    await approveIfAllowed(s, userId, draft, "scheduling", now, { offeredSlots: [slotStart] })
+  );
   return { action: "booked", eventId, slotStart, draftId: draft.id, confirmation };
 }
 
@@ -15031,7 +15044,7 @@ ${d.body}`)) {
       "autopilot_paused",
       new Date(Math.min(paused.getTime(), now.getTime() + PAUSE_RECHECK_SEC * 1e3))
     );
-  if (agentApproved && !userApproved && goalPaused(u2.settings, d.goal_id, now)) {
+  if (agentApproved && !userApproved && breakerHolds(d.kind) && goalPaused(u2.settings, d.goal_id, now)) {
     await settle("draft", { error: "goal_paused" });
     await audit(db2, userId, "system", "draft.hold", d.id, { reason: "goal_paused", goalId: d.goal_id });
     return { status: "held", reason: "goal_paused" };

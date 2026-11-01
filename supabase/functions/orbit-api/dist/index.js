@@ -5118,6 +5118,21 @@ function pausedGoalsOf(settings2) {
   }
   return out;
 }
+var OUTREACH_KINDS = /* @__PURE__ */ new Set([
+  "outreach",
+  "first_touch",
+  "warm_first_touch",
+  "bump",
+  "nurture",
+  "reengage",
+  "congratulate",
+  "referral_ask",
+  "intro_request",
+  "report_back"
+]);
+function breakerHolds(kind) {
+  return !kind || OUTREACH_KINDS.has(kind);
+}
 function goalPaused(settings2, goalId, now) {
   if (!goalId) return false;
   const p = pausedGoalsOf(settings2)[goalId];
@@ -11055,7 +11070,7 @@ ${d.body}`)) {
       "autopilot_paused",
       new Date(Math.min(paused.getTime(), now.getTime() + PAUSE_RECHECK_SEC * 1e3))
     );
-  if (agentApproved && !userApproved && goalPaused(u2.settings, d.goal_id, now)) {
+  if (agentApproved && !userApproved && breakerHolds(d.kind) && goalPaused(u2.settings, d.goal_id, now)) {
     await settle("draft", { error: "goal_paused" });
     await audit(db2, userId, "system", "draft.hold", d.id, { reason: "goal_paused", goalId: d.goal_id });
     return { status: "held", reason: "goal_paused" };
