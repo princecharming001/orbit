@@ -5,8 +5,9 @@ import { withFakeApi } from './fakeApi';
 /**
  * Autopilot (plan 29 Part B, B7 acceptance): a week on autopilot against the fake orbit-api. Phase 3 made the reply
  * flows real: Tomorrow's batch with Hold, a seeded reply of each class producing its card or send, Needs you answered
- * from the chat, a confirmed slot booking the call, the breaker, Sent for you and the pause. The flows that wait on
- * phases 4 and 5 (the Settings pages, the morning send of a first message) stay `fixme` with what they will prove.
+ * from the chat, a confirmed slot booking the call, the breaker, Sent for you and the pause. Phase 4 made Settings,
+ * Voice real; the flows that wait on phase 5 (the Autopilot page, the morning send of a first message) stay `fixme`
+ * with what they will prove.
  */
 
 const STUDENT_PEOPLE = [
@@ -217,12 +218,11 @@ test.describe('autopilot (plan 29 B7, fake orbit-api)', () => {
     await expect(page.getByTestId('turn-assistant').last()).toContainText(/Sent 3 on its own today/);
   });
 
-  test.fixme('Settings, Voice: the card as prose and the learned notes with Keep and Forget', async ({
-    page,
-  }) => {
+  test('Settings, Voice: the card as prose and the learned notes with Keep and Forget', async ({ page }) => {
     const api = await signedInOnAutopilot(page);
     await page.goto('settings/voice');
     await expect(page.getByTestId('voice-card')).toContainText('You greet with Hi');
+    await expect(page.getByTestId('voice-score')).toContainText('2.6 of 3');
     const notes = page.getByTestId('voice-note');
     await expect(notes).toHaveCount(3);
     await notes
@@ -231,7 +231,18 @@ test.describe('autopilot (plan 29 B7, fake orbit-api)', () => {
       .click();
     await expect(notes).toHaveCount(2);
     expect(api.state.voice.notes.find((n) => n.id === 'vn_thanks_either_way')?.forgottenAt).toBeTruthy();
+    await notes.filter({ hasText: 'first name' }).getByRole('button', { name: /^keep/i }).click();
+    await expect(notes.filter({ hasText: 'first name' })).toContainText('Kept');
     await page.getByTestId('voice-relearn').click();
-    expect(api.state.voice.relearnRequests).toBe(1);
+    await expect.poll(() => api.state.voice.relearnRequests).toBe(1);
+    // plain words: no dash and no exclamation mark anywhere on the page
+    await expect(page.locator('main')).not.toContainText(/[\u2014\u2013!]/);
+    // the chat reads the same notes, the forgotten one gone
+    await page.goto('');
+    await say(page, 'what have you learned about how I write');
+    await expect(page.getByTestId('turn-assistant').last()).toContainText(
+      'You sign with your first name only',
+    );
+    await expect(page.getByTestId('turn-assistant').last()).not.toContainText('Thanks either way');
   });
 });

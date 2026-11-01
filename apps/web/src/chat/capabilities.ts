@@ -1885,7 +1885,7 @@ export const CAPABILITIES: readonly Capability[] = [
     kind: 'risky',
     utterances: ['forget that', 'forget everything about Dan', 'delete what you remember about my schedule'],
   },
-  // plan 29 Part B: autopilot (phase 3: the class table, Needs you, the pause; the voice tools say "not yet" until phase 4)
+  // plan 29 Part B: autopilot (phase 3: the class table, Needs you, the pause; phase 4: the voice, its notes and forgetting one)
   {
     id: 'autopilot_mode',
     area: 'Networking agent',

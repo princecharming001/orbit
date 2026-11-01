@@ -44,8 +44,9 @@ let unmount: () => void;
 
 beforeEach(async () => {
   await wipeDatabase();
-  let user;
-  ({ api, user } = await signInToFakeApi());
+  const signedIn = await signInToFakeApi();
+  api = signedIn.api;
+  const user = signedIn.user;
   api.state.voice = {
     cardProse: [
       'You greet with Hi and sign off with Thanks.',

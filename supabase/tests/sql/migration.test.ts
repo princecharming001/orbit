@@ -100,6 +100,8 @@ describe('orbit core migration', () => {
       // plan 29 §B2.5: the hourly outcome roll, scheduled by 20261101_orbit_autopilot_phase3.sql
       'orbit-outcomes',
       'orbit-retention',
+      // plan 29 §B2.4b: the nightly voice distillation, scheduled by 20261102_orbit_voice.sql
+      'orbit-voice',
       'orbit-worker-tick',
     ]);
   });
