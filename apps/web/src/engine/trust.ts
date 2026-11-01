@@ -22,6 +22,7 @@ import {
   type Person,
   type Suggestion,
   type User,
+  VOICE_HOLD_REASON,
 } from '@orbit/core';
 import { db } from '../db/schema';
 import { flagOn } from './flags';
@@ -332,6 +333,9 @@ async function autoSendOnce(
   // a reply since the card was raised changes what to say: the student decides
   const chat = msg.chatId ? await db.chats.get(msg.chatId) : undefined;
   if (chat?.lastInboundAt && chat.lastInboundAt > s.createdAt) return { sent: false, why: 'they replied' };
+  // plan 29 §B6: what Orbit would send on its own must sound like the student; otherwise the card waits for them
+  const voice = await import('./voice').then((m) => m.checkBeforeAutoSend(user, msg));
+  if (!voice.ok) return { sent: false, why: VOICE_HOLD_REASON };
   const zone = personZone(person) ?? user.timezone;
   const window = Date.parse(nextSendWindow(now, zone, 'gmail').notBefore);
   const sendAt = new Date(Math.max(window, now.getTime() + AUTO_UNDO_MS));

@@ -36,11 +36,16 @@ import {
   OWN_WORDS_QUESTIONS,
   ownWordsOf,
   VOICE_EDITS_FOR_DISTILL,
+  VOICE_HOLD_REASON,
+  VOICE_JUDGE_MIN,
   VOICE_LEARN_EVERY,
+  type VoiceCheckResult,
   voiceCheck,
   voiceScore,
+  wordCount,
   wordEditDistance,
 } from '@orbit/core';
+import { audit } from '../db/repo';
 import { db } from '../db/schema';
 import { callApi, isServerUser } from '../integrations/orbitApi';
 import { pushProfileSettings } from './settings';
@@ -340,4 +345,79 @@ export async function relearnVoice(
 /** The notes drafting follows here: the ones in force (a forgotten note never shapes a draft). */
 export async function notesInForce(userId: string): Promise<VoiceNote[]> {
   return activeVoiceNotes(await storedVoiceNotes(userId));
+}
+
+// ---- the check before this browser sends on its own --------------------------------------------------------------
+
+/** The student's own recent sent mail, as the voice check's evidence of their greeting and sign-off. */
+async function sentExamples(userId: string, n = 5): Promise<string[]> {
+  const sent = await db.messages
+    .where('userId')
+    .equals(userId)
+    .filter((m) => m.direction === 'outbound' && !m.isAutomated && wordCount(m.bodyText ?? '') >= 25)
+    .toArray();
+  return sent
+    .sort((a, b) => b.sentAt.localeCompare(a.sentAt))
+    .slice(0, n)
+    .map((m) => m.bodyText);
+}
+
+/**
+ * Before this browser sends something on its own (the ladder's kinds, plan 29 §B6): the voice check against the card,
+ * the notes in force and the student's recent sent mail. A failure is held for the student with the reason "didn't
+ * sound like you" in the audit log, the problems beside it.
+ */
+export async function checkBeforeAutoSend(
+  user: Pick<User, 'id' | 'firstName'>,
+  msg: Pick<OutboundMessage, 'id' | 'bodyDraft' | 'subject' | 'kind'>,
+): Promise<VoiceCheckResult> {
+  const [card, notes, examples] = await Promise.all([
+    currentStyleCard(user),
+    notesInForce(user.id),
+    sentExamples(user.id),
+  ]);
+  const r = voiceCheck({ body: msg.bodyDraft, subject: msg.subject }, { card, notes, exemplars: examples });
+  if (!r.ok)
+    await audit(user.id, 'draft.hold', {
+      actor: 'system',
+      objectTable: 'outbound',
+      objectId: msg.id,
+      metadata: {
+        reason: 'voice',
+        text: VOICE_HOLD_REASON,
+        kind: msg.kind,
+        problems: r.problems.map((p) => p.detail),
+      },
+    }).catch(() => undefined);
+  return r;
+}
+
+/**
+ * The judge for a first message this browser would send on its own (plan 29 §B2.4c), on the student's own key: the
+ * check first, then Claude against their recent sent mail, which must say 2 or more. Without a key, or with too
+ * little mail to compare, it holds for a tap.
+ */
+export async function judgeFirstMessage(
+  user: Pick<User, 'id' | 'firstName'>,
+  msg: Pick<OutboundMessage, 'id' | 'bodyDraft' | 'subject' | 'kind'>,
+): Promise<{ ok: boolean; reason: string; score?: number }> {
+  const check = await checkBeforeAutoSend(user, msg);
+  if (!check.ok) return { ok: false, reason: check.problems[0]!.detail };
+  const examples = await sentExamples(user.id, 3);
+  const { llmJudgeVoice } = await import('../integrations/anthropic');
+  const j =
+    examples.length >= 2
+      ? await llmJudgeVoice({ body: msg.bodyDraft, subject: msg.subject }, examples)
+      : undefined;
+  const ok = !!j && j.score >= VOICE_JUDGE_MIN;
+  if (!ok)
+    await audit(user.id, 'draft.hold', {
+      actor: 'system',
+      objectTable: 'outbound',
+      objectId: msg.id,
+      metadata: { reason: 'voice', text: VOICE_HOLD_REASON, kind: msg.kind, score: j?.score ?? null },
+    }).catch(() => undefined);
+  return j
+    ? { ok, reason: j.reason, score: j.score }
+    : { ok: false, reason: 'Orbit could not compare it with enough of your sent mail to be sure.' };
 }

@@ -11,9 +11,10 @@
  * Send: claimed with one `update … set status = 'sending' where status = 'approved' returning *`, so two workers or
  * two taps send once. Before the provider call: the review window (`review_until`) and the pause
  * (`autopilot_paused_until`) put it back in the queue a little later; a newer inbound message cancels it
- * (`replied`); the hard rules (`checkSend`) hold or forbid it; the cap table in core (`SEND_CAPS`: Gmail 15 and
- * LinkedIn 10 a day by hand, 30 sales first touches, 5 on Orbit's own, invites 15 a day and 60 a week, or the
- * student's own lower limit) pushes it to the next window. Afterwards: sent_at, provider_message_id, the chat moves,
+ * (`replied`); the hard rules (`checkSend`) hold or forbid it; what Orbit approved itself must pass the voice check
+ * (and, for a first message, the judge) or it falls back to approval as "didn't sound like you"; the cap table in
+ * core (`SEND_CAPS`: Gmail 15 and LinkedIn 10 a day by hand, 30 sales first touches, 5 on Orbit's own, invites 15 a
+ * day and 60 a week, or the student's own lower limit) pushes it to the next window. Afterwards: sent_at, provider_message_id, the chat moves,
  * and the audit log records it (`draft.sent`, or `draft.auto_sent` for one Orbit approved itself). A 429 or 5xx
  * hands it back as approved for the queue to retry.
  */
@@ -22,6 +23,7 @@ import { placeholderIn } from '@orbit/core/drafts/validate';
 import { cancelIfReplied } from '@orbit/core/pipeline/cadence';
 import { checkSend, messageHash, type SafetyViolation, SEND_CAPS } from '@orbit/core/safety/rules';
 import type { DraftApproveRequest, ServerDraft } from '@orbit/core/server/api';
+import { VOICE_HOLD_REASON } from '@orbit/core/style/voice';
 import type { CoffeeChat } from '@orbit/core/types';
 import { historyWith } from '../compose/compose.ts';
 import { type DraftMeta, type DraftRow, draftById, loadDraft, toServerDraft } from '../compose/drafts.ts';
@@ -33,7 +35,7 @@ import { goalPaused, tripBreaker } from '../replies/breaker.ts';
 import { iso } from '../rows.ts';
 import type { Services } from '../services.ts';
 import { moveChat } from '../slots/slots.ts';
-import { recordDraftEdit } from '../voice/voice.ts';
+import { recordDraftEdit, voiceGate } from '../voice/voice.ts';
 import { validZone, zonedTime } from '../zones.ts';
 import { rawMessage } from './mime.ts';
 import { gmailSend, gmailThreadHasNewerInbound, linkedinSend, type SendOutcome } from './transport.ts';
@@ -454,6 +456,21 @@ export async function sendDraft(s: Services, draftId: string): Promise<SendResul
   if ((await salesFirstTouch(db, d)) && (!(await postalAddress(db, userId)) || !meta.footer)) {
     await settle('draft', { error: 'needs_postal_address' });
     return { status: 'held', reason: 'needs_postal_address' };
+  }
+  // 3b. the voice (plan 29 §B6): what Orbit approved itself must sound like the student, and a first message must
+  // also pass the judge; otherwise it falls back to approval with the reason in their words
+  if (agentApproved && !userApproved) {
+    const gate = await voiceGate(s, u, d, { firstMessage: FIRST_TOUCH_KINDS.has(d.kind as never) });
+    if (!gate.ok) {
+      await settle('draft', { error: 'voice' });
+      await audit(db, userId, 'system', 'draft.hold', d.id, {
+        reason: 'voice',
+        text: VOICE_HOLD_REASON,
+        problems: gate.problems,
+        ...(gate.score !== undefined ? { score: gate.score } : {}),
+      });
+      return { status: 'held', reason: 'voice' };
+    }
   }
 
   // 4. caps (the table in core, or the student's own lower limit)

@@ -23,16 +23,20 @@ import {
   mergeVoiceNotes,
   VOICE_DISTILL_SYSTEM,
   VOICE_EDITS_FOR_DISTILL,
+  VOICE_JUDGE_MIN,
+  VOICE_JUDGE_SYSTEM,
   VOICE_NOTES_MAX,
   type VoiceEdit,
   voiceCheck,
   voiceDistillUser,
+  voiceJudgeUser,
   voiceScore,
   wordEditDistance,
 } from '@orbit/core/style/voice';
 import { stripQuotedReply, wordCount } from '@orbit/core/text/email';
 import type { StyleCard } from '@orbit/core/types';
 import { z } from 'zod/v4';
+import { exemplars } from '../compose/context.ts';
 import type { Db } from '../db.ts';
 import { embeddable } from '../memory/memory.ts';
 import type { Queue } from '../queue.ts';
@@ -464,4 +468,67 @@ export async function queueRelearn(queue: Queue, userId: string, now: Date): Pro
     dedupeKey: `voice.distill:${userId}:${minute}`,
   });
   return a !== null;
+}
+
+// ---- the check before Orbit sends on its own ----------------------------------------------------------------------
+
+const JudgeS = z.object({ score: z.number().int().min(0).max(3), reason: z.string().max(400) });
+
+/**
+ * The judge for an auto first message (plan 29 §B2.4c): Claude reads the draft beside the student's closest sent
+ * mail and answers 0 to 3, "written by the same person?". Undefined when it cannot run (fewer than two exemplars, no
+ * key, the budget spent): the caller then holds the draft for a tap. Every score is kept in the audit log, where
+ * "sounds like you" reads it.
+ */
+export async function judgeVoice(
+  s: Pick<Services, 'claude' | 'db'>,
+  userId: string,
+  draft: { id: string; subject: string | null; body: string },
+  examples: string[],
+): Promise<{ score: number; reason: string } | undefined> {
+  if (examples.length < 2) return undefined;
+  const r = await s.claude.structured({
+    task: 'voice_judge',
+    system: VOICE_JUDGE_SYSTEM,
+    user: voiceJudgeUser(draft, examples),
+    schema: JudgeS,
+    userId,
+  });
+  if (!r.ok) return undefined;
+  await s.db.sql`
+    insert into orbit.audit_log (user_id, actor, action, target_table, target_id, details)
+    values (${userId}::uuid, 'system', 'draft.voice_judge', 'drafts', ${draft.id},
+            ${{ score: r.data.score, reason: r.data.reason }}::jsonb)`;
+  return r.data;
+}
+
+export type VoiceGate = { ok: true } | { ok: false; problems: string[]; score?: number };
+
+/**
+ * Before Orbit sends a draft it approved itself (plan 29 §B6): the voice check against the card, the notes in force
+ * and the student's closest sent mail; for a first message also the judge, which must say 2 or more. A failure is the
+ * list of what did not sound like them, in their words.
+ */
+export async function voiceGate(
+  s: Pick<Services, 'claude' | 'db' | 'embed'>,
+  u: { settings: Record<string, unknown>; first_name: string | null },
+  d: { id: string; user_id: string; person_id: string; kind: string; subject: string | null; body: string },
+  opts: { firstMessage: boolean },
+): Promise<VoiceGate> {
+  const card = storedCard(u.settings ?? {}, u.first_name ?? '');
+  const notes = notesOf(u.settings);
+  const examples = await exemplars(
+    s,
+    d.user_id,
+    d.person_id,
+    `${d.kind} ${d.subject ?? ''} ${d.body.slice(0, 400)}`,
+  ).catch(() => [] as string[]);
+  const check = voiceCheck({ body: d.body, subject: d.subject }, { card, notes, exemplars: examples });
+  if (!check.ok) return { ok: false, problems: check.problems.map((p) => p.detail) };
+  if (!opts.firstMessage) return { ok: true };
+  const judged = await judgeVoice(s, d.user_id, d, examples);
+  if (!judged)
+    return { ok: false, problems: ['Orbit could not compare it with enough of your sent mail to be sure.'] };
+  if (judged.score < VOICE_JUDGE_MIN) return { ok: false, problems: [judged.reason], score: judged.score };
+  return { ok: true };
 }

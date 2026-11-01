@@ -3,18 +3,24 @@
  * embedded as it is ingested and on demand, so the drafts' exemplars are real; every edit kept as a typed row,
  * whether it came with the approval, through /sync/push on the draft, or as the browser's own record.
  */
+
+import { messageHash } from '@orbit/core/safety/rules';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
-import { exemplars, styleCardOf, loadUserRow } from '../../functions/_shared/compose/context.ts';
+import { exemplars, loadUserRow, styleCardOf } from '../../functions/_shared/compose/context.ts';
+import { sendDraft } from '../../functions/_shared/sending/send.ts';
 import { makeServices } from '../../functions/_shared/services.ts';
-import { distillVoice } from '../../functions/_shared/voice/voice.ts';
+import { distillVoice, voiceGate } from '../../functions/_shared/voice/voice.ts';
 import { defaultHandlers } from '../../functions/orbit-worker/worker.ts';
 import {
   addPerson,
+  addThread,
   agentConfig,
   anthropic,
   api,
   fakeEmbed,
   fakeNet,
+  jsonRes,
+  type NetCall,
   signedInUser,
   userText,
 } from '../helpers/agents.ts';
@@ -276,8 +282,11 @@ async function someEdits(userId: string, n: number) {
 }
 
 const settingsOf = async (userId: string) =>
-  (await t.db.sql<{ settings: Record<string, unknown> }>`select settings from orbit.users where id = ${userId}::uuid`)[0]!
-    .settings;
+  (
+    await t.db.sql<{
+      settings: Record<string, unknown>;
+    }>`select settings from orbit.users where id = ${userId}::uuid`
+  )[0]!.settings;
 
 describe('notes learned from the edits', () => {
   it('voice.distill keeps at most eight, each backed by real edits, and never learns a forgotten one again', async () => {
@@ -301,7 +310,11 @@ describe('notes learned from the edits', () => {
     const claude = anthropic(() => ({
       notes: [
         // the forgotten note, reworded: never back
-        { text: 'You cut "thanks either way" every time.', avoid: 'Thanks either way', evidence: [ids[0], ids[1]] },
+        {
+          text: 'You cut "thanks either way" every time.',
+          avoid: 'Thanks either way',
+          evidence: [ids[0], ids[1]],
+        },
         ...Array.from({ length: 11 }, (_, i) => ({
           text: `You keep rule ${i} in mind`,
           avoid: '',
@@ -317,7 +330,11 @@ describe('notes learned from the edits', () => {
     expect(r.by).toBe('claude');
     expect(userText(claude.requests[0]!)).toContain('<forgotten_notes');
     expect(userText(claude.requests[0]!)).toContain(ids[0]!);
-    const notes = (await settingsOf(userId)).voice_notes as { text: string; forgottenAt: string | null; evidence: string[] }[];
+    const notes = (await settingsOf(userId)).voice_notes as {
+      text: string;
+      forgottenAt: string | null;
+      evidence: string[];
+    }[];
     const live = notes.filter((n) => !n.forgottenAt);
     expect(live.length).toBeLessThanOrEqual(8);
     expect(live.some((n) => /thanks either way/i.test(n.text))).toBe(false);
@@ -340,8 +357,22 @@ describe('notes learned from the edits', () => {
       settings: {
         style_card: CARD,
         voice_notes: [
-          { id: 'a', text: "You cut 'Thanks either way' every time", evidence: ['e'], createdAt: 'x', keptAt: null, forgottenAt: null },
-          { id: 'b', text: "You cut 'Hope you are well'", evidence: ['e'], createdAt: 'x', keptAt: null, forgottenAt: 'y' },
+          {
+            id: 'a',
+            text: "You cut 'Thanks either way' every time",
+            evidence: ['e'],
+            createdAt: 'x',
+            keptAt: null,
+            forgottenAt: null,
+          },
+          {
+            id: 'b',
+            text: "You cut 'Hope you are well'",
+            evidence: ['e'],
+            createdAt: 'x',
+            keptAt: null,
+            forgottenAt: 'y',
+          },
         ],
       },
     });
@@ -359,23 +390,48 @@ describe('the /voice routes', () => {
       settings: {
         style_card: CARD,
         voice_notes: [
-          { id: 'vn_a', text: "You cut 'Thanks either way' every time", evidence: ['e'], createdAt: 'x', keptAt: null, forgottenAt: null },
-          { id: 'vn_b', text: 'You sign with your first name only', evidence: ['e'], createdAt: 'x', keptAt: null, forgottenAt: null },
+          {
+            id: 'vn_a',
+            text: "You cut 'Thanks either way' every time",
+            evidence: ['e'],
+            createdAt: 'x',
+            keptAt: null,
+            forgottenAt: null,
+          },
+          {
+            id: 'vn_b',
+            text: 'You sign with your first name only',
+            evidence: ['e'],
+            createdAt: 'x',
+            keptAt: null,
+            forgottenAt: null,
+          },
         ],
       },
     });
     const p = await addPerson(t, userId, { name: 'Dana Ruiz', email: 'dana@example.com' });
     await aDraft(userId, p, SAM_SENT);
-    const v = await call<{ cardProse: string[]; notes: { id: string }[]; soundsLikeYou: number | null }>('/voice', token);
+    const v = await call<{ cardProse: string[]; notes: { id: string }[]; soundsLikeYou: number | null }>(
+      '/voice',
+      token,
+    );
     expect(v.status).toBe(200);
     expect(v.body.cardProse[0]).toBe('You greet with Hi and sign off with Thanks.');
     expect(v.body.notes.map((n) => n.id)).toEqual(['vn_a', 'vn_b']);
     expect(v.body.soundsLikeYou).toBe(3);
-    const kept = await call<{ note: { keptAt: string | null } }>('/voice/notes', token, { id: 'vn_b', action: 'keep' });
+    const kept = await call<{ note: { keptAt: string | null } }>('/voice/notes', token, {
+      id: 'vn_b',
+      action: 'keep',
+    });
     expect(kept.body.note.keptAt).toBeTruthy();
-    const gone = await call<{ note: { forgottenAt: string | null } }>('/voice/notes', token, { id: 'vn_a', action: 'forget' });
+    const gone = await call<{ note: { forgottenAt: string | null } }>('/voice/notes', token, {
+      id: 'vn_a',
+      action: 'forget',
+    });
     expect(gone.body.note.forgottenAt).toBeTruthy();
-    expect((await call<{ notes: { id: string }[] }>('/voice', token)).body.notes.map((n) => n.id)).toEqual(['vn_b']);
+    expect((await call<{ notes: { id: string }[] }>('/voice', token)).body.notes.map((n) => n.id)).toEqual([
+      'vn_b',
+    ]);
     expect((await call('/voice/notes', token, { id: 'nope', action: 'forget' })).status).toBe(404);
     expect((await call('/voice/notes', token, { id: 'vn_b', action: 'delete' })).status).toBe(400);
     const r = await call<{ queued: boolean }>('/voice/relearn', token);
@@ -384,5 +440,131 @@ describe('the /voice routes', () => {
       select message->>'kind' as kind from pgmq.q_orbit_enrich where message->>'userId' = ${userId}
       union all select message->>'kind' from pgmq.q_orbit_cadence where message->>'userId' = ${userId}`;
     expect(kinds.map((k) => k.kind).sort()).toEqual(['voice.card', 'voice.distill', 'voice.embed_sent']);
+  });
+});
+
+const GMAIL_SEND = 'https://gmail.googleapis.com/gmail/v1/users/me/messages/send';
+const gmail = (c: NetCall) => {
+  if (c.url === GMAIL_SEND) return jsonRes(200, { id: 'gm-1', threadId: 'gt-1' });
+  if (c.url.startsWith('https://gmail.googleapis.com/gmail/v1/users/me/threads/'))
+    return jsonRes(200, { messages: [{ id: 'x', labelIds: ['SENT'], internalDate: String(Date.now()) }] });
+  return undefined;
+};
+
+/** A draft Orbit approved itself, due now; past a thread both ways unless it is a first message. */
+async function autoApproved(userId: string, personId: string, kind: string, body: string) {
+  if (kind !== 'first_touch')
+    await addThread(t, userId, personId, [
+      { direction: 'out', at: '2026-10-08T15:00:00Z', body: 'Would you have time to chat?' },
+      { direction: 'in', at: '2026-10-09T15:00:00Z', body: 'Sure, happy to. Talk Tuesday.' },
+      { direction: 'out', at: '2026-10-10T15:00:00Z', body: 'Great, see you then.' },
+    ]);
+  const [d] = await t.db.sql<{ id: string; channel: 'gmail'; subject: string | null; body: string }>`
+    insert into orbit.drafts (user_id, person_id, channel, kind, subject, body, status, send_at, autonomy_level, auto_rung)
+    values (${userId}::uuid, ${personId}::uuid, 'gmail', ${kind}, 'Thanks', ${body}, 'approved',
+            '2026-10-14T14:59:00Z'::timestamptz, 2, ${kind})
+    returning id, channel, subject, body`;
+  await t.db.sql`
+    insert into orbit.audit_log (user_id, actor, action, target_table, target_id, details)
+    values (${userId}::uuid, 'agent', 'draft.auto_approve', 'drafts', ${d!.id}, ${{ hash: messageHash(d!) }}::jsonb)`;
+  return d!.id;
+}
+
+describe('the voice before Orbit sends on its own', () => {
+  const MID_MORNING = new Date('2026-10-14T15:00:00Z');
+
+  it('holds an auto send that does not sound like the student, with the reason in their words', async () => {
+    const net = fakeNet(gmail);
+    const { userId } = await signedInUser(t, { settings: { style_card: CARD } });
+    const p = await addPerson(t, userId, {
+      name: 'Dana Ruiz',
+      email: 'dana@example.com',
+      timezone: 'America/New_York',
+    });
+    const id = await autoApproved(
+      userId,
+      p,
+      'thank_you',
+      'Hi Dana,\n\nThank you so much for the chat!! I will circle back next week with what I find!\n\nThanks,\nSam',
+    );
+    const s = makeServices(agentConfig(net), { db: t.db, now: () => MID_MORNING });
+    expect(await sendDraft(s, id)).toEqual({ status: 'held', reason: 'voice' });
+    const [d] = await t.db.sql<{
+      status: string;
+      error: string;
+    }>`select status, error from orbit.drafts where id = ${id}::uuid`;
+    expect(d).toEqual({ status: 'draft', error: 'voice' });
+    const [hold] = await t.db.sql<{ details: { reason: string; text: string; problems: string[] } }>`
+      select details from orbit.audit_log where target_id = ${id} and action = 'draft.hold'`;
+    expect(hold!.details.reason).toBe('voice');
+    expect(hold!.details.text).toBe("didn't sound like you");
+    expect(hold!.details.problems.join(' ')).toContain("'circle back'");
+    expect(net.count((c) => c.url === GMAIL_SEND)).toBe(0);
+  });
+
+  it('lets one in their voice go, and a tap is never held by the check', async () => {
+    const net = fakeNet(gmail);
+    const { userId } = await signedInUser(t, { settings: { style_card: CARD } });
+    const p = await addPerson(t, userId, {
+      name: 'Lee Park',
+      email: 'lee@example.com',
+      timezone: 'America/New_York',
+    });
+    const id = await autoApproved(
+      userId,
+      p,
+      'thank_you',
+      "Hi Lee,\n\nThanks for the chat yesterday. It helped a lot, and I'll apply this week.\n\nThanks,\nSam",
+    );
+    const s = makeServices(agentConfig(net), { db: t.db, now: () => MID_MORNING });
+    const r = await sendDraft(s, id);
+    expect(r.status).toBe('sent');
+  });
+
+  it('an auto first message also needs the judge to say the same person wrote it', async () => {
+    let score = 1;
+    const net = fakeNet(gmail);
+    const claude = anthropic(() => ({ score, reason: 'Much more formal than the mail they send.' }));
+    net.use(claude.answer);
+    const { userId } = await signedInUser(t, { settings: { style_card: CARD } });
+    const p = await addPerson(t, userId, { name: 'Max Fern', email: 'max@example.com' });
+    const draft = {
+      id: crypto.randomUUID(),
+      user_id: userId,
+      person_id: p,
+      kind: 'first_touch',
+      subject: 'Payments',
+      body: "Hi Max,\n\nI'm a junior at State and I'd love to hear how you got into payments. Would you have twenty minutes next week?\n\nThanks,\nSam",
+    };
+    const u = { settings: { style_card: CARD }, first_name: 'Sam' };
+    const s = makeServices(agentConfig(net), { db: t.db, now: () => MID_MORNING });
+    // nothing of theirs to compare with yet: it waits for a tap
+    const blind = await voiceGate(s, u, draft, { firstMessage: true });
+    expect(blind.ok).toBe(false);
+    expect(claude.requests).toHaveLength(0);
+    // two of the student's own sent messages
+    const other = await addPerson(t, userId, { name: 'Ann Old', email: 'ann@example.com' });
+    const [th] = await t.db.sql<{ id: string }>`
+      insert into orbit.threads (user_id, provider, external_id, subject) values (${userId}::uuid, 'gmail', 'T-v', 's')
+      returning id`;
+    for (let i = 0; i < 2; i++) {
+      const body = `Hi Ann,\n\nI'm a junior at State and I'd love to hear how you got into payments. Would you have twenty minutes next week for a quick call about it, whenever suits you best? ${i}\n\nThanks,\nSam`;
+      await t.db.sql`
+        insert into orbit.messages (user_id, thread_id, provider, external_id, direction, sent_at, body_text, to_person_ids,
+                                    embedding)
+        values (${userId}::uuid, ${th!.id}::uuid, 'gmail', ${`v-${i}`}, 'out', now(), ${body}, ${[other]}::uuid[],
+                ${`[${(await fakeEmbed(body)).join(',')}]`}::vector)`;
+    }
+    const held = await voiceGate(s, u, draft, { firstMessage: true });
+    expect(held).toEqual({ ok: false, problems: ['Much more formal than the mail they send.'], score: 1 });
+    expect(userText(claude.requests[0]!)).toContain('<sent_by_the_student>');
+    const [j] = await t.db.sql<{ details: { score: number } }>`
+      select details from orbit.audit_log where target_id = ${draft.id} and action = 'draft.voice_judge'`;
+    expect(j!.details.score).toBe(1);
+    score = 2;
+    expect(await voiceGate(s, u, draft, { firstMessage: true })).toEqual({ ok: true });
+    // a bump or a thank-you is never sent to the judge
+    expect(await voiceGate(s, u, { ...draft, kind: 'bump' }, { firstMessage: false })).toEqual({ ok: true });
+    expect(claude.requests).toHaveLength(2);
   });
 });
