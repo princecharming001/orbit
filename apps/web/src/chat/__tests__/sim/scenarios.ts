@@ -244,8 +244,99 @@ const friendAna: ApiSeed = async (api, user) => {
 };
 
 /** The demo plus a reply of every class and a day on autopilot behind /autopilot/status (plan 29 C2). */
+/**
+ * Who the autopilot day wrote to first are the demo's own people with no thread yet, so the chat never finds a
+ * conversation that contradicts the status, and none is a near twin of a demo contact (Priya Shah beside Priya Hassan).
+ * The thanks comes from Hannah Brooks, who already wrote back, instead of from someone the batch holds.
+ */
+const AUTOPILOT_CAST: Record<string, string> = {
+  'Kenji Mori': 'Keiko Silva',
+  'Priya Shah': 'Nina Garcia',
+  'Grace Liu': 'Grace Patel',
+  'Omar Haddad': 'Ravi Alvarez',
+};
+const FIRST_NOTES: Record<string, { subject: string; body: (first: string, me: string) => string }> = {
+  'Keiko Silva': {
+    subject: 'Figma and a question about design tooling',
+    body: (f, me) =>
+      `Hi ${f},\n\nI'm a junior at Cornell studying CS, and your talk on how Figma's plugin API grew changed how I think about building tools for other builders.\n\nWould you have 15 minutes in the next couple of weeks to talk about how your team decides what goes into the API? Completely fine if now is busy.\n\nBest,\n${me}`,
+  },
+  'Grace Patel': {
+    subject: 'Linear and a question about onboarding flows',
+    body: (f, me) =>
+      `Hi ${f},\n\nI'm a junior at Cornell studying CS. Linear's onboarding is the only one I have ever finished without skipping, and I'd love to understand how your team got it there.\n\nWould you have 15 minutes sometime in the next couple of weeks? Whenever is easiest for you.\n\nBest,\n${me}`,
+  },
+  'Ravi Alvarez': {
+    subject: 'Quick question from a Cornell junior',
+    body: (f, me) =>
+      `Hi ${f},\n\nI'm a junior at Cornell studying CS and I'm weighing product roles for next summer. You moved into product at Notion from engineering, which is the path I'm trying to understand.\n\nWould you have 15 minutes in the next couple of weeks to talk about how you made the switch? I can make most times work.\n\nBest,\n${me}`,
+  },
+  'Nina Garcia': {
+    subject: 'Figma design systems and a Cornell junior',
+    body: (f, me) =>
+      `Hi ${f},\n\nI'm a junior at Cornell studying CS and I've been reading about how Figma runs its design system across teams.\n\nWould you have 15 minutes sometime in the next couple of weeks to talk about how you keep it consistent? No worries if the timing is bad.\n\nBest,\n${me}`,
+  },
+};
+
+async function castAutopilotDay(api: FakeOrbitApi, user: User) {
+  const people = await db.people.where('userId').equals(user.id).toArray();
+  const byName = new Map(people.map((p) => [p.displayName, p]));
+  const thanks = api.state.replies.find((r) => r.replyClass === 'thanks');
+  const hannah = byName.get('Hannah Brooks');
+  if (thanks && hannah)
+    Object.assign(thanks, {
+      personName: hannah.displayName,
+      personId: hannah.id,
+      company: hannah.currentOrganizationRaw ?? 'Figma',
+    });
+  const rename = (text: string) =>
+    Object.entries(AUTOPILOT_CAST).reduce(
+      (t, [from, to]) => t.replaceAll(from, to).replaceAll(from.split(' ')[0]!, to.split(' ')[0]!),
+      text,
+    );
+  const a = api.state.autopilot;
+  for (const list of [a.queued, a.held, a.sentToday, a.needsYou])
+    for (const i of list) {
+      const to = AUTOPILOT_CAST[i.personName];
+      if (to) {
+        const p = byName.get(to);
+        Object.assign(i, {
+          personName: to,
+          personId: p?.id ?? i.personId,
+          company: p?.currentOrganizationRaw ?? i.company,
+          recipientTimeZone: p?.timezone ?? 'America/New_York',
+        });
+        const note = FIRST_NOTES[to];
+        const d = api.state.drafts.get(i.draftId);
+        if (note) i.subject = note.subject;
+        if (d && note && p) {
+          d.personId = p.id;
+          d.subject = note.subject;
+          d.body = note.body(p.firstName || to.split(' ')[0]!, user.firstName);
+        } else if (note && p) {
+          const draft = {
+            ...[...api.state.drafts.values()][0]!,
+            id: i.draftId,
+            personId: p.id,
+            kind: 'first_touch',
+            subject: note.subject,
+            body: note.body(p.firstName || to.split(' ')[0]!, user.firstName),
+            status: i.status === 'held' ? 'draft' : i.status === 'sent' ? 'sent' : 'scheduled',
+            sendAt: i.sendAt,
+            sentAt: i.sentAt,
+            needsInput: [],
+          };
+          api.state.drafts.set(draft.id, draft as never);
+        }
+      }
+      if (i.reason) i.reason = rename(i.reason);
+    }
+  if (a.batch?.text) a.batch.text = rename(a.batch.text);
+}
+
 const autopilotDay: ApiSeed = async (api, user) => {
   withReplies(api, user, await db.people.where('userId').equals(user.id).toArray(), NOW.getTime());
+  await castAutopilotDay(api, user);
   // an account's goals and drafts sync down to the browser (the pull's own write), so the chat's goal list, its draft
   // lookups and the autopilot status all name the same goal and the same messages
   await writeFromServer('goals', api.state.goals, user.id);
@@ -263,6 +354,8 @@ const autopilotDay: ApiSeed = async (api, user) => {
       (x) => x.displayName === lena.personName,
     );
     if (p) {
+      // she is in New York: her "11" is 11 her time
+      if (!p.timezone) await db.people.update(p.id, { timezone: 'America/New_York' });
       // the demo's earlier call with Lena never happened on this account: her chat is the one the funnel just
       // booked, and her thread carries the slots Orbit offered, her pick and the confirmation
       const chat = await db.chats.where('personId').equals(p.id).first();
@@ -1476,10 +1569,10 @@ const AUTOPILOT_MODES =
   "Three modes. Off: Orbit writes, you send. Assist: you approve each message with one tap and it goes in the recipient's Tuesday to Thursday morning; bumps, thank-yous and scheduling replies go on their own after ten unchanged approvals of a kind, each shown after with a minute to undo. Autopilot: everything in Assist, plus Orbit plans the week to your target, writes first messages, shows them the evening before as Tomorrow's batch and sends them in the morning unless you hold one, answers scheduling and thank-you replies, offers three times when someone says yes, books the call when they pick one, and asks you in chat when a reply needs something only you know. The rules, said plainly: email only, never LinkedIn at any level; only alumni, people you know (closeness 40 or more) or a friend's contact; at most 5 sends a day on its own, 3 first messages a day and 12 a week, never two people at one firm on the same day; only companies on your goals; stops and tells you at the first decline, unsubscribe or pushback; every message under Sent for you with a minute to undo; pause is one tap. First messages are the last rung: until twenty have gone out unchanged, the evening batch asks for a tap. Turning a mode on is a risky change: two sentences and a confirm, nothing sent on the spot. A goal can run on autopilot while the rest stay by hand.";
 
 const AUTOPILOT_DAY =
-  "Today on autopilot, read from the status and never invented: sent 3 (a first message to Kenji Mori at Figma at 8:41 their time, a bump to Ethan Park, a scheduling reply to Lena Novak). Tomorrow's batch: 2 first messages, Grace Liu at Linear and Omar Haddad at Notion, going 8:40 their time, held with one tap until then. Held: Priya Shah at Figma, because Kenji at Figma was written to this morning and autopilot never writes to two people at one firm on the same day; she moves to Thursday. Needs you: Daniel Okafor asked whether you have applied through the portal yet. Rungs: bumps, thank-yous and scheduling replies unlocked at 10 of 10; first messages at 14 of 20, so the batch still asks for a tap in the evening. Caps: 3 of 5 today, 5 of 12 first messages this week. Nothing is paused now: the week's one pushback was Chloe Dubois's unsubscribe at Ramp, which tripped the breaker there earlier in the week. Times are said in the recipient's clock first, with the student's beside it.";
+  "Today on autopilot, read from the status and never invented: sent 3 (a first message to Keiko Silva at Figma at 8:41 their time, a bump to Ethan Park, a scheduling reply to Lena Novak). Tomorrow's batch: 2 first messages, Grace Patel at Linear and Ravi Alvarez at Notion, going 8:40 their time, held with one tap until then. Held: Nina Garcia at Figma, because Keiko at Figma was written to this morning and autopilot never writes to two people at one firm on the same day; she moves to Thursday. Needs you: Daniel Okafor asked whether you have applied through the portal yet. Rungs: bumps, thank-yous and scheduling replies unlocked at 10 of 10; first messages at 14 of 20, so the batch still asks for a tap in the evening. Caps: 3 of 5 today, 5 of 12 first messages this week. Nothing is paused now: the week's one pushback was Chloe Dubois's unsubscribe at Ramp, which tripped the breaker there earlier in the week. Times are said in the recipient's clock first, with the student's beside it.";
 
 const AUTOPILOT_REPLIES =
-  'Inbound replies, one of each class: Maya Chen interested; Lena Novak scheduling ("Thu Oct 8 at 11 works", an offered slot, so the call books and the confirmation goes); Daniel Okafor a question (have you applied); Victor Castro an objection (apply through the portal first); Sofia Bennett a referral (her colleague Raj); Ethan Park not now (November); Caleb Weber out of office until October 12; Jonah Reyes a decline; Chloe Dubois unsubscribe; Priya Shah thanks. The next action by class: interested gets the slots reply; a time that matches a slot books and confirms; a question goes to Needs you and the student\'s one line fills the reply; objection, not now and referral are drafts for approval, never sent on their own; decline and unsubscribe close the thread, mark do not contact, no reply, and the student is told; thanks goes on its own only when it carries no question.';
+  'Inbound replies, one of each class: Maya Chen interested; Lena Novak scheduling ("Thu Oct 8 at 11 works", an offered slot, so the call books and the confirmation goes); Daniel Okafor a question (have you applied); Victor Castro an objection (apply through the portal first); Sofia Bennett a referral (her colleague Raj); Ethan Park not now (November); Caleb Weber out of office until October 12; Jonah Reyes a decline; Chloe Dubois unsubscribe; Hannah Brooks thanks. The next action by class: interested gets the slots reply; a time that matches a slot books and confirms; a question goes to Needs you and the student\'s one line fills the reply; objection, not now and referral are drafts for approval, never sent on their own; decline and unsubscribe close the thread, mark do not contact, no reply, and the student is told; thanks goes on its own only when it carries no question.';
 
 const AUTOPILOT_ANSWER =
   'Answering a reply that asked a question: the student\'s one line ("yes, applied Monday") fills the gap and the reply drafts itself around it, in the student\'s voice, with nothing added that the student did not say (no dates, no claims, no new commitment); the draft is shown for approval before anything goes. Daniel Okafor asked whether the student has applied through the portal yet.';
@@ -1728,10 +1821,10 @@ const PLAN29: Scenario[] = [
     persona: AUTOPILOT_PERSONA,
     account: 'demo',
     api: autopilotDay,
-    goal: 'ask why Orbit did not send to Priya today',
+    goal: 'ask why Orbit did not send to Nina today',
     maxTurns: 3,
     expectTools: [['autopilot_status']],
-    reference: `${AUTOPILOT_DAY} The answer names the rule that held her (one person per firm per day, Kenji at Figma went this morning) and when she goes instead (Thursday), nothing else.`,
+    reference: `${AUTOPILOT_DAY} The answer names the rule that held her (one person per firm per day, Keiko at Figma went this morning) and when she goes instead (Thursday), nothing else.`,
     noWeb: true,
     minGoal: 'yes',
   },
@@ -1888,7 +1981,7 @@ const PLAN29: Scenario[] = [
     goal: "hold tomorrow's batch, and ask what would have happened to the two first messages if you had done nothing",
     maxTurns: 4,
     expectTools: [['hold_send']],
-    reference: `${AUTOPILOT_DAY} ${FIRST_TOUCH_PLAN} Both first messages are held by name (Grace Liu and Omar Haddad) and are drafts again. Before the rung is earned, doing nothing would not have sent them either: each waits for a tap (Send in the morning), and one left untapped goes back to the drafts with the reason. Replies and bumps keep going unless the student pauses everything.`,
+    reference: `${AUTOPILOT_DAY} ${FIRST_TOUCH_PLAN} Both first messages are held by name (Grace Patel and Ravi Alvarez) and are drafts again. Before the rung is earned, doing nothing would not have sent them either: each waits for a tap (Send in the morning), and one left untapped goes back to the drafts with the reason. Replies and bumps keep going unless the student pauses everything.`,
     noWeb: true,
     minGoal: 'partly',
   },

@@ -132,7 +132,10 @@ async function whyNot(
   personName: string,
   s: AutopilotStatus,
   ctx: ToolContext,
-  seen: { replies: ReplyItem[]; calls: { with: string[]; startAt: string }[] } = { replies: [], calls: [] },
+  seen: { replies: ReplyItem[]; calls: { with: string[]; startAt: string; timeZone?: string }[] } = {
+    replies: [],
+    calls: [],
+  },
 ): Promise<{ person: string; answer: string } | undefined> {
   const named = namedBy(personName);
   const first = (n: string) => n.split(' ')[0];
@@ -146,7 +149,7 @@ async function whyNot(
     const who = call.with.find(named)!;
     return {
       person: who,
-      answer: `The call with ${first(who)} is booked for ${when(call.startAt, ctx)}.${confirmed}`,
+      answer: `The call with ${first(who)} is booked for ${whenBoth({ sendAt: call.startAt, sentAt: null, recipientTimeZone: call.timeZone }, ctx)}.${confirmed}`,
     };
   }
   if (reply?.outcome === 'booked' || confirmation?.outcome === 'booked')
@@ -285,11 +288,13 @@ export const autopilotStatusTool = defineTool({
     )
       .sort((a, b) => a.startAt.localeCompare(b.startAt))
       .slice(0, 8);
-    const names = new Map(
-      (await db.people.bulkGet(calls.flatMap((e) => e.attendeePersonIds ?? []))).flatMap((p) =>
-        p ? [[p.id, p.displayName] as const] : [],
-      ),
+    const attendees = (await db.people.bulkGet(calls.flatMap((e) => e.attendeePersonIds ?? []))).flatMap(
+      (p) => (p ? [p] : []),
     );
+    const names = new Map(attendees.map((p) => [p.id, p.displayName] as const));
+    // a call says the other person's clock too, as a send does: "Thu 11:00 AM their time (8:00 AM your time)"
+    const zoneOf = (e: (typeof calls)[number]) =>
+      attendees.find((p) => (e.attendeePersonIds ?? []).includes(p.id) && p.timezone)?.timezone;
     const taps = s.queued.filter((i) => i.status === 'needs_tap').length;
     const why = input.personName
       ? await whyNot(input.personName, s, ctx, {
@@ -297,6 +302,7 @@ export const autopilotStatusTool = defineTool({
           calls: calls.map((e) => ({
             with: (e.attendeePersonIds ?? []).flatMap((id) => names.get(id) ?? []),
             startAt: e.startAt,
+            timeZone: zoneOf(e),
           })),
         })
       : undefined;
@@ -360,7 +366,7 @@ export const autopilotStatusTool = defineTool({
       upcomingCalls: calls.map((e) => ({
         with: (e.attendeePersonIds ?? []).map((id) => names.get(id)).filter(Boolean),
         title: e.title,
-        at: when(e.startAt, ctx),
+        at: whenBoth({ sendAt: e.startAt, sentAt: null, recipientTimeZone: zoneOf(e) }, ctx),
       })),
       friendAsks: (s.friendAsks ?? []).map((a) => ({
         friend: a.friendName,

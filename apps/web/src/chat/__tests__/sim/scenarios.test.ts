@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { db } from '../../../db/schema';
 import { loadDemo } from '../../../engine/demo';
 import { createFakeOrbitApi, fakeAccountUser, withFriend, withReplies } from '../../../test/fakeOrbitApi';
 import { registry } from '../../registry';
@@ -239,7 +240,24 @@ describe('sim scenarios', () => {
         expect(api.state.autopilot.mode, s.id).toBe('autopilot');
         expect(api.state.autopilot.sentToday, s.id).toHaveLength(3);
         expect(api.state.autopilot.queued, s.id).toHaveLength(2);
-        expect(api.state.autopilot.held[0]?.personName, s.id).toBe('Priya Shah');
+        expect(api.state.autopilot.held[0]?.personName, s.id).toBe('Nina Garcia');
+        // every first message on the day goes to a demo contact the student has no thread with yet
+        const firsts = [
+          ...api.state.autopilot.queued,
+          ...api.state.autopilot.held,
+          ...api.state.autopilot.sentToday,
+        ].filter((i) => i.kind === 'first_touch');
+        for (const i of firsts) {
+          const p = await db.people.get(i.personId ?? '');
+          expect(p?.displayName, `${s.id} ${i.personName}`).toBe(i.personName);
+          expect(
+            await db.threads.filter((t) => t.participantPersonIds.includes(p!.id)).count(),
+            i.personName,
+          ).toBe(0);
+        }
+        expect(api.state.replies.find((r) => r.replyClass === 'thanks')?.personName, s.id).toBe(
+          'Hannah Brooks',
+        );
         expect(api.state.autopilot.needsYou[0]?.question, s.id).toMatch(/applied/);
         expect(api.state.voice.notes, s.id).toHaveLength(3);
       }
