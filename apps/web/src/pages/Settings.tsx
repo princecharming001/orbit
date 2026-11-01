@@ -10,6 +10,7 @@ import {
 } from '@orbit/core';
 import { useLiveQuery } from 'dexie-react-hooks';
 import {
+  AudioLines,
   Blocks,
   Brain,
   Check,
@@ -117,6 +118,7 @@ import {
   Working,
 } from '../ui';
 import { Suggest } from '../ui/Suggest';
+import { VoiceSection } from './settings/Voice';
 
 /** The section with the LinkedIn import, the resume and the Claude key (its route keeps the older name). */
 const INTEGRATIONS_LABEL = 'Integrations';
@@ -126,6 +128,7 @@ const BASE_SECTIONS = [
   ['goals', 'Goals'],
   ['integrations', INTEGRATIONS_LABEL],
   ['style', 'Writing style'],
+  ['voice', 'Voice'],
   ['limits', 'Limits and schedule'],
   ['privacy', 'Data & privacy'],
 ] as const;
@@ -145,6 +148,7 @@ const SECTION_ICONS: Record<string, LucideIcon> = {
   goals: Target,
   integrations: Blocks,
   style: PenLine,
+  voice: AudioLines,
   limits: Gauge,
   privacy: ShieldCheck,
   account: CircleUserRound,
@@ -159,6 +163,7 @@ function sections(): readonly (readonly [string, string])[] {
 const SECTION_ALIASES: Record<string, string> = {
   writing: 'style',
   tone: 'style',
+  'voice-notes': 'voice',
   sending: 'limits',
   schedule: 'limits',
   data: 'privacy',
@@ -233,6 +238,7 @@ export function SettingsPage() {
             {section === 'goals' && <Goals />}
             {section === 'integrations' && <Integrations />}
             {section === 'style' && <StyleCoach />}
+            {section === 'voice' && <VoiceSection />}
             {section === 'limits' && <Limits />}
             {section === 'privacy' && <Privacy />}
             {section === 'account' && <AccountSection />}
