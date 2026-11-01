@@ -678,7 +678,12 @@ export async function approveAndSend(
       if (viaServer) return viaServer;
     }
   }
-  // a draft the server wrote has no address in this browser: without Gmail's send permission it cannot go from here
+  // a draft the server wrote reaches this browser without an address: the person's own is the one it goes to
+  if (msg.channel === 'gmail' && !msg.toEmail && person.primaryEmail) {
+    msg.toEmail = person.primaryEmail;
+    await db.outbound.update(msg.id, { toEmail: person.primaryEmail });
+  }
+  // and with no address here either, without Gmail's send permission it cannot go from this browser
   if (!opts.via && msg.channel === 'gmail' && !msg.toEmail && isServerUser(user.id)) {
     const { serverIdOf } = await import('./serverSync');
     if (serverIdOf(msg.id))

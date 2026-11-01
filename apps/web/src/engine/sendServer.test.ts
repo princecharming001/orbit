@@ -90,10 +90,23 @@ describe('an account approves email on the server (plan 29 §B2.1)', () => {
 
   it('a server draft with no address here says what to connect, never that the person has no email', async () => {
     const local = (await db.outbound.get(DRAFT_ID))!;
+    const person = (await db.people.get(local.personId))!;
     await db.outbound.update(DRAFT_ID, { toEmail: undefined });
+    await db.people.update(person.id, { primaryEmail: undefined });
     const r = await approveAndSend(user, DRAFT_ID, local.bodyDraft, local.subject);
     expect(r.ok).toBe(false);
     expect(!r.ok && r.error).toMatch(/connect Gmail with permission to send/);
+    await db.people.update(person.id, { primaryEmail: person.primaryEmail });
+  });
+
+  it("a server draft with no address here goes to the person's own address", async () => {
+    const local = (await db.outbound.get(DRAFT_ID))!;
+    const person = (await db.people.get(local.personId))!;
+    expect(person.primaryEmail).toBeTruthy();
+    await db.outbound.update(DRAFT_ID, { toEmail: undefined });
+    const r = await approveAndSend(user, DRAFT_ID, local.bodyDraft, local.subject);
+    expect(r.ok).toBe(true);
+    expect((await db.outbound.get(DRAFT_ID))!.toEmail).toBe(person.primaryEmail);
   });
 
   it('goes to /drafts/approve with the words and the undo window; undo stops it there', async () => {
