@@ -3,9 +3,9 @@
 // supabase/functions/_shared/db.ts
 import postgres from "npm:postgres@3.4.9";
 function toText(strings) {
-  let text = strings[0] ?? "";
-  for (let i = 1; i < strings.length; i++) text += `$${i}${strings[i]}`;
-  return text;
+  let text2 = strings[0] ?? "";
+  for (let i = 1; i < strings.length; i++) text2 += `$${i}${strings[i]}`;
+  return text2;
 }
 function arrayLiteral(values) {
   const items = values.map((v) => {
@@ -25,13 +25,13 @@ function toParam(v) {
   return v;
 }
 function wrapPostgres(sql, inTx) {
-  const run = async (text, params) => {
-    const rows = await sql.unsafe(text, params.map(toParam));
+  const run = async (text2, params) => {
+    const rows = await sql.unsafe(text2, params.map(toParam));
     return Array.from(rows);
   };
   return {
     sql: (strings, ...values) => run(toText(strings), values),
-    query: (text, params = []) => run(text, params),
+    query: (text2, params = []) => run(text2, params),
     begin: async (fn) => {
       if (inTx)
         return await sql.savepoint(
@@ -66,11 +66,11 @@ function connectDb(url, max = 4) {
 
 // supabase/functions/_shared/crypto.ts
 var enc = new TextEncoder();
-async function sha256Bytes(text) {
-  return new Uint8Array(await crypto.subtle.digest("SHA-256", enc.encode(text)));
+async function sha256Bytes(text2) {
+  return new Uint8Array(await crypto.subtle.digest("SHA-256", enc.encode(text2)));
 }
-async function sha256Hex(text) {
-  return Array.from(await sha256Bytes(text), (x) => x.toString(16).padStart(2, "0")).join("");
+async function sha256Hex(text2) {
+  return Array.from(await sha256Bytes(text2), (x) => x.toString(16).padStart(2, "0")).join("");
 }
 async function timingSafeEqual(a, b) {
   if (typeof a !== "string" || typeof b !== "string" || !b) return false;
@@ -1116,6 +1116,58 @@ var PHASE1_SCOPES = [
   `${G}contacts.readonly`
 ];
 var CALENDAR_EVENTS_SCOPE = `${G}calendar.events`;
+
+// packages/core/src/style/card.ts
+var PLAIN = new Set(
+  "a an the and or but so to of in on at for with from by about as is am are was were be been it its this that i me my you your we our they them he she his her would could can will should do did have has had not if just how what when where who which there here up out any some more very really also than then too all one next week weeks couple time day days minutes min chat call quick talk meet meeting coffee happy free thanks thank hope know let like love get got make sure please best hi hey hello dear".split(" ")
+);
+var FILLER = new Set(
+  "i hope you|hope you are|let me know|thank you for|thanks for the|i would love|would love to|you have time|have time to|look forward to|i wanted to|to hear from|hear from you|if you have|in the next|for your time".split(
+    "|"
+  )
+);
+
+// supabase/functions/_shared/voice/voice.ts
+import { z as z3 } from "npm:zod@3.25.76/v4";
+
+// supabase/functions/_shared/memory/memory.ts
+import { z as z2 } from "npm:zod@3.25.76/v4";
+var MEMORY_SYSTEM = [
+  'Extract durable facts worth remembering for future conversations: preferences, constraints, details of goals, outcomes, and facts about specific people. Skip small talk and anything already in <known>. Each memory ≤ 200 characters, in third person about the user ("Prefers morning calls").',
+  `Return {"memories": [{kind, text, person_name|null, importance: 0..1, quote}]}; quote must be the user's own words.`
+].join("\n");
+var memorySchema = z2.object({
+  memories: z2.array(
+    z2.object({
+      kind: z2.enum(["preference", "constraint", "goal_detail", "outcome", "person_fact", "note"]),
+      text: z2.string(),
+      person_name: z2.string().nullable(),
+      importance: z2.number(),
+      quote: z2.string()
+    })
+  )
+});
+
+// supabase/functions/_shared/voice/voice.ts
+var text = (max) => z3.string().max(max);
+var list = (n, max) => z3.array(text(max)).max(n);
+var StyleCardS = z3.object({
+  greetingPatterns: list(6, 80),
+  signoffs: list(6, 160),
+  formality: z3.number().min(0).max(1),
+  avgSentenceWords: z3.number().min(0).max(200),
+  avgMessageWords: z3.number().min(0).max(2e3),
+  contractions: z3.boolean(),
+  exclamationsPerMessage: z3.number().min(0).max(50),
+  emoji: z3.boolean(),
+  characteristicPhrases: list(12, 120),
+  avoid: list(50, 120),
+  notes: text(4e3),
+  builtFromCount: z3.number().int().min(0).max(1e6),
+  version: z3.number().int().min(0).max(1e3),
+  sources: z3.partialRecord(z3.enum(["email", "linkedin", "orbit", "pasted"]), z3.number().int().min(0)).optional(),
+  custom: z3.boolean().optional()
+});
 
 // packages/core/src/text/jaro.ts
 function jaroWinkler(a, b) {
@@ -3173,13 +3225,13 @@ function transliterateChar(cp) {
     const out = `${HANGUL_INITIALS[l]}${HANGUL_VOWELS[v]}${HANGUL_FINALS[t]}`;
     return out.charAt(0).toUpperCase() + out.slice(1);
   }
-  const num = cp >>> 8;
-  let b = blocks.get(num);
+  const num2 = cp >>> 8;
+  let b = blocks.get(num2);
   if (!b) {
-    const raw = TRANSLIT_BLOCKS[num];
+    const raw = TRANSLIT_BLOCKS[num2];
     if (raw === void 0) return "";
     b = raw.split("	");
-    blocks.set(num, b);
+    blocks.set(num2, b);
   }
   return b[cp & 255] ?? "";
 }
@@ -3707,8 +3759,8 @@ function computeFeatures(inc, cand, ctx) {
   };
 }
 function scoreFeatures(f, w = RESOLVE_WEIGHTS) {
-  const z2 = w.bias + w.name_sim * f.name_sim + w.last_sim * f.last_sim + w.org_match * f.org_match + w.title_sim * f.title_sim + w.email_name_sim * f.email_name_sim + w.domain_org_match * f.domain_org_match + w.school_match * f.school_match + w.firstNameVariant * f.firstNameVariant;
-  return sigmoid(z2);
+  const z4 = w.bias + w.name_sim * f.name_sim + w.last_sim * f.last_sim + w.org_match * f.org_match + w.title_sim * f.title_sim + w.email_name_sim * f.email_name_sim + w.domain_org_match * f.domain_org_match + w.school_match * f.school_match + w.firstNameVariant * f.firstNameVariant;
+  return sigmoid(z4);
 }
 function addressOnlyScore(f) {
   if (f.email_name_sim >= 1 && f.domain_org_match >= 0.8) return 0.93;
@@ -3952,7 +4004,7 @@ function personFromRow(r, extra = {}) {
 }
 
 // supabase/functions/_shared/ingest/util.ts
-function iso(v) {
+function iso2(v) {
   if (v === null || v === void 0 || v === "") return null;
   const d = v instanceof Date ? v : new Date(String(v));
   return Number.isNaN(d.getTime()) ? null : d.toISOString();
@@ -4005,12 +4057,12 @@ var PERSON_COLUMNS = `p.id, p.user_id, p.is_self, p.display_name, p.first_name, 
 function toPerson(row, identities = []) {
   const r = {
     ...row,
-    first_seen_at: iso(row.first_seen_at),
-    last_interaction_at: iso(row.last_interaction_at),
-    hidden_at: iso(row.hidden_at),
-    created_at: iso(row.created_at) ?? (/* @__PURE__ */ new Date(0)).toISOString(),
-    updated_at: iso(row.updated_at) ?? (/* @__PURE__ */ new Date(0)).toISOString(),
-    deleted_at: iso(row.deleted_at),
+    first_seen_at: iso2(row.first_seen_at),
+    last_interaction_at: iso2(row.last_interaction_at),
+    hidden_at: iso2(row.hidden_at),
+    created_at: iso2(row.created_at) ?? (/* @__PURE__ */ new Date(0)).toISOString(),
+    updated_at: iso2(row.updated_at) ?? (/* @__PURE__ */ new Date(0)).toISOString(),
+    deleted_at: iso2(row.deleted_at),
     strength: Number(row.strength ?? 0),
     sources: row.sources ?? [],
     tags: row.tags ?? []
@@ -4718,9 +4770,9 @@ async function storeChat(db2, userId, self, chat, messages, now, ownIds) {
   const out = { threadId, inbound: [], inserted: 0, personIds: otherIds };
   for (const m of messages) {
     if (m.skip) continue;
-    const text = (m.text ?? "").trim();
+    const text2 = (m.text ?? "").trim();
     const sentAt = unipileTime(m.timestamp ?? null);
-    if (!text || !sentAt) continue;
+    if (!text2 || !sentAt) continue;
     const own = isOwnMessage(m, ownIds);
     const from = own ? null : personOf(m.senderId) ?? (otherIds.length === 1 ? otherIds[0] : null);
     const to = own ? otherIds : [];
@@ -4728,7 +4780,7 @@ async function storeChat(db2, userId, self, chat, messages, now, ownIds) {
       insert into orbit.messages (user_id, thread_id, provider, external_id, direction, from_person_id, to_person_ids,
                                   sent_at, snippet, body_text)
       values (${userId}::uuid, ${threadId}::uuid, 'linkedin', ${m.id}, ${own ? "out" : "in"}, ${from}::uuid,
-              ${to}::uuid[], ${sentAt}::timestamptz, ${text.slice(0, 200)}, ${text})
+              ${to}::uuid[], ${sentAt}::timestamptz, ${text2.slice(0, 200)}, ${text2})
       on conflict (user_id, provider, external_id) do nothing
       returning id`;
     if (!row) continue;
@@ -4759,6 +4811,8 @@ var KIND_QUEUE = {
   "cadence.user": "orbit_cadence",
   "funnel.reply": "orbit_classify",
   "outcomes.roll": "orbit_cadence",
+  "voice.card": "orbit_cadence",
+  "voice.distill": "orbit_cadence",
   "health.snapshot": "orbit_cadence",
   "score.user": "orbit_score",
   "score.person": "orbit_score",
@@ -4766,6 +4820,7 @@ var KIND_QUEUE = {
   "enrich.dossier": "orbit_enrich",
   "source.search": "orbit_enrich",
   hop_evidence: "orbit_enrich",
+  "voice.embed_sent": "orbit_enrich",
   noop: "orbit_enrich"
 };
 function queueFor(kind) {
@@ -4863,8 +4918,8 @@ function decodePubSub(body2) {
   if (!message || typeof message.data !== "string") return void 0;
   try {
     const bin = atob(message.data.replace(/-/g, "+").replace(/_/g, "/"));
-    const text = new TextDecoder().decode(Uint8Array.from(bin, (c) => c.charCodeAt(0)));
-    const data = JSON.parse(text);
+    const text2 = new TextDecoder().decode(Uint8Array.from(bin, (c) => c.charCodeAt(0)));
+    const data = JSON.parse(text2);
     if (typeof data.emailAddress !== "string" || typeof data.historyId !== "string" && typeof data.historyId !== "number")
       return void 0;
     const historyId = String(data.historyId);

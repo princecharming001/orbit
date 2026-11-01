@@ -229,9 +229,9 @@ function flattenNullable(schema) {
 // supabase/functions/_shared/db.ts
 import postgres from "npm:postgres@3.4.9";
 function toText(strings) {
-  let text = strings[0] ?? "";
-  for (let i = 1; i < strings.length; i++) text += `$${i}${strings[i]}`;
-  return text;
+  let text2 = strings[0] ?? "";
+  for (let i = 1; i < strings.length; i++) text2 += `$${i}${strings[i]}`;
+  return text2;
 }
 function arrayLiteral(values) {
   const items = values.map((v) => {
@@ -251,13 +251,13 @@ function toParam(v) {
   return v;
 }
 function wrapPostgres(sql, inTx) {
-  const run = async (text, params) => {
-    const rows = await sql.unsafe(text, params.map(toParam));
+  const run = async (text2, params) => {
+    const rows = await sql.unsafe(text2, params.map(toParam));
     return Array.from(rows);
   };
   return {
     sql: (strings, ...values) => run(toText(strings), values),
-    query: (text, params = []) => run(text, params),
+    query: (text2, params = []) => run(text2, params),
     begin: async (fn) => {
       if (inTx)
         return await sql.savepoint(
@@ -303,11 +303,11 @@ function base64url(bytes) {
 function randomToken(n = 32) {
   return base64url(crypto.getRandomValues(new Uint8Array(n)));
 }
-async function sha256Bytes(text) {
-  return new Uint8Array(await crypto.subtle.digest("SHA-256", enc.encode(text)));
+async function sha256Bytes(text2) {
+  return new Uint8Array(await crypto.subtle.digest("SHA-256", enc.encode(text2)));
 }
-async function sha256Hex(text) {
-  return Array.from(await sha256Bytes(text), (x) => x.toString(16).padStart(2, "0")).join("");
+async function sha256Hex(text2) {
+  return Array.from(await sha256Bytes(text2), (x) => x.toString(16).padStart(2, "0")).join("");
 }
 async function timingSafeEqual(a, b) {
   if (typeof a !== "string" || typeof b !== "string" || !b) return false;
@@ -594,8 +594,8 @@ function query(params, bracketArrays = false) {
 function trimBase(base) {
   return base.replace(/\/+$/, "");
 }
-async function sha256Hex2(text) {
-  const buf = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(text));
+async function sha256Hex2(text2) {
+  const buf = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(text2));
   return Array.from(new Uint8Array(buf), (x) => x.toString(16).padStart(2, "0")).join("");
 }
 function stableJson(value) {
@@ -1173,10 +1173,10 @@ function yearOf(v) {
   }
   return void 0;
 }
-function recommendationsFrom(list) {
-  if (!Array.isArray(list)) return [];
+function recommendationsFrom(list2) {
+  if (!Array.isArray(list2)) return [];
   const out = [];
-  for (const r of list) {
+  for (const r of list2) {
     if (!r || typeof r !== "object") continue;
     const o = r;
     const actorId = memberOf(o.actor) ?? memberOf(o.author) ?? memberOf(o.recommender);
@@ -1401,6 +1401,8 @@ var KIND_QUEUE = {
   "cadence.user": "orbit_cadence",
   "funnel.reply": "orbit_classify",
   "outcomes.roll": "orbit_cadence",
+  "voice.card": "orbit_cadence",
+  "voice.distill": "orbit_cadence",
   "health.snapshot": "orbit_cadence",
   "score.user": "orbit_score",
   "score.person": "orbit_score",
@@ -1408,6 +1410,7 @@ var KIND_QUEUE = {
   "enrich.dossier": "orbit_enrich",
   "source.search": "orbit_enrich",
   hop_evidence: "orbit_enrich",
+  "voice.embed_sent": "orbit_enrich",
   noop: "orbit_enrich"
 };
 function queueFor(kind) {
@@ -1492,11 +1495,11 @@ function makeMailer(env2, doFetch) {
 }
 function supabaseEmbed() {
   let session;
-  return async (text) => {
+  return async (text2) => {
     const S = globalThis.Supabase;
     if (!S?.ai) return null;
     session ??= new S.ai.Session("gte-small");
-    const out = await session.run(text, { mean_pool: true, normalize: true });
+    const out = await session.run(text2, { mean_pool: true, normalize: true });
     if (!out || typeof out.length !== "number") return null;
     return Array.from(out, Number);
   };
@@ -2169,8 +2172,8 @@ function hasPhrase(body, phrase) {
   const re = new RegExp(`(^|[^\\p{L}\\p{N}])${escapeRe(norm2(phrase))}($|[^\\p{L}\\p{N}])`, "iu");
   return re.test(norm2(body));
 }
-function clauses(text) {
-  return text.split(
+function clauses(text2) {
+  return text2.split(
     /[\n.;!?]+|,\s*(?:and\s+)?(?=(?:never|don'?t|do not|no|avoid)\b)|\s+and\s+(?=(?:never|don'?t|do not|no|avoid)\b)/i
   ).map((c) => c.trim()).filter((c) => c.length > 1);
 }
@@ -2191,25 +2194,25 @@ function sentence(c) {
   return `${t.charAt(0).toUpperCase()}${t.slice(1)}`;
 }
 var YEAR_NOUN = /\b(I'm|I am)\s+an?\s+(?:(?:first|second|third|fourth|final)-year|freshman|sophomore|junior|senior|undergrad(?:uate)?)\b/i;
-function forbidsStudent(text) {
-  return clauses(text ?? "").some(
+function forbidsStudent(text2) {
+  return clauses(text2 ?? "").some(
     (c) => NEGATION.test(c) && /\b(say|mention|call me|describe me as|introduce me as|write)\b[^.]*\b(student|undergrad|in school|in college)\b/i.test(
       c
     )
   );
 }
-function forbidsSchool(text) {
-  return clauses(text ?? "").some(
+function forbidsSchool(text2) {
+  return clauses(text2 ?? "").some(
     (c) => NEGATION.test(c) && /\b(mention|say|name|bring up|reference|include|talk about)\b[^.]*\b(my (school|university|college|uni)|where I (study|go to school))\b/i.test(
       c
     )
   );
 }
-function neverDoChecks(text, subject = {}) {
-  if (!text?.trim()) return [];
+function neverDoChecks(text2, subject = {}) {
+  if (!text2?.trim()) return [];
   const out = [];
   const add2 = (rule, breaks) => out.push({ rule, breaks });
-  for (const raw of clauses(text)) {
+  for (const raw of clauses(text2)) {
     const c = raw.toLowerCase();
     if (!NEGATION.test(c)) continue;
     const rule = sentence(raw);
@@ -2448,20 +2451,20 @@ var COUNT_RANGE_AFTER = new RegExp(
 var PROPER_NOUN_AFTER = /^[ \t]+([A-Z][a-z]+)/;
 var DAY_BEFORE = /(?:\b(?:mon|tues?|wed(?:nes)?|thu(?:rs?)?|fri|sat(?:ur)?|sun)(?:day)?\.?|\b(?:today|tomorrow|tonight)|\d{1,2}\/\d{1,2}|\b(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?\s+\d{1,2}(?:st|nd|rd|th)?|\bthe\s+\d{1,2}(?:st|nd|rd|th))[\s,]*(?:(?:at|around|about|@|~)\s*)?$/i;
 var NOT_A_NAME = /^(your|my|mon(day)?|tue(s(day)?)?|wed(s|nesday)?|thu(r(s(day)?)?)?|fri(day)?|sat(urday)?|sun(day)?|jan(uary)?|feb(ruary)?|mar(ch)?|apr(il)?|may|june?|july?|aug(ust)?|sept?(ember)?|oct(ober)?|nov(ember)?|dec(ember)?|eastern|central|mountain|pacific|morning|afternoon|evening|tonight|tomorrow|today|or|and|to|works?|would|does|is|if|let|thanks|thank|best|cheers|looking|talk|see|ok|okay|sounds|hope|please|either|otherwise|happy)$/i;
-function placeAfterNumber(text, start, rest) {
+function placeAfterNumber(text2, start, rest) {
   const m = PROPER_NOUN_AFTER.exec(rest);
   if (!m || NOT_A_NAME.test(m[1]) || CITY_TIME_AFTER.test(rest)) return false;
-  if (!DAY_BEFORE.test(text.slice(Math.max(0, start - 40), start))) return true;
+  if (!DAY_BEFORE.test(text2.slice(Math.max(0, start - 40), start))) return true;
   const next = PROPER_NOUN_AFTER.exec(rest.slice(m[0].length));
   return !!next && !NOT_A_NAME.test(next[1]);
 }
 var FULL_DAY_OR_MONTH = /(?:day|january|february|march|april|june|july|august|september|october|november|december)\.$/i;
 var SENTENCE_AFTER_DOT = /^\s*\n|^\s+(?!(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\b)[A-Z]/;
-function tokenize(text) {
+function tokenize(text2) {
   const out = [];
   TOKEN_RE.lastIndex = 0;
   let m;
-  while (m = TOKEN_RE.exec(text)) {
+  while (m = TOKEN_RE.exec(text2)) {
     const g = m.groups ?? {};
     const raw = m[0];
     const start = m.index;
@@ -2506,7 +2509,7 @@ function tokenize(text) {
       continue;
     }
     if (g.day) {
-      endsSentence = raw.endsWith(".") && (FULL_DAY_OR_MONTH.test(raw) || SENTENCE_AFTER_DOT.test(text.slice(end)));
+      endsSentence = raw.endsWith(".") && (FULL_DAY_OR_MONTH.test(raw) || SENTENCE_AFTER_DOT.test(text2.slice(end)));
       const word = g.day.replace(/\.$/, "");
       const lower = word.toLowerCase();
       if (AMBIGUOUS_DAY.test(lower) && word[0] !== word[0].toUpperCase()) continue;
@@ -2555,11 +2558,11 @@ function tokenize(text) {
       const apRaw = (mm[3] ?? mm[4] ?? "").toLowerCase();
       const ap = apRaw.startsWith("a") ? "am" : apRaw.startsWith("p") ? "pm" : void 0;
       const ish = Boolean(mm[5]);
-      const rest = text.slice(end);
+      const rest = text2.slice(end);
       if (NOT_TIME_AFTER.test(rest)) continue;
       const bare = !ap && !mm[2] && !ish;
       if (bare && COUNT_RANGE_AFTER.test(rest)) continue;
-      if (bare && placeAfterNumber(text, start, rest)) continue;
+      if (bare && placeAfterNumber(text2, start, rest)) continue;
       if (ap && (h < 1 || h > 12)) continue;
       if (!ap && !mm[2] && (h < 1 || h > 12)) continue;
       if (mm[2] && h > 23) continue;
@@ -2603,19 +2606,19 @@ function tokenize(text) {
   return out;
 }
 var ANCHOR_KINDS = /* @__PURE__ */ new Set(["day", "date", "ord", "rel"]);
-function namesOwnDay(text, toks, i) {
+function namesOwnDay(text2, toks, i) {
   const from = toks[i].start;
-  const stop = /[.!?\n]/.exec(text.slice(from));
-  const end = stop ? from + stop.index : text.length;
+  const stop = /[.!?\n]/.exec(text2.slice(from));
+  const end = stop ? from + stop.index : text2.length;
   for (let j = i; j < toks.length && toks[j].start < end; j++) if (ANCHOR_KINDS.has(toks[j].k)) return true;
   return false;
 }
-function chunks(text, toks) {
+function chunks(text2, toks) {
   const out = [];
   let cur = [];
   for (const [i, t] of toks.entries()) {
     const prev = cur[cur.length - 1];
-    if (prev && (!/^[\s,:()]*$/.test(text.slice(prev.end, t.start)) || prev.endsSentence && namesOwnDay(text, toks, i))) {
+    if (prev && (!/^[\s,:()]*$/.test(text2.slice(prev.end, t.start)) || prev.endsSentence && namesOwnDay(text2, toks, i))) {
       out.push(cur);
       cur = [];
     }
@@ -2655,7 +2658,7 @@ function resolveHours(t, part) {
   if (end <= start) return { start };
   return { start, end };
 }
-function weekScopes(text, toks) {
+function weekScopes(text2, toks) {
   const scopes = [];
   for (const t of toks) {
     if (t.k !== "week") continue;
@@ -2664,7 +2667,7 @@ function weekScopes(text, toks) {
       start: t.start,
       end: t.end,
       offset: t.relative ? (prev?.offset ?? 0) + t.offset : t.offset,
-      blocked: weekIsBlocked(text, t.start, t.end)
+      blocked: weekIsBlocked(text2, t.start, t.end)
     });
   }
   return (start, end) => {
@@ -2678,16 +2681,16 @@ function weekScopes(text, toks) {
 }
 var WEEK_BLOCKED = /\b(not|cannot|can'?t|won'?t|isn'?t|doesn'?t|busy|booked|slammed|swamped|packed|hectic|away|out|off|traveling|travelling|vacation|pto|leave|conference|offsite|unavailable)\b/i;
 var WEEK_OPEN = /\b(open|free|available|works?|flexible|better|easier|how about|what about)\b/i;
-function weekIsBlocked(text, start, end) {
-  const before = text.slice(Math.max(0, start - 80), start);
-  const after = text.slice(end, end + 80);
+function weekIsBlocked(text2, start, end) {
+  const before = text2.slice(Math.max(0, start - 80), start);
+  const after = text2.slice(end, end + 80);
   const lo = before.split(/[.;!?\n]|,|\bbut\b|\bthough\b|\bhowever\b/i).pop() ?? "";
   const hi = after.split(/[.;!?\n]|,|\bbut\b|\bthough\b|\bhowever\b/i)[0] ?? "";
   const clause2 = `${lo} ${hi}`;
   if (!WEEK_BLOCKED.test(clause2)) return false;
   return !(WEEK_OPEN.test(clause2) && !/\b(not|cannot)\b|n['’]t\b/i.test(clause2));
 }
-function interpretChunk(text, chunk, weekAt = () => void 0, ctx = {}) {
+function interpretChunk(text2, chunk, weekAt = () => void 0, ctx = {}) {
   const proposals = [];
   const leftover = [];
   const emitted = [];
@@ -2703,9 +2706,9 @@ function interpretChunk(text, chunk, weekAt = () => void 0, ctx = {}) {
       for (const [ai, a] of d.anchors.entries())
         for (const t of d.times) {
           const stop = d.zoneEnd && d.zoneEnd > t.stop && d.zoneEnd - t.stop < 24 ? d.zoneEnd : t.stop;
-          const timeRaw = text.slice(t.start, stop);
-          const anchorRaw = text.slice(d.anchorStart, d.anchorEnd);
-          const raw = d.anchorStart <= t.start && t.start - d.anchorEnd < 24 ? text.slice(d.anchorStart, stop) : d.anchorStart > t.stop && d.anchorStart - t.stop < 24 ? text.slice(t.start, Math.max(d.anchorEnd, stop)) : `${anchorRaw} ${timeRaw}`;
+          const timeRaw = text2.slice(t.start, stop);
+          const anchorRaw = text2.slice(d.anchorStart, d.anchorEnd);
+          const raw = d.anchorStart <= t.start && t.start - d.anchorEnd < 24 ? text2.slice(d.anchorStart, stop) : d.anchorStart > t.stop && d.anchorStart - t.stop < 24 ? text2.slice(t.start, Math.max(d.anchorEnd, stop)) : `${anchorRaw} ${timeRaw}`;
           const p = {
             anchor: a,
             time: t,
@@ -2846,12 +2849,12 @@ var NEGATION_LEAD = "^\\s*(?:(?:so|well|honestly|actually|hey|hmm|and|or|ok|okay
 var NEGATIVE_QUESTION = new RegExp(`${NEGATION_LEAD}\\s+(?:we|you|i|it|that|this|there|they)\\b`, "i");
 var NEGATIVE_QUESTION_BARE = new RegExp(`${NEGATION_LEAD}\\s*$`, "i");
 var NOT_BUSY_PHRASE = /\b(?:if (?:not|that|this|those|these|none|neither|it|they|you|so)\b.*$|unless\b.*$|no (?:worries|problem|rush|pressure|stress)|not a problem|not sure|can['’]?t wait|(?:don['’]?t|do not) worry|(?:doesn['’]?t|does not) matter|(?:wouldn['’]?t|don['’]?t) mind|(?:don['’]?t|do not) hesitate|why not|no later than)/gi;
-function busyAround(text, start, end) {
+function busyAround(text2, start, end) {
   let lo = 0;
-  let hi = text.length;
+  let hi = text2.length;
   CLAUSE_BREAK.lastIndex = 0;
   let m;
-  while (m = CLAUSE_BREAK.exec(text)) {
+  while (m = CLAUSE_BREAK.exec(text2)) {
     const at = m.index;
     const stop = at + m[0].length;
     if (stop <= start) lo = stop;
@@ -2860,41 +2863,41 @@ function busyAround(text, start, end) {
       break;
     }
   }
-  let before = text.slice(lo, start).replace(NEGATIVE_QUESTION, " ");
-  if (text[hi] === "?") before = before.replace(NEGATIVE_QUESTION_BARE, " ");
-  const clause2 = `${before} ${text.slice(end, hi)}`.replace(NOT_BUSY_PHRASE, " ");
+  let before = text2.slice(lo, start).replace(NEGATIVE_QUESTION, " ");
+  if (text2[hi] === "?") before = before.replace(NEGATIVE_QUESTION_BARE, " ");
+  const clause2 = `${before} ${text2.slice(end, hi)}`.replace(NOT_BUSY_PHRASE, " ");
   return BUSY_CLAUSE.test(clause2);
 }
 var HAS_CLAUSE_BREAK = new RegExp(CLAUSE_BREAK.source, "i");
-function isTaken(text, p) {
+function isTaken(text2, p) {
   const a = p.anchorSpan;
   const t = p.timeSpan;
   const gapLo = Math.min(a.end, t.end);
   const gapHi = Math.max(a.start, t.start);
-  if (gapHi <= gapLo || !HAS_CLAUSE_BREAK.test(text.slice(gapLo, gapHi)))
-    return busyAround(text, Math.min(a.start, t.start), Math.max(a.end, t.end));
-  return busyAround(text, a.start, a.end) || busyAround(text, t.start, t.end);
+  if (gapHi <= gapLo || !HAS_CLAUSE_BREAK.test(text2.slice(gapLo, gapHi)))
+    return busyAround(text2, Math.min(a.start, t.start), Math.max(a.end, t.end));
+  return busyAround(text2, a.start, a.end) || busyAround(text2, t.start, t.end);
 }
-function sentenceIndexAt(text, pos) {
+function sentenceIndexAt(text2, pos) {
   let n = 0;
   const re = /[.!?](?=\s)|\n/g;
   let m;
-  while ((m = re.exec(text)) && m.index < pos) n++;
+  while ((m = re.exec(text2)) && m.index < pos) n++;
   return n;
 }
-function statedMessageZone(text) {
-  const z5 = "(ET|EST|EDT|CT|CST|CDT|MT|MST|MDT|PT|PST|PDT|GMT|UTC|BST|eastern|central|mountain|pacific)(?:\\s+(?:standard|daylight))?(?:\\s+time)?";
+function statedMessageZone(text2) {
+  const z7 = "(ET|EST|EDT|CT|CST|CDT|MT|MST|MDT|PT|PST|PDT|GMT|UTC|BST|eastern|central|mountain|pacific)(?:\\s+(?:standard|daylight))?(?:\\s+time)?";
   const res = [
     new RegExp(
-      `\\b(?:all\\s+)?times?\\s+(?:(?:are|listed|below|above|here)\\s+)*(?:in\\s+)?${z5}(?![A-Za-z])`,
+      `\\b(?:all\\s+)?times?\\s+(?:(?:are|listed|below|above|here)\\s+)*(?:in\\s+)?${z7}(?![A-Za-z])`,
       "i"
     ),
-    new RegExp(`\\bi'?m\\s+(?:on|in|based\\s+in)\\s+${z5}(?![A-Za-z])`, "i"),
-    new RegExp(`\\b(?:on|in)\\s+${z5}\\s+time\\b`, "i"),
-    new RegExp(`\\((?:all\\s+)?(?:times?\\s+(?:in\\s+)?)?${z5}\\)`, "i")
+    new RegExp(`\\bi'?m\\s+(?:on|in|based\\s+in)\\s+${z7}(?![A-Za-z])`, "i"),
+    new RegExp(`\\b(?:on|in)\\s+${z7}\\s+time\\b`, "i"),
+    new RegExp(`\\((?:all\\s+)?(?:times?\\s+(?:in\\s+)?)?${z7}\\)`, "i")
   ];
   for (const re of res) {
-    const m = re.exec(text);
+    const m = re.exec(text2);
     if (m) {
       const tz = resolveZone(m[1]);
       if (tz) return tz;
@@ -2933,9 +2936,9 @@ function resolveAnchorDate(a, today, todayDow, sameDayPassed) {
     }
   }
 }
-function extractTimes(text, reference, opts = {}) {
+function extractTimes(text2, reference, opts = {}) {
   const fallbackTz = isValidTimeZone(opts.timeZone) ? opts.timeZone : hostTimeZone();
-  const norm2 = text.replace(/[–‒]/g, "-").replace(/[—]/g, ", ").replace(/ /g, " ");
+  const norm2 = text2.replace(/[–‒]/g, "-").replace(/[—]/g, ", ").replace(/ /g, " ");
   const messageZone = statedMessageZone(norm2);
   const toks = tokenize(norm2);
   const weekAt = weekScopes(norm2, toks);
@@ -3782,12 +3785,12 @@ function htmlToText(html) {
   h = h.replace(
     /<a\s[^>]*href\s*=\s*["']([^"']+)["'][^>]*>([\s\S]*?)<\/a>/gi,
     (_all, href, inner) => {
-      const text = decodeEntities(inner.replace(/<[^>]+>/g, "")).trim();
+      const text2 = decodeEntities(inner.replace(/<[^>]+>/g, "")).trim();
       const url = decodeEntities(href.trim());
-      if (!/^https?:\/\//i.test(url)) return text || url.replace(/^mailto:/i, "");
+      if (!/^https?:\/\//i.test(url)) return text2 || url.replace(/^mailto:/i, "");
       const bare = (u2) => u2.replace(/^https?:\/\/(www\.)?/i, "").replace(/\/$/, "");
-      if (!text || bare(text) === bare(url)) return url;
-      return `${text} (${url})`;
+      if (!text2 || bare(text2) === bare(url)) return url;
+      return `${text2} (${url})`;
     }
   );
   h = h.replace(/<br\s*\/?>/gi, "\n").replace(/<li\b[^>]*>/gi, "\n- ").replace(/<\/(p|div|li|tr|h[1-6]|blockquote|table|ul|ol|section|article|header|footer)>/gi, "\n").replace(/<(p|div|tr|h[1-6]|table|ul|ol)\b[^>]*>/gi, "\n").replace(/<\/t[dh]>/gi, " ").replace(/<[^>]+>/g, "");
@@ -3807,14 +3810,14 @@ var QUOTE_MARKERS = [
 ];
 var MOBILE_FOOTER = /^(sent from my [\w ]{2,30}|sent from (outlook|mail|yahoo mail|gmail)( for [\w ]+)?|get outlook for (ios|android)|sent via [\w ]{2,30}|sent with [\w ]{2,30})\.?$/i;
 function stripQuotedReply(body) {
-  let text = body.replace(/\r\n/g, "\n");
-  let cut = text.length;
+  let text2 = body.replace(/\r\n/g, "\n");
+  let cut = text2.length;
   for (const { re, needsDateOrAddress } of QUOTE_MARKERS) {
-    const m = re.exec(text);
+    const m = re.exec(text2);
     if (m && m.index < cut && (!needsDateOrAddress || /\d|@/.test(m[0]))) cut = m.index;
   }
-  text = text.slice(0, cut);
-  const lines = text.split("\n");
+  text2 = text2.slice(0, cut);
+  const lines = text2.split("\n");
   while (lines.length && /^\s*>/.test(lines[lines.length - 1])) lines.pop();
   const kept = lines.filter((l) => !/^\s*>/.test(l));
   while (kept.length && (!kept[kept.length - 1].trim() || MOBILE_FOOTER.test(kept[kept.length - 1].trim())))
@@ -4000,6 +4003,9 @@ ${firstName}`],
     notes: "Warm preset."
   };
 }
+var STYLE_MIN_SAMPLES = 3;
+var GREETING2 = /^(hi|hey|hello|dear|good (morning|afternoon|evening))\b[^,!\n]*[,!]?/i;
+var SIGNOFF = /^(best|thanks|thank you|cheers|regards|warmly|all the best|talk soon|sincerely|take care|thanks so much|many thanks|best regards|kind regards|warm regards|thanks again|appreciate it)[,!.]?$/i;
 var PLAIN = new Set(
   "a an the and or but so to of in on at for with from by about as is am are was were be been it its this that i me my you your we our they them he she his her would could can will should do did have has had not if just how what when where who which there here up out any some more very really also than then too all one next week weeks couple time day days minutes min chat call quick talk meet meeting coffee happy free thanks thank hope know let like love get got make sure please best hi hey hello dear".split(" ")
 );
@@ -4008,6 +4014,115 @@ var FILLER = new Set(
     "|"
   )
 );
+function usable(s) {
+  const n = wordCount(s.text);
+  return n <= 300 && n >= (s.source === "email" ? 8 : 4);
+}
+function phrasesOf(bodies, firstName) {
+  const seen = /* @__PURE__ */ new Map();
+  const name = firstName.toLowerCase();
+  for (const b of bodies) {
+    const lines = b.split("\n").map((l) => l.trim().replace(GREETING2, "").trim()).filter((l) => l && !SIGNOFF.test(l));
+    const words4 = lines.join(" ").toLowerCase().replace(/[^a-z0-9' ]+/g, " ").split(/\s+/).filter(Boolean);
+    const mine = /* @__PURE__ */ new Set();
+    for (let i = 0; i + 3 <= words4.length; i++) {
+      const g = words4.slice(i, i + 3).join(" ");
+      const parts = words4.slice(i, i + 3);
+      if (g.includes(name) || FILLER.has(g) || parts.some((w) => /\d/.test(w))) continue;
+      if (parts.filter((w) => !PLAIN.has(w) && w.length > 2).length < 2) continue;
+      mine.add(g);
+    }
+    for (const g of mine) seen.set(g, (seen.get(g) ?? 0) + 1);
+  }
+  const floor = Math.max(3, Math.ceil(bodies.length * 0.2));
+  return [...seen.entries()].filter(([, n]) => n >= floor).sort((a, b) => b[1] - a[1]).slice(0, 5).map(([g]) => g);
+}
+function buildStyleCard(samples, firstName, fallback = "warm") {
+  const tagged = samples.map((s) => typeof s === "string" ? { text: s, source: "email" } : s).map((s) => ({ ...s, text: s.text.trim() })).filter(usable);
+  const bodies = tagged.map((s) => s.text);
+  if (bodies.length < STYLE_MIN_SAMPLES) return defaultStyleCard(fallback, firstName);
+  const greetings = /* @__PURE__ */ new Map();
+  const signoffs = /* @__PURE__ */ new Map();
+  let sentenceWords = 0;
+  let sentenceCount = 0;
+  let totalWords = 0;
+  let contractions = 0;
+  let exclamations = 0;
+  let emoji = 0;
+  for (const b of bodies) {
+    const first = b.split("\n")[0].trim();
+    const g = first.match(GREETING2);
+    if (g) {
+      const pat = g[0].replace(
+        /\b[A-Z][a-z]+\b/g,
+        (w) => /^(Hi|Hey|Hello|Dear|Good|Morning|Afternoon|Evening)$/.test(w) ? w : "{first}"
+      ).trim();
+      greetings.set(pat, (greetings.get(pat) ?? 0) + 1);
+    }
+    const lines = b.split("\n").map((l) => l.trim()).filter(Boolean);
+    for (let i = lines.length - 1; i >= Math.max(0, lines.length - 3); i--) {
+      const l = lines[i];
+      if (SIGNOFF.test(l)) {
+        const name = lines[i + 1] && lines[i + 1].length < 30 ? lines[i + 1] : firstName;
+        const key2 = `${l.replace(/[,!.]$/, "")},
+${name}`;
+        signoffs.set(key2, (signoffs.get(key2) ?? 0) + 1);
+        break;
+      }
+    }
+    const sents = b.split(/(?<=[.!?])\s+/).filter((s) => s.trim());
+    sentenceCount += sents.length;
+    sentenceWords += sents.reduce((n, s) => n + wordCount(s), 0);
+    totalWords += wordCount(b);
+    contractions += (b.match(/\b\w+'(m|re|s|ve|ll|d|t)\b/gi) ?? []).length;
+    exclamations += (b.match(/!/g) ?? []).length;
+    if (/[\p{Extended_Pictographic}]/u.test(b)) emoji++;
+  }
+  const top = (m, n) => [...m.entries()].sort((a, b) => b[1] - a[1]).slice(0, n).map(([k]) => k);
+  const avgSentenceWords = sentenceCount ? sentenceWords / sentenceCount : 14;
+  const formality = Math.min(
+    1,
+    Math.max(
+      0,
+      0.5 + (avgSentenceWords - 14) * 0.02 - contractions / bodies.length * 0.08 - exclamations / bodies.length * 0.1 + (greetings.has("Dear {first},") ? 0.2 : 0)
+    )
+  );
+  const def = defaultStyleCard(fallback, firstName);
+  const sources = {};
+  for (const s of tagged) sources[s.source] = (sources[s.source] ?? 0) + 1;
+  return {
+    greetingPatterns: top(greetings, 2).length ? top(greetings, 2) : def.greetingPatterns,
+    signoffs: top(signoffs, 2).length ? top(signoffs, 2) : def.signoffs,
+    formality,
+    avgSentenceWords: Math.round(avgSentenceWords),
+    avgMessageWords: Math.round(totalWords / bodies.length),
+    contractions: contractions / bodies.length > 0.5,
+    exclamationsPerMessage: exclamations / bodies.length,
+    emoji: emoji / bodies.length > 0.3,
+    characteristicPhrases: phrasesOf(bodies, firstName),
+    avoid: [],
+    // the student's own notes for Orbit; where the samples came from is in `sources`
+    notes: "",
+    builtFromCount: bodies.length,
+    version: 2,
+    sources
+  };
+}
+function mergeStyleCard(learned, current) {
+  if (!current) return learned;
+  const kept = { avoid: current.avoid, notes: current.custom ? current.notes : learned.notes };
+  if (!current.custom) return { ...learned, ...kept };
+  return {
+    ...current,
+    ...kept,
+    characteristicPhrases: [
+      .../* @__PURE__ */ new Set([...current.characteristicPhrases, ...learned.characteristicPhrases])
+    ].slice(0, 8),
+    builtFromCount: learned.builtFromCount,
+    sources: learned.sources,
+    version: 2
+  };
+}
 
 // packages/core/src/drafts/templates.ts
 var MAX_WORDS = {
@@ -4702,8 +4817,8 @@ var ASKING = [
   /\b(?:quick|one) (?:question|q)\b/i,
   /\b(?:what|when|where|which|who|how|why) (?:do|does|did|would|will|should|are|is|were|was|have|has|can|could)\b[^.!?\n]*$/im
 ];
-function holdsQuestion(text) {
-  const stripped = stripQuotedReply(text ?? "");
+function holdsQuestion(text2) {
+  const stripped = stripQuotedReply(text2 ?? "");
   const body = (splitSignature(stripped).body || stripped).trim();
   if (!body) return false;
   const unquoted = body.replace(/"[^"\n]*"/g, "").replace(/“[^”\n]*”/g, "");
@@ -4723,9 +4838,9 @@ var OUTREACH = /\b((freshman|sophomore|junior|senior|student|undergrad|grad stud
 var RECRUITING = /\b((?<!informational )interview(s|ing)?\b|online assessment|\bOA\b|hackerrank|codesignal|coding challenge|offer letter|background check|onboarding|application (status|received|update)|your (application|candidacy)|next (steps|round)|phone screen|technical (screen|interview)|superday|final round|hiring (manager|team)|recruit(er|ing) (team|coordinator)|i'?m (a|the) (technical |university |campus )?recruiter|(university|campus) recruit(ing|er)|talent (acquisition|partner)|move you forward|moving forward with your|we regret|unfortunately we|position has been filled|(intern|internship|new grad) program|we'?re hiring|schedule your interview|availability for (a|an|the) [\w -]{0,20}interview)/gi;
 var TRANSACTIONAL = /\b(your order|order #|order (number|confirmation|has shipped|shipped)|receipt|invoice|payment (received|due|confirmation|failed|declined)|verification code|verify your (email|account|identity)|reset your password|password reset|unsubscribe|account statement|billing (statement|update)|tracking number|has been delivered|out for delivery|subscription (renewal|confirmed|canceled))\b/gi;
 var RECRUITER_LOCAL = /recruit|talent|university|campus|careers|hiring|staffing/i;
-function hits(re, text) {
+function hits(re, text2) {
   re.lastIndex = 0;
-  return text.match(re)?.length ?? 0;
+  return text2.match(re)?.length ?? 0;
 }
 function heuristicTriage(input) {
   const topic = input.subject ?? "";
@@ -4771,19 +4886,19 @@ ${hasOutboundHuman ? topic : ""}`);
     return { category: "personal", isNetworking: false, confidence: 0.5, topic };
   return { category: "other", isNetworking: false, confidence: 0.5, topic };
 }
-function extractProposedTimes(text, reference, timeZone) {
-  return extractTimes(text, reference, { timeZone });
+function extractProposedTimes(text2, reference, timeZone) {
+  return extractTimes(text2, reference, { timeZone });
 }
 var CONTRAST = /,?\s+(?=\b(?:but|though|however|although)\b)|;\s*/i;
 function sentencesOf(body) {
-  return body.split(/(?<=[.!?])\s+|\n+/).map((s) => s.trim()).filter(Boolean).map((text) => ({
-    text,
-    question: /\?["')\]]*$/.test(text),
-    clauses: text.split(CONTRAST).map((c) => c.trim()).filter(Boolean)
+  return body.split(/(?<=[.!?])\s+|\n+/).map((s) => s.trim()).filter(Boolean).map((text2) => ({
+    text: text2,
+    question: /\?["')\]]*$/.test(text2),
+    clauses: text2.split(CONTRAST).map((c) => c.trim()).filter(Boolean)
   }));
 }
-function anyOf(res, text) {
-  return res.some((re) => re.test(text));
+function anyOf(res, text2) {
+  return res.some((re) => re.test(text2));
 }
 var OOO = /\b(out of (the )?office|on (vacation|leave|pto|parental leave|maternity leave|paternity leave|holiday|sabbatical)|away (until|from|through)|auto(-| )?reply|automatic reply|(limited|intermittent|no|minimal) (access to )?(my )?e-?mail|currently (traveling|travelling|away|out)|(will|i'?ll) (get back to you|respond|reply)( to (you|your (e-?mail|message|note)))?( as soon as possible)? (when|once|upon|after) (i|my) return|back in the office|ooo|(will|i'?ll) (get back to you|respond|reply|write back|answer|follow up)( to (you|this|your (e-?mail|message|note)))?( properly| in full| in detail| fully| at length| for real)? (when|once|after) (i'?m|i am|i get|i'?m) (back|home)|more (when|once) (i'?m|i am|i get) (back|home))\b/i;
 var AUTO_REPLY_OPENER = /^(?:(?:hi|hello|dear)[^\n]{0,30}\n+)?\s*(thank(s| you) for your (e-?mail|message|note|inquiry)|i am (currently )?(out of the office|away from (the|my) (office|desk)|on (annual |parental |maternity |paternity )?leave|ooo\b)|i will be (out of the office|away from)|automatic reply|this is an automat)/i;
@@ -4816,10 +4931,10 @@ var EMAIL_OK = [
   /\b(answer|take|field|respond to|help with) (a few |a couple( of)? |some |any |your |the )?(questions?|anything) (here|in (this|the) (thread|chain|e-?mail)|in writing|over text)\b/i
 ];
 var PASS_REFERRAL = /^pass(?:ing)?\s+(?:(?:it|this|that|these|them|him|her|your\s+\w+(?:\s+\w+)?|the\s+\w+|my\s+\w+)\s+)?(?:along\b|on\s+to\b|on\s*(?:$|[.,!;])|on\s+(?:your|to|her|his|my)\b|to\s+(?:my|our|the|a|an|[A-Z]))/i;
-function refusingPass(text) {
+function refusingPass(text2) {
   const re = /(?:^|\b(?:going to|gonna|will|'ll|have to|need to|must|i)\s+)(?:have to\s+)?(?=pass\b)/gi;
-  for (const m of text.matchAll(re)) {
-    const rest = text.slice(m.index + m[0].length);
+  for (const m of text2.matchAll(re)) {
+    const rest = text2.slice(m.index + m[0].length);
     if (!PASS_REFERRAL.test(rest) && !/^pass on (a|the|any|doing|hopping|getting) /i.test(rest)) return true;
   }
   return false;
@@ -4991,14 +5106,14 @@ var MONTH_NAMES = [
   "december"
 ];
 var SEASON_MONTH = { spring: 3, summer: 6, fall: 9, autumn: 9, winter: 12 };
-function followUpDate(text, reference, timeZone) {
+function followUpDate(text2, reference, timeZone) {
   const today = extractFirstDate("today", reference, timeZone);
   if (!today) return void 0;
-  const invite = LATER_INVITE.exec(text);
-  return (invite ? laterDate(text.slice(invite.index).split(/[.?!\n]/)[0], today) : void 0) ?? laterDate(text, today);
+  const invite = LATER_INVITE.exec(text2);
+  return (invite ? laterDate(text2.slice(invite.index).split(/[.?!\n]/)[0], today) : void 0) ?? laterDate(text2, today);
 }
-function laterDate(text, today) {
-  const t = text.toLowerCase();
+function laterDate(text2, today) {
+  const t = text2.toLowerCase();
   const [y, m] = today.split("-").map(Number);
   const firstOf = (year, month2) => {
     const yy = year + Math.floor((month2 - 1) / 12);
@@ -5028,14 +5143,14 @@ function laterDate(text, today) {
 function isAutoReplyBody(body) {
   return OOO.test(body) && AUTO_REPLY_OPENER.test(body.trim());
 }
-function returnDate(text, reference, timeZone) {
+function returnDate(text2, reference, timeZone) {
   RETURN_PHRASE.lastIndex = 0;
   let m;
-  while (m = RETURN_PHRASE.exec(text)) {
+  while (m = RETURN_PHRASE.exec(text2)) {
     const d = extractFirstDate(m[1], reference, timeZone);
     if (d) return d;
   }
-  const week = /\b(this|the rest of the|next) week\b/i.exec(text);
+  const week = /\b(this|the rest of the|next) week\b/i.exec(text2);
   if (week) {
     const monday = extractFirstDate("next monday", reference, timeZone);
     if (!monday) return void 0;
@@ -5076,8 +5191,8 @@ function stanceOf(sentences3, noCallCounts) {
   }
   return s;
 }
-function heuristicSignal(text, direction, reference, opts = {}) {
-  const body = text.replace(/[\u2018\u2019\u02bc]/g, "'");
+function heuristicSignal(text2, direction, reference, opts = {}) {
+  const body = text2.replace(/[\u2018\u2019\u02bc]/g, "'");
   const t = body.toLowerCase();
   const times2 = extractProposedTimes(body, reference, opts.timeZone);
   const extraction = {
@@ -5560,9 +5675,9 @@ function prose(body) {
       l
     ))
   );
-  const text = lines.join(" ");
-  const sentences3 = text.split(/(?<=[.!?])\s+/).map((s) => s.trim()).filter((s) => /[A-Za-z]/.test(s));
-  const words4 = text.match(/[A-Za-z][A-Za-z'’-]*/g) ?? [];
+  const text2 = lines.join(" ");
+  const sentences3 = text2.split(/(?<=[.!?])\s+/).map((s) => s.trim()).filter((s) => /[A-Za-z]/.test(s));
+  const words4 = text2.match(/[A-Za-z][A-Za-z'’-]*/g) ?? [];
   return { words: words4, sentences: sentences3 };
 }
 function fleschKincaidGrade(body) {
@@ -6004,9 +6119,9 @@ function cleanCurrentJob(v) {
   if (!v || typeof v !== "object") return void 0;
   const o = v;
   const url = cleanJobUrl(o.url);
-  const text = cleanAnswer(o.text, CURRENT_JOB_MAX);
-  if (!url && !text) return void 0;
-  return { ...url ? { url } : {}, ...text ? { text } : {} };
+  const text2 = cleanAnswer(o.text, CURRENT_JOB_MAX);
+  if (!url && !text2) return void 0;
+  return { ...url ? { url } : {}, ...text2 ? { text: text2 } : {} };
 }
 function ownWordsOf(g) {
   const out = {};
@@ -6127,14 +6242,14 @@ async function buildUserContext(db2, u2) {
      where user_id = ${u2.id}::uuid and deleted_at is null and person_id is null
      order by importance desc, last_seen_at desc limit 10`;
   if (memories.length) lines.push(`Remembered: ${memories.map((m) => m.text).join(" | ")}`);
-  const text = lines.join("\n");
-  return text.length > USER_CONTEXT_MAX_CHARS ? `${text.slice(0, USER_CONTEXT_MAX_CHARS - 1)}…` : text;
+  const text2 = lines.join("\n");
+  return text2.length > USER_CONTEXT_MAX_CHARS ? `${text2.slice(0, USER_CONTEXT_MAX_CHARS - 1)}…` : text2;
 }
 function facetLines(parsed2) {
   if (!parsed2) return [];
   const out = [];
-  const list = (v) => Array.isArray(v) ? v : [];
-  for (const f of list(parsed2.facets)) {
+  const list2 = (v) => Array.isArray(v) ? v : [];
+  for (const f of list2(parsed2.facets)) {
     const o = f;
     if (o.excluded === true) continue;
     const t = [o.title ?? o.role, o.org ?? o.organization ?? o.organizationName, o.text].filter(
@@ -6142,17 +6257,17 @@ function facetLines(parsed2) {
     );
     if (t.length) out.push(t.join(", "));
   }
-  for (const e of list(parsed2.experiences ?? parsed2.experience)) {
+  for (const e of list2(parsed2.experiences ?? parsed2.experience)) {
     const o = e;
     const t = [o.title, o.org ?? o.company].filter((x) => typeof x === "string");
     if (t.length) out.push(t.join(" at "));
   }
-  for (const e of list(parsed2.education)) {
+  for (const e of list2(parsed2.education)) {
     const o = e;
     const t = [o.degree, o.school].filter((x) => typeof x === "string");
     if (t.length) out.push(t.join(", "));
   }
-  const skills = list(parsed2.skills).filter((x) => typeof x === "string");
+  const skills = list2(parsed2.skills).filter((x) => typeof x === "string");
   if (skills.length) out.push(`Skills: ${skills.slice(0, 12).join(", ")}`);
   return out.slice(0, 12);
 }
@@ -6207,9 +6322,9 @@ async function exemplars(s, userId, personId, situation, opts = {}) {
     )
   ].sort((a, b) => b.length - a.length);
   return rows.map((r) => {
-    let text = stripQuotedReply(r.body_text).trim().slice(0, 1200);
-    for (const w of words4) text = text.replace(new RegExp(`\\b${escapeRe2(w)}\\b`, "g"), "[name]");
-    return text.replace(/^(hi|hey|hello|dear)\s+[A-Z][a-z]+/i, (m) => `${m.split(/\s+/)[0]} [name]`);
+    let text2 = stripQuotedReply(r.body_text).trim().slice(0, 1200);
+    for (const w of words4) text2 = text2.replace(new RegExp(`\\b${escapeRe2(w)}\\b`, "g"), "[name]");
+    return text2.replace(/^(hi|hey|hello|dear)\s+[A-Z][a-z]+/i, (m) => `${m.split(/\s+/)[0]} [name]`);
   });
 }
 async function loadResearch(db2, userId, personId) {
@@ -6334,8 +6449,8 @@ function composeSystem(p) {
     );
   return lines.join("\n");
 }
-function block(tag, text) {
-  const clean = (text ?? "").replace(/<\/?[a-z_]+[^>]*>/gi, " ").trim();
+function block(tag, text2) {
+  const clean = (text2 ?? "").replace(/<\/?[a-z_]+[^>]*>/gi, " ").trim();
   return `<${tag}>${clean ? `
 ${clean}
 ` : ""}</${tag}>`;
@@ -6362,8 +6477,8 @@ ${issues.map((i) => `- ${i}`).join("\n")}
 Rewrite the message so it passes every rule. Keep what was true and fix only these issues.`;
 }
 var ASK_USER = /\[ASK USER:\s*([^\]]*)\]/g;
-function askUserMarkers(text) {
-  return [...text.matchAll(ASK_USER)].map((m) => m[1].trim()).filter(Boolean);
+function askUserMarkers(text2) {
+  return [...text2.matchAll(ASK_USER)].map((m) => m[1].trim()).filter(Boolean);
 }
 
 // supabase/functions/_shared/compose/window.ts
@@ -6647,7 +6762,7 @@ ${footer}` : composed.body;
   await db2.sql`
     insert into orbit.audit_log (user_id, actor, action, target_table, target_id, details)
     values (${req.userId}::uuid, ${req.actor ?? "user"}, 'draft.compose', 'drafts', ${row.id},
-            ${{ kind: req.kind, channel: req.channel, generated_by: generatedBy, attempts, issues: lastIssues.length }}::jsonb)`;
+            ${{ kind: req.kind, channel: req.channel, generated_by: generatedBy, attempts, issues: lastIssues.length, hash: messageHash({ channel: req.channel, subject: composed.subject, body }) }}::jsonb)`;
   return {
     draft: row,
     composed: { ...composed, id: row.id, body, validator },
@@ -6768,8 +6883,8 @@ var TEMPLATE_KIND = {
   report_back: "reengage",
   schedule: "bump"
 };
-function hookPhrase(text) {
-  const t = text.trim().replace(/[.!?]+$/, "").replace(/\s+(stuck with me|caught my eye|resonated with me)$/i, "");
+function hookPhrase(text2) {
+  const t = text2.trim().replace(/[.!?]+$/, "").replace(/\s+(stuck with me|caught my eye|resonated with me)$/i, "");
   return /^(Your|The|A|An|I)\b/.test(t) && !/^I\b/.test(t) ? t[0].toLowerCase() + t.slice(1) : t;
 }
 function templateMessage(p) {
@@ -6988,12 +7103,12 @@ async function tripBreaker(db2, userId, p) {
     select settings from orbit.users where id = ${userId}::uuid`;
   const goalTitle = p.goalId ? (await db2.sql`select title from orbit.goals where id = ${p.goalId}::uuid`)[0]?.title : void 0;
   const where = p.company?.trim() || goalTitle || "first messages";
-  const text = `${p.personName} ${WHAT[p.reason]}. Paused ${where}${p.company?.trim() || goalTitle ? " first messages" : ""}.`;
-  if (p.goalId && goalPaused(u2?.settings, p.goalId, p.now)) return { tripped: false, text };
+  const text2 = `${p.personName} ${WHAT[p.reason]}. Paused ${where}${p.company?.trim() || goalTitle ? " first messages" : ""}.`;
+  if (p.goalId && goalPaused(u2?.settings, p.goalId, p.now)) return { tripped: false, text: text2 };
   if (p.goalId)
     await setGoalPause(db2, userId, p.goalId, {
       reason: p.reason,
-      text,
+      text: text2,
       until: null,
       at: p.now.toISOString()
     });
@@ -7004,7 +7119,7 @@ async function tripBreaker(db2, userId, p) {
   await raiseCard(db2, userId, {
     kind: "breaker",
     dedupeKey: `breaker:${p.goalId ?? "account"}:${p.messageId ?? p.personId ?? p.now.toISOString()}`,
-    reasonText: `${text} Read it?`,
+    reasonText: `${text2} Read it?`,
     personId: p.personId,
     messageId: p.messageId ?? null,
     signals: { reason: p.reason, goalId: p.goalId },
@@ -7013,11 +7128,11 @@ async function tripBreaker(db2, userId, p) {
     now: p.now,
     notify: {
       kind: "system",
-      title: text,
+      title: text2,
       link: p.personId ? `/people/${p.personId}` : "/settings/autopilot"
     }
   });
-  return { tripped: true, text };
+  return { tripped: true, text: text2 };
 }
 async function declinesToday(db2, userId, goalId, dayStart2) {
   const [r] = await db2.sql`
@@ -7705,17 +7820,17 @@ var SENSITIVE2 = [
   }
 ];
 var COMPANY_OK = /* @__PURE__ */ new Set(["job_loss"]);
-function carefulAllowed(text) {
-  const cat = sensitiveCategory(text);
+function carefulAllowed(text2) {
+  const cat = sensitiveCategory(text2);
   if (cat && !COMPANY_OK.has(cat)) return false;
-  if (/\b(she|he|his|her|hers|him)\b/i.test(text)) return false;
-  return !/\b(personal|private life|relationship|partner|dating)\b/i.test(text);
+  if (/\b(she|he|his|her|hers|him)\b/i.test(text2)) return false;
+  return !/\b(personal|private life|relationship|partner|dating)\b/i.test(text2);
 }
-function sensitiveCategory(text) {
-  return SENSITIVE2.find((s) => s.re.test(text))?.category;
+function sensitiveCategory(text2) {
+  return SENSITIVE2.find((s) => s.re.test(text2))?.category;
 }
-function stripSensitiveSentences(text) {
-  return text.split(/(?<=[.!?])\s+/).filter((s) => !sensitiveCategory(s)).join(" ").trim();
+function stripSensitiveSentences(text2) {
+  return text2.split(/(?<=[.!?])\s+/).filter((s) => !sensitiveCategory(s)).join(" ").trim();
 }
 
 // supabase/functions/_shared/research/identity.ts
@@ -7904,10 +8019,10 @@ var NICKNAMES2 = [
   ["zachary", "zach", "zack"]
 ];
 var escapeRe3 = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-function hasPhrase2(text, phrase) {
+function hasPhrase2(text2, phrase) {
   const p = norm(phrase);
   if (!p) return false;
-  return new RegExp(`(^|[^\\p{L}\\p{N}])${escapeRe3(p)}($|[^\\p{L}\\p{N}])`, "u").test(text);
+  return new RegExp(`(^|[^\\p{L}\\p{N}])${escapeRe3(p)}($|[^\\p{L}\\p{N}])`, "u").test(text2);
 }
 function hasExact(raw, phrase) {
   const p = phrase.trim();
@@ -8038,21 +8153,21 @@ function employerInTitle(title, card) {
 }
 function scorePage(page2, card) {
   const raw = [page2.title ?? "", page2.text ?? ""].join(" \n ");
-  const text = norm(raw);
+  const text2 = norm(raw);
   const host = hostOf(page2.url);
   const linkedinCopy = isLinkedInCopy(page2.url);
   const blocked = isBlockedSource(page2.url);
   const signals = [];
-  if (card.names.some((n) => hasPhrase2(text, n))) signals.push("name");
+  if (card.names.some((n) => hasPhrase2(text2, n))) signals.push("name");
   if (card.employers.some((e) => mentionsOrg(raw, e.aliases))) signals.push("employer");
   if (card.schools.some((s) => mentionsSchool(raw, s.aliases))) signals.push("school");
-  if (card.slug && text.includes(`linkedin.com/in/${card.slug}`)) signals.push("slug");
-  if (card.domains.some((d) => host === d || host.endsWith(`.${d}`) || text.includes(`@${d}`)))
+  if (card.slug && text2.includes(`linkedin.com/in/${card.slug}`)) signals.push("slug");
+  if (card.domains.some((d) => host === d || host.endsWith(`.${d}`) || text2.includes(`@${d}`)))
     signals.push("domain");
   const compactHost = host.replace(/[^a-z0-9]/g, "");
   if (card.last.length >= 3 && card.names.some((n) => compactHost.startsWith(n.replace(/[^a-z0-9]/g, ""))) && host.split(".").length <= 3)
     signals.push("personal_site");
-  if (card.city && hasPhrase2(text, card.city)) signals.push("city");
+  if (card.city && hasPhrase2(text2, card.city)) signals.push("city");
   const inTitle = employerInTitle(page2.title, card);
   const conflict = inTitle && !card.employers.some((e) => mentionsOrg(inTitle, e.aliases)) && !card.schools.some((s) => mentionsSchool(inTitle, s.aliases)) ? inTitle : void 0;
   const named = signals.includes("name");
@@ -8080,7 +8195,7 @@ function dossierSystem(userFirstName2, goalSentence2) {
   ].join("\n");
 }
 function dossierUser(input) {
-  const block2 = (list) => list.map(
+  const block2 = (list2) => list2.map(
     (s) => [
       `<source id="${s.id}">`,
       `url: ${s.url}`,
@@ -8241,35 +8356,35 @@ async function buildDossier(deps, input) {
   if (linkedin.profile) {
     const id = nextId();
     const url = linkedin.profile.public_profile_url ?? input.person.linkedinUrl ?? `https://www.linkedin.com/in/${linkedin.profile.public_identifier ?? input.person.linkedinMemberId ?? ""}`;
-    const text = formatProfile(linkedin.profile);
-    sources.push({ id, kind: "linkedin_profile", url, title: "LinkedIn profile", text });
+    const text2 = formatProfile(linkedin.profile);
+    sources.push({ id, kind: "linkedin_profile", url, title: "LinkedIn profile", text: text2 });
     linkedinLines.push(`[${id}] profile
-${text}`);
+${text2}`);
   }
   for (const p of linkedin.posts.slice(0, 10)) {
     if (!p.text) continue;
     const id = nextId();
-    const text = p.text.slice(0, 1500);
+    const text2 = p.text.slice(0, 1500);
     sources.push({
       id,
       kind: "linkedin_post",
       url: p.share_url ?? "",
       title: "LinkedIn post",
       published: p.parsed_datetime ?? p.date ?? null,
-      text
+      text: text2
     });
     linkedinLines.push(`[${id}] post ${p.parsed_datetime ?? p.date ?? ""}
-${text}`);
+${text2}`);
   }
   for (const r of kept) {
-    const text = (texts.get(r.url) ?? r.text ?? (r.highlights ?? []).join(" … ")).slice(0, 6e3);
+    const text2 = (texts.get(r.url) ?? r.text ?? (r.highlights ?? []).join(" … ")).slice(0, 6e3);
     sources.push({
       id: nextId(),
       kind: "web",
       url: r.url,
       title: r.title ?? void 0,
       published: r.publishedDate,
-      text
+      text: text2
     });
   }
   const allowed = sources.map((s) => s.id);
@@ -8880,12 +8995,12 @@ function enrichDossier(config) {
 
 // supabase/functions/_shared/replies/replies.ts
 var needsYouKey = (messageId) => `needs_you:${messageId}`;
-function questionOf(extraction, text) {
+function questionOf(extraction, text2) {
   const llm = extraction?.llm?.question;
   if (typeof llm === "string" && llm.trim()) return llm.trim();
   const own = extraction?.question;
   if (typeof own === "string" && own.trim()) return own.trim();
-  const body = stripQuotedReply(text);
+  const body = stripQuotedReply(text2);
   const sentence2 = body.split(/(?<=[.!?])\s+|\n+/).map((s) => s.trim()).find((s) => s.endsWith("?"));
   return sentence2 ?? (holdsQuestion(body) ? body.trim().slice(0, 200) : null);
 }
@@ -9157,8 +9272,8 @@ async function offeredSlotsFor(s, userId, personId, before) {
   }
   return void 0;
 }
-function matchOfferedSlot(text, offered, reference, timeZone) {
-  const proposed = extractProposedTimes(text, reference, timeZone);
+function matchOfferedSlot(text2, offered, reference, timeZone) {
+  const proposed = extractProposedTimes(text2, reference, timeZone);
   for (const p of proposed) {
     const t = new Date(p.startIso).getTime();
     const hit = offered.find((o) => Math.abs(new Date(o).getTime() - t) <= SLOT_MATCH_MIN * 6e4);
@@ -9195,8 +9310,8 @@ async function runReplyFunnel(s, userId, messageId, opts = {}) {
     select timezone, first_name, display_name from orbit.people where id = ${m.from_person_id}::uuid`;
   const userTz = validZone(u2?.timezone) ?? "America/New_York";
   const tz = validZone(p?.timezone) ?? userTz;
-  const text = full?.body_text ?? full?.snippet ?? "";
-  const slotStart = matchOfferedSlot(text, offered.slots, new Date(m.sent_at), tz);
+  const text2 = full?.body_text ?? full?.snippet ?? "";
+  const slotStart = matchOfferedSlot(text2, offered.slots, new Date(m.sent_at), tz);
   if (!slotStart) return maybeAutoReply(db2, userId, messageId, { services: s });
   const start = new Date(slotStart);
   if (start.getTime() <= now.getTime()) return maybeAutoReply(db2, userId, messageId, { services: s });
@@ -10001,12 +10116,12 @@ function groupPairs(members, strengthOf) {
     seenPeople.add(m.personId);
     connectors.add(m);
   }
-  const list = [...connectors];
-  for (let i = 0; i < list.length; i++)
-    for (let j = i + 1; j < list.length; j++) out.push([list[i], list[j]]);
+  const list2 = [...connectors];
+  for (let i = 0; i < list2.length; i++)
+    for (let j = i + 1; j < list2.length; j++) out.push([list2[i], list2[j]]);
   for (const m of members) {
     if (connectors.has(m)) continue;
-    for (const c of list) out.push([c, m]);
+    for (const c of list2) out.push([c, m]);
   }
   return out;
 }
@@ -12114,17 +12229,17 @@ var STOP = new Set(
 
 // packages/core/src/recommend/score.ts
 function responsePrior(p, user) {
-  let z5 = -0.4;
-  if (p.isAlumni) z5 += 0.8;
+  let z7 = -0.4;
+  if (p.isAlumni) z7 += 0.8;
   if (p.school && user.majors.some((m) => (p.headline ?? "").toLowerCase().includes(m.toLowerCase())))
-    z5 += 0.5;
+    z7 += 0.5;
   const title = (p.currentTitle ?? "").toLowerCase();
-  if (/\b(ceo|cfo|coo|cto|partner|managing director|md|founder|chief)\b/.test(title)) z5 -= 0.6;
-  else if (title) z5 += 0.3;
+  if (/\b(ceo|cfo|coo|cto|partner|managing director|md|founder|chief)\b/.test(title)) z7 -= 0.6;
+  else if (title) z7 += 0.3;
   if (p.lastInteractionAt && Date.now() - new Date(p.lastInteractionAt).getTime() < 180 * 864e5)
-    z5 += 0.3;
-  if (p.linkedinConnectedOn) z5 += 0.2;
-  return 1 / (1 + Math.exp(-z5));
+    z7 += 0.3;
+  if (p.linkedinConnectedOn) z7 += 0.2;
+  return 1 / (1 + Math.exp(-z7));
 }
 
 // packages/core/src/types.ts
@@ -12210,7 +12325,7 @@ var PATTERNS = [
   ],
   ["hostile", /\b(spam(ming)?|annoying|inappropriate|unprofessional|harass(ing|ment)?)\b/i]
 ];
-var words3 = (text) => text.toLowerCase().match(/[a-z']+/g) ?? [];
+var words3 = (text2) => text2.toLowerCase().match(/[a-z']+/g) ?? [];
 var FUNCTION_CLASSES = {
   personal: new Set(
     "i me my mine myself we us our ours ourselves you your yours yourself yourselves he him his she her hers they them their theirs".split(
@@ -12260,23 +12375,23 @@ function styleMatch(a, b) {
 }
 var clamp = (x, lo = -1, hi = 1) => Math.max(lo, Math.min(hi, x));
 function replyRapport(input) {
-  const text = input.text.trim();
-  const ws = words3(text);
+  const text2 = input.text.trim();
+  const ws = words3(text2);
   const cues = /* @__PURE__ */ new Set();
-  for (const [cue, re] of PATTERNS) if (re.test(text)) cues.add(cue);
+  for (const [cue, re] of PATTERNS) if (re.test(text2)) cues.add(cue);
   const name = input.studentFirstName?.trim();
-  if (name && name.length >= 2 && new RegExp(`\\b${name.replace(/[^\p{L}\p{N}' -]/gu, "")}\\b`, "iu").test(text))
+  if (name && name.length >= 2 && new RegExp(`\\b${name.replace(/[^\p{L}\p{N}' -]/gu, "")}\\b`, "iu").test(text2))
     cues.add("uses_your_name");
   const theirs = input.answering ? words3(input.answering).length : 0;
   if (ws.length >= 60 && ws.length >= Math.max(20, theirs)) cues.add("thoughtful");
   if (cues.has("formal")) cues.delete("uses_your_name");
   let sum = 0;
   for (const c of cues) sum += WARM_CUES[c] ?? 0;
-  if (input.valence && ws.length >= 3) sum += 0.25 * clamp(input.valence(text));
+  if (input.valence && ws.length >= 3) sum += 0.25 * clamp(input.valence(text2));
   if (cues.has("formal")) sum *= 0.5;
   if (cues.has("distant")) sum -= 0.45;
   if (cues.has("hostile")) sum -= 0.8;
-  const lsm = input.answering ? styleMatch(text, input.answering) : void 0;
+  const lsm = input.answering ? styleMatch(text2, input.answering) : void 0;
   if (lsm !== void 0) sum += 0.1 * clamp((lsm - 0.5) * 2);
   let score = Math.tanh(sum);
   if (cues.has("asked_to_stop")) score = -1;
@@ -12587,20 +12702,20 @@ function computeTieFeatures(h, now = /* @__PURE__ */ new Date()) {
   return { features, facts };
 }
 function linearTie(features, weights = TIE_WEIGHTS) {
-  let z5 = weights.bias;
-  for (const k of TIE_FEATURES) z5 += weights[k] * features[k];
-  return z5;
+  let z7 = weights.bias;
+  for (const k of TIE_FEATURES) z7 += weights[k] * features[k];
+  return z7;
 }
-function scoreFromZ(z5, calibration) {
-  const zz = calibration ? calibration.a * z5 + calibration.c : z5;
+function scoreFromZ(z7, calibration) {
+  const zz = calibration ? calibration.a * z7 + calibration.c : z7;
   return Math.round(100 * sigmoid(zz));
 }
 function scoreTie(history, now = /* @__PURE__ */ new Date(), weights = TIE_WEIGHTS, calibration) {
   const { features, facts } = computeTieFeatures(history, now);
-  const z5 = linearTie(features, weights);
-  let score = scoreFromZ(z5, calibration);
+  const z7 = linearTie(features, weights);
+  let score = scoreFromZ(z7, calibration);
   if (features.rapport !== 0) {
-    const without = scoreFromZ(z5 - weights.rapport * features.rapport, calibration);
+    const without = scoreFromZ(z7 - weights.rapport * features.rapport, calibration);
     score = Math.max(without - RAPPORT_MAX_POINTS, Math.min(without + RAPPORT_MAX_POINTS, score));
   }
   let capped = false;
@@ -12624,7 +12739,7 @@ function scoreTie(history, now = /* @__PURE__ */ new Date(), weights = TIE_WEIGH
   return {
     score,
     band: tieBand(score),
-    z: z5,
+    z: z7,
     features,
     contributions,
     explanation,
@@ -12859,14 +12974,14 @@ function warmthValue(w) {
 function makeGraph() {
   return { nodes: /* @__PURE__ */ new Set(), adj: /* @__PURE__ */ new Map() };
 }
-function addEdge(g, a, b, weight, type, text, directed = false) {
+function addEdge(g, a, b, weight, type, text2, directed = false) {
   if (weight <= 0) return;
   g.nodes.add(a);
   g.nodes.add(b);
   const set = (x, y) => {
     const m = g.adj.get(x) ?? /* @__PURE__ */ new Map();
     const cur = m.get(y);
-    if (!cur || cur.weight < weight) m.set(y, { weight, type, text });
+    if (!cur || cur.weight < weight) m.set(y, { weight, type, text: text2 });
     g.adj.set(x, m);
   };
   set(a, b);
@@ -13105,7 +13220,7 @@ function withExternal(pairs, targetId, candidates) {
   }
   return out;
 }
-function usable(p, now) {
+function usable2(p, now) {
   if (!p || p.hidden) return false;
   if (p.declinedIntroAt) {
     const t = new Date(p.declinedIntroAt).getTime();
@@ -13235,7 +13350,7 @@ function routingGraph(input, pairs, now, mutuals = /* @__PURE__ */ new Set()) {
   const lifted = /* @__PURE__ */ new Set();
   const floor = firstHopFloor(input.goal);
   for (const p of input.people.values()) {
-    if (p.id === input.targetId || !usable(p, now)) continue;
+    if (p.id === input.targetId || !usable2(p, now)) continue;
     const mutual = mutuals.has(p.id);
     const score = mutual ? Math.max(p.score, MUTUAL_MIN_SCORE) : p.score;
     const passes = p.score > 0 && p.score >= floor;
@@ -13251,7 +13366,7 @@ function routingGraph(input, pairs, now, mutuals = /* @__PURE__ */ new Set()) {
     const know = pKnow(pair);
     if (know <= 0) continue;
     const ends = [pair.aId, pair.bId];
-    if (ends.some((id) => id !== input.targetId && !usable(input.people.get(id), now))) continue;
+    if (ends.some((id) => id !== input.targetId && !usable2(input.people.get(id), now))) continue;
     const top = strongestTie(pair, now)?.kind ?? pair.kinds[0];
     const ab = pKnowDirected(pair, pair.aId, pair.bId);
     const ba = pKnowDirected(pair, pair.bId, pair.aId);
@@ -14125,11 +14240,11 @@ function keywordFit(goal, c) {
     (x) => !!x
   );
   if (criteria.length === 0) return { fit: 0.5, reasons: [] };
-  const text = candidateText(c);
+  const text2 = candidateText(c);
   const matched = criteria.filter((cr) => {
     const ws = norm(cr).split(/[^a-z0-9+#]+/).filter((w) => w.length >= 3 && !STOP2.has(w));
     if (ws.length === 0) return false;
-    const hits2 = ws.filter((w) => text.includes(w)).length;
+    const hits2 = ws.filter((w) => text2.includes(w)).length;
     return hits2 >= Math.ceil(ws.length / 2);
   });
   return {
@@ -14375,6 +14490,148 @@ function sourceSearch(config) {
   };
 }
 
+// supabase/functions/_shared/voice/voice.ts
+import { z as z4 } from "npm:zod@3.25.76/v4";
+
+// supabase/functions/_shared/memory/memory.ts
+import { z as z3 } from "npm:zod@3.25.76/v4";
+function embeddable(text2) {
+  const letters = text2.match(/\p{L}/gu) ?? [];
+  if (!letters.length) return false;
+  const latin = letters.filter((c) => /[A-Za-z]/.test(c)).length;
+  return latin / letters.length >= 0.8;
+}
+var MEMORY_SYSTEM = [
+  'Extract durable facts worth remembering for future conversations: preferences, constraints, details of goals, outcomes, and facts about specific people. Skip small talk and anything already in <known>. Each memory ≤ 200 characters, in third person about the user ("Prefers morning calls").',
+  `Return {"memories": [{kind, text, person_name|null, importance: 0..1, quote}]}; quote must be the user's own words.`
+].join("\n");
+var memorySchema = z3.object({
+  memories: z3.array(
+    z3.object({
+      kind: z3.enum(["preference", "constraint", "goal_detail", "outcome", "person_fact", "note"]),
+      text: z3.string(),
+      person_name: z3.string().nullable(),
+      importance: z3.number(),
+      quote: z3.string()
+    })
+  )
+});
+
+// supabase/functions/_shared/voice/voice.ts
+var EXEMPLAR_MIN_WORDS = 25;
+var EMBED_SENT_LIMIT = 200;
+var CARD_SAMPLES = 150;
+var text = (max) => z4.string().max(max);
+var list = (n, max) => z4.array(text(max)).max(n);
+var StyleCardS = z4.object({
+  greetingPatterns: list(6, 80),
+  signoffs: list(6, 160),
+  formality: z4.number().min(0).max(1),
+  avgSentenceWords: z4.number().min(0).max(200),
+  avgMessageWords: z4.number().min(0).max(2e3),
+  contractions: z4.boolean(),
+  exclamationsPerMessage: z4.number().min(0).max(50),
+  emoji: z4.boolean(),
+  characteristicPhrases: list(12, 120),
+  avoid: list(50, 120),
+  notes: text(4e3),
+  builtFromCount: z4.number().int().min(0).max(1e6),
+  version: z4.number().int().min(0).max(1e3),
+  sources: z4.partialRecord(z4.enum(["email", "linkedin", "orbit", "pasted"]), z4.number().int().min(0)).optional(),
+  custom: z4.boolean().optional()
+});
+async function embedSafely(embed, raw) {
+  const t = raw.trim().slice(0, 2e3);
+  if (!t || !embeddable(t)) return null;
+  try {
+    const e = await embed(t);
+    return e?.length ? e : null;
+  } catch {
+    return null;
+  }
+}
+function exemplarText(body) {
+  if (!body) return null;
+  const t = stripQuotedReply(body).trim();
+  return wordCount(t) >= EXEMPLAR_MIN_WORDS ? t : null;
+}
+async function embedMessages(db2, embed, rows) {
+  if (!embed) return 0;
+  let n = 0;
+  for (const r of rows) {
+    const t = exemplarText(r.body);
+    if (!t) continue;
+    const e = await embedSafely(embed, t);
+    if (!e) {
+      if (embeddable(t)) break;
+      continue;
+    }
+    try {
+      await db2.sql`update orbit.messages set embedding = ${vec(e)}::vector where id = ${r.id}::uuid`;
+      n++;
+    } catch {
+    }
+  }
+  return n;
+}
+async function embedSent(db2, embed, userId, limit = EMBED_SENT_LIMIT) {
+  const rows = await db2.sql`
+    select id, body_text from orbit.messages
+     where user_id = ${userId}::uuid and direction = 'out' and body_text is not null and not is_automated
+     order by sent_at desc limit ${limit}::int`;
+  const todo = rows.filter((r) => r.body_text);
+  const missing = await db2.sql`
+    select id from orbit.messages where id = any(${todo.map((r) => r.id)}::uuid[]) and embedding is null`;
+  const want = new Set(missing.map((r) => r.id));
+  const embedded = await embedMessages(
+    db2,
+    embed,
+    todo.filter((r) => want.has(r.id)).map((r) => ({ id: r.id, body: r.body_text }))
+  );
+  return { embedded, looked: rows.length };
+}
+async function relearnCard(db2, userId, now) {
+  const [u2] = await db2.sql`
+    select settings, first_name, full_name from orbit.users where id = ${userId}::uuid`;
+  if (!u2) return null;
+  const sent = await db2.sql`
+    select body_text from orbit.messages
+     where user_id = ${userId}::uuid and direction = 'out' and body_text is not null and not is_automated
+     order by sent_at desc limit ${CARD_SAMPLES}::int`;
+  const first = u2.first_name ?? u2.full_name?.split(/\s+/)[0] ?? "";
+  const preset = u2.settings?.tone_preset;
+  const learned = buildStyleCard(
+    sent.map((m) => stripQuotedReply(m.body_text)),
+    first,
+    preset === "direct" || preset === "formal" ? preset : "warm"
+  );
+  if (learned.builtFromCount === 0) return null;
+  const stored = StyleCardS.safeParse(u2.settings?.style_card);
+  const card = mergeStyleCard(learned, stored.success ? stored.data : void 0);
+  await db2.sql`
+    update orbit.users set settings = settings || jsonb_build_object('style_card', ${card}::jsonb,
+                                                                     'voice_relearned_at', ${now.toISOString()}::text)
+     where id = ${userId}::uuid`;
+  return card;
+}
+
+// supabase/functions/orbit-worker/handlers/voice.ts
+function voiceHandlers(config) {
+  return {
+    "voice.embed_sent": async (job, ctx) => {
+      if (!job.userId) throw new JobSkipped("no_user");
+      const s = makeServices(config, { db: ctx.db, now: ctx.now, queue: ctx.queue });
+      const asked = Number(job.payload.limit);
+      const limit = Number.isInteger(asked) && asked > 0 ? Math.min(asked, EMBED_SENT_LIMIT) : EMBED_SENT_LIMIT;
+      await embedSent(ctx.db, s.embed, job.userId, limit);
+    },
+    "voice.card": async (job, ctx) => {
+      if (!job.userId) throw new JobSkipped("no_user");
+      await relearnCard(ctx.db, job.userId, ctx.now());
+    }
+  };
+}
+
 // supabase/functions/orbit-worker/handlers/agents.ts
 function agentHandlers(config = { env: {} }) {
   return {
@@ -14384,7 +14641,9 @@ function agentHandlers(config = { env: {} }) {
     "cadence.user": cadenceUser(config),
     "funnel.reply": funnelReplyHandler(config),
     "outcomes.roll": outcomesRollHandler(),
-    hop_evidence: hopEvidenceHandler(config)
+    hop_evidence: hopEvidenceHandler(config),
+    // plan 29 §B2.4: the student's voice
+    ...voiceHandlers(config)
   };
 }
 
@@ -16949,8 +17208,8 @@ function computeFeatures(inc, cand, ctx) {
   };
 }
 function scoreFeatures(f, w = RESOLVE_WEIGHTS) {
-  const z5 = w.bias + w.name_sim * f.name_sim + w.last_sim * f.last_sim + w.org_match * f.org_match + w.title_sim * f.title_sim + w.email_name_sim * f.email_name_sim + w.domain_org_match * f.domain_org_match + w.school_match * f.school_match + w.firstNameVariant * f.firstNameVariant;
-  return sigmoid3(z5);
+  const z7 = w.bias + w.name_sim * f.name_sim + w.last_sim * f.last_sim + w.org_match * f.org_match + w.title_sim * f.title_sim + w.email_name_sim * f.email_name_sim + w.domain_org_match * f.domain_org_match + w.school_match * f.school_match + w.firstNameVariant * f.firstNameVariant;
+  return sigmoid3(z7);
 }
 function addressOnlyScore(f) {
   if (f.email_name_sim >= 1 && f.domain_org_match >= 0.8) return 0.93;
@@ -17792,8 +18051,8 @@ function isNotNow(body, base) {
   if (base.signal === "out_of_office") return comeBack && !/\bauto/.test(body);
   return comeBack && pushback;
 }
-function classifyReply(text, ctx) {
-  const stripped = stripQuotedReply(text);
+function classifyReply(text2, ctx) {
+  const stripped = stripQuotedReply(text2);
   const body = (splitSignature(stripped).body || stripped).replace(/[‘’ʼ]/g, "'");
   const base = heuristicSignal(body, ctx.direction ?? "inbound", ctx.now, {
     timeZone: ctx.timeZone,
@@ -17830,19 +18089,19 @@ function classifyReply(text, ctx) {
 }
 
 // supabase/functions/_shared/ingest/classify.ts
-import { z as z3 } from "npm:zod@3.25.76/v4";
+import { z as z5 } from "npm:zod@3.25.76/v4";
 var REPLY_CLASSIFY_SYSTEM = `Classify the newest message in this thread as one of: interested, scheduling, question, objection, referral, not_now, out_of_office, decline, unsubscribe, thanks, other.
 "unsubscribe" means they ask not to be contacted again. "referral" means they point to someone else. "not_now" means later, not never.
 Extract proposed times (as written, with any time zone), a return date, referred people, and their question if any.`;
-var ReplyClassSchema = z3.object({
-  class: z3.enum(REPLY_CLASSES),
-  confidence: z3.number(),
-  proposed_times: z3.array(z3.string()),
-  return_date: z3.string().nullable(),
-  referred_people: z3.array(
-    z3.object({ name: z3.string(), email: z3.string().nullable(), org: z3.string().nullable() })
+var ReplyClassSchema = z5.object({
+  class: z5.enum(REPLY_CLASSES),
+  confidence: z5.number(),
+  proposed_times: z5.array(z5.string()),
+  return_date: z5.string().nullable(),
+  referred_people: z5.array(
+    z5.object({ name: z5.string(), email: z5.string().nullable(), org: z5.string().nullable() })
   ),
-  question: z3.string().nullable()
+  question: z5.string().nullable()
 });
 var THREAD_MAX = 8;
 async function classifyMessage(db2, userId, messageId, deps) {
@@ -17854,13 +18113,13 @@ async function classifyMessage(db2, userId, messageId, deps) {
   if (!m) return { skipped: "not_found" };
   if (m.direction !== "in") return { skipped: "outbound" };
   if (m.is_automated) return { skipped: "automated" };
-  const text = (m.body_text ?? m.snippet ?? "").trim();
-  if (!text) return { skipped: "no_text" };
+  const text2 = (m.body_text ?? m.snippet ?? "").trim();
+  if (!text2) return { skipped: "no_text" };
   const sentAt = iso3(m.sent_at);
   const awaiting = m.from_person_id ? (await db2.sql`
           select 1 from orbit.drafts where user_id = ${userId}::uuid and person_id = ${m.from_person_id}::uuid
              and status = 'sent' and replied_at is null and sent_at <= ${sentAt}::timestamptz limit 1`).length > 0 : false;
-  const h = classifyReply(text, {
+  const h = classifyReply(text2, {
     now: new Date(sentAt),
     timeZone: m.timezone,
     direction: "inbound",
@@ -17957,16 +18216,16 @@ ${lines.join("\n")}
 
 // packages/core/src/scoring/vader.ts
 import vader from "npm:vader-sentiment@1.1.3";
-var vaderValence = (text) => vader.SentimentIntensityAnalyzer.polarity_scores(text).compound;
+var vaderValence = (text2) => vader.SentimentIntensityAnalyzer.polarity_scores(text2).compound;
 
 // supabase/functions/_shared/ingest/rapport.ts
-import { z as z4 } from "npm:zod@3.25.76/v4";
+import { z as z6 } from "npm:zod@3.25.76/v4";
 var RAPPORT_SYSTEM = `You read a message someone wrote to a student and judge ${RAPPORT_LLM_GUIDE}`;
-var RapportSchema = z4.object({
-  warmth: z4.number(),
-  familiarity: z4.enum(["stranger", "professional", "friendly", "friend"]),
-  effort: z4.number(),
-  cues: z4.array(z4.enum(RAPPORT_CUES))
+var RapportSchema = z6.object({
+  warmth: z6.number(),
+  familiarity: z6.enum(["stranger", "professional", "friendly", "friend"]),
+  effort: z6.number(),
+  cues: z6.array(z6.enum(RAPPORT_CUES))
 });
 var LLM_MIN_CHARS = 20;
 async function loadMessages(db2, userId, where) {
@@ -17991,15 +18250,15 @@ async function answering(db2, m) {
   return t ? stripQuotedReply(t) : void 0;
 }
 async function readOne(db2, userId, m, claude, useLlm) {
-  const text = stripQuotedReply(m.body_text ?? m.snippet ?? "").trim();
+  const text2 = stripQuotedReply(m.body_text ?? m.snippet ?? "").trim();
   const prior = await answering(db2, m);
   let reading = replyRapport({
-    text,
+    text: text2,
     studentFirstName: m.first_name ?? void 0,
     answering: prior,
     valence: vaderValence
   });
-  if (useLlm && m.tone !== false && claude?.configured && text.length >= LLM_MIN_CHARS) {
+  if (useLlm && m.tone !== false && claude?.configured && text2.length >= LLM_MIN_CHARS) {
     const r = await claude.structured({
       task: "classify",
       system: RAPPORT_SYSTEM,
@@ -18007,7 +18266,7 @@ async function readOne(db2, userId, m, claude, useLlm) {
 ${prior.slice(0, 1500)}
 </student>
 ` : ""}<reply>
-${text.slice(0, 3e3)}
+${text2.slice(0, 3e3)}
 </reply>`,
       schema: RapportSchema,
       userId
@@ -18338,7 +18597,7 @@ var THRESHOLD = 2;
 var fold3 = (s) => s.normalize("NFD").replace(/\p{M}/gu, "").replace(/[‘’]/g, "'");
 var escapeRe4 = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 var wordRe = (alt, flags) => new RegExp(`(?<![\\p{L}\\p{N}'])(?:${alt})(?![\\p{L}\\p{N}])`, `${flags}u`);
-var sentencesOf2 = (text) => text.split(/(?<!\b(?:Co|Inc|Ltd|Corp|Dr|Prof|Mr|Ms|Mrs|Jr|Sr|St|vs|etc|e\.g|i\.e))(?<=[.!?])\s+|\n+/).map((s) => s.trim()).filter(Boolean);
+var sentencesOf2 = (text2) => text2.split(/(?<!\b(?:Co|Inc|Ltd|Corp|Dr|Prof|Mr|Ms|Mrs|Jr|Sr|St|vs|etc|e\.g|i\.e))(?<=[.!?])\s+|\n+/).map((s) => s.trim()).filter(Boolean);
 var CLAUSE_SPLIT = /\s*(?:[,;:()]|\s-{1,2}\s|[–—]+)\s*/;
 var clausesOf = (sentence2) => sentence2.split(CLAUSE_SPLIT).filter((c) => c.trim());
 var DESC = "(?:(?:my|our|his|her|their)\\s+)?(?:(?:old|former|good|dear|great|close|wonderful)\\s+)?(?:(?:friend|colleague|teammate|coworker|co-worker|advisor|adviser|mentor|manager|boss|partner|classmate|roommate|cofounder|co-founder|student)\\s+)?(?:(?:professor|prof\\.?|dr\\.?|mr\\.?|ms\\.?|mrs\\.?)\\s+)?";
@@ -18643,8 +18902,8 @@ function readIntroduction(msg, people, userEmails, ctx = {}) {
   const students = (ctx.studentNames ?? []).map((n) => fold3(n.trim())).filter((n) => n.length >= 2).sort((a, b) => b.length - a.length);
   const studentAlt = students.length ? students.map(escapeRe4).join("|") : void 0;
   const isStudentWord = (w) => !!studentAlt && new RegExp(`^(?:${studentAlt})$`, "i").test(w);
-  const namesStudent = (text) => !!studentAlt && wordRe(studentAlt, "i").test(text);
-  const byTitle = (text) => candidates.reduce((t, c) => {
+  const namesStudent = (text2) => !!studentAlt && wordRe(studentAlt, "i").test(text2);
+  const byTitle = (text2) => candidates.reduce((t, c) => {
     const last = fold3(c.person.lastName?.trim() ?? "");
     return last.length < 2 ? t : t.replace(
       new RegExp(
@@ -18653,7 +18912,7 @@ function readIntroduction(msg, people, userEmails, ctx = {}) {
       ),
       c.name
     );
-  }, text);
+  }, text2);
   const body = byTitle(fold3(msg.bodyText ?? ""));
   const caseless = !/[A-Z]/.test(body.replace(/\bI\b/g, "").replace(/\n[^\n]*$/, ""));
   const lowerOnly = new Set(
@@ -18661,10 +18920,10 @@ function readIntroduction(msg, people, userEmails, ctx = {}) {
       (c) => !COMMON_WORD_NAMES.has(c.name.toLowerCase()) && !wordRe(escapeRe4(c.name), "").test(fold3(msg.bodyText ?? "")) && wordRe(escapeRe4(c.name.toLowerCase()), "").test(fold3(msg.bodyText ?? ""))
     ).map((c) => c.person.id)
   );
-  const mentions = (text, c, anyCase) => {
+  const mentions = (text2, c, anyCase) => {
     const re = wordRe(escapeRe4(c.name), anyCase || lowerOnly.has(c.person.id) ? "gi" : "g");
     const found = [];
-    for (let m = re.exec(text); m; m = re.exec(text)) found.push(m.index);
+    for (let m = re.exec(text2); m; m = re.exec(text2)) found.push(m.index);
     return found;
   };
   const anchoredAt = (before, after) => {
@@ -19050,8 +19309,8 @@ function parseMail(m, self) {
   const internal = Number(m.internalDate);
   const date = Number.isFinite(internal) && internal > 0 ? new Date(internal) : new Date(headers.date ?? "");
   if (Number.isNaN(date.getTime())) return void 0;
-  const { text, html } = findBody(m.payload);
-  const body = text ?? (html !== void 0 ? htmlToText(html) : void 0);
+  const { text: text2, html } = findBody(m.payload);
+  const body = text2 ?? (html !== void 0 ? htmlToText(html) : void 0);
   const outbound = !!from.email && self.emails.has(normalizeEmail(from.email));
   const subject = headers.subject;
   const stripped = body ? stripQuotedReply(body) : "";
@@ -19175,6 +19434,7 @@ async function ingestGmail(d, refs) {
   };
   const touched = /* @__PURE__ */ new Set();
   const classify = [];
+  const sent = [];
   for (const [tid, raw] of byThread) {
     const ms2 = [...raw].sort((a, b) => a.sentAt.localeCompare(b.sentAt));
     const pids = /* @__PURE__ */ new Set();
@@ -19231,6 +19491,7 @@ async function ingestGmail(d, refs) {
       if (row) {
         inserted++;
         stats.stored++;
+        if (m.outbound && !m.automated && exemplarText(body)) sent.push({ id: row.id, body });
         if (networking && !m.outbound && !m.automated && d.now.getTime() - new Date(m.sentAt).getTime() < CLASSIFY_WINDOW_DAYS * DAY13)
           classify.push({ id: row.id, externalId: m.id });
       } else if (body !== null)
@@ -19260,6 +19521,7 @@ async function ingestGmail(d, refs) {
     }
     if (inserted) for (const p of pids) touched.add(p);
   }
+  if (sent.length) await embedMessages(db2, d.embed, sent).catch(() => 0);
   for (const c of classify)
     await d.queue.enqueue({
       kind: "classify.message",
@@ -19377,6 +19639,7 @@ var reauth = async (fn) => {
 };
 function gmailHandlers(deps) {
   const google = googleFor(deps);
+  const embed = deps.embed ?? supabaseEmbed();
   async function firstRun(api, userId, ctx) {
     const self = await loadSelf(ctx.db, userId);
     const aliases = await api.sendAs().catch((e) => {
@@ -19449,7 +19712,7 @@ function gmailHandlers(deps) {
     });
     const refs = page2.messages ?? [];
     await ingestGmail(
-      { db: ctx.db, queue: ctx.queue, api, userId, now, jobKey: `gmail:${job.msgId}`, history: true },
+      { db: ctx.db, queue: ctx.queue, api, userId, now, jobKey: `gmail:${job.msgId}`, history: true, embed },
       refs
     );
     const done = bf.done + refs.length;
@@ -19569,7 +19832,7 @@ function gmailHandlers(deps) {
     const fresh = ids.filter((id) => !stored.has(id));
     const batch = fresh.slice(0, PAGE_SIZE);
     await ingestGmail(
-      { db: ctx.db, queue: ctx.queue, api, userId, now, jobKey: `gmail:${job.msgId}` },
+      { db: ctx.db, queue: ctx.queue, api, userId, now, jobKey: `gmail:${job.msgId}`, embed },
       batch.map((id) => ({ id }))
     );
     const allStored = fresh.length <= PAGE_SIZE;
@@ -19868,9 +20131,9 @@ async function storeChat(db2, userId, self, chat, messages, now, ownIds) {
   const out = { threadId, inbound: [], inserted: 0, personIds: otherIds };
   for (const m of messages) {
     if (m.skip) continue;
-    const text = (m.text ?? "").trim();
+    const text2 = (m.text ?? "").trim();
     const sentAt = unipileTime(m.timestamp ?? null);
-    if (!text || !sentAt) continue;
+    if (!text2 || !sentAt) continue;
     const own = isOwnMessage(m, ownIds);
     const from = own ? null : personOf(m.senderId) ?? (otherIds.length === 1 ? otherIds[0] : null);
     const to = own ? otherIds : [];
@@ -19878,7 +20141,7 @@ async function storeChat(db2, userId, self, chat, messages, now, ownIds) {
       insert into orbit.messages (user_id, thread_id, provider, external_id, direction, from_person_id, to_person_ids,
                                   sent_at, snippet, body_text)
       values (${userId}::uuid, ${threadId}::uuid, 'linkedin', ${m.id}, ${own ? "out" : "in"}, ${from}::uuid,
-              ${to}::uuid[], ${sentAt}::timestamptz, ${text.slice(0, 200)}, ${text})
+              ${to}::uuid[], ${sentAt}::timestamptz, ${text2.slice(0, 200)}, ${text2})
       on conflict (user_id, provider, external_id) do nothing
       returning id`;
     if (!row) continue;
@@ -20389,7 +20652,7 @@ var NotImplemented = class extends Error {
 var PLACEHOLDER_KINDS = [];
 function defaultHandlers(opts = {}) {
   const agents = "env" in opts ? opts : opts.agents;
-  const deps = "env" in opts ? { fetch: opts.fetch, sleep: opts.sleep, random: opts.random } : opts;
+  const deps = "env" in opts ? { fetch: opts.fetch, sleep: opts.sleep, random: opts.random, embed: opts.embed } : { ...opts, embed: opts.embed ?? opts.agents?.embed };
   const handlers2 = {
     noop: async () => {
     },

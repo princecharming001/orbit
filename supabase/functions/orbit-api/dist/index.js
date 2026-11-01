@@ -3,9 +3,9 @@
 // supabase/functions/_shared/db.ts
 import postgres from "npm:postgres@3.4.9";
 function toText(strings) {
-  let text2 = strings[0] ?? "";
-  for (let i = 1; i < strings.length; i++) text2 += `$${i}${strings[i]}`;
-  return text2;
+  let text3 = strings[0] ?? "";
+  for (let i = 1; i < strings.length; i++) text3 += `$${i}${strings[i]}`;
+  return text3;
 }
 function arrayLiteral(values) {
   const items = values.map((v) => {
@@ -25,13 +25,13 @@ function toParam(v) {
   return v;
 }
 function wrapPostgres(sql, inTx) {
-  const run = async (text2, params) => {
-    const rows = await sql.unsafe(text2, params.map(toParam));
+  const run = async (text3, params) => {
+    const rows = await sql.unsafe(text3, params.map(toParam));
     return Array.from(rows);
   };
   return {
     sql: (strings, ...values) => run(toText(strings), values),
-    query: (text2, params = []) => run(text2, params),
+    query: (text3, params = []) => run(text3, params),
     begin: async (fn) => {
       if (inTx)
         return await sql.savepoint(
@@ -71,15 +71,15 @@ function base64url(bytes) {
   for (const b of bytes) s += String.fromCharCode(b);
   return btoa(s).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
 }
-function fromBase64url(text2) {
-  const b64 = text2.replace(/-/g, "+").replace(/_/g, "/");
+function fromBase64url(text3) {
+  const b64 = text3.replace(/-/g, "+").replace(/_/g, "/");
   const bin = atob(b64 + "=".repeat((4 - b64.length % 4) % 4));
   return Uint8Array.from(bin, (c) => c.charCodeAt(0));
 }
-function fromBase64(text2) {
-  if (!/^[A-Za-z0-9+/_-]+={0,2}$/.test(text2)) return void 0;
+function fromBase64(text3) {
+  if (!/^[A-Za-z0-9+/_-]+={0,2}$/.test(text3)) return void 0;
   try {
-    return fromBase64url(text2.replace(/=+$/, ""));
+    return fromBase64url(text3.replace(/=+$/, ""));
   } catch {
     return void 0;
   }
@@ -87,11 +87,11 @@ function fromBase64(text2) {
 function randomToken(n = 32) {
   return base64url(crypto.getRandomValues(new Uint8Array(n)));
 }
-async function sha256Bytes(text2) {
-  return new Uint8Array(await crypto.subtle.digest("SHA-256", enc.encode(text2)));
+async function sha256Bytes(text3) {
+  return new Uint8Array(await crypto.subtle.digest("SHA-256", enc.encode(text3)));
 }
-async function sha256Hex(text2) {
-  return Array.from(await sha256Bytes(text2), (x) => x.toString(16).padStart(2, "0")).join("");
+async function sha256Hex(text3) {
+  return Array.from(await sha256Bytes(text3), (x) => x.toString(16).padStart(2, "0")).join("");
 }
 function isUuid(v) {
   return typeof v === "string" && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(v);
@@ -718,8 +718,8 @@ function query(params, bracketArrays = false) {
 function trimBase(base) {
   return base.replace(/\/+$/, "");
 }
-async function sha256Hex2(text2) {
-  const buf = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(text2));
+async function sha256Hex2(text3) {
+  const buf = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(text3));
   return Array.from(new Uint8Array(buf), (x) => x.toString(16).padStart(2, "0")).join("");
 }
 function stableJson(value) {
@@ -1539,6 +1539,8 @@ var KIND_QUEUE = {
   "cadence.user": "orbit_cadence",
   "funnel.reply": "orbit_classify",
   "outcomes.roll": "orbit_cadence",
+  "voice.card": "orbit_cadence",
+  "voice.distill": "orbit_cadence",
   "health.snapshot": "orbit_cadence",
   "score.user": "orbit_score",
   "score.person": "orbit_score",
@@ -1546,6 +1548,7 @@ var KIND_QUEUE = {
   "enrich.dossier": "orbit_enrich",
   "source.search": "orbit_enrich",
   hop_evidence: "orbit_enrich",
+  "voice.embed_sent": "orbit_enrich",
   noop: "orbit_enrich"
 };
 function queueFor(kind) {
@@ -1631,11 +1634,11 @@ function makeMailer(env2, doFetch) {
 }
 function supabaseEmbed() {
   let session2;
-  return async (text2) => {
+  return async (text3) => {
     const S = globalThis.Supabase;
     if (!S?.ai) return null;
     session2 ??= new S.ai.Session("gte-small");
-    const out = await session2.run(text2, { mean_pool: true, normalize: true });
+    const out = await session2.run(text3, { mean_pool: true, normalize: true });
     if (!out || typeof out.length !== "number") return null;
     return Array.from(out, Number);
   };
@@ -2420,8 +2423,8 @@ function hasPhrase(body2, phrase) {
   const re = new RegExp(`(^|[^\\p{L}\\p{N}])${escapeRe(norm2(phrase))}($|[^\\p{L}\\p{N}])`, "iu");
   return re.test(norm2(body2));
 }
-function clauses(text2) {
-  return text2.split(
+function clauses(text3) {
+  return text3.split(
     /[\n.;!?]+|,\s*(?:and\s+)?(?=(?:never|don'?t|do not|no|avoid)\b)|\s+and\s+(?=(?:never|don'?t|do not|no|avoid)\b)/i
   ).map((c) => c.trim()).filter((c) => c.length > 1);
 }
@@ -2442,25 +2445,25 @@ function sentence(c) {
   return `${t.charAt(0).toUpperCase()}${t.slice(1)}`;
 }
 var YEAR_NOUN = /\b(I'm|I am)\s+an?\s+(?:(?:first|second|third|fourth|final)-year|freshman|sophomore|junior|senior|undergrad(?:uate)?)\b/i;
-function forbidsStudent(text2) {
-  return clauses(text2 ?? "").some(
+function forbidsStudent(text3) {
+  return clauses(text3 ?? "").some(
     (c) => NEGATION.test(c) && /\b(say|mention|call me|describe me as|introduce me as|write)\b[^.]*\b(student|undergrad|in school|in college)\b/i.test(
       c
     )
   );
 }
-function forbidsSchool(text2) {
-  return clauses(text2 ?? "").some(
+function forbidsSchool(text3) {
+  return clauses(text3 ?? "").some(
     (c) => NEGATION.test(c) && /\b(mention|say|name|bring up|reference|include|talk about)\b[^.]*\b(my (school|university|college|uni)|where I (study|go to school))\b/i.test(
       c
     )
   );
 }
-function neverDoChecks(text2, subject = {}) {
-  if (!text2?.trim()) return [];
+function neverDoChecks(text3, subject = {}) {
+  if (!text3?.trim()) return [];
   const out = [];
   const add4 = (rule, breaks) => out.push({ rule, breaks });
-  for (const raw of clauses(text2)) {
+  for (const raw of clauses(text3)) {
     const c = raw.toLowerCase();
     if (!NEGATION.test(c)) continue;
     const rule = sentence(raw);
@@ -2739,20 +2742,20 @@ var COUNT_RANGE_AFTER = new RegExp(
 var PROPER_NOUN_AFTER = /^[ \t]+([A-Z][a-z]+)/;
 var DAY_BEFORE = /(?:\b(?:mon|tues?|wed(?:nes)?|thu(?:rs?)?|fri|sat(?:ur)?|sun)(?:day)?\.?|\b(?:today|tomorrow|tonight)|\d{1,2}\/\d{1,2}|\b(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?\s+\d{1,2}(?:st|nd|rd|th)?|\bthe\s+\d{1,2}(?:st|nd|rd|th))[\s,]*(?:(?:at|around|about|@|~)\s*)?$/i;
 var NOT_A_NAME = /^(your|my|mon(day)?|tue(s(day)?)?|wed(s|nesday)?|thu(r(s(day)?)?)?|fri(day)?|sat(urday)?|sun(day)?|jan(uary)?|feb(ruary)?|mar(ch)?|apr(il)?|may|june?|july?|aug(ust)?|sept?(ember)?|oct(ober)?|nov(ember)?|dec(ember)?|eastern|central|mountain|pacific|morning|afternoon|evening|tonight|tomorrow|today|or|and|to|works?|would|does|is|if|let|thanks|thank|best|cheers|looking|talk|see|ok|okay|sounds|hope|please|either|otherwise|happy)$/i;
-function placeAfterNumber(text2, start, rest) {
+function placeAfterNumber(text3, start, rest) {
   const m = PROPER_NOUN_AFTER.exec(rest);
   if (!m || NOT_A_NAME.test(m[1]) || CITY_TIME_AFTER.test(rest)) return false;
-  if (!DAY_BEFORE.test(text2.slice(Math.max(0, start - 40), start))) return true;
+  if (!DAY_BEFORE.test(text3.slice(Math.max(0, start - 40), start))) return true;
   const next = PROPER_NOUN_AFTER.exec(rest.slice(m[0].length));
   return !!next && !NOT_A_NAME.test(next[1]);
 }
 var FULL_DAY_OR_MONTH = /(?:day|january|february|march|april|june|july|august|september|october|november|december)\.$/i;
 var SENTENCE_AFTER_DOT = /^\s*\n|^\s+(?!(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\b)[A-Z]/;
-function tokenize(text2) {
+function tokenize(text3) {
   const out = [];
   TOKEN_RE.lastIndex = 0;
   let m;
-  while (m = TOKEN_RE.exec(text2)) {
+  while (m = TOKEN_RE.exec(text3)) {
     const g = m.groups ?? {};
     const raw = m[0];
     const start = m.index;
@@ -2797,7 +2800,7 @@ function tokenize(text2) {
       continue;
     }
     if (g.day) {
-      endsSentence = raw.endsWith(".") && (FULL_DAY_OR_MONTH.test(raw) || SENTENCE_AFTER_DOT.test(text2.slice(end2)));
+      endsSentence = raw.endsWith(".") && (FULL_DAY_OR_MONTH.test(raw) || SENTENCE_AFTER_DOT.test(text3.slice(end2)));
       const word = g.day.replace(/\.$/, "");
       const lower = word.toLowerCase();
       if (AMBIGUOUS_DAY.test(lower) && word[0] !== word[0].toUpperCase()) continue;
@@ -2846,11 +2849,11 @@ function tokenize(text2) {
       const apRaw = (mm[3] ?? mm[4] ?? "").toLowerCase();
       const ap = apRaw.startsWith("a") ? "am" : apRaw.startsWith("p") ? "pm" : void 0;
       const ish = Boolean(mm[5]);
-      const rest = text2.slice(end2);
+      const rest = text3.slice(end2);
       if (NOT_TIME_AFTER.test(rest)) continue;
       const bare = !ap && !mm[2] && !ish;
       if (bare && COUNT_RANGE_AFTER.test(rest)) continue;
-      if (bare && placeAfterNumber(text2, start, rest)) continue;
+      if (bare && placeAfterNumber(text3, start, rest)) continue;
       if (ap && (h < 1 || h > 12)) continue;
       if (!ap && !mm[2] && (h < 1 || h > 12)) continue;
       if (mm[2] && h > 23) continue;
@@ -2894,19 +2897,19 @@ function tokenize(text2) {
   return out;
 }
 var ANCHOR_KINDS = /* @__PURE__ */ new Set(["day", "date", "ord", "rel"]);
-function namesOwnDay(text2, toks, i) {
+function namesOwnDay(text3, toks, i) {
   const from = toks[i].start;
-  const stop = /[.!?\n]/.exec(text2.slice(from));
-  const end2 = stop ? from + stop.index : text2.length;
+  const stop = /[.!?\n]/.exec(text3.slice(from));
+  const end2 = stop ? from + stop.index : text3.length;
   for (let j = i; j < toks.length && toks[j].start < end2; j++) if (ANCHOR_KINDS.has(toks[j].k)) return true;
   return false;
 }
-function chunks(text2, toks) {
+function chunks(text3, toks) {
   const out = [];
   let cur = [];
   for (const [i, t] of toks.entries()) {
     const prev = cur[cur.length - 1];
-    if (prev && (!/^[\s,:()]*$/.test(text2.slice(prev.end, t.start)) || prev.endsSentence && namesOwnDay(text2, toks, i))) {
+    if (prev && (!/^[\s,:()]*$/.test(text3.slice(prev.end, t.start)) || prev.endsSentence && namesOwnDay(text3, toks, i))) {
       out.push(cur);
       cur = [];
     }
@@ -2946,7 +2949,7 @@ function resolveHours(t, part) {
   if (end2 <= start) return { start };
   return { start, end: end2 };
 }
-function weekScopes(text2, toks) {
+function weekScopes(text3, toks) {
   const scopes = [];
   for (const t of toks) {
     if (t.k !== "week") continue;
@@ -2955,7 +2958,7 @@ function weekScopes(text2, toks) {
       start: t.start,
       end: t.end,
       offset: t.relative ? (prev?.offset ?? 0) + t.offset : t.offset,
-      blocked: weekIsBlocked(text2, t.start, t.end)
+      blocked: weekIsBlocked(text3, t.start, t.end)
     });
   }
   return (start, end2) => {
@@ -2969,16 +2972,16 @@ function weekScopes(text2, toks) {
 }
 var WEEK_BLOCKED = /\b(not|cannot|can'?t|won'?t|isn'?t|doesn'?t|busy|booked|slammed|swamped|packed|hectic|away|out|off|traveling|travelling|vacation|pto|leave|conference|offsite|unavailable)\b/i;
 var WEEK_OPEN = /\b(open|free|available|works?|flexible|better|easier|how about|what about)\b/i;
-function weekIsBlocked(text2, start, end2) {
-  const before = text2.slice(Math.max(0, start - 80), start);
-  const after = text2.slice(end2, end2 + 80);
+function weekIsBlocked(text3, start, end2) {
+  const before = text3.slice(Math.max(0, start - 80), start);
+  const after = text3.slice(end2, end2 + 80);
   const lo = before.split(/[.;!?\n]|,|\bbut\b|\bthough\b|\bhowever\b/i).pop() ?? "";
   const hi = after.split(/[.;!?\n]|,|\bbut\b|\bthough\b|\bhowever\b/i)[0] ?? "";
   const clause2 = `${lo} ${hi}`;
   if (!WEEK_BLOCKED.test(clause2)) return false;
   return !(WEEK_OPEN.test(clause2) && !/\b(not|cannot)\b|n['’]t\b/i.test(clause2));
 }
-function interpretChunk(text2, chunk, weekAt = () => void 0, ctx = {}) {
+function interpretChunk(text3, chunk, weekAt = () => void 0, ctx = {}) {
   const proposals = [];
   const leftover = [];
   const emitted = [];
@@ -2994,9 +2997,9 @@ function interpretChunk(text2, chunk, weekAt = () => void 0, ctx = {}) {
       for (const [ai, a] of d.anchors.entries())
         for (const t of d.times) {
           const stop = d.zoneEnd && d.zoneEnd > t.stop && d.zoneEnd - t.stop < 24 ? d.zoneEnd : t.stop;
-          const timeRaw = text2.slice(t.start, stop);
-          const anchorRaw = text2.slice(d.anchorStart, d.anchorEnd);
-          const raw = d.anchorStart <= t.start && t.start - d.anchorEnd < 24 ? text2.slice(d.anchorStart, stop) : d.anchorStart > t.stop && d.anchorStart - t.stop < 24 ? text2.slice(t.start, Math.max(d.anchorEnd, stop)) : `${anchorRaw} ${timeRaw}`;
+          const timeRaw = text3.slice(t.start, stop);
+          const anchorRaw = text3.slice(d.anchorStart, d.anchorEnd);
+          const raw = d.anchorStart <= t.start && t.start - d.anchorEnd < 24 ? text3.slice(d.anchorStart, stop) : d.anchorStart > t.stop && d.anchorStart - t.stop < 24 ? text3.slice(t.start, Math.max(d.anchorEnd, stop)) : `${anchorRaw} ${timeRaw}`;
           const p = {
             anchor: a,
             time: t,
@@ -3137,12 +3140,12 @@ var NEGATION_LEAD = "^\\s*(?:(?:so|well|honestly|actually|hey|hmm|and|or|ok|okay
 var NEGATIVE_QUESTION = new RegExp(`${NEGATION_LEAD}\\s+(?:we|you|i|it|that|this|there|they)\\b`, "i");
 var NEGATIVE_QUESTION_BARE = new RegExp(`${NEGATION_LEAD}\\s*$`, "i");
 var NOT_BUSY_PHRASE = /\b(?:if (?:not|that|this|those|these|none|neither|it|they|you|so)\b.*$|unless\b.*$|no (?:worries|problem|rush|pressure|stress)|not a problem|not sure|can['’]?t wait|(?:don['’]?t|do not) worry|(?:doesn['’]?t|does not) matter|(?:wouldn['’]?t|don['’]?t) mind|(?:don['’]?t|do not) hesitate|why not|no later than)/gi;
-function busyAround(text2, start, end2) {
+function busyAround(text3, start, end2) {
   let lo = 0;
-  let hi = text2.length;
+  let hi = text3.length;
   CLAUSE_BREAK.lastIndex = 0;
   let m;
-  while (m = CLAUSE_BREAK.exec(text2)) {
+  while (m = CLAUSE_BREAK.exec(text3)) {
     const at = m.index;
     const stop = at + m[0].length;
     if (stop <= start) lo = stop;
@@ -3151,41 +3154,41 @@ function busyAround(text2, start, end2) {
       break;
     }
   }
-  let before = text2.slice(lo, start).replace(NEGATIVE_QUESTION, " ");
-  if (text2[hi] === "?") before = before.replace(NEGATIVE_QUESTION_BARE, " ");
-  const clause2 = `${before} ${text2.slice(end2, hi)}`.replace(NOT_BUSY_PHRASE, " ");
+  let before = text3.slice(lo, start).replace(NEGATIVE_QUESTION, " ");
+  if (text3[hi] === "?") before = before.replace(NEGATIVE_QUESTION_BARE, " ");
+  const clause2 = `${before} ${text3.slice(end2, hi)}`.replace(NOT_BUSY_PHRASE, " ");
   return BUSY_CLAUSE.test(clause2);
 }
 var HAS_CLAUSE_BREAK = new RegExp(CLAUSE_BREAK.source, "i");
-function isTaken(text2, p) {
+function isTaken(text3, p) {
   const a = p.anchorSpan;
   const t = p.timeSpan;
   const gapLo = Math.min(a.end, t.end);
   const gapHi = Math.max(a.start, t.start);
-  if (gapHi <= gapLo || !HAS_CLAUSE_BREAK.test(text2.slice(gapLo, gapHi)))
-    return busyAround(text2, Math.min(a.start, t.start), Math.max(a.end, t.end));
-  return busyAround(text2, a.start, a.end) || busyAround(text2, t.start, t.end);
+  if (gapHi <= gapLo || !HAS_CLAUSE_BREAK.test(text3.slice(gapLo, gapHi)))
+    return busyAround(text3, Math.min(a.start, t.start), Math.max(a.end, t.end));
+  return busyAround(text3, a.start, a.end) || busyAround(text3, t.start, t.end);
 }
-function sentenceIndexAt(text2, pos) {
+function sentenceIndexAt(text3, pos) {
   let n = 0;
   const re = /[.!?](?=\s)|\n/g;
   let m;
-  while ((m = re.exec(text2)) && m.index < pos) n++;
+  while ((m = re.exec(text3)) && m.index < pos) n++;
   return n;
 }
-function statedMessageZone(text2) {
-  const z6 = "(ET|EST|EDT|CT|CST|CDT|MT|MST|MDT|PT|PST|PDT|GMT|UTC|BST|eastern|central|mountain|pacific)(?:\\s+(?:standard|daylight))?(?:\\s+time)?";
+function statedMessageZone(text3) {
+  const z7 = "(ET|EST|EDT|CT|CST|CDT|MT|MST|MDT|PT|PST|PDT|GMT|UTC|BST|eastern|central|mountain|pacific)(?:\\s+(?:standard|daylight))?(?:\\s+time)?";
   const res = [
     new RegExp(
-      `\\b(?:all\\s+)?times?\\s+(?:(?:are|listed|below|above|here)\\s+)*(?:in\\s+)?${z6}(?![A-Za-z])`,
+      `\\b(?:all\\s+)?times?\\s+(?:(?:are|listed|below|above|here)\\s+)*(?:in\\s+)?${z7}(?![A-Za-z])`,
       "i"
     ),
-    new RegExp(`\\bi'?m\\s+(?:on|in|based\\s+in)\\s+${z6}(?![A-Za-z])`, "i"),
-    new RegExp(`\\b(?:on|in)\\s+${z6}\\s+time\\b`, "i"),
-    new RegExp(`\\((?:all\\s+)?(?:times?\\s+(?:in\\s+)?)?${z6}\\)`, "i")
+    new RegExp(`\\bi'?m\\s+(?:on|in|based\\s+in)\\s+${z7}(?![A-Za-z])`, "i"),
+    new RegExp(`\\b(?:on|in)\\s+${z7}\\s+time\\b`, "i"),
+    new RegExp(`\\((?:all\\s+)?(?:times?\\s+(?:in\\s+)?)?${z7}\\)`, "i")
   ];
   for (const re of res) {
-    const m = re.exec(text2);
+    const m = re.exec(text3);
     if (m) {
       const tz = resolveZone(m[1]);
       if (tz) return tz;
@@ -3224,9 +3227,9 @@ function resolveAnchorDate(a, today, todayDow, sameDayPassed) {
     }
   }
 }
-function extractTimes(text2, reference, opts = {}) {
+function extractTimes(text3, reference, opts = {}) {
   const fallbackTz = isValidTimeZone(opts.timeZone) ? opts.timeZone : hostTimeZone();
-  const norm2 = text2.replace(/[–‒]/g, "-").replace(/[—]/g, ", ").replace(/ /g, " ");
+  const norm2 = text3.replace(/[–‒]/g, "-").replace(/[—]/g, ", ").replace(/ /g, " ");
   const messageZone = statedMessageZone(norm2);
   const toks = tokenize(norm2);
   const weekAt = weekScopes(norm2, toks);
@@ -3335,14 +3338,14 @@ var QUOTE_MARKERS = [
 ];
 var MOBILE_FOOTER = /^(sent from my [\w ]{2,30}|sent from (outlook|mail|yahoo mail|gmail)( for [\w ]+)?|get outlook for (ios|android)|sent via [\w ]{2,30}|sent with [\w ]{2,30})\.?$/i;
 function stripQuotedReply(body2) {
-  let text2 = body2.replace(/\r\n/g, "\n");
-  let cut = text2.length;
+  let text3 = body2.replace(/\r\n/g, "\n");
+  let cut = text3.length;
   for (const { re, needsDateOrAddress } of QUOTE_MARKERS) {
-    const m = re.exec(text2);
+    const m = re.exec(text3);
     if (m && m.index < cut && (!needsDateOrAddress || /\d|@/.test(m[0]))) cut = m.index;
   }
-  text2 = text2.slice(0, cut);
-  const lines = text2.split("\n");
+  text3 = text3.slice(0, cut);
+  const lines = text3.split("\n");
   while (lines.length && /^\s*>/.test(lines[lines.length - 1])) lines.pop();
   const kept = lines.filter((l) => !/^\s*>/.test(l));
   while (kept.length && (!kept[kept.length - 1].trim() || MOBILE_FOOTER.test(kept[kept.length - 1].trim())))
@@ -4378,8 +4381,8 @@ var ASKING = [
   /\b(?:quick|one) (?:question|q)\b/i,
   /\b(?:what|when|where|which|who|how|why) (?:do|does|did|would|will|should|are|is|were|was|have|has|can|could)\b[^.!?\n]*$/im
 ];
-function holdsQuestion(text2) {
-  const stripped = stripQuotedReply(text2 ?? "");
+function holdsQuestion(text3) {
+  const stripped = stripQuotedReply(text3 ?? "");
   const body2 = (splitSignature(stripped).body || stripped).trim();
   if (!body2) return false;
   const unquoted = body2.replace(/"[^"\n]*"/g, "").replace(/“[^”\n]*”/g, "");
@@ -4388,8 +4391,8 @@ function holdsQuestion(text2) {
 }
 
 // packages/core/src/email/triage.ts
-function extractProposedTimes(text2, reference, timeZone) {
-  return extractTimes(text2, reference, { timeZone });
+function extractProposedTimes(text3, reference, timeZone) {
+  return extractTimes(text3, reference, { timeZone });
 }
 var LATER_WHEN = "(?:(?:in|after|around|by|come|until|closer to|sometime in|once|early|mid|late)\\s+)?(?:the\\s+)?(?:new year|holidays|break|next (?:month|quarter|semester|term|year|fall|spring|summer|winter|cycle)|q[1-4]|january|february|march|april|may|june|july|august|september|october|november|december|spring|summer|fall|autumn|winter|(?:a\\s+)?(?:few|couple(?: of)?|several) (?:weeks|months)|later|then)\\b";
 var LATER_INVITE = new RegExp(
@@ -4598,7 +4601,27 @@ var SEND_CAPS = {
 var AUTO_KINDS = ["bump", "thank_you", "schedule"];
 var AUTOPILOT_MODES = ["off", "assist", "autopilot"];
 var AUTOPILOT_MODE_LEVEL = { off: 0, assist: 1, autopilot: 2 };
+var AUTO_FIRST_TOUCH_RUNG = 20;
+var REVIEW_WINDOW_HOURS = 8;
 var AUTO_SEND_DAILY_CAP = SEND_CAPS.autoPerDay;
+
+// packages/core/src/safety/firstTouch.ts
+var AUTO_FIRST_TOUCH_KINDS = [
+  "outreach",
+  "first_touch",
+  "warm_first_touch"
+];
+function isFirstTouchKind(kind) {
+  return !!kind && AUTO_FIRST_TOUCH_KINDS.includes(kind);
+}
+function firstTouchRung(approvals) {
+  const n = approvals.filter((a) => isFirstTouchKind(a.kind) && !a.edited && !a.auto).length;
+  return {
+    unchanged: Math.min(n, AUTO_FIRST_TOUCH_RUNG),
+    needed: AUTO_FIRST_TOUCH_RUNG,
+    earned: n >= AUTO_FIRST_TOUCH_RUNG
+  };
+}
 
 // supabase/functions/_shared/replies/cards.ts
 var CARD_TTL_DAYS = 14;
@@ -4674,12 +4697,12 @@ async function tripBreaker(db2, userId, p) {
     select settings from orbit.users where id = ${userId}::uuid`;
   const goalTitle = p.goalId ? (await db2.sql`select title from orbit.goals where id = ${p.goalId}::uuid`)[0]?.title : void 0;
   const where = p.company?.trim() || goalTitle || "first messages";
-  const text2 = `${p.personName} ${WHAT[p.reason]}. Paused ${where}${p.company?.trim() || goalTitle ? " first messages" : ""}.`;
-  if (p.goalId && goalPaused(u2?.settings, p.goalId, p.now)) return { tripped: false, text: text2 };
+  const text3 = `${p.personName} ${WHAT[p.reason]}. Paused ${where}${p.company?.trim() || goalTitle ? " first messages" : ""}.`;
+  if (p.goalId && goalPaused(u2?.settings, p.goalId, p.now)) return { tripped: false, text: text3 };
   if (p.goalId)
     await setGoalPause(db2, userId, p.goalId, {
       reason: p.reason,
-      text: text2,
+      text: text3,
       until: null,
       at: p.now.toISOString()
     });
@@ -4690,7 +4713,7 @@ async function tripBreaker(db2, userId, p) {
   await raiseCard(db2, userId, {
     kind: "breaker",
     dedupeKey: `breaker:${p.goalId ?? "account"}:${p.messageId ?? p.personId ?? p.now.toISOString()}`,
-    reasonText: `${text2} Read it?`,
+    reasonText: `${text3} Read it?`,
     personId: p.personId,
     messageId: p.messageId ?? null,
     signals: { reason: p.reason, goalId: p.goalId },
@@ -4699,11 +4722,11 @@ async function tripBreaker(db2, userId, p) {
     now: p.now,
     notify: {
       kind: "system",
-      title: text2,
+      title: text3,
       link: p.personId ? `/people/${p.personId}` : "/settings/autopilot"
     }
   });
-  return { tripped: true, text: text2 };
+  return { tripped: true, text: text3 };
 }
 
 // packages/core/src/drafts/compose.ts
@@ -4751,9 +4774,9 @@ function prose(body2) {
       l
     ))
   );
-  const text2 = lines.join(" ");
-  const sentences2 = text2.split(/(?<=[.!?])\s+/).map((s) => s.trim()).filter((s) => /[A-Za-z]/.test(s));
-  const words2 = text2.match(/[A-Za-z][A-Za-z'’-]*/g) ?? [];
+  const text3 = lines.join(" ");
+  const sentences2 = text3.split(/(?<=[.!?])\s+/).map((s) => s.trim()).filter((s) => /[A-Za-z]/.test(s));
+  const words2 = text3.match(/[A-Za-z][A-Za-z'’-]*/g) ?? [];
   return { words: words2, sentences: sentences2 };
 }
 function fleschKincaidGrade(body2) {
@@ -5195,9 +5218,9 @@ function cleanCurrentJob(v) {
   if (!v || typeof v !== "object") return void 0;
   const o = v;
   const url = cleanJobUrl(o.url);
-  const text2 = cleanAnswer(o.text, CURRENT_JOB_MAX);
-  if (!url && !text2) return void 0;
-  return { ...url ? { url } : {}, ...text2 ? { text: text2 } : {} };
+  const text3 = cleanAnswer(o.text, CURRENT_JOB_MAX);
+  if (!url && !text3) return void 0;
+  return { ...url ? { url } : {}, ...text3 ? { text: text3 } : {} };
 }
 function ownWordsOf(g) {
   const out = {};
@@ -5318,14 +5341,14 @@ async function buildUserContext(db2, u2) {
      where user_id = ${u2.id}::uuid and deleted_at is null and person_id is null
      order by importance desc, last_seen_at desc limit 10`;
   if (memories.length) lines.push(`Remembered: ${memories.map((m) => m.text).join(" | ")}`);
-  const text2 = lines.join("\n");
-  return text2.length > USER_CONTEXT_MAX_CHARS ? `${text2.slice(0, USER_CONTEXT_MAX_CHARS - 1)}…` : text2;
+  const text3 = lines.join("\n");
+  return text3.length > USER_CONTEXT_MAX_CHARS ? `${text3.slice(0, USER_CONTEXT_MAX_CHARS - 1)}…` : text3;
 }
 function facetLines(parsed) {
   if (!parsed) return [];
   const out = [];
-  const list6 = (v) => Array.isArray(v) ? v : [];
-  for (const f2 of list6(parsed.facets)) {
+  const list7 = (v) => Array.isArray(v) ? v : [];
+  for (const f2 of list7(parsed.facets)) {
     const o = f2;
     if (o.excluded === true) continue;
     const t = [o.title ?? o.role, o.org ?? o.organization ?? o.organizationName, o.text].filter(
@@ -5333,17 +5356,17 @@ function facetLines(parsed) {
     );
     if (t.length) out.push(t.join(", "));
   }
-  for (const e of list6(parsed.experiences ?? parsed.experience)) {
+  for (const e of list7(parsed.experiences ?? parsed.experience)) {
     const o = e;
     const t = [o.title, o.org ?? o.company].filter((x) => typeof x === "string");
     if (t.length) out.push(t.join(" at "));
   }
-  for (const e of list6(parsed.education)) {
+  for (const e of list7(parsed.education)) {
     const o = e;
     const t = [o.degree, o.school].filter((x) => typeof x === "string");
     if (t.length) out.push(t.join(", "));
   }
-  const skills = list6(parsed.skills).filter((x) => typeof x === "string");
+  const skills = list7(parsed.skills).filter((x) => typeof x === "string");
   if (skills.length) out.push(`Skills: ${skills.slice(0, 12).join(", ")}`);
   return out.slice(0, 12);
 }
@@ -5398,9 +5421,9 @@ async function exemplars(s, userId, personId, situation, opts = {}) {
     )
   ].sort((a, b) => b.length - a.length);
   return rows.map((r) => {
-    let text2 = stripQuotedReply(r.body_text).trim().slice(0, 1200);
-    for (const w of words2) text2 = text2.replace(new RegExp(`\\b${escapeRe2(w)}\\b`, "g"), "[name]");
-    return text2.replace(/^(hi|hey|hello|dear)\s+[A-Z][a-z]+/i, (m) => `${m.split(/\s+/)[0]} [name]`);
+    let text3 = stripQuotedReply(r.body_text).trim().slice(0, 1200);
+    for (const w of words2) text3 = text3.replace(new RegExp(`\\b${escapeRe2(w)}\\b`, "g"), "[name]");
+    return text3.replace(/^(hi|hey|hello|dear)\s+[A-Z][a-z]+/i, (m) => `${m.split(/\s+/)[0]} [name]`);
   });
 }
 async function loadResearch(db2, userId, personId) {
@@ -5525,8 +5548,8 @@ function composeSystem(p) {
     );
   return lines.join("\n");
 }
-function block(tag, text2) {
-  const clean2 = (text2 ?? "").replace(/<\/?[a-z_]+[^>]*>/gi, " ").trim();
+function block(tag, text3) {
+  const clean2 = (text3 ?? "").replace(/<\/?[a-z_]+[^>]*>/gi, " ").trim();
   return `<${tag}>${clean2 ? `
 ${clean2}
 ` : ""}</${tag}>`;
@@ -5553,8 +5576,8 @@ ${issues.map((i) => `- ${i}`).join("\n")}
 Rewrite the message so it passes every rule. Keep what was true and fix only these issues.`;
 }
 var ASK_USER = /\[ASK USER:\s*([^\]]*)\]/g;
-function askUserMarkers(text2) {
-  return [...text2.matchAll(ASK_USER)].map((m) => m[1].trim()).filter(Boolean);
+function askUserMarkers(text3) {
+  return [...text3.matchAll(ASK_USER)].map((m) => m[1].trim()).filter(Boolean);
 }
 
 // supabase/functions/_shared/compose/window.ts
@@ -5838,7 +5861,7 @@ ${footer}` : composed.body;
   await db2.sql`
     insert into orbit.audit_log (user_id, actor, action, target_table, target_id, details)
     values (${req.userId}::uuid, ${req.actor ?? "user"}, 'draft.compose', 'drafts', ${row.id},
-            ${{ kind: req.kind, channel: req.channel, generated_by: generatedBy, attempts, issues: lastIssues.length }}::jsonb)`;
+            ${{ kind: req.kind, channel: req.channel, generated_by: generatedBy, attempts, issues: lastIssues.length, hash: messageHash({ channel: req.channel, subject: composed.subject, body: body2 }) }}::jsonb)`;
   return {
     draft: row,
     composed: { ...composed, id: row.id, body: body2, validator },
@@ -5959,8 +5982,8 @@ var TEMPLATE_KIND = {
   report_back: "reengage",
   schedule: "bump"
 };
-function hookPhrase(text2) {
-  const t = text2.trim().replace(/[.!?]+$/, "").replace(/\s+(stuck with me|caught my eye|resonated with me)$/i, "");
+function hookPhrase(text3) {
+  const t = text3.trim().replace(/[.!?]+$/, "").replace(/\s+(stuck with me|caught my eye|resonated with me)$/i, "");
   return /^(Your|The|A|An|I)\b/.test(t) && !/^I\b/.test(t) ? t[0].toLowerCase() + t.slice(1) : t;
 }
 function templateMessage(p) {
@@ -6134,12 +6157,12 @@ async function listReplies(db2, userId, now) {
     } : null
   }));
 }
-function questionOf(extraction, text2) {
+function questionOf(extraction, text3) {
   const llm = extraction?.llm?.question;
   if (typeof llm === "string" && llm.trim()) return llm.trim();
   const own = extraction?.question;
   if (typeof own === "string" && own.trim()) return own.trim();
-  const body2 = stripQuotedReply(text2);
+  const body2 = stripQuotedReply(text3);
   const sentence2 = body2.split(/(?<=[.!?])\s+|\n+/).map((s) => s.trim()).find((s) => s.endsWith("?"));
   return sentence2 ?? (holdsQuestion(body2) ? body2.trim().slice(0, 200) : null);
 }
@@ -6191,12 +6214,12 @@ async function answerReply(s, userId, req) {
 }
 
 // supabase/functions/_shared/autopilot/autopilot.ts
-var FIRST_TOUCH = ["first_touch", "warm_first_touch", "outreach"];
+var FIRST_TOUCH = [...AUTO_FIRST_TOUCH_KINDS];
 var RUNG_NEEDED = {
   bump: 10,
   thank_you: 10,
   schedule: 10,
-  first_touch: 20
+  first_touch: AUTO_FIRST_TOUCH_RUNG
 };
 var HOLD_REASONS = {
   review_window: "It waits for your evening review.",
@@ -6204,6 +6227,7 @@ var HOLD_REASONS = {
   goal_paused: "The breaker paused this goal.",
   held: "You held it.",
   needs_input: "It needs one answer from you.",
+  needs_tap: "It waited for your tap. Until twenty first messages go out as Orbit wrote them, each one in the evening batch needs one.",
   not_approved: "It was never approved.",
   linkedin_never_auto: "LinkedIn messages always wait for your own tap.",
   auto_daily_cap: `Orbit already sent ${SEND_CAPS.autoPerDay} on its own today.`,
@@ -6216,7 +6240,9 @@ async function itemRows(db2, userId, mode2, now, dayStart, draftId) {
   return db2.sql`
     select d.id, d.person_id, p.display_name, p.org_raw, o.name as org_name, d.kind, d.subject, d.send_at, d.sent_at,
            d.status, d.error, d.auto_rung, d.outcome, d.ask,
-           (select m.reply_class from orbit.messages m where m.id::text = d.ask->>'replyToMessageId') as reply_class
+           (select m.reply_class from orbit.messages m where m.id::text = d.ask->>'replyToMessageId') as reply_class,
+           exists (select 1 from orbit.audit_log a where a.target_table = 'drafts' and a.target_id = d.id::text
+                    and a.action = 'draft.approve' and a.actor = 'user') as tapped
       from orbit.drafts d
       join orbit.people p on p.id = d.person_id
       left join orbit.organizations o on o.id = p.org_id
@@ -6258,6 +6284,31 @@ function modeOf(settings2, level) {
   const m = settings2.autopilot_mode;
   if (m === "off" || m === "assist" || m === "autopilot") return m;
   return level >= 2 ? "autopilot" : level === 1 ? "assist" : "off";
+}
+function queuedStatus(r, rung) {
+  return r.auto_rung === "first_touch" && !rung.earned && !r.tapped ? "needs_tap" : "queued";
+}
+async function firstTouchRungOf(db2, userId) {
+  const [t] = await db2.sql`select to_regclass('orbit.draft_edits') is not null as has`;
+  const rows = t?.has ? await db2.sql`
+        select d.kind,
+               exists (select 1 from orbit.draft_edits e where e.draft_id = d.id) as edited
+          from orbit.drafts d
+         where d.user_id = ${userId}::uuid and d.status = 'sent' and d.kind = any(${FIRST_TOUCH}::text[])
+           and exists (select 1 from orbit.audit_log a where a.target_table = 'drafts' and a.target_id = d.id::text
+                        and a.action = 'draft.approve' and a.actor = 'user')` : await db2.sql`
+        select d.kind,
+               not exists (
+                 select 1 from orbit.audit_log a
+                   join orbit.audit_log c on c.target_table = 'drafts' and c.target_id = a.target_id
+                                         and c.action = 'draft.compose' and c.details->>'hash' = a.details->>'hash'
+                  where a.target_table = 'drafts' and a.target_id = d.id::text
+                    and a.action = 'draft.approve' and a.actor = 'user') as edited
+          from orbit.drafts d
+         where d.user_id = ${userId}::uuid and d.status = 'sent' and d.kind = any(${FIRST_TOUCH}::text[])
+           and exists (select 1 from orbit.audit_log a where a.target_table = 'drafts' and a.target_id = d.id::text
+                        and a.action = 'draft.approve' and a.actor = 'user')`;
+  return firstTouchRung(rows.map((r) => ({ kind: r.kind, edited: r.edited })));
 }
 async function autopilotStatus(db2, userId, now) {
   const [u2] = await db2.sql`
@@ -6304,14 +6355,16 @@ async function autopilotStatus(db2, userId, now) {
      group by d.kind`;
   const count = (kinds) => approvals.filter((a) => kinds.includes(a.kind)).reduce((s, a) => s + a.n, 0);
   const autoKinds = Array.isArray(settings2.auto_kinds) ? settings2.auto_kinds : [];
+  const first = await firstTouchRungOf(db2, userId);
   const rungs = ["bump", "thank_you", "schedule", "first_touch"].map((kind) => {
-    const n = kind === "first_touch" ? count(FIRST_TOUCH) : count([kind]);
+    if (kind === "first_touch")
+      return { kind, needed: first.needed, unchanged: first.unchanged, unlocked: first.earned };
     const needed = RUNG_NEEDED[kind];
     return {
       kind,
       needed,
-      unchanged: Math.min(needed, n),
-      unlocked: kind === "first_touch" ? false : autoKinds.includes(kind)
+      unchanged: Math.min(needed, count([kind])),
+      unlocked: autoKinds.includes(kind)
     };
   });
   const [caps] = await db2.sql`
@@ -6338,7 +6391,7 @@ async function autopilotStatus(db2, userId, now) {
     mode: modeOf(settings2, Number(u2.autonomy_level) || 0),
     pausedUntil,
     pausedGoals,
-    queued: queued2.map((r) => item(r, "queued")),
+    queued: queued2.map((r) => item(r, queuedStatus(r, first))),
     held: held.map((r) => item(r, "held", HOLD_REASONS[r.error ?? ""] ?? r.error ?? void 0)),
     sentToday: sentToday.map((r) => item(r, "sent")),
     needsYou,
@@ -6350,7 +6403,9 @@ async function autopilotStatus(db2, userId, now) {
       usedToday: caps?.day ?? 0,
       firstTouchesThisWeek: caps?.week_first ?? 0
     },
-    reviewUntil: reviews.length ? iso(new Date(Math.min(...reviews.map((d) => new Date(d).getTime())) - 8 * 36e5)) : null
+    reviewUntil: reviews.length ? iso(
+      new Date(Math.min(...reviews.map((d) => new Date(d).getTime())) - REVIEW_WINDOW_HOURS * 36e5)
+    ) : null
   };
 }
 async function holdSend(db2, userId, draftId, now) {
@@ -7359,10 +7414,10 @@ async function approveDraft(s, userId, req) {
   if (d.status === "sending" || d.status === "sent") return toServerDraft(d);
   if (!["draft", "approved", "scheduled", "failed"].includes(d.status))
     throw new HttpError(409, "not_approvable", `a ${d.status} draft cannot be approved`);
-  const text2 = `${d.subject ?? ""}
+  const text3 = `${d.subject ?? ""}
 ${d.body}`;
-  const needs = askUserMarkers(text2);
-  const gap = needs.length ? void 0 : placeholderIn(text2);
+  const needs = askUserMarkers(text3);
+  const gap = needs.length ? void 0 : placeholderIn(text3);
   if (needs.length || gap)
     throw new HttpError(
       409,
@@ -9461,8 +9516,8 @@ var SENSITIVE2 = [
     re: /\b((he|she|they) (was|were|got) (laid off|fired|let go)|lost (his|her|their) job|on (parental|maternity|paternity|medical|family) leave)\b/i
   }
 ];
-function sensitiveCategory(text2) {
-  return SENSITIVE2.find((s) => s.re.test(text2))?.category;
+function sensitiveCategory(text3) {
+  return SENSITIVE2.find((s) => s.re.test(text3))?.category;
 }
 
 // supabase/functions/_shared/memory/memory.ts
@@ -9486,30 +9541,30 @@ var toItem = (r) => ({
   createdAt: iso(r.created_at),
   lastSeenAt: iso(r.last_seen_at)
 });
-function embeddable(text2) {
-  const letters = text2.match(/\p{L}/gu) ?? [];
+function embeddable(text3) {
+  const letters = text3.match(/\p{L}/gu) ?? [];
   if (!letters.length) return false;
   const latin = letters.filter((c) => /[A-Za-z]/.test(c)).length;
   return latin / letters.length >= 0.8;
 }
-async function safeEmbed(embed, text2) {
-  if (!embeddable(text2)) return null;
+async function safeEmbed(embed, text3) {
+  if (!embeddable(text3)) return null;
   try {
-    const e = await embed(text2);
+    const e = await embed(text3);
     return e?.length ? e : null;
   } catch {
     return null;
   }
 }
 async function addMemory(db2, embed, userId, m, now) {
-  const text2 = m.text.replace(/\s+/g, " ").trim().slice(0, 1e3);
-  if (!text2) throw new HttpError(400, "bad_request", "text is required");
+  const text3 = m.text.replace(/\s+/g, " ").trim().slice(0, 1e3);
+  if (!text3) throw new HttpError(400, "bad_request", "text is required");
   if (!MEMORY_KINDS.includes(m.kind)) throw new HttpError(400, "bad_request", "unknown memory kind");
   if (m.personId) {
     const [p] = await db2.sql`select 1 from orbit.people where id = ${m.personId}::uuid and user_id = ${userId}::uuid`;
     if (!p) throw new HttpError(404, "not_found", "no such person");
   }
-  const e = await safeEmbed(embed, text2);
+  const e = await safeEmbed(embed, text3);
   const importance = Math.max(0, Math.min(1, m.importance ?? 0.5));
   if (e) {
     const [near] = await db2.sql`
@@ -9529,7 +9584,7 @@ async function addMemory(db2, embed, userId, m, now) {
   } else {
     const [same] = await db2.sql`
       update orbit.memories set last_seen_at = ${now}::timestamptz
-       where user_id = ${userId}::uuid and deleted_at is null and lower(text) = lower(${text2})
+       where user_id = ${userId}::uuid and deleted_at is null and lower(text) = lower(${text3})
          and person_id is not distinct from ${m.personId ?? null}::uuid
       returning id, kind, text, person_id, importance, created_at, last_seen_at`;
     if (same) return { memory: toItem(same), deduped: true };
@@ -9537,7 +9592,7 @@ async function addMemory(db2, embed, userId, m, now) {
   const [row] = await db2.sql`
     insert into orbit.memories (user_id, person_id, kind, text, embedding, importance, source, quote, created_at,
                                 last_seen_at)
-    values (${userId}::uuid, ${m.personId ?? null}::uuid, ${m.kind}, ${text2}, ${e ? vec(e) : null}::vector,
+    values (${userId}::uuid, ${m.personId ?? null}::uuid, ${m.kind}, ${text3}, ${e ? vec(e) : null}::vector,
             ${importance}::real, ${m.source ?? "remember"}, ${m.quote ?? null}, ${now}::timestamptz, ${now}::timestamptz)
     returning id, kind, text, person_id, importance, created_at, last_seen_at`;
   return { memory: toItem(row), deduped: false };
@@ -9545,10 +9600,10 @@ async function addMemory(db2, embed, userId, m, now) {
 var tokens = (s) => new Set(
   s.toLowerCase().split(/[^\p{L}\p{N}]+/u).filter((w) => w.length > 2)
 );
-function keywordScore(query2, text2) {
+function keywordScore(query2, text3) {
   const q = tokens(query2);
   if (!q.size) return 0;
-  const t = tokens(text2);
+  const t = tokens(text3);
   let hit = 0;
   for (const w of q) if (t.has(w) || [...t].some((x) => x.startsWith(w) || w.startsWith(x))) hit++;
   return hit / q.size;
@@ -10334,14 +10389,14 @@ async function upsertTie(db2, userId, t, now) {
 function makeGraph() {
   return { nodes: /* @__PURE__ */ new Set(), adj: /* @__PURE__ */ new Map() };
 }
-function addEdge(g, a, b, weight, type, text2, directed = false) {
+function addEdge(g, a, b, weight, type, text3, directed = false) {
   if (weight <= 0) return;
   g.nodes.add(a);
   g.nodes.add(b);
   const set = (x, y) => {
     const m = g.adj.get(x) ?? /* @__PURE__ */ new Map();
     const cur = m.get(y);
-    if (!cur || cur.weight < weight) m.set(y, { weight, type, text: text2 });
+    if (!cur || cur.weight < weight) m.set(y, { weight, type, text: text3 });
     g.adj.set(x, m);
   };
   set(a, b);
@@ -10511,9 +10566,9 @@ function personalizedPageRank(adj, source, opts = {}) {
       nodes.add(v);
     }
     if (total <= 0) continue;
-    const list6 = [];
-    for (const [v, w] of nbrs) if (w > 0 && Number.isFinite(w)) list6.push({ to: v, p: w / total });
-    out.set(u2, list6);
+    const list7 = [];
+    for (const [v, w] of nbrs) if (w > 0 && Number.isFinite(w)) list7.push({ to: v, p: w / total });
+    out.set(u2, list7);
   }
   let rank2 = /* @__PURE__ */ new Map([[source, 1]]);
   for (let it = 0; it < iterations; it++) {
@@ -10521,12 +10576,12 @@ function personalizedPageRank(adj, source, opts = {}) {
     let restart = alpha;
     for (const [u2, r] of rank2) {
       if (r === 0) continue;
-      const list6 = out.get(u2);
-      if (!list6) {
+      const list7 = out.get(u2);
+      if (!list7) {
         restart += (1 - alpha) * r;
         continue;
       }
-      for (const { to, p } of list6) next.set(to, (next.get(to) ?? 0) + (1 - alpha) * r * p);
+      for (const { to, p } of list7) next.set(to, (next.get(to) ?? 0) + (1 - alpha) * r * p);
     }
     next.set(source, (next.get(source) ?? 0) + restart);
     rank2 = next;
@@ -10990,17 +11045,17 @@ var STOP = new Set(
 
 // packages/core/src/recommend/score.ts
 function responsePrior(p, user) {
-  let z6 = -0.4;
-  if (p.isAlumni) z6 += 0.8;
+  let z7 = -0.4;
+  if (p.isAlumni) z7 += 0.8;
   if (p.school && user.majors.some((m) => (p.headline ?? "").toLowerCase().includes(m.toLowerCase())))
-    z6 += 0.5;
+    z7 += 0.5;
   const title = (p.currentTitle ?? "").toLowerCase();
-  if (/\b(ceo|cfo|coo|cto|partner|managing director|md|founder|chief)\b/.test(title)) z6 -= 0.6;
-  else if (title) z6 += 0.3;
+  if (/\b(ceo|cfo|coo|cto|partner|managing director|md|founder|chief)\b/.test(title)) z7 -= 0.6;
+  else if (title) z7 += 0.3;
   if (p.lastInteractionAt && Date.now() - new Date(p.lastInteractionAt).getTime() < 180 * 864e5)
-    z6 += 0.3;
-  if (p.linkedinConnectedOn) z6 += 0.2;
-  return 1 / (1 + Math.exp(-z6));
+    z7 += 0.3;
+  if (p.linkedinConnectedOn) z7 += 0.2;
+  return 1 / (1 + Math.exp(-z7));
 }
 
 // supabase/functions/_shared/research/bind.ts
@@ -12343,6 +12398,38 @@ var scoreRoutes = {
   "/scores/label": { method: "POST", auth: true, run: label }
 };
 
+// supabase/functions/_shared/voice/voice.ts
+import { z as z5 } from "npm:zod@3.25.76/v4";
+var text2 = (max) => z5.string().max(max);
+var list5 = (n, max) => z5.array(text2(max)).max(n);
+var StyleCardS = z5.object({
+  greetingPatterns: list5(6, 80),
+  signoffs: list5(6, 160),
+  formality: z5.number().min(0).max(1),
+  avgSentenceWords: z5.number().min(0).max(200),
+  avgMessageWords: z5.number().min(0).max(2e3),
+  contractions: z5.boolean(),
+  exclamationsPerMessage: z5.number().min(0).max(50),
+  emoji: z5.boolean(),
+  characteristicPhrases: list5(12, 120),
+  avoid: list5(50, 120),
+  notes: text2(4e3),
+  builtFromCount: z5.number().int().min(0).max(1e6),
+  version: z5.number().int().min(0).max(1e3),
+  sources: z5.partialRecord(z5.enum(["email", "linkedin", "orbit", "pasted"]), z5.number().int().min(0)).optional(),
+  custom: z5.boolean().optional()
+});
+function parseStyleCard(v) {
+  if (v === void 0) return void 0;
+  if (v === null) return null;
+  const r = StyleCardS.safeParse(v);
+  if (!r.success) {
+    const i = r.error.issues[0];
+    return { error: `styleCard.${i?.path.join(".") || "card"}: ${i?.message ?? "invalid"}` };
+  }
+  return r.data;
+}
+
 // supabase/functions/orbit-api/routes/settings.ts
 async function autonomy(ctx) {
   const b = await body(ctx);
@@ -12505,6 +12592,8 @@ async function profile(ctx) {
       throw badRequest(`${key} must be a whole number from 1 to ${max}`);
     return Number(v);
   };
+  const card = parseStyleCard(b.styleCard);
+  if (card && "error" in card) throw badRequest(card.error);
   const capGmail = ownCap2("dailySendCapGmail", SEND_CAPS.gmailPerDay);
   const capLinkedin = ownCap2("dailySendCapLinkedin", SEND_CAPS.linkedinPerDay);
   const userId = ctx.userId;
@@ -12518,6 +12607,7 @@ async function profile(ctx) {
   if (pausedUntil !== void 0) given.autopilot_paused_until = pausedUntil;
   if (capGmail !== void 0) given.daily_send_cap_gmail = capGmail;
   if (capLinkedin !== void 0) given.daily_send_cap_linkedin = capLinkedin;
+  if (card !== void 0) given.style_card = card;
   const level = mode2 === void 0 ? null : AUTOPILOT_MODE_LEVEL[mode2];
   const keep = Object.fromEntries(Object.entries(given).filter(([, v]) => v !== null));
   const [after] = await ctx.db.sql`
@@ -13099,11 +13189,11 @@ function keywordFit(goal, c) {
     (x) => !!x
   );
   if (criteria.length === 0) return { fit: 0.5, reasons: [] };
-  const text2 = candidateText(c);
+  const text3 = candidateText(c);
   const matched = criteria.filter((cr) => {
     const ws = norm(cr).split(/[^a-z0-9+#]+/).filter((w) => w.length >= 3 && !STOP2.has(w));
     if (ws.length === 0) return false;
-    const hits = ws.filter((w) => text2.includes(w)).length;
+    const hits = ws.filter((w) => text3.includes(w)).length;
     return hits >= Math.ceil(ws.length / 2);
   });
   return {
@@ -13389,7 +13479,7 @@ async function ensureChat(db2, userId, personId, goalId, now) {
 }
 
 // supabase/functions/orbit-api/routes/source.ts
-var list5 = (v, key) => {
+var list6 = (v, key) => {
   if (v === void 0) return void 0;
   if (!Array.isArray(v) || v.length > 25 || !v.every((x) => typeof x === "string" && x.length <= 200))
     throw badRequest(`filters.${key} must be a list of short strings`);
@@ -13406,12 +13496,12 @@ async function search2(ctx) {
     purpose: b.purpose,
     query: typeof b.query === "string" ? b.query : void 0,
     filters: {
-      organizations: list5(f2.organizations, "organizations"),
-      titles: list5(f2.titles, "titles"),
-      locations: list5(f2.locations, "locations"),
-      schools: list5(f2.schools, "schools"),
-      seniority: list5(f2.seniority, "seniority"),
-      keywords: list5(f2.keywords, "keywords")
+      organizations: list6(f2.organizations, "organizations"),
+      titles: list6(f2.titles, "titles"),
+      locations: list6(f2.locations, "locations"),
+      schools: list6(f2.schools, "schools"),
+      seniority: list6(f2.seniority, "seniority"),
+      keywords: list6(f2.keywords, "keywords")
     },
     limit: typeof b.limit === "number" ? b.limit : void 0
   };
@@ -14692,7 +14782,7 @@ function normalizeEmailForMatch(raw) {
 }
 
 // supabase/functions/orbit-api/sync.ts
-import { z as z5 } from "npm:zod@3.25.76/v4";
+import { z as z6 } from "npm:zod@3.25.76/v4";
 async function syncStatus(ctx) {
   return json(200, await statusFor(ctx.db, ctx.userId));
 }
@@ -14843,10 +14933,10 @@ async function pull(db2, userId, o) {
   if (lastAudit) next._audit = Number(lastAudit.id);
   return { changes, deleted, cursor: encodeCursor(next), hasMore };
 }
-var uuidS = z5.string().refine(isUuid, "must be a uuid");
-var tsS = z5.string().refine((s) => !Number.isNaN(Date.parse(s)), "must be a date-time");
-var dateS = z5.string().regex(/^\d{4}-\d{2}-\d{2}$/, "must be YYYY-MM-DD");
-var obj = (maxBytes) => z5.record(z5.string(), z5.unknown()).refine((v) => JSON.stringify(v).length <= maxBytes, `must be under ${maxBytes} bytes`);
+var uuidS = z6.string().refine(isUuid, "must be a uuid");
+var tsS = z6.string().refine((s) => !Number.isNaN(Date.parse(s)), "must be a date-time");
+var dateS = z6.string().regex(/^\d{4}-\d{2}-\d{2}$/, "must be YYYY-MM-DD");
+var obj = (maxBytes) => z6.record(z6.string(), z6.unknown()).refine((v) => JSON.stringify(v).length <= maxBytes, `must be under ${maxBytes} bytes`);
 var f = (col, type, schema, owned) => ({
   col,
   type,
@@ -14864,7 +14954,7 @@ var PUSH = {
       kind: f(
         "kind",
         "text",
-        z5.enum([
+        z6.enum([
           "recruiting",
           "fundraising",
           "sales",
@@ -14875,26 +14965,26 @@ var PUSH = {
           "collaboration"
         ])
       ),
-      title: f("title", "text", z5.string().trim().min(1).max(200)),
-      description: f("description", "text", z5.string().max(4e3).nullable()),
+      title: f("title", "text", z6.string().trim().min(1).max(200)),
+      description: f("description", "text", z6.string().max(4e3).nullable()),
       targets: f(
         "targets",
         "jsonb",
-        z5.object({
-          organizations: z5.array(z5.string().max(200)).max(50).default([]),
-          roles: z5.array(z5.string().max(200)).max(50).default([]),
-          geographies: z5.array(z5.string().max(200)).max(50).default([]),
-          people: z5.array(z5.string().max(200)).max(50).default([])
+        z6.object({
+          organizations: z6.array(z6.string().max(200)).max(50).default([]),
+          roles: z6.array(z6.string().max(200)).max(50).default([]),
+          geographies: z6.array(z6.string().max(200)).max(50).default([]),
+          people: z6.array(z6.string().max(200)).max(50).default([])
         })
       ),
       criteria: f("criteria", "jsonb", obj(2e4)),
-      successMetric: f("success_metric", "text", z5.string().max(500).nullable()),
-      priority: f("priority", "int", z5.number().int().min(1).max(3)),
-      status: f("status", "text", z5.enum(["active", "paused", "done"])),
-      autonomyLevel: f("autonomy_level", "int", z5.number().int().min(0).max(2).nullable()),
+      successMetric: f("success_metric", "text", z6.string().max(500).nullable()),
+      priority: f("priority", "int", z6.number().int().min(1).max(3)),
+      status: f("status", "text", z6.enum(["active", "paused", "done"])),
+      autonomyLevel: f("autonomy_level", "int", z6.number().int().min(0).max(2).nullable()),
       dueAt: f("due_at", "date", dateS.nullable()),
-      source: f("source", "text", z5.enum(["user", "onboarding", "inferred"])),
-      evidence: f("evidence", "text", z5.string().max(2e3).nullable())
+      source: f("source", "text", z6.enum(["user", "onboarding", "inferred"])),
+      evidence: f("evidence", "text", z6.string().max(2e3).nullable())
     }
   },
   chats: {
@@ -14906,7 +14996,7 @@ var PUSH = {
       personId: f("person_id", "uuid", uuidS, "people"),
       goalId: f("goal_id", "uuid", uuidS.nullable(), "goals"),
       orgId: f("org_id", "uuid", uuidS.nullable(), "organizations"),
-      stage: f("stage", "text", z5.string().min(1).max(40)),
+      stage: f("stage", "text", z6.string().min(1).max(40)),
       stageEnteredAt: f("stage_entered_at", "timestamptz", tsS),
       data: f("data", "jsonb", obj(64e3)),
       archivedAt: f("archived_at", "timestamptz", tsS.nullable())
@@ -14919,13 +15009,13 @@ var PUSH = {
     required: ["chatId", "toStage", "status", "actor"],
     fields: {
       chatId: f("chat_id", "uuid", uuidS, "chats"),
-      fromStage: f("from_stage", "text", z5.string().max(40).nullable()),
-      toStage: f("to_stage", "text", z5.string().min(1).max(40)),
-      status: f("status", "text", z5.string().min(1).max(40)),
-      actor: f("actor", "text", z5.enum(["user", "agent", "system"])),
-      reason: f("reason", "text", z5.string().max(2e3).nullable()),
+      fromStage: f("from_stage", "text", z6.string().max(40).nullable()),
+      toStage: f("to_stage", "text", z6.string().min(1).max(40)),
+      status: f("status", "text", z6.string().min(1).max(40)),
+      actor: f("actor", "text", z6.enum(["user", "agent", "system"])),
+      reason: f("reason", "text", z6.string().max(2e3).nullable()),
       evidence: f("evidence", "jsonb", obj(2e4).nullable()),
-      confidence: f("confidence", "real", z5.number().min(0).max(1).nullable()),
+      confidence: f("confidence", "real", z6.number().min(0).max(1).nullable()),
       decidedAt: f("decided_at", "timestamptz", tsS.nullable())
     }
   },
@@ -14936,12 +15026,12 @@ var PUSH = {
     key: "id",
     required: ["source", "occurredAt", "rawText"],
     fields: {
-      personIds: f("person_ids", "uuid[]", z5.array(uuidS).max(50), "people"),
+      personIds: f("person_ids", "uuid[]", z6.array(uuidS).max(50), "people"),
       chatId: f("chat_id", "uuid", uuidS.nullable(), "chats"),
-      source: f("source", "text", z5.string().min(1).max(40)),
-      title: f("title", "text", z5.string().max(300).nullable()),
+      source: f("source", "text", z6.string().min(1).max(40)),
+      title: f("title", "text", z6.string().max(300).nullable()),
       occurredAt: f("occurred_at", "timestamptz", tsS),
-      rawText: f("raw_text", "text", z5.string().max(1e5)),
+      rawText: f("raw_text", "text", z6.string().max(1e5)),
       extraction: f("extraction", "jsonb", obj(64e3).nullable())
     }
   },
@@ -14952,20 +15042,20 @@ var PUSH = {
     required: ["displayName"],
     // what the user edits by hand; everything else is derived on the server
     fields: {
-      displayName: f("display_name", "text", z5.string().trim().min(1).max(200)),
-      notes: f("notes", "text", z5.string().max(2e4).nullable()),
-      tags: f("tags", "text[]", z5.array(z5.string().max(60)).max(50)),
-      relationshipType: f("relationship_type", "text", z5.string().max(40).nullable()),
+      displayName: f("display_name", "text", z6.string().trim().min(1).max(200)),
+      notes: f("notes", "text", z6.string().max(2e4).nullable()),
+      tags: f("tags", "text[]", z6.array(z6.string().max(60)).max(50)),
+      relationshipType: f("relationship_type", "text", z6.string().max(40).nullable()),
       hiddenAt: f("hidden_at", "timestamptz", tsS.nullable()),
-      doNotContact: f("do_not_contact", "boolean", z5.boolean()),
+      doNotContact: f("do_not_contact", "boolean", z6.boolean()),
       // plan 29 §A1: hidden from friends; the people_unshare trigger drops the projection row at once
-      private: f("private", "boolean", z5.boolean()),
+      private: f("private", "boolean", z6.boolean()),
       // a fresh LinkedIn photo (or a Gravatar) the browser fetched for someone whose link had expired or was missing:
       // only those hosts, so a person's picture is never an arbitrary address
       photoUrl: f(
         "photo_url",
         "text",
-        z5.string().max(2e3).regex(
+        z6.string().max(2e3).regex(
           /^https:\/\/([a-z0-9-]+\.)*(licdn\.com|gravatar\.com)\//,
           "must be a LinkedIn or Gravatar image"
         ).nullable()
@@ -14973,17 +15063,17 @@ var PUSH = {
     },
     // a person added in the app: what the student typed, once; imports keep these up to date afterwards
     insertOnly: {
-      firstName: f("first_name", "text", z5.string().trim().max(100).nullable()),
-      lastName: f("last_name", "text", z5.string().trim().max(100).nullable()),
+      firstName: f("first_name", "text", z6.string().trim().max(100).nullable()),
+      lastName: f("last_name", "text", z6.string().trim().max(100).nullable()),
       primaryEmail: f(
         "primary_email",
         "text",
-        z5.string().trim().max(320).regex(/^[^\s@]+@[^\s@]+\.[^\s@]+$/, "must be an email address").transform((e) => normalizeEmail(e)).nullable()
+        z6.string().trim().max(320).regex(/^[^\s@]+@[^\s@]+\.[^\s@]+$/, "must be an email address").transform((e) => normalizeEmail(e)).nullable()
       ),
-      title: f("title", "text", z5.string().trim().max(300).nullable()),
-      orgRaw: f("org_raw", "text", z5.string().trim().max(300).nullable()),
-      linkedinUrl: f("linkedin_url", "text", z5.string().trim().max(500).nullable()),
-      location: f("location", "text", z5.string().trim().max(200).nullable())
+      title: f("title", "text", z6.string().trim().max(300).nullable()),
+      orgRaw: f("org_raw", "text", z6.string().trim().max(300).nullable()),
+      linkedinUrl: f("linkedin_url", "text", z6.string().trim().max(500).nullable()),
+      location: f("location", "text", z6.string().trim().max(200).nullable())
     },
     derive: (v, op) => {
       const out = [];
@@ -15020,7 +15110,7 @@ var PUSH = {
     del: "hard",
     key: "person_id",
     required: ["closeness"],
-    fields: { closeness: f("closeness", "int", z5.number().int().min(1).max(5)) }
+    fields: { closeness: f("closeness", "int", z6.number().int().min(1).max(5)) }
   },
   uploads: {
     table: "uploads",
@@ -15029,11 +15119,11 @@ var PUSH = {
     key: "id",
     required: ["kind", "text"],
     fields: {
-      kind: f("kind", "text", z5.enum(["resume", "note", "transcript", "linkedin_export"])),
-      filename: f("filename", "text", z5.string().max(300).nullable()),
-      text: f("text", "text", z5.string().max(5e5)),
+      kind: f("kind", "text", z6.enum(["resume", "note", "transcript", "linkedin_export"])),
+      filename: f("filename", "text", z6.string().max(300).nullable()),
+      text: f("text", "text", z6.string().max(5e5)),
       parsed: f("parsed", "jsonb", obj(2e5).nullable()),
-      isCurrent: f("is_current", "boolean", z5.boolean())
+      isCurrent: f("is_current", "boolean", z6.boolean())
     }
   },
   // drafts: handled by pushDraft (status transitions and edits while still a draft)
@@ -15046,11 +15136,11 @@ var ChangeError = class extends Error {
     this.code = code;
   }
 };
-var ChangeS = z5.object({
-  table: z5.string(),
-  op: z5.enum(["upsert", "delete"]),
+var ChangeS = z6.object({
+  table: z6.string(),
+  op: z6.enum(["upsert", "delete"]),
   id: uuidS,
-  row: z5.record(z5.string(), z5.unknown()).optional()
+  row: z6.record(z6.string(), z6.unknown()).optional()
 });
 var PUSH_MAX_CHANGES = 500;
 async function syncPush(ctx) {
@@ -15197,10 +15287,10 @@ async function remove(db2, userId, spec, id) {
   await audit2(db2, userId, "sync.delete", spec.table, id);
   return void 0;
 }
-var DraftPatchS = z5.object({
-  status: z5.enum(["approved", "discarded", "cancelled"]).optional(),
-  subject: z5.string().max(200).nullable().optional(),
-  body: z5.string().trim().min(1).max(2e4).optional()
+var DraftPatchS = z6.object({
+  status: z6.enum(["approved", "discarded", "cancelled"]).optional(),
+  subject: z6.string().max(200).nullable().optional(),
+  body: z6.string().trim().min(1).max(2e4).optional()
 });
 async function pushDraft(db2, userId, id, row) {
   const p = DraftPatchS.safeParse({ status: row.status, subject: row.subject, body: row.body });
