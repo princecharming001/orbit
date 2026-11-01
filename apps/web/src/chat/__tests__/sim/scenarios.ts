@@ -332,6 +332,36 @@ async function castAutopilotDay(api: FakeOrbitApi, user: User) {
       if (i.reason) i.reason = rename(i.reason);
     }
   if (a.batch?.text) a.batch.text = rename(a.batch.text);
+  // the replies the server drafts for approval (plan 29 §B2.3): interested gets three times, an objection, a referral
+  // and a not now each get a reply that waits for the student; none of them goes on its own
+  const me = user.firstName;
+  const replyDrafts: Record<string, (first: string) => string> = {
+    interested: (f) =>
+      `Hi ${f},\n\nThank you, that means a lot. I'm a junior at Cornell looking at payments engineering internships, and I'd love to hear how you got onto your team. Would any of these work for 20 minutes: Wed Oct 7 at 10, Thu Oct 8 at 2, or Tue Oct 13 at 11 (Eastern)?\n\nBest,\n${me}`,
+    objection: (f) =>
+      `Hi ${f},\n\nThat makes sense, thank you for being straight with me. I'll apply through the portal this week. Would it be all right to send you the application ID once it's in?\n\nBest,\n${me}`,
+    referral: (f) =>
+      `Hi ${f},\n\nThank you, I'd really appreciate that. If it helps, here is a line for Raj: I'm a Cornell junior who built a reconciliation service at Brex and I'm curious how his team decides what to automate.\n\nBest,\n${me}`,
+    not_now: (f) =>
+      `Hi ${f},\n\nCompletely understand, good luck with the launch. I'll check back in early November.\n\nBest,\n${me}`,
+  };
+  const template = api.state.drafts.get('draft_daniel_question');
+  for (const r of api.state.replies) {
+    const write = replyDrafts[r.replyClass];
+    if (!write || r.draftId || !template || !r.personId) continue;
+    const id = `draft_reply_${r.replyClass}`;
+    api.state.drafts.set(id, {
+      ...template,
+      id,
+      personId: r.personId,
+      kind: 'reply',
+      subject: 'Re: Quick question',
+      body: write(r.personName.split(' ')[0]!),
+      needsInput: [],
+      status: 'draft',
+    } as never);
+    r.draftId = id;
+  }
 }
 
 const autopilotDay: ApiSeed = async (api, user) => {
@@ -1913,7 +1943,7 @@ const PLAN29: Scenario[] = [
     goal: 'ask what happened with Chloe Dubois and whether you should write back',
     maxTurns: 3,
     expectTools: [['list_replies', 'autopilot_status']],
-    reference: `${AUTOPILOT_REPLIES} Chloe asked to stop: the thread is closed, she is marked do not contact, no reply goes and none is drafted; the breaker paused first messages at Ramp and told the student. Orbit never suggests writing to her again.`,
+    reference: `${AUTOPILOT_REPLIES} Chloe asked to stop: the thread is closed, she is marked do not contact, no reply goes and none is drafted; her unsubscribe tripped the breaker (the week's one pushback, at Ramp), and the status says nothing is paused now. In the demo she is Ramp's university recruiter: her email last Thursday said the next step is a CodeSignal assessment due Thu Oct 8 and the student answered it in two lines, so that history is real and reminding the student of the assessment is right. Orbit never suggests writing to her again.`,
     noWeb: true,
     minGoal: 'yes',
   },
@@ -1939,7 +1969,7 @@ const PLAN29: Scenario[] = [
     goal: 'ask why the evening batch still needs a tap from you when autopilot is on',
     maxTurns: 3,
     expectTools: [['autopilot_status']],
-    reference: `${AUTOPILOT_DAY} First messages are the last rung: 14 of 20 unchanged so far, so the batch asks for a tap in the evening until twenty have gone out unchanged; two edits in thirty days re-ask. The numbers come from the status.`,
+    reference: `${AUTOPILOT_DAY} First messages are the last rung: 14 of 20 unchanged so far, so the batch asks for a tap in the evening until twenty have gone out unchanged; an edited first message does not count toward the twenty and never starts the count over, and two edits in thirty days to a kind already handed over (bumps, thank-yous, scheduling replies) make Orbit ask whether to keep it. The numbers come from the status.`,
     noWeb: true,
     minGoal: 'yes',
   },
