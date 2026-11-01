@@ -14,7 +14,7 @@ import {
   composeFallback,
 } from '@orbit/core/drafts/templates';
 import type { ReplyClass } from '@orbit/core/email/replyClass';
-import { unansweredBefore } from '@orbit/core/safety/rules';
+import { messageHash, unansweredBefore } from '@orbit/core/safety/rules';
 import type { Slot } from '@orbit/core/server/api';
 import { stripQuotedReply } from '@orbit/core/text/email';
 import type { ComposedMessage, GoalKind, MessageKind } from '@orbit/core/types';
@@ -379,7 +379,7 @@ export async function composeDraft(s: Services, req: ComposeRequest): Promise<Co
   await db.sql`
     insert into orbit.audit_log (user_id, actor, action, target_table, target_id, details)
     values (${req.userId}::uuid, ${req.actor ?? 'user'}, 'draft.compose', 'drafts', ${row!.id},
-            ${{ kind: req.kind, channel: req.channel, generated_by: generatedBy, attempts, issues: lastIssues.length }}::jsonb)`;
+            ${{ kind: req.kind, channel: req.channel, generated_by: generatedBy, attempts, issues: lastIssues.length, hash: messageHash({ channel: req.channel, subject: composed.subject, body }) }}::jsonb)`;
   return {
     draft: row!,
     composed: { ...composed, id: row!.id, body, validator },

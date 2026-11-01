@@ -4,7 +4,14 @@
  * it: hold one send, pause everything or one goal. Phase 3 builds this for the replies; phase 5 adds tomorrow's first
  * messages to the same shapes.
  */
-import { AUTOPILOT_MODE_LEVEL, type AutopilotMode, SEND_CAPS } from '@orbit/core/safety/rules';
+import { AUTO_FIRST_TOUCH_KINDS, type FirstTouchRung, firstTouchRung } from '@orbit/core/safety/firstTouch';
+import {
+  AUTO_FIRST_TOUCH_RUNG,
+  AUTOPILOT_MODE_LEVEL,
+  type AutopilotMode,
+  REVIEW_WINDOW_HOURS,
+  SEND_CAPS,
+} from '@orbit/core/safety/rules';
 import type { AutopilotItem, AutopilotRung, AutopilotStatus } from '@orbit/core/server/api';
 import type { MessageKind } from '@orbit/core/types';
 import type { DraftMeta } from '../compose/drafts.ts';
@@ -15,14 +22,14 @@ import { questionOf } from '../replies/replies.ts';
 import { iso } from '../rows.ts';
 import { validZone, zonedTime } from '../zones.ts';
 
-const FIRST_TOUCH = ['first_touch', 'warm_first_touch', 'outreach'];
+const FIRST_TOUCH: string[] = [...AUTO_FIRST_TOUCH_KINDS];
 
 /** Approvals without an edit that unlock a rung: the ladder's kinds at ten, first messages at twenty (plan 29 §B2.2). */
 export const RUNG_NEEDED: Record<AutopilotRung['kind'], number> = {
   bump: 10,
   thank_you: 10,
   schedule: 10,
-  first_touch: 20,
+  first_touch: AUTO_FIRST_TOUCH_RUNG,
 };
 
 /** Why a draft was held, in a sentence the student reads. */
@@ -32,6 +39,8 @@ export const HOLD_REASONS: Record<string, string> = {
   goal_paused: 'The breaker paused this goal.',
   held: 'You held it.',
   needs_input: 'It needs one answer from you.',
+  needs_tap:
+    'It waited for your tap. Until twenty first messages go out as Orbit wrote them, each one in the evening batch needs one.',
   not_approved: 'It was never approved.',
   linkedin_never_auto: 'LinkedIn messages always wait for your own tap.',
   auto_daily_cap: `Orbit already sent ${SEND_CAPS.autoPerDay} on its own today.`,
@@ -56,6 +65,8 @@ type ItemRow = {
   auto_rung: string | null;
   outcome: string | null;
   ask: DraftMeta | null;
+  /** the student approved it by hand (a tap in the evening batch, or any approval of theirs) */
+  tapped: boolean;
 };
 
 /**
@@ -75,7 +86,9 @@ async function itemRows(
   return db.sql<ItemRow>`
     select d.id, d.person_id, p.display_name, p.org_raw, o.name as org_name, d.kind, d.subject, d.send_at, d.sent_at,
            d.status, d.error, d.auto_rung, d.outcome, d.ask,
-           (select m.reply_class from orbit.messages m where m.id::text = d.ask->>'replyToMessageId') as reply_class
+           (select m.reply_class from orbit.messages m where m.id::text = d.ask->>'replyToMessageId') as reply_class,
+           exists (select 1 from orbit.audit_log a where a.target_table = 'drafts' and a.target_id = d.id::text
+                    and a.action = 'draft.approve' and a.actor = 'user') as tapped
       from orbit.drafts d
       join orbit.people p on p.id = d.person_id
       left join orbit.organizations o on o.id = p.org_id
@@ -119,6 +132,46 @@ function modeOf(settings: Record<string, unknown>, level: number): AutopilotMode
   const m = settings.autopilot_mode;
   if (m === 'off' || m === 'assist' || m === 'autopilot') return m;
   return level >= 2 ? 'autopilot' : level === 1 ? 'assist' : 'off';
+}
+
+/**
+ * A queued draft as the batch shows it: an autopilot first message before the rung is earned, and not tapped yet,
+ * waits for the student's tap (`needs_tap`); everything else is simply queued.
+ */
+function queuedStatus(r: ItemRow, rung: FirstTouchRung): AutopilotItem['status'] {
+  return r.auto_rung === 'first_touch' && !rung.earned && !r.tapped ? 'needs_tap' : 'queued';
+}
+
+/**
+ * The first-message rung as the server counts it (plan 29 §B2.2): first messages that went out on the student's own
+ * approval with the words Orbit wrote. Unchanged means no `orbit.draft_edits` row for the draft when that table exists
+ * (the voice phase writes one for every edited approval); before it does, the approved words' hash equals the hash
+ * the compose step recorded. A draft composed before hashes were recorded does not count, so the rung never
+ * credits an edit it cannot see.
+ */
+export async function firstTouchRungOf(db: Db, userId: string): Promise<FirstTouchRung> {
+  const [t] = await db.sql<{ has: boolean }>`select to_regclass('orbit.draft_edits') is not null as has`;
+  const rows = t?.has
+    ? await db.sql<{ kind: string; edited: boolean }>`
+        select d.kind,
+               exists (select 1 from orbit.draft_edits e where e.draft_id = d.id) as edited
+          from orbit.drafts d
+         where d.user_id = ${userId}::uuid and d.status = 'sent' and d.kind = any(${FIRST_TOUCH}::text[])
+           and exists (select 1 from orbit.audit_log a where a.target_table = 'drafts' and a.target_id = d.id::text
+                        and a.action = 'draft.approve' and a.actor = 'user')`
+    : await db.sql<{ kind: string; edited: boolean }>`
+        select d.kind,
+               not exists (
+                 select 1 from orbit.audit_log a
+                   join orbit.audit_log c on c.target_table = 'drafts' and c.target_id = a.target_id
+                                         and c.action = 'draft.compose' and c.details->>'hash' = a.details->>'hash'
+                  where a.target_table = 'drafts' and a.target_id = d.id::text
+                    and a.action = 'draft.approve' and a.actor = 'user') as edited
+          from orbit.drafts d
+         where d.user_id = ${userId}::uuid and d.status = 'sent' and d.kind = any(${FIRST_TOUCH}::text[])
+           and exists (select 1 from orbit.audit_log a where a.target_table = 'drafts' and a.target_id = d.id::text
+                        and a.action = 'draft.approve' and a.actor = 'user')`;
+  return firstTouchRung(rows.map((r) => ({ kind: r.kind, edited: r.edited })));
 }
 
 export async function autopilotStatus(db: Db, userId: string, now: Date): Promise<AutopilotStatus> {
@@ -174,8 +227,8 @@ export async function autopilotStatus(db: Db, userId: string, now: Date): Promis
     messageId: q.id,
   }));
 
-  // the rungs, as the server can count them: approvals by hand of each kind that went out (edits are the browser's
-  // record until phase 4); the ladder's kinds count as unlocked once the student handed them over
+  // the rungs, as the server can count them: approvals by hand of each kind that went out; the ladder's kinds count
+  // as unlocked once the student handed them over, first messages once twenty went out unchanged (plan 29 §B2.2)
   const approvals = await db.sql<{ kind: string; n: number }>`
     select d.kind, count(*)::int as n from orbit.drafts d
      where d.user_id = ${userId}::uuid and d.status = 'sent' and d.auto_rung is null
@@ -185,14 +238,16 @@ export async function autopilotStatus(db: Db, userId: string, now: Date): Promis
   const count = (kinds: string[]) =>
     approvals.filter((a) => kinds.includes(a.kind)).reduce((s, a) => s + a.n, 0);
   const autoKinds = Array.isArray(settings.auto_kinds) ? (settings.auto_kinds as string[]) : [];
+  const first = await firstTouchRungOf(db, userId);
   const rungs: AutopilotRung[] = (['bump', 'thank_you', 'schedule', 'first_touch'] as const).map((kind) => {
-    const n = kind === 'first_touch' ? count(FIRST_TOUCH) : count([kind]);
+    if (kind === 'first_touch')
+      return { kind, needed: first.needed, unchanged: first.unchanged, unlocked: first.earned };
     const needed = RUNG_NEEDED[kind];
     return {
       kind,
       needed,
-      unchanged: Math.min(needed, n),
-      unlocked: kind === 'first_touch' ? false : autoKinds.includes(kind),
+      unchanged: Math.min(needed, count([kind])),
+      unlocked: autoKinds.includes(kind),
     };
   });
 
@@ -228,7 +283,7 @@ export async function autopilotStatus(db: Db, userId: string, now: Date): Promis
     mode: modeOf(settings, Number(u.autonomy_level) || 0),
     pausedUntil,
     pausedGoals,
-    queued: queued.map((r) => item(r, 'queued')),
+    queued: queued.map((r) => item(r, queuedStatus(r, first))),
     held: held.map((r) => item(r, 'held', HOLD_REASONS[r.error ?? ''] ?? r.error ?? undefined)),
     sentToday: sentToday.map((r) => item(r, 'sent')),
     needsYou,
@@ -241,7 +296,9 @@ export async function autopilotStatus(db: Db, userId: string, now: Date): Promis
       firstTouchesThisWeek: caps?.week_first ?? 0,
     },
     reviewUntil: reviews.length
-      ? iso(new Date(Math.min(...reviews.map((d) => new Date(d).getTime())) - 8 * 3_600_000))
+      ? iso(
+          new Date(Math.min(...reviews.map((d) => new Date(d).getTime())) - REVIEW_WINDOW_HOURS * 3_600_000),
+        )
       : null,
   };
 }

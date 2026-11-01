@@ -57,6 +57,7 @@ export * from './recommend/why';
 export * from './resume/parse';
 export * from './resume/profile';
 export * from './resume/schools';
+export * from './safety/firstTouch';
 export * from './safety/rules';
 export * from './scoring/known';
 export * from './scoring/rapport';

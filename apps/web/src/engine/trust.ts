@@ -15,6 +15,9 @@ import {
   AUTO_SEND_MIN_SCORE,
   type AutoKind,
   type AutopilotMode,
+  firstTouchRung,
+  firstTouchRungLine,
+  isFirstTouchKind,
   nextSendWindow,
   type Person,
   type Suggestion,
@@ -51,8 +54,15 @@ export interface Streak {
   since?: string;
 }
 
-/** Per kind: the approvals in a row without an edit, and the recent edits (Orbit's own sends never count). */
-export async function approvalStreaks(userId: string, now = new Date()): Promise<Record<LadderKind, Streak>> {
+/** The ladder's kinds plus the last rung, first messages (plan 29 §B2.2). */
+export type RungKind = LadderKind | 'first_touch';
+
+/**
+ * Per kind: the approvals in a row without an edit, and the recent edits (Orbit's own sends never count). First
+ * messages (`first_touch`: outreach, first touches and warm first touches together) count every approval without an
+ * edit, whenever it was, the way the server counts the rung: an edit does not start it over, it only does not count.
+ */
+export async function approvalStreaks(userId: string, now = new Date()): Promise<Record<RungKind, Streak>> {
   const rows = (await db.feedback.where('userId').equals(userId).toArray())
     .filter((f) => (f.kind === 'approve' || f.kind === 'edit') && !!f.outboundMessageId)
     .sort((a, b) => a.createdAt.localeCompare(b.createdAt));
@@ -61,13 +71,23 @@ export async function approvalStreaks(userId: string, now = new Date()): Promise
       .filter((m) => !!m)
       .map((m) => [m!.id, m!]),
   );
-  const out = Object.fromEntries(LADDER_KINDS.map((k) => [k, { unedited: 0, edited: 0 }])) as Record<
-    LadderKind,
-    Streak
-  >;
+  const out = Object.fromEntries(
+    [...LADDER_KINDS, 'first_touch'].map((k) => [k, { unedited: 0, edited: 0 }]),
+  ) as Record<RungKind, Streak>;
   for (const r of rows) {
     const m = msgs.get(r.outboundMessageId!);
-    if (!m || m.autoSent || !(LADDER_KINDS as readonly string[]).includes(m.kind)) continue;
+    if (!m || m.autoSent) continue;
+    if (isFirstTouchKind(m.kind)) {
+      const f = out.first_touch;
+      if (r.kind === 'edit') {
+        if (now.getTime() - Date.parse(r.createdAt) < RECHECK_DAYS * DAY) f.edited++;
+      } else {
+        f.unedited++;
+        f.since ??= r.createdAt;
+      }
+      continue;
+    }
+    if (!(LADDER_KINDS as readonly string[]).includes(m.kind)) continue;
     const s = out[m.kind as LadderKind];
     if (r.kind === 'edit') {
       s.unedited = 0;
@@ -149,6 +169,42 @@ export async function raiseTrustCards(user: Pick<User, 'id'>, now = new Date()):
     );
     offering++;
   }
+  await raiseFirstTouchRungCard(user, streaks.first_touch, now);
+}
+
+/** The card the first-message rung raises once, when it is earned (plan 29 §B2.2). */
+export const FIRST_TOUCH_RUNG_KEY = 'trust:first_touch';
+
+/**
+ * The last rung, said once in plain words when it is earned: from now on the evening batch goes in the morning on the
+ * student's silence. An account counts on the server (the status this browser last read), local mode here.
+ */
+async function raiseFirstTouchRungCard(user: Pick<User, 'id'>, streak: Streak, now: Date): Promise<void> {
+  const { cachedStatus } = await import('./autopilotMode');
+  const server = (await cachedStatus(user.id))?.rungs.find((r) => r.kind === 'first_touch');
+  const local = firstTouchRung(
+    Array.from({ length: streak.unedited }, () => ({ kind: 'first_touch', edited: false })),
+  );
+  if (!local.earned && !server?.unlocked) return;
+  if (await db.suggestions.where('dedupeKey').equals(FIRST_TOUCH_RUNG_KEY).first()) return;
+  const { upsertSuggestions } = await import('./brief');
+  await upsertSuggestions(
+    user.id,
+    [
+      {
+        kind: 'trust_offer',
+        dedupeKey: FIRST_TOUCH_RUNG_KEY,
+        reasonText: firstTouchRungLine({ ...local, unchanged: local.needed, earned: true }),
+        signals: { unedited: Math.max(streak.unedited, server?.unchanged ?? 0) },
+        payload: { messageKind: 'first_touch', rung: true },
+        urgency: 0.5,
+        goalRelevance: 0.4,
+        confidence: 1,
+        priorityScore: 0.55,
+      },
+    ],
+    now,
+  );
 }
 
 /** The student's answer on a ladder card: yes hands the kind over (or keeps it), no keeps asking. */
@@ -158,6 +214,11 @@ export async function answerTrustOffer(
   yes: boolean,
   now = new Date(),
 ) {
+  // the first-message rung is earned, not handed over: the card only says so
+  if (s.payload.rung) {
+    await db.suggestions.update(s.id, { status: 'done', decidedAt: now.toISOString() });
+    return;
+  }
   const kind = s.payload.messageKind as LadderKind;
   await setAutoKind(user.id, kind, yes);
   await db.suggestions.update(s.id, { status: 'done', decidedAt: now.toISOString() });

@@ -317,6 +317,14 @@ export type AutopilotMode = 'off' | 'assist' | 'autopilot';
 export const AUTOPILOT_MODES: readonly AutopilotMode[] = ['off', 'assist', 'autopilot'];
 export const AUTOPILOT_MODE_LEVEL: Record<AutopilotMode, 0 | 1 | 2> = { off: 0, assist: 1, autopilot: 2 };
 
+/**
+ * The first-message rung (plan 29 §B2.2): first messages the student approved without an edit before autopilot's own
+ * first messages go on silence. Until then each one in the evening batch waits for a tap.
+ */
+export const AUTO_FIRST_TOUCH_RUNG = 20;
+/** The evening review (plan 29 §B2.2): the batch opens this many hours before its morning send time. */
+export const REVIEW_WINDOW_HOURS = 8;
+
 // --- autonomy level 2 (§8.4) --------------------------------------------------------------------------------------
 
 export const AUTO_SEND_DAILY_CAP = SEND_CAPS.autoPerDay;

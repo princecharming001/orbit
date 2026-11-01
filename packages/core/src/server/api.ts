@@ -687,7 +687,11 @@ export interface AutopilotItem {
   /** when it goes or went, in the recipient's morning */
   sendAt: string | null;
   sentAt: string | null;
-  status: 'queued' | 'held' | 'sent' | 'needs_you' | 'cancelled';
+  /**
+   * `needs_tap`: an autopilot first message in tomorrow's batch before the first-message rung is earned (plan 29
+   * §B2.2): it goes in the morning only if the student taps it in the evening
+   */
+  status: 'queued' | 'needs_tap' | 'held' | 'sent' | 'needs_you' | 'cancelled';
   /** why it was held or not sent: the rule, in a sentence */
   reason?: string;
   /** a reply that asked something only the student knows */

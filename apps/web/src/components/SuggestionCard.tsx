@@ -590,7 +590,21 @@ export function SuggestionCard({
               </Button>
             </div>
           )}
-          {s.kind === 'trust_offer' && user && (
+          {s.kind === 'trust_offer' && user && !!s.payload.rung && (
+            // plan 29 §B2.2: the first-message rung is earned, not handed over; the card only says so
+            <div className="mt-3 flex flex-wrap gap-2" data-testid="trust-rung">
+              <Button
+                variant="primary"
+                size="sm"
+                disabled={busy}
+                onClick={() => void answerTrustOffer(user, s, true)}
+                data-testid="trust-rung-ok"
+              >
+                Got it
+              </Button>
+            </div>
+          )}
+          {s.kind === 'trust_offer' && user && !s.payload.rung && (
             // plan 23 §4.9: earned by ten untouched approvals; the answer is per kind
             <div className="mt-3 flex flex-wrap gap-2" data-testid="trust-offer">
               <Button

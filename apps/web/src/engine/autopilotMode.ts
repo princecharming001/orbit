@@ -17,15 +17,24 @@ import type {
   Suggestion,
   User,
 } from '@orbit/core';
-import { AUTO_KINDS, AUTOPILOT_MODE_LEVEL, newId, SEND_CAPS } from '@orbit/core';
+import {
+  AUTO_FIRST_TOUCH_RUNG,
+  AUTO_KINDS,
+  AUTOPILOT_MODE_LEVEL,
+  firstTouchRung,
+  isFirstTouchKind,
+  newId,
+  REVIEW_WINDOW_HOURS,
+  SEND_CAPS,
+} from '@orbit/core';
 import { db } from '../db/schema';
 import { callApi, isServerUser } from '../integrations/orbitApi';
 import { approvalStreaks, OFFER_AT } from './trust';
 
 /** What local mode can honestly promise. */
 export const LOCAL_AUTOPILOT_NOTE = 'Sends while Orbit is open; sign in for always-on.';
-/** First messages are the last rung (plan 29 §B2.2). */
-export const FIRST_TOUCH_RUNG = 20;
+/** First messages are the last rung (plan 29 §B2.2): core's number, which the server counts against too. */
+export const FIRST_TOUCH_RUNG = AUTO_FIRST_TOUCH_RUNG;
 /** db.kv key of the last status an account saw, for the brief when the tab was closed overnight. */
 export const STATUS_KV = 'autopilot:status:';
 
@@ -39,8 +48,6 @@ export interface StatusResult {
   /** the honest line for local mode */
   note?: string;
 }
-
-const FIRST_TOUCH_KINDS = new Set(['first_touch', 'warm_first_touch', 'outreach']);
 
 function localItem(
   o: OutboundMessage,
@@ -86,12 +93,24 @@ export async function localAutopilotStatus(
   const nameOf = (id: string) => people.get(id)?.displayName ?? 'them';
   const orgOf = (id: string) => people.get(id)?.currentOrganizationRaw ?? null;
   const dayKey = now.toDateString();
+  const first = firstTouchRung(
+    Array.from({ length: streaks.first_touch.unedited }, () => ({ kind: 'first_touch', edited: false })),
+  );
+  // an autopilot first message before the rung is earned waits for the student's tap (plan 29 §B2.2); a tapped one
+  // is theirs (autoSent false) and goes like any approval
   const queued = outbound
     .filter(
       (o) => o.status === 'queued' && !!o.autopilot && !!o.sendAt && Date.parse(o.sendAt) > now.getTime(),
     )
     .sort((a, b) => a.sendAt!.localeCompare(b.sendAt!))
-    .map((o) => localItem(o, nameOf(o.personId), orgOf(o.personId), 'queued'));
+    .map((o) =>
+      localItem(
+        o,
+        nameOf(o.personId),
+        orgOf(o.personId),
+        o.autoRung === 'first_touch' && o.autoSent && !first.earned ? 'needs_tap' : 'queued',
+      ),
+    );
   const held = outbound
     .filter((o) => o.status === 'draft' && !!o.error && (o.autoSent || o.autopilot || o.error === 'held'))
     .map((o) => localItem(o, nameOf(o.personId), orgOf(o.personId), 'held'));
@@ -129,12 +148,9 @@ export async function localAutopilotStatus(
     })),
     {
       kind: 'first_touch' as const,
-      needed: FIRST_TOUCH_RUNG,
-      unchanged: Math.min(
-        FIRST_TOUCH_RUNG,
-        outbound.filter((o) => FIRST_TOUCH_KINDS.has(o.kind) && o.status === 'sent' && !o.autoSent).length,
-      ),
-      unlocked: false,
+      needed: first.needed,
+      unchanged: first.unchanged,
+      unlocked: first.earned,
     },
   ];
   const pausedGoals = Object.entries(settings?.autopilotPausedGoals ?? {})
@@ -161,11 +177,11 @@ export async function localAutopilotStatus(
       firstTouchPerDay: SEND_CAPS.autoFirstTouchesPerDay,
       usedToday: sentToday.length,
       firstTouchesThisWeek: outbound.filter(
-        (o) => !!o.autoSent && FIRST_TOUCH_KINDS.has(o.kind) && !!o.sentAt && Date.parse(o.sentAt) >= weekAgo,
+        (o) => !!o.autoSent && isFirstTouchKind(o.kind) && !!o.sentAt && Date.parse(o.sentAt) >= weekAgo,
       ).length,
     },
     reviewUntil: queued.find((q) => q.sendAt)?.sendAt
-      ? new Date(Date.parse(queued[0]!.sendAt!) - 8 * 3_600_000).toISOString()
+      ? new Date(Date.parse(queued[0]!.sendAt!) - REVIEW_WINDOW_HOURS * 3_600_000).toISOString()
       : null,
   };
 }

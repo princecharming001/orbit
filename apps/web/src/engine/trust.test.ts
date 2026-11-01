@@ -267,3 +267,35 @@ describe('the send window and the recipient zone', () => {
     expect(zoneFromLocation('Remote')).toBeUndefined();
   });
 });
+
+describe('the first-message rung (plan 29 §B2.2)', () => {
+  it('counts first messages approved without an edit, all three kinds together, and an edit never starts it over', async () => {
+    await approvals('outreach', 8);
+    await approvals('first_touch', 3, true, 8);
+    await approvals('warm_first_touch', 6, false, 11);
+    const s = await approvalStreaks(user.id, NOW);
+    expect(s.first_touch.unedited).toBe(14);
+    expect(s.first_touch.edited).toBe(3);
+    // the ladder's own kinds are untouched by first messages
+    expect(s.bump).toEqual({ unedited: 0, edited: 0 });
+  });
+
+  it('raises one card in plain words when twenty are earned, and Got it only closes it', async () => {
+    await approvals('outreach', 19);
+    await raiseTrustCards(user, NOW);
+    expect(await db.suggestions.where('dedupeKey').equals('trust:first_touch').count()).toBe(0);
+    await approvals('first_touch', 1, false, 19);
+    await raiseTrustCards(user, NOW);
+    await raiseTrustCards(user, NOW);
+    const cards = await db.suggestions.where('dedupeKey').equals('trust:first_touch').toArray();
+    expect(cards).toHaveLength(1);
+    expect(cards[0]!.reasonText).toBe(
+      "You approved 20 first messages without changing a word, so Tomorrow's batch now goes in the morning unless you hold one.",
+    );
+    expect(cards[0]!.reasonText).not.toMatch(/[–—!]/);
+    await answerTrustOffer(user, cards[0]!, true, NOW);
+    expect((await db.suggestions.get(cards[0]!.id))?.status).toBe('done');
+    // nothing was handed over: first messages are not a ladder kind
+    expect((await db.settings.get(user.id))?.autoKinds ?? []).toEqual([]);
+  });
+});
