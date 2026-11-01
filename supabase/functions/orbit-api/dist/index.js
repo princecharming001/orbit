@@ -7382,9 +7382,32 @@ async function planCards(db2, userId, now) {
   const b = cards.find(
     (c) => c.kind === "batch_ready" && now.getTime() - new Date(c.created_at).getTime() < 18 * 36e5
   );
+  const since = new Date(now.getTime() - 7 * 864e5);
+  const [w] = await db2.sql`
+    select count(*) filter (where a.action = 'draft.auto_sent')::int as sent,
+           count(*) filter (where a.action = 'draft.auto_sent'
+                              and exists (select 1 from orbit.drafts d where d.id::text = a.target_id
+                                           and (d.replied_at is not null or d.outcome in ('replied', 'booked'))))::int as replies,
+           count(*) filter (where a.action = 'call.booked')::int as calls
+      from orbit.audit_log a
+     where a.user_id = ${userId}::uuid and a.action in ('draft.auto_sent', 'call.booked')
+       and a.created_at >= ${since}::timestamptz`;
+  const trips = await db2.sql`
+    select s.payload->>'company' as company, g.title
+      from orbit.suggestions s
+      left join orbit.goals g on g.id::text = s.payload->>'goalId'
+     where s.user_id = ${userId}::uuid and s.kind = 'breaker' and s.created_at >= ${since}::timestamptz`;
+  const week = {
+    sent: w?.sent ?? 0,
+    replies: w?.replies ?? 0,
+    calls: w?.calls ?? 0,
+    pushbacks: trips.length,
+    paused: [...new Set(trips.map((t) => t.company ?? t.title).filter((x) => !!x))]
+  };
   return {
     skipped,
     friendAsks,
+    week,
     batch: b ? { at: iso(b.created_at), text: b.reason_text, firstTouches: Number(b.payload.firstTouches) || 0 } : null
   };
 }
