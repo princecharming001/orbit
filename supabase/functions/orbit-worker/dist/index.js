@@ -10901,6 +10901,15 @@ async function refreshFriendShares(db2, ownerId, now) {
   });
   return out.length;
 }
+function shareRefreshKey(ownerId, now, why = "change") {
+  return `friends:refresh:${ownerId}:${why}:${now.getTime()}`;
+}
+async function hasActiveFriend(db2, ownerId) {
+  const [r] = await db2.sql`
+    select exists (select 1 from orbit.friendships f
+                    where f.status = 'active' and (f.a = ${ownerId}::uuid or f.b = ${ownerId}::uuid)) as ok`;
+  return !!r?.ok;
+}
 async function sharingFriends(db2, viewerId) {
   const rows = await db2.sql`
     select f.id as friendship_id, u.id as user_id, u.full_name, u.first_name, u.email, s.mode, s.company_domains
@@ -22127,6 +22136,13 @@ function scoreHandlers(_deps) {
       const now = ctx.now();
       await refreshTies(ctx.db, job.userId, now);
       await scorePeople2(ctx.db, job.userId, { now, fit: true });
+      if (await hasActiveFriend(ctx.db, job.userId))
+        await ctx.queue.enqueue({
+          kind: "friend_shares_refresh",
+          userId: job.userId,
+          payload: {},
+          dedupeKey: shareRefreshKey(job.userId, now, "score")
+        });
     }
   };
 }

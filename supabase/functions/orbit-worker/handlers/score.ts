@@ -4,10 +4,12 @@
  *                                         those people are recounted, then they are re-scored
  *   score.user                            nightly and after a backfill: every inferred tie kind is rebuilt with
  *                                         decay, the user's calibration is refit when they have ≥ 8 labels, and
- *                                         everyone is re-scored
+ *                                         everyone is re-scored; a user with a friend then has their friend
+ *                                         projection rebuilt, so a fresh backfill reaches friends the same day
  */
 
 import { isUuid } from '../../_shared/crypto.ts';
+import { hasActiveFriend, shareRefreshKey } from '../../_shared/friends/shares.ts';
 import { scorePeople } from '../../_shared/ingest/score.ts';
 import { refreshTies } from '../../_shared/ingest/ties.ts';
 import type { JobHandler } from '../worker.ts';
@@ -30,6 +32,13 @@ export function scoreHandlers(_deps: HandlerDeps): Record<string, JobHandler> {
       const now = ctx.now();
       await refreshTies(ctx.db, job.userId, now);
       await scorePeople(ctx.db, job.userId, { now, fit: true });
+      if (await hasActiveFriend(ctx.db, job.userId))
+        await ctx.queue.enqueue({
+          kind: 'friend_shares_refresh',
+          userId: job.userId,
+          payload: {},
+          dedupeKey: shareRefreshKey(job.userId, now, 'score'),
+        });
     },
   };
 }

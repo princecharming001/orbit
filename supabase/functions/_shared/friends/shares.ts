@@ -156,6 +156,23 @@ export async function refreshFriendShares(db: Db, ownerId: string, now: Date): P
   return out.length;
 }
 
+/**
+ * The dedupe key for one owner's refresh after one event. orbit.enqueue drops a key that ran in the last 24 hours, so
+ * a fixed key let one refresh a day through and a later accept or a new backfill waited for the nightly run. The
+ * events are rare (an accept, a settings change, a full re-score), so each gets its own key.
+ */
+export function shareRefreshKey(ownerId: string, now: Date, why = 'change'): string {
+  return `friends:refresh:${ownerId}:${why}:${now.getTime()}`;
+}
+
+/** Whether the owner has an active friend, the only case where their projection is read. */
+export async function hasActiveFriend(db: Db, ownerId: string): Promise<boolean> {
+  const [r] = await db.sql<{ ok: boolean }>`
+    select exists (select 1 from orbit.friendships f
+                    where f.status = 'active' and (f.a = ${ownerId}::uuid or f.b = ${ownerId}::uuid)) as ok`;
+  return !!r?.ok;
+}
+
 /** A friend who shares with the viewer, with what they share. */
 export interface SharingFriend {
   friendshipId: string;

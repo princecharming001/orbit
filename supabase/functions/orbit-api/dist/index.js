@@ -9387,6 +9387,9 @@ function underMode(rows, mode2, domains) {
     (r) => r.company_domain && want.has(r.company_domain.toLowerCase()) || r.company && names.has(normalizeCompany(r.company))
   );
 }
+function shareRefreshKey(ownerId, now, why = "change") {
+  return `friends:refresh:${ownerId}:${why}:${now.getTime()}`;
+}
 async function sharingFriends(db2, viewerId) {
   const rows = await db2.sql`
     select f.id as friendship_id, u.id as user_id, u.full_name, u.first_name, u.email, s.mode, s.company_domains
@@ -11452,7 +11455,12 @@ function defaultMode(u2) {
 async function enqueueRefresh(ctx, userIds) {
   const q = ctx.services().queue;
   for (const id of new Set(userIds))
-    await q.enqueue({ kind: "friend_shares_refresh", userId: id, payload: {}, dedupeKey: `friends:refresh:${id}` }).catch(() => void 0);
+    await q.enqueue({
+      kind: "friend_shares_refresh",
+      userId: id,
+      payload: {},
+      dedupeKey: shareRefreshKey(id, ctx.now())
+    }).catch(() => void 0);
 }
 async function logAudit(ctx, action, table, targetId, details) {
   await ctx.db.sql`

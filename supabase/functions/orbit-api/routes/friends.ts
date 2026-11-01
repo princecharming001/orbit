@@ -46,6 +46,7 @@ import {
   publicShare,
   type ShareRow,
   type SharingFriend,
+  shareRefreshKey,
   sharingFriends,
   underMode,
   visibleShares,
@@ -125,7 +126,12 @@ async function enqueueRefresh(ctx: Ctx, userIds: string[]) {
   const q = ctx.services().queue;
   for (const id of new Set(userIds))
     await q
-      .enqueue({ kind: 'friend_shares_refresh', userId: id, payload: {}, dedupeKey: `friends:refresh:${id}` })
+      .enqueue({
+        kind: 'friend_shares_refresh',
+        userId: id,
+        payload: {},
+        dedupeKey: shareRefreshKey(id, ctx.now()),
+      })
       .catch(() => undefined);
 }
 

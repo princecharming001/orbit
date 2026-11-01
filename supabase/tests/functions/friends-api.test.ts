@@ -1,5 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { refreshFriendShares } from '../../functions/_shared/friends/shares.ts';
+import { sqlQueue } from '../../functions/_shared/queue.ts';
 import { defaultHandlers } from '../../functions/orbit-worker/worker.ts';
 import { addPerson, addTie, api, fakeNet, signedInUser } from '../helpers/agents.ts';
 import { freshDb, type TestDb } from '../helpers/pglite.ts';
@@ -388,5 +389,38 @@ describe('friends over orbit-api', () => {
     expect(acc.body.friend.myMode).toBe('none');
     expect(await visible(a.userId, b.userId)).toBe(false);
     expect(await visible(b.userId, a.userId)).toBe(true);
+  });
+
+  it('a second change on the same day still refreshes the projection, and a full re-score refreshes it too', async () => {
+    const { call, ana } = await twoFriends();
+    const queued = async () => {
+      const rows = await t.db.sql<{ k: string }>`
+        select message ->> 'dedupeKey' as k from pgmq.q_orbit_score
+         where message ->> 'kind' = 'friend_shares_refresh' and message ->> 'userId' = ${ana.userId}`;
+      return rows.map((r) => r.k);
+    };
+    // the accept queued one; mark it run, the way the worker records it, and take it off the queue
+    const first = await queued();
+    expect(first.length).toBeGreaterThan(0);
+    for (const k of first)
+      await t.db.sql`
+        insert into orbit.job_runs (queue, user_id, kind, dedupe_key, status, finished_at)
+        values ('orbit_score', ${ana.userId}::uuid, 'friend_shares_refresh', ${k}, 'ok', now())`;
+    await t.db.sql`delete from pgmq.q_orbit_score where message ->> 'kind' = 'friend_shares_refresh'`;
+    // the same day, Ana narrows what she shares: a refresh is queued again, not dropped as already run
+    const set = await call('/friends/settings', ana.token, {
+      mode: 'companies',
+      companyDomains: ['stripe.com'],
+    });
+    expect(set.status).toBe(200);
+    expect((await queued()).length).toBe(1);
+    await t.db.sql`delete from pgmq.q_orbit_score where message ->> 'kind' = 'friend_shares_refresh'`;
+    // a full re-score (nightly, or after a backfill) queues one for a student with a friend
+    const handlers = defaultHandlers({});
+    await handlers['score.user']!(
+      { queue: 'orbit_score', msgId: 1, readCt: 1, kind: 'score.user', userId: ana.userId, payload: {} },
+      { db: t.db, queue: { ...sqlQueue(t.db), setVt: async () => undefined }, now: () => new Date() },
+    );
+    expect((await queued()).map((k) => k.split(':')[3])).toEqual(['score']);
   });
 });
