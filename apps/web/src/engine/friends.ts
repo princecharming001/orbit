@@ -207,8 +207,11 @@ export async function friendShares(user: Pick<User, 'id'>, friendUserId: string,
  * server drops their row the moment the flag lands. Local mode keeps the flag too, so it travels when an account comes.
  */
 export async function markPrivate(personId: string, on: boolean, now = new Date()): Promise<boolean> {
+  const person = await db.people.get(personId);
+  if (!person) return false;
   const n = await db.people.update(personId, { private: on || undefined, updatedAt: now.toISOString() });
-  if (n > 0) queueChange('people', personId);
+  // only an account has a server to tell; a local student's network never leaves this browser
+  if (n > 0 && isServerUser(person.userId)) queueChange('people', personId);
   return n > 0;
 }
 

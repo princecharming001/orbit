@@ -35,7 +35,11 @@ describe('friends in local mode', () => {
     setOrbitApiBaseForTests(null);
     user = await createLocalUser({ fullName: 'Alex Rivera', firstName: 'Alex' });
   });
-  afterEach(() => setOrbitApiBaseForTests(undefined));
+  afterEach(async () => {
+    // nothing may still be on its way to Dexie when the next test wipes it
+    await flushQueue().catch(() => undefined);
+    setOrbitApiBaseForTests(undefined);
+  });
 
   it('is an account feature: every call says so, and the words carry no dash or exclamation mark', async () => {
     expect(friendsAvailable(user)).toBe(false);
