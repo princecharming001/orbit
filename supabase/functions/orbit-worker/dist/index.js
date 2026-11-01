@@ -121,6 +121,10 @@ var TASKS = {
   extract_memory: { model: "claude-haiku-5-5", effort: "low", maxTokens: 1500 },
   extract_goal: { model: "claude-haiku-5-5", effort: "low", maxTokens: 1500 },
   judge: { model: "claude-sonnet-5-5", maxTokens: 2e3 },
+  // the drafting model reads the edits, once a night per student with new ones
+  voice_distill: { model: "claude-opus-5-5", effort: "low", maxTokens: 2e3 },
+  // the judge's model, for the few first messages autopilot would send on its own
+  voice_judge: { model: "claude-sonnet-5-5", maxTokens: 600 },
   // high effort: against the writing model as the reference it agreed on 14 of 16 claims (low effort: 8 of 16), for $0.003
   support: { model: "claude-haiku-5-5", effort: "high", maxTokens: 4e3 },
   research_extract: { model: "claude-haiku-5-5", effort: "low", maxTokens: 2e3 },
@@ -1325,10 +1329,10 @@ function createVillage(opts) {
   const secret = opts.secretKey ?? opts.apiKey;
   const base = trimBase(opts.baseUrl ?? VILLAGE_BASE);
   const clock = opts.clock ?? Date.now;
-  const tokens = /* @__PURE__ */ new Map();
+  const tokens2 = /* @__PURE__ */ new Map();
   async function token(user, fresh = false) {
     if (!secret) return unconfigured2("village", "secret key");
-    const hit = tokens.get(user.externalUserId);
+    const hit = tokens2.get(user.externalUserId);
     if (!fresh && hit && hit.until > clock()) return { ok: true, value: hit.token };
     const r = await requestJson(opts, {
       provider: "village",
@@ -1341,7 +1345,7 @@ function createVillage(opts) {
     if (!r.ok) return r;
     const now = clock();
     const expiresAt = r.value.expires_at ? r.value.expires_at * 1e3 : Number.POSITIVE_INFINITY;
-    tokens.set(user.externalUserId, {
+    tokens2.set(user.externalUserId, {
       token: r.value.token,
       until: Math.min(now + VILLAGE_TOKEN_TTL_MS, expiresAt - 6e4)
     });
@@ -1362,7 +1366,7 @@ function createVillage(opts) {
         onEmpty
       });
       if (!r.ok && r.status === 401 && attempt === 0) {
-        tokens.delete(user.externalUserId);
+        tokens2.delete(user.externalUserId);
         continue;
       }
       return r;
@@ -1522,10 +1526,10 @@ function makeServices(cfg, base) {
   const p = { fetch: doFetch, sleep: cfg.sleep, random: cfg.random, clock: () => now().getTime() };
   const env2 = cfg.env;
   const google = googleConfigOf(env2, doFetch, now);
-  let tokens = cfg.tokens;
-  if (!tokens && google) {
-    tokens = tokenSources.get(cfg) ?? googleTokenSource(google, { db: base.db, vault: sqlVault(base.db) });
-    tokenSources.set(cfg, tokens);
+  let tokens2 = cfg.tokens;
+  if (!tokens2 && google) {
+    tokens2 = tokenSources.get(cfg) ?? googleTokenSource(google, { db: base.db, vault: sqlVault(base.db) });
+    tokenSources.set(cfg, tokens2);
   }
   return {
     db: base.db,
@@ -1553,7 +1557,7 @@ function makeServices(cfg, base) {
     embed: cfg.embed ?? supabaseEmbed(),
     mailer: makeMailer(env2, doFetch),
     google,
-    tokens
+    tokens: tokens2
   };
 }
 function villageFor(cfg, make) {
@@ -1629,9 +1633,68 @@ var RECRUITER_TITLE = new RegExp(
   ].join("|"),
   "i"
 );
+var NOT_RECRUITER = /\b(?:chair(?:man|woman|person)?|ambassador|captain|rush|procurement|supply)\b/i;
+function isRecruiter(title) {
+  const t = title?.trim() ?? "";
+  return RECRUITER_TITLE.test(t) && !NOT_RECRUITER.test(t);
+}
+function yearLabel(gradYear, degree, now) {
+  const d = (degree ?? "").toUpperCase();
+  const grad = /\b(MBA|MS|MSC|MENG|MA|PHD|JD|MPA|MPP|MFIN)\b/.test(d);
+  if (/\bPHD\b|\bDPHIL\b|DOCTOR/.test(d)) return "PhD student";
+  const twoYear = /^(AA|AS|AAS|AAT|AST|AFA|A\.A\.?|A\.S\.?)$|\bASSOCIATE\b/.test(d.trim());
+  if (!gradYear) return grad ? `${d.includes("MBA") ? "MBA" : "graduate"} student` : "student";
+  const academicYear = now.getMonth() >= 7 ? now.getFullYear() + 1 : now.getFullYear();
+  const left = gradYear - academicYear;
+  if (twoYear) return left >= 1 ? "first-year" : "second-year";
+  if (grad) {
+    const program = d.includes("MBA") ? "MBA" : d.includes("PHD") ? "PhD" : "master's";
+    if (left >= 1) return `first-year ${program} student`;
+    return `second-year ${program} student`;
+  }
+  if (left <= 0) return "senior";
+  if (left === 1) return "junior";
+  if (left === 2) return "sophomore";
+  return "first-year";
+}
 function maxBumpsFor(sector, settingsMax) {
   const cap = sector === "finance" || sector === "consulting" ? 2 : 1;
   return Math.max(0, Math.min(settingsMax, cap));
+}
+var BANK_ORG = /\b(goldman|morgan stanley|jpmorgan|j\.p\. morgan|bank of america|bofa|citi|barclays|ubs|credit suisse|deutsche bank|evercore|lazard|moelis|pjt|centerview|jefferies|rbc|wells fargo|houlihan|guggenheim|perella|rothschild)\b/i;
+var PE_ORG = /\b(blackstone|kkr|apollo|carlyle|tpg|bain capital)\b/i;
+var TRADING_ORG = /\b(jane street|citadel|two sigma|de shaw|point72|millennium|bridgewater|jump trading|hudson river trading|optiver|susquehanna|drw|imc trading|tower research|akuna)\b/i;
+var VC_ORG = /\b(sequoia|a16z|andreessen|accel|benchmark|lightspeed venture|founders fund|greylock|kleiner|index ventures|general catalyst|ventures|venture partners)\b/i;
+function financeFirmKind(org) {
+  const o = org ?? "";
+  if (VC_ORG.test(o)) return "vc";
+  if (PE_ORG.test(o)) return "pe";
+  if (TRADING_ORG.test(o)) return "trading";
+  if (BANK_ORG.test(o)) return "bank";
+  return void 0;
+}
+var BIG_TECH_ORG = /\b(google|alphabet|meta|facebook|apple|amazon|aws|microsoft|netflix|nvidia|salesforce|adobe|oracle|ibm|intel|uber|airbnb|linkedin|tiktok|bytedance)\b/i;
+function firmKindOf(person, sector, userFunctions = []) {
+  const t = person.title ?? "";
+  if (ACADEMIC_TITLE.test(t)) return "academic";
+  const known = sector === "tech" ? void 0 : financeFirmKind(person.org);
+  if (known) return known;
+  if (/\b(quant\w*|trader|trading)\b/i.test(t)) return "trading";
+  if (/\b(venture|general partner)\b/i.test(t) || /\bventure/i.test(person.industry ?? "")) return "vc";
+  if (sector === "finance") {
+    if (/\bprivate equity\b/i.test(`${t} ${person.industry ?? ""}`)) return "pe";
+    const nothingKnown = !t.trim() && !(person.org ?? "").trim() && !(person.industry ?? "").trim();
+    if (nothingKnown && userFunctions[0] === "vc") return "vc";
+    return "bank";
+  }
+  if (sector === "consulting") return "consulting";
+  if (sector === "tech") {
+    if (BIG_TECH_ORG.test(person.org ?? "")) return "big_tech";
+    if (/\b(founder|co-founder|cofounder|founding|ceo|cto)\b/i.test(t) || /\bstartup\b/i.test(person.industry ?? ""))
+      return "startup";
+    return "tech";
+  }
+  return "other";
 }
 
 // packages/core/src/util/ids.ts
@@ -1886,8 +1949,64 @@ var NO_RESPONSE_AFTER_BUMPS_BUSINESS_DAYS = 10;
 var NO_RESPONSE_SILENT_DAYS = 21;
 var NO_RESPONSE_SILENT_BUSINESS_DAYS = 15;
 
-// packages/core/src/suggestions/rules.ts
+// packages/core/src/suggestions/pace.ts
 var DAY2 = 864e5;
+var dayNo = (key2) => Math.round(Date.parse(`${key2}T00:00:00Z`) / DAY2);
+var keyOf2 = (n) => new Date(n * DAY2).toISOString().slice(0, 10);
+var weekdayOf = (key2) => (/* @__PURE__ */ new Date(`${key2}T00:00:00Z`)).getUTCDay();
+function isSendingDay(key2, quietDays = []) {
+  return isBusinessDayKey(key2) && !quietDays.includes(weekdayOf(key2));
+}
+function weekKeys(now, tz) {
+  const today = dayNo(todayKey(now, tz));
+  const monday = today - (weekdayOf(keyOf2(today)) + 6) % 7;
+  return Array.from({ length: 7 }, (_, i) => keyOf2(monday + i));
+}
+function weekPace(i) {
+  const quiet = i.quietDays ?? [];
+  const todayK = todayKey(i.now, i.tz);
+  const startK = i.startedAt ? todayKey(new Date(i.startedAt), i.tz) : void 0;
+  const week = weekKeys(i.now, i.tz);
+  const sending = week.filter((k) => isSendingDay(k, quiet));
+  const counted = startK ? sending.filter((k) => k > startK) : sending;
+  const target = sending.length && counted.length < sending.length ? Math.ceil(i.target * counted.length / sending.length) : counted.length ? i.target : 0;
+  const sent = i.sentThisWeek;
+  const sentToday = Math.min(i.sentToday, sent);
+  const sentBefore = sent - sentToday;
+  const remaining = Math.max(0, target - sent);
+  const left = counted.filter((k) => k >= todayK);
+  const todayCounts = left[0] === todayK;
+  const before = counted.filter((k) => k < todayK).length;
+  const through = before + (todayCounts ? 1 : 0);
+  const share = (days) => counted.length ? target * days / counted.length : 0;
+  const expected = Math.round(share(through));
+  const even = todayCounts ? Math.ceil(Math.max(0, target - sentBefore) / left.length) : 0;
+  const today = Math.min(even, Math.max(0, i.dailyCap));
+  const leftToday = Math.min(Math.max(0, today - sentToday), remaining);
+  const slack = Math.max(1, target * 0.1);
+  const status = target > 0 && sent >= target ? "done" : startK === todayK ? "starting" : !todayCounts ? "resting" : share(before) - sentBefore >= slack ? "behind" : sent - expected >= slack ? "ahead" : "on_pace";
+  return {
+    target,
+    sent,
+    sentToday,
+    remaining,
+    workDays: counted.length,
+    daysLeft: left.length,
+    today,
+    leftToday,
+    expected,
+    status,
+    capped: even > today,
+    days: week.map((key2) => ({
+      key: key2,
+      counted: counted.includes(key2),
+      when: key2 < todayK ? "past" : key2 === todayK ? "today" : "future"
+    }))
+  };
+}
+
+// packages/core/src/suggestions/rules.ts
+var DAY3 = 864e5;
 var THANK_YOU_WINDOW_DAYS = 3;
 var BUMP_AFTER_BUSINESS_DAYS = { gmail: [5, 8], linkedin: [10, 12] };
 function bumpDue(chat, person, inp) {
@@ -1915,7 +2034,7 @@ function bumpDue(chat, person, inp) {
 function thankYouDue(chat, now) {
   if (!chat.completedAt) return false;
   const completed = new Date(chat.completedAt).getTime();
-  if (now.getTime() - completed >= THANK_YOU_WINDOW_DAYS * DAY2) return false;
+  if (now.getTime() - completed >= THANK_YOU_WINDOW_DAYS * DAY3) return false;
   if (chat.lastOutboundAt && new Date(chat.lastOutboundAt).getTime() > completed) return false;
   return true;
 }
@@ -1928,14 +2047,14 @@ var QUIET_DAY_KINDS = [
 ];
 
 // packages/core/src/pipeline/cadence.ts
-var DAY3 = 864e5;
+var DAY4 = 864e5;
 var QUIET_DAYS = 7;
 var WAITING_STAGES = ["outreach_sent", "replied", "scheduling"];
 function wentQuiet(chat, now = /* @__PURE__ */ new Date()) {
   if (!WAITING_STAGES.includes(chat.stage) || !chat.lastOutboundAt) return false;
   if (chat.lastInboundAt && chat.lastInboundAt >= chat.lastOutboundAt) return false;
   if (chat.stage !== "outreach_sent" && chat.stageEnteredAt > chat.lastOutboundAt) return false;
-  return now.getTime() - new Date(chat.lastOutboundAt).getTime() >= QUIET_DAYS * DAY3;
+  return now.getTime() - new Date(chat.lastOutboundAt).getTime() >= QUIET_DAYS * DAY4;
 }
 var SECOND_BUMP_GOALS = /* @__PURE__ */ new Set(["sales", "fundraising", "hiring"]);
 var SECOND_BUMP_AFTER_BUSINESS_DAYS = 7;
@@ -2049,7 +2168,7 @@ function cadenceActions(inp) {
       out.push({
         kind: "went_quiet",
         ...base,
-        reason: `No answer for ${Math.floor((now.getTime() - new Date(chat.lastOutboundAt).getTime()) / DAY3)} days`,
+        reason: `No answer for ${Math.floor((now.getTime() - new Date(chat.lastOutboundAt).getTime()) / DAY4)} days`,
         dueAt: now.toISOString()
       });
     if ((chat.stage === "completed" || chat.stage === "scheduled") && thankYouDue(chat, now) && !blocked(chat.personId))
@@ -2070,7 +2189,7 @@ function cadenceActions(inp) {
         dueAt: now.toISOString()
       });
   }
-  const weekAgo = now.getTime() - 7 * DAY3;
+  const weekAgo = now.getTime() - 7 * DAY4;
   const used = (inp.recentNurtureAt ?? []).filter((t) => new Date(t).getTime() > weekAgo).length;
   const left = Math.max(0, NURTURE_PER_WEEK - used);
   if (left > 0) {
@@ -2093,12 +2212,12 @@ function cadenceActions(inp) {
       const days = goal ? NURTURE_DAYS.goal : p.score >= 80 ? NURTURE_DAYS.close : p.score >= 60 ? NURTURE_DAYS.strong : 0;
       if (!days) continue;
       const last = p.lastContactAt ? new Date(p.lastContactAt).getTime() : Number.NEGATIVE_INFINITY;
-      if (now.getTime() - last < days * DAY3) continue;
+      if (now.getTime() - last < days * DAY4) continue;
       candidates.push({
         kind: "nurture",
         personId: id,
         ...goal ? { goalId: goal.id } : {},
-        draftKind: p.score >= 30 && now.getTime() - last >= 180 * DAY3 ? "reengage" : "nurture",
+        draftKind: p.score >= 30 && now.getTime() - last >= 180 * DAY4 ? "reengage" : "nurture",
         reason: p.nurtureReason,
         dueAt: due(id),
         score: p.score + (goal ? 100 : 0)
@@ -2127,9 +2246,9 @@ function cadenceActions(inp) {
 function stageTimer(chat, person, settings, now) {
   if (!ACTIVE_STAGES.includes(chat.stage)) return void 0;
   const entered = new Date(chat.stageEnteredAt).getTime();
-  if (chat.stage === "followed_up" && now.getTime() - entered >= 14 * DAY3)
+  if (chat.stage === "followed_up" && now.getTime() - entered >= 14 * DAY4)
     return decideTransition("followed_up", { type: "timer_followed_up_14d" });
-  if (chat.stage === "completed" && now.getTime() - entered >= 14 * DAY3)
+  if (chat.stage === "completed" && now.getTime() - entered >= 14 * DAY4)
     return decideTransition("completed", { type: "timer_completed_14d" });
   if (chat.stage !== "outreach_sent" || !chat.lastOutboundAt) return void 0;
   if (chat.lastInboundAt && chat.lastInboundAt > chat.lastOutboundAt) return void 0;
@@ -2144,7 +2263,7 @@ function stageTimer(chat, person, settings, now) {
     type: "timer_no_response",
     bumps: chat.bumpCount,
     maxBumps,
-    daysSilent: (now.getTime() - from.getTime()) / DAY3,
+    daysSilent: (now.getTime() - from.getTime()) / DAY4,
     businessDaysSilent: businessDaysBetween(from, now, settings.timezone)
   });
 }
@@ -2560,9 +2679,9 @@ function tokenize(text2) {
       const ish = Boolean(mm[5]);
       const rest = text2.slice(end);
       if (NOT_TIME_AFTER.test(rest)) continue;
-      const bare = !ap && !mm[2] && !ish;
-      if (bare && COUNT_RANGE_AFTER.test(rest)) continue;
-      if (bare && placeAfterNumber(text2, start, rest)) continue;
+      const bare2 = !ap && !mm[2] && !ish;
+      if (bare2 && COUNT_RANGE_AFTER.test(rest)) continue;
+      if (bare2 && placeAfterNumber(text2, start, rest)) continue;
       if (ap && (h < 1 || h > 12)) continue;
       if (!ap && !mm[2] && (h < 1 || h > 12)) continue;
       if (mm[2] && h > 23) continue;
@@ -3186,10 +3305,10 @@ function capitalizeToken(t, isFirst) {
   if (!isFirst && NAME_PARTICLES.has(lower)) return lower;
   return lower.replace(/(^|[-'’])(\p{L})/gu, (_, sep, c) => sep + c.toUpperCase());
 }
-function fixCase(tokens, offset = 0) {
-  const letters = tokens.join("");
+function fixCase(tokens2, offset = 0) {
+  const letters = tokens2.join("");
   const allUpper = letters === letters.toUpperCase() && letters !== letters.toLowerCase();
-  return tokens.map((t, i) => {
+  return tokens2.map((t, i) => {
     if (t === t.toLowerCase() && t !== t.toUpperCase()) return capitalizeToken(t, i + offset === 0);
     if (allUpper && t.length > 1) return capitalizeToken(t, i + offset === 0);
     return t;
@@ -3201,8 +3320,8 @@ function cleanTokens(s) {
     return !!k && !HONORIFICS.has(k) && !isCredentialToken(t, k) && !GENERATIONAL.has(k) && /\p{L}/u.test(t);
   });
 }
-function partsFromTokens(tokens) {
-  const fixed = fixCase(tokens);
+function partsFromTokens(tokens2) {
+  const fixed = fixCase(tokens2);
   const first = fixed[0] ?? "";
   let lastStart = fixed.length - 1;
   while (lastStart > 1 && NAME_PARTICLES.has(fixed[lastStart - 1].toLowerCase())) lastStart--;
@@ -3220,14 +3339,14 @@ function parseName(raw) {
   if (!raw) return { first: "", last: "", full: "", normalized: "" };
   const s = cleanRaw(raw);
   const parts = s.split(",").map((p) => p.trim()).filter((p) => p && !isTagPart(p));
-  let tokens;
+  let tokens2;
   if (parts.length >= 2) {
     const head = cleanTokens(parts[0]);
     const tail = cleanTokens(parts[1]);
     const headIsSurname = head.length === 1 || head.length > 1 && head.slice(0, -1).every((t) => NAME_PARTICLES.has(t.toLowerCase()));
-    tokens = headIsSurname && tail.length >= 1 && tail.length <= 2 ? [...tail, ...head] : head;
-  } else tokens = cleanTokens(parts[0] ?? "");
-  return partsFromTokens(tokens);
+    tokens2 = headIsSurname && tail.length >= 1 && tail.length <= 2 ? [...tail, ...head] : head;
+  } else tokens2 = cleanTokens(parts[0] ?? "");
+  return partsFromTokens(tokens2);
 }
 function nameFromParts(firstRaw, lastRaw) {
   const f = (firstRaw ?? "").trim();
@@ -3429,14 +3548,14 @@ function normalizeCompany(raw) {
   if (!raw) return "";
   let s = stripDiacritics(raw).toLowerCase().replace(/\([^)]*\)/g, " ");
   s = s.replace(/\band\b/g, "&").replace(/[^a-z0-9&\s]/g, " ").replace(/\s*&\s*/g, " & ");
-  const tokens = s.split(/\s+/).filter(Boolean);
-  while (tokens.length > 1 && LEGAL_SUFFIXES.has(tokens[tokens.length - 1])) tokens.pop();
-  if (tokens[0] === "the" && tokens.length > 1) tokens.shift();
-  const legal = tokens.join(" ");
+  const tokens2 = s.split(/\s+/).filter(Boolean);
+  while (tokens2.length > 1 && LEGAL_SUFFIXES.has(tokens2[tokens2.length - 1])) tokens2.pop();
+  if (tokens2[0] === "the" && tokens2.length > 1) tokens2.shift();
+  const legal = tokens2.join(" ");
   if (ORG_ALIASES[legal]) return ORG_ALIASES[legal];
-  while (tokens.length > 1 && (GENERIC_ORG_TAIL.has(tokens[tokens.length - 1]) || LEGAL_SUFFIXES.has(tokens[tokens.length - 1])))
-    tokens.pop();
-  const core = tokens.join(" ");
+  while (tokens2.length > 1 && (GENERIC_ORG_TAIL.has(tokens2[tokens2.length - 1]) || LEGAL_SUFFIXES.has(tokens2[tokens2.length - 1])))
+    tokens2.pop();
+  const core = tokens2.join(" ");
   return ORG_ALIASES[core] ?? (core.replace(/[\s&]/g, "") ? core : legal);
 }
 
@@ -3449,8 +3568,8 @@ function isRoleName(displayName) {
   return Boolean(displayName) && ROLE_NAME.test(displayName);
 }
 function isRoleLocalPart(local) {
-  const tokens = local.toLowerCase().split(/[._+-]+/).filter(Boolean);
-  return tokens.length > 0 && tokens.every((t) => ROLE_TOKEN.test(t));
+  const tokens2 = local.toLowerCase().split(/[._+-]+/).filter(Boolean);
+  return tokens2.length > 0 && tokens2.every((t) => ROLE_TOKEN.test(t));
 }
 var NOTIFICATION_DOMAINS = /* @__PURE__ */ new Set([
   "facebookmail.com",
@@ -3788,8 +3907,8 @@ function htmlToText(html) {
       const text2 = decodeEntities(inner.replace(/<[^>]+>/g, "")).trim();
       const url = decodeEntities(href.trim());
       if (!/^https?:\/\//i.test(url)) return text2 || url.replace(/^mailto:/i, "");
-      const bare = (u2) => u2.replace(/^https?:\/\/(www\.)?/i, "").replace(/\/$/, "");
-      if (!text2 || bare(text2) === bare(url)) return url;
+      const bare2 = (u2) => u2.replace(/^https?:\/\/(www\.)?/i, "").replace(/\/$/, "");
+      if (!text2 || bare2(text2) === bare2(url)) return url;
       return `${text2} (${url})`;
     }
   );
@@ -4002,6 +4121,9 @@ ${firstName}`],
     exclamationsPerMessage: 0.6,
     notes: "Warm preset."
   };
+}
+function personalStyle(card) {
+  return card.builtFromCount > 0 || !!card.custom;
 }
 var STYLE_MIN_SAMPLES = 3;
 var GREETING2 = /^(hi|hey|hello|dear|good (morning|afternoon|evening))\b[^,!\n]*[,!]?/i;
@@ -4494,7 +4616,7 @@ function placeholderIn(body) {
 }
 function unsupportedDetails(body, context) {
   const ctx = context.toLowerCase();
-  const has = (w) => {
+  const has2 = (w) => {
     const l = w.toLowerCase();
     return new RegExp(`(^|[^a-z0-9])${l.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}([^a-z0-9]|$)`).test(ctx);
   };
@@ -4506,12 +4628,12 @@ function unsupportedDetails(body, context) {
     if (/[A-Za-z0-9'@./-]$/.test(before)) continue;
     const sentenceStart = /(^|[.!?:;"]\s+|\n\s*|\(\s*)$/.test(before);
     const phrase = m[0].replace(/'s$/, "").replace(/[.'-]+$/, "");
-    if (!phrase || has(phrase)) continue;
+    if (!phrase || has2(phrase)) continue;
     const words4 = phrase.split(/\s+/);
     const unknown = words4.filter((w, i) => {
-      const bare = w.replace(/'s$/, "").replace(/[.'-]+$/, "");
-      if (!bare || COMMON_CAPS.has(bare.toLowerCase()) || has(bare)) return false;
-      if (i === 0 && sentenceStart && words4.length === 1 && /^[A-Z][a-z]+$/.test(bare)) return false;
+      const bare2 = w.replace(/'s$/, "").replace(/[.'-]+$/, "");
+      if (!bare2 || COMMON_CAPS.has(bare2.toLowerCase()) || has2(bare2)) return false;
+      if (i === 0 && sentenceStart && words4.length === 1 && /^[A-Z][a-z]+$/.test(bare2)) return false;
       return true;
     });
     if (unknown.length) out.push(phrase);
@@ -5078,11 +5200,11 @@ var WEAK_CONFIRM = /\blooking forward to (speaking|chatting|our (call|chat|conve
 var FIND_TIME = /\b(find|set up|schedule|pick|figure out|nail down|sort out|book) (a|some|the|a good) (time|slot|date)\b|\bhelp (us )?(find|schedule|set up|coordinate|book)\b/i;
 var SCHED_CUE = /\b(does .{1,40} work|free (on|at|this|next)|available (on|at|this|next)|(do you have|are you|would you be|is there) (anything|any ?time|time|a (slot|window)|something|an opening|free|available|around|open)( free| open| available)?( on| later| earlier)?( this| next)? ((mon|tues|wednes|thurs|fri|satur|sun)day|tomorrow)|here are (a few|some) times|my availability|pick a (time|slot)|grab (a|any) (time|slot)|calendly|cal\.com|booking link|how about|what about (mon|tue|wed|thu|fri)|would (any of )?(these|those|the following) (times )?work)\b/i;
 var SCHEDULING_QUESTION = /\b(does|do|would|will|could|can|might) [^?]{0,40}\b(work|suit)( for (you|u))?\s*\?|\b(free|available|open) (on|at|this|next|then|that|[a-z]+day)\b|\bwhat (time|day)s?\b|\bwhich (time|day|slot)s?\b|\bhow about\b|\bwhat about\b|\byour (schedule|calendar|availability)\b|\bwhen (works|is good|is best|are you free)\b/i;
-var DAY4 = /\b((mon|tues|wednes|thurs|fri|satur|sun)day|tomorrow)\b/i;
+var DAY5 = /\b((mon|tues|wednes|thurs|fri|satur|sun)day|tomorrow)\b/i;
 var DAY_NOT_OFFERED = /\b(not|no|never|can'?t|cannot|won'?t|don'?t|doesn'?t|isn'?t|out|busy|booked|slammed|was|were|did|had|last|still|what|which)\b/i;
 function offersDay(sentences3) {
   return sentences3.some(
-    (s) => s.question && s.text.split(/[,;:]|\s[-–—]+\s|[–—]|\b(?=but\b)/).some((c) => DAY4.test(c) && !DAY_NOT_OFFERED.test(c))
+    (s) => s.question && s.text.split(/[,;:]|\s[-–—]+\s|[–—]|\b(?=but\b)/).some((c) => DAY5.test(c) && !DAY_NOT_OFFERED.test(c))
   );
 }
 var CHECK_QUESTION = /^(still (useful|helpful|interested)|make sense|sound good|sounds good|ok|okay|right|deal)\?$/i;
@@ -5115,7 +5237,7 @@ function followUpDate(text2, reference, timeZone) {
 function laterDate(text2, today) {
   const t = text2.toLowerCase();
   const [y, m] = today.split("-").map(Number);
-  const firstOf = (year, month2) => {
+  const firstOf2 = (year, month2) => {
     const yy = year + Math.floor((month2 - 1) / 12);
     const mm = (month2 - 1) % 12 + 1;
     return `${yy}-${String(mm).padStart(2, "0")}-01`;
@@ -5125,17 +5247,17 @@ function laterDate(text2, today) {
     d.setUTCDate(d.getUTCDate() + n);
     return d.toISOString().slice(0, 10);
   };
-  const ahead = (mo) => firstOf(mo > m ? y : y + 1, mo);
+  const ahead = (mo) => firstOf2(mo > m ? y : y + 1, mo);
   const cue = "(?:in|after|around|by|until|come|early|mid|late|later in|sometime in|next)\\s+(?:the\\s+)?(?:early\\s+|mid[- ]?|late\\s+)?";
   const month = new RegExp(`${cue}(${MONTH_NAMES.join("|")})\\b`).exec(t);
   if (month) return ahead(MONTH_NAMES.indexOf(month[1]) + 1);
-  if (/\b(new year|after the (holidays|break)|next year)\b/.test(t)) return firstOf(y + 1, 1);
+  if (/\b(new year|after the (holidays|break)|next year)\b/.test(t)) return firstOf2(y + 1, 1);
   const quarter = /\b(after\s+|end of\s+)?q([1-4])\b/.exec(t);
   if (quarter) return ahead(quarter[1] ? 3 * Number(quarter[2]) + 1 : 3 * Number(quarter[2]) - 2);
   const season = new RegExp(`${cue}(spring|summer|fall|autumn|winter)\\b`).exec(t);
   if (season) return ahead(SEASON_MONTH[season[1]]);
-  if (/\bnext (month|semester)\b/.test(t)) return firstOf(y, m + 1);
-  if (/\bnext quarter\b|\b(a few|a couple( of)?|couple|few) months\b/.test(t)) return firstOf(y, m + 3);
+  if (/\bnext (month|semester)\b/.test(t)) return firstOf2(y, m + 1);
+  if (/\bnext quarter\b|\b(a few|a couple( of)?|couple|few) months\b/.test(t)) return firstOf2(y, m + 3);
   if (/\b(a few|a couple( of)?|couple|few|several) weeks\b/.test(t)) return after(21);
   if (/\bnext week\b/.test(t)) return after(7);
   return void 0;
@@ -5472,6 +5594,8 @@ var SEND_CAPS = {
   linkedinInvitesPerWeek: 60
 };
 var AUTO_KINDS = ["bump", "thank_you", "schedule"];
+var AUTO_FIRST_TOUCH_RUNG = 20;
+var REVIEW_WINDOW_HOURS = 8;
 var AUTO_SEND_DAILY_CAP = SEND_CAPS.autoPerDay;
 var AUTO_SEND_MIN_SCORE = 40;
 var REPLY_AUTO_WITHOUT_QUESTION = /* @__PURE__ */ new Set(["interested", "thanks"]);
@@ -5628,6 +5752,594 @@ function chatFromRow(r) {
     createdAt: r.created_at,
     updatedAt: r.updated_at
   });
+}
+
+// packages/core/src/safety/firstTouch.ts
+var AUTO_FIRST_TOUCH_KINDS = [
+  "outreach",
+  "first_touch",
+  "warm_first_touch"
+];
+function isFirstTouchKind(kind) {
+  return !!kind && AUTO_FIRST_TOUCH_KINDS.includes(kind);
+}
+function firstTouchRung(approvals) {
+  const n = approvals.filter((a) => isFirstTouchKind(a.kind) && !a.edited && !a.auto).length;
+  return {
+    unchanged: Math.min(n, AUTO_FIRST_TOUCH_RUNG),
+    needed: AUTO_FIRST_TOUCH_RUNG,
+    earned: n >= AUTO_FIRST_TOUCH_RUNG
+  };
+}
+var HOUR = 36e5;
+function reviewWindow(sendAt) {
+  const at = typeof sendAt === "string" ? new Date(sendAt) : sendAt;
+  return {
+    sendAt: at.toISOString(),
+    reviewUntil: at.toISOString(),
+    reviewOpensAt: new Date(at.getTime() - REVIEW_WINDOW_HOURS * HOUR).toISOString()
+  };
+}
+function earliestPlannedSend(now) {
+  return new Date(now.getTime() + REVIEW_WINDOW_HOURS * HOUR);
+}
+function firmKey(company) {
+  return normalizeCompany(company ?? "");
+}
+function isFaculty(c) {
+  return ACADEMIC_TITLE.test(`${c.title ?? ""} ${c.headline ?? ""}`);
+}
+function closeEnough(c) {
+  return !!c.isAlumni || c.score >= AUTO_SEND_MIN_SCORE || !!c.viaFriend;
+}
+function firstTouchRoute(c) {
+  const own = !!c.isAlumni || c.score >= AUTO_SEND_MIN_SCORE;
+  return own && c.hasEmail ? "direct" : c.viaFriend ? "friend" : "direct";
+}
+function firstTouchBlock(c, goal) {
+  if (c.doNotContact) return "do_not_contact";
+  if (c.hidden) return "hidden";
+  if (c.private) return "private";
+  if (looksLikeMinor({ isMinor: c.isMinor, title: c.title ?? void 0, headline: c.headline ?? void 0 }))
+    return "minor";
+  if (c.written) return "already_written";
+  if (c.openChat) return "open_chat";
+  if (c.pending) return "pending";
+  if (isRecruiter(c.title ?? void 0) || isRecruiter(c.headline ?? void 0)) return "recruiter";
+  if (isFaculty(c) && goal.kind !== "collaboration") return "faculty";
+  const firm = firmKey(c.company);
+  if (!firm || !goal.targets.some((t) => firmKey(t) === firm)) return "not_target_company";
+  if (!closeEnough(c)) return "not_close";
+  if (firstTouchRoute(c) === "direct") {
+    if (!c.hasEmail) return "no_email";
+    if (!c.hasHook) return "no_hook";
+  }
+  return void 0;
+}
+var firstOf = (name) => name.trim().split(/\s+/)[0] || name;
+function skipReason(rule, c, ctx = {}) {
+  const f = firstOf(c.name);
+  const at = c.company ? ` at ${c.company}` : "";
+  switch (rule) {
+    case "do_not_contact":
+      return `${f} asked not to be contacted, so Orbit never writes to them.`;
+    case "hidden":
+      return `You hid ${f}, so Orbit leaves them out.`;
+    case "private":
+      return `You marked ${f} private, so autopilot leaves them to you.`;
+    case "minor":
+      return `${f} looks to be under 18, so Orbit never writes to them.`;
+    case "already_written":
+      return `You have written to ${f} before. Autopilot only sends first messages; the follow ups are bumps.`;
+    case "open_chat":
+      return `You are already talking with ${f}, so there is no first message to send.`;
+    case "pending":
+      return `A first message to ${f} is already drafted or waiting in the batch.`;
+    case "recruiter":
+      return `${f} is a recruiter${at}. Autopilot never writes a first message to a recruiter; that one is yours to send.`;
+    case "faculty":
+      return `${f} is faculty. Autopilot writes to faculty only for a research goal.`;
+    case "not_target_company":
+      return c.company ? `${f} is at ${c.company}, which is not one of the companies on your goals.` : `Orbit does not know where ${f} works, so it cannot tell they are at a company on your goals.`;
+    case "not_close":
+      return `${f} is not an alum, not someone you know well (closeness ${AUTO_SEND_MIN_SCORE} or more) and not a friend's contact, so a first message to them is yours to send.`;
+    case "no_email":
+      return `Orbit has no email address for ${f}, and autopilot sends by email only.`;
+    case "no_hook":
+      return `Orbit has nothing researched about ${f} to open with yet, and a first message on its own needs one.`;
+    case "target_met":
+      return `This week's target is met, so ${f} waits for next week.`;
+    case "paced":
+      return `That morning's share of your weekly target is already planned, so ${f} moves to the next day.`;
+    case "weekly_cap":
+      return `Autopilot already has ${SEND_CAPS.autoFirstTouchesPerWeek} first messages this week, its weekly limit, so ${f} waits for next week.`;
+    case "daily_cap":
+      return `Autopilot already has ${SEND_CAPS.autoFirstTouchesPerDay} first messages for that morning, its daily limit, so ${f} moves to the next day.`;
+    case "same_firm_today":
+      return `${ctx.other ?? "Someone else"}${at} gets a first message that morning, and autopilot never writes to two people at one firm on the same day, so ${f} moves to the next day.`;
+  }
+}
+function planFirstTouchDay(i) {
+  const quota = Math.max(
+    0,
+    Math.min(
+      SEND_CAPS.autoFirstTouchesPerDay - i.onDay,
+      SEND_CAPS.autoFirstTouchesPerWeek - i.thisWeek,
+      i.remaining > 0 ? Math.ceil(i.remaining / Math.max(1, i.daysLeft)) : 0
+    )
+  );
+  const order = (c) => (c.isAlumni ? 200 : 0) + (firstTouchRoute(c) === "direct" ? 100 : 0) + c.score;
+  const sorted = [...i.candidates].sort((a, b) => order(b) - order(a) || a.name.localeCompare(b.name));
+  const firms = new Map(i.firmsOnDay.map((f) => [f.firm, f.name]));
+  const picks = [];
+  const skipped = [];
+  const skip = (c, rule, other) => skipped.push({
+    personId: c.personId,
+    name: c.name,
+    company: c.company ?? null,
+    rule,
+    reason: skipReason(rule, c, { other })
+  });
+  for (const c of sorted) {
+    const block2 = firstTouchBlock(c, i.goal);
+    if (block2) {
+      skip(c, block2);
+      continue;
+    }
+    if (picks.length >= quota) {
+      skip(
+        c,
+        i.remaining <= picks.length ? "target_met" : i.thisWeek + picks.length >= SEND_CAPS.autoFirstTouchesPerWeek ? "weekly_cap" : i.onDay + picks.length >= SEND_CAPS.autoFirstTouchesPerDay ? "daily_cap" : "paced"
+      );
+      continue;
+    }
+    const firm = firmKey(c.company);
+    const other = firms.get(firm);
+    if (other !== void 0) {
+      skip(c, "same_firm_today", other);
+      continue;
+    }
+    firms.set(firm, c.name);
+    picks.push({ candidate: c, route: firstTouchRoute(c) });
+  }
+  return { picks, skipped, quota };
+}
+
+// packages/core/src/style/voice.ts
+var VOICE_NOTES_MAX = 8;
+var VOICE_EDITS_FOR_DISTILL = 30;
+var VOICE_JUDGE_MIN = 2;
+var VOICE_HOLD_REASON = "didn't sound like you";
+var FORGOTTEN_KEEP = 100;
+var firstLine = (s) => (s.split("\n")[0] ?? "").trim();
+function greetingWords(pattern) {
+  const p = pattern.replace(/[,.:]\s*$/, "").trim();
+  if (/^\{first\}$/.test(p)) return "their first name alone";
+  return p.replace(/\s*\{first\}\s*/g, " ").trim() || "their first name";
+}
+function signoffWords(s) {
+  return firstLine(s).replace(/[,.:]\s*$/, "").trim();
+}
+var listWords = (xs) => xs.length <= 1 ? xs[0] ?? "" : `${xs.slice(0, -1).join(", ")} and ${xs[xs.length - 1]}`;
+function cardProse(card) {
+  const out = [];
+  const greet = [...new Set(card.greetingPatterns.map(greetingWords).filter(Boolean))].slice(0, 2);
+  const sign = [...new Set(card.signoffs.map(signoffWords).filter(Boolean))].slice(0, 2);
+  const g = greet.length ? `You greet with ${greet.join(" or ")}` : "";
+  const s = sign.length ? `sign off with ${sign.join(" or ")}` : "";
+  if (g && s) out.push(`${g} and ${s}.`);
+  else if (g) out.push(`${g}.`);
+  else if (s) out.push(`You ${s}.`);
+  const words4 = Math.round(card.avgMessageWords);
+  const length = words4 <= 70 ? "short" : words4 <= 130 ? "at medium length" : "long";
+  const marks = card.exclamationsPerMessage <= 0.05 ? "no exclamation marks" : card.exclamationsPerMessage < 0.5 ? "an exclamation mark now and then" : "exclamation marks often";
+  const parts = [
+    card.contractions ? "contractions" : "no contractions",
+    marks,
+    ...card.emoji ? ["the odd emoji"] : []
+  ];
+  out.push(`You write ${length}, about ${words4} words, with ${listWords(parts)}.`);
+  out.push(`Your sentences run about ${Math.round(card.avgSentenceWords)} words.`);
+  if (card.characteristicPhrases.length)
+    out.push(`Phrases of yours: ${listWords(card.characteristicPhrases.slice(0, 5).map((p) => `'${p}'`))}.`);
+  if (card.avoid.length) out.push(`You never say ${listWords(card.avoid.slice(0, 6).map((p) => `'${p}'`))}.`);
+  if (card.custom && card.notes.trim()) out.push(`Your notes for Orbit: ${card.notes.trim()}`);
+  out.push(
+    card.builtFromCount > 0 ? `Learned from ${card.builtFromCount} messages you wrote.` : card.custom ? "Set by you." : "This is a starting style; Orbit has not learned from your messages yet."
+  );
+  return out.map(plainText);
+}
+function plainText(s) {
+  return s.replace(/\s*[–—]\s*/g, ", ").replace(/!+/g, ".").replace(/\.\./g, ".").replace(/\s{2,}/g, " ").trim();
+}
+function normaliseNoteText(t) {
+  return t.toLowerCase().replace(/[‘’“”'"`]/g, "").replace(/[^a-z0-9]+/g, " ").replace(/^(you|your)\s+/, "").trim();
+}
+var QUOTED = /(?:^|[\s(:])['"‘“]([^'"‘’“”\n]{2,80}?)['"’”](?=$|[\s.,;:?)])/g;
+var NEGATIVE = /\b(cut|cuts|drop|drops|delete|deletes|remove|removes|never|avoid|avoids|stop|skip|skips|strike|take out|takes out|don'?t|do not|change|changes|swap|swaps|replace|replaces)\b/i;
+function quotedPhrases(text2) {
+  return [...text2.matchAll(QUOTED)].map((m) => m[1].trim()).filter((p) => p.length >= 2);
+}
+function avoidOf(note2) {
+  const own = note2.avoid?.trim();
+  if (own) return own;
+  if (!NEGATIVE.test(note2.text)) return void 0;
+  return quotedPhrases(note2.text)[0];
+}
+function activeVoiceNotes(notes) {
+  return (notes ?? []).filter((n) => !n.forgottenAt);
+}
+function withVoiceNotes(card, notes) {
+  const live = activeVoiceNotes(notes);
+  if (!live.length) return card;
+  const lines = live.map((n) => n.text.trim().replace(/[.]$/, "")).filter(Boolean);
+  const avoid = [...card.avoid];
+  const seen = new Set(avoid.map((a) => a.toLowerCase()));
+  for (const n of live) {
+    const a = avoidOf(n);
+    if (a && !seen.has(a.toLowerCase())) {
+      seen.add(a.toLowerCase());
+      avoid.push(a);
+    }
+  }
+  const learned = `What Orbit learned from your edits: ${lines.join("; ")}.`;
+  return { ...card, avoid, notes: card.notes.trim() ? `${card.notes.trim()}
+${learned}` : learned };
+}
+function cleanNoteText(t) {
+  const one = plainText(t.replace(/\s+/g, " "));
+  return one.length > 160 ? `${one.slice(0, 157).replace(/\s+\S*$/, "")}...` : one;
+}
+function mergeVoiceNotes(current, learned, opts) {
+  const all = (current ?? []).map((n) => ({ ...n, evidence: [...n.evidence ?? []] }));
+  const forgotten = all.filter((n) => n.forgottenAt);
+  const gone = new Set(forgotten.map((n) => normaliseNoteText(n.text)));
+  const goneAvoid = new Set(
+    forgotten.map((n) => avoidOf(n)).filter((a) => !!a).map(normaliseNoteText)
+  );
+  const at = opts.now.toISOString();
+  const added = [];
+  const touched = /* @__PURE__ */ new Set();
+  for (const l of learned) {
+    const text2 = cleanNoteText(l.text);
+    if (!text2) continue;
+    const key2 = normaliseNoteText(text2);
+    const avoid = l.avoid?.trim() ? l.avoid.trim().slice(0, 80) : null;
+    if (!key2 || gone.has(key2) || avoid && goneAvoid.has(normaliseNoteText(avoid))) continue;
+    const same = all.find(
+      (n) => !n.forgottenAt && (normaliseNoteText(n.text) === key2 || !!avoid && normaliseNoteText(avoidOf(n) ?? "") === normaliseNoteText(avoid))
+    );
+    if (same) {
+      same.evidence = [.../* @__PURE__ */ new Set([...same.evidence, ...l.evidence])].slice(-30);
+      touched.add(same.id);
+      continue;
+    }
+    const note2 = {
+      id: opts.newId(),
+      text: text2,
+      ...avoid ? { avoid } : {},
+      evidence: [...new Set(l.evidence)].slice(-30),
+      createdAt: at,
+      keptAt: null,
+      forgottenAt: null
+    };
+    all.push(note2);
+    added.push(note2);
+    touched.add(note2.id);
+  }
+  const live = all.filter((n) => !n.forgottenAt);
+  const rank2 = (n) => n.keptAt ? 0 : touched.has(n.id) ? 1 : 2;
+  const keep = new Set(
+    [...live].sort((a, b) => rank2(a) - rank2(b) || b.createdAt.localeCompare(a.createdAt)).slice(0, VOICE_NOTES_MAX).map((n) => n.id)
+  );
+  const kept = forgotten.sort((a, b) => String(b.forgottenAt).localeCompare(String(a.forgottenAt))).slice(0, FORGOTTEN_KEEP);
+  const notes = [...live.filter((n) => keep.has(n.id)), ...kept];
+  return { notes, added: added.filter((n) => keep.has(n.id)) };
+}
+var MAX_TOKENS = 400;
+var tokens = (s) => s.split(/\s+/).filter(Boolean);
+var bare = (w) => w.toLowerCase().replace(/^[^a-z0-9']+|[^a-z0-9']+$/g, "");
+function align(a, b, key2) {
+  const A = a.map(key2);
+  const B = b.map(key2);
+  const n = a.length;
+  const m = b.length;
+  const L = Array.from({ length: n + 1 }, () => new Uint16Array(m + 1));
+  for (let i2 = n - 1; i2 >= 0; i2--)
+    for (let j2 = m - 1; j2 >= 0; j2--)
+      L[i2][j2] = A[i2] === B[j2] ? L[i2 + 1][j2 + 1] + 1 : Math.max(L[i2 + 1][j2], L[i2][j2 + 1]);
+  const out = [];
+  let cur = { del: [], ins: [] };
+  const flush = () => {
+    if (cur.del.length || cur.ins.length) out.push(cur);
+    cur = { del: [], ins: [] };
+  };
+  let i = 0;
+  let j = 0;
+  while (i < n || j < m) {
+    if (i < n && j < m && A[i] === B[j]) {
+      flush();
+      i++;
+      j++;
+    } else if (j < m && (i >= n || L[i][j + 1] >= L[i + 1][j])) cur.ins.push(b[j++]);
+    else cur.del.push(a[i++]);
+  }
+  flush();
+  return out;
+}
+var unitsOf = (s) => s.split("\n").flatMap((l) => l.trim().split(/(?<=[.?!])\s+/)).map((u2) => u2.trim()).filter(Boolean);
+var unitKey = (u2) => tokens(u2).map(bare).join(" ");
+function hunksOf(before, after) {
+  const a = unitsOf(before);
+  const b = unitsOf(after);
+  if (tokens(before).length > MAX_TOKENS || tokens(after).length > MAX_TOKENS || a.length > 80 || b.length > 80)
+    return void 0;
+  const out = [];
+  const similar = (x, y) => {
+    const xw = tokens(x).map(bare);
+    const yw = tokens(y).map(bare);
+    const shared = xw.filter((w) => yw.includes(w)).length;
+    return shared / Math.max(xw.length, yw.length, 1);
+  };
+  for (const h of align(a, b, unitKey)) {
+    const dels = h.del.map((u2) => ({ u: u2, used: false }));
+    const ins = [];
+    for (const i of h.ins) {
+      let best;
+      let score = 0.5;
+      for (const d of dels)
+        if (!d.used && similar(d.u, i) >= score) {
+          best = d;
+          score = similar(d.u, i);
+        }
+      if (best) {
+        best.used = true;
+        for (const w of align(tokens(best.u), tokens(i), bare)) out.push(w);
+      } else ins.push(i);
+    }
+    const left = dels.filter((d) => !d.used).map((d) => d.u);
+    while (left.length && ins.length && wordCount(left[left.length - 1]) <= 6 && wordCount(ins[ins.length - 1]) <= 6)
+      out.push({ del: tokens(left.pop()), ins: tokens(ins.pop()) });
+    for (const d of left) out.push({ del: tokens(d), ins: [] });
+    for (const i of ins) out.push({ del: [], ins: tokens(i) });
+  }
+  return out;
+}
+var GLUE = new Set(
+  "a an the and or but so to of in on at for with from by is am are was be it its this that i me my you your we just very".split(
+    " "
+  )
+);
+var phraseOf = (ws) => ws.join(" ").replace(/^[^A-Za-z0-9']+|[^A-Za-z0-9')]+$/g, "").trim();
+var meaningful = (ws) => ws.map(bare).some((w) => w.length >= 4 && !GLUE.has(w)) || ws.length >= 2 && ws.some((w) => !GLUE.has(bare(w)));
+var avoidable = (p) => wordCount(p) >= 2 ? p : null;
+function editObservations(edits, max = VOICE_NOTES_MAX) {
+  const cuts = /* @__PURE__ */ new Map();
+  const swaps = /* @__PURE__ */ new Map();
+  for (const e of edits) {
+    const hunks = hunksOf(e.before, e.after);
+    if (!hunks) continue;
+    for (const h of hunks) {
+      if (h.del.length && !h.ins.length && h.del.length <= 12 && meaningful(h.del)) {
+        const phrase = phraseOf(h.del);
+        const key2 = normaliseNoteText(phrase);
+        if (!key2) continue;
+        const c = cuts.get(key2) ?? { phrase, ids: /* @__PURE__ */ new Set() };
+        c.ids.add(e.id);
+        cuts.set(key2, c);
+      } else if (h.del.length && h.ins.length && h.del.length <= 6 && h.ins.length <= 6) {
+        const from = phraseOf(h.del);
+        const to = phraseOf(h.ins);
+        const key2 = `${normaliseNoteText(from)}>${normaliseNoteText(to)}`;
+        if (!normaliseNoteText(from) || !normaliseNoteText(to) || !meaningful([...h.del, ...h.ins])) continue;
+        const s = swaps.get(key2) ?? { from, to, ids: /* @__PURE__ */ new Set() };
+        s.ids.add(e.id);
+        swaps.set(key2, s);
+      }
+    }
+  }
+  const floor = edits.length >= 2 ? 2 : 1;
+  const found = [
+    ...[...cuts.values()].map((c) => ({
+      key: normaliseNoteText(c.phrase),
+      n: c.ids.size,
+      note: {
+        text: `You cut '${c.phrase}' in ${c.ids.size} ${c.ids.size === 1 ? "edit" : "edits"}`,
+        avoid: avoidable(c.phrase),
+        evidence: [...c.ids]
+      }
+    })),
+    ...[...swaps.values()].map((s) => ({
+      key: normaliseNoteText(s.from),
+      n: s.ids.size,
+      note: {
+        text: `You change '${s.from}' to '${s.to}' (${s.ids.size} ${s.ids.size === 1 ? "edit" : "edits"})`,
+        avoid: avoidable(s.from),
+        evidence: [...s.ids]
+      }
+    }))
+  ].filter((f) => f.n >= floor);
+  const kept = found.filter(
+    (f) => !found.some((g) => g !== f && g.n >= f.n && g.key.length > f.key.length && g.key.includes(f.key))
+  );
+  return kept.sort((a, b) => b.n - a.n || b.key.length - a.key.length).slice(0, max).map((f) => f.note);
+}
+var GREETING_RE = /^(hi|hey|hello|dear|good (?:morning|afternoon|evening)|greetings|hiya|yo)\b/i;
+var SIGNOFF_RE = /^(best|thanks|thank you|cheers|regards|warmly|all the best|talk soon|sincerely|take care|thanks so much|many thanks|best regards|kind regards|warm regards|thanks again|appreciate it|thank you so much|best wishes|warm wishes|with thanks|gratefully)[,!.]?$/i;
+function greetingFamily(line) {
+  const t = line.trim();
+  const m = t.match(GREETING_RE);
+  if (m) return m[1].toLowerCase().replace(/^good .*/, "good");
+  if (/^\{first\},?$/.test(t) || /^[A-Z][a-z]+(?:\s[A-Z][a-z]+)?,$/.test(t)) return "name";
+  return void 0;
+}
+function signoffFamily(line) {
+  const t = line.trim().replace(/[,!.]$/, "").toLowerCase();
+  if (!SIGNOFF_RE.test(line.trim())) return void 0;
+  if (/^(thank|many thanks|with thanks|appreciate|gratefully)/.test(t)) return "thanks";
+  if (/regards|sincerely|warmly|warm wishes|best wishes/.test(t)) return "regards";
+  if (/^(best|all the best)$/.test(t)) return "best";
+  return t;
+}
+var linesOf = (body) => body.split("\n").map((l) => l.trim()).filter(Boolean);
+function signoffAt(lines) {
+  for (let i = lines.length - 1; i >= Math.max(0, lines.length - 4); i--)
+    if (signoffFamily(lines[i])) return i;
+  return -1;
+}
+var CONTRACTION = /\b[a-z]+'(m|re|ve|ll|d|t)\b|\b(it|that|there|here|what|who|he|she|let)'s\b/gi;
+var EXPANDED = /\b(i am|do not|does not|did not|cannot|can not|it is|that is|you are|we are|they are|i will|is not|are not|was not|would not|could not|should not|have not|will not|i have not|let us|there is)\b/gi;
+var has = (body, phrase) => {
+  const p = phrase.trim().toLowerCase();
+  if (p.length < 3) return false;
+  const esc = p.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return new RegExp(`(^|[^a-z0-9])${esc}($|[^a-z0-9])`, "i").test(body);
+};
+function voiceCheck(draft, ctx) {
+  const { card } = ctx;
+  const problems = [];
+  const body = draft.body.replace(/\r/g, "");
+  const lines = linesOf(body);
+  const own = personalStyle(card);
+  const exemplars2 = (ctx.exemplars ?? []).filter((e) => e.trim());
+  const cardGreet = new Set(
+    card.greetingPatterns.map((p) => greetingFamily(p)).filter((x) => !!x)
+  );
+  const cardSign = new Set(
+    card.signoffs.map((s) => signoffFamily(firstLine(s))).filter((x) => !!x)
+  );
+  for (const e of exemplars2) {
+    const el = linesOf(e);
+    const g = el[0] ? greetingFamily(el[0]) : void 0;
+    if (g) cardGreet.add(g);
+    const at = signoffAt(el);
+    if (at >= 0) cardSign.add(signoffFamily(el[at]));
+  }
+  const knows = own || exemplars2.length > 0;
+  const greet = lines[0] ? greetingFamily(lines[0]) : void 0;
+  if (knows && greet && cardGreet.size && !cardGreet.has(greet))
+    problems.push({
+      code: "greeting",
+      detail: `It opens with ${greet === "name" ? "their name alone" : `'${lines[0].split(/[\s,]/)[0]}'`}; you open with ${[...cardGreet].map((g) => g === "name" ? "their name" : `'${g[0].toUpperCase()}${g.slice(1)}'`).join(" or ")}.`
+    });
+  const signIdx = signoffAt(lines);
+  const sign = signIdx >= 0 ? signoffFamily(lines[signIdx]) : void 0;
+  if (knows && sign && cardSign.size && !cardSign.has(sign))
+    problems.push({
+      code: "signoff",
+      detail: `It signs off '${lines[signIdx].replace(/[,.]$/, "")}'; you sign off ${[...cardSign].map((s) => `'${s[0].toUpperCase()}${s.slice(1)}'`).join(" or ")}.`
+    });
+  const end = signIdx >= 0 ? signIdx : lines.length;
+  const middle = lines.slice(greet ? 1 : 0, end).join(" ");
+  const sentences3 = middle.split(/(?<=[.?!])\s+/).map((s) => s.trim()).filter((s) => wordCount(s) >= 3);
+  if (sentences3.length >= 3 && card.avgSentenceWords > 0) {
+    const avg = sentences3.reduce((n, s) => n + wordCount(s), 0) / sentences3.length;
+    const top = Math.max(card.avgSentenceWords * 1.75, card.avgSentenceWords + 9);
+    if (avg > top)
+      problems.push({
+        code: "sentence_length",
+        detail: `Its sentences run about ${Math.round(avg)} words; yours run about ${Math.round(card.avgSentenceWords)}.`
+      });
+    else if (card.avgSentenceWords >= 18 && avg < card.avgSentenceWords * 0.45)
+      problems.push({
+        code: "sentence_length",
+        detail: `Its sentences run about ${Math.round(avg)} words; yours run about ${Math.round(card.avgSentenceWords)}.`
+      });
+  }
+  const said = `${draft.subject ?? ""}
+${body}`;
+  for (const a of card.avoid)
+    if (has(said, a)) problems.push({ code: "avoid", detail: `It says '${a.trim()}', which you never say.` });
+  const seen = new Set(card.avoid.map((a) => a.trim().toLowerCase()));
+  for (const n of activeVoiceNotes(ctx.notes)) {
+    const a = avoidOf(n);
+    if (a && !seen.has(a.toLowerCase()) && has(said, a)) {
+      seen.add(a.toLowerCase());
+      problems.push({ code: "note", detail: `It says '${a}'; ${lowerFirst(n.text.replace(/[.]$/, ""))}.` });
+      continue;
+    }
+    const t = n.text.toLowerCase();
+    if (/exclamation/.test(t) && /\b(never|no|cut|drop|without|don'?t)\b/.test(t) && /!/.test(body))
+      problems.push({
+        code: "note",
+        detail: `It has an exclamation mark; ${lowerFirst(n.text.replace(/[.]$/, ""))}.`
+      });
+    else if (/emoji/.test(t) && /\b(never|no|cut|drop|without|don'?t)\b/.test(t) && /\p{Extended_Pictographic}/u.test(body))
+      problems.push({ code: "note", detail: `It has an emoji; ${lowerFirst(n.text.replace(/[.]$/, ""))}.` });
+    else if (/first name only|only your first name|just your first name/.test(t) && signIdx >= 0) {
+      const name = lines[signIdx + 1];
+      if (name && name.split(/\s+/).length >= 2 && name.length < 40)
+        problems.push({
+          code: "note",
+          detail: `It signs with your full name; ${lowerFirst(n.text.replace(/[.]$/, ""))}.`
+        });
+    }
+  }
+  const bangs = (body.match(/!/g) ?? []).length;
+  if (card.exclamationsPerMessage < 0.1 && (bangs >= 2 || own && bangs >= 1))
+    problems.push({ code: "exclamation", detail: "It uses exclamation marks; you write without them." });
+  const emoji = (body.match(/\p{Extended_Pictographic}/gu) ?? []).length;
+  if (!card.emoji && (emoji >= 2 || own && emoji >= 1))
+    problems.push({ code: "emoji", detail: "It has emoji; you write without them." });
+  const contracted = (body.match(CONTRACTION) ?? []).length;
+  const expanded = (body.match(EXPANDED) ?? []).length;
+  if (own && !card.contractions && contracted >= 2)
+    problems.push({ code: "contractions", detail: "It uses contractions like I'm; you write them out." });
+  else if (own && card.contractions && contracted === 0 && expanded >= 2 && wordCount(body) >= 40)
+    problems.push({ code: "contractions", detail: "It writes out I am and do not; you use contractions." });
+  return { ok: problems.length === 0, problems };
+}
+var lowerFirst = (s) => s ? s[0].toLowerCase() + s.slice(1) : s;
+var VOICE_DISTILL_SYSTEM = [
+  "You read how a college student edited the networking emails Orbit drafted for them, and write down what the edits show about how they write.",
+  `Return at most ${VOICE_NOTES_MAX} notes. Each note is one short line in the second person, in plain words the student would use about themselves, such as "You cut 'Thanks either way' every time" or "You sign with your first name only".`,
+  "A note must be backed by at least two edits, and its evidence lists the ids of those edits exactly as given. Leave out anything a single edit shows, anything the style card already says, and anything about a particular person or company.",
+  "When a note is about a phrase the student always removes or replaces, put that phrase in `avoid` exactly as Orbit wrote it; otherwise leave `avoid` empty.",
+  "Never repeat a note the student forgot, in any wording. Use no dashes and no exclamation marks."
+].join("\n");
+function voiceDistillUser(input) {
+  const clip2 = (s) => s.length > 1500 ? `${s.slice(0, 1500)}...` : s;
+  return [
+    `<style_card>
+${cardProse(input.card).join("\n")}
+</style_card>`,
+    input.kept.length ? `<kept_notes>
+${input.kept.join("\n")}
+</kept_notes>` : "",
+    input.forgotten.length ? `<forgotten_notes never_repeat="true">
+${input.forgotten.join("\n")}
+</forgotten_notes>` : "",
+    "<edits>",
+    ...input.edits.map(
+      (e) => `<edit id="${e.id}"${e.kind ? ` kind="${e.kind}"` : ""}>
+<orbit_wrote>
+${clip2(e.before)}
+</orbit_wrote>
+<student_sent>
+${clip2(e.after)}
+</student_sent>
+</edit>`
+    ),
+    "</edits>"
+  ].filter(Boolean).join("\n");
+}
+var VOICE_JUDGE_SYSTEM = [
+  "You compare one draft email against a few emails a college student really sent, and judge whether the same person wrote all of them.",
+  "Read the voice, not the topic: greeting and sign-off, sentence length and rhythm, contractions, how direct the ask is, warmth, punctuation, the words they reach for.",
+  "Score 0 to 3: 3, clearly the same person; 2, plausibly the same person; 1, probably someone else; 0, clearly someone else. Give the reason in one plain sentence, with no dashes and no exclamation marks."
+].join("\n");
+function voiceJudgeUser(draft, exemplars2) {
+  return [
+    "<sent_by_the_student>",
+    ...exemplars2.map((e, i) => `<email n="${i + 1}">
+${e.slice(0, 1500)}
+</email>`),
+    "</sent_by_the_student>",
+    `<draft>
+${draft.subject ? `Subject: ${draft.subject}
+` : ""}${draft.body.slice(0, 3e3)}
+</draft>`
+  ].join("\n");
 }
 
 // packages/core/src/drafts/compose.ts
@@ -5792,6 +6504,30 @@ ${body}`, ctx.inputs))
   });
   return { ok: !deduped.some((i) => i.blocking), issues: deduped, words: words4, grade };
 }
+
+// packages/core/src/knowledge/index.ts
+var DRAFT_RULES = {
+  recruiting: 'Recruiting register: warm, curious, specific. The ask is a 15 minute call about their path and their team (20 for an alum). Never a job, a referral, a resume review or "openings" in a first message; proof of interest is one specific thing about them, not about the student.',
+  fundraising: 'Fundraising register: crisp, numbers first, confident. Two lines on what the company does and why now, one line of traction only if the context gives one, then "would you be open to a look?" Never a job hunting line, never a valuation, never a fake deadline, never the whole pitch.',
+  sales: 'Sales register: short, concrete, no hype. Open with the trigger or the specific observation about them, say what the product does for people like them in plain words with one result if the context gives one, then "worth a quick look?" with an out. No feature list, no attachment.',
+  hiring: 'Hiring register: direct and respectful of their current job. Line one is why them (something they built or did), line two the company, stage and the one thing that makes the role interesting, line three "open to hearing about it?" Never "exciting opportunity", never a pasted job description.',
+  advice: `Advice register: warm, humble, specific. One real connection, the one question only this person can answer ("I'm deciding between X and Y and you did both"), a 15 to 20 minute ask with an out. Never "any advice you have", never "be my mentor", never a resume.`,
+  cofounder: 'Co-founder register: peer to peer. One line on what the student is building and why them, one line on why this person (what they built or spent years inside), a 20 minute ask to compare notes on the problem. Never equity, never a title, never "looking for a technical co-founder" as the opener.',
+  community: "Community register: friendly and concrete. A named event or group with the date and place, two or three people they would know who are coming, why this person would add something, and a plain invitation. Never a mass invite, never a bare link.",
+  collaboration: 'Collaboration register: precise and academic. Name the specific paper or talk and the specific thing in it, ask one precise question or state one concrete overlap, and ask for an answer by email or 20 minutes. "Dear Professor Lastname" for faculty not yet met; never "I am passionate about research".'
+};
+var ASK_RULES = {
+  bank: 'A banker is asked about their group and path: how they chose it, what the first year looks like, what separates the summer analysts who do well. Never about staffing or an office (consulting words), never whether the group still has seats, never off-cycle or diversity programs. When the summer cycle is already late, ask how they would approach recruiting from here, never "before recruiting starts".',
+  pe: `Someone in private equity is asked how they made the move and what surprised them about the work, or, if senior, what they look for in the analysts they hire. Never about a bank's group, summer analyst seats or "your bank".`,
+  trading: 'A trader or researcher is asked how they prepared and what the first months were like, or how they chose between trading and research; a desk head gets one question only they can answer. Never "the office" or "your group".',
+  vc: 'An investor is asked how they got into venture and what their week looks like, or whether to operate first; a founder raising money asks "would you be open to a look" with one line of traction. Never "your bank", never how juniors get staffed.',
+  consulting: 'A consultant is asked how they chose their office or practice, how staffing worked in their first year, or what case prep actually helped; a partner is asked for judgment, never about their first year. Never a "group" or a desk.',
+  big_tech: "An engineer or PM at a large company is asked what the team owns, how intern projects are picked or what to practise; a manager what they look for; a VP or head for a pointer to someone closer to the intern class. Proof beats adjectives. Never a referral ask to a stranger in a first message.",
+  tech: 'An engineer or PM is asked what the team owns, how they ended up there and what their first months were like; a manager what they look for in interns and new grads. One link to something the student built beats any adjective. Never a referral or "openings" in a first message to someone the student has not talked to.',
+  startup: "A founder or early employee is asked how they joined so early and what the stage is like; a founder what they look for in early hires. Never a referral in message one.",
+  academic: 'A professor is asked about their research and how students take part, or whether they take undergraduate research assistants and what they look for in one. Never their "first few months" or "the path to" their university.',
+  other: "Someone whose firm Orbit does not know is asked how they got into their field and what helped early on; a senior person what they look for in people starting out. Never bank, consulting or desk words."
+};
 
 // supabase/functions/_shared/rows.ts
 function iso(v) {
@@ -6168,1416 +6904,11 @@ function ownWordsLines(g, max = 240, order = LINE_ORDER) {
   return lines;
 }
 
-// supabase/functions/_shared/compose/context.ts
-var USER_CONTEXT_MAX_CHARS = 4800;
-async function loadUserRow(db2, userId) {
-  const [u2] = await db2.sql`
-    select id, email, full_name, first_name, last_name, school, grad_year, degree, majors, current_title,
-           current_org, current_city, timezone, autonomy_level, settings
-      from orbit.users where id = ${userId}::uuid and deleted_at is null`;
-  if (!u2) throw new HttpError(401, "unauthorized", "sign in again");
-  return { ...u2, settings: u2.settings ?? {}, majors: u2.majors ?? [] };
-}
-var userFirstName = (u2) => u2.first_name?.trim() || u2.full_name?.trim().split(/\s+/)[0] || u2.email.split("@")[0];
-async function loadPerson(db2, userId, personId) {
-  if (typeof personId !== "string" || !/^[0-9a-f-]{36}$/i.test(personId))
-    throw new HttpError(400, "bad_request", "personId is required");
-  const [p] = await db2.sql`
-    select p.id, p.user_id, p.is_self, p.display_name, p.first_name, p.last_name, p.primary_email, p.headline,
-           p.title, p.org_raw, o.name as org_name, p.location, p.timezone, p.school, p.is_alumni, p.linkedin_url,
-           p.linkedin_slug, p.linkedin_member_id, p.do_not_contact, p.hidden_at, p.last_interaction_at,
-           ts.score::int as score,
-           coalesce((select array_agg(i.value_norm order by i.created_at) from orbit.person_identities i
-                      where i.person_id = p.id and i.kind = 'email'), '{}') as emails
-      from orbit.people p
-      left join orbit.organizations o on o.id = p.org_id
-      left join orbit.tie_scores ts on ts.user_id = p.user_id and ts.person_id = p.id
-     where p.id = ${personId}::uuid and p.user_id = ${userId}::uuid and p.deleted_at is null`;
-  if (!p) throw new HttpError(404, "not_found", "no such person");
-  const emails = [...new Set([p.primary_email, ...p.emails ?? []].filter((e) => !!e))];
-  return { ...p, emails };
-}
-var personOrg = (p) => p.org_name ?? p.org_raw ?? void 0;
-async function buildUserContext(db2, u2) {
-  const lines = [];
-  const name = u2.full_name ?? userFirstName(u2);
-  const role = [u2.current_title, u2.current_org].filter(Boolean).join(" at ");
-  const school = u2.school ? `${[u2.degree, u2.majors.join(", ")].filter(Boolean).join(" in ") || "Student"} at ${u2.school}${u2.grad_year ? `, class of ${u2.grad_year}` : ""}` : "";
-  lines.push(
-    [name, role, school, u2.current_city ? `based in ${u2.current_city}` : ""].filter(Boolean).join("; ")
-  );
-  const s = u2.settings;
-  for (const [k, label] of [
-    ["company", "Company"],
-    ["pitch", "What it does"],
-    ["traction", "Traction"],
-    ["bio", "About"]
-  ])
-    if (typeof s[k] === "string" && s[k].trim())
-      lines.push(`${label}: ${s[k].trim()}`);
-  if (s.about && typeof s.about === "object") lines.push(...ownWordsLines(s.about, 300));
-  const goals = await db2.sql`
-    select kind, title, description, success_metric, targets from orbit.goals
-     where user_id = ${u2.id}::uuid and status = 'active' and deleted_at is null
-     order by priority, created_at limit 5`;
-  for (const g of goals) {
-    const t = g.targets ?? {};
-    const targets = [...t.organizations ?? [], ...t.roles ?? []].slice(0, 6).join(", ");
-    lines.push(
-      `Goal (${g.kind}): ${g.title}${g.description ? `. ${g.description}` : ""}${g.success_metric ? `. A win: ${g.success_metric}` : ""}${targets ? ` (targets: ${targets})` : ""}`
-    );
-  }
-  const [resume] = await db2.sql`
-    select parsed, text from orbit.uploads
-     where user_id = ${u2.id}::uuid and kind = 'resume' and is_current
-     order by created_at desc limit 1`;
-  if (resume) {
-    const facets = facetLines(resume.parsed);
-    lines.push(
-      `Resume: ${facets.length ? facets.join("; ") : resume.text.replace(/\s+/g, " ").slice(0, 800)}`
-    );
-  }
-  const memories = await db2.sql`
-    select text from orbit.memories
-     where user_id = ${u2.id}::uuid and deleted_at is null and person_id is null
-     order by importance desc, last_seen_at desc limit 10`;
-  if (memories.length) lines.push(`Remembered: ${memories.map((m) => m.text).join(" | ")}`);
-  const text2 = lines.join("\n");
-  return text2.length > USER_CONTEXT_MAX_CHARS ? `${text2.slice(0, USER_CONTEXT_MAX_CHARS - 1)}…` : text2;
-}
-function facetLines(parsed2) {
-  if (!parsed2) return [];
-  const out = [];
-  const list2 = (v) => Array.isArray(v) ? v : [];
-  for (const f of list2(parsed2.facets)) {
-    const o = f;
-    if (o.excluded === true) continue;
-    const t = [o.title ?? o.role, o.org ?? o.organization ?? o.organizationName, o.text].filter(
-      (x) => typeof x === "string"
-    );
-    if (t.length) out.push(t.join(", "));
-  }
-  for (const e of list2(parsed2.experiences ?? parsed2.experience)) {
-    const o = e;
-    const t = [o.title, o.org ?? o.company].filter((x) => typeof x === "string");
-    if (t.length) out.push(t.join(" at "));
-  }
-  for (const e of list2(parsed2.education)) {
-    const o = e;
-    const t = [o.degree, o.school].filter((x) => typeof x === "string");
-    if (t.length) out.push(t.join(", "));
-  }
-  const skills = list2(parsed2.skills).filter((x) => typeof x === "string");
-  if (skills.length) out.push(`Skills: ${skills.slice(0, 12).join(", ")}`);
-  return out.slice(0, 12);
-}
-function styleCardOf(u2) {
-  const card = u2.settings.style_card;
-  if (card && typeof card === "object" && ((card.builtFromCount ?? 0) >= 3 || card.custom))
-    return card;
-  const preset = u2.settings.tone_preset;
-  return defaultStyleCard(preset === "direct" || preset === "formal" ? preset : "warm", userFirstName(u2));
-}
-function voiceText(c) {
-  return [
-    `greetings: ${c.greetingPatterns.join(" | ")}`,
-    `sign-offs: ${c.signoffs.map((x) => x.replace(/\n/g, " ")).join(" | ")}`,
-    `average sentence: ${Math.round(c.avgSentenceWords)} words; average message: ${Math.round(c.avgMessageWords)} words`,
-    `contractions: ${c.contractions ? "yes" : "no"}; exclamation marks: ${c.exclamationsPerMessage > 0 ? "sometimes" : "never"}; emoji: ${c.emoji ? "yes" : "no"}`,
-    c.characteristicPhrases.length ? `phrases they use: ${c.characteristicPhrases.join(" | ")}` : "",
-    c.avoid.length ? `never: ${c.avoid.join(" | ")}` : "",
-    c.notes ? `notes: ${c.notes}` : ""
-  ].filter(Boolean).join("\n");
-}
-var escapeRe2 = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-async function exemplars(s, userId, personId, situation, opts = {}) {
-  let q = null;
-  try {
-    q = await s.embed(situation);
-  } catch {
-    q = null;
-  }
-  if (!q?.length) return [];
-  const limit = opts.limit ?? 3;
-  const pick = (onlyReplies) => s.db.sql`
-    select m.id, m.body_text, m.to_person_ids from orbit.messages m
-     where m.user_id = ${userId}::uuid and m.direction = 'out' and m.embedding is not null
-       and m.body_text is not null and not (${personId}::uuid = any(m.to_person_ids))
-       and coalesce(array_length(regexp_split_to_array(btrim(m.body_text), '\\s+'), 1), 0) >= 25
-       and (${onlyReplies}::boolean = false or m.in_reply_to is not null)
-     order by m.embedding <=> ${vec(q)}::vector
-     limit ${limit}::int`;
-  let rows = await pick(!!opts.replies);
-  if (opts.replies && rows.length < limit) {
-    const more = await pick(false);
-    rows = [...rows, ...more.filter((m) => !rows.some((r) => r.id === m.id))].slice(0, limit);
-  }
-  const ids = [...new Set(rows.flatMap((r) => r.to_person_ids ?? []))];
-  const names = ids.length ? await s.db.sql`
-        select first_name, last_name, display_name from orbit.people
-         where user_id = ${userId}::uuid and id = any(${ids}::uuid[])` : [];
-  const words4 = [
-    ...new Set(
-      names.flatMap((n) => [n.display_name, n.first_name, n.last_name]).filter((x) => !!x?.trim())
-    )
-  ].sort((a, b) => b.length - a.length);
-  return rows.map((r) => {
-    let text2 = stripQuotedReply(r.body_text).trim().slice(0, 1200);
-    for (const w of words4) text2 = text2.replace(new RegExp(`\\b${escapeRe2(w)}\\b`, "g"), "[name]");
-    return text2.replace(/^(hi|hey|hello|dear)\s+[A-Z][a-z]+/i, (m) => `${m.split(/\s+/)[0]} [name]`);
-  });
-}
-async function loadResearch(db2, userId, personId) {
-  const [d] = await db2.sql`
-    select content, status from orbit.dossiers
-     where user_id = ${userId}::uuid and person_id = ${personId}::uuid and status in ('ready', 'partial')`;
-  const facts = await db2.sql`
-    select id, text, type from orbit.facts
-     where user_id = ${userId}::uuid and person_id = ${personId}::uuid and deleted_at is null
-     order by confidence desc, created_at desc limit 8`;
-  const c = d?.content ?? {};
-  const lines = [];
-  const ids = /* @__PURE__ */ new Set();
-  const openers = [];
-  const cite = (xs) => {
-    for (const x of xs ?? []) ids.add(x);
-    return xs?.length ? ` [${xs.join(", ")}]` : "";
-  };
-  if (c.who) lines.push(`who: ${c.who}`);
-  let now;
-  if (c.now?.role || c.now?.org) {
-    now = [c.now.role, c.now.org].filter(Boolean).join(" at ");
-    lines.push(`now: ${now}${c.now.since ? ` since ${c.now.since}` : ""}${cite(c.now.source_ids)}`);
-  }
-  for (const r of c.recently ?? [])
-    lines.push(`recently: ${r.date ? `${r.date}: ` : ""}${r.text}${cite(r.source_ids)}`);
-  for (const r of c.in_common ?? []) lines.push(`in common: ${r.text}${cite(r.source_ids)}`);
-  for (const o of c.openers ?? []) {
-    lines.push(`opener: ${o.text}${cite(o.source_ids)}`);
-    if (o.source_ids?.[0]) openers.push({ id: o.source_ids[0], text: o.text, kind: "opener" });
-  }
-  for (const x of c.careful ?? []) lines.push(`careful: ${x}`);
-  facts.forEach((f, i) => {
-    const id = `F${i + 1}`;
-    ids.add(id);
-    lines.push(`fact [${id}] (${f.type}): ${f.text}`);
-    openers.push({ id, text: f.text, kind: "fact" });
-  });
-  return {
-    text: lines.join("\n"),
-    ids: [...ids],
-    openers,
-    recently: (c.recently ?? []).map((r) => ({ text: r.text, date: r.date ?? null })),
-    now
-  };
-}
-function recipientText(p) {
-  return [
-    `name: ${p.display_name}`,
-    p.title ? `title: ${p.title}` : "",
-    personOrg(p) ? `organization: ${personOrg(p)}` : "",
-    p.headline ? `headline: ${p.headline}` : "",
-    p.location ? `location: ${p.location}` : "",
-    p.school ? `school: ${p.school}${p.is_alumni ? " (same school as the user)" : ""}` : "",
-    p.score !== null && p.score !== void 0 ? `relationship score: ${p.score}/100` : "",
-    p.last_interaction_at ? `last contact: ${iso(p.last_interaction_at).slice(0, 10)}` : ""
-  ].filter(Boolean).join("\n");
-}
+// supabase/functions/_shared/voice/voice.ts
+import { z as z3 } from "npm:zod@3.25.76/v4";
 
-// supabase/functions/_shared/compose/prompts.ts
+// supabase/functions/_shared/memory/memory.ts
 import { z as z2 } from "npm:zod@3.25.76/v4";
-var PROMPT_VERSION = "compose-v2.1";
-var composeSchema = z2.object({
-  subject: z2.string().nullable(),
-  body: z2.string(),
-  ask: z2.object({
-    kind: z2.enum(["call", "question", "interest", "intro", "none"]),
-    text: z2.string()
-  }),
-  hooks: z2.array(z2.object({ text: z2.string(), sourceId: z2.string() }))
-});
-var GOAL_ASK = {
-  recruiting: "call",
-  advice: "call",
-  fundraising: "interest",
-  sales: "interest",
-  hiring: "interest",
-  cofounder: "call",
-  community: "question",
-  collaboration: "question"
-};
-function askKindFor(kind, goal, replyWantsCall = false) {
-  switch (kind) {
-    case "intro_request":
-      return "intro";
-    case "forwardable_blurb":
-    case "thank_you":
-    case "reengage":
-    case "nurture":
-    case "congratulate":
-    case "report_back":
-      return "none";
-    case "reply":
-      return replyWantsCall ? "call" : "none";
-    case "schedule":
-      return "call";
-    default:
-      return GOAL_ASK[goal];
-  }
-}
-function composeSystem(p) {
-  const lines = [
-    `You write one message that ${p.userFirstName} will send as themselves. It must sound like them, not like a template or a salesperson.`,
-    "Hard rules:",
-    `- ${p.wordRange} words; one ask: ${p.askKind}; subject 2–6 words.`,
-    "- Use at least one opener from <research> and keep it true; cite its source id in hooks.",
-    "- Never claim familiarity, shared history or a mutual connection that isn't in the inputs.",
-    '- No flattery adjectives (amazing, incredible, inspiring), no "I hope this finds you well", no "quick question", no em-dashes, no exclamation marks unless the voice card uses them.',
-    "- Plain words, short sentences (reading grade ≤ 7).",
-    "- Match <voice> for greeting, sign-off, contractions and sentence length. Borrow rhythm from <examples>, never their content.",
-    `- <user_context> may carry the user's own words: a "Never" line is their rule and always wins; "Their story" is how they introduce themselves, so draw on it rather than a generic line.`
-  ];
-  if (p.kind === "forwardable_blurb" && p.blurb)
-    lines.push(
-      "",
-      `Write a third-person blurb of at most 90 words that ${p.blurb.intermediary} can forward unchanged to ${p.blurb.target}: who ${p.userFirstName} is, the one reason they want to talk to ${p.blurb.target}, and the small ask. No flattery. Facts only from the inputs.`
-    );
-  if (p.kind === "reply")
-    lines.push(
-      "",
-      "Answer what they said. If they proposed times, accept one that is free (given in <free_slots>) or offer those. Keep it shorter than their message unless they asked questions. Never leave a blank, a bracket or a placeholder: the message must be ready to send as written. If a fact is needed that is not in the inputs, write around it (offer to cover it on a call, or ask them) instead of guessing it. When <task> carries the user's own answer to what they asked, the reply gives that answer in the user's words and asks nothing back. When <task> says the call is booked, the reply confirms that one time and offers no other."
-    );
-  return lines.join("\n");
-}
-function block(tag, text2) {
-  const clean = (text2 ?? "").replace(/<\/?[a-z_]+[^>]*>/gi, " ").trim();
-  return `<${tag}>${clean ? `
-${clean}
-` : ""}</${tag}>`;
-}
-function composeUser(b) {
-  return [
-    block("task", b.task),
-    block("user_context", b.userContext),
-    block("goal", b.goal),
-    block("recipient", b.recipient),
-    block("research", b.research),
-    block("thread", b.thread),
-    block("via", b.via),
-    block("voice", b.voice),
-    block("examples", b.examples),
-    ...b.freeSlots !== void 0 ? [block("free_slots", b.freeSlots)] : []
-  ].join("\n");
-}
-function retryNote(issues) {
-  return `
-<issues>
-${issues.map((i) => `- ${i}`).join("\n")}
-</issues>
-Rewrite the message so it passes every rule. Keep what was true and fix only these issues.`;
-}
-var ASK_USER = /\[ASK USER:\s*([^\]]*)\]/g;
-function askUserMarkers(text2) {
-  return [...text2.matchAll(ASK_USER)].map((m) => m[1].trim()).filter(Boolean);
-}
-
-// supabase/functions/_shared/compose/window.ts
-var WINDOW_START = { hour: 8, minute: 0 };
-var WINDOW_END = { hour: 10, minute: 30 };
-var JITTER_MAX_MIN = 20;
-function sendDayAllowed(key2, channel) {
-  const dow = weekdayOfKey(key2);
-  const ok = dow === 2 || dow === 3 || dow === 4 || channel === "linkedin" && dow === 1;
-  return ok && !usHolidays(Number(key2.slice(0, 4))).has(key2);
-}
-function nextSendWindow(now, tz, channel, random = Math.random) {
-  const zone = validZone(tz) ?? "America/New_York";
-  const jitterMs = Math.floor(random() * (JITTER_MAX_MIN + 1)) * 6e4;
-  let key2 = localParts(now, zone).key;
-  for (let i = 0; i < 21; i++, key2 = addDaysKey(key2, 1)) {
-    if (!sendDayAllowed(key2, channel)) continue;
-    const start = zonedTime2(key2, WINDOW_START.hour, WINDOW_START.minute, zone).getTime();
-    const end = zonedTime2(key2, WINDOW_END.hour, WINDOW_END.minute, zone).getTime();
-    if (now.getTime() >= end) continue;
-    const at = Math.min(Math.max(now.getTime(), start) + jitterMs, end);
-    return { notBefore: new Date(at).toISOString(), tz: zone };
-  }
-  return { notBefore: now.toISOString(), tz: zone };
-}
-
-// supabase/functions/_shared/compose/compose.ts
-var OPT_OUT_LINE = "If this isn't relevant, just say so and I won't follow up.";
-var DECLINE_COOLDOWN_DAYS = 180;
-var DAY5 = 864e5;
-var GOAL_REGISTER = {
-  recruiting: "ask: a 15-minute call about their path or team; register: warm, curious, specific",
-  advice: "ask: 15–20 minutes on one named question; register: warm, humble",
-  fundraising: 'ask: "Would you be open to a look?" plus one line of traction; register: crisp, numbers first',
-  sales: 'ask: "Worth a quick look?" tied to a trigger; register: short, concrete, no hype',
-  hiring: `ask: "Open to hearing about it?" with the role's one hook; register: direct, respects their current job`,
-  cofounder: "ask: 20 minutes to compare notes on the problem; register: peer-to-peer",
-  community: "ask: an invite to a specific event or group; register: friendly",
-  collaboration: "ask: a specific question about their paper plus the overlap; register: precise, academic"
-};
-async function composeDraft(s, req) {
-  const db2 = s.db;
-  const now = s.now();
-  const user = await loadUserRow(db2, req.userId);
-  const person = await loadPerson(db2, req.userId, req.personId);
-  if (person.is_self) throw new HttpError(400, "bad_request", "that is you");
-  if (person.do_not_contact)
-    throw new HttpError(
-      409,
-      "do_not_contact",
-      "they asked not to be contacted, so Orbit will not write to them"
-    );
-  let replyTo;
-  if (req.kind === "reply") {
-    if (!req.replyToMessageId) throw new HttpError(400, "bad_request", "a reply needs replyToMessageId");
-    replyTo = await loadReplyMessage(db2, req.userId, req.replyToMessageId);
-    if (replyTo.reply_class === "unsubscribe")
-      throw new HttpError(409, "unsubscribe", "they asked not to be contacted; no reply is drafted");
-  }
-  const goal = await resolveGoal(db2, req.userId, req.goalId ?? null, req.chatId ?? null, person.id);
-  const goalKind = goal?.kind ?? "advice";
-  const chatId = req.chatId ?? await chatFor(db2, req.userId, person.id, goal?.id ?? null);
-  const history = await historyWith(db2, req.userId, person.id);
-  const sendsToThem = req.kind !== "forwardable_blurb";
-  if (sendsToThem && req.kind !== "reply" && unansweredBefore(history) >= 3)
-    throw new HttpError(409, "unanswered_limit", "three messages already went unanswered");
-  const firstTouch = FIRST_TOUCH_KINDS.has(req.kind);
-  if (firstTouch) {
-    const [declined] = await db2.sql`
-      select count(*)::int as n from orbit.chats
-       where user_id = ${req.userId}::uuid and person_id = ${person.id}::uuid and stage = 'declined'
-         and stage_entered_at > ${new Date(now.getTime() - DECLINE_COOLDOWN_DAYS * DAY5)}::timestamptz`;
-    if ((declined?.n ?? 0) > 0)
-      throw new HttpError(409, "declined_recently", "they declined in the last 180 days");
-  }
-  const newRecipient = !history.some((m) => m.direction === "out");
-  const salesFirstTouch2 = goalKind === "sales" && firstTouch && req.channel === "gmail" && newRecipient;
-  const postal = typeof user.settings.postal_address === "string" ? user.settings.postal_address.trim() : "";
-  if (salesFirstTouch2 && !postal)
-    throw new HttpError(
-      409,
-      "needs_postal_address",
-      "add a postal address in Settings before the first sales email (CAN-SPAM)"
-    );
-  const target = req.targetPersonId ? await loadPerson(db2, req.userId, req.targetPersonId) : void 0;
-  const introducer = req.via && req.via.introducerId !== person.id ? await loadPerson(db2, req.userId, req.via.introducerId).catch(() => void 0) : req.via ? person : void 0;
-  const research = await loadResearch(db2, req.userId, person.id);
-  const userContext = await buildUserContext(db2, user);
-  const card = styleCardOf(user);
-  const meFirst = userFirstName(user);
-  const tz = validZone(person.timezone) ?? validZone(user.timezone) ?? "America/New_York";
-  const window = nextSendWindow(now, tz, req.channel, s.random);
-  const thread = await threadContext(db2, req.userId, person.id, req.kind, replyTo, req.channel);
-  const replyClass = replyTo?.reply_class ?? void 0;
-  const schedulingLink = typeof user.settings.scheduling_link === "string" ? user.settings.scheduling_link : void 0;
-  let slots = [];
-  const answer = replyTo?.answer?.trim() || void 0;
-  const confirms = req.kind === "reply" ? req.confirmSlot : void 0;
-  const wantsTimes = !confirms && (replyClass === "interested" || replyClass === "scheduling");
-  if (req.kind === "reply" && wantsTimes) {
-    try {
-      slots = (await slotsFor(s, req.userId, { personId: person.id, count: 3 })).slots;
-    } catch {
-      slots = [];
-    }
-  }
-  const askKind = askKindFor(req.kind, goalKind, wantsTimes);
-  const range = req.channel === "linkedin" ? "At most 400 characters," : wordRangeText(req.kind, goalKind);
-  const viaText = introducer ? `${introducer.display_name}${req.via?.pathScore !== void 0 ? ` (path score ${req.via.pathScore.toFixed(2)})` : ""}` : "";
-  const goalText = goal ? `${goal.kind}: ${goal.title}${goal.description ? `. ${goal.description}` : ""}
-${GOAL_REGISTER[goalKind]}` : GOAL_REGISTER[goalKind];
-  const topic = req.topic ?? goalTopic(goal);
-  const task = [
-    `kind: ${req.kind}; channel: ${req.channel}; ask: ${askKind}`,
-    target ? `the introduction is to: ${target.display_name}${personOrg(target) ? ` at ${personOrg(target)}` : ""}` : "",
-    req.kind === "forwardable_blurb" ? `the intermediary reading it first: ${person.display_name}` : "",
-    topic ? `about: ${topic}` : "",
-    req.reason ? `why now: ${req.reason}` : "",
-    schedulingLink && wantsTimes ? `scheduling link: ${schedulingLink}` : "",
-    answer ? `${meFirst}'s answer to what they asked, in ${meFirst}'s words: ${answer}` : "",
-    confirms ? `the call is booked for ${confirms.label} and the invite is sent: confirm that time in one line, offer no other times, ask nothing` : ""
-  ].filter(Boolean).join("\n");
-  const examples = await exemplars(
-    s,
-    req.userId,
-    person.id,
-    [req.kind, goalKind, person.title ?? "", thread.lastInbound ?? "", topic ?? ""].join(" "),
-    { replies: req.kind === "reply" }
-  );
-  const slotText = slots.map((x) => `${x.start} = ${x.label}`).join("\n");
-  const userBlocks = composeUser({
-    task,
-    userContext,
-    goal: goalText,
-    recipient: recipientText(person),
-    research: research.text,
-    thread: thread.text,
-    via: viaText,
-    voice: voiceText(card),
-    examples: examples.map((e, i) => `Example ${i + 1}:
-${e}`).join("\n\n"),
-    ...req.kind === "reply" ? { freeSlots: slotText } : {}
-  });
-  const system = composeSystem({
-    userFirstName: meFirst,
-    wordRange: range,
-    askKind,
-    kind: req.kind,
-    blurb: req.kind === "forwardable_blurb" ? { intermediary: person.display_name, target: target?.display_name ?? "them" } : void 0
-  });
-  const inputs = [
-    userContext,
-    goalText,
-    recipientText(person),
-    research.text,
-    thread.text,
-    viaText,
-    task,
-    slots.map((x) => x.label).join("\n"),
-    target ? recipientText(target) : "",
-    meFirst,
-    user.full_name ?? "",
-    answer ?? "",
-    confirms?.label ?? ""
-  ].join("\n");
-  const ctx = {
-    goal: goalKind,
-    recipientFirstName: firstNameOf(person),
-    recipientFullName: person.display_name,
-    recipientEmail: person.primary_email ?? void 0,
-    inputs,
-    allowedUrls: schedulingLink ? [schedulingLink] : [],
-    style: card,
-    userFirstName: meFirst
-  };
-  const check = (out) => checkComposed(out, req, ctx, research);
-  let output;
-  let attempts = 0;
-  let generatedBy = "template";
-  let lastIssues = [];
-  if (s.claude.configured) {
-    let turn = userBlocks;
-    for (let i = 0; i < 2; i++) {
-      attempts++;
-      const r = await s.claude.structured({
-        task: req.kind === "reply" ? "reply" : "compose",
-        system,
-        user: turn,
-        schema: composeSchema,
-        userId: req.userId
-      });
-      if (!r.ok) break;
-      const issues2 = check(r.data);
-      if (!issues2.length) {
-        output = r.data;
-        generatedBy = "llm";
-        break;
-      }
-      lastIssues = issues2;
-      turn = userBlocks + retryNote(issues2);
-    }
-  }
-  let composed;
-  let promptVersion = PROMPT_VERSION;
-  if (output) {
-    composed = {
-      id: "",
-      goalId: goal?.id ?? null,
-      personId: person.id,
-      kind: req.kind,
-      channel: req.channel,
-      subject: req.channel === "gmail" && req.kind !== "reply" ? output.subject?.trim() || null : null,
-      body: output.body.trim(),
-      ask: output.ask,
-      hooks: output.hooks.filter((h) => h.text.trim() && h.sourceId.trim()),
-      ...req.via ? { via: { introducerId: req.via.introducerId, pathScore: req.via.pathScore } } : {},
-      sendWindow: window,
-      promptVersion,
-      variant: null
-    };
-  } else {
-    const t = templateMessage({
-      req,
-      user,
-      person,
-      target,
-      introducer,
-      goalKind,
-      goalId: goal?.id ?? null,
-      research,
-      topic,
-      window,
-      replyClass,
-      slots,
-      answer,
-      confirms
-    });
-    composed = t;
-    promptVersion = t.promptVersion;
-  }
-  if (answer && askUserMarkers(composed.body).length)
-    composed = { ...composed, body: composed.body.replace(ASK_USER, answer) };
-  let footer;
-  if (salesFirstTouch2) {
-    const company = typeof user.settings.company === "string" ? user.settings.company.trim() : "";
-    footer = [[user.full_name ?? meFirst, company].filter(Boolean).join(", "), postal, OPT_OUT_LINE].filter(Boolean).join("\n");
-  }
-  const forCheck = composed.body.replace(ASK_USER, "").trim();
-  const v = validateComposed({ ...composed, body: forCheck }, ctx);
-  const markers = askUserMarkers(composed.body);
-  const needs = markers.length ? ["answer"] : [];
-  const issues = v.issues.filter((i) => i.blocking).map((i) => `${i.code}: ${i.detail}`).concat(markers.map((m) => `needs_input: ${m}`));
-  const validator = { ok: v.ok && markers.length === 0, issues, words: v.words, grade: v.grade };
-  const body = footer ? `${composed.body}
-
-${footer}` : composed.body;
-  const meta = {
-    kind: composed.ask.kind,
-    text: composed.ask.text,
-    ...replyTo ? { replyToMessageId: replyTo.id } : {},
-    ...slots.length ? { slots: slots.map((x) => x.start) } : {},
-    ...confirms ? { slots: [confirms.start], confirms } : {},
-    ...req.reason ? { reason: req.reason } : {},
-    ...footer ? { footer } : {},
-    ...markers.length ? { question: markers[0] } : {},
-    ...answer ? { answer } : {}
-  };
-  const offeredSlots = confirms ? [confirms.start] : slots.length ? slots.map((x) => x.start) : null;
-  const level = goal?.autonomy_level ?? user.autonomy_level ?? 0;
-  const via = req.via ? { ...req.via } : null;
-  const [row] = await db2.sql`
-    insert into orbit.drafts (user_id, person_id, chat_id, goal_id, channel, kind, subject, body, ask, hooks, via,
-                              thread_external_id, in_reply_to, status, autonomy_level, validator, generated_by,
-                              prompt_version, variant, offered_slots, needs)
-    values (${req.userId}::uuid, ${person.id}::uuid, ${chatId}::uuid, ${goal?.id ?? null}::uuid, ${req.channel},
-            ${req.kind}, ${composed.subject}, ${body}, ${meta}::jsonb, ${JSON.stringify(composed.hooks)}::jsonb,
-            ${via}::jsonb, ${thread.externalId}, ${replyTo?.rfc_message_id ?? replyTo?.external_id ?? null}, 'draft',
-            ${level}::smallint, ${validator}::jsonb, ${generatedBy}, ${promptVersion}, null,
-            ${offeredSlots ? JSON.stringify(offeredSlots) : null}::jsonb, ${needs}::text[])
-    returning *`;
-  await db2.sql`
-    insert into orbit.audit_log (user_id, actor, action, target_table, target_id, details)
-    values (${req.userId}::uuid, ${req.actor ?? "user"}, 'draft.compose', 'drafts', ${row.id},
-            ${{ kind: req.kind, channel: req.channel, generated_by: generatedBy, attempts, issues: lastIssues.length, hash: messageHash({ channel: req.channel, subject: composed.subject, body }) }}::jsonb)`;
-  return {
-    draft: row,
-    composed: { ...composed, id: row.id, body, validator },
-    attempts
-  };
-}
-function wordRangeText(kind, goal) {
-  const [min, max] = wordRange(kind, goal);
-  return `${min}–${max}`;
-}
-function goalTopic(goal) {
-  if (!goal) return void 0;
-  const t = goal.targets ?? {};
-  const c = goal.criteria ?? {};
-  if (t.roles?.[0]) return t.roles[0];
-  if (typeof c.topic === "string" && c.topic.trim()) return c.topic.trim();
-  return ["collaboration", "community", "cofounder", "advice"].includes(goal.kind) ? goal.title : void 0;
-}
-var BUSINESS_GOALS = /* @__PURE__ */ new Set(["sales", "fundraising", "hiring", "cofounder"]);
-function checkComposed(out, req, ctx, research) {
-  const body = out.body.replace(ASK_USER, "").trim();
-  const v = validateComposed(
-    {
-      kind: req.kind,
-      channel: req.channel,
-      subject: req.channel === "gmail" && req.kind !== "reply" ? out.subject : null,
-      body,
-      hooks: out.hooks,
-      ask: out.ask
-    },
-    ctx
-  );
-  const issues = v.issues.filter((i) => i.blocking).map((i) => `${i.code}: ${i.detail}`);
-  const known = new Set(research.ids);
-  for (const h of out.hooks)
-    if (h.sourceId.trim() && !known.has(h.sourceId.trim()))
-      issues.push(`hook_source: ${h.sourceId} is not a source id in <research>`);
-  return issues;
-}
-async function resolveGoal(db2, userId, goalId, chatId, personId) {
-  if (goalId) {
-    const [g2] = await db2.sql`
-      select id, kind, title, description, targets, criteria, autonomy_level from orbit.goals
-       where id = ${goalId}::uuid and user_id = ${userId}::uuid and deleted_at is null`;
-    if (!g2) throw new HttpError(404, "not_found", "no such goal");
-    return g2;
-  }
-  const [g] = await db2.sql`
-    select g.id, g.kind, g.title, g.description, g.targets, g.criteria, g.autonomy_level
-      from orbit.chats c join orbit.goals g on g.id = c.goal_id
-     where c.user_id = ${userId}::uuid and g.deleted_at is null
-       and (c.id = ${chatId}::uuid or (${chatId}::uuid is null and c.person_id = ${personId}::uuid))
-     order by c.updated_at desc limit 1`;
-  return g;
-}
-async function chatFor(db2, userId, personId, goalId) {
-  const [c] = await db2.sql`
-    select id from orbit.chats
-     where user_id = ${userId}::uuid and person_id = ${personId}::uuid and archived_at is null
-     order by (goal_id is not distinct from ${goalId}::uuid) desc, updated_at desc limit 1`;
-  return c?.id ?? null;
-}
-async function historyWith(db2, userId, personId) {
-  const rows = await db2.sql`
-    select direction, sent_at as at, external_id from orbit.messages
-     where user_id = ${userId}::uuid
-       and (from_person_id = ${personId}::uuid or ${personId}::uuid = any(to_person_ids))
-       and not is_automated
-    union all
-    select 'out' as direction, d.sent_at as at, d.provider_message_id as external_id from orbit.drafts d
-     where d.user_id = ${userId}::uuid and d.person_id = ${personId}::uuid and d.status = 'sent'
-       and d.kind <> 'forwardable_blurb' and d.sent_at is not null
-       and not exists (select 1 from orbit.messages m where m.user_id = d.user_id
-                        and m.external_id = d.provider_message_id)`;
-  return rows.map((r) => ({ direction: r.direction, at: iso(r.at) }));
-}
-async function loadReplyMessage(db2, userId, messageId) {
-  if (!/^[0-9a-f-]{36}$/i.test(messageId)) throw new HttpError(400, "bad_request", "messageId is required");
-  const [m] = await db2.sql`
-    select id, thread_id, provider, external_id, rfc_message_id, from_person_id, reply_class, sent_at, answer
-      from orbit.messages
-     where id = ${messageId}::uuid and user_id = ${userId}::uuid and direction = 'in'`;
-  if (!m) throw new HttpError(404, "not_found", "no such reply");
-  return m;
-}
-async function threadContext(db2, userId, personId, kind, replyTo, channel) {
-  let threadId = replyTo?.thread_id;
-  if (!threadId && (kind === "bump" || kind === "thank_you" || kind === "schedule" || kind === "report_back")) {
-    const [t2] = await db2.sql`
-      select t.id from orbit.threads t
-       where t.user_id = ${userId}::uuid and t.provider = ${channel}
-         and ${personId}::uuid = any(t.participant_person_ids)
-       order by t.last_at desc nulls last limit 1`;
-    threadId = t2?.id;
-  }
-  if (!threadId) return { text: "", externalId: null };
-  const [t] = await db2.sql`
-    select external_id, subject from orbit.threads where id = ${threadId}::uuid`;
-  const msgs = await db2.sql`
-    select direction, sent_at, body_text, snippet from orbit.messages
-     where thread_id = ${threadId}::uuid order by sent_at desc limit ${kind === "reply" ? 8 : 2}::int`;
-  const ordered = msgs.reverse();
-  const lines = ordered.map(
-    (m) => `${iso(m.sent_at).slice(0, 16).replace("T", " ")} ${m.direction === "in" ? "them" : "user"}: ${stripQuotedReply(m.body_text ?? m.snippet ?? "").slice(0, 1500)}`
-  );
-  const lastIn = [...ordered].reverse().find((m) => m.direction === "in");
-  return {
-    text: [t?.subject ? `subject: ${t.subject}` : "", ...lines].filter(Boolean).join("\n"),
-    lastInbound: lastIn ? stripQuotedReply(lastIn.body_text ?? lastIn.snippet ?? "").slice(0, 500) : void 0,
-    externalId: t?.external_id ?? null
-  };
-}
-var TEMPLATE_KIND = {
-  outreach: "first_touch",
-  referral_ask: "intro_request",
-  nurture: "reengage",
-  congratulate: "reengage",
-  report_back: "reengage",
-  schedule: "bump"
-};
-function hookPhrase(text2) {
-  const t = text2.trim().replace(/[.!?]+$/, "").replace(/\s+(stuck with me|caught my eye|resonated with me)$/i, "");
-  return /^(Your|The|A|An|I)\b/.test(t) && !/^I\b/.test(t) ? t[0].toLowerCase() + t.slice(1) : t;
-}
-function templateMessage(p) {
-  const { req, user, person } = p;
-  const me = userFirstName(user);
-  if (req.kind === "reply") return replyTemplate(p, me);
-  const kind = COMPOSE_KINDS.includes(req.kind) ? req.kind : TEMPLATE_KIND[req.kind] ?? "first_touch";
-  const opener = p.research.openers[0];
-  const s = user.settings;
-  const str4 = (v) => typeof v === "string" && v.trim() ? v.trim() : void 0;
-  const about = user.current_title && user.current_org ? `${user.current_title} at ${user.current_org}` : user.school ? `a student at ${user.school}` : void 0;
-  const input = {
-    kind,
-    goal: p.goalKind,
-    channel: req.channel,
-    personId: person.id,
-    goalId: p.goalId,
-    user: {
-      firstName: me,
-      school: user.school ?? void 0,
-      about,
-      company: BUSINESS_GOALS.has(p.goalKind) ? str4(s.company) : void 0,
-      pitch: BUSINESS_GOALS.has(p.goalKind) ? str4(s.pitch) : p.goalKind === "collaboration" ? str4(s.research_topic) : void 0,
-      traction: p.goalKind === "fundraising" ? str4(s.traction) : void 0
-    },
-    recipient: { firstName: firstNameOf(person), org: personOrg(person), title: person.title ?? void 0 },
-    hook: opener ? { text: hookPhrase(opener.text), sourceId: opener.id } : void 0,
-    topic: p.topic,
-    via: p.introducer && p.req.via ? {
-      introducerId: p.introducer.id,
-      introducerFirstName: firstNameOf(p.introducer),
-      pathScore: p.req.via.pathScore
-    } : void 0,
-    target: p.target ? { firstName: firstNameOf(p.target), org: personOrg(p.target) } : void 0,
-    sendWindow: p.window
-  };
-  const out = composeFallback(input);
-  return { ...out, kind: req.kind, goalId: p.goalId };
-}
-function replyTemplate(p, me) {
-  const hi = `Hi ${firstNameOf(p.person)},`;
-  const sign = `Best,
-${me}`;
-  let middle;
-  let ask = { kind: "none", text: "" };
-  if (p.confirms) {
-    middle = `${p.confirms.label} works for me, and the calendar invite is on its way. Looking forward to it.`;
-    return {
-      id: "",
-      goalId: p.goalId,
-      personId: p.person.id,
-      kind: "reply",
-      channel: p.req.channel,
-      subject: null,
-      body: [hi, middle, sign].join("\n\n"),
-      ask,
-      hooks: [],
-      sendWindow: p.window,
-      promptVersion: "template-v2",
-      variant: null
-    };
-  }
-  if (p.answer) {
-    middle = `Thanks for asking. ${p.answer.replace(/[.!?]*$/, "")}. Happy to say more whenever works for you.`;
-    return {
-      id: "",
-      goalId: p.goalId,
-      personId: p.person.id,
-      kind: "reply",
-      channel: p.req.channel,
-      subject: null,
-      body: [hi, middle, sign].join("\n\n"),
-      ask,
-      hooks: [],
-      sendWindow: p.window,
-      promptVersion: "template-v2",
-      variant: null
-    };
-  }
-  switch (p.replyClass) {
-    case "interested":
-    case "scheduling":
-      if (p.slots.length) {
-        ask = { kind: "call", text: "Would any of these times work for you?" };
-        middle = `Thanks for getting back to me. ${ask.text}
-
-${p.slots.map((x) => `- ${x.label}`).join("\n")}`;
-      } else {
-        ask = { kind: "call", text: "What times work best for you over the next week or so?" };
-        middle = `Thanks for getting back to me. ${ask.text} I'm happy to work around your schedule.`;
-      }
-      break;
-    case "thanks":
-    case "out_of_office":
-      middle = "Thank you, I really appreciate it. I will keep you posted on how things go.";
-      break;
-    case "decline":
-    case "not_now":
-    case "objection":
-      middle = "Thanks for letting me know, I understand. I appreciate you taking the time to reply.";
-      break;
-    case "referral":
-      middle = "Thank you for pointing me in the right direction. I'll reach out to them, and I'll let you know how it goes.";
-      break;
-    default:
-      middle = "Thanks for your note, I really appreciate it. Happy to go into more detail whenever works for you.";
-  }
-  return {
-    id: "",
-    goalId: p.goalId,
-    personId: p.person.id,
-    kind: "reply",
-    channel: p.req.channel,
-    subject: null,
-    body: [hi, middle, sign].join("\n\n"),
-    ask,
-    hooks: [],
-    sendWindow: p.window,
-    promptVersion: "template-v2",
-    variant: null
-  };
-}
-
-// supabase/functions/_shared/replies/cards.ts
-var CARD_TTL_DAYS = 14;
-var CLOSED_AFTER_MS = 4 * 36e5;
-async function raiseCard(db2, userId, c) {
-  const expires = new Date(c.now.getTime() + CARD_TTL_DAYS * 864e5);
-  const [row] = await db2.sql`
-    insert into orbit.suggestions (user_id, kind, person_id, chat_id, draft_id, message_id, priority_score, reason_text,
-                                   signals, payload, status, dedupe_key, expires_at, created_at, updated_at)
-    values (${userId}::uuid, ${c.kind}, ${c.personId ?? null}::uuid, ${c.chatId ?? null}::uuid, ${c.draftId ?? null}::uuid,
-            ${c.messageId ?? null}::uuid, ${c.priority ?? 0.7}::real, ${c.reasonText}, ${c.signals ?? {}}::jsonb,
-            ${c.payload ?? {}}::jsonb, 'pending', ${c.dedupeKey}, ${expires}::timestamptz, ${c.now}::timestamptz,
-            ${c.now}::timestamptz)
-    on conflict (user_id, dedupe_key) do update
-      set reason_text = excluded.reason_text, signals = excluded.signals, payload = excluded.payload,
-          expires_at = excluded.expires_at, updated_at = excluded.updated_at
-    returning id, (xmax = 0) as inserted`;
-  if (row?.inserted && c.notify)
-    await db2.sql`
-      insert into orbit.notifications (user_id, kind, title, body, link, created_at, updated_at)
-      values (${userId}::uuid, ${c.notify.kind}, ${c.notify.title}, ${c.notify.body ?? null}, ${c.notify.link ?? null},
-              ${c.now}::timestamptz, ${c.now}::timestamptz)`;
-  return row.id;
-}
-async function lastSeenAt(db2, userId) {
-  const [r] = await db2.sql`
-    select max(coalesce(last_used_at, created_at)) as at from orbit.sessions
-     where user_id = ${userId}::uuid and revoked_at is null`;
-  return r?.at ? new Date(r.at) : void 0;
-}
-async function mailIfAway(s, userId, p) {
-  if (!s.mailer.configured) return { sent: false, reason: "unconfigured" };
-  const seen = await lastSeenAt(s.db, userId);
-  if (seen && p.now.getTime() - seen.getTime() < CLOSED_AFTER_MS) return { sent: false, reason: "app_open" };
-  const [u2] = await s.db.sql`select email from orbit.users where id = ${userId}::uuid`;
-  if (!u2?.email) return { sent: false, reason: "no_email" };
-  const r = await s.mailer.send({
-    to: u2.email,
-    subject: `${p.personFirstName} asked one thing`,
-    text: `${p.personFirstName} asked one thing. Reply in Orbit.
-
-https://tryorbit.today/inbox`
-  });
-  if (!r.ok) return { sent: false, reason: r.error };
-  await s.db.sql`
-    insert into orbit.audit_log (user_id, actor, action, target_table, target_id, details)
-    values (${userId}::uuid, 'system', 'needs_you.mailed', 'users', ${userId}, ${{ id: r.id }}::jsonb)`;
-  return { sent: true };
-}
-
-// supabase/functions/_shared/replies/breaker.ts
-var DECLINES_PER_DAY = 2;
-function pausedGoalsOf(settings) {
-  const v = settings?.autopilot_paused_goals;
-  if (!v || typeof v !== "object" || Array.isArray(v)) return {};
-  const out = {};
-  for (const [goalId, p] of Object.entries(v)) {
-    if (!p || typeof p !== "object") continue;
-    const g = p;
-    out[goalId] = {
-      reason: g.reason ?? "student",
-      text: typeof g.text === "string" ? g.text : "Paused",
-      until: typeof g.until === "string" ? g.until : null,
-      at: typeof g.at === "string" ? g.at : ""
-    };
-  }
-  return out;
-}
-function goalPaused(settings, goalId, now) {
-  if (!goalId) return false;
-  const p = pausedGoalsOf(settings)[goalId];
-  if (!p) return false;
-  return p.until === null || new Date(p.until).getTime() > now.getTime();
-}
-async function setGoalPause(db2, userId, goalId, pause) {
-  const [u2] = await db2.sql`
-    select settings from orbit.users where id = ${userId}::uuid`;
-  const goals = pausedGoalsOf(u2?.settings);
-  if (pause) goals[goalId] = pause;
-  else delete goals[goalId];
-  await db2.sql`
-    update orbit.users set settings = settings || jsonb_build_object('autopilot_paused_goals', ${goals}::jsonb)
-     where id = ${userId}::uuid`;
-  return goals;
-}
-var WHAT = {
-  unsubscribe: "asked to stop",
-  declines: "declined, the second today",
-  bounce: "bounced",
-  send_error: "could not be sent to"
-};
-async function tripBreaker(db2, userId, p) {
-  const [u2] = await db2.sql`
-    select settings from orbit.users where id = ${userId}::uuid`;
-  const goalTitle = p.goalId ? (await db2.sql`select title from orbit.goals where id = ${p.goalId}::uuid`)[0]?.title : void 0;
-  const where = p.company?.trim() || goalTitle || "first messages";
-  const text2 = `${p.personName} ${WHAT[p.reason]}. Paused ${where}${p.company?.trim() || goalTitle ? " first messages" : ""}.`;
-  if (p.goalId && goalPaused(u2?.settings, p.goalId, p.now)) return { tripped: false, text: text2 };
-  if (p.goalId)
-    await setGoalPause(db2, userId, p.goalId, {
-      reason: p.reason,
-      text: text2,
-      until: null,
-      at: p.now.toISOString()
-    });
-  await db2.sql`
-    insert into orbit.audit_log (user_id, actor, action, target_table, target_id, details)
-    values (${userId}::uuid, 'system', 'autopilot.breaker', 'goals', ${p.goalId ?? userId},
-            ${{ reason: p.reason, personId: p.personId, messageId: p.messageId ?? null, goalId: p.goalId }}::jsonb)`;
-  await raiseCard(db2, userId, {
-    kind: "breaker",
-    dedupeKey: `breaker:${p.goalId ?? "account"}:${p.messageId ?? p.personId ?? p.now.toISOString()}`,
-    reasonText: `${text2} Read it?`,
-    personId: p.personId,
-    messageId: p.messageId ?? null,
-    signals: { reason: p.reason, goalId: p.goalId },
-    payload: { goalId: p.goalId, reason: p.reason, personName: p.personName, company: p.company ?? null },
-    priority: 0.9,
-    now: p.now,
-    notify: {
-      kind: "system",
-      title: text2,
-      link: p.personId ? `/people/${p.personId}` : "/settings/autopilot"
-    }
-  });
-  return { tripped: true, text: text2 };
-}
-async function declinesToday(db2, userId, goalId, dayStart2) {
-  const [r] = await db2.sql`
-    select count(distinct m.id)::int as n
-      from orbit.messages m
-      join orbit.chats c on c.user_id = m.user_id and c.person_id = m.from_person_id
-     where m.user_id = ${userId}::uuid and m.direction = 'in' and m.reply_class = 'decline'
-       and m.sent_at >= ${dayStart2}::timestamptz
-       and (${goalId}::uuid is null or c.goal_id = ${goalId}::uuid)`;
-  return r?.n ?? 0;
-}
-
-// supabase/functions/_shared/cadence/cadence.ts
-var DAY6 = 864e5;
-function goalFrom(r) {
-  const due = r.due_at instanceof Date ? r.due_at.toISOString().slice(0, 10) : r.due_at;
-  return goalFromRow({ ...isoRow(r), due_at: due });
-}
-async function loadCadence(db2, userId, now) {
-  const [u2] = await db2.sql`
-    select timezone, autonomy_level, settings from orbit.users where id = ${userId}::uuid`;
-  const tz = validZone(u2?.timezone) ?? "America/New_York";
-  const settings = u2?.settings ?? {};
-  const chatRows = await db2.sql`
-    select * from orbit.chats where user_id = ${userId}::uuid and archived_at is null`;
-  const chats = chatRows.map((r) => chatFromRow(isoRow(r)));
-  const goalRows = await db2.sql`
-    select * from orbit.goals where user_id = ${userId}::uuid and deleted_at is null`;
-  const goals = goalRows.map(goalFrom);
-  const draftRows = await db2.sql`
-    select id, person_id, chat_id, kind, status, send_at, created_at from orbit.drafts
-     where user_id = ${userId}::uuid
-       and (status in ('draft', 'approved', 'scheduled', 'sending') or created_at > ${new Date(now.getTime() - 30 * DAY6)}::timestamptz)`;
-  const drafts = draftRows.map((d) => ({
-    id: d.id,
-    personId: d.person_id,
-    chatId: d.chat_id ?? void 0,
-    kind: d.kind,
-    status: d.status,
-    sendAt: iso(d.send_at) ?? void 0,
-    createdAt: iso(d.created_at)
-  }));
-  const msgRows = await db2.sql`
-    select direction, sent_at, provider, from_person_id, to_person_ids from orbit.messages
-     where user_id = ${userId}::uuid and not is_automated
-       and sent_at > ${new Date(now.getTime() - 365 * DAY6)}::timestamptz`;
-  const messages = [];
-  for (const m of msgRows) {
-    const channel = m.provider === "linkedin" ? "linkedin" : "email";
-    const at = iso(m.sent_at);
-    if (m.direction === "in") {
-      if (m.from_person_id) messages.push({ personId: m.from_person_id, direction: "in", at, channel });
-    } else
-      for (const p of m.to_person_ids ?? []) messages.push({ personId: p, direction: "out", at, channel });
-  }
-  const unsynced = await db2.sql`
-    select d.person_id, d.sent_at, d.channel from orbit.drafts d
-     where d.user_id = ${userId}::uuid and d.status = 'sent' and d.sent_at is not null and d.kind <> 'forwardable_blurb'
-       and not exists (select 1 from orbit.messages m where m.user_id = d.user_id and m.external_id = d.provider_message_id)`;
-  for (const d of unsynced)
-    messages.push({
-      personId: d.person_id,
-      direction: "out",
-      at: iso(d.sent_at),
-      channel: d.channel === "linkedin" ? "linkedin" : "email"
-    });
-  const goalPeople = goals.flatMap((g) => g.targets?.people ?? []);
-  const wanted = [
-    .../* @__PURE__ */ new Set([...chats.map((c) => c.personId), ...drafts.map((d) => d.personId), ...goalPeople])
-  ];
-  const peopleRows = await db2.sql`
-    select p.id, p.first_name, p.display_name, p.title, p.org_raw, p.hidden_at, p.do_not_contact, p.timezone,
-           p.last_interaction_at, ts.score::int as score,
-           d.content->'recently' as recently, d.updated_at as dossier_at,
-           (select f.text from orbit.facts f where f.person_id = p.id and f.deleted_at is null
-               and f.created_at > ${new Date(now.getTime() - 30 * DAY6)}::timestamptz
-             order by f.created_at desc limit 1) as fact
-      from orbit.people p
-      left join orbit.tie_scores ts on ts.user_id = p.user_id and ts.person_id = p.id
-      left join orbit.dossiers d on d.user_id = p.user_id and d.person_id = p.id and d.status in ('ready', 'partial')
-     where p.user_id = ${userId}::uuid and not p.is_self and p.deleted_at is null and p.merged_into is null
-       and (ts.score >= 60 or p.id = any(${wanted}::uuid[]))`;
-  const people = /* @__PURE__ */ new Map();
-  for (const p of peopleRows) {
-    const fresh = p.dossier_at && now.getTime() - new Date(p.dossier_at).getTime() < 60 * DAY6;
-    const recent = fresh && Array.isArray(p.recently) ? p.recently[0]?.text : void 0;
-    people.set(p.id, {
-      person: {
-        id: p.id,
-        firstName: p.first_name ?? p.display_name.split(/\s+/)[0],
-        currentTitle: p.title ?? void 0,
-        currentOrganizationRaw: p.org_raw ?? void 0,
-        hiddenAt: iso(p.hidden_at) ?? void 0,
-        doNotContact: p.do_not_contact
-      },
-      score: p.score ?? 0,
-      lastContactAt: iso(p.last_interaction_at) ?? void 0,
-      nurtureReason: recent ?? p.fact ?? void 0,
-      timeZone: validZone(p.timezone)
-    });
-  }
-  const nurtured = draftRows.filter((d) => d.kind === "nurture" || d.kind === "reengage").map((d) => iso(d.created_at));
-  const awaiting = await db2.sql`
-    select distinct person_id from orbit.suggestions
-     where user_id = ${userId}::uuid and kind = 'needs_you' and status in ('pending', 'snoozed') and person_id is not null`;
-  const maxBumps = num(settings.max_bumps, 2);
-  const quiet = typeof settings.quiet_until === "string" ? settings.quiet_until : void 0;
-  return {
-    input: {
-      chats,
-      drafts,
-      messages,
-      people,
-      goals,
-      settings: { maxBumps, timezone: tz, quietUntil: quiet },
-      now,
-      recentNurtureAt: nurtured
-    },
-    timezone: tz,
-    chatsById: new Map(chats.map((c) => [c.id, c])),
-    goalsById: new Map(goals.map((g) => [g.id, g])),
-    settings,
-    awaitingStudent: new Set(awaiting.map((r) => r.person_id)),
-    autonomyLevel: num(u2?.autonomy_level, 0),
-    autoKinds: Array.isArray(settings.auto_kinds) ? settings.auto_kinds.filter(
-      (k) => typeof k === "string" && AUTO_KINDS.includes(k)
-    ) : [],
-    pausedUntil: typeof settings.autopilot_paused_until === "string" ? settings.autopilot_paused_until : void 0
-  };
-}
-async function autoApprovedOn(db2, userId, at, tz) {
-  const key2 = new Intl.DateTimeFormat("en-CA", { timeZone: tz }).format(at);
-  const [r] = await db2.sql`
-    select count(*)::int as n from orbit.drafts
-     where user_id = ${userId}::uuid and auto_rung is not null
-       and status in ('approved', 'scheduled', 'sending', 'sent')
-       and to_char(coalesce(send_at, sent_at, created_at) at time zone ${tz}, 'YYYY-MM-DD') = ${key2}`;
-  return r?.n ?? 0;
-}
-async function runCadence(s, userId) {
-  const db2 = s.db;
-  const now = s.now();
-  const st = await loadCadence(db2, userId, now);
-  const out = {
-    quiet: false,
-    actions: 0,
-    drafted: 0,
-    approved: 0,
-    moved: 0,
-    queued: 0,
-    skipped: 0
-  };
-  const q = st.input.settings.quietUntil;
-  if (q && now.getTime() < new Date(q).getTime()) return { ...out, quiet: true };
-  const actions = cadenceActions(st.input);
-  out.actions = actions.length;
-  const pending = (chatId, personId, kinds, sinceMs) => st.input.drafts.some(
-    (d) => kinds.includes(d.kind) && (chatId ? d.chatId === chatId : d.personId === personId) && (["draft", "approved", "scheduled", "sending"].includes(d.status) || now.getTime() - new Date(d.createdAt).getTime() < sinceMs)
-  );
-  for (const a of actions) {
-    try {
-      if (a.kind === "send_due" && a.draftId) {
-        const id = await s.queue.enqueue({
-          kind: "send.draft",
-          userId,
-          payload: { draftId: a.draftId },
-          dedupeKey: `send:${a.draftId}`
-        });
-        if (id !== null) out.queued++;
-        continue;
-      }
-      if (a.kind === "stage_timer" && a.chatId && a.toStage) {
-        await moveChat(db2, userId, a.chatId, a.toStage, a.reason, now);
-        out.moved++;
-        continue;
-      }
-      if (a.kind === "went_quiet" || !a.personId || !a.draftKind) {
-        out.skipped++;
-        continue;
-      }
-      const chat = a.chatId ? st.chatsById.get(a.chatId) : void 0;
-      if (a.kind === "bump" && pending(a.chatId, a.personId, ["bump"], 2 * DAY6)) {
-        out.skipped++;
-        continue;
-      }
-      if (a.kind === "bump" && st.awaitingStudent.has(a.personId)) {
-        out.skipped++;
-        continue;
-      }
-      if (a.kind === "thank_you" && pending(a.chatId, a.personId, ["thank_you"], 7 * DAY6)) {
-        out.skipped++;
-        continue;
-      }
-      if (a.kind === "nurture" && pending(void 0, a.personId, ["nurture", "reengage"], 7 * DAY6)) {
-        out.skipped++;
-        continue;
-      }
-      const channel = chat?.outreachChannel === "linkedin" ? "linkedin" : "gmail";
-      const { draft } = await composeDraft(s, {
-        userId,
-        personId: a.personId,
-        kind: a.draftKind,
-        channel,
-        goalId: a.goalId ?? null,
-        chatId: a.chatId ?? null,
-        reason: a.reason,
-        actor: "agent"
-      });
-      out.drafted++;
-      st.input.drafts.push({
-        id: draft.id,
-        personId: draft.person_id,
-        chatId: draft.chat_id ?? void 0,
-        kind: draft.kind,
-        status: "draft",
-        createdAt: now.toISOString()
-      });
-      const goal = a.goalId ? st.goalsById.get(a.goalId) : void 0;
-      const level = goal?.autonomyLevel ?? st.autonomyLevel;
-      const paused = !!st.pausedUntil && now.getTime() < new Date(st.pausedUntil).getTime() || goalPaused(st.settings, a.goalId ?? null, now);
-      const score = st.input.people.get(a.personId)?.score ?? 0;
-      if (level >= 1 && channel === "gmail" && st.autoKinds.includes(a.draftKind) && draft.validator?.ok && score >= AUTO_SEND_MIN_SCORE && !paused && askUserMarkers(`${draft.subject ?? ""}
-${draft.body}`).length === 0) {
-        const sendAt = nextSendWindow(
-          now,
-          st.input.people.get(a.personId)?.timeZone ?? st.timezone,
-          "gmail",
-          s.random
-        );
-        const at = new Date(sendAt.notBefore);
-        if (await autoApprovedOn(db2, userId, at, st.timezone) >= SEND_CAPS.autoPerDay) {
-          out.skipped++;
-          continue;
-        }
-        const hash = messageHash({ channel: draft.channel, subject: draft.subject, body: draft.body });
-        const [approved] = await db2.sql`
-          update orbit.drafts set status = 'approved', send_at = ${at}::timestamptz,
-                                  autonomy_level = ${level}::smallint, auto_rung = ${a.draftKind}
-           where id = ${draft.id}::uuid and status = 'draft' returning id`;
-        if (!approved) continue;
-        await db2.sql`
-          insert into orbit.audit_log (user_id, actor, action, target_table, target_id, details)
-          values (${userId}::uuid, 'agent', 'draft.auto_approve', 'drafts', ${draft.id},
-                  ${{ hash, standing: "auto_kinds", rung: a.draftKind, level, send_at: sendAt.notBefore }}::jsonb)`;
-        await s.queue.enqueue(
-          {
-            kind: "send.draft",
-            userId,
-            payload: { draftId: draft.id },
-            dedupeKey: `send:${draft.id}:${sendAt.notBefore}`
-          },
-          { delaySec: Math.max(1, Math.ceil((at.getTime() - now.getTime()) / 1e3)) }
-        );
-        out.approved++;
-      }
-    } catch (e) {
-      if (e instanceof HttpError) {
-        out.skipped++;
-        continue;
-      }
-      throw e;
-    }
-  }
-  return out;
-}
-
-// supabase/functions/orbit-worker/handlers/cadence.ts
-function cadenceUser(config) {
-  return async (job, ctx) => {
-    if (!job.userId) throw new Error("cadence.user needs a user");
-    await runCadence(makeServices(config, { db: ctx.db, now: ctx.now, queue: ctx.queue }), job.userId);
-  };
-}
-
-// supabase/functions/_shared/research/bind.ts
-var UNIPILE_SEARCHES_PER_DAY = 10;
-function ledgerName(p, operation) {
-  switch (p) {
-    case "claude":
-      return { provider: "anthropic", operation: operation ?? "call" };
-    case "apollo_match":
-      return { provider: "apollo", operation: "match" };
-    case "unipile_profile":
-      return { provider: "unipile", operation: "profile_view" };
-    case "unipile_search":
-      return { provider: "unipile", operation: "search" };
-    default:
-      return { provider: p, operation: operation ?? "call" };
-  }
-}
-function spendOf(p, estimate) {
-  const { provider, operation } = ledgerName(p);
-  switch (p) {
-    case "claude":
-    case "exa":
-      return { provider, operation, costUsd: estimate };
-    case "village":
-      return { provider, operation, units: estimate, costUsd: estimate * VILLAGE_USD_PER_CREDIT };
-    default:
-      return { provider, operation, units: estimate };
-  }
-}
-function sqlBudget(db2, now) {
-  return {
-    async check(userId, p, estimate) {
-      const v = await checkBudget(db2, userId, spendOf(p, estimate), now());
-      if (!v.ok) return { ok: false, reason: "budget_exceeded", resetsAt: v.resetsAt };
-      if (p === "unipile_search") {
-        const day2 = new Date(Date.UTC(now().getUTCFullYear(), now().getUTCMonth(), now().getUTCDate()));
-        const [r] = await db2.sql`
-          select count(*)::int as n from orbit.usage_ledger
-           where user_id = ${userId}::uuid and provider = 'unipile' and operation = 'search'
-             and created_at >= ${day2}::timestamptz`;
-        if ((r?.n ?? 0) >= UNIPILE_SEARCHES_PER_DAY)
-          return {
-            ok: false,
-            reason: "budget_exceeded",
-            resetsAt: new Date(day2.getTime() + 864e5).toISOString()
-          };
-      }
-      return { ok: true };
-    },
-    async record(userId, e) {
-      const { provider, operation } = ledgerName(e.provider, e.operation);
-      await recordUsage(db2, { userId, provider, operation, units: e.units, costUsd: e.costUsd });
-    }
-  };
-}
-function sqlCache(db2, now) {
-  return {
-    async get(userId, key2) {
-      const [r] = await db2.sql`
-        select response from orbit.research_cache
-         where user_id = ${userId}::uuid and key = ${key2} and expires_at > ${now()}::timestamptz`;
-      return r?.response;
-    },
-    async put(userId, e) {
-      await db2.sql`
-        insert into orbit.research_cache (user_id, key, provider, response, created_at, expires_at)
-        values (${userId}::uuid, ${e.key}, ${e.provider}, ${JSON.stringify(e.response)}::jsonb, ${now()}::timestamptz,
-                ${e.expiresAt}::timestamptz)
-        on conflict (user_id, key) do update set
-          provider = excluded.provider, response = excluded.response,
-          created_at = excluded.created_at, expires_at = excluded.expires_at`;
-    }
-  };
-}
-function sqlResearchDb(db2, now) {
-  const cache2 = sqlCache(db2, now);
-  return {
-    ...cache2,
-    internalHistory: (userId, personId) => internalHistory(db2, userId, personId),
-    async getDossier(userId, personId) {
-      const [r] = await db2.sql`
-        select * from orbit.dossiers where user_id = ${userId}::uuid and person_id = ${personId}::uuid`;
-      if (!r) return null;
-      return {
-        user_id: r.user_id,
-        person_id: r.person_id,
-        goal_id: r.goal_id ?? null,
-        status: r.status,
-        content: r.content ?? null,
-        sources: r.sources ?? [],
-        candidates: r.candidates ?? null,
-        cost_usd: num(r.cost_usd),
-        model: r.model ?? null,
-        prompt_version: r.prompt_version ?? null,
-        error: r.error ?? null,
-        created_at: iso(r.created_at),
-        updated_at: iso(r.updated_at),
-        expires_at: iso(r.expires_at)
-      };
-    },
-    async putDossier(row) {
-      await db2.sql`
-        insert into orbit.dossiers (user_id, person_id, goal_id, status, content, sources, candidates, cost_usd,
-                                    model, prompt_version, error, created_at, expires_at)
-        values (${row.user_id}::uuid, ${row.person_id}::uuid, ${row.goal_id}::uuid, ${row.status},
-                ${row.content === null ? null : JSON.stringify(row.content)}::jsonb, ${JSON.stringify(row.sources)}::jsonb,
-                ${row.candidates === null ? null : JSON.stringify(row.candidates)}::jsonb, ${row.cost_usd}::numeric,
-                ${row.model}, ${row.prompt_version}, ${row.error}, ${row.created_at}::timestamptz,
-                ${row.expires_at}::timestamptz)
-        on conflict (user_id, person_id) do update set
-          goal_id = excluded.goal_id, status = excluded.status, content = excluded.content,
-          sources = excluded.sources, candidates = excluded.candidates, cost_usd = excluded.cost_usd,
-          model = excluded.model, prompt_version = excluded.prompt_version, error = excluded.error,
-          created_at = excluded.created_at, expires_at = excluded.expires_at`;
-    }
-  };
-}
-async function internalHistory(db2, userId, personId) {
-  const msgs = await db2.sql`
-    select sent_at, direction, subject, body_text, snippet from orbit.messages
-     where user_id = ${userId}::uuid
-       and (from_person_id = ${personId}::uuid or ${personId}::uuid = any(to_person_ids))
-     order by sent_at desc limit 20`;
-  const [span] = await db2.sql`
-    select min(sent_at) as first, max(sent_at) as last from orbit.messages
-     where user_id = ${userId}::uuid
-       and (from_person_id = ${personId}::uuid or ${personId}::uuid = any(to_person_ids))`;
-  const notes = await db2.sql`
-    select occurred_at, raw_text from orbit.notes
-     where user_id = ${userId}::uuid and ${personId}::uuid = any(person_ids)
-     order by occurred_at desc limit 10`;
-  const facts = await db2.sql`
-    select type, text from orbit.facts
-     where user_id = ${userId}::uuid and person_id = ${personId}::uuid and deleted_at is null
-     order by created_at desc limit 20`;
-  const events = await db2.sql`
-    select start_at, title from orbit.calendar_events
-     where user_id = ${userId}::uuid and ${personId}::uuid = any(attendee_person_ids)
-     order by start_at desc limit 10`;
-  return {
-    messages: msgs.reverse().map((m) => ({
-      at: iso(m.sent_at),
-      direction: m.direction === "in" ? "inbound" : "outbound",
-      subject: m.subject ?? void 0,
-      body: stripQuotedReply(m.body_text ?? m.snippet ?? "").slice(0, 2e3)
-    })),
-    notes: notes.map((n) => ({ at: iso(n.occurred_at), text: n.raw_text.slice(0, 2e3) })),
-    facts: facts.map((f) => ({ type: f.type, text: f.text })),
-    events: events.map((e) => ({ at: iso(e.start_at), title: e.title ?? "Meeting" })),
-    firstContact: iso(span?.first),
-    lastContact: iso(span?.last)
-  };
-}
-function claudeDep(claude, userId) {
-  return {
-    async parse(task, schema, prompt) {
-      const r = await claude.structured({
-        task: task === "dossier" ? "dossier" : task === "support" ? "support" : "fit",
-        system: prompt.system,
-        user: prompt.user,
-        schema,
-        userId,
-        timeoutMs: prompt.timeoutMs
-      });
-      if (r.ok) return { ok: true, value: r.data, costUsd: r.costUsd, model: r.model };
-      if ("unconfigured" in r) return { ok: false, reason: "error", message: "unconfigured" };
-      if ("budgetExceeded" in r) return { ok: false, reason: "budget_exceeded", message: r.cap };
-      if ("refused" in r) return { ok: false, reason: "refusal" };
-      return { ok: false, reason: r.error === "max_tokens" ? "max_tokens" : "error", message: r.error };
-    }
-  };
-}
 
 // supabase/functions/_shared/research/guards.ts
 function norm(s) {
@@ -7833,1757 +7164,1973 @@ function stripSensitiveSentences(text2) {
   return text2.split(/(?<=[.!?])\s+/).filter((s) => !sensitiveCategory(s)).join(" ").trim();
 }
 
-// supabase/functions/_shared/research/identity.ts
-var COMPANY_ALIASES = [
-  ["Meta", "Meta Platforms", "Facebook"],
-  ["Google", "Alphabet", "Google LLC", "Google DeepMind", "DeepMind"],
-  ["X Corp", "Twitter"],
-  ["Amazon", "Amazon Web Services", "AWS", "Amazon.com"],
-  ["Microsoft", "MSFT", "Microsoft Research", "LinkedIn Corporation"],
-  ["Block", "Square", "Block, Inc.", "Cash App"],
-  ["JPMorgan Chase", "JPMorgan", "J.P. Morgan", "JP Morgan", "JPMorgan Chase & Co.", "Chase"],
-  ["Goldman Sachs", "Goldman"],
-  ["Morgan Stanley"],
-  ["Bank of America", "BofA", "Bank of America Merrill Lynch", "BofA Securities", "Merrill Lynch", "Merrill"],
-  ["Citi", "Citigroup", "Citibank"],
-  ["McKinsey & Company", "McKinsey"],
-  ["Boston Consulting Group", "BCG"],
-  ["Bain & Company", "Bain"],
-  ["Deloitte", "Deloitte Consulting"],
-  ["PwC", "PricewaterhouseCoopers"],
-  ["EY", "Ernst & Young"],
-  ["KPMG"],
-  ["Accenture"],
-  ["IBM", "International Business Machines"],
-  ["Apple", "Apple Inc."],
-  ["Netflix"],
-  ["Salesforce", "Slack"],
-  ["ByteDance", "TikTok"],
-  ["Snap", "Snap Inc.", "Snapchat"],
-  ["Instagram"],
-  ["WhatsApp"],
-  ["OpenAI"],
-  ["Anthropic"],
-  ["Stripe"],
-  ["Airbnb"],
-  ["Uber", "Uber Technologies"],
-  ["Lyft"],
-  ["Nvidia", "NVIDIA"],
-  ["Intel"],
-  ["Oracle"],
-  ["Adobe"],
-  ["Palantir", "Palantir Technologies"],
-  ["Databricks"],
-  ["Figma"],
-  ["Notion", "Notion Labs"],
-  ["Ramp"],
-  ["Brex"],
-  ["Robinhood"],
-  ["Coinbase"],
-  ["Shopify"],
-  ["Spotify"],
-  ["Pinterest"],
-  ["Reddit"],
-  ["Dropbox"],
-  ["Atlassian"],
-  ["Blackstone"],
-  ["KKR", "Kohlberg Kravis Roberts"],
-  ["Evercore"],
-  ["Lazard"],
-  ["Jane Street"],
-  ["Citadel", "Citadel Securities"],
-  ["Two Sigma"],
-  ["D. E. Shaw", "D.E. Shaw", "DE Shaw"],
-  ["Andreessen Horowitz", "a16z"],
-  ["Sequoia Capital", "Sequoia"],
-  ["Y Combinator", "YC"],
-  ["Tesla"],
-  ["SpaceX"],
-  ["Boeing"],
-  ["Lockheed Martin"],
-  ["Johnson & Johnson", "J&J"],
-  ["Procter & Gamble", "P&G"]
-];
-var COMMON_WORD_ORGS = new Set(
-  [
-    "meta",
-    "block",
-    "square",
-    "apple",
-    "amazon",
-    "ramp",
-    "notion",
-    "target",
-    "visa",
-    "oracle",
-    "box",
-    "chase",
-    "merrill",
-    "bain",
-    "snap",
-    "slack",
-    "shell",
-    "intel",
-    "citadel",
-    "sequoia",
-    "goldman",
-    "plaid",
-    "scale",
-    "mercury",
-    "figure",
-    "gap",
-    "ford",
-    "discord",
-    "zoom",
-    "uber",
-    "lyft",
-    "ey",
-    "yc",
-    "x"
-  ].map((s) => s.toLowerCase())
-);
-var SCHOOL_ALIASES = [
-  ["Massachusetts Institute of Technology", "MIT"],
-  ["University of California, Berkeley", "UC Berkeley", "Berkeley", "Cal"],
-  ["University of California, Los Angeles", "UCLA"],
-  ["University of California, San Diego", "UC San Diego", "UCSD"],
-  ["University of Southern California", "USC"],
-  ["Carnegie Mellon University", "Carnegie Mellon", "CMU"],
-  ["Georgia Institute of Technology", "Georgia Tech"],
-  ["University of Pennsylvania", "Penn", "UPenn", "Wharton"],
-  ["New York University", "NYU"],
-  ["University of Michigan", "Michigan", "UMich"],
-  ["University of Texas at Austin", "UT Austin"],
-  ["University of Illinois Urbana-Champaign", "UIUC", "University of Illinois"],
-  ["Stanford University", "Stanford"],
-  ["Harvard University", "Harvard", "Harvard Business School", "HBS"],
-  ["Yale University", "Yale"],
-  ["Princeton University", "Princeton"],
-  ["Columbia University", "Columbia"],
-  ["Cornell University", "Cornell"],
-  ["Brown University", "Brown"],
-  ["Duke University", "Duke"],
-  ["University of Chicago", "UChicago"],
-  ["Northwestern University", "Northwestern"],
-  ["University of Waterloo", "Waterloo"],
-  ["University of Toronto", "U of T", "UofT"]
-];
-var COMMON_WORD_SCHOOLS = /* @__PURE__ */ new Set([
-  "berkeley",
-  "cal",
-  "penn",
-  "brown",
-  "duke",
-  "columbia",
-  "michigan",
-  "mit"
-]);
-var NICKNAMES2 = [
-  ["alexander", "alex", "xander"],
-  ["alexandra", "alex", "alexa", "sasha"],
-  ["andrew", "andy", "drew"],
-  ["anthony", "tony"],
-  ["benjamin", "ben"],
-  ["catherine", "katherine", "kathryn", "kate", "katie", "cathy", "kathy"],
-  ["christopher", "chris"],
-  ["christine", "christina", "chris", "tina"],
-  ["daniel", "dan", "danny"],
-  ["danielle", "dani"],
-  ["david", "dave"],
-  ["elizabeth", "liz", "beth", "lizzie", "eliza"],
-  ["james", "jim", "jimmy", "jamie"],
-  ["jennifer", "jen", "jenny"],
-  ["jessica", "jess"],
-  ["jonathan", "jon"],
-  ["john", "jack", "johnny"],
-  ["joseph", "joe", "joey"],
-  ["joshua", "josh"],
-  ["katherine", "kate", "katie", "kat"],
-  ["margaret", "maggie", "meg", "peggy"],
-  ["matthew", "matt"],
-  ["michael", "mike", "mikey"],
-  ["nicholas", "nick"],
-  ["patricia", "pat", "trish"],
-  ["patrick", "pat"],
-  ["rebecca", "becky", "becca"],
-  ["richard", "rick", "rich", "dick"],
-  ["robert", "rob", "bob", "bobby", "robbie"],
-  ["samuel", "sam"],
-  ["samantha", "sam"],
-  ["stephen", "steven", "steve"],
-  ["susan", "sue", "suzy"],
-  ["thomas", "tom", "tommy"],
-  ["timothy", "tim"],
-  ["victoria", "vicky", "tori"],
-  ["william", "will", "bill", "billy", "liam"],
-  ["zachary", "zach", "zack"]
-];
-var escapeRe3 = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-function hasPhrase2(text2, phrase) {
-  const p = norm(phrase);
-  if (!p) return false;
-  return new RegExp(`(^|[^\\p{L}\\p{N}])${escapeRe3(p)}($|[^\\p{L}\\p{N}])`, "u").test(text2);
+// supabase/functions/_shared/memory/memory.ts
+function embeddable(text2) {
+  const letters = text2.match(/\p{L}/gu) ?? [];
+  if (!letters.length) return false;
+  const latin = letters.filter((c) => /[A-Za-z]/.test(c)).length;
+  return latin / letters.length >= 0.8;
 }
-function hasExact(raw, phrase) {
-  const p = phrase.trim();
-  if (!p) return false;
-  return new RegExp(`(^|[^\\p{L}\\p{N}])${escapeRe3(p)}($|[^\\p{L}\\p{N}])`, "u").test(raw);
-}
-function companyAliases(name) {
-  const k = normOrg(name);
-  if (!k) return [];
-  const row = COMPANY_ALIASES.find((r) => r.some((a) => normOrg(a) === k));
-  const out = [name.trim(), ...row ?? []];
-  return [...new Map(out.map((a) => [normOrg(a), a.trim()])).values()].filter((a) => normOrg(a).length >= 2);
-}
-function schoolAliases(name) {
-  const k = norm(name);
-  const row = SCHOOL_ALIASES.find((r) => r.some((a) => norm(a) === k));
-  const out = [name.trim(), ...row ?? []];
-  return [...new Map(out.map((a) => [norm(a), a.trim()])).values()].filter((a) => norm(a).length >= 2);
-}
-var PRODUCT_AFTER = /^[\s-]*(api|apis|sdk|sdks|plugin|plugins|integration|integrations|cloud|docs|checkout|connect|elements|ads|analytics|maps|sheets|drive|workspace|app store|play store|pay|wallet|webhooks?|dashboard|link|graph api|marketplace|certified|certification|partner program)\b/i;
-var PRODUCT_BEFORE = /\b(integrat\w*|using|uses|used|built (?:on|with)|powered by|via|connect(?:s|ed|ing)? (?:to|with)|migrat\w* (?:to|from)|deployed (?:on|to)|hosted on)\s+(?:the\s+)?$/i;
-function placesOf(raw, phrase, exact) {
-  const p = exact ? phrase.trim() : phrase.trim().toLowerCase();
-  const hay = exact ? raw : raw.toLowerCase();
-  const out = [];
-  if (!p) return out;
-  const re = new RegExp(`(^|[^\\p{L}\\p{N}])${escapeRe3(p)}(?=$|[^\\p{L}\\p{N}])`, "gu");
-  for (let m = re.exec(hay); m; m = re.exec(hay)) out.push(m.index + m[1].length);
-  return out;
-}
-function mentionsOrg(raw, aliases) {
-  const flat = raw.normalize("NFKD").replace(/[\u0300-\u036f]/g, "");
-  return aliases.some((a) => {
-    const n = normOrg(a);
-    if (n.length < 2) return false;
-    const exact = COMMON_WORD_ORGS.has(n) || n.length <= 3;
-    const name = exact ? a.replace(ORG_TAIL, "").trim() : n;
-    const hay = exact ? flat : norm(flat);
-    const len = (exact ? name : name.toLowerCase()).length;
-    return placesOf(hay, name, exact).some((start) => {
-      const after = hay.slice(start + len, start + len + 30);
-      const before = hay.slice(Math.max(0, start - 40), start);
-      return !PRODUCT_AFTER.test(after) && !PRODUCT_BEFORE.test(before);
-    });
-  });
-}
-var ORG_TAIL = /[,.]?\s+(inc|inc\.|llc|ltd|ltd\.|corp|corporation|co|gmbh|plc|sa|ag)\.?$/i;
-function mentionsSchool(raw, aliases) {
-  const t = norm(raw);
-  return aliases.some((a) => {
-    const n = norm(a);
-    if (COMMON_WORD_SCHOOLS.has(n) || n.length <= 4) return hasExact(raw, a);
-    return hasPhrase2(t, n);
-  });
-}
-function givenNames(first) {
-  const f = norm(first);
-  const out = /* @__PURE__ */ new Set([f]);
-  for (const row of NICKNAMES2) if (row.includes(f)) for (const x of row) out.add(x);
-  return [...out];
-}
-function cityOf(location) {
-  const first = (location ?? "").split(",")[0]?.trim() ?? "";
-  const c = first.replace(/\b(greater|metropolitan|metro)\b/gi, "").replace(/\b(bay area|area|region)\b/gi, "").trim();
-  return c.length >= 3 ? c : void 0;
-}
-function slugOf(url) {
-  const m = /linkedin\.com\/in\/([^/?#]+)/i.exec(url ?? "");
-  return m?.[1] ? decodeURIComponent(m[1]).toLowerCase() : void 0;
-}
-function identityCard(p) {
-  const fullName = p.name.trim().replace(/\s+/g, " ");
-  const parts = fullName.split(" ").filter((x) => !/^(jr\.?|sr\.?|ii|iii|iv|phd|md|mba)$/i.test(x));
-  const first = p.firstName?.trim() || parts[0] || "";
-  const last = p.lastName?.trim() || (parts.length > 1 ? parts[parts.length - 1] : "");
-  const names = /* @__PURE__ */ new Set([norm(fullName)]);
-  if (first && last) {
-    for (const g of givenNames(first)) names.add(`${g} ${norm(last)}`);
-    names.add(`${norm(first)} ${norm(last)}`);
-  }
-  const exp = (p.profile?.experience ?? []).filter((e) => e.company?.trim());
-  const current = exp.find((e) => e.current) ?? exp[0];
-  const ordered = [
-    ...current ? [current] : [],
-    ...exp.filter((e) => e !== current && normOrg(e.company) !== normOrg(current?.company))
-  ];
-  const employerNames = [];
-  if (p.org?.trim()) employerNames.push({ name: p.org.trim(), current: true });
-  for (const e of ordered) {
-    const n = e.company.trim();
-    if (employerNames.some((x) => normOrg(x.name) === normOrg(n))) continue;
-    employerNames.push({ name: n, current: e === current });
-    if (employerNames.length >= 3) break;
-  }
-  const allSchools = [
-    ...(p.profile?.education ?? []).map((e) => e.school?.trim() ?? ""),
-    p.school?.trim() ?? ""
-  ].filter(Boolean);
-  const isHigh = (s) => /high school|secondary school/i.test(s);
-  const schoolNames = [...allSchools.filter((s) => !isHigh(s)), ...allSchools.filter(isHigh)];
-  const slug = slugOf(p.linkedinUrl) ?? p.profile?.publicIdentifier?.toLowerCase() ?? void 0;
-  const employers = employerNames.slice(0, 3).map((e) => ({ ...e, aliases: companyAliases(e.name) }));
-  return {
-    fullName,
-    names: [...names].filter((n) => n.includes(" ")),
-    last: norm(last),
-    employers,
-    schools: [...new Map(schoolNames.map((s) => [norm(s), s])).values()].slice(0, 5).map((s) => ({ name: s, aliases: schoolAliases(s) })),
-    city: cityOf(p.profile?.location ?? p.location),
-    slug,
-    domains: workDomains(p.emails),
-    anchored: !!slug || !!p.profile || employers.length > 0
-  };
-}
-function hostOf(url) {
-  try {
-    return new URL(url).hostname.toLowerCase().replace(/^www\./, "");
-  } catch {
-    return "";
-  }
-}
-function employerInTitle(title, card) {
-  if (!title) return void 0;
-  const t = title.replace(/\s*[|·]\s*(linkedin|crunchbase|twitter|x)\b.*$/i, "");
-  if (!card.names.some((n) => hasPhrase2(norm(t), n))) return void 0;
-  const m = /\b(?:at|@)\s+([A-Z][\w&.'-]*(?:\s+[A-Z][\w&.'-]*){0,3})/.exec(t);
-  return m?.[1]?.trim();
-}
-function scorePage(page2, card) {
-  const raw = [page2.title ?? "", page2.text ?? ""].join(" \n ");
-  const text2 = norm(raw);
-  const host = hostOf(page2.url);
-  const linkedinCopy = isLinkedInCopy(page2.url);
-  const blocked = isBlockedSource(page2.url);
-  const signals = [];
-  if (card.names.some((n) => hasPhrase2(text2, n))) signals.push("name");
-  if (card.employers.some((e) => mentionsOrg(raw, e.aliases))) signals.push("employer");
-  if (card.schools.some((s) => mentionsSchool(raw, s.aliases))) signals.push("school");
-  if (card.slug && text2.includes(`linkedin.com/in/${card.slug}`)) signals.push("slug");
-  if (card.domains.some((d) => host === d || host.endsWith(`.${d}`) || text2.includes(`@${d}`)))
-    signals.push("domain");
-  const compactHost = host.replace(/[^a-z0-9]/g, "");
-  if (card.last.length >= 3 && card.names.some((n) => compactHost.startsWith(n.replace(/[^a-z0-9]/g, ""))) && host.split(".").length <= 3)
-    signals.push("personal_site");
-  if (card.city && hasPhrase2(text2, card.city)) signals.push("city");
-  const inTitle = employerInTitle(page2.title, card);
-  const conflict = inTitle && !card.employers.some((e) => mentionsOrg(inTitle, e.aliases)) && !card.schools.some((s) => mentionsSchool(inTitle, s.aliases)) ? inTitle : void 0;
-  const named = signals.includes("name");
-  const others = signals.filter((s) => s !== "name" && s !== "city" && s !== "personal_site");
-  let strength2 = "none";
-  if (named) strength2 = "weak";
-  if (named && others.length >= 1 && !conflict && !linkedinCopy && !blocked) strength2 = "strong";
-  return { strength: strength2, signals, conflict, linkedinCopy, blocked };
-}
-
-// supabase/functions/_shared/research/prompts.ts
-var PROMPT_VERSION2 = "dossier-v3";
-function dossierSystem(userFirstName2, goalSentence2) {
-  return [
-    `You write a research brief about one person for ${userFirstName2}, who wants to ${goalSentence2}.`,
-    'Use only the sources provided, and write from what each source actually says: "joined" stays "joined", never "led". Every claim needs the id of the source it came from.',
-    "If sources disagree or might be about a different person with the same name, leave the claim out.",
-    'A source whose title starts with "[likely them]" names someone with their name whose details all fit, but nothing ties it to them for certain: you may use it, saying so ("likely the same Dana who..."), never in an opener, and never for their current role.',
-    'Never write, even if a source says it: age, ethnicity, religion, health, family or relationships, sexuality, politics or donations, where they live (a city is the finest you may say), salary or pay, their personality or "communication style", legal matters, immigration, or that they lost a job or took leave.',
-    `"careful" is about their company only (recent layoffs, a reorganization, a product shut down, a hiring freeze), each item with its source ids; never anything about the person's own life. Leave it empty when there is nothing.`,
-    '"company" is what is happening at their company that matters to the student (team news, launches, hiring), from company sources, each with its source ids. Leave it empty when there are no company sources.',
-    `Openers: up to three single sentences the student could open a first message with, each a statement (not a question) of at most 25 words about something they made, said or did. Each rests on one cited source and uses only details that source states, in its words where you can (a title, a claim, a number); the student's reaction may be added ("stuck with me"). Never flattery, never about their private life.`,
-    `Most people have little online beyond LinkedIn. When the only sources are their LinkedIn and the student's own history, say so plainly in "who" (for example "Not much is public about Dana beyond LinkedIn.") and keep to what LinkedIn says; do not pad.`,
-    'Also lay out who they are in full, from the sources only: "career" (every role you can source, newest first, with start and end as written, e.g. "2021" or "Mar 2022"), "education", "profiles" (their own pages: LinkedIn, X, GitHub, a personal site, Google Scholar; only URLs that appear in the sources), "highlights" (up to 8 things they made or said that matter: posts, articles, talks, podcasts, projects, papers, news, awards, each with the URL of its source) and "topics" (up to 6 short phrases for what they work on or talk about).'
-  ].join("\n");
-}
-function dossierUser(input) {
-  const block2 = (list2) => list2.map(
-    (s) => [
-      `<source id="${s.id}">`,
-      `url: ${s.url}`,
-      s.title ? `title: ${s.title}` : "",
-      s.published ? `published: ${s.published}` : "",
-      s.text,
-      "</source>"
-    ].filter(Boolean).join("\n")
-  ).join("\n");
-  return [
-    `<user_context>${input.userContext}</user_context>`,
-    `<person>${JSON.stringify(input.person)}</person>`,
-    `<internal_history>${input.internalHistory}</internal_history>`,
-    `<linkedin>${input.linkedin}</linkedin>`,
-    `<sources>${block2(input.sources)}</sources>`,
-    ...input.companySources?.length ? [`<company_sources>${block2(input.companySources)}</company_sources>`] : []
-  ].join("\n");
-}
-var sourceIds = z.array(z.string());
-var dossierSchema = z.object({
-  who: z.string(),
-  now: z.object({
-    role: z.string(),
-    org: z.string(),
-    since: z.string().nullable(),
-    source_ids: sourceIds
-  }),
-  recently: z.array(z.object({ date: z.string().nullable(), text: z.string(), source_ids: sourceIds })),
-  in_common: z.array(
-    z.object({
-      text: z.string(),
-      kind: z.enum(["school", "employer", "person", "interest", "place"]),
-      source_ids: sourceIds
-    })
-  ),
-  history: z.object({
-    first_contact: z.string().nullable(),
-    last_contact: z.string().nullable(),
-    summary: z.string().nullable()
-  }),
-  openers: z.array(z.object({ text: z.string(), source_ids: sourceIds })),
-  // v2: each item cited like every other line (v1 wrote plain strings; readers accept both)
-  careful: z.array(z.object({ text: z.string(), source_ids: sourceIds })),
-  confidence: z.enum(["high", "medium", "low"]),
-  // the full picture (v1.1); optional so a dossier written before them still reads
-  career: z.array(
-    z.object({
-      role: z.string(),
-      org: z.string(),
-      start: z.string().nullable(),
-      end: z.string().nullable(),
-      source_ids: sourceIds
-    })
-  ).optional(),
-  education: z.array(
-    z.object({
-      school: z.string(),
-      degree: z.string().nullable(),
-      years: z.string().nullable(),
-      source_ids: sourceIds
-    })
-  ).optional(),
-  profiles: z.array(
-    z.object({ kind: z.enum(["linkedin", "x", "github", "website", "scholar", "other"]), url: z.string() })
-  ).optional(),
-  highlights: z.array(
-    z.object({
-      kind: z.enum(["post", "article", "talk", "podcast", "project", "paper", "news", "award", "other"]),
-      title: z.string(),
-      date: z.string().nullable(),
-      url: z.string().nullable(),
-      summary: z.string().nullable(),
-      source_ids: sourceIds
-    })
-  ).optional(),
-  topics: z.array(z.string()).optional(),
-  // v2: what is happening at their company, from company pages (Go deeper)
-  company: z.array(z.object({ text: z.string(), source_ids: sourceIds })).optional()
-});
-function retryNote2(bad, allowed) {
-  return `
-
-Your previous answer cited source ids that do not exist (${bad.join(", ")}). Cite only these ids: ${allowed.join(", ") || "(none)"}. Leave out any claim you cannot cite.`;
-}
-var supportSystem = [
-  "You check a research brief against its sources. For each numbered claim, read the sources it cites and give one verdict:",
-  '"supported": the cited sources state it, or it is a fair summary or paraphrase of what they state.',
-  '"partial": the sources back only part of it, or it says more than they do: a stronger verb ("led" where they say "joined"), a different date or number, or a role, place or detail they do not give.',
-  '"unsupported": the cited sources do not say it, or say something else.',
-  `Each claim says what kind it is. An opener is a line the student would say to them: judge only what it states about them or their work; the student's own reaction ("stuck with me", "I liked") is not a claim. A highlight names something of theirs (a post, talk, article, project): supported when the cited source is that item or describes it.`,
-  "Judge only against the cited source text given here, never what you know."
+var MEMORY_SYSTEM = [
+  'Extract durable facts worth remembering for future conversations: preferences, constraints, details of goals, outcomes, and facts about specific people. Skip small talk and anything already in <known>. Each memory ≤ 200 characters, in third person about the user ("Prefers morning calls").',
+  `Return {"memories": [{kind, text, person_name|null, importance: 0..1, quote}]}; quote must be the user's own words.`
 ].join("\n");
-var supportSchema = z.object({
-  verdicts: z.array(z.object({ id: z.string(), verdict: z.enum(["supported", "partial", "unsupported"]) }))
+var memorySchema = z2.object({
+  memories: z2.array(
+    z2.object({
+      kind: z2.enum(["preference", "constraint", "goal_detail", "outcome", "person_fact", "note"]),
+      text: z2.string(),
+      person_name: z2.string().nullable(),
+      importance: z2.number(),
+      quote: z2.string()
+    })
+  )
 });
 
-// supabase/functions/_shared/research/dossier.ts
-var DOSSIER_CAP_USD = 0.3;
-var DOSSIER_REUSE_MS = 30 * 864e5;
-var EXA_CACHE_MS = 7 * 864e5;
-var DOSSIER_MODEL = "claude-opus-5-5";
-var SYNTH_OUT_USD = 2e3 * 2e-5;
-var synthEstimateUsd = (promptChars) => promptChars / 4 * 4e-6 + SYNTH_OUT_USD;
-var iso2 = (ms2) => new Date(ms2).toISOString();
-async function buildDossier(deps, input) {
-  const now = deps.clock();
-  const prior = await deps.db.getDossier(input.userId, input.personId);
-  if (prior && !input.refresh && (prior.status === "ready" || prior.status === "partial") && prior.content && Date.parse(prior.expires_at) > now) {
-    return {
-      status: prior.status,
-      dossier: prior.content,
-      sources: prior.sources,
-      costUsd: 0,
-      cached: true,
-      model: prior.model,
-      promptVersion: prior.prompt_version ?? PROMPT_VERSION2,
-      notes: []
-    };
+// supabase/functions/_shared/voice/voice.ts
+var EXEMPLAR_MIN_WORDS = 25;
+var EMBED_SENT_LIMIT = 200;
+var CARD_SAMPLES = 150;
+var text = (max) => z3.string().max(max);
+var list = (n, max) => z3.array(text(max)).max(n);
+var StyleCardS = z3.object({
+  greetingPatterns: list(6, 80),
+  signoffs: list(6, 160),
+  formality: z3.number().min(0).max(1),
+  avgSentenceWords: z3.number().min(0).max(200),
+  avgMessageWords: z3.number().min(0).max(2e3),
+  contractions: z3.boolean(),
+  exclamationsPerMessage: z3.number().min(0).max(50),
+  emoji: z3.boolean(),
+  characteristicPhrases: list(12, 120),
+  avoid: list(50, 120),
+  notes: text(4e3),
+  builtFromCount: z3.number().int().min(0).max(1e6),
+  version: z3.number().int().min(0).max(1e3),
+  sources: z3.partialRecord(z3.enum(["email", "linkedin", "orbit", "pasted"]), z3.number().int().min(0)).optional(),
+  custom: z3.boolean().optional()
+});
+async function embedSafely(embed, raw) {
+  const t = raw.trim().slice(0, 2e3);
+  if (!t || !embeddable(t)) return null;
+  try {
+    const e = await embed(t);
+    return e?.length ? e : null;
+  } catch {
+    return null;
   }
-  const run = { deps, input, spent: 0, notes: [], partial: false };
-  const history = await deps.db.internalHistory(input.userId, input.personId);
-  const linkedin = await linkedInStep(run);
-  const searches = exaSearches(input, now);
-  const answers = await Promise.all(searches.map((s) => cachedExaSearch(run, s)));
-  const [peopleResults, ...otherResults] = answers.map((a) => a ?? []);
-  const identity = identityStep(input, linkedin.profile, peopleResults ?? []);
-  if (identity.kind === "ambiguous") {
-    await save(run, { status: "needs_disambiguation", candidates: identity.candidates }, now);
-    return {
-      status: "needs_disambiguation",
-      candidates: identity.candidates,
-      costUsd: run.spent,
-      cached: false
-    };
-  }
-  const keep = (r) => identity.kind === "anchored" && !isBlockedSource(r.url) && scorePage({ url: r.url, title: r.title, text: resultText(r) }, identity.card).strength === "strong";
-  const keptPeople = (peopleResults ?? []).filter(keep);
-  const keptOther = otherResults.flat().filter(keep);
-  if (appearsMinor({
-    title: input.person.title,
-    headline: linkedin.profile?.headline,
-    education: linkedin.profile?.education,
-    profileTexts: keptPeople.map((r) => `${r.title ?? ""} ${(r.highlights ?? []).join(" ")}`),
-    year: new Date(now).getUTCFullYear()
-  })) {
-    await save(run, { status: "failed", error: "minor" }, now);
-    return { status: "failed", error: "minor", costUsd: run.spent, cached: false };
-  }
-  const kept = dedupeByUrl([...keptPeople, ...keptOther]).slice(0, 8);
-  const texts = await contentsStep(
-    run,
-    kept.map((r) => r.url)
-  );
-  const sources = [];
+}
+function exemplarText(body) {
+  if (!body) return null;
+  const t = stripQuotedReply(body).trim();
+  return wordCount(t) >= EXEMPLAR_MIN_WORDS ? t : null;
+}
+async function embedMessages(db2, embed, rows) {
+  if (!embed) return 0;
   let n = 0;
-  const nextId = () => `S${++n}`;
-  const linkedinLines = [];
-  if (linkedin.profile) {
-    const id = nextId();
-    const url = linkedin.profile.public_profile_url ?? input.person.linkedinUrl ?? `https://www.linkedin.com/in/${linkedin.profile.public_identifier ?? input.person.linkedinMemberId ?? ""}`;
-    const text2 = formatProfile(linkedin.profile);
-    sources.push({ id, kind: "linkedin_profile", url, title: "LinkedIn profile", text: text2 });
-    linkedinLines.push(`[${id}] profile
-${text2}`);
-  }
-  for (const p of linkedin.posts.slice(0, 10)) {
-    if (!p.text) continue;
-    const id = nextId();
-    const text2 = p.text.slice(0, 1500);
-    sources.push({
-      id,
-      kind: "linkedin_post",
-      url: p.share_url ?? "",
-      title: "LinkedIn post",
-      published: p.parsed_datetime ?? p.date ?? null,
-      text: text2
-    });
-    linkedinLines.push(`[${id}] post ${p.parsed_datetime ?? p.date ?? ""}
-${text2}`);
-  }
-  for (const r of kept) {
-    const text2 = (texts.get(r.url) ?? r.text ?? (r.highlights ?? []).join(" … ")).slice(0, 6e3);
-    sources.push({
-      id: nextId(),
-      kind: "web",
-      url: r.url,
-      title: r.title ?? void 0,
-      published: r.publishedDate,
-      text: text2
-    });
-  }
-  const allowed = sources.map((s) => s.id);
-  const prompt = {
-    system: dossierSystem(input.user.firstName, input.goalSentence),
-    user: dossierUser({
-      userContext: input.user.context,
-      person: {
-        name: input.person.name,
-        title: input.person.title,
-        org: input.person.org,
-        location: input.person.location,
-        identities: {
-          linkedin: input.person.linkedinUrl,
-          emails: input.person.emails
-        }
-      },
-      internalHistory: formatHistory(history),
-      linkedin: linkedinLines.join("\n\n"),
-      sources: sources.filter((s) => s.kind === "web")
-    })
-  };
-  const thin = sources.filter((s) => s.kind === "web").length === 0;
-  let dossier = await synthesize(run, prompt, allowed);
-  let model = DOSSIER_MODEL;
-  if (!dossier) {
-    dossier = fallbackDossier(input, linkedin.profile, history);
-    model = null;
-    run.partial = true;
-  }
-  dossier = finish(dossier, history, thin && !linkedin.profile);
-  if (model === null)
-    run.notes.push("assembled without web research or the model; check it before relying on it");
-  const storedSources = sources.map(({ text: _t, ...s }) => s);
-  const status = run.partial ? "partial" : "ready";
-  await save(run, { status, content: dossier, sources: storedSources, model }, now);
-  return {
-    status,
-    dossier,
-    sources: storedSources,
-    costUsd: round4(run.spent),
-    cached: false,
-    model,
-    promptVersion: PROMPT_VERSION2,
-    notes: run.notes
-  };
-}
-async function linkedInStep(run) {
-  const { deps, input } = run;
-  const memberId = input.person.linkedinMemberId;
-  const empty = { profile: null, posts: [] };
-  if (!deps.unipile.configured || !input.unipileAccountId || !memberId) return empty;
-  const key2 = await cacheKey("unipile", { op: "profile+posts", accountId: input.unipileAccountId, memberId });
-  const hit = await deps.db.get(input.userId, key2);
-  if (hit) return hit;
-  const verdict = await deps.budget.check(input.userId, "unipile_profile", 1);
-  if (!verdict.ok) {
-    run.notes.push("LinkedIn profile skipped: daily profile-view cap reached");
-    return empty;
-  }
-  const [profile, posts] = await Promise.all([
-    deps.unipile.profile(input.unipileAccountId, memberId),
-    deps.unipile.posts(input.unipileAccountId, memberId, { limit: 10 })
-  ]);
-  if (!profile.ok) {
-    run.partial = true;
-    run.notes.push(`LinkedIn unavailable (${profile.message})`);
-    return empty;
-  }
-  await deps.budget.record(input.userId, {
-    provider: "unipile_profile",
-    operation: "profile",
-    units: 1,
-    costUsd: 0
-  });
-  const value = { profile: profile.value, posts: posts.ok ? posts.value : [] };
-  if (!posts.ok) run.notes.push("LinkedIn posts unavailable");
-  await deps.db.put(input.userId, {
-    key: key2,
-    provider: "unipile",
-    response: value,
-    expiresAt: new Date(deps.clock() + EXA_CACHE_MS)
-  });
-  return value;
-}
-function monthsAgoMonthStart(now, months) {
-  const d = new Date(now);
-  const m = d.getUTCFullYear() * 12 + d.getUTCMonth() - months;
-  return new Date(Date.UTC(Math.floor(m / 12), m % 12, 1)).toISOString();
-}
-function exaSearches(input, now) {
-  const { name, org, title } = input.person;
-  const q = (...parts) => parts.filter((p) => p?.trim()).join(" ");
-  const contents = {
-    highlights: {
-      query: input.goalQuestion ?? `What has ${name} worked on, said or published recently that matters to someone who wants to ${input.goalSentence}?`,
-      maxCharacters: 1200
+  for (const r of rows) {
+    const t = exemplarText(r.body);
+    if (!t) continue;
+    const e = await embedSafely(embed, t);
+    if (!e) {
+      if (embeddable(t)) break;
+      continue;
     }
-  };
-  const base = {
-    type: "auto",
-    numResults: 5,
-    contents,
-    excludeDomains: [...BLOCKED_SOURCE_DOMAINS]
-  };
-  const third = input.goalKind === "collaboration" ? { ...base, category: "publication", query: q(`"${name}"`, input.field ?? org) } : {
-    ...base,
-    query: q(`"${name}"`, org, "podcast OR talk OR interview OR blog OR GitHub OR personal website")
-  };
-  return [
-    { ...base, category: "people", query: q(`"${name}"`, org, title) },
-    {
-      ...base,
-      category: "news",
-      query: q(`"${name}"`, org),
-      startPublishedDate: monthsAgoMonthStart(now, 18)
-    },
-    third
-  ];
-}
-async function cachedExaSearch(run, req) {
-  const { deps, input } = run;
-  const key2 = await cacheKey("exa", { op: "search", req });
-  const hit = await deps.db.get(input.userId, key2);
-  if (hit) return hit.results ?? [];
-  if (!deps.exa.configured) {
-    if (!run.notes.includes("Exa is not configured")) run.notes.push("Exa is not configured");
-    run.partial = true;
-    return null;
+    try {
+      await db2.sql`update orbit.messages set embedding = ${vec(e)}::vector where id = ${r.id}::uuid`;
+      n++;
+    } catch {
+    }
   }
-  const est = estimateExaSearchUsd(req);
-  if (!await reserve(run, "exa", est)) return null;
-  const r = await deps.exa.search(req);
-  run.spent -= est;
-  if (!r.ok) {
-    run.partial = true;
-    run.notes.push(`Exa search failed (${r.message})`);
-    return null;
-  }
-  const cost = exaCostUsd(r.value, est);
-  run.spent += cost;
-  await deps.budget.record(input.userId, { provider: "exa", operation: "search", units: 1, costUsd: cost });
-  await deps.db.put(input.userId, {
-    key: key2,
-    provider: "exa",
-    response: { results: r.value.results },
-    expiresAt: new Date(deps.clock() + EXA_CACHE_MS)
-  });
-  return r.value.results;
+  return n;
 }
-async function reserve(run, provider, est) {
-  if (run.spent + est > DOSSIER_CAP_USD) {
-    run.partial = true;
-    if (!run.notes.includes("cost cap reached")) run.notes.push("cost cap reached");
-    return false;
-  }
-  run.spent += est;
-  const v = await run.deps.budget.check(run.input.userId, provider, est);
-  if (!v.ok) {
-    run.spent -= est;
-    run.partial = true;
-    if (!run.notes.includes(`${provider} budget exceeded`)) run.notes.push(`${provider} budget exceeded`);
-    return false;
-  }
-  return true;
-}
-function resultText(r) {
-  return [r.url, r.title, r.author, r.text, ...r.highlights ?? []].filter(Boolean).join(" \n ");
-}
-var pageText = (r) => [r.url, r.title, r.author, r.text, ...r.highlights ?? []].filter(Boolean).join(" \n ");
-function pickIdentity(card, people) {
-  const named = people.filter(
-    (r) => !isBlockedSource(r.url) && scorePage({ ...r, text: pageText(r) }, card).signals.includes("name")
+async function embedSent(db2, embed, userId, limit = EMBED_SENT_LIMIT) {
+  const rows = await db2.sql`
+    select id, body_text from orbit.messages
+     where user_id = ${userId}::uuid and direction = 'out' and body_text is not null and not is_automated
+     order by sent_at desc limit ${limit}::int`;
+  const todo = rows.filter((r) => r.body_text);
+  const missing = await db2.sql`
+    select id from orbit.messages where id = any(${todo.map((r) => r.id)}::uuid[]) and embedding is null`;
+  const want = new Set(missing.map((r) => r.id));
+  const embedded = await embedMessages(
+    db2,
+    embed,
+    todo.filter((r) => want.has(r.id)).map((r) => ({ id: r.id, body: r.body_text }))
   );
-  const byOrg = /* @__PURE__ */ new Map();
-  for (const r of named) {
-    const o = orgFromTitle(r.title, card.fullName);
-    const k = o ? normOrg(o) : norm(r.url);
-    if (!byOrg.has(k))
-      byOrg.set(k, {
-        name: card.fullName,
-        org: o,
-        title: r.title ?? void 0,
-        url: r.url,
-        snippet: (r.highlights?.[0] ?? r.text ?? "").slice(0, 240) || void 0
-      });
-  }
-  const linkedIn = !!card.slug;
-  if (linkedIn) return { kind: "anchored", card };
-  if (card.employers.length > 0 || card.domains.length > 0) {
-    if (named.some((r) => scorePage({ ...r, text: pageText(r) }, card).strength === "strong"))
-      return { kind: "anchored", card };
-    if (byOrg.size >= 2) return { kind: "ambiguous", candidates: [...byOrg.values()].slice(0, 5) };
-    return { kind: "anchored", card };
-  }
-  if (byOrg.size >= 2) return { kind: "ambiguous", candidates: [...byOrg.values()].slice(0, 5) };
-  const only = [...byOrg.values()][0];
-  if (only?.org)
-    return {
-      kind: "anchored",
-      card: { ...card, employers: [{ name: only.org, aliases: [only.org], current: true }], anchored: true }
-    };
-  return { kind: "none" };
+  return { embedded, looked: rows.length };
 }
-function identityStep(input, profile, people) {
-  const card = identityCard({
-    name: input.person.name,
-    org: input.person.org,
-    title: input.person.title,
-    location: input.person.location,
-    linkedinUrl: input.person.linkedinUrl ?? (profile?.public_identifier ? `https://www.linkedin.com/in/${profile.public_identifier}` : void 0),
-    emails: input.person.emails,
-    profile: profile ? {
-      headline: profile.headline,
-      location: profile.location,
-      publicIdentifier: profile.public_identifier,
-      experience: (profile.work_experience ?? []).map((w) => ({
-        title: w.position,
-        company: w.company,
-        current: w.current
-      })),
-      education: (profile.education ?? []).map((e) => ({ school: e.school }))
-    } : null
-  });
-  return pickIdentity(card, people);
+async function relearnCard(db2, userId, now) {
+  const [u2] = await db2.sql`
+    select settings, first_name, full_name from orbit.users where id = ${userId}::uuid`;
+  if (!u2) return null;
+  const sent = await db2.sql`
+    select body_text from orbit.messages
+     where user_id = ${userId}::uuid and direction = 'out' and body_text is not null and not is_automated
+     order by sent_at desc limit ${CARD_SAMPLES}::int`;
+  const first = u2.first_name ?? u2.full_name?.split(/\s+/)[0] ?? "";
+  const preset = u2.settings?.tone_preset;
+  const learned = buildStyleCard(
+    sent.map((m) => stripQuotedReply(m.body_text)),
+    first,
+    preset === "direct" || preset === "formal" ? preset : "warm"
+  );
+  if (learned.builtFromCount === 0) return null;
+  const stored = StyleCardS.safeParse(u2.settings?.style_card);
+  const card = mergeStyleCard(learned, stored.success ? stored.data : void 0);
+  await db2.sql`
+    update orbit.users set settings = settings || jsonb_build_object('style_card', ${card}::jsonb,
+                                                                     'voice_relearned_at', ${now.toISOString()}::text)
+     where id = ${userId}::uuid`;
+  return card;
 }
-function dedupeByUrl(rs) {
-  const seen = /* @__PURE__ */ new Set();
-  return rs.filter((r) => {
-    const k = r.url.replace(/[?#].*$/, "").replace(/\/+$/, "").toLowerCase();
-    if (seen.has(k)) return false;
-    seen.add(k);
-    return true;
-  });
+function notesOf(settings) {
+  const v = settings?.voice_notes;
+  if (!Array.isArray(v)) return [];
+  return v.filter(
+    (n) => !!n && typeof n === "object" && typeof n.id === "string" && typeof n.text === "string" && Array.isArray(n.evidence)
+  );
 }
-async function contentsStep(run, urls) {
-  const { deps, input } = run;
-  const out = /* @__PURE__ */ new Map();
-  const missing = [];
-  for (const url of urls) {
-    const key2 = await cacheKey("exa", { op: "contents", url, text: 6e3 });
-    const hit = await deps.db.get(input.userId, key2);
-    if (hit?.text) out.set(url, hit.text);
-    else missing.push({ url, key: key2 });
-  }
-  if (missing.length === 0 || !deps.exa.configured) return out;
-  const est = missing.length * EXA_PAGE_USD;
-  if (!await reserve(run, "exa", est)) return out;
-  const r = await deps.exa.contents({
-    urls: missing.map((m) => m.url),
-    text: { maxCharacters: 6e3 },
-    maxAgeHours: 720
+function storedCard(settings, firstName) {
+  const c = StyleCardS.safeParse(settings?.style_card);
+  if (c.success && ((c.data.builtFromCount ?? 0) >= STYLE_MIN_SAMPLES || c.data.custom))
+    return c.data;
+  const preset = settings?.tone_preset;
+  return defaultStyleCard(preset === "direct" || preset === "formal" ? preset : "warm", firstName);
+}
+var DistillS = z3.object({
+  notes: z3.array(
+    z3.object({
+      text: z3.string().max(400),
+      // "" when the note is not about one phrase
+      avoid: z3.string().max(200),
+      evidence: z3.array(z3.string().max(80)).max(40)
+    })
+  ).max(VOICE_NOTES_MAX * 2)
+});
+async function distillVoice(s, userId) {
+  const db2 = s.db;
+  const rows = await db2.sql`
+    select id, kind, before, after from orbit.draft_edits where user_id = ${userId}::uuid
+     order by created_at desc limit ${VOICE_EDITS_FOR_DISTILL}::int`;
+  const [u2] = await db2.sql`
+    select settings, first_name from orbit.users where id = ${userId}::uuid`;
+  if (!u2 || rows.length < 2) return { by: "too_few_edits", added: [], notes: notesOf(u2?.settings) };
+  const current = notesOf(u2.settings);
+  const card = storedCard(u2.settings ?? {}, u2.first_name ?? "");
+  const edits = rows.map((r2) => ({ id: r2.id, kind: r2.kind, before: r2.before, after: r2.after }));
+  const ids = new Set(edits.map((e) => e.id));
+  let by = "observations";
+  let learned = [];
+  const r = await s.claude.structured({
+    task: "voice_distill",
+    system: VOICE_DISTILL_SYSTEM,
+    user: voiceDistillUser({
+      card,
+      edits,
+      kept: current.filter((n) => n.keptAt && !n.forgottenAt).map((n) => n.text),
+      forgotten: current.filter((n) => n.forgottenAt).map((n) => n.text)
+    }),
+    schema: DistillS,
+    userId
   });
-  run.spent -= est;
-  if (!r.ok) {
-    run.partial = true;
-    run.notes.push(`Exa contents failed (${r.message})`);
-    return out;
-  }
-  const cost = exaCostUsd(r.value, est);
-  run.spent += cost;
-  await deps.budget.record(input.userId, {
-    provider: "exa",
-    operation: "contents",
-    units: missing.length,
-    costUsd: cost
-  });
-  for (const res of r.value.results) {
-    if (!res.text) continue;
-    const m = missing.find((x) => x.url === res.url) ?? missing.find((x) => x.url === res.id);
-    if (!m) continue;
-    out.set(m.url, res.text);
-    await deps.db.put(input.userId, {
-      key: m.key,
-      provider: "exa",
-      response: { text: res.text },
-      expiresAt: new Date(deps.clock() + EXA_CACHE_MS)
+  if (r.ok) {
+    by = "claude";
+    learned = r.data.notes.map((n) => ({
+      text: n.text,
+      avoid: n.avoid.trim() || null,
+      evidence: n.evidence.filter((e) => ids.has(e))
+    })).filter((n) => n.evidence.length > 0).slice(0, VOICE_NOTES_MAX);
+  } else learned = editObservations(edits);
+  const out = await db2.begin(async (tx) => {
+    const [fresh] = await tx.sql`
+      select settings from orbit.users where id = ${userId}::uuid for update`;
+    const merged = mergeVoiceNotes(notesOf(fresh?.settings), learned, {
+      now: s.now(),
+      newId: () => crypto.randomUUID()
     });
-  }
-  return out;
-}
-function invalidSourceIds(d, allowed) {
-  const ok = new Set(allowed);
-  const all = [
-    ...d.now.source_ids,
-    ...d.recently.flatMap((x) => x.source_ids),
-    ...d.in_common.flatMap((x) => x.source_ids),
-    ...d.openers.flatMap((x) => x.source_ids),
-    ...carefulItems(d.careful).flatMap((x) => x.source_ids),
-    ...(d.career ?? []).flatMap((x) => x.source_ids),
-    ...(d.education ?? []).flatMap((x) => x.source_ids),
-    ...(d.highlights ?? []).flatMap((x) => x.source_ids),
-    ...(d.company ?? []).flatMap((x) => x.source_ids)
-  ];
-  return [...new Set(all.filter((id) => !ok.has(id)))];
-}
-function carefulItems(c) {
-  return (Array.isArray(c) ? c : []).map(
-    (x) => typeof x === "string" ? { text: x, source_ids: [] } : x && typeof x === "object" && typeof x.text === "string" ? {
-      text: x.text,
-      source_ids: Array.isArray(x.source_ids) ? x.source_ids.filter(
-        (i) => typeof i === "string"
-      ) : []
-    } : void 0
-  ).filter((x) => !!x);
-}
-async function writeBrief(claude, prompt, allowed, budget2, task = "dossier") {
-  let user = prompt.user;
-  let first;
-  for (let attempt = 0; attempt < 2; attempt++) {
-    const est = synthEstimateUsd(prompt.system.length + user.length);
-    if (budget2.spent + est > budget2.cap) {
-      if (first) {
-        budget2.notes.push(
-          "source-id retry skipped: cost cap; kept the first answer without its uncited lines"
-        );
-        return { content: dropUncited(first, allowed), partial: true };
-      }
-      budget2.notes.push("synthesis skipped: cost cap");
-      return { content: null, partial: true };
-    }
-    const r = await claude.parse(task, dossierSchema, { system: prompt.system, user });
-    budget2.spent += r.costUsd ?? 0;
-    if (!r.ok) {
-      if (first) {
-        budget2.notes.push(
-          `source-id retry failed (${r.reason}); kept the first answer without its uncited lines`
-        );
-        return { content: dropUncited(first, allowed), partial: true };
-      }
-      budget2.notes.push(
-        `synthesis unavailable (${r.reason}${r.message ? `: ${r.message.slice(0, 160)}` : ""})`
-      );
-      return { content: null, partial: true };
-    }
-    const value = blankToNull(r.value);
-    const bad = invalidSourceIds(value, allowed);
-    if (bad.length === 0) return { content: value, partial: false };
-    if (attempt === 1) {
-      budget2.notes.push("uncited claims removed");
-      return { content: dropUncited(value, allowed), partial: true };
-    }
-    first = value;
-    user = prompt.user + retryNote2(bad, allowed);
-  }
-  return { content: first ? dropUncited(first, allowed) : null, partial: true };
-}
-async function synthesize(run, prompt, allowed) {
-  const budget2 = { spent: run.spent, cap: DOSSIER_CAP_USD, notes: run.notes };
-  const out = await writeBrief(run.deps.claude, prompt, allowed, budget2);
-  run.spent = budget2.spent;
-  if (out.partial && out.content) run.partial = true;
-  return out.content;
-}
-function blankToNull(d) {
-  const n = (v) => typeof v === "string" && v.trim() ? v : null;
-  return {
-    ...d,
-    now: { ...d.now, since: n(d.now.since) },
-    recently: d.recently.map((x) => ({ ...x, date: n(x.date) })),
-    history: {
-      first_contact: n(d.history.first_contact),
-      last_contact: n(d.history.last_contact),
-      summary: n(d.history.summary)
-    },
-    ...d.career ? { career: d.career.map((x) => ({ ...x, start: n(x.start), end: n(x.end) })) } : {},
-    ...d.education ? { education: d.education.map((x) => ({ ...x, degree: n(x.degree), years: n(x.years) })) } : {},
-    ...d.highlights ? {
-      highlights: d.highlights.map((x) => ({
-        ...x,
-        date: n(x.date),
-        url: n(x.url),
-        summary: n(x.summary)
-      }))
-    } : {}
-  };
-}
-function dropUncited(d, allowed) {
-  const ok = new Set(allowed);
-  const f = (ids) => ids.filter((i) => ok.has(i));
-  const keep = (xs) => (xs ?? []).map((x) => ({ ...x, source_ids: f(x.source_ids) })).filter((x) => x.source_ids.length);
-  return {
-    ...d,
-    now: { ...d.now, source_ids: f(d.now.source_ids) },
-    recently: keep(d.recently),
-    in_common: keep(d.in_common),
-    openers: keep(d.openers),
-    careful: keep(carefulItems(d.careful)),
-    career: keep(d.career),
-    education: keep(d.education),
-    highlights: keep(d.highlights),
-    company: keep(d.company),
-    confidence: "low"
-  };
-}
-var words2 = (s) => s.trim().split(/\s+/).filter(Boolean).length;
-function finish(d, history, noOutsideSources) {
-  const clean = (xs) => xs.filter((x) => !sensitiveCategory(x.text));
-  return {
-    ...d,
-    who: stripSensitiveSentences(d.who),
-    recently: clean(d.recently).slice(0, 3),
-    in_common: clean(d.in_common),
-    openers: clean(d.openers).filter((o) => words2(o.text) <= 25).slice(0, 3),
-    // company context only, each line cited; nothing about the person's own life (guards.ts)
-    careful: carefulItems(d.careful).filter((c) => carefulAllowed(c.text) && c.source_ids.length > 0),
-    career: (d.career ?? []).slice(0, 12),
-    education: (d.education ?? []).slice(0, 6),
-    // a profile link has to be a web address, never anything a page could run, and never a blocked site
-    profiles: (d.profiles ?? []).filter((p) => /^https?:\/\//i.test(p.url) && !isBlockedSource(p.url)).slice(0, 6),
-    highlights: (d.highlights ?? []).filter((h) => !sensitiveCategory(`${h.title} ${h.summary ?? ""}`)).filter((h) => !h.url || !/^https?:\/\//i.test(h.url) || !isBlockedSource(h.url)).map((h) => ({ ...h, url: h.url && /^https?:\/\//i.test(h.url) ? h.url : null })).slice(0, 8),
-    topics: (d.topics ?? []).filter((t) => !sensitiveCategory(t)).slice(0, 6),
-    company: clean(d.company ?? []).slice(0, 5),
-    history: {
-      first_contact: d.history.first_contact ?? history.firstContact ?? null,
-      last_contact: d.history.last_contact ?? history.lastContact ?? null,
-      summary: d.history.summary ? stripSensitiveSentences(d.history.summary) || null : null
-    },
-    confidence: noOutsideSources ? "low" : d.confidence
-  };
-}
-function fallbackDossier(input, profile, history) {
-  const current = profile?.work_experience?.find((w) => w.current) ?? profile?.work_experience?.[0];
-  const role = current?.position ?? input.person.title ?? "";
-  const org = current?.company ?? input.person.org ?? "";
-  const who = [input.person.name, role && org ? `${role} at ${org}` : role || org].filter(Boolean).join(", ");
-  const last = history.messages[history.messages.length - 1];
-  return {
-    who: `${who}.`,
-    now: {
-      role,
-      org,
-      since: null,
-      // the profile, when there is one, is always the first source
-      source_ids: profile ? ["S1"] : []
-    },
-    recently: [],
-    in_common: [],
-    history: {
-      first_contact: history.firstContact ?? history.messages[0]?.at ?? null,
-      last_contact: history.lastContact ?? last?.at ?? null,
-      summary: last ? `Last ${last.direction === "outbound" ? "you wrote" : "they wrote"}: ${last.subject ?? ""}`.trim() : null
-    },
-    openers: [],
-    // nothing to be careful about that a source says; the brief's status (partial) says it had no web research
-    careful: [],
-    confidence: "low",
-    // the profile's own history, when there is a profile (always source S1)
-    career: profile ? (profile.work_experience ?? []).slice(0, 12).map((w) => ({
-      role: w.position ?? "",
-      org: w.company ?? "",
-      start: fmtDate(w.start) || null,
-      end: w.current ? null : fmtDate(w.end) || null,
-      source_ids: ["S1"]
-    })) : [],
-    education: profile ? (profile.education ?? []).slice(0, 6).map((e) => ({
-      school: e.school ?? "",
-      degree: e.degree ?? null,
-      years: [fmtDate(e.start), fmtDate(e.end)].filter(Boolean).join("–") || null,
-      source_ids: ["S1"]
-    })) : []
-  };
-}
-function fmtDate(v) {
-  if (!v) return "";
-  if (typeof v === "string" || typeof v === "number") return String(v);
-  const o = v;
-  return o.year ? `${o.year}${o.month ? `-${String(o.month).padStart(2, "0")}` : ""}` : "";
-}
-function formatProfile(p) {
-  const lines = [
-    `${p.first_name ?? ""} ${p.last_name ?? ""}`.trim(),
-    p.headline ?? "",
-    p.location ? `Location: ${p.location}` : "",
-    p.summary ? `About: ${p.summary.slice(0, 1500)}` : ""
-  ];
-  for (const w of p.work_experience ?? [])
-    lines.push(
-      `Experience: ${w.position ?? ""} at ${w.company ?? ""} (${fmtDate(w.start)}–${w.current ? "present" : fmtDate(w.end)})`
-    );
-  for (const e of p.education ?? [])
-    lines.push(
-      `Education: ${e.school ?? ""}${e.degree ? `, ${e.degree}` : ""}${e.field_of_study ? ` in ${e.field_of_study}` : ""} (${fmtDate(e.start)}–${fmtDate(e.end)})`
-    );
-  return lines.filter(Boolean).join("\n");
-}
-function formatHistory(h) {
-  const lines = [];
-  for (const m of h.messages.slice(-20))
-    lines.push(
-      `${m.at.slice(0, 10)} ${m.direction === "outbound" ? "user → them" : "them → user"}${m.subject ? ` · ${m.subject}` : ""}: ${m.body.slice(0, 600)}`
-    );
-  for (const n of h.notes) lines.push(`note ${n.at.slice(0, 10)}: ${n.text.slice(0, 600)}`);
-  for (const f of h.facts) lines.push(`fact (${f.type}): ${f.text}`);
-  for (const e of h.events) lines.push(`event ${e.at.slice(0, 10)}: ${e.title}`);
-  return lines.join("\n") || "(none)";
-}
-var round4 = (x) => Math.round(x * 1e4) / 1e4;
-async function save(run, r, now) {
-  const { deps, input } = run;
-  await deps.db.putDossier({
-    user_id: input.userId,
-    person_id: input.personId,
-    goal_id: input.goalId ?? null,
-    status: r.status,
-    content: r.content ?? null,
-    sources: r.sources ?? [],
-    candidates: r.candidates ?? null,
-    cost_usd: round4(run.spent),
-    model: r.model ?? null,
-    prompt_version: r.content ? PROMPT_VERSION2 : null,
-    error: r.error ?? null,
-    created_at: iso2(now),
-    updated_at: iso2(now),
-    expires_at: iso2(now + DOSSIER_REUSE_MS)
+    await tx.sql`
+      update orbit.users set settings = settings || jsonb_build_object('voice_notes', ${JSON.stringify(merged.notes)}::jsonb,
+                                                                       'voice_relearned_at', ${s.now().toISOString()}::text)
+       where id = ${userId}::uuid`;
+    return merged;
   });
+  return { by, added: out.added, notes: out.notes };
+}
+var JudgeS = z3.object({ score: z3.number().int().min(0).max(3), reason: z3.string().max(400) });
+async function judgeVoice(s, userId, draft, examples) {
+  if (examples.length < 2) return void 0;
+  const r = await s.claude.structured({
+    task: "voice_judge",
+    system: VOICE_JUDGE_SYSTEM,
+    user: voiceJudgeUser(draft, examples),
+    schema: JudgeS,
+    userId
+  });
+  if (!r.ok) return void 0;
+  await s.db.sql`
+    insert into orbit.audit_log (user_id, actor, action, target_table, target_id, details)
+    values (${userId}::uuid, 'system', 'draft.voice_judge', 'drafts', ${draft.id},
+            ${{ score: r.data.score, reason: r.data.reason }}::jsonb)`;
+  return r.data;
+}
+async function voiceGate(s, u2, d, opts) {
+  const card = storedCard(u2.settings ?? {}, u2.first_name ?? "");
+  const notes = notesOf(u2.settings);
+  const examples = await exemplars(
+    s,
+    d.user_id,
+    d.person_id,
+    `${d.kind} ${d.subject ?? ""} ${d.body.slice(0, 400)}`
+  ).catch(() => []);
+  const check = voiceCheck({ body: d.body, subject: d.subject }, { card, notes, exemplars: examples });
+  if (!check.ok) return { ok: false, problems: check.problems.map((p) => p.detail) };
+  if (!opts.firstMessage) return { ok: true };
+  const judged = await judgeVoice(s, d.user_id, d, examples);
+  if (!judged)
+    return { ok: false, problems: ["Orbit could not compare it with enough of your sent mail to be sure."] };
+  if (judged.score < VOICE_JUDGE_MIN) return { ok: false, problems: [judged.reason], score: judged.score };
+  return { ok: true };
 }
 
-// supabase/functions/_shared/research/run.ts
-var GOAL_SENTENCE = {
-  recruiting: (t) => `find their next role (${t})`,
-  advice: (t) => `get advice on ${t}`,
-  fundraising: (t) => `raise money (${t})`,
-  sales: (t) => `find customers (${t})`,
-  hiring: (t) => `hire (${t})`,
-  cofounder: (t) => `find a cofounder (${t})`,
-  community: (t) => `grow a community (${t})`,
-  collaboration: (t) => `find research collaborators (${t})`
-};
-function goalSentence(goal) {
-  if (!goal) return "build relationships with people who matter to their work";
-  const f = GOAL_SENTENCE[goal.kind];
-  return f ? f(goal.title) : goal.title;
+// supabase/functions/_shared/compose/context.ts
+var USER_CONTEXT_MAX_CHARS = 4800;
+async function loadUserRow(db2, userId) {
+  const [u2] = await db2.sql`
+    select id, email, full_name, first_name, last_name, school, grad_year, degree, majors, current_title,
+           current_org, current_city, timezone, autonomy_level, settings
+      from orbit.users where id = ${userId}::uuid and deleted_at is null`;
+  if (!u2) throw new HttpError(401, "unauthorized", "sign in again");
+  return { ...u2, settings: u2.settings ?? {}, majors: u2.majors ?? [] };
 }
-async function dossierRow(db2, userId, personId) {
-  const [r] = await db2.sql`
-    select * from orbit.dossiers where user_id = ${userId}::uuid and person_id = ${personId}::uuid`;
-  return r;
-}
-async function ownedPerson(db2, userId, personId) {
+var userFirstName = (u2) => u2.first_name?.trim() || u2.full_name?.trim().split(/\s+/)[0] || u2.email.split("@")[0];
+async function loadPerson(db2, userId, personId) {
   if (typeof personId !== "string" || !/^[0-9a-f-]{36}$/i.test(personId))
     throw new HttpError(400, "bad_request", "personId is required");
   const [p] = await db2.sql`
-    select id from orbit.people where id = ${personId}::uuid and user_id = ${userId}::uuid and deleted_at is null`;
+    select p.id, p.user_id, p.is_self, p.display_name, p.first_name, p.last_name, p.primary_email, p.headline,
+           p.title, p.org_raw, o.name as org_name, p.location, p.timezone, p.school, p.is_alumni, p.linkedin_url,
+           p.linkedin_slug, p.linkedin_member_id, p.do_not_contact, p.hidden_at, p.last_interaction_at,
+           ts.score::int as score,
+           coalesce((select array_agg(i.value_norm order by i.created_at) from orbit.person_identities i
+                      where i.person_id = p.id and i.kind = 'email'), '{}') as emails
+      from orbit.people p
+      left join orbit.organizations o on o.id = p.org_id
+      left join orbit.tie_scores ts on ts.user_id = p.user_id and ts.person_id = p.id
+     where p.id = ${personId}::uuid and p.user_id = ${userId}::uuid and p.deleted_at is null`;
   if (!p) throw new HttpError(404, "not_found", "no such person");
-  return p.id;
+  const emails = [...new Set([p.primary_email, ...p.emails ?? []].filter((e) => !!e))];
+  return { ...p, emails };
 }
-async function runDossierJob(s, userId, payload) {
-  const db2 = s.db;
-  const personId = await ownedPerson(db2, userId, payload.personId);
-  const [p] = await db2.sql`
-    select p.display_name, p.title, p.org_raw, o.name as org_name, p.location, p.linkedin_url, p.linkedin_member_id,
-           (select array_agg(i.value_norm) from orbit.person_identities i where i.person_id = p.id and i.kind = 'email') as emails
-      from orbit.people p left join orbit.organizations o on o.id = p.org_id where p.id = ${personId}::uuid`;
-  const goalId = typeof payload.goalId === "string" ? payload.goalId : (await dossierRow(db2, userId, personId))?.goal_id;
-  const [goal] = goalId ? await db2.sql`
-        select id, kind, title, criteria from orbit.goals where id = ${goalId}::uuid and user_id = ${userId}::uuid` : [];
-  const user = await loadUserRow(db2, userId);
-  const [acct] = await db2.sql`
-    select external_account_id from orbit.integration_accounts
-     where user_id = ${userId}::uuid and provider = 'linkedin' and status = 'active'`;
-  const chosen = payload.chosen;
-  return buildDossier(
-    {
-      exa: s.exa,
-      unipile: s.unipile,
-      claude: claudeDep(s.claude, userId),
-      db: sqlResearchDb(db2, s.now),
-      budget: sqlBudget(db2, s.now),
-      clock: () => s.now().getTime()
-    },
-    {
-      userId,
-      personId,
-      goalId: goal?.id ?? null,
-      goalKind: goal?.kind,
-      goalSentence: goalSentence(goal),
-      field: typeof goal?.criteria?.topic === "string" ? goal.criteria.topic : void 0,
-      user: { firstName: userFirstName(user), context: await buildUserContext(db2, user) },
-      person: {
-        name: p.display_name,
-        title: p.title ?? void 0,
-        org: chosen?.org ?? p.org_name ?? p.org_raw ?? void 0,
-        location: p.location ?? void 0,
-        linkedinMemberId: p.linkedin_member_id ?? void 0,
-        linkedinUrl: p.linkedin_url ?? void 0,
-        emails: p.emails ?? void 0
-      },
-      unipileAccountId: acct?.external_account_id ?? void 0,
-      refresh: payload.refresh === true || !!chosen
-    }
+var personOrg = (p) => p.org_name ?? p.org_raw ?? void 0;
+async function buildUserContext(db2, u2) {
+  const lines = [];
+  const name = u2.full_name ?? userFirstName(u2);
+  const role = [u2.current_title, u2.current_org].filter(Boolean).join(" at ");
+  const school = u2.school ? `${[u2.degree, u2.majors.join(", ")].filter(Boolean).join(" in ") || "Student"} at ${u2.school}${u2.grad_year ? `, class of ${u2.grad_year}` : ""}` : "";
+  lines.push(
+    [name, role, school, u2.current_city ? `based in ${u2.current_city}` : ""].filter(Boolean).join("; ")
   );
-}
-
-// supabase/functions/orbit-worker/handlers/enrich.ts
-function enrichDossier(config) {
-  return async (job, ctx) => {
-    if (!job.userId) throw new Error("enrich.dossier needs a user");
-    const s = makeServices(config, { db: ctx.db, now: ctx.now, queue: ctx.queue });
-    try {
-      await runDossierJob(s, job.userId, job.payload);
-    } catch (e) {
-      if (e instanceof HttpError && e.status < 500) return;
-      throw e;
-    }
-  };
-}
-
-// supabase/functions/_shared/replies/replies.ts
-var needsYouKey = (messageId) => `needs_you:${messageId}`;
-function questionOf(extraction, text2) {
-  const llm = extraction?.llm?.question;
-  if (typeof llm === "string" && llm.trim()) return llm.trim();
-  const own = extraction?.question;
-  if (typeof own === "string" && own.trim()) return own.trim();
-  const body = stripQuotedReply(text2);
-  const sentence2 = body.split(/(?<=[.!?])\s+|\n+/).map((s) => s.trim()).find((s) => s.endsWith("?"));
-  return sentence2 ?? (holdsQuestion(body) ? body.trim().slice(0, 200) : null);
-}
-async function draftReply(s, userId, messageId, actor = "user") {
-  const m = await loadReplyMessage(s.db, userId, messageId);
-  if (m.reply_class === "unsubscribe")
-    throw new HttpError(409, "unsubscribe", "they asked not to be contacted; no reply is drafted");
-  if (!m.from_person_id) throw new HttpError(409, "unknown_sender", "Orbit does not know who sent this yet");
-  return composeDraft(s, {
-    userId,
-    personId: m.from_person_id,
-    kind: "reply",
-    channel: m.provider,
-    replyToMessageId: m.id,
-    actor
-  });
-}
-var DRAFT_CLASSES = new Set(
-  Object.keys(REPLY_NEXT_ACTION).filter((c) => REPLY_NEXT_ACTION[c].drafts)
-);
-async function maybeAutoReply(db2, userId, messageId, deps = {}) {
-  const s = deps.services ?? makeServices(deps.config ?? { env: {} }, { db: db2, now: deps.now });
-  const now = s.now();
-  const m = await loadReplyMessage(db2, userId, messageId);
-  const cls = m.reply_class;
-  if (!cls) return { action: "none", reason: "not_classified" };
-  const step = REPLY_NEXT_ACTION[cls];
-  if (cls === "decline" || cls === "unsubscribe") {
-    if (m.from_person_id) await closeOnReply(s, userId, m.id, m.from_person_id, cls, now, deps.history);
-    return cls === "unsubscribe" ? { action: "unsubscribed" } : { action: "closed", reason: "decline" };
-  }
-  if (!m.from_person_id) return { action: "none", reason: "unknown_sender" };
-  if (deps.history) return { action: "none", reason: "history" };
-  if (step.action === "needs_you") {
-    const [full] = await db2.sql`
-      select body_text, snippet, extraction, answer from orbit.messages where id = ${m.id}::uuid`;
-    if (full?.answer) return { action: "none", reason: "answered" };
-    const id = await raiseNeedsYou(s, userId, {
-      messageId: m.id,
-      personId: m.from_person_id,
-      question: questionOf(
-        full?.extraction,
-        full?.body_text ?? full?.snippet ?? ""
-      ) ?? "They asked you something.",
-      now
-    });
-    return { action: "needs_you", suggestionId: id };
-  }
-  if (!step.drafts) return { action: "none", reason: `class ${cls}` };
-  const [existing] = await db2.sql`
-    select * from orbit.drafts
-     where user_id = ${userId}::uuid and ask->>'replyToMessageId' = ${m.id}
-       and status not in ('discarded', 'cancelled')
-     order by created_at desc limit 1`;
-  let draft;
-  if (existing) {
-    if (existing.status !== "draft") return { action: "auto_sent", draftId: existing.id };
-    draft = existing;
-  } else {
-    await db2.sql`
-      update orbit.drafts d set status = 'cancelled', cancel_reason = 'superseded'
-       where d.user_id = ${userId}::uuid and d.kind = 'reply' and d.status = 'draft'
-         and d.updated_at < d.created_at + interval '2 seconds'
-         and d.ask->>'replyToMessageId' in (
-           select id::text from orbit.messages
-            where user_id = ${userId}::uuid and thread_id = ${m.thread_id}::uuid and id <> ${m.id}::uuid)`;
-    try {
-      draft = (await draftReply(s, userId, m.id, "agent")).draft;
-    } catch (e) {
-      if (e instanceof HttpError) return { action: "none", reason: e.code };
-      throw e;
-    }
-  }
-  return approveIfAllowed(s, userId, draft, cls, now);
-}
-async function approveIfAllowed(s, userId, draft, cls, now, extra = {}) {
-  const db2 = s.db;
-  const [u2] = await db2.sql`
-    select email, full_name, autonomy_level, timezone, settings from orbit.users where id = ${userId}::uuid`;
-  const [p] = await db2.sql`
-    select p.timezone, p.title, p.headline, p.do_not_contact, ts.score::int as score
-      from orbit.people p left join orbit.tie_scores ts on ts.person_id = p.id and ts.user_id = p.user_id
-     where p.id = ${draft.person_id}::uuid`;
-  const [g] = draft.goal_id ? await db2.sql`select autonomy_level from orbit.goals where id = ${draft.goal_id}::uuid` : [];
-  const userTz = validZone(u2.timezone) ?? "America/New_York";
-  const dayStart2 = zonedTime2(
-    new Intl.DateTimeFormat("en-CA", { timeZone: userTz }).format(now),
-    0,
-    0,
-    userTz
-  );
-  const [today] = await db2.sql`
-    select count(*)::int as n from orbit.audit_log
-     where user_id = ${userId}::uuid and action = 'draft.auto_approve' and created_at >= ${dayStart2}::timestamptz`;
-  const meta = draft.ask ?? {};
-  const history = await historyWith(db2, userId, draft.person_id);
-  const level = (n) => n === 0 || n === 1 || n === 2 ? n : void 0;
-  const replyTo = meta.replyToMessageId ? (await db2.sql`
-          select body_text, snippet from orbit.messages where id = ${meta.replyToMessageId}::uuid`)[0] : void 0;
-  const verdict = autonomyAllows(
-    {
-      kind: "reply",
-      channel: draft.channel,
-      personId: draft.person_id,
-      subject: draft.subject,
-      body: draft.body
-    },
-    {
-      now,
-      userEmails: [u2.email],
-      userName: u2.full_name ?? "",
-      recipient: {
-        doNotContact: p?.do_not_contact,
-        title: p?.title ?? void 0,
-        headline: p?.headline ?? void 0
-      },
-      history,
-      schedulingLink: typeof u2.settings?.scheduling_link === "string" ? u2.settings.scheduling_link : void 0,
-      offeredSlots: [...meta.slots ?? [], ...extra.offeredSlots ?? []],
-      timeZone: userTz,
-      userAutonomy: level(u2.autonomy_level) ?? 0,
-      goalAutonomy: level(g?.autonomy_level),
-      replyClass: cls,
-      replyHoldsQuestion: holdsQuestion(replyTo?.body_text ?? replyTo?.snippet ?? ""),
-      inThread: !!draft.thread_external_id,
-      recipientScore: p?.score ?? 0,
-      validatorOk: !!draft.validator?.ok,
-      autoSentToday: today?.n ?? 0,
-      recipientTimeZone: validZone(p?.timezone) ?? userTz
-    }
-  );
-  const reasons = [...verdict.reasons];
-  const paused = u2.settings?.autopilot_paused_until;
-  if (typeof paused === "string" && new Date(paused).getTime() > now.getTime())
-    reasons.push("autopilot paused");
-  if (goalPaused(u2.settings, draft.goal_id, now)) reasons.push("goal paused by the breaker");
-  if (askUserMarkers(`${draft.subject ?? ""}
-${draft.body}`).length) reasons.push("needs_input");
-  if (reasons.length) return { action: "drafted", draftId: draft.id, reasons: [...new Set(reasons)] };
-  const [approved] = await db2.sql`
-    update orbit.drafts set status = 'approved', send_at = ${now}::timestamptz, autonomy_level = 2,
-                            auto_rung = ${cls === "scheduling" ? "schedule" : "reply"}
-     where id = ${draft.id}::uuid and status = 'draft' returning id`;
-  if (!approved) return { action: "drafted", draftId: draft.id, reasons: ["changed meanwhile"] };
-  await db2.sql`
-    insert into orbit.audit_log (user_id, actor, action, target_table, target_id, details)
-    values (${userId}::uuid, 'agent', 'draft.auto_approve', 'drafts', ${draft.id},
-            ${{ hash: messageHash({ channel: draft.channel, subject: draft.subject, body: draft.body }), reply_class: cls }}::jsonb)`;
-  await db2.sql`
-    insert into orbit.audit_log (user_id, actor, action, target_table, target_id, details)
-    values (${userId}::uuid, 'agent', 'reply.auto', 'drafts', ${draft.id}, ${{ reply_class: cls }}::jsonb)`;
-  await s.queue.enqueue({
-    kind: "send.draft",
-    userId,
-    payload: { draftId: draft.id },
-    dedupeKey: `send:${draft.id}`
-  });
-  return { action: "auto_sent", draftId: draft.id };
-}
-async function closeOnReply(s, userId, messageId, personId, cls, now, history = false) {
-  const db2 = s.db;
-  const reason2 = cls === "unsubscribe" ? "asked not to be contacted" : "declined";
-  const [p] = await db2.sql`
-    select p.display_name, p.first_name, p.org_raw, o.name as org_name, p.do_not_contact
-      from orbit.people p left join orbit.organizations o on o.id = p.org_id
-     where p.id = ${personId}::uuid and p.user_id = ${userId}::uuid`;
-  if (!p) return;
-  if (!p.do_not_contact) {
-    await db2.sql`update orbit.people set do_not_contact = true where id = ${personId}::uuid and user_id = ${userId}::uuid`;
-    await db2.sql`
-      insert into orbit.audit_log (user_id, actor, action, target_table, target_id, details)
-      values (${userId}::uuid, 'agent', 'person.do_not_contact', 'people', ${personId}, ${{ source: "reply", reply_class: cls }}::jsonb)`;
-  }
-  await db2.sql`
-    update orbit.drafts set status = 'cancelled', cancel_reason = ${cls}
-     where user_id = ${userId}::uuid and person_id = ${personId}::uuid
-       and status in ('draft', 'approved', 'scheduled')`;
-  const chats = await db2.sql`
-    select id, goal_id from orbit.chats where user_id = ${userId}::uuid and person_id = ${personId}::uuid
-       and archived_at is null`;
-  for (const c of chats) await moveChat(db2, userId, c.id, "declined", reason2, now);
-  if (history) return;
-  const goalId = chats.find((c) => c.goal_id)?.goal_id ?? null;
-  const company = p.org_name ?? p.org_raw ?? null;
-  await raiseCard(db2, userId, {
-    kind: "needs_you",
-    dedupeKey: `closed:${messageId}`,
-    reasonText: cls === "unsubscribe" ? `${p.display_name} asked to stop. Orbit closed the thread and will not write to them again.` : `${p.display_name} declined. Orbit closed the thread and will not write to them again.`,
-    personId,
-    chatId: chats[0]?.id ?? null,
-    messageId,
-    signals: { replyClass: cls, closed: true },
-    payload: { replyClass: cls, closed: true, personName: p.display_name, company },
-    priority: 0.6,
-    now,
-    notify: {
-      kind: "reply_received",
-      title: `${p.display_name} ${cls === "unsubscribe" ? "asked to stop" : "declined"}`,
-      link: `/people/${personId}`
-    }
-  });
-  const userTz = validZone(
-    (await db2.sql`select timezone from orbit.users where id = ${userId}::uuid`)[0]?.timezone
-  );
-  const dayStart2 = zonedTime2(
-    new Intl.DateTimeFormat("en-CA", { timeZone: userTz ?? "America/New_York" }).format(now),
-    0,
-    0,
-    userTz ?? "America/New_York"
-  );
-  const trips = cls === "unsubscribe" || await declinesToday(db2, userId, goalId, dayStart2) >= DECLINES_PER_DAY;
-  if (trips)
-    await tripBreaker(db2, userId, {
-      goalId,
-      reason: cls === "unsubscribe" ? "unsubscribe" : "declines",
-      personId,
-      personName: p.display_name,
-      company,
-      messageId,
-      now
-    });
-}
-async function raiseNeedsYou(s, userId, p) {
-  const [person] = await s.db.sql`
-    select display_name, first_name, org_raw from orbit.people where id = ${p.personId}::uuid`;
-  const name = person?.display_name ?? "They";
-  const first = person ? firstNameOf({ first_name: person.first_name, display_name: person.display_name }) : "They";
-  const [chat] = await s.db.sql`
-    select id from orbit.chats where user_id = ${userId}::uuid and person_id = ${p.personId}::uuid and archived_at is null
-     order by updated_at desc limit 1`;
-  const question = p.question.replace(/\s+/g, " ").trim().slice(0, 300);
-  const id = await raiseCard(s.db, userId, {
-    kind: "needs_you",
-    dedupeKey: needsYouKey(p.messageId),
-    reasonText: `${name} asked: "${question}" What should I say?`,
-    personId: p.personId,
-    chatId: chat?.id ?? null,
-    messageId: p.messageId,
-    signals: { replyClass: "question" },
-    payload: { question, personName: name, replyClass: "question" },
-    priority: 0.85,
-    now: p.now,
-    notify: {
-      kind: "reply_received",
-      title: `${first} asked one thing`,
-      body: "Answer it in one line and Orbit drafts the reply.",
-      link: "/inbox?tab=needs_you"
-    }
-  });
-  await mailIfAway(s, userId, { personFirstName: first, now: p.now }).catch(() => void 0);
-  return id;
-}
-
-// supabase/functions/_shared/replies/funnel.ts
-var SLOT_MATCH_MIN = 15;
-var APP_URL = "https://tryorbit.today";
-async function offeredSlotsFor(s, userId, personId, before) {
-  const rows = await s.db.sql`
-    select * from orbit.drafts
-     where user_id = ${userId}::uuid and person_id = ${personId}::uuid and status = 'sent'
-       and sent_at <= ${before}::timestamptz
-       and (offered_slots is not null or ask->'slots' is not null)
-     order by sent_at desc limit 3`;
-  for (const d of rows) {
-    const fromColumn = Array.isArray(d.offered_slots) ? d.offered_slots : [];
-    const fromAsk = Array.isArray(d.ask?.slots) ? d.ask.slots : [];
-    const slots = [...fromColumn, ...fromAsk].filter((x) => typeof x === "string");
-    if (slots.length) return { draft: d, slots: [...new Set(slots)] };
-  }
-  return void 0;
-}
-function matchOfferedSlot(text2, offered, reference, timeZone) {
-  const proposed = extractProposedTimes(text2, reference, timeZone);
-  for (const p of proposed) {
-    const t = new Date(p.startIso).getTime();
-    const hit = offered.find((o) => Math.abs(new Date(o).getTime() - t) <= SLOT_MATCH_MIN * 6e4);
-    if (hit) return hit;
-  }
-  return void 0;
-}
-async function slotStillFree(s, userId, start, tz) {
-  const end = new Date(start.getTime() + SLOT_MINUTES * 6e4);
-  const from = new Date(start.getTime() - BUFFER_MIN * 6e4);
-  const to = new Date(end.getTime() + BUFFER_MIN * 6e4);
-  let busy;
-  try {
-    busy = await freeBusy(s, userId, from, to, tz);
-  } catch (e) {
-    if (!(e instanceof NeedsReauth) && !(e instanceof HttpError)) throw e;
-    busy = await storedBusy(s.db, userId, from, to);
-  }
-  return !busy.some((b) => start.getTime() < b.end && end.getTime() > b.start);
-}
-async function runReplyFunnel(s, userId, messageId, opts = {}) {
-  const db2 = s.db;
-  const now = s.now();
-  const m = await loadReplyMessage(db2, userId, messageId);
-  if (m.reply_class !== "scheduling" || !m.from_person_id)
-    return maybeAutoReply(db2, userId, messageId, { services: s });
-  const [full] = await db2.sql`
-    select body_text, snippet from orbit.messages where id = ${m.id}::uuid`;
-  const offered = await offeredSlotsFor(s, userId, m.from_person_id, new Date(m.sent_at));
-  if (!offered) return maybeAutoReply(db2, userId, messageId, { services: s });
-  const [u2] = await db2.sql`
-    select timezone, settings from orbit.users where id = ${userId}::uuid`;
-  const [p] = await db2.sql`
-    select timezone, first_name, display_name from orbit.people where id = ${m.from_person_id}::uuid`;
-  const userTz = validZone(u2?.timezone) ?? "America/New_York";
-  const tz = validZone(p?.timezone) ?? userTz;
-  const text2 = full?.body_text ?? full?.snippet ?? "";
-  const slotStart = matchOfferedSlot(text2, offered.slots, new Date(m.sent_at), tz);
-  if (!slotStart) return maybeAutoReply(db2, userId, messageId, { services: s });
-  const start = new Date(slotStart);
-  if (start.getTime() <= now.getTime()) return maybeAutoReply(db2, userId, messageId, { services: s });
-  const [done] = await db2.sql`
-    select external_id from orbit.calendar_events
-     where user_id = ${userId}::uuid and start_at = ${start}::timestamptz
-       and ${m.from_person_id}::uuid = any(attendee_person_ids) and coalesce(status, 'confirmed') <> 'cancelled'`;
-  let eventId = done?.external_id;
-  if (!eventId && !await slotStillFree(s, userId, start, userTz))
-    return maybeAutoReply(db2, userId, messageId, { services: s });
-  if (!eventId) {
-    const booked = await bookSlot(
-      s,
-      userId,
-      { draftId: offered.draft.id, slotStart },
-      opts.appUrl ?? APP_URL,
-      { actor: "agent" }
+  const s = u2.settings;
+  for (const [k, label] of [
+    ["company", "Company"],
+    ["pitch", "What it does"],
+    ["traction", "Traction"],
+    ["bio", "About"]
+  ])
+    if (typeof s[k] === "string" && s[k].trim())
+      lines.push(`${label}: ${s[k].trim()}`);
+  if (s.about && typeof s.about === "object") lines.push(...ownWordsLines(s.about, 300));
+  const goals = await db2.sql`
+    select kind, title, description, success_metric, targets from orbit.goals
+     where user_id = ${u2.id}::uuid and status = 'active' and deleted_at is null
+     order by priority, created_at limit 5`;
+  for (const g of goals) {
+    const t = g.targets ?? {};
+    const targets = [...t.organizations ?? [], ...t.roles ?? []].slice(0, 6).join(", ");
+    lines.push(
+      `Goal (${g.kind}): ${g.title}${g.description ? `. ${g.description}` : ""}${g.success_metric ? `. A win: ${g.success_metric}` : ""}${targets ? ` (targets: ${targets})` : ""}`
     );
-    if (booked.needsConsent) {
-      await maybeAutoReply(db2, userId, messageId, { services: s });
-      return { action: "needs_consent", url: booked.needsConsent.url, slotStart };
-    }
-    eventId = booked.eventId;
-    await db2.sql`update orbit.drafts set outcome = 'booked' where id = ${offered.draft.id}::uuid`;
-    await db2.sql`
-      insert into orbit.audit_log (user_id, actor, action, target_table, target_id, details)
-      values (${userId}::uuid, 'agent', 'call.booked', 'drafts', ${offered.draft.id},
-              ${{ start: iso(start), eventId, messageId: m.id, personId: m.from_person_id }}::jsonb)`;
   }
-  const label = slotLabel(start, new Date(start.getTime() + SLOT_MINUTES * 6e4), tz);
-  const [existing] = await db2.sql`
-    select * from orbit.drafts
-     where user_id = ${userId}::uuid and ask->>'replyToMessageId' = ${m.id}
-       and status not in ('discarded', 'cancelled')
+  const [resume] = await db2.sql`
+    select parsed, text from orbit.uploads
+     where user_id = ${u2.id}::uuid and kind = 'resume' and is_current
      order by created_at desc limit 1`;
-  let draft = existing;
-  if (!draft) {
-    try {
-      draft = (await composeDraft(s, {
-        userId,
-        personId: m.from_person_id,
-        kind: "reply",
-        channel: m.provider,
-        replyToMessageId: m.id,
-        actor: "agent",
-        confirmSlot: { start: slotStart, label }
-      })).draft;
-    } catch (e) {
-      if (e instanceof HttpError)
-        return {
-          action: "booked",
-          eventId,
-          slotStart,
-          draftId: offered.draft.id,
-          confirmation: { action: "none", reason: e.code }
-        };
-      throw e;
-    }
+  if (resume) {
+    const facets = facetLines(resume.parsed);
+    lines.push(
+      `Resume: ${facets.length ? facets.join("; ") : resume.text.replace(/\s+/g, " ").slice(0, 800)}`
+    );
   }
-  const confirmation = draft.status !== "draft" ? { action: "auto_sent", draftId: draft.id } : goalPaused(u2?.settings, draft.goal_id, now) ? {
-    action: "drafted",
-    draftId: draft.id,
-    reasons: ["goal paused by the breaker"]
-  } : await approveIfAllowed(s, userId, draft, "scheduling", now, { offeredSlots: [slotStart] });
-  return { action: "booked", eventId, slotStart, draftId: draft.id, confirmation };
+  const memories = await db2.sql`
+    select text from orbit.memories
+     where user_id = ${u2.id}::uuid and deleted_at is null and person_id is null
+     order by importance desc, last_seen_at desc limit 10`;
+  if (memories.length) lines.push(`Remembered: ${memories.map((m) => m.text).join(" | ")}`);
+  const text2 = lines.join("\n");
+  return text2.length > USER_CONTEXT_MAX_CHARS ? `${text2.slice(0, USER_CONTEXT_MAX_CHARS - 1)}…` : text2;
 }
-
-// supabase/functions/_shared/googleApi.ts
-var UNITS_PER_SECOND = 90;
-var MAX_IN_FLIGHT = 5;
-var MAX_RETRIES = 3;
-var GoogleApiError = class extends Error {
-  constructor(status, reason2) {
-    super(`google ${status} ${reason2}`);
-    this.status = status;
-    this.reason = reason2;
-    this.name = "GoogleApiError";
+function facetLines(parsed2) {
+  if (!parsed2) return [];
+  const out = [];
+  const list2 = (v) => Array.isArray(v) ? v : [];
+  for (const f of list2(parsed2.facets)) {
+    const o = f;
+    if (o.excluded === true) continue;
+    const t = [o.title ?? o.role, o.org ?? o.organization ?? o.organizationName, o.text].filter(
+      (x) => typeof x === "string"
+    );
+    if (t.length) out.push(t.join(", "));
   }
-};
-var realSleep = (ms2) => new Promise((r) => setTimeout(r, ms2));
-var QuotaPacer = class {
-  rate;
-  max;
-  clock;
-  sleep;
-  spent = [];
-  inFlight = 0;
-  waiting = [];
-  constructor(o = {}) {
-    this.rate = o.unitsPerSecond ?? UNITS_PER_SECOND;
-    this.max = o.maxInFlight ?? MAX_IN_FLIGHT;
-    this.clock = o.clock ?? Date.now;
-    this.sleep = o.sleep ?? realSleep;
+  for (const e of list2(parsed2.experiences ?? parsed2.experience)) {
+    const o = e;
+    const t = [o.title, o.org ?? o.company].filter((x) => typeof x === "string");
+    if (t.length) out.push(t.join(" at "));
   }
-  async run(units, fn) {
-    await this.acquire();
-    try {
-      return await this.spend(units, fn);
-    } finally {
-      this.release();
-    }
+  for (const e of list2(parsed2.education)) {
+    const o = e;
+    const t = [o.degree, o.school].filter((x) => typeof x === "string");
+    if (t.length) out.push(t.join(", "));
   }
-  acquire() {
-    if (this.inFlight < this.max) {
-      this.inFlight++;
-      return Promise.resolve();
-    }
-    return new Promise((r) => this.waiting.push(r));
-  }
-  release() {
-    const next = this.waiting.shift();
-    if (next) next();
-    else this.inFlight--;
-  }
-  /** Records the spend and starts the request in one synchronous step, so the recorded time is the start time. */
-  async spend(units, fn) {
-    const u2 = Math.min(Math.max(0, units), this.rate);
-    for (; ; ) {
-      const now = this.clock();
-      this.spent = this.spent.filter((e) => e.t > now - 1e3);
-      const used = this.spent.reduce((s, e) => s + e.u, 0);
-      if (used + u2 <= this.rate) {
-        this.spent.push({ t: now, u: u2 });
-        return fn();
-      }
-      let over = used + u2 - this.rate;
-      let wait = 1;
-      for (const e of this.spent) {
-        over -= e.u;
-        wait = e.t + 1e3 - now;
-        if (over <= 0) break;
-      }
-      await this.sleep(Math.max(1, wait));
-    }
-  }
-};
-async function reason(res) {
+  const skills = list2(parsed2.skills).filter((x) => typeof x === "string");
+  if (skills.length) out.push(`Skills: ${skills.slice(0, 12).join(", ")}`);
+  return out.slice(0, 12);
+}
+function styleCardOf(u2) {
+  const card = u2.settings.style_card;
+  const base = card && typeof card === "object" && ((card.builtFromCount ?? 0) >= 3 || card.custom) ? card : (() => {
+    const preset = u2.settings.tone_preset;
+    return defaultStyleCard(
+      preset === "direct" || preset === "formal" ? preset : "warm",
+      userFirstName(u2)
+    );
+  })();
+  return withVoiceNotes(base, notesOf(u2.settings));
+}
+function voiceText(c) {
+  return [
+    `greetings: ${c.greetingPatterns.join(" | ")}`,
+    `sign-offs: ${c.signoffs.map((x) => x.replace(/\n/g, " ")).join(" | ")}`,
+    `average sentence: ${Math.round(c.avgSentenceWords)} words; average message: ${Math.round(c.avgMessageWords)} words`,
+    `contractions: ${c.contractions ? "yes" : "no"}; exclamation marks: ${c.exclamationsPerMessage > 0 ? "sometimes" : "never"}; emoji: ${c.emoji ? "yes" : "no"}`,
+    c.characteristicPhrases.length ? `phrases they use: ${c.characteristicPhrases.join(" | ")}` : "",
+    c.avoid.length ? `never: ${c.avoid.join(" | ")}` : "",
+    c.notes ? `notes: ${c.notes}` : ""
+  ].filter(Boolean).join("\n");
+}
+var escapeRe2 = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+async function exemplars(s, userId, personId, situation, opts = {}) {
+  let q = null;
   try {
-    const body = await res.json();
-    if (typeof body.error === "string") return body.error;
-    return body.error?.errors?.[0]?.reason ?? body.error?.status ?? "error";
+    q = await s.embed(situation);
   } catch {
-    return "error";
+    q = null;
   }
+  if (!q?.length) return [];
+  const limit = opts.limit ?? 3;
+  const pick = (onlyReplies) => s.db.sql`
+    select m.id, m.body_text, m.to_person_ids from orbit.messages m
+     where m.user_id = ${userId}::uuid and m.direction = 'out' and m.embedding is not null
+       and m.body_text is not null and not (${personId}::uuid = any(m.to_person_ids))
+       and coalesce(array_length(regexp_split_to_array(btrim(m.body_text), '\\s+'), 1), 0) >= 25
+       and (${onlyReplies}::boolean = false or m.in_reply_to is not null)
+     order by m.embedding <=> ${vec(q)}::vector
+     limit ${limit}::int`;
+  let rows = await pick(!!opts.replies);
+  if (opts.replies && rows.length < limit) {
+    const more = await pick(false);
+    rows = [...rows, ...more.filter((m) => !rows.some((r) => r.id === m.id))].slice(0, limit);
+  }
+  const ids = [...new Set(rows.flatMap((r) => r.to_person_ids ?? []))];
+  const names = ids.length ? await s.db.sql`
+        select first_name, last_name, display_name from orbit.people
+         where user_id = ${userId}::uuid and id = any(${ids}::uuid[])` : [];
+  const words4 = [
+    ...new Set(
+      names.flatMap((n) => [n.display_name, n.first_name, n.last_name]).filter((x) => !!x?.trim())
+    )
+  ].sort((a, b) => b.length - a.length);
+  return rows.map((r) => {
+    let text2 = stripQuotedReply(r.body_text).trim().slice(0, 1200);
+    for (const w of words4) text2 = text2.replace(new RegExp(`\\b${escapeRe2(w)}\\b`, "g"), "[name]");
+    return text2.replace(/^(hi|hey|hello|dear)\s+[A-Z][a-z]+/i, (m) => `${m.split(/\s+/)[0]} [name]`);
+  });
 }
-var RATE_REASONS = /* @__PURE__ */ new Set(["rateLimitExceeded", "userRateLimitExceeded", "RESOURCE_EXHAUSTED"]);
-function googleClient(deps) {
-  const doFetch = deps.fetch ?? fetch;
-  const clock = deps.clock ?? Date.now;
-  const sleep = deps.sleep ?? realSleep;
-  const random = deps.random ?? Math.random;
-  const pacers = deps.pacers ?? /* @__PURE__ */ new Map();
-  const pacer = (userId) => {
-    let p = pacers.get(userId);
-    if (!p) {
-      p = new QuotaPacer({ clock, sleep });
-      pacers.set(userId, p);
-    }
-    return p;
+async function loadResearch(db2, userId, personId) {
+  const [d] = await db2.sql`
+    select content, status from orbit.dossiers
+     where user_id = ${userId}::uuid and person_id = ${personId}::uuid and status in ('ready', 'partial')`;
+  const facts = await db2.sql`
+    select id, text, type from orbit.facts
+     where user_id = ${userId}::uuid and person_id = ${personId}::uuid and deleted_at is null
+     order by confidence desc, created_at desc limit 8`;
+  const c = d?.content ?? {};
+  const lines = [];
+  const ids = /* @__PURE__ */ new Set();
+  const openers = [];
+  const cite = (xs) => {
+    for (const x of xs ?? []) ids.add(x);
+    return xs?.length ? ` [${xs.join(", ")}]` : "";
   };
+  if (c.who) lines.push(`who: ${c.who}`);
+  let now;
+  if (c.now?.role || c.now?.org) {
+    now = [c.now.role, c.now.org].filter(Boolean).join(" at ");
+    lines.push(`now: ${now}${c.now.since ? ` since ${c.now.since}` : ""}${cite(c.now.source_ids)}`);
+  }
+  for (const r of c.recently ?? [])
+    lines.push(`recently: ${r.date ? `${r.date}: ` : ""}${r.text}${cite(r.source_ids)}`);
+  for (const r of c.in_common ?? []) lines.push(`in common: ${r.text}${cite(r.source_ids)}`);
+  for (const o of c.openers ?? []) {
+    lines.push(`opener: ${o.text}${cite(o.source_ids)}`);
+    if (o.source_ids?.[0]) openers.push({ id: o.source_ids[0], text: o.text, kind: "opener" });
+  }
+  for (const x of c.careful ?? []) lines.push(`careful: ${x}`);
+  facts.forEach((f, i) => {
+    const id = `F${i + 1}`;
+    ids.add(id);
+    lines.push(`fact [${id}] (${f.type}): ${f.text}`);
+    openers.push({ id, text: f.text, kind: "fact" });
+  });
   return {
-    async request(userId, r) {
-      let refreshed = false;
-      let attempt = 0;
-      for (; ; ) {
-        const token = await deps.tokens.accessToken(userId);
-        const res = await pacer(userId).run(
-          r.units,
-          () => doFetch(r.url, {
-            method: r.method ?? (r.body === void 0 ? "GET" : "POST"),
-            headers: {
-              authorization: `Bearer ${token}`,
-              accept: "application/json",
-              ...r.body === void 0 ? {} : { "content-type": "application/json" }
-            },
-            body: r.body === void 0 ? void 0 : JSON.stringify(r.body),
-            // a call Google never answers fails the job (which is retried) instead of holding the worker
-            signal: AbortSignal.timeout(3e4)
-          })
-        );
-        if (res.status === 401) {
-          await res.body?.cancel();
-          if (!refreshed) {
-            deps.tokens.invalidate(userId);
-            refreshed = true;
-            continue;
-          }
-          if (deps.db)
-            await deps.db.sql`
-              update orbit.integration_accounts set status = 'needs_reauth', last_error = 'unauthorized'
-               where user_id = ${userId}::uuid and provider = 'google'`;
-          throw new NeedsReauth();
-        }
-        if (res.ok) return await res.json();
-        const why = res.status === 429 || res.status >= 500 ? "retry" : await reason(res);
-        const retryable = why === "retry" || res.status === 403 && RATE_REASONS.has(why);
-        if (retryable && attempt < MAX_RETRIES) {
-          const wait = retryAfterMs(res.headers.get("retry-after"), clock()) ?? backoffMs(attempt, random);
-          if (why === "retry") await res.body?.cancel();
-          attempt++;
-          await sleep(wait);
-          continue;
-        }
-        if (why === "retry") await res.body?.cancel();
-        throw new GoogleApiError(res.status, why === "retry" ? `http_${res.status}` : why);
-      }
-    }
+    text: lines.join("\n"),
+    ids: [...ids],
+    openers,
+    recently: (c.recently ?? []).map((r) => ({ text: r.text, date: r.date ?? null })),
+    now
   };
 }
-function qs(params) {
-  const q = new URLSearchParams();
-  for (const [k, v] of Object.entries(params)) {
-    if (v === void 0 || v === null) continue;
-    if (Array.isArray(v)) for (const x of v) q.append(k, x);
-    else q.set(k, String(v));
-  }
-  const s = q.toString();
-  return s ? `?${s}` : "";
+function recipientText(p) {
+  return [
+    `name: ${p.display_name}`,
+    p.title ? `title: ${p.title}` : "",
+    personOrg(p) ? `organization: ${personOrg(p)}` : "",
+    p.headline ? `headline: ${p.headline}` : "",
+    p.location ? `location: ${p.location}` : "",
+    p.school ? `school: ${p.school}${p.is_alumni ? " (same school as the user)" : ""}` : "",
+    p.score !== null && p.score !== void 0 ? `relationship score: ${p.score}/100` : "",
+    p.last_interaction_at ? `last contact: ${iso(p.last_interaction_at).slice(0, 10)}` : ""
+  ].filter(Boolean).join("\n");
 }
 
-// supabase/functions/orbit-worker/handlers/deps.ts
-var JobSkipped = class extends Error {
-  constructor(reason2) {
-    super(reason2);
-    this.reason = reason2;
-    this.name = "JobSkipped";
+// supabase/functions/_shared/compose/prompts.ts
+import { z as z4 } from "npm:zod@3.25.76/v4";
+var PROMPT_VERSION = "compose-v2.1";
+var composeSchema = z4.object({
+  subject: z4.string().nullable(),
+  body: z4.string(),
+  ask: z4.object({
+    kind: z4.enum(["call", "question", "interest", "intro", "none"]),
+    text: z4.string()
+  }),
+  hooks: z4.array(z4.object({ text: z4.string(), sourceId: z4.string() }))
+});
+var GOAL_ASK = {
+  recruiting: "call",
+  advice: "call",
+  fundraising: "interest",
+  sales: "interest",
+  hiring: "interest",
+  cofounder: "call",
+  community: "question",
+  collaboration: "question"
+};
+function askKindFor(kind, goal, replyWantsCall = false) {
+  switch (kind) {
+    case "intro_request":
+      return "intro";
+    case "forwardable_blurb":
+    case "thank_you":
+    case "reengage":
+    case "nurture":
+    case "congratulate":
+    case "report_back":
+      return "none";
+    case "reply":
+      return replyWantsCall ? "call" : "none";
+    case "schedule":
+      return "call";
+    default:
+      return GOAL_ASK[goal];
+  }
+}
+function composeSystem(p) {
+  const lines = [
+    `You write one message that ${p.userFirstName} will send as themselves. It must sound like them, not like a template or a salesperson.`,
+    "Hard rules:",
+    `- ${p.wordRange} words; one ask: ${p.askKind}; subject 2–6 words.`,
+    "- Use at least one opener from <research> and keep it true; cite its source id in hooks.",
+    "- Never claim familiarity, shared history or a mutual connection that isn't in the inputs.",
+    '- No flattery adjectives (amazing, incredible, inspiring), no "I hope this finds you well", no "quick question", no em-dashes, no exclamation marks unless the voice card uses them.',
+    "- Plain words, short sentences (reading grade ≤ 7).",
+    "- Match <voice> for greeting, sign-off, contractions and sentence length. Borrow rhythm from <examples>, never their content.",
+    `- <user_context> may carry the user's own words: a "Never" line is their rule and always wins; "Their story" is how they introduce themselves, so draw on it rather than a generic line.`
+  ];
+  if (p.kind === "forwardable_blurb" && p.blurb)
+    lines.push(
+      "",
+      `Write a third-person blurb of at most 90 words that ${p.blurb.intermediary} can forward unchanged to ${p.blurb.target}: who ${p.userFirstName} is, the one reason they want to talk to ${p.blurb.target}, and the small ask. No flattery. Facts only from the inputs.`
+    );
+  if (p.kind === "reply")
+    lines.push(
+      "",
+      "Answer what they said. If they proposed times, accept one that is free (given in <free_slots>) or offer those. Keep it shorter than their message unless they asked questions. Never leave a blank, a bracket or a placeholder: the message must be ready to send as written. If a fact is needed that is not in the inputs, write around it (offer to cover it on a call, or ask them) instead of guessing it. When <task> carries the user's own answer to what they asked, the reply gives that answer in the user's words and asks nothing back. When <task> says the call is booked, the reply confirms that one time and offers no other."
+    );
+  return lines.join("\n");
+}
+function block(tag, text2) {
+  const clean = (text2 ?? "").replace(/<\/?[a-z_]+[^>]*>/gi, " ").trim();
+  return `<${tag}>${clean ? `
+${clean}
+` : ""}</${tag}>`;
+}
+function composeUser(b) {
+  return [
+    block("task", b.task),
+    block("user_context", b.userContext),
+    block("goal", b.goal),
+    block("recipient", b.recipient),
+    block("research", b.research),
+    block("thread", b.thread),
+    block("via", b.via),
+    block("voice", b.voice),
+    block("examples", b.examples),
+    ...b.freeSlots !== void 0 ? [block("free_slots", b.freeSlots)] : []
+  ].join("\n");
+}
+function retryNote(issues) {
+  return `
+<issues>
+${issues.map((i) => `- ${i}`).join("\n")}
+</issues>
+Rewrite the message so it passes every rule. Keep what was true and fix only these issues.`;
+}
+var ASK_USER = /\[ASK USER:\s*([^\]]*)\]/g;
+function askUserMarkers(text2) {
+  return [...text2.matchAll(ASK_USER)].map((m) => m[1].trim()).filter(Boolean);
+}
+
+// supabase/functions/_shared/compose/window.ts
+var WINDOW_START = { hour: 8, minute: 0 };
+var WINDOW_END = { hour: 10, minute: 30 };
+var JITTER_MAX_MIN = 20;
+function sendDayAllowed(key2, channel) {
+  const dow = weekdayOfKey(key2);
+  const ok = dow === 2 || dow === 3 || dow === 4 || channel === "linkedin" && dow === 1;
+  return ok && !usHolidays(Number(key2.slice(0, 4))).has(key2);
+}
+function nextSendWindow(now, tz, channel, random = Math.random) {
+  const zone = validZone(tz) ?? "America/New_York";
+  const jitterMs = Math.floor(random() * (JITTER_MAX_MIN + 1)) * 6e4;
+  let key2 = localParts(now, zone).key;
+  for (let i = 0; i < 21; i++, key2 = addDaysKey(key2, 1)) {
+    if (!sendDayAllowed(key2, channel)) continue;
+    const start = zonedTime2(key2, WINDOW_START.hour, WINDOW_START.minute, zone).getTime();
+    const end = zonedTime2(key2, WINDOW_END.hour, WINDOW_END.minute, zone).getTime();
+    if (now.getTime() >= end) continue;
+    const at = Math.min(Math.max(now.getTime(), start) + jitterMs, end);
+    return { notBefore: new Date(at).toISOString(), tz: zone };
+  }
+  return { notBefore: now.toISOString(), tz: zone };
+}
+
+// supabase/functions/_shared/compose/compose.ts
+var OPT_OUT_LINE = "If this isn't relevant, just say so and I won't follow up.";
+var DECLINE_COOLDOWN_DAYS = 180;
+var DAY6 = 864e5;
+var GOAL_REGISTER = {
+  recruiting: "ask: a 15-minute call about their path or team; register: warm, curious, specific",
+  advice: "ask: 15–20 minutes on one named question; register: warm, humble",
+  fundraising: 'ask: "Would you be open to a look?" plus one line of traction; register: crisp, numbers first',
+  sales: 'ask: "Worth a quick look?" tied to a trigger; register: short, concrete, no hype',
+  hiring: `ask: "Open to hearing about it?" with the role's one hook; register: direct, respects their current job`,
+  cofounder: "ask: 20 minutes to compare notes on the problem; register: peer-to-peer",
+  community: "ask: an invite to a specific event or group; register: friendly",
+  collaboration: "ask: a specific question about their paper plus the overlap; register: precise, academic"
+};
+async function composeDraft(s, req) {
+  const db2 = s.db;
+  const now = s.now();
+  const user = await loadUserRow(db2, req.userId);
+  const person = await loadPerson(db2, req.userId, req.personId);
+  if (person.is_self) throw new HttpError(400, "bad_request", "that is you");
+  if (person.do_not_contact)
+    throw new HttpError(
+      409,
+      "do_not_contact",
+      "they asked not to be contacted, so Orbit will not write to them"
+    );
+  let replyTo;
+  if (req.kind === "reply") {
+    if (!req.replyToMessageId) throw new HttpError(400, "bad_request", "a reply needs replyToMessageId");
+    replyTo = await loadReplyMessage(db2, req.userId, req.replyToMessageId);
+    if (replyTo.reply_class === "unsubscribe")
+      throw new HttpError(409, "unsubscribe", "they asked not to be contacted; no reply is drafted");
+  }
+  const goal = await resolveGoal(db2, req.userId, req.goalId ?? null, req.chatId ?? null, person.id);
+  const goalKind = goal?.kind ?? "advice";
+  const chatId = req.chatId ?? await chatFor(db2, req.userId, person.id, goal?.id ?? null);
+  const history = await historyWith(db2, req.userId, person.id);
+  const sendsToThem = req.kind !== "forwardable_blurb";
+  if (sendsToThem && req.kind !== "reply" && unansweredBefore(history) >= 3)
+    throw new HttpError(409, "unanswered_limit", "three messages already went unanswered");
+  const firstTouch = FIRST_TOUCH_KINDS.has(req.kind);
+  if (firstTouch) {
+    const [declined] = await db2.sql`
+      select count(*)::int as n from orbit.chats
+       where user_id = ${req.userId}::uuid and person_id = ${person.id}::uuid and stage = 'declined'
+         and stage_entered_at > ${new Date(now.getTime() - DECLINE_COOLDOWN_DAYS * DAY6)}::timestamptz`;
+    if ((declined?.n ?? 0) > 0)
+      throw new HttpError(409, "declined_recently", "they declined in the last 180 days");
+  }
+  const newRecipient = !history.some((m) => m.direction === "out");
+  const salesFirstTouch2 = goalKind === "sales" && firstTouch && req.channel === "gmail" && newRecipient;
+  const postal = typeof user.settings.postal_address === "string" ? user.settings.postal_address.trim() : "";
+  if (salesFirstTouch2 && !postal)
+    throw new HttpError(
+      409,
+      "needs_postal_address",
+      "add a postal address in Settings before the first sales email (CAN-SPAM)"
+    );
+  const target = req.targetPersonId ? await loadPerson(db2, req.userId, req.targetPersonId) : void 0;
+  const introducer = req.via && req.via.introducerId !== person.id ? await loadPerson(db2, req.userId, req.via.introducerId).catch(() => void 0) : req.via ? person : void 0;
+  const research = await loadResearch(db2, req.userId, person.id);
+  const userContext = await buildUserContext(db2, user);
+  const card = styleCardOf(user);
+  const meFirst = userFirstName(user);
+  const tz = validZone(person.timezone) ?? validZone(user.timezone) ?? "America/New_York";
+  const window = nextSendWindow(now, tz, req.channel, s.random);
+  const thread = await threadContext(db2, req.userId, person.id, req.kind, replyTo, req.channel);
+  const replyClass = replyTo?.reply_class ?? void 0;
+  const schedulingLink = typeof user.settings.scheduling_link === "string" ? user.settings.scheduling_link : void 0;
+  let slots = [];
+  const answer = replyTo?.answer?.trim() || void 0;
+  const confirms = req.kind === "reply" ? req.confirmSlot : void 0;
+  const wantsTimes = !confirms && (replyClass === "interested" || replyClass === "scheduling");
+  if (req.kind === "reply" && wantsTimes) {
+    try {
+      slots = (await slotsFor(s, req.userId, { personId: person.id, count: 3 })).slots;
+    } catch {
+      slots = [];
+    }
+  }
+  const askKind = askKindFor(req.kind, goalKind, wantsTimes);
+  const range = req.channel === "linkedin" ? "At most 400 characters," : wordRangeText(req.kind, goalKind);
+  const viaText = introducer ? `${introducer.display_name}${req.via?.pathScore !== void 0 ? ` (path score ${req.via.pathScore.toFixed(2)})` : ""}` : "";
+  const goalText = goal ? `${goal.kind}: ${goal.title}${goal.description ? `. ${goal.description}` : ""}
+${GOAL_REGISTER[goalKind]}` : GOAL_REGISTER[goalKind];
+  const topic = req.topic ?? goalTopic(goal);
+  const task = [
+    `kind: ${req.kind}; channel: ${req.channel}; ask: ${askKind}`,
+    target ? `the introduction is to: ${target.display_name}${personOrg(target) ? ` at ${personOrg(target)}` : ""}` : "",
+    req.kind === "forwardable_blurb" ? `the intermediary reading it first: ${person.display_name}` : "",
+    topic ? `about: ${topic}` : "",
+    req.reason ? `why now: ${req.reason}` : "",
+    schedulingLink && wantsTimes ? `scheduling link: ${schedulingLink}` : "",
+    answer ? `${meFirst}'s answer to what they asked, in ${meFirst}'s words: ${answer}` : "",
+    confirms ? `the call is booked for ${confirms.label} and the invite is sent: confirm that time in one line, offer no other times, ask nothing` : ""
+  ].filter(Boolean).join("\n");
+  const examples = await exemplars(
+    s,
+    req.userId,
+    person.id,
+    [req.kind, goalKind, person.title ?? "", thread.lastInbound ?? "", topic ?? ""].join(" "),
+    { replies: req.kind === "reply" }
+  );
+  const slotText = slots.map((x) => `${x.start} = ${x.label}`).join("\n");
+  const userBlocks = composeUser({
+    task,
+    userContext,
+    goal: goalText,
+    recipient: recipientText(person),
+    research: research.text,
+    thread: thread.text,
+    via: viaText,
+    voice: voiceText(card),
+    examples: examples.map((e, i) => `Example ${i + 1}:
+${e}`).join("\n\n"),
+    ...req.kind === "reply" ? { freeSlots: slotText } : {}
+  });
+  const system = `${composeSystem({
+    userFirstName: meFirst,
+    wordRange: range,
+    askKind,
+    kind: req.kind,
+    blurb: req.kind === "forwardable_blurb" ? { intermediary: person.display_name, target: target?.display_name ?? "them" } : void 0
+  })}${firstTouch ? playbookLines(goalKind, person) : ""}`;
+  const inputs = [
+    userContext,
+    goalText,
+    recipientText(person),
+    research.text,
+    thread.text,
+    viaText,
+    task,
+    slots.map((x) => x.label).join("\n"),
+    target ? recipientText(target) : "",
+    meFirst,
+    user.full_name ?? "",
+    answer ?? "",
+    confirms?.label ?? ""
+  ].join("\n");
+  const ctx = {
+    goal: goalKind,
+    recipientFirstName: firstNameOf(person),
+    recipientFullName: person.display_name,
+    recipientEmail: person.primary_email ?? void 0,
+    inputs,
+    allowedUrls: schedulingLink ? [schedulingLink] : [],
+    style: card,
+    userFirstName: meFirst
+  };
+  const check = (out) => checkComposed(out, req, ctx, research);
+  let output;
+  let attempts = 0;
+  let generatedBy = "template";
+  let lastIssues = [];
+  if (s.claude.configured) {
+    let turn = userBlocks;
+    for (let i = 0; i < 2; i++) {
+      attempts++;
+      const r = await s.claude.structured({
+        task: req.kind === "reply" ? "reply" : "compose",
+        system,
+        user: turn,
+        schema: composeSchema,
+        userId: req.userId
+      });
+      if (!r.ok) break;
+      const issues2 = check(r.data);
+      if (!issues2.length) {
+        output = r.data;
+        generatedBy = "llm";
+        break;
+      }
+      lastIssues = issues2;
+      turn = userBlocks + retryNote(issues2);
+    }
+  }
+  let composed;
+  let promptVersion = PROMPT_VERSION;
+  if (output) {
+    composed = {
+      id: "",
+      goalId: goal?.id ?? null,
+      personId: person.id,
+      kind: req.kind,
+      channel: req.channel,
+      subject: req.channel === "gmail" && req.kind !== "reply" ? output.subject?.trim() || null : null,
+      body: output.body.trim(),
+      ask: output.ask,
+      hooks: output.hooks.filter((h) => h.text.trim() && h.sourceId.trim()),
+      ...req.via ? { via: { introducerId: req.via.introducerId, pathScore: req.via.pathScore } } : {},
+      sendWindow: window,
+      promptVersion,
+      variant: null
+    };
+  } else {
+    const t = templateMessage({
+      req,
+      user,
+      person,
+      target,
+      introducer,
+      goalKind,
+      goalId: goal?.id ?? null,
+      research,
+      topic,
+      window,
+      replyClass,
+      slots,
+      answer,
+      confirms
+    });
+    composed = t;
+    promptVersion = t.promptVersion;
+  }
+  if (answer && askUserMarkers(composed.body).length)
+    composed = { ...composed, body: composed.body.replace(ASK_USER, answer) };
+  let footer;
+  if (salesFirstTouch2) {
+    const company = typeof user.settings.company === "string" ? user.settings.company.trim() : "";
+    footer = [[user.full_name ?? meFirst, company].filter(Boolean).join(", "), postal, OPT_OUT_LINE].filter(Boolean).join("\n");
+  }
+  const forCheck = composed.body.replace(ASK_USER, "").trim();
+  const v = validateComposed({ ...composed, body: forCheck }, ctx);
+  const markers = askUserMarkers(composed.body);
+  const needs = markers.length ? ["answer"] : [];
+  const issues = v.issues.filter((i) => i.blocking).map((i) => `${i.code}: ${i.detail}`).concat(markers.map((m) => `needs_input: ${m}`));
+  const validator = { ok: v.ok && markers.length === 0, issues, words: v.words, grade: v.grade };
+  const body = footer ? `${composed.body}
+
+${footer}` : composed.body;
+  const meta = {
+    kind: composed.ask.kind,
+    text: composed.ask.text,
+    ...replyTo ? { replyToMessageId: replyTo.id } : {},
+    ...slots.length ? { slots: slots.map((x) => x.start) } : {},
+    ...confirms ? { slots: [confirms.start], confirms } : {},
+    ...req.reason ? { reason: req.reason } : {},
+    ...footer ? { footer } : {},
+    ...markers.length ? { question: markers[0] } : {},
+    ...answer ? { answer } : {}
+  };
+  const offeredSlots = confirms ? [confirms.start] : slots.length ? slots.map((x) => x.start) : null;
+  const level = goal?.autonomy_level ?? user.autonomy_level ?? 0;
+  const via = req.via ? { ...req.via } : null;
+  const [row] = await db2.sql`
+    insert into orbit.drafts (user_id, person_id, chat_id, goal_id, channel, kind, subject, body, ask, hooks, via,
+                              thread_external_id, in_reply_to, status, autonomy_level, validator, generated_by,
+                              prompt_version, variant, offered_slots, needs)
+    values (${req.userId}::uuid, ${person.id}::uuid, ${chatId}::uuid, ${goal?.id ?? null}::uuid, ${req.channel},
+            ${req.kind}, ${composed.subject}, ${body}, ${meta}::jsonb, ${JSON.stringify(composed.hooks)}::jsonb,
+            ${via}::jsonb, ${thread.externalId}, ${replyTo?.rfc_message_id ?? replyTo?.external_id ?? null}, 'draft',
+            ${level}::smallint, ${validator}::jsonb, ${generatedBy}, ${promptVersion}, null,
+            ${offeredSlots ? JSON.stringify(offeredSlots) : null}::jsonb, ${needs}::text[])
+    returning *`;
+  await db2.sql`
+    insert into orbit.audit_log (user_id, actor, action, target_table, target_id, details)
+    values (${req.userId}::uuid, ${req.actor ?? "user"}, 'draft.compose', 'drafts', ${row.id},
+            ${{ kind: req.kind, channel: req.channel, generated_by: generatedBy, attempts, issues: lastIssues.length, hash: messageHash({ channel: req.channel, subject: composed.subject, body }) }}::jsonb)`;
+  return {
+    draft: row,
+    composed: { ...composed, id: row.id, body, validator },
+    attempts
+  };
+}
+function playbookLines(goal, person) {
+  const who = { title: person.title ?? void 0, org: personOrg(person) };
+  const firm = firmKindOf(who, sectorOf(who));
+  return `
+13. ${DRAFT_RULES[goal]}
+14. ${ASK_RULES[firm]}`;
+}
+function wordRangeText(kind, goal) {
+  const [min, max] = wordRange(kind, goal);
+  return `${min}–${max}`;
+}
+function goalTopic(goal) {
+  if (!goal) return void 0;
+  const t = goal.targets ?? {};
+  const c = goal.criteria ?? {};
+  if (t.roles?.[0]) return t.roles[0];
+  if (typeof c.topic === "string" && c.topic.trim()) return c.topic.trim();
+  return ["collaboration", "community", "cofounder", "advice"].includes(goal.kind) ? goal.title : void 0;
+}
+var BUSINESS_GOALS = /* @__PURE__ */ new Set(["sales", "fundraising", "hiring", "cofounder"]);
+function checkComposed(out, req, ctx, research) {
+  const body = out.body.replace(ASK_USER, "").trim();
+  const v = validateComposed(
+    {
+      kind: req.kind,
+      channel: req.channel,
+      subject: req.channel === "gmail" && req.kind !== "reply" ? out.subject : null,
+      body,
+      hooks: out.hooks,
+      ask: out.ask
+    },
+    ctx
+  );
+  const issues = v.issues.filter((i) => i.blocking).map((i) => `${i.code}: ${i.detail}`);
+  const known = new Set(research.ids);
+  for (const h of out.hooks)
+    if (h.sourceId.trim() && !known.has(h.sourceId.trim()))
+      issues.push(`hook_source: ${h.sourceId} is not a source id in <research>`);
+  return issues;
+}
+async function resolveGoal(db2, userId, goalId, chatId, personId) {
+  if (goalId) {
+    const [g2] = await db2.sql`
+      select id, kind, title, description, targets, criteria, autonomy_level from orbit.goals
+       where id = ${goalId}::uuid and user_id = ${userId}::uuid and deleted_at is null`;
+    if (!g2) throw new HttpError(404, "not_found", "no such goal");
+    return g2;
+  }
+  const [g] = await db2.sql`
+    select g.id, g.kind, g.title, g.description, g.targets, g.criteria, g.autonomy_level
+      from orbit.chats c join orbit.goals g on g.id = c.goal_id
+     where c.user_id = ${userId}::uuid and g.deleted_at is null
+       and (c.id = ${chatId}::uuid or (${chatId}::uuid is null and c.person_id = ${personId}::uuid))
+     order by c.updated_at desc limit 1`;
+  return g;
+}
+async function chatFor(db2, userId, personId, goalId) {
+  const [c] = await db2.sql`
+    select id from orbit.chats
+     where user_id = ${userId}::uuid and person_id = ${personId}::uuid and archived_at is null
+     order by (goal_id is not distinct from ${goalId}::uuid) desc, updated_at desc limit 1`;
+  return c?.id ?? null;
+}
+async function historyWith(db2, userId, personId) {
+  const rows = await db2.sql`
+    select direction, sent_at as at, external_id from orbit.messages
+     where user_id = ${userId}::uuid
+       and (from_person_id = ${personId}::uuid or ${personId}::uuid = any(to_person_ids))
+       and not is_automated
+    union all
+    select 'out' as direction, d.sent_at as at, d.provider_message_id as external_id from orbit.drafts d
+     where d.user_id = ${userId}::uuid and d.person_id = ${personId}::uuid and d.status = 'sent'
+       and d.kind <> 'forwardable_blurb' and d.sent_at is not null
+       and not exists (select 1 from orbit.messages m where m.user_id = d.user_id
+                        and m.external_id = d.provider_message_id)`;
+  return rows.map((r) => ({ direction: r.direction, at: iso(r.at) }));
+}
+async function loadReplyMessage(db2, userId, messageId) {
+  if (!/^[0-9a-f-]{36}$/i.test(messageId)) throw new HttpError(400, "bad_request", "messageId is required");
+  const [m] = await db2.sql`
+    select id, thread_id, provider, external_id, rfc_message_id, from_person_id, reply_class, sent_at, answer
+      from orbit.messages
+     where id = ${messageId}::uuid and user_id = ${userId}::uuid and direction = 'in'`;
+  if (!m) throw new HttpError(404, "not_found", "no such reply");
+  return m;
+}
+async function threadContext(db2, userId, personId, kind, replyTo, channel) {
+  let threadId = replyTo?.thread_id;
+  if (!threadId && (kind === "bump" || kind === "thank_you" || kind === "schedule" || kind === "report_back")) {
+    const [t2] = await db2.sql`
+      select t.id from orbit.threads t
+       where t.user_id = ${userId}::uuid and t.provider = ${channel}
+         and ${personId}::uuid = any(t.participant_person_ids)
+       order by t.last_at desc nulls last limit 1`;
+    threadId = t2?.id;
+  }
+  if (!threadId) return { text: "", externalId: null };
+  const [t] = await db2.sql`
+    select external_id, subject from orbit.threads where id = ${threadId}::uuid`;
+  const msgs = await db2.sql`
+    select direction, sent_at, body_text, snippet from orbit.messages
+     where thread_id = ${threadId}::uuid order by sent_at desc limit ${kind === "reply" ? 8 : 2}::int`;
+  const ordered = msgs.reverse();
+  const lines = ordered.map(
+    (m) => `${iso(m.sent_at).slice(0, 16).replace("T", " ")} ${m.direction === "in" ? "them" : "user"}: ${stripQuotedReply(m.body_text ?? m.snippet ?? "").slice(0, 1500)}`
+  );
+  const lastIn = [...ordered].reverse().find((m) => m.direction === "in");
+  return {
+    text: [t?.subject ? `subject: ${t.subject}` : "", ...lines].filter(Boolean).join("\n"),
+    lastInbound: lastIn ? stripQuotedReply(lastIn.body_text ?? lastIn.snippet ?? "").slice(0, 500) : void 0,
+    externalId: t?.external_id ?? null
+  };
+}
+var TEMPLATE_KIND = {
+  outreach: "first_touch",
+  referral_ask: "intro_request",
+  nurture: "reengage",
+  congratulate: "reengage",
+  report_back: "reengage",
+  schedule: "bump"
+};
+function hookPhrase(text2) {
+  const t = text2.trim().replace(/[.!?]+$/, "").replace(/\s+(stuck with me|caught my eye|resonated with me)$/i, "");
+  return /^(Your|The|A|An|I)\b/.test(t) && !/^I\b/.test(t) ? t[0].toLowerCase() + t.slice(1) : t;
+}
+function templateMessage(p) {
+  const { req, user, person } = p;
+  const me = userFirstName(user);
+  if (req.kind === "reply") return replyTemplate(p, me);
+  const kind = COMPOSE_KINDS.includes(req.kind) ? req.kind : TEMPLATE_KIND[req.kind] ?? "first_touch";
+  const opener = p.research.openers[0];
+  const s = user.settings;
+  const str4 = (v) => typeof v === "string" && v.trim() ? v.trim() : void 0;
+  const about = user.current_title && user.current_org ? `${user.current_title} at ${user.current_org}` : user.school ? `a student at ${user.school}` : void 0;
+  const input = {
+    kind,
+    goal: p.goalKind,
+    channel: req.channel,
+    personId: person.id,
+    goalId: p.goalId,
+    user: {
+      firstName: me,
+      school: user.school ?? void 0,
+      about,
+      company: BUSINESS_GOALS.has(p.goalKind) ? str4(s.company) : void 0,
+      pitch: BUSINESS_GOALS.has(p.goalKind) ? str4(s.pitch) : p.goalKind === "collaboration" ? str4(s.research_topic) : void 0,
+      traction: p.goalKind === "fundraising" ? str4(s.traction) : void 0
+    },
+    recipient: { firstName: firstNameOf(person), org: personOrg(person), title: person.title ?? void 0 },
+    hook: opener ? { text: hookPhrase(opener.text), sourceId: opener.id } : void 0,
+    topic: p.topic,
+    via: p.introducer && p.req.via ? {
+      introducerId: p.introducer.id,
+      introducerFirstName: firstNameOf(p.introducer),
+      pathScore: p.req.via.pathScore
+    } : void 0,
+    target: p.target ? { firstName: firstNameOf(p.target), org: personOrg(p.target) } : void 0,
+    sendWindow: p.window
+  };
+  const out = composeFallback(input);
+  return { ...out, kind: req.kind, goalId: p.goalId };
+}
+function replyTemplate(p, me) {
+  const hi = `Hi ${firstNameOf(p.person)},`;
+  const sign = `Best,
+${me}`;
+  let middle;
+  let ask = { kind: "none", text: "" };
+  if (p.confirms) {
+    middle = `${p.confirms.label} works for me, and the calendar invite is on its way. Looking forward to it.`;
+    return {
+      id: "",
+      goalId: p.goalId,
+      personId: p.person.id,
+      kind: "reply",
+      channel: p.req.channel,
+      subject: null,
+      body: [hi, middle, sign].join("\n\n"),
+      ask,
+      hooks: [],
+      sendWindow: p.window,
+      promptVersion: "template-v2",
+      variant: null
+    };
+  }
+  if (p.answer) {
+    middle = `Thanks for asking. ${p.answer.replace(/[.!?]*$/, "")}. Happy to say more whenever works for you.`;
+    return {
+      id: "",
+      goalId: p.goalId,
+      personId: p.person.id,
+      kind: "reply",
+      channel: p.req.channel,
+      subject: null,
+      body: [hi, middle, sign].join("\n\n"),
+      ask,
+      hooks: [],
+      sendWindow: p.window,
+      promptVersion: "template-v2",
+      variant: null
+    };
+  }
+  switch (p.replyClass) {
+    case "interested":
+    case "scheduling":
+      if (p.slots.length) {
+        ask = { kind: "call", text: "Would any of these times work for you?" };
+        middle = `Thanks for getting back to me. ${ask.text}
+
+${p.slots.map((x) => `- ${x.label}`).join("\n")}`;
+      } else {
+        ask = { kind: "call", text: "What times work best for you over the next week or so?" };
+        middle = `Thanks for getting back to me. ${ask.text} I'm happy to work around your schedule.`;
+      }
+      break;
+    case "thanks":
+    case "out_of_office":
+      middle = "Thank you, I really appreciate it. I will keep you posted on how things go.";
+      break;
+    case "decline":
+    case "not_now":
+    case "objection":
+      middle = "Thanks for letting me know, I understand. I appreciate you taking the time to reply.";
+      break;
+    case "referral":
+      middle = "Thank you for pointing me in the right direction. I'll reach out to them, and I'll let you know how it goes.";
+      break;
+    default:
+      middle = "Thanks for your note, I really appreciate it. Happy to go into more detail whenever works for you.";
+  }
+  return {
+    id: "",
+    goalId: p.goalId,
+    personId: p.person.id,
+    kind: "reply",
+    channel: p.req.channel,
+    subject: null,
+    body: [hi, middle, sign].join("\n\n"),
+    ask,
+    hooks: [],
+    sendWindow: p.window,
+    promptVersion: "template-v2",
+    variant: null
+  };
+}
+
+// packages/core/src/scoring/rapport.ts
+var RAPPORT_VERSION = 1;
+var RAPPORT_CUES = [
+  "asks_about_you",
+  "offers_help",
+  "personal_news",
+  "plans_together",
+  "congratulates",
+  "glad_to_hear",
+  "casual",
+  "uses_your_name",
+  "thoughtful",
+  "formal",
+  "distant",
+  "asked_to_stop",
+  "hostile"
+];
+var WARM_CUES = {
+  asks_about_you: 0.35,
+  offers_help: 0.35,
+  personal_news: 0.3,
+  plans_together: 0.25,
+  congratulates: 0.25,
+  glad_to_hear: 0.2,
+  thoughtful: 0.2,
+  casual: 0.15,
+  uses_your_name: 0.1
+};
+var PATTERNS = [
+  [
+    "asks_about_you",
+    /\b(how (are|have) you|how'?s (it going|everything|life|school|the (semester|job|search|internship|program))|how (did|is|was) (your|the) [a-z]+|what (have|are) you been|what about you|how about you|hope (you'?re|you are|all is|everything|school|the semester|your)|how (are|is) (things|everything)|you doing)\b/i
+  ],
+  [
+    "offers_help",
+    /\b(happy to (help|chat|connect|introduce|intro|share|talk|hop on|look|review|refer|pass)|glad to (help|chat|connect|introduce)|(i'?d|i would) (be )?(love|happy|glad) to|i can (intro|introduce|connect you|put you in touch|send|share|refer|pass|ask|forward|look)|let me (intro|introduce|connect you|know if (i|there'?s anything))|feel free to (reach out|ping|text|call|email|send)|reach out (any ?time|whenever)|any ?time\b|my door is (always )?open|count on me)/i
+  ],
+  [
+    "personal_news",
+    /\b(i (just )?(got|started|moved|joined|became|bought|finished|graduated|launched)|we (just )?(had|moved|got|welcomed|bought)|(my|our) (wife|husband|partner|fianc[eé]e?|kids?|son|daughter|baby|dog|family|wedding|new (job|role|team|place|house))|i'?m (now|currently) (at|working|living|based))\b/i
+  ],
+  [
+    "plans_together",
+    /\b(let'?s (grab|get|meet|catch|chat|hop|find|do|set|plan)|catch up|next time (you|i|we)|when you'?re (in|back|around|free|next)|we should (grab|get|meet|catch|chat)|keep in touch|talk soon|see you (soon|then|there|next))\b/i
+  ],
+  [
+    "congratulates",
+    /\b(congrat(s|ulations)|so proud|proud of you|well[- ]deserved|huge news|amazing news|great news)\b/i
+  ],
+  [
+    "glad_to_hear",
+    /\b((great|so good|good|lovely|nice|fun) to (hear|see) from you|great to hear|so glad|really glad|excited|thrilled|delighted|made my day|love (this|that|to hear))\b/i
+  ],
+  [
+    "casual",
+    /(\b(haha+|hah|lol|lmao|omg|yeah|yep|yup|hey|heya|hiya|cheers|thx|ty|xx|xo|no worries|for sure|sounds fun)\b|:\)|:-\)|:D|\p{Extended_Pictographic})/iu
+  ],
+  [
+    "formal",
+    /(^\s*(dear|to whom)\b|\b(sincerely|kind regards|best regards|warm regards|respectfully|yours truly|regards,)\b|\b(we regret|please be advised|kindly note)\b)/im
+  ],
+  [
+    "distant",
+    /\b(not the (right|best) (person|contact)|wrong person|don'?t (really )?know you|who is this|how did you get (my|this)|i don'?t (do|take) (calls|coffee chats|informational)|i (don'?t|do not) have (the )?(time|bandwidth) for|not interested|unable to help|can'?t help you)\b/i
+  ],
+  [
+    "asked_to_stop",
+    /\b(stop (emailing|messaging|contacting|reaching out|writing)|(please )?(remove|unsubscribe) me|do not (contact|email|message) me|don'?t (contact|email|message) me|leave me alone)\b/i
+  ],
+  ["hostile", /\b(spam(ming)?|annoying|inappropriate|unprofessional|harass(ing|ment)?)\b/i]
+];
+var words2 = (text2) => text2.toLowerCase().match(/[a-z']+/g) ?? [];
+var FUNCTION_CLASSES = {
+  personal: new Set(
+    "i me my mine myself we us our ours ourselves you your yours yourself yourselves he him his she her hers they them their theirs".split(
+      " "
+    )
+  ),
+  impersonal: new Set(
+    "it its itself this that these those something anything everything nothing someone anyone".split(" ")
+  ),
+  articles: new Set("a an the".split(" ")),
+  prepositions: new Set(
+    "about above across after against along among around at before behind below beside between by during for from in inside into near of off on onto out over through to toward under until up upon with within without".split(
+      " "
+    )
+  ),
+  auxiliary: new Set(
+    "am is are was were be been being have has had do does did will would shall should can could may might must i'm you're we're they're it's i've you've we've i'd you'd i'll you'll we'll".split(
+      " "
+    )
+  ),
+  adverbs: new Set(
+    "very really just so too also then now here there even only quite rather almost always never often".split(
+      " "
+    )
+  ),
+  conjunctions: new Set(
+    "and but or so because if although though while whereas unless since nor yet".split(" ")
+  ),
+  negations: new Set(
+    "no not never none nobody nothing neither nor don't can't won't isn't aren't wasn't didn't doesn't".split(
+      " "
+    )
+  ),
+  quantifiers: new Set("all some many much more most few several any each every both lot lots".split(" "))
+};
+function styleMatch(a, b) {
+  const wa = words2(a);
+  const wb = words2(b);
+  if (wa.length < 15 || wb.length < 15) return void 0;
+  const share = (ws, set) => ws.filter((w) => set.has(w)).length / ws.length;
+  const parts = Object.values(FUNCTION_CLASSES).map((set) => {
+    const pa = share(wa, set);
+    const pb = share(wb, set);
+    return 1 - Math.abs(pa - pb) / (pa + pb + 1e-4);
+  });
+  return parts.reduce((s, x) => s + x, 0) / parts.length;
+}
+var clamp = (x, lo = -1, hi = 1) => Math.max(lo, Math.min(hi, x));
+function replyRapport(input) {
+  const text2 = input.text.trim();
+  const ws = words2(text2);
+  const cues = /* @__PURE__ */ new Set();
+  for (const [cue, re] of PATTERNS) if (re.test(text2)) cues.add(cue);
+  const name = input.studentFirstName?.trim();
+  if (name && name.length >= 2 && new RegExp(`\\b${name.replace(/[^\p{L}\p{N}' -]/gu, "")}\\b`, "iu").test(text2))
+    cues.add("uses_your_name");
+  const theirs = input.answering ? words2(input.answering).length : 0;
+  if (ws.length >= 60 && ws.length >= Math.max(20, theirs)) cues.add("thoughtful");
+  if (cues.has("formal")) cues.delete("uses_your_name");
+  let sum = 0;
+  for (const c of cues) sum += WARM_CUES[c] ?? 0;
+  if (input.valence && ws.length >= 3) sum += 0.25 * clamp(input.valence(text2));
+  if (cues.has("formal")) sum *= 0.5;
+  if (cues.has("distant")) sum -= 0.45;
+  if (cues.has("hostile")) sum -= 0.8;
+  const lsm = input.answering ? styleMatch(text2, input.answering) : void 0;
+  if (lsm !== void 0) sum += 0.1 * clamp((lsm - 0.5) * 2);
+  let score = Math.tanh(sum);
+  if (cues.has("asked_to_stop")) score = -1;
+  const cueCount = [...cues].filter((c) => c !== "formal").length;
+  const base = ws.length < 4 ? 0.3 : ws.length < 15 ? 0.6 : 0.85;
+  const confidence = Math.max(base, cueCount ? 0.7 : 0);
+  return {
+    score: Math.round(clamp(score) * 1e3) / 1e3,
+    by: "lexical",
+    cues: RAPPORT_CUES.filter((c) => cues.has(c)),
+    confidence,
+    v: RAPPORT_VERSION
+  };
+}
+var FAMILIARITY = {
+  stranger: -0.05,
+  professional: 0,
+  friendly: 0.1,
+  friend: 0.2
+};
+function rapportFromLlm(r) {
+  const known = new Set(RAPPORT_CUES);
+  const cues = RAPPORT_CUES.filter((c) => (r.cues ?? []).includes(c) && known.has(c));
+  let score = clamp((Number(r.warmth) || 0) / 2) * 0.8 + (FAMILIARITY[r.familiarity] ?? 0) + clamp(r.effort, 0, 2) * 0.03;
+  if (cues.includes("asked_to_stop")) score = -1;
+  return {
+    score: Math.round(clamp(score) * 1e3) / 1e3,
+    by: "llm",
+    cues,
+    confidence: 0.9,
+    v: RAPPORT_VERSION
+  };
+}
+function asRapportReading(x) {
+  if (!x || typeof x !== "object") return void 0;
+  const r = x;
+  if (typeof r.score !== "number" || !Number.isFinite(r.score)) return void 0;
+  return {
+    score: clamp(r.score),
+    by: r.by === "llm" ? "llm" : "lexical",
+    cues: Array.isArray(r.cues) ? RAPPORT_CUES.filter((c) => r.cues.includes(c)) : [],
+    confidence: typeof r.confidence === "number" ? clamp(r.confidence, 0, 1) : 0.6,
+    v: RAPPORT_VERSION
+  };
+}
+var RAPPORT_LLM_GUIDE = `rapport: how the sender feels about the student, separate from their answer to the request.
+- warmth −2..2: 2 = clearly warm and personal (asks about the student, offers help or intros, shares their own news, suggests meeting up); 0 = neutral or businesslike, including short replies such as "ok" or "sounds good"; −2 = distant, annoyed, or asks not to be contacted. A polite decline that wishes the student well is warm, not cold.
+- familiarity: stranger, professional, friendly, or friend, from how they write to the student.
+- effort 0..2: 0 a one-liner, 1 a normal reply, 2 a long, thoughtful reply.
+- cues: any of ${RAPPORT_CUES.join(", ")} that apply.`;
+
+// packages/core/src/scoring/strength.ts
+var ENGAGEMENT = /* @__PURE__ */ new Set([
+  "linkedin_comment_in",
+  "linkedin_comment_out",
+  "linkedin_reaction_in"
+]);
+var AMBIENT = /* @__PURE__ */ new Set(["email_cc", "linkedin_connected", ...ENGAGEMENT]);
+
+// packages/core/src/scoring/tieScore.ts
+var TIE_MODEL_VERSION = "tie-v2";
+var DAY7 = 864e5;
+var YEAR_DAYS = 365;
+var TIE_FEATURES = [
+  "log_days_last",
+  "log_days_first",
+  "log_out",
+  "log_in",
+  "reciprocity",
+  "log_meetings",
+  "log_threads",
+  "latency",
+  "intros",
+  "shared",
+  "structural",
+  "linkedin",
+  "warmth",
+  "never",
+  "engagement",
+  "rapport"
+];
+var TIE_WEIGHTS = {
+  bias: -2.33,
+  log_days_last: -0.28,
+  log_days_first: 0.2,
+  log_out: 0.1,
+  log_in: 0.22,
+  reciprocity: 1.02,
+  log_meetings: 0.6,
+  log_threads: 0,
+  latency: 1.56,
+  intros: 0.5,
+  shared: 0.66,
+  structural: 0.8,
+  linkedin: 0.84,
+  warmth: 0.5,
+  never: -0.1,
+  engagement: 0.5,
+  rapport: 0.6
+};
+var TIE_BASELINE = {
+  log_days_last: 5.27,
+  log_days_first: 5.52,
+  log_out: 0.31,
+  log_in: 0.25,
+  reciprocity: 0.18,
+  log_meetings: 0.12,
+  log_threads: 0.16,
+  latency: 0.03,
+  intros: 0,
+  shared: 0.4,
+  structural: 0,
+  linkedin: 0.88,
+  warmth: 0,
+  never: 0.74,
+  // the demo network had no post engagement when the baseline was taken
+  engagement: 0,
+  // no replies is neutral: silence never lowers a tie
+  rapport: 0
+};
+var RAPPORT_MAX_POINTS = 8;
+var RAPPORT_PRIOR = 3;
+var RAPPORT_STOP_WEIGHT = 4;
+var UNRECIPROCATED_SCORE_CAP = 20;
+var TIE_BAND_LABELS = {
+  faint: "Faint",
+  light: "Light",
+  warm: "Warm",
+  strong: "Strong",
+  close: "Close"
+};
+var TIE_LABEL_MIDPOINTS = { 1: 10, 2: 30, 3: 50, 4: 70, 5: 90 };
+function tieBand(score) {
+  if (score >= 80) return "close";
+  if (score >= 60) return "strong";
+  if (score >= 40) return "warm";
+  if (score >= 20) return "light";
+  return "faint";
+}
+var sigmoid = (x) => 1 / (1 + Math.exp(-x));
+function ms(iso4) {
+  if (!iso4) return void 0;
+  const t = new Date(iso4).getTime();
+  return Number.isNaN(t) ? void 0 : t;
+}
+function median(xs) {
+  if (!xs.length) return void 0;
+  const s = [...xs].sort((a, b) => a - b);
+  const mid = s.length >> 1;
+  return s.length % 2 ? s[mid] : (s[mid - 1] + s[mid]) / 2;
+}
+function meetingWeight(attendees) {
+  if (attendees <= 4) return 1;
+  if (attendees <= 8) return 0.3;
+  return 0;
+}
+var ENGAGEMENT_WEIGHT = {
+  comment_in: 1,
+  comment_out: 1,
+  reaction_in: 0.3
+};
+var ENGAGEMENT_SATURATION = 8;
+function computeTieFeatures(h, now = /* @__PURE__ */ new Date()) {
+  const t = now.getTime();
+  const when3 = (iso4) => {
+    const x = ms(iso4);
+    if (x === void 0 || x > t + DAY7) return void 0;
+    return Math.min(x, t);
+  };
+  const messages = h.messages.filter((m) => !m.automated && m.threadParticipants <= 8).map((m) => ({ ...m, t: when3(m.at) })).filter((m) => m.t !== void 0);
+  const meetings = h.meetings.filter((m) => m.attendees <= 8).map((m) => ({ ...m, t: when3(m.at) })).filter((m) => m.t !== void 0);
+  const connectedAt = h.linkedinConnected && h.connectedAt ? when3(h.connectedAt) : void 0;
+  const directions = /* @__PURE__ */ new Map();
+  for (const m of messages) {
+    const s = directions.get(m.threadId) ?? /* @__PURE__ */ new Set();
+    s.add(m.direction);
+    directions.set(m.threadId, s);
+  }
+  const twoWay = (threadId) => (directions.get(threadId)?.size ?? 0) === 2;
+  let lastTwoWay;
+  let lastAny;
+  let firstAny;
+  const seen = (x) => {
+    if (lastAny === void 0 || x > lastAny) lastAny = x;
+    if (firstAny === void 0 || x < firstAny) firstAny = x;
+  };
+  for (const m of messages) {
+    seen(m.t);
+    if (twoWay(m.threadId) && (lastTwoWay === void 0 || m.t > lastTwoWay)) lastTwoWay = m.t;
+  }
+  for (const m of meetings) {
+    seen(m.t);
+    if (lastTwoWay === void 0 || m.t > lastTwoWay) lastTwoWay = m.t;
+  }
+  if (connectedAt !== void 0) seen(connectedAt);
+  const never = messages.length === 0 && meetings.length === 0;
+  const lastRef = lastTwoWay ?? lastAny;
+  const daysLast = lastRef === void 0 ? void 0 : (t - lastRef) / DAY7;
+  const daysFirst = firstAny === void 0 ? void 0 : (t - firstAny) / DAY7;
+  const decay = (x) => 0.5 ** ((t - x) / DAY7 / YEAR_DAYS);
+  let outD = 0;
+  let inD = 0;
+  let outCount = 0;
+  let inCount = 0;
+  for (const m of messages) {
+    if (m.direction === "out") {
+      outD += decay(m.t);
+      outCount++;
+    } else {
+      inD += decay(m.t);
+      inCount++;
+    }
+  }
+  for (const m of meetings) {
+    const w = meetingWeight(m.attendees) * decay(m.t);
+    outD += w;
+    inD += w;
+  }
+  const reciprocity = inD > 0 && outD > 0 ? Math.min(1, inD / outD) : 0;
+  let meetingSum = 0;
+  let meetingCount = 0;
+  for (const m of meetings) {
+    if (t - m.t > 2 * YEAR_DAYS * DAY7) continue;
+    meetingSum += meetingWeight(m.attendees);
+    meetingCount++;
+  }
+  const smallTwoWay = /* @__PURE__ */ new Set();
+  for (const m of messages) if (m.threadParticipants <= 3 && twoWay(m.threadId)) smallTwoWay.add(m.threadId);
+  const latencies = messages.filter((m) => m.direction === "in" && m.isReplyLatencyHours !== void 0 && m.isReplyLatencyHours >= 0).map((m) => m.isReplyLatencyHours);
+  const med = median(latencies);
+  const latency = med === void 0 ? 0 : 1 - Math.min(1, Math.log(1 + med) / Math.log(169));
+  const sh = h.shared;
+  const shared = Math.min(
+    2,
+    (sh.sameSchool ? 1 : 0) + (sh.overlappingEmployer ? 1 : 0) + (sh.sameCity ? 0.5 : 0)
+  );
+  const top = h.mutualScores.map((s, i) => ({ s: Math.max(0, Math.min(100, s)), name: h.mutualNames?.[i] })).sort((a, b) => b.s - a.s).slice(0, 5);
+  const structural = top.length ? top.reduce((a, b) => a + b.s, 0) / top.length / 100 : 0;
+  const warmthVals = h.noteWarmth.filter((w) => Number.isFinite(w)).map((w) => Math.max(-1, Math.min(1, w)));
+  const warmth = warmthVals.length ? warmthVals.reduce((a, b) => a + b, 0) / warmthVals.length : 0;
+  let engaged = 0;
+  let commentsIn = 0;
+  let commentsOut = 0;
+  let reactionsIn = 0;
+  for (const e of h.engagement ?? []) {
+    const x = when3(e.at);
+    if (x === void 0) continue;
+    engaged += ENGAGEMENT_WEIGHT[e.kind] * decay(x);
+    if (e.kind === "comment_in") commentsIn++;
+    else if (e.kind === "comment_out") commentsOut++;
+    else reactionsIn++;
+  }
+  const engagement = Math.min(1, Math.log(1 + engaged) / Math.log(1 + ENGAGEMENT_SATURATION));
+  let rapportNum = 0;
+  let rapportDen = 0;
+  let rapportReadings = 0;
+  let askedToStop = false;
+  const cueCounts = /* @__PURE__ */ new Map();
+  for (const r of h.rapport ?? []) {
+    const x = when3(r.at);
+    const score = r.reading?.score;
+    if (x === void 0 || typeof score !== "number" || !Number.isFinite(score)) continue;
+    const stop = r.reading.cues.includes("asked_to_stop");
+    if (stop) askedToStop = true;
+    const w = Math.max(0, Math.min(1, r.reading.confidence ?? 0.6)) * decay(x) * (stop ? RAPPORT_STOP_WEIGHT : 1);
+    rapportNum += w * Math.max(-1, Math.min(1, score));
+    rapportDen += w;
+    rapportReadings++;
+    for (const c of r.reading.cues) cueCounts.set(c, (cueCounts.get(c) ?? 0) + 1);
+  }
+  const rapport = rapportReadings ? rapportNum / (RAPPORT_PRIOR + rapportDen) : 0;
+  const rapportCues = [...cueCounts.entries()].sort((a, b) => b[1] - a[1]).map(([c]) => c);
+  const features = {
+    log_days_last: daysLast === void 0 ? 0 : Math.log(1 + daysLast),
+    log_days_first: daysFirst === void 0 ? 0 : Math.log(1 + daysFirst),
+    log_out: Math.log(1 + outD),
+    log_in: Math.log(1 + inD),
+    reciprocity,
+    log_meetings: Math.log(1 + meetingSum),
+    log_threads: Math.log(1 + smallTwoWay.size),
+    latency,
+    intros: Math.min(2, Math.max(0, h.intros)),
+    shared,
+    structural,
+    linkedin: h.linkedinConnected ? 1 : 0,
+    warmth,
+    never: never ? 1 : 0,
+    engagement,
+    rapport
+  };
+  const facts = {
+    name: h.name,
+    daysLast,
+    lastWasTwoWay: lastTwoWay !== void 0,
+    daysFirst,
+    inCount,
+    outCount,
+    meetings: meetingCount,
+    twoWayThreads: smallTwoWay.size,
+    medianLatencyHours: med,
+    intros: features.intros,
+    introRole: h.introRole,
+    shared: sh,
+    mutualNames: top.filter((x) => x.name && x.s > 0).map((x) => x.name),
+    linkedin: h.linkedinConnected,
+    never,
+    warmth,
+    commentsIn,
+    commentsOut,
+    reactionsIn,
+    rapport,
+    rapportReadings,
+    rapportCues,
+    askedToStop
+  };
+  return { features, facts };
+}
+function linearTie(features, weights = TIE_WEIGHTS) {
+  let z7 = weights.bias;
+  for (const k of TIE_FEATURES) z7 += weights[k] * features[k];
+  return z7;
+}
+function scoreFromZ(z7, calibration) {
+  const zz = calibration ? calibration.a * z7 + calibration.c : z7;
+  return Math.round(100 * sigmoid(zz));
+}
+function scoreTie(history, now = /* @__PURE__ */ new Date(), weights = TIE_WEIGHTS, calibration) {
+  const { features, facts } = computeTieFeatures(history, now);
+  const z7 = linearTie(features, weights);
+  let score = scoreFromZ(z7, calibration);
+  if (features.rapport !== 0) {
+    const without = scoreFromZ(z7 - weights.rapport * features.rapport, calibration);
+    score = Math.max(without - RAPPORT_MAX_POINTS, Math.min(without + RAPPORT_MAX_POINTS, score));
+  }
+  let capped = false;
+  if (facts.inCount === 0 && facts.outCount > 0 && facts.meetings === 0 && !anyMeeting(history, now) && !history.intros) {
+    if (score > UNRECIPROCATED_SCORE_CAP) {
+      score = UNRECIPROCATED_SCORE_CAP;
+      capped = true;
+    }
+  }
+  let labelled = false;
+  const label = history.label;
+  if (label && TIE_LABEL_MIDPOINTS[label.closeness] !== void 0) {
+    const at = ms(label.at) ?? 0;
+    const newer = history.messages.some((m) => !m.automated && (ms(m.at) ?? 0) > at) || history.meetings.some((m) => (ms(m.at) ?? 0) > at);
+    if (!newer) {
+      score = TIE_LABEL_MIDPOINTS[label.closeness];
+      labelled = true;
+    }
+  }
+  const { contributions, explanation } = explainTie(features, facts, weights);
+  return {
+    score,
+    band: tieBand(score),
+    z: z7,
+    features,
+    contributions,
+    explanation,
+    modelVersion: TIE_MODEL_VERSION,
+    capped,
+    labelled,
+    facts
+  };
+}
+function anyMeeting(h, now) {
+  const t = now.getTime() + DAY7;
+  return h.meetings.some((m) => m.attendees <= 8 && (ms(m.at) ?? Number.POSITIVE_INFINITY) <= t);
+}
+var SHARE_MASKED_FEATURES = [
+  "log_days_last",
+  "log_days_first",
+  "log_out",
+  "log_in",
+  "reciprocity",
+  "log_meetings",
+  "log_threads",
+  "latency",
+  "intros",
+  "structural",
+  "never",
+  "rapport"
+];
+function shareFeatures(features) {
+  const out = { ...features };
+  for (const k of SHARE_MASKED_FEATURES) out[k] = 0;
+  return out;
+}
+function shareScore(history, now = /* @__PURE__ */ new Date(), weights = TIE_WEIGHTS, calibration) {
+  const { features } = computeTieFeatures(history, now);
+  const score = scoreFromZ(linearTie(shareFeatures(features), weights), calibration);
+  const label = history.label;
+  if (label && TIE_LABEL_MIDPOINTS[label.closeness] !== void 0)
+    return TIE_LABEL_MIDPOINTS[label.closeness];
+  return score;
+}
+function shareCloseness(score) {
+  if (score >= 60) return 3;
+  if (score >= 40) return 2;
+  return 1;
+}
+var plural = (n, one, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
+function ago(days) {
+  if (days < 1.5) return "a day";
+  if (days < 45) return `${Math.round(days)} days`;
+  const months = Math.round(days / 30.4);
+  if (months < 18) return plural(months, "month");
+  return plural(Math.round(days / 365), "year");
+}
+function explainTie(features, facts, weights = TIE_WEIGHTS) {
+  const c = {};
+  for (const k of TIE_FEATURES) c[k] = weights[k] * (features[k] - TIE_BASELINE[k]);
+  const name = facts.name || "They";
+  const topics = [];
+  const total = facts.inCount + facts.outCount;
+  if (facts.daysLast !== void 0 && !facts.never)
+    topics.push({
+      value: c.log_days_last,
+      negative: facts.lastWasTwoWay ? `Last real exchange was ${ago(facts.daysLast)} ago` : `No real back-and-forth yet; last contact ${ago(facts.daysLast)} ago`
+    });
+  if (facts.daysFirst !== void 0 && facts.daysFirst >= 60 && !facts.never)
+    topics.push({ value: c.log_days_first, positive: `You've been in touch for ${ago(facts.daysFirst)}` });
+  if (total > 0) {
+    const oneWay = facts.outCount > 0 && facts.inCount * 2 < facts.outCount;
+    topics.push({
+      value: c.log_out + c.log_in + c.reciprocity + c.log_threads,
+      positive: facts.inCount > 0 ? `${plural(total, "message")} between you (${facts.inCount} from them)` : void 0,
+      negative: oneWay ? `Mostly one-way: ${facts.outCount} sent, ${facts.inCount} back` : void 0
+    });
+  }
+  if (facts.meetings > 0)
+    topics.push({
+      value: c.log_meetings,
+      positive: `${plural(facts.meetings, "meeting")} in the last 2 years`
+    });
+  if (facts.intros > 0)
+    topics.push({
+      value: c.intros,
+      positive: facts.introRole === "you_introduced_them" ? "You introduced them to someone" : facts.introRole === "introduced_to_you" ? "Someone you know introduced you" : `${name} introduced you to someone`
+    });
+  const sh = facts.shared;
+  if (sh.overlappingEmployer || sh.sameSchool || sh.sameCity)
+    topics.push({
+      value: c.shared,
+      positive: sh.overlappingEmployer ? `You overlapped at ${sh.employer ?? "the same company"}${sh.overlapYears ? ` (${sh.overlapYears})` : ""}` : sh.sameSchool ? `You both went to ${sh.school ?? "the same school"}` : `You both live in ${sh.city ?? "the same city"}`
+    });
+  if (facts.mutualNames.length)
+    topics.push({
+      value: c.structural,
+      positive: `Close with people you're close to (${facts.mutualNames.slice(0, 3).join(", ")})`
+    });
+  if (facts.linkedin && facts.never)
+    topics.push({
+      value: Math.min(c.linkedin + c.never, -1e-6),
+      negative: "Connected on LinkedIn, never talked",
+      negativeOnly: true
+    });
+  else if (facts.linkedin) topics.push({ value: c.linkedin, positive: "Connected on LinkedIn" });
+  else if (facts.never) topics.push({ value: c.never, negative: "You haven't talked yet" });
+  if (facts.medianLatencyHours !== void 0) {
+    const h = facts.medianLatencyHours;
+    topics.push({
+      value: c.latency,
+      positive: h <= 48 ? Math.round(h) <= 1 ? "Usually replies within the hour" : `Usually replies within ${Math.round(h)} hours` : void 0,
+      negative: h > 48 ? `Takes about ${Math.round(h / 24)} days to reply` : void 0
+    });
+  }
+  if (facts.commentsIn + facts.commentsOut + facts.reactionsIn > 0)
+    topics.push({
+      value: c.engagement,
+      positive: facts.commentsIn && facts.commentsOut ? "You comment on each other's LinkedIn posts" : facts.commentsIn ? `${plural(facts.commentsIn, "comment")} on your LinkedIn posts` : facts.commentsOut ? "You comment on their LinkedIn posts" : facts.reactionsIn === 1 ? "Reacted to one of your LinkedIn posts" : `Reacted to ${facts.reactionsIn} of your LinkedIn posts`
+    });
+  if (facts.rapportReadings > 0 && facts.rapport !== 0)
+    topics.push({
+      value: c.rapport,
+      positive: facts.rapport > 0 ? rapportSentence(facts.rapportCues) : void 0,
+      negative: facts.askedToStop ? "They asked you not to contact them" : facts.rapport < 0 ? "Their replies sound distant" : void 0
+    });
+  if (facts.warmth !== 0)
+    topics.push({
+      value: c.warmth,
+      positive: facts.warmth > 0 ? "Your notes about them are warm" : void 0,
+      negative: facts.warmth < 0 ? "Your notes about them sound cool" : void 0
+    });
+  const positives = topics.filter((x) => !x.negativeOnly && x.positive && x.value > 0).sort((a, b) => b.value - a.value).slice(0, 3).map((x) => x.positive);
+  const negative = topics.filter((x) => x.negative && (x.value < 0 || x.negativeOnly)).sort((a, b) => a.value - b.value)[0]?.negative;
+  const explanation = [...positives, ...negative ? [negative] : []];
+  if (!explanation.length)
+    explanation.push(facts.never ? "You haven't been in touch yet" : "A light history so far");
+  return { contributions: c, explanation };
+}
+var CUE_PHRASES = {
+  asks_about_you: "ask how you're doing",
+  offers_help: "offer to help",
+  plans_together: "suggest meeting up",
+  personal_news: "share their own news",
+  congratulates: "congratulate you",
+  glad_to_hear: "sound glad to hear from you",
+  thoughtful: "write thoughtful replies"
+};
+function rapportSentence(cues) {
+  const phrases = cues.map((c) => CUE_PHRASES[c]).filter((p) => !!p).slice(0, 2);
+  if (!phrases.length) return "Their replies are warm";
+  return `Their replies are warm: they ${phrases.join(" and ")}`;
+}
+var CALIBRATION_MIN_LABELS = 8;
+var CALIBRATION_STEPS = 200;
+var CALIBRATION_RIDGE = 0.1;
+function fitCalibration(labels) {
+  const pts = labels.filter((l) => Number.isFinite(l.z) && l.closeness >= 1 && l.closeness <= 5);
+  if (pts.length < CALIBRATION_MIN_LABELS) return void 0;
+  const curvature = 2 * CALIBRATION_RIDGE + pts.reduce((s, p) => s + 0.32 * (p.z * p.z + 1), 0);
+  const lr = 1 / curvature;
+  let a = 1;
+  let c = 0;
+  for (let step = 0; step < CALIBRATION_STEPS; step++) {
+    let ga = 2 * CALIBRATION_RIDGE * (a - 1);
+    let gc = 2 * CALIBRATION_RIDGE * c;
+    for (const p of pts) {
+      const s = sigmoid(a * p.z + c);
+      const y = (p.closeness - 1) / 4;
+      const g = 2 * (s - y) * s * (1 - s);
+      ga += g * p.z;
+      gc += g;
+    }
+    a -= lr * ga;
+    c -= lr * gc;
+  }
+  return { a, c };
+}
+var yearOf3 = (iso4) => iso4 ? Number(iso4.slice(0, 4)) || void 0 : void 0;
+function sharedContext(input) {
+  const { person, user } = input;
+  const school = user?.school ? normalizeCompany(user.school) : "";
+  const schools = [
+    person.school,
+    ...(input.affiliations ?? []).filter((a) => a.kind === "education").map((a) => a.nameRaw)
+  ].filter((s) => !!s).map((s) => ({ raw: s, norm: normalizeCompany(s) }));
+  const schoolHit = school ? schools.find((s) => s.norm === school) : void 0;
+  const sameSchool = !!person.isAlumni || !!schoolHit;
+  let employer;
+  let overlapYears;
+  for (const u2 of input.userEmployers ?? []) {
+    const norm2 = normalizeCompany(u2.name);
+    if (!norm2) continue;
+    for (const a of input.affiliations ?? []) {
+      if (a.kind !== "employment" || normalizeCompany(a.nameRaw) !== norm2) continue;
+      const us = ms(u2.startDate) ?? Number.NEGATIVE_INFINITY;
+      const ue = ms(u2.endDate) ?? Number.POSITIVE_INFINITY;
+      const as = ms(a.startDate) ?? Number.NEGATIVE_INFINITY;
+      const ae = a.isCurrent ? Number.POSITIVE_INFINITY : ms(a.endDate) ?? Number.POSITIVE_INFINITY;
+      if (Math.max(us, as) > Math.min(ue, ae)) continue;
+      employer = a.nameRaw;
+      const from = Math.max(yearOf3(u2.startDate) ?? 0, yearOf3(a.startDate) ?? 0) || void 0;
+      const to = Math.min(yearOf3(u2.endDate) ?? 9999, a.isCurrent ? 9999 : yearOf3(a.endDate) ?? 9999);
+      overlapYears = from ? to === 9999 ? `since ${from}` : to === from ? `${from}` : `${from}–${to}` : void 0;
+      break;
+    }
+    if (employer) break;
+  }
+  const city = (s) => (s ?? "").toLowerCase().split(",")[0].trim();
+  const sameCity = !!user?.currentCity && !!person.location && city(user.currentCity) === city(person.location);
+  return {
+    sameSchool,
+    overlappingEmployer: !!employer,
+    sameCity,
+    school: schoolHit?.raw ?? (sameSchool ? person.school ?? user?.school : void 0),
+    employer,
+    overlapYears,
+    city: sameCity ? person.location.split(",")[0].trim() : void 0
+  };
+}
+function gatherRapport(rows) {
+  const out = [];
+  for (const r of rows) {
+    if (!r.inbound || r.automated || r.participants > 3) continue;
+    if (r.fromEmail && isAtsSender(r.fromEmail)) continue;
+    const reading = asRapportReading(r.reading);
+    if (reading) out.push({ at: r.at, reading, channel: r.channel });
+  }
+  return out;
+}
+function warmthValue(w) {
+  return w === "warm" ? 1 : w === "cool" ? -1 : 0;
+}
+
+// packages/core/src/graph/paths.ts
+function makeGraph() {
+  return { nodes: /* @__PURE__ */ new Set(), adj: /* @__PURE__ */ new Map() };
+}
+function addEdge(g, a, b, weight, type, text2, directed = false) {
+  if (weight <= 0) return;
+  g.nodes.add(a);
+  g.nodes.add(b);
+  const set = (x, y) => {
+    const m = g.adj.get(x) ?? /* @__PURE__ */ new Map();
+    const cur = m.get(y);
+    if (!cur || cur.weight < weight) m.set(y, { weight, type, text: text2 });
+    g.adj.set(x, m);
+  };
+  set(a, b);
+  if (!directed) set(b, a);
+}
+function edgeCost(weight) {
+  return -Math.log(Math.min(weight, 0.999999));
+}
+var MinHeap = class {
+  keys = [];
+  vals = [];
+  get size() {
+    return this.keys.length;
+  }
+  push(key2, val) {
+    const k = this.keys;
+    const v = this.vals;
+    let i = k.length;
+    k.push(key2);
+    v.push(val);
+    while (i > 0) {
+      const parent = i - 1 >> 1;
+      if (k[parent] <= key2) break;
+      k[i] = k[parent];
+      v[i] = v[parent];
+      i = parent;
+    }
+    k[i] = key2;
+    v[i] = val;
+  }
+  pop() {
+    const k = this.keys;
+    const v = this.vals;
+    if (!k.length) return void 0;
+    const topK = k[0];
+    const topV = v[0];
+    const lastK = k.pop();
+    const lastV = v.pop();
+    const n = k.length;
+    if (n) {
+      let i = 0;
+      while (true) {
+        const l = 2 * i + 1;
+        if (l >= n) break;
+        const r = l + 1;
+        const c = r < n && k[r] < k[l] ? r : l;
+        if (k[c] >= lastK) break;
+        k[i] = k[c];
+        v[i] = v[c];
+        i = c;
+      }
+      k[i] = lastK;
+      v[i] = lastV;
+    }
+    return [topK, topV];
   }
 };
-function googleFor(deps) {
-  const pacers = /* @__PURE__ */ new Map();
-  return (db2) => {
-    if (!deps.google) throw new JobSkipped("unconfigured");
-    return googleClient({
-      tokens: deps.google,
-      db: db2,
-      fetch: deps.fetch,
-      clock: deps.clock,
-      sleep: deps.sleep,
-      random: deps.random,
-      pacers
-    });
+function boundedSearch(g, source, maxHops, target, removedEdges, removedNodes) {
+  const dist = /* @__PURE__ */ new Map();
+  const prev = /* @__PURE__ */ new Map();
+  const minSettledHops = /* @__PURE__ */ new Map();
+  const best = /* @__PURE__ */ new Map();
+  const heap = new MinHeap();
+  const setDist = (node, hops, d, from) => {
+    let arr = dist.get(node);
+    if (!arr) {
+      arr = new Array(maxHops + 1).fill(Number.POSITIVE_INFINITY);
+      dist.set(node, arr);
+      prev.set(node, new Array(maxHops + 1));
+    }
+    arr[hops] = d;
+    prev.get(node)[hops] = from;
   };
+  setDist(source, 0, 0, void 0);
+  heap.push(0, { node: source, hops: 0 });
+  while (heap.size) {
+    const [d, { node, hops }] = heap.pop();
+    if (d > dist.get(node)[hops]) continue;
+    const settled = minSettledHops.get(node);
+    if (settled !== void 0 && settled <= hops) continue;
+    minSettledHops.set(node, hops);
+    if (!best.has(node)) best.set(node, { cost: d, hops });
+    if (node === target) break;
+    if (hops >= maxHops) continue;
+    for (const [v, e] of g.adj.get(node) ?? []) {
+      if (v === source || removedNodes?.has(v) || removedEdges?.has(`${node}>${v}`)) continue;
+      const s = minSettledHops.get(v);
+      if (s !== void 0 && s <= hops + 1) continue;
+      const nd = d + edgeCost(e.weight);
+      const cur = dist.get(v)?.[hops + 1] ?? Number.POSITIVE_INFINITY;
+      if (nd < cur) {
+        setDist(v, hops + 1, nd, node);
+        heap.push(nd, { node: v, hops: hops + 1 });
+      }
+    }
+  }
+  return { best, prev };
 }
-var LONG_VT_SEC = 300;
-
-// supabase/functions/orbit-worker/handlers/funnel.ts
-function funnelReplyHandler(config) {
-  return async (job, ctx) => {
-    if (!job.userId) throw new JobSkipped("no_user");
-    const id = job.payload.messageId;
-    if (!isUuid(id)) throw new JobSkipped("no_message");
-    await runReplyFunnel(
-      makeServices(config, { db: ctx.db, now: ctx.now, queue: ctx.queue }),
-      job.userId,
-      id
-    );
-  };
+function reconstruct(search, node) {
+  const b = search.best.get(node);
+  if (!b) return void 0;
+  const path = [node];
+  let cur = node;
+  for (let h = b.hops; h > 0; h--) {
+    cur = search.prev.get(cur)[h];
+    path.unshift(cur);
+  }
+  return path;
 }
-async function rollOutcomes(db2, now, userId) {
-  const before = new Date(now.getTime() - QUIET_DAYS * 864e5);
-  const rows = await db2.sql`
-    update orbit.drafts set outcome = 'silent'
-     where status = 'sent' and outcome is null and replied_at is null and sent_at <= ${before}::timestamptz
-       and kind <> 'forwardable_blurb'
-       and (${userId ?? null}::uuid is null or user_id = ${userId ?? null}::uuid)
-    returning id`;
-  return rows.length;
+function shortestPath(g, source, target, maxHops, removedEdges, removedNodes) {
+  if (source === target) return [source];
+  const search = boundedSearch(g, source, maxHops, target, removedEdges, removedNodes);
+  return reconstruct(search, target);
 }
-function outcomesRollHandler() {
-  return async (job, ctx) => {
-    await rollOutcomes(ctx.db, ctx.now(), job.userId ?? void 0);
-  };
+function pathCost(g, path) {
+  let c = 0;
+  for (let i = 0; i < path.length - 1; i++) c += edgeCost(g.adj.get(path[i]).get(path[i + 1]).weight);
+  return c;
+}
+function kShortestPaths(g, source, target, k = 3, maxHops = 3) {
+  if (!g.nodes.has(source) || !g.nodes.has(target)) return source === target ? [[source]] : [];
+  const first = shortestPath(g, source, target, maxHops, /* @__PURE__ */ new Set(), /* @__PURE__ */ new Set());
+  if (!first) return [];
+  const A = [first];
+  if (first.length === 1) return A;
+  const B = [];
+  const seen = /* @__PURE__ */ new Set([first.join(">")]);
+  for (let kk = 1; kk < k; kk++) {
+    const last = A[kk - 1];
+    for (let i = 0; i < last.length - 1; i++) {
+      const spur = last[i];
+      const root = last.slice(0, i + 1);
+      const removedEdges = /* @__PURE__ */ new Set();
+      const removedNodes = /* @__PURE__ */ new Set();
+      for (const p of A) {
+        if (p.length > i + 1 && root.every((n, idx) => p[idx] === n)) removedEdges.add(`${p[i]}>${p[i + 1]}`);
+      }
+      for (const n of root) if (n !== spur) removedNodes.add(n);
+      const spurPath = shortestPath(g, spur, target, maxHops - i, removedEdges, removedNodes);
+      if (!spurPath) continue;
+      const total = [...root.slice(0, -1), ...spurPath];
+      const key2 = total.join(">");
+      if (seen.has(key2)) continue;
+      seen.add(key2);
+      B.push({ cost: pathCost(g, total), path: total, key: key2 });
+    }
+    if (!B.length) break;
+    B.sort((a, b) => a.cost - b.cost);
+    A.push(B.shift().path);
+  }
+  return A;
 }
 
 // packages/core/src/graph/orgSize.ts
@@ -9802,16 +9349,8 @@ function seniorityFit(a, b) {
   return Math.abs(x - y) >= 2 ? "gap" : void 0;
 }
 
-// packages/core/src/scoring/strength.ts
-var ENGAGEMENT = /* @__PURE__ */ new Set([
-  "linkedin_comment_in",
-  "linkedin_comment_out",
-  "linkedin_reaction_in"
-]);
-var AMBIENT = /* @__PURE__ */ new Set(["email_cc", "linkedin_connected", ...ENGAGEMENT]);
-
 // packages/core/src/graph/edges.ts
-var DAY7 = 864e5;
+var DAY8 = 864e5;
 var FULL_PAIRING_MAX = 150;
 var CONNECTORS_PER_LARGE_GROUP = 20;
 function time(d) {
@@ -9831,7 +9370,7 @@ function monthsOverlap(a, b, now) {
   const end = Math.min(aEnd, bEnd);
   if (!Number.isFinite(start)) return a.isCurrent && b.isCurrent ? 12 : 0;
   if (Number.isNaN(end)) return 0;
-  return Math.max(0, (end - start) / (30 * DAY7));
+  return Math.max(0, (end - start) / (30 * DAY8));
 }
 var badDate = (a) => !!a.startDate && time(a.startDate) === void 0 || !!a.endDate && time(a.endDate) === void 0;
 function provablyDisjoint(a, b) {
@@ -10253,8 +9792,8 @@ function affiliationConfidence(kind, ev, now = /* @__PURE__ */ new Date(), bigOr
     return typeof ev.year === "number" ? 0.4 : ev.withinTwoYears ? 0.25 : 0.1;
   return TIE_CONFIDENCE[kind];
 }
-var DAY8 = 864e5;
-var YEAR = 365.25 * DAY8;
+var DAY9 = 864e5;
+var YEAR = 365.25 * DAY9;
 var GROUP_MAX = 8;
 var BIG_ORG = /* @__PURE__ */ new Set(["5001-10000", "10001+"]);
 var pairKey = (a, b) => a < b ? [a, b] : [b, a];
@@ -10548,7 +10087,7 @@ function engagementScore(items, ctx = {}) {
     if (followers === void 0) popularityKnown = false;
     const share = followers === void 0 ? W.unknownPopularity : W.audience / Math.max(W.audience, followers);
     const t = it.at ? Date.parse(it.at) : Number.NaN;
-    const months = Number.isFinite(t) ? (now - t) / (30.44 * DAY8) : Number.POSITIVE_INFINITY;
+    const months = Number.isFinite(t) ? (now - t) / (30.44 * DAY9) : Number.POSITIVE_INFINITY;
     const recency = months <= 12 ? W.recent : months <= 24 ? W.lastYear : W.old;
     if (Number.isFinite(t)) {
       dated++;
@@ -10788,7 +10327,7 @@ function pairFading(pair, now = /* @__PURE__ */ new Date()) {
     if (!n || n < 3 || !Number.isFinite(first) || !Number.isFinite(last) || last <= first) continue;
     const gap = (last - first) / (n - 1);
     const quiet = now.getTime() - last;
-    if (quiet <= Math.max(90 * DAY8, HOP_WEIGHTS.fadingGaps * gap)) return false;
+    if (quiet <= Math.max(90 * DAY9, HOP_WEIGHTS.fadingGaps * gap)) return false;
     fading = true;
   }
   return fading;
@@ -10801,8 +10340,817 @@ function isRoutable(pair) {
   return 1 - c >= 0.5;
 }
 
+// packages/core/src/graph/route.ts
+var USER_NODE = "user";
+var sigmoid2 = (x) => 1 / (1 + Math.exp(-x));
+var DAY10 = 864e5;
+function pAsk(f) {
+  return sigmoid2(
+    -2 + 4 * Math.max(0, Math.min(100, f.score)) / 100 + 0.8 * Math.max(0, Math.min(1, f.reciprocity ?? 0)) + (f.introducedUserBefore ? 0.6 : 0) + (f.sharesGoalTargetOrg ? 0.3 : 0) - (f.askedRecently ? 0.7 : 0) - (f.owesReply ? 0.5 : 0)
+  );
+}
+function pKnow(pair) {
+  return Math.max(0, Math.min(1, pair.weight));
+}
+function targetReceptivity(t) {
+  const level = seniorityClass(t.title);
+  const cLevel = level === 2;
+  const atMostManager = level === 0;
+  const r = 1 + (t.isAlum ? 0.15 : 0) + (atMostManager ? 0.1 : 0) - (cLevel ? 0.15 : 0);
+  return Math.max(0.7, Math.min(1.3, r));
+}
+function firstHopFloor(goal) {
+  if (goal === "fundraising") return 40;
+  if (goal === "recruiting" || goal === "advice") return 20;
+  return 0;
+}
+var HOP_PENALTY = 0.85;
+var OLD_EVIDENCE_YEARS = 3;
+var OLD_EVIDENCE_FACTOR = 0.7;
+var DIRECT_TIE_SCORE = 40;
+var MIN_PATH_P = 0.05;
+var MUTUAL_MIN_SCORE = 12;
+function hopBand(p) {
+  if (p >= 0.65) return "close";
+  if (p >= 0.5) return "know";
+  if (p >= 0.2) return "connected";
+  return "unclear";
+}
+function pathBand(p) {
+  if (p >= 0.35) return "high";
+  if (p >= 0.15) return "medium";
+  return "low";
+}
+var pk = (a, b) => a < b ? `${a}|${b}` : `${b}|${a}`;
+var pairKeyOf = pk;
+function dropBlocked(pairs, blocked) {
+  if (!blocked?.size) return pairs;
+  const out = new Map(pairs);
+  for (const k of blocked) out.delete(k);
+  return out;
+}
+function withExternal(pairs, targetId, candidates) {
+  if (!candidates.length) return pairs;
+  const out = new Map(pairs);
+  for (const c of candidates) {
+    if (c.introducerId === targetId) continue;
+    const key2 = pk(c.introducerId, targetId);
+    const [a, b] = key2.split("|");
+    const w = c.kind === "linkedin_mutual" ? HOP_WEIGHTS.mutual : Math.max(0, Math.min(1, c.warmth ?? 0));
+    const conf = c.kind === "linkedin_mutual" ? 0.95 : c.kind === "friend_path" ? 1 : 0.7;
+    const tie = {
+      id: `${key2}|${c.kind}`,
+      userId: "",
+      aId: a,
+      bId: b,
+      kind: c.kind === "friend_path" ? "student_says_close" : c.kind,
+      weight: w,
+      confidence: conf,
+      evidence: {
+        source: c.kind === "linkedin_mutual" ? "unipile" : c.kind === "friend_path" ? "friend" : "village"
+      },
+      lastSeenAt: c.seenAt
+    };
+    const cur = out.get(key2);
+    if (cur?.kinds.includes(tie.kind)) continue;
+    out.set(key2, {
+      aId: a,
+      bId: b,
+      weight: 1 - (1 - (cur?.weight ?? 0)) * (1 - w * conf),
+      confidence: 1 - (1 - (cur?.confidence ?? 0)) * (1 - conf),
+      kinds: [...cur?.kinds ?? [], tie.kind],
+      ties: [...cur?.ties ?? [], tie],
+      lastSeenAt: cur?.lastSeenAt
+    });
+  }
+  return out;
+}
+function usable2(p, now) {
+  if (!p || p.hidden) return false;
+  if (p.declinedIntroAt) {
+    const t = new Date(p.declinedIntroAt).getTime();
+    if (!Number.isNaN(t) && now.getTime() - t < 90 * DAY10) return false;
+  }
+  return true;
+}
+var strength = (t, now) => decayedTieWeight(t, now) * t.confidence;
+function strongestTie(pair, now) {
+  const sorted = [...pair.ties].sort((x, y) => strength(y, now) - strength(x, now));
+  return sorted.find((t) => !SUPPORT_ONLY_TIE_KINDS.has(t.kind)) ?? sorted[0];
+}
+function strongestSupport(pair, now) {
+  return [...pair.ties].filter((t) => SUPPORT_ONLY_TIE_KINDS.has(t.kind)).sort((x, y) => strength(y, now) - strength(x, now))[0];
+}
+function pairIsOld(pair, now) {
+  const cutoff = now.getTime() - OLD_EVIDENCE_YEARS * 365.25 * DAY10;
+  let newest = pair.lastSeenAt ? new Date(pair.lastSeenAt).getTime() : Number.NaN;
+  for (const t of pair.ties) {
+    const ev = t.evidence;
+    if (ev.ongoing || Array.isArray(ev.current) && ev.current.length === 2) return false;
+    if (typeof ev.toYear === "number") {
+      const end = Date.UTC(ev.toYear, 11, 31);
+      newest = Number.isNaN(newest) ? end : Math.max(newest, end);
+    }
+  }
+  return !Number.isNaN(newest) && newest < cutoff;
+}
+var MONTHS2 = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+function monthYear(iso4) {
+  if (typeof iso4 !== "string") return void 0;
+  const d = new Date(iso4);
+  return Number.isNaN(d.getTime()) ? void 0 : `${MONTHS2[d.getUTCMonth()]} ${d.getUTCFullYear()}`;
+}
+function hopEvidence(fromId, tie, toName) {
+  if (!tie) return `knows ${toName}`;
+  const ev = tie.evidence;
+  const org = typeof ev.orgName === "string" ? ev.orgName : void 0;
+  switch (tie.kind) {
+    case "email_exchange":
+      return `emails with ${toName}`;
+    case "email_cc":
+      return `is on email with ${toName}`;
+    case "email_cothread":
+      return `was on an email thread with ${toName}`;
+    case "meeting_coattendee": {
+      const when3 = monthYear(ev.lastAt ?? tie.lastSeenAt);
+      return `met ${toName}${when3 ? ` (${when3})` : ""}`;
+    }
+    case "introduced_by":
+      return ev.introducerId === fromId ? `introduced you to ${toName}` : `was introduced to you by ${toName}`;
+    case "linkedin_mutual":
+      return `is connected to ${toName} on LinkedIn`;
+    case "village_path":
+      return `knows ${toName} (via Village)`;
+    case "co_tenure": {
+      if (ev.apart) return `also worked at ${org ?? "the same company"}, not at the same time as ${toName}`;
+      const from = typeof ev.fromYear === "number" ? ev.fromYear : void 0;
+      const to = typeof ev.toYear === "number" ? ev.toYear : void 0;
+      const years = from === void 0 ? "" : ev.ongoing ? ` (since ${from})` : to && to !== from ? ` (${from} to ${to})` : ` (${from})`;
+      return `worked with ${toName}${org ? ` at ${org}` : ""}${years}`;
+    }
+    case "same_school_cohort":
+      return `went to ${typeof ev.school === "string" ? ev.school : "school"} with ${toName}`;
+    case "same_current_company":
+      return `works with ${toName}${org ? ` at ${org}` : ""}`;
+    case "linkedin_recommendation":
+      return ev.authorId === fromId ? `recommended ${toName} on LinkedIn` : `was recommended on LinkedIn by ${toName}`;
+    case "linkedin_mention":
+      return ev.authorId === fromId ? `mentioned ${toName} in a LinkedIn post` : `was mentioned by ${toName} in a LinkedIn post`;
+    case "student_says_close":
+      return `is close to ${toName} (you said)`;
+    case "common_contacts": {
+      const n = typeof ev.n === "number" ? ev.n : 0;
+      return n === 1 ? `has a contact in common with ${toName}` : `has ${n} contacts in common with ${toName}`;
+    }
+    case "linkedin_engagement":
+      return engagementPhrase(fromId, ev, toName);
+    default:
+      return `knows ${toName}`;
+  }
+}
+var times = (n, one, many) => n === 1 ? one : many.replace("{n}", String(n));
+function engagementPhrase(fromId, ev, toName) {
+  const counts = ev.counts ?? {};
+  const mine = counts[fromId] ?? {};
+  const theirs = Object.entries(counts).find(([id]) => id !== fromId)?.[1] ?? {};
+  if (ev.reciprocal) return `trades comments with ${toName} on LinkedIn`;
+  if (theirs.replies)
+    return `has had ${times(theirs.replies, "a reply", "{n} replies")} from ${toName} on LinkedIn`;
+  if (mine.comments)
+    return `has left ${times(mine.comments, "a comment", "{n} comments")} on ${toName}’s posts`;
+  if (mine.replies) return `has replied to ${toName}’s ${times(mine.replies, "comment", "comments")}`;
+  if (theirs.comments)
+    return `has had ${times(theirs.comments, "a comment", "{n} comments")} from ${toName} on their posts`;
+  if (mine.reposts) return `has reposted ${toName}`;
+  if (theirs.reposts) return `has been reposted by ${toName}`;
+  if (mine.reactions) return `has reacted to ${times(mine.reactions, "a post", "{n} posts")} by ${toName}`;
+  if (theirs.reactions)
+    return `has had ${times(theirs.reactions, "a reaction", "{n} reactions")} from ${toName} on LinkedIn`;
+  return `follows ${toName}’s posts on LinkedIn`;
+}
+function pairPhrase(fromId, pair, toName, now = /* @__PURE__ */ new Date()) {
+  if (!pair) return `knows ${toName}`;
+  const top = strongestTie(pair, now);
+  const head = hopEvidence(fromId, top, toName);
+  const support = strongestSupport(pair, now);
+  if (!support || support === top) return head;
+  return `${head}, and ${hopEvidence(fromId, support, toName)}`;
+}
+function mutualIntroducers(pairs, targetId, candidates) {
+  const out = /* @__PURE__ */ new Set();
+  if (!targetId) return out;
+  for (const c of candidates)
+    if (c.kind === "linkedin_mutual" && c.introducerId !== targetId) out.add(c.introducerId);
+  for (const pair of pairs.values()) {
+    if (!pair.kinds.includes("linkedin_mutual")) continue;
+    if (pair.aId === targetId) out.add(pair.bId);
+    else if (pair.bId === targetId) out.add(pair.aId);
+  }
+  return out;
+}
+function routingGraph(input, pairs, now, mutuals = /* @__PURE__ */ new Set()) {
+  const g = makeGraph();
+  const ask = /* @__PURE__ */ new Map();
+  const scores = /* @__PURE__ */ new Map();
+  const lifted = /* @__PURE__ */ new Set();
+  const floor = firstHopFloor(input.goal);
+  for (const p of input.people.values()) {
+    if (p.id === input.targetId || !usable2(p, now)) continue;
+    const mutual = mutuals.has(p.id);
+    const score = mutual ? Math.max(p.score, MUTUAL_MIN_SCORE) : p.score;
+    const passes = p.score > 0 && p.score >= floor;
+    if (!passes && !mutual) continue;
+    if (!passes) lifted.add(p.id);
+    const a = p.pAsk !== void 0 ? Math.max(0, Math.min(1, p.pAsk)) : pAsk({ ...p, score });
+    ask.set(p.id, a);
+    scores.set(p.id, score);
+    addEdge(g, USER_NODE, p.id, a, "strength", "", true);
+  }
+  for (const pair of pairs.values()) {
+    if (!isRoutable(pair)) continue;
+    const know = pKnow(pair);
+    if (know <= 0) continue;
+    const ends = [pair.aId, pair.bId];
+    if (ends.some((id) => id !== input.targetId && !usable2(input.people.get(id), now))) continue;
+    const top = strongestTie(pair, now)?.kind ?? pair.kinds[0];
+    const ab = pKnowDirected(pair, pair.aId, pair.bId);
+    const ba = pKnowDirected(pair, pair.bId, pair.aId);
+    if (ab === ba) addEdge(g, pair.aId, pair.bId, Math.min(0.999, ab * HOP_PENALTY), top, "");
+    else {
+      addEdge(g, pair.aId, pair.bId, Math.min(0.999, ab * HOP_PENALTY), top, "", true);
+      addEdge(g, pair.bId, pair.aId, Math.min(0.999, ba * HOP_PENALTY), top, "", true);
+    }
+  }
+  return { g, ask, scores, lifted };
+}
+function rankWarmPaths(input) {
+  const now = input.now ?? /* @__PURE__ */ new Date();
+  const target = input.people.get(input.targetId);
+  const tName = input.target?.name ?? target?.name ?? "them";
+  const direct = target && target.score >= DIRECT_TIE_SCORE ? (() => {
+    const band = TIE_BAND_LABELS[tieBand(target.score)];
+    return { score: target.score, band, text: `You know ${tName} (${band} · ${target.score})` };
+  })() : void 0;
+  const blocked = input.blockedPairs;
+  const candidates = (input.candidates ?? []).filter(
+    (c) => !blocked?.has(pk(c.introducerId, input.targetId))
+  );
+  const pairs = withCommonContacts(
+    dropBlocked(withExternal(dropBlocked(input.pairs, blocked), input.targetId, candidates), blocked),
+    now
+  );
+  const mutuals = mutualIntroducers(pairs, input.targetId, candidates);
+  const rg = routingGraph(input, pairs, now, mutuals);
+  const { g, ask } = rg;
+  const rT = targetReceptivity(input.target ?? {});
+  const k = input.k ?? 12;
+  const maxHops = input.maxHops ?? 3;
+  const found = [];
+  const score = (nodes) => {
+    const hops = [];
+    let p = 1;
+    let old = false;
+    for (let i = 0; i < nodes.length - 1; i++) {
+      const from = nodes[i];
+      const to = nodes[i + 1];
+      if (i === 0) {
+        const a = ask.get(to);
+        hops.push({ fromId: from, toId: to, p: a, kind: "strength" });
+        p *= a;
+        const last = input.people.get(to)?.lastContactAt;
+        if (last && now.getTime() - new Date(last).getTime() > OLD_EVIDENCE_YEARS * 365.25 * DAY10) old = true;
+        continue;
+      }
+      const pair = pairs.get(pk(from, to));
+      const know = pKnowDirected(pair, from, to);
+      hops.push({
+        fromId: from,
+        toId: to,
+        p: know,
+        kind: strongestTie(pair, now)?.kind ?? pair.kinds[0],
+        band: hopBand(know),
+        ...pairFading(pair, now) ? { fading: true } : {}
+      });
+      p *= know;
+      if (pairIsOld(pair, now)) old = true;
+    }
+    p *= rT * HOP_PENALTY ** (hops.length - 2);
+    if (old) p *= OLD_EVIDENCE_FACTOR;
+    p = Math.min(1, p);
+    return { nodes, hops, p, band: pathBand(p), firstHopId: nodes[1] };
+  };
+  const viaMutual = (nodes) => nodes.length === 3 && mutuals.has(nodes[1]);
+  for (const nodes of kShortestPaths(g, USER_NODE, input.targetId, k, maxHops)) {
+    if (nodes.length < 3) continue;
+    if (rg.lifted.has(nodes[1]) && !viaMutual(nodes)) continue;
+    found.push(score(nodes));
+  }
+  for (const m of mutuals) {
+    if (!ask.has(m) || !pairs.has(pk(m, input.targetId))) continue;
+    if (found.some((f) => f.nodes.length === 3 && f.firstHopId === m)) continue;
+    found.push(score([USER_NODE, m, input.targetId]));
+  }
+  for (const f of found)
+    if (viaMutual(f.nodes) && (f.p <= MIN_PATH_P || rg.lifted.has(f.firstHopId))) f.weak = true;
+  if (!direct && target && target.score > 0 && input.target?.pReply !== void 0) {
+    const p = Math.max(0, Math.min(1, input.target.pReply));
+    found.push({
+      nodes: [USER_NODE, input.targetId],
+      hops: [{ fromId: USER_NODE, toId: input.targetId, p, kind: "strength" }],
+      p,
+      band: pathBand(p),
+      firstHopId: input.targetId
+    });
+  }
+  found.sort(
+    (a, b) => b.p - a.p || a.nodes.length - b.nodes.length || a.nodes.join(">").localeCompare(b.nodes.join(">"))
+  );
+  const viable = found.filter((f) => f.p > MIN_PATH_P || viaMutual(f.nodes));
+  if (!viable.length) return direct ? { paths: [], direct } : { paths: [], fallback: "cold" };
+  const firstHops = new Set(viable.map((f) => f.firstHopId));
+  const otherWays = firstHops.size - 1;
+  const chosen = [];
+  const seenFirst = /* @__PURE__ */ new Set();
+  const middle = /* @__PURE__ */ new Map();
+  for (const f of viable) {
+    if (chosen.length >= (input.limit ?? 5)) break;
+    if (seenFirst.has(f.firstHopId)) continue;
+    const mids = f.nodes.slice(2, -1);
+    if (mids.some((m) => (middle.get(m) ?? 0) >= 2)) continue;
+    seenFirst.add(f.firstHopId);
+    for (const m of mids) middle.set(m, (middle.get(m) ?? 0) + 1);
+    chosen.push(f);
+  }
+  const nameOf2 = (id) => id === input.targetId ? tName : input.people.get(id)?.name ?? "someone";
+  return {
+    ...direct ? { direct } : {},
+    paths: chosen.map((f) => ({
+      ...f,
+      hops: f.hops.map(
+        (h, i) => i === 0 ? h : { ...h, phrase: pairPhrase(h.fromId, pairs.get(pk(h.fromId, h.toId)), nameOf2(h.toId), now) }
+      ),
+      otherWays,
+      reasonText: reasonText(f, input, pairs, tName, otherWays, now, rg.scores)
+    }))
+  };
+}
+function reasonText(f, input, pairs, tName, otherWays, now, scores = /* @__PURE__ */ new Map()) {
+  const others = otherWays > 0 ? ` ${otherWays} other ${otherWays === 1 ? "way" : "ways"} in.` : "";
+  if (f.nodes.length === 2) {
+    const t = input.people.get(input.targetId);
+    const band = t ? `${TIE_BAND_LABELS[tieBand(t.score)]} · ${t.score}` : "";
+    return `Write to ${tName} directly${band ? ` (${band})` : ""}.${others}`;
+  }
+  const a = input.people.get(f.nodes[1]);
+  const aScore = scores.get(a.id) ?? a.score;
+  const last = f.nodes.length === 3 ? pairs.get(pk(f.nodes[1], f.nodes[2])) : void 0;
+  if (last?.kinds.includes("linkedin_mutual")) {
+    const top = strongestTie(last, now);
+    const how = pairPhrase(a.id, last, tName, now);
+    const also = top && top.kind !== "linkedin_mutual" ? " (and is connected to them on LinkedIn)" : "";
+    const closeness = TIE_BAND_LABELS[tieBand(aScore)].toLowerCase();
+    const weak = f.weak ? " A weaker route, but a real connection." : "";
+    return `Through ${a.name}, a ${closeness} tie (${aScore}): ${a.name} ${how}${also}.${weak}${others}`;
+  }
+  const nameOf2 = (id) => id === input.targetId ? tName : input.people.get(id)?.name ?? "someone";
+  const phrases = [];
+  for (let i = 1; i < f.nodes.length - 1; i++) {
+    const from = f.nodes[i];
+    const to = f.nodes[i + 1];
+    phrases.push(pairPhrase(from, pairs.get(pk(from, to)), nameOf2(to), now));
+  }
+  const head = `${a.name} (${TIE_BAND_LABELS[tieBand(aScore)]} · ${aScore}) ${phrases[0]}`;
+  const rest = phrases.slice(1).map((p) => `, who ${p}`).join("");
+  return `${head}${rest}.${weakLink(f, input, pairs, nameOf2)}${others}`;
+}
+function weakLink(f, input, pairs, nameOf2) {
+  const later = f.hops.slice(1);
+  if (later.length < 2) return "";
+  const weakest = [...later].sort((x, y) => x.p - y.p)[0];
+  const band = hopBand(weakest.p);
+  if (band !== "connected" && band !== "unclear") return "";
+  if (later.every((h) => hopBand(h.p) === band)) return "";
+  const from = input.people.get(weakest.fromId)?.name ?? nameOf2(weakest.fromId);
+  const pair = pairs.get(pk(weakest.fromId, weakest.toId));
+  const top = pair ? strongestTie(pair, input.now ?? /* @__PURE__ */ new Date()) : void 0;
+  return ` The weak link: ${from} ${hopEvidence(weakest.fromId, top, nameOf2(weakest.toId))}.`;
+}
+
+// packages/core/src/text/jaro.ts
+function jaroWinkler(a, b) {
+  if (a === b) return 1;
+  if (!a.length || !b.length) return 0;
+  const matchDistance = Math.max(0, Math.floor(Math.max(a.length, b.length) / 2) - 1);
+  const aMatches = new Array(a.length).fill(false);
+  const bMatches = new Array(b.length).fill(false);
+  let matches = 0;
+  for (let i = 0; i < a.length; i++) {
+    const start = Math.max(0, i - matchDistance);
+    const end = Math.min(i + matchDistance + 1, b.length);
+    for (let j = start; j < end; j++) {
+      if (bMatches[j] || a[i] !== b[j]) continue;
+      aMatches[i] = true;
+      bMatches[j] = true;
+      matches++;
+      break;
+    }
+  }
+  if (!matches) return 0;
+  let t = 0;
+  let k = 0;
+  for (let i = 0; i < a.length; i++) {
+    if (!aMatches[i]) continue;
+    while (!bMatches[k]) k++;
+    if (a[i] !== b[k]) t++;
+    k++;
+  }
+  const m = matches;
+  const jaro = (m / a.length + m / b.length + (m - t / 2) / m) / 3;
+  let prefix = 0;
+  for (let i = 0; i < Math.min(4, a.length, b.length); i++) {
+    if (a[i] === b[i]) prefix++;
+    else break;
+  }
+  return jaro + prefix * 0.1 * (1 - jaro);
+}
+function tokenJaccard(a, b) {
+  const A = new Set(a.toLowerCase().split(/\W+/).filter(Boolean));
+  const B = new Set(b.toLowerCase().split(/\W+/).filter(Boolean));
+  if (!A.size || !B.size) return 0;
+  let inter = 0;
+  for (const x of A) if (B.has(x)) inter++;
+  return inter / (A.size + B.size - inter);
+}
+
+// packages/core/src/recommend/wantToMeet.ts
+var ROLES = [
+  [/\b(co-?)?founders?\b/, "Founder"],
+  [/\brecruit(er|ers|ing)\b|\btalent (team|acquisition)\b/, "Recruiter"],
+  [/\b(pms|pm|apms?|product managers?|product people|product folks)\b/, "Product Manager"],
+  [/\b(software )?engineers?\b|\bswes?\b|\bdevelopers?\b/, "Software Engineer"],
+  [/\bdesigners?\b/, "Product Designer"],
+  [/\bdata scientists?\b/, "Data Scientist"],
+  [/\b(investment )?bankers?\b|\bib analysts?\b/, "Investment Banking Analyst"],
+  [/\bconsultants?\b/, "Consultant"],
+  [/\b(vcs?|venture capitalists?|investors?)\b/, "Investor"],
+  [/\btraders?\b/, "Trader"],
+  [/\bresearchers?\b|\bresearch scientists?\b/, "Research Scientist"],
+  [/\bmarketers?\b|\bmarketing (people|folks|managers?)\b/, "Marketing Manager"],
+  [/\banalysts?\b/, "Analyst"],
+  [/\bassociates?\b/, "Associate"],
+  [/\bpartners?\b/, "Partner"]
+];
+var ROLE_RE = new Map(ROLES.map(([re, title]) => [title, re]));
+var STOP = new Set(
+  `about above after again alumni also anyone anything area areas around because been being best better between both
+  career careers company companies could currently doing each early especially even ever every everyone field fields
+  folks from have help hope into just know learn like love maybe meet meeting more most much people person really
+  role roles same school some someone something space than that their them then there these they thing things this
+  those through want wants were what when where which while who whom with work working works would year years your
+  ahead team teams there here other others well folks firm firms industry industries kind kinds type types start
+  started starting someday likely talk talking chat chats coffee least ideally anybody`.split(/\s+/).filter(Boolean)
+);
+
+// packages/core/src/recommend/score.ts
+function responsePrior(p, user) {
+  let z7 = -0.4;
+  if (p.isAlumni) z7 += 0.8;
+  if (p.school && user.majors.some((m) => (p.headline ?? "").toLowerCase().includes(m.toLowerCase())))
+    z7 += 0.5;
+  const title = (p.currentTitle ?? "").toLowerCase();
+  if (/\b(ceo|cfo|coo|cto|partner|managing director|md|founder|chief)\b/.test(title)) z7 -= 0.6;
+  else if (title) z7 += 0.3;
+  if (p.lastInteractionAt && Date.now() - new Date(p.lastInteractionAt).getTime() < 180 * 864e5)
+    z7 += 0.3;
+  if (p.linkedinConnectedOn) z7 += 0.2;
+  return 1 / (1 + Math.exp(-z7));
+}
+
+// supabase/functions/_shared/friends/shares.ts
+function emailHash(email) {
+  return sha256Hex(`orbit-friend:${normalizeEmail(email)}`);
+}
+function underMode(rows, mode, domains) {
+  if (mode === "none") return [];
+  if (mode === "all") return rows;
+  const want = new Set(domains.map((d) => d.toLowerCase().trim()).filter(Boolean));
+  const names = new Set([...want].map((d) => normalizeCompany(d.replace(/\.[a-z]+$/, ""))).filter(Boolean));
+  return rows.filter(
+    (r) => r.company_domain && want.has(r.company_domain.toLowerCase()) || r.company && names.has(normalizeCompany(r.company))
+  );
+}
+async function refreshFriendShares(db2, ownerId, now) {
+  const rows = await db2.sql`
+    select p.id, p.display_name, p.title, p.headline, p.org_raw, o.name as org_name, o.domains, p.school, p.is_alumni,
+           p.linkedin_member_id, p.linkedin_slug, p.primary_email, ts.share_score::int as share_score,
+           tl.closeness::int as label
+      from orbit.people p
+      left join orbit.organizations o on o.id = p.org_id
+      left join orbit.tie_scores ts on ts.user_id = p.user_id and ts.person_id = p.id
+      left join orbit.tie_labels tl on tl.user_id = p.user_id and tl.person_id = p.id
+     where p.user_id = ${ownerId}::uuid and not p.is_self and p.deleted_at is null and p.merged_into is null
+       and p.hidden_at is null and not p.do_not_contact and not p.private`;
+  const identities = await db2.sql`
+    select person_id, kind, value_norm from orbit.person_identities
+     where user_id = ${ownerId}::uuid and kind in ('email', 'linkedin_member', 'linkedin_slug')`;
+  const byPerson = /* @__PURE__ */ new Map();
+  for (const i of identities) {
+    const cur = byPerson.get(i.person_id) ?? {};
+    if (i.kind === "email" && !cur.email) cur.email = i.value_norm;
+    if (i.kind === "linkedin_member" && !cur.member) cur.member = i.value_norm;
+    if (i.kind === "linkedin_slug" && !cur.slug) cur.slug = i.value_norm;
+    byPerson.set(i.person_id, cur);
+  }
+  const out = [];
+  for (const r of rows) {
+    const ids = byPerson.get(r.id) ?? {};
+    const member = r.linkedin_member_id ?? ids.member ?? null;
+    const slug = (r.linkedin_slug ?? ids.slug)?.toLowerCase() ?? null;
+    const email = r.primary_email ?? ids.email;
+    const hash = email?.includes("@") ? await emailHash(email) : null;
+    if (!member && !slug && !hash) continue;
+    const closeness = r.share_score !== null ? shareCloseness(r.share_score) : r.label && TIE_LABEL_MIDPOINTS[r.label] !== void 0 ? shareCloseness(TIE_LABEL_MIDPOINTS[r.label]) : 1;
+    out.push({
+      owner_user_id: ownerId,
+      person_id: r.id,
+      display_name: r.display_name,
+      title: r.title ?? r.headline ?? null,
+      company: r.org_name ?? r.org_raw ?? null,
+      company_domain: r.domains?.[0]?.toLowerCase() ?? null,
+      linkedin_member_id: member,
+      linkedin_slug: slug,
+      email_hash: hash,
+      school: r.school ?? null,
+      is_alumni: !!r.is_alumni,
+      closeness
+    });
+  }
+  await db2.begin(async (tx) => {
+    await tx.sql`delete from orbit.friend_shares where owner_user_id = ${ownerId}::uuid`;
+    for (let i = 0; i < out.length; i += 500) {
+      const json2 = JSON.stringify(out.slice(i, i + 500));
+      await tx.sql`
+        insert into orbit.friend_shares (owner_user_id, person_id, display_name, title, company, company_domain,
+                                         linkedin_member_id, linkedin_slug, email_hash, school, is_alumni, closeness,
+                                         updated_at)
+        select ${ownerId}::uuid, (r ->> 'person_id')::uuid, r ->> 'display_name', r ->> 'title', r ->> 'company',
+               r ->> 'company_domain', r ->> 'linkedin_member_id', r ->> 'linkedin_slug', r ->> 'email_hash',
+               r ->> 'school', (r ->> 'is_alumni')::boolean, (r ->> 'closeness')::smallint, ${now}::timestamptz
+          from jsonb_array_elements(${json2}::jsonb) r`;
+    }
+  });
+  return out.length;
+}
+async function sharingFriends(db2, viewerId) {
+  const rows = await db2.sql`
+    select f.id as friendship_id, u.id as user_id, u.full_name, u.first_name, u.email, s.mode, s.company_domains
+      from orbit.friendships f
+      join orbit.users u on u.id = case when f.a = ${viewerId}::uuid then f.b else f.a end
+      join orbit.friend_share_settings s on s.friendship_id = f.id and s.owner_user_id = u.id
+     where f.status = 'active' and (f.a = ${viewerId}::uuid or f.b = ${viewerId}::uuid)
+       and s.mode <> 'none' and u.deleted_at is null`;
+  return rows.map((r) => {
+    const name = r.full_name?.trim() || r.first_name?.trim() || r.email.split("@")[0];
+    return {
+      friendshipId: r.friendship_id,
+      userId: r.user_id,
+      name,
+      firstName: r.first_name?.trim() || name.split(/\s+/)[0],
+      mode: r.mode,
+      domains: r.company_domains ?? []
+    };
+  });
+}
+async function visibleShares(db2, friend) {
+  const rows = await db2.sql`
+    select owner_user_id, person_id, display_name, title, company, company_domain, linkedin_member_id,
+           linkedin_slug, email_hash, school, is_alumni, closeness::int as closeness, updated_at
+      from orbit.friend_shares where owner_user_id = ${friend.userId}::uuid
+     order by display_name`;
+  return underMode(rows, friend.mode, friend.domains);
+}
+async function matchShares(db2, viewerId, shares) {
+  const out = /* @__PURE__ */ new Map();
+  if (!shares.length) return out;
+  const people = await db2.sql`
+    select p.id, p.display_name, p.org_raw, o.name as org_name, p.linkedin_member_id, p.linkedin_slug, p.primary_email
+      from orbit.people p left join orbit.organizations o on o.id = p.org_id
+     where p.user_id = ${viewerId}::uuid and not p.is_self and p.deleted_at is null and p.merged_into is null`;
+  const identities = await db2.sql`
+    select person_id, kind, value_norm from orbit.person_identities
+     where user_id = ${viewerId}::uuid and kind in ('email', 'linkedin_member', 'linkedin_slug')`;
+  const byMember = /* @__PURE__ */ new Map();
+  const bySlug = /* @__PURE__ */ new Map();
+  const emails = /* @__PURE__ */ new Map();
+  const byName = /* @__PURE__ */ new Map();
+  for (const p of people) {
+    if (p.linkedin_member_id) byMember.set(p.linkedin_member_id, p.id);
+    if (p.linkedin_slug) bySlug.set(p.linkedin_slug.toLowerCase(), p.id);
+    if (p.primary_email?.includes("@")) emails.set(normalizeEmail(p.primary_email), p.id);
+    const key2 = `${p.display_name.trim().toLowerCase()}|${normalizeCompany(p.org_name ?? p.org_raw)}`;
+    byName.set(key2, [...byName.get(key2) ?? [], p.id]);
+  }
+  for (const i of identities) {
+    if (i.kind === "linkedin_member" && !byMember.has(i.value_norm)) byMember.set(i.value_norm, i.person_id);
+    if (i.kind === "linkedin_slug" && !bySlug.has(i.value_norm.toLowerCase()))
+      bySlug.set(i.value_norm.toLowerCase(), i.person_id);
+    if (i.kind === "email" && !emails.has(i.value_norm)) emails.set(i.value_norm, i.person_id);
+  }
+  const wanted = new Set(shares.map((s) => s.email_hash).filter((h) => !!h));
+  const byHash = /* @__PURE__ */ new Map();
+  if (wanted.size)
+    for (const [email, id] of emails) {
+      const h = await emailHash(email);
+      if (wanted.has(h) && !byHash.has(h)) byHash.set(h, id);
+    }
+  for (const s of shares) {
+    const hit = s.linkedin_member_id && byMember.get(s.linkedin_member_id) || s.linkedin_slug && bySlug.get(s.linkedin_slug.toLowerCase()) || s.email_hash && byHash.get(s.email_hash) || (() => {
+      if (!s.company) return void 0;
+      const ids = byName.get(`${s.display_name.trim().toLowerCase()}|${normalizeCompany(s.company)}`);
+      return ids?.length === 1 ? ids[0] : void 0;
+    })();
+    if (hit) out.set(s.person_id, hit);
+  }
+  return out;
+}
+
+// supabase/functions/_shared/research/bind.ts
+var UNIPILE_SEARCHES_PER_DAY = 10;
+function ledgerName(p, operation) {
+  switch (p) {
+    case "claude":
+      return { provider: "anthropic", operation: operation ?? "call" };
+    case "apollo_match":
+      return { provider: "apollo", operation: "match" };
+    case "unipile_profile":
+      return { provider: "unipile", operation: "profile_view" };
+    case "unipile_search":
+      return { provider: "unipile", operation: "search" };
+    default:
+      return { provider: p, operation: operation ?? "call" };
+  }
+}
+function spendOf(p, estimate) {
+  const { provider, operation } = ledgerName(p);
+  switch (p) {
+    case "claude":
+    case "exa":
+      return { provider, operation, costUsd: estimate };
+    case "village":
+      return { provider, operation, units: estimate, costUsd: estimate * VILLAGE_USD_PER_CREDIT };
+    default:
+      return { provider, operation, units: estimate };
+  }
+}
+function sqlBudget(db2, now) {
+  return {
+    async check(userId, p, estimate) {
+      const v = await checkBudget(db2, userId, spendOf(p, estimate), now());
+      if (!v.ok) return { ok: false, reason: "budget_exceeded", resetsAt: v.resetsAt };
+      if (p === "unipile_search") {
+        const day2 = new Date(Date.UTC(now().getUTCFullYear(), now().getUTCMonth(), now().getUTCDate()));
+        const [r] = await db2.sql`
+          select count(*)::int as n from orbit.usage_ledger
+           where user_id = ${userId}::uuid and provider = 'unipile' and operation = 'search'
+             and created_at >= ${day2}::timestamptz`;
+        if ((r?.n ?? 0) >= UNIPILE_SEARCHES_PER_DAY)
+          return {
+            ok: false,
+            reason: "budget_exceeded",
+            resetsAt: new Date(day2.getTime() + 864e5).toISOString()
+          };
+      }
+      return { ok: true };
+    },
+    async record(userId, e) {
+      const { provider, operation } = ledgerName(e.provider, e.operation);
+      await recordUsage(db2, { userId, provider, operation, units: e.units, costUsd: e.costUsd });
+    }
+  };
+}
+function sqlCache(db2, now) {
+  return {
+    async get(userId, key2) {
+      const [r] = await db2.sql`
+        select response from orbit.research_cache
+         where user_id = ${userId}::uuid and key = ${key2} and expires_at > ${now()}::timestamptz`;
+      return r?.response;
+    },
+    async put(userId, e) {
+      await db2.sql`
+        insert into orbit.research_cache (user_id, key, provider, response, created_at, expires_at)
+        values (${userId}::uuid, ${e.key}, ${e.provider}, ${JSON.stringify(e.response)}::jsonb, ${now()}::timestamptz,
+                ${e.expiresAt}::timestamptz)
+        on conflict (user_id, key) do update set
+          provider = excluded.provider, response = excluded.response,
+          created_at = excluded.created_at, expires_at = excluded.expires_at`;
+    }
+  };
+}
+function sqlResearchDb(db2, now) {
+  const cache2 = sqlCache(db2, now);
+  return {
+    ...cache2,
+    internalHistory: (userId, personId) => internalHistory(db2, userId, personId),
+    async getDossier(userId, personId) {
+      const [r] = await db2.sql`
+        select * from orbit.dossiers where user_id = ${userId}::uuid and person_id = ${personId}::uuid`;
+      if (!r) return null;
+      return {
+        user_id: r.user_id,
+        person_id: r.person_id,
+        goal_id: r.goal_id ?? null,
+        status: r.status,
+        content: r.content ?? null,
+        sources: r.sources ?? [],
+        candidates: r.candidates ?? null,
+        cost_usd: num(r.cost_usd),
+        model: r.model ?? null,
+        prompt_version: r.prompt_version ?? null,
+        error: r.error ?? null,
+        created_at: iso(r.created_at),
+        updated_at: iso(r.updated_at),
+        expires_at: iso(r.expires_at)
+      };
+    },
+    async putDossier(row) {
+      await db2.sql`
+        insert into orbit.dossiers (user_id, person_id, goal_id, status, content, sources, candidates, cost_usd,
+                                    model, prompt_version, error, created_at, expires_at)
+        values (${row.user_id}::uuid, ${row.person_id}::uuid, ${row.goal_id}::uuid, ${row.status},
+                ${row.content === null ? null : JSON.stringify(row.content)}::jsonb, ${JSON.stringify(row.sources)}::jsonb,
+                ${row.candidates === null ? null : JSON.stringify(row.candidates)}::jsonb, ${row.cost_usd}::numeric,
+                ${row.model}, ${row.prompt_version}, ${row.error}, ${row.created_at}::timestamptz,
+                ${row.expires_at}::timestamptz)
+        on conflict (user_id, person_id) do update set
+          goal_id = excluded.goal_id, status = excluded.status, content = excluded.content,
+          sources = excluded.sources, candidates = excluded.candidates, cost_usd = excluded.cost_usd,
+          model = excluded.model, prompt_version = excluded.prompt_version, error = excluded.error,
+          created_at = excluded.created_at, expires_at = excluded.expires_at`;
+    }
+  };
+}
+async function internalHistory(db2, userId, personId) {
+  const msgs = await db2.sql`
+    select sent_at, direction, subject, body_text, snippet from orbit.messages
+     where user_id = ${userId}::uuid
+       and (from_person_id = ${personId}::uuid or ${personId}::uuid = any(to_person_ids))
+     order by sent_at desc limit 20`;
+  const [span] = await db2.sql`
+    select min(sent_at) as first, max(sent_at) as last from orbit.messages
+     where user_id = ${userId}::uuid
+       and (from_person_id = ${personId}::uuid or ${personId}::uuid = any(to_person_ids))`;
+  const notes = await db2.sql`
+    select occurred_at, raw_text from orbit.notes
+     where user_id = ${userId}::uuid and ${personId}::uuid = any(person_ids)
+     order by occurred_at desc limit 10`;
+  const facts = await db2.sql`
+    select type, text from orbit.facts
+     where user_id = ${userId}::uuid and person_id = ${personId}::uuid and deleted_at is null
+     order by created_at desc limit 20`;
+  const events = await db2.sql`
+    select start_at, title from orbit.calendar_events
+     where user_id = ${userId}::uuid and ${personId}::uuid = any(attendee_person_ids)
+     order by start_at desc limit 10`;
+  return {
+    messages: msgs.reverse().map((m) => ({
+      at: iso(m.sent_at),
+      direction: m.direction === "in" ? "inbound" : "outbound",
+      subject: m.subject ?? void 0,
+      body: stripQuotedReply(m.body_text ?? m.snippet ?? "").slice(0, 2e3)
+    })),
+    notes: notes.map((n) => ({ at: iso(n.occurred_at), text: n.raw_text.slice(0, 2e3) })),
+    facts: facts.map((f) => ({ type: f.type, text: f.text })),
+    events: events.map((e) => ({ at: iso(e.start_at), title: e.title ?? "Meeting" })),
+    firstContact: iso(span?.first),
+    lastContact: iso(span?.last)
+  };
+}
+function claudeDep(claude, userId) {
+  return {
+    async parse(task, schema, prompt) {
+      const r = await claude.structured({
+        task: task === "dossier" ? "dossier" : task === "support" ? "support" : "fit",
+        system: prompt.system,
+        user: prompt.user,
+        schema,
+        userId,
+        timeoutMs: prompt.timeoutMs
+      });
+      if (r.ok) return { ok: true, value: r.data, costUsd: r.costUsd, model: r.model };
+      if ("unconfigured" in r) return { ok: false, reason: "error", message: "unconfigured" };
+      if ("budgetExceeded" in r) return { ok: false, reason: "budget_exceeded", message: r.cap };
+      if ("refused" in r) return { ok: false, reason: "refusal" };
+      return { ok: false, reason: r.error === "max_tokens" ? "max_tokens" : "error", message: r.error };
+    }
+  };
+}
+
+// supabase/functions/_shared/paths/externalCandidates.ts
+var EXTERNAL_CACHE_MS = 30 * 864e5;
+
 // supabase/functions/_shared/ingest/util.ts
-function iso3(v) {
+function iso2(v) {
   if (v === null || v === void 0 || v === "") return null;
   const d = v instanceof Date ? v : new Date(String(v));
   return Number.isNaN(d.getTime()) ? null : d.toISOString();
@@ -10810,7 +11158,7 @@ function iso3(v) {
 function day(v) {
   if (v === null || v === void 0 || v === "") return null;
   if (typeof v === "string" && /^\d{4}-\d{2}-\d{2}$/.test(v)) return v;
-  return iso3(v)?.slice(0, 10) ?? null;
+  return iso2(v)?.slice(0, 10) ?? null;
 }
 async function loadAccount(db2, userId, provider) {
   const [a] = await db2.sql`
@@ -10885,12 +11233,12 @@ var PERSON_COLUMNS = `p.id, p.user_id, p.is_self, p.display_name, p.first_name, 
 function toPerson(row, identities = []) {
   const r = {
     ...row,
-    first_seen_at: iso3(row.first_seen_at),
-    last_interaction_at: iso3(row.last_interaction_at),
-    hidden_at: iso3(row.hidden_at),
-    created_at: iso3(row.created_at) ?? (/* @__PURE__ */ new Date(0)).toISOString(),
-    updated_at: iso3(row.updated_at) ?? (/* @__PURE__ */ new Date(0)).toISOString(),
-    deleted_at: iso3(row.deleted_at),
+    first_seen_at: iso2(row.first_seen_at),
+    last_interaction_at: iso2(row.last_interaction_at),
+    hidden_at: iso2(row.hidden_at),
+    created_at: iso2(row.created_at) ?? (/* @__PURE__ */ new Date(0)).toISOString(),
+    updated_at: iso2(row.updated_at) ?? (/* @__PURE__ */ new Date(0)).toISOString(),
+    deleted_at: iso2(row.deleted_at),
     strength: Number(row.strength ?? 0),
     sources: row.sources ?? [],
     tags: row.tags ?? []
@@ -10974,8 +11322,8 @@ async function refreshTies(db2, userId, now, scope = {}) {
     participantEmails: [],
     participantPersonIds: t.participant_person_ids,
     isNetworking: false,
-    lastMessageAt: iso3(t.last_at) ?? void 0,
-    firstMessageAt: iso3(t.first_at) ?? void 0
+    lastMessageAt: iso2(t.last_at) ?? void 0,
+    firstMessageAt: iso2(t.first_at) ?? void 0
   }));
   const threadIds = threads.map((t) => t.id);
   const msgRows = threadIds.length ? await db2.sql`
@@ -10992,7 +11340,7 @@ async function refreshTies(db2, userId, now, scope = {}) {
     fromPersonId: m.from_person_id ?? void 0,
     toEmails: m.to_addrs ?? [],
     ccEmails: m.cc_addrs ?? [],
-    sentAt: iso3(m.sent_at),
+    sentAt: iso2(m.sent_at),
     bodyText: "",
     headers: {},
     isAutomated: m.is_automated
@@ -11006,8 +11354,8 @@ async function refreshTies(db2, userId, now, scope = {}) {
     id: e.id,
     userId,
     externalEventId: e.id,
-    startAt: iso3(e.start_at),
-    endAt: iso3(e.end_at) ?? iso3(e.start_at),
+    startAt: iso2(e.start_at),
+    endAt: iso2(e.end_at) ?? iso2(e.start_at),
     status: e.status === "cancelled" ? "cancelled" : e.status === "tentative" ? "tentative" : "confirmed",
     attendees: (e.attendees ?? []).map((a) => ({
       email: a.email ?? "",
@@ -11619,6 +11967,2699 @@ async function runHopEvidenceJob(s, userId, payload) {
   };
 }
 
+// supabase/functions/_shared/paths/find.ts
+var DAY11 = 864e5;
+var TIE_KIND_SET = new Set(TIE_KINDS);
+async function loadGraph(db2, userId, now) {
+  const rows = await db2.sql`
+    select p.id, p.is_self, p.display_name, p.first_name, p.title, p.org_raw, o.name as org_name, p.is_alumni,
+           p.linkedin_url, p.linkedin_member_id, p.hidden_at, p.do_not_contact, p.last_interaction_at,
+           ts.score::int as score, ts.features
+      from orbit.people p
+      left join orbit.organizations o on o.id = p.org_id
+      left join orbit.tie_scores ts on ts.user_id = p.user_id and ts.person_id = p.id
+     where p.user_id = ${userId}::uuid and p.deleted_at is null and p.merged_into is null`;
+  const intros = await db2.sql`
+    select introducer_person_id, status, asked_at, outcome_at from orbit.intro_requests
+     where user_id = ${userId}::uuid and introducer_person_id is not null`;
+  const goals = await db2.sql`
+    select targets from orbit.goals where user_id = ${userId}::uuid and status = 'active' and deleted_at is null`;
+  const targetOrgs = new Set(
+    goals.flatMap((g) => g.targets?.organizations ?? []).map((o) => o.toLowerCase().trim())
+  );
+  const owes = await db2.sql`
+    select distinct m.from_person_id as person_id from orbit.threads t
+      join orbit.messages m on m.thread_id = t.id and m.sent_at = t.last_at
+     where t.user_id = ${userId}::uuid and t.last_direction = 'in' and t.is_networking
+       and m.from_person_id is not null and t.last_at > ${new Date(now.getTime() - 30 * DAY11)}::timestamptz`;
+  const owesSet = new Set(owes.map((o) => o.person_id));
+  let selfId = null;
+  const people = /* @__PURE__ */ new Map();
+  for (const r of rows) {
+    if (r.is_self) {
+      selfId = r.id;
+      continue;
+    }
+    const mine = intros.filter((i) => i.introducer_person_id === r.id);
+    const declined = mine.filter((i) => i.status === "declined").map((i) => iso(i.outcome_at ?? i.asked_at)).sort().pop();
+    const org = r.org_name ?? r.org_raw ?? void 0;
+    people.set(r.id, {
+      id: r.id,
+      name: r.first_name ?? r.display_name.split(/\s+/)[0],
+      displayName: r.display_name,
+      score: r.score ?? 0,
+      reciprocity: num(r.features?.reciprocity),
+      sharesGoalTargetOrg: !!org && targetOrgs.has(org.toLowerCase().trim()),
+      askedRecently: mine.some((i) => now.getTime() - new Date(i.asked_at).getTime() < 30 * DAY11),
+      introducedUserBefore: mine.some((i) => i.status === "intro_made" || i.status === "meeting"),
+      owesReply: owesSet.has(r.id),
+      lastContactAt: iso(r.last_interaction_at) ?? void 0,
+      hidden: !!r.hidden_at || r.do_not_contact,
+      declinedIntroAt: declined,
+      title: r.title ?? void 0,
+      org,
+      isAlumni: r.is_alumni,
+      linkedinUrl: r.linkedin_url ?? void 0,
+      memberId: r.linkedin_member_id ?? void 0,
+      doNotContact: r.do_not_contact
+    });
+  }
+  const tieRows = await db2.sql`
+    select id, a_person_id, b_person_id, kind, weight, confidence, evidence, first_seen_at, last_seen_at
+      from orbit.ties where user_id = ${userId}::uuid`;
+  const ties = [];
+  for (const t of tieRows) {
+    if (!TIE_KIND_SET.has(t.kind) || t.a_person_id === selfId || t.b_person_id === selfId) continue;
+    ties.push({
+      id: `${t.a_person_id}|${t.b_person_id}|${t.kind}`,
+      userId,
+      aId: t.a_person_id,
+      bId: t.b_person_id,
+      kind: t.kind,
+      weight: num(t.weight),
+      confidence: num(t.confidence),
+      evidence: t.evidence ?? {},
+      firstSeenAt: iso(t.first_seen_at) ?? void 0,
+      lastSeenAt: iso(t.last_seen_at) ?? void 0
+    });
+  }
+  const blockedRows = await db2.sql`
+    select a_person_id, b_person_id from orbit.blocked_pairs where user_id = ${userId}::uuid`;
+  const blocked = new Set(blockedRows.map((b) => pairKeyOf(b.a_person_id, b.b_person_id)));
+  return { selfId, people, pairs: combineTies(ties, now), blocked };
+}
+async function loadFriendLayer(db2, userId) {
+  const friends = await sharingFriends(db2, userId);
+  if (!friends.length) return { friends, shares: [] };
+  const all = [];
+  for (const friend of friends)
+    for (const share of await visibleShares(db2, friend)) all.push({ friend, share });
+  const matches = await matchShares(
+    db2,
+    userId,
+    all.map((x) => x.share)
+  );
+  return {
+    friends,
+    shares: all.map((x) => ({ ...x, matchesPersonId: matches.get(x.share.person_id) }))
+  };
+}
+async function resolvePersonRef(db2, userId, p) {
+  const url = cleanLinkedInUrl(p.linkedinUrl);
+  const slug = linkedInSlugOf(url);
+  const [hit] = await db2.sql`
+    select p.id from orbit.people p
+     where p.user_id = ${userId}::uuid and p.deleted_at is null and not p.is_self
+       and ((${p.memberId ?? null}::text is not null and p.linkedin_member_id = ${p.memberId ?? null})
+         or (${slug ?? null}::text is not null and lower(p.linkedin_slug) = ${slug ?? null})
+         or (${url ?? null}::text is not null and lower(rtrim(p.linkedin_url, '/')) = ${url ?? null})
+         or exists (select 1 from orbit.person_identities i where i.person_id = p.id
+                     and ((i.kind = 'linkedin_member' and i.value_norm = ${p.memberId ?? ""})
+                       or (i.kind = 'linkedin_slug' and i.value_norm = ${slug ?? ""}))))
+     order by p.merged_into is null desc limit 1`;
+  if (hit) return hit.id;
+  const name = p.name.trim().toLowerCase();
+  if (!name) return null;
+  const byName = await db2.sql`
+    select id from orbit.people
+     where user_id = ${userId}::uuid and deleted_at is null and not is_self and lower(display_name) = ${name}
+     limit 2`;
+  return byName.length === 1 ? byName[0].id : null;
+}
+function bestReach(g, personId, goal, now) {
+  const p = g.people.get(personId);
+  if (!p) return null;
+  const r = rankWarmPaths({
+    targetId: personId,
+    target: { name: p.name, isAlum: p.isAlumni, title: p.title },
+    goal,
+    people: g.people,
+    pairs: g.pairs,
+    blockedPairs: g.blocked,
+    now,
+    limit: 1
+  });
+  if (r.direct) return Math.min(1, r.direct.score / 100);
+  return r.paths[0]?.p ?? null;
+}
+
+// supabase/functions/_shared/replies/cards.ts
+var CARD_TTL_DAYS = 14;
+var CLOSED_AFTER_MS = 4 * 36e5;
+async function raiseCard(db2, userId, c) {
+  const expires = new Date(c.now.getTime() + CARD_TTL_DAYS * 864e5);
+  const [row] = await db2.sql`
+    insert into orbit.suggestions (user_id, kind, person_id, chat_id, draft_id, message_id, priority_score, reason_text,
+                                   signals, payload, status, dedupe_key, expires_at, created_at, updated_at)
+    values (${userId}::uuid, ${c.kind}, ${c.personId ?? null}::uuid, ${c.chatId ?? null}::uuid, ${c.draftId ?? null}::uuid,
+            ${c.messageId ?? null}::uuid, ${c.priority ?? 0.7}::real, ${c.reasonText}, ${c.signals ?? {}}::jsonb,
+            ${c.payload ?? {}}::jsonb, 'pending', ${c.dedupeKey}, ${expires}::timestamptz, ${c.now}::timestamptz,
+            ${c.now}::timestamptz)
+    on conflict (user_id, dedupe_key) do update
+      set reason_text = excluded.reason_text, signals = excluded.signals, payload = excluded.payload,
+          expires_at = excluded.expires_at, updated_at = excluded.updated_at
+    returning id, (xmax = 0) as inserted`;
+  if (row?.inserted && c.notify)
+    await db2.sql`
+      insert into orbit.notifications (user_id, kind, title, body, link, created_at, updated_at)
+      values (${userId}::uuid, ${c.notify.kind}, ${c.notify.title}, ${c.notify.body ?? null}, ${c.notify.link ?? null},
+              ${c.now}::timestamptz, ${c.now}::timestamptz)`;
+  return row.id;
+}
+async function lastSeenAt(db2, userId) {
+  const [r] = await db2.sql`
+    select max(coalesce(last_used_at, created_at)) as at from orbit.sessions
+     where user_id = ${userId}::uuid and revoked_at is null`;
+  return r?.at ? new Date(r.at) : void 0;
+}
+async function mailIfAway(s, userId, p) {
+  if (!s.mailer.configured) return { sent: false, reason: "unconfigured" };
+  const seen = await lastSeenAt(s.db, userId);
+  if (seen && p.now.getTime() - seen.getTime() < CLOSED_AFTER_MS) return { sent: false, reason: "app_open" };
+  const [u2] = await s.db.sql`select email from orbit.users where id = ${userId}::uuid`;
+  if (!u2?.email) return { sent: false, reason: "no_email" };
+  const r = await s.mailer.send({
+    to: u2.email,
+    subject: `${p.personFirstName} asked one thing`,
+    text: `${p.personFirstName} asked one thing. Reply in Orbit.
+
+https://tryorbit.today/inbox`
+  });
+  if (!r.ok) return { sent: false, reason: r.error };
+  await s.db.sql`
+    insert into orbit.audit_log (user_id, actor, action, target_table, target_id, details)
+    values (${userId}::uuid, 'system', 'needs_you.mailed', 'users', ${userId}, ${{ id: r.id }}::jsonb)`;
+  return { sent: true };
+}
+
+// supabase/functions/_shared/replies/breaker.ts
+var DECLINES_PER_DAY = 2;
+function pausedGoalsOf(settings) {
+  const v = settings?.autopilot_paused_goals;
+  if (!v || typeof v !== "object" || Array.isArray(v)) return {};
+  const out = {};
+  for (const [goalId, p] of Object.entries(v)) {
+    if (!p || typeof p !== "object") continue;
+    const g = p;
+    out[goalId] = {
+      reason: g.reason ?? "student",
+      text: typeof g.text === "string" ? g.text : "Paused",
+      until: typeof g.until === "string" ? g.until : null,
+      at: typeof g.at === "string" ? g.at : ""
+    };
+  }
+  return out;
+}
+function goalPaused(settings, goalId, now) {
+  if (!goalId) return false;
+  const p = pausedGoalsOf(settings)[goalId];
+  if (!p) return false;
+  return p.until === null || new Date(p.until).getTime() > now.getTime();
+}
+async function setGoalPause(db2, userId, goalId, pause) {
+  const [u2] = await db2.sql`
+    select settings from orbit.users where id = ${userId}::uuid`;
+  const goals = pausedGoalsOf(u2?.settings);
+  if (pause) goals[goalId] = pause;
+  else delete goals[goalId];
+  await db2.sql`
+    update orbit.users set settings = settings || jsonb_build_object('autopilot_paused_goals', ${goals}::jsonb)
+     where id = ${userId}::uuid`;
+  return goals;
+}
+var WHAT = {
+  unsubscribe: "asked to stop",
+  declines: "declined, the second today",
+  bounce: "bounced",
+  send_error: "could not be sent to"
+};
+async function tripBreaker(db2, userId, p) {
+  const [u2] = await db2.sql`
+    select settings from orbit.users where id = ${userId}::uuid`;
+  const goalTitle = p.goalId ? (await db2.sql`select title from orbit.goals where id = ${p.goalId}::uuid`)[0]?.title : void 0;
+  const where = p.company?.trim() || goalTitle || "first messages";
+  const text2 = `${p.personName} ${WHAT[p.reason]}. Paused ${where}${p.company?.trim() || goalTitle ? " first messages" : ""}.`;
+  if (p.goalId && goalPaused(u2?.settings, p.goalId, p.now)) return { tripped: false, text: text2 };
+  if (p.goalId)
+    await setGoalPause(db2, userId, p.goalId, {
+      reason: p.reason,
+      text: text2,
+      until: null,
+      at: p.now.toISOString()
+    });
+  await db2.sql`
+    insert into orbit.audit_log (user_id, actor, action, target_table, target_id, details)
+    values (${userId}::uuid, 'system', 'autopilot.breaker', 'goals', ${p.goalId ?? userId},
+            ${{ reason: p.reason, personId: p.personId, messageId: p.messageId ?? null, goalId: p.goalId }}::jsonb)`;
+  await raiseCard(db2, userId, {
+    kind: "breaker",
+    dedupeKey: `breaker:${p.goalId ?? "account"}:${p.messageId ?? p.personId ?? p.now.toISOString()}`,
+    reasonText: `${text2} Read it?`,
+    personId: p.personId,
+    messageId: p.messageId ?? null,
+    signals: { reason: p.reason, goalId: p.goalId },
+    payload: { goalId: p.goalId, reason: p.reason, personName: p.personName, company: p.company ?? null },
+    priority: 0.9,
+    now: p.now,
+    notify: {
+      kind: "system",
+      title: text2,
+      link: p.personId ? `/people/${p.personId}` : "/settings/autopilot"
+    }
+  });
+  return { tripped: true, text: text2 };
+}
+async function declinesToday(db2, userId, goalId, dayStart2) {
+  const [r] = await db2.sql`
+    select count(distinct m.id)::int as n
+      from orbit.messages m
+      join orbit.chats c on c.user_id = m.user_id and c.person_id = m.from_person_id
+     where m.user_id = ${userId}::uuid and m.direction = 'in' and m.reply_class = 'decline'
+       and m.sent_at >= ${dayStart2}::timestamptz
+       and (${goalId}::uuid is null or c.goal_id = ${goalId}::uuid)`;
+  return r?.n ?? 0;
+}
+
+// supabase/functions/_shared/replies/replies.ts
+var needsYouKey = (messageId) => `needs_you:${messageId}`;
+function questionOf(extraction, text2) {
+  const llm = extraction?.llm?.question;
+  if (typeof llm === "string" && llm.trim()) return llm.trim();
+  const own = extraction?.question;
+  if (typeof own === "string" && own.trim()) return own.trim();
+  const body = stripQuotedReply(text2);
+  const sentence2 = body.split(/(?<=[.!?])\s+|\n+/).map((s) => s.trim()).find((s) => s.endsWith("?"));
+  return sentence2 ?? (holdsQuestion(body) ? body.trim().slice(0, 200) : null);
+}
+async function draftReply(s, userId, messageId, actor = "user") {
+  const m = await loadReplyMessage(s.db, userId, messageId);
+  if (m.reply_class === "unsubscribe")
+    throw new HttpError(409, "unsubscribe", "they asked not to be contacted; no reply is drafted");
+  if (!m.from_person_id) throw new HttpError(409, "unknown_sender", "Orbit does not know who sent this yet");
+  return composeDraft(s, {
+    userId,
+    personId: m.from_person_id,
+    kind: "reply",
+    channel: m.provider,
+    replyToMessageId: m.id,
+    actor
+  });
+}
+var DRAFT_CLASSES = new Set(
+  Object.keys(REPLY_NEXT_ACTION).filter((c) => REPLY_NEXT_ACTION[c].drafts)
+);
+async function maybeAutoReply(db2, userId, messageId, deps = {}) {
+  const s = deps.services ?? makeServices(deps.config ?? { env: {} }, { db: db2, now: deps.now });
+  const now = s.now();
+  const m = await loadReplyMessage(db2, userId, messageId);
+  const cls = m.reply_class;
+  if (!cls) return { action: "none", reason: "not_classified" };
+  const step = REPLY_NEXT_ACTION[cls];
+  if (cls === "decline" || cls === "unsubscribe") {
+    if (m.from_person_id) await closeOnReply(s, userId, m.id, m.from_person_id, cls, now, deps.history);
+    return cls === "unsubscribe" ? { action: "unsubscribed" } : { action: "closed", reason: "decline" };
+  }
+  if (!m.from_person_id) return { action: "none", reason: "unknown_sender" };
+  if (deps.history) return { action: "none", reason: "history" };
+  if (step.action === "needs_you") {
+    const [full] = await db2.sql`
+      select body_text, snippet, extraction, answer from orbit.messages where id = ${m.id}::uuid`;
+    if (full?.answer) return { action: "none", reason: "answered" };
+    const id = await raiseNeedsYou(s, userId, {
+      messageId: m.id,
+      personId: m.from_person_id,
+      question: questionOf(
+        full?.extraction,
+        full?.body_text ?? full?.snippet ?? ""
+      ) ?? "They asked you something.",
+      now
+    });
+    return { action: "needs_you", suggestionId: id };
+  }
+  if (!step.drafts) return { action: "none", reason: `class ${cls}` };
+  const [existing] = await db2.sql`
+    select * from orbit.drafts
+     where user_id = ${userId}::uuid and ask->>'replyToMessageId' = ${m.id}
+       and status not in ('discarded', 'cancelled')
+     order by created_at desc limit 1`;
+  let draft;
+  if (existing) {
+    if (existing.status !== "draft") return { action: "auto_sent", draftId: existing.id };
+    draft = existing;
+  } else {
+    await db2.sql`
+      update orbit.drafts d set status = 'cancelled', cancel_reason = 'superseded'
+       where d.user_id = ${userId}::uuid and d.kind = 'reply' and d.status = 'draft'
+         and d.updated_at < d.created_at + interval '2 seconds'
+         and d.ask->>'replyToMessageId' in (
+           select id::text from orbit.messages
+            where user_id = ${userId}::uuid and thread_id = ${m.thread_id}::uuid and id <> ${m.id}::uuid)`;
+    try {
+      draft = (await draftReply(s, userId, m.id, "agent")).draft;
+    } catch (e) {
+      if (e instanceof HttpError) return { action: "none", reason: e.code };
+      throw e;
+    }
+  }
+  return approveIfAllowed(s, userId, draft, cls, now);
+}
+async function approveIfAllowed(s, userId, draft, cls, now, extra = {}) {
+  const db2 = s.db;
+  const [u2] = await db2.sql`
+    select email, full_name, autonomy_level, timezone, settings from orbit.users where id = ${userId}::uuid`;
+  const [p] = await db2.sql`
+    select p.timezone, p.title, p.headline, p.do_not_contact, ts.score::int as score
+      from orbit.people p left join orbit.tie_scores ts on ts.person_id = p.id and ts.user_id = p.user_id
+     where p.id = ${draft.person_id}::uuid`;
+  const [g] = draft.goal_id ? await db2.sql`select autonomy_level from orbit.goals where id = ${draft.goal_id}::uuid` : [];
+  const userTz = validZone(u2.timezone) ?? "America/New_York";
+  const dayStart2 = zonedTime2(
+    new Intl.DateTimeFormat("en-CA", { timeZone: userTz }).format(now),
+    0,
+    0,
+    userTz
+  );
+  const [today] = await db2.sql`
+    select count(*)::int as n from orbit.audit_log
+     where user_id = ${userId}::uuid and action = 'draft.auto_approve' and created_at >= ${dayStart2}::timestamptz`;
+  const meta = draft.ask ?? {};
+  const history = await historyWith(db2, userId, draft.person_id);
+  const level = (n) => n === 0 || n === 1 || n === 2 ? n : void 0;
+  const replyTo = meta.replyToMessageId ? (await db2.sql`
+          select body_text, snippet from orbit.messages where id = ${meta.replyToMessageId}::uuid`)[0] : void 0;
+  const verdict = autonomyAllows(
+    {
+      kind: "reply",
+      channel: draft.channel,
+      personId: draft.person_id,
+      subject: draft.subject,
+      body: draft.body
+    },
+    {
+      now,
+      userEmails: [u2.email],
+      userName: u2.full_name ?? "",
+      recipient: {
+        doNotContact: p?.do_not_contact,
+        title: p?.title ?? void 0,
+        headline: p?.headline ?? void 0
+      },
+      history,
+      schedulingLink: typeof u2.settings?.scheduling_link === "string" ? u2.settings.scheduling_link : void 0,
+      offeredSlots: [...meta.slots ?? [], ...extra.offeredSlots ?? []],
+      timeZone: userTz,
+      userAutonomy: level(u2.autonomy_level) ?? 0,
+      goalAutonomy: level(g?.autonomy_level),
+      replyClass: cls,
+      replyHoldsQuestion: holdsQuestion(replyTo?.body_text ?? replyTo?.snippet ?? ""),
+      inThread: !!draft.thread_external_id,
+      recipientScore: p?.score ?? 0,
+      validatorOk: !!draft.validator?.ok,
+      autoSentToday: today?.n ?? 0,
+      recipientTimeZone: validZone(p?.timezone) ?? userTz
+    }
+  );
+  const reasons = [...verdict.reasons];
+  const paused = u2.settings?.autopilot_paused_until;
+  if (typeof paused === "string" && new Date(paused).getTime() > now.getTime())
+    reasons.push("autopilot paused");
+  if (goalPaused(u2.settings, draft.goal_id, now)) reasons.push("goal paused by the breaker");
+  if (askUserMarkers(`${draft.subject ?? ""}
+${draft.body}`).length) reasons.push("needs_input");
+  if (reasons.length) return { action: "drafted", draftId: draft.id, reasons: [...new Set(reasons)] };
+  const [approved] = await db2.sql`
+    update orbit.drafts set status = 'approved', send_at = ${now}::timestamptz, autonomy_level = 2,
+                            auto_rung = ${cls === "scheduling" ? "schedule" : "reply"}
+     where id = ${draft.id}::uuid and status = 'draft' returning id`;
+  if (!approved) return { action: "drafted", draftId: draft.id, reasons: ["changed meanwhile"] };
+  await db2.sql`
+    insert into orbit.audit_log (user_id, actor, action, target_table, target_id, details)
+    values (${userId}::uuid, 'agent', 'draft.auto_approve', 'drafts', ${draft.id},
+            ${{ hash: messageHash({ channel: draft.channel, subject: draft.subject, body: draft.body }), reply_class: cls }}::jsonb)`;
+  await db2.sql`
+    insert into orbit.audit_log (user_id, actor, action, target_table, target_id, details)
+    values (${userId}::uuid, 'agent', 'reply.auto', 'drafts', ${draft.id}, ${{ reply_class: cls }}::jsonb)`;
+  await s.queue.enqueue({
+    kind: "send.draft",
+    userId,
+    payload: { draftId: draft.id },
+    dedupeKey: `send:${draft.id}`
+  });
+  return { action: "auto_sent", draftId: draft.id };
+}
+async function closeOnReply(s, userId, messageId, personId, cls, now, history = false) {
+  const db2 = s.db;
+  const reason2 = cls === "unsubscribe" ? "asked not to be contacted" : "declined";
+  const [p] = await db2.sql`
+    select p.display_name, p.first_name, p.org_raw, o.name as org_name, p.do_not_contact
+      from orbit.people p left join orbit.organizations o on o.id = p.org_id
+     where p.id = ${personId}::uuid and p.user_id = ${userId}::uuid`;
+  if (!p) return;
+  if (!p.do_not_contact) {
+    await db2.sql`update orbit.people set do_not_contact = true where id = ${personId}::uuid and user_id = ${userId}::uuid`;
+    await db2.sql`
+      insert into orbit.audit_log (user_id, actor, action, target_table, target_id, details)
+      values (${userId}::uuid, 'agent', 'person.do_not_contact', 'people', ${personId}, ${{ source: "reply", reply_class: cls }}::jsonb)`;
+  }
+  await db2.sql`
+    update orbit.drafts set status = 'cancelled', cancel_reason = ${cls}
+     where user_id = ${userId}::uuid and person_id = ${personId}::uuid
+       and status in ('draft', 'approved', 'scheduled')`;
+  const chats = await db2.sql`
+    select id, goal_id from orbit.chats where user_id = ${userId}::uuid and person_id = ${personId}::uuid
+       and archived_at is null`;
+  for (const c of chats) await moveChat(db2, userId, c.id, "declined", reason2, now);
+  if (history) return;
+  const goalId = chats.find((c) => c.goal_id)?.goal_id ?? null;
+  const company = p.org_name ?? p.org_raw ?? null;
+  await raiseCard(db2, userId, {
+    kind: "needs_you",
+    dedupeKey: `closed:${messageId}`,
+    reasonText: cls === "unsubscribe" ? `${p.display_name} asked to stop. Orbit closed the thread and will not write to them again.` : `${p.display_name} declined. Orbit closed the thread and will not write to them again.`,
+    personId,
+    chatId: chats[0]?.id ?? null,
+    messageId,
+    signals: { replyClass: cls, closed: true },
+    payload: { replyClass: cls, closed: true, personName: p.display_name, company },
+    priority: 0.6,
+    now,
+    notify: {
+      kind: "reply_received",
+      title: `${p.display_name} ${cls === "unsubscribe" ? "asked to stop" : "declined"}`,
+      link: `/people/${personId}`
+    }
+  });
+  const userTz = validZone(
+    (await db2.sql`select timezone from orbit.users where id = ${userId}::uuid`)[0]?.timezone
+  );
+  const dayStart2 = zonedTime2(
+    new Intl.DateTimeFormat("en-CA", { timeZone: userTz ?? "America/New_York" }).format(now),
+    0,
+    0,
+    userTz ?? "America/New_York"
+  );
+  const trips = cls === "unsubscribe" || await declinesToday(db2, userId, goalId, dayStart2) >= DECLINES_PER_DAY;
+  if (trips)
+    await tripBreaker(db2, userId, {
+      goalId,
+      reason: cls === "unsubscribe" ? "unsubscribe" : "declines",
+      personId,
+      personName: p.display_name,
+      company,
+      messageId,
+      now
+    });
+}
+async function raiseNeedsYou(s, userId, p) {
+  const [person] = await s.db.sql`
+    select display_name, first_name, org_raw from orbit.people where id = ${p.personId}::uuid`;
+  const name = person?.display_name ?? "They";
+  const first = person ? firstNameOf({ first_name: person.first_name, display_name: person.display_name }) : "They";
+  const [chat] = await s.db.sql`
+    select id from orbit.chats where user_id = ${userId}::uuid and person_id = ${p.personId}::uuid and archived_at is null
+     order by updated_at desc limit 1`;
+  const question = p.question.replace(/\s+/g, " ").trim().slice(0, 300);
+  const id = await raiseCard(s.db, userId, {
+    kind: "needs_you",
+    dedupeKey: needsYouKey(p.messageId),
+    reasonText: `${name} asked: "${question}" What should I say?`,
+    personId: p.personId,
+    chatId: chat?.id ?? null,
+    messageId: p.messageId,
+    signals: { replyClass: "question" },
+    payload: { question, personName: name, replyClass: "question" },
+    priority: 0.85,
+    now: p.now,
+    notify: {
+      kind: "reply_received",
+      title: `${first} asked one thing`,
+      body: "Answer it in one line and Orbit drafts the reply.",
+      link: "/inbox?tab=needs_you"
+    }
+  });
+  await mailIfAway(s, userId, { personFirstName: first, now: p.now }).catch(() => void 0);
+  return id;
+}
+
+// supabase/functions/_shared/autopilot/autopilot.ts
+var FIRST_TOUCH = [...AUTO_FIRST_TOUCH_KINDS];
+var HOLD_REASONS = {
+  review_window: "It waits for your evening review.",
+  autopilot_paused: "Autopilot is paused.",
+  goal_paused: "The breaker paused this goal.",
+  held: "You held it.",
+  needs_input: "It needs one answer from you.",
+  needs_tap: "It waited for your tap. Until twenty first messages go out as Orbit wrote them, each one in the evening batch needs one.",
+  not_approved: "It was never approved.",
+  linkedin_never_auto: "LinkedIn messages always wait for your own tap.",
+  auto_daily_cap: `Orbit already sent ${SEND_CAPS.autoPerDay} on its own today.`,
+  auto_first_touch_daily_cap: `Orbit already sent ${SEND_CAPS.autoFirstTouchesPerDay} first messages on its own today.`,
+  auto_first_touch_weekly_cap: `Orbit already sent ${SEND_CAPS.autoFirstTouchesPerWeek} first messages on its own this week.`,
+  gmail_daily_cap: `Your ${SEND_CAPS.gmailPerDay} emails a day are used up.`
+};
+async function firstTouchRungOf(db2, userId) {
+  const [t] = await db2.sql`select to_regclass('orbit.draft_edits') is not null as has`;
+  const rows = t?.has ? await db2.sql`
+        select d.kind,
+               exists (select 1 from orbit.draft_edits e where e.draft_id = d.id) as edited
+          from orbit.drafts d
+         where d.user_id = ${userId}::uuid and d.status = 'sent' and d.kind = any(${FIRST_TOUCH}::text[])
+           and exists (select 1 from orbit.audit_log a where a.target_table = 'drafts' and a.target_id = d.id::text
+                        and a.action = 'draft.approve' and a.actor = 'user')` : await db2.sql`
+        select d.kind,
+               not exists (
+                 select 1 from orbit.audit_log a
+                   join orbit.audit_log c on c.target_table = 'drafts' and c.target_id = a.target_id
+                                         and c.action = 'draft.compose' and c.details->>'hash' = a.details->>'hash'
+                  where a.target_table = 'drafts' and a.target_id = d.id::text
+                    and a.action = 'draft.approve' and a.actor = 'user') as edited
+          from orbit.drafts d
+         where d.user_id = ${userId}::uuid and d.status = 'sent' and d.kind = any(${FIRST_TOUCH}::text[])
+           and exists (select 1 from orbit.audit_log a where a.target_table = 'drafts' and a.target_id = d.id::text
+                        and a.action = 'draft.approve' and a.actor = 'user')`;
+  return firstTouchRung(rows.map((r) => ({ kind: r.kind, edited: r.edited })));
+}
+
+// supabase/functions/_shared/autopilot/plan.ts
+var DAY12 = 864e5;
+var FIRST_TOUCH2 = ["outreach", "first_touch", "warm_first_touch"];
+var DEFAULT_WEEKLY_TARGET = 4;
+var BATCH_CARD_HOUR = 18;
+var SKIPS_KEPT = 40;
+function firstMessageVoiceOk(draft, ctx) {
+  const notes = Array.isArray(ctx.settings.voice_notes) ? ctx.settings.voice_notes.filter((n) => typeof n?.text === "string" && !n.forgottenAt).map((n) => ({
+    text: n.text,
+    forgottenAt: null,
+    avoid: typeof n.avoid === "string" ? n.avoid : null
+  })) : [];
+  const r = voiceCheck({ body: draft.body, subject: draft.subject }, { card: ctx.card, notes });
+  return { ok: r.ok, problems: r.problems.map((p) => p.detail) };
+}
+var dayKeyOf = (d, tz) => localParts(d, tz).key;
+function sendDaysLeft(key2) {
+  return weekKeys(/* @__PURE__ */ new Date(`${key2}T12:00:00Z`), "UTC").filter((k) => k >= key2 && sendDayAllowed(k, "gmail")).length;
+}
+function friendAskNote(p) {
+  const who = [p.school, p.year].filter(Boolean).join(" ");
+  return [
+    `I'm ${p.studentFirst}${who ? `, a ${who}` : ""}, working toward ${p.goalTitle.replace(/[.]+$/, "").toLowerCase()}.`,
+    `I'd love 15 minutes to hear how ${p.targetFirst} found ${p.company ? `the way to ${p.company}` : "their way into the field"} and what they wish they had known earlier.`,
+    "No worries at all if the timing is not right."
+  ].join(" ");
+}
+async function runAutopilotPlan(s, userId) {
+  const db2 = s.db;
+  const now = s.now();
+  const out = {
+    goals: 0,
+    considered: 0,
+    queued: 0,
+    asks: 0,
+    held: 0,
+    skipped: 0,
+    batchCard: false
+  };
+  const user = await loadUserRow(db2, userId);
+  const settings = user.settings ?? {};
+  const tz = validZone(user.timezone) ?? "America/New_York";
+  const paused = typeof settings.autopilot_paused_until === "string" && new Date(settings.autopilot_paused_until).getTime() > now.getTime();
+  if (paused) return { ...out, reason: "paused" };
+  const goals = (await db2.sql`
+      select id, kind, title, targets, autonomy_level, priority from orbit.goals
+       where user_id = ${userId}::uuid and status = 'active' and deleted_at is null
+       order by priority asc, created_at asc`).filter(
+    (g) => Number(g.autonomy_level ?? user.autonomy_level ?? 0) === 2 && (g.targets?.organizations?.length ?? 0) > 0 && !goalPaused(settings, g.id, now)
+  );
+  out.goals = goals.length;
+  if (goals.length) await planGoals(s, userId, user, tz, goals, out);
+  else out.reason = "no_autopilot_goal";
+  out.batchCard = await raiseBatchCard(db2, userId, tz, now);
+  return out;
+}
+async function planGoals(s, userId, user, tz, goals, out) {
+  const db2 = s.db;
+  const now = s.now();
+  const settings = user.settings ?? {};
+  const earliest = earliestPlannedSend(now);
+  const planAt = new Date(nextSendWindow(earliest, tz, "gmail", () => 0).notBefore);
+  const planDay = dayKeyOf(planAt, tz);
+  const week = weekKeys(/* @__PURE__ */ new Date(`${planDay}T12:00:00Z`), "UTC");
+  const weekStart = zonedTime2(week[0], 0, 0, tz);
+  const weekEnd = zonedTime2(week[6], 23, 59, tz);
+  const rollStart = new Date(zonedTime2(planDay, 0, 0, tz).getTime() - 6 * DAY12);
+  const dayEnd = zonedTime2(planDay, 23, 59, tz);
+  const ownFirst = await db2.sql`
+    select coalesce(d.send_at, d.sent_at) as at, coalesce(o.name, p.org_raw) as org, p.display_name as name
+      from orbit.drafts d
+      join orbit.people p on p.id = d.person_id
+      left join orbit.organizations o on o.id = p.org_id
+     where d.user_id = ${userId}::uuid and d.auto_rung = 'first_touch'
+       and d.status in ('approved', 'scheduled', 'sending', 'sent')
+       and coalesce(d.send_at, d.sent_at) >= ${rollStart}::timestamptz
+       and coalesce(d.send_at, d.sent_at) <= ${dayEnd}::timestamptz`;
+  const onDayRows = ownFirst.filter((r) => dayKeyOf(new Date(r.at), tz) === planDay);
+  let onDay = onDayRows.length;
+  let thisWeek = ownFirst.length;
+  const firmsOnDay = onDayRows.map((r) => ({ firm: firmKey(r.org), name: r.name })).filter((f) => f.firm);
+  const [wk] = await db2.sql`
+    select count(*)::int as n,
+           count(*) filter (where coalesce(send_at, sent_at) >= ${zonedTime2(planDay, 0, 0, tz)}::timestamptz)::int as today
+      from orbit.drafts
+     where user_id = ${userId}::uuid and kind = any(${FIRST_TOUCH2}::text[])
+       and status in ('approved', 'scheduled', 'sending', 'sent')
+       and coalesce(send_at, sent_at) >= ${weekStart}::timestamptz
+       and coalesce(send_at, sent_at) <= ${weekEnd}::timestamptz`;
+  const target = Number(settings.weekly_target) >= 1 ? Math.floor(Number(settings.weekly_target)) : DEFAULT_WEEKLY_TARGET;
+  const pace = weekPace({
+    target,
+    sentThisWeek: wk?.n ?? 0,
+    sentToday: wk?.today ?? 0,
+    now: new Date(zonedTime2(planDay, 12, 0, tz)),
+    tz,
+    dailyCap: SEND_CAPS.autoFirstTouchesPerDay
+  });
+  let remaining = pace.remaining;
+  const daysLeft = sendDaysLeft(planDay);
+  const people = await candidateRows(db2, userId);
+  const layer = await loadFriendLayer(db2, userId).catch(() => ({ friends: [], shares: [] }));
+  const asked = new Set(
+    (await db2.sql`
+        select friend_user_id::text || ':' || target_person_id::text as key from orbit.friend_intro_asks
+         where asker_user_id = ${userId}::uuid and status in ('asked', 'forwarded')
+        union
+        select payload->>'friendUserId' || ':' || (payload->>'targetPersonId') as key from orbit.suggestions
+         where user_id = ${userId}::uuid and kind = 'friend_ask_ready' and status in ('pending', 'snoozed', 'done')`).map((r) => r.key)
+  );
+  const card = styleCardOf(user);
+  const meFirst = userFirstName(user);
+  const skipsAll = [];
+  for (const goal of goals) {
+    const g = { kind: goal.kind, targets: goal.targets?.organizations ?? [] };
+    const firms = new Set(g.targets.map(firmKey).filter(Boolean));
+    const byPerson = /* @__PURE__ */ new Map();
+    for (const p of people) {
+      if (!firms.has(firmKey(p.org))) continue;
+      byPerson.set(p.id, {
+        personId: p.id,
+        name: p.display_name,
+        company: p.org,
+        title: p.title,
+        headline: p.headline,
+        isAlumni: p.is_alumni,
+        score: p.score,
+        hasHook: p.has_hook,
+        hasEmail: !!p.primary_email,
+        hidden: !!p.hidden_at,
+        private: p.private,
+        doNotContact: p.do_not_contact,
+        openChat: p.open_chat,
+        written: p.written,
+        pending: p.pending
+      });
+    }
+    for (const x of layer.shares) {
+      if (!firms.has(firmKey(x.share.company))) continue;
+      const via = { userId: x.friend.userId, name: x.friend.name, sharePersonId: x.share.person_id };
+      const own = x.matchesPersonId ? byPerson.get(x.matchesPersonId) : void 0;
+      if (own) {
+        own.viaFriend ??= via;
+        continue;
+      }
+      if (x.matchesPersonId) continue;
+      const key2 = `friend_person:${x.share.person_id}`;
+      if (byPerson.has(key2)) continue;
+      byPerson.set(key2, {
+        personId: key2,
+        name: x.share.display_name,
+        company: x.share.company,
+        title: x.share.title,
+        score: 0,
+        viaFriend: via,
+        hasHook: false,
+        hasEmail: false,
+        pending: asked.has(`${x.friend.userId}:${x.share.person_id}`)
+      });
+    }
+    const candidates = [...byPerson.values()];
+    out.considered += candidates.length;
+    const day2 = planFirstTouchDay({
+      candidates,
+      goal: g,
+      remaining,
+      daysLeft,
+      onDay,
+      thisWeek,
+      firmsOnDay
+    });
+    skipsAll.push(...day2.skipped);
+    for (const pick of day2.picks) {
+      const c = pick.candidate;
+      if (pick.route === "friend" && c.viaFriend) {
+        const studentYear = yearLabel(user.grad_year ?? void 0, user.degree ?? void 0, now);
+        const note2 = friendAskNote({
+          studentFirst: meFirst,
+          school: user.school,
+          year: studentYear === "student" ? void 0 : studentYear,
+          goalTitle: goal.title,
+          targetFirst: c.name.split(/\s+/)[0],
+          company: c.company
+        });
+        const friendFirst = c.viaFriend.name.split(/\s+/)[0];
+        await raiseCard(db2, userId, {
+          kind: "friend_ask_ready",
+          dedupeKey: `friend_ask:${c.viaFriend.userId}:${c.viaFriend.sharePersonId}`,
+          reasonText: `${friendFirst} knows ${c.name}${c.company ? ` at ${c.company}` : ""}. Ask ${friendFirst} for the intro? Your note is ready for ${friendFirst} to forward, and nothing goes to ${c.name.split(/\s+/)[0]} from you.`,
+          priority: 0.7,
+          signals: { goalId: goal.id, route: "friend" },
+          payload: {
+            friendUserId: c.viaFriend.userId,
+            friendName: c.viaFriend.name,
+            targetPersonId: c.viaFriend.sharePersonId,
+            targetName: c.name,
+            company: c.company ?? null,
+            note: note2,
+            goalId: goal.id
+          },
+          now
+        });
+        asked.add(`${c.viaFriend.userId}:${c.viaFriend.sharePersonId}`);
+        out.asks++;
+        remaining--;
+        continue;
+      }
+      const queued = await writeFirstTouch(s, userId, goal, c, { settings, card, now, tz });
+      if (queued === "queued") {
+        out.queued++;
+        onDay++;
+        thisWeek++;
+        remaining--;
+        firmsOnDay.push({ firm: firmKey(c.company), name: c.name });
+      } else if (queued === "held") out.held++;
+    }
+  }
+  out.skipped = skipsAll.length;
+  await keepSkips(db2, userId, planDay, skipsAll, now);
+}
+async function candidateRows(db2, userId) {
+  return db2.sql`
+    select p.id, p.display_name, p.first_name, p.title, p.headline, coalesce(o.name, p.org_raw) as org, p.is_alumni,
+           p.primary_email, p.hidden_at, p.do_not_contact, coalesce(p.private, false) as private, p.timezone,
+           coalesce(ts.score, 0)::int as score,
+           (exists (select 1 from orbit.messages m where m.user_id = p.user_id and m.direction = 'out'
+                     and p.id = any(m.to_person_ids))
+            or exists (select 1 from orbit.drafts d where d.user_id = p.user_id and d.person_id = p.id
+                        and d.status = 'sent')) as written,
+           exists (select 1 from orbit.chats c where c.user_id = p.user_id and c.person_id = p.id
+                    and c.archived_at is null
+                    and c.stage not in ('identified', 'declined', 'no_response', 'archived')) as open_chat,
+           exists (select 1 from orbit.drafts d where d.user_id = p.user_id and d.person_id = p.id
+                    and d.kind = any(${FIRST_TOUCH2}::text[])
+                    and d.status in ('draft', 'approved', 'scheduled', 'sending')) as pending,
+           (exists (select 1 from orbit.dossiers ds where ds.user_id = p.user_id and ds.person_id = p.id
+                     and ds.status in ('ready', 'partial')
+                     and jsonb_array_length(coalesce(ds.content->'openers', '[]'::jsonb)) > 0)
+            or exists (select 1 from orbit.facts f where f.user_id = p.user_id and f.person_id = p.id
+                        and f.deleted_at is null)) as has_hook
+      from orbit.people p
+      left join orbit.organizations o on o.id = p.org_id
+      left join orbit.tie_scores ts on ts.user_id = p.user_id and ts.person_id = p.id
+     where p.user_id = ${userId}::uuid and not p.is_self and p.deleted_at is null and p.merged_into is null
+       and coalesce(o.name, p.org_raw) is not null`;
+}
+async function writeFirstTouch(s, userId, goal, c, ctx) {
+  const db2 = s.db;
+  const { now } = ctx;
+  const kind = c.score >= 40 ? "warm_first_touch" : "first_touch";
+  let draft;
+  try {
+    draft = (await composeDraft(s, {
+      userId,
+      personId: c.personId,
+      kind,
+      channel: "gmail",
+      goalId: goal.id,
+      reason: `autopilot plan for ${goal.title}`,
+      actor: "agent"
+    })).draft;
+  } catch (e) {
+    if (e instanceof HttpError) return "skipped";
+    throw e;
+  }
+  const hold = async (reason2, detail) => {
+    await db2.sql`
+      update orbit.drafts set auto_rung = 'first_touch', error = ${reason2}, autonomy_level = 2
+       where id = ${draft.id}::uuid and status = 'draft'`;
+    await db2.sql`
+      insert into orbit.audit_log (user_id, actor, action, target_table, target_id, details)
+      values (${userId}::uuid, 'agent', 'draft.hold', 'drafts', ${draft.id},
+              ${{ reason: reason2, detail: detail ?? [], plan: "autopilot" }}::jsonb)`;
+    return "held";
+  };
+  if (!draft.validator?.ok || askUserMarkers(`${draft.subject ?? ""}
+${draft.body}`).length)
+    return hold("validator", draft.validator?.issues ?? []);
+  const hooks = Array.isArray(draft.hooks) ? draft.hooks : [];
+  if (!hooks.some((h) => typeof h?.sourceId === "string" && h.sourceId.trim())) return hold("no_hook");
+  const voice = firstMessageVoiceOk(draft, ctx);
+  if (!voice.ok) return hold("voice", voice.problems);
+  const [p] = await db2.sql`
+    select timezone from orbit.people where id = ${c.personId}::uuid`;
+  const at = new Date(
+    nextSendWindow(earliestPlannedSend(now), validZone(p?.timezone) ?? ctx.tz, "gmail", s.random).notBefore
+  );
+  const w = reviewWindow(at);
+  const hash = messageHash({ channel: draft.channel, subject: draft.subject, body: draft.body });
+  const [approved] = await db2.sql`
+    update orbit.drafts set status = 'approved', send_at = ${w.sendAt}::timestamptz,
+                            review_until = ${w.reviewUntil}::timestamptz, autonomy_level = 2,
+                            auto_rung = 'first_touch', error = null
+     where id = ${draft.id}::uuid and status = 'draft' returning id`;
+  if (!approved) return "skipped";
+  await db2.sql`
+    insert into orbit.audit_log (user_id, actor, action, target_table, target_id, details)
+    values (${userId}::uuid, 'agent', 'draft.auto_approve', 'drafts', ${draft.id},
+            ${{ hash, standing: "autopilot_plan", rung: "first_touch", level: 2, goalId: goal.id, send_at: w.sendAt, review_until: w.reviewUntil }}::jsonb)`;
+  await s.queue.enqueue(
+    { kind: "send.draft", userId, payload: { draftId: draft.id }, dedupeKey: `send:${draft.id}:${w.sendAt}` },
+    { delaySec: Math.max(1, Math.ceil((at.getTime() - now.getTime()) / 1e3)) }
+  );
+  return "queued";
+}
+async function keepSkips(db2, userId, day2, skips, now) {
+  const order = {
+    same_firm_today: 0,
+    daily_cap: 1,
+    paced: 1,
+    weekly_cap: 1,
+    target_met: 1,
+    no_hook: 2,
+    no_email: 2,
+    not_close: 3,
+    recruiter: 3,
+    faculty: 3,
+    minor: 4
+  };
+  const kept = [...skips].sort((a, b) => (order[a.rule] ?? 5) - (order[b.rule] ?? 5)).slice(0, SKIPS_KEPT).map((x) => ({
+    personId: x.personId.startsWith("friend_person:") ? null : x.personId,
+    personName: x.name,
+    company: x.company,
+    rule: x.rule,
+    reason: x.reason
+  }));
+  const signature = kept.map((x) => `${x.personName}:${x.rule}`).join("|");
+  const [last] = await db2.sql`
+    select details from orbit.audit_log where user_id = ${userId}::uuid and action = 'autopilot.plan'
+     order by created_at desc limit 1`;
+  if (last?.details?.signature === signature && last.details.day === day2) return;
+  await db2.sql`
+    insert into orbit.audit_log (user_id, actor, action, target_table, target_id, details, created_at)
+    values (${userId}::uuid, 'agent', 'autopilot.plan', 'users', ${userId},
+            ${{ day: day2, signature, skipped: kept }}::jsonb, ${now}::timestamptz)`;
+}
+async function raiseBatchCard(db2, userId, tz, now) {
+  const local = localParts(now, tz);
+  if (local.hour < BATCH_CARD_HOUR) return false;
+  const [q] = await db2.sql`
+    select count(*)::int as n from orbit.drafts
+     where user_id = ${userId}::uuid and auto_rung = 'first_touch' and status in ('approved', 'scheduled')
+       and send_at > ${now}::timestamptz and send_at <= ${new Date(now.getTime() + 36 * 36e5)}::timestamptz`;
+  const n = q?.n ?? 0;
+  if (!n) return false;
+  const key2 = `batch_ready:${local.key}`;
+  const [had] = await db2.sql`
+    select id from orbit.suggestions where user_id = ${userId}::uuid and dedupe_key = ${key2}`;
+  if (had) return false;
+  const rung = await firstTouchRungOf(db2, userId);
+  const many = n === 1 ? "first message" : "first messages";
+  const text2 = rung.earned ? `Tomorrow's batch is ready: ${n} ${many} go in the morning unless you hold ${n === 1 ? "it" : "one"}.` : `Tomorrow's batch is ready: ${n} ${many} wait for your tap tonight. Until ${rung.needed} go out as Orbit wrote them, only the ones you tap are sent.`;
+  await raiseCard(db2, userId, {
+    kind: "batch_ready",
+    dedupeKey: key2,
+    reasonText: text2,
+    priority: 0.8,
+    signals: { firstTouches: n, rungEarned: rung.earned },
+    payload: { firstTouches: n, day: local.key, rungEarned: rung.earned },
+    now,
+    notify: { kind: "system", title: text2, link: "/inbox" }
+  });
+  return true;
+}
+
+// supabase/functions/_shared/cadence/cadence.ts
+var DAY13 = 864e5;
+function goalFrom(r) {
+  const due = r.due_at instanceof Date ? r.due_at.toISOString().slice(0, 10) : r.due_at;
+  return goalFromRow({ ...isoRow(r), due_at: due });
+}
+async function loadCadence(db2, userId, now) {
+  const [u2] = await db2.sql`
+    select timezone, autonomy_level, settings from orbit.users where id = ${userId}::uuid`;
+  const tz = validZone(u2?.timezone) ?? "America/New_York";
+  const settings = u2?.settings ?? {};
+  const chatRows = await db2.sql`
+    select * from orbit.chats where user_id = ${userId}::uuid and archived_at is null`;
+  const chats = chatRows.map((r) => chatFromRow(isoRow(r)));
+  const goalRows = await db2.sql`
+    select * from orbit.goals where user_id = ${userId}::uuid and deleted_at is null`;
+  const goals = goalRows.map(goalFrom);
+  const draftRows = await db2.sql`
+    select id, person_id, chat_id, kind, status, send_at, created_at from orbit.drafts
+     where user_id = ${userId}::uuid
+       and (status in ('draft', 'approved', 'scheduled', 'sending') or created_at > ${new Date(now.getTime() - 30 * DAY13)}::timestamptz)`;
+  const drafts = draftRows.map((d) => ({
+    id: d.id,
+    personId: d.person_id,
+    chatId: d.chat_id ?? void 0,
+    kind: d.kind,
+    status: d.status,
+    sendAt: iso(d.send_at) ?? void 0,
+    createdAt: iso(d.created_at)
+  }));
+  const msgRows = await db2.sql`
+    select direction, sent_at, provider, from_person_id, to_person_ids from orbit.messages
+     where user_id = ${userId}::uuid and not is_automated
+       and sent_at > ${new Date(now.getTime() - 365 * DAY13)}::timestamptz`;
+  const messages = [];
+  for (const m of msgRows) {
+    const channel = m.provider === "linkedin" ? "linkedin" : "email";
+    const at = iso(m.sent_at);
+    if (m.direction === "in") {
+      if (m.from_person_id) messages.push({ personId: m.from_person_id, direction: "in", at, channel });
+    } else
+      for (const p of m.to_person_ids ?? []) messages.push({ personId: p, direction: "out", at, channel });
+  }
+  const unsynced = await db2.sql`
+    select d.person_id, d.sent_at, d.channel from orbit.drafts d
+     where d.user_id = ${userId}::uuid and d.status = 'sent' and d.sent_at is not null and d.kind <> 'forwardable_blurb'
+       and not exists (select 1 from orbit.messages m where m.user_id = d.user_id and m.external_id = d.provider_message_id)`;
+  for (const d of unsynced)
+    messages.push({
+      personId: d.person_id,
+      direction: "out",
+      at: iso(d.sent_at),
+      channel: d.channel === "linkedin" ? "linkedin" : "email"
+    });
+  const goalPeople = goals.flatMap((g) => g.targets?.people ?? []);
+  const wanted = [
+    .../* @__PURE__ */ new Set([...chats.map((c) => c.personId), ...drafts.map((d) => d.personId), ...goalPeople])
+  ];
+  const peopleRows = await db2.sql`
+    select p.id, p.first_name, p.display_name, p.title, p.org_raw, p.hidden_at, p.do_not_contact, p.timezone,
+           p.last_interaction_at, ts.score::int as score,
+           d.content->'recently' as recently, d.updated_at as dossier_at,
+           (select f.text from orbit.facts f where f.person_id = p.id and f.deleted_at is null
+               and f.created_at > ${new Date(now.getTime() - 30 * DAY13)}::timestamptz
+             order by f.created_at desc limit 1) as fact
+      from orbit.people p
+      left join orbit.tie_scores ts on ts.user_id = p.user_id and ts.person_id = p.id
+      left join orbit.dossiers d on d.user_id = p.user_id and d.person_id = p.id and d.status in ('ready', 'partial')
+     where p.user_id = ${userId}::uuid and not p.is_self and p.deleted_at is null and p.merged_into is null
+       and (ts.score >= 60 or p.id = any(${wanted}::uuid[]))`;
+  const people = /* @__PURE__ */ new Map();
+  for (const p of peopleRows) {
+    const fresh = p.dossier_at && now.getTime() - new Date(p.dossier_at).getTime() < 60 * DAY13;
+    const recent = fresh && Array.isArray(p.recently) ? p.recently[0]?.text : void 0;
+    people.set(p.id, {
+      person: {
+        id: p.id,
+        firstName: p.first_name ?? p.display_name.split(/\s+/)[0],
+        currentTitle: p.title ?? void 0,
+        currentOrganizationRaw: p.org_raw ?? void 0,
+        hiddenAt: iso(p.hidden_at) ?? void 0,
+        doNotContact: p.do_not_contact
+      },
+      score: p.score ?? 0,
+      lastContactAt: iso(p.last_interaction_at) ?? void 0,
+      nurtureReason: recent ?? p.fact ?? void 0,
+      timeZone: validZone(p.timezone)
+    });
+  }
+  const nurtured = draftRows.filter((d) => d.kind === "nurture" || d.kind === "reengage").map((d) => iso(d.created_at));
+  const awaiting = await db2.sql`
+    select distinct person_id from orbit.suggestions
+     where user_id = ${userId}::uuid and kind = 'needs_you' and status in ('pending', 'snoozed') and person_id is not null`;
+  const maxBumps = num(settings.max_bumps, 2);
+  const quiet = typeof settings.quiet_until === "string" ? settings.quiet_until : void 0;
+  return {
+    input: {
+      chats,
+      drafts,
+      messages,
+      people,
+      goals,
+      settings: { maxBumps, timezone: tz, quietUntil: quiet },
+      now,
+      recentNurtureAt: nurtured
+    },
+    timezone: tz,
+    chatsById: new Map(chats.map((c) => [c.id, c])),
+    goalsById: new Map(goals.map((g) => [g.id, g])),
+    settings,
+    awaitingStudent: new Set(awaiting.map((r) => r.person_id)),
+    autonomyLevel: num(u2?.autonomy_level, 0),
+    autoKinds: Array.isArray(settings.auto_kinds) ? settings.auto_kinds.filter(
+      (k) => typeof k === "string" && AUTO_KINDS.includes(k)
+    ) : [],
+    pausedUntil: typeof settings.autopilot_paused_until === "string" ? settings.autopilot_paused_until : void 0
+  };
+}
+async function autoApprovedOn(db2, userId, at, tz) {
+  const key2 = new Intl.DateTimeFormat("en-CA", { timeZone: tz }).format(at);
+  const [r] = await db2.sql`
+    select count(*)::int as n from orbit.drafts
+     where user_id = ${userId}::uuid and auto_rung is not null
+       and status in ('approved', 'scheduled', 'sending', 'sent')
+       and to_char(coalesce(send_at, sent_at, created_at) at time zone ${tz}, 'YYYY-MM-DD') = ${key2}`;
+  return r?.n ?? 0;
+}
+async function runCadence(s, userId) {
+  const db2 = s.db;
+  const now = s.now();
+  const st = await loadCadence(db2, userId, now);
+  const out = {
+    quiet: false,
+    actions: 0,
+    drafted: 0,
+    approved: 0,
+    moved: 0,
+    queued: 0,
+    skipped: 0
+  };
+  const q = st.input.settings.quietUntil;
+  if (q && now.getTime() < new Date(q).getTime()) return { ...out, quiet: true };
+  const actions = cadenceActions(st.input);
+  out.actions = actions.length;
+  const pending = (chatId, personId, kinds, sinceMs) => st.input.drafts.some(
+    (d) => kinds.includes(d.kind) && (chatId ? d.chatId === chatId : d.personId === personId) && (["draft", "approved", "scheduled", "sending"].includes(d.status) || now.getTime() - new Date(d.createdAt).getTime() < sinceMs)
+  );
+  for (const a of actions) {
+    try {
+      if (a.kind === "send_due" && a.draftId) {
+        const id = await s.queue.enqueue({
+          kind: "send.draft",
+          userId,
+          payload: { draftId: a.draftId },
+          dedupeKey: `send:${a.draftId}`
+        });
+        if (id !== null) out.queued++;
+        continue;
+      }
+      if (a.kind === "stage_timer" && a.chatId && a.toStage) {
+        await moveChat(db2, userId, a.chatId, a.toStage, a.reason, now);
+        out.moved++;
+        continue;
+      }
+      if (a.kind === "went_quiet" || !a.personId || !a.draftKind) {
+        out.skipped++;
+        continue;
+      }
+      const chat = a.chatId ? st.chatsById.get(a.chatId) : void 0;
+      if (a.kind === "bump" && pending(a.chatId, a.personId, ["bump"], 2 * DAY13)) {
+        out.skipped++;
+        continue;
+      }
+      if (a.kind === "bump" && st.awaitingStudent.has(a.personId)) {
+        out.skipped++;
+        continue;
+      }
+      if (a.kind === "thank_you" && pending(a.chatId, a.personId, ["thank_you"], 7 * DAY13)) {
+        out.skipped++;
+        continue;
+      }
+      if (a.kind === "nurture" && pending(void 0, a.personId, ["nurture", "reengage"], 7 * DAY13)) {
+        out.skipped++;
+        continue;
+      }
+      const channel = chat?.outreachChannel === "linkedin" ? "linkedin" : "gmail";
+      const { draft } = await composeDraft(s, {
+        userId,
+        personId: a.personId,
+        kind: a.draftKind,
+        channel,
+        goalId: a.goalId ?? null,
+        chatId: a.chatId ?? null,
+        reason: a.reason,
+        actor: "agent"
+      });
+      out.drafted++;
+      st.input.drafts.push({
+        id: draft.id,
+        personId: draft.person_id,
+        chatId: draft.chat_id ?? void 0,
+        kind: draft.kind,
+        status: "draft",
+        createdAt: now.toISOString()
+      });
+      const goal = a.goalId ? st.goalsById.get(a.goalId) : void 0;
+      const level = goal?.autonomyLevel ?? st.autonomyLevel;
+      const paused = !!st.pausedUntil && now.getTime() < new Date(st.pausedUntil).getTime() || goalPaused(st.settings, a.goalId ?? null, now);
+      const score = st.input.people.get(a.personId)?.score ?? 0;
+      if (level >= 1 && channel === "gmail" && st.autoKinds.includes(a.draftKind) && draft.validator?.ok && score >= AUTO_SEND_MIN_SCORE && !paused && askUserMarkers(`${draft.subject ?? ""}
+${draft.body}`).length === 0) {
+        const sendAt = nextSendWindow(
+          now,
+          st.input.people.get(a.personId)?.timeZone ?? st.timezone,
+          "gmail",
+          s.random
+        );
+        const at = new Date(sendAt.notBefore);
+        if (await autoApprovedOn(db2, userId, at, st.timezone) >= SEND_CAPS.autoPerDay) {
+          out.skipped++;
+          continue;
+        }
+        const hash = messageHash({ channel: draft.channel, subject: draft.subject, body: draft.body });
+        const [approved] = await db2.sql`
+          update orbit.drafts set status = 'approved', send_at = ${at}::timestamptz,
+                                  autonomy_level = ${level}::smallint, auto_rung = ${a.draftKind}
+           where id = ${draft.id}::uuid and status = 'draft' returning id`;
+        if (!approved) continue;
+        await db2.sql`
+          insert into orbit.audit_log (user_id, actor, action, target_table, target_id, details)
+          values (${userId}::uuid, 'agent', 'draft.auto_approve', 'drafts', ${draft.id},
+                  ${{ hash, standing: "auto_kinds", rung: a.draftKind, level, send_at: sendAt.notBefore }}::jsonb)`;
+        await s.queue.enqueue(
+          {
+            kind: "send.draft",
+            userId,
+            payload: { draftId: draft.id },
+            dedupeKey: `send:${draft.id}:${sendAt.notBefore}`
+          },
+          { delaySec: Math.max(1, Math.ceil((at.getTime() - now.getTime()) / 1e3)) }
+        );
+        out.approved++;
+      }
+    } catch (e) {
+      if (e instanceof HttpError) {
+        out.skipped++;
+        continue;
+      }
+      throw e;
+    }
+  }
+  out.plan = await runAutopilotPlan(s, userId);
+  return out;
+}
+
+// supabase/functions/orbit-worker/handlers/cadence.ts
+function cadenceUser(config) {
+  return async (job, ctx) => {
+    if (!job.userId) throw new Error("cadence.user needs a user");
+    await runCadence(makeServices(config, { db: ctx.db, now: ctx.now, queue: ctx.queue }), job.userId);
+  };
+}
+
+// supabase/functions/_shared/research/identity.ts
+var COMPANY_ALIASES = [
+  ["Meta", "Meta Platforms", "Facebook"],
+  ["Google", "Alphabet", "Google LLC", "Google DeepMind", "DeepMind"],
+  ["X Corp", "Twitter"],
+  ["Amazon", "Amazon Web Services", "AWS", "Amazon.com"],
+  ["Microsoft", "MSFT", "Microsoft Research", "LinkedIn Corporation"],
+  ["Block", "Square", "Block, Inc.", "Cash App"],
+  ["JPMorgan Chase", "JPMorgan", "J.P. Morgan", "JP Morgan", "JPMorgan Chase & Co.", "Chase"],
+  ["Goldman Sachs", "Goldman"],
+  ["Morgan Stanley"],
+  ["Bank of America", "BofA", "Bank of America Merrill Lynch", "BofA Securities", "Merrill Lynch", "Merrill"],
+  ["Citi", "Citigroup", "Citibank"],
+  ["McKinsey & Company", "McKinsey"],
+  ["Boston Consulting Group", "BCG"],
+  ["Bain & Company", "Bain"],
+  ["Deloitte", "Deloitte Consulting"],
+  ["PwC", "PricewaterhouseCoopers"],
+  ["EY", "Ernst & Young"],
+  ["KPMG"],
+  ["Accenture"],
+  ["IBM", "International Business Machines"],
+  ["Apple", "Apple Inc."],
+  ["Netflix"],
+  ["Salesforce", "Slack"],
+  ["ByteDance", "TikTok"],
+  ["Snap", "Snap Inc.", "Snapchat"],
+  ["Instagram"],
+  ["WhatsApp"],
+  ["OpenAI"],
+  ["Anthropic"],
+  ["Stripe"],
+  ["Airbnb"],
+  ["Uber", "Uber Technologies"],
+  ["Lyft"],
+  ["Nvidia", "NVIDIA"],
+  ["Intel"],
+  ["Oracle"],
+  ["Adobe"],
+  ["Palantir", "Palantir Technologies"],
+  ["Databricks"],
+  ["Figma"],
+  ["Notion", "Notion Labs"],
+  ["Ramp"],
+  ["Brex"],
+  ["Robinhood"],
+  ["Coinbase"],
+  ["Shopify"],
+  ["Spotify"],
+  ["Pinterest"],
+  ["Reddit"],
+  ["Dropbox"],
+  ["Atlassian"],
+  ["Blackstone"],
+  ["KKR", "Kohlberg Kravis Roberts"],
+  ["Evercore"],
+  ["Lazard"],
+  ["Jane Street"],
+  ["Citadel", "Citadel Securities"],
+  ["Two Sigma"],
+  ["D. E. Shaw", "D.E. Shaw", "DE Shaw"],
+  ["Andreessen Horowitz", "a16z"],
+  ["Sequoia Capital", "Sequoia"],
+  ["Y Combinator", "YC"],
+  ["Tesla"],
+  ["SpaceX"],
+  ["Boeing"],
+  ["Lockheed Martin"],
+  ["Johnson & Johnson", "J&J"],
+  ["Procter & Gamble", "P&G"]
+];
+var COMMON_WORD_ORGS = new Set(
+  [
+    "meta",
+    "block",
+    "square",
+    "apple",
+    "amazon",
+    "ramp",
+    "notion",
+    "target",
+    "visa",
+    "oracle",
+    "box",
+    "chase",
+    "merrill",
+    "bain",
+    "snap",
+    "slack",
+    "shell",
+    "intel",
+    "citadel",
+    "sequoia",
+    "goldman",
+    "plaid",
+    "scale",
+    "mercury",
+    "figure",
+    "gap",
+    "ford",
+    "discord",
+    "zoom",
+    "uber",
+    "lyft",
+    "ey",
+    "yc",
+    "x"
+  ].map((s) => s.toLowerCase())
+);
+var SCHOOL_ALIASES = [
+  ["Massachusetts Institute of Technology", "MIT"],
+  ["University of California, Berkeley", "UC Berkeley", "Berkeley", "Cal"],
+  ["University of California, Los Angeles", "UCLA"],
+  ["University of California, San Diego", "UC San Diego", "UCSD"],
+  ["University of Southern California", "USC"],
+  ["Carnegie Mellon University", "Carnegie Mellon", "CMU"],
+  ["Georgia Institute of Technology", "Georgia Tech"],
+  ["University of Pennsylvania", "Penn", "UPenn", "Wharton"],
+  ["New York University", "NYU"],
+  ["University of Michigan", "Michigan", "UMich"],
+  ["University of Texas at Austin", "UT Austin"],
+  ["University of Illinois Urbana-Champaign", "UIUC", "University of Illinois"],
+  ["Stanford University", "Stanford"],
+  ["Harvard University", "Harvard", "Harvard Business School", "HBS"],
+  ["Yale University", "Yale"],
+  ["Princeton University", "Princeton"],
+  ["Columbia University", "Columbia"],
+  ["Cornell University", "Cornell"],
+  ["Brown University", "Brown"],
+  ["Duke University", "Duke"],
+  ["University of Chicago", "UChicago"],
+  ["Northwestern University", "Northwestern"],
+  ["University of Waterloo", "Waterloo"],
+  ["University of Toronto", "U of T", "UofT"]
+];
+var COMMON_WORD_SCHOOLS = /* @__PURE__ */ new Set([
+  "berkeley",
+  "cal",
+  "penn",
+  "brown",
+  "duke",
+  "columbia",
+  "michigan",
+  "mit"
+]);
+var NICKNAMES2 = [
+  ["alexander", "alex", "xander"],
+  ["alexandra", "alex", "alexa", "sasha"],
+  ["andrew", "andy", "drew"],
+  ["anthony", "tony"],
+  ["benjamin", "ben"],
+  ["catherine", "katherine", "kathryn", "kate", "katie", "cathy", "kathy"],
+  ["christopher", "chris"],
+  ["christine", "christina", "chris", "tina"],
+  ["daniel", "dan", "danny"],
+  ["danielle", "dani"],
+  ["david", "dave"],
+  ["elizabeth", "liz", "beth", "lizzie", "eliza"],
+  ["james", "jim", "jimmy", "jamie"],
+  ["jennifer", "jen", "jenny"],
+  ["jessica", "jess"],
+  ["jonathan", "jon"],
+  ["john", "jack", "johnny"],
+  ["joseph", "joe", "joey"],
+  ["joshua", "josh"],
+  ["katherine", "kate", "katie", "kat"],
+  ["margaret", "maggie", "meg", "peggy"],
+  ["matthew", "matt"],
+  ["michael", "mike", "mikey"],
+  ["nicholas", "nick"],
+  ["patricia", "pat", "trish"],
+  ["patrick", "pat"],
+  ["rebecca", "becky", "becca"],
+  ["richard", "rick", "rich", "dick"],
+  ["robert", "rob", "bob", "bobby", "robbie"],
+  ["samuel", "sam"],
+  ["samantha", "sam"],
+  ["stephen", "steven", "steve"],
+  ["susan", "sue", "suzy"],
+  ["thomas", "tom", "tommy"],
+  ["timothy", "tim"],
+  ["victoria", "vicky", "tori"],
+  ["william", "will", "bill", "billy", "liam"],
+  ["zachary", "zach", "zack"]
+];
+var escapeRe3 = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+function hasPhrase2(text2, phrase) {
+  const p = norm(phrase);
+  if (!p) return false;
+  return new RegExp(`(^|[^\\p{L}\\p{N}])${escapeRe3(p)}($|[^\\p{L}\\p{N}])`, "u").test(text2);
+}
+function hasExact(raw, phrase) {
+  const p = phrase.trim();
+  if (!p) return false;
+  return new RegExp(`(^|[^\\p{L}\\p{N}])${escapeRe3(p)}($|[^\\p{L}\\p{N}])`, "u").test(raw);
+}
+function companyAliases(name) {
+  const k = normOrg(name);
+  if (!k) return [];
+  const row = COMPANY_ALIASES.find((r) => r.some((a) => normOrg(a) === k));
+  const out = [name.trim(), ...row ?? []];
+  return [...new Map(out.map((a) => [normOrg(a), a.trim()])).values()].filter((a) => normOrg(a).length >= 2);
+}
+function schoolAliases(name) {
+  const k = norm(name);
+  const row = SCHOOL_ALIASES.find((r) => r.some((a) => norm(a) === k));
+  const out = [name.trim(), ...row ?? []];
+  return [...new Map(out.map((a) => [norm(a), a.trim()])).values()].filter((a) => norm(a).length >= 2);
+}
+var PRODUCT_AFTER = /^[\s-]*(api|apis|sdk|sdks|plugin|plugins|integration|integrations|cloud|docs|checkout|connect|elements|ads|analytics|maps|sheets|drive|workspace|app store|play store|pay|wallet|webhooks?|dashboard|link|graph api|marketplace|certified|certification|partner program)\b/i;
+var PRODUCT_BEFORE = /\b(integrat\w*|using|uses|used|built (?:on|with)|powered by|via|connect(?:s|ed|ing)? (?:to|with)|migrat\w* (?:to|from)|deployed (?:on|to)|hosted on)\s+(?:the\s+)?$/i;
+function placesOf(raw, phrase, exact) {
+  const p = exact ? phrase.trim() : phrase.trim().toLowerCase();
+  const hay = exact ? raw : raw.toLowerCase();
+  const out = [];
+  if (!p) return out;
+  const re = new RegExp(`(^|[^\\p{L}\\p{N}])${escapeRe3(p)}(?=$|[^\\p{L}\\p{N}])`, "gu");
+  for (let m = re.exec(hay); m; m = re.exec(hay)) out.push(m.index + m[1].length);
+  return out;
+}
+function mentionsOrg(raw, aliases) {
+  const flat = raw.normalize("NFKD").replace(/[\u0300-\u036f]/g, "");
+  return aliases.some((a) => {
+    const n = normOrg(a);
+    if (n.length < 2) return false;
+    const exact = COMMON_WORD_ORGS.has(n) || n.length <= 3;
+    const name = exact ? a.replace(ORG_TAIL, "").trim() : n;
+    const hay = exact ? flat : norm(flat);
+    const len = (exact ? name : name.toLowerCase()).length;
+    return placesOf(hay, name, exact).some((start) => {
+      const after = hay.slice(start + len, start + len + 30);
+      const before = hay.slice(Math.max(0, start - 40), start);
+      return !PRODUCT_AFTER.test(after) && !PRODUCT_BEFORE.test(before);
+    });
+  });
+}
+var ORG_TAIL = /[,.]?\s+(inc|inc\.|llc|ltd|ltd\.|corp|corporation|co|gmbh|plc|sa|ag)\.?$/i;
+function mentionsSchool(raw, aliases) {
+  const t = norm(raw);
+  return aliases.some((a) => {
+    const n = norm(a);
+    if (COMMON_WORD_SCHOOLS.has(n) || n.length <= 4) return hasExact(raw, a);
+    return hasPhrase2(t, n);
+  });
+}
+function givenNames(first) {
+  const f = norm(first);
+  const out = /* @__PURE__ */ new Set([f]);
+  for (const row of NICKNAMES2) if (row.includes(f)) for (const x of row) out.add(x);
+  return [...out];
+}
+function cityOf(location) {
+  const first = (location ?? "").split(",")[0]?.trim() ?? "";
+  const c = first.replace(/\b(greater|metropolitan|metro)\b/gi, "").replace(/\b(bay area|area|region)\b/gi, "").trim();
+  return c.length >= 3 ? c : void 0;
+}
+function slugOf(url) {
+  const m = /linkedin\.com\/in\/([^/?#]+)/i.exec(url ?? "");
+  return m?.[1] ? decodeURIComponent(m[1]).toLowerCase() : void 0;
+}
+function identityCard(p) {
+  const fullName = p.name.trim().replace(/\s+/g, " ");
+  const parts = fullName.split(" ").filter((x) => !/^(jr\.?|sr\.?|ii|iii|iv|phd|md|mba)$/i.test(x));
+  const first = p.firstName?.trim() || parts[0] || "";
+  const last = p.lastName?.trim() || (parts.length > 1 ? parts[parts.length - 1] : "");
+  const names = /* @__PURE__ */ new Set([norm(fullName)]);
+  if (first && last) {
+    for (const g of givenNames(first)) names.add(`${g} ${norm(last)}`);
+    names.add(`${norm(first)} ${norm(last)}`);
+  }
+  const exp = (p.profile?.experience ?? []).filter((e) => e.company?.trim());
+  const current = exp.find((e) => e.current) ?? exp[0];
+  const ordered = [
+    ...current ? [current] : [],
+    ...exp.filter((e) => e !== current && normOrg(e.company) !== normOrg(current?.company))
+  ];
+  const employerNames = [];
+  if (p.org?.trim()) employerNames.push({ name: p.org.trim(), current: true });
+  for (const e of ordered) {
+    const n = e.company.trim();
+    if (employerNames.some((x) => normOrg(x.name) === normOrg(n))) continue;
+    employerNames.push({ name: n, current: e === current });
+    if (employerNames.length >= 3) break;
+  }
+  const allSchools = [
+    ...(p.profile?.education ?? []).map((e) => e.school?.trim() ?? ""),
+    p.school?.trim() ?? ""
+  ].filter(Boolean);
+  const isHigh = (s) => /high school|secondary school/i.test(s);
+  const schoolNames = [...allSchools.filter((s) => !isHigh(s)), ...allSchools.filter(isHigh)];
+  const slug = slugOf(p.linkedinUrl) ?? p.profile?.publicIdentifier?.toLowerCase() ?? void 0;
+  const employers = employerNames.slice(0, 3).map((e) => ({ ...e, aliases: companyAliases(e.name) }));
+  return {
+    fullName,
+    names: [...names].filter((n) => n.includes(" ")),
+    last: norm(last),
+    employers,
+    schools: [...new Map(schoolNames.map((s) => [norm(s), s])).values()].slice(0, 5).map((s) => ({ name: s, aliases: schoolAliases(s) })),
+    city: cityOf(p.profile?.location ?? p.location),
+    slug,
+    domains: workDomains(p.emails),
+    anchored: !!slug || !!p.profile || employers.length > 0
+  };
+}
+function hostOf(url) {
+  try {
+    return new URL(url).hostname.toLowerCase().replace(/^www\./, "");
+  } catch {
+    return "";
+  }
+}
+function employerInTitle(title, card) {
+  if (!title) return void 0;
+  const t = title.replace(/\s*[|·]\s*(linkedin|crunchbase|twitter|x)\b.*$/i, "");
+  if (!card.names.some((n) => hasPhrase2(norm(t), n))) return void 0;
+  const m = /\b(?:at|@)\s+([A-Z][\w&.'-]*(?:\s+[A-Z][\w&.'-]*){0,3})/.exec(t);
+  return m?.[1]?.trim();
+}
+function scorePage(page2, card) {
+  const raw = [page2.title ?? "", page2.text ?? ""].join(" \n ");
+  const text2 = norm(raw);
+  const host = hostOf(page2.url);
+  const linkedinCopy = isLinkedInCopy(page2.url);
+  const blocked = isBlockedSource(page2.url);
+  const signals = [];
+  if (card.names.some((n) => hasPhrase2(text2, n))) signals.push("name");
+  if (card.employers.some((e) => mentionsOrg(raw, e.aliases))) signals.push("employer");
+  if (card.schools.some((s) => mentionsSchool(raw, s.aliases))) signals.push("school");
+  if (card.slug && text2.includes(`linkedin.com/in/${card.slug}`)) signals.push("slug");
+  if (card.domains.some((d) => host === d || host.endsWith(`.${d}`) || text2.includes(`@${d}`)))
+    signals.push("domain");
+  const compactHost = host.replace(/[^a-z0-9]/g, "");
+  if (card.last.length >= 3 && card.names.some((n) => compactHost.startsWith(n.replace(/[^a-z0-9]/g, ""))) && host.split(".").length <= 3)
+    signals.push("personal_site");
+  if (card.city && hasPhrase2(text2, card.city)) signals.push("city");
+  const inTitle = employerInTitle(page2.title, card);
+  const conflict = inTitle && !card.employers.some((e) => mentionsOrg(inTitle, e.aliases)) && !card.schools.some((s) => mentionsSchool(inTitle, s.aliases)) ? inTitle : void 0;
+  const named = signals.includes("name");
+  const others = signals.filter((s) => s !== "name" && s !== "city" && s !== "personal_site");
+  let strength2 = "none";
+  if (named) strength2 = "weak";
+  if (named && others.length >= 1 && !conflict && !linkedinCopy && !blocked) strength2 = "strong";
+  return { strength: strength2, signals, conflict, linkedinCopy, blocked };
+}
+
+// supabase/functions/_shared/research/prompts.ts
+var PROMPT_VERSION2 = "dossier-v3";
+function dossierSystem(userFirstName2, goalSentence2) {
+  return [
+    `You write a research brief about one person for ${userFirstName2}, who wants to ${goalSentence2}.`,
+    'Use only the sources provided, and write from what each source actually says: "joined" stays "joined", never "led". Every claim needs the id of the source it came from.',
+    "If sources disagree or might be about a different person with the same name, leave the claim out.",
+    'A source whose title starts with "[likely them]" names someone with their name whose details all fit, but nothing ties it to them for certain: you may use it, saying so ("likely the same Dana who..."), never in an opener, and never for their current role.',
+    'Never write, even if a source says it: age, ethnicity, religion, health, family or relationships, sexuality, politics or donations, where they live (a city is the finest you may say), salary or pay, their personality or "communication style", legal matters, immigration, or that they lost a job or took leave.',
+    `"careful" is about their company only (recent layoffs, a reorganization, a product shut down, a hiring freeze), each item with its source ids; never anything about the person's own life. Leave it empty when there is nothing.`,
+    '"company" is what is happening at their company that matters to the student (team news, launches, hiring), from company sources, each with its source ids. Leave it empty when there are no company sources.',
+    `Openers: up to three single sentences the student could open a first message with, each a statement (not a question) of at most 25 words about something they made, said or did. Each rests on one cited source and uses only details that source states, in its words where you can (a title, a claim, a number); the student's reaction may be added ("stuck with me"). Never flattery, never about their private life.`,
+    `Most people have little online beyond LinkedIn. When the only sources are their LinkedIn and the student's own history, say so plainly in "who" (for example "Not much is public about Dana beyond LinkedIn.") and keep to what LinkedIn says; do not pad.`,
+    'Also lay out who they are in full, from the sources only: "career" (every role you can source, newest first, with start and end as written, e.g. "2021" or "Mar 2022"), "education", "profiles" (their own pages: LinkedIn, X, GitHub, a personal site, Google Scholar; only URLs that appear in the sources), "highlights" (up to 8 things they made or said that matter: posts, articles, talks, podcasts, projects, papers, news, awards, each with the URL of its source) and "topics" (up to 6 short phrases for what they work on or talk about).'
+  ].join("\n");
+}
+function dossierUser(input) {
+  const block2 = (list2) => list2.map(
+    (s) => [
+      `<source id="${s.id}">`,
+      `url: ${s.url}`,
+      s.title ? `title: ${s.title}` : "",
+      s.published ? `published: ${s.published}` : "",
+      s.text,
+      "</source>"
+    ].filter(Boolean).join("\n")
+  ).join("\n");
+  return [
+    `<user_context>${input.userContext}</user_context>`,
+    `<person>${JSON.stringify(input.person)}</person>`,
+    `<internal_history>${input.internalHistory}</internal_history>`,
+    `<linkedin>${input.linkedin}</linkedin>`,
+    `<sources>${block2(input.sources)}</sources>`,
+    ...input.companySources?.length ? [`<company_sources>${block2(input.companySources)}</company_sources>`] : []
+  ].join("\n");
+}
+var sourceIds = z.array(z.string());
+var dossierSchema = z.object({
+  who: z.string(),
+  now: z.object({
+    role: z.string(),
+    org: z.string(),
+    since: z.string().nullable(),
+    source_ids: sourceIds
+  }),
+  recently: z.array(z.object({ date: z.string().nullable(), text: z.string(), source_ids: sourceIds })),
+  in_common: z.array(
+    z.object({
+      text: z.string(),
+      kind: z.enum(["school", "employer", "person", "interest", "place"]),
+      source_ids: sourceIds
+    })
+  ),
+  history: z.object({
+    first_contact: z.string().nullable(),
+    last_contact: z.string().nullable(),
+    summary: z.string().nullable()
+  }),
+  openers: z.array(z.object({ text: z.string(), source_ids: sourceIds })),
+  // v2: each item cited like every other line (v1 wrote plain strings; readers accept both)
+  careful: z.array(z.object({ text: z.string(), source_ids: sourceIds })),
+  confidence: z.enum(["high", "medium", "low"]),
+  // the full picture (v1.1); optional so a dossier written before them still reads
+  career: z.array(
+    z.object({
+      role: z.string(),
+      org: z.string(),
+      start: z.string().nullable(),
+      end: z.string().nullable(),
+      source_ids: sourceIds
+    })
+  ).optional(),
+  education: z.array(
+    z.object({
+      school: z.string(),
+      degree: z.string().nullable(),
+      years: z.string().nullable(),
+      source_ids: sourceIds
+    })
+  ).optional(),
+  profiles: z.array(
+    z.object({ kind: z.enum(["linkedin", "x", "github", "website", "scholar", "other"]), url: z.string() })
+  ).optional(),
+  highlights: z.array(
+    z.object({
+      kind: z.enum(["post", "article", "talk", "podcast", "project", "paper", "news", "award", "other"]),
+      title: z.string(),
+      date: z.string().nullable(),
+      url: z.string().nullable(),
+      summary: z.string().nullable(),
+      source_ids: sourceIds
+    })
+  ).optional(),
+  topics: z.array(z.string()).optional(),
+  // v2: what is happening at their company, from company pages (Go deeper)
+  company: z.array(z.object({ text: z.string(), source_ids: sourceIds })).optional()
+});
+function retryNote2(bad, allowed) {
+  return `
+
+Your previous answer cited source ids that do not exist (${bad.join(", ")}). Cite only these ids: ${allowed.join(", ") || "(none)"}. Leave out any claim you cannot cite.`;
+}
+var supportSystem = [
+  "You check a research brief against its sources. For each numbered claim, read the sources it cites and give one verdict:",
+  '"supported": the cited sources state it, or it is a fair summary or paraphrase of what they state.',
+  '"partial": the sources back only part of it, or it says more than they do: a stronger verb ("led" where they say "joined"), a different date or number, or a role, place or detail they do not give.',
+  '"unsupported": the cited sources do not say it, or say something else.',
+  `Each claim says what kind it is. An opener is a line the student would say to them: judge only what it states about them or their work; the student's own reaction ("stuck with me", "I liked") is not a claim. A highlight names something of theirs (a post, talk, article, project): supported when the cited source is that item or describes it.`,
+  "Judge only against the cited source text given here, never what you know."
+].join("\n");
+var supportSchema = z.object({
+  verdicts: z.array(z.object({ id: z.string(), verdict: z.enum(["supported", "partial", "unsupported"]) }))
+});
+
+// supabase/functions/_shared/research/dossier.ts
+var DOSSIER_CAP_USD = 0.3;
+var DOSSIER_REUSE_MS = 30 * 864e5;
+var EXA_CACHE_MS = 7 * 864e5;
+var DOSSIER_MODEL = "claude-opus-5-5";
+var SYNTH_OUT_USD = 2e3 * 2e-5;
+var synthEstimateUsd = (promptChars) => promptChars / 4 * 4e-6 + SYNTH_OUT_USD;
+var iso3 = (ms2) => new Date(ms2).toISOString();
+async function buildDossier(deps, input) {
+  const now = deps.clock();
+  const prior = await deps.db.getDossier(input.userId, input.personId);
+  if (prior && !input.refresh && (prior.status === "ready" || prior.status === "partial") && prior.content && Date.parse(prior.expires_at) > now) {
+    return {
+      status: prior.status,
+      dossier: prior.content,
+      sources: prior.sources,
+      costUsd: 0,
+      cached: true,
+      model: prior.model,
+      promptVersion: prior.prompt_version ?? PROMPT_VERSION2,
+      notes: []
+    };
+  }
+  const run = { deps, input, spent: 0, notes: [], partial: false };
+  const history = await deps.db.internalHistory(input.userId, input.personId);
+  const linkedin = await linkedInStep(run);
+  const searches = exaSearches(input, now);
+  const answers = await Promise.all(searches.map((s) => cachedExaSearch(run, s)));
+  const [peopleResults, ...otherResults] = answers.map((a) => a ?? []);
+  const identity = identityStep(input, linkedin.profile, peopleResults ?? []);
+  if (identity.kind === "ambiguous") {
+    await save(run, { status: "needs_disambiguation", candidates: identity.candidates }, now);
+    return {
+      status: "needs_disambiguation",
+      candidates: identity.candidates,
+      costUsd: run.spent,
+      cached: false
+    };
+  }
+  const keep = (r) => identity.kind === "anchored" && !isBlockedSource(r.url) && scorePage({ url: r.url, title: r.title, text: resultText(r) }, identity.card).strength === "strong";
+  const keptPeople = (peopleResults ?? []).filter(keep);
+  const keptOther = otherResults.flat().filter(keep);
+  if (appearsMinor({
+    title: input.person.title,
+    headline: linkedin.profile?.headline,
+    education: linkedin.profile?.education,
+    profileTexts: keptPeople.map((r) => `${r.title ?? ""} ${(r.highlights ?? []).join(" ")}`),
+    year: new Date(now).getUTCFullYear()
+  })) {
+    await save(run, { status: "failed", error: "minor" }, now);
+    return { status: "failed", error: "minor", costUsd: run.spent, cached: false };
+  }
+  const kept = dedupeByUrl([...keptPeople, ...keptOther]).slice(0, 8);
+  const texts = await contentsStep(
+    run,
+    kept.map((r) => r.url)
+  );
+  const sources = [];
+  let n = 0;
+  const nextId = () => `S${++n}`;
+  const linkedinLines = [];
+  if (linkedin.profile) {
+    const id = nextId();
+    const url = linkedin.profile.public_profile_url ?? input.person.linkedinUrl ?? `https://www.linkedin.com/in/${linkedin.profile.public_identifier ?? input.person.linkedinMemberId ?? ""}`;
+    const text2 = formatProfile(linkedin.profile);
+    sources.push({ id, kind: "linkedin_profile", url, title: "LinkedIn profile", text: text2 });
+    linkedinLines.push(`[${id}] profile
+${text2}`);
+  }
+  for (const p of linkedin.posts.slice(0, 10)) {
+    if (!p.text) continue;
+    const id = nextId();
+    const text2 = p.text.slice(0, 1500);
+    sources.push({
+      id,
+      kind: "linkedin_post",
+      url: p.share_url ?? "",
+      title: "LinkedIn post",
+      published: p.parsed_datetime ?? p.date ?? null,
+      text: text2
+    });
+    linkedinLines.push(`[${id}] post ${p.parsed_datetime ?? p.date ?? ""}
+${text2}`);
+  }
+  for (const r of kept) {
+    const text2 = (texts.get(r.url) ?? r.text ?? (r.highlights ?? []).join(" … ")).slice(0, 6e3);
+    sources.push({
+      id: nextId(),
+      kind: "web",
+      url: r.url,
+      title: r.title ?? void 0,
+      published: r.publishedDate,
+      text: text2
+    });
+  }
+  const allowed = sources.map((s) => s.id);
+  const prompt = {
+    system: dossierSystem(input.user.firstName, input.goalSentence),
+    user: dossierUser({
+      userContext: input.user.context,
+      person: {
+        name: input.person.name,
+        title: input.person.title,
+        org: input.person.org,
+        location: input.person.location,
+        identities: {
+          linkedin: input.person.linkedinUrl,
+          emails: input.person.emails
+        }
+      },
+      internalHistory: formatHistory(history),
+      linkedin: linkedinLines.join("\n\n"),
+      sources: sources.filter((s) => s.kind === "web")
+    })
+  };
+  const thin = sources.filter((s) => s.kind === "web").length === 0;
+  let dossier = await synthesize(run, prompt, allowed);
+  let model = DOSSIER_MODEL;
+  if (!dossier) {
+    dossier = fallbackDossier(input, linkedin.profile, history);
+    model = null;
+    run.partial = true;
+  }
+  dossier = finish(dossier, history, thin && !linkedin.profile);
+  if (model === null)
+    run.notes.push("assembled without web research or the model; check it before relying on it");
+  const storedSources = sources.map(({ text: _t, ...s }) => s);
+  const status = run.partial ? "partial" : "ready";
+  await save(run, { status, content: dossier, sources: storedSources, model }, now);
+  return {
+    status,
+    dossier,
+    sources: storedSources,
+    costUsd: round4(run.spent),
+    cached: false,
+    model,
+    promptVersion: PROMPT_VERSION2,
+    notes: run.notes
+  };
+}
+async function linkedInStep(run) {
+  const { deps, input } = run;
+  const memberId = input.person.linkedinMemberId;
+  const empty = { profile: null, posts: [] };
+  if (!deps.unipile.configured || !input.unipileAccountId || !memberId) return empty;
+  const key2 = await cacheKey("unipile", { op: "profile+posts", accountId: input.unipileAccountId, memberId });
+  const hit = await deps.db.get(input.userId, key2);
+  if (hit) return hit;
+  const verdict = await deps.budget.check(input.userId, "unipile_profile", 1);
+  if (!verdict.ok) {
+    run.notes.push("LinkedIn profile skipped: daily profile-view cap reached");
+    return empty;
+  }
+  const [profile, posts] = await Promise.all([
+    deps.unipile.profile(input.unipileAccountId, memberId),
+    deps.unipile.posts(input.unipileAccountId, memberId, { limit: 10 })
+  ]);
+  if (!profile.ok) {
+    run.partial = true;
+    run.notes.push(`LinkedIn unavailable (${profile.message})`);
+    return empty;
+  }
+  await deps.budget.record(input.userId, {
+    provider: "unipile_profile",
+    operation: "profile",
+    units: 1,
+    costUsd: 0
+  });
+  const value = { profile: profile.value, posts: posts.ok ? posts.value : [] };
+  if (!posts.ok) run.notes.push("LinkedIn posts unavailable");
+  await deps.db.put(input.userId, {
+    key: key2,
+    provider: "unipile",
+    response: value,
+    expiresAt: new Date(deps.clock() + EXA_CACHE_MS)
+  });
+  return value;
+}
+function monthsAgoMonthStart(now, months) {
+  const d = new Date(now);
+  const m = d.getUTCFullYear() * 12 + d.getUTCMonth() - months;
+  return new Date(Date.UTC(Math.floor(m / 12), m % 12, 1)).toISOString();
+}
+function exaSearches(input, now) {
+  const { name, org, title } = input.person;
+  const q = (...parts) => parts.filter((p) => p?.trim()).join(" ");
+  const contents = {
+    highlights: {
+      query: input.goalQuestion ?? `What has ${name} worked on, said or published recently that matters to someone who wants to ${input.goalSentence}?`,
+      maxCharacters: 1200
+    }
+  };
+  const base = {
+    type: "auto",
+    numResults: 5,
+    contents,
+    excludeDomains: [...BLOCKED_SOURCE_DOMAINS]
+  };
+  const third = input.goalKind === "collaboration" ? { ...base, category: "publication", query: q(`"${name}"`, input.field ?? org) } : {
+    ...base,
+    query: q(`"${name}"`, org, "podcast OR talk OR interview OR blog OR GitHub OR personal website")
+  };
+  return [
+    { ...base, category: "people", query: q(`"${name}"`, org, title) },
+    {
+      ...base,
+      category: "news",
+      query: q(`"${name}"`, org),
+      startPublishedDate: monthsAgoMonthStart(now, 18)
+    },
+    third
+  ];
+}
+async function cachedExaSearch(run, req) {
+  const { deps, input } = run;
+  const key2 = await cacheKey("exa", { op: "search", req });
+  const hit = await deps.db.get(input.userId, key2);
+  if (hit) return hit.results ?? [];
+  if (!deps.exa.configured) {
+    if (!run.notes.includes("Exa is not configured")) run.notes.push("Exa is not configured");
+    run.partial = true;
+    return null;
+  }
+  const est = estimateExaSearchUsd(req);
+  if (!await reserve(run, "exa", est)) return null;
+  const r = await deps.exa.search(req);
+  run.spent -= est;
+  if (!r.ok) {
+    run.partial = true;
+    run.notes.push(`Exa search failed (${r.message})`);
+    return null;
+  }
+  const cost = exaCostUsd(r.value, est);
+  run.spent += cost;
+  await deps.budget.record(input.userId, { provider: "exa", operation: "search", units: 1, costUsd: cost });
+  await deps.db.put(input.userId, {
+    key: key2,
+    provider: "exa",
+    response: { results: r.value.results },
+    expiresAt: new Date(deps.clock() + EXA_CACHE_MS)
+  });
+  return r.value.results;
+}
+async function reserve(run, provider, est) {
+  if (run.spent + est > DOSSIER_CAP_USD) {
+    run.partial = true;
+    if (!run.notes.includes("cost cap reached")) run.notes.push("cost cap reached");
+    return false;
+  }
+  run.spent += est;
+  const v = await run.deps.budget.check(run.input.userId, provider, est);
+  if (!v.ok) {
+    run.spent -= est;
+    run.partial = true;
+    if (!run.notes.includes(`${provider} budget exceeded`)) run.notes.push(`${provider} budget exceeded`);
+    return false;
+  }
+  return true;
+}
+function resultText(r) {
+  return [r.url, r.title, r.author, r.text, ...r.highlights ?? []].filter(Boolean).join(" \n ");
+}
+var pageText = (r) => [r.url, r.title, r.author, r.text, ...r.highlights ?? []].filter(Boolean).join(" \n ");
+function pickIdentity(card, people) {
+  const named = people.filter(
+    (r) => !isBlockedSource(r.url) && scorePage({ ...r, text: pageText(r) }, card).signals.includes("name")
+  );
+  const byOrg = /* @__PURE__ */ new Map();
+  for (const r of named) {
+    const o = orgFromTitle(r.title, card.fullName);
+    const k = o ? normOrg(o) : norm(r.url);
+    if (!byOrg.has(k))
+      byOrg.set(k, {
+        name: card.fullName,
+        org: o,
+        title: r.title ?? void 0,
+        url: r.url,
+        snippet: (r.highlights?.[0] ?? r.text ?? "").slice(0, 240) || void 0
+      });
+  }
+  const linkedIn = !!card.slug;
+  if (linkedIn) return { kind: "anchored", card };
+  if (card.employers.length > 0 || card.domains.length > 0) {
+    if (named.some((r) => scorePage({ ...r, text: pageText(r) }, card).strength === "strong"))
+      return { kind: "anchored", card };
+    if (byOrg.size >= 2) return { kind: "ambiguous", candidates: [...byOrg.values()].slice(0, 5) };
+    return { kind: "anchored", card };
+  }
+  if (byOrg.size >= 2) return { kind: "ambiguous", candidates: [...byOrg.values()].slice(0, 5) };
+  const only = [...byOrg.values()][0];
+  if (only?.org)
+    return {
+      kind: "anchored",
+      card: { ...card, employers: [{ name: only.org, aliases: [only.org], current: true }], anchored: true }
+    };
+  return { kind: "none" };
+}
+function identityStep(input, profile, people) {
+  const card = identityCard({
+    name: input.person.name,
+    org: input.person.org,
+    title: input.person.title,
+    location: input.person.location,
+    linkedinUrl: input.person.linkedinUrl ?? (profile?.public_identifier ? `https://www.linkedin.com/in/${profile.public_identifier}` : void 0),
+    emails: input.person.emails,
+    profile: profile ? {
+      headline: profile.headline,
+      location: profile.location,
+      publicIdentifier: profile.public_identifier,
+      experience: (profile.work_experience ?? []).map((w) => ({
+        title: w.position,
+        company: w.company,
+        current: w.current
+      })),
+      education: (profile.education ?? []).map((e) => ({ school: e.school }))
+    } : null
+  });
+  return pickIdentity(card, people);
+}
+function dedupeByUrl(rs) {
+  const seen = /* @__PURE__ */ new Set();
+  return rs.filter((r) => {
+    const k = r.url.replace(/[?#].*$/, "").replace(/\/+$/, "").toLowerCase();
+    if (seen.has(k)) return false;
+    seen.add(k);
+    return true;
+  });
+}
+async function contentsStep(run, urls) {
+  const { deps, input } = run;
+  const out = /* @__PURE__ */ new Map();
+  const missing = [];
+  for (const url of urls) {
+    const key2 = await cacheKey("exa", { op: "contents", url, text: 6e3 });
+    const hit = await deps.db.get(input.userId, key2);
+    if (hit?.text) out.set(url, hit.text);
+    else missing.push({ url, key: key2 });
+  }
+  if (missing.length === 0 || !deps.exa.configured) return out;
+  const est = missing.length * EXA_PAGE_USD;
+  if (!await reserve(run, "exa", est)) return out;
+  const r = await deps.exa.contents({
+    urls: missing.map((m) => m.url),
+    text: { maxCharacters: 6e3 },
+    maxAgeHours: 720
+  });
+  run.spent -= est;
+  if (!r.ok) {
+    run.partial = true;
+    run.notes.push(`Exa contents failed (${r.message})`);
+    return out;
+  }
+  const cost = exaCostUsd(r.value, est);
+  run.spent += cost;
+  await deps.budget.record(input.userId, {
+    provider: "exa",
+    operation: "contents",
+    units: missing.length,
+    costUsd: cost
+  });
+  for (const res of r.value.results) {
+    if (!res.text) continue;
+    const m = missing.find((x) => x.url === res.url) ?? missing.find((x) => x.url === res.id);
+    if (!m) continue;
+    out.set(m.url, res.text);
+    await deps.db.put(input.userId, {
+      key: m.key,
+      provider: "exa",
+      response: { text: res.text },
+      expiresAt: new Date(deps.clock() + EXA_CACHE_MS)
+    });
+  }
+  return out;
+}
+function invalidSourceIds(d, allowed) {
+  const ok = new Set(allowed);
+  const all = [
+    ...d.now.source_ids,
+    ...d.recently.flatMap((x) => x.source_ids),
+    ...d.in_common.flatMap((x) => x.source_ids),
+    ...d.openers.flatMap((x) => x.source_ids),
+    ...carefulItems(d.careful).flatMap((x) => x.source_ids),
+    ...(d.career ?? []).flatMap((x) => x.source_ids),
+    ...(d.education ?? []).flatMap((x) => x.source_ids),
+    ...(d.highlights ?? []).flatMap((x) => x.source_ids),
+    ...(d.company ?? []).flatMap((x) => x.source_ids)
+  ];
+  return [...new Set(all.filter((id) => !ok.has(id)))];
+}
+function carefulItems(c) {
+  return (Array.isArray(c) ? c : []).map(
+    (x) => typeof x === "string" ? { text: x, source_ids: [] } : x && typeof x === "object" && typeof x.text === "string" ? {
+      text: x.text,
+      source_ids: Array.isArray(x.source_ids) ? x.source_ids.filter(
+        (i) => typeof i === "string"
+      ) : []
+    } : void 0
+  ).filter((x) => !!x);
+}
+async function writeBrief(claude, prompt, allowed, budget2, task = "dossier") {
+  let user = prompt.user;
+  let first;
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const est = synthEstimateUsd(prompt.system.length + user.length);
+    if (budget2.spent + est > budget2.cap) {
+      if (first) {
+        budget2.notes.push(
+          "source-id retry skipped: cost cap; kept the first answer without its uncited lines"
+        );
+        return { content: dropUncited(first, allowed), partial: true };
+      }
+      budget2.notes.push("synthesis skipped: cost cap");
+      return { content: null, partial: true };
+    }
+    const r = await claude.parse(task, dossierSchema, { system: prompt.system, user });
+    budget2.spent += r.costUsd ?? 0;
+    if (!r.ok) {
+      if (first) {
+        budget2.notes.push(
+          `source-id retry failed (${r.reason}); kept the first answer without its uncited lines`
+        );
+        return { content: dropUncited(first, allowed), partial: true };
+      }
+      budget2.notes.push(
+        `synthesis unavailable (${r.reason}${r.message ? `: ${r.message.slice(0, 160)}` : ""})`
+      );
+      return { content: null, partial: true };
+    }
+    const value = blankToNull(r.value);
+    const bad = invalidSourceIds(value, allowed);
+    if (bad.length === 0) return { content: value, partial: false };
+    if (attempt === 1) {
+      budget2.notes.push("uncited claims removed");
+      return { content: dropUncited(value, allowed), partial: true };
+    }
+    first = value;
+    user = prompt.user + retryNote2(bad, allowed);
+  }
+  return { content: first ? dropUncited(first, allowed) : null, partial: true };
+}
+async function synthesize(run, prompt, allowed) {
+  const budget2 = { spent: run.spent, cap: DOSSIER_CAP_USD, notes: run.notes };
+  const out = await writeBrief(run.deps.claude, prompt, allowed, budget2);
+  run.spent = budget2.spent;
+  if (out.partial && out.content) run.partial = true;
+  return out.content;
+}
+function blankToNull(d) {
+  const n = (v) => typeof v === "string" && v.trim() ? v : null;
+  return {
+    ...d,
+    now: { ...d.now, since: n(d.now.since) },
+    recently: d.recently.map((x) => ({ ...x, date: n(x.date) })),
+    history: {
+      first_contact: n(d.history.first_contact),
+      last_contact: n(d.history.last_contact),
+      summary: n(d.history.summary)
+    },
+    ...d.career ? { career: d.career.map((x) => ({ ...x, start: n(x.start), end: n(x.end) })) } : {},
+    ...d.education ? { education: d.education.map((x) => ({ ...x, degree: n(x.degree), years: n(x.years) })) } : {},
+    ...d.highlights ? {
+      highlights: d.highlights.map((x) => ({
+        ...x,
+        date: n(x.date),
+        url: n(x.url),
+        summary: n(x.summary)
+      }))
+    } : {}
+  };
+}
+function dropUncited(d, allowed) {
+  const ok = new Set(allowed);
+  const f = (ids) => ids.filter((i) => ok.has(i));
+  const keep = (xs) => (xs ?? []).map((x) => ({ ...x, source_ids: f(x.source_ids) })).filter((x) => x.source_ids.length);
+  return {
+    ...d,
+    now: { ...d.now, source_ids: f(d.now.source_ids) },
+    recently: keep(d.recently),
+    in_common: keep(d.in_common),
+    openers: keep(d.openers),
+    careful: keep(carefulItems(d.careful)),
+    career: keep(d.career),
+    education: keep(d.education),
+    highlights: keep(d.highlights),
+    company: keep(d.company),
+    confidence: "low"
+  };
+}
+var words3 = (s) => s.trim().split(/\s+/).filter(Boolean).length;
+function finish(d, history, noOutsideSources) {
+  const clean = (xs) => xs.filter((x) => !sensitiveCategory(x.text));
+  return {
+    ...d,
+    who: stripSensitiveSentences(d.who),
+    recently: clean(d.recently).slice(0, 3),
+    in_common: clean(d.in_common),
+    openers: clean(d.openers).filter((o) => words3(o.text) <= 25).slice(0, 3),
+    // company context only, each line cited; nothing about the person's own life (guards.ts)
+    careful: carefulItems(d.careful).filter((c) => carefulAllowed(c.text) && c.source_ids.length > 0),
+    career: (d.career ?? []).slice(0, 12),
+    education: (d.education ?? []).slice(0, 6),
+    // a profile link has to be a web address, never anything a page could run, and never a blocked site
+    profiles: (d.profiles ?? []).filter((p) => /^https?:\/\//i.test(p.url) && !isBlockedSource(p.url)).slice(0, 6),
+    highlights: (d.highlights ?? []).filter((h) => !sensitiveCategory(`${h.title} ${h.summary ?? ""}`)).filter((h) => !h.url || !/^https?:\/\//i.test(h.url) || !isBlockedSource(h.url)).map((h) => ({ ...h, url: h.url && /^https?:\/\//i.test(h.url) ? h.url : null })).slice(0, 8),
+    topics: (d.topics ?? []).filter((t) => !sensitiveCategory(t)).slice(0, 6),
+    company: clean(d.company ?? []).slice(0, 5),
+    history: {
+      first_contact: d.history.first_contact ?? history.firstContact ?? null,
+      last_contact: d.history.last_contact ?? history.lastContact ?? null,
+      summary: d.history.summary ? stripSensitiveSentences(d.history.summary) || null : null
+    },
+    confidence: noOutsideSources ? "low" : d.confidence
+  };
+}
+function fallbackDossier(input, profile, history) {
+  const current = profile?.work_experience?.find((w) => w.current) ?? profile?.work_experience?.[0];
+  const role = current?.position ?? input.person.title ?? "";
+  const org = current?.company ?? input.person.org ?? "";
+  const who = [input.person.name, role && org ? `${role} at ${org}` : role || org].filter(Boolean).join(", ");
+  const last = history.messages[history.messages.length - 1];
+  return {
+    who: `${who}.`,
+    now: {
+      role,
+      org,
+      since: null,
+      // the profile, when there is one, is always the first source
+      source_ids: profile ? ["S1"] : []
+    },
+    recently: [],
+    in_common: [],
+    history: {
+      first_contact: history.firstContact ?? history.messages[0]?.at ?? null,
+      last_contact: history.lastContact ?? last?.at ?? null,
+      summary: last ? `Last ${last.direction === "outbound" ? "you wrote" : "they wrote"}: ${last.subject ?? ""}`.trim() : null
+    },
+    openers: [],
+    // nothing to be careful about that a source says; the brief's status (partial) says it had no web research
+    careful: [],
+    confidence: "low",
+    // the profile's own history, when there is a profile (always source S1)
+    career: profile ? (profile.work_experience ?? []).slice(0, 12).map((w) => ({
+      role: w.position ?? "",
+      org: w.company ?? "",
+      start: fmtDate(w.start) || null,
+      end: w.current ? null : fmtDate(w.end) || null,
+      source_ids: ["S1"]
+    })) : [],
+    education: profile ? (profile.education ?? []).slice(0, 6).map((e) => ({
+      school: e.school ?? "",
+      degree: e.degree ?? null,
+      years: [fmtDate(e.start), fmtDate(e.end)].filter(Boolean).join("–") || null,
+      source_ids: ["S1"]
+    })) : []
+  };
+}
+function fmtDate(v) {
+  if (!v) return "";
+  if (typeof v === "string" || typeof v === "number") return String(v);
+  const o = v;
+  return o.year ? `${o.year}${o.month ? `-${String(o.month).padStart(2, "0")}` : ""}` : "";
+}
+function formatProfile(p) {
+  const lines = [
+    `${p.first_name ?? ""} ${p.last_name ?? ""}`.trim(),
+    p.headline ?? "",
+    p.location ? `Location: ${p.location}` : "",
+    p.summary ? `About: ${p.summary.slice(0, 1500)}` : ""
+  ];
+  for (const w of p.work_experience ?? [])
+    lines.push(
+      `Experience: ${w.position ?? ""} at ${w.company ?? ""} (${fmtDate(w.start)}–${w.current ? "present" : fmtDate(w.end)})`
+    );
+  for (const e of p.education ?? [])
+    lines.push(
+      `Education: ${e.school ?? ""}${e.degree ? `, ${e.degree}` : ""}${e.field_of_study ? ` in ${e.field_of_study}` : ""} (${fmtDate(e.start)}–${fmtDate(e.end)})`
+    );
+  return lines.filter(Boolean).join("\n");
+}
+function formatHistory(h) {
+  const lines = [];
+  for (const m of h.messages.slice(-20))
+    lines.push(
+      `${m.at.slice(0, 10)} ${m.direction === "outbound" ? "user → them" : "them → user"}${m.subject ? ` · ${m.subject}` : ""}: ${m.body.slice(0, 600)}`
+    );
+  for (const n of h.notes) lines.push(`note ${n.at.slice(0, 10)}: ${n.text.slice(0, 600)}`);
+  for (const f of h.facts) lines.push(`fact (${f.type}): ${f.text}`);
+  for (const e of h.events) lines.push(`event ${e.at.slice(0, 10)}: ${e.title}`);
+  return lines.join("\n") || "(none)";
+}
+var round4 = (x) => Math.round(x * 1e4) / 1e4;
+async function save(run, r, now) {
+  const { deps, input } = run;
+  await deps.db.putDossier({
+    user_id: input.userId,
+    person_id: input.personId,
+    goal_id: input.goalId ?? null,
+    status: r.status,
+    content: r.content ?? null,
+    sources: r.sources ?? [],
+    candidates: r.candidates ?? null,
+    cost_usd: round4(run.spent),
+    model: r.model ?? null,
+    prompt_version: r.content ? PROMPT_VERSION2 : null,
+    error: r.error ?? null,
+    created_at: iso3(now),
+    updated_at: iso3(now),
+    expires_at: iso3(now + DOSSIER_REUSE_MS)
+  });
+}
+
+// supabase/functions/_shared/research/run.ts
+var GOAL_SENTENCE = {
+  recruiting: (t) => `find their next role (${t})`,
+  advice: (t) => `get advice on ${t}`,
+  fundraising: (t) => `raise money (${t})`,
+  sales: (t) => `find customers (${t})`,
+  hiring: (t) => `hire (${t})`,
+  cofounder: (t) => `find a cofounder (${t})`,
+  community: (t) => `grow a community (${t})`,
+  collaboration: (t) => `find research collaborators (${t})`
+};
+function goalSentence(goal) {
+  if (!goal) return "build relationships with people who matter to their work";
+  const f = GOAL_SENTENCE[goal.kind];
+  return f ? f(goal.title) : goal.title;
+}
+async function dossierRow(db2, userId, personId) {
+  const [r] = await db2.sql`
+    select * from orbit.dossiers where user_id = ${userId}::uuid and person_id = ${personId}::uuid`;
+  return r;
+}
+async function ownedPerson(db2, userId, personId) {
+  if (typeof personId !== "string" || !/^[0-9a-f-]{36}$/i.test(personId))
+    throw new HttpError(400, "bad_request", "personId is required");
+  const [p] = await db2.sql`
+    select id from orbit.people where id = ${personId}::uuid and user_id = ${userId}::uuid and deleted_at is null`;
+  if (!p) throw new HttpError(404, "not_found", "no such person");
+  return p.id;
+}
+async function runDossierJob(s, userId, payload) {
+  const db2 = s.db;
+  const personId = await ownedPerson(db2, userId, payload.personId);
+  const [p] = await db2.sql`
+    select p.display_name, p.title, p.org_raw, o.name as org_name, p.location, p.linkedin_url, p.linkedin_member_id,
+           (select array_agg(i.value_norm) from orbit.person_identities i where i.person_id = p.id and i.kind = 'email') as emails
+      from orbit.people p left join orbit.organizations o on o.id = p.org_id where p.id = ${personId}::uuid`;
+  const goalId = typeof payload.goalId === "string" ? payload.goalId : (await dossierRow(db2, userId, personId))?.goal_id;
+  const [goal] = goalId ? await db2.sql`
+        select id, kind, title, criteria from orbit.goals where id = ${goalId}::uuid and user_id = ${userId}::uuid` : [];
+  const user = await loadUserRow(db2, userId);
+  const [acct] = await db2.sql`
+    select external_account_id from orbit.integration_accounts
+     where user_id = ${userId}::uuid and provider = 'linkedin' and status = 'active'`;
+  const chosen = payload.chosen;
+  return buildDossier(
+    {
+      exa: s.exa,
+      unipile: s.unipile,
+      claude: claudeDep(s.claude, userId),
+      db: sqlResearchDb(db2, s.now),
+      budget: sqlBudget(db2, s.now),
+      clock: () => s.now().getTime()
+    },
+    {
+      userId,
+      personId,
+      goalId: goal?.id ?? null,
+      goalKind: goal?.kind,
+      goalSentence: goalSentence(goal),
+      field: typeof goal?.criteria?.topic === "string" ? goal.criteria.topic : void 0,
+      user: { firstName: userFirstName(user), context: await buildUserContext(db2, user) },
+      person: {
+        name: p.display_name,
+        title: p.title ?? void 0,
+        org: chosen?.org ?? p.org_name ?? p.org_raw ?? void 0,
+        location: p.location ?? void 0,
+        linkedinMemberId: p.linkedin_member_id ?? void 0,
+        linkedinUrl: p.linkedin_url ?? void 0,
+        emails: p.emails ?? void 0
+      },
+      unipileAccountId: acct?.external_account_id ?? void 0,
+      refresh: payload.refresh === true || !!chosen
+    }
+  );
+}
+
+// supabase/functions/orbit-worker/handlers/enrich.ts
+function enrichDossier(config) {
+  return async (job, ctx) => {
+    if (!job.userId) throw new Error("enrich.dossier needs a user");
+    const s = makeServices(config, { db: ctx.db, now: ctx.now, queue: ctx.queue });
+    try {
+      await runDossierJob(s, job.userId, job.payload);
+    } catch (e) {
+      if (e instanceof HttpError && e.status < 500) return;
+      throw e;
+    }
+  };
+}
+
+// supabase/functions/_shared/replies/funnel.ts
+var SLOT_MATCH_MIN = 15;
+var APP_URL = "https://tryorbit.today";
+async function offeredSlotsFor(s, userId, personId, before) {
+  const rows = await s.db.sql`
+    select * from orbit.drafts
+     where user_id = ${userId}::uuid and person_id = ${personId}::uuid and status = 'sent'
+       and sent_at <= ${before}::timestamptz
+       and (offered_slots is not null or ask->'slots' is not null)
+     order by sent_at desc limit 3`;
+  for (const d of rows) {
+    const fromColumn = Array.isArray(d.offered_slots) ? d.offered_slots : [];
+    const fromAsk = Array.isArray(d.ask?.slots) ? d.ask.slots : [];
+    const slots = [...fromColumn, ...fromAsk].filter((x) => typeof x === "string");
+    if (slots.length) return { draft: d, slots: [...new Set(slots)] };
+  }
+  return void 0;
+}
+function matchOfferedSlot(text2, offered, reference, timeZone) {
+  const proposed = extractProposedTimes(text2, reference, timeZone);
+  for (const p of proposed) {
+    const t = new Date(p.startIso).getTime();
+    const hit = offered.find((o) => Math.abs(new Date(o).getTime() - t) <= SLOT_MATCH_MIN * 6e4);
+    if (hit) return hit;
+  }
+  return void 0;
+}
+async function slotStillFree(s, userId, start, tz) {
+  const end = new Date(start.getTime() + SLOT_MINUTES * 6e4);
+  const from = new Date(start.getTime() - BUFFER_MIN * 6e4);
+  const to = new Date(end.getTime() + BUFFER_MIN * 6e4);
+  let busy;
+  try {
+    busy = await freeBusy(s, userId, from, to, tz);
+  } catch (e) {
+    if (!(e instanceof NeedsReauth) && !(e instanceof HttpError)) throw e;
+    busy = await storedBusy(s.db, userId, from, to);
+  }
+  return !busy.some((b) => start.getTime() < b.end && end.getTime() > b.start);
+}
+async function runReplyFunnel(s, userId, messageId, opts = {}) {
+  const db2 = s.db;
+  const now = s.now();
+  const m = await loadReplyMessage(db2, userId, messageId);
+  if (m.reply_class !== "scheduling" || !m.from_person_id)
+    return maybeAutoReply(db2, userId, messageId, { services: s });
+  const [full] = await db2.sql`
+    select body_text, snippet from orbit.messages where id = ${m.id}::uuid`;
+  const offered = await offeredSlotsFor(s, userId, m.from_person_id, new Date(m.sent_at));
+  if (!offered) return maybeAutoReply(db2, userId, messageId, { services: s });
+  const [u2] = await db2.sql`
+    select timezone, settings from orbit.users where id = ${userId}::uuid`;
+  const [p] = await db2.sql`
+    select timezone, first_name, display_name from orbit.people where id = ${m.from_person_id}::uuid`;
+  const userTz = validZone(u2?.timezone) ?? "America/New_York";
+  const tz = validZone(p?.timezone) ?? userTz;
+  const text2 = full?.body_text ?? full?.snippet ?? "";
+  const slotStart = matchOfferedSlot(text2, offered.slots, new Date(m.sent_at), tz);
+  if (!slotStart) return maybeAutoReply(db2, userId, messageId, { services: s });
+  const start = new Date(slotStart);
+  if (start.getTime() <= now.getTime()) return maybeAutoReply(db2, userId, messageId, { services: s });
+  const [done] = await db2.sql`
+    select external_id from orbit.calendar_events
+     where user_id = ${userId}::uuid and start_at = ${start}::timestamptz
+       and ${m.from_person_id}::uuid = any(attendee_person_ids) and coalesce(status, 'confirmed') <> 'cancelled'`;
+  let eventId = done?.external_id;
+  if (!eventId && !await slotStillFree(s, userId, start, userTz))
+    return maybeAutoReply(db2, userId, messageId, { services: s });
+  if (!eventId) {
+    const booked = await bookSlot(
+      s,
+      userId,
+      { draftId: offered.draft.id, slotStart },
+      opts.appUrl ?? APP_URL,
+      { actor: "agent" }
+    );
+    if (booked.needsConsent) {
+      await maybeAutoReply(db2, userId, messageId, { services: s });
+      return { action: "needs_consent", url: booked.needsConsent.url, slotStart };
+    }
+    eventId = booked.eventId;
+    await db2.sql`update orbit.drafts set outcome = 'booked' where id = ${offered.draft.id}::uuid`;
+    await db2.sql`
+      insert into orbit.audit_log (user_id, actor, action, target_table, target_id, details)
+      values (${userId}::uuid, 'agent', 'call.booked', 'drafts', ${offered.draft.id},
+              ${{ start: iso(start), eventId, messageId: m.id, personId: m.from_person_id }}::jsonb)`;
+  }
+  const label = slotLabel(start, new Date(start.getTime() + SLOT_MINUTES * 6e4), tz);
+  const [existing] = await db2.sql`
+    select * from orbit.drafts
+     where user_id = ${userId}::uuid and ask->>'replyToMessageId' = ${m.id}
+       and status not in ('discarded', 'cancelled')
+     order by created_at desc limit 1`;
+  let draft = existing;
+  if (!draft) {
+    try {
+      draft = (await composeDraft(s, {
+        userId,
+        personId: m.from_person_id,
+        kind: "reply",
+        channel: m.provider,
+        replyToMessageId: m.id,
+        actor: "agent",
+        confirmSlot: { start: slotStart, label }
+      })).draft;
+    } catch (e) {
+      if (e instanceof HttpError)
+        return {
+          action: "booked",
+          eventId,
+          slotStart,
+          draftId: offered.draft.id,
+          confirmation: { action: "none", reason: e.code }
+        };
+      throw e;
+    }
+  }
+  const confirmation = draft.status !== "draft" ? { action: "auto_sent", draftId: draft.id } : goalPaused(u2?.settings, draft.goal_id, now) ? {
+    action: "drafted",
+    draftId: draft.id,
+    reasons: ["goal paused by the breaker"]
+  } : await approveIfAllowed(s, userId, draft, "scheduling", now, { offeredSlots: [slotStart] });
+  return { action: "booked", eventId, slotStart, draftId: draft.id, confirmation };
+}
+
+// supabase/functions/_shared/googleApi.ts
+var UNITS_PER_SECOND = 90;
+var MAX_IN_FLIGHT = 5;
+var MAX_RETRIES = 3;
+var GoogleApiError = class extends Error {
+  constructor(status, reason2) {
+    super(`google ${status} ${reason2}`);
+    this.status = status;
+    this.reason = reason2;
+    this.name = "GoogleApiError";
+  }
+};
+var realSleep = (ms2) => new Promise((r) => setTimeout(r, ms2));
+var QuotaPacer = class {
+  rate;
+  max;
+  clock;
+  sleep;
+  spent = [];
+  inFlight = 0;
+  waiting = [];
+  constructor(o = {}) {
+    this.rate = o.unitsPerSecond ?? UNITS_PER_SECOND;
+    this.max = o.maxInFlight ?? MAX_IN_FLIGHT;
+    this.clock = o.clock ?? Date.now;
+    this.sleep = o.sleep ?? realSleep;
+  }
+  async run(units, fn) {
+    await this.acquire();
+    try {
+      return await this.spend(units, fn);
+    } finally {
+      this.release();
+    }
+  }
+  acquire() {
+    if (this.inFlight < this.max) {
+      this.inFlight++;
+      return Promise.resolve();
+    }
+    return new Promise((r) => this.waiting.push(r));
+  }
+  release() {
+    const next = this.waiting.shift();
+    if (next) next();
+    else this.inFlight--;
+  }
+  /** Records the spend and starts the request in one synchronous step, so the recorded time is the start time. */
+  async spend(units, fn) {
+    const u2 = Math.min(Math.max(0, units), this.rate);
+    for (; ; ) {
+      const now = this.clock();
+      this.spent = this.spent.filter((e) => e.t > now - 1e3);
+      const used = this.spent.reduce((s, e) => s + e.u, 0);
+      if (used + u2 <= this.rate) {
+        this.spent.push({ t: now, u: u2 });
+        return fn();
+      }
+      let over = used + u2 - this.rate;
+      let wait = 1;
+      for (const e of this.spent) {
+        over -= e.u;
+        wait = e.t + 1e3 - now;
+        if (over <= 0) break;
+      }
+      await this.sleep(Math.max(1, wait));
+    }
+  }
+};
+async function reason(res) {
+  try {
+    const body = await res.json();
+    if (typeof body.error === "string") return body.error;
+    return body.error?.errors?.[0]?.reason ?? body.error?.status ?? "error";
+  } catch {
+    return "error";
+  }
+}
+var RATE_REASONS = /* @__PURE__ */ new Set(["rateLimitExceeded", "userRateLimitExceeded", "RESOURCE_EXHAUSTED"]);
+function googleClient(deps) {
+  const doFetch = deps.fetch ?? fetch;
+  const clock = deps.clock ?? Date.now;
+  const sleep = deps.sleep ?? realSleep;
+  const random = deps.random ?? Math.random;
+  const pacers = deps.pacers ?? /* @__PURE__ */ new Map();
+  const pacer = (userId) => {
+    let p = pacers.get(userId);
+    if (!p) {
+      p = new QuotaPacer({ clock, sleep });
+      pacers.set(userId, p);
+    }
+    return p;
+  };
+  return {
+    async request(userId, r) {
+      let refreshed = false;
+      let attempt = 0;
+      for (; ; ) {
+        const token = await deps.tokens.accessToken(userId);
+        const res = await pacer(userId).run(
+          r.units,
+          () => doFetch(r.url, {
+            method: r.method ?? (r.body === void 0 ? "GET" : "POST"),
+            headers: {
+              authorization: `Bearer ${token}`,
+              accept: "application/json",
+              ...r.body === void 0 ? {} : { "content-type": "application/json" }
+            },
+            body: r.body === void 0 ? void 0 : JSON.stringify(r.body),
+            // a call Google never answers fails the job (which is retried) instead of holding the worker
+            signal: AbortSignal.timeout(3e4)
+          })
+        );
+        if (res.status === 401) {
+          await res.body?.cancel();
+          if (!refreshed) {
+            deps.tokens.invalidate(userId);
+            refreshed = true;
+            continue;
+          }
+          if (deps.db)
+            await deps.db.sql`
+              update orbit.integration_accounts set status = 'needs_reauth', last_error = 'unauthorized'
+               where user_id = ${userId}::uuid and provider = 'google'`;
+          throw new NeedsReauth();
+        }
+        if (res.ok) return await res.json();
+        const why = res.status === 429 || res.status >= 500 ? "retry" : await reason(res);
+        const retryable = why === "retry" || res.status === 403 && RATE_REASONS.has(why);
+        if (retryable && attempt < MAX_RETRIES) {
+          const wait = retryAfterMs(res.headers.get("retry-after"), clock()) ?? backoffMs(attempt, random);
+          if (why === "retry") await res.body?.cancel();
+          attempt++;
+          await sleep(wait);
+          continue;
+        }
+        if (why === "retry") await res.body?.cancel();
+        throw new GoogleApiError(res.status, why === "retry" ? `http_${res.status}` : why);
+      }
+    }
+  };
+}
+function qs(params) {
+  const q = new URLSearchParams();
+  for (const [k, v] of Object.entries(params)) {
+    if (v === void 0 || v === null) continue;
+    if (Array.isArray(v)) for (const x of v) q.append(k, x);
+    else q.set(k, String(v));
+  }
+  const s = q.toString();
+  return s ? `?${s}` : "";
+}
+
+// supabase/functions/orbit-worker/handlers/deps.ts
+var JobSkipped = class extends Error {
+  constructor(reason2) {
+    super(reason2);
+    this.reason = reason2;
+    this.name = "JobSkipped";
+  }
+};
+function googleFor(deps) {
+  const pacers = /* @__PURE__ */ new Map();
+  return (db2) => {
+    if (!deps.google) throw new JobSkipped("unconfigured");
+    return googleClient({
+      tokens: deps.google,
+      db: db2,
+      fetch: deps.fetch,
+      clock: deps.clock,
+      sleep: deps.sleep,
+      random: deps.random,
+      pacers
+    });
+  };
+}
+var LONG_VT_SEC = 300;
+
+// supabase/functions/orbit-worker/handlers/funnel.ts
+function funnelReplyHandler(config) {
+  return async (job, ctx) => {
+    if (!job.userId) throw new JobSkipped("no_user");
+    const id = job.payload.messageId;
+    if (!isUuid(id)) throw new JobSkipped("no_message");
+    await runReplyFunnel(
+      makeServices(config, { db: ctx.db, now: ctx.now, queue: ctx.queue }),
+      job.userId,
+      id
+    );
+  };
+}
+async function rollOutcomes(db2, now, userId) {
+  const before = new Date(now.getTime() - QUIET_DAYS * 864e5);
+  const rows = await db2.sql`
+    update orbit.drafts set outcome = 'silent'
+     where status = 'sent' and outcome is null and replied_at is null and sent_at <= ${before}::timestamptz
+       and kind <> 'forwardable_blurb'
+       and (${userId ?? null}::uuid is null or user_id = ${userId ?? null}::uuid)
+    returning id`;
+  return rows.length;
+}
+function outcomesRollHandler() {
+  return async (job, ctx) => {
+    await rollOutcomes(ctx.db, ctx.now(), job.userId ?? void 0);
+  };
+}
+
 // supabase/functions/orbit-worker/handlers/hops.ts
 function hopEvidenceHandler(config) {
   return async (job, ctx) => {
@@ -11963,6 +15004,19 @@ ${d.body}`)) {
     await settle("draft", { error: "needs_postal_address" });
     return { status: "held", reason: "needs_postal_address" };
   }
+  if (agentApproved && !userApproved) {
+    const gate = await voiceGate(s, u2, d, { firstMessage: FIRST_TOUCH_KINDS.has(d.kind) });
+    if (!gate.ok) {
+      await settle("draft", { error: "voice" });
+      await audit(db2, userId, "system", "draft.hold", d.id, {
+        reason: "voice",
+        text: VOICE_HOLD_REASON,
+        problems: gate.problems,
+        ...gate.score !== void 0 ? { score: gate.score } : {}
+      });
+      return { status: "held", reason: "voice" };
+    }
+  }
   const cap = await capReached(db2, userId, d, now, u2, agentApproved && !userApproved);
   if (cap) {
     const next = new Date(
@@ -12152,96 +15206,6 @@ function sendDraftHandler(config) {
   };
 }
 
-// packages/core/src/text/jaro.ts
-function jaroWinkler(a, b) {
-  if (a === b) return 1;
-  if (!a.length || !b.length) return 0;
-  const matchDistance = Math.max(0, Math.floor(Math.max(a.length, b.length) / 2) - 1);
-  const aMatches = new Array(a.length).fill(false);
-  const bMatches = new Array(b.length).fill(false);
-  let matches = 0;
-  for (let i = 0; i < a.length; i++) {
-    const start = Math.max(0, i - matchDistance);
-    const end = Math.min(i + matchDistance + 1, b.length);
-    for (let j = start; j < end; j++) {
-      if (bMatches[j] || a[i] !== b[j]) continue;
-      aMatches[i] = true;
-      bMatches[j] = true;
-      matches++;
-      break;
-    }
-  }
-  if (!matches) return 0;
-  let t = 0;
-  let k = 0;
-  for (let i = 0; i < a.length; i++) {
-    if (!aMatches[i]) continue;
-    while (!bMatches[k]) k++;
-    if (a[i] !== b[k]) t++;
-    k++;
-  }
-  const m = matches;
-  const jaro = (m / a.length + m / b.length + (m - t / 2) / m) / 3;
-  let prefix = 0;
-  for (let i = 0; i < Math.min(4, a.length, b.length); i++) {
-    if (a[i] === b[i]) prefix++;
-    else break;
-  }
-  return jaro + prefix * 0.1 * (1 - jaro);
-}
-function tokenJaccard(a, b) {
-  const A = new Set(a.toLowerCase().split(/\W+/).filter(Boolean));
-  const B = new Set(b.toLowerCase().split(/\W+/).filter(Boolean));
-  if (!A.size || !B.size) return 0;
-  let inter = 0;
-  for (const x of A) if (B.has(x)) inter++;
-  return inter / (A.size + B.size - inter);
-}
-
-// packages/core/src/recommend/wantToMeet.ts
-var ROLES = [
-  [/\b(co-?)?founders?\b/, "Founder"],
-  [/\brecruit(er|ers|ing)\b|\btalent (team|acquisition)\b/, "Recruiter"],
-  [/\b(pms|pm|apms?|product managers?|product people|product folks)\b/, "Product Manager"],
-  [/\b(software )?engineers?\b|\bswes?\b|\bdevelopers?\b/, "Software Engineer"],
-  [/\bdesigners?\b/, "Product Designer"],
-  [/\bdata scientists?\b/, "Data Scientist"],
-  [/\b(investment )?bankers?\b|\bib analysts?\b/, "Investment Banking Analyst"],
-  [/\bconsultants?\b/, "Consultant"],
-  [/\b(vcs?|venture capitalists?|investors?)\b/, "Investor"],
-  [/\btraders?\b/, "Trader"],
-  [/\bresearchers?\b|\bresearch scientists?\b/, "Research Scientist"],
-  [/\bmarketers?\b|\bmarketing (people|folks|managers?)\b/, "Marketing Manager"],
-  [/\banalysts?\b/, "Analyst"],
-  [/\bassociates?\b/, "Associate"],
-  [/\bpartners?\b/, "Partner"]
-];
-var ROLE_RE = new Map(ROLES.map(([re, title]) => [title, re]));
-var STOP = new Set(
-  `about above after again alumni also anyone anything area areas around because been being best better between both
-  career careers company companies could currently doing each early especially even ever every everyone field fields
-  folks from have help hope into just know learn like love maybe meet meeting more most much people person really
-  role roles same school some someone something space than that their them then there these they thing things this
-  those through want wants were what when where which while who whom with work working works would year years your
-  ahead team teams there here other others well folks firm firms industry industries kind kinds type types start
-  started starting someday likely talk talking chat chats coffee least ideally anybody`.split(/\s+/).filter(Boolean)
-);
-
-// packages/core/src/recommend/score.ts
-function responsePrior(p, user) {
-  let z7 = -0.4;
-  if (p.isAlumni) z7 += 0.8;
-  if (p.school && user.majors.some((m) => (p.headline ?? "").toLowerCase().includes(m.toLowerCase())))
-    z7 += 0.5;
-  const title = (p.currentTitle ?? "").toLowerCase();
-  if (/\b(ceo|cfo|coo|cto|partner|managing director|md|founder|chief)\b/.test(title)) z7 -= 0.6;
-  else if (title) z7 += 0.3;
-  if (p.lastInteractionAt && Date.now() - new Date(p.lastInteractionAt).getTime() < 180 * 864e5)
-    z7 += 0.3;
-  if (p.linkedinConnectedOn) z7 += 0.2;
-  return 1 / (1 + Math.exp(-z7));
-}
-
 // packages/core/src/types.ts
 var GOAL_KINDS = [
   "recruiting",
@@ -12253,1473 +15217,6 @@ var GOAL_KINDS = [
   "community",
   "collaboration"
 ];
-
-// packages/core/src/scoring/rapport.ts
-var RAPPORT_VERSION = 1;
-var RAPPORT_CUES = [
-  "asks_about_you",
-  "offers_help",
-  "personal_news",
-  "plans_together",
-  "congratulates",
-  "glad_to_hear",
-  "casual",
-  "uses_your_name",
-  "thoughtful",
-  "formal",
-  "distant",
-  "asked_to_stop",
-  "hostile"
-];
-var WARM_CUES = {
-  asks_about_you: 0.35,
-  offers_help: 0.35,
-  personal_news: 0.3,
-  plans_together: 0.25,
-  congratulates: 0.25,
-  glad_to_hear: 0.2,
-  thoughtful: 0.2,
-  casual: 0.15,
-  uses_your_name: 0.1
-};
-var PATTERNS = [
-  [
-    "asks_about_you",
-    /\b(how (are|have) you|how'?s (it going|everything|life|school|the (semester|job|search|internship|program))|how (did|is|was) (your|the) [a-z]+|what (have|are) you been|what about you|how about you|hope (you'?re|you are|all is|everything|school|the semester|your)|how (are|is) (things|everything)|you doing)\b/i
-  ],
-  [
-    "offers_help",
-    /\b(happy to (help|chat|connect|introduce|intro|share|talk|hop on|look|review|refer|pass)|glad to (help|chat|connect|introduce)|(i'?d|i would) (be )?(love|happy|glad) to|i can (intro|introduce|connect you|put you in touch|send|share|refer|pass|ask|forward|look)|let me (intro|introduce|connect you|know if (i|there'?s anything))|feel free to (reach out|ping|text|call|email|send)|reach out (any ?time|whenever)|any ?time\b|my door is (always )?open|count on me)/i
-  ],
-  [
-    "personal_news",
-    /\b(i (just )?(got|started|moved|joined|became|bought|finished|graduated|launched)|we (just )?(had|moved|got|welcomed|bought)|(my|our) (wife|husband|partner|fianc[eé]e?|kids?|son|daughter|baby|dog|family|wedding|new (job|role|team|place|house))|i'?m (now|currently) (at|working|living|based))\b/i
-  ],
-  [
-    "plans_together",
-    /\b(let'?s (grab|get|meet|catch|chat|hop|find|do|set|plan)|catch up|next time (you|i|we)|when you'?re (in|back|around|free|next)|we should (grab|get|meet|catch|chat)|keep in touch|talk soon|see you (soon|then|there|next))\b/i
-  ],
-  [
-    "congratulates",
-    /\b(congrat(s|ulations)|so proud|proud of you|well[- ]deserved|huge news|amazing news|great news)\b/i
-  ],
-  [
-    "glad_to_hear",
-    /\b((great|so good|good|lovely|nice|fun) to (hear|see) from you|great to hear|so glad|really glad|excited|thrilled|delighted|made my day|love (this|that|to hear))\b/i
-  ],
-  [
-    "casual",
-    /(\b(haha+|hah|lol|lmao|omg|yeah|yep|yup|hey|heya|hiya|cheers|thx|ty|xx|xo|no worries|for sure|sounds fun)\b|:\)|:-\)|:D|\p{Extended_Pictographic})/iu
-  ],
-  [
-    "formal",
-    /(^\s*(dear|to whom)\b|\b(sincerely|kind regards|best regards|warm regards|respectfully|yours truly|regards,)\b|\b(we regret|please be advised|kindly note)\b)/im
-  ],
-  [
-    "distant",
-    /\b(not the (right|best) (person|contact)|wrong person|don'?t (really )?know you|who is this|how did you get (my|this)|i don'?t (do|take) (calls|coffee chats|informational)|i (don'?t|do not) have (the )?(time|bandwidth) for|not interested|unable to help|can'?t help you)\b/i
-  ],
-  [
-    "asked_to_stop",
-    /\b(stop (emailing|messaging|contacting|reaching out|writing)|(please )?(remove|unsubscribe) me|do not (contact|email|message) me|don'?t (contact|email|message) me|leave me alone)\b/i
-  ],
-  ["hostile", /\b(spam(ming)?|annoying|inappropriate|unprofessional|harass(ing|ment)?)\b/i]
-];
-var words3 = (text2) => text2.toLowerCase().match(/[a-z']+/g) ?? [];
-var FUNCTION_CLASSES = {
-  personal: new Set(
-    "i me my mine myself we us our ours ourselves you your yours yourself yourselves he him his she her hers they them their theirs".split(
-      " "
-    )
-  ),
-  impersonal: new Set(
-    "it its itself this that these those something anything everything nothing someone anyone".split(" ")
-  ),
-  articles: new Set("a an the".split(" ")),
-  prepositions: new Set(
-    "about above across after against along among around at before behind below beside between by during for from in inside into near of off on onto out over through to toward under until up upon with within without".split(
-      " "
-    )
-  ),
-  auxiliary: new Set(
-    "am is are was were be been being have has had do does did will would shall should can could may might must i'm you're we're they're it's i've you've we've i'd you'd i'll you'll we'll".split(
-      " "
-    )
-  ),
-  adverbs: new Set(
-    "very really just so too also then now here there even only quite rather almost always never often".split(
-      " "
-    )
-  ),
-  conjunctions: new Set(
-    "and but or so because if although though while whereas unless since nor yet".split(" ")
-  ),
-  negations: new Set(
-    "no not never none nobody nothing neither nor don't can't won't isn't aren't wasn't didn't doesn't".split(
-      " "
-    )
-  ),
-  quantifiers: new Set("all some many much more most few several any each every both lot lots".split(" "))
-};
-function styleMatch(a, b) {
-  const wa = words3(a);
-  const wb = words3(b);
-  if (wa.length < 15 || wb.length < 15) return void 0;
-  const share = (ws, set) => ws.filter((w) => set.has(w)).length / ws.length;
-  const parts = Object.values(FUNCTION_CLASSES).map((set) => {
-    const pa = share(wa, set);
-    const pb = share(wb, set);
-    return 1 - Math.abs(pa - pb) / (pa + pb + 1e-4);
-  });
-  return parts.reduce((s, x) => s + x, 0) / parts.length;
-}
-var clamp = (x, lo = -1, hi = 1) => Math.max(lo, Math.min(hi, x));
-function replyRapport(input) {
-  const text2 = input.text.trim();
-  const ws = words3(text2);
-  const cues = /* @__PURE__ */ new Set();
-  for (const [cue, re] of PATTERNS) if (re.test(text2)) cues.add(cue);
-  const name = input.studentFirstName?.trim();
-  if (name && name.length >= 2 && new RegExp(`\\b${name.replace(/[^\p{L}\p{N}' -]/gu, "")}\\b`, "iu").test(text2))
-    cues.add("uses_your_name");
-  const theirs = input.answering ? words3(input.answering).length : 0;
-  if (ws.length >= 60 && ws.length >= Math.max(20, theirs)) cues.add("thoughtful");
-  if (cues.has("formal")) cues.delete("uses_your_name");
-  let sum = 0;
-  for (const c of cues) sum += WARM_CUES[c] ?? 0;
-  if (input.valence && ws.length >= 3) sum += 0.25 * clamp(input.valence(text2));
-  if (cues.has("formal")) sum *= 0.5;
-  if (cues.has("distant")) sum -= 0.45;
-  if (cues.has("hostile")) sum -= 0.8;
-  const lsm = input.answering ? styleMatch(text2, input.answering) : void 0;
-  if (lsm !== void 0) sum += 0.1 * clamp((lsm - 0.5) * 2);
-  let score = Math.tanh(sum);
-  if (cues.has("asked_to_stop")) score = -1;
-  const cueCount = [...cues].filter((c) => c !== "formal").length;
-  const base = ws.length < 4 ? 0.3 : ws.length < 15 ? 0.6 : 0.85;
-  const confidence = Math.max(base, cueCount ? 0.7 : 0);
-  return {
-    score: Math.round(clamp(score) * 1e3) / 1e3,
-    by: "lexical",
-    cues: RAPPORT_CUES.filter((c) => cues.has(c)),
-    confidence,
-    v: RAPPORT_VERSION
-  };
-}
-var FAMILIARITY = {
-  stranger: -0.05,
-  professional: 0,
-  friendly: 0.1,
-  friend: 0.2
-};
-function rapportFromLlm(r) {
-  const known = new Set(RAPPORT_CUES);
-  const cues = RAPPORT_CUES.filter((c) => (r.cues ?? []).includes(c) && known.has(c));
-  let score = clamp((Number(r.warmth) || 0) / 2) * 0.8 + (FAMILIARITY[r.familiarity] ?? 0) + clamp(r.effort, 0, 2) * 0.03;
-  if (cues.includes("asked_to_stop")) score = -1;
-  return {
-    score: Math.round(clamp(score) * 1e3) / 1e3,
-    by: "llm",
-    cues,
-    confidence: 0.9,
-    v: RAPPORT_VERSION
-  };
-}
-function asRapportReading(x) {
-  if (!x || typeof x !== "object") return void 0;
-  const r = x;
-  if (typeof r.score !== "number" || !Number.isFinite(r.score)) return void 0;
-  return {
-    score: clamp(r.score),
-    by: r.by === "llm" ? "llm" : "lexical",
-    cues: Array.isArray(r.cues) ? RAPPORT_CUES.filter((c) => r.cues.includes(c)) : [],
-    confidence: typeof r.confidence === "number" ? clamp(r.confidence, 0, 1) : 0.6,
-    v: RAPPORT_VERSION
-  };
-}
-var RAPPORT_LLM_GUIDE = `rapport: how the sender feels about the student, separate from their answer to the request.
-- warmth −2..2: 2 = clearly warm and personal (asks about the student, offers help or intros, shares their own news, suggests meeting up); 0 = neutral or businesslike, including short replies such as "ok" or "sounds good"; −2 = distant, annoyed, or asks not to be contacted. A polite decline that wishes the student well is warm, not cold.
-- familiarity: stranger, professional, friendly, or friend, from how they write to the student.
-- effort 0..2: 0 a one-liner, 1 a normal reply, 2 a long, thoughtful reply.
-- cues: any of ${RAPPORT_CUES.join(", ")} that apply.`;
-
-// packages/core/src/scoring/tieScore.ts
-var TIE_MODEL_VERSION = "tie-v2";
-var DAY9 = 864e5;
-var YEAR_DAYS = 365;
-var TIE_FEATURES = [
-  "log_days_last",
-  "log_days_first",
-  "log_out",
-  "log_in",
-  "reciprocity",
-  "log_meetings",
-  "log_threads",
-  "latency",
-  "intros",
-  "shared",
-  "structural",
-  "linkedin",
-  "warmth",
-  "never",
-  "engagement",
-  "rapport"
-];
-var TIE_WEIGHTS = {
-  bias: -2.33,
-  log_days_last: -0.28,
-  log_days_first: 0.2,
-  log_out: 0.1,
-  log_in: 0.22,
-  reciprocity: 1.02,
-  log_meetings: 0.6,
-  log_threads: 0,
-  latency: 1.56,
-  intros: 0.5,
-  shared: 0.66,
-  structural: 0.8,
-  linkedin: 0.84,
-  warmth: 0.5,
-  never: -0.1,
-  engagement: 0.5,
-  rapport: 0.6
-};
-var TIE_BASELINE = {
-  log_days_last: 5.27,
-  log_days_first: 5.52,
-  log_out: 0.31,
-  log_in: 0.25,
-  reciprocity: 0.18,
-  log_meetings: 0.12,
-  log_threads: 0.16,
-  latency: 0.03,
-  intros: 0,
-  shared: 0.4,
-  structural: 0,
-  linkedin: 0.88,
-  warmth: 0,
-  never: 0.74,
-  // the demo network had no post engagement when the baseline was taken
-  engagement: 0,
-  // no replies is neutral: silence never lowers a tie
-  rapport: 0
-};
-var RAPPORT_MAX_POINTS = 8;
-var RAPPORT_PRIOR = 3;
-var RAPPORT_STOP_WEIGHT = 4;
-var UNRECIPROCATED_SCORE_CAP = 20;
-var TIE_BAND_LABELS = {
-  faint: "Faint",
-  light: "Light",
-  warm: "Warm",
-  strong: "Strong",
-  close: "Close"
-};
-var TIE_LABEL_MIDPOINTS = { 1: 10, 2: 30, 3: 50, 4: 70, 5: 90 };
-function tieBand(score) {
-  if (score >= 80) return "close";
-  if (score >= 60) return "strong";
-  if (score >= 40) return "warm";
-  if (score >= 20) return "light";
-  return "faint";
-}
-var sigmoid = (x) => 1 / (1 + Math.exp(-x));
-function ms(iso4) {
-  if (!iso4) return void 0;
-  const t = new Date(iso4).getTime();
-  return Number.isNaN(t) ? void 0 : t;
-}
-function median(xs) {
-  if (!xs.length) return void 0;
-  const s = [...xs].sort((a, b) => a - b);
-  const mid = s.length >> 1;
-  return s.length % 2 ? s[mid] : (s[mid - 1] + s[mid]) / 2;
-}
-function meetingWeight(attendees) {
-  if (attendees <= 4) return 1;
-  if (attendees <= 8) return 0.3;
-  return 0;
-}
-var ENGAGEMENT_WEIGHT = {
-  comment_in: 1,
-  comment_out: 1,
-  reaction_in: 0.3
-};
-var ENGAGEMENT_SATURATION = 8;
-function computeTieFeatures(h, now = /* @__PURE__ */ new Date()) {
-  const t = now.getTime();
-  const when3 = (iso4) => {
-    const x = ms(iso4);
-    if (x === void 0 || x > t + DAY9) return void 0;
-    return Math.min(x, t);
-  };
-  const messages = h.messages.filter((m) => !m.automated && m.threadParticipants <= 8).map((m) => ({ ...m, t: when3(m.at) })).filter((m) => m.t !== void 0);
-  const meetings = h.meetings.filter((m) => m.attendees <= 8).map((m) => ({ ...m, t: when3(m.at) })).filter((m) => m.t !== void 0);
-  const connectedAt = h.linkedinConnected && h.connectedAt ? when3(h.connectedAt) : void 0;
-  const directions = /* @__PURE__ */ new Map();
-  for (const m of messages) {
-    const s = directions.get(m.threadId) ?? /* @__PURE__ */ new Set();
-    s.add(m.direction);
-    directions.set(m.threadId, s);
-  }
-  const twoWay = (threadId) => (directions.get(threadId)?.size ?? 0) === 2;
-  let lastTwoWay;
-  let lastAny;
-  let firstAny;
-  const seen = (x) => {
-    if (lastAny === void 0 || x > lastAny) lastAny = x;
-    if (firstAny === void 0 || x < firstAny) firstAny = x;
-  };
-  for (const m of messages) {
-    seen(m.t);
-    if (twoWay(m.threadId) && (lastTwoWay === void 0 || m.t > lastTwoWay)) lastTwoWay = m.t;
-  }
-  for (const m of meetings) {
-    seen(m.t);
-    if (lastTwoWay === void 0 || m.t > lastTwoWay) lastTwoWay = m.t;
-  }
-  if (connectedAt !== void 0) seen(connectedAt);
-  const never = messages.length === 0 && meetings.length === 0;
-  const lastRef = lastTwoWay ?? lastAny;
-  const daysLast = lastRef === void 0 ? void 0 : (t - lastRef) / DAY9;
-  const daysFirst = firstAny === void 0 ? void 0 : (t - firstAny) / DAY9;
-  const decay = (x) => 0.5 ** ((t - x) / DAY9 / YEAR_DAYS);
-  let outD = 0;
-  let inD = 0;
-  let outCount = 0;
-  let inCount = 0;
-  for (const m of messages) {
-    if (m.direction === "out") {
-      outD += decay(m.t);
-      outCount++;
-    } else {
-      inD += decay(m.t);
-      inCount++;
-    }
-  }
-  for (const m of meetings) {
-    const w = meetingWeight(m.attendees) * decay(m.t);
-    outD += w;
-    inD += w;
-  }
-  const reciprocity = inD > 0 && outD > 0 ? Math.min(1, inD / outD) : 0;
-  let meetingSum = 0;
-  let meetingCount = 0;
-  for (const m of meetings) {
-    if (t - m.t > 2 * YEAR_DAYS * DAY9) continue;
-    meetingSum += meetingWeight(m.attendees);
-    meetingCount++;
-  }
-  const smallTwoWay = /* @__PURE__ */ new Set();
-  for (const m of messages) if (m.threadParticipants <= 3 && twoWay(m.threadId)) smallTwoWay.add(m.threadId);
-  const latencies = messages.filter((m) => m.direction === "in" && m.isReplyLatencyHours !== void 0 && m.isReplyLatencyHours >= 0).map((m) => m.isReplyLatencyHours);
-  const med = median(latencies);
-  const latency = med === void 0 ? 0 : 1 - Math.min(1, Math.log(1 + med) / Math.log(169));
-  const sh = h.shared;
-  const shared = Math.min(
-    2,
-    (sh.sameSchool ? 1 : 0) + (sh.overlappingEmployer ? 1 : 0) + (sh.sameCity ? 0.5 : 0)
-  );
-  const top = h.mutualScores.map((s, i) => ({ s: Math.max(0, Math.min(100, s)), name: h.mutualNames?.[i] })).sort((a, b) => b.s - a.s).slice(0, 5);
-  const structural = top.length ? top.reduce((a, b) => a + b.s, 0) / top.length / 100 : 0;
-  const warmthVals = h.noteWarmth.filter((w) => Number.isFinite(w)).map((w) => Math.max(-1, Math.min(1, w)));
-  const warmth = warmthVals.length ? warmthVals.reduce((a, b) => a + b, 0) / warmthVals.length : 0;
-  let engaged = 0;
-  let commentsIn = 0;
-  let commentsOut = 0;
-  let reactionsIn = 0;
-  for (const e of h.engagement ?? []) {
-    const x = when3(e.at);
-    if (x === void 0) continue;
-    engaged += ENGAGEMENT_WEIGHT[e.kind] * decay(x);
-    if (e.kind === "comment_in") commentsIn++;
-    else if (e.kind === "comment_out") commentsOut++;
-    else reactionsIn++;
-  }
-  const engagement = Math.min(1, Math.log(1 + engaged) / Math.log(1 + ENGAGEMENT_SATURATION));
-  let rapportNum = 0;
-  let rapportDen = 0;
-  let rapportReadings = 0;
-  let askedToStop = false;
-  const cueCounts = /* @__PURE__ */ new Map();
-  for (const r of h.rapport ?? []) {
-    const x = when3(r.at);
-    const score = r.reading?.score;
-    if (x === void 0 || typeof score !== "number" || !Number.isFinite(score)) continue;
-    const stop = r.reading.cues.includes("asked_to_stop");
-    if (stop) askedToStop = true;
-    const w = Math.max(0, Math.min(1, r.reading.confidence ?? 0.6)) * decay(x) * (stop ? RAPPORT_STOP_WEIGHT : 1);
-    rapportNum += w * Math.max(-1, Math.min(1, score));
-    rapportDen += w;
-    rapportReadings++;
-    for (const c of r.reading.cues) cueCounts.set(c, (cueCounts.get(c) ?? 0) + 1);
-  }
-  const rapport = rapportReadings ? rapportNum / (RAPPORT_PRIOR + rapportDen) : 0;
-  const rapportCues = [...cueCounts.entries()].sort((a, b) => b[1] - a[1]).map(([c]) => c);
-  const features = {
-    log_days_last: daysLast === void 0 ? 0 : Math.log(1 + daysLast),
-    log_days_first: daysFirst === void 0 ? 0 : Math.log(1 + daysFirst),
-    log_out: Math.log(1 + outD),
-    log_in: Math.log(1 + inD),
-    reciprocity,
-    log_meetings: Math.log(1 + meetingSum),
-    log_threads: Math.log(1 + smallTwoWay.size),
-    latency,
-    intros: Math.min(2, Math.max(0, h.intros)),
-    shared,
-    structural,
-    linkedin: h.linkedinConnected ? 1 : 0,
-    warmth,
-    never: never ? 1 : 0,
-    engagement,
-    rapport
-  };
-  const facts = {
-    name: h.name,
-    daysLast,
-    lastWasTwoWay: lastTwoWay !== void 0,
-    daysFirst,
-    inCount,
-    outCount,
-    meetings: meetingCount,
-    twoWayThreads: smallTwoWay.size,
-    medianLatencyHours: med,
-    intros: features.intros,
-    introRole: h.introRole,
-    shared: sh,
-    mutualNames: top.filter((x) => x.name && x.s > 0).map((x) => x.name),
-    linkedin: h.linkedinConnected,
-    never,
-    warmth,
-    commentsIn,
-    commentsOut,
-    reactionsIn,
-    rapport,
-    rapportReadings,
-    rapportCues,
-    askedToStop
-  };
-  return { features, facts };
-}
-function linearTie(features, weights = TIE_WEIGHTS) {
-  let z7 = weights.bias;
-  for (const k of TIE_FEATURES) z7 += weights[k] * features[k];
-  return z7;
-}
-function scoreFromZ(z7, calibration) {
-  const zz = calibration ? calibration.a * z7 + calibration.c : z7;
-  return Math.round(100 * sigmoid(zz));
-}
-function scoreTie(history, now = /* @__PURE__ */ new Date(), weights = TIE_WEIGHTS, calibration) {
-  const { features, facts } = computeTieFeatures(history, now);
-  const z7 = linearTie(features, weights);
-  let score = scoreFromZ(z7, calibration);
-  if (features.rapport !== 0) {
-    const without = scoreFromZ(z7 - weights.rapport * features.rapport, calibration);
-    score = Math.max(without - RAPPORT_MAX_POINTS, Math.min(without + RAPPORT_MAX_POINTS, score));
-  }
-  let capped = false;
-  if (facts.inCount === 0 && facts.outCount > 0 && facts.meetings === 0 && !anyMeeting(history, now) && !history.intros) {
-    if (score > UNRECIPROCATED_SCORE_CAP) {
-      score = UNRECIPROCATED_SCORE_CAP;
-      capped = true;
-    }
-  }
-  let labelled = false;
-  const label = history.label;
-  if (label && TIE_LABEL_MIDPOINTS[label.closeness] !== void 0) {
-    const at = ms(label.at) ?? 0;
-    const newer = history.messages.some((m) => !m.automated && (ms(m.at) ?? 0) > at) || history.meetings.some((m) => (ms(m.at) ?? 0) > at);
-    if (!newer) {
-      score = TIE_LABEL_MIDPOINTS[label.closeness];
-      labelled = true;
-    }
-  }
-  const { contributions, explanation } = explainTie(features, facts, weights);
-  return {
-    score,
-    band: tieBand(score),
-    z: z7,
-    features,
-    contributions,
-    explanation,
-    modelVersion: TIE_MODEL_VERSION,
-    capped,
-    labelled,
-    facts
-  };
-}
-function anyMeeting(h, now) {
-  const t = now.getTime() + DAY9;
-  return h.meetings.some((m) => m.attendees <= 8 && (ms(m.at) ?? Number.POSITIVE_INFINITY) <= t);
-}
-var SHARE_MASKED_FEATURES = [
-  "log_days_last",
-  "log_days_first",
-  "log_out",
-  "log_in",
-  "reciprocity",
-  "log_meetings",
-  "log_threads",
-  "latency",
-  "intros",
-  "structural",
-  "never",
-  "rapport"
-];
-function shareFeatures(features) {
-  const out = { ...features };
-  for (const k of SHARE_MASKED_FEATURES) out[k] = 0;
-  return out;
-}
-function shareScore(history, now = /* @__PURE__ */ new Date(), weights = TIE_WEIGHTS, calibration) {
-  const { features } = computeTieFeatures(history, now);
-  const score = scoreFromZ(linearTie(shareFeatures(features), weights), calibration);
-  const label = history.label;
-  if (label && TIE_LABEL_MIDPOINTS[label.closeness] !== void 0)
-    return TIE_LABEL_MIDPOINTS[label.closeness];
-  return score;
-}
-function shareCloseness(score) {
-  if (score >= 60) return 3;
-  if (score >= 40) return 2;
-  return 1;
-}
-var plural = (n, one, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
-function ago(days) {
-  if (days < 1.5) return "a day";
-  if (days < 45) return `${Math.round(days)} days`;
-  const months = Math.round(days / 30.4);
-  if (months < 18) return plural(months, "month");
-  return plural(Math.round(days / 365), "year");
-}
-function explainTie(features, facts, weights = TIE_WEIGHTS) {
-  const c = {};
-  for (const k of TIE_FEATURES) c[k] = weights[k] * (features[k] - TIE_BASELINE[k]);
-  const name = facts.name || "They";
-  const topics = [];
-  const total = facts.inCount + facts.outCount;
-  if (facts.daysLast !== void 0 && !facts.never)
-    topics.push({
-      value: c.log_days_last,
-      negative: facts.lastWasTwoWay ? `Last real exchange was ${ago(facts.daysLast)} ago` : `No real back-and-forth yet; last contact ${ago(facts.daysLast)} ago`
-    });
-  if (facts.daysFirst !== void 0 && facts.daysFirst >= 60 && !facts.never)
-    topics.push({ value: c.log_days_first, positive: `You've been in touch for ${ago(facts.daysFirst)}` });
-  if (total > 0) {
-    const oneWay = facts.outCount > 0 && facts.inCount * 2 < facts.outCount;
-    topics.push({
-      value: c.log_out + c.log_in + c.reciprocity + c.log_threads,
-      positive: facts.inCount > 0 ? `${plural(total, "message")} between you (${facts.inCount} from them)` : void 0,
-      negative: oneWay ? `Mostly one-way: ${facts.outCount} sent, ${facts.inCount} back` : void 0
-    });
-  }
-  if (facts.meetings > 0)
-    topics.push({
-      value: c.log_meetings,
-      positive: `${plural(facts.meetings, "meeting")} in the last 2 years`
-    });
-  if (facts.intros > 0)
-    topics.push({
-      value: c.intros,
-      positive: facts.introRole === "you_introduced_them" ? "You introduced them to someone" : facts.introRole === "introduced_to_you" ? "Someone you know introduced you" : `${name} introduced you to someone`
-    });
-  const sh = facts.shared;
-  if (sh.overlappingEmployer || sh.sameSchool || sh.sameCity)
-    topics.push({
-      value: c.shared,
-      positive: sh.overlappingEmployer ? `You overlapped at ${sh.employer ?? "the same company"}${sh.overlapYears ? ` (${sh.overlapYears})` : ""}` : sh.sameSchool ? `You both went to ${sh.school ?? "the same school"}` : `You both live in ${sh.city ?? "the same city"}`
-    });
-  if (facts.mutualNames.length)
-    topics.push({
-      value: c.structural,
-      positive: `Close with people you're close to (${facts.mutualNames.slice(0, 3).join(", ")})`
-    });
-  if (facts.linkedin && facts.never)
-    topics.push({
-      value: Math.min(c.linkedin + c.never, -1e-6),
-      negative: "Connected on LinkedIn, never talked",
-      negativeOnly: true
-    });
-  else if (facts.linkedin) topics.push({ value: c.linkedin, positive: "Connected on LinkedIn" });
-  else if (facts.never) topics.push({ value: c.never, negative: "You haven't talked yet" });
-  if (facts.medianLatencyHours !== void 0) {
-    const h = facts.medianLatencyHours;
-    topics.push({
-      value: c.latency,
-      positive: h <= 48 ? Math.round(h) <= 1 ? "Usually replies within the hour" : `Usually replies within ${Math.round(h)} hours` : void 0,
-      negative: h > 48 ? `Takes about ${Math.round(h / 24)} days to reply` : void 0
-    });
-  }
-  if (facts.commentsIn + facts.commentsOut + facts.reactionsIn > 0)
-    topics.push({
-      value: c.engagement,
-      positive: facts.commentsIn && facts.commentsOut ? "You comment on each other's LinkedIn posts" : facts.commentsIn ? `${plural(facts.commentsIn, "comment")} on your LinkedIn posts` : facts.commentsOut ? "You comment on their LinkedIn posts" : facts.reactionsIn === 1 ? "Reacted to one of your LinkedIn posts" : `Reacted to ${facts.reactionsIn} of your LinkedIn posts`
-    });
-  if (facts.rapportReadings > 0 && facts.rapport !== 0)
-    topics.push({
-      value: c.rapport,
-      positive: facts.rapport > 0 ? rapportSentence(facts.rapportCues) : void 0,
-      negative: facts.askedToStop ? "They asked you not to contact them" : facts.rapport < 0 ? "Their replies sound distant" : void 0
-    });
-  if (facts.warmth !== 0)
-    topics.push({
-      value: c.warmth,
-      positive: facts.warmth > 0 ? "Your notes about them are warm" : void 0,
-      negative: facts.warmth < 0 ? "Your notes about them sound cool" : void 0
-    });
-  const positives = topics.filter((x) => !x.negativeOnly && x.positive && x.value > 0).sort((a, b) => b.value - a.value).slice(0, 3).map((x) => x.positive);
-  const negative = topics.filter((x) => x.negative && (x.value < 0 || x.negativeOnly)).sort((a, b) => a.value - b.value)[0]?.negative;
-  const explanation = [...positives, ...negative ? [negative] : []];
-  if (!explanation.length)
-    explanation.push(facts.never ? "You haven't been in touch yet" : "A light history so far");
-  return { contributions: c, explanation };
-}
-var CUE_PHRASES = {
-  asks_about_you: "ask how you're doing",
-  offers_help: "offer to help",
-  plans_together: "suggest meeting up",
-  personal_news: "share their own news",
-  congratulates: "congratulate you",
-  glad_to_hear: "sound glad to hear from you",
-  thoughtful: "write thoughtful replies"
-};
-function rapportSentence(cues) {
-  const phrases = cues.map((c) => CUE_PHRASES[c]).filter((p) => !!p).slice(0, 2);
-  if (!phrases.length) return "Their replies are warm";
-  return `Their replies are warm: they ${phrases.join(" and ")}`;
-}
-var CALIBRATION_MIN_LABELS = 8;
-var CALIBRATION_STEPS = 200;
-var CALIBRATION_RIDGE = 0.1;
-function fitCalibration(labels) {
-  const pts = labels.filter((l) => Number.isFinite(l.z) && l.closeness >= 1 && l.closeness <= 5);
-  if (pts.length < CALIBRATION_MIN_LABELS) return void 0;
-  const curvature = 2 * CALIBRATION_RIDGE + pts.reduce((s, p) => s + 0.32 * (p.z * p.z + 1), 0);
-  const lr = 1 / curvature;
-  let a = 1;
-  let c = 0;
-  for (let step = 0; step < CALIBRATION_STEPS; step++) {
-    let ga = 2 * CALIBRATION_RIDGE * (a - 1);
-    let gc = 2 * CALIBRATION_RIDGE * c;
-    for (const p of pts) {
-      const s = sigmoid(a * p.z + c);
-      const y = (p.closeness - 1) / 4;
-      const g = 2 * (s - y) * s * (1 - s);
-      ga += g * p.z;
-      gc += g;
-    }
-    a -= lr * ga;
-    c -= lr * gc;
-  }
-  return { a, c };
-}
-var yearOf3 = (iso4) => iso4 ? Number(iso4.slice(0, 4)) || void 0 : void 0;
-function sharedContext(input) {
-  const { person, user } = input;
-  const school = user?.school ? normalizeCompany(user.school) : "";
-  const schools = [
-    person.school,
-    ...(input.affiliations ?? []).filter((a) => a.kind === "education").map((a) => a.nameRaw)
-  ].filter((s) => !!s).map((s) => ({ raw: s, norm: normalizeCompany(s) }));
-  const schoolHit = school ? schools.find((s) => s.norm === school) : void 0;
-  const sameSchool = !!person.isAlumni || !!schoolHit;
-  let employer;
-  let overlapYears;
-  for (const u2 of input.userEmployers ?? []) {
-    const norm2 = normalizeCompany(u2.name);
-    if (!norm2) continue;
-    for (const a of input.affiliations ?? []) {
-      if (a.kind !== "employment" || normalizeCompany(a.nameRaw) !== norm2) continue;
-      const us = ms(u2.startDate) ?? Number.NEGATIVE_INFINITY;
-      const ue = ms(u2.endDate) ?? Number.POSITIVE_INFINITY;
-      const as = ms(a.startDate) ?? Number.NEGATIVE_INFINITY;
-      const ae = a.isCurrent ? Number.POSITIVE_INFINITY : ms(a.endDate) ?? Number.POSITIVE_INFINITY;
-      if (Math.max(us, as) > Math.min(ue, ae)) continue;
-      employer = a.nameRaw;
-      const from = Math.max(yearOf3(u2.startDate) ?? 0, yearOf3(a.startDate) ?? 0) || void 0;
-      const to = Math.min(yearOf3(u2.endDate) ?? 9999, a.isCurrent ? 9999 : yearOf3(a.endDate) ?? 9999);
-      overlapYears = from ? to === 9999 ? `since ${from}` : to === from ? `${from}` : `${from}–${to}` : void 0;
-      break;
-    }
-    if (employer) break;
-  }
-  const city = (s) => (s ?? "").toLowerCase().split(",")[0].trim();
-  const sameCity = !!user?.currentCity && !!person.location && city(user.currentCity) === city(person.location);
-  return {
-    sameSchool,
-    overlappingEmployer: !!employer,
-    sameCity,
-    school: schoolHit?.raw ?? (sameSchool ? person.school ?? user?.school : void 0),
-    employer,
-    overlapYears,
-    city: sameCity ? person.location.split(",")[0].trim() : void 0
-  };
-}
-function gatherRapport(rows) {
-  const out = [];
-  for (const r of rows) {
-    if (!r.inbound || r.automated || r.participants > 3) continue;
-    if (r.fromEmail && isAtsSender(r.fromEmail)) continue;
-    const reading = asRapportReading(r.reading);
-    if (reading) out.push({ at: r.at, reading, channel: r.channel });
-  }
-  return out;
-}
-function warmthValue(w) {
-  return w === "warm" ? 1 : w === "cool" ? -1 : 0;
-}
-
-// packages/core/src/graph/paths.ts
-function makeGraph() {
-  return { nodes: /* @__PURE__ */ new Set(), adj: /* @__PURE__ */ new Map() };
-}
-function addEdge(g, a, b, weight, type, text2, directed = false) {
-  if (weight <= 0) return;
-  g.nodes.add(a);
-  g.nodes.add(b);
-  const set = (x, y) => {
-    const m = g.adj.get(x) ?? /* @__PURE__ */ new Map();
-    const cur = m.get(y);
-    if (!cur || cur.weight < weight) m.set(y, { weight, type, text: text2 });
-    g.adj.set(x, m);
-  };
-  set(a, b);
-  if (!directed) set(b, a);
-}
-function edgeCost(weight) {
-  return -Math.log(Math.min(weight, 0.999999));
-}
-var MinHeap = class {
-  keys = [];
-  vals = [];
-  get size() {
-    return this.keys.length;
-  }
-  push(key2, val) {
-    const k = this.keys;
-    const v = this.vals;
-    let i = k.length;
-    k.push(key2);
-    v.push(val);
-    while (i > 0) {
-      const parent = i - 1 >> 1;
-      if (k[parent] <= key2) break;
-      k[i] = k[parent];
-      v[i] = v[parent];
-      i = parent;
-    }
-    k[i] = key2;
-    v[i] = val;
-  }
-  pop() {
-    const k = this.keys;
-    const v = this.vals;
-    if (!k.length) return void 0;
-    const topK = k[0];
-    const topV = v[0];
-    const lastK = k.pop();
-    const lastV = v.pop();
-    const n = k.length;
-    if (n) {
-      let i = 0;
-      while (true) {
-        const l = 2 * i + 1;
-        if (l >= n) break;
-        const r = l + 1;
-        const c = r < n && k[r] < k[l] ? r : l;
-        if (k[c] >= lastK) break;
-        k[i] = k[c];
-        v[i] = v[c];
-        i = c;
-      }
-      k[i] = lastK;
-      v[i] = lastV;
-    }
-    return [topK, topV];
-  }
-};
-function boundedSearch(g, source, maxHops, target, removedEdges, removedNodes) {
-  const dist = /* @__PURE__ */ new Map();
-  const prev = /* @__PURE__ */ new Map();
-  const minSettledHops = /* @__PURE__ */ new Map();
-  const best = /* @__PURE__ */ new Map();
-  const heap = new MinHeap();
-  const setDist = (node, hops, d, from) => {
-    let arr = dist.get(node);
-    if (!arr) {
-      arr = new Array(maxHops + 1).fill(Number.POSITIVE_INFINITY);
-      dist.set(node, arr);
-      prev.set(node, new Array(maxHops + 1));
-    }
-    arr[hops] = d;
-    prev.get(node)[hops] = from;
-  };
-  setDist(source, 0, 0, void 0);
-  heap.push(0, { node: source, hops: 0 });
-  while (heap.size) {
-    const [d, { node, hops }] = heap.pop();
-    if (d > dist.get(node)[hops]) continue;
-    const settled = minSettledHops.get(node);
-    if (settled !== void 0 && settled <= hops) continue;
-    minSettledHops.set(node, hops);
-    if (!best.has(node)) best.set(node, { cost: d, hops });
-    if (node === target) break;
-    if (hops >= maxHops) continue;
-    for (const [v, e] of g.adj.get(node) ?? []) {
-      if (v === source || removedNodes?.has(v) || removedEdges?.has(`${node}>${v}`)) continue;
-      const s = minSettledHops.get(v);
-      if (s !== void 0 && s <= hops + 1) continue;
-      const nd = d + edgeCost(e.weight);
-      const cur = dist.get(v)?.[hops + 1] ?? Number.POSITIVE_INFINITY;
-      if (nd < cur) {
-        setDist(v, hops + 1, nd, node);
-        heap.push(nd, { node: v, hops: hops + 1 });
-      }
-    }
-  }
-  return { best, prev };
-}
-function reconstruct(search, node) {
-  const b = search.best.get(node);
-  if (!b) return void 0;
-  const path = [node];
-  let cur = node;
-  for (let h = b.hops; h > 0; h--) {
-    cur = search.prev.get(cur)[h];
-    path.unshift(cur);
-  }
-  return path;
-}
-function shortestPath(g, source, target, maxHops, removedEdges, removedNodes) {
-  if (source === target) return [source];
-  const search = boundedSearch(g, source, maxHops, target, removedEdges, removedNodes);
-  return reconstruct(search, target);
-}
-function pathCost(g, path) {
-  let c = 0;
-  for (let i = 0; i < path.length - 1; i++) c += edgeCost(g.adj.get(path[i]).get(path[i + 1]).weight);
-  return c;
-}
-function kShortestPaths(g, source, target, k = 3, maxHops = 3) {
-  if (!g.nodes.has(source) || !g.nodes.has(target)) return source === target ? [[source]] : [];
-  const first = shortestPath(g, source, target, maxHops, /* @__PURE__ */ new Set(), /* @__PURE__ */ new Set());
-  if (!first) return [];
-  const A = [first];
-  if (first.length === 1) return A;
-  const B = [];
-  const seen = /* @__PURE__ */ new Set([first.join(">")]);
-  for (let kk = 1; kk < k; kk++) {
-    const last = A[kk - 1];
-    for (let i = 0; i < last.length - 1; i++) {
-      const spur = last[i];
-      const root = last.slice(0, i + 1);
-      const removedEdges = /* @__PURE__ */ new Set();
-      const removedNodes = /* @__PURE__ */ new Set();
-      for (const p of A) {
-        if (p.length > i + 1 && root.every((n, idx) => p[idx] === n)) removedEdges.add(`${p[i]}>${p[i + 1]}`);
-      }
-      for (const n of root) if (n !== spur) removedNodes.add(n);
-      const spurPath = shortestPath(g, spur, target, maxHops - i, removedEdges, removedNodes);
-      if (!spurPath) continue;
-      const total = [...root.slice(0, -1), ...spurPath];
-      const key2 = total.join(">");
-      if (seen.has(key2)) continue;
-      seen.add(key2);
-      B.push({ cost: pathCost(g, total), path: total, key: key2 });
-    }
-    if (!B.length) break;
-    B.sort((a, b) => a.cost - b.cost);
-    A.push(B.shift().path);
-  }
-  return A;
-}
-
-// packages/core/src/graph/route.ts
-var USER_NODE = "user";
-var sigmoid2 = (x) => 1 / (1 + Math.exp(-x));
-var DAY10 = 864e5;
-function pAsk(f) {
-  return sigmoid2(
-    -2 + 4 * Math.max(0, Math.min(100, f.score)) / 100 + 0.8 * Math.max(0, Math.min(1, f.reciprocity ?? 0)) + (f.introducedUserBefore ? 0.6 : 0) + (f.sharesGoalTargetOrg ? 0.3 : 0) - (f.askedRecently ? 0.7 : 0) - (f.owesReply ? 0.5 : 0)
-  );
-}
-function pKnow(pair) {
-  return Math.max(0, Math.min(1, pair.weight));
-}
-function targetReceptivity(t) {
-  const level = seniorityClass(t.title);
-  const cLevel = level === 2;
-  const atMostManager = level === 0;
-  const r = 1 + (t.isAlum ? 0.15 : 0) + (atMostManager ? 0.1 : 0) - (cLevel ? 0.15 : 0);
-  return Math.max(0.7, Math.min(1.3, r));
-}
-function firstHopFloor(goal) {
-  if (goal === "fundraising") return 40;
-  if (goal === "recruiting" || goal === "advice") return 20;
-  return 0;
-}
-var HOP_PENALTY = 0.85;
-var OLD_EVIDENCE_YEARS = 3;
-var OLD_EVIDENCE_FACTOR = 0.7;
-var DIRECT_TIE_SCORE = 40;
-var MIN_PATH_P = 0.05;
-var MUTUAL_MIN_SCORE = 12;
-function hopBand(p) {
-  if (p >= 0.65) return "close";
-  if (p >= 0.5) return "know";
-  if (p >= 0.2) return "connected";
-  return "unclear";
-}
-function pathBand(p) {
-  if (p >= 0.35) return "high";
-  if (p >= 0.15) return "medium";
-  return "low";
-}
-var pk = (a, b) => a < b ? `${a}|${b}` : `${b}|${a}`;
-var pairKeyOf = pk;
-function dropBlocked(pairs, blocked) {
-  if (!blocked?.size) return pairs;
-  const out = new Map(pairs);
-  for (const k of blocked) out.delete(k);
-  return out;
-}
-function withExternal(pairs, targetId, candidates) {
-  if (!candidates.length) return pairs;
-  const out = new Map(pairs);
-  for (const c of candidates) {
-    if (c.introducerId === targetId) continue;
-    const key2 = pk(c.introducerId, targetId);
-    const [a, b] = key2.split("|");
-    const w = c.kind === "linkedin_mutual" ? HOP_WEIGHTS.mutual : Math.max(0, Math.min(1, c.warmth ?? 0));
-    const conf = c.kind === "linkedin_mutual" ? 0.95 : c.kind === "friend_path" ? 1 : 0.7;
-    const tie = {
-      id: `${key2}|${c.kind}`,
-      userId: "",
-      aId: a,
-      bId: b,
-      kind: c.kind === "friend_path" ? "student_says_close" : c.kind,
-      weight: w,
-      confidence: conf,
-      evidence: {
-        source: c.kind === "linkedin_mutual" ? "unipile" : c.kind === "friend_path" ? "friend" : "village"
-      },
-      lastSeenAt: c.seenAt
-    };
-    const cur = out.get(key2);
-    if (cur?.kinds.includes(tie.kind)) continue;
-    out.set(key2, {
-      aId: a,
-      bId: b,
-      weight: 1 - (1 - (cur?.weight ?? 0)) * (1 - w * conf),
-      confidence: 1 - (1 - (cur?.confidence ?? 0)) * (1 - conf),
-      kinds: [...cur?.kinds ?? [], tie.kind],
-      ties: [...cur?.ties ?? [], tie],
-      lastSeenAt: cur?.lastSeenAt
-    });
-  }
-  return out;
-}
-function usable2(p, now) {
-  if (!p || p.hidden) return false;
-  if (p.declinedIntroAt) {
-    const t = new Date(p.declinedIntroAt).getTime();
-    if (!Number.isNaN(t) && now.getTime() - t < 90 * DAY10) return false;
-  }
-  return true;
-}
-var strength = (t, now) => decayedTieWeight(t, now) * t.confidence;
-function strongestTie(pair, now) {
-  const sorted = [...pair.ties].sort((x, y) => strength(y, now) - strength(x, now));
-  return sorted.find((t) => !SUPPORT_ONLY_TIE_KINDS.has(t.kind)) ?? sorted[0];
-}
-function strongestSupport(pair, now) {
-  return [...pair.ties].filter((t) => SUPPORT_ONLY_TIE_KINDS.has(t.kind)).sort((x, y) => strength(y, now) - strength(x, now))[0];
-}
-function pairIsOld(pair, now) {
-  const cutoff = now.getTime() - OLD_EVIDENCE_YEARS * 365.25 * DAY10;
-  let newest = pair.lastSeenAt ? new Date(pair.lastSeenAt).getTime() : Number.NaN;
-  for (const t of pair.ties) {
-    const ev = t.evidence;
-    if (ev.ongoing || Array.isArray(ev.current) && ev.current.length === 2) return false;
-    if (typeof ev.toYear === "number") {
-      const end = Date.UTC(ev.toYear, 11, 31);
-      newest = Number.isNaN(newest) ? end : Math.max(newest, end);
-    }
-  }
-  return !Number.isNaN(newest) && newest < cutoff;
-}
-var MONTHS2 = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
-function monthYear(iso4) {
-  if (typeof iso4 !== "string") return void 0;
-  const d = new Date(iso4);
-  return Number.isNaN(d.getTime()) ? void 0 : `${MONTHS2[d.getUTCMonth()]} ${d.getUTCFullYear()}`;
-}
-function hopEvidence(fromId, tie, toName) {
-  if (!tie) return `knows ${toName}`;
-  const ev = tie.evidence;
-  const org = typeof ev.orgName === "string" ? ev.orgName : void 0;
-  switch (tie.kind) {
-    case "email_exchange":
-      return `emails with ${toName}`;
-    case "email_cc":
-      return `is on email with ${toName}`;
-    case "email_cothread":
-      return `was on an email thread with ${toName}`;
-    case "meeting_coattendee": {
-      const when3 = monthYear(ev.lastAt ?? tie.lastSeenAt);
-      return `met ${toName}${when3 ? ` (${when3})` : ""}`;
-    }
-    case "introduced_by":
-      return ev.introducerId === fromId ? `introduced you to ${toName}` : `was introduced to you by ${toName}`;
-    case "linkedin_mutual":
-      return `is connected to ${toName} on LinkedIn`;
-    case "village_path":
-      return `knows ${toName} (via Village)`;
-    case "co_tenure": {
-      if (ev.apart) return `also worked at ${org ?? "the same company"}, not at the same time as ${toName}`;
-      const from = typeof ev.fromYear === "number" ? ev.fromYear : void 0;
-      const to = typeof ev.toYear === "number" ? ev.toYear : void 0;
-      const years = from === void 0 ? "" : ev.ongoing ? ` (since ${from})` : to && to !== from ? ` (${from} to ${to})` : ` (${from})`;
-      return `worked with ${toName}${org ? ` at ${org}` : ""}${years}`;
-    }
-    case "same_school_cohort":
-      return `went to ${typeof ev.school === "string" ? ev.school : "school"} with ${toName}`;
-    case "same_current_company":
-      return `works with ${toName}${org ? ` at ${org}` : ""}`;
-    case "linkedin_recommendation":
-      return ev.authorId === fromId ? `recommended ${toName} on LinkedIn` : `was recommended on LinkedIn by ${toName}`;
-    case "linkedin_mention":
-      return ev.authorId === fromId ? `mentioned ${toName} in a LinkedIn post` : `was mentioned by ${toName} in a LinkedIn post`;
-    case "student_says_close":
-      return `is close to ${toName} (you said)`;
-    case "common_contacts": {
-      const n = typeof ev.n === "number" ? ev.n : 0;
-      return n === 1 ? `has a contact in common with ${toName}` : `has ${n} contacts in common with ${toName}`;
-    }
-    case "linkedin_engagement":
-      return engagementPhrase(fromId, ev, toName);
-    default:
-      return `knows ${toName}`;
-  }
-}
-var times = (n, one, many) => n === 1 ? one : many.replace("{n}", String(n));
-function engagementPhrase(fromId, ev, toName) {
-  const counts = ev.counts ?? {};
-  const mine = counts[fromId] ?? {};
-  const theirs = Object.entries(counts).find(([id]) => id !== fromId)?.[1] ?? {};
-  if (ev.reciprocal) return `trades comments with ${toName} on LinkedIn`;
-  if (theirs.replies)
-    return `has had ${times(theirs.replies, "a reply", "{n} replies")} from ${toName} on LinkedIn`;
-  if (mine.comments)
-    return `has left ${times(mine.comments, "a comment", "{n} comments")} on ${toName}’s posts`;
-  if (mine.replies) return `has replied to ${toName}’s ${times(mine.replies, "comment", "comments")}`;
-  if (theirs.comments)
-    return `has had ${times(theirs.comments, "a comment", "{n} comments")} from ${toName} on their posts`;
-  if (mine.reposts) return `has reposted ${toName}`;
-  if (theirs.reposts) return `has been reposted by ${toName}`;
-  if (mine.reactions) return `has reacted to ${times(mine.reactions, "a post", "{n} posts")} by ${toName}`;
-  if (theirs.reactions)
-    return `has had ${times(theirs.reactions, "a reaction", "{n} reactions")} from ${toName} on LinkedIn`;
-  return `follows ${toName}’s posts on LinkedIn`;
-}
-function pairPhrase(fromId, pair, toName, now = /* @__PURE__ */ new Date()) {
-  if (!pair) return `knows ${toName}`;
-  const top = strongestTie(pair, now);
-  const head = hopEvidence(fromId, top, toName);
-  const support = strongestSupport(pair, now);
-  if (!support || support === top) return head;
-  return `${head}, and ${hopEvidence(fromId, support, toName)}`;
-}
-function mutualIntroducers(pairs, targetId, candidates) {
-  const out = /* @__PURE__ */ new Set();
-  if (!targetId) return out;
-  for (const c of candidates)
-    if (c.kind === "linkedin_mutual" && c.introducerId !== targetId) out.add(c.introducerId);
-  for (const pair of pairs.values()) {
-    if (!pair.kinds.includes("linkedin_mutual")) continue;
-    if (pair.aId === targetId) out.add(pair.bId);
-    else if (pair.bId === targetId) out.add(pair.aId);
-  }
-  return out;
-}
-function routingGraph(input, pairs, now, mutuals = /* @__PURE__ */ new Set()) {
-  const g = makeGraph();
-  const ask = /* @__PURE__ */ new Map();
-  const scores = /* @__PURE__ */ new Map();
-  const lifted = /* @__PURE__ */ new Set();
-  const floor = firstHopFloor(input.goal);
-  for (const p of input.people.values()) {
-    if (p.id === input.targetId || !usable2(p, now)) continue;
-    const mutual = mutuals.has(p.id);
-    const score = mutual ? Math.max(p.score, MUTUAL_MIN_SCORE) : p.score;
-    const passes = p.score > 0 && p.score >= floor;
-    if (!passes && !mutual) continue;
-    if (!passes) lifted.add(p.id);
-    const a = p.pAsk !== void 0 ? Math.max(0, Math.min(1, p.pAsk)) : pAsk({ ...p, score });
-    ask.set(p.id, a);
-    scores.set(p.id, score);
-    addEdge(g, USER_NODE, p.id, a, "strength", "", true);
-  }
-  for (const pair of pairs.values()) {
-    if (!isRoutable(pair)) continue;
-    const know = pKnow(pair);
-    if (know <= 0) continue;
-    const ends = [pair.aId, pair.bId];
-    if (ends.some((id) => id !== input.targetId && !usable2(input.people.get(id), now))) continue;
-    const top = strongestTie(pair, now)?.kind ?? pair.kinds[0];
-    const ab = pKnowDirected(pair, pair.aId, pair.bId);
-    const ba = pKnowDirected(pair, pair.bId, pair.aId);
-    if (ab === ba) addEdge(g, pair.aId, pair.bId, Math.min(0.999, ab * HOP_PENALTY), top, "");
-    else {
-      addEdge(g, pair.aId, pair.bId, Math.min(0.999, ab * HOP_PENALTY), top, "", true);
-      addEdge(g, pair.bId, pair.aId, Math.min(0.999, ba * HOP_PENALTY), top, "", true);
-    }
-  }
-  return { g, ask, scores, lifted };
-}
-function rankWarmPaths(input) {
-  const now = input.now ?? /* @__PURE__ */ new Date();
-  const target = input.people.get(input.targetId);
-  const tName = input.target?.name ?? target?.name ?? "them";
-  const direct = target && target.score >= DIRECT_TIE_SCORE ? (() => {
-    const band = TIE_BAND_LABELS[tieBand(target.score)];
-    return { score: target.score, band, text: `You know ${tName} (${band} · ${target.score})` };
-  })() : void 0;
-  const blocked = input.blockedPairs;
-  const candidates = (input.candidates ?? []).filter(
-    (c) => !blocked?.has(pk(c.introducerId, input.targetId))
-  );
-  const pairs = withCommonContacts(
-    dropBlocked(withExternal(dropBlocked(input.pairs, blocked), input.targetId, candidates), blocked),
-    now
-  );
-  const mutuals = mutualIntroducers(pairs, input.targetId, candidates);
-  const rg = routingGraph(input, pairs, now, mutuals);
-  const { g, ask } = rg;
-  const rT = targetReceptivity(input.target ?? {});
-  const k = input.k ?? 12;
-  const maxHops = input.maxHops ?? 3;
-  const found = [];
-  const score = (nodes) => {
-    const hops = [];
-    let p = 1;
-    let old = false;
-    for (let i = 0; i < nodes.length - 1; i++) {
-      const from = nodes[i];
-      const to = nodes[i + 1];
-      if (i === 0) {
-        const a = ask.get(to);
-        hops.push({ fromId: from, toId: to, p: a, kind: "strength" });
-        p *= a;
-        const last = input.people.get(to)?.lastContactAt;
-        if (last && now.getTime() - new Date(last).getTime() > OLD_EVIDENCE_YEARS * 365.25 * DAY10) old = true;
-        continue;
-      }
-      const pair = pairs.get(pk(from, to));
-      const know = pKnowDirected(pair, from, to);
-      hops.push({
-        fromId: from,
-        toId: to,
-        p: know,
-        kind: strongestTie(pair, now)?.kind ?? pair.kinds[0],
-        band: hopBand(know),
-        ...pairFading(pair, now) ? { fading: true } : {}
-      });
-      p *= know;
-      if (pairIsOld(pair, now)) old = true;
-    }
-    p *= rT * HOP_PENALTY ** (hops.length - 2);
-    if (old) p *= OLD_EVIDENCE_FACTOR;
-    p = Math.min(1, p);
-    return { nodes, hops, p, band: pathBand(p), firstHopId: nodes[1] };
-  };
-  const viaMutual = (nodes) => nodes.length === 3 && mutuals.has(nodes[1]);
-  for (const nodes of kShortestPaths(g, USER_NODE, input.targetId, k, maxHops)) {
-    if (nodes.length < 3) continue;
-    if (rg.lifted.has(nodes[1]) && !viaMutual(nodes)) continue;
-    found.push(score(nodes));
-  }
-  for (const m of mutuals) {
-    if (!ask.has(m) || !pairs.has(pk(m, input.targetId))) continue;
-    if (found.some((f) => f.nodes.length === 3 && f.firstHopId === m)) continue;
-    found.push(score([USER_NODE, m, input.targetId]));
-  }
-  for (const f of found)
-    if (viaMutual(f.nodes) && (f.p <= MIN_PATH_P || rg.lifted.has(f.firstHopId))) f.weak = true;
-  if (!direct && target && target.score > 0 && input.target?.pReply !== void 0) {
-    const p = Math.max(0, Math.min(1, input.target.pReply));
-    found.push({
-      nodes: [USER_NODE, input.targetId],
-      hops: [{ fromId: USER_NODE, toId: input.targetId, p, kind: "strength" }],
-      p,
-      band: pathBand(p),
-      firstHopId: input.targetId
-    });
-  }
-  found.sort(
-    (a, b) => b.p - a.p || a.nodes.length - b.nodes.length || a.nodes.join(">").localeCompare(b.nodes.join(">"))
-  );
-  const viable = found.filter((f) => f.p > MIN_PATH_P || viaMutual(f.nodes));
-  if (!viable.length) return direct ? { paths: [], direct } : { paths: [], fallback: "cold" };
-  const firstHops = new Set(viable.map((f) => f.firstHopId));
-  const otherWays = firstHops.size - 1;
-  const chosen = [];
-  const seenFirst = /* @__PURE__ */ new Set();
-  const middle = /* @__PURE__ */ new Map();
-  for (const f of viable) {
-    if (chosen.length >= (input.limit ?? 5)) break;
-    if (seenFirst.has(f.firstHopId)) continue;
-    const mids = f.nodes.slice(2, -1);
-    if (mids.some((m) => (middle.get(m) ?? 0) >= 2)) continue;
-    seenFirst.add(f.firstHopId);
-    for (const m of mids) middle.set(m, (middle.get(m) ?? 0) + 1);
-    chosen.push(f);
-  }
-  const nameOf2 = (id) => id === input.targetId ? tName : input.people.get(id)?.name ?? "someone";
-  return {
-    ...direct ? { direct } : {},
-    paths: chosen.map((f) => ({
-      ...f,
-      hops: f.hops.map(
-        (h, i) => i === 0 ? h : { ...h, phrase: pairPhrase(h.fromId, pairs.get(pk(h.fromId, h.toId)), nameOf2(h.toId), now) }
-      ),
-      otherWays,
-      reasonText: reasonText(f, input, pairs, tName, otherWays, now, rg.scores)
-    }))
-  };
-}
-function reasonText(f, input, pairs, tName, otherWays, now, scores = /* @__PURE__ */ new Map()) {
-  const others = otherWays > 0 ? ` ${otherWays} other ${otherWays === 1 ? "way" : "ways"} in.` : "";
-  if (f.nodes.length === 2) {
-    const t = input.people.get(input.targetId);
-    const band = t ? `${TIE_BAND_LABELS[tieBand(t.score)]} · ${t.score}` : "";
-    return `Write to ${tName} directly${band ? ` (${band})` : ""}.${others}`;
-  }
-  const a = input.people.get(f.nodes[1]);
-  const aScore = scores.get(a.id) ?? a.score;
-  const last = f.nodes.length === 3 ? pairs.get(pk(f.nodes[1], f.nodes[2])) : void 0;
-  if (last?.kinds.includes("linkedin_mutual")) {
-    const top = strongestTie(last, now);
-    const how = pairPhrase(a.id, last, tName, now);
-    const also = top && top.kind !== "linkedin_mutual" ? " (and is connected to them on LinkedIn)" : "";
-    const closeness = TIE_BAND_LABELS[tieBand(aScore)].toLowerCase();
-    const weak = f.weak ? " A weaker route, but a real connection." : "";
-    return `Through ${a.name}, a ${closeness} tie (${aScore}): ${a.name} ${how}${also}.${weak}${others}`;
-  }
-  const nameOf2 = (id) => id === input.targetId ? tName : input.people.get(id)?.name ?? "someone";
-  const phrases = [];
-  for (let i = 1; i < f.nodes.length - 1; i++) {
-    const from = f.nodes[i];
-    const to = f.nodes[i + 1];
-    phrases.push(pairPhrase(from, pairs.get(pk(from, to)), nameOf2(to), now));
-  }
-  const head = `${a.name} (${TIE_BAND_LABELS[tieBand(aScore)]} · ${aScore}) ${phrases[0]}`;
-  const rest = phrases.slice(1).map((p) => `, who ${p}`).join("");
-  return `${head}${rest}.${weakLink(f, input, pairs, nameOf2)}${others}`;
-}
-function weakLink(f, input, pairs, nameOf2) {
-  const later = f.hops.slice(1);
-  if (later.length < 2) return "";
-  const weakest = [...later].sort((x, y) => x.p - y.p)[0];
-  const band = hopBand(weakest.p);
-  if (band !== "connected" && band !== "unclear") return "";
-  if (later.every((h) => hopBand(h.p) === band)) return "";
-  const from = input.people.get(weakest.fromId)?.name ?? nameOf2(weakest.fromId);
-  const pair = pairs.get(pk(weakest.fromId, weakest.toId));
-  const top = pair ? strongestTie(pair, input.now ?? /* @__PURE__ */ new Date()) : void 0;
-  return ` The weak link: ${from} ${hopEvidence(weakest.fromId, top, nameOf2(weakest.toId))}.`;
-}
-
-// supabase/functions/_shared/friends/shares.ts
-function emailHash(email) {
-  return sha256Hex(`orbit-friend:${normalizeEmail(email)}`);
-}
-async function refreshFriendShares(db2, ownerId, now) {
-  const rows = await db2.sql`
-    select p.id, p.display_name, p.title, p.headline, p.org_raw, o.name as org_name, o.domains, p.school, p.is_alumni,
-           p.linkedin_member_id, p.linkedin_slug, p.primary_email, ts.share_score::int as share_score,
-           tl.closeness::int as label
-      from orbit.people p
-      left join orbit.organizations o on o.id = p.org_id
-      left join orbit.tie_scores ts on ts.user_id = p.user_id and ts.person_id = p.id
-      left join orbit.tie_labels tl on tl.user_id = p.user_id and tl.person_id = p.id
-     where p.user_id = ${ownerId}::uuid and not p.is_self and p.deleted_at is null and p.merged_into is null
-       and p.hidden_at is null and not p.do_not_contact and not p.private`;
-  const identities = await db2.sql`
-    select person_id, kind, value_norm from orbit.person_identities
-     where user_id = ${ownerId}::uuid and kind in ('email', 'linkedin_member', 'linkedin_slug')`;
-  const byPerson = /* @__PURE__ */ new Map();
-  for (const i of identities) {
-    const cur = byPerson.get(i.person_id) ?? {};
-    if (i.kind === "email" && !cur.email) cur.email = i.value_norm;
-    if (i.kind === "linkedin_member" && !cur.member) cur.member = i.value_norm;
-    if (i.kind === "linkedin_slug" && !cur.slug) cur.slug = i.value_norm;
-    byPerson.set(i.person_id, cur);
-  }
-  const out = [];
-  for (const r of rows) {
-    const ids = byPerson.get(r.id) ?? {};
-    const member = r.linkedin_member_id ?? ids.member ?? null;
-    const slug = (r.linkedin_slug ?? ids.slug)?.toLowerCase() ?? null;
-    const email = r.primary_email ?? ids.email;
-    const hash = email?.includes("@") ? await emailHash(email) : null;
-    if (!member && !slug && !hash) continue;
-    const closeness = r.share_score !== null ? shareCloseness(r.share_score) : r.label && TIE_LABEL_MIDPOINTS[r.label] !== void 0 ? shareCloseness(TIE_LABEL_MIDPOINTS[r.label]) : 1;
-    out.push({
-      owner_user_id: ownerId,
-      person_id: r.id,
-      display_name: r.display_name,
-      title: r.title ?? r.headline ?? null,
-      company: r.org_name ?? r.org_raw ?? null,
-      company_domain: r.domains?.[0]?.toLowerCase() ?? null,
-      linkedin_member_id: member,
-      linkedin_slug: slug,
-      email_hash: hash,
-      school: r.school ?? null,
-      is_alumni: !!r.is_alumni,
-      closeness
-    });
-  }
-  await db2.begin(async (tx) => {
-    await tx.sql`delete from orbit.friend_shares where owner_user_id = ${ownerId}::uuid`;
-    for (let i = 0; i < out.length; i += 500) {
-      const json2 = JSON.stringify(out.slice(i, i + 500));
-      await tx.sql`
-        insert into orbit.friend_shares (owner_user_id, person_id, display_name, title, company, company_domain,
-                                         linkedin_member_id, linkedin_slug, email_hash, school, is_alumni, closeness,
-                                         updated_at)
-        select ${ownerId}::uuid, (r ->> 'person_id')::uuid, r ->> 'display_name', r ->> 'title', r ->> 'company',
-               r ->> 'company_domain', r ->> 'linkedin_member_id', r ->> 'linkedin_slug', r ->> 'email_hash',
-               r ->> 'school', (r ->> 'is_alumni')::boolean, (r ->> 'closeness')::smallint, ${now}::timestamptz
-          from jsonb_array_elements(${json2}::jsonb) r`;
-    }
-  });
-  return out.length;
-}
-
-// supabase/functions/_shared/paths/externalCandidates.ts
-var EXTERNAL_CACHE_MS = 30 * 864e5;
-
-// supabase/functions/_shared/paths/find.ts
-var DAY11 = 864e5;
-var TIE_KIND_SET = new Set(TIE_KINDS);
-async function loadGraph(db2, userId, now) {
-  const rows = await db2.sql`
-    select p.id, p.is_self, p.display_name, p.first_name, p.title, p.org_raw, o.name as org_name, p.is_alumni,
-           p.linkedin_url, p.linkedin_member_id, p.hidden_at, p.do_not_contact, p.last_interaction_at,
-           ts.score::int as score, ts.features
-      from orbit.people p
-      left join orbit.organizations o on o.id = p.org_id
-      left join orbit.tie_scores ts on ts.user_id = p.user_id and ts.person_id = p.id
-     where p.user_id = ${userId}::uuid and p.deleted_at is null and p.merged_into is null`;
-  const intros = await db2.sql`
-    select introducer_person_id, status, asked_at, outcome_at from orbit.intro_requests
-     where user_id = ${userId}::uuid and introducer_person_id is not null`;
-  const goals = await db2.sql`
-    select targets from orbit.goals where user_id = ${userId}::uuid and status = 'active' and deleted_at is null`;
-  const targetOrgs = new Set(
-    goals.flatMap((g) => g.targets?.organizations ?? []).map((o) => o.toLowerCase().trim())
-  );
-  const owes = await db2.sql`
-    select distinct m.from_person_id as person_id from orbit.threads t
-      join orbit.messages m on m.thread_id = t.id and m.sent_at = t.last_at
-     where t.user_id = ${userId}::uuid and t.last_direction = 'in' and t.is_networking
-       and m.from_person_id is not null and t.last_at > ${new Date(now.getTime() - 30 * DAY11)}::timestamptz`;
-  const owesSet = new Set(owes.map((o) => o.person_id));
-  let selfId = null;
-  const people = /* @__PURE__ */ new Map();
-  for (const r of rows) {
-    if (r.is_self) {
-      selfId = r.id;
-      continue;
-    }
-    const mine = intros.filter((i) => i.introducer_person_id === r.id);
-    const declined = mine.filter((i) => i.status === "declined").map((i) => iso(i.outcome_at ?? i.asked_at)).sort().pop();
-    const org = r.org_name ?? r.org_raw ?? void 0;
-    people.set(r.id, {
-      id: r.id,
-      name: r.first_name ?? r.display_name.split(/\s+/)[0],
-      displayName: r.display_name,
-      score: r.score ?? 0,
-      reciprocity: num(r.features?.reciprocity),
-      sharesGoalTargetOrg: !!org && targetOrgs.has(org.toLowerCase().trim()),
-      askedRecently: mine.some((i) => now.getTime() - new Date(i.asked_at).getTime() < 30 * DAY11),
-      introducedUserBefore: mine.some((i) => i.status === "intro_made" || i.status === "meeting"),
-      owesReply: owesSet.has(r.id),
-      lastContactAt: iso(r.last_interaction_at) ?? void 0,
-      hidden: !!r.hidden_at || r.do_not_contact,
-      declinedIntroAt: declined,
-      title: r.title ?? void 0,
-      org,
-      isAlumni: r.is_alumni,
-      linkedinUrl: r.linkedin_url ?? void 0,
-      memberId: r.linkedin_member_id ?? void 0,
-      doNotContact: r.do_not_contact
-    });
-  }
-  const tieRows = await db2.sql`
-    select id, a_person_id, b_person_id, kind, weight, confidence, evidence, first_seen_at, last_seen_at
-      from orbit.ties where user_id = ${userId}::uuid`;
-  const ties = [];
-  for (const t of tieRows) {
-    if (!TIE_KIND_SET.has(t.kind) || t.a_person_id === selfId || t.b_person_id === selfId) continue;
-    ties.push({
-      id: `${t.a_person_id}|${t.b_person_id}|${t.kind}`,
-      userId,
-      aId: t.a_person_id,
-      bId: t.b_person_id,
-      kind: t.kind,
-      weight: num(t.weight),
-      confidence: num(t.confidence),
-      evidence: t.evidence ?? {},
-      firstSeenAt: iso(t.first_seen_at) ?? void 0,
-      lastSeenAt: iso(t.last_seen_at) ?? void 0
-    });
-  }
-  const blockedRows = await db2.sql`
-    select a_person_id, b_person_id from orbit.blocked_pairs where user_id = ${userId}::uuid`;
-  const blocked = new Set(blockedRows.map((b) => pairKeyOf(b.a_person_id, b.b_person_id)));
-  return { selfId, people, pairs: combineTies(ties, now), blocked };
-}
-async function resolvePersonRef(db2, userId, p) {
-  const url = cleanLinkedInUrl(p.linkedinUrl);
-  const slug = linkedInSlugOf(url);
-  const [hit] = await db2.sql`
-    select p.id from orbit.people p
-     where p.user_id = ${userId}::uuid and p.deleted_at is null and not p.is_self
-       and ((${p.memberId ?? null}::text is not null and p.linkedin_member_id = ${p.memberId ?? null})
-         or (${slug ?? null}::text is not null and lower(p.linkedin_slug) = ${slug ?? null})
-         or (${url ?? null}::text is not null and lower(rtrim(p.linkedin_url, '/')) = ${url ?? null})
-         or exists (select 1 from orbit.person_identities i where i.person_id = p.id
-                     and ((i.kind = 'linkedin_member' and i.value_norm = ${p.memberId ?? ""})
-                       or (i.kind = 'linkedin_slug' and i.value_norm = ${slug ?? ""}))))
-     order by p.merged_into is null desc limit 1`;
-  if (hit) return hit.id;
-  const name = p.name.trim().toLowerCase();
-  if (!name) return null;
-  const byName = await db2.sql`
-    select id from orbit.people
-     where user_id = ${userId}::uuid and deleted_at is null and not is_self and lower(display_name) = ${name}
-     limit 2`;
-  return byName.length === 1 ? byName[0].id : null;
-}
-function bestReach(g, personId, goal, now) {
-  const p = g.people.get(personId);
-  if (!p) return null;
-  const r = rankWarmPaths({
-    targetId: personId,
-    target: { name: p.name, isAlum: p.isAlumni, title: p.title },
-    goal,
-    people: g.people,
-    pairs: g.pairs,
-    blockedPairs: g.blocked,
-    now,
-    limit: 1
-  });
-  if (r.direct) return Math.min(1, r.direct.score / 100);
-  return r.paths[0]?.p ?? null;
-}
 
 // supabase/functions/_shared/sourcing/prompts.ts
 var FIT_BATCH = 20;
@@ -14490,131 +15987,6 @@ function sourceSearch(config) {
   };
 }
 
-// supabase/functions/_shared/voice/voice.ts
-import { z as z4 } from "npm:zod@3.25.76/v4";
-
-// supabase/functions/_shared/memory/memory.ts
-import { z as z3 } from "npm:zod@3.25.76/v4";
-function embeddable(text2) {
-  const letters = text2.match(/\p{L}/gu) ?? [];
-  if (!letters.length) return false;
-  const latin = letters.filter((c) => /[A-Za-z]/.test(c)).length;
-  return latin / letters.length >= 0.8;
-}
-var MEMORY_SYSTEM = [
-  'Extract durable facts worth remembering for future conversations: preferences, constraints, details of goals, outcomes, and facts about specific people. Skip small talk and anything already in <known>. Each memory ≤ 200 characters, in third person about the user ("Prefers morning calls").',
-  `Return {"memories": [{kind, text, person_name|null, importance: 0..1, quote}]}; quote must be the user's own words.`
-].join("\n");
-var memorySchema = z3.object({
-  memories: z3.array(
-    z3.object({
-      kind: z3.enum(["preference", "constraint", "goal_detail", "outcome", "person_fact", "note"]),
-      text: z3.string(),
-      person_name: z3.string().nullable(),
-      importance: z3.number(),
-      quote: z3.string()
-    })
-  )
-});
-
-// supabase/functions/_shared/voice/voice.ts
-var EXEMPLAR_MIN_WORDS = 25;
-var EMBED_SENT_LIMIT = 200;
-var CARD_SAMPLES = 150;
-var text = (max) => z4.string().max(max);
-var list = (n, max) => z4.array(text(max)).max(n);
-var StyleCardS = z4.object({
-  greetingPatterns: list(6, 80),
-  signoffs: list(6, 160),
-  formality: z4.number().min(0).max(1),
-  avgSentenceWords: z4.number().min(0).max(200),
-  avgMessageWords: z4.number().min(0).max(2e3),
-  contractions: z4.boolean(),
-  exclamationsPerMessage: z4.number().min(0).max(50),
-  emoji: z4.boolean(),
-  characteristicPhrases: list(12, 120),
-  avoid: list(50, 120),
-  notes: text(4e3),
-  builtFromCount: z4.number().int().min(0).max(1e6),
-  version: z4.number().int().min(0).max(1e3),
-  sources: z4.partialRecord(z4.enum(["email", "linkedin", "orbit", "pasted"]), z4.number().int().min(0)).optional(),
-  custom: z4.boolean().optional()
-});
-async function embedSafely(embed, raw) {
-  const t = raw.trim().slice(0, 2e3);
-  if (!t || !embeddable(t)) return null;
-  try {
-    const e = await embed(t);
-    return e?.length ? e : null;
-  } catch {
-    return null;
-  }
-}
-function exemplarText(body) {
-  if (!body) return null;
-  const t = stripQuotedReply(body).trim();
-  return wordCount(t) >= EXEMPLAR_MIN_WORDS ? t : null;
-}
-async function embedMessages(db2, embed, rows) {
-  if (!embed) return 0;
-  let n = 0;
-  for (const r of rows) {
-    const t = exemplarText(r.body);
-    if (!t) continue;
-    const e = await embedSafely(embed, t);
-    if (!e) {
-      if (embeddable(t)) break;
-      continue;
-    }
-    try {
-      await db2.sql`update orbit.messages set embedding = ${vec(e)}::vector where id = ${r.id}::uuid`;
-      n++;
-    } catch {
-    }
-  }
-  return n;
-}
-async function embedSent(db2, embed, userId, limit = EMBED_SENT_LIMIT) {
-  const rows = await db2.sql`
-    select id, body_text from orbit.messages
-     where user_id = ${userId}::uuid and direction = 'out' and body_text is not null and not is_automated
-     order by sent_at desc limit ${limit}::int`;
-  const todo = rows.filter((r) => r.body_text);
-  const missing = await db2.sql`
-    select id from orbit.messages where id = any(${todo.map((r) => r.id)}::uuid[]) and embedding is null`;
-  const want = new Set(missing.map((r) => r.id));
-  const embedded = await embedMessages(
-    db2,
-    embed,
-    todo.filter((r) => want.has(r.id)).map((r) => ({ id: r.id, body: r.body_text }))
-  );
-  return { embedded, looked: rows.length };
-}
-async function relearnCard(db2, userId, now) {
-  const [u2] = await db2.sql`
-    select settings, first_name, full_name from orbit.users where id = ${userId}::uuid`;
-  if (!u2) return null;
-  const sent = await db2.sql`
-    select body_text from orbit.messages
-     where user_id = ${userId}::uuid and direction = 'out' and body_text is not null and not is_automated
-     order by sent_at desc limit ${CARD_SAMPLES}::int`;
-  const first = u2.first_name ?? u2.full_name?.split(/\s+/)[0] ?? "";
-  const preset = u2.settings?.tone_preset;
-  const learned = buildStyleCard(
-    sent.map((m) => stripQuotedReply(m.body_text)),
-    first,
-    preset === "direct" || preset === "formal" ? preset : "warm"
-  );
-  if (learned.builtFromCount === 0) return null;
-  const stored = StyleCardS.safeParse(u2.settings?.style_card);
-  const card = mergeStyleCard(learned, stored.success ? stored.data : void 0);
-  await db2.sql`
-    update orbit.users set settings = settings || jsonb_build_object('style_card', ${card}::jsonb,
-                                                                     'voice_relearned_at', ${now.toISOString()}::text)
-     where id = ${userId}::uuid`;
-  return card;
-}
-
 // supabase/functions/orbit-worker/handlers/voice.ts
 function voiceHandlers(config) {
   return {
@@ -14628,6 +16000,10 @@ function voiceHandlers(config) {
     "voice.card": async (job, ctx) => {
       if (!job.userId) throw new JobSkipped("no_user");
       await relearnCard(ctx.db, job.userId, ctx.now());
+    },
+    "voice.distill": async (job, ctx) => {
+      if (!job.userId) throw new JobSkipped("no_user");
+      await distillVoice(makeServices(config, { db: ctx.db, now: ctx.now, queue: ctx.queue }), job.userId);
     }
   };
 }
@@ -17895,7 +19271,7 @@ async function ingestEvents(d, events) {
 }
 
 // supabase/functions/orbit-worker/handlers/calendar.ts
-var DAY12 = 864e5;
+var DAY14 = 864e5;
 var PAGES_MAX = 20;
 function calendarHandlers(deps) {
   const google = googleFor(deps);
@@ -17923,8 +19299,8 @@ function calendarHandlers(deps) {
           try {
             page2 = await api.events(
               syncToken ? { syncToken, pageToken } : {
-                timeMin: new Date(now.getTime() - 730 * DAY12).toISOString(),
-                timeMax: new Date(now.getTime() + 90 * DAY12).toISOString(),
+                timeMin: new Date(now.getTime() - 730 * DAY14).toISOString(),
+                timeMax: new Date(now.getTime() + 90 * DAY14).toISOString(),
                 pageToken
               }
             );
@@ -18115,7 +19491,7 @@ async function classifyMessage(db2, userId, messageId, deps) {
   if (m.is_automated) return { skipped: "automated" };
   const text2 = (m.body_text ?? m.snippet ?? "").trim();
   if (!text2) return { skipped: "no_text" };
-  const sentAt = iso3(m.sent_at);
+  const sentAt = iso2(m.sent_at);
   const awaiting = m.from_person_id ? (await db2.sql`
           select 1 from orbit.drafts where user_id = ${userId}::uuid and person_id = ${m.from_person_id}::uuid
              and status = 'sent' and replied_at is null and sent_at <= ${sentAt}::timestamptz limit 1`).length > 0 : false;
@@ -18135,7 +19511,7 @@ async function classifyMessage(db2, userId, messageId, deps) {
        where thread_id = ${m.thread_id}::uuid and sent_at <= ${sentAt}::timestamptz
        order by sent_at desc limit ${THREAD_MAX}::int`;
     const lines = thread.reverse().map(
-      (x) => `<message from="${x.direction === "out" ? "me" : "them"}" at="${iso3(x.sent_at)}">
+      (x) => `<message from="${x.direction === "out" ? "me" : "them"}" at="${iso2(x.sent_at)}">
 ${stripQuotedReply(
         x.body_text ?? x.snippet ?? ""
       ).slice(0, 4e3)}
@@ -19298,7 +20674,7 @@ async function pool(items, n, fn) {
 }
 var GROUP_MAX3 = 8;
 var CLASSIFY_WINDOW_DAYS = 180;
-var DAY13 = 864e5;
+var DAY15 = 864e5;
 var addrs = (raw) => parseAddressList(raw).map(parseAddress).filter((a) => a.email.includes("@"));
 function parseMail(m, self) {
   const labels = m.labelIds ?? [];
@@ -19492,7 +20868,7 @@ async function ingestGmail(d, refs) {
         inserted++;
         stats.stored++;
         if (m.outbound && !m.automated && exemplarText(body)) sent.push({ id: row.id, body });
-        if (networking && !m.outbound && !m.automated && d.now.getTime() - new Date(m.sentAt).getTime() < CLASSIFY_WINDOW_DAYS * DAY13)
+        if (networking && !m.outbound && !m.automated && d.now.getTime() - new Date(m.sentAt).getTime() < CLASSIFY_WINDOW_DAYS * DAY15)
           classify.push({ id: row.id, externalId: m.id });
       } else if (body !== null)
         await db2.sql`
@@ -19612,7 +20988,7 @@ var DEEP_CAP = 5e4;
 var CHAIN_DELAY_SEC = 5;
 var RECOVERY_DAYS = 30;
 var HISTORY_PAGES_MAX = 20;
-var DAY14 = 864e5;
+var DAY16 = 864e5;
 var GMAIL_SCOPE = /gmail\.readonly$/;
 async function account(job, ctx) {
   const userId = job.userId;
@@ -19627,7 +21003,7 @@ function phaseQuery(bf, now) {
   if (bf.phase === "recent") return `newer_than:${bf.days ?? 90}d -in:chats`;
   const sec = (ms2) => Math.floor(ms2 / 1e3);
   const t = now.getTime();
-  return `after:${sec(t - 730 * DAY14)} before:${sec(t - 90 * DAY14)} -in:chats`;
+  return `after:${sec(t - 730 * DAY16)} before:${sec(t - 90 * DAY16)} -in:chats`;
 }
 var reauth = async (fn) => {
   try {
@@ -20163,7 +21539,7 @@ async function storeChat(db2, userId, self, chat, messages, now, ownIds) {
 var REQUESTS_PER_JOB = 60;
 var JOB_BUDGET_MS = 6e4;
 var FRESH_FOR_MS = 20 * 36e5;
-var DAY15 = 864e5;
+var DAY17 = 864e5;
 var str3 = (v) => typeof v === "string" && v ? v : void 0;
 function linkedinHandlers(deps) {
   const sleep = deps.sleep ?? ((ms2) => new Promise((r) => setTimeout(r, ms2)));
@@ -20273,7 +21649,7 @@ function linkedinHandlers(deps) {
           });
           continue;
         }
-        const after = new Date(now.getTime() - 730 * DAY15).toISOString();
+        const after = new Date(now.getTime() - 730 * DAY17).toISOString();
         const page2 = await call(() => unipile.chats(accountId, { after, cursor: state.chatsCursor }));
         if (!page2.ok) throw new Error(`unipile chats ${page2.status ?? page2.kind}`);
         const chats = page2.value.items;
@@ -20319,7 +21695,7 @@ function linkedinHandlers(deps) {
           );
           if (stored.inserted) for (const p of stored.personIds) touched.add(p);
           for (const m of stored.inbound)
-            if (now.getTime() - new Date(m.sentAt).getTime() < CLASSIFY_WINDOW_DAYS * DAY15)
+            if (now.getTime() - new Date(m.sentAt).getTime() < CLASSIFY_WINDOW_DAYS * DAY17)
               await ctx.queue.enqueue({
                 kind: "classify.message",
                 userId,
@@ -20374,7 +21750,7 @@ async function scorePeople(ctx, userId, personIds, key2) {
 }
 
 // supabase/functions/_shared/ingest/score.ts
-var HOUR = 36e5;
+var HOUR2 = 36e5;
 var FLOOR_TYPES = /* @__PURE__ */ new Set(["family", "partner"]);
 function readCalibration(settings) {
   const c = settings.tie_calibration;
@@ -20445,7 +21821,7 @@ async function loadHistories(db2, userId, now, personIds) {
     const going = (e.attendees ?? []).filter((a) => a.responseStatus !== "declined").length;
     const attendees = Math.max(2, going || e.attendee_person_ids.length + 1);
     for (const p of e.attendee_person_ids)
-      if (idSet.has(p)) push(meetingsBy, p, { at: iso3(e.start_at), attendees });
+      if (idSet.has(p)) push(meetingsBy, p, { at: iso2(e.start_at), attendees });
   }
   const intros = await db2.sql`
     select a_person_id, b_person_id, evidence ->> 'introducerId' as introducer from orbit.ties
@@ -20460,7 +21836,7 @@ async function loadHistories(db2, userId, now, personIds) {
         select person_id, min(created_at) as at from orbit.person_identities
          where user_id = ${userId}::uuid and kind = 'linkedin_member' and source = 'linkedin_relation'
            and person_id = any(${ids}::uuid[])
-         group by person_id`).map((r) => [r.person_id, iso3(r.at)])
+         group by person_id`).map((r) => [r.person_id, iso2(r.at)])
   );
   const notes = await db2.sql`
     select person_ids, extraction ->> 'warmth' as warmth from orbit.notes
@@ -20485,7 +21861,7 @@ async function loadHistories(db2, userId, now, personIds) {
   const labels = new Map(
     (await db2.sql`
         select person_id, closeness, updated_at from orbit.tie_labels
-         where user_id = ${userId}::uuid and person_id = any(${ids}::uuid[])`).map((l) => [l.person_id, { closeness: Number(l.closeness), at: iso3(l.updated_at) }])
+         where user_id = ${userId}::uuid and person_id = any(${ids}::uuid[])`).map((l) => [l.person_id, { closeness: Number(l.closeness), at: iso2(l.updated_at) }])
   );
   for (const { row, person } of people) {
     relationship.set(person.id, row.relationship_type ?? null);
@@ -20495,7 +21871,7 @@ async function loadHistories(db2, userId, now, personIds) {
     const warmth = warmthBy.get(person.id) ?? [];
     const rapport = readTone ? gatherRapport(
       (msgsBy.get(person.id) ?? []).map((m) => ({
-        at: iso3(m.sent_at),
+        at: iso2(m.sent_at),
         inbound: m.direction === "in",
         automated: !!m.automated,
         participants: Math.max(2, Number(m.participant_count ?? 1) + 1),
@@ -20529,7 +21905,7 @@ async function loadHistories(db2, userId, now, personIds) {
 }
 function toTieMessages(rows) {
   const out = rows.map((m) => ({
-    at: iso3(m.sent_at),
+    at: iso2(m.sent_at),
     direction: m.direction,
     channel: m.provider === "linkedin" ? "linkedin" : "email",
     threadParticipants: Math.max(2, Number(m.participant_count ?? 1) + 1),
@@ -20541,7 +21917,7 @@ function toTieMessages(rows) {
   for (const m of out) {
     const t = new Date(m.at).getTime();
     if (m.direction === "in" && !m.automated && prevDir.get(m.threadId) === "out") {
-      const hrs = (t - lastOut.get(m.threadId)) / HOUR;
+      const hrs = (t - lastOut.get(m.threadId)) / HOUR2;
       if (hrs >= 0) m.isReplyLatencyHours = hrs;
     }
     if (m.direction === "out") lastOut.set(m.threadId, t);

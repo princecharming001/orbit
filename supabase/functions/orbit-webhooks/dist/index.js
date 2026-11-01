@@ -1127,8 +1127,40 @@ var FILLER = new Set(
   )
 );
 
+// packages/core/src/style/voice.ts
+var VOICE_NOTES_MAX = 8;
+var GLUE = new Set(
+  "a an the and or but so to of in on at for with from by is am are was be it its this that i me my you your we just very".split(
+    " "
+  )
+);
+var VOICE_DISTILL_SYSTEM = [
+  "You read how a college student edited the networking emails Orbit drafted for them, and write down what the edits show about how they write.",
+  `Return at most ${VOICE_NOTES_MAX} notes. Each note is one short line in the second person, in plain words the student would use about themselves, such as "You cut 'Thanks either way' every time" or "You sign with your first name only".`,
+  "A note must be backed by at least two edits, and its evidence lists the ids of those edits exactly as given. Leave out anything a single edit shows, anything the style card already says, and anything about a particular person or company.",
+  "When a note is about a phrase the student always removes or replaces, put that phrase in `avoid` exactly as Orbit wrote it; otherwise leave `avoid` empty.",
+  "Never repeat a note the student forgot, in any wording. Use no dashes and no exclamation marks."
+].join("\n");
+var VOICE_JUDGE_SYSTEM = [
+  "You compare one draft email against a few emails a college student really sent, and judge whether the same person wrote all of them.",
+  "Read the voice, not the topic: greeting and sign-off, sentence length and rhythm, contractions, how direct the ask is, warmth, punctuation, the words they reach for.",
+  "Score 0 to 3: 3, clearly the same person; 2, plausibly the same person; 1, probably someone else; 0, clearly someone else. Give the reason in one plain sentence, with no dashes and no exclamation marks."
+].join("\n");
+
 // supabase/functions/_shared/voice/voice.ts
 import { z as z3 } from "npm:zod@3.25.76/v4";
+
+// packages/core/src/ownWords.ts
+var OWN_WORDS_KEYS = [
+  "aim",
+  "success",
+  "story",
+  "proudOf",
+  "wantToMeet",
+  "networkingHard",
+  "neverDo"
+];
+var OWN_WORDS_TOTAL = OWN_WORDS_KEYS.length + 1;
 
 // supabase/functions/_shared/memory/memory.ts
 import { z as z2 } from "npm:zod@3.25.76/v4";
@@ -1168,6 +1200,17 @@ var StyleCardS = z3.object({
   sources: z3.partialRecord(z3.enum(["email", "linkedin", "orbit", "pasted"]), z3.number().int().min(0)).optional(),
   custom: z3.boolean().optional()
 });
+var DistillS = z3.object({
+  notes: z3.array(
+    z3.object({
+      text: z3.string().max(400),
+      // "" when the note is not about one phrase
+      avoid: z3.string().max(200),
+      evidence: z3.array(z3.string().max(80)).max(40)
+    })
+  ).max(VOICE_NOTES_MAX * 2)
+});
+var JudgeS = z3.object({ score: z3.number().int().min(0).max(3), reason: z3.string().max(400) });
 
 // packages/core/src/text/jaro.ts
 function jaroWinkler(a, b) {

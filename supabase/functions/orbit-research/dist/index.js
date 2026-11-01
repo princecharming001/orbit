@@ -1139,6 +1139,10 @@ var TASKS = {
   extract_memory: { model: "claude-haiku-5-5", effort: "low", maxTokens: 1500 },
   extract_goal: { model: "claude-haiku-5-5", effort: "low", maxTokens: 1500 },
   judge: { model: "claude-sonnet-5-5", maxTokens: 2e3 },
+  // the drafting model reads the edits, once a night per student with new ones
+  voice_distill: { model: "claude-opus-5-5", effort: "low", maxTokens: 2e3 },
+  // the judge's model, for the few first messages autopilot would send on its own
+  voice_judge: { model: "claude-sonnet-5-5", maxTokens: 600 },
   // high effort: against the writing model as the reference it agreed on 14 of 16 claims (low effort: 8 of 16), for $0.003
   support: { model: "claude-haiku-5-5", effort: "high", maxTokens: 4e3 },
   research_extract: { model: "claude-haiku-5-5", effort: "low", maxTokens: 2e3 },

@@ -116,9 +116,9 @@ function clientIp(req) {
 
 // supabase/functions/_shared/http.ts
 var HttpError = class extends Error {
-  constructor(status2, code, message, headers = {}) {
+  constructor(status3, code, message, headers = {}) {
     super(message ?? code);
-    this.status = status2;
+    this.status = status3;
     this.code = code;
     this.headers = headers;
   }
@@ -151,9 +151,9 @@ function preflight(req, h, methods = "GET, POST, OPTIONS") {
     }
   });
 }
-function json(status2, body2, headers = {}) {
+function json(status3, body2, headers = {}) {
   return new Response(JSON.stringify(body2), {
-    status: status2,
+    status: status3,
     headers: { "content-type": "application/json", "cache-control": "no-store", ...headers }
   });
 }
@@ -354,6 +354,10 @@ var TASKS = {
   extract_memory: { model: "claude-haiku-5-5", effort: "low", maxTokens: 1500 },
   extract_goal: { model: "claude-haiku-5-5", effort: "low", maxTokens: 1500 },
   judge: { model: "claude-sonnet-5-5", maxTokens: 2e3 },
+  // the drafting model reads the edits, once a night per student with new ones
+  voice_distill: { model: "claude-opus-5-5", effort: "low", maxTokens: 2e3 },
+  // the judge's model, for the few first messages autopilot would send on its own
+  voice_judge: { model: "claude-sonnet-5-5", maxTokens: 600 },
   // high effort: against the writing model as the reference it agreed on 14 of 16 claims (low effort: 8 of 16), for $0.003
   support: { model: "claude-haiku-5-5", effort: "high", maxTokens: 4e3 },
   research_extract: { model: "claude-haiku-5-5", effort: "low", maxTokens: 2e3 },
@@ -479,9 +483,9 @@ var PHASE1_SCOPES = [
 ];
 var CALENDAR_EVENTS_SCOPE = `${G}calendar.events`;
 var GoogleError = class extends Error {
-  constructor(status2, code) {
-    super(`google ${status2} ${code}`);
-    this.status = status2;
+  constructor(status3, code) {
+    super(`google ${status3} ${code}`);
+    this.status = status3;
     this.code = code;
   }
 };
@@ -1414,10 +1418,10 @@ function createVillage(opts) {
   const secret = opts.secretKey ?? opts.apiKey;
   const base = trimBase(opts.baseUrl ?? VILLAGE_BASE);
   const clock = opts.clock ?? Date.now;
-  const tokens2 = /* @__PURE__ */ new Map();
+  const tokens3 = /* @__PURE__ */ new Map();
   async function token(user, fresh = false) {
     if (!secret) return unconfigured2("village", "secret key");
-    const hit = tokens2.get(user.externalUserId);
+    const hit = tokens3.get(user.externalUserId);
     if (!fresh && hit && hit.until > clock()) return { ok: true, value: hit.token };
     const r = await requestJson(opts, {
       provider: "village",
@@ -1430,7 +1434,7 @@ function createVillage(opts) {
     if (!r.ok) return r;
     const now = clock();
     const expiresAt = r.value.expires_at ? r.value.expires_at * 1e3 : Number.POSITIVE_INFINITY;
-    tokens2.set(user.externalUserId, {
+    tokens3.set(user.externalUserId, {
       token: r.value.token,
       until: Math.min(now + VILLAGE_TOKEN_TTL_MS, expiresAt - 6e4)
     });
@@ -1451,7 +1455,7 @@ function createVillage(opts) {
         onEmpty
       });
       if (!r.ok && r.status === 401 && attempt === 0) {
-        tokens2.delete(user.externalUserId);
+        tokens3.delete(user.externalUserId);
         continue;
       }
       return r;
@@ -1661,10 +1665,10 @@ function makeServices(cfg, base) {
   const p = { fetch: doFetch, sleep: cfg.sleep, random: cfg.random, clock: () => now().getTime() };
   const env2 = cfg.env;
   const google = googleConfigOf(env2, doFetch, now);
-  let tokens2 = cfg.tokens;
-  if (!tokens2 && google) {
-    tokens2 = tokenSources.get(cfg) ?? googleTokenSource(google, { db: base.db, vault: sqlVault(base.db) });
-    tokenSources.set(cfg, tokens2);
+  let tokens3 = cfg.tokens;
+  if (!tokens3 && google) {
+    tokens3 = tokenSources.get(cfg) ?? googleTokenSource(google, { db: base.db, vault: sqlVault(base.db) });
+    tokenSources.set(cfg, tokens3);
   }
   return {
     db: base.db,
@@ -1692,7 +1696,7 @@ function makeServices(cfg, base) {
     embed: cfg.embed ?? supabaseEmbed(),
     mailer: makeMailer(env2, doFetch),
     google,
-    tokens: tokens2
+    tokens: tokens3
   };
 }
 function villageFor(cfg, make) {
@@ -2103,10 +2107,10 @@ function capitalizeToken(t, isFirst) {
   if (!isFirst && NAME_PARTICLES.has(lower)) return lower;
   return lower.replace(/(^|[-'’])(\p{L})/gu, (_, sep, c) => sep + c.toUpperCase());
 }
-function fixCase(tokens2, offset = 0) {
-  const letters = tokens2.join("");
+function fixCase(tokens3, offset = 0) {
+  const letters = tokens3.join("");
   const allUpper = letters === letters.toUpperCase() && letters !== letters.toLowerCase();
-  return tokens2.map((t, i) => {
+  return tokens3.map((t, i) => {
     if (t === t.toLowerCase() && t !== t.toUpperCase()) return capitalizeToken(t, i + offset === 0);
     if (allUpper && t.length > 1) return capitalizeToken(t, i + offset === 0);
     return t;
@@ -2118,8 +2122,8 @@ function cleanTokens(s) {
     return !!k && !HONORIFICS.has(k) && !isCredentialToken(t, k) && !GENERATIONAL.has(k) && /\p{L}/u.test(t);
   });
 }
-function partsFromTokens(tokens2) {
-  const fixed = fixCase(tokens2);
+function partsFromTokens(tokens3) {
+  const fixed = fixCase(tokens3);
   const first = fixed[0] ?? "";
   let lastStart = fixed.length - 1;
   while (lastStart > 1 && NAME_PARTICLES.has(fixed[lastStart - 1].toLowerCase())) lastStart--;
@@ -2137,14 +2141,14 @@ function parseName(raw) {
   if (!raw) return { first: "", last: "", full: "", normalized: "" };
   const s = cleanRaw(raw);
   const parts = s.split(",").map((p) => p.trim()).filter((p) => p && !isTagPart(p));
-  let tokens2;
+  let tokens3;
   if (parts.length >= 2) {
     const head = cleanTokens(parts[0]);
     const tail = cleanTokens(parts[1]);
     const headIsSurname = head.length === 1 || head.length > 1 && head.slice(0, -1).every((t) => NAME_PARTICLES.has(t.toLowerCase()));
-    tokens2 = headIsSurname && tail.length >= 1 && tail.length <= 2 ? [...tail, ...head] : head;
-  } else tokens2 = cleanTokens(parts[0] ?? "");
-  return partsFromTokens(tokens2);
+    tokens3 = headIsSurname && tail.length >= 1 && tail.length <= 2 ? [...tail, ...head] : head;
+  } else tokens3 = cleanTokens(parts[0] ?? "");
+  return partsFromTokens(tokens3);
 }
 function normalizeLinkedInUrl(raw) {
   if (!raw) return void 0;
@@ -2214,14 +2218,14 @@ function normalizeCompany(raw) {
   if (!raw) return "";
   let s = stripDiacritics(raw).toLowerCase().replace(/\([^)]*\)/g, " ");
   s = s.replace(/\band\b/g, "&").replace(/[^a-z0-9&\s]/g, " ").replace(/\s*&\s*/g, " & ");
-  const tokens2 = s.split(/\s+/).filter(Boolean);
-  while (tokens2.length > 1 && LEGAL_SUFFIXES.has(tokens2[tokens2.length - 1])) tokens2.pop();
-  if (tokens2[0] === "the" && tokens2.length > 1) tokens2.shift();
-  const legal = tokens2.join(" ");
+  const tokens3 = s.split(/\s+/).filter(Boolean);
+  while (tokens3.length > 1 && LEGAL_SUFFIXES.has(tokens3[tokens3.length - 1])) tokens3.pop();
+  if (tokens3[0] === "the" && tokens3.length > 1) tokens3.shift();
+  const legal = tokens3.join(" ");
   if (ORG_ALIASES[legal]) return ORG_ALIASES[legal];
-  while (tokens2.length > 1 && (GENERIC_ORG_TAIL.has(tokens2[tokens2.length - 1]) || LEGAL_SUFFIXES.has(tokens2[tokens2.length - 1])))
-    tokens2.pop();
-  const core = tokens2.join(" ");
+  while (tokens3.length > 1 && (GENERIC_ORG_TAIL.has(tokens3[tokens3.length - 1]) || LEGAL_SUFFIXES.has(tokens3[tokens3.length - 1])))
+    tokens3.pop();
+  const core = tokens3.join(" ");
   return ORG_ALIASES[core] ?? (core.replace(/[\s&]/g, "") ? core : legal);
 }
 
@@ -2271,13 +2275,13 @@ async function googleCallback(ctx) {
   const code = q.get("code");
   if (!code) return done(back, { error: "no_code" });
   try {
-    const tokens2 = await exchangeCode(ctx.google, code, st.code_verifier);
-    if (!tokens2.id_token) return done(back, { error: "no_id_token" });
-    const claims = await verifyIdToken(ctx.google, tokens2.id_token);
+    const tokens3 = await exchangeCode(ctx.google, code, st.code_verifier);
+    if (!tokens3.id_token) return done(back, { error: "no_id_token" });
+    const claims = await verifyIdToken(ctx.google, tokens3.id_token);
     if (!claims.emailVerified) return done(back, { error: "email_unverified" });
-    const scopes = (tokens2.scope ?? "").split(/\s+/).filter(Boolean);
+    const scopes = (tokens3.scope ?? "").split(/\s+/).filter(Boolean);
     const userId = await ctx.db.begin(
-      (tx) => upsertGoogleUser(tx, { ...claims, scopes, refreshToken: tokens2.refresh_token })
+      (tx) => upsertGoogleUser(tx, { ...claims, scopes, refreshToken: tokens3.refresh_token })
     );
     if (!userId) return done(back, { error: "account_deleted" });
     if (scopes.some((s) => s.endsWith("gmail.readonly")))
@@ -2851,9 +2855,9 @@ function tokenize(text3) {
       const ish = Boolean(mm[5]);
       const rest = text3.slice(end2);
       if (NOT_TIME_AFTER.test(rest)) continue;
-      const bare = !ap && !mm[2] && !ish;
-      if (bare && COUNT_RANGE_AFTER.test(rest)) continue;
-      if (bare && placeAfterNumber(text3, start, rest)) continue;
+      const bare2 = !ap && !mm[2] && !ish;
+      if (bare2 && COUNT_RANGE_AFTER.test(rest)) continue;
+      if (bare2 && placeAfterNumber(text3, start, rest)) continue;
       if (ap && (h < 1 || h > 12)) continue;
       if (!ap && !mm[2] && (h < 1 || h > 12)) continue;
       if (mm[2] && h > 23) continue;
@@ -3531,6 +3535,10 @@ ${firstName}`],
     notes: "Warm preset."
   };
 }
+function personalStyle(card) {
+  return card.builtFromCount > 0 || !!card.custom;
+}
+var STYLE_MIN_SAMPLES = 3;
 var PLAIN = new Set(
   "a an the and or but so to of in on at for with from by about as is am are was were be been it its this that i me my you your we our they them he she his her would could can will should do did have has had not if just how what when where who which there here up out any some more very really also than then too all one next week weeks couple time day days minutes min chat call quick talk meet meeting coffee happy free thanks thank hope know let like love get got make sure please best hi hey hello dear".split(" ")
 );
@@ -3686,6 +3694,41 @@ var RECRUITER_TITLE = new RegExp(
 function maxBumpsFor(sector, settingsMax) {
   const cap = sector === "finance" || sector === "consulting" ? 2 : 1;
   return Math.max(0, Math.min(settingsMax, cap));
+}
+var BANK_ORG = /\b(goldman|morgan stanley|jpmorgan|j\.p\. morgan|bank of america|bofa|citi|barclays|ubs|credit suisse|deutsche bank|evercore|lazard|moelis|pjt|centerview|jefferies|rbc|wells fargo|houlihan|guggenheim|perella|rothschild)\b/i;
+var PE_ORG = /\b(blackstone|kkr|apollo|carlyle|tpg|bain capital)\b/i;
+var TRADING_ORG = /\b(jane street|citadel|two sigma|de shaw|point72|millennium|bridgewater|jump trading|hudson river trading|optiver|susquehanna|drw|imc trading|tower research|akuna)\b/i;
+var VC_ORG = /\b(sequoia|a16z|andreessen|accel|benchmark|lightspeed venture|founders fund|greylock|kleiner|index ventures|general catalyst|ventures|venture partners)\b/i;
+function financeFirmKind(org) {
+  const o = org ?? "";
+  if (VC_ORG.test(o)) return "vc";
+  if (PE_ORG.test(o)) return "pe";
+  if (TRADING_ORG.test(o)) return "trading";
+  if (BANK_ORG.test(o)) return "bank";
+  return void 0;
+}
+var BIG_TECH_ORG = /\b(google|alphabet|meta|facebook|apple|amazon|aws|microsoft|netflix|nvidia|salesforce|adobe|oracle|ibm|intel|uber|airbnb|linkedin|tiktok|bytedance)\b/i;
+function firmKindOf(person2, sector, userFunctions = []) {
+  const t = person2.title ?? "";
+  if (ACADEMIC_TITLE.test(t)) return "academic";
+  const known = sector === "tech" ? void 0 : financeFirmKind(person2.org);
+  if (known) return known;
+  if (/\b(quant\w*|trader|trading)\b/i.test(t)) return "trading";
+  if (/\b(venture|general partner)\b/i.test(t) || /\bventure/i.test(person2.industry ?? "")) return "vc";
+  if (sector === "finance") {
+    if (/\bprivate equity\b/i.test(`${t} ${person2.industry ?? ""}`)) return "pe";
+    const nothingKnown = !t.trim() && !(person2.org ?? "").trim() && !(person2.industry ?? "").trim();
+    if (nothingKnown && userFunctions[0] === "vc") return "vc";
+    return "bank";
+  }
+  if (sector === "consulting") return "consulting";
+  if (sector === "tech") {
+    if (BIG_TECH_ORG.test(person2.org ?? "")) return "big_tech";
+    if (/\b(founder|co-founder|cofounder|founding|ceo|cto)\b/i.test(t) || /\bstartup\b/i.test(person2.industry ?? ""))
+      return "startup";
+    return "tech";
+  }
+  return "other";
 }
 
 // packages/core/src/drafts/templates.ts
@@ -4058,7 +4101,7 @@ function placeholderIn(body2) {
 }
 function unsupportedDetails(body2, context) {
   const ctx = context.toLowerCase();
-  const has = (w) => {
+  const has2 = (w) => {
     const l = w.toLowerCase();
     return new RegExp(`(^|[^a-z0-9])${l.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}([^a-z0-9]|$)`).test(ctx);
   };
@@ -4070,12 +4113,12 @@ function unsupportedDetails(body2, context) {
     if (/[A-Za-z0-9'@./-]$/.test(before)) continue;
     const sentenceStart = /(^|[.!?:;"]\s+|\n\s*|\(\s*)$/.test(before);
     const phrase = m[0].replace(/'s$/, "").replace(/[.'-]+$/, "");
-    if (!phrase || has(phrase)) continue;
+    if (!phrase || has2(phrase)) continue;
     const words2 = phrase.split(/\s+/);
     const unknown = words2.filter((w, i) => {
-      const bare = w.replace(/'s$/, "").replace(/[.'-]+$/, "");
-      if (!bare || COMMON_CAPS.has(bare.toLowerCase()) || has(bare)) return false;
-      if (i === 0 && sentenceStart && words2.length === 1 && /^[A-Z][a-z]+$/.test(bare)) return false;
+      const bare2 = w.replace(/'s$/, "").replace(/[.'-]+$/, "");
+      if (!bare2 || COMMON_CAPS.has(bare2.toLowerCase()) || has2(bare2)) return false;
+      if (i === 0 && sentenceStart && words2.length === 1 && /^[A-Z][a-z]+$/.test(bare2)) return false;
       return true;
     });
     if (unknown.length) out.push(phrase);
@@ -4646,9 +4689,9 @@ async function raiseCard(db2, userId, c) {
               ${c.now}::timestamptz, ${c.now}::timestamptz)`;
   return row.id;
 }
-async function settleCard(db2, userId, dedupeKey, status2, now) {
+async function settleCard(db2, userId, dedupeKey, status3, now) {
   await db2.sql`
-    update orbit.suggestions set status = ${status2}, decided_at = ${now}::timestamptz, updated_at = ${now}::timestamptz
+    update orbit.suggestions set status = ${status3}, decided_at = ${now}::timestamptz, updated_at = ${now}::timestamptz
      where user_id = ${userId}::uuid and dedupe_key = ${dedupeKey} and status in ('pending', 'snoozed')`;
 }
 
@@ -4891,6 +4934,30 @@ ${body2}`, ctx.inputs))
   });
   return { ok: !deduped.some((i) => i.blocking), issues: deduped, words: words2, grade };
 }
+
+// packages/core/src/knowledge/index.ts
+var DRAFT_RULES = {
+  recruiting: 'Recruiting register: warm, curious, specific. The ask is a 15 minute call about their path and their team (20 for an alum). Never a job, a referral, a resume review or "openings" in a first message; proof of interest is one specific thing about them, not about the student.',
+  fundraising: 'Fundraising register: crisp, numbers first, confident. Two lines on what the company does and why now, one line of traction only if the context gives one, then "would you be open to a look?" Never a job hunting line, never a valuation, never a fake deadline, never the whole pitch.',
+  sales: 'Sales register: short, concrete, no hype. Open with the trigger or the specific observation about them, say what the product does for people like them in plain words with one result if the context gives one, then "worth a quick look?" with an out. No feature list, no attachment.',
+  hiring: 'Hiring register: direct and respectful of their current job. Line one is why them (something they built or did), line two the company, stage and the one thing that makes the role interesting, line three "open to hearing about it?" Never "exciting opportunity", never a pasted job description.',
+  advice: `Advice register: warm, humble, specific. One real connection, the one question only this person can answer ("I'm deciding between X and Y and you did both"), a 15 to 20 minute ask with an out. Never "any advice you have", never "be my mentor", never a resume.`,
+  cofounder: 'Co-founder register: peer to peer. One line on what the student is building and why them, one line on why this person (what they built or spent years inside), a 20 minute ask to compare notes on the problem. Never equity, never a title, never "looking for a technical co-founder" as the opener.',
+  community: "Community register: friendly and concrete. A named event or group with the date and place, two or three people they would know who are coming, why this person would add something, and a plain invitation. Never a mass invite, never a bare link.",
+  collaboration: 'Collaboration register: precise and academic. Name the specific paper or talk and the specific thing in it, ask one precise question or state one concrete overlap, and ask for an answer by email or 20 minutes. "Dear Professor Lastname" for faculty not yet met; never "I am passionate about research".'
+};
+var ASK_RULES = {
+  bank: 'A banker is asked about their group and path: how they chose it, what the first year looks like, what separates the summer analysts who do well. Never about staffing or an office (consulting words), never whether the group still has seats, never off-cycle or diversity programs. When the summer cycle is already late, ask how they would approach recruiting from here, never "before recruiting starts".',
+  pe: `Someone in private equity is asked how they made the move and what surprised them about the work, or, if senior, what they look for in the analysts they hire. Never about a bank's group, summer analyst seats or "your bank".`,
+  trading: 'A trader or researcher is asked how they prepared and what the first months were like, or how they chose between trading and research; a desk head gets one question only they can answer. Never "the office" or "your group".',
+  vc: 'An investor is asked how they got into venture and what their week looks like, or whether to operate first; a founder raising money asks "would you be open to a look" with one line of traction. Never "your bank", never how juniors get staffed.',
+  consulting: 'A consultant is asked how they chose their office or practice, how staffing worked in their first year, or what case prep actually helped; a partner is asked for judgment, never about their first year. Never a "group" or a desk.',
+  big_tech: "An engineer or PM at a large company is asked what the team owns, how intern projects are picked or what to practise; a manager what they look for; a VP or head for a pointer to someone closer to the intern class. Proof beats adjectives. Never a referral ask to a stranger in a first message.",
+  tech: 'An engineer or PM is asked what the team owns, how they ended up there and what their first months were like; a manager what they look for in interns and new grads. One link to something the student built beats any adjective. Never a referral or "openings" in a first message to someone the student has not talked to.',
+  startup: "A founder or early employee is asked how they joined so early and what the stage is like; a founder what they look for in early hires. Never a referral in message one.",
+  academic: 'A professor is asked about their research and how students take part, or whether they take undergraduate research assistants and what they look for in one. Never their "first few months" or "the path to" their university.',
+  other: "Someone whose firm Orbit does not know is asked how they got into their field and what helped early on; a senior person what they look for in people starting out. Never bank, consulting or desk words."
+};
 
 // supabase/functions/_shared/rows.ts
 function iso(v) {
@@ -5267,6 +5334,775 @@ function ownWordsLines(g, max = 240, order = LINE_ORDER) {
   return lines;
 }
 
+// packages/core/src/style/voice.ts
+var VOICE_NOTES_MAX = 8;
+var VOICE_JUDGE_MIN = 2;
+var VOICE_HOLD_REASON = "didn't sound like you";
+var firstLine = (s) => (s.split("\n")[0] ?? "").trim();
+function greetingWords(pattern) {
+  const p = pattern.replace(/[,.:]\s*$/, "").trim();
+  if (/^\{first\}$/.test(p)) return "their first name alone";
+  return p.replace(/\s*\{first\}\s*/g, " ").trim() || "their first name";
+}
+function signoffWords(s) {
+  return firstLine(s).replace(/[,.:]\s*$/, "").trim();
+}
+var listWords = (xs) => xs.length <= 1 ? xs[0] ?? "" : `${xs.slice(0, -1).join(", ")} and ${xs[xs.length - 1]}`;
+function cardProse(card) {
+  const out = [];
+  const greet = [...new Set(card.greetingPatterns.map(greetingWords).filter(Boolean))].slice(0, 2);
+  const sign = [...new Set(card.signoffs.map(signoffWords).filter(Boolean))].slice(0, 2);
+  const g = greet.length ? `You greet with ${greet.join(" or ")}` : "";
+  const s = sign.length ? `sign off with ${sign.join(" or ")}` : "";
+  if (g && s) out.push(`${g} and ${s}.`);
+  else if (g) out.push(`${g}.`);
+  else if (s) out.push(`You ${s}.`);
+  const words2 = Math.round(card.avgMessageWords);
+  const length = words2 <= 70 ? "short" : words2 <= 130 ? "at medium length" : "long";
+  const marks = card.exclamationsPerMessage <= 0.05 ? "no exclamation marks" : card.exclamationsPerMessage < 0.5 ? "an exclamation mark now and then" : "exclamation marks often";
+  const parts = [
+    card.contractions ? "contractions" : "no contractions",
+    marks,
+    ...card.emoji ? ["the odd emoji"] : []
+  ];
+  out.push(`You write ${length}, about ${words2} words, with ${listWords(parts)}.`);
+  out.push(`Your sentences run about ${Math.round(card.avgSentenceWords)} words.`);
+  if (card.characteristicPhrases.length)
+    out.push(`Phrases of yours: ${listWords(card.characteristicPhrases.slice(0, 5).map((p) => `'${p}'`))}.`);
+  if (card.avoid.length) out.push(`You never say ${listWords(card.avoid.slice(0, 6).map((p) => `'${p}'`))}.`);
+  if (card.custom && card.notes.trim()) out.push(`Your notes for Orbit: ${card.notes.trim()}`);
+  out.push(
+    card.builtFromCount > 0 ? `Learned from ${card.builtFromCount} messages you wrote.` : card.custom ? "Set by you." : "This is a starting style; Orbit has not learned from your messages yet."
+  );
+  return out.map(plainText);
+}
+function plainText(s) {
+  return s.replace(/\s*[–—]\s*/g, ", ").replace(/!+/g, ".").replace(/\.\./g, ".").replace(/\s{2,}/g, " ").trim();
+}
+var QUOTED = /(?:^|[\s(:])['"‘“]([^'"‘’“”\n]{2,80}?)['"’”](?=$|[\s.,;:?)])/g;
+var NEGATIVE = /\b(cut|cuts|drop|drops|delete|deletes|remove|removes|never|avoid|avoids|stop|skip|skips|strike|take out|takes out|don'?t|do not|change|changes|swap|swaps|replace|replaces)\b/i;
+function quotedPhrases(text3) {
+  return [...text3.matchAll(QUOTED)].map((m) => m[1].trim()).filter((p) => p.length >= 2);
+}
+function avoidOf(note2) {
+  const own = note2.avoid?.trim();
+  if (own) return own;
+  if (!NEGATIVE.test(note2.text)) return void 0;
+  return quotedPhrases(note2.text)[0];
+}
+function activeVoiceNotes(notes2) {
+  return (notes2 ?? []).filter((n) => !n.forgottenAt);
+}
+function withVoiceNotes(card, notes2) {
+  const live = activeVoiceNotes(notes2);
+  if (!live.length) return card;
+  const lines = live.map((n) => n.text.trim().replace(/[.]$/, "")).filter(Boolean);
+  const avoid = [...card.avoid];
+  const seen = new Set(avoid.map((a) => a.toLowerCase()));
+  for (const n of live) {
+    const a = avoidOf(n);
+    if (a && !seen.has(a.toLowerCase())) {
+      seen.add(a.toLowerCase());
+      avoid.push(a);
+    }
+  }
+  const learned = `What Orbit learned from your edits: ${lines.join("; ")}.`;
+  return { ...card, avoid, notes: card.notes.trim() ? `${card.notes.trim()}
+${learned}` : learned };
+}
+function decideVoiceNote(notes2, id, action, now) {
+  let note2;
+  const at = now.toISOString();
+  const out = (notes2 ?? []).map((n) => {
+    if (n.id !== id) return n;
+    note2 = action === "keep" ? { ...n, keptAt: at, forgottenAt: null } : { ...n, forgottenAt: at };
+    return note2;
+  });
+  return { notes: out, note: note2 };
+}
+var MAX_TOKENS = 400;
+var tokens = (s) => s.split(/\s+/).filter(Boolean);
+var bare = (w) => w.toLowerCase().replace(/^[^a-z0-9']+|[^a-z0-9']+$/g, "");
+function align(a, b, key) {
+  const A = a.map(key);
+  const B = b.map(key);
+  const n = a.length;
+  const m = b.length;
+  const L = Array.from({ length: n + 1 }, () => new Uint16Array(m + 1));
+  for (let i2 = n - 1; i2 >= 0; i2--)
+    for (let j2 = m - 1; j2 >= 0; j2--)
+      L[i2][j2] = A[i2] === B[j2] ? L[i2 + 1][j2 + 1] + 1 : Math.max(L[i2 + 1][j2], L[i2][j2 + 1]);
+  const out = [];
+  let cur = { del: [], ins: [] };
+  const flush = () => {
+    if (cur.del.length || cur.ins.length) out.push(cur);
+    cur = { del: [], ins: [] };
+  };
+  let i = 0;
+  let j = 0;
+  while (i < n || j < m) {
+    if (i < n && j < m && A[i] === B[j]) {
+      flush();
+      i++;
+      j++;
+    } else if (j < m && (i >= n || L[i][j + 1] >= L[i + 1][j])) cur.ins.push(b[j++]);
+    else cur.del.push(a[i++]);
+  }
+  flush();
+  return out;
+}
+var unitsOf = (s) => s.split("\n").flatMap((l) => l.trim().split(/(?<=[.?!])\s+/)).map((u2) => u2.trim()).filter(Boolean);
+var unitKey = (u2) => tokens(u2).map(bare).join(" ");
+function hunksOf(before, after) {
+  const a = unitsOf(before);
+  const b = unitsOf(after);
+  if (tokens(before).length > MAX_TOKENS || tokens(after).length > MAX_TOKENS || a.length > 80 || b.length > 80)
+    return void 0;
+  const out = [];
+  const similar = (x, y) => {
+    const xw = tokens(x).map(bare);
+    const yw = tokens(y).map(bare);
+    const shared = xw.filter((w) => yw.includes(w)).length;
+    return shared / Math.max(xw.length, yw.length, 1);
+  };
+  for (const h of align(a, b, unitKey)) {
+    const dels = h.del.map((u2) => ({ u: u2, used: false }));
+    const ins = [];
+    for (const i of h.ins) {
+      let best;
+      let score = 0.5;
+      for (const d of dels)
+        if (!d.used && similar(d.u, i) >= score) {
+          best = d;
+          score = similar(d.u, i);
+        }
+      if (best) {
+        best.used = true;
+        for (const w of align(tokens(best.u), tokens(i), bare)) out.push(w);
+      } else ins.push(i);
+    }
+    const left = dels.filter((d) => !d.used).map((d) => d.u);
+    while (left.length && ins.length && wordCount(left[left.length - 1]) <= 6 && wordCount(ins[ins.length - 1]) <= 6)
+      out.push({ del: tokens(left.pop()), ins: tokens(ins.pop()) });
+    for (const d of left) out.push({ del: tokens(d), ins: [] });
+    for (const i of ins) out.push({ del: [], ins: tokens(i) });
+  }
+  return out;
+}
+function wordEditDistance(before, after) {
+  const h = hunksOf(before, after);
+  if (!h) return Math.abs(wordCount(before) - wordCount(after)) + 1;
+  return h.reduce((n, x) => n + x.del.length + x.ins.length, 0);
+}
+var GLUE = new Set(
+  "a an the and or but so to of in on at for with from by is am are was be it its this that i me my you your we just very".split(
+    " "
+  )
+);
+var GREETING_RE = /^(hi|hey|hello|dear|good (?:morning|afternoon|evening)|greetings|hiya|yo)\b/i;
+var SIGNOFF_RE = /^(best|thanks|thank you|cheers|regards|warmly|all the best|talk soon|sincerely|take care|thanks so much|many thanks|best regards|kind regards|warm regards|thanks again|appreciate it|thank you so much|best wishes|warm wishes|with thanks|gratefully)[,!.]?$/i;
+function greetingFamily(line) {
+  const t = line.trim();
+  const m = t.match(GREETING_RE);
+  if (m) return m[1].toLowerCase().replace(/^good .*/, "good");
+  if (/^\{first\},?$/.test(t) || /^[A-Z][a-z]+(?:\s[A-Z][a-z]+)?,$/.test(t)) return "name";
+  return void 0;
+}
+function signoffFamily(line) {
+  const t = line.trim().replace(/[,!.]$/, "").toLowerCase();
+  if (!SIGNOFF_RE.test(line.trim())) return void 0;
+  if (/^(thank|many thanks|with thanks|appreciate|gratefully)/.test(t)) return "thanks";
+  if (/regards|sincerely|warmly|warm wishes|best wishes/.test(t)) return "regards";
+  if (/^(best|all the best)$/.test(t)) return "best";
+  return t;
+}
+var linesOf = (body2) => body2.split("\n").map((l) => l.trim()).filter(Boolean);
+function signoffAt(lines) {
+  for (let i = lines.length - 1; i >= Math.max(0, lines.length - 4); i--)
+    if (signoffFamily(lines[i])) return i;
+  return -1;
+}
+var CONTRACTION = /\b[a-z]+'(m|re|ve|ll|d|t)\b|\b(it|that|there|here|what|who|he|she|let)'s\b/gi;
+var EXPANDED = /\b(i am|do not|does not|did not|cannot|can not|it is|that is|you are|we are|they are|i will|is not|are not|was not|would not|could not|should not|have not|will not|i have not|let us|there is)\b/gi;
+var has = (body2, phrase) => {
+  const p = phrase.trim().toLowerCase();
+  if (p.length < 3) return false;
+  const esc = p.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return new RegExp(`(^|[^a-z0-9])${esc}($|[^a-z0-9])`, "i").test(body2);
+};
+function voiceCheck(draft2, ctx) {
+  const { card } = ctx;
+  const problems = [];
+  const body2 = draft2.body.replace(/\r/g, "");
+  const lines = linesOf(body2);
+  const own = personalStyle(card);
+  const exemplars2 = (ctx.exemplars ?? []).filter((e) => e.trim());
+  const cardGreet = new Set(
+    card.greetingPatterns.map((p) => greetingFamily(p)).filter((x) => !!x)
+  );
+  const cardSign = new Set(
+    card.signoffs.map((s) => signoffFamily(firstLine(s))).filter((x) => !!x)
+  );
+  for (const e of exemplars2) {
+    const el = linesOf(e);
+    const g = el[0] ? greetingFamily(el[0]) : void 0;
+    if (g) cardGreet.add(g);
+    const at = signoffAt(el);
+    if (at >= 0) cardSign.add(signoffFamily(el[at]));
+  }
+  const knows = own || exemplars2.length > 0;
+  const greet = lines[0] ? greetingFamily(lines[0]) : void 0;
+  if (knows && greet && cardGreet.size && !cardGreet.has(greet))
+    problems.push({
+      code: "greeting",
+      detail: `It opens with ${greet === "name" ? "their name alone" : `'${lines[0].split(/[\s,]/)[0]}'`}; you open with ${[...cardGreet].map((g) => g === "name" ? "their name" : `'${g[0].toUpperCase()}${g.slice(1)}'`).join(" or ")}.`
+    });
+  const signIdx = signoffAt(lines);
+  const sign = signIdx >= 0 ? signoffFamily(lines[signIdx]) : void 0;
+  if (knows && sign && cardSign.size && !cardSign.has(sign))
+    problems.push({
+      code: "signoff",
+      detail: `It signs off '${lines[signIdx].replace(/[,.]$/, "")}'; you sign off ${[...cardSign].map((s) => `'${s[0].toUpperCase()}${s.slice(1)}'`).join(" or ")}.`
+    });
+  const end2 = signIdx >= 0 ? signIdx : lines.length;
+  const middle = lines.slice(greet ? 1 : 0, end2).join(" ");
+  const sentences2 = middle.split(/(?<=[.?!])\s+/).map((s) => s.trim()).filter((s) => wordCount(s) >= 3);
+  if (sentences2.length >= 3 && card.avgSentenceWords > 0) {
+    const avg = sentences2.reduce((n, s) => n + wordCount(s), 0) / sentences2.length;
+    const top = Math.max(card.avgSentenceWords * 1.75, card.avgSentenceWords + 9);
+    if (avg > top)
+      problems.push({
+        code: "sentence_length",
+        detail: `Its sentences run about ${Math.round(avg)} words; yours run about ${Math.round(card.avgSentenceWords)}.`
+      });
+    else if (card.avgSentenceWords >= 18 && avg < card.avgSentenceWords * 0.45)
+      problems.push({
+        code: "sentence_length",
+        detail: `Its sentences run about ${Math.round(avg)} words; yours run about ${Math.round(card.avgSentenceWords)}.`
+      });
+  }
+  const said = `${draft2.subject ?? ""}
+${body2}`;
+  for (const a of card.avoid)
+    if (has(said, a)) problems.push({ code: "avoid", detail: `It says '${a.trim()}', which you never say.` });
+  const seen = new Set(card.avoid.map((a) => a.trim().toLowerCase()));
+  for (const n of activeVoiceNotes(ctx.notes)) {
+    const a = avoidOf(n);
+    if (a && !seen.has(a.toLowerCase()) && has(said, a)) {
+      seen.add(a.toLowerCase());
+      problems.push({ code: "note", detail: `It says '${a}'; ${lowerFirst(n.text.replace(/[.]$/, ""))}.` });
+      continue;
+    }
+    const t = n.text.toLowerCase();
+    if (/exclamation/.test(t) && /\b(never|no|cut|drop|without|don'?t)\b/.test(t) && /!/.test(body2))
+      problems.push({
+        code: "note",
+        detail: `It has an exclamation mark; ${lowerFirst(n.text.replace(/[.]$/, ""))}.`
+      });
+    else if (/emoji/.test(t) && /\b(never|no|cut|drop|without|don'?t)\b/.test(t) && /\p{Extended_Pictographic}/u.test(body2))
+      problems.push({ code: "note", detail: `It has an emoji; ${lowerFirst(n.text.replace(/[.]$/, ""))}.` });
+    else if (/first name only|only your first name|just your first name/.test(t) && signIdx >= 0) {
+      const name = lines[signIdx + 1];
+      if (name && name.split(/\s+/).length >= 2 && name.length < 40)
+        problems.push({
+          code: "note",
+          detail: `It signs with your full name; ${lowerFirst(n.text.replace(/[.]$/, ""))}.`
+        });
+    }
+  }
+  const bangs = (body2.match(/!/g) ?? []).length;
+  if (card.exclamationsPerMessage < 0.1 && (bangs >= 2 || own && bangs >= 1))
+    problems.push({ code: "exclamation", detail: "It uses exclamation marks; you write without them." });
+  const emoji = (body2.match(/\p{Extended_Pictographic}/gu) ?? []).length;
+  if (!card.emoji && (emoji >= 2 || own && emoji >= 1))
+    problems.push({ code: "emoji", detail: "It has emoji; you write without them." });
+  const contracted = (body2.match(CONTRACTION) ?? []).length;
+  const expanded = (body2.match(EXPANDED) ?? []).length;
+  if (own && !card.contractions && contracted >= 2)
+    problems.push({ code: "contractions", detail: "It uses contractions like I'm; you write them out." });
+  else if (own && card.contractions && contracted === 0 && expanded >= 2 && wordCount(body2) >= 40)
+    problems.push({ code: "contractions", detail: "It writes out I am and do not; you use contractions." });
+  return { ok: problems.length === 0, problems };
+}
+var lowerFirst = (s) => s ? s[0].toLowerCase() + s.slice(1) : s;
+function voiceScore(r) {
+  return Math.max(0, 3 - r.problems.length);
+}
+function meanVoiceScore(scores) {
+  if (!scores.length) return null;
+  return Math.round(scores.reduce((a, b) => a + b, 0) / scores.length * 10) / 10;
+}
+var VOICE_DISTILL_SYSTEM = [
+  "You read how a college student edited the networking emails Orbit drafted for them, and write down what the edits show about how they write.",
+  `Return at most ${VOICE_NOTES_MAX} notes. Each note is one short line in the second person, in plain words the student would use about themselves, such as "You cut 'Thanks either way' every time" or "You sign with your first name only".`,
+  "A note must be backed by at least two edits, and its evidence lists the ids of those edits exactly as given. Leave out anything a single edit shows, anything the style card already says, and anything about a particular person or company.",
+  "When a note is about a phrase the student always removes or replaces, put that phrase in `avoid` exactly as Orbit wrote it; otherwise leave `avoid` empty.",
+  "Never repeat a note the student forgot, in any wording. Use no dashes and no exclamation marks."
+].join("\n");
+var VOICE_JUDGE_SYSTEM = [
+  "You compare one draft email against a few emails a college student really sent, and judge whether the same person wrote all of them.",
+  "Read the voice, not the topic: greeting and sign-off, sentence length and rhythm, contractions, how direct the ask is, warmth, punctuation, the words they reach for.",
+  "Score 0 to 3: 3, clearly the same person; 2, plausibly the same person; 1, probably someone else; 0, clearly someone else. Give the reason in one plain sentence, with no dashes and no exclamation marks."
+].join("\n");
+function voiceJudgeUser(draft2, exemplars2) {
+  return [
+    "<sent_by_the_student>",
+    ...exemplars2.map((e, i) => `<email n="${i + 1}">
+${e.slice(0, 1500)}
+</email>`),
+    "</sent_by_the_student>",
+    `<draft>
+${draft2.subject ? `Subject: ${draft2.subject}
+` : ""}${draft2.body.slice(0, 3e3)}
+</draft>`
+  ].join("\n");
+}
+
+// supabase/functions/_shared/voice/voice.ts
+import { z as z3 } from "npm:zod@3.25.76/v4";
+
+// supabase/functions/_shared/memory/memory.ts
+import { z as z2 } from "npm:zod@3.25.76/v4";
+
+// supabase/functions/_shared/research/guards.ts
+function norm(s) {
+  return (s ?? "").normalize("NFKD").replace(/[̀-ͯ]/g, "").toLowerCase().replace(/[‐-―]/g, "-").replace(/\s+/g, " ").trim();
+}
+var ORG_SUFFIX = /[,.]?\s+(inc|inc\.|llc|ltd|ltd\.|corp|corporation|co|gmbh|plc|sa|ag)\.?$/i;
+function normOrg(s) {
+  return norm(s).replace(ORG_SUFFIX, "").trim();
+}
+function orgFromTitle(title, name) {
+  if (!title) return void 0;
+  const cleaned = title.replace(/\s*[|·]\s*linkedin.*$/i, "").trim();
+  const parts = cleaned.split(/\s+[-–—|·]\s+/).map((p) => p.trim()).filter((p) => p && norm(p) !== norm(name));
+  for (const p of parts) {
+    const at = p.match(/\b(?:at|@)\s+(.+)$/i);
+    if (at) return at[1].trim();
+  }
+  return parts.length >= 2 ? parts[parts.length - 1] : parts[0];
+}
+var SENSITIVE2 = [
+  {
+    category: "age",
+    re: /\b\d{1,3}[- ]years?[- ]old\b|\baged \d{1,3}\b|\bborn in (19|20)\d\d\b|\bage \d{1,3}\b/i
+  },
+  {
+    category: "ethnicity",
+    re: /\b(ethnicity|ethnic background|racial|race is|caucasian|african[- ]american|asian[- ]american|hispanic|latino|latina|latinx)\b/i
+  },
+  {
+    category: "religion",
+    re: /\b(christian|muslim|jewish|hindu|buddhist|sikh|atheist|catholic|protestant|mormon|religious|religion|his faith|her faith|their faith|attends church)\b/i
+  },
+  {
+    category: "health",
+    re: /\b(diagnos(ed|is)|illness|cancer survivor|chronic (illness|condition)|disabilit(y|ies)|pregnan(t|cy)|surgery|mental illness|in recovery)\b/i
+  },
+  {
+    category: "family",
+    re: /\b(married|divorced|widow(ed|er)?|spouse|wedding|(his|her|their|your) (wife|husband|kids|children|daughter|son|family)|(father|mother|parent) of (two|three|four|\d))\b/i
+  },
+  { category: "sexuality", re: /\b(gay|lesbian|bisexual|transgender|queer|lgbtq?\+?|sexual orientation)\b/i },
+  {
+    category: "politics",
+    re: /\b(democrat(ic)? (voter|supporter)|republican (voter|supporter)|political views?|voted for|votes for|campaigned for|donated to (the )?(campaign|party)|political donations?)\b/i
+  },
+  {
+    // a street address, as written ("1200 Market Street"): case kept, so "5 years to drive growth" is not one
+    category: "home",
+    re: /\b\d{1,6}\s+[A-Z][a-z]+(\s+[A-Z][a-z]+){0,2}\s+(Street|St|Avenue|Ave|Road|Rd|Lane|Ln|Drive|Dr|Boulevard|Blvd|Court|Ct|Way|Place|Pl|Terrace|Circle)\b/
+  },
+  {
+    category: "home",
+    re: /\b(home address|lives (at|on) \d|zip code|apartment \d|apt\.? \d|neighbou?rhood (where|in which) (he|she|they) lives?|(his|her|their) (house|home) (in|on|at))\b/i
+  },
+  {
+    category: "pay",
+    re: /\b(salary|salaries|compensation package|total compensation|base pay|net worth|earns? \$|makes \$|paid \$|\$\s?\d[\d,.]*\s?k?\s+(a|per) year|annual pay|stock (grants?|options?) worth)\b/i
+  },
+  {
+    category: "personality",
+    re: /\b(personality|communication style|introvert(ed)?|extrovert(ed)?|myers[- ]briggs|mbti|enneagram|(intj|intp|entj|entp|infj|infp|enfj|enfp|istj|isfj|estj|esfj|istp|isfp|estp|esfp)\b|temperament|(is|seems|comes across as) (shy|arrogant|abrasive|difficult|blunt|awkward|cold|aloof|intense))\b/i
+  },
+  {
+    category: "legal",
+    // what happened to someone in court, not the practice area of a lawyer ("litigation associate" stays)
+    re: /\b(lawsuits?|sued|suing|indicted|indictment|arrested|arrest record|convicted|conviction|charged with|felony|misdemeanou?r|dui|restraining order|filed for bankruptcy|pleaded guilty|settled (a|the) (suit|case))\b/i
+  },
+  {
+    category: "immigration",
+    re: /\b(visa status|green card|immigration status|h-?1b status|undocumented|deport(ed|ation)|citizenship status)\b/i
+  },
+  {
+    category: "job_loss",
+    re: /\b((he|she|they) (was|were|got) (laid off|fired|let go)|lost (his|her|their) job|on (parental|maternity|paternity|medical|family) leave)\b/i
+  }
+];
+function sensitiveCategory(text3) {
+  return SENSITIVE2.find((s) => s.re.test(text3))?.category;
+}
+
+// supabase/functions/_shared/memory/memory.ts
+var DEDUPE_COSINE = 0.92;
+var HALF_LIFE_DAYS = 30;
+var MEMORY_KINDS = [
+  "preference",
+  "constraint",
+  "goal_detail",
+  "outcome",
+  "person_fact",
+  "note"
+];
+var MEMORY_MAX_CHARS = 200;
+var toItem = (r) => ({
+  id: r.id,
+  kind: r.kind,
+  text: r.text,
+  personId: r.person_id,
+  importance: num(r.importance),
+  createdAt: iso(r.created_at),
+  lastSeenAt: iso(r.last_seen_at)
+});
+function embeddable(text3) {
+  const letters = text3.match(/\p{L}/gu) ?? [];
+  if (!letters.length) return false;
+  const latin = letters.filter((c) => /[A-Za-z]/.test(c)).length;
+  return latin / letters.length >= 0.8;
+}
+async function safeEmbed(embed, text3) {
+  if (!embeddable(text3)) return null;
+  try {
+    const e = await embed(text3);
+    return e?.length ? e : null;
+  } catch {
+    return null;
+  }
+}
+async function addMemory(db2, embed, userId, m, now) {
+  const text3 = m.text.replace(/\s+/g, " ").trim().slice(0, 1e3);
+  if (!text3) throw new HttpError(400, "bad_request", "text is required");
+  if (!MEMORY_KINDS.includes(m.kind)) throw new HttpError(400, "bad_request", "unknown memory kind");
+  if (m.personId) {
+    const [p] = await db2.sql`select 1 from orbit.people where id = ${m.personId}::uuid and user_id = ${userId}::uuid`;
+    if (!p) throw new HttpError(404, "not_found", "no such person");
+  }
+  const e = await safeEmbed(embed, text3);
+  const importance = Math.max(0, Math.min(1, m.importance ?? 0.5));
+  if (e) {
+    const [near] = await db2.sql`
+      select id, kind, text, person_id, importance, created_at, last_seen_at,
+             1 - (embedding <=> ${vec(e)}::vector) as sim
+        from orbit.memories
+       where user_id = ${userId}::uuid and deleted_at is null and embedding is not null
+         and person_id is not distinct from ${m.personId ?? null}::uuid
+       order by embedding <=> ${vec(e)}::vector limit 1`;
+    if (near && num(near.sim) >= DEDUPE_COSINE) {
+      const [row2] = await db2.sql`
+        update orbit.memories set last_seen_at = ${now}::timestamptz, importance = greatest(importance, ${importance}::real)
+         where id = ${near.id}::uuid
+        returning id, kind, text, person_id, importance, created_at, last_seen_at`;
+      return { memory: toItem(row2), deduped: true };
+    }
+  } else {
+    const [same] = await db2.sql`
+      update orbit.memories set last_seen_at = ${now}::timestamptz
+       where user_id = ${userId}::uuid and deleted_at is null and lower(text) = lower(${text3})
+         and person_id is not distinct from ${m.personId ?? null}::uuid
+      returning id, kind, text, person_id, importance, created_at, last_seen_at`;
+    if (same) return { memory: toItem(same), deduped: true };
+  }
+  const [row] = await db2.sql`
+    insert into orbit.memories (user_id, person_id, kind, text, embedding, importance, source, quote, created_at,
+                                last_seen_at)
+    values (${userId}::uuid, ${m.personId ?? null}::uuid, ${m.kind}, ${text3}, ${e ? vec(e) : null}::vector,
+            ${importance}::real, ${m.source ?? "remember"}, ${m.quote ?? null}, ${now}::timestamptz, ${now}::timestamptz)
+    returning id, kind, text, person_id, importance, created_at, last_seen_at`;
+  return { memory: toItem(row), deduped: false };
+}
+var tokens2 = (s) => new Set(
+  s.toLowerCase().split(/[^\p{L}\p{N}]+/u).filter((w) => w.length > 2)
+);
+function keywordScore(query2, text3) {
+  const q = tokens2(query2);
+  if (!q.size) return 0;
+  const t = tokens2(text3);
+  let hit = 0;
+  for (const w of q) if (t.has(w) || [...t].some((x) => x.startsWith(w) || w.startsWith(x))) hit++;
+  return hit / q.size;
+}
+var recency = (lastSeen, now) => 0.5 ** (Math.max(0, now.getTime() - lastSeen.getTime()) / (HALF_LIFE_DAYS * 864e5));
+async function searchMemories(db2, embed, userId, q, now) {
+  const query2 = q.query.trim();
+  if (!query2) throw new HttpError(400, "bad_request", "query is required");
+  const e = await safeEmbed(embed, query2);
+  const rows = await db2.sql`
+    select id, kind, text, person_id, importance, created_at, last_seen_at,
+           case when embedding is null or ${e ? vec(e) : null}::vector is null then null
+                else 1 - (embedding <=> ${e ? vec(e) : null}::vector) end as sim
+      from orbit.memories
+     where user_id = ${userId}::uuid and deleted_at is null
+       and (${q.personId ?? null}::uuid is null or person_id = ${q.personId ?? null}::uuid)
+     order by last_seen_at desc
+     limit 500`;
+  const scored = rows.map((r) => {
+    const cos = r.sim === null || r.sim === void 0 ? keywordScore(query2, r.text) : Math.max(0, num(r.sim));
+    const score = 0.7 * cos + 0.2 * num(r.importance) + 0.1 * recency(new Date(r.last_seen_at), now);
+    return { ...toItem(r), score: Math.round(score * 1e4) / 1e4 };
+  });
+  return scored.sort((a, b) => b.score - a.score).slice(0, Math.max(1, Math.min(50, q.limit ?? 8)));
+}
+async function listMemories(db2, userId, personId) {
+  const rows = await db2.sql`
+    select id, kind, text, person_id, importance, created_at, last_seen_at from orbit.memories
+     where user_id = ${userId}::uuid and deleted_at is null
+       and (${personId ?? null}::uuid is null or person_id = ${personId ?? null}::uuid)
+     order by last_seen_at desc limit 500`;
+  return rows.map(toItem);
+}
+async function forgetMemory(db2, userId, id, now) {
+  const rows = await db2.sql`
+    update orbit.memories
+       set deleted_at = ${now}::timestamptz, text = '', quote = null, embedding = null, updated_at = ${now}::timestamptz
+     where id = ${id}::uuid and user_id = ${userId}::uuid and deleted_at is null returning id`;
+  return rows.length > 0;
+}
+var MEMORY_SYSTEM = [
+  'Extract durable facts worth remembering for future conversations: preferences, constraints, details of goals, outcomes, and facts about specific people. Skip small talk and anything already in <known>. Each memory ≤ 200 characters, in third person about the user ("Prefers morning calls").',
+  `Return {"memories": [{kind, text, person_name|null, importance: 0..1, quote}]}; quote must be the user's own words.`
+].join("\n");
+var memorySchema = z2.object({
+  memories: z2.array(
+    z2.object({
+      kind: z2.enum(["preference", "constraint", "goal_detail", "outcome", "person_fact", "note"]),
+      text: z2.string(),
+      person_name: z2.string().nullable(),
+      importance: z2.number(),
+      quote: z2.string()
+    })
+  )
+});
+var squash = (s) => s.toLowerCase().replace(/[’‘]/g, "'").replace(/[^\p{L}\p{N}']+/gu, " ").trim();
+async function extractMemories(claude, userId, turns2, known = []) {
+  const userTurns = turns2.filter((t) => t.role === "user").slice(-2);
+  if (!userTurns.length) return [];
+  const lastUserIdx = turns2.lastIndexOf(userTurns[0]);
+  const window = turns2.slice(Math.max(0, lastUserIdx));
+  const r = await claude.structured({
+    task: "memory_extract",
+    system: MEMORY_SYSTEM,
+    user: `<known>${known.slice(0, 20).join("\n")}</known><turns>${window.map((t) => `${t.role}: ${t.text.replace(/<\/?turns>/g, "")}`).join("\n")}</turns>`,
+    schema: memorySchema,
+    userId
+  });
+  if (!r.ok) return [];
+  const said = squash(userTurns.map((t) => t.text).join("\n"));
+  const knownSet = new Set(known.map(squash));
+  return r.data.memories.filter((m) => m.quote.trim() && said.includes(squash(m.quote))).filter((m) => !sensitiveCategory(`${m.text} ${m.quote}`)).filter((m) => !knownSet.has(squash(m.text))).map((m) => ({
+    kind: m.kind,
+    text: m.text.trim().slice(0, MEMORY_MAX_CHARS),
+    personName: m.person_name,
+    importance: Math.max(0, Math.min(1, Number.isFinite(m.importance) ? m.importance : 0.5)),
+    quote: m.quote.trim()
+  }));
+}
+
+// supabase/functions/_shared/voice/voice.ts
+var EMBED_SENT_LIMIT = 200;
+var text = (max) => z3.string().max(max);
+var list = (n, max) => z3.array(text(max)).max(n);
+var StyleCardS = z3.object({
+  greetingPatterns: list(6, 80),
+  signoffs: list(6, 160),
+  formality: z3.number().min(0).max(1),
+  avgSentenceWords: z3.number().min(0).max(200),
+  avgMessageWords: z3.number().min(0).max(2e3),
+  contractions: z3.boolean(),
+  exclamationsPerMessage: z3.number().min(0).max(50),
+  emoji: z3.boolean(),
+  characteristicPhrases: list(12, 120),
+  avoid: list(50, 120),
+  notes: text(4e3),
+  builtFromCount: z3.number().int().min(0).max(1e6),
+  version: z3.number().int().min(0).max(1e3),
+  sources: z3.partialRecord(z3.enum(["email", "linkedin", "orbit", "pasted"]), z3.number().int().min(0)).optional(),
+  custom: z3.boolean().optional()
+});
+function parseStyleCard(v) {
+  if (v === void 0) return void 0;
+  if (v === null) return null;
+  const r = StyleCardS.safeParse(v);
+  if (!r.success) {
+    const i = r.error.issues[0];
+    return { error: `styleCard.${i?.path.join(".") || "card"}: ${i?.message ?? "invalid"}` };
+  }
+  return r.data;
+}
+var sameWords = (a, b) => a.replace(/\s+/g, " ").trim() === b.replace(/\s+/g, " ").trim();
+async function recordDraftEdit(db2, d) {
+  const before = d.body_original;
+  if (!before || sameWords(before, d.body)) return false;
+  const distance = wordEditDistance(before, d.body);
+  const replyTo = d.ask?.replyToMessageId;
+  const [m] = replyTo ? await db2.sql`
+        select reply_class from orbit.messages where id = ${replyTo}::uuid and user_id = ${d.user_id}::uuid` : [];
+  const cls = m?.reply_class ?? null;
+  const updated = await db2.sql`
+    update orbit.draft_edits set after = ${d.body}, distance = ${distance}::int, reply_class = coalesce(${cls}, reply_class)
+     where draft_id = ${d.id}::uuid and user_id = ${d.user_id}::uuid returning id`;
+  if (updated.length) return true;
+  await db2.sql`
+    insert into orbit.draft_edits (user_id, draft_id, kind, reply_class, before, after, distance)
+    values (${d.user_id}::uuid, ${d.id}::uuid, ${d.kind}, ${cls}, ${before}, ${d.body}, ${distance}::int)
+    on conflict (draft_id) where draft_id is not null do update
+      set after = excluded.after, distance = excluded.distance`;
+  return true;
+}
+async function pushDraftEdit(db2, userId, id, e) {
+  const [own] = e.draftId ? await db2.sql`
+        select id from orbit.drafts where id = ${e.draftId}::uuid and user_id = ${userId}::uuid` : [];
+  const draftId = own?.id ?? null;
+  if (draftId) {
+    const [r2] = await db2.sql`
+      update orbit.draft_edits set after = ${e.after}, distance = ${e.distance}::int
+       where draft_id = ${draftId}::uuid and user_id = ${userId}::uuid and id <> ${id}::uuid
+      returning id, draft_id, kind, distance, created_at`;
+    if (r2) return r2;
+  }
+  const [r] = await db2.sql`
+    insert into orbit.draft_edits (id, user_id, draft_id, kind, reply_class, before, after, distance, created_at)
+    values (${id}::uuid, ${userId}::uuid, ${draftId}::uuid, ${e.kind}, ${e.replyClass ?? null}, ${e.before}, ${e.after},
+            ${e.distance}::int, coalesce(${e.createdAt ?? null}::timestamptz, now()))
+    on conflict (id) do update set after = excluded.after, distance = excluded.distance
+     where orbit.draft_edits.user_id = ${userId}::uuid
+    returning id, draft_id, kind, distance, created_at`;
+  return r;
+}
+function notesOf(settings2) {
+  const v = settings2?.voice_notes;
+  if (!Array.isArray(v)) return [];
+  return v.filter(
+    (n) => !!n && typeof n === "object" && typeof n.id === "string" && typeof n.text === "string" && Array.isArray(n.evidence)
+  );
+}
+function storedCard(settings2, firstName) {
+  const c = StyleCardS.safeParse(settings2?.style_card);
+  if (c.success && ((c.data.builtFromCount ?? 0) >= STYLE_MIN_SAMPLES || c.data.custom))
+    return c.data;
+  const preset = settings2?.tone_preset;
+  return defaultStyleCard(preset === "direct" || preset === "formal" ? preset : "warm", firstName);
+}
+var DistillS = z3.object({
+  notes: z3.array(
+    z3.object({
+      text: z3.string().max(400),
+      // "" when the note is not about one phrase
+      avoid: z3.string().max(200),
+      evidence: z3.array(z3.string().max(80)).max(40)
+    })
+  ).max(VOICE_NOTES_MAX * 2)
+});
+async function decideNote(db2, userId, id, action, now) {
+  return db2.begin(async (tx) => {
+    const [u2] = await tx.sql`
+      select settings from orbit.users where id = ${userId}::uuid for update`;
+    const r = decideVoiceNote(notesOf(u2?.settings), id, action, now);
+    if (!r.note) return void 0;
+    await tx.sql`
+      update orbit.users set settings = settings || jsonb_build_object('voice_notes', ${JSON.stringify(r.notes)}::jsonb)
+       where id = ${userId}::uuid`;
+    return r.note;
+  });
+}
+var SCORE_DRAFTS = 20;
+async function voiceStatus(db2, userId, now) {
+  const [u2] = await db2.sql`
+    select settings, first_name from orbit.users where id = ${userId}::uuid`;
+  const settings2 = u2?.settings ?? {};
+  const stored = StyleCardS.safeParse(settings2.style_card);
+  const card = storedCard(settings2, u2?.first_name ?? "");
+  const notes2 = notesOf(settings2);
+  const since = new Date(now.getTime() - 30 * 864e5);
+  const drafts = await db2.sql`
+    select id, subject, coalesce(body_original, body) as body from orbit.drafts
+     where user_id = ${userId}::uuid and created_at >= ${since}::timestamptz and channel = 'gmail'
+       and status in ('draft', 'approved', 'scheduled', 'sending', 'sent')
+     order by created_at desc limit ${SCORE_DRAFTS}::int`;
+  const judged = new Map(
+    (await db2.sql`
+        select target_id, (details->>'score')::int as score from orbit.audit_log
+         where user_id = ${userId}::uuid and action = 'draft.voice_judge' and created_at >= ${since}::timestamptz`).map((r) => [r.target_id, Number(r.score)])
+  );
+  const scores = drafts.map(
+    (d) => judged.has(d.id) ? judged.get(d.id) : voiceScore(voiceCheck(d, { card, notes: notes2 }))
+  );
+  const relearned = settings2.voice_relearned_at;
+  return {
+    card: stored.success ? stored.data : null,
+    cardProse: cardProse(card),
+    notes: activeVoiceNotes(notes2),
+    soundsLikeYou: meanVoiceScore(scores),
+    relearnedAt: typeof relearned === "string" ? relearned : null
+  };
+}
+async function queueRelearn(queue, userId, now) {
+  const minute = now.toISOString().slice(0, 16);
+  const a = await queue.enqueue({
+    kind: "voice.embed_sent",
+    userId,
+    payload: { limit: EMBED_SENT_LIMIT },
+    dedupeKey: `voice.embed_sent:${userId}:${minute}`
+  });
+  await queue.enqueue({
+    kind: "voice.card",
+    userId,
+    payload: {},
+    dedupeKey: `voice.card:${userId}:${minute}`
+  });
+  await queue.enqueue({
+    kind: "voice.distill",
+    userId,
+    payload: { reason: "relearn" },
+    dedupeKey: `voice.distill:${userId}:${minute}`
+  });
+  return a !== null;
+}
+var JudgeS = z3.object({ score: z3.number().int().min(0).max(3), reason: z3.string().max(400) });
+async function judgeVoice(s, userId, draft2, examples) {
+  if (examples.length < 2) return void 0;
+  const r = await s.claude.structured({
+    task: "voice_judge",
+    system: VOICE_JUDGE_SYSTEM,
+    user: voiceJudgeUser(draft2, examples),
+    schema: JudgeS,
+    userId
+  });
+  if (!r.ok) return void 0;
+  await s.db.sql`
+    insert into orbit.audit_log (user_id, actor, action, target_table, target_id, details)
+    values (${userId}::uuid, 'system', 'draft.voice_judge', 'drafts', ${draft2.id},
+            ${{ score: r.data.score, reason: r.data.reason }}::jsonb)`;
+  return r.data;
+}
+async function voiceGate(s, u2, d, opts) {
+  const card = storedCard(u2.settings ?? {}, u2.first_name ?? "");
+  const notes2 = notesOf(u2.settings);
+  const examples = await exemplars(
+    s,
+    d.user_id,
+    d.person_id,
+    `${d.kind} ${d.subject ?? ""} ${d.body.slice(0, 400)}`
+  ).catch(() => []);
+  const check = voiceCheck({ body: d.body, subject: d.subject }, { card, notes: notes2, exemplars: examples });
+  if (!check.ok) return { ok: false, problems: check.problems.map((p) => p.detail) };
+  if (!opts.firstMessage) return { ok: true };
+  const judged = await judgeVoice(s, d.user_id, d, examples);
+  if (!judged)
+    return { ok: false, problems: ["Orbit could not compare it with enough of your sent mail to be sure."] };
+  if (judged.score < VOICE_JUDGE_MIN) return { ok: false, problems: [judged.reason], score: judged.score };
+  return { ok: true };
+}
+
 // supabase/functions/_shared/compose/context.ts
 var USER_CONTEXT_MAX_CHARS = 4800;
 async function loadUserRow(db2, userId) {
@@ -5372,10 +6208,14 @@ function facetLines(parsed) {
 }
 function styleCardOf(u2) {
   const card = u2.settings.style_card;
-  if (card && typeof card === "object" && ((card.builtFromCount ?? 0) >= 3 || card.custom))
-    return card;
-  const preset = u2.settings.tone_preset;
-  return defaultStyleCard(preset === "direct" || preset === "formal" ? preset : "warm", userFirstName(u2));
+  const base = card && typeof card === "object" && ((card.builtFromCount ?? 0) >= 3 || card.custom) ? card : (() => {
+    const preset = u2.settings.tone_preset;
+    return defaultStyleCard(
+      preset === "direct" || preset === "formal" ? preset : "warm",
+      userFirstName(u2)
+    );
+  })();
+  return withVoiceNotes(base, notesOf(u2.settings));
 }
 function voiceText(c) {
   return [
@@ -5484,16 +6324,16 @@ function recipientText(p) {
 }
 
 // supabase/functions/_shared/compose/prompts.ts
-import { z as z2 } from "npm:zod@3.25.76/v4";
+import { z as z4 } from "npm:zod@3.25.76/v4";
 var PROMPT_VERSION = "compose-v2.1";
-var composeSchema = z2.object({
-  subject: z2.string().nullable(),
-  body: z2.string(),
-  ask: z2.object({
-    kind: z2.enum(["call", "question", "interest", "intro", "none"]),
-    text: z2.string()
+var composeSchema = z4.object({
+  subject: z4.string().nullable(),
+  body: z4.string(),
+  ask: z4.object({
+    kind: z4.enum(["call", "question", "interest", "intro", "none"]),
+    text: z4.string()
   }),
-  hooks: z2.array(z2.object({ text: z2.string(), sourceId: z2.string() }))
+  hooks: z4.array(z4.object({ text: z4.string(), sourceId: z4.string() }))
 });
 var GOAL_ASK = {
   recruiting: "call",
@@ -5721,13 +6561,13 @@ ${GOAL_REGISTER[goalKind]}` : GOAL_REGISTER[goalKind];
 ${e}`).join("\n\n"),
     ...req.kind === "reply" ? { freeSlots: slotText } : {}
   });
-  const system = composeSystem({
+  const system = `${composeSystem({
     userFirstName: meFirst,
     wordRange: range,
     askKind,
     kind: req.kind,
     blurb: req.kind === "forwardable_blurb" ? { intermediary: person2.display_name, target: target?.display_name ?? "them" } : void 0
-  });
+  })}${firstTouch ? playbookLines(goalKind, person2) : ""}`;
   const inputs = [
     userContext,
     goalText,
@@ -5867,6 +6707,13 @@ ${footer}` : composed.body;
     composed: { ...composed, id: row.id, body: body2, validator },
     attempts
   };
+}
+function playbookLines(goal, person2) {
+  const who = { title: person2.title ?? void 0, org: personOrg(person2) };
+  const firm = firmKindOf(who, sectorOf(who));
+  return `
+13. ${DRAFT_RULES[goal]}
+14. ${ASK_RULES[firm]}`;
 }
 function wordRangeText(kind, goal) {
   const [min, max] = wordRange(kind, goal);
@@ -6262,7 +7109,7 @@ async function itemRows(db2, userId, mode2, now, dayStart, draftId) {
               case when ${mode2}::text = 'sent' then d.sent_at end desc
      limit 50`;
 }
-function item(r, status2, reason) {
+function item(r, status3, reason) {
   return {
     draftId: r.id,
     personId: r.person_id,
@@ -6273,7 +7120,7 @@ function item(r, status2, reason) {
     subject: r.subject,
     sendAt: iso(r.send_at),
     sentAt: iso(r.sent_at),
-    status: status2,
+    status: status3,
     ...reason ? { reason } : {},
     ...r.auto_rung ? { autoRung: r.auto_rung } : {},
     ...r.outcome ? { outcome: r.outcome } : {},
@@ -6387,6 +7234,7 @@ async function autopilotStatus(db2, userId, now) {
     reason: goalPauses[id].text
   }));
   const reviews = queued2.map((q) => q.send_at).filter((x) => !!x);
+  const plan2 = await planCards(db2, userId, now);
   return {
     mode: modeOf(settings2, Number(u2.autonomy_level) || 0),
     pausedUntil,
@@ -6405,8 +7253,53 @@ async function autopilotStatus(db2, userId, now) {
     },
     reviewUntil: reviews.length ? iso(
       new Date(Math.min(...reviews.map((d) => new Date(d).getTime())) - REVIEW_WINDOW_HOURS * 36e5)
-    ) : null
+    ) : null,
+    ...plan2
   };
+}
+async function planCards(db2, userId, now) {
+  const [plan2] = await db2.sql`
+    select details, created_at from orbit.audit_log
+     where user_id = ${userId}::uuid and action = 'autopilot.plan'
+       and created_at >= ${new Date(now.getTime() - 36 * 36e5)}::timestamptz
+     order by created_at desc limit 1`;
+  const skipped = (plan2?.details?.skipped ?? []).map((x) => ({
+    ...x,
+    at: iso(plan2.created_at)
+  }));
+  const cards = await db2.sql`
+    select id, kind, reason_text, payload, created_at from orbit.suggestions
+     where user_id = ${userId}::uuid and status = 'pending' and kind in ('friend_ask_ready', 'batch_ready')
+       and expires_at > ${now}::timestamptz
+     order by created_at desc limit 20`;
+  const str3 = (v) => typeof v === "string" ? v : null;
+  const friendAsks = cards.filter((c) => c.kind === "friend_ask_ready").map((c) => ({
+    id: c.id,
+    friendUserId: str3(c.payload.friendUserId) ?? "",
+    friendName: str3(c.payload.friendName) ?? "your friend",
+    targetPersonId: str3(c.payload.targetPersonId) ?? "",
+    targetName: str3(c.payload.targetName) ?? "them",
+    company: str3(c.payload.company),
+    note: str3(c.payload.note) ?? "",
+    goalId: str3(c.payload.goalId)
+  }));
+  const b = cards.find(
+    (c) => c.kind === "batch_ready" && now.getTime() - new Date(c.created_at).getTime() < 18 * 36e5
+  );
+  return {
+    skipped,
+    friendAsks,
+    batch: b ? { at: iso(b.created_at), text: b.reason_text, firstTouches: Number(b.payload.firstTouches) || 0 } : null
+  };
+}
+async function dismissPlanCard(db2, userId, id, now) {
+  const [row] = await db2.sql`
+    update orbit.suggestions set status = 'dismissed', decided_at = ${now}::timestamptz, updated_at = ${now}::timestamptz
+     where id = ${id}::uuid and user_id = ${userId}::uuid and kind in ('friend_ask_ready', 'batch_ready')
+       and status in ('pending', 'snoozed')
+    returning id`;
+  if (!row) throw new HttpError(404, "not_found", "no such card");
+  return { id: row.id };
 }
 async function holdSend(db2, userId, draftId, now) {
   const [row] = await itemRows(db2, userId, "one", now, now, draftId);
@@ -6498,7 +7391,7 @@ function optUuid(b, key) {
   if (typeof v !== "string" || !UUID.test(v)) throw badRequest(`${key} must be an id`);
   return v;
 }
-function text(b, key, max = 2e3) {
+function text2(b, key, max = 2e3) {
   const v = b[key];
   if (typeof v !== "string" || !v.trim()) throw badRequest(`${key} is required`);
   if (v.length > max) throw badRequest(`${key} is too long`);
@@ -6557,11 +7450,16 @@ async function pause(ctx) {
     await pauseAutopilot(ctx.db, ctx.userId, { until, goalId: optUuid(b, "goalId") }, ctx.now())
   );
 }
+async function dismiss(ctx) {
+  const b = await body(ctx);
+  return json(200, await dismissPlanCard(ctx.db, ctx.userId, uuid(b, "id"), ctx.now()));
+}
 var autopilotRoutes = {
   "/autopilot/mode": { method: "POST", auth: true, run: mode },
   "/autopilot/status": { method: "GET|POST", auth: true, run: status },
   "/autopilot/hold": { method: "POST", auth: true, run: hold },
-  "/autopilot/pause": { method: "POST", auth: true, run: pause }
+  "/autopilot/pause": { method: "POST", auth: true, run: pause },
+  "/autopilot/dismiss": { method: "POST", auth: true, run: dismiss }
 };
 
 // packages/core/src/pipeline/transitions.ts
@@ -7006,908 +7904,6 @@ function dossierFromRow(r) {
   });
 }
 
-// supabase/functions/_shared/cadence/cadence.ts
-var DAY5 = 864e5;
-function goalFrom(r) {
-  const due2 = r.due_at instanceof Date ? r.due_at.toISOString().slice(0, 10) : r.due_at;
-  return goalFromRow({ ...isoRow(r), due_at: due2 });
-}
-async function loadCadence(db2, userId, now) {
-  const [u2] = await db2.sql`
-    select timezone, autonomy_level, settings from orbit.users where id = ${userId}::uuid`;
-  const tz = validZone(u2?.timezone) ?? "America/New_York";
-  const settings2 = u2?.settings ?? {};
-  const chatRows = await db2.sql`
-    select * from orbit.chats where user_id = ${userId}::uuid and archived_at is null`;
-  const chats = chatRows.map((r) => chatFromRow(isoRow(r)));
-  const goalRows = await db2.sql`
-    select * from orbit.goals where user_id = ${userId}::uuid and deleted_at is null`;
-  const goals = goalRows.map(goalFrom);
-  const draftRows = await db2.sql`
-    select id, person_id, chat_id, kind, status, send_at, created_at from orbit.drafts
-     where user_id = ${userId}::uuid
-       and (status in ('draft', 'approved', 'scheduled', 'sending') or created_at > ${new Date(now.getTime() - 30 * DAY5)}::timestamptz)`;
-  const drafts = draftRows.map((d) => ({
-    id: d.id,
-    personId: d.person_id,
-    chatId: d.chat_id ?? void 0,
-    kind: d.kind,
-    status: d.status,
-    sendAt: iso(d.send_at) ?? void 0,
-    createdAt: iso(d.created_at)
-  }));
-  const msgRows = await db2.sql`
-    select direction, sent_at, provider, from_person_id, to_person_ids from orbit.messages
-     where user_id = ${userId}::uuid and not is_automated
-       and sent_at > ${new Date(now.getTime() - 365 * DAY5)}::timestamptz`;
-  const messages = [];
-  for (const m of msgRows) {
-    const channel = m.provider === "linkedin" ? "linkedin" : "email";
-    const at = iso(m.sent_at);
-    if (m.direction === "in") {
-      if (m.from_person_id) messages.push({ personId: m.from_person_id, direction: "in", at, channel });
-    } else
-      for (const p of m.to_person_ids ?? []) messages.push({ personId: p, direction: "out", at, channel });
-  }
-  const unsynced = await db2.sql`
-    select d.person_id, d.sent_at, d.channel from orbit.drafts d
-     where d.user_id = ${userId}::uuid and d.status = 'sent' and d.sent_at is not null and d.kind <> 'forwardable_blurb'
-       and not exists (select 1 from orbit.messages m where m.user_id = d.user_id and m.external_id = d.provider_message_id)`;
-  for (const d of unsynced)
-    messages.push({
-      personId: d.person_id,
-      direction: "out",
-      at: iso(d.sent_at),
-      channel: d.channel === "linkedin" ? "linkedin" : "email"
-    });
-  const goalPeople = goals.flatMap((g) => g.targets?.people ?? []);
-  const wanted = [
-    .../* @__PURE__ */ new Set([...chats.map((c) => c.personId), ...drafts.map((d) => d.personId), ...goalPeople])
-  ];
-  const peopleRows = await db2.sql`
-    select p.id, p.first_name, p.display_name, p.title, p.org_raw, p.hidden_at, p.do_not_contact, p.timezone,
-           p.last_interaction_at, ts.score::int as score,
-           d.content->'recently' as recently, d.updated_at as dossier_at,
-           (select f.text from orbit.facts f where f.person_id = p.id and f.deleted_at is null
-               and f.created_at > ${new Date(now.getTime() - 30 * DAY5)}::timestamptz
-             order by f.created_at desc limit 1) as fact
-      from orbit.people p
-      left join orbit.tie_scores ts on ts.user_id = p.user_id and ts.person_id = p.id
-      left join orbit.dossiers d on d.user_id = p.user_id and d.person_id = p.id and d.status in ('ready', 'partial')
-     where p.user_id = ${userId}::uuid and not p.is_self and p.deleted_at is null and p.merged_into is null
-       and (ts.score >= 60 or p.id = any(${wanted}::uuid[]))`;
-  const people = /* @__PURE__ */ new Map();
-  for (const p of peopleRows) {
-    const fresh = p.dossier_at && now.getTime() - new Date(p.dossier_at).getTime() < 60 * DAY5;
-    const recent = fresh && Array.isArray(p.recently) ? p.recently[0]?.text : void 0;
-    people.set(p.id, {
-      person: {
-        id: p.id,
-        firstName: p.first_name ?? p.display_name.split(/\s+/)[0],
-        currentTitle: p.title ?? void 0,
-        currentOrganizationRaw: p.org_raw ?? void 0,
-        hiddenAt: iso(p.hidden_at) ?? void 0,
-        doNotContact: p.do_not_contact
-      },
-      score: p.score ?? 0,
-      lastContactAt: iso(p.last_interaction_at) ?? void 0,
-      nurtureReason: recent ?? p.fact ?? void 0,
-      timeZone: validZone(p.timezone)
-    });
-  }
-  const nurtured = draftRows.filter((d) => d.kind === "nurture" || d.kind === "reengage").map((d) => iso(d.created_at));
-  const awaiting = await db2.sql`
-    select distinct person_id from orbit.suggestions
-     where user_id = ${userId}::uuid and kind = 'needs_you' and status in ('pending', 'snoozed') and person_id is not null`;
-  const maxBumps = num(settings2.max_bumps, 2);
-  const quiet = typeof settings2.quiet_until === "string" ? settings2.quiet_until : void 0;
-  return {
-    input: {
-      chats,
-      drafts,
-      messages,
-      people,
-      goals,
-      settings: { maxBumps, timezone: tz, quietUntil: quiet },
-      now,
-      recentNurtureAt: nurtured
-    },
-    timezone: tz,
-    chatsById: new Map(chats.map((c) => [c.id, c])),
-    goalsById: new Map(goals.map((g) => [g.id, g])),
-    settings: settings2,
-    awaitingStudent: new Set(awaiting.map((r) => r.person_id)),
-    autonomyLevel: num(u2?.autonomy_level, 0),
-    autoKinds: Array.isArray(settings2.auto_kinds) ? settings2.auto_kinds.filter(
-      (k) => typeof k === "string" && AUTO_KINDS.includes(k)
-    ) : [],
-    pausedUntil: typeof settings2.autopilot_paused_until === "string" ? settings2.autopilot_paused_until : void 0
-  };
-}
-var toDue = (a) => ({
-  kind: a.kind,
-  personId: a.personId ?? null,
-  chatId: a.chatId ?? null,
-  draftId: a.draftId ?? null,
-  reason: a.reason,
-  dueAt: a.dueAt
-});
-async function dueItems(db2, userId, now) {
-  const st = await loadCadence(db2, userId, now);
-  return cadenceActions(st.input).map(toDue);
-}
-
-// supabase/functions/orbit-api/routes/cadence.ts
-async function due(ctx) {
-  return json(200, { items: await dueItems(ctx.db, ctx.userId, ctx.now()) });
-}
-var cadenceRoutes = {
-  "/cadence/due": { method: "POST", auth: true, run: due }
-};
-
-// supabase/functions/orbit-api/routes/calendar.ts
-async function slots(ctx) {
-  const b = await body(ctx, true);
-  if (b.tz !== void 0 && typeof b.tz !== "string") throw badRequest("tz must be an IANA zone");
-  const count = b.count === void 0 ? void 0 : Number(b.count);
-  const r = await slotsFor(ctx.services(), ctx.userId, {
-    personId: optUuid(b, "personId"),
-    tz: b.tz,
-    count: Number.isFinite(count) ? count : void 0
-  });
-  return json(200, { slots: r.slots, tz: r.tz });
-}
-async function book(ctx) {
-  const b = await body(ctx);
-  if (typeof b.slotStart !== "string") throw badRequest("slotStart is required");
-  const r = await bookSlot(
-    ctx.services(),
-    ctx.userId,
-    { draftId: uuid(b, "draftId"), slotStart: b.slotStart },
-    ctx.env.appUrl
-  );
-  return json(200, r);
-}
-var calendarRoutes = {
-  "/calendar/slots": { method: "POST", auth: true, run: slots },
-  "/calendar/book": { method: "POST", auth: true, run: book }
-};
-
-// supabase/functions/_shared/compose/drafts.ts
-function toServerDraft(r) {
-  return {
-    id: r.id,
-    personId: r.person_id,
-    chatId: r.chat_id ?? null,
-    goalId: r.goal_id ?? null,
-    channel: r.channel,
-    kind: r.kind,
-    subject: r.subject ?? null,
-    body: r.body,
-    status: r.status,
-    sendAt: iso(r.send_at),
-    sentAt: iso(r.sent_at),
-    validator: r.validator ?? null,
-    generatedBy: r.generated_by === "llm" ? "llm" : "template",
-    hooks: Array.isArray(r.hooks) ? r.hooks : [],
-    // the column says what is missing; a marker still in the body (an older draft) says the same
-    needsInput: [
-      .../* @__PURE__ */ new Set([
-        ...askUserMarkers(`${r.subject ?? ""}
-${r.body}`),
-        ...Array.isArray(r.needs) && r.needs.length && r.ask?.question ? [r.ask.question] : []
-      ])
-    ],
-    createdAt: iso(r.created_at),
-    updatedAt: iso(r.updated_at)
-  };
-}
-async function loadDraft(db2, userId, draftId) {
-  if (typeof draftId !== "string" || !/^[0-9a-f-]{36}$/i.test(draftId))
-    throw new HttpError(400, "bad_request", "draftId is required");
-  const [r] = await db2.sql`
-    select * from orbit.drafts where id = ${draftId}::uuid and user_id = ${userId}::uuid`;
-  if (!r) throw new HttpError(404, "not_found", "no such draft");
-  return r;
-}
-async function draftById(db2, draftId) {
-  const [r] = await db2.sql`select * from orbit.drafts where id = ${draftId}::uuid`;
-  return r;
-}
-
-// supabase/functions/_shared/sending/mime.ts
-var ascii = (s) => /^[\x20-\x7e]*$/.test(s);
-function headerValue(s) {
-  const one = s.replace(/[\r\n]+/g, " ").trim();
-  if (ascii(one)) return one;
-  return `=?UTF-8?B?${btoa(String.fromCharCode(...new TextEncoder().encode(one)))}?=`;
-}
-function address(email, name) {
-  const e = email.replace(/[\r\n<>]/g, "").trim();
-  if (!name) return e;
-  const n = name.replace(/[\r\n"]/g, "").trim();
-  return ascii(n) ? `"${n}" <${e}>` : `${headerValue(n)} <${e}>`;
-}
-function msgIds(raw) {
-  if (!raw) return void 0;
-  const ids = raw.split(/\s+/).map((x) => x.trim()).filter(Boolean).map((x) => x.startsWith("<") ? x : `<${x}>`);
-  return ids.length ? ids.join(" ") : void 0;
-}
-function b64Lines(bytes) {
-  let bin = "";
-  for (const b of bytes) bin += String.fromCharCode(b);
-  return (btoa(bin).match(/.{1,76}/g) ?? []).join("\r\n");
-}
-function buildMime(m) {
-  const lines = [
-    `From: ${address(m.from, m.fromName)}`,
-    `To: ${address(m.to, m.toName)}`,
-    ...m.cc ? [`Cc: ${address(m.cc, m.ccName)}`] : [],
-    `Subject: ${headerValue(m.subject)}`,
-    `Date: ${(m.date ?? /* @__PURE__ */ new Date()).toUTCString()}`,
-    "MIME-Version: 1.0",
-    'Content-Type: text/plain; charset="UTF-8"',
-    "Content-Transfer-Encoding: base64",
-    `X-Orbit-Draft-Id: ${m.draftId}`
-  ];
-  const irt = msgIds(m.inReplyTo);
-  if (irt) lines.push(`In-Reply-To: ${irt}`);
-  const refs = msgIds(m.references ?? m.inReplyTo);
-  if (refs) lines.push(`References: ${refs}`);
-  const body2 = m.body.replace(/\r?\n/g, "\r\n");
-  return `${lines.join("\r\n")}\r
-\r
-${b64Lines(new TextEncoder().encode(body2))}\r
-`;
-}
-function rawMessage(m) {
-  return base64url(new TextEncoder().encode(buildMime(m)));
-}
-
-// supabase/functions/_shared/sending/transport.ts
-var GMAIL_SEND_URL = "https://gmail.googleapis.com/gmail/v1/users/me/messages/send";
-var GMAIL_THREAD_URL = "https://gmail.googleapis.com/gmail/v1/users/me/threads";
-async function gmailSend(s, userId, raw, threadId) {
-  if (!s.tokens) return { ok: false, retry: false, error: "google_unconfigured" };
-  for (let attempt = 0; attempt < 2; attempt++) {
-    let token;
-    try {
-      token = await s.tokens.accessToken(userId);
-    } catch (e) {
-      if (e instanceof NeedsReauth) return { ok: false, retry: false, error: "needs_reauth" };
-      return { ok: false, retry: true, error: "token_error" };
-    }
-    let res;
-    try {
-      res = await s.fetch(GMAIL_SEND_URL, {
-        method: "POST",
-        headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
-        body: JSON.stringify(threadId ? { raw, threadId } : { raw })
-      });
-    } catch {
-      return { ok: false, retry: true, error: "network" };
-    }
-    if (res.status === 401 && attempt === 0) {
-      s.tokens.invalidate(userId);
-      await res.body?.cancel();
-      continue;
-    }
-    if (res.status === 429 || res.status >= 500) {
-      await res.body?.cancel();
-      return { ok: false, retry: true, error: `gmail_${res.status}` };
-    }
-    if (!res.ok) {
-      await res.body?.cancel();
-      return { ok: false, retry: false, error: `gmail_${res.status}` };
-    }
-    const j = await res.json().catch(() => ({}));
-    if (!j.id) return { ok: false, retry: false, error: "gmail_no_id" };
-    return { ok: true, providerMessageId: j.id, threadId: j.threadId };
-  }
-  return { ok: false, retry: false, error: "gmail_401" };
-}
-async function gmailThreadHasNewerInbound(s, userId, threadId, since) {
-  if (!s.tokens) return void 0;
-  try {
-    const token = await s.tokens.accessToken(userId);
-    const res = await s.fetch(
-      `${GMAIL_THREAD_URL}/${encodeURIComponent(threadId)}?format=minimal&fields=messages(id,labelIds,internalDate)`,
-      { headers: { authorization: `Bearer ${token}` } }
-    );
-    if (!res.ok) {
-      await res.body?.cancel();
-      return void 0;
-    }
-    const j = await res.json();
-    return (j.messages ?? []).some(
-      (m) => !(m.labelIds ?? []).includes("SENT") && Number(m.internalDate ?? 0) > since.getTime()
-    );
-  } catch {
-    return void 0;
-  }
-}
-async function linkedinSend(s, p) {
-  const base = (s.env.unipileBase ?? "").replace(/\/+$/, "");
-  if (!s.env.unipileKey || !base) return { ok: false, retry: false, error: "unipile_unconfigured" };
-  const form = new FormData();
-  form.set("account_id", p.accountId);
-  form.set("text", p.text);
-  let url;
-  if (p.chatId) url = `${base}/api/v1/chats/${encodeURIComponent(p.chatId)}/messages`;
-  else if (p.attendeeId) {
-    url = `${base}/api/v1/chats`;
-    form.append("attendees_ids", p.attendeeId);
-  } else return { ok: false, retry: false, error: "no_linkedin_chat" };
-  let res;
-  try {
-    res = await s.fetch(url, {
-      method: "POST",
-      headers: { "X-API-KEY": s.env.unipileKey, accept: "application/json" },
-      body: form
-    });
-  } catch {
-    return { ok: false, retry: true, error: "network" };
-  }
-  if (res.status === 429 || res.status >= 500) {
-    await res.body?.cancel();
-    return { ok: false, retry: true, error: `unipile_${res.status}` };
-  }
-  if (!res.ok) {
-    await res.body?.cancel();
-    return { ok: false, retry: false, error: `unipile_${res.status}` };
-  }
-  const j = await res.json().catch(() => ({}));
-  const id = j.message_id ?? j.id;
-  if (!id) return { ok: false, retry: false, error: "unipile_no_id" };
-  return { ok: true, providerMessageId: id, chatId: j.chat_id ?? p.chatId ?? void 0 };
-}
-
-// supabase/functions/_shared/sending/send.ts
-var LINKEDIN_CONFIRM_MS = 15 * 6e4;
-var PAUSE_RECHECK_SEC = 15 * 60;
-async function loadUser2(db2, userId) {
-  const [u2] = await db2.sql`
-    select email, full_name, first_name, timezone, autonomy_level, settings from orbit.users where id = ${userId}::uuid`;
-  return u2;
-}
-async function effectiveLevel(db2, goalId, userLevel) {
-  if (goalId) {
-    const [g] = await db2.sql`
-      select autonomy_level from orbit.goals where id = ${goalId}::uuid`;
-    if (g?.autonomy_level !== null && g?.autonomy_level !== void 0) return Number(g.autonomy_level);
-  }
-  return Number(userLevel) || 0;
-}
-function aheadOf(settings2, key, now) {
-  const v = settings2?.[key];
-  if (typeof v !== "string") return void 0;
-  const t = new Date(v);
-  return Number.isNaN(t.getTime()) || t.getTime() <= now.getTime() ? void 0 : t;
-}
-function ownCap(settings2, key, tableCap) {
-  const v = Number(settings2?.[key]);
-  return Number.isFinite(v) && v >= 1 ? Math.min(Math.floor(v), tableCap) : tableCap;
-}
-var hashOf = (d) => messageHash({ channel: d.channel, subject: d.subject, body: d.body });
-async function audit(db2, userId, actor, action, draftId, details) {
-  await db2.sql`
-    insert into orbit.audit_log (user_id, actor, action, target_table, target_id, details)
-    values (${userId}::uuid, ${actor}, ${action}, 'drafts', ${draftId}, ${details}::jsonb)`;
-}
-async function goalKindOf(db2, goalId) {
-  if (!goalId) return null;
-  const [g] = await db2.sql`select kind from orbit.goals where id = ${goalId}::uuid`;
-  return g?.kind ?? null;
-}
-async function postalAddress(db2, userId) {
-  const [u2] = await db2.sql`
-    select settings from orbit.users where id = ${userId}::uuid`;
-  const v = u2?.settings?.postal_address;
-  return typeof v === "string" ? v.trim() : "";
-}
-async function salesFirstTouch(db2, d) {
-  return d.channel === "gmail" && FIRST_TOUCH_KINDS.has(d.kind) && await goalKindOf(db2, d.goal_id) === "sales";
-}
-async function approveDraft(s, userId, req) {
-  const db2 = s.db;
-  const d = await loadDraft(db2, userId, req.draftId);
-  if (d.status === "sending" || d.status === "sent") return toServerDraft(d);
-  if (!["draft", "approved", "scheduled", "failed"].includes(d.status))
-    throw new HttpError(409, "not_approvable", `a ${d.status} draft cannot be approved`);
-  const text3 = `${d.subject ?? ""}
-${d.body}`;
-  const needs = askUserMarkers(text3);
-  const gap = needs.length ? void 0 : placeholderIn(text3);
-  if (needs.length || gap)
-    throw new HttpError(
-      409,
-      "needs_input",
-      `fill in what the draft asks for first: ${needs.length ? needs.join("; ") : gap}`
-    );
-  const [p] = await db2.sql`
-    select do_not_contact, timezone from orbit.people where id = ${d.person_id}::uuid`;
-  if (p?.do_not_contact) throw new HttpError(409, "do_not_contact", "they asked not to be contacted");
-  if (d.channel === "linkedin" && req.confirm !== true)
-    throw new HttpError(409, "needs_confirmation", "every LinkedIn message needs your tap to send");
-  if (await salesFirstTouch(db2, d) && !await postalAddress(db2, userId))
-    throw new HttpError(
-      409,
-      "needs_postal_address",
-      "add a postal address in Settings before the first sales email"
-    );
-  const now = s.now();
-  const u2 = await loadUser2(db2, userId);
-  const level = await effectiveLevel(db2, d.goal_id, u2?.autonomy_level ?? 0);
-  let sendAt;
-  if (d.channel === "linkedin") sendAt = now;
-  else if (req.sendAt) {
-    const t = new Date(req.sendAt);
-    if (Number.isNaN(t.getTime())) throw new HttpError(400, "bad_request", "sendAt must be an ISO time");
-    sendAt = t.getTime() < now.getTime() ? now : t;
-  } else if (level >= 1) {
-    const tz = validZone(p?.timezone) ?? validZone(u2?.timezone) ?? "America/New_York";
-    sendAt = new Date(nextSendWindow(now, tz, d.channel, s.random).notBefore);
-  } else {
-    sendAt = now;
-  }
-  const [row] = await db2.sql`
-    update orbit.drafts set status = 'approved', send_at = ${sendAt}::timestamptz, error = null,
-                            cancel_reason = null, autonomy_level = ${level}::smallint
-     where id = ${d.id}::uuid and user_id = ${userId}::uuid and status in ('draft', 'approved', 'scheduled', 'failed')
-    returning *`;
-  if (!row) return toServerDraft(await draftById(db2, d.id));
-  const hash = hashOf(row);
-  await audit(db2, userId, "user", "draft.approve", row.id, {
-    hash,
-    send_at: iso(sendAt),
-    channel: row.channel,
-    level
-  });
-  if (row.channel === "linkedin") await audit(db2, userId, "user", "draft.confirm", row.id, { hash });
-  if (sendAt.getTime() <= now.getTime()) {
-    try {
-      await sendDraft(s, row.id);
-    } catch (e) {
-      if (!(e instanceof SendRetry)) throw e;
-      await s.queue.enqueue(
-        {
-          kind: "send.draft",
-          userId,
-          payload: { draftId: row.id },
-          dedupeKey: `send:${row.id}:retry:${iso(now)}`
-        },
-        { delaySec: 60 }
-      );
-    }
-  } else {
-    await s.queue.enqueue(
-      {
-        kind: "send.draft",
-        userId,
-        payload: { draftId: row.id },
-        dedupeKey: `send:${row.id}:${iso(sendAt)}`
-      },
-      { delaySec: Math.ceil((sendAt.getTime() - now.getTime()) / 1e3) }
-    );
-  }
-  return toServerDraft(await draftById(db2, row.id));
-}
-async function cancelDraft(db2, userId, draftId) {
-  const d = await loadDraft(db2, userId, draftId);
-  if (d.status === "sending" || d.status === "sent")
-    throw new HttpError(409, "too_late", "it has already gone out");
-  const [row] = await db2.sql`
-    update orbit.drafts set status = 'cancelled', cancel_reason = 'user'
-     where id = ${d.id}::uuid and status in ('draft', 'approved', 'scheduled', 'failed') returning *`;
-  if (row) await audit(db2, userId, "user", "draft.cancel", d.id, {});
-  return toServerDraft(row ?? await draftById(db2, d.id));
-}
-async function discardDraft(db2, userId, draftId) {
-  const d = await loadDraft(db2, userId, draftId);
-  if (d.status === "sending" || d.status === "sent")
-    throw new HttpError(409, "too_late", "it has already gone out");
-  const [row] = await db2.sql`
-    update orbit.drafts set status = 'discarded'
-     where id = ${d.id}::uuid and status in ('draft', 'approved', 'scheduled', 'failed', 'cancelled') returning *`;
-  if (row) await audit(db2, userId, "user", "draft.discard", d.id, {});
-  return toServerDraft(row ?? await draftById(db2, d.id));
-}
-var SendRetry = class extends Error {
-  constructor(code) {
-    super(code);
-    this.name = "SendRetry";
-  }
-};
-async function sendDraft(s, draftId) {
-  const db2 = s.db;
-  const now = s.now();
-  const [d] = await db2.sql`
-    update orbit.drafts set status = 'sending'
-     where id = ${draftId}::uuid and status = 'approved'
-       and (send_at is null or send_at <= ${new Date(now.getTime() + 1e3)}::timestamptz)
-    returning *`;
-  if (!d) return { status: "skipped", reason: "not_claimed" };
-  const userId = d.user_id;
-  const settle = async (status2, fields) => {
-    await db2.sql`
-      update orbit.drafts set status = ${status2},
-             error = ${fields.error ?? null},
-             cancel_reason = ${fields.cancel_reason ?? null},
-             send_at = coalesce(${fields.send_at ?? null}::timestamptz, send_at)
-       where id = ${d.id}::uuid`;
-  };
-  const later = async (reason, at) => {
-    await settle("approved", { error: reason, send_at: at });
-    await s.queue.enqueue(
-      {
-        kind: "send.draft",
-        userId,
-        payload: { draftId: d.id },
-        dedupeKey: `send:${d.id}:${reason}:${iso(at)}`
-      },
-      { delaySec: Math.max(1, Math.ceil((at.getTime() - now.getTime()) / 1e3)) }
-    );
-    await audit(db2, userId, "system", "draft.hold", d.id, { reason, until: iso(at) });
-    return { status: "held", reason };
-  };
-  if (askUserMarkers(`${d.subject ?? ""}
-${d.body}`).length || placeholderIn(`${d.subject ?? ""}
-${d.body}`)) {
-    await settle("draft", { error: "needs_input" });
-    return { status: "held", reason: "needs_input" };
-  }
-  const review = d.review_until ? new Date(d.review_until) : void 0;
-  if (review && !Number.isNaN(review.getTime()) && review.getTime() > now.getTime())
-    return later("review_window", review);
-  const [person2] = await db2.sql`
-    select display_name, first_name, primary_email, title, headline, do_not_contact, linkedin_member_id
-      from orbit.people where id = ${d.person_id}::uuid`;
-  if (!person2) {
-    await settle("failed", { error: "no_person" });
-    return { status: "failed", error: "no_person" };
-  }
-  const history2 = await historyWith(db2, userId, d.person_id);
-  const createdAt = iso(d.created_at);
-  const replied = cancelIfReplied(
-    { personId: d.person_id, createdAt },
-    history2.map((h) => ({
-      personId: d.person_id,
-      direction: h.direction,
-      at: h.at,
-      channel: "email"
-    }))
-  );
-  let live;
-  if (!replied.cancel && d.channel === "gmail" && d.thread_external_id)
-    live = await gmailThreadHasNewerInbound(s, userId, d.thread_external_id, new Date(createdAt));
-  if (replied.cancel || live) {
-    await settle("cancelled", { cancel_reason: "replied" });
-    await audit(db2, userId, "system", "draft.cancel", d.id, { reason: "replied" });
-    return { status: "cancelled", reason: "replied" };
-  }
-  const approvals = await db2.sql`
-    select actor, action, details, created_at from orbit.audit_log
-     where user_id = ${userId}::uuid and target_table = 'drafts' and target_id = ${d.id}
-       and action in ('draft.approve', 'draft.confirm', 'draft.auto_approve')
-     order by created_at desc`;
-  const hash = hashOf(d);
-  const userApproved = approvals.some((a) => a.action === "draft.approve" && a.details?.hash === hash);
-  const agentApproved = approvals.some((a) => a.action === "draft.auto_approve" && a.details?.hash === hash);
-  const u2 = await loadUser2(db2, userId);
-  if (!u2) {
-    await settle("failed", { error: "no_user" });
-    return { status: "failed", error: "no_user" };
-  }
-  const paused = aheadOf(u2.settings, "autopilot_paused_until", now);
-  if (paused && (agentApproved && !userApproved || Number(d.autonomy_level) >= 1))
-    return later(
-      "autopilot_paused",
-      new Date(Math.min(paused.getTime(), now.getTime() + PAUSE_RECHECK_SEC * 1e3))
-    );
-  if (agentApproved && !userApproved && goalPaused(u2.settings, d.goal_id, now)) {
-    await settle("draft", { error: "goal_paused" });
-    await audit(db2, userId, "system", "draft.hold", d.id, { reason: "goal_paused", goalId: d.goal_id });
-    return { status: "held", reason: "goal_paused" };
-  }
-  if (d.channel === "linkedin" && agentApproved && !userApproved) {
-    await settle("draft", { error: "linkedin_never_auto" });
-    await audit(db2, userId, "system", "draft.hold", d.id, { reason: "linkedin_never_auto" });
-    return { status: "held", reason: "linkedin_never_auto" };
-  }
-  if (d.channel === "linkedin") {
-    const fresh = approvals.some(
-      (a) => a.action === "draft.confirm" && a.actor === "user" && a.details?.hash === hash && now.getTime() - new Date(a.created_at).getTime() <= LINKEDIN_CONFIRM_MS
-    );
-    if (!fresh) {
-      await settle("draft", { error: "linkedin_needs_fresh_approval" });
-      await audit(db2, userId, "system", "draft.hold", d.id, { reason: "linkedin_needs_fresh_approval" });
-      return { status: "held", reason: "linkedin_needs_fresh_approval" };
-    }
-  }
-  if (!userApproved && !agentApproved) {
-    await settle("draft", { error: "not_approved" });
-    return { status: "held", reason: "not_approved" };
-  }
-  const meta = d.ask ?? {};
-  const violations = checkSend(
-    { kind: d.kind, channel: d.channel, personId: d.person_id, subject: d.subject, body: d.body },
-    {
-      now,
-      userEmails: [u2.email],
-      userName: u2.full_name ?? u2.first_name ?? "",
-      recipient: {
-        doNotContact: person2.do_not_contact,
-        title: person2.title ?? void 0,
-        headline: person2.headline ?? void 0
-      },
-      history: history2,
-      schedulingLink: typeof u2.settings?.scheduling_link === "string" ? u2.settings.scheduling_link : void 0,
-      offeredSlots: meta.slots,
-      timeZone: u2.timezone,
-      approvedHash: userApproved ? hash : void 0
-    }
-  );
-  const forbidden2 = violations.find((v) => v.kind === "forbidden");
-  if (forbidden2) {
-    await settle("cancelled", { cancel_reason: forbidden2.rule });
-    await audit(db2, userId, "system", "draft.blocked", d.id, { rule: forbidden2.rule });
-    return { status: "cancelled", reason: forbidden2.rule };
-  }
-  if (violations.length) {
-    await settle("draft", { error: `needs_approval:${violations.map((v) => v.rule).join(",")}` });
-    return { status: "held", reason: violations[0].rule };
-  }
-  if (await salesFirstTouch(db2, d) && (!await postalAddress(db2, userId) || !meta.footer)) {
-    await settle("draft", { error: "needs_postal_address" });
-    return { status: "held", reason: "needs_postal_address" };
-  }
-  const cap = await capReached(db2, userId, d, now, u2, agentApproved && !userApproved);
-  if (cap) {
-    const next = new Date(
-      nextSendWindow(new Date(now.getTime() + 864e5), u2.timezone, d.channel, s.random).notBefore
-    );
-    await settle(d.channel === "linkedin" ? "draft" : "approved", { error: cap, send_at: next });
-    await audit(db2, userId, "system", "draft.hold", d.id, { reason: cap, until: iso(next) });
-    return { status: "held", reason: cap };
-  }
-  let out;
-  if (d.channel === "gmail") {
-    if (!person2.primary_email) {
-      await settle("failed", { error: "no_email" });
-      return { status: "failed", error: "no_email" };
-    }
-    const subject = d.subject ?? await threadSubject(db2, userId, d.thread_external_id) ?? "";
-    const refs = d.in_reply_to ?? await lastMessageId(db2, userId, d.thread_external_id);
-    const forward = d.kind === "forward_intro" ? d.via : null;
-    const raw = rawMessage({
-      from: u2.email,
-      fromName: u2.full_name ?? void 0,
-      to: person2.primary_email,
-      toName: person2.display_name,
-      ...forward?.cc ? { cc: forward.cc, ccName: forward.ccName } : {},
-      subject: d.subject ? subject : subject && !/^re:/i.test(subject) ? `Re: ${subject}` : subject,
-      body: d.body,
-      inReplyTo: refs,
-      references: refs,
-      draftId: d.id,
-      date: now
-    });
-    out = await gmailSend(s, userId, raw, d.thread_external_id);
-  } else {
-    const [acct] = await db2.sql`
-      select external_account_id from orbit.integration_accounts
-       where user_id = ${userId}::uuid and provider = 'linkedin' and status = 'active'`;
-    if (!acct?.external_account_id) {
-      await settle("failed", { error: "linkedin_not_connected" });
-      return { status: "failed", error: "linkedin_not_connected" };
-    }
-    const chatId = d.thread_external_id ?? await linkedinChatId(db2, userId, d.person_id);
-    const attendee = chatId ? null : await linkedinAttendee(db2, userId, d.person_id, person2.linkedin_member_id);
-    out = await linkedinSend(s, {
-      accountId: acct.external_account_id,
-      chatId,
-      attendeeId: attendee,
-      text: d.body
-    });
-  }
-  if (!out.ok) {
-    if (out.retry) {
-      await settle("approved", { error: out.error });
-      throw new SendRetry(out.error);
-    }
-    await settle("failed", { error: out.error });
-    await audit(db2, userId, "system", "draft.failed", d.id, { error: out.error });
-    if (d.channel === "gmail")
-      await tripBreaker(db2, userId, {
-        goalId: d.goal_id,
-        reason: "send_error",
-        personId: d.person_id,
-        personName: person2.display_name,
-        now
-      }).catch(() => void 0);
-    return { status: "failed", error: out.error };
-  }
-  const threadId = out.chatId ?? out.threadId ?? d.thread_external_id;
-  await db2.sql`
-    update orbit.drafts set status = 'sent', sent_at = ${now}::timestamptz, provider_message_id = ${out.providerMessageId},
-                            thread_external_id = ${threadId ?? null}, error = null
-     where id = ${d.id}::uuid`;
-  const auto = agentApproved && !userApproved;
-  await audit(db2, userId, auto ? "agent" : "user", auto ? "draft.auto_sent" : "draft.sent", d.id, {
-    channel: d.channel,
-    kind: d.kind,
-    ...auto ? { rung: d.auto_rung ?? d.kind, level: Number(d.autonomy_level) } : {}
-  });
-  if (d.chat_id) await afterSend(db2, userId, d, now);
-  const via = d.via;
-  if (d.kind === "intro_request" && via?.introRequestId)
-    await db2.sql`update orbit.intro_requests set asked_at = ${now}::timestamptz where id = ${via.introRequestId}::uuid`;
-  if (d.kind === "forward_intro" && via?.friendAskId)
-    await db2.sql`
-      update orbit.friend_intro_asks set status = 'forwarded', forwarded_message_id = ${d.id}::uuid,
-             answered_at = coalesce(answered_at, ${now}::timestamptz)
-       where id = ${via.friendAskId}::uuid and friend_user_id = ${userId}::uuid`;
-  return { status: "sent", providerMessageId: out.providerMessageId };
-}
-async function afterSend(db2, userId, d, now) {
-  const [c] = await db2.sql`
-    select stage, data from orbit.chats where id = ${d.chat_id}::uuid`;
-  if (!c) return;
-  const at = now.toISOString();
-  const data = {
-    ...c.data,
-    lastOutboundAt: at,
-    outreachChannel: d.channel === "gmail" ? "email" : "linkedin"
-  };
-  if (!data.firstOutreachAt && d.kind !== "forwardable_blurb" && d.kind !== "intro_request")
-    data.firstOutreachAt = at;
-  if (d.kind === "bump") data.bumpCount = (data.bumpCount ?? 0) + 1;
-  await db2.sql`update orbit.chats set data = ${data}::jsonb where id = ${d.chat_id}::uuid`;
-  if (["identified", "warming"].includes(c.stage) && d.kind !== "forwardable_blurb" && d.kind !== "intro_request")
-    await moveChat(db2, userId, d.chat_id, "outreach_sent", `${d.kind} sent`, now);
-}
-async function capReached(db2, userId, d, now, u2, auto) {
-  const zone = validZone(u2.timezone) ?? "America/New_York";
-  const key = new Intl.DateTimeFormat("en-CA", { timeZone: zone }).format(now);
-  const dayStart = zonedTime(key, 0, 0, zone);
-  const weekStart = new Date(dayStart.getTime() - 6 * 864e5);
-  if (auto) {
-    if (d.channel === "linkedin") return "linkedin_never_auto";
-    const [a] = await db2.sql`
-      select count(*) filter (where created_at >= ${dayStart}::timestamptz)::int as day,
-             count(*) filter (where created_at >= ${dayStart}::timestamptz
-                                and details->>'kind' in ('first_touch', 'warm_first_touch', 'outreach'))::int as day_first,
-             count(*) filter (where details->>'kind' in ('first_touch', 'warm_first_touch', 'outreach'))::int as week_first
-        from orbit.audit_log
-       where user_id = ${userId}::uuid and action = 'draft.auto_sent' and created_at >= ${weekStart}::timestamptz`;
-    if ((a?.day ?? 0) >= SEND_CAPS.autoPerDay) return "auto_daily_cap";
-    if (FIRST_TOUCH_KINDS.has(d.kind)) {
-      if ((a?.day_first ?? 0) >= SEND_CAPS.autoFirstTouchesPerDay) return "auto_first_touch_daily_cap";
-      if ((a?.week_first ?? 0) >= SEND_CAPS.autoFirstTouchesPerWeek) return "auto_first_touch_weekly_cap";
-    }
-  }
-  if (d.channel === "linkedin") {
-    const [r2] = await db2.sql`
-      select count(*)::int as n from orbit.drafts
-       where user_id = ${userId}::uuid and channel = 'linkedin' and status = 'sent'
-         and sent_at >= ${dayStart}::timestamptz`;
-    const cap2 = ownCap(u2.settings, "daily_send_cap_linkedin", SEND_CAPS.linkedinPerDay);
-    return (r2?.n ?? 0) >= cap2 ? "linkedin_daily_cap" : null;
-  }
-  if (await salesFirstTouch(db2, d)) {
-    const [r2] = await db2.sql`
-      select count(*)::int as n from orbit.drafts dr join orbit.goals g on g.id = dr.goal_id
-       where dr.user_id = ${userId}::uuid and dr.channel = 'gmail' and dr.status = 'sent' and g.kind = 'sales'
-         and dr.kind in ('first_touch', 'warm_first_touch', 'outreach') and dr.sent_at >= ${dayStart}::timestamptz`;
-    return (r2?.n ?? 0) >= SEND_CAPS.gmailSalesFirstTouchesPerDay ? "gmail_sales_daily_cap" : null;
-  }
-  const [r] = await db2.sql`
-    select count(*)::int as n from orbit.drafts dr
-     where dr.user_id = ${userId}::uuid and dr.channel = 'gmail' and dr.status = 'sent'
-       and dr.sent_at >= ${dayStart}::timestamptz
-       and not (dr.kind in ('first_touch', 'warm_first_touch', 'outreach')
-                and exists (select 1 from orbit.goals g where g.id = dr.goal_id and g.kind = 'sales'))`;
-  const cap = ownCap(u2.settings, "daily_send_cap_gmail", SEND_CAPS.gmailPerDay);
-  return (r?.n ?? 0) >= cap ? "gmail_daily_cap" : null;
-}
-async function threadSubject(db2, userId, threadExternalId) {
-  if (!threadExternalId) return null;
-  const [t] = await db2.sql`
-    select subject from orbit.threads where user_id = ${userId}::uuid and external_id = ${threadExternalId}`;
-  return t?.subject ?? null;
-}
-async function lastMessageId(db2, userId, threadExternalId) {
-  if (!threadExternalId) return null;
-  const [m] = await db2.sql`
-    select m.rfc_message_id from orbit.messages m join orbit.threads t on t.id = m.thread_id
-     where t.user_id = ${userId}::uuid and t.external_id = ${threadExternalId} and m.rfc_message_id is not null
-     order by m.sent_at desc limit 1`;
-  return m?.rfc_message_id ?? null;
-}
-async function linkedinChatId(db2, userId, personId) {
-  const [t] = await db2.sql`
-    select external_id from orbit.threads
-     where user_id = ${userId}::uuid and provider = 'linkedin' and ${personId}::uuid = any(participant_person_ids)
-     order by last_at desc nulls last limit 1`;
-  return t?.external_id ?? null;
-}
-async function linkedinAttendee(db2, userId, personId, memberId) {
-  const [i] = await db2.sql`
-    select value_raw, value_norm from orbit.person_identities
-     where user_id = ${userId}::uuid and person_id = ${personId}::uuid and kind in ('unipile_attendee', 'linkedin_member')
-     order by (kind = 'unipile_attendee') desc limit 1`;
-  return i?.value_raw ?? i?.value_norm ?? memberId;
-}
-
-// supabase/functions/orbit-api/routes/drafts.ts
-var KINDS = [
-  "outreach",
-  "bump",
-  "schedule",
-  "thank_you",
-  "nurture",
-  "congratulate",
-  "referral_ask",
-  "intro_request",
-  "reply",
-  "report_back",
-  "first_touch",
-  "warm_first_touch",
-  "forwardable_blurb",
-  "reengage"
-];
-async function compose(ctx) {
-  const b = await body(ctx);
-  const kind = b.kind;
-  if (!KINDS.includes(kind)) throw badRequest("kind is not a message kind");
-  if (b.channel !== "gmail" && b.channel !== "linkedin") throw badRequest("channel is gmail or linkedin");
-  const r = await composeDraft(ctx.services(), {
-    userId: ctx.userId,
-    personId: uuid(b, "personId"),
-    kind,
-    channel: b.channel,
-    goalId: optUuid(b, "goalId") ?? null,
-    replyToMessageId: optUuid(b, "replyToMessageId")
-  });
-  return json(200, { draft: toServerDraft(r.draft) });
-}
-async function approve(ctx) {
-  const b = await body(ctx);
-  const draft2 = await approveDraft(ctx.services(), ctx.userId, {
-    draftId: uuid(b, "draftId"),
-    sendAt: typeof b.sendAt === "string" ? b.sendAt : void 0,
-    confirm: b.confirm === true
-  });
-  return json(200, { draft: draft2 });
-}
-async function cancel(ctx) {
-  return json(200, { draft: await cancelDraft(ctx.db, ctx.userId, uuid(await body(ctx), "draftId")) });
-}
-async function discard(ctx) {
-  return json(200, { draft: await discardDraft(ctx.db, ctx.userId, uuid(await body(ctx), "draftId")) });
-}
-var draftRoutes = {
-  "/drafts/compose": { method: "POST", auth: true, run: compose },
-  "/drafts/approve": { method: "POST", auth: true, run: approve },
-  "/drafts/cancel": { method: "POST", auth: true, run: cancel },
-  "/drafts/discard": { method: "POST", auth: true, run: discard }
-};
-
-// supabase/functions/_shared/friends/forward.ts
-function forwardSubject(i) {
-  return `Intro: ${i.askerFirst} and ${i.targetFirst}`;
-}
-function forwardBody(i) {
-  const note2 = i.note.trim().replace(/^["“]+|["”]+$/g, "");
-  return [
-    `Hi ${i.targetFirst},`,
-    `${i.askerName} asked me to put you two in touch. In their words:`,
-    `"${note2}"`,
-    `Cc'ing ${i.askerFirst} so you two can take it from here. No pressure either way, and no need to reply to me.`,
-    i.meFirst
-  ].join("\n\n");
-}
-
 // packages/core/src/scoring/rapport.ts
 var RAPPORT_CUES = [
   "asks_about_you",
@@ -7990,1809 +7986,217 @@ function tieBand(score) {
   return "faint";
 }
 
-// supabase/functions/_shared/friends/shares.ts
-function emailHash(email) {
-  return sha256Hex(`orbit-friend:${normalizeEmail(email)}`);
+// packages/core/src/graph/paths.ts
+function makeGraph() {
+  return { nodes: /* @__PURE__ */ new Set(), adj: /* @__PURE__ */ new Map() };
 }
-function publicShare(r) {
-  return {
-    personId: r.person_id,
-    displayName: r.display_name,
-    title: r.title,
-    company: r.company,
-    companyDomain: r.company_domain,
-    linkedinSlug: r.linkedin_slug,
-    school: r.school,
-    isAlumni: r.is_alumni,
-    closeness: Math.max(1, Math.min(3, Number(r.closeness)))
+function addEdge(g, a, b, weight, type, text3, directed = false) {
+  if (weight <= 0) return;
+  g.nodes.add(a);
+  g.nodes.add(b);
+  const set = (x, y) => {
+    const m = g.adj.get(x) ?? /* @__PURE__ */ new Map();
+    const cur = m.get(y);
+    if (!cur || cur.weight < weight) m.set(y, { weight, type, text: text3 });
+    g.adj.set(x, m);
   };
+  set(a, b);
+  if (!directed) set(b, a);
 }
-function underMode(rows, mode2, domains) {
-  if (mode2 === "none") return [];
-  if (mode2 === "all") return rows;
-  const want = new Set(domains.map((d) => d.toLowerCase().trim()).filter(Boolean));
-  const names = new Set([...want].map((d) => normalizeCompany(d.replace(/\.[a-z]+$/, ""))).filter(Boolean));
-  return rows.filter(
-    (r) => r.company_domain && want.has(r.company_domain.toLowerCase()) || r.company && names.has(normalizeCompany(r.company))
-  );
+function edgeCost(weight) {
+  return -Math.log(Math.min(weight, 0.999999));
 }
-async function sharingFriends(db2, viewerId) {
-  const rows = await db2.sql`
-    select f.id as friendship_id, u.id as user_id, u.full_name, u.first_name, u.email, s.mode, s.company_domains
-      from orbit.friendships f
-      join orbit.users u on u.id = case when f.a = ${viewerId}::uuid then f.b else f.a end
-      join orbit.friend_share_settings s on s.friendship_id = f.id and s.owner_user_id = u.id
-     where f.status = 'active' and (f.a = ${viewerId}::uuid or f.b = ${viewerId}::uuid)
-       and s.mode <> 'none' and u.deleted_at is null`;
-  return rows.map((r) => {
-    const name = r.full_name?.trim() || r.first_name?.trim() || r.email.split("@")[0];
-    return {
-      friendshipId: r.friendship_id,
-      userId: r.user_id,
-      name,
-      firstName: r.first_name?.trim() || name.split(/\s+/)[0],
-      mode: r.mode,
-      domains: r.company_domains ?? []
-    };
-  });
-}
-async function visibleShares(db2, friend) {
-  const rows = await db2.sql`
-    select owner_user_id, person_id, display_name, title, company, company_domain, linkedin_member_id,
-           linkedin_slug, email_hash, school, is_alumni, closeness::int as closeness, updated_at
-      from orbit.friend_shares where owner_user_id = ${friend.userId}::uuid
-     order by display_name`;
-  return underMode(rows, friend.mode, friend.domains);
-}
-async function matchShares(db2, viewerId, shares2) {
-  const out = /* @__PURE__ */ new Map();
-  if (!shares2.length) return out;
-  const people = await db2.sql`
-    select p.id, p.display_name, p.org_raw, o.name as org_name, p.linkedin_member_id, p.linkedin_slug, p.primary_email
-      from orbit.people p left join orbit.organizations o on o.id = p.org_id
-     where p.user_id = ${viewerId}::uuid and not p.is_self and p.deleted_at is null and p.merged_into is null`;
-  const identities = await db2.sql`
-    select person_id, kind, value_norm from orbit.person_identities
-     where user_id = ${viewerId}::uuid and kind in ('email', 'linkedin_member', 'linkedin_slug')`;
-  const byMember = /* @__PURE__ */ new Map();
-  const bySlug = /* @__PURE__ */ new Map();
-  const emails = /* @__PURE__ */ new Map();
-  const byName = /* @__PURE__ */ new Map();
-  for (const p of people) {
-    if (p.linkedin_member_id) byMember.set(p.linkedin_member_id, p.id);
-    if (p.linkedin_slug) bySlug.set(p.linkedin_slug.toLowerCase(), p.id);
-    if (p.primary_email?.includes("@")) emails.set(normalizeEmail(p.primary_email), p.id);
-    const key = `${p.display_name.trim().toLowerCase()}|${normalizeCompany(p.org_name ?? p.org_raw)}`;
-    byName.set(key, [...byName.get(key) ?? [], p.id]);
+var MinHeap = class {
+  keys = [];
+  vals = [];
+  get size() {
+    return this.keys.length;
   }
-  for (const i of identities) {
-    if (i.kind === "linkedin_member" && !byMember.has(i.value_norm)) byMember.set(i.value_norm, i.person_id);
-    if (i.kind === "linkedin_slug" && !bySlug.has(i.value_norm.toLowerCase()))
-      bySlug.set(i.value_norm.toLowerCase(), i.person_id);
-    if (i.kind === "email" && !emails.has(i.value_norm)) emails.set(i.value_norm, i.person_id);
-  }
-  const wanted = new Set(shares2.map((s) => s.email_hash).filter((h) => !!h));
-  const byHash = /* @__PURE__ */ new Map();
-  if (wanted.size)
-    for (const [email, id] of emails) {
-      const h = await emailHash(email);
-      if (wanted.has(h) && !byHash.has(h)) byHash.set(h, id);
+  push(key, val) {
+    const k = this.keys;
+    const v = this.vals;
+    let i = k.length;
+    k.push(key);
+    v.push(val);
+    while (i > 0) {
+      const parent = i - 1 >> 1;
+      if (k[parent] <= key) break;
+      k[i] = k[parent];
+      v[i] = v[parent];
+      i = parent;
     }
-  for (const s of shares2) {
-    const hit = s.linkedin_member_id && byMember.get(s.linkedin_member_id) || s.linkedin_slug && bySlug.get(s.linkedin_slug.toLowerCase()) || s.email_hash && byHash.get(s.email_hash) || (() => {
-      if (!s.company) return void 0;
-      const ids = byName.get(`${s.display_name.trim().toLowerCase()}|${normalizeCompany(s.company)}`);
-      return ids?.length === 1 ? ids[0] : void 0;
-    })();
-    if (hit) out.set(s.person_id, hit);
+    k[i] = key;
+    v[i] = val;
   }
-  return out;
-}
-var CLOSENESS_P = { 1: 0.35, 2: 0.6, 3: 0.85 };
-function closenessPhrase(closeness, firstName) {
-  return closeness === 3 ? `is close to ${firstName}` : closeness === 2 ? `knows ${firstName} well` : `knows ${firstName}`;
-}
-var friendNode = (userId) => `friend:${userId}`;
-var friendPersonNode = (personId) => `friend_person:${personId}`;
-var isFriendNode = (id) => id.startsWith("friend:");
-
-// supabase/functions/orbit-api/routes/friends.ts
-var INVITES_PER_DAY = 20;
-var ASKS_PER_DAY_PER_FRIEND = 10;
-var INVITE_DAYS = 14;
-var SHARES_PAGE = 50;
-var MODES = ["all", "companies", "none"];
-var DAY_MS = 864e5;
-var forbidden = () => new HttpError(403, "forbidden", "not a friend who shares with you");
-function modeOf2(b, required = true) {
-  const m = b.mode;
-  if (m === void 0 && !required) return void 0;
-  if (typeof m !== "string" || !MODES.includes(m))
-    throw badRequest("mode is all, companies or none");
-  return m;
-}
-function domainsOf(b) {
-  const v = b.companyDomains;
-  if (v === void 0 || v === null) return [];
-  if (!Array.isArray(v) || v.some((d) => typeof d !== "string")) throw badRequest("companyDomains is a list");
-  return [...new Set(v.map((d) => d.trim().toLowerCase()).filter(Boolean))].slice(0, 50);
-}
-function inviteCode() {
-  let code = "";
-  while (code.length < 22) code += randomToken(24).replace(/[^A-Za-z0-9]/g, "");
-  return code.slice(0, 22);
-}
-async function userLite(db2, userId) {
-  const [u2] = await db2.sql`
-    select id, email, full_name, first_name, school, grad_year, avatar_url, settings
-      from orbit.users where id = ${userId}::uuid and deleted_at is null`;
-  if (!u2) throw new HttpError(401, "unauthorized", "sign in again");
-  return { ...u2, settings: u2.settings ?? {} };
-}
-var nameOf = (u2) => u2.full_name?.trim() || u2.first_name?.trim() || u2.email.split("@")[0];
-var firstOf = (u2) => u2.first_name?.trim() || nameOf(u2).split(/\s+/)[0];
-function defaultMode(u2) {
-  const m = u2.settings.friend_share_mode;
-  const d = u2.settings.friend_share_domains;
-  return {
-    mode: typeof m === "string" && MODES.includes(m) ? m : "all",
-    domains: Array.isArray(d) ? d.filter((x) => typeof x === "string") : []
-  };
-}
-async function enqueueRefresh(ctx, userIds) {
-  const q = ctx.services().queue;
-  for (const id of new Set(userIds))
-    await q.enqueue({ kind: "friend_shares_refresh", userId: id, payload: {}, dedupeKey: `friends:refresh:${id}` }).catch(() => void 0);
-}
-async function logAudit(ctx, action, table, targetId, details) {
-  await ctx.db.sql`
-    insert into orbit.audit_log (user_id, actor, action, target_table, target_id, details)
-    values (${ctx.userId}::uuid, 'user', ${action}, ${table}, ${targetId}, ${details}::jsonb)`;
-}
-async function targetNames(db2, userId) {
-  const goals = await db2.sql`
-    select targets from orbit.goals where user_id = ${userId}::uuid and status = 'active' and deleted_at is null`;
-  const out = [];
-  for (const g of goals) for (const o of g.targets?.organizations ?? []) if (!out.includes(o)) out.push(o);
-  return out;
-}
-async function friendView(db2, me2, f2, targets) {
-  const otherId = f2.a === me2 ? f2.b : f2.a;
-  const other = await userLite(db2, otherId);
-  const [theirs] = await db2.sql`
-    select mode, company_domains from orbit.friend_share_settings
-     where friendship_id = ${f2.id}::uuid and owner_user_id = ${otherId}::uuid`;
-  const [mine] = await db2.sql`
-    select mode, company_domains from orbit.friend_share_settings
-     where friendship_id = ${f2.id}::uuid and owner_user_id = ${me2}::uuid`;
-  const friend = {
-    friendshipId: f2.id,
-    userId: otherId,
-    name: nameOf(other),
-    firstName: firstOf(other),
-    mode: theirs?.mode ?? "none",
-    domains: theirs?.company_domains ?? []
-  };
-  const visible = friend.mode === "none" ? [] : await visibleShares(db2, friend);
-  const lower = targets.map((t) => t.toLowerCase());
-  const at = visible.filter((s) => s.company && lower.includes(s.company.toLowerCase()));
-  const knowsAt = targets.map((company) => ({
-    company,
-    count: visible.filter((s) => s.company?.toLowerCase() === company.toLowerCase()).length
-  })).filter((k) => k.count > 0);
-  return {
-    friendshipId: f2.id,
-    userId: otherId,
-    name: friend.name,
-    school: other.school,
-    gradYear: other.grad_year,
-    avatarUrl: other.avatar_url,
-    shares: visible.length,
-    atTargets: at.length,
-    knowsAt,
-    myMode: mine?.mode ?? "none",
-    myCompanyDomains: mine?.company_domains ?? [],
-    since: iso(f2.accepted_at ?? f2.created_at)
-  };
-}
-async function list(ctx) {
-  const db2 = ctx.db;
-  const me2 = ctx.userId;
-  await db2.sql`select orbit.expire_friend_asks()`;
-  const rows = await db2.sql`
-    select id, a, b, status, requested_by, created_at, accepted_at from orbit.friendships
-     where (a = ${me2}::uuid or b = ${me2}::uuid) and status in ('active', 'pending') order by created_at`;
-  const targets = await targetNames(db2, me2);
-  const friends = [];
-  const pending = [];
-  for (const f2 of rows) {
-    if (f2.status === "active") friends.push(await friendView(db2, me2, f2, targets));
-    else if (f2.requested_by !== me2) {
-      const other = await userLite(db2, f2.a === me2 ? f2.b : f2.a);
-      pending.push({
-        id: f2.id,
-        direction: "in",
-        email: null,
-        name: nameOf(other),
-        status: "pending",
-        createdAt: iso(f2.created_at)
-      });
-    } else {
-      const other = await userLite(db2, f2.a === me2 ? f2.b : f2.a);
-      pending.push({
-        id: f2.id,
-        direction: "out",
-        email: null,
-        name: nameOf(other),
-        status: "pending",
-        createdAt: iso(f2.created_at)
-      });
+  pop() {
+    const k = this.keys;
+    const v = this.vals;
+    if (!k.length) return void 0;
+    const topK = k[0];
+    const topV = v[0];
+    const lastK = k.pop();
+    const lastV = v.pop();
+    const n = k.length;
+    if (n) {
+      let i = 0;
+      while (true) {
+        const l = 2 * i + 1;
+        if (l >= n) break;
+        const r = l + 1;
+        const c = r < n && k[r] < k[l] ? r : l;
+        if (k[c] >= lastK) break;
+        k[i] = k[c];
+        v[i] = v[c];
+        i = c;
+      }
+      k[i] = lastK;
+      v[i] = lastV;
     }
+    return [topK, topV];
   }
-  const invites = await db2.sql`
-    select id, to_email, status, created_at from orbit.friend_invites
-     where from_user_id = ${me2}::uuid and status = 'pending' and to_email is not null
-       and not exists (select 1 from orbit.users u where lower(u.email) = to_email and u.deleted_at is null)
-     order by created_at`;
-  for (const i of invites)
-    pending.push({
-      id: i.id,
-      direction: "out",
-      email: i.to_email,
-      name: null,
-      status: i.status,
-      createdAt: iso(i.created_at)
-    });
-  const out = { friends, pending };
-  return json(200, out);
-}
-async function invite(ctx) {
-  const b = await body(ctx, true);
-  const db2 = ctx.db;
-  const me2 = ctx.userId;
-  const now = ctx.now();
-  const email = typeof b.email === "string" && b.email.trim() ? normalizeEmail(b.email.trim()) : null;
-  if (email && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) throw badRequest("that is not an email address");
-  const u2 = await userLite(db2, me2);
-  if (email && email === normalizeEmail(u2.email)) throw badRequest("that is your own address");
-  const [today] = await db2.sql`
-    select count(*)::int as n from orbit.friend_invites
-     where from_user_id = ${me2}::uuid and created_at > ${new Date(now.getTime() - DAY_MS)}::timestamptz`;
-  if ((today?.n ?? 0) >= INVITES_PER_DAY)
-    throw new HttpError(429, "rate_limited", `at most ${INVITES_PER_DAY} invites a day`);
-  const code = inviteCode();
-  const expires = new Date(now.getTime() + INVITE_DAYS * DAY_MS);
-  const [row] = await db2.sql`
-    insert into orbit.friend_invites (from_user_id, to_email, code, status, created_at, expires_at)
-    values (${me2}::uuid, ${email}, ${code}, 'pending', ${now}::timestamptz, ${expires}::timestamptz)
-    returning id, created_at`;
-  const link = `${ctx.env.appUrl}/friends/join/${code}`;
-  const mine = defaultMode(u2);
-  let status2 = "link";
-  let name = null;
-  if (email) {
-    const [other] = await db2.sql`
-      select id, email, full_name, first_name, school, grad_year, avatar_url, settings from orbit.users
-       where lower(email) = ${email} and deleted_at is null`;
-    if (other) {
-      const [lo, hi] = me2 < other.id ? [me2, other.id] : [other.id, me2];
-      const [existing] = await db2.sql`
-        select id, status from orbit.friendships where a = ${lo}::uuid and b = ${hi}::uuid`;
-      if (existing?.status === "active")
-        throw new HttpError(409, "already_friends", "you are already friends");
-      if (existing?.status === "blocked") throw new HttpError(409, "blocked", "that request cannot be sent");
-      const [f2] = existing ? await db2.sql`
-            update orbit.friendships set status = 'pending', requested_by = ${me2}::uuid, created_at = ${now}::timestamptz,
-                   accepted_at = null, ended_at = null, ended_by = null
-             where id = ${existing.id}::uuid returning id` : await db2.sql`
-            insert into orbit.friendships (a, b, status, requested_by, created_at)
-            values (${lo}::uuid, ${hi}::uuid, 'pending', ${me2}::uuid, ${now}::timestamptz) returning id`;
-      await db2.sql`
-        insert into orbit.friend_share_settings (friendship_id, owner_user_id, mode, company_domains)
-        values (${f2.id}::uuid, ${me2}::uuid, ${mine.mode}, ${mine.domains}::text[])
-        on conflict (friendship_id, owner_user_id) do update set mode = excluded.mode,
-          company_domains = excluded.company_domains, updated_at = now()`;
-      status2 = "requested";
-      name = nameOf(other);
-    } else {
-      const mailer = ctx.services().mailer;
-      if (mailer?.configured) {
-        const r = await mailer.send({
-          to: email,
-          subject: `${firstOf(u2)} wants to pool networks with you on Orbit`,
-          text: [
-            `${nameOf(u2)} invited you to be friends on Orbit.`,
-            "Friends pool their networks: you see who they know and how well, they see yours, and intros happen in one tap. Nothing else crosses: not your messages, notes or contact details.",
-            `Open this link to sign in and accept: ${link}`,
-            `It stops working in ${INVITE_DAYS} days.`
-          ].join("\n\n")
-        });
-        if (r.ok) status2 = "sent";
+};
+function boundedSearch(g, source, maxHops, target, removedEdges, removedNodes) {
+  const dist = /* @__PURE__ */ new Map();
+  const prev = /* @__PURE__ */ new Map();
+  const minSettledHops = /* @__PURE__ */ new Map();
+  const best = /* @__PURE__ */ new Map();
+  const heap = new MinHeap();
+  const setDist = (node, hops, d, from) => {
+    let arr = dist.get(node);
+    if (!arr) {
+      arr = new Array(maxHops + 1).fill(Number.POSITIVE_INFINITY);
+      dist.set(node, arr);
+      prev.set(node, new Array(maxHops + 1));
+    }
+    arr[hops] = d;
+    prev.get(node)[hops] = from;
+  };
+  setDist(source, 0, 0, void 0);
+  heap.push(0, { node: source, hops: 0 });
+  while (heap.size) {
+    const [d, { node, hops }] = heap.pop();
+    if (d > dist.get(node)[hops]) continue;
+    const settled = minSettledHops.get(node);
+    if (settled !== void 0 && settled <= hops) continue;
+    minSettledHops.set(node, hops);
+    if (!best.has(node)) best.set(node, { cost: d, hops });
+    if (node === target) break;
+    if (hops >= maxHops) continue;
+    for (const [v, e] of g.adj.get(node) ?? []) {
+      if (v === source || removedNodes?.has(v) || removedEdges?.has(`${node}>${v}`)) continue;
+      const s = minSettledHops.get(v);
+      if (s !== void 0 && s <= hops + 1) continue;
+      const nd = d + edgeCost(e.weight);
+      const cur = dist.get(v)?.[hops + 1] ?? Number.POSITIVE_INFINITY;
+      if (nd < cur) {
+        setDist(v, hops + 1, nd, node);
+        heap.push(nd, { node: v, hops: hops + 1 });
       }
     }
   }
-  await logAudit(ctx, "friends.invite", "friend_invites", row.id, { status: status2, byEmail: !!email });
-  const out = {
-    code,
-    link,
-    status: status2,
-    invite: {
-      id: row.id,
-      direction: "out",
-      email,
-      name,
-      status: "pending",
-      createdAt: iso(row.created_at)
+  return { best, prev };
+}
+function reconstruct(search3, node) {
+  const b = search3.best.get(node);
+  if (!b) return void 0;
+  const path = [node];
+  let cur = node;
+  for (let h = b.hops; h > 0; h--) {
+    cur = search3.prev.get(cur)[h];
+    path.unshift(cur);
+  }
+  return path;
+}
+function shortestPath(g, source, target, maxHops, removedEdges, removedNodes) {
+  if (source === target) return [source];
+  const search3 = boundedSearch(g, source, maxHops, target, removedEdges, removedNodes);
+  return reconstruct(search3, target);
+}
+function pathCost(g, path) {
+  let c = 0;
+  for (let i = 0; i < path.length - 1; i++) c += edgeCost(g.adj.get(path[i]).get(path[i + 1]).weight);
+  return c;
+}
+function kShortestPaths(g, source, target, k = 3, maxHops = 3) {
+  if (!g.nodes.has(source) || !g.nodes.has(target)) return source === target ? [[source]] : [];
+  const first = shortestPath(g, source, target, maxHops, /* @__PURE__ */ new Set(), /* @__PURE__ */ new Set());
+  if (!first) return [];
+  const A = [first];
+  if (first.length === 1) return A;
+  const B = [];
+  const seen = /* @__PURE__ */ new Set([first.join(">")]);
+  for (let kk = 1; kk < k; kk++) {
+    const last = A[kk - 1];
+    for (let i = 0; i < last.length - 1; i++) {
+      const spur = last[i];
+      const root = last.slice(0, i + 1);
+      const removedEdges = /* @__PURE__ */ new Set();
+      const removedNodes = /* @__PURE__ */ new Set();
+      for (const p of A) {
+        if (p.length > i + 1 && root.every((n, idx) => p[idx] === n)) removedEdges.add(`${p[i]}>${p[i + 1]}`);
+      }
+      for (const n of root) if (n !== spur) removedNodes.add(n);
+      const spurPath = shortestPath(g, spur, target, maxHops - i, removedEdges, removedNodes);
+      if (!spurPath) continue;
+      const total = [...root.slice(0, -1), ...spurPath];
+      const key = total.join(">");
+      if (seen.has(key)) continue;
+      seen.add(key);
+      B.push({ cost: pathCost(g, total), path: total, key });
     }
-  };
-  return json(200, out);
-}
-async function pendingFor(db2, me2, b) {
-  const friendshipId = optUuid(b, "friendshipId");
-  if (friendshipId) {
-    const [f3] = await db2.sql`
-      select id, a, b, status, requested_by, created_at, accepted_at from orbit.friendships
-       where id = ${friendshipId}::uuid and (a = ${me2}::uuid or b = ${me2}::uuid)`;
-    if (f3?.status !== "pending") throw new HttpError(404, "not_found", "no such request");
-    if (f3.requested_by === me2) throw badRequest("that is your own request");
-    return { friendshipId: f3.id, fromUserId: f3.a === me2 ? f3.b : f3.a };
+    if (!B.length) break;
+    B.sort((a, b) => a.cost - b.cost);
+    A.push(B.shift().path);
   }
-  const code = typeof b.code === "string" ? b.code.trim() : "";
-  if (!code) throw badRequest("code or friendshipId is required");
-  const [inv] = await db2.sql`
-    select id, from_user_id, to_email, status, expires_at from orbit.friend_invites where code = ${code}`;
-  if (inv?.status !== "pending" || new Date(inv.expires_at).getTime() < Date.now())
-    throw new HttpError(404, "not_found", "no such request, or it has expired");
-  if (inv.from_user_id === me2) throw badRequest("that is your own invite");
-  const [u2] = await db2.sql`select email from orbit.users where id = ${me2}::uuid`;
-  if (inv.to_email && u2 && normalizeEmail(u2.email) !== inv.to_email)
-    throw new HttpError(403, "forbidden", "that invite was sent to a different address");
-  const [lo, hi] = me2 < inv.from_user_id ? [me2, inv.from_user_id] : [inv.from_user_id, me2];
-  const [f2] = await db2.sql`
-    select id, status from orbit.friendships where a = ${lo}::uuid and b = ${hi}::uuid`;
-  return {
-    friendshipId: f2?.status === "pending" ? f2.id : void 0,
-    inviteId: inv.id,
-    fromUserId: inv.from_user_id
-  };
+  return A;
 }
-async function accept(ctx) {
-  const b = await body(ctx);
-  const db2 = ctx.db;
-  const me2 = ctx.userId;
-  const now = ctx.now();
-  const mode2 = modeOf2(b);
-  const domains = domainsOf(b);
-  const p = await pendingFor(db2, me2, b);
-  const inviter = await userLite(db2, p.fromUserId);
-  const theirs = defaultMode(inviter);
-  const [lo, hi] = me2 < p.fromUserId ? [me2, p.fromUserId] : [p.fromUserId, me2];
-  const friendshipId = await db2.begin(async (tx) => {
-    let id = p.friendshipId;
-    if (id)
-      await tx.sql`update orbit.friendships set status = 'active', accepted_at = ${now}::timestamptz where id = ${id}::uuid`;
-    else {
-      const [existing] = await tx.sql`
-        select id, status from orbit.friendships where a = ${lo}::uuid and b = ${hi}::uuid`;
-      if (existing?.status === "active")
-        throw new HttpError(409, "already_friends", "you are already friends");
-      if (existing?.status === "blocked")
-        throw new HttpError(409, "blocked", "that request cannot be accepted");
-      const [f3] = existing ? await tx.sql`
-            update orbit.friendships set status = 'active', requested_by = ${p.fromUserId}::uuid,
-                   accepted_at = ${now}::timestamptz, ended_at = null, ended_by = null
-             where id = ${existing.id}::uuid returning id` : await tx.sql`
-            insert into orbit.friendships (a, b, status, requested_by, created_at, accepted_at)
-            values (${lo}::uuid, ${hi}::uuid, 'active', ${p.fromUserId}::uuid, ${now}::timestamptz, ${now}::timestamptz)
-            returning id`;
-      id = f3.id;
+
+// packages/core/src/graph/ppr.ts
+var PPR_ALPHA = 0.15;
+var PPR_ITERATIONS = 30;
+function personalizedPageRank(adj, source, opts = {}) {
+  const alpha = opts.alpha ?? PPR_ALPHA;
+  const iterations = opts.iterations ?? PPR_ITERATIONS;
+  const out = /* @__PURE__ */ new Map();
+  const nodes = /* @__PURE__ */ new Set([source]);
+  for (const [u2, nbrs] of adj) {
+    nodes.add(u2);
+    let total = 0;
+    for (const [v, w] of nbrs) {
+      if (w > 0 && Number.isFinite(w)) total += w;
+      nodes.add(v);
     }
-    await tx.sql`
-      insert into orbit.friend_share_settings (friendship_id, owner_user_id, mode, company_domains)
-      values (${id}::uuid, ${p.fromUserId}::uuid, ${theirs.mode}, ${theirs.domains}::text[])
-      on conflict (friendship_id, owner_user_id) do nothing`;
-    await tx.sql`
-      insert into orbit.friend_share_settings (friendship_id, owner_user_id, mode, company_domains)
-      values (${id}::uuid, ${me2}::uuid, ${mode2}, ${domains}::text[])
-      on conflict (friendship_id, owner_user_id) do update set mode = excluded.mode,
-        company_domains = excluded.company_domains, updated_at = now()`;
-    if (p.inviteId)
-      await tx.sql`update orbit.friend_invites set status = 'accepted', answered_at = ${now}::timestamptz where id = ${p.inviteId}::uuid`;
-    return id;
-  });
-  await enqueueRefresh(ctx, [me2, p.fromUserId]);
-  await logAudit(ctx, "friends.accept", "friendships", friendshipId, { mode: mode2 });
-  const [f2] = await db2.sql`
-    select id, a, b, status, requested_by, created_at, accepted_at from orbit.friendships where id = ${friendshipId}::uuid`;
-  const out = { friend: await friendView(db2, me2, f2, await targetNames(db2, me2)) };
-  return json(200, out);
-}
-async function decline(ctx) {
-  const b = await body(ctx);
-  const db2 = ctx.db;
-  const me2 = ctx.userId;
-  const now = ctx.now();
-  const p = await pendingFor(db2, me2, b);
-  await db2.begin(async (tx) => {
-    if (p.friendshipId) await tx.sql`delete from orbit.friendships where id = ${p.friendshipId}::uuid`;
-    if (p.inviteId)
-      await tx.sql`update orbit.friend_invites set status = 'declined', answered_at = ${now}::timestamptz where id = ${p.inviteId}::uuid`;
-  });
-  await logAudit(ctx, "friends.decline", "friendships", p.friendshipId ?? p.inviteId ?? "", {});
-  return json(200, { ok: true });
-}
-async function end(ctx) {
-  const b = await body(ctx);
-  const db2 = ctx.db;
-  const me2 = ctx.userId;
-  const now = ctx.now();
-  const friendshipId = uuid(b, "friendshipId");
-  const rows = await db2.begin(async (tx) => {
-    const r = await tx.sql`
-      update orbit.friendships set status = 'ended', ended_at = ${now}::timestamptz, ended_by = ${me2}::uuid
-       where id = ${friendshipId}::uuid and (a = ${me2}::uuid or b = ${me2}::uuid) and status in ('active', 'pending')
-       returning id`;
-    if (r.length)
-      await tx.sql`
-        update orbit.friend_intro_asks set status = 'expired', answered_at = ${now}::timestamptz
-         where friendship_id = ${friendshipId}::uuid and status = 'asked'`;
-    return r;
-  });
-  if (!rows.length) throw new HttpError(404, "not_found", "no such friend");
-  await logAudit(ctx, "friends.end", "friendships", friendshipId, {});
-  return json(200, { ok: true });
-}
-async function ownRows(db2, me2) {
-  return db2.sql`
-    select owner_user_id, person_id, display_name, title, company, company_domain, linkedin_member_id,
-           linkedin_slug, email_hash, school, is_alumni, closeness::int as closeness, updated_at
-      from orbit.friend_shares where owner_user_id = ${me2}::uuid order by display_name`;
-}
-async function settings(ctx) {
-  const b = await body(ctx);
-  const db2 = ctx.db;
-  const me2 = ctx.userId;
-  const mode2 = modeOf2(b);
-  const domains = domainsOf(b);
-  const friendshipId = optUuid(b, "friendshipId");
-  if (friendshipId) {
-    const r = await db2.sql`
-      update orbit.friend_share_settings set mode = ${mode2}, company_domains = ${domains}::text[], updated_at = now()
-       where friendship_id = ${friendshipId}::uuid and owner_user_id = ${me2}::uuid
-         and exists (select 1 from orbit.friendships f where f.id = ${friendshipId}::uuid and f.status = 'active'
-                       and (f.a = ${me2}::uuid or f.b = ${me2}::uuid))
-       returning friendship_id as id`;
-    if (!r.length) throw new HttpError(404, "not_found", "no such friend");
-  } else {
-    await db2.sql`
-      update orbit.friend_share_settings set mode = ${mode2}, company_domains = ${domains}::text[], updated_at = now()
-       where owner_user_id = ${me2}::uuid`;
-    await db2.sql`
-      update orbit.users set settings = settings || jsonb_build_object('friend_share_mode', ${mode2}::text,
-                                                                        'friend_share_domains', ${JSON.stringify(domains)}::jsonb)
-       where id = ${me2}::uuid`;
+    if (total <= 0) continue;
+    const list7 = [];
+    for (const [v, w] of nbrs) if (w > 0 && Number.isFinite(w)) list7.push({ to: v, p: w / total });
+    out.set(u2, list7);
   }
-  await enqueueRefresh(ctx, [me2]);
-  await logAudit(ctx, "friends.settings", "friend_share_settings", friendshipId ?? me2, { mode: mode2, domains });
-  const out = {
-    mode: mode2,
-    companyDomains: domains,
-    shares: underMode(await ownRows(db2, me2), mode2, domains).length
-  };
-  return json(200, out);
-}
-async function preview(ctx) {
-  const db2 = ctx.db;
-  const me2 = ctx.userId;
-  const u2 = await userLite(db2, me2);
-  const mine = defaultMode(u2);
-  const rows = underMode(await ownRows(db2, me2), mine.mode, mine.domains);
-  const out = {
-    mode: mine.mode,
-    companyDomains: mine.domains,
-    shares: rows.map(publicShare),
-    total: rows.length
-  };
-  return json(200, out);
-}
-async function friendFor(db2, me2, friendUserId) {
-  const [v] = await db2.sql`select orbit.friend_visible(${me2}::uuid, ${friendUserId}::uuid) as v`;
-  if (!v?.v) throw forbidden();
-  const f2 = (await sharingFriends(db2, me2)).find((x) => x.userId === friendUserId);
-  if (!f2) throw forbidden();
-  return f2;
-}
-async function shares(ctx, friendUserId, b = {}) {
-  const db2 = ctx.db;
-  const me2 = ctx.userId;
-  const company = (ctx.url.searchParams.get("company") ?? (typeof b.company === "string" ? b.company : "")).trim().toLowerCase();
-  const cursor = ctx.url.searchParams.get("cursor") ?? (typeof b.cursor === "string" ? b.cursor : null);
-  const offset = cursor && /^c\d+$/.test(cursor) ? Number(cursor.slice(1)) : 0;
-  const friend = await friendFor(db2, me2, friendUserId);
-  const all = (await visibleShares(db2, friend)).filter(
-    (s) => !company || s.company?.toLowerCase() === company || s.company_domain?.toLowerCase() === company
-  );
-  const page2 = all.slice(offset, offset + SHARES_PAGE);
-  const out = {
-    friendUserId,
-    shares: page2.map(publicShare),
-    total: all.length,
-    nextCursor: offset + SHARES_PAGE < all.length ? `c${offset + SHARES_PAGE}` : null
-  };
-  return json(200, out);
-}
-async function sharesFlat(ctx) {
-  const b = await body(ctx);
-  return shares(ctx, uuid(b, "friendUserId"), b);
-}
-async function askView(db2, r) {
-  const [asker, friend] = await Promise.all([userLite(db2, r.asker_user_id), userLite(db2, r.friend_user_id)]);
-  const [t] = await db2.sql`
-    select p.display_name, p.org_raw, o.name as org_name from orbit.people p
-      left join orbit.organizations o on o.id = p.org_id where p.id = ${r.target_person_id}::uuid`;
-  return {
-    id: r.id,
-    friendshipId: r.friendship_id,
-    askerUserId: r.asker_user_id,
-    askerName: nameOf(asker),
-    friendUserId: r.friend_user_id,
-    friendName: nameOf(friend),
-    targetPersonId: r.target_person_id,
-    targetName: t?.display_name ?? "Someone",
-    targetCompany: t?.org_name ?? t?.org_raw ?? null,
-    askerPersonId: r.asker_person_id,
-    note: r.note,
-    status: r.status,
-    createdAt: iso(r.created_at),
-    answeredAt: iso(r.answered_at),
-    forwardedDraftId: r.forwarded_message_id
-  };
-}
-var ASK_COLUMNS = "id, friendship_id, asker_user_id, friend_user_id, target_person_id, asker_person_id, note, status, created_at, answered_at, forwarded_message_id";
-async function listAsks(ctx) {
-  const db2 = ctx.db;
-  const me2 = ctx.userId;
-  await db2.sql`select orbit.expire_friend_asks()`;
-  const rows = await db2.query(
-    `select ${ASK_COLUMNS} from orbit.friend_intro_asks where asker_user_id = $1 or friend_user_id = $1
-      order by created_at desc limit 200`,
-    [me2]
-  );
-  const asked = [];
-  const received = [];
-  for (const r of rows) (r.asker_user_id === me2 ? asked : received).push(await askView(db2, r));
-  const out = { asked, received };
-  return json(200, out);
-}
-async function ask(ctx) {
-  const b = await body(ctx);
-  if (!("friendUserId" in b)) return listAsks(ctx);
-  const db2 = ctx.db;
-  const me2 = ctx.userId;
-  const now = ctx.now();
-  const friendUserId = uuid(b, "friendUserId");
-  const targetPersonId = uuid(b, "targetPersonId");
-  const note2 = text(b, "note", 1200);
-  const friend = await friendFor(db2, me2, friendUserId);
-  const target = (await visibleShares(db2, friend)).find((s) => s.person_id === targetPersonId);
-  if (!target) throw new HttpError(404, "not_found", "that person is not one your friend shares");
-  const [today] = await db2.sql`
-    select count(*)::int as n from orbit.friend_intro_asks
-     where friendship_id = ${friend.friendshipId}::uuid and asker_user_id = ${me2}::uuid
-       and created_at > ${new Date(now.getTime() - DAY_MS)}::timestamptz`;
-  if ((today?.n ?? 0) >= ASKS_PER_DAY_PER_FRIEND)
-    throw new HttpError(429, "rate_limited", `at most ${ASKS_PER_DAY_PER_FRIEND} asks a day per friend`);
-  const [open] = await db2.sql`
-    select id from orbit.friend_intro_asks
-     where friendship_id = ${friend.friendshipId}::uuid and asker_user_id = ${me2}::uuid
-       and target_person_id = ${targetPersonId}::uuid and status = 'asked'`;
-  if (open)
-    throw new HttpError(409, "already_asked", "you already asked for this intro; it is waiting on them");
-  const match = (await matchShares(db2, me2, [target])).get(target.person_id) ?? null;
-  const [row] = await db2.query(
-    `insert into orbit.friend_intro_asks (friendship_id, asker_user_id, friend_user_id, target_person_id, asker_person_id,
-                                          note, status, created_at)
-     values ($1, $2, $3, $4, $5, $6, 'asked', $7) returning ${ASK_COLUMNS}`,
-    [friend.friendshipId, me2, friendUserId, targetPersonId, match, note2, now]
-  );
-  await logAudit(ctx, "friends.ask", "friend_intro_asks", row.id, { friendUserId });
-  const out = { ask: await askView(db2, row) };
-  return json(200, out);
-}
-async function respond(ctx, askId, b) {
-  const db2 = ctx.db;
-  const me2 = ctx.userId;
-  const now = ctx.now();
-  const action = b.action;
-  if (action !== "forward" && action !== "decline") throw badRequest("action is forward or decline");
-  const [r] = await db2.query(
-    `select ${ASK_COLUMNS} from orbit.friend_intro_asks where id = $1 and friend_user_id = $2`,
-    [askId, me2]
-  );
-  if (!r) throw new HttpError(404, "not_found", "no such ask");
-  if (r.status !== "asked") throw new HttpError(409, "already_answered", "that ask was answered");
-  if (action === "decline") {
-    await db2.sql`
-      update orbit.friend_intro_asks set status = 'declined', answered_at = ${now}::timestamptz where id = ${askId}::uuid`;
-    await logAudit(ctx, "friends.ask.decline", "friend_intro_asks", askId, {});
-    const out2 = {
-      ask: await askView(db2, { ...r, status: "declined", answered_at: now }),
-      draft: null
-    };
-    return json(200, out2);
-  }
-  const [target] = await db2.sql`
-    select id, display_name, first_name, primary_email, do_not_contact, hidden_at, private, deleted_at
-      from orbit.people where id = ${r.target_person_id}::uuid and user_id = ${me2}::uuid`;
-  if (!target || target.deleted_at || target.hidden_at || target.private)
-    throw new HttpError(409, "not_shared", "that person is no longer one you share");
-  if (target.do_not_contact) throw new HttpError(409, "do_not_contact", "they asked not to be contacted");
-  if (!target.primary_email)
-    throw new HttpError(
-      409,
-      "no_email",
-      `you have no email address for ${target.display_name}, so there is nothing to forward with`
-    );
-  const [asker, meRow] = await Promise.all([userLite(db2, r.asker_user_id), userLite(db2, me2)]);
-  const targetFirst = target.first_name?.trim() || target.display_name.split(/\s+/)[0];
-  const input = {
-    targetFirst,
-    askerName: nameOf(asker),
-    askerFirst: firstOf(asker),
-    note: r.note,
-    meFirst: firstOf(meRow)
-  };
-  const customBody = typeof b.body === "string" && b.body.trim() ? b.body.trim() : null;
-  const draftId = await db2.begin(async (tx) => {
-    const [d] = await tx.sql`
-      insert into orbit.drafts (user_id, person_id, channel, kind, subject, body, status, via, generated_by, validator)
-      values (${me2}::uuid, ${target.id}::uuid, 'gmail', 'forward_intro', ${forwardSubject(input)},
-              ${customBody ?? forwardBody(input)}, 'draft',
-              ${{ friendAskId: askId, cc: asker.email, ccName: nameOf(asker), askerUserId: r.asker_user_id }}::jsonb,
-              'template', ${{ ok: true, issues: [], words: 0, grade: 5 }}::jsonb)
-      returning id`;
-    await tx.sql`
-      update orbit.friend_intro_asks set status = 'forwarded', answered_at = ${now}::timestamptz,
-             forwarded_message_id = ${d.id}::uuid
-       where id = ${askId}::uuid`;
-    return d.id;
-  });
-  await logAudit(ctx, "friends.ask.forward", "friend_intro_asks", askId, { draftId });
-  const [draft2] = await db2.sql`select * from orbit.drafts where id = ${draftId}::uuid`;
-  const out = {
-    ask: await askView(db2, { ...r, status: "forwarded", answered_at: now, forwarded_message_id: draftId }),
-    draft: toServerDraft(draft2)
-  };
-  return json(200, out);
-}
-async function respondFlat(ctx) {
-  const b = await body(ctx);
-  return respond(ctx, uuid(b, "id"), b);
-}
-function friendPatternRoute(path) {
-  const shareM = /^\/friends\/shares\/([0-9a-f-]{36})$/i.exec(path);
-  if (shareM)
-    return {
-      method: "GET|POST",
-      auth: true,
-      run: async (ctx) => shares(ctx, shareM[1].toLowerCase(), ctx.req.method === "POST" ? await body(ctx, true) : {})
-    };
-  const respondM = /^\/friends\/asks\/([0-9a-f-]{36})\/respond$/i.exec(path);
-  if (respondM)
-    return {
-      method: "POST",
-      auth: true,
-      run: async (ctx) => respond(ctx, respondM[1].toLowerCase(), await body(ctx))
-    };
-  return void 0;
-}
-var friendRoutes = {
-  "/friends": { method: "GET|POST", auth: true, run: list },
-  "/friends/invite": { method: "POST", auth: true, run: invite },
-  "/friends/accept": { method: "POST", auth: true, run: accept },
-  "/friends/decline": { method: "POST", auth: true, run: decline },
-  "/friends/end": { method: "POST", auth: true, run: end },
-  "/friends/settings": { method: "POST", auth: true, run: settings },
-  "/friends/preview": { method: "GET|POST", auth: true, run: preview },
-  "/friends/shares": { method: "POST", auth: true, run: sharesFlat },
-  "/friends/asks": {
-    method: "GET|POST",
-    auth: true,
-    run: (ctx) => ctx.req.method === "GET" ? listAsks(ctx) : ask(ctx)
-  },
-  "/friends/asks/respond": { method: "POST", auth: true, run: respondFlat }
-};
-
-// packages/core/src/types.ts
-var GOAL_KINDS = [
-  "recruiting",
-  "fundraising",
-  "sales",
-  "hiring",
-  "advice",
-  "cofounder",
-  "community",
-  "collaboration"
-];
-
-// supabase/functions/_shared/goals/infer.ts
-import { z as z3 } from "npm:zod@3.25.76/v4";
-var GOAL_INFER_SYSTEM = [
-  "You extract networking goals from a conversation with a student or early-career professional.",
-  "Return only goals the user states or clearly implies for themselves. Do not invent targets.",
-  "kind is one of recruiting, fundraising, sales, hiring, advice, cofounder, community, collaboration.",
-  'If nothing new is stated, return {"goals": []}.'
-].join("\n");
-var GOAL_TITLE_MAX = 60;
-var list2 = z3.array(z3.string());
-var goalInferSchema = z3.object({
-  goals: z3.array(
-    z3.object({
-      kind: z3.enum(GOAL_KINDS),
-      title: z3.string(),
-      targets: z3.object({ organizations: list2, roles: list2, geographies: list2, people: list2 }),
-      criteria: z3.object({
-        sector: z3.string().nullable(),
-        stage: z3.string().nullable(),
-        seniority: list2.nullable(),
-        skills: list2.nullable(),
-        keywords: list2.nullable()
-      }),
-      success_metric: z3.string().nullable(),
-      due_at: z3.string().nullable(),
-      is_update_of: z3.string().nullable(),
-      quote: z3.string()
-    })
-  )
-});
-var squash = (s) => s.toLowerCase().replace(/[’‘]/g, "'").replace(/[^\p{L}\p{N}']+/gu, " ").trim();
-var clean = (xs, max = 25) => (xs ?? []).map((x) => x.trim().slice(0, 200)).filter(Boolean).slice(0, max);
-async function inferGoals(claude, userId, turns2, existing = []) {
-  const said = squash(
-    turns2.filter((t) => t.role === "user").map((t) => t.text).join("\n")
-  );
-  if (!said) return [];
-  const r = await claude.structured({
-    task: "goal_infer",
-    system: GOAL_INFER_SYSTEM,
-    user: `<existing_goals>${JSON.stringify(
-      existing.map((g) => ({ id: g.id, kind: g.kind, title: g.title, targets: g.targets }))
-    )}</existing_goals>
-<conversation>${turns2.slice(-6).map((t) => `${t.role}: ${t.text.replace(/<\/?conversation>/g, "")}`).join("\n")}</conversation>`,
-    schema: goalInferSchema,
-    userId
-  });
-  if (!r.ok) return [];
-  const ids = new Set(existing.map((g) => g.id));
-  return r.data.goals.filter((g) => g.quote.trim() && said.includes(squash(g.quote))).filter((g) => g.title.trim()).map((g) => {
-    const criteria = {};
-    if (g.criteria.sector?.trim()) criteria.sector = g.criteria.sector.trim().slice(0, 200);
-    if (g.criteria.stage?.trim()) criteria.stage = g.criteria.stage.trim().slice(0, 200);
-    for (const k of ["seniority", "skills", "keywords"]) {
-      const v = clean(g.criteria[k]);
-      if (v.length) criteria[k] = v;
+  let rank2 = /* @__PURE__ */ new Map([[source, 1]]);
+  for (let it = 0; it < iterations; it++) {
+    const next = /* @__PURE__ */ new Map();
+    let restart = alpha;
+    for (const [u2, r] of rank2) {
+      if (r === 0) continue;
+      const list7 = out.get(u2);
+      if (!list7) {
+        restart += (1 - alpha) * r;
+        continue;
+      }
+      for (const { to, p } of list7) next.set(to, (next.get(to) ?? 0) + (1 - alpha) * r * p);
     }
-    return {
-      kind: g.kind,
-      title: g.title.trim().slice(0, GOAL_TITLE_MAX),
-      targets: {
-        organizations: clean(g.targets.organizations),
-        roles: clean(g.targets.roles),
-        geographies: clean(g.targets.geographies),
-        people: clean(g.targets.people)
-      },
-      criteria,
-      successMetric: g.success_metric?.trim().slice(0, 500) || null,
-      dueAt: g.due_at && /^\d{4}-\d{2}-\d{2}$/.test(g.due_at) ? g.due_at : null,
-      isUpdateOf: g.is_update_of && ids.has(g.is_update_of) ? g.is_update_of : null,
-      quote: g.quote.trim()
-    };
-  });
-}
-
-// supabase/functions/orbit-api/routes/goals.ts
-var MAX_ACTIVE_GOALS = 5;
-var strList = (v, max = 25) => Array.isArray(v) ? v.filter((x) => typeof x === "string" && !!x.trim()).map((x) => x.trim().slice(0, 200)).slice(0, max) : [];
-async function goalsList(ctx) {
-  const rows = await ctx.db.sql`
-    select * from orbit.goals where user_id = ${ctx.userId}::uuid and deleted_at is null
-     order by (status = 'active') desc, priority, created_at`;
-  return json(200, { goals: rows.map(goalFrom) });
-}
-async function goalsUpsert(ctx) {
-  const b = await body(ctx);
-  const g = b.goal;
-  if (!g || typeof g !== "object") throw badRequest("goal is required");
-  if (!GOAL_KINDS.includes(g.kind)) throw badRequest("goal.kind is not a goal kind");
-  if (typeof g.title !== "string" || !g.title.trim() || g.title.length > 200)
-    throw badRequest("goal.title is required");
-  const id = optUuid(g, "id");
-  const status2 = g.status ?? "active";
-  if (!["active", "paused", "done"].includes(status2)) throw badRequest("goal.status is not valid");
-  const priority = g.priority ?? 2;
-  if (![1, 2, 3].includes(priority)) throw badRequest("goal.priority is 1, 2 or 3");
-  const autonomy2 = g.autonomyLevel ?? null;
-  if (autonomy2 !== null && ![0, 1, 2].includes(autonomy2)) throw badRequest("goal.autonomyLevel is 0, 1 or 2");
-  if (g.dueAt !== void 0 && g.dueAt !== null && !/^\d{4}-\d{2}-\d{2}$/.test(String(g.dueAt)))
-    throw badRequest("goal.dueAt is YYYY-MM-DD");
-  const t = g.targets ?? {};
-  const targets = {
-    organizations: strList(t.organizations),
-    roles: strList(t.roles),
-    geographies: strList(t.geographies),
-    people: strList(t.people, 200)
-  };
-  const criteria = g.criteria && typeof g.criteria === "object" && !Array.isArray(g.criteria) ? g.criteria : {};
-  const userId = ctx.userId;
-  const row = await ctx.db.begin(async (tx) => {
-    await tx.sql`select pg_advisory_xact_lock(hashtextextended(${`orbit.goals:${userId}`}, 0))`;
-    if (status2 === "active") {
-      const [n] = await tx.sql`
-        select count(*)::int as n from orbit.goals
-         where user_id = ${userId}::uuid and status = 'active' and deleted_at is null
-           and (${id ?? null}::uuid is null or id <> ${id ?? null}::uuid)`;
-      if ((n?.n ?? 0) >= MAX_ACTIVE_GOALS)
-        throw new HttpError(
-          409,
-          "too_many_goals",
-          `at most ${MAX_ACTIVE_GOALS} active goals; pause or finish one first`
-        );
-    }
-    if (id) {
-      const [r2] = await tx.sql`
-        update orbit.goals set kind = ${g.kind}, title = ${g.title.trim()}, description = ${g.description ?? null},
-               targets = ${targets}::jsonb, criteria = ${criteria}::jsonb, success_metric = ${g.successMetric ?? null},
-               priority = ${priority}::smallint, status = ${status2}, autonomy_level = ${autonomy2}::smallint,
-               due_at = ${g.dueAt ?? null}::date, evidence = coalesce(${g.evidence ?? null}, evidence)
-         where id = ${id}::uuid and user_id = ${userId}::uuid and deleted_at is null
-        returning *`;
-      if (!r2) throw new HttpError(404, "not_found", "no such goal");
-      return r2;
-    }
-    const source = g.source && ["user", "onboarding", "inferred"].includes(g.source) ? g.source : "user";
-    const [r] = await tx.sql`
-      insert into orbit.goals (user_id, kind, title, description, targets, criteria, success_metric, priority, status,
-                               autonomy_level, due_at, source, evidence)
-      values (${userId}::uuid, ${g.kind}, ${g.title.trim()}, ${g.description ?? null}, ${targets}::jsonb,
-              ${criteria}::jsonb, ${g.successMetric ?? null}, ${priority}::smallint, ${status2},
-              ${autonomy2}::smallint, ${g.dueAt ?? null}::date, ${source}, ${g.evidence ?? null})
-      returning *`;
-    return r;
-  });
-  await ctx.db.sql`
-    insert into orbit.audit_log (user_id, actor, action, target_table, target_id, details)
-    values (${userId}::uuid, 'user', ${id ? "goal.update" : "goal.create"}, 'goals', ${row.id},
-            ${{ kind: g.kind, status: status2 }}::jsonb)`;
-  return json(200, { goal: goalFrom(row) });
-}
-async function goalsArchive(ctx) {
-  const id = uuid(await body(ctx), "id");
-  const [r] = await ctx.db.sql`
-    update orbit.goals set deleted_at = ${ctx.now()}::timestamptz, status = 'done'
-     where id = ${id}::uuid and user_id = ${ctx.userId}::uuid and deleted_at is null
-    returning *`;
-  if (!r) throw new HttpError(404, "not_found", "no such goal");
-  return json(200, { goal: goalFrom(r) });
-}
-async function goalsInfer(ctx) {
-  const t = turns(await body(ctx));
-  const s = ctx.services();
-  if (!s.claude.configured) {
-    const out2 = { goals: [], unconfigured: true };
-    return json(200, out2);
+    next.set(source, (next.get(source) ?? 0) + restart);
+    rank2 = next;
   }
-  const existing = await ctx.db.sql`
-    select id, kind, title, targets from orbit.goals
-     where user_id = ${ctx.userId}::uuid and deleted_at is null and status = 'active'
-     order by priority, created_at`;
-  const out = { goals: await inferGoals(s.claude, ctx.userId, t, existing) };
-  return json(200, out);
+  for (const n of nodes) if (!rank2.has(n)) rank2.set(n, 0);
+  return rank2;
 }
-var goalRoutes = {
-  "/goals/list": { method: "POST", auth: true, run: goalsList },
-  "/goals/upsert": { method: "POST", auth: true, run: goalsUpsert },
-  "/goals/archive": { method: "POST", auth: true, run: goalsArchive },
-  "/goals/infer": { method: "POST", auth: true, run: goalsInfer }
-};
-
-// supabase/functions/orbit-api/tables.ts
-var PULL_TABLES = [
-  {
-    table: "organizations",
-    key: "id",
-    cursor: "updated_at",
-    // an Organization under the browser's names: without nameNormalized a company's wedge key read "n:undefined",
-    // so picking a company never turned the map to it
-    map: (r) => ({ ...r, nameNormalized: r.nameNorm })
-  },
-  {
-    table: "people",
-    key: "id",
-    cursor: "updated_at",
-    deletedWhen: "t.deleted_at is not null or t.merged_into is not null",
-    // a Person: the columns under the names the browser's screens read
-    map: (r) => ({
-      ...r,
-      nameNormalized: r.nameNorm,
-      currentTitle: r.title,
-      currentOrganizationId: r.orgId,
-      currentOrganizationRaw: r.orgRaw
-    })
-  },
-  { table: "person_identities", key: "id", cursor: "created_at" },
-  {
-    table: "affiliations",
-    key: "id",
-    cursor: "updated_at",
-    // an Affiliation: the company as the browser names it, so a role shows where it was and the company's logo
-    map: (r) => ({ ...r, nameRaw: r.orgRaw ?? "", organizationId: r.orgId })
-  },
-  {
-    table: "merge_suggestions",
-    key: "id",
-    cursor: "updated_at",
-    // a MergeSuggestion: the two people and the status under the browser's names (open is pending, merged accepted)
-    map: (r) => ({
-      ...r,
-      personAId: r.personA,
-      personBId: r.personB,
-      status: r.status === "open" ? "pending" : r.status === "merged" ? "accepted" : r.status
-    })
-  },
-  { table: "goals", key: "id", cursor: "updated_at", deletedWhen: "t.deleted_at is not null" },
-  // the Dexie cache keeps the last 180 days of networking threads only (§11.1)
-  {
-    table: "threads",
-    key: "id",
-    cursor: "updated_at",
-    filter: "t.is_networking and coalesce(t.last_at, t.created_at) > now() - interval '180 days'",
-    // LinkedIn threads carry their channel, as the browser's own LinkedIn reader writes them
-    map: (r) => ({
-      ...r,
-      externalThreadId: r.externalId,
-      firstMessageAt: r.firstAt,
-      lastMessageAt: r.lastAt,
-      ...r.provider === "linkedin" ? { channel: "linkedin" } : {}
-    })
-  },
-  {
-    table: "messages",
-    key: "id",
-    cursor: "updated_at",
-    filter: "t.sent_at > now() - interval '180 days' and exists (select 1 from orbit.threads th where th.id = t.thread_id and th.is_networking)",
-    omit: ["embedding"],
-    map: (r) => ({
-      ...r,
-      direction: r.direction === "out" ? "outbound" : "inbound",
-      externalMessageId: r.externalId,
-      fromEmail: r.fromAddr ?? "",
-      toEmails: r.toAddrs ?? [],
-      ccEmails: r.ccAddrs ?? [],
-      bodyText: r.bodyText ?? "",
-      ...r.provider === "linkedin" ? { channel: "linkedin" } : {}
-    })
-  },
-  // a CalendarEvent: its Google id under the browser's name
-  {
-    table: "calendar_events",
-    key: "id",
-    cursor: "updated_at",
-    map: (r) => ({ ...r, externalEventId: r.externalId })
-  },
-  {
-    table: "ties",
-    key: "id",
-    cursor: "updated_at",
-    // an Edge: type = kind, weight = w · c
-    map: (r) => ({
-      ...r,
-      personAId: r.aPersonId,
-      personBId: r.bPersonId,
-      type: r.kind,
-      rawWeight: r.weight,
-      weight: Number(r.weight) * Number(r.confidence)
-    })
-  },
-  { table: "tie_scores", key: "person_id", cursor: "updated_at" },
-  { table: "tie_labels", key: "person_id", cursor: "updated_at" },
-  {
-    table: "chats",
-    key: "id",
-    cursor: "updated_at",
-    // a CoffeeChat: the stored camelCase fields spread under the columns
-    map: ({ data, ...rest }) => ({
-      ...data ?? {},
-      ...rest,
-      ...rest.orgId ? { organizationId: rest.orgId } : {}
-    })
-  },
-  { table: "stage_events", key: "id", cursor: "updated_at" },
-  {
-    table: "drafts",
-    key: "id",
-    cursor: "updated_at",
-    // the browser's OutboundMessage names: a reply carries its Gmail thread, so it goes out in it, under its subject
-    map: (r) => ({
-      ...r,
-      ...r.threadExternalId ? { externalThreadId: r.threadExternalId } : {},
-      ...r.inReplyTo ? { inReplyToMessageId: r.inReplyTo } : {}
-    })
-  },
-  { table: "notes", key: "id", cursor: "updated_at" },
-  { table: "uploads", key: "id", cursor: "updated_at" },
-  { table: "facts", key: "id", cursor: "updated_at", deletedWhen: "t.deleted_at is not null" },
-  { table: "dossiers", key: "id", cursor: "updated_at" },
-  { table: "recommendations", key: "id", cursor: "updated_at" },
-  { table: "intro_requests", key: "id", cursor: "updated_at" },
-  // plan 29 §B2.3: the cards and notices the reply funnel raises, in the browser's own shapes
-  {
-    table: "suggestions",
-    key: "id",
-    cursor: "updated_at",
-    map: (r) => ({ ...r, outboundMessageId: r.draftId ?? void 0, carriedOver: r.carriedOver ?? 0 })
-  },
-  { table: "notifications", key: "id", cursor: "updated_at" }
-];
-var PULL_BY_NAME = new Map(PULL_TABLES.map((t) => [t.table, t]));
-var camel = (s) => s.replace(/_([a-z0-9])/g, (_, c) => c.toUpperCase());
-function toCamel(row) {
-  const out = {};
-  for (const [k, v] of Object.entries(row)) out[camel(k)] = v;
-  return out;
-}
-function shapeRow(t, row) {
-  const r = { ...row };
-  for (const c2 of t.omit ?? []) delete r[c2];
-  const c = toCamel(r);
-  return t.map ? t.map(c) : c;
-}
-
-// supabase/functions/orbit-api/routes/history.ts
-var HISTORY_THREADS = 40;
-var HISTORY_MESSAGES = 400;
-var HISTORY_EVENTS = 40;
-async function history(ctx) {
-  const personId = uuid(await body(ctx), "personId");
-  const userId = ctx.userId;
-  const [p] = await ctx.db.sql`
-    select 1 from orbit.people where id = ${personId}::uuid and user_id = ${userId}::uuid and deleted_at is null`;
-  if (!p) throw new HttpError(404, "not_found", "no such person");
-  const threads = await ctx.db.query(
-    `select to_jsonb(t) as row from orbit.threads t
-      where t.user_id = $1::uuid and $2::uuid = any(t.participant_person_ids)
-      order by coalesce(t.last_at, t.created_at) desc limit $3`,
-    [userId, personId, HISTORY_THREADS]
-  );
-  const ids = threads.map((t) => String(t.row.id));
-  const [messages, events] = await Promise.all([
-    ids.length ? ctx.db.query(
-      `select to_jsonb(m) - 'embedding' as row from orbit.messages m
-            where m.user_id = $1::uuid and m.thread_id = any($2::uuid[])
-            order by m.sent_at desc limit $3`,
-      [userId, ids, HISTORY_MESSAGES]
-    ) : Promise.resolve([]),
-    ctx.db.query(
-      `select to_jsonb(e) as row from orbit.calendar_events e
-        where e.user_id = $1::uuid and $2::uuid = any(e.attendee_person_ids)
-        order by e.start_at desc limit $3`,
-      [userId, personId, HISTORY_EVENTS]
-    )
-  ]);
-  const shape2 = (table, rows) => rows.map((r) => shapeRow(PULL_BY_NAME.get(table), r.row));
-  return json(200, {
-    threads: shape2("threads", threads),
-    messages: shape2("messages", messages),
-    events: shape2("calendar_events", events)
-  });
-}
-var historyRoutes = {
-  "/people/history": { method: "POST", auth: true, run: history }
-};
-
-// supabase/functions/_shared/accountToken.ts
-async function accountToken(accountId, signingKey) {
-  const key = await crypto.subtle.importKey(
-    "raw",
-    new TextEncoder().encode(signingKey),
-    { name: "HMAC", hash: "SHA-256" },
-    false,
-    ["sign"]
-  );
-  const sig = new Uint8Array(
-    await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(`unipile-account:${accountId}`))
-  );
-  return btoa(String.fromCharCode(...sig)).replace(/=+$/, "").replace(/\+/g, "-").replace(/\//g, "_");
-}
-
-// supabase/functions/_shared/ingest/util.ts
-function slot(d) {
-  return d.toISOString().slice(0, 15);
-}
-
-// supabase/functions/_shared/providers/unipileSync.ts
-var when = z.union([z.string(), z.number()]).nullish();
-var unipileMeSchema = z.looseObject({
-  provider_id: z.string().nullish(),
-  public_identifier: z.string().nullish(),
-  first_name: z.string().nullish(),
-  last_name: z.string().nullish()
-});
-var unipileRelationSchema = z.looseObject({
-  member_id: z.string().nullish(),
-  member_urn: z.string().nullish(),
-  public_identifier: z.string().nullish(),
-  public_profile_url: z.string().nullish(),
-  first_name: z.string().nullish(),
-  last_name: z.string().nullish(),
-  headline: z.string().nullish(),
-  profile_picture_url: z.string().nullish(),
-  created_at: when
-});
-var unipileChatSchema = z.looseObject({
-  id: z.string(),
-  type: z.union([z.number(), z.string()]).nullish(),
-  name: z.string().nullish(),
-  attendee_provider_id: z.string().nullish(),
-  timestamp: when,
-  content_type: z.string().nullish()
-});
-var unipileAttendeeSchema = z.looseObject({
-  id: z.string().nullish(),
-  provider_id: z.string().nullish(),
-  name: z.string().nullish(),
-  is_self: z.union([z.number(), z.boolean()]).nullish(),
-  profile_url: z.string().nullish(),
-  picture_url: z.string().nullish(),
-  specifics: z.looseObject({ occupation: z.string().nullish(), location: z.string().nullish() }).nullish()
-});
-var unipileMessageSchema = z.looseObject({
-  id: z.string(),
-  chat_id: z.string().nullish(),
-  sender_id: z.string().nullish(),
-  sender_attendee_id: z.string().nullish(),
-  text: z.string().nullish(),
-  timestamp: when,
-  is_sender: z.union([z.number(), z.boolean()]).nullish(),
-  is_event: z.union([z.number(), z.boolean()]).nullish(),
-  hidden: z.union([z.number(), z.boolean()]).nullish(),
-  deleted: z.union([z.number(), z.boolean()]).nullish()
-});
-var page = (item2) => z.looseObject({ items: z.array(item2).default([]), cursor: z.string().nullish() });
-var unipileSearchItemSchema2 = z.looseObject({
-  id: z.string().nullish(),
-  name: z.string().nullish(),
-  headline: z.string().nullish(),
-  location: z.string().nullish(),
-  public_profile_url: z.string().nullish(),
-  profile_url: z.string().nullish(),
-  profile_picture_url: z.string().nullish(),
-  network_distance: z.union([z.string(), z.number()]).nullish()
-});
-var RELATIONS_LIMIT = 50;
-var CHATS_LIMIT = 250;
-var MESSAGES_LIMIT = 100;
-function createUnipileSync(opts) {
-  const configured = !!opts.apiKey && !!opts.baseUrl;
-  const base = trimBase(opts.baseUrl ?? "");
-  const headers = () => ({ "X-API-KEY": opts.apiKey ?? "" });
-  const no = () => unconfigured2("unipile", "API key or base URL");
-  const get2 = (path, schema) => requestJson(opts, { provider: "unipile", url: `${base}${path}`, headers: headers(), schema });
-  return {
-    configured,
-    async me(accountId) {
-      if (!configured) return no();
-      return get2(`/api/v1/users/me${query({ account_id: accountId })}`, unipileMeSchema);
-    },
-    async relations(accountId, cursor) {
-      if (!configured) return no();
-      return get2(
-        `/api/v1/users/relations${query({ account_id: accountId, limit: RELATIONS_LIMIT, cursor: cursor ?? void 0 })}`,
-        page(unipileRelationSchema)
-      );
-    },
-    async chats(accountId, o) {
-      if (!configured) return no();
-      return get2(
-        `/api/v1/chats${query({ account_id: accountId, limit: CHATS_LIMIT, after: o.after, cursor: o.cursor ?? void 0 })}`,
-        page(unipileChatSchema)
-      );
-    },
-    async attendees(chatId) {
-      if (!configured) return no();
-      const r = await get2(
-        `/api/v1/chats/${encodeURIComponent(chatId)}/attendees`,
-        page(unipileAttendeeSchema)
-      );
-      return r.ok ? { ok: true, value: r.value.items } : r;
-    },
-    async messages(chatId) {
-      if (!configured) return no();
-      const r = await get2(
-        `/api/v1/chats/${encodeURIComponent(chatId)}/messages${query({ limit: MESSAGES_LIMIT })}`,
-        page(unipileMessageSchema)
-      );
-      return r.ok ? { ok: true, value: r.value.items } : r;
-    },
-    async hostedLink(b) {
-      if (!configured) return no();
-      return requestJson(opts, {
-        provider: "unipile",
-        url: `${base}/api/v1/hosted/accounts/link`,
-        method: "POST",
-        headers: headers(),
-        body: {
-          type: "create",
-          providers: ["LINKEDIN"],
-          api_url: base,
-          expiresOn: b.expiresOn,
-          name: b.name,
-          notify_url: b.notifyUrl,
-          success_redirect_url: b.successRedirectUrl,
-          ...b.failureRedirectUrl ? { failure_redirect_url: b.failureRedirectUrl } : {}
-        },
-        schema: z.looseObject({ url: z.string() })
-      });
-    },
-    async searchPeople(accountId, keywords, limit = 8) {
-      if (!configured) return no();
-      const r = await requestJson(opts, {
-        provider: "unipile",
-        url: `${base}/api/v1/linkedin/search${query({ account_id: accountId, limit })}`,
-        method: "POST",
-        headers: headers(),
-        body: { api: "classic", category: "people", keywords, network_distance: [1, 2, 3] },
-        schema: page(unipileSearchItemSchema2)
-      });
-      if (!r.ok) return r;
-      const degree = (d) => {
-        const m = /(\d)/.exec(String(d ?? ""));
-        return m ? Number(m[1]) : void 0;
-      };
-      return {
-        ok: true,
-        value: r.value.items.filter((p) => !!p.id && !!p.name?.trim()).map((p) => ({
-          memberId: p.id,
-          name: p.name.trim(),
-          headline: p.headline?.trim() || void 0,
-          location: p.location?.trim() || void 0,
-          profileUrl: p.public_profile_url || p.profile_url || void 0,
-          pictureUrl: p.profile_picture_url || void 0,
-          distance: degree(p.network_distance)
-        }))
-      };
-    }
-  };
-}
-
-// supabase/functions/orbit-api/routes/integrations.ts
-var queued = (q) => json(200, q);
-async function googleAccount(ctx) {
-  const [a] = await ctx.db.sql`
-    select status, scopes, sync_state from orbit.integration_accounts
-     where user_id = ${ctx.userId}::uuid and provider = 'google'`;
-  return a;
-}
-async function googleSync(ctx) {
-  const body2 = await readJson(ctx.req, { optional: true });
-  const mode2 = body2.mode ?? "incremental";
-  if (mode2 !== "backfill" && mode2 !== "incremental") throw badRequest("mode must be backfill or incremental");
-  const userId = ctx.userId;
-  const acct = await googleAccount(ctx);
-  if (!acct?.scopes.some((s) => s.endsWith("gmail.readonly")))
-    return queued({ queued: false, reason: "not_connected" });
-  if (acct.status !== "active") return queued({ queued: false, reason: acct.status });
-  const q = sqlQueue(ctx.db);
-  if (mode2 === "backfill") {
-    const phase = acct.sync_state?.gmail?.backfill;
-    if (phase?.phase && phase.phase !== "complete")
-      return queued({ queued: false, reason: "already_running" });
-    const id2 = await q.enqueue({
-      kind: "sync.gmail.backfill",
-      userId,
-      payload: phase?.phase === "complete" ? { phase: "recent", restart: true } : { phase: "recent" },
-      dedupeKey: `gmail-backfill:${userId}:manual:${slot(ctx.now())}`
-    });
-    return queued(id2 === null ? { queued: false, reason: "already_running" } : { queued: true });
-  }
-  const id = await q.enqueue({
-    kind: "sync.gmail.incremental",
-    userId,
-    payload: { reason: "manual" },
-    dedupeKey: `gmail-manual:${userId}:${slot(ctx.now())}`
-  });
-  if (acct.scopes.some((s) => /calendar\.(readonly|events)$/.test(s)))
-    await q.enqueue({
-      kind: "sync.calendar",
-      userId,
-      payload: { reason: "manual" },
-      dedupeKey: `calendar-manual:${userId}:${slot(ctx.now())}`
-    });
-  return queued(id === null ? { queued: false, reason: "already_running" } : { queued: true });
-}
-function unipileFor(ctx) {
-  return createUnipileSync({ fetch: ctx.fetch, apiKey: ctx.env.unipileKey, baseUrl: ctx.env.unipileBase });
-}
-var missingUnipile = (ctx) => [
-  ...ctx.env.unipileKey ? [] : ["UNIPILE_API_KEY"],
-  ...ctx.env.unipileBase ? [] : ["UNIPILE_BASE_URL"]
-];
-function functionsBase(ctx) {
-  if (ctx.env.functionsUrl) return ctx.env.functionsUrl.replace(/\/+$/, "");
-  const fromRedirect = ctx.env.googleRedirectUri?.match(/^(https?:\/\/[^/]+\/functions\/v1)\//)?.[1];
-  if (fromRedirect) return fromRedirect;
-  const href = `${ctx.url.origin}${ctx.url.pathname}`;
-  const i = href.indexOf("/orbit-api");
-  return i > 0 ? href.slice(0, i) : ctx.url.origin;
-}
-async function linkedinConnectStart(ctx) {
-  await readJson(ctx.req, { optional: true });
-  const missing = missingUnipile(ctx);
-  const secret = await resolveSecret(
-    (name) => name === "ORBIT_UNIPILE_WEBHOOK_SECRET" ? ctx.env.unipileWebhookSecret : void 0,
-    ctx.db,
-    "ORBIT_UNIPILE_WEBHOOK_SECRET",
-    "orbit_unipile_webhook_secret"
-  );
-  if (!secret) missing.push("ORBIT_UNIPILE_WEBHOOK_SECRET");
-  if (missing.length) return unconfigured({}, missing);
-  const userId = ctx.userId;
-  const r = await unipileFor(ctx).hostedLink({
-    name: userId,
-    notifyUrl: `${functionsBase(ctx)}/orbit-webhooks/unipile/account?token=${encodeURIComponent(secret)}`,
-    successRedirectUrl: `${ctx.env.appUrl}/settings?linkedin=connected`,
-    failureRedirectUrl: `${ctx.env.appUrl}/settings?linkedin=failed`,
-    expiresOn: new Date(ctx.now().getTime() + 36e5).toISOString()
-  });
-  if (!r.ok) throw new HttpError(502, "upstream", "LinkedIn connection is unavailable right now");
-  await ctx.db.sql`
-    insert into orbit.integration_accounts (user_id, provider, status)
-    values (${userId}::uuid, 'linkedin', 'connecting')
-    on conflict (user_id, provider) do update set
-      status = case when orbit.integration_accounts.status = 'active' then 'active' else 'connecting' end`;
-  await ctx.db.sql`
-    insert into orbit.audit_log (user_id, actor, action, target_table)
-    values (${userId}::uuid, 'user', 'linkedin.connect_start', 'integration_accounts')`;
-  const out = { url: r.value.url };
-  return json(200, out);
-}
-async function linkedinStatus(ctx) {
-  const userId = ctx.userId;
-  const [a] = await ctx.db.sql`
-    select status, external_account_id, last_synced_at from orbit.integration_accounts
-     where user_id = ${userId}::uuid and provider = 'linkedin'`;
-  const [n] = await ctx.db.sql`
-    select count(distinct pi.person_id)::int as n from orbit.person_identities pi
-      join orbit.people p on p.id = pi.person_id
-     where pi.user_id = ${userId}::uuid and pi.kind = 'linkedin_member' and pi.source = 'linkedin_relation'
-       and p.merged_into is null and p.deleted_at is null`;
-  const status2 = !a ? "not_connected" : a.status === "active" || a.status === "connecting" || a.status === "needs_reauth" ? a.status : a.status === "revoked" ? "not_connected" : "error";
-  const out = {
-    status: status2,
-    accountId: a?.external_account_id ?? null,
-    lastSyncedAt: a?.last_synced_at ? new Date(a.last_synced_at).toISOString() : null,
-    relations: n?.n ?? 0
-  };
-  return json(200, out);
-}
-async function linkedinSync(ctx) {
-  await readJson(ctx.req, { optional: true });
-  const missing = missingUnipile(ctx);
-  if (missing.length) return unconfigured({}, missing);
-  const userId = ctx.userId;
-  const [a] = await ctx.db.sql`
-    select status, external_account_id from orbit.integration_accounts
-     where user_id = ${userId}::uuid and provider = 'linkedin'`;
-  if (!a?.external_account_id) return queued({ queued: false, reason: "not_connected" });
-  if (a.status !== "active") return queued({ queued: false, reason: a.status });
-  const id = await sqlQueue(ctx.db).enqueue({
-    kind: "sync.linkedin",
-    userId,
-    payload: { mode: "sync" },
-    dedupeKey: `linkedin-manual:${userId}:${slot(ctx.now())}`
-  });
-  return queued(id === null ? { queued: false, reason: "already_running" } : { queued: true });
-}
-var INTEGRATION_ROUTES = {
-  "/google/sync": { method: "POST", auth: true, run: googleSync },
-  "/linkedin/connect/start": { method: "POST", auth: true, run: linkedinConnectStart },
-  "/linkedin/status": { method: "GET|POST", auth: true, run: linkedinStatus },
-  "/linkedin/sync": { method: "POST", auth: true, run: linkedinSync },
-  "/linkedin/search": { method: "POST", auth: true, run: linkedinSearch },
-  "/linkedin/reader": { method: "POST", auth: true, run: linkedinReader }
-};
-async function linkedinReader(ctx) {
-  const [a] = await ctx.db.sql`
-    select status, external_account_id from orbit.integration_accounts
-     where user_id = ${ctx.userId}::uuid and provider = 'linkedin'`;
-  if (!a?.external_account_id || a.status !== "active")
-    return json(200, { ok: false, reason: "not_connected" });
-  if (!ctx.env.connectorsSigningKey) return json(200, { ok: false, reason: "unconfigured" });
-  return json(200, {
-    ok: true,
-    accountId: a.external_account_id,
-    token: await accountToken(a.external_account_id, ctx.env.connectorsSigningKey)
-  });
-}
-var LINKEDIN_SEARCHES_PER_DAY = 80;
-async function linkedinSearch(ctx) {
-  const body2 = await readJson(ctx.req, { optional: true });
-  const q = typeof body2.q === "string" ? body2.q.replace(/\s+/g, " ").trim().slice(0, 120) : "";
-  if (q.length < 2) throw badRequest("q must be at least 2 characters");
-  const userId = ctx.userId;
-  const [a] = await ctx.db.sql`
-    select status, external_account_id from orbit.integration_accounts
-     where user_id = ${userId}::uuid and provider = 'linkedin'`;
-  if (!a?.external_account_id || a.status !== "active")
-    return json(200, { ok: false, reason: "not_connected" });
-  const unipile = unipileFor(ctx);
-  if (!unipile.configured) return json(200, { ok: false, reason: "unconfigured" });
-  const [n] = await ctx.db.sql`
-    select count(*)::int as n from orbit.audit_log
-     where user_id = ${userId}::uuid and action = 'linkedin.search'
-       and created_at > ${new Date(ctx.now().getTime() - 864e5)}::timestamptz`;
-  if ((n?.n ?? 0) >= LINKEDIN_SEARCHES_PER_DAY) return json(200, { ok: false, reason: "limit" });
-  await ctx.db.sql`
-    insert into orbit.audit_log (user_id, actor, action, target_table) values (${userId}::uuid, 'user', 'linkedin.search', 'people')`;
-  const r = await unipile.searchPeople(a.external_account_id, q);
-  if (!r.ok) return json(200, { ok: false, reason: "error" });
-  return json(200, { ok: true, people: r.value });
-}
-
-// supabase/functions/_shared/memory/memory.ts
-import { z as z4 } from "npm:zod@3.25.76/v4";
-
-// supabase/functions/_shared/research/guards.ts
-function norm(s) {
-  return (s ?? "").normalize("NFKD").replace(/[̀-ͯ]/g, "").toLowerCase().replace(/[‐-―]/g, "-").replace(/\s+/g, " ").trim();
-}
-var ORG_SUFFIX = /[,.]?\s+(inc|inc\.|llc|ltd|ltd\.|corp|corporation|co|gmbh|plc|sa|ag)\.?$/i;
-function normOrg(s) {
-  return norm(s).replace(ORG_SUFFIX, "").trim();
-}
-function orgFromTitle(title, name) {
-  if (!title) return void 0;
-  const cleaned = title.replace(/\s*[|·]\s*linkedin.*$/i, "").trim();
-  const parts = cleaned.split(/\s+[-–—|·]\s+/).map((p) => p.trim()).filter((p) => p && norm(p) !== norm(name));
-  for (const p of parts) {
-    const at = p.match(/\b(?:at|@)\s+(.+)$/i);
-    if (at) return at[1].trim();
-  }
-  return parts.length >= 2 ? parts[parts.length - 1] : parts[0];
-}
-var SENSITIVE2 = [
-  {
-    category: "age",
-    re: /\b\d{1,3}[- ]years?[- ]old\b|\baged \d{1,3}\b|\bborn in (19|20)\d\d\b|\bage \d{1,3}\b/i
-  },
-  {
-    category: "ethnicity",
-    re: /\b(ethnicity|ethnic background|racial|race is|caucasian|african[- ]american|asian[- ]american|hispanic|latino|latina|latinx)\b/i
-  },
-  {
-    category: "religion",
-    re: /\b(christian|muslim|jewish|hindu|buddhist|sikh|atheist|catholic|protestant|mormon|religious|religion|his faith|her faith|their faith|attends church)\b/i
-  },
-  {
-    category: "health",
-    re: /\b(diagnos(ed|is)|illness|cancer survivor|chronic (illness|condition)|disabilit(y|ies)|pregnan(t|cy)|surgery|mental illness|in recovery)\b/i
-  },
-  {
-    category: "family",
-    re: /\b(married|divorced|widow(ed|er)?|spouse|wedding|(his|her|their|your) (wife|husband|kids|children|daughter|son|family)|(father|mother|parent) of (two|three|four|\d))\b/i
-  },
-  { category: "sexuality", re: /\b(gay|lesbian|bisexual|transgender|queer|lgbtq?\+?|sexual orientation)\b/i },
-  {
-    category: "politics",
-    re: /\b(democrat(ic)? (voter|supporter)|republican (voter|supporter)|political views?|voted for|votes for|campaigned for|donated to (the )?(campaign|party)|political donations?)\b/i
-  },
-  {
-    // a street address, as written ("1200 Market Street"): case kept, so "5 years to drive growth" is not one
-    category: "home",
-    re: /\b\d{1,6}\s+[A-Z][a-z]+(\s+[A-Z][a-z]+){0,2}\s+(Street|St|Avenue|Ave|Road|Rd|Lane|Ln|Drive|Dr|Boulevard|Blvd|Court|Ct|Way|Place|Pl|Terrace|Circle)\b/
-  },
-  {
-    category: "home",
-    re: /\b(home address|lives (at|on) \d|zip code|apartment \d|apt\.? \d|neighbou?rhood (where|in which) (he|she|they) lives?|(his|her|their) (house|home) (in|on|at))\b/i
-  },
-  {
-    category: "pay",
-    re: /\b(salary|salaries|compensation package|total compensation|base pay|net worth|earns? \$|makes \$|paid \$|\$\s?\d[\d,.]*\s?k?\s+(a|per) year|annual pay|stock (grants?|options?) worth)\b/i
-  },
-  {
-    category: "personality",
-    re: /\b(personality|communication style|introvert(ed)?|extrovert(ed)?|myers[- ]briggs|mbti|enneagram|(intj|intp|entj|entp|infj|infp|enfj|enfp|istj|isfj|estj|esfj|istp|isfp|estp|esfp)\b|temperament|(is|seems|comes across as) (shy|arrogant|abrasive|difficult|blunt|awkward|cold|aloof|intense))\b/i
-  },
-  {
-    category: "legal",
-    // what happened to someone in court, not the practice area of a lawyer ("litigation associate" stays)
-    re: /\b(lawsuits?|sued|suing|indicted|indictment|arrested|arrest record|convicted|conviction|charged with|felony|misdemeanou?r|dui|restraining order|filed for bankruptcy|pleaded guilty|settled (a|the) (suit|case))\b/i
-  },
-  {
-    category: "immigration",
-    re: /\b(visa status|green card|immigration status|h-?1b status|undocumented|deport(ed|ation)|citizenship status)\b/i
-  },
-  {
-    category: "job_loss",
-    re: /\b((he|she|they) (was|were|got) (laid off|fired|let go)|lost (his|her|their) job|on (parental|maternity|paternity|medical|family) leave)\b/i
-  }
-];
-function sensitiveCategory(text3) {
-  return SENSITIVE2.find((s) => s.re.test(text3))?.category;
-}
-
-// supabase/functions/_shared/memory/memory.ts
-var DEDUPE_COSINE = 0.92;
-var HALF_LIFE_DAYS = 30;
-var MEMORY_KINDS = [
-  "preference",
-  "constraint",
-  "goal_detail",
-  "outcome",
-  "person_fact",
-  "note"
-];
-var MEMORY_MAX_CHARS = 200;
-var toItem = (r) => ({
-  id: r.id,
-  kind: r.kind,
-  text: r.text,
-  personId: r.person_id,
-  importance: num(r.importance),
-  createdAt: iso(r.created_at),
-  lastSeenAt: iso(r.last_seen_at)
-});
-function embeddable(text3) {
-  const letters = text3.match(/\p{L}/gu) ?? [];
-  if (!letters.length) return false;
-  const latin = letters.filter((c) => /[A-Za-z]/.test(c)).length;
-  return latin / letters.length >= 0.8;
-}
-async function safeEmbed(embed, text3) {
-  if (!embeddable(text3)) return null;
-  try {
-    const e = await embed(text3);
-    return e?.length ? e : null;
-  } catch {
-    return null;
-  }
-}
-async function addMemory(db2, embed, userId, m, now) {
-  const text3 = m.text.replace(/\s+/g, " ").trim().slice(0, 1e3);
-  if (!text3) throw new HttpError(400, "bad_request", "text is required");
-  if (!MEMORY_KINDS.includes(m.kind)) throw new HttpError(400, "bad_request", "unknown memory kind");
-  if (m.personId) {
-    const [p] = await db2.sql`select 1 from orbit.people where id = ${m.personId}::uuid and user_id = ${userId}::uuid`;
-    if (!p) throw new HttpError(404, "not_found", "no such person");
-  }
-  const e = await safeEmbed(embed, text3);
-  const importance = Math.max(0, Math.min(1, m.importance ?? 0.5));
-  if (e) {
-    const [near] = await db2.sql`
-      select id, kind, text, person_id, importance, created_at, last_seen_at,
-             1 - (embedding <=> ${vec(e)}::vector) as sim
-        from orbit.memories
-       where user_id = ${userId}::uuid and deleted_at is null and embedding is not null
-         and person_id is not distinct from ${m.personId ?? null}::uuid
-       order by embedding <=> ${vec(e)}::vector limit 1`;
-    if (near && num(near.sim) >= DEDUPE_COSINE) {
-      const [row2] = await db2.sql`
-        update orbit.memories set last_seen_at = ${now}::timestamptz, importance = greatest(importance, ${importance}::real)
-         where id = ${near.id}::uuid
-        returning id, kind, text, person_id, importance, created_at, last_seen_at`;
-      return { memory: toItem(row2), deduped: true };
-    }
-  } else {
-    const [same] = await db2.sql`
-      update orbit.memories set last_seen_at = ${now}::timestamptz
-       where user_id = ${userId}::uuid and deleted_at is null and lower(text) = lower(${text3})
-         and person_id is not distinct from ${m.personId ?? null}::uuid
-      returning id, kind, text, person_id, importance, created_at, last_seen_at`;
-    if (same) return { memory: toItem(same), deduped: true };
-  }
-  const [row] = await db2.sql`
-    insert into orbit.memories (user_id, person_id, kind, text, embedding, importance, source, quote, created_at,
-                                last_seen_at)
-    values (${userId}::uuid, ${m.personId ?? null}::uuid, ${m.kind}, ${text3}, ${e ? vec(e) : null}::vector,
-            ${importance}::real, ${m.source ?? "remember"}, ${m.quote ?? null}, ${now}::timestamptz, ${now}::timestamptz)
-    returning id, kind, text, person_id, importance, created_at, last_seen_at`;
-  return { memory: toItem(row), deduped: false };
-}
-var tokens = (s) => new Set(
-  s.toLowerCase().split(/[^\p{L}\p{N}]+/u).filter((w) => w.length > 2)
-);
-function keywordScore(query2, text3) {
-  const q = tokens(query2);
-  if (!q.size) return 0;
-  const t = tokens(text3);
-  let hit = 0;
-  for (const w of q) if (t.has(w) || [...t].some((x) => x.startsWith(w) || w.startsWith(x))) hit++;
-  return hit / q.size;
-}
-var recency = (lastSeen, now) => 0.5 ** (Math.max(0, now.getTime() - lastSeen.getTime()) / (HALF_LIFE_DAYS * 864e5));
-async function searchMemories(db2, embed, userId, q, now) {
-  const query2 = q.query.trim();
-  if (!query2) throw new HttpError(400, "bad_request", "query is required");
-  const e = await safeEmbed(embed, query2);
-  const rows = await db2.sql`
-    select id, kind, text, person_id, importance, created_at, last_seen_at,
-           case when embedding is null or ${e ? vec(e) : null}::vector is null then null
-                else 1 - (embedding <=> ${e ? vec(e) : null}::vector) end as sim
-      from orbit.memories
-     where user_id = ${userId}::uuid and deleted_at is null
-       and (${q.personId ?? null}::uuid is null or person_id = ${q.personId ?? null}::uuid)
-     order by last_seen_at desc
-     limit 500`;
-  const scored = rows.map((r) => {
-    const cos = r.sim === null || r.sim === void 0 ? keywordScore(query2, r.text) : Math.max(0, num(r.sim));
-    const score = 0.7 * cos + 0.2 * num(r.importance) + 0.1 * recency(new Date(r.last_seen_at), now);
-    return { ...toItem(r), score: Math.round(score * 1e4) / 1e4 };
-  });
-  return scored.sort((a, b) => b.score - a.score).slice(0, Math.max(1, Math.min(50, q.limit ?? 8)));
-}
-async function listMemories(db2, userId, personId) {
-  const rows = await db2.sql`
-    select id, kind, text, person_id, importance, created_at, last_seen_at from orbit.memories
-     where user_id = ${userId}::uuid and deleted_at is null
-       and (${personId ?? null}::uuid is null or person_id = ${personId ?? null}::uuid)
-     order by last_seen_at desc limit 500`;
-  return rows.map(toItem);
-}
-async function forgetMemory(db2, userId, id, now) {
-  const rows = await db2.sql`
-    update orbit.memories
-       set deleted_at = ${now}::timestamptz, text = '', quote = null, embedding = null, updated_at = ${now}::timestamptz
-     where id = ${id}::uuid and user_id = ${userId}::uuid and deleted_at is null returning id`;
-  return rows.length > 0;
-}
-var MEMORY_SYSTEM = [
-  'Extract durable facts worth remembering for future conversations: preferences, constraints, details of goals, outcomes, and facts about specific people. Skip small talk and anything already in <known>. Each memory ≤ 200 characters, in third person about the user ("Prefers morning calls").',
-  `Return {"memories": [{kind, text, person_name|null, importance: 0..1, quote}]}; quote must be the user's own words.`
-].join("\n");
-var memorySchema = z4.object({
-  memories: z4.array(
-    z4.object({
-      kind: z4.enum(["preference", "constraint", "goal_detail", "outcome", "person_fact", "note"]),
-      text: z4.string(),
-      person_name: z4.string().nullable(),
-      importance: z4.number(),
-      quote: z4.string()
-    })
-  )
-});
-var squash2 = (s) => s.toLowerCase().replace(/[’‘]/g, "'").replace(/[^\p{L}\p{N}']+/gu, " ").trim();
-async function extractMemories(claude, userId, turns2, known = []) {
-  const userTurns = turns2.filter((t) => t.role === "user").slice(-2);
-  if (!userTurns.length) return [];
-  const lastUserIdx = turns2.lastIndexOf(userTurns[0]);
-  const window = turns2.slice(Math.max(0, lastUserIdx));
-  const r = await claude.structured({
-    task: "memory_extract",
-    system: MEMORY_SYSTEM,
-    user: `<known>${known.slice(0, 20).join("\n")}</known><turns>${window.map((t) => `${t.role}: ${t.text.replace(/<\/?turns>/g, "")}`).join("\n")}</turns>`,
-    schema: memorySchema,
-    userId
-  });
-  if (!r.ok) return [];
-  const said = squash2(userTurns.map((t) => t.text).join("\n"));
-  const knownSet = new Set(known.map(squash2));
-  return r.data.memories.filter((m) => m.quote.trim() && said.includes(squash2(m.quote))).filter((m) => !sensitiveCategory(`${m.text} ${m.quote}`)).filter((m) => !knownSet.has(squash2(m.text))).map((m) => ({
-    kind: m.kind,
-    text: m.text.trim().slice(0, MEMORY_MAX_CHARS),
-    personName: m.person_name,
-    importance: Math.max(0, Math.min(1, Number.isFinite(m.importance) ? m.importance : 0.5)),
-    quote: m.quote.trim()
-  }));
-}
-
-// supabase/functions/orbit-api/routes/memory.ts
-async function search(ctx) {
-  const b = await body(ctx);
-  const s = ctx.services();
-  const memories = await searchMemories(
-    ctx.db,
-    s.embed,
-    ctx.userId,
-    {
-      query: text(b, "query", 1e3),
-      personId: optUuid(b, "personId"),
-      limit: typeof b.limit === "number" ? b.limit : void 0
-    },
-    ctx.now()
-  );
-  return json(200, { memories });
-}
-async function add(ctx) {
-  const b = await body(ctx);
-  const s = ctx.services();
-  const r = await addMemory(
-    ctx.db,
-    s.embed,
-    ctx.userId,
-    {
-      text: text(b, "text", 1e3),
-      kind: b.kind,
-      personId: optUuid(b, "personId"),
-      source: "remember"
-    },
-    ctx.now()
-  );
-  return json(200, r);
-}
-async function list3(ctx) {
-  const b = await body(ctx, true);
-  return json(200, { memories: await listMemories(ctx.db, ctx.userId, optUuid(b, "personId")) });
-}
-async function forget(ctx) {
-  const id = uuid(await body(ctx), "id");
-  if (!await forgetMemory(ctx.db, ctx.userId, id, ctx.now()))
-    throw new HttpError(404, "not_found", "no such memory");
-  return json(200, { ok: true });
-}
-var KNOWN_MEMORIES = 20;
-async function personNamed(db2, userId, name) {
-  const n = name?.trim().toLowerCase();
-  if (!n) return null;
-  const rows = await db2.sql`
-    select id from orbit.people
-     where user_id = ${userId}::uuid and deleted_at is null and merged_into is null and not is_self
-       and lower(display_name) = ${n}
-     limit 2`;
-  return rows.length === 1 ? rows[0].id : null;
-}
-async function extract(ctx) {
-  const t = turns(await body(ctx));
-  const s = ctx.services();
-  const userId = ctx.userId;
-  if (!s.claude.configured) {
-    const out2 = { memories: [], added: 0, unconfigured: true };
-    return json(200, out2);
-  }
-  const known = await ctx.db.sql`
-    select text from orbit.memories where user_id = ${userId}::uuid and deleted_at is null
-     order by importance desc, last_seen_at desc limit ${KNOWN_MEMORIES}::int`;
-  const found = await extractMemories(
-    s.claude,
-    userId,
-    t,
-    known.map((k) => k.text)
-  );
-  const memories = [];
-  let added = 0;
-  for (const m of found) {
-    const r = await addMemory(
-      ctx.db,
-      s.embed,
-      userId,
-      {
-        text: m.text,
-        kind: m.kind,
-        personId: await personNamed(ctx.db, userId, m.personName),
-        importance: m.importance,
-        source: "chat",
-        quote: m.quote
-      },
-      ctx.now()
-    );
-    memories.push(r.memory);
-    if (!r.deduped) added++;
-  }
-  const out = { memories, added };
-  return json(200, out);
-}
-var memoryRoutes = {
-  "/memory/search": { method: "POST", auth: true, run: search },
-  "/memory/add": { method: "POST", auth: true, run: add },
-  "/memory/list": { method: "POST", auth: true, run: list3 },
-  "/memory/forget": { method: "POST", auth: true, run: forget },
-  "/memory/extract": { method: "POST", auth: true, run: extract }
-};
 
 // packages/core/src/graph/orgSize.ts
 var KNOWN_SIZES = {};
-var add2 = (bucket, names) => {
+var add = (bucket, names) => {
   for (const n of names) KNOWN_SIZES[normalizeCompany(n)] = bucket;
 };
-add2("10001+", [
+add("10001+", [
   "Google",
   "Alphabet",
   "Meta",
@@ -9885,7 +8289,7 @@ add2("10001+", [
   "Shopify",
   "Booking.com"
 ]);
-add2("5001-10000", [
+add("5001-10000", [
   "Stripe",
   "Airbnb",
   "Snap",
@@ -9912,7 +8316,7 @@ add2("5001-10000", [
   "LEK Consulting",
   "Kearney"
 ]);
-add2("1001-5000", [
+add("1001-5000", [
   "Figma",
   "Anthropic",
   "OpenAI",
@@ -9943,8 +8347,8 @@ add2("1001-5000", [
   "Apollo",
   "Carlyle"
 ]);
-add2("501-1000", ["Vercel", "Retool", "Rippling", "Mercury", "Jump Trading", "Optiver", "Five Rings"]);
-add2("201-500", ["Linear", "Sequoia Capital", "Andreessen Horowitz", "a16z", "Benchmark", "Accel"]);
+add("501-1000", ["Vercel", "Retool", "Rippling", "Mercury", "Jump Trading", "Optiver", "Five Rings"]);
+add("201-500", ["Linear", "Sequoia Capital", "Andreessen Horowitz", "a16z", "Benchmark", "Accel"]);
 
 // packages/core/src/graph/titles.ts
 var C_LEVEL = /\b(ceo|cfo|coo|cto|cmo|cpo|cio|ciso|chief|president|partner|managing director|founder|co-founder|cofounder)\b/i;
@@ -10060,8 +8464,8 @@ var TIE_CONFIDENCE = {
   common_contacts: 0.6,
   student_says_close: 0.9
 };
-var DAY6 = 864e5;
-var YEAR = 365.25 * DAY6;
+var DAY5 = 864e5;
+var YEAR = 365.25 * DAY5;
 var pairKey = (a, b) => a < b ? [a, b] : [b, a];
 function maxIso(a, b) {
   if (!a) return b;
@@ -10102,7 +8506,7 @@ function engagementScore(items, ctx = {}) {
     if (followers === void 0) popularityKnown = false;
     const share = followers === void 0 ? W.unknownPopularity : W.audience / Math.max(W.audience, followers);
     const t = it.at ? Date.parse(it.at) : Number.NaN;
-    const months = Number.isFinite(t) ? (now - t) / (30.44 * DAY6) : Number.POSITIVE_INFINITY;
+    const months = Number.isFinite(t) ? (now - t) / (30.44 * DAY5) : Number.POSITIVE_INFINITY;
     const recency2 = months <= 12 ? W.recent : months <= 24 ? W.lastYear : W.old;
     if (Number.isFinite(t)) {
       dated++;
@@ -10342,7 +8746,7 @@ function pairFading(pair, now = /* @__PURE__ */ new Date()) {
     if (!n || n < 3 || !Number.isFinite(first) || !Number.isFinite(last) || last <= first) continue;
     const gap = (last - first) / (n - 1);
     const quiet = now.getTime() - last;
-    if (quiet <= Math.max(90 * DAY6, HOP_WEIGHTS.fadingGaps * gap)) return false;
+    if (quiet <= Math.max(90 * DAY5, HOP_WEIGHTS.fadingGaps * gap)) return false;
     fading = true;
   }
   return fading;
@@ -10355,245 +8759,10 @@ function isRoutable(pair) {
   return 1 - c >= 0.5;
 }
 
-// supabase/functions/_shared/ingest/ties.ts
-var INTERACTION_KINDS = [
-  "email_exchange",
-  "email_cc",
-  "email_cothread",
-  "meeting_coattendee"
-];
-var AFFILIATION_KINDS = ["co_tenure", "same_school_cohort", "same_current_company", "same_city"];
-var INFERRED_KINDS = [...INTERACTION_KINDS, ...AFFILIATION_KINDS];
-async function upsertTie(db2, userId, t, now) {
-  const [a, b] = t.a < t.b ? [t.a, t.b] : [t.b, t.a];
-  if (a === b) return;
-  const w = Math.min(1, Math.max(0, t.weight));
-  const c = Math.min(1, Math.max(0, t.confidence));
-  await db2.sql`
-    insert into orbit.ties (user_id, a_person_id, b_person_id, kind, weight, confidence, evidence, first_seen_at,
-                            last_seen_at)
-    values (${userId}::uuid, ${a}::uuid, ${b}::uuid, ${t.kind}, ${w}::real, ${c}::real, ${t.evidence}::jsonb,
-            coalesce(${t.firstSeenAt ?? null}::timestamptz, ${now}::timestamptz),
-            coalesce(${t.lastSeenAt ?? null}::timestamptz, ${now}::timestamptz))
-    on conflict (user_id, a_person_id, b_person_id, kind) do update set
-      weight = excluded.weight, confidence = excluded.confidence, evidence = excluded.evidence,
-      first_seen_at = least(orbit.ties.first_seen_at, excluded.first_seen_at),
-      last_seen_at = excluded.last_seen_at
-    where orbit.ties.weight is distinct from excluded.weight
-       or orbit.ties.confidence is distinct from excluded.confidence
-       or orbit.ties.evidence is distinct from excluded.evidence
-       or orbit.ties.last_seen_at is distinct from excluded.last_seen_at`;
-}
-
-// packages/core/src/graph/paths.ts
-function makeGraph() {
-  return { nodes: /* @__PURE__ */ new Set(), adj: /* @__PURE__ */ new Map() };
-}
-function addEdge(g, a, b, weight, type, text3, directed = false) {
-  if (weight <= 0) return;
-  g.nodes.add(a);
-  g.nodes.add(b);
-  const set = (x, y) => {
-    const m = g.adj.get(x) ?? /* @__PURE__ */ new Map();
-    const cur = m.get(y);
-    if (!cur || cur.weight < weight) m.set(y, { weight, type, text: text3 });
-    g.adj.set(x, m);
-  };
-  set(a, b);
-  if (!directed) set(b, a);
-}
-function edgeCost(weight) {
-  return -Math.log(Math.min(weight, 0.999999));
-}
-var MinHeap = class {
-  keys = [];
-  vals = [];
-  get size() {
-    return this.keys.length;
-  }
-  push(key, val) {
-    const k = this.keys;
-    const v = this.vals;
-    let i = k.length;
-    k.push(key);
-    v.push(val);
-    while (i > 0) {
-      const parent = i - 1 >> 1;
-      if (k[parent] <= key) break;
-      k[i] = k[parent];
-      v[i] = v[parent];
-      i = parent;
-    }
-    k[i] = key;
-    v[i] = val;
-  }
-  pop() {
-    const k = this.keys;
-    const v = this.vals;
-    if (!k.length) return void 0;
-    const topK = k[0];
-    const topV = v[0];
-    const lastK = k.pop();
-    const lastV = v.pop();
-    const n = k.length;
-    if (n) {
-      let i = 0;
-      while (true) {
-        const l = 2 * i + 1;
-        if (l >= n) break;
-        const r = l + 1;
-        const c = r < n && k[r] < k[l] ? r : l;
-        if (k[c] >= lastK) break;
-        k[i] = k[c];
-        v[i] = v[c];
-        i = c;
-      }
-      k[i] = lastK;
-      v[i] = lastV;
-    }
-    return [topK, topV];
-  }
-};
-function boundedSearch(g, source, maxHops, target, removedEdges, removedNodes) {
-  const dist = /* @__PURE__ */ new Map();
-  const prev = /* @__PURE__ */ new Map();
-  const minSettledHops = /* @__PURE__ */ new Map();
-  const best = /* @__PURE__ */ new Map();
-  const heap = new MinHeap();
-  const setDist = (node, hops, d, from) => {
-    let arr = dist.get(node);
-    if (!arr) {
-      arr = new Array(maxHops + 1).fill(Number.POSITIVE_INFINITY);
-      dist.set(node, arr);
-      prev.set(node, new Array(maxHops + 1));
-    }
-    arr[hops] = d;
-    prev.get(node)[hops] = from;
-  };
-  setDist(source, 0, 0, void 0);
-  heap.push(0, { node: source, hops: 0 });
-  while (heap.size) {
-    const [d, { node, hops }] = heap.pop();
-    if (d > dist.get(node)[hops]) continue;
-    const settled = minSettledHops.get(node);
-    if (settled !== void 0 && settled <= hops) continue;
-    minSettledHops.set(node, hops);
-    if (!best.has(node)) best.set(node, { cost: d, hops });
-    if (node === target) break;
-    if (hops >= maxHops) continue;
-    for (const [v, e] of g.adj.get(node) ?? []) {
-      if (v === source || removedNodes?.has(v) || removedEdges?.has(`${node}>${v}`)) continue;
-      const s = minSettledHops.get(v);
-      if (s !== void 0 && s <= hops + 1) continue;
-      const nd = d + edgeCost(e.weight);
-      const cur = dist.get(v)?.[hops + 1] ?? Number.POSITIVE_INFINITY;
-      if (nd < cur) {
-        setDist(v, hops + 1, nd, node);
-        heap.push(nd, { node: v, hops: hops + 1 });
-      }
-    }
-  }
-  return { best, prev };
-}
-function reconstruct(search3, node) {
-  const b = search3.best.get(node);
-  if (!b) return void 0;
-  const path = [node];
-  let cur = node;
-  for (let h = b.hops; h > 0; h--) {
-    cur = search3.prev.get(cur)[h];
-    path.unshift(cur);
-  }
-  return path;
-}
-function shortestPath(g, source, target, maxHops, removedEdges, removedNodes) {
-  if (source === target) return [source];
-  const search3 = boundedSearch(g, source, maxHops, target, removedEdges, removedNodes);
-  return reconstruct(search3, target);
-}
-function pathCost(g, path) {
-  let c = 0;
-  for (let i = 0; i < path.length - 1; i++) c += edgeCost(g.adj.get(path[i]).get(path[i + 1]).weight);
-  return c;
-}
-function kShortestPaths(g, source, target, k = 3, maxHops = 3) {
-  if (!g.nodes.has(source) || !g.nodes.has(target)) return source === target ? [[source]] : [];
-  const first = shortestPath(g, source, target, maxHops, /* @__PURE__ */ new Set(), /* @__PURE__ */ new Set());
-  if (!first) return [];
-  const A = [first];
-  if (first.length === 1) return A;
-  const B = [];
-  const seen = /* @__PURE__ */ new Set([first.join(">")]);
-  for (let kk = 1; kk < k; kk++) {
-    const last = A[kk - 1];
-    for (let i = 0; i < last.length - 1; i++) {
-      const spur = last[i];
-      const root = last.slice(0, i + 1);
-      const removedEdges = /* @__PURE__ */ new Set();
-      const removedNodes = /* @__PURE__ */ new Set();
-      for (const p of A) {
-        if (p.length > i + 1 && root.every((n, idx) => p[idx] === n)) removedEdges.add(`${p[i]}>${p[i + 1]}`);
-      }
-      for (const n of root) if (n !== spur) removedNodes.add(n);
-      const spurPath = shortestPath(g, spur, target, maxHops - i, removedEdges, removedNodes);
-      if (!spurPath) continue;
-      const total = [...root.slice(0, -1), ...spurPath];
-      const key = total.join(">");
-      if (seen.has(key)) continue;
-      seen.add(key);
-      B.push({ cost: pathCost(g, total), path: total, key });
-    }
-    if (!B.length) break;
-    B.sort((a, b) => a.cost - b.cost);
-    A.push(B.shift().path);
-  }
-  return A;
-}
-
-// packages/core/src/graph/ppr.ts
-var PPR_ALPHA = 0.15;
-var PPR_ITERATIONS = 30;
-function personalizedPageRank(adj, source, opts = {}) {
-  const alpha = opts.alpha ?? PPR_ALPHA;
-  const iterations = opts.iterations ?? PPR_ITERATIONS;
-  const out = /* @__PURE__ */ new Map();
-  const nodes = /* @__PURE__ */ new Set([source]);
-  for (const [u2, nbrs] of adj) {
-    nodes.add(u2);
-    let total = 0;
-    for (const [v, w] of nbrs) {
-      if (w > 0 && Number.isFinite(w)) total += w;
-      nodes.add(v);
-    }
-    if (total <= 0) continue;
-    const list7 = [];
-    for (const [v, w] of nbrs) if (w > 0 && Number.isFinite(w)) list7.push({ to: v, p: w / total });
-    out.set(u2, list7);
-  }
-  let rank2 = /* @__PURE__ */ new Map([[source, 1]]);
-  for (let it = 0; it < iterations; it++) {
-    const next = /* @__PURE__ */ new Map();
-    let restart = alpha;
-    for (const [u2, r] of rank2) {
-      if (r === 0) continue;
-      const list7 = out.get(u2);
-      if (!list7) {
-        restart += (1 - alpha) * r;
-        continue;
-      }
-      for (const { to, p } of list7) next.set(to, (next.get(to) ?? 0) + (1 - alpha) * r * p);
-    }
-    next.set(source, (next.get(source) ?? 0) + restart);
-    rank2 = next;
-  }
-  for (const n of nodes) if (!rank2.has(n)) rank2.set(n, 0);
-  return rank2;
-}
-
 // packages/core/src/graph/route.ts
 var USER_NODE = "user";
 var sigmoid = (x) => 1 / (1 + Math.exp(-x));
-var DAY7 = 864e5;
+var DAY6 = 864e5;
 function pAsk(f2) {
   return sigmoid(
     -2 + 4 * Math.max(0, Math.min(100, f2.score)) / 100 + 0.8 * Math.max(0, Math.min(1, f2.reciprocity ?? 0)) + (f2.introducedUserBefore ? 0.6 : 0) + (f2.sharesGoalTargetOrg ? 0.3 : 0) - (f2.askedRecently ? 0.7 : 0) - (f2.owesReply ? 0.5 : 0)
@@ -10679,7 +8848,7 @@ function usable(p, now) {
   if (!p || p.hidden) return false;
   if (p.declinedIntroAt) {
     const t = new Date(p.declinedIntroAt).getTime();
-    if (!Number.isNaN(t) && now.getTime() - t < 90 * DAY7) return false;
+    if (!Number.isNaN(t) && now.getTime() - t < 90 * DAY6) return false;
   }
   return true;
 }
@@ -10692,7 +8861,7 @@ function strongestSupport(pair, now) {
   return [...pair.ties].filter((t) => SUPPORT_ONLY_TIE_KINDS.has(t.kind)).sort((x, y) => strength(y, now) - strength(x, now))[0];
 }
 function pairIsOld(pair, now) {
-  const cutoff = now.getTime() - OLD_EVIDENCE_YEARS * 365.25 * DAY7;
+  const cutoff = now.getTime() - OLD_EVIDENCE_YEARS * 365.25 * DAY6;
   let newest = pair.lastSeenAt ? new Date(pair.lastSeenAt).getTime() : Number.NaN;
   for (const t of pair.ties) {
     const ev = t.evidence;
@@ -10868,7 +9037,7 @@ function rankWarmPaths(input) {
         hops.push({ fromId: from, toId: to, p: a, kind: "strength" });
         p *= a;
         const last = input.people.get(to)?.lastContactAt;
-        if (last && now.getTime() - new Date(last).getTime() > OLD_EVIDENCE_YEARS * 365.25 * DAY7) old = true;
+        if (last && now.getTime() - new Date(last).getTime() > OLD_EVIDENCE_YEARS * 365.25 * DAY6) old = true;
         continue;
       }
       const pair = pairs.get(pk(from, to));
@@ -11057,6 +9226,112 @@ function responsePrior(p, user) {
   if (p.linkedinConnectedOn) z7 += 0.2;
   return 1 / (1 + Math.exp(-z7));
 }
+
+// supabase/functions/_shared/friends/shares.ts
+function emailHash(email) {
+  return sha256Hex(`orbit-friend:${normalizeEmail(email)}`);
+}
+function publicShare(r) {
+  return {
+    personId: r.person_id,
+    displayName: r.display_name,
+    title: r.title,
+    company: r.company,
+    companyDomain: r.company_domain,
+    linkedinSlug: r.linkedin_slug,
+    school: r.school,
+    isAlumni: r.is_alumni,
+    closeness: Math.max(1, Math.min(3, Number(r.closeness)))
+  };
+}
+function underMode(rows, mode2, domains) {
+  if (mode2 === "none") return [];
+  if (mode2 === "all") return rows;
+  const want = new Set(domains.map((d) => d.toLowerCase().trim()).filter(Boolean));
+  const names = new Set([...want].map((d) => normalizeCompany(d.replace(/\.[a-z]+$/, ""))).filter(Boolean));
+  return rows.filter(
+    (r) => r.company_domain && want.has(r.company_domain.toLowerCase()) || r.company && names.has(normalizeCompany(r.company))
+  );
+}
+async function sharingFriends(db2, viewerId) {
+  const rows = await db2.sql`
+    select f.id as friendship_id, u.id as user_id, u.full_name, u.first_name, u.email, s.mode, s.company_domains
+      from orbit.friendships f
+      join orbit.users u on u.id = case when f.a = ${viewerId}::uuid then f.b else f.a end
+      join orbit.friend_share_settings s on s.friendship_id = f.id and s.owner_user_id = u.id
+     where f.status = 'active' and (f.a = ${viewerId}::uuid or f.b = ${viewerId}::uuid)
+       and s.mode <> 'none' and u.deleted_at is null`;
+  return rows.map((r) => {
+    const name = r.full_name?.trim() || r.first_name?.trim() || r.email.split("@")[0];
+    return {
+      friendshipId: r.friendship_id,
+      userId: r.user_id,
+      name,
+      firstName: r.first_name?.trim() || name.split(/\s+/)[0],
+      mode: r.mode,
+      domains: r.company_domains ?? []
+    };
+  });
+}
+async function visibleShares(db2, friend) {
+  const rows = await db2.sql`
+    select owner_user_id, person_id, display_name, title, company, company_domain, linkedin_member_id,
+           linkedin_slug, email_hash, school, is_alumni, closeness::int as closeness, updated_at
+      from orbit.friend_shares where owner_user_id = ${friend.userId}::uuid
+     order by display_name`;
+  return underMode(rows, friend.mode, friend.domains);
+}
+async function matchShares(db2, viewerId, shares2) {
+  const out = /* @__PURE__ */ new Map();
+  if (!shares2.length) return out;
+  const people = await db2.sql`
+    select p.id, p.display_name, p.org_raw, o.name as org_name, p.linkedin_member_id, p.linkedin_slug, p.primary_email
+      from orbit.people p left join orbit.organizations o on o.id = p.org_id
+     where p.user_id = ${viewerId}::uuid and not p.is_self and p.deleted_at is null and p.merged_into is null`;
+  const identities = await db2.sql`
+    select person_id, kind, value_norm from orbit.person_identities
+     where user_id = ${viewerId}::uuid and kind in ('email', 'linkedin_member', 'linkedin_slug')`;
+  const byMember = /* @__PURE__ */ new Map();
+  const bySlug = /* @__PURE__ */ new Map();
+  const emails = /* @__PURE__ */ new Map();
+  const byName = /* @__PURE__ */ new Map();
+  for (const p of people) {
+    if (p.linkedin_member_id) byMember.set(p.linkedin_member_id, p.id);
+    if (p.linkedin_slug) bySlug.set(p.linkedin_slug.toLowerCase(), p.id);
+    if (p.primary_email?.includes("@")) emails.set(normalizeEmail(p.primary_email), p.id);
+    const key = `${p.display_name.trim().toLowerCase()}|${normalizeCompany(p.org_name ?? p.org_raw)}`;
+    byName.set(key, [...byName.get(key) ?? [], p.id]);
+  }
+  for (const i of identities) {
+    if (i.kind === "linkedin_member" && !byMember.has(i.value_norm)) byMember.set(i.value_norm, i.person_id);
+    if (i.kind === "linkedin_slug" && !bySlug.has(i.value_norm.toLowerCase()))
+      bySlug.set(i.value_norm.toLowerCase(), i.person_id);
+    if (i.kind === "email" && !emails.has(i.value_norm)) emails.set(i.value_norm, i.person_id);
+  }
+  const wanted = new Set(shares2.map((s) => s.email_hash).filter((h) => !!h));
+  const byHash = /* @__PURE__ */ new Map();
+  if (wanted.size)
+    for (const [email, id] of emails) {
+      const h = await emailHash(email);
+      if (wanted.has(h) && !byHash.has(h)) byHash.set(h, id);
+    }
+  for (const s of shares2) {
+    const hit = s.linkedin_member_id && byMember.get(s.linkedin_member_id) || s.linkedin_slug && bySlug.get(s.linkedin_slug.toLowerCase()) || s.email_hash && byHash.get(s.email_hash) || (() => {
+      if (!s.company) return void 0;
+      const ids = byName.get(`${s.display_name.trim().toLowerCase()}|${normalizeCompany(s.company)}`);
+      return ids?.length === 1 ? ids[0] : void 0;
+    })();
+    if (hit) out.set(s.person_id, hit);
+  }
+  return out;
+}
+var CLOSENESS_P = { 1: 0.35, 2: 0.6, 3: 0.85 };
+function closenessPhrase(closeness, firstName) {
+  return closeness === 3 ? `is close to ${firstName}` : closeness === 2 ? `knows ${firstName} well` : `knows ${firstName}`;
+}
+var friendNode = (userId) => `friend:${userId}`;
+var friendPersonNode = (personId) => `friend_person:${personId}`;
+var isFriendNode = (id) => id.startsWith("friend:");
 
 // supabase/functions/_shared/research/bind.ts
 var UNIPILE_SEARCHES_PER_DAY = 10;
@@ -11379,6 +9654,41 @@ async function villageFor2(deps, input, out) {
   return entry.kind === "person" ? personIntros(entry.data) : companyIntros(entry.data);
 }
 
+// supabase/functions/_shared/ingest/util.ts
+function slot(d) {
+  return d.toISOString().slice(0, 15);
+}
+
+// supabase/functions/_shared/ingest/ties.ts
+var INTERACTION_KINDS = [
+  "email_exchange",
+  "email_cc",
+  "email_cothread",
+  "meeting_coattendee"
+];
+var AFFILIATION_KINDS = ["co_tenure", "same_school_cohort", "same_current_company", "same_city"];
+var INFERRED_KINDS = [...INTERACTION_KINDS, ...AFFILIATION_KINDS];
+async function upsertTie(db2, userId, t, now) {
+  const [a, b] = t.a < t.b ? [t.a, t.b] : [t.b, t.a];
+  if (a === b) return;
+  const w = Math.min(1, Math.max(0, t.weight));
+  const c = Math.min(1, Math.max(0, t.confidence));
+  await db2.sql`
+    insert into orbit.ties (user_id, a_person_id, b_person_id, kind, weight, confidence, evidence, first_seen_at,
+                            last_seen_at)
+    values (${userId}::uuid, ${a}::uuid, ${b}::uuid, ${t.kind}, ${w}::real, ${c}::real, ${t.evidence}::jsonb,
+            coalesce(${t.firstSeenAt ?? null}::timestamptz, ${now}::timestamptz),
+            coalesce(${t.lastSeenAt ?? null}::timestamptz, ${now}::timestamptz))
+    on conflict (user_id, a_person_id, b_person_id, kind) do update set
+      weight = excluded.weight, confidence = excluded.confidence, evidence = excluded.evidence,
+      first_seen_at = least(orbit.ties.first_seen_at, excluded.first_seen_at),
+      last_seen_at = excluded.last_seen_at
+    where orbit.ties.weight is distinct from excluded.weight
+       or orbit.ties.confidence is distinct from excluded.confidence
+       or orbit.ties.evidence is distinct from excluded.evidence
+       or orbit.ties.last_seen_at is distinct from excluded.last_seen_at`;
+}
+
 // supabase/functions/_shared/paths/hopEvidence.ts
 var HOP_CACHE_MS = 30 * 864e5;
 
@@ -11419,7 +9729,7 @@ async function deleteTies(db2, userId, aId, bId, kinds, keep = [], by = { actor:
 }
 
 // supabase/functions/_shared/paths/find.ts
-var DAY8 = 864e5;
+var DAY7 = 864e5;
 var TIE_KIND_SET = new Set(TIE_KINDS);
 async function loadGraph(db2, userId, now) {
   const rows = await db2.sql`
@@ -11442,7 +9752,7 @@ async function loadGraph(db2, userId, now) {
     select distinct m.from_person_id as person_id from orbit.threads t
       join orbit.messages m on m.thread_id = t.id and m.sent_at = t.last_at
      where t.user_id = ${userId}::uuid and t.last_direction = 'in' and t.is_networking
-       and m.from_person_id is not null and t.last_at > ${new Date(now.getTime() - 30 * DAY8)}::timestamptz`;
+       and m.from_person_id is not null and t.last_at > ${new Date(now.getTime() - 30 * DAY7)}::timestamptz`;
   const owesSet = new Set(owes.map((o) => o.person_id));
   let selfId = null;
   const people = /* @__PURE__ */ new Map();
@@ -11461,7 +9771,7 @@ async function loadGraph(db2, userId, now) {
       score: r.score ?? 0,
       reciprocity: num(r.features?.reciprocity),
       sharesGoalTargetOrg: !!org && targetOrgs.has(org.toLowerCase().trim()),
-      askedRecently: mine.some((i) => now.getTime() - new Date(i.asked_at).getTime() < 30 * DAY8),
+      askedRecently: mine.some((i) => now.getTime() - new Date(i.asked_at).getTime() < 30 * DAY7),
       introducedUserBefore: mine.some((i) => i.status === "intro_made" || i.status === "meeting"),
       owesReply: owesSet.has(r.id),
       lastContactAt: iso(r.last_interaction_at) ?? void 0,
@@ -11929,6 +10239,2380 @@ function bestReach(g, personId, goal, now) {
   return r.paths[0]?.p ?? null;
 }
 
+// supabase/functions/_shared/cadence/cadence.ts
+var DAY8 = 864e5;
+function goalFrom(r) {
+  const due2 = r.due_at instanceof Date ? r.due_at.toISOString().slice(0, 10) : r.due_at;
+  return goalFromRow({ ...isoRow(r), due_at: due2 });
+}
+async function loadCadence(db2, userId, now) {
+  const [u2] = await db2.sql`
+    select timezone, autonomy_level, settings from orbit.users where id = ${userId}::uuid`;
+  const tz = validZone(u2?.timezone) ?? "America/New_York";
+  const settings2 = u2?.settings ?? {};
+  const chatRows = await db2.sql`
+    select * from orbit.chats where user_id = ${userId}::uuid and archived_at is null`;
+  const chats = chatRows.map((r) => chatFromRow(isoRow(r)));
+  const goalRows = await db2.sql`
+    select * from orbit.goals where user_id = ${userId}::uuid and deleted_at is null`;
+  const goals = goalRows.map(goalFrom);
+  const draftRows = await db2.sql`
+    select id, person_id, chat_id, kind, status, send_at, created_at from orbit.drafts
+     where user_id = ${userId}::uuid
+       and (status in ('draft', 'approved', 'scheduled', 'sending') or created_at > ${new Date(now.getTime() - 30 * DAY8)}::timestamptz)`;
+  const drafts = draftRows.map((d) => ({
+    id: d.id,
+    personId: d.person_id,
+    chatId: d.chat_id ?? void 0,
+    kind: d.kind,
+    status: d.status,
+    sendAt: iso(d.send_at) ?? void 0,
+    createdAt: iso(d.created_at)
+  }));
+  const msgRows = await db2.sql`
+    select direction, sent_at, provider, from_person_id, to_person_ids from orbit.messages
+     where user_id = ${userId}::uuid and not is_automated
+       and sent_at > ${new Date(now.getTime() - 365 * DAY8)}::timestamptz`;
+  const messages = [];
+  for (const m of msgRows) {
+    const channel = m.provider === "linkedin" ? "linkedin" : "email";
+    const at = iso(m.sent_at);
+    if (m.direction === "in") {
+      if (m.from_person_id) messages.push({ personId: m.from_person_id, direction: "in", at, channel });
+    } else
+      for (const p of m.to_person_ids ?? []) messages.push({ personId: p, direction: "out", at, channel });
+  }
+  const unsynced = await db2.sql`
+    select d.person_id, d.sent_at, d.channel from orbit.drafts d
+     where d.user_id = ${userId}::uuid and d.status = 'sent' and d.sent_at is not null and d.kind <> 'forwardable_blurb'
+       and not exists (select 1 from orbit.messages m where m.user_id = d.user_id and m.external_id = d.provider_message_id)`;
+  for (const d of unsynced)
+    messages.push({
+      personId: d.person_id,
+      direction: "out",
+      at: iso(d.sent_at),
+      channel: d.channel === "linkedin" ? "linkedin" : "email"
+    });
+  const goalPeople = goals.flatMap((g) => g.targets?.people ?? []);
+  const wanted = [
+    .../* @__PURE__ */ new Set([...chats.map((c) => c.personId), ...drafts.map((d) => d.personId), ...goalPeople])
+  ];
+  const peopleRows = await db2.sql`
+    select p.id, p.first_name, p.display_name, p.title, p.org_raw, p.hidden_at, p.do_not_contact, p.timezone,
+           p.last_interaction_at, ts.score::int as score,
+           d.content->'recently' as recently, d.updated_at as dossier_at,
+           (select f.text from orbit.facts f where f.person_id = p.id and f.deleted_at is null
+               and f.created_at > ${new Date(now.getTime() - 30 * DAY8)}::timestamptz
+             order by f.created_at desc limit 1) as fact
+      from orbit.people p
+      left join orbit.tie_scores ts on ts.user_id = p.user_id and ts.person_id = p.id
+      left join orbit.dossiers d on d.user_id = p.user_id and d.person_id = p.id and d.status in ('ready', 'partial')
+     where p.user_id = ${userId}::uuid and not p.is_self and p.deleted_at is null and p.merged_into is null
+       and (ts.score >= 60 or p.id = any(${wanted}::uuid[]))`;
+  const people = /* @__PURE__ */ new Map();
+  for (const p of peopleRows) {
+    const fresh = p.dossier_at && now.getTime() - new Date(p.dossier_at).getTime() < 60 * DAY8;
+    const recent = fresh && Array.isArray(p.recently) ? p.recently[0]?.text : void 0;
+    people.set(p.id, {
+      person: {
+        id: p.id,
+        firstName: p.first_name ?? p.display_name.split(/\s+/)[0],
+        currentTitle: p.title ?? void 0,
+        currentOrganizationRaw: p.org_raw ?? void 0,
+        hiddenAt: iso(p.hidden_at) ?? void 0,
+        doNotContact: p.do_not_contact
+      },
+      score: p.score ?? 0,
+      lastContactAt: iso(p.last_interaction_at) ?? void 0,
+      nurtureReason: recent ?? p.fact ?? void 0,
+      timeZone: validZone(p.timezone)
+    });
+  }
+  const nurtured = draftRows.filter((d) => d.kind === "nurture" || d.kind === "reengage").map((d) => iso(d.created_at));
+  const awaiting = await db2.sql`
+    select distinct person_id from orbit.suggestions
+     where user_id = ${userId}::uuid and kind = 'needs_you' and status in ('pending', 'snoozed') and person_id is not null`;
+  const maxBumps = num(settings2.max_bumps, 2);
+  const quiet = typeof settings2.quiet_until === "string" ? settings2.quiet_until : void 0;
+  return {
+    input: {
+      chats,
+      drafts,
+      messages,
+      people,
+      goals,
+      settings: { maxBumps, timezone: tz, quietUntil: quiet },
+      now,
+      recentNurtureAt: nurtured
+    },
+    timezone: tz,
+    chatsById: new Map(chats.map((c) => [c.id, c])),
+    goalsById: new Map(goals.map((g) => [g.id, g])),
+    settings: settings2,
+    awaitingStudent: new Set(awaiting.map((r) => r.person_id)),
+    autonomyLevel: num(u2?.autonomy_level, 0),
+    autoKinds: Array.isArray(settings2.auto_kinds) ? settings2.auto_kinds.filter(
+      (k) => typeof k === "string" && AUTO_KINDS.includes(k)
+    ) : [],
+    pausedUntil: typeof settings2.autopilot_paused_until === "string" ? settings2.autopilot_paused_until : void 0
+  };
+}
+var toDue = (a) => ({
+  kind: a.kind,
+  personId: a.personId ?? null,
+  chatId: a.chatId ?? null,
+  draftId: a.draftId ?? null,
+  reason: a.reason,
+  dueAt: a.dueAt
+});
+async function dueItems(db2, userId, now) {
+  const st = await loadCadence(db2, userId, now);
+  return cadenceActions(st.input).map(toDue);
+}
+
+// supabase/functions/orbit-api/routes/cadence.ts
+async function due(ctx) {
+  return json(200, { items: await dueItems(ctx.db, ctx.userId, ctx.now()) });
+}
+var cadenceRoutes = {
+  "/cadence/due": { method: "POST", auth: true, run: due }
+};
+
+// supabase/functions/orbit-api/routes/calendar.ts
+async function slots(ctx) {
+  const b = await body(ctx, true);
+  if (b.tz !== void 0 && typeof b.tz !== "string") throw badRequest("tz must be an IANA zone");
+  const count = b.count === void 0 ? void 0 : Number(b.count);
+  const r = await slotsFor(ctx.services(), ctx.userId, {
+    personId: optUuid(b, "personId"),
+    tz: b.tz,
+    count: Number.isFinite(count) ? count : void 0
+  });
+  return json(200, { slots: r.slots, tz: r.tz });
+}
+async function book(ctx) {
+  const b = await body(ctx);
+  if (typeof b.slotStart !== "string") throw badRequest("slotStart is required");
+  const r = await bookSlot(
+    ctx.services(),
+    ctx.userId,
+    { draftId: uuid(b, "draftId"), slotStart: b.slotStart },
+    ctx.env.appUrl
+  );
+  return json(200, r);
+}
+var calendarRoutes = {
+  "/calendar/slots": { method: "POST", auth: true, run: slots },
+  "/calendar/book": { method: "POST", auth: true, run: book }
+};
+
+// supabase/functions/_shared/compose/drafts.ts
+function toServerDraft(r) {
+  return {
+    id: r.id,
+    personId: r.person_id,
+    chatId: r.chat_id ?? null,
+    goalId: r.goal_id ?? null,
+    channel: r.channel,
+    kind: r.kind,
+    subject: r.subject ?? null,
+    body: r.body,
+    status: r.status,
+    sendAt: iso(r.send_at),
+    sentAt: iso(r.sent_at),
+    validator: r.validator ?? null,
+    generatedBy: r.generated_by === "llm" ? "llm" : "template",
+    hooks: Array.isArray(r.hooks) ? r.hooks : [],
+    // the column says what is missing; a marker still in the body (an older draft) says the same
+    needsInput: [
+      .../* @__PURE__ */ new Set([
+        ...askUserMarkers(`${r.subject ?? ""}
+${r.body}`),
+        ...Array.isArray(r.needs) && r.needs.length && r.ask?.question ? [r.ask.question] : []
+      ])
+    ],
+    createdAt: iso(r.created_at),
+    updatedAt: iso(r.updated_at)
+  };
+}
+async function loadDraft(db2, userId, draftId) {
+  if (typeof draftId !== "string" || !/^[0-9a-f-]{36}$/i.test(draftId))
+    throw new HttpError(400, "bad_request", "draftId is required");
+  const [r] = await db2.sql`
+    select * from orbit.drafts where id = ${draftId}::uuid and user_id = ${userId}::uuid`;
+  if (!r) throw new HttpError(404, "not_found", "no such draft");
+  return r;
+}
+async function draftById(db2, draftId) {
+  const [r] = await db2.sql`select * from orbit.drafts where id = ${draftId}::uuid`;
+  return r;
+}
+
+// supabase/functions/_shared/sending/mime.ts
+var ascii = (s) => /^[\x20-\x7e]*$/.test(s);
+function headerValue(s) {
+  const one = s.replace(/[\r\n]+/g, " ").trim();
+  if (ascii(one)) return one;
+  return `=?UTF-8?B?${btoa(String.fromCharCode(...new TextEncoder().encode(one)))}?=`;
+}
+function address(email, name) {
+  const e = email.replace(/[\r\n<>]/g, "").trim();
+  if (!name) return e;
+  const n = name.replace(/[\r\n"]/g, "").trim();
+  return ascii(n) ? `"${n}" <${e}>` : `${headerValue(n)} <${e}>`;
+}
+function msgIds(raw) {
+  if (!raw) return void 0;
+  const ids = raw.split(/\s+/).map((x) => x.trim()).filter(Boolean).map((x) => x.startsWith("<") ? x : `<${x}>`);
+  return ids.length ? ids.join(" ") : void 0;
+}
+function b64Lines(bytes) {
+  let bin = "";
+  for (const b of bytes) bin += String.fromCharCode(b);
+  return (btoa(bin).match(/.{1,76}/g) ?? []).join("\r\n");
+}
+function buildMime(m) {
+  const lines = [
+    `From: ${address(m.from, m.fromName)}`,
+    `To: ${address(m.to, m.toName)}`,
+    ...m.cc ? [`Cc: ${address(m.cc, m.ccName)}`] : [],
+    `Subject: ${headerValue(m.subject)}`,
+    `Date: ${(m.date ?? /* @__PURE__ */ new Date()).toUTCString()}`,
+    "MIME-Version: 1.0",
+    'Content-Type: text/plain; charset="UTF-8"',
+    "Content-Transfer-Encoding: base64",
+    `X-Orbit-Draft-Id: ${m.draftId}`
+  ];
+  const irt = msgIds(m.inReplyTo);
+  if (irt) lines.push(`In-Reply-To: ${irt}`);
+  const refs = msgIds(m.references ?? m.inReplyTo);
+  if (refs) lines.push(`References: ${refs}`);
+  const body2 = m.body.replace(/\r?\n/g, "\r\n");
+  return `${lines.join("\r\n")}\r
+\r
+${b64Lines(new TextEncoder().encode(body2))}\r
+`;
+}
+function rawMessage(m) {
+  return base64url(new TextEncoder().encode(buildMime(m)));
+}
+
+// supabase/functions/_shared/sending/transport.ts
+var GMAIL_SEND_URL = "https://gmail.googleapis.com/gmail/v1/users/me/messages/send";
+var GMAIL_THREAD_URL = "https://gmail.googleapis.com/gmail/v1/users/me/threads";
+async function gmailSend(s, userId, raw, threadId) {
+  if (!s.tokens) return { ok: false, retry: false, error: "google_unconfigured" };
+  for (let attempt = 0; attempt < 2; attempt++) {
+    let token;
+    try {
+      token = await s.tokens.accessToken(userId);
+    } catch (e) {
+      if (e instanceof NeedsReauth) return { ok: false, retry: false, error: "needs_reauth" };
+      return { ok: false, retry: true, error: "token_error" };
+    }
+    let res;
+    try {
+      res = await s.fetch(GMAIL_SEND_URL, {
+        method: "POST",
+        headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+        body: JSON.stringify(threadId ? { raw, threadId } : { raw })
+      });
+    } catch {
+      return { ok: false, retry: true, error: "network" };
+    }
+    if (res.status === 401 && attempt === 0) {
+      s.tokens.invalidate(userId);
+      await res.body?.cancel();
+      continue;
+    }
+    if (res.status === 429 || res.status >= 500) {
+      await res.body?.cancel();
+      return { ok: false, retry: true, error: `gmail_${res.status}` };
+    }
+    if (!res.ok) {
+      await res.body?.cancel();
+      return { ok: false, retry: false, error: `gmail_${res.status}` };
+    }
+    const j = await res.json().catch(() => ({}));
+    if (!j.id) return { ok: false, retry: false, error: "gmail_no_id" };
+    return { ok: true, providerMessageId: j.id, threadId: j.threadId };
+  }
+  return { ok: false, retry: false, error: "gmail_401" };
+}
+async function gmailThreadHasNewerInbound(s, userId, threadId, since) {
+  if (!s.tokens) return void 0;
+  try {
+    const token = await s.tokens.accessToken(userId);
+    const res = await s.fetch(
+      `${GMAIL_THREAD_URL}/${encodeURIComponent(threadId)}?format=minimal&fields=messages(id,labelIds,internalDate)`,
+      { headers: { authorization: `Bearer ${token}` } }
+    );
+    if (!res.ok) {
+      await res.body?.cancel();
+      return void 0;
+    }
+    const j = await res.json();
+    return (j.messages ?? []).some(
+      (m) => !(m.labelIds ?? []).includes("SENT") && Number(m.internalDate ?? 0) > since.getTime()
+    );
+  } catch {
+    return void 0;
+  }
+}
+async function linkedinSend(s, p) {
+  const base = (s.env.unipileBase ?? "").replace(/\/+$/, "");
+  if (!s.env.unipileKey || !base) return { ok: false, retry: false, error: "unipile_unconfigured" };
+  const form = new FormData();
+  form.set("account_id", p.accountId);
+  form.set("text", p.text);
+  let url;
+  if (p.chatId) url = `${base}/api/v1/chats/${encodeURIComponent(p.chatId)}/messages`;
+  else if (p.attendeeId) {
+    url = `${base}/api/v1/chats`;
+    form.append("attendees_ids", p.attendeeId);
+  } else return { ok: false, retry: false, error: "no_linkedin_chat" };
+  let res;
+  try {
+    res = await s.fetch(url, {
+      method: "POST",
+      headers: { "X-API-KEY": s.env.unipileKey, accept: "application/json" },
+      body: form
+    });
+  } catch {
+    return { ok: false, retry: true, error: "network" };
+  }
+  if (res.status === 429 || res.status >= 500) {
+    await res.body?.cancel();
+    return { ok: false, retry: true, error: `unipile_${res.status}` };
+  }
+  if (!res.ok) {
+    await res.body?.cancel();
+    return { ok: false, retry: false, error: `unipile_${res.status}` };
+  }
+  const j = await res.json().catch(() => ({}));
+  const id = j.message_id ?? j.id;
+  if (!id) return { ok: false, retry: false, error: "unipile_no_id" };
+  return { ok: true, providerMessageId: id, chatId: j.chat_id ?? p.chatId ?? void 0 };
+}
+
+// supabase/functions/_shared/sending/send.ts
+var LINKEDIN_CONFIRM_MS = 15 * 6e4;
+var PAUSE_RECHECK_SEC = 15 * 60;
+async function loadUser2(db2, userId) {
+  const [u2] = await db2.sql`
+    select email, full_name, first_name, timezone, autonomy_level, settings from orbit.users where id = ${userId}::uuid`;
+  return u2;
+}
+async function effectiveLevel(db2, goalId, userLevel) {
+  if (goalId) {
+    const [g] = await db2.sql`
+      select autonomy_level from orbit.goals where id = ${goalId}::uuid`;
+    if (g?.autonomy_level !== null && g?.autonomy_level !== void 0) return Number(g.autonomy_level);
+  }
+  return Number(userLevel) || 0;
+}
+function aheadOf(settings2, key, now) {
+  const v = settings2?.[key];
+  if (typeof v !== "string") return void 0;
+  const t = new Date(v);
+  return Number.isNaN(t.getTime()) || t.getTime() <= now.getTime() ? void 0 : t;
+}
+function ownCap(settings2, key, tableCap) {
+  const v = Number(settings2?.[key]);
+  return Number.isFinite(v) && v >= 1 ? Math.min(Math.floor(v), tableCap) : tableCap;
+}
+var hashOf = (d) => messageHash({ channel: d.channel, subject: d.subject, body: d.body });
+async function audit(db2, userId, actor, action, draftId, details) {
+  await db2.sql`
+    insert into orbit.audit_log (user_id, actor, action, target_table, target_id, details)
+    values (${userId}::uuid, ${actor}, ${action}, 'drafts', ${draftId}, ${details}::jsonb)`;
+}
+async function goalKindOf(db2, goalId) {
+  if (!goalId) return null;
+  const [g] = await db2.sql`select kind from orbit.goals where id = ${goalId}::uuid`;
+  return g?.kind ?? null;
+}
+async function postalAddress(db2, userId) {
+  const [u2] = await db2.sql`
+    select settings from orbit.users where id = ${userId}::uuid`;
+  const v = u2?.settings?.postal_address;
+  return typeof v === "string" ? v.trim() : "";
+}
+async function salesFirstTouch(db2, d) {
+  return d.channel === "gmail" && FIRST_TOUCH_KINDS.has(d.kind) && await goalKindOf(db2, d.goal_id) === "sales";
+}
+async function approveDraft(s, userId, req) {
+  const db2 = s.db;
+  let d = await loadDraft(db2, userId, req.draftId);
+  if (d.status === "sending" || d.status === "sent") return toServerDraft(d);
+  if (!["draft", "approved", "scheduled", "failed"].includes(d.status))
+    throw new HttpError(409, "not_approvable", `a ${d.status} draft cannot be approved`);
+  if (req.body !== void 0 || req.subject !== void 0) d = await applyEdit(db2, d, req);
+  const text3 = `${d.subject ?? ""}
+${d.body}`;
+  const needs = askUserMarkers(text3);
+  const gap = needs.length ? void 0 : placeholderIn(text3);
+  if (needs.length || gap)
+    throw new HttpError(
+      409,
+      "needs_input",
+      `fill in what the draft asks for first: ${needs.length ? needs.join("; ") : gap}`
+    );
+  const [p] = await db2.sql`
+    select do_not_contact, timezone from orbit.people where id = ${d.person_id}::uuid`;
+  if (p?.do_not_contact) throw new HttpError(409, "do_not_contact", "they asked not to be contacted");
+  if (d.channel === "linkedin" && req.confirm !== true)
+    throw new HttpError(409, "needs_confirmation", "every LinkedIn message needs your tap to send");
+  if (await salesFirstTouch(db2, d) && !await postalAddress(db2, userId))
+    throw new HttpError(
+      409,
+      "needs_postal_address",
+      "add a postal address in Settings before the first sales email"
+    );
+  const now = s.now();
+  const u2 = await loadUser2(db2, userId);
+  const level = await effectiveLevel(db2, d.goal_id, u2?.autonomy_level ?? 0);
+  let sendAt;
+  if (d.channel === "linkedin") sendAt = now;
+  else if (req.sendAt) {
+    const t = new Date(req.sendAt);
+    if (Number.isNaN(t.getTime())) throw new HttpError(400, "bad_request", "sendAt must be an ISO time");
+    sendAt = t.getTime() < now.getTime() ? now : t;
+  } else if (level >= 1) {
+    const tz = validZone(p?.timezone) ?? validZone(u2?.timezone) ?? "America/New_York";
+    sendAt = new Date(nextSendWindow(now, tz, d.channel, s.random).notBefore);
+  } else {
+    sendAt = now;
+  }
+  const [row] = await db2.sql`
+    update orbit.drafts set status = 'approved', send_at = ${sendAt}::timestamptz, error = null,
+                            cancel_reason = null, autonomy_level = ${level}::smallint
+     where id = ${d.id}::uuid and user_id = ${userId}::uuid and status in ('draft', 'approved', 'scheduled', 'failed')
+    returning *`;
+  if (!row) return toServerDraft(await draftById(db2, d.id));
+  await recordDraftEdit(db2, row).catch(() => false);
+  const hash = hashOf(row);
+  await audit(db2, userId, "user", "draft.approve", row.id, {
+    hash,
+    send_at: iso(sendAt),
+    channel: row.channel,
+    level
+  });
+  if (row.channel === "linkedin") await audit(db2, userId, "user", "draft.confirm", row.id, { hash });
+  if (sendAt.getTime() <= now.getTime()) {
+    try {
+      await sendDraft(s, row.id);
+    } catch (e) {
+      if (!(e instanceof SendRetry)) throw e;
+      await s.queue.enqueue(
+        {
+          kind: "send.draft",
+          userId,
+          payload: { draftId: row.id },
+          dedupeKey: `send:${row.id}:retry:${iso(now)}`
+        },
+        { delaySec: 60 }
+      );
+    }
+  } else {
+    await s.queue.enqueue(
+      {
+        kind: "send.draft",
+        userId,
+        payload: { draftId: row.id },
+        dedupeKey: `send:${row.id}:${iso(sendAt)}`
+      },
+      { delaySec: Math.ceil((sendAt.getTime() - now.getTime()) / 1e3) }
+    );
+  }
+  return toServerDraft(await draftById(db2, row.id));
+}
+async function applyEdit(db2, d, req) {
+  const body2 = req.body === void 0 ? d.body : req.body;
+  if (typeof body2 !== "string" || !body2.trim() || body2.length > 2e4)
+    throw new HttpError(400, "bad_request", "body must be the message, at most 20,000 characters");
+  const subject = req.subject === void 0 ? d.subject : req.subject;
+  if (subject !== null && (typeof subject !== "string" || subject.length > 200))
+    throw new HttpError(400, "bad_request", "subject must be text of at most 200 characters, or null");
+  if (body2.trim() === d.body.trim() && (subject ?? null) === (d.subject ?? null)) return d;
+  const [row] = await db2.sql`
+    update orbit.drafts set body = ${body2.trim()}, subject = ${subject ?? null}
+     where id = ${d.id}::uuid and status in ('draft', 'approved', 'scheduled', 'failed') returning *`;
+  return row ?? d;
+}
+async function cancelDraft(db2, userId, draftId) {
+  const d = await loadDraft(db2, userId, draftId);
+  if (d.status === "sending" || d.status === "sent")
+    throw new HttpError(409, "too_late", "it has already gone out");
+  const [row] = await db2.sql`
+    update orbit.drafts set status = 'cancelled', cancel_reason = 'user'
+     where id = ${d.id}::uuid and status in ('draft', 'approved', 'scheduled', 'failed') returning *`;
+  if (row) await audit(db2, userId, "user", "draft.cancel", d.id, {});
+  return toServerDraft(row ?? await draftById(db2, d.id));
+}
+async function discardDraft(db2, userId, draftId) {
+  const d = await loadDraft(db2, userId, draftId);
+  if (d.status === "sending" || d.status === "sent")
+    throw new HttpError(409, "too_late", "it has already gone out");
+  const [row] = await db2.sql`
+    update orbit.drafts set status = 'discarded'
+     where id = ${d.id}::uuid and status in ('draft', 'approved', 'scheduled', 'failed', 'cancelled') returning *`;
+  if (row) await audit(db2, userId, "user", "draft.discard", d.id, {});
+  return toServerDraft(row ?? await draftById(db2, d.id));
+}
+var SendRetry = class extends Error {
+  constructor(code) {
+    super(code);
+    this.name = "SendRetry";
+  }
+};
+async function sendDraft(s, draftId) {
+  const db2 = s.db;
+  const now = s.now();
+  const [d] = await db2.sql`
+    update orbit.drafts set status = 'sending'
+     where id = ${draftId}::uuid and status = 'approved'
+       and (send_at is null or send_at <= ${new Date(now.getTime() + 1e3)}::timestamptz)
+    returning *`;
+  if (!d) return { status: "skipped", reason: "not_claimed" };
+  const userId = d.user_id;
+  const settle = async (status3, fields) => {
+    await db2.sql`
+      update orbit.drafts set status = ${status3},
+             error = ${fields.error ?? null},
+             cancel_reason = ${fields.cancel_reason ?? null},
+             send_at = coalesce(${fields.send_at ?? null}::timestamptz, send_at)
+       where id = ${d.id}::uuid`;
+  };
+  const later = async (reason, at) => {
+    await settle("approved", { error: reason, send_at: at });
+    await s.queue.enqueue(
+      {
+        kind: "send.draft",
+        userId,
+        payload: { draftId: d.id },
+        dedupeKey: `send:${d.id}:${reason}:${iso(at)}`
+      },
+      { delaySec: Math.max(1, Math.ceil((at.getTime() - now.getTime()) / 1e3)) }
+    );
+    await audit(db2, userId, "system", "draft.hold", d.id, { reason, until: iso(at) });
+    return { status: "held", reason };
+  };
+  if (askUserMarkers(`${d.subject ?? ""}
+${d.body}`).length || placeholderIn(`${d.subject ?? ""}
+${d.body}`)) {
+    await settle("draft", { error: "needs_input" });
+    return { status: "held", reason: "needs_input" };
+  }
+  const review = d.review_until ? new Date(d.review_until) : void 0;
+  if (review && !Number.isNaN(review.getTime()) && review.getTime() > now.getTime())
+    return later("review_window", review);
+  const [person2] = await db2.sql`
+    select display_name, first_name, primary_email, title, headline, do_not_contact, linkedin_member_id
+      from orbit.people where id = ${d.person_id}::uuid`;
+  if (!person2) {
+    await settle("failed", { error: "no_person" });
+    return { status: "failed", error: "no_person" };
+  }
+  const history2 = await historyWith(db2, userId, d.person_id);
+  const createdAt = iso(d.created_at);
+  const replied = cancelIfReplied(
+    { personId: d.person_id, createdAt },
+    history2.map((h) => ({
+      personId: d.person_id,
+      direction: h.direction,
+      at: h.at,
+      channel: "email"
+    }))
+  );
+  let live;
+  if (!replied.cancel && d.channel === "gmail" && d.thread_external_id)
+    live = await gmailThreadHasNewerInbound(s, userId, d.thread_external_id, new Date(createdAt));
+  if (replied.cancel || live) {
+    await settle("cancelled", { cancel_reason: "replied" });
+    await audit(db2, userId, "system", "draft.cancel", d.id, { reason: "replied" });
+    return { status: "cancelled", reason: "replied" };
+  }
+  const approvals = await db2.sql`
+    select actor, action, details, created_at from orbit.audit_log
+     where user_id = ${userId}::uuid and target_table = 'drafts' and target_id = ${d.id}
+       and action in ('draft.approve', 'draft.confirm', 'draft.auto_approve')
+     order by created_at desc`;
+  const hash = hashOf(d);
+  const userApproved = approvals.some((a) => a.action === "draft.approve" && a.details?.hash === hash);
+  const agentApproved = approvals.some((a) => a.action === "draft.auto_approve" && a.details?.hash === hash);
+  const u2 = await loadUser2(db2, userId);
+  if (!u2) {
+    await settle("failed", { error: "no_user" });
+    return { status: "failed", error: "no_user" };
+  }
+  const paused = aheadOf(u2.settings, "autopilot_paused_until", now);
+  if (paused && (agentApproved && !userApproved || Number(d.autonomy_level) >= 1))
+    return later(
+      "autopilot_paused",
+      new Date(Math.min(paused.getTime(), now.getTime() + PAUSE_RECHECK_SEC * 1e3))
+    );
+  if (agentApproved && !userApproved && goalPaused(u2.settings, d.goal_id, now)) {
+    await settle("draft", { error: "goal_paused" });
+    await audit(db2, userId, "system", "draft.hold", d.id, { reason: "goal_paused", goalId: d.goal_id });
+    return { status: "held", reason: "goal_paused" };
+  }
+  if (d.channel === "linkedin" && agentApproved && !userApproved) {
+    await settle("draft", { error: "linkedin_never_auto" });
+    await audit(db2, userId, "system", "draft.hold", d.id, { reason: "linkedin_never_auto" });
+    return { status: "held", reason: "linkedin_never_auto" };
+  }
+  if (d.channel === "linkedin") {
+    const fresh = approvals.some(
+      (a) => a.action === "draft.confirm" && a.actor === "user" && a.details?.hash === hash && now.getTime() - new Date(a.created_at).getTime() <= LINKEDIN_CONFIRM_MS
+    );
+    if (!fresh) {
+      await settle("draft", { error: "linkedin_needs_fresh_approval" });
+      await audit(db2, userId, "system", "draft.hold", d.id, { reason: "linkedin_needs_fresh_approval" });
+      return { status: "held", reason: "linkedin_needs_fresh_approval" };
+    }
+  }
+  if (!userApproved && !agentApproved) {
+    await settle("draft", { error: "not_approved" });
+    return { status: "held", reason: "not_approved" };
+  }
+  const meta = d.ask ?? {};
+  const violations = checkSend(
+    { kind: d.kind, channel: d.channel, personId: d.person_id, subject: d.subject, body: d.body },
+    {
+      now,
+      userEmails: [u2.email],
+      userName: u2.full_name ?? u2.first_name ?? "",
+      recipient: {
+        doNotContact: person2.do_not_contact,
+        title: person2.title ?? void 0,
+        headline: person2.headline ?? void 0
+      },
+      history: history2,
+      schedulingLink: typeof u2.settings?.scheduling_link === "string" ? u2.settings.scheduling_link : void 0,
+      offeredSlots: meta.slots,
+      timeZone: u2.timezone,
+      approvedHash: userApproved ? hash : void 0
+    }
+  );
+  const forbidden2 = violations.find((v) => v.kind === "forbidden");
+  if (forbidden2) {
+    await settle("cancelled", { cancel_reason: forbidden2.rule });
+    await audit(db2, userId, "system", "draft.blocked", d.id, { rule: forbidden2.rule });
+    return { status: "cancelled", reason: forbidden2.rule };
+  }
+  if (violations.length) {
+    await settle("draft", { error: `needs_approval:${violations.map((v) => v.rule).join(",")}` });
+    return { status: "held", reason: violations[0].rule };
+  }
+  if (await salesFirstTouch(db2, d) && (!await postalAddress(db2, userId) || !meta.footer)) {
+    await settle("draft", { error: "needs_postal_address" });
+    return { status: "held", reason: "needs_postal_address" };
+  }
+  if (agentApproved && !userApproved) {
+    const gate = await voiceGate(s, u2, d, { firstMessage: FIRST_TOUCH_KINDS.has(d.kind) });
+    if (!gate.ok) {
+      await settle("draft", { error: "voice" });
+      await audit(db2, userId, "system", "draft.hold", d.id, {
+        reason: "voice",
+        text: VOICE_HOLD_REASON,
+        problems: gate.problems,
+        ...gate.score !== void 0 ? { score: gate.score } : {}
+      });
+      return { status: "held", reason: "voice" };
+    }
+  }
+  const cap = await capReached(db2, userId, d, now, u2, agentApproved && !userApproved);
+  if (cap) {
+    const next = new Date(
+      nextSendWindow(new Date(now.getTime() + 864e5), u2.timezone, d.channel, s.random).notBefore
+    );
+    await settle(d.channel === "linkedin" ? "draft" : "approved", { error: cap, send_at: next });
+    await audit(db2, userId, "system", "draft.hold", d.id, { reason: cap, until: iso(next) });
+    return { status: "held", reason: cap };
+  }
+  let out;
+  if (d.channel === "gmail") {
+    if (!person2.primary_email) {
+      await settle("failed", { error: "no_email" });
+      return { status: "failed", error: "no_email" };
+    }
+    const subject = d.subject ?? await threadSubject(db2, userId, d.thread_external_id) ?? "";
+    const refs = d.in_reply_to ?? await lastMessageId(db2, userId, d.thread_external_id);
+    const forward = d.kind === "forward_intro" ? d.via : null;
+    const raw = rawMessage({
+      from: u2.email,
+      fromName: u2.full_name ?? void 0,
+      to: person2.primary_email,
+      toName: person2.display_name,
+      ...forward?.cc ? { cc: forward.cc, ccName: forward.ccName } : {},
+      subject: d.subject ? subject : subject && !/^re:/i.test(subject) ? `Re: ${subject}` : subject,
+      body: d.body,
+      inReplyTo: refs,
+      references: refs,
+      draftId: d.id,
+      date: now
+    });
+    out = await gmailSend(s, userId, raw, d.thread_external_id);
+  } else {
+    const [acct] = await db2.sql`
+      select external_account_id from orbit.integration_accounts
+       where user_id = ${userId}::uuid and provider = 'linkedin' and status = 'active'`;
+    if (!acct?.external_account_id) {
+      await settle("failed", { error: "linkedin_not_connected" });
+      return { status: "failed", error: "linkedin_not_connected" };
+    }
+    const chatId = d.thread_external_id ?? await linkedinChatId(db2, userId, d.person_id);
+    const attendee = chatId ? null : await linkedinAttendee(db2, userId, d.person_id, person2.linkedin_member_id);
+    out = await linkedinSend(s, {
+      accountId: acct.external_account_id,
+      chatId,
+      attendeeId: attendee,
+      text: d.body
+    });
+  }
+  if (!out.ok) {
+    if (out.retry) {
+      await settle("approved", { error: out.error });
+      throw new SendRetry(out.error);
+    }
+    await settle("failed", { error: out.error });
+    await audit(db2, userId, "system", "draft.failed", d.id, { error: out.error });
+    if (d.channel === "gmail")
+      await tripBreaker(db2, userId, {
+        goalId: d.goal_id,
+        reason: "send_error",
+        personId: d.person_id,
+        personName: person2.display_name,
+        now
+      }).catch(() => void 0);
+    return { status: "failed", error: out.error };
+  }
+  const threadId = out.chatId ?? out.threadId ?? d.thread_external_id;
+  await db2.sql`
+    update orbit.drafts set status = 'sent', sent_at = ${now}::timestamptz, provider_message_id = ${out.providerMessageId},
+                            thread_external_id = ${threadId ?? null}, error = null
+     where id = ${d.id}::uuid`;
+  const auto = agentApproved && !userApproved;
+  await audit(db2, userId, auto ? "agent" : "user", auto ? "draft.auto_sent" : "draft.sent", d.id, {
+    channel: d.channel,
+    kind: d.kind,
+    ...auto ? { rung: d.auto_rung ?? d.kind, level: Number(d.autonomy_level) } : {}
+  });
+  if (d.chat_id) await afterSend(db2, userId, d, now);
+  const via = d.via;
+  if (d.kind === "intro_request" && via?.introRequestId)
+    await db2.sql`update orbit.intro_requests set asked_at = ${now}::timestamptz where id = ${via.introRequestId}::uuid`;
+  if (d.kind === "forward_intro" && via?.friendAskId)
+    await db2.sql`
+      update orbit.friend_intro_asks set status = 'forwarded', forwarded_message_id = ${d.id}::uuid,
+             answered_at = coalesce(answered_at, ${now}::timestamptz)
+       where id = ${via.friendAskId}::uuid and friend_user_id = ${userId}::uuid`;
+  return { status: "sent", providerMessageId: out.providerMessageId };
+}
+async function afterSend(db2, userId, d, now) {
+  const [c] = await db2.sql`
+    select stage, data from orbit.chats where id = ${d.chat_id}::uuid`;
+  if (!c) return;
+  const at = now.toISOString();
+  const data = {
+    ...c.data,
+    lastOutboundAt: at,
+    outreachChannel: d.channel === "gmail" ? "email" : "linkedin"
+  };
+  if (!data.firstOutreachAt && d.kind !== "forwardable_blurb" && d.kind !== "intro_request")
+    data.firstOutreachAt = at;
+  if (d.kind === "bump") data.bumpCount = (data.bumpCount ?? 0) + 1;
+  await db2.sql`update orbit.chats set data = ${data}::jsonb where id = ${d.chat_id}::uuid`;
+  if (["identified", "warming"].includes(c.stage) && d.kind !== "forwardable_blurb" && d.kind !== "intro_request")
+    await moveChat(db2, userId, d.chat_id, "outreach_sent", `${d.kind} sent`, now);
+}
+async function capReached(db2, userId, d, now, u2, auto) {
+  const zone = validZone(u2.timezone) ?? "America/New_York";
+  const key = new Intl.DateTimeFormat("en-CA", { timeZone: zone }).format(now);
+  const dayStart = zonedTime(key, 0, 0, zone);
+  const weekStart = new Date(dayStart.getTime() - 6 * 864e5);
+  if (auto) {
+    if (d.channel === "linkedin") return "linkedin_never_auto";
+    const [a] = await db2.sql`
+      select count(*) filter (where created_at >= ${dayStart}::timestamptz)::int as day,
+             count(*) filter (where created_at >= ${dayStart}::timestamptz
+                                and details->>'kind' in ('first_touch', 'warm_first_touch', 'outreach'))::int as day_first,
+             count(*) filter (where details->>'kind' in ('first_touch', 'warm_first_touch', 'outreach'))::int as week_first
+        from orbit.audit_log
+       where user_id = ${userId}::uuid and action = 'draft.auto_sent' and created_at >= ${weekStart}::timestamptz`;
+    if ((a?.day ?? 0) >= SEND_CAPS.autoPerDay) return "auto_daily_cap";
+    if (FIRST_TOUCH_KINDS.has(d.kind)) {
+      if ((a?.day_first ?? 0) >= SEND_CAPS.autoFirstTouchesPerDay) return "auto_first_touch_daily_cap";
+      if ((a?.week_first ?? 0) >= SEND_CAPS.autoFirstTouchesPerWeek) return "auto_first_touch_weekly_cap";
+    }
+  }
+  if (d.channel === "linkedin") {
+    const [r2] = await db2.sql`
+      select count(*)::int as n from orbit.drafts
+       where user_id = ${userId}::uuid and channel = 'linkedin' and status = 'sent'
+         and sent_at >= ${dayStart}::timestamptz`;
+    const cap2 = ownCap(u2.settings, "daily_send_cap_linkedin", SEND_CAPS.linkedinPerDay);
+    return (r2?.n ?? 0) >= cap2 ? "linkedin_daily_cap" : null;
+  }
+  if (await salesFirstTouch(db2, d)) {
+    const [r2] = await db2.sql`
+      select count(*)::int as n from orbit.drafts dr join orbit.goals g on g.id = dr.goal_id
+       where dr.user_id = ${userId}::uuid and dr.channel = 'gmail' and dr.status = 'sent' and g.kind = 'sales'
+         and dr.kind in ('first_touch', 'warm_first_touch', 'outreach') and dr.sent_at >= ${dayStart}::timestamptz`;
+    return (r2?.n ?? 0) >= SEND_CAPS.gmailSalesFirstTouchesPerDay ? "gmail_sales_daily_cap" : null;
+  }
+  const [r] = await db2.sql`
+    select count(*)::int as n from orbit.drafts dr
+     where dr.user_id = ${userId}::uuid and dr.channel = 'gmail' and dr.status = 'sent'
+       and dr.sent_at >= ${dayStart}::timestamptz
+       and not (dr.kind in ('first_touch', 'warm_first_touch', 'outreach')
+                and exists (select 1 from orbit.goals g where g.id = dr.goal_id and g.kind = 'sales'))`;
+  const cap = ownCap(u2.settings, "daily_send_cap_gmail", SEND_CAPS.gmailPerDay);
+  return (r?.n ?? 0) >= cap ? "gmail_daily_cap" : null;
+}
+async function threadSubject(db2, userId, threadExternalId) {
+  if (!threadExternalId) return null;
+  const [t] = await db2.sql`
+    select subject from orbit.threads where user_id = ${userId}::uuid and external_id = ${threadExternalId}`;
+  return t?.subject ?? null;
+}
+async function lastMessageId(db2, userId, threadExternalId) {
+  if (!threadExternalId) return null;
+  const [m] = await db2.sql`
+    select m.rfc_message_id from orbit.messages m join orbit.threads t on t.id = m.thread_id
+     where t.user_id = ${userId}::uuid and t.external_id = ${threadExternalId} and m.rfc_message_id is not null
+     order by m.sent_at desc limit 1`;
+  return m?.rfc_message_id ?? null;
+}
+async function linkedinChatId(db2, userId, personId) {
+  const [t] = await db2.sql`
+    select external_id from orbit.threads
+     where user_id = ${userId}::uuid and provider = 'linkedin' and ${personId}::uuid = any(participant_person_ids)
+     order by last_at desc nulls last limit 1`;
+  return t?.external_id ?? null;
+}
+async function linkedinAttendee(db2, userId, personId, memberId) {
+  const [i] = await db2.sql`
+    select value_raw, value_norm from orbit.person_identities
+     where user_id = ${userId}::uuid and person_id = ${personId}::uuid and kind in ('unipile_attendee', 'linkedin_member')
+     order by (kind = 'unipile_attendee') desc limit 1`;
+  return i?.value_raw ?? i?.value_norm ?? memberId;
+}
+
+// supabase/functions/orbit-api/routes/drafts.ts
+var KINDS = [
+  "outreach",
+  "bump",
+  "schedule",
+  "thank_you",
+  "nurture",
+  "congratulate",
+  "referral_ask",
+  "intro_request",
+  "reply",
+  "report_back",
+  "first_touch",
+  "warm_first_touch",
+  "forwardable_blurb",
+  "reengage"
+];
+async function compose(ctx) {
+  const b = await body(ctx);
+  const kind = b.kind;
+  if (!KINDS.includes(kind)) throw badRequest("kind is not a message kind");
+  if (b.channel !== "gmail" && b.channel !== "linkedin") throw badRequest("channel is gmail or linkedin");
+  const r = await composeDraft(ctx.services(), {
+    userId: ctx.userId,
+    personId: uuid(b, "personId"),
+    kind,
+    channel: b.channel,
+    goalId: optUuid(b, "goalId") ?? null,
+    replyToMessageId: optUuid(b, "replyToMessageId")
+  });
+  return json(200, { draft: toServerDraft(r.draft) });
+}
+async function approve(ctx) {
+  const b = await body(ctx);
+  const draft2 = await approveDraft(ctx.services(), ctx.userId, {
+    draftId: uuid(b, "draftId"),
+    sendAt: typeof b.sendAt === "string" ? b.sendAt : void 0,
+    confirm: b.confirm === true,
+    // the words as the student left them (plan 29 §B2.4)
+    ...b.body !== void 0 ? { body: b.body } : {},
+    ...b.subject !== void 0 ? { subject: b.subject } : {}
+  });
+  return json(200, { draft: draft2 });
+}
+async function cancel(ctx) {
+  return json(200, { draft: await cancelDraft(ctx.db, ctx.userId, uuid(await body(ctx), "draftId")) });
+}
+async function discard(ctx) {
+  return json(200, { draft: await discardDraft(ctx.db, ctx.userId, uuid(await body(ctx), "draftId")) });
+}
+var draftRoutes = {
+  "/drafts/compose": { method: "POST", auth: true, run: compose },
+  "/drafts/approve": { method: "POST", auth: true, run: approve },
+  "/drafts/cancel": { method: "POST", auth: true, run: cancel },
+  "/drafts/discard": { method: "POST", auth: true, run: discard }
+};
+
+// supabase/functions/_shared/friends/forward.ts
+function forwardSubject(i) {
+  return `Intro: ${i.askerFirst} and ${i.targetFirst}`;
+}
+function forwardBody(i) {
+  const note2 = i.note.trim().replace(/^["“]+|["”]+$/g, "");
+  return [
+    `Hi ${i.targetFirst},`,
+    `${i.askerName} asked me to put you two in touch. In their words:`,
+    `"${note2}"`,
+    `Cc'ing ${i.askerFirst} so you two can take it from here. No pressure either way, and no need to reply to me.`,
+    i.meFirst
+  ].join("\n\n");
+}
+
+// supabase/functions/orbit-api/routes/friends.ts
+var INVITES_PER_DAY = 20;
+var ASKS_PER_DAY_PER_FRIEND = 10;
+var INVITE_DAYS = 14;
+var SHARES_PAGE = 50;
+var MODES = ["all", "companies", "none"];
+var DAY_MS = 864e5;
+var forbidden = () => new HttpError(403, "forbidden", "not a friend who shares with you");
+function modeOf2(b, required = true) {
+  const m = b.mode;
+  if (m === void 0 && !required) return void 0;
+  if (typeof m !== "string" || !MODES.includes(m))
+    throw badRequest("mode is all, companies or none");
+  return m;
+}
+function domainsOf(b) {
+  const v = b.companyDomains;
+  if (v === void 0 || v === null) return [];
+  if (!Array.isArray(v) || v.some((d) => typeof d !== "string")) throw badRequest("companyDomains is a list");
+  return [...new Set(v.map((d) => d.trim().toLowerCase()).filter(Boolean))].slice(0, 50);
+}
+function inviteCode() {
+  let code = "";
+  while (code.length < 22) code += randomToken(24).replace(/[^A-Za-z0-9]/g, "");
+  return code.slice(0, 22);
+}
+async function userLite(db2, userId) {
+  const [u2] = await db2.sql`
+    select id, email, full_name, first_name, school, grad_year, avatar_url, settings
+      from orbit.users where id = ${userId}::uuid and deleted_at is null`;
+  if (!u2) throw new HttpError(401, "unauthorized", "sign in again");
+  return { ...u2, settings: u2.settings ?? {} };
+}
+var nameOf = (u2) => u2.full_name?.trim() || u2.first_name?.trim() || u2.email.split("@")[0];
+var firstOf = (u2) => u2.first_name?.trim() || nameOf(u2).split(/\s+/)[0];
+function defaultMode(u2) {
+  const m = u2.settings.friend_share_mode;
+  const d = u2.settings.friend_share_domains;
+  return {
+    mode: typeof m === "string" && MODES.includes(m) ? m : "all",
+    domains: Array.isArray(d) ? d.filter((x) => typeof x === "string") : []
+  };
+}
+async function enqueueRefresh(ctx, userIds) {
+  const q = ctx.services().queue;
+  for (const id of new Set(userIds))
+    await q.enqueue({ kind: "friend_shares_refresh", userId: id, payload: {}, dedupeKey: `friends:refresh:${id}` }).catch(() => void 0);
+}
+async function logAudit(ctx, action, table, targetId, details) {
+  await ctx.db.sql`
+    insert into orbit.audit_log (user_id, actor, action, target_table, target_id, details)
+    values (${ctx.userId}::uuid, 'user', ${action}, ${table}, ${targetId}, ${details}::jsonb)`;
+}
+async function targetNames(db2, userId) {
+  const goals = await db2.sql`
+    select targets from orbit.goals where user_id = ${userId}::uuid and status = 'active' and deleted_at is null`;
+  const out = [];
+  for (const g of goals) for (const o of g.targets?.organizations ?? []) if (!out.includes(o)) out.push(o);
+  return out;
+}
+async function friendView(db2, me2, f2, targets) {
+  const otherId = f2.a === me2 ? f2.b : f2.a;
+  const other = await userLite(db2, otherId);
+  const [theirs] = await db2.sql`
+    select mode, company_domains from orbit.friend_share_settings
+     where friendship_id = ${f2.id}::uuid and owner_user_id = ${otherId}::uuid`;
+  const [mine] = await db2.sql`
+    select mode, company_domains from orbit.friend_share_settings
+     where friendship_id = ${f2.id}::uuid and owner_user_id = ${me2}::uuid`;
+  const friend = {
+    friendshipId: f2.id,
+    userId: otherId,
+    name: nameOf(other),
+    firstName: firstOf(other),
+    mode: theirs?.mode ?? "none",
+    domains: theirs?.company_domains ?? []
+  };
+  const visible = friend.mode === "none" ? [] : await visibleShares(db2, friend);
+  const lower = targets.map((t) => t.toLowerCase());
+  const at = visible.filter((s) => s.company && lower.includes(s.company.toLowerCase()));
+  const knowsAt = targets.map((company) => ({
+    company,
+    count: visible.filter((s) => s.company?.toLowerCase() === company.toLowerCase()).length
+  })).filter((k) => k.count > 0);
+  return {
+    friendshipId: f2.id,
+    userId: otherId,
+    name: friend.name,
+    school: other.school,
+    gradYear: other.grad_year,
+    avatarUrl: other.avatar_url,
+    shares: visible.length,
+    atTargets: at.length,
+    knowsAt,
+    myMode: mine?.mode ?? "none",
+    myCompanyDomains: mine?.company_domains ?? [],
+    since: iso(f2.accepted_at ?? f2.created_at)
+  };
+}
+async function list2(ctx) {
+  const db2 = ctx.db;
+  const me2 = ctx.userId;
+  await db2.sql`select orbit.expire_friend_asks()`;
+  const rows = await db2.sql`
+    select id, a, b, status, requested_by, created_at, accepted_at from orbit.friendships
+     where (a = ${me2}::uuid or b = ${me2}::uuid) and status in ('active', 'pending') order by created_at`;
+  const targets = await targetNames(db2, me2);
+  const friends = [];
+  const pending = [];
+  for (const f2 of rows) {
+    if (f2.status === "active") friends.push(await friendView(db2, me2, f2, targets));
+    else if (f2.requested_by !== me2) {
+      const other = await userLite(db2, f2.a === me2 ? f2.b : f2.a);
+      pending.push({
+        id: f2.id,
+        direction: "in",
+        email: null,
+        name: nameOf(other),
+        status: "pending",
+        createdAt: iso(f2.created_at)
+      });
+    } else {
+      const other = await userLite(db2, f2.a === me2 ? f2.b : f2.a);
+      pending.push({
+        id: f2.id,
+        direction: "out",
+        email: null,
+        name: nameOf(other),
+        status: "pending",
+        createdAt: iso(f2.created_at)
+      });
+    }
+  }
+  const invites = await db2.sql`
+    select id, to_email, status, created_at from orbit.friend_invites
+     where from_user_id = ${me2}::uuid and status = 'pending' and to_email is not null
+       and not exists (select 1 from orbit.users u where lower(u.email) = to_email and u.deleted_at is null)
+     order by created_at`;
+  for (const i of invites)
+    pending.push({
+      id: i.id,
+      direction: "out",
+      email: i.to_email,
+      name: null,
+      status: i.status,
+      createdAt: iso(i.created_at)
+    });
+  const out = { friends, pending };
+  return json(200, out);
+}
+async function invite(ctx) {
+  const b = await body(ctx, true);
+  const db2 = ctx.db;
+  const me2 = ctx.userId;
+  const now = ctx.now();
+  const email = typeof b.email === "string" && b.email.trim() ? normalizeEmail(b.email.trim()) : null;
+  if (email && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) throw badRequest("that is not an email address");
+  const u2 = await userLite(db2, me2);
+  if (email && email === normalizeEmail(u2.email)) throw badRequest("that is your own address");
+  const [today] = await db2.sql`
+    select count(*)::int as n from orbit.friend_invites
+     where from_user_id = ${me2}::uuid and created_at > ${new Date(now.getTime() - DAY_MS)}::timestamptz`;
+  if ((today?.n ?? 0) >= INVITES_PER_DAY)
+    throw new HttpError(429, "rate_limited", `at most ${INVITES_PER_DAY} invites a day`);
+  const code = inviteCode();
+  const expires = new Date(now.getTime() + INVITE_DAYS * DAY_MS);
+  const [row] = await db2.sql`
+    insert into orbit.friend_invites (from_user_id, to_email, code, status, created_at, expires_at)
+    values (${me2}::uuid, ${email}, ${code}, 'pending', ${now}::timestamptz, ${expires}::timestamptz)
+    returning id, created_at`;
+  const link = `${ctx.env.appUrl}/friends/join/${code}`;
+  const mine = defaultMode(u2);
+  let status3 = "link";
+  let name = null;
+  if (email) {
+    const [other] = await db2.sql`
+      select id, email, full_name, first_name, school, grad_year, avatar_url, settings from orbit.users
+       where lower(email) = ${email} and deleted_at is null`;
+    if (other) {
+      const [lo, hi] = me2 < other.id ? [me2, other.id] : [other.id, me2];
+      const [existing] = await db2.sql`
+        select id, status from orbit.friendships where a = ${lo}::uuid and b = ${hi}::uuid`;
+      if (existing?.status === "active")
+        throw new HttpError(409, "already_friends", "you are already friends");
+      if (existing?.status === "blocked") throw new HttpError(409, "blocked", "that request cannot be sent");
+      const [f2] = existing ? await db2.sql`
+            update orbit.friendships set status = 'pending', requested_by = ${me2}::uuid, created_at = ${now}::timestamptz,
+                   accepted_at = null, ended_at = null, ended_by = null
+             where id = ${existing.id}::uuid returning id` : await db2.sql`
+            insert into orbit.friendships (a, b, status, requested_by, created_at)
+            values (${lo}::uuid, ${hi}::uuid, 'pending', ${me2}::uuid, ${now}::timestamptz) returning id`;
+      await db2.sql`
+        insert into orbit.friend_share_settings (friendship_id, owner_user_id, mode, company_domains)
+        values (${f2.id}::uuid, ${me2}::uuid, ${mine.mode}, ${mine.domains}::text[])
+        on conflict (friendship_id, owner_user_id) do update set mode = excluded.mode,
+          company_domains = excluded.company_domains, updated_at = now()`;
+      status3 = "requested";
+      name = nameOf(other);
+    } else {
+      const mailer = ctx.services().mailer;
+      if (mailer?.configured) {
+        const r = await mailer.send({
+          to: email,
+          subject: `${firstOf(u2)} wants to pool networks with you on Orbit`,
+          text: [
+            `${nameOf(u2)} invited you to be friends on Orbit.`,
+            "Friends pool their networks: you see who they know and how well, they see yours, and intros happen in one tap. Nothing else crosses: not your messages, notes or contact details.",
+            `Open this link to sign in and accept: ${link}`,
+            `It stops working in ${INVITE_DAYS} days.`
+          ].join("\n\n")
+        });
+        if (r.ok) status3 = "sent";
+      }
+    }
+  }
+  await logAudit(ctx, "friends.invite", "friend_invites", row.id, { status: status3, byEmail: !!email });
+  const out = {
+    code,
+    link,
+    status: status3,
+    invite: {
+      id: row.id,
+      direction: "out",
+      email,
+      name,
+      status: "pending",
+      createdAt: iso(row.created_at)
+    }
+  };
+  return json(200, out);
+}
+async function pendingFor(db2, me2, b) {
+  const friendshipId = optUuid(b, "friendshipId");
+  if (friendshipId) {
+    const [f3] = await db2.sql`
+      select id, a, b, status, requested_by, created_at, accepted_at from orbit.friendships
+       where id = ${friendshipId}::uuid and (a = ${me2}::uuid or b = ${me2}::uuid)`;
+    if (f3?.status !== "pending") throw new HttpError(404, "not_found", "no such request");
+    if (f3.requested_by === me2) throw badRequest("that is your own request");
+    return { friendshipId: f3.id, fromUserId: f3.a === me2 ? f3.b : f3.a };
+  }
+  const code = typeof b.code === "string" ? b.code.trim() : "";
+  if (!code) throw badRequest("code or friendshipId is required");
+  const [inv] = await db2.sql`
+    select id, from_user_id, to_email, status, expires_at from orbit.friend_invites where code = ${code}`;
+  if (inv?.status !== "pending" || new Date(inv.expires_at).getTime() < Date.now())
+    throw new HttpError(404, "not_found", "no such request, or it has expired");
+  if (inv.from_user_id === me2) throw badRequest("that is your own invite");
+  const [u2] = await db2.sql`select email from orbit.users where id = ${me2}::uuid`;
+  if (inv.to_email && u2 && normalizeEmail(u2.email) !== inv.to_email)
+    throw new HttpError(403, "forbidden", "that invite was sent to a different address");
+  const [lo, hi] = me2 < inv.from_user_id ? [me2, inv.from_user_id] : [inv.from_user_id, me2];
+  const [f2] = await db2.sql`
+    select id, status from orbit.friendships where a = ${lo}::uuid and b = ${hi}::uuid`;
+  return {
+    friendshipId: f2?.status === "pending" ? f2.id : void 0,
+    inviteId: inv.id,
+    fromUserId: inv.from_user_id
+  };
+}
+async function accept(ctx) {
+  const b = await body(ctx);
+  const db2 = ctx.db;
+  const me2 = ctx.userId;
+  const now = ctx.now();
+  const mode2 = modeOf2(b);
+  const domains = domainsOf(b);
+  const p = await pendingFor(db2, me2, b);
+  const inviter = await userLite(db2, p.fromUserId);
+  const theirs = defaultMode(inviter);
+  const [lo, hi] = me2 < p.fromUserId ? [me2, p.fromUserId] : [p.fromUserId, me2];
+  const friendshipId = await db2.begin(async (tx) => {
+    let id = p.friendshipId;
+    if (id)
+      await tx.sql`update orbit.friendships set status = 'active', accepted_at = ${now}::timestamptz where id = ${id}::uuid`;
+    else {
+      const [existing] = await tx.sql`
+        select id, status from orbit.friendships where a = ${lo}::uuid and b = ${hi}::uuid`;
+      if (existing?.status === "active")
+        throw new HttpError(409, "already_friends", "you are already friends");
+      if (existing?.status === "blocked")
+        throw new HttpError(409, "blocked", "that request cannot be accepted");
+      const [f3] = existing ? await tx.sql`
+            update orbit.friendships set status = 'active', requested_by = ${p.fromUserId}::uuid,
+                   accepted_at = ${now}::timestamptz, ended_at = null, ended_by = null
+             where id = ${existing.id}::uuid returning id` : await tx.sql`
+            insert into orbit.friendships (a, b, status, requested_by, created_at, accepted_at)
+            values (${lo}::uuid, ${hi}::uuid, 'active', ${p.fromUserId}::uuid, ${now}::timestamptz, ${now}::timestamptz)
+            returning id`;
+      id = f3.id;
+    }
+    await tx.sql`
+      insert into orbit.friend_share_settings (friendship_id, owner_user_id, mode, company_domains)
+      values (${id}::uuid, ${p.fromUserId}::uuid, ${theirs.mode}, ${theirs.domains}::text[])
+      on conflict (friendship_id, owner_user_id) do nothing`;
+    await tx.sql`
+      insert into orbit.friend_share_settings (friendship_id, owner_user_id, mode, company_domains)
+      values (${id}::uuid, ${me2}::uuid, ${mode2}, ${domains}::text[])
+      on conflict (friendship_id, owner_user_id) do update set mode = excluded.mode,
+        company_domains = excluded.company_domains, updated_at = now()`;
+    if (p.inviteId)
+      await tx.sql`update orbit.friend_invites set status = 'accepted', answered_at = ${now}::timestamptz where id = ${p.inviteId}::uuid`;
+    return id;
+  });
+  await enqueueRefresh(ctx, [me2, p.fromUserId]);
+  await logAudit(ctx, "friends.accept", "friendships", friendshipId, { mode: mode2 });
+  const [f2] = await db2.sql`
+    select id, a, b, status, requested_by, created_at, accepted_at from orbit.friendships where id = ${friendshipId}::uuid`;
+  const out = { friend: await friendView(db2, me2, f2, await targetNames(db2, me2)) };
+  return json(200, out);
+}
+async function decline(ctx) {
+  const b = await body(ctx);
+  const db2 = ctx.db;
+  const me2 = ctx.userId;
+  const now = ctx.now();
+  const p = await pendingFor(db2, me2, b);
+  await db2.begin(async (tx) => {
+    if (p.friendshipId) await tx.sql`delete from orbit.friendships where id = ${p.friendshipId}::uuid`;
+    if (p.inviteId)
+      await tx.sql`update orbit.friend_invites set status = 'declined', answered_at = ${now}::timestamptz where id = ${p.inviteId}::uuid`;
+  });
+  await logAudit(ctx, "friends.decline", "friendships", p.friendshipId ?? p.inviteId ?? "", {});
+  return json(200, { ok: true });
+}
+async function end(ctx) {
+  const b = await body(ctx);
+  const db2 = ctx.db;
+  const me2 = ctx.userId;
+  const now = ctx.now();
+  const friendshipId = uuid(b, "friendshipId");
+  const rows = await db2.begin(async (tx) => {
+    const r = await tx.sql`
+      update orbit.friendships set status = 'ended', ended_at = ${now}::timestamptz, ended_by = ${me2}::uuid
+       where id = ${friendshipId}::uuid and (a = ${me2}::uuid or b = ${me2}::uuid) and status in ('active', 'pending')
+       returning id`;
+    if (r.length)
+      await tx.sql`
+        update orbit.friend_intro_asks set status = 'expired', answered_at = ${now}::timestamptz
+         where friendship_id = ${friendshipId}::uuid and status = 'asked'`;
+    return r;
+  });
+  if (!rows.length) throw new HttpError(404, "not_found", "no such friend");
+  await logAudit(ctx, "friends.end", "friendships", friendshipId, {});
+  return json(200, { ok: true });
+}
+async function ownRows(db2, me2) {
+  return db2.sql`
+    select owner_user_id, person_id, display_name, title, company, company_domain, linkedin_member_id,
+           linkedin_slug, email_hash, school, is_alumni, closeness::int as closeness, updated_at
+      from orbit.friend_shares where owner_user_id = ${me2}::uuid order by display_name`;
+}
+async function settings(ctx) {
+  const b = await body(ctx);
+  const db2 = ctx.db;
+  const me2 = ctx.userId;
+  const mode2 = modeOf2(b);
+  const domains = domainsOf(b);
+  const friendshipId = optUuid(b, "friendshipId");
+  if (friendshipId) {
+    const r = await db2.sql`
+      update orbit.friend_share_settings set mode = ${mode2}, company_domains = ${domains}::text[], updated_at = now()
+       where friendship_id = ${friendshipId}::uuid and owner_user_id = ${me2}::uuid
+         and exists (select 1 from orbit.friendships f where f.id = ${friendshipId}::uuid and f.status = 'active'
+                       and (f.a = ${me2}::uuid or f.b = ${me2}::uuid))
+       returning friendship_id as id`;
+    if (!r.length) throw new HttpError(404, "not_found", "no such friend");
+  } else {
+    await db2.sql`
+      update orbit.friend_share_settings set mode = ${mode2}, company_domains = ${domains}::text[], updated_at = now()
+       where owner_user_id = ${me2}::uuid`;
+    await db2.sql`
+      update orbit.users set settings = settings || jsonb_build_object('friend_share_mode', ${mode2}::text,
+                                                                        'friend_share_domains', ${JSON.stringify(domains)}::jsonb)
+       where id = ${me2}::uuid`;
+  }
+  await enqueueRefresh(ctx, [me2]);
+  await logAudit(ctx, "friends.settings", "friend_share_settings", friendshipId ?? me2, { mode: mode2, domains });
+  const out = {
+    mode: mode2,
+    companyDomains: domains,
+    shares: underMode(await ownRows(db2, me2), mode2, domains).length
+  };
+  return json(200, out);
+}
+async function preview(ctx) {
+  const db2 = ctx.db;
+  const me2 = ctx.userId;
+  const u2 = await userLite(db2, me2);
+  const mine = defaultMode(u2);
+  const rows = underMode(await ownRows(db2, me2), mine.mode, mine.domains);
+  const out = {
+    mode: mine.mode,
+    companyDomains: mine.domains,
+    shares: rows.map(publicShare),
+    total: rows.length
+  };
+  return json(200, out);
+}
+async function friendFor(db2, me2, friendUserId) {
+  const [v] = await db2.sql`select orbit.friend_visible(${me2}::uuid, ${friendUserId}::uuid) as v`;
+  if (!v?.v) throw forbidden();
+  const f2 = (await sharingFriends(db2, me2)).find((x) => x.userId === friendUserId);
+  if (!f2) throw forbidden();
+  return f2;
+}
+async function shares(ctx, friendUserId, b = {}) {
+  const db2 = ctx.db;
+  const me2 = ctx.userId;
+  const company = (ctx.url.searchParams.get("company") ?? (typeof b.company === "string" ? b.company : "")).trim().toLowerCase();
+  const cursor = ctx.url.searchParams.get("cursor") ?? (typeof b.cursor === "string" ? b.cursor : null);
+  const offset = cursor && /^c\d+$/.test(cursor) ? Number(cursor.slice(1)) : 0;
+  const friend = await friendFor(db2, me2, friendUserId);
+  const all = (await visibleShares(db2, friend)).filter(
+    (s) => !company || s.company?.toLowerCase() === company || s.company_domain?.toLowerCase() === company
+  );
+  const page2 = all.slice(offset, offset + SHARES_PAGE);
+  const out = {
+    friendUserId,
+    shares: page2.map(publicShare),
+    total: all.length,
+    nextCursor: offset + SHARES_PAGE < all.length ? `c${offset + SHARES_PAGE}` : null
+  };
+  return json(200, out);
+}
+async function sharesFlat(ctx) {
+  const b = await body(ctx);
+  return shares(ctx, uuid(b, "friendUserId"), b);
+}
+async function askView(db2, r) {
+  const [asker, friend] = await Promise.all([userLite(db2, r.asker_user_id), userLite(db2, r.friend_user_id)]);
+  const [t] = await db2.sql`
+    select p.display_name, p.org_raw, o.name as org_name from orbit.people p
+      left join orbit.organizations o on o.id = p.org_id where p.id = ${r.target_person_id}::uuid`;
+  return {
+    id: r.id,
+    friendshipId: r.friendship_id,
+    askerUserId: r.asker_user_id,
+    askerName: nameOf(asker),
+    friendUserId: r.friend_user_id,
+    friendName: nameOf(friend),
+    targetPersonId: r.target_person_id,
+    targetName: t?.display_name ?? "Someone",
+    targetCompany: t?.org_name ?? t?.org_raw ?? null,
+    askerPersonId: r.asker_person_id,
+    note: r.note,
+    status: r.status,
+    createdAt: iso(r.created_at),
+    answeredAt: iso(r.answered_at),
+    forwardedDraftId: r.forwarded_message_id
+  };
+}
+var ASK_COLUMNS = "id, friendship_id, asker_user_id, friend_user_id, target_person_id, asker_person_id, note, status, created_at, answered_at, forwarded_message_id";
+async function listAsks(ctx) {
+  const db2 = ctx.db;
+  const me2 = ctx.userId;
+  await db2.sql`select orbit.expire_friend_asks()`;
+  const rows = await db2.query(
+    `select ${ASK_COLUMNS} from orbit.friend_intro_asks where asker_user_id = $1 or friend_user_id = $1
+      order by created_at desc limit 200`,
+    [me2]
+  );
+  const asked = [];
+  const received = [];
+  for (const r of rows) (r.asker_user_id === me2 ? asked : received).push(await askView(db2, r));
+  const out = { asked, received };
+  return json(200, out);
+}
+async function ask(ctx) {
+  const b = await body(ctx);
+  if (!("friendUserId" in b)) return listAsks(ctx);
+  const db2 = ctx.db;
+  const me2 = ctx.userId;
+  const now = ctx.now();
+  const friendUserId = uuid(b, "friendUserId");
+  const targetPersonId = uuid(b, "targetPersonId");
+  const note2 = text2(b, "note", 1200);
+  const friend = await friendFor(db2, me2, friendUserId);
+  const target = (await visibleShares(db2, friend)).find((s) => s.person_id === targetPersonId);
+  if (!target) throw new HttpError(404, "not_found", "that person is not one your friend shares");
+  const [today] = await db2.sql`
+    select count(*)::int as n from orbit.friend_intro_asks
+     where friendship_id = ${friend.friendshipId}::uuid and asker_user_id = ${me2}::uuid
+       and created_at > ${new Date(now.getTime() - DAY_MS)}::timestamptz`;
+  if ((today?.n ?? 0) >= ASKS_PER_DAY_PER_FRIEND)
+    throw new HttpError(429, "rate_limited", `at most ${ASKS_PER_DAY_PER_FRIEND} asks a day per friend`);
+  const [open] = await db2.sql`
+    select id from orbit.friend_intro_asks
+     where friendship_id = ${friend.friendshipId}::uuid and asker_user_id = ${me2}::uuid
+       and target_person_id = ${targetPersonId}::uuid and status = 'asked'`;
+  if (open)
+    throw new HttpError(409, "already_asked", "you already asked for this intro; it is waiting on them");
+  const match = (await matchShares(db2, me2, [target])).get(target.person_id) ?? null;
+  const [row] = await db2.query(
+    `insert into orbit.friend_intro_asks (friendship_id, asker_user_id, friend_user_id, target_person_id, asker_person_id,
+                                          note, status, created_at)
+     values ($1, $2, $3, $4, $5, $6, 'asked', $7) returning ${ASK_COLUMNS}`,
+    [friend.friendshipId, me2, friendUserId, targetPersonId, match, note2, now]
+  );
+  await logAudit(ctx, "friends.ask", "friend_intro_asks", row.id, { friendUserId });
+  await settleCard(db2, me2, `friend_ask:${friendUserId}:${targetPersonId}`, "done", now);
+  const out = { ask: await askView(db2, row) };
+  return json(200, out);
+}
+async function respond(ctx, askId, b) {
+  const db2 = ctx.db;
+  const me2 = ctx.userId;
+  const now = ctx.now();
+  const action = b.action;
+  if (action !== "forward" && action !== "decline") throw badRequest("action is forward or decline");
+  const [r] = await db2.query(
+    `select ${ASK_COLUMNS} from orbit.friend_intro_asks where id = $1 and friend_user_id = $2`,
+    [askId, me2]
+  );
+  if (!r) throw new HttpError(404, "not_found", "no such ask");
+  if (r.status !== "asked") throw new HttpError(409, "already_answered", "that ask was answered");
+  if (action === "decline") {
+    await db2.sql`
+      update orbit.friend_intro_asks set status = 'declined', answered_at = ${now}::timestamptz where id = ${askId}::uuid`;
+    await logAudit(ctx, "friends.ask.decline", "friend_intro_asks", askId, {});
+    const out2 = {
+      ask: await askView(db2, { ...r, status: "declined", answered_at: now }),
+      draft: null
+    };
+    return json(200, out2);
+  }
+  const [target] = await db2.sql`
+    select id, display_name, first_name, primary_email, do_not_contact, hidden_at, private, deleted_at
+      from orbit.people where id = ${r.target_person_id}::uuid and user_id = ${me2}::uuid`;
+  if (!target || target.deleted_at || target.hidden_at || target.private)
+    throw new HttpError(409, "not_shared", "that person is no longer one you share");
+  if (target.do_not_contact) throw new HttpError(409, "do_not_contact", "they asked not to be contacted");
+  if (!target.primary_email)
+    throw new HttpError(
+      409,
+      "no_email",
+      `you have no email address for ${target.display_name}, so there is nothing to forward with`
+    );
+  const [asker, meRow] = await Promise.all([userLite(db2, r.asker_user_id), userLite(db2, me2)]);
+  const targetFirst = target.first_name?.trim() || target.display_name.split(/\s+/)[0];
+  const input = {
+    targetFirst,
+    askerName: nameOf(asker),
+    askerFirst: firstOf(asker),
+    note: r.note,
+    meFirst: firstOf(meRow)
+  };
+  const customBody = typeof b.body === "string" && b.body.trim() ? b.body.trim() : null;
+  const draftId = await db2.begin(async (tx) => {
+    const [d] = await tx.sql`
+      insert into orbit.drafts (user_id, person_id, channel, kind, subject, body, status, via, generated_by, validator)
+      values (${me2}::uuid, ${target.id}::uuid, 'gmail', 'forward_intro', ${forwardSubject(input)},
+              ${customBody ?? forwardBody(input)}, 'draft',
+              ${{ friendAskId: askId, cc: asker.email, ccName: nameOf(asker), askerUserId: r.asker_user_id }}::jsonb,
+              'template', ${{ ok: true, issues: [], words: 0, grade: 5 }}::jsonb)
+      returning id`;
+    await tx.sql`
+      update orbit.friend_intro_asks set status = 'forwarded', answered_at = ${now}::timestamptz,
+             forwarded_message_id = ${d.id}::uuid
+       where id = ${askId}::uuid`;
+    return d.id;
+  });
+  await logAudit(ctx, "friends.ask.forward", "friend_intro_asks", askId, { draftId });
+  const [draft2] = await db2.sql`select * from orbit.drafts where id = ${draftId}::uuid`;
+  const out = {
+    ask: await askView(db2, { ...r, status: "forwarded", answered_at: now, forwarded_message_id: draftId }),
+    draft: toServerDraft(draft2)
+  };
+  return json(200, out);
+}
+async function respondFlat(ctx) {
+  const b = await body(ctx);
+  return respond(ctx, uuid(b, "id"), b);
+}
+function friendPatternRoute(path) {
+  const shareM = /^\/friends\/shares\/([0-9a-f-]{36})$/i.exec(path);
+  if (shareM)
+    return {
+      method: "GET|POST",
+      auth: true,
+      run: async (ctx) => shares(ctx, shareM[1].toLowerCase(), ctx.req.method === "POST" ? await body(ctx, true) : {})
+    };
+  const respondM = /^\/friends\/asks\/([0-9a-f-]{36})\/respond$/i.exec(path);
+  if (respondM)
+    return {
+      method: "POST",
+      auth: true,
+      run: async (ctx) => respond(ctx, respondM[1].toLowerCase(), await body(ctx))
+    };
+  return void 0;
+}
+var friendRoutes = {
+  "/friends": { method: "GET|POST", auth: true, run: list2 },
+  "/friends/invite": { method: "POST", auth: true, run: invite },
+  "/friends/accept": { method: "POST", auth: true, run: accept },
+  "/friends/decline": { method: "POST", auth: true, run: decline },
+  "/friends/end": { method: "POST", auth: true, run: end },
+  "/friends/settings": { method: "POST", auth: true, run: settings },
+  "/friends/preview": { method: "GET|POST", auth: true, run: preview },
+  "/friends/shares": { method: "POST", auth: true, run: sharesFlat },
+  "/friends/asks": {
+    method: "GET|POST",
+    auth: true,
+    run: (ctx) => ctx.req.method === "GET" ? listAsks(ctx) : ask(ctx)
+  },
+  "/friends/asks/respond": { method: "POST", auth: true, run: respondFlat }
+};
+
+// packages/core/src/types.ts
+var GOAL_KINDS = [
+  "recruiting",
+  "fundraising",
+  "sales",
+  "hiring",
+  "advice",
+  "cofounder",
+  "community",
+  "collaboration"
+];
+
+// supabase/functions/_shared/goals/infer.ts
+import { z as z5 } from "npm:zod@3.25.76/v4";
+var GOAL_INFER_SYSTEM = [
+  "You extract networking goals from a conversation with a student or early-career professional.",
+  "Return only goals the user states or clearly implies for themselves. Do not invent targets.",
+  "kind is one of recruiting, fundraising, sales, hiring, advice, cofounder, community, collaboration.",
+  'If nothing new is stated, return {"goals": []}.'
+].join("\n");
+var GOAL_TITLE_MAX = 60;
+var list3 = z5.array(z5.string());
+var goalInferSchema = z5.object({
+  goals: z5.array(
+    z5.object({
+      kind: z5.enum(GOAL_KINDS),
+      title: z5.string(),
+      targets: z5.object({ organizations: list3, roles: list3, geographies: list3, people: list3 }),
+      criteria: z5.object({
+        sector: z5.string().nullable(),
+        stage: z5.string().nullable(),
+        seniority: list3.nullable(),
+        skills: list3.nullable(),
+        keywords: list3.nullable()
+      }),
+      success_metric: z5.string().nullable(),
+      due_at: z5.string().nullable(),
+      is_update_of: z5.string().nullable(),
+      quote: z5.string()
+    })
+  )
+});
+var squash2 = (s) => s.toLowerCase().replace(/[’‘]/g, "'").replace(/[^\p{L}\p{N}']+/gu, " ").trim();
+var clean = (xs, max = 25) => (xs ?? []).map((x) => x.trim().slice(0, 200)).filter(Boolean).slice(0, max);
+async function inferGoals(claude, userId, turns2, existing = []) {
+  const said = squash2(
+    turns2.filter((t) => t.role === "user").map((t) => t.text).join("\n")
+  );
+  if (!said) return [];
+  const r = await claude.structured({
+    task: "goal_infer",
+    system: GOAL_INFER_SYSTEM,
+    user: `<existing_goals>${JSON.stringify(
+      existing.map((g) => ({ id: g.id, kind: g.kind, title: g.title, targets: g.targets }))
+    )}</existing_goals>
+<conversation>${turns2.slice(-6).map((t) => `${t.role}: ${t.text.replace(/<\/?conversation>/g, "")}`).join("\n")}</conversation>`,
+    schema: goalInferSchema,
+    userId
+  });
+  if (!r.ok) return [];
+  const ids = new Set(existing.map((g) => g.id));
+  return r.data.goals.filter((g) => g.quote.trim() && said.includes(squash2(g.quote))).filter((g) => g.title.trim()).map((g) => {
+    const criteria = {};
+    if (g.criteria.sector?.trim()) criteria.sector = g.criteria.sector.trim().slice(0, 200);
+    if (g.criteria.stage?.trim()) criteria.stage = g.criteria.stage.trim().slice(0, 200);
+    for (const k of ["seniority", "skills", "keywords"]) {
+      const v = clean(g.criteria[k]);
+      if (v.length) criteria[k] = v;
+    }
+    return {
+      kind: g.kind,
+      title: g.title.trim().slice(0, GOAL_TITLE_MAX),
+      targets: {
+        organizations: clean(g.targets.organizations),
+        roles: clean(g.targets.roles),
+        geographies: clean(g.targets.geographies),
+        people: clean(g.targets.people)
+      },
+      criteria,
+      successMetric: g.success_metric?.trim().slice(0, 500) || null,
+      dueAt: g.due_at && /^\d{4}-\d{2}-\d{2}$/.test(g.due_at) ? g.due_at : null,
+      isUpdateOf: g.is_update_of && ids.has(g.is_update_of) ? g.is_update_of : null,
+      quote: g.quote.trim()
+    };
+  });
+}
+
+// supabase/functions/orbit-api/routes/goals.ts
+var MAX_ACTIVE_GOALS = 5;
+var strList = (v, max = 25) => Array.isArray(v) ? v.filter((x) => typeof x === "string" && !!x.trim()).map((x) => x.trim().slice(0, 200)).slice(0, max) : [];
+async function goalsList(ctx) {
+  const rows = await ctx.db.sql`
+    select * from orbit.goals where user_id = ${ctx.userId}::uuid and deleted_at is null
+     order by (status = 'active') desc, priority, created_at`;
+  return json(200, { goals: rows.map(goalFrom) });
+}
+async function goalsUpsert(ctx) {
+  const b = await body(ctx);
+  const g = b.goal;
+  if (!g || typeof g !== "object") throw badRequest("goal is required");
+  if (!GOAL_KINDS.includes(g.kind)) throw badRequest("goal.kind is not a goal kind");
+  if (typeof g.title !== "string" || !g.title.trim() || g.title.length > 200)
+    throw badRequest("goal.title is required");
+  const id = optUuid(g, "id");
+  const status3 = g.status ?? "active";
+  if (!["active", "paused", "done"].includes(status3)) throw badRequest("goal.status is not valid");
+  const priority = g.priority ?? 2;
+  if (![1, 2, 3].includes(priority)) throw badRequest("goal.priority is 1, 2 or 3");
+  const autonomy2 = g.autonomyLevel ?? null;
+  if (autonomy2 !== null && ![0, 1, 2].includes(autonomy2)) throw badRequest("goal.autonomyLevel is 0, 1 or 2");
+  if (g.dueAt !== void 0 && g.dueAt !== null && !/^\d{4}-\d{2}-\d{2}$/.test(String(g.dueAt)))
+    throw badRequest("goal.dueAt is YYYY-MM-DD");
+  const t = g.targets ?? {};
+  const targets = {
+    organizations: strList(t.organizations),
+    roles: strList(t.roles),
+    geographies: strList(t.geographies),
+    people: strList(t.people, 200)
+  };
+  const criteria = g.criteria && typeof g.criteria === "object" && !Array.isArray(g.criteria) ? g.criteria : {};
+  const userId = ctx.userId;
+  const row = await ctx.db.begin(async (tx) => {
+    await tx.sql`select pg_advisory_xact_lock(hashtextextended(${`orbit.goals:${userId}`}, 0))`;
+    if (status3 === "active") {
+      const [n] = await tx.sql`
+        select count(*)::int as n from orbit.goals
+         where user_id = ${userId}::uuid and status = 'active' and deleted_at is null
+           and (${id ?? null}::uuid is null or id <> ${id ?? null}::uuid)`;
+      if ((n?.n ?? 0) >= MAX_ACTIVE_GOALS)
+        throw new HttpError(
+          409,
+          "too_many_goals",
+          `at most ${MAX_ACTIVE_GOALS} active goals; pause or finish one first`
+        );
+    }
+    if (id) {
+      const [r2] = await tx.sql`
+        update orbit.goals set kind = ${g.kind}, title = ${g.title.trim()}, description = ${g.description ?? null},
+               targets = ${targets}::jsonb, criteria = ${criteria}::jsonb, success_metric = ${g.successMetric ?? null},
+               priority = ${priority}::smallint, status = ${status3}, autonomy_level = ${autonomy2}::smallint,
+               due_at = ${g.dueAt ?? null}::date, evidence = coalesce(${g.evidence ?? null}, evidence)
+         where id = ${id}::uuid and user_id = ${userId}::uuid and deleted_at is null
+        returning *`;
+      if (!r2) throw new HttpError(404, "not_found", "no such goal");
+      return r2;
+    }
+    const source = g.source && ["user", "onboarding", "inferred"].includes(g.source) ? g.source : "user";
+    const [r] = await tx.sql`
+      insert into orbit.goals (user_id, kind, title, description, targets, criteria, success_metric, priority, status,
+                               autonomy_level, due_at, source, evidence)
+      values (${userId}::uuid, ${g.kind}, ${g.title.trim()}, ${g.description ?? null}, ${targets}::jsonb,
+              ${criteria}::jsonb, ${g.successMetric ?? null}, ${priority}::smallint, ${status3},
+              ${autonomy2}::smallint, ${g.dueAt ?? null}::date, ${source}, ${g.evidence ?? null})
+      returning *`;
+    return r;
+  });
+  await ctx.db.sql`
+    insert into orbit.audit_log (user_id, actor, action, target_table, target_id, details)
+    values (${userId}::uuid, 'user', ${id ? "goal.update" : "goal.create"}, 'goals', ${row.id},
+            ${{ kind: g.kind, status: status3 }}::jsonb)`;
+  return json(200, { goal: goalFrom(row) });
+}
+async function goalsArchive(ctx) {
+  const id = uuid(await body(ctx), "id");
+  const [r] = await ctx.db.sql`
+    update orbit.goals set deleted_at = ${ctx.now()}::timestamptz, status = 'done'
+     where id = ${id}::uuid and user_id = ${ctx.userId}::uuid and deleted_at is null
+    returning *`;
+  if (!r) throw new HttpError(404, "not_found", "no such goal");
+  return json(200, { goal: goalFrom(r) });
+}
+async function goalsInfer(ctx) {
+  const t = turns(await body(ctx));
+  const s = ctx.services();
+  if (!s.claude.configured) {
+    const out2 = { goals: [], unconfigured: true };
+    return json(200, out2);
+  }
+  const existing = await ctx.db.sql`
+    select id, kind, title, targets from orbit.goals
+     where user_id = ${ctx.userId}::uuid and deleted_at is null and status = 'active'
+     order by priority, created_at`;
+  const out = { goals: await inferGoals(s.claude, ctx.userId, t, existing) };
+  return json(200, out);
+}
+var goalRoutes = {
+  "/goals/list": { method: "POST", auth: true, run: goalsList },
+  "/goals/upsert": { method: "POST", auth: true, run: goalsUpsert },
+  "/goals/archive": { method: "POST", auth: true, run: goalsArchive },
+  "/goals/infer": { method: "POST", auth: true, run: goalsInfer }
+};
+
+// supabase/functions/orbit-api/tables.ts
+var PULL_TABLES = [
+  {
+    table: "organizations",
+    key: "id",
+    cursor: "updated_at",
+    // an Organization under the browser's names: without nameNormalized a company's wedge key read "n:undefined",
+    // so picking a company never turned the map to it
+    map: (r) => ({ ...r, nameNormalized: r.nameNorm })
+  },
+  {
+    table: "people",
+    key: "id",
+    cursor: "updated_at",
+    deletedWhen: "t.deleted_at is not null or t.merged_into is not null",
+    // a Person: the columns under the names the browser's screens read
+    map: (r) => ({
+      ...r,
+      nameNormalized: r.nameNorm,
+      currentTitle: r.title,
+      currentOrganizationId: r.orgId,
+      currentOrganizationRaw: r.orgRaw
+    })
+  },
+  { table: "person_identities", key: "id", cursor: "created_at" },
+  {
+    table: "affiliations",
+    key: "id",
+    cursor: "updated_at",
+    // an Affiliation: the company as the browser names it, so a role shows where it was and the company's logo
+    map: (r) => ({ ...r, nameRaw: r.orgRaw ?? "", organizationId: r.orgId })
+  },
+  {
+    table: "merge_suggestions",
+    key: "id",
+    cursor: "updated_at",
+    // a MergeSuggestion: the two people and the status under the browser's names (open is pending, merged accepted)
+    map: (r) => ({
+      ...r,
+      personAId: r.personA,
+      personBId: r.personB,
+      status: r.status === "open" ? "pending" : r.status === "merged" ? "accepted" : r.status
+    })
+  },
+  { table: "goals", key: "id", cursor: "updated_at", deletedWhen: "t.deleted_at is not null" },
+  // the Dexie cache keeps the last 180 days of networking threads only (§11.1)
+  {
+    table: "threads",
+    key: "id",
+    cursor: "updated_at",
+    filter: "t.is_networking and coalesce(t.last_at, t.created_at) > now() - interval '180 days'",
+    // LinkedIn threads carry their channel, as the browser's own LinkedIn reader writes them
+    map: (r) => ({
+      ...r,
+      externalThreadId: r.externalId,
+      firstMessageAt: r.firstAt,
+      lastMessageAt: r.lastAt,
+      ...r.provider === "linkedin" ? { channel: "linkedin" } : {}
+    })
+  },
+  {
+    table: "messages",
+    key: "id",
+    cursor: "updated_at",
+    filter: "t.sent_at > now() - interval '180 days' and exists (select 1 from orbit.threads th where th.id = t.thread_id and th.is_networking)",
+    omit: ["embedding"],
+    map: (r) => ({
+      ...r,
+      direction: r.direction === "out" ? "outbound" : "inbound",
+      externalMessageId: r.externalId,
+      fromEmail: r.fromAddr ?? "",
+      toEmails: r.toAddrs ?? [],
+      ccEmails: r.ccAddrs ?? [],
+      bodyText: r.bodyText ?? "",
+      ...r.provider === "linkedin" ? { channel: "linkedin" } : {}
+    })
+  },
+  // a CalendarEvent: its Google id under the browser's name
+  {
+    table: "calendar_events",
+    key: "id",
+    cursor: "updated_at",
+    map: (r) => ({ ...r, externalEventId: r.externalId })
+  },
+  {
+    table: "ties",
+    key: "id",
+    cursor: "updated_at",
+    // an Edge: type = kind, weight = w · c
+    map: (r) => ({
+      ...r,
+      personAId: r.aPersonId,
+      personBId: r.bPersonId,
+      type: r.kind,
+      rawWeight: r.weight,
+      weight: Number(r.weight) * Number(r.confidence)
+    })
+  },
+  { table: "tie_scores", key: "person_id", cursor: "updated_at" },
+  { table: "tie_labels", key: "person_id", cursor: "updated_at" },
+  {
+    table: "chats",
+    key: "id",
+    cursor: "updated_at",
+    // a CoffeeChat: the stored camelCase fields spread under the columns
+    map: ({ data, ...rest }) => ({
+      ...data ?? {},
+      ...rest,
+      ...rest.orgId ? { organizationId: rest.orgId } : {}
+    })
+  },
+  { table: "stage_events", key: "id", cursor: "updated_at" },
+  {
+    table: "drafts",
+    key: "id",
+    cursor: "updated_at",
+    // the browser's OutboundMessage names: a reply carries its Gmail thread, so it goes out in it, under its subject
+    map: (r) => ({
+      ...r,
+      ...r.threadExternalId ? { externalThreadId: r.threadExternalId } : {},
+      ...r.inReplyTo ? { inReplyToMessageId: r.inReplyTo } : {}
+    })
+  },
+  { table: "notes", key: "id", cursor: "updated_at" },
+  { table: "uploads", key: "id", cursor: "updated_at" },
+  { table: "facts", key: "id", cursor: "updated_at", deletedWhen: "t.deleted_at is not null" },
+  { table: "dossiers", key: "id", cursor: "updated_at" },
+  { table: "recommendations", key: "id", cursor: "updated_at" },
+  { table: "intro_requests", key: "id", cursor: "updated_at" },
+  // plan 29 §B2.3: the cards and notices the reply funnel raises, in the browser's own shapes
+  {
+    table: "suggestions",
+    key: "id",
+    cursor: "updated_at",
+    map: (r) => ({ ...r, outboundMessageId: r.draftId ?? void 0, carriedOver: r.carriedOver ?? 0 })
+  },
+  { table: "notifications", key: "id", cursor: "updated_at" }
+];
+var PULL_BY_NAME = new Map(PULL_TABLES.map((t) => [t.table, t]));
+var camel = (s) => s.replace(/_([a-z0-9])/g, (_, c) => c.toUpperCase());
+function toCamel(row) {
+  const out = {};
+  for (const [k, v] of Object.entries(row)) out[camel(k)] = v;
+  return out;
+}
+function shapeRow(t, row) {
+  const r = { ...row };
+  for (const c2 of t.omit ?? []) delete r[c2];
+  const c = toCamel(r);
+  return t.map ? t.map(c) : c;
+}
+
+// supabase/functions/orbit-api/routes/history.ts
+var HISTORY_THREADS = 40;
+var HISTORY_MESSAGES = 400;
+var HISTORY_EVENTS = 40;
+async function history(ctx) {
+  const personId = uuid(await body(ctx), "personId");
+  const userId = ctx.userId;
+  const [p] = await ctx.db.sql`
+    select 1 from orbit.people where id = ${personId}::uuid and user_id = ${userId}::uuid and deleted_at is null`;
+  if (!p) throw new HttpError(404, "not_found", "no such person");
+  const threads = await ctx.db.query(
+    `select to_jsonb(t) as row from orbit.threads t
+      where t.user_id = $1::uuid and $2::uuid = any(t.participant_person_ids)
+      order by coalesce(t.last_at, t.created_at) desc limit $3`,
+    [userId, personId, HISTORY_THREADS]
+  );
+  const ids = threads.map((t) => String(t.row.id));
+  const [messages, events] = await Promise.all([
+    ids.length ? ctx.db.query(
+      `select to_jsonb(m) - 'embedding' as row from orbit.messages m
+            where m.user_id = $1::uuid and m.thread_id = any($2::uuid[])
+            order by m.sent_at desc limit $3`,
+      [userId, ids, HISTORY_MESSAGES]
+    ) : Promise.resolve([]),
+    ctx.db.query(
+      `select to_jsonb(e) as row from orbit.calendar_events e
+        where e.user_id = $1::uuid and $2::uuid = any(e.attendee_person_ids)
+        order by e.start_at desc limit $3`,
+      [userId, personId, HISTORY_EVENTS]
+    )
+  ]);
+  const shape2 = (table, rows) => rows.map((r) => shapeRow(PULL_BY_NAME.get(table), r.row));
+  return json(200, {
+    threads: shape2("threads", threads),
+    messages: shape2("messages", messages),
+    events: shape2("calendar_events", events)
+  });
+}
+var historyRoutes = {
+  "/people/history": { method: "POST", auth: true, run: history }
+};
+
+// supabase/functions/_shared/accountToken.ts
+async function accountToken(accountId, signingKey) {
+  const key = await crypto.subtle.importKey(
+    "raw",
+    new TextEncoder().encode(signingKey),
+    { name: "HMAC", hash: "SHA-256" },
+    false,
+    ["sign"]
+  );
+  const sig = new Uint8Array(
+    await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(`unipile-account:${accountId}`))
+  );
+  return btoa(String.fromCharCode(...sig)).replace(/=+$/, "").replace(/\+/g, "-").replace(/\//g, "_");
+}
+
+// supabase/functions/_shared/providers/unipileSync.ts
+var when = z.union([z.string(), z.number()]).nullish();
+var unipileMeSchema = z.looseObject({
+  provider_id: z.string().nullish(),
+  public_identifier: z.string().nullish(),
+  first_name: z.string().nullish(),
+  last_name: z.string().nullish()
+});
+var unipileRelationSchema = z.looseObject({
+  member_id: z.string().nullish(),
+  member_urn: z.string().nullish(),
+  public_identifier: z.string().nullish(),
+  public_profile_url: z.string().nullish(),
+  first_name: z.string().nullish(),
+  last_name: z.string().nullish(),
+  headline: z.string().nullish(),
+  profile_picture_url: z.string().nullish(),
+  created_at: when
+});
+var unipileChatSchema = z.looseObject({
+  id: z.string(),
+  type: z.union([z.number(), z.string()]).nullish(),
+  name: z.string().nullish(),
+  attendee_provider_id: z.string().nullish(),
+  timestamp: when,
+  content_type: z.string().nullish()
+});
+var unipileAttendeeSchema = z.looseObject({
+  id: z.string().nullish(),
+  provider_id: z.string().nullish(),
+  name: z.string().nullish(),
+  is_self: z.union([z.number(), z.boolean()]).nullish(),
+  profile_url: z.string().nullish(),
+  picture_url: z.string().nullish(),
+  specifics: z.looseObject({ occupation: z.string().nullish(), location: z.string().nullish() }).nullish()
+});
+var unipileMessageSchema = z.looseObject({
+  id: z.string(),
+  chat_id: z.string().nullish(),
+  sender_id: z.string().nullish(),
+  sender_attendee_id: z.string().nullish(),
+  text: z.string().nullish(),
+  timestamp: when,
+  is_sender: z.union([z.number(), z.boolean()]).nullish(),
+  is_event: z.union([z.number(), z.boolean()]).nullish(),
+  hidden: z.union([z.number(), z.boolean()]).nullish(),
+  deleted: z.union([z.number(), z.boolean()]).nullish()
+});
+var page = (item2) => z.looseObject({ items: z.array(item2).default([]), cursor: z.string().nullish() });
+var unipileSearchItemSchema2 = z.looseObject({
+  id: z.string().nullish(),
+  name: z.string().nullish(),
+  headline: z.string().nullish(),
+  location: z.string().nullish(),
+  public_profile_url: z.string().nullish(),
+  profile_url: z.string().nullish(),
+  profile_picture_url: z.string().nullish(),
+  network_distance: z.union([z.string(), z.number()]).nullish()
+});
+var RELATIONS_LIMIT = 50;
+var CHATS_LIMIT = 250;
+var MESSAGES_LIMIT = 100;
+function createUnipileSync(opts) {
+  const configured = !!opts.apiKey && !!opts.baseUrl;
+  const base = trimBase(opts.baseUrl ?? "");
+  const headers = () => ({ "X-API-KEY": opts.apiKey ?? "" });
+  const no = () => unconfigured2("unipile", "API key or base URL");
+  const get2 = (path, schema) => requestJson(opts, { provider: "unipile", url: `${base}${path}`, headers: headers(), schema });
+  return {
+    configured,
+    async me(accountId) {
+      if (!configured) return no();
+      return get2(`/api/v1/users/me${query({ account_id: accountId })}`, unipileMeSchema);
+    },
+    async relations(accountId, cursor) {
+      if (!configured) return no();
+      return get2(
+        `/api/v1/users/relations${query({ account_id: accountId, limit: RELATIONS_LIMIT, cursor: cursor ?? void 0 })}`,
+        page(unipileRelationSchema)
+      );
+    },
+    async chats(accountId, o) {
+      if (!configured) return no();
+      return get2(
+        `/api/v1/chats${query({ account_id: accountId, limit: CHATS_LIMIT, after: o.after, cursor: o.cursor ?? void 0 })}`,
+        page(unipileChatSchema)
+      );
+    },
+    async attendees(chatId) {
+      if (!configured) return no();
+      const r = await get2(
+        `/api/v1/chats/${encodeURIComponent(chatId)}/attendees`,
+        page(unipileAttendeeSchema)
+      );
+      return r.ok ? { ok: true, value: r.value.items } : r;
+    },
+    async messages(chatId) {
+      if (!configured) return no();
+      const r = await get2(
+        `/api/v1/chats/${encodeURIComponent(chatId)}/messages${query({ limit: MESSAGES_LIMIT })}`,
+        page(unipileMessageSchema)
+      );
+      return r.ok ? { ok: true, value: r.value.items } : r;
+    },
+    async hostedLink(b) {
+      if (!configured) return no();
+      return requestJson(opts, {
+        provider: "unipile",
+        url: `${base}/api/v1/hosted/accounts/link`,
+        method: "POST",
+        headers: headers(),
+        body: {
+          type: "create",
+          providers: ["LINKEDIN"],
+          api_url: base,
+          expiresOn: b.expiresOn,
+          name: b.name,
+          notify_url: b.notifyUrl,
+          success_redirect_url: b.successRedirectUrl,
+          ...b.failureRedirectUrl ? { failure_redirect_url: b.failureRedirectUrl } : {}
+        },
+        schema: z.looseObject({ url: z.string() })
+      });
+    },
+    async searchPeople(accountId, keywords, limit = 8) {
+      if (!configured) return no();
+      const r = await requestJson(opts, {
+        provider: "unipile",
+        url: `${base}/api/v1/linkedin/search${query({ account_id: accountId, limit })}`,
+        method: "POST",
+        headers: headers(),
+        body: { api: "classic", category: "people", keywords, network_distance: [1, 2, 3] },
+        schema: page(unipileSearchItemSchema2)
+      });
+      if (!r.ok) return r;
+      const degree = (d) => {
+        const m = /(\d)/.exec(String(d ?? ""));
+        return m ? Number(m[1]) : void 0;
+      };
+      return {
+        ok: true,
+        value: r.value.items.filter((p) => !!p.id && !!p.name?.trim()).map((p) => ({
+          memberId: p.id,
+          name: p.name.trim(),
+          headline: p.headline?.trim() || void 0,
+          location: p.location?.trim() || void 0,
+          profileUrl: p.public_profile_url || p.profile_url || void 0,
+          pictureUrl: p.profile_picture_url || void 0,
+          distance: degree(p.network_distance)
+        }))
+      };
+    }
+  };
+}
+
+// supabase/functions/orbit-api/routes/integrations.ts
+var queued = (q) => json(200, q);
+async function googleAccount(ctx) {
+  const [a] = await ctx.db.sql`
+    select status, scopes, sync_state from orbit.integration_accounts
+     where user_id = ${ctx.userId}::uuid and provider = 'google'`;
+  return a;
+}
+async function googleSync(ctx) {
+  const body2 = await readJson(ctx.req, { optional: true });
+  const mode2 = body2.mode ?? "incremental";
+  if (mode2 !== "backfill" && mode2 !== "incremental") throw badRequest("mode must be backfill or incremental");
+  const userId = ctx.userId;
+  const acct = await googleAccount(ctx);
+  if (!acct?.scopes.some((s) => s.endsWith("gmail.readonly")))
+    return queued({ queued: false, reason: "not_connected" });
+  if (acct.status !== "active") return queued({ queued: false, reason: acct.status });
+  const q = sqlQueue(ctx.db);
+  if (mode2 === "backfill") {
+    const phase = acct.sync_state?.gmail?.backfill;
+    if (phase?.phase && phase.phase !== "complete")
+      return queued({ queued: false, reason: "already_running" });
+    const id2 = await q.enqueue({
+      kind: "sync.gmail.backfill",
+      userId,
+      payload: phase?.phase === "complete" ? { phase: "recent", restart: true } : { phase: "recent" },
+      dedupeKey: `gmail-backfill:${userId}:manual:${slot(ctx.now())}`
+    });
+    return queued(id2 === null ? { queued: false, reason: "already_running" } : { queued: true });
+  }
+  const id = await q.enqueue({
+    kind: "sync.gmail.incremental",
+    userId,
+    payload: { reason: "manual" },
+    dedupeKey: `gmail-manual:${userId}:${slot(ctx.now())}`
+  });
+  if (acct.scopes.some((s) => /calendar\.(readonly|events)$/.test(s)))
+    await q.enqueue({
+      kind: "sync.calendar",
+      userId,
+      payload: { reason: "manual" },
+      dedupeKey: `calendar-manual:${userId}:${slot(ctx.now())}`
+    });
+  return queued(id === null ? { queued: false, reason: "already_running" } : { queued: true });
+}
+function unipileFor(ctx) {
+  return createUnipileSync({ fetch: ctx.fetch, apiKey: ctx.env.unipileKey, baseUrl: ctx.env.unipileBase });
+}
+var missingUnipile = (ctx) => [
+  ...ctx.env.unipileKey ? [] : ["UNIPILE_API_KEY"],
+  ...ctx.env.unipileBase ? [] : ["UNIPILE_BASE_URL"]
+];
+function functionsBase(ctx) {
+  if (ctx.env.functionsUrl) return ctx.env.functionsUrl.replace(/\/+$/, "");
+  const fromRedirect = ctx.env.googleRedirectUri?.match(/^(https?:\/\/[^/]+\/functions\/v1)\//)?.[1];
+  if (fromRedirect) return fromRedirect;
+  const href = `${ctx.url.origin}${ctx.url.pathname}`;
+  const i = href.indexOf("/orbit-api");
+  return i > 0 ? href.slice(0, i) : ctx.url.origin;
+}
+async function linkedinConnectStart(ctx) {
+  await readJson(ctx.req, { optional: true });
+  const missing = missingUnipile(ctx);
+  const secret = await resolveSecret(
+    (name) => name === "ORBIT_UNIPILE_WEBHOOK_SECRET" ? ctx.env.unipileWebhookSecret : void 0,
+    ctx.db,
+    "ORBIT_UNIPILE_WEBHOOK_SECRET",
+    "orbit_unipile_webhook_secret"
+  );
+  if (!secret) missing.push("ORBIT_UNIPILE_WEBHOOK_SECRET");
+  if (missing.length) return unconfigured({}, missing);
+  const userId = ctx.userId;
+  const r = await unipileFor(ctx).hostedLink({
+    name: userId,
+    notifyUrl: `${functionsBase(ctx)}/orbit-webhooks/unipile/account?token=${encodeURIComponent(secret)}`,
+    successRedirectUrl: `${ctx.env.appUrl}/settings?linkedin=connected`,
+    failureRedirectUrl: `${ctx.env.appUrl}/settings?linkedin=failed`,
+    expiresOn: new Date(ctx.now().getTime() + 36e5).toISOString()
+  });
+  if (!r.ok) throw new HttpError(502, "upstream", "LinkedIn connection is unavailable right now");
+  await ctx.db.sql`
+    insert into orbit.integration_accounts (user_id, provider, status)
+    values (${userId}::uuid, 'linkedin', 'connecting')
+    on conflict (user_id, provider) do update set
+      status = case when orbit.integration_accounts.status = 'active' then 'active' else 'connecting' end`;
+  await ctx.db.sql`
+    insert into orbit.audit_log (user_id, actor, action, target_table)
+    values (${userId}::uuid, 'user', 'linkedin.connect_start', 'integration_accounts')`;
+  const out = { url: r.value.url };
+  return json(200, out);
+}
+async function linkedinStatus(ctx) {
+  const userId = ctx.userId;
+  const [a] = await ctx.db.sql`
+    select status, external_account_id, last_synced_at from orbit.integration_accounts
+     where user_id = ${userId}::uuid and provider = 'linkedin'`;
+  const [n] = await ctx.db.sql`
+    select count(distinct pi.person_id)::int as n from orbit.person_identities pi
+      join orbit.people p on p.id = pi.person_id
+     where pi.user_id = ${userId}::uuid and pi.kind = 'linkedin_member' and pi.source = 'linkedin_relation'
+       and p.merged_into is null and p.deleted_at is null`;
+  const status3 = !a ? "not_connected" : a.status === "active" || a.status === "connecting" || a.status === "needs_reauth" ? a.status : a.status === "revoked" ? "not_connected" : "error";
+  const out = {
+    status: status3,
+    accountId: a?.external_account_id ?? null,
+    lastSyncedAt: a?.last_synced_at ? new Date(a.last_synced_at).toISOString() : null,
+    relations: n?.n ?? 0
+  };
+  return json(200, out);
+}
+async function linkedinSync(ctx) {
+  await readJson(ctx.req, { optional: true });
+  const missing = missingUnipile(ctx);
+  if (missing.length) return unconfigured({}, missing);
+  const userId = ctx.userId;
+  const [a] = await ctx.db.sql`
+    select status, external_account_id from orbit.integration_accounts
+     where user_id = ${userId}::uuid and provider = 'linkedin'`;
+  if (!a?.external_account_id) return queued({ queued: false, reason: "not_connected" });
+  if (a.status !== "active") return queued({ queued: false, reason: a.status });
+  const id = await sqlQueue(ctx.db).enqueue({
+    kind: "sync.linkedin",
+    userId,
+    payload: { mode: "sync" },
+    dedupeKey: `linkedin-manual:${userId}:${slot(ctx.now())}`
+  });
+  return queued(id === null ? { queued: false, reason: "already_running" } : { queued: true });
+}
+var INTEGRATION_ROUTES = {
+  "/google/sync": { method: "POST", auth: true, run: googleSync },
+  "/linkedin/connect/start": { method: "POST", auth: true, run: linkedinConnectStart },
+  "/linkedin/status": { method: "GET|POST", auth: true, run: linkedinStatus },
+  "/linkedin/sync": { method: "POST", auth: true, run: linkedinSync },
+  "/linkedin/search": { method: "POST", auth: true, run: linkedinSearch },
+  "/linkedin/reader": { method: "POST", auth: true, run: linkedinReader }
+};
+async function linkedinReader(ctx) {
+  const [a] = await ctx.db.sql`
+    select status, external_account_id from orbit.integration_accounts
+     where user_id = ${ctx.userId}::uuid and provider = 'linkedin'`;
+  if (!a?.external_account_id || a.status !== "active")
+    return json(200, { ok: false, reason: "not_connected" });
+  if (!ctx.env.connectorsSigningKey) return json(200, { ok: false, reason: "unconfigured" });
+  return json(200, {
+    ok: true,
+    accountId: a.external_account_id,
+    token: await accountToken(a.external_account_id, ctx.env.connectorsSigningKey)
+  });
+}
+var LINKEDIN_SEARCHES_PER_DAY = 80;
+async function linkedinSearch(ctx) {
+  const body2 = await readJson(ctx.req, { optional: true });
+  const q = typeof body2.q === "string" ? body2.q.replace(/\s+/g, " ").trim().slice(0, 120) : "";
+  if (q.length < 2) throw badRequest("q must be at least 2 characters");
+  const userId = ctx.userId;
+  const [a] = await ctx.db.sql`
+    select status, external_account_id from orbit.integration_accounts
+     where user_id = ${userId}::uuid and provider = 'linkedin'`;
+  if (!a?.external_account_id || a.status !== "active")
+    return json(200, { ok: false, reason: "not_connected" });
+  const unipile = unipileFor(ctx);
+  if (!unipile.configured) return json(200, { ok: false, reason: "unconfigured" });
+  const [n] = await ctx.db.sql`
+    select count(*)::int as n from orbit.audit_log
+     where user_id = ${userId}::uuid and action = 'linkedin.search'
+       and created_at > ${new Date(ctx.now().getTime() - 864e5)}::timestamptz`;
+  if ((n?.n ?? 0) >= LINKEDIN_SEARCHES_PER_DAY) return json(200, { ok: false, reason: "limit" });
+  await ctx.db.sql`
+    insert into orbit.audit_log (user_id, actor, action, target_table) values (${userId}::uuid, 'user', 'linkedin.search', 'people')`;
+  const r = await unipile.searchPeople(a.external_account_id, q);
+  if (!r.ok) return json(200, { ok: false, reason: "error" });
+  return json(200, { ok: true, people: r.value });
+}
+
+// supabase/functions/orbit-api/routes/memory.ts
+async function search(ctx) {
+  const b = await body(ctx);
+  const s = ctx.services();
+  const memories = await searchMemories(
+    ctx.db,
+    s.embed,
+    ctx.userId,
+    {
+      query: text2(b, "query", 1e3),
+      personId: optUuid(b, "personId"),
+      limit: typeof b.limit === "number" ? b.limit : void 0
+    },
+    ctx.now()
+  );
+  return json(200, { memories });
+}
+async function add2(ctx) {
+  const b = await body(ctx);
+  const s = ctx.services();
+  const r = await addMemory(
+    ctx.db,
+    s.embed,
+    ctx.userId,
+    {
+      text: text2(b, "text", 1e3),
+      kind: b.kind,
+      personId: optUuid(b, "personId"),
+      source: "remember"
+    },
+    ctx.now()
+  );
+  return json(200, r);
+}
+async function list4(ctx) {
+  const b = await body(ctx, true);
+  return json(200, { memories: await listMemories(ctx.db, ctx.userId, optUuid(b, "personId")) });
+}
+async function forget(ctx) {
+  const id = uuid(await body(ctx), "id");
+  if (!await forgetMemory(ctx.db, ctx.userId, id, ctx.now()))
+    throw new HttpError(404, "not_found", "no such memory");
+  return json(200, { ok: true });
+}
+var KNOWN_MEMORIES = 20;
+async function personNamed(db2, userId, name) {
+  const n = name?.trim().toLowerCase();
+  if (!n) return null;
+  const rows = await db2.sql`
+    select id from orbit.people
+     where user_id = ${userId}::uuid and deleted_at is null and merged_into is null and not is_self
+       and lower(display_name) = ${n}
+     limit 2`;
+  return rows.length === 1 ? rows[0].id : null;
+}
+async function extract(ctx) {
+  const t = turns(await body(ctx));
+  const s = ctx.services();
+  const userId = ctx.userId;
+  if (!s.claude.configured) {
+    const out2 = { memories: [], added: 0, unconfigured: true };
+    return json(200, out2);
+  }
+  const known = await ctx.db.sql`
+    select text from orbit.memories where user_id = ${userId}::uuid and deleted_at is null
+     order by importance desc, last_seen_at desc limit ${KNOWN_MEMORIES}::int`;
+  const found = await extractMemories(
+    s.claude,
+    userId,
+    t,
+    known.map((k) => k.text)
+  );
+  const memories = [];
+  let added = 0;
+  for (const m of found) {
+    const r = await addMemory(
+      ctx.db,
+      s.embed,
+      userId,
+      {
+        text: m.text,
+        kind: m.kind,
+        personId: await personNamed(ctx.db, userId, m.personName),
+        importance: m.importance,
+        source: "chat",
+        quote: m.quote
+      },
+      ctx.now()
+    );
+    memories.push(r.memory);
+    if (!r.deduped) added++;
+  }
+  const out = { memories, added };
+  return json(200, out);
+}
+var memoryRoutes = {
+  "/memory/search": { method: "POST", auth: true, run: search },
+  "/memory/add": { method: "POST", auth: true, run: add2 },
+  "/memory/list": { method: "POST", auth: true, run: list4 },
+  "/memory/forget": { method: "POST", auth: true, run: forget },
+  "/memory/extract": { method: "POST", auth: true, run: extract }
+};
+
 // supabase/functions/_shared/paths/outcomes.ts
 var KINDS2 = /* @__PURE__ */ new Set([...TIE_KINDS, "strength"]);
 var MAX_HOPS = 6;
@@ -12077,7 +12761,7 @@ var pathRoutes = {
 };
 
 // supabase/functions/orbit-api/routes/replies.ts
-async function list4(ctx) {
+async function list5(ctx) {
   return json(200, { replies: await listReplies(ctx.db, ctx.userId, ctx.now()) });
 }
 async function draft(ctx) {
@@ -12095,7 +12779,7 @@ async function answer(ctx) {
   return json(200, { draft: toServerDraft(r.draft) });
 }
 var replyRoutes = {
-  "/replies/list": { method: "POST", auth: true, run: list4 },
+  "/replies/list": { method: "POST", auth: true, run: list5 },
   "/replies/draft": { method: "POST", auth: true, run: draft },
   "/replies/answer": { method: "POST", auth: true, run: answer }
 };
@@ -12249,12 +12933,12 @@ async function requestDossier(s, userId, req) {
   const now = s.now();
   const row = await dossierRow(s.db, userId, personId);
   if (row && !refresh2) {
-    const status2 = row.status;
+    const status3 = row.status;
     const fresh = new Date(row.expires_at).getTime() > now.getTime();
-    if ((status2 === "ready" || status2 === "partial") && row.content && fresh)
-      return { status: status2, dossier: toDossier(row) };
-    if (status2 === "needs_disambiguation") return { status: status2, dossier: toDossier(row) };
-    if (status2 === "pending" && now.getTime() - new Date(row.updated_at).getTime() < 10 * 6e4)
+    if ((status3 === "ready" || status3 === "partial") && row.content && fresh)
+      return { status: status3, dossier: toDossier(row) };
+    if (status3 === "needs_disambiguation") return { status: status3, dossier: toDossier(row) };
+    if (status3 === "pending" && now.getTime() - new Date(row.updated_at).getTime() < 10 * 6e4)
       return { status: "queued", dossier: toDossier(row) };
   }
   await s.db.sql`
@@ -12398,39 +13082,8 @@ var scoreRoutes = {
   "/scores/label": { method: "POST", auth: true, run: label }
 };
 
-// supabase/functions/_shared/voice/voice.ts
-import { z as z5 } from "npm:zod@3.25.76/v4";
-var text2 = (max) => z5.string().max(max);
-var list5 = (n, max) => z5.array(text2(max)).max(n);
-var StyleCardS = z5.object({
-  greetingPatterns: list5(6, 80),
-  signoffs: list5(6, 160),
-  formality: z5.number().min(0).max(1),
-  avgSentenceWords: z5.number().min(0).max(200),
-  avgMessageWords: z5.number().min(0).max(2e3),
-  contractions: z5.boolean(),
-  exclamationsPerMessage: z5.number().min(0).max(50),
-  emoji: z5.boolean(),
-  characteristicPhrases: list5(12, 120),
-  avoid: list5(50, 120),
-  notes: text2(4e3),
-  builtFromCount: z5.number().int().min(0).max(1e6),
-  version: z5.number().int().min(0).max(1e3),
-  sources: z5.partialRecord(z5.enum(["email", "linkedin", "orbit", "pasted"]), z5.number().int().min(0)).optional(),
-  custom: z5.boolean().optional()
-});
-function parseStyleCard(v) {
-  if (v === void 0) return void 0;
-  if (v === null) return null;
-  const r = StyleCardS.safeParse(v);
-  if (!r.success) {
-    const i = r.error.issues[0];
-    return { error: `styleCard.${i?.path.join(".") || "card"}: ${i?.message ?? "invalid"}` };
-  }
-  return r.data;
-}
-
 // supabase/functions/orbit-api/routes/settings.ts
+var WEEKLY_TARGET_MAX = 350;
 async function autonomy(ctx) {
   const b = await body(ctx);
   const level = Number(b.level);
@@ -12596,6 +13249,7 @@ async function profile(ctx) {
   if (card && "error" in card) throw badRequest(card.error);
   const capGmail = ownCap2("dailySendCapGmail", SEND_CAPS.gmailPerDay);
   const capLinkedin = ownCap2("dailySendCapLinkedin", SEND_CAPS.linkedinPerDay);
+  const weekly = ownCap2("weeklyOutreachTarget", WEEKLY_TARGET_MAX);
   const userId = ctx.userId;
   const given = {};
   if (postal !== void 0) given.postal_address = postal;
@@ -12607,6 +13261,7 @@ async function profile(ctx) {
   if (pausedUntil !== void 0) given.autopilot_paused_until = pausedUntil;
   if (capGmail !== void 0) given.daily_send_cap_gmail = capGmail;
   if (capLinkedin !== void 0) given.daily_send_cap_linkedin = capLinkedin;
+  if (weekly !== void 0) given.weekly_target = weekly;
   if (card !== void 0) given.style_card = card;
   const level = mode2 === void 0 ? null : AUTOPILOT_MODE_LEVEL[mode2];
   const keep = Object.fromEntries(Object.entries(given).filter(([, v]) => v !== null));
@@ -13514,6 +14169,35 @@ async function add3(ctx) {
 var sourceRoutes = {
   "/source/search": { method: "POST", auth: true, run: search2 },
   "/source/add": { method: "POST", auth: true, run: add3 }
+};
+
+// supabase/functions/orbit-api/routes/voice.ts
+async function status2(ctx) {
+  if (ctx.req.method === "POST") await ctx.req.body?.cancel();
+  return json(200, await voiceStatus(ctx.db, ctx.userId, ctx.now()));
+}
+async function notes(ctx) {
+  const b = await body(ctx);
+  if (typeof b.id !== "string" || !b.id.trim() || b.id.length > 100) throw badRequest("id names a note");
+  if (b.action !== "keep" && b.action !== "forget") throw badRequest("action is keep or forget");
+  const note2 = await decideNote(ctx.db, ctx.userId, b.id, b.action, ctx.now());
+  if (!note2) throw new HttpError(404, "not_found", "no such note");
+  await ctx.db.sql`
+    insert into orbit.audit_log (user_id, actor, action, target_table, target_id, details)
+    values (${ctx.userId}::uuid, 'user', ${`voice.note.${b.action}`}, 'users', ${ctx.userId}, ${{ note: b.id }}::jsonb)`;
+  const out = { note: note2 };
+  return json(200, out);
+}
+async function relearn(ctx) {
+  await ctx.req.body?.cancel();
+  await queueRelearn(ctx.services().queue, ctx.userId, ctx.now());
+  const out = { queued: true };
+  return json(200, out);
+}
+var voiceRoutes = {
+  "/voice": { method: "GET|POST", auth: true, run: status2 },
+  "/voice/notes": { method: "POST", auth: true, run: notes },
+  "/voice/relearn": { method: "POST", auth: true, run: relearn }
 };
 
 // packages/core/src/entity/nicknames.data.ts
@@ -15128,6 +15812,8 @@ var PUSH = {
   },
   // drafts: handled by pushDraft (status transitions and edits while still a draft)
   drafts: { table: "drafts", write: "update", key: "id", fields: {} },
+  // an edit the browser recorded as it sent (plan 29 §B2.4): handled by pushDraftEdit, one row per draft
+  draft_edits: { table: "draft_edits", write: "upsert", key: "id", fields: {} },
   memories: { table: "memories", write: "none", del: "hard", key: "id", fields: {} }
 };
 var ChangeError = class extends Error {
@@ -15166,6 +15852,7 @@ async function applyChange(db2, userId, raw) {
     const row = await db2.begin(async (tx) => {
       if (c.op === "delete") return remove(tx, userId, spec, c.id);
       if (spec.table === "drafts") return pushDraft(tx, userId, c.id, c.row ?? {});
+      if (spec.table === "draft_edits") return pushEdit(tx, userId, c.id, c.row ?? {});
       if (spec.write === "none")
         throw new ChangeError("not_allowed", `${c.table} can only be deleted from the app`);
       return write(tx, userId, spec, c.id, c.row ?? {});
@@ -15295,15 +15982,15 @@ var DraftPatchS = z6.object({
 async function pushDraft(db2, userId, id, row) {
   const p = DraftPatchS.safeParse({ status: row.status, subject: row.subject, body: row.body });
   if (!p.success) throw new ChangeError("invalid", p.error.issues[0]?.message ?? "invalid draft change");
-  const { status: status2, subject, body: body2 } = p.data;
+  const { status: status3, subject, body: body2 } = p.data;
   const hasSubject = "subject" in row;
-  if (!status2 && !hasSubject && body2 === void 0) throw new ChangeError("invalid", "nothing to change");
+  if (!status3 && !hasSubject && body2 === void 0) throw new ChangeError("invalid", "nothing to change");
   const [r] = await db2.sql`
     update orbit.drafts t set
       subject = case when ${hasSubject}::boolean then ${subject ?? null}::text else t.subject end,
       body = coalesce(${body2 ?? null}::text, t.body),
-      status = coalesce(${status2 ?? null}::text, t.status),
-      cancel_reason = case when ${status2 ?? null}::text = 'cancelled' then 'user' else t.cancel_reason end
+      status = coalesce(${status3 ?? null}::text, t.status),
+      cancel_reason = case when ${status3 ?? null}::text = 'cancelled' then 'user' else t.cancel_reason end
      where t.id = ${id}::uuid and t.user_id = ${userId}::uuid and t.status = 'draft'
     returning to_jsonb(t) as row`;
   if (!r) {
@@ -15314,7 +16001,26 @@ async function pushDraft(db2, userId, id, row) {
   }
   const changed = ["status", "subject", "body"].filter((k) => k in row);
   await audit2(db2, userId, "sync.update", "drafts", id, changed);
+  if (body2 !== void 0)
+    await recordDraftEdit(db2, r.row);
   return shape("drafts", r.row);
+}
+var DraftEditS = z6.object({
+  draftId: uuidS.nullable().optional(),
+  kind: z6.string().trim().min(1).max(40),
+  replyClass: z6.string().max(40).nullable().optional(),
+  before: z6.string().min(1).max(2e4),
+  after: z6.string().min(1).max(2e4),
+  distance: z6.number().int().min(0).max(1e5),
+  createdAt: tsS.nullable().optional()
+});
+async function pushEdit(db2, userId, id, row) {
+  const p = DraftEditS.safeParse(row);
+  if (!p.success) throw new ChangeError("invalid", p.error.issues[0]?.message ?? "invalid edit");
+  const r = await pushDraftEdit(db2, userId, id, p.data);
+  if (!r) throw new ChangeError("not_found", `draft_edits ${id} was not found`);
+  await audit2(db2, userId, "sync.insert", "draft_edits", id, ["before", "after"]);
+  return r;
 }
 
 // supabase/functions/orbit-api/api.ts
@@ -15348,7 +16054,8 @@ var ROUTES = {
   ...settingsRoutes,
   ...cadenceRoutes,
   ...autopilotRoutes,
-  ...friendRoutes
+  ...friendRoutes,
+  ...voiceRoutes
 };
 function missingSecrets(deps, google) {
   const m = [];
