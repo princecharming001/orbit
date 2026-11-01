@@ -95,15 +95,23 @@ export function TomorrowBatch({ view }: { view: AutopilotView }) {
       )}
       <ul className="divide-y divide-line">
         {items.map((i) => (
-          <li key={i.draftId} className="py-2.5 flex items-start gap-3" data-testid="batch-item">
+          // the actions sit under the words until there is room beside them, so a name never breaks in two
+          <li
+            key={i.draftId}
+            className="py-2.5 flex flex-col gap-2 lg:flex-row lg:items-start lg:gap-3"
+            data-testid="batch-item"
+          >
             <div className="min-w-0 flex-1">
               <div className="flex items-center gap-2 text-[13.5px] flex-wrap">
                 {i.personId ? (
-                  <Link to={`/people/${i.personId}`} className="font-medium hover:underline">
+                  <Link
+                    to={`/people/${i.personId}`}
+                    className="font-medium whitespace-nowrap hover:underline"
+                  >
                     {i.personName}
                   </Link>
                 ) : (
-                  <span className="font-medium">{i.personName}</span>
+                  <span className="font-medium whitespace-nowrap">{i.personName}</span>
                 )}
                 {i.company && <span className="text-ink-3">{i.company}</span>}
                 <Chip>{MESSAGE_KIND_LABELS[i.kind]}</Chip>
@@ -114,7 +122,7 @@ export function TomorrowBatch({ view }: { view: AutopilotView }) {
               </div>
               {i.subject && <p className="text-[13px] text-ink-3 mt-0.5 line-clamp-1">{i.subject}</p>}
             </div>
-            <div className="flex items-center gap-1 shrink-0">
+            <div className="flex flex-wrap items-center gap-1 lg:shrink-0">
               <Button size="sm" variant="ghost" onClick={() => void hold(i)} data-testid="batch-hold">
                 Hold
               </Button>
@@ -149,17 +157,21 @@ export function TomorrowBatch({ view }: { view: AutopilotView }) {
           </p>
           <ul className="divide-y divide-line">
             {asks.map((a) => (
-              <li key={a.id} className="py-2.5 flex items-start gap-3" data-testid="batch-ask">
+              <li
+                key={a.id}
+                className="py-2.5 flex flex-col gap-2 lg:flex-row lg:items-start lg:gap-3"
+                data-testid="batch-ask"
+              >
                 <div className="min-w-0 flex-1 text-[13.5px]">
                   <div>
-                    <span className="font-medium">{a.friendName}</span>
+                    <span className="font-medium whitespace-nowrap">{a.friendName}</span>
                     <span className="text-ink-3"> knows </span>
-                    <span className="font-medium">{a.targetName}</span>
+                    <span className="font-medium whitespace-nowrap">{a.targetName}</span>
                     {a.company && <span className="text-ink-3"> at {a.company}</span>}
                   </div>
                   <p className="text-[12.5px] text-ink-3 mt-0.5 line-clamp-2">{a.note}</p>
                 </div>
-                <div className="flex items-center gap-1 shrink-0">
+                <div className="flex flex-wrap items-center gap-1 lg:shrink-0">
                   <Button
                     size="sm"
                     variant="ghost"
