@@ -124,4 +124,35 @@ describe('autopilot in the chat, phase 5', () => {
     const q2 = (same.data as { ui: { queued: { person: string; when?: string }[] } }).ui.queued;
     expect(q2.find((q) => q.person === 'Grace Liu')?.when).toBe('Wed 8:40 AM');
   });
+
+  it('asked about one person, the status answers from what they did first: a booked call, a closed door', async () => {
+    const lena = api.state.replies.find((r) => r.personName === 'Lena Novak')!;
+    lena.outcome = 'booked';
+    const booked = await run('autopilot_status', { personName: 'Lena' }, ctx());
+    expect(booked.summary).toMatch(/^Lena picked one of the times Orbit offered and the call is booked\./);
+    // with the event on the calendar, the time
+    await db.people.put({ ...(await db.people.get('p_jane'))!, id: 'p_lena', displayName: 'Lena Novak' });
+    await db.events.put({
+      id: 'evt_lena',
+      userId: user.id,
+      externalEventId: 'g1',
+      title: 'Coffee chat with Lena Novak',
+      startAt: '2026-10-08T15:00:00.000Z',
+      endAt: '2026-10-08T15:30:00.000Z',
+      status: 'confirmed',
+      attendees: [],
+      attendeePersonIds: ['p_lena'],
+    });
+    const call = await run('autopilot_status', { personName: 'Lena' }, ctx());
+    expect(call.summary).toMatch(/^The call with Lena is booked for Thu /);
+    const ui = (call.data as { ui: { repliesThisWeek: { person: string; said?: string }[] } }).ui;
+    expect(ui.repliesThisWeek.find((x) => x.person === 'Lena Novak')?.said).toContain(
+      'Thu Oct 8 at 11 works',
+    );
+    const chloe = await run('autopilot_status', { personName: 'Chloe' }, ctx());
+    expect(chloe.summary).toMatch(
+      /^Chloe asked not to be contacted .+, so Orbit will not write to them again\./,
+    );
+    for (const e of [booked, call, chloe]) expect(e.summary).not.toMatch(DASH_OR_BANG);
+  });
 });

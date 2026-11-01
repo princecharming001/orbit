@@ -249,6 +249,30 @@ const autopilotDay: ApiSeed = async (api, user) => {
   // an account's goals and drafts sync down to the browser (the pull's own write), so the chat's goal list, its draft
   // lookups and the autopilot status all name the same goal and the same messages
   await writeFromServer('goals', api.state.goals, user.id);
+  // the funnel booked the slot Lena picked (plan 29 §B2.3), as the server does: her reply and the confirmation say
+  // booked, and the call is on the calendar, synced down like any event
+  const lena = api.state.replies.find((r) => r.personName === 'Lena Novak' && r.replyClass === 'scheduling');
+  if (lena) {
+    lena.outcome = 'booked';
+    for (const i of api.state.autopilot.sentToday) if (i.personName === lena.personName) i.outcome = 'booked';
+    const p = (await db.people.where('userId').equals(user.id).toArray()).find(
+      (x) => x.displayName === lena.personName,
+    );
+    if (p)
+      await db.events.put({
+        id: 'evt_lena_call',
+        userId: user.id,
+        externalEventId: 'g_lena_call',
+        title: 'Coffee chat with Lena Novak',
+        startAt: '2026-10-08T15:00:00.000Z',
+        endAt: '2026-10-08T15:30:00.000Z',
+        status: 'confirmed',
+        attendees: [{ email: 'lena@ramp.com', displayName: 'Lena Novak' }],
+        attendeePersonIds: [p.id],
+        inviteSentAt: '2026-10-06T13:05:00.000Z',
+        isCoffeeChat: true,
+      });
+  }
   await writeFromServer(
     'drafts',
     [...api.state.drafts.values()] as unknown as Record<string, unknown>[],

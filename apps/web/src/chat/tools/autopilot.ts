@@ -129,9 +129,43 @@ async function whyNot(
   personName: string,
   s: AutopilotStatus,
   ctx: ToolContext,
+  seen: { replies: ReplyItem[]; calls: { with: string[]; startAt: string }[] } = { replies: [], calls: [] },
 ): Promise<{ person: string; answer: string } | undefined> {
   const named = namedBy(personName);
   const first = (n: string) => n.split(' ')[0];
+  // what they did comes first: a booked call, a reply that closed the door, a question waiting on the student. "Did
+  // the call with Lena get booked" is answered here, never from the stage of a chat or the send lists
+  const call = seen.calls.find((c) => c.with.some(named));
+  const reply = seen.replies.find((x) => named(x.personName));
+  const confirmation = s.sentToday.find((i) => named(i.personName) && i.replyClass === 'scheduling');
+  const confirmed = confirmation?.sentAt ? ` The confirmation went ${when(confirmation.sentAt, ctx)}.` : '';
+  if (call) {
+    const who = call.with.find(named)!;
+    return {
+      person: who,
+      answer: `The call with ${first(who)} is booked for ${when(call.startAt, ctx)}.${confirmed}`,
+    };
+  }
+  if (reply?.outcome === 'booked' || confirmation?.outcome === 'booked')
+    return {
+      person: reply?.personName ?? confirmation!.personName,
+      answer: `${first(reply?.personName ?? confirmation!.personName)} picked one of the times Orbit offered and the call is booked.${confirmed}`,
+    };
+  if (reply && (reply.replyClass === 'decline' || reply.replyClass === 'unsubscribe'))
+    return {
+      person: reply.personName,
+      answer: `${first(reply.personName)} ${reply.replyClass === 'unsubscribe' ? 'asked not to be contacted' : 'said no'} ${when(reply.receivedAt, ctx)}, so Orbit will not write to them again.`,
+    };
+  if (reply?.replyClass === 'question' && !reply.answer)
+    return {
+      person: reply.personName,
+      answer: `${first(reply.personName)} asked you something ${when(reply.receivedAt, ctx)}; the reply waits for your answer in Needs you.`,
+    };
+  if (reply?.replyClass === 'scheduling' && confirmation)
+    return {
+      person: reply.personName,
+      answer: `${first(reply.personName)} wrote back about a time ${when(reply.receivedAt, ctx)} and Orbit answered ${when(confirmation.sentAt ?? confirmation.sendAt, ctx)}; nothing is on the calendar yet.`,
+    };
   const held = s.held.find((i) => named(i.personName));
   if (held)
     return {
@@ -254,7 +288,15 @@ export const autopilotStatusTool = defineTool({
       ),
     );
     const taps = s.queued.filter((i) => i.status === 'needs_tap').length;
-    const why = input.personName ? await whyNot(input.personName, s, ctx) : undefined;
+    const why = input.personName
+      ? await whyNot(input.personName, s, ctx, {
+          replies: recent,
+          calls: calls.map((e) => ({
+            with: (e.attendeePersonIds ?? []).flatMap((id) => names.get(id) ?? []),
+            startAt: e.startAt,
+          })),
+        })
+      : undefined;
     const week = autopilotWeekLine(s.week);
     const summary = [
       input.personName
@@ -303,6 +345,8 @@ export const autopilotStatusTool = defineTool({
         company: x.company ?? undefined,
         replyClass: REPLY_CLASS_LABELS[x.replyClass] ?? x.replyClass,
         received: when(x.receivedAt, ctx),
+        // what they wrote, wrapped like every other outside text: "Thu Oct 8 at 11 works for me"
+        said: wrapped(ctx, 'reply', x.snippet, 300),
         outcome: x.outcome ?? undefined,
         question: x.question ? wrapped(ctx, 'question', x.question, 300) : undefined,
         closed:
