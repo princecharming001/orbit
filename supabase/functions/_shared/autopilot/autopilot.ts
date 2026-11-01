@@ -89,6 +89,7 @@ type ItemRow = {
   display_name: string;
   org_raw: string | null;
   org_name: string | null;
+  timezone: string | null;
   kind: string;
   reply_class: string | null;
   subject: string | null;
@@ -118,8 +119,8 @@ async function itemRows(
 ): Promise<ItemRow[]> {
   const twoDaysAgo = new Date(now.getTime() - 2 * 86_400_000);
   return db.sql<ItemRow>`
-    select d.id, d.person_id, p.display_name, p.org_raw, o.name as org_name, d.kind, d.subject, d.send_at, d.sent_at,
-           d.status, d.error, d.auto_rung, d.outcome, d.ask,
+    select d.id, d.person_id, p.display_name, p.org_raw, o.name as org_name, p.timezone, d.kind, d.subject, d.send_at,
+           d.sent_at, d.status, d.error, d.auto_rung, d.outcome, d.ask,
            (select m.reply_class from orbit.messages m where m.id::text = d.ask->>'replyToMessageId') as reply_class,
            exists (select 1 from orbit.audit_log a where a.target_table = 'drafts' and a.target_id = d.id::text
                     and a.action = 'draft.approve' and a.actor = 'user') as tapped
@@ -154,6 +155,7 @@ function item(r: ItemRow, status: AutopilotItem['status'], reason?: string): Aut
     subject: r.subject,
     sendAt: iso(r.send_at),
     sentAt: iso(r.sent_at),
+    ...(validZone(r.timezone) ? { recipientTimeZone: validZone(r.timezone) } : {}),
     status,
     ...(reason ? { reason } : {}),
     ...(r.auto_rung ? { autoRung: r.auto_rung as AutopilotRung['kind'] } : {}),

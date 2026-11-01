@@ -107,4 +107,21 @@ describe('autopilot in the chat, phase 5', () => {
     expect(env.summary).not.toMatch(DASH_OR_BANG);
     expect(api.routes()).toContain('/autopilot/status');
   });
+
+  it("a queued first message says the student's clock and the recipient's when the two differ", async () => {
+    const grace = api.state.autopilot.queued.find((q) => q.personName === 'Grace Liu')!;
+    grace.sendAt = '2026-10-07T12:40:00.000Z';
+    grace.recipientTimeZone = 'America/New_York';
+    const west = { ...user, timezone: 'America/Los_Angeles' };
+    const env = await run('autopilot_status', {}, makeCtx(west, { toolUseId: nextToolUseId() }));
+    const queued = (env.data as { ui: { queued: { person: string; when?: string }[] } }).ui.queued;
+    expect(queued.find((q) => q.person === 'Grace Liu')?.when).toBe(
+      'Wed 5:40 AM your time (8:40 AM their time)',
+    );
+    // the same zone says one clock
+    const east = { ...user, timezone: 'America/New_York' };
+    const same = await run('autopilot_status', {}, makeCtx(east, { toolUseId: nextToolUseId() }));
+    const q2 = (same.data as { ui: { queued: { person: string; when?: string }[] } }).ui.queued;
+    expect(q2.find((q) => q.person === 'Grace Liu')?.when).toBe('Wed 8:40 AM');
+  });
 });

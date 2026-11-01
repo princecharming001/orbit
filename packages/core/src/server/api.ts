@@ -696,6 +696,8 @@ export interface AutopilotItem {
   subject: string | null;
   /** when it goes or went, in the recipient's morning */
   sendAt: string | null;
+  /** the recipient's time zone, the one the send window was picked in, when Orbit knows it */
+  recipientTimeZone?: string;
   sentAt: string | null;
   /**
    * `needs_tap`: an autopilot first message in tomorrow's batch before the first-message rung is earned (plan 29

@@ -54,6 +54,32 @@ const when = (iso: string | null | undefined, ctx: ToolContext) =>
       })
     : undefined;
 
+/** The same moment in the recipient's zone, when it differs from the student's: first messages go in their morning. */
+const theirTime = (i: Pick<AutopilotItem, 'sendAt' | 'sentAt' | 'recipientTimeZone'>, ctx: ToolContext) => {
+  const at = i.sentAt ?? i.sendAt;
+  const tz = i.recipientTimeZone;
+  if (!at || !tz || tz === ctx.user.timezone) return undefined;
+  const fmt = (zone?: string) =>
+    new Date(at).toLocaleString('en-US', {
+      weekday: 'short',
+      hour: 'numeric',
+      minute: '2-digit',
+      timeZone: zone,
+    });
+  const theirs = fmt(tz);
+  return theirs === fmt(ctx.user.timezone || undefined) ? undefined : theirs;
+};
+
+/** "Tue 5:40 AM (8:40 AM their time)": the student's clock first, the recipient's beside it when it differs. */
+const whenBoth = (i: Pick<AutopilotItem, 'sendAt' | 'sentAt' | 'recipientTimeZone'>, ctx: ToolContext) => {
+  const mine = when(i.sentAt ?? i.sendAt, ctx);
+  const theirs = theirTime(i, ctx);
+  if (!mine || !theirs) return mine;
+  // the weekday only when their day differs from the student's
+  const sameDay = mine.split(' ')[0] === theirs.split(' ')[0];
+  return `${mine} your time (${sameDay ? theirs.slice(theirs.indexOf(' ') + 1) : theirs} their time)`;
+};
+
 function itemLine(i: AutopilotItem, ctx: ToolContext) {
   return {
     draftId: i.draftId,
@@ -62,7 +88,7 @@ function itemLine(i: AutopilotItem, ctx: ToolContext) {
     kind: MESSAGE_KIND_LABELS[i.kind] ?? i.kind,
     replyClass: i.replyClass ? REPLY_CLASS_LABELS[i.replyClass] : undefined,
     status: i.status,
-    when: when(i.sentAt ?? i.sendAt, ctx),
+    when: whenBoth(i, ctx),
     reason: i.reason ? wrapped(ctx, 'reason', i.reason, 300) : undefined,
     question: i.question ? wrapped(ctx, 'question', i.question, 300) : undefined,
     outcome: i.outcome ?? undefined,
@@ -118,8 +144,8 @@ async function whyNot(
       person: queued.personName,
       answer:
         queued.status === 'needs_tap'
-          ? `${first(queued.personName)} is in tomorrow's batch for ${when(queued.sendAt, ctx)}, waiting for your tap: until twenty first messages go out unchanged, each one needs one.`
-          : `${first(queued.personName)} is in tomorrow's batch and goes ${when(queued.sendAt, ctx)} unless you hold it.`,
+          ? `${first(queued.personName)} is in tomorrow's batch for ${whenBoth(queued, ctx)}, waiting for your tap: until twenty first messages go out unchanged, each one needs one.`
+          : `${first(queued.personName)} is in tomorrow's batch and goes ${whenBoth(queued, ctx)} unless you hold it.`,
     };
   const sent = s.sentToday.find((i) => named(i.personName));
   if (sent)
