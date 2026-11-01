@@ -1432,7 +1432,10 @@ export function withFriend(
     displayName: p.displayName,
     title: p.currentTitle ?? null,
     company: p.currentOrganizationRaw ?? null,
-    companyDomain: null,
+    // the company's web domain, as the server carries it from the organization ("Ramp" is ramp.com)
+    companyDomain: p.currentOrganizationRaw
+      ? `${p.currentOrganizationRaw.toLowerCase().replace(/[^a-z0-9]+/g, '')}.com`
+      : null,
     linkedinSlug: null,
     school: null,
     isAlumni: false,

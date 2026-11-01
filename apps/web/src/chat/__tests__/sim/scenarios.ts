@@ -6,6 +6,7 @@ import { addPersonByHand } from '../../../engine/people';
 import { writeFromServer } from '../../../engine/serverSync';
 import { addTargetCompanies } from '../../../engine/targets';
 import { setConnectorsMockForTests } from '../../../integrations/connectorsMock';
+import { GMAIL_SEND_SCOPE } from '../../../integrations/google';
 import { type FakeOrbitApi, fakeDossier, withFriend, withReplies } from '../../../test/fakeOrbitApi';
 import { NOW } from '../helpers';
 import type { AccountState, ApiSeed } from './harness';
@@ -280,6 +281,8 @@ const FIRST_NOTES: Record<string, { subject: string; body: (first: string, me: s
 };
 
 async function castAutopilotDay(api: FakeOrbitApi, user: User) {
+  // an account on autopilot granted Gmail's send permission: its sends go from the server
+  api.state.status.google.scopes = [GMAIL_SEND_SCOPE];
   const people = await db.people.where('userId').equals(user.id).toArray();
   const byName = new Map(people.map((p) => [p.displayName, p]));
   const thanks = api.state.replies.find((r) => r.replyClass === 'thanks');

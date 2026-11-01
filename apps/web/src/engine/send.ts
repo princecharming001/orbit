@@ -527,6 +527,8 @@ async function approveOnServer(
   body: string,
   subject: string | undefined,
   undoMs: number,
+  /** autopilot's planned time: the server holds it until then instead of the undo window */
+  sendAt?: Date,
 ): Promise<ApproveResult | undefined> {
   const sync = await import('./serverSync');
   // a draft made in this browser goes up first
@@ -535,7 +537,7 @@ async function approveOnServer(
     draftId: serverId,
     body,
     ...(subject !== undefined ? { subject } : {}),
-    undoSec: Math.round(undoMs / 1000),
+    ...(sendAt ? { sendAt: sendAt.toISOString() } : { undoSec: Math.round(undoMs / 1000) }),
   });
   if (!r.ok) return r.code === 'not_found' ? undefined : { ok: false, error: r.message };
   await sync.keepServerDraft(r.value.draft, user.id);
@@ -661,7 +663,7 @@ export async function approveAndSend(
         : 'Add a subject line.',
     };
   // an account's email goes out from the server, in the recipient's window or after the undo window (plan 29 §B2.1)
-  if (!opts.via && !opts.scheduleAt) {
+  if (!opts.via) {
     const serverId = await serverEmailId(user, msg);
     if (serverId) {
       const viaServer = await approveOnServer(
@@ -671,9 +673,20 @@ export async function approveAndSend(
         note ? withNote(bodyFinal, note) : bodyFinal,
         env.threaded ? undefined : env.subject,
         opts.undoWindowMs ?? UNDO_WINDOW_MS,
+        opts.scheduleAt,
       );
       if (viaServer) return viaServer;
     }
+  }
+  // a draft the server wrote has no address in this browser: without Gmail's send permission it cannot go from here
+  if (!opts.via && msg.channel === 'gmail' && !msg.toEmail && isServerUser(user.id)) {
+    const { serverIdOf } = await import('./serverSync');
+    if (serverIdOf(msg.id))
+      return {
+        ok: false,
+        error:
+          'To send it from Orbit, connect Gmail with permission to send, in Settings, Integrations. Or copy the text and send it from Gmail yourself.',
+      };
   }
   // Orbit sends it itself, after the undo window: email through Gmail, LinkedIn through the student's own account
   const direct =

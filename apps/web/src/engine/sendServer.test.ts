@@ -69,6 +69,33 @@ afterEach(async () => {
 });
 
 describe('an account approves email on the server (plan 29 §B2.1)', () => {
+  it('an autopilot schedule goes to the server with its planned time, not the undo window', async () => {
+    api.state.status.google.scopes = [GMAIL_SEND_SCOPE];
+    await refreshSyncStatus();
+    const local = (await db.outbound.get(DRAFT_ID))!;
+    const at = new Date('2026-10-07T12:40:00.000Z');
+    const r = await approveAndSend(
+      user,
+      DRAFT_ID,
+      local.bodyDraft,
+      local.subject,
+      new Date('2026-10-06T18:00:00Z'),
+      {
+        scheduleAt: at,
+      },
+    );
+    expect(r).toMatchObject({ ok: true, status: 'scheduled', sendAt: at.toISOString() });
+    expect(api.state.drafts.get(DRAFT_ID)?.sendAt).toBe(at.toISOString());
+  });
+
+  it('a server draft with no address here says what to connect, never that the person has no email', async () => {
+    const local = (await db.outbound.get(DRAFT_ID))!;
+    await db.outbound.update(DRAFT_ID, { toEmail: undefined });
+    const r = await approveAndSend(user, DRAFT_ID, local.bodyDraft, local.subject);
+    expect(r.ok).toBe(false);
+    expect(!r.ok && r.error).toMatch(/connect Gmail with permission to send/);
+  });
+
   it('goes to /drafts/approve with the words and the undo window; undo stops it there', async () => {
     api.state.status.google.scopes = [GMAIL_SEND_SCOPE];
     await refreshSyncStatus();
