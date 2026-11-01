@@ -1248,13 +1248,19 @@ async function finalizeSent(
         editDistance: edited ? Math.abs((msg.bodyFinal ?? '').length - msg.bodyDraft.length) : 0,
         editBefore: edited ? msg.bodyDraft : undefined,
         editAfter: edited ? msg.bodyFinal : undefined,
-      } as never),
+      }),
     );
     // plan 23 §4.9: ten untouched approvals of a kind earn the offer to send that kind on its own
     if (!msg.autoSent) await step(() => import('./trust').then((m) => m.raiseTrustCards(user, now)));
   }
-  // plan 29 §B2.4: every tenth send learns the student's voice again (never a reason this send failed to record)
-  await import('./voice').then((m) => m.noteSendForVoice(user, now)).catch(() => undefined);
+  // plan 29 §B2.4: an edited send is the student's voice, kept typed whether or not a card raised it; every tenth
+  // send learns the card again (neither is ever a reason this send failed to record)
+  await import('./voice')
+    .then(async (m) => {
+      await m.recordEdit(user.id, msg, suggestion, now);
+      await m.noteSendForVoice(user, now);
+    })
+    .catch(() => undefined);
   await step(() =>
     audit(user.id, 'message.sent', {
       objectTable: 'outbound',

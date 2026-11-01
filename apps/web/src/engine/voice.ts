@@ -4,9 +4,12 @@
  * Keeping the card current: every tenth send learns the card again from what the student wrote (`learnStyle`) and,
  * for an account, gives it to the server through /settings/profile, so the server's drafts and its voice check read
  * the same card this browser drafts with.
+ *
+ * Edits: every send whose words the student changed is kept as a typed `draftEdits` row (what Orbit wrote, what
+ * went), in both modes; the outbox takes an account's to orbit.draft_edits.
  */
-import type { StyleCard, User } from '@orbit/core';
-import { VOICE_LEARN_EVERY } from '@orbit/core';
+import type { DraftEdit, OutboundMessage, StyleCard, Suggestion, User } from '@orbit/core';
+import { newId, VOICE_LEARN_EVERY, wordEditDistance } from '@orbit/core';
 import { db } from '../db/schema';
 import { isServerUser } from '../integrations/orbitApi';
 import { pushProfileSettings } from './settings';
@@ -46,4 +49,36 @@ export async function noteSendForVoice(
   } catch {
     return false;
   }
+}
+
+/**
+ * An edited send, typed (plan 29 §B2.4): what Orbit wrote and what the student sent, every time the words changed,
+ * whether a card raised the draft or not. For an account the outbox takes it to orbit.draft_edits.
+ */
+export async function recordEdit(
+  userId: string,
+  msg: Pick<OutboundMessage, 'id' | 'kind' | 'bodyDraft' | 'bodyFinal'>,
+  suggestion?: Pick<Suggestion, 'payload'>,
+  now = new Date(),
+): Promise<DraftEdit | undefined> {
+  const after = (msg.bodyFinal ?? '').trim();
+  const before = msg.bodyDraft.trim();
+  if (!after || !before || after.replace(/\s+/g, ' ') === before.replace(/\s+/g, ' ')) return undefined;
+  const cls = suggestion?.payload?.replyClass;
+  const edit: DraftEdit = {
+    id: newId('edit'),
+    userId,
+    draftId: msg.id,
+    kind: msg.kind,
+    ...(typeof cls === 'string' ? { replyClass: cls } : {}),
+    before,
+    after,
+    distance: wordEditDistance(before, after),
+    createdAt: now.toISOString(),
+  };
+  // one row per draft: sent again after another edit, the newer words replace the older
+  const had = await db.draftEdits.where('draftId').equals(msg.id).first();
+  if (had) await db.draftEdits.update(had.id, { after, distance: edit.distance });
+  else await db.draftEdits.add(edit);
+  return had ? { ...had, after, distance: edit.distance } : edit;
 }

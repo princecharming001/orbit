@@ -19,6 +19,7 @@ import { base64url, fromBase64url, isUuid } from '../_shared/crypto.ts';
 import type { Db, Row } from '../_shared/db.ts';
 import { badRequest, json, readJson } from '../_shared/http.ts';
 import { QUEUES } from '../_shared/queue.ts';
+import { pushDraftEdit, recordDraftEdit } from '../_shared/voice/voice.ts';
 import type { Ctx } from './api.ts';
 import { PULL_BY_NAME, PULL_TABLES, type PullTable, shapeRow } from './tables.ts';
 
@@ -473,6 +474,8 @@ export const PUSH: Record<string, PushSpec> = {
   },
   // drafts: handled by pushDraft (status transitions and edits while still a draft)
   drafts: { table: 'drafts', write: 'update', key: 'id', fields: {} },
+  // an edit the browser recorded as it sent (plan 29 §B2.4): handled by pushDraftEdit, one row per draft
+  draft_edits: { table: 'draft_edits', write: 'upsert', key: 'id', fields: {} },
   memories: { table: 'memories', write: 'none', del: 'hard', key: 'id', fields: {} },
 };
 
@@ -518,6 +521,7 @@ export async function applyChange(db: Db, userId: string, raw: unknown) {
     const row = await db.begin(async (tx) => {
       if (c.op === 'delete') return remove(tx, userId, spec, c.id);
       if (spec.table === 'drafts') return pushDraft(tx, userId, c.id, c.row ?? {});
+      if (spec.table === 'draft_edits') return pushEdit(tx, userId, c.id, c.row ?? {});
       if (spec.write === 'none')
         throw new ChangeError('not_allowed', `${c.table} can only be deleted from the app`);
       return write(tx, userId, spec, c.id, c.row ?? {});
@@ -697,5 +701,28 @@ async function pushDraft(db: Db, userId: string, id: string, row: Record<string,
   }
   const changed = ['status', 'subject', 'body'].filter((k) => k in row);
   await audit(db, userId, 'sync.update', 'drafts', id, changed);
+  // an edit to Orbit's words is the student's voice (plan 29 §B2.4): one draft_edits row per draft
+  if (body !== undefined)
+    await recordDraftEdit(db, r.row as unknown as Parameters<typeof recordDraftEdit>[1]);
   return shape('drafts', r.row);
+}
+
+const DraftEditS = z.object({
+  draftId: uuidS.nullable().optional(),
+  kind: z.string().trim().min(1).max(40),
+  replyClass: z.string().max(40).nullable().optional(),
+  before: z.string().min(1).max(20_000),
+  after: z.string().min(1).max(20_000),
+  distance: z.number().int().min(0).max(100_000),
+  createdAt: tsS.nullable().optional(),
+});
+
+/** An edit the browser recorded: a new row, or the server's own row for the same draft brought up to date. */
+async function pushEdit(db: Db, userId: string, id: string, row: Record<string, unknown>) {
+  const p = DraftEditS.safeParse(row);
+  if (!p.success) throw new ChangeError('invalid', p.error.issues[0]?.message ?? 'invalid edit');
+  const r = await pushDraftEdit(db, userId, id, p.data);
+  if (!r) throw new ChangeError('not_found', `draft_edits ${id} was not found`);
+  await audit(db, userId, 'sync.insert', 'draft_edits', id, ['before', 'after']);
+  return r;
 }

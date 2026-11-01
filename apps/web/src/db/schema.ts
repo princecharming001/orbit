@@ -6,6 +6,7 @@ import type {
   CalendarEvent,
   CoffeeChat,
   Dossier,
+  DraftEdit,
   Edge,
   EmailMessage,
   EmailThread,
@@ -341,6 +342,7 @@ export class OrbitDB extends Dexie {
   targetPlans!: EntityTable<TargetPlan, 'id'>;
   friends!: EntityTable<FriendRow, 'friendshipId'>;
   friendAsks!: EntityTable<FriendAskRow, 'id'>;
+  draftEdits!: EntityTable<DraftEdit, 'id'>;
 
   constructor(name = 'orbit') {
     super(name);
@@ -485,6 +487,11 @@ export class OrbitDB extends Dexie {
     this.version(12).stores({
       friends: 'friendshipId, ownerId, userId',
       friendAsks: 'id, ownerId, friendshipId, status',
+    });
+    // plan 29 §B2.4: every edit the student made before a send, typed (what Orbit wrote, what went), read by the
+    // voice and pushed to orbit.draft_edits for an account; the settings row gains voiceNotes (not indexed)
+    this.version(13).stores({
+      draftEdits: 'id, userId, createdAt, draftId',
     });
   }
 }

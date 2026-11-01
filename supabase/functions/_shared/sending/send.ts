@@ -33,6 +33,7 @@ import { goalPaused, tripBreaker } from '../replies/breaker.ts';
 import { iso } from '../rows.ts';
 import type { Services } from '../services.ts';
 import { moveChat } from '../slots/slots.ts';
+import { recordDraftEdit } from '../voice/voice.ts';
 import { validZone, zonedTime } from '../zones.ts';
 import { rawMessage } from './mime.ts';
 import { gmailSend, gmailThreadHasNewerInbound, linkedinSend, type SendOutcome } from './transport.ts';
@@ -127,10 +128,12 @@ export async function approveDraft(
   req: Partial<DraftApproveRequest>,
 ): Promise<ServerDraft> {
   const db = s.db;
-  const d = await loadDraft(db, userId, req.draftId);
+  let d = await loadDraft(db, userId, req.draftId);
   if (d.status === 'sending' || d.status === 'sent') return toServerDraft(d);
   if (!['draft', 'approved', 'scheduled', 'failed'].includes(d.status))
     throw new HttpError(409, 'not_approvable', `a ${d.status} draft cannot be approved`);
+  // the words as the student left them (plan 29 §B2.4): approved as edited, and the edit kept for the voice
+  if (req.body !== undefined || req.subject !== undefined) d = await applyEdit(db, d, req);
   const text = `${d.subject ?? ''}\n${d.body}`;
   const needs = askUserMarkers(text);
   const gap = needs.length ? undefined : placeholderIn(text);
@@ -175,6 +178,7 @@ export async function approveDraft(
      where id = ${d.id}::uuid and user_id = ${userId}::uuid and status in ('draft', 'approved', 'scheduled', 'failed')
     returning *`;
   if (!row) return toServerDraft((await draftById(db, d.id))!);
+  await recordDraftEdit(db, row).catch(() => false);
   const hash = hashOf(row);
   await audit(db, userId, 'user', 'draft.approve', row.id, {
     hash,
@@ -212,6 +216,21 @@ export async function approveDraft(
     );
   }
   return toServerDraft((await draftById(db, row.id))!);
+}
+
+/** An approval that carries the student's words: the body (and subject) as they left them, checked first. */
+async function applyEdit(db: Db, d: DraftRow, req: Partial<DraftApproveRequest>): Promise<DraftRow> {
+  const body = req.body === undefined ? d.body : req.body;
+  if (typeof body !== 'string' || !body.trim() || body.length > 20_000)
+    throw new HttpError(400, 'bad_request', 'body must be the message, at most 20,000 characters');
+  const subject = req.subject === undefined ? d.subject : req.subject;
+  if (subject !== null && (typeof subject !== 'string' || subject.length > 200))
+    throw new HttpError(400, 'bad_request', 'subject must be text of at most 200 characters, or null');
+  if (body.trim() === d.body.trim() && (subject ?? null) === (d.subject ?? null)) return d;
+  const [row] = await db.sql<DraftRow>`
+    update orbit.drafts set body = ${body.trim()}, subject = ${subject ?? null}
+     where id = ${d.id}::uuid and status in ('draft', 'approved', 'scheduled', 'failed') returning *`;
+  return row ?? d;
 }
 
 export async function cancelDraft(db: Db, userId: string, draftId: unknown): Promise<ServerDraft> {

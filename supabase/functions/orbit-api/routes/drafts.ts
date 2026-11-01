@@ -1,8 +1,10 @@
 /**
  * Drafts (§7, §8.5):
  *   POST /drafts/compose {personId, kind, goalId?, channel, replyToMessageId?}  → {draft}
- *   POST /drafts/approve {draftId, sendAt?, confirm?}  → {draft}; no sendAt = the next send window; LinkedIn needs
- *                                                       confirm: true and goes at once; due now = sent now
+ *   POST /drafts/approve {draftId, sendAt?, confirm?, body?, subject?}
+ *                                                    → {draft}; no sendAt = the next send window; LinkedIn needs
+ *                                                       confirm: true and goes at once; due now = sent now; a body or
+ *                                                       subject approves the student's words and keeps the edit
  *   POST /drafts/cancel {draftId}                      → {draft} (an approved send that has not gone out)
  *   POST /drafts/discard {draftId}                     → {draft}
  */
@@ -54,6 +56,9 @@ async function approve(ctx: Ctx): Promise<Response> {
     draftId: uuid(b, 'draftId'),
     sendAt: typeof b.sendAt === 'string' ? b.sendAt : undefined,
     confirm: b.confirm === true,
+    // the words as the student left them (plan 29 §B2.4)
+    ...(b.body !== undefined ? { body: b.body as string } : {}),
+    ...(b.subject !== undefined ? { subject: b.subject as string | null } : {}),
   });
   return json(200, { draft });
 }

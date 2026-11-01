@@ -1,11 +1,12 @@
 /**
  * The voice on the server (plan 29 §B2.4, §B7): the style card through /settings/profile, the student's sent mail
- * embedded as it is ingested and on demand, so the drafts' exemplars are real.
+ * embedded as it is ingested and on demand, so the drafts' exemplars are real; every edit kept as a typed row,
+ * whether it came with the approval, through /sync/push on the draft, or as the browser's own record.
  */
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { exemplars } from '../../functions/_shared/compose/context.ts';
 import { defaultHandlers } from '../../functions/orbit-worker/worker.ts';
-import { agentConfig, api, fakeEmbed, fakeNet, signedInUser } from '../helpers/agents.ts';
+import { addPerson, agentConfig, api, fakeEmbed, fakeNet, signedInUser } from '../helpers/agents.ts';
 import { FakeGoogle, virtualTime } from '../helpers/fakeApis.ts';
 import { clearQueues, connectedUser, drain, fakeTokens } from '../helpers/ingest.ts';
 import { fixtureMailbox, NOW } from '../helpers/mailFixtures.ts';
@@ -123,5 +124,129 @@ describe('sent mail into embeddings', () => {
     const after = await t.db.sql<{ n: number }>`
       select count(*)::int as n from orbit.messages where user_id = ${u}::uuid and embedding is not null`;
     expect(after[0]!.n).toBe(3);
+  });
+});
+
+const ORBIT_WROTE =
+  "Hi Dana,\n\nI'm a junior at State and would love to hear how you got to Stripe. Would you be open to a quick call next week? Thanks either way.\n\nBest,\nSam";
+const SAM_SENT =
+  "Hi Dana,\n\nI'm a junior at State and would love to hear how you got to Stripe. Would you be open to a call next week?\n\nThanks,\nSam";
+
+async function aDraft(userId: string, personId: string, body = ORBIT_WROTE) {
+  const [d] = await t.db.sql<{ id: string; body_original: string }>`
+    insert into orbit.drafts (user_id, person_id, channel, kind, subject, body, status)
+    values (${userId}::uuid, ${personId}::uuid, 'gmail', 'first_touch', 'Stripe', ${body}, 'draft')
+    returning id, body_original`;
+  return d!;
+}
+
+const editsOf = (userId: string) =>
+  t.db.sql<{
+    id: string;
+    draft_id: string | null;
+    kind: string;
+    before: string;
+    after: string;
+    distance: number;
+  }>`
+    select id, draft_id, kind, before, after, distance from orbit.draft_edits where user_id = ${userId}::uuid
+     order by created_at`;
+
+describe('edits, typed, whichever way they arrive', () => {
+  it('a draft keeps the words Orbit wrote, and an approve with edited words writes one draft_edits row', async () => {
+    const net = fakeNet();
+    const call = api(t, net);
+    const { userId, token } = await signedInUser(t);
+    const p = await addPerson(t, userId, { name: 'Dana Ruiz', email: 'dana@example.com' });
+    const d = await aDraft(userId, p);
+    expect(d.body_original).toBe(ORBIT_WROTE);
+    const later = new Date(Date.now() + 3 * 86_400_000).toISOString();
+    const r = await call<{ draft: { body: string; status: string } }>('/drafts/approve', token, {
+      draftId: d.id,
+      body: SAM_SENT,
+      sendAt: later,
+    });
+    expect(r.status).toBe(200);
+    expect(r.body.draft.body).toBe(SAM_SENT);
+    const edits = await editsOf(userId);
+    expect(edits).toHaveLength(1);
+    expect(edits[0]).toMatchObject({
+      draft_id: d.id,
+      kind: 'first_touch',
+      before: ORBIT_WROTE,
+      after: SAM_SENT,
+    });
+    expect(edits[0]!.distance).toBeGreaterThan(3);
+    // approving again, unchanged, writes nothing new
+    await call('/drafts/approve', token, { draftId: d.id, sendAt: later });
+    expect(await editsOf(userId)).toHaveLength(1);
+  });
+
+  it('an approve of the words as written records nothing', async () => {
+    const call = api(t, fakeNet());
+    const { userId, token } = await signedInUser(t);
+    const p = await addPerson(t, userId, { name: 'Lee Park', email: 'lee@example.com' });
+    const d = await aDraft(userId, p);
+    await call('/drafts/approve', token, {
+      draftId: d.id,
+      sendAt: new Date(Date.now() + 86_400_000).toISOString(),
+    });
+    expect(await editsOf(userId)).toHaveLength(0);
+  });
+
+  it('an edit pushed on the draft is one row, and the browser’s own record folds into it', async () => {
+    const call = api(t, fakeNet());
+    const { userId, token } = await signedInUser(t);
+    const p = await addPerson(t, userId, { name: 'Ana Cole', email: 'ana@example.com' });
+    const d = await aDraft(userId, p);
+    const push = await call<{ results: { ok: boolean }[] }>('/sync/push', token, {
+      changes: [{ table: 'drafts', op: 'upsert', id: d.id, row: { body: SAM_SENT } }],
+    });
+    expect(push.body.results[0]!.ok).toBe(true);
+    expect(await editsOf(userId)).toHaveLength(1);
+    const again = `${SAM_SENT}\n`;
+    const own = crypto.randomUUID();
+    const r = await call<{ results: { ok: boolean }[] }>('/sync/push', token, {
+      changes: [
+        {
+          table: 'draft_edits',
+          op: 'upsert',
+          id: own,
+          row: { draftId: d.id, kind: 'first_touch', before: ORBIT_WROTE, after: again, distance: 6 },
+        },
+        // an edit to a draft only that browser had: kept, with no draft named
+        {
+          table: 'draft_edits',
+          op: 'upsert',
+          id: crypto.randomUUID(),
+          row: {
+            draftId: crypto.randomUUID(),
+            kind: 'bump',
+            before: 'Just bumping this.',
+            after: 'Bumping this.',
+            distance: 1,
+          },
+        },
+        {
+          table: 'draft_edits',
+          op: 'upsert',
+          id: crypto.randomUUID(),
+          row: { kind: 'bump', before: '', after: 'x', distance: 1 },
+        },
+      ],
+    });
+    expect(r.body.results.map((x) => x.ok)).toEqual([true, true, false]);
+    const edits = await editsOf(userId);
+    expect(edits).toHaveLength(2);
+    expect(edits.find((e) => e.draft_id === d.id)!.after).toBe(again);
+    expect(edits.find((e) => e.kind === 'bump')!.draft_id).toBeNull();
+  });
+
+  it('a user’s edits go with the account', async () => {
+    const { userId } = await signedInUser(t);
+    await t.db.sql`
+      insert into orbit.draft_edits (user_id, kind, before, after, distance) values (${userId}::uuid, 'bump', 'a b', 'a', 1)`;
+    await t.db.sql`select orbit.delete_user(${userId}::uuid)`;
+    expect(await editsOf(userId)).toHaveLength(0);
   });
 });

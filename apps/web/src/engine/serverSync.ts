@@ -17,6 +17,7 @@
  */
 import type {
   CoffeeChat,
+  DraftEdit,
   Goal,
   MeetingNote,
   OutboundMessage,
@@ -78,6 +79,7 @@ const PUSH_ORDER = [
   'uploads',
   'tie_labels',
   'drafts',
+  'draft_edits',
   'memories',
 ];
 
@@ -465,6 +467,8 @@ const OUTBOX_SOURCES: { dexie: string; table: string; key?: 'personId' | 'resume
   { dexie: 'tieLabels', table: 'tie_labels', key: 'personId' },
   { dexie: 'resumes', table: 'uploads' },
   { dexie: 'resumeFacets', table: 'uploads', key: 'resumeId', owned: false },
+  // plan 29 §B2.4: each edit the student made before a send, for the server's distillation
+  { dexie: 'draftEdits', table: 'draft_edits' },
 ];
 
 /** Whether a write to this row should go to the server: account mode, signed in, and the student's own row. */
@@ -736,6 +740,24 @@ async function buildChange(entry: OutboxRow, pairs: [string, string][]): Promise
         op: 'upsert',
         id: sid,
         row: { body: d.bodyFinal ?? d.bodyDraft, subject: d.subject ?? null },
+      };
+    }
+    case 'draft_edits': {
+      const e = (await db.draftEdits.get(entry.id)) as DraftEdit | undefined;
+      if (!e) return undefined;
+      return {
+        table: 'draft_edits',
+        op: 'upsert',
+        id: sid,
+        row: {
+          draftId: ref(e.draftId),
+          kind: e.kind,
+          replyClass: e.replyClass ?? null,
+          before: e.before.slice(0, 20_000),
+          after: e.after.slice(0, 20_000),
+          distance: e.distance,
+          createdAt: e.createdAt,
+        },
       };
     }
     case 'tie_labels': {

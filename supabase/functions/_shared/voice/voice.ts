@@ -5,9 +5,12 @@
  * (`users.settings.style_card`, shape checked here); `voice.card` rebuilds it from the sent mail the server holds when
  * the student asks to relearn. Exemplars: every sent Gmail message of 25 words or more gets an embedding through the
  * same gte-small adapter the memories use, as it is ingested (never blocking the ingest) and, for mail stored before
- * that, through `voice.embed_sent`, which embeds the last 200 for one user on demand.
+ * that, through `voice.embed_sent`, which embeds the last 200 for one user on demand. Edits: a server draft keeps the
+ * words Orbit wrote (`body_original`), so an edited approve or an edit pushed from a browser writes one
+ * orbit.draft_edits row per draft, the distillation's evidence.
  */
 import { buildStyleCard, mergeStyleCard } from '@orbit/core/style/card';
+import { wordEditDistance } from '@orbit/core/style/voice';
 import { stripQuotedReply, wordCount } from '@orbit/core/text/email';
 import type { StyleCard } from '@orbit/core/types';
 import { z } from 'zod/v4';
@@ -167,4 +170,86 @@ export async function relearnCard(db: Db, userId: string, now: Date): Promise<St
                                                                      'voice_relearned_at', ${now.toISOString()}::text)
      where id = ${userId}::uuid`;
   return card;
+}
+
+// ---- edits --------------------------------------------------------------------------------------------------------
+
+/** Two bodies are the same words when they match after whitespace is evened out. */
+const sameWords = (a: string, b: string) => a.replace(/\s+/g, ' ').trim() === b.replace(/\s+/g, ' ').trim();
+
+/**
+ * One edited draft into orbit.draft_edits: what Orbit first wrote (`body_original`) against the body as it stands.
+ * Nothing when the words are the same; an edit made again replaces the draft's row. Returns whether a row was written.
+ */
+export async function recordDraftEdit(
+  db: Db,
+  d: {
+    id: string;
+    user_id: string;
+    kind: string;
+    body: string;
+    body_original?: string | null;
+    ask?: { replyToMessageId?: string } | null;
+  },
+): Promise<boolean> {
+  const before = d.body_original;
+  if (!before || sameWords(before, d.body)) return false;
+  const distance = wordEditDistance(before, d.body);
+  const replyTo = d.ask?.replyToMessageId;
+  const [m] = replyTo
+    ? await db.sql<{ reply_class: string | null }>`
+        select reply_class from orbit.messages where id = ${replyTo}::uuid and user_id = ${d.user_id}::uuid`
+    : [];
+  const cls = m?.reply_class ?? null;
+  const updated = await db.sql`
+    update orbit.draft_edits set after = ${d.body}, distance = ${distance}::int, reply_class = coalesce(${cls}, reply_class)
+     where draft_id = ${d.id}::uuid and user_id = ${d.user_id}::uuid returning id`;
+  if (updated.length) return true;
+  await db.sql`
+    insert into orbit.draft_edits (user_id, draft_id, kind, reply_class, before, after, distance)
+    values (${d.user_id}::uuid, ${d.id}::uuid, ${d.kind}, ${cls}, ${before}, ${d.body}, ${distance}::int)
+    on conflict (draft_id) where draft_id is not null do update
+      set after = excluded.after, distance = excluded.distance`;
+  return true;
+}
+
+/**
+ * An edit a browser recorded (`/sync/push`, table draft_edits): kept under its own id, or folded into the row the
+ * server already has for the same draft. The draft is named only when it is the student's own.
+ */
+export async function pushDraftEdit(
+  db: Db,
+  userId: string,
+  id: string,
+  e: {
+    draftId?: string | null;
+    kind: string;
+    replyClass?: string | null;
+    before: string;
+    after: string;
+    distance: number;
+    createdAt?: string | null;
+  },
+): Promise<Record<string, unknown> | undefined> {
+  const [own] = e.draftId
+    ? await db.sql<{ id: string }>`
+        select id from orbit.drafts where id = ${e.draftId}::uuid and user_id = ${userId}::uuid`
+    : [];
+  const draftId = own?.id ?? null;
+  if (draftId) {
+    const [r] = await db.sql<Record<string, unknown>>`
+      update orbit.draft_edits set after = ${e.after}, distance = ${e.distance}::int
+       where draft_id = ${draftId}::uuid and user_id = ${userId}::uuid and id <> ${id}::uuid
+      returning id, draft_id, kind, distance, created_at`;
+    if (r) return r;
+  }
+  const [r] = await db.sql<Record<string, unknown>>`
+    insert into orbit.draft_edits (id, user_id, draft_id, kind, reply_class, before, after, distance, created_at)
+    values (${id}::uuid, ${userId}::uuid, ${draftId}::uuid, ${e.kind}, ${e.replyClass ?? null}, ${e.before}, ${e.after},
+            ${e.distance}::int, coalesce(${e.createdAt ?? null}::timestamptz, now()))
+    on conflict (id) do update set after = excluded.after, distance = excluded.distance
+     where orbit.draft_edits.user_id = ${userId}::uuid
+    returning id, draft_id, kind, distance, created_at`;
+  // undefined: the id is another student's row
+  return r;
 }

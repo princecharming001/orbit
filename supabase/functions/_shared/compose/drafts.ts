@@ -18,6 +18,8 @@ export type DraftRow = Record<string, unknown> & {
   kind: string;
   subject: string | null;
   body: string;
+  /** plan 29 §B2.4: the body as Orbit composed it; a different body at approval is the student's edit */
+  body_original?: string | null;
   status: ServerDraft['status'];
   ask: DraftMeta | null;
   hooks: { text: string; sourceId: string }[];
