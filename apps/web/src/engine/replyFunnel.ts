@@ -52,19 +52,22 @@ async function upsertCard(
   c: Omit<Suggestion, 'id' | 'userId' | 'status' | 'carriedOver' | 'expiresAt' | 'createdAt'>,
   now: Date,
 ): Promise<Suggestion> {
-  const had = await db.suggestions.where('dedupeKey').equals(c.dedupeKey).first();
-  if (had) return had;
-  const s: Suggestion = {
-    id: newId('s'),
-    userId,
-    status: 'pending',
-    carriedOver: 0,
-    expiresAt: new Date(now.getTime() + 14 * 86_400_000).toISOString(),
-    createdAt: now.toISOString(),
-    ...c,
-  };
-  await db.suggestions.add(s);
-  return s;
+  // one read-write transaction: two funnel runs at once (the reply check and Drafts opening) must not both add it
+  return db.transaction('rw', db.suggestions, async () => {
+    const had = await db.suggestions.where('dedupeKey').equals(c.dedupeKey).first();
+    if (had) return had;
+    const s: Suggestion = {
+      id: newId('s'),
+      userId,
+      status: 'pending',
+      carriedOver: 0,
+      expiresAt: new Date(now.getTime() + 14 * 86_400_000).toISOString(),
+      createdAt: now.toISOString(),
+      ...c,
+    };
+    await db.suggestions.add(s);
+    return s;
+  });
 }
 
 async function notify(userId: string, title: string, body: string | undefined, link: string, now: Date) {

@@ -21,6 +21,8 @@ export function useOpenAutopilotCards(userId: string | undefined) {
             .equals(userId)
             .filter((s) => (s.kind === 'needs_you' || s.kind === 'breaker') && s.status === 'pending')
             .toArray()
+            // one card per key, whatever raised it twice
+            .then((rows) => rows.filter((s, i) => rows.findIndex((r) => r.dedupeKey === s.dedupeKey) === i))
         : [],
     [userId],
   );

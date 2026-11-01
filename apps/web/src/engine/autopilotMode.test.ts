@@ -443,6 +443,22 @@ describe('autopilot with an account (plan 29 §B5, fake orbit-api)', () => {
     expect(api.calls.filter((c) => c.route === '/calendar/book')).toHaveLength(1);
   });
 
+  it('two funnel runs at once raise one Needs you card per question, never two', async () => {
+    await Promise.all([
+      runAccountFunnel(user, NOW),
+      runAccountFunnel(user, NOW),
+      runAccountFunnel(user, NOW),
+    ]);
+    const cards = await db.suggestions
+      .where('userId')
+      .equals(user.id)
+      .filter((x) => x.kind === 'needs_you')
+      .toArray();
+    const keys = cards.map((c) => c.dedupeKey);
+    expect(keys.length).toBeGreaterThan(0);
+    expect(new Set(keys).size).toBe(keys.length);
+  });
+
   it('syncAutopilotCards marks a question done once the server no longer lists it', async () => {
     const r = await autopilotStatus(user, NOW);
     if (!r.ok) throw new Error('status');
