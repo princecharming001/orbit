@@ -12,6 +12,7 @@ import { useLiveQuery } from 'dexie-react-hooks';
 import {
   AudioLines,
   Blocks,
+  Bot,
   Brain,
   Check,
   ChevronDown,
@@ -118,6 +119,7 @@ import {
   Working,
 } from '../ui';
 import { Suggest } from '../ui/Suggest';
+import { AutopilotSection } from './settings/Autopilot';
 import { VoiceSection } from './settings/Voice';
 
 /** The section with the LinkedIn import, the resume and the Claude key (its route keeps the older name). */
@@ -129,6 +131,7 @@ const BASE_SECTIONS = [
   ['integrations', INTEGRATIONS_LABEL],
   ['style', 'Writing style'],
   ['voice', 'Voice'],
+  ['autopilot', 'Autopilot'],
   ['limits', 'Limits and schedule'],
   ['privacy', 'Data & privacy'],
 ] as const;
@@ -149,6 +152,7 @@ const SECTION_ICONS: Record<string, LucideIcon> = {
   integrations: Blocks,
   style: PenLine,
   voice: AudioLines,
+  autopilot: Bot,
   limits: Gauge,
   privacy: ShieldCheck,
   account: CircleUserRound,
@@ -164,6 +168,7 @@ const SECTION_ALIASES: Record<string, string> = {
   writing: 'style',
   tone: 'style',
   'voice-notes': 'voice',
+  autonomy: 'autopilot',
   sending: 'limits',
   schedule: 'limits',
   data: 'privacy',
@@ -239,6 +244,7 @@ export function SettingsPage() {
             {section === 'integrations' && <Integrations />}
             {section === 'style' && <StyleCoach />}
             {section === 'voice' && <VoiceSection />}
+            {section === 'autopilot' && <AutopilotSection />}
             {section === 'limits' && <Limits />}
             {section === 'privacy' && <Privacy />}
             {section === 'account' && <AccountSection />}

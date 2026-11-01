@@ -106,6 +106,8 @@ export interface FakeState {
   autopilot: AutopilotStatus;
   /** per-goal autopilot modes set through /autopilot/mode */
   goalModes: Map<string, AutopilotStatus['mode']>;
+  /** batch items the student tapped (/drafts/approve on a needs_tap item): their own sends */
+  tapped: Set<string>;
   /** what /voice answers; relearnRequests counts /voice/relearn calls */
   voice: {
     cardProse: string[];
@@ -213,6 +215,7 @@ export function createFakeOrbitApi(
     friendAsks: [],
     autopilot: emptyAutopilot(),
     goalModes: new Map(),
+    tapped: new Set(),
     voice: { cardProse: [], notes: [], soundsLikeYou: null, relearnedAt: null, relearnRequests: 0 },
   };
   const code = 'good-code';
@@ -468,6 +471,10 @@ export function createFakeOrbitApi(
           forwardedDraftId: null,
         };
         state.friendAsks.push(ask);
+        // the plan's drafted ask for this contact is done (plan 29 §C1 phase 5)
+        state.autopilot.friendAsks = (state.autopilot.friendAsks ?? []).filter(
+          (a) => !(a.friendUserId === f.userId && a.targetPersonId === target.personId),
+        );
         return json(200, { ask });
       }
       // autopilot and voice (plan 29 Part B)
@@ -486,6 +493,12 @@ export function createFakeOrbitApi(
       }
       case '/autopilot/status':
         return json(200, state.autopilot);
+      case '/autopilot/dismiss': {
+        const had = (state.autopilot.friendAsks ?? []).some((a) => a.id === body.id);
+        if (!had && state.autopilot.batch?.at !== body.id) return error(404, 'not_found', 'no such card');
+        state.autopilot.friendAsks = (state.autopilot.friendAsks ?? []).filter((a) => a.id !== body.id);
+        return json(200, { id: body.id });
+      }
       case '/autopilot/hold': {
         const i = state.autopilot.queued.findIndex((x) => x.draftId === body.draftId);
         if (i < 0) return error(404, 'not_found', 'nothing queued with that id');
@@ -850,7 +863,13 @@ export function createFakeOrbitApi(
         if (/\[ASK USER:/.test(d.body))
           return error(409, 'needs_input', 'answer the question in the draft first');
         d.status = 'scheduled';
-        d.sendAt = iso(clock + 18 * 3600_000);
+        d.sendAt = typeof body.sendAt === 'string' ? body.sendAt : iso(clock + 18 * 3600_000);
+        // a tap on a first message in tomorrow's batch makes it the student's own (plan 29 §B2.2)
+        for (const q of state.autopilot.queued)
+          if (q.draftId === d.id && q.status === 'needs_tap') {
+            q.status = 'queued';
+            state.tapped.add(d.id);
+          }
         return json(200, { draft: d });
       }
       case '/drafts/cancel':
@@ -1083,7 +1102,49 @@ function emptyAutopilot(): AutopilotStatus {
       firstTouchesThisWeek: 0,
     },
     reviewUntil: null,
+    skipped: [],
+    friendAsks: [],
+    batch: null,
+    week: { sent: 0, replies: 0, calls: 0, pushbacks: 0, paused: [] },
   };
+}
+
+/**
+ * The morning in the fake (plan 29 §B2.2): every queued message whose time has come goes the way the send job sends
+ * it. A first message nobody tapped before the rung is earned goes back to Held with the reason; anything else goes
+ * and shows under Sent for you (a tapped one is the student's own send and leaves the batch without showing there).
+ */
+export function sendTheBatch(api: FakeOrbitApi, at: string): void {
+  const { autopilot } = api.state;
+  const earned = !!autopilot.rungs.find((r) => r.kind === 'first_touch')?.unlocked;
+  const due = autopilot.queued.filter((q) => !!q.sendAt && q.sendAt <= at);
+  autopilot.queued = autopilot.queued.filter((q) => !due.includes(q));
+  for (const q of due) {
+    const d = api.state.drafts.get(q.draftId);
+    if (q.status === 'needs_tap' && !earned) {
+      autopilot.held.push({
+        ...q,
+        status: 'held',
+        sendAt: null,
+        reason:
+          'It waited for your tap. Until twenty first messages go out as Orbit wrote them, each one in the evening batch needs one.',
+      });
+      if (d) d.status = 'draft';
+      continue;
+    }
+    if (d) {
+      d.status = 'sent';
+      d.sentAt = q.sendAt;
+    }
+    if (api.state.tapped.has(q.draftId)) continue;
+    autopilot.sentToday.push({
+      ...q,
+      status: 'sent',
+      sentAt: q.sendAt,
+      autoRung: q.autoRung ?? 'first_touch',
+    });
+    autopilot.caps.usedToday++;
+  }
 }
 
 /** What the friend shares with the student, under the friend's mode. */
@@ -1594,7 +1655,7 @@ export function withReplies(
         personName: 'Grace Liu',
         company: 'Linear',
         kind: 'first_touch',
-        status: 'queued',
+        status: 'needs_tap',
         subject: 'Linear and a question about onboarding flows',
         sendAt: tomorrow,
       }),
@@ -1603,7 +1664,7 @@ export function withReplies(
         personName: 'Omar Haddad',
         company: 'Notion',
         kind: 'first_touch',
-        status: 'queued',
+        status: 'needs_tap',
         subject: 'Quick question from a Cornell junior',
         sendAt: '2026-10-07T12:58:00.000Z',
       }),
@@ -1684,6 +1745,33 @@ export function withReplies(
       firstTouchesThisWeek: 5,
     },
     reviewUntil: '2026-10-07T04:40:00.000Z',
+    // who the plan left out and why (plan 29 §B6), the ask to a friend it drafted, tonight's card, and the week
+    skipped: [
+      {
+        personId: null,
+        personName: 'Noah Kim',
+        company: 'Linear',
+        rule: 'recruiter',
+        reason:
+          'Noah is a recruiter at Linear. Autopilot never writes a first message to a recruiter; that one is yours to send.',
+        at: '2026-10-06T23:00:00.000Z',
+      },
+      {
+        personId: null,
+        personName: 'Sam Patel',
+        company: 'Acme',
+        rule: 'not_target_company',
+        reason: 'Sam is at Acme, which is not one of the companies on your goals.',
+        at: '2026-10-06T23:00:00.000Z',
+      },
+    ],
+    friendAsks: [],
+    batch: {
+      at: '2026-10-06T22:00:00.000Z',
+      text: "Tomorrow's batch is ready: 2 first messages wait for your tap tonight. Until 20 go out as Orbit wrote them, only the ones you tap are sent.",
+      firstTouches: 2,
+    },
+    week: { sent: 9, replies: 4, calls: 2, pushbacks: 1, paused: ['Ramp'] },
   };
   state.pausedUntil = null;
   // what Orbit learned from the student's edits (B2.4), in their words, each with the edits behind it

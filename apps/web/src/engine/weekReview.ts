@@ -29,6 +29,7 @@ import {
   wentQuiet,
 } from '@orbit/core';
 import { db } from '../db/schema';
+import { isServerUser } from '../integrations/orbitApi';
 
 const DAY = 86_400_000;
 /** The review is due from Sunday at this hour, local time. */
@@ -105,6 +106,8 @@ export interface WeekReview {
   holiday?: string;
   /** what Orbit sent on its own this week (plan 23 §4.9) */
   sentForYou: number;
+  /** "On autopilot: 9 sent, 4 replies, 2 calls, 1 pushback (paused Stripe)" (plan 29 §B1), on a week it ran */
+  autopilot?: string;
   /** nothing moved this week */
   empty: boolean;
   /** "6 reached · 3 replied · 2 chats booked · 1 went quiet", or "Nothing moved this week" */
@@ -319,7 +322,7 @@ export async function buildWeekReview(user: User, now = new Date()): Promise<Wee
     by<TargetPlan>(db.targetPlans),
     db.settings.get(user.id),
   ]);
-  return weekReviewFrom(
+  const review = weekReviewFrom(
     {
       people,
       outbound,
@@ -338,6 +341,11 @@ export async function buildWeekReview(user: User, now = new Date()): Promise<Wee
     now,
     user.timezone || 'UTC',
   );
+  // plan 29 §B1: the week on autopilot, the server's for an account (the status it last read), this browser's else
+  const { autopilotWeekLine, cachedStatus, localWeek } = await import('./autopilotMode');
+  const week = isServerUser(user.id) ? (await cachedStatus(user.id))?.week : await localWeek(user.id, now);
+  const line = autopilotWeekLine(week);
+  return line ? { ...review, autopilot: line } : review;
 }
 
 /** Keep the week's numbers as its recap brief, once per Sunday, with a weekly_recap notification. */

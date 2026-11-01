@@ -234,6 +234,11 @@ function WeekCard({ r }: { r: WeekReview }) {
         />
         <Count label="went quiet" people={r.quiet} testId="week-review-quiet" />
       </ul>
+      {r.autopilot && (
+        <p className="mt-3 text-[13px] text-ink-2" data-testid="week-review-autopilot">
+          {r.autopilot}.
+        </p>
+      )}
       {r.sentForYou > 0 && (
         <p className="mt-3 text-[13px] text-ink-2" data-testid="week-review-sent-for-you">
           Orbit sent {r.sentForYou} for you, the kinds you handed over.

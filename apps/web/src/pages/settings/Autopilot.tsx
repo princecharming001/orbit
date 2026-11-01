@@ -1,0 +1,326 @@
+/**
+ * Settings, Autopilot (plan 29 §B1, §B5): one page, three modes, the rules printed under Autopilot in plain words and
+ * never hidden, the rungs as they stand per kind with their counts and the ladder's switches, a "Run on autopilot"
+ * switch on each goal, Pause and Stop everything, and in local mode the honest line that Orbit sends only while it is
+ * open. The same page in both modes: an account reads the server's status, local mode this browser's own.
+ */
+import type { AutopilotMode, AutopilotRung, Goal } from '@orbit/core';
+import { firstTouchRungLine } from '@orbit/core';
+import { useLiveQuery } from 'dexie-react-hooks';
+import { useState } from 'react';
+import { useAutopilotStatus } from '../../components/autopilot/useAutopilotStatus';
+import { SettingsCard, SettingsHeader, SettingsRow, SettingsStack } from '../../components/settings/kit';
+import { db } from '../../db/schema';
+import {
+  AUTOPILOT_MODE_TEXT,
+  AUTOPILOT_RULES,
+  FIRST_TOUCH_RUNG_RULE,
+  LOCAL_AUTOPILOT_NOTE,
+  pauseAutopilot,
+  setGoalAutopilot,
+  setMode,
+} from '../../engine/autopilotMode';
+import { GOAL_KIND_LABELS } from '../../engine/goals';
+import { LADDER_WORDS, type LadderKind, setAutoKind } from '../../engine/trust';
+import { useSession } from '../../state/session';
+import { Button, cx, relDate, Switch, useToast, Working } from '../../ui';
+
+const MODES: AutopilotMode[] = ['off', 'assist', 'autopilot'];
+const DAY = 86_400_000;
+
+/** What a rung's state says: "Orbit sends", "earned", or "14 of 20 approved unchanged". */
+function rungState(r: AutopilotRung): string {
+  if (r.unlocked) return r.kind === 'first_touch' ? 'Earned: the batch goes on silence' : 'Orbit sends';
+  if (r.unchanged >= r.needed) return 'Earned, asks you';
+  return `${r.unchanged} of ${r.needed} approved unchanged`;
+}
+
+const RUNG_TITLES: Record<AutopilotRung['kind'], string> = {
+  bump: LADDER_WORDS.bump.title,
+  thank_you: LADDER_WORDS.thank_you.title,
+  schedule: LADDER_WORDS.schedule.title,
+  first_touch: 'First messages',
+};
+
+export function AutopilotSection() {
+  const { user } = useSession();
+  const toast = useToast();
+  const view = useAutopilotStatus(user);
+  const settings = useLiveQuery(() => (user ? db.settings.get(user.id) : undefined), [user?.id]);
+  const goals =
+    useLiveQuery(
+      async () =>
+        user
+          ? (await db.userGoals.where('userId').equals(user.id).toArray()).filter(
+              (g) => !g.deletedAt && g.status === 'active',
+            )
+          : [],
+      [user?.id],
+    ) ?? [];
+  const [busy, setBusy] = useState<string>();
+  if (!user) return null;
+  const status = view.status;
+  const mode: AutopilotMode = status?.mode ?? settings?.autopilotMode ?? 'off';
+  const accountLevel = mode === 'autopilot' ? 2 : mode === 'assist' ? 1 : 0;
+
+  const run = async (key: string, fn: () => Promise<{ ok: boolean; message?: string }>, done: string) => {
+    setBusy(key);
+    try {
+      const r = await fn();
+      toast.push(r.ok ? { text: done } : { text: r.message ?? 'That did not work.', tone: 'bad' });
+      await view.refresh();
+    } finally {
+      setBusy(undefined);
+    }
+  };
+  const choose = (m: AutopilotMode) =>
+    run(`mode:${m}`, () => setMode(user, m), `Orbit is on ${AUTOPILOT_MODE_TEXT[m].title}.`);
+  const goalSwitch = (g: Goal, on: boolean) =>
+    run(
+      `goal:${g.id}`,
+      () => setGoalAutopilot(user, g.id, on),
+      on ? `${g.title} runs on autopilot.` : `${g.title} no longer runs on autopilot.`,
+    );
+  const pause = (days: number | null) =>
+    run(
+      'pause',
+      () =>
+        pauseAutopilot(user, {
+          until: days === null ? null : new Date(Date.now() + days * DAY).toISOString(),
+        }),
+      days === null
+        ? 'Autopilot is back on.'
+        : days >= 365
+          ? "Stopped. Nothing goes on its own and tomorrow's batch is back in your drafts until you turn it on again."
+          : `Paused for ${days === 1 ? 'a day' : `${days} days`}.`,
+    );
+  const liftGoal = (goalId: string) =>
+    run('lift', () => pauseAutopilot(user, { until: null, goalId }), 'Lifted. That goal runs again.');
+
+  const pausedUntil = status?.pausedUntil ?? null;
+  const stopped = !!pausedUntil && Date.parse(pausedUntil) - Date.now() > 300 * DAY;
+  const auto = new Set(settings?.autoKinds ?? []);
+  const rungs = status?.rungs ?? [];
+  const first = rungs.find((r) => r.kind === 'first_touch');
+
+  return (
+    <div data-testid="settings-autopilot">
+      <SettingsHeader
+        title="Autopilot"
+        description={
+          view.local
+            ? `How much Orbit does on its own, and the rules it never breaks. ${LOCAL_AUTOPILOT_NOTE}`
+            : 'How much Orbit does on its own, and the rules it never breaks.'
+        }
+      />
+      <SettingsStack>
+        {view.local && (
+          <p
+            className="-mt-4 rounded-[10px] bg-canvas-2/70 px-3.5 py-2.5 text-[12.5px] text-ink-2"
+            data-testid="autopilot-local-note"
+          >
+            {LOCAL_AUTOPILOT_NOTE}
+          </p>
+        )}
+        <SettingsCard title="Mode">
+          <div className="space-y-2 p-4" role="radiogroup" aria-label="Autopilot mode">
+            {MODES.map((m) => (
+              <button
+                key={m}
+                type="button"
+                role="radio"
+                aria-checked={mode === m}
+                onClick={() => void choose(m)}
+                disabled={!!busy}
+                className={cx(
+                  'w-full text-left rounded-[10px] border px-3.5 py-3 flex items-start gap-3 transition-colors',
+                  mode === m ? 'border-ink bg-canvas-2/60' : 'border-line hover:bg-canvas-2/60',
+                )}
+                data-testid={`autopilot-mode-${m}`}
+              >
+                <span
+                  className={cx(
+                    'mt-0.5 h-4 w-4 shrink-0 rounded-full border-[1.5px] inline-flex items-center justify-center',
+                    mode === m ? 'border-ink' : 'border-line',
+                  )}
+                  aria-hidden
+                >
+                  {mode === m && <span className="h-2 w-2 rounded-full bg-ink" />}
+                </span>
+                <span className="min-w-0">
+                  <span className="text-[13.5px] font-medium flex items-center gap-2">
+                    {AUTOPILOT_MODE_TEXT[m].title}
+                    {busy === `mode:${m}` && <Working />}
+                  </span>
+                  <span className="block text-[12.5px] text-ink-3 mt-0.5">{AUTOPILOT_MODE_TEXT[m].body}</span>
+                  {m === 'autopilot' && (
+                    <ul
+                      className="mt-2 space-y-1 text-[12.5px] text-ink-2 list-disc pl-4"
+                      data-testid="autopilot-rules"
+                    >
+                      {AUTOPILOT_RULES.map((r) => (
+                        <li key={r}>{r}</li>
+                      ))}
+                      <li>{FIRST_TOUCH_RUNG_RULE}</li>
+                    </ul>
+                  )}
+                </span>
+              </button>
+            ))}
+          </div>
+        </SettingsCard>
+
+        <SettingsCard
+          title="What Orbit has earned"
+          description="Each kind is earned by approvals you sent without changing a word. Bumps, thank-yous and scheduling replies ask you once they are earned; first messages are the last rung."
+          data-testid="autopilot-rungs"
+        >
+          {rungs.map((r) => {
+            const ladder = r.kind !== 'first_touch';
+            const mine = ladder && auto.has(r.kind as LadderKind);
+            return (
+              <SettingsRow
+                key={r.kind}
+                data-testid={`autopilot-rung-${r.kind}`}
+                label={RUNG_TITLES[r.kind]}
+                description={
+                  ladder
+                    ? rungState({ ...r, unlocked: mine })
+                    : firstTouchRungLine({ unchanged: r.unchanged, needed: r.needed, earned: r.unlocked })
+                }
+                control={
+                  ladder ? (
+                    <Switch
+                      checked={mine}
+                      onChange={(v: boolean) =>
+                        void run(
+                          `kind:${r.kind}`,
+                          async () => {
+                            await setAutoKind(user.id, r.kind as LadderKind, v);
+                            return { ok: true };
+                          },
+                          v
+                            ? `Orbit sends ${LADDER_WORDS[r.kind as LadderKind].many} on its own.`
+                            : `${LADDER_WORDS[r.kind as LadderKind].title} wait for your tap again.`,
+                        )
+                      }
+                      label={`Orbit sends ${LADDER_WORDS[r.kind as LadderKind].many} on its own`}
+                    />
+                  ) : (
+                    <span className="text-[12.5px] text-ink-2 tabular" data-testid="autopilot-rung-count">
+                      {r.unchanged} of {r.needed}
+                    </span>
+                  )
+                }
+              />
+            );
+          })}
+          {!rungs.length && (
+            <p className="px-5 py-4 text-[13px] text-ink-3">Reading where each kind stands.</p>
+          )}
+        </SettingsCard>
+
+        <SettingsCard
+          title="Goals on autopilot"
+          description="A goal can run on autopilot while the rest stays by hand. The rules above apply to every goal."
+          data-testid="autopilot-goals"
+        >
+          {goals.length ? (
+            goals.map((g) => {
+              const on = (g.autonomyLevel ?? accountLevel) === 2;
+              const pausedGoal = status?.pausedGoals.find((p) => p.goalId === g.id);
+              return (
+                <SettingsRow
+                  key={g.id}
+                  data-testid={`goal-autopilot-${g.id}`}
+                  label={g.title}
+                  description={
+                    pausedGoal
+                      ? `${GOAL_KIND_LABELS[g.kind]}. Paused: ${pausedGoal.reason}`
+                      : `${GOAL_KIND_LABELS[g.kind]}. ${g.targets.organizations.length ? `${g.targets.organizations.length} ${g.targets.organizations.length === 1 ? 'company' : 'companies'} on it.` : 'No companies on it yet, so autopilot has no one to write to first.'}`
+                  }
+                  control={
+                    <>
+                      {pausedGoal && (
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          onClick={() => void liftGoal(g.id)}
+                          disabled={!!busy}
+                        >
+                          Lift the pause
+                        </Button>
+                      )}
+                      <Switch
+                        checked={on}
+                        busy={busy === `goal:${g.id}`}
+                        onChange={(v: boolean) => void goalSwitch(g, v)}
+                        label={`Run ${g.title} on autopilot`}
+                        data-testid="goal-autopilot-switch"
+                      />
+                    </>
+                  }
+                />
+              );
+            })
+          ) : (
+            <p className="px-5 py-4 text-[13px] text-ink-3">
+              No goals yet. Add one in Goals and it can run on autopilot from here.
+            </p>
+          )}
+        </SettingsCard>
+
+        <SettingsCard
+          title="Pause"
+          description="Nothing Orbit chose a time for goes out while it is paused. Stop everything also puts tomorrow's batch back in your drafts."
+          data-testid="autopilot-pause"
+          footer={
+            pausedUntil ? (
+              <Button size="sm" variant="primary" onClick={() => void pause(null)} disabled={!!busy}>
+                Turn it back on
+              </Button>
+            ) : (
+              <>
+                <Button
+                  size="sm"
+                  onClick={() => void pause(1)}
+                  disabled={!!busy}
+                  data-testid="autopilot-pause-day"
+                >
+                  Pause for a day
+                </Button>
+                <Button
+                  size="sm"
+                  onClick={() => void pause(7)}
+                  disabled={!!busy}
+                  data-testid="autopilot-pause-week"
+                >
+                  Pause for a week
+                </Button>
+                <Button
+                  size="sm"
+                  variant="danger"
+                  onClick={() => void pause(365 * 5)}
+                  disabled={!!busy}
+                  data-testid="autopilot-stop"
+                >
+                  Stop everything
+                </Button>
+              </>
+            )
+          }
+        >
+          <p className="px-5 py-4 text-[13px] text-ink-2" data-testid="autopilot-pause-state">
+            {pausedUntil
+              ? stopped
+                ? 'Stopped until you turn it back on.'
+                : `Paused until ${relDate(pausedUntil)}.`
+              : first
+                ? `On. ${status?.caps.usedToday ?? 0} of ${status?.caps.autoPerDay ?? 5} sends on its own today, ${status?.caps.firstTouchesThisWeek ?? 0} of ${status?.caps.firstTouchPerWeek ?? 12} first messages this week.`
+                : 'On.'}
+          </p>
+        </SettingsCard>
+      </SettingsStack>
+    </div>
+  );
+}

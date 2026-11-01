@@ -744,6 +744,21 @@ export interface AutopilotStatus {
   friendAsks?: AutopilotFriendAsk[];
   /** tonight's batch card, once it is raised (at 18:00 the student's time, when the batch is not empty) */
   batch?: { at: string; text: string; firstTouches: number } | null;
+  /** the last seven days on autopilot, for the weekly review's line (plan 29 §B1) */
+  week?: AutopilotWeek;
+}
+/** "On autopilot: 9 sent, 4 replies, 2 calls, 1 pushback (paused Stripe)" as numbers (plan 29 §B1). */
+export interface AutopilotWeek {
+  /** what Orbit sent on its own */
+  sent: number;
+  /** of those, the ones answered */
+  replies: number;
+  /** calls booked from a reply */
+  calls: number;
+  /** times the breaker paused a goal */
+  pushbacks: number;
+  /** what the pushbacks paused, by company or goal */
+  paused: string[];
 }
 /** A person the plan step weighed and left out, with the rule (plan 29 §B6). */
 export interface AutopilotSkip {

@@ -5,6 +5,7 @@ import { Check, ChevronUp, Copy, ExternalLink, Sparkles } from 'lucide-react';
 import { type ReactNode, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { db } from '../db/schema';
+import { answerPlanAsk } from '../engine/autopilotMode';
 import {
   ensureDrafts,
   isMessageSuggestion,
@@ -587,6 +588,56 @@ export function SuggestionCard({
                 }
               >
                 No
+              </Button>
+            </div>
+          )}
+          {s.kind === 'batch_ready' && (
+            // plan 29 §B1: tonight's batch is ready for the evening review
+            <div className="mt-3 flex gap-2" data-testid="batch-ready-card">
+              <Button variant="primary" size="sm" onClick={() => nav('/inbox')}>
+                See tomorrow's batch
+              </Button>
+            </div>
+          )}
+          {s.kind === 'friend_ask_ready' && user && (
+            // plan 29 §A2.5: the plan drafted an ask to a friend; it goes to the friend, never to the person
+            <div className="mt-3 flex flex-wrap gap-2" data-testid="friend-ask-ready">
+              <Button
+                variant="primary"
+                size="sm"
+                disabled={busy}
+                onClick={() =>
+                  void answerPlanAsk(
+                    user,
+                    {
+                      id: String(s.payload.cardId ?? s.payload.id ?? ''),
+                      friendUserId: String(s.payload.friendUserId ?? ''),
+                      targetPersonId: String(s.payload.targetPersonId ?? ''),
+                      note: String(s.payload.note ?? ''),
+                    },
+                    true,
+                  )
+                }
+              >
+                Ask {String(s.payload.friendName ?? 'your friend').split(' ')[0]}
+              </Button>
+              <Button
+                size="sm"
+                disabled={busy}
+                onClick={() =>
+                  void answerPlanAsk(
+                    user,
+                    {
+                      id: String(s.payload.cardId ?? s.payload.id ?? ''),
+                      friendUserId: String(s.payload.friendUserId ?? ''),
+                      targetPersonId: String(s.payload.targetPersonId ?? ''),
+                      note: String(s.payload.note ?? ''),
+                    },
+                    false,
+                  )
+                }
+              >
+                Not now
               </Button>
             </div>
           )}

@@ -12,6 +12,7 @@ import type {
   AutopilotItem,
   AutopilotMode,
   AutopilotStatus,
+  AutopilotWeek,
   OutboundMessage,
   ServerDraft,
   Suggestion,
@@ -187,11 +188,51 @@ export async function localAutopilotStatus(
   };
 }
 
+/**
+ * The last seven days on autopilot in this browser (plan 29 §B1): what Orbit sent on its own, how many of those
+ * people answered, the calls that followed, and the breaker's pauses with what they paused.
+ */
+export async function localWeek(userId: string, now = new Date()): Promise<AutopilotWeek> {
+  const since = now.getTime() - 7 * 86_400_000;
+  const within = (iso?: string) => !!iso && Date.parse(iso) >= since && Date.parse(iso) <= now.getTime();
+  const [outbound, messages, chats, events, cards] = await Promise.all([
+    db.outbound.where('userId').equals(userId).toArray(),
+    db.messages.where('userId').equals(userId).toArray(),
+    db.chats.where('userId').equals(userId).toArray(),
+    db.stageEvents.where('userId').equals(userId).toArray(),
+    db.suggestions.where('userId').equals(userId).toArray(),
+  ]);
+  const sent = outbound.filter((o) => o.autoSent && o.status === 'sent' && within(o.sentAt));
+  const replies = sent.filter((o) =>
+    messages.some(
+      (m) =>
+        m.direction === 'inbound' &&
+        m.fromPersonId === o.personId &&
+        Date.parse(m.sentAt) > Date.parse(o.sentAt!),
+    ),
+  ).length;
+  const people = new Set(sent.map((o) => o.personId));
+  const chatIds = new Set(chats.filter((c) => people.has(c.personId)).map((c) => c.id));
+  const calls = events.filter(
+    (e) =>
+      e.status === 'applied' && e.toStage === 'scheduled' && chatIds.has(e.chatId) && within(e.createdAt),
+  ).length;
+  const trips = cards.filter((c) => c.kind === 'breaker' && within(c.createdAt));
+  const paused = [
+    ...new Set(
+      trips
+        .map((c) => (c.payload.company as string | undefined) ?? (c.payload.title as string | undefined))
+        .filter((x): x is string => !!x),
+    ),
+  ];
+  return { sent: sent.length, replies, calls, pushbacks: trips.length, paused };
+}
+
 /** Who this browser's last plan left out and why, and tonight's batch card when it is up (plan 29 §B4). */
 async function localPlanCards(
   userId: string,
   now: Date,
-): Promise<Pick<AutopilotStatus, 'skipped' | 'friendAsks' | 'batch'>> {
+): Promise<Pick<AutopilotStatus, 'skipped' | 'friendAsks' | 'batch' | 'week'>> {
   const { LOCAL_SKIPS_KV } = await import('./autopilotPlan');
   const kept = (await db.kv.get(`${LOCAL_SKIPS_KV}${userId}`))?.value as
     | { at: string; skipped: NonNullable<AutopilotStatus['skipped']> }
@@ -209,6 +250,7 @@ async function localPlanCards(
   return {
     skipped: fresh ? kept.skipped : [],
     friendAsks: [],
+    week: await localWeek(userId, now),
     batch: card
       ? { at: card.createdAt, text: card.reasonText, firstTouches: Number(card.payload.firstTouches) || 0 }
       : null,
@@ -570,6 +612,56 @@ export async function answerReply(
     payload: { ...card.payload, answer },
   });
   return { ok: true, draft, local: true };
+}
+
+// ---- the words Settings, the chat and the review share (plan 29 §B1) -------------------------------------------------
+
+/** What each mode means, in the student's words, exactly as Settings prints it (plan 29 §B1). */
+export const AUTOPILOT_MODE_TEXT: Record<AutopilotMode, { title: string; body: string }> = {
+  off: { title: 'Off', body: 'Orbit writes, you send.' },
+  assist: {
+    title: 'Assist',
+    body: "You approve each message with one tap and it goes at the right time: the recipient's Tuesday to Thursday morning, spaced like a person. Bumps, thank-yous and scheduling replies go on their own once you have approved ten of a kind unchanged, each shown after with a minute to undo.",
+  },
+  autopilot: {
+    title: 'Autopilot',
+    body: "Everything in Assist, and: Orbit plans your week to your target, writes the first messages, shows them to you the evening before as Tomorrow's batch, and sends them in the morning unless you hold one. When someone replies, Orbit answers scheduling and thank-you replies itself, offers three times from your calendar when they say yes, books the call when they pick one, and asks you in chat only when a reply needs something only you know.",
+  },
+};
+
+/** The rules under Autopilot, each a sentence, never hidden (plan 29 §B1), with the caps from the one rulebook. */
+export const AUTOPILOT_RULES: readonly string[] = [
+  'Email only, never LinkedIn.',
+  "Only to alumni, people you know (closeness 40 or more) or a friend's contact.",
+  `At most ${SEND_CAPS.autoPerDay} sends a day on its own, ${SEND_CAPS.autoFirstTouchesPerWeek} first messages a week.`,
+  'Only companies on your goals.',
+  'Stops and tells you at the first decline, unsubscribe or pushback.',
+  'Every message appears under Sent for you with a minute to undo, and in your morning brief.',
+  'Pause is one tap, here and in the chat.',
+];
+
+/** The last rung, said once under the rules (plan 29 §B1, §B2.2). */
+export const FIRST_TOUCH_RUNG_RULE = `First messages are the last rung: until ${AUTO_FIRST_TOUCH_RUNG} first messages have gone out unchanged, the batch asks for a tap in the evening instead of sending in the morning.`;
+
+/** "On autopilot: 9 sent, 4 replies, 2 calls, 1 pushback (paused Stripe)", or undefined for a quiet week. */
+export function autopilotWeekLine(w: AutopilotWeek | undefined): string | undefined {
+  if (!w || (!w.sent && !w.pushbacks)) return undefined;
+  const n = (k: number, one: string, many = `${one}s`) => `${k} ${k === 1 ? one : many}`;
+  const paused = w.paused.length ? ` (paused ${w.paused.join(' and ')})` : '';
+  return `On autopilot: ${w.sent} sent, ${n(w.replies, 'reply', 'replies')}, ${n(w.calls, 'call')}, ${n(w.pushbacks, 'pushback')}${paused}`;
+}
+
+/**
+ * A goal's "Run on autopilot" switch (plan 29 §B1): on writes the goal's level 2; off puts it back to the level the
+ * account runs at, held at assist at most, so the rest of the account is untouched.
+ */
+export async function setGoalAutopilot(
+  user: Pick<User, 'id'>,
+  goalId: string,
+  on: boolean,
+): Promise<{ ok: true; mode: AutopilotMode; goalId: string | null } | Fail> {
+  const account = (await db.settings.get(user.id))?.autopilotMode ?? 'off';
+  return setMode(user, on ? 'autopilot' : account === 'off' ? 'off' : 'assist', goalId);
 }
 
 /** "Autopilot: sent 3, answered 2 replies, booked 1 call, 2 need you" for the brief, or undefined when nothing. */

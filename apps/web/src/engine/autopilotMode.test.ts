@@ -238,7 +238,12 @@ describe('autopilot in local mode (plan 29 §B5)', () => {
     await chatWith('p_chloe', 'Please stop emailing me.', 'g1');
     const out = await runLocalFunnel(user, NOW);
     expect(out).toMatchObject({ handled: 2, needsYou: 1, closed: 1, breakers: 1 });
-    const cards = await db.suggestions.where('userId').equals(user.id).toArray();
+    const cards = await db.suggestions
+      .where('userId')
+      .equals(user.id)
+      // the plan's batch card is its own test (pages/settings/Autopilot.test.tsx)
+      .filter((c) => c.kind !== 'batch_ready')
+      .toArray();
     const q = cards.find((c) => c.kind === 'needs_you' && !c.payload.closed)!;
     expect(q.reasonText).toBe(
       'Daniel Okafor asked: "Quick one first: have you applied through the portal yet?" What should I say?',
@@ -305,7 +310,12 @@ describe('autopilot in local mode (plan 29 §B5)', () => {
     expect(events).toHaveLength(1);
     expect(events[0]!.startAt).toBe('2026-10-08T15:00:00.000Z');
     expect(events[0]!.inviteSentAt).toBeTruthy();
-    const cards = await db.suggestions.where('userId').equals(user.id).toArray();
+    const cards = await db.suggestions
+      .where('userId')
+      .equals(user.id)
+      // the plan's batch card is its own test (pages/settings/Autopilot.test.tsx)
+      .filter((c) => c.kind !== 'batch_ready')
+      .toArray();
     expect(cards.map((c) => c.kind).sort()).toEqual(['prep_brief', 'schedule_confirm']);
     const confirm = cards.find((c) => c.kind === 'schedule_confirm')!;
     const draft = await db.outbound.get(confirm.outboundMessageId!);
@@ -369,7 +379,12 @@ describe('autopilot with an account (plan 29 §B5, fake orbit-api)', () => {
     expect(r.ok && !r.local).toBe(true);
     if (!r.ok) return;
     expect(r.status.queued.map((q) => q.personName)).toEqual(['Grace Liu', 'Omar Haddad']);
-    const cards = await db.suggestions.where('userId').equals(user.id).toArray();
+    const cards = await db.suggestions
+      .where('userId')
+      .equals(user.id)
+      // the plan's batch card is its own test (pages/settings/Autopilot.test.tsx)
+      .filter((c) => c.kind !== 'batch_ready')
+      .toArray();
     expect(cards.map((c) => [c.kind, c.payload.personName])).toEqual([['needs_you', 'Daniel Okafor']]);
     expect(cards[0]!.payload.question).toBe('Have you applied through the portal yet?');
     const held = await holdSend(user, 'draft_ap_grace');
@@ -398,7 +413,12 @@ describe('autopilot with an account (plan 29 §B5, fake orbit-api)', () => {
     expect(book.body).toEqual({ draftId: 'draft_lena_slots', slotStart: '2026-10-08T15:00:00Z' });
     expect(api.state.replies.find((r) => r.personName === 'Lena Novak')!.outcome).toBe('booked');
     expect(api.state.autopilot.sentToday.find((i) => i.personName === 'Lena Novak')!.outcome).toBe('booked');
-    const cards = await db.suggestions.where('userId').equals(user.id).toArray();
+    const cards = await db.suggestions
+      .where('userId')
+      .equals(user.id)
+      // the plan's batch card is its own test (pages/settings/Autopilot.test.tsx)
+      .filter((c) => c.kind !== 'batch_ready')
+      .toArray();
     const kinds = cards
       .map((c) => `${c.kind}:${c.payload.personName ?? ''}${c.payload.closed ? ':closed' : ''}`)
       .sort();
@@ -426,12 +446,47 @@ describe('autopilot with an account (plan 29 §B5, fake orbit-api)', () => {
   it('syncAutopilotCards marks a question done once the server no longer lists it', async () => {
     const r = await autopilotStatus(user, NOW);
     if (!r.ok) throw new Error('status');
-    const [card] = await db.suggestions.where('userId').equals(user.id).toArray();
+    const [card] = await db.suggestions
+      .where('userId')
+      .equals(user.id)
+      // the plan's batch card is its own test (pages/settings/Autopilot.test.tsx)
+      .filter((c) => c.kind !== 'batch_ready')
+      .toArray();
     await syncAutopilotCards(user.id, { ...r.status, needsYou: [] }, NOW);
     expect((await db.suggestions.get(card!.id))!.status).toBe('done');
-    const again = (await db.suggestions.where('userId').equals(user.id).toArray()).filter(
-      (s) => s.status === 'pending',
-    );
+    const again = (
+      await db.suggestions
+        .where('userId')
+        .equals(user.id)
+        // the plan's batch card is its own test (pages/settings/Autopilot.test.tsx)
+        .filter((c) => c.kind !== 'batch_ready')
+        .toArray()
+    ).filter((s) => s.status === 'pending');
     expect(again).toEqual([] as Suggestion[]);
+  });
+});
+
+describe('the weekly review line (plan 29 §B1)', () => {
+  it('says the week on autopilot in one line, in the plan words, and nothing on a quiet week', async () => {
+    const { autopilotWeekLine } = await import('./autopilotMode');
+    expect(autopilotWeekLine({ sent: 9, replies: 4, calls: 2, pushbacks: 1, paused: ['Stripe'] })).toBe(
+      'On autopilot: 9 sent, 4 replies, 2 calls, 1 pushback (paused Stripe)',
+    );
+    expect(autopilotWeekLine({ sent: 1, replies: 1, calls: 1, pushbacks: 0, paused: [] })).toBe(
+      'On autopilot: 1 sent, 1 reply, 1 call, 0 pushbacks',
+    );
+    expect(autopilotWeekLine({ sent: 0, replies: 0, calls: 0, pushbacks: 0, paused: [] })).toBeUndefined();
+    expect(autopilotWeekLine(undefined)).toBeUndefined();
+  });
+
+  it('the modes and the rules are worded as Settings prints them, with no dash or exclamation mark', async () => {
+    const { AUTOPILOT_MODE_TEXT, AUTOPILOT_RULES, FIRST_TOUCH_RUNG_RULE } = await import('./autopilotMode');
+    for (const t of [
+      ...Object.values(AUTOPILOT_MODE_TEXT).map((m) => m.body),
+      ...AUTOPILOT_RULES,
+      FIRST_TOUCH_RUNG_RULE,
+    ])
+      expect(t).not.toMatch(/[–—!]/);
+    expect(AUTOPILOT_RULES).toContain('At most 5 sends a day on its own, 12 first messages a week.');
   });
 });

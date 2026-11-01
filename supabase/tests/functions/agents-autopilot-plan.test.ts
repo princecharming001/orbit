@@ -561,6 +561,8 @@ describe('sending the batch (plan 29 §B2.2, §B4, §B6)', () => {
     expect(status.sentToday).toEqual([
       expect.objectContaining({ draftId: r.draftId, autoRung: 'first_touch', status: 'sent' }),
     ]);
+    // the weekly review's line reads the week from the same status
+    expect(status.week).toMatchObject({ sent: 1, replies: 0, calls: 0, pushbacks: 0 });
   });
 
   it('a hold wins: the held message is never claimed', async () => {
@@ -665,5 +667,12 @@ describe('sending the batch (plan 29 §B2.2, §B4, §B6)', () => {
     expect(card!.reason_text).toBe(
       'Gia Grant pushed back on a first message Orbit sent. Paused Ramp first messages. Read it?',
     );
+    expect(
+      (await autopilotStatus(t.db, sent.userId, new Date(AT.getTime() + 3 * 3_600_000))).week,
+    ).toMatchObject({
+      sent: 1,
+      pushbacks: 1,
+      paused: ['Ramp'],
+    });
   });
 });
