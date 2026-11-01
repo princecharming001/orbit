@@ -5,8 +5,8 @@ import { BANNED_PHRASES, voiceProblems } from '../agent/voice';
 const text = stableSystemText();
 
 describe('stable system block', () => {
-  it('is version 16 and byte-identical for every conversation; the tag rule follows in its own small block', () => {
-    expect(STABLE_SYSTEM_VERSION).toBe(16);
+  it('is version 17 and byte-identical for every conversation; the tag rule follows in its own small block', () => {
+    expect(STABLE_SYSTEM_VERSION).toBe(17);
     expect(stableSystemText()).toBe(text);
     const a = systemBlocks('0123456789abcdef');
     const b = systemBlocks('fedcba9876543210');
@@ -20,6 +20,14 @@ describe('stable system block', () => {
     expect(a[1]!.text).toMatch(/0123456789abcdef/);
     expect(a[1]!.text).not.toEqual(b[1]!.text);
     expect(a[1]!.text.length).toBeLessThan(600);
+  });
+
+  it('v17: first messages on autopilot, the first-message rung and the evening review', () => {
+    expect(text).toMatch(/until twenty first messages have gone out unchanged \(the first-message rung\)/);
+    expect(text).toMatch(/That is the evening review/);
+    expect(text).toMatch(/at most 3 a morning and 12 a week/);
+    expect(text).toMatch(/never a recruiter, anyone under 18, or faculty outside a research goal/);
+    expect(text).not.toMatch(/[–—]/);
   });
 
   it('v9: goals, memory, research and sourcing, autonomy honesty and the hard rules', () => {

@@ -1374,6 +1374,9 @@ const AUTOPILOT_REPLIES =
 const AUTOPILOT_ANSWER =
   'Answering a reply that asked a question: the student\'s one line ("yes, applied Monday") fills the gap and the reply drafts itself around it, in the student\'s voice, with nothing added that the student did not say (no dates, no claims, no new commitment); the draft is shown for approval before anything goes. Daniel Okafor asked whether the student has applied through the portal yet.';
 
+const FIRST_TOUCH_PLAN =
+  "How first messages on autopilot work: each hour Orbit plans the next morning for the goals on autopilot, to the week's target, writing only to alumni or people the student knows (closeness 40 or more) at a company on the goal, or drafting the ask to a friend for a friend's contact (never a note to the contact); never a recruiter, anyone under 18 or faculty outside a research goal; one person per firm a morning, at most 3 a morning and 12 a week; each needs something researched to open with. They show the evening before as Tomorrow's batch, with a card at six. Until twenty first messages have gone out unchanged each waits for a tap; after that silence sends it in the morning unless held. Why someone was left out is in the status with its rule.";
+
 const VOICE_NOTES =
   'Settings, Voice: the card as prose (greets with Hi, signs off Thanks, short sentences, contractions, no exclamation marks, the ask by the second sentence) and what Orbit learned from edits, one line each: "You cut Thanks either way every time", "You never open with the connection line twice in one thread", "You sign with your first name only". Each note can be kept or forgotten; a forgotten note is never re-learned; Relearn from my sent mail runs in the background. Listed from the voice data, never invented, and forgetting one is a change the student asked for, done at once and said back in a line.';
 
@@ -1736,6 +1739,48 @@ const PLAN29: Scenario[] = [
     reference: `${AUTOPILOT_DAY} First messages are the last rung: 14 of 20 unchanged so far, so the batch asks for a tap in the evening until twenty have gone out unchanged; two edits in thirty days re-ask. The numbers come from the status.`,
     noWeb: true,
     minGoal: 'yes',
+  },
+  // ---- first messages on autopilot (plan 29 §C1 phase 5) ----------------------------------------------------------
+  {
+    id: 'ap-recruiting-on-autopilot-rung',
+    group: 'autopilot',
+    persona:
+      'Alex, the demo junior who wants Orbit to start writing first messages for the internship search',
+    account: 'demo',
+    api: autopilotDay,
+    goal: 'put your recruiting on autopilot, and ask whether first messages will go out on their own from tomorrow',
+    maxTurns: 5,
+    expectTools: [['set_autopilot_mode']],
+    reference: `${AUTOPILOT_MODES} ${FIRST_TOUCH_PLAN} The confirm says the mode in two sentences and where the rung stands from the status (14 of 20 approved unchanged, so the batch still asks for a tap each evening until six more go out unchanged); turning it on sends nothing on the spot and promises no date the rung has not reached.`,
+    noWeb: true,
+    minGoal: 'partly',
+  },
+  {
+    id: 'ap-why-not-noah',
+    group: 'autopilot',
+    persona: AUTOPILOT_PERSONA,
+    account: 'demo',
+    api: autopilotDay,
+    goal: 'ask why Orbit did not write to Noah Kim at Linear, then why not Sam Patel',
+    maxTurns: 4,
+    expectTools: [['autopilot_status']],
+    reference: `${AUTOPILOT_DAY} ${FIRST_TOUCH_PLAN} The last plan left out Noah Kim at Linear because he is a recruiter (autopilot never writes a first message to a recruiter; that one is the student's to send) and Sam Patel because Acme is not one of the companies on the goals. Each answer names the one rule from the status in plain words, offers the next step a sharp friend would (write to Noah by hand, or add Acme to a goal), and invents no other reason.`,
+    noWeb: true,
+    minGoal: 'yes',
+  },
+  {
+    id: 'ap-hold-batch-before-rung',
+    group: 'autopilot',
+    persona:
+      'Alex, the demo junior who read the evening batch card and wants to look again before anything goes',
+    account: 'demo',
+    api: autopilotDay,
+    goal: "hold tomorrow's batch, and ask what would have happened to the two first messages if you had done nothing",
+    maxTurns: 4,
+    expectTools: [['hold_send']],
+    reference: `${AUTOPILOT_DAY} ${FIRST_TOUCH_PLAN} Both first messages are held by name (Grace Liu and Omar Haddad) and are drafts again. Before the rung is earned, doing nothing would not have sent them either: each waits for a tap (Send in the morning), and one left untapped goes back to the drafts with the reason. Replies and bumps keep going unless the student pauses everything.`,
+    noWeb: true,
+    minGoal: 'partly',
   },
 ];
 

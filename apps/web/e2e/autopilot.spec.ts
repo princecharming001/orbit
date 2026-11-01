@@ -1,13 +1,13 @@
 import { expect, type Page, test } from '@playwright/test';
-import { type FakeOrbitApi, withReplies } from '../src/test/fakeOrbitApi';
+import { type FakeOrbitApi, sendTheBatch, withReplies } from '../src/test/fakeOrbitApi';
 import { withFakeApi } from './fakeApi';
 
 /**
  * Autopilot (plan 29 Part B, B7 acceptance): a week on autopilot against the fake orbit-api. Phase 3 made the reply
  * flows real: Tomorrow's batch with Hold, a seeded reply of each class producing its card or send, Needs you answered
  * from the chat, a confirmed slot booking the call, the breaker, Sent for you and the pause. Phase 4 made Settings,
- * Voice real; the flows that wait on phase 5 (the Autopilot page, the morning send of a first message) stay `fixme`
- * with what they will prove.
+ * Voice real; phase 5 the Autopilot page, the first messages in the evening batch that wait for a tap, and the
+ * morning send of a first message once the rung is earned.
  */
 
 const STUDENT_PEOPLE = [
@@ -55,16 +55,21 @@ async function say(page: Page, text: string) {
 }
 
 test.describe('autopilot (plan 29 B7, fake orbit-api)', () => {
-  test.fixme('Settings shows the three modes with their rules, and the rungs as they stand', async ({
-    page,
-  }) => {
-    await signedInOnAutopilot(page);
+  test('Settings shows the three modes with their rules, and the rungs as they stand', async ({ page }) => {
+    const api = await signedInOnAutopilot(page);
     await page.goto('settings/autopilot');
     for (const mode of ['Off', 'Assist', 'Autopilot'])
       await expect(page.getByTestId(`autopilot-mode-${mode.toLowerCase()}`)).toContainText(mode);
     await expect(page.getByTestId('autopilot-rules')).toContainText('Email only, never LinkedIn');
     await expect(page.getByTestId('autopilot-rules')).toContainText('At most 5 sends a day on its own');
     await expect(page.getByTestId('autopilot-rung-first_touch')).toContainText('14 of 20');
+    await expect(page.getByTestId('settings-autopilot')).not.toContainText(/[–—!]/);
+    // a goal runs on autopilot on its own switch
+    const goal = api.state.goals[0]!;
+    await page.getByTestId(`goal-autopilot-${goal.id}`).getByRole('switch').click();
+    await expect
+      .poll(() => api.calls.filter((c) => c.route === '/autopilot/mode').map((c) => c.body))
+      .toContainEqual(expect.objectContaining({ goalId: goal.id }));
   });
 
   test("the batch is shown in the evening as Tomorrow's batch, with Hold, Edit and Send now", async ({
@@ -94,14 +99,41 @@ test.describe('autopilot (plan 29 B7, fake orbit-api)', () => {
     expect(api.state.autopilot.queued.map((h) => h.personName)).toEqual(['Omar Haddad']);
   });
 
-  test.fixme('the morning: the clock passes the send time and Sent for you gains the one that went', async ({
+  test('the evening: first messages wait for a tap before the rung, and a tap keeps one for the morning', async ({
     page,
   }) => {
-    // phase 5: the first-message rung and the morning send
-    await signedInOnAutopilot(page);
+    const api = await signedInOnAutopilot(page);
     await page.goto('drafts');
-    await page.clock.fastForward('18:00:00');
+    const batch = page.getByTestId('tomorrow-batch');
+    await expect(batch.getByTestId('batch-needs-tap')).toHaveCount(2);
+    await expect(batch.getByTestId('batch-rung')).toContainText('14 of 20 first messages approved unchanged');
+    await batch.getByTestId('batch-item').filter({ hasText: 'Grace Liu' }).getByTestId('batch-tap').click();
+    await expect(batch.getByTestId('batch-needs-tap')).toHaveCount(1);
+    // the morning: Grace was tapped and goes as the student's own; Omar was not, and waits as a draft with the reason
+    sendTheBatch(api, '2026-10-07T13:00:00.000Z');
+    await page.reload();
+    await expect(page.getByTestId('tomorrow-batch')).toHaveCount(0);
+    expect(api.state.drafts.get('draft_ap_grace')?.status).toBe('sent');
+    expect(api.state.autopilot.held.find((h) => h.personName === 'Omar Haddad')?.reason).toContain(
+      'It waited for your tap',
+    );
+    await expect(page.getByTestId('sent-for-you')).not.toContainText('Omar Haddad');
+  });
+
+  test('the morning: once the rung is earned, the send time passes and Sent for you gains the one that went', async ({
+    page,
+  }) => {
+    const api = await signedInOnAutopilot(page);
+    const first = api.state.autopilot.rungs.find((r) => r.kind === 'first_touch')!;
+    Object.assign(first, { unchanged: 20, unlocked: true });
+    for (const q of api.state.autopilot.queued) q.status = 'queued';
+    await page.goto('drafts');
+    await expect(page.getByTestId('tomorrow-batch').getByTestId('batch-item')).toHaveCount(2);
+    await expect(page.getByTestId('tomorrow-batch').getByTestId('batch-needs-tap')).toHaveCount(0);
+    sendTheBatch(api, '2026-10-07T13:00:00.000Z');
+    await page.reload();
     await expect(page.getByTestId('sent-for-you')).toContainText('Omar Haddad');
+    await expect(page.getByTestId('sent-for-you')).toContainText('Grace Liu');
   });
 
   test('a seeded reply of each class produces the right card or send', async ({ page }) => {

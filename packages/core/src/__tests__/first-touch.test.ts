@@ -268,3 +268,16 @@ describe('one send morning (plan 29 §B6)', () => {
     expect(r.picks).toEqual([expect.objectContaining({ route: 'friend' })]);
   });
 });
+
+describe('the playbook quotes the one cap table (plan 29 §B5)', () => {
+  it('etiquette says the limits with the numbers SEND_CAPS holds', async () => {
+    const { knowledgeSection } = await import('../knowledge/index');
+    const body = knowledgeSection('etiquette').body;
+    for (const phrase of [
+      `by hand, ${SEND_CAPS.gmailPerDay} emails and ${SEND_CAPS.linkedinPerDay} LinkedIn messages a day`,
+      `on its own, ${SEND_CAPS.autoPerDay} sends a day, ${SEND_CAPS.autoFirstTouchesPerDay} first messages a day and ${SEND_CAPS.autoFirstTouchesPerWeek} a week`,
+      'one person per firm a morning, never LinkedIn',
+    ])
+      expect(body).toContain(phrase);
+  });
+});

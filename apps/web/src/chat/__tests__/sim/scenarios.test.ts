@@ -158,12 +158,12 @@ describe('sim scenarios', () => {
       ).toBe(true);
   });
 
-  it('cover plan 29: twelve friends and fifteen autopilot scenarios, pending only while a tool is missing, with a reference and no web', () => {
+  it('cover plan 29: twelve friends and eighteen autopilot scenarios (three for first messages), pending only while a tool is missing, with a reference and no web', () => {
     expect(PLAN29_GROUPS).toEqual(['friends', 'autopilot']);
     const friends = SCENARIOS.filter((s) => s.group === 'friends');
     const autopilot = SCENARIOS.filter((s) => s.group === 'autopilot');
     expect(friends).toHaveLength(12);
-    expect(autopilot).toHaveLength(15);
+    expect(autopilot).toHaveLength(18);
     // phase 4 landed the voice tools: no autopilot scenario waits any more
     expect(autopilot.filter((s) => s.pending).map((s) => s.id)).toEqual([]);
     for (const s of [...friends, ...autopilot]) {

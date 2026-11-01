@@ -396,6 +396,19 @@ export function routeNetwork(text: string, lower: string, h: NetworkHelpers): Ro
     );
 
   // ---- autopilot (plan 29) ----
+  {
+    // "why didn't you send to Priya": the status names the one rule for her
+    const m = text.match(
+      /^why (?:didn'?t|did not|haven'?t|have not) (?:you|orbit) (?:send|written|write|sent)(?: anything)? to (?:the one to )?([A-Z][\w'-]+(?: [A-Z][\w'-]+)?)\s*\??$/i,
+    );
+    if (m && !/^(?:me|them|him|her|anyone)$/i.test(m[1]!))
+      return h.viaTool(
+        'autopilot_status',
+        { personName: m[1]!.trim() },
+        undefined,
+        'read the autopilot status',
+      );
+  }
   if (
     /^(?:what did (?:you|orbit) send(?: for me)?(?: today)?|what(?:'s| is) going out tomorrow|what(?:'s| is) (?:in )?tomorrow'?s batch|show (?:me )?(?:the )?autopilot(?: status)?|autopilot status|what needs me|what did autopilot do(?: today)?|did (?:the call with )?\w+ get booked|is autopilot (?:on|paused))\??$/.test(
       lower,

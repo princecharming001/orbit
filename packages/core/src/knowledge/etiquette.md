@@ -20,4 +20,6 @@ Channels: email is better for alumni and anyone whose address you can find, Link
 
 Send windows, finance and consulting: Tuesday to Thursday, mid morning in the recipient's time zone; avoid Monday 9am and Friday afternoon. Tech: within three days of a posting beats any window. Stay in touch every four to six weeks after a conversation with one real update tied to something they said and "no reply needed".
 
+Orbit's limits, said when asked: by hand, 15 emails and 10 LinkedIn messages a day; on its own, 5 sends a day, 3 first messages a day and 12 a week, one person per firm a morning, never LinkedIn.
+
 Words that mark a message as mail merge, never used: "I hope this finds you well", "reach out", "pick your brain", "leverage", "passionate about", "impressed by your background", "any advice you have", "touch base", "circle back".

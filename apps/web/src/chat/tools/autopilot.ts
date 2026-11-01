@@ -4,17 +4,25 @@
  * asked, and the pause. One engine call each (engine/autopilotMode.ts), which reads the server for an account and this
  * browser otherwise. What Orbit learned about how the student writes has its own tools (tools/voice.ts).
  */
-import type { AutopilotItem, AutopilotMode } from '@orbit/core';
-import { AUTOPILOT_MODE_LEVEL, MESSAGE_KIND_LABELS, REPLY_NEXT_ACTION } from '@orbit/core';
+import type { AutopilotItem, AutopilotMode, AutopilotStatus } from '@orbit/core';
+import {
+  AUTOPILOT_MODE_LEVEL,
+  firstTouchRungLine,
+  MESSAGE_KIND_LABELS,
+  REPLY_NEXT_ACTION,
+  SEND_CAPS,
+} from '@orbit/core';
 import { db } from '../../db/schema';
 import {
   answerReply,
   autopilotStatus,
+  autopilotWeekLine,
   holdSend,
   LOCAL_AUTOPILOT_NOTE,
   pauseAutopilot,
   setMode,
 } from '../../engine/autopilotMode';
+import { whyNotFirstTouch } from '../../engine/autopilotPlan';
 import { listReplies, REPLY_CLASS_LABELS } from '../../engine/replies';
 import { isServerUser } from '../../integrations/orbitApi';
 import { z } from '../../zod';
@@ -30,7 +38,7 @@ export const MODE_TEXT: Record<AutopilotMode, { title: string; body: string }> =
   },
   autopilot: {
     title: 'Autopilot',
-    body: "Everything in Assist, and Orbit plans your week to your target, writes the first messages, shows them to you the evening before as Tomorrow's batch and sends them in the morning unless you hold one. It answers scheduling and thank-you replies itself, offers three times from your calendar when someone says yes, books the call when they pick one, and asks you only when a reply needs something only you know. Email only, never LinkedIn, at most 5 sends a day on its own.",
+    body: "Everything in Assist, and Orbit plans your week to your target, writes the first messages, shows them to you the evening before as Tomorrow's batch and sends them in the morning unless you hold one. It answers scheduling and thank-you replies itself, books the call when someone picks one of three times from your calendar, and asks you only when a reply needs something only you know; email only, never LinkedIn, at most 5 sends a day on its own.",
   },
 };
 
@@ -62,6 +70,77 @@ function itemLine(i: AutopilotItem, ctx: ToolContext) {
   };
 }
 
+/**
+ * Where the first-message rung stands, in one sentence (plan 29 §B2.2), for the confirm before autopilot is turned
+ * on: "14 of 20 first messages approved unchanged. Until 6 more go out as Orbit wrote them, ..." Read from the status;
+ * nothing when it cannot be read.
+ */
+async function rungSentence(ctx: ToolContext): Promise<string> {
+  const r = await autopilotStatus(ctx.user, ctx.now).catch(() => undefined);
+  const first = r?.ok ? r.status.rungs.find((x) => x.kind === 'first_touch') : undefined;
+  return first
+    ? firstTouchRungLine({ unchanged: first.unchanged, needed: first.needed, earned: first.unlocked })
+    : '';
+}
+
+/** "Dan" names Daniel: a word of the name that starts with the word said, or the other way round. */
+function namedBy(said: string | undefined): (name: string) => boolean {
+  const want = (said ?? '').toLowerCase().trim();
+  return (name: string) =>
+    !!want &&
+    name
+      .toLowerCase()
+      .split(/\s+/)
+      .some((w) => want.split(/\s+/).some((v) => v.length >= 3 && (w.startsWith(v) || v.startsWith(w))));
+}
+
+/**
+ * "Why didn't you send to Priya" (plan 29 §B6), answered with the one rule: held with its reason, waiting in the
+ * batch, already sent, left out by the last plan with its rule, or, for someone the plan never weighed, the first
+ * condition they fail against the goals.
+ */
+async function whyNot(
+  personName: string,
+  s: AutopilotStatus,
+  ctx: ToolContext,
+): Promise<{ person: string; answer: string } | undefined> {
+  const named = namedBy(personName);
+  const first = (n: string) => n.split(' ')[0];
+  const held = s.held.find((i) => named(i.personName));
+  if (held)
+    return {
+      person: held.personName,
+      answer: `${first(held.personName)} was held: ${held.reason ?? 'it waits for you'}`,
+    };
+  const queued = s.queued.find((i) => named(i.personName));
+  if (queued)
+    return {
+      person: queued.personName,
+      answer:
+        queued.status === 'needs_tap'
+          ? `${first(queued.personName)} is in tomorrow's batch for ${when(queued.sendAt, ctx)}, waiting for your tap: until twenty first messages go out unchanged, each one needs one.`
+          : `${first(queued.personName)} is in tomorrow's batch and goes ${when(queued.sendAt, ctx)} unless you hold it.`,
+    };
+  const sent = s.sentToday.find((i) => named(i.personName));
+  if (sent)
+    return {
+      person: sent.personName,
+      answer: `Orbit did write to ${first(sent.personName)}, ${when(sent.sentAt, ctx)}.`,
+    };
+  const skipped = (s.skipped ?? []).find((i) => named(i.personName));
+  if (skipped) return { person: skipped.personName, answer: skipped.reason };
+  const people = await db.people.where('userId').equals(ctx.user.id).toArray();
+  const p = people.find((x) => named(x.displayName));
+  if (!p) return undefined;
+  const why = await whyNotFirstTouch(ctx.user, p.id, ctx.now);
+  return {
+    person: p.displayName,
+    answer:
+      why ??
+      `Nothing rules ${first(p.displayName)} out; the plan writes to at most ${SEND_CAPS.autoFirstTouchesPerDay} a morning, the closest first, so ${first(p.displayName)} comes up on a later morning.`,
+  };
+}
+
 export const setAutopilotModeTool = defineTool({
   name: 'set_autopilot_mode',
   kind: 'risky',
@@ -76,8 +155,9 @@ export const setAutopilotModeTool = defineTool({
   async summarizeIntent(input, ctx) {
     const goal = input.goalId ? await db.userGoals.get(input.goalId) : undefined;
     const m = MODE_TEXT[input.mode];
+    const rung = input.mode === 'autopilot' ? await rungSentence(ctx) : '';
     return {
-      text: `${goal ? `For "${goal.title}": ` : ''}${m.title}. ${m.body}${isServerUser(ctx.user.id) ? '' : ` ${LOCAL_AUTOPILOT_NOTE}`}`,
+      text: `${goal ? `For "${goal.title}": ` : ''}${m.title}. ${m.body}${rung ? ` ${rung}` : ''}${isServerUser(ctx.user.id) ? '' : ` ${LOCAL_AUTOPILOT_NOTE}`}`,
       blockedReason:
         input.goalId && !goal ? 'Orbit has no goal with that id. List the goals first.' : undefined,
     };
@@ -107,18 +187,36 @@ export const autopilotStatusTool = defineTool({
   name: 'autopilot_status',
   kind: 'read',
   description:
-    'Call this when the student asks what Orbit sent today or on its own, what goes out tomorrow (tomorrow\'s batch), what is held and why ("why didn\'t you send to Priya"), which replies need them, whether a call got booked, whether autopilot is paused, or where the rungs and caps stand. Read only.',
-  input: z.object({}),
+    'Call this when the student asks what Orbit sent today or on its own, what goes out tomorrow (tomorrow\'s batch, and which first messages wait for their tap), what is held and why, why someone was not written to ("why didn\'t you send to Priya": give personName, and the answer names the one rule), which replies need them, whether a call got booked, whether autopilot is paused, how the week went on autopilot, or where the rungs and caps stand. Read only.',
+  input: z.object({
+    personName: z
+      .string()
+      .max(120)
+      .optional()
+      .describe('Someone the student asks about ("why didn\'t you send to Priya"), as they say the name.'),
+  }),
   capabilities: ['autopilot_status'],
   progress: 'Reading what autopilot did',
-  async execute(_input, ctx) {
+  async execute(input, ctx) {
     const r = await autopilotStatus(ctx.user, ctx.now);
     if (!r.ok) throw new Error(r.message);
     const s = r.status;
     const booked = s.sentToday.filter((i) => i.outcome === 'booked').length;
+    const taps = s.queued.filter((i) => i.status === 'needs_tap').length;
+    const why = input.personName ? await whyNot(input.personName, s, ctx) : undefined;
+    const week = autopilotWeekLine(s.week);
     const summary = [
+      input.personName
+        ? why
+          ? why.answer
+          : `Orbit has no one called ${input.personName} in your people, so it never weighed them.`
+        : '',
       `Autopilot is ${s.mode}${s.pausedUntil ? `, paused until ${when(s.pausedUntil, ctx)}` : ''}.`,
-      `Sent ${s.sentToday.length} on its own today${booked ? `, ${plural(booked, 'call')} booked` : ''}; ${plural(s.queued.length, 'message')} queued for the morning; ${plural(s.held.length, 'message')} held; ${plural(s.needsYou.length, 'reply', 'replies')} need you.`,
+      `Sent ${s.sentToday.length} on its own today${booked ? `, ${plural(booked, 'call')} booked` : ''}; ${plural(s.queued.length, 'message')} queued for the morning${taps ? ` (${taps} waiting for your tap)` : ''}; ${plural(s.held.length, 'message')} held; ${plural(s.needsYou.length, 'reply', 'replies')} need you.`,
+      s.friendAsks?.length
+        ? `${plural(s.friendAsks.length, 'ask')} to a friend ready for your tap: ${s.friendAsks.map((a) => `${a.friendName} for ${a.targetName}`).join(', ')}.`
+        : '',
+      week ? `${week}.` : '',
       s.pausedGoals.length
         ? `Paused goals: ${s.pausedGoals.map((g) => `${g.title} (${g.reason})`).join('; ')}.`
         : '',
@@ -142,6 +240,23 @@ export const autopilotStatusTool = defineTool({
       rungs: s.rungs,
       caps: s.caps,
       reviewUntil: s.reviewUntil,
+      firstTouchRung: s.rungs.find((x) => x.kind === 'first_touch'),
+      skipped: (s.skipped ?? []).slice(0, 12).map((x) => ({
+        person: x.personName,
+        company: x.company ?? undefined,
+        rule: x.rule,
+        reason: wrapped(ctx, 'reason', x.reason, 300),
+      })),
+      friendAsks: (s.friendAsks ?? []).map((a) => ({
+        friend: a.friendName,
+        person: a.targetName,
+        company: a.company ?? undefined,
+        note: wrapped(ctx, 'note', a.note, 600),
+      })),
+      week: s.week,
+      ...(input.personName
+        ? { asked: { name: input.personName, person: why?.person, answer: why?.answer ?? null } }
+        : {}),
       local: r.local,
       note: r.note,
     };

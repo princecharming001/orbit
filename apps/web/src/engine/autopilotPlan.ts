@@ -410,3 +410,30 @@ export async function raiseLocalBatchCard(user: User, now = new Date()): Promise
   );
   return true;
 }
+
+/**
+ * Why Orbit did not write to someone first (plan 29 §B6), from this browser's own records: the first rule they fail
+ * against the goals on autopilot (every active goal when none is on autopilot yet), in a sentence, or undefined when
+ * none does and they simply were not in a plan yet. The chat's "why didn't you send to Priya" reads this after the
+ * status's own lists.
+ */
+export async function whyNotFirstTouch(
+  user: Pick<User, 'id'>,
+  personId: string,
+  now = new Date(),
+): Promise<string | undefined> {
+  const c = (await localCandidates(user.id)).get(personId);
+  if (!c) return undefined;
+  const onAutopilot = await autopilotGoals(user, now);
+  const goals = onAutopilot.length
+    ? onAutopilot
+    : (await db.userGoals.where('userId').equals(user.id).toArray()).filter(
+        (g) => !g.deletedAt && g.status === 'active',
+      );
+  const { skipReason } = await import('@orbit/core');
+  const rules = goals.map((g) => firstTouchBlock(c, { kind: g.kind, targets: g.targets.organizations }));
+  if (!goals.length) return skipReason('not_target_company', c);
+  // they pass for at least one goal: nothing rules them out
+  if (rules.some((r) => !r)) return undefined;
+  return skipReason(rules[0]!, c);
+}
