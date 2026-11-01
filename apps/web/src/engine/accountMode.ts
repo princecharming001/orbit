@@ -3,7 +3,15 @@
  * account's id, so every row the server sends (keyed by that user) belongs to it; signing out keeps the data on this
  * device and stops syncing; deleting the account removes it on the server and here.
  */
-import type { AutoKind, AutopilotMode, RecruitingGoals, StyleCard, User, UserSettings } from '@orbit/core';
+import type {
+  AutoKind,
+  AutopilotMode,
+  RecruitingGoals,
+  StyleCard,
+  User,
+  UserSettings,
+  VoiceNote,
+} from '@orbit/core';
 import { AUTO_KINDS, AUTOPILOT_MODES, ownWordsOf } from '@orbit/core';
 import { getCurrentUserId, setCurrentUserId } from '../db/repo';
 import { db } from '../db/schema';
@@ -114,6 +122,14 @@ export async function adoptAccountUser(a: AccountUser, now = new Date()): Promis
     const mine = await db.styles.get(user.id);
     if (!mine || (!mine.card.custom && mine.card.builtFromCount < serverCard.builtFromCount))
       await db.styles.put({ ...mine, userId: user.id, card: serverCard, updatedAt: now.toISOString() });
+  }
+  // what Orbit learned from the student's edits, the forgotten ones too so they never show again here
+  if (local && Array.isArray(s.voice_notes)) {
+    const notes = (s.voice_notes as Partial<VoiceNote>[]).filter(
+      (n): n is VoiceNote =>
+        typeof n?.id === 'string' && typeof n.text === 'string' && Array.isArray(n.evidence),
+    );
+    await db.settings.update(user.id, { voiceNotes: notes });
   }
   await setCurrentUserId(user.id);
   return user;

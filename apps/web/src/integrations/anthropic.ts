@@ -13,12 +13,14 @@ import type {
   ChatTurn,
   DraftContext,
   DraftOutput,
+  LearnedNote,
   MemoryKind,
   NoteExtraction,
   ReplySignal,
   ResumeFacet,
   StyleCard,
   TriageResult,
+  VoiceEdit,
 } from '@orbit/core';
 import {
   fmtWindow,
@@ -30,6 +32,10 @@ import {
   type RapportReading,
   rapportFromLlm,
   tzAbbr,
+  VOICE_DISTILL_SYSTEM,
+  VOICE_JUDGE_SYSTEM,
+  voiceDistillUser,
+  voiceJudgeUser,
 } from '@orbit/core';
 // The SDK's zodOutputFormat helper is built on zod/v4 and cannot read zod v3 schemas.
 import { draftKnowledgeRules } from '../engine/draftKnowledge';
@@ -955,6 +961,52 @@ export async function llmStyleFeedback(
         note: r.note,
       }
     : undefined;
+}
+
+/**
+ * What the student's edits show about how they write (plan 29 §B2.4), read on their own Claude key: at most eight
+ * one-line notes, each with the ids of the edits behind it. Undefined without a key (the caller then shows the plain
+ * observations instead).
+ */
+export async function llmVoiceNotes(input: {
+  card: StyleCard;
+  edits: VoiceEdit[];
+  kept: string[];
+  forgotten: string[];
+}): Promise<LearnedNote[] | undefined> {
+  const schema = z.object({
+    notes: z.array(z.object({ text: z.string(), avoid: z.string(), evidence: z.array(z.string()) })),
+  });
+  const r = await runParse(
+    'drafts',
+    VOICE_DISTILL_SYSTEM,
+    (wrap) => wrap('student_edits', voiceDistillUser(input)),
+    schema,
+    'low',
+    1500,
+    { quiet: true },
+  );
+  return r?.notes.map((n) => ({ text: n.text, avoid: n.avoid.trim() || null, evidence: n.evidence }));
+}
+
+/**
+ * The judge for a first message Orbit would send on its own (plan 29 §B2.4c): 0 to 3, was it written by the same
+ * person as these sent emails. Undefined without a key; the caller then holds the draft for a tap.
+ */
+export async function llmJudgeVoice(
+  draft: { subject?: string | null; body: string },
+  exemplars: string[],
+): Promise<{ score: number; reason: string } | undefined> {
+  const schema = z.object({ score: z.number().int().min(0).max(3), reason: z.string() });
+  return runParse(
+    'drafts',
+    VOICE_JUDGE_SYSTEM,
+    (wrap) => wrap('voice_check', voiceJudgeUser(draft, exemplars)),
+    schema,
+    'low',
+    300,
+    { quiet: true, model: LIGHT_MODEL },
+  );
 }
 
 /** What Claude read in a chat turn: memories, and recruiting targets the student stated. Checked by the caller. */

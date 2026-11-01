@@ -43,6 +43,7 @@ import { researchRoutes } from './routes/research.ts';
 import { scoreRoutes } from './routes/scores.ts';
 import { settingsRoutes } from './routes/settings.ts';
 import { sourceRoutes } from './routes/source.ts';
+import { voiceRoutes } from './routes/voice.ts';
 import { syncPull, syncPush, syncStatus } from './sync.ts';
 
 export const DEFAULT_APP_URL = 'https://tryorbit.today';
@@ -159,6 +160,7 @@ const ROUTES: Record<string, Route> = {
   ...cadenceRoutes,
   ...autopilotRoutes,
   ...friendRoutes,
+  ...voiceRoutes,
 };
 
 /** The secrets a route needs that are not set. */

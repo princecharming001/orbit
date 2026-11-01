@@ -4,9 +4,20 @@
  * whether it came with the approval, through /sync/push on the draft, or as the browser's own record.
  */
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
-import { exemplars } from '../../functions/_shared/compose/context.ts';
+import { exemplars, styleCardOf, loadUserRow } from '../../functions/_shared/compose/context.ts';
+import { makeServices } from '../../functions/_shared/services.ts';
+import { distillVoice } from '../../functions/_shared/voice/voice.ts';
 import { defaultHandlers } from '../../functions/orbit-worker/worker.ts';
-import { addPerson, agentConfig, api, fakeEmbed, fakeNet, signedInUser } from '../helpers/agents.ts';
+import {
+  addPerson,
+  agentConfig,
+  anthropic,
+  api,
+  fakeEmbed,
+  fakeNet,
+  signedInUser,
+  userText,
+} from '../helpers/agents.ts';
 import { FakeGoogle, virtualTime } from '../helpers/fakeApis.ts';
 import { clearQueues, connectedUser, drain, fakeTokens } from '../helpers/ingest.ts';
 import { fixtureMailbox, NOW } from '../helpers/mailFixtures.ts';
@@ -248,5 +259,130 @@ describe('edits, typed, whichever way they arrive', () => {
       insert into orbit.draft_edits (user_id, kind, before, after, distance) values (${userId}::uuid, 'bump', 'a b', 'a', 1)`;
     await t.db.sql`select orbit.delete_user(${userId}::uuid)`;
     expect(await editsOf(userId)).toHaveLength(0);
+  });
+});
+
+async function someEdits(userId: string, n: number) {
+  const ids: string[] = [];
+  for (let i = 0; i < n; i++) {
+    const [r] = await t.db.sql<{ id: string }>`
+      insert into orbit.draft_edits (user_id, kind, before, after, distance, created_at)
+      values (${userId}::uuid, 'first_touch', ${`${ORBIT_WROTE} ${i}`}, ${`${SAM_SENT} ${i}`}, 6,
+              now() - ${`${i} hours`}::interval)
+      returning id`;
+    ids.push(r!.id);
+  }
+  return ids;
+}
+
+const settingsOf = async (userId: string) =>
+  (await t.db.sql<{ settings: Record<string, unknown> }>`select settings from orbit.users where id = ${userId}::uuid`)[0]!
+    .settings;
+
+describe('notes learned from the edits', () => {
+  it('voice.distill keeps at most eight, each backed by real edits, and never learns a forgotten one again', async () => {
+    const { userId } = await signedInUser(t, {
+      settings: {
+        voice_notes: [
+          {
+            id: 'vn_gone',
+            text: "You cut 'Thanks either way' every time",
+            avoid: 'Thanks either way',
+            evidence: [],
+            createdAt: '2026-10-01T00:00:00.000Z',
+            keptAt: null,
+            forgottenAt: '2026-10-20T00:00:00.000Z',
+          },
+        ],
+      },
+    });
+    const ids = await someEdits(userId, 5);
+    const net = fakeNet();
+    const claude = anthropic(() => ({
+      notes: [
+        // the forgotten note, reworded: never back
+        { text: 'You cut "thanks either way" every time.', avoid: 'Thanks either way', evidence: [ids[0], ids[1]] },
+        ...Array.from({ length: 11 }, (_, i) => ({
+          text: `You keep rule ${i} in mind`,
+          avoid: '',
+          evidence: [ids[i % 5], ids[(i + 1) % 5]],
+        })),
+        // evidence Claude made up: dropped
+        { text: 'You always mention the weather', avoid: '', evidence: ['not-an-edit'] },
+      ],
+    }));
+    net.use(claude.answer);
+    const s = makeServices(agentConfig(net), { db: t.db, now: () => new Date(NOW) });
+    const r = await distillVoice(s, userId);
+    expect(r.by).toBe('claude');
+    expect(userText(claude.requests[0]!)).toContain('<forgotten_notes');
+    expect(userText(claude.requests[0]!)).toContain(ids[0]!);
+    const notes = (await settingsOf(userId)).voice_notes as { text: string; forgottenAt: string | null; evidence: string[] }[];
+    const live = notes.filter((n) => !n.forgottenAt);
+    expect(live.length).toBeLessThanOrEqual(8);
+    expect(live.some((n) => /thanks either way/i.test(n.text))).toBe(false);
+    expect(live.some((n) => /weather/.test(n.text))).toBe(false);
+    for (const n of live) for (const e of n.evidence) expect(ids).toContain(e);
+    expect(notes.find((n) => n.text.includes("'Thanks either way'"))!.forgottenAt).toBeTruthy();
+  });
+
+  it('without Claude it reads the edits as plain observations', async () => {
+    const { userId } = await signedInUser(t);
+    await someEdits(userId, 3);
+    const s = makeServices(agentConfig(fakeNet(), {}), { db: t.db, now: () => new Date(NOW) });
+    const r = await distillVoice(s, userId);
+    expect(r.by).toBe('observations');
+    expect(r.added.map((n) => n.text)).toContain("You cut 'Thanks either way' in 3 edits");
+  });
+
+  it('drafting reads the notes in force into the card, and never a forgotten one', async () => {
+    const { userId } = await signedInUser(t, {
+      settings: {
+        style_card: CARD,
+        voice_notes: [
+          { id: 'a', text: "You cut 'Thanks either way' every time", evidence: ['e'], createdAt: 'x', keptAt: null, forgottenAt: null },
+          { id: 'b', text: "You cut 'Hope you are well'", evidence: ['e'], createdAt: 'x', keptAt: null, forgottenAt: 'y' },
+        ],
+      },
+    });
+    const card = styleCardOf(await loadUserRow(t.db, userId));
+    expect(card.avoid).toEqual(['circle back', 'Thanks either way']);
+    expect(card.notes).toContain("You cut 'Thanks either way' every time");
+    expect(card.notes).not.toContain('Hope you are well');
+  });
+});
+
+describe('the /voice routes', () => {
+  it('reads the card in sentences and the notes, keeps and forgets one, and queues a relearn', async () => {
+    const call = api(t, fakeNet());
+    const { userId, token } = await signedInUser(t, {
+      settings: {
+        style_card: CARD,
+        voice_notes: [
+          { id: 'vn_a', text: "You cut 'Thanks either way' every time", evidence: ['e'], createdAt: 'x', keptAt: null, forgottenAt: null },
+          { id: 'vn_b', text: 'You sign with your first name only', evidence: ['e'], createdAt: 'x', keptAt: null, forgottenAt: null },
+        ],
+      },
+    });
+    const p = await addPerson(t, userId, { name: 'Dana Ruiz', email: 'dana@example.com' });
+    await aDraft(userId, p, SAM_SENT);
+    const v = await call<{ cardProse: string[]; notes: { id: string }[]; soundsLikeYou: number | null }>('/voice', token);
+    expect(v.status).toBe(200);
+    expect(v.body.cardProse[0]).toBe('You greet with Hi and sign off with Thanks.');
+    expect(v.body.notes.map((n) => n.id)).toEqual(['vn_a', 'vn_b']);
+    expect(v.body.soundsLikeYou).toBe(3);
+    const kept = await call<{ note: { keptAt: string | null } }>('/voice/notes', token, { id: 'vn_b', action: 'keep' });
+    expect(kept.body.note.keptAt).toBeTruthy();
+    const gone = await call<{ note: { forgottenAt: string | null } }>('/voice/notes', token, { id: 'vn_a', action: 'forget' });
+    expect(gone.body.note.forgottenAt).toBeTruthy();
+    expect((await call<{ notes: { id: string }[] }>('/voice', token)).body.notes.map((n) => n.id)).toEqual(['vn_b']);
+    expect((await call('/voice/notes', token, { id: 'nope', action: 'forget' })).status).toBe(404);
+    expect((await call('/voice/notes', token, { id: 'vn_b', action: 'delete' })).status).toBe(400);
+    const r = await call<{ queued: boolean }>('/voice/relearn', token);
+    expect(r.body.queued).toBe(true);
+    const kinds = await t.db.sql<{ kind: string }>`
+      select message->>'kind' as kind from pgmq.q_orbit_enrich where message->>'userId' = ${userId}
+      union all select message->>'kind' from pgmq.q_orbit_cadence where message->>'userId' = ${userId}`;
+    expect(kinds.map((k) => k.kind).sort()).toEqual(['voice.card', 'voice.distill', 'voice.embed_sent']);
   });
 });

@@ -9,9 +9,13 @@
  * voice.card {}
  *   The style card learned again from the sent mail the server holds and laid over the stored one (what the student
  *   set by hand wins); /voice/relearn queues it after the embeddings.
+ *
+ * voice.distill {reason?}
+ *   The last thirty edits read into notes (Claude, or the plain observations without it), merged so a forgotten
+ *   note never comes back. Nightly for everyone with a new edit (orbit.enqueue_voice_distill), and on relearn.
  */
 import { type AgentConfig, makeServices } from '../../_shared/services.ts';
-import { EMBED_SENT_LIMIT, embedSent, relearnCard } from '../../_shared/voice/voice.ts';
+import { distillVoice, EMBED_SENT_LIMIT, embedSent, relearnCard } from '../../_shared/voice/voice.ts';
 import type { JobHandler } from '../worker.ts';
 import { JobSkipped } from './deps.ts';
 
@@ -28,6 +32,10 @@ export function voiceHandlers(config: AgentConfig): Record<string, JobHandler> {
     'voice.card': async (job, ctx) => {
       if (!job.userId) throw new JobSkipped('no_user');
       await relearnCard(ctx.db, job.userId, ctx.now());
+    },
+    'voice.distill': async (job, ctx) => {
+      if (!job.userId) throw new JobSkipped('no_user');
+      await distillVoice(makeServices(config, { db: ctx.db, now: ctx.now, queue: ctx.queue }), job.userId);
     },
   };
 }

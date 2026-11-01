@@ -7,17 +7,37 @@
  * same gte-small adapter the memories use, as it is ingested (never blocking the ingest) and, for mail stored before
  * that, through `voice.embed_sent`, which embeds the last 200 for one user on demand. Edits: a server draft keeps the
  * words Orbit wrote (`body_original`), so an edited approve or an edit pushed from a browser writes one
- * orbit.draft_edits row per draft, the distillation's evidence.
+ * orbit.draft_edits row per draft, the distillation's evidence. Notes: `voice.distill` reads the last thirty edits
+ * into at most eight notes (users.settings.voice_notes) the student keeps or forgets; drafting reads the ones in force
+ * into the card (compose/context.ts styleCardOf).
  */
-import { buildStyleCard, mergeStyleCard } from '@orbit/core/style/card';
-import { wordEditDistance } from '@orbit/core/style/voice';
+import type { VoiceNote, VoiceResponse } from '@orbit/core/server/api';
+import { buildStyleCard, defaultStyleCard, mergeStyleCard, STYLE_MIN_SAMPLES } from '@orbit/core/style/card';
+import {
+  activeVoiceNotes,
+  cardProse,
+  decideVoiceNote,
+  editObservations,
+  type LearnedNote,
+  meanVoiceScore,
+  mergeVoiceNotes,
+  VOICE_DISTILL_SYSTEM,
+  VOICE_EDITS_FOR_DISTILL,
+  VOICE_NOTES_MAX,
+  type VoiceEdit,
+  voiceCheck,
+  voiceDistillUser,
+  voiceScore,
+  wordEditDistance,
+} from '@orbit/core/style/voice';
 import { stripQuotedReply, wordCount } from '@orbit/core/text/email';
 import type { StyleCard } from '@orbit/core/types';
 import { z } from 'zod/v4';
 import type { Db } from '../db.ts';
 import { embeddable } from '../memory/memory.ts';
+import type { Queue } from '../queue.ts';
 import { vec } from '../rows.ts';
-import type { Embed } from '../services.ts';
+import type { Embed, Services } from '../services.ts';
 
 /** Sent mail shorter than this is not an example of how the student writes (the exemplars' own floor). */
 export const EXEMPLAR_MIN_WORDS = 25;
@@ -252,4 +272,196 @@ export async function pushDraftEdit(
     returning id, draft_id, kind, distance, created_at`;
   // undefined: the id is another student's row
   return r;
+}
+
+// ---- notes learned from the edits --------------------------------------------------------------------------------
+
+/** The notes stored for a user (users.settings.voice_notes), the malformed ones left out. */
+export function notesOf(settings: Record<string, unknown> | null | undefined): VoiceNote[] {
+  const v = settings?.voice_notes;
+  if (!Array.isArray(v)) return [];
+  return v.filter(
+    (n): n is VoiceNote =>
+      !!n &&
+      typeof n === 'object' &&
+      typeof (n as VoiceNote).id === 'string' &&
+      typeof (n as VoiceNote).text === 'string' &&
+      Array.isArray((n as VoiceNote).evidence),
+  );
+}
+
+/** The card a user's drafts follow: their own (learned or set), else the tone preset. */
+export function storedCard(settings: Record<string, unknown>, firstName: string): StyleCard {
+  const c = StyleCardS.safeParse(settings?.style_card);
+  if (c.success && ((c.data.builtFromCount ?? 0) >= STYLE_MIN_SAMPLES || c.data.custom))
+    return c.data as StyleCard;
+  const preset = settings?.tone_preset;
+  return defaultStyleCard(preset === 'direct' || preset === 'formal' ? preset : 'warm', firstName);
+}
+
+const DistillS = z.object({
+  notes: z
+    .array(
+      z.object({
+        text: z.string().max(400),
+        // "" when the note is not about one phrase
+        avoid: z.string().max(200),
+        evidence: z.array(z.string().max(80)).max(40),
+      }),
+    )
+    .max(VOICE_NOTES_MAX * 2),
+});
+
+export interface DistillResult {
+  /** how the notes were found: Claude, the plain observations without it, or nothing to read yet */
+  by: 'claude' | 'observations' | 'too_few_edits';
+  added: VoiceNote[];
+  notes: VoiceNote[];
+}
+
+/**
+ * `voice.distill`: the last thirty edits and the card to Claude, which answers at most eight one-line notes in the
+ * student's words, each with the edits behind it; without Claude (no key, the budget spent, a refusal) the plain
+ * observations stand in. The notes are merged into users.settings.voice_notes inside one transaction against the
+ * notes as they are then, so a note forgotten while Claude was reading stays forgotten and is never learned again.
+ */
+export async function distillVoice(s: Services, userId: string): Promise<DistillResult> {
+  const db = s.db;
+  const rows = await db.sql<{ id: string; kind: string; before: string; after: string }>`
+    select id, kind, before, after from orbit.draft_edits where user_id = ${userId}::uuid
+     order by created_at desc limit ${VOICE_EDITS_FOR_DISTILL}::int`;
+  const [u] = await db.sql<{ settings: Record<string, unknown>; first_name: string | null }>`
+    select settings, first_name from orbit.users where id = ${userId}::uuid`;
+  if (!u || rows.length < 2) return { by: 'too_few_edits', added: [], notes: notesOf(u?.settings) };
+  const current = notesOf(u.settings);
+  const card = storedCard(u.settings ?? {}, u.first_name ?? '');
+  const edits: VoiceEdit[] = rows.map((r) => ({ id: r.id, kind: r.kind, before: r.before, after: r.after }));
+  const ids = new Set(edits.map((e) => e.id));
+  let by: DistillResult['by'] = 'observations';
+  let learned: LearnedNote[] = [];
+  const r = await s.claude.structured({
+    task: 'voice_distill',
+    system: VOICE_DISTILL_SYSTEM,
+    user: voiceDistillUser({
+      card,
+      edits,
+      kept: current.filter((n) => n.keptAt && !n.forgottenAt).map((n) => n.text),
+      forgotten: current.filter((n) => n.forgottenAt).map((n) => n.text),
+    }),
+    schema: DistillS,
+    userId,
+  });
+  if (r.ok) {
+    by = 'claude';
+    learned = r.data.notes
+      .map((n) => ({
+        text: n.text,
+        avoid: n.avoid.trim() || null,
+        evidence: n.evidence.filter((e) => ids.has(e)),
+      }))
+      // a note with nothing behind it is a guess
+      .filter((n) => n.evidence.length > 0)
+      .slice(0, VOICE_NOTES_MAX);
+  } else learned = editObservations(edits);
+  const out = await db.begin(async (tx) => {
+    const [fresh] = await tx.sql<{ settings: Record<string, unknown> }>`
+      select settings from orbit.users where id = ${userId}::uuid for update`;
+    const merged = mergeVoiceNotes(notesOf(fresh?.settings), learned, {
+      now: s.now(),
+      newId: () => crypto.randomUUID(),
+    });
+    await tx.sql`
+      update orbit.users set settings = settings || jsonb_build_object('voice_notes', ${JSON.stringify(merged.notes)}::jsonb,
+                                                                       'voice_relearned_at', ${s.now().toISOString()}::text)
+       where id = ${userId}::uuid`;
+    return merged;
+  });
+  return { by, added: out.added, notes: out.notes };
+}
+
+/** Keep or forget one note; a forgotten one stays stored so the distillation never brings it back. */
+export async function decideNote(
+  db: Db,
+  userId: string,
+  id: string,
+  action: 'keep' | 'forget',
+  now: Date,
+): Promise<VoiceNote | undefined> {
+  return db.begin(async (tx) => {
+    const [u] = await tx.sql<{ settings: Record<string, unknown> }>`
+      select settings from orbit.users where id = ${userId}::uuid for update`;
+    const r = decideVoiceNote(notesOf(u?.settings), id, action, now);
+    if (!r.note) return undefined;
+    await tx.sql`
+      update orbit.users set settings = settings || jsonb_build_object('voice_notes', ${JSON.stringify(r.notes)}::jsonb)
+       where id = ${userId}::uuid`;
+    return r.note;
+  });
+}
+
+/** Recent drafts read for "sounds like you": the newest twenty Orbit wrote in the last thirty days. */
+const SCORE_DRAFTS = 20;
+
+/**
+ * GET /voice: the card and its sentences, the notes in force, and how much the recent drafts sound like the
+ * student (0 to 3: the judge's scores where it ran, the voice check's elsewhere; null with no recent drafts).
+ */
+export async function voiceStatus(db: Db, userId: string, now: Date): Promise<VoiceResponse> {
+  const [u] = await db.sql<{ settings: Record<string, unknown>; first_name: string | null }>`
+    select settings, first_name from orbit.users where id = ${userId}::uuid`;
+  const settings = u?.settings ?? {};
+  const stored = StyleCardS.safeParse(settings.style_card);
+  const card = storedCard(settings, u?.first_name ?? '');
+  const notes = notesOf(settings);
+  const since = new Date(now.getTime() - 30 * 86_400_000);
+  const drafts = await db.sql<{ id: string; subject: string | null; body: string }>`
+    select id, subject, coalesce(body_original, body) as body from orbit.drafts
+     where user_id = ${userId}::uuid and created_at >= ${since}::timestamptz and channel = 'gmail'
+       and status in ('draft', 'approved', 'scheduled', 'sending', 'sent')
+     order by created_at desc limit ${SCORE_DRAFTS}::int`;
+  const judged = new Map(
+    (
+      await db.sql<{ target_id: string; score: number }>`
+        select target_id, (details->>'score')::int as score from orbit.audit_log
+         where user_id = ${userId}::uuid and action = 'draft.voice_judge' and created_at >= ${since}::timestamptz`
+    ).map((r) => [r.target_id, Number(r.score)]),
+  );
+  const scores = drafts.map((d) =>
+    judged.has(d.id) ? judged.get(d.id)! : voiceScore(voiceCheck(d, { card, notes })),
+  );
+  const relearned = settings.voice_relearned_at;
+  return {
+    card: stored.success ? (stored.data as StyleCard) : null,
+    cardProse: cardProse(card),
+    notes: activeVoiceNotes(notes),
+    soundsLikeYou: meanVoiceScore(scores),
+    relearnedAt: typeof relearned === 'string' ? relearned : null,
+  };
+}
+
+/**
+ * POST /voice/relearn: the sent mail embedded (the exemplars), the card learned again from it, and the edits read
+ * into notes, as three background jobs, at most once a minute.
+ */
+export async function queueRelearn(queue: Queue, userId: string, now: Date): Promise<boolean> {
+  const minute = now.toISOString().slice(0, 16);
+  const a = await queue.enqueue({
+    kind: 'voice.embed_sent',
+    userId,
+    payload: { limit: EMBED_SENT_LIMIT },
+    dedupeKey: `voice.embed_sent:${userId}:${minute}`,
+  });
+  await queue.enqueue({
+    kind: 'voice.card',
+    userId,
+    payload: {},
+    dedupeKey: `voice.card:${userId}:${minute}`,
+  });
+  await queue.enqueue({
+    kind: 'voice.distill',
+    userId,
+    payload: { reason: 'relearn' },
+    dedupeKey: `voice.distill:${userId}:${minute}`,
+  });
+  return a !== null;
 }

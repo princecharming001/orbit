@@ -54,3 +54,33 @@ revoke all on table orbit.draft_edits from public, anon, authenticated;
 grant all on table orbit.draft_edits to service_role;
 revoke all on function orbit.drafts_body_original() from public, anon, authenticated;
 grant execute on function orbit.drafts_body_original() to service_role;
+
+-- the nightly distillation (plan 29 §B2.4b): once a day, for everyone with an edit since the last day, the edits are
+-- read into notes; the job itself merges them so a forgotten note is never learned again
+create or replace function orbit.enqueue_voice_distill()
+returns int
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  r record;
+  n int := 0;
+  day text := to_char(now() at time zone 'utc', 'YYYY-MM-DD');
+begin
+  for r in
+    select distinct e.user_id from orbit.draft_edits e join orbit.users u on u.id = e.user_id
+     where e.created_at >= now() - interval '25 hours' and u.deleted_at is null
+  loop
+    if orbit.enqueue('orbit_cadence', jsonb_build_object(
+      'kind', 'voice.distill', 'userId', r.user_id, 'payload', jsonb_build_object('reason', 'nightly'),
+      'dedupeKey', 'voice.distill:' || r.user_id || ':' || day)) is not null then
+      n := n + 1;
+    end if;
+  end loop;
+  return n;
+end
+$$;
+select cron.schedule('orbit-voice', '43 7 * * *', $$select orbit.enqueue_voice_distill()$$);
+revoke all on function orbit.enqueue_voice_distill() from public, anon, authenticated;
+grant execute on function orbit.enqueue_voice_distill() to service_role;

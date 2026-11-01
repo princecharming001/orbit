@@ -28,6 +28,10 @@ export type Task =
   | 'research_extract'
   /** deep research: the brief, written from the facts the loop extracted */
   | 'research_brief'
+  /** plan 29 §B2.4: the student's edits read into notes on how they write */
+  | 'voice_distill'
+  /** plan 29 §B2.4c: was an auto first message written by the same person as their sent mail */
+  | 'voice_judge'
   /** earlier names of reply_classify, memory_extract and goal_infer, kept for callers that still use them */
   | 'classify'
   | 'extract_memory'
@@ -63,6 +67,10 @@ export const TASKS: Record<Task, TaskSetting> = {
   extract_memory: { model: 'claude-haiku-5-5', effort: 'low', maxTokens: 1500 },
   extract_goal: { model: 'claude-haiku-5-5', effort: 'low', maxTokens: 1500 },
   judge: { model: 'claude-sonnet-5-5', maxTokens: 2000 },
+  // the drafting model reads the edits, once a night per student with new ones
+  voice_distill: { model: 'claude-opus-5-5', effort: 'low', maxTokens: 2000 },
+  // the judge's model, for the few first messages autopilot would send on its own
+  voice_judge: { model: 'claude-sonnet-5-5', maxTokens: 600 },
   // high effort: against the writing model as the reference it agreed on 14 of 16 claims (low effort: 8 of 16), for $0.003
   support: { model: 'claude-haiku-5-5', effort: 'high', maxTokens: 4000 },
   research_extract: { model: 'claude-haiku-5-5', effort: 'low', maxTokens: 2000 },

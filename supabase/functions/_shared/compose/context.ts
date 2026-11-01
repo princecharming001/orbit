@@ -7,12 +7,14 @@
  */
 import { type OwnWords, ownWordsLines } from '@orbit/core/ownWords';
 import { defaultStyleCard } from '@orbit/core/style/card';
+import { withVoiceNotes } from '@orbit/core/style/voice';
 import { stripQuotedReply } from '@orbit/core/text/email';
 import type { StyleCard } from '@orbit/core/types';
 import type { Db } from '../db.ts';
 import { HttpError } from '../http.ts';
 import { firstNameOf, iso, vec } from '../rows.ts';
 import type { Services } from '../services.ts';
+import { notesOf } from '../voice/voice.ts';
 
 /** ≈ 1,200 tokens at four characters a token. */
 export const USER_CONTEXT_MAX_CHARS = 4800;
@@ -187,13 +189,24 @@ function facetLines(parsed: Record<string, unknown> | null): string[] {
 
 // ---- voice ----------------------------------------------------------------------------------------------------
 
-/** The user's style card when it was built from ≥ 5 sent messages, else the tone preset (§7.7). */
+/**
+ * The user's style card when it was built from ≥ 3 sent messages (or set by hand), else the tone preset (§7.7), with
+ * what Orbit learned from their edits in force (plan 29 §B2.4): the kept and new notes in its notes, the phrases they
+ * cut in its avoid list. A forgotten note is never read.
+ */
 export function styleCardOf(u: UserRow): StyleCard {
   const card = u.settings.style_card as Partial<StyleCard> | undefined;
-  if (card && typeof card === 'object' && ((card.builtFromCount ?? 0) >= 3 || card.custom))
-    return card as StyleCard;
-  const preset = u.settings.tone_preset;
-  return defaultStyleCard(preset === 'direct' || preset === 'formal' ? preset : 'warm', userFirstName(u));
+  const base =
+    card && typeof card === 'object' && ((card.builtFromCount ?? 0) >= 3 || card.custom)
+      ? (card as StyleCard)
+      : (() => {
+          const preset = u.settings.tone_preset;
+          return defaultStyleCard(
+            preset === 'direct' || preset === 'formal' ? preset : 'warm',
+            userFirstName(u),
+          );
+        })();
+  return withVoiceNotes(base, notesOf(u.settings));
 }
 
 export function voiceText(c: StyleCard): string {

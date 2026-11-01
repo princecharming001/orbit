@@ -92,6 +92,10 @@ import type {
   SourceAddResponse,
   SourceSearchRequest,
   SourceSearchResponse,
+  VoiceNoteRequest,
+  VoiceNoteResponse,
+  VoiceRelearnResponse,
+  VoiceResponse,
 } from '@orbit/core';
 import { readLocalRow, writeLocalRow } from './prefs';
 
@@ -258,6 +262,10 @@ export interface ApiRoutes {
   '/friends/shares': [FriendSharesRequest, FriendSharesResponse];
   '/friends/asks': [FriendAskRequest | Record<string, never>, FriendAskResponse | FriendAsksResponse];
   '/friends/asks/respond': [FriendAskRespondByIdRequest, FriendAskRespondResponse];
+  // the student's voice (plan 29 §B2.4)
+  '/voice': [Record<string, never>, VoiceResponse];
+  '/voice/notes': [VoiceNoteRequest, VoiceNoteResponse];
+  '/voice/relearn': [Record<string, never>, VoiceRelearnResponse];
 }
 export type ClientRoute = keyof ApiRoutes;
 

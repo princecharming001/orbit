@@ -48,6 +48,7 @@ import {
   warmUpProgress,
   whenLabel,
   whyThemSentence,
+  withVoiceNotes,
 } from '@orbit/core';
 import { addTouchpoint, feedback, notify, recomputeAllStrengths } from '../db/repo';
 import { db } from '../db/schema';
@@ -979,7 +980,11 @@ export async function buildDraftContext(
       pastOrgs,
       orgRoles,
     },
-    styleCard: style?.card ?? defaultStyleCard(settings?.tonePreset ?? 'warm', user.firstName),
+    // plan 29 §B2.4: what Orbit learned from the student's edits, the notes in force, shapes every draft
+    styleCard: withVoiceNotes(
+      style?.card ?? defaultStyleCard(settings?.tonePreset ?? 'warm', user.firstName),
+      settings?.voiceNotes,
+    ),
     person: {
       firstName: person.firstName,
       lastName: person.lastName,
