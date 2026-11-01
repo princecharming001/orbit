@@ -106,7 +106,7 @@ export interface WeekReview {
   holiday?: string;
   /** what Orbit sent on its own this week (plan 23 §4.9) */
   sentForYou: number;
-  /** "On autopilot: 9 sent, 4 replies, 2 calls, 1 pushback (paused Stripe)" (plan 29 §B1), on a week it ran */
+  /** "On autopilot this week: 9 sent, 4 replies, 2 calls, 1 pushback at Stripe" (plan 29 §B1), on a week it ran */
   autopilot?: string;
   /** nothing moved this week */
   empty: boolean;

@@ -754,7 +754,7 @@ export interface AutopilotStatus {
   /** the last seven days on autopilot, for the weekly review's line (plan 29 §B1) */
   week?: AutopilotWeek;
 }
-/** "On autopilot: 9 sent, 4 replies, 2 calls, 1 pushback (paused Stripe)" as numbers (plan 29 §B1). */
+/** "On autopilot this week: 9 sent, 4 replies, 2 calls, 1 pushback at Stripe" as numbers (plan 29 §B1); `paused` names where the breaker tripped, not what is paused now. */
 export interface AutopilotWeek {
   /** what Orbit sent on its own */
   sent: number;

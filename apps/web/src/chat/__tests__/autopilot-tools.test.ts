@@ -95,7 +95,7 @@ describe('autopilot in the chat, phase 5', () => {
   it("the status says tomorrow's batch with the first messages waiting for a tap, and the week", async () => {
     const env = await run('autopilot_status', {}, ctx());
     expect(env.summary).toContain('2 messages queued for the morning (2 waiting for your tap)');
-    expect(env.summary).toContain('On autopilot: 9 sent, 4 replies, 2 calls, 1 pushback (paused Ramp).');
+    expect(env.summary).toContain('On autopilot this week: 9 sent, 4 replies, 2 calls, 1 pushback at Ramp.');
     const data = (
       env.data as { ui: { queued: { person: string; status: string }[]; skipped: { rule: string }[] } }
     ).ui;
@@ -108,7 +108,7 @@ describe('autopilot in the chat, phase 5', () => {
     expect(api.routes()).toContain('/autopilot/status');
   });
 
-  it("a queued first message says the student's clock and the recipient's when the two differ", async () => {
+  it("a queued first message says the recipient's clock and the student's when the two differ", async () => {
     const grace = api.state.autopilot.queued.find((q) => q.personName === 'Grace Liu')!;
     grace.sendAt = '2026-10-07T12:40:00.000Z';
     grace.recipientTimeZone = 'America/New_York';
@@ -116,7 +116,7 @@ describe('autopilot in the chat, phase 5', () => {
     const env = await run('autopilot_status', {}, makeCtx(west, { toolUseId: nextToolUseId() }));
     const queued = (env.data as { ui: { queued: { person: string; when?: string }[] } }).ui.queued;
     expect(queued.find((q) => q.person === 'Grace Liu')?.when).toBe(
-      'Wed 5:40 AM your time (8:40 AM their time)',
+      'Wed 8:40 AM their time (5:40 AM your time)',
     );
     // the same zone says one clock
     const east = { ...user, timezone: 'America/New_York' };

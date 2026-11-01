@@ -486,10 +486,10 @@ describe('the weekly review line (plan 29 §B1)', () => {
   it('says the week on autopilot in one line, in the plan words, and nothing on a quiet week', async () => {
     const { autopilotWeekLine } = await import('./autopilotMode');
     expect(autopilotWeekLine({ sent: 9, replies: 4, calls: 2, pushbacks: 1, paused: ['Stripe'] })).toBe(
-      'On autopilot: 9 sent, 4 replies, 2 calls, 1 pushback (paused Stripe)',
+      'On autopilot this week: 9 sent, 4 replies, 2 calls, 1 pushback at Stripe',
     );
     expect(autopilotWeekLine({ sent: 1, replies: 1, calls: 1, pushbacks: 0, paused: [] })).toBe(
-      'On autopilot: 1 sent, 1 reply, 1 call, 0 pushbacks',
+      'On autopilot this week: 1 sent, 1 reply, 1 call, 0 pushbacks',
     );
     expect(autopilotWeekLine({ sent: 0, replies: 0, calls: 0, pushbacks: 0, paused: [] })).toBeUndefined();
     expect(autopilotWeekLine(undefined)).toBeUndefined();

@@ -645,12 +645,14 @@ export const AUTOPILOT_RULES: readonly string[] = [
 /** The last rung, said once under the rules (plan 29 §B1, §B2.2). */
 export const FIRST_TOUCH_RUNG_RULE = `First messages are the last rung: until ${AUTO_FIRST_TOUCH_RUNG} first messages have gone out unchanged, the batch asks for a tap in the evening instead of sending in the morning.`;
 
-/** "On autopilot: 9 sent, 4 replies, 2 calls, 1 pushback (paused Stripe)", or undefined for a quiet week. */
+/** "On autopilot this week: 9 sent, 4 replies, 2 calls, 1 pushback at Stripe", or undefined for a quiet week. */
 export function autopilotWeekLine(w: AutopilotWeek | undefined): string | undefined {
   if (!w || (!w.sent && !w.pushbacks)) return undefined;
   const n = (k: number, one: string, many = `${one}s`) => `${k} ${k === 1 ? one : many}`;
-  const paused = w.paused.length ? ` (paused ${w.paused.join(' and ')})` : '';
-  return `On autopilot: ${w.sent} sent, ${n(w.replies, 'reply', 'replies')}, ${n(w.calls, 'call')}, ${n(w.pushbacks, 'pushback')}${paused}`;
+  // the companies where the breaker tripped this week, which is history: whether outreach is paused now is the status's
+  // paused goals, so the line never says paused
+  const at = w.paused.length ? ` at ${w.paused.join(' and ')}` : '';
+  return `On autopilot this week: ${w.sent} sent, ${n(w.replies, 'reply', 'replies')}, ${n(w.calls, 'call')}, ${n(w.pushbacks, 'pushback')}${at}`;
 }
 
 /**

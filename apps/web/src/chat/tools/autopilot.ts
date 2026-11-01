@@ -70,14 +70,17 @@ const theirTime = (i: Pick<AutopilotItem, 'sendAt' | 'sentAt' | 'recipientTimeZo
   return theirs === fmt(ctx.user.timezone || undefined) ? undefined : theirs;
 };
 
-/** "Tue 5:40 AM (8:40 AM their time)": the student's clock first, the recipient's beside it when it differs. */
+/**
+ * "Wed 8:40 AM their time (5:40 AM your time)": the recipient's clock first, since their morning is the rule a send
+ * keeps and the time a reply quotes, and the student's beside it when it differs.
+ */
 const whenBoth = (i: Pick<AutopilotItem, 'sendAt' | 'sentAt' | 'recipientTimeZone'>, ctx: ToolContext) => {
   const mine = when(i.sentAt ?? i.sendAt, ctx);
   const theirs = theirTime(i, ctx);
   if (!mine || !theirs) return mine;
-  // the weekday only when their day differs from the student's
+  // the weekday only when the student's day differs from theirs
   const sameDay = mine.split(' ')[0] === theirs.split(' ')[0];
-  return `${mine} your time (${sameDay ? theirs.slice(theirs.indexOf(' ') + 1) : theirs} their time)`;
+  return `${theirs} their time (${sameDay ? mine.slice(mine.indexOf(' ') + 1) : mine} your time)`;
 };
 
 function itemLine(i: AutopilotItem, ctx: ToolContext) {

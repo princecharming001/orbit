@@ -535,7 +535,7 @@ export const sendDraft = defineTool({
   name: 'send_draft',
   kind: 'risky',
   description:
-    'Call this only when the student says to send, approve or hand off a specific draft ("send the follow-up to Priya", "ok send it"), to retry a failed send, or asks for the text to paste into Gmail themselves (via copy). It never sends on its own: it returns a confirmation the student approves in the card, and the approved text is bound by the engine. Email goes through Gmail (10 second undo) or opens in the mail app; LinkedIn messages go from the student\'s own LinkedIn when it is connected live (same undo), else are copied and opened on LinkedIn; hand-offs then wait for the student\'s "I sent it". A blocked send explains the engine\'s reason instead.',
+    'Call this only when the student says to send, approve or hand off a specific draft ("send the follow-up to Priya", "ok send it"), to retry a failed send, or asks for the text to paste into Gmail themselves (via copy). It never sends on its own: it returns a confirmation the student approves in the card, and the approved text is bound by the engine. Email goes through Gmail (10 second undo) or opens in the mail app; LinkedIn messages are copied and opened on LinkedIn for the student to send (only a device-only setup with LinkedIn connected live sends them from the student\'s own LinkedIn, same undo; an Orbit account never does, so never offer connecting LinkedIn as a way to send); hand-offs then wait for the student\'s "I sent it". A blocked send explains the engine\'s reason instead.',
   input: z.object({
     draftId: z.string().describe('The draft id.'),
     body: z

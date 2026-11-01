@@ -254,11 +254,86 @@ const autopilotDay: ApiSeed = async (api, user) => {
   const lena = api.state.replies.find((r) => r.personName === 'Lena Novak' && r.replyClass === 'scheduling');
   if (lena) {
     lena.outcome = 'booked';
-    for (const i of api.state.autopilot.sentToday) if (i.personName === lena.personName) i.outcome = 'booked';
+    // the confirmation goes minutes after her pick, not before it
+    const confirmedAt = new Date(Date.parse(lena.receivedAt) + 4 * 60_000).toISOString();
+    for (const i of api.state.autopilot.sentToday)
+      if (i.personName === lena.personName)
+        Object.assign(i, { outcome: 'booked', sendAt: confirmedAt, sentAt: confirmedAt });
     const p = (await db.people.where('userId').equals(user.id).toArray()).find(
       (x) => x.displayName === lena.personName,
     );
-    if (p)
+    if (p) {
+      // the demo's earlier call with Lena never happened on this account: her chat is the one the funnel just
+      // booked, and her thread carries the slots Orbit offered, her pick and the confirmation
+      const chat = await db.chats.where('personId').equals(p.id).first();
+      if (chat) {
+        const old = chat.scheduledEventId;
+        if (old) await db.events.delete(old);
+        await db.notes.where('chatId').equals(chat.id).delete();
+        await db.chats.update(chat.id, {
+          stage: 'scheduled',
+          scheduledEventId: 'evt_lena_call',
+          completedAt: undefined,
+          lastInboundAt: lena.receivedAt,
+          lastOutboundAt: confirmedAt,
+          stageEnteredAt: confirmedAt,
+        });
+        const thread = chat.threadId ? await db.threads.get(chat.threadId) : undefined;
+        if (thread) {
+          const base = {
+            userId: user.id,
+            threadId: thread.id,
+            subject: `Re: ${thread.subject}`,
+            ccEmails: [],
+            headers: {},
+            isAutomated: false,
+          };
+          const offeredAt = new Date(Date.parse(lena.receivedAt) - 26 * 3_600_000).toISOString();
+          await db.messages.bulkPut([
+            {
+              ...base,
+              id: 'm_lena_slots',
+              externalMessageId: 'ext-m_lena_slots',
+              direction: 'outbound',
+              fromEmail: user.email,
+              fromName: user.fullName,
+              toEmails: [p.primaryEmail ?? 'lena@ramp.com'],
+              sentAt: offeredAt,
+              bodyText: `Hi Lena,\n\nThank you. Would any of these work for 20 minutes: Wed Oct 7 at 10, Thu Oct 8 at 11, or Tue Oct 13 at 2 (all Eastern)?\n\n${user.firstName}`,
+              signal: 'scheduling_proposal',
+            },
+            {
+              ...base,
+              id: 'm_lena_pick',
+              externalMessageId: 'ext-m_lena_pick',
+              direction: 'inbound',
+              fromEmail: p.primaryEmail ?? 'lena@ramp.com',
+              fromName: p.displayName,
+              fromPersonId: p.id,
+              toEmails: [user.email],
+              sentAt: lena.receivedAt,
+              bodyText: `${lena.snippet}\n\nLena`,
+              signal: 'scheduling_proposal',
+            },
+            {
+              ...base,
+              id: 'm_lena_confirm',
+              externalMessageId: 'ext-m_lena_confirm',
+              direction: 'outbound',
+              fromEmail: user.email,
+              fromName: user.fullName,
+              toEmails: [p.primaryEmail ?? 'lena@ramp.com'],
+              sentAt: confirmedAt,
+              bodyText: `Thursday at 11 it is. The invite is on its way. Talk then.\n\n${user.firstName}`,
+              signal: 'scheduling_proposal',
+            },
+          ] as never);
+          await db.threads.update(thread.id, {
+            messageCount: thread.messageCount + 3,
+            lastMessageAt: confirmedAt,
+          } as never);
+        }
+      }
       await db.events.put({
         id: 'evt_lena_call',
         userId: user.id,
@@ -269,9 +344,11 @@ const autopilotDay: ApiSeed = async (api, user) => {
         status: 'confirmed',
         attendees: [{ email: 'lena@ramp.com', displayName: 'Lena Novak' }],
         attendeePersonIds: [p.id],
-        inviteSentAt: '2026-10-06T13:05:00.000Z',
+        inviteSentAt: confirmedAt,
         isCoffeeChat: true,
+        chatId: chat?.id,
       });
+    }
   }
   await writeFromServer(
     'drafts',
@@ -1399,7 +1476,7 @@ const AUTOPILOT_MODES =
   "Three modes. Off: Orbit writes, you send. Assist: you approve each message with one tap and it goes in the recipient's Tuesday to Thursday morning; bumps, thank-yous and scheduling replies go on their own after ten unchanged approvals of a kind, each shown after with a minute to undo. Autopilot: everything in Assist, plus Orbit plans the week to your target, writes first messages, shows them the evening before as Tomorrow's batch and sends them in the morning unless you hold one, answers scheduling and thank-you replies, offers three times when someone says yes, books the call when they pick one, and asks you in chat when a reply needs something only you know. The rules, said plainly: email only, never LinkedIn at any level; only alumni, people you know (closeness 40 or more) or a friend's contact; at most 5 sends a day on its own, 3 first messages a day and 12 a week, never two people at one firm on the same day; only companies on your goals; stops and tells you at the first decline, unsubscribe or pushback; every message under Sent for you with a minute to undo; pause is one tap. First messages are the last rung: until twenty have gone out unchanged, the evening batch asks for a tap. Turning a mode on is a risky change: two sentences and a confirm, nothing sent on the spot. A goal can run on autopilot while the rest stay by hand.";
 
 const AUTOPILOT_DAY =
-  "Today on autopilot, read from the status and never invented: sent 3 (a first message to Kenji Mori at Figma at 8:41 their time, a bump to Ethan Park, a scheduling reply to Lena Novak). Tomorrow's batch: 2 first messages, Grace Liu at Linear and Omar Haddad at Notion, going 8:40 their time, held with one tap until then. Held: Priya Shah at Figma, because Kenji at Figma was written to this morning and autopilot never writes to two people at one firm on the same day; she moves to Thursday. Needs you: Daniel Okafor asked whether you have applied through the portal yet. Rungs: bumps, thank-yous and scheduling replies unlocked at 10 of 10; first messages at 14 of 20, so the batch still asks for a tap in the evening. Caps: 3 of 5 today, 5 of 12 first messages this week. Nothing is paused.";
+  "Today on autopilot, read from the status and never invented: sent 3 (a first message to Kenji Mori at Figma at 8:41 their time, a bump to Ethan Park, a scheduling reply to Lena Novak). Tomorrow's batch: 2 first messages, Grace Liu at Linear and Omar Haddad at Notion, going 8:40 their time, held with one tap until then. Held: Priya Shah at Figma, because Kenji at Figma was written to this morning and autopilot never writes to two people at one firm on the same day; she moves to Thursday. Needs you: Daniel Okafor asked whether you have applied through the portal yet. Rungs: bumps, thank-yous and scheduling replies unlocked at 10 of 10; first messages at 14 of 20, so the batch still asks for a tap in the evening. Caps: 3 of 5 today, 5 of 12 first messages this week. Nothing is paused now: the week's one pushback was Chloe Dubois's unsubscribe at Ramp, which tripped the breaker there earlier in the week. Times are said in the recipient's clock first, with the student's beside it.";
 
 const AUTOPILOT_REPLIES =
   'Inbound replies, one of each class: Maya Chen interested; Lena Novak scheduling ("Thu Oct 8 at 11 works", an offered slot, so the call books and the confirmation goes); Daniel Okafor a question (have you applied); Victor Castro an objection (apply through the portal first); Sofia Bennett a referral (her colleague Raj); Ethan Park not now (November); Caleb Weber out of office until October 12; Jonah Reyes a decline; Chloe Dubois unsubscribe; Priya Shah thanks. The next action by class: interested gets the slots reply; a time that matches a slot books and confirms; a question goes to Needs you and the student\'s one line fills the reply; objection, not now and referral are drafts for approval, never sent on their own; decline and unsubscribe close the thread, mark do not contact, no reply, and the student is told; thanks goes on its own only when it carries no question.';
@@ -1704,7 +1781,7 @@ const PLAN29: Scenario[] = [
     api: autopilotDay,
     goal: 'ask whether autopilot can send your LinkedIn messages as well',
     maxTurns: 3,
-    reference: `${AUTOPILOT_MODES} LinkedIn is never sent on its own at any level, invites included; LinkedIn drafts are handed to the student to send with a tap. Said plainly, without apology, with the email side as what autopilot does cover.`,
+    reference: `${AUTOPILOT_MODES} LinkedIn is never sent on its own at any level, invites included; on an Orbit account LinkedIn drafts are copied and opened on LinkedIn for the student to send themselves, and connecting LinkedIn live only keeps their connections in sync, it does not send. Said plainly, without apology, with the email side as what autopilot does cover.`,
     noWeb: true,
     minGoal: 'yes',
   },
