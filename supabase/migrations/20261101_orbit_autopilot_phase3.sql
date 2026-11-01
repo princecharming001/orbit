@@ -62,8 +62,10 @@ alter table orbit.suggestions enable row level security;
 alter table orbit.notifications enable row level security;
 
 -- updated_at moves with every change, as on the other pulled tables
+drop trigger if exists touch_updated_at on orbit.suggestions;
 create trigger touch_updated_at before update on orbit.suggestions
   for each row execute function orbit.touch_updated_at();
+drop trigger if exists touch_updated_at on orbit.notifications;
 create trigger touch_updated_at before update on orbit.notifications
   for each row execute function orbit.touch_updated_at();
 
@@ -91,3 +93,9 @@ begin
 end
 $$;
 select cron.schedule('orbit-outcomes', '37 * * * *', $$select orbit.enqueue_outcomes()$$);
+
+-- the same grants the core migration gives everything in the schema: service role only
+revoke all on table orbit.suggestions, orbit.notifications from public, anon, authenticated;
+grant all on table orbit.suggestions, orbit.notifications to service_role;
+revoke all on function orbit.enqueue_outcomes() from public, anon, authenticated;
+grant execute on function orbit.enqueue_outcomes() to service_role;
