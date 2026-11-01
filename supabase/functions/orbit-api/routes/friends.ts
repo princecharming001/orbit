@@ -51,6 +51,7 @@ import {
   visibleShares,
 } from '../../_shared/friends/shares.ts';
 import { badRequest, HttpError, json } from '../../_shared/http.ts';
+import { settleCard } from '../../_shared/replies/cards.ts';
 import { iso } from '../../_shared/rows.ts';
 import type { Ctx, Route } from '../api.ts';
 import { body, optUuid, text, uuid } from './body.ts';
@@ -673,6 +674,8 @@ async function ask(ctx: Ctx): Promise<Response> {
     [friend.friendshipId, me, friendUserId, targetPersonId, match, note, now],
   );
   await logAudit(ctx, 'friends.ask', 'friend_intro_asks', row!.id, { friendUserId });
+  // the ask autopilot's plan drafted for this contact, if it did, is done (plan 29 §C1 phase 5)
+  await settleCard(db, me, `friend_ask:${friendUserId}:${targetPersonId}`, 'done', now);
   const out: FriendAskResponse = { ask: await askView(db, row!) };
   return json(200, out);
 }

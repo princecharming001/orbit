@@ -448,6 +448,8 @@ export interface ProfileSettingsRequest {
   /** the student's own daily limits, when lower than the cap table (users.settings.daily_send_cap_gmail, _linkedin) */
   dailySendCapGmail?: number;
   dailySendCapLinkedin?: number;
+  /** first messages a week (the Limits page): users.settings.weekly_target, which the autopilot plan paces against */
+  weeklyOutreachTarget?: number;
   /**
    * the student's style card as this browser learned it (plan 29 §B2.4a), for the server's drafts and checks:
    * users.settings.style_card; null removes it
@@ -733,6 +735,39 @@ export interface AutopilotStatus {
   };
   /** when the evening review opens for tomorrow's batch */
   reviewUntil: string | null;
+  /**
+   * Why people at the goals' companies were not written to first by the last plan (plan 29 §B6): one rule each, in a
+   * sentence ("Priya is a recruiter at Figma. Autopilot never writes a first message to a recruiter")
+   */
+  skipped?: AutopilotSkip[];
+  /** asks to a friend the plan drafted for the student to send: a friend's contact is always asked of the friend */
+  friendAsks?: AutopilotFriendAsk[];
+  /** tonight's batch card, once it is raised (at 18:00 the student's time, when the batch is not empty) */
+  batch?: { at: string; text: string; firstTouches: number } | null;
+}
+/** A person the plan step weighed and left out, with the rule (plan 29 §B6). */
+export interface AutopilotSkip {
+  personId: string | null;
+  personName: string;
+  company: string | null;
+  rule: string;
+  reason: string;
+  /** when the plan decided it */
+  at: string;
+}
+/** An intro ask to a friend the plan step drafted (plan 29 §A2.5, §C1 phase 5): sent only on the student's tap. */
+export interface AutopilotFriendAsk {
+  /** the card's id */
+  id: string;
+  friendUserId: string;
+  friendName: string;
+  /** the friend's own person id for the contact (their share row), what /friends/asks takes */
+  targetPersonId: string;
+  targetName: string;
+  company: string | null;
+  /** the note the friend forwards, in the student's words */
+  note: string;
+  goalId: string | null;
 }
 /** POST /autopilot/hold { draftId }: the batch goes without this one */
 export interface AutopilotHoldRequest {
@@ -751,6 +786,14 @@ export interface AutopilotPauseResponse {
   goalId: string | null;
   /** queued sends that were cancelled by the pause */
   cancelled: number;
+}
+
+/** POST /autopilot/dismiss { id }: a plan card set aside (an ask to a friend, tonight's batch card) */
+export interface AutopilotDismissRequest {
+  id: string;
+}
+export interface AutopilotDismissResponse {
+  id: string;
 }
 
 /**
@@ -866,6 +909,7 @@ export const API_ROUTES = [
   '/autopilot/status',
   '/autopilot/hold',
   '/autopilot/pause',
+  '/autopilot/dismiss',
   '/replies/answer',
   '/voice',
   '/voice/notes',

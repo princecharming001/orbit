@@ -7,6 +7,7 @@
  * before a postal address is set (CAN-SPAM, §14.3); such a first touch carries the opt-out line (§7.7).
  */
 import { FIRST_TOUCH_KINDS, validateComposed, wordRange } from '@orbit/core/drafts/compose';
+import { firmKindOf, sectorOf } from '@orbit/core/drafts/sector';
 import {
   COMPOSE_KINDS,
   type ComposeKind,
@@ -14,6 +15,7 @@ import {
   composeFallback,
 } from '@orbit/core/drafts/templates';
 import type { ReplyClass } from '@orbit/core/email/replyClass';
+import { ASK_RULES, DRAFT_RULES } from '@orbit/core/knowledge/index';
 import { messageHash, unansweredBefore } from '@orbit/core/safety/rules';
 import type { Slot } from '@orbit/core/server/api';
 import { stripQuotedReply } from '@orbit/core/text/email';
@@ -226,7 +228,7 @@ export async function composeDraft(s: Services, req: ComposeRequest): Promise<Co
     examples: examples.map((e, i) => `Example ${i + 1}:\n${e}`).join('\n\n'),
     ...(req.kind === 'reply' ? { freeSlots: slotText } : {}),
   });
-  const system = composeSystem({
+  const system = `${composeSystem({
     userFirstName: meFirst,
     wordRange: range,
     askKind,
@@ -235,7 +237,7 @@ export async function composeDraft(s: Services, req: ComposeRequest): Promise<Co
       req.kind === 'forwardable_blurb'
         ? { intermediary: person.display_name, target: target?.display_name ?? 'them' }
         : undefined,
-  });
+  })}${firstTouch ? playbookLines(goalKind, person) : ''}`;
 
   // what a message may draw on, for the invented-name check
   const inputs = [
@@ -385,6 +387,19 @@ export async function composeDraft(s: Services, req: ComposeRequest): Promise<Co
     composed: { ...composed, id: row!.id, body, validator },
     attempts,
   };
+}
+
+/**
+ * The playbook's two lines for a first message (plan 28 §3b, rules 13 and 14), the ones the browser's drafts carry:
+ * the register of the goal, and what a first message to this kind of firm asks and never asks.
+ */
+export function playbookLines(
+  goal: GoalKind,
+  person: Pick<PersonRow, 'title' | 'org_name' | 'org_raw'>,
+): string {
+  const who = { title: person.title ?? undefined, org: personOrg(person) };
+  const firm = firmKindOf(who, sectorOf(who));
+  return `\n13. ${DRAFT_RULES[goal]}\n14. ${ASK_RULES[firm]}`;
 }
 
 function wordRangeText(kind: MessageKind, goal: GoalKind): string {

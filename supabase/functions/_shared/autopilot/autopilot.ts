@@ -12,7 +12,13 @@ import {
   REVIEW_WINDOW_HOURS,
   SEND_CAPS,
 } from '@orbit/core/safety/rules';
-import type { AutopilotItem, AutopilotRung, AutopilotStatus } from '@orbit/core/server/api';
+import type {
+  AutopilotFriendAsk,
+  AutopilotItem,
+  AutopilotRung,
+  AutopilotSkip,
+  AutopilotStatus,
+} from '@orbit/core/server/api';
 import type { MessageKind } from '@orbit/core/types';
 import type { DraftMeta } from '../compose/drafts.ts';
 import type { Db } from '../db.ts';
@@ -279,6 +285,7 @@ export async function autopilotStatus(db: Db, userId: string, now: Date): Promis
       reason: goalPauses[id]!.text,
     }));
   const reviews = queued.map((q) => q.send_at).filter((x): x is Date => !!x);
+  const plan = await planCards(db, userId, now);
   return {
     mode: modeOf(settings, Number(u.autonomy_level) || 0),
     pausedUntil,
@@ -300,7 +307,81 @@ export async function autopilotStatus(db: Db, userId: string, now: Date): Promis
           new Date(Math.min(...reviews.map((d) => new Date(d).getTime())) - REVIEW_WINDOW_HOURS * 3_600_000),
         )
       : null,
+    ...plan,
   };
+}
+
+/**
+ * What the plan step left for the status (plan 29 §B4): who it left out and why (the newest plan, in the last day and
+ * a half), the asks to friends it drafted, and tonight's batch card.
+ */
+async function planCards(
+  db: Db,
+  userId: string,
+  now: Date,
+): Promise<Pick<AutopilotStatus, 'skipped' | 'friendAsks' | 'batch'>> {
+  const [plan] = await db.sql<{ details: { skipped?: Omit<AutopilotSkip, 'at'>[] }; created_at: Date }>`
+    select details, created_at from orbit.audit_log
+     where user_id = ${userId}::uuid and action = 'autopilot.plan'
+       and created_at >= ${new Date(now.getTime() - 36 * 3_600_000)}::timestamptz
+     order by created_at desc limit 1`;
+  const skipped: AutopilotSkip[] = (plan?.details?.skipped ?? []).map((x) => ({
+    ...x,
+    at: iso(plan!.created_at)!,
+  }));
+  const cards = await db.sql<{
+    id: string;
+    kind: string;
+    reason_text: string;
+    payload: Record<string, unknown>;
+    created_at: Date;
+  }>`
+    select id, kind, reason_text, payload, created_at from orbit.suggestions
+     where user_id = ${userId}::uuid and status = 'pending' and kind in ('friend_ask_ready', 'batch_ready')
+       and expires_at > ${now}::timestamptz
+     order by created_at desc limit 20`;
+  const str = (v: unknown) => (typeof v === 'string' ? v : null);
+  const friendAsks: AutopilotFriendAsk[] = cards
+    .filter((c) => c.kind === 'friend_ask_ready')
+    .map((c) => ({
+      id: c.id,
+      friendUserId: str(c.payload.friendUserId) ?? '',
+      friendName: str(c.payload.friendName) ?? 'your friend',
+      targetPersonId: str(c.payload.targetPersonId) ?? '',
+      targetName: str(c.payload.targetName) ?? 'them',
+      company: str(c.payload.company),
+      note: str(c.payload.note) ?? '',
+      goalId: str(c.payload.goalId),
+    }));
+  const b = cards.find(
+    (c) => c.kind === 'batch_ready' && now.getTime() - new Date(c.created_at).getTime() < 18 * 3_600_000,
+  );
+  return {
+    skipped,
+    friendAsks,
+    batch: b
+      ? { at: iso(b.created_at)!, text: b.reason_text, firstTouches: Number(b.payload.firstTouches) || 0 }
+      : null,
+  };
+}
+
+/**
+ * POST /autopilot/dismiss {id}: the student set a plan card aside (an ask to a friend they will not send, tonight's
+ * batch card read). The ask is never drafted again for that contact.
+ */
+export async function dismissPlanCard(
+  db: Db,
+  userId: string,
+  id: string,
+  now: Date,
+): Promise<{ id: string }> {
+  const [row] = await db.sql<{ id: string }>`
+    update orbit.suggestions set status = 'dismissed', decided_at = ${now}::timestamptz, updated_at = ${now}::timestamptz
+     where id = ${id}::uuid and user_id = ${userId}::uuid and kind in ('friend_ask_ready', 'batch_ready')
+       and status in ('pending', 'snoozed')
+    returning id`;
+  if (!row) throw new HttpError(404, 'not_found', 'no such card');
+  return { id: row.id };
 }
 
 /** POST /autopilot/hold: a queued send goes back to a draft, held by the student; the batch goes without it. */

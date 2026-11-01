@@ -206,7 +206,8 @@ export const LIMIT_RANGES = {
 
 /**
  * Save sending limits and the warm-up settings, kept inside the ranges the page allows. In account mode the daily
- * caps go up too, so the server's send job honours the student's own lower limit as the browser does.
+ * caps go up too, so the server's send job honours the student's own lower limit as the browser does, and so does
+ * the weekly target, which the server's autopilot plan paces against.
  */
 export async function updateLimits(userId: string, patch: LimitsPatch): Promise<UserSettings | undefined> {
   const changes: Partial<UserSettings> = {};
@@ -221,6 +222,8 @@ export async function updateLimits(userId: string, patch: LimitsPatch): Promise<
   const caps: ProfileSettingsRequest = {};
   if (changes.dailySendCapGmail !== undefined) caps.dailySendCapGmail = changes.dailySendCapGmail;
   if (changes.dailySendCapLinkedin !== undefined) caps.dailySendCapLinkedin = changes.dailySendCapLinkedin;
+  // the week's target paces the server's autopilot plan step (plan 29 §B4)
+  if (changes.weeklyOutreachTarget !== undefined) caps.weeklyOutreachTarget = changes.weeklyOutreachTarget;
   if (Object.keys(caps).length) await pushProfileSettings(userId, caps);
   return db.settings.get(userId);
 }

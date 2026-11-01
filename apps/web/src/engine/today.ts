@@ -29,6 +29,8 @@ export const SUGGESTION_KIND_LABELS: Record<
   trust_offer: { label: 'Send on its own?', tone: 'accent' },
   needs_you: { label: 'Needs you', tone: 'accent' },
   breaker: { label: 'Paused', tone: 'warn' },
+  batch_ready: { label: "Tomorrow's batch", tone: 'accent' },
+  friend_ask_ready: { label: 'Ask a friend', tone: 'accent' },
 };
 
 /**

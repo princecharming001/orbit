@@ -9,6 +9,9 @@
  * (`users.settings.auto_kinds`, the browser's `settings.autoKinds`) is approved for the recipient's next send window
  * on its own, under the browser ladder's conditions: the goal or the student at level 1 or more, Gmail, the
  * validator passed, a tie score of 40 or more, no pause, and fewer than five of Orbit's own sends that day.
+ *
+ * Then the plan step (plan 29 §B4, `autopilot/plan.ts`): for the goals on autopilot, the next morning's first
+ * messages, queued behind the evening review, and the batch card at 18:00.
  */
 import type {
   CadenceAction,
@@ -22,6 +25,7 @@ import { AUTO_KINDS, AUTO_SEND_MIN_SCORE, messageHash, SEND_CAPS } from '@orbit/
 import type { DueItem } from '@orbit/core/server/api';
 import { chatFromRow, goalFromRow, type Row } from '@orbit/core/server/mappers';
 import type { CoffeeChat, Goal, MessageKind } from '@orbit/core/types';
+import { type PlanSummary, runAutopilotPlan } from '../autopilot/plan.ts';
 import { composeDraft } from '../compose/compose.ts';
 import { askUserMarkers } from '../compose/prompts.ts';
 import { nextSendWindow } from '../compose/window.ts';
@@ -241,6 +245,8 @@ export interface CadenceSummary {
   moved: number;
   queued: number;
   skipped: number;
+  /** autopilot's plan step: the first messages queued for the morning and the asks to friends (plan 29 §B4) */
+  plan?: PlanSummary;
 }
 
 /** The cadence.user job (§9.3). */
@@ -392,5 +398,7 @@ export async function runCadence(s: Services, userId: string): Promise<CadenceSu
       throw e;
     }
   }
+  // the plan step (plan 29 §B4): first messages for the goals on autopilot, and tonight's batch card
+  out.plan = await runAutopilotPlan(s, userId);
   return out;
 }

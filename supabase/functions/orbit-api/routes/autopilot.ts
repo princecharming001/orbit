@@ -5,10 +5,12 @@
  *                                            the student, the pauses, the rungs and the caps
  *   POST /autopilot/hold {draftId}         → {item}: the batch goes without this one
  *   POST /autopilot/pause {until, goalId?} → {pausedUntil, goalId, cancelled}: null lifts the pause
+ *   POST /autopilot/dismiss {id}           → {id}: a plan card set aside (an ask to a friend, tonight's batch card)
  */
 import { AUTOPILOT_MODES, type AutopilotMode } from '@orbit/core/safety/rules';
 import {
   autopilotStatus,
+  dismissPlanCard,
   holdSend,
   pauseAutopilot,
   setAutopilotMode,
@@ -55,9 +57,15 @@ async function pause(ctx: Ctx): Promise<Response> {
   );
 }
 
+async function dismiss(ctx: Ctx): Promise<Response> {
+  const b = await body(ctx);
+  return json(200, await dismissPlanCard(ctx.db, ctx.userId!, uuid(b, 'id'), ctx.now()));
+}
+
 export const autopilotRoutes: Record<string, Route> = {
   '/autopilot/mode': { method: 'POST', auth: true, run: mode },
   '/autopilot/status': { method: 'GET|POST', auth: true, run: status },
   '/autopilot/hold': { method: 'POST', auth: true, run: hold },
   '/autopilot/pause': { method: 'POST', auth: true, run: pause },
+  '/autopilot/dismiss': { method: 'POST', auth: true, run: dismiss },
 };

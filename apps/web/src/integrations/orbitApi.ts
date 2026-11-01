@@ -17,6 +17,8 @@
  */
 import type {
   AutonomyRequest,
+  AutopilotDismissRequest,
+  AutopilotDismissResponse,
   AutopilotHoldRequest,
   AutopilotHoldResponse,
   AutopilotModeRequest,
@@ -236,6 +238,7 @@ export interface ApiRoutes {
   '/autopilot/status': [Record<string, never>, AutopilotStatus];
   '/autopilot/hold': [AutopilotHoldRequest, AutopilotHoldResponse];
   '/autopilot/pause': [AutopilotPauseRequest, AutopilotPauseResponse];
+  '/autopilot/dismiss': [AutopilotDismissRequest, AutopilotDismissResponse];
   '/calendar/slots': [SlotsRequest, SlotsResponse];
   '/calendar/book': [BookRequest, BookResponse];
   '/memory/search': [MemorySearchRequest, MemorySearchResponse];

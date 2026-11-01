@@ -1891,6 +1891,8 @@ const BRIEF_LABELS: Record<SuggestionKind, (n: number) => string> = {
   trust_offer: (n) => `${n} offer${n > 1 ? 's' : ''} to send on its own`,
   needs_you: (n) => `${n} repl${n > 1 ? 'ies' : 'y'} that need${n > 1 ? '' : 's'} you`,
   breaker: (n) => `${n} pause${n > 1 ? 's' : ''} to read`,
+  batch_ready: (n) => `${n} batch${n > 1 ? 'es' : ''} to review tonight`,
+  friend_ask_ready: (n) => `${n} ask${n > 1 ? 's' : ''} for a friend's intro`,
 };
 
 /** The one-line summary at the top of Today. It always names a real next step, never "all good" on an empty network. */

@@ -159,7 +159,11 @@ export type SuggestionKind =
   /** a reply asked something only the student knows (plan 29 §B2.3): the question, and a line to answer it */
   | 'needs_you'
   /** the circuit breaker fired (plan 29 §B2.7): who pushed back, and which goal's first messages are paused */
-  | 'breaker';
+  | 'breaker'
+  /** tomorrow's batch is ready for the evening review (plan 29 §B1): raised once a day at 18:00 when it is not empty */
+  | 'batch_ready'
+  /** the plan step drafted an ask to a friend for one of their contacts (plan 29 §A2.5): sent only on a tap */
+  | 'friend_ask_ready';
 export type SuggestionStatus =
   | 'pending'
   | 'approved'
