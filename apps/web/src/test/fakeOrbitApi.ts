@@ -430,7 +430,8 @@ export function createFakeOrbitApi(
             f.myCompanyDomains = domains;
           }
         }
-        return json(200, { mode, companyDomains: domains, shares: ownVisible(state).length });
+        // the count under the mode just set, for that friend or for all (the server counts the same way)
+        return json(200, { mode, companyDomains: domains, shares: ownVisible(state, mode, domains).length });
       }
       case '/friends/preview':
         return json(200, {
@@ -1173,12 +1174,15 @@ function publicShare(s: FakeFriendShare): FriendShare {
   return pub;
 }
 
-function ownVisible(state: FakeState): FriendShare[] {
-  if (state.friendShareMode === 'none') return [];
-  if (state.friendShareMode === 'companies')
-    return state.ownShares.filter(
-      (p) => p.companyDomain && state.friendCompanyDomains.includes(p.companyDomain),
-    );
+/** What the student shares under a mode: their default, or one friend's when given (the server's underMode). */
+function ownVisible(
+  state: FakeState,
+  mode: FriendShareMode = state.friendShareMode,
+  domains: string[] = state.friendCompanyDomains,
+): FriendShare[] {
+  if (mode === 'none') return [];
+  if (mode === 'companies')
+    return state.ownShares.filter((p) => p.companyDomain && domains.includes(p.companyDomain));
   return state.ownShares;
 }
 
