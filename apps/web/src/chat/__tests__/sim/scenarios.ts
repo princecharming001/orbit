@@ -283,6 +283,11 @@ const FIRST_NOTES: Record<string, { subject: string; body: (first: string, me: s
 async function castAutopilotDay(api: FakeOrbitApi, user: User) {
   // an account on autopilot granted Gmail's send permission: its sends go from the server
   api.state.status.google.scopes = [GMAIL_SEND_SCOPE];
+  // the batch writes to Notion, one of the demo's target companies, so the goal on autopilot names it too
+  for (const g of api.state.goals) {
+    const orgs = g.targets.organizations;
+    if (orgs.length && !orgs.includes('Notion')) orgs.push('Notion');
+  }
   const people = await db.people.where('userId').equals(user.id).toArray();
   const byName = new Map(people.map((p) => [p.displayName, p]));
   const thanks = api.state.replies.find((r) => r.replyClass === 'thanks');
