@@ -305,6 +305,11 @@ export interface UserSettings {
    */
   friendShareMode?: 'all' | 'companies' | 'none';
   friendShareDomains?: string[];
+  /**
+   * What Orbit learned from the student's edits (plan 29 §B2.4), kept or forgotten in Settings, Voice: this
+   * browser's notes in local mode, and a copy of the server's users.settings.voice_notes for an account
+   */
+  voiceNotes?: import('./server/api').VoiceNote[];
 }
 
 /** What a goal is for (plan 16 §2.1); it changes the register, the ask and the routing rules. */
@@ -1171,6 +1176,27 @@ export interface FeedbackEvent {
   refId?: ID;
   reason?: string;
   editDistance?: number;
+  /** an edited send: what Orbit wrote and what the student sent instead (the typed row is a DraftEdit) */
+  editBefore?: string;
+  editAfter?: string;
+  createdAt: string;
+}
+
+/**
+ * One edit the student made to a draft before it went (plan 29 §B2.4): what Orbit wrote, what they sent, and how
+ * many words changed. Every edited send writes one, in both modes; an account pushes them to orbit.draft_edits,
+ * where the nightly distillation reads them into notes.
+ */
+export interface DraftEdit {
+  id: ID;
+  userId: ID;
+  draftId?: ID;
+  kind: MessageKind;
+  replyClass?: string;
+  before: string;
+  after: string;
+  /** words taken out or put in */
+  distance: number;
   createdAt: string;
 }
 

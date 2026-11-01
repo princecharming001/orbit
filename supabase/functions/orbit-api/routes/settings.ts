@@ -12,7 +12,8 @@
  *          and the one rulebook's settings (plan 29 §B2.1): autoKinds as users.settings.auto_kinds (the whole list),
  *          autopilotMode as users.settings.autopilot_mode with users.autonomy_level set to match (off 0, assist 1,
  *          autopilot 2), autopilotPausedUntil as users.settings.autopilot_paused_until (null resumes), and the
- *          student's own daily limits as daily_send_cap_gmail and daily_send_cap_linkedin
+ *          student's own daily limits as daily_send_cap_gmail and daily_send_cap_linkedin; and the style card the
+ *          browser learned (plan 29 §B2.4a) as users.settings.style_card, its shape checked, null removing it
  *   The pause also sets autopilot_paused_until, so the send job holds what Orbit chose a time for.
  */
 import { cleanAnswer, cleanCurrentJob, OWN_WORDS_KEYS, type OwnWords } from '@orbit/core/ownWords';
@@ -26,6 +27,7 @@ import {
 import type { ProfileSettingsResponse } from '@orbit/core/server/api';
 import { badRequest, HttpError, json } from '../../_shared/http.ts';
 import { sqlQueue } from '../../_shared/queue.ts';
+import { parseStyleCard } from '../../_shared/voice/voice.ts';
 import { validZone } from '../../_shared/zones.ts';
 import type { Ctx, Route } from '../api.ts';
 import { body, optUuid } from './body.ts';
@@ -225,11 +227,14 @@ async function profile(ctx: Ctx): Promise<Response> {
       throw badRequest(`${key} must be a whole number from 1 to ${max}`);
     return Number(v);
   };
+  // the style card the browser learned (plan 29 §B2.4a): the server's drafts and its voice check read it
+  const card = parseStyleCard(b.styleCard);
+  if (card && 'error' in card) throw badRequest(card.error);
   const capGmail = ownCap('dailySendCapGmail', SEND_CAPS.gmailPerDay);
   const capLinkedin = ownCap('dailySendCapLinkedin', SEND_CAPS.linkedinPerDay);
   const userId = ctx.userId!;
   // the keys given are replaced (or removed when null); the rest of settings is kept
-  const given: Record<string, string | string[] | number | OwnWords | boolean | null> = {};
+  const given: Record<string, string | string[] | number | OwnWords | boolean | object | null> = {};
   if (postal !== undefined) given.postal_address = postal;
   if (link !== undefined) given.scheduling_link = link;
   if (about !== undefined) given.about = about;
@@ -240,6 +245,7 @@ async function profile(ctx: Ctx): Promise<Response> {
   if (pausedUntil !== undefined) given.autopilot_paused_until = pausedUntil;
   if (capGmail !== undefined) given.daily_send_cap_gmail = capGmail;
   if (capLinkedin !== undefined) given.daily_send_cap_linkedin = capLinkedin;
+  if (card !== undefined) given.style_card = card;
   const level = mode === undefined ? null : AUTOPILOT_MODE_LEVEL[mode];
   const keep = Object.fromEntries(Object.entries(given).filter(([, v]) => v !== null));
   const [after] = await ctx.db.sql<{

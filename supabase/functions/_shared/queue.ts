@@ -28,6 +28,8 @@ export const KIND_QUEUE: Record<string, QueueName> = {
   'cadence.user': 'orbit_cadence',
   'funnel.reply': 'orbit_classify',
   'outcomes.roll': 'orbit_cadence',
+  'voice.card': 'orbit_cadence',
+  'voice.distill': 'orbit_cadence',
   'health.snapshot': 'orbit_cadence',
   'score.user': 'orbit_score',
   'score.person': 'orbit_score',
@@ -35,6 +37,7 @@ export const KIND_QUEUE: Record<string, QueueName> = {
   'enrich.dossier': 'orbit_enrich',
   'source.search': 'orbit_enrich',
   hop_evidence: 'orbit_enrich',
+  'voice.embed_sent': 'orbit_enrich',
   noop: 'orbit_enrich',
 };
 

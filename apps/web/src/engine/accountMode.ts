@@ -3,7 +3,7 @@
  * account's id, so every row the server sends (keyed by that user) belongs to it; signing out keeps the data on this
  * device and stops syncing; deleting the account removes it on the server and here.
  */
-import type { AutoKind, AutopilotMode, RecruitingGoals, User, UserSettings } from '@orbit/core';
+import type { AutoKind, AutopilotMode, RecruitingGoals, StyleCard, User, UserSettings } from '@orbit/core';
 import { AUTO_KINDS, AUTOPILOT_MODES, ownWordsOf } from '@orbit/core';
 import { getCurrentUserId, setCurrentUserId } from '../db/repo';
 import { db } from '../db/schema';
@@ -107,8 +107,29 @@ export async function adoptAccountUser(a: AccountUser, now = new Date()): Promis
   const about = ownWordsOf(a.settings?.about as Partial<RecruitingGoals> | undefined);
   if (Object.keys(about).length && !Object.keys(ownWordsOf(await db.goals.get(user.id))).length)
     await saveGoals(user.id, about);
+  // the style card the server drafts with (plan 29 §B2.4a), taken where this device has none, or only a smaller
+  // learned one the student never set by hand
+  const serverCard = styleCardFrom(s.style_card);
+  if (serverCard) {
+    const mine = await db.styles.get(user.id);
+    if (!mine || (!mine.card.custom && mine.card.builtFromCount < serverCard.builtFromCount))
+      await db.styles.put({ ...mine, userId: user.id, card: serverCard, updatedAt: now.toISOString() });
+  }
   await setCurrentUserId(user.id);
   return user;
+}
+
+/** A style card as the server keeps it (users.settings.style_card), when it has the shape drafting needs. */
+function styleCardFrom(v: unknown): StyleCard | undefined {
+  if (!v || typeof v !== 'object') return undefined;
+  const c = v as Partial<StyleCard>;
+  return Array.isArray(c.greetingPatterns) &&
+    Array.isArray(c.signoffs) &&
+    Array.isArray(c.avoid) &&
+    typeof c.builtFromCount === 'number' &&
+    typeof c.avgSentenceWords === 'number'
+    ? (c as StyleCard)
+    : undefined;
 }
 
 /** Sign out of Orbit on this device: the session ends, syncing stops, the data already here stays. */

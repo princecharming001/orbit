@@ -22,6 +22,7 @@ import { NeedsReauth } from '../../_shared/google.ts';
 import { GoogleApiError } from '../../_shared/googleApi.ts';
 import { ingestGmail } from '../../_shared/ingest/gmail.ts';
 import { type Account, loadAccount, loadSelf, patchSyncState } from '../../_shared/ingest/util.ts';
+import { supabaseEmbed } from '../../_shared/services.ts';
 import type { Job, JobContext, JobHandler } from '../worker.ts';
 import { googleFor, type HandlerDeps, JobSkipped, LONG_VT_SEC } from './deps.ts';
 
@@ -76,6 +77,8 @@ const reauth = async <T>(fn: () => Promise<T>): Promise<T> => {
 
 export function gmailHandlers(deps: HandlerDeps): Record<string, JobHandler> {
   const google = googleFor(deps);
+  // the student's sent mail is embedded as it arrives, for the drafts' exemplars (plan 29 §B2.4a)
+  const embed = deps.embed ?? supabaseEmbed();
 
   async function firstRun(api: GmailApi, userId: string, ctx: JobContext) {
     const self = await loadSelf(ctx.db, userId);
@@ -155,7 +158,7 @@ export function gmailHandlers(deps: HandlerDeps): Record<string, JobHandler> {
     });
     const refs = page.messages ?? [];
     await ingestGmail(
-      { db: ctx.db, queue: ctx.queue, api, userId, now, jobKey: `gmail:${job.msgId}`, history: true },
+      { db: ctx.db, queue: ctx.queue, api, userId, now, jobKey: `gmail:${job.msgId}`, history: true, embed },
       refs,
     );
     const done = bf.done + refs.length;
@@ -281,7 +284,7 @@ export function gmailHandlers(deps: HandlerDeps): Record<string, JobHandler> {
     const fresh = ids.filter((id) => !stored.has(id));
     const batch = fresh.slice(0, PAGE_SIZE);
     await ingestGmail(
-      { db: ctx.db, queue: ctx.queue, api, userId, now, jobKey: `gmail:${job.msgId}` },
+      { db: ctx.db, queue: ctx.queue, api, userId, now, jobKey: `gmail:${job.msgId}`, embed },
       batch.map((id) => ({ id })),
     );
     // all new messages stored: move on to the newest history (or, past the page cap, to the last record read)

@@ -13,7 +13,10 @@
  *      networking threads; thread aggregates are recounted from the stored messages;
  *   7. introductions in networking threads become introduced_by ties (and move an intro request to intro_made);
  *   8. classify.message for new inbound human mail in networking threads (last 180 days), and one score.person job
- *      for everyone on the touched threads.
+ *      for everyone on the touched threads;
+ *   9. the student's own new sent mail of 25 words or more is embedded for the drafts' exemplars (plan 29 §B2.4a),
+ *      through the embedding adapter the memories use; without one, or on any failure, it is simply left for
+ *      voice.embed_sent and the ingest goes on.
  * Nothing here logs content, names or addresses.
  */
 import { heuristicTriage, isAutoReplyBody } from '@orbit/core/email/triage';
@@ -34,6 +37,8 @@ import type { Db } from '../db.ts';
 import { findBody, type GmailApi, type GmailMessage, headerMap } from '../gmail.ts';
 import { GoogleApiError } from '../googleApi.ts';
 import type { Queue } from '../queue.ts';
+import type { Embed } from '../services.ts';
+import { embedMessages, exemplarText } from '../voice/voice.ts';
 import { type Incoming, resolvePeople } from './people.ts';
 import { upsertIntroTie } from './ties.ts';
 import { loadSelf, type SelfInfo } from './util.ts';
@@ -149,6 +154,8 @@ export interface GmailIngestDeps {
    * listed, but none gets an answer drafted. They came before Orbit, so a new account starts with no drafts.
    */
   history?: boolean;
+  /** gte-small, for the student's sent mail (plan 29 §B2.4a); without it nothing is embedded */
+  embed?: Embed;
 }
 
 export interface GmailIngestStats {
@@ -284,6 +291,7 @@ export async function ingestGmail(
 
   const touched = new Set<string>();
   const classify: { id: string; externalId: string }[] = [];
+  const sent: { id: string; body: string | null }[] = [];
   for (const [tid, raw] of byThread) {
     const ms = [...raw].sort((a, b) => a.sentAt.localeCompare(b.sentAt));
     const pids = new Set<string>();
@@ -347,6 +355,7 @@ export async function ingestGmail(
       if (row) {
         inserted++;
         stats.stored++;
+        if (m.outbound && !m.automated && exemplarText(body)) sent.push({ id: row.id, body });
         if (
           networking &&
           !m.outbound &&
@@ -383,6 +392,8 @@ export async function ingestGmail(
     if (inserted) for (const p of pids) touched.add(p);
   }
 
+  // the student's own words, for the exemplars: best effort, never in the way of the ingest
+  if (sent.length) await embedMessages(db, d.embed, sent).catch(() => 0);
   for (const c of classify)
     await d.queue.enqueue({
       kind: 'classify.message',

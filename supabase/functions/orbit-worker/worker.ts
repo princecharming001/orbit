@@ -63,7 +63,9 @@ export function defaultHandlers(
 ): Record<string, JobHandler> {
   const agents: AgentConfig | undefined = 'env' in opts ? opts : opts.agents;
   const deps: HandlerDeps =
-    'env' in opts ? { fetch: opts.fetch, sleep: opts.sleep, random: opts.random } : opts;
+    'env' in opts
+      ? { fetch: opts.fetch, sleep: opts.sleep, random: opts.random, embed: opts.embed }
+      : { ...opts, embed: opts.embed ?? opts.agents?.embed };
   const handlers: Record<string, JobHandler> = {
     noop: async () => {},
     'health.snapshot': async (_job, ctx) => {

@@ -7,6 +7,7 @@ import type { Claude } from '../../_shared/claude.ts';
 import type { Db } from '../../_shared/db.ts';
 import type { TokenSource } from '../../_shared/google.ts';
 import { type GoogleClient, googleClient, type QuotaPacer } from '../../_shared/googleApi.ts';
+import type { Embed } from '../../_shared/services.ts';
 
 export interface HandlerDeps {
   fetch?: typeof fetch;
@@ -22,6 +23,8 @@ export interface HandlerDeps {
   random?: () => number;
   /** how long a paged sync job works before it saves its place and queues the rest (default 60 s) */
   jobBudgetMs?: number;
+  /** gte-small for the student's sent mail (plan 29 §B2.4a); the Edge Runtime's own model when not given */
+  embed?: Embed;
 }
 
 export class JobSkipped extends Error {

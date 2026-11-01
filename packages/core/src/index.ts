@@ -69,6 +69,7 @@ export type { AutopilotMode } from './server/api';
 export * from './server/api';
 export * from './server/mappers';
 export * from './style/card';
+export * from './style/voice';
 export { isBusinessDayKey, usHolidayName, usHolidays } from './suggestions/calendar';
 export * from './suggestions/pace';
 export * from './suggestions/rules';

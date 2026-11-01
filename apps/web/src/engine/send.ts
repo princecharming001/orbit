@@ -1253,6 +1253,8 @@ async function finalizeSent(
     // plan 23 §4.9: ten untouched approvals of a kind earn the offer to send that kind on its own
     if (!msg.autoSent) await step(() => import('./trust').then((m) => m.raiseTrustCards(user, now)));
   }
+  // plan 29 §B2.4: every tenth send learns the student's voice again (never a reason this send failed to record)
+  await import('./voice').then((m) => m.noteSendForVoice(user, now)).catch(() => undefined);
   await step(() =>
     audit(user.id, 'message.sent', {
       objectTable: 'outbound',

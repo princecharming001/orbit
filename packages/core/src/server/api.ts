@@ -285,6 +285,9 @@ export interface DraftApproveRequest {
   draftId: string;
   sendAt?: string;
   confirm?: boolean;
+  /** the words as the student left them (plan 29 §B2.4): approving an edited draft records the edit */
+  body?: string;
+  subject?: string | null;
 }
 /** POST /drafts/cancel, POST /drafts/discard */
 export interface DraftIdRequest {
@@ -445,6 +448,11 @@ export interface ProfileSettingsRequest {
   /** the student's own daily limits, when lower than the cap table (users.settings.daily_send_cap_gmail, _linkedin) */
   dailySendCapGmail?: number;
   dailySendCapLinkedin?: number;
+  /**
+   * the student's style card as this browser learned it (plan 29 §B2.4a), for the server's drafts and checks:
+   * users.settings.style_card; null removes it
+   */
+  styleCard?: StyleCard | null;
 }
 export interface ProfileSettingsResponse {
   postalAddress: string | null;
@@ -765,6 +773,8 @@ export interface VoiceNote {
   text: string;
   /** the draft_edits rows behind it */
   evidence: string[];
+  /** the phrase the note says the student never uses, exactly as Orbit wrote it; drafting avoids it */
+  avoid?: string | null;
   createdAt: string;
   keptAt: string | null;
   /** a forgotten note is never re-learned */

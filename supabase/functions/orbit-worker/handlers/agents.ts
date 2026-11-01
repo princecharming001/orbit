@@ -7,6 +7,7 @@ import { funnelReplyHandler, outcomesRollHandler } from './funnel.ts';
 import { hopEvidenceHandler } from './hops.ts';
 import { sendDraftHandler } from './send.ts';
 import { sourceSearch } from './source.ts';
+import { voiceHandlers } from './voice.ts';
 
 export function agentHandlers(config: AgentConfig = { env: {} }): Record<string, JobHandler> {
   return {
@@ -17,5 +18,7 @@ export function agentHandlers(config: AgentConfig = { env: {} }): Record<string,
     'funnel.reply': funnelReplyHandler(config),
     'outcomes.roll': outcomesRollHandler(),
     hop_evidence: hopEvidenceHandler(config),
+    // plan 29 §B2.4: the student's voice
+    ...voiceHandlers(config),
   };
 }
