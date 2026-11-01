@@ -77,7 +77,7 @@ export const listFriendsTool = defineTool({
   name: 'list_friends',
   kind: 'read',
   description:
-    "Call this when the student asks who their friends on Orbit are, what a friend shares with them, who they could reach through friends (at a company or at all), how many of their target companies a friend covers, or what a friend can see of their own network. It lists each friend with how many people they share, how many are at the student's targets and where, and what the student shares back; with a company it also lists the friend's people there and how well the friend knows each. It also says plainly what a friend may see and what never crosses. Needs an Orbit account; without one it says so.",
+    "Call this when the student asks who their friends on Orbit are, what a friend shares with them, who they could reach through friends (at a company or at all), how many of their target companies a friend covers, or what a friend can see of their own network. It lists each friend with how many people they share, how many are at the student's targets and where, and what the student shares back; with a company it also lists the friend's people there and how well the friend knows each. It also lists the intro asks friends made of the student (with their note) and the asks the student made, so call it first when the student says a friend sent or asked them something. It also says plainly what a friend may see and what never crosses. Needs an Orbit account; without one it says so.",
   input: z.object({
     company: z
       .string()
@@ -88,9 +88,12 @@ export const listFriendsTool = defineTool({
   progress: 'Reading your friends',
   async execute(input, ctx): Promise<ResultEnvelope> {
     if (!friendsAvailable(ctx.user)) return needsAccount('Friends');
-    const r = await listFriends(ctx.user);
+    const [r, asks] = await Promise.all([listFriends(ctx.user), listAsks(ctx.user)]);
     if (!r.ok) throw new Error(r.message);
     const { friends, pending } = r.value;
+    // what a friend asked of the student, and what the student asked: the first thing to say when one waits
+    const received = asks.ok ? asks.value.received.filter((a) => a.status === 'asked') : [];
+    const asked = asks.ok ? asks.value.asked : [];
     const items = friends.map((f) => ({
       text: `${f.name}${f.school ? ` · ${f.school}${f.gradYear ? ` ${f.gradYear}` : ''}` : ''}`,
       sub: friendLine(f),
@@ -135,6 +138,9 @@ export const listFriendsTool = defineTool({
         : ` Nobody your friends share works at ${input.company}.`
       : '';
     const pend = waiting.length ? ` ${plural(waiting.length, 'request')} waiting on you in Friends.` : '';
+    const waitingAsks = received.length
+      ? ` ${received.map((a) => `${first(a.askerName)} asked you for an intro to ${a.targetName}${a.targetCompany ? ` at ${a.targetCompany}` : ''}`).join('; ')}. It waits in Friends for you to forward.`
+      : '';
     return ok(
       'list',
       {
@@ -154,11 +160,25 @@ export const listFriendsTool = defineTool({
           yourCompanies: f.myCompanyDomains,
         })),
         pending: pending.map((p) => ({ direction: p.direction, who: p.name ?? p.email, status: p.status })),
+        asksToYou: received.map((a) => ({
+          askId: a.id,
+          from: a.askerName,
+          wantsToMeet: a.targetName,
+          company: a.targetCompany ?? undefined,
+          note: wrapped(ctx, 'note', a.note, 600),
+        })),
+        asksYouMade: asked.map((a) => ({
+          askId: a.id,
+          friend: a.friendName,
+          person: a.targetName,
+          company: a.targetCompany ?? undefined,
+          status: a.status,
+        })),
         atCompany: at.length ? at : undefined,
         whatAFriendSees: FRIENDS_WHAT_CROSSES,
-        next: 'ask_friend_for_intro asks the friend with a note they forward; set_friend_sharing changes what you share',
+        next: 'ask_friend_for_intro asks the friend with a note they forward; respond_to_friend_ask forwards an ask in asksToYou; set_friend_sharing changes what you share',
       },
-      `${lead}${company}${pend}`,
+      `${lead}${company}${pend}${waitingAsks}`,
       '/friends',
     );
   },

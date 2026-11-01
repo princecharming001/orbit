@@ -4,7 +4,7 @@
  * asked, and the pause. One engine call each (engine/autopilotMode.ts), which reads the server for an account and this
  * browser otherwise. What Orbit learned about how the student writes has its own tools (tools/voice.ts).
  */
-import type { AutopilotItem, AutopilotMode, AutopilotStatus } from '@orbit/core';
+import type { AutopilotItem, AutopilotMode, AutopilotStatus, ReplyItem } from '@orbit/core';
 import {
   AUTOPILOT_MODE_LEVEL,
   firstTouchRungLine,
@@ -187,7 +187,7 @@ export const autopilotStatusTool = defineTool({
   name: 'autopilot_status',
   kind: 'read',
   description:
-    'Call this when the student asks what Orbit sent today or on its own, what goes out tomorrow (tomorrow\'s batch, and which first messages wait for their tap), what is held and why, why someone was not written to ("why didn\'t you send to Priya": give personName, and the answer names the one rule), which replies need them, whether a call got booked, whether autopilot is paused, how the week went on autopilot, or where the rungs and caps stand. Read only.',
+    'Call this when the student asks what Orbit sent today or on its own, what goes out tomorrow (tomorrow\'s batch, and which first messages wait for their tap), what is held and why, why someone was not written to ("why didn\'t you send to Priya": give personName, and the answer names the one rule), which replies need them, whether a call got booked and when, what happened with someone who replied (an unsubscribe or a decline means never write to them again), whether autopilot is paused, how the week went on autopilot, or where the rungs and caps stand. It returns the replies of the last week with their class and outcome and the upcoming calls with their times: answer from those, never from the stage of a chat or an old note. Read only.',
   input: z.object({
     personName: z
       .string()
@@ -198,10 +198,33 @@ export const autopilotStatusTool = defineTool({
   capabilities: ['autopilot_status'],
   progress: 'Reading what autopilot did',
   async execute(input, ctx) {
-    const r = await autopilotStatus(ctx.user, ctx.now);
+    const [r, rep] = await Promise.all([
+      autopilotStatus(ctx.user, ctx.now),
+      listReplies(ctx.user).catch(() => ({ ok: false as const })),
+    ]);
     if (!r.ok) throw new Error(r.message);
     const s = r.status;
     const booked = s.sentToday.filter((i) => i.outcome === 'booked').length;
+    // the replies of the last week, each with what it was and what came of it, and every booked call with its time:
+    // the answer to "did Lena book", "what happened with Chloe" is read here, never guessed from a chat's stage
+    const replies = rep.ok ? (rep as { replies: ReplyItem[] }).replies : [];
+    const weekAgo = ctx.now.getTime() - 7 * 86_400_000;
+    const recent = replies.filter((x) => Date.parse(x.receivedAt) >= weekAgo).slice(0, 12);
+    const now = ctx.now.toISOString();
+    const calls = (
+      await db.events
+        .where('userId')
+        .equals(ctx.user.id)
+        .filter((e) => e.startAt >= now && /coffee chat|call|chat with/i.test(e.title ?? ''))
+        .toArray()
+    )
+      .sort((a, b) => a.startAt.localeCompare(b.startAt))
+      .slice(0, 8);
+    const names = new Map(
+      (await db.people.bulkGet(calls.flatMap((e) => e.attendeePersonIds ?? []))).flatMap((p) =>
+        p ? [[p.id, p.displayName] as const] : [],
+      ),
+    );
     const taps = s.queued.filter((i) => i.status === 'needs_tap').length;
     const why = input.personName ? await whyNot(input.personName, s, ctx) : undefined;
     const week = autopilotWeekLine(s.week);
@@ -246,6 +269,23 @@ export const autopilotStatusTool = defineTool({
         company: x.company ?? undefined,
         rule: x.rule,
         reason: wrapped(ctx, 'reason', x.reason, 300),
+      })),
+      repliesThisWeek: recent.map((x) => ({
+        person: x.personName,
+        company: x.company ?? undefined,
+        replyClass: REPLY_CLASS_LABELS[x.replyClass] ?? x.replyClass,
+        received: when(x.receivedAt, ctx),
+        outcome: x.outcome ?? undefined,
+        question: x.question ? wrapped(ctx, 'question', x.question, 300) : undefined,
+        closed:
+          x.replyClass === 'decline' || x.replyClass === 'unsubscribe'
+            ? 'do not write to them again'
+            : undefined,
+      })),
+      upcomingCalls: calls.map((e) => ({
+        with: (e.attendeePersonIds ?? []).map((id) => names.get(id)).filter(Boolean),
+        title: e.title,
+        at: when(e.startAt, ctx),
       })),
       friendAsks: (s.friendAsks ?? []).map((a) => ({
         friend: a.friendName,

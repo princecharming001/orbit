@@ -6,7 +6,7 @@ const text = stableSystemText();
 
 describe('stable system block', () => {
   it('is version 17 and byte-identical for every conversation; the tag rule follows in its own small block', () => {
-    expect(STABLE_SYSTEM_VERSION).toBe(17);
+    expect(STABLE_SYSTEM_VERSION).toBe(18);
     expect(stableSystemText()).toBe(text);
     const a = systemBlocks('0123456789abcdef');
     const b = systemBlocks('fedcba9876543210');
@@ -62,6 +62,17 @@ describe('stable system block', () => {
     expect(text).toMatch(/You never invent facts about the student or anyone else/);
     expect(text).toMatch(/If a rule blocks an action, say which rule in plain words/);
     expect(text).toMatch(/Orbit accounts:/);
+  });
+
+  it('v18: status from the replies and calls, the existing goal, and never around a friend', () => {
+    expect(text).toMatch(/from its repliesThisWeek and upcomingCalls/);
+    expect(text).toMatch(
+      /Never decide from a chat's stage, an old note or a card that a call already happened/,
+    );
+    expect(text).toMatch(/never suggest writing to them/);
+    expect(text).toMatch(/never create a new goal or add companies to make it run/);
+    expect(text).toMatch(/never draft a note straight to a person you only know of through a friend/);
+    expect(text).toMatch(/call list_friends first: asksToYou holds every intro a friend asked of them/);
   });
 
   it('keeps nothing volatile in it', () => {
