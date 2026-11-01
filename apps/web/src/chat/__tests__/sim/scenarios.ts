@@ -249,7 +249,11 @@ const autopilotDay: ApiSeed = async (api, user) => {
   // an account's goals and drafts sync down to the browser (the pull's own write), so the chat's goal list, its draft
   // lookups and the autopilot status all name the same goal and the same messages
   await writeFromServer('goals', api.state.goals, user.id);
-  await writeFromServer('drafts', [...api.state.drafts.values()] as unknown as Record<string, unknown>[], user.id);
+  await writeFromServer(
+    'drafts',
+    [...api.state.drafts.values()] as unknown as Record<string, unknown>[],
+    user.id,
+  );
 };
 
 // ---- The chat quality campaign (plan 28): more students, and the questions they really ask -------------------------
