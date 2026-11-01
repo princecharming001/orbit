@@ -20,7 +20,7 @@ import { firstNameOf, iso, num } from '../rows.ts';
 import { type AgentConfig, makeServices, type Services } from '../services.ts';
 import { moveChat } from '../slots/slots.ts';
 import { validZone, zonedTime } from '../zones.ts';
-import { DECLINES_PER_DAY, declinesToday, goalPaused, tripBreaker } from './breaker.ts';
+import { DECLINES_PER_DAY, declinesToday, goalPaused, pushbackOnAutoFirst, tripBreaker } from './breaker.ts';
 import { mailIfAway, raiseCard, settleCard } from './cards.ts';
 
 export const REPLY_WINDOW_DAYS = 30;
@@ -173,6 +173,8 @@ export async function maybeAutoReply(
   const cls = m.reply_class as ReplyClass | null;
   if (!cls) return { action: 'none', reason: 'not_classified' };
   const step = REPLY_NEXT_ACTION[cls];
+  // a decline or a concern answering one of autopilot's own first messages pauses that goal's first messages at once
+  if (!deps.history) await pushbackOnAutoFirst(db, userId, m, now);
 
   if (cls === 'decline' || cls === 'unsubscribe') {
     if (m.from_person_id) await closeOnReply(s, userId, m.id, m.from_person_id, cls, now, deps.history);

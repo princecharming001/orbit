@@ -9,7 +9,10 @@ import { raiseBatchCard, runAutopilotPlan } from '../../functions/_shared/autopi
 import { runCadence } from '../../functions/_shared/cadence/cadence.ts';
 import { composeDraft } from '../../functions/_shared/compose/compose.ts';
 import { refreshFriendShares } from '../../functions/_shared/friends/shares.ts';
-import { setGoalPause } from '../../functions/_shared/replies/breaker.ts';
+import { goalPaused, setGoalPause } from '../../functions/_shared/replies/breaker.ts';
+import { maybeAutoReply } from '../../functions/_shared/replies/replies.ts';
+import { vec } from '../../functions/_shared/rows.ts';
+import { sendDraft } from '../../functions/_shared/sending/send.ts';
 import { makeServices } from '../../functions/_shared/services.ts';
 import {
   ALL_KEYS,
@@ -18,6 +21,7 @@ import {
   agentConfig,
   anthropic,
   api,
+  fakeEmbed,
   fakeNet,
   jsonRes,
   type NetCall,
@@ -89,6 +93,46 @@ async function contact(
       insert into orbit.facts (user_id, person_id, type, text)
       values (${userId}::uuid, ${id}::uuid, 'career', ${`${p.name.split(' ')[0]} moved to ${p.org} from a seed startup last spring`})`;
   return id;
+}
+
+/** Twenty first messages that went out unchanged on the student's own approval: the rung, earned. */
+async function earnRung(userId: string) {
+  const p = await addPerson(t, userId, { name: 'Rung Past', email: 'past@example.com' });
+  const { messageHash } = await import('@orbit/core/safety/rules');
+  for (let i = 0; i < 20; i++) {
+    const body = `Hi number ${i}`;
+    const hash = messageHash({ channel: 'gmail', subject: null, body });
+    const [x] = await t.db.sql<{ id: string }>`
+      insert into orbit.drafts (user_id, person_id, channel, kind, body, status, sent_at)
+      values (${userId}::uuid, ${p}::uuid, 'gmail', 'first_touch', ${body}, 'sent', ${new Date(NOW.getTime() - 30 * 86_400_000)}::timestamptz)
+      returning id`;
+    await t.db.sql`
+      insert into orbit.audit_log (user_id, actor, action, target_table, target_id, details)
+      values (${userId}::uuid, 'agent', 'draft.compose', 'drafts', ${x!.id}, ${{ hash }}::jsonb),
+             (${userId}::uuid, 'user', 'draft.approve', 'drafts', ${x!.id}, ${{ hash }}::jsonb)`;
+  }
+}
+
+/** Two emails the student wrote, embedded the way the Gmail ingest embeds sent mail: the voice gate's exemplars. */
+async function soundsLikeThem(userId: string) {
+  const friend = await addPerson(t, userId, { name: 'Old Friend', email: 'old@example.com' });
+  const bodies = [
+    'Hi Lena,\n\nThanks again for the time on Thursday. The part about how your team picks intern projects stuck with me, and I tried the exercise you mentioned over the weekend.\n\nBest,\nSam',
+    'Hi Omar,\n\nI saw the post about the new design tooling work and wanted to say it was great to read. I would love to hear how the team decided where to start when you have a few minutes.\n\nBest,\nSam',
+  ];
+  const th = await addThread(
+    t,
+    userId,
+    friend,
+    bodies.map((body, i) => ({
+      direction: 'out' as const,
+      at: new Date(NOW.getTime() - (40 + i) * 86_400_000).toISOString(),
+      body,
+    })),
+  );
+  for (const [i, id] of th.messageIds.entries())
+    await t.db
+      .sql`update orbit.messages set embedding = ${vec(await fakeEmbed(bodies[i]!))}::vector where id = ${id}::uuid`;
 }
 
 /** The voice phase's table, when its migration is in: an edited approval has a row there. */
@@ -435,5 +479,191 @@ describe('the plan step (plan 29 §B4, §B6)', () => {
     expect(sys).toContain(`14. ${ASK_RULES.tech}`);
     // a reply carries neither
     expect(sys.match(/\n13\. /g)).toHaveLength(1);
+  });
+});
+
+describe('sending the batch (plan 29 §B2.2, §B4, §B6)', () => {
+  const AT = new Date(MORNING);
+  const at = (d: Date) => () => d;
+
+  /**
+   * One planned first message for the morning, from the plan step itself. The send job's voice gate reads the
+   * student's sent mail and asks the judge: two of their own emails and a judge that says the same person wrote it.
+   */
+  async function planned(over: { earn?: boolean } = {}) {
+    const judge = anthropic(() => ({ score: 3, reason: 'The same short, warm voice.' }));
+    const net = fakeNet(judge.answer, gmail());
+    const s = makeServices(agentConfig(net, {}), { db: t.db, now: () => NOW });
+    const u = await onAutopilot();
+    if (over.earn) await earnRung(u.userId);
+    await soundsLikeThem(u.userId);
+    const personId = await contact(u.userId, { name: 'Gia Grant', org: 'Ramp', score: 70 });
+    expect((await runAutopilotPlan(s, u.userId)).queued).toBe(1);
+    const [d] = await t.db.sql<{ id: string; send_at: Date }>`
+      select id, send_at from orbit.drafts where user_id = ${u.userId}::uuid and auto_rung = 'first_touch'`;
+    const morning = makeServices(agentConfig(net, { anthropicKey: ALL_KEYS.anthropicKey }), {
+      db: t.db,
+      now: at(AT),
+    });
+    const sends = () => net.calls.filter((c) => c.url === GMAIL_SEND).length;
+    return { ...u, net, s, morning, personId, draftId: d!.id, sends };
+  }
+  const statusOf = async (id: string) =>
+    (
+      await t.db.sql<{ status: string; error: string | null; cancel_reason: string | null }>`
+      select status, error, cancel_reason from orbit.drafts where id = ${id}::uuid`
+    )[0]!;
+
+  it('nothing goes before the review window ends, whoever approved it', async () => {
+    const r = await planned({ earn: true });
+    const early = makeServices(agentConfig(r.net, {}), {
+      db: t.db,
+      now: at(new Date(AT.getTime() - 3_600_000)),
+    });
+    await t.db
+      .sql`update orbit.drafts set send_at = ${new Date(AT.getTime() - 3_600_000)}::timestamptz where id = ${r.draftId}::uuid`;
+    expect(await sendDraft(early, r.draftId)).toEqual({ status: 'held', reason: 'review_window' });
+    expect(r.sends()).toBe(0);
+  });
+
+  it('before the rung a first message waits for a tap: silence keeps it back, a tap sends it at its time', async () => {
+    const r = await planned();
+    expect(await sendDraft(r.morning, r.draftId)).toEqual({ status: 'held', reason: 'needs_tap' });
+    expect(await statusOf(r.draftId)).toMatchObject({ status: 'draft', error: 'needs_tap' });
+    expect(r.sends()).toBe(0);
+    const held = await autopilotStatus(t.db, r.userId, AT);
+    expect(held.held.find((h) => h.draftId === r.draftId)?.reason).toContain('It waited for your tap');
+
+    // the next evening the student taps it in the batch: it goes as their own send, and counts toward the rung
+    const second = await planned();
+    const call = api(t, second.net, { env: {}, now: () => NOW });
+    const tap = await call('/drafts/approve', second.token, { draftId: second.draftId, sendAt: MORNING });
+    expect(tap.status).toBe(200);
+    expect((await autopilotStatus(t.db, second.userId, NOW)).queued[0]?.status).toBe('queued');
+    expect(await sendDraft(second.morning, second.draftId)).toMatchObject({ status: 'sent' });
+    const [a] = await t.db.sql<{ action: string }>`
+      select action from orbit.audit_log where target_id = ${second.draftId} and action in ('draft.sent', 'draft.auto_sent')`;
+    expect(a!.action).toBe('draft.sent');
+    expect((await firstTouchRungOf(t.db, second.userId)).unchanged).toBe(1);
+  });
+
+  it('after the rung it sends at its time on silence, recorded as draft.auto_sent with its rung', async () => {
+    const r = await planned({ earn: true });
+    expect(await sendDraft(r.morning, r.draftId)).toMatchObject({ status: 'sent' });
+    expect(r.sends()).toBe(1);
+    const [a] = await t.db.sql<{ actor: string; details: Record<string, unknown> }>`
+      select actor, details from orbit.audit_log where target_id = ${r.draftId} and action = 'draft.auto_sent'`;
+    expect(a).toMatchObject({
+      actor: 'agent',
+      details: { rung: 'first_touch', kind: 'warm_first_touch', level: 2 },
+    });
+    const status = await autopilotStatus(t.db, r.userId, AT);
+    expect(status.sentToday).toEqual([
+      expect.objectContaining({ draftId: r.draftId, autoRung: 'first_touch', status: 'sent' }),
+    ]);
+  });
+
+  it('a hold wins: the held message is never claimed', async () => {
+    const r = await planned({ earn: true });
+    const call = api(t, r.net, { env: {}, now: () => NOW });
+    expect((await call('/autopilot/hold', r.token, { draftId: r.draftId })).status).toBe(200);
+    expect(await sendDraft(r.morning, r.draftId)).toEqual({ status: 'skipped', reason: 'not_claimed' });
+    expect(r.sends()).toBe(0);
+  });
+
+  it('every condition is looked at again at send time: a reply since, do not contact, private, a firm written to today', async () => {
+    const replied = await planned({ earn: true });
+    // drafted at the plan's hour (the test database's own clock is not the fake one)
+    await t.db
+      .sql`update orbit.drafts set created_at = ${NOW}::timestamptz where id = ${replied.draftId}::uuid`;
+    await addThread(t, replied.userId, replied.personId, [
+      {
+        direction: 'in',
+        at: new Date(AT.getTime() - 3_600_000).toISOString(),
+        body: 'Hi, saw your name come up.',
+      },
+    ]);
+    expect(await sendDraft(replied.morning, replied.draftId)).toEqual({
+      status: 'cancelled',
+      reason: 'replied',
+    });
+
+    const dnc = await planned({ earn: true });
+    await t.db.sql`update orbit.people set do_not_contact = true where id = ${dnc.personId}::uuid`;
+    expect(await sendDraft(dnc.morning, dnc.draftId)).toMatchObject({
+      status: 'cancelled',
+      reason: 'do_not_contact',
+    });
+
+    const priv = await planned({ earn: true });
+    await t.db.sql`update orbit.people set private = true where id = ${priv.personId}::uuid`;
+    expect(await sendDraft(priv.morning, priv.draftId)).toEqual({
+      status: 'held',
+      reason: 'first_touch:private',
+    });
+    expect((await autopilotStatus(t.db, priv.userId, AT)).held[0]?.reason).toBe(
+      'You marked Gia private, so autopilot leaves them to you.',
+    );
+
+    const firm = await planned({ earn: true });
+    const other = await contact(firm.userId, { name: 'Rae Ramp', org: 'Ramp', score: 70 });
+    await t.db.sql`
+      insert into orbit.drafts (user_id, person_id, channel, kind, body, status, sent_at, auto_rung)
+      values (${firm.userId}::uuid, ${other}::uuid, 'gmail', 'first_touch', 'Hi Rae', 'sent', ${new Date(AT.getTime() - 600_000)}::timestamptz, 'first_touch')`;
+    const r = await sendDraft(firm.morning, firm.draftId);
+    expect(r).toEqual({ status: 'held', reason: 'same_firm_today' });
+    const [later] = await t.db.sql<{ status: string; send_at: Date }>`
+      select status, send_at from orbit.drafts where id = ${firm.draftId}::uuid`;
+    expect(later!.status).toBe('approved');
+    expect(new Date(later!.send_at).toISOString()).toBe('2026-10-15T12:00:00.000Z');
+    for (const x of [replied, dnc, priv, firm]) expect(x.sends()).toBe(0);
+  });
+
+  it('the pause and the breaker stop it, and a pushback on one Orbit sent trips the breaker for the goal', async () => {
+    const paused = await planned({ earn: true });
+    await t.db.sql`
+      update orbit.users set settings = settings || ${{ autopilot_paused_until: new Date(AT.getTime() + 86_400_000).toISOString() }}::jsonb
+       where id = ${paused.userId}::uuid`;
+    expect(await sendDraft(paused.morning, paused.draftId)).toEqual({
+      status: 'held',
+      reason: 'autopilot_paused',
+    });
+
+    const broken = await planned({ earn: true });
+    await setGoalPause(t.db, broken.userId, broken.goalId, {
+      reason: 'unsubscribe',
+      text: 'Chloe Dubois asked to stop. Paused Ramp first messages.',
+      until: null,
+      at: NOW.toISOString(),
+    });
+    expect(await sendDraft(broken.morning, broken.draftId)).toEqual({
+      status: 'held',
+      reason: 'goal_paused',
+    });
+    for (const x of [paused, broken]) expect(x.sends()).toBe(0);
+
+    // Gia answers the first message Orbit sent with a no: that goal's first messages pause at once
+    const sent = await planned({ earn: true });
+    expect(await sendDraft(sent.morning, sent.draftId)).toMatchObject({ status: 'sent' });
+    const reply = await addThread(t, sent.userId, sent.personId, [
+      {
+        direction: 'in',
+        at: new Date(AT.getTime() + 3_600_000).toISOString(),
+        body: 'Not interested, thanks.',
+        replyClass: 'decline',
+      },
+    ]);
+    await maybeAutoReply(t.db, sent.userId, reply.messageIds[0]!, {
+      now: at(new Date(AT.getTime() + 2 * 3_600_000)),
+    });
+    const [u] = await t.db.sql<{
+      settings: Record<string, unknown>;
+    }>`select settings from orbit.users where id = ${sent.userId}::uuid`;
+    expect(goalPaused(u!.settings, sent.goalId, AT)).toBe(true);
+    const [card] = await t.db.sql<{ reason_text: string }>`
+      select reason_text from orbit.suggestions where user_id = ${sent.userId}::uuid and kind = 'breaker'`;
+    expect(card!.reason_text).toBe(
+      'Gia Grant pushed back on a first message Orbit sent. Paused Ramp first messages. Read it?',
+    );
   });
 });

@@ -4,7 +4,13 @@
  * it: hold one send, pause everything or one goal. Phase 3 builds this for the replies; phase 5 adds tomorrow's first
  * messages to the same shapes.
  */
-import { AUTO_FIRST_TOUCH_KINDS, type FirstTouchRung, firstTouchRung } from '@orbit/core/safety/firstTouch';
+import {
+  AUTO_FIRST_TOUCH_KINDS,
+  type FirstTouchRung,
+  type FirstTouchSkipRule,
+  firstTouchRung,
+  skipReason,
+} from '@orbit/core/safety/firstTouch';
 import {
   AUTO_FIRST_TOUCH_RUNG,
   AUTOPILOT_MODE_LEVEL,
@@ -19,6 +25,7 @@ import type {
   AutopilotSkip,
   AutopilotStatus,
 } from '@orbit/core/server/api';
+import { VOICE_HOLD_REASON } from '@orbit/core/style/voice';
 import type { MessageKind } from '@orbit/core/types';
 import type { DraftMeta } from '../compose/drafts.ts';
 import type { Db } from '../db.ts';
@@ -53,7 +60,28 @@ export const HOLD_REASONS: Record<string, string> = {
   auto_first_touch_daily_cap: `Orbit already sent ${SEND_CAPS.autoFirstTouchesPerDay} first messages on its own today.`,
   auto_first_touch_weekly_cap: `Orbit already sent ${SEND_CAPS.autoFirstTouchesPerWeek} first messages on its own this week.`,
   gmail_daily_cap: `Your ${SEND_CAPS.gmailPerDay} emails a day are used up.`,
+  validator: 'Orbit wrote it, but it did not pass its own checks, so it waits for you to read it.',
+  no_hook: 'Orbit found nothing researched about them to open with, so it waits for you.',
+  voice: `It ${VOICE_HOLD_REASON}, so it waits for your tap.`,
+  same_firm_today:
+    'Someone at the same firm got a first message this morning, so this one moved to the next morning.',
 };
+
+/**
+ * Why a draft was held, in a sentence: the table above, or for a first message the rule that no longer holds
+ * (`first_touch:<rule>`), said with the person's name the way the plan says it.
+ */
+export function holdReason(
+  r: Pick<ItemRow, 'error' | 'display_name' | 'org_name' | 'org_raw'>,
+): string | undefined {
+  const e = r.error ?? '';
+  if (e.startsWith('first_touch:'))
+    return skipReason(e.slice('first_touch:'.length) as FirstTouchSkipRule, {
+      name: r.display_name,
+      company: r.org_name ?? r.org_raw,
+    });
+  return HOLD_REASONS[e] ?? (e || undefined);
+}
 
 type ItemRow = {
   id: string;
@@ -291,7 +319,7 @@ export async function autopilotStatus(db: Db, userId: string, now: Date): Promis
     pausedUntil,
     pausedGoals,
     queued: queued.map((r) => item(r, queuedStatus(r, first))),
-    held: held.map((r) => item(r, 'held', HOLD_REASONS[r.error ?? ''] ?? r.error ?? undefined)),
+    held: held.map((r) => item(r, 'held', holdReason(r))),
     sentToday: sentToday.map((r) => item(r, 'sent')),
     needsYou,
     rungs,

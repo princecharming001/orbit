@@ -26,7 +26,9 @@ import {
   type FirstTouchCandidate,
   type FirstTouchGoal,
   type FirstTouchSkip,
+  type FirstTouchSkipRule,
   firmKey,
+  firstTouchBlock,
   planFirstTouchDay,
   reviewWindow,
 } from '@orbit/core/safety/firstTouch';
@@ -35,7 +37,7 @@ import { voiceCheck } from '@orbit/core/style/voice';
 import { weekKeys, weekPace } from '@orbit/core/suggestions/pace';
 import type { GoalKind, MessageKind } from '@orbit/core/types';
 import { composeDraft } from '../compose/compose.ts';
-import { loadUserRow, styleCardOf, userFirstName } from '../compose/context.ts';
+import { exemplars, loadUserRow, userFirstName } from '../compose/context.ts';
 import type { DraftRow } from '../compose/drafts.ts';
 import { askUserMarkers } from '../compose/prompts.ts';
 import { nextSendWindow, sendDayAllowed } from '../compose/window.ts';
@@ -45,6 +47,7 @@ import { loadFriendLayer } from '../paths/find.ts';
 import { goalPaused } from '../replies/breaker.ts';
 import { raiseCard } from '../replies/cards.ts';
 import type { Services } from '../services.ts';
+import { notesOf, storedCard } from '../voice/voice.ts';
 import { localParts, validZone, zonedTime } from '../zones.ts';
 import { firstTouchRungOf } from './autopilot.ts';
 
@@ -100,25 +103,27 @@ type GoalRow = {
 };
 
 /**
- * The voice gate before an autopilot first message (plan 29 §B2.4c), in one place: core `voiceCheck` against the
- * student's card and the notes they kept. The model judge ("written by the same person? 0 to 3", §B2.4c) is the voice
- * phase's; when it lands it is called here, and nothing else changes. A draft that fails falls to approval with the
- * reason "didn't sound like you".
+ * The voice gate before an autopilot first message goes into the batch (plan 29 §B2.4c), in one place: the voice
+ * phase's no-model check (core `voiceCheck`) against the student's card, the notes they kept and their closest sent
+ * mail, exactly as the send job reads them. The judge ("written by the same person? 0 to 3", `judgeVoice`) runs once,
+ * in the send job's `voiceGate` right before a message goes on silence: before the rung every first message waits
+ * for a tap anyway, and a tap is the student's own approval. A draft that fails here falls to approval with the
+ * reason in their words.
  */
-export function firstMessageVoiceOk(
-  draft: Pick<DraftRow, 'body' | 'subject'>,
-  ctx: { settings: Record<string, unknown>; card: ReturnType<typeof styleCardOf> },
-): { ok: boolean; problems: string[] } {
-  const notes = Array.isArray(ctx.settings.voice_notes)
-    ? (ctx.settings.voice_notes as { text?: unknown; forgottenAt?: unknown; avoid?: unknown }[])
-        .filter((n) => typeof n?.text === 'string' && !n.forgottenAt)
-        .map((n) => ({
-          text: n.text as string,
-          forgottenAt: null,
-          avoid: typeof n.avoid === 'string' ? n.avoid : null,
-        }))
-    : [];
-  const r = voiceCheck({ body: draft.body, subject: draft.subject }, { card: ctx.card, notes });
+export async function firstMessageVoiceOk(
+  s: Pick<Services, 'db' | 'embed'>,
+  user: Pick<Awaited<ReturnType<typeof loadUserRow>>, 'settings' | 'first_name'>,
+  draft: Pick<DraftRow, 'user_id' | 'person_id' | 'kind' | 'body' | 'subject'>,
+): Promise<{ ok: boolean; problems: string[] }> {
+  const card = storedCard(user.settings ?? {}, user.first_name ?? '');
+  const notes = notesOf(user.settings);
+  const examples = await exemplars(
+    s,
+    draft.user_id,
+    draft.person_id,
+    `${draft.kind} ${draft.subject ?? ''} ${draft.body.slice(0, 400)}`,
+  ).catch(() => [] as string[]);
+  const r = voiceCheck({ body: draft.body, subject: draft.subject }, { card, notes, exemplars: examples });
   return { ok: r.ok, problems: r.problems.map((p) => p.detail) };
 }
 
@@ -258,7 +263,6 @@ async function planGoals(
          where user_id = ${userId}::uuid and kind = 'friend_ask_ready' and status in ('pending', 'snoozed', 'done')`
     ).map((r) => r.key),
   );
-  const card = styleCardOf(user);
   const meFirst = userFirstName(user);
   const skipsAll: FirstTouchSkip[] = [];
 
@@ -357,7 +361,7 @@ async function planGoals(
         remaining--;
         continue;
       }
-      const queued = await writeFirstTouch(s, userId, goal, c, { settings, card, now, tz });
+      const queued = await writeFirstTouch(s, userId, goal, c, { user, now, tz });
       if (queued === 'queued') {
         out.queued++;
         onDay++;
@@ -371,8 +375,15 @@ async function planGoals(
   await keepSkips(db, userId, planDay, skipsAll, now);
 }
 
-/** The student's people with everything the first-message conditions read, in one query. */
-async function candidateRows(db: Db, userId: string): Promise<PersonCandidateRow[]> {
+/**
+ * The student's people with everything the first-message conditions read, in one query: all of them, or one person
+ * (the send job's look at them again), leaving the draft being sent out of "already drafted".
+ */
+async function candidateRows(
+  db: Db,
+  userId: string,
+  one?: { personId: string; draftId: string },
+): Promise<PersonCandidateRow[]> {
   return db.sql<PersonCandidateRow>`
     select p.id, p.display_name, p.first_name, p.title, p.headline, coalesce(o.name, p.org_raw) as org, p.is_alumni,
            p.primary_email, p.hidden_at, p.do_not_contact, coalesce(p.private, false) as private, p.timezone,
@@ -386,7 +397,8 @@ async function candidateRows(db: Db, userId: string): Promise<PersonCandidateRow
                     and c.stage not in ('identified', 'declined', 'no_response', 'archived')) as open_chat,
            exists (select 1 from orbit.drafts d where d.user_id = p.user_id and d.person_id = p.id
                     and d.kind = any(${FIRST_TOUCH}::text[])
-                    and d.status in ('draft', 'approved', 'scheduled', 'sending')) as pending,
+                    and d.status in ('draft', 'approved', 'scheduled', 'sending')
+                    and d.id <> ${one?.draftId ?? null}::uuid is not false) as pending,
            (exists (select 1 from orbit.dossiers ds where ds.user_id = p.user_id and ds.person_id = p.id
                      and ds.status in ('ready', 'partial')
                      and jsonb_array_length(coalesce(ds.content->'openers', '[]'::jsonb)) > 0)
@@ -396,7 +408,82 @@ async function candidateRows(db: Db, userId: string): Promise<PersonCandidateRow
       left join orbit.organizations o on o.id = p.org_id
       left join orbit.tie_scores ts on ts.user_id = p.user_id and ts.person_id = p.id
      where p.user_id = ${userId}::uuid and not p.is_self and p.deleted_at is null and p.merged_into is null
-       and coalesce(o.name, p.org_raw) is not null`;
+       and (${one?.personId ?? null}::uuid is null or p.id = ${one?.personId ?? null}::uuid)
+       and (${one?.personId ?? null}::uuid is not null or coalesce(o.name, p.org_raw) is not null)`;
+}
+
+/** What the send job does with an autopilot first message when its time comes (plan 29 §B2.2, §B6). */
+export type FirstTouchSendGate =
+  | { go: true }
+  /** back to a draft: `needs_tap` before the rung, or `first_touch:<rule>` when a condition no longer holds */
+  | { go: false; hold: string; rule?: FirstTouchSkipRule }
+  /** another first message went to this firm today: it goes in the next morning window instead */
+  | { go: false; later: 'same_firm_today'; until: Date };
+
+/**
+ * The send job's second look at an autopilot first message Orbit approved itself (the student did not tap it): the
+ * first-message rung must be earned, every condition about the person must still hold (they may have been hidden,
+ * marked private or do not contact, written to, become a recruiter, or left the goal's companies since the plan), and
+ * nobody else at the firm got one of Orbit's first messages today. The reply since, the caps, the pauses and a hold
+ * are the send job's own checks, run for every send.
+ */
+export async function firstTouchSendGate(
+  s: Services,
+  userId: string,
+  d: Pick<DraftRow, 'id' | 'person_id' | 'goal_id'>,
+): Promise<FirstTouchSendGate> {
+  const db = s.db;
+  const now = s.now();
+  const rung = await firstTouchRungOf(db, userId);
+  if (!rung.earned) return { go: false, hold: 'needs_tap' };
+  const [goal] = d.goal_id
+    ? await db.sql<GoalRow>`
+        select id, kind, title, targets, autonomy_level, priority from orbit.goals
+         where id = ${d.goal_id}::uuid and user_id = ${userId}::uuid and deleted_at is null and status = 'active'`
+    : [];
+  const [p] = await candidateRows(db, userId, { personId: d.person_id, draftId: d.id });
+  if (!p) return { go: false, hold: 'first_touch:hidden', rule: 'hidden' };
+  const rule = firstTouchBlock(
+    {
+      personId: p.id,
+      name: p.display_name,
+      company: p.org,
+      title: p.title,
+      headline: p.headline,
+      isAlumni: p.is_alumni,
+      score: p.score,
+      hasHook: true,
+      hasEmail: !!p.primary_email,
+      hidden: !!p.hidden_at,
+      private: p.private,
+      doNotContact: p.do_not_contact,
+      openChat: p.open_chat,
+      written: p.written,
+      pending: p.pending,
+    },
+    { kind: goal?.kind ?? 'recruiting', targets: goal?.targets?.organizations ?? [] },
+  );
+  if (rule) return { go: false, hold: `first_touch:${rule}`, rule };
+  const [u] = await db.sql<{ timezone: string }>`select timezone from orbit.users where id = ${userId}::uuid`;
+  const tz = validZone(u?.timezone) ?? 'America/New_York';
+  const dayStart = zonedTime(dayKeyOf(now, tz), 0, 0, tz);
+  const today = await db.sql<{ org: string | null }>`
+    select coalesce(o.name, p.org_raw) as org from orbit.drafts d
+      join orbit.people p on p.id = d.person_id
+      left join orbit.organizations o on o.id = p.org_id
+     where d.user_id = ${userId}::uuid and d.auto_rung = 'first_touch' and d.status = 'sent' and d.id <> ${d.id}::uuid
+       and d.sent_at >= ${dayStart}::timestamptz`;
+  const firm = firmKey(p.org);
+  if (firm && today.some((x) => firmKey(x.org) === firm))
+    return {
+      go: false,
+      later: 'same_firm_today',
+      until: new Date(
+        nextSendWindow(new Date(now.getTime() + DAY), validZone(p.timezone) ?? tz, 'gmail', s.random)
+          .notBefore,
+      ),
+    };
+  return { go: true };
 }
 
 /**
@@ -408,7 +495,7 @@ async function writeFirstTouch(
   userId: string,
   goal: GoalRow,
   c: FirstTouchCandidate,
-  ctx: { settings: Record<string, unknown>; card: ReturnType<typeof styleCardOf>; now: Date; tz: string },
+  ctx: { user: Awaited<ReturnType<typeof loadUserRow>>; now: Date; tz: string },
 ): Promise<'queued' | 'held' | 'skipped'> {
   const db = s.db;
   const { now } = ctx;
@@ -444,7 +531,7 @@ async function writeFirstTouch(
     return hold('validator', draft.validator?.issues ?? []);
   const hooks = Array.isArray(draft.hooks) ? draft.hooks : [];
   if (!hooks.some((h) => typeof h?.sourceId === 'string' && h.sourceId.trim())) return hold('no_hook');
-  const voice = firstMessageVoiceOk(draft, ctx);
+  const voice = await firstMessageVoiceOk(s, ctx.user, draft);
   if (!voice.ok) return hold('voice', voice.problems);
 
   const [p] = await db.sql<{ timezone: string | null }>`

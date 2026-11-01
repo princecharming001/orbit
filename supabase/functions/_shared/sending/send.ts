@@ -25,6 +25,7 @@ import { checkSend, messageHash, type SafetyViolation, SEND_CAPS } from '@orbit/
 import type { DraftApproveRequest, ServerDraft } from '@orbit/core/server/api';
 import { VOICE_HOLD_REASON } from '@orbit/core/style/voice';
 import type { CoffeeChat } from '@orbit/core/types';
+import { firstTouchSendGate } from '../autopilot/plan.ts';
 import { historyWith } from '../compose/compose.ts';
 import { type DraftMeta, type DraftRow, draftById, loadDraft, toServerDraft } from '../compose/drafts.ts';
 import { askUserMarkers } from '../compose/prompts.ts';
@@ -396,6 +397,25 @@ export async function sendDraft(s: Services, draftId: string): Promise<SendResul
     await audit(db, userId, 'system', 'draft.hold', d.id, { reason: 'goal_paused', goalId: d.goal_id });
     return { status: 'held', reason: 'goal_paused' };
   }
+  // an autopilot first message (plan 29 §B2.2, §B6): Orbit's own approval stands for it only once the first-message
+  // rung is earned and while every condition about the person still holds; a tap in the evening batch is the
+  // student's own approval and goes like any other
+  const firstTouchStanding = d.auto_rung === 'first_touch' && agentApproved && !userApproved;
+  if (firstTouchStanding) {
+    const gate = await firstTouchSendGate(s, userId, d);
+    if (!gate.go && 'later' in gate) return later(gate.later, gate.until);
+    // someone who asked not to be contacted, or looks under 18, is never written to: cancelled, as the hard rules do
+    if (!gate.go && (gate.rule === 'do_not_contact' || gate.rule === 'minor')) {
+      await settle('cancelled', { cancel_reason: gate.rule });
+      await audit(db, userId, 'system', 'draft.blocked', d.id, { rule: gate.rule });
+      return { status: 'cancelled', reason: gate.rule };
+    }
+    if (!gate.go) {
+      await settle('draft', { error: gate.hold });
+      await audit(db, userId, 'system', 'draft.hold', d.id, { reason: gate.hold });
+      return { status: 'held', reason: gate.hold };
+    }
+  }
   // LinkedIn is never sent on Orbit's own (plan 29 §B6): only a fresh tap below sends it
   if (d.channel === 'linkedin' && agentApproved && !userApproved) {
     await settle('draft', { error: 'linkedin_never_auto' });
@@ -441,7 +461,8 @@ export async function sendDraft(s: Services, draftId: string): Promise<SendResul
       timeZone: u.timezone,
       approvedHash: userApproved ? hash : undefined,
     },
-  );
+    // the earned rung is the student's standing approval of a first message, and nothing else it covers
+  ).filter((v) => !(firstTouchStanding && v.rule === 'first_message_needs_approval'));
   const forbidden = violations.find((v) => v.kind === 'forbidden');
   if (forbidden) {
     await settle('cancelled', { cancel_reason: forbidden.rule });

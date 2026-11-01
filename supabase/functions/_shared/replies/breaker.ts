@@ -1,6 +1,7 @@
 /**
- * The circuit breaker (plan 29 §B2.7): an unsubscribe, two declines in a day, a bounce or a Gmail send error pauses
- * what Orbit sends on its own for that goal, and tells the student. The pause is one key in users.settings,
+ * The circuit breaker (plan 29 §B2.7): an unsubscribe, two declines in a day, a bounce, a Gmail send error, or a
+ * decline or concern answering a first message Orbit sent on its own (§B2.2) pauses what Orbit sends on its own for
+ * that goal, and tells the student. The pause is one key in users.settings,
  * `autopilot_paused_goals`, read by the cadence (nothing of that goal's is approved on its own), the send job (an
  * approved auto send of that goal waits) and the reply funnel (no auto reply for that goal). The student lifts it
  * from Settings or the chat (`/autopilot/pause {until: null, goalId}`).
@@ -8,7 +9,7 @@
 import type { Db } from '../db.ts';
 import { raiseCard } from './cards.ts';
 
-export type BreakerReason = 'unsubscribe' | 'declines' | 'bounce' | 'send_error';
+export type BreakerReason = 'unsubscribe' | 'declines' | 'bounce' | 'send_error' | 'pushback';
 
 export interface GoalPause {
   reason: BreakerReason | 'student';
@@ -75,6 +76,7 @@ const WHAT: Record<BreakerReason, string> = {
   declines: 'declined, the second today',
   bounce: 'bounced',
   send_error: 'could not be sent to',
+  pushback: 'pushed back on a first message Orbit sent',
 };
 
 /**
@@ -147,4 +149,37 @@ export async function declinesToday(
        and m.sent_at >= ${dayStart}::timestamptz
        and (${goalId}::uuid is null or c.goal_id = ${goalId}::uuid)`;
   return r?.n ?? 0;
+}
+
+/**
+ * A decline or a concern answering a first message Orbit sent on its own trips the breaker for that goal at once
+ * (plan 29 §B2.2): "Marcus Lee pushed back on a first message Orbit sent. Paused Stripe first messages."
+ */
+export async function pushbackOnAutoFirst(
+  db: Db,
+  userId: string,
+  m: { id: string; from_person_id: string | null; sent_at: Date | string; reply_class: string | null },
+  now: Date,
+): Promise<boolean> {
+  if (!m.from_person_id || (m.reply_class !== 'decline' && m.reply_class !== 'objection')) return false;
+  const [d] = await db.sql<{ goal_id: string | null; display_name: string; org: string | null }>`
+    select d.goal_id, p.display_name, coalesce(o.name, p.org_raw) as org from orbit.drafts d
+      join orbit.people p on p.id = d.person_id
+      left join orbit.organizations o on o.id = p.org_id
+     where d.user_id = ${userId}::uuid and d.person_id = ${m.from_person_id}::uuid and d.auto_rung = 'first_touch'
+       and d.status = 'sent' and d.sent_at <= ${new Date(m.sent_at)}::timestamptz
+       and exists (select 1 from orbit.audit_log a where a.target_table = 'drafts' and a.target_id = d.id::text
+                    and a.action = 'draft.auto_sent')
+     order by d.sent_at desc limit 1`;
+  if (!d) return false;
+  const r = await tripBreaker(db, userId, {
+    goalId: d.goal_id,
+    reason: 'pushback',
+    personId: m.from_person_id,
+    personName: d.display_name,
+    company: d.org,
+    messageId: m.id,
+    now,
+  });
+  return r.tripped;
 }
