@@ -232,6 +232,11 @@ describe('autonomy level 2 (§8.4)', () => {
     expect(reason(confirm, auto({ now: new Date('2026-10-15T03:00:00Z') }))).toEqual([
       '23:00 in their time zone',
     ]);
+    // the quiet hours run until 7:00 too, not only from 21:00
+    expect(reason(confirm, auto({ now: new Date('2026-10-15T10:00:00Z') }))).toEqual([
+      '6:00 in their time zone',
+    ]);
+    expect(reason(confirm, auto({ now: new Date('2026-10-15T11:00:00Z') }))).toEqual([]);
     expect(reason(confirm, auto({ userAutonomy: 1 }))).toEqual(['autonomy level 1']);
     expect(reason(confirm, auto({ userAutonomy: 0, goalAutonomy: 2 }))).toEqual([]);
     expect(reason(confirm, auto({ replyClass: 'question' }))).toEqual(['reply class question']);

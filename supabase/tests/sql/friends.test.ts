@@ -112,6 +112,12 @@ describe('the friends tables', () => {
     // a stranger sees neither
     expect(await visible(c, a)).toBe(false);
     expect(await visible(c, b)).toBe(false);
+    // a settings row for someone outside the friendship opens nothing: visibility needs the two ends of one friendship
+    await share(f, c, 'all');
+    expect(await visible(a, c)).toBe(false);
+    expect(await visible(b, c)).toBe(false);
+    await t.db
+      .sql`delete from orbit.friend_share_settings where friendship_id = ${f}::uuid and owner_user_id = ${c}::uuid`;
     // each side's choice is its own: b stops sharing, a still shares with b
     await share(f, b, 'none');
     expect(await visible(a, b)).toBe(false);

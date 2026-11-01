@@ -6,7 +6,8 @@
  */
 import type Anthropic from '@anthropic-ai/sdk';
 
-export const WEB_SEARCH_MAX_USES = 5;
+/** Matches the prompt rule (one to three focused searches): the bench saw one query run three times under a cap of 5. */
+export const WEB_SEARCH_MAX_USES = 3;
 export const WEB_SEARCH_TOOL: Anthropic.Beta.BetaWebSearchTool20260209 = {
   type: 'web_search_20260209',
   name: 'web_search',
