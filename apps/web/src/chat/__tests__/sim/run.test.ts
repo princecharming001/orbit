@@ -61,9 +61,11 @@ describe.skipIf(!SIM_ENABLED)(`sim: simulated students${only ? ` (${only})` : ''
   for (const s of list) {
     it(`${s.group}/${s.id}: ${s.goal}`, async () => {
       const { engine, user } = await seed(s.account, s.api);
+      // what the student had before the chat: a goal Orbit tracks during it is not one the profile already had
+      const facts = await studentFacts(user);
       const t = await converse(engine, s.persona, s.goal, s.maxTurns ?? 5);
       const shape = shapeCheck(t, { wide: s.wide, expectWeb: s.expectWeb, noWeb: s.noWeb });
-      const v = await judge(t, user.firstName, s.reference, await studentFacts(user));
+      const v = await judge(t, user.firstName, s.reference, facts);
       const tools = t.turns.flatMap((x) => x.tools.map((tt) => tt.name));
       const web = t.turns.flatMap((x) => x.web.map((w) => w.query ?? ''));
       saveRun(s.id, t, v, shape);

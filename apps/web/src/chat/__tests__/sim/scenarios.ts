@@ -3,6 +3,7 @@ import { setCurrentUserId } from '../../../db/repo';
 import { db } from '../../../db/schema';
 import { saveGoal } from '../../../engine/goals';
 import { addPersonByHand } from '../../../engine/people';
+import { writeFromServer } from '../../../engine/serverSync';
 import { addTargetCompanies } from '../../../engine/targets';
 import { setConnectorsMockForTests } from '../../../integrations/connectorsMock';
 import { type FakeOrbitApi, fakeDossier, withFriend, withReplies } from '../../../test/fakeOrbitApi';
@@ -245,6 +246,10 @@ const friendAna: ApiSeed = async (api, user) => {
 /** The demo plus a reply of every class and a day on autopilot behind /autopilot/status (plan 29 C2). */
 const autopilotDay: ApiSeed = async (api, user) => {
   withReplies(api, user, await db.people.where('userId').equals(user.id).toArray(), NOW.getTime());
+  // an account's goals and drafts sync down to the browser (the pull's own write), so the chat's goal list, its draft
+  // lookups and the autopilot status all name the same goal and the same messages
+  await writeFromServer('goals', api.state.goals, user.id);
+  await writeFromServer('drafts', [...api.state.drafts.values()] as unknown as Record<string, unknown>[], user.id);
 };
 
 // ---- The chat quality campaign (plan 28): more students, and the questions they really ask -------------------------
