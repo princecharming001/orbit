@@ -940,6 +940,31 @@ export async function sendDueQueued(
         if (late < 0) continue;
         // the review window (plan 29 §B2.2) and the pause hold it where it is; it goes to the next window after
         if (paused || (o.reviewUntil && now.getTime() < Date.parse(o.reviewUntil))) continue;
+        // plan 29 §B2.2, §B6: an autopilot first message Orbit approved itself goes on silence only once the rung is
+        // earned, while every condition about the person holds and the judge says it sounds like the student
+        if (o.autoRung === 'first_touch' && o.autoSent) {
+          const gate = await import('./autopilotPlan').then((m) =>
+            m.localFirstTouchGate(user, o, now, { judge: false }),
+          );
+          if (!gate.ok) {
+            const m = gate.later
+              ? await transition(o.id, ['queued'], {
+                  status: 'queued',
+                  sendAt: gate.until,
+                  queuedAt: gate.until,
+                  reviewUntil: gate.until,
+                })
+              : await transition(o.id, ['queued'], {
+                  status: 'draft',
+                  sendAt: undefined,
+                  queuedAt: undefined,
+                  autopilot: undefined,
+                  error: gate.reason,
+                });
+            if (m && !gate.later) out.push({ id: o.id, ok: false, error: m.error });
+            continue;
+          }
+        }
         // missed while Orbit was closed, or too soon after the last one: the next slot, never a burst
         const tooSoon = !!lastAuto && now.getTime() - lastAuto.getTime() < AUTOPILOT_GAP_MIN.min * 60_000;
         if (late > STALE_QUEUE_MS || tooSoon) {
@@ -972,6 +997,21 @@ export async function sendDueQueued(
             out.push({ id: o.id, ok: false, error: m.error });
           }
           continue;
+        }
+        // the voice judge reads an autopilot first message once, right before it goes (plan 29 §B2.4c)
+        if (o.autoRung === 'first_touch' && o.autoSent) {
+          const gate = await import('./autopilotPlan').then((m) => m.localFirstTouchGate(user, o, now));
+          if (!gate.ok) {
+            const m = await transition(o.id, ['queued'], {
+              status: 'draft',
+              sendAt: undefined,
+              queuedAt: undefined,
+              autopilot: undefined,
+              error: gate.reason,
+            });
+            if (m) out.push({ id: o.id, ok: false, error: m.error });
+            continue;
+          }
         }
         const claimed = await transition(o.id, ['queued'], { status: 'sending' });
         if (!claimed) continue;

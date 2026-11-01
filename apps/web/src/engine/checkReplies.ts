@@ -182,6 +182,9 @@ async function checkOnce(
   }
   // plan 29 §B2.3: the class table on what came in: Needs you, a closed thread, a booked slot, the breaker
   await import('./replyFunnel').then((m) => m.runReplyFunnel(user, now)).catch(() => undefined);
+  // plan 29 §B4: local mode plans tomorrow morning's first messages here, while a tab is open (an account's server
+  // plans its own every hour)
+  await import('./autopilotPlan').then((m) => m.runLocalAutopilotPlan(user, now)).catch(() => undefined);
   // plan 23 §4.6: a reply a plan was waiting on ("after Dana replies") releases the next step's draft
   await import('./targetPlan').then((m) => m.releaseHeldSteps(user, now)).catch(() => undefined);
   // plan 27: new replies get the classifier's reading of their warmth in the background, then a rescore

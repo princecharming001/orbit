@@ -183,6 +183,35 @@ export async function localAutopilotStatus(
     reviewUntil: queued.find((q) => q.sendAt)?.sendAt
       ? new Date(Date.parse(queued[0]!.sendAt!) - REVIEW_WINDOW_HOURS * 3_600_000).toISOString()
       : null,
+    ...(await localPlanCards(user.id, now)),
+  };
+}
+
+/** Who this browser's last plan left out and why, and tonight's batch card when it is up (plan 29 §B4). */
+async function localPlanCards(
+  userId: string,
+  now: Date,
+): Promise<Pick<AutopilotStatus, 'skipped' | 'friendAsks' | 'batch'>> {
+  const { LOCAL_SKIPS_KV } = await import('./autopilotPlan');
+  const kept = (await db.kv.get(`${LOCAL_SKIPS_KV}${userId}`))?.value as
+    | { at: string; skipped: NonNullable<AutopilotStatus['skipped']> }
+    | undefined;
+  const fresh = kept && now.getTime() - Date.parse(kept.at) < 36 * 3_600_000;
+  const card = (
+    await db.suggestions
+      .where('userId')
+      .equals(userId)
+      .filter((x) => x.kind === 'batch_ready' && x.status === 'pending')
+      .toArray()
+  )
+    .filter((x) => now.getTime() - Date.parse(x.createdAt) < 18 * 3_600_000)
+    .sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0];
+  return {
+    skipped: fresh ? kept.skipped : [],
+    friendAsks: [],
+    batch: card
+      ? { at: card.createdAt, text: card.reasonText, firstTouches: Number(card.payload.firstTouches) || 0 }
+      : null,
   };
 }
 
@@ -286,6 +315,82 @@ export async function syncAutopilotCards(
       payload: { goalId: g.goalId, title: g.title, reason: g.reason },
     });
   }
+  // the plan step's cards (plan 29 §B4): tonight's batch, and each ask to a friend it drafted
+  if (status.batch)
+    await upsert({
+      kind: 'batch_ready',
+      dedupeKey: `batch_ready:${status.batch.at.slice(0, 10)}`,
+      priorityScore: 0.8,
+      reasonText: status.batch.text,
+      signals: { firstTouches: status.batch.firstTouches, fromServer: true },
+      payload: { firstTouches: status.batch.firstTouches },
+    });
+  for (const a of status.friendAsks ?? [])
+    await upsert({
+      kind: 'friend_ask_ready',
+      dedupeKey: `friend_ask:${a.friendUserId}:${a.targetPersonId}`,
+      priorityScore: 0.7,
+      reasonText: `${a.friendName.split(' ')[0]} knows ${a.targetName}${a.company ? ` at ${a.company}` : ''}. Ask ${a.friendName.split(' ')[0]} for the intro?`,
+      signals: { fromServer: true },
+      payload: { ...a, cardId: a.id },
+    });
+}
+
+/**
+ * A tap on a first message in tomorrow's batch before the rung is earned (plan 29 §B2.2): it goes at its time as the
+ * student's own approval. An account approves it on the server for the same time; here it simply becomes the
+ * student's (not Orbit's own), which also counts it toward the rung once it is sent.
+ */
+export async function tapBatchItem(
+  user: Pick<User, 'id'>,
+  item: Pick<AutopilotItem, 'draftId' | 'sendAt'>,
+): Promise<{ ok: true } | Fail> {
+  if (isServerUser(user.id)) {
+    const r = await callApi('/drafts/approve', {
+      draftId: item.draftId,
+      ...(item.sendAt ? { sendAt: item.sendAt } : {}),
+    });
+    return r.ok ? { ok: true } : { ok: false, message: r.message };
+  }
+  const m = await db.outbound.get(item.draftId);
+  if (!m || m.userId !== user.id || m.status !== 'queued')
+    return { ok: false, message: 'It is no longer in the batch.' };
+  await db.outbound.update(m.id, { autoSent: false });
+  return { ok: true };
+}
+
+/**
+ * The ask to a friend the plan drafted (plan 29 §A2.5): sent to the friend with its note on the student's tap, or set
+ * aside. The friend forwards; nothing ever goes to the contact from the student.
+ */
+export async function answerPlanAsk(
+  user: Pick<User, 'id'>,
+  ask: Pick<
+    NonNullable<AutopilotStatus['friendAsks']>[number],
+    'id' | 'friendUserId' | 'targetPersonId' | 'note'
+  >,
+  send: boolean,
+  now = new Date(),
+): Promise<{ ok: true } | Fail> {
+  if (!isServerUser(user.id)) return { ok: false, message: 'Asking a friend needs an Orbit account.' };
+  const r = send
+    ? await callApi('/friends/asks', {
+        friendUserId: ask.friendUserId,
+        targetPersonId: ask.targetPersonId,
+        note: ask.note,
+      })
+    : await callApi('/autopilot/dismiss', { id: ask.id });
+  if (!r.ok) return { ok: false, message: r.message };
+  const card = await db.suggestions
+    .where('dedupeKey')
+    .equals(`friend_ask:${ask.friendUserId}:${ask.targetPersonId}`)
+    .first();
+  if (card)
+    await db.suggestions.update(card.id, {
+      status: send ? 'done' : 'dismissed',
+      decidedAt: now.toISOString(),
+    });
+  return { ok: true };
 }
 
 /** Hold one queued send: the batch goes without it, and the draft is back in the student's hands. */
