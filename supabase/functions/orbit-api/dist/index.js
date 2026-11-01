@@ -3691,6 +3691,11 @@ var RECRUITER_TITLE = new RegExp(
   ].join("|"),
   "i"
 );
+var NOT_RECRUITER = /\b(?:chair(?:man|woman|person)?|ambassador|captain|rush|procurement|supply)\b/i;
+function isRecruiter(title) {
+  const t = title?.trim() ?? "";
+  return RECRUITER_TITLE.test(t) && !NOT_RECRUITER.test(t);
+}
 function maxBumpsFor(sector, settingsMax) {
   const cap = sector === "finance" || sector === "consulting" ? 2 : 1;
   return Math.max(0, Math.min(settingsMax, cap));
@@ -4647,6 +4652,7 @@ var AUTOPILOT_MODE_LEVEL = { off: 0, assist: 1, autopilot: 2 };
 var AUTO_FIRST_TOUCH_RUNG = 20;
 var REVIEW_WINDOW_HOURS = 8;
 var AUTO_SEND_DAILY_CAP = SEND_CAPS.autoPerDay;
+var AUTO_SEND_MIN_SCORE = 40;
 
 // packages/core/src/safety/firstTouch.ts
 var AUTO_FIRST_TOUCH_KINDS = [
@@ -4664,6 +4670,406 @@ function firstTouchRung(approvals) {
     needed: AUTO_FIRST_TOUCH_RUNG,
     earned: n >= AUTO_FIRST_TOUCH_RUNG
   };
+}
+function firmKey(company) {
+  return normalizeCompany(company ?? "");
+}
+function isFaculty(c) {
+  return ACADEMIC_TITLE.test(`${c.title ?? ""} ${c.headline ?? ""}`);
+}
+function closeEnough(c) {
+  return !!c.isAlumni || c.score >= AUTO_SEND_MIN_SCORE || !!c.viaFriend;
+}
+function firstTouchRoute(c) {
+  const own = !!c.isAlumni || c.score >= AUTO_SEND_MIN_SCORE;
+  return own && c.hasEmail ? "direct" : c.viaFriend ? "friend" : "direct";
+}
+function firstTouchBlock(c, goal) {
+  if (c.doNotContact) return "do_not_contact";
+  if (c.hidden) return "hidden";
+  if (c.private) return "private";
+  if (looksLikeMinor({ isMinor: c.isMinor, title: c.title ?? void 0, headline: c.headline ?? void 0 }))
+    return "minor";
+  if (c.written) return "already_written";
+  if (c.openChat) return "open_chat";
+  if (c.pending) return "pending";
+  if (isRecruiter(c.title ?? void 0) || isRecruiter(c.headline ?? void 0)) return "recruiter";
+  if (isFaculty(c) && goal.kind !== "collaboration") return "faculty";
+  const firm = firmKey(c.company);
+  if (!firm || !goal.targets.some((t) => firmKey(t) === firm)) return "not_target_company";
+  if (!closeEnough(c)) return "not_close";
+  if (firstTouchRoute(c) === "direct") {
+    if (!c.hasEmail) return "no_email";
+    if (!c.hasHook) return "no_hook";
+  }
+  return void 0;
+}
+var firstOf = (name) => name.trim().split(/\s+/)[0] || name;
+function skipReason(rule, c, ctx = {}) {
+  const f2 = firstOf(c.name);
+  const at = c.company ? ` at ${c.company}` : "";
+  switch (rule) {
+    case "do_not_contact":
+      return `${f2} asked not to be contacted, so Orbit never writes to them.`;
+    case "hidden":
+      return `You hid ${f2}, so Orbit leaves them out.`;
+    case "private":
+      return `You marked ${f2} private, so autopilot leaves them to you.`;
+    case "minor":
+      return `${f2} looks to be under 18, so Orbit never writes to them.`;
+    case "already_written":
+      return `You have written to ${f2} before. Autopilot only sends first messages; the follow ups are bumps.`;
+    case "open_chat":
+      return `You are already talking with ${f2}, so there is no first message to send.`;
+    case "pending":
+      return `A first message to ${f2} is already drafted or waiting in the batch.`;
+    case "recruiter":
+      return `${f2} is a recruiter${at}. Autopilot never writes a first message to a recruiter; that one is yours to send.`;
+    case "faculty":
+      return `${f2} is faculty. Autopilot writes to faculty only for a research goal.`;
+    case "not_target_company":
+      return c.company ? `${f2} is at ${c.company}, which is not one of the companies on your goals.` : `Orbit does not know where ${f2} works, so it cannot tell they are at a company on your goals.`;
+    case "not_close":
+      return `${f2} is not an alum, not someone you know well (closeness ${AUTO_SEND_MIN_SCORE} or more) and not a friend's contact, so a first message to them is yours to send.`;
+    case "no_email":
+      return `Orbit has no email address for ${f2}, and autopilot sends by email only.`;
+    case "no_hook":
+      return `Orbit has nothing researched about ${f2} to open with yet, and a first message on its own needs one.`;
+    case "target_met":
+      return `This week's target is met, so ${f2} waits for next week.`;
+    case "paced":
+      return `That morning's share of your weekly target is already planned, so ${f2} moves to the next day.`;
+    case "weekly_cap":
+      return `Autopilot already has ${SEND_CAPS.autoFirstTouchesPerWeek} first messages this week, its weekly limit, so ${f2} waits for next week.`;
+    case "daily_cap":
+      return `Autopilot already has ${SEND_CAPS.autoFirstTouchesPerDay} first messages for that morning, its daily limit, so ${f2} moves to the next day.`;
+    case "same_firm_today":
+      return `${ctx.other ?? "Someone else"}${at} gets a first message that morning, and autopilot never writes to two people at one firm on the same day, so ${f2} moves to the next day.`;
+  }
+}
+
+// packages/core/src/style/voice.ts
+var VOICE_NOTES_MAX = 8;
+var VOICE_JUDGE_MIN = 2;
+var VOICE_HOLD_REASON = "didn't sound like you";
+var firstLine = (s) => (s.split("\n")[0] ?? "").trim();
+function greetingWords(pattern) {
+  const p = pattern.replace(/[,.:]\s*$/, "").trim();
+  if (/^\{first\}$/.test(p)) return "their first name alone";
+  return p.replace(/\s*\{first\}\s*/g, " ").trim() || "their first name";
+}
+function signoffWords(s) {
+  return firstLine(s).replace(/[,.:]\s*$/, "").trim();
+}
+var listWords = (xs) => xs.length <= 1 ? xs[0] ?? "" : `${xs.slice(0, -1).join(", ")} and ${xs[xs.length - 1]}`;
+function cardProse(card) {
+  const out = [];
+  const greet = [...new Set(card.greetingPatterns.map(greetingWords).filter(Boolean))].slice(0, 2);
+  const sign = [...new Set(card.signoffs.map(signoffWords).filter(Boolean))].slice(0, 2);
+  const g = greet.length ? `You greet with ${greet.join(" or ")}` : "";
+  const s = sign.length ? `sign off with ${sign.join(" or ")}` : "";
+  if (g && s) out.push(`${g} and ${s}.`);
+  else if (g) out.push(`${g}.`);
+  else if (s) out.push(`You ${s}.`);
+  const words2 = Math.round(card.avgMessageWords);
+  const length = words2 <= 70 ? "short" : words2 <= 130 ? "at medium length" : "long";
+  const marks = card.exclamationsPerMessage <= 0.05 ? "no exclamation marks" : card.exclamationsPerMessage < 0.5 ? "an exclamation mark now and then" : "exclamation marks often";
+  const parts = [
+    card.contractions ? "contractions" : "no contractions",
+    marks,
+    ...card.emoji ? ["the odd emoji"] : []
+  ];
+  out.push(`You write ${length}, about ${words2} words, with ${listWords(parts)}.`);
+  out.push(`Your sentences run about ${Math.round(card.avgSentenceWords)} words.`);
+  if (card.characteristicPhrases.length)
+    out.push(`Phrases of yours: ${listWords(card.characteristicPhrases.slice(0, 5).map((p) => `'${p}'`))}.`);
+  if (card.avoid.length) out.push(`You never say ${listWords(card.avoid.slice(0, 6).map((p) => `'${p}'`))}.`);
+  if (card.custom && card.notes.trim()) out.push(`Your notes for Orbit: ${card.notes.trim()}`);
+  out.push(
+    card.builtFromCount > 0 ? `Learned from ${card.builtFromCount} messages you wrote.` : card.custom ? "Set by you." : "This is a starting style; Orbit has not learned from your messages yet."
+  );
+  return out.map(plainText);
+}
+function plainText(s) {
+  return s.replace(/\s*[–—]\s*/g, ", ").replace(/!+/g, ".").replace(/\.\./g, ".").replace(/\s{2,}/g, " ").trim();
+}
+var QUOTED = /(?:^|[\s(:])['"‘“]([^'"‘’“”\n]{2,80}?)['"’”](?=$|[\s.,;:?)])/g;
+var NEGATIVE = /\b(cut|cuts|drop|drops|delete|deletes|remove|removes|never|avoid|avoids|stop|skip|skips|strike|take out|takes out|don'?t|do not|change|changes|swap|swaps|replace|replaces)\b/i;
+function quotedPhrases(text3) {
+  return [...text3.matchAll(QUOTED)].map((m) => m[1].trim()).filter((p) => p.length >= 2);
+}
+function avoidOf(note2) {
+  const own = note2.avoid?.trim();
+  if (own) return own;
+  if (!NEGATIVE.test(note2.text)) return void 0;
+  return quotedPhrases(note2.text)[0];
+}
+function activeVoiceNotes(notes2) {
+  return (notes2 ?? []).filter((n) => !n.forgottenAt);
+}
+function withVoiceNotes(card, notes2) {
+  const live = activeVoiceNotes(notes2);
+  if (!live.length) return card;
+  const lines = live.map((n) => n.text.trim().replace(/[.]$/, "")).filter(Boolean);
+  const avoid = [...card.avoid];
+  const seen = new Set(avoid.map((a) => a.toLowerCase()));
+  for (const n of live) {
+    const a = avoidOf(n);
+    if (a && !seen.has(a.toLowerCase())) {
+      seen.add(a.toLowerCase());
+      avoid.push(a);
+    }
+  }
+  const learned = `What Orbit learned from your edits: ${lines.join("; ")}.`;
+  return { ...card, avoid, notes: card.notes.trim() ? `${card.notes.trim()}
+${learned}` : learned };
+}
+function decideVoiceNote(notes2, id, action, now) {
+  let note2;
+  const at = now.toISOString();
+  const out = (notes2 ?? []).map((n) => {
+    if (n.id !== id) return n;
+    note2 = action === "keep" ? { ...n, keptAt: at, forgottenAt: null } : { ...n, forgottenAt: at };
+    return note2;
+  });
+  return { notes: out, note: note2 };
+}
+var MAX_TOKENS = 400;
+var tokens = (s) => s.split(/\s+/).filter(Boolean);
+var bare = (w) => w.toLowerCase().replace(/^[^a-z0-9']+|[^a-z0-9']+$/g, "");
+function align(a, b, key) {
+  const A = a.map(key);
+  const B = b.map(key);
+  const n = a.length;
+  const m = b.length;
+  const L = Array.from({ length: n + 1 }, () => new Uint16Array(m + 1));
+  for (let i2 = n - 1; i2 >= 0; i2--)
+    for (let j2 = m - 1; j2 >= 0; j2--)
+      L[i2][j2] = A[i2] === B[j2] ? L[i2 + 1][j2 + 1] + 1 : Math.max(L[i2 + 1][j2], L[i2][j2 + 1]);
+  const out = [];
+  let cur = { del: [], ins: [] };
+  const flush = () => {
+    if (cur.del.length || cur.ins.length) out.push(cur);
+    cur = { del: [], ins: [] };
+  };
+  let i = 0;
+  let j = 0;
+  while (i < n || j < m) {
+    if (i < n && j < m && A[i] === B[j]) {
+      flush();
+      i++;
+      j++;
+    } else if (j < m && (i >= n || L[i][j + 1] >= L[i + 1][j])) cur.ins.push(b[j++]);
+    else cur.del.push(a[i++]);
+  }
+  flush();
+  return out;
+}
+var unitsOf = (s) => s.split("\n").flatMap((l) => l.trim().split(/(?<=[.?!])\s+/)).map((u2) => u2.trim()).filter(Boolean);
+var unitKey = (u2) => tokens(u2).map(bare).join(" ");
+function hunksOf(before, after) {
+  const a = unitsOf(before);
+  const b = unitsOf(after);
+  if (tokens(before).length > MAX_TOKENS || tokens(after).length > MAX_TOKENS || a.length > 80 || b.length > 80)
+    return void 0;
+  const out = [];
+  const similar = (x, y) => {
+    const xw = tokens(x).map(bare);
+    const yw = tokens(y).map(bare);
+    const shared = xw.filter((w) => yw.includes(w)).length;
+    return shared / Math.max(xw.length, yw.length, 1);
+  };
+  for (const h of align(a, b, unitKey)) {
+    const dels = h.del.map((u2) => ({ u: u2, used: false }));
+    const ins = [];
+    for (const i of h.ins) {
+      let best;
+      let score = 0.5;
+      for (const d of dels)
+        if (!d.used && similar(d.u, i) >= score) {
+          best = d;
+          score = similar(d.u, i);
+        }
+      if (best) {
+        best.used = true;
+        for (const w of align(tokens(best.u), tokens(i), bare)) out.push(w);
+      } else ins.push(i);
+    }
+    const left = dels.filter((d) => !d.used).map((d) => d.u);
+    while (left.length && ins.length && wordCount(left[left.length - 1]) <= 6 && wordCount(ins[ins.length - 1]) <= 6)
+      out.push({ del: tokens(left.pop()), ins: tokens(ins.pop()) });
+    for (const d of left) out.push({ del: tokens(d), ins: [] });
+    for (const i of ins) out.push({ del: [], ins: tokens(i) });
+  }
+  return out;
+}
+function wordEditDistance(before, after) {
+  const h = hunksOf(before, after);
+  if (!h) return Math.abs(wordCount(before) - wordCount(after)) + 1;
+  return h.reduce((n, x) => n + x.del.length + x.ins.length, 0);
+}
+var GLUE = new Set(
+  "a an the and or but so to of in on at for with from by is am are was be it its this that i me my you your we just very".split(
+    " "
+  )
+);
+var GREETING_RE = /^(hi|hey|hello|dear|good (?:morning|afternoon|evening)|greetings|hiya|yo)\b/i;
+var SIGNOFF_RE = /^(best|thanks|thank you|cheers|regards|warmly|all the best|talk soon|sincerely|take care|thanks so much|many thanks|best regards|kind regards|warm regards|thanks again|appreciate it|thank you so much|best wishes|warm wishes|with thanks|gratefully)[,!.]?$/i;
+function greetingFamily(line) {
+  const t = line.trim();
+  const m = t.match(GREETING_RE);
+  if (m) return m[1].toLowerCase().replace(/^good .*/, "good");
+  if (/^\{first\},?$/.test(t) || /^[A-Z][a-z]+(?:\s[A-Z][a-z]+)?,$/.test(t)) return "name";
+  return void 0;
+}
+function signoffFamily(line) {
+  const t = line.trim().replace(/[,!.]$/, "").toLowerCase();
+  if (!SIGNOFF_RE.test(line.trim())) return void 0;
+  if (/^(thank|many thanks|with thanks|appreciate|gratefully)/.test(t)) return "thanks";
+  if (/regards|sincerely|warmly|warm wishes|best wishes/.test(t)) return "regards";
+  if (/^(best|all the best)$/.test(t)) return "best";
+  return t;
+}
+var linesOf = (body2) => body2.split("\n").map((l) => l.trim()).filter(Boolean);
+function signoffAt(lines) {
+  for (let i = lines.length - 1; i >= Math.max(0, lines.length - 4); i--)
+    if (signoffFamily(lines[i])) return i;
+  return -1;
+}
+var CONTRACTION = /\b[a-z]+'(m|re|ve|ll|d|t)\b|\b(it|that|there|here|what|who|he|she|let)'s\b/gi;
+var EXPANDED = /\b(i am|do not|does not|did not|cannot|can not|it is|that is|you are|we are|they are|i will|is not|are not|was not|would not|could not|should not|have not|will not|i have not|let us|there is)\b/gi;
+var has = (body2, phrase) => {
+  const p = phrase.trim().toLowerCase();
+  if (p.length < 3) return false;
+  const esc = p.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return new RegExp(`(^|[^a-z0-9])${esc}($|[^a-z0-9])`, "i").test(body2);
+};
+function voiceCheck(draft2, ctx) {
+  const { card } = ctx;
+  const problems = [];
+  const body2 = draft2.body.replace(/\r/g, "");
+  const lines = linesOf(body2);
+  const own = personalStyle(card);
+  const exemplars2 = (ctx.exemplars ?? []).filter((e) => e.trim());
+  const cardGreet = new Set(
+    card.greetingPatterns.map((p) => greetingFamily(p)).filter((x) => !!x)
+  );
+  const cardSign = new Set(
+    card.signoffs.map((s) => signoffFamily(firstLine(s))).filter((x) => !!x)
+  );
+  for (const e of exemplars2) {
+    const el = linesOf(e);
+    const g = el[0] ? greetingFamily(el[0]) : void 0;
+    if (g) cardGreet.add(g);
+    const at = signoffAt(el);
+    if (at >= 0) cardSign.add(signoffFamily(el[at]));
+  }
+  const knows = own || exemplars2.length > 0;
+  const greet = lines[0] ? greetingFamily(lines[0]) : void 0;
+  if (knows && greet && cardGreet.size && !cardGreet.has(greet))
+    problems.push({
+      code: "greeting",
+      detail: `It opens with ${greet === "name" ? "their name alone" : `'${lines[0].split(/[\s,]/)[0]}'`}; you open with ${[...cardGreet].map((g) => g === "name" ? "their name" : `'${g[0].toUpperCase()}${g.slice(1)}'`).join(" or ")}.`
+    });
+  const signIdx = signoffAt(lines);
+  const sign = signIdx >= 0 ? signoffFamily(lines[signIdx]) : void 0;
+  if (knows && sign && cardSign.size && !cardSign.has(sign))
+    problems.push({
+      code: "signoff",
+      detail: `It signs off '${lines[signIdx].replace(/[,.]$/, "")}'; you sign off ${[...cardSign].map((s) => `'${s[0].toUpperCase()}${s.slice(1)}'`).join(" or ")}.`
+    });
+  const end2 = signIdx >= 0 ? signIdx : lines.length;
+  const middle = lines.slice(greet ? 1 : 0, end2).join(" ");
+  const sentences2 = middle.split(/(?<=[.?!])\s+/).map((s) => s.trim()).filter((s) => wordCount(s) >= 3);
+  if (sentences2.length >= 3 && card.avgSentenceWords > 0) {
+    const avg = sentences2.reduce((n, s) => n + wordCount(s), 0) / sentences2.length;
+    const top = Math.max(card.avgSentenceWords * 1.75, card.avgSentenceWords + 9);
+    if (avg > top)
+      problems.push({
+        code: "sentence_length",
+        detail: `Its sentences run about ${Math.round(avg)} words; yours run about ${Math.round(card.avgSentenceWords)}.`
+      });
+    else if (card.avgSentenceWords >= 18 && avg < card.avgSentenceWords * 0.45)
+      problems.push({
+        code: "sentence_length",
+        detail: `Its sentences run about ${Math.round(avg)} words; yours run about ${Math.round(card.avgSentenceWords)}.`
+      });
+  }
+  const said = `${draft2.subject ?? ""}
+${body2}`;
+  for (const a of card.avoid)
+    if (has(said, a)) problems.push({ code: "avoid", detail: `It says '${a.trim()}', which you never say.` });
+  const seen = new Set(card.avoid.map((a) => a.trim().toLowerCase()));
+  for (const n of activeVoiceNotes(ctx.notes)) {
+    const a = avoidOf(n);
+    if (a && !seen.has(a.toLowerCase()) && has(said, a)) {
+      seen.add(a.toLowerCase());
+      problems.push({ code: "note", detail: `It says '${a}'; ${lowerFirst(n.text.replace(/[.]$/, ""))}.` });
+      continue;
+    }
+    const t = n.text.toLowerCase();
+    if (/exclamation/.test(t) && /\b(never|no|cut|drop|without|don'?t)\b/.test(t) && /!/.test(body2))
+      problems.push({
+        code: "note",
+        detail: `It has an exclamation mark; ${lowerFirst(n.text.replace(/[.]$/, ""))}.`
+      });
+    else if (/emoji/.test(t) && /\b(never|no|cut|drop|without|don'?t)\b/.test(t) && /\p{Extended_Pictographic}/u.test(body2))
+      problems.push({ code: "note", detail: `It has an emoji; ${lowerFirst(n.text.replace(/[.]$/, ""))}.` });
+    else if (/first name only|only your first name|just your first name/.test(t) && signIdx >= 0) {
+      const name = lines[signIdx + 1];
+      if (name && name.split(/\s+/).length >= 2 && name.length < 40)
+        problems.push({
+          code: "note",
+          detail: `It signs with your full name; ${lowerFirst(n.text.replace(/[.]$/, ""))}.`
+        });
+    }
+  }
+  const bangs = (body2.match(/!/g) ?? []).length;
+  if (card.exclamationsPerMessage < 0.1 && (bangs >= 2 || own && bangs >= 1))
+    problems.push({ code: "exclamation", detail: "It uses exclamation marks; you write without them." });
+  const emoji = (body2.match(/\p{Extended_Pictographic}/gu) ?? []).length;
+  if (!card.emoji && (emoji >= 2 || own && emoji >= 1))
+    problems.push({ code: "emoji", detail: "It has emoji; you write without them." });
+  const contracted = (body2.match(CONTRACTION) ?? []).length;
+  const expanded = (body2.match(EXPANDED) ?? []).length;
+  if (own && !card.contractions && contracted >= 2)
+    problems.push({ code: "contractions", detail: "It uses contractions like I'm; you write them out." });
+  else if (own && card.contractions && contracted === 0 && expanded >= 2 && wordCount(body2) >= 40)
+    problems.push({ code: "contractions", detail: "It writes out I am and do not; you use contractions." });
+  return { ok: problems.length === 0, problems };
+}
+var lowerFirst = (s) => s ? s[0].toLowerCase() + s.slice(1) : s;
+function voiceScore(r) {
+  return Math.max(0, 3 - r.problems.length);
+}
+function meanVoiceScore(scores) {
+  if (!scores.length) return null;
+  return Math.round(scores.reduce((a, b) => a + b, 0) / scores.length * 10) / 10;
+}
+var VOICE_DISTILL_SYSTEM = [
+  "You read how a college student edited the networking emails Orbit drafted for them, and write down what the edits show about how they write.",
+  `Return at most ${VOICE_NOTES_MAX} notes. Each note is one short line in the second person, in plain words the student would use about themselves, such as "You cut 'Thanks either way' every time" or "You sign with your first name only".`,
+  "A note must be backed by at least two edits, and its evidence lists the ids of those edits exactly as given. Leave out anything a single edit shows, anything the style card already says, and anything about a particular person or company.",
+  "When a note is about a phrase the student always removes or replaces, put that phrase in `avoid` exactly as Orbit wrote it; otherwise leave `avoid` empty.",
+  "Never repeat a note the student forgot, in any wording. Use no dashes and no exclamation marks."
+].join("\n");
+var VOICE_JUDGE_SYSTEM = [
+  "You compare one draft email against a few emails a college student really sent, and judge whether the same person wrote all of them.",
+  "Read the voice, not the topic: greeting and sign-off, sentence length and rhythm, contractions, how direct the ask is, warmth, punctuation, the words they reach for.",
+  "Score 0 to 3: 3, clearly the same person; 2, plausibly the same person; 1, probably someone else; 0, clearly someone else. Give the reason in one plain sentence, with no dashes and no exclamation marks."
+].join("\n");
+function voiceJudgeUser(draft2, exemplars2) {
+  return [
+    "<sent_by_the_student>",
+    ...exemplars2.map((e, i) => `<email n="${i + 1}">
+${e.slice(0, 1500)}
+</email>`),
+    "</sent_by_the_student>",
+    `<draft>
+${draft2.subject ? `Subject: ${draft2.subject}
+` : ""}${draft2.body.slice(0, 3e3)}
+</draft>`
+  ].join("\n");
 }
 
 // supabase/functions/_shared/replies/cards.ts
@@ -4733,7 +5139,8 @@ var WHAT = {
   unsubscribe: "asked to stop",
   declines: "declined, the second today",
   bounce: "bounced",
-  send_error: "could not be sent to"
+  send_error: "could not be sent to",
+  pushback: "pushed back on a first message Orbit sent"
 };
 async function tripBreaker(db2, userId, p) {
   const [u2] = await db2.sql`
@@ -5332,330 +5739,6 @@ function ownWordsLines(g, max = 240, order = LINE_ORDER) {
     lines.push(`Going for this job now: ${clip(job, max)}`);
   }
   return lines;
-}
-
-// packages/core/src/style/voice.ts
-var VOICE_NOTES_MAX = 8;
-var VOICE_JUDGE_MIN = 2;
-var VOICE_HOLD_REASON = "didn't sound like you";
-var firstLine = (s) => (s.split("\n")[0] ?? "").trim();
-function greetingWords(pattern) {
-  const p = pattern.replace(/[,.:]\s*$/, "").trim();
-  if (/^\{first\}$/.test(p)) return "their first name alone";
-  return p.replace(/\s*\{first\}\s*/g, " ").trim() || "their first name";
-}
-function signoffWords(s) {
-  return firstLine(s).replace(/[,.:]\s*$/, "").trim();
-}
-var listWords = (xs) => xs.length <= 1 ? xs[0] ?? "" : `${xs.slice(0, -1).join(", ")} and ${xs[xs.length - 1]}`;
-function cardProse(card) {
-  const out = [];
-  const greet = [...new Set(card.greetingPatterns.map(greetingWords).filter(Boolean))].slice(0, 2);
-  const sign = [...new Set(card.signoffs.map(signoffWords).filter(Boolean))].slice(0, 2);
-  const g = greet.length ? `You greet with ${greet.join(" or ")}` : "";
-  const s = sign.length ? `sign off with ${sign.join(" or ")}` : "";
-  if (g && s) out.push(`${g} and ${s}.`);
-  else if (g) out.push(`${g}.`);
-  else if (s) out.push(`You ${s}.`);
-  const words2 = Math.round(card.avgMessageWords);
-  const length = words2 <= 70 ? "short" : words2 <= 130 ? "at medium length" : "long";
-  const marks = card.exclamationsPerMessage <= 0.05 ? "no exclamation marks" : card.exclamationsPerMessage < 0.5 ? "an exclamation mark now and then" : "exclamation marks often";
-  const parts = [
-    card.contractions ? "contractions" : "no contractions",
-    marks,
-    ...card.emoji ? ["the odd emoji"] : []
-  ];
-  out.push(`You write ${length}, about ${words2} words, with ${listWords(parts)}.`);
-  out.push(`Your sentences run about ${Math.round(card.avgSentenceWords)} words.`);
-  if (card.characteristicPhrases.length)
-    out.push(`Phrases of yours: ${listWords(card.characteristicPhrases.slice(0, 5).map((p) => `'${p}'`))}.`);
-  if (card.avoid.length) out.push(`You never say ${listWords(card.avoid.slice(0, 6).map((p) => `'${p}'`))}.`);
-  if (card.custom && card.notes.trim()) out.push(`Your notes for Orbit: ${card.notes.trim()}`);
-  out.push(
-    card.builtFromCount > 0 ? `Learned from ${card.builtFromCount} messages you wrote.` : card.custom ? "Set by you." : "This is a starting style; Orbit has not learned from your messages yet."
-  );
-  return out.map(plainText);
-}
-function plainText(s) {
-  return s.replace(/\s*[–—]\s*/g, ", ").replace(/!+/g, ".").replace(/\.\./g, ".").replace(/\s{2,}/g, " ").trim();
-}
-var QUOTED = /(?:^|[\s(:])['"‘“]([^'"‘’“”\n]{2,80}?)['"’”](?=$|[\s.,;:?)])/g;
-var NEGATIVE = /\b(cut|cuts|drop|drops|delete|deletes|remove|removes|never|avoid|avoids|stop|skip|skips|strike|take out|takes out|don'?t|do not|change|changes|swap|swaps|replace|replaces)\b/i;
-function quotedPhrases(text3) {
-  return [...text3.matchAll(QUOTED)].map((m) => m[1].trim()).filter((p) => p.length >= 2);
-}
-function avoidOf(note2) {
-  const own = note2.avoid?.trim();
-  if (own) return own;
-  if (!NEGATIVE.test(note2.text)) return void 0;
-  return quotedPhrases(note2.text)[0];
-}
-function activeVoiceNotes(notes2) {
-  return (notes2 ?? []).filter((n) => !n.forgottenAt);
-}
-function withVoiceNotes(card, notes2) {
-  const live = activeVoiceNotes(notes2);
-  if (!live.length) return card;
-  const lines = live.map((n) => n.text.trim().replace(/[.]$/, "")).filter(Boolean);
-  const avoid = [...card.avoid];
-  const seen = new Set(avoid.map((a) => a.toLowerCase()));
-  for (const n of live) {
-    const a = avoidOf(n);
-    if (a && !seen.has(a.toLowerCase())) {
-      seen.add(a.toLowerCase());
-      avoid.push(a);
-    }
-  }
-  const learned = `What Orbit learned from your edits: ${lines.join("; ")}.`;
-  return { ...card, avoid, notes: card.notes.trim() ? `${card.notes.trim()}
-${learned}` : learned };
-}
-function decideVoiceNote(notes2, id, action, now) {
-  let note2;
-  const at = now.toISOString();
-  const out = (notes2 ?? []).map((n) => {
-    if (n.id !== id) return n;
-    note2 = action === "keep" ? { ...n, keptAt: at, forgottenAt: null } : { ...n, forgottenAt: at };
-    return note2;
-  });
-  return { notes: out, note: note2 };
-}
-var MAX_TOKENS = 400;
-var tokens = (s) => s.split(/\s+/).filter(Boolean);
-var bare = (w) => w.toLowerCase().replace(/^[^a-z0-9']+|[^a-z0-9']+$/g, "");
-function align(a, b, key) {
-  const A = a.map(key);
-  const B = b.map(key);
-  const n = a.length;
-  const m = b.length;
-  const L = Array.from({ length: n + 1 }, () => new Uint16Array(m + 1));
-  for (let i2 = n - 1; i2 >= 0; i2--)
-    for (let j2 = m - 1; j2 >= 0; j2--)
-      L[i2][j2] = A[i2] === B[j2] ? L[i2 + 1][j2 + 1] + 1 : Math.max(L[i2 + 1][j2], L[i2][j2 + 1]);
-  const out = [];
-  let cur = { del: [], ins: [] };
-  const flush = () => {
-    if (cur.del.length || cur.ins.length) out.push(cur);
-    cur = { del: [], ins: [] };
-  };
-  let i = 0;
-  let j = 0;
-  while (i < n || j < m) {
-    if (i < n && j < m && A[i] === B[j]) {
-      flush();
-      i++;
-      j++;
-    } else if (j < m && (i >= n || L[i][j + 1] >= L[i + 1][j])) cur.ins.push(b[j++]);
-    else cur.del.push(a[i++]);
-  }
-  flush();
-  return out;
-}
-var unitsOf = (s) => s.split("\n").flatMap((l) => l.trim().split(/(?<=[.?!])\s+/)).map((u2) => u2.trim()).filter(Boolean);
-var unitKey = (u2) => tokens(u2).map(bare).join(" ");
-function hunksOf(before, after) {
-  const a = unitsOf(before);
-  const b = unitsOf(after);
-  if (tokens(before).length > MAX_TOKENS || tokens(after).length > MAX_TOKENS || a.length > 80 || b.length > 80)
-    return void 0;
-  const out = [];
-  const similar = (x, y) => {
-    const xw = tokens(x).map(bare);
-    const yw = tokens(y).map(bare);
-    const shared = xw.filter((w) => yw.includes(w)).length;
-    return shared / Math.max(xw.length, yw.length, 1);
-  };
-  for (const h of align(a, b, unitKey)) {
-    const dels = h.del.map((u2) => ({ u: u2, used: false }));
-    const ins = [];
-    for (const i of h.ins) {
-      let best;
-      let score = 0.5;
-      for (const d of dels)
-        if (!d.used && similar(d.u, i) >= score) {
-          best = d;
-          score = similar(d.u, i);
-        }
-      if (best) {
-        best.used = true;
-        for (const w of align(tokens(best.u), tokens(i), bare)) out.push(w);
-      } else ins.push(i);
-    }
-    const left = dels.filter((d) => !d.used).map((d) => d.u);
-    while (left.length && ins.length && wordCount(left[left.length - 1]) <= 6 && wordCount(ins[ins.length - 1]) <= 6)
-      out.push({ del: tokens(left.pop()), ins: tokens(ins.pop()) });
-    for (const d of left) out.push({ del: tokens(d), ins: [] });
-    for (const i of ins) out.push({ del: [], ins: tokens(i) });
-  }
-  return out;
-}
-function wordEditDistance(before, after) {
-  const h = hunksOf(before, after);
-  if (!h) return Math.abs(wordCount(before) - wordCount(after)) + 1;
-  return h.reduce((n, x) => n + x.del.length + x.ins.length, 0);
-}
-var GLUE = new Set(
-  "a an the and or but so to of in on at for with from by is am are was be it its this that i me my you your we just very".split(
-    " "
-  )
-);
-var GREETING_RE = /^(hi|hey|hello|dear|good (?:morning|afternoon|evening)|greetings|hiya|yo)\b/i;
-var SIGNOFF_RE = /^(best|thanks|thank you|cheers|regards|warmly|all the best|talk soon|sincerely|take care|thanks so much|many thanks|best regards|kind regards|warm regards|thanks again|appreciate it|thank you so much|best wishes|warm wishes|with thanks|gratefully)[,!.]?$/i;
-function greetingFamily(line) {
-  const t = line.trim();
-  const m = t.match(GREETING_RE);
-  if (m) return m[1].toLowerCase().replace(/^good .*/, "good");
-  if (/^\{first\},?$/.test(t) || /^[A-Z][a-z]+(?:\s[A-Z][a-z]+)?,$/.test(t)) return "name";
-  return void 0;
-}
-function signoffFamily(line) {
-  const t = line.trim().replace(/[,!.]$/, "").toLowerCase();
-  if (!SIGNOFF_RE.test(line.trim())) return void 0;
-  if (/^(thank|many thanks|with thanks|appreciate|gratefully)/.test(t)) return "thanks";
-  if (/regards|sincerely|warmly|warm wishes|best wishes/.test(t)) return "regards";
-  if (/^(best|all the best)$/.test(t)) return "best";
-  return t;
-}
-var linesOf = (body2) => body2.split("\n").map((l) => l.trim()).filter(Boolean);
-function signoffAt(lines) {
-  for (let i = lines.length - 1; i >= Math.max(0, lines.length - 4); i--)
-    if (signoffFamily(lines[i])) return i;
-  return -1;
-}
-var CONTRACTION = /\b[a-z]+'(m|re|ve|ll|d|t)\b|\b(it|that|there|here|what|who|he|she|let)'s\b/gi;
-var EXPANDED = /\b(i am|do not|does not|did not|cannot|can not|it is|that is|you are|we are|they are|i will|is not|are not|was not|would not|could not|should not|have not|will not|i have not|let us|there is)\b/gi;
-var has = (body2, phrase) => {
-  const p = phrase.trim().toLowerCase();
-  if (p.length < 3) return false;
-  const esc = p.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  return new RegExp(`(^|[^a-z0-9])${esc}($|[^a-z0-9])`, "i").test(body2);
-};
-function voiceCheck(draft2, ctx) {
-  const { card } = ctx;
-  const problems = [];
-  const body2 = draft2.body.replace(/\r/g, "");
-  const lines = linesOf(body2);
-  const own = personalStyle(card);
-  const exemplars2 = (ctx.exemplars ?? []).filter((e) => e.trim());
-  const cardGreet = new Set(
-    card.greetingPatterns.map((p) => greetingFamily(p)).filter((x) => !!x)
-  );
-  const cardSign = new Set(
-    card.signoffs.map((s) => signoffFamily(firstLine(s))).filter((x) => !!x)
-  );
-  for (const e of exemplars2) {
-    const el = linesOf(e);
-    const g = el[0] ? greetingFamily(el[0]) : void 0;
-    if (g) cardGreet.add(g);
-    const at = signoffAt(el);
-    if (at >= 0) cardSign.add(signoffFamily(el[at]));
-  }
-  const knows = own || exemplars2.length > 0;
-  const greet = lines[0] ? greetingFamily(lines[0]) : void 0;
-  if (knows && greet && cardGreet.size && !cardGreet.has(greet))
-    problems.push({
-      code: "greeting",
-      detail: `It opens with ${greet === "name" ? "their name alone" : `'${lines[0].split(/[\s,]/)[0]}'`}; you open with ${[...cardGreet].map((g) => g === "name" ? "their name" : `'${g[0].toUpperCase()}${g.slice(1)}'`).join(" or ")}.`
-    });
-  const signIdx = signoffAt(lines);
-  const sign = signIdx >= 0 ? signoffFamily(lines[signIdx]) : void 0;
-  if (knows && sign && cardSign.size && !cardSign.has(sign))
-    problems.push({
-      code: "signoff",
-      detail: `It signs off '${lines[signIdx].replace(/[,.]$/, "")}'; you sign off ${[...cardSign].map((s) => `'${s[0].toUpperCase()}${s.slice(1)}'`).join(" or ")}.`
-    });
-  const end2 = signIdx >= 0 ? signIdx : lines.length;
-  const middle = lines.slice(greet ? 1 : 0, end2).join(" ");
-  const sentences2 = middle.split(/(?<=[.?!])\s+/).map((s) => s.trim()).filter((s) => wordCount(s) >= 3);
-  if (sentences2.length >= 3 && card.avgSentenceWords > 0) {
-    const avg = sentences2.reduce((n, s) => n + wordCount(s), 0) / sentences2.length;
-    const top = Math.max(card.avgSentenceWords * 1.75, card.avgSentenceWords + 9);
-    if (avg > top)
-      problems.push({
-        code: "sentence_length",
-        detail: `Its sentences run about ${Math.round(avg)} words; yours run about ${Math.round(card.avgSentenceWords)}.`
-      });
-    else if (card.avgSentenceWords >= 18 && avg < card.avgSentenceWords * 0.45)
-      problems.push({
-        code: "sentence_length",
-        detail: `Its sentences run about ${Math.round(avg)} words; yours run about ${Math.round(card.avgSentenceWords)}.`
-      });
-  }
-  const said = `${draft2.subject ?? ""}
-${body2}`;
-  for (const a of card.avoid)
-    if (has(said, a)) problems.push({ code: "avoid", detail: `It says '${a.trim()}', which you never say.` });
-  const seen = new Set(card.avoid.map((a) => a.trim().toLowerCase()));
-  for (const n of activeVoiceNotes(ctx.notes)) {
-    const a = avoidOf(n);
-    if (a && !seen.has(a.toLowerCase()) && has(said, a)) {
-      seen.add(a.toLowerCase());
-      problems.push({ code: "note", detail: `It says '${a}'; ${lowerFirst(n.text.replace(/[.]$/, ""))}.` });
-      continue;
-    }
-    const t = n.text.toLowerCase();
-    if (/exclamation/.test(t) && /\b(never|no|cut|drop|without|don'?t)\b/.test(t) && /!/.test(body2))
-      problems.push({
-        code: "note",
-        detail: `It has an exclamation mark; ${lowerFirst(n.text.replace(/[.]$/, ""))}.`
-      });
-    else if (/emoji/.test(t) && /\b(never|no|cut|drop|without|don'?t)\b/.test(t) && /\p{Extended_Pictographic}/u.test(body2))
-      problems.push({ code: "note", detail: `It has an emoji; ${lowerFirst(n.text.replace(/[.]$/, ""))}.` });
-    else if (/first name only|only your first name|just your first name/.test(t) && signIdx >= 0) {
-      const name = lines[signIdx + 1];
-      if (name && name.split(/\s+/).length >= 2 && name.length < 40)
-        problems.push({
-          code: "note",
-          detail: `It signs with your full name; ${lowerFirst(n.text.replace(/[.]$/, ""))}.`
-        });
-    }
-  }
-  const bangs = (body2.match(/!/g) ?? []).length;
-  if (card.exclamationsPerMessage < 0.1 && (bangs >= 2 || own && bangs >= 1))
-    problems.push({ code: "exclamation", detail: "It uses exclamation marks; you write without them." });
-  const emoji = (body2.match(/\p{Extended_Pictographic}/gu) ?? []).length;
-  if (!card.emoji && (emoji >= 2 || own && emoji >= 1))
-    problems.push({ code: "emoji", detail: "It has emoji; you write without them." });
-  const contracted = (body2.match(CONTRACTION) ?? []).length;
-  const expanded = (body2.match(EXPANDED) ?? []).length;
-  if (own && !card.contractions && contracted >= 2)
-    problems.push({ code: "contractions", detail: "It uses contractions like I'm; you write them out." });
-  else if (own && card.contractions && contracted === 0 && expanded >= 2 && wordCount(body2) >= 40)
-    problems.push({ code: "contractions", detail: "It writes out I am and do not; you use contractions." });
-  return { ok: problems.length === 0, problems };
-}
-var lowerFirst = (s) => s ? s[0].toLowerCase() + s.slice(1) : s;
-function voiceScore(r) {
-  return Math.max(0, 3 - r.problems.length);
-}
-function meanVoiceScore(scores) {
-  if (!scores.length) return null;
-  return Math.round(scores.reduce((a, b) => a + b, 0) / scores.length * 10) / 10;
-}
-var VOICE_DISTILL_SYSTEM = [
-  "You read how a college student edited the networking emails Orbit drafted for them, and write down what the edits show about how they write.",
-  `Return at most ${VOICE_NOTES_MAX} notes. Each note is one short line in the second person, in plain words the student would use about themselves, such as "You cut 'Thanks either way' every time" or "You sign with your first name only".`,
-  "A note must be backed by at least two edits, and its evidence lists the ids of those edits exactly as given. Leave out anything a single edit shows, anything the style card already says, and anything about a particular person or company.",
-  "When a note is about a phrase the student always removes or replaces, put that phrase in `avoid` exactly as Orbit wrote it; otherwise leave `avoid` empty.",
-  "Never repeat a note the student forgot, in any wording. Use no dashes and no exclamation marks."
-].join("\n");
-var VOICE_JUDGE_SYSTEM = [
-  "You compare one draft email against a few emails a college student really sent, and judge whether the same person wrote all of them.",
-  "Read the voice, not the topic: greeting and sign-off, sentence length and rhythm, contractions, how direct the ask is, warmth, punctuation, the words they reach for.",
-  "Score 0 to 3: 3, clearly the same person; 2, plausibly the same person; 1, probably someone else; 0, clearly someone else. Give the reason in one plain sentence, with no dashes and no exclamation marks."
-].join("\n");
-function voiceJudgeUser(draft2, exemplars2) {
-  return [
-    "<sent_by_the_student>",
-    ...exemplars2.map((e, i) => `<email n="${i + 1}">
-${e.slice(0, 1500)}
-</email>`),
-    "</sent_by_the_student>",
-    `<draft>
-${draft2.subject ? `Subject: ${draft2.subject}
-` : ""}${draft2.body.slice(0, 3e3)}
-</draft>`
-  ].join("\n");
 }
 
 // supabase/functions/_shared/voice/voice.ts
@@ -7080,8 +7163,21 @@ var HOLD_REASONS = {
   auto_daily_cap: `Orbit already sent ${SEND_CAPS.autoPerDay} on its own today.`,
   auto_first_touch_daily_cap: `Orbit already sent ${SEND_CAPS.autoFirstTouchesPerDay} first messages on its own today.`,
   auto_first_touch_weekly_cap: `Orbit already sent ${SEND_CAPS.autoFirstTouchesPerWeek} first messages on its own this week.`,
-  gmail_daily_cap: `Your ${SEND_CAPS.gmailPerDay} emails a day are used up.`
+  gmail_daily_cap: `Your ${SEND_CAPS.gmailPerDay} emails a day are used up.`,
+  validator: "Orbit wrote it, but it did not pass its own checks, so it waits for you to read it.",
+  no_hook: "Orbit found nothing researched about them to open with, so it waits for you.",
+  voice: `It ${VOICE_HOLD_REASON}, so it waits for your tap.`,
+  same_firm_today: "Someone at the same firm got a first message this morning, so this one moved to the next morning."
 };
+function holdReason(r) {
+  const e = r.error ?? "";
+  if (e.startsWith("first_touch:"))
+    return skipReason(e.slice("first_touch:".length), {
+      name: r.display_name,
+      company: r.org_name ?? r.org_raw
+    });
+  return HOLD_REASONS[e] ?? (e || void 0);
+}
 async function itemRows(db2, userId, mode2, now, dayStart, draftId) {
   const twoDaysAgo = new Date(now.getTime() - 2 * 864e5);
   return db2.sql`
@@ -7240,7 +7336,7 @@ async function autopilotStatus(db2, userId, now) {
     pausedUntil,
     pausedGoals,
     queued: queued2.map((r) => item(r, queuedStatus(r, first))),
-    held: held.map((r) => item(r, "held", HOLD_REASONS[r.error ?? ""] ?? r.error ?? void 0)),
+    held: held.map((r) => item(r, "held", holdReason(r))),
     sentToday: sentToday.map((r) => item(r, "sent")),
     needsYou,
     rungs,
@@ -10239,8 +10335,92 @@ function bestReach(g, personId, goal, now) {
   return r.paths[0]?.p ?? null;
 }
 
-// supabase/functions/_shared/cadence/cadence.ts
+// supabase/functions/_shared/autopilot/plan.ts
 var DAY8 = 864e5;
+var FIRST_TOUCH2 = ["outreach", "first_touch", "warm_first_touch"];
+var dayKeyOf = (d, tz) => localParts(d, tz).key;
+async function candidateRows(db2, userId, one) {
+  return db2.sql`
+    select p.id, p.display_name, p.first_name, p.title, p.headline, coalesce(o.name, p.org_raw) as org, p.is_alumni,
+           p.primary_email, p.hidden_at, p.do_not_contact, coalesce(p.private, false) as private, p.timezone,
+           coalesce(ts.score, 0)::int as score,
+           (exists (select 1 from orbit.messages m where m.user_id = p.user_id and m.direction = 'out'
+                     and p.id = any(m.to_person_ids))
+            or exists (select 1 from orbit.drafts d where d.user_id = p.user_id and d.person_id = p.id
+                        and d.status = 'sent')) as written,
+           exists (select 1 from orbit.chats c where c.user_id = p.user_id and c.person_id = p.id
+                    and c.archived_at is null
+                    and c.stage not in ('identified', 'declined', 'no_response', 'archived')) as open_chat,
+           exists (select 1 from orbit.drafts d where d.user_id = p.user_id and d.person_id = p.id
+                    and d.kind = any(${FIRST_TOUCH2}::text[])
+                    and d.status in ('draft', 'approved', 'scheduled', 'sending')
+                    and d.id <> ${one?.draftId ?? null}::uuid is not false) as pending,
+           (exists (select 1 from orbit.dossiers ds where ds.user_id = p.user_id and ds.person_id = p.id
+                     and ds.status in ('ready', 'partial')
+                     and jsonb_array_length(coalesce(ds.content->'openers', '[]'::jsonb)) > 0)
+            or exists (select 1 from orbit.facts f where f.user_id = p.user_id and f.person_id = p.id
+                        and f.deleted_at is null)) as has_hook
+      from orbit.people p
+      left join orbit.organizations o on o.id = p.org_id
+      left join orbit.tie_scores ts on ts.user_id = p.user_id and ts.person_id = p.id
+     where p.user_id = ${userId}::uuid and not p.is_self and p.deleted_at is null and p.merged_into is null
+       and (${one?.personId ?? null}::uuid is null or p.id = ${one?.personId ?? null}::uuid)
+       and (${one?.personId ?? null}::uuid is not null or coalesce(o.name, p.org_raw) is not null)`;
+}
+async function firstTouchSendGate(s, userId, d) {
+  const db2 = s.db;
+  const now = s.now();
+  const rung = await firstTouchRungOf(db2, userId);
+  if (!rung.earned) return { go: false, hold: "needs_tap" };
+  const [goal] = d.goal_id ? await db2.sql`
+        select id, kind, title, targets, autonomy_level, priority from orbit.goals
+         where id = ${d.goal_id}::uuid and user_id = ${userId}::uuid and deleted_at is null and status = 'active'` : [];
+  const [p] = await candidateRows(db2, userId, { personId: d.person_id, draftId: d.id });
+  if (!p) return { go: false, hold: "first_touch:hidden", rule: "hidden" };
+  const rule = firstTouchBlock(
+    {
+      personId: p.id,
+      name: p.display_name,
+      company: p.org,
+      title: p.title,
+      headline: p.headline,
+      isAlumni: p.is_alumni,
+      score: p.score,
+      hasHook: true,
+      hasEmail: !!p.primary_email,
+      hidden: !!p.hidden_at,
+      private: p.private,
+      doNotContact: p.do_not_contact,
+      openChat: p.open_chat,
+      written: p.written,
+      pending: p.pending
+    },
+    { kind: goal?.kind ?? "recruiting", targets: goal?.targets?.organizations ?? [] }
+  );
+  if (rule) return { go: false, hold: `first_touch:${rule}`, rule };
+  const [u2] = await db2.sql`select timezone from orbit.users where id = ${userId}::uuid`;
+  const tz = validZone(u2?.timezone) ?? "America/New_York";
+  const dayStart = zonedTime(dayKeyOf(now, tz), 0, 0, tz);
+  const today = await db2.sql`
+    select coalesce(o.name, p.org_raw) as org from orbit.drafts d
+      join orbit.people p on p.id = d.person_id
+      left join orbit.organizations o on o.id = p.org_id
+     where d.user_id = ${userId}::uuid and d.auto_rung = 'first_touch' and d.status = 'sent' and d.id <> ${d.id}::uuid
+       and d.sent_at >= ${dayStart}::timestamptz`;
+  const firm = firmKey(p.org);
+  if (firm && today.some((x) => firmKey(x.org) === firm))
+    return {
+      go: false,
+      later: "same_firm_today",
+      until: new Date(
+        nextSendWindow(new Date(now.getTime() + DAY8), validZone(p.timezone) ?? tz, "gmail", s.random).notBefore
+      )
+    };
+  return { go: true };
+}
+
+// supabase/functions/_shared/cadence/cadence.ts
+var DAY9 = 864e5;
 function goalFrom(r) {
   const due2 = r.due_at instanceof Date ? r.due_at.toISOString().slice(0, 10) : r.due_at;
   return goalFromRow({ ...isoRow(r), due_at: due2 });
@@ -10259,7 +10439,7 @@ async function loadCadence(db2, userId, now) {
   const draftRows = await db2.sql`
     select id, person_id, chat_id, kind, status, send_at, created_at from orbit.drafts
      where user_id = ${userId}::uuid
-       and (status in ('draft', 'approved', 'scheduled', 'sending') or created_at > ${new Date(now.getTime() - 30 * DAY8)}::timestamptz)`;
+       and (status in ('draft', 'approved', 'scheduled', 'sending') or created_at > ${new Date(now.getTime() - 30 * DAY9)}::timestamptz)`;
   const drafts = draftRows.map((d) => ({
     id: d.id,
     personId: d.person_id,
@@ -10272,7 +10452,7 @@ async function loadCadence(db2, userId, now) {
   const msgRows = await db2.sql`
     select direction, sent_at, provider, from_person_id, to_person_ids from orbit.messages
      where user_id = ${userId}::uuid and not is_automated
-       and sent_at > ${new Date(now.getTime() - 365 * DAY8)}::timestamptz`;
+       and sent_at > ${new Date(now.getTime() - 365 * DAY9)}::timestamptz`;
   const messages = [];
   for (const m of msgRows) {
     const channel = m.provider === "linkedin" ? "linkedin" : "email";
@@ -10302,7 +10482,7 @@ async function loadCadence(db2, userId, now) {
            p.last_interaction_at, ts.score::int as score,
            d.content->'recently' as recently, d.updated_at as dossier_at,
            (select f.text from orbit.facts f where f.person_id = p.id and f.deleted_at is null
-               and f.created_at > ${new Date(now.getTime() - 30 * DAY8)}::timestamptz
+               and f.created_at > ${new Date(now.getTime() - 30 * DAY9)}::timestamptz
              order by f.created_at desc limit 1) as fact
       from orbit.people p
       left join orbit.tie_scores ts on ts.user_id = p.user_id and ts.person_id = p.id
@@ -10311,7 +10491,7 @@ async function loadCadence(db2, userId, now) {
        and (ts.score >= 60 or p.id = any(${wanted}::uuid[]))`;
   const people = /* @__PURE__ */ new Map();
   for (const p of peopleRows) {
-    const fresh = p.dossier_at && now.getTime() - new Date(p.dossier_at).getTime() < 60 * DAY8;
+    const fresh = p.dossier_at && now.getTime() - new Date(p.dossier_at).getTime() < 60 * DAY9;
     const recent = fresh && Array.isArray(p.recently) ? p.recently[0]?.text : void 0;
     people.set(p.id, {
       person: {
@@ -10857,6 +11037,21 @@ ${d.body}`)) {
     await audit(db2, userId, "system", "draft.hold", d.id, { reason: "goal_paused", goalId: d.goal_id });
     return { status: "held", reason: "goal_paused" };
   }
+  const firstTouchStanding = d.auto_rung === "first_touch" && agentApproved && !userApproved;
+  if (firstTouchStanding) {
+    const gate = await firstTouchSendGate(s, userId, d);
+    if (!gate.go && "later" in gate) return later(gate.later, gate.until);
+    if (!gate.go && (gate.rule === "do_not_contact" || gate.rule === "minor")) {
+      await settle("cancelled", { cancel_reason: gate.rule });
+      await audit(db2, userId, "system", "draft.blocked", d.id, { rule: gate.rule });
+      return { status: "cancelled", reason: gate.rule };
+    }
+    if (!gate.go) {
+      await settle("draft", { error: gate.hold });
+      await audit(db2, userId, "system", "draft.hold", d.id, { reason: gate.hold });
+      return { status: "held", reason: gate.hold };
+    }
+  }
   if (d.channel === "linkedin" && agentApproved && !userApproved) {
     await settle("draft", { error: "linkedin_never_auto" });
     await audit(db2, userId, "system", "draft.hold", d.id, { reason: "linkedin_never_auto" });
@@ -10894,7 +11089,8 @@ ${d.body}`)) {
       timeZone: u2.timezone,
       approvedHash: userApproved ? hash : void 0
     }
-  );
+    // the earned rung is the student's standing approval of a first message, and nothing else it covers
+  ).filter((v) => !(firstTouchStanding && v.rule === "first_message_needs_approval"));
   const forbidden2 = violations.find((v) => v.kind === "forbidden");
   if (forbidden2) {
     await settle("cancelled", { cancel_reason: forbidden2.rule });
@@ -11206,7 +11402,7 @@ async function userLite(db2, userId) {
   return { ...u2, settings: u2.settings ?? {} };
 }
 var nameOf = (u2) => u2.full_name?.trim() || u2.first_name?.trim() || u2.email.split("@")[0];
-var firstOf = (u2) => u2.first_name?.trim() || nameOf(u2).split(/\s+/)[0];
+var firstOf2 = (u2) => u2.first_name?.trim() || nameOf(u2).split(/\s+/)[0];
 function defaultMode(u2) {
   const m = u2.settings.friend_share_mode;
   const d = u2.settings.friend_share_domains;
@@ -11245,7 +11441,7 @@ async function friendView(db2, me2, f2, targets) {
     friendshipId: f2.id,
     userId: otherId,
     name: nameOf(other),
-    firstName: firstOf(other),
+    firstName: firstOf2(other),
     mode: theirs?.mode ?? "none",
     domains: theirs?.company_domains ?? []
   };
@@ -11375,7 +11571,7 @@ async function invite(ctx) {
       if (mailer?.configured) {
         const r = await mailer.send({
           to: email,
-          subject: `${firstOf(u2)} wants to pool networks with you on Orbit`,
+          subject: `${firstOf2(u2)} wants to pool networks with you on Orbit`,
           text: [
             `${nameOf(u2)} invited you to be friends on Orbit.`,
             "Friends pool their networks: you see who they know and how well, they see yours, and intros happen in one tap. Nothing else crosses: not your messages, notes or contact details.",
@@ -11715,9 +11911,9 @@ async function respond(ctx, askId, b) {
   const input = {
     targetFirst,
     askerName: nameOf(asker),
-    askerFirst: firstOf(asker),
+    askerFirst: firstOf2(asker),
     note: r.note,
-    meFirst: firstOf(meRow)
+    meFirst: firstOf2(meRow)
   };
   const customBody = typeof b.body === "string" && b.body.trim() ? b.body.trim() : null;
   const draftId = await db2.begin(async (tx) => {

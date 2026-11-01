@@ -12191,7 +12191,8 @@ var WHAT = {
   unsubscribe: "asked to stop",
   declines: "declined, the second today",
   bounce: "bounced",
-  send_error: "could not be sent to"
+  send_error: "could not be sent to",
+  pushback: "pushed back on a first message Orbit sent"
 };
 async function tripBreaker(db2, userId, p) {
   const [u2] = await db2.sql`
@@ -12239,6 +12240,29 @@ async function declinesToday(db2, userId, goalId, dayStart2) {
        and (${goalId}::uuid is null or c.goal_id = ${goalId}::uuid)`;
   return r?.n ?? 0;
 }
+async function pushbackOnAutoFirst(db2, userId, m, now) {
+  if (!m.from_person_id || m.reply_class !== "decline" && m.reply_class !== "objection") return false;
+  const [d] = await db2.sql`
+    select d.goal_id, p.display_name, coalesce(o.name, p.org_raw) as org from orbit.drafts d
+      join orbit.people p on p.id = d.person_id
+      left join orbit.organizations o on o.id = p.org_id
+     where d.user_id = ${userId}::uuid and d.person_id = ${m.from_person_id}::uuid and d.auto_rung = 'first_touch'
+       and d.status = 'sent' and d.sent_at <= ${new Date(m.sent_at)}::timestamptz
+       and exists (select 1 from orbit.audit_log a where a.target_table = 'drafts' and a.target_id = d.id::text
+                    and a.action = 'draft.auto_sent')
+     order by d.sent_at desc limit 1`;
+  if (!d) return false;
+  const r = await tripBreaker(db2, userId, {
+    goalId: d.goal_id,
+    reason: "pushback",
+    personId: m.from_person_id,
+    personName: d.display_name,
+    company: d.org,
+    messageId: m.id,
+    now
+  });
+  return r.tripped;
+}
 
 // supabase/functions/_shared/replies/replies.ts
 var needsYouKey = (messageId) => `needs_you:${messageId}`;
@@ -12275,6 +12299,7 @@ async function maybeAutoReply(db2, userId, messageId, deps = {}) {
   const cls = m.reply_class;
   if (!cls) return { action: "none", reason: "not_classified" };
   const step = REPLY_NEXT_ACTION[cls];
+  if (!deps.history) await pushbackOnAutoFirst(db2, userId, m, now);
   if (cls === "decline" || cls === "unsubscribe") {
     if (m.from_person_id) await closeOnReply(s, userId, m.id, m.from_person_id, cls, now, deps.history);
     return cls === "unsubscribe" ? { action: "unsubscribed" } : { action: "closed", reason: "decline" };
@@ -12515,7 +12540,11 @@ var HOLD_REASONS = {
   auto_daily_cap: `Orbit already sent ${SEND_CAPS.autoPerDay} on its own today.`,
   auto_first_touch_daily_cap: `Orbit already sent ${SEND_CAPS.autoFirstTouchesPerDay} first messages on its own today.`,
   auto_first_touch_weekly_cap: `Orbit already sent ${SEND_CAPS.autoFirstTouchesPerWeek} first messages on its own this week.`,
-  gmail_daily_cap: `Your ${SEND_CAPS.gmailPerDay} emails a day are used up.`
+  gmail_daily_cap: `Your ${SEND_CAPS.gmailPerDay} emails a day are used up.`,
+  validator: "Orbit wrote it, but it did not pass its own checks, so it waits for you to read it.",
+  no_hook: "Orbit found nothing researched about them to open with, so it waits for you.",
+  voice: `It ${VOICE_HOLD_REASON}, so it waits for your tap.`,
+  same_firm_today: "Someone at the same firm got a first message this morning, so this one moved to the next morning."
 };
 async function firstTouchRungOf(db2, userId) {
   const [t] = await db2.sql`select to_regclass('orbit.draft_edits') is not null as has`;
@@ -12546,13 +12575,16 @@ var FIRST_TOUCH2 = ["outreach", "first_touch", "warm_first_touch"];
 var DEFAULT_WEEKLY_TARGET = 4;
 var BATCH_CARD_HOUR = 18;
 var SKIPS_KEPT = 40;
-function firstMessageVoiceOk(draft, ctx) {
-  const notes = Array.isArray(ctx.settings.voice_notes) ? ctx.settings.voice_notes.filter((n) => typeof n?.text === "string" && !n.forgottenAt).map((n) => ({
-    text: n.text,
-    forgottenAt: null,
-    avoid: typeof n.avoid === "string" ? n.avoid : null
-  })) : [];
-  const r = voiceCheck({ body: draft.body, subject: draft.subject }, { card: ctx.card, notes });
+async function firstMessageVoiceOk(s, user, draft) {
+  const card = storedCard(user.settings ?? {}, user.first_name ?? "");
+  const notes = notesOf(user.settings);
+  const examples = await exemplars(
+    s,
+    draft.user_id,
+    draft.person_id,
+    `${draft.kind} ${draft.subject ?? ""} ${draft.body.slice(0, 400)}`
+  ).catch(() => []);
+  const r = voiceCheck({ body: draft.body, subject: draft.subject }, { card, notes, exemplars: examples });
   return { ok: r.ok, problems: r.problems.map((p) => p.detail) };
 }
 var dayKeyOf = (d, tz) => localParts(d, tz).key;
@@ -12650,7 +12682,6 @@ async function planGoals(s, userId, user, tz, goals, out) {
         select payload->>'friendUserId' || ':' || (payload->>'targetPersonId') as key from orbit.suggestions
          where user_id = ${userId}::uuid and kind = 'friend_ask_ready' and status in ('pending', 'snoozed', 'done')`).map((r) => r.key)
   );
-  const card = styleCardOf(user);
   const meFirst = userFirstName(user);
   const skipsAll = [];
   for (const goal of goals) {
@@ -12747,7 +12778,7 @@ async function planGoals(s, userId, user, tz, goals, out) {
         remaining--;
         continue;
       }
-      const queued = await writeFirstTouch(s, userId, goal, c, { settings, card, now, tz });
+      const queued = await writeFirstTouch(s, userId, goal, c, { user, now, tz });
       if (queued === "queued") {
         out.queued++;
         onDay++;
@@ -12760,7 +12791,7 @@ async function planGoals(s, userId, user, tz, goals, out) {
   out.skipped = skipsAll.length;
   await keepSkips(db2, userId, planDay, skipsAll, now);
 }
-async function candidateRows(db2, userId) {
+async function candidateRows(db2, userId, one) {
   return db2.sql`
     select p.id, p.display_name, p.first_name, p.title, p.headline, coalesce(o.name, p.org_raw) as org, p.is_alumni,
            p.primary_email, p.hidden_at, p.do_not_contact, coalesce(p.private, false) as private, p.timezone,
@@ -12774,7 +12805,8 @@ async function candidateRows(db2, userId) {
                     and c.stage not in ('identified', 'declined', 'no_response', 'archived')) as open_chat,
            exists (select 1 from orbit.drafts d where d.user_id = p.user_id and d.person_id = p.id
                     and d.kind = any(${FIRST_TOUCH2}::text[])
-                    and d.status in ('draft', 'approved', 'scheduled', 'sending')) as pending,
+                    and d.status in ('draft', 'approved', 'scheduled', 'sending')
+                    and d.id <> ${one?.draftId ?? null}::uuid is not false) as pending,
            (exists (select 1 from orbit.dossiers ds where ds.user_id = p.user_id and ds.person_id = p.id
                      and ds.status in ('ready', 'partial')
                      and jsonb_array_length(coalesce(ds.content->'openers', '[]'::jsonb)) > 0)
@@ -12784,7 +12816,59 @@ async function candidateRows(db2, userId) {
       left join orbit.organizations o on o.id = p.org_id
       left join orbit.tie_scores ts on ts.user_id = p.user_id and ts.person_id = p.id
      where p.user_id = ${userId}::uuid and not p.is_self and p.deleted_at is null and p.merged_into is null
-       and coalesce(o.name, p.org_raw) is not null`;
+       and (${one?.personId ?? null}::uuid is null or p.id = ${one?.personId ?? null}::uuid)
+       and (${one?.personId ?? null}::uuid is not null or coalesce(o.name, p.org_raw) is not null)`;
+}
+async function firstTouchSendGate(s, userId, d) {
+  const db2 = s.db;
+  const now = s.now();
+  const rung = await firstTouchRungOf(db2, userId);
+  if (!rung.earned) return { go: false, hold: "needs_tap" };
+  const [goal] = d.goal_id ? await db2.sql`
+        select id, kind, title, targets, autonomy_level, priority from orbit.goals
+         where id = ${d.goal_id}::uuid and user_id = ${userId}::uuid and deleted_at is null and status = 'active'` : [];
+  const [p] = await candidateRows(db2, userId, { personId: d.person_id, draftId: d.id });
+  if (!p) return { go: false, hold: "first_touch:hidden", rule: "hidden" };
+  const rule = firstTouchBlock(
+    {
+      personId: p.id,
+      name: p.display_name,
+      company: p.org,
+      title: p.title,
+      headline: p.headline,
+      isAlumni: p.is_alumni,
+      score: p.score,
+      hasHook: true,
+      hasEmail: !!p.primary_email,
+      hidden: !!p.hidden_at,
+      private: p.private,
+      doNotContact: p.do_not_contact,
+      openChat: p.open_chat,
+      written: p.written,
+      pending: p.pending
+    },
+    { kind: goal?.kind ?? "recruiting", targets: goal?.targets?.organizations ?? [] }
+  );
+  if (rule) return { go: false, hold: `first_touch:${rule}`, rule };
+  const [u2] = await db2.sql`select timezone from orbit.users where id = ${userId}::uuid`;
+  const tz = validZone(u2?.timezone) ?? "America/New_York";
+  const dayStart2 = zonedTime2(dayKeyOf(now, tz), 0, 0, tz);
+  const today = await db2.sql`
+    select coalesce(o.name, p.org_raw) as org from orbit.drafts d
+      join orbit.people p on p.id = d.person_id
+      left join orbit.organizations o on o.id = p.org_id
+     where d.user_id = ${userId}::uuid and d.auto_rung = 'first_touch' and d.status = 'sent' and d.id <> ${d.id}::uuid
+       and d.sent_at >= ${dayStart2}::timestamptz`;
+  const firm = firmKey(p.org);
+  if (firm && today.some((x) => firmKey(x.org) === firm))
+    return {
+      go: false,
+      later: "same_firm_today",
+      until: new Date(
+        nextSendWindow(new Date(now.getTime() + DAY12), validZone(p.timezone) ?? tz, "gmail", s.random).notBefore
+      )
+    };
+  return { go: true };
 }
 async function writeFirstTouch(s, userId, goal, c, ctx) {
   const db2 = s.db;
@@ -12820,7 +12904,7 @@ ${draft.body}`).length)
     return hold("validator", draft.validator?.issues ?? []);
   const hooks = Array.isArray(draft.hooks) ? draft.hooks : [];
   if (!hooks.some((h) => typeof h?.sourceId === "string" && h.sourceId.trim())) return hold("no_hook");
-  const voice = firstMessageVoiceOk(draft, ctx);
+  const voice = await firstMessageVoiceOk(s, ctx.user, draft);
   if (!voice.ok) return hold("voice", voice.problems);
   const [p] = await db2.sql`
     select timezone from orbit.people where id = ${c.personId}::uuid`;
@@ -14952,6 +15036,21 @@ ${d.body}`)) {
     await audit(db2, userId, "system", "draft.hold", d.id, { reason: "goal_paused", goalId: d.goal_id });
     return { status: "held", reason: "goal_paused" };
   }
+  const firstTouchStanding = d.auto_rung === "first_touch" && agentApproved && !userApproved;
+  if (firstTouchStanding) {
+    const gate = await firstTouchSendGate(s, userId, d);
+    if (!gate.go && "later" in gate) return later(gate.later, gate.until);
+    if (!gate.go && (gate.rule === "do_not_contact" || gate.rule === "minor")) {
+      await settle("cancelled", { cancel_reason: gate.rule });
+      await audit(db2, userId, "system", "draft.blocked", d.id, { rule: gate.rule });
+      return { status: "cancelled", reason: gate.rule };
+    }
+    if (!gate.go) {
+      await settle("draft", { error: gate.hold });
+      await audit(db2, userId, "system", "draft.hold", d.id, { reason: gate.hold });
+      return { status: "held", reason: gate.hold };
+    }
+  }
   if (d.channel === "linkedin" && agentApproved && !userApproved) {
     await settle("draft", { error: "linkedin_never_auto" });
     await audit(db2, userId, "system", "draft.hold", d.id, { reason: "linkedin_never_auto" });
@@ -14989,7 +15088,8 @@ ${d.body}`)) {
       timeZone: u2.timezone,
       approvedHash: userApproved ? hash : void 0
     }
-  );
+    // the earned rung is the student's standing approval of a first message, and nothing else it covers
+  ).filter((v) => !(firstTouchStanding && v.rule === "first_message_needs_approval"));
   const forbidden = violations.find((v) => v.kind === "forbidden");
   if (forbidden) {
     await settle("cancelled", { cancel_reason: forbidden.rule });
