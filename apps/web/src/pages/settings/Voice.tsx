@@ -123,7 +123,9 @@ export function VoiceSection() {
 
           <SettingsCard title="Sounds like you" data-testid="voice-score">
             <div className="px-5 py-4 flex items-baseline gap-3">
-              <span className="text-[19px] font-semibold tabular-nums text-ink">{score.value}</span>
+              <span className="shrink-0 whitespace-nowrap text-[19px] font-semibold tabular-nums text-ink">
+                {score.value}
+              </span>
               <span className="text-[12.5px] text-ink-3">{score.line}</span>
             </div>
           </SettingsCard>

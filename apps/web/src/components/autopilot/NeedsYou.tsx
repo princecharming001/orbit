@@ -183,7 +183,7 @@ export function NeedsYou({ user }: { user: User }) {
                 <span className="min-w-0 truncate">{s.reasonText}</span>
                 <button
                   type="button"
-                  className="ml-auto text-[12px] text-ink-3 underline underline-offset-2 hover:text-ink"
+                  className="ml-auto shrink-0 whitespace-nowrap text-[12px] text-ink-3 underline underline-offset-2 hover:text-ink"
                   onClick={() =>
                     db.suggestions.update(s.id, { status: 'done', decidedAt: new Date().toISOString() })
                   }

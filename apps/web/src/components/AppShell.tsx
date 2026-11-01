@@ -27,6 +27,7 @@ import { threadActions, useThread } from '../chat/ui/threadStore';
 import { db } from '../db/schema';
 import { dailyMaintenance } from '../engine/sync';
 import { draftLists, startedDrafts } from '../engine/today';
+import { isServerUser } from '../integrations/orbitApi';
 import { PageLoading, preloadPages } from '../pages/lazyPages';
 import { useSession } from '../state/session';
 import { Avatar, calendarDaysBetween, cx, Skeleton, useToast } from '../ui';
@@ -549,7 +550,9 @@ function AccountMenu({
         {expanded && (
           <div className="min-w-0">
             <div className="font-medium truncate">{user.fullName}</div>
-            <div className="text-[12px] text-ink-3 truncate">{gmail ? 'Gmail connected' : 'Local data'}</div>
+            <div className="text-[12px] text-ink-3 truncate">
+              {gmail ? 'Gmail connected' : isServerUser(user.id) ? 'Orbit account' : 'Local data'}
+            </div>
           </div>
         )}
       </button>
