@@ -46,5 +46,5 @@ jobs:
           name: chat-eval-${{ github.run_id }}
           path: docs/qa/chat-runs/ci
           retention-days: 30
-      - name: The bar (plan 28 §5): no dimension average under 2.5, nothing unsafe or invented
+      - name: 'The bar (plan 28 §5): no dimension average under 2.5, nothing unsafe or invented'
         run: node scripts/chat-eval.mjs docs/qa/chat-runs/ci/_scorecard.json --gate
