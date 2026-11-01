@@ -66,6 +66,7 @@ export const PLAN29_TOOLS = [
   'set_autopilot_mode',
   'autopilot_status',
   'hold_send',
+  'approve_batch',
   'answer_reply',
   'pause_autopilot',
   'list_voice_notes',

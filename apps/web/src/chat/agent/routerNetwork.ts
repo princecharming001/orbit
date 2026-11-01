@@ -428,6 +428,17 @@ export function routeNetwork(text: string, lower: string, h: NetworkHelpers): Ro
       text.match(/^hold (?:the (?:one|message|note) to )(.+)$/i);
     if (m) return h.viaTool('hold_send', { personName: m[1]!.trim() }, undefined, 'hold the send');
   }
+  // approving tomorrow's batch, or one first message in it, to go as planned ("send them" alone stays with drafts)
+  if (
+    /^(?:(?:these|they|both) look good,? )?(?:approve (?:both|all|them|them both|tomorrow'?s batch|the batch)(?: as is| as planned)?|(?:approve|send) (?:both|all|them|them both|tomorrow'?s batch|the batch) in the morning|send tomorrow'?s batch)$/.test(
+      lower,
+    )
+  )
+    return h.viaTool('approve_batch', { all: true }, undefined, 'approve the batch');
+  {
+    const m = text.match(/^approve ([a-z][a-z .'-]*?)(?:'s| one)(?: as is)?$/i);
+    if (m) return h.viaTool('approve_batch', { personName: m[1]!.trim() }, undefined, 'approve the batch');
+  }
   {
     const m =
       text.match(/^(?:answer|reply to|tell) ([A-Z][\w'-]+(?: [A-Z][\w'-]+)?)(?::| that| -)\s*(.+)$/i) ??

@@ -236,6 +236,7 @@ describe('every tool parses and executes its example input against the demo', ()
       set_autopilot_mode: { mode: 'assist' },
       autopilot_status: {},
       hold_send: { all: true },
+      approve_batch: { all: true },
       answer_reply: { personName: 'Dan', answer: 'yes, applied Monday' },
       pause_autopilot: { until: '2026-12-20' },
       list_voice_notes: {},

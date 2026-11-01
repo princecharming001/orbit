@@ -108,6 +108,27 @@ describe('autopilot in the chat, phase 5', () => {
     expect(api.routes()).toContain('/autopilot/status');
   });
 
+  it("approving tomorrow's batch taps each first message waiting for it, at its planned time, never now", async () => {
+    const waiting = api.state.autopilot.queued.filter((q) => q.status === 'needs_tap');
+    expect(waiting.length).toBe(2);
+    const ask = await execute('approve_batch', { all: true }, ctx());
+    expect(ask.kind).toBe('needs_confirmation');
+    const env = await run('approve_batch', { all: true }, ctx());
+    expect(env.kind).not.toBe('error');
+    expect((env.data as { ui: { approved: string[] } }).ui.approved).toEqual(
+      waiting.map((q) => q.personName),
+    );
+    for (const q of waiting) {
+      expect(q.status).toBe('queued');
+      // the planned time in their morning stands: approving is never a send now
+      expect(api.state.drafts.get(q.draftId)?.sendAt).toBe(q.sendAt);
+    }
+    expect(env.summary).not.toMatch(DASH_OR_BANG);
+    // nothing is left waiting, so a second approve says so before asking
+    const again = await execute('approve_batch', { all: true }, ctx());
+    expect(JSON.stringify(again)).toMatch(/Nothing in the batch is waiting for your tap/);
+  });
+
   it("a queued first message says the recipient's clock and the student's when the two differ", async () => {
     const grace = api.state.autopilot.queued.find((q) => q.personName === 'Grace Liu')!;
     grace.sendAt = '2026-10-07T12:40:00.000Z';

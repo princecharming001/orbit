@@ -21,6 +21,7 @@ import {
   LOCAL_AUTOPILOT_NOTE,
   pauseAutopilot,
   setMode,
+  tapBatchItem,
 } from '../../engine/autopilotMode';
 import { whyNotFirstTouch } from '../../engine/autopilotPlan';
 import { listReplies, REPLY_CLASS_LABELS } from '../../engine/replies';
@@ -447,6 +448,81 @@ export const holdSendTool = defineTool({
   toModel,
 });
 
+/** The batch items a tap approves: before the first-message rung, the ones waiting for it, by id, name or all. */
+async function tapTargets(
+  input: { draftId?: string; personName?: string; all?: boolean },
+  ctx: ToolContext,
+): Promise<{ status: AutopilotStatus; items: AutopilotItem[] } | { message: string }> {
+  const r = await autopilotStatus(ctx.user, ctx.now);
+  if (!r.ok) return { message: r.message };
+  const named = namedBy(input.personName ?? '');
+  const waiting = r.status.queued.filter((q) => q.status === 'needs_tap');
+  const items = input.all
+    ? waiting
+    : waiting.filter((q) => q.draftId === input.draftId || named(q.personName));
+  return { status: r.status, items };
+}
+
+export const approveBatchTool = defineTool({
+  name: 'approve_batch',
+  kind: 'risky',
+  description:
+    'Call this when the student approves tomorrow\'s batch, or one first message in it, to go as planned ("approve both", "these look good, send them in the morning", "approve Grace\'s"). Give the draftId or the person\'s name from autopilot_status, or all: true. Only for first messages waiting for their tap; each one goes at its planned time in the recipient\'s morning, never now, and holds with one tap until then. Use this, never send_draft, for a message in the batch.',
+  input: z.object({
+    draftId: z.string().optional().describe('The batch message to approve (from autopilot_status).'),
+    personName: z.string().optional().describe('Who it is to, as the student says it.'),
+    all: z.boolean().optional().describe('Every first message waiting for a tap.'),
+  }),
+  capabilities: ['autopilot_tap'],
+  progress: 'Approving the batch',
+  async summarizeIntent(input, ctx) {
+    const t = await tapTargets(input, ctx);
+    if ('message' in t) return { text: 'Approve the batch.', blockedReason: t.message };
+    if (!t.items.length)
+      return {
+        text: "Approve tomorrow's batch.",
+        blockedReason: t.status.queued.length
+          ? 'Nothing in the batch is waiting for your tap: it goes in the morning as planned.'
+          : "Nothing is in tomorrow's batch.",
+      };
+    const lines = t.items.map(
+      (i) =>
+        `${i.personName}${i.company ? ` at ${i.company}` : ''}, ${whenBoth(i, ctx) ?? 'in their morning'}`,
+    );
+    return {
+      text: `Approve ${plural(t.items.length, 'first message')} to go as planned: ${lines.join('; ')}. Each can still be held until it goes.`,
+    };
+  },
+  async execute(input, ctx) {
+    const t = await tapTargets(input, ctx);
+    if ('message' in t) throw new Error(t.message);
+    const done: AutopilotItem[] = [];
+    const failed: string[] = [];
+    for (const i of t.items) {
+      const r = await tapBatchItem(ctx.user, i);
+      if (r.ok) done.push(i);
+      else failed.push(`${i.personName} (${r.message})`);
+    }
+    const summary = [
+      done.length
+        ? `Approved ${done.map((i) => `${i.personName}, going ${whenBoth(i, ctx) ?? 'in their morning'}`).join('; ')}. Say hold and Orbit keeps ${done.length === 1 ? 'it' : 'them'} until then.`
+        : '',
+      failed.length ? `Could not approve ${failed.join(', ')}.` : '',
+    ]
+      .filter(Boolean)
+      .join(' ');
+    if (!done.length) throw new Error(summary || 'Nothing was approved.');
+    return ok(
+      'text',
+      { approved: done.map((i) => i.personName) },
+      { approved: done.map((i) => i.personName), failed },
+      summary,
+      '/inbox',
+    );
+  },
+  toModel,
+});
+
 export const answerReplyTool = defineTool({
   name: 'answer_reply',
   kind: 'write',
@@ -575,6 +651,7 @@ export const autopilotTools: AnyTool[] = [
   setAutopilotModeTool,
   autopilotStatusTool,
   holdSendTool,
+  approveBatchTool,
   answerReplyTool,
   pauseAutopilotTool,
 ];

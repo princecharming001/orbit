@@ -1908,6 +1908,13 @@ export const CAPABILITIES: readonly Capability[] = [
     utterances: ["hold tomorrow's batch", "don't send the one to Priya", 'hold everything queued'],
   },
   {
+    id: 'autopilot_tap',
+    area: 'Networking agent',
+    title: "Approve tomorrow's batch, or one first message in it, to go in the recipient's morning",
+    kind: 'risky',
+    utterances: ['approve both as is', 'these look good, send them in the morning', "approve Grace's"],
+  },
+  {
     id: 'reply_answer',
     area: 'Networking agent',
     title: 'Answer a question a reply asked, in one line, and Orbit drafts the reply around it',
