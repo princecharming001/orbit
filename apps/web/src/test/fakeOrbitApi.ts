@@ -49,7 +49,12 @@ export interface FakeState {
   rejectPush: Map<string, string>;
   status: {
     counts: Record<string, number>;
-    google: { status: string; backfill: { phase: string | null; done: number; total: number | null } | null };
+    google: {
+      status: string;
+      backfill: { phase: string | null; done: number; total: number | null } | null;
+      /** what /sync/status reports as granted; the send scope lets the server send the account's email */
+      scopes?: string[];
+    };
   };
   goals: Goal[];
   scores: Map<string, { score: number; band: string; explanation: string[] }>;
@@ -603,7 +608,7 @@ export function createFakeOrbitApi(
               provider: 'google',
               status: state.status.google.status,
               email: state.user.email,
-              scopes: [],
+              scopes: state.status.google.scopes ?? [],
               linked: true,
               lastSyncedAt: null,
               lastError: null,
@@ -862,8 +867,15 @@ export function createFakeOrbitApi(
           return error(409, 'needs_confirm', 'LinkedIn messages need a tap to confirm');
         if (/\[ASK USER:/.test(d.body))
           return error(409, 'needs_input', 'answer the question in the draft first');
-        d.status = 'scheduled';
-        d.sendAt = typeof body.sendAt === 'string' ? body.sendAt : iso(clock + 18 * 3600_000);
+        // as the server answers (plan 29 §B2.1): approved, with the student's words and the undo window kept
+        d.status = 'approved';
+        if (typeof body.body === 'string') d.body = body.body;
+        d.sendAt =
+          typeof body.sendAt === 'string'
+            ? body.sendAt
+            : typeof body.undoSec === 'number' && (state.user.autonomyLevel ?? 0) === 0
+              ? iso(Date.now() + body.undoSec * 1000)
+              : iso(clock + 18 * 3600_000);
         // a tap on a first message in tomorrow's batch makes it the student's own (plan 29 §B2.2)
         for (const q of state.autopilot.queued)
           if (q.draftId === d.id && q.status === 'needs_tap') {

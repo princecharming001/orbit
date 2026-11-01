@@ -288,6 +288,11 @@ export interface DraftApproveRequest {
   /** the words as the student left them (plan 29 §B2.4): approving an edited draft records the edit */
   body?: string;
   subject?: string | null;
+  /**
+   * when approving is sending (autopilot off), wait this many seconds first (at most 60) so the student can undo:
+   * the browser's ten seconds, kept when an account's email goes out from the server (plan 29 §B2.1)
+   */
+  undoSec?: number;
 }
 /** POST /drafts/cancel, POST /drafts/discard */
 export interface DraftIdRequest {

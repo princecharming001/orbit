@@ -100,6 +100,29 @@ export async function runApproval(
         },
       },
     });
+  } else if (r.status === 'scheduled') {
+    // an account's email, approved on the server (plan 29 §B2.1): it goes after the undo window, or in their morning
+    const soon = Date.parse(r.sendAt) - Date.now() <= 60_000;
+    const at = new Date(r.sendAt).toLocaleString('en-US', {
+      weekday: 'short',
+      hour: 'numeric',
+      minute: '2-digit',
+      timeZone: user.timezone || undefined,
+    });
+    toast.push({
+      text: soon
+        ? `Sending to ${name} in ${Math.round(UNDO_WINDOW_MS / 1000)} seconds.`
+        : `Approved. Gmail sends it to ${name} ${at}, in their morning.`,
+      ttl: soon ? UNDO_WINDOW_MS - 2000 : 10_000,
+      action: {
+        label: soon ? 'Undo' : 'Stop it',
+        onClick: () => {
+          undoQueued(user, draft.id).then((undone) =>
+            toast.push({ text: undone ? 'Not sent. The draft is back.' : 'Too late, it already went out.' }),
+          );
+        },
+      },
+    });
   } else
     toast.push({
       text: draft.channel === 'linkedin' ? `Sent to ${name} on LinkedIn.` : `Sent to ${name}.`,

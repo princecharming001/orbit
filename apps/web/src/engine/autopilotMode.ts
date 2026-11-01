@@ -30,6 +30,7 @@ import {
 } from '@orbit/core';
 import { db } from '../db/schema';
 import { callApi, isServerUser } from '../integrations/orbitApi';
+import { keepServerDraft } from './serverSync';
 import { approvalStreaks, OFFER_AT } from './trust';
 
 /** What local mode can honestly promise. */
@@ -576,6 +577,7 @@ export async function answerReply(
     });
     if (!r.ok) return { ok: false, message: r.message };
     if (card) await db.suggestions.update(card.id, { status: 'done', decidedAt: now.toISOString() });
+    await keepServerDraft(r.value.draft, user.id);
     return { ok: true, draft: r.value.draft, local: false };
   }
   if (!card?.personId) return { ok: false, message: 'Orbit does not know which reply this answers.' };

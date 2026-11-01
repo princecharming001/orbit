@@ -230,6 +230,53 @@ describe('sending (§8.5, §14.6, §16)', () => {
     expect(Number(row2!.autonomy_level)).toBe(1);
   });
 
+  it("plan 29 §B2.1: an undo window delays a level 0 send; the student can stop it and approve it again, Orbit's own cancel cannot", async () => {
+    const net = fakeNet(google());
+    const call = api(t, net, { env: {} });
+    const { userId, token } = await signedInUser(t);
+    const p = await addPerson(t, userId, { name: 'Una Undo', email: 'una@example.com' });
+    const c = await call<{ draft: { id: string } }>('/drafts/compose', token, {
+      personId: p,
+      kind: 'first_touch',
+      channel: 'gmail',
+    });
+    const id = c.body.draft.id;
+    const r = await call<{ draft: { status: string; sendAt: string } }>('/drafts/approve', token, {
+      draftId: id,
+      undoSec: 10,
+    });
+    // waits out the ten seconds instead of going at once
+    expect(r.body.draft.status).toBe('approved');
+    const wait = new Date(r.body.draft.sendAt).getTime() - Date.now();
+    expect(wait).toBeGreaterThan(5_000);
+    expect(wait).toBeLessThanOrEqual(10_500);
+    expect(sends(net)).toHaveLength(0);
+    // undo: cancelled by the student, and nothing goes even when the job runs
+    const undo = await call<{ draft: { status: string } }>('/drafts/cancel', token, { draftId: id });
+    expect(undo.body.draft.status).toBe('cancelled');
+    expect((await sendDraft(makeServices(agentConfig(net, {}), { db: t.db }), id)).status).toBe('skipped');
+    expect(sends(net)).toHaveLength(0);
+    // approved again, as the student left it: it goes
+    const again = await call<{ draft: { status: string } }>('/drafts/approve', token, { draftId: id });
+    expect(again.status).toBe(200);
+    expect(again.body.draft.status).toBe('sent');
+    expect(sends(net)).toHaveLength(1);
+    // a draft Orbit cancelled (a hard rule) stays cancelled
+    const q = await addPerson(t, userId, { name: 'Vic Rule', email: 'vic@example.com' });
+    const c2 = await call<{ draft: { id: string } }>('/drafts/compose', token, {
+      personId: q,
+      kind: 'first_touch',
+      channel: 'gmail',
+    });
+    await t.db.sql`update orbit.drafts set status = 'cancelled', cancel_reason = 'do_not_contact'
+                    where id = ${c2.body.draft.id}::uuid`;
+    const no = await call<{ error: { code: string } }>('/drafts/approve', token, {
+      draftId: c2.body.draft.id,
+    });
+    expect(no.status).toBe(409);
+    expect(no.body.error.code).toBe('not_approvable');
+  });
+
   it('plan 29 §B2.2: the send job waits for review_until, back in the queue rather than dead-lettered, then sends', async () => {
     const net = fakeNet(google());
     const call = api(t, net, { env: {} });

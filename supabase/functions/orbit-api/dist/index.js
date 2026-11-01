@@ -10867,7 +10867,8 @@ async function approveDraft(s, userId, req) {
   const db2 = s.db;
   let d = await loadDraft(db2, userId, req.draftId);
   if (d.status === "sending" || d.status === "sent") return toServerDraft(d);
-  if (!["draft", "approved", "scheduled", "failed"].includes(d.status))
+  const undone = d.status === "cancelled" && d.cancel_reason === "user";
+  if (!["draft", "approved", "scheduled", "failed"].includes(d.status) && !undone)
     throw new HttpError(409, "not_approvable", `a ${d.status} draft cannot be approved`);
   if (req.body !== void 0 || req.subject !== void 0) d = await applyEdit(db2, d, req);
   const text3 = `${d.subject ?? ""}
@@ -10904,12 +10905,14 @@ ${d.body}`;
     const tz = validZone(p?.timezone) ?? validZone(u2?.timezone) ?? "America/New_York";
     sendAt = new Date(nextSendWindow(now, tz, d.channel, s.random).notBefore);
   } else {
-    sendAt = now;
+    const undoSec = Math.max(0, Math.min(60, Math.floor(Number(req.undoSec) || 0)));
+    sendAt = new Date(now.getTime() + undoSec * 1e3);
   }
   const [row] = await db2.sql`
     update orbit.drafts set status = 'approved', send_at = ${sendAt}::timestamptz, error = null,
                             cancel_reason = null, autonomy_level = ${level}::smallint
-     where id = ${d.id}::uuid and user_id = ${userId}::uuid and status in ('draft', 'approved', 'scheduled', 'failed')
+     where id = ${d.id}::uuid and user_id = ${userId}::uuid
+       and (status in ('draft', 'approved', 'scheduled', 'failed') or (status = 'cancelled' and cancel_reason = 'user'))
     returning *`;
   if (!row) return toServerDraft(await draftById(db2, d.id));
   await recordDraftEdit(db2, row).catch(() => false);
@@ -10959,7 +10962,9 @@ async function applyEdit(db2, d, req) {
   if (body2.trim() === d.body.trim() && (subject ?? null) === (d.subject ?? null)) return d;
   const [row] = await db2.sql`
     update orbit.drafts set body = ${body2.trim()}, subject = ${subject ?? null}
-     where id = ${d.id}::uuid and status in ('draft', 'approved', 'scheduled', 'failed') returning *`;
+     where id = ${d.id}::uuid
+       and (status in ('draft', 'approved', 'scheduled', 'failed') or (status = 'cancelled' and cancel_reason = 'user'))
+     returning *`;
   return row ?? d;
 }
 async function cancelDraft(db2, userId, draftId) {
@@ -11376,6 +11381,7 @@ async function approve(ctx) {
     draftId: uuid(b, "draftId"),
     sendAt: typeof b.sendAt === "string" ? b.sendAt : void 0,
     confirm: b.confirm === true,
+    ...typeof b.undoSec === "number" ? { undoSec: b.undoSec } : {},
     // the words as the student left them (plan 29 §B2.4)
     ...b.body !== void 0 ? { body: b.body } : {},
     ...b.subject !== void 0 ? { subject: b.subject } : {}

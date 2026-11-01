@@ -5,6 +5,7 @@
  */
 import type { ReplyClass, ReplyItem, ServerDraft, Slot, User } from '@orbit/core';
 import { callApi, isAccountMode, isServerUser, NO_SERVER, SIGN_IN_FIRST } from '../integrations/orbitApi';
+import { keepServerDraft } from './serverSync';
 
 export const REPLY_CLASS_LABELS: Record<ReplyClass, string> = {
   interested: 'Interested',
@@ -43,7 +44,9 @@ export async function draftReply(
 ): Promise<{ ok: true; draft: ServerDraft } | Fail> {
   if (!isServerUser(user.id)) return notHere();
   const r = await callApi('/replies/draft', { messageId });
-  return r.ok ? { ok: true, draft: r.value.draft } : { ok: false, message: r.message };
+  if (!r.ok) return { ok: false, message: r.message };
+  await keepServerDraft(r.value.draft, user.id);
+  return { ok: true, draft: r.value.draft };
 }
 
 /** The draft still asks the student for a fact ([ASK USER: …], §8.6): it cannot be approved yet. */
@@ -109,6 +112,7 @@ export async function approveServerDraft(
     ...(draft.channel === 'linkedin' ? { confirm: true } : {}),
   });
   if (!r.ok) return { ok: false, message: r.message };
+  await keepServerDraft(r.value.draft, user.id);
   return { ok: true, draft: r.value.draft, text: approvedText(r.value.draft, user.timezone) };
 }
 

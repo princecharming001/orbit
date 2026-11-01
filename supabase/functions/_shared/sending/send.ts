@@ -133,7 +133,9 @@ export async function approveDraft(
   const db = s.db;
   let d = await loadDraft(db, userId, req.draftId);
   if (d.status === 'sending' || d.status === 'sent') return toServerDraft(d);
-  if (!['draft', 'approved', 'scheduled', 'failed'].includes(d.status))
+  // a draft the student stopped themselves (an undo) can be approved again; one Orbit cancelled cannot
+  const undone = d.status === 'cancelled' && d.cancel_reason === 'user';
+  if (!['draft', 'approved', 'scheduled', 'failed'].includes(d.status) && !undone)
     throw new HttpError(409, 'not_approvable', `a ${d.status} draft cannot be approved`);
   // the words as the student left them (plan 29 §B2.4): approved as edited, and the edit kept for the voice
   if (req.body !== undefined || req.subject !== undefined) d = await applyEdit(db, d, req);
@@ -172,13 +174,15 @@ export async function approveDraft(
     const tz = validZone(p?.timezone) ?? validZone(u?.timezone) ?? 'America/New_York';
     sendAt = new Date(nextSendWindow(now, tz, d.channel, s.random).notBefore);
   } else {
-    // level 0: the student sends, so approving is sending
-    sendAt = now;
+    // level 0: the student sends, so approving is sending, after the undo window when the app asks for one
+    const undoSec = Math.max(0, Math.min(60, Math.floor(Number(req.undoSec) || 0)));
+    sendAt = new Date(now.getTime() + undoSec * 1000);
   }
   const [row] = await db.sql<DraftRow>`
     update orbit.drafts set status = 'approved', send_at = ${sendAt}::timestamptz, error = null,
                             cancel_reason = null, autonomy_level = ${level}::smallint
-     where id = ${d.id}::uuid and user_id = ${userId}::uuid and status in ('draft', 'approved', 'scheduled', 'failed')
+     where id = ${d.id}::uuid and user_id = ${userId}::uuid
+       and (status in ('draft', 'approved', 'scheduled', 'failed') or (status = 'cancelled' and cancel_reason = 'user'))
     returning *`;
   if (!row) return toServerDraft((await draftById(db, d.id))!);
   await recordDraftEdit(db, row).catch(() => false);
@@ -232,7 +236,9 @@ async function applyEdit(db: Db, d: DraftRow, req: Partial<DraftApproveRequest>)
   if (body.trim() === d.body.trim() && (subject ?? null) === (d.subject ?? null)) return d;
   const [row] = await db.sql<DraftRow>`
     update orbit.drafts set body = ${body.trim()}, subject = ${subject ?? null}
-     where id = ${d.id}::uuid and status in ('draft', 'approved', 'scheduled', 'failed') returning *`;
+     where id = ${d.id}::uuid
+       and (status in ('draft', 'approved', 'scheduled', 'failed') or (status = 'cancelled' and cancel_reason = 'user'))
+     returning *`;
   return row ?? d;
 }
 

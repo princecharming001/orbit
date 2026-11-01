@@ -56,6 +56,7 @@ async function approve(ctx: Ctx): Promise<Response> {
     draftId: uuid(b, 'draftId'),
     sendAt: typeof b.sendAt === 'string' ? b.sendAt : undefined,
     confirm: b.confirm === true,
+    ...(typeof b.undoSec === 'number' ? { undoSec: b.undoSec } : {}),
     // the words as the student left them (plan 29 §B2.4)
     ...(b.body !== undefined ? { body: b.body as string } : {}),
     ...(b.subject !== undefined ? { subject: b.subject as string | null } : {}),

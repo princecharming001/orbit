@@ -396,6 +396,15 @@ function withPullLock<T>(fn: () => Promise<T>): Promise<T> {
 }
 
 /** Pull every page of changes since the stored cursor. One pull at a time, in this tab and across tabs. */
+/**
+ * A draft a route just changed (an answer filled in, an approval, a reply drafted), written into this browser at once:
+ * the chat's draft tools and the Drafts page read Dexie, and the next pull may be minutes away. Never fails the action.
+ */
+export async function keepServerDraft(draft: unknown, userId: string): Promise<void> {
+  if (!draft || typeof draft !== 'object') return;
+  await writeFromServer('drafts', [draft as Record<string, unknown>], userId).catch(() => 0);
+}
+
 export function pullNow(userId: string, opts: { signal?: AbortSignal } = {}): Promise<PullOutcome> {
   pulling ??= withPullLock(async () => {
     // local edits go up first, so the rows that come down already carry them

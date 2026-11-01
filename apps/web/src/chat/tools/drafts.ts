@@ -25,6 +25,7 @@ import {
   restorePerson,
   revertHandoff,
   reviewDraft,
+  serverEmailId,
   snapshotPerson,
   undoQueued,
 } from '../../engine/send';
@@ -505,14 +506,20 @@ async function sendIntent(
   copy: boolean,
 ) {
   const person = await requirePerson(ctx, draft.personId);
-  const [env, direct] = await Promise.all([draftEnvelope(draft), googleSendActive(ctx.user.id)]);
+  const [env, direct, fromServer] = await Promise.all([
+    draftEnvelope(draft),
+    googleSendActive(ctx.user.id),
+    copy ? undefined : serverEmailId(ctx.user, draft),
+  ]);
   const how =
     draft.channel === 'gmail'
       ? copy
         ? 'copied for you to paste into Gmail, then marked as waiting for your I sent it'
-        : direct
-          ? 'sent by Gmail after a 10 second undo window'
-          : `opened in your mail app addressed to ${draft.toEmail ?? person.firstName}, then marked as waiting for your I sent it`
+        : fromServer
+          ? 'sent by Gmail from your account, and you can stop it until it goes'
+          : direct
+            ? 'sent by Gmail after a 10 second undo window'
+            : `opened in your mail app addressed to ${draft.toEmail ?? person.firstName}, then marked as waiting for your I sent it`
       : 'copied and opened on LinkedIn, then marked as waiting for your I sent it';
   const subj =
     draft.channel === 'gmail'
@@ -521,7 +528,7 @@ async function sendIntent(
         : ` with the subject "${(subject ?? draft.subject ?? '').trim() || 'none yet'}"`
       : '';
   const text = `Send the ${MESSAGE_KIND_LABELS[draft.kind].toLowerCase()} to ${person.displayName}: ${how}${subj}. It starts: "${firstLine(body) ?? ''}"`;
-  return { person, env, direct, text };
+  return { person, env, direct: direct || !!fromServer, text };
 }
 
 export const sendDraft = defineTool({
@@ -622,7 +629,7 @@ export const sendDraft = defineTool({
       subjectToPaste: fresh.status === 'handed_off' && fresh.channel === 'gmail' ? fresh.subject : undefined,
       notes,
       next:
-        fresh.status === 'queued'
+        fresh.status === 'queued' || fresh.status === 'approved'
           ? { tool: 'undo_send', input: { draftId: fresh.id } }
           : fresh.status === 'handed_off'
             ? { tool: 'confirm_handoff', input: { draftId: fresh.id } }
@@ -631,18 +638,22 @@ export const sendDraft = defineTool({
     // The mailto summary already says it opened in the mail app, so drop the toast that only repeats that
     // (keep any other toast, e.g. the "browser blocked the tab" fallback).
     const extraNotes = notes.filter((n) => !/^opened in your mail app\.?$/i.test(n.trim())).join(' ');
+    // approved on the server (plan 29 §B2.1): soon after the undo window, or in their morning
+    const soon = !!fresh.sendAt && Date.parse(fresh.sendAt) - ctx.now.getTime() <= 60_000;
     const summary =
-      fresh.status === 'queued'
+      fresh.status === 'queued' || (fresh.status === 'approved' && soon)
         ? `Sending to ${person.firstName} in 10 seconds through Gmail. Say undo to stop it; after that it is sent.`
-        : fresh.status === 'sent'
-          ? `Sent to ${person.firstName}.`
-          : fresh.status === 'handed_off'
-            ? fresh.handoffVia === 'copy'
-              ? `The text is ready to paste into Gmail${fresh.subject ? ` with the subject "${fresh.subject}"` : ''}. Once it is sent, say so and Orbit logs it.`
-              : fresh.channel === 'gmail'
-                ? `Opened in the mail app addressed to ${person.firstName}. Once it is sent, say so and Orbit logs it.${extraNotes ? ` ${extraNotes}` : ''}`
-                : `${notes.join(' ') || 'Copied and opened on LinkedIn.'} Once it is sent, say so and Orbit logs it.`
-            : `The message is ${fresh.status}.`;
+        : fresh.status === 'approved'
+          ? `Approved. Gmail sends it to ${person.firstName} ${fmtWhen(fresh.sendAt, ctx) ?? 'soon'}, in their morning. Say stop and Orbit holds it until then.`
+          : fresh.status === 'sent'
+            ? `Sent to ${person.firstName}.`
+            : fresh.status === 'handed_off'
+              ? fresh.handoffVia === 'copy'
+                ? `The text is ready to paste into Gmail${fresh.subject ? ` with the subject "${fresh.subject}"` : ''}. Once it is sent, say so and Orbit logs it.`
+                : fresh.channel === 'gmail'
+                  ? `Opened in the mail app addressed to ${person.firstName}. Once it is sent, say so and Orbit logs it.${extraNotes ? ` ${extraNotes}` : ''}`
+                  : `${notes.join(' ') || 'Copied and opened on LinkedIn.'} Once it is sent, say so and Orbit logs it.`
+              : `The message is ${fresh.status}.`;
     return ok('draft', out, out, summary, `/inbox?draft=${fresh.id}`);
   },
   toModel,
@@ -664,7 +675,7 @@ export const undoSend = defineTool({
     return {
       text: `Stop the email to ${p?.displayName ?? 'them'} before Gmail sends it. It goes back to a draft.`,
       blockedReason:
-        d.status !== 'queued'
+        d.status !== 'queued' && d.status !== 'approved'
           ? d.status === 'sent'
             ? 'Too late, it already went out.'
             : 'This message is not waiting to be sent.'

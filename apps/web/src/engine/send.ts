@@ -30,11 +30,13 @@ import { usesMockConnectors } from '../integrations/connectorsMock';
 import {
   canSendWith,
   currentGoogleToken,
+  GMAIL_SEND_SCOPE,
   gmailGet,
   gmailHeaders,
   gmailSend,
   messageIdTokens,
 } from '../integrations/google';
+import { callApi, isServerUser } from '../integrations/orbitApi';
 import { AUTOPILOT_GAP_MIN, nextSlotAfter } from './autopilotTime';
 import { evaluateImmediateSuggestions, findReferrerFor } from './brief';
 import { checkIntroNote } from './introNote';
@@ -477,6 +479,8 @@ export type HandoffVia = 'mailto' | 'linkedin_compose' | 'linkedin_connect' | 'c
 
 export type ApproveResult =
   | { ok: true; status: 'queued'; sendAt: string }
+  /** an account's email, approved on the server, which sends it at `sendAt` (plan 29 §B2.1) */
+  | { ok: true; status: 'scheduled'; sendAt: string }
   | { ok: true; status: 'sent' }
   | { ok: true; status: 'handed_off'; handoffUrl: string; via: HandoffVia; threaded: boolean }
   | { ok: false; error: string; issues?: DraftIssue[] };
@@ -493,6 +497,55 @@ export async function googleSendActive(userId: string): Promise<boolean> {
     .first();
   if (!g) return false;
   return canSendWith(g.scopes) && canSendWith(currentGoogleToken()?.scopes);
+}
+
+/**
+ * Plan 29 §B2.1: for an account, the server is the sender (the worker, with the Gmail token in the Vault) whenever its
+ * Google connection may send. The id the draft has there, or undefined when this message goes out from the browser.
+ */
+export async function serverEmailId(
+  user: Pick<User, 'id'>,
+  msg: Pick<OutboundMessage, 'id' | 'channel'>,
+): Promise<string | undefined> {
+  if (msg.channel !== 'gmail' || !isServerUser(user.id)) return undefined;
+  const sync = await import('./serverSync');
+  const id = sync.serverIdOf(msg.id);
+  if (!id) return undefined;
+  const status = sync.syncStatusNow() ?? (await sync.refreshSyncStatus().catch(() => undefined));
+  const g = sync.googleStatus(status);
+  return g && g.status === 'active' && g.scopes.includes(GMAIL_SEND_SCOPE) ? id : undefined;
+}
+
+/**
+ * Approve on the server: the words as the student left them, the undo window when approving is sending, the answer
+ * written back into this browser. Undefined when the server does not have this draft (the browser sends it then).
+ */
+async function approveOnServer(
+  user: User,
+  msg: OutboundMessage,
+  serverId: string,
+  body: string,
+  subject: string | undefined,
+  undoMs: number,
+): Promise<ApproveResult | undefined> {
+  const sync = await import('./serverSync');
+  // a draft made in this browser goes up first
+  await sync.flushQueue().catch(() => undefined);
+  const r = await callApi('/drafts/approve', {
+    draftId: serverId,
+    body,
+    ...(subject !== undefined ? { subject } : {}),
+    undoSec: Math.round(undoMs / 1000),
+  });
+  if (!r.ok) return r.code === 'not_found' ? undefined : { ok: false, error: r.message };
+  await sync.keepServerDraft(r.value.draft, user.id);
+  await audit(user.id, 'message.approved', {
+    objectTable: 'outbound',
+    objectId: msg.id,
+    metadata: { channel: msg.channel, kind: msg.kind, sendAt: r.value.draft.sendAt, server: true },
+  });
+  if (r.value.draft.status === 'sent') return { ok: true, status: 'sent' };
+  return { ok: true, status: 'scheduled', sendAt: r.value.draft.sendAt ?? new Date().toISOString() };
 }
 
 /** Atomically move a message from one of `from` to `changes.status`; undefined when it was not in `from`. */
@@ -607,6 +660,21 @@ export async function approveAndSend(
         ? 'Orbit could not find the subject of this thread. Reply from Gmail instead.'
         : 'Add a subject line.',
     };
+  // an account's email goes out from the server, in the recipient's window or after the undo window (plan 29 §B2.1)
+  if (!opts.via && !opts.scheduleAt) {
+    const serverId = await serverEmailId(user, msg);
+    if (serverId) {
+      const viaServer = await approveOnServer(
+        user,
+        msg,
+        serverId,
+        note ? withNote(bodyFinal, note) : bodyFinal,
+        env.threaded ? undefined : env.subject,
+        opts.undoWindowMs ?? UNDO_WINDOW_MS,
+      );
+      if (viaServer) return viaServer;
+    }
+  }
   // Orbit sends it itself, after the undo window: email through Gmail, LinkedIn through the student's own account
   const direct =
     !opts.via &&
@@ -752,6 +820,18 @@ export function withoutNote(body: string, note: string | undefined): string {
 
 /** Undo a queued send inside the window: back to an editable draft; the suggestion stays where it was. */
 export async function undoQueued(user: User, messageId: string): Promise<boolean> {
+  // approved on the server (plan 29 §B2.1): the server stops it, and the student can approve it again
+  const held = await db.outbound.get(messageId);
+  if (held?.userId === user.id && held.status === 'approved' && isServerUser(user.id)) {
+    const sync = await import('./serverSync');
+    const id = sync.serverIdOf(messageId);
+    if (!id) return false;
+    const r = await callApi('/drafts/cancel', { draftId: id });
+    if (!r.ok) return false;
+    await sync.keepServerDraft(r.value.draft, user.id);
+    await audit(user.id, 'message.undone', { objectTable: 'outbound', objectId: messageId });
+    return r.value.draft.status === 'cancelled';
+  }
   const m = await transition(messageId, ['queued'], {
     status: 'draft',
     sendAt: undefined,
