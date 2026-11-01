@@ -1924,7 +1924,8 @@ export const CAPABILITIES: readonly Capability[] = [
   {
     id: 'voice_notes',
     area: 'Networking agent',
-    title: 'See what Orbit learned about how you write (not yet: Settings, Voice lands in phase 4)',
+    title:
+      'See what Orbit learned about how you write: your style in sentences and the notes from your edits',
     kind: 'read',
     utterances: [
       'what have you learned about how I write',
@@ -1935,7 +1936,7 @@ export const CAPABILITIES: readonly Capability[] = [
   {
     id: 'voice_forget',
     area: 'Networking agent',
-    title: 'Forget one thing Orbit learned about how you write (not yet: phase 4)',
+    title: 'Forget one thing Orbit learned about how you write, so it is never learned again',
     kind: 'write',
     utterances: [
       "forget the note about 'Thanks either way'",

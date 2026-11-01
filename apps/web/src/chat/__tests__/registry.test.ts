@@ -82,9 +82,6 @@ const CSV = `First Name,Last Name,URL,Email Address,Company,Position,Connected O
 Tara,Nguyen,https://www.linkedin.com/in/tara-nguyen-demo,,Brex,Associate Product Manager,01 Oct 2026
 `;
 
-/** Tools that say "not yet" by design until a later phase lands them. */
-const NOT_YET = new Set(['list_voice_notes', 'forget_voice_note']);
-
 describe('every tool parses and executes its example input against the demo', () => {
   it('runs each tool once, in an order that keeps the demo usable', async () => {
     const ids = await demoIds();
@@ -273,10 +270,6 @@ describe('every tool parses and executes its example input against the demo', ()
       if (spec.kind === 'risky') {
         expect(env.kind, `${name}: ${env.summary}`).toBe('needs_confirmation');
         expect(env.confirmationId).toMatch(/^conf_/);
-      } else if (NOT_YET.has(name)) {
-        // plan 29 phase 3: the voice tools are honest stubs until Settings, Voice lands (phase 4)
-        expect(env.kind, `${name}: ${env.summary}`).toBe('error');
-        expect(env.summary).toMatch(/yet/);
       } else {
         expect(env.kind, `${name}: ${env.summary}`).not.toBe('error');
         expect(env.kind).not.toBe('needs_confirmation');

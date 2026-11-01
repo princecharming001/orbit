@@ -207,12 +207,12 @@ export const CAP_EXPECT: Record<string, Expect> = Object.fromEntries([
   also('memory_recall', ['recall', 'get_person']),
   also('memory_forget', ['forget'], ANSWER),
   // plan 29 Part B (phase 3): the mode is a confirm, the status answers, a hold or an answer with nothing waiting
-  // says so in words, the voice tools say "not yet" until phase 4
+  // says so in words; the voice (phase 4) lists the notes, and a forget with no note named asks which in words
   also('autopilot_mode', ['set_autopilot_mode', 'set_autonomy']),
   also('autopilot_status', ['autopilot_status', 'list_due'], ANSWER),
   also('autopilot_hold', ['hold_send', 'autopilot_status'], ANSWER),
   also('reply_answer', ['answer_reply', 'list_replies'], ANSWER),
   also('autopilot_pause', ['pause_autopilot', 'pause_outreach']),
-  also('voice_notes', ['list_voice_notes'], { error: true }),
-  also('voice_forget', ['forget_voice_note'], { error: true }),
+  also('voice_notes', ['list_voice_notes']),
+  also('voice_forget', ['forget_voice_note', 'list_voice_notes'], ANSWER),
 ]);

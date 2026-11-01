@@ -164,13 +164,8 @@ describe('sim scenarios', () => {
     const autopilot = SCENARIOS.filter((s) => s.group === 'autopilot');
     expect(friends).toHaveLength(12);
     expect(autopilot).toHaveLength(15);
-    // phase 3 landed the autopilot tools: only the two voice scenarios still wait (phase 4)
-    expect(
-      autopilot
-        .filter((s) => s.pending)
-        .map((s) => s.id)
-        .sort(),
-    ).toEqual(['ap-forget-note', 'ap-what-learned-voice']);
+    // phase 4 landed the voice tools: no autopilot scenario waits any more
+    expect(autopilot.filter((s) => s.pending).map((s) => s.id)).toEqual([]);
     for (const s of [...friends, ...autopilot]) {
       expect(s.reference?.length ?? 0, s.id).toBeGreaterThan(80);
       expect(s.noWeb, s.id).toBe(true);

@@ -2,7 +2,7 @@
  * Autopilot in the chat (plan 29 §B5): the mode (three words, confirmed), the status (what went out today, what goes
  * tomorrow, what needs the student, why something was held), a hold, the student's answer to a question a reply
  * asked, and the pause. One engine call each (engine/autopilotMode.ts), which reads the server for an account and this
- * browser otherwise. The two voice tools are stubs until phase 4 lands Settings, Voice: they say so plainly.
+ * browser otherwise. What Orbit learned about how the student writes has its own tools (tools/voice.ts).
  */
 import type { AutopilotItem, AutopilotMode } from '@orbit/core';
 import { AUTOPILOT_MODE_LEVEL, MESSAGE_KIND_LABELS, REPLY_NEXT_ACTION } from '@orbit/core';
@@ -18,7 +18,7 @@ import {
 import { listReplies, REPLY_CLASS_LABELS } from '../../engine/replies';
 import { isServerUser } from '../../integrations/orbitApi';
 import { z } from '../../zod';
-import type { ResultEnvelope, ToolContext } from '../types';
+import type { ToolContext } from '../types';
 import { type AnyTool, clip, defineTool, err, ok, plural, toModel, wrapped } from './_shared';
 
 /** What each mode means, in the student's words (plan 29 §B1). */
@@ -327,39 +327,6 @@ export const pauseAutopilotTool = defineTool({
   toModel,
 });
 
-const NOT_YET: ResultEnvelope = err(
-  'Orbit does not keep voice notes yet. What it learned from your edits lands with Settings, Voice in the next phase; until then the drafts follow your style card and your own words from onboarding.',
-  { notYet: true, phase: 4 },
-);
-
-export const listVoiceNotesTool = defineTool({
-  name: 'list_voice_notes',
-  kind: 'read',
-  description:
-    'Call this when the student asks what Orbit has learned about how they write. Not available yet: it says so honestly.',
-  input: z.object({}),
-  capabilities: ['voice_notes'],
-  progress: 'Reading your voice notes',
-  async execute() {
-    return NOT_YET;
-  },
-  toModel,
-});
-
-export const forgetVoiceNoteTool = defineTool({
-  name: 'forget_voice_note',
-  kind: 'write',
-  description:
-    'Call this when the student wants Orbit to forget something it learned about how they write. Not available yet: it says so honestly.',
-  input: z.object({ note: z.string().max(300).optional().describe('The note, as the student says it.') }),
-  capabilities: ['voice_forget'],
-  progress: 'Forgetting the note',
-  async execute() {
-    return NOT_YET;
-  },
-  toModel,
-});
-
 /** What a class means for the next step, for draft_reply and the chat's explanations. */
 export function nextStepText(cls: keyof typeof REPLY_NEXT_ACTION): string {
   return clip(REPLY_NEXT_ACTION[cls].summary, 300) ?? '';
@@ -371,6 +338,4 @@ export const autopilotTools: AnyTool[] = [
   holdSendTool,
   answerReplyTool,
   pauseAutopilotTool,
-  listVoiceNotesTool,
-  forgetVoiceNoteTool,
 ];

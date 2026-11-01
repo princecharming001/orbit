@@ -50,8 +50,11 @@ export interface Scenario {
 }
 
 /** The chat tools plan 29 §A5 and §B5 name; a pending scenario may expect these before the registry has them. */
-/** Plan 29 tools that exist as honest "not yet" stubs until phase 4 (Settings, Voice): their scenarios stay pending. */
-export const PLAN29_STUBS = ['list_voice_notes', 'forget_voice_note'] as const;
+/**
+ * Plan 29 tools that exist as honest "not yet" stubs: their scenarios stay pending. None is left since phase 4 made the
+ * voice tools real.
+ */
+export const PLAN29_STUBS: readonly string[] = [];
 
 export const PLAN29_TOOLS = [
   'list_friends',
@@ -1631,7 +1634,6 @@ const PLAN29: Scenario[] = [
     reference: VOICE_NOTES,
     noWeb: true,
     minGoal: 'yes',
-    pending: 'plan29',
   },
   {
     id: 'ap-forget-note',
@@ -1645,7 +1647,6 @@ const PLAN29: Scenario[] = [
     reference: VOICE_NOTES,
     noWeb: true,
     minGoal: 'partly',
-    pending: 'plan29',
   },
   {
     id: 'ap-assist-vs-autopilot',
