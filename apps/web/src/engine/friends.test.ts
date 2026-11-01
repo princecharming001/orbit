@@ -24,6 +24,7 @@ import {
   throughFriendsLine,
 } from './friends';
 import { clearPathCacheForTests } from './paths';
+import { flushQueue } from './serverSync';
 
 const DASH_OR_BANG = /[—–!]/;
 
@@ -132,6 +133,8 @@ describe('friends against the fake orbit-api', () => {
     );
   });
   afterEach(async () => {
+    // the people written above in account mode queued outbox writes: let them land before the next test wipes Dexie
+    await flushQueue().catch(() => undefined);
     await leaveFakeApi();
   });
 

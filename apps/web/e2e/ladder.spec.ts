@@ -122,9 +122,11 @@ test.describe('the trust ladder', () => {
       .catch(async (e) => {
         throw new Error(`${String(e)}\nlast auto-send answer: ${await why()}`);
       });
-    const row = sent.getByTestId('sent-for-you-row').first();
+    // one item per message: the row (who and Undo) and, under it, when it goes
+    const item = sent.getByTestId('sent-item').first();
+    const row = item.getByTestId('sent-for-you-row');
     await expect(row).toContainText(name);
-    await expect(row.getByTestId('sent-for-you-when')).toHaveText(/^(Sending in \d+ s|Goes .+ their time)$/);
+    await expect(item.getByTestId('sent-for-you-when')).toHaveText(/^(Sending in \d+ s|Goes .+ their time)$/);
     // Undo puts it back in the student's hands
     await row.getByTestId('sent-for-you-undo').click();
     await expect(page.getByTestId('toasts')).toContainText('Not sent. The draft is back in Drafts.');
