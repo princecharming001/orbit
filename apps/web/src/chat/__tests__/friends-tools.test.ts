@@ -112,6 +112,20 @@ describe('friends tools against the fake orbit-api', () => {
     await leaveFakeApi();
   });
 
+  it("preview_my_shares: the student's own rows as a friend sees them, never an address", async () => {
+    const env = await execute('preview_my_shares', {}, ctx());
+    expect(env.kind).toBe('list');
+    const m = modelResult('preview_my_shares', env) as {
+      data: { total: number; rows: Record<string, unknown>[] };
+    };
+    expect(m.data.total).toBe(api.state.ownShares.length);
+    expect(m.data.rows.length).toBeGreaterThan(0);
+    for (const row of m.data.rows)
+      expect(Object.keys(row)).toEqual(['name', 'title', 'company', 'school', 'alum', 'closeness']);
+    expect(env.summary).toMatch(/Never an email, note or draft/);
+    expect(env.summary).not.toMatch(/[—–!]/);
+  });
+
   it('list_friends: Ana with her counts, what crosses, and who she knows at a company', async () => {
     const env = await execute('list_friends', {}, ctx());
     expect(env.kind).toBe('list');
@@ -126,6 +140,18 @@ describe('friends tools against the fake orbit-api', () => {
     // nothing of Ana's people beyond the projection: no address anywhere
     expect(JSON.stringify(m)).not.toMatch(/@/);
     const stripe = await execute('list_friends', { company: 'Stripe' }, ctx());
+    // the student's own best way in there is handed over, so a friend route is weighed against it
+    const own = (modelResult('list_friends', stripe) as { data: { yourOwnBest?: { name: string } } }).data
+      .yourOwnBest;
+    const best = (
+      await db.people
+        .where('userId')
+        .equals(user.id)
+        .filter((p) => /stripe/i.test(p.currentOrganizationRaw ?? ''))
+        .toArray()
+    ).sort((a, b) => (b.tieScore ?? 0) - (a.tieScore ?? 0))[0];
+    expect(own).toBeDefined();
+    expect(own?.name).toBe(best?.displayName);
     expect(stripe.summary).toMatch(
       /At Stripe: Ana knows Dan Lee \(is close to Dan\), Maya Chen \(knows Maya well\)/,
     );

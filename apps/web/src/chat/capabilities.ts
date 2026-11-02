@@ -1964,6 +1964,13 @@ export const CAPABILITIES: readonly Capability[] = [
     ],
   },
   {
+    id: 'friend_preview',
+    area: 'Networking agent',
+    title: 'See your own people exactly as a friend sees them, row for row',
+    kind: 'read',
+    utterances: ['show what Ana sees', 'what does a friend see of my network', 'preview my share'],
+  },
+  {
     id: 'friend_invite',
     area: 'Networking agent',
     title: 'Invite a friend to pool networks',

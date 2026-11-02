@@ -243,6 +243,7 @@ describe('every tool parses and executes its example input against the demo', ()
       forget_voice_note: { note: 'Thanks either way' },
       // plan 29 Part A: friends; in the demo each says it needs an account, the risky ones ask first
       list_friends: {},
+      preview_my_shares: {},
       invite_friend: { email: 'noah.patel@cornell.edu' },
       set_friend_sharing: { mode: 'none' },
       ask_friend_for_intro: {

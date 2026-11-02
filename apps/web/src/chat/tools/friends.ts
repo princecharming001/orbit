@@ -16,6 +16,7 @@ import {
   inviteFriend,
   listAsks,
   listFriends,
+  previewShares,
   respondToAsk,
   SHARE_MODE_LABELS,
   setShareMode,
@@ -128,6 +129,22 @@ export const listFriendsTool = defineTool({
           });
       }
     }
+    // the student's own best way in there, by tie score, so a friend route is weighed against it and never guessed
+    const co = input.company?.trim().toLowerCase();
+    const own = co
+      ? (
+          await db.people
+            .where('userId')
+            .equals(ctx.user.id)
+            .filter((p) => !!p.isHuman && (p.currentOrganizationRaw ?? '').toLowerCase().includes(co))
+            .toArray()
+        ).sort((a, b) => (b.tieScore ?? 0) - (a.tieScore ?? 0))[0]
+      : undefined;
+    const alsoBy = own
+      ? at
+          .filter((a) => a.people.some((p) => p.name.toLowerCase() === own.displayName.toLowerCase()))
+          .map((a) => a.friend)
+      : [];
     const waiting = pending.filter((p) => p.direction === 'in');
     const lead = friends.length
       ? `${plural(friends.length, 'friend')} on Orbit: ${friends.map((f) => `${first(f.name)} (${friendLine(f)})`).join('; ')}.`
@@ -175,6 +192,15 @@ export const listFriendsTool = defineTool({
           status: a.status,
         })),
         atCompany: at.length ? at : undefined,
+        yourOwnBest: own
+          ? {
+              personId: own.id,
+              name: own.displayName,
+              title: own.currentTitle ?? null,
+              tieScore: own.tieScore,
+              alsoKnownBy: alsoBy.length ? alsoBy : undefined,
+            }
+          : undefined,
         whatAFriendSees: FRIENDS_WHAT_CROSSES,
         next: 'ask_friend_for_intro asks the friend with a note they forward; respond_to_friend_ask forwards an ask in asksToYou; set_friend_sharing changes what you share',
       },
@@ -445,8 +471,58 @@ export const respondToFriendAskTool = defineTool({
   toModel,
 });
 
+const CLOSENESS_WORD = { 1: 'knows', 2: 'knows well', 3: 'close' } as const;
+
+export const previewMySharesTool = defineTool({
+  name: 'preview_my_shares',
+  kind: 'read',
+  description:
+    'Call this when the student wants to see what a friend sees of their network, row for row ("show what Ana sees", "what does my share look like"). It returns the student\'s own people exactly as any friend sees them: name, title, company, school, alum or not, and the closeness word, never an email, note or draft. Every friend sees the same rows. Needs an Orbit account; without one it says so.',
+  input: z.object({}),
+  capabilities: ['friend_preview'],
+  progress: 'Reading what your friends see',
+  async execute(_input, ctx): Promise<ResultEnvelope> {
+    if (!friendsAvailable(ctx.user)) return needsAccount('Friends');
+    const r = await previewShares(ctx.user);
+    if (!r.ok) throw new Error(r.message);
+    const { shares, total, mode } = r.value;
+    const rows = shares.slice(0, 8).map((s) => ({
+      name: s.displayName,
+      title: s.title,
+      company: s.company,
+      school: s.school,
+      alum: s.isAlumni,
+      closeness: CLOSENESS_WORD[s.closeness] ?? 'knows',
+    }));
+    const items = rows.map((x) => ({
+      text: x.name,
+      sub: [
+        x.title && x.company ? `${x.title} at ${x.company}` : (x.title ?? x.company),
+        x.alum ? 'your alum' : x.school,
+      ]
+        .filter(Boolean)
+        .join(' · '),
+      chip: x.closeness,
+      href: '/friends',
+      avatar: { name: x.name, src: undefined } as { name: string; src?: string },
+    }));
+    const summary = total
+      ? `A friend sees ${plural(total, 'person', 'people')} of yours, each as a row like these: name, title, company, school and how well you know them. Never an email, note or draft. The whole list is on the Friends page.`
+      : 'A friend sees none of your people right now: you share nothing yet.';
+    return ok(
+      'list',
+      { title: `What a friend sees (${total})`, items },
+      { total, mode: SHARE_MODE_LABELS[mode], rows, more: Math.max(0, total - rows.length) },
+      summary,
+      '/friends',
+    );
+  },
+  toModel,
+});
+
 export const friendTools: AnyTool[] = [
   listFriendsTool,
+  previewMySharesTool,
   inviteFriendTool,
   setFriendSharingTool,
   askFriendForIntroTool,

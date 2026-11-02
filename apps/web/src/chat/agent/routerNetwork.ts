@@ -278,6 +278,12 @@ export function routeNetwork(text: string, lower: string, h: NetworkHelpers): Ro
 
   // ---- friends on Orbit (plan 29 Part A) ----
   if (
+    /^(?:show (?:me )?what (?:.+?) sees|what does a friend see of my (?:network|people)|preview my shares?)\??$/i.test(
+      text,
+    )
+  )
+    return h.viaTool('preview_my_shares', {}, undefined, 'preview shares');
+  if (
     /^(?:who are my friends(?: on orbit)?|(?:show |list |see )?(?:me )?(?:my )?friends(?: on orbit)?|what (?:can|does) (.+?) see(?: of (?:mine|my network|my people))?|what (?:do|does) (?:my )?friends? see(?: of mine)?)\??$/i.test(
       text,
     )
