@@ -7409,16 +7409,21 @@ async function planCards(db2, userId, now) {
      where a.user_id = ${userId}::uuid and a.action in ('draft.auto_sent', 'call.booked')
        and a.created_at >= ${since}::timestamptz`;
   const trips = await db2.sql`
-    select s.payload->>'company' as company, g.title
+    select s.payload->>'company' as company, g.title, s.payload->>'personName' as person_name,
+           s.payload->>'reason' as reason
       from orbit.suggestions s
       left join orbit.goals g on g.id::text = s.payload->>'goalId'
-     where s.user_id = ${userId}::uuid and s.kind = 'breaker' and s.created_at >= ${since}::timestamptz`;
+     where s.user_id = ${userId}::uuid and s.kind = 'breaker' and s.created_at >= ${since}::timestamptz
+     order by s.created_at desc`;
   const week = {
     sent: w?.sent ?? 0,
     replies: w?.replies ?? 0,
     calls: w?.calls ?? 0,
     pushbacks: trips.length,
-    paused: [...new Set(trips.map((t) => t.company ?? t.title).filter((x) => !!x))]
+    paused: [...new Set(trips.map((t) => t.company ?? t.title).filter((x) => !!x))],
+    who: trips.flatMap(
+      (t) => t.person_name ? [{ personName: t.person_name, reason: t.reason ?? "pushback" }] : []
+    )
   };
   return {
     skipped,

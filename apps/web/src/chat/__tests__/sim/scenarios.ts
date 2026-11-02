@@ -7,6 +7,7 @@ import { writeFromServer } from '../../../engine/serverSync';
 import { addTargetCompanies } from '../../../engine/targets';
 import { setConnectorsMockForTests } from '../../../integrations/connectorsMock';
 import { GMAIL_SEND_SCOPE } from '../../../integrations/google';
+import { writePrefs } from '../../../integrations/prefs';
 import { type FakeOrbitApi, fakeDossier, withFriend, withReplies } from '../../../test/fakeOrbitApi';
 import { NOW } from '../helpers';
 import type { AccountState, ApiSeed } from './harness';
@@ -382,6 +383,11 @@ async function castAutopilotDay(api: FakeOrbitApi, user: User) {
     r.draftId = id;
   }
 }
+
+/** Google sign-in set up, as on the live site: local mode can name signing in as the next step. */
+const googleReady = async (): Promise<void> => {
+  writePrefs({ googleClientId: 'sim-client.apps.googleusercontent.com' });
+};
 
 const autopilotDay: ApiSeed = async (api, user) => {
   withReplies(api, user, await db.people.where('userId').equals(user.id).toArray(), NOW.getTime());
@@ -1803,7 +1809,7 @@ const PLAN29: Scenario[] = [
     group: 'friends',
     persona:
       'Alex, the demo junior trying Orbit without signing in, who heard friends can pool their networks',
-    account: 'demo',
+    account: { demo: true, seed: googleReady, live: true },
     goal: 'ask who you could reach through friends and how to set that up',
     maxTurns: 3,
     reference: `${FRIENDS_SHARING} Without an account there are no friends to list: the honest answer is that Friends needs an Orbit account because nothing leaves the browser in local mode, and the one next step is the Google sign-in.`,

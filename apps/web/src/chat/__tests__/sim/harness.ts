@@ -89,7 +89,8 @@ export type AccountState =
   | 'demo'
   | 'empty'
   | ((user: User) => Promise<void>)
-  | { demo: true; seed: (user: User) => Promise<void> }
+  // live: the sample student signed out on a site with accounts, as tryorbit.today is (sign-in is the next step)
+  | { demo: true; seed: (user: User) => Promise<void>; live?: true }
   | { profile: Partial<User>; seed?: (user: User) => Promise<void> };
 
 /**
@@ -177,6 +178,10 @@ export async function seed(
     const signed = await completeSignIn(`#code=${api.code}`);
     if (!signed.ok) throw new Error(signed.message);
     await apiSeed(api, user);
+  } else if (typeof state === 'object' && 'live' in state && state.live) {
+    // nobody is signed in, so the server answers nothing; only the site's account mode shows
+    setOrbitApiBaseForTests('https://sim.orbit.invalid');
+    setOrbitApiFetchForTests(async () => new Response('{"error":"unauthorized"}', { status: 401 }));
   }
   pointChatAtClaude();
   const engine = createChatEngine({ registry, execute, user: () => user, now: () => NOW });

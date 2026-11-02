@@ -673,6 +673,7 @@ describe('sending the batch (plan 29 §B2.2, §B4, §B6)', () => {
       sent: 1,
       pushbacks: 1,
       paused: ['Ramp'],
+      who: [{ personName: 'Gia Grant', reason: 'pushback' }],
     });
   });
 });

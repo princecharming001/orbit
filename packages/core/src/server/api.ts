@@ -766,6 +766,8 @@ export interface AutopilotWeek {
   pushbacks: number;
   /** what the pushbacks paused, by company or goal */
   paused: string[];
+  /** who tripped each pushback and why (the breaker's reason), so "which one was it" is read, never guessed */
+  who?: { personName: string; reason: string }[];
 }
 /** A person the plan step weighed and left out, with the rule (plan 29 §B6). */
 export interface AutopilotSkip {

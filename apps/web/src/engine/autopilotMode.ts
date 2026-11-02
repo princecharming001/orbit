@@ -226,7 +226,12 @@ export async function localWeek(userId: string, now = new Date()): Promise<Autop
         .filter((x): x is string => !!x),
     ),
   ];
-  return { sent: sent.length, replies, calls, pushbacks: trips.length, paused };
+  const who = trips.flatMap((c) =>
+    typeof c.payload.personName === 'string'
+      ? [{ personName: c.payload.personName, reason: String(c.payload.reason ?? 'pushback') }]
+      : [],
+  );
+  return { sent: sent.length, replies, calls, pushbacks: trips.length, paused, who };
 }
 
 /** Who this browser's last plan left out and why, and tonight's batch card when it is up (plan 29 §B4). */
@@ -682,8 +687,21 @@ export function autopilotWeekLine(w: AutopilotWeek | undefined): string | undefi
   // the companies where the breaker tripped this week, which is history: whether outreach is paused now is the status's
   // paused goals, so the line never says paused
   const at = w.paused.length ? ` at ${w.paused.join(' and ')}` : '';
-  return `On autopilot this week: ${w.sent} sent, ${n(w.replies, 'reply', 'replies')}, ${n(w.calls, 'call')}, ${n(w.pushbacks, 'pushback')}${at}`;
+  // who tripped it, as the breaker recorded, so "which one was that" is answered from the status
+  const who = w.who?.length
+    ? ` (${w.who.map((x) => `${x.personName} ${PUSHBACK_WHAT[x.reason] ?? 'pushed back'}`).join('; ')})`
+    : '';
+  return `On autopilot this week: ${w.sent} sent, ${n(w.replies, 'reply', 'replies')}, ${n(w.calls, 'call')}, ${n(w.pushbacks, 'pushback')}${at}${who}`;
 }
+
+/** The breaker's reasons in words (the server's breaker says the same). */
+const PUSHBACK_WHAT: Record<string, string> = {
+  unsubscribe: 'asked to stop',
+  declines: 'declined, the second that day',
+  bounce: 'bounced',
+  send_error: 'could not be sent to',
+  pushback: 'pushed back on a first message',
+};
 
 /**
  * A goal's "Run on autopilot" switch (plan 29 §B1): on writes the goal's level 2; off puts it back to the level the

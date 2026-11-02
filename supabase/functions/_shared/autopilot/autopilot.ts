@@ -397,17 +397,27 @@ async function planCards(
       from orbit.audit_log a
      where a.user_id = ${userId}::uuid and a.action in ('draft.auto_sent', 'call.booked')
        and a.created_at >= ${since}::timestamptz`;
-  const trips = await db.sql<{ company: string | null; title: string | null }>`
-    select s.payload->>'company' as company, g.title
+  const trips = await db.sql<{
+    company: string | null;
+    title: string | null;
+    person_name: string | null;
+    reason: string | null;
+  }>`
+    select s.payload->>'company' as company, g.title, s.payload->>'personName' as person_name,
+           s.payload->>'reason' as reason
       from orbit.suggestions s
       left join orbit.goals g on g.id::text = s.payload->>'goalId'
-     where s.user_id = ${userId}::uuid and s.kind = 'breaker' and s.created_at >= ${since}::timestamptz`;
+     where s.user_id = ${userId}::uuid and s.kind = 'breaker' and s.created_at >= ${since}::timestamptz
+     order by s.created_at desc`;
   const week = {
     sent: w?.sent ?? 0,
     replies: w?.replies ?? 0,
     calls: w?.calls ?? 0,
     pushbacks: trips.length,
     paused: [...new Set(trips.map((t) => t.company ?? t.title).filter((x): x is string => !!x))],
+    who: trips.flatMap((t) =>
+      t.person_name ? [{ personName: t.person_name, reason: t.reason ?? 'pushback' }] : [],
+    ),
   };
   return {
     skipped,

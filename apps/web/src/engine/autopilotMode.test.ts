@@ -488,6 +488,19 @@ describe('the weekly review line (plan 29 §B1)', () => {
     expect(autopilotWeekLine({ sent: 9, replies: 4, calls: 2, pushbacks: 1, paused: ['Stripe'] })).toBe(
       'On autopilot this week: 9 sent, 4 replies, 2 calls, 1 pushback at Stripe',
     );
+    // who tripped it, so "which one was that" is read from the status
+    expect(
+      autopilotWeekLine({
+        sent: 9,
+        replies: 4,
+        calls: 2,
+        pushbacks: 1,
+        paused: ['Ramp'],
+        who: [{ personName: 'Chloe Dubois', reason: 'unsubscribe' }],
+      }),
+    ).toBe(
+      'On autopilot this week: 9 sent, 4 replies, 2 calls, 1 pushback at Ramp (Chloe Dubois asked to stop)',
+    );
     expect(autopilotWeekLine({ sent: 1, replies: 1, calls: 1, pushbacks: 0, paused: [] })).toBe(
       'On autopilot this week: 1 sent, 1 reply, 1 call, 0 pushbacks',
     );

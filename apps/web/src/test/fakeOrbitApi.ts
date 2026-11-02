@@ -1798,7 +1798,14 @@ export function withReplies(
       text: "Tomorrow's batch is ready: 2 first messages wait for your tap tonight. Until 20 go out as Orbit wrote them, only the ones you tap are sent.",
       firstTouches: 2,
     },
-    week: { sent: 9, replies: 4, calls: 2, pushbacks: 1, paused: ['Ramp'] },
+    week: {
+      sent: 9,
+      replies: 4,
+      calls: 2,
+      pushbacks: 1,
+      paused: ['Ramp'],
+      who: [{ personName: 'Chloe Dubois', reason: 'unsubscribe' }],
+    },
   };
   state.pausedUntil = null;
   // what Orbit learned from the student's edits (B2.4), in their words, each with the edits behind it
