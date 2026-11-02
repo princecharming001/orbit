@@ -146,6 +146,18 @@ describe('autopilot in the chat, phase 5', () => {
     expect(api.state.drafts.get(q.draftId)?.subject).toBe(subject);
   });
 
+  it('an answer with a wrong message id still answers the person named', async () => {
+    const env = await run(
+      'answer_reply',
+      { personName: 'Daniel', messageId: 'msg_not_a_reply', answer: 'yes, applied last Tuesday' },
+      ctx(),
+    );
+    expect(env.kind).not.toBe('error');
+    expect(env.summary).toContain('Drafted the reply to Daniel around your answer.');
+    const daniel = api.state.replies.find((r) => r.personName === 'Daniel Okafor')!;
+    expect(daniel.answer).toBe('yes, applied last Tuesday');
+  });
+
   it("a queued first message says the recipient's clock and the student's when the two differ", async () => {
     const grace = api.state.autopilot.queued.find((q) => q.personName === 'Grace Liu')!;
     grace.sendAt = '2026-10-07T12:40:00.000Z';

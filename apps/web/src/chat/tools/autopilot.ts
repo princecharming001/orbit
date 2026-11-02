@@ -560,16 +560,16 @@ export const answerReplyTool = defineTool({
       cards.find((s) => input.messageId && s.payload.messageId === input.messageId) ??
       cards.find((s) => named(String(s.payload.personName ?? ''))) ??
       (cards.length === 1 && !want && !input.messageId ? cards[0] : undefined);
-    let messageId = input.messageId;
-    if (!card && !messageId && isServerUser(ctx.user.id)) {
+    // the card's own message wins over an id the model passed: a wrong id would answer nothing
+    let messageId = (card?.payload.messageId as string | undefined) ?? input.messageId;
+    if (!card && isServerUser(ctx.user.id)) {
       // the card may not have reached this browser yet: the server's replies know the question
       const known = await listReplies(ctx.user);
-      const hit = known.ok
-        ? known.replies.find(
-            (x) =>
-              x.replyClass === 'question' && !x.answer && (named(x.personName) || known.replies.length === 1),
-          )
-        : undefined;
+      const open = known.ok ? known.replies.filter((x) => x.replyClass === 'question' && !x.answer) : [];
+      const hit =
+        open.find((x) => !!messageId && x.messageId === messageId) ??
+        open.find((x) => named(x.personName)) ??
+        (open.length === 1 ? open[0] : undefined);
       messageId = hit?.messageId;
     }
     if (!card && !messageId) {
