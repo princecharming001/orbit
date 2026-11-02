@@ -7442,14 +7442,14 @@ async function holdSend(db2, userId, draftId, now) {
   if (row.status === "sent" || row.status === "sending")
     throw new HttpError(409, "too_late", "it has already gone out");
   const [held] = await db2.sql`
-    update orbit.drafts set status = 'draft', error = 'held', cancel_reason = null, send_at = null
+    update orbit.drafts set status = 'draft', error = 'held', cancel_reason = null
      where id = ${draftId}::uuid and user_id = ${userId}::uuid and status in ('approved', 'scheduled', 'draft')
     returning id`;
   if (!held) throw new HttpError(409, "not_holdable", `a ${row.status} draft cannot be held`);
   await db2.sql`
     insert into orbit.audit_log (user_id, actor, action, target_table, target_id, details)
     values (${userId}::uuid, 'user', 'draft.hold', 'drafts', ${draftId}, ${{ reason: "held", at: iso(now) }}::jsonb)`;
-  return item({ ...row, status: "draft", error: "held", send_at: null }, "held", HOLD_REASONS.held);
+  return item({ ...row, status: "draft", error: "held" }, "held", HOLD_REASONS.held);
 }
 async function pauseAutopilot(db2, userId, req, now) {
   if (req.goalId) {

@@ -4,6 +4,7 @@ import { CHANNEL_LABELS, MESSAGE_KIND_LABELS, relTime, WHY_THEM_GAP } from '@orb
 import { runApproval } from '../../components/approve';
 import { db } from '../../db/schema';
 import { autopilotCanSend, LINKEDIN_WAITS, planSchedule, scheduleSends } from '../../engine/autopilot';
+import { autopilotStatus, holdSend } from '../../engine/autopilotMode';
 import { type DraftInputs, regenerateDraft } from '../../engine/brief';
 import {
   composeDraft,
@@ -318,6 +319,12 @@ export const createDrafts = defineTool({
   toModel,
 });
 
+/** Whether a draft is one of autopilot's queued messages (an account's batch lives on the server). */
+async function inBatch(ctx: ToolContext, id: string): Promise<boolean> {
+  const r = await autopilotStatus(ctx.user, ctx.now).catch(() => undefined);
+  return !!r?.ok && r.status.queued.some((q) => q.draftId === id);
+}
+
 export const updateDraftBody = defineTool({
   name: 'update_draft_body',
   kind: 'write',
@@ -331,7 +338,19 @@ export const updateDraftBody = defineTool({
   capabilities: ['draft_edit_text', 'draft_close_keep'],
   progress: 'Saving your edits',
   async execute(input, ctx) {
-    const draft = await requireDraft(ctx, input.draftId);
+    let draft = await requireDraft(ctx, input.draftId);
+    // a first message waiting in tomorrow's batch is held to change it, its planned morning kept for the tap
+    let heldFromBatch = false;
+    if (
+      !draft.sentAt &&
+      ['approved', 'scheduled', 'queued'].includes(draft.status) &&
+      (draft.autopilot || !!draft.autoRung || (await inBatch(ctx, draft.id)))
+    ) {
+      const h = await holdSend(ctx.user, draft.id);
+      if (!h.ok) throw new Error(h.message);
+      draft = await requireDraft(ctx, draft.id);
+      heldFromBatch = draft.status === 'draft';
+    }
     if (draft.status !== 'draft')
       throw new Error('This message is no longer a draft, so its text cannot change.');
     if (input.body === undefined && input.subject === undefined)
@@ -349,7 +368,7 @@ export const updateDraftBody = defineTool({
       'draft',
       out,
       out,
-      `Saved your edits.${blocking.length ? ` Before sending, fix: ${blocking.map((i) => i.text).join(' ')}` : ''}`,
+      `Saved your edits.${heldFromBatch ? ' It is out of the batch until you approve it again; approved, it goes at its planned time.' : ''}${blocking.length ? ` Before sending, fix: ${blocking.map((i) => i.text).join(' ')}` : ''}`,
       `/inbox?draft=${fresh.id}`,
     );
   },

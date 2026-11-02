@@ -438,21 +438,24 @@ export async function dismissPlanCard(
   return { id: row.id };
 }
 
-/** POST /autopilot/hold: a queued send goes back to a draft, held by the student; the batch goes without it. */
+/**
+ * POST /autopilot/hold: a queued send goes back to a draft, held by the student; the batch goes without it. Its planned
+ * time stays on the draft (nothing sends a draft), so approving it again puts it back in the same morning.
+ */
 export async function holdSend(db: Db, userId: string, draftId: string, now: Date): Promise<AutopilotItem> {
   const [row] = await itemRows(db, userId, 'one', now, now, draftId);
   if (!row) throw new HttpError(404, 'not_found', 'nothing queued with that id');
   if (row.status === 'sent' || row.status === 'sending')
     throw new HttpError(409, 'too_late', 'it has already gone out');
   const [held] = await db.sql<{ id: string }>`
-    update orbit.drafts set status = 'draft', error = 'held', cancel_reason = null, send_at = null
+    update orbit.drafts set status = 'draft', error = 'held', cancel_reason = null
      where id = ${draftId}::uuid and user_id = ${userId}::uuid and status in ('approved', 'scheduled', 'draft')
     returning id`;
   if (!held) throw new HttpError(409, 'not_holdable', `a ${row.status} draft cannot be held`);
   await db.sql`
     insert into orbit.audit_log (user_id, actor, action, target_table, target_id, details)
     values (${userId}::uuid, 'user', 'draft.hold', 'drafts', ${draftId}, ${{ reason: 'held', at: iso(now) }}::jsonb)`;
-  return item({ ...row, status: 'draft', error: 'held', send_at: null }, 'held', HOLD_REASONS.held);
+  return item({ ...row, status: 'draft', error: 'held' }, 'held', HOLD_REASONS.held);
 }
 
 /**

@@ -129,6 +129,23 @@ describe('autopilot in the chat, phase 5', () => {
     expect(JSON.stringify(again)).toMatch(/Nothing in the batch is waiting for your tap/);
   });
 
+  it('changing a first message in the batch holds it with its morning kept, and approving it puts it back with the new words', async () => {
+    const q = api.state.autopilot.queued.find((x) => x.status === 'needs_tap')!;
+    const { keepServerDraft } = await import('../../engine/serverSync');
+    await keepServerDraft(api.state.drafts.get(q.draftId), user.id);
+    const subject = 'From engineering to product';
+    const edit = await run('update_draft_body', { draftId: q.draftId, subject }, ctx());
+    expect(edit.kind).not.toBe('error');
+    expect(edit.summary).toMatch(/out of the batch until you approve it again/);
+    expect((await db.outbound.get(q.draftId))?.status).toBe('draft');
+    expect(api.state.autopilot.held.find((h) => h.draftId === q.draftId)?.sendAt).toBe(q.sendAt);
+    const env = await run('approve_batch', { personName: q.personName }, ctx());
+    expect(env.kind).not.toBe('error');
+    expect(api.state.autopilot.queued.find((x) => x.draftId === q.draftId)?.status).toBe('queued');
+    expect(api.state.drafts.get(q.draftId)?.sendAt).toBe(q.sendAt);
+    expect(api.state.drafts.get(q.draftId)?.subject).toBe(subject);
+  });
+
   it("a queued first message says the recipient's clock and the student's when the two differ", async () => {
     const grace = api.state.autopilot.queued.find((q) => q.personName === 'Grace Liu')!;
     grace.sendAt = '2026-10-07T12:40:00.000Z';

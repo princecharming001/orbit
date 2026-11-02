@@ -456,7 +456,14 @@ async function tapTargets(
   const r = await autopilotStatus(ctx.user, ctx.now);
   if (!r.ok) return { message: r.message };
   const named = namedBy(input.personName ?? '');
-  const waiting = r.status.queued.filter((q) => q.status === 'needs_tap');
+  // waiting for the tap, or held by the student (to edit it, say) with its planned morning still ahead
+  const heldBack = r.status.held.filter(
+    (h) =>
+      h.sendAt &&
+      Date.parse(h.sendAt) > (ctx.now ?? new Date()).getTime() &&
+      !!h.reason?.startsWith('You held it'),
+  );
+  const waiting = [...r.status.queued.filter((q) => q.status === 'needs_tap'), ...heldBack];
   const items = input.all
     ? waiting
     : waiting.filter((q) => q.draftId === input.draftId || named(q.personName));

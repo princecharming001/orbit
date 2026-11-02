@@ -389,13 +389,34 @@ export async function tapBatchItem(
   item: Pick<AutopilotItem, 'draftId' | 'sendAt'>,
 ): Promise<{ ok: true } | Fail> {
   if (isServerUser(user.id)) {
+    // a held one the student edited goes with their words
+    const held = await db.outbound.get(item.draftId);
+    const edited = held?.status === 'draft' ? held : undefined;
     const r = await callApi('/drafts/approve', {
       draftId: item.draftId,
+      ...(edited ? { body: edited.bodyFinal ?? edited.bodyDraft } : {}),
+      ...(edited?.subject ? { subject: edited.subject } : {}),
       ...(item.sendAt ? { sendAt: item.sendAt } : {}),
     });
-    return r.ok ? { ok: true } : { ok: false, message: r.message };
+    if (!r.ok) return { ok: false, message: r.message };
+    await keepServerDraft(r.value.draft, user.id);
+    return { ok: true };
   }
   const m = await db.outbound.get(item.draftId);
+  // one the student held (to edit it, say) goes back in the batch at its planned time
+  if (
+    m &&
+    m.userId === user.id &&
+    m.status === 'draft' &&
+    item.sendAt &&
+    Date.parse(item.sendAt) > Date.now()
+  ) {
+    const { approveAndSend } = await import('./send');
+    const r = await approveAndSend(user as User, m.id, m.bodyFinal ?? m.bodyDraft, m.subject, new Date(), {
+      scheduleAt: new Date(item.sendAt),
+    });
+    return r.ok ? { ok: true } : { ok: false, message: r.error };
+  }
   if (!m || m.userId !== user.id || m.status !== 'queued')
     return { ok: false, message: 'It is no longer in the batch.' };
   await db.outbound.update(m.id, { autoSent: false });
@@ -443,7 +464,16 @@ export async function holdSend(
 ): Promise<{ ok: true; item?: AutopilotItem } | Fail> {
   if (isServerUser(user.id)) {
     const r = await callApi('/autopilot/hold', { draftId });
-    return r.ok ? { ok: true, item: r.value.item } : { ok: false, message: r.message };
+    if (!r.ok) return { ok: false, message: r.message };
+    // this browser's copy is a draft again at once (the next pull may be minutes away), its planned time kept
+    const local = await db.outbound.get(draftId);
+    if (local && local.status !== 'sent')
+      await db.outbound.update(draftId, {
+        status: 'draft',
+        error: 'held',
+        sendAt: r.value.item.sendAt ?? local.sendAt,
+      });
+    return { ok: true, item: r.value.item };
   }
   const m = await db.outbound.get(draftId);
   if (!m || m.userId !== user.id) return { ok: false, message: 'That draft is gone.' };

@@ -871,12 +871,20 @@ export function createFakeOrbitApi(
         // as the server answers (plan 29 §B2.1): approved, with the student's words and the undo window kept
         d.status = 'approved';
         if (typeof body.body === 'string') d.body = body.body;
+        if (typeof body.subject === 'string') d.subject = body.subject;
         d.sendAt =
           typeof body.sendAt === 'string'
             ? body.sendAt
             : typeof body.undoSec === 'number' && (state.user.autonomyLevel ?? 0) === 0
               ? iso(Date.now() + body.undoSec * 1000)
               : iso(clock + 18 * 3600_000);
+        // a held one approved again goes back in the batch at its planned time
+        const back = state.autopilot.held.findIndex((h) => h.draftId === d.id && h.sendAt);
+        if (back >= 0 && typeof body.sendAt === 'string') {
+          const [h] = state.autopilot.held.splice(back, 1);
+          state.autopilot.queued.push({ ...h!, status: 'queued', reason: undefined, sendAt: body.sendAt });
+          state.tapped.add(d.id);
+        }
         // a tap on a first message in tomorrow's batch makes it the student's own (plan 29 §B2.2)
         for (const q of state.autopilot.queued)
           if (q.draftId === d.id && q.status === 'needs_tap') {
