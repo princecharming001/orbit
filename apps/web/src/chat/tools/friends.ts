@@ -154,6 +154,9 @@ export const listFriendsTool = defineTool({
         ? ` At ${input.company}: ${at.map((a) => `${first(a.friend)} knows ${a.people.map((p) => `${p.name} (${p.closeness.replace(`${first(a.friend)} `, '')})`).join(', ')}`).join('; ')}.`
         : ` Nobody your friends share works at ${input.company}.`
       : '';
+    const ownLine = own
+      ? ` Your own best way in at ${input.company}: ${own.displayName}${alsoBy.length ? `, whom ${alsoBy.map(first).join(' and ')} also ${alsoBy.length > 1 ? 'know' : 'knows'}` : ''}.`
+      : '';
     const pend = waiting.length ? ` ${plural(waiting.length, 'request')} waiting on you in Friends.` : '';
     const waitingAsks = received.length
       ? ` ${received.map((a) => `${first(a.askerName)} asked you for an intro to ${a.targetName}${a.targetCompany ? ` at ${a.targetCompany}` : ''}`).join('; ')}. It waits in Friends for you to forward.`
@@ -204,7 +207,7 @@ export const listFriendsTool = defineTool({
         whatAFriendSees: FRIENDS_WHAT_CROSSES,
         next: 'ask_friend_for_intro asks the friend with a note they forward; respond_to_friend_ask forwards an ask in asksToYou; set_friend_sharing changes what you share',
       },
-      `${lead}${company}${pend}${waitingAsks}`,
+      `${lead}${company}${ownLine}${pend}${waitingAsks}`,
       '/friends',
     );
   },

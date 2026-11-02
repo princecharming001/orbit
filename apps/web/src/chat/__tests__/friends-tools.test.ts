@@ -152,6 +152,7 @@ describe('friends tools against the fake orbit-api', () => {
     ).sort((a, b) => (b.tieScore ?? 0) - (a.tieScore ?? 0))[0];
     expect(own).toBeDefined();
     expect(own?.name).toBe(best?.displayName);
+    expect(stripe.summary).toContain(`Your own best way in at Stripe: ${best!.displayName}`);
     expect(stripe.summary).toMatch(
       /At Stripe: Ana knows Dan Lee \(is close to Dan\), Maya Chen \(knows Maya well\)/,
     );
