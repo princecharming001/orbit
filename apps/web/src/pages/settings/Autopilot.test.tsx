@@ -111,9 +111,11 @@ describe('Settings, Autopilot', () => {
     expect(calls('/autopilot/mode')[0]!.body).toEqual({ mode: 'assist' });
 
     const goal = api.state.goals[0]!;
-    await until(() => !!q(`goal-autopilot-${goal.id}`), 'the goal row');
-    const sw = q(`goal-autopilot-${goal.id}`)!.querySelector<HTMLButtonElement>('[role="switch"]')!;
-    await act(async () => sw.click());
+    // the goal row follows the account to assist before its switch is pressed, or the tap would turn it off
+    const goalSwitch = () =>
+      q(`goal-autopilot-${goal.id}`)?.querySelector<HTMLButtonElement>('[role="switch"]');
+    await until(() => goalSwitch()?.getAttribute('aria-checked') === 'false', 'the goal row off');
+    await act(async () => goalSwitch()!.click());
     await until(() => calls('/autopilot/mode').length === 2, 'the goal mode');
     expect(calls('/autopilot/mode')[1]!.body).toEqual({ mode: 'autopilot', goalId: goal.id });
     expect((await db.userGoals.get(goal.id))!.autonomyLevel).toBe(2);
