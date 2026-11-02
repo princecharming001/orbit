@@ -499,6 +499,20 @@ const autopilotDay: ApiSeed = async (api, user) => {
   );
 };
 
+/** The same account before autopilot was on: assist mode, the rung earned so far, nothing sent or queued on its own. */
+const autopilotDayAssist: ApiSeed = async (api, user) => {
+  await autopilotDay(api, user);
+  Object.assign(api.state.autopilot, {
+    mode: 'assist',
+    queued: [],
+    held: [],
+    sentToday: [],
+    skipped: [],
+    batch: null,
+    week: undefined,
+  });
+};
+
 // ---- The chat quality campaign (plan 28): more students, and the questions they really ask -------------------------
 
 /** A student's profile plus their goals, over an otherwise empty account. */
@@ -1999,7 +2013,7 @@ const PLAN29: Scenario[] = [
     persona:
       'Alex, the demo junior who wants Orbit to start writing first messages for the internship search',
     account: 'demo',
-    api: autopilotDay,
+    api: autopilotDayAssist,
     goal: 'put your recruiting on autopilot, and ask whether first messages will go out on their own from tomorrow',
     maxTurns: 5,
     expectTools: [['set_autopilot_mode']],
