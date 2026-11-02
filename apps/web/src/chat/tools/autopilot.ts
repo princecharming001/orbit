@@ -378,7 +378,15 @@ export const autopilotStatusTool = defineTool({
         company: a.company ?? undefined,
         note: wrapped(ctx, 'note', a.note, 600),
       })),
-      week: s.week,
+      // the week line's counts are only what autopilot itself sent and the answers to those; every reply that came in,
+      // whatever it answered, is in repliesThisWeek, so the two numbers differ and neither is wrong
+      week: s.week
+        ? {
+            ...s.week,
+            means:
+              'sent and replies count only what Orbit sent on its own this week and the answers to those; repliesThisWeek is every reply that came in',
+          }
+        : undefined,
       ...(input.personName
         ? { asked: { name: input.personName, person: why?.person, answer: why?.answer ?? null } }
         : {}),
