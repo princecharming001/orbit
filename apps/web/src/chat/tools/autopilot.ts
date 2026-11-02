@@ -315,7 +315,7 @@ export const autopilotStatusTool = defineTool({
           : `Orbit has no one called ${input.personName} in your people, so it never weighed them.`
         : '',
       `${{ off: 'Orbit sends nothing on its own (Off)', assist: 'Assist is on', autopilot: 'Autopilot is on' }[s.mode] ?? `Mode: ${s.mode}`}${s.pausedUntil ? `, paused until ${when(s.pausedUntil, ctx)}` : ''}.`,
-      `Sent ${s.sentToday.length} on its own today${booked ? `, ${plural(booked, 'call')} booked` : ''}; ${plural(s.queued.length, 'message')} queued for the morning${taps ? ` (${taps} waiting for your tap)` : ''}; ${plural(s.held.length, 'message')} held; ${plural(s.needsYou.length, 'reply', 'replies')} need you.`,
+      `Sent ${s.sentToday.length} on its own today${s.sentToday.length ? ` (${s.sentToday.map((i) => i.personName).join(', ')})` : ''}${booked ? `, ${plural(booked, 'call')} booked` : ''}; ${plural(s.queued.length, 'message')} queued for the morning${taps ? ` (${taps} waiting for your tap)` : ''}; ${plural(s.held.length, 'message')} held; ${plural(s.needsYou.length, 'reply', 'replies')} need you.`,
       s.friendAsks?.length
         ? `${plural(s.friendAsks.length, 'ask')} to a friend ready for your tap: ${s.friendAsks.map((a) => `${a.friendName} for ${a.targetName}`).join(', ')}.`
         : '',

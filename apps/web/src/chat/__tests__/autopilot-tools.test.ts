@@ -95,6 +95,8 @@ describe('autopilot in the chat, phase 5', () => {
   it("the status says tomorrow's batch with the first messages waiting for a tap, and the week", async () => {
     const env = await run('autopilot_status', {}, ctx());
     expect(env.summary).toContain('2 messages queued for the morning (2 waiting for your tap)');
+    // who got today's sends is named, so the card is never pointed at for a list it does not hold
+    expect(env.summary).toMatch(/Sent 3 on its own today \(\w+ \w+, \w+ \w+, \w+ \w+\)/);
     expect(env.summary).toContain(
       'On autopilot this week: 9 sent, 4 replies, 2 calls, 1 pushback at Ramp (Chloe Dubois asked to stop).',
     );
