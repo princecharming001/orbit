@@ -237,10 +237,12 @@ describe('sim scenarios', () => {
           'thanks',
         ])
           expect(classes, s.id).toContain(c);
-        expect(api.state.autopilot.mode, s.id).toBe('autopilot');
-        expect(api.state.autopilot.sentToday, s.id).toHaveLength(3);
-        expect(api.state.autopilot.queued, s.id).toHaveLength(2);
-        expect(api.state.autopilot.held[0]?.personName, s.id).toBe('Nina Garcia');
+        // the one student who has yet to turn it on starts in assist, with nothing sent or queued on its own
+        const before = s.id === 'ap-recruiting-on-autopilot-rung';
+        expect(api.state.autopilot.mode, s.id).toBe(before ? 'assist' : 'autopilot');
+        expect(api.state.autopilot.sentToday, s.id).toHaveLength(before ? 0 : 3);
+        expect(api.state.autopilot.queued, s.id).toHaveLength(before ? 0 : 2);
+        if (!before) expect(api.state.autopilot.held[0]?.personName, s.id).toBe('Nina Garcia');
         // every first message on the day goes to a demo contact the student has no thread with yet
         const firsts = [
           ...api.state.autopilot.queued,
