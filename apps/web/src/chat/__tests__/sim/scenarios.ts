@@ -288,6 +288,12 @@ async function castAutopilotDay(api: FakeOrbitApi, user: User) {
     const orgs = g.targets.organizations;
     if (orgs.length && !orgs.includes('Notion')) orgs.push('Notion');
   }
+  // and so does the student's own copy, the one the chat reads
+  for (const g of await db.userGoals.where('userId').equals(user.id).toArray()) {
+    const orgs = g.targets?.organizations ?? [];
+    if (g.kind === 'recruiting' && orgs.length && !orgs.includes('Notion'))
+      await db.userGoals.update(g.id, { targets: { ...g.targets, organizations: [...orgs, 'Notion'] } });
+  }
   const people = await db.people.where('userId').equals(user.id).toArray();
   const byName = new Map(people.map((p) => [p.displayName, p]));
   const thanks = api.state.replies.find((r) => r.replyClass === 'thanks');
@@ -1611,7 +1617,7 @@ const AUTOPILOT_DAY =
   "Today on autopilot, read from the status and never invented: sent 3 (a first message to Keiko Silva at Figma at 8:41 their time, a bump to Ethan Park, a scheduling reply to Lena Novak). Tomorrow's batch: 2 first messages, Grace Patel at Linear going at 8:40 AM their time and Ravi Alvarez at Notion at 8:58 AM their time, held with one tap until then. Held: Nina Garcia at Figma, because Keiko at Figma was written to this morning and autopilot never writes to two people at one firm on the same day; she moves to Thursday. Needs you: Daniel Okafor asked whether you have applied through the portal yet. Rungs: bumps, thank-yous and scheduling replies unlocked at 10 of 10; first messages at 14 of 20, so the batch still asks for a tap in the evening. Caps: 3 of 5 today, 5 of 12 first messages this week. Nothing is paused now: the week's one pushback was Chloe Dubois's unsubscribe at Ramp, which tripped the breaker there earlier in the week. Times are said in the recipient's clock first, with the student's beside it.";
 
 const AUTOPILOT_REPLIES =
-  'Inbound replies, one of each class: Maya Chen interested; Lena Novak scheduling ("Thu Oct 8 at 11 works", an offered slot, so the call books and the confirmation goes); Daniel Okafor a question (have you applied); Victor Castro an objection (apply through the portal first); Sofia Bennett a referral (her colleague Raj); Ethan Park not now (November); Caleb Weber out of office until October 12; Jonah Reyes a decline; Chloe Dubois unsubscribe; Hannah Brooks thanks. The next action by class: interested gets the slots reply, and Maya\'s asks what the student is looking for, so hers waits for a tap with the three times; a time that matches a slot books and confirms; a question goes to Needs you and the student\'s one line fills the reply; objection, not now and referral are drafts for approval, never sent on their own; decline and unsubscribe close the thread, mark do not contact, no reply, and the student is told; thanks goes on its own only when it carries no question.';
+  "Inbound replies, one of each class: Maya Chen interested; Lena Novak scheduling (\"Thu Oct 8 at 11 works\", an offered slot, so the call books and the confirmation goes); Daniel Okafor (a software engineer at Stripe, so the portal he means is Stripe's) a question (have you applied); Victor Castro an objection (apply through the portal first); Sofia Bennett a referral (her colleague Raj); Ethan Park not now (November); Caleb Weber out of office until October 12; Jonah Reyes a decline; Chloe Dubois unsubscribe; Hannah Brooks thanks. The next action by class: interested gets the slots reply, and Maya's asks what the student is looking for, so hers waits for a tap with the three times; a time that matches a slot books and confirms; a question goes to Needs you and the student's one line fills the reply; objection, not now and referral are drafts for approval, never sent on their own; decline and unsubscribe close the thread, mark do not contact, no reply, and the student is told; thanks goes on its own only when it carries no question.";
 
 const AUTOPILOT_ANSWER =
   'Answering a reply that asked a question: the student\'s one line ("yes, applied Monday") fills the gap and the reply drafts itself around it, in the student\'s voice, with nothing added that the student did not say (no dates, no claims, no new commitment); the draft is shown for approval before anything goes. Daniel Okafor asked whether the student has applied through the portal yet.';
