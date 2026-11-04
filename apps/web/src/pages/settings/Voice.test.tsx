@@ -123,5 +123,10 @@ describe('Settings, Voice', () => {
     const relearn = host.querySelector<HTMLButtonElement>('[data-testid="voice-relearn"]')!;
     await act(async () => relearn.click());
     await until(() => api.state.voice.relearnRequests === 1, 'the relearn');
+    // the page reloads the card after the answer: the test ends only once that is done, so nothing updates a torn-down page
+    await until(() => !relearn.disabled, 'the relearn to finish');
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 50));
+    });
   });
 });
