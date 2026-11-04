@@ -18,6 +18,7 @@ import {
 } from '../../integrations/anthropic';
 import type { ChatConversation, ResultEnvelope, ToolContext, ToolSpec, TurnEvent } from '../types';
 import { recordToolAction } from './actions';
+import { sentenceGate, withoutButtonTalk } from './buttonTalk';
 import type { ChatClient } from './client';
 import { knowledgeTextFor } from './knowledge';
 import { buildSnapshot, memoryLineOf, snapshotIsStale, snapshotKeyOf, snapshotText } from './snapshot';
@@ -475,16 +476,22 @@ export async function runTurn(
     try {
       for await (const stream of runner) {
         // listeners go on before anything is awaited: the stream does not replay events emitted before they attach
+        // the words go out a sentence at a time, without the ones about the buttons ("The options are below.")
+        const gate = sentenceGate((text) => {
+          spoken += text;
+          spokenAfterWork += text;
+          onEvent({ type: 'text', delta: text });
+        });
         stream.on('text', (delta) => {
           if (closedAfter?.trim()) {
             muted += delta;
             return;
           }
-          spoken += delta;
-          spokenAfterWork += delta;
-          onEvent({ type: 'text', delta });
+          gate.push(delta);
         });
         stream.on('streamEvent', (ev, snapshot) => {
+          // a text block's last words go out when it ends, before the tool or card that follows it
+          if (ev.type === 'content_block_stop' && snapshot.content[ev.index]?.type === 'text') gate.flush();
           if (ev.type === 'content_block_stop') {
             // display 'updates': a thinking block with text is a progress note before the tool_use it introduces;
             // one line per block, nothing for an empty block
@@ -524,6 +531,7 @@ export async function runTurn(
         // results the tools did not write themselves (a tool_use whose input failed validation never ran)
         await flushResults();
         const message = await stream.finalMessage();
+        gate.flush();
         attempt = 0;
         recordTokens(message.usage);
         for (const t of message.input_transformations ?? [])
@@ -541,15 +549,17 @@ export async function runTurn(
         if (closedAfter?.trim() && muted) {
           if (hasToolUse) {
             // the turn went on to another tool after the pills: the words were not a doubled reply after all
+            muted = withoutButtonTalk(muted);
             spoken += muted;
-            onEvent({ type: 'text', delta: muted });
+            if (muted) onEvent({ type: 'text', delta: muted });
             muted = '';
           } else if (closedAfter.trim().split(/\s+/).length < CLAUSE_WORDS) {
             // the words before the pills were only a clause of intent ("One sec, checking."): what came after
             // them is the answer itself, not a doubled reply, so it is shown and kept
+            muted = withoutButtonTalk(muted);
             spoken += muted;
             spokenAfterWork += muted;
-            onEvent({ type: 'text', delta: muted });
+            if (muted) onEvent({ type: 'text', delta: muted });
             muted = '';
           } else {
             // the line after the pills: not shown, and not stored, so a reload does not bring it back

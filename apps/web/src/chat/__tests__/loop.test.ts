@@ -185,22 +185,20 @@ describe('tools', () => {
       },
       { text: 'One card today and nobody went quiet.' },
     ]);
+    // the words go out a sentence at a time, each before the tools that follow it
     expect(kinds(events)).toEqual([
       'progress',
       'text',
-      'text',
-      'text',
       'tool_start',
       'tool_start',
       'tool_result',
       'tool_result',
-      'text',
-      'text',
       'text',
       'done',
     ]);
     expect(events[0]).toEqual({ type: 'progress', text: 'Checking the brief and the pipeline.' });
-    expect(events[4]).toEqual({
+    expect(events[1]).toEqual({ type: 'text', delta: 'Let me look.' });
+    expect(events[2]).toEqual({
       type: 'tool_start',
       toolUseId: 'toolu_a',
       toolName: 'get_today_brief',

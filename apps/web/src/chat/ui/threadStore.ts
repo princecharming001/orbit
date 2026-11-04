@@ -5,7 +5,9 @@
  * one leaves it running, and coming back shows it where it is. Only Stop ends it. The engine stays the source of
  * truth: opening a conversation loads it from there.
  */
+
 import { useSyncExternalStore } from 'react';
+import { withoutButtonTalk } from '../agent/buttonTalk';
 import { SETUP_CHIPS } from '../agent/setupChips';
 import { webSources } from '../agent/webSearch';
 import type {
@@ -276,7 +278,11 @@ export function hydrate(messages: ChatMessage[], actions: ChatAction[]): Turn[] 
         tool_use_id?: string;
         content?: unknown;
       };
-      if (b?.type === 'text' && b.text) blocks.push({ type: 'text', text: b.text });
+      // a sentence about the buttons was never shown live, and is not shown when the chat is opened again
+      if (b?.type === 'text' && b.text) {
+        const text = withoutButtonTalk(b.text);
+        if (text.trim()) blocks.push({ type: 'text', text });
+      }
       // Claude's web search, as it read live: the query, then the sources it found
       else if (b?.type === 'server_tool_use' && b.name === 'web_search' && b.id)
         blocks.push({

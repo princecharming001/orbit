@@ -360,30 +360,37 @@ export const autopilotStatusTool = defineTool({
       : undefined;
     const week = autopilotWeekLine(s.week);
     const rundown = await replyRundown(recent, s);
-    const summary = [
-      input.personName
-        ? why
-          ? why.answer
-          : `Orbit has no one called ${input.personName} in your people, so it never weighed them.`
-        : '',
-      `${{ off: 'Orbit sends nothing on its own (Off)', assist: 'Assist is on', autopilot: 'Autopilot is on' }[s.mode] ?? `Mode: ${s.mode}`}${s.pausedUntil ? (openEndedPause(s.pausedUntil, ctx.now) ? ', paused until you say resume' : `, paused until ${when(s.pausedUntil, ctx)}`) : ''}.`,
-      `Sent ${s.sentToday.length} on its own today${s.sentToday.length ? ` (${s.sentToday.map((i) => i.personName).join(', ')})` : ''}${booked ? `, ${plural(booked, 'call')} booked` : ''}; ${plural(s.queued.length, 'message')} queued for the morning${s.queued.length ? ` (${s.queued.map((i) => i.personName).join(', ')}${taps ? `; ${taps} waiting for your tap` : ''})` : ''}; ${plural(s.held.length, 'message')} held${s.held.length ? ` (${s.held.map((i) => i.personName).join(', ')})` : ''}; ${plural(s.needsYou.length, 'reply', 'replies')} need you.`,
-      s.friendAsks?.length
-        ? `${plural(s.friendAsks.length, 'ask')} to a friend ready for your tap: ${s.friendAsks.map((a) => `${a.friendName} for ${a.targetName}`).join(', ')}.`
-        : '',
-      rundown,
-      // the week line counts only what autopilot sent on its own and the answers to those, said so beside the rundown
-      week ? `${week}${rundown ? ' (counting only what it sent on its own)' : ''}.` : '',
-      s.pausedGoals.length
-        ? `Paused goals: ${s.pausedGoals.map((g) => `${g.title} (${g.reason})`).join('; ')}.`
-        : // said outright, so a pushback in the week is never read as a pause still holding
-          !s.pausedUntil && s.mode !== 'off'
-          ? 'Nothing is paused now.'
-          : '',
-      r.note ?? '',
-    ]
-      .filter(Boolean)
-      .join(' ');
+    // asked about one person, the card is that person's answer and whether anything is paused, never the whole week
+    const onePerson = input.personName
+      ? why
+        ? why.answer
+        : `Orbit has no one called ${input.personName} in your people, so it never weighed them.`
+      : '';
+    const pauseLine = s.pausedUntil
+      ? `Autopilot is paused until ${openEndedPause(s.pausedUntil, ctx.now) ? 'you say resume' : when(s.pausedUntil, ctx)}.`
+      : '';
+    const summary = onePerson
+      ? [onePerson, pauseLine].filter(Boolean).join(' ')
+      : [
+          '',
+          `${{ off: 'Orbit sends nothing on its own (Off)', assist: 'Assist is on', autopilot: 'Autopilot is on' }[s.mode] ?? `Mode: ${s.mode}`}${s.pausedUntil ? (openEndedPause(s.pausedUntil, ctx.now) ? ', paused until you say resume' : `, paused until ${when(s.pausedUntil, ctx)}`) : ''}.`,
+          `Sent ${s.sentToday.length} on its own today${s.sentToday.length ? ` (${s.sentToday.map((i) => i.personName).join(', ')})` : ''}${booked ? `, ${plural(booked, 'call')} booked` : ''}; ${plural(s.queued.length, 'message')} queued for the morning${s.queued.length ? ` (${s.queued.map((i) => i.personName).join(', ')}${taps ? `; ${taps} waiting for your tap` : ''})` : ''}; ${plural(s.held.length, 'message')} held${s.held.length ? ` (${s.held.map((i) => i.personName).join(', ')})` : ''}; ${plural(s.needsYou.length, 'reply', 'replies')} need you.`,
+          s.friendAsks?.length
+            ? `${plural(s.friendAsks.length, 'ask')} to a friend ready for your tap: ${s.friendAsks.map((a) => `${a.friendName} for ${a.targetName}`).join(', ')}.`
+            : '',
+          rundown,
+          // the week line counts only what autopilot sent on its own and the answers to those, said so beside the rundown
+          week ? `${week}${rundown ? ' (counting only what it sent on its own)' : ''}.` : '',
+          s.pausedGoals.length
+            ? `Paused goals: ${s.pausedGoals.map((g) => `${g.title} (${g.reason})`).join('; ')}.`
+            : // said outright, so a pushback in the week is never read as a pause still holding
+              !s.pausedUntil && s.mode !== 'off'
+              ? 'Nothing is paused now.'
+              : '',
+          r.note ?? '',
+        ]
+          .filter(Boolean)
+          .join(' ');
     const data = {
       mode: s.mode,
       pausedUntil: openEndedPause(s.pausedUntil, ctx.now) ? 'until the student says resume' : s.pausedUntil,
