@@ -248,9 +248,10 @@ test.describe('Chat home', () => {
       'prep',
       'list',
       'needs_confirmation',
-      'error',
     ])
       await expect(page.getByTestId(`result-${kind}`), kind).toBeVisible();
+    // a step that failed is the assistant's to work around: with an answer in the turn, the student never sees it
+    await expect(page.getByTestId('result-error')).toHaveCount(0);
     await expect(page.getByTestId('thread').getByText('Today', { exact: true })).toBeVisible();
     await expect(page.getByTestId('turn-user')).toHaveCSS('margin-left', /\d/);
     // the draft card is the real editor with the real buttons
@@ -260,7 +261,6 @@ test.describe('Chat home', () => {
     await expect(draft.getByRole('button', { name: /open email to/i })).toBeVisible();
     // the model's notes to itself stay out of the thread unless turned on in Settings
     await expect(page.getByTestId('progress-line')).toHaveCount(0);
-    await expect(page.getByTestId('result-error')).toContainText('could not find a chat');
     await shot(page, 'e2e-laptop-conversation');
     expect(await clipped(page, '[data-testid="chat-thread"]')).toEqual([]);
     await noOverflow(page, 'conversation');
