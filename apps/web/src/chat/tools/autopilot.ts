@@ -263,6 +263,17 @@ export const setAutopilotModeTool = defineTool({
   toModel,
 });
 
+/** What a send was, said with its person ("a bump to Ethan Park"), so a send and that person's reply never read as one. */
+const SENT_WHAT: Partial<Record<AutopilotItem['kind'], string>> = {
+  outreach: 'a first message',
+  first_touch: 'a first message',
+  bump: 'a bump',
+  schedule: 'a scheduling reply',
+  thank_you: 'a thank-you',
+  reply: 'a reply',
+  nurture: 'a check-in',
+};
+
 /** The groups a week's replies fall into, in the order the card says them: what needs the student first. */
 const REPLY_GROUPS = [
   'need you',
@@ -374,7 +385,7 @@ export const autopilotStatusTool = defineTool({
       : [
           '',
           `${{ off: 'Orbit sends nothing on its own (Off)', assist: 'Assist is on', autopilot: 'Autopilot is on' }[s.mode] ?? `Mode: ${s.mode}`}${s.pausedUntil ? (openEndedPause(s.pausedUntil, ctx.now) ? ', paused until you say resume' : `, paused until ${when(s.pausedUntil, ctx)}`) : ''}.`,
-          `Sent ${s.sentToday.length} on its own today${s.sentToday.length ? ` (${s.sentToday.map((i) => i.personName).join(', ')})` : ''}${booked ? `, ${plural(booked, 'call')} booked` : ''}; ${plural(s.queued.length, 'message')} queued for the morning${s.queued.length ? ` (${s.queued.map((i) => i.personName).join(', ')}${taps ? `; ${taps} waiting for your tap` : ''})` : ''}; ${plural(s.held.length, 'message')} held${s.held.length ? ` (${s.held.map((i) => i.personName).join(', ')})` : ''}; ${plural(s.needsYou.length, 'reply', 'replies')} need you.`,
+          `Sent ${s.sentToday.length} on its own today${s.sentToday.length ? ` (${s.sentToday.map((i) => `${SENT_WHAT[i.kind] ?? 'a message'} to ${i.personName}`).join(', ')})` : ''}${booked ? `, ${plural(booked, 'call')} booked` : ''}; ${plural(s.queued.length, 'message')} queued for the morning${s.queued.length ? ` (${s.queued.map((i) => i.personName).join(', ')}${taps ? `; ${taps} waiting for your tap` : ''})` : ''}; ${plural(s.held.length, 'message')} held${s.held.length ? ` (${s.held.map((i) => i.personName).join(', ')})` : ''}; ${plural(s.needsYou.length, 'reply', 'replies')} need you.`,
           s.friendAsks?.length
             ? `${plural(s.friendAsks.length, 'ask')} to a friend ready for your tap: ${s.friendAsks.map((a) => `${a.friendName} for ${a.targetName}`).join(', ')}.`
             : '',

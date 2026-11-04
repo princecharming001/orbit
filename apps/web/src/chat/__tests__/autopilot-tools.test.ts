@@ -98,7 +98,8 @@ describe('autopilot in the chat, phase 5', () => {
       /2 messages queued for the morning \(\w+ \w+, \w+ \w+; 2 waiting for your tap\); 1 message held \(\w+ \w+\)/,
     );
     // who got today's sends is named, so the card is never pointed at for a list it does not hold
-    expect(env.summary).toMatch(/Sent 3 on its own today \(\w+ \w+, \w+ \w+, \w+ \w+\)/);
+    // each send says what it was, so a bump to someone and their reply never read as one
+    expect(env.summary).toMatch(/Sent 3 on its own today \((?:a [\w -]+ to \w+ \w+(?:, |\))){3}/);
     expect(env.summary).toContain(
       'On autopilot this week: 9 sent, 4 replies, 2 calls, 1 pushback at Ramp (Chloe Dubois asked to stop) (counting only what it sent on its own).',
     );
