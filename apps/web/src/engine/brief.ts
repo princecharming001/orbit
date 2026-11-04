@@ -27,6 +27,7 @@ import {
   isRuleSuggestion,
   liftOdds,
   newId,
+  nicheWords,
   normalizeCompany,
   normalizeEmail,
   ownWordsOf,
@@ -40,6 +41,7 @@ import {
   selectForBrief,
   shortOrg,
   staleReason,
+  stepOf,
   suggestionFromCandidate,
   titleChangedMeaningfully,
   todayKey,
@@ -55,6 +57,7 @@ import { db } from '../db/schema';
 import { describeLlmFailure, hasLlm, llmDraft, llmSummary, toLlmError } from '../integrations/anthropic';
 import { latestReply, linkedInRepliesByPerson, newer } from './conversation';
 import { researchOpeners } from './deepResearch';
+import { draftPlaybookFor } from './draftKnowledge';
 import { goalRegisterDraft } from './goalDrafts';
 import { bestPathStrength, buildReachGraph, reachPersonIn } from './graph';
 import {
@@ -684,6 +687,25 @@ export async function buildDraftContext(
   const summary = resumeFacets.find((f) => f.kind === 'summary')?.text;
   // a report-back is addressed to the referrer; the chat on the suggestion is the target's chat
   const chat = kind === 'report_back' ? undefined : chatFound;
+  // the goal this message serves (plan 30): the chat's own goal, else the student's top active goal. Its kind and words
+  // pick the niche playbook, the same resolver the server uses; before, the kind was guessed from the cycle label.
+  const activeGoals = (await db.userGoals.where('userId').equals(user.id).toArray())
+    .filter((g) => g.status === 'active' && !g.deletedAt)
+    .sort((a, b) => a.priority - b.priority);
+  const goal =
+    activeGoals.find((g) => g.id === (chat as { goalId?: string } | undefined)?.goalId) ?? activeGoals[0];
+  // what the student told the chat to keep (plan 30): about themselves, and about this person
+  const memories = (await db.memories.where('userId').equals(user.id).toArray())
+    .filter((m) => !m.deletedAt && m.text.trim())
+    .sort((a, b) => b.importance - a.importance || b.lastSeenAt.localeCompare(a.lastSeenAt));
+  const remembered = memories
+    .filter((m) => !m.personId)
+    .slice(0, 8)
+    .map((m) => m.text);
+  const rememberedAboutThem = memories
+    .filter((m) => m.personId === person.id)
+    .slice(0, 5)
+    .map((m) => m.text);
   let thread: DraftContext['thread'];
   // their newest answer on any channel: a LinkedIn reply newer than the email thread is what the draft answers
   const reply = chat ? await latestReply(chat) : undefined;
@@ -975,6 +997,15 @@ export async function buildDraftContext(
       credibility: credibilityLine(resumeFacets),
       // in their own words (plan 24): how to introduce them, what they are going for, their rules
       ...pickWords(goals),
+      ...(goal
+        ? {
+            goal: goal.kind,
+            goalText: [goal.title, goal.description].filter(Boolean).join('. '),
+            ...(typeof goal.criteria.playbook === 'string' ? { goalBrief: goal.criteria.playbook } : {}),
+          }
+        : {}),
+      ...(remembered.length ? { remembered } : {}),
+      ...(rememberedAboutThem.length ? { rememberedAboutThem } : {}),
       schedulingLink: settings?.schedulingLink,
       timezone: user.timezone,
       pastOrgs,
@@ -1080,8 +1111,10 @@ async function materializeDraft(
   const template = generateDraft(ctx);
   let out = template;
   let generatedBy: OutboundMessage['generatedBy'] = 'template';
+  const playbook = draftPlaybookFor(ctx);
   const opts = (context: string) => ({
     kind,
+    ...(stepOf(kind) === 'first' ? { maxWords: nicheWords(playbook.niche)[1] } : {}),
     facts: ctx.facts,
     allowedUrls: [ctx.user.schedulingLink ?? '', user.linkedinUrl ?? ''].filter(Boolean),
     recipientEmail: person.primaryEmail,

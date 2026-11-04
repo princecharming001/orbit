@@ -6,6 +6,7 @@
 import type { FriendInvite } from '@orbit/core';
 import { useState } from 'react';
 import { Button, Input, useToast } from '../../ui';
+import { EmailTypoHint } from '../EmailTypoHint';
 
 const TAP = 'pointer-coarse:min-h-11';
 
@@ -94,6 +95,7 @@ export function InviteBox({
           {link ? 'Copy the link' : 'Get a link to send'}
         </Button>
       </form>
+      <EmailTypoHint email={email} onFix={setEmail} />
       {link && (
         <p className="text-[12.5px] text-ink-3 break-all" data-testid="friends-invite-link-text">
           {link}

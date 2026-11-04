@@ -12,7 +12,7 @@
 import { article } from '../drafts/phrasing';
 import { isRecruiter } from '../drafts/sector';
 import { normalizeCompany, stripDiacritics } from '../text/normalize';
-import type { RecruitingGoals, ResumeFacet, TargetCompany } from '../types';
+import type { Goal, RecruitingGoals, ResumeFacet, TargetCompany } from '../types';
 import { rankScore, replyOdds } from './quality';
 import {
   FUNCTION_SEARCH_TITLE,
@@ -91,11 +91,24 @@ export function buildDiscoverProfile(inp: {
   >[];
   outreach?: OutreachExample[];
   dismissed?: DismissSignal[];
+  /** the goals the student set in the chat or Settings (plan 30): their roles, companies and places count too */
+  userGoals?: Pick<Goal, 'targets' | 'priority' | 'status'>[];
 }): DiscoverProfile {
   const g = inp.goals ?? {};
+  const active = (inp.userGoals ?? []).filter((x) => x.status === 'active');
+  const goalRoles = active.flatMap((x) => x.targets.roles ?? []);
+  const goalPlaces = active.flatMap((x) => x.targets.geographies ?? []);
+  const goalCompanies = active.flatMap((x) =>
+    (x.targets.organizations ?? []).map((nameRaw) => ({
+      nameRaw,
+      priority: x.priority,
+      status: 'active' as const,
+    })),
+  );
   const titles = uniqBy(
     [
       ...(g.targetRoles ?? []).map(searchTitleFor),
+      ...goalRoles.map(searchTitleFor),
       ...(g.targetFunctions ?? []).map((f) => FUNCTION_SEARCH_TITLE[f] ?? f),
     ].filter((t) => t.trim().length > 1),
     (t) => t.toLowerCase(),
@@ -105,10 +118,13 @@ export function buildDiscoverProfile(inp: {
     targetTitles: titles,
     targetFunctions: g.targetFunctions ?? [],
     industries: (g.targetIndustries ?? []).map((i) => i.trim()).filter(Boolean),
-    locations: (g.targetLocations ?? []).map(placeName).filter((l) => l && !/^remote$/i.test(l)),
+    locations: uniqBy(
+      [...(g.targetLocations ?? []), ...goalPlaces].map(placeName).filter((l) => l && !/^remote$/i.test(l)),
+      (l) => l.toLowerCase(),
+    ),
     homeLocations: [inp.user.currentCity, inp.user.homeCity].map(placeName).filter(Boolean),
     targetCompanies: uniqBy(
-      inp.targetCompanies
+      [...inp.targetCompanies, ...goalCompanies]
         .filter((t) => t.status !== 'closed')
         .map((t) => ({ name: t.nameRaw, key: normalizeCompany(t.nameRaw), priority: t.priority }))
         .sort((a, b) => a.priority - b.priority),

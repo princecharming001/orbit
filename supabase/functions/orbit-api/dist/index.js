@@ -3338,9 +3338,22 @@ var QUOTE_MARKERS = [
   { re: /^Am\s[^\n]{5,200}(?:\n[^\n]{0,200})?\sschrieb[^\n]*:\s*$/m, needsDateOrAddress: true },
   { re: /^El\s[^\n]{5,200}(?:\n[^\n]{0,200})?\sescribió:\s*$/m, needsDateOrAddress: true },
   { re: /^Op\s[^\n]{5,200}(?:\n[^\n]{0,200})?\sschreef[^\n]*:\s*$/m, needsDateOrAddress: true },
-  { re: /^Em\s[^\n]{5,200}(?:\n[^\n]{0,200})?\sescreveu:\s*$/m, needsDateOrAddress: true }
+  { re: /^Em\s[^\n]{5,200}(?:\n[^\n]{0,200})?\sescreveu:\s*$/m, needsDateOrAddress: true },
+  // more clients and languages, after crisp-oss/email-reply-parser (MIT, lib/regex.ts), with bounded repeats
+  { re: /^Il\s[^\n]{5,200}(?:\n[^\n]{0,200})?\s(?:ha\s)?scritto:\s*$/m, needsDateOrAddress: true },
+  {
+    re: /^(?:W\sdniu|Dnia)\s[^\n]{5,200}(?:\n[^\n]{0,200})?\s(?:pisze|napisał(?:\(a\))?):\s*$/mu,
+    needsDateOrAddress: true
+  },
+  { re: /^Den\s[^\n]{5,200}(?:\n[^\n]{0,200})?\sskrev[^\n]{0,200}:\s*$/m, needsDateOrAddress: true },
+  { re: /^[a-z]{2,4}\.?\s[^\n]{5,200}\skirjoitti:\s*$/m, needsDateOrAddress: true },
+  { re: /^[^\n]{0,100}在[^\n]{3,200}写道[：:]\s*$/m, needsDateOrAddress: true },
+  { re: /^20\d{2}[./-][^\n]{3,200}(?:작성|のメッセージ):\s*$/m },
+  { re: /^[^\n]{2,100}\son\s[^\n]{3,100}\sat\s[^\n]{3,60}\swrote:\s*$/m, needsDateOrAddress: true },
+  { re: /^\s*\*?(?:From|Von|De|Van|Da)\s?:\*?\s[^\n]{1,200}?\s?[[<][^\n\]>]{3,200}@[^\n\]>]{3,200}[\]>]/im },
+  { re: /^-{1,12}\s?(?:Oprindelig besked|Message d'origine|Ursprüngliche Nachricht)\s?-{0,12}\s*$/im }
 ];
-var MOBILE_FOOTER = /^(sent from my [\w ]{2,30}|sent from (outlook|mail|yahoo mail|gmail)( for [\w ]+)?|get outlook for (ios|android)|sent via [\w ]{2,30}|sent with [\w ]{2,30})\.?$/i;
+var MOBILE_FOOTER = /^(sent from my [\w ]{2,30}|sent from (outlook|mail|yahoo mail|gmail)( for [\w ]+)?|get outlook for (ios|android)|sent via [\w ]{2,30}|sent with [\w ]{2,30}|envoyé (de|depuis) mon [\p{L} ]{2,30}|enviado desde mi [\p{L} ]{2,30}|gesendet von meinem [\p{L} ]{2,30}|verzonden vanaf mijn [\p{L} ]{2,30}|verstuurd vanaf mijn [\p{L} ]{2,30}|sendt fra min [\p{L} ]{2,30}|télécharger outlook pour (ios|android))\.?$/iu;
 function stripQuotedReply(body2) {
   let text3 = body2.replace(/\r\n/g, "\n");
   let cut = text3.length;
@@ -3850,7 +3863,22 @@ var COMPOSE_KINDS = [
 ];
 var COMPOSE_TEMPLATE_VERSION = "template-v2";
 function goalAsk(i) {
-  const topic = i.topic ?? "your work";
+  const topic = i.topic && i.topic.trim().split(/\s+/).length <= 5 ? i.topic.trim() : "your path";
+  if (i.niche === "ib_coffee_chat" || i.niche === "consulting_coffee_chat" || i.niche === "finance_coffee_chat")
+    return {
+      kind: "call",
+      text: "Would you have 15 minutes for a call about your path and your first year?"
+    };
+  if (i.niche === "research_position")
+    return {
+      kind: "question",
+      text: "Would there be room for an undergraduate in your lab, or a few minutes to talk about it?"
+    };
+  if (i.niche === "startup_job")
+    return {
+      kind: "call",
+      text: i.topic ? `Would you be open to a short call about the ${i.topic} role?` : "Would you be open to a short call about the role you are hiring for?"
+    };
   switch (i.goal) {
     case "recruiting":
       return { kind: "call", text: "Would you have 15 minutes for a call about your path and your team?" };
@@ -3867,12 +3895,16 @@ function goalAsk(i) {
     case "community":
       return { kind: "question", text: "Would you like to join us at the next one?" };
     case "collaboration":
-      return { kind: "question", text: `Have you tried your method on ${topic}?` };
+      return { kind: "question", text: "Would you be open to a short call about your research this month?" };
   }
 }
 var sentences = (...xs) => xs.filter((x) => !!x && !!x.trim()).map((x) => /[.!?]$/.test(x.trim()) ? x.trim() : `${x.trim()}.`).join(" ");
 function goalMiddle(i) {
   const org = i.recipient.org ? ` at ${i.recipient.org}` : "";
+  if (i.niche === "research_position")
+    return "I would like to get research experience in your area and I am ready to put in steady hours. I can send my CV and transcript.";
+  if (i.niche === "startup_job")
+    return `I would like to help build what your team${org} is working on, and I can share what I have built so far.`;
   const co = i.user.company ?? "our team";
   const topic = i.topic ?? "this";
   switch (i.goal) {
@@ -3929,14 +3961,25 @@ function intro(i) {
   return `My name is ${i.user.firstName}${about}.`;
 }
 function hookLine(i) {
-  return i.hook ? `${i.hook.text[0].toUpperCase()}${i.hook.text.slice(1)} stuck with me.` : "";
+  if (!i.hook) return "";
+  const t = i.hook.text.trim().replace(/[.]+$/, "");
+  const sentence2 = t.split(/\s+/).length > 8 || /\b(says|lists|is|are|was|were|has|have|takes|runs|works|wrote|published)\b/i.test(t);
+  if (!sentence2) return `${t[0].toUpperCase()}${t.slice(1)} stuck with me.`;
+  const toYou = t.replace(/\b(her|his|their)\b/gi, "your").replace(/\b(she|he|they)\b/gi, "you").replace(/^your\b/i, "your");
+  return `I saw that ${toYou[0].toLowerCase()}${toYou.slice(1)}.`;
+}
+function greetingOf(i) {
+  const academic = i.niche === "research_position" || i.niche === "research_collaboration";
+  if (academic && i.recipient.lastName && /\bprofessor\b/i.test(i.recipient.title ?? ""))
+    return `Dear Professor ${i.recipient.lastName},`;
+  return academic ? `Dear ${i.recipient.firstName},` : `Hi ${i.recipient.firstName},`;
 }
 var paragraphs = (...ps) => ps.filter((p) => p.trim()).join("\n\n");
 function composeFallback(i) {
   const ask3 = goalAsk(i);
   const sign = `Best,
 ${i.user.firstName}`;
-  const hi = `Hi ${i.recipient.firstName},`;
+  const hi = greetingOf(i);
   const via = i.via?.introducerFirstName;
   const target = i.target?.firstName ?? "them";
   const targetAt = i.target?.org ? ` at ${i.target.org}` : "";
@@ -4001,7 +4044,7 @@ ${i.user.firstName}`;
     case "bump": {
       body2 = paragraphs(
         hi,
-        `I wanted to bring this back to the top of your inbox. ${ask3.text} If now is not a good time, that is fine.`,
+        `I am following up on my note from last week. ${ask3.text} If now is not a good time, that is fine.`,
         sign
       );
       break;
@@ -4059,7 +4102,8 @@ var COMMON_CAPS = new Set(
   any anything anyone someone something all some most many much more still even only really
   saw read found noticed met came floating following followed surfacing congratulations congrats well
   speaking also especially again either neither both each every other another mostly for context
-  resume cv`.split(/\s+/)
+  resume cv professor prof dr phd postdoc lab undergraduate it's it'll that's there's let's you're we're they're
+  api apis ai ml llm sql ui ux pm cs ceo cto coo cfo vp mba ib`.split(/\s+/)
 );
 var PHRASE_CHECKS = [
   {
@@ -4123,7 +4167,8 @@ function unsupportedDetails(body2, context) {
     const unknown = words2.filter((w, i) => {
       const bare2 = w.replace(/'s$/, "").replace(/[.'-]+$/, "");
       if (!bare2 || COMMON_CAPS.has(bare2.toLowerCase()) || has2(bare2)) return false;
-      if (i === 0 && sentenceStart && words2.length === 1 && /^[A-Z][a-z]+$/.test(bare2)) return false;
+      if (i === 0 && sentenceStart && words2.length === 1 && /^[A-Z][a-z]+(?:'(?:ll|ve|re|d|s|m|t))?$/.test(bare2))
+        return false;
       return true;
     });
     if (unknown.length) out.push(phrase);
@@ -4146,7 +4191,7 @@ function validateDraft(d, opts) {
   const lower = body2.toLowerCase();
   const wc = wordsIn(body2);
   const limitKind = opts.kind === "schedule" && opts.asks?.length ? "reply" : opts.kind;
-  const max = MAX_WORDS[limitKind];
+  const max = Math.max(MAX_WORDS[limitKind], opts.maxWords ?? 0);
   if (wc > max + 25) issues.push({ code: "too_long", detail: `${wc} words, aim for ${max}`, blocking: true });
   else if (wc > max)
     issues.push({ code: "too_long", detail: `${wc} words, aim for ${max}`, blocking: false });
@@ -4206,7 +4251,10 @@ function validateDraft(d, opts) {
   for (const c of d.claims)
     if (c.kind === "about_person" && c.factId && !factIds.has(c.factId))
       issues.push({ code: "ungrounded_claim", detail: c.text, blocking: true });
-  if (opts.recipientFirstName && !body2.includes(opts.recipientFirstName) && !(opts.recipientFullName && body2.includes(opts.recipientFullName)))
+  const lastName = opts.recipientFullName?.trim().split(/\s+/).slice(1).pop();
+  if (opts.recipientFirstName && !body2.includes(opts.recipientFirstName) && !(opts.recipientFullName && body2.includes(opts.recipientFullName)) && !(lastName && new RegExp(
+    `\\b(Professor|Prof\\.?|Dr\\.?)\\s+${lastName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`
+  ).test(body2)))
     issues.push({ code: "missing_name", detail: opts.recipientFirstName, blocking: true });
   const school = opts.school?.trim() ? [opts.school.trim(), schoolShort(opts.school)] : [];
   for (const rule of brokenNeverRules(`${d.subject ?? ""}
@@ -5194,6 +5242,280 @@ async function tripBreaker(db2, userId, p) {
   return { tripped: true, text: text3 };
 }
 
+// packages/core/src/knowledge/index.ts
+var ASK_RULES = {
+  bank: 'A banker is asked about their group and path: how they chose it, what the first year looks like, what separates the summer analysts who do well. Never about staffing or an office (consulting words), never whether the group still has seats, never off-cycle or diversity programs. When the summer cycle is already late, ask how they would approach recruiting from here, never "before recruiting starts".',
+  pe: `Someone in private equity is asked how they made the move and what surprised them about the work, or, if senior, what they look for in the analysts they hire. Never about a bank's group, summer analyst seats or "your bank".`,
+  trading: 'A trader or researcher is asked how they prepared and what the first months were like, or how they chose between trading and research; a desk head gets one question only they can answer. Never "the office" or "your group".',
+  vc: 'An investor is asked how they got into venture and what their week looks like, or whether to operate first; a founder raising money asks "would you be open to a look" with one line of traction. Never "your bank", never how juniors get staffed.',
+  consulting: 'A consultant is asked how they chose their office or practice, how staffing worked in their first year, or what case prep actually helped; a partner is asked for judgment, never about their first year. Never a "group" or a desk.',
+  big_tech: "An engineer or PM at a large company is asked what the team owns, how intern projects are picked or what to practise; a manager what they look for; a VP or head for a pointer to someone closer to the intern class. Proof beats adjectives. Never a referral ask to a stranger in a first message.",
+  tech: 'An engineer or PM is asked what the team owns, how they ended up there and what their first months were like; a manager what they look for in interns and new grads. One link to something the student built beats any adjective. Never a referral or "openings" in a first message to someone the student has not talked to.',
+  startup: "A founder or early employee is asked how they joined so early and what the stage is like; a founder what they look for in early hires. Never a referral in message one.",
+  academic: 'A professor is asked about their research and how students take part, or whether they take undergraduate research assistants and what they look for in one. Never their "first few months" or "the path to" their university.',
+  other: "Someone whose firm Orbit does not know is asked how they got into their field and what helped early on; a senior person what they look for in people starting out. Never bank, consulting or desk words."
+};
+
+// packages/core/src/drafts/niche.ts
+var JOB_NOW = /\b(hiring|open (role|position)s?|job (post|posting|listing)|apply(ing)? (for|to)|founding (engineer|ml|designer|pm)|new[- ]grad|full[- ]time (role|job)|internship at (a|an) (startup|seed|series))/i;
+var STARTUP_GOAL = /\b(startups?|seed|series [ab]|early[- ]stage|yc|y combinator|founding)\b/i;
+var RESEARCH_GOAL = /\b(research (position|assistant|opportunit|experience|lab)|undergrad(uate)? research|\bRA\b|lab position|join (a|the|their|his|her) (lab|group)|(a|the) lab\b|reu\b|urop\b|pura\b|research this (summer|fall|spring|winter))/i;
+var COLLAB_GOAL = /\b(collaborat|co-?author|joint (paper|project)|research partner)/i;
+var GRAD_DEGREE = /\b(phd|ph\.d|doctoral|postdoc)\b/i;
+function nicheFor(i) {
+  const goal = i.goalText ?? "";
+  const sector = sectorOf(i.recipient, i.targetFunctions ?? []);
+  const firm = firmKindOf(i.recipient, sector, i.targetFunctions ?? []);
+  switch (i.goalKind) {
+    case "fundraising":
+    case "sales":
+    case "hiring":
+    case "cofounder":
+    case "community":
+      return i.goalKind;
+    case "collaboration":
+      return firm === "academic" && !GRAD_DEGREE.test(i.degree ?? "") && RESEARCH_GOAL.test(goal) ? "research_position" : "research_collaboration";
+    default:
+      break;
+  }
+  if (firm === "academic" || RESEARCH_GOAL.test(goal))
+    return GRAD_DEGREE.test(i.degree ?? "") || COLLAB_GOAL.test(goal) ? "research_collaboration" : "research_position";
+  if (firm === "startup" && (JOB_NOW.test(goal) || STARTUP_GOAL.test(goal))) return "startup_job";
+  if (STARTUP_GOAL.test(goal) && JOB_NOW.test(goal)) return "startup_job";
+  if (firm === "bank") return "ib_coffee_chat";
+  if (firm === "consulting") return "consulting_coffee_chat";
+  if (firm === "pe" || firm === "vc" || firm === "trading") return "finance_coffee_chat";
+  if (firm === "big_tech" || firm === "tech" || firm === "startup") return "tech_recruiting";
+  return i.goalKind === "advice" ? "advice" : "general";
+}
+function stepOf(kind) {
+  switch (kind) {
+    case "first_touch":
+    case "warm_first_touch":
+    case "outreach":
+    case "intro_request":
+    case "referral_ask":
+      return "first";
+    case "bump":
+      return "follow_up";
+    case "reply":
+    case "schedule":
+      return "reply";
+    case "thank_you":
+      return "thank_you";
+    default:
+      return "other";
+  }
+}
+var COMMON_FOLLOW_UP = 'Open by pointing back to the first note in a few words ("Following up on my note from last week about ..."), keep who the student is and the real link in one clause, add one new, true line (something they did since, a sharper question, a recent fact about them), and repeat the same ask in one line. Never "just bumping this", "circling back", "bringing this to the top of your inbox" or "in case it got buried", and no guilt.';
+var COMMON_REPLY = `If they named a time, check it against the free hours and take it when it is free; never turn down a free time they offered. Otherwise offer two or three exact start times (day, date, time and zone) inside the free hours that fit the week they named, at different times of day. Say how long and phone or video. Never write "I'm flexible, pick a time": choosing is the student's job. Only when nothing free fits, give the scheduling link or ask for two times that suit them. Never invent availability or hours the inputs do not give. Thanks in a few words, no gushing, no new questions.`;
+var NICHE_PLAYBOOKS = {
+  ib_coffee_chat: {
+    label: "an investment banking coffee chat",
+    first: 'Four to six short sentences. Open with the real link (same school or club, a referral, a shared employer) or one specific thing about their group. One line on who the student is, only the most relevant fact. Ask for 15 to 20 minutes by phone or Zoom to hear how they chose their group and what their first year has been like. Never a job, an interview, a referral, "openings" or a resume in a first message. Sign off with the full name.',
+    followUp: `After about a week, two or three sentences. ${COMMON_FOLLOW_UP} Bankers expect a follow-up; two in total is normal.`,
+    reply: "They said yes: thank them in a few words, then offer two or three concrete times from the free slots (or take the time they gave), say phone or Zoom and how long, and stop. No new questions, no pitch.",
+    thankYou: "Within a day of the call: one specific thing they said and what the student will do with it, then a light permission to keep in touch. Never ask for a referral in the thank-you.",
+    firstWords: [60, 120],
+    sources: [
+      "https://mergersandinquisitions.com/investment-banking/recruitment/networking/",
+      "https://www.wallstreetoasis.com/forum/investment-banking/what-kind-of-networking-cold-emails-do-you-respond-to",
+      "https://banking-at-michigan.squarespace.com/s/Email-Guide-for-IB-Recruitment-2.pdf"
+    ]
+  },
+  consulting_coffee_chat: {
+    label: "a consulting coffee chat",
+    first: 'Four to six short sentences. Open with the real link (school, club, office city) or one specific thing about their practice or office. One line on who the student is. Ask for 15 to 20 minutes to hear how they chose the firm and their office or practice, and what their first year of staffing was like. Never a referral, an interview or "openings" in a first message.',
+    followUp: `After about a week, two or three sentences. ${COMMON_FOLLOW_UP}`,
+    reply: "They said yes: thank them briefly, take their time or offer two or three concrete times from the free slots, confirm the medium and length, and stop.",
+    thankYou: "Within a day: one specific thing they said (about staffing, the case, the office) and what the student took from it, then a light permission to stay in touch.",
+    firstWords: [60, 120],
+    sources: [
+      "https://mergersandinquisitions.com/investment-banking/recruitment/networking/",
+      "https://www.preplounge.com/en/blog/finance/investment-banking/interview/cold-email-ib"
+    ]
+  },
+  finance_coffee_chat: {
+    label: "a coffee chat in private equity, venture or trading",
+    first: "Four to six short sentences. The real link or one specific thing about their firm or a deal or post of theirs. One line on who the student is. Ask for 15 to 20 minutes on how they made the move into their seat and what the work is really like. Never a job or a referral in a first message.",
+    followUp: `After about a week, two or three sentences. ${COMMON_FOLLOW_UP}`,
+    reply: "They said yes: thank them briefly, offer two or three concrete times from the free slots or take theirs, confirm the medium and length.",
+    thankYou: "Within a day: one specific thing they said and what the student will do with it.",
+    firstWords: [60, 120],
+    sources: ["https://mergersandinquisitions.com/investment-banking/recruitment/networking/"]
+  },
+  tech_recruiting: {
+    label: "a recruiting chat with an engineer, PM or designer",
+    first: "Three to five sentences. The real link or one specific thing about their team or product. One line of proof about the student (something they built, with a result, or a link) rather than adjectives. Ask for 15 minutes on what the team owns and how they got there. Never a referral to a stranger in a first message.",
+    followUp: `After about a week, two or three sentences. ${COMMON_FOLLOW_UP}`,
+    reply: "They said yes: thank them briefly, offer two or three concrete times from the free slots or take theirs, confirm the length.",
+    thankYou: "Within a day: one specific thing they said and what the student will do with it.",
+    firstWords: [50, 110],
+    sources: ["https://www.1752.vc/learn/how-to-cold-email-a-startup-founder-for-a-job"]
+  },
+  startup_job: {
+    label: "a note to a startup about a role it is hiring for now",
+    first: 'Direct and concrete, 60 to 130 words. Name the role (from the topic or facts) and one specific thing about the product or a recent launch that shows real interest. One or two lines of proof of work: what the student built or shipped, with the result, and a link only if the inputs give one. One line on why this company now. The ask: a short call about the role, or the best way to be considered. Interest in the open role is welcome here; never "any openings?", never a referral ask to a stranger, never "passionate about startups".',
+    followUp: "After about a week, point back to the first note and the role in a few words, then one new thing: a small idea for their product, a quick take on their launch, or a piece of work with its result, and the same ask in one line. Stop after two follow-ups.",
+    reply: "They want to talk: say yes, take their time or offer two or three concrete times from the free slots, and answer what they asked (a GitHub link, hours, a start date) with what the student gave. Short.",
+    thankYou: "Within a day: thank them, one thing from the conversation that made the role more interesting, and anything promised (a link, a sample) or when it will come.",
+    firstWords: [60, 130],
+    sources: [
+      "https://www.1752.vc/learn/how-to-cold-email-a-startup-founder-for-a-job",
+      "https://nextplayso.substack.com/p/extremely-practical-advice-for-getting",
+      "https://www.colinkeeley.com/blog/cold-email-your-way-into-an-internshipjob-at-any-startup"
+    ]
+  },
+  research_position: {
+    label: "an undergraduate asking about a place in a lab",
+    first: 'Formal and warm: "Dear Professor X" (a PhD student or postdoc by first name). 80 to 180 words in two or three short paragraphs. Name one specific paper or project of theirs from the facts and one honest sentence on what drew the student to it, never a copied summary. Their year and major, the relevant coursework or skills, any lab or project experience, or plainly that they are new and eager to learn. Their availability (hours a week, which terms) when the inputs give it. The ask: whether there might be a place for an undergraduate in the lab, or a short meeting to talk about it. Offer to send a CV and transcript; never say they are attached. Never flattery, never asking about pay first. Subject names the research area and that they are an undergraduate.',
+    followUp: "After one to two weeks, three or four polite sentences: point back to the first note and the paper it named, restate year and major in one clause, the availability again, one new detail (a course finished, a skill picked up) if the inputs give one, and the same ask. Professors are busy and a follow-up is normal.",
+    reply: "Answer exactly what they asked (availability, interests, CV) with what the student gave, offer times if a meeting is proposed, and say the CV or transcript will follow rather than claiming an attachment. Short and formal.",
+    thankYou: "After meeting: thank them, one thing they said about the project, and the next step that was agreed (a reading, a start date, a form).",
+    firstWords: [80, 180],
+    sources: [
+      "https://urop.mit.edu/students/resources/approaching-faculty/email-templates/",
+      "https://exl.cns.utexas.edu/do-research/find-research-lab/how-reach-out-professors",
+      "https://our.unc.edu/find/emails-to-faculty/",
+      "https://pcur.princeton.edu/2025/04/21/cracking-cold-emails-reaching-out-to-professors-in-a-way-that-works/"
+    ]
+  },
+  research_collaboration: {
+    label: "a researcher proposing a collaboration",
+    first: 'Precise and collegial, 50 to 150 words. One specific question about their paper and the overlap with the student’s own work, named concretely. The ask: a 20 minute call to compare notes, or whether they would be open to it. Never flattery, never a vague "let’s collaborate".',
+    followUp: `After about two weeks, two or three sentences. ${COMMON_FOLLOW_UP}`,
+    reply: "Answer what they said, propose concrete times from the free slots if they want to talk, short.",
+    thankYou: "After the call: the one idea agreed on and the next step with its owner.",
+    firstWords: [50, 150],
+    sources: ["https://urop.mit.edu/students/resources/approaching-faculty/email-templates/"]
+  },
+  fundraising: {
+    label: "a founder writing to an investor",
+    first: 'Crisp, numbers first: two lines on what the company does and why now, one line of traction only if the inputs give one, then "would you be open to a look?" Never a valuation, a fake deadline or the whole pitch.',
+    followUp: `After about a week, two sentences with one new number or milestone if the inputs give one. ${COMMON_FOLLOW_UP}`,
+    reply: "Answer what they asked, offer times from the free slots, and send what they asked for if the inputs have it.",
+    thankYou: "After the meeting: thank them, the one question they raised and when the answer comes.",
+    firstWords: [50, 120],
+    sources: ["packages/core/src/knowledge/fundraising.md"]
+  },
+  sales: {
+    label: "a first sales note",
+    first: 'Short and concrete: the trigger or a specific observation about them, what the product does for people like them in plain words with one result if the inputs give one, then "worth a quick look?" with an out.',
+    followUp: `After about a week, one new reason it matters to them now. ${COMMON_FOLLOW_UP}`,
+    reply: "Answer what they said and offer times from the free slots. No feature list.",
+    thankYou: "After the call: the one problem they named and the next step.",
+    firstWords: [40, 90],
+    sources: ["packages/core/src/knowledge/sales.md"]
+  },
+  hiring: {
+    label: "a founder recruiting someone",
+    first: 'Direct and respectful of their current job: why them (something they built or did), the company and stage and the one thing that makes the role interesting, then "open to hearing about it?"',
+    followUp: `After about a week, one new line about the role or the team. ${COMMON_FOLLOW_UP}`,
+    reply: "Answer what they asked and offer times from the free slots.",
+    thankYou: "After the call: thank them and the next step.",
+    firstWords: [50, 110],
+    sources: ["packages/core/src/knowledge/hiring.md"]
+  },
+  advice: {
+    label: "asking someone for advice",
+    first: 'Warm and humble: the real link, the one question only this person can answer, and 15 to 20 minutes with an easy out. Never "any advice you have", never "be my mentor".',
+    followUp: `After about a week, two or three sentences. ${COMMON_FOLLOW_UP}`,
+    reply: "Thank them briefly, take their time or offer two or three concrete times from the free slots.",
+    thankYou: "Within a day: what they said and what the student will do with it.",
+    firstWords: [50, 120],
+    sources: ["packages/core/src/knowledge/advice.md"]
+  },
+  cofounder: {
+    label: "looking for a co-founder",
+    first: "Peer to peer: what the student is building and why, why this person (what they built or spent years inside), and 20 minutes to compare notes on the problem. Never equity or titles.",
+    followUp: `After about a week, one new line on the problem or progress. ${COMMON_FOLLOW_UP}`,
+    reply: "Answer what they said and offer times from the free slots.",
+    thankYou: "After the call: the one thing to try next and who does it.",
+    firstWords: [50, 120],
+    sources: ["packages/core/src/knowledge/cofounder.md"]
+  },
+  community: {
+    label: "an invitation to an event or group",
+    first: "Friendly and concrete: the named event or group with the date and place, who else is coming if the inputs say so, why this person would add something, and a plain invitation.",
+    followUp: "Closer to the date, one line with the details and the invitation again.",
+    reply: "Confirm the details they asked about.",
+    thankYou: "After the event: thank them for coming and one thing from it.",
+    firstWords: [40, 100],
+    sources: ["packages/core/src/knowledge/community.md"]
+  },
+  general: {
+    label: "a networking message",
+    first: "The real link or one specific thing about them, one line on who the student is, and one small, clear ask with an easy out.",
+    followUp: `After about a week, two or three sentences. ${COMMON_FOLLOW_UP}`,
+    reply: "Answer what they said, offer concrete times from the free slots if they want to talk, short.",
+    thankYou: "Within a day: one specific thing they said and what the student will do with it.",
+    firstWords: [50, 120],
+    sources: ["packages/core/src/knowledge/etiquette.md"]
+  }
+};
+var NICHE_FORM = {
+  ib_coffee_chat: { ask: "call", gradeMax: 7, callMinutes: 15 },
+  consulting_coffee_chat: { ask: "call", gradeMax: 7, callMinutes: 15 },
+  finance_coffee_chat: { ask: "call", gradeMax: 7, callMinutes: 15 },
+  tech_recruiting: { ask: "call", gradeMax: 7, callMinutes: 15 },
+  startup_job: { ask: "call", gradeMax: 8, callMinutes: 20 },
+  research_position: {
+    ask: "question",
+    gradeMax: 10,
+    greeting: '"Dear Professor <last name>," for faculty (a PhD student, postdoc or lab manager by first name), whatever <voice> uses for greetings',
+    callMinutes: 20
+  },
+  research_collaboration: {
+    ask: "question",
+    gradeMax: 10,
+    greeting: '"Dear Professor <last name>," for faculty not yet met, whatever <voice> uses for greetings',
+    callMinutes: 20
+  },
+  fundraising: { ask: "interest", gradeMax: 8, callMinutes: 30 },
+  sales: { ask: "interest", gradeMax: 7, callMinutes: 20 },
+  hiring: { ask: "interest", gradeMax: 7, callMinutes: 20 },
+  advice: { ask: "call", gradeMax: 7, callMinutes: 15 },
+  cofounder: { ask: "call", gradeMax: 7, callMinutes: 20 },
+  community: { ask: "question", gradeMax: 7 },
+  general: { ask: "call", gradeMax: 7, callMinutes: 15 }
+};
+var FIRM_ASK_NICHES = /* @__PURE__ */ new Set([
+  "ib_coffee_chat",
+  "consulting_coffee_chat",
+  "finance_coffee_chat",
+  "tech_recruiting",
+  "advice",
+  "general"
+]);
+function nicheWords(niche) {
+  return NICHE_PLAYBOOKS[niche].firstWords;
+}
+function draftPlaybook(i) {
+  const niche = nicheFor(i);
+  const form = NICHE_FORM[niche];
+  const lines = nicheRules(niche, i.kind, i.goalBrief);
+  const step = stepOf(i.kind);
+  if (step === "first" && FIRM_ASK_NICHES.has(niche)) {
+    const sector = sectorOf(i.recipient, i.targetFunctions ?? []);
+    lines.push(ASK_RULES[firmKindOf(i.recipient, sector, i.targetFunctions ?? [])]);
+  }
+  if (form.greeting && step !== "other") lines.push(`Greeting: ${form.greeting}.`);
+  if (form.callMinutes && (step === "first" || step === "reply"))
+    lines.push(
+      `A call here is ${form.callMinutes} minutes unless they named a length; a reply that sets one up says the length and phone or video.`
+    );
+  return { niche, label: NICHE_PLAYBOOKS[niche].label, form, lines };
+}
+function nicheRules(niche, kind, goalBrief) {
+  const p = NICHE_PLAYBOOKS[niche];
+  const step = stepOf(kind);
+  const rule = step === "first" ? p.first : step === "follow_up" ? p.followUp : step === "reply" ? `${p.reply} ${COMMON_REPLY}` : step === "thank_you" ? p.thankYou : "";
+  const out = rule ? [`This is ${p.label}. ${rule}`] : [];
+  const brief = goalBrief?.trim();
+  if (brief) out.push(`For this goal in particular: ${brief.slice(0, 700)}`);
+  return out;
+}
+
 // packages/core/src/drafts/compose.ts
 var READING_GRADE_MAX = 7;
 var LINKEDIN_MESSAGE_MAX = 400;
@@ -5221,9 +5543,9 @@ var COMPOSE_BANNED_PHRASES = [
   "hope this finds you well",
   "quick question"
 ];
-function wordRange(kind, goal) {
-  if (FIRST_TOUCH_KINDS.has(kind)) return goal === "sales" ? [40, 90] : [50, 110];
-  if (kind === "bump") return [15, 50];
+function wordRange(kind, goal, niche) {
+  if (FIRST_TOUCH_KINDS.has(kind)) return niche ? nicheWords(niche) : goal === "sales" ? [40, 90] : [50, 110];
+  if (kind === "bump") return niche ? [20, 75] : [15, 50];
   return [MIN_WORDS[kind], MAX_WORDS[kind]];
 }
 function syllables(word) {
@@ -5254,6 +5576,10 @@ var ASK_PHRASE = /\b(would you|could you|could we|can we|can you|are you open|op
 function asksIn(body2) {
   return prose(body2).sentences.filter((s) => s.endsWith("?") || ASK_PHRASE.test(s));
 }
+function cleanSubject(subject) {
+  return subject.replace(/^\s*((re|fwd?)\s*:\s*)+/i, "").trim();
+}
+var READING_GRADE_SLACK = 1;
 function wordHit(lower, phrase) {
   return new RegExp(`(^|[^a-z])${phrase.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}([^a-z]|$)`).test(lower);
 }
@@ -5298,10 +5624,18 @@ function validateComposed(msg, ctx) {
       );
     if (FIRST_TOUCH_KINDS.has(msg.kind) && words2 < 12) block3("words_out_of_range", `${words2} words`);
   } else {
-    const [min, max] = wordRange(msg.kind, ctx.goal);
+    const [min, max] = wordRange(msg.kind, ctx.goal, ctx.niche);
     if (words2 < min || words2 > max) block3("words_out_of_range", `${words2} words, want ${min}–${max}`);
   }
-  if (grade > READING_GRADE_MAX) block3("reading_grade", `grade ${grade}, want ${READING_GRADE_MAX} or lower`);
+  const gradeMax = ctx.niche ? NICHE_FORM[ctx.niche].gradeMax : READING_GRADE_MAX;
+  if (grade > gradeMax + READING_GRADE_SLACK)
+    block3("reading_grade", `grade ${grade}, want ${gradeMax} or lower`);
+  else if (grade > gradeMax)
+    issues.push({
+      code: "reading_grade",
+      detail: `grade ${grade}, want ${gradeMax} or lower`,
+      blocking: false
+    });
   const asks = asksIn(body2);
   const wantsNone = msg.kind === "reengage" && (msg.ask?.kind ?? "none") === "none";
   if (wantsNone) {
@@ -5311,7 +5645,7 @@ function validateComposed(msg, ctx) {
     else if (asks.length > 1) block3("several_asks", `${asks.length} asks: ${asks.join(" | ")}`);
   } else if (asks.length > 1) block3("several_asks", `${asks.length} asks: ${asks.join(" | ")}`);
   if (msg.channel === "gmail") {
-    const subject = (msg.subject ?? "").trim();
+    const subject = cleanSubject(msg.subject ?? "");
     if (!subject) {
       if (FIRST_TOUCH_KINDS.has(msg.kind) || msg.kind === "intro_request")
         block3("subject_missing", "no subject");
@@ -5357,30 +5691,6 @@ ${body2}`, ctx.inputs))
   return { ok: !deduped.some((i) => i.blocking), issues: deduped, words: words2, grade };
 }
 
-// packages/core/src/knowledge/index.ts
-var DRAFT_RULES = {
-  recruiting: 'Recruiting register: warm, curious, specific. The ask is a 15 minute call about their path and their team (20 for an alum). Never a job, a referral, a resume review or "openings" in a first message; proof of interest is one specific thing about them, not about the student.',
-  fundraising: 'Fundraising register: crisp, numbers first, confident. Two lines on what the company does and why now, one line of traction only if the context gives one, then "would you be open to a look?" Never a job hunting line, never a valuation, never a fake deadline, never the whole pitch.',
-  sales: 'Sales register: short, concrete, no hype. Open with the trigger or the specific observation about them, say what the product does for people like them in plain words with one result if the context gives one, then "worth a quick look?" with an out. No feature list, no attachment.',
-  hiring: 'Hiring register: direct and respectful of their current job. Line one is why them (something they built or did), line two the company, stage and the one thing that makes the role interesting, line three "open to hearing about it?" Never "exciting opportunity", never a pasted job description.',
-  advice: `Advice register: warm, humble, specific. One real connection, the one question only this person can answer ("I'm deciding between X and Y and you did both"), a 15 to 20 minute ask with an out. Never "any advice you have", never "be my mentor", never a resume.`,
-  cofounder: 'Co-founder register: peer to peer. One line on what the student is building and why them, one line on why this person (what they built or spent years inside), a 20 minute ask to compare notes on the problem. Never equity, never a title, never "looking for a technical co-founder" as the opener.',
-  community: "Community register: friendly and concrete. A named event or group with the date and place, two or three people they would know who are coming, why this person would add something, and a plain invitation. Never a mass invite, never a bare link.",
-  collaboration: 'Collaboration register: precise and academic. Name the specific paper or talk and the specific thing in it, ask one precise question or state one concrete overlap, and ask for an answer by email or 20 minutes. "Dear Professor Lastname" for faculty not yet met; never "I am passionate about research".'
-};
-var ASK_RULES = {
-  bank: 'A banker is asked about their group and path: how they chose it, what the first year looks like, what separates the summer analysts who do well. Never about staffing or an office (consulting words), never whether the group still has seats, never off-cycle or diversity programs. When the summer cycle is already late, ask how they would approach recruiting from here, never "before recruiting starts".',
-  pe: `Someone in private equity is asked how they made the move and what surprised them about the work, or, if senior, what they look for in the analysts they hire. Never about a bank's group, summer analyst seats or "your bank".`,
-  trading: 'A trader or researcher is asked how they prepared and what the first months were like, or how they chose between trading and research; a desk head gets one question only they can answer. Never "the office" or "your group".',
-  vc: 'An investor is asked how they got into venture and what their week looks like, or whether to operate first; a founder raising money asks "would you be open to a look" with one line of traction. Never "your bank", never how juniors get staffed.',
-  consulting: 'A consultant is asked how they chose their office or practice, how staffing worked in their first year, or what case prep actually helped; a partner is asked for judgment, never about their first year. Never a "group" or a desk.',
-  big_tech: "An engineer or PM at a large company is asked what the team owns, how intern projects are picked or what to practise; a manager what they look for; a VP or head for a pointer to someone closer to the intern class. Proof beats adjectives. Never a referral ask to a stranger in a first message.",
-  tech: 'An engineer or PM is asked what the team owns, how they ended up there and what their first months were like; a manager what they look for in interns and new grads. One link to something the student built beats any adjective. Never a referral or "openings" in a first message to someone the student has not talked to.',
-  startup: "A founder or early employee is asked how they joined so early and what the stage is like; a founder what they look for in early hires. Never a referral in message one.",
-  academic: 'A professor is asked about their research and how students take part, or whether they take undergraduate research assistants and what they look for in one. Never their "first few months" or "the path to" their university.',
-  other: "Someone whose firm Orbit does not know is asked how they got into their field and what helped early on; a senior person what they look for in people starting out. Never bank, consulting or desk words."
-};
-
 // supabase/functions/_shared/rows.ts
 function iso(v) {
   if (v === null || v === void 0 || v === "") return null;
@@ -5402,6 +5712,12 @@ function firstNameOf(p) {
   if (f2) return f2;
   const d = typeof p.display_name === "string" ? p.display_name.trim() : "";
   return d.split(/\s+/)[0] || "there";
+}
+function lastNameOf(p) {
+  const l = typeof p.last_name === "string" && p.last_name.trim() ? p.last_name.trim() : "";
+  if (l) return l;
+  const words2 = (typeof p.display_name === "string" ? p.display_name.trim() : "").split(/\s+/);
+  return words2.length > 1 ? words2[words2.length - 1] : void 0;
 }
 
 // supabase/functions/_shared/zones.ts
@@ -5520,6 +5836,48 @@ function pickSlots(busy, opts) {
   }
   return out;
 }
+function freeWindows(busy, opts) {
+  const from = opts.now.getTime() + LEAD_HOURS * 36e5;
+  const until = (opts.until ?? addBusinessDays(opts.now, HORIZON_BUSINESS_DAYS, opts.userTz)).getTime();
+  const days = opts.days ?? HORIZON_BUSINESS_DAYS;
+  const buffer = BUFFER_MIN * 6e4;
+  const step = 15 * 6e4;
+  const hm = (d) => new Intl.DateTimeFormat("en-US", {
+    timeZone: opts.labelTz,
+    hour: "2-digit",
+    minute: "2-digit",
+    hourCycle: "h23"
+  }).format(new Date(d));
+  const out = [];
+  let key = localParts(new Date(from), opts.userTz).key;
+  for (let i = 0; i < 31 && out.length < days; i++, key = addDaysKey(key, 1)) {
+    const dow = weekdayOfKey(key);
+    if (dow === 0 || dow === 6 || usHolidays(Number(key.slice(0, 4))).has(key)) continue;
+    const dayStart = zonedTime(key, DAY_START.hour, DAY_START.minute, opts.userTz).getTime();
+    const dayEnd = zonedTime(key, DAY_END.hour, DAY_END.minute, opts.userTz).getTime();
+    if (dayStart > until) break;
+    const spans = [];
+    for (let t = Math.max(dayStart, Math.ceil(from / step) * step); t + step <= Math.min(dayEnd, until); t += step) {
+      if (busy.some((b) => t < b.end + buffer && t + step > b.start - buffer)) continue;
+      const last = spans[spans.length - 1];
+      if (last && last[1] === t) last[1] = t + step;
+      else spans.push([t, t + step]);
+    }
+    const usable2 = spans.filter(([a, b]) => b - a >= SLOT_MINUTES * 6e4);
+    const first = usable2[0];
+    if (!first) continue;
+    const day2 = new Intl.DateTimeFormat("en-US", {
+      timeZone: opts.labelTz,
+      weekday: "short",
+      month: "short",
+      day: "numeric"
+    }).format(new Date(first[0]));
+    out.push(
+      `${day2}: ${usable2.map(([a, b]) => `${hm(a)} to ${hm(b)}`).join(", ")} ${zoneAbbrev(new Date(first[0]), opts.labelTz)}`
+    );
+  }
+  return out;
+}
 async function googleCall(s, userId, url, body2) {
   if (!s.tokens) throw new HttpError(503, "unconfigured", "Google is not configured");
   for (let attempt = 0; attempt < 2; attempt++) {
@@ -5588,7 +5946,12 @@ async function slotsFor(s, userId, opts = {}) {
     source = "stored";
   }
   const count = Math.max(1, Math.min(5, opts.count ?? 3));
-  return { slots: pickSlots(busy, { now, userTz, labelTz, count, until: timeMax }), tz: labelTz, source };
+  return {
+    slots: pickSlots(busy, { now, userTz, labelTz, count, until: timeMax }),
+    windows: freeWindows(busy, { now, userTz, labelTz, until: timeMax }),
+    tz: labelTz,
+    source
+  };
 }
 var STATE_TTL_MS2 = 10 * 6e4;
 async function calendarConsentUrl(s, userId, appUrl) {
@@ -5761,6 +6124,1274 @@ import { z as z3 } from "npm:zod@3.25.76/v4";
 
 // supabase/functions/_shared/memory/memory.ts
 import { z as z2 } from "npm:zod@3.25.76/v4";
+
+// packages/core/src/entity/resolve.ts
+import { getDomain, getDomainWithoutSuffix } from "npm:tldts@7.4.18";
+
+// packages/core/src/entity/nicknames.data.ts
+var NICKNAME_DATA = [
+  "aaron:erin ron ronnie",
+  "abbigail:abbe abbey abbi abbie abby gail nabby",
+  "abbigale:abbe abbey abbi abbie abby gail nabby",
+  "abednego:bedney",
+  "abel:ab abe eb ebbie",
+  "abiel:ab",
+  "abigail:abbe abbey abbi abbie abby gail nabby",
+  "abigale:abbe abbey abbi abbie abby gail nabby",
+  "abijah:ab bige",
+  "abner:ab",
+  "abraham:ab abe",
+  "abram:ab abe",
+  "absalom:ab abbie app",
+  "ada:addy adie",
+  "adaline:ada addy adie delia dell lena",
+  "addison:addie addy",
+  "adela:adie della",
+  "adelaide:addy adele adie dell della heidi",
+  "adelbert:albert bert del delbert",
+  "adele:addy dell",
+  "adeline:ada addy delia dell lena",
+  "adelphia:addy adele dell delphia philly",
+  "adena:adina deena dena dina",
+  "adolphus:ado adolph dolph",
+  "adrian:rian",
+  "adriane:riane",
+  "adrienne:addie enne rienne",
+  "agatha:aga aggy",
+  "agnes:aggy inez nessa",
+  "aileen:allie lena",
+  "alan:al",
+  "alanson:al lanson",
+  "alastair:al",
+  "alazama:ali",
+  "albert:al bert",
+  "alberta:allie bert bertie",
+  "aldo:al",
+  "aldrich:rich riche richie",
+  "aleksandr:alek alex",
+  "aleva:leve levy",
+  "alex:al",
+  "alexa:alex lexi",
+  "alexander:al alec alex sandy",
+  "alexandra:alex alla sandra sandy",
+  "alexandria:alex alexander alla drina sandra",
+  "alexis:alex lexi",
+  "alfonse:al",
+  "alfred:al fred freddy",
+  "alfreda:alfy freda freddy frieda",
+  "algernon:algy",
+  "alice:allie elsie lisa",
+  "alicia:allie elsie lisa",
+  "aline:adeline",
+  "alison:ali allie",
+  "alixandra:alix",
+  "allan:al alan allen",
+  "allen:al alan allan",
+  "allisandra:ali allie ally",
+  "allison:ali allie ally",
+  "allyson:ali allie ally",
+  "allyssa:ali allie ally",
+  "almena:ali allie ally mena",
+  "almina:minnie",
+  "almira:myra",
+  "alonzo:al lon lonzo",
+  "alphinias:alphus",
+  "althea:ally",
+  "alverta:vert virdie",
+  "alyssa:al ally lissia",
+  "alzada:zada",
+  "amanda:manda mandy",
+  "ambrose:brose",
+  "amelia:amy emily mel millie",
+  "amos:moses",
+  "anastasia:ana stacy",
+  "anderson:andy",
+  "andre:drea",
+  "andrea:andi andrew andy drea rea",
+  "andrew:andy drew randy",
+  "andriane:ada adri rienne",
+  "angela:angel angie",
+  "angelica:angel angelika angelique angie",
+  "angelina:angel angie lina",
+  "ann:annie nan",
+  "anna:ann anne annie nan",
+  "anne:ann annie nan",
+  "annette:anna nettie",
+  "annie:ann anna",
+  "anselm:ance anse ansel selma",
+  "anthony:ant tony",
+  "antoinette:ann netta tony",
+  "antonia:ann netta tony",
+  "antonio:ant tony",
+  "appoline:appie appy",
+  "aquilla:quil quillie",
+  "ara:arry belle",
+  "arabella:ara arry bella belle",
+  "arabelle:ara arry bella belle",
+  "araminta:armida middie minty ruminta",
+  "archibald:archie",
+  "archilles:kill killis",
+  "ariadne:ari arie",
+  "ariana:ari",
+  "arianna:ari",
+  "ariel:ari",
+  "arielle:arie",
+  "aristotle:telly",
+  "arizona:ona onie",
+  "arlene:arly lena",
+  "armanda:mandy",
+  "armena:arry mena",
+  "armilda:milly",
+  "arminda:mindie",
+  "arminta:minite minnie",
+  "arnold:arnie",
+  "aron:erin ron ronnie",
+  "artelepsa:epsey",
+  "artemus:art",
+  "arthur:art",
+  "arthusa:thursa",
+  "arzada:zaddi",
+  "asahel:asa",
+  "asaph:asa",
+  "asenath:assene natty sene",
+  "ashley:ash ashly leah lee",
+  "aubrey:bree",
+  "audrey:audree dee",
+  "august:gus",
+  "augusta:aggy gatsy gussie tina",
+  "augustina:aggy gatsy gussie tina",
+  "augustine:august austin gus",
+  "augustus:august austin gus",
+  "aurelia:aurilla ora orilla ree rilly",
+  "aurora:rory",
+  "avarilla:rilla",
+  "axel:ax",
+  "azariah:aze riah",
+  "bab:barby",
+  "babs:bab barbara barby",
+  "barbara:bab babs barbie barby bobbie",
+  "barbery:barbara",
+  "barbie:barbara",
+  "barnabas:barney",
+  "barney:barnabas",
+  "barrett:barry",
+  "bart:bartholomew",
+  "bartholomew:bart bartel bat mees meus",
+  "barticus:bart",
+  "bazaleel:basil",
+  "bea:beatrice",
+  "beatrice:bea trisha trix trixie",
+  "becca:beck",
+  "beck:becky",
+  "bedelia:bridgit delia",
+  "belinda:belle linda",
+  "bella:arabella belle isabella",
+  "ben:benji bennie benny",
+  "benedict:ben bennie",
+  "benjamin:ben benjy bennie benny jamie",
+  "benjy:benjamin",
+  "bennett:ben bennie benny",
+  "bernard:barney berney bernie berny",
+  "berney:bernie",
+  "bert:bertie bob bobby",
+  "bertha:bert bertie birdie",
+  "bertram:bert",
+  "bertrand:randy",
+  "bess:bessie",
+  "bessie:bess",
+  "beth:betsy betty elizabeth",
+  "bethena:beth thaney",
+  "beverly:bev",
+  "bezaleel:zeely",
+  "biddie:biddy",
+  "bill:billy fred robert william willie",
+  "billy:fred robert william",
+  "blanche:bea",
+  "bob:rob robert",
+  "bobby:bob rob",
+  "boetius:bo",
+  "brad:bradford ford",
+  "bradford:brad ford",
+  "bradley:brad",
+  "brady:brody",
+  "breanna:bree bri",
+  "breeanna:bree",
+  "brenda:brandy",
+  "brian:bryan bryant",
+  "briana:bri",
+  "brianna:bri",
+  "bridget:biddie biddy bridgie bridie",
+  "brittany:britt brittnie",
+  "brittney:britt brittnie",
+  "broderick:brady brody rick ricky rod",
+  "brooklyn:brook brooke",
+  "bryanna:ana anna bri briana brianna",
+  "bryant:bry bryan",
+  "caitlin:cait caity",
+  "caitlyn:cait caity",
+  "caldonia:calliedona",
+  "caleb:cal",
+  "california:callie",
+  "calista:kissy",
+  "callie:cal",
+  "calpurnia:cally",
+  "calvin:cal vin vinny",
+  "cameron:cam ron ronny",
+  "camila:cami mila",
+  "camile:cammie",
+  "camille:cammie millie",
+  "campbell:cam",
+  "candace:candy dacey",
+  "carla:carly karla",
+  "carlotta:lottie",
+  "carlton:carl",
+  "carmellia:mellia",
+  "carmelo:melo",
+  "carmon:cammie carm charm",
+  "carol:carolann carole caroline carri carrie cassie kara kari lynn",
+  "carolann:carol carole",
+  "caroline:carol carole carrie cassie lynn",
+  "carolyn:carrie cassie lynn",
+  "carrie:cassie",
+  "carthaette:etta etty",
+  "casper:jasper",
+  "cassandra:cassie sandra sandy",
+  "cassidy:cass cassie",
+  "cassie:cass",
+  "caswell:cass",
+  "catherine:casey cassie cathy kathy katy kay kit kittie lena trina",
+  "cathleen:casey cassie cathy kathy katy kay kit kittie lena trina",
+  "cathy:catherine cathleen kathy",
+  "cecilia:celia cissy",
+  "cedric:ced rick ricky",
+  "celeste:celia lessie",
+  "celinda:linda lindy lynn",
+  "charity:chat",
+  "charles:carl charlie chick chuck",
+  "charlie:charles chuck",
+  "charlotte:char lotta lottie sherry",
+  "chauncey:chan",
+  "chelsea:chels chelsie",
+  "chelsey:chelsie",
+  "cheryl:cher",
+  "chesley:chet",
+  "chester:chet",
+  "chet:chester",
+  "chick:caroline charlotte chuck",
+  "chloe:clo",
+  "chris:kris",
+  "christa:chris",
+  "christian:chris kit",
+  "christiana:ann chris christy crissy kris kristy tina",
+  "christiano:chris",
+  "christina:chris chrissy christy crissy kris kristy tina",
+  "christine:chris chrissy christy crissy kris kristy tina",
+  "christoffer:chris",
+  "christoph:chris",
+  "christopher:chris kit",
+  "christy:crissy",
+  "cicely:cilla",
+  "cinderella:arilla cindy rella rilla",
+  "cindy:cinderella",
+  "claire:clair clara clare",
+  "clara:clarissa",
+  "clare:clara",
+  "clarence:clair clare",
+  "clarinda:clara",
+  "clarissa:cissy clara",
+  "claudia:claud",
+  "cleatus:cleat",
+  "clement:clem",
+  "clementine:clem clement",
+  "cliff:clifford",
+  "clifford:cliff ford",
+  "clifton:cliff tony",
+  "cole:colie",
+  "colton:colt",
+  "columbus:clum",
+  "con:conny",
+  "conrad:con conny",
+  "constance:connie",
+  "cooper:coop",
+  "cordelia:cordy delia",
+  "corey:coco cordy ree",
+  "corinne:cora ora",
+  "cornelia:cornie corny nelia nelle nelly",
+  "cornelius:con conny corny neil niel",
+  "cory:coco cordy ree",
+  "courtney:court curt",
+  "crystal:chris crys stal tal",
+  "curtis:curt",
+  "cynthia:cindy cintha",
+  "cyrenius:cene cy renius serene swene",
+  "cyrus:cy",
+  "dahl:dal",
+  "dalton:dahl dal",
+  "dan:danny",
+  "daniel:dan dann danny",
+  "danielle:dani ellie",
+  "danny:daniel",
+  "daphne:daph daphie",
+  "darlene:darry lena",
+  "dave:davey",
+  "david:dave davey day",
+  "daycia:dacia daisha",
+  "deanna:dee deedee",
+  "deanne:ann dee",
+  "debbie:deb debby deborah debra",
+  "debby:deb",
+  "debora:deb debbie debby",
+  "deborah:deb debbie debby",
+  "debra:deb debbie",
+  "deidre:deedee",
+  "delbert:bert del",
+  "delia:cordelia delius fidelia",
+  "delilah:dell della lil lila",
+  "deliverance:della delly dilly",
+  "della:adela adelaide delilah dell",
+  "delores:dee dell della lola lolly",
+  "delpha:philadelphia",
+  "delphine:del delf delphi",
+  "demaris:dea maris mary",
+  "demerias:dea maris mary",
+  "democrates:mock",
+  "denise:dee",
+  "dennis:dennie denny",
+  "dennison:dennis denny",
+  "derek:derrek rick ricky",
+  "derick:rick ricky",
+  "derrick:eric rick ricky",
+  "deuteronomy:duty",
+  "diana:di dicey didi",
+  "diane:di dian dianne dicey didi",
+  "dicey:dicie",
+  "dick:richard rick",
+  "dickson:dick",
+  "domenic:dom nic",
+  "dominic:dom nic",
+  "dominick:dom nick nicky",
+  "dominico:dom",
+  "don:donnie donny",
+  "donald:don donnie donny dony",
+  "donato:don",
+  "donna:dona",
+  "donovan:don donnie donny dony",
+  "dorcus:darkey",
+  "dorinda:dora dorothea",
+  "doris:dora",
+  "dorothea:doda dora",
+  "dorothy:dolly dora dortha dot dottie dotty",
+  "dotha:dotty",
+  "dotty:dot",
+  "douglas:doug",
+  "drusilla:silla",
+  "duncan:dunk",
+  "dustin:dusty",
+  "earnest:ernestine ernie",
+  "ebbie:eb",
+  "ebenezer:eb ebbie eben",
+  "eddie:ed",
+  "eddy:ed",
+  "edgar:ed eddie eddy",
+  "edith:edie edye",
+  "edmond:ed eddie eddy",
+  "edmund:ed eddie eddy ned ted",
+  "edna:edny",
+  "eduardo:ed eddie eddy",
+  "edward:ed eddie eddy ned ted teddy",
+  "edwin:ed eddie eddy ned win",
+  "edwina:edwin",
+  "edyth:edie edye",
+  "edythe:edie edye",
+  "egbert:bert burt",
+  "eighta:athy",
+  "eileen:helen",
+  "elaine:helen lainie",
+  "elbert:albert bert",
+  "elbertson:bert elbert",
+  "eldora:dora",
+  "eleanor:elaine ellen ellie lanna lenora nelly nora",
+  "eleazer:lazar",
+  "elena:helen",
+  "eliana:ella elle ellie",
+  "elias:eli lee lias",
+  "elijah:eli lige",
+  "eliphalel:life",
+  "eliphalet:left",
+  "elisa:lisa",
+  "elisha:eli lish",
+  "eliza:elizabeth",
+  "elizabeth:bess bessie beth betsy betty eliza lib libby lisa liz liza lizzie lizzy",
+  "ella:el ellen",
+  "ellen:helen nell nellie",
+  "ellender:ellen helen nellie",
+  "ellie:elly",
+  "ellswood:elsey",
+  "elminie:minnie",
+  "elmira:ellie elly mira",
+  "elnora:nora",
+  "eloise:heloise louise",
+  "elouise:louise",
+  "elsie:elsey",
+  "elswood:elsey",
+  "elvira:elvie",
+  "elwood:woody",
+  "elysia:lisa lissa",
+  "elze:elsey",
+  "emanuel:manny manuel",
+  "emeline:em emily emma emmy milly",
+  "emil:em emily",
+  "emilia:em emmy millie",
+  "emily:em emma emmy mel millie",
+  "emma:em emmy",
+  "emmanuel:manny manuel",
+  "epaphroditius:dite ditus dyce dyche eppa",
+  "ephraim:eph",
+  "erasmus:rasmus raze",
+  "eric:rick ricky",
+  "erick:eric rick ricky",
+  "erik:eric rick ricky",
+  "ernest:ernie",
+  "ernestine:erna ernest teeny tina",
+  "erwin:irwin",
+  "eseneth:senie",
+  "essy:es",
+  "estella:essy stella",
+  "estelle:essy stella",
+  "esther:essie hester",
+  "eudicy:dicey",
+  "eudora:dora",
+  "eudoris:dosie dossie",
+  "eugene:gene",
+  "eunice:nicie",
+  "euphemia:effie effy",
+  "eurydice:dicey",
+  "eustacia:stacia stacy",
+  "eva:eve",
+  "evaline:eva eve lena",
+  "evangeline:ev evan vangie",
+  "evelyn:ev eve evelina",
+  "experience:exie",
+  "ezekiel:ez zeke",
+  "ezideen:ez",
+  "ezra:ez",
+  "faith:fay",
+  "fallon:fal falcon fall fallie fally falon lon lonnie",
+  "felicia:fel feli felix",
+  "felicity:flick tick",
+  "feltie:felty",
+  "ferdinand:ferdie fred freddie freddy",
+  "ferdinando:ferdie fred nando",
+  "fidelia:delia",
+  "fionna:fiona",
+  "flora:florence",
+  "florence:flo flora flossy",
+  "floyd:lloyd",
+  "fran:frannie",
+  "frances:cissy fanny fran francie frankie frannie franniey franny sis",
+  "francie:francine",
+  "francine:fran francie frannie franniey franny",
+  "francis:fran frank frankie",
+  "frank:frankie franky",
+  "frankie:francis frank",
+  "franklin:fran frank",
+  "franklind:fran frank",
+  "fred:freddie freddy",
+  "freda:frieda",
+  "frederica:erica erika freddy frederick rickey",
+  "frederick:derick erick fred freddie freddy fritz rick ricky",
+  "fredericka:ericka freda freddy frieda ricka rickey",
+  "frieda:fred freddie freddy",
+  "gabriel:gabby gabe",
+  "gabriella:ella gabby",
+  "gabrielle:ella gabby",
+  "gareth:gare gary",
+  "garrett:barrett gare garratt garret garry gary jerry rhett",
+  "garrick:garri",
+  "genevieve:eve jean jenny",
+  "geoffrey:geoff jeff",
+  "george:georgie",
+  "georgia:georgie",
+  "georgiana:georgia",
+  "georgine:george",
+  "gerald:gerry jerry",
+  "geraldine:dina gerri gerrie gerry jerry",
+  "gerhardt:gay",
+  "gertie:gert gertrude",
+  "gertrude:gert gertie trudy",
+  "gilbert:bert gil wilber",
+  "giovanni:gio",
+  "glenn:glen",
+  "gloria:glory",
+  "governor:govie",
+  "grace:gracie",
+  "grayson:gray",
+  "greenberry:berry green",
+  "greggory:gregg",
+  "gregory:gory greg",
+  "gretchen:margaret",
+  "griselda:grissel",
+  "gum:monty",
+  "gus:gussie",
+  "gustavus:gus gussie",
+  "gwen:wendy",
+  "gwendolyn:gwen wendy",
+  "hailey:haylee hayley",
+  "hamilton:ham",
+  "hannah:anna nan nanny",
+  "harold:hal hap haps harry",
+  "harriet:hattie",
+  "harrison:hap haps harry",
+  "harry:hap haps harold henry",
+  "haseltine:hassie",
+  "haylee:hailey hayley",
+  "hayley:hailey haylee",
+  "heather:hetty",
+  "helen:ella ellen ellie lena",
+  "helena:aileen eileen elaine eleanor ellen lena nell nellie",
+  "helene:ella ellen ellie lena",
+  "heloise:eloise elouise lois",
+  "henrietta:etta etty hank henny nettie retta",
+  "henry:hal hank hap haps harry",
+  "hephsibah:hipsie",
+  "hepsibah:hipsie",
+  "herbert:bert herb",
+  "herman:dutch harman",
+  "hermione:hermie",
+  "hester:esther hessy hetty",
+  "hezekiah:hez hy kiah",
+  "hillary:hilary",
+  "hipsbibah:hipsie",
+  "hiram:hy",
+  "honora:honey nora norah norry",
+  "hopkins:hop hopp",
+  "horace:horry",
+  "hortense:harty tensey",
+  "hosea:hosey hosie",
+  "howard:hal howie",
+  "hubert:bert hub hugh",
+  "ian:john",
+  "ignatius:iggy nace nate natius",
+  "ignatzio:iggy nace naz",
+  "immanuel:emmanuel manuel",
+  "india:indie indy",
+  "inez:agnes",
+  "iona:onnie",
+  "irene:rena",
+  "irvin:irving",
+  "irving:irv",
+  "irwin:erwin",
+  "isaac:ike zeke",
+  "isabel:bell bella belle ib issy nib nibby tibbie",
+  "isabella:bella belle ib issy nib nibby tibbie",
+  "isabelle:bella belle ib issy nib nibby tibbie",
+  "isadora:dora issy",
+  "isadore:izzy",
+  "isaiah:zadie zay",
+  "isidore:izzy",
+  "iva:ivy",
+  "ivan:john",
+  "jack:jackie",
+  "jackson:jack",
+  "jacob:jaap jake jay",
+  "jacobus:jacob",
+  "jacqueline:jack jackie jacqui",
+  "jahoda:hoda hodie hody",
+  "jakob:jake",
+  "jalen:al alen haylen jaelin jaelyn jailyn jay jaye jaylin jaylyn len lennie lenny",
+  "james:jamie jem jim jimmie jimmy",
+  "jamey:james jamie",
+  "jamie:james",
+  "jane:janie jean jennie jessie",
+  "janet:jan jessie",
+  "janice:jan",
+  "jannett:nettie",
+  "jasmine:jas jazz jazzy",
+  "jason:jase jay",
+  "jasper:casper jap",
+  "jayme:jay",
+  "jean:jane jeannie",
+  "jeanette:janet jean jessie nettie",
+  "jeanne:jane jeannie",
+  "jebadiah:jeb",
+  "jedediah:diah dyer jed",
+  "jedidiah:diah dyer jed",
+  "jefferey:jeff",
+  "jefferson:jeff sonny",
+  "jeffery:jeff",
+  "jeffrey:geoff jeff",
+  "jehiel:hiel",
+  "jehu:gee hugh",
+  "jemima:mima",
+  "jennet:jenn jenny jessie",
+  "jennie:jen jenny",
+  "jennifer:jen jenn jenni jennie jenny",
+  "jeremiah:jereme jerry",
+  "jeremy:jez jezza",
+  "jerita:rita",
+  "jerry:geraldine geri gerry jereme",
+  "jesse:jess",
+  "jessica:jess jessie",
+  "jessie:jane janet jess",
+  "jillian:jill",
+  "jim:jimmie",
+  "jimmie:jim jimmy",
+  "jincy:jane",
+  "jinsy:jane",
+  "joan:jo nonie",
+  "joann:jo",
+  "joanna:hannah jo joan jodi jody",
+  "joanne:jo",
+  "jocelyn:jo joss",
+  "jody:jo",
+  "joe:joey",
+  "joey:joe",
+  "johann:john",
+  "johanna:jo",
+  "johannah:hannah jo joan jody nonie",
+  "johannes:john johnny jonathan",
+  "john:ian jack jock johnny jon jonnie jonny",
+  "johnathan:john johnathon johny jon jonathan jonathon jonnie jonny nathan",
+  "johnathon:john johnathan johny jon jonathan jonathon jonnie jonny",
+  "jon:john johnny jonnie jonny",
+  "jonathan:john johnathan johnathon johny jon jonathon jonnie jonny nathan",
+  "jonathon:john johnathan johnathon johny jon jonathan jonnie jonny",
+  "jordan:jordy",
+  "joseph:jody joe joey jos",
+  "josephine:fina jo jody joey josey josie",
+  "josetta:jettie",
+  "josey:josophine",
+  "joshua:joe jos josh",
+  "josiah:jos",
+  "josophine:jo joey josey",
+  "joyce:joy",
+  "juanita:nettie nita",
+  "judah:jude juder",
+  "judith:juda jude judi judie judy",
+  "judson:jud sonny",
+  "judy:judith",
+  "julia:jill jules julie",
+  "julian:jule jules",
+  "julias:jule jules",
+  "julie:jule jules julia",
+  "june:junius",
+  "junior:jr june junie",
+  "justin:justina juston justus",
+  "kaitlin:kait kaitie",
+  "kaitlyn:kait kaitie",
+  "kaitlynn:kait kaitie",
+  "kalli:cali kali",
+  "kameron:kam",
+  "karla:carla carly",
+  "katarina:catherine tina",
+  "kate:kay",
+  "katelin:kate kay kaye",
+  "katelyn:kate kay kaye",
+  "katherine:cassie cathy kate kathy katie katy kay kaye kit kittie lena trina",
+  "kathleen:cassie cathy kathy katy kay kit kittie lena trina",
+  "kathryn:kate kathy katie",
+  "katia:kate katie",
+  "katy:kate kathy katie",
+  "kayla:kay",
+  "kelley:kelli kellie kelly",
+  "kendall:ken kenny",
+  "kendra:kay kenj kenji kenny",
+  "kendrick:ken kenny",
+  "kendrik:ken kenny",
+  "kennedy:ken kenny",
+  "kenneth:ken kendrick kenny",
+  "kenny:ken kenneth",
+  "kent:ken kendrick kenny",
+  "kerry:kerri",
+  "kevin:kev",
+  "keziah:kizza kizzie",
+  "kim:kimmy",
+  "kimberley:kim kimberli kimberly",
+  "kimberly:kim kimberley kimberli",
+  "kingsley:king",
+  "kingston:king",
+  "kit:kittie",
+  "kris:chris",
+  "kristel:kris",
+  "kristen:chris",
+  "kristin:chris",
+  "kristina:christina kris krissy tina",
+  "kristine:chris christy crissy kris kristy tina",
+  "kristofer:chris kris",
+  "kristoffer:chris kris",
+  "kristopher:chris kris",
+  "kristy:chris",
+  "kymberly:kym",
+  "lafayette:fate laffie",
+  "lamont:monty",
+  "laodicia:cenia dicy",
+  "larry:laurence lawrence",
+  "latisha:tish tisha",
+  "laura:laurie lori",
+  "laurel:laurie",
+  "lauren:laurie ren",
+  "laurence:larry lon lonny lorne lorry",
+  "laurinda:laura lawrence",
+  "lauryn:laurie",
+  "laveda:veda",
+  "laverne:verna vernon",
+  "lavina:ina vina viney",
+  "lavinia:ina vina viney",
+  "lavonia:vina viney vonnie wyncha",
+  "lavonne:von",
+  "lawrence:larry lawrie lon lonny lorne lorry",
+  "leanne:annie lea",
+  "lecurgus:curg",
+  "leilani:lani",
+  "lemuel:lem",
+  "lena:ellen",
+  "lenora:lee nora",
+  "leo:leon",
+  "leonard:len lenny leo leon lineau",
+  "leonidas:lee leon",
+  "leonora:nell nellie nora",
+  "leonore:elenor honor nora",
+  "leroy:lee roy",
+  "lesley:les",
+  "leslie:les",
+  "lester:les",
+  "letitia:lettice lettie tish titia",
+  "levi:lee",
+  "levicy:vicy",
+  "levone:von",
+  "lexi:lex",
+  "lib:libby",
+  "lidia:lyddy",
+  "lil:lilly lily",
+  "liliana:lil lilly lily",
+  "lillah:lil lilly lily lolly",
+  "lillian:lil lilly lolly",
+  "lilly:lil lily",
+  "lily:lil lilly",
+  "lincoln:link",
+  "linda:lindy lynn",
+  "lindsay:lindsey lindsie lindsy",
+  "lindy:lynn",
+  "lionel:leon",
+  "lisa:liz",
+  "littleberry:berry little",
+  "lizzie:liz",
+  "lois:lou louise",
+  "lonzo:lon",
+  "lorelei:laurie lori lorrie",
+  "lorenzo:loren",
+  "loretta:etta lorie lorrie retta",
+  "lorraine:lorie lorrie",
+  "lotta:lottie",
+  "lou:louis lu",
+  "louis:lewis lou louie louise",
+  "louisa:eliza lois lou",
+  "louise:eliza lois lou",
+  "louvinia:vina viney vonnie wyncha",
+  "lucas:luke",
+  "lucia:lucius lucy",
+  "lucias:luke",
+  "lucille:cille lou lu lucy",
+  "lucina:sinah",
+  "lucinda:cindy lou lu lucy",
+  "lucretia:creasey",
+  "lucy:lucinda",
+  "luella:ella lu lula",
+  "luke:lucas",
+  "lunetta:nettie",
+  "lurana:lura",
+  "luther:luke",
+  "lydia:lyddy",
+  "lyndon:lindy lynn",
+  "mabel:amabel mehitabel",
+  "mac:mc",
+  "mack:mac mc",
+  "mackenzie:kenzy mac mack",
+  "maddison:maddi maddie",
+  "maddy:madeline madelyn madge",
+  "madeline:lena maddi maddie maddy madge madie magda maggie maud",
+  "madelyn:maddy madie",
+  "madie:madeline madelyn",
+  "madison:maddy mattie",
+  "maegen:meg",
+  "magdalena:lena maggie",
+  "magdelina:lena madge magda maggie",
+  "mahala:hallie",
+  "makayla:kayla",
+  "malachi:mally",
+  "malcolm:mac mal malc",
+  "malinda:lindy",
+  "manda:mandy",
+  "mandie:amanda",
+  "mandy:amanda",
+  "manerva:eve minerva nerva nervie",
+  "manny:manuel",
+  "manoah:noah",
+  "manola:nonnie",
+  "manuel:emanuel manny",
+  "marcus:marc mark",
+  "margaret:daisy gretta madge maggie maggy marge margery margie margy meg midge peg peggy polly rita",
+  "margaretta:daisy gretta madge maggie marge margery margie meg midge peg peggy rita",
+  "margarita:daisy greta madge maggie maisie marge margo meg megan metta midge peggie rita",
+  "marge:margaret margaretta margery",
+  "margie:marjorie",
+  "marguerite:peggy",
+  "maria:mia ria",
+  "mariah:maria mary",
+  "marian:marianna marion",
+  "marie:mae mary",
+  "marietta:mae mamie maria mariah marie marion mary maureen may mercy minnie mitzi mollie molly polly",
+  "marilyn:mary",
+  "marion:mary",
+  "marissa:rissa",
+  "marjorie:margie margy",
+  "marni:marnie",
+  "marsha:marcia marcie mary",
+  "martha:marty mat mattie patsy patty",
+  "martin:marty",
+  "martina:tina",
+  "martine:tine",
+  "marv:marvin",
+  "marvin:marv",
+  "mary:mae mamie marie mitzi molly polly",
+  "masayuki:masa",
+  "mat:mattie",
+  "mathew:mat matt maty",
+  "mathilda:patty tillie",
+  "matilda:matty maud tilla tilly",
+  "matt:matty",
+  "matthew:matt mattie matty thias thys",
+  "matthews:matt mattie matty",
+  "matthias:matt thias thys",
+  "maud:middy",
+  "maureen:mary",
+  "maurice:morey",
+  "mavery:mave",
+  "mavine:mave",
+  "max:maxie",
+  "maximilian:max",
+  "maximillian:max",
+  "maxine:max",
+  "maxwell:max",
+  "may:mae",
+  "mckenna:ken kenna meaka",
+  "medora:dora",
+  "megan:meg",
+  "meghan:meg",
+  "mehitabel:hetty hitty mabel mitty",
+  "melanie:mellie",
+  "melchizedek:dick zadock",
+  "melinda:linda lindy lynn mel mindy",
+  "melissa:lisa lissa mel milly missy",
+  "mellony:mellia",
+  "melody:lodi",
+  "melvin:mel",
+  "melvina:vina",
+  "mercedes:merci mercy sadie",
+  "merv:mervin",
+  "mervin:merv",
+  "mervyn:merv",
+  "micajah:cage",
+  "michael:micah mick mickey micky mike mikey",
+  "micheal:mike mikey miky",
+  "michele:chelle mickey shelley shellie shelly",
+  "michelle:chelle mickey shelley shellie shelly shely",
+  "mick:micky",
+  "miguel:michael miggy miguael miguaell miguail miguaill miguayl miguayll miguell mike",
+  "mike:michael mick micky",
+  "mildred:milly",
+  "millicent:milly missy",
+  "minerva:minnie",
+  "minnie:wilhelmina",
+  "miranda:mandy mira randi randy",
+  "miriam:mimi mitzi mitzie",
+  "missy:melissa",
+  "mitch:mitchell",
+  "mitchell:mitch",
+  "mitzi:mary mittie mitty",
+  "mitzie:mittie mitty",
+  "monet:nettie",
+  "monica:monna monnie",
+  "monte:monty",
+  "monteleon:monte",
+  "montesque:monty",
+  "montgomery:gum monty",
+  "monty:lamont",
+  "morris:morey",
+  "mortimer:mort",
+  "moses:amos mose moss",
+  "muriel:mur",
+  "myrtle:mert myrt myrti",
+  "nadine:deedee nada",
+  "nancy:ann nan nanny",
+  "naomi:omi",
+  "napoleon:leon nap nappy",
+  "natalia:nat talia",
+  "natalie:natty nettie",
+  "natasha:nat tasha",
+  "nathan:nat nate",
+  "nathaniel:nat nate nathan natty than",
+  "nelle:nelly",
+  "nellie:nell",
+  "nelson:nels",
+  "newt:newton",
+  "newton:newt",
+  "nicholas:claas claes nic nick nickie nicky nico",
+  "nichole:cole nicki nicky nikki",
+  "nicholette:cole nichole nickey nicki nicky nicole nikki",
+  "nicodemus:nic nick nickie nicky nico",
+  "nicolas:nic nick nickie nicky nico",
+  "nicole:cole nicki nicky nikki nole",
+  "nikolas:claes nic nick nickie nicky nico",
+  "nikole:nikki",
+  "nora:nonie",
+  "norbert:bert norby",
+  "norbusamte:norbu",
+  "norman:norm",
+  "nowell:noel",
+  "obadiah:diah dyer obed obie",
+  "obediah:obie",
+  "obedience:beda beedy biddie obed",
+  "obie:obediah",
+  "octavia:tave tavia",
+  "odell:odo",
+  "olive:livia nollie ollie",
+  "oliver:ollie",
+  "olivia:livia nollie ollie",
+  "ollie:oliver",
+  "onicyphorous:cy cyphorus one osaforum osaforus syphorous",
+  "orilla:ora rilly",
+  "orlando:roland",
+  "orphelia:phelia",
+  "ossy:ozzy",
+  "oswald:ossy ozzy waldo",
+  "otis:ode ote",
+  "pamela:pam",
+  "pandora:dora",
+  "parmelia:amelia melia milly",
+  "parthenia:parsuny pasoonie phenie teeny",
+  "patience:pat patty",
+  "patricia:pat patsy patti patty tricia trish trisha",
+  "patrick:paddy pat pate patsy peter",
+  "patsy:patty",
+  "patty:patricia",
+  "paul:polly",
+  "paula:lina polly",
+  "paulina:lina polly",
+  "pauline:polly",
+  "peggy:peg",
+  "pelegrine:perry",
+  "penelope:penny",
+  "percival:percy",
+  "peregrine:perry",
+  "permelia:mellie melly milly",
+  "pernetta:nettie",
+  "persephone:seph sephy",
+  "pete:petey",
+  "peter:pate pete",
+  "petronella:nellie",
+  "pheney:josephine",
+  "pheriba:ferbie pherbia",
+  "philadelphia:delphia",
+  "philander:fie",
+  "philetus:leet phil",
+  "philinda:linda lindy lynn",
+  "philip:phil pip",
+  "philipina:penie phoebe pip",
+  "phillip:phil pip",
+  "philly:delphia",
+  "philomena:menaalmena",
+  "phoebe:fifi",
+  "phyllis:phyl",
+  "pinckney:pink",
+  "pleasant:ples",
+  "pocahontas:pokey",
+  "posthuma:humey",
+  "prescott:pres scott scotty",
+  "priscilla:cilla cissy prissy",
+  "providence:provy",
+  "prudence:prudy prue",
+  "prudy:prudence",
+  "rachael:rach",
+  "rachel:rachael shelly",
+  "rafaela:rafa",
+  "ramona:mona",
+  "randall:randy",
+  "randolf:dolph randy",
+  "randolph:dolph randy",
+  "raphael:ralph",
+  "ray:raymond",
+  "raymond:ray",
+  "reba:becca beck",
+  "rebecca:becca beck becky reba",
+  "reggie:reg reginald",
+  "regina:gina reggie",
+  "reginald:naldo reg reggie renny",
+  "relief:leafa",
+  "reuben:rube",
+  "reynold:reginald",
+  "rhoda:rodie",
+  "rhodella:della",
+  "rhyna:rhynie",
+  "ricardo:rick ricky",
+  "rich:dick rick",
+  "richard:dick dickie dickon dicky rich richie rick ricky",
+  "rick:ricky",
+  "ricky:dick rich",
+  "robert:bill billy bob bobby dob dobbin hob hobkin rob robby rupert",
+  "roberta:bert bertie birdie birtie bobbie robbie roby",
+  "roberto:rob",
+  "robin:rob robbie",
+  "roderick:erick rickie rod roddy",
+  "rodger:bobby hodge rod roge roger",
+  "rodney:rod",
+  "roger:bobby hodge rod rodger roge",
+  "roland:lanny orlando rollo rolly",
+  "ron:ronnie ronny",
+  "ronald:naldo ron ronnie ronny",
+  "ronny:ronald",
+  "rosa:rose",
+  "rosabel:belle rosa rose roz",
+  "rosabella:bella belle rosa rose roz",
+  "rosaenn:ann",
+  "rosaenna:ann",
+  "rosalinda:linda rosa rose roz",
+  "rosalyn:linda rosa rose roz",
+  "roscoe:ross",
+  "rose:rosie",
+  "roseann:ann rose rosie roz",
+  "roseanna:ann rose rosie roz",
+  "roseanne:ann",
+  "rosemarie:rose rosie",
+  "rosemary:marie mary rose rosemarie rosey",
+  "rosina:sina",
+  "roxane:rox roxie",
+  "roxanna:ann rose roxie",
+  "roxanne:ann rose roxie",
+  "rudolph:dolph olph rolf rudy",
+  "rudolphus:dolph olph rolf rudy",
+  "russell:russ rusty",
+  "ruth:ruthie",
+  "ryan:ry",
+  "sabrina:brina",
+  "safieel:safie",
+  "salome:loomie",
+  "salvador:sal sally",
+  "sam:sammy",
+  "samantha:mantha sam sammy",
+  "sampson:sam sammy",
+  "samson:sam sammy",
+  "samuel:sam sammy",
+  "samyra:myra sam sammy",
+  "sandra:cassandra sandy",
+  "sandy:sandra",
+  "sanford:sandy",
+  "sarah:sadie sally sara",
+  "sarilla:silla",
+  "savannah:anna savanna vannie",
+  "scott:sceeter scottie scotty squat",
+  "sebastian:seb sebby",
+  "selma:anselm",
+  "serena:rena",
+  "serilla:rilla",
+  "seymour:morey see",
+  "shaina:sha shay",
+  "sharon:sha shay",
+  "shaun:shawn",
+  "shawn:shaun",
+  "sheila:cecilia",
+  "sheldon:shelly",
+  "shelton:shel shelly tony",
+  "sheridan:dan danny sher",
+  "sheryl:cheri cherie sher sheri sherri sherry sherryl",
+  "shirley:lee sherry shirl",
+  "sibbilla:sibbell sibbie sybill",
+  "sidney:sid syd",
+  "sigfired:sid",
+  "sigfrid:sid",
+  "sigismund:sig",
+  "silas:si",
+  "silence:liley",
+  "silvester:si sly syl vest vester",
+  "simeon:si sion",
+  "simon:si sion",
+  "smith:smitty",
+  "socrates:crate",
+  "sofia:sofie sophie",
+  "solomon:sal salmon saul sol solly zolly",
+  "sondra:dre sonnie",
+  "sophia:sophie",
+  "sophronia:frona fronia sophia",
+  "stacey:staci stacie stacy",
+  "stacie:stacey staci stacy",
+  "stacy:staci",
+  "stanley:stan",
+  "stephan:steve",
+  "stephanie:annie steffi steffie steph stephani stephany stephie stephine stevie",
+  "stephen:steph steve",
+  "steve:stevie",
+  "steven:steph steve stevie",
+  "stuart:stu",
+  "sue:susan susie",
+  "sullivan:sully van",
+  "susan:hannah sue sukey susie suzie",
+  "susannah:hannah sue sukey susie",
+  "susie:suzie",
+  "suzanne:sue suki susie",
+  "sybill:sibbie",
+  "sydney:sid",
+  "sylvanus:sly syl",
+  "sylvester:si sly sy syl vessie vester vet",
+  "sylvia:syl sylvie",
+  "tabby:tabitha",
+  "tabitha:tabby",
+  "tamara:tami tammie tammy",
+  "tamarra:tammy",
+  "tammie:tami tammy",
+  "tammy:tami tammie",
+  "tanafra:tanny",
+  "tasha:tash tashie",
+  "ted:teddy",
+  "temperance:tempy",
+  "terence:terry",
+  "teresa:terry tess tessa tessie",
+  "terri:teri terrie terry",
+  "terry:terence",
+  "tess:teresa theresa",
+  "tessa:teresa theresa",
+  "thad:thaddeus",
+  "thaddeus:thad",
+  "theo:theodore",
+  "theodora:dora",
+  "theodore:ted teddy theo",
+  "theodosia:dosia theo theodosius",
+  "theophilus:ophi",
+  "theotha:otha",
+  "theresa:terry tess tessa tessie thirza thursa traci tracie tracy",
+  "thom:thomas tom tommy",
+  "thomas:thom tom tommy",
+  "thomasa:tamzine",
+  "tiffany:tiff tiffy",
+  "tilford:tillie",
+  "tim:timmy",
+  "timothy:tim timmy",
+  "tina:christina",
+  "tisha:tish",
+  "tobias:bias toby",
+  "tom:thomas tommy",
+  "tony:anthony",
+  "tonya:toni",
+  "tracey:traci tracie tracy",
+  "tranquilla:quilla trannie",
+  "travis:trav",
+  "trevor:trev",
+  "tricia:trish",
+  "trish:patricia trisha",
+  "tristan:tris",
+  "trix:trixie",
+  "trudy:gertrude",
+  "tryphena:phena",
+  "tyler:ty",
+  "unice:eunice nicie",
+  "uriah:riah",
+  "ursula:sula sulie",
+  "valentina:felty val vallie",
+  "valentine:felty",
+  "valeri:val valerie",
+  "valeria:val",
+  "valerie:val",
+  "vanburen:buren",
+  "vandalia:vannie",
+  "vanessa:essa nessa vanna",
+  "vernisee:nicey",
+  "vernon:vern",
+  "veronica:franky frony ron ronie ronna ronnie ronny vonnie",
+  "vic:vicki vickie vicky victor",
+  "vicki:vickie vicky victoria",
+  "victor:vic",
+  "victoria:tori torie torri torrie tory vic vicki vickie vicky",
+  "vijay:vij",
+  "vincent:vic vin vince vinnie vinny",
+  "vincenzo:vic vin vince vinnie vinny",
+  "vinson:vin vince vinnie vinny",
+  "viola:ola vi",
+  "violet:vi",
+  "violetta:lettie",
+  "virginia:ginger ginny jane jennie virgy",
+  "vivian:vi viv",
+  "waldo:ossy ozzy",
+  "wallace:wally",
+  "wally:walt",
+  "walter:wally walt",
+  "washington:wash",
+  "webster:webb",
+  "wendy:wen",
+  "wesley:wes",
+  "westley:farmboy wes west",
+  "weston:wes",
+  "wilber:bert will",
+  "wilbur:will willie willy",
+  "wilda:willie",
+  "wilfred:fred wil will willie",
+  "wilhelm:wil willie",
+  "wilhelmina:mina minnie willie wilma",
+  "will:bill fred wilbur willie",
+  "william:bela bell bill billy wil will willie willy",
+  "willie:fred william",
+  "willis:bill willy",
+  "wilma:billiewilhelm william",
+  "wilson:will willie willy",
+  "winfield:field win winny",
+  "winifred:freddie winnet winnie",
+  "winnie:winnifred",
+  "winnifred:fred freddie freddy winnie winny",
+  "winny:winnifred",
+  "winton:wint",
+  "woodrow:drew wood woody",
+  "yeona:ona onie",
+  "yoshihiko:yoshi",
+  "yulan:lan yul",
+  "yvonne:vonna",
+  "zach:zack zak",
+  "zachariah:zac zach zachy zack zak zakk zeke",
+  "zachary:zac zach zachy zack zak zakk zeke",
+  "zachery:zac zach zachy zack zak zakk zeke",
+  "zack:zach zak",
+  "zebedee:zeb",
+  "zedediah:diah dyer zed",
+  "zephaniah:zeph"
+];
+
+// packages/core/src/entity/nicknames.ts
+var NICKNAME_VARIANTS = (() => {
+  const map = /* @__PURE__ */ new Map();
+  const link = (a, b) => {
+    const s = map.get(a) ?? /* @__PURE__ */ new Set();
+    s.add(b);
+    map.set(a, s);
+  };
+  for (const row of NICKNAME_DATA) {
+    const i = row.indexOf(":");
+    const name = row.slice(0, i);
+    for (const nick of row.slice(i + 1).split(" ")) {
+      if (!nick) continue;
+      link(name, nick);
+      link(nick, name);
+    }
+  }
+  return map;
+})();
+
+// packages/core/src/entity/translit.data.ts
+var CJK_INDEX_ALPHABET = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
+
+// packages/core/src/entity/translit.ts
+var digit = new Map([...CJK_INDEX_ALPHABET].map((c, i) => [c, i]));
+
+// packages/core/src/entity/resolve.ts
+function normalizeEmailForMatch(raw) {
+  return normalizeEmail(raw);
+}
 
 // supabase/functions/_shared/research/guards.ts
 function norm(s) {
@@ -6269,6 +7900,8 @@ async function buildUserContext(db2, u2) {
     lines.push(
       `Resume: ${facets.length ? facets.join("; ") : resume.text.replace(/\s+/g, " ").slice(0, 800)}`
     );
+    const links = resumeLinks(resume.text);
+    if (links.length) lines.push(`Links: ${links.join(" ")}`);
   }
   const memories = await db2.sql`
     select text from orbit.memories
@@ -6277,6 +7910,17 @@ async function buildUserContext(db2, u2) {
   if (memories.length) lines.push(`Remembered: ${memories.map((m) => m.text).join(" | ")}`);
   const text3 = lines.join("\n");
   return text3.length > USER_CONTEXT_MAX_CHARS ? `${text3.slice(0, USER_CONTEXT_MAX_CHARS - 1)}…` : text3;
+}
+function resumeLinks(text3) {
+  const out = /* @__PURE__ */ new Set();
+  for (const m of text3.matchAll(
+    /(?<![@\w.-])(?:https?:\/\/)?(?:www\.)?((?:github\.com|gitlab\.com|linkedin\.com\/in|huggingface\.co|kaggle\.com|scholar\.google\.com)\/[A-Za-z0-9_.\-/?=]+|[a-z0-9-]+\.(?:dev|io|me|site|github\.io)(?:\/[A-Za-z0-9_.\-/]*)?)/gi
+  )) {
+    const u2 = m[1].replace(/[./]+$/, "");
+    if (/@/.test(m[0]) || u2.length < 8) continue;
+    out.add(`https://${u2}`);
+  }
+  return [...out].slice(0, 4);
 }
 function facetLines(parsed) {
   if (!parsed) return [];
@@ -6423,7 +8067,7 @@ function recipientText(p) {
 
 // supabase/functions/_shared/compose/prompts.ts
 import { z as z4 } from "npm:zod@3.25.76/v4";
-var PROMPT_VERSION = "compose-v2.1";
+var PROMPT_VERSION = "compose-v3.0";
 var composeSchema = z4.object({
   subject: z4.string().nullable(),
   body: z4.string(),
@@ -6443,7 +8087,7 @@ var GOAL_ASK = {
   community: "question",
   collaboration: "question"
 };
-function askKindFor(kind, goal, replyWantsCall = false) {
+function askKindFor(kind, goal, replyWantsCall = false, nicheAsk) {
   switch (kind) {
     case "intro_request":
       return "intro";
@@ -6459,7 +8103,7 @@ function askKindFor(kind, goal, replyWantsCall = false) {
     case "schedule":
       return "call";
     default:
-      return GOAL_ASK[goal];
+      return nicheAsk ?? GOAL_ASK[goal];
   }
 }
 function composeSystem(p) {
@@ -6470,8 +8114,9 @@ function composeSystem(p) {
     "- Use at least one opener from <research> and keep it true; cite its source id in hooks.",
     "- Never claim familiarity, shared history or a mutual connection that isn't in the inputs.",
     '- No flattery adjectives (amazing, incredible, inspiring), no "I hope this finds you well", no "quick question", no em-dashes, no exclamation marks unless the voice card uses them.',
-    "- Plain words, short sentences (reading grade ≤ 7).",
-    "- Match <voice> for greeting, sign-off, contractions and sentence length. Borrow rhythm from <examples>, never their content.",
+    `- Plain words, short sentences (reading grade ≤ ${p.gradeMax ?? 7}).`,
+    "- Match <voice> for greeting, sign-off, contractions and sentence length, unless a numbered rule below fixes the greeting. Borrow rhythm from <examples>, never their content.",
+    "- The numbered rules below are this niche's norms for this step; follow them over any general habit.",
     `- <user_context> may carry the user's own words: a "Never" line is their rule and always wins; "Their story" is how they introduce themselves, so draw on it rather than a generic line.`
   ];
   if (p.kind === "forwardable_blurb" && p.blurb)
@@ -6546,16 +8191,6 @@ function nextSendWindow(now, tz, channel, random = Math.random) {
 var OPT_OUT_LINE = "If this isn't relevant, just say so and I won't follow up.";
 var DECLINE_COOLDOWN_DAYS = 180;
 var DAY2 = 864e5;
-var GOAL_REGISTER = {
-  recruiting: "ask: a 15-minute call about their path or team; register: warm, curious, specific",
-  advice: "ask: 15–20 minutes on one named question; register: warm, humble",
-  fundraising: 'ask: "Would you be open to a look?" plus one line of traction; register: crisp, numbers first',
-  sales: 'ask: "Worth a quick look?" tied to a trigger; register: short, concrete, no hype',
-  hiring: `ask: "Open to hearing about it?" with the role's one hook; register: direct, respects their current job`,
-  cofounder: "ask: 20 minutes to compare notes on the problem; register: peer-to-peer",
-  community: "ask: an invite to a specific event or group; register: friendly",
-  collaboration: "ask: a specific question about their paper plus the overlap; register: precise, academic"
-};
 async function composeDraft(s, req) {
   const db2 = s.db;
   const now = s.now();
@@ -6578,6 +8213,18 @@ async function composeDraft(s, req) {
   const goal = await resolveGoal(db2, req.userId, req.goalId ?? null, req.chatId ?? null, person2.id);
   const goalKind = goal?.kind ?? "advice";
   const chatId = req.chatId ?? await chatFor(db2, req.userId, person2.id, goal?.id ?? null);
+  const goalTargets = goal?.targets ?? {};
+  const goalCriteria = goal?.criteria ?? {};
+  const aim = user.settings.about?.aim;
+  const playbook = draftPlaybook({
+    goalKind,
+    goalText: [goal?.title, goal?.description, typeof aim === "string" ? aim : "", req.topic].filter(Boolean).join(". "),
+    recipient: { title: person2.title ?? void 0, org: personOrg(person2) },
+    targetFunctions: goalTargets.roles ?? [],
+    degree: user.degree ?? void 0,
+    kind: req.kind,
+    goalBrief: typeof goalCriteria.playbook === "string" ? goalCriteria.playbook : void 0
+  });
   const history2 = await historyWith(db2, req.userId, person2.id);
   const sendsToThem = req.kind !== "forwardable_blurb";
   if (sendsToThem && req.kind !== "reply" && unansweredBefore(history2) >= 3)
@@ -6604,6 +8251,14 @@ async function composeDraft(s, req) {
   const introducer = req.via && req.via.introducerId !== person2.id ? await loadPerson(db2, req.userId, req.via.introducerId).catch(() => void 0) : req.via ? person2 : void 0;
   const research = await loadResearch(db2, req.userId, person2.id);
   const userContext = await buildUserContext(db2, user);
+  const aboutThem = await db2.sql`
+    select text from orbit.memories
+     where user_id = ${req.userId}::uuid and person_id = ${person2.id}::uuid and deleted_at is null
+     order by importance desc, last_seen_at desc limit 5`;
+  const recipient = [
+    recipientText(person2),
+    aboutThem.length ? `What ${userFirstName(user)} told Orbit about them: ${aboutThem.map((m) => m.text).join(" | ")}` : ""
+  ].filter(Boolean).join("\n");
   const card = styleCardOf(user);
   const meFirst = userFirstName(user);
   const tz = validZone(person2.timezone) ?? validZone(user.timezone) ?? "America/New_York";
@@ -6612,21 +8267,25 @@ async function composeDraft(s, req) {
   const replyClass = replyTo?.reply_class ?? void 0;
   const schedulingLink = typeof user.settings.scheduling_link === "string" ? user.settings.scheduling_link : void 0;
   let slots2 = [];
+  let windows2 = [];
+  let slotTz;
   const answer2 = replyTo?.answer?.trim() || void 0;
   const confirms = req.kind === "reply" ? req.confirmSlot : void 0;
   const wantsTimes = !confirms && (replyClass === "interested" || replyClass === "scheduling");
   if (req.kind === "reply" && wantsTimes) {
     try {
-      slots2 = (await slotsFor(s, req.userId, { personId: person2.id, count: 3 })).slots;
+      const free = await slotsFor(s, req.userId, { personId: person2.id, count: 3 });
+      slots2 = free.slots;
+      windows2 = free.windows;
+      slotTz = free.tz;
     } catch {
       slots2 = [];
     }
   }
-  const askKind = askKindFor(req.kind, goalKind, wantsTimes);
-  const range = req.channel === "linkedin" ? "At most 400 characters," : wordRangeText(req.kind, goalKind);
+  const askKind = askKindFor(req.kind, goalKind, wantsTimes, playbook.form.ask);
+  const range = req.channel === "linkedin" ? "At most 400 characters," : wordRangeText(req.kind, goalKind, playbook.niche);
   const viaText = introducer ? `${introducer.display_name}${req.via?.pathScore !== void 0 ? ` (path score ${req.via.pathScore.toFixed(2)})` : ""}` : "";
-  const goalText = goal ? `${goal.kind}: ${goal.title}${goal.description ? `. ${goal.description}` : ""}
-${GOAL_REGISTER[goalKind]}` : GOAL_REGISTER[goalKind];
+  const goalText = goal ? `${goal.kind}: ${goal.title}${goal.description ? `. ${goal.description}` : ""} (${playbook.label})` : playbook.label;
   const topic = req.topic ?? goalTopic(goal);
   const task = [
     `kind: ${req.kind}; channel: ${req.channel}; ask: ${askKind}`,
@@ -6645,12 +8304,16 @@ ${GOAL_REGISTER[goalKind]}` : GOAL_REGISTER[goalKind];
     [req.kind, goalKind, person2.title ?? "", thread.lastInbound ?? "", topic ?? ""].join(" "),
     { replies: req.kind === "reply" }
   );
-  const slotText = slots2.map((x) => `${x.start} = ${x.label}`).join("\n");
+  const slotText = [
+    ...slots2.map((x) => `${x.start} = ${x.label.replace(/ to \d{1,2}:\d{2}( ?[ap]m)?/i, "")}`),
+    windows2.length ? `Free hours by day over the next two weeks (any start inside one is free):
+${windows2.join("\n")}` : ""
+  ].filter(Boolean).join("\n");
   const userBlocks = composeUser({
     task,
     userContext,
     goal: goalText,
-    recipient: recipientText(person2),
+    recipient,
     research: research.text,
     thread: thread.text,
     via: viaText,
@@ -6664,12 +8327,14 @@ ${e}`).join("\n\n"),
     wordRange: range,
     askKind,
     kind: req.kind,
-    blurb: req.kind === "forwardable_blurb" ? { intermediary: person2.display_name, target: target?.display_name ?? "them" } : void 0
-  })}${firstTouch ? playbookLines(goalKind, person2) : ""}`;
+    blurb: req.kind === "forwardable_blurb" ? { intermediary: person2.display_name, target: target?.display_name ?? "them" } : void 0,
+    gradeMax: playbook.form.gradeMax
+  })}${playbook.lines.map((l, i) => `
+${13 + i}. ${l}`).join("")}`;
   const inputs = [
     userContext,
     goalText,
-    recipientText(person2),
+    recipient,
     research.text,
     thread.text,
     viaText,
@@ -6683,11 +8348,12 @@ ${e}`).join("\n\n"),
   ].join("\n");
   const ctx = {
     goal: goalKind,
+    niche: playbook.niche,
     recipientFirstName: firstNameOf(person2),
     recipientFullName: person2.display_name,
     recipientEmail: person2.primary_email ?? void 0,
     inputs,
-    allowedUrls: schedulingLink ? [schedulingLink] : [],
+    allowedUrls: [...schedulingLink ? [schedulingLink] : [], ...linksIn(userContext)],
     style: card,
     userFirstName: meFirst
   };
@@ -6727,7 +8393,7 @@ ${e}`).join("\n\n"),
       personId: person2.id,
       kind: req.kind,
       channel: req.channel,
-      subject: req.channel === "gmail" && req.kind !== "reply" ? output.subject?.trim() || null : null,
+      subject: req.channel === "gmail" && req.kind !== "reply" ? cleanSubject(output.subject ?? "") || null : null,
       body: output.body.trim(),
       ask: output.ask,
       hooks: output.hooks.filter((h) => h.text.trim() && h.sourceId.trim()),
@@ -6744,6 +8410,7 @@ ${e}`).join("\n\n"),
       target,
       introducer,
       goalKind,
+      niche: playbook.niche,
       goalId: goal?.id ?? null,
       research,
       topic,
@@ -6772,6 +8439,14 @@ ${e}`).join("\n\n"),
   const body2 = footer ? `${composed.body}
 
 ${footer}` : composed.body;
+  if (generatedBy === "llm" && windows2.length && !confirms) {
+    const named = extractProposedTimes(composed.body, now, slotTz).map((t) => new Date(t.startIso)).filter((d) => d.getTime() > now.getTime()).map((d) => ({
+      start: d.toISOString(),
+      end: new Date(d.getTime() + 30 * 6e4).toISOString(),
+      label: ""
+    }));
+    for (const n of named) if (!slots2.some((x) => x.start === n.start)) slots2.push(n);
+  }
   const meta = {
     kind: composed.ask.kind,
     text: composed.ask.text,
@@ -6799,22 +8474,18 @@ ${footer}` : composed.body;
   await db2.sql`
     insert into orbit.audit_log (user_id, actor, action, target_table, target_id, details)
     values (${req.userId}::uuid, ${req.actor ?? "user"}, 'draft.compose', 'drafts', ${row.id},
-            ${{ kind: req.kind, channel: req.channel, generated_by: generatedBy, attempts, issues: lastIssues.length, hash: messageHash({ channel: req.channel, subject: composed.subject, body: body2 }) }}::jsonb)`;
+            ${{ kind: req.kind, channel: req.channel, generated_by: generatedBy, attempts, issues: lastIssues.length, codes: [...new Set(lastIssues.map((i) => i.split(":")[0]))], detail: lastIssues.slice(0, 4).map((i) => i.slice(0, 140)), niche: playbook.niche, hash: messageHash({ channel: req.channel, subject: composed.subject, body: body2 }) }}::jsonb)`;
   return {
     draft: row,
     composed: { ...composed, id: row.id, body: body2, validator },
     attempts
   };
 }
-function playbookLines(goal, person2) {
-  const who = { title: person2.title ?? void 0, org: personOrg(person2) };
-  const firm = firmKindOf(who, sectorOf(who));
-  return `
-13. ${DRAFT_RULES[goal]}
-14. ${ASK_RULES[firm]}`;
+function linksIn(text3) {
+  return [...new Set(text3.match(/https?:\/\/[^\s,;)|]+/g) ?? [])].map((u2) => u2.replace(/[.]+$/, ""));
 }
-function wordRangeText(kind, goal) {
-  const [min, max] = wordRange(kind, goal);
+function wordRangeText(kind, goal, niche) {
+  const [min, max] = wordRange(kind, goal, niche);
   return `${min}–${max}`;
 }
 function goalTopic(goal) {
@@ -6954,7 +8625,13 @@ function templateMessage(p) {
       pitch: BUSINESS_GOALS.has(p.goalKind) ? str3(s.pitch) : p.goalKind === "collaboration" ? str3(s.research_topic) : void 0,
       traction: p.goalKind === "fundraising" ? str3(s.traction) : void 0
     },
-    recipient: { firstName: firstNameOf(person2), org: personOrg(person2), title: person2.title ?? void 0 },
+    recipient: {
+      firstName: firstNameOf(person2),
+      lastName: lastNameOf(person2),
+      org: personOrg(person2),
+      title: person2.title ?? void 0
+    },
+    niche: p.niche,
     hook: opener ? { text: hookPhrase(opener.text), sourceId: opener.id } : void 0,
     topic: p.topic,
     via: p.introducer && p.req.via ? {
@@ -6969,7 +8646,9 @@ function templateMessage(p) {
   return { ...out, kind: req.kind, goalId: p.goalId };
 }
 function replyTemplate(p, me2) {
-  const hi = `Hi ${firstNameOf(p.person)},`;
+  const academic = p.niche === "research_position" || p.niche === "research_collaboration";
+  const last = lastNameOf(p.person);
+  const hi = academic && last && /\bprofessor\b/i.test(p.person.title ?? "") ? `Dear Professor ${last},` : `${academic ? "Dear" : "Hi"} ${firstNameOf(p.person)},`;
   const sign = `Best,
 ${me2}`;
   let middle;
@@ -7015,7 +8694,7 @@ ${me2}`;
         ask3 = { kind: "call", text: "Would any of these times work for you?" };
         middle = `Thanks for getting back to me. ${ask3.text}
 
-${p.slots.map((x) => `- ${x.label}`).join("\n")}`;
+${p.slots.slice(0, 3).map((x) => `- ${x.label}`).join("\n")}`;
       } else {
         ask3 = { kind: "call", text: "What times work best for you over the next week or so?" };
         middle = `Thanks for getting back to me. ${ask3.text} I'm happy to work around your schedule.`;
@@ -11814,8 +13493,18 @@ async function settings(ctx) {
 async function preview(ctx) {
   const db2 = ctx.db;
   const me2 = ctx.userId;
+  const b = ctx.req.method === "POST" ? await body(ctx, true) : {};
+  const friendshipId = optUuid(b, "friendshipId") ?? ctx.url.searchParams.get("friendshipId") ?? void 0;
   const u2 = await userLite(db2, me2);
-  const mine = defaultMode(u2);
+  let mine = defaultMode(u2);
+  if (friendshipId) {
+    if (!/^[0-9a-f-]{36}$/i.test(friendshipId)) throw badRequest("friendshipId must be a uuid");
+    const [own] = await db2.sql`
+      select mode, company_domains from orbit.friend_share_settings
+       where friendship_id = ${friendshipId}::uuid and owner_user_id = ${me2}::uuid`;
+    if (!own) throw forbidden();
+    mine = { mode: own.mode, domains: own.company_domains ?? [] };
+  }
   const rows = underMode(await ownRows(db2, me2), mine.mode, mine.domains);
   const out = {
     mode: mine.mode,
@@ -14453,1271 +16142,6 @@ var voiceRoutes = {
   "/voice/notes": { method: "POST", auth: true, run: notes },
   "/voice/relearn": { method: "POST", auth: true, run: relearn }
 };
-
-// packages/core/src/entity/nicknames.data.ts
-var NICKNAME_DATA = [
-  "aaron:erin ron ronnie",
-  "abbigail:abbe abbey abbi abbie abby gail nabby",
-  "abbigale:abbe abbey abbi abbie abby gail nabby",
-  "abednego:bedney",
-  "abel:ab abe eb ebbie",
-  "abiel:ab",
-  "abigail:abbe abbey abbi abbie abby gail nabby",
-  "abigale:abbe abbey abbi abbie abby gail nabby",
-  "abijah:ab bige",
-  "abner:ab",
-  "abraham:ab abe",
-  "abram:ab abe",
-  "absalom:ab abbie app",
-  "ada:addy adie",
-  "adaline:ada addy adie delia dell lena",
-  "addison:addie addy",
-  "adela:adie della",
-  "adelaide:addy adele adie dell della heidi",
-  "adelbert:albert bert del delbert",
-  "adele:addy dell",
-  "adeline:ada addy delia dell lena",
-  "adelphia:addy adele dell delphia philly",
-  "adena:adina deena dena dina",
-  "adolphus:ado adolph dolph",
-  "adrian:rian",
-  "adriane:riane",
-  "adrienne:addie enne rienne",
-  "agatha:aga aggy",
-  "agnes:aggy inez nessa",
-  "aileen:allie lena",
-  "alan:al",
-  "alanson:al lanson",
-  "alastair:al",
-  "alazama:ali",
-  "albert:al bert",
-  "alberta:allie bert bertie",
-  "aldo:al",
-  "aldrich:rich riche richie",
-  "aleksandr:alek alex",
-  "aleva:leve levy",
-  "alex:al",
-  "alexa:alex lexi",
-  "alexander:al alec alex sandy",
-  "alexandra:alex alla sandra sandy",
-  "alexandria:alex alexander alla drina sandra",
-  "alexis:alex lexi",
-  "alfonse:al",
-  "alfred:al fred freddy",
-  "alfreda:alfy freda freddy frieda",
-  "algernon:algy",
-  "alice:allie elsie lisa",
-  "alicia:allie elsie lisa",
-  "aline:adeline",
-  "alison:ali allie",
-  "alixandra:alix",
-  "allan:al alan allen",
-  "allen:al alan allan",
-  "allisandra:ali allie ally",
-  "allison:ali allie ally",
-  "allyson:ali allie ally",
-  "allyssa:ali allie ally",
-  "almena:ali allie ally mena",
-  "almina:minnie",
-  "almira:myra",
-  "alonzo:al lon lonzo",
-  "alphinias:alphus",
-  "althea:ally",
-  "alverta:vert virdie",
-  "alyssa:al ally lissia",
-  "alzada:zada",
-  "amanda:manda mandy",
-  "ambrose:brose",
-  "amelia:amy emily mel millie",
-  "amos:moses",
-  "anastasia:ana stacy",
-  "anderson:andy",
-  "andre:drea",
-  "andrea:andi andrew andy drea rea",
-  "andrew:andy drew randy",
-  "andriane:ada adri rienne",
-  "angela:angel angie",
-  "angelica:angel angelika angelique angie",
-  "angelina:angel angie lina",
-  "ann:annie nan",
-  "anna:ann anne annie nan",
-  "anne:ann annie nan",
-  "annette:anna nettie",
-  "annie:ann anna",
-  "anselm:ance anse ansel selma",
-  "anthony:ant tony",
-  "antoinette:ann netta tony",
-  "antonia:ann netta tony",
-  "antonio:ant tony",
-  "appoline:appie appy",
-  "aquilla:quil quillie",
-  "ara:arry belle",
-  "arabella:ara arry bella belle",
-  "arabelle:ara arry bella belle",
-  "araminta:armida middie minty ruminta",
-  "archibald:archie",
-  "archilles:kill killis",
-  "ariadne:ari arie",
-  "ariana:ari",
-  "arianna:ari",
-  "ariel:ari",
-  "arielle:arie",
-  "aristotle:telly",
-  "arizona:ona onie",
-  "arlene:arly lena",
-  "armanda:mandy",
-  "armena:arry mena",
-  "armilda:milly",
-  "arminda:mindie",
-  "arminta:minite minnie",
-  "arnold:arnie",
-  "aron:erin ron ronnie",
-  "artelepsa:epsey",
-  "artemus:art",
-  "arthur:art",
-  "arthusa:thursa",
-  "arzada:zaddi",
-  "asahel:asa",
-  "asaph:asa",
-  "asenath:assene natty sene",
-  "ashley:ash ashly leah lee",
-  "aubrey:bree",
-  "audrey:audree dee",
-  "august:gus",
-  "augusta:aggy gatsy gussie tina",
-  "augustina:aggy gatsy gussie tina",
-  "augustine:august austin gus",
-  "augustus:august austin gus",
-  "aurelia:aurilla ora orilla ree rilly",
-  "aurora:rory",
-  "avarilla:rilla",
-  "axel:ax",
-  "azariah:aze riah",
-  "bab:barby",
-  "babs:bab barbara barby",
-  "barbara:bab babs barbie barby bobbie",
-  "barbery:barbara",
-  "barbie:barbara",
-  "barnabas:barney",
-  "barney:barnabas",
-  "barrett:barry",
-  "bart:bartholomew",
-  "bartholomew:bart bartel bat mees meus",
-  "barticus:bart",
-  "bazaleel:basil",
-  "bea:beatrice",
-  "beatrice:bea trisha trix trixie",
-  "becca:beck",
-  "beck:becky",
-  "bedelia:bridgit delia",
-  "belinda:belle linda",
-  "bella:arabella belle isabella",
-  "ben:benji bennie benny",
-  "benedict:ben bennie",
-  "benjamin:ben benjy bennie benny jamie",
-  "benjy:benjamin",
-  "bennett:ben bennie benny",
-  "bernard:barney berney bernie berny",
-  "berney:bernie",
-  "bert:bertie bob bobby",
-  "bertha:bert bertie birdie",
-  "bertram:bert",
-  "bertrand:randy",
-  "bess:bessie",
-  "bessie:bess",
-  "beth:betsy betty elizabeth",
-  "bethena:beth thaney",
-  "beverly:bev",
-  "bezaleel:zeely",
-  "biddie:biddy",
-  "bill:billy fred robert william willie",
-  "billy:fred robert william",
-  "blanche:bea",
-  "bob:rob robert",
-  "bobby:bob rob",
-  "boetius:bo",
-  "brad:bradford ford",
-  "bradford:brad ford",
-  "bradley:brad",
-  "brady:brody",
-  "breanna:bree bri",
-  "breeanna:bree",
-  "brenda:brandy",
-  "brian:bryan bryant",
-  "briana:bri",
-  "brianna:bri",
-  "bridget:biddie biddy bridgie bridie",
-  "brittany:britt brittnie",
-  "brittney:britt brittnie",
-  "broderick:brady brody rick ricky rod",
-  "brooklyn:brook brooke",
-  "bryanna:ana anna bri briana brianna",
-  "bryant:bry bryan",
-  "caitlin:cait caity",
-  "caitlyn:cait caity",
-  "caldonia:calliedona",
-  "caleb:cal",
-  "california:callie",
-  "calista:kissy",
-  "callie:cal",
-  "calpurnia:cally",
-  "calvin:cal vin vinny",
-  "cameron:cam ron ronny",
-  "camila:cami mila",
-  "camile:cammie",
-  "camille:cammie millie",
-  "campbell:cam",
-  "candace:candy dacey",
-  "carla:carly karla",
-  "carlotta:lottie",
-  "carlton:carl",
-  "carmellia:mellia",
-  "carmelo:melo",
-  "carmon:cammie carm charm",
-  "carol:carolann carole caroline carri carrie cassie kara kari lynn",
-  "carolann:carol carole",
-  "caroline:carol carole carrie cassie lynn",
-  "carolyn:carrie cassie lynn",
-  "carrie:cassie",
-  "carthaette:etta etty",
-  "casper:jasper",
-  "cassandra:cassie sandra sandy",
-  "cassidy:cass cassie",
-  "cassie:cass",
-  "caswell:cass",
-  "catherine:casey cassie cathy kathy katy kay kit kittie lena trina",
-  "cathleen:casey cassie cathy kathy katy kay kit kittie lena trina",
-  "cathy:catherine cathleen kathy",
-  "cecilia:celia cissy",
-  "cedric:ced rick ricky",
-  "celeste:celia lessie",
-  "celinda:linda lindy lynn",
-  "charity:chat",
-  "charles:carl charlie chick chuck",
-  "charlie:charles chuck",
-  "charlotte:char lotta lottie sherry",
-  "chauncey:chan",
-  "chelsea:chels chelsie",
-  "chelsey:chelsie",
-  "cheryl:cher",
-  "chesley:chet",
-  "chester:chet",
-  "chet:chester",
-  "chick:caroline charlotte chuck",
-  "chloe:clo",
-  "chris:kris",
-  "christa:chris",
-  "christian:chris kit",
-  "christiana:ann chris christy crissy kris kristy tina",
-  "christiano:chris",
-  "christina:chris chrissy christy crissy kris kristy tina",
-  "christine:chris chrissy christy crissy kris kristy tina",
-  "christoffer:chris",
-  "christoph:chris",
-  "christopher:chris kit",
-  "christy:crissy",
-  "cicely:cilla",
-  "cinderella:arilla cindy rella rilla",
-  "cindy:cinderella",
-  "claire:clair clara clare",
-  "clara:clarissa",
-  "clare:clara",
-  "clarence:clair clare",
-  "clarinda:clara",
-  "clarissa:cissy clara",
-  "claudia:claud",
-  "cleatus:cleat",
-  "clement:clem",
-  "clementine:clem clement",
-  "cliff:clifford",
-  "clifford:cliff ford",
-  "clifton:cliff tony",
-  "cole:colie",
-  "colton:colt",
-  "columbus:clum",
-  "con:conny",
-  "conrad:con conny",
-  "constance:connie",
-  "cooper:coop",
-  "cordelia:cordy delia",
-  "corey:coco cordy ree",
-  "corinne:cora ora",
-  "cornelia:cornie corny nelia nelle nelly",
-  "cornelius:con conny corny neil niel",
-  "cory:coco cordy ree",
-  "courtney:court curt",
-  "crystal:chris crys stal tal",
-  "curtis:curt",
-  "cynthia:cindy cintha",
-  "cyrenius:cene cy renius serene swene",
-  "cyrus:cy",
-  "dahl:dal",
-  "dalton:dahl dal",
-  "dan:danny",
-  "daniel:dan dann danny",
-  "danielle:dani ellie",
-  "danny:daniel",
-  "daphne:daph daphie",
-  "darlene:darry lena",
-  "dave:davey",
-  "david:dave davey day",
-  "daycia:dacia daisha",
-  "deanna:dee deedee",
-  "deanne:ann dee",
-  "debbie:deb debby deborah debra",
-  "debby:deb",
-  "debora:deb debbie debby",
-  "deborah:deb debbie debby",
-  "debra:deb debbie",
-  "deidre:deedee",
-  "delbert:bert del",
-  "delia:cordelia delius fidelia",
-  "delilah:dell della lil lila",
-  "deliverance:della delly dilly",
-  "della:adela adelaide delilah dell",
-  "delores:dee dell della lola lolly",
-  "delpha:philadelphia",
-  "delphine:del delf delphi",
-  "demaris:dea maris mary",
-  "demerias:dea maris mary",
-  "democrates:mock",
-  "denise:dee",
-  "dennis:dennie denny",
-  "dennison:dennis denny",
-  "derek:derrek rick ricky",
-  "derick:rick ricky",
-  "derrick:eric rick ricky",
-  "deuteronomy:duty",
-  "diana:di dicey didi",
-  "diane:di dian dianne dicey didi",
-  "dicey:dicie",
-  "dick:richard rick",
-  "dickson:dick",
-  "domenic:dom nic",
-  "dominic:dom nic",
-  "dominick:dom nick nicky",
-  "dominico:dom",
-  "don:donnie donny",
-  "donald:don donnie donny dony",
-  "donato:don",
-  "donna:dona",
-  "donovan:don donnie donny dony",
-  "dorcus:darkey",
-  "dorinda:dora dorothea",
-  "doris:dora",
-  "dorothea:doda dora",
-  "dorothy:dolly dora dortha dot dottie dotty",
-  "dotha:dotty",
-  "dotty:dot",
-  "douglas:doug",
-  "drusilla:silla",
-  "duncan:dunk",
-  "dustin:dusty",
-  "earnest:ernestine ernie",
-  "ebbie:eb",
-  "ebenezer:eb ebbie eben",
-  "eddie:ed",
-  "eddy:ed",
-  "edgar:ed eddie eddy",
-  "edith:edie edye",
-  "edmond:ed eddie eddy",
-  "edmund:ed eddie eddy ned ted",
-  "edna:edny",
-  "eduardo:ed eddie eddy",
-  "edward:ed eddie eddy ned ted teddy",
-  "edwin:ed eddie eddy ned win",
-  "edwina:edwin",
-  "edyth:edie edye",
-  "edythe:edie edye",
-  "egbert:bert burt",
-  "eighta:athy",
-  "eileen:helen",
-  "elaine:helen lainie",
-  "elbert:albert bert",
-  "elbertson:bert elbert",
-  "eldora:dora",
-  "eleanor:elaine ellen ellie lanna lenora nelly nora",
-  "eleazer:lazar",
-  "elena:helen",
-  "eliana:ella elle ellie",
-  "elias:eli lee lias",
-  "elijah:eli lige",
-  "eliphalel:life",
-  "eliphalet:left",
-  "elisa:lisa",
-  "elisha:eli lish",
-  "eliza:elizabeth",
-  "elizabeth:bess bessie beth betsy betty eliza lib libby lisa liz liza lizzie lizzy",
-  "ella:el ellen",
-  "ellen:helen nell nellie",
-  "ellender:ellen helen nellie",
-  "ellie:elly",
-  "ellswood:elsey",
-  "elminie:minnie",
-  "elmira:ellie elly mira",
-  "elnora:nora",
-  "eloise:heloise louise",
-  "elouise:louise",
-  "elsie:elsey",
-  "elswood:elsey",
-  "elvira:elvie",
-  "elwood:woody",
-  "elysia:lisa lissa",
-  "elze:elsey",
-  "emanuel:manny manuel",
-  "emeline:em emily emma emmy milly",
-  "emil:em emily",
-  "emilia:em emmy millie",
-  "emily:em emma emmy mel millie",
-  "emma:em emmy",
-  "emmanuel:manny manuel",
-  "epaphroditius:dite ditus dyce dyche eppa",
-  "ephraim:eph",
-  "erasmus:rasmus raze",
-  "eric:rick ricky",
-  "erick:eric rick ricky",
-  "erik:eric rick ricky",
-  "ernest:ernie",
-  "ernestine:erna ernest teeny tina",
-  "erwin:irwin",
-  "eseneth:senie",
-  "essy:es",
-  "estella:essy stella",
-  "estelle:essy stella",
-  "esther:essie hester",
-  "eudicy:dicey",
-  "eudora:dora",
-  "eudoris:dosie dossie",
-  "eugene:gene",
-  "eunice:nicie",
-  "euphemia:effie effy",
-  "eurydice:dicey",
-  "eustacia:stacia stacy",
-  "eva:eve",
-  "evaline:eva eve lena",
-  "evangeline:ev evan vangie",
-  "evelyn:ev eve evelina",
-  "experience:exie",
-  "ezekiel:ez zeke",
-  "ezideen:ez",
-  "ezra:ez",
-  "faith:fay",
-  "fallon:fal falcon fall fallie fally falon lon lonnie",
-  "felicia:fel feli felix",
-  "felicity:flick tick",
-  "feltie:felty",
-  "ferdinand:ferdie fred freddie freddy",
-  "ferdinando:ferdie fred nando",
-  "fidelia:delia",
-  "fionna:fiona",
-  "flora:florence",
-  "florence:flo flora flossy",
-  "floyd:lloyd",
-  "fran:frannie",
-  "frances:cissy fanny fran francie frankie frannie franniey franny sis",
-  "francie:francine",
-  "francine:fran francie frannie franniey franny",
-  "francis:fran frank frankie",
-  "frank:frankie franky",
-  "frankie:francis frank",
-  "franklin:fran frank",
-  "franklind:fran frank",
-  "fred:freddie freddy",
-  "freda:frieda",
-  "frederica:erica erika freddy frederick rickey",
-  "frederick:derick erick fred freddie freddy fritz rick ricky",
-  "fredericka:ericka freda freddy frieda ricka rickey",
-  "frieda:fred freddie freddy",
-  "gabriel:gabby gabe",
-  "gabriella:ella gabby",
-  "gabrielle:ella gabby",
-  "gareth:gare gary",
-  "garrett:barrett gare garratt garret garry gary jerry rhett",
-  "garrick:garri",
-  "genevieve:eve jean jenny",
-  "geoffrey:geoff jeff",
-  "george:georgie",
-  "georgia:georgie",
-  "georgiana:georgia",
-  "georgine:george",
-  "gerald:gerry jerry",
-  "geraldine:dina gerri gerrie gerry jerry",
-  "gerhardt:gay",
-  "gertie:gert gertrude",
-  "gertrude:gert gertie trudy",
-  "gilbert:bert gil wilber",
-  "giovanni:gio",
-  "glenn:glen",
-  "gloria:glory",
-  "governor:govie",
-  "grace:gracie",
-  "grayson:gray",
-  "greenberry:berry green",
-  "greggory:gregg",
-  "gregory:gory greg",
-  "gretchen:margaret",
-  "griselda:grissel",
-  "gum:monty",
-  "gus:gussie",
-  "gustavus:gus gussie",
-  "gwen:wendy",
-  "gwendolyn:gwen wendy",
-  "hailey:haylee hayley",
-  "hamilton:ham",
-  "hannah:anna nan nanny",
-  "harold:hal hap haps harry",
-  "harriet:hattie",
-  "harrison:hap haps harry",
-  "harry:hap haps harold henry",
-  "haseltine:hassie",
-  "haylee:hailey hayley",
-  "hayley:hailey haylee",
-  "heather:hetty",
-  "helen:ella ellen ellie lena",
-  "helena:aileen eileen elaine eleanor ellen lena nell nellie",
-  "helene:ella ellen ellie lena",
-  "heloise:eloise elouise lois",
-  "henrietta:etta etty hank henny nettie retta",
-  "henry:hal hank hap haps harry",
-  "hephsibah:hipsie",
-  "hepsibah:hipsie",
-  "herbert:bert herb",
-  "herman:dutch harman",
-  "hermione:hermie",
-  "hester:esther hessy hetty",
-  "hezekiah:hez hy kiah",
-  "hillary:hilary",
-  "hipsbibah:hipsie",
-  "hiram:hy",
-  "honora:honey nora norah norry",
-  "hopkins:hop hopp",
-  "horace:horry",
-  "hortense:harty tensey",
-  "hosea:hosey hosie",
-  "howard:hal howie",
-  "hubert:bert hub hugh",
-  "ian:john",
-  "ignatius:iggy nace nate natius",
-  "ignatzio:iggy nace naz",
-  "immanuel:emmanuel manuel",
-  "india:indie indy",
-  "inez:agnes",
-  "iona:onnie",
-  "irene:rena",
-  "irvin:irving",
-  "irving:irv",
-  "irwin:erwin",
-  "isaac:ike zeke",
-  "isabel:bell bella belle ib issy nib nibby tibbie",
-  "isabella:bella belle ib issy nib nibby tibbie",
-  "isabelle:bella belle ib issy nib nibby tibbie",
-  "isadora:dora issy",
-  "isadore:izzy",
-  "isaiah:zadie zay",
-  "isidore:izzy",
-  "iva:ivy",
-  "ivan:john",
-  "jack:jackie",
-  "jackson:jack",
-  "jacob:jaap jake jay",
-  "jacobus:jacob",
-  "jacqueline:jack jackie jacqui",
-  "jahoda:hoda hodie hody",
-  "jakob:jake",
-  "jalen:al alen haylen jaelin jaelyn jailyn jay jaye jaylin jaylyn len lennie lenny",
-  "james:jamie jem jim jimmie jimmy",
-  "jamey:james jamie",
-  "jamie:james",
-  "jane:janie jean jennie jessie",
-  "janet:jan jessie",
-  "janice:jan",
-  "jannett:nettie",
-  "jasmine:jas jazz jazzy",
-  "jason:jase jay",
-  "jasper:casper jap",
-  "jayme:jay",
-  "jean:jane jeannie",
-  "jeanette:janet jean jessie nettie",
-  "jeanne:jane jeannie",
-  "jebadiah:jeb",
-  "jedediah:diah dyer jed",
-  "jedidiah:diah dyer jed",
-  "jefferey:jeff",
-  "jefferson:jeff sonny",
-  "jeffery:jeff",
-  "jeffrey:geoff jeff",
-  "jehiel:hiel",
-  "jehu:gee hugh",
-  "jemima:mima",
-  "jennet:jenn jenny jessie",
-  "jennie:jen jenny",
-  "jennifer:jen jenn jenni jennie jenny",
-  "jeremiah:jereme jerry",
-  "jeremy:jez jezza",
-  "jerita:rita",
-  "jerry:geraldine geri gerry jereme",
-  "jesse:jess",
-  "jessica:jess jessie",
-  "jessie:jane janet jess",
-  "jillian:jill",
-  "jim:jimmie",
-  "jimmie:jim jimmy",
-  "jincy:jane",
-  "jinsy:jane",
-  "joan:jo nonie",
-  "joann:jo",
-  "joanna:hannah jo joan jodi jody",
-  "joanne:jo",
-  "jocelyn:jo joss",
-  "jody:jo",
-  "joe:joey",
-  "joey:joe",
-  "johann:john",
-  "johanna:jo",
-  "johannah:hannah jo joan jody nonie",
-  "johannes:john johnny jonathan",
-  "john:ian jack jock johnny jon jonnie jonny",
-  "johnathan:john johnathon johny jon jonathan jonathon jonnie jonny nathan",
-  "johnathon:john johnathan johny jon jonathan jonathon jonnie jonny",
-  "jon:john johnny jonnie jonny",
-  "jonathan:john johnathan johnathon johny jon jonathon jonnie jonny nathan",
-  "jonathon:john johnathan johnathon johny jon jonathan jonnie jonny",
-  "jordan:jordy",
-  "joseph:jody joe joey jos",
-  "josephine:fina jo jody joey josey josie",
-  "josetta:jettie",
-  "josey:josophine",
-  "joshua:joe jos josh",
-  "josiah:jos",
-  "josophine:jo joey josey",
-  "joyce:joy",
-  "juanita:nettie nita",
-  "judah:jude juder",
-  "judith:juda jude judi judie judy",
-  "judson:jud sonny",
-  "judy:judith",
-  "julia:jill jules julie",
-  "julian:jule jules",
-  "julias:jule jules",
-  "julie:jule jules julia",
-  "june:junius",
-  "junior:jr june junie",
-  "justin:justina juston justus",
-  "kaitlin:kait kaitie",
-  "kaitlyn:kait kaitie",
-  "kaitlynn:kait kaitie",
-  "kalli:cali kali",
-  "kameron:kam",
-  "karla:carla carly",
-  "katarina:catherine tina",
-  "kate:kay",
-  "katelin:kate kay kaye",
-  "katelyn:kate kay kaye",
-  "katherine:cassie cathy kate kathy katie katy kay kaye kit kittie lena trina",
-  "kathleen:cassie cathy kathy katy kay kit kittie lena trina",
-  "kathryn:kate kathy katie",
-  "katia:kate katie",
-  "katy:kate kathy katie",
-  "kayla:kay",
-  "kelley:kelli kellie kelly",
-  "kendall:ken kenny",
-  "kendra:kay kenj kenji kenny",
-  "kendrick:ken kenny",
-  "kendrik:ken kenny",
-  "kennedy:ken kenny",
-  "kenneth:ken kendrick kenny",
-  "kenny:ken kenneth",
-  "kent:ken kendrick kenny",
-  "kerry:kerri",
-  "kevin:kev",
-  "keziah:kizza kizzie",
-  "kim:kimmy",
-  "kimberley:kim kimberli kimberly",
-  "kimberly:kim kimberley kimberli",
-  "kingsley:king",
-  "kingston:king",
-  "kit:kittie",
-  "kris:chris",
-  "kristel:kris",
-  "kristen:chris",
-  "kristin:chris",
-  "kristina:christina kris krissy tina",
-  "kristine:chris christy crissy kris kristy tina",
-  "kristofer:chris kris",
-  "kristoffer:chris kris",
-  "kristopher:chris kris",
-  "kristy:chris",
-  "kymberly:kym",
-  "lafayette:fate laffie",
-  "lamont:monty",
-  "laodicia:cenia dicy",
-  "larry:laurence lawrence",
-  "latisha:tish tisha",
-  "laura:laurie lori",
-  "laurel:laurie",
-  "lauren:laurie ren",
-  "laurence:larry lon lonny lorne lorry",
-  "laurinda:laura lawrence",
-  "lauryn:laurie",
-  "laveda:veda",
-  "laverne:verna vernon",
-  "lavina:ina vina viney",
-  "lavinia:ina vina viney",
-  "lavonia:vina viney vonnie wyncha",
-  "lavonne:von",
-  "lawrence:larry lawrie lon lonny lorne lorry",
-  "leanne:annie lea",
-  "lecurgus:curg",
-  "leilani:lani",
-  "lemuel:lem",
-  "lena:ellen",
-  "lenora:lee nora",
-  "leo:leon",
-  "leonard:len lenny leo leon lineau",
-  "leonidas:lee leon",
-  "leonora:nell nellie nora",
-  "leonore:elenor honor nora",
-  "leroy:lee roy",
-  "lesley:les",
-  "leslie:les",
-  "lester:les",
-  "letitia:lettice lettie tish titia",
-  "levi:lee",
-  "levicy:vicy",
-  "levone:von",
-  "lexi:lex",
-  "lib:libby",
-  "lidia:lyddy",
-  "lil:lilly lily",
-  "liliana:lil lilly lily",
-  "lillah:lil lilly lily lolly",
-  "lillian:lil lilly lolly",
-  "lilly:lil lily",
-  "lily:lil lilly",
-  "lincoln:link",
-  "linda:lindy lynn",
-  "lindsay:lindsey lindsie lindsy",
-  "lindy:lynn",
-  "lionel:leon",
-  "lisa:liz",
-  "littleberry:berry little",
-  "lizzie:liz",
-  "lois:lou louise",
-  "lonzo:lon",
-  "lorelei:laurie lori lorrie",
-  "lorenzo:loren",
-  "loretta:etta lorie lorrie retta",
-  "lorraine:lorie lorrie",
-  "lotta:lottie",
-  "lou:louis lu",
-  "louis:lewis lou louie louise",
-  "louisa:eliza lois lou",
-  "louise:eliza lois lou",
-  "louvinia:vina viney vonnie wyncha",
-  "lucas:luke",
-  "lucia:lucius lucy",
-  "lucias:luke",
-  "lucille:cille lou lu lucy",
-  "lucina:sinah",
-  "lucinda:cindy lou lu lucy",
-  "lucretia:creasey",
-  "lucy:lucinda",
-  "luella:ella lu lula",
-  "luke:lucas",
-  "lunetta:nettie",
-  "lurana:lura",
-  "luther:luke",
-  "lydia:lyddy",
-  "lyndon:lindy lynn",
-  "mabel:amabel mehitabel",
-  "mac:mc",
-  "mack:mac mc",
-  "mackenzie:kenzy mac mack",
-  "maddison:maddi maddie",
-  "maddy:madeline madelyn madge",
-  "madeline:lena maddi maddie maddy madge madie magda maggie maud",
-  "madelyn:maddy madie",
-  "madie:madeline madelyn",
-  "madison:maddy mattie",
-  "maegen:meg",
-  "magdalena:lena maggie",
-  "magdelina:lena madge magda maggie",
-  "mahala:hallie",
-  "makayla:kayla",
-  "malachi:mally",
-  "malcolm:mac mal malc",
-  "malinda:lindy",
-  "manda:mandy",
-  "mandie:amanda",
-  "mandy:amanda",
-  "manerva:eve minerva nerva nervie",
-  "manny:manuel",
-  "manoah:noah",
-  "manola:nonnie",
-  "manuel:emanuel manny",
-  "marcus:marc mark",
-  "margaret:daisy gretta madge maggie maggy marge margery margie margy meg midge peg peggy polly rita",
-  "margaretta:daisy gretta madge maggie marge margery margie meg midge peg peggy rita",
-  "margarita:daisy greta madge maggie maisie marge margo meg megan metta midge peggie rita",
-  "marge:margaret margaretta margery",
-  "margie:marjorie",
-  "marguerite:peggy",
-  "maria:mia ria",
-  "mariah:maria mary",
-  "marian:marianna marion",
-  "marie:mae mary",
-  "marietta:mae mamie maria mariah marie marion mary maureen may mercy minnie mitzi mollie molly polly",
-  "marilyn:mary",
-  "marion:mary",
-  "marissa:rissa",
-  "marjorie:margie margy",
-  "marni:marnie",
-  "marsha:marcia marcie mary",
-  "martha:marty mat mattie patsy patty",
-  "martin:marty",
-  "martina:tina",
-  "martine:tine",
-  "marv:marvin",
-  "marvin:marv",
-  "mary:mae mamie marie mitzi molly polly",
-  "masayuki:masa",
-  "mat:mattie",
-  "mathew:mat matt maty",
-  "mathilda:patty tillie",
-  "matilda:matty maud tilla tilly",
-  "matt:matty",
-  "matthew:matt mattie matty thias thys",
-  "matthews:matt mattie matty",
-  "matthias:matt thias thys",
-  "maud:middy",
-  "maureen:mary",
-  "maurice:morey",
-  "mavery:mave",
-  "mavine:mave",
-  "max:maxie",
-  "maximilian:max",
-  "maximillian:max",
-  "maxine:max",
-  "maxwell:max",
-  "may:mae",
-  "mckenna:ken kenna meaka",
-  "medora:dora",
-  "megan:meg",
-  "meghan:meg",
-  "mehitabel:hetty hitty mabel mitty",
-  "melanie:mellie",
-  "melchizedek:dick zadock",
-  "melinda:linda lindy lynn mel mindy",
-  "melissa:lisa lissa mel milly missy",
-  "mellony:mellia",
-  "melody:lodi",
-  "melvin:mel",
-  "melvina:vina",
-  "mercedes:merci mercy sadie",
-  "merv:mervin",
-  "mervin:merv",
-  "mervyn:merv",
-  "micajah:cage",
-  "michael:micah mick mickey micky mike mikey",
-  "micheal:mike mikey miky",
-  "michele:chelle mickey shelley shellie shelly",
-  "michelle:chelle mickey shelley shellie shelly shely",
-  "mick:micky",
-  "miguel:michael miggy miguael miguaell miguail miguaill miguayl miguayll miguell mike",
-  "mike:michael mick micky",
-  "mildred:milly",
-  "millicent:milly missy",
-  "minerva:minnie",
-  "minnie:wilhelmina",
-  "miranda:mandy mira randi randy",
-  "miriam:mimi mitzi mitzie",
-  "missy:melissa",
-  "mitch:mitchell",
-  "mitchell:mitch",
-  "mitzi:mary mittie mitty",
-  "mitzie:mittie mitty",
-  "monet:nettie",
-  "monica:monna monnie",
-  "monte:monty",
-  "monteleon:monte",
-  "montesque:monty",
-  "montgomery:gum monty",
-  "monty:lamont",
-  "morris:morey",
-  "mortimer:mort",
-  "moses:amos mose moss",
-  "muriel:mur",
-  "myrtle:mert myrt myrti",
-  "nadine:deedee nada",
-  "nancy:ann nan nanny",
-  "naomi:omi",
-  "napoleon:leon nap nappy",
-  "natalia:nat talia",
-  "natalie:natty nettie",
-  "natasha:nat tasha",
-  "nathan:nat nate",
-  "nathaniel:nat nate nathan natty than",
-  "nelle:nelly",
-  "nellie:nell",
-  "nelson:nels",
-  "newt:newton",
-  "newton:newt",
-  "nicholas:claas claes nic nick nickie nicky nico",
-  "nichole:cole nicki nicky nikki",
-  "nicholette:cole nichole nickey nicki nicky nicole nikki",
-  "nicodemus:nic nick nickie nicky nico",
-  "nicolas:nic nick nickie nicky nico",
-  "nicole:cole nicki nicky nikki nole",
-  "nikolas:claes nic nick nickie nicky nico",
-  "nikole:nikki",
-  "nora:nonie",
-  "norbert:bert norby",
-  "norbusamte:norbu",
-  "norman:norm",
-  "nowell:noel",
-  "obadiah:diah dyer obed obie",
-  "obediah:obie",
-  "obedience:beda beedy biddie obed",
-  "obie:obediah",
-  "octavia:tave tavia",
-  "odell:odo",
-  "olive:livia nollie ollie",
-  "oliver:ollie",
-  "olivia:livia nollie ollie",
-  "ollie:oliver",
-  "onicyphorous:cy cyphorus one osaforum osaforus syphorous",
-  "orilla:ora rilly",
-  "orlando:roland",
-  "orphelia:phelia",
-  "ossy:ozzy",
-  "oswald:ossy ozzy waldo",
-  "otis:ode ote",
-  "pamela:pam",
-  "pandora:dora",
-  "parmelia:amelia melia milly",
-  "parthenia:parsuny pasoonie phenie teeny",
-  "patience:pat patty",
-  "patricia:pat patsy patti patty tricia trish trisha",
-  "patrick:paddy pat pate patsy peter",
-  "patsy:patty",
-  "patty:patricia",
-  "paul:polly",
-  "paula:lina polly",
-  "paulina:lina polly",
-  "pauline:polly",
-  "peggy:peg",
-  "pelegrine:perry",
-  "penelope:penny",
-  "percival:percy",
-  "peregrine:perry",
-  "permelia:mellie melly milly",
-  "pernetta:nettie",
-  "persephone:seph sephy",
-  "pete:petey",
-  "peter:pate pete",
-  "petronella:nellie",
-  "pheney:josephine",
-  "pheriba:ferbie pherbia",
-  "philadelphia:delphia",
-  "philander:fie",
-  "philetus:leet phil",
-  "philinda:linda lindy lynn",
-  "philip:phil pip",
-  "philipina:penie phoebe pip",
-  "phillip:phil pip",
-  "philly:delphia",
-  "philomena:menaalmena",
-  "phoebe:fifi",
-  "phyllis:phyl",
-  "pinckney:pink",
-  "pleasant:ples",
-  "pocahontas:pokey",
-  "posthuma:humey",
-  "prescott:pres scott scotty",
-  "priscilla:cilla cissy prissy",
-  "providence:provy",
-  "prudence:prudy prue",
-  "prudy:prudence",
-  "rachael:rach",
-  "rachel:rachael shelly",
-  "rafaela:rafa",
-  "ramona:mona",
-  "randall:randy",
-  "randolf:dolph randy",
-  "randolph:dolph randy",
-  "raphael:ralph",
-  "ray:raymond",
-  "raymond:ray",
-  "reba:becca beck",
-  "rebecca:becca beck becky reba",
-  "reggie:reg reginald",
-  "regina:gina reggie",
-  "reginald:naldo reg reggie renny",
-  "relief:leafa",
-  "reuben:rube",
-  "reynold:reginald",
-  "rhoda:rodie",
-  "rhodella:della",
-  "rhyna:rhynie",
-  "ricardo:rick ricky",
-  "rich:dick rick",
-  "richard:dick dickie dickon dicky rich richie rick ricky",
-  "rick:ricky",
-  "ricky:dick rich",
-  "robert:bill billy bob bobby dob dobbin hob hobkin rob robby rupert",
-  "roberta:bert bertie birdie birtie bobbie robbie roby",
-  "roberto:rob",
-  "robin:rob robbie",
-  "roderick:erick rickie rod roddy",
-  "rodger:bobby hodge rod roge roger",
-  "rodney:rod",
-  "roger:bobby hodge rod rodger roge",
-  "roland:lanny orlando rollo rolly",
-  "ron:ronnie ronny",
-  "ronald:naldo ron ronnie ronny",
-  "ronny:ronald",
-  "rosa:rose",
-  "rosabel:belle rosa rose roz",
-  "rosabella:bella belle rosa rose roz",
-  "rosaenn:ann",
-  "rosaenna:ann",
-  "rosalinda:linda rosa rose roz",
-  "rosalyn:linda rosa rose roz",
-  "roscoe:ross",
-  "rose:rosie",
-  "roseann:ann rose rosie roz",
-  "roseanna:ann rose rosie roz",
-  "roseanne:ann",
-  "rosemarie:rose rosie",
-  "rosemary:marie mary rose rosemarie rosey",
-  "rosina:sina",
-  "roxane:rox roxie",
-  "roxanna:ann rose roxie",
-  "roxanne:ann rose roxie",
-  "rudolph:dolph olph rolf rudy",
-  "rudolphus:dolph olph rolf rudy",
-  "russell:russ rusty",
-  "ruth:ruthie",
-  "ryan:ry",
-  "sabrina:brina",
-  "safieel:safie",
-  "salome:loomie",
-  "salvador:sal sally",
-  "sam:sammy",
-  "samantha:mantha sam sammy",
-  "sampson:sam sammy",
-  "samson:sam sammy",
-  "samuel:sam sammy",
-  "samyra:myra sam sammy",
-  "sandra:cassandra sandy",
-  "sandy:sandra",
-  "sanford:sandy",
-  "sarah:sadie sally sara",
-  "sarilla:silla",
-  "savannah:anna savanna vannie",
-  "scott:sceeter scottie scotty squat",
-  "sebastian:seb sebby",
-  "selma:anselm",
-  "serena:rena",
-  "serilla:rilla",
-  "seymour:morey see",
-  "shaina:sha shay",
-  "sharon:sha shay",
-  "shaun:shawn",
-  "shawn:shaun",
-  "sheila:cecilia",
-  "sheldon:shelly",
-  "shelton:shel shelly tony",
-  "sheridan:dan danny sher",
-  "sheryl:cheri cherie sher sheri sherri sherry sherryl",
-  "shirley:lee sherry shirl",
-  "sibbilla:sibbell sibbie sybill",
-  "sidney:sid syd",
-  "sigfired:sid",
-  "sigfrid:sid",
-  "sigismund:sig",
-  "silas:si",
-  "silence:liley",
-  "silvester:si sly syl vest vester",
-  "simeon:si sion",
-  "simon:si sion",
-  "smith:smitty",
-  "socrates:crate",
-  "sofia:sofie sophie",
-  "solomon:sal salmon saul sol solly zolly",
-  "sondra:dre sonnie",
-  "sophia:sophie",
-  "sophronia:frona fronia sophia",
-  "stacey:staci stacie stacy",
-  "stacie:stacey staci stacy",
-  "stacy:staci",
-  "stanley:stan",
-  "stephan:steve",
-  "stephanie:annie steffi steffie steph stephani stephany stephie stephine stevie",
-  "stephen:steph steve",
-  "steve:stevie",
-  "steven:steph steve stevie",
-  "stuart:stu",
-  "sue:susan susie",
-  "sullivan:sully van",
-  "susan:hannah sue sukey susie suzie",
-  "susannah:hannah sue sukey susie",
-  "susie:suzie",
-  "suzanne:sue suki susie",
-  "sybill:sibbie",
-  "sydney:sid",
-  "sylvanus:sly syl",
-  "sylvester:si sly sy syl vessie vester vet",
-  "sylvia:syl sylvie",
-  "tabby:tabitha",
-  "tabitha:tabby",
-  "tamara:tami tammie tammy",
-  "tamarra:tammy",
-  "tammie:tami tammy",
-  "tammy:tami tammie",
-  "tanafra:tanny",
-  "tasha:tash tashie",
-  "ted:teddy",
-  "temperance:tempy",
-  "terence:terry",
-  "teresa:terry tess tessa tessie",
-  "terri:teri terrie terry",
-  "terry:terence",
-  "tess:teresa theresa",
-  "tessa:teresa theresa",
-  "thad:thaddeus",
-  "thaddeus:thad",
-  "theo:theodore",
-  "theodora:dora",
-  "theodore:ted teddy theo",
-  "theodosia:dosia theo theodosius",
-  "theophilus:ophi",
-  "theotha:otha",
-  "theresa:terry tess tessa tessie thirza thursa traci tracie tracy",
-  "thom:thomas tom tommy",
-  "thomas:thom tom tommy",
-  "thomasa:tamzine",
-  "tiffany:tiff tiffy",
-  "tilford:tillie",
-  "tim:timmy",
-  "timothy:tim timmy",
-  "tina:christina",
-  "tisha:tish",
-  "tobias:bias toby",
-  "tom:thomas tommy",
-  "tony:anthony",
-  "tonya:toni",
-  "tracey:traci tracie tracy",
-  "tranquilla:quilla trannie",
-  "travis:trav",
-  "trevor:trev",
-  "tricia:trish",
-  "trish:patricia trisha",
-  "tristan:tris",
-  "trix:trixie",
-  "trudy:gertrude",
-  "tryphena:phena",
-  "tyler:ty",
-  "unice:eunice nicie",
-  "uriah:riah",
-  "ursula:sula sulie",
-  "valentina:felty val vallie",
-  "valentine:felty",
-  "valeri:val valerie",
-  "valeria:val",
-  "valerie:val",
-  "vanburen:buren",
-  "vandalia:vannie",
-  "vanessa:essa nessa vanna",
-  "vernisee:nicey",
-  "vernon:vern",
-  "veronica:franky frony ron ronie ronna ronnie ronny vonnie",
-  "vic:vicki vickie vicky victor",
-  "vicki:vickie vicky victoria",
-  "victor:vic",
-  "victoria:tori torie torri torrie tory vic vicki vickie vicky",
-  "vijay:vij",
-  "vincent:vic vin vince vinnie vinny",
-  "vincenzo:vic vin vince vinnie vinny",
-  "vinson:vin vince vinnie vinny",
-  "viola:ola vi",
-  "violet:vi",
-  "violetta:lettie",
-  "virginia:ginger ginny jane jennie virgy",
-  "vivian:vi viv",
-  "waldo:ossy ozzy",
-  "wallace:wally",
-  "wally:walt",
-  "walter:wally walt",
-  "washington:wash",
-  "webster:webb",
-  "wendy:wen",
-  "wesley:wes",
-  "westley:farmboy wes west",
-  "weston:wes",
-  "wilber:bert will",
-  "wilbur:will willie willy",
-  "wilda:willie",
-  "wilfred:fred wil will willie",
-  "wilhelm:wil willie",
-  "wilhelmina:mina minnie willie wilma",
-  "will:bill fred wilbur willie",
-  "william:bela bell bill billy wil will willie willy",
-  "willie:fred william",
-  "willis:bill willy",
-  "wilma:billiewilhelm william",
-  "wilson:will willie willy",
-  "winfield:field win winny",
-  "winifred:freddie winnet winnie",
-  "winnie:winnifred",
-  "winnifred:fred freddie freddy winnie winny",
-  "winny:winnifred",
-  "winton:wint",
-  "woodrow:drew wood woody",
-  "yeona:ona onie",
-  "yoshihiko:yoshi",
-  "yulan:lan yul",
-  "yvonne:vonna",
-  "zach:zack zak",
-  "zachariah:zac zach zachy zack zak zakk zeke",
-  "zachary:zac zach zachy zack zak zakk zeke",
-  "zachery:zac zach zachy zack zak zakk zeke",
-  "zack:zach zak",
-  "zebedee:zeb",
-  "zedediah:diah dyer zed",
-  "zephaniah:zeph"
-];
-
-// packages/core/src/entity/nicknames.ts
-var NICKNAME_VARIANTS = (() => {
-  const map = /* @__PURE__ */ new Map();
-  const link = (a, b) => {
-    const s = map.get(a) ?? /* @__PURE__ */ new Set();
-    s.add(b);
-    map.set(a, s);
-  };
-  for (const row of NICKNAME_DATA) {
-    const i = row.indexOf(":");
-    const name = row.slice(0, i);
-    for (const nick of row.slice(i + 1).split(" ")) {
-      if (!nick) continue;
-      link(name, nick);
-      link(nick, name);
-    }
-  }
-  return map;
-})();
-
-// packages/core/src/entity/translit.data.ts
-var CJK_INDEX_ALPHABET = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
-
-// packages/core/src/entity/translit.ts
-var digit = new Map([...CJK_INDEX_ALPHABET].map((c, i) => [c, i]));
-
-// packages/core/src/entity/resolve.ts
-function normalizeEmailForMatch(raw) {
-  return normalizeEmail(raw);
-}
 
 // supabase/functions/orbit-api/sync.ts
 import { z as z6 } from "npm:zod@3.25.76/v4";

@@ -462,3 +462,48 @@ describe('network recommendations (recommendPeople)', () => {
     expect(after[0]!.personId).toBe('f');
   });
 });
+
+describe('goals set in the chat shape Discover too (plan 30)', () => {
+  it('adds an active goal’s roles, companies and places, and ignores a paused one', () => {
+    const p = profile({
+      userGoals: [
+        {
+          status: 'active',
+          priority: 1,
+          targets: {
+            organizations: ['Jane Street'],
+            roles: ['Quant Trader'],
+            geographies: ['Chicago'],
+            people: [],
+          },
+        },
+        {
+          status: 'paused',
+          priority: 2,
+          targets: {
+            organizations: ['Citadel'],
+            roles: ['Data Scientist'],
+            geographies: ['Miami'],
+            people: [],
+          },
+        },
+      ],
+    });
+    expect(p.targetCompanies.map((c) => c.name)).toContain('Jane Street');
+    expect(p.targetCompanies.map((c) => c.name)).not.toContain('Citadel');
+    expect(p.locations).toContain('Chicago');
+    expect(p.locations).not.toContain('Miami');
+    expect(p.targetTitles.some((t) => /quant/i.test(t))).toBe(true);
+    // a company named both ways is one target
+    const twice = profile({
+      userGoals: [
+        {
+          status: 'active',
+          priority: 2,
+          targets: { organizations: ['Stripe'], roles: [], geographies: [], people: [] },
+        },
+      ],
+    });
+    expect(twice.targetCompanies.filter((c) => c.name === 'Stripe')).toHaveLength(1);
+  });
+});

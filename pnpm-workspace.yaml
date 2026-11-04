@@ -2,3 +2,6 @@ packages:
   - apps/*
   - packages/*
   - supabase/tests
+
+overrides:
+  tldts-core: 7.4.18

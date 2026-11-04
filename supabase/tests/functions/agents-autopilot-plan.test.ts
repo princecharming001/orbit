@@ -2,7 +2,7 @@
  * First messages on autopilot (plan 29 §B2.2, §B4, §B6, §C1 phase 5): the first-message rung as the server counts it,
  * the plan step that queues the morning's first messages behind the evening review, and the batch card.
  */
-import { ASK_RULES, DRAFT_RULES } from '@orbit/core/knowledge/index';
+import { ASK_RULES } from '@orbit/core/knowledge/index';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { autopilotStatus, firstTouchRungOf } from '../../functions/_shared/autopilot/autopilot.ts';
 import { raiseBatchCard, runAutopilotPlan } from '../../functions/_shared/autopilot/plan.ts';
@@ -457,7 +457,7 @@ describe('the plan step (plan 29 §B4, §B6)', () => {
     expect(note!.title).toBe(status.batch!.text);
   });
 
-  it('a first message the model writes carries the playbook rules 13 and 14', async () => {
+  it('a first message the model writes carries the niche playbook as rules 13 on', async () => {
     const claude = anthropic(() => ({
       subject: 'x',
       body: 'too short',
@@ -475,9 +475,8 @@ describe('the plan step (plan 29 §B4, §B6)', () => {
     });
     await composeDraft(s, { userId, personId: p, kind: 'first_touch', channel: 'gmail', goalId });
     const sys = systemText(claude.requests[0]!);
-    expect(sys).toContain(`13. ${DRAFT_RULES.recruiting}`);
+    expect(sys).toContain('13. This is a recruiting chat with an engineer, PM or designer.');
     expect(sys).toContain(`14. ${ASK_RULES.tech}`);
-    // a reply carries neither
     expect(sys.match(/\n13\. /g)).toHaveLength(1);
   });
 });

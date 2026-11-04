@@ -7,7 +7,7 @@
 import type { ComposedMessage, GoalKind, MessageKind } from '@orbit/core/types';
 import { z } from 'zod/v4';
 
-export const PROMPT_VERSION = 'compose-v2.1';
+export const PROMPT_VERSION = 'compose-v3.0';
 
 export const composeSchema = z.object({
   subject: z.string().nullable(),
@@ -35,7 +35,12 @@ export const GOAL_ASK: Record<GoalKind, AskKind> = {
 };
 
 /** The ask a kind carries: none for thanks, blurbs, nurture and re-engage notes; an intro for intro requests. */
-export function askKindFor(kind: MessageKind, goal: GoalKind, replyWantsCall = false): AskKind {
+export function askKindFor(
+  kind: MessageKind,
+  goal: GoalKind,
+  replyWantsCall = false,
+  nicheAsk?: AskKind,
+): AskKind {
   switch (kind) {
     case 'intro_request':
       return 'intro';
@@ -51,7 +56,7 @@ export function askKindFor(kind: MessageKind, goal: GoalKind, replyWantsCall = f
     case 'schedule':
       return 'call';
     default:
-      return GOAL_ASK[goal];
+      return nicheAsk ?? GOAL_ASK[goal];
   }
 }
 
@@ -63,6 +68,8 @@ export interface SystemParams {
   kind: MessageKind;
   /** the intermediary and the target, for a forwardable blurb */
   blurb?: { intermediary: string; target: string };
+  /** the highest reading grade the niche allows (7 unless the niche says otherwise) */
+  gradeMax?: number;
 }
 
 /** The §7.6 system prompt, with the §7.6 blurb paragraph or the §8.6 reply paragraph when the kind needs it. */
@@ -74,8 +81,9 @@ export function composeSystem(p: SystemParams): string {
     '- Use at least one opener from <research> and keep it true; cite its source id in hooks.',
     "- Never claim familiarity, shared history or a mutual connection that isn't in the inputs.",
     '- No flattery adjectives (amazing, incredible, inspiring), no "I hope this finds you well", no "quick question", no em-dashes, no exclamation marks unless the voice card uses them.',
-    '- Plain words, short sentences (reading grade ≤ 7).',
-    '- Match <voice> for greeting, sign-off, contractions and sentence length. Borrow rhythm from <examples>, never their content.',
+    `- Plain words, short sentences (reading grade ≤ ${p.gradeMax ?? 7}).`,
+    '- Match <voice> for greeting, sign-off, contractions and sentence length, unless a numbered rule below fixes the greeting. Borrow rhythm from <examples>, never their content.',
+    "- The numbered rules below are this niche's norms for this step; follow them over any general habit.",
     '- <user_context> may carry the user\'s own words: a "Never" line is their rule and always wins; "Their story" is how they introduce themselves, so draw on it rather than a generic line.',
   ];
   if (p.kind === 'forwardable_blurb' && p.blurb)

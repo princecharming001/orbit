@@ -1164,53 +1164,9 @@ var OWN_WORDS_TOTAL = OWN_WORDS_KEYS.length + 1;
 
 // supabase/functions/_shared/memory/memory.ts
 import { z as z2 } from "npm:zod@3.25.76/v4";
-var MEMORY_SYSTEM = [
-  'Extract durable facts worth remembering for future conversations: preferences, constraints, details of goals, outcomes, and facts about specific people. Skip small talk and anything already in <known>. Each memory ≤ 200 characters, in third person about the user ("Prefers morning calls").',
-  `Return {"memories": [{kind, text, person_name|null, importance: 0..1, quote}]}; quote must be the user's own words.`
-].join("\n");
-var memorySchema = z2.object({
-  memories: z2.array(
-    z2.object({
-      kind: z2.enum(["preference", "constraint", "goal_detail", "outcome", "person_fact", "note"]),
-      text: z2.string(),
-      person_name: z2.string().nullable(),
-      importance: z2.number(),
-      quote: z2.string()
-    })
-  )
-});
 
-// supabase/functions/_shared/voice/voice.ts
-var text = (max) => z3.string().max(max);
-var list = (n, max) => z3.array(text(max)).max(n);
-var StyleCardS = z3.object({
-  greetingPatterns: list(6, 80),
-  signoffs: list(6, 160),
-  formality: z3.number().min(0).max(1),
-  avgSentenceWords: z3.number().min(0).max(200),
-  avgMessageWords: z3.number().min(0).max(2e3),
-  contractions: z3.boolean(),
-  exclamationsPerMessage: z3.number().min(0).max(50),
-  emoji: z3.boolean(),
-  characteristicPhrases: list(12, 120),
-  avoid: list(50, 120),
-  notes: text(4e3),
-  builtFromCount: z3.number().int().min(0).max(1e6),
-  version: z3.number().int().min(0).max(1e3),
-  sources: z3.partialRecord(z3.enum(["email", "linkedin", "orbit", "pasted"]), z3.number().int().min(0)).optional(),
-  custom: z3.boolean().optional()
-});
-var DistillS = z3.object({
-  notes: z3.array(
-    z3.object({
-      text: z3.string().max(400),
-      // "" when the note is not about one phrase
-      avoid: z3.string().max(200),
-      evidence: z3.array(z3.string().max(80)).max(40)
-    })
-  ).max(VOICE_NOTES_MAX * 2)
-});
-var JudgeS = z3.object({ score: z3.number().int().min(0).max(3), reason: z3.string().max(400) });
+// packages/core/src/entity/resolve.ts
+import { getDomain, getDomainWithoutSuffix } from "npm:tldts@7.4.18";
 
 // packages/core/src/text/jaro.ts
 function jaroWinkler(a, b) {
@@ -3662,8 +3618,70 @@ var PERSONAL_EMAIL_DOMAINS = /* @__PURE__ */ new Set([
   "fastmail.com",
   "hey.com",
   "qq.com",
-  "163.com"
+  "163.com",
+  // internet providers and regional mail: an address there says nothing about an employer either
+  "126.com",
+  "att.net",
+  "bellsouth.net",
+  "bigpond.com",
+  "btinternet.com",
+  "charter.net",
+  "comcast.net",
+  "cox.net",
+  "duck.com",
+  "earthlink.net",
+  "free.fr",
+  "frontier.com",
+  "hushmail.com",
+  "juno.com",
+  "laposte.net",
+  "libero.it",
+  "mail.com",
+  "mail.ru",
+  "naver.com",
+  "optonline.net",
+  "optusnet.com.au",
+  "orange.fr",
+  "rediffmail.com",
+  "rocketmail.com",
+  "rogers.com",
+  "sbcglobal.net",
+  "shaw.ca",
+  "sina.com",
+  "sky.com",
+  "sympatico.ca",
+  "t-online.de",
+  "telus.net",
+  "tuta.io",
+  "tutanota.com",
+  "verizon.net",
+  "web.de",
+  "windstream.net",
+  "yandex.com",
+  "yandex.ru",
+  "zoho.com",
+  "zohomail.com"
 ]);
+var PERSONAL_MAIL_BRANDS = /* @__PURE__ */ new Set([
+  "yahoo",
+  "hotmail",
+  "outlook",
+  "live",
+  "msn",
+  "gmx",
+  "aol",
+  "ymail",
+  "yandex"
+]);
+function isPersonalEmailDomain(domain) {
+  const d = (domain ?? "").trim().toLowerCase();
+  if (!d) return false;
+  if (PERSONAL_EMAIL_DOMAINS.has(d)) return true;
+  const registrable = getDomain(d) ?? d;
+  if (PERSONAL_EMAIL_DOMAINS.has(registrable)) return true;
+  const brand = getDomainWithoutSuffix(d);
+  return !!brand && PERSONAL_MAIL_BRANDS.has(brand);
+}
 function sigmoid(x) {
   return 1 / (1 + Math.exp(-x));
 }
@@ -3695,7 +3713,7 @@ function emailEvidence(rawEmail, name, org, orgDomains, fuzzy = true) {
   const email = normalizeEmail(rawEmail);
   if (!email.includes("@")) return { nameSim: 0, domainOrg: 0 };
   const dom = emailDomain(email);
-  const personal = PERSONAL_EMAIL_DOMAINS.has(dom);
+  const personal = isPersonalEmailDomain(dom);
   let nameSim = 0;
   if (name.first && name.last) {
     const local = emailLocalPart(email).replace(/\+.*$/, "").replace(/[\d._-]+/g, " ").trim();
@@ -3837,7 +3855,7 @@ function employerConflict(inc, cand, ctx, f) {
   if (!candOrg) return false;
   const email = inc.email ? normalizeEmail(inc.email) : "";
   const dom = email.includes("@") ? emailDomain(email) : "";
-  const work = !!dom && !PERSONAL_EMAIL_DOMAINS.has(dom);
+  const work = !!dom && !isPersonalEmailDomain(dom);
   if (work) {
     const known = cand.currentOrganizationId ? ctx.orgDomains?.get(cand.currentOrganizationId) ?? [] : [];
     const root = dom.split(".").slice(-2, -1)[0] ?? "";
@@ -3937,7 +3955,7 @@ function resolveIdentity(inc, ctx) {
     const pDomains = [...new Set([p.primaryEmail, ...p.emails].filter(Boolean).map((e) => emailDomain(e)))];
     if (!incName.full || placeholder) {
       if (incDomain && pDomains.includes(incDomain)) return true;
-      if (incDomain && !PERSONAL_EMAIL_DOMAINS.has(incDomain)) return true;
+      if (incDomain && !isPersonalEmailDomain(incDomain)) return true;
       return placeholder && !!incName.full && pDomains.length > 0;
     }
     const pf = foldName(p.displayName);
@@ -3976,6 +3994,55 @@ function sameMailboxOtherName(owner, incName, people, ctx) {
   }
   return out;
 }
+
+// supabase/functions/_shared/memory/memory.ts
+var MEMORY_SYSTEM = [
+  'Extract durable facts worth remembering for future conversations: preferences, constraints, details of goals, outcomes, and facts about specific people. Skip small talk and anything already in <known>. Each memory ≤ 200 characters, in third person about the user ("Prefers morning calls").',
+  `Return {"memories": [{kind, text, person_name|null, importance: 0..1, quote}]}; quote must be the user's own words.`
+].join("\n");
+var memorySchema = z2.object({
+  memories: z2.array(
+    z2.object({
+      kind: z2.enum(["preference", "constraint", "goal_detail", "outcome", "person_fact", "note"]),
+      text: z2.string(),
+      person_name: z2.string().nullable(),
+      importance: z2.number(),
+      quote: z2.string()
+    })
+  )
+});
+
+// supabase/functions/_shared/voice/voice.ts
+var text = (max) => z3.string().max(max);
+var list = (n, max) => z3.array(text(max)).max(n);
+var StyleCardS = z3.object({
+  greetingPatterns: list(6, 80),
+  signoffs: list(6, 160),
+  formality: z3.number().min(0).max(1),
+  avgSentenceWords: z3.number().min(0).max(200),
+  avgMessageWords: z3.number().min(0).max(2e3),
+  contractions: z3.boolean(),
+  exclamationsPerMessage: z3.number().min(0).max(50),
+  emoji: z3.boolean(),
+  characteristicPhrases: list(12, 120),
+  avoid: list(50, 120),
+  notes: text(4e3),
+  builtFromCount: z3.number().int().min(0).max(1e6),
+  version: z3.number().int().min(0).max(1e3),
+  sources: z3.partialRecord(z3.enum(["email", "linkedin", "orbit", "pasted"]), z3.number().int().min(0)).optional(),
+  custom: z3.boolean().optional()
+});
+var DistillS = z3.object({
+  notes: z3.array(
+    z3.object({
+      text: z3.string().max(400),
+      // "" when the note is not about one phrase
+      avoid: z3.string().max(200),
+      evidence: z3.array(z3.string().max(80)).max(40)
+    })
+  ).max(VOICE_NOTES_MAX * 2)
+});
+var JudgeS = z3.object({ score: z3.number().int().min(0).max(3), reason: z3.string().max(400) });
 
 // packages/core/src/server/mappers.ts
 var u = (v) => v === null ? void 0 : v;
@@ -4205,7 +4272,7 @@ async function resolvePeople(db2, userId, input, opts) {
     if (n.last) lasts.add(n.last.toLowerCase());
     if (i.email) {
       const d = emailDomain(normalizeEmail(i.email));
-      if (d && !PERSONAL_EMAIL_DOMAINS.has(d)) domains.add(d);
+      if (d && !isPersonalEmailDomain(d)) domains.add(d);
     }
   }
   const knownIds = [...new Set(known.map((k) => k.personId))];

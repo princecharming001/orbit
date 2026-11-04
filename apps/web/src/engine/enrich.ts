@@ -12,15 +12,16 @@
  */
 import type { Person, User } from '@orbit/core';
 import {
+  domainLabel,
   emailDomain,
   hasRealName,
   isKnownContact,
+  isPersonalEmailDomain,
   linkedInSlug,
   nameAgreement,
   newId,
   normalizeCompany,
   normalizeLinkedInUrl,
-  PERSONAL_EMAIL_DOMAINS,
   roleFromHeadline,
   transliterate,
 } from '@orbit/core';
@@ -44,12 +45,12 @@ const norm = (s: string) =>
 /** True when `phrase` appears in `text` as whole words ("meta" is in "PM at Meta", not in "metadata"). */
 const hasWords = (text: string, phrase: string) => !!phrase && ` ${text} `.includes(` ${phrase} `);
 
-/** "corgi.com" → "corgi", "mail.stripe.com" → "stripe": the name a work address points at. */
+/** "corgi.com" → "corgi", "mail.stripe.com" → "stripe", "monzo.co.uk" → "monzo": the name a work address points at,
+ * read with the public suffix list (tldts) so a two-part suffix is never taken for the company. */
 export function companyFromEmail(email: string | undefined): string | undefined {
   const d = email ? emailDomain(email) : undefined;
-  if (!d || PERSONAL_EMAIL_DOMAINS.has(d) || d.endsWith('.edu')) return undefined;
-  const parts = d.split('.');
-  return parts.length >= 2 ? parts[parts.length - 2] : undefined;
+  if (!d || isPersonalEmailDomain(d) || d.endsWith('.edu')) return undefined;
+  return domainLabel(d);
 }
 
 /**

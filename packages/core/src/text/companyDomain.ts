@@ -1,4 +1,4 @@
-import { PERSONAL_EMAIL_DOMAINS } from '../entity/resolve';
+import { isPersonalEmailDomain } from '../entity/resolve';
 import { normalizeCompany, stripDiacritics } from './normalize';
 import { SUB_SCHOOLS, UNIVERSITIES } from './universities';
 
@@ -718,7 +718,7 @@ export function companyDomain(
   // a work address (not a free mailbox, not a school) names the employer's domain
   for (const e of hints.emails ?? []) {
     const d = e?.split('@')[1]?.toLowerCase().trim();
-    if (d && DOMAIN.test(d) && !PERSONAL_EMAIL_DOMAINS.has(d) && !d.endsWith('.edu')) return d;
+    if (d && DOMAIN.test(d) && !isPersonalEmailDomain(d) && !d.endsWith('.edu')) return d;
   }
   if (!norm) return undefined;
   // a one-word name is usually its own .com ("Ramp", "Figma"); longer names are too often wrong to guess

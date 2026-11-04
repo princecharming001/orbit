@@ -723,9 +723,16 @@ describe('replies (§8)', () => {
     expect(d.status).toBe(200);
     const prompt = userText(claude.requests[0]!);
     const slotBlock = prompt.split('<free_slots>')[1]!.split('</free_slots>')[0]!;
-    const lines = slotBlock.trim().split('\n');
+    // three slots to offer, then the free hours of each day (so a time they name can be taken when it is free)
+    const lines = slotBlock
+      .trim()
+      .split('\n')
+      .filter((l) => l.includes(' = '));
     expect(lines).toHaveLength(3);
     for (const l of lines) expect(l).toMatch(/ PT$/);
+    const hours = slotBlock.split('Free hours by day')[1]!.trim().split('\n').slice(1);
+    expect(hours.length).toBeGreaterThanOrEqual(3);
+    for (const h of hours) expect(h).toMatch(/^\w{3}, \w{3} \d{1,2}: \d{2}:\d{2} to \d{2}:\d{2}.* PT$/);
     const [row] = await t.db.sql<{
       ask: { slots: string[] };
     }>`select ask from orbit.drafts where id = ${d.body.draft.id}::uuid`;

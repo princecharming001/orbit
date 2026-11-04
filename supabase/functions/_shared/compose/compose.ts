@@ -6,8 +6,9 @@
  * unanswered message, a new first touch within 180 days of a decline, and a sales first touch to a new recipient
  * before a postal address is set (CAN-SPAM, §14.3); such a first touch carries the opt-out line (§7.7).
  */
-import { FIRST_TOUCH_KINDS, validateComposed, wordRange } from '@orbit/core/drafts/compose';
-import { firmKindOf, sectorOf } from '@orbit/core/drafts/sector';
+
+import { cleanSubject, FIRST_TOUCH_KINDS, validateComposed, wordRange } from '@orbit/core/drafts/compose';
+import { draftPlaybook, type Niche } from '@orbit/core/drafts/niche';
 import {
   COMPOSE_KINDS,
   type ComposeKind,
@@ -15,14 +16,14 @@ import {
   composeFallback,
 } from '@orbit/core/drafts/templates';
 import type { ReplyClass } from '@orbit/core/email/replyClass';
-import { ASK_RULES, DRAFT_RULES } from '@orbit/core/knowledge/index';
+import { extractProposedTimes } from '@orbit/core/email/triage';
 import { messageHash, unansweredBefore } from '@orbit/core/safety/rules';
 import type { Slot } from '@orbit/core/server/api';
 import { stripQuotedReply } from '@orbit/core/text/email';
 import type { ComposedMessage, GoalKind, MessageKind } from '@orbit/core/types';
 import type { Db } from '../db.ts';
 import { HttpError } from '../http.ts';
-import { firstNameOf, iso } from '../rows.ts';
+import { firstNameOf, iso, lastNameOf } from '../rows.ts';
 import type { Services } from '../services.ts';
 import { slotsFor } from '../slots/slots.ts';
 import { validZone } from '../zones.ts';
@@ -87,19 +88,6 @@ export interface ComposeResult {
   attempts: number;
 }
 
-const GOAL_REGISTER: Record<GoalKind, string> = {
-  recruiting: 'ask: a 15-minute call about their path or team; register: warm, curious, specific',
-  advice: 'ask: 15–20 minutes on one named question; register: warm, humble',
-  fundraising:
-    'ask: "Would you be open to a look?" plus one line of traction; register: crisp, numbers first',
-  sales: 'ask: "Worth a quick look?" tied to a trigger; register: short, concrete, no hype',
-  hiring:
-    'ask: "Open to hearing about it?" with the role\'s one hook; register: direct, respects their current job',
-  cofounder: 'ask: 20 minutes to compare notes on the problem; register: peer-to-peer',
-  community: 'ask: an invite to a specific event or group; register: friendly',
-  collaboration: 'ask: a specific question about their paper plus the overlap; register: precise, academic',
-};
-
 /** The composed message as a stored draft. Throws HttpError for the refusals above. */
 export async function composeDraft(s: Services, req: ComposeRequest): Promise<ComposeResult> {
   const db = s.db;
@@ -126,6 +114,21 @@ export async function composeDraft(s: Services, req: ComposeRequest): Promise<Co
   const goal = await resolveGoal(db, req.userId, req.goalId ?? null, req.chatId ?? null, person.id);
   const goalKind: GoalKind = (goal?.kind as GoalKind) ?? 'advice';
   const chatId = req.chatId ?? (await chatFor(db, req.userId, person.id, goal?.id ?? null));
+  // the niche playbook this message follows (plan 30): one resolver shared with the browser's drafts
+  const goalTargets = (goal?.targets ?? {}) as Record<string, string[]>;
+  const goalCriteria = (goal?.criteria ?? {}) as Record<string, unknown>;
+  const aim = (user.settings.about as { aim?: unknown } | undefined)?.aim;
+  const playbook = draftPlaybook({
+    goalKind,
+    goalText: [goal?.title, goal?.description, typeof aim === 'string' ? aim : '', req.topic]
+      .filter(Boolean)
+      .join('. '),
+    recipient: { title: person.title ?? undefined, org: personOrg(person) },
+    targetFunctions: goalTargets.roles ?? [],
+    degree: user.degree ?? undefined,
+    kind: req.kind,
+    goalBrief: typeof goalCriteria.playbook === 'string' ? goalCriteria.playbook : undefined,
+  });
 
   const history = await historyWith(db, req.userId, person.id);
   const sendsToThem = req.kind !== 'forwardable_blurb';
@@ -160,6 +163,19 @@ export async function composeDraft(s: Services, req: ComposeRequest): Promise<Co
 
   const research = await loadResearch(db, req.userId, person.id);
   const userContext = await buildUserContext(db, user);
+  // what the student told Orbit about this person (chat memories tied to them)
+  const aboutThem = await db.sql<{ text: string }>`
+    select text from orbit.memories
+     where user_id = ${req.userId}::uuid and person_id = ${person.id}::uuid and deleted_at is null
+     order by importance desc, last_seen_at desc limit 5`;
+  const recipient = [
+    recipientText(person),
+    aboutThem.length
+      ? `What ${userFirstName(user)} told Orbit about them: ${aboutThem.map((m) => m.text).join(' | ')}`
+      : '',
+  ]
+    .filter(Boolean)
+    .join('\n');
   const card = styleCardOf(user);
   const meFirst = userFirstName(user);
   const tz = validZone(person.timezone) ?? validZone(user.timezone) ?? 'America/New_York';
@@ -171,26 +187,34 @@ export async function composeDraft(s: Services, req: ComposeRequest): Promise<Co
   const schedulingLink =
     typeof user.settings.scheduling_link === 'string' ? user.settings.scheduling_link : undefined;
   let slots: Slot[] = [];
+  let windows: string[] = [];
+  let slotTz: string | undefined;
   // the student's answer to a question the reply asked (plan 29 §B2.3), and a booked time to confirm
   const answer = replyTo?.answer?.trim() || undefined;
   const confirms = req.kind === 'reply' ? req.confirmSlot : undefined;
   const wantsTimes = !confirms && (replyClass === 'interested' || replyClass === 'scheduling');
   if (req.kind === 'reply' && wantsTimes) {
     try {
-      slots = (await slotsFor(s, req.userId, { personId: person.id, count: 3 })).slots;
+      const free = await slotsFor(s, req.userId, { personId: person.id, count: 3 });
+      slots = free.slots;
+      windows = free.windows;
+      slotTz = free.tz;
     } catch {
       slots = [];
     }
   }
 
-  const askKind = askKindFor(req.kind, goalKind, wantsTimes);
-  const range = req.channel === 'linkedin' ? 'At most 400 characters,' : wordRangeText(req.kind, goalKind);
+  const askKind = askKindFor(req.kind, goalKind, wantsTimes, playbook.form.ask);
+  const range =
+    req.channel === 'linkedin'
+      ? 'At most 400 characters,'
+      : wordRangeText(req.kind, goalKind, playbook.niche);
   const viaText = introducer
     ? `${introducer.display_name}${req.via?.pathScore !== undefined ? ` (path score ${req.via.pathScore.toFixed(2)})` : ''}`
     : '';
   const goalText = goal
-    ? `${goal.kind}: ${goal.title}${goal.description ? `. ${goal.description}` : ''}\n${GOAL_REGISTER[goalKind]}`
-    : GOAL_REGISTER[goalKind];
+    ? `${goal.kind}: ${goal.title}${goal.description ? `. ${goal.description}` : ''} (${playbook.label})`
+    : playbook.label;
   const topic = req.topic ?? goalTopic(goal);
   const task = [
     `kind: ${req.kind}; channel: ${req.channel}; ask: ${askKind}`,
@@ -215,12 +239,20 @@ export async function composeDraft(s: Services, req: ComposeRequest): Promise<Co
     [req.kind, goalKind, person.title ?? '', thread.lastInbound ?? '', topic ?? ''].join(' '),
     { replies: req.kind === 'reply' },
   );
-  const slotText = slots.map((x) => `${x.start} = ${x.label}`).join('\n');
+  // a slot is offered as its start: the call runs as long as they asked, not the calendar hold's 30 minutes
+  const slotText = [
+    ...slots.map((x) => `${x.start} = ${x.label.replace(/ to \d{1,2}:\d{2}( ?[ap]m)?/i, '')}`),
+    windows.length
+      ? `Free hours by day over the next two weeks (any start inside one is free):\n${windows.join('\n')}`
+      : '',
+  ]
+    .filter(Boolean)
+    .join('\n');
   const userBlocks = composeUser({
     task,
     userContext,
     goal: goalText,
-    recipient: recipientText(person),
+    recipient,
     research: research.text,
     thread: thread.text,
     via: viaText,
@@ -237,13 +269,14 @@ export async function composeDraft(s: Services, req: ComposeRequest): Promise<Co
       req.kind === 'forwardable_blurb'
         ? { intermediary: person.display_name, target: target?.display_name ?? 'them' }
         : undefined,
-  })}${firstTouch ? playbookLines(goalKind, person) : ''}`;
+    gradeMax: playbook.form.gradeMax,
+  })}${playbook.lines.map((l, i) => `\n${13 + i}. ${l}`).join('')}`;
 
   // what a message may draw on, for the invented-name check
   const inputs = [
     userContext,
     goalText,
-    recipientText(person),
+    recipient,
     research.text,
     thread.text,
     viaText,
@@ -257,11 +290,12 @@ export async function composeDraft(s: Services, req: ComposeRequest): Promise<Co
   ].join('\n');
   const ctx = {
     goal: goalKind,
+    niche: playbook.niche,
     recipientFirstName: firstNameOf(person),
     recipientFullName: person.display_name,
     recipientEmail: person.primary_email ?? undefined,
     inputs,
-    allowedUrls: schedulingLink ? [schedulingLink] : [],
+    allowedUrls: [...(schedulingLink ? [schedulingLink] : []), ...linksIn(userContext)],
     style: card,
     userFirstName: meFirst,
   };
@@ -303,7 +337,8 @@ export async function composeDraft(s: Services, req: ComposeRequest): Promise<Co
       personId: person.id,
       kind: req.kind,
       channel: req.channel,
-      subject: req.channel === 'gmail' && req.kind !== 'reply' ? output.subject?.trim() || null : null,
+      subject:
+        req.channel === 'gmail' && req.kind !== 'reply' ? cleanSubject(output.subject ?? '') || null : null,
       body: output.body.trim(),
       ask: output.ask,
       hooks: output.hooks.filter((h) => h.text.trim() && h.sourceId.trim()),
@@ -320,6 +355,7 @@ export async function composeDraft(s: Services, req: ComposeRequest): Promise<Co
       target,
       introducer,
       goalKind,
+      niche: playbook.niche,
       goalId: goal?.id ?? null,
       research,
       topic,
@@ -354,6 +390,18 @@ export async function composeDraft(s: Services, req: ComposeRequest): Promise<Co
     .concat(markers.map((m) => `needs_input: ${m}`));
   const validator = { ok: v.ok && markers.length === 0, issues, words: v.words, grade: v.grade };
   const body = footer ? `${composed.body}\n\n${footer}` : composed.body;
+  // times the model offered from the free hours count as offered too, so a "Tuesday at 2 works" books the call
+  if (generatedBy === 'llm' && windows.length && !confirms) {
+    const named = extractProposedTimes(composed.body, now, slotTz)
+      .map((t) => new Date(t.startIso))
+      .filter((d) => d.getTime() > now.getTime())
+      .map((d) => ({
+        start: d.toISOString(),
+        end: new Date(d.getTime() + 30 * 60_000).toISOString(),
+        label: '',
+      }));
+    for (const n of named) if (!slots.some((x) => x.start === n.start)) slots.push(n);
+  }
   const meta: DraftMeta = {
     kind: composed.ask.kind,
     text: composed.ask.text,
@@ -381,7 +429,7 @@ export async function composeDraft(s: Services, req: ComposeRequest): Promise<Co
   await db.sql`
     insert into orbit.audit_log (user_id, actor, action, target_table, target_id, details)
     values (${req.userId}::uuid, ${req.actor ?? 'user'}, 'draft.compose', 'drafts', ${row!.id},
-            ${{ kind: req.kind, channel: req.channel, generated_by: generatedBy, attempts, issues: lastIssues.length, hash: messageHash({ channel: req.channel, subject: composed.subject, body }) }}::jsonb)`;
+            ${{ kind: req.kind, channel: req.channel, generated_by: generatedBy, attempts, issues: lastIssues.length, codes: [...new Set(lastIssues.map((i) => i.split(':')[0]))], detail: lastIssues.slice(0, 4).map((i) => i.slice(0, 140)), niche: playbook.niche, hash: messageHash({ channel: req.channel, subject: composed.subject, body }) }}::jsonb)`;
   return {
     draft: row!,
     composed: { ...composed, id: row!.id, body, validator },
@@ -389,21 +437,13 @@ export async function composeDraft(s: Services, req: ComposeRequest): Promise<Co
   };
 }
 
-/**
- * The playbook's two lines for a first message (plan 28 §3b, rules 13 and 14), the ones the browser's drafts carry:
- * the register of the goal, and what a first message to this kind of firm asks and never asks.
- */
-export function playbookLines(
-  goal: GoalKind,
-  person: Pick<PersonRow, 'title' | 'org_name' | 'org_raw'>,
-): string {
-  const who = { title: person.title ?? undefined, org: personOrg(person) };
-  const firm = firmKindOf(who, sectorOf(who));
-  return `\n13. ${DRAFT_RULES[goal]}\n14. ${ASK_RULES[firm]}`;
+/** The student's own links (GitHub, a portfolio, LinkedIn) in their context, which a message may use. */
+export function linksIn(text: string): string[] {
+  return [...new Set(text.match(/https?:\/\/[^\s,;)|]+/g) ?? [])].map((u) => u.replace(/[.]+$/, ''));
 }
 
-function wordRangeText(kind: MessageKind, goal: GoalKind): string {
-  const [min, max] = wordRange(kind, goal);
+function wordRangeText(kind: MessageKind, goal: GoalKind, niche: Niche): string {
+  const [min, max] = wordRange(kind, goal, niche);
   return `${min}–${max}`;
 }
 
@@ -616,6 +656,7 @@ function templateMessage(p: {
   target?: PersonRow;
   introducer?: PersonRow;
   goalKind: GoalKind;
+  niche: Niche;
   goalId: string | null;
   research: Research;
   topic?: string;
@@ -658,7 +699,13 @@ function templateMessage(p: {
           : undefined,
       traction: p.goalKind === 'fundraising' ? str(s.traction) : undefined,
     },
-    recipient: { firstName: firstNameOf(person), org: personOrg(person), title: person.title ?? undefined },
+    recipient: {
+      firstName: firstNameOf(person),
+      lastName: lastNameOf(person),
+      org: personOrg(person),
+      title: person.title ?? undefined,
+    },
+    niche: p.niche,
     hook: opener ? { text: hookPhrase(opener.text), sourceId: opener.id } : undefined,
     topic: p.topic,
     via:
@@ -683,6 +730,7 @@ function replyTemplate(
     person: PersonRow;
     goalId: string | null;
     window: { notBefore: string; tz: string };
+    niche?: Niche;
     replyClass?: ReplyClass;
     slots: Slot[];
     answer?: string;
@@ -690,7 +738,13 @@ function replyTemplate(
   },
   me: string,
 ): Omit<ComposedMessage, 'validator'> {
-  const hi = `Hi ${firstNameOf(p.person)},`;
+  // a professor keeps the title the first note used (the niche's greeting rule)
+  const academic = p.niche === 'research_position' || p.niche === 'research_collaboration';
+  const last = lastNameOf(p.person);
+  const hi =
+    academic && last && /\bprofessor\b/i.test(p.person.title ?? '')
+      ? `Dear Professor ${last},`
+      : `${academic ? 'Dear' : 'Hi'} ${firstNameOf(p.person)},`;
   const sign = `Best,\n${me}`;
   let middle: string;
   let ask: ComposedMessage['ask'] = { kind: 'none', text: '' };
@@ -735,7 +789,10 @@ function replyTemplate(
     case 'scheduling':
       if (p.slots.length) {
         ask = { kind: 'call', text: 'Would any of these times work for you?' };
-        middle = `Thanks for getting back to me. ${ask.text}\n\n${p.slots.map((x) => `- ${x.label}`).join('\n')}`;
+        middle = `Thanks for getting back to me. ${ask.text}\n\n${p.slots
+          .slice(0, 3)
+          .map((x) => `- ${x.label}`)
+          .join('\n')}`;
       } else {
         ask = { kind: 'call', text: 'What times work best for you over the next week or so?' };
         middle = `Thanks for getting back to me. ${ask.text} I'm happy to work around your schedule.`;

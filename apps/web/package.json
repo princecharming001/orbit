@@ -17,6 +17,7 @@
     "@fontsource-variable/inter": "5.2.8",
     "@fontsource/geist-mono": "5.2.7",
     "@orbit/core": "workspace:*",
+    "@zootools/email-spell-checker": "1.12.0",
     "dexie": "^4.0.10",
     "dexie-react-hooks": "^1.1.7",
     "lucide-react": "^0.475.0",

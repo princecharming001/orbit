@@ -84,6 +84,61 @@ export function pickSlots(
   return out;
 }
 
+/**
+ * The free hours of each working day, merged ("Thu, Nov 12: 09:00 to 12:00, 14:30 to 17:30 ET"), so a reply can
+ * take a time the other person named when it is free, not only the first slot of the day.
+ */
+export function freeWindows(
+  busy: Busy[],
+  opts: { now: Date; userTz: string; labelTz: string; until?: Date; days?: number },
+): string[] {
+  const from = opts.now.getTime() + LEAD_HOURS * 3_600_000;
+  const until = (opts.until ?? addBusinessDays(opts.now, HORIZON_BUSINESS_DAYS, opts.userTz)).getTime();
+  const days = opts.days ?? HORIZON_BUSINESS_DAYS;
+  const buffer = BUFFER_MIN * 60_000;
+  const step = 15 * 60_000;
+  const hm = (d: number) =>
+    new Intl.DateTimeFormat('en-US', {
+      timeZone: opts.labelTz,
+      hour: '2-digit',
+      minute: '2-digit',
+      hourCycle: 'h23',
+    }).format(new Date(d));
+  const out: string[] = [];
+  let key = localParts(new Date(from), opts.userTz).key;
+  for (let i = 0; i < 31 && out.length < days; i++, key = addDaysKey(key, 1)) {
+    const dow = weekdayOfKey(key);
+    if (dow === 0 || dow === 6 || usHolidays(Number(key.slice(0, 4))).has(key)) continue;
+    const dayStart = zonedTime(key, DAY_START.hour, DAY_START.minute, opts.userTz).getTime();
+    const dayEnd = zonedTime(key, DAY_END.hour, DAY_END.minute, opts.userTz).getTime();
+    if (dayStart > until) break;
+    const spans: [number, number][] = [];
+    for (
+      let t = Math.max(dayStart, Math.ceil(from / step) * step);
+      t + step <= Math.min(dayEnd, until);
+      t += step
+    ) {
+      if (busy.some((b) => t < b.end + buffer && t + step > b.start - buffer)) continue;
+      const last = spans[spans.length - 1];
+      if (last && last[1] === t) last[1] = t + step;
+      else spans.push([t, t + step]);
+    }
+    const usable = spans.filter(([a, b]) => b - a >= SLOT_MINUTES * 60_000);
+    const first = usable[0];
+    if (!first) continue;
+    const day = new Intl.DateTimeFormat('en-US', {
+      timeZone: opts.labelTz,
+      weekday: 'short',
+      month: 'short',
+      day: 'numeric',
+    }).format(new Date(first[0]));
+    out.push(
+      `${day}: ${usable.map(([a, b]) => `${hm(a)} to ${hm(b)}`).join(', ')} ${zoneAbbrev(new Date(first[0]), opts.labelTz)}`,
+    );
+  }
+  return out;
+}
+
 async function googleCall(
   s: Services,
   userId: string,
@@ -151,7 +206,7 @@ export async function slotsFor(
   s: Services,
   userId: string,
   opts: { personId?: string; tz?: string; count?: number } = {},
-): Promise<SlotsResponse & { source: 'google' | 'stored' }> {
+): Promise<SlotsResponse & { source: 'google' | 'stored'; windows: string[] }> {
   const [u] = await s.db.sql<{
     timezone: string;
   }>`select timezone from orbit.users where id = ${userId}::uuid`;
@@ -176,7 +231,12 @@ export async function slotsFor(
     source = 'stored';
   }
   const count = Math.max(1, Math.min(5, opts.count ?? 3));
-  return { slots: pickSlots(busy, { now, userTz, labelTz, count, until: timeMax }), tz: labelTz, source };
+  return {
+    slots: pickSlots(busy, { now, userTz, labelTz, count, until: timeMax }),
+    windows: freeWindows(busy, { now, userTz, labelTz, until: timeMax }),
+    tz: labelTz,
+    source,
+  };
 }
 
 // ---- booking ---------------------------------------------------------------------------------------------------

@@ -146,6 +146,9 @@ export async function buildUserContext(db: Db, u: UserRow): Promise<string> {
     lines.push(
       `Resume: ${facets.length ? facets.join('; ') : resume.text.replace(/\s+/g, ' ').slice(0, 800)}`,
     );
+    // the links on the resume (GitHub, a portfolio, LinkedIn): facets drop them, and a message may point to one
+    const links = resumeLinks(resume.text);
+    if (links.length) lines.push(`Links: ${links.join(' ')}`);
   }
 
   const memories = await db.sql<{ text: string }>`
@@ -156,6 +159,19 @@ export async function buildUserContext(db: Db, u: UserRow): Promise<string> {
 
   const text = lines.join('\n');
   return text.length > USER_CONTEXT_MAX_CHARS ? `${text.slice(0, USER_CONTEXT_MAX_CHARS - 1)}…` : text;
+}
+
+/** The student's own links on a resume: a full URL, or a bare github.com / linkedin.com/in / personal-site path. */
+export function resumeLinks(text: string): string[] {
+  const out = new Set<string>();
+  for (const m of text.matchAll(
+    /(?<![@\w.-])(?:https?:\/\/)?(?:www\.)?((?:github\.com|gitlab\.com|linkedin\.com\/in|huggingface\.co|kaggle\.com|scholar\.google\.com)\/[A-Za-z0-9_.\-/?=]+|[a-z0-9-]+\.(?:dev|io|me|site|github\.io)(?:\/[A-Za-z0-9_.\-/]*)?)/gi,
+  )) {
+    const u = m[1]!.replace(/[./]+$/, '');
+    if (/@/.test(m[0]!) || u.length < 8) continue;
+    out.add(`https://${u}`);
+  }
+  return [...out].slice(0, 4);
 }
 
 /** Resume facets (parsed.experiences / education / skills / facets) as short lines. */

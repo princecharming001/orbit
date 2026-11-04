@@ -478,26 +478,6 @@ export function findPlaybookSection(topic: string): KnowledgeSection | undefined
   return best ? knowledgeSection(best.id) : undefined;
 }
 
-/** What a first message in each goal's register does; appended to the draft prompt (plan 28 §3b, rule 13). */
-export const DRAFT_RULES: Record<GoalKind, string> = {
-  recruiting:
-    'Recruiting register: warm, curious, specific. The ask is a 15 minute call about their path and their team (20 for an alum). Never a job, a referral, a resume review or "openings" in a first message; proof of interest is one specific thing about them, not about the student.',
-  fundraising:
-    'Fundraising register: crisp, numbers first, confident. Two lines on what the company does and why now, one line of traction only if the context gives one, then "would you be open to a look?" Never a job hunting line, never a valuation, never a fake deadline, never the whole pitch.',
-  sales:
-    'Sales register: short, concrete, no hype. Open with the trigger or the specific observation about them, say what the product does for people like them in plain words with one result if the context gives one, then "worth a quick look?" with an out. No feature list, no attachment.',
-  hiring:
-    'Hiring register: direct and respectful of their current job. Line one is why them (something they built or did), line two the company, stage and the one thing that makes the role interesting, line three "open to hearing about it?" Never "exciting opportunity", never a pasted job description.',
-  advice:
-    'Advice register: warm, humble, specific. One real connection, the one question only this person can answer ("I\'m deciding between X and Y and you did both"), a 15 to 20 minute ask with an out. Never "any advice you have", never "be my mentor", never a resume.',
-  cofounder:
-    'Co-founder register: peer to peer. One line on what the student is building and why them, one line on why this person (what they built or spent years inside), a 20 minute ask to compare notes on the problem. Never equity, never a title, never "looking for a technical co-founder" as the opener.',
-  community:
-    'Community register: friendly and concrete. A named event or group with the date and place, two or three people they would know who are coming, why this person would add something, and a plain invitation. Never a mass invite, never a bare link.',
-  collaboration:
-    'Collaboration register: precise and academic. Name the specific paper or talk and the specific thing in it, ask one precise question or state one concrete overlap, and ask for an answer by email or 20 minutes. "Dear Professor Lastname" for faculty not yet met; never "I am passionate about research".',
-};
-
 /** What a first message to this kind of firm asks about and never asks (plan 28 §3b, rule 14). */
 export const ASK_RULES: Record<FirmKind, string> = {
   bank: 'A banker is asked about their group and path: how they chose it, what the first year looks like, what separates the summer analysts who do well. Never about staffing or an office (consulting words), never whether the group still has seats, never off-cycle or diversity programs. When the summer cycle is already late, ask how they would approach recruiting from here, never "before recruiting starts".',

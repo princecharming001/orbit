@@ -157,6 +157,13 @@ const goalFields = {
     .optional()
     .describe('A deadline as YYYY-MM-DD (an application deadline, a close date).'),
   priority: z.number().int().min(1).max(3).optional().describe('1 is the top priority, 3 the lowest.'),
+  norms: z
+    .string()
+    .max(700)
+    .optional()
+    .describe(
+      'Only for a field Orbit has no playbook for (not banking, consulting, PE, VC, trading, tech, startups, research labs, fundraising, sales, hiring, co-founders or events): two or three plain sentences on how outreach works there, what a first message says and asks for, and what it never does. Drafts for this goal follow it.',
+    ),
 };
 
 type GoalFields = {
@@ -171,6 +178,7 @@ type GoalFields = {
   successMetric?: string;
   dueAt?: string;
   priority?: number;
+  norms?: string;
 };
 
 function goalPatch(i: GoalFields, existing?: Goal): Partial<GoalInput> {
@@ -178,6 +186,8 @@ function goalPatch(i: GoalFields, existing?: Goal): Partial<GoalInput> {
   if (i.sector) criteria.sector = i.sector;
   if (i.stage) criteria.stage = i.stage;
   if (i.keywords) criteria.keywords = i.keywords;
+  // the field's outreach norms when no playbook covers it (plan 30): every draft for the goal carries them
+  if (i.norms?.trim()) criteria.playbook = i.norms.trim();
   const t = existing?.targets;
   return {
     title: i.title,

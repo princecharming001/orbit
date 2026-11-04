@@ -45,6 +45,8 @@ export interface ValidationIssue {
 
 export interface ValidateOptions {
   kind: MessageKind;
+  /** the word limit when the niche sets a longer one than the kind's (a professor email runs to 180) */
+  maxWords?: number;
   facts: PersonFact[];
   allowedUrls: string[];
   recipientEmail?: string;
@@ -94,7 +96,8 @@ const COMMON_CAPS = new Set(
   any anything anyone someone something all some most many much more still even only really
   saw read found noticed met came floating following followed surfacing congratulations congrats well
   speaking also especially again either neither both each every other another mostly for context
-  resume cv`.split(/\s+/),
+  resume cv professor prof dr phd postdoc lab undergraduate it's it'll that's there's let's you're we're they're
+  api apis ai ml llm sql ui ux pm cs ceo cto coo cfo vp mba ib`.split(/\s+/),
 );
 const PHRASE_CHECKS: { re: RegExp; anchor: RegExp; what: string }[] = [
   {
@@ -169,7 +172,13 @@ export function unsupportedDetails(body: string, context: string): string[] {
       const bare = w.replace(/'s$/, '').replace(/[.'-]+$/, '');
       if (!bare || COMMON_CAPS.has(bare.toLowerCase()) || has(bare)) return false;
       // a single capitalised word opening a sentence is usually just English
-      if (i === 0 && sentenceStart && words.length === 1 && /^[A-Z][a-z]+$/.test(bare)) return false;
+      if (
+        i === 0 &&
+        sentenceStart &&
+        words.length === 1 &&
+        /^[A-Z][a-z]+(?:'(?:ll|ve|re|d|s|m|t))?$/.test(bare)
+      )
+        return false;
       return true;
     });
     if (unknown.length) out.push(phrase);
@@ -198,7 +207,7 @@ export function validateDraft(
   const wc = wordsIn(body);
   // a scheduling reply that also answers their asks is held to the reply limit
   const limitKind = opts.kind === 'schedule' && opts.asks?.length ? 'reply' : opts.kind;
-  const max = MAX_WORDS[limitKind];
+  const max = Math.max(MAX_WORDS[limitKind], opts.maxWords ?? 0);
   if (wc > max + 25) issues.push({ code: 'too_long', detail: `${wc} words, aim for ${max}`, blocking: true });
   else if (wc > max)
     issues.push({ code: 'too_long', detail: `${wc} words, aim for ${max}`, blocking: false });
@@ -262,10 +271,18 @@ export function validateDraft(
   for (const c of d.claims)
     if (c.kind === 'about_person' && c.factId && !factIds.has(c.factId))
       issues.push({ code: 'ungrounded_claim', detail: c.text, blocking: true });
+  // a professor is greeted by title and last name ("Dear Professor Kim"), which names them as well
+  const lastName = opts.recipientFullName?.trim().split(/\s+/).slice(1).pop();
   if (
     opts.recipientFirstName &&
     !body.includes(opts.recipientFirstName) &&
-    !(opts.recipientFullName && body.includes(opts.recipientFullName))
+    !(opts.recipientFullName && body.includes(opts.recipientFullName)) &&
+    !(
+      lastName &&
+      new RegExp(
+        `\\b(Professor|Prof\\.?|Dr\\.?)\\s+${lastName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`,
+      ).test(body)
+    )
   )
     issues.push({ code: 'missing_name', detail: opts.recipientFirstName, blocking: true });
   const school = opts.school?.trim() ? [opts.school.trim(), schoolShort(opts.school)] : [];

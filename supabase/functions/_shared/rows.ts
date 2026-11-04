@@ -32,3 +32,11 @@ export function firstNameOf(p: { first_name?: unknown; display_name?: unknown })
   const d = typeof p.display_name === 'string' ? p.display_name.trim() : '';
   return d.split(/\s+/)[0] || 'there';
 }
+
+/** Last name, for a formal greeting ("Dear Professor Kim"): the stored one, else the last word of the display name. */
+export function lastNameOf(p: { last_name?: unknown; display_name?: unknown }): string | undefined {
+  const l = typeof p.last_name === 'string' && p.last_name.trim() ? p.last_name.trim() : '';
+  if (l) return l;
+  const words = (typeof p.display_name === 'string' ? p.display_name.trim() : '').split(/\s+/);
+  return words.length > 1 ? words[words.length - 1] : undefined;
+}

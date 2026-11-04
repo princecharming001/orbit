@@ -9,6 +9,7 @@ import { addPersonByHand } from '../engine/people';
 import { useSession } from '../state/session';
 import { Avatar, Button, cx, Input, Label, Modal, Spinner, useToast } from '../ui';
 import { Suggest } from '../ui/Suggest';
+import { EmailTypoHint } from './EmailTypoHint';
 
 /**
  * "Add a person": the way into Orbit that needs no Google and no LinkedIn export. The student types who they want to
@@ -445,6 +446,7 @@ function ByHand({
             aria-invalid={emailBad}
             data-testid="add-person-email"
           />
+          <EmailTypoHint email={f.email} onFix={(email) => setF({ ...f, email })} />
         </div>
         <div>
           <Label htmlFor="ap-li" hint="or email">

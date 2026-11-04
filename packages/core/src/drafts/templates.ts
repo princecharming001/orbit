@@ -15,6 +15,7 @@ import type {
   StyleCard,
 } from '../types';
 import { forbidsSchool, forbidsStudent } from './neverDo';
+import type { Niche } from './niche';
 import {
   article,
   cap1,
@@ -184,6 +185,14 @@ export interface DraftContext {
      * cycle and their own words when not given (see `goalOf`).
      */
     goal?: GoalKind;
+    /** the goal's title and description, in their words: with the kind, it picks the niche playbook (plan 30) */
+    goalText?: string;
+    /** the goal's own short brief, for a niche no playbook covers */
+    goalBrief?: string;
+    /** what the student told Orbit to remember about themselves, in the third person (chat memories) */
+    remembered?: string[];
+    /** what the student told Orbit about this recipient, in the third person */
+    rememberedAboutThem?: string[];
     schedulingLink?: string;
     timezone: string;
     pastOrgs?: string[]; // from the resume: employers/orgs the student has been at
@@ -3766,7 +3775,9 @@ export interface ComposeTemplateInput {
     /** one line of traction, numbers first (fundraising): "We have 40 paying clinics." */
     traction?: string;
   };
-  recipient: { firstName: string; org?: string; title?: string };
+  recipient: { firstName: string; lastName?: string; org?: string; title?: string };
+  /** the niche playbook the message follows (plan 30): a lab position or a startup role changes the greeting and ask */
+  niche?: Niche;
   /** the opener from research or history, as a noun phrase: "your post on fraud models" */
   hook?: { text: string; sourceId: string };
   /** the role, question, problem, event or paper the message is about, or the student's news (reengage) */
@@ -3803,7 +3814,29 @@ export function composeInputsText(i: ComposeTemplateInput): string {
 
 /** The default ask per goal (§7.2), one sentence, in plain words. */
 function goalAsk(i: ComposeTemplateInput): { text: string; kind: ComposedMessage['ask']['kind'] } {
-  const topic = i.topic ?? 'your work';
+  // a goal title ("Learn how people switched from audit") does not read as a topic, so a long one is left out
+  const topic = i.topic && i.topic.trim().split(/\s+/).length <= 5 ? i.topic.trim() : 'your path';
+  if (
+    i.niche === 'ib_coffee_chat' ||
+    i.niche === 'consulting_coffee_chat' ||
+    i.niche === 'finance_coffee_chat'
+  )
+    return {
+      kind: 'call',
+      text: 'Would you have 15 minutes for a call about your path and your first year?',
+    };
+  if (i.niche === 'research_position')
+    return {
+      kind: 'question',
+      text: 'Would there be room for an undergraduate in your lab, or a few minutes to talk about it?',
+    };
+  if (i.niche === 'startup_job')
+    return {
+      kind: 'call',
+      text: i.topic
+        ? `Would you be open to a short call about the ${i.topic} role?`
+        : 'Would you be open to a short call about the role you are hiring for?',
+    };
   switch (i.goal) {
     case 'recruiting':
       return { kind: 'call', text: 'Would you have 15 minutes for a call about your path and your team?' };
@@ -3820,7 +3853,8 @@ function goalAsk(i: ComposeTemplateInput): { text: string; kind: ComposedMessage
     case 'community':
       return { kind: 'question', text: 'Would you like to join us at the next one?' };
     case 'collaboration':
-      return { kind: 'question', text: `Have you tried your method on ${topic}?` };
+      // the topic is often a role ("research assistant"), so the ask names their research, never the topic
+      return { kind: 'question', text: 'Would you be open to a short call about your research this month?' };
   }
 }
 
@@ -3833,6 +3867,10 @@ const sentences = (...xs: (string | undefined | false)[]) =>
 /** Why the student writes to this person, per goal: two or three short sentences after the hook. */
 function goalMiddle(i: ComposeTemplateInput): string {
   const org = i.recipient.org ? ` at ${i.recipient.org}` : '';
+  if (i.niche === 'research_position')
+    return 'I would like to get research experience in your area and I am ready to put in steady hours. I can send my CV and transcript.';
+  if (i.niche === 'startup_job')
+    return `I would like to help build what your team${org} is working on, and I can share what I have built so far.`;
   const co = i.user.company ?? 'our team';
   const topic = i.topic ?? 'this';
   switch (i.goal) {
@@ -3891,9 +3929,30 @@ function intro(i: ComposeTemplateInput): string {
   return `My name is ${i.user.firstName}${about}.`;
 }
 
-/** The hook as its own sentence, opening with it ("Your post on fraud models stuck with me."). */
+/**
+ * The hook as its own sentence: a noun phrase opens it ("Your post on fraud models stuck with me."); a fact written
+ * as a sentence about them ("Her lab website says ...") is said to them ("I saw that your lab website says ...").
+ */
 function hookLine(i: ComposeTemplateInput): string {
-  return i.hook ? `${i.hook.text[0]!.toUpperCase()}${i.hook.text.slice(1)} stuck with me.` : '';
+  if (!i.hook) return '';
+  const t = i.hook.text.trim().replace(/[.]+$/, '');
+  const sentence =
+    t.split(/\s+/).length > 8 ||
+    /\b(says|lists|is|are|was|were|has|have|takes|runs|works|wrote|published)\b/i.test(t);
+  if (!sentence) return `${t[0]!.toUpperCase()}${t.slice(1)} stuck with me.`;
+  const toYou = t
+    .replace(/\b(her|his|their)\b/gi, 'your')
+    .replace(/\b(she|he|they)\b/gi, 'you')
+    .replace(/^your\b/i, 'your');
+  return `I saw that ${toYou[0]!.toLowerCase()}${toYou.slice(1)}.`;
+}
+
+/** The greeting: a professor written to about a lab is "Dear Professor Kim", everyone else by first name. */
+function greetingOf(i: ComposeTemplateInput): string {
+  const academic = i.niche === 'research_position' || i.niche === 'research_collaboration';
+  if (academic && i.recipient.lastName && /\bprofessor\b/i.test(i.recipient.title ?? ''))
+    return `Dear Professor ${i.recipient.lastName},`;
+  return academic ? `Dear ${i.recipient.firstName},` : `Hi ${i.recipient.firstName},`;
 }
 
 const paragraphs = (...ps: string[]) => ps.filter((p) => p.trim()).join('\n\n');
@@ -3906,7 +3965,7 @@ const paragraphs = (...ps: string[]) => ps.filter((p) => p.trim()).join('\n\n');
 export function composeFallback(i: ComposeTemplateInput): Omit<ComposedMessage, 'validator'> {
   const ask = goalAsk(i);
   const sign = `Best,\n${i.user.firstName}`;
-  const hi = `Hi ${i.recipient.firstName},`;
+  const hi = greetingOf(i);
   const via = i.via?.introducerFirstName;
   const target = i.target?.firstName ?? 'them';
   const targetAt = i.target?.org ? ` at ${i.target.org}` : '';
@@ -3976,7 +4035,7 @@ export function composeFallback(i: ComposeTemplateInput): Omit<ComposedMessage, 
     case 'bump': {
       body = paragraphs(
         hi,
-        `I wanted to bring this back to the top of your inbox. ${ask.text} If now is not a good time, that is fine.`,
+        `I am following up on my note from last week. ${ask.text} If now is not a good time, that is fine.`,
         sign,
       );
       break;

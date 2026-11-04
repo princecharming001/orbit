@@ -3,6 +3,7 @@ export * from './demo/seed';
 export * from './drafts/coach';
 export * from './drafts/compose';
 export * from './drafts/neverDo';
+export * from './drafts/niche';
 export {
   article,
   expandShorthand,

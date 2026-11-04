@@ -1,3 +1,4 @@
+import { getDomain, getDomainWithoutSuffix } from 'tldts';
 import { jaroWinkler, tokenJaccard } from '../text/jaro';
 import {
   canonicalFirstName,
@@ -182,7 +183,81 @@ export const PERSONAL_EMAIL_DOMAINS = new Set([
   'hey.com',
   'qq.com',
   '163.com',
+  // internet providers and regional mail: an address there says nothing about an employer either
+  '126.com',
+  'att.net',
+  'bellsouth.net',
+  'bigpond.com',
+  'btinternet.com',
+  'charter.net',
+  'comcast.net',
+  'cox.net',
+  'duck.com',
+  'earthlink.net',
+  'free.fr',
+  'frontier.com',
+  'hushmail.com',
+  'juno.com',
+  'laposte.net',
+  'libero.it',
+  'mail.com',
+  'mail.ru',
+  'naver.com',
+  'optonline.net',
+  'optusnet.com.au',
+  'orange.fr',
+  'rediffmail.com',
+  'rocketmail.com',
+  'rogers.com',
+  'sbcglobal.net',
+  'shaw.ca',
+  'sina.com',
+  'sky.com',
+  'sympatico.ca',
+  't-online.de',
+  'telus.net',
+  'tuta.io',
+  'tutanota.com',
+  'verizon.net',
+  'web.de',
+  'windstream.net',
+  'yandex.com',
+  'yandex.ru',
+  'zoho.com',
+  'zohomail.com',
 ]);
+
+/** The name part of a domain under the public suffix list: "mail.stripe.com" → "stripe", "monzo.co.uk" → "monzo". */
+export function domainLabel(domain: string): string | undefined {
+  return getDomainWithoutSuffix(domain.trim().toLowerCase()) ?? undefined;
+}
+
+/** Providers that run the same free mail under many country domains (yahoo.co.uk, hotmail.fr, gmx.de). */
+const PERSONAL_MAIL_BRANDS = new Set([
+  'yahoo',
+  'hotmail',
+  'outlook',
+  'live',
+  'msn',
+  'gmx',
+  'aol',
+  'ymail',
+  'yandex',
+]);
+
+/**
+ * True when an address at this domain is a personal mailbox, not an employer: the curated list, its subdomains
+ * ("mail.yahoo.com"), and the big providers under any country suffix, read with the public suffix list (tldts).
+ */
+export function isPersonalEmailDomain(domain: string | undefined): boolean {
+  const d = (domain ?? '').trim().toLowerCase();
+  if (!d) return false;
+  if (PERSONAL_EMAIL_DOMAINS.has(d)) return true;
+  const registrable = getDomain(d) ?? d;
+  if (PERSONAL_EMAIL_DOMAINS.has(registrable)) return true;
+  const brand = getDomainWithoutSuffix(d);
+  return !!brand && PERSONAL_MAIL_BRANDS.has(brand);
+}
 
 function sigmoid(x: number): number {
   return 1 / (1 + Math.exp(-x));
@@ -247,7 +322,7 @@ function emailEvidence(
   const email = normalizeEmail(rawEmail);
   if (!email.includes('@')) return { nameSim: 0, domainOrg: 0 };
   const dom = emailDomain(email);
-  const personal = PERSONAL_EMAIL_DOMAINS.has(dom);
+  const personal = isPersonalEmailDomain(dom);
   let nameSim = 0;
   if (name.first && name.last) {
     const local = emailLocalPart(email)
@@ -465,7 +540,7 @@ function employerConflict(
   if (!candOrg) return false;
   const email = inc.email ? normalizeEmail(inc.email) : '';
   const dom = email.includes('@') ? emailDomain(email) : '';
-  const work = !!dom && !PERSONAL_EMAIL_DOMAINS.has(dom);
+  const work = !!dom && !isPersonalEmailDomain(dom);
   if (work) {
     const known = cand.currentOrganizationId ? (ctx.orgDomains?.get(cand.currentOrganizationId) ?? []) : [];
     const root = dom.split('.').slice(-2, -1)[0] ?? '';
@@ -624,7 +699,7 @@ export function resolveIdentity(inc: IncomingIdentity, ctx: ResolveContext): Res
     if (!incName.full || placeholder) {
       // address-only on one side: same domain, or an address that fits the other side's name
       if (incDomain && pDomains.includes(incDomain)) return true;
-      if (incDomain && !PERSONAL_EMAIL_DOMAINS.has(incDomain)) return true;
+      if (incDomain && !isPersonalEmailDomain(incDomain)) return true;
       return placeholder && !!incName.full && pDomains.length > 0;
     }
     const pf = foldName(p.displayName);
@@ -680,7 +755,7 @@ export function findDuplicatePairs(
     if (isPlaceholderName(p) && p.primaryEmail) {
       // a bare address can only be linked through its domain
       const dom = emailDomain(normalizeEmail(p.primaryEmail));
-      if (!PERSONAL_EMAIL_DOMAINS.has(dom)) add(`domain:${dom}`, p);
+      if (!isPersonalEmailDomain(dom)) add(`domain:${dom}`, p);
     }
   }
   for (const p of people) {

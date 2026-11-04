@@ -5,7 +5,6 @@ import type { FirmKind } from '../drafts/sector';
 import { KNOWLEDGE_FILES } from '../knowledge/bundle';
 import {
   ASK_RULES,
-  DRAFT_RULES,
   findPlaybookSection,
   functionsFromText,
   KNOWLEDGE_IDS,
@@ -168,12 +167,7 @@ describe('findPlaybookSection (channel 2) and functionsFromText', () => {
 });
 
 describe('the draft rules (channel 3)', () => {
-  it('has one register rule per goal kind and one ask rule per firm kind, each short and clean', () => {
-    for (const kind of GOAL_KINDS) {
-      expect(DRAFT_RULES[kind], kind).toMatch(/register/);
-      expect(words(DRAFT_RULES[kind]), kind).toBeLessThanOrEqual(80);
-      expect(DRAFT_RULES[kind], kind).not.toMatch(DASH_OR_BANG);
-    }
+  it('has one ask rule per firm kind, each short and clean (the registers live in the niche playbooks)', () => {
     const firms: FirmKind[] = [
       'bank',
       'pe',
@@ -192,8 +186,7 @@ describe('the draft rules (channel 3)', () => {
       expect(words(ASK_RULES[f]), f).toBeLessThanOrEqual(80);
       expect(ASK_RULES[f], f).not.toMatch(DASH_OR_BANG);
     }
-    // the fundraising register is not a job hunt, and the banker is never asked consulting words
-    expect(DRAFT_RULES.fundraising).toMatch(/Never a job hunting line/);
+    // the banker is never asked consulting words
     expect(ASK_RULES.bank).toMatch(/Never about staffing or an office/);
     expect(ASK_RULES.vc).toMatch(/Never "your bank"/);
   });

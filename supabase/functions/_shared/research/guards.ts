@@ -2,6 +2,8 @@
  * Research guards that run in code, not only in the prompt (§5.4, §5.5, §14.6): identity matching for web results,
  * the "appears to be in high school" stop, and removal of anything touching a sensitive category.
  */
+// a relative path: the browser also compiles this file, outside the server's @orbit/core mapping
+import { isPersonalEmailDomain } from '../../../../packages/core/src/entity/resolve.ts';
 
 /** Lowercase, accents stripped, whitespace collapsed. */
 export function norm(s: string | null | undefined): string {
@@ -21,26 +23,12 @@ export function normOrg(s: string | null | undefined): string {
   return norm(s).replace(ORG_SUFFIX, '').trim();
 }
 
-const PUBLIC_MAIL = new Set([
-  'gmail.com',
-  'googlemail.com',
-  'outlook.com',
-  'hotmail.com',
-  'live.com',
-  'yahoo.com',
-  'icloud.com',
-  'me.com',
-  'proton.me',
-  'protonmail.com',
-  'aol.com',
-]);
-
 /** Work email domains from the person's addresses (public mail providers prove nothing about identity). */
 export function workDomains(emails: string[] | undefined): string[] {
   const out = new Set<string>();
   for (const e of emails ?? []) {
     const d = norm(e.split('@')[1]);
-    if (d && !PUBLIC_MAIL.has(d)) out.add(d);
+    if (d && !isPersonalEmailDomain(d)) out.add(d);
   }
   return [...out];
 }

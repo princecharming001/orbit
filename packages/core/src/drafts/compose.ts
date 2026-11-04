@@ -1,4 +1,5 @@
 import type { ComposedMessage, GoalKind, MessageKind, PersonFact, StyleCard } from '../types';
+import { NICHE_FORM, type Niche, nicheWords } from './niche';
 import { BANNED_SUBJECT_PATTERNS, MAX_WORDS, MIN_WORDS, wordsIn } from './templates';
 import { unsupportedDetails, type ValidationIssue, validateDraft } from './validate';
 
@@ -36,6 +37,8 @@ export interface ComposeIssue {
 
 export interface ComposeContext {
   goal: GoalKind;
+  /** the playbook the message follows (plan 30): its word range and reading grade */
+  niche?: Niche;
   recipientFirstName: string;
   recipientFullName?: string;
   recipientEmail?: string;
@@ -85,9 +88,10 @@ export const COMPOSE_BANNED_PHRASES = [
 ];
 
 /** Body word range by kind and goal (§7.1): first touches 50–110 (sales 40–90), bumps 15–50. */
-export function wordRange(kind: MessageKind, goal: GoalKind): [number, number] {
-  if (FIRST_TOUCH_KINDS.has(kind)) return goal === 'sales' ? [40, 90] : [50, 110];
-  if (kind === 'bump') return [15, 50];
+export function wordRange(kind: MessageKind, goal: GoalKind, niche?: Niche): [number, number] {
+  if (FIRST_TOUCH_KINDS.has(kind)) return niche ? nicheWords(niche) : goal === 'sales' ? [40, 90] : [50, 110];
+  // a niche follow-up points back to the first note, keeps who the student is and adds one new line
+  if (kind === 'bump') return niche ? [20, 75] : [15, 50];
   return [MIN_WORDS[kind], MAX_WORDS[kind]];
 }
 
@@ -144,6 +148,14 @@ const ASK_PHRASE =
 export function asksIn(body: string): string[] {
   return prose(body).sentences.filter((s) => s.endsWith('?') || ASK_PHRASE.test(s));
 }
+
+/** A subject as sent: Gmail threads a follow-up on its own, so a "Re:" or "Fwd:" the model adds is dropped. */
+export function cleanSubject(subject: string): string {
+  return subject.replace(/^\s*((re|fwd?)\s*:\s*)+/i, '').trim();
+}
+
+/** How far over the niche's reading grade a draft may go before it is refused: a little over is a warning. */
+const READING_GRADE_SLACK = 1;
 
 function wordHit(lower: string, phrase: string): boolean {
   return new RegExp(`(^|[^a-z])${phrase.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}([^a-z]|$)`).test(lower);
@@ -202,10 +214,18 @@ export function validateComposed(
       );
     if (FIRST_TOUCH_KINDS.has(msg.kind) && words < 12) block('words_out_of_range', `${words} words`);
   } else {
-    const [min, max] = wordRange(msg.kind, ctx.goal);
+    const [min, max] = wordRange(msg.kind, ctx.goal, ctx.niche);
     if (words < min || words > max) block('words_out_of_range', `${words} words, want ${min}–${max}`);
   }
-  if (grade > READING_GRADE_MAX) block('reading_grade', `grade ${grade}, want ${READING_GRADE_MAX} or lower`);
+  const gradeMax = ctx.niche ? NICHE_FORM[ctx.niche].gradeMax : READING_GRADE_MAX;
+  if (grade > gradeMax + READING_GRADE_SLACK)
+    block('reading_grade', `grade ${grade}, want ${gradeMax} or lower`);
+  else if (grade > gradeMax)
+    issues.push({
+      code: 'reading_grade',
+      detail: `grade ${grade}, want ${gradeMax} or lower`,
+      blocking: false,
+    });
 
   const asks = asksIn(body);
   const wantsNone = msg.kind === 'reengage' && (msg.ask?.kind ?? 'none') === 'none';
@@ -217,7 +237,7 @@ export function validateComposed(
   } else if (asks.length > 1) block('several_asks', `${asks.length} asks: ${asks.join(' | ')}`);
 
   if (msg.channel === 'gmail') {
-    const subject = (msg.subject ?? '').trim();
+    const subject = cleanSubject(msg.subject ?? '');
     if (!subject) {
       if (FIRST_TOUCH_KINDS.has(msg.kind) || msg.kind === 'intro_request')
         block('subject_missing', 'no subject');

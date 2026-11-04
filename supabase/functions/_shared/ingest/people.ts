@@ -14,9 +14,9 @@
 import {
   doNotMergeKey,
   type IncomingIdentity,
+  isPersonalEmailDomain,
   isPlaceholderName,
   isRoleAddress,
-  PERSONAL_EMAIL_DOMAINS,
   resolveIdentity,
 } from '@orbit/core/entity/resolve';
 import { isAtsSender, isAutomatedSender, isRoleName } from '@orbit/core/text/email';
@@ -206,7 +206,7 @@ export async function resolvePeople(
     if (n.last) lasts.add(n.last.toLowerCase());
     if (i.email) {
       const d = emailDomain(normalizeEmail(i.email));
-      if (d && !PERSONAL_EMAIL_DOMAINS.has(d)) domains.add(d);
+      if (d && !isPersonalEmailDomain(d)) domains.add(d);
     }
   }
   const knownIds = [...new Set(known.map((k) => k.personId))];

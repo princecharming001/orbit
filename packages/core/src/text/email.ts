@@ -497,10 +497,23 @@ const QUOTE_MARKERS: { re: RegExp; needsDateOrAddress?: boolean }[] = [
   { re: /^El\s[^\n]{5,200}(?:\n[^\n]{0,200})?\sescribió:\s*$/m, needsDateOrAddress: true },
   { re: /^Op\s[^\n]{5,200}(?:\n[^\n]{0,200})?\sschreef[^\n]*:\s*$/m, needsDateOrAddress: true },
   { re: /^Em\s[^\n]{5,200}(?:\n[^\n]{0,200})?\sescreveu:\s*$/m, needsDateOrAddress: true },
+  // more clients and languages, after crisp-oss/email-reply-parser (MIT, lib/regex.ts), with bounded repeats
+  { re: /^Il\s[^\n]{5,200}(?:\n[^\n]{0,200})?\s(?:ha\s)?scritto:\s*$/m, needsDateOrAddress: true },
+  {
+    re: /^(?:W\sdniu|Dnia)\s[^\n]{5,200}(?:\n[^\n]{0,200})?\s(?:pisze|napisał(?:\(a\))?):\s*$/mu,
+    needsDateOrAddress: true,
+  },
+  { re: /^Den\s[^\n]{5,200}(?:\n[^\n]{0,200})?\sskrev[^\n]{0,200}:\s*$/m, needsDateOrAddress: true },
+  { re: /^[a-z]{2,4}\.?\s[^\n]{5,200}\skirjoitti:\s*$/m, needsDateOrAddress: true },
+  { re: /^[^\n]{0,100}在[^\n]{3,200}写道[：:]\s*$/m, needsDateOrAddress: true },
+  { re: /^20\d{2}[./-][^\n]{3,200}(?:작성|のメッセージ):\s*$/m },
+  { re: /^[^\n]{2,100}\son\s[^\n]{3,100}\sat\s[^\n]{3,60}\swrote:\s*$/m, needsDateOrAddress: true },
+  { re: /^\s*\*?(?:From|Von|De|Van|Da)\s?:\*?\s[^\n]{1,200}?\s?[[<][^\n\]>]{3,200}@[^\n\]>]{3,200}[\]>]/im },
+  { re: /^-{1,12}\s?(?:Oprindelig besked|Message d'origine|Ursprüngliche Nachricht)\s?-{0,12}\s*$/im },
 ];
 
 const MOBILE_FOOTER =
-  /^(sent from my [\w ]{2,30}|sent from (outlook|mail|yahoo mail|gmail)( for [\w ]+)?|get outlook for (ios|android)|sent via [\w ]{2,30}|sent with [\w ]{2,30})\.?$/i;
+  /^(sent from my [\w ]{2,30}|sent from (outlook|mail|yahoo mail|gmail)( for [\w ]+)?|get outlook for (ios|android)|sent via [\w ]{2,30}|sent with [\w ]{2,30}|envoyé (de|depuis) mon [\p{L} ]{2,30}|enviado desde mi [\p{L} ]{2,30}|gesendet von meinem [\p{L} ]{2,30}|verzonden vanaf mijn [\p{L} ]{2,30}|verstuurd vanaf mijn [\p{L} ]{2,30}|sendt fra min [\p{L} ]{2,30}|télécharger outlook pour (ios|android))\.?$/iu;
 
 export function stripQuotedReply(body: string): string {
   let text = body.replace(/\r\n/g, '\n');

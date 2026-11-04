@@ -218,8 +218,9 @@ export function entryFrom(
 
 /** Everything the feed scores with: the student's profile for Discover, and who is already in Orbit. */
 async function loadContext(user: User, now = new Date()) {
-  const [goals, targetCompanies, resumeFacets, people, state] = await Promise.all([
+  const [goals, userGoals, targetCompanies, resumeFacets, people, state] = await Promise.all([
     db.goals.get(user.id),
+    db.userGoals.where('userId').equals(user.id).toArray(),
     db.targetCompanies.where('userId').equals(user.id).toArray(),
     currentResumeFacets(user.id),
     db.people.where('userId').equals(user.id).toArray(),
@@ -234,6 +235,7 @@ async function loadContext(user: User, now = new Date()) {
   const profile = buildDiscoverProfile({
     user,
     goals,
+    userGoals: userGoals.filter((g) => !g.deletedAt),
     targetCompanies,
     resumeFacets,
     outreach: signals.outreach,
