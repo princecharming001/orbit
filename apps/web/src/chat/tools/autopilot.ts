@@ -252,6 +252,46 @@ export const setAutopilotModeTool = defineTool({
   toModel,
 });
 
+/** The groups a week's replies fall into, in the order the card says them: what needs the student first. */
+const REPLY_GROUPS = [
+  'need you',
+  'booked',
+  'reply drafted for your tap',
+  'answered',
+  'nothing to do',
+  'closed, never written to again',
+] as const;
+
+/**
+ * Every reply of the week by first name, grouped by what came of it: "Replies this week (10): need you: Daniel;
+ * booked: Lena; ...". The card carries the rundown, so the names always add up to the count and the answer to "what
+ * replies came in and what did you do with each" is read, never rebuilt from the rows.
+ */
+export async function replyRundown(recent: ReplyItem[], s: AutopilotStatus): Promise<string> {
+  if (!recent.length) return '';
+  const drafts = await db.outbound.bulkGet(recent.flatMap((x) => (x.draftId ? [x.draftId] : [])));
+  const sent = new Set(drafts.flatMap((d) => (d && d.status === 'sent' ? [d.id] : [])));
+  const asks = new Set(s.needsYou.map((i) => i.messageId ?? i.personName));
+  const groupOf = (x: ReplyItem): (typeof REPLY_GROUPS)[number] => {
+    if (x.replyClass === 'decline' || x.replyClass === 'unsubscribe' || x.outcome === 'declined')
+      return 'closed, never written to again';
+    if (x.outcome === 'booked') return 'booked';
+    if ((x.replyClass === 'question' && !x.answer) || asks.has(x.messageId) || asks.has(x.personName))
+      return 'need you';
+    if (x.outcome === 'replied' || (x.draftId && sent.has(x.draftId))) return 'answered';
+    if (x.draftId) return 'reply drafted for your tap';
+    return 'nothing to do';
+  };
+  const by = new Map<string, string[]>();
+  for (const x of recent) {
+    const g = groupOf(x);
+    const first = x.personName.split(/\s+/)[0] ?? x.personName;
+    by.set(g, [...(by.get(g) ?? []), first]);
+  }
+  const parts = REPLY_GROUPS.flatMap((g) => (by.get(g)?.length ? [`${g}: ${by.get(g)!.join(', ')}`] : []));
+  return `Replies this week (${recent.length}): ${parts.join('; ')}.`;
+}
+
 export const autopilotStatusTool = defineTool({
   name: 'autopilot_status',
   kind: 'read',
@@ -308,6 +348,7 @@ export const autopilotStatusTool = defineTool({
         })
       : undefined;
     const week = autopilotWeekLine(s.week);
+    const rundown = await replyRundown(recent, s);
     const summary = [
       input.personName
         ? why
@@ -319,7 +360,9 @@ export const autopilotStatusTool = defineTool({
       s.friendAsks?.length
         ? `${plural(s.friendAsks.length, 'ask')} to a friend ready for your tap: ${s.friendAsks.map((a) => `${a.friendName} for ${a.targetName}`).join(', ')}.`
         : '',
-      week ? `${week}.` : '',
+      rundown,
+      // the week line counts only what autopilot sent on its own and the answers to those, said so beside the rundown
+      week ? `${week}${rundown ? ' (counting only what it sent on its own)' : ''}.` : '',
       s.pausedGoals.length
         ? `Paused goals: ${s.pausedGoals.map((g) => `${g.title} (${g.reason})`).join('; ')}.`
         : // said outright, so a pushback in the week is never read as a pause still holding

@@ -100,8 +100,14 @@ describe('autopilot in the chat, phase 5', () => {
     // who got today's sends is named, so the card is never pointed at for a list it does not hold
     expect(env.summary).toMatch(/Sent 3 on its own today \(\w+ \w+, \w+ \w+, \w+ \w+\)/);
     expect(env.summary).toContain(
-      'On autopilot this week: 9 sent, 4 replies, 2 calls, 1 pushback at Ramp (Chloe Dubois asked to stop).',
+      'On autopilot this week: 9 sent, 4 replies, 2 calls, 1 pushback at Ramp (Chloe Dubois asked to stop) (counting only what it sent on its own).',
     );
+    // every reply of the week is named once, grouped by what came of it, so the names add up to the count
+    const rundown = env.summary.match(/Replies this week \((\d+)\): ([^.]+)\./);
+    expect(rundown).not.toBeNull();
+    const named = rundown![2]!.split('; ').flatMap((g) => g.split(': ')[1]!.split(', '));
+    expect(named).toHaveLength(Number(rundown![1]));
+    expect(rundown![2]).toMatch(/^need you: /);
     const data = (
       env.data as { ui: { queued: { person: string; status: string }[]; skipped: { rule: string }[] } }
     ).ui;

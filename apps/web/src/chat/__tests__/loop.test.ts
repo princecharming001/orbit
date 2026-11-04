@@ -734,6 +734,10 @@ describe('a turn ends on the pills', () => {
     expect(text(events)).toBe('Let me check.Two replied, Lena and Omar.');
     const rows = await store.history(conversation.id);
     expect(JSON.stringify(rows)).toMatch(/Two replied/);
+    // the model is told the answer is still to come, so it never talks about the buttons instead of answering
+    const results = JSON.stringify(messageRequests(fake).at(-1)!.body.messages.at(-1));
+    expect(results).toMatch(/Now write the answer from the other results/);
+    expect(JSON.stringify(rows.at(-2))).toMatch(/Now write the answer/);
   });
 
   it('keeps the answer after the pills when only a clause of intent came before them (plan 28)', async () => {

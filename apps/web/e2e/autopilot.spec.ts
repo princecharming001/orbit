@@ -167,8 +167,10 @@ test.describe('autopilot (plan 29 B7, fake orbit-api)', () => {
     await page.goto('');
     await say(page, 'answer Dan: yes, applied Monday');
     const turn = page.getByTestId('turn-assistant').last();
-    await expect(turn).toContainText(/Drafted the reply to Daniel/);
+    // the reply is shown as the draft itself, ready to look over, and goes into Daniel's thread with its subject
+    await expect(turn).toContainText('To Daniel Okafor');
     await expect(turn).toContainText('yes, applied Monday');
+    await expect(turn).not.toContainText('Add a subject line');
     expect(api.state.drafts.get('draft_daniel_question')?.needsInput).toEqual([]);
     expect(api.state.drafts.get('draft_daniel_question')?.body).toContain('yes, applied Monday');
     expect(api.state.autopilot.needsYou).toHaveLength(0);

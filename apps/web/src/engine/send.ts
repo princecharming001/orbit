@@ -423,7 +423,15 @@ export async function reviewDraft(
   const person = await db.people.get(msg.personId);
   if (!person) return [];
   const [settings, goals] = await Promise.all([db.settings.get(user.id), db.goals.get(user.id)]);
-  const threaded = !!msg.externalThreadId || !!(await threadForMessage(msg));
+  // a reply the server holds goes from the server into the thread it answers, under that thread's subject, even when
+  // this browser has not synced the thread
+  const threaded =
+    !!msg.externalThreadId ||
+    !!(await threadForMessage(msg)) ||
+    (msg.kind === 'reply' &&
+      msg.channel === 'gmail' &&
+      isServerUser(user.id) &&
+      !!(await import('./serverSync')).serverIdOf(msg.id));
   const opts = {
     kind: msg.kind,
     facts: [],
