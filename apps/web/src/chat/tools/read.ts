@@ -1,4 +1,5 @@
 /** Read tools: a few broad lookups with filters, never one per page. Nothing here changes data. */
+
 import type {
   CalendarEvent,
   CoffeeChat,
@@ -35,6 +36,7 @@ import {
   wordsIn,
 } from '@orbit/core';
 import { db } from '../../db/schema';
+import { localScore } from '../../engine/closeness';
 import { conversationWith } from '../../engine/conversation';
 import { DEMO_USER_ID } from '../../engine/demo';
 import { lastInboundOf, liveChatOf, nextMessageKind } from '../../engine/drafts';
@@ -582,7 +584,7 @@ export const searchPeople = defineTool({
         ...personRef(p),
         relationship: p.relationshipType === 'unknown' ? undefined : RELATIONSHIP_LABELS[p.relationshipType],
         alum: !!p.isAlumni,
-        closeness: Math.round(p.strength * 100) / 100,
+        closeness: localScore(p).score,
         lastTouch: fmtDay(lastTouch(p), ctx),
         stage: chat ? STAGE_LABELS[chat.stage] : undefined,
         chatId: chat?.id,
@@ -690,7 +692,7 @@ export const getPerson = defineTool({
       mailto: person.primaryEmail ? `mailto:${person.primaryEmail}` : undefined,
       linkedinUrl: person.linkedinUrl,
       relationship: RELATIONSHIP_LABELS[person.relationshipType],
-      closeness: Math.round(person.strength * 100) / 100,
+      closeness: localScore(person).score,
       lastTouch: fmtDay(lastTouch(person), ctx),
       texts: texts
         ? { fromThem: texts.inCount, fromYou: texts.outCount, last: fmtDay(texts.lastAt, ctx) }
@@ -1335,7 +1337,7 @@ export const findRoutes = defineTool({
       target: tc ? { id: tc.id, status: TARGET_STATUS_LABELS[tc.status], priority: tc.priority } : undefined,
       thereNow: reach.direct.slice(0, 15).map((d) => ({
         ...personRef(d.person),
-        closeness: Math.round(d.strength * 100) / 100,
+        closeness: localScore(d.person).score,
         alum: !!d.person.isAlumni,
       })),
       former: reach.former.slice(0, 10).map((f) => ({ ...personRef(f.person), leftOn: f.endedAt })),
@@ -1501,7 +1503,7 @@ export const listRecommendations = defineTool({
               (p.currentTitle ?? '').toLowerCase().includes(s)),
         )
         .slice(0, limit)
-        .map((p) => ({ ...personRef(p), closeness: Math.round(p.strength * 100) / 100 }));
+        .map((p) => ({ ...personRef(p), closeness: localScore(p).score }));
       return ok(
         'people',
         { people: hits },
