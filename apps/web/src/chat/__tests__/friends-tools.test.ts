@@ -154,7 +154,7 @@ describe('friends tools against the fake orbit-api', () => {
     expect(own?.name).toBe(best?.displayName);
     expect(stripe.summary).toContain(`Your own best way in at Stripe: ${best!.displayName}`);
     expect(stripe.summary).toMatch(
-      /At Stripe: Ana knows Dan Lee \(is close to Dan\), Maya Chen \(knows Maya well\)/,
+      /At Stripe: Ana knows Dan Lee \(is close to Dan\), Maya Chen \(knows Maya well; you know Maya too\)/,
     );
     const linear = await execute('list_friends', { company: 'Linear' }, ctx());
     expect(linear.summary).toMatch(/Nobody your friends share works at Linear/);

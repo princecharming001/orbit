@@ -104,7 +104,13 @@ export const listFriendsTool = defineTool({
     }));
     const at: {
       friend: string;
-      people: { personId: string; name: string; title: string | null; closeness: string }[];
+      people: {
+        personId: string;
+        name: string;
+        title: string | null;
+        closeness: string;
+        youKnowThemToo?: true;
+      }[];
     }[] = [];
     if (input.company) {
       for (const f of friends) {
@@ -131,15 +137,20 @@ export const listFriendsTool = defineTool({
     }
     // the student's own best way in there, by tie score, so a friend route is weighed against it and never guessed
     const co = input.company?.trim().toLowerCase();
-    const own = co
+    const mine = co
       ? (
           await db.people
             .where('userId')
             .equals(ctx.user.id)
             .filter((p) => !!p.isHuman && (p.currentOrganizationRaw ?? '').toLowerCase().includes(co))
             .toArray()
-        ).sort((a, b) => (b.tieScore ?? 0) - (a.tieScore ?? 0))[0]
-      : undefined;
+        ).sort((a, b) => (b.tieScore ?? 0) - (a.tieScore ?? 0))
+      : [];
+    const own = mine[0];
+    // a friend's person the student also knows is said as such, so the shared route is never missed
+    const mineNames = new Set(mine.map((p) => p.displayName.toLowerCase()));
+    for (const a of at)
+      for (const p of a.people) if (mineNames.has(p.name.toLowerCase())) p.youKnowThemToo = true;
     const alsoBy = own
       ? at
           .filter((a) => a.people.some((p) => p.name.toLowerCase() === own.displayName.toLowerCase()))
@@ -151,7 +162,7 @@ export const listFriendsTool = defineTool({
       : `No friends on Orbit yet. ${FRIENDS_EMPTY}`;
     const company = input.company
       ? at.length
-        ? ` At ${input.company}: ${at.map((a) => `${first(a.friend)} knows ${a.people.map((p) => `${p.name} (${p.closeness.replace(`${first(a.friend)} `, '')})`).join(', ')}`).join('; ')}.`
+        ? ` At ${input.company}: ${at.map((a) => `${first(a.friend)} knows ${a.people.map((p) => `${p.name} (${p.closeness.replace(`${first(a.friend)} `, '')}${p.youKnowThemToo ? `; you know ${first(p.name)} too` : ''})`).join(', ')}`).join('; ')}.`
         : ` Nobody your friends share works at ${input.company}.`
       : '';
     const ownLine = own
