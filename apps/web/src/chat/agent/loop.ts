@@ -163,8 +163,6 @@ export function strictSchema<S extends object>(schema: S): S {
 
 interface ToolHooks {
   onRun: (toolUseId: string, spec: ToolSpec, input: unknown) => Promise<ResultEnvelope>;
-  /** what the model is told a tool returned, when the turn knows better than the tool alone */
-  project?: (toolUseId: string, spec: ToolSpec, env: ResultEnvelope) => string | undefined;
   signal?: AbortSignal;
 }
 
@@ -204,7 +202,7 @@ export function buildRunnerTools(
       run: async (input, context) => {
         const id = context?.toolUse.id ?? newId('toolu');
         const env = await hooks.onRun(id, spec, input);
-        const content = hooks.project?.(id, spec, env) ?? projectEnvelope(spec, env);
+        const content = projectEnvelope(spec, env);
         if (env.kind === 'error') throw new ToolError(content);
         return content;
       },
@@ -353,18 +351,8 @@ export async function runTurn(
   let worked = false;
   let spokenAfterWork = '';
 
-  // pills put up in the same round as a lookup: the answer is still to come, so the model is told to write it, never
-  // to talk about the buttons ("I can't post anything after those buttons" read as a technical message)
-  const projected = (toolUseId: string, spec: ToolSpec, env: ResultEnvelope): string =>
-    CLOSING_TOOLS.has(spec.name) &&
-    env.kind !== 'error' &&
-    pending &&
-    toolUsesOf(pending.message.content).some((u) => u.id !== toolUseId && !CLOSING_TOOLS.has(u.name))
-      ? 'shown under your answer. Now write the answer from the other results, in your own words, and never mention the buttons or what you can or cannot write.'
-      : projectEnvelope(spec, env);
   const tools = buildRunnerTools(registry, {
     signal,
-    project: projected,
     onRun: async (toolUseId, spec, input) => {
       const cancelled = (reason: string): ResultEnvelope => ({
         kind: 'error',
@@ -377,6 +365,20 @@ export async function runTurn(
         spokenAfterWork = '';
       }
       if (signal?.aborted) env = cancelled('user stopped');
+      else if (
+        CLOSING_TOOLS.has(spec.name) &&
+        pending &&
+        toolUsesOf(pending.message.content).some((u) => u.id !== toolUseId && !CLOSING_TOOLS.has(u.name))
+      )
+        // pills put up in the same round as a lookup come before the answer, and the model then talks about the
+        // buttons instead of answering ("The buttons are below."): they are not shown, a failed step the thread
+        // hides, and the model writes the answer and calls them on their own after it
+        env = {
+          kind: 'error',
+          data: undefined,
+          summary:
+            'Not shown yet: the answer comes first. Write the answer from the other results now, in your own words, then call this on its own as the last thing. Never mention buttons or options in your words.',
+        };
       else {
         try {
           env = await deps.execute(spec.name, input, {
@@ -403,7 +405,7 @@ export async function runTurn(
         messageId: pending?.rowId,
         now: clock(),
       });
-      results.set(toolUseId, { content: projected(toolUseId, spec, env), isError: env.kind === 'error' });
+      results.set(toolUseId, { content: projectEnvelope(spec, env), isError: env.kind === 'error' });
       // the pills close the turn only when they were the whole round: next to a read tool, the answer is still to come
       if (
         CLOSING_TOOLS.has(spec.name) &&
