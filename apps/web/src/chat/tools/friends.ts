@@ -491,13 +491,17 @@ export const previewMySharesTool = defineTool({
   name: 'preview_my_shares',
   kind: 'read',
   description:
-    'Call this when the student wants to see what a friend sees of their network, row for row ("show what Ana sees", "what does my share look like"). It returns the student\'s own people exactly as any friend sees them: name, title, company, school, alum or not, and the closeness word, never an email, note or draft. Every friend sees the same rows. Needs an Orbit account; without one it says so.',
-  input: z.object({}),
+    'Call this when the student wants to see what a friend sees of their network, row for row ("show what Ana sees", "what does my share look like"). It returns the student\'s own people exactly as that friend sees them: name, title, company, school, alum or not, and the closeness word, never an email, note or draft. Name the friend when the student does, since sharing can differ per friend (only some companies for one of them); leave the name out for what friends see by default. Needs an Orbit account; without one it says so.',
+  input: z.object({
+    friendName: z.string().optional().describe("The friend's name, for that friend's own view."),
+  }),
   capabilities: ['friend_preview'],
   progress: 'Reading what your friends see',
-  async execute(_input, ctx): Promise<ResultEnvelope> {
+  async execute(input, ctx): Promise<ResultEnvelope> {
     if (!friendsAvailable(ctx.user)) return needsAccount('Friends');
-    const r = await previewShares(ctx.user);
+    const friend = input.friendName ? await friendNamed(ctx, input.friendName) : undefined;
+    if (input.friendName && !friend) throw new Error(`No friend on Orbit named ${input.friendName}.`);
+    const r = await previewShares(ctx.user, friend?.friendshipId);
     if (!r.ok) throw new Error(r.message);
     const { shares, total, mode } = r.value;
     const rows = shares.slice(0, 8).map((s) => ({
@@ -520,13 +524,20 @@ export const previewMySharesTool = defineTool({
       href: '/friends',
       avatar: { name: x.name, src: undefined } as { name: string; src?: string },
     }));
+    const who = friend ? first(friend.name) : 'A friend';
     const summary = total
-      ? `A friend sees ${plural(total, 'person', 'people')} of yours, each as a row like these: name, title, company, school and how well you know them. Never an email, note or draft. The whole list is on the Friends page.`
-      : 'A friend sees none of your people right now: you share nothing yet.';
+      ? `${who} sees ${plural(total, 'person', 'people')} of yours, each as a row like these: name, title, company, school and how well you know them. Never an email, note or draft. The whole list is on the Friends page.`
+      : `${who} sees none of your people right now: you share nothing${friend ? ' with them' : ''} yet.`;
     return ok(
       'list',
-      { title: `What a friend sees (${total})`, items },
-      { total, mode: SHARE_MODE_LABELS[mode], rows, more: Math.max(0, total - rows.length) },
+      { title: `What ${friend ? first(friend.name) : 'a friend'} sees (${total})`, items },
+      {
+        total,
+        friend: friend?.name ?? 'any friend',
+        mode: SHARE_MODE_LABELS[mode],
+        rows,
+        more: Math.max(0, total - rows.length),
+      },
       summary,
       '/friends',
     );

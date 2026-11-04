@@ -168,6 +168,24 @@ describe('friends over orbit-api', () => {
     });
     expect(some.status).toBe(200);
     expect(some.body.shares.map((s) => s.displayName)).toEqual(['Dan Lee']);
+    // Ana's preview for Maya is that narrower share; her default preview is still everyone
+    const forMaya = await call<{ shares: Share[]; mode: string; total: number }>(
+      '/friends/preview',
+      ana.token,
+      {
+        friendshipId: ana1.friendshipId,
+      },
+    );
+    expect(forMaya.body.mode).toBe('companies');
+    expect(forMaya.body.shares.map((s) => s.displayName)).toEqual(['Dan Lee']);
+    const byDefault = await call<{ mode: string; total: number }>('/friends/preview', ana.token, {});
+    expect(byDefault.body.mode).toBe('all');
+    expect(byDefault.body.total).toBe(2);
+    // a friendship that is not Ana's shows nothing
+    const notHers = await call<Err>('/friends/preview', maya.token, {
+      friendshipId: '00000000-0000-4000-8000-000000000009',
+    });
+    expect(notHers.status).toBe(403);
   });
 
   it('a stranger cannot read a projection (403), and nothing Google-derived crosses in what a friend reads', async () => {

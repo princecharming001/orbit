@@ -10,7 +10,7 @@
  *   GET|POST /friends                            → the friends with their counts, and what is pending either way
  *   POST /friends/settings {friendshipId?, mode, companyDomains?}
  *                                                → what the student shares back, with one friend or with all
- *   GET|POST /friends/preview                    → the student's own projection, row for row as a friend sees it
+ *   GET|POST /friends/preview { friendshipId? }  → the student's own projection, row for row as a friend (or one friend) sees it
  *   GET /friends/shares/:friendUserId?company=   → a friend's projection, paged (also POST /friends/shares {friendUserId})
  *   POST /friends/asks {friendUserId, targetPersonId, note}
  *                                                → an intro asked of the friend; the friend's next list shows it
@@ -536,8 +536,19 @@ async function settings(ctx: Ctx): Promise<Response> {
 async function preview(ctx: Ctx): Promise<Response> {
   const db = ctx.db;
   const me = ctx.userId!;
+  const b = ctx.req.method === 'POST' ? await body(ctx, true) : {};
+  const friendshipId = optUuid(b, 'friendshipId') ?? ctx.url.searchParams.get('friendshipId') ?? undefined;
   const u = await userLite(db, me);
-  const mine = defaultMode(u);
+  let mine = defaultMode(u);
+  // one friend's view: what this student shares with that friend alone (plan 29 §A1, "See exactly what Ana sees")
+  if (friendshipId) {
+    if (!/^[0-9a-f-]{36}$/i.test(friendshipId)) throw badRequest('friendshipId must be a uuid');
+    const [own] = await db.sql<{ mode: FriendShareMode; company_domains: string[] }>`
+      select mode, company_domains from orbit.friend_share_settings
+       where friendship_id = ${friendshipId}::uuid and owner_user_id = ${me}::uuid`;
+    if (!own) throw forbidden();
+    mine = { mode: own.mode, domains: own.company_domains ?? [] };
+  }
   const rows = underMode(await ownRows(db, me), mine.mode, mine.domains);
   const out: FriendPreviewResponse = {
     mode: mine.mode,

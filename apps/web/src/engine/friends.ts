@@ -186,10 +186,10 @@ export async function setShareMode(
   return { ok: true as const, value: r.value };
 }
 
-/** The student's own projection, row for row as a friend sees it (plan 29 §A1, "See exactly what Ana sees"). */
-export async function previewShares(user: Pick<User, 'id'>) {
+/** The student's own projection, row for row as a friend (or the one friend named) sees it (plan 29 §A1). */
+export async function previewShares(user: Pick<User, 'id'>, friendshipId?: string) {
   if (!friendsAvailable(user)) return needsAccount();
-  const r = await callApi('/friends/preview', {});
+  const r = await callApi('/friends/preview', friendshipId ? { friendshipId } : {});
   if (!r.ok) return fail(r);
   return { ok: true as const, value: r.value };
 }

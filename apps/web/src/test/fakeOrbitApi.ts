@@ -433,13 +433,19 @@ export function createFakeOrbitApi(
         // the count under the mode just set, for that friend or for all (the server counts the same way)
         return json(200, { mode, companyDomains: domains, shares: ownVisible(state, mode, domains).length });
       }
-      case '/friends/preview':
-        return json(200, {
-          mode: state.friendShareMode,
-          companyDomains: state.friendCompanyDomains,
-          shares: ownVisible(state),
-          total: ownVisible(state).length,
-        });
+      case '/friends/preview': {
+        // one friend's view when a friendship is named, else the default every new friend gets
+        const f =
+          typeof body.friendshipId === 'string'
+            ? state.friends.find((x) => x.friendshipId === body.friendshipId)
+            : undefined;
+        if (typeof body.friendshipId === 'string' && !f)
+          return error(403, 'forbidden', 'not a friend who shares with you');
+        const mode = f ? f.myMode : state.friendShareMode;
+        const domains = f ? f.myCompanyDomains : state.friendCompanyDomains;
+        const rows = ownVisible(state, mode, domains);
+        return json(200, { mode, companyDomains: domains, shares: rows, total: rows.length });
+      }
       case '/friends/asks': {
         if (req.method === 'GET' || !('friendUserId' in body))
           return json(200, {

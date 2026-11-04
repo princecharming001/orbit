@@ -261,7 +261,7 @@ export interface ApiRoutes {
   '/friends/decline': [FriendsDeclineRequest, { ok: boolean }];
   '/friends/end': [FriendsEndRequest, { ok: boolean }];
   '/friends/settings': [FriendsSettingsRequest, FriendsSettingsResponse];
-  '/friends/preview': [Record<string, never>, FriendPreviewResponse];
+  '/friends/preview': [{ friendshipId?: string }, FriendPreviewResponse];
   '/friends/shares': [FriendSharesRequest, FriendSharesResponse];
   '/friends/asks': [FriendAskRequest | Record<string, never>, FriendAskResponse | FriendAsksResponse];
   '/friends/asks/respond': [FriendAskRespondByIdRequest, FriendAskRespondResponse];
