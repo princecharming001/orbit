@@ -9,7 +9,7 @@ import {
   ThumbsUp,
   TriangleAlert,
 } from 'lucide-react';
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { copyText } from '../../components/approve';
 import { isStaleChunk } from '../../components/ErrorBoundary';
@@ -217,19 +217,17 @@ function Assistant({
     .filter((b): b is Extract<Block, { type: 'text' }> => b.type === 'text')
     .map((b) => b.text)
     .join('\n\n');
-  const lastBlock = turn.blocks[turn.blocks.length - 1];
-  const folded = turnLayout(turn.blocks).some((p) => p.type === 'work');
-  const waiting =
-    streaming &&
-    !folded &&
-    (!lastBlock ||
-      lastBlock.type === 'progress' ||
-      (lastBlock.type === 'tool' && lastBlock.status === 'running'));
+  // while the turn works it reads as one status line; the cards and words come in once the answer starts
+  const revealedRef = useRef(false);
+  if (!streaming || showReasoning || answerStarted(turn.blocks)) revealedRef.current = true;
+  const revealed = revealedRef.current;
+  const activity = streaming ? currentStep(turn.blocks) : '';
   return (
     <div className="group min-w-0" data-testid="turn-assistant" data-status={turn.status}>
       <div aria-live="polite" aria-busy={streaming}>
+        {!revealed && <TurnStatus step={activity} />}
         <ChoicesContext.Provider value={{ running, laterUserText }}>
-          {turnLayout(turn.blocks).map((piece) =>
+          {(revealed ? turnLayout(turn.blocks) : []).map((piece) =>
             piece.type === 'work' ? (
               <WorkLog
                 key={`work-${piece.items[0]!.i}`}
@@ -251,13 +249,7 @@ function Assistant({
             ),
           )}
         </ChoicesContext.Provider>
-        {waiting && (
-          <div className="flex items-center gap-1 h-6 text-ink-3" role="status" aria-label="Working">
-            <span className="w-1.5 h-1.5 rounded-full bg-ink-3 animate-pulse" />
-            <span className="w-1.5 h-1.5 rounded-full bg-ink-3 animate-pulse [animation-delay:150ms]" />
-            <span className="w-1.5 h-1.5 rounded-full bg-ink-3 animate-pulse [animation-delay:300ms]" />
-          </div>
-        )}
+        {revealed && streaming && <TurnStatus step={activity} quiet />}
       </div>
       {turn.status === 'stopped' && (
         <p className="text-[12.5px] text-ink-3 mt-1" data-testid="turn-stopped">
@@ -345,6 +337,87 @@ function IconButton({
 
 const blockKey = (b: Block, i: number) =>
   b.type === 'tool' ? b.toolUseId : b.type === 'web' ? b.id : `b${i}`;
+
+/** Words in the student's view a status line rotates through while a turn works. */
+export const WORKING_WORDS = [
+  'Cooking',
+  'Gargling',
+  'Simmering',
+  'Rummaging',
+  'Untangling',
+  'Percolating',
+  'Noodling',
+  'Brewing',
+  'Sifting',
+  'Mulling',
+  'Tinkering',
+  'Whisking',
+  'Marinating',
+  'Puttering',
+];
+
+/** Short lead-ins ("One sec, pulling up Daniel.") are not the answer; this many characters after the last step is. */
+export const ANSWER_MIN_CHARS = 80;
+
+/**
+ * Whether the answer has begun: the last block is words, nothing runs, and the words after the last step are more
+ * than a lead-in. A card waiting on the student's approval counts too, so it is never held back.
+ */
+export function answerStarted(blocks: Block[]): boolean {
+  if (blocks.some((b) => b.type === 'tool' && b.status === 'pending')) return true;
+  let lastStep = -1;
+  blocks.forEach((b, k) => {
+    if (b.type === 'tool' || b.type === 'web' || b.type === 'progress') lastStep = k;
+  });
+  const tail = blocks.slice(lastStep + 1);
+  if (!tail.length || tail.some((b) => b.type !== 'text')) return false;
+  const chars = tail.reduce((n, b) => n + (b.type === 'text' ? b.text.trim().length : 0), 0);
+  return chars >= ANSWER_MIN_CHARS;
+}
+
+/** The step under way, in the student's words: the running tool's label, a web search, or the latest finished step. */
+export function currentStep(blocks: Block[]): string {
+  for (let i = blocks.length - 1; i >= 0; i--) {
+    const b = blocks[i]!;
+    if (b.type === 'tool' && b.status === 'running') return b.progress ?? humanTool(b.toolName);
+    if (b.type === 'web' && b.status === 'searching') return `Searching the web for ${b.query}`;
+    if (b.type === 'tool' && b.envelope && !QUIET_TOOLS.has(b.toolName))
+      return b.envelope.summary?.trim() ?? '';
+  }
+  return '';
+}
+
+/**
+ * The one line a working turn shows: a rotating word and the step under way. Under an answer that is already
+ * coming in, a quieter line, so the turn never looks finished before it is.
+ */
+function TurnStatus({ step, quiet }: { step: string; quiet?: boolean }) {
+  const [n, setN] = useState(() => Math.floor(Math.random() * WORKING_WORDS.length));
+  useEffect(() => {
+    const t = window.setInterval(() => setN((x) => (x + 1) % WORKING_WORDS.length), 2600);
+    return () => window.clearInterval(t);
+  }, []);
+  const short = step.length > 90 ? `${step.slice(0, 89).trimEnd()}…` : step;
+  return (
+    <div
+      className={cx(
+        'flex min-w-0 items-center gap-2 text-ink-3',
+        quiet ? 'h-6 text-[12.5px]' : 'my-1 h-7 text-[13.5px]',
+      )}
+      role="status"
+      aria-label="Working"
+      data-testid="turn-working"
+    >
+      <span className="w-1.5 h-1.5 rounded-full shrink-0 bg-accent animate-pulse" aria-hidden />
+      <span className="shimmer shrink-0 font-medium">{WORKING_WORDS[n]}…</span>
+      {!quiet && short && (
+        <span className="min-w-0 truncate" data-testid="turn-working-step">
+          {short}
+        </span>
+      )}
+    </div>
+  );
+}
 
 /** One block of a turn as it reads in the thread. */
 function BlockView({

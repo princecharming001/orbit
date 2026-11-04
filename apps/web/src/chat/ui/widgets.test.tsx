@@ -157,14 +157,19 @@ describe('tap-to-answer choices', () => {
     await act(async () => {
       turn = threadActions(engine).send('show choices');
     });
-    // the pills arrive before the turn ends
-    for (let i = 0; i < 600 && $$('[data-testid="choice-pill"]').length === 0; i++)
-      await act(() => new Promise((r) => setTimeout(r, 5)));
-    const pills = $$('[data-testid="choice-pill"]') as HTMLButtonElement[];
-    expect(pills).toHaveLength(2);
+    // the choices arrive before the turn ends; while it runs the turn reads as one status line, and any pill that
+    // shows is disabled, so nothing can be tapped until the turn is done
+    const hasChoices = () =>
+      getThread().turns.some(
+        (t) =>
+          t.role === 'assistant' && t.blocks.some((b) => b.type === 'tool' && b.toolName === 'offer_choices'),
+      );
+    for (let i = 0; i < 600 && !hasChoices(); i++) await act(() => new Promise((r) => setTimeout(r, 5)));
     expect(getThread().running).toBe(true);
+    expect(document.querySelector('[data-testid="turn-working"]')).not.toBeNull();
+    const pills = $$('[data-testid="choice-pill"]') as HTMLButtonElement[];
     expect(pills.every((p) => p.disabled)).toBe(true);
-    await act(async () => pills[0]!.click());
+    for (const p of pills) await act(async () => p.click());
     expect(sends()).toEqual(['show choices']);
     await act(async () => {
       await turn;
