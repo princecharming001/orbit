@@ -100,10 +100,12 @@ export function freeWindows(
   const hm = (d: number) =>
     new Intl.DateTimeFormat('en-US', {
       timeZone: opts.labelTz,
-      hour: '2-digit',
+      hour: 'numeric',
       minute: '2-digit',
-      hourCycle: 'h23',
-    }).format(new Date(d));
+      hour12: true,
+    })
+      .format(new Date(d))
+      .replace(/\u202f|\s/g, ' ');
   const out: string[] = [];
   let key = localParts(new Date(from), opts.userTz).key;
   for (let i = 0; i < 31 && out.length < days; i++, key = addDaysKey(key, 1)) {

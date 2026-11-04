@@ -4384,11 +4384,13 @@ function goalAsk(i) {
       kind: "question",
       text: "Would there be room for an undergraduate in your lab, or a few minutes to talk about it?"
     };
-  if (i.niche === "startup_job")
+  if (i.niche === "startup_job") {
+    const role = roleName(i.topic);
     return {
       kind: "call",
-      text: i.topic ? `Would you be open to a short call about the ${i.topic} role?` : "Would you be open to a short call about the role you are hiring for?"
+      text: role ? `Would you be open to a short call about the ${role} role?` : "Would you be open to a short call about the role you are hiring for?"
     };
+  }
   switch (i.goal) {
     case "recruiting":
       return { kind: "call", text: "Would you have 15 minutes for a call about your path and your team?" };
@@ -4408,13 +4410,28 @@ function goalAsk(i) {
       return { kind: "question", text: "Would you be open to a short call about your research this month?" };
   }
 }
+function roleName(topic) {
+  const t = topic?.trim().replace(/^the\s+/i, "").replace(/\s+(role|position|opening)$/i, "").trim();
+  return t || void 0;
+}
+function proofLines(i) {
+  const proof = i.user.proof?.trim().replace(/\s+/g, " ");
+  return sentences(
+    proof && `${proof[0].toUpperCase()}${proof.slice(1)}`,
+    i.user.link && `My work is at ${i.user.link}`
+  );
+}
 var sentences = (...xs) => xs.filter((x) => !!x && !!x.trim()).map((x) => /[.!?]$/.test(x.trim()) ? x.trim() : `${x.trim()}.`).join(" ");
 function goalMiddle(i) {
   const org = i.recipient.org ? ` at ${i.recipient.org}` : "";
   if (i.niche === "research_position")
-    return "I would like to get research experience in your area and I am ready to put in steady hours. I can send my CV and transcript.";
+    return sentences(
+      proofLines(i),
+      "I would like to get research experience in your area and I am ready to put in steady hours",
+      "I can send my CV and transcript"
+    );
   if (i.niche === "startup_job")
-    return `I would like to help build what your team${org} is working on, and I can share what I have built so far.`;
+    return sentences(proofLines(i), `I would like to help build what your team${org} is working on`);
   const co = i.user.company ?? "our team";
   const topic = i.topic ?? "this";
   switch (i.goal) {
@@ -4466,6 +4483,13 @@ var SUBJECTS = {
   community: () => "join us next month",
   collaboration: () => "your paper and my work"
 };
+var NICHE_SUBJECTS = {
+  startup_job: (i) => {
+    const role = roleName(i.topic);
+    return role && role.split(/\s+/).length <= 5 ? `${role} role` : "the role you are hiring for";
+  },
+  research_position: () => "undergraduate interested in your lab"
+};
 function intro(i) {
   const about = i.user.about ? `, ${i.user.about}` : "";
   return `My name is ${i.user.firstName}${about}.`;
@@ -4476,7 +4500,8 @@ function hookLine(i) {
   const sentence2 = t.split(/\s+/).length > 8 || /\b(says|lists|is|are|was|were|has|have|takes|runs|works|wrote|published)\b/i.test(t);
   if (!sentence2) return `${t[0].toUpperCase()}${t.slice(1)} stuck with me.`;
   const toYou = t.replace(/\b(her|his|their)\b/gi, "your").replace(/\b(she|he|they)\b/gi, "you").replace(/^your\b/i, "your");
-  return `I saw that ${toYou[0].toLowerCase()}${toYou.slice(1)}.`;
+  const lead = /^(your|the|a|an|this|that|these|those)\b/i.test(toYou) ? `${toYou[0].toLowerCase()}${toYou.slice(1)}` : toYou;
+  return `I saw that ${lead.replace(/^the the\b/i, "the")}.`;
 }
 function greetingOf(i) {
   const academic = i.niche === "research_position" || i.niche === "research_collaboration";
@@ -4507,7 +4532,7 @@ ${i.user.firstName}`;
           [warm, intro(i), i.hook ? `I read ${i.hook.text}.` : "", ask.text].filter(Boolean).join(" ")
         ].join("\n");
       } else {
-        subject = warm ? `through ${via}` : SUBJECTS[i.goal](i);
+        subject = warm ? `through ${via}` : NICHE_SUBJECTS[i.niche ?? "general"]?.(i) ?? SUBJECTS[i.goal](i);
         body = paragraphs(
           hi,
           [warm, intro(i), hookLine(i)].filter(Boolean).join(" "),
@@ -4552,9 +4577,12 @@ ${i.user.firstName}`;
       break;
     }
     case "bump": {
+      const role = i.niche === "startup_job" ? roleName(i.topic) : void 0;
+      const about = role ? `I am following up on my note from last week about the ${role} role.` : i.niche === "research_position" ? "I am following up on my note from last week about a place for an undergraduate in your lab." : "I am following up on my note from last week.";
+      const proof = i.niche === "startup_job" || i.niche === "research_position" ? proofLines(i) : "";
       body = paragraphs(
         hi,
-        `I am following up on my note from last week. ${ask.text} If now is not a good time, that is fine.`,
+        [about, proof, ask.text, "If now is not a good time, that is fine."].filter(Boolean).join(" "),
         sign
       );
       break;
@@ -4612,8 +4640,12 @@ var COMMON_CAPS = new Set(
   any anything anyone someone something all some most many much more still even only really
   saw read found noticed met came floating following followed surfacing congratulations congrats well
   speaking also especially again either neither both each every other another mostly for context
-  resume cv professor prof dr phd postdoc lab undergraduate it's it'll that's there's let's you're we're they're
-  api apis ai ml llm sql ui ux pm cs ceo cto coo cfo vp mba ib`.split(/\s+/)
+  resume cv professor prof dr phd postdoc lab undergraduate it's it'll it'd that's that'd there's let's you're you'll you'd
+  we're we'll we'd they're they'll they'd isn't aren't wasn't don't doesn't didn't can't won't wouldn't couldn't
+  api apis ai ml llm llms sql ui ux pm cs ceo cto coo cfo vp mba ib
+  json csv html css sdk sdks ios aws gcp gpu gpus nlp cv saas b2b b2c mvp seo kpi okr crm url urls pdf faq`.split(
+    /\s+/
+  )
 );
 var PHRASE_CHECKS = [
   {
@@ -6455,7 +6487,7 @@ function stepOf(kind) {
       return "other";
   }
 }
-var COMMON_FOLLOW_UP = 'Open by pointing back to the first note in a few words ("Following up on my note from last week about ..."), keep who the student is and the real link in one clause, add one new, true line (something they did since, a sharper question, a recent fact about them), and repeat the same ask in one line. Never "just bumping this", "circling back", "bringing this to the top of your inbox" or "in case it got buried", and no guilt.';
+var COMMON_FOLLOW_UP = 'Open by pointing back to the first note in a few words ("Following up on my note from last week about ..."), then who the student is and the real link in one clause written for someone who may not remember the first note ("I am a junior at UT studying finance"), never as if they should. Add one new, true line of context, stated and never asked: something of the student’s from the inputs the first note did not use (a role, a project, a result), or a fact about them from the facts. The only question in the message is the same ask, in one line. Plain words, short sentences. Never "just bumping this", "circling back", "bringing this to the top of your inbox" or "in case it got buried", and no guilt.';
 var COMMON_REPLY = `If they named a time, check it against the free hours and take it when it is free; never turn down a free time they offered. Otherwise offer two or three exact start times (day, date, time and zone) inside the free hours that fit the week they named, at different times of day. Say how long and phone or video. Never write "I'm flexible, pick a time": choosing is the student's job. Only when nothing free fits, give the scheduling link or ask for two times that suit them. Never invent availability or hours the inputs do not give. Thanks in a few words, no gushing, no new questions.`;
 var NICHE_PLAYBOOKS = {
   ib_coffee_chat: {
@@ -6503,9 +6535,9 @@ var NICHE_PLAYBOOKS = {
   },
   startup_job: {
     label: "a note to a startup about a role it is hiring for now",
-    first: 'Direct and concrete, 60 to 130 words. Name the role (from the topic or facts) and one specific thing about the product or a recent launch that shows real interest. One or two lines of proof of work: what the student built or shipped, with the result, and a link only if the inputs give one. One line on why this company now. The ask: a short call about the role, or the best way to be considered. Interest in the open role is welcome here; never "any openings?", never a referral ask to a stranger, never "passionate about startups".',
-    followUp: "After about a week, point back to the first note and the role in a few words, then one new thing: a small idea for their product, a quick take on their launch, or a piece of work with its result, and the same ask in one line. Stop after two follow-ups.",
-    reply: "They want to talk: say yes, take their time or offer two or three concrete times from the free slots, and answer what they asked (a GitHub link, hours, a start date) with what the student gave. Short.",
+    first: `Direct and concrete, 60 to 130 words. Name the role (from the topic or facts) and one specific thing about the product or a recent post or launch, with the student's own short reaction to it (what it made them think, never a summary). Proof of work is the heart of it: the student's strongest project or job from the inputs, by name, with what it did and its number or result and the tools used, in one or two plain sentences, and its link when the inputs give one (a GitHub or portfolio link goes in as it is). Never "I can share what I have built": show it. One line on why this company now, tied to the student. The ask: a short call about the role, or the best way to be considered. Subject names the role and the proof in a few words ("Backend intern: Go retry queue, 80% fewer failures"). Interest in the open role is welcome here; never "any openings?", never a referral ask to a stranger, never "passionate about startups".`,
+    followUp: `After about a week, three or four sentences: point back to the first note and the role in a few words, the student's proof again in one clause (the project by name and its number), then one new, concrete thing tied to their product or a post of theirs: a specific idea (what, for whom, how the student would try it), a short take on their launch, or a new piece of work with its result or link. "I keep thinking about your product" is not new. The same ask in one line. Stop after two follow-ups.`,
+    reply: "They want to talk: say yes and name the role once, take their time or offer two or three concrete times from the free slots, and answer what they asked (a GitHub link, hours, a start date) with what the student gave, including the link itself when the inputs have it. One concrete thing the student would bring up only if it comes from the inputs. Short.",
     thankYou: "Within a day: thank them, one thing from the conversation that made the role more interesting, and anything promised (a link, a sample) or when it will come.",
     firstWords: [60, 130],
     sources: [
@@ -6516,9 +6548,9 @@ var NICHE_PLAYBOOKS = {
   },
   research_position: {
     label: "an undergraduate asking about a place in a lab",
-    first: 'Formal and warm: "Dear Professor X" (a PhD student or postdoc by first name). 80 to 180 words in two or three short paragraphs. Name one specific paper or project of theirs from the facts and one honest sentence on what drew the student to it, never a copied summary. Their year and major, the relevant coursework or skills, any lab or project experience, or plainly that they are new and eager to learn. Their availability (hours a week, which terms) when the inputs give it. The ask: whether there might be a place for an undergraduate in the lab, or a short meeting to talk about it. Offer to send a CV and transcript; never say they are attached. Never flattery, never asking about pay first. Subject names the research area and that they are an undergraduate.',
-    followUp: "After one to two weeks, three or four polite sentences: point back to the first note and the paper it named, restate year and major in one clause, the availability again, one new detail (a course finished, a skill picked up) if the inputs give one, and the same ask. Professors are busy and a follow-up is normal.",
-    reply: "Answer exactly what they asked (availability, interests, CV) with what the student gave, offer times if a meeting is proposed, and say the CV or transcript will follow rather than claiming an attachment. Short and formal.",
+    first: 'Formal and warm: "Dear Professor X" (a PhD student or postdoc by first name). 80 to 180 words in two or three short paragraphs. Name one specific paper or project of theirs from the facts and one honest sentence on what drew the student to it, never a copied summary. Their year and major, the relevant coursework or skills, any lab or project experience, or plainly that they are new and eager to learn. Their availability (hours a week, which terms) when the inputs give it. One ask, a single question: whether there might be a place for an undergraduate in the lab (to a PhD student or postdoc: whether they would have 15 minutes to talk about getting started). Never two questions joined by "or". Offer to send a CV and transcript; never say they are attached. Never flattery, never asking about pay first. Subject names the research area and that they are an undergraduate.',
+    followUp: "After one to two weeks, three short polite sentences, 40 to 70 words, never a second copy of the first note: point back to it and the paper or project it named; year and major with the student’s most relevant skill or result in one clause (a course grade, a tool, a project) and the availability in hours a week or terms when the inputs give it; then the same ask and the offer of a CV and transcript. Professors are busy and a follow-up is normal.",
+    reply: "Answer exactly what they asked (availability, interests, CV) with what the student gave and nothing more. Weekly availability for lab work (hours a week, which days, which terms) comes only from the student's own words; the calendar's free hours are for meeting times only and never stand in for it. When the student gave no weekly availability, say they will send their schedule. Offer times from the free hours if a meeting is proposed. When they asked about a paper, a review or a project, one honest sentence on it. Say the CV or transcript will follow today rather than claiming an attachment, and only when they asked for it. Short and formal.",
     thankYou: "After meeting: thank them, one thing they said about the project, and the next step that was agreed (a reading, a start date, a form).",
     firstWords: [80, 180],
     sources: [
@@ -6606,7 +6638,7 @@ var NICHE_FORM = {
   consulting_coffee_chat: { ask: "call", gradeMax: 7, callMinutes: 15 },
   finance_coffee_chat: { ask: "call", gradeMax: 7, callMinutes: 15 },
   tech_recruiting: { ask: "call", gradeMax: 7, callMinutes: 15 },
-  startup_job: { ask: "call", gradeMax: 8, callMinutes: 20 },
+  startup_job: { ask: "call", gradeMax: 9, callMinutes: 20 },
   research_position: {
     ask: "question",
     gradeMax: 10,
@@ -6682,6 +6714,25 @@ var ONE_ASK_KINDS = /* @__PURE__ */ new Set([
   "bump",
   "referral_ask",
   "schedule"
+]);
+var PLAIN_SWAPS = [
+  [/\breaching out\b/gi, "writing"],
+  [/\breached out\b/gi, "wrote"],
+  [/\breach out\b/gi, "write"]
+];
+function plainPhrases(text2) {
+  let out = text2;
+  for (const [re, plain] of PLAIN_SWAPS)
+    out = out.replace(
+      re,
+      (m) => m[0] === m[0].toUpperCase() ? plain[0].toUpperCase() + plain.slice(1) : plain
+    );
+  return out;
+}
+var LONG_SUBJECT_NICHES = /* @__PURE__ */ new Set([
+  "research_position",
+  "research_collaboration",
+  "startup_job"
 ]);
 var COMPOSE_BANNED_PHRASES = [
   "amazing",
@@ -6799,10 +6850,11 @@ function validateComposed(msg, ctx) {
         block2("subject_missing", "no subject");
     } else {
       const n = subject.split(/\s+/).length;
-      if (n < 2 || n > 6 || subject.length > SUBJECT_MAX_CHARS)
+      const [maxWords, maxChars] = ctx.niche && LONG_SUBJECT_NICHES.has(ctx.niche) ? [8, 60] : [6, SUBJECT_MAX_CHARS];
+      if (n < 2 || n > maxWords || subject.length > maxChars)
         block2(
           "subject_length",
-          `${n} words, ${subject.length} characters (2–6 words, ≤ ${SUBJECT_MAX_CHARS})`
+          `${n} words, ${subject.length} characters (2–${maxWords} words, ≤ ${maxChars})`
         );
       const caps = subject.split(/\s+/).slice(1).filter(
         (w) => /^[A-Z]/.test(w) && !new RegExp(`\\b${w.replace(/[^A-Za-z0-9]/g, "")}\\b`).test(ctx.inputs)
@@ -6992,10 +7044,10 @@ function freeWindows(busy, opts) {
   const step = 15 * 6e4;
   const hm = (d) => new Intl.DateTimeFormat("en-US", {
     timeZone: opts.labelTz,
-    hour: "2-digit",
+    hour: "numeric",
     minute: "2-digit",
-    hourCycle: "h23"
-  }).format(new Date(d));
+    hour12: true
+  }).format(new Date(d)).replace(/\u202f|\s/g, " ");
   const out = [];
   let key2 = localParts(new Date(from), opts.userTz).key;
   for (let i = 0; i < 31 && out.length < days; i++, key2 = addDaysKey(key2, 1)) {
@@ -11115,6 +11167,8 @@ ${13 + i}. ${l}`).join("")}`;
         userId: req.userId
       });
       if (!r.ok) break;
+      r.data.body = plainPhrases(r.data.body);
+      if (r.data.subject) r.data.subject = plainPhrases(r.data.subject);
       const issues2 = check(r.data);
       if (!issues2.length) {
         output = r.data;
@@ -11159,7 +11213,8 @@ ${13 + i}. ${l}`).join("")}`;
       replyClass,
       slots,
       answer,
-      confirms
+      confirms,
+      links: userContext.match(/^Links: (.+)$/m)?.[1]?.split(/\s+/) ?? []
     });
     composed = t;
     promptVersion = t.promptVersion;
@@ -11339,6 +11394,7 @@ var TEMPLATE_KIND = {
   report_back: "reengage",
   schedule: "bump"
 };
+var PROOF_NICHES = /* @__PURE__ */ new Set(["startup_job", "research_position", "tech_recruiting"]);
 function hookPhrase(text2) {
   const t = text2.trim().replace(/[.!?]+$/, "").replace(/\s+(stuck with me|caught my eye|resonated with me)$/i, "");
   return /^(Your|The|A|An|I)\b/.test(t) && !/^I\b/.test(t) ? t[0].toLowerCase() + t.slice(1) : t;
@@ -11364,7 +11420,12 @@ function templateMessage(p) {
       about,
       company: BUSINESS_GOALS.has(p.goalKind) ? str4(s.company) : void 0,
       pitch: BUSINESS_GOALS.has(p.goalKind) ? str4(s.pitch) : p.goalKind === "collaboration" ? str4(s.research_topic) : void 0,
-      traction: p.goalKind === "fundraising" ? str4(s.traction) : void 0
+      traction: p.goalKind === "fundraising" ? str4(s.traction) : void 0,
+      // the proof of work a startup or a lab note leads with, in the student's own words
+      ...PROOF_NICHES.has(p.niche) ? {
+        proof: str4(s.about?.proudOf),
+        link: p.links?.find((l) => /github\.com/i.test(l)) ?? p.links?.find((l) => !/linkedin\.com/i.test(l))
+      } : {}
     },
     recipient: {
       firstName: firstNameOf(person),

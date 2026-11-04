@@ -28,6 +28,7 @@ import {
   LINKEDIN_NOTE_TARGET,
   MAX_WORDS,
   nicheWords,
+  plainPhrases,
   RAPPORT_CUES,
   RAPPORT_LLM_GUIDE,
   type RapportReading,
@@ -806,7 +807,7 @@ export async function llmDraft(ctx: DraftContext, template: DraftOutput): Promis
     2048,
   );
   if (!r) return undefined;
-  const body = r.body.replace(/[—–]/g, ',').replace(/\s+,/g, ',');
+  const body = plainPhrases(r.body.replace(/[—–]/g, ',').replace(/\s+,/g, ','));
   const opening =
     body
       .split('\n')

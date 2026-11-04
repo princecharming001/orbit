@@ -78,6 +78,7 @@ const JUDGE_SYSTEM = [
   '- ask: exactly one clear ask, the right one for this niche and step, easy to say yes to, with no pressure.',
   '- length: right for the step (first message about 70 to 150 words, research emails may reach 180; a follow-up under 70; a reply proportionate to what they said). Too long is a 1 when it is over by half.',
   '- tone: sounds like a real student of this year writing in their own voice: humble but not groveling, no clichés, no flattery, no filler, no AI-sounding phrasing, no em dashes. A claim the facts do not support (an attachment that does not exist, a shared history, an achievement the student did not mention) is a 1.',
+  'The student sends the message from their own mail and attaches any file themselves when sending, so a draft never claims an attachment: "I will send my CV and transcript today" is the right move, not a flaw. What is in <student_answer> is the student\'s own words and counts as facts.',
   'Return only JSON: {"specificity":n,"norms":n,"ask":n,"length":n,"tone":n,"notes":"<=60 words on what is weak, quoting the message","fix":"<=30 words: the one change that helps most"}.',
 ].join('\n');
 
@@ -97,6 +98,10 @@ async function judgeDraft(
       .join(' | ')}${p.resume ? `\nResume: ${p.resume.text}` : ''}\n</student>`,
     `<recipient>\n${p.recipient.name}, ${p.recipient.title} at ${p.recipient.org}. Facts: ${p.recipient.facts.join(' | ')}\n</recipient>`,
     context ? `<their_message>\n${context}\n</their_message>` : '',
+    // what the student told Orbit to say back: a reply drawing on it uses the student's own facts
+    step === 'reply' && p.theirReply.answer
+      ? `<student_answer>\n${p.theirReply.answer}\n</student_answer>`
+      : '',
     `<message>\nSubject: ${subject ?? '(reply in thread)'}\n\n${body}\n</message>`,
   ]
     .filter(Boolean)
@@ -146,12 +151,22 @@ const only = (process.env.DRAFT_BENCH_ONLY ?? '').split(',').filter(Boolean);
 const personas = only.length ? BENCH_PERSONAS.filter((p) => only.includes(p.id)) : BENCH_PERSONAS;
 const graded: Graded[] = [];
 
+/** Each student's zone, from their city: a reply's times read in the zone both of them live in. */
+const CITY_ZONES: Record<string, string> = {
+  Austin: 'America/Chicago',
+  Columbus: 'America/New_York',
+  Davis: 'America/Los_Angeles',
+  Pittsburgh: 'America/New_York',
+};
+const zoneOf = (p: BenchPersona) => CITY_ZONES[p.city ?? ''] ?? 'America/New_York';
+
 /** The student's account: profile, own words, resume and the goal their stated aim infers to. */
 async function seedStudent(s: ReturnType<typeof makeServices>, p: BenchPersona) {
   const { userId } = await signedInUser(t, { firstName: p.firstName, settings: { about: p.about } });
   await t.db.sql`
     update orbit.users set full_name = ${p.fullName}, school = ${p.school}, grad_year = ${p.gradYear},
-           degree = ${p.degree}, majors = ${p.majors}::text[], current_city = ${p.city ?? null}
+           degree = ${p.degree}, majors = ${p.majors}::text[], current_city = ${p.city ?? null},
+           timezone = ${zoneOf(p)}
      where id = ${userId}::uuid`;
   if (p.resume)
     await t.db.sql`
@@ -177,7 +192,7 @@ async function seedRecipient(userId: string, p: BenchPersona, copy = 0) {
     org: r.org,
     title: r.title,
     email: copy ? r.email.replace('@', `+${copy}@`) : r.email,
-    timezone: 'America/New_York',
+    timezone: zoneOf(p),
     ...(r.score !== undefined ? { score: r.score } : {}),
   });
   if (r.alum) await t.db.sql`update orbit.people set is_alumni = true where id = ${id}::uuid`;

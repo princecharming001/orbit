@@ -77,6 +77,32 @@ const ONE_ASK_KINDS: ReadonlySet<MessageKind> = new Set([
   'schedule',
 ]);
 
+/**
+ * Stock phrases with a plain equivalent that never changes the meaning: swapped before validation, so a good draft is
+ * not thrown away over "reach out". Anything else on the banned lists still blocks.
+ */
+const PLAIN_SWAPS: [RegExp, string][] = [
+  [/\breaching out\b/gi, 'writing'],
+  [/\breached out\b/gi, 'wrote'],
+  [/\breach out\b/gi, 'write'],
+];
+
+export function plainPhrases(text: string): string {
+  let out = text;
+  for (const [re, plain] of PLAIN_SWAPS)
+    out = out.replace(re, (m) =>
+      m[0] === m[0]!.toUpperCase() ? plain[0]!.toUpperCase() + plain.slice(1) : plain,
+    );
+  return out;
+}
+
+/** Niches whose subject names an area or a role as well as the student, so it gets eight words and 60 characters. */
+const LONG_SUBJECT_NICHES: ReadonlySet<Niche> = new Set([
+  'research_position',
+  'research_collaboration',
+  'startup_job',
+]);
+
 /** Flattery and filler §7.5 adds to the v1 list. */
 export const COMPOSE_BANNED_PHRASES = [
   'amazing',
@@ -243,10 +269,14 @@ export function validateComposed(
         block('subject_missing', 'no subject');
     } else {
       const n = subject.split(/\s+/).length;
-      if (n < 2 || n > 6 || subject.length > SUBJECT_MAX_CHARS)
+      // a lab or a startup subject names the area or the role and the student ("Undergraduate interested in sleep
+      // research"), so it may run a little longer than a coffee chat's
+      const [maxWords, maxChars] =
+        ctx.niche && LONG_SUBJECT_NICHES.has(ctx.niche) ? [8, 60] : [6, SUBJECT_MAX_CHARS];
+      if (n < 2 || n > maxWords || subject.length > maxChars)
         block(
           'subject_length',
-          `${n} words, ${subject.length} characters (2–6 words, ≤ ${SUBJECT_MAX_CHARS})`,
+          `${n} words, ${subject.length} characters (2–${maxWords} words, ≤ ${maxChars})`,
         );
       // lower-case except names: a capitalised word after the first must be a name from the inputs
       const caps = subject

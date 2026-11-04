@@ -7,7 +7,13 @@
  * before a postal address is set (CAN-SPAM, §14.3); such a first touch carries the opt-out line (§7.7).
  */
 
-import { cleanSubject, FIRST_TOUCH_KINDS, validateComposed, wordRange } from '@orbit/core/drafts/compose';
+import {
+  cleanSubject,
+  FIRST_TOUCH_KINDS,
+  plainPhrases,
+  validateComposed,
+  wordRange,
+} from '@orbit/core/drafts/compose';
 import { draftPlaybook, type Niche } from '@orbit/core/drafts/niche';
 import {
   COMPOSE_KINDS,
@@ -317,6 +323,8 @@ export async function composeDraft(s: Services, req: ComposeRequest): Promise<Co
         userId: req.userId,
       });
       if (!r.ok) break;
+      r.data.body = plainPhrases(r.data.body);
+      if (r.data.subject) r.data.subject = plainPhrases(r.data.subject);
       const issues = check(r.data);
       if (!issues.length) {
         output = r.data;
@@ -364,6 +372,7 @@ export async function composeDraft(s: Services, req: ComposeRequest): Promise<Co
       slots,
       answer,
       confirms,
+      links: userContext.match(/^Links: (.+)$/m)?.[1]?.split(/\s+/) ?? [],
     });
     composed = t;
     promptVersion = t.promptVersion;
@@ -640,6 +649,9 @@ const TEMPLATE_KIND: Partial<Record<MessageKind, ComposeKind>> = {
   schedule: 'bump',
 };
 
+/** Niches whose template leads with the student's proof of work. */
+const PROOF_NICHES: ReadonlySet<Niche> = new Set(['startup_job', 'research_position', 'tech_recruiting']);
+
 /** "your point about X" from an opener sentence, for the template's hook slot. */
 function hookPhrase(text: string): string {
   const t = text
@@ -665,6 +677,8 @@ function templateMessage(p: {
   slots: Slot[];
   answer?: string;
   confirms?: { start: string; label: string };
+  /** the student's own links from their resume (GitHub first) */
+  links?: string[];
 }): Omit<ComposedMessage, 'validator'> {
   const { req, user, person } = p;
   const me = userFirstName(user);
@@ -698,6 +712,14 @@ function templateMessage(p: {
           ? str(s.research_topic)
           : undefined,
       traction: p.goalKind === 'fundraising' ? str(s.traction) : undefined,
+      // the proof of work a startup or a lab note leads with, in the student's own words
+      ...(PROOF_NICHES.has(p.niche)
+        ? {
+            proof: str((s.about as { proudOf?: unknown } | undefined)?.proudOf),
+            link:
+              p.links?.find((l) => /github\.com/i.test(l)) ?? p.links?.find((l) => !/linkedin\.com/i.test(l)),
+          }
+        : {}),
     },
     recipient: {
       firstName: firstNameOf(person),

@@ -96,8 +96,12 @@ const COMMON_CAPS = new Set(
   any anything anyone someone something all some most many much more still even only really
   saw read found noticed met came floating following followed surfacing congratulations congrats well
   speaking also especially again either neither both each every other another mostly for context
-  resume cv professor prof dr phd postdoc lab undergraduate it's it'll that's there's let's you're we're they're
-  api apis ai ml llm sql ui ux pm cs ceo cto coo cfo vp mba ib`.split(/\s+/),
+  resume cv professor prof dr phd postdoc lab undergraduate it's it'll it'd that's that'd there's let's you're you'll you'd
+  we're we'll we'd they're they'll they'd isn't aren't wasn't don't doesn't didn't can't won't wouldn't couldn't
+  api apis ai ml llm llms sql ui ux pm cs ceo cto coo cfo vp mba ib
+  json csv html css sdk sdks ios aws gcp gpu gpus nlp cv saas b2b b2c mvp seo kpi okr crm url urls pdf faq`.split(
+    /\s+/,
+  ),
 );
 const PHRASE_CHECKS: { re: RegExp; anchor: RegExp; what: string }[] = [
   {

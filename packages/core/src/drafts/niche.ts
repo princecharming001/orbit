@@ -118,7 +118,7 @@ export interface NichePlaybook {
 }
 
 const COMMON_FOLLOW_UP =
-  'Open by pointing back to the first note in a few words ("Following up on my note from last week about ..."), keep who the student is and the real link in one clause, add one new, true line (something they did since, a sharper question, a recent fact about them), and repeat the same ask in one line. Never "just bumping this", "circling back", "bringing this to the top of your inbox" or "in case it got buried", and no guilt.';
+  'Open by pointing back to the first note in a few words ("Following up on my note from last week about ..."), then who the student is and the real link in one clause written for someone who may not remember the first note ("I am a junior at UT studying finance"), never as if they should. Add one new, true line of context, stated and never asked: something of the student’s from the inputs the first note did not use (a role, a project, a result), or a fact about them from the facts. The only question in the message is the same ask, in one line. Plain words, short sentences. Never "just bumping this", "circling back", "bringing this to the top of your inbox" or "in case it got buried", and no guilt.';
 
 /** What every reply that sets up a call does, whatever the niche. */
 const COMMON_REPLY =
@@ -181,11 +181,11 @@ export const NICHE_PLAYBOOKS: Record<Niche, NichePlaybook> = {
   startup_job: {
     label: 'a note to a startup about a role it is hiring for now',
     first:
-      'Direct and concrete, 60 to 130 words. Name the role (from the topic or facts) and one specific thing about the product or a recent launch that shows real interest. One or two lines of proof of work: what the student built or shipped, with the result, and a link only if the inputs give one. One line on why this company now. The ask: a short call about the role, or the best way to be considered. Interest in the open role is welcome here; never "any openings?", never a referral ask to a stranger, never "passionate about startups".',
+      'Direct and concrete, 60 to 130 words. Name the role (from the topic or facts) and one specific thing about the product or a recent post or launch, with the student\'s own short reaction to it (what it made them think, never a summary). Proof of work is the heart of it: the student\'s strongest project or job from the inputs, by name, with what it did and its number or result and the tools used, in one or two plain sentences, and its link when the inputs give one (a GitHub or portfolio link goes in as it is). Never "I can share what I have built": show it. One line on why this company now, tied to the student. The ask: a short call about the role, or the best way to be considered. Subject names the role and the proof in a few words ("Backend intern: Go retry queue, 80% fewer failures"). Interest in the open role is welcome here; never "any openings?", never a referral ask to a stranger, never "passionate about startups".',
     followUp:
-      'After about a week, point back to the first note and the role in a few words, then one new thing: a small idea for their product, a quick take on their launch, or a piece of work with its result, and the same ask in one line. Stop after two follow-ups.',
+      'After about a week, three or four sentences: point back to the first note and the role in a few words, the student\'s proof again in one clause (the project by name and its number), then one new, concrete thing tied to their product or a post of theirs: a specific idea (what, for whom, how the student would try it), a short take on their launch, or a new piece of work with its result or link. "I keep thinking about your product" is not new. The same ask in one line. Stop after two follow-ups.',
     reply:
-      'They want to talk: say yes, take their time or offer two or three concrete times from the free slots, and answer what they asked (a GitHub link, hours, a start date) with what the student gave. Short.',
+      'They want to talk: say yes and name the role once, take their time or offer two or three concrete times from the free slots, and answer what they asked (a GitHub link, hours, a start date) with what the student gave, including the link itself when the inputs have it. One concrete thing the student would bring up only if it comes from the inputs. Short.',
     thankYou:
       'Within a day: thank them, one thing from the conversation that made the role more interesting, and anything promised (a link, a sample) or when it will come.',
     firstWords: [60, 130],
@@ -198,11 +198,11 @@ export const NICHE_PLAYBOOKS: Record<Niche, NichePlaybook> = {
   research_position: {
     label: 'an undergraduate asking about a place in a lab',
     first:
-      'Formal and warm: "Dear Professor X" (a PhD student or postdoc by first name). 80 to 180 words in two or three short paragraphs. Name one specific paper or project of theirs from the facts and one honest sentence on what drew the student to it, never a copied summary. Their year and major, the relevant coursework or skills, any lab or project experience, or plainly that they are new and eager to learn. Their availability (hours a week, which terms) when the inputs give it. The ask: whether there might be a place for an undergraduate in the lab, or a short meeting to talk about it. Offer to send a CV and transcript; never say they are attached. Never flattery, never asking about pay first. Subject names the research area and that they are an undergraduate.',
+      'Formal and warm: "Dear Professor X" (a PhD student or postdoc by first name). 80 to 180 words in two or three short paragraphs. Name one specific paper or project of theirs from the facts and one honest sentence on what drew the student to it, never a copied summary. Their year and major, the relevant coursework or skills, any lab or project experience, or plainly that they are new and eager to learn. Their availability (hours a week, which terms) when the inputs give it. One ask, a single question: whether there might be a place for an undergraduate in the lab (to a PhD student or postdoc: whether they would have 15 minutes to talk about getting started). Never two questions joined by "or". Offer to send a CV and transcript; never say they are attached. Never flattery, never asking about pay first. Subject names the research area and that they are an undergraduate.',
     followUp:
-      'After one to two weeks, three or four polite sentences: point back to the first note and the paper it named, restate year and major in one clause, the availability again, one new detail (a course finished, a skill picked up) if the inputs give one, and the same ask. Professors are busy and a follow-up is normal.',
+      'After one to two weeks, three short polite sentences, 40 to 70 words, never a second copy of the first note: point back to it and the paper or project it named; year and major with the student’s most relevant skill or result in one clause (a course grade, a tool, a project) and the availability in hours a week or terms when the inputs give it; then the same ask and the offer of a CV and transcript. Professors are busy and a follow-up is normal.',
     reply:
-      'Answer exactly what they asked (availability, interests, CV) with what the student gave, offer times if a meeting is proposed, and say the CV or transcript will follow rather than claiming an attachment. Short and formal.',
+      "Answer exactly what they asked (availability, interests, CV) with what the student gave and nothing more. Weekly availability for lab work (hours a week, which days, which terms) comes only from the student's own words; the calendar's free hours are for meeting times only and never stand in for it. When the student gave no weekly availability, say they will send their schedule. Offer times from the free hours if a meeting is proposed. When they asked about a paper, a review or a project, one honest sentence on it. Say the CV or transcript will follow today rather than claiming an attachment, and only when they asked for it. Short and formal.",
     thankYou:
       'After meeting: thank them, one thing they said about the project, and the next step that was agreed (a reading, a start date, a form).',
     firstWords: [80, 180],
@@ -314,7 +314,7 @@ export const NICHE_FORM: Record<Niche, NicheForm> = {
   consulting_coffee_chat: { ask: 'call', gradeMax: 7, callMinutes: 15 },
   finance_coffee_chat: { ask: 'call', gradeMax: 7, callMinutes: 15 },
   tech_recruiting: { ask: 'call', gradeMax: 7, callMinutes: 15 },
-  startup_job: { ask: 'call', gradeMax: 8, callMinutes: 20 },
+  startup_job: { ask: 'call', gradeMax: 9, callMinutes: 20 },
   research_position: {
     ask: 'question',
     gradeMax: 10,

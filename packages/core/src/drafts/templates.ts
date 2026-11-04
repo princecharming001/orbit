@@ -3774,6 +3774,10 @@ export interface ComposeTemplateInput {
     pitch?: string;
     /** one line of traction, numbers first (fundraising): "We have 40 paying clinics." */
     traction?: string;
+    /** what the student is proud of, in their own words: the proof of work a startup or a lab note leads with */
+    proof?: string;
+    /** the student's own link (GitHub, portfolio) from their resume, as written there */
+    link?: string;
   };
   recipient: { firstName: string; lastName?: string; org?: string; title?: string };
   /** the niche playbook the message follows (plan 30): a lab position or a startup role changes the greeting and ask */
@@ -3799,6 +3803,8 @@ export function composeInputsText(i: ComposeTemplateInput): string {
     i.user.company,
     i.user.pitch,
     i.user.traction,
+    i.user.proof,
+    i.user.link,
     i.recipient.firstName,
     i.recipient.org,
     i.recipient.title,
@@ -3830,13 +3836,15 @@ function goalAsk(i: ComposeTemplateInput): { text: string; kind: ComposedMessage
       kind: 'question',
       text: 'Would there be room for an undergraduate in your lab, or a few minutes to talk about it?',
     };
-  if (i.niche === 'startup_job')
+  if (i.niche === 'startup_job') {
+    const role = roleName(i.topic);
     return {
       kind: 'call',
-      text: i.topic
-        ? `Would you be open to a short call about the ${i.topic} role?`
+      text: role
+        ? `Would you be open to a short call about the ${role} role?`
         : 'Would you be open to a short call about the role you are hiring for?',
     };
+  }
   switch (i.goal) {
     case 'recruiting':
       return { kind: 'call', text: 'Would you have 15 minutes for a call about your path and your team?' };
@@ -3858,6 +3866,26 @@ function goalAsk(i: ComposeTemplateInput): { text: string; kind: ComposedMessage
   }
 }
 
+/** A role as the topic names it, without a leading "the" or a trailing "role" ("the Backend Intern role" is "Backend
+ * Intern"), so a sentence that adds its own never doubles them. */
+export function roleName(topic: string | undefined): string | undefined {
+  const t = topic
+    ?.trim()
+    .replace(/^the\s+/i, '')
+    .replace(/\s+(role|position|opening)$/i, '')
+    .trim();
+  return t || undefined;
+}
+
+/** The student's proof in their own words as one sentence, and their link when they have one. */
+function proofLines(i: ComposeTemplateInput): string {
+  const proof = i.user.proof?.trim().replace(/\s+/g, ' ');
+  return sentences(
+    proof && `${proof[0]!.toUpperCase()}${proof.slice(1)}`,
+    i.user.link && `My work is at ${i.user.link}`,
+  );
+}
+
 const sentences = (...xs: (string | undefined | false)[]) =>
   xs
     .filter((x): x is string => !!x && !!x.trim())
@@ -3868,9 +3896,13 @@ const sentences = (...xs: (string | undefined | false)[]) =>
 function goalMiddle(i: ComposeTemplateInput): string {
   const org = i.recipient.org ? ` at ${i.recipient.org}` : '';
   if (i.niche === 'research_position')
-    return 'I would like to get research experience in your area and I am ready to put in steady hours. I can send my CV and transcript.';
+    return sentences(
+      proofLines(i),
+      'I would like to get research experience in your area and I am ready to put in steady hours',
+      'I can send my CV and transcript',
+    );
   if (i.niche === 'startup_job')
-    return `I would like to help build what your team${org} is working on, and I can share what I have built so far.`;
+    return sentences(proofLines(i), `I would like to help build what your team${org} is working on`);
   const co = i.user.company ?? 'our team';
   const topic = i.topic ?? 'this';
   switch (i.goal) {
@@ -3924,6 +3956,15 @@ const SUBJECTS: Record<GoalKind, (i: ComposeTemplateInput) => string> = {
   collaboration: () => 'your paper and my work',
 };
 
+/** Subjects a niche fixes: a startup note names the role, a lab note says it is from an undergraduate. */
+const NICHE_SUBJECTS: Partial<Record<Niche, (i: ComposeTemplateInput) => string>> = {
+  startup_job: (i) => {
+    const role = roleName(i.topic);
+    return role && role.split(/\s+/).length <= 5 ? `${role} role` : 'the role you are hiring for';
+  },
+  research_position: () => 'undergraduate interested in your lab',
+};
+
 function intro(i: ComposeTemplateInput): string {
   const about = i.user.about ? `, ${i.user.about}` : '';
   return `My name is ${i.user.firstName}${about}.`;
@@ -3944,7 +3985,11 @@ function hookLine(i: ComposeTemplateInput): string {
     .replace(/\b(her|his|their)\b/gi, 'your')
     .replace(/\b(she|he|they)\b/gi, 'you')
     .replace(/^your\b/i, 'your');
-  return `I saw that ${toYou[0]!.toLowerCase()}${toYou.slice(1)}.`;
+  // only a common first word is lowered ("Your lab website says" to "your lab website says"); a name keeps its case
+  const lead = /^(your|the|a|an|this|that|these|those)\b/i.test(toYou)
+    ? `${toYou[0]!.toLowerCase()}${toYou.slice(1)}`
+    : toYou;
+  return `I saw that ${lead.replace(/^the the\b/i, 'the')}.`;
 }
 
 /** The greeting: a professor written to about a lab is "Dear Professor Kim", everyone else by first name. */
@@ -3984,7 +4029,9 @@ export function composeFallback(i: ComposeTemplateInput): Omit<ComposedMessage, 
           [warm, intro(i), i.hook ? `I read ${i.hook.text}.` : '', ask.text].filter(Boolean).join(' '),
         ].join('\n');
       } else {
-        subject = warm ? `through ${via}` : SUBJECTS[i.goal](i);
+        subject = warm
+          ? `through ${via}`
+          : (NICHE_SUBJECTS[i.niche ?? 'general']?.(i) ?? SUBJECTS[i.goal](i));
         body = paragraphs(
           hi,
           [warm, intro(i), hookLine(i)].filter(Boolean).join(' '),
@@ -4033,9 +4080,17 @@ export function composeFallback(i: ComposeTemplateInput): Omit<ComposedMessage, 
       break;
     }
     case 'bump': {
+      // a startup or a lab follow-up names what the first note was about and carries the proof again in one line
+      const role = i.niche === 'startup_job' ? roleName(i.topic) : undefined;
+      const about = role
+        ? `I am following up on my note from last week about the ${role} role.`
+        : i.niche === 'research_position'
+          ? 'I am following up on my note from last week about a place for an undergraduate in your lab.'
+          : 'I am following up on my note from last week.';
+      const proof = i.niche === 'startup_job' || i.niche === 'research_position' ? proofLines(i) : '';
       body = paragraphs(
         hi,
-        `I am following up on my note from last week. ${ask.text} If now is not a good time, that is fine.`,
+        [about, proof, ask.text, 'If now is not a good time, that is fine.'].filter(Boolean).join(' '),
         sign,
       );
       break;
