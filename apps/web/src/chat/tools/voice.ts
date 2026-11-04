@@ -54,6 +54,8 @@ export const listVoiceNotesTool = defineTool({
       edits: v.edits,
       ownWords: v.ownWords.map((w) => ({ question: w.label, answer: clip(w.text, 300) })),
       mode: v.mode,
+      // the card lists every note: the answer is one or two plain sentences on the style, naming one note at most
+      say: 'The card already lists the notes and the score. Answer in one or two plain sentences, never a list, and name one note at most.',
       ...(v.offline
         ? { offline: 'The account could not be read just now: these are the notes this browser has.' }
         : {}),
@@ -98,7 +100,13 @@ export const forgetVoiceNoteTool = defineTool({
     return ok(
       'settings',
       { changes: [{ label: 'Voice note', to: 'Forgotten' }] },
-      { forgotten: { id: note.id, text: note.text }, neverRelearned: true },
+      {
+        forgotten: { id: note.id, text: note.text },
+        neverRelearned: true,
+        // forgetting it is the whole change: the draft goes back to what the student writes, so nothing more is saved
+        whole:
+          'This is the whole change. Save nothing else (no memory, no new note) unless the student asks.',
+      },
       `Forgotten: "${note.text}". Orbit will not learn it again, and your drafts stop following it.`,
       '/settings/voice',
     );
