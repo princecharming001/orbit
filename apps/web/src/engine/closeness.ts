@@ -77,7 +77,10 @@ export async function explainScore(
 ): Promise<{ ok: true; view: ScoreView } | { ok: false; message: string }> {
   const person = await db.people.get(personId);
   if (!person || person.userId !== user.id)
-    return { ok: false, message: 'Orbit has no person with that id. Search for them first.' };
+    return {
+      ok: false,
+      message: 'That person is not in your People yet. Add them first, then I can help with them.',
+    };
   const label = await db.tieLabels.get(personId);
   if (isServerUser(user.id)) {
     const r = await callApi('/scores/explain', { personId });
@@ -112,7 +115,10 @@ export async function rateCloseness(
 ): Promise<{ ok: true; view: ScoreView } | { ok: false; message: string }> {
   const person = await db.people.get(personId);
   if (!person || person.userId !== user.id)
-    return { ok: false, message: 'Orbit has no person with that id. Search for them first.' };
+    return {
+      ok: false,
+      message: 'That person is not in your People yet. Add them first, then I can help with them.',
+    };
   const row: TieLabelRow = {
     personId,
     userId: user.id,

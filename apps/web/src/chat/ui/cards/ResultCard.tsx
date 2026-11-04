@@ -160,13 +160,26 @@ function Envelope({ env, block, actions }: { env: ResultEnvelope; block: ToolBlo
         <GlassCard kind="error" tone="bad">
           <div className="flex items-start gap-2">
             <TriangleAlert size={15} className="text-bad shrink-0 mt-0.5" aria-hidden />
-            <span>{readError(d) ?? env.summary}</span>
+            <span>{plainError(readError(d) ?? env.summary)}</span>
           </div>
         </GlassCard>
       );
     default:
       return <Summary env={env} />;
   }
+}
+
+/** A failed step said in plain words: Orbit's own sentence, or what to do when it reads like a machine wrote it. */
+export function plainError(text: string | undefined): string {
+  const m = (text ?? '').trim();
+  if (
+    !m ||
+    /[{}<>[\]]|\b(exception|undefined|null|fetch|status|timeout|ECONN|HTTP|stack|TypeError|uuid|ids?)\b|\b\d{3}\b|_[a-z]/i.test(
+      m,
+    )
+  )
+    return 'That did not work this time. Try again, or ask it another way.';
+  return m;
 }
 
 /** The plan from a posting, the same card the Map and the company page show, read live so drafting updates it. */
@@ -1313,7 +1326,12 @@ function ListCard({ env, block, actions }: { env: ResultEnvelope; block: ToolBlo
   // rows that stand for people found in a search can be picked: added to People, with routes or a draft to each
   const pickable = items.filter((it) => !!it.id);
   const chosen = pickable.filter((it) => picked.has(it.id!));
-  const rows: Picked[] = chosen.map((it) => ({ name: it.text, rec: it.known ? undefined : it.id }));
+  // someone found in a search goes by name alone (their title is on the card); the id finds them
+  const rows: Picked[] = chosen.map((it) =>
+    it.known
+      ? { name: it.text }
+      : { name: it.text.split(/,\s|\s\|\s|\s·\s/)[0]!.trim() || it.text, rec: it.id },
+  );
   const pickedSteps = [addPicked(rows, 'routes'), addPicked(rows), addPicked(rows, 'drafts')].filter(
     (s): s is NextStep => !!s,
   );

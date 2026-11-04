@@ -287,7 +287,7 @@ describe('every tool parses and executes its example input against the demo', ()
   it("a read tool reports an engine error with the engine's words, never a throw", async () => {
     const env = await execute('get_person', { personId: 'nobody' }, makeCtx(user));
     expect(env.kind).toBe('error');
-    expect(env.summary).toMatch(/no person with that id/);
+    expect(env.summary).toMatch(/not in your People yet/);
     const unknown = await execute('no_such_tool', {}, makeCtx(user));
     expect(unknown.kind).toBe('error');
     const bad = await execute('get_person', { personId: 42 }, makeCtx(user));

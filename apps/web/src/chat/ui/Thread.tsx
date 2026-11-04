@@ -16,6 +16,7 @@ import { isStaleChunk } from '../../components/ErrorBoundary';
 import { useShowReasoning } from '../../state/showReasoning';
 import { cx, useToast } from '../../ui';
 import { ChoicesContext } from './cards/Choices';
+import { withoutRefs } from './cards/next';
 import { DraftOwnersContext } from './cards/parts';
 import { type CardActions, editingDraftId, ResultCard } from './cards/ResultCard';
 import { Markdown } from './Markdown';
@@ -71,7 +72,7 @@ export function Thread({
                     className="max-w-[85%] rounded-[20px] rounded-br-[8px] px-4 py-2.5 whitespace-pre-wrap break-words bg-[rgba(14,20,36,0.06)]"
                     data-testid="turn-user"
                   >
-                    {t.text}
+                    {withoutRefs(t.text)}
                   </div>
                 </div>
               ) : t.role === 'assistant' ? (
@@ -141,8 +142,14 @@ export type TurnPiece =
  * between them fold into one quiet line where the work began, and what stays out is the answer (the words after the
  * last lookup), the cards to act on (a draft, an approval, choices, a setup) and the web's sources.
  */
-export function turnLayout(blocks: Block[]): TurnPiece[] {
-  const ordered = inReadingOrder(blocks);
+export function turnLayout(blocks: Block[], streaming = false): TurnPiece[] {
+  // a step that failed is for the assistant to work around (it tries another way and says what happened): it is
+  // never shown, unless it is all the turn has to say once it is over
+  const failed = (b: Block) => b.type === 'tool' && b.envelope?.kind === 'error';
+  const said = blocks.some(
+    (b) => (b.type === 'text' && !!b.text.trim()) || ((b.type === 'tool' || b.type === 'web') && !failed(b)),
+  );
+  const ordered = inReadingOrder(blocks).filter(({ b }) => !failed(b) || (!said && !streaming));
   const isLookup = (b: Block) =>
     b.type === 'tool' && b.status !== 'pending' && !(b.envelope && OUTCOME_KINDS.has(b.envelope.kind));
   const lookups = ordered.filter(({ b }) => isLookup(b)).length;
@@ -151,7 +158,7 @@ export function turnLayout(blocks: Block[]): TurnPiece[] {
   // the answer is what comes after the last lookup: a card the student acts on (pills, a draft, a setup) after the
   // words is not work, so the words before it stay out of the fold
   blocks.forEach((b, i) => {
-    if ((b.type === 'tool' && isLookup(b)) || b.type === 'web') lastTool = i;
+    if ((b.type === 'tool' && isLookup(b) && !failed(b)) || b.type === 'web') lastTool = i;
   });
   const isWork = ({ b, i }: { b: Block; i: number }) =>
     isLookup(b) || b.type === 'progress' || (b.type === 'text' && i < lastTool);
@@ -227,7 +234,7 @@ function Assistant({
       <div aria-live="polite" aria-busy={streaming}>
         {!revealed && <TurnStatus step={activity} />}
         <ChoicesContext.Provider value={{ running, laterUserText }}>
-          {(revealed ? turnLayout(turn.blocks) : []).map((piece) =>
+          {(revealed ? turnLayout(turn.blocks, streaming) : []).map((piece) =>
             piece.type === 'work' ? (
               <WorkLog
                 key={`work-${piece.items[0]!.i}`}
@@ -381,6 +388,8 @@ export function currentStep(blocks: Block[]): string {
     const b = blocks[i]!;
     if (b.type === 'tool' && b.status === 'running') return b.progress ?? humanTool(b.toolName);
     if (b.type === 'web' && b.status === 'searching') return `Searching the web for ${b.query}`;
+    // a step that failed is the assistant's to work around, never a line the student reads
+    if (b.type === 'tool' && b.envelope?.kind === 'error') continue;
     if (b.type === 'tool' && b.envelope && !QUIET_TOOLS.has(b.toolName))
       return b.envelope.summary?.trim() ?? '';
   }
@@ -640,6 +649,25 @@ const ERROR_COPY: Record<ErrorKind, { title: string; link?: { to: string; label:
   other: { title: 'Something went wrong.' },
 };
 
+/**
+ * The second half of an error line, in plain words: Orbit's own sentences stay, anything that reads like a machine
+ * wrote it (a status code, an exception, JSON, "Connection error.") becomes what the student can do about it.
+ */
+export function plainMessage(kind: ErrorKind, message: string): string {
+  const m = message.trim();
+  if (kind === 'aborted' || m === ERROR_COPY[kind].title) return '';
+  // limits, keys and refusals are Orbit's own sentences, with their numbers
+  if (kind !== 'other' && kind !== 'network') return m;
+  const technical =
+    !m ||
+    /[{}<>[\]]|\b(error|exception|undefined|null|fetch|status|timeout|ECONN|HTTP|stack|TypeError|uuid|id)\b|\d{3}\b/i.test(
+      m,
+    );
+  if (!technical) return m;
+  if (kind === 'network') return 'Check your connection, then try again.';
+  return 'Try again in a moment. Anything already done is kept.';
+}
+
 function ErrorLine({ kind, message }: { kind: ErrorKind; message: string }) {
   // a part of the chat this tab had not loaded yet was replaced by a deploy: the fix is a reload, said plainly
   if (isStaleChunk(message))
@@ -675,7 +703,8 @@ function ErrorLine({ kind, message }: { kind: ErrorKind; message: string }) {
     >
       <TriangleAlert size={16} className="text-bad shrink-0 mt-0.5" aria-hidden />
       <div className="min-w-0">
-        <span className="font-medium">{c.title}</span> <span className="text-ink-2">{message}</span>
+        <span className="font-medium">{c.title}</span>{' '}
+        <span className="text-ink-2">{plainMessage(kind, message)}</span>
         {c.link && (
           <>
             {' '}

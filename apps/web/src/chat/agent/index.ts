@@ -75,6 +75,7 @@ export function createChatEngine(deps: ChatEngineDeps): ChatEngine {
   const nameFrom = async (conversation: ChatConversation, text: string) => {
     if (conversation.title !== 'New chat') return;
     const clean = text
+      .replace(/\s*\[rec [^\]]+\]/g, '')
       .replace(/\s+/g, ' ')
       .trim()
       .replace(/[.?]+$/, '');
@@ -299,7 +300,11 @@ export function createChatEngine(deps: ChatEngineDeps): ChatEngine {
         if (e.type === 'done') finished = true;
         onEvent(e);
       };
-      const client = chatMode() === 'router' ? undefined : await getClient();
+      // people picked on a card ("Add to People and draft a message to each of: A [rec x]") are an exact request:
+      // it runs as asked, the same way with or without the model, and never guesses at the ids
+      const picked =
+        /\[rec [^\]\s]+\]/.test(trimmed) && /^add (?:them |these |those )?to people\b/i.test(trimmed);
+      const client = chatMode() === 'router' || picked ? undefined : await getClient();
       if (!client) await routerTurn(conversation, trimmed, watch);
       else
         await (await import('./loop')).runTurn(

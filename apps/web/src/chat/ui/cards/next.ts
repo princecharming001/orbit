@@ -87,6 +87,13 @@ export interface Picked {
   rec?: string;
 }
 
+/** A message as the student reads it: the "[rec …]" ids a picked row carries for the tools are left out. */
+export const withoutRefs = (text: string) =>
+  text
+    .replace(/\s*\[rec [^\]]*(?:\]|…?$)/g, '')
+    .replace(/[ \t]{2,}/g, ' ')
+    .trim();
+
 const pickedList = (rows: Picked[]) =>
   nameList(rows.map((r) => (r.rec ? `${r.name} [rec ${r.rec}]` : r.name)));
 

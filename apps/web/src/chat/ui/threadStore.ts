@@ -1,7 +1,9 @@
 /**
  * The chat thread as the UI sees it: the current conversation, its turns, and whether a turn is running. It lives
  * outside React so the thread survives moving to another page and back, and a running turn keeps streaming while
- * the student looks at Today. The engine stays the source of truth: opening a conversation loads it from there.
+ * the student looks at Today. A turn belongs to its conversation, not to the screen: opening another chat or a new
+ * one leaves it running, and coming back shows it where it is. Only Stop ends it. The engine stays the source of
+ * truth: opening a conversation loads it from there.
  */
 import { useSyncExternalStore } from 'react';
 import { SETUP_CHIPS } from '../agent/setupChips';
@@ -77,13 +79,25 @@ export interface ThreadState {
 
 let state: ThreadState = { temporary: false, turns: [], running: false, historyVersion: 0 };
 const listeners = new Set<() => void>();
-let controller: AbortController | undefined;
+/** a turn still running, by conversation: its own copy of the turns, so it keeps going while another chat is open */
+interface LiveTurn {
+  conversation: ChatConversation;
+  turns: Turn[];
+  controller: AbortController;
+}
+const live = new Map<string, LiveTurn>();
+/** the conversation each running assistant turn belongs to */
+const turnHome = new Map<string, string>();
 let seq = 0;
 const id = () => `t_${++seq}_${Date.now().toString(36)}`;
 
 function set(patch: Partial<ThreadState> | ((s: ThreadState) => Partial<ThreadState>)) {
-  state = { ...state, ...(typeof patch === 'function' ? patch(state) : patch) };
-  for (const l of listeners) l();
+  const next = typeof patch === 'function' ? patch(state) : patch;
+  state = { ...state, ...next };
+  // a change to the open chat's turns (an approval, a cancel) reaches its running copy too
+  const l = state.conversation ? live.get(state.conversation.id) : undefined;
+  if (l && next.turns) l.turns = state.turns;
+  for (const fn of listeners) fn();
 }
 const subscribe = (l: () => void) => {
   listeners.add(l);
@@ -97,9 +111,15 @@ export function getThread(): ThreadState {
 }
 /** tests only */
 export function resetThread() {
-  controller?.abort();
-  controller = undefined;
+  for (const l of live.values()) l.controller.abort();
+  live.clear();
+  turnHome.clear();
   set({ conversation: undefined, temporary: false, turns: [], running: false });
+}
+
+/** Whether a turn is still running in this conversation (the sidebar can mark it). */
+export function isRunning(conversationId: string | undefined): boolean {
+  return !!conversationId && live.has(conversationId);
 }
 
 const autoOpenListeners = new Set<(href: string) => void>();
@@ -110,9 +130,12 @@ export function subscribeAutoOpen(l: (href: string) => void): () => void {
 }
 
 function updateTurn(turnId: string, fn: (t: AssistantTurn) => AssistantTurn) {
-  set((s) => ({
-    turns: s.turns.map((t) => (t.id === turnId && t.role === 'assistant' ? fn(t) : t)),
-  }));
+  const map = (turns: Turn[]) => turns.map((t) => (t.id === turnId && t.role === 'assistant' ? fn(t) : t));
+  const home = turnHome.get(turnId);
+  const l = home ? live.get(home) : undefined;
+  if (l) l.turns = map(l.turns);
+  // the screen shows it only while its conversation is the open one
+  if (!home || state.conversation?.id === home) set((s) => ({ turns: l ? l.turns : map(s.turns) }));
 }
 
 /** Folds one engine event into the assistant turn it belongs to. Exported for the tests. */
@@ -146,8 +169,11 @@ export function applyEvent(turnId: string, e: TurnEvent) {
         ],
       }));
       break;
-    case 'tool_result':
-      if (e.envelope.autoOpen && e.envelope.href) for (const l of autoOpenListeners) l(e.envelope.href);
+    case 'tool_result': {
+      // a side panel opens only for the chat on screen, never for one running in the background
+      const home = turnHome.get(turnId);
+      if (e.envelope.autoOpen && e.envelope.href && (!home || state.conversation?.id === home))
+        for (const l of autoOpenListeners) l(e.envelope.href);
       updateTurn(turnId, (t) => ({
         ...t,
         blocks: t.blocks.map((b) =>
@@ -161,6 +187,7 @@ export function applyEvent(turnId: string, e: TurnEvent) {
         ),
       }));
       break;
+    }
     case 'web_search':
       updateTurn(turnId, (t) =>
         t.blocks.some((b) => b.type === 'web' && b.id === e.id)
@@ -320,9 +347,10 @@ export function threadActions(engine: ChatEngine) {
     userText: string,
     go: (conversationId: string, onEvent: (e: TurnEvent) => void, signal: AbortSignal) => Promise<void>,
   ) {
-    if (state.running) return;
+    if (state.conversation && live.has(state.conversation.id)) return;
     const c = await ensureConversation();
-    controller = new AbortController();
+    if (live.has(c.id)) return;
+    const controller = new AbortController();
     const assistant: AssistantTurn = {
       id: id(),
       role: 'assistant',
@@ -330,14 +358,14 @@ export function threadActions(engine: ChatEngine) {
       status: 'streaming',
       at: new Date().toISOString(),
     };
-    set((s) => ({
-      running: true,
-      turns: [
-        ...s.turns,
-        { id: id(), role: 'user', text: userText, at: new Date().toISOString() },
-        assistant,
-      ],
-    }));
+    const turns: Turn[] = [
+      ...state.turns,
+      { id: id(), role: 'user', text: userText, at: new Date().toISOString() },
+      assistant,
+    ];
+    live.set(c.id, { conversation: c, turns, controller });
+    turnHome.set(assistant.id, c.id);
+    set({ running: true, turns });
     try {
       await go(c.id, (e) => applyEvent(assistant.id, e), controller.signal);
     } catch (err) {
@@ -347,27 +375,35 @@ export function threadActions(engine: ChatEngine) {
         message: err instanceof Error ? err.message : String(err),
       });
     } finally {
-      controller = undefined;
-      set((s) => ({
-        running: false,
-        historyVersion: s.historyVersion + 1,
-        turns: s.turns.map((t) =>
+      const l = live.get(c.id);
+      live.delete(c.id);
+      turnHome.delete(assistant.id);
+      const finish = (ts: Turn[]) =>
+        ts.map((t) =>
           t.id === assistant.id && t.role === 'assistant' && t.status === 'streaming'
-            ? { ...t, status: 'done' }
+            ? { ...t, status: 'done' as const }
             : t,
-        ),
-      }));
+        );
+      set((s) =>
+        s.conversation?.id === c.id
+          ? { running: false, historyVersion: s.historyVersion + 1, turns: finish(l?.turns ?? s.turns) }
+          : { historyVersion: s.historyVersion + 1 },
+      );
     }
+  }
+  /** Shows a conversation: its running turn as it is now when one is going, else what the engine stored. */
+  function show(conversation: ChatConversation | undefined, turns: Turn[], temporary: boolean) {
+    const l = conversation ? live.get(conversation.id) : undefined;
+    set({ conversation, turns: l ? l.turns : turns, running: !!l, temporary });
   }
   return {
     newChat() {
-      controller?.abort();
-      set({ conversation: undefined, turns: [], running: false });
+      // a turn still running in the chat being left keeps going; it is there when the student opens it again
+      show(undefined, [], state.temporary);
     },
     setTemporary(on: boolean) {
       // a temporary chat is its own conversation: switching starts fresh either way
-      controller?.abort();
-      set({ temporary: on, conversation: undefined, turns: [], running: false });
+      show(undefined, [], on);
     },
     send: (text: string) => turn(text, (cid, on, signal) => engine.send(cid, text, on, signal)),
     runChip(chipId: string) {
@@ -388,7 +424,7 @@ export function threadActions(engine: ChatEngine) {
       return turn(`Attached ${label}: ${file.name}`, (cid, on) => engine.attach(cid, file, kind, on));
     },
     stop() {
-      controller?.abort();
+      if (state.conversation) live.get(state.conversation.id)?.controller.abort();
     },
     /** re-asks the student's message before this assistant turn */
     retry(turnId: string) {
@@ -468,9 +504,10 @@ export function threadActions(engine: ChatEngine) {
     },
     async open(conversationId: string) {
       if (state.conversation?.id === conversationId && state.running) return;
-      controller?.abort();
+      const running = live.get(conversationId);
+      if (running) return show(running.conversation, running.turns, false);
       const { conversation, messages, actions } = await engine.loadConversation(conversationId);
-      set({ conversation, turns: hydrate(messages, actions), running: false, temporary: false });
+      show(conversation, hydrate(messages, actions), false);
     },
     /** refreshes the open conversation from the engine (on returning to the page) */
     async refresh() {

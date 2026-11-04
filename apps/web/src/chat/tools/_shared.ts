@@ -236,7 +236,7 @@ export function cardRef(s: Suggestion, person?: Person): CardRef {
 export async function requirePerson(ctx: ToolContext, personId: string): Promise<Person> {
   const p = await db.people.get(personId);
   if (!p || p.userId !== ctx.user.id)
-    throw new Error('Orbit has no person with that id. Search for them first.');
+    throw new Error('That person is not in your People yet. Add them first, then I can help with them.');
   return p;
 }
 

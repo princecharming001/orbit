@@ -12,13 +12,15 @@ import { createFakeChatEngine, type FakeChatEngine } from '../testing/fakeEngine
 import { fixturePerson } from '../testing/fixtures';
 import type { ResultKind } from '../types';
 import { ChatHome } from './ChatHome';
-import { dayLabel, inReadingOrder, Thread, type TurnPiece, turnLayout } from './Thread';
+import { plainError } from './cards/ResultCard';
+import { dayLabel, inReadingOrder, plainMessage, Thread, type TurnPiece, turnLayout } from './Thread';
 import {
   type AssistantTurn,
   applyEvent,
   type Block,
   getThread,
   hydrate,
+  isRunning,
   resetThread,
   threadActions,
 } from './threadStore';
@@ -122,14 +124,52 @@ describe('the chat thread', () => {
       'prep',
       'list',
       'needs_confirmation',
-      'error',
     ];
     for (const k of kinds) expect($(`[data-testid="result-${k}"]`), k).not.toBeNull();
+    // a step that failed is the assistant's to work around: with an answer in the turn, it is never shown
+    expect($('[data-testid="result-error"]')).toBeNull();
     // the user's words sit in a bubble, the assistant's text streams in as plain text
     expect($('[data-testid="turn-user"]')?.textContent).toBe('show me everything');
     expect($('[data-testid="turn-assistant"]')?.textContent).toMatch(/That is the whole set/);
     // every card that lives on a page offers the way there
     expect($$('[data-testid="open-in-app"]').length).toBeGreaterThan(8);
+  });
+
+  it('keeps a turn running when the student opens a new chat, and shows it finished on coming back', async () => {
+    const slow = createFakeChatEngine({ delay: 15 });
+    const a = threadActions(slow);
+    const sent = a.send('show me everything');
+    await new Promise((r) => setTimeout(r, 20));
+    const first = getThread().conversation!;
+    expect(getThread().running).toBe(true);
+    act(() => a.newChat());
+    expect(getThread().conversation).toBeUndefined();
+    expect(getThread().running).toBe(false);
+    expect(isRunning(first.id)).toBe(true);
+    await sent;
+    expect(isRunning(first.id)).toBe(false);
+    await a.open(first.id);
+    const answer = getThread().turns.find((t) => t.role === 'assistant');
+    expect(answer && answer.role === 'assistant' && answer.status).not.toBe('stopped');
+    expect(JSON.stringify(getThread().turns)).toMatch(/That is the whole set/);
+  });
+
+  it('shows a failed step only when it is all a finished turn has, and then in plain words', () => {
+    const failed: Block = {
+      type: 'tool',
+      toolUseId: 'x',
+      toolName: 'create_drafts',
+      status: 'done',
+      envelope: { kind: 'error', data: undefined, summary: 'Orbit has no person with that id 4a1dd3c6' },
+    };
+    const said: Block = { type: 'text', text: 'Drafted all four.' };
+    expect(turnLayout([failed, said]).map((p) => p.type === 'block' && p.b.type)).toEqual(['text']);
+    expect(turnLayout([failed], true)).toEqual([]);
+    expect(turnLayout([failed])).toHaveLength(1);
+    expect(plainError('Orbit has no person with that id 4a1dd3c6')).toMatch(/^That did not work/);
+    expect(plainError('No friend on Orbit named Ana.')).toBe('No friend on Orbit named Ana.');
+    expect(plainMessage('other', 'Connection error.')).toMatch(/^Try again/);
+    expect(plainMessage('cap', 'You used $30 of $30.')).toBe('You used $30 of $30.');
   });
 
   it('folds a turn that looked many things up into one line, keeping the answer and the cards to act on', () => {

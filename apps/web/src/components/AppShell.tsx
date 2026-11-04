@@ -23,7 +23,8 @@ import { type ReactNode, Suspense, useEffect, useLayoutEffect, useMemo, useRef, 
 import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { useChatEngine } from '../chat/engineContext';
 import type { ChatConversation } from '../chat/types';
-import { threadActions, useThread } from '../chat/ui/threadStore';
+import { withoutRefs } from '../chat/ui/cards/next';
+import { isRunning, threadActions, useThread } from '../chat/ui/threadStore';
 import { db } from '../db/schema';
 import { dailyMaintenance } from '../engine/sync';
 import { draftLists, startedDrafts } from '../engine/today';
@@ -695,7 +696,14 @@ function Recent({ chat }: { chat: ReturnType<typeof threadActions> }) {
                           )}
                           data-testid="recent-item"
                         >
-                          {c.title}
+                          {isRunning(c.id) && thread.conversation?.id !== c.id && (
+                            <span
+                              className="inline-block w-1.5 h-1.5 rounded-full bg-accent animate-pulse mr-1.5 align-middle"
+                              title="Still working on this"
+                              data-testid="recent-running"
+                            />
+                          )}
+                          {withoutRefs(c.title)}
                         </button>
                         <span className="absolute right-1 top-1 flex gap-0.5 opacity-0 group-hover:opacity-100 focus-within:opacity-100">
                           <button
