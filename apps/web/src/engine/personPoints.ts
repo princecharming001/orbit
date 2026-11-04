@@ -410,9 +410,10 @@ export async function loadPointContext(
   // small threads with one of these people on them: who was on a thread of three or fewer with whom
   const smallThreads = new Set<string>();
   for (const t of threads) {
-    const on = [...new Set(t.participantPersonIds)];
+    // older and synced threads can lack either list; a missing one counts as empty, never a crash
+    const on = [...new Set(t.participantPersonIds ?? [])];
     // three people at most, the student included: the two of them and the student (whose address is among them)
-    if (on.length !== 2 || t.participantEmails.length > 3 || !on.some((id) => ids.has(id))) continue;
+    if (on.length !== 2 || (t.participantEmails ?? []).length > 3 || !on.some((id) => ids.has(id))) continue;
     for (const a of on) for (const b of on) if (a < b) smallThreads.add(`${a}|${b}`);
   }
   const resume =
