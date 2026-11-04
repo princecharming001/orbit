@@ -366,8 +366,21 @@ export function threadActions(engine: ChatEngine) {
     live.set(c.id, { conversation: c, turns, controller });
     turnHome.set(assistant.id, c.id);
     set({ running: true, turns });
+    // a new chat is in Recent from its first word, named by then: a student who leaves during the first answer can
+    // see it is still working and go back to it
+    let listed = false;
     try {
-      await go(c.id, (e) => applyEvent(assistant.id, e), controller.signal);
+      await go(
+        c.id,
+        (e) => {
+          if (!listed) {
+            listed = true;
+            set((s) => ({ historyVersion: s.historyVersion + 1 }));
+          }
+          applyEvent(assistant.id, e);
+        },
+        controller.signal,
+      );
     } catch (err) {
       applyEvent(assistant.id, {
         type: 'error',

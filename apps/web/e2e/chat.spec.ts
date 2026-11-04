@@ -365,6 +365,68 @@ test.describe('Chat home', () => {
     await expect(page.getByTestId('turn-user').last()).toHaveText('hello');
   });
 
+  test('a running answer keeps going on another page, in another chat and behind another tab', async ({
+    page,
+    context,
+  }) => {
+    test.setTimeout(120_000);
+    await home(page);
+    const answer = page.getByTestId('turn-assistant').last();
+    const finished = async () => {
+      await expect(answer).toContainText('Still working, line 40', { timeout: 20_000 });
+      await expect(page.getByTestId('turn-stopped')).toHaveCount(0);
+      await expect(page.getByTestId('composer-stop')).toHaveCount(0);
+    };
+    const reopen = async () => {
+      await page.getByTestId('recent-item').first().click();
+      await expect(page.getByTestId('turn-assistant').first()).toBeVisible();
+    };
+
+    // 1. another page of Orbit while it works: the Recent dot marks it, and it is done when the student comes back
+    await ask(page, 'slow one please');
+    await expect(answer).toContainText('Still working, line 2');
+    await page.getByRole('link', { name: 'People', exact: true }).click();
+    await expect(page).toHaveURL(/\/people/);
+    // a new chat is listed while its first answer is still going, marked as working
+    await expect(page.getByTestId('recent-running')).toBeVisible();
+    await page.waitForTimeout(1_500);
+    await reopen();
+    await finished();
+
+    // 2. a new chat opened while it works: the first one keeps going
+    await ask(page, 'slow one please');
+    await expect(answer).toContainText('Still working, line 2');
+    await page.getByRole('button', { name: 'New chat' }).click();
+    await expect(page.getByTestId('greeting')).toBeVisible();
+    await expect(page.getByTestId('recent-running')).toBeVisible();
+    await expect(page.getByTestId('recent-running')).toHaveCount(0, { timeout: 20_000 });
+    await reopen();
+    await finished();
+
+    // 3. another browser tab in front, this one hidden: it still finishes
+    await ask(page, 'slow one please');
+    await expect(answer).toContainText('Still working, line 2');
+    const other = await context.newPage();
+    await other.goto('about:blank');
+    await other.bringToFront();
+    await page.evaluate(() => {
+      Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => 'hidden' });
+      Object.defineProperty(document, 'hidden', { configurable: true, get: () => true });
+      document.dispatchEvent(new Event('visibilitychange'));
+      window.dispatchEvent(new Event('blur'));
+    });
+    await other.waitForTimeout(4_000);
+    await page.evaluate(() => {
+      Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => 'visible' });
+      Object.defineProperty(document, 'hidden', { configurable: true, get: () => false });
+      document.dispatchEvent(new Event('visibilitychange'));
+      window.dispatchEvent(new Event('focus'));
+    });
+    await page.bringToFront();
+    await other.close();
+    await finished();
+  });
+
   test('a Temporary chat is not saved; the sidebar lists, opens, renames and archives the others', async ({
     page,
   }) => {

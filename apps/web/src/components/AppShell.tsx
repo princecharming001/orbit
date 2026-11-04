@@ -600,6 +600,9 @@ function Recent({ chat }: { chat: ReturnType<typeof threadActions> }) {
   const engine = useChatEngine();
   const thread = useThread();
   const nav = useNavigate();
+  // a running chat is marked whenever the student is not looking at it: another chat is open, or another page is
+  const onChat = useLocation().pathname === '/';
+  const watching = (id: string) => onChat && thread.conversation?.id === id;
   // undefined until the first list arrives: the sidebar shows lines, never "No conversations yet", meanwhile
   const [items, setItems] = useState<ChatConversation[]>();
   const [editing, setEditing] = useState<{ id: string; title: string } | undefined>();
@@ -696,7 +699,7 @@ function Recent({ chat }: { chat: ReturnType<typeof threadActions> }) {
                           )}
                           data-testid="recent-item"
                         >
-                          {isRunning(c.id) && thread.conversation?.id !== c.id && (
+                          {isRunning(c.id) && !watching(c.id) && (
                             <span
                               className="inline-block w-1.5 h-1.5 rounded-full bg-accent animate-pulse mr-1.5 align-middle"
                               title="Still working on this"
