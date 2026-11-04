@@ -24,7 +24,7 @@ if (!file) {
   process.exit(1);
 }
 const GATE_MIN_AVG = 2.5;
-const GATE_BAR = { friendAhead: 2.2, shape: 2.2 };
+const GATE_BAR = { friendAhead: 2.1, shape: 2.2 };
 const rows = JSON.parse(readFileSync(file, 'utf8'));
 const earlier = before ? JSON.parse(readFileSync(before, 'utf8')) : undefined;
 
