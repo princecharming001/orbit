@@ -606,11 +606,24 @@ export const answerReplyTool = defineTool({
       sent: false,
       status: r.local ? r.draft.status : r.draft.status,
     };
+    const summary = `Drafted the reply to ${first} around your answer. Nothing is sent until you approve it${r.local ? ' in Drafts' : ' in Drafts, Replies'}.`;
+    // the draft itself goes in the thread, so the student reads what it says before approving; the server's copy is
+    // in this browser by now (keepServerDraft), under the same id
+    const saved = await db.outbound.get(r.draft.id);
+    const person = personId ? await db.people.get(personId) : undefined;
+    if (saved)
+      return ok(
+        'draft',
+        { ...data, draft: saved, person },
+        { ...data, body: wrapped(ctx, 'draft', body, 1500), shownAsCard: true },
+        summary,
+        `/inbox?draft=${saved.id}`,
+      );
     return ok(
       'text',
       data,
       { ...data, body: wrapped(ctx, 'draft', body, 1500) },
-      `Drafted the reply to ${first} around your answer. Nothing is sent until you approve it${r.local ? ' in Drafts' : ' in Drafts, Replies'}.`,
+      `${summary}\n\n${body}`,
       personId ? `/people/${personId}?tab=messages` : '/inbox?tab=replies',
     );
   },

@@ -570,6 +570,8 @@ export function createFakeOrbitApi(
             clock,
           );
         draft.kind = 'reply';
+        // a reply goes into the thread it answers, under its subject: it has none of its own (as on the server)
+        draft.subject = null;
         draft.body = draft.body.replace(/\[ASK USER:[^\]]*\]/g, answer);
         draft.needsInput = [];
         draft.updatedAt = iso(clock);
