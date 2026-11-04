@@ -28,7 +28,18 @@ import { listReplies, REPLY_CLASS_LABELS } from '../../engine/replies';
 import { isServerUser } from '../../integrations/orbitApi';
 import { z } from '../../zod';
 import type { ToolContext } from '../types';
-import { type AnyTool, clip, defineTool, err, ok, plural, toModel, wrapped } from './_shared';
+import {
+  type AnyTool,
+  clip,
+  defineTool,
+  err,
+  OPEN_PAUSE_UNTIL,
+  ok,
+  openEndedPause,
+  plural,
+  toModel,
+  wrapped,
+} from './_shared';
 
 /** What each mode means, in the student's words (plan 29 §B1). */
 export const MODE_TEXT: Record<AutopilotMode, { title: string; body: string }> = {
@@ -355,7 +366,7 @@ export const autopilotStatusTool = defineTool({
           ? why.answer
           : `Orbit has no one called ${input.personName} in your people, so it never weighed them.`
         : '',
-      `${{ off: 'Orbit sends nothing on its own (Off)', assist: 'Assist is on', autopilot: 'Autopilot is on' }[s.mode] ?? `Mode: ${s.mode}`}${s.pausedUntil ? `, paused until ${when(s.pausedUntil, ctx)}` : ''}.`,
+      `${{ off: 'Orbit sends nothing on its own (Off)', assist: 'Assist is on', autopilot: 'Autopilot is on' }[s.mode] ?? `Mode: ${s.mode}`}${s.pausedUntil ? (openEndedPause(s.pausedUntil, ctx.now) ? ', paused until you say resume' : `, paused until ${when(s.pausedUntil, ctx)}`) : ''}.`,
       `Sent ${s.sentToday.length} on its own today${s.sentToday.length ? ` (${s.sentToday.map((i) => i.personName).join(', ')})` : ''}${booked ? `, ${plural(booked, 'call')} booked` : ''}; ${plural(s.queued.length, 'message')} queued for the morning${s.queued.length ? ` (${s.queued.map((i) => i.personName).join(', ')}${taps ? `; ${taps} waiting for your tap` : ''})` : ''}; ${plural(s.held.length, 'message')} held${s.held.length ? ` (${s.held.map((i) => i.personName).join(', ')})` : ''}; ${plural(s.needsYou.length, 'reply', 'replies')} need you.`,
       s.friendAsks?.length
         ? `${plural(s.friendAsks.length, 'ask')} to a friend ready for your tap: ${s.friendAsks.map((a) => `${a.friendName} for ${a.targetName}`).join(', ')}.`
@@ -375,7 +386,7 @@ export const autopilotStatusTool = defineTool({
       .join(' ');
     const data = {
       mode: s.mode,
-      pausedUntil: s.pausedUntil,
+      pausedUntil: openEndedPause(s.pausedUntil, ctx.now) ? 'until the student says resume' : s.pausedUntil,
       pausedGoals: s.pausedGoals.map((g) => ({
         goalId: g.goalId,
         title: g.title,
@@ -692,7 +703,7 @@ export const pauseAutopilotTool = defineTool({
       const t = new Date(/^\d{4}-\d{2}-\d{2}$/.test(input.until) ? `${input.until}T23:59:00` : input.until);
       if (Number.isNaN(t.getTime())) return err('Say the date as YYYY-MM-DD.');
       until = t.toISOString();
-    } else until = new Date(ctx.now.getTime() + 365 * 86_400_000).toISOString();
+    } else until = OPEN_PAUSE_UNTIL;
     const r = await pauseAutopilot(ctx.user, { until, goalId: input.goalId }, ctx.now);
     if (!r.ok) throw new Error(r.message);
     const goal = input.goalId ? await db.userGoals.get(input.goalId) : undefined;
@@ -705,7 +716,11 @@ export const pauseAutopilotTool = defineTool({
       {
         changes: [{ label: goal ? `Autopilot for ${goal.title}` : 'Autopilot', to: until ? 'Paused' : 'On' }],
       },
-      { pausedUntil: until, goalId: input.goalId ?? null, cancelled: r.cancelled },
+      {
+        pausedUntil: until && !input.until ? 'until the student says resume' : until,
+        goalId: input.goalId ?? null,
+        cancelled: r.cancelled,
+      },
       summary,
       '/settings/autopilot',
     );

@@ -445,6 +445,12 @@ describe('account mode, against a fake orbit-api', () => {
     const paused = await execute('pause_outreach', { until: '2026-12-20' }, ctx());
     expect(paused.summary).toMatch(/paused until 2026-12-20/);
     expect(api.state.pausedUntil).toBe('2026-12-20');
+    // "until I say": no end date the student never chose, said as theirs to lift
+    const open = await execute('pause_outreach', { untilResumed: true }, ctx());
+    expect(open.summary).toBe(
+      'Outreach is paused until you say resume. Nothing is drafted or sent until then.',
+    );
+    expect(api.state.pausedUntil).toBe('2099-12-31');
     await execute('pause_outreach', {}, ctx());
     expect(api.state.pausedUntil).toBeNull();
     api.state.due = [

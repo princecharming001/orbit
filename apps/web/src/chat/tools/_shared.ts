@@ -133,6 +133,15 @@ export function fmtDay(iso: string | undefined, ctx: Pick<ToolContext, 'user'>):
 
 export const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
 
+/** The end a pause "until I say resume" is stored with: the server needs a time, the student never sees it. */
+export const OPEN_PAUSE_UNTIL = '2099-12-31T23:59:00.000Z';
+/**
+ * A pause with no end the student chose: the open end above, or one set more than 300 days out (older pauses until
+ * lifted were stored a year ahead). Said "until you say resume", never as its record date.
+ */
+export const openEndedPause = (until: string | null | undefined, now: Date): boolean =>
+  !!until && Date.parse(until) - now.getTime() > 300 * 86_400_000;
+
 // ---------- compact references ----------
 
 export interface PersonRef {

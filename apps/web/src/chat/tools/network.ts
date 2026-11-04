@@ -42,7 +42,18 @@ import { addSourced, candidateLine, providerNames, searchPeople } from '../../en
 import { callApi, isAccountMode, isServerUser } from '../../integrations/orbitApi';
 import { z } from '../../zod';
 import type { ResultEnvelope, ToolContext } from '../types';
-import { type AnyTool, clip, defineTool, ok, plural, requirePerson, toModel, wrapped } from './_shared';
+import {
+  type AnyTool,
+  clip,
+  defineTool,
+  OPEN_PAUSE_UNTIL,
+  ok,
+  openEndedPause,
+  plural,
+  requirePerson,
+  toModel,
+  wrapped,
+} from './_shared';
 import { createDrafts } from './drafts';
 import { routesToMany } from './read';
 
@@ -1066,26 +1077,33 @@ export const pauseOutreachTool = defineTool({
   name: 'pause_outreach',
   kind: 'write',
   description:
-    'Call this when the student asks to pause outreach, go quiet for a while (exams, vacation), or to resume. Until the date nothing is drafted or sent for them. Leave until out to resume now. Needs an Orbit account.',
+    'Call this when the student asks to pause outreach, go quiet for a while (exams, vacation), or to resume. Until the date nothing is drafted or sent for them. With no date they gave ("until I say", "for now"), set untilResumed instead of picking one. Leave both out to resume now. Needs an Orbit account.',
   input: z.object({
     until: z
       .string()
       .regex(/^\d{4}-\d{2}-\d{2}$/)
       .optional()
-      .describe('The last day of the pause as YYYY-MM-DD; leave out to resume.'),
+      .describe('The last day of the pause as YYYY-MM-DD, only a day the student said; leave out to resume.'),
+    untilResumed: z.boolean().optional().describe('Pause with no end date, until the student says resume.'),
   }),
   capabilities: ['outreach_pause'],
   progress: 'Pausing outreach',
   async execute(input, ctx) {
     if (!accountReady(ctx)) return needsAccount('Pausing outreach');
-    const r = await pauseOutreach(ctx.user, input.until ?? null);
+    const r = await pauseOutreach(
+      ctx.user,
+      input.until ?? (input.untilResumed ? OPEN_PAUSE_UNTIL.slice(0, 10) : null),
+    );
     if (!r.ok) throw new Error(r.message);
+    // a pause with no end the student chose is said as theirs to lift, never as its record date
+    const open = openEndedPause(r.until, ctx.now);
+    const shown = open ? 'you say resume' : r.until;
     return ok(
       'settings',
-      { changes: [{ label: 'Outreach paused until', to: r.until ?? 'resumed' }] },
-      { quietUntil: r.until },
+      { changes: [{ label: 'Outreach paused until', to: shown ?? 'resumed' }] },
+      { quietUntil: open ? 'until the student says resume' : r.until },
       r.until
-        ? `Outreach is paused until ${r.until}. Nothing is drafted or sent until then.`
+        ? `Outreach is paused until ${shown}. Nothing is drafted or sent until then.`
         : 'Outreach is back on.',
       '/settings/outreach',
     );
