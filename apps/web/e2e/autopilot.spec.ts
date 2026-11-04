@@ -219,8 +219,8 @@ test.describe('autopilot (plan 29 B7, fake orbit-api)', () => {
     const card = page.getByTestId('autopilot-breaker-card');
     await expect(card).toContainText('Chloe Dubois');
     await expect(card).toContainText('Paused Ramp first messages');
-    expect(api.state.autopilot.pausedGoals.length).toBeGreaterThan(0);
-    expect(api.state.autopilot.pausedGoals[0]!.goalId).toBe('goal_internships');
+    // the card can show before the fake server records the pause: wait for it, never read it once
+    await expect.poll(() => api.state.autopilot.pausedGoals[0]?.goalId).toBe('goal_internships');
     // nothing is said with a dash or an exclamation mark
     await expect(card).not.toContainText(/[–—!]/);
   });
