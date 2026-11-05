@@ -466,26 +466,27 @@ describe('budget (§13.5)', () => {
     expect(CAPS.map((c) => c.id)).toContain('apollo_match_daily_credits');
   });
 
-  it('caps a user at $20 in total, counting what the chat spent through orbit-claude', async () => {
-    expect(USER_TOTAL_USD).toBe(20);
-    expect(MONTHLY_TOTAL_USD).toBeGreaterThan(USER_TOTAL_USD);
+  it('caps a user at $100 in total, counting what the chat spent through orbit-claude', async () => {
+    // a stop against a runaway account, well above the month cap a normal student never reaches
+    expect(USER_TOTAL_USD).toBe(100);
+    expect(MONTHLY_TOTAL_USD).toBeLessThan(USER_TOTAL_USD);
     const u = await makeUser(t.db);
     // last year's server spend still counts: the cap does not reset
     await t.db.sql`insert into orbit.usage_ledger (user_id, provider, operation, units, cost_usd, created_at)
-      values (${u}::uuid, 'exa', 'search', 1, 12::numeric, now() - interval '400 days')`;
+      values (${u}::uuid, 'exa', 'search', 1, 60::numeric, now() - interval '400 days')`;
     expect(await checkBudget(t.db, u, { provider: 'anthropic', costUsd: 0.5 })).toEqual({ ok: true });
-    await t.db.sql`select public.orbit_spend_add(${`user:${u}`}, 7.9::numeric)`;
+    await t.db.sql`select public.orbit_spend_add(${`user:${u}`}, 39.9::numeric)`;
     expect(await checkBudget(t.db, u, { provider: 'anthropic', costUsd: 0.05 })).toEqual({ ok: true });
     expect(await checkBudget(t.db, u, { provider: 'anthropic', costUsd: 0.5 })).toMatchObject({
       ok: false,
       cap: 'user_total_usd',
-      limit: 20,
+      limit: 100,
     });
     // the chat's proxy sees the same total
     const [row] = await t.db.sql<{
       total: string;
     }>`select public.orbit_spend_total(${`user:${u}`})::text as total`;
-    expect(Number(row!.total)).toBeCloseTo(19.9, 5);
+    expect(Number(row!.total)).toBeCloseTo(99.9, 5);
     const [other] = await t.db.sql<{
       total: string;
     }>`select public.orbit_spend_total('client:abcdefghijklmnop')::text as total`;
