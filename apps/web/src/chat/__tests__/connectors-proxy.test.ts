@@ -231,14 +231,16 @@ describe('orbit-connectors proxy', () => {
     // a forged report: wrong signature, or another sign-in's reference
     const forged = notifyUrl.replace(/sig=[^&]+/, 'sig=nope');
     expect(
-      (await report(forged, { status: 'CREATION_SUCCESS', account_id: 'acc_evil', name: 'orbit_ref1' })).status,
+      (await report(forged, { status: 'CREATION_SUCCESS', account_id: 'acc_evil', name: 'orbit_ref1' }))
+        .status,
     ).toBe(403);
     expect(
       (await report(notifyUrl, { status: 'CREATION_SUCCESS', account_id: 'acc_evil', name: 'ref2' })).status,
     ).toBe(400);
     // Unipile's real report
     expect(
-      (await report(notifyUrl, { status: 'CREATION_SUCCESS', account_id: 'acc_9', name: 'orbit_ref1' })).status,
+      (await report(notifyUrl, { status: 'CREATION_SUCCESS', account_id: 'acc_9', name: 'orbit_ref1' }))
+        .status,
     ).toBe(200);
     expect(await (await handler(post('/connect/status', { ref: 'orbit_ref1' }))).json()).toEqual({
       status: 'connected',
@@ -272,7 +274,9 @@ describe('orbit-connectors proxy', () => {
     // its state says when the sign-in is through: the same id, a fresh token
     expect(
       await (
-        await handler(post('/connect/status', { ref: 'orbit_ref1', reconnectAccountId: 'a1', token: TOKEN.a1 }))
+        await handler(
+          post('/connect/status', { ref: 'orbit_ref1', reconnectAccountId: 'a1', token: TOKEN.a1 }),
+        )
       ).json(),
     ).toEqual({ status: 'connected', accountId: 'a1', token: TOKEN.a1 });
     expect(upstream.at(-1)!.url).toContain('/api/v1/accounts/a1');
@@ -313,12 +317,19 @@ describe('orbit-connectors proxy', () => {
       {},
       accounts([{ id: 'acc_1', name: 'orbit_ref1', sources: [{ status: 'CREDENTIALS' }] }]),
     );
-    expect(await (await badCreds.handler(post('/connect/status', { ref: 'orbit_ref1' }))).json()).toMatchObject({
+    expect(
+      await (await badCreds.handler(post('/connect/status', { ref: 'orbit_ref1' }))).json(),
+    ).toMatchObject({
       status: 'error',
       message: expect.stringMatching(/did not accept the sign-in/),
     });
-    const stopped = harness({}, accounts([{ id: 'acc_1', name: 'orbit_ref1', sources: [{ status: 'STOPPED' }] }]));
-    expect(await (await stopped.handler(post('/connect/status', { ref: 'orbit_ref1' }))).json()).toMatchObject({
+    const stopped = harness(
+      {},
+      accounts([{ id: 'acc_1', name: 'orbit_ref1', sources: [{ status: 'STOPPED' }] }]),
+    );
+    expect(
+      await (await stopped.handler(post('/connect/status', { ref: 'orbit_ref1' }))).json(),
+    ).toMatchObject({
       status: 'error',
     });
   });
