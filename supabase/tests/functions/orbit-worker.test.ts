@@ -203,6 +203,51 @@ describe('runTick', () => {
     expect(visible).toHaveLength(4 - s.processed);
   });
 
+  it('closes runs an earlier tick left running, as died with the isolate', async () => {
+    await t.db.sql`insert into orbit.job_runs (queue, msg_id, kind, status, attempt, started_at)
+      values ('orbit_score', 1, 'score.user', 'running', 1, now() - interval '20 minutes'),
+             ('orbit_score', 2, 'score.user', 'running', 1, now() - interval '2 minutes')`;
+    const s = await runTick({ db: t.db, handlers: {} });
+    expect(s.swept).toBe(1);
+    const r = await runs();
+    expect(r.map((x) => [x.status, x.error])).toEqual([
+      ['error', 'died with the isolate'],
+      ['running', null],
+    ]);
+  });
+
+  it('does not start a job whose kind needs more time than the budget has left', async () => {
+    const ran = vi.fn(async () => {});
+    await sqlQueue(t.db).enqueue({ kind: 'sync.linkedin', userId: null, payload: {} });
+    let ms = 0;
+    // 30 s left: a LinkedIn sync needs 65 s, so it waits for the next tick and is visible at once
+    const s = await runTick({
+      db: t.db,
+      budgetMs: 30_000,
+      clock: () => (ms += 10),
+      handlers: { 'sync.linkedin': ran },
+    });
+    expect(ran).not.toHaveBeenCalled();
+    expect(s.stoppedBy).toBe('budget');
+    const visible = await t.db.sql`select 1 from pgmq.q_orbit_sync where vt <= now()`;
+    expect(visible).toHaveLength(1);
+  });
+
+  it('runs a few CPU-heavy jobs per tick and leaves the rest for a fresh isolate', async () => {
+    const ran = vi.fn(async () => {});
+    for (let i = 0; i < 5; i++)
+      await sqlQueue(t.db).enqueue({ kind: 'score.page', userId: null, payload: { i } });
+    const s = await runTick({ db: t.db, handlers: { 'score.page': ran } });
+    expect(ran).toHaveBeenCalledTimes(3);
+    expect(s.stoppedBy).toBe('cpu');
+    expect(await left('orbit_score')).toBe(2);
+    const visible = await t.db.sql`select 1 from pgmq.q_orbit_score where vt <= now()`;
+    expect(visible).toHaveLength(2);
+    const again = await runTick({ db: t.db, handlers: { 'score.page': ran } });
+    expect(again.processed).toBe(2);
+    expect(await left('orbit_score')).toBe(0);
+  });
+
   it('health.snapshot writes orbit.health() to the audit log', async () => {
     await sqlQueue(t.db).enqueue({ kind: 'health.snapshot', userId: null, payload: {} });
     await runTick({ db: t.db, handlers: defaultHandlers() });

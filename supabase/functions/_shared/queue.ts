@@ -32,6 +32,7 @@ export const KIND_QUEUE: Record<string, QueueName> = {
   'voice.distill': 'orbit_cadence',
   'health.snapshot': 'orbit_cadence',
   'score.user': 'orbit_score',
+  'score.page': 'orbit_score',
   'score.person': 'orbit_score',
   friend_shares_refresh: 'orbit_score',
   'enrich.dossier': 'orbit_enrich',

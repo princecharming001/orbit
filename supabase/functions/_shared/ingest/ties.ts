@@ -77,11 +77,13 @@ export async function refreshTies(
   db: Db,
   userId: string,
   now: Date,
-  scope: { personIds?: string[] } = {},
+  scope: { personIds?: string[]; allKinds?: boolean } = {},
 ): Promise<{ upserted: number; deleted: number }> {
   const scoped = !!scope.personIds;
   const focus = scope.personIds ?? [];
   if (scoped && !focus.length) return { upserted: 0, deleted: 0 };
+  // the nightly rebuild runs one page of people at a time (score.page): every kind, for the pairs touching the page
+  const full = !scoped || !!scope.allKinds;
 
   // people (all: inferTies needs the address book to read who wrote to whom)
   const rows = await db.query<Record<string, unknown>>(
@@ -186,8 +188,8 @@ export async function refreshTies(
     attendeePersonIds: e.attendee_person_ids,
   }));
 
-  // affiliations and organizations (the nightly rebuild only)
-  const affiliations = scoped
+  // affiliations and organizations (the nightly rebuild only, whole or by page)
+  const affiliations = !full
     ? []
     : (
         await db.sql<Record<string, unknown>>`
@@ -201,7 +203,7 @@ export async function refreshTies(
         } as unknown as Row.Affiliations),
       );
   const organizations = new Map<string, Organization>();
-  if (!scoped)
+  if (full)
     for (const o of await db.sql<{
       id: string;
       name: string;
@@ -228,7 +230,7 @@ export async function refreshTies(
     messages,
     now,
   });
-  const keep = new Set<string>(scoped ? INTERACTION_KINDS : INFERRED_KINDS);
+  const keep = new Set<string>(full ? INFERRED_KINDS : INTERACTION_KINDS);
   const inFocus = (t: { a: string; b: string }) => !scoped || focus.includes(t.a) || focus.includes(t.b);
   const out: TieRow[] = inferred
     .filter((t: Tie) => keep.has(t.kind) && inFocus({ a: t.aId, b: t.bId }))
@@ -242,7 +244,7 @@ export async function refreshTies(
       firstSeenAt: t.firstSeenAt,
       lastSeenAt: t.lastSeenAt,
     }));
-  if (!scoped) out.push(...sameCityTies(people.filter((p) => !p.hiddenAt)));
+  if (full) out.push(...sameCityTies(people.filter((p) => !p.hiddenAt)).filter(inFocus));
 
   for (const part of chunks(out, 500)) await upsertTies(db, userId, part, now);
   const upserted = out.length;

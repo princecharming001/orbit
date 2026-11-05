@@ -97,6 +97,23 @@ export const MAX_READS = 5;
  */
 export const MAX_READS_UNFINISHED = MAX_READS + 5;
 export const DEFAULT_BUDGET_MS = 110_000;
+/**
+ * Kinds whose work is JavaScript CPU (tie scoring) rather than waiting on a provider. The isolate's CPU allowance is
+ * shared by every job a tick runs, so a tick runs a few of these and only while it is fresh; the rest wait for the
+ * next tick, a minute away, in a new isolate.
+ */
+export const HEAVY_KINDS: ReadonlySet<string> = new Set(['score.user', 'score.page', 'score.person']);
+export const HEAVY_PER_TICK = 3;
+/** a heavy job is not started once the tick has already run this many jobs of any kind */
+export const HEAVY_AFTER_JOBS = 6;
+/** wall clock a kind needs to finish cleanly: it is not started with less than this left in the budget */
+export const RESERVE_MS: Readonly<Record<string, number>> = {
+  'sync.linkedin': 65_000,
+  'sync.gmail.backfill': 58_000,
+  'score.user': 20_000,
+  'score.page': 20_000,
+};
+export const DEFAULT_RESERVE_MS = 8_000;
 
 export const backoffSec = (readCt: number) => 30 * 2 ** Math.max(0, readCt - 1);
 
@@ -118,7 +135,10 @@ export interface TickSummary {
   skipped: number;
   deadLettered: number;
   byQueue: Partial<Record<QueueName, number>>;
-  stoppedBy: 'empty' | 'budget';
+  /** `cpu`: a heavy job was left for the next tick's fresh isolate */
+  stoppedBy: 'empty' | 'budget' | 'cpu';
+  /** runs of earlier ticks found still 'running' and closed as died with the isolate */
+  swept?: number;
 }
 
 function parse(message: unknown): Omit<Job, 'queue' | 'msgId' | 'readCt'> | undefined {
@@ -157,18 +177,47 @@ export async function runTick(deps: WorkerDeps): Promise<TickSummary> {
     stoppedBy: 'empty',
   };
 
+  // runs an earlier tick never finished (the isolate died under them: a CPU or memory limit) are closed, so the log
+  // is honest and health() counts them
+  const swept = await db.sql<{ id: number }>`
+    update orbit.job_runs
+       set status = 'error', error = 'died with the isolate', finished_at = ${now()}::timestamptz,
+           duration_ms = (extract(epoch from (${now()}::timestamptz - started_at)) * 1000)::int
+     where status = 'running' and started_at < ${now()}::timestamptz - interval '10 minutes'
+     returning id`;
+  if (swept.length) s.swept = swept.length;
+
+  let heavy = 0;
+  const closed = new Set<QueueName>();
   outer: while (clock() < deadline) {
     for (const q of QUEUES) {
+      if (closed.has(q)) continue;
       const batch = await queue.read(q, VT_SEC, BATCH);
       if (!batch.length) continue;
       const readAt = clock();
+      // hand messages back right away instead of waiting out their visibility timeout
+      const handBack = async (rest: typeof batch) => {
+        for (const r of rest) await queue.setVt(q, r.msgId, 0);
+      };
       for (let i = 0; i < batch.length; i++) {
         const msg = batch[i]!;
-        if (clock() >= deadline) {
-          // out of time: hand the rest back right away instead of waiting out their visibility timeout
-          for (const rest of batch.slice(i)) await queue.setVt(q, rest.msgId, 0);
+        const kind = parse(msg.message)?.kind;
+        // out of time for this kind: it is not started with less than it needs, so it never dies at the wall clock
+        const need = (kind ? RESERVE_MS[kind] : undefined) ?? DEFAULT_RESERVE_MS;
+        if (clock() + need > deadline) {
+          await handBack(batch.slice(i));
           s.stoppedBy = 'budget';
           break outer;
+        }
+        if (kind && HEAVY_KINDS.has(kind)) {
+          if (heavy >= HEAVY_PER_TICK || s.processed >= HEAVY_AFTER_JOBS) {
+            // CPU-heavy work waits for a fresh isolate: the rest of this queue is left for the next tick
+            await handBack(batch.slice(i));
+            closed.add(q);
+            s.stoppedBy = 'cpu';
+            continue outer;
+          }
+          heavy++;
         }
         // a message waiting behind slow ones is hidden again before it runs, so the next tick cannot pick it up
         // too and run it twice

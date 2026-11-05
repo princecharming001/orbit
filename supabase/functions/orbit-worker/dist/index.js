@@ -27,7 +27,7 @@ var CAPS = [
   }
 ];
 var MONTHLY_TOTAL_USD = 25;
-var USER_TOTAL_USD = 20;
+var USER_TOTAL_USD = 100;
 var NEVER = "9999-12-31T00:00:00.000Z";
 function windowStart(window, now) {
   return window === "day" ? new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate())) : new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1));
@@ -1409,6 +1409,7 @@ var KIND_QUEUE = {
   "voice.distill": "orbit_cadence",
   "health.snapshot": "orbit_cadence",
   "score.user": "orbit_score",
+  "score.page": "orbit_score",
   "score.person": "orbit_score",
   friend_shares_refresh: "orbit_score",
   "enrich.dossier": "orbit_enrich",
@@ -14548,6 +14549,7 @@ async function refreshTies(db2, userId, now, scope = {}) {
   const scoped = !!scope.personIds;
   const focus = scope.personIds ?? [];
   if (scoped && !focus.length) return { upserted: 0, deleted: 0 };
+  const full = !scoped || !!scope.allKinds;
   const rows = await db2.query(
     `select ${PERSON_COLUMNS} from orbit.people p
       where p.user_id = $1::uuid and p.deleted_at is null and p.merged_into is null and not p.is_self`,
@@ -14618,7 +14620,7 @@ async function refreshTies(db2, userId, now, scope = {}) {
     })),
     attendeePersonIds: e.attendee_person_ids
   }));
-  const affiliations = scoped ? [] : (await db2.sql`
+  const affiliations = !full ? [] : (await db2.sql`
           select a.* from orbit.affiliations a join orbit.people p on p.id = a.person_id
            where a.user_id = ${userId}::uuid and p.merged_into is null and p.deleted_at is null and not p.is_self`).map(
     (a) => affiliationFromRow({
@@ -14628,7 +14630,7 @@ async function refreshTies(db2, userId, now, scope = {}) {
     })
   );
   const organizations = /* @__PURE__ */ new Map();
-  if (!scoped)
+  if (full)
     for (const o of await db2.sql`
       select id, name, name_norm, domains, size_bucket from orbit.organizations where user_id = ${userId}::uuid`)
       organizations.set(o.id, {
@@ -14648,7 +14650,7 @@ async function refreshTies(db2, userId, now, scope = {}) {
     messages,
     now
   });
-  const keep = new Set(scoped ? INTERACTION_KINDS : INFERRED_KINDS);
+  const keep = new Set(full ? INFERRED_KINDS : INTERACTION_KINDS);
   const inFocus = (t) => !scoped || focus.includes(t.a) || focus.includes(t.b);
   const out = inferred.filter((t) => keep.has(t.kind) && inFocus({ a: t.aId, b: t.bId })).map((t) => ({
     a: t.aId,
@@ -14660,7 +14662,7 @@ async function refreshTies(db2, userId, now, scope = {}) {
     firstSeenAt: t.firstSeenAt,
     lastSeenAt: t.lastSeenAt
   }));
-  if (!scoped) out.push(...sameCityTies(people.filter((p) => !p.hiddenAt)));
+  if (full) out.push(...sameCityTies(people.filter((p) => !p.hiddenAt)).filter(inFocus));
   for (const part of chunks2(out, 500)) await upsertTies(db2, userId, part, now);
   const upserted = out.length;
   const kinds = [...keep];
@@ -23658,6 +23660,7 @@ async function scorePeople2(db2, userId, opts) {
 }
 
 // supabase/functions/orbit-worker/handlers/score.ts
+var SCORE_PAGE = 300;
 function scoreHandlers(_deps) {
   return {
     "score.person": async (job, ctx) => {
@@ -23665,17 +23668,52 @@ function scoreHandlers(_deps) {
       const raw = Array.isArray(job.payload.personIds) ? job.payload.personIds : [job.payload.personId];
       const ids = [...new Set(raw.filter(isUuid))];
       if (!ids.length) return;
+      const [now_, rest] = [ids.slice(0, SCORE_PAGE), ids.slice(SCORE_PAGE)];
+      if (rest.length)
+        await ctx.queue.enqueue({ kind: "score.person", userId: job.userId, payload: { personIds: rest } });
       const now = ctx.now();
-      await refreshTies(ctx.db, job.userId, now, { personIds: ids });
-      await scorePeople2(ctx.db, job.userId, { now, personIds: ids });
+      await refreshTies(ctx.db, job.userId, now, { personIds: now_ });
+      await scorePeople2(ctx.db, job.userId, { now, personIds: now_ });
     },
+    /**
+     * The nightly rebuild, paged (the whole of it in one isolate exceeded the CPU allowance and died every night):
+     * the calibration is refit first from the labelled people, then every page of people gets its own score.page
+     * job, which rebuilds that page's ties of every kind and scores them.
+     */
     "score.user": async (job, ctx) => {
       if (!job.userId) throw new JobSkipped("no_user");
       await ctx.queue.setVt(job.queue, job.msgId, LONG_VT_SEC);
       const now = ctx.now();
-      await refreshTies(ctx.db, job.userId, now);
-      await scorePeople2(ctx.db, job.userId, { now, fit: true });
-      if (await hasActiveFriend(ctx.db, job.userId))
+      const ids = (await ctx.db.sql`
+          select id from orbit.people
+           where user_id = ${job.userId}::uuid and deleted_at is null and merged_into is null and not is_self
+           order by id`).map((r) => r.id);
+      const labelled = (await ctx.db.sql`
+          select person_id from orbit.tie_labels where user_id = ${job.userId}::uuid`).map((r) => r.person_id);
+      if (labelled.length) await scorePeople2(ctx.db, job.userId, { now, personIds: labelled, fit: true });
+      const pages = chunks2(ids, SCORE_PAGE);
+      const runKey = job.dedupeKey ?? `score.user:${job.userId}:${now.toISOString()}`;
+      for (const [i, personIds] of pages.entries())
+        await ctx.queue.enqueue({
+          kind: "score.page",
+          userId: job.userId,
+          payload: { personIds, page: i, pages: pages.length },
+          dedupeKey: `${runKey}:page:${i}`
+        });
+      if (!pages.length) await refreshTies(ctx.db, job.userId, now);
+    },
+    "score.page": async (job, ctx) => {
+      if (!job.userId) throw new JobSkipped("no_user");
+      const raw = Array.isArray(job.payload.personIds) ? job.payload.personIds : [];
+      const ids = [...new Set(raw.filter(isUuid))];
+      const now = ctx.now();
+      if (ids.length) {
+        await refreshTies(ctx.db, job.userId, now, { personIds: ids, allKinds: true });
+        await scorePeople2(ctx.db, job.userId, { now, personIds: ids });
+      }
+      const page2 = Number(job.payload.page);
+      const pages = Number(job.payload.pages);
+      if (Number.isFinite(page2) && Number.isFinite(pages) && page2 === pages - 1 && await hasActiveFriend(ctx.db, job.userId))
         await ctx.queue.enqueue({
           kind: "friend_shares_refresh",
           userId: job.userId,
@@ -23723,6 +23761,16 @@ var BATCH = 10;
 var MAX_READS = 5;
 var MAX_READS_UNFINISHED = MAX_READS + 5;
 var DEFAULT_BUDGET_MS = 11e4;
+var HEAVY_KINDS = /* @__PURE__ */ new Set(["score.user", "score.page", "score.person"]);
+var HEAVY_PER_TICK = 3;
+var HEAVY_AFTER_JOBS = 6;
+var RESERVE_MS = {
+  "sync.linkedin": 65e3,
+  "sync.gmail.backfill": 58e3,
+  "score.user": 2e4,
+  "score.page": 2e4
+};
+var DEFAULT_RESERVE_MS = 8e3;
 var backoffSec = (readCt) => 30 * 2 ** Math.max(0, readCt - 1);
 function parse(message) {
   if (!message || typeof message !== "object" || Array.isArray(message)) return void 0;
@@ -23756,17 +23804,41 @@ async function runTick(deps) {
     byQueue: {},
     stoppedBy: "empty"
   };
+  const swept = await db2.sql`
+    update orbit.job_runs
+       set status = 'error', error = 'died with the isolate', finished_at = ${now()}::timestamptz,
+           duration_ms = (extract(epoch from (${now()}::timestamptz - started_at)) * 1000)::int
+     where status = 'running' and started_at < ${now()}::timestamptz - interval '10 minutes'
+     returning id`;
+  if (swept.length) s.swept = swept.length;
+  let heavy = 0;
+  const closed = /* @__PURE__ */ new Set();
   outer: while (clock() < deadline) {
     for (const q of QUEUES) {
+      if (closed.has(q)) continue;
       const batch = await queue.read(q, VT_SEC, BATCH);
       if (!batch.length) continue;
       const readAt = clock();
+      const handBack = async (rest) => {
+        for (const r of rest) await queue.setVt(q, r.msgId, 0);
+      };
       for (let i = 0; i < batch.length; i++) {
         const msg = batch[i];
-        if (clock() >= deadline) {
-          for (const rest of batch.slice(i)) await queue.setVt(q, rest.msgId, 0);
+        const kind = parse(msg.message)?.kind;
+        const need = (kind ? RESERVE_MS[kind] : void 0) ?? DEFAULT_RESERVE_MS;
+        if (clock() + need > deadline) {
+          await handBack(batch.slice(i));
           s.stoppedBy = "budget";
           break outer;
+        }
+        if (kind && HEAVY_KINDS.has(kind)) {
+          if (heavy >= HEAVY_PER_TICK || s.processed >= HEAVY_AFTER_JOBS) {
+            await handBack(batch.slice(i));
+            closed.add(q);
+            s.stoppedBy = "cpu";
+            continue outer;
+          }
+          heavy++;
         }
         if (clock() - readAt > VT_SEC * 1e3 / 2) await queue.setVt(q, msg.msgId, VT_SEC);
         await runOne(q, msg.msgId, msg.readCt, msg.message);

@@ -260,7 +260,7 @@ var CAPS = [
   }
 ];
 var MONTHLY_TOTAL_USD = 25;
-var USER_TOTAL_USD = 20;
+var USER_TOTAL_USD = 100;
 var NEVER = "9999-12-31T00:00:00.000Z";
 function windowStart(window, now) {
   return window === "day" ? new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate())) : new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1));
@@ -1547,6 +1547,7 @@ var KIND_QUEUE = {
   "voice.distill": "orbit_cadence",
   "health.snapshot": "orbit_cadence",
   "score.user": "orbit_score",
+  "score.page": "orbit_score",
   "score.person": "orbit_score",
   friend_shares_refresh: "orbit_score",
   "enrich.dossier": "orbit_enrich",
