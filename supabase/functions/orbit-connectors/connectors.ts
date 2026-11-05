@@ -952,6 +952,9 @@ export function makeHandler(deps: ConnectorDeps): (req: Request) => Promise<Resp
   };
 }
 
+/** The shape of a ref /connect/start issues: never an Orbit user id. */
+const ISSUED_REF = /^orbit_[A-Za-z0-9-]{4,64}$/;
+
 function newRef(): string {
   return `orbit_${crypto.randomUUID()}`;
 }
@@ -1019,6 +1022,10 @@ async function unipileConnectStatus(
 ): Promise<ConnectStatus> {
   const ref = String(body.ref ?? '');
   if (!ref) return { status: 'error', message: 'No connection was started.' };
+  // only a ref this function issued (/connect/start: orbit_<random>) can find an account by its name. orbit-api names
+  // the accounts it links after the Orbit user id, and a user id is no secret (friends see each other's), so a bare
+  // id here would hand anyone that user's LinkedIn account and a token for it
+  if (!ISSUED_REF.test(ref)) return { status: 'error', message: 'No connection was started.' };
   // a reconnect keeps the account's id: its own state says when the sign-in is through (the handler checked the token)
   const reconnect = text(body.reconnectAccountId, 200);
   if (reconnect) {

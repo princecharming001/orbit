@@ -1251,6 +1251,7 @@ function makeHandler(deps) {
     }
   };
 }
+var ISSUED_REF = /^orbit_[A-Za-z0-9-]{4,64}$/;
 function newRef() {
   return `orbit_${crypto.randomUUID()}`;
 }
@@ -1288,6 +1289,7 @@ var FAILED_SOURCE = /* @__PURE__ */ new Set(["ERROR", "CREDENTIALS", "PERMISSION
 async function unipileConnectStatus(deps, body, doFetch) {
   const ref = String(body.ref ?? "");
   if (!ref) return { status: "error", message: "No connection was started." };
+  if (!ISSUED_REF.test(ref)) return { status: "error", message: "No connection was started." };
   const reconnect = text(body.reconnectAccountId, 200);
   if (reconnect) {
     const one = await doFetch(`${deps.unipileBase}/api/v1/accounts/${encodeURIComponent(reconnect)}`, {

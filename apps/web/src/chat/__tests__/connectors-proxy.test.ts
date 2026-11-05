@@ -111,7 +111,7 @@ function harness(over: Partial<ConnectorDeps> = {}, upstreamOver?: Upstream) {
         JSON.stringify({
           items: [
             { id: 'acc_other', name: 'someone else', sources: [{ status: 'OK' }] },
-            { id: 'acc_1', name: 'ref1', sources: [{ status: 'OK' }] },
+            { id: 'acc_1', name: 'orbit_ref1', sources: [{ status: 'OK' }] },
           ],
         }),
         { status: 200 },
@@ -137,7 +137,7 @@ function harness(over: Partial<ConnectorDeps> = {}, upstreamOver?: Upstream) {
     villageBase: 'https://api.village.do',
     villageUser: { externalUserId: 'orbit-local', email: 'founder@orbit.test' },
     origins: defaultOrigins,
-    newRef: () => 'ref1',
+    newRef: () => 'orbit_ref1',
     signingKey: SIGNING,
     fetch: (async (url: string, init: RequestInit = {}) => {
       upstream.push({
@@ -185,9 +185,9 @@ describe('orbit-connectors proxy', () => {
   it('starts a Unipile connect with our reference as the account name', async () => {
     const { handler, upstream } = harness();
     const r = await handler(post('/connect/start', {}));
-    expect(await r.json()).toEqual({ url: 'https://unipile/login', ref: 'ref1' });
+    expect(await r.json()).toEqual({ url: 'https://unipile/login', ref: 'orbit_ref1' });
     expect(upstream[0]!.url).toContain('/hosted/accounts/link');
-    expect(upstream[0]!.body).toMatchObject({ type: 'create', providers: ['LINKEDIN'], name: 'ref1' });
+    expect(upstream[0]!.body).toMatchObject({ type: 'create', providers: ['LINKEDIN'], name: 'orbit_ref1' });
   });
 
   it("matches a LinkedIn sign-in through Unipile's signed callback, even when the account's name is the person's", async () => {
@@ -214,10 +214,10 @@ describe('orbit-connectors proxy', () => {
     await handler(post('/connect/start', {}));
     const notifyUrl = String((upstream[0]!.body as { notify_url?: string }).notify_url);
     expect(notifyUrl).toMatch(
-      /^https:\/\/x\.supabase\.co\/functions\/v1\/orbit-connectors\/connect\/notify\?ref=ref1&sig=/,
+      /^https:\/\/x\.supabase\.co\/functions\/v1\/orbit-connectors\/connect\/notify\?ref=orbit_ref1&sig=/,
     );
     // before Unipile reports back, still waiting
-    expect(await (await handler(post('/connect/status', { ref: 'ref1' }))).json()).toEqual({
+    expect(await (await handler(post('/connect/status', { ref: 'orbit_ref1' }))).json()).toEqual({
       status: 'pending',
     });
     const report = (url: string, body: unknown) =>
@@ -231,16 +231,16 @@ describe('orbit-connectors proxy', () => {
     // a forged report: wrong signature, or another sign-in's reference
     const forged = notifyUrl.replace(/sig=[^&]+/, 'sig=nope');
     expect(
-      (await report(forged, { status: 'CREATION_SUCCESS', account_id: 'acc_evil', name: 'ref1' })).status,
+      (await report(forged, { status: 'CREATION_SUCCESS', account_id: 'acc_evil', name: 'orbit_ref1' })).status,
     ).toBe(403);
     expect(
       (await report(notifyUrl, { status: 'CREATION_SUCCESS', account_id: 'acc_evil', name: 'ref2' })).status,
     ).toBe(400);
     // Unipile's real report
     expect(
-      (await report(notifyUrl, { status: 'CREATION_SUCCESS', account_id: 'acc_9', name: 'ref1' })).status,
+      (await report(notifyUrl, { status: 'CREATION_SUCCESS', account_id: 'acc_9', name: 'orbit_ref1' })).status,
     ).toBe(200);
-    expect(await (await handler(post('/connect/status', { ref: 'ref1' }))).json()).toEqual({
+    expect(await (await handler(post('/connect/status', { ref: 'orbit_ref1' }))).json()).toEqual({
       status: 'connected',
       accountId: 'acc_9',
       token: TOKEN.acc_9 ?? expect.any(String),
@@ -272,40 +272,53 @@ describe('orbit-connectors proxy', () => {
     // its state says when the sign-in is through: the same id, a fresh token
     expect(
       await (
-        await handler(post('/connect/status', { ref: 'ref1', reconnectAccountId: 'a1', token: TOKEN.a1 }))
+        await handler(post('/connect/status', { ref: 'orbit_ref1', reconnectAccountId: 'a1', token: TOKEN.a1 }))
       ).json(),
     ).toEqual({ status: 'connected', accountId: 'a1', token: TOKEN.a1 });
     expect(upstream.at(-1)!.url).toContain('/api/v1/accounts/a1');
   });
 
+  it("never hands out an account linked through orbit-api, named after its owner's user id, for that id", async () => {
+    // orbit-api names a linked account after the Orbit user id, which friends can see: asking for that id must not
+    // return the account or a token for it
+    const victim = '5b1f0c2e-8d4a-4c3b-9e7f-1a2b3c4d5e6f';
+    const h = harness({}, accounts([{ id: 'acc_victim', name: victim, sources: [{ status: 'OK' }] }]));
+    const r = await h.handler(post('/connect/status', { ref: victim }));
+    const body = (await r.json()) as Record<string, unknown>;
+    expect(body.status).toBe('error');
+    expect(body).not.toHaveProperty('token');
+    expect(body).not.toHaveProperty('accountId');
+    expect(h.upstream.some((u) => u.url.includes('/api/v1/accounts'))).toBe(false);
+  });
+
   it('maps the connect status: connected, pending, failed sign-ins as error', async () => {
     const ok = harness();
-    expect(await (await ok.handler(post('/connect/status', { ref: 'ref1' }))).json()).toEqual({
+    expect(await (await ok.handler(post('/connect/status', { ref: 'orbit_ref1' }))).json()).toEqual({
       status: 'connected',
       accountId: 'acc_1',
       token: TOKEN.acc_1,
     });
     const waiting = harness(
       {},
-      accounts([{ id: 'acc_1', name: 'ref1', sources: [{ status: 'CONNECTING' }] }]),
+      accounts([{ id: 'acc_1', name: 'orbit_ref1', sources: [{ status: 'CONNECTING' }] }]),
     );
-    expect(await (await waiting.handler(post('/connect/status', { ref: 'ref1' }))).json()).toEqual({
+    expect(await (await waiting.handler(post('/connect/status', { ref: 'orbit_ref1' }))).json()).toEqual({
       status: 'pending',
     });
     const notYet = harness({}, accounts([]));
-    expect(await (await notYet.handler(post('/connect/status', { ref: 'ref1' }))).json()).toEqual({
+    expect(await (await notYet.handler(post('/connect/status', { ref: 'orbit_ref1' }))).json()).toEqual({
       status: 'pending',
     });
     const badCreds = harness(
       {},
-      accounts([{ id: 'acc_1', name: 'ref1', sources: [{ status: 'CREDENTIALS' }] }]),
+      accounts([{ id: 'acc_1', name: 'orbit_ref1', sources: [{ status: 'CREDENTIALS' }] }]),
     );
-    expect(await (await badCreds.handler(post('/connect/status', { ref: 'ref1' }))).json()).toMatchObject({
+    expect(await (await badCreds.handler(post('/connect/status', { ref: 'orbit_ref1' }))).json()).toMatchObject({
       status: 'error',
       message: expect.stringMatching(/did not accept the sign-in/),
     });
-    const stopped = harness({}, accounts([{ id: 'acc_1', name: 'ref1', sources: [{ status: 'STOPPED' }] }]));
-    expect(await (await stopped.handler(post('/connect/status', { ref: 'ref1' }))).json()).toMatchObject({
+    const stopped = harness({}, accounts([{ id: 'acc_1', name: 'orbit_ref1', sources: [{ status: 'STOPPED' }] }]));
+    expect(await (await stopped.handler(post('/connect/status', { ref: 'orbit_ref1' }))).json()).toMatchObject({
       status: 'error',
     });
   });
@@ -341,11 +354,11 @@ describe('orbit-connectors proxy', () => {
 
   it('reads a 404 from Unipile as still waiting and any other failure as a 502', async () => {
     const missing = harness({}, accounts([], 404));
-    const r1 = await missing.handler(post('/connect/status', { ref: 'ref1' }));
+    const r1 = await missing.handler(post('/connect/status', { ref: 'orbit_ref1' }));
     expect(r1.status).toBe(200);
     expect(await r1.json()).toEqual({ status: 'pending' });
     const broken = harness({}, accounts([], 500));
-    expect((await broken.handler(post('/connect/status', { ref: 'ref1' }))).status).toBe(502);
+    expect((await broken.handler(post('/connect/status', { ref: 'orbit_ref1' }))).status).toBe(502);
     const down = harness({}, () => new Response('{}', { status: 500 }));
     const r2 = await down.handler(post('/relations', { accountId: 'a1', token: TOKEN.a1 }));
     expect(r2.status).toBe(502);
