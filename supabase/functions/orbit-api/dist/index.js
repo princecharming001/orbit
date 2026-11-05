@@ -16593,7 +16593,8 @@ async function webCall(ctx) {
   const { deps, input } = ctx;
   const ask3 = webAsk(input.goal);
   if (!ask3) return [];
-  if (!deps.web?.length) {
+  if (!deps.web) return [];
+  if (!deps.web.length) {
     ctx.unconfigured.add("web");
     return [];
   }

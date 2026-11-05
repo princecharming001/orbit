@@ -384,7 +384,9 @@ async function webCall(ctx: Ctx): Promise<Candidate[]> {
   const { deps, input } = ctx;
   const ask = webAsk(input.goal);
   if (!ask) return [];
-  if (!deps.web?.length) {
+  // no web wired at all (a caller that never built one): nothing to say; wired but keyless: the student is told
+  if (!deps.web) return [];
+  if (!deps.web.length) {
     ctx.unconfigured.add('web');
     return [];
   }
