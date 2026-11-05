@@ -63,6 +63,10 @@ export const HOLD_REASONS: Record<string, string> = {
   validator: 'Orbit wrote it, but it did not pass its own checks, so it waits for you to read it.',
   no_hook: 'Orbit found nothing researched about them to open with, so it waits for you.',
   voice: `It ${VOICE_HOLD_REASON}, so it waits for your tap.`,
+  send_unconfirmed: 'Gmail did not confirm the last try, so Orbit checks your Sent mail before trying again.',
+  send_interrupted: 'The send was interrupted, so Orbit checks your Sent mail before trying again.',
+  linkedin_unconfirmed:
+    'LinkedIn did not confirm the message went. Check the chat on LinkedIn before you send it again.',
   same_firm_today:
     'Someone at the same firm got a first message this morning, so this one moved to the next morning.',
 };

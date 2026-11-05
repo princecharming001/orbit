@@ -8,10 +8,18 @@ import type { Services } from '../services.ts';
 
 export const GMAIL_SEND_URL = 'https://gmail.googleapis.com/gmail/v1/users/me/messages/send';
 export const GMAIL_THREAD_URL = 'https://gmail.googleapis.com/gmail/v1/users/me/threads';
+export const GMAIL_MESSAGES_URL = 'https://gmail.googleapis.com/gmail/v1/users/me/messages';
 
+/** How long a send call may take before Orbit stops waiting; past it the send may or may not have gone. */
+export const SEND_TIMEOUT_MS = 25_000;
+
+/**
+ * `ambiguous`: the provider may have taken the message even though the call failed (the connection dropped or timed
+ * out after the request went, or a 5xx), so a retry must first look for the copy that went out.
+ */
 export type SendOutcome =
   | { ok: true; providerMessageId: string; threadId?: string }
-  | { ok: false; retry: boolean; error: string };
+  | { ok: false; retry: boolean; error: string; ambiguous?: boolean };
 
 export async function gmailSend(
   s: Services,
@@ -34,9 +42,10 @@ export async function gmailSend(
         method: 'POST',
         headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
         body: JSON.stringify(threadId ? { raw, threadId } : { raw }),
+        signal: AbortSignal.timeout(SEND_TIMEOUT_MS),
       });
     } catch {
-      return { ok: false, retry: true, error: 'network' };
+      return { ok: false, retry: true, error: 'network', ambiguous: true };
     }
     if (res.status === 401 && attempt === 0) {
       s.tokens.invalidate(userId);
@@ -45,7 +54,7 @@ export async function gmailSend(
     }
     if (res.status === 429 || res.status >= 500) {
       await res.body?.cancel();
-      return { ok: false, retry: true, error: `gmail_${res.status}` };
+      return { ok: false, retry: true, error: `gmail_${res.status}`, ambiguous: res.status >= 500 };
     }
     if (!res.ok) {
       await res.body?.cancel();
@@ -88,6 +97,49 @@ export async function gmailThreadHasNewerInbound(
   }
 }
 
+/**
+ * The copy of a send that may have gone through (after a dropped connection, a timeout, a 5xx, or an isolate that
+ * died mid-send): the student's Sent mail to `to` since `since` carrying this draft's X-Orbit-Draft-Id. Null when
+ * there is none, undefined when Gmail could not be asked (the caller then waits rather than risk a second copy).
+ */
+export async function gmailSentCopy(
+  s: Services,
+  userId: string,
+  p: { to: string; draftId: string; since: Date },
+): Promise<{ id: string; threadId?: string } | null | undefined> {
+  if (!s.tokens) return undefined;
+  try {
+    const token = await s.tokens.accessToken(userId);
+    const headers = { authorization: `Bearer ${token}` };
+    const q = `in:sent to:${p.to} after:${Math.floor(p.since.getTime() / 1000) - 60}`;
+    const list = await s.fetch(`${GMAIL_MESSAGES_URL}?maxResults=20&q=${encodeURIComponent(q)}`, {
+      headers,
+      signal: AbortSignal.timeout(SEND_TIMEOUT_MS),
+    });
+    if (!list.ok) {
+      await list.body?.cancel();
+      return undefined;
+    }
+    const j = (await list.json()) as { messages?: { id: string; threadId?: string }[] };
+    for (const m of j.messages ?? []) {
+      const res = await s.fetch(
+        `${GMAIL_MESSAGES_URL}/${encodeURIComponent(m.id)}?format=metadata&metadataHeaders=X-Orbit-Draft-Id`,
+        { headers, signal: AbortSignal.timeout(SEND_TIMEOUT_MS) },
+      );
+      if (!res.ok) {
+        await res.body?.cancel();
+        return undefined;
+      }
+      const msg = (await res.json()) as { payload?: { headers?: { name: string; value: string }[] } };
+      const tag = msg.payload?.headers?.find((h) => h.name.toLowerCase() === 'x-orbit-draft-id')?.value;
+      if (tag?.trim() === p.draftId) return { id: m.id, threadId: m.threadId };
+    }
+    return null;
+  } catch {
+    return undefined;
+  }
+}
+
 /** Unipile: POST /api/v1/chats/{chat_id}/messages, or POST /api/v1/chats to start one (multipart). */
 export async function linkedinSend(
   s: Services,
@@ -110,13 +162,14 @@ export async function linkedinSend(
       method: 'POST',
       headers: { 'X-API-KEY': s.env.unipileKey, accept: 'application/json' },
       body: form,
+      signal: AbortSignal.timeout(SEND_TIMEOUT_MS),
     });
   } catch {
-    return { ok: false, retry: true, error: 'network' };
+    return { ok: false, retry: true, error: 'network', ambiguous: true };
   }
   if (res.status === 429 || res.status >= 500) {
     await res.body?.cancel();
-    return { ok: false, retry: true, error: `unipile_${res.status}` };
+    return { ok: false, retry: true, error: `unipile_${res.status}`, ambiguous: res.status >= 500 };
   }
   if (!res.ok) {
     await res.body?.cancel();

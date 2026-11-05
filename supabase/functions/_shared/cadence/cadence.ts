@@ -33,6 +33,7 @@ import type { Db } from '../db.ts';
 import { HttpError } from '../http.ts';
 import { goalPaused } from '../replies/breaker.ts';
 import { iso, isoRow, num } from '../rows.ts';
+import { recoverStuckSends } from '../sending/send.ts';
 import type { Services } from '../services.ts';
 import { moveChat } from '../slots/slots.ts';
 import { validZone } from '../zones.ts';
@@ -245,6 +246,8 @@ export interface CadenceSummary {
   moved: number;
   queued: number;
   skipped: number;
+  /** sends a dead worker left half done, settled before the scan */
+  recovered?: number;
   /** autopilot's plan step: the first messages queued for the morning and the asks to friends (plan 29 §B4) */
   plan?: PlanSummary;
 }
@@ -253,6 +256,8 @@ export interface CadenceSummary {
 export async function runCadence(s: Services, userId: string): Promise<CadenceSummary> {
   const db = s.db;
   const now = s.now();
+  // a send a dead worker left half done is settled first, so nothing below waits behind it
+  const recovered = await recoverStuckSends(s, userId);
   const st = await loadCadence(db, userId, now);
   const out: CadenceSummary = {
     quiet: false,
@@ -262,6 +267,7 @@ export async function runCadence(s: Services, userId: string): Promise<CadenceSu
     moved: 0,
     queued: 0,
     skipped: 0,
+    recovered,
   };
   const q = st.input.settings.quietUntil;
   if (q && now.getTime() < new Date(q).getTime()) return { ...out, quiet: true };

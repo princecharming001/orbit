@@ -15814,6 +15814,9 @@ var HOLD_REASONS = {
   validator: "Orbit wrote it, but it did not pass its own checks, so it waits for you to read it.",
   no_hook: "Orbit found nothing researched about them to open with, so it waits for you.",
   voice: `It ${VOICE_HOLD_REASON}, so it waits for your tap.`,
+  send_unconfirmed: "Gmail did not confirm the last try, so Orbit checks your Sent mail before trying again.",
+  send_interrupted: "The send was interrupted, so Orbit checks your Sent mail before trying again.",
+  linkedin_unconfirmed: "LinkedIn did not confirm the message went. Check the chat on LinkedIn before you send it again.",
   same_firm_today: "Someone at the same firm got a first message this morning, so this one moved to the next morning."
 };
 async function firstTouchRungOf(db2, userId) {
@@ -16259,6 +16262,650 @@ async function raiseBatchCard(db2, userId, tz, now) {
   return true;
 }
 
+// supabase/functions/_shared/sending/mime.ts
+var ascii = (s) => /^[\x20-\x7e]*$/.test(s);
+function headerValue(s) {
+  const one = s.replace(/[\r\n]+/g, " ").trim();
+  if (ascii(one)) return one;
+  return `=?UTF-8?B?${btoa(String.fromCharCode(...new TextEncoder().encode(one)))}?=`;
+}
+function address(email, name) {
+  const e = email.replace(/[\r\n<>]/g, "").trim();
+  if (!name) return e;
+  const n = name.replace(/[\r\n"]/g, "").trim();
+  return ascii(n) ? `"${n}" <${e}>` : `${headerValue(n)} <${e}>`;
+}
+function msgIds(raw) {
+  if (!raw) return void 0;
+  const ids = raw.split(/\s+/).map((x) => x.trim()).filter(Boolean).map((x) => x.startsWith("<") ? x : `<${x}>`);
+  return ids.length ? ids.join(" ") : void 0;
+}
+function b64Lines(bytes) {
+  let bin = "";
+  for (const b of bytes) bin += String.fromCharCode(b);
+  return (btoa(bin).match(/.{1,76}/g) ?? []).join("\r\n");
+}
+function buildMime(m) {
+  const lines = [
+    `From: ${address(m.from, m.fromName)}`,
+    `To: ${address(m.to, m.toName)}`,
+    ...m.cc ? [`Cc: ${address(m.cc, m.ccName)}`] : [],
+    `Subject: ${headerValue(m.subject)}`,
+    `Date: ${(m.date ?? /* @__PURE__ */ new Date()).toUTCString()}`,
+    "MIME-Version: 1.0",
+    'Content-Type: text/plain; charset="UTF-8"',
+    "Content-Transfer-Encoding: base64",
+    `X-Orbit-Draft-Id: ${m.draftId}`
+  ];
+  const irt = msgIds(m.inReplyTo);
+  if (irt) lines.push(`In-Reply-To: ${irt}`);
+  const refs = msgIds(m.references ?? m.inReplyTo);
+  if (refs) lines.push(`References: ${refs}`);
+  const body = m.body.replace(/\r?\n/g, "\r\n");
+  return `${lines.join("\r\n")}\r
+\r
+${b64Lines(new TextEncoder().encode(body))}\r
+`;
+}
+function rawMessage(m) {
+  return base64url(new TextEncoder().encode(buildMime(m)));
+}
+
+// supabase/functions/_shared/sending/transport.ts
+var GMAIL_SEND_URL = "https://gmail.googleapis.com/gmail/v1/users/me/messages/send";
+var GMAIL_THREAD_URL = "https://gmail.googleapis.com/gmail/v1/users/me/threads";
+var GMAIL_MESSAGES_URL = "https://gmail.googleapis.com/gmail/v1/users/me/messages";
+var SEND_TIMEOUT_MS = 25e3;
+async function gmailSend(s, userId, raw, threadId) {
+  if (!s.tokens) return { ok: false, retry: false, error: "google_unconfigured" };
+  for (let attempt = 0; attempt < 2; attempt++) {
+    let token;
+    try {
+      token = await s.tokens.accessToken(userId);
+    } catch (e) {
+      if (e instanceof NeedsReauth) return { ok: false, retry: false, error: "needs_reauth" };
+      return { ok: false, retry: true, error: "token_error" };
+    }
+    let res;
+    try {
+      res = await s.fetch(GMAIL_SEND_URL, {
+        method: "POST",
+        headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+        body: JSON.stringify(threadId ? { raw, threadId } : { raw }),
+        signal: AbortSignal.timeout(SEND_TIMEOUT_MS)
+      });
+    } catch {
+      return { ok: false, retry: true, error: "network", ambiguous: true };
+    }
+    if (res.status === 401 && attempt === 0) {
+      s.tokens.invalidate(userId);
+      await res.body?.cancel();
+      continue;
+    }
+    if (res.status === 429 || res.status >= 500) {
+      await res.body?.cancel();
+      return { ok: false, retry: true, error: `gmail_${res.status}`, ambiguous: res.status >= 500 };
+    }
+    if (!res.ok) {
+      await res.body?.cancel();
+      return { ok: false, retry: false, error: `gmail_${res.status}` };
+    }
+    const j = await res.json().catch(() => ({}));
+    if (!j.id) return { ok: false, retry: false, error: "gmail_no_id" };
+    return { ok: true, providerMessageId: j.id, threadId: j.threadId };
+  }
+  return { ok: false, retry: false, error: "gmail_401" };
+}
+async function gmailThreadHasNewerInbound(s, userId, threadId, since) {
+  if (!s.tokens) return void 0;
+  try {
+    const token = await s.tokens.accessToken(userId);
+    const res = await s.fetch(
+      `${GMAIL_THREAD_URL}/${encodeURIComponent(threadId)}?format=minimal&fields=messages(id,labelIds,internalDate)`,
+      { headers: { authorization: `Bearer ${token}` } }
+    );
+    if (!res.ok) {
+      await res.body?.cancel();
+      return void 0;
+    }
+    const j = await res.json();
+    return (j.messages ?? []).some(
+      (m) => !(m.labelIds ?? []).includes("SENT") && Number(m.internalDate ?? 0) > since.getTime()
+    );
+  } catch {
+    return void 0;
+  }
+}
+async function gmailSentCopy(s, userId, p) {
+  if (!s.tokens) return void 0;
+  try {
+    const token = await s.tokens.accessToken(userId);
+    const headers = { authorization: `Bearer ${token}` };
+    const q = `in:sent to:${p.to} after:${Math.floor(p.since.getTime() / 1e3) - 60}`;
+    const list2 = await s.fetch(`${GMAIL_MESSAGES_URL}?maxResults=20&q=${encodeURIComponent(q)}`, {
+      headers,
+      signal: AbortSignal.timeout(SEND_TIMEOUT_MS)
+    });
+    if (!list2.ok) {
+      await list2.body?.cancel();
+      return void 0;
+    }
+    const j = await list2.json();
+    for (const m of j.messages ?? []) {
+      const res = await s.fetch(
+        `${GMAIL_MESSAGES_URL}/${encodeURIComponent(m.id)}?format=metadata&metadataHeaders=X-Orbit-Draft-Id`,
+        { headers, signal: AbortSignal.timeout(SEND_TIMEOUT_MS) }
+      );
+      if (!res.ok) {
+        await res.body?.cancel();
+        return void 0;
+      }
+      const msg = await res.json();
+      const tag = msg.payload?.headers?.find((h) => h.name.toLowerCase() === "x-orbit-draft-id")?.value;
+      if (tag?.trim() === p.draftId) return { id: m.id, threadId: m.threadId };
+    }
+    return null;
+  } catch {
+    return void 0;
+  }
+}
+async function linkedinSend(s, p) {
+  const base = (s.env.unipileBase ?? "").replace(/\/+$/, "");
+  if (!s.env.unipileKey || !base) return { ok: false, retry: false, error: "unipile_unconfigured" };
+  const form = new FormData();
+  form.set("account_id", p.accountId);
+  form.set("text", p.text);
+  let url;
+  if (p.chatId) url = `${base}/api/v1/chats/${encodeURIComponent(p.chatId)}/messages`;
+  else if (p.attendeeId) {
+    url = `${base}/api/v1/chats`;
+    form.append("attendees_ids", p.attendeeId);
+  } else return { ok: false, retry: false, error: "no_linkedin_chat" };
+  let res;
+  try {
+    res = await s.fetch(url, {
+      method: "POST",
+      headers: { "X-API-KEY": s.env.unipileKey, accept: "application/json" },
+      body: form,
+      signal: AbortSignal.timeout(SEND_TIMEOUT_MS)
+    });
+  } catch {
+    return { ok: false, retry: true, error: "network", ambiguous: true };
+  }
+  if (res.status === 429 || res.status >= 500) {
+    await res.body?.cancel();
+    return { ok: false, retry: true, error: `unipile_${res.status}`, ambiguous: res.status >= 500 };
+  }
+  if (!res.ok) {
+    await res.body?.cancel();
+    return { ok: false, retry: false, error: `unipile_${res.status}` };
+  }
+  const j = await res.json().catch(() => ({}));
+  const id = j.message_id ?? j.id;
+  if (!id) return { ok: false, retry: false, error: "unipile_no_id" };
+  return { ok: true, providerMessageId: id, chatId: j.chat_id ?? p.chatId ?? void 0 };
+}
+
+// supabase/functions/_shared/sending/send.ts
+var LINKEDIN_CONFIRM_MS = 15 * 6e4;
+var PAUSE_RECHECK_SEC = 15 * 60;
+var STUCK_SENDING_MS = 10 * 6e4;
+async function loadUser(db2, userId) {
+  const [u2] = await db2.sql`
+    select email, full_name, first_name, timezone, autonomy_level, settings from orbit.users where id = ${userId}::uuid`;
+  return u2;
+}
+function aheadOf(settings, key2, now) {
+  const v = settings?.[key2];
+  if (typeof v !== "string") return void 0;
+  const t = new Date(v);
+  return Number.isNaN(t.getTime()) || t.getTime() <= now.getTime() ? void 0 : t;
+}
+function ownCap(settings, key2, tableCap) {
+  const v = Number(settings?.[key2]);
+  return Number.isFinite(v) && v >= 1 ? Math.min(Math.floor(v), tableCap) : tableCap;
+}
+var hashOf = (d) => messageHash({ channel: d.channel, subject: d.subject, body: d.body });
+async function audit(db2, userId, actor, action, draftId, details) {
+  await db2.sql`
+    insert into orbit.audit_log (user_id, actor, action, target_table, target_id, details)
+    values (${userId}::uuid, ${actor}, ${action}, 'drafts', ${draftId}, ${details}::jsonb)`;
+}
+async function goalKindOf(db2, goalId) {
+  if (!goalId) return null;
+  const [g] = await db2.sql`select kind from orbit.goals where id = ${goalId}::uuid`;
+  return g?.kind ?? null;
+}
+async function postalAddress(db2, userId) {
+  const [u2] = await db2.sql`
+    select settings from orbit.users where id = ${userId}::uuid`;
+  const v = u2?.settings?.postal_address;
+  return typeof v === "string" ? v.trim() : "";
+}
+async function salesFirstTouch(db2, d) {
+  return d.channel === "gmail" && FIRST_TOUCH_KINDS.has(d.kind) && await goalKindOf(db2, d.goal_id) === "sales";
+}
+var SendRetry = class extends Error {
+  constructor(code) {
+    super(code);
+    this.name = "SendRetry";
+  }
+};
+async function sendDraft(s, draftId) {
+  const db2 = s.db;
+  const now = s.now();
+  const [d] = await db2.sql`
+    update orbit.drafts set status = 'sending'
+     where id = ${draftId}::uuid and status = 'approved'
+       and (send_at is null or send_at <= ${new Date(now.getTime() + 1e3)}::timestamptz)
+    returning *`;
+  if (!d) return { status: "skipped", reason: "not_claimed" };
+  const userId = d.user_id;
+  const settle = async (status, fields) => {
+    await db2.sql`
+      update orbit.drafts set status = ${status},
+             error = ${fields.error ?? null},
+             cancel_reason = ${fields.cancel_reason ?? null},
+             send_at = coalesce(${fields.send_at ?? null}::timestamptz, send_at)
+       where id = ${d.id}::uuid`;
+  };
+  const later = async (reason2, at) => {
+    await settle("approved", { error: reason2, send_at: at });
+    await s.queue.enqueue(
+      {
+        kind: "send.draft",
+        userId,
+        payload: { draftId: d.id },
+        dedupeKey: `send:${d.id}:${reason2}:${iso(at)}`
+      },
+      { delaySec: Math.max(1, Math.ceil((at.getTime() - now.getTime()) / 1e3)) }
+    );
+    await audit(db2, userId, "system", "draft.hold", d.id, { reason: reason2, until: iso(at) });
+    return { status: "held", reason: reason2 };
+  };
+  if (askUserMarkers(`${d.subject ?? ""}
+${d.body}`).length || placeholderIn(`${d.subject ?? ""}
+${d.body}`)) {
+    await settle("draft", { error: "needs_input" });
+    return { status: "held", reason: "needs_input" };
+  }
+  const review = d.review_until ? new Date(d.review_until) : void 0;
+  if (review && !Number.isNaN(review.getTime()) && review.getTime() > now.getTime())
+    return later("review_window", review);
+  const [person] = await db2.sql`
+    select display_name, first_name, primary_email, title, headline, do_not_contact, linkedin_member_id
+      from orbit.people where id = ${d.person_id}::uuid`;
+  if (!person) {
+    await settle("failed", { error: "no_person" });
+    return { status: "failed", error: "no_person" };
+  }
+  const history = await historyWith(db2, userId, d.person_id);
+  const createdAt = iso(d.created_at);
+  const replied = cancelIfReplied(
+    { personId: d.person_id, createdAt },
+    history.map((h) => ({
+      personId: d.person_id,
+      direction: h.direction,
+      at: h.at,
+      channel: "email"
+    }))
+  );
+  let live;
+  if (!replied.cancel && d.channel === "gmail" && d.thread_external_id)
+    live = await gmailThreadHasNewerInbound(s, userId, d.thread_external_id, new Date(createdAt));
+  if (replied.cancel || live) {
+    await settle("cancelled", { cancel_reason: "replied" });
+    await audit(db2, userId, "system", "draft.cancel", d.id, { reason: "replied" });
+    return { status: "cancelled", reason: "replied" };
+  }
+  const approvals = await db2.sql`
+    select actor, action, details, created_at from orbit.audit_log
+     where user_id = ${userId}::uuid and target_table = 'drafts' and target_id = ${d.id}
+       and action in ('draft.approve', 'draft.confirm', 'draft.auto_approve', 'draft.send_unconfirmed')
+     order by created_at desc`;
+  const unconfirmed = approvals.some((a) => a.action === "draft.send_unconfirmed");
+  const hash = hashOf(d);
+  const userApproved = approvals.some((a) => a.action === "draft.approve" && a.details?.hash === hash);
+  const agentApproved = approvals.some((a) => a.action === "draft.auto_approve" && a.details?.hash === hash);
+  const u2 = await loadUser(db2, userId);
+  if (!u2) {
+    await settle("failed", { error: "no_user" });
+    return { status: "failed", error: "no_user" };
+  }
+  const paused = aheadOf(u2.settings, "autopilot_paused_until", now);
+  if (paused && (agentApproved && !userApproved || Number(d.autonomy_level) >= 1))
+    return later(
+      "autopilot_paused",
+      new Date(Math.min(paused.getTime(), now.getTime() + PAUSE_RECHECK_SEC * 1e3))
+    );
+  if (agentApproved && !userApproved && breakerHolds(d.kind) && goalPaused(u2.settings, d.goal_id, now)) {
+    await settle("draft", { error: "goal_paused" });
+    await audit(db2, userId, "system", "draft.hold", d.id, { reason: "goal_paused", goalId: d.goal_id });
+    return { status: "held", reason: "goal_paused" };
+  }
+  const firstTouchStanding = d.auto_rung === "first_touch" && agentApproved && !userApproved;
+  if (firstTouchStanding) {
+    const gate = await firstTouchSendGate(s, userId, d);
+    if (!gate.go && "later" in gate) return later(gate.later, gate.until);
+    if (!gate.go && (gate.rule === "do_not_contact" || gate.rule === "minor")) {
+      await settle("cancelled", { cancel_reason: gate.rule });
+      await audit(db2, userId, "system", "draft.blocked", d.id, { rule: gate.rule });
+      return { status: "cancelled", reason: gate.rule };
+    }
+    if (!gate.go) {
+      await settle("draft", { error: gate.hold });
+      await audit(db2, userId, "system", "draft.hold", d.id, { reason: gate.hold });
+      return { status: "held", reason: gate.hold };
+    }
+  }
+  if (d.channel === "linkedin" && agentApproved && !userApproved) {
+    await settle("draft", { error: "linkedin_never_auto" });
+    await audit(db2, userId, "system", "draft.hold", d.id, { reason: "linkedin_never_auto" });
+    return { status: "held", reason: "linkedin_never_auto" };
+  }
+  if (d.channel === "linkedin") {
+    const fresh = approvals.some(
+      (a) => a.action === "draft.confirm" && a.actor === "user" && a.details?.hash === hash && now.getTime() - new Date(a.created_at).getTime() <= LINKEDIN_CONFIRM_MS
+    );
+    if (!fresh) {
+      await settle("draft", { error: "linkedin_needs_fresh_approval" });
+      await audit(db2, userId, "system", "draft.hold", d.id, { reason: "linkedin_needs_fresh_approval" });
+      return { status: "held", reason: "linkedin_needs_fresh_approval" };
+    }
+  }
+  if (!userApproved && !agentApproved) {
+    await settle("draft", { error: "not_approved" });
+    return { status: "held", reason: "not_approved" };
+  }
+  const meta2 = d.ask ?? {};
+  const violations = checkSend(
+    { kind: d.kind, channel: d.channel, personId: d.person_id, subject: d.subject, body: d.body },
+    {
+      now,
+      userEmails: [u2.email],
+      userName: u2.full_name ?? u2.first_name ?? "",
+      recipient: {
+        doNotContact: person.do_not_contact,
+        title: person.title ?? void 0,
+        headline: person.headline ?? void 0
+      },
+      history,
+      schedulingLink: typeof u2.settings?.scheduling_link === "string" ? u2.settings.scheduling_link : void 0,
+      offeredSlots: meta2.slots,
+      timeZone: u2.timezone,
+      approvedHash: userApproved ? hash : void 0
+    }
+    // the earned rung is the student's standing approval of a first message, and nothing else it covers
+  ).filter((v) => !(firstTouchStanding && v.rule === "first_message_needs_approval"));
+  const forbidden = violations.find((v) => v.kind === "forbidden");
+  if (forbidden) {
+    await settle("cancelled", { cancel_reason: forbidden.rule });
+    await audit(db2, userId, "system", "draft.blocked", d.id, { rule: forbidden.rule });
+    return { status: "cancelled", reason: forbidden.rule };
+  }
+  if (violations.length) {
+    await settle("draft", { error: `needs_approval:${violations.map((v) => v.rule).join(",")}` });
+    return { status: "held", reason: violations[0].rule };
+  }
+  if (await salesFirstTouch(db2, d) && (!await postalAddress(db2, userId) || !meta2.footer)) {
+    await settle("draft", { error: "needs_postal_address" });
+    return { status: "held", reason: "needs_postal_address" };
+  }
+  if (agentApproved && !userApproved) {
+    const gate = await voiceGate(s, u2, d, { firstMessage: FIRST_TOUCH_KINDS.has(d.kind) });
+    if (!gate.ok) {
+      await settle("draft", { error: "voice" });
+      await audit(db2, userId, "system", "draft.hold", d.id, {
+        reason: "voice",
+        text: VOICE_HOLD_REASON,
+        problems: gate.problems,
+        ...gate.score !== void 0 ? { score: gate.score } : {}
+      });
+      return { status: "held", reason: "voice" };
+    }
+  }
+  const cap = await capReached(db2, userId, d, now, u2, agentApproved && !userApproved);
+  if (cap) {
+    const next = new Date(
+      nextSendWindow(new Date(now.getTime() + 864e5), u2.timezone, d.channel, s.random).notBefore
+    );
+    await settle(d.channel === "linkedin" ? "draft" : "approved", { error: cap, send_at: next });
+    await audit(db2, userId, "system", "draft.hold", d.id, { reason: cap, until: iso(next) });
+    return { status: "held", reason: cap };
+  }
+  let out;
+  if (d.channel === "gmail") {
+    if (!person.primary_email) {
+      await settle("failed", { error: "no_email" });
+      return { status: "failed", error: "no_email" };
+    }
+    const copy = unconfirmed ? await gmailSentCopy(s, userId, {
+      to: person.primary_email,
+      draftId: d.id,
+      since: new Date(createdAt)
+    }) : null;
+    if (copy === void 0) {
+      await settle("approved", { error: "send_unconfirmed" });
+      throw new SendRetry("send_unconfirmed");
+    }
+    const subject = d.subject ?? await threadSubject(db2, userId, d.thread_external_id) ?? "";
+    const refs = d.in_reply_to ?? await lastMessageId(db2, userId, d.thread_external_id);
+    const forward = d.kind === "forward_intro" ? d.via : null;
+    const raw = rawMessage({
+      from: u2.email,
+      fromName: u2.full_name ?? void 0,
+      to: person.primary_email,
+      toName: person.display_name,
+      ...forward?.cc ? { cc: forward.cc, ccName: forward.ccName } : {},
+      subject: d.subject ? subject : subject && !/^re:/i.test(subject) ? `Re: ${subject}` : subject,
+      body: d.body,
+      inReplyTo: refs,
+      references: refs,
+      draftId: d.id,
+      date: now
+    });
+    out = copy ? { ok: true, providerMessageId: copy.id, threadId: copy.threadId } : await gmailSend(s, userId, raw, d.thread_external_id);
+  } else {
+    const [acct] = await db2.sql`
+      select external_account_id from orbit.integration_accounts
+       where user_id = ${userId}::uuid and provider = 'linkedin' and status = 'active'`;
+    if (!acct?.external_account_id) {
+      await settle("failed", { error: "linkedin_not_connected" });
+      return { status: "failed", error: "linkedin_not_connected" };
+    }
+    const chatId = d.thread_external_id ?? await linkedinChatId(db2, userId, d.person_id);
+    const attendee = chatId ? null : await linkedinAttendee(db2, userId, d.person_id, person.linkedin_member_id);
+    out = await linkedinSend(s, {
+      accountId: acct.external_account_id,
+      chatId,
+      attendeeId: attendee,
+      text: d.body
+    });
+  }
+  if (!out.ok) {
+    if (out.ambiguous)
+      await audit(db2, userId, "system", "draft.send_unconfirmed", d.id, { error: out.error, at: iso(now) });
+    if (out.retry && out.ambiguous && d.channel === "linkedin") {
+      await settle("failed", { error: "linkedin_unconfirmed" });
+      await audit(db2, userId, "system", "draft.failed", d.id, {
+        error: "linkedin_unconfirmed",
+        cause: out.error
+      });
+      return { status: "failed", error: "linkedin_unconfirmed" };
+    }
+    if (out.retry) {
+      await settle("approved", { error: out.error });
+      throw new SendRetry(out.error);
+    }
+    await settle("failed", { error: out.error });
+    await audit(db2, userId, "system", "draft.failed", d.id, { error: out.error });
+    if (d.channel === "gmail")
+      await tripBreaker(db2, userId, {
+        goalId: d.goal_id,
+        reason: "send_error",
+        personId: d.person_id,
+        personName: person.display_name,
+        now
+      }).catch(() => void 0);
+    return { status: "failed", error: out.error };
+  }
+  const threadId = out.chatId ?? out.threadId ?? d.thread_external_id;
+  await db2.sql`
+    update orbit.drafts set status = 'sent', sent_at = ${now}::timestamptz, provider_message_id = ${out.providerMessageId},
+                            thread_external_id = ${threadId ?? null}, error = null
+     where id = ${d.id}::uuid`;
+  const auto = agentApproved && !userApproved;
+  await audit(db2, userId, auto ? "agent" : "user", auto ? "draft.auto_sent" : "draft.sent", d.id, {
+    channel: d.channel,
+    kind: d.kind,
+    ...auto ? { rung: d.auto_rung ?? d.kind, level: Number(d.autonomy_level) } : {}
+  });
+  if (d.chat_id) await afterSend(db2, userId, d, now);
+  const via = d.via;
+  if (d.kind === "intro_request" && via?.introRequestId)
+    await db2.sql`update orbit.intro_requests set asked_at = ${now}::timestamptz where id = ${via.introRequestId}::uuid`;
+  if (d.kind === "forward_intro" && via?.friendAskId)
+    await db2.sql`
+      update orbit.friend_intro_asks set status = 'forwarded', forwarded_message_id = ${d.id}::uuid,
+             answered_at = coalesce(answered_at, ${now}::timestamptz)
+       where id = ${via.friendAskId}::uuid and friend_user_id = ${userId}::uuid`;
+  return { status: "sent", providerMessageId: out.providerMessageId };
+}
+async function afterSend(db2, userId, d, now) {
+  const [c] = await db2.sql`
+    select stage, data from orbit.chats where id = ${d.chat_id}::uuid`;
+  if (!c) return;
+  const at = now.toISOString();
+  const data = {
+    ...c.data,
+    lastOutboundAt: at,
+    outreachChannel: d.channel === "gmail" ? "email" : "linkedin"
+  };
+  if (!data.firstOutreachAt && d.kind !== "forwardable_blurb" && d.kind !== "intro_request")
+    data.firstOutreachAt = at;
+  if (d.kind === "bump") data.bumpCount = (data.bumpCount ?? 0) + 1;
+  await db2.sql`update orbit.chats set data = ${data}::jsonb where id = ${d.chat_id}::uuid`;
+  if (["identified", "warming"].includes(c.stage) && d.kind !== "forwardable_blurb" && d.kind !== "intro_request")
+    await moveChat(db2, userId, d.chat_id, "outreach_sent", `${d.kind} sent`, now);
+}
+async function capReached(db2, userId, d, now, u2, auto) {
+  const zone = validZone(u2.timezone) ?? "America/New_York";
+  const key2 = new Intl.DateTimeFormat("en-CA", { timeZone: zone }).format(now);
+  const dayStart2 = zonedTime2(key2, 0, 0, zone);
+  const weekStart = new Date(dayStart2.getTime() - 6 * 864e5);
+  const [f] = await db2.sql`
+    select count(*)::int as n,
+           count(*) filter (where o.kind in ('first_touch', 'warm_first_touch', 'outreach'))::int as first
+      from orbit.drafts o, orbit.drafts me
+     where me.id = ${d.id}::uuid and o.user_id = ${userId}::uuid and o.status = 'sending'
+       and o.channel = ${d.channel} and o.id <> me.id and (o.updated_at, o.id) < (me.updated_at, me.id)`;
+  const inFlight = f?.n ?? 0;
+  const inFlightFirst = f?.first ?? 0;
+  if (auto) {
+    if (d.channel === "linkedin") return "linkedin_never_auto";
+    const [a] = await db2.sql`
+      select count(*) filter (where created_at >= ${dayStart2}::timestamptz)::int as day,
+             count(*) filter (where created_at >= ${dayStart2}::timestamptz
+                                and details->>'kind' in ('first_touch', 'warm_first_touch', 'outreach'))::int as day_first,
+             count(*) filter (where details->>'kind' in ('first_touch', 'warm_first_touch', 'outreach'))::int as week_first
+        from orbit.audit_log
+       where user_id = ${userId}::uuid and action = 'draft.auto_sent' and created_at >= ${weekStart}::timestamptz`;
+    if ((a?.day ?? 0) + inFlight >= SEND_CAPS.autoPerDay) return "auto_daily_cap";
+    if (FIRST_TOUCH_KINDS.has(d.kind)) {
+      if ((a?.day_first ?? 0) + inFlightFirst >= SEND_CAPS.autoFirstTouchesPerDay)
+        return "auto_first_touch_daily_cap";
+      if ((a?.week_first ?? 0) + inFlightFirst >= SEND_CAPS.autoFirstTouchesPerWeek)
+        return "auto_first_touch_weekly_cap";
+    }
+  }
+  if (d.channel === "linkedin") {
+    const [r2] = await db2.sql`
+      select count(*)::int as n from orbit.drafts
+       where user_id = ${userId}::uuid and channel = 'linkedin' and status = 'sent'
+         and sent_at >= ${dayStart2}::timestamptz`;
+    const cap2 = ownCap(u2.settings, "daily_send_cap_linkedin", SEND_CAPS.linkedinPerDay);
+    return (r2?.n ?? 0) + inFlight >= cap2 ? "linkedin_daily_cap" : null;
+  }
+  if (await salesFirstTouch(db2, d)) {
+    const [r2] = await db2.sql`
+      select count(*)::int as n from orbit.drafts dr join orbit.goals g on g.id = dr.goal_id
+       where dr.user_id = ${userId}::uuid and dr.channel = 'gmail' and dr.status = 'sent' and g.kind = 'sales'
+         and dr.kind in ('first_touch', 'warm_first_touch', 'outreach') and dr.sent_at >= ${dayStart2}::timestamptz`;
+    return (r2?.n ?? 0) + inFlightFirst >= SEND_CAPS.gmailSalesFirstTouchesPerDay ? "gmail_sales_daily_cap" : null;
+  }
+  const [r] = await db2.sql`
+    select count(*)::int as n from orbit.drafts dr
+     where dr.user_id = ${userId}::uuid and dr.channel = 'gmail' and dr.status = 'sent'
+       and dr.sent_at >= ${dayStart2}::timestamptz
+       and not (dr.kind in ('first_touch', 'warm_first_touch', 'outreach')
+                and exists (select 1 from orbit.goals g where g.id = dr.goal_id and g.kind = 'sales'))`;
+  const cap = ownCap(u2.settings, "daily_send_cap_gmail", SEND_CAPS.gmailPerDay);
+  return (r?.n ?? 0) + inFlight >= cap ? "gmail_daily_cap" : null;
+}
+async function recoverStuckSends(s, userId) {
+  const db2 = s.db;
+  const now = s.now();
+  const stuck = await db2.sql`
+    select id, channel from orbit.drafts
+     where user_id = ${userId}::uuid and status = 'sending'
+       and updated_at < ${new Date(now.getTime() - STUCK_SENDING_MS)}::timestamptz`;
+  let n = 0;
+  for (const d of stuck) {
+    const email = d.channel === "gmail";
+    const [row] = await db2.sql`
+      update orbit.drafts
+         set status = ${email ? "approved" : "failed"},
+             error = ${email ? "send_interrupted" : "linkedin_unconfirmed"},
+             send_at = case when ${email} then ${now}::timestamptz else send_at end
+       where id = ${d.id}::uuid and status = 'sending'
+         and updated_at < ${new Date(now.getTime() - STUCK_SENDING_MS)}::timestamptz
+      returning id`;
+    if (!row) continue;
+    n++;
+    await audit(db2, userId, "system", "draft.send_unconfirmed", d.id, {
+      error: "send_interrupted",
+      at: iso(now)
+    });
+    if (email)
+      await s.queue.enqueue({
+        kind: "send.draft",
+        userId,
+        payload: { draftId: d.id },
+        dedupeKey: `send:${d.id}:recover:${iso(now)}`
+      });
+    else await audit(db2, userId, "system", "draft.failed", d.id, { error: "linkedin_unconfirmed" });
+  }
+  return n;
+}
+async function threadSubject(db2, userId, threadExternalId) {
+  if (!threadExternalId) return null;
+  const [t] = await db2.sql`
+    select subject from orbit.threads where user_id = ${userId}::uuid and external_id = ${threadExternalId}`;
+  return t?.subject ?? null;
+}
+async function lastMessageId(db2, userId, threadExternalId) {
+  if (!threadExternalId) return null;
+  const [m] = await db2.sql`
+    select m.rfc_message_id from orbit.messages m join orbit.threads t on t.id = m.thread_id
+     where t.user_id = ${userId}::uuid and t.external_id = ${threadExternalId} and m.rfc_message_id is not null
+     order by m.sent_at desc limit 1`;
+  return m?.rfc_message_id ?? null;
+}
+async function linkedinChatId(db2, userId, personId) {
+  const [t] = await db2.sql`
+    select external_id from orbit.threads
+     where user_id = ${userId}::uuid and provider = 'linkedin' and ${personId}::uuid = any(participant_person_ids)
+     order by last_at desc nulls last limit 1`;
+  return t?.external_id ?? null;
+}
+async function linkedinAttendee(db2, userId, personId, memberId) {
+  const [i] = await db2.sql`
+    select value_raw, value_norm from orbit.person_identities
+     where user_id = ${userId}::uuid and person_id = ${personId}::uuid and kind in ('unipile_attendee', 'linkedin_member')
+     order by (kind = 'unipile_attendee') desc limit 1`;
+  return i?.value_raw ?? i?.value_norm ?? memberId;
+}
+
 // supabase/functions/_shared/cadence/cadence.ts
 var DAY13 = 864e5;
 function goalFrom(r) {
@@ -16389,6 +17036,7 @@ async function autoApprovedOn(db2, userId, at, tz) {
 async function runCadence(s, userId) {
   const db2 = s.db;
   const now = s.now();
+  const recovered = await recoverStuckSends(s, userId);
   const st = await loadCadence(db2, userId, now);
   const out = {
     quiet: false,
@@ -16397,7 +17045,8 @@ async function runCadence(s, userId) {
     approved: 0,
     moved: 0,
     queued: 0,
-    skipped: 0
+    skipped: 0,
+    recovered
   };
   const q = st.input.settings.quietUntil;
   if (q && now.getTime() < new Date(q).getTime()) return { ...out, quiet: true };
@@ -18021,547 +18670,6 @@ function hopEvidenceHandler(config) {
     const r = await runHopEvidenceJob(s, job.userId, job.payload);
     if (r.status === "skipped") throw new JobSkipped(r.reason);
   };
-}
-
-// supabase/functions/_shared/sending/mime.ts
-var ascii = (s) => /^[\x20-\x7e]*$/.test(s);
-function headerValue(s) {
-  const one = s.replace(/[\r\n]+/g, " ").trim();
-  if (ascii(one)) return one;
-  return `=?UTF-8?B?${btoa(String.fromCharCode(...new TextEncoder().encode(one)))}?=`;
-}
-function address(email, name) {
-  const e = email.replace(/[\r\n<>]/g, "").trim();
-  if (!name) return e;
-  const n = name.replace(/[\r\n"]/g, "").trim();
-  return ascii(n) ? `"${n}" <${e}>` : `${headerValue(n)} <${e}>`;
-}
-function msgIds(raw) {
-  if (!raw) return void 0;
-  const ids = raw.split(/\s+/).map((x) => x.trim()).filter(Boolean).map((x) => x.startsWith("<") ? x : `<${x}>`);
-  return ids.length ? ids.join(" ") : void 0;
-}
-function b64Lines(bytes) {
-  let bin = "";
-  for (const b of bytes) bin += String.fromCharCode(b);
-  return (btoa(bin).match(/.{1,76}/g) ?? []).join("\r\n");
-}
-function buildMime(m) {
-  const lines = [
-    `From: ${address(m.from, m.fromName)}`,
-    `To: ${address(m.to, m.toName)}`,
-    ...m.cc ? [`Cc: ${address(m.cc, m.ccName)}`] : [],
-    `Subject: ${headerValue(m.subject)}`,
-    `Date: ${(m.date ?? /* @__PURE__ */ new Date()).toUTCString()}`,
-    "MIME-Version: 1.0",
-    'Content-Type: text/plain; charset="UTF-8"',
-    "Content-Transfer-Encoding: base64",
-    `X-Orbit-Draft-Id: ${m.draftId}`
-  ];
-  const irt = msgIds(m.inReplyTo);
-  if (irt) lines.push(`In-Reply-To: ${irt}`);
-  const refs = msgIds(m.references ?? m.inReplyTo);
-  if (refs) lines.push(`References: ${refs}`);
-  const body = m.body.replace(/\r?\n/g, "\r\n");
-  return `${lines.join("\r\n")}\r
-\r
-${b64Lines(new TextEncoder().encode(body))}\r
-`;
-}
-function rawMessage(m) {
-  return base64url(new TextEncoder().encode(buildMime(m)));
-}
-
-// supabase/functions/_shared/sending/transport.ts
-var GMAIL_SEND_URL = "https://gmail.googleapis.com/gmail/v1/users/me/messages/send";
-var GMAIL_THREAD_URL = "https://gmail.googleapis.com/gmail/v1/users/me/threads";
-async function gmailSend(s, userId, raw, threadId) {
-  if (!s.tokens) return { ok: false, retry: false, error: "google_unconfigured" };
-  for (let attempt = 0; attempt < 2; attempt++) {
-    let token;
-    try {
-      token = await s.tokens.accessToken(userId);
-    } catch (e) {
-      if (e instanceof NeedsReauth) return { ok: false, retry: false, error: "needs_reauth" };
-      return { ok: false, retry: true, error: "token_error" };
-    }
-    let res;
-    try {
-      res = await s.fetch(GMAIL_SEND_URL, {
-        method: "POST",
-        headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
-        body: JSON.stringify(threadId ? { raw, threadId } : { raw })
-      });
-    } catch {
-      return { ok: false, retry: true, error: "network" };
-    }
-    if (res.status === 401 && attempt === 0) {
-      s.tokens.invalidate(userId);
-      await res.body?.cancel();
-      continue;
-    }
-    if (res.status === 429 || res.status >= 500) {
-      await res.body?.cancel();
-      return { ok: false, retry: true, error: `gmail_${res.status}` };
-    }
-    if (!res.ok) {
-      await res.body?.cancel();
-      return { ok: false, retry: false, error: `gmail_${res.status}` };
-    }
-    const j = await res.json().catch(() => ({}));
-    if (!j.id) return { ok: false, retry: false, error: "gmail_no_id" };
-    return { ok: true, providerMessageId: j.id, threadId: j.threadId };
-  }
-  return { ok: false, retry: false, error: "gmail_401" };
-}
-async function gmailThreadHasNewerInbound(s, userId, threadId, since) {
-  if (!s.tokens) return void 0;
-  try {
-    const token = await s.tokens.accessToken(userId);
-    const res = await s.fetch(
-      `${GMAIL_THREAD_URL}/${encodeURIComponent(threadId)}?format=minimal&fields=messages(id,labelIds,internalDate)`,
-      { headers: { authorization: `Bearer ${token}` } }
-    );
-    if (!res.ok) {
-      await res.body?.cancel();
-      return void 0;
-    }
-    const j = await res.json();
-    return (j.messages ?? []).some(
-      (m) => !(m.labelIds ?? []).includes("SENT") && Number(m.internalDate ?? 0) > since.getTime()
-    );
-  } catch {
-    return void 0;
-  }
-}
-async function linkedinSend(s, p) {
-  const base = (s.env.unipileBase ?? "").replace(/\/+$/, "");
-  if (!s.env.unipileKey || !base) return { ok: false, retry: false, error: "unipile_unconfigured" };
-  const form = new FormData();
-  form.set("account_id", p.accountId);
-  form.set("text", p.text);
-  let url;
-  if (p.chatId) url = `${base}/api/v1/chats/${encodeURIComponent(p.chatId)}/messages`;
-  else if (p.attendeeId) {
-    url = `${base}/api/v1/chats`;
-    form.append("attendees_ids", p.attendeeId);
-  } else return { ok: false, retry: false, error: "no_linkedin_chat" };
-  let res;
-  try {
-    res = await s.fetch(url, {
-      method: "POST",
-      headers: { "X-API-KEY": s.env.unipileKey, accept: "application/json" },
-      body: form
-    });
-  } catch {
-    return { ok: false, retry: true, error: "network" };
-  }
-  if (res.status === 429 || res.status >= 500) {
-    await res.body?.cancel();
-    return { ok: false, retry: true, error: `unipile_${res.status}` };
-  }
-  if (!res.ok) {
-    await res.body?.cancel();
-    return { ok: false, retry: false, error: `unipile_${res.status}` };
-  }
-  const j = await res.json().catch(() => ({}));
-  const id = j.message_id ?? j.id;
-  if (!id) return { ok: false, retry: false, error: "unipile_no_id" };
-  return { ok: true, providerMessageId: id, chatId: j.chat_id ?? p.chatId ?? void 0 };
-}
-
-// supabase/functions/_shared/sending/send.ts
-var LINKEDIN_CONFIRM_MS = 15 * 6e4;
-var PAUSE_RECHECK_SEC = 15 * 60;
-async function loadUser(db2, userId) {
-  const [u2] = await db2.sql`
-    select email, full_name, first_name, timezone, autonomy_level, settings from orbit.users where id = ${userId}::uuid`;
-  return u2;
-}
-function aheadOf(settings, key2, now) {
-  const v = settings?.[key2];
-  if (typeof v !== "string") return void 0;
-  const t = new Date(v);
-  return Number.isNaN(t.getTime()) || t.getTime() <= now.getTime() ? void 0 : t;
-}
-function ownCap(settings, key2, tableCap) {
-  const v = Number(settings?.[key2]);
-  return Number.isFinite(v) && v >= 1 ? Math.min(Math.floor(v), tableCap) : tableCap;
-}
-var hashOf = (d) => messageHash({ channel: d.channel, subject: d.subject, body: d.body });
-async function audit(db2, userId, actor, action, draftId, details) {
-  await db2.sql`
-    insert into orbit.audit_log (user_id, actor, action, target_table, target_id, details)
-    values (${userId}::uuid, ${actor}, ${action}, 'drafts', ${draftId}, ${details}::jsonb)`;
-}
-async function goalKindOf(db2, goalId) {
-  if (!goalId) return null;
-  const [g] = await db2.sql`select kind from orbit.goals where id = ${goalId}::uuid`;
-  return g?.kind ?? null;
-}
-async function postalAddress(db2, userId) {
-  const [u2] = await db2.sql`
-    select settings from orbit.users where id = ${userId}::uuid`;
-  const v = u2?.settings?.postal_address;
-  return typeof v === "string" ? v.trim() : "";
-}
-async function salesFirstTouch(db2, d) {
-  return d.channel === "gmail" && FIRST_TOUCH_KINDS.has(d.kind) && await goalKindOf(db2, d.goal_id) === "sales";
-}
-var SendRetry = class extends Error {
-  constructor(code) {
-    super(code);
-    this.name = "SendRetry";
-  }
-};
-async function sendDraft(s, draftId) {
-  const db2 = s.db;
-  const now = s.now();
-  const [d] = await db2.sql`
-    update orbit.drafts set status = 'sending'
-     where id = ${draftId}::uuid and status = 'approved'
-       and (send_at is null or send_at <= ${new Date(now.getTime() + 1e3)}::timestamptz)
-    returning *`;
-  if (!d) return { status: "skipped", reason: "not_claimed" };
-  const userId = d.user_id;
-  const settle = async (status, fields) => {
-    await db2.sql`
-      update orbit.drafts set status = ${status},
-             error = ${fields.error ?? null},
-             cancel_reason = ${fields.cancel_reason ?? null},
-             send_at = coalesce(${fields.send_at ?? null}::timestamptz, send_at)
-       where id = ${d.id}::uuid`;
-  };
-  const later = async (reason2, at) => {
-    await settle("approved", { error: reason2, send_at: at });
-    await s.queue.enqueue(
-      {
-        kind: "send.draft",
-        userId,
-        payload: { draftId: d.id },
-        dedupeKey: `send:${d.id}:${reason2}:${iso(at)}`
-      },
-      { delaySec: Math.max(1, Math.ceil((at.getTime() - now.getTime()) / 1e3)) }
-    );
-    await audit(db2, userId, "system", "draft.hold", d.id, { reason: reason2, until: iso(at) });
-    return { status: "held", reason: reason2 };
-  };
-  if (askUserMarkers(`${d.subject ?? ""}
-${d.body}`).length || placeholderIn(`${d.subject ?? ""}
-${d.body}`)) {
-    await settle("draft", { error: "needs_input" });
-    return { status: "held", reason: "needs_input" };
-  }
-  const review = d.review_until ? new Date(d.review_until) : void 0;
-  if (review && !Number.isNaN(review.getTime()) && review.getTime() > now.getTime())
-    return later("review_window", review);
-  const [person] = await db2.sql`
-    select display_name, first_name, primary_email, title, headline, do_not_contact, linkedin_member_id
-      from orbit.people where id = ${d.person_id}::uuid`;
-  if (!person) {
-    await settle("failed", { error: "no_person" });
-    return { status: "failed", error: "no_person" };
-  }
-  const history = await historyWith(db2, userId, d.person_id);
-  const createdAt = iso(d.created_at);
-  const replied = cancelIfReplied(
-    { personId: d.person_id, createdAt },
-    history.map((h) => ({
-      personId: d.person_id,
-      direction: h.direction,
-      at: h.at,
-      channel: "email"
-    }))
-  );
-  let live;
-  if (!replied.cancel && d.channel === "gmail" && d.thread_external_id)
-    live = await gmailThreadHasNewerInbound(s, userId, d.thread_external_id, new Date(createdAt));
-  if (replied.cancel || live) {
-    await settle("cancelled", { cancel_reason: "replied" });
-    await audit(db2, userId, "system", "draft.cancel", d.id, { reason: "replied" });
-    return { status: "cancelled", reason: "replied" };
-  }
-  const approvals = await db2.sql`
-    select actor, action, details, created_at from orbit.audit_log
-     where user_id = ${userId}::uuid and target_table = 'drafts' and target_id = ${d.id}
-       and action in ('draft.approve', 'draft.confirm', 'draft.auto_approve')
-     order by created_at desc`;
-  const hash = hashOf(d);
-  const userApproved = approvals.some((a) => a.action === "draft.approve" && a.details?.hash === hash);
-  const agentApproved = approvals.some((a) => a.action === "draft.auto_approve" && a.details?.hash === hash);
-  const u2 = await loadUser(db2, userId);
-  if (!u2) {
-    await settle("failed", { error: "no_user" });
-    return { status: "failed", error: "no_user" };
-  }
-  const paused = aheadOf(u2.settings, "autopilot_paused_until", now);
-  if (paused && (agentApproved && !userApproved || Number(d.autonomy_level) >= 1))
-    return later(
-      "autopilot_paused",
-      new Date(Math.min(paused.getTime(), now.getTime() + PAUSE_RECHECK_SEC * 1e3))
-    );
-  if (agentApproved && !userApproved && breakerHolds(d.kind) && goalPaused(u2.settings, d.goal_id, now)) {
-    await settle("draft", { error: "goal_paused" });
-    await audit(db2, userId, "system", "draft.hold", d.id, { reason: "goal_paused", goalId: d.goal_id });
-    return { status: "held", reason: "goal_paused" };
-  }
-  const firstTouchStanding = d.auto_rung === "first_touch" && agentApproved && !userApproved;
-  if (firstTouchStanding) {
-    const gate = await firstTouchSendGate(s, userId, d);
-    if (!gate.go && "later" in gate) return later(gate.later, gate.until);
-    if (!gate.go && (gate.rule === "do_not_contact" || gate.rule === "minor")) {
-      await settle("cancelled", { cancel_reason: gate.rule });
-      await audit(db2, userId, "system", "draft.blocked", d.id, { rule: gate.rule });
-      return { status: "cancelled", reason: gate.rule };
-    }
-    if (!gate.go) {
-      await settle("draft", { error: gate.hold });
-      await audit(db2, userId, "system", "draft.hold", d.id, { reason: gate.hold });
-      return { status: "held", reason: gate.hold };
-    }
-  }
-  if (d.channel === "linkedin" && agentApproved && !userApproved) {
-    await settle("draft", { error: "linkedin_never_auto" });
-    await audit(db2, userId, "system", "draft.hold", d.id, { reason: "linkedin_never_auto" });
-    return { status: "held", reason: "linkedin_never_auto" };
-  }
-  if (d.channel === "linkedin") {
-    const fresh = approvals.some(
-      (a) => a.action === "draft.confirm" && a.actor === "user" && a.details?.hash === hash && now.getTime() - new Date(a.created_at).getTime() <= LINKEDIN_CONFIRM_MS
-    );
-    if (!fresh) {
-      await settle("draft", { error: "linkedin_needs_fresh_approval" });
-      await audit(db2, userId, "system", "draft.hold", d.id, { reason: "linkedin_needs_fresh_approval" });
-      return { status: "held", reason: "linkedin_needs_fresh_approval" };
-    }
-  }
-  if (!userApproved && !agentApproved) {
-    await settle("draft", { error: "not_approved" });
-    return { status: "held", reason: "not_approved" };
-  }
-  const meta2 = d.ask ?? {};
-  const violations = checkSend(
-    { kind: d.kind, channel: d.channel, personId: d.person_id, subject: d.subject, body: d.body },
-    {
-      now,
-      userEmails: [u2.email],
-      userName: u2.full_name ?? u2.first_name ?? "",
-      recipient: {
-        doNotContact: person.do_not_contact,
-        title: person.title ?? void 0,
-        headline: person.headline ?? void 0
-      },
-      history,
-      schedulingLink: typeof u2.settings?.scheduling_link === "string" ? u2.settings.scheduling_link : void 0,
-      offeredSlots: meta2.slots,
-      timeZone: u2.timezone,
-      approvedHash: userApproved ? hash : void 0
-    }
-    // the earned rung is the student's standing approval of a first message, and nothing else it covers
-  ).filter((v) => !(firstTouchStanding && v.rule === "first_message_needs_approval"));
-  const forbidden = violations.find((v) => v.kind === "forbidden");
-  if (forbidden) {
-    await settle("cancelled", { cancel_reason: forbidden.rule });
-    await audit(db2, userId, "system", "draft.blocked", d.id, { rule: forbidden.rule });
-    return { status: "cancelled", reason: forbidden.rule };
-  }
-  if (violations.length) {
-    await settle("draft", { error: `needs_approval:${violations.map((v) => v.rule).join(",")}` });
-    return { status: "held", reason: violations[0].rule };
-  }
-  if (await salesFirstTouch(db2, d) && (!await postalAddress(db2, userId) || !meta2.footer)) {
-    await settle("draft", { error: "needs_postal_address" });
-    return { status: "held", reason: "needs_postal_address" };
-  }
-  if (agentApproved && !userApproved) {
-    const gate = await voiceGate(s, u2, d, { firstMessage: FIRST_TOUCH_KINDS.has(d.kind) });
-    if (!gate.ok) {
-      await settle("draft", { error: "voice" });
-      await audit(db2, userId, "system", "draft.hold", d.id, {
-        reason: "voice",
-        text: VOICE_HOLD_REASON,
-        problems: gate.problems,
-        ...gate.score !== void 0 ? { score: gate.score } : {}
-      });
-      return { status: "held", reason: "voice" };
-    }
-  }
-  const cap = await capReached(db2, userId, d, now, u2, agentApproved && !userApproved);
-  if (cap) {
-    const next = new Date(
-      nextSendWindow(new Date(now.getTime() + 864e5), u2.timezone, d.channel, s.random).notBefore
-    );
-    await settle(d.channel === "linkedin" ? "draft" : "approved", { error: cap, send_at: next });
-    await audit(db2, userId, "system", "draft.hold", d.id, { reason: cap, until: iso(next) });
-    return { status: "held", reason: cap };
-  }
-  let out;
-  if (d.channel === "gmail") {
-    if (!person.primary_email) {
-      await settle("failed", { error: "no_email" });
-      return { status: "failed", error: "no_email" };
-    }
-    const subject = d.subject ?? await threadSubject(db2, userId, d.thread_external_id) ?? "";
-    const refs = d.in_reply_to ?? await lastMessageId(db2, userId, d.thread_external_id);
-    const forward = d.kind === "forward_intro" ? d.via : null;
-    const raw = rawMessage({
-      from: u2.email,
-      fromName: u2.full_name ?? void 0,
-      to: person.primary_email,
-      toName: person.display_name,
-      ...forward?.cc ? { cc: forward.cc, ccName: forward.ccName } : {},
-      subject: d.subject ? subject : subject && !/^re:/i.test(subject) ? `Re: ${subject}` : subject,
-      body: d.body,
-      inReplyTo: refs,
-      references: refs,
-      draftId: d.id,
-      date: now
-    });
-    out = await gmailSend(s, userId, raw, d.thread_external_id);
-  } else {
-    const [acct] = await db2.sql`
-      select external_account_id from orbit.integration_accounts
-       where user_id = ${userId}::uuid and provider = 'linkedin' and status = 'active'`;
-    if (!acct?.external_account_id) {
-      await settle("failed", { error: "linkedin_not_connected" });
-      return { status: "failed", error: "linkedin_not_connected" };
-    }
-    const chatId = d.thread_external_id ?? await linkedinChatId(db2, userId, d.person_id);
-    const attendee = chatId ? null : await linkedinAttendee(db2, userId, d.person_id, person.linkedin_member_id);
-    out = await linkedinSend(s, {
-      accountId: acct.external_account_id,
-      chatId,
-      attendeeId: attendee,
-      text: d.body
-    });
-  }
-  if (!out.ok) {
-    if (out.retry) {
-      await settle("approved", { error: out.error });
-      throw new SendRetry(out.error);
-    }
-    await settle("failed", { error: out.error });
-    await audit(db2, userId, "system", "draft.failed", d.id, { error: out.error });
-    if (d.channel === "gmail")
-      await tripBreaker(db2, userId, {
-        goalId: d.goal_id,
-        reason: "send_error",
-        personId: d.person_id,
-        personName: person.display_name,
-        now
-      }).catch(() => void 0);
-    return { status: "failed", error: out.error };
-  }
-  const threadId = out.chatId ?? out.threadId ?? d.thread_external_id;
-  await db2.sql`
-    update orbit.drafts set status = 'sent', sent_at = ${now}::timestamptz, provider_message_id = ${out.providerMessageId},
-                            thread_external_id = ${threadId ?? null}, error = null
-     where id = ${d.id}::uuid`;
-  const auto = agentApproved && !userApproved;
-  await audit(db2, userId, auto ? "agent" : "user", auto ? "draft.auto_sent" : "draft.sent", d.id, {
-    channel: d.channel,
-    kind: d.kind,
-    ...auto ? { rung: d.auto_rung ?? d.kind, level: Number(d.autonomy_level) } : {}
-  });
-  if (d.chat_id) await afterSend(db2, userId, d, now);
-  const via = d.via;
-  if (d.kind === "intro_request" && via?.introRequestId)
-    await db2.sql`update orbit.intro_requests set asked_at = ${now}::timestamptz where id = ${via.introRequestId}::uuid`;
-  if (d.kind === "forward_intro" && via?.friendAskId)
-    await db2.sql`
-      update orbit.friend_intro_asks set status = 'forwarded', forwarded_message_id = ${d.id}::uuid,
-             answered_at = coalesce(answered_at, ${now}::timestamptz)
-       where id = ${via.friendAskId}::uuid and friend_user_id = ${userId}::uuid`;
-  return { status: "sent", providerMessageId: out.providerMessageId };
-}
-async function afterSend(db2, userId, d, now) {
-  const [c] = await db2.sql`
-    select stage, data from orbit.chats where id = ${d.chat_id}::uuid`;
-  if (!c) return;
-  const at = now.toISOString();
-  const data = {
-    ...c.data,
-    lastOutboundAt: at,
-    outreachChannel: d.channel === "gmail" ? "email" : "linkedin"
-  };
-  if (!data.firstOutreachAt && d.kind !== "forwardable_blurb" && d.kind !== "intro_request")
-    data.firstOutreachAt = at;
-  if (d.kind === "bump") data.bumpCount = (data.bumpCount ?? 0) + 1;
-  await db2.sql`update orbit.chats set data = ${data}::jsonb where id = ${d.chat_id}::uuid`;
-  if (["identified", "warming"].includes(c.stage) && d.kind !== "forwardable_blurb" && d.kind !== "intro_request")
-    await moveChat(db2, userId, d.chat_id, "outreach_sent", `${d.kind} sent`, now);
-}
-async function capReached(db2, userId, d, now, u2, auto) {
-  const zone = validZone(u2.timezone) ?? "America/New_York";
-  const key2 = new Intl.DateTimeFormat("en-CA", { timeZone: zone }).format(now);
-  const dayStart2 = zonedTime2(key2, 0, 0, zone);
-  const weekStart = new Date(dayStart2.getTime() - 6 * 864e5);
-  if (auto) {
-    if (d.channel === "linkedin") return "linkedin_never_auto";
-    const [a] = await db2.sql`
-      select count(*) filter (where created_at >= ${dayStart2}::timestamptz)::int as day,
-             count(*) filter (where created_at >= ${dayStart2}::timestamptz
-                                and details->>'kind' in ('first_touch', 'warm_first_touch', 'outreach'))::int as day_first,
-             count(*) filter (where details->>'kind' in ('first_touch', 'warm_first_touch', 'outreach'))::int as week_first
-        from orbit.audit_log
-       where user_id = ${userId}::uuid and action = 'draft.auto_sent' and created_at >= ${weekStart}::timestamptz`;
-    if ((a?.day ?? 0) >= SEND_CAPS.autoPerDay) return "auto_daily_cap";
-    if (FIRST_TOUCH_KINDS.has(d.kind)) {
-      if ((a?.day_first ?? 0) >= SEND_CAPS.autoFirstTouchesPerDay) return "auto_first_touch_daily_cap";
-      if ((a?.week_first ?? 0) >= SEND_CAPS.autoFirstTouchesPerWeek) return "auto_first_touch_weekly_cap";
-    }
-  }
-  if (d.channel === "linkedin") {
-    const [r2] = await db2.sql`
-      select count(*)::int as n from orbit.drafts
-       where user_id = ${userId}::uuid and channel = 'linkedin' and status = 'sent'
-         and sent_at >= ${dayStart2}::timestamptz`;
-    const cap2 = ownCap(u2.settings, "daily_send_cap_linkedin", SEND_CAPS.linkedinPerDay);
-    return (r2?.n ?? 0) >= cap2 ? "linkedin_daily_cap" : null;
-  }
-  if (await salesFirstTouch(db2, d)) {
-    const [r2] = await db2.sql`
-      select count(*)::int as n from orbit.drafts dr join orbit.goals g on g.id = dr.goal_id
-       where dr.user_id = ${userId}::uuid and dr.channel = 'gmail' and dr.status = 'sent' and g.kind = 'sales'
-         and dr.kind in ('first_touch', 'warm_first_touch', 'outreach') and dr.sent_at >= ${dayStart2}::timestamptz`;
-    return (r2?.n ?? 0) >= SEND_CAPS.gmailSalesFirstTouchesPerDay ? "gmail_sales_daily_cap" : null;
-  }
-  const [r] = await db2.sql`
-    select count(*)::int as n from orbit.drafts dr
-     where dr.user_id = ${userId}::uuid and dr.channel = 'gmail' and dr.status = 'sent'
-       and dr.sent_at >= ${dayStart2}::timestamptz
-       and not (dr.kind in ('first_touch', 'warm_first_touch', 'outreach')
-                and exists (select 1 from orbit.goals g where g.id = dr.goal_id and g.kind = 'sales'))`;
-  const cap = ownCap(u2.settings, "daily_send_cap_gmail", SEND_CAPS.gmailPerDay);
-  return (r?.n ?? 0) >= cap ? "gmail_daily_cap" : null;
-}
-async function threadSubject(db2, userId, threadExternalId) {
-  if (!threadExternalId) return null;
-  const [t] = await db2.sql`
-    select subject from orbit.threads where user_id = ${userId}::uuid and external_id = ${threadExternalId}`;
-  return t?.subject ?? null;
-}
-async function lastMessageId(db2, userId, threadExternalId) {
-  if (!threadExternalId) return null;
-  const [m] = await db2.sql`
-    select m.rfc_message_id from orbit.messages m join orbit.threads t on t.id = m.thread_id
-     where t.user_id = ${userId}::uuid and t.external_id = ${threadExternalId} and m.rfc_message_id is not null
-     order by m.sent_at desc limit 1`;
-  return m?.rfc_message_id ?? null;
-}
-async function linkedinChatId(db2, userId, personId) {
-  const [t] = await db2.sql`
-    select external_id from orbit.threads
-     where user_id = ${userId}::uuid and provider = 'linkedin' and ${personId}::uuid = any(participant_person_ids)
-     order by last_at desc nulls last limit 1`;
-  return t?.external_id ?? null;
-}
-async function linkedinAttendee(db2, userId, personId, memberId) {
-  const [i] = await db2.sql`
-    select value_raw, value_norm from orbit.person_identities
-     where user_id = ${userId}::uuid and person_id = ${personId}::uuid and kind in ('unipile_attendee', 'linkedin_member')
-     order by (kind = 'unipile_attendee') desc limit 1`;
-  return i?.value_raw ?? i?.value_norm ?? memberId;
 }
 
 // supabase/functions/orbit-worker/handlers/send.ts

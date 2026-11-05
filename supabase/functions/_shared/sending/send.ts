@@ -39,12 +39,20 @@ import { moveChat } from '../slots/slots.ts';
 import { recordDraftEdit, voiceGate } from '../voice/voice.ts';
 import { validZone, zonedTime } from '../zones.ts';
 import { rawMessage } from './mime.ts';
-import { gmailSend, gmailThreadHasNewerInbound, linkedinSend, type SendOutcome } from './transport.ts';
+import {
+  gmailSend,
+  gmailSentCopy,
+  gmailThreadHasNewerInbound,
+  linkedinSend,
+  type SendOutcome,
+} from './transport.ts';
 
 /** A LinkedIn send needs the user's tap on that message within this window. */
 export const LINKEDIN_CONFIRM_MS = 15 * 60_000;
 /** A send held by the pause is looked at again this often, until the pause ends. */
 export const PAUSE_RECHECK_SEC = 15 * 60;
+/** A draft still 'sending' this long after its claim was left by a worker that died mid-send. */
+export const STUCK_SENDING_MS = 10 * 60_000;
 
 type UserRow = Record<string, unknown> & {
   email: string;
@@ -379,8 +387,10 @@ export async function sendDraft(s: Services, draftId: string): Promise<SendResul
   }>`
     select actor, action, details, created_at from orbit.audit_log
      where user_id = ${userId}::uuid and target_table = 'drafts' and target_id = ${d.id}
-       and action in ('draft.approve', 'draft.confirm', 'draft.auto_approve')
+       and action in ('draft.approve', 'draft.confirm', 'draft.auto_approve', 'draft.send_unconfirmed')
      order by created_at desc`;
+  // an earlier try may have gone out without Orbit hearing so: Gmail is asked for that copy before a second one
+  const unconfirmed = approvals.some((a) => a.action === 'draft.send_unconfirmed');
   const hash = hashOf(d);
   const userApproved = approvals.some((a) => a.action === 'draft.approve' && a.details?.hash === hash);
   const agentApproved = approvals.some((a) => a.action === 'draft.auto_approve' && a.details?.hash === hash);
@@ -519,6 +529,18 @@ export async function sendDraft(s: Services, draftId: string): Promise<SendResul
       await settle('failed', { error: 'no_email' });
       return { status: 'failed', error: 'no_email' };
     }
+    const copy = unconfirmed
+      ? await gmailSentCopy(s, userId, {
+          to: person.primary_email,
+          draftId: d.id,
+          since: new Date(createdAt),
+        })
+      : null;
+    if (copy === undefined) {
+      // Gmail cannot say whether the earlier try went: wait and ask again rather than risk a second copy
+      await settle('approved', { error: 'send_unconfirmed' });
+      throw new SendRetry('send_unconfirmed');
+    }
     const subject = d.subject ?? (await threadSubject(db, userId, d.thread_external_id)) ?? '';
     const refs = d.in_reply_to ?? (await lastMessageId(db, userId, d.thread_external_id));
     // a friend's intro passed on (plan 29 §A4) carries the friend in cc, so the reply reaches them without the
@@ -537,7 +559,9 @@ export async function sendDraft(s: Services, draftId: string): Promise<SendResul
       draftId: d.id,
       date: now,
     });
-    out = await gmailSend(s, userId, raw, d.thread_external_id);
+    out = copy
+      ? { ok: true, providerMessageId: copy.id, threadId: copy.threadId }
+      : await gmailSend(s, userId, raw, d.thread_external_id);
   } else {
     const [acct] = await db.sql<{ external_account_id: string | null }>`
       select external_account_id from orbit.integration_accounts
@@ -558,6 +582,18 @@ export async function sendDraft(s: Services, draftId: string): Promise<SendResul
     });
   }
   if (!out.ok) {
+    // the provider may have taken it: remembered, so the next try looks for the copy before sending again
+    if (out.ambiguous)
+      await audit(db, userId, 'system', 'draft.send_unconfirmed', d.id, { error: out.error, at: iso(now) });
+    // LinkedIn cannot be asked what went: never resent on Orbit's own, the student checks the chat and taps again
+    if (out.retry && out.ambiguous && d.channel === 'linkedin') {
+      await settle('failed', { error: 'linkedin_unconfirmed' });
+      await audit(db, userId, 'system', 'draft.failed', d.id, {
+        error: 'linkedin_unconfirmed',
+        cause: out.error,
+      });
+      return { status: 'failed', error: 'linkedin_unconfirmed' };
+    }
     if (out.retry) {
       await settle('approved', { error: out.error });
       throw new SendRetry(out.error);
@@ -643,6 +679,16 @@ async function capReached(
   const key = new Intl.DateTimeFormat('en-CA', { timeZone: zone }).format(now);
   const dayStart = zonedTime(key, 0, 0, zone);
   const weekStart = new Date(dayStart.getTime() - 6 * 86_400_000);
+  // sends claimed earlier by another worker and not yet recorded count too, so two at once never pass a cap
+  // together (the earlier claim goes first; the later one waits for the next window)
+  const [f] = await db.sql<{ n: number; first: number }>`
+    select count(*)::int as n,
+           count(*) filter (where o.kind in ('first_touch', 'warm_first_touch', 'outreach'))::int as first
+      from orbit.drafts o, orbit.drafts me
+     where me.id = ${d.id}::uuid and o.user_id = ${userId}::uuid and o.status = 'sending'
+       and o.channel = ${d.channel} and o.id <> me.id and (o.updated_at, o.id) < (me.updated_at, me.id)`;
+  const inFlight = f?.n ?? 0;
+  const inFlightFirst = f?.first ?? 0;
   if (auto) {
     if (d.channel === 'linkedin') return 'linkedin_never_auto';
     const [a] = await db.sql<{ day: number; week_first: number; day_first: number }>`
@@ -652,10 +698,12 @@ async function capReached(
              count(*) filter (where details->>'kind' in ('first_touch', 'warm_first_touch', 'outreach'))::int as week_first
         from orbit.audit_log
        where user_id = ${userId}::uuid and action = 'draft.auto_sent' and created_at >= ${weekStart}::timestamptz`;
-    if ((a?.day ?? 0) >= SEND_CAPS.autoPerDay) return 'auto_daily_cap';
+    if ((a?.day ?? 0) + inFlight >= SEND_CAPS.autoPerDay) return 'auto_daily_cap';
     if (FIRST_TOUCH_KINDS.has(d.kind as never)) {
-      if ((a?.day_first ?? 0) >= SEND_CAPS.autoFirstTouchesPerDay) return 'auto_first_touch_daily_cap';
-      if ((a?.week_first ?? 0) >= SEND_CAPS.autoFirstTouchesPerWeek) return 'auto_first_touch_weekly_cap';
+      if ((a?.day_first ?? 0) + inFlightFirst >= SEND_CAPS.autoFirstTouchesPerDay)
+        return 'auto_first_touch_daily_cap';
+      if ((a?.week_first ?? 0) + inFlightFirst >= SEND_CAPS.autoFirstTouchesPerWeek)
+        return 'auto_first_touch_weekly_cap';
     }
   }
   if (d.channel === 'linkedin') {
@@ -664,14 +712,16 @@ async function capReached(
        where user_id = ${userId}::uuid and channel = 'linkedin' and status = 'sent'
          and sent_at >= ${dayStart}::timestamptz`;
     const cap = ownCap(u.settings, 'daily_send_cap_linkedin', SEND_CAPS.linkedinPerDay);
-    return (r?.n ?? 0) >= cap ? 'linkedin_daily_cap' : null;
+    return (r?.n ?? 0) + inFlight >= cap ? 'linkedin_daily_cap' : null;
   }
   if (await salesFirstTouch(db, d)) {
     const [r] = await db.sql<{ n: number }>`
       select count(*)::int as n from orbit.drafts dr join orbit.goals g on g.id = dr.goal_id
        where dr.user_id = ${userId}::uuid and dr.channel = 'gmail' and dr.status = 'sent' and g.kind = 'sales'
          and dr.kind in ('first_touch', 'warm_first_touch', 'outreach') and dr.sent_at >= ${dayStart}::timestamptz`;
-    return (r?.n ?? 0) >= SEND_CAPS.gmailSalesFirstTouchesPerDay ? 'gmail_sales_daily_cap' : null;
+    return (r?.n ?? 0) + inFlightFirst >= SEND_CAPS.gmailSalesFirstTouchesPerDay
+      ? 'gmail_sales_daily_cap'
+      : null;
   }
   const [r] = await db.sql<{ n: number }>`
     select count(*)::int as n from orbit.drafts dr
@@ -680,7 +730,49 @@ async function capReached(
        and not (dr.kind in ('first_touch', 'warm_first_touch', 'outreach')
                 and exists (select 1 from orbit.goals g where g.id = dr.goal_id and g.kind = 'sales'))`;
   const cap = ownCap(u.settings, 'daily_send_cap_gmail', SEND_CAPS.gmailPerDay);
-  return (r?.n ?? 0) >= cap ? 'gmail_daily_cap' : null;
+  return (r?.n ?? 0) + inFlight >= cap ? 'gmail_daily_cap' : null;
+}
+
+/**
+ * Drafts left 'sending' by a worker that died between the claim and the record (the isolate's CPU or wall-clock
+ * limit, a crash): an email goes back in the queue marked unconfirmed, so the next try asks Gmail for the copy first
+ * and sends only if there is none; a LinkedIn message, which cannot be looked up, fails for the student to check.
+ * Run from the hourly cadence scan. Returns how many were recovered.
+ */
+export async function recoverStuckSends(s: Services, userId: string): Promise<number> {
+  const db = s.db;
+  const now = s.now();
+  const stuck = await db.sql<{ id: string; channel: string }>`
+    select id, channel from orbit.drafts
+     where user_id = ${userId}::uuid and status = 'sending'
+       and updated_at < ${new Date(now.getTime() - STUCK_SENDING_MS)}::timestamptz`;
+  let n = 0;
+  for (const d of stuck) {
+    const email = d.channel === 'gmail';
+    const [row] = await db.sql<{ id: string }>`
+      update orbit.drafts
+         set status = ${email ? 'approved' : 'failed'},
+             error = ${email ? 'send_interrupted' : 'linkedin_unconfirmed'},
+             send_at = case when ${email} then ${now}::timestamptz else send_at end
+       where id = ${d.id}::uuid and status = 'sending'
+         and updated_at < ${new Date(now.getTime() - STUCK_SENDING_MS)}::timestamptz
+      returning id`;
+    if (!row) continue;
+    n++;
+    await audit(db, userId, 'system', 'draft.send_unconfirmed', d.id, {
+      error: 'send_interrupted',
+      at: iso(now),
+    });
+    if (email)
+      await s.queue.enqueue({
+        kind: 'send.draft',
+        userId,
+        payload: { draftId: d.id },
+        dedupeKey: `send:${d.id}:recover:${iso(now)}`,
+      });
+    else await audit(db, userId, 'system', 'draft.failed', d.id, { error: 'linkedin_unconfirmed' });
+  }
+  return n;
 }
 
 /** LinkedIn invites: 15 a day and 60 a week, counted from the audit log (invites go out only on a tap). */

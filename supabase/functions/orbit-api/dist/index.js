@@ -9043,6 +9043,9 @@ var HOLD_REASONS = {
   validator: "Orbit wrote it, but it did not pass its own checks, so it waits for you to read it.",
   no_hook: "Orbit found nothing researched about them to open with, so it waits for you.",
   voice: `It ${VOICE_HOLD_REASON}, so it waits for your tap.`,
+  send_unconfirmed: "Gmail did not confirm the last try, so Orbit checks your Sent mail before trying again.",
+  send_interrupted: "The send was interrupted, so Orbit checks your Sent mail before trying again.",
+  linkedin_unconfirmed: "LinkedIn did not confirm the message went. Check the chat on LinkedIn before you send it again.",
   same_firm_today: "Someone at the same firm got a first message this morning, so this one moved to the next morning."
 };
 function holdReason(r) {
@@ -12327,173 +12330,6 @@ async function firstTouchSendGate(s, userId, d) {
   return { go: true };
 }
 
-// supabase/functions/_shared/cadence/cadence.ts
-var DAY9 = 864e5;
-function goalFrom(r) {
-  const due2 = r.due_at instanceof Date ? r.due_at.toISOString().slice(0, 10) : r.due_at;
-  return goalFromRow({ ...isoRow(r), due_at: due2 });
-}
-async function loadCadence(db2, userId, now) {
-  const [u2] = await db2.sql`
-    select timezone, autonomy_level, settings from orbit.users where id = ${userId}::uuid`;
-  const tz = validZone(u2?.timezone) ?? "America/New_York";
-  const settings2 = u2?.settings ?? {};
-  const chatRows = await db2.sql`
-    select * from orbit.chats where user_id = ${userId}::uuid and archived_at is null`;
-  const chats = chatRows.map((r) => chatFromRow(isoRow(r)));
-  const goalRows = await db2.sql`
-    select * from orbit.goals where user_id = ${userId}::uuid and deleted_at is null`;
-  const goals = goalRows.map(goalFrom);
-  const draftRows = await db2.sql`
-    select id, person_id, chat_id, kind, status, send_at, created_at from orbit.drafts
-     where user_id = ${userId}::uuid
-       and (status in ('draft', 'approved', 'scheduled', 'sending') or created_at > ${new Date(now.getTime() - 30 * DAY9)}::timestamptz)`;
-  const drafts = draftRows.map((d) => ({
-    id: d.id,
-    personId: d.person_id,
-    chatId: d.chat_id ?? void 0,
-    kind: d.kind,
-    status: d.status,
-    sendAt: iso(d.send_at) ?? void 0,
-    createdAt: iso(d.created_at)
-  }));
-  const msgRows = await db2.sql`
-    select direction, sent_at, provider, from_person_id, to_person_ids from orbit.messages
-     where user_id = ${userId}::uuid and not is_automated
-       and sent_at > ${new Date(now.getTime() - 365 * DAY9)}::timestamptz`;
-  const messages = [];
-  for (const m of msgRows) {
-    const channel = m.provider === "linkedin" ? "linkedin" : "email";
-    const at = iso(m.sent_at);
-    if (m.direction === "in") {
-      if (m.from_person_id) messages.push({ personId: m.from_person_id, direction: "in", at, channel });
-    } else
-      for (const p of m.to_person_ids ?? []) messages.push({ personId: p, direction: "out", at, channel });
-  }
-  const unsynced = await db2.sql`
-    select d.person_id, d.sent_at, d.channel from orbit.drafts d
-     where d.user_id = ${userId}::uuid and d.status = 'sent' and d.sent_at is not null and d.kind <> 'forwardable_blurb'
-       and not exists (select 1 from orbit.messages m where m.user_id = d.user_id and m.external_id = d.provider_message_id)`;
-  for (const d of unsynced)
-    messages.push({
-      personId: d.person_id,
-      direction: "out",
-      at: iso(d.sent_at),
-      channel: d.channel === "linkedin" ? "linkedin" : "email"
-    });
-  const goalPeople = goals.flatMap((g) => g.targets?.people ?? []);
-  const wanted = [
-    .../* @__PURE__ */ new Set([...chats.map((c) => c.personId), ...drafts.map((d) => d.personId), ...goalPeople])
-  ];
-  const peopleRows = await db2.sql`
-    select p.id, p.first_name, p.display_name, p.title, p.org_raw, p.hidden_at, p.do_not_contact, p.timezone,
-           p.last_interaction_at, ts.score::int as score,
-           d.content->'recently' as recently, d.updated_at as dossier_at,
-           (select f.text from orbit.facts f where f.person_id = p.id and f.deleted_at is null
-               and f.created_at > ${new Date(now.getTime() - 30 * DAY9)}::timestamptz
-             order by f.created_at desc limit 1) as fact
-      from orbit.people p
-      left join orbit.tie_scores ts on ts.user_id = p.user_id and ts.person_id = p.id
-      left join orbit.dossiers d on d.user_id = p.user_id and d.person_id = p.id and d.status in ('ready', 'partial')
-     where p.user_id = ${userId}::uuid and not p.is_self and p.deleted_at is null and p.merged_into is null
-       and (ts.score >= 60 or p.id = any(${wanted}::uuid[]))`;
-  const people = /* @__PURE__ */ new Map();
-  for (const p of peopleRows) {
-    const fresh = p.dossier_at && now.getTime() - new Date(p.dossier_at).getTime() < 60 * DAY9;
-    const recent = fresh && Array.isArray(p.recently) ? p.recently[0]?.text : void 0;
-    people.set(p.id, {
-      person: {
-        id: p.id,
-        firstName: p.first_name ?? p.display_name.split(/\s+/)[0],
-        currentTitle: p.title ?? void 0,
-        currentOrganizationRaw: p.org_raw ?? void 0,
-        hiddenAt: iso(p.hidden_at) ?? void 0,
-        doNotContact: p.do_not_contact
-      },
-      score: p.score ?? 0,
-      lastContactAt: iso(p.last_interaction_at) ?? void 0,
-      nurtureReason: recent ?? p.fact ?? void 0,
-      timeZone: validZone(p.timezone)
-    });
-  }
-  const nurtured = draftRows.filter((d) => d.kind === "nurture" || d.kind === "reengage").map((d) => iso(d.created_at));
-  const awaiting = await db2.sql`
-    select distinct person_id from orbit.suggestions
-     where user_id = ${userId}::uuid and kind = 'needs_you' and status in ('pending', 'snoozed') and person_id is not null`;
-  const maxBumps = num(settings2.max_bumps, 2);
-  const quiet = typeof settings2.quiet_until === "string" ? settings2.quiet_until : void 0;
-  return {
-    input: {
-      chats,
-      drafts,
-      messages,
-      people,
-      goals,
-      settings: { maxBumps, timezone: tz, quietUntil: quiet },
-      now,
-      recentNurtureAt: nurtured
-    },
-    timezone: tz,
-    chatsById: new Map(chats.map((c) => [c.id, c])),
-    goalsById: new Map(goals.map((g) => [g.id, g])),
-    settings: settings2,
-    awaitingStudent: new Set(awaiting.map((r) => r.person_id)),
-    autonomyLevel: num(u2?.autonomy_level, 0),
-    autoKinds: Array.isArray(settings2.auto_kinds) ? settings2.auto_kinds.filter(
-      (k) => typeof k === "string" && AUTO_KINDS.includes(k)
-    ) : [],
-    pausedUntil: typeof settings2.autopilot_paused_until === "string" ? settings2.autopilot_paused_until : void 0
-  };
-}
-var toDue = (a) => ({
-  kind: a.kind,
-  personId: a.personId ?? null,
-  chatId: a.chatId ?? null,
-  draftId: a.draftId ?? null,
-  reason: a.reason,
-  dueAt: a.dueAt
-});
-async function dueItems(db2, userId, now) {
-  const st = await loadCadence(db2, userId, now);
-  return cadenceActions(st.input).map(toDue);
-}
-
-// supabase/functions/orbit-api/routes/cadence.ts
-async function due(ctx) {
-  return json(200, { items: await dueItems(ctx.db, ctx.userId, ctx.now()) });
-}
-var cadenceRoutes = {
-  "/cadence/due": { method: "POST", auth: true, run: due }
-};
-
-// supabase/functions/orbit-api/routes/calendar.ts
-async function slots(ctx) {
-  const b = await body(ctx, true);
-  if (b.tz !== void 0 && typeof b.tz !== "string") throw badRequest("tz must be an IANA zone");
-  const count = b.count === void 0 ? void 0 : Number(b.count);
-  const r = await slotsFor(ctx.services(), ctx.userId, {
-    personId: optUuid(b, "personId"),
-    tz: b.tz,
-    count: Number.isFinite(count) ? count : void 0
-  });
-  return json(200, { slots: r.slots, tz: r.tz });
-}
-async function book(ctx) {
-  const b = await body(ctx);
-  if (typeof b.slotStart !== "string") throw badRequest("slotStart is required");
-  const r = await bookSlot(
-    ctx.services(),
-    ctx.userId,
-    { draftId: uuid(b, "draftId"), slotStart: b.slotStart },
-    ctx.env.appUrl
-  );
-  return json(200, r);
-}
-var calendarRoutes = {
-  "/calendar/slots": { method: "POST", auth: true, run: slots },
-  "/calendar/book": { method: "POST", auth: true, run: book }
-};
-
 // supabase/functions/_shared/compose/drafts.ts
 function toServerDraft(r) {
   return {
@@ -12588,6 +12424,8 @@ function rawMessage(m) {
 // supabase/functions/_shared/sending/transport.ts
 var GMAIL_SEND_URL = "https://gmail.googleapis.com/gmail/v1/users/me/messages/send";
 var GMAIL_THREAD_URL = "https://gmail.googleapis.com/gmail/v1/users/me/threads";
+var GMAIL_MESSAGES_URL = "https://gmail.googleapis.com/gmail/v1/users/me/messages";
+var SEND_TIMEOUT_MS = 25e3;
 async function gmailSend(s, userId, raw, threadId) {
   if (!s.tokens) return { ok: false, retry: false, error: "google_unconfigured" };
   for (let attempt = 0; attempt < 2; attempt++) {
@@ -12603,10 +12441,11 @@ async function gmailSend(s, userId, raw, threadId) {
       res = await s.fetch(GMAIL_SEND_URL, {
         method: "POST",
         headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
-        body: JSON.stringify(threadId ? { raw, threadId } : { raw })
+        body: JSON.stringify(threadId ? { raw, threadId } : { raw }),
+        signal: AbortSignal.timeout(SEND_TIMEOUT_MS)
       });
     } catch {
-      return { ok: false, retry: true, error: "network" };
+      return { ok: false, retry: true, error: "network", ambiguous: true };
     }
     if (res.status === 401 && attempt === 0) {
       s.tokens.invalidate(userId);
@@ -12615,7 +12454,7 @@ async function gmailSend(s, userId, raw, threadId) {
     }
     if (res.status === 429 || res.status >= 500) {
       await res.body?.cancel();
-      return { ok: false, retry: true, error: `gmail_${res.status}` };
+      return { ok: false, retry: true, error: `gmail_${res.status}`, ambiguous: res.status >= 500 };
     }
     if (!res.ok) {
       await res.body?.cancel();
@@ -12647,6 +12486,39 @@ async function gmailThreadHasNewerInbound(s, userId, threadId, since) {
     return void 0;
   }
 }
+async function gmailSentCopy(s, userId, p) {
+  if (!s.tokens) return void 0;
+  try {
+    const token = await s.tokens.accessToken(userId);
+    const headers = { authorization: `Bearer ${token}` };
+    const q = `in:sent to:${p.to} after:${Math.floor(p.since.getTime() / 1e3) - 60}`;
+    const list7 = await s.fetch(`${GMAIL_MESSAGES_URL}?maxResults=20&q=${encodeURIComponent(q)}`, {
+      headers,
+      signal: AbortSignal.timeout(SEND_TIMEOUT_MS)
+    });
+    if (!list7.ok) {
+      await list7.body?.cancel();
+      return void 0;
+    }
+    const j = await list7.json();
+    for (const m of j.messages ?? []) {
+      const res = await s.fetch(
+        `${GMAIL_MESSAGES_URL}/${encodeURIComponent(m.id)}?format=metadata&metadataHeaders=X-Orbit-Draft-Id`,
+        { headers, signal: AbortSignal.timeout(SEND_TIMEOUT_MS) }
+      );
+      if (!res.ok) {
+        await res.body?.cancel();
+        return void 0;
+      }
+      const msg = await res.json();
+      const tag = msg.payload?.headers?.find((h) => h.name.toLowerCase() === "x-orbit-draft-id")?.value;
+      if (tag?.trim() === p.draftId) return { id: m.id, threadId: m.threadId };
+    }
+    return null;
+  } catch {
+    return void 0;
+  }
+}
 async function linkedinSend(s, p) {
   const base = (s.env.unipileBase ?? "").replace(/\/+$/, "");
   if (!s.env.unipileKey || !base) return { ok: false, retry: false, error: "unipile_unconfigured" };
@@ -12664,14 +12536,15 @@ async function linkedinSend(s, p) {
     res = await s.fetch(url, {
       method: "POST",
       headers: { "X-API-KEY": s.env.unipileKey, accept: "application/json" },
-      body: form
+      body: form,
+      signal: AbortSignal.timeout(SEND_TIMEOUT_MS)
     });
   } catch {
-    return { ok: false, retry: true, error: "network" };
+    return { ok: false, retry: true, error: "network", ambiguous: true };
   }
   if (res.status === 429 || res.status >= 500) {
     await res.body?.cancel();
-    return { ok: false, retry: true, error: `unipile_${res.status}` };
+    return { ok: false, retry: true, error: `unipile_${res.status}`, ambiguous: res.status >= 500 };
   }
   if (!res.ok) {
     await res.body?.cancel();
@@ -12686,6 +12559,7 @@ async function linkedinSend(s, p) {
 // supabase/functions/_shared/sending/send.ts
 var LINKEDIN_CONFIRM_MS = 15 * 6e4;
 var PAUSE_RECHECK_SEC = 15 * 60;
+var STUCK_SENDING_MS = 10 * 6e4;
 async function loadUser2(db2, userId) {
   const [u2] = await db2.sql`
     select email, full_name, first_name, timezone, autonomy_level, settings from orbit.users where id = ${userId}::uuid`;
@@ -12929,8 +12803,9 @@ ${d.body}`)) {
   const approvals = await db2.sql`
     select actor, action, details, created_at from orbit.audit_log
      where user_id = ${userId}::uuid and target_table = 'drafts' and target_id = ${d.id}
-       and action in ('draft.approve', 'draft.confirm', 'draft.auto_approve')
+       and action in ('draft.approve', 'draft.confirm', 'draft.auto_approve', 'draft.send_unconfirmed')
      order by created_at desc`;
+  const unconfirmed = approvals.some((a) => a.action === "draft.send_unconfirmed");
   const hash = hashOf(d);
   const userApproved = approvals.some((a) => a.action === "draft.approve" && a.details?.hash === hash);
   const agentApproved = approvals.some((a) => a.action === "draft.auto_approve" && a.details?.hash === hash);
@@ -13046,6 +12921,15 @@ ${d.body}`)) {
       await settle("failed", { error: "no_email" });
       return { status: "failed", error: "no_email" };
     }
+    const copy = unconfirmed ? await gmailSentCopy(s, userId, {
+      to: person2.primary_email,
+      draftId: d.id,
+      since: new Date(createdAt)
+    }) : null;
+    if (copy === void 0) {
+      await settle("approved", { error: "send_unconfirmed" });
+      throw new SendRetry("send_unconfirmed");
+    }
     const subject = d.subject ?? await threadSubject(db2, userId, d.thread_external_id) ?? "";
     const refs = d.in_reply_to ?? await lastMessageId(db2, userId, d.thread_external_id);
     const forward = d.kind === "forward_intro" ? d.via : null;
@@ -13062,7 +12946,7 @@ ${d.body}`)) {
       draftId: d.id,
       date: now
     });
-    out = await gmailSend(s, userId, raw, d.thread_external_id);
+    out = copy ? { ok: true, providerMessageId: copy.id, threadId: copy.threadId } : await gmailSend(s, userId, raw, d.thread_external_id);
   } else {
     const [acct] = await db2.sql`
       select external_account_id from orbit.integration_accounts
@@ -13081,6 +12965,16 @@ ${d.body}`)) {
     });
   }
   if (!out.ok) {
+    if (out.ambiguous)
+      await audit(db2, userId, "system", "draft.send_unconfirmed", d.id, { error: out.error, at: iso(now) });
+    if (out.retry && out.ambiguous && d.channel === "linkedin") {
+      await settle("failed", { error: "linkedin_unconfirmed" });
+      await audit(db2, userId, "system", "draft.failed", d.id, {
+        error: "linkedin_unconfirmed",
+        cause: out.error
+      });
+      return { status: "failed", error: "linkedin_unconfirmed" };
+    }
     if (out.retry) {
       await settle("approved", { error: out.error });
       throw new SendRetry(out.error);
@@ -13141,6 +13035,14 @@ async function capReached(db2, userId, d, now, u2, auto) {
   const key = new Intl.DateTimeFormat("en-CA", { timeZone: zone }).format(now);
   const dayStart = zonedTime(key, 0, 0, zone);
   const weekStart = new Date(dayStart.getTime() - 6 * 864e5);
+  const [f2] = await db2.sql`
+    select count(*)::int as n,
+           count(*) filter (where o.kind in ('first_touch', 'warm_first_touch', 'outreach'))::int as first
+      from orbit.drafts o, orbit.drafts me
+     where me.id = ${d.id}::uuid and o.user_id = ${userId}::uuid and o.status = 'sending'
+       and o.channel = ${d.channel} and o.id <> me.id and (o.updated_at, o.id) < (me.updated_at, me.id)`;
+  const inFlight = f2?.n ?? 0;
+  const inFlightFirst = f2?.first ?? 0;
   if (auto) {
     if (d.channel === "linkedin") return "linkedin_never_auto";
     const [a] = await db2.sql`
@@ -13150,10 +13052,12 @@ async function capReached(db2, userId, d, now, u2, auto) {
              count(*) filter (where details->>'kind' in ('first_touch', 'warm_first_touch', 'outreach'))::int as week_first
         from orbit.audit_log
        where user_id = ${userId}::uuid and action = 'draft.auto_sent' and created_at >= ${weekStart}::timestamptz`;
-    if ((a?.day ?? 0) >= SEND_CAPS.autoPerDay) return "auto_daily_cap";
+    if ((a?.day ?? 0) + inFlight >= SEND_CAPS.autoPerDay) return "auto_daily_cap";
     if (FIRST_TOUCH_KINDS.has(d.kind)) {
-      if ((a?.day_first ?? 0) >= SEND_CAPS.autoFirstTouchesPerDay) return "auto_first_touch_daily_cap";
-      if ((a?.week_first ?? 0) >= SEND_CAPS.autoFirstTouchesPerWeek) return "auto_first_touch_weekly_cap";
+      if ((a?.day_first ?? 0) + inFlightFirst >= SEND_CAPS.autoFirstTouchesPerDay)
+        return "auto_first_touch_daily_cap";
+      if ((a?.week_first ?? 0) + inFlightFirst >= SEND_CAPS.autoFirstTouchesPerWeek)
+        return "auto_first_touch_weekly_cap";
     }
   }
   if (d.channel === "linkedin") {
@@ -13162,14 +13066,14 @@ async function capReached(db2, userId, d, now, u2, auto) {
        where user_id = ${userId}::uuid and channel = 'linkedin' and status = 'sent'
          and sent_at >= ${dayStart}::timestamptz`;
     const cap2 = ownCap(u2.settings, "daily_send_cap_linkedin", SEND_CAPS.linkedinPerDay);
-    return (r2?.n ?? 0) >= cap2 ? "linkedin_daily_cap" : null;
+    return (r2?.n ?? 0) + inFlight >= cap2 ? "linkedin_daily_cap" : null;
   }
   if (await salesFirstTouch(db2, d)) {
     const [r2] = await db2.sql`
       select count(*)::int as n from orbit.drafts dr join orbit.goals g on g.id = dr.goal_id
        where dr.user_id = ${userId}::uuid and dr.channel = 'gmail' and dr.status = 'sent' and g.kind = 'sales'
          and dr.kind in ('first_touch', 'warm_first_touch', 'outreach') and dr.sent_at >= ${dayStart}::timestamptz`;
-    return (r2?.n ?? 0) >= SEND_CAPS.gmailSalesFirstTouchesPerDay ? "gmail_sales_daily_cap" : null;
+    return (r2?.n ?? 0) + inFlightFirst >= SEND_CAPS.gmailSalesFirstTouchesPerDay ? "gmail_sales_daily_cap" : null;
   }
   const [r] = await db2.sql`
     select count(*)::int as n from orbit.drafts dr
@@ -13178,7 +13082,7 @@ async function capReached(db2, userId, d, now, u2, auto) {
        and not (dr.kind in ('first_touch', 'warm_first_touch', 'outreach')
                 and exists (select 1 from orbit.goals g where g.id = dr.goal_id and g.kind = 'sales'))`;
   const cap = ownCap(u2.settings, "daily_send_cap_gmail", SEND_CAPS.gmailPerDay);
-  return (r?.n ?? 0) >= cap ? "gmail_daily_cap" : null;
+  return (r?.n ?? 0) + inFlight >= cap ? "gmail_daily_cap" : null;
 }
 async function threadSubject(db2, userId, threadExternalId) {
   if (!threadExternalId) return null;
@@ -13208,6 +13112,173 @@ async function linkedinAttendee(db2, userId, personId, memberId) {
      order by (kind = 'unipile_attendee') desc limit 1`;
   return i?.value_raw ?? i?.value_norm ?? memberId;
 }
+
+// supabase/functions/_shared/cadence/cadence.ts
+var DAY9 = 864e5;
+function goalFrom(r) {
+  const due2 = r.due_at instanceof Date ? r.due_at.toISOString().slice(0, 10) : r.due_at;
+  return goalFromRow({ ...isoRow(r), due_at: due2 });
+}
+async function loadCadence(db2, userId, now) {
+  const [u2] = await db2.sql`
+    select timezone, autonomy_level, settings from orbit.users where id = ${userId}::uuid`;
+  const tz = validZone(u2?.timezone) ?? "America/New_York";
+  const settings2 = u2?.settings ?? {};
+  const chatRows = await db2.sql`
+    select * from orbit.chats where user_id = ${userId}::uuid and archived_at is null`;
+  const chats = chatRows.map((r) => chatFromRow(isoRow(r)));
+  const goalRows = await db2.sql`
+    select * from orbit.goals where user_id = ${userId}::uuid and deleted_at is null`;
+  const goals = goalRows.map(goalFrom);
+  const draftRows = await db2.sql`
+    select id, person_id, chat_id, kind, status, send_at, created_at from orbit.drafts
+     where user_id = ${userId}::uuid
+       and (status in ('draft', 'approved', 'scheduled', 'sending') or created_at > ${new Date(now.getTime() - 30 * DAY9)}::timestamptz)`;
+  const drafts = draftRows.map((d) => ({
+    id: d.id,
+    personId: d.person_id,
+    chatId: d.chat_id ?? void 0,
+    kind: d.kind,
+    status: d.status,
+    sendAt: iso(d.send_at) ?? void 0,
+    createdAt: iso(d.created_at)
+  }));
+  const msgRows = await db2.sql`
+    select direction, sent_at, provider, from_person_id, to_person_ids from orbit.messages
+     where user_id = ${userId}::uuid and not is_automated
+       and sent_at > ${new Date(now.getTime() - 365 * DAY9)}::timestamptz`;
+  const messages = [];
+  for (const m of msgRows) {
+    const channel = m.provider === "linkedin" ? "linkedin" : "email";
+    const at = iso(m.sent_at);
+    if (m.direction === "in") {
+      if (m.from_person_id) messages.push({ personId: m.from_person_id, direction: "in", at, channel });
+    } else
+      for (const p of m.to_person_ids ?? []) messages.push({ personId: p, direction: "out", at, channel });
+  }
+  const unsynced = await db2.sql`
+    select d.person_id, d.sent_at, d.channel from orbit.drafts d
+     where d.user_id = ${userId}::uuid and d.status = 'sent' and d.sent_at is not null and d.kind <> 'forwardable_blurb'
+       and not exists (select 1 from orbit.messages m where m.user_id = d.user_id and m.external_id = d.provider_message_id)`;
+  for (const d of unsynced)
+    messages.push({
+      personId: d.person_id,
+      direction: "out",
+      at: iso(d.sent_at),
+      channel: d.channel === "linkedin" ? "linkedin" : "email"
+    });
+  const goalPeople = goals.flatMap((g) => g.targets?.people ?? []);
+  const wanted = [
+    .../* @__PURE__ */ new Set([...chats.map((c) => c.personId), ...drafts.map((d) => d.personId), ...goalPeople])
+  ];
+  const peopleRows = await db2.sql`
+    select p.id, p.first_name, p.display_name, p.title, p.org_raw, p.hidden_at, p.do_not_contact, p.timezone,
+           p.last_interaction_at, ts.score::int as score,
+           d.content->'recently' as recently, d.updated_at as dossier_at,
+           (select f.text from orbit.facts f where f.person_id = p.id and f.deleted_at is null
+               and f.created_at > ${new Date(now.getTime() - 30 * DAY9)}::timestamptz
+             order by f.created_at desc limit 1) as fact
+      from orbit.people p
+      left join orbit.tie_scores ts on ts.user_id = p.user_id and ts.person_id = p.id
+      left join orbit.dossiers d on d.user_id = p.user_id and d.person_id = p.id and d.status in ('ready', 'partial')
+     where p.user_id = ${userId}::uuid and not p.is_self and p.deleted_at is null and p.merged_into is null
+       and (ts.score >= 60 or p.id = any(${wanted}::uuid[]))`;
+  const people = /* @__PURE__ */ new Map();
+  for (const p of peopleRows) {
+    const fresh = p.dossier_at && now.getTime() - new Date(p.dossier_at).getTime() < 60 * DAY9;
+    const recent = fresh && Array.isArray(p.recently) ? p.recently[0]?.text : void 0;
+    people.set(p.id, {
+      person: {
+        id: p.id,
+        firstName: p.first_name ?? p.display_name.split(/\s+/)[0],
+        currentTitle: p.title ?? void 0,
+        currentOrganizationRaw: p.org_raw ?? void 0,
+        hiddenAt: iso(p.hidden_at) ?? void 0,
+        doNotContact: p.do_not_contact
+      },
+      score: p.score ?? 0,
+      lastContactAt: iso(p.last_interaction_at) ?? void 0,
+      nurtureReason: recent ?? p.fact ?? void 0,
+      timeZone: validZone(p.timezone)
+    });
+  }
+  const nurtured = draftRows.filter((d) => d.kind === "nurture" || d.kind === "reengage").map((d) => iso(d.created_at));
+  const awaiting = await db2.sql`
+    select distinct person_id from orbit.suggestions
+     where user_id = ${userId}::uuid and kind = 'needs_you' and status in ('pending', 'snoozed') and person_id is not null`;
+  const maxBumps = num(settings2.max_bumps, 2);
+  const quiet = typeof settings2.quiet_until === "string" ? settings2.quiet_until : void 0;
+  return {
+    input: {
+      chats,
+      drafts,
+      messages,
+      people,
+      goals,
+      settings: { maxBumps, timezone: tz, quietUntil: quiet },
+      now,
+      recentNurtureAt: nurtured
+    },
+    timezone: tz,
+    chatsById: new Map(chats.map((c) => [c.id, c])),
+    goalsById: new Map(goals.map((g) => [g.id, g])),
+    settings: settings2,
+    awaitingStudent: new Set(awaiting.map((r) => r.person_id)),
+    autonomyLevel: num(u2?.autonomy_level, 0),
+    autoKinds: Array.isArray(settings2.auto_kinds) ? settings2.auto_kinds.filter(
+      (k) => typeof k === "string" && AUTO_KINDS.includes(k)
+    ) : [],
+    pausedUntil: typeof settings2.autopilot_paused_until === "string" ? settings2.autopilot_paused_until : void 0
+  };
+}
+var toDue = (a) => ({
+  kind: a.kind,
+  personId: a.personId ?? null,
+  chatId: a.chatId ?? null,
+  draftId: a.draftId ?? null,
+  reason: a.reason,
+  dueAt: a.dueAt
+});
+async function dueItems(db2, userId, now) {
+  const st = await loadCadence(db2, userId, now);
+  return cadenceActions(st.input).map(toDue);
+}
+
+// supabase/functions/orbit-api/routes/cadence.ts
+async function due(ctx) {
+  return json(200, { items: await dueItems(ctx.db, ctx.userId, ctx.now()) });
+}
+var cadenceRoutes = {
+  "/cadence/due": { method: "POST", auth: true, run: due }
+};
+
+// supabase/functions/orbit-api/routes/calendar.ts
+async function slots(ctx) {
+  const b = await body(ctx, true);
+  if (b.tz !== void 0 && typeof b.tz !== "string") throw badRequest("tz must be an IANA zone");
+  const count = b.count === void 0 ? void 0 : Number(b.count);
+  const r = await slotsFor(ctx.services(), ctx.userId, {
+    personId: optUuid(b, "personId"),
+    tz: b.tz,
+    count: Number.isFinite(count) ? count : void 0
+  });
+  return json(200, { slots: r.slots, tz: r.tz });
+}
+async function book(ctx) {
+  const b = await body(ctx);
+  if (typeof b.slotStart !== "string") throw badRequest("slotStart is required");
+  const r = await bookSlot(
+    ctx.services(),
+    ctx.userId,
+    { draftId: uuid(b, "draftId"), slotStart: b.slotStart },
+    ctx.env.appUrl
+  );
+  return json(200, r);
+}
+var calendarRoutes = {
+  "/calendar/slots": { method: "POST", auth: true, run: slots },
+  "/calendar/book": { method: "POST", auth: true, run: book }
+};
 
 // supabase/functions/orbit-api/routes/drafts.ts
 var KINDS = [
