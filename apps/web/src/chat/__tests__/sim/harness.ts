@@ -199,7 +199,18 @@ export function teardownSim(): void {
 /** One student turn against Orbit, collecting the tools, prose and any pending confirmation. */
 async function orbitTurn(engine: ChatEngine, conversationId: string, text: string): Promise<Exchange> {
   const events: TurnEvent[] = [];
-  await engine.send(conversationId, text, (e) => events.push(e));
+  // SIM_TRACE=1 prints each turn as it runs, so a crash mid-conversation still shows what led to it
+  if (process.env.SIM_TRACE) console.error(`[sim trace] student: ${text.slice(0, 200)}`);
+  try {
+    await engine.send(conversationId, text, (e) => events.push(e));
+  } finally {
+    if (process.env.SIM_TRACE)
+      console.error(
+        `[sim trace] tools: ${events
+          .flatMap((e) => (e.type === 'tool_start' ? [e.toolName] : []))
+          .join(', ')}`,
+      );
+  }
   const names = new Map<string, string>();
   for (const e of events) if (e.type === 'tool_start') names.set(e.toolUseId, e.toolName);
   const tools = events.flatMap((e) =>

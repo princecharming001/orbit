@@ -252,18 +252,21 @@ export function createChatEngine(deps: ChatEngineDeps): ChatEngine {
         { status: env.kind === 'error' ? 'error' : 'done', envelope: env },
         clock(),
       );
-    // the next model turn sees the decision as a plain line; the UI renders meta 'decision' as a status line
-    await store.append(
-      action.conversationId,
-      {
-        role: 'user',
-        content: [
-          { type: 'text', text: `[Orbit] Approved ${actionId}: ${action.toolName} -> ${env.summary}` },
-        ],
-        meta: 'decision',
-      },
-      clock(),
-    );
+    // the next model turn sees the decision as a plain line; the UI renders meta 'decision' as a status line. An
+    // approved reset (leave_demo, load_demo, delete_all) took the chat with it: the tool did its work, and there is
+    // no conversation left to write the line into
+    if (await store.getConversation(action.conversationId))
+      await store.append(
+        action.conversationId,
+        {
+          role: 'user',
+          content: [
+            { type: 'text', text: `[Orbit] Approved ${actionId}: ${action.toolName} -> ${env.summary}` },
+          ],
+          meta: 'decision',
+        },
+        clock(),
+      );
     return env;
   };
 

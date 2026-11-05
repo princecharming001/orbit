@@ -800,6 +800,9 @@ export function createFakeOrbitApi(
               displayName: p.displayName,
               currentTitle: p.from.title,
               currentOrganizationRaw: p.from.org,
+              // as the server keeps them (plan 31): the email the page gave, and a LinkedIn address when known
+              primaryEmail: p.from.email ?? null,
+              linkedinUrl: p.from.linkedinUrl ?? null,
               sources: ['manual'],
               createdAt: at,
               updatedAt: at,

@@ -2623,7 +2623,10 @@ export const SCENARIOS: Scenario[] = [
     group: 'agent',
     persona:
       'Ana, a sophomore in bioengineering who wants a lab position and has no professor in her network',
-    account: 'demo',
+    // her own signed-in account, not the demo: on the demo, "I am Ana" reads as a student who wants to leave it
+    account: {
+      profile: { fullName: 'Ana Torres', firstName: 'Ana', school: 'UC Berkeley', graduationYear: 2029 },
+    },
     api: professors,
     goal: 'ask Orbit to source professors you can reach out to for biomed research at Berkeley; expect real names with what each works on and whether an email was found, read off their faculty pages, and the offer to add one and draft to them; never a made-up professor',
     maxTurns: 5,

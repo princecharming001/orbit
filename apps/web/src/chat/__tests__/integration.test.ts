@@ -547,3 +547,31 @@ describe('coverage', () => {
     for (const n of ui) expect(registry.has(n), n).toBe(true);
   });
 });
+
+// ---------------------------------------------------------------------------------------------------------------
+// (z) an approved reset takes the chat with it
+// ---------------------------------------------------------------------------------------------------------------
+
+describe('an approved reset that wipes the browser', () => {
+  beforeAll(async () => {
+    await clearPrefs();
+    user = await loadDemo({ reset: true, now: NOW });
+    engine = createChatEngine({ registry, execute, user: () => user, now: () => NOW });
+  }, 90_000);
+
+  it('resolves the approval instead of throwing, and the next message says the chat is gone', async () => {
+    const conv = (await engine.startConversation({ temporary: false })).id;
+    const t = await say('load the demo', conv);
+    expect(t.env?.kind).toBe('needs_confirmation');
+    // the tool reloads the demo from scratch: every table, this conversation included
+    const env = await engine.approve(t.env!.confirmationId!);
+    expect(env.kind).not.toBe('error');
+    expect(env.summary).toMatch(/demo is loaded/i);
+    expect(await db.chatConversations.get(conv)).toBeUndefined();
+    const after = await say('hi', conv);
+    const err = after.events.find((e) => e.type === 'error') as
+      | Extract<TurnEvent, { type: 'error' }>
+      | undefined;
+    expect(err?.message).toMatch(/no longer exists/);
+  }, 90_000);
+});
