@@ -2393,7 +2393,7 @@ var CAPS = [
   }
 ];
 var MONTHLY_TOTAL_USD = 25;
-var USER_TOTAL_USD = 20;
+var USER_TOTAL_USD = 100;
 var NEVER = "9999-12-31T00:00:00.000Z";
 function windowStart(window, now) {
   return window === "day" ? new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate())) : new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1));
