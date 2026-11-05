@@ -316,7 +316,9 @@ describe('orbit.health (§16)', () => {
         'generated_at',
         'job_errors_24h',
         'needs_reauth',
+        'orphaned_runs',
         'queues',
+        'scores_oldest_hours',
         'stuck_backfills',
       ].sort(),
     );

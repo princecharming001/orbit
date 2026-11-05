@@ -435,10 +435,33 @@ describe('friends over orbit-api', () => {
     await t.db.sql`delete from pgmq.q_orbit_score where message ->> 'kind' = 'friend_shares_refresh'`;
     // a full re-score (nightly, or after a backfill) queues one for a student with a friend
     const handlers = defaultHandlers({});
+    const ctx = {
+      db: t.db,
+      queue: { ...sqlQueue(t.db), setVt: async () => undefined },
+      now: () => new Date(),
+    };
     await handlers['score.user']!(
       { queue: 'orbit_score', msgId: 1, readCt: 1, kind: 'score.user', userId: ana.userId, payload: {} },
-      { db: t.db, queue: { ...sqlQueue(t.db), setVt: async () => undefined }, now: () => new Date() },
+      ctx,
     );
+    // the rebuild runs a page of people at a time; the last page is what queues the refresh, once every score is fresh
+    const pages = await t.db.sql<{ message: { payload: Record<string, unknown> } }>`
+      select message from pgmq.q_orbit_score
+       where message ->> 'kind' = 'score.page' and message ->> 'userId' = ${ana.userId}`;
+    expect(pages.length).toBeGreaterThan(0);
+    expect(await queued()).toEqual([]);
+    for (const [i, p] of pages.entries())
+      await handlers['score.page']!(
+        {
+          queue: 'orbit_score',
+          msgId: 10 + i,
+          readCt: 1,
+          kind: 'score.page',
+          userId: ana.userId,
+          payload: p.message.payload,
+        },
+        ctx,
+      );
     expect((await queued()).map((k) => k.split(':')[3])).toEqual(['score']);
   });
 });
