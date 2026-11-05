@@ -1,7 +1,11 @@
 /** The integration routes of orbit-api (§12.3): Google sync, LinkedIn hosted auth, status and sync. */
 import type { LinkedinStatusResponse, QueuedResponse } from '@orbit/core/server/api';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
-import { accountToken as sharedAccountToken } from '../../functions/_shared/accountToken.ts';
+import {
+  accountTokenOk,
+  accountTokenV2,
+  accountToken as sharedAccountToken,
+} from '../../functions/_shared/accountToken.ts';
 import { memoryTake } from '../../functions/_shared/ratelimit.ts';
 import { createSession } from '../../functions/_shared/session.ts';
 import { type ApiDeps, makeApiHandler } from '../../functions/orbit-api/api.ts';
@@ -301,12 +305,19 @@ describe('/linkedin/reader', () => {
     await t.db.sql`
       insert into orbit.integration_accounts (user_id, provider, external_account_id, status)
       values (${userId}::uuid, 'linkedin', 'acc-reader', 'active')`;
-    // their own account only, whatever the request names, signed exactly as orbit-connectors signs it
-    expect(await reader()).toEqual({
-      ok: true,
-      accountId: 'acc-reader',
-      token: await connectorsAccountToken('acc-reader', 'signing-placeholder'),
-    });
+    // their own account only, whatever the request names, with the second-version token orbit-connectors opens it with
+    const v2 = await accountTokenV2('acc-reader', 'signing-placeholder');
+    expect(await reader()).toEqual({ ok: true, accountId: 'acc-reader', token: v2 });
+    expect(await accountTokenOk('acc-reader', v2, 'signing-placeholder', async () => false)).toBe(true);
+    // a first-version token for an account linked here opens nothing (one could be handed out by user id until 11-05)
+    expect(
+      await accountTokenOk(
+        'acc-reader',
+        await connectorsAccountToken('acc-reader', 'signing-placeholder'),
+        'signing-placeholder',
+        async () => false,
+      ),
+    ).toBe(false);
     expect(await sharedAccountToken('acc-reader', 'signing-placeholder')).toBe(
       await connectorsAccountToken('acc-reader', 'signing-placeholder'),
     );

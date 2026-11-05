@@ -14398,6 +14398,9 @@ async function accountToken(accountId, signingKey) {
   );
   return btoa(String.fromCharCode(...sig)).replace(/=+$/, "").replace(/\+/g, "-").replace(/\//g, "_");
 }
+function accountTokenV2(accountId, signingKey) {
+  return accountToken(`v2:${accountId}`, signingKey);
+}
 
 // supabase/functions/_shared/providers/unipileSync.ts
 var when = z.union([z.string(), z.number()]).nullish();
@@ -14700,7 +14703,8 @@ async function linkedinReader(ctx) {
   return json(200, {
     ok: true,
     accountId: a.external_account_id,
-    token: await accountToken(a.external_account_id, ctx.env.connectorsSigningKey)
+    // the second version: a first-version token for an account linked here no longer opens it (accountTokenOk)
+    token: await accountTokenV2(a.external_account_id, ctx.env.connectorsSigningKey)
   });
 }
 var LINKEDIN_SEARCHES_PER_DAY = 80;

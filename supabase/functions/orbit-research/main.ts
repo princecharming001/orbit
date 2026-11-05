@@ -1,3 +1,4 @@
+import { unipileBrowserKept } from '../_shared/accountToken.ts';
 import { createExa } from '../_shared/providers/exa';
 import { createParallelSearch, createSerperSearch } from '../_shared/providers/webSearch';
 import { postgrestSharedCache } from '../_shared/research/web';
@@ -29,6 +30,11 @@ const exaKey = await providerSecret('EXA_API_KEY');
 // Parallel is out of credit; with neither set, research searches the way it did before
 const parallelKey = await providerSecret('PARALLEL_API_KEY');
 const serperKey = await providerSecret('SERPER_API_KEY');
+// first-version account tokens open research only for accounts a browser linked (Unipile names those orbit_<random>)
+const [unipileKey, unipileBase] = await Promise.all([
+  providerSecret('UNIPILE_API_KEY'),
+  providerSecret('UNIPILE_BASE_URL'),
+]);
 const engines = [
   createParallelSearch({ fetch, apiKey: parallelKey, timeoutMs: 10_000, maxRetries: 1 }),
   createSerperSearch({ fetch, apiKey: serperKey, timeoutMs: 10_000, maxRetries: 1 }),
@@ -40,6 +46,7 @@ Deno.serve(
     origins: defaultOrigins,
     // account tokens are signed by orbit-connectors with the service role key, which never leaves the server
     signingKey: serviceKey || undefined,
+    browserKept: unipileBrowserKept(unipileBase, unipileKey, fetch),
     salt: serviceKey.slice(-16) || 'orbit',
     take: postgrestTake(url, serviceKey),
     store: postgrestStore(url, serviceKey),

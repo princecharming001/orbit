@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { accountTokenV2 } from '../../../../../supabase/functions/_shared/accountToken';
 import {
   accountToken,
   type Bucket,
@@ -139,6 +140,8 @@ function harness(over: Partial<ConnectorDeps> = {}, upstreamOver?: Upstream) {
     origins: defaultOrigins,
     newRef: () => 'orbit_ref1',
     signingKey: SIGNING,
+    // these accounts were linked in a browser through /connect/start; the Unipile check has its own tests
+    browserKept: async () => true,
     fetch: (async (url: string, init: RequestInit = {}) => {
       upstream.push({
         url,
@@ -361,6 +364,30 @@ describe('orbit-connectors proxy', () => {
       (await harness({}, one(500, {})).handler(post('/account', { accountId: 'acc_1', token: TOKEN.acc_1 })))
         .status,
     ).toBe(502);
+  });
+
+  it("opens an account linked through orbit-api only with orbit-api's second-version token, never the first-version one /connect/status could once hand out by user id", async () => {
+    // the real Unipile check: acc_1 was linked through orbit-api, so Unipile names it after its owner's user id
+    const named =
+      (name: string): Upstream =>
+      (url) =>
+        url.includes('/api/v1/accounts/acc_1')
+          ? new Response(JSON.stringify({ id: 'acc_1', name, sources: [{ status: 'OK' }] }), { status: 200 })
+          : new Response('{}', { status: 404 });
+    const serverLinked = harness({ browserKept: undefined }, named('390cf6d9-fd4b-47ce-942d-7689cda5d312'));
+    const old = await serverLinked.handler(post('/account', { accountId: 'acc_1', token: TOKEN.acc_1 }));
+    expect(old.status).toBe(403);
+    const v2 = await accountTokenV2('acc_1', SIGNING);
+    expect(
+      await (await serverLinked.handler(post('/account', { accountId: 'acc_1', token: v2 }))).json(),
+    ).toEqual({
+      status: 'connected',
+    });
+    // an account a browser linked through /connect/start keeps its first-version token
+    const browser = harness({ browserKept: undefined }, named('orbit_3f2a9c1e-77aa-4b1c-9d0e-1234567890ab'));
+    expect(
+      await (await browser.handler(post('/account', { accountId: 'acc_1', token: TOKEN.acc_1 }))).json(),
+    ).toEqual({ status: 'connected' });
   });
 
   it('reads a 404 from Unipile as still waiting and any other failure as a 502', async () => {

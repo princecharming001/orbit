@@ -5,6 +5,7 @@
  * the support check (the fast model).
  */
 import { describe, expect, it } from 'vitest';
+import { accountTokenV2 } from '../../functions/_shared/accountToken.ts';
 import { memorySharedCache } from '../../functions/_shared/research/web';
 import {
   accountToken,
@@ -166,6 +167,7 @@ async function setup(over: Partial<ResearchDeps> = {}, opts: { webPages?: boolea
   const deps: ResearchDeps = {
     origins: (o) => o === ORIGIN,
     signingKey: KEY,
+    browserKept: async () => true,
     salt: 'test',
     take: memoryTake(() => NOW.getTime()),
     store,
@@ -229,6 +231,18 @@ describe('orbit-research', () => {
     const r = await bare.post('/quick', body(bare.token));
     expect(r.status).toBe(503);
     expect(r.headers.get('x-orbit-connector')).toBe('unconfigured');
+  });
+
+  it('a first-version token opens research only for an account a browser linked, a second-version one always', async () => {
+    const serverLinked = await setup({ browserKept: async () => false });
+    const r = await serverLinked.post('/quick', body(serverLinked.token));
+    expect(r.status).toBe(403);
+    expect(r.body.reason).toBe('not_linked');
+    expect(serverLinked.net.calls).toHaveLength(0);
+    const unknown = await setup({ browserKept: undefined });
+    expect((await unknown.post('/quick', body(unknown.token))).status).toBe(403);
+    const v2 = await accountTokenV2('acc_1', KEY);
+    expect((await serverLinked.post('/quick', body(v2))).status).not.toBe(403);
   });
 
   it('refuses a browser without the LinkedIn account token orbit-connectors handed out', async () => {

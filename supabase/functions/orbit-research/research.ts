@@ -25,6 +25,7 @@
  * Kept free of Deno APIs so it runs under Node tests; main.ts binds it to the real secrets and stores.
  */
 import Anthropic from '@anthropic-ai/sdk';
+import { accountTokenOk } from '../_shared/accountToken.ts';
 import { makeClaude } from '../_shared/claude.ts';
 import { clientIp, defaultOrigins } from '../_shared/origins.ts';
 import type { Exa } from '../_shared/providers/exa';
@@ -86,6 +87,8 @@ export interface ResearchDeps {
   origins: (origin: string) => boolean;
   /** verifies account tokens (the service role key in production); without it every research call is refused */
   signingKey?: string;
+  /** whether an account was linked through /connect/start (first-version tokens open only those); without it, none */
+  browserKept?: (accountId: string) => Promise<boolean>;
   /** salt for the hashed account, person and visitor */
   salt?: string;
   take: Take;
@@ -160,19 +163,6 @@ export async function accountToken(accountId: string, signingKey: string): Promi
     .replace(/=+$/, '')
     .replace(/\+/g, '-')
     .replace(/\//g, '_');
-}
-
-async function tokenValid(
-  accountId: string,
-  token: unknown,
-  signingKey: string | undefined,
-): Promise<boolean> {
-  if (!signingKey || !accountId || typeof token !== 'string' || !token) return false;
-  const want = await accountToken(accountId, signingKey);
-  if (want.length !== token.length) return false;
-  let diff = 0;
-  for (let i = 0; i < want.length; i++) diff |= want.charCodeAt(i) ^ token.charCodeAt(i);
-  return diff === 0;
 }
 
 function dayBucket(prefix: string, who: string, now: Date, limit: number): Bucket {
@@ -430,7 +420,9 @@ export function makeHandler(deps: ResearchDeps): (req: Request) => Promise<Respo
     if (path === '/remove') return removeRoute(deps, body, h);
 
     const accountId = str(body.accountId, 200) ?? '';
-    if (!(await tokenValid(accountId, body.token, deps.signingKey)))
+    if (
+      !(await accountTokenOk(accountId, body.token, deps.signingKey, deps.browserKept ?? (async () => false)))
+    )
       return json(
         403,
         { ok: false, reason: 'not_linked', message: 'Connect your LinkedIn to Orbit to research people.' },

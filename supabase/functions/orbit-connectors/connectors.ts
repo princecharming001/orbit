@@ -39,6 +39,7 @@
  * keys only changes this file (Village's lives in _shared/providers/village.ts, shared with the server).
  */
 
+import { accountTokenOk, unipileBrowserKept } from '../_shared/accountToken.ts';
 import { timingSafeEqual } from '../_shared/crypto.ts';
 import { clientIp, defaultOrigins } from '../_shared/origins.ts';
 import { type PostingDeps, readPosting } from '../_shared/postings.ts';
@@ -94,6 +95,8 @@ export interface ConnectorDeps {
   newRef?: () => string;
   /** signs account tokens (the service role key in production); without it account routes are refused */
   signingKey?: string;
+  /** whether an account was linked through /connect/start (first-version tokens open only those); Unipile by default */
+  browserKept?: (accountId: string) => Promise<boolean>;
   /** LinkedIn messages and requests one account may send per day */
   sendsPerDay?: number;
   /** each LinkedIn ledger's daily total per account (DEFAULT_LEDGER for any left out) */
@@ -764,6 +767,9 @@ const ACCOUNT_ROUTES = new Set([
 
 export function makeHandler(deps: ConnectorDeps): (req: Request) => Promise<Response> {
   const doFetch = deps.fetch ?? fetch;
+  // one Unipile answer cache per handler, shared by every route that checks an account token
+  deps.browserKept ??= unipileBrowserKept(deps.unipileBase, deps.unipileKey, doFetch);
+  const browserKept = deps.browserKept;
   const limits = deps.limits ?? DEFAULT_LIMITS;
   const now = deps.now ?? (() => new Date());
   const take = deps.take ?? memoryTake(() => now().getTime());
@@ -859,7 +865,10 @@ export function makeHandler(deps: ConnectorDeps): (req: Request) => Promise<Resp
       );
       return json(200, answer, h);
     }
-    if (ACCOUNT_ROUTES.has(path) && !(await tokenValid(accountId, body.token, deps.signingKey)))
+    if (
+      ACCOUNT_ROUTES.has(path) &&
+      !(await accountTokenOk(accountId, body.token, deps.signingKey, browserKept))
+    )
       return json(403, { error: 'this LinkedIn account is not linked to this browser' }, h);
     if (path === '/send') {
       let sendVerdict: { allowed: boolean };
@@ -915,7 +924,7 @@ export function makeHandler(deps: ConnectorDeps): (req: Request) => Promise<Resp
       if (isVillage) return json(200, await villagePaths(village, deps.villageUser!, body), h);
       // a reconnect names the student's existing account; only the browser holding its token may ask for it
       const reconnect = text(body.reconnectAccountId, 200);
-      if (reconnect && !(await tokenValid(reconnect, body.token, deps.signingKey)))
+      if (reconnect && !(await accountTokenOk(reconnect, body.token, deps.signingKey, browserKept)))
         return json(403, { error: 'this LinkedIn account is not linked to this browser' }, h);
       if (path === '/connect/start')
         return json(200, await unipileConnectStart(deps, doFetch, deps.newRef ?? newRef, reconnect), h);
@@ -2419,7 +2428,14 @@ async function enrichmentRoute(
       );
   } else {
     if (!deps.unipileKey || !deps.unipileBase) return unconfigured(h);
-    if (!(await tokenValid(String(body.accountId ?? ''), body.token, deps.signingKey)))
+    if (
+      !(await accountTokenOk(
+        String(body.accountId ?? ''),
+        body.token,
+        deps.signingKey,
+        deps.browserKept ?? (async () => false),
+      ))
+    )
       return json(403, { error: 'this LinkedIn account is not linked to this browser' }, h);
     // a read that only needs what anyone would see (`public`): another student's account may have read it today
     if (kind === 'profile' && body.public === true) {

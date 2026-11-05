@@ -32,6 +32,7 @@ function harness(over: Partial<ConnectorDeps> = {}) {
     villageBase: undefined,
     origins: defaultOrigins,
     signingKey: SIGNING,
+    browserKept: async () => true,
     companies: cache,
     now: () => new Date('2026-10-27T12:00:00Z'),
     take: memoryTake(() => Date.parse('2026-10-27T12:00:00Z')),

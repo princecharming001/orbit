@@ -16,7 +16,7 @@ import type {
   LinkedinStatusResponse,
   QueuedResponse,
 } from '@orbit/core/server/api';
-import { accountToken } from '../../_shared/accountToken.ts';
+import { accountTokenV2 } from '../../_shared/accountToken.ts';
 import { badRequest, HttpError, json, readJson, unconfigured } from '../../_shared/http.ts';
 import { slot } from '../../_shared/ingest/util.ts';
 import { createUnipileSync } from '../../_shared/providers/unipileSync.ts';
@@ -206,7 +206,8 @@ export async function linkedinReader(ctx: Ctx): Promise<Response> {
   return json(200, {
     ok: true,
     accountId: a.external_account_id,
-    token: await accountToken(a.external_account_id, ctx.env.connectorsSigningKey),
+    // the second version: a first-version token for an account linked here no longer opens it (accountTokenOk)
+    token: await accountTokenV2(a.external_account_id, ctx.env.connectorsSigningKey),
   });
 }
 

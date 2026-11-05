@@ -78,6 +78,7 @@ function harness(over: Partial<ConnectorDeps> = {}, answer?: (url: string, init:
     villageBase: undefined,
     origins: defaultOrigins,
     signingKey: SIGNING,
+    browserKept: async () => true,
     fetch: (async (url: string, init: RequestInit = {}) => {
       upstream.push({
         url,

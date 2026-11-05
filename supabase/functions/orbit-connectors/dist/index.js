@@ -344,6 +344,56 @@ function postgrestPostingCache(url2, serviceKey2, doFetch = fetch) {
   };
 }
 
+// supabase/functions/_shared/accountToken.ts
+async function accountToken(accountId, signingKey) {
+  const key = await crypto.subtle.importKey(
+    "raw",
+    new TextEncoder().encode(signingKey),
+    { name: "HMAC", hash: "SHA-256" },
+    false,
+    ["sign"]
+  );
+  const sig = new Uint8Array(
+    await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(`unipile-account:${accountId}`))
+  );
+  return btoa(String.fromCharCode(...sig)).replace(/=+$/, "").replace(/\+/g, "-").replace(/\//g, "_");
+}
+function accountTokenV2(accountId, signingKey) {
+  return accountToken(`v2:${accountId}`, signingKey);
+}
+function sameText(a, b) {
+  if (a.length !== b.length) return false;
+  let diff = 0;
+  for (let i = 0; i < a.length; i++) diff |= a.charCodeAt(i) ^ b.charCodeAt(i);
+  return diff === 0;
+}
+async function accountTokenOk(accountId, token, signingKey, browserKept) {
+  if (!signingKey || !accountId || typeof token !== "string" || !token) return false;
+  if (sameText(await accountTokenV2(accountId, signingKey), token)) return true;
+  if (!sameText(await accountToken(accountId, signingKey), token)) return false;
+  return browserKept(accountId).catch(() => false);
+}
+function unipileBrowserKept(base, key, doFetch, now = Date.now) {
+  const known = /* @__PURE__ */ new Map();
+  return async (accountId) => {
+    if (!base || !key) return false;
+    const hit = known.get(accountId);
+    if (hit && now() - hit.at < 36e5) return hit.kept;
+    const res = await doFetch(`${base}/api/v1/accounts/${encodeURIComponent(accountId)}`, {
+      headers: { accept: "application/json", "X-API-KEY": key },
+      signal: AbortSignal.timeout(8e3)
+    });
+    if (!res.ok) {
+      await res.body?.cancel();
+      return false;
+    }
+    const a = await res.json();
+    const kept = typeof a.name === "string" && /^orbit_[A-Za-z0-9-]{4,64}$/.test(a.name);
+    known.set(accountId, { kept, at: now() });
+    return kept;
+  };
+}
+
 // supabase/functions/_shared/crypto.ts
 var enc = new TextEncoder();
 async function sha256Bytes(text2) {
@@ -797,7 +847,7 @@ function postgrestLinks(url2, serviceKey2, doFetch = fetch) {
     }
   };
 }
-async function accountToken(accountId, signingKey) {
+async function accountToken2(accountId, signingKey) {
   const key = await crypto.subtle.importKey(
     "raw",
     new TextEncoder().encode(signingKey),
@@ -812,7 +862,7 @@ async function accountToken(accountId, signingKey) {
 }
 async function tokenValid(accountId, token, signingKey) {
   if (!signingKey || !accountId || typeof token !== "string" || !token) return false;
-  const want = await accountToken(accountId, signingKey);
+  const want = await accountToken2(accountId, signingKey);
   if (want.length !== token.length) return false;
   let diff = 0;
   for (let i = 0; i < want.length; i++) diff |= want.charCodeAt(i) ^ token.charCodeAt(i);
@@ -1085,6 +1135,8 @@ var ACCOUNT_ROUTES = /* @__PURE__ */ new Set([
 ]);
 function makeHandler(deps) {
   const doFetch = deps.fetch ?? fetch;
+  deps.browserKept ??= unipileBrowserKept(deps.unipileBase, deps.unipileKey, doFetch);
+  const browserKept = deps.browserKept;
   const limits = deps.limits ?? DEFAULT_LIMITS;
   const now = deps.now ?? (() => /* @__PURE__ */ new Date());
   const take = deps.take ?? memoryTake(() => now().getTime());
@@ -1172,7 +1224,7 @@ function makeHandler(deps) {
       );
       return json(200, answer, h);
     }
-    if (ACCOUNT_ROUTES.has(path) && !await tokenValid(accountId, body.token, deps.signingKey))
+    if (ACCOUNT_ROUTES.has(path) && !await accountTokenOk(accountId, body.token, deps.signingKey, browserKept))
       return json(403, { error: "this LinkedIn account is not linked to this browser" }, h);
     if (path === "/send") {
       let sendVerdict;
@@ -1216,14 +1268,14 @@ function makeHandler(deps) {
     try {
       if (isVillage) return json(200, await villagePaths(village, deps.villageUser, body), h);
       const reconnect = text(body.reconnectAccountId, 200);
-      if (reconnect && !await tokenValid(reconnect, body.token, deps.signingKey))
+      if (reconnect && !await accountTokenOk(reconnect, body.token, deps.signingKey, browserKept))
         return json(403, { error: "this LinkedIn account is not linked to this browser" }, h);
       if (path === "/connect/start")
         return json(200, await unipileConnectStart(deps, doFetch, deps.newRef ?? newRef, reconnect), h);
       if (path === "/connect/status") {
         const st = await unipileConnectStatus(deps, body, doFetch);
         if (st.status === "connected" && st.accountId && deps.signingKey)
-          return json(200, { ...st, token: await accountToken(st.accountId, deps.signingKey) }, h);
+          return json(200, { ...st, token: await accountToken2(st.accountId, deps.signingKey) }, h);
         return json(200, st, h);
       }
       if (path === "/account") return json(200, await unipileAccountHealth(deps, accountId, doFetch), h);
@@ -1260,7 +1312,7 @@ function uHeaders(deps) {
 }
 async function notifyUrl(deps, ref) {
   if (!deps.publicUrl || !deps.signingKey || !deps.links) return void 0;
-  const sig = await accountToken(`link:${ref}`, deps.signingKey);
+  const sig = await accountToken2(`link:${ref}`, deps.signingKey);
   return `${deps.publicUrl}/connect/notify?ref=${encodeURIComponent(ref)}&sig=${encodeURIComponent(sig)}`;
 }
 async function unipileConnectStart(deps, doFetch, makeRef, reconnect) {
@@ -1342,7 +1394,7 @@ async function unipileNotify(deps, req) {
   const q = new URL(req.url).searchParams;
   const ref = q.get("ref") ?? "";
   const sig = q.get("sig") ?? "";
-  if (!ref || !sig || !await timingSafeEqual(sig, await accountToken(`link:${ref}`, deps.signingKey)))
+  if (!ref || !sig || !await timingSafeEqual(sig, await accountToken2(`link:${ref}`, deps.signingKey)))
     return no(403);
   let b;
   try {
@@ -1708,7 +1760,7 @@ async function unipileInbox(deps, body, doFetch) {
 }
 async function sealCursor(deps, accountId, state) {
   const payload = base64(new TextEncoder().encode(JSON.stringify(state))).replace(/=+$/, "").replace(/\+/g, "-").replace(/\//g, "_");
-  const sig = await accountToken(`cursor:${accountId}:${payload}`, deps.signingKey);
+  const sig = await accountToken2(`cursor:${accountId}:${payload}`, deps.signingKey);
   return `${payload}.${sig}`;
 }
 async function openCursor(deps, accountId, cursor) {
@@ -2275,7 +2327,12 @@ async function enrichmentRoute(deps, path, body, ctx) {
       );
   } else {
     if (!deps.unipileKey || !deps.unipileBase) return unconfigured2(h);
-    if (!await tokenValid(String(body.accountId ?? ""), body.token, deps.signingKey))
+    if (!await accountTokenOk(
+      String(body.accountId ?? ""),
+      body.token,
+      deps.signingKey,
+      deps.browserKept ?? (async () => false)
+    ))
       return json(403, { error: "this LinkedIn account is not linked to this browser" }, h);
     if (kind === "profile" && body.public === true) {
       const key = await profileShareKey(body);
