@@ -144,6 +144,68 @@ const investors: ApiSeed = (api: FakeOrbitApi) => {
   ];
 };
 
+/** Professors read off UC Berkeley's own faculty pages (plan 31): email and research from the page, nothing guessed. */
+const professors: ApiSeed = (api: FakeOrbitApi) => {
+  api.state.sourced = [
+    {
+      id: 'rec_prof_1',
+      name: 'Adam Abate',
+      title: 'Associate Professor, Bioengineering and Therapeutic Sciences',
+      org: 'Bioengineering and Therapeutic Sciences, UC Berkeley',
+      email: 'abate@berkeley.edu',
+      url: 'https://bioegrad.berkeley.edu/people/adam-abate',
+      evidence: [
+        'Works on single-cell technologies, microfluidics, infectious disease',
+        'Lab page: https://www.abatelab.org/',
+        'Listed on Adam Abate | UC Berkeley-UCSF Graduate Program in Bioengineering (https://bioegrad.berkeley.edu/people/adam-abate)',
+      ],
+      source: 'web',
+      rank: 0.78,
+      fit: 0.9,
+      reach: 0.2,
+      responsiveness: 0.5,
+      reasons: [
+        'Biomedical faculty at UC Berkeley with a lab page',
+        'Works on single cells and infectious disease',
+      ],
+    },
+    {
+      id: 'rec_prof_2',
+      name: 'Hillel Adesnik',
+      title: 'Assistant Professor of Neurobiology',
+      org: 'Neurobiology, UC Berkeley',
+      email: 'hadesnik@berkeley.edu',
+      url: 'https://bioegrad.berkeley.edu/people/hillel-adesnik',
+      evidence: [
+        'Works on the neural basis of perception, cortical microcircuits, novel imaging approaches',
+        'Listed on Hillel Adesnik | UC Berkeley-UCSF Graduate Program in Bioengineering (https://bioegrad.berkeley.edu/people/hillel-adesnik)',
+      ],
+      source: 'web',
+      rank: 0.7,
+      fit: 0.8,
+      reach: 0.1,
+      responsiveness: 0.5,
+      reasons: ['Neurobiology faculty doing imaging work'],
+    },
+    {
+      id: 'rec_prof_3',
+      name: 'John Canny',
+      title: 'Professor',
+      org: 'Computer Science, UC Berkeley',
+      url: 'https://bioegrad.berkeley.edu/faculty/faculty-by-research-area',
+      evidence: [
+        'Listed on Faculty by Research Area | UC Berkeley-UCSF Graduate Program in Bioengineering (https://bioegrad.berkeley.edu/faculty/faculty-by-research-area)',
+      ],
+      source: 'web',
+      rank: 0.3,
+      fit: 0.2,
+      reach: 0,
+      responsiveness: 0.5,
+      reasons: ['Computer science, not primarily biomedical'],
+    },
+  ];
+};
+
 const operators: ApiSeed = (api: FakeOrbitApi) => {
   api.state.sourced = [
     {
@@ -2552,6 +2614,18 @@ export const SCENARIOS: Scenario[] = [
     account: 'demo',
     api: investors,
     goal: 'find seed investors who fit your startup',
+    maxTurns: 5,
+    expectTools: [['find_people']],
+    minGoal: 'partly',
+  },
+  {
+    id: 'find-professors',
+    group: 'agent',
+    persona:
+      'Ana, a sophomore in bioengineering who wants a lab position and has no professor in her network',
+    account: 'demo',
+    api: professors,
+    goal: 'ask Orbit to source professors you can reach out to for biomed research at Berkeley; expect real names with what each works on and whether an email was found, read off their faculty pages, and the offer to add one and draft to them; never a made-up professor',
     maxTurns: 5,
     expectTools: [['find_people']],
     minGoal: 'partly',

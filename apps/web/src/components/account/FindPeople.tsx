@@ -139,6 +139,18 @@ export function FindPeople({ userId }: { userId: string }) {
                   <div className="text-[12.5px] text-ink-3">
                     {[c.title, c.org, c.location].filter(Boolean).join(' · ')}
                   </div>
+                  {c.email ? (
+                    <div className="text-[12.5px] text-ink-2" data-testid="find-email">
+                      {c.email}
+                    </div>
+                  ) : null}
+                  {c.evidence?.length ? (
+                    <ul className="mt-1 text-[12.5px] text-ink-2 space-y-0.5" data-testid="find-context">
+                      {c.evidence.slice(0, 2).map((e, i) => (
+                        <li key={i}>{e}</li>
+                      ))}
+                    </ul>
+                  ) : null}
                   {c.reasons.length ? (
                     <ul className="mt-1 text-[12.5px] text-ink-2 space-y-0.5" data-testid="find-reasons">
                       {c.reasons.slice(0, 3).map((r, i) => (

@@ -139,7 +139,13 @@ export interface SourcedCandidate {
   org?: string;
   location?: string;
   linkedinUrl?: string;
-  source: 'unipile' | 'apollo' | 'exa' | 'semantic_scholar';
+  /** an email the public page gave, exactly as written there (plan 31); never guessed */
+  email?: string;
+  /** the page they were found on */
+  url?: string;
+  /** what a first message can be written from: what they work on, the lab, the page */
+  evidence?: string[];
+  source: 'unipile' | 'apollo' | 'exa' | 'semantic_scholar' | 'web';
   rank: number;
   fit: number;
   reach: number;
@@ -170,6 +176,8 @@ export interface SourceSearchResponse {
   unconfigured: string[];
   /** filters dropped to get results (§6.7) */
   relaxed: string[];
+  /** what the web pass did (plan 31): hits, pages and profile pages read */
+  notes?: string[];
 }
 /** POST /source/add */
 export interface SourceAddRequest {

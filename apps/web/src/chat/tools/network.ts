@@ -593,7 +593,7 @@ export const findPeopleTool = defineTool({
   name: 'find_people',
   kind: 'write',
   description:
-    "Call this when the student asks to find new people beyond their network for a purpose: investors, customers, candidates, mentors, alumni, a co-founder or research collaborators. Give the purpose (a goal kind) and what they are looking for; with an Orbit account it searches LinkedIn, Apollo, the web and Semantic Scholar and ranks results by fit, how reachable they are and how likely to reply, with reasons. Without one, it searches LinkedIn from the student's own account when LinkedIn is connected live. Show the top few and offer add_sourced.",
+    'Call this when the student asks to find or source new people beyond their network for a purpose: investors, customers, candidates, mentors, alumni, a co-founder, research collaborators, or professors and researchers at a school ("source professors I can reach out to for biomed research at Berkeley"). Give the purpose (a goal kind; professors and labs are collaboration), what they are looking for, and the school or organization and the topic when the student names them: with those, Orbit reads that place\'s faculty or team pages and comes back with names, titles, an email when the page gives one, and what each person works on, the context a first message is written from. With an Orbit account it also searches LinkedIn, Apollo and Semantic Scholar and ranks everyone by fit, how reachable they are and how likely to reply, with reasons. Without one, it searches LinkedIn from the student\'s own account when LinkedIn is connected live. Show the top few with what they work on and whether an email was found, and offer add_sourced.',
   input: z.object({
     purpose: z.enum(KINDS).describe('What the people are for.'),
     query: z
@@ -602,6 +602,23 @@ export const findPeopleTool = defineTool({
       .optional()
       .describe('Who, in the student\'s words ("seed investors in climate software").'),
     goalId: z.string().optional().describe('The goal this is for (from list_goals), if there is one.'),
+    school: z
+      .string()
+      .max(120)
+      .optional()
+      .describe(
+        'The school named in the ask ("UC Berkeley"), when there is one; its faculty pages are read.',
+      ),
+    organization: z
+      .string()
+      .max(120)
+      .optional()
+      .describe('The company or organization named in the ask ("Stripe"), when there is one.'),
+    topic: z
+      .string()
+      .max(160)
+      .optional()
+      .describe('The field, topic or team ("biomedical research", "payments"), when the student names one.'),
   }),
   capabilities: ['source_find'],
   progress: 'Searching for people',
@@ -610,7 +627,16 @@ export const findPeopleTool = defineTool({
       if (!(await linkedInSearchReady(ctx.user))) return needsAccount('Finding new people');
       return findOnLinkedIn(ctx, input.query, input.purpose);
     }
-    const r = await searchPeople(ctx.user, input);
+    const r = await searchPeople(ctx.user, {
+      purpose: input.purpose,
+      query: input.query,
+      goalId: input.goalId,
+      filters: {
+        schools: input.school ? [input.school] : undefined,
+        organizations: input.organization ? [input.organization] : undefined,
+        keywords: input.topic ? [input.topic] : undefined,
+      },
+    });
     if (!r.ok) throw new Error(r.message);
     const { results, unconfigured, relaxed } = r.value;
     const top = results.slice(0, 10);
@@ -629,14 +655,17 @@ export const findPeopleTool = defineTool({
         known: c.knownPersonId,
         text: candidateLine(c),
         chip: c.knownPersonId ? 'You know them' : undefined,
-        sub: c.reasons.slice(0, 2).join('. '),
-        href: c.knownPersonId ? `/people/${c.knownPersonId}` : undefined,
+        // what the page said they work on reads better than the fit reasons when the web found them
+        sub: [...(c.evidence ?? []).slice(0, 1), ...c.reasons.slice(0, 1)].join('. '),
+        href: c.knownPersonId ? `/people/${c.knownPersonId}` : c.url,
       })),
       {
         results: top.map((c) => ({
           recommendationId: c.id,
           who: wrapped(ctx, 'sourced', candidateLine(c), 200),
           location: c.location,
+          emailFound: !!c.email,
+          context: (c.evidence ?? []).slice(0, 2).map((t) => wrapped(ctx, 'sourced', t, 200)),
           reasons: c.reasons.slice(0, 2).map((t) => wrapped(ctx, 'sourced', t, 160)),
           knownPersonId: c.knownPersonId,
           rank: Math.round(c.rank * 100) / 100,

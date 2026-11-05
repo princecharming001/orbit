@@ -21,6 +21,8 @@ export interface FitCandidate {
   org?: string;
   location?: string;
   headline?: string;
+  /** what the page said about them (plan 31) */
+  evidence?: string[];
   source: string;
 }
 

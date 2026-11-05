@@ -4,6 +4,7 @@
  * adapters, Google tokens for Gmail and Calendar, the embedding model and the queue. Every piece degrades to
  * "unconfigured" when its key is missing, and tests inject fakes through `AgentConfig` (fetch, embed, clock).
  */
+
 import type Anthropic from '@anthropic-ai/sdk';
 import { type Claude, makeClaude } from './claude.ts';
 import type { Db } from './db.ts';
@@ -15,6 +16,7 @@ import { createSemanticScholar, type SemanticScholar } from './providers/semanti
 import { createUnipileResearch, type UnipileResearch } from './providers/unipileResearch';
 import { createVillage, type Village } from './providers/village';
 import { type Queue, sqlQueue } from './queue.ts';
+import type { WebSource } from './research/web';
 import { sqlVault } from './vault.ts';
 
 export interface AgentEnv {
@@ -99,6 +101,8 @@ export interface AgentConfig {
   tokens?: TokenSource;
   /** a prepared Anthropic client (tests) */
   anthropic?: Anthropic;
+  /** the public web for sourcing (tests hand in a fake; plan 31) */
+  web?: WebSource[];
 }
 
 export interface Services {
@@ -122,6 +126,10 @@ export interface Services {
   /** undefined when Orbit's Google client is not configured */
   google?: GoogleConfig;
   tokens?: TokenSource;
+  /** a prepared Anthropic client (tests), for the web sourcing chain */
+  anthropic?: Anthropic;
+  /** web sources handed in (tests); otherwise built from the keys */
+  web?: WebSource[];
 }
 
 interface SupabaseAi {
@@ -199,6 +207,8 @@ export function makeServices(cfg: AgentConfig, base: { db: Db; now?: () => Date;
     mailer: makeMailer(env, doFetch),
     google,
     tokens,
+    anthropic: cfg.anthropic,
+    web: cfg.web,
   };
 }
 

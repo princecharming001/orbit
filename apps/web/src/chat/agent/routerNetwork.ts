@@ -71,7 +71,7 @@ export function dateFrom(text: string, now = new Date()): string | undefined {
 
 /** The search purpose behind "find me seed investors in climate". */
 const FIND_WHO =
-  /^find (?:me )?(?:some |a few |more |new )?((?:seed |angel |climate |fintech )?(?:investors?|vcs?|angels?|customers?|clients?|candidates?|engineers? to hire|mentors?|advisors?|alumni|a co-?founder|co-?founders?|collaborators?|researchers?|professors?))\b(.*)$/i;
+  /^(?:find|source|look for|search for) (?:me )?(?:some |a few |more |new )?((?:seed |angel |climate |fintech )?(?:investors?|vcs?|angels?|customers?|clients?|candidates?|engineers? to hire|mentors?|advisors?|alumni|a co-?founder|co-?founders?|collaborators?|researchers?|professors?|faculty|pis?|labs?))\b(.*)$/i;
 
 export function routeNetwork(text: string, lower: string, h: NetworkHelpers): RouterIntent | undefined {
   const goalNamed = (word: string) => {
@@ -210,7 +210,7 @@ export function routeNetwork(text: string, lower: string, h: NetworkHelpers): Ro
       const kind = kindFrom(m[1]!) ?? 'advice';
       return h.viaTool(
         'find_people',
-        { purpose: kind, query: text.replace(/^find (?:me )?/i, '') },
+        { purpose: kind, query: text.replace(/^(?:find|source|look for|search for) (?:me )?/i, '') },
         undefined,
         'find people',
       );

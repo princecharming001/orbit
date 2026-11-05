@@ -426,7 +426,13 @@ test.describe('account mode (mocked orbit-api)', () => {
           name: 'Rhea Kapoor',
           title: 'Partner',
           org: 'Seedling Fund',
-          source: 'exa',
+          email: 'rhea@seedling.fund',
+          url: 'https://seedling.fund/team',
+          evidence: [
+            'Works on seed rounds in climate software',
+            'Listed on Team | Seedling (https://seedling.fund/team)',
+          ],
+          source: 'web',
           rank: 0.8,
           fit: 0.9,
           reach: 0.4,
@@ -452,6 +458,13 @@ test.describe('account mode (mocked orbit-api)', () => {
       await page.getByTestId('find-query').fill('seed investors in climate software');
       await page.getByTestId('find-search').click();
       await expect(page.getByTestId('find-result')).toHaveCount(2);
+      // what the web found: the email as the page gave it, and what they work on
+      await expect(page.getByTestId('find-result').first().getByTestId('find-email')).toHaveText(
+        'rhea@seedling.fund',
+      );
+      await expect(page.getByTestId('find-result').first().getByTestId('find-context')).toContainText(
+        'Works on seed rounds',
+      );
       await expect(page.getByTestId('find-result').nth(1)).toContainText('You know them');
       await expect(page.getByTestId('find-quiet')).toContainText('Not searched yet: Apollo');
       await page.getByTestId('find-add').first().click();

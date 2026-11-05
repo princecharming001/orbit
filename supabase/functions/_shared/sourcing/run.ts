@@ -5,6 +5,8 @@
  * orbit.recommendations. "Add" turns chosen rows into people with a pipeline chat at `identified` and queues their
  * dossier.
  */
+
+import Anthropic from '@anthropic-ai/sdk';
 import { responsePrior } from '@orbit/core/recommend/score';
 import type {
   SourceAddResponse,
@@ -19,6 +21,7 @@ import { HttpError } from '../http.ts';
 import { bestReach, ensurePerson, loadGraph, resolvePersonRef, type UserGraph } from '../paths/find.ts';
 import { cleanLinkedInUrl } from '../providers/unipileResearch';
 import { claudeDep, sqlBudget } from '../research/bind.ts';
+import { claudeWeb, exaWeb, GATHER_MODEL, sqlSharedCache, type WebSource } from '../research/web';
 import { firstNameOf } from '../rows.ts';
 import type { Services } from '../services.ts';
 import {
@@ -78,6 +81,7 @@ export function sourcingGoal(
     employeeRanges: strs(c.employee_ranges ?? c.employeeRanges),
     pastCompanies: strs(c.past_companies ?? c.pastCompanies),
     topic: query ?? str(c.topic),
+    school: f.schools?.[0] ?? strs(t.schools)[0],
   };
 }
 
@@ -90,6 +94,9 @@ const toSourced = (id: string, r: RecommendationRow): SourcedCandidate => {
     ...(c.org ? { org: c.org } : {}),
     ...(c.location ? { location: c.location } : {}),
     ...(c.linkedinUrl ? { linkedinUrl: c.linkedinUrl } : {}),
+    ...(c.email ? { email: c.email } : {}),
+    ...(c.url ? { url: c.url } : {}),
+    ...(c.evidence?.length ? { evidence: c.evidence.slice(0, 4) } : {}),
     source: (c.sources[0] ?? 'exa') as SourceName,
     rank: r.rank,
     fit: r.fit,
@@ -168,6 +175,8 @@ export async function runSourcing(
       exa: s.exa,
       semanticScholar: s.semanticScholar,
       claude: s.claude.configured ? claudeDep(s.claude, userId) : undefined,
+      web: webSourcesFor(s),
+      fetch: s.fetch,
       budget: sqlBudget(db, s.now),
       clock: () => now.getTime(),
       knownPerson: knownOf,
@@ -215,7 +224,13 @@ export async function runSourcing(
       returning id`;
     results.push(toSourced(row!.id, r));
   }
-  return { batchId: result.batchId, results, unconfigured: result.unconfigured, relaxed: result.relaxed };
+  return {
+    batchId: result.batchId,
+    results,
+    unconfigured: result.unconfigured,
+    relaxed: result.relaxed,
+    ...(result.notes.length ? { notes: result.notes } : {}),
+  };
 }
 
 /** POST /source/add: one person, one chat at `identified` with the goal, one queued dossier per recommendation. */
@@ -260,6 +275,17 @@ export async function addSourced(s: Services, userId: string, ids: unknown): Pro
         rec.source.split('+')[0] ?? 'sourcing',
       ));
     const chatId = await ensureChat(db, userId, personId, rec.goal_id, now);
+    // what the page said about them becomes the person's facts (plan 31), the research a first message is written
+    // from; the same line is never written twice
+    for (const text of (c.evidence ?? []).slice(0, 4))
+      await db.sql`
+        insert into orbit.facts (user_id, person_id, type, text, source_table, source_id, confidence)
+        select ${userId}::uuid, ${personId}::uuid, 'sourced', ${text}, 'recommendations', ${rec.id}::uuid, 0.7
+         where not exists (select 1 from orbit.facts where person_id = ${personId}::uuid and text = ${text} and deleted_at is null)`;
+    if (c.email)
+      await db.sql`
+        update orbit.people set primary_email = ${normalizeEmail(c.email)}
+         where id = ${personId}::uuid and user_id = ${userId}::uuid and primary_email is null`;
     await db.sql`
       update orbit.recommendations set status = 'added', person_id = ${personId}::uuid where id = ${rec.id}::uuid`;
     // no research is queued here: research on a person starts only when the student asks for it on their page
@@ -294,4 +320,22 @@ export async function ensureChat(
     insert into orbit.stage_events (user_id, chat_id, from_stage, to_stage, status, actor, reason, decided_at)
     values (${userId}::uuid, ${row!.id}::uuid, null, 'identified', 'applied', 'user', 'added from sourcing', ${now}::timestamptz)`;
   return row!.id;
+}
+
+/**
+ * Where sourcing reads the public web (plan 31): Exa when its key is set, Claude's own search otherwise, both through
+ * the shared research cache. Tests hand in their own sources.
+ */
+export function webSourcesFor(s: Services): WebSource[] {
+  if (s.web) return s.web;
+  const cache = sqlSharedCache(s.db, () => s.now().getTime());
+  const out: WebSource[] = [];
+  if (s.exa.configured) out.push(exaWeb(s.exa, cache));
+  const client =
+    s.anthropic ??
+    (s.env.anthropicKey
+      ? new Anthropic({ apiKey: s.env.anthropicKey, fetch: s.fetch, maxRetries: 1 })
+      : undefined);
+  if (client) out.push(claudeWeb(client, cache, { model: GATHER_MODEL }));
+  return out;
 }

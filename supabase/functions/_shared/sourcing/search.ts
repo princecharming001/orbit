@@ -26,9 +26,11 @@ import {
 import type { BudgetDep, ClaudeDep, Clock } from '../research/deps';
 import type { GoalKind } from '../research/dossier';
 import { norm, normOrg, orgFromTitle } from '../research/guards';
+import type { WebSource } from '../research/web';
 import { FIT_BATCH, type FitCandidate, fitSchema, fitSystem, fitUser } from './prompts';
+import { sourceFromWeb, webAsk } from './web';
 
-export type SourceName = 'unipile' | 'apollo' | 'exa' | 'semantic_scholar';
+export type SourceName = 'unipile' | 'apollo' | 'exa' | 'semantic_scholar' | 'web';
 
 export interface SourcingGoal {
   id: string | null;
@@ -54,6 +56,8 @@ export interface SourcingGoal {
   pastCompanies?: string[];
   /** research or community topic */
   topic?: string;
+  /** the school named in the ask (plan 31: the web provider reads its faculty pages) */
+  school?: string;
 }
 
 export interface SourcingInput {
@@ -83,6 +87,8 @@ export interface Candidate {
   memberId?: string;
   email?: string;
   url?: string;
+  /** what a first message can be written from (plan 31): what they work on, the lab, the page it came from */
+  evidence?: string[];
   networkDistance?: number;
   sources: SourceName[];
   externalIds: Partial<Record<SourceName, string>>;
@@ -108,6 +114,10 @@ export interface SourcingDeps {
   claude?: ClaudeDep;
   /** overrides the default fit scorer */
   fitScorer?: FitScorer;
+  /** the public web, for asks that name a place (plan 31): Exa, then Claude's own search; none means no web */
+  web?: WebSource[];
+  /** plain page fetches for the web provider's profile pass */
+  fetch?: typeof fetch;
   /** best path P to the candidate (§4), or null when there is none */
   reachOf: (c: Candidate) => Promise<number | null> | number | null;
   /** the existing responsePrior, 0..1 */
@@ -145,6 +155,8 @@ export interface SourcingResult {
   relaxed: ('location' | 'seniority')[];
   /** providers that answered with an error (the others still count) */
   errors: string[];
+  /** what the web pass did (plan 31), for the log */
+  notes: string[];
   batchId: string;
 }
 
@@ -167,6 +179,8 @@ interface Ctx {
   input: SourcingInput;
   unconfigured: Set<string>;
   errors: Set<string>;
+  /** what the web pass did, for the log */
+  notes: Set<string>;
   idCache: Map<string, string | undefined>;
   salesNav?: boolean;
   seq: number;
@@ -183,6 +197,7 @@ export async function sourcePeople(deps: SourcingDeps, input: SourcingInput): Pr
     input,
     unconfigured: new Set(),
     errors: new Set(),
+    notes: new Set(),
     idCache: new Map(),
     seq: 0,
     ran: false,
@@ -220,6 +235,7 @@ export async function sourcePeople(deps: SourcingDeps, input: SourcingInput): Pr
     unconfigured: [...ctx.unconfigured].sort(),
     relaxed,
     errors: [...ctx.errors].sort(),
+    notes: [...ctx.notes],
     batchId,
   };
 }
@@ -239,10 +255,13 @@ function plan(ctx: Ctx): Call[] {
     (q: string, extra: Partial<ExaSearchRequest> = {}): Call =>
     (r) =>
       exaCall(ctx, { query: q, category: 'people', ...extra }, r, 'person');
+  // the public pages of a named place (plan 31): only when the ask names one, so the web is never searched blind
+  const web: Call[] = webAsk(g) ? [() => webCall(ctx)] : [];
   switch (g.kind) {
     case 'recruiting':
     case 'advice':
       return [
+        ...web,
         (r) =>
           linkedInCall(ctx, r, {
             keywords: orJoin(roles) || g.keywords?.join(' '),
@@ -324,6 +343,7 @@ function plan(ctx: Ctx): Call[] {
       ];
     case 'collaboration':
       return [
+        ...web,
         (r) => scholarCall(ctx, r),
         (r) =>
           exaCall(
@@ -336,6 +356,7 @@ function plan(ctx: Ctx): Call[] {
     case 'community':
       return [
         (r) => linkedInCall(ctx, r, { keywords: words(g.topic, ...(g.keywords ?? [])), distance: [1, 2] }),
+        ...web,
       ];
   }
 }
@@ -357,6 +378,37 @@ function note(ctx: Ctx, r: ProviderResult<unknown>): boolean {
 }
 
 // ---- providers ----------------------------------------------------------------------------------------------
+
+/** The web provider (plan 31): the place's faculty or team pages, read for the people they name. */
+async function webCall(ctx: Ctx): Promise<Candidate[]> {
+  const { deps, input } = ctx;
+  const ask = webAsk(input.goal);
+  if (!ask) return [];
+  if (!deps.web?.length) {
+    ctx.unconfigured.add('web');
+    return [];
+  }
+  ctx.ran = true;
+  try {
+    const r = await sourceFromWeb({
+      ask,
+      sources: deps.web,
+      claude: deps.claude,
+      budget: deps.budget,
+      userId: input.userId,
+      nextKey: () => `c${++ctx.seq}`,
+      clock: deps.clock,
+      fetch: deps.fetch,
+    });
+    for (const n of r.notes) ctx.notes.add(`web: ${n}`);
+    if (!r.candidates.length && r.notes.some((n) => /budget_exceeded/.test(n)))
+      ctx.errors.add('web: budget_exceeded');
+    return r.candidates;
+  } catch (e) {
+    ctx.errors.add(`web: ${e instanceof Error ? e.message : 'failed'}`);
+    return [];
+  }
+}
 
 async function exaCall(
   ctx: Ctx,
@@ -734,7 +786,9 @@ const STOP = new Set([
 ]);
 
 function candidateText(c: Candidate): string {
-  return norm([c.name, c.title, c.org, c.headline, c.location].filter(Boolean).join(' '));
+  return norm(
+    [c.name, c.title, c.org, c.headline, c.location, ...(c.evidence ?? [])].filter(Boolean).join(' '),
+  );
 }
 
 /** Rule fallback (§6.2): the share of criteria whose words mostly appear in the candidate's fields. */
@@ -773,6 +827,7 @@ export function llmFitScorer(claude: ClaudeDep): FitScorer {
         org: c.org,
         location: c.location,
         headline: c.headline,
+        evidence: c.evidence?.slice(0, 3),
         source: c.sources.join('+'),
       }));
       const r = await claude.parse('sourcing_fit', fitSchema, {

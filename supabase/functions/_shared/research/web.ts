@@ -8,7 +8,9 @@
  * of the pages they point to, keyed by the query or the page address, never by who asked. A retry after a timeout, or
  * Go deeper after the quick brief, reads them back for nothing.
  */
+
 import type Anthropic from '@anthropic-ai/sdk';
+import type { Db } from '../db.ts';
 import { costUsd, type Usage } from '../prices.ts';
 import {
   EXA_PAGE_USD,
@@ -175,6 +177,34 @@ export function postgrestSharedCache(
         });
       } catch {
         // a cache that cannot be written only means the next retry pays again
+      }
+    },
+  };
+}
+
+/** The same store through a direct database connection (orbit-api and the worker hold one). */
+export function sqlSharedCache(db: Db, clock: () => number = Date.now): SharedCache {
+  return {
+    async get(key) {
+      try {
+        const rows = await db.sql<{ value: unknown }>`
+          select value from public.orbit_research_cache
+           where key = ${key} and expires_at > ${new Date(clock()).toISOString()}::timestamptz limit 1`;
+        return rows[0]?.value;
+      } catch {
+        return undefined;
+      }
+    },
+    async put(key, kind, value, ttlMs) {
+      try {
+        await db.sql`
+          insert into public.orbit_research_cache (key, kind, value, created_at, expires_at)
+          values (${key}, ${kind}, ${JSON.stringify(value)}::jsonb, ${new Date(clock()).toISOString()}::timestamptz,
+                  ${new Date(clock() + ttlMs).toISOString()}::timestamptz)
+          on conflict (key) do update set kind = excluded.kind, value = excluded.value,
+            created_at = excluded.created_at, expires_at = excluded.expires_at`;
+      } catch {
+        // a cache that cannot be written only means the next run pays again
       }
     },
   };

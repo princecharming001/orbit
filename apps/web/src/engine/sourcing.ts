@@ -10,7 +10,8 @@ import { pullNow } from './serverSync';
 export const PROVIDER_LABELS: Record<string, string> = {
   unipile: 'LinkedIn search',
   apollo: 'Apollo',
-  exa: 'Web search',
+  exa: 'Exa',
+  web: 'Web search',
   semantic_scholar: 'Semantic Scholar',
   village: 'Village',
 };
@@ -33,16 +34,34 @@ function notHere(): { ok: false; message: string } {
   return { ok: false, message: isAccountMode() ? SIGN_IN_FIRST : NO_SERVER };
 }
 
+export interface SearchFilters {
+  schools?: string[];
+  organizations?: string[];
+  keywords?: string[];
+  titles?: string[];
+}
+
 export async function searchPeople(
   user: Pick<User, 'id'>,
-  q: { purpose: GoalKind; query?: string; goalId?: string; limit?: number },
+  q: { purpose: GoalKind; query?: string; goalId?: string; limit?: number; filters?: SearchFilters },
 ): Promise<SearchOutcome> {
   if (!isServerUser(user.id)) return notHere();
+  const clean = (xs?: string[]) => {
+    const out = (xs ?? []).map((x) => x.trim()).filter(Boolean);
+    return out.length ? out : undefined;
+  };
+  const filters = {
+    schools: clean(q.filters?.schools),
+    organizations: clean(q.filters?.organizations),
+    keywords: clean(q.filters?.keywords),
+    titles: clean(q.filters?.titles),
+  };
   const r = await callApi('/source/search', {
     purpose: q.purpose,
     query: q.query?.trim() || undefined,
     goalId: q.goalId,
     limit: q.limit ?? 20,
+    ...(Object.values(filters).some(Boolean) ? { filters } : {}),
   });
   if (!r.ok) return { ok: false, message: r.message };
   return { ok: true, value: r.value };
@@ -66,5 +85,5 @@ export async function addSourced(user: Pick<User, 'id'>, recommendationIds: stri
 /** One candidate as a line: "Maya Chen, Partner at Seed Fund (fit 0.82)". */
 export function candidateLine(c: SourcedCandidate): string {
   const role = [c.title, c.org].filter(Boolean).join(' at ');
-  return `${c.name}${role ? `, ${role}` : ''}`;
+  return `${c.name}${role ? `, ${role}` : ''}${c.email ? ' (email found)' : ''}`;
 }
