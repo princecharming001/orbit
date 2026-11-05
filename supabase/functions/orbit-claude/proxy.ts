@@ -72,6 +72,14 @@ export const DEFAULT_LIMITS: Limits = {
 };
 /** Dollars one user may spend on Orbit's key, until it is raised. */
 export const DEFAULT_CAP_USD = 30;
+/**
+ * Dollars a day from one network without a signed-in session. The browser id a request names is the caller's own
+ * choice, so a fresh one is a fresh $30: without this a script rotating it spends Orbit's key until the global
+ * request count stops it.
+ */
+export const DEFAULT_ANON_IP_DAILY_USD = 10;
+/** Dollars a day on Orbit's key across everyone: the hard stop on the bill. */
+export const DEFAULT_GLOBAL_DAILY_USD = 200;
 
 /** Running dollar totals per user (see subjectOf). */
 export interface Spend {
@@ -99,6 +107,10 @@ export interface ProxyDeps {
   /** the per-user dollar totals; without it nothing is metered (tests that do not need it) */
   spend?: Spend;
   capUsd?: number;
+  /** dollars a day from one network for requests without a signed-in session */
+  anonIpDailyUsd?: number;
+  /** dollars a day across everyone */
+  globalDailyUsd?: number;
   /** ORBIT_SESSION_SECRET, to recognise a signed-in user's access token */
   sessionSecret?: string;
 }
@@ -505,13 +517,44 @@ export function makeHandler(deps: ProxyDeps): (req: Request) => Promise<Response
 
     // the per-user dollar cap: counted before the call, charged as the answer streams back
     const subject = await subjectOf(req, visitor, deps.sessionSecret, now());
+    // also counted: the day's total for everyone, and the day's total for this network when nobody is signed in
+    const day = now().toISOString().slice(0, 10);
+    const globalDay = `global:${day}`;
+    const ipDay = subject.startsWith('user:') ? undefined : `ipday:${visitor}:${day}`;
+    const charged = [subject, globalDay, ...(ipDay ? [ipDay] : [])];
     let spent = 0;
     if (deps.spend) {
+      const spend = deps.spend;
+      let globalSpent = 0;
+      let ipSpent = 0;
       try {
-        spent = await deps.spend.total(subject);
+        [spent, globalSpent, ipSpent] = await Promise.all([
+          spend.total(subject),
+          spend.total(globalDay),
+          ipDay ? spend.total(ipDay) : Promise.resolve(0),
+        ]);
       } catch {
         return apiError(503, 'api_error', 'Orbit’s shared Claude access is unavailable right now.', h);
       }
+      if (globalSpent >= (deps.globalDailyUsd ?? DEFAULT_GLOBAL_DAILY_USD))
+        return apiError(
+          429,
+          'rate_limit_error',
+          'Orbit’s shared Claude access has reached today’s limit.',
+          h,
+          {
+            'x-orbit-limit': 'global',
+            'x-should-retry': 'false',
+          },
+        );
+      if (ipDay && ipSpent >= (deps.anonIpDailyUsd ?? DEFAULT_ANON_IP_DAILY_USD))
+        return apiError(
+          429,
+          'rate_limit_error',
+          'Orbit’s shared Claude has done enough for today without a sign-in. Sign in, or add your own Anthropic key in Settings, to keep chatting.',
+          h,
+          { 'x-orbit-limit': 'day', 'x-should-retry': 'false' },
+        );
       if (spent >= cap)
         return apiError(
           429,
@@ -559,7 +602,9 @@ export function makeHandler(deps: ProxyDeps): (req: Request) => Promise<Response
       return new Response(upstream.body, { status: upstream.status, headers: out });
     const streamed = (upstream.headers.get('content-type') ?? '').includes('text/event-stream');
     return new Response(
-      meter(upstream.body, streamed, (usd) => spend.add(subject, usd)),
+      meter(upstream.body, streamed, async (usd) => {
+        await Promise.all(charged.map((c) => spend.add(c, usd)));
+      }),
       { status: upstream.status, headers: out },
     );
   };

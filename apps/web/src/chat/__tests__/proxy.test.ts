@@ -416,9 +416,62 @@ describe('the $30 per-user cap on Orbit’s key', () => {
       // read the stream through, as the chat does
     }
     // 10 input tokens at $4/M at message_start, then 1 output token at $20/M at message_delta
-    expect(m.adds.map(([s]) => s)).toEqual([`client:${CLIENT}`, `client:${CLIENT}`]);
-    expect(m.adds[0]![1]).toBeCloseTo(0.00004, 10);
-    expect(m.adds[1]![1]).toBeCloseTo(0.00002, 10);
+    const mine = m.adds.filter(([s]) => s === `client:${CLIENT}`);
+    expect(mine).toHaveLength(2);
+    expect(mine[0]![1]).toBeCloseTo(0.00004, 10);
+    expect(mine[1]![1]).toBeCloseTo(0.00002, 10);
+    // the same dollars count toward the day's total and, with nobody signed in, this network's day
+    const day = new Date().toISOString().slice(0, 10);
+    expect(m.adds.filter(([s]) => s === `global:${day}`)).toHaveLength(2);
+    expect(m.adds.filter(([s]) => s.startsWith('ipday:') && s.endsWith(day))).toHaveLength(2);
+  });
+
+  it('a script rotating its browser id gets no fresh allowance: the network’s day stops it, and a signed-in user is not counted there', async () => {
+    const day = new Date().toISOString().slice(0, 10);
+    const m = memSpend();
+    // spend the network's day under one browser id
+    const first = harness({ spend: m.spend, headers: { 'x-orbit-client': CLIENT } });
+    const res = await first.client.beta.messages.create({ ...chatParams, stream: true }).withResponse();
+    for await (const _ of res.data) {
+      // read through
+    }
+    const ipKey = m.adds.map(([s]) => s).find((s) => s.startsWith('ipday:'))!;
+    expect(ipKey.endsWith(day)).toBe(true);
+    const over = memSpend({ [ipKey]: 10.5 });
+    const rotated = harness({ spend: over.spend, headers: { 'x-orbit-client': 'a'.repeat(32) } });
+    const raw = await rotated.client.beta.messages.create(chatParams).catch((e) => e);
+    expect(raw).toBeInstanceOf(Anthropic.RateLimitError);
+    expect(rotated.upstream).toHaveLength(0);
+    // a signed-in user on that network still chats, charged to themselves and the day, never the network
+    const signedIn = harness({
+      spend: over.spend,
+      sessionSecret: SECRET,
+      headers: {
+        'x-orbit-session': await accessToken({
+          sub: USER,
+          aud: 'orbit',
+          exp: Math.floor(Date.now() / 1000) + 600,
+        }),
+        'x-orbit-client': CLIENT,
+      },
+    });
+    const ok = await signedIn.client.beta.messages.create({ ...chatParams, stream: true }).withResponse();
+    for await (const _ of ok.data) {
+      // read through
+    }
+    expect(signedIn.upstream).toHaveLength(1);
+    expect(over.adds.map(([s]) => s).filter((s) => s.startsWith('ipday:'))).toHaveLength(0);
+    expect(over.adds.map(([s]) => s)).toContain(`user:${USER}`);
+  });
+
+  it('the day’s total across everyone is a hard stop before Anthropic is called', async () => {
+    const day = new Date().toISOString().slice(0, 10);
+    const m = memSpend({ [`global:${day}`]: 200 });
+    const { client, upstream } = harness({ spend: m.spend, headers: { 'x-orbit-client': CLIENT } });
+    const raw = await client.beta.messages.create(chatParams).catch((e) => e);
+    expect(raw).toBeInstanceOf(Anthropic.RateLimitError);
+    expect(raw.headers.get('x-orbit-limit')).toBe('global');
+    expect(upstream).toHaveLength(0);
   });
 
   it('refuses before calling Anthropic once the user has spent $30, and the chat says so and stops asking', async () => {
