@@ -4723,10 +4723,10 @@ function unsupportedDetails(body, context) {
     if (hit && !p.anchor.test(context)) out.push(`${p.what} ("${hit[0]}")`);
   }
   for (const f of body.match(/\$?\d[\d,]*(\.\d+)?%?/g) ?? []) {
-    const plain = f.replace(/[$,%]/g, "");
-    const interesting = /[%$.]/.test(f) || Number(plain) >= 100;
-    if (!interesting || /^(19|20)\d\d$/.test(plain)) continue;
-    if (!ctx.includes(plain) && !ctx.includes(f.toLowerCase())) out.push(f);
+    const plain2 = f.replace(/[$,%]/g, "");
+    const interesting = /[%$.]/.test(f) || Number(plain2) >= 100;
+    if (!interesting || /^(19|20)\d\d$/.test(plain2)) continue;
+    if (!ctx.includes(plain2) && !ctx.includes(f.toLowerCase())) out.push(f);
   }
   return [...new Set(out)];
 }
@@ -6725,10 +6725,10 @@ var PLAIN_SWAPS = [
 ];
 function plainPhrases(text2) {
   let out = text2;
-  for (const [re, plain] of PLAIN_SWAPS)
+  for (const [re, plain2] of PLAIN_SWAPS)
     out = out.replace(
       re,
-      (m) => m[0] === m[0].toUpperCase() ? plain[0].toUpperCase() + plain.slice(1) : plain
+      (m) => m[0] === m[0].toUpperCase() ? plain2[0].toUpperCase() + plain2.slice(1) : plain2
     );
   return out;
 }
@@ -16393,7 +16393,7 @@ async function gmailSentCopy(s, userId, p) {
     const j = await list2.json();
     for (const m of j.messages ?? []) {
       const res = await s.fetch(
-        `${GMAIL_MESSAGES_URL}/${encodeURIComponent(m.id)}?format=metadata&metadataHeaders=X-Orbit-Draft-Id`,
+        `${GMAIL_MESSAGES_URL}/${encodeURIComponent(m.id)}?format=metadata&metadataHeaders=X-Orbit-Draft-Id&metadataHeaders=Subject`,
         { headers, signal: AbortSignal.timeout(SEND_TIMEOUT_MS) }
       );
       if (!res.ok) {
@@ -16401,13 +16401,25 @@ async function gmailSentCopy(s, userId, p) {
         return void 0;
       }
       const msg = await res.json();
-      const tag = msg.payload?.headers?.find((h) => h.name.toLowerCase() === "x-orbit-draft-id")?.value;
-      if (tag?.trim() === p.draftId) return { id: m.id, threadId: m.threadId };
+      const header = (n) => msg.payload?.headers?.find((h) => h.name.toLowerCase() === n)?.value;
+      const tag = header("x-orbit-draft-id")?.trim();
+      if (tag === p.draftId) return { id: m.id, threadId: m.threadId };
+      if (!tag && p.body && sameMessage(header("subject"), msg.snippet, p.subject, p.body))
+        return { id: m.id, threadId: m.threadId };
     }
     return null;
   } catch {
     return void 0;
   }
+}
+var plain = (t) => (t ?? "").replace(/&#39;/g, "'").replace(/&quot;/g, '"').replace(/&amp;/g, "&").replace(/\s+/g, " ").trim().toLowerCase();
+function sameMessage(subject, snippet, draftSubject, body) {
+  const s = plain(subject).replace(/^re:\s*/, "");
+  const ds = plain(draftSubject).replace(/^re:\s*/, "");
+  if (ds && s !== ds) return false;
+  const a = plain(snippet).slice(0, 80);
+  const b = plain(body).slice(0, 80);
+  return a.length >= 20 && b.startsWith(a.slice(0, Math.min(a.length, b.length)));
 }
 async function linkedinSend(s, p) {
   const base = (s.env.unipileBase ?? "").replace(/\/+$/, "");
@@ -16682,7 +16694,9 @@ ${d.body}`)) {
     const copy = unconfirmed ? await gmailSentCopy(s, userId, {
       to: person.primary_email,
       draftId: d.id,
-      since: new Date(createdAt)
+      since: new Date(createdAt),
+      subject: d.subject,
+      body: d.body
     }) : null;
     if (copy === void 0) {
       await settle("approved", { error: "send_unconfirmed" });

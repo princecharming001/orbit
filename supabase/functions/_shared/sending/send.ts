@@ -534,6 +534,8 @@ export async function sendDraft(s: Services, draftId: string): Promise<SendResul
           to: person.primary_email,
           draftId: d.id,
           since: new Date(createdAt),
+          subject: d.subject,
+          body: d.body,
         })
       : null;
     if (copy === undefined) {

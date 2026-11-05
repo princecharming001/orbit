@@ -99,13 +99,14 @@ export async function gmailThreadHasNewerInbound(
 
 /**
  * The copy of a send that may have gone through (after a dropped connection, a timeout, a 5xx, or an isolate that
- * died mid-send): the student's Sent mail to `to` since `since` carrying this draft's X-Orbit-Draft-Id. Null when
- * there is none, undefined when Gmail could not be asked (the caller then waits rather than risk a second copy).
+ * died mid-send): the student's Sent mail to `to` since `since` carrying this draft's X-Orbit-Draft-Id, or, on a copy
+ * that came back without that header, the same subject and opening words. Null when there is none, undefined when
+ * Gmail could not be asked (the caller then waits rather than risk a second copy).
  */
 export async function gmailSentCopy(
   s: Services,
   userId: string,
-  p: { to: string; draftId: string; since: Date },
+  p: { to: string; draftId: string; since: Date; subject?: string | null; body?: string },
 ): Promise<{ id: string; threadId?: string } | null | undefined> {
   if (!s.tokens) return undefined;
   try {
@@ -123,21 +124,51 @@ export async function gmailSentCopy(
     const j = (await list.json()) as { messages?: { id: string; threadId?: string }[] };
     for (const m of j.messages ?? []) {
       const res = await s.fetch(
-        `${GMAIL_MESSAGES_URL}/${encodeURIComponent(m.id)}?format=metadata&metadataHeaders=X-Orbit-Draft-Id`,
+        `${GMAIL_MESSAGES_URL}/${encodeURIComponent(m.id)}?format=metadata&metadataHeaders=X-Orbit-Draft-Id&metadataHeaders=Subject`,
         { headers, signal: AbortSignal.timeout(SEND_TIMEOUT_MS) },
       );
       if (!res.ok) {
         await res.body?.cancel();
         return undefined;
       }
-      const msg = (await res.json()) as { payload?: { headers?: { name: string; value: string }[] } };
-      const tag = msg.payload?.headers?.find((h) => h.name.toLowerCase() === 'x-orbit-draft-id')?.value;
-      if (tag?.trim() === p.draftId) return { id: m.id, threadId: m.threadId };
+      const msg = (await res.json()) as {
+        snippet?: string;
+        payload?: { headers?: { name: string; value: string }[] };
+      };
+      const header = (n: string) => msg.payload?.headers?.find((h) => h.name.toLowerCase() === n)?.value;
+      const tag = header('x-orbit-draft-id')?.trim();
+      if (tag === p.draftId) return { id: m.id, threadId: m.threadId };
+      if (!tag && p.body && sameMessage(header('subject'), msg.snippet, p.subject, p.body))
+        return { id: m.id, threadId: m.threadId };
     }
     return null;
   } catch {
     return undefined;
   }
+}
+
+const plain = (t: string | null | undefined) =>
+  (t ?? '')
+    .replace(/&#39;/g, "'")
+    .replace(/&quot;/g, '"')
+    .replace(/&amp;/g, '&')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .toLowerCase();
+
+/** A Sent copy with no draft id is this draft when its subject (Re: aside) and its opening words are the draft's. */
+function sameMessage(
+  subject: string | undefined,
+  snippet: string | undefined,
+  draftSubject: string | null | undefined,
+  body: string,
+): boolean {
+  const s = plain(subject).replace(/^re:\s*/, '');
+  const ds = plain(draftSubject).replace(/^re:\s*/, '');
+  if (ds && s !== ds) return false;
+  const a = plain(snippet).slice(0, 80);
+  const b = plain(body).slice(0, 80);
+  return a.length >= 20 && b.startsWith(a.slice(0, Math.min(a.length, b.length)));
 }
 
 /** Unipile: POST /api/v1/chats/{chat_id}/messages, or POST /api/v1/chats to start one (multipart). */

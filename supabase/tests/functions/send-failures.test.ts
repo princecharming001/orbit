@@ -43,17 +43,31 @@ type Mode = 'ok' | 'drop_before' | 'drop_after' | 'timeout' | '503_before' | '50
  * went) or after (it went, but the caller never heard).
  */
 function gmail() {
-  const sent: { id: string; threadId: string; to: string; draftId: string }[] = [];
+  const sent: {
+    id: string;
+    threadId: string;
+    to: string;
+    draftId: string;
+    subject?: string;
+    snippet?: string;
+  }[] = [];
   const next: Mode[] = [];
-  const box = { sent, next, probeDown: false };
+  const box = { sent, next, probeDown: false, stripHeader: false };
   const answer = (c: NetCall) => {
     if (c.url === GMAIL_SEND) {
       const raw = new TextDecoder().decode(fromBase64url((c.body as { raw: string }).raw));
       const draftId = /X-Orbit-Draft-Id: (\S+)/.exec(raw)?.[1] ?? '';
       const to = /^To: .*<([^>]+)>/m.exec(raw)?.[1] ?? '';
+      const subject = /^Subject: (.*)$/m.exec(raw)?.[1]?.trim() ?? '';
+      const b64 = raw
+        .split(/\r?\n\r?\n/)
+        .slice(1)
+        .join('')
+        .replace(/\s+/g, '');
+      const text = new TextDecoder().decode(Uint8Array.from(atob(b64), (ch) => ch.charCodeAt(0)));
       const deliver = () => {
         const id = `gm-${sent.length + 1}`;
-        sent.push({ id, threadId: `gt-${id}`, to, draftId });
+        sent.push({ id, threadId: `gt-${id}`, to, draftId, subject, snippet: text.slice(0, 120) });
         return id;
       };
       const mode = next.shift() ?? 'ok';
@@ -84,7 +98,9 @@ function gmail() {
       const id = decodeURIComponent(c.url.slice(GMAIL.length + 1).split('?')[0]!);
       const m = sent.find((x) => x.id === id);
       if (!m) return jsonRes(404, {});
-      return jsonRes(200, { id, payload: { headers: [{ name: 'X-Orbit-Draft-Id', value: m.draftId }] } });
+      const headers = [{ name: 'Subject', value: m.subject ?? '' }];
+      if (!box.stripHeader) headers.push({ name: 'X-Orbit-Draft-Id', value: m.draftId });
+      return jsonRes(200, { id, snippet: m.snippet ?? '', payload: { headers } });
     }
     return undefined;
   };
@@ -162,6 +178,18 @@ describe('Gmail sends that fail after Gmail may have taken them', () => {
     expect(g.box.sent.filter((m) => m.draftId === lost.id)).toHaveLength(0);
     expect((await sendDraft(s, lost.id)).status).toBe('sent');
     expect(g.box.sent.filter((m) => m.draftId === lost.id)).toHaveLength(1);
+  });
+
+  it('a Sent copy that came back without the draft id header is still found by its subject and opening words', async () => {
+    const g = gmail();
+    g.box.stripHeader = true;
+    const net = fakeNet(g.answer);
+    const s = makeServices(agentConfig(net, {}), { db: t.db });
+    const { id } = await dueDraft(net, 'Hal Header', 'hal@example.com');
+    g.box.next.push('drop_after');
+    await expect(sendDraft(s, id)).rejects.toBeInstanceOf(SendRetry);
+    expect(await sendDraft(s, id)).toEqual({ status: 'sent', providerMessageId: 'gm-1' });
+    expect(posts(net)).toBe(1);
   });
 
   it('a 429 is a clean refusal: retried without looking in Sent, sent once', async () => {
