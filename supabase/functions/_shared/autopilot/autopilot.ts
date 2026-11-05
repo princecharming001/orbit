@@ -65,6 +65,8 @@ export const HOLD_REASONS: Record<string, string> = {
   voice: `It ${VOICE_HOLD_REASON}, so it waits for your tap.`,
   send_unconfirmed: 'Gmail did not confirm the last try, so Orbit checks your Sent mail before trying again.',
   send_interrupted: 'The send was interrupted, so Orbit checks your Sent mail before trying again.',
+  gmail_unconfirmed:
+    'Orbit could not check your Sent mail to see whether it went. Look there before you send it again.',
   linkedin_unconfirmed:
     'LinkedIn did not confirm the message went. Check the chat on LinkedIn before you send it again.',
   same_firm_today:

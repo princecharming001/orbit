@@ -53,6 +53,8 @@ export const LINKEDIN_CONFIRM_MS = 15 * 60_000;
 export const PAUSE_RECHECK_SEC = 15 * 60;
 /** A draft still 'sending' this long after its claim was left by a worker that died mid-send. */
 export const STUCK_SENDING_MS = 10 * 60_000;
+/** How long a send Gmail could not confirm keeps waiting to ask Gmail before the student is asked to check. */
+export const UNCONFIRMED_WAIT_MS = 2 * 60 * 60_000;
 
 type UserRow = Record<string, unknown> & {
   email: string;
@@ -539,7 +541,17 @@ export async function sendDraft(s: Services, draftId: string): Promise<SendResul
         })
       : null;
     if (copy === undefined) {
-      // Gmail cannot say whether the earlier try went: wait and ask again rather than risk a second copy
+      // Gmail cannot say whether the earlier try went: wait and ask again rather than risk a second copy, but not
+      // forever (a Sent mail Orbit may not read, or one that keeps failing): after UNCONFIRMED_WAIT_MS it stops and
+      // asks the student to look, so a send never stalls without a word
+      const first = approvals
+        .filter((a) => a.action === 'draft.send_unconfirmed')
+        .reduce((t, a) => Math.min(t, new Date(a.created_at).getTime()), now.getTime());
+      if (now.getTime() - first >= UNCONFIRMED_WAIT_MS) {
+        await settle('failed', { error: 'gmail_unconfirmed' });
+        await audit(db, userId, 'system', 'draft.failed', d.id, { error: 'gmail_unconfirmed' });
+        return { status: 'failed', error: 'gmail_unconfirmed' };
+      }
       await settle('approved', { error: 'send_unconfirmed' });
       throw new SendRetry('send_unconfirmed');
     }

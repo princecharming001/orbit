@@ -9045,6 +9045,7 @@ var HOLD_REASONS = {
   voice: `It ${VOICE_HOLD_REASON}, so it waits for your tap.`,
   send_unconfirmed: "Gmail did not confirm the last try, so Orbit checks your Sent mail before trying again.",
   send_interrupted: "The send was interrupted, so Orbit checks your Sent mail before trying again.",
+  gmail_unconfirmed: "Orbit could not check your Sent mail to see whether it went. Look there before you send it again.",
   linkedin_unconfirmed: "LinkedIn did not confirm the message went. Check the chat on LinkedIn before you send it again.",
   same_firm_today: "Someone at the same firm got a first message this morning, so this one moved to the next morning."
 };
@@ -12572,6 +12573,7 @@ async function linkedinSend(s, p) {
 var LINKEDIN_CONFIRM_MS = 15 * 6e4;
 var PAUSE_RECHECK_SEC = 15 * 60;
 var STUCK_SENDING_MS = 10 * 6e4;
+var UNCONFIRMED_WAIT_MS = 2 * 60 * 6e4;
 async function loadUser2(db2, userId) {
   const [u2] = await db2.sql`
     select email, full_name, first_name, timezone, autonomy_level, settings from orbit.users where id = ${userId}::uuid`;
@@ -12941,6 +12943,12 @@ ${d.body}`)) {
       body: d.body
     }) : null;
     if (copy === void 0) {
+      const first = approvals.filter((a) => a.action === "draft.send_unconfirmed").reduce((t, a) => Math.min(t, new Date(a.created_at).getTime()), now.getTime());
+      if (now.getTime() - first >= UNCONFIRMED_WAIT_MS) {
+        await settle("failed", { error: "gmail_unconfirmed" });
+        await audit(db2, userId, "system", "draft.failed", d.id, { error: "gmail_unconfirmed" });
+        return { status: "failed", error: "gmail_unconfirmed" };
+      }
       await settle("approved", { error: "send_unconfirmed" });
       throw new SendRetry("send_unconfirmed");
     }

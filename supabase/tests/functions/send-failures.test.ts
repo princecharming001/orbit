@@ -4,10 +4,16 @@
  * under test everywhere: the recipient never gets the same message twice, and the student always sees where it stands.
  */
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { HOLD_REASONS } from '../../functions/_shared/autopilot/autopilot.ts';
 import { runCadence } from '../../functions/_shared/cadence/cadence.ts';
 import { fromBase64url } from '../../functions/_shared/crypto.ts';
 import { NeedsReauth } from '../../functions/_shared/google.ts';
-import { recoverStuckSends, SendRetry, sendDraft } from '../../functions/_shared/sending/send.ts';
+import {
+  recoverStuckSends,
+  SendRetry,
+  sendDraft,
+  UNCONFIRMED_WAIT_MS,
+} from '../../functions/_shared/sending/send.ts';
 import { gmailSend, SEND_TIMEOUT_MS } from '../../functions/_shared/sending/transport.ts';
 import { makeServices } from '../../functions/_shared/services.ts';
 import {
@@ -241,6 +247,26 @@ describe('Gmail sends that fail after Gmail may have taken them', () => {
     expect(posts(net)).toBe(1);
     g.box.probeDown = false;
     expect(await sendDraft(s, id)).toEqual({ status: 'sent', providerMessageId: 'gm-1' });
+    expect(posts(net)).toBe(1);
+  });
+
+  it('when Gmail still cannot say after two hours, it stops and asks the student to look rather than wait in silence', async () => {
+    const g = gmail();
+    const net = fakeNet(g.answer);
+    const s = makeServices(agentConfig(net, {}), { db: t.db });
+    const { id } = await dueDraft(net, 'Uri Unread', 'uri@example.com');
+    g.box.next.push('drop_after');
+    await expect(sendDraft(s, id)).rejects.toBeInstanceOf(SendRetry);
+    g.box.probeDown = true;
+    await expect(sendDraft(s, id)).rejects.toBeInstanceOf(SendRetry);
+    const later = makeServices(agentConfig(net, {}), {
+      db: t.db,
+      now: () => new Date(Date.now() + UNCONFIRMED_WAIT_MS + 60_000),
+    });
+    expect(await sendDraft(later, id)).toEqual({ status: 'failed', error: 'gmail_unconfirmed' });
+    expect(await draftRow(id)).toMatchObject({ status: 'failed', error: 'gmail_unconfirmed' });
+    expect(await actions(id)).toContain('draft.failed');
+    expect(HOLD_REASONS.gmail_unconfirmed).toMatch(/Sent mail/);
     expect(posts(net)).toBe(1);
   });
 
