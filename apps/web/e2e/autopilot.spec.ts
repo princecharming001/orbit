@@ -1,5 +1,10 @@
 import { expect, type Page, test } from '@playwright/test';
-import { type FakeOrbitApi, sendTheBatch, withReplies } from '../src/test/fakeOrbitApi';
+import {
+  DANIEL_QUESTION_DRAFT,
+  type FakeOrbitApi,
+  sendTheBatch,
+  withReplies,
+} from '../src/test/fakeOrbitApi';
 import { withFakeApi } from './fakeApi';
 
 /**
@@ -171,11 +176,11 @@ test.describe('autopilot (plan 29 B7, fake orbit-api)', () => {
     await expect(turn).toContainText('To Daniel Okafor');
     await expect(turn).toContainText('yes, applied Monday');
     await expect(turn).not.toContainText('Add a subject line');
-    expect(api.state.drafts.get('draft_daniel_question')?.needsInput).toEqual([]);
-    expect(api.state.drafts.get('draft_daniel_question')?.body).toContain('yes, applied Monday');
+    expect(api.state.drafts.get(DANIEL_QUESTION_DRAFT)?.needsInput).toEqual([]);
+    expect(api.state.drafts.get(DANIEL_QUESTION_DRAFT)?.body).toContain('yes, applied Monday');
     expect(api.state.autopilot.needsYou).toHaveLength(0);
     // nothing was sent: the draft waits
-    expect(api.state.drafts.get('draft_daniel_question')?.status).toBe('draft');
+    expect(api.state.drafts.get(DANIEL_QUESTION_DRAFT)?.status).toBe('draft');
   });
 
   test('Needs you is answered from the card and the card is done', async ({ page }) => {
@@ -185,7 +190,7 @@ test.describe('autopilot (plan 29 B7, fake orbit-api)', () => {
     await item.getByTestId('needs-you-answer').fill('yes, applied Monday');
     await item.getByTestId('needs-you-send').click();
     await expect(page.getByTestId('needs-you-item').filter({ hasText: 'Daniel Okafor' })).toHaveCount(0);
-    expect(api.state.drafts.get('draft_daniel_question')?.body).toContain('yes, applied Monday');
+    expect(api.state.drafts.get(DANIEL_QUESTION_DRAFT)?.body).toContain('yes, applied Monday');
   });
 
   test('a confirmed slot books the call and puts it on the calendar for its prep card', async ({ page }) => {

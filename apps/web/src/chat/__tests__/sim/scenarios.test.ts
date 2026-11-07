@@ -1,7 +1,13 @@
 import { describe, expect, it } from 'vitest';
 import { db } from '../../../db/schema';
 import { loadDemo } from '../../../engine/demo';
-import { createFakeOrbitApi, fakeAccountUser, withFriend, withReplies } from '../../../test/fakeOrbitApi';
+import {
+  createFakeOrbitApi,
+  DANIEL_QUESTION_DRAFT,
+  fakeAccountUser,
+  withFriend,
+  withReplies,
+} from '../../../test/fakeOrbitApi';
 import { registry } from '../../registry';
 import { NOW } from '../helpers';
 import { seed, shapeCheck, type Transcript, teardownSim } from './harness';
@@ -349,7 +355,7 @@ describe('sim scenarios', () => {
     expect((held.body.item as { status: string }).status).toBe('held');
     expect(api.state.autopilot.queued).toHaveLength(1);
     const answered = await call('/replies/answer', {
-      draftId: 'draft_daniel_question',
+      draftId: DANIEL_QUESTION_DRAFT,
       answer: 'Yes, I applied on Monday.',
     });
     expect((answered.body.draft as { body: string; needsInput: string[] }).body).toContain(

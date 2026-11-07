@@ -258,12 +258,30 @@ interface Envelope {
   inReplyTo?: string;
   references?: string;
   threaded: boolean;
+  /** the server threads it with its own copy of the thread: no subject is known or needed here */
+  serverHeld?: boolean;
+}
+
+/**
+ * A reply the server holds for an account: it goes from the server into the thread it answers, under that thread's
+ * subject, even when this browser has not synced the thread (so no subject is asked for here, and approving it never
+ * waits on one).
+ */
+async function serverHeldReply(msg: OutboundMessage): Promise<boolean> {
+  return (
+    msg.kind === 'reply' &&
+    msg.channel === 'gmail' &&
+    isServerUser(msg.userId) &&
+    !!(await import('./serverSync')).serverIdOf(msg.id)
+  );
 }
 
 async function envelopeFor(msg: OutboundMessage, subjectArg?: string): Promise<Envelope> {
   const thread = await threadForMessage(msg);
-  if (!thread && !msg.externalThreadId)
+  if (!thread && !msg.externalThreadId) {
+    if (await serverHeldReply(msg)) return { threaded: true, serverHeld: true };
     return { subject: (subjectArg ?? msg.subject)?.trim() || undefined, threaded: false };
+  }
   // In a thread the subject is always the thread's, never an empty or made-up one
   const subject = replySubject(thread?.subject ?? msg.subject ?? subjectArg);
   const msgs = thread ? await db.messages.where('threadId').equals(thread.id).sortBy('sentAt') : [];
@@ -425,13 +443,7 @@ export async function reviewDraft(
   const [settings, goals] = await Promise.all([db.settings.get(user.id), db.goals.get(user.id)]);
   // a reply the server holds goes from the server into the thread it answers, under that thread's subject, even when
   // this browser has not synced the thread
-  const threaded =
-    !!msg.externalThreadId ||
-    !!(await threadForMessage(msg)) ||
-    (msg.kind === 'reply' &&
-      msg.channel === 'gmail' &&
-      isServerUser(user.id) &&
-      !!(await import('./serverSync')).serverIdOf(msg.id));
+  const threaded = !!msg.externalThreadId || !!(await threadForMessage(msg)) || (await serverHeldReply(msg));
   const opts = {
     kind: msg.kind,
     facts: [],
@@ -663,7 +675,7 @@ export async function approveAndSend(
     if (problems.length) return { ok: false, error: `The note to forward: ${problems[0]}` };
   }
   const env = await envelopeFor(msg, subject);
-  if (msg.channel === 'gmail' && !env.subject)
+  if (msg.channel === 'gmail' && !env.subject && !env.serverHeld)
     return {
       ok: false,
       error: env.threaded

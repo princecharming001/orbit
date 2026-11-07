@@ -8,7 +8,13 @@ import { addTargetCompanies } from '../../../engine/targets';
 import { setConnectorsMockForTests } from '../../../integrations/connectorsMock';
 import { GMAIL_SEND_SCOPE } from '../../../integrations/google';
 import { writePrefs } from '../../../integrations/prefs';
-import { type FakeOrbitApi, fakeDossier, withFriend, withReplies } from '../../../test/fakeOrbitApi';
+import {
+  DANIEL_QUESTION_DRAFT,
+  type FakeOrbitApi,
+  fakeDossier,
+  withFriend,
+  withReplies,
+} from '../../../test/fakeOrbitApi';
 import { NOW } from '../helpers';
 import type { AccountState, ApiSeed } from './harness';
 
@@ -427,7 +433,7 @@ async function castAutopilotDay(api: FakeOrbitApi, user: User) {
     not_now: (f) =>
       `Hi ${f},\n\nCompletely understand, good luck with the launch. I'll check back in early November.\n\nBest,\n${me}`,
   };
-  const template = api.state.drafts.get('draft_daniel_question');
+  const template = api.state.drafts.get(DANIEL_QUESTION_DRAFT);
   for (const r of api.state.replies) {
     const write = replyDrafts[r.replyClass];
     if (!write || r.draftId || !template || !r.personId) continue;

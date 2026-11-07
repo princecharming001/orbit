@@ -29,6 +29,8 @@ import type {
 import type { AccountUser } from '../integrations/orbitApi';
 
 export const FAKE_API_BASE = 'https://orbit-api.test/functions/v1/orbit-api';
+/** The draft of Daniel's question that waits on the student: a uuid like every id the server mints, as the browser's rules expect. */
+export const DANIEL_QUESTION_DRAFT = '0d2a7c4e-5b1f-4a9e-8c3d-0a11e10c0a7e';
 
 export interface FakeCall {
   route: string;
@@ -1626,7 +1628,7 @@ export function withReplies(
   // Daniel's question waits on the student: the draft carries the gap, Needs you carries the question
   const question = state.replies.find((r) => r.replyClass === 'question')!;
   const qDraft = draftRow(
-    'draft_daniel_question',
+    DANIEL_QUESTION_DRAFT,
     question.personId ?? '',
     'gmail',
     `Hi Daniel,\n\nThanks for getting back to me. [ASK USER: Have you applied through the portal yet?]\n\nBest,\n${first}`,
