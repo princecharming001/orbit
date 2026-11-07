@@ -37,6 +37,9 @@ Orbit (working name) is a networking copilot for college students who are recrui
 | 27 | [Closeness that reads the replies](27-reply-warmth.md) | the tone of their replies feeds the tie score: their warmth only, defaults on (built 2026-10-26) |
 | 28 | [Chat quality campaign](28-chat-quality-campaign.md) | the bench (a Claude student, a Claude judge on eight dimensions, a model-free shape check), the playbook the model answers from, the scenario matrix, phases to "flawless" (Phase 1 built 2026-10-31) |
 | 29 | [Friends and autopilot](29-friends-and-autopilot.md) | two students pool their networks (signal, never content; the friend always forwards) and outreach runs itself inside one rulebook: earned rungs, a review window, replies finished by class, calls booked, a voice learned from edits (plan 2026-10-31) |
+| 30 | [Niche drafting](30-niche-drafting.md) | one playbook per kind of outreach, replacing the per-goal registers (built 2026-11-03) |
+| 31 | [Web sourcing](31-web-sourcing.md) | people from public pages, with contact and context, for asks the network cannot answer (built 2026-11-05) |
+| 32 | [Network search](32-network-search.md) | "who in my network..." answered like LinkedIn's filters: a compiled query bound to one job, headline and LinkedIn facts, three-way checks, a judge with quotes, a people table (built 2026-11-07) |
 
 Precedence when documents disagree: **16 > 02 (names) > 03 (schema) > 01 (behaviour) > the subsystem document.** 16 retires the Next.js + Inngest stack of 02, 08 and 09 in favour of Supabase Edge Functions, queues and cron. File a fix against the lower one.
 

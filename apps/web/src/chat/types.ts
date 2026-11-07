@@ -14,6 +14,8 @@ export type ResultKind =
   | 'text'
   | 'person'
   | 'people'
+  /** a network search's result (plan 32): rows with a band and the evidence behind each, counts, what limited it */
+  | 'people_table'
   | 'draft'
   | 'drafts'
   | 'pipeline'

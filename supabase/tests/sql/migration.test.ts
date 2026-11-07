@@ -92,6 +92,8 @@ describe('orbit core migration', () => {
     const jobs = await t.db.sql<{ jobname: string }>`select jobname from cron.job order by jobname`;
     expect(jobs.map((j) => j.jobname)).toEqual([
       'orbit-cadence',
+      // plan 32 §6.1: nightly YC company facts, scheduled by 20261108_orbit_network_search.sql
+      'orbit-company-facts-nightly',
       // plan 29 §A4: the nightly projection refresh, scheduled by 20261101_orbit_friends.sql
       'orbit-friends-nightly',
       'orbit-health',
@@ -100,6 +102,8 @@ describe('orbit core migration', () => {
       // plan 29 §B2.5: the hourly outcome roll, scheduled by 20261101_orbit_autopilot_phase3.sql
       'orbit-outcomes',
       'orbit-retention',
+      // plan 32 §6.4: the LinkedIn connections census, every three hours, same migration
+      'orbit-search-census',
       // plan 29 §B2.4b: the nightly voice distillation, scheduled by 20261102_orbit_voice.sql
       'orbit-voice',
       'orbit-worker-tick',

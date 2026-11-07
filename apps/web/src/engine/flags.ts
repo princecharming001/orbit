@@ -6,10 +6,22 @@
 import { useLiveQuery } from 'dexie-react-hooks';
 import { db } from '../db/schema';
 
-export type Flag = 'targetPlan' | 'chatsView' | 'activityLine' | 'weekReview' | 'trustLadder';
+/** networkSearch (plan 32): search_network and its card; off, "who fits" asks go to the name and company search */
+export type Flag =
+  | 'targetPlan'
+  | 'chatsView'
+  | 'activityLine'
+  | 'weekReview'
+  | 'trustLadder'
+  | 'networkSearch';
 
 /** Flags turned off for everyone, here in the code: the one-commit off switch. */
 const OFF: ReadonlySet<Flag> = new Set<Flag>([]);
+
+/** The code switch alone, for callers that cannot wait (the no-key router); the kv row is read where it acts. */
+export function flagOffInCode(flag: Flag): boolean {
+  return OFF.has(flag);
+}
 
 export async function flagOn(flag: Flag): Promise<boolean> {
   if (OFF.has(flag)) return false;

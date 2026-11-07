@@ -1009,7 +1009,9 @@ var DEFAULT_LEDGER = { profile: 100, posts: 100, search: 100, company: 150 };
 var LEDGER_CEILINGS = {
   profile: { mutuals: 1, route: 0.85, enrich: 0.5, photo: 0.3 },
   posts: { engagement: 1, activity: 0.85 },
-  search: { mutuals: 1, discover: 0.7, logos: 0.5 },
+  // census: the background sweep of the student's connections (orbit-worker search_census, plan 32 §6.4), which
+  // takes from the same counters over SQL; facets: the lookups a network search makes while the student waits
+  search: { mutuals: 1, discover: 0.7, facets: 0.7, logos: 0.5, census: 0.4 },
   // company pages and company searches for logos: a company page is not a profile view (nobody is told), so it has
   // its own ledger instead of taking reads from people
   company: { logos: 1 }
@@ -1255,7 +1257,7 @@ function makeHandler(deps) {
       const hit = key ? await sharedGet(deps, key) : void 0;
       if (hit) return json(200, { ...hit, cursor: null, shared: true }, h);
     }
-    const ledgerSpend = path === "/search" ? () => spend("search", "discover") : path === "/posts/activity" ? () => spend("posts", "activity", POSTS_UPSTREAM_PER_CALL) : path === "/engagement" ? () => spend("posts", "engagement") : void 0;
+    const ledgerSpend = path === "/search" ? () => spend("search", body.purpose === "facets" ? "facets" : "discover") : path === "/posts/activity" ? () => spend("posts", "activity", POSTS_UPSTREAM_PER_CALL) : path === "/engagement" ? () => spend("posts", "engagement") : void 0;
     if (ledgerSpend) {
       let within;
       try {
@@ -2210,20 +2212,29 @@ async function unipileSearch(deps, body, doFetch) {
     network_distance: distance.length ? distance : [2, 3]
   };
   const advanced = {};
+  const strict = body.strict === true;
+  const unknownFilter = {
+    ok: false,
+    reason: "unknown_filter",
+    message: "LinkedIn does not know that company, school or place."
+  };
   if (title) advanced.title = title;
   if (company) {
     const id = await searchParameterId(deps, accountId, "COMPANY", company, doFetch);
     if (id) search.company = [id];
+    else if (strict) return unknownFilter;
     else advanced.company = company;
   }
   if (school) {
     const id = await searchParameterId(deps, accountId, "SCHOOL", school, doFetch);
     if (id) search.school = [id];
+    else if (strict) return unknownFilter;
     else advanced.school = school;
   }
   if (location) {
     const id = await searchParameterId(deps, accountId, "LOCATION", location, doFetch);
     if (id) search.location = [id];
+    else if (strict) return unknownFilter;
     else keywords.push(location);
   }
   const kw = keywords.filter(Boolean).join(" ");

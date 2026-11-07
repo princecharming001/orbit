@@ -90,6 +90,12 @@ describe('every tool parses and executes its example input against the demo', ()
       get_today_brief: {},
       list_pipeline: { view: 'table', sortBy: 'lastReply' },
       search_people: { query: ids.person.firstName },
+      search_network: {
+        ask: 'engineers I know',
+        positions: [{ role: { families: ['engineering'] } }],
+      },
+      // the set search_network just made (the first in this file)
+      search_network_more: { setId: 'rs1', action: 'more' },
       get_person: {
         personId: ids.person.id,
         include: ['facts', 'timeline', 'conversation', 'prep', 'drafts', 'connections', 'notes', 'promises'],

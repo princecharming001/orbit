@@ -25,11 +25,12 @@ Deno.serve(
       perMinute: num('ORBIT_LIMIT_PER_MINUTE', 30),
       perDay: num('ORBIT_LIMIT_PER_DAY', 250),
       globalPerDay: num('ORBIT_LIMIT_GLOBAL_PER_DAY', 3000),
-      // memory, resume and reply-tone reads: their own daily counts per visitor
+      // memory, resume, reply-tone and search-judge reads: their own daily counts per visitor
       perDayCall: {
         memory: num('ORBIT_LIMIT_MEMORY_PER_DAY', 200),
         resume: num('ORBIT_LIMIT_RESUME_PER_DAY', 5),
         rapport: num('ORBIT_LIMIT_RAPPORT_PER_DAY', 150),
+        judge: num('ORBIT_LIMIT_JUDGE_PER_DAY', 300),
       },
     },
   }),

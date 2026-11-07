@@ -28,6 +28,7 @@ import type {
   AutopilotStatus,
   BookRequest,
   BookResponse,
+  CompanyFactsResponse,
   DraftApproveRequest,
   DraftComposeRequest,
   DraftIdRequest,
@@ -88,6 +89,11 @@ import type {
   ScoreExplainRequest,
   ScoreExplainResponse,
   ScoreLabelRequest,
+  SearchFacetsResponse,
+  SearchFacetsWrite,
+  SearchLabelRequest,
+  SearchLookupRequest,
+  SearchLookupResponse,
   SlotsRequest,
   SlotsResponse,
   SourceAddRequest,
@@ -269,6 +275,11 @@ export interface ApiRoutes {
   '/voice': [Record<string, never>, VoiceResponse];
   '/voice/notes': [VoiceNoteRequest, VoiceNoteResponse];
   '/voice/relearn': [Record<string, never>, VoiceRelearnResponse];
+  // network search (plan 32 §6)
+  '/companies/facts': [{ since?: string }, CompanyFactsResponse];
+  '/search/facets': [{ since?: string } | SearchFacetsWrite, SearchFacetsResponse | { written: number }];
+  '/search/lookup': [SearchLookupRequest, SearchLookupResponse];
+  '/search/labels': [SearchLabelRequest, { ok: boolean }];
 }
 export type ClientRoute = keyof ApiRoutes;
 

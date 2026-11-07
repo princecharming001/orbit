@@ -24,6 +24,7 @@ import { friendHandlers } from './handlers/friends.ts';
 import { gmailHandlers } from './handlers/gmail.ts';
 import { linkedinHandlers } from './handlers/linkedin.ts';
 import { scoreHandlers } from './handlers/score.ts';
+import { searchHandlers } from './handlers/search.ts';
 
 export class NotImplemented extends Error {
   constructor(kind: string) {
@@ -77,6 +78,7 @@ export function defaultHandlers(
     ...linkedinHandlers(deps),
     ...scoreHandlers(deps),
     ...friendHandlers(),
+    ...searchHandlers(deps),
     ...classifyHandlers(deps, agents),
     ...agentHandlers(agents),
   };
@@ -112,6 +114,8 @@ export const RESERVE_MS: Readonly<Record<string, number>> = {
   'sync.gmail.backfill': 58_000,
   'score.user': 20_000,
   'score.page': 20_000,
+  search_census: 58_000,
+  company_facts_sync: 30_000,
 };
 export const DEFAULT_RESERVE_MS = 8_000;
 

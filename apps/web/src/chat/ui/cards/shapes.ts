@@ -151,10 +151,15 @@ export function readPeople(d: unknown): { person: Person; why?: string; stage?: 
 }
 
 /** What a people list was asked for: the search words or the filter, when there were any. */
-export function readPeopleQuery(d: unknown): { query?: string; filter?: string } {
+export function readPeopleQuery(d: unknown): { query?: string; filter?: string; nameQuery: boolean } {
   const o = obj(unpack(d));
   const filter = str(o.filter);
-  return { query: str(o.query), filter: filter && filter !== 'all' ? filter : undefined };
+  return {
+    query: str(o.query),
+    filter: filter && filter !== 'all' ? filter : undefined,
+    // older results carry no flag: they were all treated as names
+    nameQuery: o.nameQuery !== false,
+  };
 }
 
 /** draft: `{ draft, person? }`, a draft reference `{ id, person, firstLine }`, or a bare OutboundMessage */

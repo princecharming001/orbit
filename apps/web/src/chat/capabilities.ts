@@ -38,6 +38,17 @@ export const CAPABILITIES: readonly Capability[] = [
     utterances: ['find Lena', 'who do I know at Stripe', 'search for an analyst at Evercore'],
   },
   {
+    id: 'network_search',
+    area: 'Shell and navigation',
+    title: 'Find everyone in the network who fits a description, with the evidence for each',
+    kind: 'read',
+    utterances: [
+      'YC founders in my network',
+      'Berkeley alums at Stripe in SF',
+      'PMs I have not talked to in a year',
+    ],
+  },
+  {
     id: 'hint_dismiss',
     area: 'Shell and navigation',
     title: 'Close a first-run hint for good',

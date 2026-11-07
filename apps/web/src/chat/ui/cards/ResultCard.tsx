@@ -24,6 +24,7 @@ import { Markdown } from '../Markdown';
 import type { ToolBlock } from '../threadStore';
 import { Choices } from './Choices';
 import { addPicked, askForIntro, type Picked, routesToEach, writeTo, writeToEach } from './next';
+import { PeopleTableCard, readTable } from './PeopleTable';
 import {
   CardHead,
   DraftOwnersContext,
@@ -117,6 +118,8 @@ function Envelope({ env, block, actions }: { env: ResultEnvelope; block: ToolBlo
     }
     case 'people':
       return <PeopleCard env={env} actions={actions} />;
+    case 'people_table':
+      return readTable(d) ? <PeopleTableCard env={env} send={actions.send} /> : <Summary env={env} />;
     case 'choices':
       return <Choices options={readChoices(d)} actions={actions} />;
     case 'setup': {
@@ -301,7 +304,7 @@ function PersonCard({ env, r, actions }: { env: ResultEnvelope; r: PersonView; a
 
 function PeopleCard({ env, actions }: { env: ResultEnvelope; actions: CardActions }) {
   const people = readPeople(env.data);
-  const { query } = readPeopleQuery(env.data);
+  const { query, nameQuery } = readPeopleQuery(env.data);
   const target = readRoutes(env.data).to;
   const fold = useFold(people);
   const picked = usePicked();
@@ -317,7 +320,7 @@ function PeopleCard({ env, actions }: { env: ResultEnvelope; actions: CardAction
     <GlassCard kind="people">
       <CardHead
         title={
-          query && people.length > 1
+          query && nameQuery && people.length > 1
             ? `Which "${query}"?`
             : firstSentence(env.summary).replace(/, including .*$/, '')
         }

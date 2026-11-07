@@ -946,5 +946,88 @@ export const API_ROUTES = [
   '/voice',
   '/voice/notes',
   '/voice/relearn',
+  // plan 32: network search
+  '/companies/facts',
+  '/search/facets',
+  '/search/lookup',
+  '/search/labels',
 ] as const;
 export type ApiRoute = (typeof API_ROUTES)[number];
+
+// ---- network search (plan 32 §6) ----------------------------------------------------------------------------------
+
+/** A company fact as the server sends it (core search CompanyFact). */
+export interface CompanyFactWire {
+  key: string;
+  name: string;
+  formerNames?: string[];
+  website?: string;
+  ycBatch?: string;
+  ycStatus?: 'Active' | 'Inactive' | 'Acquired' | 'Public';
+  ycStage?: 'Early' | 'Growth';
+  teamSize?: number;
+  industries?: string[];
+  oneLiner?: string;
+  ambiguousName?: boolean;
+  source: 'yc' | 'bigpicture' | 'curated' | 'linkedin';
+  asOf?: string;
+}
+
+export interface CompanyFactsResponse {
+  facts: CompanyFactWire[];
+  /** pass back as `since` for the facts changed after this answer */
+  at: string;
+}
+
+export type FacetKind = 'place' | 'school' | 'company' | 'past_company';
+
+export interface FacetWire {
+  personId: string;
+  kind: FacetKind;
+  value: string;
+  positive: boolean;
+  source: 'census' | 'facet_search' | 'profile' | 'user';
+  at: string;
+}
+
+export interface SearchFacetsResponse {
+  facets: FacetWire[];
+  at: string;
+  /** the answer was cut at its limit: ask again with `since: at` */
+  more: boolean;
+  census: { seen: number; matched: number; doneAt: string | null; running: boolean } | null;
+  /** complete lookups of the last 30 days: a connection with a LinkedIn id not listed for one lacks that facet */
+  scans?: FacetScanWire[];
+}
+
+export interface FacetScanWire {
+  kind: 'place' | 'school' | 'company';
+  value: string;
+  at: string;
+}
+
+export interface SearchLookupRequest {
+  kind: 'place' | 'school' | 'company';
+  value: string;
+}
+
+export interface SearchLookupResponse {
+  ok: boolean;
+  kind: 'place' | 'school' | 'company';
+  value: string;
+  personIds: string[];
+  complete: boolean;
+  cached?: boolean;
+  reason?: string;
+}
+
+export interface SearchFacetsWrite {
+  facets: { personId: string; kind: FacetKind; value: string; positive: boolean }[];
+}
+
+export interface SearchLabelRequest {
+  personId: string;
+  askHash: string;
+  ask: string;
+  verdict: 'yes' | 'no';
+}

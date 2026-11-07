@@ -106,6 +106,27 @@ export interface TieScoreRow {
   [k: string]: unknown;
 }
 
+/** One cached value of network search (plan 32): company facts, a judge answer, a pull's position. */
+export interface SearchCacheRow {
+  key: string;
+  /** '' for values shared by every student on this browser (company facts) */
+  userId: string;
+  at: string;
+  value: unknown;
+}
+
+/** What LinkedIn listed about one person (orbit.facet_assertions); id = personId|kind|value|source. */
+export interface FacetRow {
+  id: string;
+  userId: string;
+  personId: string;
+  kind: 'place' | 'school' | 'company' | 'past_company';
+  value: string;
+  positive: boolean;
+  source: string;
+  at: string;
+}
+
 /** One way to reach a person (orbit.person_identities): an address, a LinkedIn id or slug. */
 export interface PersonIdentityRow {
   id: string;
@@ -343,6 +364,8 @@ export class OrbitDB extends Dexie {
   friends!: EntityTable<FriendRow, 'friendshipId'>;
   friendAsks!: EntityTable<FriendAskRow, 'id'>;
   draftEdits!: EntityTable<DraftEdit, 'id'>;
+  searchCache!: EntityTable<SearchCacheRow, 'key'>;
+  facetAssertions!: EntityTable<FacetRow, 'id'>;
 
   constructor(name = 'orbit') {
     super(name);
@@ -492,6 +515,12 @@ export class OrbitDB extends Dexie {
     // voice and pushed to orbit.draft_edits for an account; the settings row gains voiceNotes (not indexed)
     this.version(13).stores({
       draftEdits: 'id, userId, createdAt, draftId',
+    });
+    // plan 32: network search. searchCache holds the company facts, the judge's answers and each pull's position;
+    // facetAssertions what LinkedIn listed about the student's people (from the server's census and lookups)
+    this.version(14).stores({
+      searchCache: 'key, userId, at',
+      facetAssertions: 'id, userId, personId',
     });
   }
 }

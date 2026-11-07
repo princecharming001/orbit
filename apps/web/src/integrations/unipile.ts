@@ -446,6 +446,10 @@ export interface LinkedInSearchQuery {
   distance?: (1 | 2 | 3)[];
   /** the cursor the previous page of the same search returned: the next page */
   cursor?: string;
+  /** refuse a company, school or location LinkedIn has no id for, instead of searching it as keywords */
+  strict?: boolean;
+  /** whose share of the day's searches this takes: 'facets' is a network search's lookup while the student waits */
+  purpose?: 'facets';
 }
 
 /** The proxy's answer when the account has run all the searches Orbit allows today: a failure with this status. */

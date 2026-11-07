@@ -6,16 +6,23 @@
 import { Check, X } from 'lucide-react';
 import { useEffect, useSyncExternalStore } from 'react';
 import { Link } from 'react-router-dom';
-import { clearLinkedInProgress, linkedInProgress, subscribeLinkedInProgress } from '../engine/linkedinLive';
+import {
+  clearLinkedInProgress,
+  dismissLinkedInProgress,
+  linkedInProgress,
+  subscribeLinkedInProgress,
+} from '../engine/linkedinLive';
 import { cx, Spinner } from '../ui';
 
 const DONE_SHOWN_MS = 12_000;
+/** a failure says what went wrong, then leaves (Settings keeps it on the account row) */
+const FAILED_SHOWN_MS = 20_000;
 
 export function LinkedInProgressBanner() {
   const p = useSyncExternalStore(subscribeLinkedInProgress, linkedInProgress, linkedInProgress);
   useEffect(() => {
-    if (p?.phase !== 'done') return;
-    const t = setTimeout(clearLinkedInProgress, DONE_SHOWN_MS);
+    if (p?.phase !== 'done' && p?.phase !== 'failed') return;
+    const t = setTimeout(clearLinkedInProgress, p.phase === 'done' ? DONE_SHOWN_MS : FAILED_SHOWN_MS);
     return () => clearTimeout(t);
   }, [p]);
   if (!p) return null;
@@ -96,7 +103,7 @@ export function LinkedInProgressBanner() {
         {!working && (
           <button
             type="button"
-            onClick={clearLinkedInProgress}
+            onClick={dismissLinkedInProgress}
             className="shrink-0 -mr-1 -mt-1 w-7 h-7 rounded-full inline-flex items-center justify-center text-ink-3 hover:text-ink hover:bg-canvas-2"
             aria-label="Dismiss"
           >

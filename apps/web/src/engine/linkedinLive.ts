@@ -131,12 +131,41 @@ export function subscribeLinkedInProgress(fn: () => void): () => void {
 /** While a quiet background refresh runs, the progress card stays away (a failure is still on the account row). */
 let quietSync = false;
 
+/** A failure the student closed is not raised again for a day (the account row in Settings still says it). */
+const DISMISSED_KEY = 'orbit.linkedin.dismissedFailure';
+const DISMISSED_MS = 24 * 3_600_000;
+function dismissedRecently(message: string | undefined): boolean {
+  try {
+    const v = JSON.parse(localStorage.getItem(DISMISSED_KEY) ?? 'null') as {
+      message?: string;
+      at?: number;
+    } | null;
+    return !!v?.at && v.message === (message ?? '') && Date.now() - v.at < DISMISSED_MS;
+  } catch {
+    return false;
+  }
+}
+
 function setProgress(p: Omit<LinkedInProgress, 'at'> | undefined): void {
   if (quietSync && p) return;
+  if (p?.phase === 'failed' && dismissedRecently(p.message)) return;
   progress = p && { ...p, at: Date.now() };
   for (const fn of progressListeners) fn();
 }
 export function clearLinkedInProgress(): void {
+  setProgress(undefined);
+}
+/** The student closed the card: a failure stays closed for a day. */
+export function dismissLinkedInProgress(): void {
+  if (progress?.phase === 'failed')
+    try {
+      localStorage.setItem(
+        DISMISSED_KEY,
+        JSON.stringify({ message: progress.message ?? '', at: Date.now() }),
+      );
+    } catch {
+      // storage may be off; it is then only closed for this visit
+    }
   setProgress(undefined);
 }
 

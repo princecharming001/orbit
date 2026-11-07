@@ -104,11 +104,12 @@ async function client(): Promise<LlmClient | undefined> {
  * what the student said after a chat turn, and reading their resume. The proxy holds each to its own output limit and,
  * for resumes, its own daily count; both count against the student's daily limit like the chat.
  */
-export type SharedCall = 'memory' | 'resume' | 'rapport';
+export type SharedCall = 'memory' | 'resume' | 'rapport' | 'judge';
 export const SHARED_CALL_MAX_TOKENS: Record<SharedCall, number> = {
   memory: 1024,
   resume: 8192,
   rapport: 300,
+  judge: 2048,
 };
 /** The placeholder key sent to Orbit's shared access; the server function swaps in the real one. */
 const SHARED_PLACEHOLDER = 'orbit-shared';
@@ -627,6 +628,24 @@ export async function llmSignal(
     sentiment: r.sentiment,
     ...(direction === 'inbound' && r.rapport ? { rapport: rapportFromLlm(r.rapport) } : {}),
   };
+}
+
+/**
+ * Network search's judge (plan 32 §6.6): one structured read of up to a dozen people against an ask, on the light
+ * model, through Orbit's shared access when the student has no key (its own daily count). Undefined when Claude
+ * cannot be reached; throws an LlmError when the call fails.
+ */
+export async function llmSearchJudge<T extends z.ZodTypeAny>(
+  system: string,
+  buildUser: (wrap: Wrap) => string,
+  schema: T,
+  maxTokens: number,
+): Promise<z.infer<T> | undefined> {
+  return runParse('chat', system, buildUser, schema, 'low', maxTokens, {
+    shared: 'judge',
+    quiet: true,
+    model: LIGHT_MODEL,
+  });
 }
 
 /**

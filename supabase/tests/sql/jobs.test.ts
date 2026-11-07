@@ -262,6 +262,10 @@ describe('orbit.delete_user (§10.4 test 4)', () => {
       insert into orbit.usage_ledger (user_id, provider, operation, units, cost_usd) values ('${u}', 'anthropic', 'x', 1, 0.01);
       insert into orbit.job_runs (queue, user_id, kind, status) values ('orbit_sync', '${u}', 'noop', 'ok');
       insert into orbit.audit_log (user_id, actor, action) values ('${u}', 'user', 'x');
+      insert into orbit.facet_assertions (user_id, person_id, kind, value, positive, source) values ('${u}', '${p2}', 'place', 'Austin', true, 'census');
+      insert into orbit.search_census (user_id, seen) values ('${u}', 10);
+      insert into orbit.search_labels (user_id, person_id, ask_hash, ask, verdict) values ('${u}', '${p2}', 'h', 'a', 'yes');
+      insert into orbit.facet_scans (user_id, kind, value, complete) values ('${u}', 'company', 'Stripe', true);
       insert into orbit.dead_letters (queue, message) values ('orbit_sync', '{"kind":"x","userId":"${u}"}');
     `);
     await db.sql`select orbit.enqueue('orbit_sync', ${{ kind: 'noop', userId: u, payload: {} }}::jsonb)`;

@@ -6,7 +6,7 @@ const text = stableSystemText();
 
 describe('stable system block', () => {
   it('is version 17 and byte-identical for every conversation; the tag rule follows in its own small block', () => {
-    expect(STABLE_SYSTEM_VERSION).toBe(23);
+    expect(STABLE_SYSTEM_VERSION).toBe(24);
     expect(stableSystemText()).toBe(text);
     const a = systemBlocks('0123456789abcdef');
     const b = systemBlocks('fedcba9876543210');

@@ -41,6 +41,7 @@ import { pathRoutes } from './routes/paths.ts';
 import { replyRoutes } from './routes/replies.ts';
 import { researchRoutes } from './routes/research.ts';
 import { scoreRoutes } from './routes/scores.ts';
+import { searchRoutes } from './routes/search.ts';
 import { settingsRoutes } from './routes/settings.ts';
 import { sourceRoutes } from './routes/source.ts';
 import { voiceRoutes } from './routes/voice.ts';
@@ -155,6 +156,7 @@ const ROUTES: Record<string, Route> = {
   ...draftRoutes,
   ...replyRoutes,
   ...calendarRoutes,
+  ...searchRoutes,
   ...memoryRoutes,
   ...settingsRoutes,
   ...cadenceRoutes,

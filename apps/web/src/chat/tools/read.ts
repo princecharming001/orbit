@@ -41,6 +41,7 @@ import { conversationWith } from '../../engine/conversation';
 import { DEMO_USER_ID } from '../../engine/demo';
 import { lastInboundOf, liveChatOf, nextMessageKind } from '../../engine/drafts';
 import { friendRouteOf, friendRoutes } from '../../engine/friends';
+import { isGivenName } from '../../engine/given-names';
 import {
   COMPANY_TEAM_LABELS,
   type CompanyReach,
@@ -538,7 +539,7 @@ export const searchPeople = defineTool({
   name: 'search_people',
   kind: 'read',
   description:
-    'Call this first whenever the student names a person, so you have their id for the other tools, and when they ask who they know at a company, who their closest ties are, their alumni, people with a chat, people at target companies, or hidden people. Returns ranked matches (exact name first, then prefix, then company or title). If several people match a name, ask the student which one before writing anything.',
+    'Call this first whenever the student names a person, so you have their id for the other tools, and for simple lists: who their closest ties are, their alumni, people with a chat, people at target companies, or hidden people. Returns ranked matches (exact name first, then prefix, then company or title). If several people match a name, ask the student which one before writing anything. Who fits a description (a role, a kind of company such as YC, a school, a place, a topic) goes to search_network instead.',
   input: z.object({
     query: z
       .string()
@@ -592,21 +593,34 @@ export const searchPeople = defineTool({
       };
     });
     const q = input.query?.trim();
+    // a name ("Lena", "Ana P") asks which person; a company or title ("W26", "Stripe") is a list, not a pick
+    const nameQuery = !!q && looksLikeName(q, list);
     const summary = rows.length
-      ? `${plural(rows.length, 'person', 'people')} match${rows.length === 1 ? 'es' : ''}${q ? ` "${q}"` : ''}${rows.length > 1 && q ? '. Check which one is meant before acting.' : '.'}`
+      ? `${plural(rows.length, 'person', 'people')} match${rows.length === 1 ? 'es' : ''}${q ? ` "${q}"` : ''}${rows.length > 1 && nameQuery ? '. Check which one is meant before acting.' : '.'}`
       : q
         ? `Nobody named or at "${q}" is in Orbit yet.`
         : 'Nobody is in Orbit yet.';
     return ok(
       'people',
-      { people: rows, query: q, filter },
-      { people: rows, ambiguous: rows.length > 1 },
+      { people: rows, query: q, filter, nameQuery },
+      { people: rows, ambiguous: rows.length > 1 && nameQuery },
       summary,
       '/people?view=list',
     );
   },
   toModel,
 });
+
+/** A query that names a person: its first word is a given name, or it starts someone's name. */
+export function looksLikeName(q: string, people: readonly Pick<Person, 'displayName'>[]): boolean {
+  const lower = q.toLowerCase();
+  const first = lower.split(/\s+/)[0] ?? '';
+  if (first.length > 1 && isGivenName(first)) return true;
+  return people.some((p) => {
+    const name = p.displayName.toLowerCase();
+    return name.startsWith(lower) || name.split(/\s+/).some((w) => w.length > 1 && w === first);
+  });
+}
 
 // ---------- get_person ----------
 

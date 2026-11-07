@@ -7,7 +7,9 @@
   "types": "./src/index.ts",
   "exports": {
     ".": "./src/index.ts",
-    "./vader": "./src/scoring/vader.ts"
+    "./vader": "./src/scoring/vader.ts",
+    "./search": "./src/search/index.ts",
+    "./search-places": "./src/search/places.data.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit -p tsconfig.json",

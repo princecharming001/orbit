@@ -1,5 +1,6 @@
 import type { ChatStage, MessageKind } from '@orbit/core';
 import { findPlaybookSection, mayHoldFacts } from '@orbit/core';
+import { flagOffInCode } from '../../engine/flags';
 import { isJobBoardLink, linkIn, saysApplying } from '../../integrations/postings';
 import type { ChoiceOption, ToolSpec } from '../types';
 import { type MatchablePerson, resolvePerson } from './people-match';
@@ -7,6 +8,7 @@ import { followUp, resolveReferences } from './routerFollowUp';
 import { mentioned, routeEarly, routeMore } from './routerMore';
 import { routeNetwork } from './routerNetwork';
 import type { ThreadContext } from './routerThread';
+import { compileSearch } from './searchCompile';
 import { peopleWaiting } from './setup';
 import { answerSocial, isNoise, readSocial, type SmallTalkKit, soundsFrustrated } from './smallTalk';
 import { fixTypos } from './typos';
@@ -700,6 +702,18 @@ function routeInner(raw: string, ctx: RouterContext): RouterIntent {
     )
   )
     return viaTool('list_recommendations', {}, undefined, 'list recommendations');
+
+  // network search (plan 32): "YC founders in my network", "Berkeley alums at Stripe", "PMs I haven't talked to"
+  if (ctx.registry.has('search_network') && !flagOffInCode('networkSearch')) {
+    const spec = compileSearch(text);
+    if (spec)
+      return viaTool(
+        'search_network',
+        spec as unknown as Record<string, unknown>,
+        undefined,
+        'search your network',
+      );
+  }
 
   // the networking agent: goals, scores, research, finding people, intros, replies, autonomy, memory, cadence
   {

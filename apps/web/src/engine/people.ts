@@ -545,6 +545,7 @@ export async function mergePeople(userId: string, survivorId: string, mergedId: 
       db.textThreads,
       db.memories,
       db.researchRuns,
+      db.facetAssertions,
     ],
     async () => {
       // touches: one per source item and person, so a touch both records have is kept once
@@ -561,6 +562,7 @@ export async function mergePeople(userId: string, survivorId: string, mergedId: 
       await db.personIdentities.where('personId').equals(mergedId).modify({ personId: survivorId });
       // the month's research log counts people: the merged one's briefs count as the survivor's
       await db.researchRuns.where('personId').equals(mergedId).modify({ personId: survivorId });
+      await db.facetAssertions.where('personId').equals(mergedId).modify({ personId: survivorId });
       // what the student told the chat about them stays with them
       await db.memories.where('personId').equals(mergedId).modify({ personId: survivorId });
       await db.messages.where('fromPersonId').equals(mergedId).modify({ fromPersonId: survivorId });

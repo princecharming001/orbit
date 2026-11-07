@@ -41,15 +41,17 @@ export const ALLOWED_BETAS = new Set([
 export const MAX_TOKENS = 16_000;
 export const MAX_BODY_BYTES = 1_500_000;
 
-/** The kinds of call the proxy forwards: the chat, and two small structured reads. */
-export type CallType = 'chat' | 'memory' | 'resume' | 'rapport';
-export const CALL_TYPES: readonly CallType[] = ['chat', 'memory', 'resume', 'rapport'];
+/** The kinds of call the proxy forwards: the chat, and small structured reads. */
+export type CallType = 'chat' | 'memory' | 'resume' | 'rapport' | 'judge';
+export const CALL_TYPES: readonly CallType[] = ['chat', 'memory', 'resume', 'rapport', 'judge'];
 /** Per call type: the largest max_tokens and request body allowed (the chat keeps MAX_TOKENS and MAX_BODY_BYTES). */
 export const CALL_LIMITS: Record<Exclude<CallType, 'chat'>, { maxTokens: number; maxBytes: number }> = {
   memory: { maxTokens: 1024, maxBytes: 60_000 },
   resume: { maxTokens: 8192, maxBytes: 200_000 },
   // how warm one reply reads (plan 27): the reply and the student's message it answers
   rapport: { maxTokens: 300, maxBytes: 24_000 },
+  // network search (plan 32 §6.6): whether up to a dozen people meet an ask, with the words it rests on
+  judge: { maxTokens: 2048, maxBytes: 60_000 },
 };
 
 export interface Limits {
@@ -63,6 +65,7 @@ export const DEFAULT_CALL_PER_DAY: Record<Exclude<CallType, 'chat'>, number> = {
   memory: 200,
   resume: 5,
   rapport: 150,
+  judge: 300,
 };
 export const DEFAULT_LIMITS: Limits = {
   perMinute: 30,
