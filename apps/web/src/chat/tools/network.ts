@@ -38,7 +38,14 @@ import {
   REPLY_CLASS_LABELS,
 } from '../../engine/replies';
 import { dossierView, getDossier, localDossier } from '../../engine/research';
-import { addSourced, candidateLine, providerNames, searchPeople } from '../../engine/sourcing';
+import {
+  addSourced,
+  candidateLine,
+  emailNote,
+  providerNames,
+  searchPeople,
+  tierChip,
+} from '../../engine/sourcing';
 import { callApi, isAccountMode, isServerUser } from '../../integrations/orbitApi';
 import { z } from '../../zod';
 import type { ResultEnvelope, ToolContext } from '../types';
@@ -593,7 +600,7 @@ export const findPeopleTool = defineTool({
   name: 'find_people',
   kind: 'write',
   description:
-    'Call this when the student asks to find or source new people beyond their network for a purpose: investors, customers, candidates, mentors, alumni, a co-founder, research collaborators, or professors and researchers at a school ("source professors I can reach out to for biomed research at Berkeley"). Give the purpose (a goal kind; professors and labs are collaboration), what they are looking for, and the school or organization and the topic when the student names them: with those, Orbit reads that place\'s faculty or team pages and comes back with names, titles, an email when the page gives one, and what each person works on, the context a first message is written from. With an Orbit account it also searches LinkedIn, Apollo and Semantic Scholar and ranks everyone by fit, how reachable they are and how likely to reply, with reasons. Without one, it searches LinkedIn from the student\'s own account when LinkedIn is connected live. Show the top few with what they work on and whether an email was found, and offer add_sourced.',
+    'Call this when the student asks to find or source new people beyond their network for a purpose: investors, customers, candidates, mentors, alumni, a co-founder, research collaborators, or professors and researchers at a school ("source professors I can reach out to for biomed research at Berkeley"). Give the purpose (a goal kind; professors and labs are collaboration), what they are looking for, and the school or organization and the topic when the student names them: with those, Orbit reads that place\'s faculty or team pages and comes back with names, titles, an email when the page gives one, and what each person works on, the context a first message is written from. With an Orbit account it also searches LinkedIn, Apollo and Semantic Scholar and ranks everyone by fit, how reachable they are and how likely to reply, with reasons. Without one, it searches LinkedIn from the student\'s own account when LinkedIn is connected live. Also call it, without being asked, when search_network found nobody for a "who should I reach out to" ask, and when the student wants people outside LinkedIn or people to email. Everyone comes back ranked warmest first in five tiers: 1 already talked with, 2 one hop away (a close contact at the same place: suggest asking them for an intro), 3 shared background (school, a past company, hometown), 4 open to students, 5 cold but relevant. Each has an email when one could be found, marked as on their page, from the company\'s usual address pattern, or a guess that is not confirmed (say so before the student sends to a guess). Show the top few with the tier reason, what they work on and the email, and offer add_sourced; once added, create_draft writes to them.',
   input: z.object({
     purpose: z.enum(KINDS).describe('What the people are for.'),
     query: z
@@ -654,9 +661,11 @@ export const findPeopleTool = defineTool({
         id: c.id,
         known: c.knownPersonId,
         text: candidateLine(c),
-        chip: c.knownPersonId ? 'You know them' : undefined,
-        // what the page said they work on reads better than the fit reasons when the web found them
-        sub: [...(c.evidence ?? []).slice(0, 1), ...c.reasons.slice(0, 1)].join('. '),
+        chip: tierChip(c),
+        // the tier's reason first, then what the page said they work on, then the email and how sure it is
+        sub: [c.why ?? c.reasons[0], ...(c.evidence ?? []).slice(0, 1), emailNote(c)]
+          .filter(Boolean)
+          .join('. '),
         href: c.knownPersonId ? `/people/${c.knownPersonId}` : c.url,
       })),
       {
@@ -664,7 +673,11 @@ export const findPeopleTool = defineTool({
           recommendationId: c.id,
           who: wrapped(ctx, 'sourced', candidateLine(c), 200),
           location: c.location,
-          emailFound: !!c.email,
+          tier: c.tier,
+          why: c.why ? wrapped(ctx, 'sourced', c.why, 200) : undefined,
+          introVia: c.bridge ? { personId: c.bridge.personId, name: c.bridge.name } : undefined,
+          email: c.email ? wrapped(ctx, 'sourced', c.email, 120) : undefined,
+          emailConfidence: c.email ? (c.emailConfidence ?? 'page') : undefined,
           context: (c.evidence ?? []).slice(0, 2).map((t) => wrapped(ctx, 'sourced', t, 200)),
           reasons: c.reasons.slice(0, 2).map((t) => wrapped(ctx, 'sourced', t, 160)),
           knownPersonId: c.knownPersonId,

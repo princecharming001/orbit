@@ -216,6 +216,18 @@ export function routeNetwork(text: string, lower: string, h: NetworkHelpers): Ro
       );
     }
   }
+  // people to email outside LinkedIn: the web and email search, warmest first
+  if (
+    /\b(?:outside (?:of )?(?:my )?linkedin|(?:people|someone|anyone|who) (?:i can|can i|to|i should|should i) (?:cold[- ])?email)\b/i.test(
+      text,
+    )
+  )
+    return h.viaTool(
+      'find_people',
+      { purpose: kindFrom(text) ?? 'advice', query: text },
+      undefined,
+      'find people',
+    );
   if (
     /^add (?:them(?: all)?|those|the first (?:one|two|three|few)|all of them)(?: to (?:my pipeline|people|my people|orbit))?$/.test(
       lower,

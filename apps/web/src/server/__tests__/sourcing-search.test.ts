@@ -380,4 +380,44 @@ describe('merge and fit rules', () => {
       reasons: ['Matches "climate software"'],
     });
   });
+
+  it('warmth: a warm intro outranks a better-fitting stranger, and the email finder fills the rest', async () => {
+    const net = fakeFetch((c: Call) => {
+      if (c.url.endsWith('api.exa.ai/search'))
+        return json((c.body as { category?: string }).category === 'company' ? exaFunds : exaInvestors);
+      if (c.url.includes('mixed_people/api_search')) return json(apolloInvestors);
+      return undefined;
+    });
+    const llm = fakeClaude(
+      fitAnswer({ 'Maya Patel': 0.9, 'Leo Grant': 0.5, 'Sam Ok***r': 0.6, 'Greenfield Ventures': 0.3 }),
+    );
+    const { warmthOf } = await import('../../../../../supabase/functions/_shared/sourcing/warmth');
+    const { fillEmails } = await import('../../../../../supabase/functions/_shared/sourcing/email');
+    const deps: SourcingDeps = {
+      ...providers(net.fetch),
+      claude: llm.claude,
+      reachOf: () => null,
+      responsiveness: () => 0.5,
+      budget: memoryBudget().budget,
+      clock: manualClock().clock,
+      newId: () => 'batch-w',
+      warmthOf: (c, known) =>
+        warmthOf(c, {
+          student: { orgs: [], interests: [] },
+          known,
+          warm:
+            c.name === 'Leo Grant' && c.org
+              ? [{ personId: 'kel', name: 'Kelly Moss', score: 83, org: c.org }]
+              : [],
+          year: 2026,
+        }),
+      fillEmails: (cands) => fillEmails(cands, { known: [], orgDomains: new Map(), mx: async () => false }),
+    };
+    const out = await sourcePeople(deps, { userId: 'u1', goal: fundraising, user: { firstName: 'Ari' } });
+    const names = out.results.map((r) => r.candidate.name);
+    expect(names.indexOf('Leo Grant')).toBeLessThan(names.indexOf('Maya Patel'));
+    const leo = out.results.find((r) => r.candidate.name === 'Leo Grant')!;
+    expect(leo.candidate.warmth).toMatchObject({ tier: 2, bridge: { personId: 'kel' } });
+    expect(leo.reasons[0]).toMatch(/Kelly is close to you/);
+  });
 });

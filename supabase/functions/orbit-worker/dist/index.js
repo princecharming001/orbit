@@ -2335,8 +2335,8 @@ function mentionTarget(clause2) {
   if (!m) return void 0;
   const what = m[1].replace(/^that\s+/i, "").replace(/^I\s+(?:go to|attend|am at|study at|went to|transferred from|am|was|have|had)\s+/i, "").replace(/^I'm\s+(?=(an?|the)\s)/i, (x) => /\bstudent\b/i.test(m[1]) ? x : "");
   if (/^(I|I'm|I am|I go)$/i.test(what.trim())) return void 0;
-  const words4 = what.replace(/^["'‘“]+|["'’”]+$/g, "").replace(/\b(in|to|on|with|when|unless|because|anywhere|ever|at all|please)\b.*$/i, "").replace(/^(my|the|that|about|any|a|an|our)\s+/i, "").trim().split(/\s+/).slice(0, 4);
-  const phrase = words4.join(" ").trim();
+  const words5 = what.replace(/^["'‘“]+|["'’”]+$/g, "").replace(/\b(in|to|on|with|when|unless|because|anywhere|ever|at all|please)\b.*$/i, "").replace(/^(my|the|that|about|any|a|an|our)\s+/i, "").trim().split(/\s+/).slice(0, 4);
+  const phrase = words5.join(" ").trim();
   if (phrase.length < 2 || VAGUE.has(phrase.toLowerCase())) return void 0;
   return phrase;
 }
@@ -2376,12 +2376,12 @@ function neverDoChecks(text2, subject = {}) {
     if (/\breferr/.test(c) && /\b(ask|asking|request|requesting|mention|for)\b/.test(c))
       add2(rule, (b) => /\breferr(al|als|ed|ing)?\b|\brefer me\b/i.test(b));
     if (/\b(gpa|grades?)\b/.test(c)) add2(rule, (b) => /\bgpa\b|\bgrade point\b/i.test(b));
-    const schoolNames = forbidsSchool(raw) ? (subject.school ?? []).map((n) => n.trim()).filter((n) => n.length >= 2) : [];
-    if (schoolNames.length) add2(rule, (b) => schoolNames.some((n) => hasPhrase(b, n)));
+    const schoolNames2 = forbidsSchool(raw) ? (subject.school ?? []).map((n) => n.trim()).filter((n) => n.length >= 2) : [];
+    if (schoolNames2.length) add2(rule, (b) => schoolNames2.some((n) => hasPhrase(b, n)));
     if (forbidsStudent(raw)) add2(rule, (b) => /\bstudent\b/i.test(b) || YEAR_NOUN.test(b));
     if (/\bcommunity college\b/i.test(c)) add2(rule, (b) => /\bcommunity college\b/i.test(b));
     const target = mentionTarget(raw);
-    if (target && !/\b(gpa|grades?|referrals?|exclamation|emojis?)\b/i.test(target) && !(schoolNames.length && /^(my )?(school|university|college|uni)$/i.test(target)) && !forbidsStudent(raw))
+    if (target && !/\b(gpa|grades?|referrals?|exclamation|emojis?)\b/i.test(target) && !(schoolNames2.length && /^(my )?(school|university|college|uni)$/i.test(target)) && !forbidsStudent(raw))
       add2(rule, (b) => hasPhrase(b, target));
   }
   return out;
@@ -2783,7 +2783,7 @@ function to24(h, ap) {
   if (ap === "am" && h === 12) return 0;
   return h;
 }
-function resolveHours(t, part) {
+function resolveHours(t, part2) {
   const startClock = (ap) => to24(t.h, ap) + t.min / 60;
   let startAp = t.ap;
   if (!startAp) {
@@ -2793,8 +2793,8 @@ function resolveHours(t, part) {
       const cand = to24(t.h, t.end.ap) + t.min / 60;
       const endH = to24(t.end.h, t.end.ap) + t.end.min / 60;
       startAp = cand <= endH ? t.end.ap : "am";
-    } else if (part === "morning") startAp = "am";
-    else if (part === "afternoon" || part === "evening") startAp = "pm";
+    } else if (part2 === "morning") startAp = "am";
+    else if (part2 === "afternoon" || part2 === "evening") startAp = "pm";
     else if (t.h >= 1 && t.h <= 7) startAp = "pm";
     else if (t.h === 12) startAp = "pm";
     else startAp = t.h > 12 ? void 0 : "am";
@@ -3325,8 +3325,8 @@ var NAME_PARTICLES = /* @__PURE__ */ new Set([
   "st"
 ]);
 var tokenKey = (t) => stripDiacritics(t).toLowerCase().replace(/[.,]/g, "");
-function isTagPart(part) {
-  const toks = part.split(/\s+/).filter(Boolean);
+function isTagPart(part2) {
+  const toks = part2.split(/\s+/).filter(Boolean);
   return toks.length > 0 && toks.every((t) => {
     const k = tokenKey(t);
     return !k || GENERATIONAL.has(k) || isCredentialToken(t, k) || HONORIFICS.has(k);
@@ -4190,11 +4190,11 @@ function phrasesOf(bodies, firstName) {
   const name = firstName.toLowerCase();
   for (const b of bodies) {
     const lines = b.split("\n").map((l) => l.trim().replace(GREETING2, "").trim()).filter((l) => l && !SIGNOFF.test(l));
-    const words4 = lines.join(" ").toLowerCase().replace(/[^a-z0-9' ]+/g, " ").split(/\s+/).filter(Boolean);
+    const words5 = lines.join(" ").toLowerCase().replace(/[^a-z0-9' ]+/g, " ").split(/\s+/).filter(Boolean);
     const mine = /* @__PURE__ */ new Set();
-    for (let i = 0; i + 3 <= words4.length; i++) {
-      const g = words4.slice(i, i + 3).join(" ");
-      const parts = words4.slice(i, i + 3);
+    for (let i = 0; i + 3 <= words5.length; i++) {
+      const g = words5.slice(i, i + 3).join(" ");
+      const parts = words5.slice(i, i + 3);
       if (g.includes(name) || FILLER.has(g) || parts.some((w) => /\d/.test(w))) continue;
       if (parts.filter((w) => !PLAIN.has(w) && w.length > 2).length < 2) continue;
       mine.add(g);
@@ -4737,11 +4737,11 @@ function unsupportedDetails(body, context) {
     const sentenceStart = /(^|[.!?:;"]\s+|\n\s*|\(\s*)$/.test(before);
     const phrase = m[0].replace(/'s$/, "").replace(/[.'-]+$/, "");
     if (!phrase || has2(phrase)) continue;
-    const words4 = phrase.split(/\s+/);
-    const unknown = words4.filter((w, i) => {
+    const words5 = phrase.split(/\s+/);
+    const unknown = words5.filter((w, i) => {
       const bare2 = w.replace(/'s$/, "").replace(/[.'-]+$/, "");
       if (!bare2 || COMMON_CAPS.has(bare2.toLowerCase()) || has2(bare2)) return false;
-      if (i === 0 && sentenceStart && words4.length === 1 && /^[A-Z][a-z]+(?:'(?:ll|ve|re|d|s|m|t))?$/.test(bare2))
+      if (i === 0 && sentenceStart && words5.length === 1 && /^[A-Z][a-z]+(?:'(?:ll|ve|re|d|s|m|t))?$/.test(bare2))
         return false;
       return true;
     });
@@ -5612,10 +5612,10 @@ function checkIntroAsk(d) {
   return d.kind === "intro_request" || d.kind === "forwardable_blurb" ? [approval("intro_ask_needs_approval", "asking a third party for an introduction is approved")] : [];
 }
 function checkCrossThread(d, ctx) {
-  const words4 = (s) => s.toLowerCase().match(/[a-z0-9']+/g) ?? [];
-  const body = ` ${words4(d.body).join(" ")} `;
+  const words5 = (s) => s.toLowerCase().match(/[a-z0-9']+/g) ?? [];
+  const body = ` ${words5(d.body).join(" ")} `;
   for (const t of ctx.otherThreads ?? []) {
-    const w = words4(t);
+    const w = words5(t);
     for (let i = 0; i + 8 <= w.length; i++) {
       const run = ` ${w.slice(i, i + 8).join(" ")} `;
       if (body.includes(run))
@@ -6042,15 +6042,15 @@ function cardProse(card) {
   if (g && s) out.push(`${g} and ${s}.`);
   else if (g) out.push(`${g}.`);
   else if (s) out.push(`You ${s}.`);
-  const words4 = Math.round(card.avgMessageWords);
-  const length = words4 <= 70 ? "short" : words4 <= 130 ? "at medium length" : "long";
+  const words5 = Math.round(card.avgMessageWords);
+  const length = words5 <= 70 ? "short" : words5 <= 130 ? "at medium length" : "long";
   const marks = card.exclamationsPerMessage <= 0.05 ? "no exclamation marks" : card.exclamationsPerMessage < 0.5 ? "an exclamation mark now and then" : "exclamation marks often";
   const parts = [
     card.contractions ? "contractions" : "no contractions",
     marks,
     ...card.emoji ? ["the odd emoji"] : []
   ];
-  out.push(`You write ${length}, about ${words4} words, with ${listWords(parts)}.`);
+  out.push(`You write ${length}, about ${words5} words, with ${listWords(parts)}.`);
   out.push(`Your sentences run about ${Math.round(card.avgSentenceWords)} words.`);
   if (card.characteristicPhrases.length)
     out.push(`Phrases of yours: ${listWords(card.characteristicPhrases.slice(0, 5).map((p) => `'${p}'`))}.`);
@@ -6794,14 +6794,14 @@ function prose(body) {
   );
   const text2 = lines.join(" ");
   const sentences3 = text2.split(/(?<=[.!?])\s+/).map((s) => s.trim()).filter((s) => /[A-Za-z]/.test(s));
-  const words4 = text2.match(/[A-Za-z][A-Za-z'’-]*/g) ?? [];
-  return { words: words4, sentences: sentences3 };
+  const words5 = text2.match(/[A-Za-z][A-Za-z'’-]*/g) ?? [];
+  return { words: words5, sentences: sentences3 };
 }
 function fleschKincaidGrade(body) {
-  const { words: words4, sentences: sentences3 } = prose(body);
-  if (!words4.length || !sentences3.length) return 0;
-  const syl = words4.reduce((s, w) => s + syllables(w), 0);
-  return 0.39 * (words4.length / sentences3.length) + 11.8 * (syl / words4.length) - 15.59;
+  const { words: words5, sentences: sentences3 } = prose(body);
+  if (!words5.length || !sentences3.length) return 0;
+  const syl = words5.reduce((s, w) => s + syllables(w), 0);
+  return 0.39 * (words5.length / sentences3.length) + 11.8 * (syl / words5.length) - 15.59;
 }
 var ASK_PHRASE = /\b(would you|could you|could we|can we|can you|are you open|open to|worth a (quick )?look|happy to (chat|talk|hop)|let me know if|would it be|do you have|are you up for|might you|would love (it )?if you)\b/i;
 function asksIn(body) {
@@ -6819,7 +6819,7 @@ function validateComposed(msg, ctx) {
   const block3 = (code, detail) => issues.push({ code, detail, blocking: true });
   const body = msg.body;
   const lower = body.toLowerCase();
-  const words4 = wordsIn(body);
+  const words5 = wordsIn(body);
   const grade = Math.round(fleschKincaidGrade(body) * 10) / 10;
   const v1 = validateDraft(
     {
@@ -6853,10 +6853,10 @@ function validateComposed(msg, ctx) {
         ctx.connectionNote ? "connection_note_too_long" : "linkedin_too_long",
         `${body.length} characters, at most ${max}`
       );
-    if (FIRST_TOUCH_KINDS.has(msg.kind) && words4 < 12) block3("words_out_of_range", `${words4} words`);
+    if (FIRST_TOUCH_KINDS.has(msg.kind) && words5 < 12) block3("words_out_of_range", `${words5} words`);
   } else {
     const [min, max] = wordRange(msg.kind, ctx.goal, ctx.niche);
-    if (words4 < min || words4 > max) block3("words_out_of_range", `${words4} words, want ${min}–${max}`);
+    if (words5 < min || words5 > max) block3("words_out_of_range", `${words5} words, want ${min}–${max}`);
   }
   const gradeMax = ctx.niche ? NICHE_FORM[ctx.niche].gradeMax : READING_GRADE_MAX;
   if (grade > gradeMax + READING_GRADE_SLACK)
@@ -6920,7 +6920,7 @@ ${body}`, ctx.inputs))
     seen.add(k);
     return true;
   });
-  return { ok: !deduped.some((i) => i.blocking), issues: deduped, words: words4, grade };
+  return { ok: !deduped.some((i) => i.blocking), issues: deduped, words: words5, grade };
 }
 
 // packages/core/src/drafts/typing.ts
@@ -6968,7 +6968,7 @@ function dropSignoff(body, firstName) {
   return lines.join("\n").replace(/\s+$/, "");
 }
 function properCase(text2) {
-  const withI = mapUnprotected(text2, (part) => part.replace(/\bi(?='(?:m|ll|d|ve|re)\b|\b)/g, "I"));
+  const withI = mapUnprotected(text2, (part2) => part2.replace(/\bi(?='(?:m|ll|d|ve|re)\b|\b)/g, "I"));
   return withI.replace(/(^\s*|[.!?]\s+|\n\s*)([a-z])/g, (m, lead, c, at) => {
     const rest = withI.slice(at + lead.length);
     if (/^(https?:\/\/|www\.|[\w.+-]+@|[\w-]+\.(com|io|ai|co|org|net|dev|app|today)\b)/.test(rest)) return m;
@@ -7008,8 +7008,8 @@ function firstNameOf(p) {
 function lastNameOf(p) {
   const l = typeof p.last_name === "string" && p.last_name.trim() ? p.last_name.trim() : "";
   if (l) return l;
-  const words4 = (typeof p.display_name === "string" ? p.display_name.trim() : "").split(/\s+/);
-  return words4.length > 1 ? words4[words4.length - 1] : void 0;
+  const words5 = (typeof p.display_name === "string" ? p.display_name.trim() : "").split(/\s+/);
+  return words5.length > 1 ? words5[words5.length - 1] : void 0;
 }
 
 // supabase/functions/_shared/zones.ts
@@ -9929,8 +9929,8 @@ function isPersonalEmailDomain(domain) {
   const d = (domain ?? "").trim().toLowerCase();
   if (!d) return false;
   if (PERSONAL_EMAIL_DOMAINS.has(d)) return true;
-  const registrable = getDomain(d) ?? d;
-  if (PERSONAL_EMAIL_DOMAINS.has(registrable)) return true;
+  const registrable2 = getDomain(d) ?? d;
+  if (PERSONAL_EMAIL_DOMAINS.has(registrable2)) return true;
   const brand = getDomainWithoutSuffix(d);
   return !!brand && PERSONAL_MAIL_BRANDS.has(brand);
 }
@@ -10882,14 +10882,14 @@ async function exemplars(s, userId, personId, situation, opts = {}) {
   const names = ids.length ? await s.db.sql`
         select first_name, last_name, display_name from orbit.people
          where user_id = ${userId}::uuid and id = any(${ids}::uuid[])` : [];
-  const words4 = [
+  const words5 = [
     ...new Set(
       names.flatMap((n) => [n.display_name, n.first_name, n.last_name]).filter((x) => !!x?.trim())
     )
   ].sort((a, b) => b.length - a.length);
   return rows.map((r) => {
     let text2 = stripQuotedReply(r.body_text).trim().slice(0, 1200);
-    for (const w of words4) text2 = text2.replace(new RegExp(`\\b${escapeRe3(w)}\\b`, "g"), "[name]");
+    for (const w of words5) text2 = text2.replace(new RegExp(`\\b${escapeRe3(w)}\\b`, "g"), "[name]");
     return text2.replace(/^(hi|hey|hello|dear)\s+[A-Z][a-z]+/i, (m) => `${m.split(/\s+/)[0]} [name]`);
   });
 }
@@ -14767,7 +14767,7 @@ async function refreshTies(db2, userId, now, scope = {}) {
     lastSeenAt: t.lastSeenAt
   }));
   if (full) out.push(...sameCityTies(people.filter((p) => !p.hiddenAt)).filter(inFocus));
-  for (const part of chunks2(out, 500)) await upsertTies(db2, userId, part, now);
+  for (const part2 of chunks2(out, 500)) await upsertTies(db2, userId, part2, now);
   const upserted = out.length;
   const kinds = [...keep];
   const live = out.map((t) => `${t.a}|${t.b}|${t.kind}`);
@@ -17586,7 +17586,7 @@ function identityCard(p) {
     p.school?.trim() ?? ""
   ].filter(Boolean);
   const isHigh = (s) => /high school|secondary school/i.test(s);
-  const schoolNames = [...allSchools.filter((s) => !isHigh(s)), ...allSchools.filter(isHigh)];
+  const schoolNames2 = [...allSchools.filter((s) => !isHigh(s)), ...allSchools.filter(isHigh)];
   const slug = slugOf(p.linkedinUrl) ?? p.profile?.publicIdentifier?.toLowerCase() ?? void 0;
   const employers = employerNames.slice(0, 3).map((e) => ({ ...e, aliases: companyAliases(e.name) }));
   return {
@@ -17594,7 +17594,7 @@ function identityCard(p) {
     names: [...names].filter((n) => n.includes(" ")),
     last: norm(last),
     employers,
-    schools: [...new Map(schoolNames.map((s) => [norm(s), s])).values()].slice(0, 5).map((s) => ({ name: s, aliases: schoolAliases(s) })),
+    schools: [...new Map(schoolNames2.map((s) => [norm(s), s])).values()].slice(0, 5).map((s) => ({ name: s, aliases: schoolAliases(s) })),
     city: cityOf(p.profile?.location ?? p.location),
     slug,
     domains: workDomains(p.emails),
@@ -19253,6 +19253,401 @@ async function gatherFrom(sources, plan2, ctx) {
   return { hits: [], pages: [], costUsd: 0, notes, steps: [] };
 }
 
+// supabase/functions/_shared/sourcing/warmth.ts
+var WARM_SCORE = 40;
+var KNOWN_SCORE = 20;
+var TIER_BONUS = { 1: 0.6, 2: 0.45, 3: 0.3, 4: 0.15, 5: 0 };
+var PUBLIC_MAIL = /^(gmail|googlemail|yahoo|hotmail|outlook|live|icloud|me|mac|aol|proton|protonmail|msn|comcast|ymail|gmx|hey)\./i;
+function workDomain(email) {
+  const d = norm(email?.split("@")[1]);
+  return d && !PUBLIC_MAIL.test(d) ? d : void 0;
+}
+function siteDomain(url) {
+  if (!url) return void 0;
+  try {
+    const h = new URL(url).hostname.toLowerCase().replace(/^www\./, "");
+    if (/linkedin|twitter|x\.com|github|facebook|instagram|medium|substack|google|youtube|wikipedia/.test(h))
+      return void 0;
+    return registrable(h);
+  } catch {
+    return void 0;
+  }
+}
+function registrable(host) {
+  const parts = host.split(".").filter(Boolean);
+  const keep = parts.length >= 3 && /^(co|com|ac|org|net|gov|edu)$/.test(parts.at(-2)) && parts.at(-1).length === 2 ? 3 : 2;
+  return parts.slice(-keep).join(".");
+}
+var words4 = (s) => norm(s).split(/[^a-z0-9+#]+/).filter((w) => w.length >= 3 && !STOP2.has(w));
+var STOP2 = /* @__PURE__ */ new Set([
+  "the",
+  "and",
+  "for",
+  "with",
+  "university",
+  "college",
+  "school",
+  "inc",
+  "llc",
+  "company",
+  "team",
+  "group",
+  "lab",
+  "labs",
+  "new",
+  "work",
+  "working",
+  "skills",
+  "business",
+  "product"
+]);
+function sameOrg(a, b) {
+  const x = normOrg(a);
+  const y = normOrg(b);
+  if (!x || !y || x.length < 2 || y.length < 2) return false;
+  if (x === y) return true;
+  const [short2, long] = x.length <= y.length ? [x, y] : [y, x];
+  if (short2.length < 3 || !long.startsWith(`${short2} `)) return false;
+  return long.slice(short2.length).split(/[^a-z0-9]+/).filter(Boolean).every((w) => ORG_QUALIFIERS.has(w));
+}
+var ORG_QUALIFIERS = /* @__PURE__ */ new Set([
+  "inc",
+  "labs",
+  "lab",
+  "ai",
+  "hq",
+  "cloud",
+  "research",
+  "technologies",
+  "technology",
+  "tech",
+  "group",
+  "holdings",
+  "corp",
+  "corporation",
+  "company",
+  "co",
+  "global",
+  "us",
+  "usa",
+  "america",
+  "americas",
+  "international",
+  "io",
+  "app",
+  "platforms",
+  "platform",
+  "software",
+  "systems",
+  "health",
+  "financial",
+  "capital",
+  "ventures",
+  "deepmind",
+  "ads",
+  "web services",
+  "aws",
+  "payments",
+  "pay"
+]);
+var NOT_AN_ORG = /^(?:yc|y combinator)?\s*[wsfx]?\s*'?\d{2,4}$|^(?:yc|ycombinator)\b|backed$|^(?:jsv|ef)\b|^(?:stealth|stealth mode|self[- ]employed|freelance|home)$/i;
+function orgNames(raw) {
+  if (!raw) return [];
+  const out = [];
+  const add2 = (x) => {
+    const t = x.replace(/[^\p{L}\p{N}&.' -]+/gu, " ").replace(/\s+/g, " ").trim();
+    if (t.length < 2 || t.length > 40 || NOT_AN_ORG.test(t) || /^(ex|former|prev|previously)\b/i.test(t))
+      return;
+    if (normOrg(t).split(" ").every((w) => ORG_QUALIFIERS.has(w)))
+      return;
+    if (!out.some((o) => normOrg(o) === normOrg(t))) out.push(t);
+  };
+  for (const part2 of raw.split(/\s*(?:[|•·│┃]+|\/\/|\s[-–—]\s|;|,\s*(?:an?\s)?)\s*/)) {
+    const inParens = [...part2.matchAll(/\(([^)]+)\)/g)].map((m) => m[1]);
+    add2(part2.replace(/\([^)]*\)/g, " "));
+    for (const p of inParens) add2(p);
+  }
+  return out;
+}
+function orgsOf(c) {
+  const fromOrg = orgNames(c.org);
+  if (fromOrg.length) return fromOrg;
+  const h = c.headline ?? "";
+  const at = h.match(/(?:@|\bat\s)\s*([^|•·,;]+)/i)?.[1];
+  if (at) return orgNames(at);
+  if (h && h.trim().split(/\s+/).length <= 2 && !/\b(engineer|manager|founder|student|product|designer|analyst|investor|researcher)\b/i.test(h))
+    return orgNames(h);
+  return [];
+}
+function schoolNames(school) {
+  const s = norm(school);
+  if (!s) return [];
+  const out = /* @__PURE__ */ new Set([s]);
+  const uc = s.match(/^university of california,?\s+(.+)$/);
+  if (uc?.[1]) {
+    out.add(`uc ${uc[1]}`);
+    out.add(uc[1]);
+    if (uc[1] === "berkeley") for (const a of ["cal", "haas", "berkeleyhaas", "berkeley haas"]) out.add(a);
+  }
+  const of = s.match(/^(.+?) university$/);
+  if (of?.[1] && of[1].length >= 4) out.add(of[1]);
+  return [...out].filter((n) => n.length >= 4 || n === "cal");
+}
+function isSchoolOrg(o, studentSchool) {
+  const n = norm(o);
+  if (!n) return false;
+  if (/\b(university|college|institute of technology|polytechnic|school of|community college)\b/.test(n))
+    return true;
+  if (/^uc ?[a-z]+$|^uc[a-z]{1,3}$|^(mit|caltech|cmu|nyu|usc|ucla|ucsd|uci|ucsb|ucsc|ucd|uiuc|umd|asu|sjsu|ut austin|georgia tech)$/.test(
+    n
+  ))
+    return true;
+  return schoolNames(studentSchool).includes(n);
+}
+var BROAD = /* @__PURE__ */ new Set([
+  "operations",
+  "strategy",
+  "management",
+  "marketing",
+  "leadership",
+  "sales",
+  "research",
+  "design",
+  "analytics",
+  "finance",
+  "communication",
+  "teamwork"
+]);
+function isBroad(interest) {
+  return BROAD.has(norm(interest));
+}
+var candidateText = (c) => norm([c.title, c.org, c.headline, c.location, ...c.evidence ?? []].filter(Boolean).join(" "));
+var workText = (c) => norm([c.title, c.org, c.headline, ...c.evidence ?? []].filter(Boolean).join(" "));
+var EDU_CONTEXT = /\b(alum|alumni|alumna|alumnus|graduate|grad|class of|b\.?s\.?|b\.?a\.?|m\.?s\.?|mba|ph\.?d\.?|student|studied|studying|haas|eecs|professor|faculty|lecturer|postdoc|school of|college of|department)\b|['’]\d{2}\b/;
+var escapeRe5 = (x) => x.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+var hasPhrase3 = (text2, phrase) => !!phrase && new RegExp(`(^|[^a-z0-9])${escapeRe5(phrase)}([^a-z0-9]|$)`).test(text2);
+function schoolIn(text2, school) {
+  const names = schoolNames(school);
+  const full = names.filter((n) => n.includes(" "));
+  const hit = full.find((n) => hasPhrase3(text2, n));
+  if (hit) return hit;
+  if (!EDU_CONTEXT.test(text2)) return void 0;
+  return names.filter((n) => !n.includes(" ")).find((n) => hasPhrase3(text2, n));
+}
+var CLOSED_DOOR = /\b(?:not|no longer|isn['’]t|is not|aren['’]t|are not|don['’]t|do not|unable to)\s+(?:currently\s+|be\s+)?(?:accepting|taking|looking|hiring|available|able to (?:take|respond)|respond)/i;
+var OPEN_DOOR = /\b(email me|e-mail me|reach out|feel free to (?:contact|email|reach)|happy to (?:chat|help|talk|connect)|office hours|open to (?:chat|coffee|connect|mentor)|(?:prospective|interested) (?:students|undergrad)|undergraduates? (?:welcome|interested)|accepting (?:students|undergrad)|looking for (?:students|undergrad|research assistants)|mentor(?:ing|ship)?\b|dms? (?:are )?open)/i;
+function recentGrad(text2, year) {
+  for (const m of text2.matchAll(/\b(?:class of |'|’|(?:bs|ba|ms|mba|b\.s\.|b\.a\.)\s*)(20)?(\d{2})\b/gi)) {
+    const y = 2e3 + Number(m[2]);
+    if (y >= year - 3 && y <= year) return true;
+  }
+  return false;
+}
+function warmthOf(c, input) {
+  const { student, known, warm } = input;
+  const text2 = candidateText(c);
+  const name = c.firstName ?? c.name.split(/\s+/).find((w) => !/^(dr|prof|professor|mr|ms|mrs|mx)\.?$/i.test(w)) ?? c.name;
+  if (known && (known.score ?? 0) >= KNOWN_SCORE)
+    return { tier: 1, why: `You've talked with ${name} before` };
+  const domains = new Set((input.domains ?? []).map((d) => d.toLowerCase()));
+  const bigOrg = (o) => isSchoolOrg(o, student.school);
+  const theirOrgs = orgsOf(c).filter((o) => !bigOrg(o));
+  let where;
+  const bridge = [...warm].filter((w) => w.score >= WARM_SCORE).sort((a, b) => b.score - a.score).find((w) => {
+    for (const mine of orgNames(w.org).filter((o) => !bigOrg(o))) {
+      const hit = theirOrgs.find((o) => sameOrg(mine, o));
+      if (hit) {
+        where = hit;
+        return true;
+      }
+    }
+    const d = workDomain(w.email);
+    return !!d && domains.has(d) && !/\.edu$/.test(d);
+  });
+  if (bridge) {
+    const bridgeFirst = bridge.name.split(/\s+/)[0] ?? bridge.name;
+    where ??= theirOrgs[0] ?? c.org ?? "there";
+    return {
+      tier: 2,
+      why: `${bridgeFirst} is close to you and also at ${where}, so ask for an intro`,
+      bridge: { personId: bridge.personId, name: bridge.name }
+    };
+  }
+  const work = workText(c);
+  const school = schoolIn(work, student.school);
+  if (school)
+    return {
+      tier: 3,
+      why: `Also ${/\b(student|phd|candidate|professor|faculty|lecturer|postdoc)\b/.test(work) ? "at" : "from"} ${schoolLabel(school, student.school)}`
+    };
+  const pastOrg = student.orgs.find(
+    (o) => !schoolNames(student.school).includes(norm(o)) && (orgsOf(c).some((x) => sameOrg(o, x)) || normOrg(o).length >= 5 && hasPhrase3(work, normOrg(o)))
+  );
+  if (pastOrg) return { tier: 3, why: `Also worked at ${pastOrg}` };
+  const home = norm(student.homeCity).split(",")[0].trim();
+  if (home.length >= 4 && hasPhrase3(norm(c.location), home))
+    return { tier: 3, why: `Based in ${student.homeCity.split(",")[0].trim()}, your hometown` };
+  if (OPEN_DOOR.test(text2) && !CLOSED_DOOR.test(text2))
+    return { tier: 4, why: "Their page invites students to reach out" };
+  if (recentGrad(text2, input.year))
+    return { tier: 4, why: "Graduated recently, so likely to remember being a student" };
+  const hook = student.interests.find((i) => words4(i).length > 0 && !isBroad(i) && hasPhrase3(work, norm(i)));
+  return hook ? { tier: 5, why: `Works on ${hook}, which is on your résumé` } : { tier: 5 };
+}
+function schoolLabel(hit, school) {
+  const uc = norm(school).match(/^university of california,?\s+(.+)$/);
+  if (uc?.[1]) return `UC ${titleCase(uc[1])}`;
+  return titleCase(hit === "cal" ? norm(school) : hit);
+}
+function titleCase(s) {
+  return s.split(" ").map((w) => w.length <= 2 ? w.toUpperCase() : w[0].toUpperCase() + w.slice(1)).join(" ");
+}
+function warmRank(base, fit, tier) {
+  return base + TIER_BONUS[tier] * (0.4 + 0.6 * Math.max(0, Math.min(1, fit)));
+}
+function studentFromResume(parsed2, base) {
+  const orgs = /* @__PURE__ */ new Set();
+  const interests = /* @__PURE__ */ new Set();
+  if (base.currentOrg) orgs.add(base.currentOrg);
+  const facets = Array.isArray(parsed2?.facets) ? parsed2.facets : [];
+  for (const f of facets) {
+    if (f.excluded === true) continue;
+    const org = [f.org, f.organization, f.organizationName].find((x) => typeof x === "string");
+    if (org && (f.kind === "experience" || f.kind === "education") && !/^freelance|self[- ]employed$/i.test(org))
+      orgs.add(org.trim());
+    for (const k of Array.isArray(f.keywords) ? f.keywords : [])
+      if (typeof k === "string" && k.trim().length >= 3 && k.length <= 40)
+        interests.add(k.trim().toLowerCase());
+    if (f.kind === "project" && typeof f.title === "string") interests.add(f.title.trim().toLowerCase());
+  }
+  return {
+    school: base.school ?? void 0,
+    orgs: [...orgs],
+    homeCity: base.homeCity ?? void 0,
+    interests: [...interests].slice(0, 60),
+    gradYear: base.gradYear ?? void 0
+  };
+}
+
+// supabase/functions/_shared/sourcing/email.ts
+var PATTERNS2 = {
+  "first.last": (f, l) => `${f}.${l}`,
+  first: (f) => f,
+  flast: (f, l) => `${f[0]}${l}`,
+  firstlast: (f, l) => `${f}${l}`,
+  first_last: (f, l) => `${f}_${l}`,
+  "f.last": (f, l) => `${f[0]}.${l}`,
+  firstl: (f, l) => `${f}${l[0]}`,
+  last: (_f, l) => l,
+  "last.first": (f, l) => `${l}.${f}`
+};
+var part = (s) => norm(s).replace(/[^a-z]/g, "").slice(0, 40);
+function nameParts(name, first, last) {
+  const words5 = norm(name).replace(/\b(dr|prof|professor|mr|ms|mrs|phd|md|jr|sr|ii|iii|iv)\b\.?/g, " ").replace(/\([^)]*\)/g, " ").split(/[\s,]+/).filter(Boolean);
+  const f = part(first ?? words5[0]);
+  const l = part(last ?? words5.at(-1));
+  if (!f || !l || f === l || l.length < 2) return void 0;
+  return { f, l };
+}
+function patternOf(local, f, l) {
+  const lp = local.toLowerCase();
+  return Object.entries(PATTERNS2).find(([, make]) => make(f, l) === lp)?.[0];
+}
+var ROLE_LOCAL = /^(info|hello|hi|team|founders?|support|admin|contact|office|admissions|housing|careers|jobs|hr|sales|press|media|noreply|no-reply|help|events|marketing|billing|accounts?|ops|legal|security|partners?|investors?|community|reshall|mailroom)\b/;
+var ROLE_NAME2 = /\b(team|founders|office|services|housing|support|admissions|corps|mailroom|invitational|department|committee|club|association|council|center|centre|newsletter|notifications?)\b/i;
+function domainPattern(known, domain) {
+  const counts = /* @__PURE__ */ new Map();
+  let people = 0;
+  let ids = 0;
+  for (const k of known) {
+    const [local, d] = k.email.toLowerCase().split("@");
+    if (!local || d !== domain || ROLE_LOCAL.test(local) || ROLE_NAME2.test(k.name)) continue;
+    const n = nameParts(k.name);
+    if (!n) continue;
+    people++;
+    if (/\d{3,}/.test(local)) ids++;
+    const p = patternOf(local, n.f, n.l);
+    if (p) counts.set(p, (counts.get(p) ?? 0) + 1);
+  }
+  const ranked = [...counts].sort((a, b) => b[1] - a[1]);
+  const [top, second] = ranked;
+  if (!top) return void 0;
+  if (second && second[1] === top[1]) return void 0;
+  if (ids / people >= 0.25) return void 0;
+  const share = top[1] / people;
+  const need = isUniversity(domain) ? 3 : 2;
+  if (top[1] >= need && share >= 0.6) return { pattern: top[0], sure: true };
+  if (people === 1 && !isUniversity(domain)) return { pattern: top[0], sure: false };
+  return void 0;
+}
+function dnsMx(doFetch, timeoutMs = 4e3) {
+  const cache2 = /* @__PURE__ */ new Map();
+  return (domain) => {
+    let hit = cache2.get(domain);
+    if (!hit) {
+      hit = (async () => {
+        try {
+          const res = await doFetch(
+            `https://cloudflare-dns.com/dns-query?name=${encodeURIComponent(domain)}&type=MX`,
+            { headers: { accept: "application/dns-json" }, signal: AbortSignal.timeout(timeoutMs) }
+          );
+          if (!res.ok) return false;
+          const b = await res.json();
+          return b.Status === 0 && (b.Answer ?? []).some((a) => a.type === 15);
+        } catch {
+          return false;
+        }
+      })();
+      cache2.set(domain, hit);
+    }
+    return hit;
+  };
+}
+function domainsOf(c, orgDomains) {
+  const out = [];
+  const add2 = (d) => {
+    if (d && !out.includes(d)) out.push(d);
+  };
+  add2(workDomain(c.email));
+  if (c.org) add2(orgDomains.get(norm(c.org)));
+  add2(siteDomain(c.url));
+  return out;
+}
+var isUniversity = (d) => /\.(edu|ac\.[a-z]{2})$/.test(d);
+async function fillEmails(cands, opts) {
+  const pageFound = cands.filter((c) => c.email).map((c) => ({ name: c.name, email: c.email }));
+  const known = [...opts.known, ...pageFound];
+  const patterns = /* @__PURE__ */ new Map();
+  let filled = 0;
+  for (const c of cands) {
+    if (c.entity !== "person") continue;
+    if (c.email) {
+      c.emailConfidence ??= "page";
+      continue;
+    }
+    if (filled >= (opts.max ?? 40)) break;
+    const n = c.lastNameObfuscated ? void 0 : nameParts(c.name, c.firstName, c.lastName);
+    if (!n) continue;
+    for (const d of domainsOf(c, opts.orgDomains)) {
+      if (!patterns.has(d)) patterns.set(d, domainPattern(known, d));
+      const p = patterns.get(d);
+      if (p) {
+        c.email = `${PATTERNS2[p.pattern](n.f, n.l)}@${d}`;
+        c.emailConfidence = p.sure ? "pattern" : "guess";
+        filled++;
+        break;
+      }
+      if (isUniversity(d)) continue;
+      if (await opts.mx(d)) {
+        c.email = `${PATTERNS2["first.last"](n.f, n.l)}@${d}`;
+        c.emailConfidence = "guess";
+        filled++;
+        break;
+      }
+    }
+  }
+}
+
 // supabase/functions/_shared/sourcing/prompts.ts
 var FIT_BATCH = 20;
 function fitSystem(userFirstName2) {
@@ -19424,14 +19819,14 @@ function webAsk(goal) {
     if (at?.[1]) place = at[1].replace(/^the\s+/i, "").trim();
   }
   if (!place) return void 0;
-  subject = subject.replace(new RegExp(`\\b(?:at|@|from)\\s+${escapeRe5(place)}\\b`, "i"), " ").replace(new RegExp(`\\b${escapeRe5(place)}\\b`, "i"), " ").replace(ROLE_WORDS, " ").replace(
+  subject = subject.replace(new RegExp(`\\b(?:at|@|from)\\s+${escapeRe6(place)}\\b`, "i"), " ").replace(new RegExp(`\\b${escapeRe6(place)}\\b`, "i"), " ").replace(ROLE_WORDS, " ").replace(
     /\b(?:i can|i could|i should|reach out to|write to|talk to|to|contact|email|cold email|source|find|some|a few|new|me|who)\b/gi,
     " "
   ).replace(/\s+/g, " ").trim().replace(/^(?:for|about|on|in|into|doing|working on|studying|researching)\s+/i, "").replace(/\s+(?:for|about|on|in|at)$/i, "").trim();
   if (!subject) subject = goal.roles?.[0] ?? role ?? "people";
   return { place, subject, role };
 }
-var escapeRe5 = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+var escapeRe6 = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 function webQueries(ask) {
   const who = ask.role && /professor|faculty|pi\b|investigator|postdoc|phd|researcher|scientist/.test(ask.role) ? "faculty" : ask.role ?? "team";
   const qs2 = [
@@ -19767,7 +20162,7 @@ async function sourceFromWeb(o) {
       name,
       firstName,
       lastName: rest.join(" "),
-      title: p.title?.trim() || (o.ask.role ? titleCase(o.ask.role.replace(/s$/, "")) : void 0),
+      title: p.title?.trim() || (o.ask.role ? titleCase2(o.ask.role.replace(/s$/, "")) : void 0),
       org: p.department ? `${p.department.trim()}, ${o.ask.place}` : o.ask.place,
       headline: worksOn.join(", ") || void 0,
       email: p.email ?? void 0,
@@ -19791,7 +20186,7 @@ function cleanEmail(e) {
   const s = e.trim().replace(/\s*[[(]\s*at\s*[\])]\s*/i, "@").replace(/\s*[[(]\s*dot\s*[\])]\s*/gi, ".").replace(/^mailto:/i, "").toLowerCase();
   return /^[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}$/.test(s) ? s : void 0;
 }
-var titleCase = (s) => s.replace(/\b\w/g, (c) => c.toUpperCase());
+var titleCase2 = (s) => s.replace(/\b\w/g, (c) => c.toUpperCase());
 
 // supabase/functions/_shared/sourcing/search.ts
 var WEIGHTS = { fit: 0.45, reach: 0.35, responsiveness: 0.2 };
@@ -19850,7 +20245,7 @@ async function gather(calls, relax) {
 function plan(ctx) {
   const g = ctx.input.goal;
   const roles = g.roles ?? [];
-  const words4 = (...xs) => xs.filter((x) => x?.trim()).join(" ");
+  const words5 = (...xs) => xs.filter((x) => x?.trim()).join(" ");
   const exaPeople = (q, extra = {}) => (r) => exaCall(ctx, { query: q, category: "people", ...extra }, r, "person");
   const web = webAsk(g) ? [() => webCall(ctx)] : [];
   switch (g.kind) {
@@ -19867,15 +20262,15 @@ function plan(ctx) {
         (r) => apolloCall(ctx, r, {
           person_titles: roles.length ? roles : void 0,
           q_organization_domains_list: g.domains?.length ? g.domains : void 0,
-          q_keywords: g.domains?.length ? g.keywords?.join(" ") : words4(...g.orgs ?? [], ...g.keywords ?? [])
+          q_keywords: g.domains?.length ? g.keywords?.join(" ") : words5(...g.orgs ?? [], ...g.keywords ?? [])
         })
       ];
     case "fundraising":
       return [
         exaPeople(
-          words4(
+          words5(
             roles[0] ?? "partner",
-            `at a ${words4(g.stage) || "venture"} fund investing in`,
+            `at a ${words5(g.stage) || "venture"} fund investing in`,
             g.sector ?? g.keywords?.join(" ")
           ),
           {}
@@ -19883,7 +20278,7 @@ function plan(ctx) {
         (r) => exaCall(
           ctx,
           {
-            query: words4(g.stage, "venture fund investing in", g.sector ?? g.keywords?.join(" ")),
+            query: words5(g.stage, "venture fund investing in", g.sector ?? g.keywords?.join(" ")),
             category: "company"
           },
           r,
@@ -19891,7 +20286,7 @@ function plan(ctx) {
         ),
         (r) => apolloCall(ctx, r, {
           person_titles: ["Partner", "Principal", "General Partner", "Investor"],
-          q_keywords: words4(g.sector, g.stage, ...g.keywords ?? []) || void 0
+          q_keywords: words5(g.sector, g.stage, ...g.keywords ?? []) || void 0
         })
       ];
     case "sales":
@@ -19899,25 +20294,25 @@ function plan(ctx) {
         (r) => apolloCall(ctx, r, {
           person_titles: roles.length ? roles : void 0,
           organization_num_employees_ranges: g.employeeRanges,
-          q_keywords: words4(g.sector, ...g.keywords ?? []) || void 0,
+          q_keywords: words5(g.sector, ...g.keywords ?? []) || void 0,
           q_organization_domains_list: g.domains?.length ? g.domains : void 0
         })
       ];
     case "hiring": {
       const calls = [
         (r) => linkedInCall(ctx, r, {
-          keywords: words4(orJoin(roles), ...g.skills ?? []),
+          keywords: words5(orJoin(roles), ...g.skills ?? []),
           pastCompanies: g.pastCompanies,
           school: ctx.input.user.school,
           distance: [2, 3]
         }),
-        exaPeople(words4(roles[0], ...g.skills ?? []))
+        exaPeople(words5(roles[0], ...g.skills ?? []))
       ];
       if (roles.some((x) => /engineer|developer|programmer|software|ml|data scientist/i.test(x)))
         calls.push(
           (r) => exaCall(
             ctx,
-            { query: words4(roles[0], ...g.skills ?? []), includeDomains: ["github.com"] },
+            { query: words5(roles[0], ...g.skills ?? []), includeDomains: ["github.com"] },
             r,
             "person"
           )
@@ -19926,8 +20321,8 @@ function plan(ctx) {
     }
     case "cofounder":
       return [
-        exaPeople(words4(...g.skills ?? [], g.topic, "founder")),
-        (r) => linkedInCall(ctx, r, { keywords: words4(...g.skills ?? [], g.topic), distance: [2] })
+        exaPeople(words5(...g.skills ?? [], g.topic, "founder")),
+        (r) => linkedInCall(ctx, r, { keywords: words5(...g.skills ?? [], g.topic), distance: [2] })
       ];
     case "collaboration":
       return [
@@ -19935,14 +20330,14 @@ function plan(ctx) {
         (r) => scholarCall(ctx, r),
         (r) => exaCall(
           ctx,
-          { query: words4(g.topic, ...g.keywords ?? []), category: "publication" },
+          { query: words5(g.topic, ...g.keywords ?? []), category: "publication" },
           r,
           "person"
         )
       ];
     case "community":
       return [
-        (r) => linkedInCall(ctx, r, { keywords: words4(g.topic, ...g.keywords ?? []), distance: [1, 2] }),
+        (r) => linkedInCall(ctx, r, { keywords: words5(g.topic, ...g.keywords ?? []), distance: [1, 2] }),
         ...web
       ];
   }
@@ -20300,7 +20695,7 @@ function mergeCandidates(cands) {
   }
   return groups;
 }
-var STOP2 = /* @__PURE__ */ new Set([
+var STOP3 = /* @__PURE__ */ new Set([
   "the",
   "and",
   "for",
@@ -20322,7 +20717,7 @@ var STOP2 = /* @__PURE__ */ new Set([
   "or",
   "to"
 ]);
-function candidateText(c) {
+function candidateText2(c) {
   return norm(
     [c.name, c.title, c.org, c.headline, c.location, ...c.evidence ?? []].filter(Boolean).join(" ")
   );
@@ -20332,9 +20727,9 @@ function keywordFit(goal, c) {
     (x) => !!x
   );
   if (criteria.length === 0) return { fit: 0.5, reasons: [] };
-  const text2 = candidateText(c);
+  const text2 = candidateText2(c);
   const matched = criteria.filter((cr) => {
-    const ws = norm(cr).split(/[^a-z0-9+#]+/).filter((w) => w.length >= 3 && !STOP2.has(w));
+    const ws = norm(cr).split(/[^a-z0-9+#]+/).filter((w) => w.length >= 3 && !STOP3.has(w));
     if (ws.length === 0) return false;
     const hits2 = ws.filter((w) => text2.includes(w)).length;
     return hits2 >= Math.ceil(ws.length / 2);
@@ -20383,6 +20778,7 @@ async function rank(ctx, cands, batchId) {
   const fitOf = (c) => fits.get(c.key) ?? keywordFit(input.goal, c);
   const byFit = [...cands].sort((a, b) => fitOf(b).fit - fitOf(a).fit);
   const reachTop = new Set(byFit.slice(0, REACH_TOP).map((c) => c.key));
+  if (deps.fillEmails) await deps.fillEmails(byFit.slice(0, 60)).catch(() => void 0);
   const rows = [];
   for (const c of byFit) {
     const f = fitOf(c);
@@ -20391,9 +20787,13 @@ async function rank(ctx, cands, batchId) {
     const responsiveness = Math.max(0, Math.min(1, await deps.responsiveness(c)));
     const known = deps.knownPerson ? await deps.knownPerson(c) : null;
     const reasons = [...f.reasons];
-    if (known)
+    const warmth = deps.warmthOf?.(c, known);
+    if (warmth) c.warmth = warmth;
+    if (warmth?.why) reasons.unshift(warmth.why);
+    else if (known)
       reasons.unshift(known.score !== void 0 ? `You know them (${known.score})` : "You know them");
     else if (c.networkDistance === 2) reasons.push("2nd-degree on LinkedIn");
+    const base = WEIGHTS.fit * f.fit + WEIGHTS.reach * reach + WEIGHTS.responsiveness * responsiveness;
     const { key: _key, ...candidate } = c;
     rows.push({
       user_id: input.userId,
@@ -20402,7 +20802,7 @@ async function rank(ctx, cands, batchId) {
       candidate,
       source: c.sources.join("+"),
       external_id: c.memberId ?? c.externalIds.apollo ?? c.externalIds.semantic_scholar ?? c.linkedinUrl ?? c.url ?? null,
-      rank: round42(WEIGHTS.fit * f.fit + WEIGHTS.reach * reach + WEIGHTS.responsiveness * responsiveness),
+      rank: round42(warmth ? warmRank(base, f.fit, warmth.tier) : base),
       fit: round42(f.fit),
       reach: round42(reach),
       responsiveness: round42(responsiveness),
@@ -20465,6 +20865,10 @@ var toSourced = (id, r) => {
     ...c.email ? { email: c.email } : {},
     ...c.url ? { url: c.url } : {},
     ...c.evidence?.length ? { evidence: c.evidence.slice(0, 4) } : {},
+    ...c.email && c.emailConfidence ? { emailConfidence: c.emailConfidence } : {},
+    ...c.warmth ? { tier: c.warmth.tier } : {},
+    ...c.warmth?.why ? { why: c.warmth.why } : {},
+    ...c.warmth?.bridge ? { bridge: c.warmth.bridge } : {},
     source: c.sources[0] ?? "exa",
     rank: r.rank,
     fit: r.fit,
@@ -20486,7 +20890,8 @@ async function runSourcing(s, userId, req) {
     if (!goal) throw new HttpError(404, "not_found", "no such goal");
   }
   const [u2] = await db2.sql`
-    select first_name, full_name, email, school, majors from orbit.users where id = ${userId}::uuid`;
+    select first_name, full_name, email, school, majors, current_org, grad_year from orbit.users
+     where id = ${userId}::uuid`;
   const [acct] = await db2.sql`
     select external_account_id from orbit.integration_accounts
      where user_id = ${userId}::uuid and provider = 'linkedin' and status = 'active'`;
@@ -20517,6 +20922,14 @@ async function runSourcing(s, userId, req) {
     return v;
   };
   const user = { school: u2?.school ?? "", majors: u2?.majors ?? [] };
+  const ctx = await warmContext(db2, userId, u2, req.homeCity, g);
+  const sGoal = sourcingGoal(req, goal);
+  sGoal.orgs?.forEach((o, i) => {
+    const d = sGoal.domains?.[i];
+    if (d) ctx.orgDomains.set(norm(o), d.toLowerCase());
+  });
+  const mx = dnsMx(s.fetch);
+  const year = now.getUTCFullYear();
   const result = await sourcePeople(
     {
       unipile: s.unipile,
@@ -20541,6 +20954,16 @@ async function runSourcing(s, userId, req) {
         },
         user
       ),
+      warmthOf: (c, known2) => warmthOf(c, {
+        student: ctx.student,
+        known: known2,
+        warm: ctx.warm,
+        domains: [workDomain(c.email), c.org ? ctx.orgDomains.get(norm(c.org)) : void 0].filter(
+          (d) => !!d
+        ),
+        year
+      }),
+      fillEmails: (cands) => fillEmails(cands, { known: ctx.known, orgDomains: ctx.orgDomains, mx }),
       inPipeline: async (c) => {
         const k = await knownOf(c);
         if (!k || !goal) return false;
@@ -20552,7 +20975,7 @@ async function runSourcing(s, userId, req) {
     },
     {
       userId,
-      goal: sourcingGoal(req, goal),
+      goal: sGoal,
       user: {
         firstName: u2?.first_name ?? u2?.full_name?.split(/\s+/)[0] ?? "the user",
         school: u2?.school ?? void 0
@@ -20588,6 +21011,43 @@ function webSourcesFor(s) {
   const client = s.anthropic ?? (s.env.anthropicKey ? new Anthropic2({ apiKey: s.env.anthropicKey, fetch: s.fetch, maxRetries: 1 }) : void 0);
   if (client) out.push(claudeWeb(client, cache2, { model: GATHER_MODEL }));
   return out;
+}
+async function warmContext(db2, userId, u2, homeCity, graph) {
+  const [resume] = await db2.sql`
+    select parsed from orbit.uploads
+     where user_id = ${userId}::uuid and kind = 'resume' and is_current order by created_at desc limit 1`;
+  const student = studentFromResume(resume?.parsed, {
+    school: u2?.school,
+    currentOrg: u2?.current_org,
+    gradYear: u2?.grad_year,
+    homeCity: typeof homeCity === "string" ? homeCity.slice(0, 80) : void 0
+  });
+  const emails = await db2.sql`
+    select id, display_name, org_raw, primary_email as email from orbit.people
+     where user_id = ${userId}::uuid and primary_email is not null and deleted_at is null and not is_self
+     limit 5000`;
+  const known = emails.map((e) => ({ name: e.display_name, email: e.email }));
+  const emailOf = new Map(emails.map((e) => [e.id, e.email]));
+  const tally = /* @__PURE__ */ new Map();
+  for (const e of emails) {
+    const d = workDomain(e.email);
+    if (!d || !e.org_raw) continue;
+    const k = norm(e.org_raw);
+    const m = tally.get(k) ?? /* @__PURE__ */ new Map();
+    m.set(d, (m.get(d) ?? 0) + 1);
+    tally.set(k, m);
+  }
+  const orgDomains = /* @__PURE__ */ new Map();
+  for (const [k, m] of tally) orgDomains.set(k, [...m].sort((a, b) => b[1] - a[1])[0][0]);
+  const gr = await graph();
+  const warm = [...gr.people.values()].filter((p) => p.score >= WARM_SCORE && !p.hidden && !p.doNotContact).sort((a, b) => b.score - a.score).map((p) => ({
+    personId: p.id,
+    name: p.displayName,
+    score: p.score,
+    org: p.org,
+    email: emailOf.get(p.id)
+  }));
+  return { student, warm, known, orgDomains };
 }
 
 // supabase/functions/orbit-worker/handlers/source.ts
@@ -21833,9 +22293,9 @@ function gmailApi(client, userId) {
     sendAs: async () => (await get("/settings/sendAs", GMAIL_UNITS.sendAs)).sendAs ?? []
   };
 }
-function headerMap(part) {
+function headerMap(part2) {
   const out = {};
-  for (const h of part?.headers ?? []) {
+  for (const h of part2?.headers ?? []) {
     const k = h.name.toLowerCase();
     if (!(k in out)) out[k] = h.value;
   }
@@ -21850,7 +22310,7 @@ function decodeBody(data) {
     return "";
   }
 }
-function findBody(part) {
+function findBody(part2) {
   const out = {};
   const walk = (p) => {
     if (!p || p.filename && p.body?.attachmentId) return;
@@ -21860,7 +22320,7 @@ function findBody(part) {
       out.html = decodeBody(p.body.data);
     for (const c of p.parts ?? []) walk(c);
   };
-  walk(part);
+  walk(part2);
   return out;
 }
 
@@ -21869,7 +22329,7 @@ var STRONG = 3;
 var GENERIC = 2;
 var THRESHOLD = 2;
 var fold3 = (s) => s.normalize("NFD").replace(/\p{M}/gu, "").replace(/[‘’]/g, "'");
-var escapeRe6 = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+var escapeRe7 = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 var wordRe = (alt, flags) => new RegExp(`(?<![\\p{L}\\p{N}'])(?:${alt})(?![\\p{L}\\p{N}])`, `${flags}u`);
 var sentencesOf2 = (text2) => text2.split(/(?<!\b(?:Co|Inc|Ltd|Corp|Dr|Prof|Mr|Ms|Mrs|Jr|Sr|St|vs|etc|e\.g|i\.e))(?<=[.!?])\s+|\n+/).map((s) => s.trim()).filter(Boolean);
 var CLAUSE_SPLIT = /\s*(?:[,;:()]|\s-{1,2}\s|[–—]+)\s*/;
@@ -22174,14 +22634,14 @@ function readIntroduction(msg, people, userEmails, ctx = {}) {
   }
   const isCandidateWord = (w) => candidates.some((c) => c.name.toLowerCase() === w.toLowerCase());
   const students = (ctx.studentNames ?? []).map((n) => fold3(n.trim())).filter((n) => n.length >= 2).sort((a, b) => b.length - a.length);
-  const studentAlt = students.length ? students.map(escapeRe6).join("|") : void 0;
+  const studentAlt = students.length ? students.map(escapeRe7).join("|") : void 0;
   const isStudentWord = (w) => !!studentAlt && new RegExp(`^(?:${studentAlt})$`, "i").test(w);
   const namesStudent = (text2) => !!studentAlt && wordRe(studentAlt, "i").test(text2);
   const byTitle = (text2) => candidates.reduce((t, c) => {
     const last = fold3(c.person.lastName?.trim() ?? "");
     return last.length < 2 ? t : t.replace(
       new RegExp(
-        `\\b(?:professor|prof\\.?|dr\\.?|mr\\.?|ms\\.?|mrs\\.?)\\s+${escapeRe6(last)}\\b`,
+        `\\b(?:professor|prof\\.?|dr\\.?|mr\\.?|ms\\.?|mrs\\.?)\\s+${escapeRe7(last)}\\b`,
         "gi"
       ),
       c.name
@@ -22191,11 +22651,11 @@ function readIntroduction(msg, people, userEmails, ctx = {}) {
   const caseless = !/[A-Z]/.test(body.replace(/\bI\b/g, "").replace(/\n[^\n]*$/, ""));
   const lowerOnly = new Set(
     candidates.filter(
-      (c) => !COMMON_WORD_NAMES.has(c.name.toLowerCase()) && !wordRe(escapeRe6(c.name), "").test(fold3(msg.bodyText ?? "")) && wordRe(escapeRe6(c.name.toLowerCase()), "").test(fold3(msg.bodyText ?? ""))
+      (c) => !COMMON_WORD_NAMES.has(c.name.toLowerCase()) && !wordRe(escapeRe7(c.name), "").test(fold3(msg.bodyText ?? "")) && wordRe(escapeRe7(c.name.toLowerCase()), "").test(fold3(msg.bodyText ?? ""))
     ).map((c) => c.person.id)
   );
   const mentions = (text2, c, anyCase) => {
-    const re = wordRe(escapeRe6(c.name), anyCase || lowerOnly.has(c.person.id) ? "gi" : "g");
+    const re = wordRe(escapeRe7(c.name), anyCase || lowerOnly.has(c.person.id) ? "gi" : "g");
     const found = [];
     for (let m = re.exec(text2); m; m = re.exec(text2)) found.push(m.index);
     return found;
@@ -22278,8 +22738,8 @@ function readIntroduction(msg, people, userEmails, ctx = {}) {
       ).test(cl.toLowerCase())
     );
     const vocative = clauses2.map((cl) => {
-      const words4 = cl.replace(/[!.?]+/g, " ").split(/\s+/).filter(Boolean);
-      return words4.length > 0 && words4.length <= 5 && words4.every((w) => GREETING_WORDS.has(w.toLowerCase()) || isStudentWord(w) || isCandidateWord(w)) && words4.some((w) => isStudentWord(w) || isCandidateWord(w));
+      const words5 = cl.replace(/[!.?]+/g, " ").split(/\s+/).filter(Boolean);
+      return words5.length > 0 && words5.length <= 5 && words5.every((w) => GREETING_WORDS.has(w.toLowerCase()) || isStudentWord(w) || isCandidateWord(w)) && words5.some((w) => isStudentWord(w) || isCandidateWord(w));
     });
     let aimed = false;
     let introducing = false;
@@ -22348,7 +22808,7 @@ function readIntroduction(msg, people, userEmails, ctx = {}) {
         }
         if (aimed) mark(c, STRONG);
       });
-      const n = escapeRe6(c.name.toLowerCase());
+      const n = escapeRe7(c.name.toLowerCase());
       if (new RegExp(
         `\\b${n}\\s*,?\\s*\\(?\\s*(?:my|our)\\s+(?:ea|assistant|executive\\s+assistant|chief\\s+of\\s+staff|scheduler|coordinator)\\b|\\b(?:my|our)\\s+(?:ea|assistant|executive\\s+assistant|chief\\s+of\\s+staff|scheduler)\\s+${n}\\b|\\b${n}\\b[^.]{0,30}\\bwho\\s+(?:manages|runs|handles|keeps)\\s+my\\s+(?:calendar|schedule|diary)`
       ).test(lowerSentence))
@@ -22374,7 +22834,7 @@ function readIntroduction(msg, people, userEmails, ctx = {}) {
     for (const c of namedNow) {
       if (c.strong) continue;
       const listed = clauses2.some(
-        (cl, i) => kinds[i] === "plain" && new RegExp(`^\\s*(?:and|&)\\s+${escapeRe6(c.name)}\\b`, caseless ? "i" : "").test(cl)
+        (cl, i) => kinds[i] === "plain" && new RegExp(`^\\s*(?:and|&)\\s+${escapeRe7(c.name)}\\b`, caseless ? "i" : "").test(cl)
       );
       if (listed && strongHere.length) {
         mark(c, STRONG);
@@ -22435,9 +22895,9 @@ function readIntroduction(msg, people, userEmails, ctx = {}) {
   if (inbound && !isReplySubject && others <= 2 && !ARRANGES_MEETING.test(body.toLowerCase()) && !workSplit)
     for (const c of candidates) {
       if (c.thanked || c.looseThanked || c.scheduler || !mentioned.has(c.person.id)) continue;
-      const counter = notPresenting(escapeRe6(c.name.toLowerCase()));
+      const counter = notPresenting(escapeRe7(c.name.toLowerCase()));
       const where = sentencesOf2(body).filter((x) => mentions(x, c, caseless).length);
-      const role = roleDescribed(escapeRe6(c.name));
+      const role = roleDescribed(escapeRe7(c.name));
       if (where.length && !where.some((x) => counter.test(x.toLowerCase())) && where.some((x) => role.test(caseless ? x.replace(/^./, (ch) => ch.toUpperCase()) : x)))
         mark(c, GENERIC);
     }
@@ -22478,8 +22938,8 @@ function readIntroduction(msg, people, userEmails, ctx = {}) {
       };
       add2(1, "named");
       if (!isReplySubject) add2(1, "a new thread");
-      const role = roleDescribed(escapeRe6(c.name));
-      const n = escapeRe6(c.name.toLowerCase());
+      const role = roleDescribed(escapeRe7(c.name));
+      const n = escapeRe7(c.name.toLowerCase());
       if (where.some((x) => role.test(caseless ? x.replace(/^./, (ch) => ch.toUpperCase()) : x)) || where.some((x) => new RegExp(`\\b${n}\\b[^.!?]{0,40}?\\b${POSSIBLE_ROLE}`, "iu").test(x)) || next.some((x) => new RegExp(`^\\s*(?:he|she|they)\\b[^.!?]{0,30}?\\b${POSSIBLE_ROLE}`, "iu").test(x)))
         add2(1, "says who they are");
       if ([...where, ...after].some((x) => POSSIBLE_TALK.test(x.toLowerCase()))) add2(1, "someone to talk to");
@@ -23880,8 +24340,8 @@ async function scorePeople2(db2, userId, opts) {
       last: lastAt ?? null
     };
   });
-  for (const part of chunks2(rows, 500)) {
-    const json2 = JSON.stringify(part);
+  for (const part2 of chunks2(rows, 500)) {
+    const json2 = JSON.stringify(part2);
     await db2.sql`
       insert into orbit.tie_scores (user_id, person_id, score, share_score, band, features, contributions,
                                     explanation, model_version, computed_at)
@@ -24842,8 +25302,8 @@ function isAmbiguousKey(key2, common) {
   if (!key2) return true;
   if (key2.replace(/\s/g, "").length <= 3) return true;
   if (common.has(key2)) return true;
-  const words4 = key2.split(" ");
-  return words4.length === 2 && words4.every((w) => common.has(w));
+  const words5 = key2.split(" ");
+  return words5.length === 2 && words5.every((w) => common.has(w));
 }
 var KIND_OF = {};
 var KIND_LISTS = [
@@ -24911,7 +25371,7 @@ function ycOssFact(c, asOf) {
   const name = clip2(c.name, 160);
   const key2 = name ? orgKey(name) : "";
   if (!name || !key2) return void 0;
-  const words4 = [...c.industries ?? [], ...c.tags ?? []].filter((w) => typeof w === "string" && !!w.trim()).map((w) => w.trim().slice(0, 60));
+  const words5 = [...c.industries ?? [], ...c.tags ?? []].filter((w) => typeof w === "string" && !!w.trim()).map((w) => w.trim().slice(0, 60));
   const team = typeof c.team_size === "number" && Number.isFinite(c.team_size) && c.team_size >= 0 ? c.team_size : void 0;
   const formerNames = (c.former_names ?? []).filter((n) => typeof n === "string" && !!n.trim()).slice(0, 5);
   const f = { key: key2, name, source: "yc" };
@@ -24923,7 +25383,7 @@ function ycOssFact(c, asOf) {
   if (c.status && STATUSES.has(c.status)) f.ycStatus = c.status;
   if (c.stage && STAGES2.has(c.stage)) f.ycStage = c.stage;
   if (team !== void 0) f.teamSize = team;
-  const industries = [...new Set(words4)].slice(0, 16);
+  const industries = [...new Set(words5)].slice(0, 16);
   if (industries.length) f.industries = industries;
   const oneLiner = clip2(c.one_liner, 300);
   if (oneLiner) f.oneLiner = oneLiner;
@@ -25004,7 +25464,7 @@ async function syncCompanyFacts(db2, doFetch, now) {
   const asOf = now.toISOString().slice(0, 10);
   let written = 0;
   for (let i = 0; i < rows.length; i += BATCH_ROWS) {
-    const part = rows.slice(i, i + BATCH_ROWS);
+    const part2 = rows.slice(i, i + BATCH_ROWS);
     await db2.sql`
       insert into orbit_private.company_facts (source, source_id, key, name, former_names, website, yc_batch, yc_status,
         yc_stage, team_size, industries, one_liner, ambiguous_name, yc_slug, as_of, updated_at)
@@ -25013,7 +25473,7 @@ async function syncCompanyFacts(db2, doFetch, now) {
              r.team_size, array(select jsonb_array_elements_text(r.industries)), r.one_liner, r.ambiguous_name,
              r.yc_slug, ${asOf}::date, now()
         from jsonb_to_recordset(${JSON.stringify(
-      part.map((r) => ({
+      part2.map((r) => ({
         source_id: r.sourceId,
         key: r.key,
         name: r.name,
@@ -25048,10 +25508,10 @@ async function syncCompanyFacts(db2, doFetch, now) {
     await db2.sql`
       update orbit_private.company_facts c set yc_slug = r.yc_slug
         from jsonb_to_recordset(${JSON.stringify(
-      part.filter((r) => r.slug).map((r) => ({ source_id: r.sourceId, yc_slug: r.slug }))
+      part2.filter((r) => r.slug).map((r) => ({ source_id: r.sourceId, yc_slug: r.slug }))
     )}::jsonb) as r(source_id text, yc_slug text)
        where c.source = 'yc' and c.source_id = r.source_id and c.yc_slug is distinct from r.yc_slug`;
-    written += part.length;
+    written += part2.length;
   }
   return { fetched: list2.length, written };
 }
@@ -25581,8 +26041,8 @@ async function readPeople(db2, claude, userId, limit, personIds) {
      limit ${limit}`;
   let n = 0;
   for (let i = 0; i < rows.length; i += READ_BATCH) {
-    const part = rows.slice(i, i + READ_BATCH);
-    const texts = part.map(
+    const part2 = rows.slice(i, i + READ_BATCH);
+    const texts = part2.map(
       (r) => personReadingText({
         name: r.name,
         headline: r.headline ?? void 0,
@@ -25590,14 +26050,14 @@ async function readPeople(db2, claude, userId, limit, personIds) {
         experience: r.experience ?? []
       })
     );
-    const worth = part.map((r) => !!r.about || (r.experience ?? []).some((e) => e.description));
+    const worth = part2.map((r) => !!r.about || (r.experience ?? []).some((e) => e.description));
     let model;
     let modelName = null;
     if (claude?.configured && worth.some(Boolean)) {
       const res = await claude.structured({
         task: "reading",
         system: PERSON_READING_SYSTEM,
-        user: part.map((_, k) => worth[k] ? block2("person", `P${k + 1}`, texts[k]) : "").filter(Boolean).join("\n\n"),
+        user: part2.map((_, k) => worth[k] ? block2("person", `P${k + 1}`, texts[k]) : "").filter(Boolean).join("\n\n"),
         schema: personSchema,
         userId
       });
@@ -25606,13 +26066,13 @@ async function readPeople(db2, claude, userId, limit, personIds) {
         model = /* @__PURE__ */ new Map();
         for (const p of res.data.people) {
           const k = Number(/(\d+)/.exec(p.person)?.[1] ?? 0) - 1;
-          if (k >= 0 && k < part.length) model.set(k, rawOf(p.facts));
+          if (k >= 0 && k < part2.length) model.set(k, rawOf(p.facts));
         }
       } else if ("budgetExceeded" in res) {
         return n;
       }
     }
-    for (let k = 0; k < part.length; k++) {
+    for (let k = 0; k < part2.length; k++) {
       const text2 = texts[k];
       const reading = withPatterns(
         settlePersonReading(model?.get(k), text2),
@@ -25621,7 +26081,7 @@ async function readPeople(db2, claude, userId, limit, personIds) {
       await db2.sql`
         update orbit.profile_reads set reading = ${JSON.stringify(reading)}::jsonb, reading_model = ${modelName},
           reading_at = now(), updated_at = now()
-         where user_id = ${userId}::uuid and person_id = ${part[k].person_id}::uuid`;
+         where user_id = ${userId}::uuid and person_id = ${part2[k].person_id}::uuid`;
       n++;
     }
   }
@@ -25636,8 +26096,8 @@ async function readCompanies(db2, claude, userId, limit, now) {
      order by read_at limit ${limit}`;
   let n = 0;
   for (let i = 0; i < rows.length; i += READ_BATCH) {
-    const part = rows.slice(i, i + READ_BATCH);
-    const texts = part.map(
+    const part2 = rows.slice(i, i + READ_BATCH);
+    const texts = part2.map(
       (c) => companyReadingText({
         name: c.name,
         tagline: c.tagline ?? void 0,
@@ -25645,19 +26105,19 @@ async function readCompanies(db2, claude, userId, limit, now) {
       })
     );
     const raw = /* @__PURE__ */ new Map();
-    const worth = part.map((c) => !!c.description || !!c.tagline);
+    const worth = part2.map((c) => !!c.description || !!c.tagline);
     if (claude?.configured && worth.some(Boolean)) {
       const res = await claude.structured({
         task: "reading",
         system: COMPANY_READING_SYSTEM,
-        user: part.map((_, k) => worth[k] ? block2("company", `C${k + 1}`, texts[k]) : "").filter(Boolean).join("\n\n"),
+        user: part2.map((_, k) => worth[k] ? block2("company", `C${k + 1}`, texts[k]) : "").filter(Boolean).join("\n\n"),
         schema: companySchema,
         userId
       });
       if (res.ok)
         for (const c of res.data.companies) {
           const k = Number(/(\d+)/.exec(c.company)?.[1] ?? 0) - 1;
-          if (k >= 0 && k < part.length)
+          if (k >= 0 && k < part2.length)
             raw.set(k, {
               stage: c.stage.trim() ? { value: c.stage, quote: c.quote } : null,
               kind: c.kind.trim() || null,
@@ -25666,8 +26126,8 @@ async function readCompanies(db2, claude, userId, limit, now) {
         }
       else if ("budgetExceeded" in res) return n;
     }
-    for (let k = 0; k < part.length; k++) {
-      const c = part[k];
+    for (let k = 0; k < part2.length; k++) {
+      const c = part2[k];
       const r = settleCompanyReading(raw.get(k), texts[k]);
       await db2.sql`
         update orbit_private.company_pages set reading = ${JSON.stringify(r)}::jsonb, reading_at = now()

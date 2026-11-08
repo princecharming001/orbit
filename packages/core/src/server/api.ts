@@ -139,8 +139,16 @@ export interface SourcedCandidate {
   org?: string;
   location?: string;
   linkedinUrl?: string;
-  /** an email the public page gave, exactly as written there (plan 31); never guessed */
+  /** an email: written on a public page, built from the company's address pattern, or a marked guess */
   email?: string;
+  /** how the email was found: page (as written there), pattern (the company's real pattern), guess (unconfirmed) */
+  emailConfidence?: 'page' | 'pattern' | 'guess';
+  /** how warm the student is to them: 1 in your world, 2 one hop away, 3 shared background, 4 open door, 5 cold */
+  tier?: 1 | 2 | 3 | 4 | 5;
+  /** the one reason for the tier, in plain words */
+  why?: string;
+  /** the warm contact to ask for an intro (tier 2) */
+  bridge?: { personId: string; name: string };
   /** the page they were found on */
   url?: string;
   /** what a first message can be written from: what they work on, the lab, the page */
@@ -159,6 +167,8 @@ export interface SourceSearchRequest {
   goalId?: string;
   purpose: GoalKind;
   query?: string;
+  /** the student's hometown (kept in the browser), for the shared-background tier */
+  homeCity?: string;
   filters?: {
     organizations?: string[];
     titles?: string[];

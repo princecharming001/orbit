@@ -1,6 +1,6 @@
 /**
  * Sourcing (§6):
- *   POST /source/search {goalId?, purpose, query?, filters?, limit?}  → {batchId, results, unconfigured, relaxed}
+ *   POST /source/search {goalId?, purpose, query?, homeCity?, filters?, limit?}  → {batchId, results, unconfigured, relaxed}
  *   POST /source/add {recommendationIds}                              → {people: [{id, displayName, chatId}]}
  */
 import type { SourceSearchRequest } from '@orbit/core/server/api';
@@ -26,6 +26,7 @@ async function search(ctx: Ctx): Promise<Response> {
     goalId: optUuid(b, 'goalId'),
     purpose: b.purpose as SourceSearchRequest['purpose'],
     query: typeof b.query === 'string' ? b.query : undefined,
+    homeCity: typeof b.homeCity === 'string' && b.homeCity.length <= 80 ? b.homeCity : undefined,
     filters: {
       organizations: list(f.organizations, 'organizations'),
       titles: list(f.titles, 'titles'),

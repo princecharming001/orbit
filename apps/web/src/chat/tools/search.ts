@@ -374,6 +374,9 @@ function forModel(d: Awaited<ReturnType<typeof tableData>>) {
     relaxed: d.relaxed,
     unsupported: d.unsupported,
     notOnFile: found ? undefined : d.unknownBy,
+    nextStep: found
+      ? undefined
+      : 'Nobody in the network matches. Unless the student only asked about people they already know, call find_people now with the same ask (purpose, query, and the organization or school) to look beyond LinkedIn on the web, ranked warmest first with emails.',
     stillToCheck: d.remaining,
     judgeFailed: d.judgeFailed || undefined,
     profilesReadNow: d.profilesRead || undefined,

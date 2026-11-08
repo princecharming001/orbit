@@ -3,6 +3,7 @@
  * across its providers, the student adds the ones they want, and the new people and chats arrive with a pull.
  */
 import type { GoalKind, SourcedCandidate, SourceSearchResponse, User } from '@orbit/core';
+import { db } from '../db/schema';
 import { callApi, isAccountMode, isServerUser, NO_SERVER, SIGN_IN_FIRST } from '../integrations/orbitApi';
 import { pullNow } from './serverSync';
 
@@ -56,9 +57,12 @@ export async function searchPeople(
     keywords: clean(q.filters?.keywords),
     titles: clean(q.filters?.titles),
   };
+  // the hometown lives in the browser; the server reads it for the shared-background tier
+  const homeCity = (await db.users.get(user.id).catch(() => undefined))?.homeCity?.trim() || undefined;
   const r = await callApi('/source/search', {
     purpose: q.purpose,
     query: q.query?.trim() || undefined,
+    homeCity,
     goalId: q.goalId,
     limit: q.limit ?? 20,
     ...(Object.values(filters).some(Boolean) ? { filters } : {}),
@@ -82,8 +86,25 @@ export async function addSourced(user: Pick<User, 'id'>, recommendationIds: stri
   return { ok: true, people: r.value.people };
 }
 
-/** One candidate as a line: "Maya Chen, Partner at Seed Fund (fit 0.82)". */
+/** One candidate as a line: "Maya Chen, Partner at Seed Fund". */
 export function candidateLine(c: SourcedCandidate): string {
   const role = [c.title, c.org].filter(Boolean).join(' at ');
-  return `${c.name}${role ? `, ${role}` : ''}${c.email ? ' (email found)' : ''}`;
+  return `${c.name}${role ? `, ${role}` : ''}`;
+}
+
+/** The tier as a short chip: "Intro via Sam", "Shared background", "Open to students"; nothing for a cold match. */
+export function tierChip(c: SourcedCandidate): string | undefined {
+  if (c.knownPersonId || c.tier === 1) return 'You know them';
+  if (c.tier === 2) return c.bridge ? `Intro via ${c.bridge.name.split(/\s+/)[0]}` : 'Intro possible';
+  if (c.tier === 3) return 'Shared background';
+  if (c.tier === 4) return 'Open to students';
+  return undefined;
+}
+
+/** How sure Orbit is of the email, in words: "email on their page", "email from the company pattern", ... */
+export function emailNote(c: SourcedCandidate): string | undefined {
+  if (!c.email) return undefined;
+  if (c.emailConfidence === 'pattern') return `${c.email} (the company's usual address pattern)`;
+  if (c.emailConfidence === 'guess') return `${c.email} (a guess, not confirmed)`;
+  return `${c.email} (on their page)`;
 }

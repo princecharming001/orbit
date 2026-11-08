@@ -27,7 +27,9 @@ import type { BudgetDep, ClaudeDep, Clock } from '../research/deps';
 import type { GoalKind } from '../research/dossier';
 import { norm, normOrg, orgFromTitle } from '../research/guards';
 import type { WebSource } from '../research/web';
+import type { EmailConfidence } from './email';
 import { FIT_BATCH, type FitCandidate, fitSchema, fitSystem, fitUser } from './prompts';
+import { type Warmth, warmRank } from './warmth';
 import { sourceFromWeb, webAsk } from './web';
 
 export type SourceName = 'unipile' | 'apollo' | 'exa' | 'semantic_scholar' | 'web';
@@ -86,6 +88,10 @@ export interface Candidate {
   linkedinUrl?: string;
   memberId?: string;
   email?: string;
+  /** how the email was found: on a page, from the company's pattern, or a guess (email.ts) */
+  emailConfidence?: EmailConfidence;
+  /** how warm the student is to them, in five tiers (warmth.ts) */
+  warmth?: Warmth;
   url?: string;
   /** what a first message can be written from (plan 31): what they work on, the lab, the page it came from */
   evidence?: string[];
@@ -126,6 +132,10 @@ export interface SourcingDeps {
   knownPerson?: (c: Candidate) => Promise<{ personId: string; score?: number } | null>;
   /** already in the pipeline for this goal: dropped */
   inPipeline?: (c: Candidate) => Promise<boolean>;
+  /** the warmth tier from the student's own context (warmth.ts); without it every candidate ranks as before */
+  warmthOf?: (c: Candidate, known: { personId: string; score?: number } | null) => Warmth;
+  /** fills emails for the best candidates who have none (email.ts) */
+  fillEmails?: (cands: Candidate[]) => Promise<void>;
   budget?: BudgetDep;
   clock: Clock;
   newId?: () => string;
@@ -865,6 +875,7 @@ async function rank(ctx: Ctx, cands: Candidate[], batchId: string): Promise<Reco
   const fitOf = (c: Candidate) => fits.get(c.key) ?? keywordFit(input.goal, c);
   const byFit = [...cands].sort((a, b) => fitOf(b).fit - fitOf(a).fit);
   const reachTop = new Set(byFit.slice(0, REACH_TOP).map((c) => c.key));
+  if (deps.fillEmails) await deps.fillEmails(byFit.slice(0, 60)).catch(() => undefined);
 
   const rows: RecommendationRow[] = [];
   for (const c of byFit) {
@@ -874,9 +885,13 @@ async function rank(ctx: Ctx, cands: Candidate[], batchId: string): Promise<Reco
     const responsiveness = Math.max(0, Math.min(1, await deps.responsiveness(c)));
     const known = deps.knownPerson ? await deps.knownPerson(c) : null;
     const reasons = [...f.reasons];
-    if (known)
+    const warmth = deps.warmthOf?.(c, known);
+    if (warmth) c.warmth = warmth;
+    if (warmth?.why) reasons.unshift(warmth.why);
+    else if (known)
       reasons.unshift(known.score !== undefined ? `You know them (${known.score})` : 'You know them');
     else if (c.networkDistance === 2) reasons.push('2nd-degree on LinkedIn');
+    const base = WEIGHTS.fit * f.fit + WEIGHTS.reach * reach + WEIGHTS.responsiveness * responsiveness;
     const { key: _key, ...candidate } = c;
     rows.push({
       user_id: input.userId,
@@ -891,7 +906,7 @@ async function rank(ctx: Ctx, cands: Candidate[], batchId: string): Promise<Reco
         c.linkedinUrl ??
         c.url ??
         null,
-      rank: round4(WEIGHTS.fit * f.fit + WEIGHTS.reach * reach + WEIGHTS.responsiveness * responsiveness),
+      rank: round4(warmth ? warmRank(base, f.fit, warmth.tier) : base),
       fit: round4(f.fit),
       reach: round4(reach),
       responsiveness: round4(responsiveness),

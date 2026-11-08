@@ -21,9 +21,11 @@ import { HttpError } from '../http.ts';
 import { bestReach, ensurePerson, loadGraph, resolvePersonRef, type UserGraph } from '../paths/find.ts';
 import { cleanLinkedInUrl } from '../providers/unipileResearch';
 import { claudeDep, sqlBudget } from '../research/bind.ts';
+import { norm } from '../research/guards';
 import { claudeWeb, exaWeb, GATHER_MODEL, sqlSharedCache, type WebSource } from '../research/web';
 import { firstNameOf } from '../rows.ts';
 import type { Services } from '../services.ts';
+import { dnsMx, fillEmails, type KnownAddress } from './email';
 import {
   type Candidate,
   type RecommendationRow,
@@ -31,6 +33,14 @@ import {
   type SourcingGoal,
   sourcePeople,
 } from './search';
+import {
+  type StudentContext,
+  studentFromResume,
+  WARM_SCORE,
+  type WarmContact,
+  warmthOf,
+  workDomain,
+} from './warmth';
 
 const strs = (v: unknown): string[] =>
   Array.isArray(v)
@@ -97,6 +107,10 @@ const toSourced = (id: string, r: RecommendationRow): SourcedCandidate => {
     ...(c.email ? { email: c.email } : {}),
     ...(c.url ? { url: c.url } : {}),
     ...(c.evidence?.length ? { evidence: c.evidence.slice(0, 4) } : {}),
+    ...(c.email && c.emailConfidence ? { emailConfidence: c.emailConfidence } : {}),
+    ...(c.warmth ? { tier: c.warmth.tier } : {}),
+    ...(c.warmth?.why ? { why: c.warmth.why } : {}),
+    ...(c.warmth?.bridge ? { bridge: c.warmth.bridge } : {}),
     source: (c.sources[0] ?? 'exa') as SourceName,
     rank: r.rank,
     fit: r.fit,
@@ -136,8 +150,11 @@ export async function runSourcing(
     email: string;
     school: string | null;
     majors: string[];
+    current_org: string | null;
+    grad_year: number | null;
   }>`
-    select first_name, full_name, email, school, majors from orbit.users where id = ${userId}::uuid`;
+    select first_name, full_name, email, school, majors, current_org, grad_year from orbit.users
+     where id = ${userId}::uuid`;
   const [acct] = await db.sql<{ external_account_id: string | null }>`
     select external_account_id from orbit.integration_accounts
      where user_id = ${userId}::uuid and provider = 'linkedin' and status = 'active'`;
@@ -168,6 +185,15 @@ export async function runSourcing(
     return v;
   };
   const user = { school: u?.school ?? '', majors: u?.majors ?? [] };
+  const ctx = await warmContext(db, userId, u, req.homeCity, g);
+  const sGoal = sourcingGoal(req, goal);
+  // the ask's own org → domain pairs come first; the student's contacts teach the rest
+  sGoal.orgs?.forEach((o, i) => {
+    const d = sGoal.domains?.[i];
+    if (d) ctx.orgDomains.set(norm(o), d.toLowerCase());
+  });
+  const mx = dnsMx(s.fetch);
+  const year = now.getUTCFullYear();
   const result = await sourcePeople(
     {
       unipile: s.unipile,
@@ -193,6 +219,17 @@ export async function runSourcing(
           } as Person,
           user,
         ),
+      warmthOf: (c, known) =>
+        warmthOf(c, {
+          student: ctx.student,
+          known,
+          warm: ctx.warm,
+          domains: [workDomain(c.email), c.org ? ctx.orgDomains.get(norm(c.org)) : undefined].filter(
+            (d): d is string => !!d,
+          ),
+          year,
+        }),
+      fillEmails: (cands) => fillEmails(cands, { known: ctx.known, orgDomains: ctx.orgDomains, mx }),
       inPipeline: async (c) => {
         const k = await knownOf(c);
         if (!k || !goal) return false;
@@ -204,7 +241,7 @@ export async function runSourcing(
     },
     {
       userId,
-      goal: sourcingGoal(req, goal),
+      goal: sGoal,
       user: {
         firstName: u?.first_name ?? u?.full_name?.split(/\s+/)[0] ?? 'the user',
         school: u?.school ?? undefined,
@@ -286,6 +323,19 @@ export async function addSourced(s: Services, userId: string, ids: unknown): Pro
       await db.sql`
         update orbit.people set primary_email = ${normalizeEmail(c.email)}
          where id = ${personId}::uuid and user_id = ${userId}::uuid and primary_email is null`;
+    // an address Orbit built rather than read is said so on the person, so a draft to it is sent knowingly
+    const how =
+      c.email && c.emailConfidence === 'guess'
+        ? `Email ${c.email} is a guess from the usual first.last pattern, not confirmed`
+        : c.email && c.emailConfidence === 'pattern'
+          ? `Email ${c.email} follows the address pattern their company uses`
+          : undefined;
+    if (how)
+      await db.sql`
+        insert into orbit.facts (user_id, person_id, type, text, source_table, source_id, confidence)
+        select ${userId}::uuid, ${personId}::uuid, 'sourced', ${how}, 'recommendations', ${rec.id}::uuid,
+               ${c.emailConfidence === 'guess' ? 0.3 : 0.6}
+         where not exists (select 1 from orbit.facts where person_id = ${personId}::uuid and text = ${how} and deleted_at is null)`;
     await db.sql`
       update orbit.recommendations set status = 'added', person_id = ${personId}::uuid where id = ${rec.id}::uuid`;
     // no research is queued here: research on a person starts only when the student asks for it on their page
@@ -338,4 +388,61 @@ export function webSourcesFor(s: Services): WebSource[] {
       : undefined);
   if (client) out.push(claudeWeb(client, cache, { model: GATHER_MODEL }));
   return out;
+}
+
+/** What the warmth tiers and the email finder read, loaded once per search. */
+interface WarmCtx {
+  student: StudentContext;
+  warm: WarmContact[];
+  known: KnownAddress[];
+  /** normalized org name → the work domain most of the student's contacts there use */
+  orgDomains: Map<string, string>;
+}
+
+async function warmContext(
+  db: Db,
+  userId: string,
+  u: { school: string | null; current_org: string | null; grad_year: number | null } | undefined,
+  homeCity: string | undefined,
+  graph: () => Promise<UserGraph>,
+): Promise<WarmCtx> {
+  const [resume] = await db.sql<{ parsed: Record<string, unknown> | null }>`
+    select parsed from orbit.uploads
+     where user_id = ${userId}::uuid and kind = 'resume' and is_current order by created_at desc limit 1`;
+  const student = studentFromResume(resume?.parsed, {
+    school: u?.school,
+    currentOrg: u?.current_org,
+    gradYear: u?.grad_year,
+    homeCity: typeof homeCity === 'string' ? homeCity.slice(0, 80) : undefined,
+  });
+  const emails = await db.sql<{ id: string; display_name: string; org_raw: string | null; email: string }>`
+    select id, display_name, org_raw, primary_email as email from orbit.people
+     where user_id = ${userId}::uuid and primary_email is not null and deleted_at is null and not is_self
+     limit 5000`;
+  const known = emails.map((e) => ({ name: e.display_name, email: e.email }));
+  const emailOf = new Map(emails.map((e) => [e.id, e.email]));
+  // the domain most contacts at an org use
+  const tally = new Map<string, Map<string, number>>();
+  for (const e of emails) {
+    const d = workDomain(e.email);
+    if (!d || !e.org_raw) continue;
+    const k = norm(e.org_raw);
+    const m = tally.get(k) ?? new Map<string, number>();
+    m.set(d, (m.get(d) ?? 0) + 1);
+    tally.set(k, m);
+  }
+  const orgDomains = new Map<string, string>();
+  for (const [k, m] of tally) orgDomains.set(k, [...m].sort((a, b) => b[1] - a[1])[0]![0]);
+  const gr = await graph();
+  const warm: WarmContact[] = [...gr.people.values()]
+    .filter((p) => p.score >= WARM_SCORE && !p.hidden && !p.doNotContact)
+    .sort((a, b) => b.score - a.score)
+    .map((p) => ({
+      personId: p.id,
+      name: p.displayName,
+      score: p.score,
+      org: p.org,
+      email: emailOf.get(p.id),
+    }));
+  return { student, warm, known, orgDomains };
 }
