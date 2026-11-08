@@ -344,17 +344,16 @@ describe('sourcing (§6)', () => {
       linkedinUrl: 'https://www.linkedin.com/in/leo-grant',
       score: 55,
     });
-    const r = await call<{ results: { name: string; knownPersonId?: string; reasons: string[] }[] }>(
-      '/source/search',
-      token,
-      {
-        purpose: 'fundraising',
-        query: 'climate',
-      },
-    );
+    const r = await call<{
+      results: { name: string; knownPersonId?: string; reasons: string[]; tier?: number }[];
+    }>('/source/search', token, {
+      purpose: 'fundraising',
+      query: 'climate',
+    });
     const leo = r.body.results.find((x) => x.name === 'Leo Grant')!;
     expect(leo.knownPersonId).toBe(known);
-    expect(leo.reasons[0]).toBe('You know them (55)');
+    expect(leo.reasons[0]).toBe("You've talked with Leo before");
+    expect(leo.tier).toBe(1);
     await t.db
       .sql`select orbit.enqueue('orbit_enrich', ${JSON.stringify({ kind: 'source.search', userId, payload: { purpose: 'fundraising', query: 'climate' } })}::jsonb, 0)`;
     const before = (await t.db.sql`select 1 from orbit.recommendations where user_id = ${userId}::uuid`)
