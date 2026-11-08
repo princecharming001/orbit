@@ -10,6 +10,8 @@ export const YC_OSS_URL = 'https://yc-oss.github.io/api/companies/all.json';
 export interface YcOssCompany {
   id?: number;
   name?: string;
+  /** the company's page: https://www.ycombinator.com/companies/<slug> */
+  slug?: string;
   former_names?: string[];
   website?: string;
   one_liner?: string;
@@ -57,4 +59,54 @@ export function ycOssFact(c: YcOssCompany, asOf?: string): CompanyFact | undefin
   if (isAmbiguousKey(key, COMMON_WORDS)) f.ambiguousName = true;
   if (asOf) f.asOf = asOf;
   return f;
+}
+
+/** A YC company page's address, for a directory slug that looks like one. */
+export function ycCompanyUrl(slug: string | undefined): string | undefined {
+  return slug && /^[a-z0-9][a-z0-9-]{0,120}$/.test(slug)
+    ? `https://www.ycombinator.com/companies/${slug}`
+    : undefined;
+}
+
+const ENTITIES: Record<string, string> = { quot: '"', amp: '&', apos: "'", lt: '<', gt: '>', nbsp: ' ' };
+
+function unescapeHtml(s: string): string {
+  return s.replace(/&(#x[0-9a-f]+|#\d+|[a-z]+);/gi, (m, e: string) => {
+    if (e[0] === '#')
+      return String.fromCodePoint(
+        e[1] === 'x' || e[1] === 'X' ? Number.parseInt(e.slice(2), 16) : Number(e.slice(1)),
+      );
+    return ENTITIES[e.toLowerCase()] ?? m;
+  });
+}
+
+export interface YcFounder {
+  name: string;
+  title?: string;
+  active?: boolean;
+}
+
+/**
+ * The founders a YC company page lists (the page's embedded data: props.company.founders, each with full_name, title
+ * and is_active). Undefined when the page has no such data (a changed page, a block page), so nothing is overwritten.
+ */
+export function parseYcFounders(html: string): YcFounder[] | undefined {
+  const m = /data-page="([^"]+)"/.exec(html);
+  if (!m?.[1]) return undefined;
+  let data: unknown;
+  try {
+    data = JSON.parse(unescapeHtml(m[1]));
+  } catch {
+    return undefined;
+  }
+  const list = (data as { props?: { company?: { founders?: unknown } } })?.props?.company?.founders;
+  if (!Array.isArray(list)) return undefined;
+  const out: YcFounder[] = [];
+  for (const f of list as { full_name?: unknown; title?: unknown; is_active?: unknown }[]) {
+    const name = clip(f?.full_name, 120);
+    if (!name) continue;
+    const title = clip(f?.title, 80);
+    out.push({ name, ...(title ? { title } : {}), ...(f?.is_active === false ? { active: false } : {}) });
+  }
+  return out.slice(0, 12);
 }

@@ -197,11 +197,7 @@ export function FathomRow({ user }: { user: User }) {
           <RowStatus tone="bad">Key no longer works</RowStatus>
         ) : undefined
       }
-      line={
-        status.available
-          ? undefined
-          : 'Not part of this version of Orbit yet. Paste notes in Add note instead.'
-      }
+      line={status.available ? undefined : 'Not available yet'}
       actions={
         !status.available ? undefined : (
           <>
@@ -264,7 +260,7 @@ export function FathomRow({ user }: { user: User }) {
           onCancel={() => setAsking(false)}
           hint={
             <>
-              In Fathom: Settings, API Access, Generate API key.{' '}
+              In Fathom: Settings, API Access.{' '}
               <a
                 href={FATHOM_KEY_URL}
                 target="_blank"
@@ -273,7 +269,6 @@ export function FathomRow({ user }: { user: User }) {
               >
                 Open Fathom
               </a>
-              . Kept in this browser only. Fathom must be recording your calls for notes to arrive.
             </>
           }
         />
@@ -333,11 +328,7 @@ export function MeetingAppRow({ user, app }: { user: User; app: MeetingApp }) {
           <RowStatus tone="bad">{meta.connect === 'key' ? 'Key no longer works' : 'Sign in again'}</RowStatus>
         ) : undefined
       }
-      line={
-        status.available
-          ? undefined
-          : 'Not part of this version of Orbit yet. Paste notes in Add note instead.'
-      }
+      line={status.available ? undefined : 'Not available yet'}
       actions={
         !status.available ? undefined : (
           <>
@@ -465,11 +456,7 @@ export function CalcomRow({ user }: { user: User }) {
           <RowStatus tone="bad">Key no longer works</RowStatus>
         ) : undefined
       }
-      line={
-        status.available
-          ? 'Your booking link, offered when drafts propose times'
-          : 'Not part of this version of Orbit yet.'
-      }
+      line={status.available ? undefined : 'Not available yet'}
       actions={
         !status.available ? undefined : (
           <>

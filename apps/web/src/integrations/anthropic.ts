@@ -45,8 +45,7 @@ import { draftPlaybookFor } from '../engine/draftKnowledge';
 import { z } from '../zod';
 import { currentAccessToken } from './orbitApi';
 import {
-  DEFAULT_DAILY_REQUEST_CAP,
-  DEFAULT_DAILY_TOKEN_CAP,
+  dailyLlmCaps,
   type LlmFeature,
   llmFeatures,
   readPrefs,
@@ -210,7 +209,7 @@ export function toLlmError(e: unknown): LlmError {
       shared === 'unconfigured'
         ? "Orbit's shared Claude access is unavailable right now."
         : shared === 'budget'
-          ? "You've used all the Claude that Orbit includes for you."
+          ? "You've used today's Claude that Orbit includes for you."
           : "Orbit's shared Claude access has reached today's limit.",
       detail,
     );
@@ -285,8 +284,8 @@ export function describeLlmFailure(e: LlmError): {
     case 'shared_limit':
       if (/Orbit includes/.test(e.message))
         return {
-          title: 'Your included Claude is used up',
-          body: `${e.message} The chat now understands a fixed set of commands. Add your own Anthropic key in Settings, Integrations to keep chatting with Claude.`,
+          title: "Today's included Claude is used up",
+          body: `${e.message} It comes back at midnight UTC. Until then the chat understands a fixed set of commands, or add your own Anthropic key in Settings, Integrations.`,
         };
       return {
         title: "Orbit's shared Claude access is paused",
@@ -342,8 +341,7 @@ export function recordFailure(e: LlmError): void {
 export function overDailyCap(): LlmError | undefined {
   const p = readPrefs();
   const usage = todaysLlmUsage(p);
-  const reqCap = p.llmDailyRequestCap ?? DEFAULT_DAILY_REQUEST_CAP;
-  const tokCap = p.llmDailyTokenCap ?? DEFAULT_DAILY_TOKEN_CAP;
+  const { requests: reqCap, tokens: tokCap } = dailyLlmCaps(p);
   if (usage.requests >= reqCap)
     return new LlmError('cap', `Orbit has made ${usage.requests} Claude requests today, your daily limit.`);
   if (usage.inputTokens + usage.outputTokens >= tokCap)

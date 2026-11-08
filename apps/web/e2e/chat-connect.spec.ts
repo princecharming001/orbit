@@ -80,7 +80,7 @@ test.describe('Connect LinkedIn and Gmail, live LinkedIn and warm intros', () =>
     const external = await loadDemo(page);
     await page.goto('settings/integrations');
     const card = page.getByTestId('settings-linkedin-live');
-    await expect(card).toContainText('LinkedIn (live)');
+    await expect(card).toContainText('LinkedIn');
     await card.getByTestId('settings-linkedin-live-connect').click();
     await expect(card.getByTestId('settings-linkedin-live-status')).toContainText(
       /Connected · \d+ connections · last synced/,

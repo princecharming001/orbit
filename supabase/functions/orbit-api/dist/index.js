@@ -1784,6 +1784,7 @@ import { jwtVerify as jwtVerify2, SignJWT } from "npm:jose@6.2.12";
 var ACCESS_TTL_SEC = 3600;
 var REFRESH_TTL_DAYS = 30;
 var LOGIN_CODE_TTL_SEC = 120;
+var REFRESH_GRACE_DAYS = 3;
 var AUDIENCE = "orbit";
 function sessionKey(secret) {
   const decoded = fromBase64(secret.trim());
@@ -1825,17 +1826,40 @@ async function createSession(db2, cfg, userId, userAgent) {
   const access = await signAccess(cfg, { userId, sessionId: row.id });
   return { accessToken: access.token, refreshToken, expiresAt: access.expiresAt, sessionId: row.id };
 }
+async function nextRefreshToken(cfg, refreshToken) {
+  const key = await crypto.subtle.importKey(
+    "raw",
+    new Uint8Array(sessionKey(cfg.secret)),
+    { name: "HMAC", hash: "SHA-256" },
+    false,
+    ["sign"]
+  );
+  const mac = await crypto.subtle.sign(
+    "HMAC",
+    key,
+    new TextEncoder().encode(`orbit-refresh:${refreshToken}`)
+  );
+  return base64url(new Uint8Array(mac));
+}
 async function refreshSession(db2, cfg, refreshToken) {
   if (typeof refreshToken !== "string" || refreshToken.length < 20 || refreshToken.length > 200) return null;
   const now = (cfg.now ?? (() => /* @__PURE__ */ new Date()))();
-  const next = randomToken(32);
+  const next = await nextRefreshToken(cfg, refreshToken);
+  const oldHash = await sha256Hex(refreshToken);
+  const nextHash = await sha256Hex(next);
   const expires = new Date(now.getTime() + REFRESH_TTL_DAYS * 864e5);
+  const graceFrom = new Date(now.getTime() - REFRESH_GRACE_DAYS * 864e5);
   const [row] = await db2.sql`
     update orbit.sessions s
-       set refresh_hash = ${await sha256Hex(next)}, last_used_at = ${now}::timestamptz, expires_at = ${expires}::timestamptz
+       set prev_refresh_hash = case when s.refresh_hash = ${oldHash} then ${oldHash} else s.prev_refresh_hash end,
+           rotated_at = case when s.refresh_hash = ${oldHash} then ${now}::timestamptz else s.rotated_at end,
+           refresh_hash = ${nextHash}, last_used_at = ${now}::timestamptz, expires_at = ${expires}::timestamptz
       from orbit.users u
-     where s.refresh_hash = ${await sha256Hex(refreshToken)} and s.revoked_at is null
-       and s.expires_at > ${now}::timestamptz and u.id = s.user_id and u.deleted_at is null
+     where (s.refresh_hash = ${oldHash}
+            or (s.prev_refresh_hash = ${oldHash} and s.refresh_hash = ${nextHash}
+                and s.rotated_at > ${graceFrom}::timestamptz))
+       and s.revoked_at is null and s.expires_at > ${now}::timestamptz
+       and u.id = s.user_id and u.deleted_at is null
     returning s.id, s.user_id`;
   if (!row) return null;
   const access = await signAccess(cfg, { userId: row.user_id, sessionId: row.id });
@@ -1851,7 +1875,8 @@ async function revokeSession(db2, refreshToken, now = /* @__PURE__ */ new Date()
   if (typeof refreshToken !== "string" || !refreshToken) return false;
   const rows = await db2.sql`
     update orbit.sessions set revoked_at = ${now}::timestamptz
-     where refresh_hash = ${await sha256Hex(refreshToken)} and revoked_at is null
+     where (refresh_hash = ${await sha256Hex(refreshToken)} or prev_refresh_hash = ${await sha256Hex(refreshToken)})
+       and revoked_at is null
     returning id`;
   return rows.length > 0;
 }
@@ -16080,7 +16105,7 @@ async function loadCompanyFacts(db2, since2) {
   const rows = await db2.sql`
     select key, name, former_names, website, yc_batch, yc_status, yc_stage, team_size, industries, one_liner,
            ambiguous_name, source, as_of::text as as_of, updated_at::text as updated_at, linkedin_id,
-           linkedin_handle, founded_year, growth_12m, stage, stage_evidence, kind, about
+           linkedin_handle, founded_year, growth_12m, stage, stage_evidence, kind, about, founders
       from orbit_private.company_facts
      where ${since2 ?? null}::timestamptz is null or updated_at > ${since2 ?? null}::timestamptz
      order by updated_at`;
@@ -16108,6 +16133,7 @@ async function loadCompanyFacts(db2, since2) {
     }
     if (r.kind) f2.kind = r.kind;
     if (r.about) f2.about = r.about;
+    if (r.founders?.length) f2.founders = r.founders;
     return f2;
   });
   return { facts, at };

@@ -38,8 +38,7 @@ import {
 import { addTargetCompanies } from '../../engine/targets';
 import { hasLlm, testApiKey } from '../../integrations/anthropic';
 import {
-  DEFAULT_DAILY_REQUEST_CAP,
-  DEFAULT_DAILY_TOKEN_CAP,
+  dailyLlmCaps,
   type LlmFeature,
   llmFeatures,
   readPrefs,
@@ -551,8 +550,8 @@ export const updateLimitsTool = defineTool({
           }
         : undefined,
       claudeCaps: {
-        requestsPerDay: prefs.llmDailyRequestCap ?? DEFAULT_DAILY_REQUEST_CAP,
-        tokensPerDay: prefs.llmDailyTokenCap ?? DEFAULT_DAILY_TOKEN_CAP,
+        requestsPerDay: dailyLlmCaps(prefs).requests,
+        tokensPerDay: dailyLlmCaps(prefs).tokens,
       },
       ranges: LIMIT_RANGES,
     };

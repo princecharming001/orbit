@@ -21,7 +21,7 @@ export const syncLinkedinTool = defineTool({
   name: 'sync_linkedin',
   kind: 'write',
   description:
-    'Call this when the student asks to sync, refresh or pull their LinkedIn connections again and LinkedIn is connected live (Settings shows LinkedIn (live)). It re-pulls every connection, adds new people and updates the rest (nobody is doubled), and refreshes who to meet. When LinkedIn is not connected live, or live sync is not switched on yet, it shows the LinkedIn setup widget instead, which connects it or takes the export.',
+    'Call this when the student asks to sync, refresh or pull their LinkedIn connections again and LinkedIn is connected live (Settings shows LinkedIn connected). It re-pulls every connection, adds new people and updates the rest (nobody is doubled), and refreshes who to meet. When LinkedIn is not connected live, or live sync is not switched on yet, it shows the LinkedIn setup widget instead, which connects it or takes the export.',
   input: z.object({}),
   capabilities: ['linkedin_live_sync'],
   progress: 'Syncing your LinkedIn',

@@ -8,8 +8,9 @@
  * - only client tools plus Claude's own web search (the one server tool the chat uses, at most five searches a
  *   turn); no other server tools, MCP servers or containers
  * - a body size cap, and request counters per visitor (hashed IP) per minute and per day, plus a global daily cap
- * - a dollar cap per user (ORBIT_USER_CAP_USD, $30 by default): each answer's tokens are priced as they stream past
- *   and added to the user's total; once the total reaches the cap the proxy answers 429 `x-orbit-limit: budget`.
+ * - a dollar cap per user per day (ORBIT_USER_CAP_USD, $20 by default, the UTC day): each answer's tokens are priced as
+ *   they stream past and added to the user's total for the day; once it reaches the cap the proxy answers 429
+ *   `x-orbit-limit: budget` until the next day.
  *   The user is the signed-in account when the browser sends a valid Orbit session (`x-orbit-session`), else the
  *   browser's own id (`x-orbit-client`), else the hashed IP.
  *
@@ -61,20 +62,21 @@ export interface Limits {
   /** each visitor's daily count for one kind of call, on top of perDay */
   perDayCall?: Partial<Record<Exclude<CallType, 'chat'>, number>>;
 }
+// the dollar cap per user per day is the real limit; the counts only stop a runaway loop
 export const DEFAULT_CALL_PER_DAY: Record<Exclude<CallType, 'chat'>, number> = {
-  memory: 200,
-  resume: 5,
-  rapport: 150,
-  judge: 300,
+  memory: 3000,
+  resume: 50,
+  rapport: 3000,
+  judge: 5000,
 };
 export const DEFAULT_LIMITS: Limits = {
-  perMinute: 30,
-  perDay: 250,
-  globalPerDay: 3000,
+  perMinute: 120,
+  perDay: 5000,
+  globalPerDay: 100_000,
   perDayCall: DEFAULT_CALL_PER_DAY,
 };
-/** Dollars one user may spend on Orbit's key, until it is raised. */
-export const DEFAULT_CAP_USD = 30;
+/** Dollars one user may spend on Orbit's key in a UTC day. */
+export const DEFAULT_CAP_USD = 20;
 /**
  * Dollars a day from one network without a signed-in session. The browser id a request names is the caller's own
  * choice, so a fresh one is a fresh $30: without this a script rotating it spends Orbit's key until the global
@@ -518,10 +520,10 @@ export function makeHandler(deps: ProxyDeps): (req: Request) => Promise<Response
       });
     }
 
-    // the per-user dollar cap: counted before the call, charged as the answer streams back
-    const subject = await subjectOf(req, visitor, deps.sessionSecret, now());
-    // also counted: the day's total for everyone, and the day's total for this network when nobody is signed in
+    // the per-user dollar cap for the day: counted before the call, charged as the answer streams back
     const day = now().toISOString().slice(0, 10);
+    const subject = `${await subjectOf(req, visitor, deps.sessionSecret, now())}:${day}`;
+    // also counted: the day's total for everyone, and the day's total for this network when nobody is signed in
     const globalDay = `global:${day}`;
     const ipDay = subject.startsWith('user:') ? undefined : `ipday:${visitor}:${day}`;
     const charged = [subject, globalDay, ...(ipDay ? [ipDay] : [])];
@@ -562,7 +564,7 @@ export function makeHandler(deps: ProxyDeps): (req: Request) => Promise<Response
         return apiError(
           429,
           'rate_limit_error',
-          `You have used the $${cap} of Claude that Orbit includes. Add your own Anthropic key in Settings to keep chatting.`,
+          `You have used today's $${cap} of Claude that Orbit includes. It resets at midnight UTC, or add your own Anthropic key in Settings to keep going.`,
           h,
           { 'x-orbit-limit': 'budget', 'x-should-retry': 'false', 'x-orbit-budget-remaining': '0' },
         );

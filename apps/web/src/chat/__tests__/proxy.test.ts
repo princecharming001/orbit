@@ -401,7 +401,7 @@ async function accessToken(claims: Record<string, unknown>, secret = SECRET) {
 const USER = '0b7f6c2e-8a51-4c1e-9d0a-3f2b1c4d5e6f';
 const CLIENT = 'f00dfeedc0ffee0123456789abcdef01';
 
-describe('the $30 per-user cap on Orbit’s key', () => {
+describe('the $20 per-user daily cap on Orbit’s key', () => {
   afterEach(() => {
     setSharedClaudeUrlForTests(undefined);
     writePrefs({ sharedClaudePause: undefined });
@@ -411,12 +411,12 @@ describe('the $30 per-user cap on Orbit’s key', () => {
     const m = memSpend();
     const { client } = harness({ spend: m.spend, headers: { 'x-orbit-client': CLIENT } });
     const res = await client.beta.messages.create({ ...chatParams, stream: true }).withResponse();
-    expect(res.response.headers.get('x-orbit-budget-remaining')).toBe('30.00');
+    expect(res.response.headers.get('x-orbit-budget-remaining')).toBe('20.00');
     for await (const _ of res.data) {
       // read the stream through, as the chat does
     }
     // 10 input tokens at $4/M at message_start, then 1 output token at $20/M at message_delta
-    const mine = m.adds.filter(([s]) => s === `client:${CLIENT}`);
+    const mine = m.adds.filter(([s]) => s === `client:${CLIENT}:${new Date().toISOString().slice(0, 10)}`);
     expect(mine).toHaveLength(2);
     expect(mine[0]![1]).toBeCloseTo(0.00004, 10);
     expect(mine[1]![1]).toBeCloseTo(0.00002, 10);
@@ -461,7 +461,7 @@ describe('the $30 per-user cap on Orbit’s key', () => {
     }
     expect(signedIn.upstream).toHaveLength(1);
     expect(over.adds.map(([s]) => s).filter((s) => s.startsWith('ipday:'))).toHaveLength(0);
-    expect(over.adds.map(([s]) => s)).toContain(`user:${USER}`);
+    expect(over.adds.map(([s]) => s)).toContain(`user:${USER}:${new Date().toISOString().slice(0, 10)}`);
   });
 
   it('the day’s total across everyone is a hard stop before Anthropic is called', async () => {
@@ -474,9 +474,9 @@ describe('the $30 per-user cap on Orbit’s key', () => {
     expect(upstream).toHaveLength(0);
   });
 
-  it('refuses before calling Anthropic once the user has spent $30, and the chat says so and stops asking', async () => {
+  it('refuses before calling Anthropic once the user has spent today’s $20, and the chat pauses until midnight UTC', async () => {
     setSharedClaudeUrlForTests(BASE);
-    const m = memSpend({ [`client:${CLIENT}`]: 30.0001 });
+    const m = memSpend({ [`client:${CLIENT}:${new Date().toISOString().slice(0, 10)}`]: 20.0001 });
     const { client, upstream } = harness({ spend: m.spend, headers: { 'x-orbit-client': CLIENT } });
     const raw = await client.beta.messages.create(chatParams).catch((e) => e);
     expect(raw).toBeInstanceOf(Anthropic.RateLimitError);
@@ -484,12 +484,12 @@ describe('the $30 per-user cap on Orbit’s key', () => {
     expect(upstream).toHaveLength(0);
     const err = toLlmError(raw);
     expect(err.reason).toBe('shared_limit');
-    expect(describeLlmFailure(err).title).toBe('Your included Claude is used up');
+    expect(describeLlmFailure(err).title).toBe("Today's included Claude is used up");
     expect(readPrefs().sharedClaudePause?.reason).toBe('budget');
     expect(chatMode()).toBe('router');
-    expect(chatModeNote()?.text).toMatch(/used all the Claude that Orbit includes/);
-    // not back tomorrow: the allowance does not reset by itself
-    expect(sharedClaudeAvailable(new Date(Date.now() + 2 * 24 * 3600_000))).toBe(false);
+    expect(chatModeNote()?.text).toMatch(/used today's Claude that Orbit includes/);
+    // back the next UTC day: the allowance is per day
+    expect(sharedClaudeAvailable(new Date(Date.now() + 2 * 24 * 3600_000))).toBe(true);
   });
 
   it('counts a signed-in student by their account, and anyone else by browser, then by IP', async () => {

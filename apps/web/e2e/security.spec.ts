@@ -90,7 +90,7 @@ test.describe('security', () => {
     // nothing to set: no key field, no per-feature switches, no limits
     await expect(page.getByLabel('Anthropic API key')).toHaveCount(0);
     await expect(page.getByTestId('ai-permissions')).toHaveCount(0);
-    await expect(page.getByTestId('ai-chat-row')).toContainText(/of \d+ requests/);
+    await expect(page.getByTestId('ai-chat-row')).toContainText(/\d+ requests? today/);
     // the old key can be dropped for the built-in Claude
     await page.getByTestId('ai-remove-key').click();
     await expect(page.getByText('Built in.')).toBeVisible();

@@ -15,22 +15,22 @@ Deno.serve(
     origins: defaultOrigins,
     take: postgrestTake(url, serviceKey),
     salt: serviceKey.slice(-16) || 'orbit',
-    // $30 per user until raised; set ORBIT_USER_CAP_USD to change it
+    // $20 per user per UTC day; set ORBIT_USER_CAP_USD to change it
     spend: postgrestSpend(url, serviceKey),
-    capUsd: num('ORBIT_USER_CAP_USD', 30),
+    capUsd: num('ORBIT_USER_CAP_USD', 20),
     anonIpDailyUsd: num('ORBIT_ANON_IP_DAILY_USD', 10),
     globalDailyUsd: num('ORBIT_GLOBAL_DAILY_USD', 200),
     sessionSecret: Deno.env.get('ORBIT_SESSION_SECRET') || undefined,
     limits: {
-      perMinute: num('ORBIT_LIMIT_PER_MINUTE', 30),
-      perDay: num('ORBIT_LIMIT_PER_DAY', 250),
-      globalPerDay: num('ORBIT_LIMIT_GLOBAL_PER_DAY', 3000),
+      perMinute: num('ORBIT_LIMIT_PER_MINUTE', 120),
+      perDay: num('ORBIT_LIMIT_PER_DAY', 5000),
+      globalPerDay: num('ORBIT_LIMIT_GLOBAL_PER_DAY', 100_000),
       // memory, resume, reply-tone and search-judge reads: their own daily counts per visitor
       perDayCall: {
-        memory: num('ORBIT_LIMIT_MEMORY_PER_DAY', 200),
-        resume: num('ORBIT_LIMIT_RESUME_PER_DAY', 5),
-        rapport: num('ORBIT_LIMIT_RAPPORT_PER_DAY', 150),
-        judge: num('ORBIT_LIMIT_JUDGE_PER_DAY', 300),
+        memory: num('ORBIT_LIMIT_MEMORY_PER_DAY', 3000),
+        resume: num('ORBIT_LIMIT_RESUME_PER_DAY', 50),
+        rapport: num('ORBIT_LIMIT_RAPPORT_PER_DAY', 3000),
+        judge: num('ORBIT_LIMIT_JUDGE_PER_DAY', 5000),
       },
     },
   }),

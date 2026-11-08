@@ -20,6 +20,7 @@ import { withoutRefs } from './cards/next';
 import { DraftOwnersContext } from './cards/parts';
 import { type CardActions, editingDraftId, ResultCard } from './cards/ResultCard';
 import { Markdown } from './Markdown';
+import { type NamedPerson, namedPeople } from './names';
 import type { AssistantTurn, Block, ErrorKind, ToolBlock, Turn, WebBlock } from './threadStore';
 
 export interface ThreadActions extends CardActions {
@@ -224,6 +225,11 @@ function Assistant({
     .filter((b): b is Extract<Block, { type: 'text' }> => b.type === 'text')
     .map((b) => b.text)
     .join('\n\n');
+  // the people this turn's cards named: the answer's words bold and link them
+  const people = useMemo(
+    () => namedPeople(turn.blocks.map((b) => (b.type === 'tool' ? b.envelope?.data : undefined))),
+    [turn.blocks],
+  );
   // while the turn works it reads as one status line; the cards and words come in once the answer starts
   const revealedRef = useRef(false);
   if (!streaming || showReasoning || answerStarted(turn.blocks)) revealedRef.current = true;
@@ -252,6 +258,7 @@ function Assistant({
                 streaming={streaming}
                 showReasoning={showReasoning}
                 actions={actions}
+                people={people}
               />
             ),
           )}
@@ -436,6 +443,7 @@ function BlockView({
   streaming,
   showReasoning,
   actions,
+  people,
 }: {
   b: Block;
   i: number;
@@ -443,8 +451,9 @@ function BlockView({
   streaming: boolean;
   showReasoning: boolean;
   actions: CardActions;
+  people?: NamedPerson[];
 }) {
-  if (b.type === 'text') return <Markdown text={b.text} />;
+  if (b.type === 'text') return <Markdown text={b.text} people={people} />;
   if (b.type === 'progress')
     return showReasoning ? <ProgressLine text={b.text} live={streaming && i === last} /> : null;
   if (b.type === 'web') return <WebSearchLine block={b} live={streaming} />;

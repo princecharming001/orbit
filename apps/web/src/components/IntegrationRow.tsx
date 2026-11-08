@@ -1,6 +1,7 @@
 import { companyLogoUrl } from '@orbit/core';
 import { Children, type ReactNode, useState } from 'react';
 import { cx } from '../ui';
+import { FLAT_ROWS, SectionHead } from './settings/kit';
 
 /**
  * A small square mark for an app: its own logo on a white tile when it has a web address (`logo`), else its initials
@@ -24,7 +25,7 @@ export function AppMark({
   return (
     <span
       className={cx(
-        'relative inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-[10px] text-[12px] font-semibold',
+        'relative inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-[9px] text-[12px] font-semibold',
         logo && !failed
           ? dark
             ? 'bg-ink'
@@ -58,8 +59,8 @@ export function AppMark({
 }
 
 /**
- * One app on the Integrations page: mark, name and status on the first line, one short line under it, and its
- * actions on the right. Anything longer (a key field, a how-to) goes in `children`, under the text.
+ * One app on the Integrations page: its mark, the name with its status under it (and one short line when there is
+ * something to say), and its actions on the right. Anything longer (a key field, a how-to) goes in `children`.
  */
 export function IntegrationRow({
   mark,
@@ -81,24 +82,22 @@ export function IntegrationRow({
   // `{cond && <x/>}` children are false when nothing shows: only what renders counts, so a bare row stays centred
   const extra = Children.toArray(children).length > 0;
   return (
-    <div className="px-5 py-4" data-testid={testId}>
-      <div className={cx('flex gap-3', line || extra ? 'items-start' : 'items-center')}>
+    <div className="py-4" data-testid={testId}>
+      <div className={cx('flex gap-3.5', extra ? 'items-start' : 'items-center')}>
         {mark}
         <div className="min-w-0 flex-1">
-          <div className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
-            <span className="text-[13.5px] font-medium text-ink">{name}</span>
-            {status}
-          </div>
-          {line && <div className="mt-0.5 text-[12.5px] text-ink-3">{line}</div>}
-          {extra && <div className="mt-2.5 text-[13px]">{children}</div>}
+          <div className="text-[14px] font-medium leading-5 text-ink">{name}</div>
+          {status && <div className="mt-0.5 leading-[18px]">{status}</div>}
+          {line && <div className="mt-0.5 text-[12.5px] leading-[18px] text-ink-3">{line}</div>}
+          {extra && <div className="mt-3 text-[13px]">{children}</div>}
         </div>
-        {actions && <div className="flex shrink-0 flex-wrap items-center justify-end gap-1.5">{actions}</div>}
+        {actions && <div className="flex shrink-0 flex-wrap items-center justify-end gap-2">{actions}</div>}
       </div>
     </div>
   );
 }
 
-/** "Connected · 79 connections · synced 2 days ago": the green status after an app's name. */
+/** "Connected · 79 connections · synced 2 days ago": the status under an app's name, a dot for how it stands. */
 export function RowStatus({
   tone = 'good',
   children,
@@ -111,17 +110,23 @@ export function RowStatus({
   return (
     <span
       className={cx(
-        'text-[12px] inline-flex flex-wrap items-center gap-1',
-        tone === 'good' ? 'text-good' : tone === 'bad' ? 'text-bad' : 'text-ink-3',
+        'inline-flex items-start gap-1.5 text-[12.5px] leading-[18px] [&_.lucide-check]:hidden',
+        tone === 'bad' ? 'text-bad' : 'text-ink-3',
       )}
       data-testid={testId}
     >
-      {children}
+      {tone !== 'muted' && (
+        <span
+          className={cx('mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full', tone === 'good' ? 'bg-good' : 'bg-bad')}
+          aria-hidden
+        />
+      )}
+      <span className="min-w-0">{children}</span>
     </span>
   );
 }
 
-/** A group of apps on the Integrations page: its title above, the apps in one card split by hairlines. */
+/** A group of apps on the Integrations page: its heading over a hairline, the apps split by hairlines. */
 export function RowGroup({
   title,
   hint,
@@ -132,14 +137,9 @@ export function RowGroup({
   children: ReactNode;
 }) {
   return (
-    <section className="[&:not(:first-child)]:mt-8">
-      <div className="mb-2.5 flex flex-wrap items-baseline gap-x-2 px-0.5">
-        <h3 className="text-[14px] font-semibold text-ink">{title}</h3>
-        {hint && <span className="text-[12.5px] text-ink-3">{hint}</span>}
-      </div>
-      <div className="divide-y divide-line-2 overflow-hidden rounded-[14px] border border-line bg-canvas shadow-[var(--shadow-card)]">
-        {children}
-      </div>
+    <section className="[&:not(:first-child)]:mt-10">
+      <SectionHead title={title} description={hint} />
+      <div className={FLAT_ROWS}>{children}</div>
     </section>
   );
 }

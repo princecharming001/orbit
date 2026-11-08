@@ -330,26 +330,30 @@ function summaryOf(d: Awaited<ReturnType<typeof tableData>>): string {
   const c = d.counts;
   const sure = c.strong;
   const likely = c.likely;
-  const unchecked = c.uncheckedListed + c.uncheckedSilent;
   const parts: string[] = [];
   if (sure) parts.push(`${sure} ${sure === 1 ? 'person matches' : 'people match'}`);
   if (likely) parts.push(`${likely} likely`);
   if (!sure && !likely) parts.push('Nobody in your network clearly matches');
   let s = parts.join(', ');
-  if (unchecked)
-    s += `. ${unchecked} more could not be checked${d.unknownBy[0] ? ` (${d.unknownBy[0].label} is not on file for them)` : ''}`;
+  // who could not be checked stays out of the answer when someone matched: the student asked who fits
+  if (!sure && !likely && d.unknownBy[0])
+    s += `. ${d.unknownBy[0].label} is not on file for most of your network`;
   if (d.relaxed) s += `. Loosened: ${d.relaxed}`;
   return `${s}.`;
 }
 
 function forModel(d: Awaited<ReturnType<typeof tableData>>) {
+  const found = d.counts.strong + d.counts.likely;
   return {
     setId: d.setId,
-    counts: d.counts,
+    // who could not be checked is only for explaining an empty answer
+    counts: found ? { strong: d.counts.strong, likely: d.counts.likely } : d.counts,
+    replyStyle:
+      'The card already lists everyone. Answer in one or two short sentences: how many match, then name the two or three the student is closest to or talked with most recently, with their company. Write names exactly as given. Do not mention people who could not be checked.',
     notes: d.notes,
     relaxed: d.relaxed,
     unsupported: d.unsupported,
-    notOnFile: d.unknownBy,
+    notOnFile: found ? undefined : d.unknownBy,
     stillToCheck: d.remaining,
     judgeFailed: d.judgeFailed || undefined,
     profilesReadNow: d.profilesRead || undefined,

@@ -127,6 +127,9 @@ export function evaluateDoc(
       if (!j || !(c.answer === 'likely' || (c.answer === 'unknown' && c.signal === 'hint'))) continue;
       // a judge yes or no lands as yes or no; its "likely" leaves a likely as it was and lifts an unknown
       if (j.answer === 'unknown') continue;
+      // a no that only quotes the words Orbit already weighed for this check ("CTO at Opalite Health (YC W26)",
+      // which made "founder" likely) adds nothing but the model's guess, so it cannot overturn the likely
+      if (j.answer === 'no' && c.answer === 'likely' && quotesOnly(c.evidence, j.quote)) continue;
       checks[i] = {
         ...c,
         answer: j.answer,
@@ -191,6 +194,21 @@ export function evaluateDoc(
   };
 }
 
+const foldQuote = (s: string) =>
+  s
+    .toLowerCase()
+    .replace(/[\u2018\u2019]/g, "'")
+    .replace(/[\u201c\u201d"]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+/** The judge's quote is (part of) the evidence the check already rests on. */
+export function quotesOnly(evidence: string | undefined, quote: string | undefined): boolean {
+  if (!evidence || !quote) return false;
+  const q = foldQuote(quote);
+  return q.length > 0 && foldQuote(evidence).includes(q);
+}
+
 const BAND_ORDER: Record<Band, number> = { strong: 0, likely: 1, unchecked: 2, no: 3 };
 
 /** Order rows: bands never mix; inside a band, `sort` or evidence, fit, then warmth. */
@@ -226,10 +244,20 @@ export function orderRows(rows: Row[], spec: QuerySpec, opts: RunOptions = {}): 
             fitOf(b) - fitOf(a) ||
             a.name.localeCompare(b.name)
           );
+        // a topic or a free-text criterion ranks by how well it fits; otherwise the people the student actually knows
+        // and talks to come first (a list of 77 founders should open with the ones they message, not with "A")
+        if (spec.keywords?.terms.length || spec.criteria?.length)
+          return (
+            b.evidenceRank - a.evidenceRank ||
+            fitOf(b) - fitOf(a) ||
+            b.warmth - a.warmth ||
+            a.name.localeCompare(b.name)
+          );
         return (
+          b.warmth - a.warmth ||
+          recent(b) - recent(a) ||
           b.evidenceRank - a.evidenceRank ||
           fitOf(b) - fitOf(a) ||
-          b.warmth - a.warmth ||
           a.name.localeCompare(b.name)
         );
     }

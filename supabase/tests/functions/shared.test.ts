@@ -283,11 +283,37 @@ describe('sessions', () => {
     expect(stored[0]!.refresh_hash).not.toBe(s.refreshToken);
     const r = await refreshSession(t.db, cfg, s.refreshToken);
     expect(r?.sessionId).toBe(s.sessionId);
-    expect(await refreshSession(t.db, cfg, s.refreshToken)).toBeNull();
+    expect(r?.refreshToken).not.toBe(s.refreshToken);
     expect(await authenticate(t.db, cfg, `Bearer ${r!.accessToken}`)).toMatchObject({ userId: u });
     expect(await revokeSession(t.db, r!.refreshToken)).toBe(true);
     await expect(authenticate(t.db, cfg, `Bearer ${r!.accessToken}`)).rejects.toMatchObject({ status: 401 });
     await expect(authenticate(t.db, cfg, null)).rejects.toMatchObject({ status: 401 });
+  });
+
+  it('a refresh whose answer was lost, or a second tab, gets the same new token instead of ending the session', async () => {
+    const u = await makeUser(t.db);
+    const s = await createSession(t.db, cfg, u);
+    const a = await refreshSession(t.db, cfg, s.refreshToken);
+    const again = await refreshSession(t.db, cfg, s.refreshToken);
+    expect(again?.refreshToken).toBe(a!.refreshToken);
+    // the chain goes on from the new token, and then the first one is spent
+    const b = await refreshSession(t.db, cfg, a!.refreshToken);
+    expect(b?.refreshToken).not.toBe(a!.refreshToken);
+    expect(await refreshSession(t.db, cfg, s.refreshToken)).toBeNull();
+    expect((await refreshSession(t.db, cfg, a!.refreshToken))?.refreshToken).toBe(b!.refreshToken);
+  });
+
+  it('a replaced token is only good for three days, and never after sign-out', async () => {
+    const u = await makeUser(t.db);
+    const s = await createSession(t.db, cfg, u);
+    const a = await refreshSession(t.db, cfg, s.refreshToken);
+    const late = { ...cfg, now: () => new Date(Date.now() + 4 * 86_400_000) };
+    expect(await refreshSession(t.db, late, s.refreshToken)).toBeNull();
+    expect(await refreshSession(t.db, late, a!.refreshToken)).not.toBeNull();
+    const s2 = await createSession(t.db, cfg, u);
+    await refreshSession(t.db, cfg, s2.refreshToken);
+    expect(await revokeSession(t.db, s2.refreshToken)).toBe(true);
+    expect(await refreshSession(t.db, cfg, s2.refreshToken)).toBeNull();
   });
 
   it('expires refresh tokens after 30 days', async () => {

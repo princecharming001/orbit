@@ -23,7 +23,12 @@ export function sharedClaudeUrl(): string | undefined {
 
 /** The active pause, or undefined once it has passed. */
 export function sharedClaudePause(now = new Date()): { until: string; reason: string } | undefined {
-  const p = readPrefs().sharedClaudePause;
+  const stored = readPrefs().sharedClaudePause;
+  // the allowance is per day now: a pause kept from the old one-time allowance ends at the next UTC midnight
+  const p =
+    stored?.reason === 'budget' && Date.parse(stored.until) > nextUtcMidnight(now).getTime()
+      ? { ...stored, until: nextUtcMidnight(now).toISOString() }
+      : stored;
   return p && new Date(p.until).getTime() > now.getTime() ? p : undefined;
 }
 
@@ -35,16 +40,21 @@ export function sharedClaudeAvailable(now = new Date()): boolean {
 
 /**
  * Pause the shared access after it refused: until the next UTC midnight for a daily limit, an hour when the server
- * is not set up, and for a long while once this student has used their whole allowance ($30 until it is raised;
- * clearing the pause in Settings, or raising the cap, brings it back).
+ * is not set up, and until the next UTC day once this student has used the day's allowance ($20 a day).
  */
+function nextUtcMidnight(now: Date): Date {
+  const d = new Date(now);
+  d.setUTCHours(0, 0, 0, 0);
+  d.setUTCDate(d.getUTCDate() + 1);
+  return d;
+}
+
 export function pauseSharedClaude(
   reason: 'day' | 'global' | 'unconfigured' | 'budget',
   now = new Date(),
 ): void {
   const until = new Date(now);
   if (reason === 'unconfigured') until.setTime(now.getTime() + 60 * 60_000);
-  else if (reason === 'budget') until.setTime(now.getTime() + 30 * 24 * 3600_000);
   else {
     until.setUTCHours(0, 0, 0, 0);
     until.setUTCDate(until.getUTCDate() + 1);

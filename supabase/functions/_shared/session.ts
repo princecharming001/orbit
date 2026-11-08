@@ -1,17 +1,21 @@
 /**
  * Orbit sessions (§11.2): an HS256 access token `{sub: user_id, sid: session_id, aud: "orbit", iat, exp: +1h}` signed
  * with ORBIT_SESSION_SECRET, and a 30-day refresh token (32 random bytes, base64url) stored only as its sha256 in
- * orbit.sessions and rotated on every refresh. Login codes (the one-time code the OAuth callback hands the SPA) live
+ * orbit.sessions and rotated on every refresh. A rotated token is derived from the one it replaces (an HMAC with the
+ * session secret), and the replaced one stays good for REFRESH_GRACE_DAYS, giving back that same new token: a refresh
+ * whose answer never reached the browser, or two tabs refreshing at once, no longer ends the session. Login codes (the one-time code the OAuth callback hands the SPA) live
  * here too: 32 random bytes, stored hashed, valid for 2 minutes, usable once.
  */
 import { jwtVerify, SignJWT } from 'jose';
-import { fromBase64, isUuid, randomToken, sha256Hex } from './crypto.ts';
+import { base64url, fromBase64, isUuid, randomToken, sha256Hex } from './crypto.ts';
 import type { Db } from './db.ts';
 import { unauthorized } from './http.ts';
 
 export const ACCESS_TTL_SEC = 3600;
 export const REFRESH_TTL_DAYS = 30;
 export const LOGIN_CODE_TTL_SEC = 120;
+/** How long a replaced refresh token can still be redeemed (for the same new token). */
+export const REFRESH_GRACE_DAYS = 3;
 const AUDIENCE = 'orbit';
 
 export interface SessionConfig {
@@ -94,9 +98,27 @@ export async function createSession(
   return { accessToken: access.token, refreshToken, expiresAt: access.expiresAt, sessionId: row!.id };
 }
 
+/** The token that replaces `refreshToken`: the same every time, and only the server (with the secret) can make it. */
+export async function nextRefreshToken(cfg: SessionConfig, refreshToken: string): Promise<string> {
+  const key = await crypto.subtle.importKey(
+    'raw',
+    new Uint8Array(sessionKey(cfg.secret)),
+    { name: 'HMAC', hash: 'SHA-256' },
+    false,
+    ['sign'],
+  );
+  const mac = await crypto.subtle.sign(
+    'HMAC',
+    key,
+    new TextEncoder().encode(`orbit-refresh:${refreshToken}`),
+  );
+  return base64url(new Uint8Array(mac));
+}
+
 /**
- * Rotates a refresh token: the old one stops working in the same statement that issues the new one, so a token
- * can be redeemed once. Null when the token is unknown, expired, revoked, or its user is gone.
+ * Rotates a refresh token. The current token is replaced by its derived successor; the token it replaced stays good
+ * for REFRESH_GRACE_DAYS and gives back that same successor (so a lost answer or a second tab costs nothing). Null when
+ * the token is unknown, older than that, expired, revoked, or its user is gone.
  */
 export async function refreshSession(
   db: Db,
@@ -105,14 +127,23 @@ export async function refreshSession(
 ): Promise<(Tokens & { userId: string }) | null> {
   if (typeof refreshToken !== 'string' || refreshToken.length < 20 || refreshToken.length > 200) return null;
   const now = (cfg.now ?? (() => new Date()))();
-  const next = randomToken(32);
+  const next = await nextRefreshToken(cfg, refreshToken);
+  const oldHash = await sha256Hex(refreshToken);
+  const nextHash = await sha256Hex(next);
   const expires = new Date(now.getTime() + REFRESH_TTL_DAYS * 86_400_000);
+  const graceFrom = new Date(now.getTime() - REFRESH_GRACE_DAYS * 86_400_000);
+  // the current token rotates; the one just replaced (asked again within the grace) only renews the same successor
   const [row] = await db.sql<{ id: string; user_id: string }>`
     update orbit.sessions s
-       set refresh_hash = ${await sha256Hex(next)}, last_used_at = ${now}::timestamptz, expires_at = ${expires}::timestamptz
+       set prev_refresh_hash = case when s.refresh_hash = ${oldHash} then ${oldHash} else s.prev_refresh_hash end,
+           rotated_at = case when s.refresh_hash = ${oldHash} then ${now}::timestamptz else s.rotated_at end,
+           refresh_hash = ${nextHash}, last_used_at = ${now}::timestamptz, expires_at = ${expires}::timestamptz
       from orbit.users u
-     where s.refresh_hash = ${await sha256Hex(refreshToken)} and s.revoked_at is null
-       and s.expires_at > ${now}::timestamptz and u.id = s.user_id and u.deleted_at is null
+     where (s.refresh_hash = ${oldHash}
+            or (s.prev_refresh_hash = ${oldHash} and s.refresh_hash = ${nextHash}
+                and s.rotated_at > ${graceFrom}::timestamptz))
+       and s.revoked_at is null and s.expires_at > ${now}::timestamptz
+       and u.id = s.user_id and u.deleted_at is null
     returning s.id, s.user_id`;
   if (!row) return null;
   const access = await signAccess(cfg, { userId: row.user_id, sessionId: row.id });
@@ -130,7 +161,8 @@ export async function revokeSession(db: Db, refreshToken: string, now = new Date
   if (typeof refreshToken !== 'string' || !refreshToken) return false;
   const rows = await db.sql`
     update orbit.sessions set revoked_at = ${now}::timestamptz
-     where refresh_hash = ${await sha256Hex(refreshToken)} and revoked_at is null
+     where (refresh_hash = ${await sha256Hex(refreshToken)} or prev_refresh_hash = ${await sha256Hex(refreshToken)})
+       and revoked_at is null
     returning id`;
   return rows.length > 0;
 }

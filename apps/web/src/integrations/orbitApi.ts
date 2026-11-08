@@ -570,6 +570,9 @@ async function adopt(
 ) {
   tokens = { accessToken: s.accessToken, refreshToken: s.refreshToken, expiresAt: s.expiresAt };
   if (user) account = user;
+  // the rotated refresh token is always stored, with the user from memory or from what was stored before (a tab that
+  // heard "signed out" mid-refresh used to keep the new token in memory only, and lost the session on reload)
+  account ??= (await readLocalRow<StoredSession>(SESSION_ROW))?.user;
   if (account)
     await writeLocalRow(SESSION_ROW, { refreshToken: s.refreshToken, user: account } satisfies StoredSession);
   announce({ type: 'tokens', ...s, user: account });
@@ -661,10 +664,12 @@ export async function callApi<R extends ClientRoute>(
       return failure('signed_out', 'Your Orbit session ended. Sign in with Google again.', { status: 401 });
     res = await rawCall(route, body, { token: tokens.accessToken, method, signal: opts.signal });
     if (!(res instanceof Response)) return res;
-    if (res.status === 401) {
-      await clearSession();
-      return failure('signed_out', 'Your Orbit session ended. Sign in with Google again.', { status: 401 });
-    }
+    // a fresh token refused by one route says something about that route, not the session: keep the session (a
+    // refresh the server refuses is what ends it, in refreshSession)
+    if (res.status === 401)
+      return failure('signed_out', 'Orbit could not confirm your session for this. Try again in a moment.', {
+        status: 401,
+      });
   }
   return interpret<ApiRoutes[R][1]>(res);
 }

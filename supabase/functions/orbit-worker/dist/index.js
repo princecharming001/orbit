@@ -24821,6 +24821,39 @@ function ycOssFact(c, asOf) {
   if (asOf) f.asOf = asOf;
   return f;
 }
+function ycCompanyUrl(slug) {
+  return slug && /^[a-z0-9][a-z0-9-]{0,120}$/.test(slug) ? `https://www.ycombinator.com/companies/${slug}` : void 0;
+}
+var ENTITIES3 = { quot: '"', amp: "&", apos: "'", lt: "<", gt: ">", nbsp: " " };
+function unescapeHtml(s) {
+  return s.replace(/&(#x[0-9a-f]+|#\d+|[a-z]+);/gi, (m, e) => {
+    if (e[0] === "#")
+      return String.fromCodePoint(
+        e[1] === "x" || e[1] === "X" ? Number.parseInt(e.slice(2), 16) : Number(e.slice(1))
+      );
+    return ENTITIES3[e.toLowerCase()] ?? m;
+  });
+}
+function parseYcFounders(html) {
+  const m = /data-page="([^"]+)"/.exec(html);
+  if (!m?.[1]) return void 0;
+  let data;
+  try {
+    data = JSON.parse(unescapeHtml(m[1]));
+  } catch {
+    return void 0;
+  }
+  const list2 = data?.props?.company?.founders;
+  if (!Array.isArray(list2)) return void 0;
+  const out = [];
+  for (const f of list2) {
+    const name = clip2(f?.full_name, 120);
+    if (!name) continue;
+    const title = clip2(f?.title, 80);
+    out.push({ name, ...title ? { title } : {}, ...f?.is_active === false ? { active: false } : {} });
+  }
+  return out.slice(0, 12);
+}
 
 // supabase/functions/_shared/search/companyFacts.ts
 var MIN_COMPANIES = 3e3;
@@ -24840,7 +24873,8 @@ function factRow(c) {
     teamSize: f.teamSize ?? null,
     industries: f.industries ?? [],
     oneLiner: f.oneLiner ?? null,
-    ambiguousName: !!f.ambiguousName
+    ambiguousName: !!f.ambiguousName,
+    slug: ycCompanyUrl(c.slug) ? c.slug : null
   };
 }
 async function syncCompanyFacts(db2, doFetch, now) {
@@ -24863,11 +24897,11 @@ async function syncCompanyFacts(db2, doFetch, now) {
     const part = rows.slice(i, i + BATCH_ROWS);
     await db2.sql`
       insert into orbit_private.company_facts (source, source_id, key, name, former_names, website, yc_batch, yc_status,
-        yc_stage, team_size, industries, one_liner, ambiguous_name, as_of, updated_at)
+        yc_stage, team_size, industries, one_liner, ambiguous_name, yc_slug, as_of, updated_at)
       select 'yc', r.source_id, r.key, r.name,
              array(select jsonb_array_elements_text(r.former_names)), r.website, r.yc_batch, r.yc_status, r.yc_stage,
              r.team_size, array(select jsonb_array_elements_text(r.industries)), r.one_liner, r.ambiguous_name,
-             ${asOf}::date, now()
+             r.yc_slug, ${asOf}::date, now()
         from jsonb_to_recordset(${JSON.stringify(
       part.map((r) => ({
         source_id: r.sourceId,
@@ -24881,25 +24915,100 @@ async function syncCompanyFacts(db2, doFetch, now) {
         team_size: r.teamSize,
         industries: r.industries,
         one_liner: r.oneLiner,
-        ambiguous_name: r.ambiguousName
+        ambiguous_name: r.ambiguousName,
+        yc_slug: r.slug
       }))
     )}::jsonb) as r(source_id text, key text, name text, former_names jsonb, website text, yc_batch text,
-             yc_status text, yc_stage text, team_size int, industries jsonb, one_liner text, ambiguous_name boolean)
+             yc_status text, yc_stage text, team_size int, industries jsonb, one_liner text, ambiguous_name boolean,
+             yc_slug text)
       on conflict (source, source_id) do update set
         key = excluded.key, name = excluded.name, former_names = excluded.former_names, website = excluded.website,
         yc_batch = excluded.yc_batch, yc_status = excluded.yc_status, yc_stage = excluded.yc_stage,
         team_size = excluded.team_size, industries = excluded.industries, one_liner = excluded.one_liner,
-        ambiguous_name = excluded.ambiguous_name, as_of = excluded.as_of, updated_at = now()
-      -- unchanged companies keep their updated_at, so the browser's incremental pull stays small
+        ambiguous_name = excluded.ambiguous_name, as_of = excluded.as_of, updated_at = now(),
+        yc_slug = coalesce(excluded.yc_slug, company_facts.yc_slug)
+      -- unchanged companies keep their updated_at, so the browser's incremental pull stays small (the slug alone is
+      -- not something the browser reads, so it is filled in below without touching updated_at)
       where (company_facts.key, company_facts.name, company_facts.former_names, company_facts.website,
              company_facts.yc_batch, company_facts.yc_status, company_facts.yc_stage, company_facts.team_size,
              company_facts.industries, company_facts.one_liner, company_facts.ambiguous_name)
         is distinct from (excluded.key, excluded.name, excluded.former_names, excluded.website, excluded.yc_batch,
              excluded.yc_status, excluded.yc_stage, excluded.team_size, excluded.industries, excluded.one_liner,
              excluded.ambiguous_name)`;
+    await db2.sql`
+      update orbit_private.company_facts c set yc_slug = r.yc_slug
+        from jsonb_to_recordset(${JSON.stringify(
+      part.filter((r) => r.slug).map((r) => ({ source_id: r.sourceId, yc_slug: r.slug }))
+    )}::jsonb) as r(source_id text, yc_slug text)
+       where c.source = 'yc' and c.source_id = r.source_id and c.yc_slug is distinct from r.yc_slug`;
     written += part.length;
   }
   return { fetched: list2.length, written };
+}
+var FOUNDERS_REREAD_DAYS = 30;
+var FOUNDER_FETCH_MS = 6e3;
+var FOUNDER_PARALLEL = 4;
+async function syncYcFounders(db2, doFetch, opts) {
+  const clock = opts.clock ?? Date.now;
+  const due = await db2.sql`
+    with mine as (
+      select distinct c.source_id
+        from orbit.organizations o
+        join orbit_private.company_facts c
+          on c.source = 'yc' and (c.key = o.name_norm or c.key = regexp_replace(o.name_norm, '\s*\(?\s*yc\M.*$', ''))
+       where (${opts.userId ?? null}::uuid is null or o.user_id = ${opts.userId ?? null}::uuid)
+    )
+    select c.source_id, c.yc_slug
+      from orbit_private.company_facts c
+      left join mine m on m.source_id = c.source_id
+     where c.source = 'yc' and c.yc_slug is not null
+       and (c.founders_at is null or c.founders_at < now() - make_interval(days => ${FOUNDERS_REREAD_DAYS}))
+       and (${!!opts.networkOnly} = false or m.source_id is not null)
+     order by (m.source_id is not null) desc, c.founders_at nulls first, c.yc_batch desc nulls last, c.source_id
+     limit ${opts.n}`;
+  const out = { read: 0, listed: 0, failed: 0 };
+  let next = 0;
+  const one = async (row) => {
+    const url = ycCompanyUrl(row.yc_slug);
+    if (!url) return;
+    let status = 0;
+    let html = "";
+    try {
+      const ctl = new AbortController();
+      const timer = setTimeout(() => ctl.abort(), FOUNDER_FETCH_MS);
+      try {
+        const res = await doFetch(url, {
+          headers: { accept: "text/html", "user-agent": "Orbit/1.0 (+https://tryorbit.today)" },
+          signal: ctl.signal
+        });
+        status = res.status;
+        html = res.ok ? await res.text() : "";
+      } finally {
+        clearTimeout(timer);
+      }
+    } catch {
+      out.failed++;
+      return;
+    }
+    const founders = status === 404 ? [] : parseYcFounders(html);
+    if (!founders) {
+      out.failed++;
+      return;
+    }
+    out.read++;
+    if (founders.length) out.listed++;
+    await db2.sql`
+      update orbit_private.company_facts
+         set founders = ${JSON.stringify(founders)}::jsonb, founders_at = now(),
+             updated_at = case when founders is distinct from ${JSON.stringify(founders)}::jsonb then now()
+                               else updated_at end
+       where source = 'yc' and source_id = ${row.source_id}`;
+  };
+  const worker = async () => {
+    while (next < due.length && clock() + FOUNDER_FETCH_MS < opts.deadline) await one(due[next++]);
+  };
+  await Promise.all(Array.from({ length: Math.min(FOUNDER_PARALLEL, due.length) }, worker));
+  return out;
 }
 
 // packages/core/src/search/reading.ts
@@ -25563,9 +25672,12 @@ function searchHandlers(deps) {
   const doFetch = deps.fetch ?? fetch;
   return {
     company_facts_sync: async (_job, ctx) => {
+      const clock = deps.clock ?? Date.now;
+      const started = clock();
       const r = await syncCompanyFacts(ctx.db, doFetch, ctx.now());
       if (r.skipped === "fetch_failed") throw new Error("yc-oss fetch failed");
       if (r.skipped) throw new JobSkipped(r.skipped);
+      await syncYcFounders(ctx.db, doFetch, { userId: null, n: 80, deadline: started + 45e3, clock });
     },
     search_census: async (job, ctx) => {
       const userId = job.userId;
@@ -25600,6 +25712,14 @@ function searchHandlers(deps) {
       if (!acct?.externalAccountId) throw new JobSkipped("not_connected");
       if (acct.status !== "active") throw new JobSkipped(acct.status);
       await ctx.queue.setVt(job.queue, job.msgId, LONG_VT_SEC);
+      const clock = deps.clock ?? Date.now;
+      const founders = syncYcFounders(ctx.db, doFetch, {
+        userId,
+        n: 16,
+        deadline: clock() + 4e4,
+        clock,
+        networkOnly: true
+      }).catch(() => void 0);
       await runReadingStep(
         ctx.db,
         {
@@ -25615,6 +25735,7 @@ function searchHandlers(deps) {
         acct.externalAccountId,
         ctx.now()
       );
+      await founders;
     }
   };
 }

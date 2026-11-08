@@ -100,16 +100,16 @@ describe('the proxy: memory and resume reads', () => {
     expect(keys).toHaveLength(4);
     expect(keys.some((k) => k.startsWith('orbit:day:'))).toBe(true);
     expect(keys.some((k) => k.startsWith('orbit:memory:'))).toBe(true);
-    expect(taken[0]!.find((b) => b.key.startsWith('orbit:memory:'))!.limit).toBe(200);
+    expect(taken[0]!.find((b) => b.key.startsWith('orbit:memory:'))!.limit).toBe(3000);
   });
 
-  it('holds resumes to 5 a day by default, and the chat to its three counters', () => {
+  it('holds resumes to 50 a day by default, and the chat to its three counters', () => {
     const now = new Date('2026-10-22T12:00:00Z');
     expect(buckets('v', now, DEFAULT_LIMITS)).toHaveLength(3);
     const resume = buckets('v', now, DEFAULT_LIMITS, 'resume');
     expect(resume[3]).toEqual({
       key: 'orbit:resume:2026-10-22:v',
-      limit: 5,
+      limit: 50,
       expires: '2026-10-23T00:00:00.000Z',
     });
     expect(buckets('v', now, { ...DEFAULT_LIMITS, perDayCall: { resume: 9 } }, 'resume')[3]!.limit).toBe(9);

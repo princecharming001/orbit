@@ -26,6 +26,7 @@ import {
   Send,
   ShieldCheck,
   Target,
+  Telescope,
   Trash2,
   Upload,
   UserRound,
@@ -92,7 +93,7 @@ import { fmtFailureTime } from '../integrations/anthropic';
 import { currentGoogleToken, googleClientId } from '../integrations/google';
 import { isAccountMode, isServerUser, startGoogleSignIn } from '../integrations/orbitApi';
 import {
-  DEFAULT_DAILY_REQUEST_CAP,
+  dailyLlmCaps,
   envGoogleClientId,
   readPrefs,
   subscribePrefs,
@@ -217,7 +218,7 @@ export function SettingsPage() {
                   cx(
                     'group h-9 px-2.5 rounded-[9px] flex items-center gap-2.5 text-[13.5px] whitespace-nowrap transition-colors',
                     isActive
-                      ? 'bg-canvas text-ink font-medium shadow-[var(--shadow-pill)]'
+                      ? 'bg-canvas-2 text-ink font-medium'
                       : 'text-ink-2 hover:bg-canvas-2 hover:text-ink',
                   )
                 }
@@ -980,20 +981,12 @@ function GoogleAccountRow() {
         ) : (
           <RowStatus tone={g ? 'good' : 'muted'} testId="google-via-account-status">
             <Check size={12} /> Connected
-            {g?.email ? ` as ${g.email}` : ' through your Orbit account'}
+            {g?.email ? ` as ${g.email}` : ''}
             {g?.lastSyncedAt ? ` · synced ${relDate(g.lastSyncedAt)}` : ''}
           </RowStatus>
         )
       }
-      line={
-        signedOut ? (
-          'Orbit cannot read your email or calendar until you sign in with Google again'
-        ) : (
-          <NavLink to="/settings/account" className="underline underline-offset-2 hover:text-ink">
-            Account settings
-          </NavLink>
-        )
-      }
+      line={signedOut ? 'Sign in again to keep mail and calendar syncing' : undefined}
       actions={
         signedOut ? (
           <Button
@@ -1054,12 +1047,7 @@ function Integrations() {
   const viaAccount = isServerUser(user.id);
   const googleOffered = builtIn || !!google;
   // until the accounts are read, a connected service would show as off: the rows show their shape instead
-  const header = (
-    <SettingsHeader
-      title="Integrations"
-      description="Where Orbit finds your people and what it knows about you."
-    />
-  );
+  const header = <SettingsHeader title="Integrations" />;
   if (accountsQ === undefined)
     return (
       <>
@@ -1070,7 +1058,7 @@ function Integrations() {
   return (
     <div className="pb-10">
       {header}
-      <RowGroup title="Your network">
+      <RowGroup title="Network">
         {viaAccount ? (
           <GoogleAccountRow />
         ) : (
@@ -1089,9 +1077,7 @@ function Integrations() {
             }
             line={
               googleOffered ? undefined : (
-                <span data-testid="google-unavailable">
-                  Not part of this version of Orbit. Send from your own mail app and press I sent it.
-                </span>
+                <span data-testid="google-unavailable">Not part of this version of Orbit.</span>
               )
             }
             actions={
@@ -1177,8 +1163,7 @@ function Integrations() {
                     How?
                   </summary>
                   <span className="block mt-1">
-                    On LinkedIn: Settings, Data privacy, Get a copy of your data, Connections. Upload the file
-                    it emails you; uploading again updates people, never doubles them.
+                    On LinkedIn: Settings, Data privacy, Get a copy of your data, Connections.
                   </span>
                 </details>
               </>
@@ -1199,6 +1184,8 @@ function Integrations() {
       </RowGroup>
       <RowGroup title="About you">
         <ResumeRow user={user} resume={resume} />
+      </RowGroup>
+      <RowGroup title="AI">
         <ClaudeCard />
         <ResearchCard />
       </RowGroup>
@@ -1244,15 +1231,9 @@ function ResumeRow({ user, resume }: { user: User; resume?: Resume }) {
       }
       name="Resume"
       status={
-        <span className="text-[12px]" data-testid="resume-on-file">
-          {resume ? (
-            <span className="text-good inline-flex items-center gap-1">
-              <Check size={12} /> On file
-            </span>
-          ) : (
-            <span className="text-ink-3">No resume yet</span>
-          )}
-        </span>
+        <RowStatus tone={resume ? 'good' : 'muted'} testId="resume-on-file">
+          {resume ? 'On file' : 'No resume yet'}
+        </RowStatus>
       }
       line={
         resume ? (
@@ -1279,7 +1260,7 @@ function ResumeRow({ user, resume }: { user: User; resume?: Resume }) {
             )}
           </span>
         ) : (
-          'PDF, Word or text, up to 10 MB. Drafts mention what you have done.'
+          'PDF, Word or text'
         )
       }
       actions={
@@ -1347,15 +1328,22 @@ function ResearchCard() {
   if (!user) return null;
   return (
     <IntegrationRow
-      mark={<AppMark>R</AppMark>}
+      mark={
+        <AppMark>
+          <Telescope size={16} strokeWidth={1.75} />
+        </AppMark>
+      }
       name="Deep research"
-      status={<RowStatus>{left ? `${left.left} of ${left.limit} left this month` : 'Built in.'}</RowStatus>}
-    >
-      <p className="text-[12px] text-ink-3" data-testid="research-spend">
-        {spend?.briefs ?? 0} {spend?.briefs === 1 ? 'person' : 'people'} researched, $
-        {(spend?.usd ?? 0).toFixed(2)} this month
-      </p>
-    </IntegrationRow>
+      status={<RowStatus>{left ? `${left.left} of ${left.limit} left this month` : 'Built in'}</RowStatus>}
+      line={
+        spend?.briefs ? (
+          <span data-testid="research-spend">
+            {spend.briefs} {spend.briefs === 1 ? 'person' : 'people'} researched, ${spend.usd.toFixed(2)} this
+            month
+          </span>
+        ) : undefined
+      }
+    />
   );
 }
 
@@ -1369,7 +1357,7 @@ function ClaudeCard() {
   // Stay in step with changes made by Claude calls and by Orbit open in another tab.
   useEffect(() => subscribePrefs(setPrefs), []);
   const usage = todaysLlmUsage(prefs);
-  const reqCap = prefs.llmDailyRequestCap ?? DEFAULT_DAILY_REQUEST_CAP;
+  const reqCap = dailyLlmCaps(prefs).requests;
   const keySaved = !!prefs.anthropicApiKey;
   return (
     <IntegrationRow
@@ -1377,8 +1365,9 @@ function ClaudeCard() {
       name="Claude"
       status={
         <RowStatus testId="ai-chat-row">
-          <Check size={12} /> {keySaved ? 'Key saved.' : 'Built in.'} {usage.requests} of {reqCap} requests
-          today
+          <Check size={12} />{' '}
+          {keySaved ? `Key saved. ${usage.requests} of ${reqCap}` : `Built in. ${usage.requests}`}{' '}
+          {usage.requests === 1 && !keySaved ? 'request' : 'requests'} today
         </RowStatus>
       }
       actions={

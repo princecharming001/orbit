@@ -53,6 +53,14 @@ export type LiveSyncResult =
   | { ok: true; rows: number; added: number; updated: number; recommended: number }
   | { ok: false; reason: 'not_connected' | 'unconfigured' | 'error'; message: string };
 
+/** LinkedIn linked through Orbit's server, while this browser is signed out of Orbit. */
+export const SIGN_IN_AGAIN = 'Sign in to Orbit again to keep LinkedIn syncing. It is still connected.';
+
+/** A LinkedIn row Orbit's server linked: it holds no browser token, only the account id. */
+function serverLinked(row: { accessToken?: string; syncState?: unknown }): boolean {
+  return !row.accessToken && !!(row.syncState as { server?: boolean } | undefined)?.server;
+}
+
 /** What the UI says while the Unipile key is not pasted yet. */
 export const LIVE_SOON =
   "LinkedIn can't be connected right now. Try again in a little while, or later from Settings.";
@@ -247,6 +255,11 @@ export async function connectLinkedInLive(
   opts: { onProgress?: (count: number) => void; signal?: AbortSignal } = {},
 ): Promise<LiveConnectResult> {
   if (isServerUser(user.id)) return connectViaServer(user, opts);
+  // signed out of Orbit, with LinkedIn linked through the server: signing in again brings it back (a second Unipile
+  // account would be billed on its own and refused by the server's token check)
+  const linked = await liveLinkedInAccount(user.id);
+  if (linked && serverLinked(linked) && !usesMockConnectors(user.id))
+    return { ok: false, reason: 'error', message: SIGN_IN_AGAIN };
   let accountId: string | undefined;
   let accessToken: string | undefined;
   if (usesMockConnectors(user.id)) accountId = MOCK_ACCOUNT_ID;
@@ -507,6 +520,10 @@ async function syncLinkedInLiveOnce(
     const rows = Number((row.syncState as { rows?: number }).rows ?? 0);
     return { ok: true, rows, added: 0, updated: 0, recommended: 0 };
   }
+  // linked through Orbit's server (no browser token): only the signed-in session can sync it; reading LinkedIn from
+  // the browser would be refused (the 403 "LinkedIn did not answer"), so ask for a sign-in and leave the row as it is
+  if (serverLinked(row) && !usesMockConnectors(user.id))
+    return { ok: false, reason: 'not_connected', message: SIGN_IN_AGAIN };
   let conns: LiveConnection[];
   // the daily sync between full pulls reads the newest connections only, until one Orbit already has
   const prevRows = Number((row.syncState as { rows?: number }).rows ?? 0);

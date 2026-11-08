@@ -312,13 +312,20 @@ describe('sessions (§11.2)', () => {
     expect(((await r.json()) as { user: { id: string } }).user.id).toBe(userId);
   });
 
-  it('refresh rotates the token: the old one stops working', async () => {
+  it('refresh rotates the token: a repeat gets the same new one, and two rotations later the old one is spent', async () => {
     const { handler } = harness();
     const { refreshToken } = await signedIn();
     const r1 = await handler(req('/auth/refresh', { body: { refreshToken } }));
     expect(r1.status).toBe(200);
     const b1 = (await r1.json()) as { accessToken: string; refreshToken: string };
     expect(b1.refreshToken).not.toBe(refreshToken);
+    // the answer was lost, or a second tab asked: the same new token, and the session goes on
+    const again = await handler(req('/auth/refresh', { body: { refreshToken } }));
+    expect(again.status).toBe(200);
+    expect(((await again.json()) as { refreshToken: string }).refreshToken).toBe(b1.refreshToken);
+    expect((await handler(req('/auth/refresh', { body: { refreshToken: b1.refreshToken } }))).status).toBe(
+      200,
+    );
     expect((await handler(req('/auth/refresh', { body: { refreshToken } }))).status).toBe(401);
     expect((await handler(req('/auth/me', { token: b1.accessToken }))).status).toBe(200);
   });

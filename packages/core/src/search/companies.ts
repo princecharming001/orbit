@@ -69,6 +69,42 @@ export interface CompanyFact {
   about?: string;
   /** team size is LinkedIn's count of members who list the company (not a payroll number) */
   sizeFromLinkedIn?: boolean;
+  /** the founders YC's company page lists by name, with their titles */
+  founders?: { name: string; title?: string; active?: boolean }[];
+}
+
+const nameWords = (s: string) =>
+  s
+    .normalize('NFKD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .replace(/\([^)]*\)/g, ' ')
+    .replace(/[^a-z\s'-]/g, ' ')
+    .split(/[\s'-]+/)
+    .filter((w) => w.length > 0 && !/^(dr|mr|ms|mrs|jr|sr|ii|iii|phd|md|mba)$/.test(w));
+
+/**
+ * The founder a company's own list names, when it is this person: the same last name, and first names that are the
+ * same or one the short form of the other ("Alex" and "Alexander", at least three letters). A name alone never
+ * matches across companies; this is only asked about the company the person says they work at.
+ */
+export function listedFounder(
+  personName: string,
+  fact: Pick<CompanyFact, 'founders'> | undefined,
+): { name: string; title?: string; active?: boolean } | undefined {
+  if (!fact?.founders?.length) return undefined;
+  const p = nameWords(personName);
+  if (p.length < 2) return undefined;
+  const [pf, pl] = [p[0]!, p[p.length - 1]!];
+  return fact.founders.find((f) => {
+    const w = nameWords(f.name);
+    if (w.length < 2) return false;
+    const [ff, fl] = [w[0]!, w[w.length - 1]!];
+    if (fl !== pl) return false;
+    if (ff === pf) return true;
+    const [short, long] = ff.length <= pf.length ? [ff, pf] : [pf, ff];
+    return short.length >= 3 && long.startsWith(short);
+  });
 }
 
 /** Legal suffixes beyond core's list, ported from cleanco (MIT): matched only as the last word. */

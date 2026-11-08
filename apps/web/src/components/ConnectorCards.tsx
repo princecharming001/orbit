@@ -95,7 +95,7 @@ export function LinkedInLiveCard({ user }: { user: User }) {
             in
           </AppMark>
         }
-        name="LinkedIn (live)"
+        name="LinkedIn"
         status={
           status.connected ? (
             status.signedOut ? (
@@ -235,13 +235,13 @@ export function WarmIntrosCard({ user }: { user: User }) {
     <IntegrationRow
       testId="settings-warm-intros"
       mark={<AppMark logo="village.do">V</AppMark>}
-      name="Warm intros (Village)"
+      name="Village"
       status={
         <RowStatus tone={on && !notSetUp && !refused ? 'good' : 'muted'} testId="settings-warm-intros-status">
           {notSetUp ? (
-            "Village isn't set up"
+            'Not set up'
           ) : refused ? (
-            "Village isn't accepting Orbit's key"
+            'Key refused'
           ) : on ? (
             <>
               <Check size={12} /> On
@@ -253,14 +253,14 @@ export function WarmIntrosCard({ user }: { user: User }) {
       }
       line={
         !offered
-          ? 'Not part of this version of Orbit yet.'
+          ? 'Not available yet'
           : mock
-            ? 'On for the demo, with sample paths.'
+            ? 'Sample intro paths in the demo'
             : notSetUp
-              ? "Orbit's server has no Village key yet, so there are no intro paths from it. Your own routes still work."
+              ? "Orbit's server has no Village key yet"
               : refused
-                ? 'Village refused the key on its last lookup, so Orbit stops asking it until tomorrow. Your own routes still work.'
-                : 'Intro paths from Village; it sees the names you look up'
+                ? 'Orbit tries again tomorrow'
+                : 'Warm intro paths. Village sees the names you look up'
       }
       actions={
         offered ? (

@@ -82,13 +82,7 @@ import { villageAvailable, villageOffered, type WarmIntro, warmIntrosFor } from 
 import { hasLlm, MODEL } from '../../integrations/anthropic';
 import { currentGoogleToken, googleClientId } from '../../integrations/google';
 import { isServerUser } from '../../integrations/orbitApi';
-import {
-  DEFAULT_DAILY_REQUEST_CAP,
-  DEFAULT_DAILY_TOKEN_CAP,
-  llmFeatures,
-  readPrefs,
-  todaysLlmUsage,
-} from '../../integrations/prefs';
+import { dailyLlmCaps, llmFeatures, readPrefs, todaysLlmUsage } from '../../integrations/prefs';
 import { sharedClaudeAvailable } from '../../integrations/shared-claude';
 import { stepAddress } from '../../pages/onboardingSteps';
 import { z } from '../../zod';
@@ -1908,8 +1902,8 @@ export const getUsage = defineTool({
       features: llmFeatures(prefs),
       today: { requests: usage.requests, tokens: usage.inputTokens + usage.outputTokens },
       caps: {
-        requestsPerDay: prefs.llmDailyRequestCap ?? DEFAULT_DAILY_REQUEST_CAP,
-        tokensPerDay: prefs.llmDailyTokenCap ?? DEFAULT_DAILY_TOKEN_CAP,
+        requestsPerDay: dailyLlmCaps(prefs).requests,
+        tokensPerDay: dailyLlmCaps(prefs).tokens,
       },
       lastError: prefs.lastLlmError
         ? { at: fmtWhen(prefs.lastLlmError.at, ctx), message: prefs.lastLlmError.message }

@@ -25,7 +25,7 @@ import {
 } from '@orbit/core';
 import { db, type LocalMemory } from '../db/schema';
 import { claudeReachable, llmExtractMemories, overDailyCap } from '../integrations/anthropic';
-import { DEFAULT_DAILY_REQUEST_CAP, readPrefs, todaysLlmUsage } from '../integrations/prefs';
+import { dailyLlmCaps, readPrefs, todaysLlmUsage } from '../integrations/prefs';
 import { applyRecruitingTargets, type RecruitingChange } from './goals';
 import { MEMORY_KINDS } from './memory';
 import { localForget, localMemories, localRemember } from './memoryLocal';
@@ -49,7 +49,7 @@ const KEEP_FOR_CHAT = 5;
 function budgetLeft(): boolean {
   if (overDailyCap()) return false;
   const p = readPrefs();
-  const cap = p.llmDailyRequestCap ?? DEFAULT_DAILY_REQUEST_CAP;
+  const cap = dailyLlmCaps(p).requests;
   return cap - todaysLlmUsage(p).requests > KEEP_FOR_CHAT;
 }
 

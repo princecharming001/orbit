@@ -10,6 +10,7 @@ import {
   industryTerms,
   keysFor,
   kindOfOrg,
+  listedFounder,
   matchFacts,
   orgKey,
   parentOf,
@@ -316,6 +317,7 @@ function checkRole(
   c: CompiledPosition,
   kindHint: ReturnType<typeof kindOfOrg>,
   startup = false,
+  listed = false,
 ): Answer {
   if (!spec) return 'yes';
   const parts: Answer[] = [];
@@ -345,7 +347,9 @@ function checkRole(
     else parts.push('no');
   }
   if (spec.founder) {
-    if (role.founder && !role.club && kindHint !== 'student_org' && kindHint !== 'university')
+    // the company's own founder list (YC's page) names them: that settles it, whatever their title says
+    if (listed) parts.push('yes');
+    else if (role.founder && !role.club && kindHint !== 'student_org' && kindHint !== 'university')
       parts.push(role.weak ? 'likely' : 'yes');
     else if (startup && !role.club && FOUNDERISH_TITLE.test(role.title ?? '')) parts.push('likely');
     else parts.push(hasTitle || role.earlyEmployee || role.club ? 'no' : 'unknown');
@@ -500,8 +504,11 @@ export function checkPosition(doc: PersonDoc, c: CompiledPosition, ctx: SearchCo
     const kind = role.club ? 'student_org' : kindOfOrg(role.org, fact);
     // a CEO or CTO of a YC company (or a small startup Orbit has facts for) is most often one of its founders
     const startup = role.saysYc || !!fact?.ycBatch || (fact?.teamSize !== undefined && fact.teamSize <= 50);
-    const r = checkRole(role, p.role, c, kind, startup);
+    const founderListed = p.role?.founder ? listedFounder(doc.name, fact) : undefined;
+    const r = checkRole(role, p.role, c, kind, startup, !!founderListed);
     const co = checkCompany(role, p.company, c, ctx, text, doc);
+    if (founderListed)
+      co.evidence = `${co.evidence} (YC lists ${doc.name.split(' ')[0]} as ${founderListed.title?.trim() || 'a founder'})`;
     const time = andAll([
       withinYears(role.start, p.startedWithinYears, ctx.now),
       withinYears(role.end, p.endedWithinYears, ctx.now),

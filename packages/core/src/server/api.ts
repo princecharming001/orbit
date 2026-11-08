@@ -995,6 +995,15 @@ export interface CompanyFactWire {
     | 'student_org';
   /** the company's LinkedIn About, cut short */
   about?: string;
+  /** the founders YC's company page lists, with the title each gives (a YC company only) */
+  founders?: CompanyFounderWire[];
+}
+
+export interface CompanyFounderWire {
+  name: string;
+  title?: string;
+  /** false when YC marks them as no longer at the company */
+  active?: boolean;
 }
 
 export interface CompanyFactsResponse {
