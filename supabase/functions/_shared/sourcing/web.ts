@@ -5,6 +5,10 @@
  * email exactly as the page writes it, what they work on, a lab page when linked. Each becomes a Candidate with
  * `email`, `url` and `evidence`, the lines a first message is written from.
  *
+ * An ask that names no place is not searched for the whole world: for advice and collaboration the student's own
+ * school stands in (its people share the student's background), and only when every other source found nobody
+ * does a last pass search by the subject alone (search.ts relaxes `place`).
+ *
  * Who searches is the same chain as deep research (research/web.ts): Exa when its key is set, Claude's own web search
  * and fetch otherwise, both through the shared 7-day cache. Nothing here guesses an email: a person the page lists
  * without one comes back without one.
@@ -23,6 +27,7 @@ import {
   type WebSource,
 } from '../research/web';
 import type { Candidate, SourcingGoal } from './search';
+import { isSchoolOrg } from './warmth';
 
 export const WEB_PROMPT_VERSION = 'sourcing-web-v1.0';
 /** pages read at most in one run */
@@ -44,6 +49,18 @@ export interface WebAsk {
   place: string;
   subject: string;
   role?: string;
+  /** no place was named: the student's own school stood in, so the people found share their background */
+  assumedPlace?: boolean;
+  /** no place at all: the subject alone drives the searches, the last pass when nothing else found anyone */
+  broad?: boolean;
+}
+
+/** How a place may be filled in when the ask names none. */
+export interface WebAskOptions {
+  /** stands in for a missing place (the student's school) */
+  fallbackPlace?: string;
+  /** allow an ask with no place at all */
+  broad?: boolean;
 }
 
 const ROLE_WORDS =
@@ -54,7 +71,7 @@ const ROLE_WORDS =
  * neither filter named a place, the query is read for "… at <place>" or "<place> <subject>" ("berkeley biomed
  * professors"); undefined when no place can be told, so the web is not searched for the whole world.
  */
-export function webAsk(goal: SourcingGoal): WebAsk | undefined {
+export function webAsk(goal: SourcingGoal, opts: WebAskOptions = {}): WebAsk | undefined {
   const text = [goal.topic, goal.title, ...(goal.keywords ?? [])].filter(Boolean).join(' ').trim();
   const role = text.match(ROLE_WORDS)?.[1]?.toLowerCase();
   let place = (goal.school ?? goal.orgs?.[0] ?? '').trim();
@@ -65,11 +82,20 @@ export function webAsk(goal: SourcingGoal): WebAsk | undefined {
     );
     if (at?.[1]) place = at[1].replace(/^the\s+/i, '').trim();
   }
-  if (!place) return undefined;
+  let assumedPlace = false;
+  if (!place && opts.fallbackPlace?.trim()) {
+    place = opts.fallbackPlace.trim();
+    assumedPlace = true;
+  }
+  if (!place && !opts.broad) return undefined;
   // the subject is the ask without the place and the role words
-  subject = subject
-    .replace(new RegExp(`\\b(?:at|@|from)\\s+${escapeRe(place)}\\b`, 'i'), ' ')
-    .replace(new RegExp(`\\b${escapeRe(place)}\\b`, 'i'), ' ')
+  subject = (
+    place
+      ? subject
+          .replace(new RegExp(`\\b(?:at|@|from)\\s+${escapeRe(place)}\\b`, 'i'), ' ')
+          .replace(new RegExp(`\\b${escapeRe(place)}\\b`, 'i'), ' ')
+      : subject
+  )
     .replace(ROLE_WORDS, ' ')
     .replace(
       /\b(?:i can|i could|i should|reach out to|write to|talk to|to|contact|email|cold email|source|find|some|a few|new|me|who)\b/gi,
@@ -81,23 +107,57 @@ export function webAsk(goal: SourcingGoal): WebAsk | undefined {
     .replace(/\s+(?:for|about|on|in|at)$/i, '')
     .trim();
   if (!subject) subject = goal.roles?.[0] ?? role ?? 'people';
-  return { place, subject, role };
+  // "people" and no place is the whole world, not a search
+  if (!place && subject === 'people') return undefined;
+  return {
+    place,
+    subject,
+    role,
+    ...(assumedPlace ? { assumedPlace: true } : {}),
+    ...(place ? {} : { broad: true }),
+  };
 }
 
 const escapeRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
-/** Three or four searches: the directory, the labs, the people page, each with the place and the subject. */
+const ACADEMIC_ROLE = /professor|faculty|pi\b|investigator|postdoc|phd|researcher|scientist/;
+
+/** Whether the ask is for academics: a faculty-like role, or a school as the place. */
+export function isAcademic(ask: WebAsk): boolean {
+  if (ask.role && ACADEMIC_ROLE.test(ask.role)) return true;
+  if (ask.broad) return false;
+  return !!ask.assumedPlace || isSchoolOrg(ask.place);
+}
+
+/**
+ * Three or four searches with the place and the subject: for a school the directory, the labs, the people page and the
+ * department; for a company its team and about pages and the people who write for it; with no place, the pages that
+ * list people in the subject.
+ */
 export function webQueries(ask: WebAsk): WebQuery[] {
-  const who =
-    ask.role && /professor|faculty|pi\b|investigator|postdoc|phd|researcher|scientist/.test(ask.role)
-      ? 'faculty'
-      : (ask.role ?? 'team');
-  const qs = [
-    { id: 'directory', query: `${ask.place} ${ask.subject} ${who}` },
-    { id: 'labs', query: `${ask.place} ${ask.subject} lab research group` },
-    { id: 'people', query: `${ask.place} ${ask.subject} people directory email` },
-    { id: 'department', query: `${ask.place} department of ${ask.subject} ${who} profiles` },
-  ];
+  const faculty = !!ask.role && ACADEMIC_ROLE.test(ask.role);
+  const who = faculty ? 'faculty' : (ask.role ?? 'team');
+  const qs: WebQuery[] = ask.broad
+    ? [
+        { id: 'directory', query: `${ask.subject} ${who} directory email` },
+        { id: 'people', query: `${ask.subject} ${who} list contact` },
+        faculty || !ask.role
+          ? { id: 'labs', query: `${ask.subject} lab research group people` }
+          : { id: 'team', query: `${ask.subject} companies team page ${who}` },
+      ]
+    : isAcademic(ask)
+      ? [
+          { id: 'directory', query: `${ask.place} ${ask.subject} ${who}` },
+          { id: 'labs', query: `${ask.place} ${ask.subject} lab research group` },
+          { id: 'people', query: `${ask.place} ${ask.subject} people directory email` },
+          { id: 'department', query: `${ask.place} department of ${ask.subject} ${who} profiles` },
+        ]
+      : [
+          { id: 'team', query: `${ask.place} ${ask.subject} ${who}` },
+          { id: 'about', query: `${ask.place} team about us ${ask.subject}` },
+          { id: 'blog', query: `${ask.place} ${ask.subject} blog authors` },
+          { id: 'people', query: `${ask.place} ${ask.subject} people email` },
+        ];
   const seen = new Set<string>();
   return qs.filter((q) => {
     const k = q.query.toLowerCase().replace(/\s+/g, ' ');
@@ -120,6 +180,7 @@ export function selectPages(hits: SearchHit[], ask: WebAsk, max = WEB_MAX_PAGES)
     .filter(
       (w) => w.length >= 3 && !['the', 'university', 'college', 'school', 'institute', 'of'].includes(w),
     );
+  const academic = isAcademic(ask);
   const scored = hits
     .filter((h) => h.url && !SKIP_URL.test(h.url) && !isBlockedSource(h.url))
     .map((h) => {
@@ -131,7 +192,7 @@ export function selectPages(hits: SearchHit[], ask: WebAsk, max = WEB_MAX_PAGES)
       }
       const text = `${h.url} ${h.title ?? ''}`.toLowerCase();
       let score = 0;
-      if (/\.edu(\.|$)|\.ac\.[a-z]{2}$/.test(host)) score += 3;
+      if (academic && /\.edu(\.|$)|\.ac\.[a-z]{2}$/.test(host)) score += 3;
       if (placeTokens.some((t) => host.includes(t))) score += 3;
       if (DIRECTORY_WORDS.test(text)) score += 2;
       if (
@@ -380,7 +441,9 @@ export async function sourceFromWeb(o: WebSourcingOptions): Promise<WebSourcingR
   }
   const plan: GatherPlan = {
     queries: webQueries(o.ask),
-    focus: `the ${o.ask.role ?? 'people'} pages of ${o.ask.place} about ${o.ask.subject}: faculty or team directories, lab and group pages`,
+    focus: o.ask.broad
+      ? `pages that list ${o.ask.role ?? 'people'} working on ${o.ask.subject}: directories, team pages, lab and group pages`
+      : `the ${o.ask.role ?? 'people'} pages of ${o.ask.place} about ${o.ask.subject}: faculty or team directories, lab and group pages`,
     maxPages: o.maxPages ?? WEB_MAX_PAGES,
   };
   const gathered = await gatherFrom(o.sources, plan, {
@@ -539,7 +602,13 @@ export async function sourceFromWeb(o: WebSourcingOptions): Promise<WebSourcingR
       firstName,
       lastName: rest.join(' '),
       title: p.title?.trim() || (o.ask.role ? titleCase(o.ask.role.replace(/s$/, '')) : undefined),
-      org: p.department ? `${p.department.trim()}, ${o.ask.place}` : o.ask.place,
+      org: p.department
+        ? o.ask.broad
+          ? p.department.trim()
+          : `${p.department.trim()}, ${o.ask.place}`
+        : o.ask.broad
+          ? undefined
+          : o.ask.place,
       headline: worksOn.join(', ') || undefined,
       email: p.email ?? undefined,
       url: page.url,

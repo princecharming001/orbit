@@ -19,13 +19,14 @@ import { GOAL_KINDS, type Person } from '@orbit/core/types';
 import type { Db } from '../db.ts';
 import { HttpError } from '../http.ts';
 import { bestReach, ensurePerson, loadGraph, resolvePersonRef, type UserGraph } from '../paths/find.ts';
-import { cleanLinkedInUrl } from '../providers/unipileResearch';
+import { cleanLinkedInUrl, linkedInSlugOf } from '../providers/unipileResearch';
 import { claudeDep, sqlBudget } from '../research/bind.ts';
-import { norm } from '../research/guards';
+import { norm, normOrg } from '../research/guards';
 import { claudeWeb, exaWeb, GATHER_MODEL, sqlSharedCache, type WebSource } from '../research/web';
 import { firstNameOf } from '../rows.ts';
 import type { Services } from '../services.ts';
-import { dnsMx, fillEmails, type KnownAddress } from './email';
+import { dnsMx, fillEmails, type KnownAddress, orgDomainsOf } from './email';
+import { indexKnown, type KnownRow, matchKnown } from './known';
 import {
   type Candidate,
   type RecommendationRow,
@@ -34,7 +35,10 @@ import {
   sourcePeople,
 } from './search';
 import {
+  orgsOf,
   type StudentContext,
+  schoolIn,
+  siteDomain,
   studentFromResume,
   WARM_SCORE,
   type WarmContact,
@@ -186,6 +190,57 @@ export async function runSourcing(
   };
   const user = { school: u?.school ?? '', majors: u?.majors ?? [] };
   const ctx = await warmContext(db, userId, u, req.homeCity, g);
+  const slugOf = (c: Candidate) => linkedInSlugOf(cleanLinkedInUrl(c.linkedinUrl)) ?? undefined;
+  const uniq = (xs: (string | undefined | null)[]) => [...new Set(xs.filter((x): x is string => !!x))];
+  // every candidate against the student's people in one query, instead of two or three per candidate
+  const knownBatch = async (todo: Candidate[]) => {
+    if (!todo.length) return;
+    const slugs = uniq(todo.map((c) => slugOf(c)?.toLowerCase()));
+    const members = uniq(todo.map((c) => c.memberId));
+    const emails = uniq(todo.map((c) => (c.email ? normalizeEmail(c.email) : undefined)));
+    const names = uniq(todo.map((c) => c.name.trim().toLowerCase()));
+    const rows = await db.sql<KnownRow>`
+      select p.id, p.display_name, p.org_raw, p.headline, p.primary_email, p.linkedin_slug, p.linkedin_member_id,
+             coalesce((select array_agg(i.value_norm) from orbit.person_identities i
+                        where i.person_id = p.id and i.kind = 'email'), '{}') as emails,
+             coalesce((select array_agg(i.value_norm) from orbit.person_identities i
+                        where i.person_id = p.id and i.kind in ('linkedin_slug', 'linkedin_member')), '{}') as linkedin_ids
+        from orbit.people p
+       where p.user_id = ${userId}::uuid and p.deleted_at is null and not p.is_self
+         and (lower(p.linkedin_slug) = any(${slugs}::text[]) or p.linkedin_member_id = any(${members}::text[])
+           or lower(p.primary_email) = any(${emails}::text[]) or lower(p.display_name) = any(${names}::text[])
+           or exists (select 1 from orbit.person_identities i where i.person_id = p.id
+                       and ((i.kind = 'email' and i.value_norm = any(${emails}::text[]))
+                         or (i.kind in ('linkedin_slug', 'linkedin_member')
+                             and i.value_norm = any(${[...slugs, ...members]}::text[])))))
+       order by p.merged_into is null desc, p.id`;
+    const idx = indexKnown(rows);
+    const gr = rows.length ? await g() : undefined;
+    for (const c of todo) {
+      const hit = matchKnown(idx, c, {
+        slug: slugOf(c),
+        email: c.email ? normalizeEmail(c.email) : undefined,
+        orgDomain: orgDomainsOf(c, ctx.orgDomains)[0],
+      });
+      known.set(c.key, hit ? { personId: hit.id, score: gr?.people.get(hit.id)?.score } : null);
+    }
+  };
+  // the domain of a candidate's company from the company facts Orbit already holds (YC, LinkedIn pages), so a
+  // LinkedIn-only candidate at a known startup can get an address too
+  const domainBatch = async (todo: Candidate[]) => {
+    const keys = uniq(todo.flatMap((c) => orgsOf(c)).flatMap((o) => [norm(o), normOrg(o)])).filter(
+      (k) => k.length >= 2 && !ctx.orgDomains.has(k),
+    );
+    if (!keys.length) return;
+    const facts = await db.sql<{ key: string; website: string }>`
+      select distinct on (key) key, website from orbit_private.company_facts
+       where website is not null and not coalesce(ambiguous_name, false) and key = any(${keys.slice(0, 300)}::text[])
+       order by key, (source = 'linkedin') desc`;
+    for (const f of facts) {
+      const d = siteDomain(f.website);
+      if (d) ctx.orgDomains.set(f.key, d);
+    }
+  };
   const sGoal = sourcingGoal(req, goal);
   // the ask's own org → domain pairs come first; the student's contacts teach the rest
   sGoal.orgs?.forEach((o, i) => {
@@ -213,20 +268,27 @@ export async function runSourcing(
       responsiveness: (c) =>
         responsePrior(
           {
-            isAlumni: !!user.school && !!c.headline?.toLowerCase().includes(user.school.toLowerCase()),
+            // the school by any of its names, beside a word that says they studied or teach there
+            isAlumni: !!schoolIn(
+              norm([c.title, c.org, c.headline].filter(Boolean).join(' ')),
+              user.school || undefined,
+            ),
             currentTitle: c.title,
             headline: c.headline,
           } as Person,
           user,
         ),
+      prefetch: async (cands) => {
+        const todo = cands.filter((c) => !known.has(c.key));
+        await domainBatch(todo);
+        await knownBatch(todo);
+      },
       warmthOf: (c, known) =>
         warmthOf(c, {
           student: ctx.student,
           known,
           warm: ctx.warm,
-          domains: [workDomain(c.email), c.org ? ctx.orgDomains.get(norm(c.org)) : undefined].filter(
-            (d): d is string => !!d,
-          ),
+          domains: [workDomain(c.email), ...orgDomainsOf(c, ctx.orgDomains)].filter((d): d is string => !!d),
           year,
         }),
       fillEmails: (cands) => fillEmails(cands, { known: ctx.known, orgDomains: ctx.orgDomains, mx }),
@@ -266,6 +328,7 @@ export async function runSourcing(
     results,
     unconfigured: result.unconfigured,
     relaxed: result.relaxed,
+    ...(result.assumedPlace ? { assumedPlace: result.assumedPlace } : {}),
     ...(result.notes.length ? { notes: result.notes } : {}),
   };
 }

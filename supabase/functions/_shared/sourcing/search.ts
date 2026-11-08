@@ -30,7 +30,7 @@ import type { WebSource } from '../research/web';
 import type { EmailConfidence } from './email';
 import { FIT_BATCH, type FitCandidate, fitSchema, fitSystem, fitUser } from './prompts';
 import { type Warmth, warmRank } from './warmth';
-import { sourceFromWeb, webAsk } from './web';
+import { sourceFromWeb, type WebAsk, webAsk } from './web';
 
 export type SourceName = 'unipile' | 'apollo' | 'exa' | 'semantic_scholar' | 'web';
 
@@ -136,6 +136,8 @@ export interface SourcingDeps {
   warmthOf?: (c: Candidate, known: { personId: string; score?: number } | null) => Warmth;
   /** fills emails for the best candidates who have none (email.ts) */
   fillEmails?: (cands: Candidate[]) => Promise<void>;
+  /** one pass over every candidate before ranking, alongside fit: who is known, which orgs have a domain (run.ts) */
+  prefetch?: (cands: Candidate[]) => Promise<void>;
   budget?: BudgetDep;
   clock: Clock;
   newId?: () => string;
@@ -161,8 +163,10 @@ export interface RecommendationRow {
 export interface SourcingResult {
   results: RecommendationRow[];
   unconfigured: string[];
-  /** what was dropped from the query to find anyone, in order */
-  relaxed: ('location' | 'seniority')[];
+  /** what was dropped from the query to find anyone, in order; `place` means the web was searched by subject alone */
+  relaxed: ('location' | 'seniority' | 'place')[];
+  /** the student's school stood in for a place the ask did not name */
+  assumedPlace?: string;
   /** providers that answered with an error (the others still count) */
   errors: string[];
   /** what the web pass did (plan 31), for the log */
@@ -182,6 +186,8 @@ const MAX_SCORED = 100;
 interface Relax {
   location: boolean;
   seniority: boolean;
+  /** the web may be searched with no place at all */
+  place: boolean;
 }
 
 interface Ctx {
@@ -196,6 +202,10 @@ interface Ctx {
   seq: number;
   /** some provider was configured and called (relaxing a query nobody ran is pointless) */
   ran: boolean;
+  /** the student's school stood in for a place the ask did not name */
+  assumedPlace?: string;
+  /** the web's answer per ask, so a relaxed pass does not read the same pages twice */
+  webDone: Map<string, Candidate[]>;
 }
 
 type Call = (relax: Relax) => Promise<Candidate[]>;
@@ -211,10 +221,11 @@ export async function sourcePeople(deps: SourcingDeps, input: SourcingInput): Pr
     idCache: new Map(),
     seq: 0,
     ran: false,
+    webDone: new Map(),
   };
   const batchId = deps.newId?.() ?? crypto.randomUUID();
   const calls = plan(ctx);
-  const relax: Relax = { location: false, seniority: false };
+  const relax: Relax = { location: false, seniority: false, place: false };
   const relaxed: SourcingResult['relaxed'] = [];
 
   let merged = await gather(calls, relax);
@@ -231,6 +242,19 @@ export async function sourcePeople(deps: SourcingDeps, input: SourcingInput): Pr
     relaxed.push('seniority');
     merged = await gather(calls, relax);
   }
+  // nobody anywhere and no place to search: the web by the subject alone, the last pass (a named or assumed place
+  // was searched already in the passes above)
+  if (
+    merged.length === 0 &&
+    deps.web?.length &&
+    !askFor(ctx, relax) &&
+    askFor(ctx, { ...relax, place: true })
+  ) {
+    relax.place = true;
+    relaxed.push('place');
+    // only the web changes in this pass: the other providers already answered
+    merged = await gather([(r) => webCall(ctx, r)], relax);
+  }
 
   // dedupe against the pipeline for this goal
   if (deps.inPipeline) {
@@ -244,6 +268,7 @@ export async function sourcePeople(deps: SourcingDeps, input: SourcingInput): Pr
     results: rows.slice(0, input.limit ?? 50),
     unconfigured: [...ctx.unconfigured].sort(),
     relaxed,
+    ...(ctx.assumedPlace ? { assumedPlace: ctx.assumedPlace } : {}),
     errors: [...ctx.errors].sort(),
     notes: [...ctx.notes],
     batchId,
@@ -265,8 +290,9 @@ function plan(ctx: Ctx): Call[] {
     (q: string, extra: Partial<ExaSearchRequest> = {}): Call =>
     (r) =>
       exaCall(ctx, { query: q, category: 'people', ...extra }, r, 'person');
-  // the public pages of a named place (plan 31): only when the ask names one, so the web is never searched blind
-  const web: Call[] = webAsk(g) ? [() => webCall(ctx)] : [];
+  // the public pages of a place (plan 31): the one named, the student's school for advice and collaboration, and by
+  // the subject alone only as the last pass (webCall decides from `relax`)
+  const web: Call[] = [(r) => webCall(ctx, r)];
   switch (g.kind) {
     case 'recruiting':
     case 'advice':
@@ -290,6 +316,7 @@ function plan(ctx: Ctx): Call[] {
       ];
     case 'fundraising':
       return [
+        ...web,
         exaPeople(
           words(
             roles[0] ?? 'partner',
@@ -316,6 +343,7 @@ function plan(ctx: Ctx): Call[] {
       ];
     case 'sales':
       return [
+        ...web,
         (r) =>
           apolloCall(ctx, r, {
             person_titles: roles.length ? roles : undefined,
@@ -326,6 +354,7 @@ function plan(ctx: Ctx): Call[] {
       ];
     case 'hiring': {
       const calls: Call[] = [
+        ...web,
         (r) =>
           linkedInCall(ctx, r, {
             keywords: words(orJoin(roles), ...(g.skills ?? [])),
@@ -348,6 +377,7 @@ function plan(ctx: Ctx): Call[] {
     }
     case 'cofounder':
       return [
+        ...web,
         exaPeople(words(...(g.skills ?? []), g.topic, 'founder')),
         (r) => linkedInCall(ctx, r, { keywords: words(...(g.skills ?? []), g.topic), distance: [2] }),
       ];
@@ -389,10 +419,25 @@ function note(ctx: Ctx, r: ProviderResult<unknown>): boolean {
 
 // ---- providers ----------------------------------------------------------------------------------------------
 
+/**
+ * What the web is asked for: the place the ask names; for advice and collaboration with none named, the student's own
+ * school (its people share the student's background, warmth tier 3); with `relax.place`, the subject alone.
+ */
+function askFor(ctx: Ctx, relax: Relax): WebAsk | undefined {
+  const g = ctx.input.goal;
+  const named = webAsk(g);
+  if (named) return named;
+  if ((g.kind === 'advice' || g.kind === 'collaboration') && ctx.input.user.school) {
+    const own = webAsk(g, { fallbackPlace: ctx.input.user.school });
+    if (own) return own;
+  }
+  return relax.place ? webAsk(g, { broad: true }) : undefined;
+}
+
 /** The web provider (plan 31): the place's faculty or team pages, read for the people they name. */
-async function webCall(ctx: Ctx): Promise<Candidate[]> {
+async function webCall(ctx: Ctx, relax: Relax): Promise<Candidate[]> {
   const { deps, input } = ctx;
-  const ask = webAsk(input.goal);
+  const ask = askFor(ctx, relax);
   if (!ask) return [];
   // no web wired at all (a caller that never built one): nothing to say; wired but keyless: the student is told
   if (!deps.web) return [];
@@ -401,6 +446,14 @@ async function webCall(ctx: Ctx): Promise<Candidate[]> {
     return [];
   }
   ctx.ran = true;
+  if (ask.assumedPlace) {
+    ctx.assumedPlace = ask.place;
+    ctx.notes.add(`web: no place named, searched ${ask.place}`);
+  }
+  if (ask.broad) ctx.notes.add('web: no place named, searched by subject alone');
+  const askKey = JSON.stringify(ask);
+  const done = ctx.webDone.get(askKey);
+  if (done) return done;
   try {
     const r = await sourceFromWeb({
       ask,
@@ -415,6 +468,7 @@ async function webCall(ctx: Ctx): Promise<Candidate[]> {
     for (const n of r.notes) ctx.notes.add(`web: ${n}`);
     if (!r.candidates.length && r.notes.some((n) => /budget_exceeded/.test(n)))
       ctx.errors.add('web: budget_exceeded');
+    ctx.webDone.set(askKey, r.candidates);
     return r.candidates;
   } catch (e) {
     ctx.errors.add(`web: ${e instanceof Error ? e.message : 'failed'}`);
@@ -871,7 +925,11 @@ async function rank(ctx: Ctx, cands: Candidate[], batchId: string): Promise<Reco
     (deps.claude
       ? llmFitScorer(deps.claude)
       : async (g, _u, cs) => new Map(cs.map((c) => [c.key, keywordFit(g, c)])));
-  const fits = await scorer(input.goal, input.user, cands);
+  // who is already known and which orgs have a domain load while Haiku scores fit
+  const [fits] = await Promise.all([
+    scorer(input.goal, input.user, cands),
+    deps.prefetch?.(cands).catch(() => undefined),
+  ]);
   const fitOf = (c: Candidate) => fits.get(c.key) ?? keywordFit(input.goal, c);
   const byFit = [...cands].sort((a, b) => fitOf(b).fit - fitOf(a).fit);
   const reachTop = new Set(byFit.slice(0, REACH_TOP).map((c) => c.key));

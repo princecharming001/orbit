@@ -645,10 +645,13 @@ export const findPeopleTool = defineTool({
       },
     });
     if (!r.ok) throw new Error(r.message);
-    const { results, unconfigured, relaxed } = r.value;
+    const { results, unconfigured, relaxed, assumedPlace } = r.value;
     const top = results.slice(0, 10);
+    const dropped = relaxed.filter((x) => x !== 'place');
     const quiet = [
-      relaxed.length ? `To find more, the search left out ${relaxed.join(', ')}.` : '',
+      assumedPlace ? `No school or company was named, so it looked at ${assumedPlace}.` : '',
+      relaxed.includes('place') ? 'No place was named, so it searched the web by topic alone.' : '',
+      dropped.length ? `To find more, the search left out ${dropped.join(', ')}.` : '',
       unconfigured.length
         ? `${providerNames(unconfigured)} ${unconfigured.length === 1 ? 'is' : 'are'} not set up yet.`
         : '',

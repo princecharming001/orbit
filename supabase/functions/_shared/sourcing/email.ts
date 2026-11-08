@@ -7,9 +7,9 @@
  * A university gets no guess: its addresses rarely follow one pattern. Mail servers are checked over DNS-over-HTTPS
  * (an MX record), never by connecting to them; nothing here sends anything.
  */
-import { norm } from '../research/guards';
+import { norm, normOrg } from '../research/guards';
 import type { Candidate } from './search';
-import { siteDomain, workDomain } from './warmth';
+import { orgsOf, siteDomain, workDomain } from './warmth';
 
 export type EmailConfidence = 'page' | 'pattern' | 'guess';
 
@@ -136,14 +136,24 @@ export function dnsMx(doFetch: typeof fetch, timeoutMs = 4000): MxCheck {
   };
 }
 
-/** The company domains to try for a candidate: the ask's domain for their org, their page, then known contacts. */
+/** The domains the candidate's org names are known by ("Stripe | Berkeley Haas" asks for both), in order. */
+export function orgDomainsOf(c: Candidate, orgDomains: Map<string, string>): string[] {
+  const out: string[] = [];
+  for (const o of [...(c.org ? [c.org] : []), ...orgsOf(c)]) {
+    const d = orgDomains.get(norm(o)) ?? orgDomains.get(normOrg(o));
+    if (d && !out.includes(d)) out.push(d);
+  }
+  return out;
+}
+
+/** The company domains to try for a candidate: their own address, their org's domains, then their page. */
 export function domainsOf(c: Candidate, orgDomains: Map<string, string>): string[] {
   const out: string[] = [];
   const add = (d: string | undefined) => {
     if (d && !out.includes(d)) out.push(d);
   };
   add(workDomain(c.email));
-  if (c.org) add(orgDomains.get(norm(c.org)));
+  for (const d of orgDomainsOf(c, orgDomains)) add(d);
   add(siteDomain(c.url));
   return out;
 }

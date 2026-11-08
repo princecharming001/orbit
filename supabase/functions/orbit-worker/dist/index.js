@@ -19369,15 +19369,18 @@ function orgNames(raw) {
   }
   return out;
 }
-function orgsOf(c) {
-  const fromOrg = orgNames(c.org);
-  if (fromOrg.length) return fromOrg;
-  const h = c.headline ?? "";
+function headlineOrgs(headline) {
+  const h = headline ?? "";
+  if (!h.trim()) return [];
   const at = h.match(/(?:@|\bat\s)\s*([^|•·,;]+)/i)?.[1];
   if (at) return orgNames(at);
-  if (h && h.trim().split(/\s+/).length <= 2 && !/\b(engineer|manager|founder|student|product|designer|analyst|investor|researcher)\b/i.test(h))
+  if (h.trim().split(/\s+/).length <= 2 && !/\b(engineer|manager|founder|student|product|designer|analyst|investor|researcher)\b/i.test(h))
     return orgNames(h);
   return [];
+}
+function orgsOf(c) {
+  const fromOrg = orgNames(c.org);
+  return fromOrg.length ? fromOrg : headlineOrgs(c.headline);
 }
 function schoolNames(school) {
   const s = norm(school);
@@ -19398,7 +19401,7 @@ function isSchoolOrg(o, studentSchool) {
   if (!n) return false;
   if (/\b(university|college|institute of technology|polytechnic|school of|community college)\b/.test(n))
     return true;
-  if (/^uc ?[a-z]+$|^uc[a-z]{1,3}$|^(mit|caltech|cmu|nyu|usc|ucla|ucsd|uci|ucsb|ucsc|ucd|uiuc|umd|asu|sjsu|ut austin|georgia tech)$/.test(
+  if (/^uc ?[a-z]+$|^uc[a-z]{1,3}$|^(mit|caltech|cmu|nyu|usc|ucla|ucsd|uci|ucsb|ucsc|ucd|uiuc|umd|asu|sjsu|ut austin|georgia tech|stanford|harvard|yale|princeton|cornell|dartmouth|upenn|wharton|duke|northwestern|berkeley|purdue|vanderbilt|emory|oxford|cambridge|eth zurich|epfl|waterloo)$/.test(
     n
   ))
     return true;
@@ -19603,13 +19606,21 @@ function dnsMx(doFetch, timeoutMs = 4e3) {
     return hit;
   };
 }
+function orgDomainsOf(c, orgDomains) {
+  const out = [];
+  for (const o of [...c.org ? [c.org] : [], ...orgsOf(c)]) {
+    const d = orgDomains.get(norm(o)) ?? orgDomains.get(normOrg(o));
+    if (d && !out.includes(d)) out.push(d);
+  }
+  return out;
+}
 function domainsOf(c, orgDomains) {
   const out = [];
   const add2 = (d) => {
     if (d && !out.includes(d)) out.push(d);
   };
   add2(workDomain(c.email));
-  if (c.org) add2(orgDomains.get(norm(c.org)));
+  for (const d of orgDomainsOf(c, orgDomains)) add2(d);
   add2(siteDomain(c.url));
   return out;
 }
@@ -19646,6 +19657,43 @@ async function fillEmails(cands, opts) {
       }
     }
   }
+}
+
+// supabase/functions/_shared/sourcing/known.ts
+function indexKnown(rows) {
+  const idx = { bySlug: /* @__PURE__ */ new Map(), byMember: /* @__PURE__ */ new Map(), byEmail: /* @__PURE__ */ new Map(), byName: /* @__PURE__ */ new Map() };
+  const set = (m, k, r) => {
+    if (k && !m.has(k)) m.set(k, r);
+  };
+  for (const r of rows) {
+    set(idx.bySlug, r.linkedin_slug?.toLowerCase(), r);
+    set(idx.byMember, r.linkedin_member_id, r);
+    for (const id of r.linkedin_ids ?? []) {
+      set(idx.bySlug, id.toLowerCase(), r);
+      set(idx.byMember, id, r);
+    }
+    set(idx.byEmail, r.primary_email?.toLowerCase(), r);
+    for (const e of r.emails ?? []) set(idx.byEmail, e.toLowerCase(), r);
+    const n = r.display_name.trim().toLowerCase();
+    if (n) idx.byName.set(n, [...idx.byName.get(n) ?? [], r]);
+  }
+  return idx;
+}
+function matchKnown(idx, c, o) {
+  const hit = (o.slug ? idx.bySlug.get(o.slug.toLowerCase()) : void 0) ?? (c.memberId ? idx.byMember.get(c.memberId) : void 0) ?? (o.email ? idx.byEmail.get(o.email.toLowerCase()) : void 0);
+  if (hit) return hit;
+  const same = idx.byName.get(c.name.trim().toLowerCase()) ?? [];
+  if (!same.length) return void 0;
+  const theirs = orgsOf(c);
+  const domains = new Set(
+    [workDomain(c.email), o.orgDomain, siteDomain(c.url)].filter((d) => !!d)
+  );
+  return same.find((r) => {
+    const mine = [...orgNames(r.org_raw ?? void 0), ...headlineOrgs(r.headline ?? void 0)];
+    if (mine.some((m) => !isSchoolOrg(m) && theirs.some((t) => sameOrg(m, t)))) return true;
+    const d = workDomain(r.primary_email ?? void 0) ?? (r.emails ?? []).map((e) => workDomain(e)).find((x) => !!x);
+    return !!d && domains.has(d);
+  });
 }
 
 // supabase/functions/_shared/sourcing/prompts.ts
@@ -19807,7 +19855,7 @@ var WEB_PROFILE_PAGES = 16;
 var PROFILE_FETCH_MS = 7e3;
 var UA2 = "Mozilla/5.0 (compatible; OrbitBot/1.0; +https://tryorbit.today)";
 var ROLE_WORDS = /\b(professors?|faculty|pis?|principal investigators?|postdocs?|phd students?|researchers?|scientists?|engineers?|recruiters?|founders?|product managers?|pms?|designers?|analysts?)\b/i;
-function webAsk(goal) {
+function webAsk(goal, opts = {}) {
   const text2 = [goal.topic, goal.title, ...goal.keywords ?? []].filter(Boolean).join(" ").trim();
   const role = text2.match(ROLE_WORDS)?.[1]?.toLowerCase();
   let place = (goal.school ?? goal.orgs?.[0] ?? "").trim();
@@ -19818,22 +19866,50 @@ function webAsk(goal) {
     );
     if (at?.[1]) place = at[1].replace(/^the\s+/i, "").trim();
   }
-  if (!place) return void 0;
-  subject = subject.replace(new RegExp(`\\b(?:at|@|from)\\s+${escapeRe6(place)}\\b`, "i"), " ").replace(new RegExp(`\\b${escapeRe6(place)}\\b`, "i"), " ").replace(ROLE_WORDS, " ").replace(
+  let assumedPlace = false;
+  if (!place && opts.fallbackPlace?.trim()) {
+    place = opts.fallbackPlace.trim();
+    assumedPlace = true;
+  }
+  if (!place && !opts.broad) return void 0;
+  subject = (place ? subject.replace(new RegExp(`\\b(?:at|@|from)\\s+${escapeRe6(place)}\\b`, "i"), " ").replace(new RegExp(`\\b${escapeRe6(place)}\\b`, "i"), " ") : subject).replace(ROLE_WORDS, " ").replace(
     /\b(?:i can|i could|i should|reach out to|write to|talk to|to|contact|email|cold email|source|find|some|a few|new|me|who)\b/gi,
     " "
   ).replace(/\s+/g, " ").trim().replace(/^(?:for|about|on|in|into|doing|working on|studying|researching)\s+/i, "").replace(/\s+(?:for|about|on|in|at)$/i, "").trim();
   if (!subject) subject = goal.roles?.[0] ?? role ?? "people";
-  return { place, subject, role };
+  if (!place && subject === "people") return void 0;
+  return {
+    place,
+    subject,
+    role,
+    ...assumedPlace ? { assumedPlace: true } : {},
+    ...place ? {} : { broad: true }
+  };
 }
 var escapeRe6 = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+var ACADEMIC_ROLE = /professor|faculty|pi\b|investigator|postdoc|phd|researcher|scientist/;
+function isAcademic(ask) {
+  if (ask.role && ACADEMIC_ROLE.test(ask.role)) return true;
+  if (ask.broad) return false;
+  return !!ask.assumedPlace || isSchoolOrg(ask.place);
+}
 function webQueries(ask) {
-  const who = ask.role && /professor|faculty|pi\b|investigator|postdoc|phd|researcher|scientist/.test(ask.role) ? "faculty" : ask.role ?? "team";
-  const qs2 = [
+  const faculty = !!ask.role && ACADEMIC_ROLE.test(ask.role);
+  const who = faculty ? "faculty" : ask.role ?? "team";
+  const qs2 = ask.broad ? [
+    { id: "directory", query: `${ask.subject} ${who} directory email` },
+    { id: "people", query: `${ask.subject} ${who} list contact` },
+    faculty || !ask.role ? { id: "labs", query: `${ask.subject} lab research group people` } : { id: "team", query: `${ask.subject} companies team page ${who}` }
+  ] : isAcademic(ask) ? [
     { id: "directory", query: `${ask.place} ${ask.subject} ${who}` },
     { id: "labs", query: `${ask.place} ${ask.subject} lab research group` },
     { id: "people", query: `${ask.place} ${ask.subject} people directory email` },
     { id: "department", query: `${ask.place} department of ${ask.subject} ${who} profiles` }
+  ] : [
+    { id: "team", query: `${ask.place} ${ask.subject} ${who}` },
+    { id: "about", query: `${ask.place} team about us ${ask.subject}` },
+    { id: "blog", query: `${ask.place} ${ask.subject} blog authors` },
+    { id: "people", query: `${ask.place} ${ask.subject} people email` }
   ];
   const seen = /* @__PURE__ */ new Set();
   return qs2.filter((q) => {
@@ -19849,6 +19925,7 @@ function selectPages(hits2, ask, max = WEB_MAX_PAGES) {
   const placeTokens = ask.place.toLowerCase().split(/[^a-z0-9]+/).filter(
     (w) => w.length >= 3 && !["the", "university", "college", "school", "institute", "of"].includes(w)
   );
+  const academic = isAcademic(ask);
   const scored = hits2.filter((h) => h.url && !SKIP_URL.test(h.url) && !isBlockedSource(h.url)).map((h) => {
     let host = "";
     try {
@@ -19858,7 +19935,7 @@ function selectPages(hits2, ask, max = WEB_MAX_PAGES) {
     }
     const text2 = `${h.url} ${h.title ?? ""}`.toLowerCase();
     let score = 0;
-    if (/\.edu(\.|$)|\.ac\.[a-z]{2}$/.test(host)) score += 3;
+    if (academic && /\.edu(\.|$)|\.ac\.[a-z]{2}$/.test(host)) score += 3;
     if (placeTokens.some((t) => host.includes(t))) score += 3;
     if (DIRECTORY_WORDS.test(text2)) score += 2;
     if (ask.subject.toLowerCase().split(/\s+/).some((w) => w.length >= 4 && text2.includes(w)))
@@ -20027,7 +20104,7 @@ async function sourceFromWeb(o) {
   }
   const plan2 = {
     queries: webQueries(o.ask),
-    focus: `the ${o.ask.role ?? "people"} pages of ${o.ask.place} about ${o.ask.subject}: faculty or team directories, lab and group pages`,
+    focus: o.ask.broad ? `pages that list ${o.ask.role ?? "people"} working on ${o.ask.subject}: directories, team pages, lab and group pages` : `the ${o.ask.role ?? "people"} pages of ${o.ask.place} about ${o.ask.subject}: faculty or team directories, lab and group pages`,
     maxPages: o.maxPages ?? WEB_MAX_PAGES
   };
   const gathered = await gatherFrom(o.sources, plan2, {
@@ -20163,7 +20240,7 @@ async function sourceFromWeb(o) {
       firstName,
       lastName: rest.join(" "),
       title: p.title?.trim() || (o.ask.role ? titleCase2(o.ask.role.replace(/s$/, "")) : void 0),
-      org: p.department ? `${p.department.trim()}, ${o.ask.place}` : o.ask.place,
+      org: p.department ? o.ask.broad ? p.department.trim() : `${p.department.trim()}, ${o.ask.place}` : o.ask.broad ? void 0 : o.ask.place,
       headline: worksOn.join(", ") || void 0,
       email: p.email ?? void 0,
       url: page2.url,
@@ -20203,11 +20280,12 @@ async function sourcePeople(deps, input) {
     notes: /* @__PURE__ */ new Set(),
     idCache: /* @__PURE__ */ new Map(),
     seq: 0,
-    ran: false
+    ran: false,
+    webDone: /* @__PURE__ */ new Map()
   };
   const batchId = deps.newId?.() ?? crypto.randomUUID();
   const calls = plan(ctx);
-  const relax = { location: false, seniority: false };
+  const relax = { location: false, seniority: false, place: false };
   const relaxed = [];
   let merged = await gather(calls, relax);
   const g = input.goal;
@@ -20223,6 +20301,11 @@ async function sourcePeople(deps, input) {
     relaxed.push("seniority");
     merged = await gather(calls, relax);
   }
+  if (merged.length === 0 && deps.web?.length && !askFor(ctx, relax) && askFor(ctx, { ...relax, place: true })) {
+    relax.place = true;
+    relaxed.push("place");
+    merged = await gather([(r) => webCall(ctx, r)], relax);
+  }
   if (deps.inPipeline) {
     const keep = [];
     for (const c of merged) if (!await deps.inPipeline(c)) keep.push(c);
@@ -20233,6 +20316,7 @@ async function sourcePeople(deps, input) {
     results: rows.slice(0, input.limit ?? 50),
     unconfigured: [...ctx.unconfigured].sort(),
     relaxed,
+    ...ctx.assumedPlace ? { assumedPlace: ctx.assumedPlace } : {},
     errors: [...ctx.errors].sort(),
     notes: [...ctx.notes],
     batchId
@@ -20247,7 +20331,7 @@ function plan(ctx) {
   const roles = g.roles ?? [];
   const words5 = (...xs) => xs.filter((x) => x?.trim()).join(" ");
   const exaPeople = (q, extra = {}) => (r) => exaCall(ctx, { query: q, category: "people", ...extra }, r, "person");
-  const web = webAsk(g) ? [() => webCall(ctx)] : [];
+  const web = [(r) => webCall(ctx, r)];
   switch (g.kind) {
     case "recruiting":
     case "advice":
@@ -20267,6 +20351,7 @@ function plan(ctx) {
       ];
     case "fundraising":
       return [
+        ...web,
         exaPeople(
           words5(
             roles[0] ?? "partner",
@@ -20291,6 +20376,7 @@ function plan(ctx) {
       ];
     case "sales":
       return [
+        ...web,
         (r) => apolloCall(ctx, r, {
           person_titles: roles.length ? roles : void 0,
           organization_num_employees_ranges: g.employeeRanges,
@@ -20300,6 +20386,7 @@ function plan(ctx) {
       ];
     case "hiring": {
       const calls = [
+        ...web,
         (r) => linkedInCall(ctx, r, {
           keywords: words5(orJoin(roles), ...g.skills ?? []),
           pastCompanies: g.pastCompanies,
@@ -20321,6 +20408,7 @@ function plan(ctx) {
     }
     case "cofounder":
       return [
+        ...web,
         exaPeople(words5(...g.skills ?? [], g.topic, "founder")),
         (r) => linkedInCall(ctx, r, { keywords: words5(...g.skills ?? [], g.topic), distance: [2] })
       ];
@@ -20355,9 +20443,19 @@ function note(ctx, r) {
   else ctx.errors.add(`${r.provider}: ${r.message}`);
   return false;
 }
-async function webCall(ctx) {
+function askFor(ctx, relax) {
+  const g = ctx.input.goal;
+  const named = webAsk(g);
+  if (named) return named;
+  if ((g.kind === "advice" || g.kind === "collaboration") && ctx.input.user.school) {
+    const own = webAsk(g, { fallbackPlace: ctx.input.user.school });
+    if (own) return own;
+  }
+  return relax.place ? webAsk(g, { broad: true }) : void 0;
+}
+async function webCall(ctx, relax) {
   const { deps, input } = ctx;
-  const ask = webAsk(input.goal);
+  const ask = askFor(ctx, relax);
   if (!ask) return [];
   if (!deps.web) return [];
   if (!deps.web.length) {
@@ -20365,6 +20463,14 @@ async function webCall(ctx) {
     return [];
   }
   ctx.ran = true;
+  if (ask.assumedPlace) {
+    ctx.assumedPlace = ask.place;
+    ctx.notes.add(`web: no place named, searched ${ask.place}`);
+  }
+  if (ask.broad) ctx.notes.add("web: no place named, searched by subject alone");
+  const askKey = JSON.stringify(ask);
+  const done = ctx.webDone.get(askKey);
+  if (done) return done;
   try {
     const r = await sourceFromWeb({
       ask,
@@ -20379,6 +20485,7 @@ async function webCall(ctx) {
     for (const n of r.notes) ctx.notes.add(`web: ${n}`);
     if (!r.candidates.length && r.notes.some((n) => /budget_exceeded/.test(n)))
       ctx.errors.add("web: budget_exceeded");
+    ctx.webDone.set(askKey, r.candidates);
     return r.candidates;
   } catch (e) {
     ctx.errors.add(`web: ${e instanceof Error ? e.message : "failed"}`);
@@ -20774,7 +20881,10 @@ async function rank(ctx, cands, batchId) {
   const { deps, input } = ctx;
   if (cands.length === 0) return [];
   const scorer = deps.fitScorer ?? (deps.claude ? llmFitScorer(deps.claude) : async (g, _u, cs) => new Map(cs.map((c) => [c.key, keywordFit(g, c)])));
-  const fits = await scorer(input.goal, input.user, cands);
+  const [fits] = await Promise.all([
+    scorer(input.goal, input.user, cands),
+    deps.prefetch?.(cands).catch(() => void 0)
+  ]);
   const fitOf = (c) => fits.get(c.key) ?? keywordFit(input.goal, c);
   const byFit = [...cands].sort((a, b) => fitOf(b).fit - fitOf(a).fit);
   const reachTop = new Set(byFit.slice(0, REACH_TOP).map((c) => c.key));
@@ -20923,6 +21033,54 @@ async function runSourcing(s, userId, req) {
   };
   const user = { school: u2?.school ?? "", majors: u2?.majors ?? [] };
   const ctx = await warmContext(db2, userId, u2, req.homeCity, g);
+  const slugOf3 = (c) => linkedInSlugOf(cleanLinkedInUrl(c.linkedinUrl)) ?? void 0;
+  const uniq = (xs) => [...new Set(xs.filter((x) => !!x))];
+  const knownBatch = async (todo) => {
+    if (!todo.length) return;
+    const slugs = uniq(todo.map((c) => slugOf3(c)?.toLowerCase()));
+    const members = uniq(todo.map((c) => c.memberId));
+    const emails = uniq(todo.map((c) => c.email ? normalizeEmail(c.email) : void 0));
+    const names = uniq(todo.map((c) => c.name.trim().toLowerCase()));
+    const rows = await db2.sql`
+      select p.id, p.display_name, p.org_raw, p.headline, p.primary_email, p.linkedin_slug, p.linkedin_member_id,
+             coalesce((select array_agg(i.value_norm) from orbit.person_identities i
+                        where i.person_id = p.id and i.kind = 'email'), '{}') as emails,
+             coalesce((select array_agg(i.value_norm) from orbit.person_identities i
+                        where i.person_id = p.id and i.kind in ('linkedin_slug', 'linkedin_member')), '{}') as linkedin_ids
+        from orbit.people p
+       where p.user_id = ${userId}::uuid and p.deleted_at is null and not p.is_self
+         and (lower(p.linkedin_slug) = any(${slugs}::text[]) or p.linkedin_member_id = any(${members}::text[])
+           or lower(p.primary_email) = any(${emails}::text[]) or lower(p.display_name) = any(${names}::text[])
+           or exists (select 1 from orbit.person_identities i where i.person_id = p.id
+                       and ((i.kind = 'email' and i.value_norm = any(${emails}::text[]))
+                         or (i.kind in ('linkedin_slug', 'linkedin_member')
+                             and i.value_norm = any(${[...slugs, ...members]}::text[])))))
+       order by p.merged_into is null desc, p.id`;
+    const idx = indexKnown(rows);
+    const gr = rows.length ? await g() : void 0;
+    for (const c of todo) {
+      const hit = matchKnown(idx, c, {
+        slug: slugOf3(c),
+        email: c.email ? normalizeEmail(c.email) : void 0,
+        orgDomain: orgDomainsOf(c, ctx.orgDomains)[0]
+      });
+      known.set(c.key, hit ? { personId: hit.id, score: gr?.people.get(hit.id)?.score } : null);
+    }
+  };
+  const domainBatch = async (todo) => {
+    const keys = uniq(todo.flatMap((c) => orgsOf(c)).flatMap((o) => [norm(o), normOrg(o)])).filter(
+      (k) => k.length >= 2 && !ctx.orgDomains.has(k)
+    );
+    if (!keys.length) return;
+    const facts = await db2.sql`
+      select distinct on (key) key, website from orbit_private.company_facts
+       where website is not null and not coalesce(ambiguous_name, false) and key = any(${keys.slice(0, 300)}::text[])
+       order by key, (source = 'linkedin') desc`;
+    for (const f of facts) {
+      const d = siteDomain(f.website);
+      if (d) ctx.orgDomains.set(f.key, d);
+    }
+  };
   const sGoal = sourcingGoal(req, goal);
   sGoal.orgs?.forEach((o, i) => {
     const d = sGoal.domains?.[i];
@@ -20948,19 +21106,26 @@ async function runSourcing(s, userId, req) {
       },
       responsiveness: (c) => responsePrior(
         {
-          isAlumni: !!user.school && !!c.headline?.toLowerCase().includes(user.school.toLowerCase()),
+          // the school by any of its names, beside a word that says they studied or teach there
+          isAlumni: !!schoolIn(
+            norm([c.title, c.org, c.headline].filter(Boolean).join(" ")),
+            user.school || void 0
+          ),
           currentTitle: c.title,
           headline: c.headline
         },
         user
       ),
+      prefetch: async (cands) => {
+        const todo = cands.filter((c) => !known.has(c.key));
+        await domainBatch(todo);
+        await knownBatch(todo);
+      },
       warmthOf: (c, known2) => warmthOf(c, {
         student: ctx.student,
         known: known2,
         warm: ctx.warm,
-        domains: [workDomain(c.email), c.org ? ctx.orgDomains.get(norm(c.org)) : void 0].filter(
-          (d) => !!d
-        ),
+        domains: [workDomain(c.email), ...orgDomainsOf(c, ctx.orgDomains)].filter((d) => !!d),
         year
       }),
       fillEmails: (cands) => fillEmails(cands, { known: ctx.known, orgDomains: ctx.orgDomains, mx }),
@@ -21000,6 +21165,7 @@ async function runSourcing(s, userId, req) {
     results,
     unconfigured: result.unconfigured,
     relaxed: result.relaxed,
+    ...result.assumedPlace ? { assumedPlace: result.assumedPlace } : {},
     ...result.notes.length ? { notes: result.notes } : {}
   };
 }

@@ -213,21 +213,24 @@ export function orgNames(raw: string | undefined): string[] {
   return out;
 }
 
-/** Where a candidate works: their org, else what the headline says after "@" or " at ", else a short headline. */
-export function orgsOf(c: Candidate): string[] {
-  const fromOrg = orgNames(c.org);
-  if (fromOrg.length) return fromOrg;
-  const h = c.headline ?? '';
+/** The company a headline names after "@" or " at ", else a headline of a word or two with no role in it ("Stripe"). */
+export function headlineOrgs(headline: string | undefined): string[] {
+  const h = headline ?? '';
+  if (!h.trim()) return [];
   const at = h.match(/(?:@|\bat\s)\s*([^|•·,;]+)/i)?.[1];
   if (at) return orgNames(at);
-  // a headline of a word or two with no role in it is the company ("Stripe")
   if (
-    h &&
     h.trim().split(/\s+/).length <= 2 &&
     !/\b(engineer|manager|founder|student|product|designer|analyst|investor|researcher)\b/i.test(h)
   )
     return orgNames(h);
   return [];
+}
+
+/** Where a candidate works: their org, else what the headline says. */
+export function orgsOf(c: Candidate): string[] {
+  const fromOrg = orgNames(c.org);
+  return fromOrg.length ? fromOrg : headlineOrgs(c.headline);
 }
 
 /** "University of California, Berkeley" also reads as "UC Berkeley" and "Berkeley". */
@@ -254,7 +257,7 @@ export function isSchoolOrg(o: string | undefined, studentSchool?: string): bool
   if (/\b(university|college|institute of technology|polytechnic|school of|community college)\b/.test(n))
     return true;
   if (
-    /^uc ?[a-z]+$|^uc[a-z]{1,3}$|^(mit|caltech|cmu|nyu|usc|ucla|ucsd|uci|ucsb|ucsc|ucd|uiuc|umd|asu|sjsu|ut austin|georgia tech)$/.test(
+    /^uc ?[a-z]+$|^uc[a-z]{1,3}$|^(mit|caltech|cmu|nyu|usc|ucla|ucsd|uci|ucsb|ucsc|ucd|uiuc|umd|asu|sjsu|ut austin|georgia tech|stanford|harvard|yale|princeton|cornell|dartmouth|upenn|wharton|duke|northwestern|berkeley|purdue|vanderbilt|emory|oxford|cambridge|eth zurich|epfl|waterloo)$/.test(
       n,
     )
   )

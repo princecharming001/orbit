@@ -315,7 +315,7 @@ describe('POST /source/search with a school', () => {
     expect(texts.some((x) => /^Listed on Faculty/.test(x))).toBe(true);
   });
 
-  it('an ask that names no place does not search the web', async () => {
+  it("an ask that names no place searches the student's school for advice, and by subject alone last for the rest", async () => {
     const claude = anthropic((r) =>
       systemText(r).includes('list the people it names') ? readAnswer(r) : fitAnswer(r),
     );
@@ -330,11 +330,31 @@ describe('POST /source/search with a school', () => {
     };
     const call = api(t, net, { env, agent: { ...agentConfig(net, env), web: [web] } });
     const { token } = await signedInUser(t);
-    const r = await call<{ results: unknown[] }>('/source/search', token, {
-      purpose: 'advice',
-      query: 'mentors in fintech',
-    });
+    const r = await call<{ results: unknown[]; assumedPlace?: string; relaxed: string[] }>(
+      '/source/search',
+      token,
+      { purpose: 'advice', query: 'mentors in fintech' },
+    );
     expect(r.status).toBe(200);
-    expect(web.plans).toHaveLength(0);
+    expect(r.body.assumedPlace).toBe('Stanford');
+    expect(r.body.relaxed).not.toContain('place');
+    expect(web.plans).toHaveLength(1);
+    const first = web.plans[0] as { queries: { query: string }[] };
+    expect(first.queries[0]!.query).toMatch(/^Stanford /);
+    // fundraising has no school to stand in: the web is searched by the subject alone, and only because nothing
+    // else found anyone
+    const r2 = await call<{ results: unknown[]; assumedPlace?: string; relaxed: string[] }>(
+      '/source/search',
+      token,
+      { purpose: 'fundraising', query: 'seed climate investors' },
+    );
+    expect(r2.status).toBe(200);
+    expect(r2.body.assumedPlace).toBeUndefined();
+    expect(r2.body.relaxed).toContain('place');
+    expect(web.plans).toHaveLength(2);
+    const second = web.plans[1] as { queries: { query: string }[] };
+    const qs = second.queries.map((q) => q.query).join(' | ');
+    expect(qs).toContain('seed climate investors');
+    expect(qs).not.toMatch(/Stanford/);
   });
 });

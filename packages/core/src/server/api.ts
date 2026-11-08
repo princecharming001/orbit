@@ -184,8 +184,10 @@ export interface SourceSearchResponse {
   results: SourcedCandidate[];
   /** providers skipped because their key is not set */
   unconfigured: string[];
-  /** filters dropped to get results (§6.7) */
+  /** filters dropped to get results (§6.7); "place" means the web was searched by subject alone */
   relaxed: string[];
+  /** the student's own school stood in for a place the ask did not name */
+  assumedPlace?: string;
   /** what the web pass did (plan 31): hits, pages and profile pages read */
   notes?: string[];
 }

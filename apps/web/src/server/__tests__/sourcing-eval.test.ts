@@ -10,6 +10,11 @@ import {
   type KnownAddress,
   learnPattern,
 } from '../../../../../supabase/functions/_shared/sourcing/email';
+import {
+  indexKnown,
+  type KnownRow,
+  matchKnown,
+} from '../../../../../supabase/functions/_shared/sourcing/known';
 import type { Candidate } from '../../../../../supabase/functions/_shared/sourcing/search';
 import {
   type StudentContext,
@@ -18,7 +23,7 @@ import {
   type WarmthTier,
   warmthOf,
 } from '../../../../../supabase/functions/_shared/sourcing/warmth';
-import { webAsk } from '../../../../../supabase/functions/_shared/sourcing/web';
+import { selectPages, webAsk, webQueries } from '../../../../../supabase/functions/_shared/sourcing/web';
 import { routeNetwork } from '../../chat/agent/routerNetwork';
 
 const cand = (c: Partial<Candidate>): Candidate => ({
@@ -501,7 +506,7 @@ describe('routing to the outside-LinkedIn search: 11 cases', () => {
     });
 });
 
-describe('where the web search looks: 4 cases', () => {
+describe('where the web search looks: 12 cases', () => {
   const g = (x: object) => ({ id: null, kind: 'advice' as const, title: '', criteria: [], ...x });
   it('W1 a named company', () =>
     expect(webAsk(g({ orgs: ['Stripe'], roles: ['product manager'] }))?.place).toBe('Stripe'));
@@ -509,6 +514,128 @@ describe('where the web search looks: 4 cases', () => {
     expect(webAsk(g({ school: 'UC Berkeley', topic: 'biomedical research' }))?.place).toBe('UC Berkeley'));
   it('W3 "at" in the ask', () => expect(webAsk(g({ topic: 'designers at Figma' }))?.place).toBe('Figma'));
   it('W4 nowhere named', () => expect(webAsk(g({ topic: 'fintech founders' }))).toBeUndefined());
+  it("W5 no place: the student's school stands in", () =>
+    expect(webAsk(g({ topic: 'mentors in fintech' }), { fallbackPlace: 'Stanford' })).toMatchObject({
+      place: 'Stanford',
+      subject: 'mentors in fintech',
+      assumedPlace: true,
+    }));
+  it('W6 a named place wins over the fallback', () =>
+    expect(webAsk(g({ topic: 'designers at Figma' }), { fallbackPlace: 'Stanford' })).toMatchObject({
+      place: 'Figma',
+    }));
+  it('W7 broad: the subject alone drives every search', () => {
+    const a = webAsk(g({ topic: 'fintech founders' }), { broad: true })!;
+    expect(a).toMatchObject({ place: '', subject: 'fintech', role: 'founders', broad: true });
+    expect(webQueries(a).every((q) => /fintech/.test(q.query) && /founders/.test(q.query))).toBe(true);
+  });
+  it('W8 broad with nothing to search for', () =>
+    expect(webAsk(g({ topic: '' }), { broad: true })).toBeUndefined());
+  it('W9 a school asks for faculty, labs and departments', () => {
+    const qs = webQueries(webAsk(g({ school: 'UC Berkeley', topic: 'biomedical research' }))!)
+      .map((q) => q.query)
+      .join(' | ');
+    expect(qs).toMatch(/lab research group/);
+    expect(qs).toMatch(/department of/);
+  });
+  it('W10 a company asks for team pages, not departments', () => {
+    const qs = webQueries(webAsk(g({ orgs: ['Stripe'], topic: 'payments' }))!).map((q) => q.query);
+    expect(qs[0]).toBe('Stripe payments team');
+    expect(qs.join(' | ')).not.toMatch(/department of|lab research group/);
+  });
+  it("W11 the student's school is searched as a school even when its name does not say so", () => {
+    const a = webAsk(g({ topic: 'mentors in fintech' }), { fallbackPlace: 'Stanford' })!;
+    expect(
+      webQueries(a)
+        .map((q) => q.query)
+        .join(' | '),
+    ).toMatch(/lab research group/);
+  });
+  it('W12 a broad ask for founders does not favor .edu pages', () => {
+    const a = webAsk(g({ topic: 'fintech founders' }), { broad: true })!;
+    const picked = selectPages(
+      [
+        { url: 'https://cs.someu.edu/news', title: 'News', query: 'q' },
+        { url: 'https://fintechlist.com/founders', title: 'Fintech founders directory', query: 'q' },
+      ],
+      a,
+    );
+    expect(picked[0]).toBe('https://fintechlist.com/founders');
+  });
+});
+
+describe('is this someone the student already knows: 9 cases', () => {
+  const rows: KnownRow[] = [
+    {
+      id: 'p1',
+      display_name: 'Maya Chen',
+      org_raw: 'Stripe',
+      headline: 'PM at Stripe',
+      primary_email: 'maya@stripe.com',
+      linkedin_slug: 'maya-chen-1',
+      linkedin_member_id: 'ACo1',
+      emails: ['maya@stripe.com'],
+      linkedin_ids: [],
+    },
+    {
+      id: 'p2',
+      display_name: 'Maya Chen',
+      org_raw: 'UC Berkeley',
+      headline: 'Student',
+      primary_email: null,
+      linkedin_slug: null,
+      linkedin_member_id: null,
+      emails: [],
+      linkedin_ids: [],
+    },
+    {
+      id: 'p3',
+      display_name: 'Leo Grant',
+      org_raw: null,
+      headline: 'Partner @ Greenfield Ventures',
+      primary_email: null,
+      linkedin_slug: null,
+      linkedin_member_id: null,
+      emails: ['leo@greenfield.vc'],
+      linkedin_ids: ['leo-grant'],
+    },
+  ];
+  const idx = indexKnown(rows);
+  const find = (c: Partial<Candidate>, o: { slug?: string; email?: string; orgDomain?: string } = {}) =>
+    matchKnown(idx, cand(c), o)?.id;
+  it('K1 by LinkedIn slug', () =>
+    expect(find({ linkedinUrl: 'https://www.linkedin.com/in/Maya-Chen-1' }, { slug: 'Maya-Chen-1' })).toBe(
+      'p1',
+    ));
+  it('K2 by an identity slug, whatever the name', () =>
+    expect(find({ name: 'L Grant' }, { slug: 'leo-grant' })).toBe('p3'));
+  it('K3 by email', () =>
+    expect(find({ name: 'M. Chen', email: 'MAYA@stripe.com' }, { email: 'maya@stripe.com' })).toBe('p1'));
+  it('K4 by name and the same company, written messily', () =>
+    expect(find({ org: 'Stripe | Berkeley Haas', title: 'Product Lead' })).toBe('p1'));
+  it('K5 by name and the company in their headline', () =>
+    expect(find({ name: 'Leo Grant', org: 'Greenfield Ventures' })).toBe('p3'));
+  it('K6 by name and work email domain', () =>
+    expect(find({ name: 'Leo Grant', email: 'l.grant@greenfield.vc' })).toBe('p3'));
+  it('K7 a name alone is not a match', () =>
+    expect(find({ name: 'Maya Chen', org: 'Figma' })).toBeUndefined());
+  it('K8 a shared university is not a match', () =>
+    expect(find({ name: 'Maya Chen', org: 'Bioengineering, UC Berkeley' })).toBeUndefined());
+  it('K9 nobody by that name', () => expect(find({ name: 'Zed Quill', org: 'Stripe' })).toBeUndefined());
+});
+
+describe('org domains for an email: 2 cases', () => {
+  const m = new Map([
+    ['stripe', 'stripe.com'],
+    ['berkeley haas', 'haas.berkeley.edu'],
+  ]);
+  it('D1 an org written with a pipe gets both domains, in order', () =>
+    expect(domainsOf(cand({ org: 'Stripe | Berkeley Haas' }), m)).toEqual([
+      'stripe.com',
+      'haas.berkeley.edu',
+    ]));
+  it('D2 the company in the headline when the org is empty', () =>
+    expect(domainsOf(cand({ headline: 'Engineer at Stripe' }), m)).toEqual(['stripe.com']));
 });
 
 // written blind, after the rules above were tuned, to check they generalize
