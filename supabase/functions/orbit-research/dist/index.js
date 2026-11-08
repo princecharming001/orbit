@@ -2433,6 +2433,7 @@ var CAPS = [
     limit: 10,
     window: "day"
   },
+  { id: "hunter_daily_credits", provider: "hunter", measure: "units", limit: 10, window: "day" },
   {
     id: "unipile_profile_views_daily",
     provider: "unipile",

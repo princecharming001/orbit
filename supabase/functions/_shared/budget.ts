@@ -1,6 +1,6 @@
 /**
  * Per-user spending caps (§13.5), read from orbit.usage_ledger before a paid call:
- *   per day   Claude $1.50, Exa $0.50, Village 50 credits, Apollo match 10 credits, Unipile profile views 40
+ *   per day   Claude $1.50, Exa $0.50, Village 50 credits, Apollo match 10 credits, Hunter 10 credits, Unipile profile views 40
  *   per month $25 across every provider (calendar month, UTC)
  *   in total $100 per user, counting the chat's Claude spend too (public.orbit_proxy_spend): a stop against a
  *   runaway account, never a limit a real student meets in a year of normal use
@@ -30,6 +30,7 @@ export const CAPS: Cap[] = [
     limit: 10,
     window: 'day',
   },
+  { id: 'hunter_daily_credits', provider: 'hunter', measure: 'units', limit: 10, window: 'day' },
   {
     id: 'unipile_profile_views_daily',
     provider: 'unipile',

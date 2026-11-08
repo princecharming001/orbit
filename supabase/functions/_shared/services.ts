@@ -11,6 +11,7 @@ import type { Db } from './db.ts';
 import { type GoogleConfig, googleTokenSource, type TokenSource } from './google.ts';
 import { type Apollo, createApollo } from './providers/apollo';
 import { createExa, type Exa } from './providers/exa';
+import { createHunter, type Hunter } from './providers/hunter';
 import { defaultSleep } from './providers/request';
 import { createSemanticScholar, type SemanticScholar } from './providers/semanticScholar';
 import { createUnipileResearch, type UnipileResearch } from './providers/unipileResearch';
@@ -29,6 +30,8 @@ export interface AgentEnv {
   unipileBase?: string;
   /** APOLLO_API_KEY */
   apolloKey?: string;
+  /** HUNTER_API_KEY: finds and verifies work emails for people found outside the student's inbox */
+  hunterKey?: string;
   /** SEMANTIC_SCHOLAR_API_KEY; optional, the public rate limit applies without it */
   semanticScholarKey?: string;
   /** VILLAGE_SECRET_KEY + VILLAGE_BASE_URL (defaults to https://api.village.do) */
@@ -118,6 +121,7 @@ export interface Services {
   exa: Exa;
   unipile: UnipileResearch;
   apollo: Apollo;
+  hunter: Hunter;
   semanticScholar: SemanticScholar;
   village: Village;
   embed: Embed;
@@ -199,6 +203,7 @@ export function makeServices(cfg: AgentConfig, base: { db: Db; now?: () => Date;
     exa: createExa({ ...p, apiKey: env.exaKey }),
     unipile: createUnipileResearch({ ...p, apiKey: env.unipileKey, baseUrl: env.unipileBase }),
     apollo: createApollo({ ...p, apiKey: env.apolloKey }),
+    hunter: createHunter({ ...p, apiKey: env.hunterKey }),
     semanticScholar: createSemanticScholar({ ...p, apiKey: env.semanticScholarKey, anonymous: true }),
     village: villageFor(cfg, () =>
       createVillage({ ...p, secretKey: env.villageKey, baseUrl: env.villageBase }),
@@ -228,6 +233,7 @@ export const AGENT_SECRET_NAMES = [
   'UNIPILE_API_KEY',
   'UNIPILE_BASE_URL',
   'APOLLO_API_KEY',
+  'HUNTER_API_KEY',
   'SEMANTIC_SCHOLAR_API_KEY',
   'VILLAGE_SECRET_KEY',
   'VILLAGE_BASE_URL',
@@ -267,6 +273,7 @@ export function agentEnvFrom(get: (name: string) => string | undefined): AgentEn
     unipileKey: get('UNIPILE_API_KEY'),
     unipileBase: get('UNIPILE_BASE_URL'),
     apolloKey: get('APOLLO_API_KEY'),
+    hunterKey: get('HUNTER_API_KEY'),
     semanticScholarKey: get('SEMANTIC_SCHOLAR_API_KEY'),
     villageKey: get('VILLAGE_SECRET_KEY'),
     villageBase: get('VILLAGE_BASE_URL'),

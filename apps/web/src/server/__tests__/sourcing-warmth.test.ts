@@ -114,7 +114,7 @@ describe('finding emails', () => {
     expect(learnPattern(known, 'none.com')).toBeUndefined();
   });
 
-  it('keeps a page email, builds one from the pattern, guesses only where mail is accepted and never at a university', async () => {
+  it('keeps a page email, builds one from the pattern, and never sends a blind first.last unverified', async () => {
     const page = cand({ name: 'Page Person', email: 'pp@x.com' });
     const pattern = cand({ name: 'Maya Chen', org: 'Acme' });
     const guess = cand({ name: 'Jo Park', org: 'Beta', url: 'https://beta.io/team' });
@@ -130,7 +130,7 @@ describe('finding emails', () => {
     });
     expect(page).toMatchObject({ email: 'pp@x.com', emailConfidence: 'page' });
     expect(pattern).toMatchObject({ email: 'mchen@acme.com', emailConfidence: 'pattern' });
-    expect(guess).toMatchObject({ email: 'jo.park@beta.io', emailConfidence: 'guess' });
+    expect(guess.email).toBeUndefined();
     expect(nomail.email).toBeUndefined();
     expect(uni.email).toBeUndefined();
   });

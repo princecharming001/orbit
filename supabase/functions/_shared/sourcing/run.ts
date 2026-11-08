@@ -27,7 +27,7 @@ import { firstNameOf } from '../rows.ts';
 import type { Services } from '../services.ts';
 import { dnsMx, fillEmails, type KnownAddress, orgDomainsOf } from './email';
 import { indexKnown, type KnownRow, matchKnown } from './known';
-import { emailLookup } from './lookup';
+import { emailLookup, emailVerifier } from './lookup';
 import {
   type Candidate,
   type RecommendationRow,
@@ -251,16 +251,20 @@ export async function runSourcing(
   const mx = dnsMx(s.fetch);
   const year = now.getUTCFullYear();
   const budget = sqlBudget(db, s.now);
-  // verified addresses: a 1st-degree connection's own contact email, else Apollo (both capped per day, cached 30 days)
+  // looked-up addresses: a 1st-degree connection's own contact email, else Hunter, else Apollo (capped per day, the
+  // paid answers cached 30 days); the same Hunter key verifies the addresses built from a pattern
+  const cache = sqlSharedCache(db, () => now.getTime());
   const lookup = emailLookup({
     userId,
     unipile: s.unipile,
     unipileAccountId: acct?.external_account_id ?? undefined,
+    hunter: s.hunter,
     apollo: s.apollo,
     budget,
-    cache: sqlSharedCache(db, () => now.getTime()),
+    cache,
     domainOf: (c) => orgDomainsOf(c, ctx.orgDomains)[0] ?? siteDomain(c.url),
   });
+  const verify = emailVerifier({ userId, hunter: s.hunter, budget, cache });
   const result = await sourcePeople(
     {
       unipile: s.unipile,
@@ -303,7 +307,8 @@ export async function runSourcing(
           domains: [workDomain(c.email), ...orgDomainsOf(c, ctx.orgDomains)].filter((d): d is string => !!d),
           year,
         }),
-      fillEmails: (cands) => fillEmails(cands, { known: ctx.known, orgDomains: ctx.orgDomains, mx, lookup }),
+      fillEmails: (cands) =>
+        fillEmails(cands, { known: ctx.known, orgDomains: ctx.orgDomains, mx, lookup, verify }),
       inPipeline: async (c) => {
         const k = await knownOf(c);
         if (!k || !goal) return false;

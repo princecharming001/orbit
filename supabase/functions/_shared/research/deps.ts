@@ -52,6 +52,7 @@ export type BudgetProvider =
   | 'village'
   | 'apollo'
   | 'apollo_match'
+  | 'hunter'
   | 'unipile_profile'
   | 'unipile_search';
 
@@ -59,7 +60,7 @@ export type BudgetVerdict = { ok: true } | { ok: false; reason: 'budget_exceeded
 
 /**
  * Per-user caps from `usage_ledger` (`_shared/budget.ts`). `estimate` is in the cap's own unit: USD for claude and
- * exa, credits for village and apollo_match, views for unipile_profile, searches for unipile_search.
+ * exa, credits for village, apollo_match and hunter, views for unipile_profile, searches for unipile_search.
  */
 export interface BudgetDep {
   check(userId: string, provider: BudgetProvider, estimate: number): Promise<BudgetVerdict>;

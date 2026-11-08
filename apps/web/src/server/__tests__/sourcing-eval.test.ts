@@ -292,8 +292,12 @@ interface EmailCase {
   c: Partial<Candidate>;
   orgDomains?: [string, string][];
   mxOk?: string[];
+  /** what the verifier says per address; absent means no verifier (no Hunter key) */
+  verify?: Record<string, 'valid' | 'invalid' | 'risky'>;
   email?: string;
-  confidence?: 'page' | 'pattern' | 'guess';
+  confidence?: 'verified' | 'page' | 'pattern' | 'guess';
+  /** addresses the verifier was asked about, when it matters */
+  asked?: string[];
 }
 
 const EMAILS: EmailCase[] = [
@@ -342,12 +346,10 @@ const EMAILS: EmailCase[] = [
     orgDomains: [['district', 'district.net']],
   },
   {
-    id: 'E05 a tie is no pattern, guess when mail works',
+    id: 'E05 a tie is no pattern, and no blind guess without a verifier',
     c: { name: 'Maya Chen', org: 'Tie' },
     orgDomains: [['tie', 'tie.com']],
     mxOk: ['tie.com'],
-    email: 'maya.chen@tie.com',
-    confidence: 'guess',
   },
   {
     id: 'E06 accents dropped',
@@ -378,18 +380,17 @@ const EMAILS: EmailCase[] = [
   { id: 'E10 one name only', c: { name: 'Cher', org: 'Acme' }, orgDomains: [['acme', 'acme.com']] },
   { id: 'E11 no mail server, no guess', c: { name: 'Al Kim', url: 'https://nomail.io/about' } },
   {
-    id: 'E12 guess from the company site',
+    id: 'E12 a company site alone gives no blind first.last (right 1 time in 5)',
     c: { name: 'Jo Park', url: 'https://beta.io/team' },
     mxOk: ['beta.io'],
-    email: 'jo.park@beta.io',
-    confidence: 'guess',
   },
   {
-    id: 'E13 subdomain site',
+    id: 'E13 the verifier confirms first.last at a subdomain site',
     c: { name: 'Jo Park', url: 'https://team.beta.io/jo' },
     mxOk: ['beta.io'],
+    verify: { 'jo.park@beta.io': 'valid' },
     email: 'jo.park@beta.io',
-    confidence: 'guess',
+    confidence: 'verified',
   },
   {
     id: 'E14 university gets no guess',
@@ -417,11 +418,12 @@ const EMAILS: EmailCase[] = [
     mxOk: ['acme.com'],
   },
   {
-    id: 'E19 UK company domain',
+    id: 'E19 UK company domain, confirmed',
     c: { name: 'Jo Park', url: 'https://www.beta.co.uk/team' },
     mxOk: ['beta.co.uk'],
+    verify: { 'jo.park@beta.co.uk': 'valid' },
     email: 'jo.park@beta.co.uk',
-    confidence: 'guess',
+    confidence: 'verified',
   },
   {
     id: 'E20 page gmail stays as written',
@@ -429,22 +431,78 @@ const EMAILS: EmailCase[] = [
     email: 'jo.park.1@gmail.com',
     confidence: 'page',
   },
+  {
+    id: 'E23 a catch-all server confirms nothing: no blind address',
+    c: { name: 'Jo Park', url: 'https://beta.io/team' },
+    mxOk: ['beta.io'],
+    verify: { 'jo.park@beta.io': 'risky' },
+  },
+  {
+    id: 'E24 the verifier rejects the learned pattern: dropped',
+    c: { name: 'Maya Chen', org: 'Acme' },
+    orgDomains: [['acme', 'acme.com']],
+    verify: { 'mchen@acme.com': 'invalid' },
+  },
+  {
+    id: 'E25 the verifier confirms the learned pattern',
+    c: { name: 'Maya Chen', org: 'Acme' },
+    orgDomains: [['acme', 'acme.com']],
+    verify: { 'mchen@acme.com': 'valid' },
+    email: 'mchen@acme.com',
+    confidence: 'verified',
+  },
+  {
+    id: 'E26 a learned pattern the verifier cannot judge stays a pattern',
+    c: { name: 'Maya Chen', org: 'Acme' },
+    orgDomains: [['acme', 'acme.com']],
+    verify: { 'mchen@acme.com': 'risky' },
+    email: 'mchen@acme.com',
+    confidence: 'pattern',
+  },
+  {
+    id: 'E27 one example, rejected by the verifier: dropped',
+    c: { name: 'Maya Chen', org: 'Tiny' },
+    orgDomains: [['tiny', 'tiny.io']],
+    verify: { 'maya@tiny.io': 'invalid' },
+  },
+  {
+    id: 'E28 a university is never sent a blind address, even with a verifier',
+    c: { name: 'Lu Wang', url: 'https://eecs.berkeley.edu/faculty/lu' },
+    mxOk: ['berkeley.edu'],
+    verify: { 'lu.wang@berkeley.edu': 'valid' },
+    asked: [],
+  },
+  {
+    id: 'E29 no mail server: no verification spent',
+    c: { name: 'Al Kim', url: 'https://nomail.io/about' },
+    verify: { 'al.kim@nomail.io': 'valid' },
+    asked: [],
+  },
 ];
 
-describe('finding emails: 20 cases', () => {
+describe('finding emails: 27 cases', () => {
   for (const e of EMAILS)
     it(e.id, async () => {
       const c = cand(e.c);
+      const asked: string[] = [];
+      const table = e.verify;
       await fillEmails([c], {
         known,
         orgDomains: new Map(e.orgDomains ?? []),
         mx: async (d) => (e.mxOk ?? []).includes(d),
+        verify: table
+          ? async (email) => {
+              asked.push(email);
+              return table[email];
+            }
+          : undefined,
       });
       expect({ id: e.id, email: c.email, confidence: c.email ? c.emailConfidence : undefined }).toEqual({
         id: e.id,
         email: e.email,
         confidence: e.confidence,
       });
+      if (e.asked) expect(asked).toEqual(e.asked);
     });
 
   it('E21 three agreeing university addresses are a pattern', () => {

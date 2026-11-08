@@ -1,10 +1,15 @@
-/** The verified email lookup (lookup.ts): LinkedIn's own contact email first, Apollo second, cached, capped. */
+/** The email lookup (lookup.ts): LinkedIn's own contact email, then Hunter, then Apollo, cached, capped; and the verifier. */
 import { describe, expect, it } from 'vitest';
 import type { Apollo } from '../../../../../supabase/functions/_shared/providers/apollo';
+import {
+  createHunter,
+  type Hunter,
+  type HunterFinder,
+} from '../../../../../supabase/functions/_shared/providers/hunter';
 import type { UnipileResearch } from '../../../../../supabase/functions/_shared/providers/unipileResearch';
 import { memorySharedCache } from '../../../../../supabase/functions/_shared/research/web';
 import { fillEmails } from '../../../../../supabase/functions/_shared/sourcing/email';
-import { emailLookup } from '../../../../../supabase/functions/_shared/sourcing/lookup';
+import { emailLookup, emailVerifier } from '../../../../../supabase/functions/_shared/sourcing/lookup';
 import type { Candidate } from '../../../../../supabase/functions/_shared/sourcing/search';
 import { memoryBudget } from './fakes';
 
@@ -44,6 +49,28 @@ function fakeUnipile(emails: string[] | undefined) {
     },
   } as unknown as UnipileResearch;
   return { unipile, calls };
+}
+
+type Found = NonNullable<HunterFinder['data']>;
+
+function fakeHunter(
+  answer: (p: Record<string, string>) => Found | null,
+  verdicts: Record<string, string> = {},
+) {
+  const finds: Record<string, string>[] = [];
+  const verifies: string[] = [];
+  const hunter = {
+    configured: true,
+    findEmail: async (p: Record<string, string>) => {
+      finds.push(p);
+      return { ok: true, value: { data: answer(p) } };
+    },
+    verifyEmail: async (email: string) => {
+      verifies.push(email);
+      return { ok: true, value: { data: { status: verdicts[email] ?? 'unknown' } } };
+    },
+  } as unknown as Hunter;
+  return { hunter, finds, verifies };
 }
 
 const maya = cand({ linkedinUrl: 'https://www.linkedin.com/in/maya-chen-1', org: 'Stripe' });
@@ -234,5 +261,211 @@ describe('verified addresses inside the email finder: 5 cases', () => {
     expect(a.emailConfidence).toBe('verified');
     expect(b.email).toBe('bliu@acme.ai');
     expect(b.emailConfidence).toBe('guess');
+  });
+});
+
+describe('Hunter in the lookup: 9 cases', () => {
+  const ok = (email: string, extra: Partial<Found> = {}): Found => ({
+    email,
+    score: 95,
+    verification: { status: 'valid' },
+    sources: [],
+    ...extra,
+  });
+
+  it('H1 by LinkedIn handle first: the person themself, verified; Apollo never asked', async () => {
+    const h = fakeHunter(() => ok('maya@stripe.com'));
+    const ap = fakeApollo(() => ({ email: 'other@stripe.com', email_status: 'verified' }));
+    const look = emailLookup({
+      userId: 'u',
+      hunter: h.hunter,
+      apollo: ap.apollo,
+      cache: memorySharedCache(),
+    });
+    expect(await look(maya)).toEqual({ email: 'maya@stripe.com', source: 'hunter', status: 'verified' });
+    expect(h.finds).toEqual([{ linkedin_handle: 'maya-chen-1' }]);
+    expect(ap.calls).toHaveLength(0);
+  });
+
+  it('H2 nothing by handle: then by name and the company domain', async () => {
+    const h = fakeHunter((p) => (p.domain ? ok('mchen@stripe.com') : null));
+    const look = emailLookup({
+      userId: 'u',
+      hunter: h.hunter,
+      cache: memorySharedCache(),
+      domainOf: () => 'stripe.com',
+    });
+    expect(await look(maya)).toMatchObject({ email: 'mchen@stripe.com', status: 'verified' });
+    expect(h.finds[1]).toEqual({ first_name: 'maya', last_name: 'chen', domain: 'stripe.com' });
+  });
+
+  it('H3 a namesake (their LinkedIn is someone else) is dropped', async () => {
+    const h = fakeHunter(() =>
+      ok('joseph.gonzalez@berkeley.edu', { linkedin_url: 'https://linkedin.com/in/joseph-go99' }),
+    );
+    const look = emailLookup({
+      userId: 'u',
+      hunter: h.hunter,
+      cache: memorySharedCache(),
+      domainOf: () => 'berkeley.edu',
+    });
+    const prof = cand({ name: 'Joseph Gonzalez', linkedinUrl: 'https://www.linkedin.com/in/jegonzal' });
+    expect(await look(prof)).toBeUndefined();
+    expect(h.finds).toHaveLength(2);
+  });
+
+  it('H4 by name at a university with no profile to compare: a guess at most', async () => {
+    const h = fakeHunter(() => ok('hearst@berkeley.edu'));
+    const look = emailLookup({
+      userId: 'u',
+      hunter: h.hunter,
+      cache: memorySharedCache(),
+      domainOf: () => 'berkeley.edu',
+    });
+    expect(await look(cand({ name: 'Marti Hearst', org: 'UC Berkeley' }))).toMatchObject({
+      email: 'hearst@berkeley.edu',
+      status: 'guess',
+    });
+  });
+
+  it('H5 an address Hunter itself marks invalid is dropped', async () => {
+    const h = fakeHunter(() => ok('maya@stripe.com', { verification: { status: 'invalid' } }));
+    const look = emailLookup({ userId: 'u', hunter: h.hunter, cache: memorySharedCache() });
+    expect(await look(maya)).toBeUndefined();
+  });
+
+  it('H6 a catch-all server: verified only when the address is still on a public page', async () => {
+    const onPage = fakeHunter(() =>
+      ok('maya@stripe.com', { verification: { status: 'accept_all' }, sources: [{ still_on_page: true }] }),
+    );
+    expect(
+      await emailLookup({ userId: 'u', hunter: onPage.hunter, cache: memorySharedCache() })(maya),
+    ).toMatchObject({ status: 'verified' });
+    const weak = fakeHunter(() =>
+      ok('maya@stripe.com', { verification: { status: 'accept_all' }, score: 40 }),
+    );
+    expect(
+      await emailLookup({ userId: 'u', hunter: weak.hunter, cache: memorySharedCache() })(maya),
+    ).toBeUndefined();
+  });
+
+  it("H7 a connection's LinkedIn email is never served to another student from the cache", async () => {
+    const li = fakeUnipile(['maya.chen@stripe.com']);
+    const ap = fakeApollo(() => null);
+    const cache = memorySharedCache();
+    const mine = emailLookup({
+      userId: 'a',
+      unipile: li.unipile,
+      unipileAccountId: 'acc',
+      apollo: ap.apollo,
+      cache,
+    });
+    expect(await mine(cand({ ...maya, networkDistance: 1 }))).toMatchObject({ source: 'linkedin' });
+    const theirs = emailLookup({
+      userId: 'b',
+      unipile: li.unipile,
+      unipileAccountId: 'acc2',
+      apollo: ap.apollo,
+      cache,
+    });
+    expect(await theirs(cand({ ...maya, networkDistance: 2 }))).toBeUndefined();
+    expect(li.calls).toHaveLength(1);
+  });
+
+  it('H8 a key added later asks again instead of reading the old miss', async () => {
+    const cache = memorySharedCache();
+    const ap = fakeApollo(() => null);
+    expect(await emailLookup({ userId: 'u', apollo: ap.apollo, cache })(maya)).toBeUndefined();
+    const h = fakeHunter(() => ok('maya@stripe.com'));
+    expect(
+      await emailLookup({ userId: 'u', hunter: h.hunter, apollo: ap.apollo, cache })(maya),
+    ).toMatchObject({
+      email: 'maya@stripe.com',
+    });
+  });
+
+  it('H9 over the daily Hunter cap: no call', async () => {
+    const h = fakeHunter(() => ok('maya@stripe.com'));
+    const look = emailLookup({
+      userId: 'u',
+      hunter: h.hunter,
+      budget: memoryBudget({ hunter: true }).budget,
+      cache: memorySharedCache(),
+    });
+    expect(await look(maya)).toBeUndefined();
+    expect(h.finds).toHaveLength(0);
+  });
+});
+
+describe('the verifier: 4 cases', () => {
+  it('V1 no Hunter key: no verifier at all', () => {
+    expect(emailVerifier({ userId: 'u', cache: memorySharedCache() })).toBeUndefined();
+  });
+
+  it('V2 statuses map to valid, invalid and risky; each address is checked once for everyone', async () => {
+    const h = fakeHunter(() => null, { 'a@x.com': 'valid', 'b@x.com': 'invalid', 'c@x.com': 'accept_all' });
+    const cache = memorySharedCache();
+    const v = emailVerifier({ userId: 'u', hunter: h.hunter, cache })!;
+    expect([await v('a@x.com'), await v('b@x.com'), await v('c@x.com'), await v('d@x.com')]).toEqual([
+      'valid',
+      'invalid',
+      'risky',
+      'risky',
+    ]);
+    await emailVerifier({ userId: 'u2', hunter: h.hunter, cache })!('A@x.com');
+    expect(h.verifies).toEqual(['a@x.com', 'b@x.com', 'c@x.com', 'd@x.com']);
+  });
+
+  it('V3 over the daily Hunter cap: no call, no verdict', async () => {
+    const h = fakeHunter(() => null, { 'a@x.com': 'valid' });
+    const v = emailVerifier({
+      userId: 'u',
+      hunter: h.hunter,
+      budget: memoryBudget({ hunter: true }).budget,
+      cache: memorySharedCache(),
+    })!;
+    expect(await v('a@x.com')).toBeUndefined();
+    expect(h.verifies).toHaveLength(0);
+  });
+
+  it('V4 the finder caps verifications per run, best fit first', async () => {
+    const asked: string[] = [];
+    const cs = ['Al One', 'Bo Two', 'Cy Three'].map((name) => cand({ name, url: 'https://beta.io/team' }));
+    await fillEmails(cs, {
+      known: [],
+      orgDomains: new Map(),
+      maxVerifies: 2,
+      verify: async (e) => {
+        asked.push(e);
+        return 'valid';
+      },
+    });
+    expect(asked).toEqual(['al.one@beta.io', 'bo.two@beta.io']);
+    expect(cs.map((c) => c.emailConfidence)).toEqual(['verified', 'verified', undefined]);
+  });
+});
+
+describe('the Hunter adapter: 2 cases', () => {
+  it('sends the key as a header and the person in the query; 404 is nobody found', async () => {
+    const seen: { url: string; key: string | null }[] = [];
+    const fetch = (async (url: string, init: RequestInit) => {
+      seen.push({ url, key: new Headers(init.headers).get('x-api-key') });
+      return new Response('{"errors":[{"id":"not_found"}]}', { status: 404 });
+    }) as unknown as typeof globalThis.fetch;
+    const r = await createHunter({ fetch, apiKey: 'hk' }).findEmail({ linkedin_handle: 'maya-chen-1' });
+    expect(r).toEqual({ ok: true, value: { data: null } });
+    expect(seen[0]!.url).toBe('https://api.hunter.io/v2/email-finder?linkedin_handle=maya-chen-1');
+    expect(seen[0]!.key).toBe('hk');
+  });
+
+  it('no key: unconfigured, nothing sent', async () => {
+    let calls = 0;
+    const fetch = (async () => {
+      calls++;
+      return new Response('{}');
+    }) as unknown as typeof globalThis.fetch;
+    const r = await createHunter({ fetch }).verifyEmail('a@x.com');
+    expect(r.ok).toBe(false);
+    expect(calls).toBe(0);
   });
 });

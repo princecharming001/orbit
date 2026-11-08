@@ -17,6 +17,7 @@ var CAPS = [
     limit: 10,
     window: "day"
   },
+  { id: "hunter_daily_credits", provider: "hunter", measure: "units", limit: 10, window: "day" },
   {
     id: "unipile_profile_views_daily",
     provider: "unipile",
@@ -743,6 +744,62 @@ function createExa(opts) {
         headers: headers(),
         body: req,
         schema: exaContentsResponseSchema
+      });
+    }
+  };
+}
+
+// supabase/functions/_shared/providers/hunter.ts
+var HUNTER_BASE = "https://api.hunter.io";
+var sourceSchema = z.looseObject({
+  domain: z.string().nullish(),
+  uri: z.string().nullish(),
+  still_on_page: z.boolean().nullish()
+});
+var hunterFinderSchema = z.looseObject({
+  data: z.looseObject({
+    email: z.string().nullish(),
+    score: z.number().nullish(),
+    accept_all: z.boolean().nullish(),
+    position: z.string().nullish(),
+    linkedin_url: z.string().nullish(),
+    sources: z.array(sourceSchema).nullish(),
+    verification: z.looseObject({ status: z.string().nullish() }).nullish()
+  }).nullish()
+});
+var hunterVerifierSchema = z.looseObject({
+  data: z.looseObject({ status: z.string().nullish(), score: z.number().nullish() }).nullish()
+});
+function deliverability(status) {
+  const s = (status ?? "").toLowerCase();
+  if (s === "valid") return "valid";
+  if (s === "invalid" || s === "disposable") return "invalid";
+  return "risky";
+}
+function createHunter(opts) {
+  const base = trimBase(opts.baseUrl ?? HUNTER_BASE);
+  const headers = () => ({ "X-API-KEY": opts.apiKey ?? "" });
+  return {
+    configured: !!opts.apiKey,
+    async findEmail(params) {
+      if (!opts.apiKey) return unconfigured2("hunter");
+      return requestJson(opts, {
+        provider: "hunter",
+        url: `${base}/v2/email-finder${query({ ...params })}`,
+        headers: headers(),
+        schema: hunterFinderSchema,
+        // nobody found by that handle or name
+        emptyOn: [404],
+        onEmpty: () => ({ data: null })
+      });
+    },
+    async verifyEmail(email) {
+      if (!opts.apiKey) return unconfigured2("hunter");
+      return requestJson(opts, {
+        provider: "hunter",
+        url: `${base}/v2/email-verifier${query({ email })}`,
+        headers: headers(),
+        schema: hunterVerifierSchema
       });
     }
   };
@@ -1556,6 +1613,7 @@ function makeServices(cfg, base) {
     exa: createExa({ ...p, apiKey: env2.exaKey }),
     unipile: createUnipileResearch({ ...p, apiKey: env2.unipileKey, baseUrl: env2.unipileBase }),
     apollo: createApollo({ ...p, apiKey: env2.apolloKey }),
+    hunter: createHunter({ ...p, apiKey: env2.hunterKey }),
     semanticScholar: createSemanticScholar({ ...p, apiKey: env2.semanticScholarKey, anonymous: true }),
     village: villageFor(
       cfg,
@@ -1583,6 +1641,7 @@ var AGENT_SECRET_NAMES = [
   "UNIPILE_API_KEY",
   "UNIPILE_BASE_URL",
   "APOLLO_API_KEY",
+  "HUNTER_API_KEY",
   "SEMANTIC_SCHOLAR_API_KEY",
   "VILLAGE_SECRET_KEY",
   "VILLAGE_BASE_URL",
@@ -1610,6 +1669,7 @@ function agentEnvFrom(get) {
     unipileKey: get("UNIPILE_API_KEY"),
     unipileBase: get("UNIPILE_BASE_URL"),
     apolloKey: get("APOLLO_API_KEY"),
+    hunterKey: get("HUNTER_API_KEY"),
     semanticScholarKey: get("SEMANTIC_SCHOLAR_API_KEY"),
     villageKey: get("VILLAGE_SECRET_KEY"),
     villageBase: get("VILLAGE_BASE_URL"),
@@ -19536,6 +19596,7 @@ function studentFromResume(parsed2, base) {
 
 // supabase/functions/_shared/sourcing/email.ts
 var MAX_LOOKUPS = 10;
+var MAX_VERIFIES = 10;
 var PATTERNS2 = {
   "first.last": (f, l) => `${f}.${l}`,
   first: (f) => f,
@@ -19639,37 +19700,50 @@ async function fillEmails(cands, opts) {
       c.emailConfidence = g.status === "verified" ? "verified" : "guess";
     });
   }
-  const pageFound = cands.filter((c) => c.email).map((c) => ({ name: c.name, email: c.email }));
-  const known = [...opts.known, ...pageFound];
+  const known = [
+    ...opts.known,
+    ...cands.filter((c) => c.email).map((c) => ({ name: c.name, email: c.email }))
+  ];
   const patterns = /* @__PURE__ */ new Map();
-  let filled = 0;
+  const patternAt = (d) => {
+    if (!patterns.has(d)) patterns.set(d, domainPattern(known, d));
+    return patterns.get(d);
+  };
+  let verifies = 0;
+  const maxVerifies = opts.maxVerifies ?? MAX_VERIFIES;
+  const check = (email) => opts.verify && verifies++ < maxVerifies ? opts.verify(email).catch(() => void 0) : Promise.resolve(void 0);
+  const todo = [];
   for (const c of cands) {
     if (c.entity !== "person") continue;
     if (c.email) {
       c.emailConfidence ??= "page";
       continue;
     }
-    if (filled >= (opts.max ?? 40)) break;
     const n = c.lastNameObfuscated ? void 0 : nameParts(c.name, c.firstName, c.lastName);
-    if (!n) continue;
-    for (const d of domainsOf(c, opts.orgDomains)) {
-      if (!patterns.has(d)) patterns.set(d, domainPattern(known, d));
-      const p = patterns.get(d);
-      if (p) {
-        c.email = `${PATTERNS2[p.pattern](n.f, n.l)}@${d}`;
-        c.emailConfidence = p.sure ? "pattern" : "guess";
-        filled++;
-        break;
-      }
-      if (isUniversity(d)) continue;
-      if (await opts.mx(d)) {
-        c.email = `${PATTERNS2["first.last"](n.f, n.l)}@${d}`;
-        c.emailConfidence = "guess";
-        filled++;
-        break;
-      }
-    }
+    if (n && todo.length < (opts.max ?? 40)) todo.push({ c, n });
   }
+  await Promise.all(
+    todo.map(async ({ c, n }) => {
+      for (const d of domainsOf(c, opts.orgDomains)) {
+        const p = patternAt(d);
+        if (p) {
+          const email2 = `${PATTERNS2[p.pattern](n.f, n.l)}@${d}`;
+          const v = await check(email2);
+          if (v === "invalid") continue;
+          c.email = email2;
+          c.emailConfidence = v === "valid" ? "verified" : p.sure ? "pattern" : "guess";
+          return;
+        }
+        if (!opts.verify || isUniversity(d)) continue;
+        if (opts.mx && !await opts.mx(d)) continue;
+        const email = `${PATTERNS2["first.last"](n.f, n.l)}@${d}`;
+        if (await check(email) !== "valid") continue;
+        c.email = email;
+        c.emailConfidence = "verified";
+        return;
+      }
+    })
+  );
 }
 
 // supabase/functions/_shared/sourcing/known.ts
@@ -19716,11 +19790,16 @@ function emailLookup(d) {
     const slug = linkedInSlugOf(cleanLinkedInUrl(c.linkedinUrl));
     const n = c.lastNameObfuscated ? void 0 : nameParts(c.name, c.firstName, c.lastName);
     const domain = d.domainOf?.(c);
-    const key2 = slug ? `email:li:${slug}` : c.memberId ? `email:mid:${c.memberId}` : n && domain ? `email:nd:${n.f}.${n.l}@${domain}` : void 0;
-    if (!key2) return void 0;
+    const mine = await fromLinkedIn(d, c, slug);
+    if (mine) return mine;
+    const asked = `${d.hunter?.configured ? "h" : ""}${d.apollo?.configured ? "a" : ""}`;
+    if (!asked) return void 0;
+    const who = slug ? `li:${slug}` : c.memberId ? `mid:${c.memberId}` : n && domain ? `nd:${n.f}.${n.l}@${domain}` : void 0;
+    if (!who) return void 0;
+    const key2 = `email:${asked}:${who}`;
     const hit = await d.cache.get(key2).catch(() => void 0);
     if (hit) return "none" in hit ? void 0 : hit;
-    const found = await fromLinkedIn(d, c, slug) ?? await fromApollo(d, c, domain);
+    const found = await fromHunter(d, slug, n, domain) ?? await fromApollo(d, c, domain);
     await d.cache.put(key2, "email_lookup", found ?? { none: true }, LOOKUP_TTL_MS).catch(() => void 0);
     return found;
   };
@@ -19740,6 +19819,46 @@ async function fromLinkedIn(d, c, slug) {
   });
   const email = r.value.contact_info?.emails?.find((e) => typeof e === "string" && e.includes("@"));
   return email ? { email: email.trim().toLowerCase(), source: "linkedin", status: "verified" } : void 0;
+}
+async function fromHunter(d, slug, n, domain) {
+  if (!d.hunter?.configured) return void 0;
+  const asks = [];
+  if (slug) asks.push({ by: "handle", params: { linkedin_handle: slug } });
+  if (n && domain) asks.push({ by: "name", params: { first_name: n.f, last_name: n.l, domain } });
+  for (const ask of asks) {
+    if (d.budget && !(await d.budget.check(d.userId, "hunter", 1)).ok) return void 0;
+    const r = await d.hunter.findEmail(ask.params);
+    if (!r.ok) return void 0;
+    const h = r.value.data;
+    const email = h?.email?.trim().toLowerCase();
+    if (!h || !email?.includes("@")) continue;
+    await d.budget?.record(d.userId, { provider: "hunter", operation: "find", units: 1, costUsd: 0 });
+    const theirs = linkedInSlugOf(cleanLinkedInUrl(h.linkedin_url));
+    if (slug && theirs && theirs !== slug) continue;
+    const v = deliverability(h.verification?.status);
+    if (v === "invalid") continue;
+    const onPage = (h.sources ?? []).some((x) => x.still_on_page);
+    const sure = ask.by === "handle" || !!theirs || !isUniversity(email.split("@")[1] ?? "");
+    if (sure && (v === "valid" || onPage)) return { email, source: "hunter", status: "verified" };
+    if ((h.score ?? 0) >= 70) return { email, source: "hunter", status: "guess" };
+  }
+  return void 0;
+}
+function emailVerifier(d) {
+  const hunter = d.hunter;
+  if (!hunter?.configured) return void 0;
+  return async (email) => {
+    const key2 = `verify:${email.toLowerCase()}`;
+    const hit = await d.cache.get(key2).catch(() => void 0);
+    if (hit?.v) return hit.v;
+    if (d.budget && !(await d.budget.check(d.userId, "hunter", 0.5)).ok) return void 0;
+    const r = await hunter.verifyEmail(email);
+    if (!r.ok) return void 0;
+    await d.budget?.record(d.userId, { provider: "hunter", operation: "verify", units: 0.5, costUsd: 0 });
+    const v = deliverability(r.value.data?.status);
+    await d.cache.put(key2, "email_verify", { v }, LOOKUP_TTL_MS).catch(() => void 0);
+    return v;
+  };
 }
 async function fromApollo(d, c, domain) {
   if (!d.apollo?.configured) return void 0;
@@ -21154,15 +21273,18 @@ async function runSourcing(s, userId, req) {
   const mx = dnsMx(s.fetch);
   const year = now.getUTCFullYear();
   const budget2 = sqlBudget(db2, s.now);
+  const cache2 = sqlSharedCache(db2, () => now.getTime());
   const lookup = emailLookup({
     userId,
     unipile: s.unipile,
     unipileAccountId: acct?.external_account_id ?? void 0,
+    hunter: s.hunter,
     apollo: s.apollo,
     budget: budget2,
-    cache: sqlSharedCache(db2, () => now.getTime()),
+    cache: cache2,
     domainOf: (c) => orgDomainsOf(c, ctx.orgDomains)[0] ?? siteDomain(c.url)
   });
+  const verify = emailVerifier({ userId, hunter: s.hunter, budget: budget2, cache: cache2 });
   const result = await sourcePeople(
     {
       unipile: s.unipile,
@@ -21203,7 +21325,7 @@ async function runSourcing(s, userId, req) {
         domains: [workDomain(c.email), ...orgDomainsOf(c, ctx.orgDomains)].filter((d) => !!d),
         year
       }),
-      fillEmails: (cands) => fillEmails(cands, { known: ctx.known, orgDomains: ctx.orgDomains, mx, lookup }),
+      fillEmails: (cands) => fillEmails(cands, { known: ctx.known, orgDomains: ctx.orgDomains, mx, lookup, verify }),
       inPipeline: async (c) => {
         const k = await knownOf(c);
         if (!k || !goal) return false;
