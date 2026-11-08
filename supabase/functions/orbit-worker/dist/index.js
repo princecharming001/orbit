@@ -6898,6 +6898,66 @@ ${body}`, ctx.inputs))
   return { ok: !deduped.some((i) => i.blocking), issues: deduped, words: words4, grade };
 }
 
+// packages/core/src/drafts/typing.ts
+var TYPING_SAMPLES = 40;
+var MIN_SAMPLES = 5;
+var LOWER_SHARE = 0.6;
+var SIGN_SHARE = 0.3;
+var hasWords = (s) => /[A-Za-z]{3}/.test(s) && s.trim().length > 20;
+var opening = (s) => s.replace(/^[\s"'(\-*•>]+/, "");
+function learnTyping(newestFirst, firstName) {
+  const samples = newestFirst.filter(hasWords).slice(0, TYPING_SAMPLES);
+  if (samples.length < MIN_SAMPLES) return void 0;
+  const lower = samples.filter((s) => /^[a-z]/.test(opening(s))).length;
+  const name = firstName?.trim().toLowerCase();
+  const signed = name ? samples.filter((s) => new RegExp(`(^|[\\s,\\-])${escapeRe2(name)}[\\s.!]*$`, "i").test(s.trim())).length : 0;
+  return {
+    casing: lower / samples.length >= LOWER_SHARE ? "lower" : "proper",
+    signs: signed / samples.length >= SIGN_SHARE,
+    from: samples.length
+  };
+}
+function escapeRe2(s) {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+var PROTECTED = /(https?:\/\/\S+|www\.\S+|[\w.+-]+@[\w-]+\.[\w.-]+|@\w+|\b[\w-]+\.(?:com|io|ai|co|org|net|dev|app|today)\b\S*)/g;
+function mapUnprotected(text2, fn) {
+  let out = "";
+  let at = 0;
+  for (const m of text2.matchAll(PROTECTED)) {
+    out += fn(text2.slice(at, m.index)) + m[0];
+    at = (m.index ?? 0) + m[0].length;
+  }
+  return out + fn(text2.slice(at));
+}
+var SIGNOFF_WORDS = /^(best|thanks|thank you|thanks so much|cheers|regards|best regards|warmly|talk soon|all the best)[,.!]?$/i;
+function dropSignoff(body, firstName) {
+  const name = firstName.trim().toLowerCase();
+  if (!name) return body;
+  const lines = body.replace(/\s+$/, "").split("\n");
+  const last = lines[lines.length - 1]?.trim().replace(/^[-–—]\s*/, "").toLowerCase();
+  if (last !== name) return body;
+  lines.pop();
+  const above = lines[lines.length - 1]?.trim();
+  if (above && SIGNOFF_WORDS.test(above)) lines.pop();
+  return lines.join("\n").replace(/\s+$/, "");
+}
+function properCase(text2) {
+  const withI = mapUnprotected(text2, (part) => part.replace(/\bi(?='(?:m|ll|d|ve|re)\b|\b)/g, "I"));
+  return withI.replace(/(^\s*|[.!?]\s+|\n\s*)([a-z])/g, (m, lead, c, at) => {
+    const rest = withI.slice(at + lead.length);
+    if (/^(https?:\/\/|www\.|[\w.+-]+@|[\w-]+\.(com|io|ai|co|org|net|dev|app|today)\b)/.test(rest)) return m;
+    return lead + c.toUpperCase();
+  });
+}
+function applyTyping(body, style, opts) {
+  if (!style) return body;
+  let out = body;
+  if (opts.channel === "linkedin" && !style.signs && opts.firstName) out = dropSignoff(out, opts.firstName);
+  out = style.casing === "lower" ? mapUnprotected(out, (p) => p.toLowerCase()) : properCase(out);
+  return out;
+}
+
 // supabase/functions/_shared/rows.ts
 function iso(v) {
   if (v === null || v === void 0 || v === "") return null;
@@ -10770,7 +10830,7 @@ function voiceText(c) {
     c.notes ? `notes: ${c.notes}` : ""
   ].filter(Boolean).join("\n");
 }
-var escapeRe2 = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+var escapeRe3 = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 async function exemplars(s, userId, personId, situation, opts = {}) {
   let q = null;
   try {
@@ -10804,7 +10864,7 @@ async function exemplars(s, userId, personId, situation, opts = {}) {
   ].sort((a, b) => b.length - a.length);
   return rows.map((r) => {
     let text2 = stripQuotedReply(r.body_text).trim().slice(0, 1200);
-    for (const w of words4) text2 = text2.replace(new RegExp(`\\b${escapeRe2(w)}\\b`, "g"), "[name]");
+    for (const w of words4) text2 = text2.replace(new RegExp(`\\b${escapeRe3(w)}\\b`, "g"), "[name]");
     return text2.replace(/^(hi|hey|hello|dear)\s+[A-Z][a-z]+/i, (m) => `${m.split(/\s+/)[0]} [name]`);
   });
 }
@@ -11228,6 +11288,21 @@ ${13 + i}. ${l}`).join("")}`;
   }
   if (answer && askUserMarkers(composed.body).length)
     composed = { ...composed, body: composed.body.replace(ASK_USER, answer) };
+  if (!askUserMarkers(composed.body).length) {
+    const sent = await db2.sql`
+      select body_text as b from orbit.messages
+       where user_id = ${req.userId}::uuid and provider = ${req.channel} and direction = 'out'
+         and body_text is not null
+       order by sent_at desc limit 80`;
+    const style = learnTyping(
+      sent.map((r) => r.b),
+      meFirst
+    );
+    composed = {
+      ...composed,
+      body: applyTyping(composed.body, style, { channel: req.channel, firstName: meFirst })
+    };
+  }
   let footer;
   if (salesFirstTouch2) {
     const company = typeof user.settings.company === "string" ? user.settings.company.trim() : "";
@@ -17382,16 +17457,16 @@ var NICKNAMES2 = [
   ["william", "will", "bill", "billy", "liam"],
   ["zachary", "zach", "zack"]
 ];
-var escapeRe3 = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+var escapeRe4 = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 function hasPhrase2(text2, phrase) {
   const p = norm(phrase);
   if (!p) return false;
-  return new RegExp(`(^|[^\\p{L}\\p{N}])${escapeRe3(p)}($|[^\\p{L}\\p{N}])`, "u").test(text2);
+  return new RegExp(`(^|[^\\p{L}\\p{N}])${escapeRe4(p)}($|[^\\p{L}\\p{N}])`, "u").test(text2);
 }
 function hasExact(raw, phrase) {
   const p = phrase.trim();
   if (!p) return false;
-  return new RegExp(`(^|[^\\p{L}\\p{N}])${escapeRe3(p)}($|[^\\p{L}\\p{N}])`, "u").test(raw);
+  return new RegExp(`(^|[^\\p{L}\\p{N}])${escapeRe4(p)}($|[^\\p{L}\\p{N}])`, "u").test(raw);
 }
 function companyAliases(name) {
   const k = normOrg(name);
@@ -17413,7 +17488,7 @@ function placesOf(raw, phrase, exact) {
   const hay = exact ? raw : raw.toLowerCase();
   const out = [];
   if (!p) return out;
-  const re = new RegExp(`(^|[^\\p{L}\\p{N}])${escapeRe3(p)}(?=$|[^\\p{L}\\p{N}])`, "gu");
+  const re = new RegExp(`(^|[^\\p{L}\\p{N}])${escapeRe4(p)}(?=$|[^\\p{L}\\p{N}])`, "gu");
   for (let m = re.exec(hay); m; m = re.exec(hay)) out.push(m.index + m[1].length);
   return out;
 }
@@ -19324,14 +19399,14 @@ function webAsk(goal) {
     if (at?.[1]) place = at[1].replace(/^the\s+/i, "").trim();
   }
   if (!place) return void 0;
-  subject = subject.replace(new RegExp(`\\b(?:at|@|from)\\s+${escapeRe4(place)}\\b`, "i"), " ").replace(new RegExp(`\\b${escapeRe4(place)}\\b`, "i"), " ").replace(ROLE_WORDS, " ").replace(
+  subject = subject.replace(new RegExp(`\\b(?:at|@|from)\\s+${escapeRe5(place)}\\b`, "i"), " ").replace(new RegExp(`\\b${escapeRe5(place)}\\b`, "i"), " ").replace(ROLE_WORDS, " ").replace(
     /\b(?:i can|i could|i should|reach out to|write to|talk to|to|contact|email|cold email|source|find|some|a few|new|me|who)\b/gi,
     " "
   ).replace(/\s+/g, " ").trim().replace(/^(?:for|about|on|in|into|doing|working on|studying|researching)\s+/i, "").replace(/\s+(?:for|about|on|in|at)$/i, "").trim();
   if (!subject) subject = goal.roles?.[0] ?? role ?? "people";
   return { place, subject, role };
 }
-var escapeRe4 = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+var escapeRe5 = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 function webQueries(ask) {
   const who = ask.role && /professor|faculty|pi\b|investigator|postdoc|phd|researcher|scientist/.test(ask.role) ? "faculty" : ask.role ?? "team";
   const qs2 = [
@@ -21769,7 +21844,7 @@ var STRONG = 3;
 var GENERIC = 2;
 var THRESHOLD = 2;
 var fold3 = (s) => s.normalize("NFD").replace(/\p{M}/gu, "").replace(/[‘’]/g, "'");
-var escapeRe5 = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+var escapeRe6 = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 var wordRe = (alt, flags) => new RegExp(`(?<![\\p{L}\\p{N}'])(?:${alt})(?![\\p{L}\\p{N}])`, `${flags}u`);
 var sentencesOf2 = (text2) => text2.split(/(?<!\b(?:Co|Inc|Ltd|Corp|Dr|Prof|Mr|Ms|Mrs|Jr|Sr|St|vs|etc|e\.g|i\.e))(?<=[.!?])\s+|\n+/).map((s) => s.trim()).filter(Boolean);
 var CLAUSE_SPLIT = /\s*(?:[,;:()]|\s-{1,2}\s|[–—]+)\s*/;
@@ -22074,14 +22149,14 @@ function readIntroduction(msg, people, userEmails, ctx = {}) {
   }
   const isCandidateWord = (w) => candidates.some((c) => c.name.toLowerCase() === w.toLowerCase());
   const students = (ctx.studentNames ?? []).map((n) => fold3(n.trim())).filter((n) => n.length >= 2).sort((a, b) => b.length - a.length);
-  const studentAlt = students.length ? students.map(escapeRe5).join("|") : void 0;
+  const studentAlt = students.length ? students.map(escapeRe6).join("|") : void 0;
   const isStudentWord = (w) => !!studentAlt && new RegExp(`^(?:${studentAlt})$`, "i").test(w);
   const namesStudent = (text2) => !!studentAlt && wordRe(studentAlt, "i").test(text2);
   const byTitle = (text2) => candidates.reduce((t, c) => {
     const last = fold3(c.person.lastName?.trim() ?? "");
     return last.length < 2 ? t : t.replace(
       new RegExp(
-        `\\b(?:professor|prof\\.?|dr\\.?|mr\\.?|ms\\.?|mrs\\.?)\\s+${escapeRe5(last)}\\b`,
+        `\\b(?:professor|prof\\.?|dr\\.?|mr\\.?|ms\\.?|mrs\\.?)\\s+${escapeRe6(last)}\\b`,
         "gi"
       ),
       c.name
@@ -22091,11 +22166,11 @@ function readIntroduction(msg, people, userEmails, ctx = {}) {
   const caseless = !/[A-Z]/.test(body.replace(/\bI\b/g, "").replace(/\n[^\n]*$/, ""));
   const lowerOnly = new Set(
     candidates.filter(
-      (c) => !COMMON_WORD_NAMES.has(c.name.toLowerCase()) && !wordRe(escapeRe5(c.name), "").test(fold3(msg.bodyText ?? "")) && wordRe(escapeRe5(c.name.toLowerCase()), "").test(fold3(msg.bodyText ?? ""))
+      (c) => !COMMON_WORD_NAMES.has(c.name.toLowerCase()) && !wordRe(escapeRe6(c.name), "").test(fold3(msg.bodyText ?? "")) && wordRe(escapeRe6(c.name.toLowerCase()), "").test(fold3(msg.bodyText ?? ""))
     ).map((c) => c.person.id)
   );
   const mentions = (text2, c, anyCase) => {
-    const re = wordRe(escapeRe5(c.name), anyCase || lowerOnly.has(c.person.id) ? "gi" : "g");
+    const re = wordRe(escapeRe6(c.name), anyCase || lowerOnly.has(c.person.id) ? "gi" : "g");
     const found = [];
     for (let m = re.exec(text2); m; m = re.exec(text2)) found.push(m.index);
     return found;
@@ -22248,7 +22323,7 @@ function readIntroduction(msg, people, userEmails, ctx = {}) {
         }
         if (aimed) mark(c, STRONG);
       });
-      const n = escapeRe5(c.name.toLowerCase());
+      const n = escapeRe6(c.name.toLowerCase());
       if (new RegExp(
         `\\b${n}\\s*,?\\s*\\(?\\s*(?:my|our)\\s+(?:ea|assistant|executive\\s+assistant|chief\\s+of\\s+staff|scheduler|coordinator)\\b|\\b(?:my|our)\\s+(?:ea|assistant|executive\\s+assistant|chief\\s+of\\s+staff|scheduler)\\s+${n}\\b|\\b${n}\\b[^.]{0,30}\\bwho\\s+(?:manages|runs|handles|keeps)\\s+my\\s+(?:calendar|schedule|diary)`
       ).test(lowerSentence))
@@ -22274,7 +22349,7 @@ function readIntroduction(msg, people, userEmails, ctx = {}) {
     for (const c of namedNow) {
       if (c.strong) continue;
       const listed = clauses2.some(
-        (cl, i) => kinds[i] === "plain" && new RegExp(`^\\s*(?:and|&)\\s+${escapeRe5(c.name)}\\b`, caseless ? "i" : "").test(cl)
+        (cl, i) => kinds[i] === "plain" && new RegExp(`^\\s*(?:and|&)\\s+${escapeRe6(c.name)}\\b`, caseless ? "i" : "").test(cl)
       );
       if (listed && strongHere.length) {
         mark(c, STRONG);
@@ -22335,9 +22410,9 @@ function readIntroduction(msg, people, userEmails, ctx = {}) {
   if (inbound && !isReplySubject && others <= 2 && !ARRANGES_MEETING.test(body.toLowerCase()) && !workSplit)
     for (const c of candidates) {
       if (c.thanked || c.looseThanked || c.scheduler || !mentioned.has(c.person.id)) continue;
-      const counter = notPresenting(escapeRe5(c.name.toLowerCase()));
+      const counter = notPresenting(escapeRe6(c.name.toLowerCase()));
       const where = sentencesOf2(body).filter((x) => mentions(x, c, caseless).length);
-      const role = roleDescribed(escapeRe5(c.name));
+      const role = roleDescribed(escapeRe6(c.name));
       if (where.length && !where.some((x) => counter.test(x.toLowerCase())) && where.some((x) => role.test(caseless ? x.replace(/^./, (ch) => ch.toUpperCase()) : x)))
         mark(c, GENERIC);
     }
@@ -22378,8 +22453,8 @@ function readIntroduction(msg, people, userEmails, ctx = {}) {
       };
       add2(1, "named");
       if (!isReplySubject) add2(1, "a new thread");
-      const role = roleDescribed(escapeRe5(c.name));
-      const n = escapeRe5(c.name.toLowerCase());
+      const role = roleDescribed(escapeRe6(c.name));
+      const n = escapeRe6(c.name.toLowerCase());
       if (where.some((x) => role.test(caseless ? x.replace(/^./, (ch) => ch.toUpperCase()) : x)) || where.some((x) => new RegExp(`\\b${n}\\b[^.!?]{0,40}?\\b${POSSIBLE_ROLE}`, "iu").test(x)) || next.some((x) => new RegExp(`^\\s*(?:he|she|they)\\b[^.!?]{0,30}?\\b${POSSIBLE_ROLE}`, "iu").test(x)))
         add2(1, "says who they are");
       if ([...where, ...after].some((x) => POSSIBLE_TALK.test(x.toLowerCase()))) add2(1, "someone to talk to");

@@ -17,6 +17,7 @@ import { DraftEditor, OutboxStatus } from '../../../components/DraftEditor';
 import { KIND_LABEL, SuggestionCard } from '../../../components/SuggestionCard';
 import { TargetPlanCard } from '../../../components/TargetPlanCard';
 import { db } from '../../../db/schema';
+import { conversationWith } from '../../../engine/conversation';
 import { useShowReasoning } from '../../../state/showReasoning';
 import { Avatar, Button, Chip, cx, LinkedInMark, relDate } from '../../../ui';
 import type { ResultEnvelope } from '../../types';
@@ -481,13 +482,21 @@ function DraftHead({
   href?: string;
   aside?: ReactNode;
 }) {
+  // a "first message" to someone who has written to the student before is picking a conversation back up
+  const firstKind =
+    draft.kind === 'outreach' || draft.kind === 'first_touch' || draft.kind === 'warm_first_touch';
+  const talked = useLiveQuery(
+    async () =>
+      firstKind ? (await conversationWith(draft.userId, draft.personId)).some((m) => !m.out) : false,
+    [firstKind, draft.userId, draft.personId],
+  );
   return (
     <CardHead
       lead={name ? <Avatar name={name} src={person?.photoUrl} id={draft.personId} size={24} /> : undefined}
       title={name ? `To ${name}` : 'Draft'}
       chip={
         <>
-          <Chip tone="accent">{MESSAGE_KIND_LABELS[draft.kind]}</Chip>
+          <Chip tone="accent">{talked ? MESSAGE_KIND_LABELS.reengage : MESSAGE_KIND_LABELS[draft.kind]}</Chip>
           <span className="hidden sm:inline text-[12.5px] text-ink-3 shrink-0">
             {CHANNEL_LABELS[draft.channel]}
           </span>

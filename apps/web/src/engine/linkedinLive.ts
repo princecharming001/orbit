@@ -110,6 +110,48 @@ async function saveAccount(
   return row;
 }
 
+/** What Settings says when the server's LinkedIn sync stopped on an error (it retries on Sync now). */
+export const SERVER_SYNC_STOPPED = "LinkedIn's sync stopped on Orbit's server. Try Sync now.";
+
+/**
+ * Account mode: Orbit's server holds the LinkedIn account and syncs it, so the row in this browser mirrors what the
+ * server says (how many connections, when it last synced, signed out or not). Without this the row kept whatever it
+ * held at connect time: 0 connections, never synced, and any error an older browser-side read left on it.
+ * Gives false when there is nothing to mirror (not an account, or the server did not answer).
+ */
+export async function refreshLinkedInFromServer(user: User, signal?: AbortSignal): Promise<boolean> {
+  if (!isServerUser(user.id) || usesMockConnectors(user.id)) return false;
+  const st = await callApi('/linkedin/status', {}, { signal });
+  if (!st.ok) return false;
+  const v = st.value;
+  const row = await liveLinkedInAccount(user.id);
+  if (v.status === 'not_connected') {
+    if (isConnected(row))
+      await db.integrations.update(row.id, {
+        status: 'revoked',
+        externalAccountId: undefined,
+        lastError: undefined,
+      });
+    return true;
+  }
+  // still signing in: the connect flow owns the row until the account turns active
+  if (v.status === 'connecting' && !isConnected(row)) return true;
+  await saveAccount(user.id, {
+    externalAccountId: v.accountId ?? row?.externalAccountId ?? 'orbit-api',
+    status: v.status === 'active' || v.status === 'connecting' ? 'active' : 'error',
+    lastError:
+      v.status === 'needs_reauth'
+        ? LINKEDIN_SIGNED_OUT
+        : v.status === 'error'
+          ? SERVER_SYNC_STOPPED
+          : undefined,
+    lastSyncedAt: v.lastSyncedAt ?? row?.lastSyncedAt,
+    accessToken: undefined,
+    syncState: { ...(row?.syncState ?? {}), rows: v.relations, server: true },
+  });
+  return true;
+}
+
 // how the hosted sign-in is waited on; tests shorten it. LinkedIn may ask the student to approve the sign-in in its
 // app, and Unipile reports the new account a while after its window closes, so Orbit keeps waiting for 15 minutes.
 let poll = { everyMs: 2000, tries: 450 };
@@ -517,7 +559,9 @@ async function syncLinkedInLiveOnce(
         reason: r.reason === 'unconfigured' ? 'unconfigured' : 'error',
         message: r.message,
       };
-    const rows = Number((row.syncState as { rows?: number }).rows ?? 0);
+    await refreshLinkedInFromServer(user, opts.signal);
+    const now = await liveLinkedInAccount(user.id);
+    const rows = Number((now?.syncState as { rows?: number } | undefined)?.rows ?? 0);
     return { ok: true, rows, added: 0, updated: 0, recommended: 0 };
   }
   // linked through Orbit's server (no browser token): only the signed-in session can sync it; reading LinkedIn from
@@ -700,6 +744,8 @@ export async function autoSyncLinkedInLive(
   user: User,
   now = new Date(),
 ): Promise<LiveSyncResult | undefined> {
+  // an account's server syncs on its own: read where it stands first, so a fresh server sync is not queued again
+  await refreshLinkedInFromServer(user).catch(() => false);
   const st = await linkedInLiveStatus(user, now);
   if (!st.connected || !st.stale) return undefined;
   const row = await liveLinkedInAccount(user.id);

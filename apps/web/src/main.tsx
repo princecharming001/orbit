@@ -7,6 +7,7 @@ import { reloadOnce } from './components/ErrorBoundary';
 import { db } from './db/schema';
 import { isAccountMode, loadSession } from './integrations/orbitApi';
 import { loadPrefs } from './integrations/prefs';
+import { watchForNewVersion } from './staleTab';
 import './styles/index.css';
 
 // A part of the app this tab loads later was replaced by a deploy since the tab opened: load the new version once
@@ -14,6 +15,9 @@ import './styles/index.css';
 window.addEventListener('vite:preloadError', (e) => {
   if (reloadOnce()) e.preventDefault();
 });
+
+// A tab left open across a deploy loads the new version when the student comes back to it (src/staleTab.ts)
+if (import.meta.env.PROD && !navigator.webdriver) watchForNewVersion();
 
 // End-to-end tests drive live changes (someone new, a stage change) through the same database the app reads.
 if (navigator.webdriver) (window as unknown as { __orbitDb: typeof db }).__orbitDb = db;

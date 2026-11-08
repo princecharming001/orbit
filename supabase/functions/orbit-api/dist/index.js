@@ -5775,6 +5775,66 @@ ${body2}`, ctx.inputs))
   return { ok: !deduped.some((i) => i.blocking), issues: deduped, words: words2, grade };
 }
 
+// packages/core/src/drafts/typing.ts
+var TYPING_SAMPLES = 40;
+var MIN_SAMPLES = 5;
+var LOWER_SHARE = 0.6;
+var SIGN_SHARE = 0.3;
+var hasWords = (s) => /[A-Za-z]{3}/.test(s) && s.trim().length > 20;
+var opening = (s) => s.replace(/^[\s"'(\-*•>]+/, "");
+function learnTyping(newestFirst, firstName) {
+  const samples = newestFirst.filter(hasWords).slice(0, TYPING_SAMPLES);
+  if (samples.length < MIN_SAMPLES) return void 0;
+  const lower = samples.filter((s) => /^[a-z]/.test(opening(s))).length;
+  const name = firstName?.trim().toLowerCase();
+  const signed = name ? samples.filter((s) => new RegExp(`(^|[\\s,\\-])${escapeRe2(name)}[\\s.!]*$`, "i").test(s.trim())).length : 0;
+  return {
+    casing: lower / samples.length >= LOWER_SHARE ? "lower" : "proper",
+    signs: signed / samples.length >= SIGN_SHARE,
+    from: samples.length
+  };
+}
+function escapeRe2(s) {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+var PROTECTED = /(https?:\/\/\S+|www\.\S+|[\w.+-]+@[\w-]+\.[\w.-]+|@\w+|\b[\w-]+\.(?:com|io|ai|co|org|net|dev|app|today)\b\S*)/g;
+function mapUnprotected(text3, fn) {
+  let out = "";
+  let at = 0;
+  for (const m of text3.matchAll(PROTECTED)) {
+    out += fn(text3.slice(at, m.index)) + m[0];
+    at = (m.index ?? 0) + m[0].length;
+  }
+  return out + fn(text3.slice(at));
+}
+var SIGNOFF_WORDS = /^(best|thanks|thank you|thanks so much|cheers|regards|best regards|warmly|talk soon|all the best)[,.!]?$/i;
+function dropSignoff(body2, firstName) {
+  const name = firstName.trim().toLowerCase();
+  if (!name) return body2;
+  const lines = body2.replace(/\s+$/, "").split("\n");
+  const last = lines[lines.length - 1]?.trim().replace(/^[-–—]\s*/, "").toLowerCase();
+  if (last !== name) return body2;
+  lines.pop();
+  const above = lines[lines.length - 1]?.trim();
+  if (above && SIGNOFF_WORDS.test(above)) lines.pop();
+  return lines.join("\n").replace(/\s+$/, "");
+}
+function properCase(text3) {
+  const withI = mapUnprotected(text3, (part) => part.replace(/\bi(?='(?:m|ll|d|ve|re)\b|\b)/g, "I"));
+  return withI.replace(/(^\s*|[.!?]\s+|\n\s*)([a-z])/g, (m, lead, c, at) => {
+    const rest = withI.slice(at + lead.length);
+    if (/^(https?:\/\/|www\.|[\w.+-]+@|[\w-]+\.(com|io|ai|co|org|net|dev|app|today)\b)/.test(rest)) return m;
+    return lead + c.toUpperCase();
+  });
+}
+function applyTyping(body2, style, opts) {
+  if (!style) return body2;
+  let out = body2;
+  if (opts.channel === "linkedin" && !style.signs && opts.firstName) out = dropSignoff(out, opts.firstName);
+  out = style.casing === "lower" ? mapUnprotected(out, (p) => p.toLowerCase()) : properCase(out);
+  return out;
+}
+
 // supabase/functions/_shared/rows.ts
 function iso(v) {
   if (v === null || v === void 0 || v === "") return null;
@@ -8172,7 +8232,7 @@ function voiceText(c) {
     c.notes ? `notes: ${c.notes}` : ""
   ].filter(Boolean).join("\n");
 }
-var escapeRe2 = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+var escapeRe3 = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 async function exemplars(s, userId, personId, situation, opts = {}) {
   let q = null;
   try {
@@ -8206,7 +8266,7 @@ async function exemplars(s, userId, personId, situation, opts = {}) {
   ].sort((a, b) => b.length - a.length);
   return rows.map((r) => {
     let text3 = stripQuotedReply(r.body_text).trim().slice(0, 1200);
-    for (const w of words2) text3 = text3.replace(new RegExp(`\\b${escapeRe2(w)}\\b`, "g"), "[name]");
+    for (const w of words2) text3 = text3.replace(new RegExp(`\\b${escapeRe3(w)}\\b`, "g"), "[name]");
     return text3.replace(/^(hi|hey|hello|dear)\s+[A-Z][a-z]+/i, (m) => `${m.split(/\s+/)[0]} [name]`);
   });
 }
@@ -8630,6 +8690,21 @@ ${13 + i}. ${l}`).join("")}`;
   }
   if (answer2 && askUserMarkers(composed.body).length)
     composed = { ...composed, body: composed.body.replace(ASK_USER, answer2) };
+  if (!askUserMarkers(composed.body).length) {
+    const sent = await db2.sql`
+      select body_text as b from orbit.messages
+       where user_id = ${req.userId}::uuid and provider = ${req.channel} and direction = 'out'
+         and body_text is not null
+       order by sent_at desc limit 80`;
+    const style = learnTyping(
+      sent.map((r) => r.b),
+      meFirst
+    );
+    composed = {
+      ...composed,
+      body: applyTyping(composed.body, style, { channel: req.channel, firstName: meFirst })
+    };
+  }
   let footer;
   if (salesFirstTouch2) {
     const company = typeof user.settings.company === "string" ? user.settings.company.trim() : "";
@@ -18034,14 +18109,14 @@ function webAsk(goal) {
     if (at?.[1]) place = at[1].replace(/^the\s+/i, "").trim();
   }
   if (!place) return void 0;
-  subject = subject.replace(new RegExp(`\\b(?:at|@|from)\\s+${escapeRe3(place)}\\b`, "i"), " ").replace(new RegExp(`\\b${escapeRe3(place)}\\b`, "i"), " ").replace(ROLE_WORDS, " ").replace(
+  subject = subject.replace(new RegExp(`\\b(?:at|@|from)\\s+${escapeRe4(place)}\\b`, "i"), " ").replace(new RegExp(`\\b${escapeRe4(place)}\\b`, "i"), " ").replace(ROLE_WORDS, " ").replace(
     /\b(?:i can|i could|i should|reach out to|write to|talk to|to|contact|email|cold email|source|find|some|a few|new|me|who)\b/gi,
     " "
   ).replace(/\s+/g, " ").trim().replace(/^(?:for|about|on|in|into|doing|working on|studying|researching)\s+/i, "").replace(/\s+(?:for|about|on|in|at)$/i, "").trim();
   if (!subject) subject = goal.roles?.[0] ?? role ?? "people";
   return { place, subject, role };
 }
-var escapeRe3 = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+var escapeRe4 = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 function webQueries(ask3) {
   const who = ask3.role && /professor|faculty|pi\b|investigator|postdoc|phd|researcher|scientist/.test(ask3.role) ? "faculty" : ask3.role ?? "team";
   const qs = [

@@ -5,7 +5,7 @@
  */
 import type { Person } from '@orbit/core';
 import { ArrowRight, Check, ChevronDown, X } from 'lucide-react';
-import { useContext, useState } from 'react';
+import { useContext, useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { isAccountMode as accountMode, callApi } from '../../../integrations/orbitApi';
 import { Avatar, cx, LinkedInMark } from '../../../ui';
@@ -99,7 +99,7 @@ function Row({
   const confirmedByYc = /\(\s*YC lists /i.test(r.evidence ?? '');
   return (
     <div
-      className="group relative flex items-center gap-3 rounded-xl px-2.5 py-2 transition-colors hover:bg-canvas-2 focus-within:bg-canvas-2"
+      className="group/row relative flex items-center gap-3 rounded-xl px-2.5 py-2 transition-colors hover:bg-canvas-2 focus-within:bg-canvas-2"
       data-testid="people-table-item"
       data-band={r.band}
     >
@@ -112,7 +112,10 @@ function Row({
       />
       <div className="relative h-9 w-9 shrink-0">
         <div
-          className={cx('transition-opacity', onPick && (picking ? 'opacity-0' : 'group-hover:opacity-0'))}
+          className={cx(
+            'transition-opacity',
+            onPick && (picking ? 'opacity-0' : 'group-hover/row:opacity-0'),
+          )}
         >
           <Avatar name={p.displayName} src={p.photoUrl} id={p.id} size={36} />
         </div>
@@ -120,7 +123,7 @@ function Row({
           <label
             className={cx(
               'absolute inset-0 z-10 flex cursor-pointer items-center justify-center rounded-full transition-opacity',
-              picking ? 'opacity-100' : 'opacity-0 group-hover:opacity-100 focus-within:opacity-100',
+              picking ? 'opacity-100' : 'opacity-0 group-hover/row:opacity-100 focus-within:opacity-100',
             )}
           >
             <input
@@ -179,14 +182,14 @@ function Row({
         </div>
       </div>
       <span
-        className="pointer-events-none hidden shrink-0 items-center gap-1 text-[12px] font-medium text-ink-2 opacity-0 transition-opacity group-hover:opacity-100 @lg:inline-flex"
+        className="pointer-events-none hidden shrink-0 items-center gap-1 text-[12px] font-medium text-ink-2 opacity-0 transition-opacity group-hover/row:opacity-100 @lg:inline-flex"
         aria-hidden
       >
         Warm path <ArrowRight size={13} />
       </span>
       <button
         type="button"
-        className="relative z-10 inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-ink-3 opacity-0 transition-opacity hover:bg-canvas hover:text-ink focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 group-hover:opacity-100"
+        className="relative z-10 inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-ink-3 opacity-0 transition-opacity hover:bg-canvas hover:text-ink focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 group-hover/row:opacity-100"
         aria-label={`${p.displayName} is not a match`}
         title="Not a match"
         onClick={onNotAMatch}
@@ -210,9 +213,34 @@ export function PeopleTableCard({
   const [picked, setPicked] = useState<Set<string>>(() => new Set());
   const [filter, setFilter] = useState<Filter>('all');
   const [open, setOpen] = useState(false);
+  // a tab's own rows: the first page lists confirmed matches first, so the likely ones may not be on it at all
+  const [byBand, setByBand] = useState<Partial<Record<'strong' | 'likely', TableRow[] | 'gone'>>>({});
+  const setId = t?.setId;
+  const onPage = t && filter !== 'all' ? t.rows.filter((r) => r.band === filter).length : 0;
+  const wanted = t && filter !== 'all' ? t.counts[filter] : 0;
+  const need = filter !== 'all' && !byBand[filter] && onPage < wanted;
+  useEffect(() => {
+    if (!need || !setId) return;
+    let live = true;
+    void import('../../tools/search')
+      .then((m) => m.bandTableRows(setId, filter))
+      .catch(() => undefined)
+      .then((list) => {
+        if (live) setByBand((b) => ({ ...b, [filter]: list ?? 'gone' }));
+      });
+    return () => {
+      live = false;
+    };
+  }, [need, setId, filter]);
   if (!t) return null;
   const listed = t.rows.filter((r) => !hidden.has(r.person.id) && r.band !== 'unchecked' && r.band !== 'no');
-  const rows = filter === 'all' ? listed : listed.filter((r) => r.band === filter);
+  const bandList = filter === 'all' ? undefined : byBand[filter];
+  const rows =
+    filter === 'all'
+      ? listed
+      : Array.isArray(bandList)
+        ? bandList.filter((r) => !hidden.has(r.person.id))
+        : listed.filter((r) => r.band === filter);
   const shown = open || rows.length <= FOLD + 1 ? rows : rows.slice(0, FOLD);
   const notAMatch = (r: TableRow) => {
     setHidden((h) => new Set(h).add(r.person.id));
@@ -285,7 +313,13 @@ export function PeopleTableCard({
         )}
       </div>
       {shown.length === 0 ? (
-        <div className="px-4 pb-4 text-ink-2">Nobody to show.</div>
+        <div className="px-4 pb-4 text-ink-2" data-testid="people-empty">
+          {need
+            ? 'Loading…'
+            : filter !== 'all' && wanted > 0
+              ? `The ${wanted} ${filter === 'likely' ? 'likely' : 'confirmed'} matches are past this page. Ask again to see them.`
+              : 'Nobody to show.'}
+        </div>
       ) : (
         <ul className="px-1.5 pb-1.5">
           {shown.map((r) => {

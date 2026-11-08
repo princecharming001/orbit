@@ -21,6 +21,7 @@ import {
   type ComposeTemplateInput,
   composeFallback,
 } from '@orbit/core/drafts/templates';
+import { applyTyping, learnTyping } from '@orbit/core/drafts/typing';
 import type { ReplyClass } from '@orbit/core/email/replyClass';
 import { extractProposedTimes } from '@orbit/core/email/triage';
 import { messageHash, unansweredBefore } from '@orbit/core/safety/rules';
@@ -380,6 +381,23 @@ export async function composeDraft(s: Services, req: ComposeRequest): Promise<Co
   // an answer the student gave fills any marker the model still left; the reply never asks what was answered
   if (answer && askUserMarkers(composed.body).length)
     composed = { ...composed, body: composed.body.replace(ASK_USER, answer) };
+
+  // one casing start to finish, the way the student types on this channel (@orbit/core drafts/typing)
+  if (!askUserMarkers(composed.body).length) {
+    const sent = await db.sql<{ b: string }>`
+      select body_text as b from orbit.messages
+       where user_id = ${req.userId}::uuid and provider = ${req.channel} and direction = 'out'
+         and body_text is not null
+       order by sent_at desc limit 80`;
+    const style = learnTyping(
+      sent.map((r) => r.b),
+      meFirst,
+    );
+    composed = {
+      ...composed,
+      body: applyTyping(composed.body, style, { channel: req.channel, firstName: meFirst }),
+    };
+  }
 
   // the compliance footer on a sales first touch (§7.7, §14.3), outside what the validator counts
   let footer: string | undefined;

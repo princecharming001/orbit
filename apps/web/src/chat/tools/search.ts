@@ -9,7 +9,13 @@ import type { Person } from '@orbit/core';
 import { COMPANY_KINDS, type QuerySpec, SENIORITIES, STAGES, TITLE_FAMILIES } from '@orbit/core/search';
 import { db } from '../../db/schema';
 import { flagOn } from '../../engine/flags';
-import { explainInSet, moreOfSet, runNetworkSearch, type SearchOutcome } from '../../engine/networkSearch';
+import {
+  bandOfSet,
+  explainInSet,
+  moreOfSet,
+  runNetworkSearch,
+  type SearchOutcome,
+} from '../../engine/networkSearch';
 import { z } from '../../zod';
 import { defineTool, err, ok } from './_shared';
 import { searchPeople } from './read';
@@ -271,7 +277,7 @@ const spec = z
 
 type Outcome = SearchOutcome;
 
-interface TableRow {
+export interface TableRow {
   person: Pick<
     Person,
     'id' | 'displayName' | 'currentTitle' | 'currentOrganizationRaw' | 'photoUrl' | 'linkedinUrl'
@@ -283,10 +289,11 @@ interface TableRow {
   lastTalk?: string;
 }
 
-async function tableData(o: Outcome) {
-  const people = await db.people.bulkGet(o.rows.map((r) => r.personId));
+/** Result rows as the card shows them, with each person's photo and LinkedIn from this browser's records. */
+async function toTableRows(list: Outcome['rows']): Promise<TableRow[]> {
+  const people = await db.people.bulkGet(list.map((r) => r.personId));
   const byId = new Map(people.filter((p): p is Person => !!p).map((p) => [p.id, p]));
-  const rows: TableRow[] = o.rows.map((r) => {
+  return list.map((r) => {
     const p = byId.get(r.personId);
     return {
       person: {
@@ -304,6 +311,19 @@ async function tableData(o: Outcome) {
       lastTalk: r.lastTalk,
     };
   });
+}
+
+/** The card's Confirmed or Likely tab, read from the set kept in this tab; undefined once it is gone. */
+export async function bandTableRows(
+  setId: string,
+  band: 'strong' | 'likely',
+): Promise<TableRow[] | undefined> {
+  const list = bandOfSet(setId, band);
+  return list ? toTableRows(list) : undefined;
+}
+
+async function tableData(o: Outcome) {
+  const rows = await toTableRows(o.rows);
   const c = o.set.result.counts;
   const unknownBy = Object.entries(o.set.result.unknownBy)
     .sort((a, b) => b[1] - a[1])

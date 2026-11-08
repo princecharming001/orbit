@@ -55,7 +55,7 @@ import {
 import { addTouchpoint, feedback, notify, recomputeAllStrengths } from '../db/repo';
 import { db } from '../db/schema';
 import { describeLlmFailure, hasLlm, llmDraft, llmSummary, toLlmError } from '../integrations/anthropic';
-import { latestReply, linkedInRepliesByPerson, newer } from './conversation';
+import { conversationWith, latestReply, linkedInRepliesByPerson, newer } from './conversation';
 import { researchOpeners } from './deepResearch';
 import { draftPlaybookFor } from './draftKnowledge';
 import { goalRegisterDraft } from './goalDrafts';
@@ -70,6 +70,7 @@ import { personSummary } from './prep';
 import { loadDiscoverSignals, waitingSet } from './recommend';
 import { currentResumeFacets, sharesOrgNow } from './resume';
 import { retireSuggestions, runTimedStageRules } from './stages';
+import { inTheirTyping } from './typing';
 
 const DAY = 86_400_000;
 
@@ -788,6 +789,22 @@ export async function buildDraftContext(
       if (history.repliedEver && history.threadId && channel === 'gmail')
         thread = { inThread: true, subject: lastThread?.subject };
     }
+    // a LinkedIn chat or texts filed without this person on the thread still count: the conversation the draft
+    // card shows ("Show conversation (49)") is the one the draft picks back up, never a stranger's introduction
+    if (!history) {
+      const said = (await conversationWith(user.id, person.id)).filter((m) => !m.pending && m.text.trim());
+      const lastSaid = said.sort((a, b) => a.at.localeCompare(b.at)).at(-1);
+      if (lastSaid) {
+        history = {
+          lastAt: lastSaid.at,
+          lastInbound: !lastSaid.out,
+          repliedEver: said.some((m) => !m.out) && said.some((m) => m.out),
+          threadId: undefined,
+        };
+        const lastIn = [...said].reverse().find((m) => !m.out);
+        if (!thread && lastIn) thread = { lastInboundBody: lastIn.text, lastInboundAt: lastIn.at };
+      }
+    }
   }
   // promises the student made to this person in the conversation, kept in the thank-you
   const promises =
@@ -1138,6 +1155,15 @@ async function materializeDraft(
         generatedBy = 'llm';
       }
     }
+  }
+  // one casing start to finish, the way the student types on this channel (engine/typing)
+  if (!out.needsInput.length) {
+    const sendsOn = writtenChannel(out, channel, person);
+    out = {
+      ...out,
+      body: await inTheirTyping(user, sendsOn, out.body),
+      ...(out.bodyShort ? { bodyShort: await inTheirTyping(user, sendsOn, out.bodyShort) } : {}),
+    };
   }
   return { out, generatedBy, ctx };
 }

@@ -400,6 +400,20 @@ export async function moreOfSet(
   };
 }
 
+/**
+ * One band of a kept set (Confirmed or Likely), for the card's tabs: the first page lists the confirmed matches first,
+ * so the likely ones may not be on it at all. Undefined when the set is no longer open in this tab.
+ */
+export function bandOfSet(setId: string, band: 'strong' | 'likely', limit = 50): SearchRowView[] | undefined {
+  const set = sets.get(setId);
+  const w = worlds.get(setId);
+  if (!set || !w) return undefined;
+  return set.result.rows
+    .filter((r) => r.band === band)
+    .slice(0, limit)
+    .map((r) => rowView(r, w.world.people, w.world));
+}
+
 /** Why one person is (or is not) in a kept set: every check with its evidence. */
 export function explainInSet(setId: string, personId: string): SearchRowView | undefined {
   const set = sets.get(setId);

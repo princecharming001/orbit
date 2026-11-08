@@ -18,6 +18,7 @@ export * from './drafts/sector';
 export * from './drafts/templates';
 export * from './drafts/thread';
 export { whenLabel } from './drafts/time';
+export * from './drafts/typing';
 export * from './drafts/validate';
 export * from './email/nextAction';
 export * from './email/replyClass';

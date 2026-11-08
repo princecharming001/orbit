@@ -12,6 +12,7 @@ import {
   disconnectLinkedInLive,
   LIVE_SOON,
   linkedInLiveStatus,
+  refreshLinkedInFromServer,
   syncLinkedInLive,
 } from '../engine/linkedinLive';
 import { setWarmIntros, villageAvailable, villageOffered } from '../engine/warmIntros';
@@ -31,6 +32,11 @@ export function LinkedInLiveCard({ user }: { user: User }) {
   // the switch says what Unipile says: signed out by LinkedIn, or gone, is shown as such (the row updates itself)
   useEffect(() => {
     void checkLinkedInAccount(user).catch(() => undefined);
+    // an account's LinkedIn lives on Orbit's server: show its count and last sync, and keep them current while open
+    const mirror = () => void refreshLinkedInFromServer(user).catch(() => false);
+    mirror();
+    const t = setInterval(mirror, 30_000);
+    return () => clearInterval(t);
   }, [user.id]);
   if (!status) return null;
   const connect = async () => {
