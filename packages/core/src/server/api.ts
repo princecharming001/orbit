@@ -142,7 +142,7 @@ export interface SourcedCandidate {
   /** an email: written on a public page, built from the company's address pattern, or a marked guess */
   email?: string;
   /** how the email was found: page (as written there), pattern (the company's real pattern), guess (unconfirmed) */
-  emailConfidence?: 'page' | 'pattern' | 'guess';
+  emailConfidence?: 'verified' | 'page' | 'pattern' | 'guess';
   /** how warm the student is to them: 1 in your world, 2 one hop away, 3 shared background, 4 open door, 5 cold */
   tier?: 1 | 2 | 3 | 4 | 5;
   /** the one reason for the tier, in plain words */

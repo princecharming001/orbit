@@ -1,5 +1,6 @@
 /**
  * An email for a person sourced outside the student's network, with how sure Orbit is of it:
+ *   verified a 1st-degree connection's own contact email on LinkedIn, or Apollo's verified address (lookup.ts)
  *   page     written on a public page about them (the web pass reads it exactly as written)
  *   pattern  built from the address pattern the company really uses, learned from people at the same domain the
  *            student has emailed, or from other addresses found on pages in the same search
@@ -11,7 +12,17 @@ import { norm, normOrg } from '../research/guards';
 import type { Candidate } from './search';
 import { orgsOf, siteDomain, workDomain } from './warmth';
 
-export type EmailConfidence = 'page' | 'pattern' | 'guess';
+export type EmailConfidence = 'verified' | 'page' | 'pattern' | 'guess';
+
+/** What a lookup (lookup.ts) found for one person. */
+export interface LookedUp {
+  email: string;
+  source: 'linkedin' | 'apollo';
+  status: 'verified' | 'guess';
+}
+export type EmailLookup = (c: Candidate) => Promise<LookedUp | undefined>;
+/** verified lookups in one run at most (each may spend a credit); the best-fitting candidates get them */
+export const MAX_LOOKUPS = 10;
 
 type Make = (f: string, l: string) => string;
 
@@ -166,8 +177,29 @@ const isUniversity = (d: string) => /\.(edu|ac\.[a-z]{2})$/.test(d);
  */
 export async function fillEmails(
   cands: Candidate[],
-  opts: { known: KnownAddress[]; orgDomains: Map<string, string>; mx: MxCheck; max?: number },
+  opts: {
+    known: KnownAddress[];
+    orgDomains: Map<string, string>;
+    mx: MxCheck;
+    max?: number;
+    lookup?: EmailLookup;
+    maxLookups?: number;
+  },
 ): Promise<void> {
+  // 1. verified addresses first, for the best-fitting people who have none (the list arrives best fit first)
+  if (opts.lookup) {
+    const want = cands
+      .filter((c) => c.entity === 'person' && !c.email && !c.lastNameObfuscated)
+      .slice(0, opts.maxLookups ?? MAX_LOOKUPS);
+    const got = await Promise.all(want.map((c) => opts.lookup!(c).catch(() => undefined)));
+    want.forEach((c, i) => {
+      const g = got[i];
+      if (!g) return;
+      c.email = g.email;
+      c.emailConfidence = g.status === 'verified' ? 'verified' : 'guess';
+    });
+  }
+  // 2. the rest from the patterns the found addresses teach (a verified one teaches its domain too)
   const pageFound: KnownAddress[] = cands
     .filter((c) => c.email)
     .map((c) => ({ name: c.name, email: c.email! }));

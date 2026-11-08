@@ -101,9 +101,10 @@ export function tierChip(c: SourcedCandidate): string | undefined {
   return undefined;
 }
 
-/** How sure Orbit is of the email, in words: "email on their page", "email from the company pattern", ... */
+/** How sure Orbit is of the email, in words: verified, on their page, from the company pattern, or a guess. */
 export function emailNote(c: SourcedCandidate): string | undefined {
   if (!c.email) return undefined;
+  if (c.emailConfidence === 'verified') return `${c.email} (verified)`;
   if (c.emailConfidence === 'pattern') return `${c.email} (the company's usual address pattern)`;
   if (c.emailConfidence === 'guess') return `${c.email} (a guess, not confirmed)`;
   return `${c.email} (on their page)`;

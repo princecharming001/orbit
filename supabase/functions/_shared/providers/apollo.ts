@@ -61,7 +61,9 @@ export const apolloSearchResponseSchema = z.looseObject({
 export type ApolloSearchResponse = z.infer<typeof apolloSearchResponseSchema>;
 
 export const apolloMatchResponseSchema = z.looseObject({
-  person: apolloPersonSchema.extend({ email: z.string().nullish() }).nullish(),
+  person: apolloPersonSchema
+    .extend({ email: z.string().nullish(), email_status: z.string().nullish() })
+    .nullish(),
 });
 
 export interface Apollo {

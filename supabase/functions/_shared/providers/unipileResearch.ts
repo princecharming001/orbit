@@ -49,6 +49,10 @@ export const unipileProfileSchema = z.looseObject({
   network_distance: z.string().nullish(),
   shared_connections_count: z.number().nullish(),
   websites: z.array(z.string()).nullish(),
+  /** a 1st-degree connection's contact details, as they chose to show them */
+  contact_info: z
+    .looseObject({ emails: z.array(z.string()).nullish(), phones: z.array(z.string()).nullish() })
+    .nullish(),
   work_experience: z
     .array(
       z.looseObject({

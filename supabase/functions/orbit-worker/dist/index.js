@@ -646,7 +646,7 @@ var apolloSearchResponseSchema = z.looseObject({
   people: z.array(apolloPersonSchema).default([])
 });
 var apolloMatchResponseSchema = z.looseObject({
-  person: apolloPersonSchema.extend({ email: z.string().nullish() }).nullish()
+  person: apolloPersonSchema.extend({ email: z.string().nullish(), email_status: z.string().nullish() }).nullish()
 });
 function createApollo(opts) {
   const base = trimBase(opts.baseUrl ?? APOLLO_BASE);
@@ -820,6 +820,8 @@ var unipileProfileSchema = z.looseObject({
   network_distance: z.string().nullish(),
   shared_connections_count: z.number().nullish(),
   websites: z.array(z.string()).nullish(),
+  /** a 1st-degree connection's contact details, as they chose to show them */
+  contact_info: z.looseObject({ emails: z.array(z.string()).nullish(), phones: z.array(z.string()).nullish() }).nullish(),
   work_experience: z.array(
     z.looseObject({
       position: z.string().nullish(),
@@ -19533,6 +19535,7 @@ function studentFromResume(parsed2, base) {
 }
 
 // supabase/functions/_shared/sourcing/email.ts
+var MAX_LOOKUPS = 10;
 var PATTERNS2 = {
   "first.last": (f, l) => `${f}.${l}`,
   first: (f) => f,
@@ -19626,6 +19629,16 @@ function domainsOf(c, orgDomains) {
 }
 var isUniversity = (d) => /\.(edu|ac\.[a-z]{2})$/.test(d);
 async function fillEmails(cands, opts) {
+  if (opts.lookup) {
+    const want = cands.filter((c) => c.entity === "person" && !c.email && !c.lastNameObfuscated).slice(0, opts.maxLookups ?? MAX_LOOKUPS);
+    const got = await Promise.all(want.map((c) => opts.lookup(c).catch(() => void 0)));
+    want.forEach((c, i) => {
+      const g = got[i];
+      if (!g) return;
+      c.email = g.email;
+      c.emailConfidence = g.status === "verified" ? "verified" : "guess";
+    });
+  }
   const pageFound = cands.filter((c) => c.email).map((c) => ({ name: c.name, email: c.email }));
   const known = [...opts.known, ...pageFound];
   const patterns = /* @__PURE__ */ new Map();
@@ -19694,6 +19707,58 @@ function matchKnown(idx, c, o) {
     const d = workDomain(r.primary_email ?? void 0) ?? (r.emails ?? []).map((e) => workDomain(e)).find((x) => !!x);
     return !!d && domains.has(d);
   });
+}
+
+// supabase/functions/_shared/sourcing/lookup.ts
+var LOOKUP_TTL_MS = 30 * 24 * 3600 * 1e3;
+function emailLookup(d) {
+  return async (c) => {
+    const slug = linkedInSlugOf(cleanLinkedInUrl(c.linkedinUrl));
+    const n = c.lastNameObfuscated ? void 0 : nameParts(c.name, c.firstName, c.lastName);
+    const domain = d.domainOf?.(c);
+    const key2 = slug ? `email:li:${slug}` : c.memberId ? `email:mid:${c.memberId}` : n && domain ? `email:nd:${n.f}.${n.l}@${domain}` : void 0;
+    if (!key2) return void 0;
+    const hit = await d.cache.get(key2).catch(() => void 0);
+    if (hit) return "none" in hit ? void 0 : hit;
+    const found = await fromLinkedIn(d, c, slug) ?? await fromApollo(d, c, domain);
+    await d.cache.put(key2, "email_lookup", found ?? { none: true }, LOOKUP_TTL_MS).catch(() => void 0);
+    return found;
+  };
+}
+async function fromLinkedIn(d, c, slug) {
+  if (c.networkDistance !== 1 || !d.unipile?.configured || !d.unipileAccountId) return void 0;
+  const id = c.memberId ?? slug;
+  if (!id) return void 0;
+  if (d.budget && !(await d.budget.check(d.userId, "unipile_profile", 1)).ok) return void 0;
+  const r = await d.unipile.profile(d.unipileAccountId, id, { sections: [] });
+  if (!r.ok) return void 0;
+  await d.budget?.record(d.userId, {
+    provider: "unipile_profile",
+    operation: "profile_view",
+    units: 1,
+    costUsd: 0
+  });
+  const email = r.value.contact_info?.emails?.find((e) => typeof e === "string" && e.includes("@"));
+  return email ? { email: email.trim().toLowerCase(), source: "linkedin", status: "verified" } : void 0;
+}
+async function fromApollo(d, c, domain) {
+  if (!d.apollo?.configured) return void 0;
+  const url = cleanLinkedInUrl(c.linkedinUrl);
+  const [first = "", ...rest] = c.name.trim().split(/\s+/);
+  const firstName = c.firstName ?? first;
+  const lastName = c.lastName ?? rest.join(" ");
+  const params = url ? { linkedin_url: url } : firstName && lastName && domain && !c.lastNameObfuscated ? { first_name: firstName, last_name: lastName, domain } : void 0;
+  if (!params) return void 0;
+  if (d.budget && !(await d.budget.check(d.userId, "apollo_match", 1)).ok) return void 0;
+  const r = await d.apollo.matchPerson({ ...params, reveal_personal_emails: false });
+  if (!r.ok) return void 0;
+  await d.budget?.record(d.userId, { provider: "apollo_match", operation: "match", units: 1, costUsd: 0 });
+  const p = r.value.person;
+  const email = p?.email?.trim().toLowerCase();
+  if (!email?.includes("@")) return void 0;
+  const status = (p?.email_status ?? "").toLowerCase();
+  if (/unavailable|bounced|invalid/.test(status)) return void 0;
+  return { email, source: "apollo", status: /guess|extrapolat/.test(status) ? "guess" : "verified" };
 }
 
 // supabase/functions/_shared/sourcing/prompts.ts
@@ -20562,9 +20627,9 @@ async function apolloCall(ctx, relax, params) {
     page: 1
   });
   if (!note(ctx, r) || !r.ok) return [];
-  return r.value.people.map((p) => fromApollo(ctx, p));
+  return r.value.people.map((p) => fromApollo2(ctx, p));
 }
-function fromApollo(ctx, p) {
+function fromApollo2(ctx, p) {
   const n = apolloName(p);
   const name = `${n.first} ${n.last}`.trim();
   return {
@@ -21088,6 +21153,16 @@ async function runSourcing(s, userId, req) {
   });
   const mx = dnsMx(s.fetch);
   const year = now.getUTCFullYear();
+  const budget2 = sqlBudget(db2, s.now);
+  const lookup = emailLookup({
+    userId,
+    unipile: s.unipile,
+    unipileAccountId: acct?.external_account_id ?? void 0,
+    apollo: s.apollo,
+    budget: budget2,
+    cache: sqlSharedCache(db2, () => now.getTime()),
+    domainOf: (c) => orgDomainsOf(c, ctx.orgDomains)[0] ?? siteDomain(c.url)
+  });
   const result = await sourcePeople(
     {
       unipile: s.unipile,
@@ -21097,7 +21172,7 @@ async function runSourcing(s, userId, req) {
       claude: s.claude.configured ? claudeDep(s.claude, userId) : void 0,
       web: webSourcesFor(s),
       fetch: s.fetch,
-      budget: sqlBudget(db2, s.now),
+      budget: budget2,
       clock: () => now.getTime(),
       knownPerson: knownOf,
       reachOf: async (c) => {
@@ -21128,7 +21203,7 @@ async function runSourcing(s, userId, req) {
         domains: [workDomain(c.email), ...orgDomainsOf(c, ctx.orgDomains)].filter((d) => !!d),
         year
       }),
-      fillEmails: (cands) => fillEmails(cands, { known: ctx.known, orgDomains: ctx.orgDomains, mx }),
+      fillEmails: (cands) => fillEmails(cands, { known: ctx.known, orgDomains: ctx.orgDomains, mx, lookup }),
       inPipeline: async (c) => {
         const k = await knownOf(c);
         if (!k || !goal) return false;

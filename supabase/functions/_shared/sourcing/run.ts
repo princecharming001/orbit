@@ -27,6 +27,7 @@ import { firstNameOf } from '../rows.ts';
 import type { Services } from '../services.ts';
 import { dnsMx, fillEmails, type KnownAddress, orgDomainsOf } from './email';
 import { indexKnown, type KnownRow, matchKnown } from './known';
+import { emailLookup } from './lookup';
 import {
   type Candidate,
   type RecommendationRow,
@@ -249,6 +250,17 @@ export async function runSourcing(
   });
   const mx = dnsMx(s.fetch);
   const year = now.getUTCFullYear();
+  const budget = sqlBudget(db, s.now);
+  // verified addresses: a 1st-degree connection's own contact email, else Apollo (both capped per day, cached 30 days)
+  const lookup = emailLookup({
+    userId,
+    unipile: s.unipile,
+    unipileAccountId: acct?.external_account_id ?? undefined,
+    apollo: s.apollo,
+    budget,
+    cache: sqlSharedCache(db, () => now.getTime()),
+    domainOf: (c) => orgDomainsOf(c, ctx.orgDomains)[0] ?? siteDomain(c.url),
+  });
   const result = await sourcePeople(
     {
       unipile: s.unipile,
@@ -258,7 +270,7 @@ export async function runSourcing(
       claude: s.claude.configured ? claudeDep(s.claude, userId) : undefined,
       web: webSourcesFor(s),
       fetch: s.fetch,
-      budget: sqlBudget(db, s.now),
+      budget,
       clock: () => now.getTime(),
       knownPerson: knownOf,
       reachOf: async (c) => {
@@ -291,7 +303,7 @@ export async function runSourcing(
           domains: [workDomain(c.email), ...orgDomainsOf(c, ctx.orgDomains)].filter((d): d is string => !!d),
           year,
         }),
-      fillEmails: (cands) => fillEmails(cands, { known: ctx.known, orgDomains: ctx.orgDomains, mx }),
+      fillEmails: (cands) => fillEmails(cands, { known: ctx.known, orgDomains: ctx.orgDomains, mx, lookup }),
       inPipeline: async (c) => {
         const k = await knownOf(c);
         if (!k || !goal) return false;
@@ -392,12 +404,14 @@ export async function addSourced(s: Services, userId: string, ids: unknown): Pro
         ? `Email ${c.email} is a guess from the usual first.last pattern, not confirmed`
         : c.email && c.emailConfidence === 'pattern'
           ? `Email ${c.email} follows the address pattern their company uses`
-          : undefined;
+          : c.email && c.emailConfidence === 'verified'
+            ? `Email ${c.email} is verified`
+            : undefined;
     if (how)
       await db.sql`
         insert into orbit.facts (user_id, person_id, type, text, source_table, source_id, confidence)
         select ${userId}::uuid, ${personId}::uuid, 'sourced', ${how}, 'recommendations', ${rec.id}::uuid,
-               ${c.emailConfidence === 'guess' ? 0.3 : 0.6}
+               ${c.emailConfidence === 'guess' ? 0.3 : c.emailConfidence === 'verified' ? 0.9 : 0.6}
          where not exists (select 1 from orbit.facts where person_id = ${personId}::uuid and text = ${how} and deleted_at is null)`;
     await db.sql`
       update orbit.recommendations set status = 'added', person_id = ${personId}::uuid where id = ${rec.id}::uuid`;
