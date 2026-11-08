@@ -41,6 +41,7 @@ export const KIND_QUEUE: Record<string, QueueName> = {
   'voice.embed_sent': 'orbit_enrich',
   company_facts_sync: 'orbit_enrich',
   search_census: 'orbit_enrich',
+  search_reading: 'orbit_enrich',
   noop: 'orbit_enrich',
 };
 

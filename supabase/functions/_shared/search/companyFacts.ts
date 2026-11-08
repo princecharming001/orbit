@@ -136,9 +136,18 @@ export async function loadCompanyFacts(
     yc_stage: CompanyFactWire['ycStage'] | null;
     as_of: string | null;
     updated_at: string;
+    linkedin_id: string | null;
+    linkedin_handle: string | null;
+    founded_year: number | null;
+    growth_12m: number | null;
+    stage: CompanyFactWire['stage'] | null;
+    stage_evidence: string | null;
+    kind: CompanyFactWire['kind'] | null;
+    about: string | null;
   }>`
     select key, name, former_names, website, yc_batch, yc_status, yc_stage, team_size, industries, one_liner,
-           ambiguous_name, source, as_of::text as as_of, updated_at::text as updated_at
+           ambiguous_name, source, as_of::text as as_of, updated_at::text as updated_at, linkedin_id,
+           linkedin_handle, founded_year, growth_12m, stage, stage_evidence, kind, about
       from orbit_private.company_facts
      where ${since ?? null}::timestamptz is null or updated_at > ${since ?? null}::timestamptz
      order by updated_at`;
@@ -156,6 +165,16 @@ export async function loadCompanyFacts(
     if (r.one_liner) f.oneLiner = r.one_liner;
     if (r.ambiguous_name) f.ambiguousName = true;
     if (r.as_of) f.asOf = r.as_of;
+    if (r.linkedin_id) f.linkedinId = r.linkedin_id;
+    if (r.linkedin_handle) f.linkedinHandle = r.linkedin_handle;
+    if (r.founded_year) f.foundedYear = r.founded_year;
+    if (r.growth_12m != null) f.growth12m = r.growth_12m;
+    if (r.stage) {
+      f.stage = r.stage;
+      if (r.stage_evidence) f.stageEvidence = r.stage_evidence;
+    }
+    if (r.kind) f.kind = r.kind;
+    if (r.about) f.about = r.about;
     return f;
   });
   return { facts, at };

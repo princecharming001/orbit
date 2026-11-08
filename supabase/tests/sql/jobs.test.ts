@@ -265,6 +265,7 @@ describe('orbit.delete_user (§10.4 test 4)', () => {
       insert into orbit.facet_assertions (user_id, person_id, kind, value, positive, source) values ('${u}', '${p2}', 'place', 'Austin', true, 'census');
       insert into orbit.search_census (user_id, seen) values ('${u}', 10);
       insert into orbit.search_labels (user_id, person_id, ask_hash, ask, verdict) values ('${u}', '${p2}', 'h', 'a', 'yes');
+      insert into orbit.profile_reads (user_id, person_id, about) values ('${u}', '${p2}', 'About');
       insert into orbit.facet_scans (user_id, kind, value, complete) values ('${u}', 'company', 'Stripe', true);
       insert into orbit.dead_letters (queue, message) values ('orbit_sync', '{"kind":"x","userId":"${u}"}');
     `);

@@ -320,6 +320,7 @@ async function tableData(o: Outcome) {
     remaining: o.remaining,
     judgeFailed: o.set.judgeFailed,
     judgeUnavailable: o.set.judgeUnavailable,
+    profilesRead: o.set.profilesRead,
     unsupported: o.set.spec.unsupported ?? [],
     rows,
   };
@@ -351,6 +352,7 @@ function forModel(d: Awaited<ReturnType<typeof tableData>>) {
     notOnFile: d.unknownBy,
     stillToCheck: d.remaining,
     judgeFailed: d.judgeFailed || undefined,
+    profilesReadNow: d.profilesRead || undefined,
     noAiCheck: d.judgeUnavailable || undefined,
     rows: d.rows.slice(0, 15).map((r) => ({
       personId: r.person.id,

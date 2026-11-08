@@ -3,6 +3,7 @@
  * work, schools and place, each value with where it came from. Relationship data and company facts are not in it;
  * they are joined at query time, so nightly rescoring does not rebuild documents.
  */
+import type { ProfileExperienceWire, ProfileReadingWire } from '../server/api';
 import type { Affiliation, Person } from '../types';
 import { orgKey } from './companies';
 import { readHeadline, type SchoolLookup } from './headline';
@@ -54,8 +55,17 @@ export interface DocRole {
   /** the YC badge written next to this role ("(YC S25)") */
   ycBatch?: string;
   saysYc?: boolean;
+  /** LinkedIn's id for the company, from the person's own profile: names its page exactly (plan 33) */
+  linkedinCompanyId?: string;
   /** the text this came from, shown as evidence */
   evidence: string;
+}
+
+/** A person's LinkedIn profile as the reading job left it (plan 33). */
+export interface DocProfile {
+  about?: string;
+  experience: readonly ProfileExperienceWire[];
+  reading?: ProfileReadingWire;
 }
 
 export interface DocSchool {
@@ -109,9 +119,15 @@ export interface PersonDoc {
     notes: string;
     summary: string;
     topics: string;
+    /** what the person wrote under their jobs on LinkedIn */
+    jobs: string;
   };
   tags: string[];
   linkedinMemberId?: string;
+  /** what the reading step understood from their About and job descriptions, each fact with its quote */
+  reading?: ProfileReadingWire;
+  /** their LinkedIn profile was read (so its jobs and About are complete, not guessed from a headline) */
+  profileRead?: boolean;
   /** a stable hash of everything above, for the judge cache */
   hash: string;
 }
@@ -150,6 +166,7 @@ export function buildPersonDoc(
   deps: DocDeps,
   facets: readonly FacetAssertion[] = [],
   label?: ExtractLabel,
+  profile?: DocProfile,
 ): PersonDoc {
   const roles: DocRole[] = [];
   const schools: DocSchool[] = [];
@@ -177,6 +194,7 @@ export function buildPersonDoc(
       same.saysYc ||= r.saysYc;
       same.start ??= r.start;
       same.end ??= r.end;
+      same.linkedinCompanyId ??= r.linkedinCompanyId;
       if (!r.weak) same.weak = false;
       return;
     }
@@ -226,6 +244,30 @@ export function buildPersonDoc(
       });
     }
   }
+
+  // the jobs on their LinkedIn profile, with dates and the company's LinkedIn id
+  for (const e of profile?.experience ?? []) {
+    if (!e.title && !e.company) continue;
+    add({
+      title: e.title,
+      org: e.company,
+      current: e.current,
+      start: e.start,
+      end: e.end,
+      source: 'profile',
+      linkedinCompanyId: e.companyId,
+      evidence: `LinkedIn: ${[e.title, e.company].filter(Boolean).join(' at ')}`,
+    });
+  }
+  // "I angel invest in pre-seed founders": an investing role in their own words
+  const angel = profile?.reading?.signals?.find((x) => x.value === 'angel_investing');
+  if (angel)
+    add({
+      title: 'Angel investor',
+      current: true,
+      source: 'profile',
+      evidence: `"${angel.quote}"`,
+    });
 
   const h = readHeadline(person.headline, deps.isSchool);
   const badgeFor = (text: string) => h.yc.find((y) => y.text === text);
@@ -343,8 +385,12 @@ export function buildPersonDoc(
     location: person.location ?? '',
     tags: (person.tags ?? []).join(' '),
     notes: person.notes ?? '',
-    summary: person.summary ?? '',
-    topics: h.topics.join(' | '),
+    summary: person.summary || profile?.about || '',
+    topics: [...h.topics, ...(profile?.reading?.focus ?? []).map((f) => f.value)].join(' | '),
+    jobs: (profile?.experience ?? [])
+      .map((e) => e.description)
+      .filter(Boolean)
+      .join(' | '),
   };
   const doc: Omit<PersonDoc, 'hash'> = {
     id: person.id,
@@ -358,6 +404,8 @@ export function buildPersonDoc(
     text,
     tags: person.tags ?? [],
     linkedinMemberId: person.linkedinMemberId,
+    ...(profile?.reading ? { reading: profile.reading } : {}),
+    ...(profile ? { profileRead: true } : {}),
   };
   return {
     ...doc,
@@ -370,6 +418,10 @@ export function buildPersonDoc(
         roles.length,
         schools.map((s) => s.name),
         facets.length,
+        // a new About or reading changes what the judge reads, so it is asked again
+        text.summary.length,
+        text.jobs.length,
+        profile?.reading ? JSON.stringify(profile.reading).length : 0,
       ]),
     ),
   };
@@ -399,7 +451,7 @@ export function hashString(s: string): string {
 /** All of a doc's text in one lowercase string, for hint checks and lexical fallback. */
 export function docText(d: PersonDoc): string {
   const t = d.text;
-  return `${d.name} ${t.headline} ${t.title} ${t.org} ${t.location} ${t.tags} ${t.summary} ${t.topics}`.toLowerCase();
+  return `${d.name} ${t.headline} ${t.title} ${t.org} ${t.location} ${t.tags} ${t.summary} ${t.topics} ${t.jobs}`.toLowerCase();
 }
 
 export { yearOf as isoYear };

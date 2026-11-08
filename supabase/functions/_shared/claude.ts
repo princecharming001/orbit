@@ -32,6 +32,8 @@ export type Task =
   | 'voice_distill'
   /** plan 29 §B2.4c: was an auto first message written by the same person as their sent mail */
   | 'voice_judge'
+  /** plan 33: LinkedIn About sections and company pages read into stated stage, size, focus and signals */
+  | 'reading'
   /** earlier names of reply_classify, memory_extract and goal_infer, kept for callers that still use them */
   | 'classify'
   | 'extract_memory'
@@ -63,6 +65,7 @@ export const TASKS: Record<Task, TaskSetting> = {
   goal_infer: { model: 'claude-haiku-5-5', effort: 'low', maxTokens: 1500 },
   fit: { model: 'claude-haiku-5-5', effort: 'low', maxTokens: 3000 },
   triage: { model: 'claude-haiku-5-5', effort: 'low', maxTokens: 1000 },
+  reading: { model: 'claude-haiku-5-5', effort: 'low', maxTokens: 3000 },
   classify: { model: 'claude-haiku-5-5', effort: 'low', maxTokens: 1000 },
   extract_memory: { model: 'claude-haiku-5-5', effort: 'low', maxTokens: 1500 },
   extract_goal: { model: 'claude-haiku-5-5', effort: 'low', maxTokens: 1500 },

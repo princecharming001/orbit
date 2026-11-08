@@ -951,6 +951,8 @@ export const API_ROUTES = [
   '/search/facets',
   '/search/lookup',
   '/search/labels',
+  '/search/profiles',
+  '/search/read',
 ] as const;
 export type ApiRoute = (typeof API_ROUTES)[number];
 
@@ -971,6 +973,28 @@ export interface CompanyFactWire {
   ambiguousName?: boolean;
   source: 'yc' | 'bigpicture' | 'curated' | 'linkedin';
   asOf?: string;
+  /** from the company's LinkedIn page (plan 33): its id, founding year, headcount growth over 12 months in percent */
+  linkedinId?: string;
+  linkedinHandle?: string;
+  foundedYear?: number;
+  growth12m?: number;
+  /** a stage the company's own About states ("Series B"), with the words it rests on */
+  stage?: 'pre_seed' | 'seed' | 'series_a' | 'series_b_plus' | 'growth' | 'public' | 'acquired' | 'inactive';
+  stageEvidence?: string;
+  kind?:
+    | 'big_tech'
+    | 'startup'
+    | 'bank'
+    | 'vc_firm'
+    | 'consulting'
+    | 'pe'
+    | 'hedge_fund'
+    | 'university'
+    | 'nonprofit'
+    | 'government'
+    | 'student_org';
+  /** the company's LinkedIn About, cut short */
+  about?: string;
 }
 
 export interface CompanyFactsResponse {
@@ -1023,6 +1047,73 @@ export interface SearchLookupResponse {
 
 export interface SearchFacetsWrite {
   facets: { personId: string; kind: FacetKind; value: string; positive: boolean }[];
+}
+
+/** One job on a person's LinkedIn profile (plan 33). */
+export interface ProfileExperienceWire {
+  title?: string;
+  company?: string;
+  /** LinkedIn's company id, which names the company's page exactly */
+  companyId?: string;
+  current: boolean;
+  /** ISO dates (YYYY-MM or YYYY-MM-DD) when LinkedIn gives them */
+  start?: string;
+  end?: string;
+  /** what the person wrote under the job, cut short */
+  description?: string;
+}
+
+/** A fact the reading step took from a person's own words; `quote` is copied from their profile. */
+export interface ReadFactWire<T> {
+  value: T;
+  quote: string;
+  /** the company it is about, as the person named it */
+  company?: string;
+}
+
+export type ReadingSignal =
+  | 'hiring'
+  | 'raising'
+  | 'angel_investing'
+  | 'stealth'
+  | 'open_to_work'
+  | 'advising';
+
+/** What the reading step understood from a person's About and job descriptions. */
+export interface ProfileReadingWire {
+  stage?: ReadFactWire<NonNullable<CompanyFactWire['stage']>>;
+  teamSize?: ReadFactWire<number>;
+  /** what they work on, a few words each ("AI agents for insurance") */
+  focus?: ReadFactWire<string>[];
+  signals?: ReadFactWire<ReadingSignal>[];
+}
+
+/** A person's LinkedIn profile as Orbit read it: their About, their jobs, and what the reading made of them. */
+export interface ProfileReadWire {
+  personId: string;
+  about?: string;
+  experience: ProfileExperienceWire[];
+  reading?: ProfileReadingWire;
+  at: string;
+}
+
+export interface SearchProfilesResponse {
+  profiles: ProfileReadWire[];
+  at: string;
+  more: boolean;
+  /** how far the background reading has got: people read, and companies whose pages are known */
+  progress: { read: number; readable: number; companies: number } | null;
+}
+
+export interface SearchReadRequest {
+  personIds: string[];
+}
+
+export interface SearchReadResponse {
+  ok: boolean;
+  /** people whose profiles were read now (or were fresh already) */
+  read: string[];
+  reason?: string;
 }
 
 export interface SearchLabelRequest {

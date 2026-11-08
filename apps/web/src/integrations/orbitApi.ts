@@ -94,6 +94,9 @@ import type {
   SearchLabelRequest,
   SearchLookupRequest,
   SearchLookupResponse,
+  SearchProfilesResponse,
+  SearchReadRequest,
+  SearchReadResponse,
   SlotsRequest,
   SlotsResponse,
   SourceAddRequest,
@@ -280,6 +283,9 @@ export interface ApiRoutes {
   '/search/facets': [{ since?: string } | SearchFacetsWrite, SearchFacetsResponse | { written: number }];
   '/search/lookup': [SearchLookupRequest, SearchLookupResponse];
   '/search/labels': [SearchLabelRequest, { ok: boolean }];
+  // profile reading (plan 33)
+  '/search/profiles': [{ since?: string }, SearchProfilesResponse];
+  '/search/read': [SearchReadRequest, SearchReadResponse];
 }
 export type ClientRoute = keyof ApiRoutes;
 

@@ -44,6 +44,8 @@ interface TableData {
   remaining: number;
   judgeFailed: number;
   judgeUnavailable: boolean;
+  /** LinkedIn profiles read for this search while the student waited */
+  profilesRead?: number;
   unsupported: string[];
   rows: TableRow[];
 }
@@ -130,7 +132,18 @@ export function PeopleTableCard({
   return (
     <GlassCard kind="people_table">
       <CardHead title={env.summary.split('. ')[0]?.replace(/\.$/, '')} />
-      {t.notes.length > 0 && <div className="text-[12px] text-ink-3 -mt-1 mb-1.5">{t.notes.join(' ')}</div>}
+      {(t.notes.length > 0 || !!t.profilesRead) && (
+        <div className="text-[12px] text-ink-3 -mt-1 mb-1.5">
+          {[
+            ...t.notes,
+            ...(t.profilesRead
+              ? [
+                  `Read ${t.profilesRead} LinkedIn ${t.profilesRead === 1 ? 'profile' : 'profiles'} to check this.`,
+                ]
+              : []),
+          ].join(' ')}
+        </div>
+      )}
       {rows.length === 0 ? (
         <div className="text-ink-2">Nobody to show.</div>
       ) : (

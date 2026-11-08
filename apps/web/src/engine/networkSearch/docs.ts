@@ -15,7 +15,7 @@ import {
   type SearchContext,
 } from '@orbit/core/search';
 import { db, type FacetRow } from '../../db/schema';
-import { companyFacts, facetsByPerson, placeIndex, schoolIndex } from './data';
+import { companyFacts, facetsByPerson, placeIndex, profilesByPerson, schoolIndex } from './data';
 import { loadScans } from './lookup';
 
 interface Kept {
@@ -75,7 +75,7 @@ export async function loadWorld(
   opts: { touches?: boolean } = {},
 ): Promise<SearchWorld> {
   const userId = user.id;
-  const [people, affiliations, orgs, chats, facts, schools, places, facets, touches, scans] =
+  const [people, affiliations, orgs, chats, facts, schools, places, facets, touches, scans, profiles] =
     await Promise.all([
       db.people.where('userId').equals(userId).toArray(),
       db.affiliations.where('userId').equals(userId).toArray(),
@@ -89,6 +89,7 @@ export async function loadWorld(
         ? db.touchpoints.where('userId').equals(userId).toArray()
         : Promise.resolve([] as Touchpoint[]),
       loadScans(userId),
+      profilesByPerson(userId),
     ]);
   // a complete LinkedIn lookup: a connection it did not list lacks the facet (for people Orbit knows by LinkedIn id)
   const scanSig = scans.map((x) => `${x.kind}:${x.value}:${x.at}`).join('|');
@@ -118,7 +119,8 @@ export async function loadWorld(
     live.add(p.id);
     const aff = byPersonAff.get(p.id) ?? [];
     const fs: FacetRow[] = facets.get(p.id) ?? [];
-    const sig = `${scanSig.length}:${hashString(scanSig)}|${p.updatedAt}|${aff.length}|${aff.map((a) => a.id).join(',').length}|${fs.length}|${
+    const prof = profiles.get(p.id);
+    const sig = `${scanSig.length}:${hashString(scanSig)}|${prof?.at ?? ''}|${p.updatedAt}|${aff.length}|${aff.map((a) => a.id).join(',').length}|${fs.length}|${
       fs
         .map((f) => f.at)
         .sort()
@@ -129,7 +131,7 @@ export async function loadWorld(
       docs.push(prev.doc);
       continue;
     }
-    const doc = buildPersonDoc(p, aff, deps, withScans(p, fs, scans));
+    const doc = buildPersonDoc(p, aff, deps, withScans(p, fs, scans), undefined, prof);
     kept.set(p.id, { sig, doc });
     docs.push(doc);
   }

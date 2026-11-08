@@ -11,6 +11,10 @@
  *                                   account, while the student waits; complete = every match was listed
  *   POST /search/labels {personId, askHash, ask, verdict}
  *                                 → {ok}: the student said a row is, or is not, a match
+ *   GET /search/profiles?since=   → {profiles, at, more, progress} (plan 33): the LinkedIn profiles read for the
+ *                                   student's people (About, jobs, the reading), changed after `since`
+ *   POST /search/read {personIds} → {ok, read, reason?}: reads up to six people's profiles (and their companies'
+ *                                   pages) now, while the student waits on a search
  */
 
 import { isUuid } from '../../_shared/crypto.ts';
@@ -18,6 +22,7 @@ import { badRequest, json } from '../../_shared/http.ts';
 import { loadAccount } from '../../_shared/ingest/util.ts';
 import { loadCompanyFacts } from '../../_shared/search/companyFacts.ts';
 import { type LookupKind, runFacetLookup } from '../../_shared/search/lookup.ts';
+import { ASK_MAX, runReadingStep } from '../../_shared/search/reading.ts';
 import type { Ctx, Route } from '../api.ts';
 import { body } from './body.ts';
 
@@ -158,9 +163,88 @@ async function labels(ctx: Ctx): Promise<Response> {
   return json(200, { ok: !!row });
 }
 
+const PROFILES_PAGE = 2000;
+
+async function profiles(ctx: Ctx): Promise<Response> {
+  const b = ctx.req.method === 'POST' ? await body(ctx, true) : undefined;
+  const s = since(ctx, b);
+  const rows = await ctx.db.sql<{
+    person_id: string;
+    about: string | null;
+    experience: unknown;
+    reading: unknown;
+    updated_at: string;
+  }>`
+    select person_id, about, experience, reading, updated_at::text as updated_at from orbit.profile_reads
+     where user_id = ${ctx.userId!}::uuid and status = 'ok'
+       and (${s ?? null}::timestamptz is null or updated_at > ${s ?? null}::timestamptz)
+     order by updated_at
+     limit ${PROFILES_PAGE}`;
+  let at = s ?? new Date(0).toISOString();
+  for (const r of rows) if (r.updated_at > at) at = r.updated_at;
+  const [progress] = await ctx.db.sql<{ read: number; readable: number; companies: number }>`
+    select (select count(*)::int from orbit.profile_reads where user_id = ${ctx.userId!}::uuid) as read,
+           (select count(*)::int from orbit.people where user_id = ${ctx.userId!}::uuid and deleted_at is null
+              and merged_into is null and coalesce(linkedin_member_id, linkedin_slug) is not null) as readable,
+           (select count(distinct f.ref)::int from orbit.facet_assertions f
+              join orbit_private.company_pages c on c.linkedin_id = f.ref and c.status = 'ok'
+             where f.user_id = ${ctx.userId!}::uuid) as companies`;
+  return json(200, {
+    profiles: rows.map((r) => ({
+      personId: r.person_id,
+      ...(r.about ? { about: r.about } : {}),
+      experience: Array.isArray(r.experience) ? r.experience : [],
+      ...(r.reading && typeof r.reading === 'object' ? { reading: r.reading } : {}),
+      at: r.updated_at,
+    })),
+    at,
+    more: rows.length === PROFILES_PAGE,
+    progress: progress ?? null,
+  });
+}
+
+async function read(ctx: Ctx): Promise<Response> {
+  const b = await body(ctx);
+  if (
+    !Array.isArray(b.personIds) ||
+    !b.personIds.length ||
+    b.personIds.length > ASK_MAX ||
+    !b.personIds.every((x) => typeof x === 'string' && isUuid(x))
+  )
+    throw badRequest(`personIds is a list of up to ${ASK_MAX} person ids`);
+  const off = (reason: string) => json(200, { ok: false, read: [], reason });
+  if (!ctx.env.unipileKey || !ctx.env.unipileBase) return off('unconfigured');
+  const acct = await loadAccount(ctx.db, ctx.userId!, 'linkedin');
+  if (!acct?.externalAccountId || acct.status !== 'active') return off('not_connected');
+  const svc = ctx.services();
+  const step = await runReadingStep(
+    ctx.db,
+    {
+      fetch: ctx.fetch,
+      apiKey: ctx.env.unipileKey,
+      baseUrl: ctx.env.unipileBase,
+      claude: svc.claude,
+      sleep: svc.sleep,
+      random: svc.random,
+      clock: Date.now,
+    },
+    ctx.userId!,
+    acct.externalAccountId,
+    ctx.now(),
+    { mode: 'ask', personIds: b.personIds as string[], budgetMs: 20_000 },
+  );
+  return json(200, {
+    ok: true,
+    read: step.readIds,
+    ...(step.stopped && step.stopped !== 'time' ? { reason: step.stopped } : {}),
+  });
+}
+
 export const searchRoutes: Record<string, Route> = {
   '/companies/facts': { method: 'GET|POST', auth: true, run: companyFacts },
   '/search/facets': { method: 'GET|POST', auth: true, run: facets },
   '/search/lookup': { method: 'POST', auth: true, run: lookup },
   '/search/labels': { method: 'POST', auth: true, run: labels },
+  '/search/profiles': { method: 'GET|POST', auth: true, run: profiles },
+  '/search/read': { method: 'POST', auth: true, run: read },
 };

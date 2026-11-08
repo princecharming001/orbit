@@ -2521,6 +2521,7 @@ var TASKS = {
   goal_infer: { model: "claude-haiku-5-5", effort: "low", maxTokens: 1500 },
   fit: { model: "claude-haiku-5-5", effort: "low", maxTokens: 3e3 },
   triage: { model: "claude-haiku-5-5", effort: "low", maxTokens: 1e3 },
+  reading: { model: "claude-haiku-5-5", effort: "low", maxTokens: 3e3 },
   classify: { model: "claude-haiku-5-5", effort: "low", maxTokens: 1e3 },
   extract_memory: { model: "claude-haiku-5-5", effort: "low", maxTokens: 1500 },
   extract_goal: { model: "claude-haiku-5-5", effort: "low", maxTokens: 1500 },

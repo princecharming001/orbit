@@ -11,7 +11,9 @@ import {
   keysFor,
   kindOfOrg,
   matchFacts,
+  orgKey,
   parentOf,
+  type Stage,
   stageOf,
 } from './companies';
 import { type DocRole, docText, EVIDENCE_RANK, type EvidenceSource, type PersonDoc } from './doc';
@@ -351,19 +353,41 @@ function checkRole(
   return andAll(parts);
 }
 
+/**
+ * What a person's own profile states about the company of one of their roles (plan 33): a stage or a team size the
+ * reading quoted, when it names this company, or names none and this is their only current job.
+ */
+function statedFor(doc: PersonDoc | undefined, role: DocRole) {
+  const r = doc?.reading;
+  if (!r || !role.current) return {};
+  const currentOrgs = new Set(doc.roles.filter((x) => x.current && x.orgKey).map((x) => x.orgKey));
+  const fits = (company: string | undefined) =>
+    company ? !!role.orgKey && orgKey(company) === role.orgKey : currentOrgs.size <= 1;
+  return {
+    stage: r.stage && fits(r.stage.company) ? r.stage : undefined,
+    teamSize: r.teamSize && fits(r.teamSize.company) ? r.teamSize : undefined,
+  };
+}
+
 function checkCompany(
   role: DocRole,
   spec: CompanySpec | undefined,
   c: CompiledPosition,
   ctx: SearchContext,
   text: string,
+  doc?: PersonDoc,
 ): RoleResult {
   const base: RoleResult = { answer: 'yes', evidence: role.evidence, source: role.source };
   if (!spec) return base;
   const parts: Answer[] = [];
+  const notes: string[] = [];
   let estimated = false;
   const fm = role.org
-    ? matchFacts(role.org, ctx.facts, { badgeBatch: role.ycBatch, saysYc: role.saysYc })
+    ? matchFacts(role.org, ctx.facts, {
+        badgeBatch: role.ycBatch,
+        saysYc: role.saysYc,
+        linkedinId: role.linkedinCompanyId,
+      })
     : undefined;
   const fact = fm?.fact;
   // a weak name match ("Astro") says nothing about the company's stage, size or industry
@@ -391,39 +415,56 @@ function checkCompany(
       else parts.push(inBatch ? (sure ? 'yes' : 'likely') : 'no');
     } else parts.push('no');
   }
+  const said = statedFor(doc, role);
   if (spec.stages?.length) {
-    const st = stageOf(sureFact);
+    // their own words first ("we just raised our seed"), then the company's page, then an estimate from headcount
+    const st = said.stage
+      ? { stage: said.stage.value as Stage, estimated: false, evidence: said.stage.quote }
+      : stageOf(sureFact);
     if (!st) parts.push('unknown');
     else {
       estimated = st.estimated;
+      if (st.evidence) notes.push(`"${st.evidence}"`);
       parts.push(
         spec.stages.includes(st.stage) ? (st.estimated ? 'likely' : 'yes') : st.estimated ? 'unknown' : 'no',
       );
     }
   }
   if (spec.sizeMin !== undefined || spec.sizeMax !== undefined) {
-    const n = sureFact?.teamSize;
+    const n = said.teamSize?.value ?? sureFact?.teamSize;
     if (n === undefined) parts.push('unknown');
-    else
-      parts.push(
-        (spec.sizeMin === undefined || n >= spec.sizeMin) && (spec.sizeMax === undefined || n <= spec.sizeMax)
-          ? 'yes'
-          : 'no',
-      );
+    else {
+      if (said.teamSize) notes.push(`"${said.teamSize.quote}"`);
+      else if (sureFact?.sizeFromLinkedIn)
+        notes.push(`LinkedIn lists ${n.toLocaleString('en-US')} employees`);
+      const inRange =
+        (spec.sizeMin === undefined || n >= spec.sizeMin) &&
+        (spec.sizeMax === undefined || n <= spec.sizeMax);
+      // LinkedIn counts members who list the company: near a bound it is a likely, not a certainty
+      const near =
+        !said.teamSize &&
+        sureFact?.sizeFromLinkedIn &&
+        [spec.sizeMin, spec.sizeMax].some((b) => b !== undefined && Math.abs(n - b) <= Math.max(3, b * 0.2));
+      parts.push(inRange ? (near ? 'likely' : 'yes') : near ? 'unknown' : 'no');
+    }
   }
   if (c.industry) {
-    const factText = `${(sureFact?.industries ?? []).join(' ')} ${sureFact?.oneLiner ?? ''}`.toLowerCase();
+    const factText =
+      `${(sureFact?.industries ?? []).join(' ')} ${sureFact?.oneLiner ?? ''} ${sureFact?.about ?? ''}`.toLowerCase();
+    const focus = role.current ? (doc?.reading?.focus ?? []).map((f) => f.value).join(' ') : '';
     const hit =
       c.industry.some((t) => hasWord(factText, t)) ||
       c.industry.some((t) => hasWord(`${role.title ?? ''} ${role.org ?? ''}`, t));
     if (hit) parts.push('yes');
-    else if (sureFact?.industries?.length) parts.push('no');
+    else if (focus && c.industry.some((t) => hasWord(focus, t))) parts.push('likely');
+    else if (sureFact?.industries?.length || sureFact?.about) parts.push('no');
     else parts.push(c.industry.some((t) => hasWord(text, t)) ? 'likely' : 'unknown');
   }
-  const ev =
+  const ycEv =
     fact?.ycBatch && spec.yc
       ? `${role.evidence}${/\byc\b/i.test(role.evidence) ? '' : ` (YC ${fact.ycBatch})`}`
       : role.evidence;
+  const ev = notes.length ? `${ycEv} (${notes.join('; ')})` : ycEv;
   return {
     answer: andAll(parts),
     evidence: ev,
@@ -450,13 +491,17 @@ export function checkPosition(doc: PersonDoc, c: CompiledPosition, ctx: SearchCo
     if (when === 'current' && !role.current) continue;
     if (when === 'past' && role.current) continue;
     const fact = role.org
-      ? matchFacts(role.org, ctx.facts, { badgeBatch: role.ycBatch, saysYc: role.saysYc })?.fact
+      ? matchFacts(role.org, ctx.facts, {
+          badgeBatch: role.ycBatch,
+          saysYc: role.saysYc,
+          linkedinId: role.linkedinCompanyId,
+        })?.fact
       : undefined;
     const kind = role.club ? 'student_org' : kindOfOrg(role.org, fact);
     // a CEO or CTO of a YC company (or a small startup Orbit has facts for) is most often one of its founders
     const startup = role.saysYc || !!fact?.ycBatch || (fact?.teamSize !== undefined && fact.teamSize <= 50);
     const r = checkRole(role, p.role, c, kind, startup);
-    const co = checkCompany(role, p.company, c, ctx, text);
+    const co = checkCompany(role, p.company, c, ctx, text, doc);
     const time = andAll([
       withinYears(role.start, p.startedWithinYears, ctx.now),
       withinYears(role.end, p.endedWithinYears, ctx.now),

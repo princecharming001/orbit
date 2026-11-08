@@ -22,6 +22,7 @@ import type {
   OutboundMessage,
   Person,
   PersonFact,
+  ProfileReadWire,
   Recommendation,
   RecruitingGoals,
   Resume,
@@ -125,6 +126,11 @@ export interface FacetRow {
   positive: boolean;
   source: string;
   at: string;
+}
+
+/** A person's LinkedIn profile as the server read it (plan 33): their About, their jobs, the reading. */
+export interface ProfileReadRow extends ProfileReadWire {
+  userId: string;
 }
 
 /** One way to reach a person (orbit.person_identities): an address, a LinkedIn id or slug. */
@@ -366,6 +372,7 @@ export class OrbitDB extends Dexie {
   draftEdits!: EntityTable<DraftEdit, 'id'>;
   searchCache!: EntityTable<SearchCacheRow, 'key'>;
   facetAssertions!: EntityTable<FacetRow, 'id'>;
+  profileReads!: EntityTable<ProfileReadRow, 'personId'>;
 
   constructor(name = 'orbit') {
     super(name);
@@ -521,6 +528,10 @@ export class OrbitDB extends Dexie {
     this.version(14).stores({
       searchCache: 'key, userId, at',
       facetAssertions: 'id, userId, personId',
+    });
+    // plan 33: the LinkedIn profiles the server read for the student's people (About, jobs, the reading)
+    this.version(15).stores({
+      profileReads: 'personId, userId',
     });
   }
 }

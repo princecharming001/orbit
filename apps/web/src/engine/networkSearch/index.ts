@@ -19,8 +19,10 @@ import {
   shouldRelax,
 } from '@orbit/core/search';
 import MiniSearch from 'minisearch';
+import { db } from '../../db/schema';
 import { claudeReachable } from '../../integrations/anthropic';
-import { refreshFacets } from './data';
+import { callApi, isServerUser } from '../../integrations/orbitApi';
+import { companyFacts, refreshFacets, refreshProfiles } from './data';
 import { loadWorld, type SearchWorld } from './docs';
 import { JUDGE_FIRST, judge, openQuestions } from './judge';
 import { lookupsFor, runLookups } from './lookup';
@@ -54,6 +56,8 @@ export interface SearchSet {
   judgedIds: Set<string>;
   judgeFailed: number;
   judgeUnavailable: boolean;
+  /** LinkedIn profiles read while the student waited (plan 33) */
+  profilesRead: number;
   at: number;
 }
 
@@ -176,7 +180,7 @@ async function judgeMore(
   const docs = new Map(world.docs.map((d) => [d.id, d]));
   const items = toJudge(set, docs, limit);
   if (!items.length) return;
-  const out = await judge(set.userId, set.ask, items, signal);
+  const out = await judge(set.userId, set.ask, items, signal, world.ctx.facts);
   for (const [id, m] of out.answers) {
     const merged = set.judged.get(id) ?? new Map<string, JudgedAnswer>();
     for (const [k, v] of m) merged.set(k, v);
@@ -201,6 +205,79 @@ function rerun(
   });
 }
 
+/** Profiles read at ask time per search, and how long a search waits for them. */
+export const READ_NOW_MAX = 6;
+const READ_NOW_MS = 22_000;
+const READ_AGAIN_MS = 7 * DAY;
+
+/**
+ * Whether reading profiles could change this ask's answer: it asks something a headline rarely says (a company's
+ * stage, size or industry, a past job, a time in a role) or something only words can answer (a criterion, keywords).
+ */
+export function readingHelps(spec: QuerySpec): boolean {
+  if (spec.criteria?.length || spec.keywords?.terms.length) return true;
+  return (spec.positions ?? []).some(
+    (p) =>
+      !!p.company?.stages?.length ||
+      p.company?.sizeMin !== undefined ||
+      p.company?.sizeMax !== undefined ||
+      !!p.company?.industries?.length ||
+      p.when === 'past' ||
+      p.when === 'ever' ||
+      p.startedWithinYears !== undefined ||
+      p.endedWithinYears !== undefined,
+  );
+}
+
+/** The listed people worth reading now: an open check a profile could settle, not read yet, best first. */
+export function toRead(result: RunResult, world: SearchWorld, limit = READ_NOW_MAX): string[] {
+  const docs = new Map(world.docs.map((d) => [d.id, d]));
+  const out: string[] = [];
+  for (const band of ['strong', 'likely', 'unchecked'] as const)
+    for (const r of result.rows) {
+      if (out.length >= limit) return out;
+      if (r.band !== band) continue;
+      const d = docs.get(r.id);
+      const p = world.people.get(r.id);
+      if (!d || d.profileRead || !(p?.linkedinMemberId || p?.linkedinSlug)) continue;
+      const open = r.checks.some(
+        (c) =>
+          c.need === 'must' &&
+          (c.answer === 'likely' || c.answer === 'unknown' || c.estimated) &&
+          (c.key.startsWith('position:') || c.key.startsWith('criterion:') || c.key === 'keywords'),
+      );
+      if (open) out.push(r.id);
+    }
+  return out;
+}
+
+/**
+ * Reads up to six people's LinkedIn profiles and their companies' pages now (an account's server-held LinkedIn), then
+ * pulls what was read. Returns how many were read; 0 when nothing could be.
+ */
+async function readNow(userId: string, ids: string[], signal?: AbortSignal): Promise<number> {
+  if (!ids.length || !isServerUser(userId) || signal?.aborted) return 0;
+  const now = Date.now();
+  const keys = ids.map((id) => `readAsked:${userId}:${id}`);
+  const asked = await db.searchCache.bulkGet(keys);
+  const todo = ids.filter((_, i) => !asked[i] || now - Date.parse(asked[i]!.at) > READ_AGAIN_MS);
+  if (!todo.length) return 0;
+  const at = new Date().toISOString();
+  await db.searchCache.bulkPut(
+    todo.map((id) => ({ key: `readAsked:${userId}:${id}`, userId, at, value: 1 })),
+  );
+  const r = await Promise.race([
+    callApi('/search/read', { personIds: todo }).catch(() => undefined),
+    new Promise<undefined>((res) => setTimeout(() => res(undefined), READ_NOW_MS)),
+  ]);
+  if (!r?.ok || !r.value.ok || !r.value.read.length) return 0;
+  await Promise.all([
+    refreshProfiles(userId, true).catch(() => null),
+    companyFacts(userId, { force: true }).catch(() => undefined),
+  ]);
+  return r.value.read.length;
+}
+
 /**
  * Runs one ask. `caller: 'router'` means no model compiled it and none can judge it: criteria are dropped by lint.
  */
@@ -218,7 +295,10 @@ export async function runNetworkSearch(
     };
   const spec = linted.spec;
   // what the server learned since the last search (census, lookups); never waits long
-  await Promise.race([refreshFacets(user.id).catch(() => null), new Promise((r) => setTimeout(r, 1500))]);
+  await Promise.race([
+    Promise.all([refreshFacets(user.id).catch(() => null), refreshProfiles(user.id).catch(() => null)]),
+    new Promise((r) => setTimeout(r, 1500)),
+  ]);
   let world = await loadWorld(user, { touches: needsTouches(spec) });
   // what LinkedIn lists for the companies, schools and places the ask names (a few searches while the student waits)
   if (await runLookups(user, lookupsFor(compileSpec(spec, world.ctx)), opts.signal).catch(() => false))
@@ -229,7 +309,7 @@ export async function runNetworkSearch(
     prev && spec.refine?.onlyThese
       ? new Set(prev.result.rows.filter((r) => r.band !== 'no').map((r) => r.id))
       : undefined;
-  const lexical = spec.keywords?.terms.length ? lexicalScores(world.docs, spec.keywords.terms) : undefined;
+  let lexical = spec.keywords?.terms.length ? lexicalScores(world.docs, spec.keywords.terms) : undefined;
   const set: SearchSet = {
     id: `rs${++seq}`,
     userId: user.id,
@@ -246,8 +326,24 @@ export async function runNetworkSearch(
     judgedIds: new Set(),
     judgeFailed: 0,
     judgeUnavailable: false,
+    profilesRead: 0,
     at: Date.now(),
   };
+  // read the profiles of the people a profile could settle, then look again with what they say
+  if (opts.caller !== 'router' && readingHelps(spec)) {
+    const read = await readNow(user.id, toRead(set.result, world), opts.signal).catch(() => 0);
+    if (read) {
+      set.profilesRead = read;
+      world = await loadWorld(user, { touches: needsTouches(spec) });
+      world.ctx.noJudge = !claudeReachable('chat', 'judge');
+      lexical = spec.keywords?.terms.length ? lexicalScores(world.docs, spec.keywords.terms) : undefined;
+      set.result = runSpec(spec, world.docs, world.ctx, {
+        lexical,
+        onlyIds,
+        warmthFirst: WARMTH_WORDS.test(spec.ask),
+      });
+    }
+  }
   // relax only when the network really said no (not when it is merely unchecked)
   if (shouldRelax(set.result)) {
     for (const step of relaxSteps(spec)) {

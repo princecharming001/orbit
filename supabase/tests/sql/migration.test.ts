@@ -104,6 +104,8 @@ describe('orbit core migration', () => {
       'orbit-retention',
       // plan 32 §6.4: the LinkedIn connections census, every three hours, same migration
       'orbit-search-census',
+      // plan 33: profile reading, every two hours, scheduled by 20261109_orbit_profile_reading.sql
+      'orbit-search-reading',
       // plan 29 §B2.4b: the nightly voice distillation, scheduled by 20261102_orbit_voice.sql
       'orbit-voice',
       'orbit-worker-tick',

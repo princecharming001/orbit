@@ -8,6 +8,7 @@ export * from './headline';
 export * from './lint';
 export * from './places';
 export * from './predicates';
+export * from './reading';
 export * from './relax';
 export * from './run';
 export * from './schools';

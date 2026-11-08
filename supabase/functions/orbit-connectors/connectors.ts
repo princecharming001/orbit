@@ -599,14 +599,15 @@ export const DEFAULT_LEDGER: LedgerTotals = { profile: 100, posts: 100, search: 
  * is looking at can still read up to 85, and /mutuals' target read up to the full 100.
  */
 export const LEDGER_CEILINGS = {
-  profile: { mutuals: 1, route: 0.85, enrich: 0.5, photo: 0.3 },
+  // reading: orbit-worker search_reading's background profile reads (plan 33, over SQL); reading_ask: POST /search/read
+  profile: { mutuals: 1, route: 0.85, reading_ask: 0.6, enrich: 0.5, reading: 0.3, photo: 0.3 },
   posts: { engagement: 1, activity: 0.85 },
   // census: the background sweep of the student's connections (orbit-worker search_census, plan 32 §6.4), which
   // takes from the same counters over SQL; facets: the lookups a network search makes while the student waits
   search: { mutuals: 1, discover: 0.7, facets: 0.7, logos: 0.5, census: 0.4 },
   // company pages and company searches for logos: a company page is not a profile view (nobody is told), so it has
   // its own ledger instead of taking reads from people
-  company: { logos: 1 },
+  company: { logos: 1, reading_ask: 0.8, reading: 0.6 },
 } as const;
 
 export type LedgerCaller<K extends LedgerKind = LedgerKind> = keyof (typeof LEDGER_CEILINGS)[K];

@@ -57,6 +57,18 @@ export interface CompanyFact {
   source: 'yc' | 'bigpicture' | 'curated' | 'linkedin';
   /** facts older than a year are estimates */
   asOf?: string;
+  /** from the company's LinkedIn page (plan 33) */
+  linkedinId?: string;
+  foundedYear?: number;
+  /** headcount growth over the last 12 months, in percent */
+  growth12m?: number;
+  /** a stage the company's own About states, with the words it rests on */
+  stage?: Stage;
+  stageEvidence?: string;
+  /** the company's LinkedIn About, cut short */
+  about?: string;
+  /** team size is LinkedIn's count of members who list the company (not a payroll number) */
+  sizeFromLinkedIn?: boolean;
 }
 
 /** Legal suffixes beyond core's list, ported from cleanco (MIT): matched only as the last word. */
@@ -280,11 +292,15 @@ export interface StageRead {
   stage: Stage;
   /** derived from team size, not stated anywhere: caps a match at Likely */
   estimated: boolean;
+  /** the words a stated stage rests on */
+  evidence?: string;
 }
 
 /** The stage Orbit can say for a company: stated (acquired, public, YC growth) or estimated from team size. */
 export function stageOf(fact: CompanyFact | undefined): StageRead | undefined {
   if (!fact) return undefined;
+  // the company's own About says it ("our Series B")
+  if (fact.stage) return { stage: fact.stage, estimated: false, evidence: fact.stageEvidence };
   if (fact.ycStatus === 'Acquired') return { stage: 'acquired', estimated: false };
   if (fact.ycStatus === 'Public') return { stage: 'public', estimated: false };
   if (fact.ycStatus === 'Inactive') return { stage: 'inactive', estimated: false };
@@ -313,17 +329,41 @@ export interface FactsIndex {
   byKey: ReadonlyMap<string, CompanyFact>;
   /** former names and websites to the current key */
   alias: ReadonlyMap<string, string>;
+  /** companies by their LinkedIn id (plan 33): a person's job names its page exactly */
+  byLinkedinId?: ReadonlyMap<string, CompanyFact>;
 }
 
 export function buildFactsIndex(facts: readonly CompanyFact[]): FactsIndex {
   const byKey = new Map<string, CompanyFact>();
   const alias = new Map<string, string>();
+  const byLinkedinId = new Map<string, CompanyFact>();
   const clash = new Set<string>();
-  for (const f of facts) {
+  // LinkedIn pages last: each is laid over the directory row it is the same company as
+  const ordered = [...facts].sort(
+    (a, b) => Number(a.source === 'linkedin') - Number(b.source === 'linkedin'),
+  );
+  for (const f of ordered) {
     const prev = byKey.get(f.key);
-    // two YC companies with one key ("Clear", "Clear"): keep neither as a bare-name match
-    if (prev && prev.source === 'yc' && f.source === 'yc' && prev.name !== f.name) clash.add(f.key);
-    if (!prev || rankSource(f.source) > rankSource(prev.source)) byKey.set(f.key, { ...prev, ...f });
+    if (f.source === 'linkedin') {
+      if (f.linkedinId) byLinkedinId.set(f.linkedinId, f);
+      if (prev && prev.source !== 'linkedin') {
+        // the same company when the websites or LinkedIn handles agree; otherwise two companies sharing a name, and
+        // the directory row keeps the name (the page is still found by its LinkedIn id)
+        if (sameCompany(prev, f)) {
+          const merged = layLinkedIn(prev, f);
+          byKey.set(f.key, merged);
+          if (f.linkedinId) byLinkedinId.set(f.linkedinId, merged);
+        }
+        continue;
+      }
+      if (prev && prev.source === 'linkedin' && prev.linkedinId !== f.linkedinId && !sameCompany(prev, f))
+        clash.add(f.key);
+      if (!prev) byKey.set(f.key, f);
+    } else {
+      // two YC companies with one key ("Clear", "Clear"): keep neither as a bare-name match
+      if (prev && prev.source === 'yc' && f.source === 'yc' && prev.name !== f.name) clash.add(f.key);
+      if (!prev || rankSource(f.source) > rankSource(prev.source)) byKey.set(f.key, { ...prev, ...f });
+    }
     for (const n of f.formerNames ?? []) {
       const k = orgKey(n);
       if (k && k !== f.key && !alias.has(k)) alias.set(k, f.key);
@@ -335,7 +375,36 @@ export function buildFactsIndex(facts: readonly CompanyFact[]): FactsIndex {
     const f = byKey.get(k);
     if (f) byKey.set(k, { ...f, ambiguousName: true });
   }
-  return { byKey, alias };
+  return { byKey, alias, byLinkedinId };
+}
+
+function sameCompany(a: CompanyFact, b: CompanyFact): boolean {
+  const da = domainKey(a.website)?.replace(/^www\./, '');
+  const db = domainKey(b.website)?.replace(/^www\./, '');
+  if (da && db) return da === db;
+  if (a.linkedinHandle && b.linkedinHandle)
+    return a.linkedinHandle.toLowerCase() === b.linkedinHandle.toLowerCase();
+  // no website on one side: the same name is taken as the same company only when neither is ambiguous
+  return !a.ambiguousName && !b.ambiguousName && a.name.toLowerCase() === b.name.toLowerCase();
+}
+
+/** A directory row with what its LinkedIn page adds: current headcount, founding year, growth, a stated stage. */
+function layLinkedIn(dir: CompanyFact, li: CompanyFact): CompanyFact {
+  return {
+    ...dir,
+    linkedinId: li.linkedinId ?? dir.linkedinId,
+    linkedinHandle: dir.linkedinHandle ?? li.linkedinHandle,
+    website: dir.website ?? li.website,
+    teamSize: li.teamSize ?? dir.teamSize,
+    sizeFromLinkedIn: li.teamSize !== undefined || dir.sizeFromLinkedIn,
+    foundedYear: li.foundedYear ?? dir.foundedYear,
+    growth12m: li.growth12m ?? dir.growth12m,
+    stage: li.stage ?? dir.stage,
+    stageEvidence: li.stage ? li.stageEvidence : dir.stageEvidence,
+    about: li.about ?? dir.about,
+    industries: dir.industries?.length ? dir.industries : li.industries,
+    kind: dir.kind ?? li.kind,
+  };
 }
 
 function rankSource(s: CompanyFact['source']): number {
@@ -355,7 +424,7 @@ export interface FactMatch {
   fact: CompanyFact;
   confidence: Confidence;
   /** why: 'badge' (headline says YC and the batch agrees), 'domain', 'name', 'former_name' */
-  basis: 'badge' | 'domain' | 'name' | 'former_name';
+  basis: 'badge' | 'domain' | 'name' | 'former_name' | 'linkedin';
 }
 
 /**
@@ -366,8 +435,16 @@ export interface FactMatch {
 export function matchFacts(
   org: string | undefined,
   index: FactsIndex,
-  evidence: { badgeBatch?: string; saysYc?: boolean; emailDomains?: readonly string[] } = {},
+  evidence: {
+    badgeBatch?: string;
+    saysYc?: boolean;
+    emailDomains?: readonly string[];
+    /** the company's LinkedIn id from the person's own profile: names the page exactly */
+    linkedinId?: string;
+  } = {},
 ): FactMatch | undefined {
+  const byId = evidence.linkedinId ? index.byLinkedinId?.get(evidence.linkedinId) : undefined;
+  if (byId) return { fact: byId, confidence: 'strong', basis: 'linkedin' };
   const key = orgKey(org);
   for (const d of evidence.emailDomains ?? []) {
     const viaDomain = index.alias.get(`@${d}`);

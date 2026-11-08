@@ -115,6 +115,7 @@ export const RESERVE_MS: Readonly<Record<string, number>> = {
   'score.user': 20_000,
   'score.page': 20_000,
   search_census: 58_000,
+  search_reading: 58_000,
   company_facts_sync: 30_000,
 };
 export const DEFAULT_RESERVE_MS = 8_000;

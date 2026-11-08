@@ -7,7 +7,7 @@
  *   - facets: from orbit-api for an account, every 10 minutes at most;
  *   - schools and places: bundled, imported on first use.
  */
-import type { CompanyFactWire, FacetWire, SearchFacetsResponse } from '@orbit/core';
+import type { CompanyFactWire, FacetWire, SearchFacetsResponse, SearchProfilesResponse } from '@orbit/core';
 import type { CompanyFact, FactsIndex, PlaceIndex, SchoolIndex } from '@orbit/core/search';
 import {
   buildFactsIndex,
@@ -17,7 +17,7 @@ import {
   ycOssFact,
 } from '@orbit/core/search';
 import { loadSchools } from '../../data/schools';
-import { db, type FacetRow } from '../../db/schema';
+import { db, type FacetRow, type ProfileReadRow } from '../../db/schema';
 import { callApi, isServerUser } from '../../integrations/orbitApi';
 import { keepScans } from './lookup';
 
@@ -36,7 +36,8 @@ let factsMem: { cache: FactsCache; index: FactsIndex } | undefined;
 let factsLoading: Promise<FactsIndex> | undefined;
 
 function fromWire(f: CompanyFactWire): CompanyFact {
-  return { ...f };
+  // a LinkedIn page's team size is its count of members who list the company
+  return f.source === 'linkedin' && f.teamSize !== undefined ? { ...f, sizeFromLinkedIn: true } : { ...f };
 }
 
 async function pullFacts(userId: string, prev: FactsCache | undefined): Promise<FactsCache | undefined> {
@@ -64,13 +65,15 @@ async function pullFacts(userId: string, prev: FactsCache | undefined): Promise<
 }
 
 /** The company facts index; an empty one when nothing could be loaded (YC checks then rest on headlines alone). */
-export async function companyFacts(userId: string): Promise<FactsIndex> {
-  if (factsMem && Date.now() - factsMem.cache.fetchedAt < FACTS_FRESH_MS) return factsMem.index;
+export async function companyFacts(userId: string, opts: { force?: boolean } = {}): Promise<FactsIndex> {
+  if (!opts.force && factsMem && Date.now() - factsMem.cache.fetchedAt < FACTS_FRESH_MS)
+    return factsMem.index;
   factsLoading ??= (async () => {
     try {
       const row = await db.searchCache.get(FACTS_KEY);
       let cache = row?.value as FactsCache | undefined;
-      if (!cache || Date.now() - cache.fetchedAt >= FACTS_FRESH_MS) {
+      // forced: pages read moments ago (plan 33) come in through the incremental pull
+      if (!cache || opts.force || Date.now() - cache.fetchedAt >= FACTS_FRESH_MS) {
         const pulled = await pullFacts(userId, cache);
         if (pulled) {
           cache = pulled;
@@ -119,6 +122,46 @@ export async function refreshFacets(userId: string, force = false): Promise<Sear
     if (!v.more) break;
   }
   return census;
+}
+
+const profilesPulledAt = new Map<string, number>();
+
+/**
+ * Pulls the LinkedIn profiles the server read since the last pull (plan 33): About sections, jobs and the reading.
+ * Returns the reading's progress, or null when nothing was asked (not an account, or pulled moments ago).
+ */
+export async function refreshProfiles(
+  userId: string,
+  force = false,
+): Promise<SearchProfilesResponse['progress'] | null> {
+  if (!isServerUser(userId)) return null;
+  if (!force && Date.now() - (profilesPulledAt.get(userId) ?? 0) < FACETS_FRESH_MS) return null;
+  profilesPulledAt.set(userId, Date.now());
+  const posKey = `profilesAt:${userId}`;
+  let since = ((await db.searchCache.get(posKey))?.value as string | undefined) ?? undefined;
+  let progress: SearchProfilesResponse['progress'] = null;
+  for (let page = 0; page < 10; page++) {
+    const r = await callApi('/search/profiles', since ? { since } : {});
+    if (!r.ok) break;
+    progress = r.value.progress;
+    const rows: ProfileReadRow[] = r.value.profiles.map((p) => ({ ...p, userId }));
+    if (rows.length) await db.profileReads.bulkPut(rows);
+    since = r.value.at;
+    await db.searchCache.put({ key: posKey, userId, at: new Date().toISOString(), value: since });
+    if (!r.value.more) break;
+  }
+  return progress;
+}
+
+/** The profiles kept for the student's people, by person. */
+export async function profilesByPerson(userId: string): Promise<Map<string, ProfileReadRow>> {
+  const rows = await db.profileReads.where('userId').equals(userId).toArray();
+  return new Map(rows.map((r) => [r.personId, r]));
+}
+
+/** Test hook: the next pull goes to the server whatever the time. */
+export function forgetProfilePulls(): void {
+  profilesPulledAt.clear();
 }
 
 /** Every facet kept for the student's people, by person. */
@@ -172,6 +215,7 @@ export function resetSearchDataForTests(): void {
   factsMem = undefined;
   factsLoading = undefined;
   facetsPulledAt.clear();
+  profilesPulledAt.clear();
   schoolsMem = undefined;
   placesMem = undefined;
 }

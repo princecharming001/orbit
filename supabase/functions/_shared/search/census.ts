@@ -36,6 +36,8 @@ export interface CensusPerson {
   headline?: string;
   location?: string;
   companies: string[];
+  /** LinkedIn's id for each current employer, by name (plan 33: the company's page is read by it) */
+  companyIds?: Record<string, string>;
 }
 
 export interface CensusStep {
@@ -59,15 +61,25 @@ export function censusPeople(items: unknown): CensusPerson[] {
     const name = txt(p.name, 160);
     if (!memberId || !name) continue;
     if (typeof p.network_distance === 'string' && p.network_distance !== 'DISTANCE_1') continue;
-    const companies = Array.isArray(p.current_positions)
-      ? p.current_positions
-          .map((x) =>
-            x && typeof x === 'object' ? txt((x as Record<string, unknown>).company, 160) : undefined,
-          )
-          .filter((c): c is string => !!c)
-          .slice(0, 3)
-      : [];
-    out.push({ memberId, name, headline: txt(p.headline, 220), location: txt(p.location, 160), companies });
+    const companies: string[] = [];
+    const companyIds: Record<string, string> = {};
+    for (const x of Array.isArray(p.current_positions) ? p.current_positions : []) {
+      if (!x || typeof x !== 'object' || companies.length >= 3) continue;
+      const pos = x as Record<string, unknown>;
+      const c = txt(pos.company, 160);
+      if (!c) continue;
+      companies.push(c);
+      const id = pos.company_id == null ? undefined : txt(String(pos.company_id), 60);
+      if (id && /^\d+$/.test(id)) companyIds[c] = id;
+    }
+    out.push({
+      memberId,
+      name,
+      headline: txt(p.headline, 220),
+      location: txt(p.location, 160),
+      companies,
+      ...(Object.keys(companyIds).length ? { companyIds } : {}),
+    });
   }
   return out;
 }
@@ -116,23 +128,25 @@ export async function filePage(db: Db, userId: string, people: CensusPerson[], n
      where i.user_id = ${userId}::uuid and i.kind = 'linkedin_member' and i.value_norm = any(${ids}::text[])`;
   const byMember = new Map<string, string>();
   for (const k of known) if (!byMember.has(k.member)) byMember.set(k.member, k.id);
-  const rows: { person_id: string; kind: string; value: string }[] = [];
+  const rows: { person_id: string; kind: string; value: string; ref: string | null }[] = [];
   const places: { id: string; location: string }[] = [];
   for (const p of people) {
     const id = byMember.get(p.memberId);
     if (!id) continue;
     if (p.location) {
-      rows.push({ person_id: id, kind: 'place', value: p.location });
+      rows.push({ person_id: id, kind: 'place', value: p.location, ref: null });
       places.push({ id, location: p.location });
     }
-    for (const c of p.companies) rows.push({ person_id: id, kind: 'company', value: c });
+    for (const c of p.companies)
+      rows.push({ person_id: id, kind: 'company', value: c, ref: p.companyIds?.[c] ?? null });
   }
   if (rows.length)
     await db.sql`
-      insert into orbit.facet_assertions (user_id, person_id, kind, value, positive, source, at)
-      select ${userId}::uuid, r.person_id, r.kind, r.value, true, 'census', ${now.toISOString()}::timestamptz
-        from jsonb_to_recordset(${JSON.stringify(rows)}::jsonb) as r(person_id uuid, kind text, value text)
-      on conflict (user_id, person_id, kind, value, source) do update set at = excluded.at, positive = true`;
+      insert into orbit.facet_assertions (user_id, person_id, kind, value, positive, source, at, ref)
+      select ${userId}::uuid, r.person_id, r.kind, r.value, true, 'census', ${now.toISOString()}::timestamptz, r.ref
+        from jsonb_to_recordset(${JSON.stringify(rows)}::jsonb) as r(person_id uuid, kind text, value text, ref text)
+      on conflict (user_id, person_id, kind, value, source) do update set at = excluded.at, positive = true,
+        ref = coalesce(excluded.ref, facet_assertions.ref)`;
   if (places.length)
     await db.sql`
       update orbit.people p set location = r.location, updated_at = now()

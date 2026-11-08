@@ -12,8 +12,8 @@
  *   - answers are cached by (person text hash, question), so the same person is never asked the same thing twice;
  *   - a failed call leaves the rows as they were (likely stays likely), and the card says not everyone was checked.
  */
-import type { JudgedAnswer, PersonDoc, Row } from '@orbit/core/search';
-import { hashString } from '@orbit/core/search';
+import type { FactsIndex, JudgedAnswer, PersonDoc, Row } from '@orbit/core/search';
+import { hashString, matchFacts } from '@orbit/core/search';
 import { db } from '../../db/schema';
 import { claudeReachable, llmSearchJudge, type Wrap } from '../../integrations/anthropic';
 import { z } from '../../zod';
@@ -57,18 +57,54 @@ export function openQuestions(row: Row): Question[] {
     .map((c) => ({ key: c.key, text: c.label }));
 }
 
-/** What the judge reads about one person: their own words, original case, one fact a line. */
-export function personText(d: PersonDoc): string {
+const SIGNAL_WORDS: Record<string, string> = {
+  hiring: 'hiring',
+  raising: 'raising money',
+  angel_investing: 'angel invests',
+  stealth: 'building in stealth',
+  open_to_work: 'looking for a role',
+  advising: 'advises companies',
+};
+
+/**
+ * What the judge reads about one person: their own words, original case, one fact a line. With the company facts,
+ * each current employer's LinkedIn About and headcount come too (plan 33), so "a Series A climate startup" can be
+ * answered from what the company says about itself.
+ */
+export function personText(d: PersonDoc, facts?: FactsIndex): string {
   const lines: string[] = [`Name: ${d.name}`];
   if (d.headline) lines.push(`Headline: ${d.headline}`);
-  for (const r of d.roles.slice(0, 6)) {
+  const companies: string[] = [];
+  for (const r of d.roles.slice(0, 8)) {
     const when = r.future ? 'incoming' : r.current ? 'now' : 'before';
-    lines.push(`Role (${when}): ${[r.title, r.org].filter(Boolean).join(' at ') || r.evidence}`);
+    const span = r.start
+      ? ` (${r.start.slice(0, 4)}${r.end ? `-${r.end.slice(0, 4)}` : r.current ? '-now' : ''})`
+      : '';
+    lines.push(`Role (${when}): ${[r.title, r.org].filter(Boolean).join(' at ') || r.evidence}${span}`);
+    if (facts && r.current && r.org && companies.length < 2) {
+      const f = matchFacts(r.org, facts, { linkedinId: r.linkedinCompanyId, saysYc: r.saysYc })?.fact;
+      if (f && (f.about || f.oneLiner || f.teamSize)) {
+        const bits = [
+          f.oneLiner,
+          f.teamSize ? `${f.teamSize.toLocaleString('en-US')} people on LinkedIn` : undefined,
+          f.foundedYear ? `founded ${f.foundedYear}` : undefined,
+          f.ycBatch ? `YC ${f.ycBatch}` : undefined,
+        ].filter(Boolean);
+        companies.push(
+          `Company ${f.name}: ${bits.join('; ')}${f.about ? `. About: ${f.about.slice(0, 400)}` : ''}`,
+        );
+      }
+    }
   }
+  lines.push(...companies);
   for (const s of d.schools.slice(0, 4))
     lines.push(`School: ${s.name}${s.gradYear ? ` ${s.gradYear}` : ''}${s.field ? `, ${s.field}` : ''}`);
   if (d.text.location) lines.push(`Location: ${d.text.location}`);
-  if (d.text.summary) lines.push(`About: ${d.text.summary.slice(0, 600)}`);
+  if (d.text.summary) lines.push(`About: ${d.text.summary.slice(0, 1500)}`);
+  if (d.text.jobs) lines.push(`What they wrote under their jobs: ${d.text.jobs.slice(0, 800)}`);
+  if (d.reading?.focus?.length) lines.push(`Works on: ${d.reading.focus.map((f) => f.value).join('; ')}`);
+  if (d.reading?.signals?.length)
+    lines.push(`Says they are: ${d.reading.signals.map((s) => SIGNAL_WORDS[s.value] ?? s.value).join(', ')}`);
   if (d.text.notes) lines.push(`Student's notes: ${d.text.notes.slice(0, 400)}`);
   if (d.tags.length) lines.push(`Tags: ${d.tags.slice(0, 8).join(', ')}`);
   return lines.join('\n');
@@ -116,8 +152,9 @@ const answerSchema = z.object({
   ),
 });
 
-function cacheKey(doc: PersonDoc, q: Question): string {
-  return `judge:${doc.hash}:${hashString(q.text.toLowerCase())}`;
+/** Keyed by what the judge reads (the person's text and their company's), so a new About asks again. */
+function cacheKey(textHash: string, q: Question): string {
+  return `judge:${textHash}:${hashString(q.text.toLowerCase())}`;
 }
 
 async function judgeBatch(
@@ -176,11 +213,14 @@ export async function judge(
   ask: string,
   items: JudgeItem[],
   signal?: AbortSignal,
+  facts?: FactsIndex,
 ): Promise<JudgeOutcome> {
   const answers = new Map<string, Map<string, JudgedAnswer>>();
   const todo: JudgeItem[] = [];
   const now = Date.now();
-  const keys = items.flatMap((it) => it.questions.map((q) => cacheKey(it.doc, q)));
+  const allTexts = new Map(items.map((it) => [it.doc.id, personText(it.doc, facts)]));
+  const textHash = new Map([...allTexts].map(([id, t]) => [id, hashString(t)]));
+  const keys = items.flatMap((it) => it.questions.map((q) => cacheKey(textHash.get(it.doc.id)!, q)));
   const cached = new Map(
     (await db.searchCache.bulkGet(keys))
       .filter((r): r is NonNullable<typeof r> => !!r && now - Date.parse(r.at) < CACHE_DAYS * 86_400_000)
@@ -190,7 +230,7 @@ export async function judge(
     const m = new Map<string, JudgedAnswer>();
     const open: Question[] = [];
     for (const q of it.questions) {
-      const hit = cached.get(cacheKey(it.doc, q));
+      const hit = cached.get(cacheKey(textHash.get(it.doc.id)!, q));
       if (hit) m.set(q.key, hit);
       else open.push(q);
     }
@@ -200,7 +240,7 @@ export async function judge(
   if (!todo.length) return { answers, judged: items.length, failed: 0 };
   if (!claudeReachable('chat', 'judge'))
     return { answers, judged: items.length - todo.length, failed: 0, unavailable: true };
-  const texts = new Map(todo.map((it) => [it.doc.id, personText(it.doc)]));
+  const texts = allTexts;
   const batches: JudgeItem[][] = [];
   for (let i = 0; i < todo.length; i += JUDGE_BATCH) batches.push(todo.slice(i, i + JUDGE_BATCH));
   let failed = 0;
@@ -223,7 +263,7 @@ export async function judge(
             const a = m.get(q.key);
             if (!a) continue;
             merged.set(q.key, a);
-            rows.push({ key: cacheKey(it.doc, q), userId, at, value: a });
+            rows.push({ key: cacheKey(textHash.get(it.doc.id)!, q), userId, at, value: a });
           }
           answers.set(it.doc.id, merged);
         }
