@@ -160,11 +160,12 @@ export async function syncYcFounders(
 ): Promise<FounderSync> {
   const clock = opts.clock ?? Date.now;
   const due = await db.sql<{ source_id: string; yc_slug: string }>`
+    -- no backslashes in this SQL: a JS template string drops them before Postgres sees the pattern
     with mine as (
       select distinct c.source_id
         from orbit.organizations o
         join orbit_private.company_facts c
-          on c.source = 'yc' and (c.key = o.name_norm or c.key = regexp_replace(o.name_norm, '\s*\(?\s*yc\M.*$', ''))
+          on c.source = 'yc' and (c.key = o.name_norm or c.key = regexp_replace(o.name_norm, '[[:space:]]*[(]?[[:space:]]*yc([^[:alnum:]].*)?$', ''))
        where (${opts.userId ?? null}::uuid is null or o.user_id = ${opts.userId ?? null}::uuid)
     )
     select c.source_id, c.yc_slug
