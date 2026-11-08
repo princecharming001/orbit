@@ -779,40 +779,54 @@ function deliverability(status) {
   if (s === "invalid" || s === "disposable") return "invalid";
   return "risky";
 }
-function createHunter(opts) {
+var SPENT = /* @__PURE__ */ new Set([402, 403, 429]);
+function createHunter(given) {
+  const opts = { ...given, maxRetries: 0, timeoutMs: given.timeoutMs ?? 6e3 };
   const base = trimBase(opts.baseUrl ?? HUNTER_BASE);
   const headers = () => ({ "X-API-KEY": opts.apiKey ?? "" });
+  let spent = false;
+  const call = async (run) => {
+    if (!opts.apiKey) return unconfigured2("hunter");
+    if (spent)
+      return { ok: false, kind: "budget_exceeded", provider: "hunter", message: "hunter: out of credits" };
+    const r = await run();
+    if (!r.ok && r.status !== void 0 && SPENT.has(r.status)) spent = true;
+    return r;
+  };
   return {
     configured: !!opts.apiKey,
-    async findEmail(params) {
-      if (!opts.apiKey) return unconfigured2("hunter");
-      return requestJson(opts, {
-        provider: "hunter",
-        url: `${base}/v2/email-finder${query({ ...params })}`,
-        headers: headers(),
-        schema: hunterFinderSchema,
-        // nobody found by that handle or name
-        emptyOn: [404],
-        onEmpty: () => ({ data: null })
-      });
+    findEmail(params) {
+      return call(
+        () => requestJson(opts, {
+          provider: "hunter",
+          url: `${base}/v2/email-finder${query({ ...params })}`,
+          headers: headers(),
+          schema: hunterFinderSchema,
+          // nobody found by that handle or name
+          emptyOn: [404],
+          onEmpty: () => ({ data: null })
+        })
+      );
     },
-    async domainPattern(domain) {
-      if (!opts.apiKey) return unconfigured2("hunter");
-      return requestJson(opts, {
-        provider: "hunter",
-        url: `${base}/v2/domain-search${query({ domain, limit: 1 })}`,
-        headers: headers(),
-        schema: hunterDomainSchema
-      });
+    domainPattern(domain) {
+      return call(
+        () => requestJson(opts, {
+          provider: "hunter",
+          url: `${base}/v2/domain-search${query({ domain, limit: 1 })}`,
+          headers: headers(),
+          schema: hunterDomainSchema
+        })
+      );
     },
-    async verifyEmail(email) {
-      if (!opts.apiKey) return unconfigured2("hunter");
-      return requestJson(opts, {
-        provider: "hunter",
-        url: `${base}/v2/email-verifier${query({ email })}`,
-        headers: headers(),
-        schema: hunterVerifierSchema
-      });
+    verifyEmail(email) {
+      return call(
+        () => requestJson(opts, {
+          provider: "hunter",
+          url: `${base}/v2/email-verifier${query({ email })}`,
+          headers: headers(),
+          schema: hunterVerifierSchema
+        })
+      );
     }
   };
 }
@@ -19765,6 +19779,14 @@ async function fillEmails(cands, opts) {
     })
   );
 }
+var EMAIL_DEADLINE_MS = 12e3;
+function withDeadline(work, ms2) {
+  let timer;
+  const stop = new Promise((resolve) => {
+    timer = setTimeout(resolve, ms2);
+  });
+  return Promise.race([work.catch(() => void 0), stop]).finally(() => clearTimeout(timer));
+}
 
 // supabase/functions/_shared/sourcing/known.ts
 function indexKnown(rows) {
@@ -21373,7 +21395,10 @@ async function runSourcing(s, userId, req) {
         domains: [workDomain(c.email), ...orgDomainsOf(c, ctx.orgDomains)].filter((d) => !!d),
         year
       }),
-      fillEmails: (cands) => fillEmails(cands, { known: ctx.known, orgDomains: ctx.orgDomains, mx, lookup, verify, template }),
+      fillEmails: (cands) => withDeadline(
+        fillEmails(cands, { known: ctx.known, orgDomains: ctx.orgDomains, mx, lookup, verify, template }),
+        EMAIL_DEADLINE_MS
+      ),
       inPipeline: async (c) => {
         const k = await knownOf(c);
         if (!k || !goal) return false;

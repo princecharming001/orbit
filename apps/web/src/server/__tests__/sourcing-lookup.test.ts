@@ -8,7 +8,11 @@ import {
 } from '../../../../../supabase/functions/_shared/providers/hunter';
 import type { UnipileResearch } from '../../../../../supabase/functions/_shared/providers/unipileResearch';
 import { memorySharedCache } from '../../../../../supabase/functions/_shared/research/web';
-import { fillEmails, fromTemplate } from '../../../../../supabase/functions/_shared/sourcing/email';
+import {
+  fillEmails,
+  fromTemplate,
+  withDeadline,
+} from '../../../../../supabase/functions/_shared/sourcing/email';
 import {
   domainTemplate,
   emailLookup,
@@ -514,6 +518,49 @@ describe('the verifier: 4 cases', () => {
     });
     expect(asked).toEqual(['al.one@beta.io', 'bo.two@beta.io']);
     expect(cs.map((c) => c.emailConfidence)).toEqual(['verified', 'verified', 'pattern']);
+  });
+});
+
+describe('Hunter never holds up a search: 3 cases', () => {
+  it('out of credits: one try, then every later call in the search is skipped', async () => {
+    let calls = 0;
+    const fetch = (async () => {
+      calls++;
+      return new Response('{"errors":[{"id":"too_many_requests"}]}', {
+        status: 429,
+        headers: { 'retry-after': '30' },
+      });
+    }) as unknown as typeof globalThis.fetch;
+    const h = createHunter({ fetch, apiKey: 'hk', sleep: async () => undefined });
+    const a = await h.findEmail({ linkedin_handle: 'a' });
+    const b = await h.verifyEmail('b@x.com');
+    const c = await h.domainPattern('x.com');
+    expect([a.ok, b.ok, c.ok]).toEqual([false, false, false]);
+    expect(calls).toBe(1);
+  });
+
+  it('a server error is not retried either', async () => {
+    let calls = 0;
+    const fetch = (async () => {
+      calls++;
+      return new Response('{}', { status: 503 });
+    }) as unknown as typeof globalThis.fetch;
+    const h = createHunter({ fetch, apiKey: 'hk', sleep: async () => undefined });
+    expect((await h.findEmail({ linkedin_handle: 'a' })).ok).toBe(false);
+    expect((await h.findEmail({ linkedin_handle: 'b' })).ok).toBe(false);
+    expect(calls).toBe(2);
+  });
+
+  it('the email step keeps what it found by the deadline and lets the search go on', async () => {
+    const c = cand({ name: 'Al One' });
+    const slow = new Promise<void>((resolve) => {
+      c.email = 'al@x.com';
+      setTimeout(resolve, 5000);
+    });
+    const t0 = Date.now();
+    await withDeadline(slow, 30);
+    expect(Date.now() - t0).toBeLessThan(1000);
+    expect(c.email).toBe('al@x.com');
   });
 });
 

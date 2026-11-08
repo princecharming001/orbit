@@ -69,40 +69,60 @@ export interface Hunter {
   verifyEmail(email: string): Promise<ProviderResult<z.infer<typeof hunterVerifierSchema>>>;
 }
 
-export function createHunter(opts: ProviderOptions): Hunter {
+/**
+ * Out of credits or over the rate limit (seen live: a free plan used up mid-search turned each call into three slow
+ * retries and a 47-second search): Hunter answers 429, 402 or 403, and every later call in the same search is skipped.
+ */
+const SPENT = new Set([402, 403, 429]);
+
+export function createHunter(given: ProviderOptions): Hunter {
+  // one try, short: an email is never worth holding up a search for
+  const opts: ProviderOptions = { ...given, maxRetries: 0, timeoutMs: given.timeoutMs ?? 6000 };
   const base = trimBase(opts.baseUrl ?? HUNTER_BASE);
   const headers = () => ({ 'X-API-KEY': opts.apiKey ?? '' });
+  let spent = false;
+  const call = async <T>(run: () => Promise<ProviderResult<T>>): Promise<ProviderResult<T>> => {
+    if (!opts.apiKey) return unconfigured('hunter');
+    if (spent)
+      return { ok: false, kind: 'budget_exceeded', provider: 'hunter', message: 'hunter: out of credits' };
+    const r = await run();
+    if (!r.ok && r.status !== undefined && SPENT.has(r.status)) spent = true;
+    return r;
+  };
   return {
     configured: !!opts.apiKey,
-    async findEmail(params) {
-      if (!opts.apiKey) return unconfigured('hunter');
-      return requestJson(opts, {
-        provider: 'hunter',
-        url: `${base}/v2/email-finder${query({ ...params })}`,
-        headers: headers(),
-        schema: hunterFinderSchema,
-        // nobody found by that handle or name
-        emptyOn: [404],
-        onEmpty: () => ({ data: null }),
-      });
+    findEmail(params) {
+      return call(() =>
+        requestJson(opts, {
+          provider: 'hunter',
+          url: `${base}/v2/email-finder${query({ ...params })}`,
+          headers: headers(),
+          schema: hunterFinderSchema,
+          // nobody found by that handle or name
+          emptyOn: [404],
+          onEmpty: () => ({ data: null }),
+        }),
+      );
     },
-    async domainPattern(domain) {
-      if (!opts.apiKey) return unconfigured('hunter');
-      return requestJson(opts, {
-        provider: 'hunter',
-        url: `${base}/v2/domain-search${query({ domain, limit: 1 })}`,
-        headers: headers(),
-        schema: hunterDomainSchema,
-      });
+    domainPattern(domain) {
+      return call(() =>
+        requestJson(opts, {
+          provider: 'hunter',
+          url: `${base}/v2/domain-search${query({ domain, limit: 1 })}`,
+          headers: headers(),
+          schema: hunterDomainSchema,
+        }),
+      );
     },
-    async verifyEmail(email) {
-      if (!opts.apiKey) return unconfigured('hunter');
-      return requestJson(opts, {
-        provider: 'hunter',
-        url: `${base}/v2/email-verifier${query({ email })}`,
-        headers: headers(),
-        schema: hunterVerifierSchema,
-      });
+    verifyEmail(email) {
+      return call(() =>
+        requestJson(opts, {
+          provider: 'hunter',
+          url: `${base}/v2/email-verifier${query({ email })}`,
+          headers: headers(),
+          schema: hunterVerifierSchema,
+        }),
+      );
     },
   };
 }

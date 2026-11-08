@@ -374,6 +374,8 @@ export function setOrbitApiFetchForTests(f: typeof fetch | undefined): void {
 const doFetch: typeof fetch = (input, init) => (fetchImpl ?? globalThis.fetch)(input, init);
 
 const REQUEST_TIMEOUT_MS = 25_000;
+/** routes that read the web and look up emails take longer than a normal call (seen live: a 47-second search) */
+const SLOW_ROUTES: Record<string, number> = { '/source/search': 75_000 };
 /** refresh this long before the access token expires */
 export const REFRESH_BEFORE_MS = 5 * 60_000;
 
@@ -382,6 +384,7 @@ async function rawCall(
   body: unknown,
   opts: { token?: string; method?: 'GET' | 'POST'; signal?: AbortSignal } = {},
 ): Promise<Response | ApiFailure> {
+  const waitMs = SLOW_ROUTES[route] ?? REQUEST_TIMEOUT_MS;
   const base = orbitApiBase();
   if (!base) return failure('off', NO_SERVER);
   const headers: Record<string, string> = { accept: 'application/json' };
@@ -389,9 +392,7 @@ async function rawCall(
   const method = opts.method ?? 'POST';
   if (method === 'POST') headers['content-type'] = 'application/json';
   const timeout =
-    typeof AbortSignal !== 'undefined' && 'timeout' in AbortSignal
-      ? AbortSignal.timeout(REQUEST_TIMEOUT_MS)
-      : undefined;
+    typeof AbortSignal !== 'undefined' && 'timeout' in AbortSignal ? AbortSignal.timeout(waitMs) : undefined;
   const signal =
     opts.signal && timeout && 'any' in AbortSignal
       ? AbortSignal.any([opts.signal, timeout])

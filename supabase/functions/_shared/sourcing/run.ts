@@ -25,7 +25,7 @@ import { norm, normOrg } from '../research/guards';
 import { claudeWeb, exaWeb, GATHER_MODEL, sqlSharedCache, type WebSource } from '../research/web';
 import { firstNameOf } from '../rows.ts';
 import type { Services } from '../services.ts';
-import { dnsMx, fillEmails, type KnownAddress, orgDomainsOf } from './email';
+import { dnsMx, EMAIL_DEADLINE_MS, fillEmails, type KnownAddress, orgDomainsOf, withDeadline } from './email';
 import { indexKnown, type KnownRow, matchKnown } from './known';
 import { domainTemplate, emailLookup, emailVerifier } from './lookup';
 import {
@@ -309,7 +309,10 @@ export async function runSourcing(
           year,
         }),
       fillEmails: (cands) =>
-        fillEmails(cands, { known: ctx.known, orgDomains: ctx.orgDomains, mx, lookup, verify, template }),
+        withDeadline(
+          fillEmails(cands, { known: ctx.known, orgDomains: ctx.orgDomains, mx, lookup, verify, template }),
+          EMAIL_DEADLINE_MS,
+        ),
       inPipeline: async (c) => {
         const k = await knownOf(c);
         if (!k || !goal) return false;

@@ -282,3 +282,17 @@ export async function fillEmails(
     }),
   );
 }
+
+/**
+ * The email step's share of a search: lookups, patterns and verifications run in parallel, and whatever they found by
+ * then is kept (candidates are filled in place); the rest of the list goes out without an email rather than late.
+ */
+export const EMAIL_DEADLINE_MS = 12_000;
+
+export function withDeadline(work: Promise<void>, ms: number): Promise<void> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const stop = new Promise<void>((resolve) => {
+    timer = setTimeout(resolve, ms);
+  });
+  return Promise.race([work.catch(() => undefined), stop]).finally(() => clearTimeout(timer));
+}
