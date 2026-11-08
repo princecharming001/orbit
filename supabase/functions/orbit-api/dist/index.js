@@ -891,6 +891,9 @@ var hunterFinderSchema = z.looseObject({
     verification: z.looseObject({ status: z.string().nullish() }).nullish()
   }).nullish()
 });
+var hunterDomainSchema = z.looseObject({
+  data: z.looseObject({ pattern: z.string().nullish(), accept_all: z.boolean().nullish() }).nullish()
+});
 var hunterVerifierSchema = z.looseObject({
   data: z.looseObject({ status: z.string().nullish(), score: z.number().nullish() }).nullish()
 });
@@ -915,6 +918,15 @@ function createHunter(opts) {
         // nobody found by that handle or name
         emptyOn: [404],
         onEmpty: () => ({ data: null })
+      });
+    },
+    async domainPattern(domain) {
+      if (!opts.apiKey) return unconfigured2("hunter");
+      return requestJson(opts, {
+        provider: "hunter",
+        url: `${base}/v2/domain-search${query({ domain, limit: 1 })}`,
+        headers: headers(),
+        schema: hunterDomainSchema
       });
     },
     async verifyEmail(email) {
@@ -18306,6 +18318,10 @@ function studentFromResume(parsed, base) {
 
 // supabase/functions/_shared/sourcing/email.ts
 var MAX_LOOKUPS = 10;
+function fromTemplate(template, f2, l) {
+  const local = template.toLowerCase().replace(/\{first\}/g, f2).replace(/\{last\}/g, l).replace(/\{f\}/g, f2[0] ?? "").replace(/\{l\}/g, l[0] ?? "");
+  return /^[a-z0-9][a-z0-9._-]{0,63}$/.test(local) ? local : void 0;
+}
 var MAX_VERIFIES = 10;
 var PATTERNS = {
   "first.last": (f2, l) => `${f2}.${l}`,
@@ -18438,18 +18454,22 @@ async function fillEmails(cands, opts) {
         const p = patternAt(d);
         if (p) {
           const email2 = `${PATTERNS[p.pattern](n.f, n.l)}@${d}`;
-          const v = await check(email2);
-          if (v === "invalid") continue;
+          const v2 = await check(email2);
+          if (v2 === "invalid") continue;
           c.email = email2;
-          c.emailConfidence = v === "valid" ? "verified" : p.sure ? "pattern" : "guess";
+          c.emailConfidence = v2 === "valid" ? "verified" : p.sure ? "pattern" : "guess";
           return;
         }
-        if (!opts.verify || isUniversity(d)) continue;
+        if (!opts.template || isUniversity(d)) continue;
         if (opts.mx && !await opts.mx(d)) continue;
-        const email = `${PATTERNS["first.last"](n.f, n.l)}@${d}`;
-        if (await check(email) !== "valid") continue;
+        const t = await opts.template(d).catch(() => void 0);
+        const local = t ? fromTemplate(t, n.f, n.l) : void 0;
+        if (!local) continue;
+        const email = `${local}@${d}`;
+        const v = await check(email);
+        if (v === "invalid") continue;
         c.email = email;
-        c.emailConfidence = "verified";
+        c.emailConfidence = v === "valid" ? "verified" : "pattern";
         return;
       }
     })
@@ -18509,7 +18529,7 @@ function emailLookup(d) {
     const key = `email:${asked}:${who}`;
     const hit = await d.cache.get(key).catch(() => void 0);
     if (hit) return "none" in hit ? void 0 : hit;
-    const found = await fromHunter(d, slug, n, domain) ?? await fromApollo(d, c, domain);
+    const found = await fromHunter(d, c, slug, n, domain) ?? await fromApollo(d, c, domain);
     await d.cache.put(key, "email_lookup", found ?? { none: true }, LOOKUP_TTL_MS).catch(() => void 0);
     return found;
   };
@@ -18530,7 +18550,7 @@ async function fromLinkedIn(d, c, slug) {
   const email = r.value.contact_info?.emails?.find((e) => typeof e === "string" && e.includes("@"));
   return email ? { email: email.trim().toLowerCase(), source: "linkedin", status: "verified" } : void 0;
 }
-async function fromHunter(d, slug, n, domain) {
+async function fromHunter(d, c, slug, n, domain) {
   if (!d.hunter?.configured) return void 0;
   const asks = [];
   if (slug) asks.push({ by: "handle", params: { linkedin_handle: slug } });
@@ -18547,12 +18567,39 @@ async function fromHunter(d, slug, n, domain) {
     if (slug && theirs && theirs !== slug) continue;
     const v = deliverability(h.verification?.status);
     if (v === "invalid") continue;
+    const atUniversity = isUniversity(email.split("@")[1] ?? "");
+    if (ask3.by === "name" && atUniversity && notTheirRole(c, h.position)) continue;
     const onPage = (h.sources ?? []).some((x) => x.still_on_page);
-    const sure = ask3.by === "handle" || !!theirs || !isUniversity(email.split("@")[1] ?? "");
-    if (sure && (v === "valid" || onPage)) return { email, source: "hunter", status: "verified" };
+    const proven = onPage || v === "valid" && !h.accept_all;
+    const samePerson = ask3.by === "handle" || !!slug && theirs === slug || !atUniversity;
+    if (samePerson && proven) return { email, source: "hunter", status: "verified" };
     if ((h.score ?? 0) >= 70) return { email, source: "hunter", status: "guess" };
   }
   return void 0;
+}
+var ACADEMIC = /\b(prof|professor|faculty|lecturer|instructor|chair|dean|postdoc)/i;
+var ACADEMIC_ROLE = /prof|faculty|lectur|research|scien|chair|dean|director|postdoc|ph\.?d|fellow|instruct|teach|assistant|associate|advis|emerit|engineer|head/i;
+function notTheirRole(c, position) {
+  if (!position) return false;
+  if (!ACADEMIC.test([c.title, c.headline].filter(Boolean).join(" "))) return false;
+  return !ACADEMIC_ROLE.test(position);
+}
+function domainTemplate(d) {
+  const hunter = d.hunter;
+  if (!hunter?.configured) return void 0;
+  return async (domain) => {
+    const key = `pattern:${domain.toLowerCase()}`;
+    const hit = await d.cache.get(key).catch(() => void 0);
+    if (hit) return hit.t;
+    if (d.budget && !(await d.budget.check(d.userId, "hunter", 1)).ok) return void 0;
+    const r = await hunter.domainPattern(domain);
+    if (!r.ok) return void 0;
+    const t = r.value.data?.pattern ?? void 0;
+    if (t)
+      await d.budget?.record(d.userId, { provider: "hunter", operation: "domain", units: 1, costUsd: 0 });
+    await d.cache.put(key, "email_pattern", t ? { t } : { none: true }, LOOKUP_TTL_MS).catch(() => void 0);
+    return t;
+  };
 }
 function emailVerifier(d) {
   const hunter = d.hunter;
@@ -18781,14 +18828,14 @@ function webAsk(goal, opts = {}) {
   };
 }
 var escapeRe5 = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-var ACADEMIC_ROLE = /professor|faculty|pi\b|investigator|postdoc|phd|researcher|scientist/;
+var ACADEMIC_ROLE2 = /professor|faculty|pi\b|investigator|postdoc|phd|researcher|scientist/;
 function isAcademic(ask3) {
-  if (ask3.role && ACADEMIC_ROLE.test(ask3.role)) return true;
+  if (ask3.role && ACADEMIC_ROLE2.test(ask3.role)) return true;
   if (ask3.broad) return false;
   return !!ask3.assumedPlace || isSchoolOrg(ask3.place);
 }
 function webQueries(ask3) {
-  const faculty = !!ask3.role && ACADEMIC_ROLE.test(ask3.role);
+  const faculty = !!ask3.role && ACADEMIC_ROLE2.test(ask3.role);
   const who = faculty ? "faculty" : ask3.role ?? "team";
   const qs = ask3.broad ? [
     { id: "directory", query: `${ask3.subject} ${who} directory email` },
@@ -19995,6 +20042,7 @@ async function runSourcing(s, userId, req) {
     domainOf: (c) => orgDomainsOf(c, ctx.orgDomains)[0] ?? siteDomain(c.url)
   });
   const verify = emailVerifier({ userId, hunter: s.hunter, budget, cache });
+  const template = domainTemplate({ userId, hunter: s.hunter, budget, cache });
   const result = await sourcePeople(
     {
       unipile: s.unipile,
@@ -20035,7 +20083,7 @@ async function runSourcing(s, userId, req) {
         domains: [workDomain(c.email), ...orgDomainsOf(c, ctx.orgDomains)].filter((d) => !!d),
         year
       }),
-      fillEmails: (cands) => fillEmails(cands, { known: ctx.known, orgDomains: ctx.orgDomains, mx, lookup: lookup2, verify }),
+      fillEmails: (cands) => fillEmails(cands, { known: ctx.known, orgDomains: ctx.orgDomains, mx, lookup: lookup2, verify, template }),
       inPipeline: async (c) => {
         const k = await knownOf(c);
         if (!k || !goal) return false;

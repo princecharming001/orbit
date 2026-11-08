@@ -6,7 +6,8 @@
  *             answer whose LinkedIn profile is someone else's is dropped: at a big domain a name alone finds
  *             namesakes (tested at Berkeley, one professor's name returned a staff member's address)
  *   apollo    Apollo People Match by LinkedIn URL, else by name and company domain (1 credit)
- * Also the verifier fillEmails uses for addresses it builds from a pattern (Hunter, half a credit).
+ * Also what fillEmails uses for everyone past the lookups: a company's pattern from Hunter's domain search (1 credit
+ * per domain, cached) and the verifier for the addresses it builds (half a credit).
  * Each paid answer, found or not, is kept 30 days in the shared research cache so a person is looked up once for
  * everyone (a LinkedIn contact email never is: only the student's connections may see it);
  * every call goes through the per-user daily caps (budget.ts: 10 Hunter credits, 10 Apollo matches, 40 profile
@@ -17,7 +18,14 @@ import { deliverability, type Hunter } from '../providers/hunter';
 import { cleanLinkedInUrl, linkedInSlugOf, type UnipileResearch } from '../providers/unipileResearch';
 import type { BudgetDep } from '../research/deps';
 import type { SharedCache } from '../research/web';
-import { type EmailLookup, isUniversity, type LookedUp, nameParts, type Verify } from './email';
+import {
+  type DomainTemplate,
+  type EmailLookup,
+  isUniversity,
+  type LookedUp,
+  nameParts,
+  type Verify,
+} from './email';
 import type { Candidate } from './search';
 
 export const LOOKUP_TTL_MS = 30 * 24 * 3600 * 1000;
@@ -60,7 +68,7 @@ export function emailLookup(d: LookupDeps): EmailLookup {
     const key = `email:${asked}:${who}`;
     const hit = (await d.cache.get(key).catch(() => undefined)) as Cached | undefined;
     if (hit) return 'none' in hit ? undefined : hit;
-    const found = (await fromHunter(d, slug, n, domain)) ?? (await fromApollo(d, c, domain));
+    const found = (await fromHunter(d, c, slug, n, domain)) ?? (await fromApollo(d, c, domain));
     await d.cache.put(key, 'email_lookup', found ?? { none: true }, LOOKUP_TTL_MS).catch(() => undefined);
     return found;
   };
@@ -91,6 +99,7 @@ async function fromLinkedIn(
 /** Hunter's Email Finder: by LinkedIn handle (the person themself), else by name and company domain. */
 async function fromHunter(
   d: LookupDeps,
+  c: Candidate,
   slug: string | undefined,
   n: { f: string; l: string } | undefined,
   domain: string | undefined,
@@ -113,13 +122,51 @@ async function fromHunter(
     if (slug && theirs && theirs !== slug) continue;
     const v = deliverability(h.verification?.status);
     if (v === 'invalid') continue;
+    const atUniversity = isUniversity(email.split('@')[1] ?? '');
+    // a professor's name matched to staff with the same name (seen live: "Event Specialist" for a professor)
+    if (ask.by === 'name' && atUniversity && notTheirRole(c, h.position)) continue;
     const onPage = (h.sources ?? []).some((x) => x.still_on_page);
-    // by name at a university, with no LinkedIn profile to compare, it may be a namesake: never more than a guess
-    const sure = ask.by === 'handle' || !!theirs || !isUniversity(email.split('@')[1] ?? '');
-    if (sure && (v === 'valid' || onPage)) return { email, source: 'hunter', status: 'verified' };
+    // at a server that takes any address and with no page showing it, "valid" proves nothing (seen live: Hunter
+    // answered first.last for someone whose address is their first name)
+    const proven = onPage || (v === 'valid' && !h.accept_all);
+    // by name at a university, only a matching LinkedIn profile shows it is the same person
+    const samePerson = ask.by === 'handle' || (!!slug && theirs === slug) || !atUniversity;
+    if (samePerson && proven) return { email, source: 'hunter', status: 'verified' };
     if ((h.score ?? 0) >= 70) return { email, source: 'hunter', status: 'guess' };
   }
   return undefined;
+}
+
+const ACADEMIC = /\b(prof|professor|faculty|lecturer|instructor|chair|dean|postdoc)/i;
+const ACADEMIC_ROLE =
+  /prof|faculty|lectur|research|scien|chair|dean|director|postdoc|ph\.?d|fellow|instruct|teach|assistant|associate|advis|emerit|engineer|head/i;
+
+/** The candidate teaches and the address belongs to someone in a job that is not teaching or research. */
+function notTheirRole(c: Candidate, position: string | null | undefined): boolean {
+  if (!position) return false;
+  if (!ACADEMIC.test([c.title, c.headline].filter(Boolean).join(' '))) return false;
+  return !ACADEMIC_ROLE.test(position);
+}
+
+/** The pattern a company uses, from Hunter's domain search; cached 30 days for everyone, misses too. */
+export function domainTemplate(
+  d: Pick<LookupDeps, 'userId' | 'hunter' | 'budget' | 'cache'>,
+): DomainTemplate | undefined {
+  const hunter = d.hunter;
+  if (!hunter?.configured) return undefined;
+  return async (domain) => {
+    const key = `pattern:${domain.toLowerCase()}`;
+    const hit = (await d.cache.get(key).catch(() => undefined)) as { t?: string; none?: true } | undefined;
+    if (hit) return hit.t;
+    if (d.budget && !(await d.budget.check(d.userId, 'hunter', 1)).ok) return undefined;
+    const r = await hunter.domainPattern(domain);
+    if (!r.ok) return undefined;
+    const t = r.value.data?.pattern ?? undefined;
+    if (t)
+      await d.budget?.record(d.userId, { provider: 'hunter', operation: 'domain', units: 1, costUsd: 0 });
+    await d.cache.put(key, 'email_pattern', t ? { t } : { none: true }, LOOKUP_TTL_MS).catch(() => undefined);
+    return t;
+  };
 }
 
 /** Whether an address Orbit built is deliverable, by Hunter's verifier; cached 30 days for everyone. */

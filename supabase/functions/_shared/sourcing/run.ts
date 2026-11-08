@@ -27,7 +27,7 @@ import { firstNameOf } from '../rows.ts';
 import type { Services } from '../services.ts';
 import { dnsMx, fillEmails, type KnownAddress, orgDomainsOf } from './email';
 import { indexKnown, type KnownRow, matchKnown } from './known';
-import { emailLookup, emailVerifier } from './lookup';
+import { domainTemplate, emailLookup, emailVerifier } from './lookup';
 import {
   type Candidate,
   type RecommendationRow,
@@ -265,6 +265,7 @@ export async function runSourcing(
     domainOf: (c) => orgDomainsOf(c, ctx.orgDomains)[0] ?? siteDomain(c.url),
   });
   const verify = emailVerifier({ userId, hunter: s.hunter, budget, cache });
+  const template = domainTemplate({ userId, hunter: s.hunter, budget, cache });
   const result = await sourcePeople(
     {
       unipile: s.unipile,
@@ -308,7 +309,7 @@ export async function runSourcing(
           year,
         }),
       fillEmails: (cands) =>
-        fillEmails(cands, { known: ctx.known, orgDomains: ctx.orgDomains, mx, lookup, verify }),
+        fillEmails(cands, { known: ctx.known, orgDomains: ctx.orgDomains, mx, lookup, verify, template }),
       inPipeline: async (c) => {
         const k = await knownOf(c);
         if (!k || !goal) return false;

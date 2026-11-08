@@ -6,9 +6,11 @@
  *   pattern  built from the address pattern the company really uses, learned from two or more people at the same
  *            domain (88% right when tested against real inboxes)
  *   guess    a single example of the pattern, or a lookup's unconfirmed answer; shown as unconfirmed
- * A blind first.last address is never shown on its own: tested on 144 real company addresses it was right one time in
- * five. It is offered only when the verifier confirms it, and never at a university. Mail servers are checked over
- * DNS-over-HTTPS (an MX record) before a verification is spent; nothing here sends anything.
+ * A blind first.last address is never used: tested on 144 real company addresses it was right one time in five, and a
+ * verifier cannot catch it at a server that takes any address (one wrong first.last came back "valid" in testing).
+ * With no pattern from the student's inbox, the company's pattern comes from Hunter's domain search instead (it got
+ * three of three right where first.last got none), and never for a university. Mail servers are checked over
+ * DNS-over-HTTPS (an MX record) before a credit is spent; nothing here sends anything.
  */
 import { norm, normOrg } from '../research/guards';
 import type { Candidate } from './search';
@@ -27,6 +29,20 @@ export type EmailLookup = (c: Candidate) => Promise<LookedUp | undefined>;
 export const MAX_LOOKUPS = 10;
 /** Whether an address is deliverable, from a verifier (lookup.ts); undefined when it could not say. */
 export type Verify = (email: string) => Promise<'valid' | 'invalid' | 'risky' | undefined>;
+/** The address pattern a company uses, as Hunter writes it ("{first}", "{f}{last}"); undefined when unknown. */
+export type DomainTemplate = (domain: string) => Promise<string | undefined>;
+
+/** An address from a Hunter pattern and a name; undefined when the pattern has a part Orbit cannot fill. */
+export function fromTemplate(template: string, f: string, l: string): string | undefined {
+  const local = template
+    .toLowerCase()
+    .replace(/\{first\}/g, f)
+    .replace(/\{last\}/g, l)
+    .replace(/\{f\}/g, f[0] ?? '')
+    .replace(/\{l\}/g, l[0] ?? '');
+  return /^[a-z0-9][a-z0-9._-]{0,63}$/.test(local) ? local : undefined;
+}
+
 /** built addresses checked in one run at most (each may spend half a credit) */
 export const MAX_VERIFIES = 10;
 
@@ -186,9 +202,11 @@ export async function fillEmails(
   opts: {
     known: KnownAddress[];
     orgDomains: Map<string, string>;
-    /** whether a domain takes mail; checked before a verification is spent on a blind address */
+    /** whether a domain takes mail; checked before a credit is spent on its pattern */
     mx?: MxCheck;
     verify?: Verify;
+    /** the company's own pattern from Hunter, for a domain the student's inbox teaches nothing about */
+    template?: DomainTemplate;
     max?: number;
     lookup?: EmailLookup;
     maxLookups?: number;
@@ -248,13 +266,17 @@ export async function fillEmails(
           c.emailConfidence = v === 'valid' ? 'verified' : p.sure ? 'pattern' : 'guess';
           return;
         }
-        // no pattern known: the common first.last only when the verifier confirms it, never at a university
-        if (!opts.verify || isUniversity(d)) continue;
+        // nothing learned from the inbox: the pattern Hunter has seen the company use, never at a university
+        if (!opts.template || isUniversity(d)) continue;
         if (opts.mx && !(await opts.mx(d))) continue;
-        const email = `${PATTERNS['first.last']!(n.f, n.l)}@${d}`;
-        if ((await check(email)) !== 'valid') continue;
+        const t = await opts.template(d).catch(() => undefined);
+        const local = t ? fromTemplate(t, n.f, n.l) : undefined;
+        if (!local) continue;
+        const email = `${local}@${d}`;
+        const v = await check(email);
+        if (v === 'invalid') continue;
         c.email = email;
-        c.emailConfidence = 'verified';
+        c.emailConfidence = v === 'valid' ? 'verified' : 'pattern';
         return;
       }
     }),

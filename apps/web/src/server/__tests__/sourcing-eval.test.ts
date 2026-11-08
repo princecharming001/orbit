@@ -294,6 +294,8 @@ interface EmailCase {
   mxOk?: string[];
   /** what the verifier says per address; absent means no verifier (no Hunter key) */
   verify?: Record<string, 'valid' | 'invalid' | 'risky'>;
+  /** the pattern Hunter's domain search reports per domain */
+  template?: Record<string, string>;
   email?: string;
   confidence?: 'verified' | 'page' | 'pattern' | 'guess';
   /** addresses the verifier was asked about, when it matters */
@@ -385,11 +387,12 @@ const EMAILS: EmailCase[] = [
     mxOk: ['beta.io'],
   },
   {
-    id: 'E13 the verifier confirms first.last at a subdomain site',
+    id: 'E13 the company pattern from Hunter, confirmed, at a subdomain site',
     c: { name: 'Jo Park', url: 'https://team.beta.io/jo' },
     mxOk: ['beta.io'],
-    verify: { 'jo.park@beta.io': 'valid' },
-    email: 'jo.park@beta.io',
+    template: { 'beta.io': '{first}' },
+    verify: { 'jo@beta.io': 'valid' },
+    email: 'jo@beta.io',
     confidence: 'verified',
   },
   {
@@ -418,11 +421,12 @@ const EMAILS: EmailCase[] = [
     mxOk: ['acme.com'],
   },
   {
-    id: 'E19 UK company domain, confirmed',
+    id: 'E19 UK company domain, Hunter pattern f+last',
     c: { name: 'Jo Park', url: 'https://www.beta.co.uk/team' },
     mxOk: ['beta.co.uk'],
-    verify: { 'jo.park@beta.co.uk': 'valid' },
-    email: 'jo.park@beta.co.uk',
+    template: { 'beta.co.uk': '{f}{last}' },
+    verify: { 'jpark@beta.co.uk': 'valid' },
+    email: 'jpark@beta.co.uk',
     confidence: 'verified',
   },
   {
@@ -432,10 +436,28 @@ const EMAILS: EmailCase[] = [
     confidence: 'page',
   },
   {
-    id: 'E23 a catch-all server confirms nothing: no blind address',
+    id: 'E23 no pattern anywhere: no blind first.last even if a verifier would pass it',
     c: { name: 'Jo Park', url: 'https://beta.io/team' },
     mxOk: ['beta.io'],
-    verify: { 'jo.park@beta.io': 'risky' },
+    template: {},
+    verify: { 'jo.park@beta.io': 'valid' },
+    asked: [],
+  },
+  {
+    id: 'E23b a Hunter pattern at a server that takes any address stays a pattern',
+    c: { name: 'Jo Park', url: 'https://beta.io/team' },
+    mxOk: ['beta.io'],
+    template: { 'beta.io': '{first}' },
+    verify: { 'jo@beta.io': 'risky' },
+    email: 'jo@beta.io',
+    confidence: 'pattern',
+  },
+  {
+    id: 'E23c a Hunter pattern the verifier rejects is dropped',
+    c: { name: 'Jo Park', url: 'https://beta.io/team' },
+    mxOk: ['beta.io'],
+    template: { 'beta.io': '{first}' },
+    verify: { 'jo@beta.io': 'invalid' },
   },
   {
     id: 'E24 the verifier rejects the learned pattern: dropped',
@@ -469,23 +491,26 @@ const EMAILS: EmailCase[] = [
     id: 'E28 a university is never sent a blind address, even with a verifier',
     c: { name: 'Lu Wang', url: 'https://eecs.berkeley.edu/faculty/lu' },
     mxOk: ['berkeley.edu'],
+    template: { 'berkeley.edu': '{first}.{last}' },
     verify: { 'lu.wang@berkeley.edu': 'valid' },
     asked: [],
   },
   {
     id: 'E29 no mail server: no verification spent',
     c: { name: 'Al Kim', url: 'https://nomail.io/about' },
+    template: { 'nomail.io': '{first}.{last}' },
     verify: { 'al.kim@nomail.io': 'valid' },
     asked: [],
   },
 ];
 
-describe('finding emails: 27 cases', () => {
+describe('finding emails: 29 cases', () => {
   for (const e of EMAILS)
     it(e.id, async () => {
       const c = cand(e.c);
       const asked: string[] = [];
       const table = e.verify;
+      const tpl = e.template;
       await fillEmails([c], {
         known,
         orgDomains: new Map(e.orgDomains ?? []),
@@ -496,6 +521,7 @@ describe('finding emails: 27 cases', () => {
               return table[email];
             }
           : undefined,
+        template: tpl ? async (d) => tpl[d] : undefined,
       });
       expect({ id: e.id, email: c.email, confidence: c.email ? c.emailConfidence : undefined }).toEqual({
         id: e.id,

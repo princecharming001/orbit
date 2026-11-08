@@ -8,8 +8,12 @@ import {
 } from '../../../../../supabase/functions/_shared/providers/hunter';
 import type { UnipileResearch } from '../../../../../supabase/functions/_shared/providers/unipileResearch';
 import { memorySharedCache } from '../../../../../supabase/functions/_shared/research/web';
-import { fillEmails } from '../../../../../supabase/functions/_shared/sourcing/email';
-import { emailLookup, emailVerifier } from '../../../../../supabase/functions/_shared/sourcing/lookup';
+import { fillEmails, fromTemplate } from '../../../../../supabase/functions/_shared/sourcing/email';
+import {
+  domainTemplate,
+  emailLookup,
+  emailVerifier,
+} from '../../../../../supabase/functions/_shared/sourcing/lookup';
 import type { Candidate } from '../../../../../supabase/functions/_shared/sourcing/search';
 import { memoryBudget } from './fakes';
 
@@ -397,6 +401,73 @@ describe('Hunter in the lookup: 9 cases', () => {
   });
 });
 
+describe('live-test regressions: 4 cases', () => {
+  const found = (email: string, extra: Partial<Found> = {}): Found => ({
+    email,
+    score: 95,
+    verification: { status: 'valid' },
+    sources: [],
+    ...extra,
+  });
+  const atBerkeley = (h: Hunter) =>
+    emailLookup({ userId: 'u', hunter: h, cache: memorySharedCache(), domainOf: () => 'berkeley.edu' });
+
+  it("R1 by name at a university, Hunter's LinkedIn with none of ours to compare is not proof", async () => {
+    const h = fakeHunter(() =>
+      found('joseph.gonzalez@berkeley.edu', { linkedin_url: 'https://linkedin.com/in/joseph-go99' }),
+    );
+    expect(await atBerkeley(h.hunter)(cand({ name: 'Joseph Gonzalez', org: 'UC Berkeley' }))).toMatchObject({
+      status: 'guess',
+    });
+  });
+
+  it('R2 a professor matched to staff with the same name is dropped', async () => {
+    const h = fakeHunter(() => found('joseph.gonzalez@berkeley.edu', { position: 'Event Specialist' }));
+    const prof = cand({ name: 'Joseph Gonzalez', org: 'UC Berkeley', title: 'Associate Professor of EECS' });
+    expect(await atBerkeley(h.hunter)(prof)).toBeUndefined();
+    const real = fakeHunter(() => found('denero@berkeley.edu', { position: 'Assistant' }));
+    expect(
+      await atBerkeley(real.hunter)(cand({ name: 'John DeNero', title: 'Teaching Professor' })),
+    ).toMatchObject({
+      email: 'denero@berkeley.edu',
+    });
+  });
+
+  it('R3 a catch-all server and no page showing it: "valid" is only a guess', async () => {
+    const h = fakeHunter(() =>
+      found('jasjit.singh@rockstar.com', { accept_all: true, score: 83, verification: { status: 'valid' } }),
+    );
+    const look = emailLookup({
+      userId: 'u',
+      hunter: h.hunter,
+      cache: memorySharedCache(),
+      domainOf: () => 'rockstar.com',
+    });
+    expect(await look(cand({ name: 'Jasjit Singh', org: 'Rockstar' }))).toMatchObject({ status: 'guess' });
+  });
+
+  it('R4 the company pattern: Hunter templates, cached per domain for everyone', async () => {
+    expect(fromTemplate('{first}', 'george', 'bandarian')).toBe('george');
+    expect(fromTemplate('{f}{last}', 'maya', 'chen')).toBe('mchen');
+    expect(fromTemplate('{first}.{l}', 'maya', 'chen')).toBe('maya.c');
+    expect(fromTemplate('{first}{middle}', 'maya', 'chen')).toBeUndefined();
+    const asked: string[] = [];
+    const hunter = {
+      configured: true,
+      domainPattern: async (d: string) => {
+        asked.push(d);
+        return { ok: true, value: { data: { pattern: d === 'pear.vc' ? '{first}' : null } } };
+      },
+    } as unknown as Hunter;
+    const cache = memorySharedCache();
+    const t = domainTemplate({ userId: 'u', hunter, cache })!;
+    expect([await t('pear.vc'), await t('none.io')]).toEqual(['{first}', undefined]);
+    await domainTemplate({ userId: 'u2', hunter, cache })!('pear.vc');
+    await domainTemplate({ userId: 'u2', hunter, cache })!('none.io');
+    expect(asked).toEqual(['pear.vc', 'none.io']);
+  });
+});
+
 describe('the verifier: 4 cases', () => {
   it('V1 no Hunter key: no verifier at all', () => {
     expect(emailVerifier({ userId: 'u', cache: memorySharedCache() })).toBeUndefined();
@@ -435,13 +506,14 @@ describe('the verifier: 4 cases', () => {
       known: [],
       orgDomains: new Map(),
       maxVerifies: 2,
+      template: async () => '{first}.{last}',
       verify: async (e) => {
         asked.push(e);
         return 'valid';
       },
     });
     expect(asked).toEqual(['al.one@beta.io', 'bo.two@beta.io']);
-    expect(cs.map((c) => c.emailConfidence)).toEqual(['verified', 'verified', undefined]);
+    expect(cs.map((c) => c.emailConfidence)).toEqual(['verified', 'verified', 'pattern']);
   });
 });
 
