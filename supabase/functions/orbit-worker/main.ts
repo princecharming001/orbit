@@ -7,7 +7,7 @@ import { connectDb } from '../_shared/db.ts';
 import { googleTokenSource } from '../_shared/google.ts';
 import { makeLogger } from '../_shared/http.ts';
 import { providerSecret, resolveSecret } from '../_shared/secrets.ts';
-import { agentEnvFrom } from '../_shared/services.ts';
+import { agentEnvWithSecrets } from '../_shared/services.ts';
 import { sqlVault } from '../_shared/vault.ts';
 import type { HandlerDeps } from './handlers/deps.ts';
 import { DEFAULT_BUDGET_MS, defaultHandlers, makeWorkerHandler, runTick } from './worker.ts';
@@ -19,11 +19,13 @@ const salt = env('ORBIT_LOG_SALT') ?? ((env('SUPABASE_SERVICE_ROLE_KEY') ?? '').
 const log = makeLogger(salt);
 const runtime = typeof EdgeRuntime !== 'undefined' ? EdgeRuntime : undefined;
 const db = dbUrl ? connectDb(dbUrl, 2) : undefined;
+// the agent features' keys (Claude, Exa, ...): a function secret, else the copy in orbit_private.secrets
+const agentEnv = await agentEnvWithSecrets(env, db);
 const cronSecret = await resolveSecret(env, db, 'ORBIT_CRON_SECRET', 'orbit_cron_secret');
 
 // Claude for the reply jobs (classify.message and its rapport reading, rapport.backfill; Haiku, low effort): the
 // function secret when set, else the key Orbit's chat proxy reads from orbit_private.secrets. Only these jobs get it:
-// drafting and research keep their own key (agentEnvFrom). Spend goes through the per-user ledger and caps.
+// drafting and research read theirs through agentEnv. Spend goes through the per-user ledger and caps.
 // Unipile (LinkedIn sync) the same way.
 const [claudeKey, unipileKey, unipileBase] = await Promise.all([
   providerSecret(env, db, 'ORBIT_ANTHROPIC_API_KEY'),
@@ -46,7 +48,7 @@ const handlerDeps: HandlerDeps = {
   unipile: { apiKey: unipileKey, baseUrl: unipileBase },
   claude: makeClaude({ apiKey: claudeKey, db }),
 };
-const handlers = defaultHandlers({ ...handlerDeps, agents: { env: agentEnvFrom(env) } });
+const handlers = defaultHandlers({ ...handlerDeps, agents: { env: agentEnv } });
 
 Deno.serve(
   makeWorkerHandler({

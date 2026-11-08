@@ -221,6 +221,43 @@ function villageFor(cfg: AgentConfig, make: () => Village): Village {
   return v;
 }
 
+/** The secrets the agent env reads, by name. */
+export const AGENT_SECRET_NAMES = [
+  'ORBIT_ANTHROPIC_API_KEY',
+  'EXA_API_KEY',
+  'UNIPILE_API_KEY',
+  'UNIPILE_BASE_URL',
+  'APOLLO_API_KEY',
+  'SEMANTIC_SCHOLAR_API_KEY',
+  'VILLAGE_SECRET_KEY',
+  'VILLAGE_BASE_URL',
+  'RESEND_API_KEY',
+  'RESEND_FROM',
+] as const;
+
+/**
+ * The agent env with each key taken from the function's environment when set, else from the copy kept in
+ * orbit_private.secrets (public.orbit_secret, service role only), read in one round trip. Without this, a key stored
+ * once for every function (Orbit's Claude key is) left research, sourcing's web search and drafting unconfigured.
+ */
+export async function agentEnvWithSecrets(
+  get: (name: string) => string | undefined,
+  db: Db | undefined,
+): Promise<AgentEnv> {
+  const stored = new Map<string, string>();
+  const missing = AGENT_SECRET_NAMES.filter((n) => !get(n));
+  if (db && missing.length) {
+    try {
+      const rows = await db.sql<{ n: string; v: string | null }>`
+        select n, public.orbit_secret(n) as v from unnest(${missing as unknown as string[]}::text[]) as n`;
+      for (const r of rows) if (r.v) stored.set(r.n, r.v);
+    } catch {
+      // no orbit_secret here: the env alone, as before
+    }
+  }
+  return agentEnvFrom((name) => get(name) || stored.get(name));
+}
+
 /** The agent env from a function's environment (`Deno.env.get`). */
 export function agentEnvFrom(get: (name: string) => string | undefined): AgentEnv {
   const supabaseUrl = get('SUPABASE_URL');

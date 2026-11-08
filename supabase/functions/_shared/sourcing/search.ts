@@ -420,7 +420,8 @@ async function exaCall(
 ): Promise<Candidate[]> {
   const { deps, input } = ctx;
   if (!deps.exa.configured) {
-    ctx.unconfigured.add('exa');
+    // Exa is optional once the web search is on (it finds the same pages): only say so when neither is
+    if (!deps.web?.length) ctx.unconfigured.add('exa');
     return [];
   }
   const loc = locationOf(ctx, relax);

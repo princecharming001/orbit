@@ -1575,6 +1575,31 @@ function villageFor(cfg, make) {
   }
   return v;
 }
+var AGENT_SECRET_NAMES = [
+  "ORBIT_ANTHROPIC_API_KEY",
+  "EXA_API_KEY",
+  "UNIPILE_API_KEY",
+  "UNIPILE_BASE_URL",
+  "APOLLO_API_KEY",
+  "SEMANTIC_SCHOLAR_API_KEY",
+  "VILLAGE_SECRET_KEY",
+  "VILLAGE_BASE_URL",
+  "RESEND_API_KEY",
+  "RESEND_FROM"
+];
+async function agentEnvWithSecrets(get, db2) {
+  const stored = /* @__PURE__ */ new Map();
+  const missing = AGENT_SECRET_NAMES.filter((n) => !get(n));
+  if (db2 && missing.length) {
+    try {
+      const rows = await db2.sql`
+        select n, public.orbit_secret(n) as v from unnest(${missing}::text[]) as n`;
+      for (const r of rows) if (r.v) stored.set(r.n, r.v);
+    } catch {
+    }
+  }
+  return agentEnvFrom((name) => get(name) || stored.get(name));
+}
 function agentEnvFrom(get) {
   const supabaseUrl = get("SUPABASE_URL");
   return {
@@ -19968,7 +19993,7 @@ async function webCall(ctx) {
 async function exaCall(ctx, base, relax, entity) {
   const { deps, input } = ctx;
   if (!deps.exa.configured) {
-    ctx.unconfigured.add("exa");
+    if (!deps.web?.length) ctx.unconfigured.add("exa");
     return [];
   }
   const loc = locationOf(ctx, relax);
@@ -26144,6 +26169,7 @@ var salt = env("ORBIT_LOG_SALT") ?? ((env("SUPABASE_SERVICE_ROLE_KEY") ?? "").sl
 var log = makeLogger(salt);
 var runtime = typeof EdgeRuntime !== "undefined" ? EdgeRuntime : void 0;
 var db = dbUrl ? connectDb(dbUrl, 2) : void 0;
+var agentEnv = await agentEnvWithSecrets(env, db);
 var cronSecret = await resolveSecret(env, db, "ORBIT_CRON_SECRET", "orbit_cron_secret");
 var [claudeKey, unipileKey, unipileBase] = await Promise.all([
   providerSecret(env, db, "ORBIT_ANTHROPIC_API_KEY"),
@@ -26161,7 +26187,7 @@ var handlerDeps = {
   unipile: { apiKey: unipileKey, baseUrl: unipileBase },
   claude: makeClaude({ apiKey: claudeKey, db })
 };
-var handlers = defaultHandlers({ ...handlerDeps, agents: { env: agentEnvFrom(env) } });
+var handlers = defaultHandlers({ ...handlerDeps, agents: { env: agentEnv } });
 Deno.serve(
   makeWorkerHandler({
     cronSecret,

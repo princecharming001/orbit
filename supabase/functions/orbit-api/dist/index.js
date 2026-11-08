@@ -1714,6 +1714,31 @@ function villageFor(cfg, make) {
   }
   return v;
 }
+var AGENT_SECRET_NAMES = [
+  "ORBIT_ANTHROPIC_API_KEY",
+  "EXA_API_KEY",
+  "UNIPILE_API_KEY",
+  "UNIPILE_BASE_URL",
+  "APOLLO_API_KEY",
+  "SEMANTIC_SCHOLAR_API_KEY",
+  "VILLAGE_SECRET_KEY",
+  "VILLAGE_BASE_URL",
+  "RESEND_API_KEY",
+  "RESEND_FROM"
+];
+async function agentEnvWithSecrets(get2, db2) {
+  const stored = /* @__PURE__ */ new Map();
+  const missing = AGENT_SECRET_NAMES.filter((n) => !get2(n));
+  if (db2 && missing.length) {
+    try {
+      const rows = await db2.sql`
+        select n, public.orbit_secret(n) as v from unnest(${missing}::text[]) as n`;
+      for (const r of rows) if (r.v) stored.set(r.n, r.v);
+    } catch {
+    }
+  }
+  return agentEnvFrom((name) => get2(name) || stored.get(name));
+}
 function agentEnvFrom(get2) {
   const supabaseUrl2 = get2("SUPABASE_URL");
   return {
@@ -18678,7 +18703,7 @@ async function webCall(ctx) {
 async function exaCall(ctx, base, relax, entity) {
   const { deps, input } = ctx;
   if (!deps.exa.configured) {
-    ctx.unconfigured.add("exa");
+    if (!deps.web?.length) ctx.unconfigured.add("exa");
     return [];
   }
   const loc = locationOf(ctx, relax);
@@ -20165,6 +20190,7 @@ var num2 = (name, fallback) => {
 var supabaseUrl = env("SUPABASE_URL");
 var dbUrl = env("SUPABASE_DB_URL");
 var db = dbUrl ? connectDb(dbUrl) : void 0;
+var agentEnv = await agentEnvWithSecrets(env, db);
 var [sessionSecret, unipileWebhookSecret, unipileKey, unipileBase, redirectUri] = await Promise.all([
   resolveSecret(env, db, "ORBIT_SESSION_SECRET", "orbit_session_secret"),
   resolveSecret(env, db, "ORBIT_UNIPILE_WEBHOOK_SECRET", "orbit_unipile_webhook_secret"),
@@ -20188,7 +20214,7 @@ Deno.serve(
       connectorsSigningKey: env("SUPABASE_SERVICE_ROLE_KEY")
     },
     db,
-    agent: { env: agentEnvFrom(env) },
+    agent: { env: agentEnv },
     refreshProviderSecrets: async () => {
       const [unipileKey2, unipileBase2] = await Promise.all([
         providerSecret(env, db, "UNIPILE_API_KEY"),
