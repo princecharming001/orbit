@@ -23,7 +23,13 @@ export function searchHandlers(deps: HandlerDeps): Record<string, JobHandler> {
       if (r.skipped === 'fetch_failed') throw new Error('yc-oss fetch failed');
       if (r.skipped) throw new JobSkipped(r.skipped);
       // founder lists from YC's pages, everyone's network companies first, in what is left of the job's time
-      await syncYcFounders(ctx.db, doFetch, { userId: null, n: 80, deadline: started + 45_000, clock });
+      const f = await syncYcFounders(ctx.db, doFetch, {
+        userId: null,
+        n: 80,
+        deadline: started + 45_000,
+        clock,
+      });
+      console.log(JSON.stringify({ fn: 'orbit-worker', step: 'yc_founders', ...f }));
     },
     search_census: async (job, ctx) => {
       const userId = job.userId;
@@ -66,7 +72,19 @@ export function searchHandlers(deps: HandlerDeps): Record<string, JobHandler> {
         deadline: clock() + 40_000,
         clock,
         networkOnly: true,
-      }).catch(() => undefined);
+      })
+        .then((f) =>
+          console.log(JSON.stringify({ fn: 'orbit-worker', step: 'yc_founders', userJob: true, ...f })),
+        )
+        .catch((e) =>
+          console.log(
+            JSON.stringify({
+              fn: 'orbit-worker',
+              step: 'yc_founders',
+              error: String(e?.message ?? e).slice(0, 200),
+            }),
+          ),
+        );
       await runReadingStep(
         ctx.db,
         {

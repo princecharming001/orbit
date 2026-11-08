@@ -145,6 +145,10 @@ export interface FounderSync {
   read: number;
   listed: number;
   failed: number;
+  due?: number;
+  /** the last page's HTTP status and the last fetch error, for the log when pages fail */
+  lastStatus?: number;
+  lastError?: string;
 }
 
 /**
@@ -176,7 +180,7 @@ export async function syncYcFounders(
        and (${!!opts.networkOnly} = false or m.source_id is not null)
      order by (m.source_id is not null) desc, c.founders_at nulls first, c.yc_batch desc nulls last, c.source_id
      limit ${opts.n}`;
-  const out: FounderSync = { read: 0, listed: 0, failed: 0 };
+  const out: FounderSync = { read: 0, listed: 0, failed: 0, due: due.length };
   let next = 0;
   const one = async (row: { source_id: string; yc_slug: string }) => {
     const url = ycCompanyUrl(row.yc_slug);
@@ -192,12 +196,14 @@ export async function syncYcFounders(
           signal: ctl.signal,
         });
         status = res.status;
+        out.lastStatus = status;
         html = res.ok ? await res.text() : '';
       } finally {
         clearTimeout(timer);
       }
-    } catch {
+    } catch (e) {
       out.failed++;
+      out.lastError = String((e as Error)?.message ?? e).slice(0, 160);
       return;
     }
     const founders = status === 404 ? [] : parseYcFounders(html);

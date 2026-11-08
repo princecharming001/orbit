@@ -24967,7 +24967,7 @@ async function syncYcFounders(db2, doFetch, opts) {
        and (${!!opts.networkOnly} = false or m.source_id is not null)
      order by (m.source_id is not null) desc, c.founders_at nulls first, c.yc_batch desc nulls last, c.source_id
      limit ${opts.n}`;
-  const out = { read: 0, listed: 0, failed: 0 };
+  const out = { read: 0, listed: 0, failed: 0, due: due.length };
   let next = 0;
   const one = async (row) => {
     const url = ycCompanyUrl(row.yc_slug);
@@ -24983,12 +24983,14 @@ async function syncYcFounders(db2, doFetch, opts) {
           signal: ctl.signal
         });
         status = res.status;
+        out.lastStatus = status;
         html = res.ok ? await res.text() : "";
       } finally {
         clearTimeout(timer);
       }
-    } catch {
+    } catch (e) {
       out.failed++;
+      out.lastError = String(e?.message ?? e).slice(0, 160);
       return;
     }
     const founders = status === 404 ? [] : parseYcFounders(html);
@@ -25678,7 +25680,13 @@ function searchHandlers(deps) {
       const r = await syncCompanyFacts(ctx.db, doFetch, ctx.now());
       if (r.skipped === "fetch_failed") throw new Error("yc-oss fetch failed");
       if (r.skipped) throw new JobSkipped(r.skipped);
-      await syncYcFounders(ctx.db, doFetch, { userId: null, n: 80, deadline: started + 45e3, clock });
+      const f = await syncYcFounders(ctx.db, doFetch, {
+        userId: null,
+        n: 80,
+        deadline: started + 45e3,
+        clock
+      });
+      console.log(JSON.stringify({ fn: "orbit-worker", step: "yc_founders", ...f }));
     },
     search_census: async (job, ctx) => {
       const userId = job.userId;
@@ -25720,7 +25728,17 @@ function searchHandlers(deps) {
         deadline: clock() + 4e4,
         clock,
         networkOnly: true
-      }).catch(() => void 0);
+      }).then(
+        (f) => console.log(JSON.stringify({ fn: "orbit-worker", step: "yc_founders", userJob: true, ...f }))
+      ).catch(
+        (e) => console.log(
+          JSON.stringify({
+            fn: "orbit-worker",
+            step: "yc_founders",
+            error: String(e?.message ?? e).slice(0, 200)
+          })
+        )
+      );
       await runReadingStep(
         ctx.db,
         {
