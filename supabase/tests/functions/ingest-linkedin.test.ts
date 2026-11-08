@@ -326,6 +326,30 @@ describe('sync.linkedin', () => {
         select sync_state as s from orbit.integration_accounts where user_id = ${u}::uuid and provider = 'linkedin'`;
       expect(a!.s.linkedin.stage).toBe('done');
     });
+
+    it('a job files at most four pages of relations, however much time is left, then hands on', async () => {
+      // filing is CPU: about ten pages in one worker run used up its CPU and it was killed mid-job on every attempt
+      const u = await connectedUser(t.db, { linkedinAccount: 'acc-pages' });
+      const env = setup(true);
+      env.unipile.relationsPageSize = 1;
+      env.unipile.relations = ['Ada', 'Ben', 'Cal', 'Dee', 'Eve', 'Fay'].map((n) => ({
+        member_id: `ACo${n}`,
+        public_identifier: n.toLowerCase(),
+        first_name: n,
+        last_name: 'Pages',
+        headline: `Engineer at ${n} Co`,
+        created_at: Date.parse(ago(10)),
+      }));
+      env.unipile.chats = [];
+      await sync(u, { mode: 'sync' });
+      await drain(t, env.handlers, env.time.now);
+      const runs = (await jobRuns(t.db, u)).filter((r) => r.kind === 'sync.linkedin');
+      expect(runs).toHaveLength(2);
+      expect(runs.every((r) => r.status === 'ok')).toBe(true);
+      const [n] = await t.db.sql<{ n: number }>`
+        select count(*)::int as n from orbit.people where user_id = ${u}::uuid and linkedin_connected_on is not null`;
+      expect(n!.n).toBe(6);
+    });
   });
 });
 

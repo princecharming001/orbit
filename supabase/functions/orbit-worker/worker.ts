@@ -106,6 +106,8 @@ export const DEFAULT_BUDGET_MS = 110_000;
  */
 export const HEAVY_KINDS: ReadonlySet<string> = new Set(['score.user', 'score.page', 'score.person']);
 export const HEAVY_PER_TICK = 3;
+/** Kinds that run once a worker run, alone in their CPU budget (the LinkedIn sync files pages, which is CPU). */
+export const ONCE_PER_TICK: ReadonlySet<string> = new Set(['sync.linkedin']);
 /** a heavy job is not started once the tick has already run this many jobs of any kind */
 export const HEAVY_AFTER_JOBS = 6;
 /** wall clock a kind needs to finish cleanly: it is not started with less than this left in the budget */
@@ -193,6 +195,7 @@ export async function runTick(deps: WorkerDeps): Promise<TickSummary> {
   if (swept.length) s.swept = swept.length;
 
   let heavy = 0;
+  const once = new Set<string>();
   const closed = new Set<QueueName>();
   outer: while (clock() < deadline) {
     for (const q of QUEUES) {
@@ -213,6 +216,15 @@ export async function runTick(deps: WorkerDeps): Promise<TickSummary> {
           await handBack(batch.slice(i));
           s.stoppedBy = 'budget';
           break outer;
+        }
+        if (kind && ONCE_PER_TICK.has(kind)) {
+          if (once.has(kind)) {
+            await handBack(batch.slice(i));
+            closed.add(q);
+            s.stoppedBy = 'cpu';
+            continue outer;
+          }
+          once.add(kind);
         }
         if (kind && HEAVY_KINDS.has(kind)) {
           if (heavy >= HEAVY_PER_TICK || s.processed >= HEAVY_AFTER_JOBS) {

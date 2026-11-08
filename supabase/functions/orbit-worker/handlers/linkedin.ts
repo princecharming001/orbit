@@ -33,6 +33,14 @@ import { type HandlerDeps, JobSkipped, LONG_VT_SEC } from './deps.ts';
 export const REQUESTS_PER_JOB = 60;
 /** a job saves its place and queues the next one after this long */
 export const JOB_BUDGET_MS = 60_000;
+/**
+ * Pages of relations (50 each) one job files before it hands on. Filing is CPU, not waiting: about ten pages used up
+ * an isolate's CPU and it was killed mid-job on every attempt, so a 7,500-person network stalled near 5,300 and the
+ * job was dead-lettered. Four pages a job, one job a worker run, stays well inside it.
+ */
+export const RELATION_PAGES_PER_JOB = 4;
+/** Chats filed by one job, for the same reason (each is a page of messages to store). */
+export const CHATS_PER_JOB = 8;
 /** a full pass that ended this recently is not walked again */
 export const FRESH_FOR_MS = 20 * 3_600_000;
 const DAY = 86_400_000;
@@ -109,6 +117,8 @@ export function linkedinHandlers(deps: HandlerDeps): Record<string, JobHandler> 
       const firstPass = !state.syncedAt;
       if (state.stage === 'done' || !state.stage) state = { ...state, stage: 'relations', cursor: null };
       let requests = 0;
+      let pages = 0;
+      let chatsDone = 0;
       const call = async <T>(fn: () => Promise<T>): Promise<T> => {
         // at most one request a second per account (§12.3 rate limits)
         if (requests > 0) await sleep(1000);
@@ -149,6 +159,11 @@ export function linkedinHandlers(deps: HandlerDeps): Record<string, JobHandler> 
           break;
         }
         if (state.stage === 'relations') {
+          if (pages >= RELATION_PAGES_PER_JOB) {
+            outOfBudget = true;
+            break;
+          }
+          pages++;
           const page = await call(() => unipile.relations(accountId, state.cursor));
           if (!page.ok) throw new Error(`unipile relations ${page.status ?? page.kind}`);
           const rels = page.value.items.map(relationFromUnipile).filter((r) => !!r);
@@ -179,11 +194,12 @@ export function linkedinHandlers(deps: HandlerDeps): Record<string, JobHandler> 
         const chats = page.value.items;
         let i = state.chatIndex ?? 0;
         for (; i < chats.length; i++) {
-          if (requests + 2 > REQUESTS_PER_JOB || overBudget()) {
+          if (requests + 2 > REQUESTS_PER_JOB || overBudget() || chatsDone >= CHATS_PER_JOB) {
             outOfBudget = true;
             break;
           }
           const chat = chats[i]!;
+          chatsDone++;
           const att = await call(() => unipile.attendees(chat.id));
           if (!att.ok) throw new Error(`unipile attendees ${att.status ?? att.kind}`);
           const attendees: ChatAttendeeInput[] = att.value.map((a) => ({

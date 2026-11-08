@@ -23336,6 +23336,8 @@ async function storeChat(db2, userId, self, chat, messages, now, ownIds) {
 // supabase/functions/orbit-worker/handlers/linkedin.ts
 var REQUESTS_PER_JOB = 60;
 var JOB_BUDGET_MS = 6e4;
+var RELATION_PAGES_PER_JOB = 4;
+var CHATS_PER_JOB = 8;
 var FRESH_FOR_MS = 20 * 36e5;
 var DAY17 = 864e5;
 var str3 = (v) => typeof v === "string" && v ? v : void 0;
@@ -23391,6 +23393,8 @@ function linkedinHandlers(deps) {
       const firstPass = !state.syncedAt;
       if (state.stage === "done" || !state.stage) state = { ...state, stage: "relations", cursor: null };
       let requests = 0;
+      let pages = 0;
+      let chatsDone = 0;
       const call = async (fn) => {
         if (requests > 0) await sleep(1e3);
         requests++;
@@ -23427,6 +23431,11 @@ function linkedinHandlers(deps) {
           break;
         }
         if (state.stage === "relations") {
+          if (pages >= RELATION_PAGES_PER_JOB) {
+            outOfBudget = true;
+            break;
+          }
+          pages++;
           const page3 = await call(() => unipile.relations(accountId, state.cursor));
           if (!page3.ok) throw new Error(`unipile relations ${page3.status ?? page3.kind}`);
           const rels = page3.value.items.map(relationFromUnipile).filter((r2) => !!r2);
@@ -23453,11 +23462,12 @@ function linkedinHandlers(deps) {
         const chats = page2.value.items;
         let i = state.chatIndex ?? 0;
         for (; i < chats.length; i++) {
-          if (requests + 2 > REQUESTS_PER_JOB || overBudget()) {
+          if (requests + 2 > REQUESTS_PER_JOB || overBudget() || chatsDone >= CHATS_PER_JOB) {
             outOfBudget = true;
             break;
           }
           const chat = chats[i];
+          chatsDone++;
           const att = await call(() => unipile.attendees(chat.id));
           if (!att.ok) throw new Error(`unipile attendees ${att.status ?? att.kind}`);
           const attendees = att.value.map((a) => ({
@@ -25799,6 +25809,7 @@ var MAX_READS_UNFINISHED = MAX_READS + 5;
 var DEFAULT_BUDGET_MS = 11e4;
 var HEAVY_KINDS = /* @__PURE__ */ new Set(["score.user", "score.page", "score.person"]);
 var HEAVY_PER_TICK = 3;
+var ONCE_PER_TICK = /* @__PURE__ */ new Set(["sync.linkedin"]);
 var HEAVY_AFTER_JOBS = 6;
 var RESERVE_MS = {
   "sync.linkedin": 65e3,
@@ -25851,6 +25862,7 @@ async function runTick(deps) {
      returning id`;
   if (swept.length) s.swept = swept.length;
   let heavy = 0;
+  const once = /* @__PURE__ */ new Set();
   const closed = /* @__PURE__ */ new Set();
   outer: while (clock() < deadline) {
     for (const q of QUEUES) {
@@ -25869,6 +25881,15 @@ async function runTick(deps) {
           await handBack(batch.slice(i));
           s.stoppedBy = "budget";
           break outer;
+        }
+        if (kind && ONCE_PER_TICK.has(kind)) {
+          if (once.has(kind)) {
+            await handBack(batch.slice(i));
+            closed.add(q);
+            s.stoppedBy = "cpu";
+            continue outer;
+          }
+          once.add(kind);
         }
         if (kind && HEAVY_KINDS.has(kind)) {
           if (heavy >= HEAVY_PER_TICK || s.processed >= HEAVY_AFTER_JOBS) {
