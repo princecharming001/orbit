@@ -150,7 +150,20 @@ export function turnLayout(blocks: Block[], streaming = false): TurnPiece[] {
   const said = blocks.some(
     (b) => (b.type === 'text' && !!b.text.trim()) || ((b.type === 'tool' || b.type === 'web') && !failed(b)),
   );
-  const ordered = inReadingOrder(blocks).filter(({ b }) => !failed(b) || (!said && !streaming));
+  // a draft the turn shows again further down (written, then shown with its conversation) is shown once, there:
+  // the earlier card would only be a header saying "Continued below"
+  const lastFor = new Map<string, number>();
+  blocks.forEach((b, i) => {
+    const id = b.type === 'tool' ? editingDraftId(b) : undefined;
+    if (id) lastFor.set(id, i);
+  });
+  const shownLater = (b: Block, i: number) => {
+    const id = b.type === 'tool' ? editingDraftId(b) : undefined;
+    return !!id && (lastFor.get(id) ?? i) > i;
+  };
+  const ordered = inReadingOrder(blocks).filter(
+    ({ b, i }) => (!failed(b) || (!said && !streaming)) && !shownLater(b, i),
+  );
   const isLookup = (b: Block) =>
     b.type === 'tool' && b.status !== 'pending' && !(b.envelope && OUTCOME_KINDS.has(b.envelope.kind));
   const lookups = ordered.filter(({ b }) => isLookup(b)).length;

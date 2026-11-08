@@ -172,6 +172,22 @@ describe('the chat thread', () => {
     expect(plainMessage('cap', 'You used $30 of $30.')).toBe('You used $30 of $30.');
   });
 
+  it('shows a draft once: a card the turn shows again further down is left out where it first came', () => {
+    const draft = (id: string, draftId: string): Block => ({
+      type: 'tool',
+      toolUseId: id,
+      toolName: 'draft_message',
+      status: 'done',
+      envelope: {
+        kind: 'draft',
+        data: { id: draftId, body: 'hey', kindLabel: 'First message' },
+        summary: 'Draft',
+      },
+    });
+    const pieces = turnLayout([draft('a', 'd1'), draft('b', 'd2'), draft('c', 'd1'), draft('d', 'd2')]);
+    expect(pieces.map((p) => p.type === 'block' && p.b.type === 'tool' && p.b.toolUseId)).toEqual(['c', 'd']);
+  });
+
   it('folds a turn that looked many things up into one line, keeping the answer and the cards to act on', () => {
     const tool = (id: string, kind: ResultKind, summary: string): Block => ({
       type: 'tool',
