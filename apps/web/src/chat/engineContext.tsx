@@ -4,7 +4,7 @@ import { useSession } from '../state/session';
 import { createChatEngine } from './agent';
 import { execute, registry } from './registry';
 import type { ChatEngine } from './types';
-import { getChatMode } from './ui/prefs';
+import { getChatMode, setLastAutoChoice } from './ui/prefs';
 
 /**
  * The engine the chat UI talks to. By default it is the real one: `createChatEngine` over the tool registry and its
@@ -29,7 +29,8 @@ export function ChatEngineProvider({ engine, children }: { engine?: ChatEngine; 
           if (!u) throw new Error('Sign in or load the demo first.');
           return u;
         },
-        quick: () => getChatMode() === 'quick',
+        chatMode: getChatMode,
+        onEffort: (c) => setLastAutoChoice(c.effort),
       }),
     [engine],
   );

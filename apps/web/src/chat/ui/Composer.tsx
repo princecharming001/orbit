@@ -1,8 +1,23 @@
 import { ArrowUp, ChevronDown, FileText, Linkedin, Mail, Mic, NotebookPen, Plus, Square } from 'lucide-react';
-import { type KeyboardEvent, useEffect, useId, useLayoutEffect, useRef, useState } from 'react';
+import {
+  type KeyboardEvent,
+  useEffect,
+  useId,
+  useLayoutEffect,
+  useRef,
+  useState,
+  useSyncExternalStore,
+} from 'react';
 import { Link } from 'react-router-dom';
 import { cx } from '../../ui';
-import { type ChatMode, getChatMode, MODE_LABEL, setChatMode } from './prefs';
+import {
+  type ChatMode,
+  getChatMode,
+  getLastAutoChoice,
+  MODE_LABEL,
+  setChatMode,
+  subscribeLastAutoChoice,
+} from './prefs';
 
 type AttachKind = 'note' | 'resume' | 'linkedin' | 'email';
 const ATTACH: { kind: AttachKind; label: string; accept: string; icon: typeof Plus }[] = [
@@ -60,6 +75,8 @@ export function Composer({
   const [text, setText] = useState('');
   const [menu, setMenu] = useState<'attach' | 'mode' | undefined>();
   const [chatMode, setMode] = useState<ChatMode>(() => getChatMode());
+  // what Auto picked for the last reply, shown in the menu and nowhere else (plan 37 §5.1)
+  const lastAuto = useSyncExternalStore(subscribeLastAutoChoice, getLastAutoChoice, getLastAutoChoice);
   const [listening, setListening] = useState(false);
   const [canDictate] = useState(() => !!speechApi());
   const ref = useRef<HTMLTextAreaElement>(null);
@@ -247,6 +264,11 @@ export function Composer({
                 >
                   <div className="text-[14px] font-medium">{MODE_LABEL[m].label}</div>
                   <div className="text-[12.5px] text-ink-3">{MODE_LABEL[m].hint}</div>
+                  {m === 'auto' && chatMode === 'auto' && lastAuto && (
+                    <div className="mt-1 text-[12px] text-ink-3" data-testid="mode-last-auto">
+                      Last reply: {MODE_LABEL[lastAuto].label}
+                    </div>
+                  )}
                 </button>
               ))
             ) : (

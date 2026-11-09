@@ -184,9 +184,40 @@ describe('request shape', () => {
     expect(sys.content[0].text).toMatch(/^Setup: people \d+, /m);
   });
 
-  it("uses 'low' effort in quick mode", async () => {
+  it("sends quick mode's 'low' as a per-message change, never a request-level one, so the cache holds", async () => {
     await turn('hi', [{ text: 'ok' }], { quick: true });
-    expect(messageRequests(fake)[0]!.body.output_config).toEqual({ effort: 'low' });
+    const body = messageRequests(fake)[0]!.body;
+    expect(body.output_config).toEqual({ effort: 'medium' });
+    const u = body.messages.findIndex((m: { role: string }) => m.role === 'user');
+    expect(body.messages[u - 1]).toEqual({ role: 'system', content: [], output_config: { effort: 'low' } });
+  });
+
+  it('changes the level only when it differs, appended before the message, and the history replays exactly', async () => {
+    await turn('who went quiet', [{ text: 'Nobody yet.' }], { effort: 'low', effortReason: 'a lookup' });
+    await turn('anyone else', [{ text: 'No.' }], { effort: 'low' });
+    await turn('draft a note to Priya', [{ text: 'Done.' }], {
+      effort: 'medium',
+      effortReason: 'asks for thought',
+    });
+    const reqs = messageRequests(fake);
+    const efforts = (b: { messages: { role: string; output_config?: { effort: string } }[] }) =>
+      b.messages.filter((m) => m.role === 'system' && m.output_config).map((m) => m.output_config!.effort);
+    expect(efforts(reqs[0]!.body)).toEqual(['low']);
+    // the second turn is already at low: nothing new
+    expect(efforts(reqs[1]!.body)).toEqual(['low']);
+    // back to medium for a draft, the earlier change left in place
+    expect(efforts(reqs[2]!.body)).toEqual(['low', 'medium']);
+    for (const r of reqs) expect(r.body.output_config).toEqual({ effort: 'medium' });
+    // every request is the one before it with the new turn appended: the cached prefix holds
+    for (let i = 1; i < reqs.length; i++) {
+      const prev = JSON.stringify(reqs[i - 1]!.body.messages.slice(0, -1));
+      expect(JSON.stringify(reqs[i]!.body.messages).startsWith(prev.slice(0, -1))).toBe(true);
+    }
+    // the reply records the level it ran at and why
+    const rows = await store.messages(conversation.id);
+    const replies = rows.filter((r) => r.role === 'assistant');
+    expect(replies.map((r) => r.usage?.effort)).toEqual(['low', 'low', 'medium']);
+    expect(replies[0]!.usage?.effortReason).toBe('a lookup');
   });
 });
 
@@ -709,7 +740,13 @@ describe('budget, abort and failures', () => {
     ]);
     expect(todaysLlmUsage(readPrefs())).toMatchObject({ requests: 1, inputTokens: 410, outputTokens: 15 });
     const rows = await store.messages(conversation.id);
-    expect(rows[2]!.usage).toEqual({ input: 100, output: 10, cacheRead: 900, cacheWrite: 0 });
+    expect(rows[2]!.usage).toEqual({
+      input: 100,
+      output: 10,
+      cacheRead: 900,
+      cacheWrite: 0,
+      effort: 'medium',
+    });
   });
 
   it('stops on abort while a tool runs, records a cancelled is_error result and does not count it as a failure', async () => {

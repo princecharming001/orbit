@@ -23,6 +23,7 @@ import { learnAfterTurn } from './afterTurn';
 import { chipsFor, resolveChip, setupChipsFor } from './chips';
 // the client and the loop carry the Anthropic SDK: loaded on the first turn that talks to Claude, not with the page
 import type { ChatClient } from './client';
+import { type Effort, type EffortChoice, JUDGEMENT_TOOLS, pickEffort } from './effort';
 import type { ExecuteFn } from './loop';
 import { chatMode, chatModeNote } from './mode';
 import { ORBIT_NOTE } from './orbitNote';
@@ -44,6 +45,13 @@ export interface ChatEngineDeps {
   now?: () => Date;
   /** pins effort 'low' instead of 'medium'; a getter follows the composer's Smart / Quick switch */
   quick?: boolean | (() => boolean);
+  /**
+   * The composer's mode (plan 37 §5): 'auto' picks the level per turn, 'smart' and 'quick' pin it. Wins over `quick`
+   * when given.
+   */
+  chatMode?: () => 'auto' | 'smart' | 'quick';
+  /** told what Auto picked for each turn, for the composer's "Last reply" line */
+  onEffort?: (choice: EffortChoice) => void;
   prefixMismatch?: 'drop_block' | 'error';
 }
 
@@ -277,6 +285,40 @@ export function createChatEngine(deps: ChatEngineDeps): ChatEngine {
     return env;
   };
 
+  /** The level for one turn (plan 37 §5): pinned by Smart or Quick, picked per message by Auto. */
+  const effortFor = async (
+    conversation: ChatConversation,
+    text: string,
+  ): Promise<{ effort: Effort; effortReason?: string }> => {
+    const mode = deps.chatMode?.();
+    if (!mode) {
+      const quick = typeof deps.quick === 'function' ? deps.quick() : deps.quick;
+      return { effort: quick ? 'low' : 'medium' };
+    }
+    if (mode === 'smart') return { effort: 'medium', effortReason: 'Smart' };
+    if (mode === 'quick') return { effort: 'low', effortReason: 'Quick' };
+    let choice: EffortChoice;
+    try {
+      const user = getUser();
+      const [ctx, thread, rows] = await Promise.all([
+        routerContextFor(user.id, clock()),
+        threadContextFor(store, conversation.id),
+        store.messages(conversation.id),
+      ]);
+      const intent = routeUtterance(routedText(text), {
+        registry: deps.registry,
+        ...ctx,
+        firstName: user.firstName,
+        thread,
+      });
+      choice = pickEffort(text, { intent, registry: deps.registry, ...lastTurnOf(rows) });
+    } catch {
+      choice = { effort: 'medium', reason: 'could not read the message' };
+    }
+    deps.onEffort?.(choice);
+    return { effort: choice.effort, effortReason: choice.reason };
+  };
+
   /**
    * What the student did with card buttons since the model last heard from them (plan 37 §4.4): the model never saw
    * the taps, so without this it would offer "Add Stripe to targets" again. One Orbit note after their words, each
@@ -352,7 +394,7 @@ export function createChatEngine(deps: ChatEngineDeps): ChatEngine {
             user: getUser(),
             conversation,
             now: clock,
-            quick: typeof deps.quick === 'function' ? deps.quick() : deps.quick,
+            ...(await effortFor(conversation, trimmed)),
             prefixMismatch: deps.prefixMismatch,
           },
           [{ type: 'text', text: trimmed }, ...(await tapNote(conversation.id))],
@@ -580,4 +622,29 @@ export async function attachInput(
   if (keys.has('mimeType') && file.type) input.mimeType = file.type;
   if (keys.has('title') && kind === 'note') input.title = file.name.replace(/\.[a-z0-9]+$/i, '');
   return input;
+}
+
+/**
+ * What the last turn did, for Auto: whether it reached for a judgement tool (a draft makes the next turn Smart) and
+ * whether Orbi ended on a question the student is now answering.
+ */
+export function lastTurnOf(rows: ChatMessage[]): { afterJudgement: boolean; answeringQuestion: boolean } {
+  let i = rows.length - 1;
+  const said = (r: ChatMessage) =>
+    r.role === 'user' &&
+    !r.meta &&
+    Array.isArray(r.content) &&
+    (r.content as { type?: string }[]).some((b) => b.type === 'text');
+  while (i >= 0 && !said(rows[i]!)) i--;
+  const turn = rows.slice(i + 1).filter((r) => r.role === 'assistant');
+  const blocks = turn.flatMap((r) =>
+    Array.isArray(r.content) ? (r.content as { type?: string; name?: string; text?: string }[]) : [],
+  );
+  const afterJudgement = blocks.some((b) => b.type === 'tool_use' && !!b.name && JUDGEMENT_TOOLS.has(b.name));
+  const lastText =
+    [...blocks]
+      .reverse()
+      .find((b) => b.type === 'text' && b.text?.trim())
+      ?.text?.trim() ?? '';
+  return { afterJudgement, answeringQuestion: lastText.endsWith('?') };
 }

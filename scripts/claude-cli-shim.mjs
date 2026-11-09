@@ -371,7 +371,9 @@ function parseRequest(body) {
   let system = systemText(body.system);
   if (toolChoice === 'any' || toolChoice === 'tool')
     system += `\n\nYou must call ${toolChoice === 'tool' ? `the ${body.tool_choice.name} tool` : 'one of your tools'} now.`;
-  const effort = body.output_config?.effort;
+  // a per-message effort change (an empty system message with output_config, plan 37) wins over the request's own
+  const perMessage = [...(body.messages ?? [])].reverse().find((m) => m?.output_config?.effort)?.output_config?.effort;
+  const effort = perMessage ?? body.output_config?.effort;
   const format = body.output_config?.format;
   return {
     model: body.model,

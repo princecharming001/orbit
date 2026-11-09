@@ -17,6 +17,7 @@ export interface AppendInput {
   role: ChatMessage['role'];
   content: unknown;
   meta?: ChatMessage['meta'];
+  outputConfig?: ChatMessage['outputConfig'];
   model?: string;
   usage?: ChatMessage['usage'];
   stopReason?: string;
@@ -186,7 +187,10 @@ export class ChatStore {
    */
   async replayableRows(conversationId: string): Promise<ChatMessage[]> {
     const rows = (await this.messages(conversationId)).filter((r) => r.meta !== 'error');
-    return rows.filter((r, i) => r.role !== 'system' || rows[i + 1]?.role === 'assistant');
+    // an effort-only row may sit anywhere (plan 37 §5): it never needs an assistant turn after it
+    return rows.filter(
+      (r, i) => r.role !== 'system' || r.meta === 'effort' || rows[i + 1]?.role === 'assistant',
+    );
   }
 
   /** The API history: replayable rows mapped verbatim to `BetaMessageParam`. */
@@ -195,10 +199,20 @@ export class ChatStore {
     // the API takes a system row only after a user row (or an assistant turn that ended in a server tool result):
     // an Orbit nudge stored right after an assistant row (one build did that) replays as Orbit's own user message,
     // which the prompt reads the same way, so an old conversation never refuses every later turn
-    return rows.map((r, i) => ({
-      role: r.role === 'system' && rows[i - 1]?.role === 'assistant' ? 'user' : r.role,
-      content: r.content as BetaMessageParam['content'],
-    }));
+    return rows.map((r, i) =>
+      r.meta === 'effort' && r.outputConfig
+        ? effortMessage(r.outputConfig.effort)
+        : {
+            role: r.role === 'system' && rows[i - 1]?.role === 'assistant' ? 'user' : r.role,
+            content: r.content as BetaMessageParam['content'],
+          },
+    );
+  }
+
+  /** The effort the next reply runs at: the last effort-only row the model still sees, else the request's own. */
+  async currentEffort(conversationId: string): Promise<string | undefined> {
+    const rows = sinceCompaction(await this.replayableRows(conversationId));
+    return [...rows].reverse().find((r) => r.meta === 'effort')?.outputConfig?.effort;
   }
 
   /**
@@ -258,6 +272,14 @@ export class ChatStore {
 }
 
 // ---- helpers over stored content ----
+
+/**
+ * A per-message effort change (beta `mid-conversation-output-config-2026-07-01`): a system message with empty content
+ * that sets the level from the next student message on, without the cache reset a request-level change causes.
+ */
+export function effortMessage(effort: string): BetaMessageParam {
+  return { role: 'system', content: [], output_config: { effort } } as unknown as BetaMessageParam;
+}
 
 function textOfRow(row: Pick<ChatMessage, 'content'>): string | undefined {
   const content = row.content as BetaContentBlockParam[] | string;

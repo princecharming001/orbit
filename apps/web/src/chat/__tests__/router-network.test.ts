@@ -202,3 +202,21 @@ describe('router: the networking agent', () => {
     expect(dateFrom('soon')).toBeUndefined();
   });
 });
+
+describe('a field in a network ask (plan 37: the known router gap)', () => {
+  it.each([
+    ['who do I know who works in climate', 'climate'],
+    ['who do I know in fintech', 'fintech'],
+    ['anyone in my network who works in healthcare', 'healthcare'],
+    ['people I know in the crypto space', 'crypto'],
+  ])('%s searches the network for the field', (text, field) => {
+    const r = routeUtterance(text, ctx());
+    expect(r).toMatchObject({ kind: 'tool', tool: 'search_network_spec' });
+    expect((r as { input: { keywords?: { terms: string[] } } }).input.keywords).toEqual({ terms: [field] });
+  });
+
+  it('a place or a company is not a field', () => {
+    const r = routeUtterance('who do I know in SF', ctx());
+    expect((r as { input?: { keywords?: unknown } }).input?.keywords).toBeUndefined();
+  });
+});

@@ -22,10 +22,11 @@ import type { ChatConversation, ResultEnvelope, ToolContext, ToolSpec, TurnEvent
 import { recordToolAction } from './actions';
 import { sentenceGate, withoutButtonTalk } from './buttonTalk';
 import { type ChatClient, usesSharedAccess } from './client';
+import type { Effort } from './effort';
 import { knowledgeTextFor } from './knowledge';
 import { isOrbitText } from './orbitNote';
 import { buildSnapshot, memoryLineOf, snapshotIsStale, snapshotKeyOf, snapshotText } from './snapshot';
-import { type ChatStore, conversationNonce, toolResultsOf, toolUsesOf } from './store';
+import { type ChatStore, conversationNonce, effortMessage, toolResultsOf, toolUsesOf } from './store';
 import { systemBlocks } from './system';
 import { WEB_SEARCH_TOOL, WEB_SEARCH_TURN_BUDGET, webSources } from './webSearch';
 
@@ -42,7 +43,11 @@ export const CHAT_BETAS = [
   'server-side-fallback-2026-06-01', // refusal fallbacks in the array form of `fallbacks`
   'thinking-display-updates-2026-08-18', // progress lines between tool calls (`thinking.display: 'updates'`)
   'thinking-binding-controls-2026-08-01', // `thinking.block_binding.prefix_mismatch_behavior`
+  'mid-conversation-output-config-2026-07-01', // per-message effort: Smart, Quick and Auto without a cache reset
 ] as const;
+
+/** The request's own effort, the same for every request so the cache holds; a turn's level is a per-message change. */
+export const REQUEST_EFFORT = 'medium';
 
 /** The longest real answers are under 2,000 tokens; a tool input cut off here is caught as TruncatedToolInput. */
 export const MAX_TOKENS = 8_000;
@@ -71,8 +76,16 @@ export interface TurnDeps {
   user: User;
   conversation: ChatConversation;
   now?: () => Date;
-  /** 'quick' pins effort low for the engine; the default pins medium (the model's own default, pinned so it never varies) */
+  /** Quick: this turn at 'low' (the same as `effort: 'low'`) */
   quick?: boolean;
+  /**
+   * The level for this turn (plan 37 §5): Smart is 'medium', Quick and Auto's lookups 'low'. It goes out as a per-message
+   * effort change before the student's message when it differs from the level the conversation is at; the request's
+   * own effort never changes, so the cached prefix holds whatever the mode.
+   */
+  effort?: Effort;
+  /** why Auto picked the level, kept with the reply's usage */
+  effortReason?: string;
   /** 'drop_block' in production (degrade, do not fail); 'error' in tests so any history edit fails the test */
   prefixMismatch?: 'drop_block' | 'error';
 }
@@ -484,7 +497,7 @@ export function withWebSearch(tools: BetaRunnableTool[]): BetaToolRunnerParams['
  * `knowledge` is the student's playbook block (agent/knowledge.ts), which changes only when their goals do.
  */
 export function turnParams(
-  deps: Pick<TurnDeps, 'conversation' | 'quick' | 'prefixMismatch'>,
+  deps: Pick<TurnDeps, 'conversation' | 'prefixMismatch'>,
   tools: BetaRunnableTool[],
   messages: Anthropic.Beta.BetaMessageParam[],
   knowledge?: string,
@@ -499,7 +512,7 @@ export function turnParams(
       display: 'updates',
       block_binding: { prefix_mismatch_behavior: deps.prefixMismatch ?? 'drop_block' },
     },
-    output_config: { effort: deps.quick ? 'low' : 'medium' },
+    output_config: { effort: REQUEST_EFFORT },
     fallbacks: FALLBACK_MODELS,
     context_management: { edits: [{ type: 'compact_20260112', instructions: COMPACTION_INSTRUCTIONS }] },
     cache_control: { type: 'ephemeral' },
@@ -557,6 +570,18 @@ export async function runTurn(
 
   // the history, the student's turn and, when stale, a fresh snapshot: all appended, nothing edited
   const history = await store.history(conversation.id);
+  // the level for this reply: a per-message change just before the student's message, only when it differs from the
+  // level the conversation is at (plan 37 §5); appended, never edited, so the history replays exactly
+  const effort: Effort = deps.effort ?? (deps.quick ? 'low' : 'medium');
+  const atNow = (await store.currentEffort(conversation.id)) ?? REQUEST_EFFORT;
+  if (effort !== atNow) {
+    await store.append(
+      conversation.id,
+      { role: 'system', content: [], meta: 'effort', outputConfig: { effort } },
+      clock(),
+    );
+    history.push(effortMessage(effort));
+  }
   const userMsg: Anthropic.Beta.BetaMessageParam = { role: 'user', content: userBlocks };
   await store.append(conversation.id, userMsg, clock());
   const messages: Anthropic.Beta.BetaMessageParam[] = [...history, userMsg];
@@ -738,7 +763,7 @@ export async function runTurn(
         role: 'assistant',
         content: message.content,
         model: message.model,
-        usage: storedUsage(message.usage),
+        usage: { ...storedUsage(message.usage), effort, effortReason: deps.effortReason },
         stopReason: message.stop_reason ?? undefined,
       },
       clock(),

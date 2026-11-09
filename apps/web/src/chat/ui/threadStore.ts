@@ -243,6 +243,9 @@ export function applyEvent(turnId: string, e: TurnEvent) {
  */
 export function hydrate(messages: ChatMessage[], actions: ChatAction[]): Turn[] {
   const byId = new Map(actions.map((a) => [a.id, a]));
+  const byMessage = new Map<string, ChatAction[]>();
+  for (const a of actions)
+    if (a.messageId) byMessage.set(a.messageId, [...(byMessage.get(a.messageId) ?? []), a]);
   const turns: Turn[] = [];
   // the answer being built: assistant messages join it until the student says something or a line is drawn
   let open: AssistantTurn | undefined;
@@ -322,6 +325,34 @@ export function hydrate(messages: ChatMessage[], actions: ChatAction[]): Turn[] 
                   : 'done',
         });
       }
+    }
+    // a turn the no-key router ran (a chip, a command): its row holds the words, its card is the action recorded under
+    // the row, so a reopened chat shows the card as it read live, the lead without the summary the card says
+    const routed = (byMessage.get(m.id) ?? []).filter(
+      (a) => a.envelope && !a.origin && !blocks.some((b) => b.type === 'tool' && b.toolUseId === a.id),
+    );
+    for (const a of routed) {
+      const env = a.envelope!;
+      const last = blocks.at(-1);
+      if (last?.type === 'text' && env.summary && last.text.endsWith(env.summary)) {
+        const lead = last.text.slice(0, -env.summary.length).trim();
+        if (lead) last.text = lead;
+        else blocks.pop();
+      }
+      blocks.push({
+        type: 'tool',
+        toolUseId: a.id,
+        toolName: a.toolName,
+        envelope: env,
+        status:
+          a.status === 'pending'
+            ? 'pending'
+            : a.status === 'cancelled'
+              ? 'cancelled'
+              : env.kind === 'needs_confirmation' && a.status === 'done'
+                ? 'approved'
+                : 'done',
+      });
     }
     const stopped = m.stopReason === 'aborted';
     if (open) {

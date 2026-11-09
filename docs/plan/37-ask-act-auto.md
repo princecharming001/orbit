@@ -1,6 +1,7 @@
 # 37. Ask, act, auto: one question when the ask is unclear, buttons that act in place, and a mode that picks its own effort
 
-Status: plan, 2026-11-09. Written from three things the founder saw in the gallery and the live app on 2026-11-09, each
+Status: phases 1 to 4 built 2026-11-09 (§11 says what shipped and where the build departs from this plan, with the
+reason); the Auto bench (§5.4) waits for a budget. Written from three things the founder saw in the gallery and the live app on 2026-11-09, each
 traced to its cause in main `cc02b34`. Amends 19 (persona: one question), 28 (the bench), 32 and 36 (network search and
 the ladder), 35 D1 (chat effort) and the card layer of 14. Written for a Claude Code session to execute top to bottom in
 the order of §7, iterating with the gallery and the bench until every acceptance line in §7 holds.
@@ -440,7 +441,7 @@ medium; the gallery shots show the chip; nothing about effort appears in the cha
 |---|---|---|
 | "who do I know at Triumph", two Triumphs | a company card saying nobody, 90 words comparing both firms and judging who is too senior | "Triumph Law or Triumph Education Group?" and two buttons; a tap, then the right company card and a short answer |
 | "Add Triumph to targets" | a new student turn, a reply, a second card | the chip says Target, the button says Target with a check, the thread is unchanged |
-| Composer mode | Smart or Quick, set by hand, never changed | Auto: Quick for lookups and taps, Smart for drafts and judgement calls, moving up mid-turn when needed; Smart and Quick remain as overrides |
+| Composer mode | Smart or Quick, set by hand, never changed | Auto: Quick for lookups and taps, Smart for drafts and judgement calls, the turn after a draft Smart; Smart and Quick remain as overrides, and no level change costs the cache |
 | Cost a message (35 §1.1: about $0.045) | all turns at medium | measured in Phase 5 step 3; target 10% down at the same scorecard |
 
 ## 9. Decisions and approvals
@@ -466,3 +467,65 @@ medium; the gallery shots show the chip; nothing about effort appears in the cha
 - Auto picks low for an ask that needed thought and the move up never triggers (no judgement tool is called, the model
   just answers). Mitigation: the `medium` list in §5.2 errs toward medium for anything the router cannot name; the bench
   is the arbiter, and Smart is one tap away.
+
+## 11. As built (2026-11-09)
+
+What shipped, by phase, and every place the build departs from the sections above.
+
+**Phase 1, companies ask first.** `engine/companyRef.ts` (`companyEntries`, `decideCompany`, `resolveCompanyRef`,
+`rememberResolution`), `chat/clarify.ts` (the result, the pick message, `routedText`), `chat/ui/cards/Clarify.tsx`,
+`find_routes`, `search_network` and `find_people` resolve before they run, the loop answers any later tool call of the
+turn with "not run" (`NOT_RUN_ASKED`) and a wordless clarify turn gets `ASK_UP`, never the answer nudge. Prompt v28.
+The demo has Juniper Health (two people) and Juniper Capital (one), `DEMO_NAMESAKE_ORGS` in the seed, never drawn for
+anyone else (D2: Harbor was taken by a mock investor, "Harbor Lane Ventures"). The no-key router sends a name that starts
+known companies to `find_routes` instead of a people list, and reads "a route to someone at Bain" as Bain.
+Departures:
+- §3.1 asked for `tool_choice: none` after a clarify. The loop instead answers later calls with "not run": a
+  `tool_choice` change mid-turn would restart the messages cache, and the "not run" result stops the work as surely.
+- §3.4 asked for a snapshot line per resolution. The pick's own message ("Juniper Health [picked company ... for
+  "Juniper": ...]") is in the history the model reads, and the tools read the conversation's picks themselves, so the
+  snapshot (and its cache key) is left alone. Picks live on `ChatConversation.resolved`, in memory for temporary chats.
+- The prompt line is one sentence: the 24k budget of the stable block (plan 35 A2) leaves no room for more, and how to
+  word the question travels in the result's `howToAnswer`.
+
+**Phase 2, buttons act in place.** `NextStep.run`, `InPlaceStep` (parts.tsx), `ChatEngine.runStep`, `tapActionId`,
+`ChatAction.origin`, the company card's live Target chip, and the Orbit note after the student's next words
+("Since your last reply the student tapped, in cards: ...", told once, never in their bubble). In place now: Add
+{company} to targets, Add to People on picked rows and on a find_people list, and Show again. A tap counts as the
+student's own words for tools that run on them (`ToolContext.tapped`).
+Departures:
+- Undo (§4.3, D4) is not built: the founder asked for "the button updating to a finished state, and that's it".
+  Taking a target off stays one tap on the company page.
+- Find email has no chat button today, so there was nothing to convert; a sourced-people button is future work.
+- Snooze, Dismiss and Mark done exist on the Drafts page, not as chat card steps; nothing to convert.
+
+**Phase 3, people and drafts.** `search_people` answers a first name several people share with a question (who each is
+beside the name), and a pick settles the name for the conversation; the router's lead is "Which Keiko?". Drafts: the
+model already picks a draft by id, so the structural question is the router's: "send it" with two open drafts now offers
+the drafts as buttons.
+
+**Phase 4, Auto.** `chat/agent/effort.ts` (`pickEffort`, `JUDGEMENT_TOOLS`), `lastTurnOf` in the engine, `ChatMode`
+'auto', the menu's "Last reply" line, `ChatMessage.usage.effort` and `effortReason`, and the router now reads a field
+("who do I know who works in climate") as a network search. D1: Auto is the default for a student who never picked a
+mode; one who picked Smart or Quick keeps it.
+Departures, from the API's own rules (the claude-api reference, read 2026-11-09):
+- A request-level `effort` change between requests restarts the messages cache. Every request now sends
+  `effort: medium`, and a turn's level is a per-message change (an empty `role: system` message with
+  `output_config.effort`, beta `mid-conversation-output-config-2026-07-01`) stored before the student's message only
+  when it differs. Quick uses the same path, so switching modes no longer costs the cache either.
+- §5.3 asked for a move up inside a turn. A per-message change takes hold only at the next student message with new
+  input, and a request-level change would restart the cache for the rest of the turn; so a turn that reaches for a
+  judgement tool makes the next turn Smart instead (`afterJudgement`). Drafting itself runs in its own call
+  (`create_draft` composes on the server), so the chat's level matters less for the draft than for the words around it.
+- The new beta is in the proxy's `ALLOWED_BETAS`; orbit-claude must be deployed at the pushed sha before the web build
+  goes live, or shared-access chats would send the effort message without its beta.
+- The gallery shim honours a per-message level.
+
+**Found while iterating.** A reopened chat without a key drew every card as text (router turns store words, their
+cards are action rows): `hydrate` now puts the card back under its turn, the lead without the summary, so a tapped
+button is still done after a reload in either mode. The router's "the second one" reads a question's options as the
+list. Two offline simulation threads cover the Juniper question and "the first one" after "tell me about Keiko".
+
+**Tests added.** `chat/__tests__/clarify.test.ts` (20), `in-place.test.tsx` (5), `effort.test.ts` (45), the loop's
+question-back and per-message effort cases, `ui/cards/clarify.test.tsx`, `ui/composer-mode.test.tsx`, router field
+cases, e2e `ask-act.spec.ts`, and gallery cases c01 to c03 and b01 (with `tap:` and `step:` turns).

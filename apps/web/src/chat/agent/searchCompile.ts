@@ -4,7 +4,7 @@
  * (YC, "in my network", "I know", alums, "I haven't talked to"); anything it cannot read stays with the other phrases.
  * Criteria are never produced here: with no model, nothing could check them.
  */
-import type { PositionSpec, QuerySpec, TitleFamily } from '@orbit/core/search';
+import { INDUSTRY_WORDS, type PositionSpec, type QuerySpec, type TitleFamily } from '@orbit/core/search';
 
 const ROLE_WORDS: [RegExp, { families?: TitleFamily[]; founder?: boolean; titles?: string[] }][] = [
   [/\b(co-?founders?|founders?|founding team)\b/i, { founder: true }],
@@ -90,6 +90,21 @@ function schoolsIn(text: string): string[] {
 }
 
 /** Compiles one sentence, or undefined when it is not a network search this reader understands. */
+/** The field an ask names after "in" ("works in climate", "in the fintech space"), when it is one Orbit knows. */
+export function fieldIn(t: string): string | undefined {
+  const m =
+    /\bin\s+(?:the\s+)?([a-z][a-z-]{1,20}(?:\s[a-z-]{2,20})?)(?:\s+(?:space|industry|sector|world))?\s*\??$/i.exec(
+      t,
+    );
+  if (!m) return undefined;
+  const words = m[1]!.toLowerCase();
+  const known = (w: string) =>
+    w in INDUSTRY_WORDS || Object.values(INDUSTRY_WORDS).some((list) => list.includes(w));
+  if (known(words)) return words;
+  const first = words.split(' ')[0]!;
+  return known(first) ? first : undefined;
+}
+
 export function compileSearch(text: string): QuerySpec | undefined {
   const t = text.trim().replace(/\s+/g, ' ');
   if (!NETWORK.test(t)) return undefined;
@@ -137,6 +152,10 @@ export function compileSearch(text: string): QuerySpec | undefined {
     spec.relationship = { ...spec.relationship, alumOfMySchool: true };
   const places = placesIn(t);
   if (places.length) spec.places = [{ names: places }];
+  // a field ("who do I know who works in climate", "anyone I know in fintech"): the ask's topic, which the search and
+  // its ladder widen to the field's neighbours (plan 36)
+  const field = fieldIn(t);
+  if (field && !places.length) spec.keywords = { terms: [field] };
   const quiet =
     /\b(?:not|haven'?t|have not|never)\s+(?:talked|spoken)(?: to)?(?: (?:them|in|for))*\s+(?:(a|an|one|\d+)\s+)?(day|week|month|year)s?\b/i.exec(
       t,
@@ -151,6 +170,7 @@ export function compileSearch(text: string): QuerySpec | undefined {
   // "who do I know at Stripe" alone is a company question (routes into it); a search needs a kind of person, YC, a
   // school, or how the student knows them
   const kind =
+    !!spec.keywords ||
     yc ||
     hasRole ||
     schools.length > 0 ||

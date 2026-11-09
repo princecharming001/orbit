@@ -337,3 +337,21 @@ describe('a name that fits several people asks which one (plan 37 phase 3)', () 
     expect(JSON.stringify(done.map((d) => d.envelope.data))).toContain(pick.id);
   });
 });
+
+describe('a reopened chat without a key shows its cards again', () => {
+  it('the router turn comes back with its card, the lead without the summary, and taps stay apart', async () => {
+    const store = new ChatStore();
+    const engine = createChatEngine({ registry, execute, user: () => user, store, now: () => NOW });
+    const c = await engine.startConversation({ temporary: false });
+    await engine.send(c.id, 'who do I know at Juniper Health', () => {});
+    const { hydrate } = await import('../ui/threadStore');
+    const turns = hydrate(await store.messages(c.id), await store.actions(c.id));
+    const reply = turns.find((t) => t.role === 'assistant') as Extract<(typeof turns)[number], { role: 'assistant' }>;
+    const tools = reply.blocks.filter((b) => b.type === 'tool');
+    expect(tools).toHaveLength(1);
+    expect((tools[0] as { envelope?: ResultEnvelope }).envelope?.kind).toBe('company');
+    // the summary is the card's to say, not a paragraph above it
+    const words = reply.blocks.filter((b) => b.type === 'text').map((b) => (b as { text: string }).text);
+    expect(words.join(' ')).not.toMatch(/people you know there now/);
+  });
+});

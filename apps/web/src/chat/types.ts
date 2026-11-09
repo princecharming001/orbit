@@ -212,9 +212,19 @@ export interface ChatMessage {
    * 'decision' = an Approve/Cancel line; 'snapshot' = an appended context block; 'memory' = an appended context block
    * holding only the Remembered line; 'error' = a failed turn note
    */
-  meta?: 'decision' | 'snapshot' | 'memory' | 'error';
+  meta?: 'decision' | 'snapshot' | 'memory' | 'error' | 'effort';
   model?: string;
-  usage?: { input: number; output: number; cacheRead?: number; cacheWrite?: number };
+  /** an effort-only row (plan 37 §5): the level for this reply on, sent as `output_config` with empty content */
+  outputConfig?: { effort: 'low' | 'medium' | 'high' };
+  /** the effort the reply ran at and why Auto picked it (plan 37 §5.4) */
+  usage?: {
+    input: number;
+    output: number;
+    cacheRead?: number;
+    cacheWrite?: number;
+    effort?: string;
+    effortReason?: string;
+  };
   stopReason?: string;
   createdAt: string;
 }

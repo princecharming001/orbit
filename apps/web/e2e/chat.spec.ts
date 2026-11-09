@@ -337,12 +337,16 @@ test.describe('Chat home', () => {
     }
   });
 
-  test('with a key the dropdown offers Smart and Quick and the router note is gone', async ({ page }) => {
+  test('with a key the dropdown offers Auto, Smart and Quick and the router note is gone', async ({
+    page,
+  }) => {
     await home(page, '?fakeEngine=1&fakeMode=llm');
     await expect(page.getByTestId('router-note')).toHaveCount(0);
-    await expect(page.getByTestId('composer-mode')).toHaveText(/Smart/);
+    // plan 37: a student who never picked a mode gets Auto
+    await expect(page.getByTestId('composer-mode')).toHaveText(/Auto/);
     await page.getByTestId('composer-mode').click();
-    await page.getByRole('menuitemradio', { name: /Quick/ }).click();
+    await expect(page.getByRole('menuitemradio')).toHaveText([/^Auto/, /^Smart/, /^Quick/]);
+    await page.getByRole('menuitemradio', { name: /^Quick/ }).click();
     await expect(page.getByTestId('composer-mode')).toHaveText(/Quick/);
     expect(await page.evaluate(() => localStorage.getItem('orbit:chatMode'))).toBe('quick');
   });

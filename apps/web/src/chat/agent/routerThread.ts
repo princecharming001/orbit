@@ -1,4 +1,5 @@
 import { db } from '../../db/schema';
+import { readClarify } from '../clarify';
 import type { ChatAction, ChoiceOption, ResultEnvelope } from '../types';
 import type { NextStep } from '../ui/cards/parts';
 import {
@@ -169,6 +170,11 @@ async function peopleIn(
     case 'people': {
       const list = readPeople(d).map((p) => ref(p.person));
       return list.length === 1 ? { one: list[0] } : { list };
+    }
+    case 'clarify': {
+      // "which Keiko?": "the second one" is the second option (plan 37)
+      const c = readClarify(d);
+      return c?.about === 'person' ? { list: c.options.map((o) => ({ id: o.id, name: o.label })) } : {};
     }
     case 'pipeline': {
       const list = readPipeline(d).items.map((i) => ref(i.person));

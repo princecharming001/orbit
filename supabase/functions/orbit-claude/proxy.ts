@@ -43,6 +43,8 @@ export const ALLOWED_BETAS = new Set([
   'server-side-fallback-2026-06-01',
   'thinking-display-updates-2026-08-18',
   'thinking-binding-controls-2026-08-01',
+  // plan 37: Smart, Quick and Auto set the level per message without a cache reset
+  'mid-conversation-output-config-2026-07-01',
 ]);
 export const MAX_TOKENS = 16_000;
 export const MAX_BODY_BYTES = 1_500_000;
