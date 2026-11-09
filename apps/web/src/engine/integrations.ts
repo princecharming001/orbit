@@ -2,6 +2,7 @@ import type { User } from '@orbit/core';
 import { newId } from '@orbit/core';
 import { db, type IntegrationAccount } from '../db/schema';
 import { connectGoogle, disconnectGoogle, ensureGmailSend, googleScopeWarning } from '../integrations/google';
+import { isServerUser } from '../integrations/orbitApi';
 import { writePrefs } from '../integrations/prefs';
 import { type SyncProgress, syncGoogle } from './sync';
 
@@ -50,6 +51,9 @@ const SIGN_IN_PROBLEM =
  */
 export async function markGoogleNeedsReauth(userId: string, error: string): Promise<void> {
   if (!SIGN_IN_PROBLEM.test(error)) return;
+  // an Orbit account: the server holds the Google connection and marks its own row; this browser's copy follows it
+  // (reconcileGoogleRow), so a mark here would only disagree with Settings
+  if (isServerUser(userId)) return;
   const g = await googleAccount(userId);
   if (g) await db.integrations.update(g.id, { status: 'needs_reauth', lastError: error });
 }

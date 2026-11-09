@@ -22,6 +22,7 @@ import {
   startActivity,
 } from './activity';
 import { LINKEDIN_SIGNED_OUT } from './linkedinLive';
+import { reconcileGoogleRow } from './serverSync';
 
 const NOW = Date.parse('2026-10-20T15:00:00.000Z');
 
@@ -137,6 +138,41 @@ describe("today's counts and the problems", () => {
     });
     const ps = await activityProblems(user, new Date(NOW));
     expect(ps[0]).toMatchObject({ text: 'LinkedIn signed you out', fix: 'Sign in again' });
+  });
+
+  it('Google needs signing in only while the row says so; the server saying connected clears it', async () => {
+    await db.integrations.put({
+      id: 'g',
+      userId: user.id,
+      provider: 'google',
+      externalAccountId: 'alex@umich.edu',
+      status: 'needs_reauth',
+      scopes: [],
+      syncState: {},
+      lastError: "Cannot read properties of undefined (reading 'message-id')",
+      connectedAt: new Date(NOW).toISOString(),
+    });
+    const before = await activityProblems(user, new Date(NOW));
+    expect(before.map((p) => p.text)).toContain('Google needs you to sign in again');
+    await reconcileGoogleRow(user.id, {
+      counts: {},
+      integrations: [
+        {
+          provider: 'google',
+          status: 'active',
+          email: 'alex@umich.edu',
+          scopes: [],
+          linked: true,
+          lastSyncedAt: new Date(NOW).toISOString(),
+          lastError: null,
+          watchExpiresAt: null,
+          backfill: null,
+        },
+      ],
+      jobs: { pending: 0 },
+    });
+    const after = await activityProblems(user, new Date(NOW));
+    expect(after.map((p) => p.text)).not.toContain('Google needs you to sign in again');
   });
 });
 

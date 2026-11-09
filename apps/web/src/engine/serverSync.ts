@@ -894,8 +894,41 @@ export function subscribeSyncStatus(fn: (s: SyncStatus | undefined) => void): ()
 }
 
 let lastStatusJson = '';
+/** the user the loop runs for: their Google row in this browser is kept to what the server says */
+let syncUserId: string | undefined;
+
+/**
+ * The browser's Google row follows the server's. For an Orbit account the server holds the Google connection, so its
+ * status is the truth; the row this browser keeps is read by the activity line's problems and the chat's status, and
+ * a "needs_reauth" left on it (seen: from a code error in an old sync) sat as "Google needs you to sign in again"
+ * for days while Settings, which asks the server, showed Google connected with nothing to click. Returns whether
+ * the row changed.
+ */
+export async function reconcileGoogleRow(userId: string, s: SyncStatus | undefined): Promise<boolean> {
+  const server = googleStatus(s);
+  if (!server) return false;
+  const row = await db.integrations
+    .where('userId')
+    .equals(userId)
+    .filter((i) => i.provider === 'google')
+    .first();
+  if (!row) return false;
+  const next =
+    server.status === 'needs_reauth'
+      ? {
+          status: 'needs_reauth' as const,
+          lastError: server.lastError ?? 'Google needs you to sign in again',
+        }
+      : server.status === 'active'
+        ? { status: 'active' as const, lastError: undefined }
+        : undefined;
+  if (!next || (row.status === next.status && row.lastError === next.lastError)) return false;
+  await db.integrations.update(row.id, next);
+  return true;
+}
 
 function setStatus(s: SyncStatus | undefined): void {
+  if (syncUserId) void reconcileGoogleRow(syncUserId, s).catch(() => undefined);
   // the same answer as last time changes nothing on screen
   const json = JSON.stringify(s ?? null);
   if (json === lastStatusJson) return;
@@ -955,6 +988,7 @@ let lastDerived = 0;
  */
 export function startServerSync(o: SyncLoopOptions): () => void {
   installOutboxHooks();
+  syncUserId = o.user.id;
   void repairStoredCompanies().catch(() => undefined);
   void repairStoredMessages().catch(() => undefined);
   void repairStoredNames()

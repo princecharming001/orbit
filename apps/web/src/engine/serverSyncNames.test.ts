@@ -5,7 +5,14 @@
  */
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { db, wipeDatabase } from '../db/schema';
-import { repairStoredMessages, repairStoredNames, withBrowserNames, writeFromServer } from './serverSync';
+import type { SyncStatus } from '../integrations/orbitApi';
+import {
+  reconcileGoogleRow,
+  repairStoredMessages,
+  repairStoredNames,
+  withBrowserNames,
+  writeFromServer,
+} from './serverSync';
 
 const U = '11111111-1111-4111-8111-111111111111';
 const P = '22222222-2222-4222-8222-222222222222';
@@ -147,5 +154,60 @@ describe('messages from the server carry headers', () => {
     expect(await repairStoredMessages()).toBe(1);
     expect((await db.messages.get('m-old'))?.headers).toEqual({ 'message-id': '<old@mail>' });
     expect(await repairStoredMessages()).toBe(0);
+  });
+});
+
+describe("the browser's Google row follows the server", () => {
+  const google = (status: string, lastError: string | null = null): SyncStatus => ({
+    counts: {},
+    integrations: [
+      {
+        provider: 'google',
+        status,
+        email: 'a@b.co',
+        scopes: [],
+        linked: true,
+        lastSyncedAt: null,
+        lastError,
+        watchExpiresAt: null,
+        backfill: null,
+      },
+    ],
+    jobs: { pending: 0 },
+  });
+  const row = async () => (await db.integrations.where('userId').equals(U).toArray())[0];
+
+  beforeEach(() =>
+    db.integrations.put({
+      id: 'g',
+      userId: U,
+      provider: 'google',
+      externalAccountId: 'a@b.co',
+      status: 'needs_reauth',
+      scopes: [],
+      syncState: {},
+      lastError: "Cannot read properties of undefined (reading 'message-id')",
+      connectedAt: '2026-11-01T00:00:00.000Z',
+    }),
+  );
+
+  it('a stale sign-in mark goes once the server says Google is connected, and only once', async () => {
+    expect(await reconcileGoogleRow(U, google('active'))).toBe(true);
+    expect(await row()).toMatchObject({ status: 'active' });
+    expect((await row())?.lastError).toBeUndefined();
+    expect(await reconcileGoogleRow(U, google('active'))).toBe(false);
+  });
+
+  it("the server's own sign-in problem reaches the row, with its reason", async () => {
+    await reconcileGoogleRow(U, google('active'));
+    expect(await reconcileGoogleRow(U, google('needs_reauth', 'invalid_grant'))).toBe(true);
+    expect(await row()).toMatchObject({ status: 'needs_reauth', lastError: 'invalid_grant' });
+  });
+
+  it('no answer, no Google on the server, or another user changes nothing', async () => {
+    expect(await reconcileGoogleRow(U, undefined)).toBe(false);
+    expect(await reconcileGoogleRow(U, { counts: {}, integrations: [], jobs: { pending: 0 } })).toBe(false);
+    expect(await reconcileGoogleRow(P, google('active'))).toBe(false);
+    expect(await row()).toMatchObject({ status: 'needs_reauth' });
   });
 });
