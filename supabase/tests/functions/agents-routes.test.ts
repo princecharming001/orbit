@@ -98,6 +98,11 @@ describe('scores', () => {
     expect(ex.status).toBe(200);
     expect(ex.body).toMatchObject({ score: 34, band: 'light', explanation: ['You email each other'] });
     expect(ex.body.labelled).toBeUndefined();
+    // plan 35 B6: opening the person page puts them on the background reading's list
+    expect(
+      await t.db
+        .sql`select 1 from orbit.profile_requests where user_id = ${userId}::uuid and person_id = ${p}::uuid`,
+    ).toHaveLength(1);
     const lab = await call<{ score: number; band: string; labelled: number; explanation: string[] }>(
       '/scores/label',
       token,

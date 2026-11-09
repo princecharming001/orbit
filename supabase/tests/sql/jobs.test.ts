@@ -88,11 +88,14 @@ describe('orbit.enqueue_cadence (§9.4 test 1)', () => {
 });
 
 describe('orbit.enqueue_incremental_syncs and enqueue_nightly', () => {
-  it('polls connected Google accounts not synced in 10 minutes, by granted scope', async () => {
+  it('polls Gmail for accounts not synced in 10 minutes and the calendar once a slot, by granted scope', async () => {
     await t.pg.exec('delete from pgmq.q_orbit_sync;');
     const fresh = await makeUser(t.db);
     const stale = await makeUser(t.db);
     const mailOnly = await makeUser(t.db);
+    // plan 35 B5: only students Orbit follows (seen lately, or with something going out) are polled
+    await t.db.sql`update orbit.users set last_seen_at = now()
+      where id in (${fresh}::uuid, ${stale}::uuid, ${mailOnly}::uuid)`;
     const scopes = [
       'https://www.googleapis.com/auth/gmail.readonly',
       'https://www.googleapis.com/auth/calendar.readonly',
@@ -103,8 +106,10 @@ describe('orbit.enqueue_incremental_syncs and enqueue_nightly', () => {
              (${mailOnly}::uuid, 'google', ${scopes.slice(0, 1)}::text[], null)`;
     await t.db.sql`select orbit.enqueue_incremental_syncs()`;
     const msgs = (await queued('orbit_sync')).map((r) => `${r.message.kind}:${r.message.userId}`).sort();
+    // the calendar no longer waits on the shared last_synced_at (a Gmail sync stamps it too): its slot key limits it
     expect(msgs).toEqual(
       [
+        `sync.calendar:${fresh}`,
         `sync.calendar:${stale}`,
         `sync.gmail.incremental:${mailOnly}`,
         `sync.gmail.incremental:${stale}`,
@@ -114,7 +119,7 @@ describe('orbit.enqueue_incremental_syncs and enqueue_nightly', () => {
     expect(again!.n).toBe(0);
   });
 
-  it('polls connected LinkedIn accounts of recently seen students not synced in 10 minutes', async () => {
+  it('polls connected LinkedIn accounts of recently seen students not synced in the last hour', async () => {
     await t.pg.exec('delete from pgmq.q_orbit_sync;');
     const stale = await makeUser(t.db);
     const fresh = await makeUser(t.db);
@@ -125,8 +130,8 @@ describe('orbit.enqueue_incremental_syncs and enqueue_nightly', () => {
     await t.db.sql`update orbit.users set last_seen_at = now() - interval '30 days' where id = ${idle}::uuid`;
     await t.db
       .sql`insert into orbit.integration_accounts (user_id, provider, external_account_id, last_synced_at)
-      values (${stale}::uuid, 'linkedin', 'acc-stale', now() - interval '1 hour'),
-             (${fresh}::uuid, 'linkedin', 'acc-fresh', now()),
+      values (${stale}::uuid, 'linkedin', 'acc-stale', now() - interval '2 hours'),
+             (${fresh}::uuid, 'linkedin', 'acc-fresh', now() - interval '30 minutes'),
              (${idle}::uuid, 'linkedin', 'acc-idle', null),
              (${unlinked}::uuid, 'linkedin', null, null)`;
     await t.db.sql`select orbit.enqueue_incremental_syncs()`;
@@ -296,6 +301,7 @@ describe('orbit.delete_user (§10.4 test 4)', () => {
       insert into orbit.search_census (user_id, seen) values ('${u}', 10);
       insert into orbit.search_labels (user_id, person_id, ask_hash, ask, verdict) values ('${u}', '${p2}', 'h', 'a', 'yes');
       insert into orbit.profile_reads (user_id, person_id, about) values ('${u}', '${p2}', 'About');
+      insert into orbit.profile_requests (user_id, person_id) values ('${u}', '${p2}');
       insert into orbit.facet_scans (user_id, kind, value, complete) values ('${u}', 'company', 'Stripe', true);
       insert into orbit.dead_letters (queue, message) values ('orbit_sync', '{"kind":"x","userId":"${u}"}');
     `);

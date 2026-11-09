@@ -12,7 +12,14 @@ import {
   type TargetInfo,
   type WarmPath,
 } from '@orbit/core/graph/route';
-import { combineTies, TIE_KINDS, type Tie, type TieKind, type TiePair } from '@orbit/core/graph/ties';
+import {
+  combineTies,
+  ROUTABLE_TIE_KINDS,
+  TIE_KINDS,
+  type Tie,
+  type TieKind,
+  type TiePair,
+} from '@orbit/core/graph/ties';
 import { responsePrior } from '@orbit/core/recommend/score';
 import { looksLikeMinor } from '@orbit/core/safety/rules';
 import type { PathsFindRequest, PathsFindResponse } from '@orbit/core/server/api';
@@ -36,6 +43,7 @@ import { HttpError } from '../http.ts';
 import { cleanLinkedInUrl, linkedInSlugOf } from '../providers/unipileResearch';
 import { sqlBudget, sqlCache } from '../research/bind.ts';
 import { iso, num } from '../rows.ts';
+import { requestReads } from '../search/reading.ts';
 import type { Services } from '../services.ts';
 import {
   type ExternalResult,
@@ -68,38 +76,83 @@ export interface UserGraph {
 
 const TIE_KIND_SET = new Set<string>(TIE_KINDS);
 
-/** The user's people and ties in the shape core routes over. */
-export async function loadGraph(db: Db, userId: string, now: Date): Promise<UserGraph> {
-  const rows = await db.sql<{
-    id: string;
-    is_self: boolean;
-    display_name: string;
-    first_name: string | null;
-    title: string | null;
-    org_raw: string | null;
-    org_name: string | null;
-    is_alumni: boolean;
-    linkedin_url: string | null;
-    linkedin_member_id: string | null;
-    hidden_at: Date | null;
-    do_not_contact: boolean;
-    last_interaction_at: Date | null;
-    score: number | null;
-    features: Record<string, number> | null;
-  }>`
-    select p.id, p.is_self, p.display_name, p.first_name, p.title, p.org_raw, o.name as org_name, p.is_alumni,
-           p.linkedin_url, p.linkedin_member_id, p.hidden_at, p.do_not_contact, p.last_interaction_at,
-           ts.score::int as score, ts.features
-      from orbit.people p
-      left join orbit.organizations o on o.id = p.org_id
-      left join orbit.tie_scores ts on ts.user_id = p.user_id and ts.person_id = p.id
-     where p.user_id = ${userId}::uuid and p.deleted_at is null and p.merged_into is null`;
-  const intros = await db.sql<{
-    introducer_person_id: string | null;
-    status: string;
-    asked_at: Date;
-    outcome_at: Date | null;
-  }>`
+type GraphPersonRow = {
+  id: string;
+  is_self: boolean;
+  display_name: string;
+  first_name: string | null;
+  title: string | null;
+  org_raw: string | null;
+  org_name: string | null;
+  is_alumni: boolean;
+  linkedin_url: string | null;
+  linkedin_member_id: string | null;
+  hidden_at: Date | null;
+  do_not_contact: boolean;
+  last_interaction_at: Date | null;
+  score: number | null;
+  reciprocity: unknown;
+};
+
+type GraphTieRow = {
+  a_person_id: string;
+  b_person_id: string;
+  kind: string;
+  weight: number;
+  confidence: number;
+  evidence: Record<string, unknown> | null;
+  first_seen_at: Date;
+  last_seen_at: Date;
+};
+
+/** Only the tie score's reciprocity feature is read here (pAsk); the rest of `features` never leaves the database. */
+const PERSON_COLUMNS = `p.id, p.is_self, p.display_name, p.first_name, p.title, p.org_raw, o.name as org_name, p.is_alumni,
+       p.linkedin_url, p.linkedin_member_id, p.hidden_at, p.do_not_contact, p.last_interaction_at,
+       ts.score::int as score, ts.features->'reciprocity' as reciprocity
+  from orbit.people p
+  left join orbit.organizations o on o.id = p.org_id
+  left join orbit.tie_scores ts on ts.user_id = p.user_id and ts.person_id = p.id
+ where p.user_id = $1::uuid and p.deleted_at is null and p.merged_into is null`;
+
+/**
+ * The evidence keys ranking reads (plan 35 B7): one-way engagement (pKnowDirected), the counts and dates that say a
+ * pair is fading (pairFading) and whether it is old (pairIsOld). Phrases read the rest, fetched for the chosen routes
+ * only (`withFullEvidence`).
+ */
+export const RANKING_EVIDENCE_KEYS = [
+  'reciprocal',
+  'wBy',
+  'threads',
+  'events',
+  'messages',
+  'items',
+  'firstAt',
+  'lastAt',
+  'ongoing',
+  'current',
+  'toYear',
+] as const;
+/** `current` is read only for its length (two people there now): a stand-in of the same length, not their ids. */
+const slimKey = (k: (typeof RANKING_EVIDENCE_KEYS)[number]) =>
+  k === 'current'
+    ? `'current', case when jsonb_typeof(t.evidence->'current') = 'array'
+         then (select coalesce(jsonb_agg(0), '[]'::jsonb) from jsonb_array_elements(t.evidence->'current')) end`
+    : `'${k}', t.evidence->'${k}'`;
+const SLIM_EVIDENCE = `jsonb_strip_nulls(jsonb_build_object(${RANKING_EVIDENCE_KEYS.map(slimKey).join(', ')}))`;
+const TIE_COLUMNS = (slim: boolean) =>
+  `t.a_person_id, t.b_person_id, t.kind, t.weight, t.confidence, ${slim ? SLIM_EVIDENCE : 't.evidence'} as evidence,
+   t.first_seen_at, t.last_seen_at`;
+
+interface GraphContext {
+  intros: { introducer_person_id: string | null; status: string; asked_at: Date; outcome_at: Date | null }[];
+  targetOrgs: Set<string>;
+  owes: Set<string>;
+  blocked: Set<string>;
+}
+
+/** What every graph load reads besides people and ties: intro requests, goal target companies, owed replies, blocks. */
+async function graphContext(db: Db, userId: string, now: Date): Promise<GraphContext> {
+  const intros = await db.sql<GraphContext['intros'][number]>`
     select introducer_person_id, status, asked_at, outcome_at from orbit.intro_requests
      where user_id = ${userId}::uuid and introducer_person_id is not null`;
   const goals = await db.sql<{ targets: { organizations?: string[] } }>`
@@ -112,76 +165,293 @@ export async function loadGraph(db: Db, userId: string, now: Date): Promise<User
       join orbit.messages m on m.thread_id = t.id and m.sent_at = t.last_at
      where t.user_id = ${userId}::uuid and t.last_direction = 'in' and t.is_networking
        and m.from_person_id is not null and t.last_at > ${new Date(now.getTime() - 30 * DAY)}::timestamptz`;
-  const owesSet = new Set(owes.map((o) => o.person_id));
+  const blockedRows = await db.sql<{ a_person_id: string; b_person_id: string }>`
+    select a_person_id, b_person_id from orbit.blocked_pairs where user_id = ${userId}::uuid`;
+  return {
+    intros,
+    targetOrgs,
+    owes: new Set(owes.map((o) => o.person_id)),
+    blocked: new Set(blockedRows.map((b) => pairKeyOf(b.a_person_id, b.b_person_id))),
+  };
+}
 
+function graphPerson(r: GraphPersonRow, c: GraphContext, now: Date): GraphPerson {
+  const mine = c.intros.filter((i) => i.introducer_person_id === r.id);
+  const declined = mine
+    .filter((i) => i.status === 'declined')
+    .map((i) => iso(i.outcome_at ?? i.asked_at)!)
+    .sort()
+    .pop();
+  const org = r.org_name ?? r.org_raw ?? undefined;
+  return {
+    id: r.id,
+    name: r.first_name ?? r.display_name.split(/\s+/)[0]!,
+    displayName: r.display_name,
+    score: r.score ?? 0,
+    reciprocity: num(r.reciprocity),
+    sharesGoalTargetOrg: !!org && c.targetOrgs.has(org.toLowerCase().trim()),
+    askedRecently: mine.some((i) => now.getTime() - new Date(i.asked_at).getTime() < 30 * DAY),
+    introducedUserBefore: mine.some((i) => i.status === 'intro_made' || i.status === 'meeting'),
+    owesReply: c.owes.has(r.id),
+    lastContactAt: iso(r.last_interaction_at) ?? undefined,
+    hidden: !!r.hidden_at || r.do_not_contact,
+    declinedIntroAt: declined,
+    title: r.title ?? undefined,
+    org,
+    isAlumni: r.is_alumni,
+    linkedinUrl: r.linkedin_url ?? undefined,
+    memberId: r.linkedin_member_id ?? undefined,
+    doNotContact: r.do_not_contact,
+  };
+}
+
+const tieKey = (a: string, b: string, kind: string) => `${a}|${b}|${kind}`;
+
+function tieOf(t: GraphTieRow, userId: string): Tie {
+  return {
+    id: tieKey(t.a_person_id, t.b_person_id, t.kind),
+    userId,
+    aId: t.a_person_id,
+    bId: t.b_person_id,
+    kind: t.kind as TieKind,
+    weight: num(t.weight),
+    confidence: num(t.confidence),
+    evidence: t.evidence ?? {},
+    firstSeenAt: iso(t.first_seen_at) ?? undefined,
+    lastSeenAt: iso(t.last_seen_at) ?? undefined,
+  };
+}
+
+/** A loaded graph that can grow (`extendNeighbourhood`) and take full evidence later (`withFullEvidence`). */
+interface LoadedGraph extends UserGraph {
+  userId: string;
+  now: Date;
+  ctx: GraphContext;
+  /** every tie loaded, by `${a}|${b}|${kind}` (the self's ties left out, as core never routes through them) */
+  ties: Map<string, Tie>;
+  /** a neighbourhood load: hops from the target per person whose every tie is loaded; undefined for the whole graph */
+  depth?: Map<string, number>;
+  /** pairs whose ties carry their full evidence */
+  full: Set<string>;
+}
+
+function addTies(g: LoadedGraph, rows: GraphTieRow[]): void {
+  for (const t of rows) {
+    if (!TIE_KIND_SET.has(t.kind) || t.a_person_id === g.selfId || t.b_person_id === g.selfId) continue;
+    const tie = tieOf(t, g.userId);
+    g.ties.set(tie.id, tie);
+  }
+}
+
+function rebuildPairs(g: LoadedGraph): void {
+  g.pairs = combineTies([...g.ties.values()], g.now);
+}
+
+/** The user's people and ties in the shape core routes over (every person and tie; full evidence unless `slim`). */
+export async function loadGraph(
+  db: Db,
+  userId: string,
+  now: Date,
+  opts: { slim?: boolean } = {},
+): Promise<UserGraph> {
+  return loadWhole(db, userId, now, opts.slim ?? false);
+}
+
+async function loadWhole(db: Db, userId: string, now: Date, slim: boolean): Promise<LoadedGraph> {
+  const rows = await db.query<GraphPersonRow>(`select ${PERSON_COLUMNS}`, [userId]);
+  const ctx = await graphContext(db, userId, now);
+  const g = graphOf(userId, now, ctx, rows);
+  addTies(
+    g,
+    await db.query<GraphTieRow>(`select ${TIE_COLUMNS(slim)} from orbit.ties t where t.user_id = $1::uuid`, [
+      userId,
+    ]),
+  );
+  rebuildPairs(g);
+  if (!slim) for (const k of g.pairs.keys()) g.full.add(k);
+  return g;
+}
+
+function graphOf(userId: string, now: Date, ctx: GraphContext, rows: GraphPersonRow[]): LoadedGraph {
   let selfId: string | null = null;
   const people = new Map<string, GraphPerson>();
   for (const r of rows) {
-    if (r.is_self) {
-      selfId = r.id;
-      continue;
+    if (r.is_self) selfId = r.id;
+    else people.set(r.id, graphPerson(r, ctx, now));
+  }
+  return {
+    userId,
+    now,
+    ctx,
+    selfId,
+    people,
+    pairs: new Map(),
+    blocked: ctx.blocked,
+    ties: new Map(),
+    full: new Set(),
+  };
+}
+
+/** Hops from the target a route of at most three hops can reach: you → A → B → target leaves A two pairs away. */
+export const NEIGHBOURHOOD_HOPS = 2;
+
+/**
+ * People within `NEIGHBOURHOOD_HOPS` pairs of the seeds (each seed at its own starting depth), over every tie but the
+ * self's: a recursive walk in the database, so only the target's neighbourhood leaves it.
+ */
+async function nearby(
+  db: Db,
+  userId: string,
+  seeds: { id: string; depth: number }[],
+): Promise<Map<string, number>> {
+  if (!seeds.length) return new Map();
+  const rows = await db.query<{ id: string; depth: number }>(
+    `with recursive me as (
+       select id from orbit.people where user_id = $1::uuid and is_self
+     ), near(id, depth) as (
+       select s.id, s.depth from unnest($2::uuid[], $3::int[]) as s(id, depth)
+       union
+       select x.other, n.depth + 1
+         from near n
+         cross join lateral (
+           select t.b_person_id as other from orbit.ties t where t.user_id = $1::uuid and t.a_person_id = n.id
+           union all
+           select t.a_person_id from orbit.ties t where t.user_id = $1::uuid and t.b_person_id = n.id
+         ) x
+        where n.depth < $4 and n.id not in (select id from me) and x.other not in (select id from me)
+     )
+     select id, min(depth)::int as depth from near group by id`,
+    [userId, seeds.map((s) => s.id), seeds.map((s) => s.depth), NEIGHBOURHOOD_HOPS],
+  );
+  return new Map(rows.map((r) => [r.id, r.depth]));
+}
+
+/**
+ * The target's neighbourhood (plan 35 B7): the self, the people within two pairs of the target (every route of at
+ * most three hops runs through them), every tie among them and every routable tie leaving them, so common contacts
+ * count exactly as on the whole graph. Evidence holds only what ranking reads until `withFullEvidence`. Routes are the same as over
+ * `loadGraph`: core's search never leaves this set (hopsToTarget), and every pair it scores is here whole.
+ */
+export async function loadNeighbourhood(
+  db: Db,
+  userId: string,
+  targetId: string,
+  now: Date,
+): Promise<LoadedGraph> {
+  const depth = await nearby(db, userId, [{ id: targetId, depth: 0 }]);
+  const ids = [...depth.keys()];
+  const rows = await db.query<GraphPersonRow>(
+    `select ${PERSON_COLUMNS} and (p.is_self or p.id = any($2::uuid[]))`,
+    [userId, ids],
+  );
+  const ctx = await graphContext(db, userId, now);
+  const g = graphOf(userId, now, ctx, rows);
+  g.depth = depth;
+  addTies(g, await tiesTouching(db, userId, ids, ids));
+  rebuildPairs(g);
+  return g;
+}
+
+/**
+ * The ties touching `ids`: every kind between two people of the neighbourhood (`within`), and only the routable
+ * kinds out of it, which is all common contacts count (core withCommonContacts). A same-company clique around the
+ * target stays in the database.
+ */
+async function tiesTouching(db: Db, userId: string, ids: string[], within: string[]): Promise<GraphTieRow[]> {
+  if (!ids.length) return [];
+  return db.query<GraphTieRow>(
+    `select ${TIE_COLUMNS(true)} from orbit.ties t
+      where t.user_id = $1::uuid and (t.a_person_id = any($2::uuid[]) or t.b_person_id = any($2::uuid[]))
+        and (t.kind = any($4::text[]) or (t.a_person_id = any($3::uuid[]) and t.b_person_id = any($3::uuid[])))`,
+    [userId, ids, within, [...ROUTABLE_TIE_KINDS]],
+  );
+}
+
+/**
+ * After new ties were stored (Unipile mutuals, Village introducers) and member ids learned: the same graph patched,
+ * never loaded again. The new ties are read back as stored (the upsert keeps the larger weight); a person they bring
+ * nearer the target brings their own neighbourhood.
+ */
+async function extendNeighbourhood(
+  db: Db,
+  g: LoadedGraph,
+  added: TieRow[],
+  learned: { personId: string; memberId: string }[],
+): Promise<void> {
+  for (const l of learned) {
+    const p = g.people.get(l.personId);
+    if (p) p.memberId = l.memberId;
+  }
+  if (!added.length) return;
+  const stored = await db.query<GraphTieRow>(
+    `select ${TIE_COLUMNS(true)} from orbit.ties t
+       join unnest($2::uuid[], $3::uuid[], $4::text[]) as k(a, b, kind)
+         on t.a_person_id = k.a and t.b_person_id = k.b and t.kind = k.kind
+      where t.user_id = $1::uuid`,
+    [g.userId, added.map((t) => t.a_person_id), added.map((t) => t.b_person_id), added.map((t) => t.kind)],
+  );
+  addTies(g, stored);
+  for (const t of stored) g.full.delete(pairKeyOf(t.a_person_id, t.b_person_id));
+  const depth = g.depth;
+  if (depth) {
+    // an end of a new tie may now be nearer the target than it was (the new ties all touch the target or a
+    // person next to it, so two passes settle it)
+    const d = (id: string) => depth.get(id) ?? Number.POSITIVE_INFINITY;
+    const nearer = new Map<string, number>();
+    const at = (id: string) => Math.min(d(id), nearer.get(id) ?? Number.POSITIVE_INFINITY);
+    for (let pass = 0; pass < NEIGHBOURHOOD_HOPS; pass++)
+      for (const t of stored)
+        for (const [x, y] of [
+          [t.a_person_id, t.b_person_id],
+          [t.b_person_id, t.a_person_id],
+        ] as const) {
+          const via = at(y) + 1;
+          if (via <= NEIGHBOURHOOD_HOPS && via < at(x)) nearer.set(x, via);
+        }
+    const seeds = [...nearer].map(([id, dd]) => ({ id, depth: dd }));
+    const reach = await nearby(db, g.userId, seeds);
+    const fresh = [...reach.keys()].filter((id) => !depth.has(id));
+    for (const [id, dd] of reach) if (dd < d(id)) depth.set(id, dd);
+    if (fresh.length) {
+      const rows = await db.query<GraphPersonRow>(`select ${PERSON_COLUMNS} and p.id = any($2::uuid[])`, [
+        g.userId,
+        fresh,
+      ]);
+      for (const r of rows) if (!r.is_self) g.people.set(r.id, graphPerson(r, g.ctx, g.now));
+      // a tie between a fresh person and one already here may be of any kind now that both are inside
+      addTies(g, await tiesTouching(db, g.userId, fresh, [...depth.keys()]));
     }
-    const mine = intros.filter((i) => i.introducer_person_id === r.id);
-    const declined = mine
-      .filter((i) => i.status === 'declined')
-      .map((i) => iso(i.outcome_at ?? i.asked_at)!)
-      .sort()
-      .pop();
-    const org = r.org_name ?? r.org_raw ?? undefined;
-    people.set(r.id, {
-      id: r.id,
-      name: r.first_name ?? r.display_name.split(/\s+/)[0]!,
-      displayName: r.display_name,
-      score: r.score ?? 0,
-      reciprocity: num(r.features?.reciprocity),
-      sharesGoalTargetOrg: !!org && targetOrgs.has(org.toLowerCase().trim()),
-      askedRecently: mine.some((i) => now.getTime() - new Date(i.asked_at).getTime() < 30 * DAY),
-      introducedUserBefore: mine.some((i) => i.status === 'intro_made' || i.status === 'meeting'),
-      owesReply: owesSet.has(r.id),
-      lastContactAt: iso(r.last_interaction_at) ?? undefined,
-      hidden: !!r.hidden_at || r.do_not_contact,
-      declinedIntroAt: declined,
-      title: r.title ?? undefined,
-      org,
-      isAlumni: r.is_alumni,
-      linkedinUrl: r.linkedin_url ?? undefined,
-      memberId: r.linkedin_member_id ?? undefined,
-      doNotContact: r.do_not_contact,
-    });
   }
-  const tieRows = await db.sql<{
-    id: string;
-    a_person_id: string;
-    b_person_id: string;
-    kind: string;
-    weight: number;
-    confidence: number;
-    evidence: Record<string, unknown>;
-    first_seen_at: Date;
-    last_seen_at: Date;
-  }>`
-    select id, a_person_id, b_person_id, kind, weight, confidence, evidence, first_seen_at, last_seen_at
-      from orbit.ties where user_id = ${userId}::uuid`;
-  const ties: Tie[] = [];
-  for (const t of tieRows) {
-    if (!TIE_KIND_SET.has(t.kind) || t.a_person_id === selfId || t.b_person_id === selfId) continue;
-    ties.push({
-      id: `${t.a_person_id}|${t.b_person_id}|${t.kind}`,
-      userId,
-      aId: t.a_person_id,
-      bId: t.b_person_id,
-      kind: t.kind as TieKind,
-      weight: num(t.weight),
-      confidence: num(t.confidence),
-      evidence: t.evidence ?? {},
-      firstSeenAt: iso(t.first_seen_at) ?? undefined,
-      lastSeenAt: iso(t.last_seen_at) ?? undefined,
-    });
+  rebuildPairs(g);
+}
+
+/**
+ * Full evidence for the pairs the routes walk (plan 35 B7): ranking read only RANKING_EVIDENCE_KEYS, the phrases and
+ * reasons read the rest. Returns true when anything changed (the caller ranks again, to the same routes).
+ */
+async function withFullEvidence(db: Db, g: LoadedGraph, paths: Pick<WarmPath, 'nodes'>[]): Promise<boolean> {
+  const want = new Set<string>();
+  for (const p of paths)
+    for (let i = 1; i < p.nodes.length - 1; i++) {
+      const k = pairKeyOf(p.nodes[i]!, p.nodes[i + 1]!);
+      // stored ties only: a friend's hop (plan 29 §A4) is made here and has no row
+      if (!g.full.has(k) && g.pairs.get(k)?.ties.some((t) => g.ties.has(t.id))) want.add(k);
+    }
+  if (!want.size) return false;
+  const pairs = [...want].map((k) => k.split('|') as [string, string]);
+  const rows = await db.query<{ a_person_id: string; b_person_id: string; kind: string; evidence: unknown }>(
+    `select t.a_person_id, t.b_person_id, t.kind, t.evidence from orbit.ties t
+       join unnest($2::uuid[], $3::uuid[]) as k(a, b)
+         on (t.a_person_id = k.a and t.b_person_id = k.b) or (t.a_person_id = k.b and t.b_person_id = k.a)
+      where t.user_id = $1::uuid`,
+    [g.userId, pairs.map((x) => x[0]), pairs.map((x) => x[1])],
+  );
+  for (const r of rows) {
+    const tie = g.ties.get(tieKey(r.a_person_id, r.b_person_id, r.kind));
+    if (tie) tie.evidence = (r.evidence as Record<string, unknown>) ?? {};
   }
-  const blockedRows = await db.sql<{ a_person_id: string; b_person_id: string }>`
-    select a_person_id, b_person_id from orbit.blocked_pairs where user_id = ${userId}::uuid`;
-  const blocked = new Set(blockedRows.map((b) => pairKeyOf(b.a_person_id, b.b_person_id)));
-  return { selfId, people, pairs: combineTies(ties, now), blocked };
+  for (const k of want) g.full.add(k);
+  return true;
 }
 
 // ---- the friend layer (plan 29 §A4) -------------------------------------------------------------------------------
@@ -404,7 +674,10 @@ export async function upsertTies(db: Db, ties: TieRow[]): Promise<void> {
               ${t.confidence}::real, ${t.evidence}::jsonb, ${t.last_seen_at}::timestamptz, ${t.last_seen_at}::timestamptz)
       on conflict (user_id, a_person_id, b_person_id, kind) do update set
         weight = greatest(orbit.ties.weight, excluded.weight), confidence = excluded.confidence,
-        evidence = excluded.evidence, last_seen_at = greatest(orbit.ties.last_seen_at, excluded.last_seen_at)`;
+        evidence = excluded.evidence, last_seen_at = greatest(orbit.ties.last_seen_at, excluded.last_seen_at)
+      where (orbit.ties.weight, orbit.ties.confidence, orbit.ties.evidence, orbit.ties.last_seen_at)
+            is distinct from (greatest(orbit.ties.weight, excluded.weight), excluded.confidence, excluded.evidence,
+                              greatest(orbit.ties.last_seen_at, excluded.last_seen_at))`;
 }
 
 async function externalFor(s: Services, userId: string, target: ExternalTarget): Promise<ExternalResult> {
@@ -496,7 +769,8 @@ export async function findPaths(
         });
     }
     await upsertTies(db, ext.ties);
-    const g = await loadGraph(db, userId, now);
+    // PageRank over the whole network picks among many people there, so the whole graph, without its evidence
+    const g = await loadWhole(db, userId, now, true);
     // plan 29 §A4: friends' people at the company join the targets, as the student's own person when they have them
     const layer = await loadFriendLayer(db, userId);
     const friendShares = sharesAt(layer, company, domain);
@@ -519,14 +793,34 @@ export async function findPaths(
         title: p.title,
         pReply: p.score > 0 ? responsePrior(personLike(p), user) : undefined,
       }));
-    const chosen = rankCompanyTargets({
-      targets,
-      goal: goalKind,
-      people: g.people,
-      pairs: g.pairs,
-      blockedPairs: g.blocked,
-      now,
-    });
+    const rank = (ts: TargetInfo[]) =>
+      rankCompanyTargets({
+        targets: ts,
+        goal: goalKind,
+        people: g.people,
+        pairs: g.pairs,
+        blockedPairs: g.blocked,
+        now,
+      });
+    let chosen = rank(targets);
+    // the chosen routes' words need their full evidence; ranking just the chosen targets again gives the same routes
+    if (
+      await withFullEvidence(
+        db,
+        g,
+        chosen.map((x) => x.path),
+      )
+    ) {
+      const picked = new Set(chosen.map((x) => x.target.id));
+      chosen = rank(targets.filter((x) => picked.has(x.id)));
+    }
+    // the people a company lookup routes to are worth reading in the background (plan 35 B6); a friend's person
+    // (`friend_person:<id>`) is not the student's to read
+    await requestReads(
+      db,
+      userId,
+      chosen.map((x) => x.target.id).filter((id) => !id.includes(':')),
+    );
     const paths: PathsFindResponse['paths'] = [];
     for (const x of chosen) {
       const p = decorateFriendPath(x.path, layer, x.target.name ?? 'them');
@@ -560,10 +854,13 @@ export async function findPaths(
     );
   } else throw new HttpError(400, 'bad_request', 'target needs personId, linkedinUrl or company');
 
-  let g = await loadGraph(db, userId, now);
+  // plan 35 B7: only the target's neighbourhood, loaded once and patched after new ties
+  const g = await loadNeighbourhood(db, userId, targetId, now);
   const target = g.people.get(targetId);
   if (!target) throw new HttpError(404, 'not_found', 'no such person');
   if (looksLikeMinor({ title: target.title })) return { paths: [], sources: [], unconfigured: [] };
+  // a Map target is someone the student wants to know more about: the background reading reads them (plan 35 B6)
+  await requestReads(db, userId, [targetId]);
   const ext = await externalFor(s, userId, {
     kind: 'person',
     personId: targetId,
@@ -573,27 +870,31 @@ export async function findPaths(
     company: target.org,
   });
   const learned = await learnMemberIds(db, userId, ext);
-  if (ext.ties.length || learned) {
+  if (ext.ties.length || learned.length) {
     await upsertTies(db, ext.ties);
-    g = await loadGraph(db, userId, now);
+    await extendNeighbourhood(db, g, ext.ties, learned);
   }
   // plan 29 §A4: a friend who shares this person is one more way in, ranked with the rest
   const layer = await loadFriendLayer(db, userId);
   applyFriendLayer(g, sharesFor(layer, targetId));
-  const r = rankWarmPaths({
-    targetId,
-    target: {
-      name: target.name,
-      isAlum: target.isAlumni,
-      title: target.title,
-      pReply: target.score > 0 ? responsePrior(personLike(target), user) : undefined,
-    },
-    goal: goalKind,
-    people: g.people,
-    pairs: g.pairs,
-    blockedPairs: g.blocked,
-    now,
-  });
+  const rank = () =>
+    rankWarmPaths({
+      targetId,
+      target: {
+        name: target.name,
+        isAlum: target.isAlumni,
+        title: target.title,
+        pReply: target.score > 0 ? responsePrior(personLike(target), user) : undefined,
+      },
+      goal: goalKind,
+      people: g.people,
+      pairs: g.pairs,
+      blockedPairs: g.blocked,
+      now,
+    });
+  let r = rank();
+  // the chosen routes' words need their full evidence; ranking again over the same graph gives the same routes
+  if (await withFullEvidence(db, g, r.paths)) r = rank();
   const paths: PathsFindResponse['paths'] = [];
   for (const raw of r.paths as WarmPath[]) {
     const p = decorateFriendPath(raw, layer, target.name);
@@ -612,10 +913,14 @@ export async function findPaths(
 
 /**
  * Keep the member id LinkedIn's mutuals search gave for a person found by the same LinkedIn profile address (never
- * by name: names never bind, plan 17): hop evidence matches by member id only (plan 21 §6). Returns how many were new.
+ * by name: names never bind, plan 17): hop evidence matches by member id only (plan 21 §6). Returns the new ones.
  */
-async function learnMemberIds(db: Db, userId: string, ext: ExternalResult): Promise<number> {
-  let n = 0;
+async function learnMemberIds(
+  db: Db,
+  userId: string,
+  ext: ExternalResult,
+): Promise<{ personId: string; memberId: string }[]> {
+  const learned: { personId: string; memberId: string }[] = [];
   for (const c of ext.candidates) {
     const slug = linkedInSlugOf(c.linkedinUrl);
     if (c.source !== 'linkedin_mutual' || !c.personId || !c.memberId || !slug) continue;
@@ -630,13 +935,13 @@ async function learnMemberIds(db: Db, userId: string, ext: ExternalResult): Prom
                           and i.person_id <> ${c.personId}::uuid)
       returning 1`;
     if (!rows.length) continue;
-    n++;
+    learned.push({ personId: c.personId, memberId: c.memberId });
     await db.sql`
       insert into orbit.person_identities (user_id, person_id, kind, value_norm, value_raw, source)
       values (${userId}::uuid, ${c.personId}::uuid, 'linkedin_member', ${c.memberId}, ${c.memberId}, 'unipile')
       on conflict (user_id, kind, value_norm) do nothing`;
   }
-  return n;
+  return learned;
 }
 
 /**

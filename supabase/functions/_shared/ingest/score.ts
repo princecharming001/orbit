@@ -350,14 +350,82 @@ export async function scorePeople(
       on conflict (user_id, person_id) do update set
         score = excluded.score, share_score = excluded.share_score, band = excluded.band, features = excluded.features,
         contributions = excluded.contributions, explanation = excluded.explanation,
-        model_version = excluded.model_version, computed_at = excluded.computed_at`;
+        model_version = excluded.model_version, computed_at = excluded.computed_at
+      where (orbit.tie_scores.score, orbit.tie_scores.share_score, orbit.tie_scores.band, orbit.tie_scores.features,
+             orbit.tie_scores.contributions, orbit.tie_scores.explanation, orbit.tie_scores.model_version)
+            is distinct from (excluded.score, excluded.share_score, excluded.band, excluded.features,
+                              excluded.contributions, excluded.explanation, excluded.model_version)`;
+    // scored_at marks the run for delta scoring (plan 35 B1); on its own it does not bump updated_at (B2's trigger),
+    // so a person whose strength did not move is not sent to the browser again
     await db.sql`
       update orbit.people p set strength = (r ->> 'strength')::real,
-             last_interaction_at = coalesce((r ->> 'last')::timestamptz, p.last_interaction_at)
+             last_interaction_at = coalesce((r ->> 'last')::timestamptz, p.last_interaction_at),
+             scored_at = now()
         from jsonb_array_elements(${json}::jsonb) r
-       where p.id = (r ->> 'id')::uuid and p.user_id = ${userId}::uuid
-         and (p.strength is distinct from (r ->> 'strength')::real
-           or p.last_interaction_at is distinct from coalesce((r ->> 'last')::timestamptz, p.last_interaction_at))`;
+       where p.id = (r ->> 'id')::uuid and p.user_id = ${userId}::uuid`;
   }
   return { scored: rows.length, calibration };
+}
+
+/** Scores older than this are rebuilt for everyone (plan 35 B1): recency decay and neighbours' scores move them. */
+export const FULL_RESCORE_DAYS = 7;
+
+/**
+ * Whether tonight's run rescores everyone: someone's last score is a week old (delta runs leave unchanged people at
+ * their old scored_at, so this comes round weekly).
+ */
+export async function fullRescoreDue(db: Db, userId: string): Promise<boolean> {
+  // the database's clock, as scored_at is
+  const [r] = await db.sql<{ due: boolean | null }>`
+    select min(scored_at) < now() - make_interval(days => ${FULL_RESCORE_DAYS}) as due from orbit.people
+     where user_id = ${userId}::uuid and not is_self and deleted_at is null and merged_into is null`;
+  return r?.due === true;
+}
+
+/**
+ * The people whose score can have moved since their last one (plan 35 B1): never scored, their own row changed, or
+ * one of the inputs loadHistories reads is newer than their scored_at: a message from or to them, a meeting they are
+ * on (edited, or now in the past), a tie, an affiliation, a label, a note, a LinkedIn identity. Removed ties and the
+ * passing of time are left to the weekly full rescore.
+ */
+export async function changedPeople(db: Db, userId: string): Promise<string[]> {
+  const rows = await db.sql<{ id: string }>`
+    with live as (
+      select id, scored_at, updated_at from orbit.people
+       where user_id = ${userId}::uuid and not is_self and deleted_at is null and merged_into is null),
+    since as (select coalesce(min(scored_at), '-infinity'::timestamptz) as t from live),
+    touched as (
+      select m.from_person_id as id, m.updated_at as at from orbit.messages m, since
+       where m.user_id = ${userId}::uuid and m.updated_at > since.t and m.from_person_id is not null
+      union all
+      select unnest(m.to_person_ids), m.updated_at from orbit.messages m, since
+       where m.user_id = ${userId}::uuid and m.updated_at > since.t
+      union all
+      select unnest(e.attendee_person_ids),
+             case when e.start_at <= now() then greatest(e.updated_at, e.start_at) else e.updated_at end
+        from orbit.calendar_events e, since
+       where e.user_id = ${userId}::uuid and (e.updated_at > since.t or e.start_at between since.t and now())
+      union all
+      select t.a_person_id, t.updated_at from orbit.ties t, since
+       where t.user_id = ${userId}::uuid and t.updated_at > since.t
+      union all
+      select t.b_person_id, t.updated_at from orbit.ties t, since
+       where t.user_id = ${userId}::uuid and t.updated_at > since.t
+      union all
+      select a.person_id, a.updated_at from orbit.affiliations a, since
+       where a.user_id = ${userId}::uuid and a.updated_at > since.t
+      union all
+      select l.person_id, l.updated_at from orbit.tie_labels l, since
+       where l.user_id = ${userId}::uuid and l.updated_at > since.t
+      union all
+      select unnest(n.person_ids), n.updated_at from orbit.notes n, since
+       where n.user_id = ${userId}::uuid and n.updated_at > since.t
+      union all
+      select i.person_id, i.created_at from orbit.person_identities i, since
+       where i.user_id = ${userId}::uuid and i.created_at > since.t)
+    select l.id from live l
+     where l.scored_at is null or l.updated_at > l.scored_at
+        or exists (select 1 from touched x where x.id = l.id and x.at > l.scored_at)
+     order by l.id`;
+  return rows.map((r) => r.id);
 }

@@ -228,6 +228,10 @@ describe('census', () => {
       verdict: 'yes',
     });
     expect(l2.body.ok).toBe(false);
+    // plan 35 B6: a person judged against an ask goes on the background reading's list; another's never does
+    const asked = await t.db.sql<{ user_id: string; person_id: string }>`
+      select user_id, person_id from orbit.profile_requests where person_id in (${mine}::uuid, ${theirs}::uuid)`;
+    expect(asked).toEqual([{ user_id: a.userId, person_id: mine }]);
   });
 
   it('looks up one facet while the student waits: positives, a complete scan, a fresh scan answered from store', async () => {

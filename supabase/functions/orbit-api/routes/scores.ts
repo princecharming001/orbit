@@ -10,6 +10,7 @@ import type { ScoreExplainResponse } from '@orbit/core/server/api';
 import { badRequest, HttpError, json } from '../../_shared/http.ts';
 import { sqlQueue } from '../../_shared/queue.ts';
 import { iso, num } from '../../_shared/rows.ts';
+import { requestReads } from '../../_shared/search/reading.ts';
 import type { Ctx, Route } from '../api.ts';
 import { body, uuid } from './body.ts';
 
@@ -58,7 +59,8 @@ async function ownPerson(ctx: Ctx, personId: string) {
 async function explain(ctx: Ctx): Promise<Response> {
   const personId = uuid(await body(ctx), 'personId');
   await ownPerson(ctx, personId);
-  const r = await scoreRow(ctx, personId);
+  // the person page asks for this when it opens: the background reading should read them (plan 35 B6)
+  const [r] = await Promise.all([scoreRow(ctx, personId), requestReads(ctx.db, ctx.userId!, [personId])]);
   if (!r) throw new HttpError(404, 'not_scored', 'this person has no score yet');
   return json(200, explainOf(personId, r));
 }

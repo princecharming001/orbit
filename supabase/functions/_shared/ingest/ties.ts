@@ -1,11 +1,13 @@
 /**
  * orbit.ties from the stored mail, meetings and affiliations (§2.3), with core `inferTies` doing the inference.
  *
- *   refreshTies(db, user, now)                 the nightly rebuild (score.user): every kind Orbit infers itself —
+ *   refreshTies(db, user, now)                 every kind Orbit infers itself, for the whole network —
  *                                              email_exchange, email_cc, email_cothread, meeting_coattendee,
  *                                              co_tenure, same_school_cohort, same_current_company, same_city —
  *                                              with interaction kinds decayed (w·0.5^(years/2)) and rows whose
  *                                              evidence is gone deleted
+ *   refreshTies(db, user, now, {kinds})        the same for some kinds only: the nightly run (score.ties) infers
+ *                                              one TIE_GROUPS entry a job, so no isolate holds the whole inference
  *   refreshTies(db, user, now, {personIds})    the incremental pass after new mail or events: the interaction kinds
  *                                              for pairs that include one of these people
  *
@@ -13,11 +15,11 @@
  * detection at ingest) and are never touched here. Threads with more than 8 people and events with more than 8
  * attendees carry no tie (core). The stored weight is the decayed w; first/last seen are the evidence's dates.
  */
-import { decayedTieWeight, inferTies, type Tie, type TieKind } from '@orbit/core/graph/ties';
+import { decayedTieWeight, inferTies, type TieKind } from '@orbit/core/graph/ties';
 import { affiliationFromRow, type Row } from '@orbit/core/server/mappers';
 import type { CalendarEvent, EmailMessage, EmailThread, Organization } from '@orbit/core/types';
 import type { Db } from '../db.ts';
-import { chunks, day, iso, PERSON_COLUMNS, toPerson } from './util.ts';
+import { chunks, day, iso, toPerson } from './util.ts';
 
 export const INTERACTION_KINDS: TieKind[] = [
   'email_exchange',
@@ -28,6 +30,20 @@ export const INTERACTION_KINDS: TieKind[] = [
 const AFFILIATION_KINDS = ['co_tenure', 'same_school_cohort', 'same_current_company', 'same_city'];
 /** what refreshTies owns; the other kinds are written by their own sources */
 export const INFERRED_KINDS = [...INTERACTION_KINDS, ...AFFILIATION_KINDS];
+/**
+ * The nightly inference, one job per entry (plan 35 B1): each needs its own inputs only (mail and meetings; jobs;
+ * schools; cities), and no kind's rows depend on another's, so the union is the whole-network inference.
+ */
+export const TIE_GROUPS: readonly { name: string; kinds: readonly string[] }[] = [
+  { name: 'interaction', kinds: INTERACTION_KINDS },
+  { name: 'employment', kinds: ['co_tenure', 'same_current_company'] },
+  { name: 'education', kinds: ['same_school_cohort'] },
+  { name: 'same_city', kinds: ['same_city'] },
+];
+/** the columns tie inference reads of a person (core inferTies, inferEdges, sameCityTies): no text it never reads */
+const TIE_PERSON_COLUMNS = `p.id, p.user_id, p.is_self, p.display_name, p.first_name, p.last_name, p.name_norm,
+  p.primary_email, p.title, p.org_id, p.org_raw, p.location, p.school, p.strength, p.hidden_at, p.merged_into,
+  p.deleted_at`;
 
 const GROUP_MAX = 8;
 /** a city with more of the user's contacts than this says nothing about who knows whom */
@@ -77,24 +93,32 @@ export async function refreshTies(
   db: Db,
   userId: string,
   now: Date,
-  scope: { personIds?: string[]; allKinds?: boolean } = {},
+  scope: { personIds?: string[]; kinds?: readonly string[] } = {},
 ): Promise<{ upserted: number; deleted: number }> {
   const scoped = !!scope.personIds;
   const focus = scope.personIds ?? [];
   if (scoped && !focus.length) return { upserted: 0, deleted: 0 };
-  // the nightly rebuild runs one page of people at a time (score.page): every kind, for the pairs touching the page
-  const full = !scoped || !!scope.allKinds;
+  const keep = new Set<string>(
+    (scope.kinds ?? (scoped ? INTERACTION_KINDS : INFERRED_KINDS)).filter((k) => INFERRED_KINDS.includes(k)),
+  );
+  if (!keep.size) return { upserted: 0, deleted: 0 };
+  const interactions = INTERACTION_KINDS.some((k) => keep.has(k));
+  const employment = keep.has('co_tenure') || keep.has('same_current_company');
+  const education = keep.has('same_school_cohort');
 
   // people (all: inferTies needs the address book to read who wrote to whom)
   const rows = await db.query<Record<string, unknown>>(
-    `select ${PERSON_COLUMNS} from orbit.people p
-      where p.user_id = $1::uuid and p.deleted_at is null and p.merged_into is null and not p.is_self`,
+    `select ${TIE_PERSON_COLUMNS} from orbit.people p
+      where p.user_id = $1::uuid and p.deleted_at is null and p.merged_into is null and not p.is_self
+      order by p.id`,
     [userId],
   );
-  const idRows = await db.sql<{ person_id: string; kind: string; value_norm: string }>`
-    select pi.person_id, pi.kind, pi.value_norm from orbit.person_identities pi
-      join orbit.people p on p.id = pi.person_id
-     where pi.user_id = ${userId}::uuid and pi.kind = 'email' and not p.is_self`;
+  const idRows = !interactions
+    ? []
+    : await db.sql<{ person_id: string; kind: string; value_norm: string }>`
+        select pi.person_id, pi.kind, pi.value_norm from orbit.person_identities pi
+          join orbit.people p on p.id = pi.person_id
+         where pi.user_id = ${userId}::uuid and pi.kind = 'email' and not p.is_self`;
   const idsBy = new Map<string, { kind: string; value_norm: string }[]>();
   for (const r of idRows) {
     const arr = idsBy.get(r.person_id) ?? [];
@@ -104,15 +128,17 @@ export async function refreshTies(
   const people = rows.map((r) => toPerson(r, idsBy.get(r.id as string)));
 
   // threads (small ones only) and their messages
-  const threadRows = await db.sql<{
-    id: string;
-    participant_person_ids: string[];
-    last_at: unknown;
-    first_at: unknown;
-  }>`
-    select id, participant_person_ids, last_at, first_at from orbit.threads
-     where user_id = ${userId}::uuid and cardinality(participant_person_ids) between 2 and ${GROUP_MAX}::int
-       and (not ${scoped}::boolean or participant_person_ids && ${focus}::uuid[])`;
+  const threadRows = !interactions
+    ? []
+    : await db.sql<{
+        id: string;
+        participant_person_ids: string[];
+        last_at: unknown;
+        first_at: unknown;
+      }>`
+        select id, participant_person_ids, last_at, first_at from orbit.threads
+         where user_id = ${userId}::uuid and cardinality(participant_person_ids) between 2 and ${GROUP_MAX}::int
+           and (not ${scoped}::boolean or participant_person_ids && ${focus}::uuid[])`;
   const threads: EmailThread[] = threadRows.map((t) => ({
     id: t.id,
     userId,
@@ -158,18 +184,20 @@ export async function refreshTies(
   }));
 
   // meetings in the past (a future invite is not yet a meeting)
-  const eventRows = await db.sql<{
-    id: string;
-    start_at: unknown;
-    end_at: unknown;
-    status: string | null;
-    attendees: { email?: string; responseStatus?: string; self?: boolean }[];
-    attendee_person_ids: string[];
-  }>`
-    select id, start_at, end_at, status, attendees, attendee_person_ids from orbit.calendar_events
-     where user_id = ${userId}::uuid and start_at <= ${now}::timestamptz
-       and cardinality(attendee_person_ids) >= 2 and attendee_count <= ${GROUP_MAX}::int
-       and (not ${scoped}::boolean or attendee_person_ids && ${focus}::uuid[])`;
+  const eventRows = !interactions
+    ? []
+    : await db.sql<{
+        id: string;
+        start_at: unknown;
+        end_at: unknown;
+        status: string | null;
+        attendees: { email?: string; responseStatus?: string; self?: boolean }[];
+        attendee_person_ids: string[];
+      }>`
+        select id, start_at, end_at, status, attendees, attendee_person_ids from orbit.calendar_events
+         where user_id = ${userId}::uuid and start_at <= ${now}::timestamptz
+           and cardinality(attendee_person_ids) >= 2 and attendee_count <= ${GROUP_MAX}::int
+           and (not ${scoped}::boolean or attendee_person_ids && ${focus}::uuid[])`;
   const events: CalendarEvent[] = eventRows.map((e) => ({
     id: e.id,
     userId,
@@ -188,22 +216,29 @@ export async function refreshTies(
     attendeePersonIds: e.attendee_person_ids,
   }));
 
-  // affiliations and organizations (the nightly rebuild only, whole or by page)
-  const affiliations = !full
+  // affiliations and organizations (the affiliation kinds only): jobs for co_tenure and same_current_company,
+  // schools for same_school_cohort. Every row is read in a fixed order either way, and the kind this run does not
+  // infer is kept with its name blanked (core groups nothing without a name): core then meets each person in the same
+  // order as the whole inference does, so a tie's evidence lists people in the same order and an unchanged tie is
+  // not rewritten
+  const affKinds = [...(employment ? ['employment'] : []), ...(education ? ['education'] : [])];
+  const affiliations = !affKinds.length
     ? []
     : (
         await db.sql<Record<string, unknown>>`
           select a.* from orbit.affiliations a join orbit.people p on p.id = a.person_id
-           where a.user_id = ${userId}::uuid and p.merged_into is null and p.deleted_at is null and not p.is_self`
-      ).map((a) =>
-        affiliationFromRow({
+           where a.user_id = ${userId}::uuid and p.merged_into is null and p.deleted_at is null and not p.is_self
+           order by a.id`
+      ).map((a) => {
+        const aff = affiliationFromRow({
           ...a,
           start_date: day(a.start_date),
           end_date: day(a.end_date),
-        } as unknown as Row.Affiliations),
-      );
+        } as unknown as Row.Affiliations);
+        return affKinds.includes(aff.kind) ? aff : { ...aff, nameRaw: '', organizationId: undefined };
+      });
   const organizations = new Map<string, Organization>();
-  if (full)
+  if (affKinds.length)
     for (const o of await db.sql<{
       id: string;
       name: string;
@@ -220,31 +255,45 @@ export async function refreshTies(
         sizeBucket: o.size_bucket ?? undefined,
       });
 
-  const inferred = inferTies({
-    userId,
-    people,
-    affiliations,
-    organizations,
-    threads,
-    events,
-    messages,
-    now,
-  });
-  const keep = new Set<string>(full ? INFERRED_KINDS : INTERACTION_KINDS);
   const inFocus = (t: { a: string; b: string }) => !scoped || focus.includes(t.a) || focus.includes(t.b);
-  const out: TieRow[] = inferred
-    .filter((t: Tie) => keep.has(t.kind) && inFocus({ a: t.aId, b: t.bId }))
-    .map((t: Tie) => ({
-      a: t.aId,
-      b: t.bId,
-      kind: t.kind,
-      weight: decayedTieWeight(t, now),
-      confidence: t.confidence,
-      evidence: { ...t.evidence, source: 'orbit' },
-      firstSeenAt: t.firstSeenAt,
-      lastSeenAt: t.lastSeenAt,
-    }));
-  if (full) out.push(...sameCityTies(people.filter((p) => !p.hiddenAt)).filter(inFocus));
+  const out: TieRow[] = [];
+  if (interactions || affKinds.length) {
+    // a person's current company and school stand in for affiliations in core (virtual rows): left out when this
+    // run does not infer those kinds, which only spares the work, since no kind's rows depend on another's
+    const forEdges = people.map((p) =>
+      employment && education
+        ? p
+        : {
+            ...p,
+            ...(employment ? {} : { currentOrganizationRaw: undefined, currentOrganizationId: undefined }),
+            ...(education ? {} : { school: undefined }),
+          },
+    );
+    const inferred = inferTies({
+      userId,
+      people: forEdges,
+      affiliations,
+      organizations,
+      threads,
+      events,
+      messages,
+      now,
+    });
+    for (const t of inferred) {
+      if (!keep.has(t.kind) || !inFocus({ a: t.aId, b: t.bId })) continue;
+      out.push({
+        a: t.aId,
+        b: t.bId,
+        kind: t.kind,
+        weight: decayedTieWeight(t, now),
+        confidence: t.confidence,
+        evidence: { ...t.evidence, source: 'orbit' },
+        firstSeenAt: t.firstSeenAt,
+        lastSeenAt: t.lastSeenAt,
+      });
+    }
+  }
+  if (keep.has('same_city')) out.push(...sameCityTies(people.filter((p) => !p.hiddenAt)).filter(inFocus));
 
   for (const part of chunks(out, 500)) await upsertTies(db, userId, part, now);
   const upserted = out.length;
