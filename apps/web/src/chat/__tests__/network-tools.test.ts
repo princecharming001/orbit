@@ -154,12 +154,28 @@ describe('local mode', () => {
       const results = (modelResult('find_people', found).data as { results: { recommendationId: string }[] })
         .results;
       expect(results[0]!.recommendationId).toMatch(/^li:/);
+      // finding people adds no one, and says so
+      expect(found.summary).toMatch(/None are in your People until you pick them\./);
+      expect((await db.people.toArray()).filter((p) => p.id !== 'p_priya')).toHaveLength(0);
+      // the model asking to add them gets an Approve card naming who would join People, and nothing is added yet
+      const asked = await execute(
+        'add_sourced',
+        { recommendationIds: [results[0]!.recommendationId] },
+        makeCtx(user, { caller: 'llm', toolUseId: nextToolUseId() }),
+      );
+      expect(asked.kind).toBe('needs_confirmation');
+      expect(asked.summary).toMatch(
+        /^Add .+ to your People, saved to contact\. Nothing happens until you approve it\.$/,
+      );
+      expect((await db.people.toArray()).filter((p) => p.id !== 'p_priya')).toHaveLength(0);
+      expect(await db.chats.count()).toBe(0);
+      // the student presses Approve
       const added = await execute(
         'add_sourced',
         { recommendationIds: [results[0]!.recommendationId] },
-        makeCtx(user, { toolUseId: nextToolUseId() }),
+        makeCtx(user, { caller: 'ui', confirmation: asked.confirmationId, toolUseId: nextToolUseId() }),
       );
-      expect(added.summary).toMatch(/ready to write to on LinkedIn/);
+      expect(added.summary).toMatch(/to People \(saved to contact\), ready to write to on LinkedIn/);
       const person = (await db.people.toArray()).find((p) => p.id !== 'p_priya')!;
       expect(person.linkedinMemberId).toMatch(/^demo-search-/);
       const chat = await db.chats.where('personId').equals(person.id).first();
@@ -168,10 +184,11 @@ describe('local mode', () => {
       expect(person.sources).toEqual(['linkedin_search']);
       // two more picked on the card, with the routes to each in the same turn: one card, both named as added
       const more = results.slice(1, 3).map((r) => r.recommendationId);
+      // pressing Add and find routes on the card is the student's own words: it runs at once
       const routed = await execute(
         'add_sourced',
         { recommendationIds: more, next: 'routes' },
-        makeCtx(user, { toolUseId: nextToolUseId() }),
+        makeCtx(user, { caller: 'router', toolUseId: nextToolUseId() }),
       );
       expect(routed.kind).toBe('routes_many');
       expect(routed.summary).toMatch(/^Added .* to People \(saved to contact\)\. Routes to 2 people\./);
@@ -187,7 +204,7 @@ describe('local mode', () => {
       const drafted = await execute(
         'add_sourced',
         { recommendationIds: [results[3]!.recommendationId], next: 'drafts' },
-        makeCtx(user, { toolUseId: nextToolUseId() }),
+        makeCtx(user, { caller: 'router', toolUseId: nextToolUseId() }),
       );
       expect(drafted.summary).toMatch(/^Added .* to People \(saved to contact\)\./);
     } finally {
@@ -205,7 +222,9 @@ describe('local mode', () => {
       ['list_due', {}],
     ];
     for (const [name, input] of reads) {
-      const env = await execute(name, input, makeCtx(user, { toolUseId: nextToolUseId() }));
+      // add_sourced asks first; the student's own "Add to People" words reach the account check
+      const caller = name === 'add_sourced' ? 'router' : 'ui';
+      const env = await execute(name, input, makeCtx(user, { caller, toolUseId: nextToolUseId() }));
       expect(env.kind, name).toBe('text');
       expect(env.summary, name).toMatch(/needs an Orbit account/);
       plainSummary(env);
@@ -342,11 +361,25 @@ describe('account mode, against a fake orbit-api', () => {
       ctx(),
     );
     expect(found.kind).toBe('list');
-    expect(found.summary).toMatch(/Found 2 people\. Apollo is not set up yet/);
+    expect(found.summary).toMatch(
+      /Found 2 people\. None are in your People until you pick them\. Apollo is not set up yet/,
+    );
     const items = (found.data as { ui: { items: { chip?: string }[] } }).ui.items;
     expect(items[1]?.chip).toBe('You know them');
-    const added = await execute('add_sourced', { recommendationIds: ['rec_a'] }, ctx());
-    expect(added.summary).toMatch(/Added Maya Chen/);
+    // the model never adds on its own: the Approve card names Maya, and nothing joins People until it is pressed
+    const asked = await execute('add_sourced', { recommendationIds: ['rec_a'] }, { ...ctx(), caller: 'llm' });
+    expect(asked.kind).toBe('needs_confirmation');
+    expect(asked.summary).toMatch(/^Add Maya Chen, Partner at Seed Fund to your People, saved to contact\./);
+    expect((await db.people.toArray()).some((p) => p.displayName === 'Maya Chen')).toBe(false);
+    const added = await execute(
+      'add_sourced',
+      { recommendationIds: ['rec_a'] },
+      { ...ctx(), caller: 'router' },
+    );
+    expect(added.summary).toMatch(
+      /Added Maya Chen to People \(saved to contact\)\. Deep research starts only when you press it/,
+    );
+    expect(added.summary).not.toMatch(/has started/);
     expect((await db.people.toArray()).some((p) => p.displayName === 'Maya Chen')).toBe(true);
     expect((await db.chats.toArray()).some((c) => c.stage === 'identified')).toBe(true);
   });

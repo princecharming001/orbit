@@ -10,7 +10,7 @@ async function ask(page: Page, text: string) {
 
 /** The people on a list of search results can be picked, and the picked ones get warm routes in one card. */
 test.describe('Picking people on a card', () => {
-  test('a LinkedIn search: pick two, Find warm routes adds them and shows the best way in to each', async ({
+  test('a LinkedIn search: pick two, Add and find routes adds them and shows the best way in to each', async ({
     page,
   }) => {
     await loadDemo(page);
@@ -37,7 +37,8 @@ test.describe('Picking people on a card', () => {
     const names = (await boxes.evaluateAll((els) => els.map((el) => el.getAttribute('aria-label') ?? '')))
       .slice(0, 2)
       .map((t) => t.replace(/^Pick /, '').trim());
-    await list.getByTestId('selection-step').filter({ hasText: 'Find warm routes' }).click();
+    // picking someone not in Orbit yet says Add on the button: pressing it is the choice to add them
+    await list.getByTestId('selection-step').filter({ hasText: 'Add and find routes' }).click();
     // the message names them, with the ids the add needs, and the answer is one card with both
     await expect(page.getByTestId('turn-user').last()).toContainText(
       'Add to People and find warm routes to each of',

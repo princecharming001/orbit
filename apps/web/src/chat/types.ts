@@ -101,6 +101,12 @@ export interface ToolSpec<I extends z.ZodObject = z.ZodObject, D = unknown> {
   execute: (input: z.infer<I>, ctx: ToolContext) => Promise<ResultEnvelope<D>>;
   /** compact projection of `data` for the model; default: the whole data */
   toModel?: (data: D) => unknown;
+  /**
+   * risky tools only: the student's own words, read exactly by the no-key router ("Add to People: Dana Lee [rec x]",
+   * "add Priya Shah, priya@evercore.com"), are the choice, so a router call runs at once. A call from the model still
+   * needs Approve: adding someone to the student's People is never a side effect of the model's turn.
+   */
+  runsOnStudentWords?: boolean;
   /** risky tools: the sentence the Approve card shows (what will happen, and any engine reason it is blocked) */
   summarizeIntent?: (
     input: z.infer<I>,

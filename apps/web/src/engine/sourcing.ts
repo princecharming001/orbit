@@ -75,7 +75,7 @@ export type AddOutcome =
   | { ok: true; people: { id: string; displayName: string; chatId: string }[] }
   | { ok: false; message: string };
 
-/** Add sourced candidates: each becomes a person with a chat at "to contact", and research starts on them. */
+/** Add sourced candidates the student picked: each becomes a person with a chat at "to contact". No research starts. */
 export async function addSourced(user: Pick<User, 'id'>, recommendationIds: string[]): Promise<AddOutcome> {
   if (!isServerUser(user.id)) return notHere();
   if (!recommendationIds.length) return { ok: false, message: 'Pick someone to add first.' };

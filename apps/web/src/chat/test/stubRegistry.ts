@@ -299,7 +299,7 @@ export function makeStubRegistry(): StubRegistry {
       ]);
     }
     if (ctx.signal?.aborted) throw new Error('aborted');
-    if (spec.kind === 'risky') {
+    if (spec.kind === 'risky' && !(spec.runsOnStudentWords && ctx.caller === 'router' && !ctx.confirmation)) {
       if (!ctx.confirmation) {
         const id = `conf_${++confirmationCount}`;
         confirmations.set(id, { toolName: name, input: parsed.data, used: false });

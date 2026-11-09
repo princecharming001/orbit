@@ -223,7 +223,7 @@ export function ReachSearch({
             const head =
               r.kind === 'linkedin' && (i === 0 || rows[i - 1]!.kind === 'network') ? (
                 <p key="li-head" className="label-mono flex items-center gap-2 px-1 pt-3 pb-1">
-                  On LinkedIn
+                  On LinkedIn, pick to add to People
                 </p>
               ) : null;
             const name = r.kind === 'network' ? r.c.label : r.f.name;
@@ -264,13 +264,17 @@ export function ReachSearch({
                     <span className="block truncate text-[14px] font-medium">{name}</span>
                     {sub && <span className="block truncate text-[12.5px] text-ink-3">{sub}</span>}
                   </span>
-                  <span className="label-mono shrink-0 !text-[10px]">
+                  <span
+                    className="label-mono shrink-0 !text-[10px]"
+                    data-testid={r.kind === 'linkedin' ? 'map-linkedin-add' : undefined}
+                  >
+                    {/* picking someone from LinkedIn adds them to People: the row says so before the pick */}
                     {r.kind === 'linkedin'
                       ? r.f.distance === 2
-                        ? '2nd'
+                        ? '2nd · Add'
                         : r.f.distance === 3
-                          ? '3rd'
-                          : 'LinkedIn'
+                          ? '3rd · Add'
+                          : 'Add'
                       : r.c.kind === 'person'
                         ? 'Person'
                         : 'Company'}

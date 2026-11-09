@@ -105,20 +105,33 @@ export function routesToEach(names: string[]): NextStep | undefined {
   return { label: 'Find warm routes', message: `Find warm routes to each of: ${nameList(list)}` };
 }
 
-/** "Add to People: A [rec x] and B [rec y]", then routes to each or a draft to each, in the same turn. */
+/**
+ * "Add to People: A [rec x] and B [rec y]", then routes to each or a draft to each, in the same turn. Pressing it is
+ * the student's choice to add the people not in Orbit yet, so the label says Add whenever someone new would join.
+ */
 export function addPicked(rows: Picked[], then?: 'routes' | 'drafts'): NextStep | undefined {
   const list = rows.slice(0, 20);
   if (!list.length) return undefined;
+  const adds = list.some((r) => r.rec);
+  // everyone picked is in Orbit already: there is no one to add
+  if (!then && !adds) return undefined;
   const head =
     then === 'routes'
       ? 'Add to People and find warm routes to each of'
       : then === 'drafts'
         ? 'Add to People and draft a message to each of'
         : 'Add to People';
-  return {
-    label: then === 'routes' ? 'Find warm routes' : then === 'drafts' ? 'Write to them' : 'Add to People',
-    message: `${head}: ${pickedList(list)}`,
-  };
+  const label =
+    then === 'routes'
+      ? adds
+        ? 'Add and find routes'
+        : 'Find warm routes'
+      : then === 'drafts'
+        ? adds
+          ? 'Add and write to them'
+          : 'Write to them'
+        : 'Add to People';
+  return { label, message: `${head}: ${pickedList(list)}` };
 }
 
 export const prepFor = (name: string): NextStep => ({

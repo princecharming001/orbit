@@ -608,11 +608,36 @@ export const researchLeftTool = defineTool({
 
 // ---------- sourcing ----------
 
+/** Who each search result is ("Maya Chen, Partner at Seed Fund"), so the Approve card for add_sourced names them. */
+const sourcedNames = new Map<string, string>();
+const rememberSourced = (id: string, line: string) => {
+  if (sourcedNames.size > 500) sourcedNames.clear();
+  sourcedNames.set(id, line);
+};
+
+/** What the student is asked to approve: who joins their People, and what follows. */
+export function addSourcedIntent(recommendationIds: string[], next?: 'routes' | 'drafts'): string {
+  const names = recommendationIds.map((id) => sourcedNames.get(id));
+  const who = names.every(Boolean)
+    ? joinNames(names as string[])
+    : plural(recommendationIds.length, 'person', 'people');
+  const then =
+    next === 'routes'
+      ? ' Then Orbit finds warm routes to each.'
+      : next === 'drafts'
+        ? ' Then Orbit drafts a message to each for you to review. Nothing is sent.'
+        : '';
+  return `Add ${who} to your People, saved to contact.${then}`;
+}
+
+const joinNames = (xs: string[]) =>
+  xs.length <= 2 ? xs.join(' and ') : `${xs.slice(0, -1).join('; ')} and ${xs[xs.length - 1]}`;
+
 export const findPeopleTool = defineTool({
   name: 'find_people',
   kind: 'write',
   description:
-    'Call this when the student asks to find or source new people beyond their network for a purpose: investors, customers, candidates, mentors, alumni, a co-founder, research collaborators, or professors and researchers at a school ("source professors I can reach out to for biomed research at Berkeley"). Give the purpose (a goal kind; professors and labs are collaboration), what they are looking for, and the school or organization and the topic when the student names them: with those, Orbit reads that place\'s faculty or team pages and comes back with names, titles, an email when the page gives one, and what each person works on, the context a first message is written from. With an Orbit account it also searches LinkedIn, Apollo and Semantic Scholar and ranks everyone by fit, how reachable they are and how likely to reply, with reasons. Without one, it searches LinkedIn from the student\'s own account when LinkedIn is connected live. Also call it, without being asked, when search_network found nobody for a "who should I reach out to" ask, and when the student wants people outside LinkedIn or people to email. Everyone comes back ranked warmest first in five tiers: 1 already talked with, 2 one hop away (a close contact at the same place: suggest asking them for an intro), 3 shared background (school, a past company, hometown), 4 open to students, 5 cold but relevant. Each has an email when one could be found, marked as verified (their own LinkedIn contact email, or an address a verifier confirmed), on their page, from the company\'s usual address pattern, or a guess that is not confirmed (say so before the student sends to a guess). Show the top few with the tier reason, what they work on and the email, and offer add_sourced; once added, create_draft writes to them.',
+    'Call this when the student asks to find or source new people beyond their network for a purpose: investors, customers, candidates, mentors, alumni, a co-founder, research collaborators, or professors and researchers at a school ("source professors I can reach out to for biomed research at Berkeley"). Give the purpose (a goal kind; professors and labs are collaboration), what they are looking for, and the school or organization and the topic when the student names them: with those, Orbit reads that place\'s faculty or team pages and comes back with names, titles, an email when the page gives one, and what each person works on, the context a first message is written from. With an Orbit account it also searches LinkedIn, Apollo and Semantic Scholar and ranks everyone by fit, how reachable they are and how likely to reply, with reasons. Without one, it searches LinkedIn from the student\'s own account when LinkedIn is connected live. Also call it, without being asked, when search_network found nobody for a "who should I reach out to" ask, and when the student wants people outside LinkedIn or people to email. Everyone comes back ranked warmest first in five tiers: 1 already talked with, 2 one hop away (a close contact at the same place: suggest asking them for an intro), 3 shared background (school, a past company, hometown), 4 open to students, 5 cold but relevant. Each has an email when one could be found, marked as verified (their own LinkedIn contact email, or an address a verifier confirmed), on their page, from the company\'s usual address pattern, or a guess that is not confirmed (say so before the student sends to a guess). Show the top few with the tier reason, what they work on and the email. Finding people never adds them: ask whether to add any ("Want me to add them?") and call add_sourced only once the student says which; once added, create_draft writes to them.',
   input: z.object({
     purpose: z.enum(KINDS).describe('What the people are for.'),
     query: z
@@ -659,6 +684,7 @@ export const findPeopleTool = defineTool({
     if (!r.ok) throw new Error(r.message);
     const { results, unconfigured, relaxed, assumedPlace } = r.value;
     const top = results.slice(0, 10);
+    for (const c of top) rememberSourced(c.id, candidateLine(c));
     const dropped = relaxed.filter((x) => x !== 'place');
     const quiet = [
       assumedPlace ? `No school or company was named, so it looked at ${assumedPlace}.` : '',
@@ -710,7 +736,7 @@ export const findPeopleTool = defineTool({
         })),
         more: Math.max(0, results.length - top.length),
       },
-      `${results.length ? `Found ${plural(results.length, 'person', 'people')}` : 'No one matched yet'}.${quiet ? ` ${quiet}` : ''}`,
+      `${results.length ? `Found ${plural(results.length, 'person', 'people')}. None are in your People until you pick them` : 'No one matched yet'}.${quiet ? ` ${quiet}` : ''}`,
       '/discover?tab=find',
     );
   },
@@ -726,6 +752,7 @@ async function findOnLinkedIn(
   const r = await searchLinkedInLive(ctx.user, query || GOAL_KIND_LABELS[purpose]);
   if (!r.ok) throw new Error(r.message);
   const top = r.people.slice(0, 10);
+  for (const p of top) rememberSourced(p.id, [p.name, p.headline].filter(Boolean).join(', '));
   const degree = (d?: number) => (d === 2 ? '2nd' : d === 3 ? '3rd' : undefined);
   return list(
     `On LinkedIn: ${GOAL_KIND_LABELS[purpose].toLowerCase()}`,
@@ -757,16 +784,17 @@ async function findOnLinkedIn(
       source: 'linkedin',
     },
     top.length
-      ? `Found ${plural(top.length, 'person', 'people')} on LinkedIn outside your connections.`
+      ? `Found ${plural(top.length, 'person', 'people')} on LinkedIn outside your connections. None are in your People until you pick them.`
       : 'LinkedIn found no one for that. Try other words: a role, a company or a school.',
   );
 }
 
 export const addSourcedTool = defineTool({
   name: 'add_sourced',
-  kind: 'write',
+  kind: 'risky',
+  runsOnStudentWords: true,
   description:
-    'Call this after find_people when the student picks people to add (their recommendationIds). Each becomes a person in Orbit with a chat at "to contact" for the goal, and research on them starts. Never add people the student did not pick. With next: "routes" it goes straight on to warm routes to each of them in one card; with next: "drafts" it drafts a message to each. Someone added this way is saved to contact, not someone the student knows.',
+    'Call this only when the student\'s own latest message asks to add people from find_people ("add Dana", "add the first two", "add them"; pass their recommendationIds): each becomes a person in their People with a chat at "to contact" for the goal. Never call it on your own after a search, a second-degree or mutuals look, research, routes or a draft: end with one short question instead ("Want me to add them?") and wait. The student approves the add before it happens. With next: "routes" it goes straight on to warm routes to each of them in one card; with next: "drafts" it drafts a message to each. Someone added this way is saved to contact, not someone the student knows.',
   input: z.object({
     recommendationIds: z
       .array(z.string().min(1))
@@ -782,6 +810,9 @@ export const addSourcedTool = defineTool({
   }),
   capabilities: ['source_add', 'source_add_then'],
   progress: 'Adding them',
+  async summarizeIntent(input) {
+    return { text: addSourcedIntent(input.recommendationIds, input.next) };
+  },
   async execute(input, ctx) {
     const fromLinkedIn = input.recommendationIds.every((id) => id.startsWith(LINKEDIN_FOUND_PREFIX));
     if (fromLinkedIn) {
@@ -792,7 +823,7 @@ export const addSourcedTool = defineTool({
         'Added',
         r.people.map((p) => ({ text: p.displayName, href: `/people/${p.id}` })),
         { added: r.people.map((p) => ({ personId: p.id, name: p.displayName, chatId: p.chatId })) },
-        `Added ${r.people.map((p) => p.displayName).join(', ')}, ready to write to on LinkedIn.`,
+        `Added ${r.people.map((p) => p.displayName).join(', ')} to People (saved to contact), ready to write to on LinkedIn.`,
         r.people.length === 1 ? `/people/${r.people[0]!.id}` : '/people',
       );
     }
@@ -804,7 +835,7 @@ export const addSourcedTool = defineTool({
       'Added',
       r.people.map((p) => ({ text: p.displayName, href: `/people/${p.id}` })),
       { added: r.people.map((p) => ({ personId: p.id, name: p.displayName, chatId: p.chatId })) },
-      `Added ${r.people.map((p) => p.displayName).join(', ')}. Research on ${r.people.length === 1 ? 'them' : 'each'} has started.`,
+      `Added ${r.people.map((p) => p.displayName).join(', ')} to People (saved to contact). Deep research starts only when you press it on their page.`,
       r.people.length === 1 ? `/people/${r.people[0]!.id}` : '/people',
     );
   },

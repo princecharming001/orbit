@@ -35,9 +35,10 @@ const RELATIONSHIPS = Object.keys(RELATIONSHIP_LABELS) as [RelationshipType, ...
 
 export const addPerson = defineTool({
   name: 'add_person',
-  kind: 'write',
+  kind: 'risky',
+  runsOnStudentWords: true,
   description:
-    'Call this only when the student asks to add someone to Orbit by hand ("add Priya Shah, analyst at Evercore, priya@evercore.com"). Needs a name and a way to reach them: an email or a LinkedIn profile URL. A record with the same email or profile is updated, not duplicated. Drafts then lists them under the people to write to; use create_draft to start the first message.',
+    'Call this only when the student\'s own message asks to add someone to their People by hand ("add Priya Shah, analyst at Evercore, priya@evercore.com"). Never to save someone you found, researched or are drafting to: ask "Want me to add them?" first. The student approves the add before it happens. Needs a name and a way to reach them: an email or a LinkedIn profile URL. A record with the same email or profile is updated, not duplicated. Drafts then lists them under the people to write to; use create_draft to start the first message.',
   input: z.object({
     name: z.string().min(1).describe('Full name.'),
     company: z.string().optional().describe('Where they work.'),
@@ -48,6 +49,17 @@ export const addPerson = defineTool({
   }),
   capabilities: ['person_add_by_hand', 'pipeline_add_person', 'note_add_person_inline'],
   progress: 'Adding them',
+  async summarizeIntent(input) {
+    const role = [input.title?.trim(), input.company?.trim()].filter(Boolean).join(' at ');
+    const reach = input.email?.trim() || (input.linkedinUrl?.trim() ? 'their LinkedIn' : '');
+    return {
+      text: `Add ${input.name.trim()}${role ? `, ${role}` : ''}${reach ? ` (${reach})` : ''} to your People.`,
+      blockedReason:
+        !input.email?.trim() && !input.linkedinUrl?.trim()
+          ? `Orbit needs a way to reach ${input.name.trim()}: an email address or a LinkedIn profile link.`
+          : undefined,
+    };
+  },
   async execute(input, ctx) {
     const email = input.email?.trim();
     if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email))
@@ -297,9 +309,9 @@ export const pickPrepQuestions = defineTool({
 
 export const saveSuggestedContactsTool = defineTool({
   name: 'save_suggested_contacts',
-  kind: 'write',
+  kind: 'risky',
   description:
-    'Call this only when the student says who a person suggested they talk to ("Priya suggested I talk to Tom Lee at Stripe and Maya Wu"). Pass the text: clear names are saved as people with a "suggested by" fact and a saved recommendation; names Orbit is unsure of come back under confirm and are saved only when the student says yes (pass them in names). Not a person at all comes back under skipped.',
+    'Call this when the student says who a person suggested they talk to ("Priya suggested I talk to Tom Lee at Stripe and Maya Wu"). Pass the text: the student approves before anyone is saved; clear names are then saved as people on Discover with a "suggested by" fact and a saved recommendation; names Orbit is unsure of come back under confirm and are saved only when the student says yes (pass them in names). Not a person at all comes back under skipped.',
   input: z.object({
     personId: z.string().describe('The person who made the suggestions.'),
     text: z
@@ -318,6 +330,22 @@ export const saveSuggestedContactsTool = defineTool({
   }),
   capabilities: ['person_prep_suggested_names'],
   progress: 'Saving who they suggested',
+  async summarizeIntent(input, ctx) {
+    const from = await requirePerson(ctx, input.personId);
+    const label = (n: { name: string; org?: string }) => (n.org ? `${n.name} at ${n.org}` : n.name);
+    const clear = input.text?.trim()
+      ? readSuggestedNames(input.text, { knownOrgs: await knownOrganisations(ctx.user.id) }).names
+      : [];
+    const names = [...clear, ...(input.names ?? [])].map(label);
+    if (!names.length)
+      return {
+        text: `Add the people ${from.firstName} suggested to your People.`,
+        blockedReason: 'Orbit could not read a full name in that. Say each person by first and last name.',
+      };
+    return {
+      text: `Add ${names.join(', ')} to your People and Discover, as suggested by ${from.firstName}.`,
+    };
+  },
   async execute(input, ctx) {
     const from = await requirePerson(ctx, input.personId);
     const saved: { id: string; name: string; href: string }[] = [];

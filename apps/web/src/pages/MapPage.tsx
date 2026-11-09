@@ -625,15 +625,18 @@ export function MapPage() {
     if (userId && reachParam === '1' && companyParam && !companyFocus && !choices)
       void openCompany(companyParam, companyParam);
   }, [userId, reachParam, companyParam]);
-  /** Someone found on LinkedIn: they join Orbit (a chat at "to contact"), and the map shows the routes to them. */
+  /**
+   * Someone found on LinkedIn, picked from a row that says Add: they join People (a chat at "to contact", saved to
+   * contact), and the map shows the routes to them.
+   */
   const chooseLinkedIn = async (f: FoundView) => {
     if (!user) return;
     // the server looks them up on LinkedIn first: the box spins and a toast says so meanwhile
-    await working.run(`linkedin:${f.id}`, `Adding ${f.name} to your Orbit…`, async () => {
+    await working.run(`linkedin:${f.id}`, `Adding ${f.name} to your People…`, async () => {
       const r = await addLinkedInFound(user, [f.id]);
       if (!r.ok) return void toast.push({ text: r.message, tone: 'neutral' });
       setQuery(f.name);
-      toast.push({ text: `${f.name} is in your Orbit now.`, tone: 'good' });
+      toast.push({ text: `Added ${f.name} to People, saved to contact.`, tone: 'good' });
       setParams({ reach: r.people[0]!.id });
     });
   };

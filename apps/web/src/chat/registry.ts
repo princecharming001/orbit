@@ -276,7 +276,10 @@ export async function execute(name: string, input: unknown, ctx: ToolContext): P
   if (!parsed.success) return err(`The request to ${name} is missing something. ${issuesText(parsed.error)}`);
   const data = parsed.data as Record<string, unknown>;
   if (spec.kind === 'read') return runTool(spec, data, ctx);
-  if (spec.kind === 'risky') {
+  // the student's exact words, read by the router, are the approval for a tool that runs on them (an Approve click
+  // presents a token and goes through the check like any other)
+  const studentsWords = !!spec.runsOnStudentWords && ctx.caller === 'router' && !ctx.confirmation;
+  if (spec.kind === 'risky' && !studentsWords) {
     const check = await checkConfirmation(ctx, name, data);
     if (!check.ok) {
       // a token presented again after it ran gets the stored result, never a second run or a scolding

@@ -79,7 +79,11 @@ describe('picking people on a list of search results', () => {
     await click(boxes[2]!);
     expect($('[data-testid="selection-count"]')?.textContent).toBe('2 picked');
     const steps = $$('[data-testid="selection-step"]');
-    expect(steps.map((s) => s.textContent)).toEqual(['Find warm routes', 'Add to People', 'Write to them']);
+    expect(steps.map((s) => s.textContent)).toEqual([
+      'Add and find routes',
+      'Add to People',
+      'Add and write to them',
+    ]);
     await click(steps[0]!);
     // someone Orbit already has is named plainly; a stranger carries the id add_sourced needs
     expect(sent).toEqual([
@@ -87,6 +91,13 @@ describe('picking people on a list of search results', () => {
     ]);
     await click(steps[2]!);
     expect(sent[1]).toBe('Add to People and draft a message to each of: Dana Lee [rec li:1] and Maya Chen');
+  });
+
+  it('only people Orbit already has picked: nothing to add, so no button says Add', async () => {
+    await render(env);
+    await click($$('[data-testid="pick-person"]')[2]!);
+    const steps = $$('[data-testid="selection-step"]');
+    expect(steps.map((s) => s.textContent)).toEqual(['Find warm routes', 'Write to them']);
   });
 
   it('All picks every row shown, None clears them', async () => {
@@ -232,7 +243,11 @@ describe('people found in a search, in the people card look', () => {
     await click(boxes[2]!);
     expect($('[data-testid="selection-count"]')?.textContent).toBe('2 picked');
     const steps = $$('[data-testid="selection-step"]');
-    expect(steps.map((s) => s.textContent)).toEqual(['Find warm routes', 'Add to People', 'Write to them']);
+    expect(steps.map((s) => s.textContent)).toEqual([
+      'Add and find routes',
+      'Add to People',
+      'Add and write to them',
+    ]);
     await click(steps[2]!);
     expect(sent).toEqual([
       'Add to People and draft a message to each of: Harris Stolzenberg [rec r1] and Maya Chen',

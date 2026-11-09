@@ -6,7 +6,7 @@ const text = stableSystemText();
 
 describe('stable system block', () => {
   it('is version 17 and byte-identical for every conversation; the tag rule follows in its own small block', () => {
-    expect(STABLE_SYSTEM_VERSION).toBe(24);
+    expect(STABLE_SYSTEM_VERSION).toBe(25);
     expect(stableSystemText()).toBe(text);
     const a = systemBlocks('0123456789abcdef');
     const b = systemBlocks('fedcba9876543210');
@@ -20,6 +20,16 @@ describe('stable system block', () => {
     expect(a[1]!.text).toMatch(/0123456789abcdef/);
     expect(a[1]!.text).not.toEqual(b[1]!.text);
     expect(a[1]!.text.length).toBeLessThan(600);
+  });
+
+  it("v25: adding someone to People is always the student's choice, never a side effect", () => {
+    expect(text).toMatch(/Adding anyone to the student's People is always their own clear choice/);
+    expect(text).toMatch(
+      /Searching, second-degree people, mutuals, routes, research and drafting never add anyone/,
+    );
+    expect(text).toMatch(/"Want me to add them\?"/);
+    expect(text).toMatch(/never add a person in order to research them or write to them/);
+    expect(text).toMatch(/Finding people never adds them/);
   });
 
   it('v17: first messages on autopilot, the first-message rung and the evening review', () => {
