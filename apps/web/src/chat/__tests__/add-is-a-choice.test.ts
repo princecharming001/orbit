@@ -42,8 +42,7 @@ async function seedPerson(user: User, id: string, name: string): Promise<Person>
   return p;
 }
 
-const othersThan = async (...ids: string[]) =>
-  (await db.people.toArray()).filter((p) => !ids.includes(p.id));
+const othersThan = async (...ids: string[]) => (await db.people.toArray()).filter((p) => !ids.includes(p.id));
 
 describe('the tools that add people', () => {
   it('each one asks the student to approve and explains on the Approve card who would join People', () => {
