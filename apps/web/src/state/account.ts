@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { subscribeSyncStatus, syncStatusNow } from '../engine/serverSync';
+import { statusMark, subscribeSyncStatus, syncStatusNow } from '../engine/serverSync';
 import {
   type AccountUser,
   accountUser,
@@ -32,4 +32,15 @@ export function useSyncStatus(): SyncStatus | undefined {
   const [s, setS] = useState(syncStatusNow);
   useEffect(() => subscribeSyncStatus(setS), []);
   return s;
+}
+
+/**
+ * One of the status's marks (plan 35 B3): it changes when what /linkedin/status or /autopilot/status answers changed
+ * on the server, so a screen reads that route again only then. Undefined before the first status, or from a server
+ * from before the marks.
+ */
+export function useStatusMark(kind: 'linkedin' | 'autopilot'): string | undefined {
+  const [m, setM] = useState(() => statusMark(kind, syncStatusNow()));
+  useEffect(() => subscribeSyncStatus((s) => setM(s ? statusMark(kind, s) : undefined)), [kind]);
+  return m;
 }

@@ -162,7 +162,15 @@ export interface SyncStatus {
     >
   >;
   integrations: SyncIntegration[];
+  /** what the server still has queued for this account; counted only while setup runs (plan 35 B3) */
   jobs: { pending: number };
+  /**
+   * Plan 35 B3: when what /sync/pull returns, what /linkedin/status answers and what /autopilot/status answers last
+   * changed. Compared only for equality. Missing from a server from before the marks.
+   */
+  marks?: { changed: string | null; linkedin: string | null; autopilot: string | null };
+  /** setup is still running on the server (onboarding unfinished, an import going) */
+  setup?: boolean;
 }
 
 /** POST /sync/pull */

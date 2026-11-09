@@ -5,7 +5,7 @@
 import type { User } from '@orbit/core';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { Check } from 'lucide-react';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import {
   checkLinkedInAccount,
   connectLinkedInLive,
@@ -19,6 +19,7 @@ import { setWarmIntros, villageAvailable, villageOffered } from '../engine/warmI
 import { usesMockConnectors } from '../integrations/connectorsMock';
 import { subscribePrefs } from '../integrations/prefs';
 import { checkVillage, subscribeVillageHealth, villageHealth, villageRefused } from '../integrations/village';
+import { useStatusMark } from '../state/account';
 import { Button, Modal, relDate, Spinner, Switch, useToast } from '../ui';
 import { AppMark, IntegrationRow, RowStatus } from './IntegrationRow';
 
@@ -32,12 +33,18 @@ export function LinkedInLiveCard({ user }: { user: User }) {
   // the switch says what Unipile says: signed out by LinkedIn, or gone, is shown as such (the row updates itself)
   useEffect(() => {
     void checkLinkedInAccount(user).catch(() => undefined);
-    // an account's LinkedIn lives on Orbit's server: show its count and last sync, and keep them current while open
-    const mirror = () => void refreshLinkedInFromServer(user).catch(() => false);
-    mirror();
-    const t = setInterval(mirror, 30_000);
-    return () => clearInterval(t);
   }, [user.id]);
+  // an account's LinkedIn lives on Orbit's server: its count and last sync are read when the card opens, then again
+  // only when the sync status's LinkedIn mark moves (plan 35 B3), with no timer of its own
+  const mark = useStatusMark('linkedin');
+  const lastMark = useRef<{ user: string; mark: string | undefined }>(undefined);
+  useEffect(() => {
+    const prev = lastMark.current;
+    lastMark.current = { user: user.id, mark };
+    // the first status after opening (prev.mark undefined) or the same mark: what the card read is still current
+    if (prev && prev.user === user.id && (prev.mark === undefined || prev.mark === mark)) return;
+    void refreshLinkedInFromServer(user).catch(() => false);
+  }, [user.id, mark]);
   if (!status) return null;
   const connect = async () => {
     setError(undefined);

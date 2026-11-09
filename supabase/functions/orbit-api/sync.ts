@@ -1,7 +1,8 @@
 /**
  * The sync endpoints (§11.1, §11.4, §18):
  *
- *   POST /sync/status                      counts, integration states, backfill progress, pending jobs
+ *   POST /sync/status                      counts, integration states, backfill progress, pending jobs (during setup),
+ *                                          and the marks: when pulled data, LinkedIn and autopilot last changed
  *   POST /sync/pull {cursor?, tables?, limit?}
  *        → {changes: {table: rows[]}, deleted: {table: ids[]}, cursor, hasMore}
  *        cursor = base64url JSON {table: {t: last cursor time, k: last key}, _audit: last audit_log id}
@@ -29,21 +30,38 @@ export async function syncStatus(ctx: Ctx): Promise<Response> {
   return json(200, await statusFor(ctx.db, ctx.userId!));
 }
 
+/** A mark as the browser compares it: ISO time with microseconds, so two moves in one millisecond still differ. */
+const MARK_ISO = 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"';
+
+export interface StatusMarks {
+  /** anything /sync/pull returns last changed (plan 35 B3); the browser pulls only when this moved */
+  changed: string | null;
+  /** what /linkedin/status answers last changed */
+  linkedin: string | null;
+  /** what /autopilot/status answers last changed */
+  autopilot: string | null;
+}
+
+/**
+ * Plan 35 B3: one row (orbit.user_marks) instead of nine counts and a scan of every queue. The counts older browsers
+ * pull by are kept on that row and counted again only after something changed since; the queue depth is read only
+ * while setup runs (onboarding unfinished, Google's import or LinkedIn's first pass still going), the only time a
+ * screen shows it.
+ */
 export async function statusFor(db: Db, userId: string) {
-  // the three reads go out together: this answers the setup screen's poll every few seconds
-  const [[counts], accounts, pending] = await Promise.all([
-    db.sql<Record<string, number>>`
-    select
-      (select count(*) from orbit.people where user_id = ${userId}::uuid and not is_self
-         and deleted_at is null and merged_into is null)::int as people,
-      (select count(*) from orbit.organizations where user_id = ${userId}::uuid)::int as organizations,
-      (select count(*) from orbit.threads where user_id = ${userId}::uuid)::int as threads,
-      (select count(*) from orbit.messages where user_id = ${userId}::uuid)::int as messages,
-      (select count(*) from orbit.calendar_events where user_id = ${userId}::uuid)::int as events,
-      (select count(*) from orbit.ties where user_id = ${userId}::uuid)::int as ties,
-      (select count(*) from orbit.goals where user_id = ${userId}::uuid and deleted_at is null and status = 'active')::int as goals,
-      (select count(*) from orbit.chats where user_id = ${userId}::uuid and archived_at is null)::int as chats,
-      (select count(*) from orbit.drafts where user_id = ${userId}::uuid and status = 'draft')::int as drafts`,
+  const [marks, accounts, users] = await Promise.all([
+    db.sql<{
+      changed_at: string;
+      linkedin_at: string;
+      autopilot_at: string;
+      counts: Record<string, number> | null;
+      fresh: boolean;
+    }>`
+    select to_char(changed_at at time zone 'utc', ${MARK_ISO}) as changed_at,
+           to_char(linkedin_at at time zone 'utc', ${MARK_ISO}) as linkedin_at,
+           to_char(autopilot_at at time zone 'utc', ${MARK_ISO}) as autopilot_at,
+           counts, (counts is not null and counts_at >= changed_at) as fresh
+      from orbit.user_marks where user_id = ${userId}::uuid`,
     db.sql<{
       provider: string;
       status: string;
@@ -58,41 +76,102 @@ export async function statusFor(db: Db, userId: string) {
     select provider, status, email, scopes, external_account_id is not null as linked, sync_state,
            last_synced_at, last_error, watch_expires_at
       from orbit.integration_accounts where user_id = ${userId}::uuid order by provider`,
-    db.query<{ n: number }>(
-      `select (${QUEUES.map((q) => `(select count(*) from pgmq.q_${q} where message->>'userId' = $1)`).join(' + ')})::int as n`,
-      [userId],
-    ),
+    db.sql<{ onboarded: boolean }>`
+    select coalesce(onboarding->>'completed_at', '') <> '' as onboarded from orbit.users where id = ${userId}::uuid`,
   ]);
   const iso = (d: Date | null) => (d ? new Date(d).toISOString() : null);
-  return {
+  const integrations = accounts.map((a) => {
+    const bf = a.sync_state?.gmail?.backfill as Record<string, unknown> | undefined;
+    const li = a.sync_state?.linkedin as Record<string, unknown> | undefined;
+    return {
+      // LinkedIn's first full pass is still bringing connections in (a later refresh walks known people again)
+      ...(a.provider === 'linkedin'
+        ? { importing: !!li && !li.syncedAt && typeof li.stage === 'string' && li.stage !== 'done' }
+        : {}),
+      provider: a.provider,
+      status: a.status,
+      email: a.email,
+      scopes: a.scopes,
+      linked: a.linked,
+      lastSyncedAt: iso(a.last_synced_at),
+      lastError: a.last_error,
+      watchExpiresAt: iso(a.watch_expires_at),
+      backfill: bf
+        ? {
+            phase: bf.phase ?? null,
+            done: Number(bf.done ?? 0),
+            total: bf.total == null ? null : Number(bf.total),
+          }
+        : null,
+    };
+  });
+  const setup =
+    users[0]?.onboarded === false ||
+    integrations.some(
+      (i) =>
+        i.importing === true ||
+        (i.provider === 'google' &&
+          i.status === 'active' &&
+          (i.backfill?.phase === 'recent' || i.backfill?.phase === 'deep')),
+    );
+  let mark = marks[0];
+  let counts = mark?.fresh ? (mark.counts ?? {}) : undefined;
+  const [pending] = await Promise.all([
+    setup
+      ? db.query<{ n: number }>(
+          `select (${QUEUES.map((q) => `(select count(*) from pgmq.q_${q} where message->>'userId' = $1)`).join(' + ')})::int as n`,
+          [userId],
+        )
+      : Promise.resolve([{ n: 0 }]),
+    (async () => {
+      if (counts) return;
+      counts = await countsFor(db, userId);
+      // kept as of the mark just read: a change after it moves changed_at past counts_at and counts again
+      const [m] = await db.sql<{ changed_at: string; linkedin_at: string; autopilot_at: string }>`
+        insert into orbit.user_marks as m (user_id, counts, counts_at)
+        values (${userId}::uuid, ${counts}::jsonb, coalesce(${mark?.changed_at ?? null}::timestamptz, now()))
+        on conflict (user_id) do update set counts = excluded.counts, counts_at = excluded.counts_at
+        returning to_char(m.changed_at at time zone 'utc', ${MARK_ISO}) as changed_at,
+                  to_char(m.linkedin_at at time zone 'utc', ${MARK_ISO}) as linkedin_at,
+                  to_char(m.autopilot_at at time zone 'utc', ${MARK_ISO}) as autopilot_at`;
+      if (m) mark = { ...m, counts, fresh: true };
+    })(),
+  ]);
+  const out: {
+    counts: Record<string, number>;
+    integrations: typeof integrations;
+    jobs: { pending: number };
+    marks: StatusMarks;
+    setup: boolean;
+  } = {
     counts: counts ?? {},
-    integrations: accounts.map((a) => {
-      const bf = a.sync_state?.gmail?.backfill as Record<string, unknown> | undefined;
-      const li = a.sync_state?.linkedin as Record<string, unknown> | undefined;
-      return {
-        // LinkedIn's first full pass is still bringing connections in (a later refresh walks known people again)
-        ...(a.provider === 'linkedin'
-          ? { importing: !!li && !li.syncedAt && typeof li.stage === 'string' && li.stage !== 'done' }
-          : {}),
-        provider: a.provider,
-        status: a.status,
-        email: a.email,
-        scopes: a.scopes,
-        linked: a.linked,
-        lastSyncedAt: iso(a.last_synced_at),
-        lastError: a.last_error,
-        watchExpiresAt: iso(a.watch_expires_at),
-        backfill: bf
-          ? {
-              phase: bf.phase ?? null,
-              done: Number(bf.done ?? 0),
-              total: bf.total == null ? null : Number(bf.total),
-            }
-          : null,
-      };
-    }),
+    integrations,
     jobs: { pending: pending[0]?.n ?? 0 },
+    marks: {
+      changed: mark?.changed_at ?? null,
+      linkedin: mark?.linkedin_at ?? null,
+      autopilot: mark?.autopilot_at ?? null,
+    },
+    setup,
   };
+  return out;
+}
+
+/** The counts the setup screen and older browsers read; run only after something changed. */
+async function countsFor(db: Db, userId: string): Promise<Record<string, number>> {
+  const [counts] = await db.sql<Record<string, number>>`
+    select
+      (select count(*) from orbit.people where user_id = ${userId}::uuid and not is_self
+         and deleted_at is null and merged_into is null)::int as people,
+      (select count(*) from orbit.organizations where user_id = ${userId}::uuid)::int as organizations,
+      (select count(*) from orbit.threads where user_id = ${userId}::uuid)::int as threads,
+      (select count(*) from orbit.messages where user_id = ${userId}::uuid)::int as messages,
+      (select count(*) from orbit.calendar_events where user_id = ${userId}::uuid)::int as events,
+      (select count(*) from orbit.ties where user_id = ${userId}::uuid)::int as ties,
+      (select count(*) from orbit.goals where user_id = ${userId}::uuid and deleted_at is null and status = 'active')::int as goals,
+      (select count(*) from orbit.chats where user_id = ${userId}::uuid and archived_at is null)::int as chats,
+      (select count(*) from orbit.drafts where user_id = ${userId}::uuid and status = 'draft')::int as drafts`;
+  return counts ?? {};
 }
 
 // ---- pull ---------------------------------------------------------------------------------------------------------
