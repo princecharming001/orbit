@@ -3562,19 +3562,21 @@ export class OrbitScene {
       if (v.key === this.tipKey && this.tip.value(now) > 0.5 && !this.cardShown()) continue;
       const text = this.tagText(v.person);
       const hw = this.measure(text, fontPx, false) / 2 + 5;
+      // a dot near the side of the screen keeps its name: the tag slides in to stay on screen, under the dot still
+      const x = Math.min(Math.max(v.x, hw), this.w - hw);
       let y = v.y + v.pr + 5 + hh;
-      if (!free(v.x, y, hw)) {
+      if (!free(x, y, hw)) {
         y = v.y - v.pr - 5 - hh;
-        if (!free(v.x, y, hw)) continue;
+        if (!free(x, y, hw)) continue;
       }
-      boxes.push(v.x - hw, y - hh, v.x + hw, y + hh);
+      boxes.push(x - hw, y - hh, x + hw, y + hh);
       ctx.globalAlpha = 0.92 * k;
       ctx.fillStyle = '#ffffff';
-      roundRect(ctx, v.x - hw, y - hh, hw * 2, hh * 2, hh);
+      roundRect(ctx, x - hw, y - hh, hw * 2, hh * 2, hh);
       ctx.fill();
       ctx.globalAlpha = k;
       ctx.fillStyle = INK;
-      ctx.fillText(text, v.x, y + 0.5);
+      ctx.fillText(text, x, y + 0.5);
       tags.push(text);
     }
     ctx.globalAlpha = 1;
