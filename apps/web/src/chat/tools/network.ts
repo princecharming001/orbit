@@ -53,6 +53,7 @@ import {
   type AnyTool,
   clip,
   defineTool,
+  err,
   OPEN_PAUSE_UNTIL,
   ok,
   openEndedPause,
@@ -193,7 +194,7 @@ const goalFields = {
     .max(700)
     .optional()
     .describe(
-      'Only for a field Orbit has no playbook for (not banking, consulting, PE, VC, trading, tech, startups, research labs, fundraising, sales, hiring, co-founders or events): two or three plain sentences on how outreach works there, what a first message says and asks for, and what it never does. Drafts for this goal follow it.',
+      'Only for a field no playbook covers: two or three sentences on how outreach works there, which drafts follow.',
     ),
 };
 
@@ -237,13 +238,41 @@ function goalPatch(i: GoalFields, existing?: Goal): Partial<GoalInput> {
 
 // ---------- goals ----------
 
+/** Changes one goal: the shared body of set_goal with a goalId and the router's update_goal. */
+async function changeGoal(
+  ctx: ToolContext,
+  input: GoalFields & { goalId: string; kind?: Goal['kind']; status?: 'active' | 'paused' },
+): Promise<ResultEnvelope> {
+  const existing = await db.userGoals.get(input.goalId);
+  if (!existing || existing.userId !== ctx.user.id || existing.deletedAt)
+    throw new Error('Orbit has no goal with that id. List the goals first.');
+  const g = await saveGoal(ctx.user, {
+    id: existing.id,
+    kind: input.kind ?? existing.kind,
+    status: input.status,
+    ...goalPatch(input, existing),
+  });
+  return list(
+    'Goal updated',
+    [goalItem(g)],
+    { goal: goalRef(g) },
+    `Updated the goal: ${goalLine(g)}.`,
+    '/settings/goals',
+  );
+}
+
 export const setGoalTool = defineTool({
   name: 'set_goal',
   kind: 'write',
   description:
-    'Call this when the student asks to track a goal, or says yes after you asked "Want me to track this as a goal?". A goal is what they are working toward: recruiting, fundraising, sales, hiring, advice, cofounder, community or collaboration, with targets (companies, roles, places, people) and criteria. Never call it for a goal you only inferred until the student agreed; then pass their own words as evidence. At most five goals are active.',
+    'Call this when the student asks to track a goal, or says yes after you asked "Want me to track this as a goal?" (pass their words as evidence), and with goalId (from list_goals) when they ask to change one: its name, targets, deadline or priority, or to pause or restart it. Lists you pass replace the old ones, so include what should stay. Never track a goal you only inferred until the student agreed. At most five goals are active.',
   input: z.object({
-    kind: z.enum(KINDS).describe('What the goal is for.'),
+    goalId: z.string().optional().describe('The goal to change (from list_goals); leave out for a new goal.'),
+    kind: z.enum(KINDS).optional().describe('What the goal is for. Needed for a new goal.'),
+    status: z
+      .enum(['active', 'paused'])
+      .optional()
+      .describe('With goalId: pause a goal, or make it active again.'),
     ...goalFields,
     evidence: z
       .string()
@@ -251,9 +280,14 @@ export const setGoalTool = defineTool({
       .optional()
       .describe("For a goal you proposed: the student's own words it came from."),
   }),
-  capabilities: ['goal_set'],
+  capabilities: ['goal_set', 'goal_update'],
   progress: 'Saving your goal',
   async execute(input, ctx) {
+    if (input.goalId) return changeGoal(ctx, { ...input, goalId: input.goalId });
+    if (!input.kind)
+      return err(
+        'Say what the goal is for (recruiting, fundraising, sales, hiring, advice, cofounder, community or collaboration).',
+      );
     const g = await saveGoal(ctx.user, {
       kind: input.kind,
       ...goalPatch(input),
@@ -304,40 +338,21 @@ export const listGoalsTool = defineTool({
   toModel,
 });
 
+/** The router's name for changing a goal; the model uses set_goal with a goalId (plan 35 A1). */
 export const updateGoalTool = defineTool({
   name: 'update_goal',
   kind: 'write',
   description:
-    'Call this when the student asks to change a goal: its name, targets, deadline, priority, or to pause or restart it (goalId from list_goals). Lists you pass replace the old ones, so include what should stay.',
+    'Call this when the student asks to change a goal from the router (the model uses set_goal with a goalId): its name, targets, deadline or priority, or to pause or restart it. Lists replace the old ones.',
   input: z.object({
     goalId: z.string().describe('The goal to change (from list_goals).'),
-    kind: z
-      .enum(KINDS)
-      .optional()
-      .describe('A different kind, if the student says it is really about something else.'),
+    kind: z.enum(KINDS).optional().describe('A different kind, if the goal is really about something else.'),
     status: z.enum(['active', 'paused']).optional().describe('Pause a goal, or make it active again.'),
     ...goalFields,
   }),
   capabilities: ['goal_update'],
   progress: 'Updating your goal',
-  async execute(input, ctx) {
-    const existing = await db.userGoals.get(input.goalId);
-    if (!existing || existing.userId !== ctx.user.id || existing.deletedAt)
-      throw new Error('Orbit has no goal with that id. List the goals first.');
-    const g = await saveGoal(ctx.user, {
-      id: existing.id,
-      kind: input.kind ?? existing.kind,
-      status: input.status,
-      ...goalPatch(input, existing),
-    });
-    return list(
-      'Goal updated',
-      [goalItem(g)],
-      { goal: goalRef(g) },
-      `Updated the goal: ${goalLine(g)}.`,
-      '/settings/goals',
-    );
-  },
+  execute: (input, ctx) => changeGoal(ctx, input),
   toModel,
 });
 
@@ -638,7 +653,7 @@ export const findPeopleTool = defineTool({
   name: 'find_people',
   kind: 'write',
   description:
-    'Call this when the student asks to find or source new people beyond their network for a purpose: investors, customers, candidates, mentors, alumni, a co-founder, research collaborators, or professors and researchers at a school ("source professors I can reach out to for biomed research at Berkeley"). Give the purpose (a goal kind; professors and labs are collaboration), what they are looking for, and the school or organization and the topic when the student names them: with those, Orbit reads that place\'s faculty or team pages and comes back with names, titles, an email when the page gives one, and what each person works on, the context a first message is written from. With an Orbit account it also searches LinkedIn, Apollo and Semantic Scholar and ranks everyone by fit, how reachable they are and how likely to reply, with reasons. Without one, it searches LinkedIn from the student\'s own account when LinkedIn is connected live. Also call it, without being asked, when search_network found nobody for a "who should I reach out to" ask, and when the student wants people outside LinkedIn or people to email. Everyone comes back ranked warmest first in five tiers: 1 already talked with, 2 one hop away (a close contact at the same place: suggest asking them for an intro), 3 shared background (school, a past company, hometown), 4 open to students, 5 cold but relevant. Each has an email when one could be found, marked as verified (their own LinkedIn contact email, or an address a verifier confirmed), on their page, from the company\'s usual address pattern, or a guess that is not confirmed (say so before the student sends to a guess). Show the top few with the tier reason, what they work on and the email. Finding people never adds them: ask whether to add any ("Want me to add them?") and call add_sourced only once the student says which; once added, create_draft writes to them.',
+    'Call this when the student asks to find or source new people beyond their network for a purpose: investors, customers, candidates, mentors, alumni, a co-founder, research collaborators, or professors at a school ("source professors for biomed research at Berkeley"). Give the purpose (professors and labs are collaboration), what they want, and the school or organization and topic when named: Orbit reads that place\'s faculty or team pages for names, titles, emails and what each person works on. With an Orbit account it also searches LinkedIn, Apollo and Semantic Scholar and ranks by fit, reach and likely reply; without one, LinkedIn from the student\'s own account when connected live. Everyone comes back warmest first in five tiers (1 already talked with, 2 one hop away, 3 shared background, 4 open to students, 5 cold but relevant), each email marked verified, on their page, the company pattern, or an unconfirmed guess. Finding people never adds them.',
   input: z.object({
     purpose: z.enum(KINDS).describe('What the people are for.'),
     query: z

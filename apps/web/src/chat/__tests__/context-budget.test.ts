@@ -12,7 +12,7 @@ import { MODEL } from '../../integrations/anthropic';
 import { clearPrefs, writePrefs } from '../../integrations/prefs';
 import { createChatEngine } from '../agent';
 import { makeChatClient, setChatClientFactoryForTests } from '../agent/client';
-import { buildRunnerTools, projectEnvelope } from '../agent/loop';
+import { buildRunnerTools, CORE_TOOLS, projectEnvelope } from '../agent/loop';
 import { buildSnapshot, estimateTokens } from '../agent/snapshot';
 import { ChatStore } from '../agent/store';
 import { stableSystemText } from '../agent/system';
@@ -109,6 +109,29 @@ describe('the context of one turn, demo account', () => {
     expect(system).toBeGreaterThan(500);
     expect(toolList).toBeGreaterThan(1000);
   }, 120_000);
+});
+
+describe('the tools loaded up front (plan 35 A1)', () => {
+  it('keeps the loaded tool list under 30,000 characters and defers the rest to tool search', () => {
+    const all = buildRunnerTools(registry, {
+      onRun: async () => ({ kind: 'text', data: {}, summary: '' }),
+    }).map((t) => {
+      const { run: _run, parse: _parse, ...rest } = t as unknown as Record<string, unknown>;
+      return rest;
+    });
+    const loaded = all.filter((t) => !t.defer_loading);
+    const deferred = all.filter((t) => t.defer_loading);
+    const loadedChars = JSON.stringify(loaded).length;
+    note('tools sent (all)', all.length);
+    note('tools loaded up front', loaded.length);
+    note('tools deferred', deferred.length);
+    note('loaded tool list (chars)', loadedChars);
+    note('whole tool list (chars)', JSON.stringify(all).length);
+    expect(loaded.map((t) => t.name).sort()).toEqual([...CORE_TOOLS].sort());
+    expect(loadedChars).toBeLessThan(30_000);
+    expect(deferred.length).toBeGreaterThanOrEqual(80);
+    expect(deferred.every((t) => t.cache_control === undefined)).toBe(true);
+  });
 });
 
 describe.skipIf(!KEY)('live: cache reads across three turns on the demo account', () => {

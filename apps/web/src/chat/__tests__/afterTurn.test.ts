@@ -12,10 +12,12 @@ import { leaveFakeApi, signInToFakeApi } from '../../test/account';
 import type { FakeOrbitApi } from '../../test/fakeOrbitApi';
 import { createChatEngine } from '../agent';
 import {
+  GOAL_INFER_EVERY_MS,
   lastTurns,
   mentionsPlans,
   offeredGoal,
   resetGoalOffersForTests,
+  takeGoalInfer,
   textTurns,
   trackMessage,
   worthRemembering,
@@ -122,6 +124,19 @@ describe('turns for the server', () => {
     expect(trackMessage({ ...PRE_SEED, kind: 'community', title: 'Grow the robotics group' })).toBe(
       'Track a goal: Grow the robotics group (community)',
     );
+  });
+
+  it('asks /goals/infer only for a stated plan, and at most once per conversation in ten minutes (plan 35 A4)', () => {
+    resetGoalOffersForTests();
+    const plan = "I'm applying to PM internships this fall, mostly at fintech startups";
+    // a plan word in a question is not a statement: no call
+    expect(takeGoalInfer('c1', 'Who should I email about PM internships today?', 0)).toBe(false);
+    expect(takeGoalInfer('c1', plan, 0)).toBe(true);
+    expect(takeGoalInfer('c1', 'We want to raise a seed round next spring, I think', 60_000)).toBe(false);
+    expect(takeGoalInfer('c2', plan, 60_000)).toBe(true);
+    expect(takeGoalInfer('c1', plan, GOAL_INFER_EVERY_MS - 1)).toBe(false);
+    expect(takeGoalInfer('c1', plan, GOAL_INFER_EVERY_MS)).toBe(true);
+    resetGoalOffersForTests();
   });
 });
 

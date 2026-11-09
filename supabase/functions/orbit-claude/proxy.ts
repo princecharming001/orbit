@@ -5,8 +5,8 @@
  *
  * - only POST /v1/messages, from Orbit's own origins
  * - only Orbit's chat model (and its refusal fallback), only Orbit's betas, max_tokens capped
- * - only client tools plus Claude's own web search (the one server tool the chat uses, at most five searches a
- *   turn); no other server tools, MCP servers or containers
+ * - only client tools (deferred or not) plus Claude's own web search (at most five searches a request) and the BM25
+ *   tool search that loads deferred tools; no other server tools, MCP servers or containers
  * - a body size cap, and request counters per visitor (hashed IP) per minute and per day, plus a global daily cap
  * - a dollar cap per user per day (ORBIT_USER_CAP_USD, $3 by default, the UTC day): each answer's tokens are priced as
  *   they stream past and added to the user's total for the day; once it reaches the cap the proxy answers 429
@@ -201,6 +201,16 @@ function apiError(
 export const WEB_SEARCH = { type: 'web_search_20260209', name: 'web_search', maxUses: 5 } as const;
 const WEB_SEARCH_KEYS = new Set(['type', 'name', 'max_uses', 'cache_control']);
 
+/** Claude's BM25 tool search: finds the deferred client tools of the same request, costs nothing of its own. */
+export const TOOL_SEARCH = { type: 'tool_search_tool_bm25_20251119', name: 'tool_search_tool_bm25' } as const;
+const TOOL_SEARCH_KEYS = new Set(['type', 'name']);
+
+function rejectToolSearch(t: Record<string, unknown>): string | undefined {
+  if (t.name !== TOOL_SEARCH.name) return 'Server tools are not available here.';
+  for (const k of Object.keys(t)) if (!TOOL_SEARCH_KEYS.has(k)) return `${k} is not available here.`;
+  return undefined;
+}
+
 function rejectWebSearch(t: Record<string, unknown>): string | undefined {
   if (t.name !== WEB_SEARCH.name) return 'Server tools are not available here.';
   if (typeof t.max_uses !== 'number' || t.max_uses < 1 || t.max_uses > WEB_SEARCH.maxUses)
@@ -233,6 +243,9 @@ export function rejectBody(body: unknown): string | undefined {
       const type = t && typeof t === 'object' ? (t as { type?: unknown }).type : undefined;
       if (type === WEB_SEARCH.type) {
         const why = rejectWebSearch(t as Record<string, unknown>);
+        if (why) return why;
+      } else if (type === TOOL_SEARCH.type) {
+        const why = rejectToolSearch(t as Record<string, unknown>);
         if (why) return why;
       } else if (type !== undefined && type !== 'custom') return 'Server tools are not available here.';
     }

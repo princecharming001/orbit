@@ -247,6 +247,28 @@ describe('Orbit Claude proxy', () => {
       expect(rejectBody({ ...chatParams, tools: [bad] }), JSON.stringify(bad)).toBeTruthy();
   });
 
+  it('lets the BM25 tool search and deferred client tools through, and still refuses every other server tool (plan 35 A1)', () => {
+    const search = { type: 'tool_search_tool_bm25_20251119', name: 'tool_search_tool_bm25' };
+    const deferred = {
+      name: 'get_settings',
+      description: 'Read the settings.',
+      input_schema: { type: 'object', properties: {} },
+      defer_loading: true,
+    };
+    const web = { type: 'web_search_20260209', name: 'web_search', max_uses: 2 };
+    expect(rejectBody({ ...chatParams, tools: [deferred, search, web] })).toBeUndefined();
+    for (const bad of [
+      { ...search, name: 'other' },
+      { ...search, defer_loading: true },
+      { ...search, allowed_callers: ['code_execution_20260120'] },
+      { type: 'tool_search_tool_regex_20251119', name: 'tool_search_tool_regex' },
+      { type: 'memory_20250818', name: 'memory' },
+      { type: 'web_fetch_20260309', name: 'web_fetch' },
+      { type: 'mcp_toolset', mcp_server_name: 'x' },
+    ])
+      expect(rejectBody({ ...chatParams, tools: [deferred, bad] }), JSON.stringify(bad)).toBeTruthy();
+  });
+
   it('turns a used-up day into a rate limit error the app recognises, without retrying', async () => {
     const { client, upstream } = harness({
       take: async (bs) => ({ allowed: false, over: bs[1]!.key }),

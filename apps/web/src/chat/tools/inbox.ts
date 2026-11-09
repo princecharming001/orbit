@@ -71,7 +71,14 @@ export function replyRows(replies: ReplyItem[]): MessageRow[] {
   ).map(({ personKey: _k, ...r }) => r);
 }
 
+/** Conversations list_inbox reads (plan 35 A3: was 30); the Inbox page shows the rest. */
+export const INBOX_ROWS = 15;
+
 /** The replies card: one row a person, newest first, with the face and what their reply meant. */
+/** How to word an answer about replies (plan 35 A2), sent with the result instead of in the system prompt. */
+export const REPLIES_HOW_TO_ANSWER =
+  'The card lists every reply, so answer now, never with a menu of options and never a heading, a list or a repeat of the card: say how many replied and name each person once, grouped by what happened (need you, picking a time, answered, nothing to do, closed), one short line a group, first names only, under 60 words. Someone who declined or asked to stop is closed: never suggest writing to them.';
+
 export function repliesEnvelope(ctx: ToolContext, replies: ReplyItem[]): ResultEnvelope {
   const rows = replyRows(replies).slice(0, 25);
   // the model sees the same rows (one a person), so it never names someone twice
@@ -99,6 +106,7 @@ export function repliesEnvelope(ctx: ToolContext, replies: ReplyItem[]): ResultE
         };
       }),
       note: 'Replies to the student’s own outreach only. Messages out of the blue are in list_inbox. Draft an answer only when the student asks (draft_reply).',
+      howToAnswer: REPLIES_HOW_TO_ANSWER,
     },
     rows.length
       ? `${plural(rows.length, 'person', 'people')} replied to your outreach in the last 30 days.`
@@ -142,7 +150,7 @@ export const listInboxTool = defineTool({
   async execute(input, ctx) {
     if (!isServerUser(ctx.user.id)) return needsAccount('Reading your inbox');
     const days = input.days ?? 7;
-    const r = await listInbox(ctx.user, { ...input, days, limit: 30 });
+    const r = await listInbox(ctx.user, { ...input, days, limit: INBOX_ROWS });
     if (!r.ok) throw new Error(r.message);
     const rows = inboxRows(r.items);
     const notes = [EMAIL_NOTE[r.email], LINKEDIN_NOTE[r.linkedin]].filter((x): x is string => !!x);

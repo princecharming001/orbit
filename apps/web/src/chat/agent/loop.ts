@@ -10,11 +10,13 @@ import {
   describeLlmFailure,
   LlmError,
   makeWrap,
+  neutralizeTags,
   overDailyCap,
   recordFailure,
   recordTokens,
   reserveRequest,
   toLlmError,
+  type Wrap,
 } from '../../integrations/anthropic';
 import type { ChatConversation, ResultEnvelope, ToolContext, ToolSpec, TurnEvent } from '../types';
 import { recordToolAction } from './actions';
@@ -52,7 +54,7 @@ export const ITERATION_HEADER = 'x-orbit-iterations';
 export const FALLBACK_MODELS = [{ model: 'claude-opus-5' }];
 /** Words before the pills that are a clause of intent, not an answer: what follows them is then the reply. */
 const CLAUSE_WORDS = 9;
-/** Consecutive unparseable-tool-JSON failures of one turn before giving up. */
+/** Unparseable-tool-JSON failures one turn may re-issue, counted over the whole turn (never reset by a good stream). */
 const MAX_PARSE_RETRIES = 2;
 
 export const COMPACTION_INSTRUCTIONS =
@@ -81,16 +83,65 @@ export class TruncatedToolInput extends Error {
   }
 }
 
-/** What the model reads as the tool_result: the envelope with `data` projected by the tool. */
-export function projectEnvelope(spec: ToolSpec | undefined, env: ResultEnvelope): string {
+/**
+ * The results whose data holds third-party text (an email, a note, a LinkedIn field). In the chat loop a tool's own
+ * `wrap` only neutralizes such text and marks the result here; the loop then wraps the whole projected data once,
+ * instead of every field in its own untrusted element with the nonce (plan 35 A3: list_inbox alone had 90).
+ */
+const UNTRUSTED_RESULTS = new WeakSet<ResultEnvelope>();
+
+/** A `wrap` for one tool call in the loop: neutralizes the text and remembers that the result needs the wrapper. */
+export function deferredWrap(): { wrap: Wrap; used: () => boolean } {
+  let used = false;
+  return {
+    wrap: (_source, text) => {
+      used = true;
+      return neutralizeTags(text);
+    },
+    used: () => used,
+  };
+}
+
+/** Marks a result as holding third-party text, so its data goes out inside one untrusted element. */
+export function markUntrusted(env: ResultEnvelope): void {
+  UNTRUSTED_RESULTS.add(env);
+}
+
+/**
+ * What the model reads as the tool_result: the envelope with `data` projected by the tool. When the data holds
+ * third-party text (see markUntrusted) and the conversation's wrap is given, the envelope's own fields stay JSON on
+ * the first line and the data follows inside one untrusted element.
+ */
+export function projectEnvelope(spec: ToolSpec | undefined, env: ResultEnvelope, wrapAll?: Wrap): string {
+  const data = spec?.toModel ? spec.toModel(env.data as never) : env.data;
+  const head = {
+    kind: env.kind,
+    summary: env.summary,
+    href: env.href,
+    confirmationId: env.confirmationId,
+    continues: env.continues,
+  };
+  if (wrapAll && UNTRUSTED_RESULTS.has(env) && data !== undefined)
+    return `${JSON.stringify(head)}\n${wrapAll(spec?.name ?? 'tool', JSON.stringify(data))}`;
   return JSON.stringify({
     kind: env.kind,
     summary: env.summary,
-    data: spec?.toModel ? spec.toModel(env.data as never) : env.data,
+    data,
     href: env.href,
     confirmationId: env.confirmationId,
     continues: env.continues,
   });
+}
+
+/** Reads a tool_result back (tests and tools that replay one): plain JSON, or the head line plus the wrapped data. */
+// biome-ignore lint/suspicious/noExplicitAny: like JSON.parse, the shape is the tool's own
+export function parseToolResult(text: string): any {
+  const nl = text.indexOf('\n<untrusted_');
+  if (nl < 0) return JSON.parse(text);
+  const head = JSON.parse(text.slice(0, nl)) as Record<string, unknown>;
+  const body = text.slice(nl + 1);
+  const inner = body.slice(body.indexOf('>\n') + 2, body.lastIndexOf('\n</untrusted_'));
+  return { ...head, data: JSON.parse(inner.replace(/&lt;(\s*\/?\s*untrusted)/gi, '<$1')) };
 }
 
 function cancelledContent(reason: string): string {
@@ -173,11 +224,18 @@ interface ToolHooks {
   signal?: AbortSignal;
   /** a line for the model appended to every tool result, such as the spent web search budget */
   note?: () => string | undefined;
+  /** the conversation's wrap, for results that hold third-party text (projectEnvelope) */
+  wrap?: Wrap;
 }
 
 /** What the model reads back from a tool: the projected envelope, then the turn's note when there is one. */
-export function toolResultText(spec: ToolSpec | undefined, env: ResultEnvelope, note?: string): string {
-  const content = projectEnvelope(spec, env);
+export function toolResultText(
+  spec: ToolSpec | undefined,
+  env: ResultEnvelope,
+  note?: string,
+  wrapAll?: Wrap,
+): string {
+  const content = projectEnvelope(spec, env, wrapAll);
   return note ? `${content}\n${note}` : content;
 }
 
@@ -186,34 +244,177 @@ export const WEB_BUDGET_NOTE =
   '[Orbit] The web searches for this turn are used up. Answer from what you have found; do not search again.';
 
 /**
- * The runner tools over the registry: `betaZodTool` (the runner validates the input against the Zod schema before
- * `run`), `eager_input_streaming` so long inputs stream, `strict` on the risky tools so their input is exact. An error envelope is
- * thrown as a `ToolError` so the runner marks the result `is_error` and the model knows to recover.
+ * One switch for tool search (plan 35 A1): on, only CORE_TOOLS load up front and the rest are found through Claude's
+ * BM25 tool search when a turn needs them (still sent in full, so the API can expand them). Off, every tool loads as
+ * before. Flip this one line to go back.
  */
-/** The API accepts at most this many strict tools in one request. */
-export const MAX_STRICT_TOOLS = 20;
+export const CHAT_TOOL_SEARCH = true;
+
+/** The server tool that finds deferred tools by a natural-language query (docs: tool-search-tool). */
+export const TOOL_SEARCH_TOOL = {
+  type: 'tool_search_tool_bm25_20251119',
+  name: 'tool_search_tool_bm25',
+} as const satisfies Anthropic.Beta.Messages.BetaToolSearchToolBm25_20251119;
 
 /**
- * Which tools are strict. The API caps strict tools at twenty, so strict goes where an exact input matters most: the
- * risky tools, whose input the Approve token is bound to. Every tool's input is still validated against its full
- * Zod schema before it runs, strict or not.
+ * Tools the model never sees. The admin and legacy ones are reached only from Settings, the "+" menu, the router and
+ * chips; update_goal is set_goal with a goalId for the model; search_network_spec is the router's own form of
+ * search_network (a compiled spec). All of them still run through `execute()`.
  */
-export function strictToolNames(specs: ToolSpec[]): Set<string> {
-  return new Set(
-    specs
-      .filter((s) => s.kind === 'risky')
-      .map((s) => s.name)
-      .slice(0, MAX_STRICT_TOOLS),
-  );
+export const MODEL_HIDDEN_TOOLS: ReadonlySet<string> = new Set([
+  'load_demo',
+  'leave_demo',
+  'delete_all_data',
+  'export_data',
+  'set_claude_key',
+  'set_llm_feature',
+  'disconnect_google',
+  'disconnect_linkedin',
+  'process_outbox',
+  'set_autonomy',
+  'update_goal',
+  'search_network_spec',
+]);
+
+/**
+ * The tools loaded up front when tool search is on: what most turns use (the day, people, the network, drafts,
+ * autopilot, memory, the playbook) and the two that close a turn. Everything else is one search away.
+ */
+export const CORE_TOOLS: ReadonlySet<string> = new Set([
+  'add_person',
+  'autopilot_status',
+  'create_draft',
+  'find_people',
+  'find_routes',
+  'get_person',
+  'get_today_brief',
+  'list_drafts',
+  'list_inbox',
+  'list_pipeline',
+  'lookup_playbook',
+  'offer_choices',
+  'open_page',
+  'remember',
+  'search_network',
+  'search_people',
+  'send_draft',
+  'set_goal',
+  'show_setup',
+  'update_draft_body',
+]);
+
+/**
+ * The API's limits on strict tools in one request, deferred ones included (the grammar is built from the whole list):
+ * twenty strict tools, 24 optional parameters and 16 union-typed parameters across all their schemas.
+ */
+export const STRICT_LIMITS = { tools: 20, optional: 24, unions: 16 } as const;
+/** Risky tools that are strict before any other: the input the student approves is exactly what runs. */
+export const STRICT_FIRST = [
+  'send_draft',
+  'schedule_sends',
+  'undo_send',
+  'update_limits',
+  'approve_batch',
+  'set_autopilot_mode',
+];
+/** Kept for callers that read the old name. */
+export const MAX_STRICT_TOOLS = STRICT_LIMITS.tools;
+
+type JsonSchema = Record<string, unknown>;
+
+/** Optional and union-typed parameters at every depth of a schema, as the strict limits count them. */
+export function schemaCost(schema: unknown): { optional: number; unions: number } {
+  let optional = 0;
+  let unions = 0;
+  const walk = (node: unknown) => {
+    if (!node || typeof node !== 'object') return;
+    if (Array.isArray(node)) return node.forEach(walk);
+    const n = node as JsonSchema;
+    const props = n.properties as Record<string, JsonSchema> | undefined;
+    if (props && typeof props === 'object') {
+      const required = new Set((n.required as string[] | undefined) ?? []);
+      for (const [k, v] of Object.entries(props)) {
+        if (!required.has(k)) optional++;
+        if (v && (Array.isArray(v.type) || Array.isArray(v.anyOf))) unions++;
+      }
+    }
+    for (const [k, v] of Object.entries(n)) if (k !== 'description' && k !== 'enum') walk(v);
+  };
+  walk(schema);
+  return { optional, unions };
 }
 
+/**
+ * Which tools are strict: the risky tools, whose input the Approve token is bound to, STRICT_FIRST first and then the
+ * cheapest, for as long as the API's limits allow. Every tool's input is still validated against its full Zod schema
+ * before it runs, strict or not.
+ */
+export function strictToolNames(specs: ToolSpec[], schemaOf: (spec: ToolSpec) => unknown): Set<string> {
+  const risky = specs.filter((s) => s.kind === 'risky');
+  const rank = (s: ToolSpec) => {
+    const i = STRICT_FIRST.indexOf(s.name);
+    return i >= 0 ? i : STRICT_FIRST.length;
+  };
+  const costs = new Map(risky.map((s) => [s.name, schemaCost(schemaOf(s))]));
+  const ordered = [...risky].sort(
+    (a, b) =>
+      rank(a) - rank(b) ||
+      costs.get(a.name)!.optional - costs.get(b.name)!.optional ||
+      (a.name < b.name ? -1 : 1),
+  );
+  const out = new Set<string>();
+  let optional = 0;
+  let unions = 0;
+  for (const s of ordered) {
+    const c = costs.get(s.name)!;
+    if (out.size >= STRICT_LIMITS.tools) break;
+    if (optional + c.optional > STRICT_LIMITS.optional || unions + c.unions > STRICT_LIMITS.unions) continue;
+    out.add(s.name);
+    optional += c.optional;
+    unions += c.unions;
+  }
+  return out;
+}
+
+const SAFE_MAX = Number.MAX_SAFE_INTEGER;
+
+/**
+ * The input schema without what says nothing: Zod's `$schema` line and the safe-integer bounds it puts on every
+ * `.int()` (minimum -2^53+1, maximum 2^53-1). Real bounds and enums stay.
+ */
+export function compactSchema<S extends object>(schema: S): S {
+  const clean = (node: unknown): unknown => {
+    if (!node || typeof node !== 'object') return node;
+    if (Array.isArray(node)) return node.map(clean);
+    const out: JsonSchema = {};
+    for (const [k, v] of Object.entries(node as JsonSchema)) {
+      if (k === '$schema') continue;
+      if (k === 'minimum' && v === -SAFE_MAX) continue;
+      if (k === 'maximum' && v === SAFE_MAX) continue;
+      out[k] = k === 'enum' || k === 'required' ? v : clean(v);
+    }
+    return out;
+  };
+  return clean(schema) as S;
+}
+
+/** Tools whose input can run long (a message, a goal, pills): their input streams as it is written. */
+const EAGER = (spec: ToolSpec) => spec.kind !== 'read' || spec.name === 'offer_choices';
+
+/**
+ * The runner tools over the registry: `betaZodTool` (the runner validates the input against the Zod schema before
+ * `run`), `eager_input_streaming` on the tools whose input can run long, `strict` on the risky tools that fit the API's limits so their
+ * input is exact, and `defer_loading` on every tool outside CORE_TOOLS when tool search is on. An error envelope is
+ * thrown as a `ToolError` so the runner marks the result `is_error` and the model knows to recover.
+ */
 export function buildRunnerTools(
   registry: ReadonlyMap<string, ToolSpec>,
   hooks: ToolHooks,
+  opts: { toolSearch?: boolean } = {},
 ): BetaRunnableTool[] {
-  const specs = sortedSpecs(registry).filter(modelCallable);
-  const strict = strictToolNames(specs);
-  const built = specs.map((spec) => {
+  const search = opts.toolSearch ?? CHAT_TOOL_SEARCH;
+  const specs = sortedSpecs(registry).filter((s) => !MODEL_HIDDEN_TOOLS.has(s.name) && modelCallable(s));
+  const made = specs.map((spec) => {
     const tool = betaZodTool({
       name: spec.name,
       description: spec.description,
@@ -221,31 +422,43 @@ export function buildRunnerTools(
       run: async (input, context) => {
         const id = context?.toolUse.id ?? newId('toolu');
         const env = await hooks.onRun(id, spec, input);
-        const content = toolResultText(spec, env, hooks.note?.());
+        const content = toolResultText(spec, env, hooks.note?.(), hooks.wrap);
         if (env.kind === 'error') throw new ToolError(content);
         return content;
       },
     });
-    return {
-      ...tool,
-      input_schema: strictSchema(
-        (tool as { input_schema: Anthropic.Beta.BetaTool.InputSchema }).input_schema,
-      ),
-      eager_input_streaming: true,
-      strict: strict.has(spec.name),
-    };
+    const schema = compactSchema(
+      (tool as { input_schema: Anthropic.Beta.BetaTool.InputSchema }).input_schema,
+    );
+    return { spec, tool, schema };
   });
-  // a cache breakpoint after the last tool as well as on the frozen system block: both are the same for every
-  // conversation of every student, so one warm entry serves them all; the conversation's own lines come after
-  const last = built.at(-1);
-  if (last) built[built.length - 1] = { ...last, cache_control: { type: 'ephemeral' } };
+  const bySpec = new Map(made.map((m) => [m.spec.name, m.schema]));
+  const strict = strictToolNames(specs, (s) => strictSchema(bySpec.get(s.name)!));
+  const built: BetaRunnableTool[] = made.map(({ spec, tool, schema }) => ({
+    ...tool,
+    input_schema: strict.has(spec.name) ? strictSchema(schema) : schema,
+    ...(EAGER(spec) ? { eager_input_streaming: true } : {}),
+    ...(strict.has(spec.name) ? { strict: true } : {}),
+    ...(search && !CORE_TOOLS.has(spec.name) ? { defer_loading: true } : {}),
+  }));
+  // a cache breakpoint after the last loaded tool as well as on the frozen system block: both are the same for every
+  // conversation of every student, so one warm entry serves them all (a deferred tool cannot carry one)
+  for (let i = built.length - 1; i >= 0; i--)
+    if (!built[i]!.defer_loading) {
+      built[i] = { ...built[i]!, cache_control: { type: 'ephemeral' } };
+      break;
+    }
   return built;
 }
 
-/** The client tools then web search, the cache breakpoint moved onto the last one so the whole list stays cached. */
+/**
+ * The client tools, the tool search tool when any are deferred, then web search, the cache breakpoint moved onto the
+ * last one so the whole loaded list stays cached.
+ */
 export function withWebSearch(tools: BetaRunnableTool[]): BetaToolRunnerParams['tools'] {
   const plain = tools.map(({ cache_control: _c, ...t }) => t as BetaRunnableTool);
-  return [...plain, { ...WEB_SEARCH_TOOL, cache_control: { type: 'ephemeral' } }];
+  const search = plain.some((t) => t.defer_loading) ? [TOOL_SEARCH_TOOL] : [];
+  return [...plain, ...search, { ...WEB_SEARCH_TOOL, cache_control: { type: 'ephemeral' } }];
 }
 
 /**
@@ -387,6 +600,7 @@ export async function runTurn(
   const tools = buildRunnerTools(registry, {
     signal,
     note: budgetNote,
+    wrap,
     onRun: async (toolUseId, spec, input) => {
       const cancelled = (reason: string): ResultEnvelope => ({
         kind: 'error',
@@ -414,17 +628,20 @@ export async function runTurn(
             'Not shown yet: the answer comes first. Write the answer from the other results now, in your own words, then call this on its own as the last thing. Never mention buttons or options in your words.',
         };
       else {
+        // third-party text is neutralized field by field and the result wrapped once (projectEnvelope)
+        const once = deferredWrap();
         try {
           env = await deps.execute(spec.name, input, {
             user,
             now: clock(),
             conversationId: conversation.id,
             nonce,
-            wrap,
+            wrap: once.wrap,
             toolUseId,
             signal,
             caller: 'llm',
           });
+          if (once.used()) markUntrusted(env);
         } catch (e) {
           env = signal?.aborted ? cancelled('user stopped') : thrownEnvelope(e);
         }
@@ -440,7 +657,7 @@ export async function runTurn(
         now: clock(),
       });
       results.set(toolUseId, {
-        content: toolResultText(spec, env, budgetNote()),
+        content: toolResultText(spec, env, budgetNote(), wrap),
         isError: env.kind === 'error',
       });
       // the pills close the turn only when they were the whole round: next to a read tool, the answer is still to come
@@ -568,7 +785,6 @@ export async function runTurn(
         await flushResults();
         const message = await stream.finalMessage();
         gate.flush();
-        attempt = 0;
         recordTokens(message.usage);
         webSearches += message.usage.server_tool_use?.web_search_requests ?? 0;
         // the next request the runner sends is the next of the turn
@@ -674,13 +890,18 @@ export async function runTurn(
 /** The tools that end a turn: words come before them, and a line after them would read as a doubled reply. */
 const CLOSING_TOOLS = new Set(['offer_choices', 'show_setup']);
 
-const SPEAK_UP =
+export const SPEAK_UP =
   "[Orbit] Your reply had no answer in words, only a lookup, cards or buttons. Answer the student's last message now in one to three plain, warm sentences from what the tools and searches returned, naming a source in words when it came from the web. Do not call any tools, and do not repeat what a card already lists.";
+
+const NOT_RUN = JSON.stringify({ kind: 'error', summary: 'Not run: answer in words now.' });
 
 /**
  * A turn must never end on cards alone: the prompt asks for words, and this is the backstop when the model still
- * gives none. One more request over the same params with tools off; its text streams as the end of this turn, and
- * the nudge and the answer are stored so the history replays exactly. Best effort: a failure leaves the turn as it was.
+ * gives none. One more request over the same params, the nudge appended and nothing else changed (the same tools and
+ * tool_choice, so the cached history is read, not written again; plan 35 A3), stopping after that one request. The
+ * nudge says not to call tools; a tool the model calls anyway is never run, and is answered "not run" so the stored
+ * history stays valid. Its text streams as the end of this turn, and the nudge and the answer are stored so the
+ * history replays exactly. Best effort: a failure leaves the turn as it was.
  */
 async function speakUp(
   deps: TurnDeps,
@@ -704,14 +925,19 @@ async function speakUp(
       role: last?.role === 'assistant' ? 'user' : 'system',
       content: [{ type: 'text', text: SPEAK_UP }],
     };
+    // the same tool definitions (what is sent is byte-identical); only what runs locally is swapped for "not run"
+    const tools = params.tools.map((t) =>
+      'run' in t && typeof t.run === 'function'
+        ? ({
+            ...t,
+            run: async () => {
+              throw new ToolError(NOT_RUN);
+            },
+          } as typeof t)
+        : t,
+    );
     const runner = deps.client.beta.messages.toolRunner(
-      {
-        ...params,
-        messages: [...messages, nudge],
-        tool_choice: { type: 'none' },
-        max_iterations: 1,
-        stream: true,
-      },
+      { ...params, tools, messages: [...messages, nudge], max_iterations: 1, stream: true },
       { signal, ...(headers ? { headers } : {}) },
     );
     let said: string | undefined;
@@ -726,6 +952,21 @@ async function speakUp(
       if (!text.trim()) return undefined;
       await deps.store.append(conversationId, nudge, clock());
       said = (await persistAssistant(message)).id;
+      const uses = toolUsesOf(message.content);
+      if (uses.length)
+        await deps.store.append(
+          conversationId,
+          {
+            role: 'user',
+            content: uses.map((u) => ({
+              type: 'tool_result' as const,
+              tool_use_id: u.id,
+              content: NOT_RUN,
+              is_error: true,
+            })),
+          },
+          clock(),
+        );
     }
     return said;
   } catch (e) {
