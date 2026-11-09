@@ -1399,13 +1399,21 @@ function routeInner(raw: string, ctx: RouterContext): RouterIntent {
       /^(?:who (?:can|could) (?:warmly )?(?:introduce|intro|connect) me (?:to|with|at)|who (?:can|could) get me (?:a |an )?(?:warm )?(?:intro|introduction) (?:to|at|into)|(?:find |show |any |get )?(?:a |an |the |my )?(?:warm )?(?:routes?|paths?|way|intros?|introductions?) (?:to|into|at)|how (?:do|can|could|would) i (?:reach|get to|get into|get an intro to|get introduced to|get a warm intro to|connect with)|who do i know at|anyone (?:i know )?at|do i know anyone at|reach|get me (?:to|into))\s+(.+)$/i,
     );
     if (m) {
-      const target = stripName(m[1]!);
+      // "a route to someone at Bain" is a route into Bain
+      const target = stripName(
+        m[1]!.replace(/^(?:someone|somebody|anyone|people|a person) (?:at|in|from|on) /i, ''),
+      );
       const r = person(target);
       if (r.person)
         return viaTool('find_routes', { personId: r.person.id }, undefined, 'find routes to a person');
-      const company = ctx.companies.find((c) => c.toLowerCase() === target.toLowerCase()) ?? target;
-      if (r.candidates.length && !ctx.companies.some((c) => c.toLowerCase() === target.toLowerCase()))
-        return ambiguous(target, r.candidates);
+      const t = target.toLowerCase();
+      const company = ctx.companies.find((c) => c.toLowerCase() === t) ?? target;
+      // a name that starts companies the student knows ("Juniper" for Juniper Health and Juniper Capital) goes to
+      // find_routes, which asks which one (plan 37), never to a list of people who merely match the word
+      const companyish = ctx.companies.some(
+        (c) => c.toLowerCase() === t || c.toLowerCase().startsWith(`${t} `),
+      );
+      if (r.candidates.length && !companyish) return ambiguous(target, r.candidates);
       return viaTool('find_routes', { company }, undefined, 'find routes to a company');
     }
   }

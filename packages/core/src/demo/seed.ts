@@ -379,6 +379,37 @@ const FIRM_ROLES: Record<string, DemoRole[]> = {
     { fn: 'other', title: 'Campus Recruiter', min: 0, max: 6 },
   ],
 };
+/**
+ * Two small firms that share a first word (plan 37): "who do I know at Juniper" fits both, so the demo can show the
+ * question Orbit asks back. They hold three hand-placed people and are never drawn for anyone else.
+ */
+export const DEMO_NAMESAKE_ORGS: DemoOrg[] = [
+  {
+    name: 'Juniper Health',
+    domain: 'juniperhealth.com',
+    industry: 'Healthcare',
+    size: '51-200',
+    slug: 'juniper-health',
+    founded: 2016,
+    emailPattern: 'first',
+    cities: ['Boston, MA'],
+    weight: 0,
+    functions: { pm: 1, other: 1 },
+  },
+  {
+    name: 'Juniper Capital',
+    domain: 'junipercap.com',
+    industry: 'Venture capital',
+    size: '11-50',
+    slug: 'juniper-capital',
+    founded: 2014,
+    emailPattern: 'first',
+    cities: ['New York, NY'],
+    weight: 0,
+    functions: { other: 1 },
+  },
+];
+
 /** The title ladder a demo firm uses. */
 export const demoRolesFor = (slug: string): DemoRole[] => FIRM_ROLES[slug] ?? TECH_ROLES;
 const eligible = (r: DemoRole, years: number) => years >= r.min && (r.max === undefined || years <= r.max);
@@ -609,7 +640,7 @@ export function buildDemoDataset(
     neverDo: 'Never mention my GPA. Never write to two people at the same company on the same day.',
     currentJob: { text: `Stripe, Software Engineering Intern, Summer ${fallYear + 1}` },
   };
-  const organizations: Organization[] = DEMO_ORGS.map((o) => ({
+  const organizations: Organization[] = [...DEMO_ORGS, ...DEMO_NAMESAKE_ORGS].map((o) => ({
     id: `org_${o.slug}`,
     name: o.name,
     nameNormalized: normalizeCompany(o.name),
@@ -618,7 +649,7 @@ export function buildDemoDataset(
     industry: o.industry,
     sizeBucket: o.size,
   }));
-  const orgSpec = (slug: string) => DEMO_ORGS.find((o) => o.slug === slug)!;
+  const orgSpec = (slug: string) => [...DEMO_ORGS, ...DEMO_NAMESAKE_ORGS].find((o) => o.slug === slug)!;
   const targetCompanies: TargetCompany[] = [
     {
       // not applied yet on purpose: in tech the referral goes in before the portal application (15 §2.11)
@@ -2669,6 +2700,46 @@ export function buildDemoDataset(
       },
     ]);
   }
+  // plan 37: two firms named Juniper, people the student is connected to on LinkedIn at each, never written to
+  addPerson({
+    id: 'p901',
+    first: 'Leila',
+    last: 'Ellery',
+    org: 'juniper-health',
+    title: 'Product Manager',
+    school: 'Boston University',
+    grad: Y - 6,
+    since: ymd(Y - 3, 4),
+    email: false,
+    connectedOn: businessDay(now, -140, 18),
+    sources: ['linkedin_csv'],
+  });
+  addPerson({
+    id: 'p902',
+    first: 'Nina',
+    last: 'Vashti',
+    org: 'juniper-health',
+    title: 'Operations Manager',
+    school,
+    grad: Y - 8,
+    since: ymd(Y - 2, 9),
+    email: false,
+    connectedOn: businessDay(now, -220, 18),
+    sources: ['linkedin_csv'],
+  });
+  addPerson({
+    id: 'p903',
+    first: 'Isabel',
+    last: 'Albescu',
+    org: 'juniper-capital',
+    title: 'Operations Associate',
+    school: 'New York University',
+    grad: Y - 4,
+    since: ymd(Y - 2, 7),
+    email: false,
+    connectedOn: businessDay(now, -95, 18),
+    sources: ['linkedin_csv'],
+  });
   return {
     user,
     settings,

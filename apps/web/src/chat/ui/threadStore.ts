@@ -8,7 +8,7 @@
 
 import { useSyncExternalStore } from 'react';
 import { withoutButtonTalk } from '../agent/buttonTalk';
-import { isOrbitNote } from '../agent/orbitNote';
+import { isOrbitNote, isOrbitText } from '../agent/orbitNote';
 import { SETUP_CHIPS } from '../agent/setupChips';
 import { webSources } from '../agent/webSearch';
 import type {
@@ -17,6 +17,7 @@ import type {
   ChatEngine,
   ChatMessage,
   ResultEnvelope,
+  StepRun,
   TurnEvent,
 } from '../types';
 
@@ -339,9 +340,13 @@ export function hydrate(messages: ChatMessage[], actions: ChatAction[]): Turn[] 
 function textOf(content: unknown): string {
   if (typeof content === 'string') return content;
   if (Array.isArray(content))
-    return content
-      .map((b) => (b && typeof b === 'object' && 'text' in b ? String((b as { text: unknown }).text) : ''))
-      .join('');
+    return (
+      content
+        .map((b) => (b && typeof b === 'object' && 'text' in b ? String((b as { text: unknown }).text) : ''))
+        // Orbit's note after the student's words (what they tapped in cards) is for the model, not their bubble
+        .filter((t) => !isOrbitText(t))
+        .join('')
+    );
   return '';
 }
 
@@ -429,6 +434,12 @@ export function threadActions(engine: ChatEngine) {
       show(undefined, [], on);
     },
     send: (text: string) => turn(text, (cid, on, signal) => engine.send(cid, text, on, signal)),
+    /** a card button that acts in place (plan 37 §4): no turn, nothing added to the thread */
+    async runStep(origin: string, step: { label: string; run: StepRun }): Promise<ResultEnvelope> {
+      // the card is in the conversation on screen
+      const conversation = await ensureConversation();
+      return engine.runStep(conversation.id, origin, step);
+    },
     runChip(chipId: string) {
       const chip = [...engine.chips(), ...SETUP_CHIPS].find((c) => c.id === chipId);
       return turn(chip?.asUser ?? chipId, (cid, on) => engine.runChip(cid, chipId, on));

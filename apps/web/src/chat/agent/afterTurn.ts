@@ -27,7 +27,7 @@ import { extractFromChat } from '../../engine/memory';
 import { learnedNote, learnFromTurn } from '../../engine/memoryLearn';
 import { isServerUser } from '../../integrations/orbitApi';
 import type { ChatMessage, TurnEvent } from '../types';
-import { isOrbitNote } from './orbitNote';
+import { isOrbitNote, isOrbitText } from './orbitNote';
 import { kindFrom } from './routerNetwork';
 import type { ChatStore } from './store';
 
@@ -81,7 +81,7 @@ function textOf(content: unknown): string {
         ? (b as { text: string }).text
         : '',
     )
-    .filter(Boolean)
+    .filter((t) => t && !isOrbitText(t))
     .join('\n');
 }
 

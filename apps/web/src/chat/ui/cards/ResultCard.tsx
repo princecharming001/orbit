@@ -6,7 +6,14 @@
  * expect.
  */
 import type { OutboundMessage, Person, Suggestion } from '@orbit/core';
-import { CHANNEL_LABELS, MEDIUM_TIE, MESSAGE_KIND_LABELS, STAGE_LABELS, STRONG_TIE } from '@orbit/core';
+import {
+  CHANNEL_LABELS,
+  MEDIUM_TIE,
+  MESSAGE_KIND_LABELS,
+  normalizeCompany,
+  STAGE_LABELS,
+  STRONG_TIE,
+} from '@orbit/core';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { ArrowRight, ArrowUpRight, Check, Copy, Download, Map as MapIcon, TriangleAlert } from 'lucide-react';
 import { Fragment as Frag, type ReactNode, useContext, useState } from 'react';
@@ -20,10 +27,12 @@ import { db } from '../../../db/schema';
 import { conversationWith } from '../../../engine/conversation';
 import { useShowReasoning } from '../../../state/showReasoning';
 import { Avatar, Button, Chip, cx, LinkedInMark, relDate } from '../../../ui';
-import type { ResultEnvelope } from '../../types';
+import { readClarify } from '../../clarify';
+import type { ResultEnvelope, StepRun } from '../../types';
 import { Markdown } from '../Markdown';
 import type { ToolBlock } from '../threadStore';
 import { Choices } from './Choices';
+import { ClarifyCard } from './Clarify';
 import { ChatsCard, WeekCard } from './goalCards';
 import { MessagesCard, readMessages } from './MessagesCard';
 import { addPicked, askForIntro, type Picked, writeTo } from './next';
@@ -40,6 +49,7 @@ import {
   PickBox,
   Section,
   SelectionBar,
+  StepRunnerContext,
   TurnPersonCardsContext,
   useFold,
 } from './parts';
@@ -73,6 +83,7 @@ import {
   readText,
   readWarmIntros,
   readWeekCard,
+  unpack,
   type WarmIntro,
 } from './shapes';
 import { cardSteps, rowsFrom } from './steps';
@@ -84,6 +95,8 @@ export interface CardActions {
   cancel: (toolUseId: string) => Promise<void>;
   /** sends text as the student's next message (a tapped choice or next step) */
   send: (text: string) => Promise<void> | void;
+  /** runs a card button in place, without a turn (plan 37 §4); absent where a card cannot act (a preview) */
+  runStep?: (origin: string, step: { label: string; run: StepRun }) => Promise<ResultEnvelope>;
 }
 
 /** The draft a block shows in an editor (a draft card, or a send waiting for approval), for DraftOwnersContext. */
@@ -111,7 +124,14 @@ const stageText = (stage?: string, label?: string) =>
 export function ResultCard({ block, actions }: { block: ToolBlock; actions: CardActions }) {
   const env = block.envelope;
   if (!env) return null;
-  return <Envelope env={env} block={block} actions={actions} />;
+  const runner = actions.runStep;
+  return (
+    <StepRunnerContext.Provider
+      value={runner ? { origin: block.toolUseId, run: (step) => runner(block.toolUseId, step) } : {}}
+    >
+      <Envelope env={env} block={block} actions={actions} />
+    </StepRunnerContext.Provider>
+  );
 }
 
 /**
@@ -141,6 +161,14 @@ function Envelope({ env, block, actions }: { env: ResultEnvelope; block: ToolBlo
       return readTable(d) ? <PeopleTableCard env={env} send={actions.send} /> : <Summary env={env} />;
     case 'choices':
       return <Choices options={readChoices(d)} actions={actions} />;
+    case 'clarify': {
+      const c = readClarify(d);
+      return c ? (
+        <ClarifyCard data={c} toolUseId={block.toolUseId} actions={actions} />
+      ) : (
+        <Summary env={env} />
+      );
+    }
     case 'setup': {
       const { what, status } = readSetup(d);
       return what ? <SetupCard what={what} status={status} /> : <Summary env={env} />;
@@ -1175,9 +1203,20 @@ function FactsCard({ env }: { env: ResultEnvelope }) {
 // ---------- company ----------
 
 function CompanyCard({ env, actions }: { env: ResultEnvelope; actions: CardActions }) {
-  const { name, industry, people, former, saved, target, via } = readCompany(env.data);
+  const { name, industry, people, former, saved, target: wasTarget, via } = readCompany(env.data);
   const warm = readWarmIntros(env.data);
   const fold = useFold(people);
+  // the targets as they are now: "Add to targets" tapped on this card turns the chip to Target at once (plan 37 §4)
+  const organizationId = (unpack(env.data) as { organizationId?: string } | undefined)?.organizationId;
+  const liveTarget = useLiveQuery(async () => {
+    if (!name) return false;
+    const key = normalizeCompany(name);
+    const all = await db.targetCompanies.toArray();
+    return all.some(
+      (t) => (!!organizationId && t.organizationId === organizationId) || normalizeCompany(t.nameRaw) === key,
+    );
+  }, [name, organizationId]);
+  const target = liveTarget ?? wasTarget;
   // the rows as Orbit has them now: the LinkedIn headline and photo the tool's summary leaves out
   const livePeople = useLiveQuery(async () => {
     const rows = await db.people.bulkGet(people.map((p) => p.id));

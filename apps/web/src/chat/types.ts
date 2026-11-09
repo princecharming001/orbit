@@ -41,6 +41,8 @@ export type ResultKind =
   | 'list'
   /** conversations in the people-card look (the inbox, the replies): data `{ title, sub?, rows: MessageRow[] }` */
   | 'messages'
+  /** one short question when a name in the ask fits several things (plan 37): data `ClarifyData` */
+  | 'clarify'
   | 'needs_confirmation'
   | 'error';
 
@@ -69,6 +71,31 @@ export interface ChoiceOption {
   message: string;
 }
 
+/** What a clarify result asks about. */
+export type ClarifyAbout = 'company' | 'person' | 'draft';
+
+/**
+ * A question back (plan 37 §3.1): the ask named something that fits several things, so nothing ran. Each option is a
+ * tap; the tap sends `pickMessage(...)` as the student's next turn and the original ask runs with the choice.
+ */
+export interface ClarifyData {
+  about: ClarifyAbout;
+  /** the words in the ask that fit several things ("Triumph") */
+  term: string;
+  /** the question in one line ("Which Triumph?") */
+  question: string;
+  options: { id: string; label: string; sub?: string }[];
+}
+
+/** A pick the student made in this conversation: `term` (normalised) means this one from now on (plan 37 R5). */
+export interface Resolution {
+  about: ClarifyAbout;
+  term: string;
+  id: string;
+  label: string;
+  organizationId?: string;
+}
+
 /** Third-party text (emails, notes, LinkedIn fields) is wrapped before it reaches the model. */
 export type Wrap = (label: string, text: string) => string;
 
@@ -88,6 +115,33 @@ export interface ToolContext {
   signal?: AbortSignal;
   /** 'llm' when called by the model, 'router' from the no-key router, 'ui' from a chip or an Approve click */
   caller: 'llm' | 'router' | 'ui';
+  /** a button on a card the student tapped (plan 37 §4): their own clear choice, like their typed words */
+  tapped?: boolean;
+}
+
+/**
+ * A card button that acts in place (plan 37 §4): the tool runs at once, the button shows `done`, and nothing is added
+ * to the thread.
+ */
+export interface StepRun {
+  tool: string;
+  input: Record<string, unknown>;
+  /** the button's words once it ran ("Added to targets") */
+  done: string;
+}
+
+/**
+ * The action row a tapped card button records: one per card, button and input (other rows picked on the same card are
+ * another tap), so a reload shows it done.
+ */
+export function tapActionId(toolUseId: string, step: { label: string; run: StepRun }): string {
+  const slug = step.label
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-|-$/g, '');
+  let h = 0;
+  for (const ch of JSON.stringify(step.run.input)) h = (Math.imul(h, 31) + ch.charCodeAt(0)) | 0;
+  return `tap_${toolUseId}_${slug}_${(h >>> 0).toString(36)}`;
 }
 
 export interface ToolSpec<I extends z.ZodObject = z.ZodObject, D = unknown> {
@@ -141,6 +195,8 @@ export interface ChatConversation {
   archivedAt?: string;
   /** pinned to the top of Recent in the sidebar, when */
   pinnedAt?: string;
+  /** what the student picked when Orbit asked which one they meant (plan 37) */
+  resolved?: Resolution[];
 }
 
 /** A stored turn. `content` holds the whole API content block array for assistant turns (thinking, tool_use,
@@ -178,6 +234,8 @@ export interface ChatAction {
   summary?: string;
   blockedReason?: string;
   expiresAt?: string;
+  /** a card button the student tapped (plan 37 §4): the card's tool_use id and the button; `noted` once the model was told */
+  origin?: { toolUseId: string; label: string; noted?: boolean };
   createdAt: string;
   updatedAt: string;
 }
@@ -233,6 +291,15 @@ export interface ChatEngine {
   ): Promise<void>;
   chips(): ChipSpec[];
   runChip(conversationId: string, chipId: string, onEvent: (e: TurnEvent) => void): Promise<void>;
+  /**
+   * A card button that acts in place (plan 37 §4): runs the step's tool as the student's own tap, records it under
+   * `tapActionId(origin, label)` and returns the result. Nothing is added to the thread.
+   */
+  runStep(
+    conversationId: string,
+    origin: string,
+    step: { label: string; run: StepRun },
+  ): Promise<ResultEnvelope>;
   /** Approve a pending confirmation; for send_draft pass the edited text from the card */
   approve(actionId: string, edited?: { body: string; subject?: string }): Promise<ResultEnvelope>;
   cancel(actionId: string): Promise<void>;

@@ -1,4 +1,5 @@
 import { z } from '../../zod';
+import { clarifyResult } from '../clarify';
 import type { ResultEnvelope, ToolContext, ToolSpec } from '../types';
 
 /**
@@ -163,18 +164,23 @@ export function makeStubRegistry(): StubRegistry {
         company: z.string().optional().describe('company name'),
       }),
       execute: async (input) =>
-        input.company
-          ? {
-              kind: 'company',
-              data: { company: input.company, thereNow: [] },
-              summary: `No one at ${input.company} yet.`,
-            }
-          : {
-              kind: 'routes',
-              data: { target: input.personId, routes: [] },
-              summary: 'No warm route yet.',
-              href: `/map?reach=${input.personId}`,
-            },
+        input.company === 'Juniper'
+          ? clarifyResult('company', 'Juniper', [
+              { id: 'org_jh', label: 'Juniper Health', sub: 'Healthcare. 2 people you know there' },
+              { id: 'org_jc', label: 'Juniper Capital', sub: '1 person you know there' },
+            ])
+          : input.company
+            ? {
+                kind: 'company',
+                data: { company: input.company, thereNow: [] },
+                summary: `No one at ${input.company} yet.`,
+              }
+            : {
+                kind: 'routes',
+                data: { target: input.personId, routes: [] },
+                summary: 'No warm route yet.',
+                href: `/map?reach=${input.personId}`,
+              },
     }),
     tool({
       name: 'create_draft',

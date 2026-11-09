@@ -9,6 +9,7 @@ import { GOAL_KINDS, newId, REPLY_CLASSES } from '@orbit/core';
 import { db } from '../../db/schema';
 import { calendarInvitesAvailable, sendCalendarInvite } from '../../engine/calendarInvite';
 import { CLOSENESS_LABELS, type Closeness, explainScore, rateCloseness } from '../../engine/closeness';
+import { resolveCompanyRef } from '../../engine/companyRef';
 import { allowanceLine, readAllowance, researchMode } from '../../engine/deepResearch';
 import { askFriendForIntro, friendRouteOf } from '../../engine/friends';
 import {
@@ -44,6 +45,7 @@ import {
 import { mockSourcedPeople, mockSourcingFits, usesMockConnectors } from '../../integrations/connectorsMock';
 import { callApi, isAccountMode, isServerUser } from '../../integrations/orbitApi';
 import { z } from '../../zod';
+import { clarifyResult } from '../clarify';
 import type { ResultEnvelope, ToolContext } from '../types';
 import {
   type AnyTool,
@@ -680,6 +682,17 @@ export const findPeopleTool = defineTool({
   capabilities: ['source_find'],
   progress: 'Searching for people',
   async execute(input, ctx) {
+    // plan 37: "people at Triumph" when the student knows people at two Triumphs asks which one first
+    if (input.organization?.trim()) {
+      const ref = await resolveCompanyRef(ctx.user.id, input.organization, ctx.conversationId);
+      if (ref.kind === 'many')
+        return clarifyResult(
+          'company',
+          ref.term,
+          ref.options.map((o) => ({ id: o.id, label: o.label, sub: o.sub })),
+        );
+      if (ref.kind === 'one') input = { ...input, organization: ref.label };
+    }
     if (!accountReady(ctx)) {
       // plan 36: the sample student finds made-up people, like the rest of the demo's connectors; its mock LinkedIn
       // pool holds engineers and PMs, so an ask for investors, professors or a field it lacks goes to the mock sourcing

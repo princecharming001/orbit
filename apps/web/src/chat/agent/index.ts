@@ -1,8 +1,11 @@
 import type Anthropic from '@anthropic-ai/sdk';
 import type { User } from '@orbit/core';
 import { newId } from '@orbit/core';
+import { db } from '../../db/schema';
+import { rememberResolution } from '../../engine/companyRef';
 import { MODEL, makeWrap } from '../../integrations/anthropic';
 import { refreshPrefs } from '../../integrations/prefs';
+import { parsePick, resolutionOf, routedText } from '../clarify';
 import type {
   ChatAction,
   ChatConversation,
@@ -14,6 +17,7 @@ import type {
   ToolSpec,
   TurnEvent,
 } from '../types';
+import { tapActionId } from '../types';
 import { recordToolAction } from './actions';
 import { learnAfterTurn } from './afterTurn';
 import { chipsFor, resolveChip, setupChipsFor } from './chips';
@@ -21,6 +25,7 @@ import { chipsFor, resolveChip, setupChipsFor } from './chips';
 import type { ChatClient } from './client';
 import type { ExecuteFn } from './loop';
 import { chatMode, chatModeNote } from './mode';
+import { ORBIT_NOTE } from './orbitNote';
 import { type RouterIntent, routeUtterance } from './router';
 import { routerContextFor } from './routerContext';
 import { threadContextFor } from './routerThread';
@@ -76,6 +81,7 @@ export function createChatEngine(deps: ChatEngineDeps): ChatEngine {
     if (conversation.title !== 'New chat') return;
     const clean = text
       .replace(/\s*\[rec [^\]]+\]/g, '')
+      .replace(/\s*\[picked [^\]]+\]/g, '')
       .replace(/\s+/g, ' ')
       .trim()
       .replace(/[.?]+$/, '');
@@ -192,7 +198,8 @@ export function createChatEngine(deps: ChatEngineDeps): ChatEngine {
     let ctx = first;
     const route = (t: string, thread?: Awaited<ReturnType<typeof threadContextFor>>) =>
       routeUtterance(t, { registry: deps.registry, ...ctx, firstName: user.firstName, thread });
-    const intent = route(text, thread);
+    // a pick from a question back finishes the ask it interrupted; the tools read the pick from the conversation
+    const intent = route(routedText(text), thread);
     if (intent.kind !== 'tool') return sayText(conversation, intent, onEvent);
     const rest = intent.andThen ?? [];
     await runToolDirect(
@@ -270,6 +277,26 @@ export function createChatEngine(deps: ChatEngineDeps): ChatEngine {
     return env;
   };
 
+  /**
+   * What the student did with card buttons since the model last heard from them (plan 37 §4.4): the model never saw
+   * the taps, so without this it would offer "Add Stripe to targets" again. One Orbit note after their words, each
+   * tap told once.
+   */
+  const tapNote = async (conversationId: string): Promise<{ type: 'text'; text: string }[]> => {
+    const taps = (await store.actions(conversationId)).filter(
+      (a) => a.origin && !a.origin.noted && a.status === 'done',
+    );
+    if (!taps.length) return [];
+    for (const a of taps) await store.updateAction(a.id, { origin: { ...a.origin!, noted: true } }, clock());
+    const said = taps.map((a) => `${a.origin!.label} (${a.envelope?.summary ?? 'done'})`).join('; ');
+    return [
+      {
+        type: 'text',
+        text: `${ORBIT_NOTE} Since your last reply the student tapped, in cards: ${said}. Do not offer these again.`,
+      },
+    ];
+  };
+
   const engine: ChatEngine = {
     mode: () => chatMode(),
     modeNote: () => chatModeNote(),
@@ -296,6 +323,12 @@ export function createChatEngine(deps: ChatEngineDeps): ChatEngine {
       const trimmed = text.trim();
       if (!trimmed) return emitError(onEvent, 'Type something first.');
       await nameFrom(conversation, trimmed);
+      // plan 37: a tap on a question back; what the student picked holds for the rest of this conversation
+      const pick = parsePick(trimmed);
+      if (pick) {
+        const org = pick.about === 'company' ? await db.organizations.get(pick.id) : undefined;
+        await rememberResolution(conversation.id, resolutionOf(pick, org?.id));
+      }
       // another tab may have removed the key, turned the chat off or used up today's budget
       await refreshPrefs();
       let finished = false;
@@ -322,7 +355,7 @@ export function createChatEngine(deps: ChatEngineDeps): ChatEngine {
             quick: typeof deps.quick === 'function' ? deps.quick() : deps.quick,
             prefixMismatch: deps.prefixMismatch,
           },
-          [{ type: 'text', text: trimmed }],
+          [{ type: 'text', text: trimmed }, ...(await tapNote(conversation.id))],
           watch,
           signal,
         );
@@ -345,6 +378,40 @@ export function createChatEngine(deps: ChatEngineDeps): ChatEngine {
       );
       const run = await resolveChip(chip, deps.registry, getUser().id, clock());
       await runToolDirect(conversation, run.tool, run.input, 'ui', onEvent, run.lead);
+    },
+
+    async runStep(conversationId, origin, step) {
+      const id = tapActionId(origin, step);
+      const conversation = await store.getConversation(conversationId);
+      const user = getUser();
+      let env: ResultEnvelope;
+      try {
+        env = await deps.execute(
+          step.run.tool,
+          step.run.input,
+          toolContext(conversationId, 'ui', { toolUseId: id, tapped: true }),
+        );
+      } catch (e) {
+        env = {
+          kind: 'error',
+          data: { detail: e instanceof Error ? e.message : String(e) },
+          summary: 'That did not go through.',
+        };
+      }
+      // a step that ran is recorded on the card's own conversation, so a reload shows it done and the next turn
+      // tells the model what the student did (plan 37 §4.4); a failure is kept too, for the card to say so
+      if (conversation)
+        await recordToolAction(store, {
+          conversationId,
+          userId: user.id,
+          toolUseId: id,
+          toolName: step.run.tool,
+          input: step.run.input,
+          env,
+          now: clock(),
+          origin: { toolUseId: origin, label: step.label },
+        });
+      return env;
     },
 
     async approve(actionId, edited) {

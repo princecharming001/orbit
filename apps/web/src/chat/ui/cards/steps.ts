@@ -73,7 +73,17 @@ function stepsOf(toolName: string, env: ResultEnvelope): NextStep[] {
       if (!r) return [];
       // just hidden: the one thing to offer is taking it back
       if (r.person.hiddenAt || /^Hid\b/.test(env.summary))
-        return [{ label: 'Show again', message: `Unhide ${r.person.displayName}` }];
+        return [
+          {
+            label: 'Show again',
+            message: `Unhide ${r.person.displayName}`,
+            run: {
+              tool: 'update_person',
+              input: { personId: r.person.id, unhide: true },
+              done: 'Shown again',
+            },
+          },
+        ];
       const { person, chat, questions } = r;
       const steps: NextStep[] = [];
       if (!r.nextMessage?.wait) steps.push(writeTo(person.displayName, r.nextMessage?.kind));
@@ -171,8 +181,23 @@ function stepsOf(toolName: string, env: ResultEnvelope): NextStep[] {
       if (!items.length) return [];
       const heading = title ?? firstSentence(env.summary);
       const steps: NextStep[] = [];
-      if (toolName === 'find_people')
-        steps.push({ label: 'Add them to People', message: 'Add them all to People' });
+      if (toolName === 'find_people') {
+        // everyone on the list who is not in Orbit yet joins in place (plan 37 §4)
+        const recs = items.flatMap((i) => (i.id && !i.known ? [i.id] : []));
+        steps.push(
+          recs.length
+            ? {
+                label: 'Add them to People',
+                message: 'Add them all to People',
+                run: {
+                  tool: 'add_sourced',
+                  input: { recommendationIds: recs.slice(0, 20) },
+                  done: 'Added to People',
+                },
+              }
+            : { label: 'Add them to People', message: 'Add them all to People' },
+        );
+      }
       const researched = heading.match(/^Research on (.+)$/)?.[1];
       if (researched) steps.push(writeTo(researched));
       if (toolName === 'list_due') steps.push(showDrafts);

@@ -23,6 +23,7 @@ import { recordToolAction } from './actions';
 import { sentenceGate, withoutButtonTalk } from './buttonTalk';
 import { type ChatClient, usesSharedAccess } from './client';
 import { knowledgeTextFor } from './knowledge';
+import { isOrbitText } from './orbitNote';
 import { buildSnapshot, memoryLineOf, snapshotIsStale, snapshotKeyOf, snapshotText } from './snapshot';
 import { type ChatStore, conversationNonce, toolResultsOf, toolUsesOf } from './store';
 import { systemBlocks } from './system';
@@ -561,7 +562,7 @@ export async function runTurn(
   const messages: Anthropic.Beta.BetaMessageParam[] = [...history, userMsg];
   // the student's words of this turn pick what "Remembered" holds
   const lastUserText = userBlocks
-    .map((b) => (b.type === 'text' ? b.text : ''))
+    .map((b) => (b.type === 'text' && !isOrbitText(b.text) ? b.text : ''))
     .join(' ')
     .trim();
   const snapshot = await buildSnapshot(user.id, clock(), { lastUserText });
@@ -614,6 +615,8 @@ export async function runTurn(
     ...(metered ? { headers: { [ITERATION_HEADER]: String(iteration) } } : {}),
   });
 
+  // the stored assistant row whose tools asked a question back (plan 37): later rounds of this turn run nothing
+  let askedIn: string | undefined;
   const toolHooks: ToolHooks = {
     signal,
     note: budgetNote,
@@ -630,6 +633,9 @@ export async function runTurn(
         spokenAfterWork = '';
       }
       if (signal?.aborted) env = cancelled('user stopped');
+      else if (askedIn !== undefined && pending?.rowId !== askedIn)
+        // plan 37 R7: a question back ends the work of the turn; whatever comes next waits for the student's pick
+        env = { kind: 'error', data: undefined, summary: NOT_RUN_ASKED };
       else if (
         CLOSING_TOOLS.has(spec.name) &&
         pending &&
@@ -663,6 +669,7 @@ export async function runTurn(
           env = signal?.aborted ? cancelled('user stopped') : thrownEnvelope(e);
         }
       }
+      if (env.kind === 'clarify' && askedIn === undefined) askedIn = pending?.rowId ?? '';
       await recordToolAction(store, {
         conversationId: conversation.id,
         userId: user.id,
@@ -916,17 +923,26 @@ export async function runTurn(
       persistAssistant,
       signal,
       metered ? { [ITERATION_HEADER]: String(iteration) } : undefined,
+      askedIn !== undefined ? ASK_UP : SPEAK_UP,
     );
     if (said) lastRowId = said;
   }
   onEvent({ type: 'done', stopReason: lastStop, messageId: lastRowId });
 }
 
+/** A tool call after a question back in the same turn: not run, and the model is told why. */
+export const NOT_RUN_ASKED =
+  'Not run: you asked the student which one they meant. Write the one short question naming the choices and stop; this runs after they pick.';
+
 /** The tools that end a turn: words come before them, and a line after them would read as a doubled reply. */
 const CLOSING_TOOLS = new Set(['offer_choices', 'show_setup']);
 
 export const SPEAK_UP =
   "[Orbit] Your reply had no answer in words, only a lookup, cards or buttons. Answer the student's last message now in one to three plain, warm sentences from what the tools and searches returned, naming a source in words when it came from the web. Do not call any tools, and do not repeat what a card already lists.";
+
+/** The backstop's words after a question back: the question, never an answer around it. */
+export const ASK_UP =
+  "[Orbit] Your reply had no words. A tool found that the student's ask fits several things. Ask them which one in one short question that names the choices, and nothing else. Do not call any tools.";
 
 const NOT_RUN = JSON.stringify({ kind: 'error', summary: 'Not run: answer in words now.' });
 
@@ -947,6 +963,7 @@ async function speakUp(
   persistAssistant: (m: Anthropic.Beta.BetaMessage) => Promise<{ id: string }>,
   signal?: AbortSignal,
   headers?: Record<string, string>,
+  say = SPEAK_UP,
 ): Promise<string | undefined> {
   try {
     // an empty final assistant message cannot be replayed; the nudge stands between the turn and the answer
@@ -958,7 +975,7 @@ async function speakUp(
     const last = messages.at(-1);
     const nudge: Anthropic.Beta.BetaMessageParam = {
       role: last?.role === 'assistant' ? 'user' : 'system',
-      content: [{ type: 'text', text: SPEAK_UP }],
+      content: [{ type: 'text', text: say }],
     };
     // the same tool definitions (what is sent is byte-identical); only what runs locally is swapped for "not run"
     const tools = params.tools.map((t) =>

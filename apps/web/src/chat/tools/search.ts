@@ -8,6 +8,7 @@
 import type { Person } from '@orbit/core';
 import { COMPANY_KINDS, type QuerySpec, SENIORITIES, STAGES, TITLE_FAMILIES } from '@orbit/core/search';
 import { db } from '../../db/schema';
+import { resolveCompanyRef } from '../../engine/companyRef';
 import { flagOn } from '../../engine/flags';
 import {
   bandOfSet,
@@ -18,6 +19,7 @@ import {
 } from '../../engine/networkSearch';
 import { climbLadder, type Ladder } from '../../engine/networkSearch/ladder';
 import { z } from '../../zod';
+import { clarifyResult } from '../clarify';
 import type { ResultEnvelope, ToolContext } from '../types';
 import { defineTool, err, ok } from './_shared';
 import { searchPeople } from './read';
@@ -583,6 +585,36 @@ export function specOfFlat(f: FlatSearch): QuerySpec {
   return spec;
 }
 
+/** Each company the spec names, settled: the one the student meant, or a question when it fits several. */
+async function resolveCompanyNames(
+  spec: QuerySpec,
+  ctx: ToolContext,
+): Promise<{ spec: QuerySpec } | { clarify: ResultEnvelope }> {
+  if (!spec.positions?.some((p) => !p.negate && p.company?.names?.length)) return { spec };
+  const positions: NonNullable<QuerySpec['positions']> = [];
+  for (const p of spec.positions) {
+    if (p.negate || !p.company?.names?.length) {
+      positions.push(p);
+      continue;
+    }
+    const names: string[] = [];
+    for (const n of p.company.names) {
+      const ref = await resolveCompanyRef(ctx.user.id, n, ctx.conversationId);
+      if (ref.kind === 'many')
+        return {
+          clarify: clarifyResult(
+            'company',
+            ref.term,
+            ref.options.map((o) => ({ id: o.id, label: o.label, sub: o.sub })),
+          ),
+        };
+      names.push(ref.kind === 'one' ? ref.label : n);
+    }
+    positions.push({ ...p, company: { ...p.company, names } });
+  }
+  return { spec: { ...spec, positions } };
+}
+
 async function runSearch(input: QuerySpec, ctx: ToolContext): Promise<ResultEnvelope> {
   // switched off (engine/flags): the plain name, company and title search, on the words the spec names
   if (!(await flagOn('networkSearch'))) {
@@ -592,6 +624,11 @@ async function runSearch(input: QuerySpec, ctx: ToolContext): Promise<ResultEnve
       input.keywords?.terms[0];
     return searchPeople.execute({ query }, ctx);
   }
+  // plan 37: a company name that fits several companies the student knows people at is asked about first; one that
+  // fits a single company is searched under that company's own name
+  const resolved = await resolveCompanyNames(input, ctx);
+  if ('clarify' in resolved) return resolved.clarify;
+  input = resolved.spec;
   const out = await runNetworkSearch(ctx.user, input, {
     caller: ctx.caller,
     signal: ctx.signal,

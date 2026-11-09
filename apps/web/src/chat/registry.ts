@@ -280,7 +280,9 @@ export async function execute(name: string, input: unknown, ctx: ToolContext): P
   if (spec.kind === 'read') return runTool(spec, data, ctx);
   // the student's exact words, read by the router, are the approval for a tool that runs on them (an Approve click
   // presents a token and goes through the check like any other)
-  const studentsWords = !!spec.runsOnStudentWords && ctx.caller === 'router' && !ctx.confirmation;
+  // a tapped card button is the same clear choice (plan 37 §4)
+  const studentsWords =
+    !!spec.runsOnStudentWords && (ctx.caller === 'router' || !!ctx.tapped) && !ctx.confirmation;
   if (spec.kind === 'risky' && !studentsWords) {
     const check = await checkConfirmation(ctx, name, data);
     if (!check.ok) {

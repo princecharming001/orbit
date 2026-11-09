@@ -334,6 +334,10 @@ export function createFakeChatEngine(opts: { mode?: 'llm' | 'router'; delay?: nu
           : chipScript(chip);
       await run(conversationId, chip.asUser, script, onEvent);
     },
+    async runStep(conversationId, origin, step) {
+      log('runStep', { conversationId, origin, label: step.label, tool: step.run.tool });
+      return { kind: 'text', data: { text: step.run.done }, summary: step.run.done };
+    },
     async approve(actionId, edited) {
       log('approve', actionId, edited);
       for (const [conversationId, acts] of actions) {

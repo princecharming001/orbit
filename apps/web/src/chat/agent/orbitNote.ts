@@ -18,3 +18,6 @@ export function isOrbitNote(m: { role: string; content: unknown }): boolean {
         : '';
   return text.trimStart().startsWith(ORBIT_NOTE);
 }
+
+/** A text block that is Orbit's note, not the student's words (one can follow their words in the same message). */
+export const isOrbitText = (text: string) => text.trimStart().startsWith(ORBIT_NOTE);

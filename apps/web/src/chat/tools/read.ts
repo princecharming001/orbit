@@ -37,6 +37,7 @@ import {
 } from '@orbit/core';
 import { db } from '../../db/schema';
 import { localScore } from '../../engine/closeness';
+import { resolveCompanyRef } from '../../engine/companyRef';
 import { conversationWith } from '../../engine/conversation';
 import { DEMO_USER_ID } from '../../engine/demo';
 import { lastInboundOf, liveChatOf, nextMessageKind } from '../../engine/drafts';
@@ -86,6 +87,7 @@ import { dailyLlmCaps, llmFeatures, readPrefs, todaysLlmUsage } from '../../inte
 import { sharedClaudeAvailable } from '../../integrations/shared-claude';
 import { stepAddress } from '../../pages/onboardingSteps';
 import { z } from '../../zod';
+import { clarifyResult } from '../clarify';
 import type { ResultEnvelope, ToolContext } from '../types';
 import {
   type AnyTool,
@@ -1288,7 +1290,19 @@ export const findRoutes = defineTool({
     const userId = ctx.user.id;
     if (input.personIds?.length) return routesToMany(ctx, input.personIds);
     let personId = input.personId;
-    let company = input.company;
+    let company = input.company?.trim() || undefined;
+    // plan 37: a name that fits several companies the student knows people at is a question, never a guess
+    const named = !personId ? (company ?? input.query?.trim()) : undefined;
+    if (named) {
+      const ref = await resolveCompanyRef(userId, named, ctx.conversationId);
+      if (ref.kind === 'many')
+        return clarifyResult(
+          'company',
+          ref.term,
+          ref.options.map((o) => ({ id: o.id, label: o.label, sub: o.sub })),
+        );
+      if (ref.kind === 'one') company = ref.id;
+    }
     if (!personId && !company) {
       const q = input.query?.trim();
       if (!q) throw new Error('Say who or which company to reach.');

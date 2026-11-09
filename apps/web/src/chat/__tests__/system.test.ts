@@ -22,8 +22,8 @@ const VOICE_FIXTURE = [
 ];
 
 describe('stable system block', () => {
-  it('is version 27 and byte-identical for every conversation; the tag rule follows in its own small block', () => {
-    expect(STABLE_SYSTEM_VERSION).toBe(27);
+  it('is version 28 and byte-identical for every conversation; the tag rule follows in its own small block', () => {
+    expect(STABLE_SYSTEM_VERSION).toBe(28);
     // plan 35 A2: the fixed block is under 24k characters
     expect(text.length).toBeLessThan(24_000);
     expect(stableSystemText()).toBe(text);

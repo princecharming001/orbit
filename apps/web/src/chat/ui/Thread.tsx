@@ -84,6 +84,12 @@ export function Thread({
                   running={running}
                   last={i === turns.length - 1}
                   laterUserText={turns.slice(i + 1).find((x) => x.role === 'user')?.text}
+                  askText={
+                    turns
+                      .slice(0, i)
+                      .reverse()
+                      .find((x) => x.role === 'user')?.text
+                  }
                 />
               ) : (
                 <div
@@ -221,6 +227,7 @@ function Assistant({
   running,
   last,
   laterUserText,
+  askText,
 }: {
   turn: AssistantTurn;
   actions: ThreadActions;
@@ -229,6 +236,8 @@ function Assistant({
   last: boolean;
   /** the first thing the student said after this turn: tap-to-answer choices stop once there is one */
   laterUserText?: string;
+  /** what the student asked that this turn answers */
+  askText?: string;
 }) {
   const toast = useToast();
   const [vote, setVote] = useState<'up' | 'down'>();
@@ -274,12 +283,16 @@ function Assistant({
       ),
     [turn.blocks],
   );
+  // two tools of one round can ask the same question (find_routes and search_network both found two Triumphs)
+  const firstClarify = turn.blocks.find(
+    (b): b is Extract<Block, { type: 'tool' }> => b.type === 'tool' && b.envelope?.kind === 'clarify',
+  )?.toolUseId;
   return (
     <div className="group min-w-0" data-testid="turn-assistant" data-status={turn.status}>
       <TurnPersonCardsContext.Provider value={personCards}>
         <div aria-live="polite" aria-busy={streaming} className="space-y-4">
           {!revealed && <TurnStatus step={activity} />}
-          <ChoicesContext.Provider value={{ running, laterUserText }}>
+          <ChoicesContext.Provider value={{ running, laterUserText, askText, firstClarify }}>
             {(revealed ? turnLayout(turn.blocks, streaming) : []).map((piece) =>
               piece.type === 'work' ? (
                 <WorkLog

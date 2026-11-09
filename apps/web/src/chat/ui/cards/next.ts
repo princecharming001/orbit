@@ -91,6 +91,8 @@ export interface Picked {
 export const withoutRefs = (text: string) =>
   text
     .replace(/\s*\[rec [^\]]*(?:\]|…?$)/g, '')
+    // a pick from a question back (plan 37): the student sees the name they tapped
+    .replace(/\s*\[picked (?:company|person|draft) [^\]]*(?:\]|…?$)/g, '')
     .replace(/[ \t]{2,}/g, ' ')
     .trim();
 
@@ -131,7 +133,16 @@ export function addPicked(rows: Picked[], then?: 'routes' | 'drafts'): NextStep 
           ? 'Add and write to them'
           : 'Write to them'
         : 'Add to People';
-  return { label, message: `${head}: ${pickedList(list)}` };
+  const message = `${head}: ${pickedList(list)}`;
+  // adding alone acts in place (plan 37 §4): the people join, the chip says so, nothing is said in the thread
+  const recs = list.flatMap((r) => (r.rec ? [r.rec] : []));
+  if (!then && recs.length)
+    return {
+      label,
+      message,
+      run: { tool: 'add_sourced', input: { recommendationIds: recs }, done: 'Added to People' },
+    };
+  return { label, message };
 }
 
 export const prepFor = (name: string): NextStep => ({
@@ -154,9 +165,11 @@ export const askForIntro = (introducer: string, target: string): NextStep => ({
   message: `Draft an intro request to ${introducer} for ${target}`,
 });
 
+/** Acts in place (plan 37 §4): the company goes on the targets, the chip says so, the thread stays as it was. */
 export const addTarget = (company: string): NextStep => ({
   label: `Add ${company} to targets`,
   message: `Add ${company} to my target companies`,
+  run: { tool: 'manage_target_company', input: { action: 'add', names: company }, done: 'Added to targets' },
 });
 
 export const whoWentQuiet: NextStep = { label: 'Who went quiet', message: 'Who went quiet?' };

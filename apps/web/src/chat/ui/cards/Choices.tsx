@@ -15,6 +15,10 @@ export interface ChoicesState {
   running: boolean;
   /** the text of the first message the student sent after this assistant turn, if any */
   laterUserText?: string;
+  /** the student's message this assistant turn answers (a question back finishes it on the pick) */
+  askText?: string;
+  /** the first question back in this turn: a second one about the same ask is not shown again */
+  firstClarify?: string;
 }
 
 /** Provided by the thread for each assistant turn; the default is a live, idle thread. */

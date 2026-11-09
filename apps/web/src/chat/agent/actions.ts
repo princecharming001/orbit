@@ -20,6 +20,8 @@ export async function recordToolAction(
     env: ResultEnvelope;
     messageId?: string;
     now: Date;
+    /** a tapped card button (plan 37 §4) */
+    origin?: { toolUseId: string; label: string };
   },
 ): Promise<void> {
   const at = a.now.toISOString();
@@ -32,6 +34,7 @@ export async function recordToolAction(
     input: a.input,
     status: a.env.kind === 'error' ? 'error' : 'done',
     envelope: a.env,
+    ...(a.origin ? { origin: a.origin } : {}),
     createdAt: at,
     updatedAt: at,
   });

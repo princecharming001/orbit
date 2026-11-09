@@ -9,11 +9,13 @@ import { setSharedClaudeUrlForTests } from '../../integrations/shared-claude';
 import { z } from '../../zod';
 import { makeChatClient, setChatClientFactoryForTests } from '../agent/client';
 import {
+  ASK_UP,
   CHAT_BETAS,
   CORE_TOOLS,
   ITERATION_HEADER,
   MAX_ITERATIONS,
   MODEL_HIDDEN_TOOLS,
+  NOT_RUN_ASKED,
   parseToolResult,
   resetToolSearchForTests,
   runTurn,
@@ -236,6 +238,57 @@ describe('never a reply without words', () => {
     const rows = await store.messages(conversation.id);
     expect(unpairedToolUses(rows)).toEqual([]);
     expect(JSON.stringify(rows.at(-1)!.content)).toMatch(/Not run/);
+  });
+});
+
+describe('a question back (plan 37)', () => {
+  it('runs nothing after a clarify result: the next round gets "not run", and the turn ends on the question', async () => {
+    const events = await turn('who do I know at Juniper', [
+      { toolCalls: [{ id: 'toolu_r', name: 'find_routes', input: { company: 'Juniper' } }] },
+      {
+        text: 'Juniper Health or Juniper Capital?',
+        toolCalls: [{ id: 'toolu_more', name: 'list_pipeline', input: {} }],
+      },
+      { stopReason: 'end_turn' },
+    ]);
+    expect(stub.calls.map((c) => c.name)).toEqual(['find_routes']);
+    expect(text(events)).toBe('Juniper Health or Juniper Capital?');
+    const results = events.filter((e) => e.type === 'tool_result') as Extract<
+      TurnEvent,
+      { type: 'tool_result' }
+    >[];
+    expect(results.map((r) => r.envelope.kind)).toEqual(['clarify', 'error']);
+    expect(results[1]!.envelope.summary).toBe(NOT_RUN_ASKED);
+    const rows = await store.messages(conversation.id);
+    expect(unpairedToolUses(rows)).toEqual([]);
+    // the clarify card is what the thread keeps; the not-run step is a failed step it hides
+    const turns = hydrate(rows, await store.actions(conversation.id));
+    const a = turns.find((t): t is AssistantTurn => t.role === 'assistant')!;
+    expect(a.blocks.some((b) => b.type === 'tool' && b.envelope?.kind === 'clarify')).toBe(true);
+  });
+
+  it('tools in the same round as the clarify still run (two lookups of one ask)', async () => {
+    await turn('who do I know at Juniper', [
+      {
+        toolCalls: [
+          { id: 'toolu_r', name: 'find_routes', input: { company: 'Juniper' } },
+          { id: 'toolu_p', name: 'list_pipeline', input: {} },
+        ],
+      },
+      { text: 'Juniper Health or Juniper Capital?' },
+    ]);
+    expect(stub.calls.map((c) => c.name).sort()).toEqual(['find_routes', 'list_pipeline']);
+  });
+
+  it('a clarify turn with no words gets the ask nudge, never the answer nudge', async () => {
+    const events = await turn('who do I know at Juniper', [
+      { toolCalls: [{ id: 'toolu_r', name: 'find_routes', input: { company: 'Juniper' } }] },
+      { stopReason: 'end_turn' },
+      { text: 'Juniper Health or Juniper Capital?' },
+    ]);
+    expect(text(events)).toBe('Juniper Health or Juniper Capital?');
+    const last = messageRequests(fake).at(-1)!.body;
+    expect(last.messages.at(-1)).toEqual({ role: 'system', content: [{ type: 'text', text: ASK_UP }] });
   });
 });
 

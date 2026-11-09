@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   buildDemoDataset,
   businessDay,
+  DEMO_NAMESAKE_ORGS,
   DEMO_ORGS,
   type DemoDataset,
   demoRolesFor,
@@ -71,7 +72,7 @@ function check(now: Date, ds: DemoDataset) {
       .sort((a, b) => a.startDate!.localeCompare(b.startDate!));
     // and nobody worked at a firm before it was founded (Anthropic in 2017, Ramp in 2015)
     for (const job of jobs) {
-      const firm = DEMO_ORGS.find((o) => `org_${o.slug}` === job.organizationId)!;
+      const firm = [...DEMO_ORGS, ...DEMO_NAMESAKE_ORGS].find((o) => `org_${o.slug}` === job.organizationId)!;
       expect(
         yearOf(job.startDate),
         `${p.displayName}: ${job.title} at ${job.nameRaw} from ${job.startDate}, founded ${firm.founded}`,

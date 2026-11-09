@@ -53,6 +53,7 @@ export function ChatHome() {
       cancel: actions.cancel.bind(actions),
       retry: actions.retry.bind(actions),
       send: actions.send,
+      runStep: actions.runStep,
     }),
     [actions],
   );

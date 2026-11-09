@@ -4,10 +4,13 @@
  * next steps that sends a message the chat's tools understand.
  */
 import type { Person } from '@orbit/core';
-import { ArrowRight, ArrowUpRight, ChevronDown } from 'lucide-react';
+import { useLiveQuery } from 'dexie-react-hooks';
+import { ArrowRight, ArrowUpRight, Check, ChevronDown, Loader2, Plus } from 'lucide-react';
 import { createContext, type ReactNode, useContext, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
+import { db } from '../../../db/schema';
 import { Avatar, cx, LinkedInMark } from '../../../ui';
+import { type ResultEnvelope, type StepRun, tapActionId } from '../../types';
 import { ChoicesContext } from './Choices';
 
 /**
@@ -229,6 +232,7 @@ export function SelectionBar({
   send: (text: string) => Promise<void> | void;
 }) {
   const { running } = useContext(ChoicesContext);
+  const runner = useContext(StepRunnerContext);
   if (!total) return null;
   return (
     <div
@@ -252,20 +256,29 @@ export function SelectionBar({
       </button>
       {count > 0 && (
         <span className="flex flex-wrap gap-1.5">
-          {steps.map((s) => (
-            <button
-              key={s.label}
-              type="button"
-              className="inline-flex items-center gap-1 min-h-7 px-2.5 py-1 rounded-[6px] border border-ink bg-ink text-canvas text-[12.5px] font-medium leading-tight hover:opacity-90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:opacity-50 disabled:pointer-events-none"
-              disabled={running}
-              title={s.message}
-              data-testid="selection-step"
-              onClick={() => void send(s.message)}
-            >
-              <ArrowRight size={12} aria-hidden className="shrink-0" />
-              {s.label}
-            </button>
-          ))}
+          {steps.map((s) =>
+            s.run && runner.run && runner.origin ? (
+              <InPlaceStep
+                key={s.label}
+                step={{ label: s.label, run: s.run }}
+                origin={runner.origin}
+                run={runner.run}
+              />
+            ) : (
+              <button
+                key={s.label}
+                type="button"
+                className="inline-flex items-center gap-1 min-h-7 px-2.5 py-1 rounded-[6px] border border-ink bg-ink text-canvas text-[12.5px] font-medium leading-tight hover:opacity-90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:opacity-50 disabled:pointer-events-none"
+                disabled={running}
+                title={s.message}
+                data-testid="selection-step"
+                onClick={() => void send(s.message)}
+              >
+                <ArrowRight size={12} aria-hidden className="shrink-0" />
+                {s.label}
+              </button>
+            ),
+          )}
         </span>
       )}
     </div>
@@ -292,11 +305,22 @@ export function useFold<T>(items: T[], n = 5): { shown: T[]; more: ReactNode } {
   return { shown, more };
 }
 
-/** A next step a card offers: the chip's words, and the message it sends as the student's next turn. */
+/**
+ * A next step a card offers: the chip's words, and the message it sends as the student's next turn. A step with `run`
+ * acts in place instead (plan 37 §4): the tool runs at once, the chip shows `run.done`, and nothing is added to the
+ * thread. `message` stays the same request in words, for the no-key router ("do it" after a card) and the tests.
+ */
 export interface NextStep {
   label: string;
   message: string;
+  run?: StepRun;
 }
+
+/** The card's own tool_use id and how to run one of its buttons in place; empty where a card cannot act. */
+export const StepRunnerContext = createContext<{
+  origin?: string;
+  run?: (step: { label: string; run: StepRun }) => Promise<ResultEnvelope>;
+}>({});
 
 /**
  * The row of next steps at the foot of a card: up to three quiet chips. A tap sends the step's message, which the
@@ -310,6 +334,7 @@ export function NextSteps({
   send: (text: string) => Promise<void> | void;
 }) {
   const { running } = useContext(ChoicesContext);
+  const runner = useContext(StepRunnerContext);
   const sending = useRef(false);
   const list = steps.slice(0, 3);
   if (!list.length) return null;
@@ -320,26 +345,115 @@ export function NextSteps({
       aria-label="Next steps"
       data-testid="next-steps"
     >
-      {list.map((s) => (
-        <button
-          key={s.label}
-          type="button"
-          className="inline-flex items-center gap-1 min-h-7 max-w-full px-2.5 py-1 rounded-[6px] border border-line bg-canvas text-[12.5px] font-medium leading-tight text-ink-2 text-left hover:text-ink hover:bg-canvas-2 hover:border-[#d6d4d0] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:opacity-50 disabled:pointer-events-none"
-          disabled={running}
-          title={s.message}
-          data-testid="next-step"
-          onClick={() => {
-            if (sending.current || running) return;
-            sending.current = true;
-            void Promise.resolve(send(s.message)).finally(() => {
-              sending.current = false;
-            });
-          }}
-        >
-          <ArrowRight size={12} aria-hidden className="shrink-0 text-ink-3" />
-          <span className="min-w-0">{s.label}</span>
-        </button>
-      ))}
+      {list.map((s) =>
+        s.run && runner.run && runner.origin ? (
+          <InPlaceStep
+            key={s.label}
+            step={{ label: s.label, run: s.run }}
+            origin={runner.origin}
+            run={runner.run}
+          />
+        ) : (
+          <button
+            key={s.label}
+            type="button"
+            className="inline-flex items-center gap-1 min-h-7 max-w-full px-2.5 py-1 rounded-[6px] border border-line bg-canvas text-[12.5px] font-medium leading-tight text-ink-2 text-left hover:text-ink hover:bg-canvas-2 hover:border-[#d6d4d0] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:opacity-50 disabled:pointer-events-none"
+            disabled={running}
+            title={s.message}
+            data-testid="next-step"
+            onClick={() => {
+              if (sending.current || running) return;
+              sending.current = true;
+              void Promise.resolve(send(s.message)).finally(() => {
+                sending.current = false;
+              });
+            }}
+          >
+            <ArrowRight size={12} aria-hidden className="shrink-0 text-ink-3" />
+            <span className="min-w-0">{s.label}</span>
+          </button>
+        ),
+      )}
     </div>
+  );
+}
+
+const STEP_CHIP =
+  'inline-flex items-center gap-1 min-h-7 max-w-full px-2.5 py-1 rounded-[6px] border text-[12.5px] font-medium leading-tight text-left';
+
+/**
+ * A button that does its thing where it is (plan 37 §4): "Add Stripe to targets" runs, then reads "Added to targets"
+ * with a check. Nothing is said in the thread. The tap is recorded under the card, so a reload shows it done; a
+ * failure says so in one line and the button can be tapped again.
+ */
+export function InPlaceStep({
+  step,
+  origin,
+  run,
+}: {
+  step: { label: string; run: StepRun };
+  origin: string;
+  run: (step: { label: string; run: StepRun }) => Promise<ResultEnvelope>;
+}) {
+  const id = tapActionId(origin, step);
+  // a tap recorded earlier (this conversation, before a reload); a temporary chat keeps it only in this state
+  const stored = useLiveQuery(() => db.chatActions.get(id), [id]);
+  const [local, setLocal] = useState<'running' | 'done' | 'failed'>();
+  const [error, setError] = useState<string>();
+  const state = local ?? (stored?.status === 'done' ? 'done' : undefined);
+  const go = async () => {
+    if (state === 'running' || state === 'done') return;
+    setLocal('running');
+    setError(undefined);
+    try {
+      const env = await run(step);
+      if (env.kind === 'error' || env.kind === 'needs_confirmation') {
+        setLocal('failed');
+        setError(env.kind === 'error' ? env.summary : 'That needs your approval in a message.');
+      } else setLocal('done');
+    } catch (e) {
+      setLocal('failed');
+      setError(e instanceof Error ? e.message : 'That did not go through.');
+    }
+  };
+  if (state === 'done')
+    return (
+      <span
+        className={cx(STEP_CHIP, 'border-line-2 bg-canvas-2 text-ink-3')}
+        data-testid="next-step"
+        data-state="done"
+        aria-live="polite"
+      >
+        <Check size={12} aria-hidden className="shrink-0" />
+        <span className="min-w-0">{step.run.done}</span>
+      </span>
+    );
+  return (
+    <span className="inline-flex flex-wrap items-center gap-x-2 gap-y-1">
+      <button
+        type="button"
+        className={cx(
+          STEP_CHIP,
+          'border-line bg-canvas text-ink-2 hover:text-ink hover:bg-canvas-2 hover:border-[#d6d4d0] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:opacity-50 disabled:pointer-events-none',
+        )}
+        disabled={state === 'running'}
+        aria-busy={state === 'running'}
+        data-testid="next-step"
+        data-state={state ?? 'ready'}
+        onClick={() => void go()}
+      >
+        {state === 'running' ? (
+          <Loader2 size={12} aria-hidden className="shrink-0 animate-spin text-ink-3" />
+        ) : (
+          <Plus size={12} aria-hidden className="shrink-0 text-ink-3" />
+        )}
+        <span className="min-w-0">{step.label}</span>
+      </button>
+      {state === 'failed' && error && (
+        <span className="text-[12.5px] text-bad" data-testid="next-step-error">
+          {error}
+        </span>
+      )}
+    </span>
   );
 }
