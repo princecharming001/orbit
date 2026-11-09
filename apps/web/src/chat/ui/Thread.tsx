@@ -261,7 +261,12 @@ function Assistant({
               : b.envelope.kind === 'draft'
                 ? (() => {
                     const r = readDraft(b.envelope.data);
-                    return r?.draft?.personId ?? r?.person?.id;
+                    const ui = (b.envelope.data as { ui?: { personId?: unknown } } | undefined)?.ui;
+                    return (
+                      r?.draft?.personId ??
+                      r?.person?.id ??
+                      (typeof ui?.personId === 'string' ? ui.personId : undefined)
+                    );
                   })()
                 : undefined;
           return id ? [id] : [];
