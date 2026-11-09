@@ -1993,7 +1993,67 @@ describe('orbit-connectors /posting', () => {
     'https://careers.example.com/role/6':
       '<html><title>Careers</title><body>Backend Engineer, Billing. Acme Corp. Austin, TX. Hiring manager: Sam Ortiz.</body></html>',
     'https://blog.example.com/post/7': '<html><title>Our offsite</title><body>We went hiking.</body></html>',
+    'https://blog.example.com/post/8': `<html><title>Our offsite</title><body>${'We went hiking up the ridge and talked about the roadmap. '.repeat(15)}</body></html>`,
+    // a careers site that draws its Greenhouse posting with script: the page alone is an empty shell
+    'https://neuralink.com/careers/apply/':
+      '<html><title>Apply | Neuralink</title><body><div id="grnhse_app"></div><h1>Loading job application…</h1></body></html>',
+    'https://acme.com/careers/apply/':
+      '<html><title>Apply | Acme</title><body><div id="grnhse_app"></div><h1>Loading job application…</h1></body></html>',
+    // Ashby embedded on a company site, and the job's own Ashby page
+    'https://www.linear.app/careers/':
+      '<html><title>Careers</title><body><script src="https://jobs.ashbyhq.com/linear/embed?version=2"></script></body></html>',
+    'https://jobs.ashbyhq.com/linear/0a1b2c3d-1111-2222-3333-444455556666': ld({
+      title: 'Product Engineer',
+      hiringOrganization: { name: 'Linear' },
+    }),
+    // a careers page that frames its board's job page
+    'https://careers.figma.example/role':
+      '<html><title>Careers</title><body><iframe src="https://jobs.lever.co/figma/aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee?embed=true&amp;x=1"></iframe></body></html>',
+    'https://jobs.lever.co/figma/aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee': ld({
+      title: 'Design Intern',
+      hiringOrganization: 'Figma',
+    }),
   };
+  /** Greenhouse: the embed names a job's board, and the public API answers with the job. */
+  const GREENHOUSE_JOBS: Record<string, Record<string, unknown>> = {
+    'neuralink/5663271003': {
+      title: 'Machine Learning Engineer',
+      company_name: 'Neuralink',
+      location: { name: 'Austin, Texas, United States' },
+      departments: [{ id: 1, name: 'BCI Applications' }],
+      requisition_id: 'HC-ENG-009',
+      application_deadline: null,
+      content: '&lt;p&gt;Build the decoders that let people with paralysis control computers.&lt;/p&gt;',
+    },
+    'stripe/7000001': { title: 'Software Engineer, New Grad', company_name: 'Stripe' },
+  };
+  const GREENHOUSE_BOARD_OF: Record<string, string> = {
+    '5663271003': 'neuralink',
+    '7000001': 'stripe',
+    '9999999': 'acme',
+  };
+  function greenhouse(url: string): Response | undefined {
+    const embed = /^https:\/\/boards\.greenhouse\.io\/embed\/job_app\?token=(\d+)$/.exec(url);
+    if (embed) {
+      const board = GREENHOUSE_BOARD_OF[embed[1]!];
+      return board
+        ? new Response(null, {
+            status: 301,
+            headers: {
+              location: `https://job-boards.greenhouse.io/embed/job_app?for=${board}&token=${embed[1]}`,
+            },
+          })
+        : new Response('not found', { status: 404 });
+    }
+    const api = /^https:\/\/boards-api\.greenhouse\.io\/v1\/boards\/([^/]+)\/jobs\/(\d+)$/.exec(url);
+    if (api) {
+      const job = GREENHOUSE_JOBS[`${api[1]}/${api[2]}`];
+      return job
+        ? new Response(JSON.stringify(job), { status: 200, headers: { 'content-type': 'application/json' } })
+        : new Response(JSON.stringify({ status: 404, error: 'Job not found' }), { status: 404 });
+    }
+    return undefined;
+  }
   function postings(model?: (text: string) => Record<string, unknown>, perDay = 3) {
     const calls = { page: 0, model: 0 };
     const store = new Map<string, number>();
@@ -2033,6 +2093,8 @@ describe('orbit-connectors /posting', () => {
         }
         calls.page++;
         if (url.includes('down.example.com')) throw new Error('connect ECONNREFUSED');
+        const gh = greenhouse(url);
+        if (gh) return gh;
         const html = PAGES[url.split(/[?#]/)[0]!];
         return html
           ? new Response(html, { status: 200, headers: { 'content-type': 'text/html' } })
@@ -2163,5 +2225,99 @@ describe('orbit-connectors /posting', () => {
       ok: false,
       reason: 'unconfigured',
     });
+  });
+
+  it('reads a Greenhouse job a careers site embeds, from the board, with no model and no page', async () => {
+    const { post, calls } = postings();
+    const url =
+      'https://neuralink.com/careers/apply/?gh_jid=5663271003&gh_src=c356a2533us&jr_id=6a07008e152f493123c4c4b4';
+    expect(await (await post({ url })).json()).toMatchObject({
+      ok: true,
+      source: 'board',
+      posting: {
+        company: 'Neuralink',
+        role: 'Machine Learning Engineer',
+        team: 'BCI Applications',
+        location: 'Austin, Texas, United States',
+        requisitionId: 'HC-ENG-009',
+        url,
+      },
+    });
+    // the job id is the cache key: another tracking link to the same job is a cache hit
+    const before = calls.page;
+    const again = await (
+      await post({ url: 'https://neuralink.com/careers/apply/?gh_jid=5663271003&utm_source=x' })
+    ).json();
+    expect(again).toMatchObject({ ok: true, cached: true, posting: { role: 'Machine Learning Engineer' } });
+    expect(calls.page).toBe(before);
+  });
+
+  it("reads Greenhouse's own job pages from the API, and its embed address too", async () => {
+    const { post } = postings();
+    for (const url of [
+      'https://job-boards.greenhouse.io/stripe/jobs/7000001',
+      'https://boards.greenhouse.io/embed/job_app?for=stripe&token=7000001',
+    ])
+      expect(await (await post({ url })).json()).toMatchObject({
+        ok: true,
+        source: 'board',
+        posting: { company: 'Stripe', role: 'Software Engineer, New Grad' },
+      });
+  });
+
+  it('the model reads the job description from the board for the team, level and names', async () => {
+    const { post, calls } = postings(
+      (text) =>
+        /decoders/.test(text)
+          ? { kind: 'posting', company: 'Neuralink', role: 'Machine Learning Engineer', level: 'Senior' }
+          : { kind: 'not_a_posting' },
+      10,
+    );
+    expect(
+      await (await post({ url: 'https://neuralink.com/careers/apply/?gh_jid=5663271003' })).json(),
+    ).toMatchObject({ ok: true, source: 'board', posting: { team: 'BCI Applications', level: 'Senior' } });
+    expect(calls.model).toBe(1);
+  });
+
+  it('says a Greenhouse job is closed when its board no longer lists it, and never remembers that', async () => {
+    const { post } = postings();
+    const url = 'https://acme.com/careers/apply/?gh_jid=9999999';
+    expect(await (await post({ url })).json()).toMatchObject({
+      ok: false,
+      reason: 'closed',
+      message: 'The job board no longer lists that job, so it may have closed. Try the company name.',
+    });
+    expect((await (await post({ url })).json()).cached).toBeUndefined();
+  });
+
+  it('reads an Ashby job a careers site embeds, from its Ashby page', async () => {
+    const { post } = postings();
+    expect(
+      await (
+        await post({ url: 'https://www.linear.app/careers/?ashby_jid=0a1b2c3d-1111-2222-3333-444455556666' })
+      ).json(),
+    ).toMatchObject({ ok: true, source: 'jsonld', posting: { company: 'Linear', role: 'Product Engineer' } });
+  });
+
+  it('follows the one job link a careers page frames', async () => {
+    const { post } = postings();
+    expect(await (await post({ url: 'https://careers.figma.example/role' })).json()).toMatchObject({
+      ok: true,
+      posting: { company: 'Figma', role: 'Design Intern', url: 'https://careers.figma.example/role' },
+    });
+  });
+
+  it('never caches "not a posting" for a thin page, so a later read can do better', async () => {
+    const { post, calls } = postings(() => ({ kind: 'not_a_posting' }), 10);
+    const url = 'https://neuralink.com/careers/apply/';
+    expect((await (await post({ url })).json()).reason).toBe('not_a_posting');
+    const pages = calls.page;
+    await post({ url });
+    expect(calls.page).toBeGreaterThan(pages);
+    // a page with real words that is not a posting is remembered
+    await post({ url: 'https://blog.example.com/post/8' });
+    const blog = calls.page;
+    await post({ url: 'https://blog.example.com/post/8' });
+    expect(calls.page).toBe(blog);
   });
 });

@@ -12,12 +12,19 @@ export type PostingRead =
   | {
       ok: true;
       posting: PostingInfo;
-      source: 'jsonld' | 'model' | 'text' | 'demo' | 'typed';
+      source: 'board' | 'jsonld' | 'model' | 'text' | 'demo' | 'typed';
       cached?: boolean;
     }
   | {
       ok: false;
-      reason: 'not_a_posting' | 'careers_list' | 'unreachable' | 'unconfigured' | 'limit' | 'bad_request';
+      reason:
+        | 'not_a_posting'
+        | 'careers_list'
+        | 'closed'
+        | 'unreachable'
+        | 'unconfigured'
+        | 'limit'
+        | 'bad_request';
       message: string;
     };
 
@@ -174,12 +181,18 @@ export async function readPosting(
         };
   }
   const r = await unipileProxyCall<
-    PostingRead | { ok: true; posting: PostingInfo; source: 'jsonld' | 'model' | 'text' }
+    PostingRead | { ok: true; posting: PostingInfo; source: 'board' | 'jsonld' | 'model' | 'text' }
   >('/posting', { url: input.url, text: input.text }, { fetch: opts.fetch, timeoutMs: 30_000 });
   if (r.ok && (r.value.ok || !input.url)) return r.value;
   // the page could not be read: a job board's address still names the company, and a typed line still makes a target
   const fromUrl = input.url ? postingFromUrl(input.url) : undefined;
   if (fromUrl) return { ok: true, posting: fromUrl, source: 'typed' };
+  // a job link the server could not make out (a careers site that draws its posting with script): the site still
+  // names the company. A careers list or a closed job keeps its own answer.
+  if (r.ok && !r.value.ok && r.value.reason === 'not_a_posting' && input.url && isJobBoardLink(input.url)) {
+    const fromPath = postingFromPath(input.url);
+    if (fromPath) return { ok: true, posting: fromPath, source: 'typed' };
+  }
   if (r.ok) return r.value;
   const typed = input.text ? postingFromText(input.text) : undefined;
   if (typed) return { ok: true, posting: typed, source: 'typed' };
