@@ -4,7 +4,9 @@
  * day rows), the chat's token shape, the LinkedIn ledgers' fullest share, Hunter credits this month, isolate deaths,
  * dead letters and job errors, and any provider switched off. It writes one orbit.audit_log row, action
  * `cost.digest` (the owner's cost page reads these), and mails the owner when a threshold is crossed and a mailer
- * is configured. The Unipile account count is not readable here; it stays a manual field (null).
+ * is configured. The Unipile accounts come from the newest unipile.reconcile row of the last 36 hours (plan 35 E1):
+ * the count on the key, Orbit's linked ones, and the LinkedIn accounts Orbit made that no student row holds (orphans,
+ * each still billed), with Osmo's and other accounts counted apart; null when the reconciler has not run.
  */
 import type { Db } from '../../_shared/db.ts';
 import type { Mailer } from '../../_shared/services.ts';
@@ -28,6 +30,19 @@ export const DEFAULT_COST_THRESHOLDS: CostThresholds = {
   isolateDeaths: 5,
   deadLetters: 5,
 };
+
+/** What the digest carries from the newest unipile.reconcile row (handlers/unipile.ts ReconcileReport). */
+export interface UnipileDigest {
+  at: string;
+  total: number;
+  orbitLinked: number;
+  missingAtUnipile: string[];
+  orbitOrphans: { id: string; createdAt: string | null; reason: string }[];
+  notOrbitCount: number;
+  notOrbitLinkedin: string[];
+  /** links parked by linkedin.park (plan 35 E5), now */
+  parked: number;
+}
 
 /** each account's daily LinkedIn ledger totals (orbit-connectors DEFAULT_LEDGER) */
 export const LINKEDIN_LEDGER_TOTALS: Record<string, number> = {
@@ -78,7 +93,9 @@ export interface CostDigest {
     byKind: { kind: string; runs: number; errors: number }[];
   };
   switchedOff: string[];
+  /** every account on the shared Unipile key at the last reconcile; null before it first runs */
   unipileAccounts: number | null;
+  unipile: UnipileDigest | null;
   thresholds: CostThresholds;
   crossed: { key: string; value: number; limit: number }[];
   mailed: boolean;
@@ -211,6 +228,8 @@ export async function buildCostDigest(db: Db, now: Date, thresholds: CostThresho
         select provider from orbit_private.provider_switches where not enabled order by provider`
     ).map((r) => r.provider);
 
+  const unipile = await unipileDigest(db, now);
+
   const crossed: CostDigest['crossed'] = [];
   const check = (key: string, value: number | null, limit: number) => {
     if (value != null && value > limit) crossed.push({ key, value, limit });
@@ -221,6 +240,8 @@ export async function buildCostDigest(db: Db, now: Date, thresholds: CostThresho
   check('isolateDeaths', jobs.isolateDeaths, thresholds.isolateDeaths);
   check('deadLetters', jobs.deadLetters, thresholds.deadLetters);
   check('switchedOff', switchedOff.length, 0);
+  // an orphan is an account Orbit made and no student holds: billed every month until someone deletes it
+  check('unipileOrphans', unipile ? unipile.orbitOrphans.length : null, 0);
 
   return {
     day,
@@ -234,10 +255,41 @@ export async function buildCostDigest(db: Db, now: Date, thresholds: CostThresho
     linkedinPeakShare,
     jobs,
     switchedOff,
-    unipileAccounts: null,
+    unipileAccounts: unipile?.total ?? null,
+    unipile,
     thresholds,
     crossed,
     mailed: false,
+  };
+}
+
+async function unipileDigest(db: Db, now: Date): Promise<UnipileDigest | null> {
+  const [r] = await db.sql<{
+    created_at: Date | string;
+    details: {
+      total?: number;
+      orbitLinked?: number;
+      missingAtUnipile?: string[];
+      orbitOrphans?: { id: string; createdAt: string | null; reason: string }[];
+      notOrbit?: { count?: number; linkedin?: { id: string }[] };
+    };
+  }>`
+    select created_at, details from orbit.audit_log
+     where action = 'unipile.reconcile' and created_at > ${new Date(now.getTime() - 36 * 3_600_000)}::timestamptz
+     order by created_at desc limit 1`;
+  const [p] = await db.sql<{ n: number | string }>`
+    select count(*) as n from orbit.integration_accounts where provider = 'linkedin' and status = 'parked'`;
+  if (!r) return null;
+  const d = r.details ?? {};
+  return {
+    at: new Date(r.created_at).toISOString(),
+    total: num(d.total),
+    orbitLinked: num(d.orbitLinked),
+    missingAtUnipile: d.missingAtUnipile ?? [],
+    orbitOrphans: (d.orbitOrphans ?? []).map((o) => ({ id: o.id, createdAt: o.createdAt, reason: o.reason })),
+    notOrbitCount: num(d.notOrbit?.count),
+    notOrbitLinkedin: (d.notOrbit?.linkedin ?? []).map((a) => a.id),
+    parked: num(p?.n),
   };
 }
 
@@ -248,6 +300,7 @@ const LABELS: Record<string, string> = {
   isolateDeaths: 'Worker runs that died with the isolate',
   deadLetters: 'Dead letters',
   switchedOff: 'Providers switched off',
+  unipileOrphans: 'Unipile LinkedIn accounts Orbit made that no student holds',
 };
 
 /** the email: plain text, numbers first, no em dashes or exclamation marks */
@@ -263,6 +316,22 @@ export function costDigestText(d: CostDigest): string {
     `Jobs: ${d.jobs.runs} runs, ${d.jobs.errors} errors, ${d.jobs.isolateDeaths} isolate deaths, ${d.jobs.deadLetters} dead letters.`,
   ];
   if (d.switchedOff.length) lines.push(`Switched off: ${d.switchedOff.join(', ')}.`);
+  if (d.unipile) {
+    const u = d.unipile;
+    lines.push(
+      `Unipile: ${u.total} accounts on the key, ${u.orbitLinked} linked by Orbit, ${u.parked} parked, ${u.notOrbitCount} not Orbit's.`,
+    );
+    if (u.orbitOrphans.length)
+      lines.push(
+        `Orbit orphans (not deleted, delete by hand once checked): ${u.orbitOrphans
+          .map((o) => `${o.id} (${o.createdAt?.slice(0, 10) ?? 'no date'})`)
+          .join(', ')}.`,
+      );
+    if (u.notOrbitLinkedin.length)
+      lines.push(`LinkedIn accounts that are not Orbit's: ${u.notOrbitLinkedin.join(', ')}.`);
+    if (u.missingAtUnipile.length)
+      lines.push(`Orbit rows whose account Unipile no longer has: ${u.missingAtUnipile.length}.`);
+  }
   if (d.providers.length) {
     lines.push('', 'By provider:');
     for (const p of d.providers.slice(0, 12))

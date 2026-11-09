@@ -88,6 +88,12 @@ export async function liveLinkedInAccount(userId: string): Promise<IntegrationAc
 const isConnected = (row: IntegrationAccount | undefined): row is IntegrationAccount =>
   !!row && row.status !== 'revoked' && !!row.externalAccountId;
 
+/** A link Orbit's server parked while the student was away (plan 35 E5). */
+const isParked = (row: IntegrationAccount | undefined): boolean =>
+  !!row &&
+  (row.status === 'revoked' || !row.externalAccountId) &&
+  (row.syncState as { parked?: unknown } | undefined)?.parked === true;
+
 async function saveAccount(
   userId: string,
   patch: Partial<IntegrationAccount>,
@@ -110,6 +116,13 @@ async function saveAccount(
   return row;
 }
 
+/**
+ * What Settings says when Orbit's server parked the student's LinkedIn link while they were away (plan 35 E5): the
+ * account was unlinked at Unipile, everything already synced stayed, and reconnecting picks up from the last sync.
+ */
+export const LINKEDIN_PARKED =
+  'LinkedIn is paused while you were away. Reconnect to pick up where you left off.';
+
 /** What Settings says when the server's LinkedIn sync stopped on an error (it retries on Sync now). */
 export const SERVER_SYNC_STOPPED = "LinkedIn's sync stopped on Orbit's server. Try Sync now.";
 
@@ -126,12 +139,25 @@ export async function refreshLinkedInFromServer(user: User, signal?: AbortSignal
   const v = st.value;
   const row = await liveLinkedInAccount(user.id);
   if (v.status === 'not_connected') {
-    if (isConnected(row))
-      await db.integrations.update(row.id, {
+    if (isConnected(row) || isParked(row))
+      await db.integrations.update(row!.id, {
         status: 'revoked',
         externalAccountId: undefined,
         lastError: undefined,
+        syncState: { ...(row!.syncState ?? {}), parked: false },
       });
+    return true;
+  }
+  // parked while away: not linked, so nothing calls LinkedIn, and Settings offers Reconnect LinkedIn
+  if (v.status === 'parked') {
+    await saveAccount(user.id, {
+      status: 'revoked',
+      externalAccountId: undefined,
+      accessToken: undefined,
+      lastError: LINKEDIN_PARKED,
+      lastSyncedAt: v.lastSyncedAt ?? row?.lastSyncedAt,
+      syncState: { ...(row?.syncState ?? {}), rows: v.relations, server: true, parked: true },
+    });
     return true;
   }
   // still signing in: the connect flow owns the row until the account turns active
@@ -147,7 +173,7 @@ export async function refreshLinkedInFromServer(user: User, signal?: AbortSignal
           : undefined,
     lastSyncedAt: v.lastSyncedAt ?? row?.lastSyncedAt,
     accessToken: undefined,
-    syncState: { ...(row?.syncState ?? {}), rows: v.relations, server: true },
+    syncState: { ...(row?.syncState ?? {}), rows: v.relations, server: true, parked: false },
   });
   return true;
 }
@@ -712,6 +738,8 @@ export interface LinkedInLiveStatus {
   error?: string;
   /** LinkedIn signed the account out (checkLinkedInAccount): Settings offers Sign in again */
   signedOut?: boolean;
+  /** Orbit parked the link while the student was away (plan 35 E5): Settings offers Reconnect LinkedIn */
+  parked?: boolean;
   /** the sample student's mock connector */
   demo: boolean;
   /** connected and the last sync is more than a day old */
@@ -731,6 +759,7 @@ export async function linkedInLiveStatus(user: User, now = new Date()): Promise<
     rows: connected && typeof rows === 'number' ? rows : undefined,
     error: connected ? row.lastError : undefined,
     signedOut: connected && row.lastError === LINKEDIN_SIGNED_OUT,
+    parked: isParked(row),
     demo: usesMockConnectors(user.id),
     stale: connected && (!last || now.getTime() - Date.parse(last) > AUTO_SYNC_AFTER_MS),
   };

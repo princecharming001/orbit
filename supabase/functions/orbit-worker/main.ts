@@ -11,6 +11,7 @@ import { agentEnvWithSecrets, makeMailer } from '../_shared/services.ts';
 import { sqlVault } from '../_shared/vault.ts';
 import { DEFAULT_COST_THRESHOLDS } from './handlers/cost.ts';
 import type { HandlerDeps } from './handlers/deps.ts';
+import { parkDays } from './handlers/unipile.ts';
 import { DEFAULT_BUDGET_MS, defaultHandlers, makeWorkerHandler, runTick } from './worker.ts';
 
 const env = (name: string) => Deno.env.get(name) || undefined;
@@ -28,11 +29,14 @@ const cronSecret = await resolveSecret(env, db, 'ORBIT_CRON_SECRET', 'orbit_cron
 // function secret when set, else the key Orbit's chat proxy reads from orbit_private.secrets. Only these jobs get it:
 // drafting and research read theirs through agentEnv. Spend goes through the per-user ledger and caps.
 // Unipile (LinkedIn sync) the same way.
-const [claudeKey, unipileKey, unipileBase, ownerId] = await Promise.all([
+// ORBIT_LINKEDIN_PARK_DAYS (plan 35 E5): days away before a student's LinkedIn link is parked; unset is 21, 0 is off.
+// A function secret, else orbit_private.secrets, so it can be turned off without a redeploy.
+const [claudeKey, unipileKey, unipileBase, ownerId, parkRaw] = await Promise.all([
   providerSecret(env, db, 'ORBIT_ANTHROPIC_API_KEY'),
   providerSecret(env, db, 'UNIPILE_API_KEY'),
   providerSecret(env, db, 'UNIPILE_BASE_URL'),
   providerSecret(env, db, 'ORBIT_OWNER_ID'),
+  providerSecret(env, db, 'ORBIT_LINKEDIN_PARK_DAYS'),
 ]);
 
 // the daily cost digest (plan 34 E2): thresholds from the environment, the owner's email through Resend when set
@@ -63,6 +67,7 @@ const handlerDeps: HandlerDeps = {
   unipile: { apiKey: unipileKey, baseUrl: unipileBase },
   claude: makeClaude({ apiKey: claudeKey, db }),
   cost: { mailer: makeMailer(agentEnv, fetch), ownerId, thresholds: costThresholds },
+  park: { days: parkDays(parkRaw) },
 };
 const handlers = defaultHandlers({ ...handlerDeps, agents: { env: agentEnv } });
 

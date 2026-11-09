@@ -27,6 +27,7 @@ import { gmailHandlers } from './handlers/gmail.ts';
 import { linkedinHandlers } from './handlers/linkedin.ts';
 import { scoreHandlers } from './handlers/score.ts';
 import { searchHandlers } from './handlers/search.ts';
+import { unipileHandlers } from './handlers/unipile.ts';
 
 export class NotImplemented extends Error {
   constructor(kind: string) {
@@ -82,6 +83,7 @@ export function defaultHandlers(
     ...friendHandlers(),
     ...searchHandlers(deps),
     ...costHandlers(deps.cost),
+    ...unipileHandlers(deps),
     ...classifyHandlers(deps, agents),
     ...agentHandlers(agents),
   };

@@ -27,7 +27,7 @@ import {
   storeChat,
 } from '../../_shared/ingest/linkedin.ts';
 import { loadAccount, loadSelf, patchSyncState } from '../../_shared/ingest/util.ts';
-import { createUnipileSync, type UnipileSync } from '../../_shared/providers/unipileSync.ts';
+import { createUnipileSync, type UnipileSync, unipileTime } from '../../_shared/providers/unipileSync.ts';
 import type { JobContext, JobHandler } from '../worker.ts';
 import { type HandlerDeps, JobSkipped, LONG_VT_SEC } from './deps.ts';
 
@@ -62,6 +62,13 @@ interface LinkedinState {
   /** this pass is a short one: chats with activity after `chatsAfter` only, and syncedAt is left as it is */
   short?: boolean;
   chatsAfter?: string;
+  /**
+   * plan 35 E5, a parked link reconnected (orbit-webhooks unparkState): this short pass reads relations only back to
+   * `chatsAfter` (newest first), and ends as a full pass would
+   */
+  resume?: boolean;
+  /** messages at or before this were stored under an earlier Unipile account's ids and are never stored again */
+  floor?: string;
 }
 
 const str = (v: unknown) => (typeof v === 'string' && v ? v : undefined);
@@ -180,6 +187,17 @@ export function linkedinHandlers(deps: HandlerDeps): Record<string, JobHandler> 
           const rels = page.value.items.map(relationFromUnipile).filter((r) => !!r);
           const r = await ingestRelations(ctx.db, userId, rels, now);
           for (const pid of r.byMember.values()) touched.add(pid);
+          // a resumed link: the walk stops at the first page that reaches back to the last finished pass
+          const resumeAt = state.resume ? state.chatsAfter : undefined;
+          if (
+            resumeAt &&
+            page.value.cursor &&
+            rels.some((x) => !!x.connectedAt && x.connectedAt <= resumeAt)
+          ) {
+            state = { ...state, stage: 'chats', cursor: null, chatsCursor: null, chatIndex: 0 };
+            await save({ stage: 'chats', cursor: null, chatsCursor: null, chatIndex: 0 });
+            continue;
+          }
           if (fresh) {
             // the last full pass stands (its end time keeps the next sync short too); chats are read only back to
             // the last pass of either kind
@@ -232,6 +250,9 @@ export function linkedinHandlers(deps: HandlerDeps): Record<string, JobHandler> 
             break;
           }
           const chat = chats[i]!;
+          // nothing new since the floor: every message in it is stored already, under the earlier account's ids
+          const chatAt = unipileTime(chat.timestamp);
+          if (state.floor && chatAt && chatAt <= state.floor) continue;
           chatsDone++;
           const att = await call(() => unipile.attendees(chat.id));
           if (!att.ok) throw new Error(`unipile attendees ${att.status ?? att.kind}`);
@@ -251,12 +272,20 @@ export function linkedinHandlers(deps: HandlerDeps): Record<string, JobHandler> 
           if (count > CHAT_MAX_ATTENDEES) continue;
           const msgs = await call(() => unipile.messages(chat.id));
           if (!msgs.ok) throw new Error(`unipile messages ${msgs.status ?? msgs.kind}`);
+          const floor = state.floor;
+          const kept = floor
+            ? msgs.value.filter((m) => {
+                const at = unipileTime(m.timestamp);
+                return !at || at > floor;
+              })
+            : msgs.value;
+          if (!kept.length) continue;
           const stored = await storeChat(
             ctx.db,
             userId,
             self,
             { id: chat.id, attendees },
-            msgs.value.map((m) => ({
+            kept.map((m) => ({
               id: m.id,
               text: m.text,
               senderId: m.sender_id,
@@ -287,14 +316,17 @@ export function linkedinHandlers(deps: HandlerDeps): Record<string, JobHandler> 
           state = { ...state, chatsCursor: page.value.cursor, chatIndex: 0 };
           await save({ chatsCursor: page.value.cursor, chatIndex: 0 });
         } else if (state.short) {
-          // a short pass ends without a full rebuild: syncedAt stays, so a full walk still comes once a week
-          state = { ...state, stage: 'done', chatsCursor: null, chatIndex: 0, short: false };
+          // a short pass ends without a full rebuild: syncedAt stays, so a full walk still comes once a week. A resumed
+          // link's pass brought everything since the last finished one, so it counts as that full pass.
+          const resumed = !!state.resume;
+          state = { ...state, stage: 'done', chatsCursor: null, chatIndex: 0, short: false, resume: false };
           await save({
             stage: 'done',
             chatsCursor: null,
             chatIndex: 0,
             short: false,
             recentAt: now.toISOString(),
+            ...(resumed ? { resume: false, syncedAt: now.toISOString() } : {}),
           });
           finished = true;
           shortPass = true;

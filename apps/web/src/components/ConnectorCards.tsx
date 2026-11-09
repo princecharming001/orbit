@@ -10,6 +10,7 @@ import {
   checkLinkedInAccount,
   connectLinkedInLive,
   disconnectLinkedInLive,
+  LINKEDIN_PARKED,
   LIVE_SOON,
   linkedInLiveStatus,
   refreshLinkedInFromServer,
@@ -121,6 +122,10 @@ export function LinkedInLiveCard({ user }: { user: User }) {
             <RowStatus testId="settings-linkedin-live-status">
               <Spinner /> {busy}
             </RowStatus>
+          ) : status.parked ? (
+            <RowStatus tone="muted" testId="settings-linkedin-live-status">
+              {LINKEDIN_PARKED}
+            </RowStatus>
           ) : undefined
         }
         line={
@@ -167,7 +172,18 @@ export function LinkedInLiveCard({ user }: { user: User }) {
                   )}
                 </Button>
               )}
-              {(status.connected || !soon) && (
+              {status.parked && !status.connected && (
+                <Button
+                  size="sm"
+                  variant="primary"
+                  onClick={connect}
+                  disabled={!!busy}
+                  data-testid="settings-linkedin-live-reconnect"
+                >
+                  Reconnect LinkedIn
+                </Button>
+              )}
+              {(status.connected || !soon) && !(status.parked && !status.connected) && (
                 <Switch
                   checked={status.connected}
                   label="LinkedIn"

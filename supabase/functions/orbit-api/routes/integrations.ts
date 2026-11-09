@@ -4,7 +4,10 @@
  *   POST /google/sync {mode: 'backfill' | 'incremental'}  → QueuedResponse
  *   POST /linkedin/connect/start                          → {url}: Unipile hosted auth for this user (name = user id,
  *                                                           notify_url = orbit-webhooks/unipile/account?token=…)
- *   POST /linkedin/status                                 → LinkedinStatusResponse
+ *   POST /linkedin/status                                 → LinkedinStatusResponse ('parked': the link was removed
+ *                                                           while the student was away, plan 35 E5; connect/start
+ *                                                           links a new account into the same row, which stays
+ *                                                           'parked' until the webhook turns it active)
  *   POST /linkedin/sync                                   → QueuedResponse
  *
  * Work is queued, never done inline. Without Unipile's key (or the webhook secret) the LinkedIn routes answer 503
@@ -118,7 +121,8 @@ export async function linkedinConnectStart(ctx: Ctx): Promise<Response> {
     insert into orbit.integration_accounts (user_id, provider, status)
     values (${userId}::uuid, 'linkedin', 'connecting')
     on conflict (user_id, provider) do update set
-      status = case when orbit.integration_accounts.status = 'active' then 'active' else 'connecting' end`;
+      status = case when orbit.integration_accounts.status in ('active', 'parked')
+                    then orbit.integration_accounts.status else 'connecting' end`;
   await ctx.db.sql`
     insert into orbit.audit_log (user_id, actor, action, target_table)
     values (${userId}::uuid, 'user', 'linkedin.connect_start', 'integration_accounts')`;
@@ -142,7 +146,10 @@ export async function linkedinStatus(ctx: Ctx): Promise<Response> {
        and p.merged_into is null and p.deleted_at is null`;
   const status: LinkedinStatusResponse['status'] = !a
     ? 'not_connected'
-    : a.status === 'active' || a.status === 'connecting' || a.status === 'needs_reauth'
+    : a.status === 'active' ||
+        a.status === 'connecting' ||
+        a.status === 'needs_reauth' ||
+        a.status === 'parked'
       ? a.status
       : a.status === 'revoked'
         ? 'not_connected'
