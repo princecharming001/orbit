@@ -44,10 +44,12 @@ export function OnboardingLayout({
     // opaque and positioned, so the body's fixed colour blobs (z-index -1) are covered on these pages
     <div className="relative z-0 min-h-dvh bg-page flex flex-col" data-testid="ob-layout">
       <header className="relative h-16 shrink-0 px-4 sm:px-8 flex items-center justify-between gap-4 border-b border-line">
+        {/* the landing page: /welcome shows it to someone mid-setup too ("/" would send them back into setup) */}
         <Link
-          to="/"
+          to="/welcome"
           className="inline-flex items-center gap-2 rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ink/20"
           title="Back to the Orbit home page"
+          data-testid="ob-home"
         >
           <Logo size={24} />
           <span className="font-medium tracking-[-0.01em] text-[15px]">Orbit</span>

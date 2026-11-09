@@ -209,10 +209,11 @@ describe('setup addresses', () => {
     done();
   });
 
-  it('goes back from Welcome to the landing page', async () => {
+  it('takes the Orbit logo back to the landing page, from any step of setup', async () => {
     const { host, q, done } = await renderSetup('/onboarding/0', 1);
     expect(q('ob-welcome')).not.toBeNull();
-    await act(async () => (host.querySelector('button[aria-label="Back"]') as HTMLElement).click());
+    expect(host.querySelector('button[aria-label="Back"]')).toBeNull();
+    await act(async () => q('ob-home')!.click());
     await settle();
     expect(q('landing')).not.toBeNull();
     done();
