@@ -318,7 +318,7 @@ export const autopilotStatusTool = defineTool({
   name: 'autopilot_status',
   kind: 'read',
   description:
-    'Call this when the student asks what Orbit sent today or on its own, what goes out tomorrow (tomorrow\'s batch, and which first messages wait for their tap), what is held and why, why someone was not written to ("why didn\'t you send to Priya": give personName, and the answer names the one rule), which replies need them, whether a call got booked and when, what happened with someone who replied (an unsubscribe or a decline means never write to them again), whether autopilot is paused, how the week went on autopilot, or where the rungs and caps stand. It returns the replies of the last week with their class and outcome and the upcoming calls with their times: answer from those, never from the stage of a chat or an old note. Read only.',
+    "Call this when the student asks what Orbit sent today or on its own, what goes out tomorrow and which first messages wait for their tap, what is held and why, why someone was not written to (give personName; the answer names the one rule), which replies need them, whether a call got booked, what happened with someone who replied, whether autopilot is paused, how the week went, or where the rungs and caps stand. Returns the last week's replies with their class and outcome, the upcoming calls with their times, and howToAnswer. Read only.",
   input: z.object({
     personName: z
       .string()

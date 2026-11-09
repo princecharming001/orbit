@@ -17,6 +17,7 @@ import {
   type SearchOutcome,
 } from '../../engine/networkSearch';
 import { z } from '../../zod';
+import type { ResultEnvelope, ToolContext } from '../types';
 import { defineTool, err, ok } from './_shared';
 import { searchPeople } from './read';
 
@@ -381,7 +382,7 @@ function forModel(d: Awaited<ReturnType<typeof tableData>>) {
     judgeFailed: d.judgeFailed || undefined,
     profilesReadNow: d.profilesRead || undefined,
     noAiCheck: d.judgeUnavailable || undefined,
-    rows: d.rows.slice(0, 15).map((r) => ({
+    rows: d.rows.slice(0, 10).map((r) => ({
       personId: r.person.id,
       name: r.person.displayName,
       title: r.person.currentTitle,
@@ -396,33 +397,140 @@ function forModel(d: Awaited<ReturnType<typeof tableData>>) {
   };
 }
 
+const strings = (what: string) => z.array(z.string()).optional().describe(what);
+
+/**
+ * The model's form of a network search (plan 35 A1): the sentence plus a few flat filters, expanded into a QuerySpec
+ * here. The full spec (blocks, anyOf, negation per block) stays for the router's compiled specs (search_network_spec).
+ */
+const flat = z
+  .object({
+    ask: z.string().describe("The student's sentence, as they said it."),
+    roles: strings('Jobs or kinds of work as said ("PM", "engineers", "founders"). OR.'),
+    companies: strings('Companies as said ("Stripe"). OR; with roles, the same job.'),
+    companyKinds: z.array(z.enum(COMPANY_KINDS)).optional().describe('Kinds of company.'),
+    yc: strings('YC batches as said ("W26"); [] for any YC company.'),
+    industries: strings('Industries as said ("fintech").'),
+    when: z
+      .enum(['current', 'past', 'ever'])
+      .optional()
+      .describe('current (default), past ("ex-Google") or ever.'),
+    notAt: strings('Companies to leave out ("not at Google").'),
+    schools: strings('Schools as said ("Berkeley").'),
+    places: strings('Places ("SF").'),
+    topics: strings('Topics in what they wrote ("robotics").'),
+    warmthAtLeast: z
+      .enum(['light', 'warm', 'strong', 'close'])
+      .optional()
+      .describe('At least this close ("know well": strong).'),
+    talkedWithinDays: z.number().int().optional().describe('Talked within this many days.'),
+    quietForDays: z.number().int().optional().describe('Not talked for this many days or more.'),
+    neverTalked: z.boolean().optional().describe('true: never emailed, met or messaged.'),
+    alumOfMySchool: z.boolean().optional().describe("true: went to the student's school."),
+    criteria: strings(
+      'At most 3 things no field can say ("works on AI agents"), checked by reading each person.',
+    ),
+    unsupported: strings('Parts Orbit cannot check (age, salary): said back, never guessed.'),
+    refine: z
+      .string()
+      .optional()
+      .describe('For a follow-up: the earlier setId; send every filter again, revised.'),
+    onlyThese: z.boolean().optional().describe('With refine: only among the earlier results.'),
+    sort: z
+      .enum(['match', 'warmth', 'recent', 'name'])
+      .optional()
+      .describe('match (default), warmth (closest first) or recent (last talked first).'),
+    limit: z.number().int().min(1).max(50).optional().describe('Rows to show (default 25).'),
+  })
+  .strict();
+
+type FlatSearch = z.infer<typeof flat>;
+
+const some = (xs: string[] | undefined) => (xs ?? []).map((x) => x.trim()).filter(Boolean);
+
+/** The flat filters as the engine's QuerySpec: one job block for roles, companies and YC, then the rest. */
+export function specOfFlat(f: FlatSearch): QuerySpec {
+  const spec: QuerySpec = { ask: f.ask };
+  const roles = some(f.roles);
+  const companies = some(f.companies);
+  const industries = some(f.industries);
+  const positions: NonNullable<QuerySpec['positions']> = [];
+  if (roles.length || companies.length || f.companyKinds?.length || f.yc || industries.length) {
+    const company: NonNullable<NonNullable<QuerySpec['positions']>[number]['company']> = {};
+    if (companies.length) company.names = companies;
+    if (f.companyKinds?.length) company.kinds = f.companyKinds;
+    if (f.yc) company.yc = some(f.yc).length ? { batches: some(f.yc) } : { any: true };
+    if (industries.length) company.industries = industries;
+    positions.push({
+      ...(roles.length ? { role: { families: roles as never } } : {}),
+      ...(Object.keys(company).length ? { company } : {}),
+      ...(f.when ? { when: f.when } : {}),
+    });
+  }
+  if (some(f.notAt).length) positions.push({ company: { names: some(f.notAt) }, negate: true });
+  if (positions.length) spec.positions = positions;
+  if (some(f.schools).length) spec.schools = [{ names: some(f.schools) }];
+  if (some(f.places).length) spec.places = [{ names: some(f.places) }];
+  if (some(f.topics).length) spec.keywords = { terms: some(f.topics) };
+  const rel: NonNullable<QuerySpec['relationship']> = {};
+  if (f.warmthAtLeast) rel.warmthAtLeast = f.warmthAtLeast;
+  if (f.talkedWithinDays) rel.talkedWithinDays = f.talkedWithinDays;
+  if (f.quietForDays) rel.quietForDays = f.quietForDays;
+  if (f.neverTalked) rel.everTalked = false;
+  if (f.alumOfMySchool) rel.alumOfMySchool = true;
+  if (Object.keys(rel).length) spec.relationship = rel;
+  if (some(f.criteria).length)
+    spec.criteria = some(f.criteria)
+      .slice(0, 3)
+      .map((text) => ({ text }));
+  if (some(f.unsupported).length) spec.unsupported = some(f.unsupported);
+  if (f.refine) spec.refine = { resultSetId: f.refine, mode: 'replace', onlyThese: f.onlyThese };
+  if (f.sort) spec.sort = f.sort;
+  if (f.limit) spec.limit = f.limit;
+  return spec;
+}
+
+async function runSearch(input: QuerySpec, ctx: ToolContext): Promise<ResultEnvelope> {
+  // switched off (engine/flags): the plain name, company and title search, on the words the spec names
+  if (!(await flagOn('networkSearch'))) {
+    const query =
+      input.positions?.flatMap((p) => p.company?.names ?? [])[0] ??
+      input.schools?.[0]?.names[0] ??
+      input.keywords?.terms[0];
+    return searchPeople.execute({ query }, ctx);
+  }
+  const out = await runNetworkSearch(ctx.user, input, {
+    caller: ctx.caller,
+    signal: ctx.signal,
+    shown: input.limit,
+  });
+  if (!out.ok) return err(out.message);
+  const d = await tableData(out);
+  return ok('people_table', d, forModel(d), summaryOf(d));
+}
+
 export const searchNetwork = defineTool({
   name: 'search_network',
   kind: 'read',
   description:
-    'Call this when the student asks who in their network fits a description: a role, company, kind of company (YC, big tech, a VC firm, seed stage), school, class year, place, industry, topic, or how they know them ("YC founders I know", "Berkeley alums at Stripe in SF", "PMs I have not talked to in a year", "investors who reply to me"). Compile the sentence into the spec: positions for jobs (role and company in ONE block when they go together), schools, places, relationship for the tie, criteria only for what no field can say (at most 3), unsupported for what Orbit cannot check. Every row comes with the evidence behind it; strong rows are sure, likely rows rest on weaker evidence, and people whose details are not on file are counted, never guessed. For a follow-up ("only the ones in SF", "what about Stanford") send the whole revised spec with refine. Use search_people instead to find one person by name.',
+    'Call this when the student asks who in their network fits a description: a role, company, kind of company (YC, big tech, a VC firm), school, place, industry, topic, or how they know them ("YC founders I know", "Berkeley alums at Stripe in SF", "PMs I have not talked to in a year"). Put each part of the sentence in its field; criteria only for what no field can say. Rows come with their evidence: strong rows are sure, likely rows rest on weaker evidence, people with nothing on file are counted, never guessed. Use search_people to find one person by name.',
+  input: flat,
+  capabilities: ['network_search'],
+  progress: 'Checking your network',
+  execute: (input, ctx) => runSearch(specOfFlat(input), ctx),
+  toModel: (data: unknown) => (data as { forModel: unknown }).forModel,
+});
+
+/** The router's form: a QuerySpec compiled without a model (agent/searchCompile.ts). Never offered to the model. */
+export const searchNetworkSpec = defineTool({
+  name: 'search_network_spec',
+  kind: 'read',
+  description:
+    'Call this when the no-key router compiled a network search into a full QuerySpec; the model uses search_network instead.',
   input: spec,
   capabilities: ['network_search'],
   progress: 'Checking your network',
-  async execute(input, ctx) {
-    // switched off (engine/flags): the plain name, company and title search, on the words the spec names
-    if (!(await flagOn('networkSearch'))) {
-      const s = input as QuerySpec;
-      const query =
-        s.positions?.flatMap((p) => p.company?.names ?? [])[0] ??
-        s.schools?.[0]?.names[0] ??
-        s.keywords?.terms[0];
-      return searchPeople.execute({ query }, ctx);
-    }
-    const out = await runNetworkSearch(ctx.user, input as QuerySpec, {
-      caller: ctx.caller,
-      signal: ctx.signal,
-      shown: input.limit,
-    });
-    if (!out.ok) return err(out.message);
-    const d = await tableData(out);
-    return ok('people_table', d, forModel(d), summaryOf(d));
-  },
+  execute: (input, ctx) => runSearch(input as QuerySpec, ctx),
   toModel: (data: unknown) => (data as { forModel: unknown }).forModel,
 });
 
@@ -489,4 +597,4 @@ export const searchNetworkMore = defineTool({
   toModel: (data: unknown) => (data as { forModel: unknown }).forModel,
 });
 
-export const searchTools = [searchNetwork, searchNetworkMore];
+export const searchTools = [searchNetwork, searchNetworkMore, searchNetworkSpec];

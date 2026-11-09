@@ -10,11 +10,12 @@ import type { User } from '@orbit/core';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { db } from '../../db/schema';
 import { loadDemo } from '../../engine/demo';
+import { makeWrap } from '../../integrations/anthropic';
 import { clearPrefs, writePrefs } from '../../integrations/prefs';
 import { ATTACH_TOOL, createChatEngine } from '../agent';
 import { CHIPS } from '../agent/chips';
 import { makeChatClient, setChatClientFactoryForTests } from '../agent/client';
-import { buildRunnerTools } from '../agent/loop';
+import { buildRunnerTools, CORE_TOOLS, MODEL_HIDDEN_TOOLS, STRICT_LIMITS, schemaCost } from '../agent/loop';
 import { routeUtterance } from '../agent/router';
 import { CAPABILITIES } from '../capabilities';
 import { execute, registry, tools } from '../registry';
@@ -292,13 +293,23 @@ describe('Claude mode: scripted model turns calling the real tools', () => {
     return undefined;
   };
 
-  it('is in Claude mode with every registry tool offered to the model', async () => {
+  it('is in Claude mode with every registry tool but the admin ones offered to the model', async () => {
     expect(engine.mode()).toBe('llm');
     await claude('hi', [], 'Hi Alex.');
-    const offered = messageRequests(fake)[0]!.body.tools.map((t: { name: string }) => t.name);
-    // every registry tool, and Claude's own web search last
+    const sent = messageRequests(fake)[0]!.body.tools as { name: string; defer_loading?: boolean }[];
+    const offered = sent.map((t) => t.name);
+    // every registry tool the model may call, then the tool search that loads the deferred ones, and Claude's own
+    // web search last (plan 35 A1)
     expect(offered.at(-1)).toBe('web_search');
-    expect([...offered.slice(0, -1)].sort()).toEqual(tools.map((t) => t.name).sort());
+    expect(offered.at(-2)).toBe('tool_search_tool_bm25');
+    expect([...offered.slice(0, -2)].sort()).toEqual(
+      tools
+        .map((t) => t.name)
+        .filter((n) => !MODEL_HIDDEN_TOOLS.has(n))
+        .sort(),
+    );
+    const loaded = sent.filter((t) => !t.defer_loading).map((t) => t.name);
+    expect(loaded.slice(0, -2).sort()).toEqual([...CORE_TOOLS].sort());
   });
 
   it("brief: the model reads today's brief and gets compact cards back", async () => {
@@ -464,15 +475,28 @@ describe('Claude mode: scripted model turns calling the real tools', () => {
     expect((await db.suggestions.get(card.id))!.status).toBe('pending');
   });
 
-  it('delete everything asks first, and Cancel leaves every row in place', async () => {
+  it('delete everything is never offered to the model, still asks first, and Cancel leaves every row in place', async () => {
     const people = await peopleCount();
     const outbound = await db.outbound.count();
-    const del = call('delete_all_data', {});
-    const t = await claude('delete all my data', [[del]], 'Approve the card to delete everything.');
-    expect(t.env?.kind).toBe('needs_confirmation');
-    await engine.cancel(t.env!.confirmationId!);
-    expect((await db.chatActions.get(t.env!.confirmationId!))?.status).toBe('cancelled');
-    expect((await engine.approve(t.env!.confirmationId!)).kind).toBe('error');
+    expect(MODEL_HIDDEN_TOOLS.has('delete_all_data')).toBe(true);
+    const c = await engine.startConversation({ temporary: false });
+    const env = await execute(
+      'delete_all_data',
+      {},
+      {
+        user,
+        now: NOW,
+        conversationId: c.id,
+        nonce: 'testnonce01',
+        wrap: makeWrap('testnonce01').wrap,
+        toolUseId: 'toolu_del',
+        caller: 'llm',
+      },
+    );
+    expect(env.kind).toBe('needs_confirmation');
+    await engine.cancel(env.confirmationId!);
+    expect((await db.chatActions.get(env.confirmationId!))?.status).toBe('cancelled');
+    expect((await engine.approve(env.confirmationId!)).kind).toBe('error');
     expect(await peopleCount()).toBe(people);
     expect(await db.outbound.count()).toBe(outbound);
     expect(await db.users.get(user.id)).toBeTruthy();
@@ -528,10 +552,19 @@ describe('coverage', () => {
       // a draft card's Approve asks send_draft, then runs it with the token
       'send_draft',
     ]);
-    const unreachable = tools.map((t) => t.name).filter((n) => !offered.has(n) && !ui.has(n));
+    // the admin and legacy tools are reached from the router, Settings and chips (process_outbox: the app sends the
+    // due outbox itself every few seconds), never by the model (plan 35 A1)
+    const unreachable = tools
+      .map((t) => t.name)
+      .filter((n) => !offered.has(n) && !ui.has(n) && !MODEL_HIDDEN_TOOLS.has(n));
     expect(unreachable).toEqual([]);
-    // the model is offered every tool: no tool's input needs a File the model could not give
-    expect([...offered].sort()).toEqual(tools.map((t) => t.name).sort());
+    // the model is offered every other tool: no tool's input needs a File the model could not give
+    expect([...offered].sort()).toEqual(
+      tools
+        .map((t) => t.name)
+        .filter((n) => !MODEL_HIDDEN_TOOLS.has(n))
+        .sort(),
+    );
     // the request the API accepts: at most twenty strict tools, and no schema keyword strict mode rejects
     const built = buildRunnerTools(registry, {
       onRun: async () => ({ kind: 'text', data: {}, summary: '' }),
@@ -539,7 +572,16 @@ describe('coverage', () => {
       strict?: boolean;
       input_schema: unknown;
     }[];
-    expect(built.filter((t) => t.strict).length).toBeLessThanOrEqual(20);
+    expect(built.filter((t) => t.strict).length).toBeLessThanOrEqual(STRICT_LIMITS.tools);
+    const cost = built
+      .filter((t) => t.strict)
+      .map((t) => schemaCost(t.input_schema))
+      .reduce((a, b) => ({ optional: a.optional + b.optional, unions: a.unions + b.unions }), {
+        optional: 0,
+        unions: 0,
+      });
+    expect(cost.optional).toBeLessThanOrEqual(STRICT_LIMITS.optional);
+    expect(cost.unions).toBeLessThanOrEqual(STRICT_LIMITS.unions);
     for (const t of built.filter((x) => x.strict))
       expect(JSON.stringify(t.input_schema)).not.toMatch(
         /"(minimum|maximum|minLength|maxLength|multipleOf|\$schema)"/,

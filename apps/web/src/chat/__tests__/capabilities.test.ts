@@ -60,9 +60,10 @@ describe('registry coverage', () => {
     // research_left (show_research took research_person's place: the chat reads briefs, it never starts one)
     // plan 23: plan_for_posting, list_upcoming_chats and week_review; plan 28: lookup_playbook; plan 29 Part A: the
     // five friends tools; plan 29 phase 3: the eight autopilot tools (the two voice ones honest stubs until phase 4);
-    // plan 32: search_network and search_network_more
-    expect(names.length).toBe(113);
-    expect(names.length).toBeLessThanOrEqual(113);
+    // plan 32: search_network and search_network_more; plan 35 A1: search_network_spec, the router's compiled form
+    // (the model sees the flat search_network)
+    expect(names.length).toBe(114);
+    expect(names.length).toBeLessThanOrEqual(114);
     expect(registry.size).toBe(names.length);
     const counts = toolCountByKind();
     expect(counts.read + counts.write + counts.risky).toBe(names.length);

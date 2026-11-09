@@ -704,11 +704,11 @@ function routeInner(raw: string, ctx: RouterContext): RouterIntent {
     return viaTool('list_recommendations', {}, undefined, 'list recommendations');
 
   // network search (plan 32): "YC founders in my network", "Berkeley alums at Stripe", "PMs I haven't talked to"
-  if (ctx.registry.has('search_network') && !flagOffInCode('networkSearch')) {
+  if (ctx.registry.has('search_network_spec') && !flagOffInCode('networkSearch')) {
     const spec = compileSearch(text);
     if (spec)
       return viaTool(
-        'search_network',
+        'search_network_spec',
         spec as unknown as Record<string, unknown>,
         undefined,
         'search your network',

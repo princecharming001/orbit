@@ -9,9 +9,12 @@ import { setSharedClaudeUrlForTests } from '../../integrations/shared-claude';
 import { makeChatClient, setChatClientFactoryForTests } from '../agent/client';
 import {
   CHAT_BETAS,
+  CORE_TOOLS,
   ITERATION_HEADER,
   MAX_ITERATIONS,
+  MODEL_HIDDEN_TOOLS,
   runTurn,
+  strictToolNames,
   type TurnDeps,
   WEB_BUDGET_NOTE,
 } from '../agent/loop';
@@ -114,7 +117,8 @@ describe('request shape', () => {
     expect(body.output_config).toEqual({ effort: 'medium' });
     expect(body.tool_choice).toBeUndefined();
     expect(body.max_iterations).toBeUndefined();
-    // the client tools sorted, then Claude's own web search, a few searches a request
+    // the client tools sorted, then the tool search that loads the deferred ones, then Claude's own web search, a few
+    // searches a request
     const web = body.tools.at(-1);
     expect(web).toEqual({
       type: 'web_search_20260209',
@@ -122,18 +126,37 @@ describe('request shape', () => {
       max_uses: 2,
       cache_control: { type: 'ephemeral' },
     });
-    const client = body.tools.slice(0, -1);
+    expect(body.tools.at(-2)).toEqual({
+      type: 'tool_search_tool_bm25_20251119',
+      name: 'tool_search_tool_bm25',
+    });
+    const client = body.tools.slice(0, -2);
     const names = client.map((t: { name: string }) => t.name);
     expect(names).toEqual([...names].sort());
     // the imports take text or base64 like the real registry, so every tool has a JSON Schema form and is offered
-    expect(names).toEqual([...stub.registry.keys()].sort());
+    expect(names).toEqual([...stub.registry.keys()].filter((n) => !MODEL_HIDDEN_TOOLS.has(n)).sort());
     // one cache breakpoint after the last tool, so every conversation shares the cached tool list
     expect(client.some((t: { cache_control?: unknown }) => t.cache_control)).toBe(false);
+    const strict = strictToolNames(
+      [...stub.registry.values()].filter((s) => !MODEL_HIDDEN_TOOLS.has(s.name)),
+      (s) => client.find((t: { name: string }) => t.name === s.name).input_schema,
+    );
+    expect(strict.size).toBeGreaterThan(0);
     for (const t of client) {
-      // strict on the risky tools (the API allows twenty strict tools); the rest are validated by Zod before they run
-      expect(t.strict).toBe(stub.registry.get(t.name)!.kind === 'risky');
-      expect(JSON.stringify(t.input_schema)).not.toMatch(/"(minimum|maximum|minLength|maxLength|\$schema)"/);
-      expect(t.eager_input_streaming).toBe(true);
+      const spec = stub.registry.get(t.name)!;
+      // strict on the risky tools that fit the API's limits; the rest are validated by Zod before they run
+      expect(t.strict === true).toBe(strict.has(t.name));
+      if (t.strict) expect(spec.kind).toBe('risky');
+      else expect(t.strict).toBeUndefined();
+      if (t.strict)
+        expect(JSON.stringify(t.input_schema)).not.toMatch(
+          /"(minimum|maximum|minLength|maxLength|\$schema)"/,
+        );
+      // never Zod's $schema line or its safe-integer bounds
+      expect(JSON.stringify(t.input_schema)).not.toMatch(/"\$schema"|9007199254740991/);
+      // deferred unless it is one of the core tools (plan 35 A1)
+      expect(t.defer_loading === true).toBe(!CORE_TOOLS.has(t.name));
+      expect(t.eager_input_streaming === true).toBe(spec.kind !== 'read' || t.name === 'offer_choices');
       expect(t.input_schema.additionalProperties).toBe(false);
       expect(t.run).toBeUndefined();
     }

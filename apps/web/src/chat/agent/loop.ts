@@ -186,34 +186,177 @@ export const WEB_BUDGET_NOTE =
   '[Orbit] The web searches for this turn are used up. Answer from what you have found; do not search again.';
 
 /**
- * The runner tools over the registry: `betaZodTool` (the runner validates the input against the Zod schema before
- * `run`), `eager_input_streaming` so long inputs stream, `strict` on the risky tools so their input is exact. An error envelope is
- * thrown as a `ToolError` so the runner marks the result `is_error` and the model knows to recover.
+ * One switch for tool search (plan 35 A1): on, only CORE_TOOLS load up front and the rest are found through Claude's
+ * BM25 tool search when a turn needs them (still sent in full, so the API can expand them). Off, every tool loads as
+ * before. Flip this one line to go back.
  */
-/** The API accepts at most this many strict tools in one request. */
-export const MAX_STRICT_TOOLS = 20;
+export const CHAT_TOOL_SEARCH = true;
+
+/** The server tool that finds deferred tools by a natural-language query (docs: tool-search-tool). */
+export const TOOL_SEARCH_TOOL = {
+  type: 'tool_search_tool_bm25_20251119',
+  name: 'tool_search_tool_bm25',
+} as const satisfies Anthropic.Beta.Messages.BetaToolSearchToolBm25_20251119;
 
 /**
- * Which tools are strict. The API caps strict tools at twenty, so strict goes where an exact input matters most: the
- * risky tools, whose input the Approve token is bound to. Every tool's input is still validated against its full
- * Zod schema before it runs, strict or not.
+ * Tools the model never sees. The admin and legacy ones are reached only from Settings, the "+" menu, the router and
+ * chips; update_goal is set_goal with a goalId for the model; search_network_spec is the router's own form of
+ * search_network (a compiled spec). All of them still run through `execute()`.
  */
-export function strictToolNames(specs: ToolSpec[]): Set<string> {
-  return new Set(
-    specs
-      .filter((s) => s.kind === 'risky')
-      .map((s) => s.name)
-      .slice(0, MAX_STRICT_TOOLS),
-  );
+export const MODEL_HIDDEN_TOOLS: ReadonlySet<string> = new Set([
+  'load_demo',
+  'leave_demo',
+  'delete_all_data',
+  'export_data',
+  'set_claude_key',
+  'set_llm_feature',
+  'disconnect_google',
+  'disconnect_linkedin',
+  'process_outbox',
+  'set_autonomy',
+  'update_goal',
+  'search_network_spec',
+]);
+
+/**
+ * The tools loaded up front when tool search is on: what most turns use (the day, people, the network, drafts,
+ * autopilot, memory, the playbook) and the two that close a turn. Everything else is one search away.
+ */
+export const CORE_TOOLS: ReadonlySet<string> = new Set([
+  'add_person',
+  'autopilot_status',
+  'create_draft',
+  'find_people',
+  'find_routes',
+  'get_person',
+  'get_today_brief',
+  'list_drafts',
+  'list_inbox',
+  'list_pipeline',
+  'lookup_playbook',
+  'offer_choices',
+  'open_page',
+  'remember',
+  'search_network',
+  'search_people',
+  'send_draft',
+  'set_goal',
+  'show_setup',
+  'update_draft_body',
+]);
+
+/**
+ * The API's limits on strict tools in one request, deferred ones included (the grammar is built from the whole list):
+ * twenty strict tools, 24 optional parameters and 16 union-typed parameters across all their schemas.
+ */
+export const STRICT_LIMITS = { tools: 20, optional: 24, unions: 16 } as const;
+/** Risky tools that are strict before any other: the input the student approves is exactly what runs. */
+export const STRICT_FIRST = [
+  'send_draft',
+  'schedule_sends',
+  'undo_send',
+  'update_limits',
+  'approve_batch',
+  'set_autopilot_mode',
+];
+/** Kept for callers that read the old name. */
+export const MAX_STRICT_TOOLS = STRICT_LIMITS.tools;
+
+type JsonSchema = Record<string, unknown>;
+
+/** Optional and union-typed parameters at every depth of a schema, as the strict limits count them. */
+export function schemaCost(schema: unknown): { optional: number; unions: number } {
+  let optional = 0;
+  let unions = 0;
+  const walk = (node: unknown) => {
+    if (!node || typeof node !== 'object') return;
+    if (Array.isArray(node)) return node.forEach(walk);
+    const n = node as JsonSchema;
+    const props = n.properties as Record<string, JsonSchema> | undefined;
+    if (props && typeof props === 'object') {
+      const required = new Set((n.required as string[] | undefined) ?? []);
+      for (const [k, v] of Object.entries(props)) {
+        if (!required.has(k)) optional++;
+        if (v && (Array.isArray(v.type) || Array.isArray(v.anyOf))) unions++;
+      }
+    }
+    for (const [k, v] of Object.entries(n)) if (k !== 'description' && k !== 'enum') walk(v);
+  };
+  walk(schema);
+  return { optional, unions };
 }
 
+/**
+ * Which tools are strict: the risky tools, whose input the Approve token is bound to, STRICT_FIRST first and then the
+ * cheapest, for as long as the API's limits allow. Every tool's input is still validated against its full Zod schema
+ * before it runs, strict or not.
+ */
+export function strictToolNames(specs: ToolSpec[], schemaOf: (spec: ToolSpec) => unknown): Set<string> {
+  const risky = specs.filter((s) => s.kind === 'risky');
+  const rank = (s: ToolSpec) => {
+    const i = STRICT_FIRST.indexOf(s.name);
+    return i >= 0 ? i : STRICT_FIRST.length;
+  };
+  const costs = new Map(risky.map((s) => [s.name, schemaCost(schemaOf(s))]));
+  const ordered = [...risky].sort(
+    (a, b) =>
+      rank(a) - rank(b) ||
+      costs.get(a.name)!.optional - costs.get(b.name)!.optional ||
+      (a.name < b.name ? -1 : 1),
+  );
+  const out = new Set<string>();
+  let optional = 0;
+  let unions = 0;
+  for (const s of ordered) {
+    const c = costs.get(s.name)!;
+    if (out.size >= STRICT_LIMITS.tools) break;
+    if (optional + c.optional > STRICT_LIMITS.optional || unions + c.unions > STRICT_LIMITS.unions) continue;
+    out.add(s.name);
+    optional += c.optional;
+    unions += c.unions;
+  }
+  return out;
+}
+
+const SAFE_MAX = Number.MAX_SAFE_INTEGER;
+
+/**
+ * The input schema without what says nothing: Zod's `$schema` line and the safe-integer bounds it puts on every
+ * `.int()` (minimum -2^53+1, maximum 2^53-1). Real bounds and enums stay.
+ */
+export function compactSchema<S extends object>(schema: S): S {
+  const clean = (node: unknown): unknown => {
+    if (!node || typeof node !== 'object') return node;
+    if (Array.isArray(node)) return node.map(clean);
+    const out: JsonSchema = {};
+    for (const [k, v] of Object.entries(node as JsonSchema)) {
+      if (k === '$schema') continue;
+      if (k === 'minimum' && v === -SAFE_MAX) continue;
+      if (k === 'maximum' && v === SAFE_MAX) continue;
+      out[k] = k === 'enum' || k === 'required' ? v : clean(v);
+    }
+    return out;
+  };
+  return clean(schema) as S;
+}
+
+/** Tools whose input can run long (a message, a goal, pills): their input streams as it is written. */
+const EAGER = (spec: ToolSpec) => spec.kind !== 'read' || spec.name === 'offer_choices';
+
+/**
+ * The runner tools over the registry: `betaZodTool` (the runner validates the input against the Zod schema before
+ * `run`), `eager_input_streaming` on the tools whose input can run long, `strict` on the risky tools that fit the API's limits so their
+ * input is exact, and `defer_loading` on every tool outside CORE_TOOLS when tool search is on. An error envelope is
+ * thrown as a `ToolError` so the runner marks the result `is_error` and the model knows to recover.
+ */
 export function buildRunnerTools(
   registry: ReadonlyMap<string, ToolSpec>,
   hooks: ToolHooks,
+  opts: { toolSearch?: boolean } = {},
 ): BetaRunnableTool[] {
-  const specs = sortedSpecs(registry).filter(modelCallable);
-  const strict = strictToolNames(specs);
-  const built = specs.map((spec) => {
+  const search = opts.toolSearch ?? CHAT_TOOL_SEARCH;
+  const specs = sortedSpecs(registry).filter((s) => !MODEL_HIDDEN_TOOLS.has(s.name) && modelCallable(s));
+  const made = specs.map((spec) => {
     const tool = betaZodTool({
       name: spec.name,
       description: spec.description,
@@ -226,26 +369,38 @@ export function buildRunnerTools(
         return content;
       },
     });
-    return {
-      ...tool,
-      input_schema: strictSchema(
-        (tool as { input_schema: Anthropic.Beta.BetaTool.InputSchema }).input_schema,
-      ),
-      eager_input_streaming: true,
-      strict: strict.has(spec.name),
-    };
+    const schema = compactSchema(
+      (tool as { input_schema: Anthropic.Beta.BetaTool.InputSchema }).input_schema,
+    );
+    return { spec, tool, schema };
   });
-  // a cache breakpoint after the last tool as well as on the frozen system block: both are the same for every
-  // conversation of every student, so one warm entry serves them all; the conversation's own lines come after
-  const last = built.at(-1);
-  if (last) built[built.length - 1] = { ...last, cache_control: { type: 'ephemeral' } };
+  const bySpec = new Map(made.map((m) => [m.spec.name, m.schema]));
+  const strict = strictToolNames(specs, (s) => strictSchema(bySpec.get(s.name)!));
+  const built: BetaRunnableTool[] = made.map(({ spec, tool, schema }) => ({
+    ...tool,
+    input_schema: strict.has(spec.name) ? strictSchema(schema) : schema,
+    ...(EAGER(spec) ? { eager_input_streaming: true } : {}),
+    ...(strict.has(spec.name) ? { strict: true } : {}),
+    ...(search && !CORE_TOOLS.has(spec.name) ? { defer_loading: true } : {}),
+  }));
+  // a cache breakpoint after the last loaded tool as well as on the frozen system block: both are the same for every
+  // conversation of every student, so one warm entry serves them all (a deferred tool cannot carry one)
+  for (let i = built.length - 1; i >= 0; i--)
+    if (!built[i]!.defer_loading) {
+      built[i] = { ...built[i]!, cache_control: { type: 'ephemeral' } };
+      break;
+    }
   return built;
 }
 
-/** The client tools then web search, the cache breakpoint moved onto the last one so the whole list stays cached. */
+/**
+ * The client tools, the tool search tool when any are deferred, then web search, the cache breakpoint moved onto the
+ * last one so the whole loaded list stays cached.
+ */
 export function withWebSearch(tools: BetaRunnableTool[]): BetaToolRunnerParams['tools'] {
   const plain = tools.map(({ cache_control: _c, ...t }) => t as BetaRunnableTool);
-  return [...plain, { ...WEB_SEARCH_TOOL, cache_control: { type: 'ephemeral' } }];
+  const search = plain.some((t) => t.defer_loading) ? [TOOL_SEARCH_TOOL] : [];
+  return [...plain, ...search, { ...WEB_SEARCH_TOOL, cache_control: { type: 'ephemeral' } }];
 }
 
 /**

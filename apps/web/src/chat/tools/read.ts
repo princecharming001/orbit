@@ -1234,7 +1234,7 @@ export const findRoutes = defineTool({
   name: 'find_routes',
   kind: 'read',
   description:
-    'Call this when the student asks how to reach someone, who could introduce them to a person, for a warm intro to a person or a company, who they know at a company (including through friends on Orbit), which former employees of a company are in their network, or wants a company page. Give a personId for routes to a person (each route names the first hop to ask for an intro) or a company name for the people there now, former employees and two-hop routes. Both include warm intro paths from Village when the student has it (warmth in a word, and the hops). A query that is not a clear person or company returns candidates to choose from. With an Orbit account, routes to a person are ranked by the chance the intro happens (likely, possible, long shot), each with a reason and a pathId for ask_for_intro; a route through a friend on Orbit says so (viaFriend) and is asked of the friend with ask_friend_for_intro, never drafted to the person. A company answer also lists the five best ways in with their team, route and score, and links the company page with everyone by team.',
+    'Call this when the student asks how to reach someone, who could introduce them, for a warm intro to a person or a company, who they know at a company (including through friends on Orbit), which former employees of a company they know, or wants a company page. Give a personId for routes to a person (each names the first hop to ask) or a company name for the people there now, former employees and two-hop routes, with Village intro paths when connected. An unclear query returns candidates. With an Orbit account, routes are ranked likely, possible or long shot, each with a reason and a pathId for ask_for_intro; a route through a friend (viaFriend) goes to ask_friend_for_intro. A company answer lists the five best ways in and links the company page.',
   input: z.object({
     personId: z.string().optional().describe('Routes to this person (from search_people).'),
     personIds: z
@@ -1243,7 +1243,7 @@ export const findRoutes = defineTool({
       .max(10)
       .optional()
       .describe(
-        "Routes to several people at once (ids from search_people, find_people's knownPersonId or add_sourced): one card with the best way in to each. Use this when the student picks or names more than one person.",
+        'Routes to several people the student picked at once (ids from search_people, find_people or add_sourced).',
       ),
     company: z
       .string()
@@ -1951,7 +1951,7 @@ export const lookupPlaybook = defineTool({
     topic: z
       .string()
       .describe(
-        'The topic in the student\'s words ("how does vc recruiting work", "what is a superday", "seed round") or a section id: etiquette, glossary, ib, consulting, tech, pm, data-design, vc-job, quant, finance-other, fundraising, sales, hiring, advice, cofounder, community, collaboration.',
+        'The topic in the student\'s words ("what is a superday") or a section id (ib, vc-job, quant, cofounder, glossary).',
       ),
   }),
   capabilities: ['playbook_lookup'],

@@ -97,7 +97,7 @@ export const createDraft = defineTool({
   name: 'create_draft',
   kind: 'write',
   description:
-    'Call this when the student asks to write to someone, draft a message, follow up, send a thank-you, ask for a referral or an intro, or start a first message (also from Discover or the Map). Leave kind out and Orbit picks it from where the chat stands (and says when a message should wait). A draft already started for that kind is reopened, never duplicated. For a cold LinkedIn-only stranger the answer is a warm-up choice: call again with warmUp start or skip. For an intro request give targetPersonId (the person to be introduced to) and the connector as personId. Pass the lines only the student can supply (connection, update, role, target) when they gave them. When the result says the draft still needs a line, ask the student for it and call redraft_with_inputs. Nothing is sent: that is send_draft.',
+    'Call this when the student asks to write to someone, draft a message, follow up, send a thank-you, ask for a referral or an intro, or start a first message. Leave kind out and Orbit picks it from where the chat stands (and says when a message should wait). A draft already started for that kind is reopened, never duplicated. For a cold LinkedIn-only stranger the answer is a warm-up choice: call again with warmUp start or skip. For an intro request give targetPersonId (the person to be introduced to) and the connector as personId. Pass the lines only the student can supply (connection, update, role, target) when they gave them. When the result says the draft still needs a line, ask the student for it and call redraft_with_inputs. Nothing is sent: that is send_draft.',
   input: z.object({
     personId: z
       .string()
@@ -107,9 +107,7 @@ export const createDraft = defineTool({
     kind: z
       .enum(KINDS)
       .optional()
-      .describe(
-        'The kind of message; leave out to let Orbit pick from the chat stage (outreach, bump, schedule, thank_you, nurture, congratulate, referral_ask, intro_request, reply, report_back).',
-      ),
+      .describe('The kind of message; leave out to let Orbit pick from the chat stage.'),
     targetPersonId: z
       .string()
       .optional()
@@ -385,7 +383,7 @@ export const manageDraft = defineTool({
     action: z
       .enum(['reset_to_suggested', 'restore', 'revert_handoff', 'undo_confirm_sent'])
       .describe(
-        'reset_to_suggested: back to Orbit\'s text. restore: a discarded draft comes back. revert_handoff: a handed-off message becomes a draft again. undo_confirm_sent: take back "I sent it" (puts the person\'s chat and cards back as they were).',
+        'reset_to_suggested: Orbit\'s text. restore: undiscard. revert_handoff: a draft again. undo_confirm_sent: take back "I sent it".',
       ),
   }),
   capabilities: [
@@ -554,7 +552,7 @@ export const sendDraft = defineTool({
   name: 'send_draft',
   kind: 'risky',
   description:
-    'Call this only when the student says to send, approve or hand off a specific draft ("send the follow-up to Priya", "ok send it"), to retry a failed send, or asks for the text to paste into Gmail themselves (via copy). It never sends on its own: it returns a confirmation the student approves in the card, and the approved text is bound by the engine. Email goes through Gmail (10 second undo) or opens in the mail app; LinkedIn messages are copied and opened on LinkedIn for the student to send (only a device-only setup with LinkedIn connected live sends them from the student\'s own LinkedIn, same undo; an Orbit account never does, so never offer connecting LinkedIn as a way to send); hand-offs then wait for the student\'s "I sent it". A blocked send explains the engine\'s reason instead.',
+    'Call this only when the student says to send, approve or hand off a specific draft ("send the follow-up to Priya", "ok send it"), to retry a failed send, or asks for the text to paste into Gmail themselves (via copy). It never sends on its own: it returns a confirmation the student approves in the card, and the approved text is bound by the engine. Email goes through Gmail (10 second undo) or opens in the mail app; LinkedIn messages are copied and opened on LinkedIn for the student to send (only a device-only setup with LinkedIn connected live sends them itself; an Orbit account never does, so never offer connecting LinkedIn as a way to send); hand-offs wait for the student\'s "I sent it". A blocked send gives the engine\'s reason.',
   input: z.object({
     draftId: z.string().describe('The draft id.'),
     body: z
