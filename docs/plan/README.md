@@ -42,6 +42,9 @@ Orbit (working name) is a networking copilot for college students who are recrui
 | 32 | [Network search](32-network-search.md) | "who in my network..." answered like LinkedIn's filters: a compiled query bound to one job, headline and LinkedIn facts, three-way checks, a judge with quotes, a people table (built 2026-11-07) |
 | 33 | [Profile reading](33-profile-reading.md) | LinkedIn Abouts, job descriptions and company pages read in the background and at ask time; Haiku extracts stage, team size, focus and signals with quotes (built 2026-11-08) |
 | 34 | [Cost audit](34-cost-audit.md) | every paid call measured and ranked, the 11-08 outages explained, prices and alternatives with sources, five shippable phases from caps and kill switches to a daily digest; the call-site inventory is in [34-cost-audit-inventory.md](34-cost-audit-inventory.md) (plan 2026-11-09) |
+| 35 | [Cost reduction](35-cost-reduction.md) | do not do it, do it once, do less of it, do it cheaper: the chat request, the worker, server Claude calls, bench-gated effort and model tradeoffs, the LinkedIn line (phases A to C built 2026-11-09, D not run) |
+| 36 | [No dead ends](36-no-dead-ends.md) | every people question ends with people: the ladder of free rungs (related field, used to work there, can introduce you) before paid sourcing and the web, one honest clause naming the tier (built 2026-11-09) |
+| 37 | [Ask, act, auto](37-ask-act-auto.md) | one question when a name fits several things (two Triumphs), with the choices as buttons and the original ask completed on the pick; card buttons that act in place with no new turn; an Auto mode that picks Quick or Smart per turn and moves up mid-turn (plan 2026-11-09) |
 
 Precedence when documents disagree: **16 > 02 (names) > 03 (schema) > 01 (behaviour) > the subsystem document.** 16 retires the Next.js + Inngest stack of 02, 08 and 09 in favour of Supabase Edge Functions, queues and cron. File a fix against the lower one.
 
