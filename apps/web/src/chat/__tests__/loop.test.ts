@@ -15,6 +15,7 @@ import {
   MAX_ITERATIONS,
   MODEL_HIDDEN_TOOLS,
   parseToolResult,
+  resetToolSearchForTests,
   runTurn,
   SPEAK_UP,
   strictToolNames,
@@ -969,6 +970,51 @@ describe('tool search and the tail (plan 35 A1, A3)', () => {
     // the tool search is never answered with a tool_result of ours
     const results = reqs[1]!.body.messages.at(-1).content as { tool_use_id: string }[];
     expect(results.map((r) => r.tool_use_id)).toEqual(['toolu_n']);
+  });
+
+  it('sends the turn again with every tool loaded when the API refuses tool search, and keeps them loaded', async () => {
+    resetToolSearchForTests();
+    try {
+      const events = await turn('who should I talk to', [
+        {
+          error: {
+            status: 400,
+            type: 'invalid_request_error',
+            message: 'tools.82.type: tool_search_tool_bm25_20251119 is not supported',
+          },
+        },
+        { text: 'Start with Maya.' },
+      ]);
+      expect(text(events)).toBe('Start with Maya.');
+      const reqs = messageRequests(fake);
+      expect(reqs).toHaveLength(2);
+      expect(reqs[0]!.body.tools.some((t: { defer_loading?: boolean }) => t.defer_loading)).toBe(true);
+      const second = reqs[1]!.body.tools as { name: string; type?: string; defer_loading?: boolean }[];
+      expect(second.some((t) => t.defer_loading)).toBe(false);
+      expect(second.some((t) => t.name === 'tool_search_tool_bm25')).toBe(false);
+      expect(second.some((t) => t.name === 'add_note')).toBe(true);
+      // the next turn starts with every tool loaded
+      await turn('and after that', [{ text: 'Then Omar.' }]);
+      const third = messageRequests(fake)[2]!.body.tools as { defer_loading?: boolean }[];
+      expect(third.some((t) => t.defer_loading)).toBe(false);
+    } finally {
+      resetToolSearchForTests();
+    }
+  });
+
+  it('does not treat another bad request as a tool search refusal', async () => {
+    resetToolSearchForTests();
+    const events = await turn('hello', [
+      {
+        error: {
+          status: 400,
+          type: 'invalid_request_error',
+          message: 'messages: text content blocks must be non-empty',
+        },
+      },
+    ]);
+    expect(events.some((e) => e.type === 'error')).toBe(true);
+    expect(messageRequests(fake)).toHaveLength(1);
   });
 
   it('wraps third-party text once per tool result, with the nonce, and neutralizes a forged closing tag', async () => {

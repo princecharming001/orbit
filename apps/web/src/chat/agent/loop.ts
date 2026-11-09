@@ -250,6 +250,23 @@ export const WEB_BUDGET_NOTE =
  */
 export const CHAT_TOOL_SEARCH = true;
 
+/**
+ * Set when the API refused a request because of tool search (a 400 naming it): every later turn in this page load
+ * loads all tools again, and the refused request is re-sent that way, so a student never sees the refusal.
+ */
+let toolSearchRejected = false;
+export function resetToolSearchForTests(): void {
+  toolSearchRejected = false;
+}
+/** A 400 from the API about tool search or deferred tools, as opposed to any other bad request. */
+export function isToolSearchRejection(err: unknown): boolean {
+  return (
+    err instanceof Anthropic.APIError &&
+    err.status === 400 &&
+    /tool[_ ]search|defer_loading|tool_reference/i.test(err.message)
+  );
+}
+
 /** The server tool that finds deferred tools by a natural-language query (docs: tool-search-tool). */
 export const TOOL_SEARCH_TOOL = {
   type: 'tool_search_tool_bm25_20251119',
@@ -412,7 +429,7 @@ export function buildRunnerTools(
   hooks: ToolHooks,
   opts: { toolSearch?: boolean } = {},
 ): BetaRunnableTool[] {
-  const search = opts.toolSearch ?? CHAT_TOOL_SEARCH;
+  const search = opts.toolSearch ?? (CHAT_TOOL_SEARCH && !toolSearchRejected);
   const specs = sortedSpecs(registry).filter((s) => !MODEL_HIDDEN_TOOLS.has(s.name) && modelCallable(s));
   const made = specs.map((spec) => {
     const tool = betaZodTool({
@@ -597,7 +614,7 @@ export async function runTurn(
     ...(metered ? { headers: { [ITERATION_HEADER]: String(iteration) } } : {}),
   });
 
-  const tools = buildRunnerTools(registry, {
+  const toolHooks: ToolHooks = {
     signal,
     note: budgetNote,
     wrap,
@@ -675,7 +692,8 @@ export async function runTurn(
         await flushResults();
       return env;
     },
-  });
+  };
+  let tools = buildRunnerTools(registry, toolHooks);
 
   const params = turnParams(deps, tools, messages, knowledge);
   let runner = deps.client.beta.messages.toolRunner(params, requestOptions());
@@ -842,6 +860,23 @@ export async function runTurn(
       }
       break;
     } catch (err) {
+      // the API refused tool search before anything was said or run: load every tool and send the request again
+      if (
+        isToolSearchRejection(err) &&
+        tools.some((t) => t.defer_loading) &&
+        !pending &&
+        !spoken &&
+        !signal?.aborted
+      ) {
+        toolSearchRejected = true;
+        console.warn('[orbit chat] tool search was refused, sending the turn with every tool loaded', err);
+        tools = buildRunnerTools(registry, toolHooks, { toolSearch: false });
+        runner = deps.client.beta.messages.toolRunner(
+          { ...runner.params, tools: withWebSearch(tools) },
+          requestOptions(),
+        );
+        continue;
+      }
       if (
         err instanceof Anthropic.APIError ||
         err instanceof TruncatedToolInput ||
