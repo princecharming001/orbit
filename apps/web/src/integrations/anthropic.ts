@@ -54,7 +54,13 @@ import {
   updatePrefs,
   writePrefs,
 } from './prefs';
-import { pauseSharedClaude, sharedClaudeAvailable, sharedClaudeUrl, sharedClientId } from './shared-claude';
+import {
+  pauseEndsOn,
+  pauseSharedClaude,
+  sharedClaudeAvailable,
+  sharedClaudeUrl,
+  sharedClientId,
+} from './shared-claude';
 
 export const MODEL = 'claude-opus-5-5';
 /** Background classification and extraction, the same model the server runs these jobs on. */
@@ -203,14 +209,24 @@ export function toLlmError(e: unknown): LlmError {
       detail,
     );
   if (shared === 'day' || shared === 'global' || shared === 'unconfigured' || shared === 'budget') {
-    pauseSharedClaude(shared);
+    const reset = e instanceof APIError ? e.headers?.get('x-orbit-reset') : undefined;
+    const month =
+      shared === 'budget' &&
+      e instanceof APIError &&
+      e.headers?.get('x-orbit-budget-scope') === 'month' &&
+      reset
+        ? { until: reset }
+        : undefined;
+    pauseSharedClaude(shared, new Date(), month);
     return new LlmError(
       'shared_limit',
       shared === 'unconfigured'
         ? "Orbit's shared Claude access is unavailable right now."
-        : shared === 'budget'
-          ? "You've used today's Claude that Orbit includes for you."
-          : "Orbit's shared Claude access has reached today's limit.",
+        : month
+          ? `You've used this month's Claude that Orbit includes for you. It comes back on ${pauseEndsOn(month.until)}.`
+          : shared === 'budget'
+            ? "You've used today's Claude that Orbit includes for you."
+            : "Orbit's shared Claude access has reached today's limit.",
       detail,
     );
   }
@@ -282,6 +298,11 @@ export function describeLlmFailure(e: LlmError): {
         body: `${e.message} Orbit is using its own templates until tomorrow. You can change the limit in Settings, Integrations.`,
       };
     case 'shared_limit':
+      if (/this month's Claude that Orbit includes/.test(e.message))
+        return {
+          title: "This month's included Claude is used up",
+          body: `${e.message} Until then the chat understands a fixed set of commands, or add your own Anthropic key in Settings, Integrations.`,
+        };
       if (/Orbit includes/.test(e.message))
         return {
           title: "Today's included Claude is used up",

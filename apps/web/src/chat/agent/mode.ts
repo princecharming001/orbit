@@ -1,6 +1,11 @@
 import { describeLlmFailure, llmEnabled, overDailyCap } from '../../integrations/anthropic';
 import { llmFeatures, readPrefs } from '../../integrations/prefs';
-import { sharedClaudeAvailable, sharedClaudePause, sharedClaudeUrl } from '../../integrations/shared-claude';
+import {
+  pauseEndsOn,
+  sharedClaudeAvailable,
+  sharedClaudePause,
+  sharedClaudeUrl,
+} from '../../integrations/shared-claude';
 
 export const SETTINGS_ROUTE = '/settings/integrations';
 
@@ -42,9 +47,11 @@ export function chatModeNote(): { text: string; href?: string } | undefined {
       text:
         pause.reason === 'unconfigured'
           ? `Orbit's shared Claude access is unavailable right now, so Orbit understands a fixed set of commands and the buttons below. ${ROUTER_ABILITIES} Add your own key in Settings, Integrations to chat freely; it stays on this device.`
-          : pause.reason === 'budget'
-            ? `You've used today's Claude that Orbit includes for you, so until midnight UTC Orbit understands a fixed set of commands and the buttons below. ${ROUTER_ABILITIES} Add your own key in Settings, Integrations to keep chatting with Claude; it stays on this device.`
-            : `Orbit's shared Claude access has reached today's limit, so until tomorrow Orbit understands a fixed set of commands and the buttons below. ${ROUTER_ABILITIES} Add your own key in Settings, Integrations to keep chatting with Claude; it stays on this device.`,
+          : pause.reason === 'budget' && pause.scope === 'month'
+            ? `You've used this month's Claude that Orbit includes for you, so until ${pauseEndsOn(pause.until)} Orbit understands a fixed set of commands and the buttons below. ${ROUTER_ABILITIES} Add your own key in Settings, Integrations to keep chatting with Claude; it stays on this device.`
+            : pause.reason === 'budget'
+              ? `You've used today's Claude that Orbit includes for you, so until midnight UTC Orbit understands a fixed set of commands and the buttons below. ${ROUTER_ABILITIES} Add your own key in Settings, Integrations to keep chatting with Claude; it stays on this device.`
+              : `Orbit's shared Claude access has reached today's limit, so until tomorrow Orbit understands a fixed set of commands and the buttons below. ${ROUTER_ABILITIES} Add your own key in Settings, Integrations to keep chatting with Claude; it stays on this device.`,
       href: SETTINGS_ROUTE,
     };
   const cap = overDailyCap();

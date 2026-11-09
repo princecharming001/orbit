@@ -90,6 +90,17 @@ export const DEFAULT_CAP_USD = 3;
 export const DEFAULT_ANON_IP_DAILY_USD = 1;
 /** Dollars a day on Orbit's key across everyone: the hard stop on the bill. */
 export const DEFAULT_GLOBAL_DAILY_USD = 25;
+/**
+ * Dollars of Claude a signed-in student may use in a calendar month (UTC), chat and server work together: the
+ * allowance the $49 subscription is priced on, so a heavy month cannot take the margin under half. The month's
+ * subject `user:<uuid>:m:<YYYY-MM>` is the chat's spend; orbit_spend_total adds the server's Claude spend that month.
+ */
+export const DEFAULT_MONTHLY_USD = 10;
+
+/** The first instant of the next calendar month, UTC: when a monthly allowance comes back. */
+export function nextMonthStart(now: Date): Date {
+  return new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 1));
+}
 
 /** One answer's shape and price, written once the answer is complete (plan 34 C1). */
 export interface UsageRow {
@@ -136,6 +147,10 @@ export interface ProxyDeps {
   anonIpDailyUsd?: number;
   /** dollars a day across everyone */
   globalDailyUsd?: number;
+  /** dollars a calendar month for one signed-in student, chat and server work together */
+  monthlyUsd?: number;
+  /** the owner's user id (ORBIT_OWNER_ID): no monthly allowance, so testing never runs out (or a lookup for it) */
+  ownerId?: string | (() => Promise<string | undefined>);
   /** ORBIT_SESSION_SECRET, to recognise a signed-in user's access token (or a lookup for it, cached by the caller) */
   sessionSecret?: string | (() => Promise<string | undefined>);
   /** whether Orbit's Anthropic access is switched on (orbit_private.provider_switches); absent means on */
@@ -150,6 +165,8 @@ const EXPOSE = [
   'x-should-retry',
   'x-orbit-limit',
   'x-orbit-budget-remaining',
+  'x-orbit-budget-scope',
+  'x-orbit-reset',
   'anthropic-ratelimit-requests-remaining',
   'anthropic-ratelimit-tokens-remaining',
 ].join(', ');
@@ -508,6 +525,7 @@ export function meter(
 export function makeHandler(deps: ProxyDeps): (req: Request) => Promise<Response> {
   const limits = deps.limits ?? DEFAULT_LIMITS;
   const cap = deps.capUsd ?? DEFAULT_CAP_USD;
+  const monthCap = deps.monthlyUsd ?? DEFAULT_MONTHLY_USD;
   const doFetch = deps.fetch ?? fetch;
   const now = deps.now ?? (() => new Date());
   return async (req) => {
@@ -615,20 +633,38 @@ export function makeHandler(deps: ProxyDeps): (req: Request) => Promise<Response
     const globalDay = `global:${day}`;
     const signedIn = who.startsWith('user:');
     const ipDay = signedIn ? undefined : `ipday:${visitor}:${day}`;
-    const charged = [subject, globalDay, ...(ipDay ? [ipDay] : []), ...(signedIn ? [who] : [])];
+    // a signed-in student's month, for the monthly allowance; the owner has none
+    let ownerId: string | undefined;
+    if (signedIn && deps.ownerId)
+      try {
+        ownerId = typeof deps.ownerId === 'function' ? await deps.ownerId() : deps.ownerId;
+      } catch {
+        ownerId = undefined;
+      }
+    const monthSubject = signedIn ? `${who}:m:${day.slice(0, 7)}` : undefined;
+    const monthCapped = !!monthSubject && (!ownerId || who !== `user:${ownerId}`);
+    const charged = [
+      subject,
+      globalDay,
+      ...(ipDay ? [ipDay] : []),
+      ...(signedIn ? [who] : []),
+      ...(monthSubject ? [monthSubject] : []),
+    ];
     const iterHeader = Number(req.headers.get('x-orbit-iterations'));
     const iterations =
       Number.isInteger(iterHeader) && iterHeader >= 0 && iterHeader <= 1000 ? iterHeader : undefined;
     let spent = 0;
+    let monthSpent = 0;
     if (deps.spend) {
       const spend = deps.spend;
       let globalSpent = 0;
       let ipSpent = 0;
       try {
-        [spent, globalSpent, ipSpent] = await Promise.all([
+        [spent, globalSpent, ipSpent, monthSpent] = await Promise.all([
           spend.total(subject),
           spend.total(globalDay),
           ipDay ? spend.total(ipDay) : Promise.resolve(0),
+          monthSubject && monthCapped ? spend.total(monthSubject) : Promise.resolve(0),
         ]);
       } catch {
         return apiError(503, 'api_error', 'Orbit’s shared Claude access is unavailable right now.', h);
@@ -660,6 +696,23 @@ export function makeHandler(deps: ProxyDeps): (req: Request) => Promise<Response
           h,
           { 'x-orbit-limit': 'budget', 'x-should-retry': 'false', 'x-orbit-budget-remaining': '0' },
         );
+      if (monthCapped && monthSpent >= monthCap) {
+        const back = nextMonthStart(now());
+        const on = back.toLocaleDateString('en-US', { month: 'long', day: 'numeric', timeZone: 'UTC' });
+        return apiError(
+          429,
+          'rate_limit_error',
+          `You have used this month's $${monthCap} of Claude that Orbit includes. It comes back on ${on}, or add your own Anthropic key in Settings to keep going.`,
+          h,
+          {
+            'x-orbit-limit': 'budget',
+            'x-orbit-budget-scope': 'month',
+            'x-orbit-reset': back.toISOString(),
+            'x-should-retry': 'false',
+            'x-orbit-budget-remaining': '0',
+          },
+        );
+      }
     }
 
     const headers: Record<string, string> = {
@@ -681,7 +734,11 @@ export function makeHandler(deps: ProxyDeps): (req: Request) => Promise<Response
       return apiError(502, 'api_error', 'Could not reach Anthropic from Orbit’s server.', h);
     }
     const out: Record<string, string> = { ...h };
-    if (deps.spend) out['x-orbit-budget-remaining'] = Math.max(0, cap - spent).toFixed(2);
+    if (deps.spend)
+      out['x-orbit-budget-remaining'] = Math.max(
+        0,
+        monthCapped ? Math.min(cap - spent, monthCap - monthSpent) : cap - spent,
+      ).toFixed(2);
     for (const k of ['content-type', 'request-id', 'retry-after', 'x-should-retry']) {
       const v = upstream.headers.get(k);
       if (v) out[k] = v;

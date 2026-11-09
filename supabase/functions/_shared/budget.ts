@@ -1,7 +1,8 @@
 /**
  * Per-user spending caps (§13.5), read from orbit.usage_ledger before a paid call:
  *   per day   Claude $1.50 for server work, Claude $4.50 for chat and server work together, Exa $0.50, Village 50 credits, Apollo match 10 credits, Hunter 10 credits, Unipile profile views 40
- *   per month $25 across every provider (calendar month, UTC)
+ *   per month $25 across every provider (calendar month, UTC), and Claude $10 for chat and server work together (the
+ *   allowance the subscription is priced on; the owner, ORBIT_OWNER_ID, has none)
  *   in total $100 per user, counting the chat's Claude spend too (public.orbit_proxy_spend): a stop against a
  *   runaway account, never a limit a real student meets in a year of normal use
  *   for everyone together, Hunter 40 credits a month (plan 34 A4): under the plan's 50, so tests and a busy day
@@ -24,9 +25,14 @@ export interface Cap {
   window: 'day' | 'month';
   /** whose spend is summed: the user's own (default) or everyone's */
   scope?: 'user' | 'global';
-  /** add the student's chat spend today (public.orbit_proxy_spend) to the sum */
+  /** add the student's chat spend in the cap's window (public.orbit_proxy_spend) to the sum */
   includeChat?: boolean;
+  /** the owner (ORBIT_OWNER_ID) is not held to it */
+  ownerExempt?: boolean;
 }
+
+/** Dollars of Claude a student may use in a calendar month, chat and server work together (orbit-claude holds the same). */
+export const CLAUDE_MONTHLY_USD = 10;
 
 export const CAPS: Cap[] = [
   { id: 'claude_daily_usd', provider: 'anthropic', measure: 'cost_usd', limit: 1.5, window: 'day' },
@@ -37,6 +43,15 @@ export const CAPS: Cap[] = [
     limit: 4.5,
     window: 'day',
     includeChat: true,
+  },
+  {
+    id: 'claude_monthly_usd',
+    provider: 'anthropic',
+    measure: 'cost_usd',
+    limit: CLAUDE_MONTHLY_USD,
+    window: 'month',
+    includeChat: true,
+    ownerExempt: true,
   },
   { id: 'exa_daily_usd', provider: 'exa', measure: 'cost_usd', limit: 0.5, window: 'day' },
   { id: 'village_daily_credits', provider: 'village', measure: 'units', limit: 50, window: 'day' },
@@ -169,11 +184,13 @@ export async function checkBudget(
     let used = source
       .filter((r) => r.provider === cap.provider && (!cap.operation || r.operation === cap.operation))
       .reduce((s, r) => s + Number(r[field]), 0);
-    // the chat's Claude spend today counts toward the combined day cap, never the server-only one, so a student who
-    // chatted a lot can still get drafts until chat and server work together reach the combined limit
-    if (cap.includeChat) used += await chatSpendToday(db, userId, now);
+    // the chat's Claude spend in the window counts toward the combined caps, never the server-only one, so a student
+    // who chatted a lot can still get drafts until chat and server work together reach the combined limit
+    if (cap.includeChat) used += await chatSpend(db, userId, cap.window, now);
     const add = cap.measure === 'units' ? (spend.units ?? 1) : (spend.costUsd ?? 0);
-    if (used + add > cap.limit || (used >= cap.limit && add === 0))
+    const over = used + add > cap.limit || (used >= cap.limit && add === 0);
+    if (over && cap.ownerExempt && (await isOwner(db, userId))) continue;
+    if (over)
       return {
         ok: false,
         reason: 'budget_exceeded',
@@ -195,9 +212,24 @@ type LedgerSums = {
   month_usd: string;
 };
 
-/** What the student's chat has cost today, as orbit-claude metered it (0 before the proxy writes user rows). */
-async function chatSpendToday(db: Db, userId: string, now: Date): Promise<number> {
-  const subject = `user:${userId}:${now.toISOString().slice(0, 10)}`;
+/** Whether this is the owner's account (ORBIT_OWNER_ID, kept in the secrets table), who tests on the live site. */
+async function isOwner(db: Db, userId: string): Promise<boolean> {
+  try {
+    const [r] = await db.sql<{ v: string | null }>`select public.orbit_secret('ORBIT_OWNER_ID') as v`;
+    return !!r?.v && r.v.trim() === userId;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * What the student's chat has cost in the window, as orbit-claude metered it: `user:<uuid>:<YYYY-MM-DD>` for the day,
+ * `user:<uuid>:m:<YYYY-MM>` for the month (0 before the proxy writes them).
+ */
+async function chatSpend(db: Db, userId: string, window: 'day' | 'month', now: Date): Promise<number> {
+  const iso = now.toISOString();
+  const subject =
+    window === 'day' ? `user:${userId}:${iso.slice(0, 10)}` : `user:${userId}:m:${iso.slice(0, 7)}`;
   try {
     const [r] = await db.sql<{ usd: string | null }>`
       select usd::text as usd from public.orbit_proxy_spend where subject = ${subject}`;

@@ -100,6 +100,8 @@ function harness(
     enabled?: () => Promise<boolean>;
     usage?: (row: UsageRow) => Promise<void>;
     headers?: Record<string, string>;
+    monthlyUsd?: number;
+    ownerId?: string | (() => Promise<string | undefined>);
   } = {},
 ) {
   const upstream: Seen[] = [];
@@ -111,6 +113,8 @@ function harness(
     sessionSecret: opts.sessionSecret,
     enabled: opts.enabled,
     usage: opts.usage,
+    monthlyUsd: opts.monthlyUsd,
+    ownerId: opts.ownerId,
     take:
       opts.take ??
       (async (bs) => {
@@ -467,10 +471,10 @@ describe('the $3 per-user daily cap on Orbit’s key', () => {
     expect(signedIn.upstream).toHaveLength(1);
     expect(over.adds.map(([s]) => s).filter((s) => s.startsWith('ipday:'))).toHaveLength(0);
     expect(over.adds.map(([s]) => s)).toContain(`user:${USER}:${new Date().toISOString().slice(0, 10)}`);
-    // and to their lifetime total, the subject the server's own caps read: three adds per priced event
+    // and to their lifetime total, the subject the server's own caps read, and their month: four adds per priced event
     expect(over.adds.map(([s]) => s)).toContain(`user:${USER}`);
     const perEvent = over.adds.filter(([s]) => !s.startsWith('ipday:'));
-    expect(perEvent).toHaveLength(6);
+    expect(perEvent).toHaveLength(8);
   });
 
   it('reads the session key through a lookup (the copy in Vault) and charges the signed-in user', async () => {
@@ -493,7 +497,9 @@ describe('the $3 per-user daily cap on Orbit’s key', () => {
       // read through
     }
     const subjects = new Set(m.adds.map(([s]) => s));
-    expect(subjects).toEqual(new Set([`user:${USER}:${day}`, `global:${day}`, `user:${USER}`]));
+    expect(subjects).toEqual(
+      new Set([`user:${USER}:${day}`, `global:${day}`, `user:${USER}`, `user:${USER}:m:${day.slice(0, 7)}`]),
+    );
     // a lookup that fails leaves the request counted by browser, never refused
     const broken = memSpend();
     const fallback = harness({
@@ -576,6 +582,76 @@ describe('the $3 per-user daily cap on Orbit’s key', () => {
     expect(chatModeNote()?.text).toMatch(/used today's Claude that Orbit includes/);
     // back the next UTC day: the allowance is per day
     expect(sharedClaudeAvailable(new Date(Date.now() + 2 * 24 * 3600_000))).toBe(true);
+  });
+
+  it('a signed-in student who used the month’s $10 is stopped until the 1st, and the chat says so', async () => {
+    setSharedClaudeUrlForTests(BASE);
+    const month = new Date().toISOString().slice(0, 7);
+    const session = await accessToken({ sub: USER, aud: 'orbit', exp: Math.floor(Date.now() / 1000) + 600 });
+    const m = memSpend({ [`user:${USER}:m:${month}`]: 10.01 });
+    const { client, upstream } = harness({
+      spend: m.spend,
+      sessionSecret: SECRET,
+      headers: { 'x-orbit-session': session, 'x-orbit-client': CLIENT },
+    });
+    const raw = await client.beta.messages.create(chatParams).catch((e) => e);
+    expect(raw).toBeInstanceOf(Anthropic.RateLimitError);
+    expect(raw.headers.get('x-orbit-limit')).toBe('budget');
+    expect(raw.headers.get('x-orbit-budget-scope')).toBe('month');
+    const reset = new Date(raw.headers.get('x-orbit-reset'));
+    expect(reset.getUTCDate()).toBe(1);
+    expect(reset.getTime()).toBeGreaterThan(Date.now());
+    expect(upstream).toHaveLength(0);
+    const err = toLlmError(raw);
+    expect(err.reason).toBe('shared_limit');
+    expect(describeLlmFailure(err).title).toBe("This month's included Claude is used up");
+    expect(readPrefs().sharedClaudePause).toMatchObject({ reason: 'budget', scope: 'month' });
+    expect(chatMode()).toBe('router');
+    expect(chatModeNote()?.text).toMatch(/used this month's Claude that Orbit includes/);
+    // still paused tomorrow (a day's pause would have ended), back once the month turns
+    expect(sharedClaudeAvailable(new Date(Date.now() + 26 * 3600_000))).toBe(
+      reset.getTime() < Date.now() + 26 * 3600_000,
+    );
+    expect(sharedClaudeAvailable(new Date(reset.getTime() + 1000))).toBe(true);
+    // under the allowance the answer says how much is left, the smaller of the day and the month
+    const under = memSpend({ [`user:${USER}:m:${month}`]: 9.5 });
+    const ok = harness({
+      spend: under.spend,
+      sessionSecret: SECRET,
+      headers: { 'x-orbit-session': session, 'x-orbit-client': CLIENT },
+    });
+    const res = await ok.client.beta.messages.create({ ...chatParams, stream: true }).withResponse();
+    expect(res.response.headers.get('x-orbit-budget-remaining')).toBe('0.50');
+    for await (const _ of res.data) {
+      // read through
+    }
+  });
+
+  it('the owner has no monthly allowance, and someone not signed in is never held to one', async () => {
+    const month = new Date().toISOString().slice(0, 7);
+    const session = await accessToken({ sub: USER, aud: 'orbit', exp: Math.floor(Date.now() / 1000) + 600 });
+    const m = memSpend({ [`user:${USER}:m:${month}`]: 50 });
+    const owner = harness({
+      spend: m.spend,
+      sessionSecret: SECRET,
+      ownerId: async () => USER,
+      headers: { 'x-orbit-session': session, 'x-orbit-client': CLIENT },
+    });
+    const res = await owner.client.beta.messages.create({ ...chatParams, stream: true }).withResponse();
+    for await (const _ of res.data) {
+      // read through
+    }
+    expect(owner.upstream).toHaveLength(1);
+    // still metered, so the owner's month shows on the cost page
+    expect(m.adds.map(([s]) => s)).toContain(`user:${USER}:m:${month}`);
+    // a browser without an account has its own daily caps and no month subject
+    const anon = memSpend();
+    const browser = harness({ spend: anon.spend, headers: { 'x-orbit-client': CLIENT } });
+    const r2 = await browser.client.beta.messages.create({ ...chatParams, stream: true }).withResponse();
+    for await (const _ of r2.data) {
+      // read through
+    }
+    expect(anon.adds.some(([s]) => s.includes(':m:'))).toBe(false);
   });
 
   it('counts a signed-in student by their account, and anyone else by browser, then by IP', async () => {

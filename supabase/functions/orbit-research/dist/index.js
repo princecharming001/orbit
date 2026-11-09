@@ -2398,6 +2398,8 @@ var EXPOSE = [
   "x-should-retry",
   "x-orbit-limit",
   "x-orbit-budget-remaining",
+  "x-orbit-budget-scope",
+  "x-orbit-reset",
   "anthropic-ratelimit-requests-remaining",
   "anthropic-ratelimit-tokens-remaining"
 ].join(", ");
@@ -2429,6 +2431,7 @@ import Anthropic from "npm:@anthropic-ai/sdk@0.133.0";
 import { zodOutputFormat } from "npm:@anthropic-ai/sdk@0.133.0/helpers/zod";
 
 // supabase/functions/_shared/budget.ts
+var CLAUDE_MONTHLY_USD = 10;
 var CAPS = [
   { id: "claude_daily_usd", provider: "anthropic", measure: "cost_usd", limit: 1.5, window: "day" },
   {
@@ -2438,6 +2441,15 @@ var CAPS = [
     limit: 4.5,
     window: "day",
     includeChat: true
+  },
+  {
+    id: "claude_monthly_usd",
+    provider: "anthropic",
+    measure: "cost_usd",
+    limit: CLAUDE_MONTHLY_USD,
+    window: "month",
+    includeChat: true,
+    ownerExempt: true
   },
   { id: "exa_daily_usd", provider: "exa", measure: "cost_usd", limit: 0.5, window: "day" },
   { id: "village_daily_credits", provider: "village", measure: "units", limit: 50, window: "day" },
@@ -2531,9 +2543,11 @@ async function checkBudget(db, userId, spend, now = /* @__PURE__ */ new Date()) 
     }
     const field = cap.window === "month" ? cap.measure === "units" ? "month_units" : "month_usd" : cap.measure === "units" ? "day_units" : "day_usd";
     let used = source.filter((r) => r.provider === cap.provider && (!cap.operation || r.operation === cap.operation)).reduce((s, r) => s + Number(r[field]), 0);
-    if (cap.includeChat) used += await chatSpendToday(db, userId, now);
+    if (cap.includeChat) used += await chatSpend(db, userId, cap.window, now);
     const add = cap.measure === "units" ? spend.units ?? 1 : spend.costUsd ?? 0;
-    if (used + add > cap.limit || used >= cap.limit && add === 0)
+    const over = used + add > cap.limit || used >= cap.limit && add === 0;
+    if (over && cap.ownerExempt && await isOwner(db, userId)) continue;
+    if (over)
       return {
         ok: false,
         reason: "budget_exceeded",
@@ -2545,8 +2559,17 @@ async function checkBudget(db, userId, spend, now = /* @__PURE__ */ new Date()) 
   }
   return { ok: true };
 }
-async function chatSpendToday(db, userId, now) {
-  const subject = `user:${userId}:${now.toISOString().slice(0, 10)}`;
+async function isOwner(db, userId) {
+  try {
+    const [r] = await db.sql`select public.orbit_secret('ORBIT_OWNER_ID') as v`;
+    return !!r?.v && r.v.trim() === userId;
+  } catch {
+    return false;
+  }
+}
+async function chatSpend(db, userId, window, now) {
+  const iso = now.toISOString();
+  const subject = window === "day" ? `user:${userId}:${iso.slice(0, 10)}` : `user:${userId}:m:${iso.slice(0, 7)}`;
   try {
     const [r] = await db.sql`
       select usd::text as usd from public.orbit_proxy_spend where subject = ${subject}`;

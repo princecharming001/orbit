@@ -238,6 +238,7 @@ import Anthropic from "npm:@anthropic-ai/sdk@0.133.0";
 import { zodOutputFormat } from "npm:@anthropic-ai/sdk@0.133.0/helpers/zod";
 
 // supabase/functions/_shared/budget.ts
+var CLAUDE_MONTHLY_USD = 10;
 var CAPS = [
   { id: "claude_daily_usd", provider: "anthropic", measure: "cost_usd", limit: 1.5, window: "day" },
   {
@@ -247,6 +248,15 @@ var CAPS = [
     limit: 4.5,
     window: "day",
     includeChat: true
+  },
+  {
+    id: "claude_monthly_usd",
+    provider: "anthropic",
+    measure: "cost_usd",
+    limit: CLAUDE_MONTHLY_USD,
+    window: "month",
+    includeChat: true,
+    ownerExempt: true
   },
   { id: "exa_daily_usd", provider: "exa", measure: "cost_usd", limit: 0.5, window: "day" },
   { id: "village_daily_credits", provider: "village", measure: "units", limit: 50, window: "day" },
@@ -340,9 +350,11 @@ async function checkBudget(db2, userId, spend, now = /* @__PURE__ */ new Date())
     }
     const field = cap.window === "month" ? cap.measure === "units" ? "month_units" : "month_usd" : cap.measure === "units" ? "day_units" : "day_usd";
     let used = source.filter((r) => r.provider === cap.provider && (!cap.operation || r.operation === cap.operation)).reduce((s, r) => s + Number(r[field]), 0);
-    if (cap.includeChat) used += await chatSpendToday(db2, userId, now);
+    if (cap.includeChat) used += await chatSpend(db2, userId, cap.window, now);
     const add4 = cap.measure === "units" ? spend.units ?? 1 : spend.costUsd ?? 0;
-    if (used + add4 > cap.limit || used >= cap.limit && add4 === 0)
+    const over = used + add4 > cap.limit || used >= cap.limit && add4 === 0;
+    if (over && cap.ownerExempt && await isOwner(db2, userId)) continue;
+    if (over)
       return {
         ok: false,
         reason: "budget_exceeded",
@@ -354,8 +366,17 @@ async function checkBudget(db2, userId, spend, now = /* @__PURE__ */ new Date())
   }
   return { ok: true };
 }
-async function chatSpendToday(db2, userId, now) {
-  const subject = `user:${userId}:${now.toISOString().slice(0, 10)}`;
+async function isOwner(db2, userId) {
+  try {
+    const [r] = await db2.sql`select public.orbit_secret('ORBIT_OWNER_ID') as v`;
+    return !!r?.v && r.v.trim() === userId;
+  } catch {
+    return false;
+  }
+}
+async function chatSpend(db2, userId, window, now) {
+  const iso3 = now.toISOString();
+  const subject = window === "day" ? `user:${userId}:${iso3.slice(0, 10)}` : `user:${userId}:m:${iso3.slice(0, 7)}`;
   try {
     const [r] = await db2.sql`
       select usd::text as usd from public.orbit_proxy_spend where subject = ${subject}`;

@@ -79,7 +79,12 @@ export interface LocalPrefs {
   /** show the chat model's own notes to itself (the grey lines before each step); off unless the student asks */
   showReasoning?: boolean;
   /** Orbit's shared Claude access said stop (daily limit, or not set up): the chat uses commands until `until`. */
-  sharedClaudePause?: { until: string; reason: 'day' | 'global' | 'unconfigured' | 'budget' };
+  sharedClaudePause?: {
+    until: string;
+    reason: 'day' | 'global' | 'unconfigured' | 'budget';
+    /** the student's monthly allowance ran out (the server named when it comes back), not the day's */
+    scope?: 'month';
+  };
 }
 
 interface PrefsRow {

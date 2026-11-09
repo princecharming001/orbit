@@ -585,6 +585,47 @@ describe('cost guards (plan 34)', () => {
     });
   });
 
+  it('the monthly Claude allowance: chat and server together reach $10, the owner has none', async () => {
+    const u = await makeUser(t.db);
+    const owner = await makeUser(t.db);
+    const now = new Date();
+    const month = now.toISOString().slice(0, 7);
+    // $8.60 of chat this month (spread over days, so no day cap trips) and $1 of server Claude work today
+    await t.db.sql`select public.orbit_spend_add(${`user:${u}:m:${month}`}, 8.6::numeric)`;
+    await recordUsage(t.db, { userId: u, provider: 'anthropic', operation: 'compose', units: 1, costUsd: 1 });
+    // the proxy reads one total for the month: its chat plus the server's Claude spend
+    const [tot] = await t.db.sql<{ usd: string }>`
+      select public.orbit_spend_total(${`user:${u}:m:${month}`})::text as usd`;
+    expect(Number(tot!.usd)).toBeCloseTo(9.6, 5);
+    // other providers and other months do not count toward it
+    await recordUsage(t.db, { userId: u, provider: 'hunter', operation: 'find', units: 1, costUsd: 0.5 });
+    const [same] = await t.db.sql<{ usd: string }>`
+      select public.orbit_spend_total(${`user:${u}:m:${month}`})::text as usd`;
+    expect(Number(same!.usd)).toBeCloseTo(9.6, 5);
+    const [other] = await t.db.sql<{
+      usd: string;
+    }>`select public.orbit_spend_total(${`user:${u}:m:1999-01`})::text as usd`;
+    expect(Number(other!.usd)).toBe(0);
+    // the server's next Claude call stays under $10 only while it is small
+    expect(await checkBudget(t.db, u, { provider: 'anthropic', costUsd: 0.3 }, now)).toEqual({ ok: true });
+    const v = await checkBudget(t.db, u, { provider: 'anthropic', costUsd: 0.5 }, now);
+    expect(v).toMatchObject({ ok: false, cap: 'claude_monthly_usd', limit: 10 });
+    if (!v.ok) expect(new Date(v.resetsAt).getUTCDate()).toBe(1);
+    // the owner, named in the secrets table, is never held to it
+    await t.db.sql`select public.orbit_spend_add(${`user:${owner}:m:${month}`}, 40::numeric)`;
+    expect(await checkBudget(t.db, owner, { provider: 'anthropic', costUsd: 0.1 }, now)).toMatchObject({
+      ok: false,
+      cap: 'claude_monthly_usd',
+    });
+    await t.db.sql`
+      insert into orbit_private.secrets (name, value) values ('ORBIT_OWNER_ID', ${owner})
+      on conflict (name) do update set value = excluded.value`;
+    expect(await checkBudget(t.db, owner, { provider: 'anthropic', costUsd: 0.1 }, now)).toEqual({
+      ok: true,
+    });
+    await t.db.sql`delete from orbit_private.secrets where name = 'ORBIT_OWNER_ID'`;
+  });
+
   it('A5: a switched-off provider answers budget_exceeded and never calls out', async () => {
     forgetSwitches(t.db);
     expect([...(await providersOff(t.db))]).toEqual([]);

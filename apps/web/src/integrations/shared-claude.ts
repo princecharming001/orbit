@@ -22,11 +22,16 @@ export function sharedClaudeUrl(): string | undefined {
 }
 
 /** The active pause, or undefined once it has passed. */
-export function sharedClaudePause(now = new Date()): { until: string; reason: string } | undefined {
+export function sharedClaudePause(
+  now = new Date(),
+): { until: string; reason: string; scope?: 'month' } | undefined {
   const stored = readPrefs().sharedClaudePause;
-  // the allowance is per day now: a pause kept from the old one-time allowance ends at the next UTC midnight
+  // a day's allowance ends at the next UTC midnight (a pause kept from the old one-time allowance included); the
+  // monthly allowance runs to the date the server named
   const p =
-    stored?.reason === 'budget' && Date.parse(stored.until) > nextUtcMidnight(now).getTime()
+    stored?.reason === 'budget' &&
+    stored.scope !== 'month' &&
+    Date.parse(stored.until) > nextUtcMidnight(now).getTime()
       ? { ...stored, until: nextUtcMidnight(now).toISOString() }
       : stored;
   return p && new Date(p.until).getTime() > now.getTime() ? p : undefined;
@@ -52,7 +57,15 @@ function nextUtcMidnight(now: Date): Date {
 export function pauseSharedClaude(
   reason: 'day' | 'global' | 'unconfigured' | 'budget',
   now = new Date(),
+  month?: { until: string },
 ): void {
+  // the month's allowance: until the date the server named (the first of next month), never more than 32 days
+  const back = month ? Date.parse(month.until) : Number.NaN;
+  if (reason === 'budget' && Number.isFinite(back) && back > now.getTime()) {
+    const until = new Date(Math.min(back, now.getTime() + 32 * 86_400_000));
+    writePrefs({ sharedClaudePause: { until: until.toISOString(), reason, scope: 'month' } });
+    return;
+  }
   const until = new Date(now);
   if (reason === 'unconfigured') until.setTime(now.getTime() + 60 * 60_000);
   else {
@@ -60,6 +73,11 @@ export function pauseSharedClaude(
     until.setUTCDate(until.getUTCDate() + 1);
   }
   writePrefs({ sharedClaudePause: { until: until.toISOString(), reason } });
+}
+
+/** "December 1": the day a monthly pause ends, for what the chat says. */
+export function pauseEndsOn(until: string): string {
+  return new Date(until).toLocaleDateString('en-US', { month: 'long', day: 'numeric', timeZone: 'UTC' });
 }
 
 const CLIENT_KEY = 'orbit.sharedClient';
