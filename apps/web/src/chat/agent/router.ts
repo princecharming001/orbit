@@ -492,7 +492,7 @@ function routeInner(raw: string, ctx: RouterContext): RouterIntent {
         };
   const ambiguous = (name: string, candidates: MatchablePerson[]): RouterIntent =>
     has('search_people')
-      ? viaTool('search_people', { query: stripName(name) }, 'More than one person matches. Pick one:')
+      ? viaTool('search_people', { query: stripName(name) }, `Which ${stripName(name)}?`)
       : {
           kind: 'text',
           text: `More than one person matches "${stripName(name)}": ${candidates.map((p) => p.displayName).join(', ')}. Say the full name.`,

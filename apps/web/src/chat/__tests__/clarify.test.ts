@@ -126,7 +126,7 @@ describe('the pick message', () => {
     });
     expect(withoutRefs(m)).toBe('Juniper Capital');
     expect(withoutPick(m)).toBe('Juniper Capital');
-    expect(routedText(m)).toBe('who do I know at Juniper');
+    expect(routedText(m)).toBe('who do I know at Juniper Capital');
     expect(routedText('Juniper Capital [picked company x for "Juniper"]')).toBe('Juniper Capital');
     expect(routedText('who do I know at Stripe')).toBe('who do I know at Stripe');
   });
@@ -269,5 +269,71 @@ describe('without a Claude key, the router asks and the pick finishes the ask', 
       }),
     ]);
     expect(conv?.title).toBe('who do I know at Juniper');
+  });
+});
+
+describe('a name that fits several people asks which one (plan 37 phase 3)', () => {
+  it('search_people with a first name several people share is a question with who each is', async () => {
+    const env = await execute('search_people', { query: 'Keiko' }, makeCtx(user, { caller: 'llm' }));
+    const c = clarify(env);
+    expect(c.about).toBe('person');
+    expect(c.question).toBe('Which Keiko?');
+    expect(c.options.length).toBeGreaterThanOrEqual(2);
+    expect(c.options.length).toBeLessThanOrEqual(4);
+    for (const o of c.options) {
+      expect(o.label).toMatch(/^Keiko /);
+      expect(o.sub).toMatch(/ at /);
+    }
+  });
+
+  it('a full name, a company and a name only one person has never ask', async () => {
+    for (const query of ['Lena Novak', 'Lena', 'Stripe', 'Nina Vashti']) {
+      const env = await execute('search_people', { query }, makeCtx(user, { caller: 'llm' }));
+      expect(env.kind, query).toBe('people');
+    }
+  });
+
+  it('a pick in this conversation answers the name from then on', async () => {
+    const asked = clarify(
+      await execute('search_people', { query: 'Keiko' }, makeCtx(user, { conversationId: 'conv_keiko' })),
+    );
+    const chosen = asked.options[1]!;
+    await rememberResolution('conv_keiko', resolutionOf(parsePick(pickMessage('person', 'Keiko', chosen))!));
+    const env = await execute(
+      'search_people',
+      { query: 'keiko' },
+      makeCtx(user, { conversationId: 'conv_keiko' }),
+    );
+    expect(env.kind).toBe('people');
+    const rows = (env.data as { ui: { people: { id: string }[] } }).ui.people;
+    expect(rows.map((r) => r.id)).toEqual([chosen.id]);
+  });
+
+  it('without a key: "draft a thank you to Keiko" asks, and the tap drafts to the one picked', async () => {
+    const engine = createChatEngine({
+      registry,
+      execute,
+      user: () => user,
+      store: new ChatStore(),
+      now: () => NOW,
+    });
+    const c = await engine.startConversation({ temporary: false });
+    const first: TurnEvent[] = [];
+    await engine.send(c.id, 'draft a thank you to Keiko', (e) => first.push(e));
+    expect(first.find((e) => e.type === 'text')).toMatchObject({ delta: 'Which Keiko?' });
+    const asked = first.find((e) => e.type === 'tool_result') as Extract<TurnEvent, { type: 'tool_result' }>;
+    const q = clarify(asked.envelope);
+    const pick = q.options[0]!;
+    const second: TurnEvent[] = [];
+    await engine.send(c.id, pickMessage('person', q.term, pick, 'draft a thank you to Keiko'), (e) =>
+      second.push(e),
+    );
+    const done = second.filter((e) => e.type === 'tool_result') as Extract<
+      TurnEvent,
+      { type: 'tool_result' }
+    >[];
+    const kinds = done.map((d) => d.envelope.kind);
+    expect(kinds).not.toContain('clarify');
+    expect(JSON.stringify(done.map((d) => d.envelope.data))).toContain(pick.id);
   });
 });

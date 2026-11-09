@@ -198,11 +198,19 @@ export function followUp(text: string, t: ThreadContext, h: FollowHelpers): Rout
           text: 'Tap Approve on the card above to send it. Nothing goes out before that.',
         };
       if (focusDraft) return h.viaTool('send_draft', { draftId: focusDraft.id }, undefined, 'send a draft');
+      // plan 37: which one, as buttons, never a sentence to retype
       if (drafts.length > 1)
-        return {
-          kind: 'text',
-          text: `Which one? Say "send the first" or name them, like: send my draft to ${drafts[0]!.name.split(' ')[0]}.`,
-        };
+        return h.viaTool(
+          'offer_choices',
+          {
+            options: drafts.slice(0, 3).map((d) => ({
+              label: `The one to ${d.name.split(' ')[0]}`,
+              message: `Send my draft to ${d.name}`,
+            })),
+          },
+          'Which one?',
+          'ask which draft',
+        );
     }
     if (
       /^(?:send|approve) (?:them|these|all|all of them|them all|both|all \w+)(?: now)?$/.test(lower) &&

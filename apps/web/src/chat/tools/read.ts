@@ -37,7 +37,7 @@ import {
 } from '@orbit/core';
 import { db } from '../../db/schema';
 import { localScore } from '../../engine/closeness';
-import { resolveCompanyRef } from '../../engine/companyRef';
+import { resolutionsFor, resolveCompanyRef } from '../../engine/companyRef';
 import { conversationWith } from '../../engine/conversation';
 import { DEMO_USER_ID } from '../../engine/demo';
 import { lastInboundOf, liveChatOf, nextMessageKind } from '../../engine/drafts';
@@ -87,7 +87,7 @@ import { dailyLlmCaps, llmFeatures, readPrefs, todaysLlmUsage } from '../../inte
 import { sharedClaudeAvailable } from '../../integrations/shared-claude';
 import { stepAddress } from '../../pages/onboardingSteps';
 import { z } from '../../zod';
-import { clarifyResult } from '../clarify';
+import { clarifyResult, resolutionTerm } from '../clarify';
 import type { ResultEnvelope, ToolContext } from '../types';
 import {
   type AnyTool,
@@ -581,6 +581,29 @@ export const searchPeople = defineTool({
             activeChat: new Set(activeChat.keys()),
             targetNames: new Set(targets.map((t) => t.nameRaw.toLowerCase())),
           }).slice(0, limit);
+    const q = input.query?.trim();
+    // a name ("Lena", "Ana P") asks which person; a company or title ("W26", "Stripe") is a list, not a pick
+    const nameQuery = !!q && looksLikeName(q, list);
+    // plan 37: a name that fits several people is a question back, never a guess; a pick earlier in this
+    // conversation answers it
+    if (q && nameQuery && filter === 'all' && !input.sort) {
+      const named = namedBy(q, list);
+      const picked = (await resolutionsFor(ctx.conversationId)).find(
+        (r) => r.about === 'person' && r.term === resolutionTerm('person', q),
+      );
+      const settled = picked && people.find((p) => p.id === picked.id && !p.hiddenAt);
+      if (settled) list.splice(0, list.length, settled);
+      else if (named.length > 1 && !named.some((p) => p.displayName.toLowerCase() === q.toLowerCase()))
+        return clarifyResult(
+          'person',
+          q,
+          named.slice(0, 4).map((p) => ({
+            id: p.id,
+            label: p.displayName,
+            sub: [p.currentTitle, p.currentOrganizationRaw].filter(Boolean).join(' at ') || undefined,
+          })),
+        );
+    }
     const rows = list.map((p) => {
       const chat = activeChat.get(p.id);
       return {
@@ -594,9 +617,6 @@ export const searchPeople = defineTool({
         hidden: !!p.hiddenAt,
       };
     });
-    const q = input.query?.trim();
-    // a name ("Lena", "Ana P") asks which person; a company or title ("W26", "Stripe") is a list, not a pick
-    const nameQuery = !!q && looksLikeName(q, list);
     const summary = rows.length
       ? `${plural(rows.length, 'person', 'people')} match${rows.length === 1 ? 'es' : ''}${q ? ` "${q}"` : ''}${rows.length > 1 && nameQuery ? '. Check which one is meant before acting.' : '.'}`
       : q
@@ -612,6 +632,20 @@ export const searchPeople = defineTool({
   },
   toModel,
 });
+
+/** The people a name query names: the whole name, the first name, or the start of the name ("Lena", "Lena N"). */
+export function namedBy<P extends Pick<Person, 'displayName' | 'firstName'>>(q: string, people: P[]): P[] {
+  const s = q.trim().toLowerCase().replace(/\s+/g, ' ');
+  return people.filter((p) => {
+    const name = p.displayName.toLowerCase();
+    return (
+      name === s ||
+      p.firstName.toLowerCase() === s ||
+      name.startsWith(`${s} `) ||
+      (s.includes(' ') && name.startsWith(s))
+    );
+  });
+}
 
 /** A query that names a person: its first word is a given name, or it starts someone's name. */
 export function looksLikeName(q: string, people: readonly Pick<Person, 'displayName'>[]): boolean {

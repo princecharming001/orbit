@@ -123,5 +123,10 @@ export function resolutionOf(pick: Pick, organizationId?: string): Resolution {
 /** The words the no-key router should read for a message: a pick finishes the ask it interrupted. */
 export function routedText(text: string): string {
   const pick = parsePick(text);
-  return pick ? (pick.ask ?? pick.label) : text;
+  if (!pick) return text;
+  if (!pick.ask) return pick.label;
+  // the router reads names itself: the words that fit several things become the one picked ("Lena" is Lena Novak)
+  const esc = pick.term.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const re = new RegExp(`\\b${esc}\\b`, 'i');
+  return pick.term && re.test(pick.ask) ? pick.ask.replace(re, pick.label) : pick.ask;
 }

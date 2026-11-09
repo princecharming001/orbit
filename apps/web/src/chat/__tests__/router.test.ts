@@ -351,7 +351,7 @@ describe('router: handled utterances', () => {
   it('asks which person when a name is ambiguous', () => {
     const r = routeUtterance('draft a thank you to Sam', ctx());
     expect(r).toMatchObject({ kind: 'tool', tool: 'search_people', input: { query: 'Sam' } });
-    expect((r as { lead?: string }).lead).toMatch(/More than one person/);
+    expect((r as { lead?: string }).lead).toBe('Which Sam?');
   });
 
   it('never routes to a tool the registry does not have', () => {
