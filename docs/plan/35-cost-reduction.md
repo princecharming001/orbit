@@ -429,6 +429,10 @@ signup is free (2,500 searches). Until then every sourcing run pays Claude web s
 | Hunter credits per sourced person | 1 to 2 | | | | |
 | Reply draft $ (§9.3) | $0.031 | | | | |
 | Unipile accounts (§9.6) | 11 (10 included) | | | | |
+| Tool chars loaded in the cached prefix (offline, `context-budget.test.ts`) | 120,300 (114 tools, all loaded) | 29,444 (20 core, tool search, web_search; 82 deferred, sent but not loaded) | | | |
+| Fixed system block chars (`system.test.ts`) | 38,250 | 23,880 | | | |
+| Playbook block chars, IB recruiting student (header is now the section list) | 10,240 | 9,681 | | | |
+| Cached prefix chars before the conversation (loaded tools + fixed block + playbook; tokens wait for the bench) | 168,800 | 63,000 | | | |
 
 ## 8. Decisions and approvals for Anish
 
