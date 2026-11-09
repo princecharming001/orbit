@@ -27,7 +27,8 @@ export interface LinkedinConnectStartResponse {
 }
 /** POST /linkedin/status */
 export interface LinkedinStatusResponse {
-  status: 'not_connected' | 'connecting' | 'active' | 'needs_reauth' | 'error';
+  /** 'parked': Orbit unlinked the account while the student was away (plan 35 E5); reconnecting resumes it */
+  status: 'not_connected' | 'connecting' | 'active' | 'needs_reauth' | 'error' | 'parked';
   accountId: string | null;
   lastSyncedAt: string | null;
   relations: number;

@@ -28,6 +28,8 @@ export interface HandlerDeps {
   embed?: Embed;
   /** the daily cost digest's mailer, owner and thresholds (plan 34 E2) */
   cost?: CostDigestDeps;
+  /** parking idle LinkedIn links (plan 35 E5): ORBIT_LINKEDIN_PARK_DAYS as days (0 is off), and links a night */
+  park?: { days?: number; perRun?: number };
 }
 
 export class JobSkipped extends Error {

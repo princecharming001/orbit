@@ -355,6 +355,10 @@ describe('orbit.health (§16)', () => {
         'queues',
         'scores_oldest_hours',
         'stuck_backfills',
+        // plan 35 E1, E5 (20261122_orbit_unipile_park.sql)
+        'unipile_orphans',
+        'unipile_reconciled_at',
+        'linkedin_parked',
       ].sort(),
     );
     expect(h.dead_letters_24h).toBeGreaterThanOrEqual(1);

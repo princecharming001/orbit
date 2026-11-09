@@ -92,7 +92,7 @@ export namespace Row {
     external_account_id: string | null;
     email: string | null;
     scopes: string[];
-    status: 'active' | 'needs_reauth' | 'revoked' | 'error' | 'connecting';
+    status: 'active' | 'needs_reauth' | 'revoked' | 'error' | 'connecting' | 'parked';
     token_secret_id: Uuid | null;
     sync_state: Record<string, Json>;
     watch_expires_at: Ts | null;

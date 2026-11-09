@@ -100,6 +100,8 @@ describe('orbit core migration', () => {
       'orbit-friends-nightly',
       'orbit-health',
       'orbit-incremental',
+      // plan 35 E5: parking idle LinkedIn links, scheduled by 20261122_orbit_unipile_park.sql
+      'orbit-linkedin-park',
       'orbit-nightly',
       // plan 29 §B2.5: the hourly outcome roll, scheduled by 20261101_orbit_autopilot_phase3.sql
       'orbit-outcomes',
@@ -108,6 +110,8 @@ describe('orbit core migration', () => {
       'orbit-search-census',
       // plan 33: profile reading, every two hours, scheduled by 20261109_orbit_profile_reading.sql
       'orbit-search-reading',
+      // plan 35 E1: the Unipile account reconciler, same migration
+      'orbit-unipile-reconcile',
       // plan 29 §B2.4b: the nightly voice distillation, scheduled by 20261102_orbit_voice.sql
       'orbit-voice',
       'orbit-worker-tick',
