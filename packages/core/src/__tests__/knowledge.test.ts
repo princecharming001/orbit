@@ -110,10 +110,10 @@ describe('knowledgeFor (plan 28 §3b, channel 1)', () => {
       }
   });
 
-  it('the block says how to use it and which sections are one lookup away', () => {
+  it('the block lists its sections and which are one lookup away (how to use it is in the chat prompt, plan 35 A2)', () => {
     const text = knowledgeBlockText(knowledgeFor([{ kind: 'fundraising' }]));
-    expect(text).toMatch(/^Playbook\. What a sharp friend who has done this knows/);
-    expect(text).toMatch(/\[CHANGES YEARLY\] gives the pattern/);
+    expect(text).toMatch(/^Playbook: Networking etiquette, Raising a first round\./);
+    expect(text.split('\n\n')[0]!.length).toBeLessThan(400);
     expect(text).toMatch(/Other sections, through lookup_playbook: .*vc-job.*glossary|glossary.*vc-job/);
     expect(text).toMatch(/## Networking etiquette/);
     expect(text).toMatch(/## Raising a first round/);

@@ -314,6 +314,18 @@ export async function replyRundown(recent: ReplyItem[], s: AutopilotStatus): Pro
   return `Replies this week (${recent.length}): ${parts.join('; ')}.`;
 }
 
+/**
+ * How to word an answer from autopilot_status (plan 35 A2): sent with the result, the only time it matters, instead of
+ * in every request's system prompt.
+ */
+export const AUTOPILOT_HOW_TO_ANSWER = [
+  'The card already lists everything, so your words are never a heading, a bulleted list, bold names or a repeat of the card: lead with what needs their tap, then at most two short sentences on the rest, the way a friend would text it, naming the people.',
+  'Asked what replies came in, answer it now, never with a menu of options instead: the "Replies this week" line groups every person by what happened, so say that count and name each person once in the same groups (need you, booked, drafted for their tap, answered, nothing to do, closed), one short line a group, first names only, no reasons unless one changes what they do, under 60 words in all. That count is every reply; the week line\'s smaller number is only answers to what Orbit sent on its own, so say which you mean.',
+  'Asked why someone was or was not written to, name the one rule that held or skipped them in plain words (not at a company on your goals, nothing researched to open with, a recruiter, the cap, one per firm a morning), and the time it goes instead when there is one. Asked about one person, also say in one clause the open thing their history holds (an assessment due, a referral offered, a time they named) when it shows one.',
+  'A pushback in the week is history: when nothing is paused now, say it paused that company then and nothing is paused now, never that it is paused and never that you lifted it. Give a rung in numbers (14 of 20).',
+  "Then add the one thing a sharp friend would add unasked, in a short clause, never a second paragraph: when a message goes, in the recipient's clock with theirs beside it exactly as given (8:40 AM their time, 5:40 AM yours); that a hold or a pause is undone with one tap; who is held and the rule that held them; that the batch waits for their evening tap until the rung is earned; that it stops on its own at the first decline or pushback. Pick the one that matters most for what they asked.",
+].join(' ');
+
 export const autopilotStatusTool = defineTool({
   name: 'autopilot_status',
   kind: 'read',
@@ -464,6 +476,7 @@ export const autopilotStatusTool = defineTool({
         : {}),
       local: r.local,
       note: r.note,
+      howToAnswer: AUTOPILOT_HOW_TO_ANSWER,
     };
     return ok('text', data, data, summary, '/inbox');
   },

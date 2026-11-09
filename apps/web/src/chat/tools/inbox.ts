@@ -75,6 +75,10 @@ export function replyRows(replies: ReplyItem[]): MessageRow[] {
 export const INBOX_ROWS = 15;
 
 /** The replies card: one row a person, newest first, with the face and what their reply meant. */
+/** How to word an answer about replies (plan 35 A2), sent with the result instead of in the system prompt. */
+export const REPLIES_HOW_TO_ANSWER =
+  'The card lists every reply, so answer now, never with a menu of options and never a heading, a list or a repeat of the card: say how many replied and name each person once, grouped by what happened (need you, picking a time, answered, nothing to do, closed), one short line a group, first names only, under 60 words. Someone who declined or asked to stop is closed: never suggest writing to them.';
+
 export function repliesEnvelope(ctx: ToolContext, replies: ReplyItem[]): ResultEnvelope {
   const rows = replyRows(replies).slice(0, 25);
   // the model sees the same rows (one a person), so it never names someone twice
@@ -102,6 +106,7 @@ export function repliesEnvelope(ctx: ToolContext, replies: ReplyItem[]): ResultE
         };
       }),
       note: 'Replies to the student’s own outreach only. Messages out of the blue are in list_inbox. Draft an answer only when the student asks (draft_reply).',
+      howToAnswer: REPLIES_HOW_TO_ANSWER,
     },
     rows.length
       ? `${plural(rows.length, 'person', 'people')} replied to your outreach in the last 30 days.`

@@ -173,14 +173,13 @@ export function knowledgeFor(
   return out;
 }
 
-/** The block the chat prepends to the conversation: how to use it, then the sections. */
+/** The block the chat prepends to the conversation: the section list, then the sections. */
 export function knowledgeBlockText(sections: readonly KnowledgeSection[]): string {
   const have = new Set(sections.map((s) => s.id));
   const others = KNOWLEDGE_IDS.filter((id) => !have.has(id));
+  // how to use the playbook is said once, in the chat's frozen system block (Knowledge); this is the list (plan 35 A2)
   const head = [
-    'Playbook. What a sharp friend who has done this knows, picked for this student. Answer a question about how a process works from it first, in your own words and only the part that matters for them right now; from their own data second; from the web only for a current fact.',
-    "A line tagged [CHANGES YEARLY] gives the pattern, not this year's date: say the pattern, then check the date or the program on the web before stating one.",
-    'Answer in under sixty words: the one or two things that matter for this student now, one concept at a time, the rest when they ask. Never a paragraph per concept, never a closing summary line.',
+    `Playbook: ${sections.map((s) => s.title).join(', ')}.`,
     others.length ? `Other sections, through lookup_playbook: ${others.join(', ')}.` : '',
   ]
     .filter(Boolean)

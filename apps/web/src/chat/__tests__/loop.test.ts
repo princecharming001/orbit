@@ -109,7 +109,7 @@ describe('request shape', () => {
       body.system.filter((b: { cache_control?: unknown }) => b.cache_control).length +
       body.tools.filter((t: { cache_control?: unknown }) => t.cache_control).length;
     expect(breakpoints).toBeLessThanOrEqual(4);
-    expect(body.system[1].text).toMatch(/^Playbook\. What a sharp friend/);
+    expect(body.system[1].text).toMatch(/^Playbook: /);
     expect(body.system[1].text).toMatch(/## Networking etiquette/);
     expect(body.system[2].cache_control).toBeUndefined();
     expect(body.thinking).toEqual({

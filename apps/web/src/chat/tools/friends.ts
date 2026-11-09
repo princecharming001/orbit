@@ -216,6 +216,7 @@ export const listFriendsTool = defineTool({
             }
           : undefined,
         whatAFriendSees: FRIENDS_WHAT_CROSSES,
+        howToAnswer: FRIENDS_HOW_TO_ANSWER,
         next: 'ask_friend_for_intro asks the friend with a note they forward; respond_to_friend_ask forwards an ask in asksToYou; set_friend_sharing changes what you share',
       },
       `${lead}${company}${ownLine}${pend}${waitingAsks}`,
@@ -224,6 +225,13 @@ export const listFriendsTool = defineTool({
   },
   toModel,
 });
+
+/**
+ * How to word an answer about who the student can reach (plan 35 A2): it travels with list_friends, the only place it
+ * matters, instead of sitting in every request's system prompt.
+ */
+export const FRIENDS_HOW_TO_ANSWER =
+  "Two or three short lines that answer the question asked first. Asked what a friend knows somewhere, lead with the friend's best person there and how well the friend knows them, with a clause when youKnowThemToo shows the student knows them too; then the student's own best tie there in one clause (yourOwnBest: the highest tie score among their own people there, never the first alum a list shows), with a clause when alsoKnownBy shows a friend knows them too. Asked who they know there in general, lead with yourOwnBest. The cards carry everyone else, so never walk through the list.";
 
 export const inviteFriendTool = defineTool({
   name: 'invite_friend',
