@@ -83,6 +83,144 @@ function jsonLdPosting(html) {
   }
   return void 0;
 }
+var GREENHOUSE_HOST = /^(?:boards|job-boards)(\.eu)?\.greenhouse\.io$/i;
+var UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+var SLUG = /^[a-z0-9][a-z0-9_.-]{0,80}$/i;
+function boardJobOf(raw) {
+  let u;
+  try {
+    u = new URL(raw);
+  } catch {
+    return void 0;
+  }
+  const parts = u.pathname.split("/").filter(Boolean);
+  const gh = GREENHOUSE_HOST.exec(u.hostname);
+  const forParam = u.searchParams.get("for") ?? void 0;
+  if (gh) {
+    const eu = !!gh[1];
+    const token = parts[0] && parts[0] !== "embed" && SLUG.test(parts[0]) ? parts[0] : forParam;
+    const id = parts[1] === "jobs" && parts[2] || u.searchParams.get("gh_jid") || (parts[0] === "embed" ? u.searchParams.get("token") : null);
+    if (id && /^\d{4,}$/.test(id)) return { board: "greenhouse", id, token: token || void 0, eu };
+  }
+  const ghJid = u.searchParams.get("gh_jid");
+  if (ghJid && /^\d{4,}$/.test(ghJid))
+    return { board: "greenhouse", id: ghJid, token: forParam && SLUG.test(forParam) ? forParam : void 0 };
+  const ashby = u.searchParams.get("ashby_jid");
+  if (ashby && UUID.test(ashby) && !/(^|\.)ashbyhq\.com$/i.test(u.hostname))
+    return { board: "ashby", id: ashby };
+  return void 0;
+}
+function boardJobKey(job) {
+  return job.board === "greenhouse" ? `https://boards.greenhouse.io/job/${job.id}` : `https://jobs.ashbyhq.com/job/${job.id}`;
+}
+function siteNames(raw) {
+  try {
+    const labels = new URL(raw).hostname.toLowerCase().replace(/^www\./, "").split(".");
+    const generic = /^(www|jobs|careers|career|apply|boards|job-boards|work|join|hire|talent|co|com|org|net|io)$/;
+    return [...new Set(labels.filter((l) => l.length > 1 && !generic.test(l)).slice(0, 2))];
+  } catch {
+    return [];
+  }
+}
+var boardHeaders = { "user-agent": POSTING_USER_AGENT, accept: "application/json" };
+async function greenhouseBoardOf(id, doFetch, signal) {
+  try {
+    const res = await doFetch(`https://boards.greenhouse.io/embed/job_app?token=${id}`, {
+      headers: { "user-agent": POSTING_USER_AGENT },
+      redirect: "manual",
+      signal
+    });
+    const at = res.headers.get("location");
+    if (!at) return void 0;
+    const u = new URL(at, "https://boards.greenhouse.io");
+    const token = u.searchParams.get("for");
+    return token && SLUG.test(token) ? { token, eu: /\.eu\.greenhouse\.io$/i.test(u.hostname) } : void 0;
+  } catch {
+    return void 0;
+  }
+}
+async function greenhouseJob(token, id, eu, doFetch, signal) {
+  const res = await doFetch(
+    `https://boards-api${eu ? ".eu" : ""}.greenhouse.io/v1/boards/${encodeURIComponent(token)}/jobs/${id}`,
+    { headers: boardHeaders, signal }
+  );
+  if (res.status === 404) return "closed";
+  if (!res.ok) return void 0;
+  const j = await res.json();
+  const role = str(j.title);
+  if (!role) return void 0;
+  const company = str(j.company_name) ?? token.replace(/[-_]+/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
+  const deadline = str(j.application_deadline);
+  const dept = Array.isArray(j.departments) ? j.departments[0] : void 0;
+  return {
+    source: "board",
+    posting: {
+      company,
+      role,
+      team: str(dept?.name),
+      location: str(j.location?.name),
+      deadline: deadline && /^\d{4}-\d\d-\d\d/.test(deadline) ? deadline.slice(0, 10) : void 0,
+      requisitionId: str(j.requisition_id),
+      namesOnPage: { recruiters: [], managers: [] }
+    },
+    // the job's description comes as escaped HTML
+    text: `${role} at ${company}
+${pageText(decodeEntities(typeof j.content === "string" ? j.content : ""))}`
+  };
+}
+function boardNamesIn(html, re) {
+  if (!html) return [];
+  const out = /* @__PURE__ */ new Set();
+  for (const m of decodeEntities(html).matchAll(re)) if (m[1] && SLUG.test(m[1])) out.add(m[1].toLowerCase());
+  return [...out].filter((x) => !/^(embed|jobs?|v1|api)$/.test(x));
+}
+async function readBoardJob(job, pageUrl, html, deps, doFetch) {
+  const signal = AbortSignal.timeout(deps.timeoutMs ?? POSTING_TIMEOUT_MS);
+  if (job.board === "greenhouse") {
+    const boards = [];
+    if (job.token) boards.push({ token: job.token, eu: !!job.eu, named: true });
+    else {
+      const found = await greenhouseBoardOf(job.id, doFetch, signal);
+      if (found) boards.push({ ...found, named: true });
+      for (const token of [
+        ...boardNamesIn(
+          html,
+          /greenhouse\.io\/(?:embed\/job_(?:board(?:\/js)?|app)\?(?:[^"'\s<>]*?&)?for=)?([a-z0-9_.-]+)/gi
+        ),
+        ...siteNames(pageUrl)
+      ])
+        if (!boards.some((b) => b.token === token)) boards.push({ token, eu: false, named: false });
+    }
+    let closed = false;
+    for (const b of boards.slice(0, 4)) {
+      try {
+        const r = await greenhouseJob(b.token, job.id, b.eu, doFetch, signal);
+        if (r === "closed") closed ||= b.named;
+        else if (r) return r;
+      } catch {
+      }
+    }
+    return closed ? "closed" : void 0;
+  }
+  for (const org of [
+    ...boardNamesIn(html, /jobs\.ashbyhq\.com\/([a-z0-9_.-]+)/gi),
+    ...siteNames(pageUrl)
+  ].slice(0, 3)) {
+    try {
+      const page = await fetchPage(`https://jobs.ashbyhq.com/${org}/${job.id}`, deps, doFetch);
+      const ld = page ? jsonLdPosting(page) : void 0;
+      if (ld) return { posting: ld, source: "jsonld", text: pageText(page) };
+    } catch {
+    }
+  }
+  return void 0;
+}
+function embeddedJobLink(html) {
+  const found = /* @__PURE__ */ new Set();
+  const re = /https?:\/\/(?:(?:job-)?boards(?:\.eu)?\.greenhouse\.io\/(?:embed\/job_app\?[^"'\s<>]*token=\d+[^"'\s<>]*|[a-z0-9_.-]+\/jobs\/\d+)|jobs\.(?:eu\.)?lever\.co\/[a-z0-9_.-]+\/[0-9a-f-]{36}|jobs\.ashbyhq\.com\/[a-z0-9_.-]+\/[0-9a-f-]{36}|[a-z0-9-]+\.wd\d+\.myworkdayjobs\.com\/[^"'\s<>]*\/job\/[^"'\s<>]+)/gi;
+  for (const m of decodeEntities(html).matchAll(re)) found.add(m[0].replace(/[).,;]+$/, ""));
+  return found.size === 1 ? [...found][0] : void 0;
+}
 function titleOf(html) {
   return str(/<title[^>]*>([\s\S]*?)<\/title>/i.exec(html)?.[1]);
 }
@@ -225,74 +363,111 @@ async function fetchPage(url2, deps, doFetch) {
   }
   return new TextDecoder().decode(all);
 }
+var THIN_TEXT = 600;
+function withoutThin(a) {
+  const { thin: _thin, ...rest } = a;
+  return rest;
+}
+var CLOSED = {
+  ok: false,
+  reason: "closed",
+  message: "The job board no longer lists that job, so it may have closed. Try the company name."
+};
+async function readUrl(url2, job, deps, doFetch) {
+  let found;
+  if (job?.board === "greenhouse") found = await readBoardJob(job, url2, void 0, deps, doFetch);
+  let html;
+  if (!found || found === "closed") {
+    try {
+      html = await fetchPage(url2, deps, doFetch);
+    } catch {
+      html = void 0;
+    }
+  }
+  if (!found && html) {
+    const ld = jsonLdPosting(html);
+    if (ld) found = { posting: ld, source: "jsonld", text: pageText(html) };
+    else if (job) found = await readBoardJob(job, url2, html, deps, doFetch);
+    if (!found) {
+      const inner = embeddedJobLink(html);
+      if (inner && inner !== url2 && !postingUrlProblem(inner)) {
+        const innerJob = boardJobOf(inner);
+        if (innerJob) found = await readBoardJob(innerJob, inner, html, deps, doFetch);
+        else {
+          const page = await fetchPage(inner, deps, doFetch).catch(() => void 0);
+          const ld2 = page ? jsonLdPosting(page) : void 0;
+          if (ld2) found = { posting: ld2, source: "jsonld", text: pageText(page) };
+        }
+      }
+    }
+  }
+  if (found === "closed") {
+    if (!html || !jsonLdPosting(html)) return { ...CLOSED, thin: true };
+    found = { posting: jsonLdPosting(html), source: "jsonld", text: pageText(html) };
+  }
+  if (found) {
+    let posting = { ...found.posting, url: url2 };
+    if (deps.anthropicKey && found.text.trim()) {
+      try {
+        const more = fromModel(await askModel(deps, found.text, url2, doFetch), url2);
+        if (more.ok)
+          posting = {
+            ...posting,
+            team: posting.team ?? more.posting.team,
+            level: posting.level ?? more.posting.level,
+            namesOnPage: more.posting.namesOnPage
+          };
+      } catch {
+      }
+    }
+    return { ok: true, source: found.source, posting };
+  }
+  if (!html)
+    return {
+      ok: false,
+      reason: "unreachable",
+      message: "Orbit couldn't open that page. Paste the posting's text, or the company name."
+    };
+  if (!deps.anthropicKey)
+    return {
+      ok: false,
+      reason: "unconfigured",
+      message: "Reading postings is not set up yet. Paste the company name."
+    };
+  const body = pageText(html);
+  const text2 = `${titleOf(html) ?? ""}
+${body}`.trim();
+  try {
+    const answer = fromModel(await askModel(deps, text2, url2, doFetch), url2);
+    return answer.ok ? answer : { ...answer, thin: body.length < THIN_TEXT };
+  } catch {
+    return {
+      ok: false,
+      reason: "unreachable",
+      message: "Orbit couldn't read that page just now. Paste the company name."
+    };
+  }
+}
 async function readPosting(input, deps, opts = {}) {
   const doFetch = deps.fetch ?? fetch;
   const url2 = input.url?.trim();
   if (url2) {
     const problem = postingUrlProblem(url2);
     if (problem) return { ok: false, reason: "bad_request", message: problem };
-    const key = await postingKey(url2);
+    const job = boardJobOf(url2);
+    const key = await postingKey(job ? boardJobKey(job) : url2);
     const hit = await deps.cache?.get(key).catch(() => void 0);
-    if (hit) return hit.ok ? { ...hit, cached: true } : hit;
+    if (hit) return hit.ok ? { ...hit, posting: { ...hit.posting, url: url2 }, cached: true } : hit;
     if (opts.take && !await opts.take())
       return {
         ok: false,
         reason: "limit",
         message: "Orbit has read as many postings as it allows today. Paste the company name instead."
       };
-    let html;
-    try {
-      html = await fetchPage(url2, deps, doFetch);
-    } catch {
-      html = void 0;
-    }
-    if (!html)
-      return {
-        ok: false,
-        reason: "unreachable",
-        message: "Orbit couldn't open that page. Paste the posting's text, or the company name."
-      };
-    let answer;
-    const ld = jsonLdPosting(html);
-    if (ld) answer = { ok: true, source: "jsonld", posting: { ...ld, url: url2 } };
-    else if (!deps.anthropicKey)
-      return {
-        ok: false,
-        reason: "unconfigured",
-        message: "Reading postings is not set up yet. Paste the company name."
-      };
-    else {
-      const text3 = `${titleOf(html) ?? ""}
-${pageText(html)}`.trim();
-      try {
-        answer = fromModel(await askModel(deps, text3, url2, doFetch), url2);
-      } catch {
-        return {
-          ok: false,
-          reason: "unreachable",
-          message: "Orbit couldn't read that page just now. Paste the company name."
-        };
-      }
-    }
-    if (answer.ok && answer.source === "jsonld" && deps.anthropicKey) {
-      try {
-        const more = fromModel(await askModel(deps, pageText(html), url2, doFetch), url2);
-        if (more.ok)
-          answer = {
-            ...answer,
-            posting: {
-              ...answer.posting,
-              team: answer.posting.team ?? more.posting.team,
-              level: answer.posting.level ?? more.posting.level,
-              namesOnPage: more.posting.namesOnPage
-            }
-          };
-      } catch {
-      }
-    }
-    if (answer.ok || answer.reason === "not_a_posting" || answer.reason === "careers_list")
-      await deps.cache?.put(key, url2, answer).catch(() => void 0);
-    return answer;
+    const answer = await readUrl(url2, job, deps, doFetch);
+    if (answer.ok || answer.reason === "careers_list" || answer.reason === "not_a_posting" && !answer.thin)
+      await deps.cache?.put(key, url2, withoutThin(answer)).catch(() => void 0);
+    return withoutThin(answer);
   }
   const text2 = input.text?.trim();
   if (!text2) return { ok: false, reason: "bad_request", message: "Paste a job link or the posting text." };
