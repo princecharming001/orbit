@@ -809,6 +809,16 @@ export function createFakeOrbitApi(
           unconfigured: ['apollo'],
           relaxed: [],
         });
+      case '/source/email': {
+        // plan 35 C3: the on-demand lookup; the fake knows only the address a sourced result already carried
+        const c = state.sourced.find((x) => x.id === body.recommendationId);
+        return json(
+          200,
+          c?.email
+            ? { email: c.email, emailConfidence: c.emailConfidence ?? 'page', emailStatus: 'found' }
+            : { emailStatus: 'not found' },
+        );
+      }
       case '/source/add': {
         const ids = (body.recommendationIds as string[]) ?? [];
         const people = ids

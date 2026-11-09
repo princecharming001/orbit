@@ -103,6 +103,8 @@ import type {
   SlotsResponse,
   SourceAddRequest,
   SourceAddResponse,
+  SourceEmailRequest,
+  SourceEmailResponse,
   SourceSearchRequest,
   SourceSearchResponse,
   VoiceNoteRequest,
@@ -244,6 +246,7 @@ export interface ApiRoutes {
   '/research/choose': [ResearchChooseRequest, ResearchPersonResponse];
   '/source/search': [SourceSearchRequest, SourceSearchResponse];
   '/source/add': [SourceAddRequest, SourceAddResponse];
+  '/source/email': [SourceEmailRequest, SourceEmailResponse];
   '/paths/find': [PathsFindRequest, PathsFindResponse];
   '/intros/ask': [IntroAskRequest, IntroAskResponse];
   '/drafts/compose': [DraftComposeRequest, DraftResponse];

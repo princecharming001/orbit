@@ -2,7 +2,13 @@
  * Finding new people for a goal (plan 16 §6) from the browser's side, account mode only: the search runs on orbit-api
  * across its providers, the student adds the ones they want, and the new people and chats arrive with a pull.
  */
-import type { GoalKind, SourcedCandidate, SourceSearchResponse, User } from '@orbit/core';
+import type {
+  GoalKind,
+  SourcedCandidate,
+  SourceEmailResponse,
+  SourceSearchResponse,
+  User,
+} from '@orbit/core';
 import { db } from '../db/schema';
 import { callApi, isAccountMode, isServerUser, NO_SERVER, SIGN_IN_FIRST } from '../integrations/orbitApi';
 import { pullNow } from './serverSync';
@@ -84,6 +90,20 @@ export async function addSourced(user: Pick<User, 'id'>, recommendationIds: stri
   // the new people and their chats come down with the next pull; do it now so their pages open
   await pullNow(user.id).catch(() => undefined);
   return { ok: true, people: r.value.people };
+}
+
+/**
+ * Look up one sourced candidate's address on demand (plan 35 C3): a search no longer pays for every result's email,
+ * so the student asks for the ones they will write to. Adding someone looks theirs up on the server already.
+ */
+export async function findEmail(
+  user: Pick<User, 'id'>,
+  recommendationId: string,
+): Promise<{ ok: true; value: SourceEmailResponse } | { ok: false; message: string }> {
+  if (!isServerUser(user.id)) return notHere();
+  const r = await callApi('/source/email', { recommendationId });
+  if (!r.ok) return { ok: false, message: r.message };
+  return { ok: true, value: r.value };
 }
 
 /** One candidate as a line: "Maya Chen, Partner at Seed Fund". */

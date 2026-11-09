@@ -5,7 +5,7 @@ import { type FormEvent, useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { Dot, EmailLine, NameTag, PeopleShell, PersonLine } from '../../chat/ui/cards/people';
 import { activeGoals, GOAL_KIND_LABELS } from '../../engine/goals';
-import { addSourced, providerNames, searchPeople, tierChip } from '../../engine/sourcing';
+import { addSourced, findEmail, providerNames, searchPeople, tierChip } from '../../engine/sourcing';
 import { Button, cx, EmptyState, Input, Spinner } from '../../ui';
 
 const PLACEHOLDER: Record<GoalKind, string> = {
@@ -37,6 +37,7 @@ export function FindPeople({ userId }: { userId: string }) {
   });
   const [added, setAdded] = useState<Record<string, string>>({});
   const [adding, setAdding] = useState<string>();
+  const [finding, setFinding] = useState<string>();
   useEffect(() => {
     // start from the student's first active goal
     activeGoals(userId).then((gs) => {
@@ -72,6 +73,32 @@ export function FindPeople({ userId }: { userId: string }) {
       else if (r.people[0]) setAdded((a) => ({ ...a, [c.id]: r.people[0]!.id }));
     } finally {
       setAdding(undefined);
+    }
+  };
+
+  const lookUp = async (c: SourcedCandidate) => {
+    setFinding(c.id);
+    setError(undefined);
+    try {
+      const r = await findEmail({ id: userId }, c.id);
+      if (!r.ok) setError(r.message);
+      else
+        setResults((rs) =>
+          rs?.map((x) =>
+            x.id === c.id
+              ? r.value.email
+                ? {
+                    ...x,
+                    email: r.value.email,
+                    emailConfidence: r.value.emailConfidence,
+                    emailStatus: undefined,
+                  }
+                : { ...x, emailStatus: 'not found' }
+              : x,
+          ),
+        );
+    } finally {
+      setFinding(undefined);
     }
   };
 
@@ -161,12 +188,28 @@ export function FindPeople({ userId }: { userId: string }) {
                         </span>
                       }
                       extra={
-                        c.email || why ? (
+                        c.email || why || c.emailStatus ? (
                           <>
                             {c.email && (
                               <EmailLine email={c.email} sureness={c.emailConfidence} testId="find-email" />
                             )}
-                            {c.email && why && <Dot />}
+                            {!c.email && c.emailStatus === 'not looked up' && !personId && (
+                              <button
+                                type="button"
+                                data-testid="find-email-lookup"
+                                disabled={finding === c.id}
+                                onClick={() => void lookUp(c)}
+                                className="text-[13px] text-ink underline decoration-[#cfcdc9] underline-offset-4 hover:decoration-ink disabled:opacity-60"
+                              >
+                                {finding === c.id ? 'Looking up email' : 'Find email'}
+                              </button>
+                            )}
+                            {!c.email && c.emailStatus === 'not found' && (
+                              <span className="text-[13px] text-ink-2" data-testid="find-email-none">
+                                No email found
+                              </span>
+                            )}
+                            {(c.email || c.emailStatus) && why && <Dot />}
                             {why && (
                               <span className="truncate" data-testid="find-context" title={why}>
                                 {why}
