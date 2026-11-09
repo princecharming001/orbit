@@ -1,14 +1,18 @@
 /**
- * Company logos straight from LinkedIn (the student's rule: never a guessed one), for a whole network. Orbit keeps one
- * shared list of LinkedIn companies for every student (orbit-connectors /companies): a company any student's account
- * has found before answers at once and costs no LinkedIn read, with its logo copied into Orbit's storage so it never
- * expires. While the app is open this queue sends the names still without a LinkedIn logo in batches: the companies
- * tiles on screen asked for first (`wantCompanyLogo`, most recent first), then every company in the student's
- * network, the ones most people work at first. A few new companies are looked up per call, from the account's own
- * company allowance (a company page is not a profile view, so it never takes reads from people). LinkedIn's company
- * search answers only when exactly one company has the name (two "Nova"s are two companies, so neither is taken);
- * the company's LinkedIn id, public name and logo are then kept on the organisation (enrichment/logos `adoptCompany`).
- * Schools are left to their own site icons. The sample student's companies come from the mock connector.
+ * Company logos straight from LinkedIn (the student's rule: never a guessed one), for the companies the student sees.
+ * Orbit keeps one shared list of LinkedIn companies for every student (orbit-connectors /companies): a company any
+ * student's account has found before answers at once and costs no LinkedIn read, with its logo copied into Orbit's
+ * storage so it never expires. While the app is open this queue sends, in batches, the names of companies a tile
+ * showed without a LinkedIn logo (`wantCompanyLogo`, also `seenCompany`: the Map, People, Pipeline and Discover rows
+ * all draw their logos through CompanyLogo, which calls it once a tile is near the screen), this visit first, then
+ * those shown in the last two weeks (kept in this browser). Plan 35 B4: the rest of the network is never swept from
+ * the browser; a weekly server job (orbit-worker logos.sweep) fills the shared list for companies 3 or more people
+ * work at across all students, so most tiles answer from it for free. A few new companies are looked up per call,
+ * from the account's own company allowance (a company page is not a profile view, so it never takes reads from
+ * people). LinkedIn's company search answers only when exactly one company has the name (two "Nova"s are two
+ * companies, so neither is taken); the company's LinkedIn id, public name and logo are then kept on the organisation
+ * (enrichment/logos `adoptCompany`). Schools are left to their own site icons. The sample student's companies come
+ * from the mock connector.
  */
 import { looksLikeSchool, normalizeCompany, type User } from '@orbit/core';
 import { db } from '../db/schema';
@@ -31,6 +35,10 @@ export const LOGO_BATCH = 60;
 export const LOGO_GAP_MS = 20_000;
 /** A company LinkedIn could not pin down is sent again after this long (the shared list keeps the answer meanwhile). */
 export const LOGO_RETRY_MS = 14 * 86_400_000;
+/** A company a tile showed stays wanted this long across visits; one never shown is never sent. */
+export const LOGO_SEEN_KEEP_MS = 14 * 86_400_000;
+/** The most companies kept as shown, the latest first. */
+export const LOGO_SEEN_MAX = 300;
 
 let jitter = () => Math.random();
 /** Unit-test hook: the random share of each gap (0 to 1). */
@@ -50,6 +58,9 @@ export function wantCompanyLogo(name: string | undefined): void {
   wanted.set(key, { name: name.trim(), at: Date.now() });
   if (!had) for (const fn of listeners) fn();
 }
+
+/** A row shows this company's logo tile (plan 35 B4's name for wantCompanyLogo). */
+export const seenCompany = wantCompanyLogo;
 
 /** Where company answers come from: Orbit's shared list through the proxy, or the demo's mock connector. */
 export interface CompanySource {
@@ -84,14 +95,35 @@ export async function companySourceFor(user: Pick<User, 'id'>): Promise<CompanyS
 
 type Tried = Record<string, string>;
 const triedKey = (userId: string) => `logos:tried:${userId}`;
+type Shown = Record<string, { name: string; at: number }>;
+const seenKey = (userId: string) => `logos:seen:${userId}`;
+
+/** The companies tiles showed, this visit merged into those kept from the last two weeks (the latest first). */
+async function shownCompanies(userId: string, now: Date): Promise<[string, { name: string; at: number }][]> {
+  const stored = ((await db.kv.get(seenKey(userId)))?.value as Shown | undefined) ?? {};
+  const merged = new Map(Object.entries(stored));
+  let changed = false;
+  for (const [key, w] of wanted)
+    if ((merged.get(key)?.at ?? 0) < w.at) {
+      merged.set(key, w);
+      changed = true;
+    }
+  const kept = [...merged]
+    .filter(([, w]) => now.getTime() - w.at < LOGO_SEEN_KEEP_MS)
+    .sort((a, b) => b[1].at - a[1].at)
+    .slice(0, LOGO_SEEN_MAX);
+  if (changed || kept.length !== merged.size)
+    await db.kv.put({ key: seenKey(userId), value: Object.fromEntries(kept) });
+  return kept;
+}
 const nextCall = new Map<string, number>();
 
 export type LogoStep = 'asked' | 'idle' | 'wait' | 'paused' | 'off';
 
 /**
- * The names to send next: those tiles asked for (most recent first), then the companies people in the network work
- * at, most people first. Never one that already has a LinkedIn logo, a school (its site icon stands in), or one
- * LinkedIn could not pin down in the last two weeks.
+ * The names to send next: those tiles asked for this visit (most recent first), then those shown in the last two
+ * weeks. Never one that already has a LinkedIn logo, a school (its site icon stands in), or one LinkedIn could not pin
+ * down in the last two weeks, and never a company no tile showed (plan 35 B4).
  */
 async function namesToSend(
   userId: string,
@@ -117,25 +149,9 @@ async function namesToSend(
     seen.add(key);
     out.push({ key, name });
   };
+  const shown = await shownCompanies(userId, now);
   for (const [key, { name }] of [...wanted.entries()].sort((a, b) => b[1].at - a[1].at)) add(key, name);
-  if (out.length < LOGO_BATCH) {
-    const count = new Map<string, { name: string; n: number }>();
-    await db.people
-      .where('userId')
-      .equals(userId)
-      .each((p) => {
-        if (p.hiddenAt || !p.currentOrganizationRaw) return;
-        const key = normalizeCompany(p.currentOrganizationRaw);
-        if (!key) return;
-        const c = count.get(key);
-        if (c) c.n++;
-        else count.set(key, { name: p.currentOrganizationRaw.trim(), n: 1 });
-      });
-    for (const [key, { name }] of [...count.entries()].sort((a, b) => b[1].n - a[1].n)) {
-      if (out.length >= LOGO_BATCH) break;
-      add(key, name);
-    }
-  }
+  for (const [key, { name }] of shown) add(key, name);
   return out.slice(0, LOGO_BATCH);
 }
 

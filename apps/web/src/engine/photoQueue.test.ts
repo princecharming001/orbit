@@ -13,9 +13,10 @@ import {
   refreshOnePhoto,
   resetPhotoQueueForTests,
   setPhotoJitterForTests,
+  shownPeople,
   wantsPhoto,
 } from './photoQueue';
-import { photoBroken, photoWanted, resetPhotoSignalsForTests } from './photoSignals';
+import { photoBroken, photoWanted, resetPhotoSignalsForTests, seenPerson } from './photoSignals';
 
 const BASE = 'https://proxy.test/functions/v1/orbit-connectors';
 const NOW = new Date('2026-10-22T15:00:00Z');
@@ -87,6 +88,12 @@ afterEach(() => {
 });
 
 const at = (ms: number) => new Date(NOW.getTime() + ms);
+
+/** People a screen has shown (plan 35 B4: only they are fetched). */
+async function shown(people: Person[]): Promise<void> {
+  await db.people.bulkPut(people);
+  for (const p of people) seenPerson(p.id);
+}
 const GAP = 60_000 / PHOTOS_PER_MINUTE;
 
 describe('who needs a photo fetched', () => {
@@ -125,7 +132,7 @@ describe('who needs a photo fetched', () => {
 
 describe('the photo queue', () => {
   it('fetches one photo a tick, people on screen first and the newest next, and never the same person twice', async () => {
-    await db.people.bulkPut([
+    await shown([
       person({
         id: 'p_old',
         firstName: 'Old',
@@ -180,7 +187,7 @@ describe('the photo queue', () => {
   });
 
   it('spaces calls out to a few a minute and stops at the day’s allowance', async () => {
-    await db.people.bulkPut(
+    await shown(
       Array.from({ length: PHOTOS_PER_DAY + 2 }, (_, i) =>
         person({ id: `p${i}`, firstName: 'P', lastName: `N${i}`, linkedinMemberId: `m${i}` }),
       ),
@@ -206,7 +213,7 @@ describe('the photo queue', () => {
   }, 30_000);
 
   it('spaces calls at random, never closer than the steady pace', async () => {
-    await db.people.bulkPut(
+    await shown(
       Array.from({ length: 3 }, (_, i) =>
         person({ id: `p${i}`, firstName: 'P', lastName: `N${i}`, linkedinMemberId: `m${i}` }),
       ),
@@ -218,7 +225,7 @@ describe('the photo queue', () => {
   });
 
   it('leaves alone someone whose profile enrichment read in the last 45 days', async () => {
-    await db.people.bulkPut([
+    await shown([
       person({ id: 'p_read', firstName: 'Re', lastName: 'Ad', linkedinMemberId: 'm_read' }),
       person({ id: 'p_stale', firstName: 'St', lastName: 'Ale', linkedinMemberId: 'm_stale' }),
     ]);
@@ -234,7 +241,7 @@ describe('the photo queue', () => {
   });
 
   it('asks once about one LinkedIn member with two Orbit rows, and skips anyone enrichment read under another row (plan 34 B4, B6)', async () => {
-    await db.people.bulkPut([
+    await shown([
       person({ id: 'p_a', firstName: 'Al', lastName: 'One', linkedinMemberId: 'm_same' }),
       person({ id: 'p_a2', firstName: 'Al', lastName: 'One', linkedinMemberId: 'm_same' }),
       person({ id: 'p_b', firstName: 'Bo', lastName: 'Two', linkedinMemberId: 'm_read' }),
@@ -249,7 +256,7 @@ describe('the photo queue', () => {
   });
 
   it('fetches a fresh link for an expired LinkedIn photo, and clears a dead one LinkedIn no longer has', async () => {
-    await db.people.bulkPut([
+    await shown([
       person({
         id: 'p_exp',
         firstName: 'Ex',
@@ -284,7 +291,7 @@ describe('the photo queue', () => {
   });
 
   it('a photo the screen could not load is fetched once more; the same link back does not loop', async () => {
-    await db.people.put(
+    await shown([
       person({
         id: 'p_b',
         firstName: 'Bro',
@@ -292,7 +299,7 @@ describe('the photo queue', () => {
         linkedinMemberId: 'm_b',
         photoUrl: licdn('same'),
       }),
-    );
+    ]);
     expect(await refreshOnePhoto(user, { now: at(0) })).toEqual({ step: 'idle' });
     photoBroken('p_b', licdn('same'));
     answers.m_b = { ok: true, photo: { pictureUrl: licdn('same') } };
@@ -302,7 +309,7 @@ describe('the photo queue', () => {
   });
 
   it('stops for the day when LinkedIn asks to slow down, with the pause enrichment keeps', async () => {
-    await db.people.bulkPut([
+    await shown([
       person({ id: 'p1', firstName: 'A', lastName: 'One', linkedinMemberId: 'm1' }),
       person({ id: 'p2', firstName: 'B', lastName: 'Two', linkedinMemberId: 'm2' }),
     ]);
@@ -316,7 +323,7 @@ describe('the photo queue', () => {
 
   it('does nothing without live LinkedIn, and uses the demo’s own pictures on the mock connector', async () => {
     await db.integrations.clear();
-    await db.people.put(person({ id: 'p1', firstName: 'A', lastName: 'One', linkedinMemberId: 'm1' }));
+    await shown([person({ id: 'p1', firstName: 'A', lastName: 'One', linkedinMemberId: 'm1' })]);
     expect(await refreshOnePhoto(user, { now: at(0) })).toEqual({ step: 'off' });
     setConnectorsMockForTests(true);
     await db.integrations.put({
@@ -331,5 +338,43 @@ describe('the photo queue', () => {
     });
     expect(await refreshOnePhoto(user, { now: at(0) })).toEqual({ step: 'asked', personId: 'p1' });
     expect(calls).toHaveLength(0);
+  });
+
+  it('fetches photos only for people a screen showed, this visit or kept from an earlier one (plan 35 B4)', async () => {
+    await db.people.bulkPut([
+      person({
+        id: 'p_never',
+        firstName: 'Ne',
+        lastName: 'Ver',
+        linkedinMemberId: 'm_never',
+        createdAt: '2026-10-21',
+      }),
+      person({
+        id: 'p_shown',
+        firstName: 'Sh',
+        lastName: 'Own',
+        linkedinMemberId: 'm_shown',
+        createdAt: '2026-01-01',
+      }),
+      person({
+        id: 'p_map',
+        firstName: 'Ma',
+        lastName: 'Pdot',
+        linkedinMemberId: 'm_map',
+        createdAt: '2026-02-01',
+      }),
+    ]);
+    // nobody on screen yet: nothing is fetched, however many people want a photo
+    expect(await refreshOnePhoto(user, { now: at(0) })).toEqual({ step: 'idle' });
+    photoWanted('p_shown');
+    expect(await refreshOnePhoto(user, { now: at(0) })).toEqual({ step: 'asked', personId: 'p_shown' });
+    // a face-sized dot on the Map counts too, and the queue keeps it for the next visit
+    seenPerson('p_map');
+    await shownPeople(user.id, at(GAP));
+    resetPhotoSignalsForTests();
+    expect(await refreshOnePhoto(user, { now: at(GAP) })).toEqual({ step: 'asked', personId: 'p_map' });
+    expect(calls.map((c) => c.identifier)).toEqual(['m_shown', 'm_map']);
+    expect(await refreshOnePhoto(user, { now: at(2 * GAP) })).toEqual({ step: 'idle' });
+    expect(calls.map((c) => c.identifier)).not.toContain('m_never');
   });
 });

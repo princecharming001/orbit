@@ -17,6 +17,8 @@ export interface HandlerDeps {
   /** GMAIL_PUBSUB_TOPIC; without it watch registration is skipped and Orbit relies on the 10-minute poll */
   gmailTopic?: string;
   unipile?: { apiKey?: string; baseUrl?: string };
+  /** Supabase Storage for the shared company logos (SUPABASE_URL, the service role key): logos.sweep needs it */
+  storage?: { url?: string; serviceKey?: string };
   claude?: Claude;
   /** milliseconds; pacing and per-job time budgets */
   clock?: () => number;

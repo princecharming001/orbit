@@ -58,6 +58,8 @@ export interface FakeState {
       /** what /sync/status reports as granted; the send scope lets the server send the account's email */
       scopes?: string[];
     };
+    /** plan 35 B3: the marks /sync/status carries; left out, the fake answers like a server from before them */
+    marks?: { changed: string | null; linkedin: string | null; autopilot: string | null };
   };
   goals: Goal[];
   scores: Map<string, { score: number; band: string; explanation: string[] }>;
@@ -647,6 +649,7 @@ export function createFakeOrbitApi(
               : []),
           ],
           jobs: { pending: 0 },
+          ...(state.status.marks ? { marks: state.status.marks } : {}),
         });
       case '/sync/pull': {
         const at = typeof body.cursor === 'string' && body.cursor ? Number(body.cursor.slice(1)) : 0;

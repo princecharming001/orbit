@@ -369,6 +369,47 @@ describe('/sync/status', () => {
     });
     expect(b.jobs.pending).toBe(1);
   });
+
+  it('carries the marks, keeps the counts until something changed, and reads the queues only during setup', async () => {
+    const { handler } = harness();
+    const { token, userId } = await signedIn();
+    type Status = {
+      counts: Record<string, number>;
+      jobs: { pending: number };
+      marks: { changed: string | null; linkedin: string | null; autopilot: string | null };
+      setup: boolean;
+    };
+    const status = async () =>
+      (await (await handler(req('/sync/status', { token, body: {} }))).json()) as Status;
+    // setup over: onboarding done, no import running
+    await t.db.sql`update orbit.users set onboarding = '{"completed_at":"2026-11-01T00:00:00Z"}'::jsonb
+      where id = ${userId}::uuid`;
+    await t.db
+      .sql`update orbit.integration_accounts set sync_state = '{}'::jsonb where user_id = ${userId}::uuid`;
+    await t.db
+      .sql`select orbit.enqueue('orbit_score', ${{ kind: 'score.user', userId, payload: {} }}::jsonb)`;
+    const a = await status();
+    expect(a.setup).toBe(false);
+    expect(a.jobs.pending).toBe(0);
+    expect(a.marks.changed).toMatch(/^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{6}Z$/);
+    expect(a.counts.people).toBe(0);
+    // nothing changed: the same marks and counts, without counting again
+    const b = await status();
+    expect(b.marks).toEqual(a.marks);
+    const [kept] = await t.db.sql<{ counts_at: string }>`
+      select counts_at::text as counts_at from orbit.user_marks where user_id = ${userId}::uuid`;
+    expect((await status()).counts).toEqual(a.counts);
+    const [still] = await t.db.sql<{ counts_at: string }>`
+      select counts_at::text as counts_at from orbit.user_marks where user_id = ${userId}::uuid`;
+    expect(still!.counts_at).toBe(kept!.counts_at);
+    // a new person moves the mark and the counts follow
+    await t.db
+      .sql`insert into orbit.people (user_id, display_name, name_norm) values (${userId}::uuid, 'Bo', 'bo')`;
+    const c = await status();
+    expect(c.marks.changed).not.toBe(a.marks.changed);
+    expect(c.marks.linkedin).toBe(a.marks.linkedin);
+    expect(c.counts.people).toBe(1);
+  });
 });
 
 describe('/sync/pull', () => {

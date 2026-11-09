@@ -7,11 +7,12 @@
 import { act } from 'react';
 import { createRoot } from 'react-dom/client';
 import { MemoryRouter } from 'react-router-dom';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { TomorrowBatch } from '../../components/autopilot/TomorrowBatch';
 import { useAutopilotStatus } from '../../components/autopilot/useAutopilotStatus';
 import { setCurrentUserId } from '../../db/repo';
 import { db, wipeDatabase } from '../../db/schema';
+import { refreshSyncStatus } from '../../engine/serverSync';
 import { SessionProvider, useSession } from '../../state/session';
 import { leaveFakeApi, signInToFakeApi } from '../../test/account';
 import { type FakeOrbitApi, withReplies } from '../../test/fakeOrbitApi';
@@ -128,6 +129,33 @@ describe('Settings, Autopilot', () => {
     );
     expect(api.state.autopilot.queued).toEqual([]);
     await until(() => q('autopilot-pause-state')!.textContent!.includes('Stopped'), 'the stopped line');
+  });
+});
+
+describe('the autopilot status read (plan 35 B3)', () => {
+  it('is read again when the autopilot mark moves, and not on a timer', async () => {
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
+    try {
+      api.state.status.marks = { changed: 'c1', linkedin: 'l1', autopilot: 'a1' };
+      await act(async () => void (await refreshSyncStatus()));
+      await mount('batch');
+      await until(() => calls('/autopilot/status').length > 0, 'the first read');
+      await settle();
+      const first = calls('/autopilot/status').length;
+      act(() => vi.advanceTimersByTime(10 * 60_000));
+      await settle();
+      expect(calls('/autopilot/status')).toHaveLength(first);
+      // another mark moving leaves it alone; the autopilot mark moving reads it once more
+      api.state.status.marks = { changed: 'c2', linkedin: 'l1', autopilot: 'a1' };
+      await act(async () => void (await refreshSyncStatus()));
+      await settle();
+      expect(calls('/autopilot/status')).toHaveLength(first);
+      api.state.status.marks = { changed: 'c2', linkedin: 'l1', autopilot: 'a2' };
+      await act(async () => void (await refreshSyncStatus()));
+      await until(() => calls('/autopilot/status').length === first + 1, 'the read after the mark');
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 

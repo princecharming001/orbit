@@ -102,6 +102,8 @@ describe('orbit core migration', () => {
       'orbit-incremental',
       // plan 35 E5: parking idle LinkedIn links, scheduled by 20261122_orbit_unipile_park.sql
       'orbit-linkedin-park',
+      // plan 35 B4: the weekly shared-company logo sweep, scheduled by 20261121_orbit_user_marks.sql
+      'orbit-logos-weekly',
       'orbit-nightly',
       // plan 29 §B2.5: the hourly outcome roll, scheduled by 20261101_orbit_autopilot_phase3.sql
       'orbit-outcomes',

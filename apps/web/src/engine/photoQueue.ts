@@ -2,9 +2,10 @@
  * People's LinkedIn photos, fetched a few at a time while the app is open. A LinkedIn search gives no picture for
  * most people outside the student's network, an export or a typed-in profile link gives none at all, and the links
  * LinkedIn does give expire after a few weeks. So everyone with a LinkedIn profile (a member id, a public name or a
- * link) and no working photo is asked about through the connector (/photo: the plain profile, no sections), people
- * on screen first, then the newest, and no one whose profile enrichment read in the last 45 days (that read
- * brought the photo). A few calls a minute at random spacing, a bounded number a day, each person at most once a week
+ * link) and no working photo is asked about through the connector (/photo: the plain profile, no sections), but only
+ * once a screen has shown them (plan 35 B4: a row's Avatar or a face-sized dot on the Map, this visit or in the last
+ * two weeks), people on screen first, then the newest, and no one whose profile enrichment read in the last 45 days
+ * (that read brought the photo). A few calls a minute at random spacing, a bounded number a day, each person at most once a week
  * whether it found one or not, and nothing while LinkedIn has asked Orbit to slow down (the pause enrichment keeps).
  * Someone without LinkedIn has nothing to fetch here: their Gravatar (engine/enrichment) or their initials stay.
  * The sample student's photos come from the mock connector.
@@ -17,7 +18,7 @@ import { type EnrichOutcome, type LinkedInPhoto, linkedInPhoto } from '../integr
 import { endActivity, startActivity } from './activity';
 import { liveAccountFor } from './enrichment/sources';
 import { allProfileMarks, allRecords, linkedInPaused, pauseLinkedIn, readBudget } from './enrichment/store';
-import { brokenPhoto, onScreenRank, subscribePhotoSignals } from './photoSignals';
+import { brokenPhoto, onScreenRank, seenPeople, subscribePhotoSignals } from './photoSignals';
 import { freshPhoto, isGravatarPhoto, isLinkedInPhoto, linkedInImageExpired } from './photos';
 
 /** Calls a minute at most: each gap is this share of a minute plus up to as much again, at random. */
@@ -28,6 +29,10 @@ export const PHOTO_RETRY_MS = 7 * 86_400_000;
 /** Someone whose profile enrichment read this recently already has the photo that read brought. */
 export const PROFILE_READ_FRESH_MS = 45 * 86_400_000;
 const GAP_MS = 60_000 / PHOTOS_PER_MINUTE;
+/** Someone a screen showed stays fetchable this long (a person never shown is never fetched). */
+export const SEEN_KEEP_MS = 14 * 86_400_000;
+/** The most people kept as shown, the latest first. */
+export const SEEN_MAX = 500;
 
 let jitter = () => Math.random();
 /** Unit-test hook: the random share of each gap (0 to 1). */
@@ -93,6 +98,29 @@ export async function photoSourceFor(user: Pick<User, 'id'>): Promise<PhotoSourc
 type Tried = Record<string, string>;
 const triedKey = (userId: string) => `photos:tried:${userId}`;
 const dayKey = (userId: string) => `photos:day:${userId}`;
+const seenKey = (userId: string) => `photos:seen:${userId}`;
+
+/**
+ * The people a screen showed, this visit and in the last two weeks (kept in this browser, the latest SEEN_MAX):
+ * the only ones whose photo the queue fetches.
+ */
+export async function shownPeople(userId: string, now: Date): Promise<Map<string, number>> {
+  const stored = ((await db.kv.get(seenKey(userId)))?.value as Record<string, number> | undefined) ?? {};
+  const merged = new Map(Object.entries(stored));
+  let changed = false;
+  for (const [id, at] of seenPeople())
+    if ((merged.get(id) ?? 0) < at) {
+      merged.set(id, at);
+      changed = true;
+    }
+  const kept = [...merged]
+    .filter(([, at]) => now.getTime() - at < SEEN_KEEP_MS)
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, SEEN_MAX);
+  if (changed || kept.length !== merged.size)
+    await db.kv.put({ key: seenKey(userId), value: Object.fromEntries(kept) });
+  return new Map(kept);
+}
 
 async function readTried(userId: string): Promise<Tried> {
   return ((await db.kv.get(triedKey(userId)))?.value as Tried | undefined) ?? {};
@@ -125,12 +153,16 @@ export async function refreshOnePhoto(
   const day = now.toISOString().slice(0, 10);
   const used = await readUsed(user.id, day);
   if (used >= PHOTOS_PER_DAY) return { step: 'paused' };
+  // only people a screen showed (plan 35 B4): nobody's photo is fetched for a network nobody looks through
+  const shown = await shownPeople(user.id, now);
+  if (!shown.size) return { step: 'idle' };
   const tried = await readTried(user.id);
   const records = await allRecords(user.id);
   const marks = await allProfileMarks(user.id);
   const recent = (at: string | undefined) => !!at && now.getTime() - Date.parse(at) < PROFILE_READ_FRESH_MS;
-  const candidates = (await db.people.where('userId').equals(user.id).toArray()).filter(
-    (p) => wantsPhoto(p, now) && !recent(records.get(p.id)?.profileAt),
+  const candidates = (await db.people.bulkGet([...shown.keys()])).filter(
+    (p): p is Person =>
+      !!p && p.userId === user.id && wantsPhoto(p, now) && !recent(records.get(p.id)?.profileAt),
   );
   // tried is kept by who they are on LinkedIn as well as by Orbit person (plan 34 B4): an unmerged duplicate is not
   // asked about twice, and someone asked by profile name who came back with a member id is not asked again

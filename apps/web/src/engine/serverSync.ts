@@ -971,11 +971,29 @@ export function backfillDone(s: SyncStatus | undefined): boolean {
 
 // ---- the loop -------------------------------------------------------------------------------------------------------
 
+/** During setup the status is read every 3 seconds, so the import's progress moves on screen. */
 export const STATUS_EVERY_ONBOARDING_MS = 3_000;
-export const STATUS_EVERY_MS = 60_000;
+/**
+ * After setup (plan 35 B3): every 5 minutes while the tab is visible, at once when it becomes visible again, never
+ * while it is hidden. The status is one row on the server, and a pull follows only when its mark moved.
+ */
+export const STATUS_EVERY_MS = 5 * 60_000;
 export const PUSH_EVERY_MS = 10_000;
 /** after a pull that changed rows, the brief is rebuilt at most this often */
 const DERIVED_EVERY_MS = 5 * 60_000;
+
+/**
+ * What says the server has something new to pull: its "changed" mark, or for a server from before the marks, the
+ * counts it used to send. A different key than last time means a pull.
+ */
+export function pullKey(s: SyncStatus): string {
+  return s.marks ? `m:${s.marks.changed ?? ''}` : `c:${JSON.stringify(s.counts ?? {})}`;
+}
+
+/** The status's mark for LinkedIn's or autopilot's answer: undefined from a server from before the marks. */
+export function statusMark(kind: 'linkedin' | 'autopilot', s: SyncStatus | undefined = lastStatus) {
+  return s?.marks ? (s.marks[kind] ?? '') : undefined;
+}
 
 export interface SyncLoopOptions {
   user: Pick<User, 'id' | 'onboardingCompletedAt'>;
@@ -988,8 +1006,9 @@ export interface SyncLoopOptions {
 let lastDerived = 0;
 
 /**
- * Start syncing for the signed-in user: a pull at once, the status poll (paused while the tab is hidden), the outbox
- * flush on a timer and when the tab hides. Returns a stop function.
+ * Start syncing for the signed-in user: the status at once (and a pull when it says something changed, or when it
+ * cannot be read), the status poll while the tab is visible, the outbox flush on a timer and when the tab hides.
+ * Returns a stop function.
  */
 export function startServerSync(o: SyncLoopOptions): () => void {
   installOutboxHooks();
@@ -1001,7 +1020,7 @@ export function startServerSync(o: SyncLoopOptions): () => void {
     .then(() => backfillServerTouchpoints(o.user.id))
     .catch(() => undefined);
   let stopped = false;
-  let lastCounts = '';
+  let lastKey = '';
   const derived = async (out: PullOutcome) => {
     if (!out.changed || !o.onPulled) return;
     const now = Date.now();
@@ -1024,37 +1043,63 @@ export function startServerSync(o: SyncLoopOptions): () => void {
   const hidden = () => typeof document !== 'undefined' && document.hidden;
   let every = o.onboarding ? STATUS_EVERY_ONBOARDING_MS : STATUS_EVERY_MS;
   let statusTimer: ReturnType<typeof setInterval> | undefined;
-  const poll = async () => {
-    if (stopped || hidden()) return;
-    const s = await refreshSyncStatus().catch(() => undefined);
-    // the import is in: no need to watch it every 3 seconds, even before setup's last step
-    if (every !== STATUS_EVERY_MS && backfillDone(s)) {
-      every = STATUS_EVERY_MS;
-      clearInterval(statusTimer);
-      statusTimer = setInterval(poll, every);
-    }
-    const counts = JSON.stringify(s?.counts ?? {});
-    if (s && counts !== lastCounts) {
-      lastCounts = counts;
-      await pull();
-    }
+  const stopTimer = () => {
+    if (statusTimer) clearInterval(statusTimer);
+    statusTimer = undefined;
+  };
+  // the poll's timer runs only while the tab is visible
+  const startTimer = () => {
+    stopTimer();
+    if (!stopped && !hidden()) statusTimer = setInterval(() => void poll(), every);
+  };
+  let polling: Promise<SyncStatus | undefined> | undefined;
+  const poll = (): Promise<SyncStatus | undefined> => {
+    if (stopped || hidden()) return Promise.resolve(undefined);
+    polling ??= (async () => {
+      const s = await refreshSyncStatus().catch(() => undefined);
+      // the import is in (or the server says setup is over): no need to watch it every 3 seconds
+      if (every !== STATUS_EVERY_MS && s && (backfillDone(s) || s.setup === false)) {
+        every = STATUS_EVERY_MS;
+        startTimer();
+      }
+      if (s) {
+        const key = pullKey(s);
+        if (key !== lastKey) {
+          lastKey = key;
+          await pull();
+        }
+      }
+      return s;
+    })().finally(() => {
+      polling = undefined;
+    });
+    return polling;
   };
   // an empty outbox makes no request, so the timer runs while hidden too (a send can finish in the background)
   const push = () => {
     if (!stopped) void pushOutbox().catch(() => undefined);
   };
   void (async () => {
-    await pull();
-    await poll();
+    // the status says whether there is anything to pull; a server that cannot answer it is pulled from anyway
+    const s = await poll();
+    if (!s && !stopped) await pull();
   })();
-  statusTimer = setInterval(poll, every);
+  startTimer();
   const pushTimer = setInterval(push, PUSH_EVERY_MS);
-  // hiding sends what is queued; coming back checks the server at once instead of waiting for the next tick
-  const onVisibility = () => (hidden() ? push() : void poll());
+  // hiding sends what is queued and stops the poll; coming back checks the server at once, then on the timer
+  const onVisibility = () => {
+    if (hidden()) {
+      stopTimer();
+      push();
+    } else {
+      void poll();
+      startTimer();
+    }
+  };
   if (typeof document !== 'undefined') document.addEventListener('visibilitychange', onVisibility);
   return () => {
     stopped = true;
-    clearInterval(statusTimer);
+    stopTimer();
     clearInterval(pushTimer);
     if (typeof document !== 'undefined') document.removeEventListener('visibilitychange', onVisibility);
   };

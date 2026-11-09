@@ -1,6 +1,6 @@
 import type { CoffeeChat, MeetingNote, Person, Resume, ResumeFacet, User } from '@orbit/core';
 import { newId } from '@orbit/core';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { db, wipeDatabase } from '../db/schema';
 import { leaveFakeApi, signInToFakeApi } from '../test/account';
 import type { FakeOrbitApi } from '../test/fakeOrbitApi';
@@ -11,7 +11,9 @@ import {
   pushOutbox,
   refreshSyncStatus,
   repairStoredCompanies,
+  STATUS_EVERY_MS,
   serverIdOf,
+  startServerSync,
   syncStatusNow,
   writeFromServer,
 } from './serverSync';
@@ -128,6 +130,79 @@ describe('pull', () => {
     api.state.status.counts.messages = 1240;
     await refreshSyncStatus();
     expect(syncStatusNow()?.counts.messages).toBe(1240);
+  });
+});
+
+describe('the loop (plan 35 B3)', () => {
+  let hidden = false;
+  let stop: (() => void) | undefined;
+  const count = (route: string) => api.calls.filter((c) => c.route === route).length;
+  const setHidden = (h: boolean) => {
+    hidden = h;
+    document.dispatchEvent(new Event('visibilitychange'));
+  };
+  beforeEach(() => {
+    hidden = false;
+    Object.defineProperty(document, 'hidden', { configurable: true, get: () => hidden });
+    // only the intervals are faked: Dexie and the fake API keep their real timers
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
+    api.state.status.google.backfill = { phase: 'done', done: 10, total: 10 };
+  });
+  afterEach(() => {
+    stop?.();
+    stop = undefined;
+    vi.useRealTimers();
+    Reflect.deleteProperty(document, 'hidden');
+  });
+
+  it('pulls when the changed mark moves, and not while it stays the same', async () => {
+    api.state.status.marks = { changed: 'm1', linkedin: 'l1', autopilot: 'a1' };
+    stop = startServerSync({ user: { id: user.id }, onboarding: false });
+    // the status first; it says there is something new, so one pull
+    await vi.waitFor(() => expect(count('/sync/pull')).toBe(1));
+    expect(count('/sync/status')).toBe(1);
+    // five minutes on, the same mark: a status read and no pull
+    vi.advanceTimersByTime(STATUS_EVERY_MS);
+    await vi.waitFor(() => expect(count('/sync/status')).toBe(2));
+    await new Promise((r) => setTimeout(r, 20));
+    expect(count('/sync/pull')).toBe(1);
+    // a change on the server moves the mark: the next read pulls
+    api.state.status.marks = { changed: 'm2', linkedin: 'l1', autopilot: 'a1' };
+    vi.advanceTimersByTime(STATUS_EVERY_MS);
+    await vi.waitFor(() => expect(count('/sync/pull')).toBe(2));
+    // only LinkedIn's mark moved: its card reads it, the loop does not pull
+    api.state.status.marks = { changed: 'm2', linkedin: 'l2', autopilot: 'a1' };
+    vi.advanceTimersByTime(STATUS_EVERY_MS);
+    await vi.waitFor(() => expect(syncStatusNow()?.marks?.linkedin).toBe('l2'));
+    await new Promise((r) => setTimeout(r, 20));
+    expect(count('/sync/pull')).toBe(2);
+  });
+
+  it('runs no poll while the tab is hidden, and reads the status at once when it is back', async () => {
+    api.state.status.marks = { changed: 'm1', linkedin: 'l1', autopilot: 'a1' };
+    stop = startServerSync({ user: { id: user.id }, onboarding: false });
+    await vi.waitFor(() => expect(count('/sync/pull')).toBe(1));
+    setHidden(true);
+    const timers = vi.getTimerCount();
+    vi.advanceTimersByTime(STATUS_EVERY_MS * 6);
+    await new Promise((r) => setTimeout(r, 20));
+    expect(count('/sync/status')).toBe(1);
+    // back: one read straight away, and the poll's timer again
+    setHidden(false);
+    await vi.waitFor(() => expect(count('/sync/status')).toBe(2));
+    expect(vi.getTimerCount()).toBe(timers + 1);
+  });
+
+  it('pulls by the counts from a server that sends no marks', async () => {
+    stop = startServerSync({ user: { id: user.id }, onboarding: false });
+    await vi.waitFor(() => expect(count('/sync/pull')).toBe(1));
+    vi.advanceTimersByTime(STATUS_EVERY_MS);
+    await vi.waitFor(() => expect(count('/sync/status')).toBe(2));
+    await new Promise((r) => setTimeout(r, 20));
+    expect(count('/sync/pull')).toBe(1);
+    api.state.status.counts.people = 5;
+    vi.advanceTimersByTime(STATUS_EVERY_MS);
+    await vi.waitFor(() => expect(count('/sync/pull')).toBe(2));
   });
 });
 

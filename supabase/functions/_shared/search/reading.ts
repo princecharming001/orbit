@@ -95,7 +95,18 @@ export async function spendRead(
   now: Date,
   mode: Mode,
 ): Promise<boolean> {
-  const b = bucket(kind, accountId, now, SHARES[mode][kind]);
+  return spendShare(db, kind, accountId, now, SHARES[mode][kind]);
+}
+
+/** The same, for a caller with its own share of the day's ledger (orbit-worker logos.sweep, plan 35 B4). */
+export async function spendShare(
+  db: Db,
+  kind: LedgerKind,
+  accountId: string,
+  now: Date,
+  share: number,
+): Promise<boolean> {
+  const b = bucket(kind, accountId, now, share);
   const [used] = await db.sql<{ count: number }>`
     select count from public.orbit_proxy_counters where bucket = ${b.key} and expires_at >= now()`;
   if ((used?.count ?? 0) + 1 > b.limit) return false;

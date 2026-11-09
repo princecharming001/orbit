@@ -423,8 +423,8 @@ signup is free (2,500 searches). Until then every sourcing run pays Claude web s
 | `/goals/infer` per turn (§9.2) | ~0.8 (estimate) | | | | |
 | `score.page` wall s a night (§9.4) | 24,707 (11-08) | | | | |
 | Rows in the first pull after a score run (§9.5) | ~28,000 (estimate) | | | | |
-| orbit-api calls a day, one tab (§9.2) | ~300 | | | | |
-| `/linkedin/status` a day (§9.2) | 175 | | | | |
+| orbit-api calls a day, one tab (§9.2) | ~300 | | ~35 (B3 estimate, to measure after deploy) | | |
+| `/linkedin/status` a day (§9.2) | 175 | | 1 to 3 (B3 estimate: card opens and LinkedIn mark moves) | | |
 | Job runs a day, one student (§9.4) | 110 | | | | |
 | Hunter credits per sourced person | 1 to 2 | | | | |
 | Reply draft $ (§9.3) | $0.031 | | | | |

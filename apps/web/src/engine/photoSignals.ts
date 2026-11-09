@@ -1,6 +1,7 @@
 /**
  * What the screen tells the photo queue (engine/photoQueue.ts), kept apart so the Avatar imports nothing heavy:
- * which people are on screen right now (their photos are fetched first) and which photo links would not load (a
+ * which people are on screen right now (their photos are fetched first), everyone a screen showed this visit (plan 35
+ * B4: only they are fetched at all; the queue keeps the list across visits), and which photo links would not load (a
  * fresh one is due). All in memory: it is about this visit.
  */
 
@@ -8,6 +9,8 @@
 const onScreen = new Map<string, { count: number; seq: number }>();
 /** person id -> the photo link that failed to load */
 const broken = new Map<string, string>();
+/** person id -> when a screen last showed them (ms), kept after they leave it */
+const seenAt = new Map<string, number>();
 const listeners = new Set<() => void>();
 let seq = 0;
 
@@ -15,8 +18,22 @@ function notify(): void {
   for (const fn of listeners) fn();
 }
 
+/**
+ * A screen shows this person (a row's Avatar, a dot on the Map big enough to carry a face). Cheap and silent, so the
+ * Map can call it as it draws: their photo becomes one the queue may fetch.
+ */
+export function seenPerson(personId: string, at = Date.now()): void {
+  seenAt.set(personId, at);
+}
+
+/** Everyone a screen showed this visit, with when they were last shown (ms). */
+export function seenPeople(): Map<string, number> {
+  return new Map(seenAt);
+}
+
 /** An Avatar for this person is on screen. Returns the call that says it left. */
 export function photoWanted(personId: string): () => void {
+  seenPerson(personId);
   const cur = onScreen.get(personId);
   onScreen.set(personId, { count: (cur?.count ?? 0) + 1, seq: ++seq });
   notify();
@@ -54,6 +71,7 @@ export function subscribePhotoSignals(fn: () => void): () => void {
 export function resetPhotoSignalsForTests(): void {
   onScreen.clear();
   broken.clear();
+  seenAt.clear();
   listeners.clear();
   seq = 0;
 }

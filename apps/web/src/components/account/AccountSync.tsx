@@ -7,7 +7,8 @@ import { useSession } from '../../state/session';
 
 /**
  * Keeps the browser's copy in step with the Orbit account while someone is signed in (account mode only): pulls,
- * the status poll (every 3 seconds during setup, every minute after) and the outbox. Renders nothing.
+ * the status poll (every 3 seconds during setup, every 5 minutes after, never while the tab is hidden) and the
+ * outbox. Renders nothing.
  */
 export function AccountSync() {
   const { user } = useSession();

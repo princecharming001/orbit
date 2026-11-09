@@ -4,11 +4,15 @@
  *   search_census        every three hours per student with LinkedIn: one step of the sweep of their connections
  *   search_reading       every two hours per student with LinkedIn (plan 33): company pages, a few profiles' About
  *                        sections and jobs, and Claude's reading of them
+ *   logos.sweep          weekly, for everyone (plan 35 B4): LinkedIn logos for companies 3 or more people work at
+ *                        across all students, into the shared company list; queues its next part while names are left
  */
 
 import { loadAccount } from '../../_shared/ingest/util.ts';
+import { storageLogoWriter } from '../../_shared/providers/linkedinCompanies.ts';
 import { runCensusStep } from '../../_shared/search/census.ts';
 import { syncCompanyFacts, syncYcFounders } from '../../_shared/search/companyFacts.ts';
+import { runLogoSweep, SWEEP_MAX_PARTS } from '../../_shared/search/logoSweep.ts';
 import { runReadingStep } from '../../_shared/search/reading.ts';
 import type { JobHandler } from '../worker.ts';
 import { type HandlerDeps, JobSkipped, LONG_VT_SEC } from './deps.ts';
@@ -30,6 +34,40 @@ export function searchHandlers(deps: HandlerDeps): Record<string, JobHandler> {
         clock,
       });
       console.log(JSON.stringify({ fn: 'orbit-worker', step: 'yc_founders', ...f }));
+    },
+    'logos.sweep': async (job, ctx) => {
+      const { apiKey, baseUrl } = deps.unipile ?? {};
+      const { url, serviceKey } = deps.storage ?? {};
+      if (!apiKey || !baseUrl || !url || !serviceKey) throw new JobSkipped('unconfigured');
+      await ctx.queue.setVt(job.queue, job.msgId, LONG_VT_SEC);
+      const now = ctx.now();
+      const r = await runLogoSweep(
+        ctx.db,
+        {
+          fetch: doFetch,
+          apiKey,
+          baseUrl,
+          storeLogo: storageLogoWriter(url, serviceKey, doFetch),
+          sleep: deps.sleep ?? ((ms) => new Promise<void>((res) => setTimeout(res, ms))),
+          random: deps.random ?? Math.random,
+          clock: deps.clock ?? Date.now,
+        },
+        now,
+      );
+      console.log(JSON.stringify({ fn: 'orbit-worker', step: 'logos_sweep', ...r }));
+      if (r.stopped === 'no_accounts') throw new JobSkipped('no_accounts');
+      // time ran out with names left: the next part, this week, a few minutes on; spent shares wait for next week
+      const part = Number(job.payload.part ?? 0) || 0;
+      if (r.stopped === 'time' && r.remaining > 0 && part + 1 < SWEEP_MAX_PARTS)
+        await ctx.queue.enqueue(
+          {
+            kind: 'logos.sweep',
+            userId: null,
+            payload: { part: part + 1 },
+            dedupeKey: `weekly:logos.sweep:${isoWeek(now)}:${part + 1}`,
+          },
+          { delaySec: 300 },
+        );
     },
     search_census: async (job, ctx) => {
       const userId = job.userId;
@@ -103,4 +141,14 @@ export function searchHandlers(deps: HandlerDeps): Record<string, JobHandler> {
       await founders;
     },
   };
+}
+
+/** "2026-45": the ISO year and week, the same as orbit.enqueue_logos_sweep's to_char(..., 'IYYY-IW'). */
+export function isoWeek(d: Date): string {
+  const t = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()));
+  const day = t.getUTCDay() || 7;
+  t.setUTCDate(t.getUTCDate() + 4 - day);
+  const year = t.getUTCFullYear();
+  const week = Math.ceil(((t.getTime() - Date.UTC(year, 0, 1)) / 86_400_000 + 1) / 7);
+  return `${year}-${String(week).padStart(2, '0')}`;
 }

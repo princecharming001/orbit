@@ -45,6 +45,19 @@ import { clientIp, defaultOrigins } from '../_shared/origins.ts';
 import { type PostingDeps, readPosting } from '../_shared/postings.ts';
 import { EXA_SEARCH_USD } from '../_shared/providers/exa.ts';
 import {
+  answerOf,
+  COMPANY_RETRY_MS,
+  type CompanyAnswer,
+  type CompanyCache,
+  type CompanyRow,
+  companyByName,
+  companyNameKey,
+  companyPage,
+  isLinkedInImage,
+  lookupCompany,
+  storageLogoWriter,
+} from '../_shared/providers/linkedinCompanies.ts';
+import {
   companyIntros,
   createVillage,
   personIntros,
@@ -56,7 +69,8 @@ import {
   type VillageUser,
 } from '../_shared/providers/village';
 
-export { clientIp, defaultOrigins };
+export type { CompanyAnswer, CompanyCache, CompanyRow };
+export { COMPANY_RETRY_MS, clientIp, companyNameKey, defaultOrigins, isLinkedInImage };
 
 export interface Limits {
   perMinute: number;
@@ -170,28 +184,6 @@ export function memorySharedReads(): SharedReads {
   };
 }
 
-/**
- * A LinkedIn company as Orbit keeps it for every student: found once by its name (or not: `ambiguous` when LinkedIn
- * has several of that name, `not_found` when none), with its logo copied into Orbit's storage, where it never
- * expires (LinkedIn's own logo links stop working after a few weeks).
- */
-export interface CompanyRow {
-  key: string;
-  status: 'found' | 'ambiguous' | 'not_found';
-  companyId?: string;
-  publicIdentifier?: string;
-  name?: string;
-  logoUrl?: string;
-  checkedAt: string;
-}
-
-export interface CompanyCache {
-  getMany(keys: string[]): Promise<Record<string, CompanyRow>>;
-  put(row: CompanyRow): Promise<void>;
-  /** keep a logo's bytes; answers the address it is served from */
-  storeLogo(companyId: string, bytes: ArrayBuffer, contentType: string): Promise<string | undefined>;
-}
-
 export function memoryCompanyCache(): CompanyCache & { rows: Map<string, CompanyRow> } {
   const rows = new Map<string, CompanyRow>();
   return {
@@ -249,16 +241,7 @@ export function postgrestCompanyCache(
         p_logo_url: row.logoUrl ?? null,
       });
     },
-    storeLogo: async (companyId, bytes, contentType) => {
-      const ext = contentType.includes('png') ? 'png' : contentType.includes('webp') ? 'webp' : 'jpg';
-      const path = `${companyId.replace(/[^\w-]/g, '')}.${ext}`;
-      const r = await doFetch(`${url}/storage/v1/object/company-logos/${path}`, {
-        method: 'POST',
-        headers: { ...auth, 'content-type': contentType, 'x-upsert': 'true', 'cache-control': '31536000' },
-        body: bytes,
-      });
-      return r.ok ? `${url}/storage/v1/object/public/company-logos/${path}` : undefined;
-    },
+    storeLogo: storageLogoWriter(url, serviceKey, doFetch),
   };
 }
 
@@ -421,101 +404,8 @@ export function sendBucket(accountId: string, now: Date, perDay: number): Bucket
   return { key: `connectors:send:${day}:${accountId}`, limit: perDay, expires: end.toISOString() };
 }
 
-/** A company found by its name is looked up again after this long when LinkedIn could not pin it down. */
-export const COMPANY_RETRY_MS = 30 * 86_400_000;
 /** New companies one call may look up on LinkedIn (the rest wait for the next call); cached ones are always free. */
 export const COMPANIES_PER_CALL = 8;
-/** The biggest logo kept (LinkedIn's are a few kilobytes). */
-const LOGO_MAX_BYTES = 300_000;
-
-/** What a student is told about one company: found (with its id and a logo that does not expire), or why not. */
-export interface CompanyAnswer {
-  status: CompanyRow['status'];
-  companyId?: string;
-  publicIdentifier?: string;
-  name?: string;
-  logoUrl?: string;
-}
-
-const answerOf = (r: CompanyRow): CompanyAnswer => ({
-  status: r.status,
-  companyId: r.companyId,
-  publicIdentifier: r.publicIdentifier,
-  name: r.name,
-  logoUrl: r.logoUrl,
-});
-
-/** Where a company's LinkedIn page would be if it is at its own name ("SpaceX" -> spacex), for names of 3+ letters. */
-const pageAddress = (name: string): string | undefined => {
-  const slug = companyNameKey(name).replace(/[^a-z0-9]+/g, '');
-  return slug.length >= 3 ? slug : undefined;
-};
-
-/** A company found on LinkedIn, before its logo is kept. */
-interface FoundCompany {
-  id: string;
-  name?: string;
-  publicIdentifier?: string;
-  /** LinkedIn's own logo link (it expires) */
-  logo?: string;
-}
-
-/**
- * The company whose LinkedIn page is at the asked name itself ("SpaceX" at /company/spacex), when that page's name is
- * exactly the one asked for; nothing otherwise.
- */
-async function companyAtOwnName(
-  deps: ConnectorDeps,
-  accountId: string,
-  name: string,
-  doFetch: typeof fetch,
-): Promise<FoundCompany | undefined> {
-  const key = companyNameKey(name);
-  const slug = pageAddress(name);
-  if (!slug) return undefined;
-  const page = await unipileCompany(deps, { accountId, identifier: slug }, doFetch);
-  if (!('company' in page) || !page.company?.id) return undefined;
-  if (companyNameKey(page.company.name) !== key) return undefined;
-  return {
-    id: page.company.id,
-    name: page.company.name,
-    publicIdentifier: page.company.publicIdentifier,
-    logo: page.company.logoUrl,
-  };
-}
-
-/** Copy a found company's logo into Orbit's storage and keep the company for everyone; the answer for the student. */
-async function keepCompany(
-  cache: CompanyCache | undefined,
-  key: string,
-  c: FoundCompany,
-  doFetch: typeof fetch,
-  now: Date,
-): Promise<CompanyAnswer> {
-  let kept: string | undefined;
-  if (c.logo && cache) {
-    try {
-      const res = await doFetch(c.logo);
-      const type = res.headers.get('content-type') ?? 'image/jpeg';
-      const bytes = await res.arrayBuffer();
-      if (res.ok && type.startsWith('image/') && bytes.byteLength && bytes.byteLength <= LOGO_MAX_BYTES)
-        kept = await cache.storeLogo(c.id, bytes, type);
-    } catch {
-      // the logo did not copy: the student gets LinkedIn's link for now, and the company is looked up again later
-    }
-  }
-  const row: CompanyRow = {
-    key,
-    status: 'found',
-    companyId: c.id,
-    publicIdentifier: c.publicIdentifier,
-    name: c.name,
-    logoUrl: kept,
-    checkedAt: now.toISOString(),
-  };
-  if (kept) await cache?.put(row).catch(() => undefined);
-  return { ...answerOf(row), logoUrl: kept ?? c.logo };
-}
 
 /**
  * Logos and LinkedIn ids for many companies at once (`names`, up to 60). Every company any student has found before is
@@ -557,57 +447,23 @@ async function companiesRoute(
   const want = Math.min(Number(body.resolve ?? COMPANIES_PER_CALL) || 0, COMPANIES_PER_CALL);
   let stopped: string | undefined;
   let looked = 0;
+  const u = { base: deps.unipileBase ?? '', key: deps.unipileKey ?? '' };
   for (const [key, name] of misses.slice(0, want)) {
-    if (!(await ctx.spend('company', 'logos'))) {
-      stopped = 'limit';
+    const r = await lookupCompany(u, {
+      accountId,
+      key,
+      name,
+      cache,
+      doFetch: ctx.doFetch,
+      now,
+      spend: () => ctx.spend('company', 'logos'),
+    });
+    if (r.looked) looked++;
+    if (r.answer) companies[name] = r.answer;
+    if (r.stopped) {
+      stopped = r.stopped;
       break;
     }
-    looked++;
-    // a well-known company's page is usually at its own name (linkedin.com/company/spacex), while a search for it
-    // can list only its namesakes: that page first, kept only when its name is exactly the one asked for
-    if (pageAddress(name)) {
-      const atName = await companyAtOwnName(deps, accountId, name, ctx.doFetch).catch(() => undefined);
-      if (atName) {
-        companies[name] = await keepCompany(cache, key, atName, ctx.doFetch, now);
-        continue;
-      }
-      if (!(await ctx.spend('company', 'logos'))) {
-        stopped = 'limit';
-        break;
-      }
-    }
-    const found = await companyByName(deps, accountId, name, ctx.doFetch);
-    if (!('id' in found)) {
-      if (found.reason === 'throttled') {
-        stopped = 'throttled';
-        break;
-      }
-      if (found.reason !== 'ambiguous' && found.reason !== 'not_found') continue;
-      const row: CompanyRow = { key, status: found.reason, checkedAt: now.toISOString() };
-      await cache?.put(row).catch(() => undefined);
-      companies[name] = answerOf(row);
-      continue;
-    }
-    // the search result names the company and carries its logo; its page is read only when it does not
-    let c: FoundCompany = {
-      id: found.id,
-      name: text(found.item.name, 160),
-      publicIdentifier: text(found.item.public_identifier, 160),
-      logo: licdn(found.item.logo),
-    };
-    if (!c.logo && (await ctx.spend('company', 'logos'))) {
-      const page = await unipileCompany(deps, { accountId, identifier: found.id }, ctx.doFetch).catch(
-        () => undefined,
-      );
-      if (page && 'company' in page && page.company)
-        c = {
-          id: found.id,
-          name: page.company.name ?? c.name,
-          publicIdentifier: page.company.publicIdentifier ?? c.publicIdentifier,
-          logo: page.company.logoUrl,
-        };
-    }
-    companies[name] = await keepCompany(cache, key, c, ctx.doFetch, now);
   }
   return {
     ok: true,
@@ -1315,16 +1171,6 @@ async function unipileRelations(deps: ConnectorDeps, body: Record<string, unknow
 
 /** A profile photo is at most this big: a small square, kept in the student's browser. */
 export const PHOTO_MAX_BYTES = 400_000;
-
-/** LinkedIn's image hosts: the only places a profile photo is fetched from. */
-export function isLinkedInImage(url: string): boolean {
-  try {
-    const u = new URL(url);
-    return u.protocol === 'https:' && (u.hostname === 'licdn.com' || u.hostname.endsWith('.licdn.com'));
-  } catch {
-    return false;
-  }
-}
 
 function base64(bytes: Uint8Array): string {
   let bin = '';
@@ -2772,113 +2618,18 @@ async function unipilePhoto(deps: ConnectorDeps, body: Record<string, unknown>, 
 }
 
 /** A company's LinkedIn page, by LinkedIn's id or its public name: its name, public name, logo and website. */
-/** A company name as LinkedIn and Orbit both write it: case, punctuation and legal suffixes set aside. */
-export function companyNameKey(name: unknown): string {
-  return String(name ?? '')
-    .toLowerCase()
-    .normalize('NFKD')
-    .replace(/[\u0300-\u036f]/g, '')
-    .replace(/&/g, ' and ')
-    .replace(/[^a-z0-9]+/g, ' ')
-    .replace(
-      /\b(the|inc|incorporated|llc|ltd|limited|corp|corporation|co|company|gmbh|plc|sa|ag|bv|lp|llp)\b/g,
-      ' ',
-    )
-    .replace(/\s+/g, ' ')
-    .trim();
-}
-
-/**
- * A company found on LinkedIn by its name (plan: logos straight from LinkedIn): LinkedIn's company search, kept only
- * when exactly one result has the same name (two "Nova"s are two companies, so neither is guessed). The page is then
- * read like any company, for its id, public name and logo.
- */
-async function companyByName(
-  deps: ConnectorDeps,
-  accountId: string,
-  name: string,
-  doFetch: typeof fetch,
-): Promise<{ id: string; item: Record<string, unknown> } | { ok: false; reason: string; message: string }> {
-  const q = new URLSearchParams({ account_id: accountId, limit: '10' });
-  const res = await doFetch(`${deps.unipileBase}/api/v1/linkedin/search?${q}`, {
-    method: 'POST',
-    headers: uHeaders(deps),
-    body: JSON.stringify({ api: 'classic', category: 'companies', keywords: name }),
-  });
-  if (res.status === 429)
-    return {
-      ok: false,
-      reason: 'throttled',
-      message: 'LinkedIn asked Orbit to slow down. It carries on later.',
-    };
-  if (res.status >= 400 && res.status < 500)
-    return { ok: false, reason: 'refused', message: await unipileError(res) };
-  if (!res.ok) throw new Error(`unipile ${res.status}`);
-  const items = ((await res.json()) as { items?: Record<string, unknown>[] }).items ?? [];
-  const key = companyNameKey(name);
-  const same = items.filter(
-    (c) => companyNameKey(c.name) === key && (typeof c.id === 'string' || typeof c.id === 'number'),
-  );
-  if (same.length === 1) return { id: String(same[0]!.id), item: same[0]! };
-  // several of the same name ("SpaceX" and its fan pages, a regional office): the real company when one has by far
-  // the most followers (ten times the next, and thousands of them); otherwise a namesake's logo is never taken
-  const followers = (c: Record<string, unknown>) =>
-    [c.followers_count, c.followerCount, c.followers].find((n): n is number => typeof n === 'number') ?? 0;
-  const ranked = [...same].sort((a, b) => followers(b) - followers(a));
-  if (
-    ranked.length > 1 &&
-    followers(ranked[0]!) >= 5000 &&
-    followers(ranked[0]!) >= 10 * followers(ranked[1]!)
-  )
-    return { id: String(ranked[0]!.id), item: ranked[0]! };
-  return same.length
-    ? {
-        ok: false,
-        reason: 'ambiguous',
-        message: 'LinkedIn has more than one company of that name.',
-      }
-    : { ok: false, reason: 'not_found', message: 'LinkedIn could not find that company.' };
-}
-
 async function unipileCompany(deps: ConnectorDeps, body: Record<string, unknown>, doFetch: typeof fetch) {
   const accountId = String(body.accountId ?? '');
+  const u = { base: deps.unipileBase ?? '', key: deps.unipileKey ?? '' };
   let identifier = text(body.identifier, 200);
   const byName = !identifier ? text(body.name, 160) : undefined;
   if (byName) {
-    const found = await companyByName(deps, accountId, byName, doFetch);
+    const found = await companyByName(u, accountId, byName, doFetch);
     if (!('id' in found)) return found;
     identifier = found.id;
   }
   if (!identifier) return { ok: false, reason: 'bad_request', message: 'Say which company to read.' };
-  const q = new URLSearchParams({ account_id: accountId });
-  const res = await doFetch(
-    `${deps.unipileBase}/api/v1/linkedin/company/${encodeURIComponent(identifier)}?${q}`,
-    { headers: uHeaders(deps) },
-  );
-  if (res.status === 404 || res.status === 422)
-    return { ok: false, reason: 'not_found', message: 'LinkedIn could not find that company.' };
-  if (res.status === 429)
-    return {
-      ok: false,
-      reason: 'throttled',
-      message: 'LinkedIn asked Orbit to slow down. It carries on later.',
-    };
-  if (res.status >= 400 && res.status < 500)
-    return { ok: false, reason: 'refused', message: await unipileError(res) };
-  if (!res.ok) throw new Error(`unipile ${res.status}`);
-  const c = (await res.json()) as Record<string, unknown>;
-  const industry = Array.isArray(c.industry) ? c.industry.find((x) => typeof x === 'string') : c.industry;
-  return {
-    ok: true,
-    company: {
-      id: text(c.id, 60),
-      name: text(c.name, 160),
-      publicIdentifier: text(c.public_identifier, 160),
-      logoUrl: licdn(c.logo),
-      website: text(c.website, 300),
-      industry: text(industry, 120),
-    },
-  };
+  return companyPage(u, accountId, identifier, doFetch);
 }
 
 /**
