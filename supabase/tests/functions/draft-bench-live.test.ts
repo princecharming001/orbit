@@ -25,10 +25,22 @@ import {
   type NetCall,
   signedInUser,
 } from '../helpers/agents.ts';
+import { cliMessages, cliTotals } from '../helpers/cli-anthropic.ts';
 import { freshDb, type TestDb } from '../helpers/pglite.ts';
 import { BENCH_PERSONAS, type BenchPersona, NICHE_NORMS, type Niche } from './draft-bench-personas.ts';
 
-const LIVE = !!process.env.ORBIT_DRAFT_BENCH && !!process.env.ANTHROPIC_API_KEY;
+// DRAFT_BENCH_VIA=cli answers every model call through the local `claude` command line (the developer's own login)
+// instead of the API key; DRAFT_BENCH_MODEL / DRAFT_BENCH_EFFORT swap the draft writer's model or effort (the arm).
+const VIA_CLI = process.env.DRAFT_BENCH_VIA === 'cli';
+const LIVE = !!process.env.ORBIT_DRAFT_BENCH && (VIA_CLI || !!process.env.ANTHROPIC_API_KEY);
+const ARM = {
+  model: process.env.DRAFT_BENCH_MODEL || undefined,
+  effort: process.env.DRAFT_BENCH_EFFORT || undefined,
+};
+/** The arm applies to the draft writer only (the Opus task), never to goal inference or the judge. */
+function armFor(body: { model?: string }) {
+  return String(body.model ?? '').startsWith('claude-opus') ? ARM : {};
+}
 const NOW = new Date('2026-11-03T16:00:00Z');
 const DAY = 86_400_000;
 const JUDGE_MODEL = 'claude-sonnet-5-5';
@@ -38,7 +50,9 @@ function liveNet() {
   return fakeNet(
     (c: NetCall) =>
       c.url.startsWith('https://api.anthropic.com/')
-        ? fetch(c.url, { method: c.method, headers: c.headers, body: JSON.stringify(c.body) })
+        ? VIA_CLI
+          ? cliMessages(c.body as Parameters<typeof cliMessages>[0], armFor(c.body as { model?: string }))
+          : fetch(c.url, { method: c.method, headers: c.headers, body: JSON.stringify(c.body) })
         : undefined,
     // a connected calendar with the student free all week, so a reply can offer real times
     (c: NetCall) =>
@@ -107,20 +121,23 @@ async function judgeDraft(
     .filter(Boolean)
     .join('\n');
   for (let attempt = 0; attempt < 3; attempt++) {
-    const res = await fetch('https://api.anthropic.com/v1/messages', {
-      method: 'POST',
-      headers: {
-        'content-type': 'application/json',
-        'x-api-key': process.env.ANTHROPIC_API_KEY!,
-        'anthropic-version': '2023-06-01',
-      },
-      body: JSON.stringify({
-        model: JUDGE_MODEL,
-        max_tokens: 1200,
-        system: JUDGE_SYSTEM,
-        messages: [{ role: 'user', content: user }],
-      }),
-    });
+    const judgeBody = {
+      model: JUDGE_MODEL,
+      max_tokens: 1200,
+      system: JUDGE_SYSTEM,
+      messages: [{ role: 'user', content: user }],
+    };
+    const res = VIA_CLI
+      ? await cliMessages(judgeBody)
+      : await fetch('https://api.anthropic.com/v1/messages', {
+          method: 'POST',
+          headers: {
+            'content-type': 'application/json',
+            'x-api-key': process.env.ANTHROPIC_API_KEY!,
+            'anthropic-version': '2023-06-01',
+          },
+          body: JSON.stringify(judgeBody),
+        });
     if (!res.ok) continue;
     const j = (await res.json()) as { content: { type: string; text?: string }[] };
     const text = j.content.find((c) => c.type === 'text')?.text ?? '';
@@ -206,10 +223,13 @@ describe.skipIf(!LIVE)('student draft bench against the real API (plan 30)', () 
   for (const p of personas)
     it(`${p.id}: ${p.niche}`, async () => {
       const net = liveNet();
-      const s = makeServices(agentConfig(net, { anthropicKey: process.env.ANTHROPIC_API_KEY! }), {
-        db: t.db,
-        now: () => NOW,
-      });
+      const s = makeServices(
+        agentConfig(net, { anthropicKey: process.env.ANTHROPIC_API_KEY || 'cli-bench' }),
+        {
+          db: t.db,
+          now: () => NOW,
+        },
+      );
       const { userId, goalId, goalKind } = await seedStudent(s, p);
       const record = async (step: Step, r: Awaited<ReturnType<typeof composeDraft>>, context = '') => {
         const v = await judgeDraft(p, step, r.composed.subject, r.composed.body, context);
@@ -330,6 +350,8 @@ describe.skipIf(!LIVE)('student draft bench against the real API (plan 30)', () 
     if (out) {
       mkdirSync(out, { recursive: true });
       writeFileSync(join(out, 'drafts.json'), JSON.stringify(graded, null, 2));
+      if (VIA_CLI)
+        writeFileSync(join(out, 'cli-usage.json'), JSON.stringify({ arm: ARM, ...cliTotals }, null, 2));
       writeFileSync(join(out, 'drafts.md'), `${lines.join('\n')}\n\n${md}`);
     }
     expect(graded.length).toBe(personas.length * 3);
