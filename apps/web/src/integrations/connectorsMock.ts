@@ -829,7 +829,8 @@ export function mockSourcedPeople(
   const investor = q.purpose === 'fundraising' || INVESTOR_ASK.test(ask);
   const professor = !investor && (q.purpose === 'collaboration' || PROFESSOR_ASK.test(ask));
   const stage = STAGE_OF(ask);
-  const software = /\bsoftware\b/i.test(ask);
+  // "climate software" as the topic already says software: never "climate software software"
+  const software = /\bsoftware\b/i.test(ask) && !/\bsoftware\b/i.test(fieldWord);
   const out: MockSourced[] = [];
   const names = new Set<string>();
   for (let i = 0; out.length < Math.min(limit, 20) && i < 400; i++) {
@@ -846,7 +847,8 @@ export function mockSourcedPeople(
       title = ['Partner', 'Principal', 'General Partner', 'Associate', 'Venture Partner'][n % 5]!;
       org = firms.investors[n % firms.investors.length]!;
       const what = [stage, fieldWord, software ? 'software' : ''].filter(Boolean).join(' ');
-      why = `Invests in ${what || 'early-stage'} companies at ${org}`;
+      // the row's second line already says the title and firm, so the reason says only what they back
+      why = `Invests in ${what || 'early-stage'} companies`;
       evidence = [
         `Leads ${stage ?? 'early'} rounds${fieldWord ? ` in ${fieldWord}` : ''}${software ? ' software' : ''}`,
         `Writes first checks of $250k to $2M`,
@@ -864,7 +866,7 @@ export function mockSourcedPeople(
         n % 5
       ]!;
       org = q.organization?.trim() || firms.companies[n % firms.companies.length]!;
-      why = `${title} at ${org}${fieldWord ? `, working in ${fieldWord}` : ''}`;
+      why = fieldWord ? `Works in ${fieldWord}` : `Works on the product`;
       evidence = [`Works on ${fieldWord || 'the product'} at ${org}`];
     }
     const location = PLACES[Math.floor(rand() * PLACES.length)]!;

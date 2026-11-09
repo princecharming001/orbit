@@ -123,7 +123,10 @@ test.describe('Connect LinkedIn and Gmail, live LinkedIn and warm intros', () =>
     await ask(page, 'warm intro to Stripe');
     const company = page.getByTestId('result-company').last();
     await expect(company).toBeVisible();
-    await expect(company.getByTestId('warm-intro').first()).toContainText(/→ Stripe/);
+    // the path is drawn as faces joined by arrows, ending at the company
+    await expect(
+      company.getByTestId('warm-intro').first().getByTestId('warm-intro-path').getByRole('listitem').last(),
+    ).toHaveText('Stripe');
     expect(external).toEqual([]);
   });
 
