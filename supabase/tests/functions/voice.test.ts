@@ -352,6 +352,37 @@ describe('notes learned from the edits', () => {
     expect(r.added.map((n) => n.text)).toContain("You cut 'Thanks either way' in 3 edits");
   });
 
+  it('plan 35 C1: a later distill reads only the edits since the last one, and nothing new means no call', async () => {
+    const { userId } = await signedInUser(t);
+    const first = await someEdits(userId, 3);
+    const net = fakeNet();
+    const claude = anthropic(() => ({ notes: [] }));
+    net.use(claude.answer);
+    const s = makeServices(agentConfig(net), { db: t.db, now: () => new Date(NOW) });
+    expect((await distillVoice(s, userId)).by).toBe('claude');
+    for (const id of first) expect(userText(claude.requests[0]!)).toContain(id);
+    // nothing since: no model call
+    expect((await distillVoice(s, userId)).by).toBe('too_few_edits');
+    expect(claude.requests).toHaveLength(1);
+    // two new edits: the next read has them and none of the old
+    const fresh: string[] = [];
+    for (let i = 0; i < 2; i++) {
+      const [r] = await t.db.sql<{ id: string }>`
+        insert into orbit.draft_edits (user_id, kind, before, after, distance, created_at)
+        values (${userId}::uuid, 'bump', ${`${ORBIT_WROTE} new ${i}`}, ${`${SAM_SENT} new ${i}`}, 6,
+                now() + ${`${i + 1} minutes`}::interval)
+        returning id`;
+      fresh.push(r!.id);
+    }
+    expect((await distillVoice(s, userId)).by).toBe('claude');
+    const second = userText(claude.requests[1]!);
+    for (const id of fresh) expect(second).toContain(id);
+    for (const id of first) expect(second).not.toContain(id);
+    // a relearn reads them all again
+    await distillVoice(s, userId, { full: true });
+    for (const id of [...first, ...fresh]) expect(userText(claude.requests[2]!)).toContain(id);
+  });
+
   it('drafting reads the notes in force into the card, and never a forgotten one', async () => {
     const { userId } = await signedInUser(t, {
       settings: {

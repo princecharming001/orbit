@@ -1,6 +1,7 @@
 /**
  * Per-user spending caps (§13.5), read from orbit.usage_ledger before a paid call:
- *   per day   Claude $1.50 for server work, Claude $4.50 for chat and server work together, Exa $0.50, Village 50 credits, Apollo match 10 credits, Hunter 10 credits, Unipile profile views 40
+ *   per day   Claude $1.50 for server work, Claude $4.50 for chat and server work together, Exa $0.50, Village 50 credits, Apollo match 10 credits, Hunter 10 credits, Unipile profile views 40,
+ *             Enrow 10 credits, Icypeas 10 credits, Reoon 25 checks (plan 35 E6)
  *   per month $25 across every provider (calendar month, UTC), and Claude $10 for chat and server work together (the
  *   allowance the subscription is priced on; the owner, ORBIT_OWNER_ID, has none)
  *   in total $100 per user, counting the chat's Claude spend too (public.orbit_proxy_spend): a stop against a
@@ -72,6 +73,10 @@ export const CAPS: Cap[] = [
     window: 'month',
     scope: 'global',
   },
+  // the finders and verifier behind Hunter (plan 35 E6): a day's lookups for one student, as Hunter's
+  { id: 'enrow_daily_credits', provider: 'enrow', measure: 'units', limit: 10, window: 'day' },
+  { id: 'icypeas_daily_credits', provider: 'icypeas', measure: 'units', limit: 10, window: 'day' },
+  { id: 'reoon_daily_checks', provider: 'reoon', measure: 'units', limit: 25, window: 'day' },
   {
     id: 'unipile_profile_views_daily',
     provider: 'unipile',
@@ -245,14 +250,19 @@ export interface UsageEntry {
   operation: string;
   units: number;
   costUsd: number;
+  /** a Claude call's token split (plan 35 A5): uncached input, cache read, cache write, output */
+  tokens?: { input: number; cacheRead: number; cacheWrite: number; output: number };
 }
 
 /** Writes what a call actually cost; the row's id, for `settleUsage`. */
 export async function recordUsage(db: Db, entry: UsageEntry): Promise<string | undefined> {
+  const t = entry.tokens;
   const rows = await db.sql<{ id: string }>`
-    insert into orbit.usage_ledger (user_id, provider, operation, units, cost_usd)
+    insert into orbit.usage_ledger (user_id, provider, operation, units, cost_usd, input_tokens, cache_read_tokens,
+                                    cache_write_tokens, output_tokens)
     values (${entry.userId}::uuid, ${entry.provider}, ${entry.operation}, ${entry.units}::numeric,
-            ${round(entry.costUsd)}::numeric)
+            ${round(entry.costUsd)}::numeric, ${t ? t.input : null}::bigint, ${t ? t.cacheRead : null}::bigint,
+            ${t ? t.cacheWrite : null}::bigint, ${t ? t.output : null}::bigint)
     returning id::text as id`;
   return rows[0]?.id;
 }

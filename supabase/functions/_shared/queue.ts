@@ -48,6 +48,7 @@ export const KIND_QUEUE: Record<string, QueueName> = {
   'cost.digest': 'orbit_enrich',
   'unipile.reconcile': 'orbit_enrich',
   'linkedin.park': 'orbit_enrich',
+  'claude.batch.poll': 'orbit_enrich',
   noop: 'orbit_enrich',
 };
 

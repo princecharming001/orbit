@@ -250,7 +250,7 @@ export async function exemplars(
   userId: string,
   personId: string,
   situation: string,
-  opts: { replies?: boolean; limit?: number } = {},
+  opts: { replies?: boolean; limit?: number; maxChars?: number } = {},
 ): Promise<string[]> {
   let q: number[] | null = null;
   try {
@@ -287,7 +287,9 @@ export async function exemplars(
     ),
   ].sort((a, b) => b.length - a.length);
   return rows.map((r) => {
-    let text = stripQuotedReply(r.body_text).trim().slice(0, 1200);
+    let text = stripQuotedReply(r.body_text)
+      .trim()
+      .slice(0, opts.maxChars ?? 1200);
     for (const w of words) text = text.replace(new RegExp(`\\b${escapeRe(w)}\\b`, 'g'), '[name]');
     return text.replace(/^(hi|hey|hello|dear)\s+[A-Z][a-z]+/i, (m) => `${m.split(/\s+/)[0]} [name]`);
   });

@@ -6,12 +6,15 @@
  */
 
 import type Anthropic from '@anthropic-ai/sdk';
-import { type Claude, makeClaude } from './claude.ts';
+import { batchFlagOn, type Claude, makeClaude } from './claude.ts';
 import type { Db } from './db.ts';
 import { type GoogleConfig, googleTokenSource, type TokenSource } from './google.ts';
 import { type Apollo, createApollo } from './providers/apollo';
+import { createEnrow, type Enrow } from './providers/enrow';
 import { createExa, type Exa } from './providers/exa';
 import { createHunter, type Hunter } from './providers/hunter';
+import { createIcypeas, type Icypeas } from './providers/icypeas';
+import { createReoon, type Reoon } from './providers/reoon';
 import { defaultSleep } from './providers/request';
 import { createSemanticScholar, type SemanticScholar } from './providers/semanticScholar';
 import { createUnipileResearch, type UnipileResearch } from './providers/unipileResearch';
@@ -33,6 +36,18 @@ export interface AgentEnv {
   apolloKey?: string;
   /** HUNTER_API_KEY: finds and verifies work emails for people found outside the student's inbox */
   hunterKey?: string;
+  /**
+   * ENROW_API_KEY, ICYPEAS_API_KEY: cheaper email finders tried before Hunter (plan 35 E6), Enrow first; REOON_API_KEY:
+   * the verifier checked before a send, Hunter's verifier without it. Each is used only when its key is set.
+   */
+  enrowKey?: string;
+  icypeasKey?: string;
+  reoonKey?: string;
+  /**
+   * ORBIT_CLAUDE_BATCH: Message Batches for the Claude work nobody waits on (plan 35 C2). agentEnvFrom reads it as on
+   * unless set to off; a config built by hand (tests) leaves it undefined, which is off.
+   */
+  claudeBatch?: string;
   /** SEMANTIC_SCHOLAR_API_KEY; optional, the public rate limit applies without it */
   semanticScholarKey?: string;
   /** VILLAGE_SECRET_KEY + VILLAGE_BASE_URL (defaults to https://api.village.do) */
@@ -126,6 +141,10 @@ export interface Services {
   unipile: UnipileResearch;
   apollo: Apollo;
   hunter: Hunter;
+  /** the cheaper email finders and the verifier (plan 35 E6); each unconfigured without its key */
+  enrow: Enrow;
+  icypeas: Icypeas;
+  reoon: Reoon;
   semanticScholar: SemanticScholar;
   village: Village;
   embed: Embed;
@@ -206,6 +225,7 @@ export function makeServices(cfg: AgentConfig, base: { db: Db; now?: () => Date;
       now,
       client: cfg.anthropic,
       enabled: gate('anthropic'),
+      batch: env.claudeBatch !== undefined && batchFlagOn(env.claudeBatch),
     }),
     exa: createExa({ ...p, apiKey: env.exaKey, gate: gate('exa') }),
     unipile: createUnipileResearch({
@@ -216,6 +236,9 @@ export function makeServices(cfg: AgentConfig, base: { db: Db; now?: () => Date;
     }),
     apollo: createApollo({ ...p, apiKey: env.apolloKey, gate: gate('apollo') }),
     hunter: createHunter({ ...p, apiKey: env.hunterKey, gate: gate('hunter') }),
+    enrow: createEnrow({ ...p, apiKey: env.enrowKey, gate: gate('enrow') }),
+    icypeas: createIcypeas({ ...p, apiKey: env.icypeasKey, gate: gate('icypeas') }),
+    reoon: createReoon({ ...p, apiKey: env.reoonKey, gate: gate('reoon') }),
     semanticScholar: createSemanticScholar({ ...p, apiKey: env.semanticScholarKey, anonymous: true }),
     village: villageFor(cfg, () =>
       createVillage({ ...p, secretKey: env.villageKey, baseUrl: env.villageBase, gate: gate('village') }),
@@ -246,6 +269,10 @@ export const AGENT_SECRET_NAMES = [
   'UNIPILE_BASE_URL',
   'APOLLO_API_KEY',
   'HUNTER_API_KEY',
+  'ENROW_API_KEY',
+  'ICYPEAS_API_KEY',
+  'REOON_API_KEY',
+  'ORBIT_CLAUDE_BATCH',
   'SEMANTIC_SCHOLAR_API_KEY',
   'VILLAGE_SECRET_KEY',
   'VILLAGE_BASE_URL',
@@ -288,6 +315,10 @@ export function agentEnvFrom(get: (name: string) => string | undefined): AgentEn
     unipileBase: get('UNIPILE_BASE_URL'),
     apolloKey: get('APOLLO_API_KEY'),
     hunterKey: get('HUNTER_API_KEY'),
+    enrowKey: get('ENROW_API_KEY'),
+    icypeasKey: get('ICYPEAS_API_KEY'),
+    reoonKey: get('REOON_API_KEY'),
+    claudeBatch: get('ORBIT_CLAUDE_BATCH') ?? 'on',
     semanticScholarKey: get('SEMANTIC_SCHOLAR_API_KEY'),
     villageKey: get('VILLAGE_SECRET_KEY'),
     villageBase: get('VILLAGE_BASE_URL'),

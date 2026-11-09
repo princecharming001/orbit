@@ -11,8 +11,9 @@
  *   set by hand wins); /voice/relearn queues it after the embeddings.
  *
  * voice.distill {reason?}
- *   The last thirty edits read into notes (Claude, or the plain observations without it), merged so a forgotten
- *   note never comes back. Nightly for everyone with a new edit (orbit.enqueue_voice_distill), and on relearn.
+ *   The edits since the last distillation read into notes (Claude, or the plain observations without it), merged so
+ *   a forgotten note never comes back. Nightly for everyone with a new edit (orbit.enqueue_voice_distill), through
+ *   Message Batches when it can (plan 35 C2); on relearn the last thirty, at once.
  */
 import { type AgentConfig, makeServices } from '../../_shared/services.ts';
 import { distillVoice, EMBED_SENT_LIMIT, embedSent, relearnCard } from '../../_shared/voice/voice.ts';
@@ -35,7 +36,12 @@ export function voiceHandlers(config: AgentConfig): Record<string, JobHandler> {
     },
     'voice.distill': async (job, ctx) => {
       if (!job.userId) throw new JobSkipped('no_user');
-      await distillVoice(makeServices(config, { db: ctx.db, now: ctx.now, queue: ctx.queue }), job.userId);
+      // a relearn reads the last thirty edits again; the nightly job reads only the new ones, through a batch
+      const relearn = job.payload.reason === 'relearn';
+      await distillVoice(makeServices(config, { db: ctx.db, now: ctx.now, queue: ctx.queue }), job.userId, {
+        full: relearn,
+        batch: !relearn,
+      });
     },
   };
 }

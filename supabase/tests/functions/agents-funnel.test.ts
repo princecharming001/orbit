@@ -388,6 +388,8 @@ describe('booking from a confirmed slot (plan 29 §B2.3)', () => {
     expect(out).toMatchObject({ action: 'booked', slotStart: SLOT, eventId: expect.stringMatching(/^evt-/) });
     if (out.action !== 'booked') return;
     expect(out.confirmation.action).toBe('auto_sent');
+    // plan 35 C1: the confirmation of a booked time is the reply template, never a model call
+    expect(claude.requests).toHaveLength(0);
     const ev = net.calls.find((x) => x.url.includes('/calendar/v3/calendars/primary/events'))!;
     expect(ev.body).toMatchObject({ start: { dateTime: new Date(SLOT).toISOString() } });
     const [event] = await t.db.sql<{ start_at: Date; chat_id: string; attendee_person_ids: string[] }>`

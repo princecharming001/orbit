@@ -57,7 +57,11 @@ export type BudgetProvider =
   | 'unipile_search'
   /** plain web search engines for sourcing (plan 34 B5): dollars */
   | 'serper'
-  | 'parallel';
+  | 'parallel'
+  /** email finders and the verifier (plan 35 E6): credits */
+  | 'enrow'
+  | 'icypeas'
+  | 'reoon';
 
 export type BudgetVerdict = { ok: true } | { ok: false; reason: 'budget_exceeded'; resetsAt?: string };
 
@@ -79,7 +83,7 @@ export interface BudgetDep {
     userId: string,
     entry: { provider: BudgetProvider; operation: string; units: number; costUsd: number },
   ): Promise<
-    | { ok: true; settle(actual: { units: number; operation?: string }): Promise<void> }
+    | { ok: true; settle(actual: { units: number; operation?: string; costUsd?: number }): Promise<void> }
     | { ok: false; reason: 'budget_exceeded'; resetsAt?: string }
   >;
 }

@@ -14,6 +14,7 @@ import { composeDraft } from '../../_shared/compose/compose.ts';
 import { toServerDraft } from '../../_shared/compose/drafts.ts';
 import { badRequest, json } from '../../_shared/http.ts';
 import { approveDraft, cancelDraft, discardDraft } from '../../_shared/sending/send.ts';
+import { lookupPersonEmail } from '../../_shared/sourcing/ondemand.ts';
 import type { Ctx, Route } from '../api.ts';
 import { body, optUuid, uuid } from './body.ts';
 
@@ -39,9 +40,18 @@ async function compose(ctx: Ctx): Promise<Response> {
   const kind = b.kind as DraftComposeRequest['kind'];
   if (!KINDS.includes(kind)) throw badRequest('kind is not a message kind');
   if (b.channel !== 'gmail' && b.channel !== 'linkedin') throw badRequest('channel is gmail or linkedin');
-  const r = await composeDraft(ctx.services(), {
+  const s = ctx.services();
+  const personId = uuid(b, 'personId');
+  // an email to someone Orbit has no address for: the student asked to email them, so the address is looked up now
+  // (plan 35 C3), the free sources first; without one the draft is written all the same, as before
+  if (b.channel === 'gmail' && kind !== 'reply') {
+    const [p] = await ctx.db.sql<{ primary_email: string | null }>`
+      select primary_email from orbit.people where id = ${personId}::uuid and user_id = ${ctx.userId!}::uuid`;
+    if (p && !p.primary_email) await lookupPersonEmail(s, ctx.userId!, personId).catch(() => undefined);
+  }
+  const r = await composeDraft(s, {
     userId: ctx.userId!,
-    personId: uuid(b, 'personId'),
+    personId,
     kind,
     channel: b.channel,
     goalId: optUuid(b, 'goalId') ?? null,

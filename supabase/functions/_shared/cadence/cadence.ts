@@ -26,7 +26,8 @@ import type { DueItem } from '@orbit/core/server/api';
 import { chatFromRow, goalFromRow, type Row } from '@orbit/core/server/mappers';
 import type { CoffeeChat, Goal, MessageKind } from '@orbit/core/types';
 import { type PlanSummary, runAutopilotPlan } from '../autopilot/plan.ts';
-import { composeDraft } from '../compose/compose.ts';
+import { type ComposeRequest, composeDraftBatched } from '../compose/compose.ts';
+import type { DraftRow } from '../compose/drafts.ts';
 import { askUserMarkers } from '../compose/prompts.ts';
 import { nextSendWindow } from '../compose/window.ts';
 import type { Db } from '../db.ts';
@@ -250,6 +251,73 @@ export interface CadenceSummary {
   recovered?: number;
   /** autopilot's plan step: the first messages queued for the morning and the asks to friends (plan 29 §B4) */
   plan?: PlanSummary;
+  /** drafts whose model turn went to Message Batches; stored when the answer comes (plan 35 C2) */
+  batched?: number;
+}
+
+/**
+ * The ladder (plan 23 §4.9, plan 29 §B2.1) for one draft cadence just wrote: approved for the recipient's next
+ * window on its own when the student handed its kind to Orbit and every condition holds; `capped` when the day's own
+ * sends are spent. A batched draft (plan 35 C2) runs it when the answer comes, on the state as it is then.
+ */
+export async function cadenceLadder(
+  s: Services,
+  userId: string,
+  st: CadenceState,
+  a: { draftKind: MessageKind; goalId: string | null; personId: string },
+  channel: 'gmail' | 'linkedin',
+  draft: DraftRow,
+): Promise<'approved' | 'capped' | 'none'> {
+  const db = s.db;
+  const now = s.now();
+  // the ladder (plan 23 §4.9, plan 29 §B2.1): a kind the student handed to Orbit is approved for the recipient's
+  // next window on its own, under the browser's conditions; the send job checks it all again at send time
+  const goal = a.goalId ? st.goalsById.get(a.goalId) : undefined;
+  const level = goal?.autonomyLevel ?? st.autonomyLevel;
+  // the account's pause, and the breaker's for this goal (plan 29 §B2.7)
+  const paused =
+    (!!st.pausedUntil && now.getTime() < new Date(st.pausedUntil).getTime()) ||
+    goalPaused(st.settings, a.goalId ?? null, now);
+  const score = st.input.people.get(a.personId)?.score ?? 0;
+  if (
+    level >= 1 &&
+    channel === 'gmail' &&
+    st.autoKinds.includes(a.draftKind) &&
+    draft.validator?.ok &&
+    score >= AUTO_SEND_MIN_SCORE &&
+    !paused &&
+    askUserMarkers(`${draft.subject ?? ''}\n${draft.body}`).length === 0
+  ) {
+    const sendAt = nextSendWindow(
+      now,
+      st.input.people.get(a.personId)?.timeZone ?? st.timezone,
+      'gmail',
+      s.random,
+    );
+    const at = new Date(sendAt.notBefore);
+    if ((await autoApprovedOn(db, userId, at, st.timezone)) >= SEND_CAPS.autoPerDay) return 'capped';
+    const hash = messageHash({ channel: draft.channel, subject: draft.subject, body: draft.body });
+    const [approved] = await db.sql<{ id: string }>`
+          update orbit.drafts set status = 'approved', send_at = ${at}::timestamptz,
+                                  autonomy_level = ${level}::smallint, auto_rung = ${a.draftKind}
+           where id = ${draft.id}::uuid and status = 'draft' returning id`;
+    if (!approved) return 'none';
+    await db.sql`
+          insert into orbit.audit_log (user_id, actor, action, target_table, target_id, details)
+          values (${userId}::uuid, 'agent', 'draft.auto_approve', 'drafts', ${draft.id},
+                  ${{ hash, standing: 'auto_kinds', rung: a.draftKind, level, send_at: sendAt.notBefore }}::jsonb)`;
+    await s.queue.enqueue(
+      {
+        kind: 'send.draft',
+        userId,
+        payload: { draftId: draft.id },
+        dedupeKey: `send:${draft.id}:${sendAt.notBefore}`,
+      },
+      { delaySec: Math.max(1, Math.ceil((at.getTime() - now.getTime()) / 1000)) },
+    );
+    return 'approved';
+  }
+  return 'none';
 }
 
 /** The cadence.user job (§9.3). */
@@ -327,7 +395,7 @@ export async function runCadence(s: Services, userId: string): Promise<CadenceSu
         continue;
       }
       const channel = chat?.outreachChannel === 'linkedin' ? 'linkedin' : 'gmail';
-      const { draft } = await composeDraft(s, {
+      const req: ComposeRequest = {
         userId,
         personId: a.personId,
         kind: a.draftKind,
@@ -336,7 +404,19 @@ export async function runCadence(s: Services, userId: string): Promise<CadenceSu
         chatId: a.chatId ?? null,
         reason: a.reason,
         actor: 'agent',
+      };
+      // nobody waits on a follow-up: the model's turn goes through Message Batches when it can (plan 35 C2), and
+      // the draft and the ladder below run when the answer comes (batchJobs.ts `compose.cadence`)
+      const b = await composeDraftBatched(s, req, {
+        handler: 'compose.cadence',
+        dedupeKey: `cadence:${userId}:${a.personId}:${a.draftKind}:${a.chatId ?? ''}`,
       });
+      if (b.batched) {
+        if (b.duplicate) out.skipped++;
+        else out.batched = (out.batched ?? 0) + 1;
+        continue;
+      }
+      const { draft } = b.result;
       out.drafted++;
       st.input.drafts.push({
         id: draft.id,
@@ -346,56 +426,16 @@ export async function runCadence(s: Services, userId: string): Promise<CadenceSu
         status: 'draft',
         createdAt: now.toISOString(),
       });
-      // the ladder (plan 23 §4.9, plan 29 §B2.1): a kind the student handed to Orbit is approved for the recipient's
-      // next window on its own, under the browser's conditions; the send job checks it all again at send time
-      const goal = a.goalId ? st.goalsById.get(a.goalId) : undefined;
-      const level = goal?.autonomyLevel ?? st.autonomyLevel;
-      // the account's pause, and the breaker's for this goal (plan 29 §B2.7)
-      const paused =
-        (!!st.pausedUntil && now.getTime() < new Date(st.pausedUntil).getTime()) ||
-        goalPaused(st.settings, a.goalId ?? null, now);
-      const score = st.input.people.get(a.personId)?.score ?? 0;
-      if (
-        level >= 1 &&
-        channel === 'gmail' &&
-        st.autoKinds.includes(a.draftKind) &&
-        draft.validator?.ok &&
-        score >= AUTO_SEND_MIN_SCORE &&
-        !paused &&
-        askUserMarkers(`${draft.subject ?? ''}\n${draft.body}`).length === 0
-      ) {
-        const sendAt = nextSendWindow(
-          now,
-          st.input.people.get(a.personId)?.timeZone ?? st.timezone,
-          'gmail',
-          s.random,
-        );
-        const at = new Date(sendAt.notBefore);
-        if ((await autoApprovedOn(db, userId, at, st.timezone)) >= SEND_CAPS.autoPerDay) {
-          out.skipped++;
-          continue;
-        }
-        const hash = messageHash({ channel: draft.channel, subject: draft.subject, body: draft.body });
-        const [approved] = await db.sql<{ id: string }>`
-          update orbit.drafts set status = 'approved', send_at = ${at}::timestamptz,
-                                  autonomy_level = ${level}::smallint, auto_rung = ${a.draftKind}
-           where id = ${draft.id}::uuid and status = 'draft' returning id`;
-        if (!approved) continue;
-        await db.sql`
-          insert into orbit.audit_log (user_id, actor, action, target_table, target_id, details)
-          values (${userId}::uuid, 'agent', 'draft.auto_approve', 'drafts', ${draft.id},
-                  ${{ hash, standing: 'auto_kinds', rung: a.draftKind, level, send_at: sendAt.notBefore }}::jsonb)`;
-        await s.queue.enqueue(
-          {
-            kind: 'send.draft',
-            userId,
-            payload: { draftId: draft.id },
-            dedupeKey: `send:${draft.id}:${sendAt.notBefore}`,
-          },
-          { delaySec: Math.max(1, Math.ceil((at.getTime() - now.getTime()) / 1000)) },
-        );
-        out.approved++;
-      }
+      const step = await cadenceLadder(
+        s,
+        userId,
+        st,
+        { draftKind: a.draftKind, goalId: a.goalId ?? null, personId: a.personId },
+        channel,
+        draft,
+      );
+      if (step === 'approved') out.approved++;
+      else if (step === 'capped') out.skipped++;
     } catch (e) {
       if (e instanceof HttpError) {
         out.skipped++;

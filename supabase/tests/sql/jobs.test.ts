@@ -302,6 +302,7 @@ describe('orbit.delete_user (§10.4 test 4)', () => {
       insert into orbit.search_labels (user_id, person_id, ask_hash, ask, verdict) values ('${u}', '${p2}', 'h', 'a', 'yes');
       insert into orbit.profile_reads (user_id, person_id, about) values ('${u}', '${p2}', 'About');
       insert into orbit.profile_requests (user_id, person_id) values ('${u}', '${p2}');
+      insert into orbit.claude_batch_requests (user_id, task, model, request, params, handler) values ('${u}', 'compose', 'm', '{}', '{}', 'compose.cadence');
       insert into orbit.facet_scans (user_id, kind, value, complete) values ('${u}', 'company', 'Stripe', true);
       insert into orbit.dead_letters (queue, message) values ('orbit_sync', '{"kind":"x","userId":"${u}"}');
     `);

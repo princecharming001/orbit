@@ -36,6 +36,7 @@ import { breakerHolds, goalPaused, tripBreaker } from '../replies/breaker.ts';
 import { iso } from '../rows.ts';
 import type { Services } from '../services.ts';
 import { moveChat } from '../slots/slots.ts';
+import { checkBuiltAddress } from '../sourcing/ondemand.ts';
 import { recordDraftEdit, voiceGate } from '../voice/voice.ts';
 import { validZone, zonedTime } from '../zones.ts';
 import { rawMessage } from './mime.ts';
@@ -355,9 +356,11 @@ export async function sendDraft(s: Services, draftId: string): Promise<SendResul
     linkedin_member_id: string | null;
     linkedin_slug: string | null;
     linkedin_connected_on: string | null;
+    email_confidence: string | null;
+    email_checked_at: Date | null;
   }>`
     select display_name, first_name, primary_email, title, headline, do_not_contact, linkedin_member_id,
-           linkedin_slug, linkedin_connected_on
+           linkedin_slug, linkedin_connected_on, email_confidence, email_checked_at
       from orbit.people where id = ${d.person_id}::uuid`;
   if (!person) {
     await settle('failed', { error: 'no_person' });
@@ -533,6 +536,19 @@ export async function sendDraft(s: Services, draftId: string): Promise<SendResul
     if (!person.primary_email) {
       await settle('failed', { error: 'no_email' });
       return { status: 'failed', error: 'no_email' };
+    }
+    // an address Orbit built or guessed for a sourced person is verified once, here and not at search time (plan 35
+    // C3); a bad one holds the message for the student instead of bouncing
+    const address = await checkBuiltAddress(s, userId, {
+      id: d.person_id,
+      email: person.primary_email,
+      confidence: person.email_confidence,
+      checkedAt: person.email_checked_at,
+    });
+    if (address === 'invalid') {
+      await settle('draft', { error: 'email_invalid' });
+      await audit(db, userId, 'system', 'draft.hold', d.id, { reason: 'email_invalid' });
+      return { status: 'held', reason: 'email_invalid' };
     }
     const copy = unconfirmed
       ? await gmailSentCopy(s, userId, {

@@ -1,4 +1,5 @@
 import { unipileBrowserKept } from '../_shared/accountToken.ts';
+import { connectDb } from '../_shared/db.ts';
 import { createExa } from '../_shared/providers/exa';
 import { createParallelSearch, createSerperSearch } from '../_shared/providers/webSearch';
 import { postgrestSharedCache } from '../_shared/research/web';
@@ -35,6 +36,9 @@ const [unipileKey, unipileBase] = await Promise.all([
   providerSecret('UNIPILE_API_KEY'),
   providerSecret('UNIPILE_BASE_URL'),
 ]);
+// plan 35 A5: the brief's Claude calls land in orbit.usage_ledger under the student who asked, inside their caps
+const dbUrl = Deno.env.get('SUPABASE_DB_URL');
+const db = dbUrl ? connectDb(dbUrl, 1) : undefined;
 const engines = [
   createParallelSearch({ fetch, apiKey: parallelKey, timeoutMs: 10_000, maxRetries: 1 }),
   createSerperSearch({ fetch, apiKey: serperKey, timeoutMs: 10_000, maxRetries: 1 }),
@@ -63,5 +67,6 @@ Deno.serve(
     accountPerDay: num('ORBIT_RESEARCH_ACCOUNT_PER_DAY', 40),
     visitorPerMinute: num('ORBIT_RESEARCH_PER_MINUTE', 20),
     visitorPerDay: num('ORBIT_RESEARCH_PER_DAY', 200),
+    db,
   }),
 );

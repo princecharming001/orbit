@@ -4,13 +4,16 @@ import villageCompany from '../../functions/_shared/__fixtures__/village-company
 import villagePerson from '../../functions/_shared/__fixtures__/village-person-paths.json';
 import villageToken from '../../functions/_shared/__fixtures__/village-token.json';
 import {
+  type AnthropicRequest,
   addPerson,
   addTie,
+  anthropic,
   api,
   fakeNet,
   jsonRes,
   type NetCall,
   signedInUser,
+  systemText,
   UNIPILE,
 } from '../helpers/agents.ts';
 import { freshDb, type TestDb } from '../helpers/pglite.ts';
@@ -254,5 +257,52 @@ describe('intros/ask (§4.3, §7.3)', () => {
       select status, introducer_person_id, target_person_id from orbit.intro_requests where id = ${r.body.introRequestId}::uuid`;
     expect(ir).toEqual({ status: 'asked', introducer_person_id: intro, target_person_id: target });
     expect(net.calls).toHaveLength(0);
+  });
+
+  it('plan 35 C1: with Claude, the request and the blurb come from one model call, each kept as its own draft', async () => {
+    // the template's two messages (they pass the checks) are what the model answers with
+    const ask = async (env: Record<string, string> | undefined, reply?: (r: AnthropicRequest) => unknown) => {
+      const claude = anthropic(reply ?? (() => ({})));
+      const net = fakeNet(claude.answer);
+      const call = api(t, net, env ? { env } : { env: {} });
+      const { userId, token } = await signedInUser(t);
+      const target = await addPerson(t, userId, {
+        name: 'Priya Ahmed',
+        title: 'Product Manager',
+        org: 'Figma',
+      });
+      const intro = await addPerson(t, userId, { name: 'Ana Silva', email: 'ana@example.com', score: 60 });
+      await addTie(t, userId, intro, target, 'email_exchange', 0.8, 0.95);
+      const found = await call<Found>('/paths/find', token, { target: { personId: target } });
+      const r = await call<{ draftIds: string[] }>('/intros/ask', token, {
+        introducerPersonId: intro,
+        targetPersonId: target,
+        pathScore: found.body.paths[0]!.p,
+        path: found.body.paths[0]!,
+      });
+      expect(r.status).toBe(200);
+      const drafts = await t.db.sql<{
+        kind: string;
+        subject: string | null;
+        body: string;
+        generated_by: string;
+      }>`
+        select kind, subject, body, generated_by from orbit.drafts where id = any(${r.body.draftIds}::uuid[]) order by kind`;
+      return { claude, drafts };
+    };
+    const tpl = await ask(undefined);
+    const out = (kind: string) => {
+      const d = tpl.drafts.find((x) => x.kind === kind)!;
+      return { subject: d.subject, body: d.body, ask: { kind: 'intro', text: 'an intro' }, hooks: [] };
+    };
+    const { claude, drafts } = await ask({ anthropicKey: 'sk-ant-placeholder' }, () => ({
+      request: out('intro_request'),
+      blurb: out('forwardable_blurb'),
+    }));
+    expect(claude.requests).toHaveLength(1);
+    expect(systemText(claude.requests[0]!)).toContain('<request_rules>');
+    expect(systemText(claude.requests[0]!)).toContain('<blurb_rules>');
+    expect(drafts.map((d) => d.kind)).toEqual(['forwardable_blurb', 'intro_request']);
+    expect(drafts.map((d) => d.body)).toEqual(tpl.drafts.map((d) => d.body));
   });
 });

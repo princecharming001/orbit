@@ -144,6 +144,11 @@ export interface SourcedCandidate {
   email?: string;
   /** how the email was found: page (as written there), pattern (the company's real pattern), guess (unconfirmed) */
   emailConfidence?: 'verified' | 'page' | 'pattern' | 'guess';
+  /**
+   * no email yet (plan 35 C3): 'not looked up' until the student adds them or asks to email them (POST /source/email),
+   * 'not found' once a lookup found nothing
+   */
+  emailStatus?: 'not looked up' | 'not found';
   /** how warm the student is to them: 1 in your world, 2 one hop away, 3 shared background, 4 open door, 5 cold */
   tier?: 1 | 2 | 3 | 4 | 5;
   /** the one reason for the tier, in plain words */
@@ -179,6 +184,8 @@ export interface SourceSearchRequest {
     keywords?: string[];
   };
   limit?: number;
+  /** look up emails for the best three (plan 35 C3); also when the query asks "with emails" */
+  withEmails?: boolean;
 }
 export interface SourceSearchResponse {
   batchId: string;
@@ -193,6 +200,16 @@ export interface SourceSearchResponse {
   notes?: string[];
 }
 /** POST /source/add */
+/** POST /source/email: one person's address looked up on demand (plan 35 C3), by recommendation or by person */
+export interface SourceEmailRequest {
+  recommendationId?: string;
+  personId?: string;
+}
+export interface SourceEmailResponse {
+  email?: string;
+  emailConfidence?: 'verified' | 'page' | 'pattern' | 'guess';
+  emailStatus: 'found' | 'not found';
+}
 export interface SourceAddRequest {
   recommendationIds: string[];
 }

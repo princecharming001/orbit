@@ -36,6 +36,7 @@ import {
 import { stripQuotedReply, wordCount } from '@orbit/core/text/email';
 import type { StyleCard } from '@orbit/core/types';
 import { z } from 'zod/v4';
+import type { ClaudeResult } from '../claude.ts';
 import { exemplars } from '../compose/context.ts';
 import type { Db } from '../db.ts';
 import { embeddable } from '../memory/memory.ts';
@@ -317,34 +318,51 @@ const DistillS = z.object({
 });
 
 export interface DistillResult {
-  /** how the notes were found: Claude, the plain observations without it, or nothing to read yet */
-  by: 'claude' | 'observations' | 'too_few_edits';
+  /**
+   * how the notes were found: Claude, the plain observations without it, nothing (new) to read yet, or the edits
+   * sent through Message Batches (the notes are merged when the answer comes, `applyDistill`)
+   */
+  by: 'claude' | 'observations' | 'too_few_edits' | 'batched';
   added: VoiceNote[];
   notes: VoiceNote[];
 }
 
+/** The newest edit time a distillation has read (users.settings.voice_distilled_at); the next reads only later ones. */
+export const DISTILLED_AT = 'voice_distilled_at';
+
+type EditRow = { id: string; kind: string; before: string; after: string; created_at: Date | string };
+
 /**
- * `voice.distill`: the last thirty edits and the card to Claude, which answers at most eight one-line notes in the
+ * `voice.distill`: the edits since the last distillation (plan 35 C1: the last thirty were re-read every night) and
+ * the card to Claude, with the notes the student kept and forgot, which answers at most eight one-line notes in the
  * student's words, each with the edits behind it; without Claude (no key, the budget spent, a refusal) the plain
- * observations stand in. The notes are merged into users.settings.voice_notes inside one transaction against the
- * notes as they are then, so a note forgotten while Claude was reading stays forgotten and is never learned again.
+ * observations stand in. `full` (a relearn, or no distillation yet) reads the last thirty. The notes are merged into
+ * users.settings.voice_notes inside one transaction against the notes as they are then, so a note forgotten while
+ * Claude was reading stays forgotten and is never learned again; notes learned earlier stay unless pushed out.
+ * `batch` (the nightly job) sends the edits through Message Batches when it can (plan 35 C2).
  */
-export async function distillVoice(s: Services, userId: string): Promise<DistillResult> {
+export async function distillVoice(
+  s: Services,
+  userId: string,
+  opts: { full?: boolean; batch?: boolean } = {},
+): Promise<DistillResult> {
   const db = s.db;
-  const rows = await db.sql<{ id: string; kind: string; before: string; after: string }>`
-    select id, kind, before, after from orbit.draft_edits where user_id = ${userId}::uuid
-     order by created_at desc limit ${VOICE_EDITS_FOR_DISTILL}::int`;
   const [u] = await db.sql<{ settings: Record<string, unknown>; first_name: string | null }>`
     select settings, first_name from orbit.users where id = ${userId}::uuid`;
-  if (!u || rows.length < 2) return { by: 'too_few_edits', added: [], notes: notesOf(u?.settings) };
+  const last = u?.settings?.[DISTILLED_AT];
+  const since = !opts.full && typeof last === 'string' && !Number.isNaN(Date.parse(last)) ? last : null;
+  const rows = await db.sql<EditRow>`
+    select id, kind, before, after, created_at from orbit.draft_edits
+     where user_id = ${userId}::uuid and (${since}::timestamptz is null or created_at > ${since}::timestamptz)
+     order by created_at desc limit ${VOICE_EDITS_FOR_DISTILL}::int`;
+  // nothing new since the last reading; or, the first time, too little to read anything from
+  if (!u || rows.length === 0 || (!since && rows.length < 2))
+    return { by: 'too_few_edits', added: [], notes: notesOf(u?.settings) };
   const current = notesOf(u.settings);
   const card = storedCard(u.settings ?? {}, u.first_name ?? '');
   const edits: VoiceEdit[] = rows.map((r) => ({ id: r.id, kind: r.kind, before: r.before, after: r.after }));
-  const ids = new Set(edits.map((e) => e.id));
-  let by: DistillResult['by'] = 'observations';
-  let learned: LearnedNote[] = [];
-  const r = await s.claude.structured({
-    task: 'voice_distill',
+  const request = {
+    task: 'voice_distill' as const,
     system: VOICE_DISTILL_SYSTEM,
     user: voiceDistillUser({
       card,
@@ -354,7 +372,47 @@ export async function distillVoice(s: Services, userId: string): Promise<Distill
     }),
     schema: DistillS,
     userId,
-  });
+  };
+  if (opts.batch && s.claude.structuredBatch && s.claude.batching) {
+    const q = await s.claude.structuredBatch(request, {
+      handler: 'voice.distill',
+      payload: { editIds: rows.map((r) => r.id) },
+      dedupeKey: `voice.distill:${userId}`,
+    });
+    if (q.queued || q.reason === 'duplicate') return { by: 'batched', added: [], notes: current };
+  }
+  return applyDistill(s, userId, rows, await s.claude.structured(request));
+}
+
+/** A batched distillation's answer (batchJobs.ts): the same edits, read back by id, and the notes merged. */
+export async function distillFromBatch(
+  s: Services,
+  userId: string,
+  editIds: string[],
+  answer: (schema: typeof DistillS) => Promise<ClaudeResult<z.infer<typeof DistillS>>>,
+): Promise<DistillResult> {
+  const rows = await s.db.sql<EditRow>`
+    select id, kind, before, after, created_at from orbit.draft_edits
+     where user_id = ${userId}::uuid and id = any(${editIds}::uuid[]) order by created_at desc`;
+  const r = await answer(DistillS);
+  if (!rows.length) {
+    const [u] = await s.db.sql<{ settings: Record<string, unknown> }>`
+      select settings from orbit.users where id = ${userId}::uuid`;
+    return { by: 'too_few_edits', added: [], notes: notesOf(u?.settings) };
+  }
+  return applyDistill(s, userId, rows, r);
+}
+
+async function applyDistill(
+  s: Services,
+  userId: string,
+  rows: EditRow[],
+  r: ClaudeResult<z.infer<typeof DistillS>>,
+): Promise<DistillResult> {
+  const edits: VoiceEdit[] = rows.map((x) => ({ id: x.id, kind: x.kind, before: x.before, after: x.after }));
+  const ids = new Set(edits.map((e) => e.id));
+  let by: DistillResult['by'] = 'observations';
+  let learned: LearnedNote[];
   if (r.ok) {
     by = 'claude';
     learned = r.data.notes
@@ -367,16 +425,21 @@ export async function distillVoice(s: Services, userId: string): Promise<Distill
       .filter((n) => n.evidence.length > 0)
       .slice(0, VOICE_NOTES_MAX);
   } else learned = editObservations(edits);
-  const out = await db.begin(async (tx) => {
+  // the newest edit read: one made while Claude was reading is read next time
+  const newest = rows.map((x) => new Date(x.created_at).getTime()).reduce((a, b) => Math.max(a, b), 0);
+  const out = await s.db.begin(async (tx) => {
     const [fresh] = await tx.sql<{ settings: Record<string, unknown> }>`
       select settings from orbit.users where id = ${userId}::uuid for update`;
     const merged = mergeVoiceNotes(notesOf(fresh?.settings), learned, {
       now: s.now(),
       newId: () => crypto.randomUUID(),
     });
+    const prior = fresh?.settings?.[DISTILLED_AT];
+    const mark = Math.max(newest, typeof prior === 'string' ? Date.parse(prior) || 0 : 0);
     await tx.sql`
       update orbit.users set settings = settings || jsonb_build_object('voice_notes', ${JSON.stringify(merged.notes)}::jsonb,
-                                                                       'voice_relearned_at', ${s.now().toISOString()}::text)
+                                                                       'voice_relearned_at', ${s.now().toISOString()}::text,
+                                                                       ${DISTILLED_AT}::text, ${new Date(mark).toISOString()}::text)
        where id = ${userId}::uuid`;
     return merged;
   });

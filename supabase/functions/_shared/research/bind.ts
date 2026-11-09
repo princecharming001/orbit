@@ -199,12 +199,22 @@ export async function internalHistory(db: Db, userId: string, personId: string):
   };
 }
 
-/** deps.ts's ClaudeDep over claude.ts: `dossier` → Opus 5.5, `sourcing_fit` → Haiku 5.5 (task `fit`). */
+/**
+ * deps.ts's ClaudeDep over claude.ts: `dossier` → Opus 5.5, `sourcing_fit` → Haiku 5.5 (task `fit`), sourcing's page
+ * reads (`extract`) → Haiku 5.5 as `sourcing_read` (plan 35 A5: they were filed as `fit`).
+ */
 export function claudeDep(claude: Claude, userId: string | null): ClaudeDep {
   return {
     async parse(task, schema, prompt) {
       const r = await claude.structured({
-        task: task === 'dossier' ? 'dossier' : task === 'support' ? 'support' : 'fit',
+        task:
+          task === 'dossier'
+            ? 'dossier'
+            : task === 'support'
+              ? 'support'
+              : task === 'extract'
+                ? 'sourcing_read'
+                : 'fit',
         system: prompt.system,
         user: prompt.user,
         schema,

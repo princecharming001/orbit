@@ -28,9 +28,25 @@ import { claudeWeb, exaWeb, GATHER_MODEL, sqlSharedCache, type WebSource } from 
 import { firstNameOf } from '../rows.ts';
 import type { Services } from '../services.ts';
 import { switchGate } from '../switches.ts';
-import { dnsMx, EMAIL_DEADLINE_MS, fillEmails, type KnownAddress, orgDomainsOf, withDeadline } from './email';
+import {
+  dnsMx,
+  domainsOf,
+  EMAIL_DEADLINE_MS,
+  fillEmails,
+  type KnownAddress,
+  orgDomainsOf,
+  withDeadline,
+} from './email';
 import { indexKnown, type KnownRow, matchKnown } from './known';
-import { domainTemplate, emailLookup, emailVerifier } from './lookup';
+import { cachedTemplate, domainTemplate, emailLookup } from './lookup';
+import {
+  ADD_LOOKUPS,
+  ASKED_LOOKUPS,
+  asksForEmails,
+  emailToolsFor,
+  findEmailFor,
+  keepEmail,
+} from './ondemand';
 import {
   type Candidate,
   type RecommendationRow,
@@ -116,6 +132,9 @@ const toSourced = (id: string, r: RecommendationRow): SourcedCandidate => {
     ...(c.url ? { url: c.url } : {}),
     ...(c.evidence?.length ? { evidence: c.evidence.slice(0, 4) } : {}),
     ...(c.email && c.emailConfidence ? { emailConfidence: c.emailConfidence } : {}),
+    ...(c.email
+      ? {}
+      : { emailStatus: c.emailLookedUp ? ('not found' as const) : ('not looked up' as const) }),
     ...(c.warmth ? { tier: c.warmth.tier } : {}),
     ...(c.warmth?.why ? { why: c.warmth.why } : {}),
     ...(c.warmth?.bridge ? { bridge: c.warmth.bridge } : {}),
@@ -254,21 +273,53 @@ export async function runSourcing(
   const mx = dnsMx(s.fetch);
   const year = now.getUTCFullYear();
   const budget = sqlBudget(db, s.now);
-  // looked-up addresses: a 1st-degree connection's own contact email, else Hunter, else Apollo (capped per day, the
-  // paid answers cached 30 days); the same Hunter key verifies the addresses built from a pattern
   const cache = sqlSharedCache(db, () => now.getTime());
-  const lookup = emailLookup({
+  // emails on demand (plan 35 C3): the search itself spends nothing on them. It reads the addresses pages gave, the
+  // patterns the student's own mail teaches and the company patterns already cached; the paid lookup (a 1st-degree
+  // connection's contact email, else Enrow or Icypeas, else Hunter, else Apollo, then Hunter's domain search) runs
+  // here only for the best three when the ask wanted emails, and otherwise when the student adds someone or asks
+  // to email them (ondemand.ts). Nothing is verified until a message is about to go (send.ts).
+  const wantsEmails = asksForEmails(req);
+  const emailDeps = {
     userId,
     unipile: s.unipile,
     unipileAccountId: acct?.external_account_id ?? undefined,
     hunter: s.hunter,
+    enrow: s.enrow,
+    icypeas: s.icypeas,
     apollo: s.apollo,
     budget,
     cache,
+  };
+  const lookup = emailLookup({
+    ...emailDeps,
     domainOf: (c) => orgDomainsOf(c, ctx.orgDomains)[0] ?? siteDomain(c.url),
   });
-  const verify = emailVerifier({ userId, hunter: s.hunter, budget, cache });
-  const template = domainTemplate({ userId, hunter: s.hunter, budget, cache });
+  const template = domainTemplate(emailDeps);
+  const cached = cachedTemplate(cache);
+  const emailsFor = async (cands: Candidate[]) => {
+    // the domains each was found at, kept on the stored row for a lookup later
+    for (const c of cands) if (c.entity === 'person') c.domains = domainsOf(c, ctx.orgDomains).slice(0, 4);
+    await fillEmails(cands, {
+      known: ctx.known,
+      orgDomains: ctx.orgDomains,
+      template: cached,
+      maxVerifies: 0,
+    });
+    if (!wantsEmails) return;
+    const top = cands.filter((c) => c.entity === 'person').slice(0, ASKED_LOOKUPS);
+    const todo = top.filter((c) => !c.email && !c.lastNameObfuscated);
+    for (const c of todo) c.emailLookedUp = true;
+    await fillEmails(todo, {
+      known: ctx.known,
+      orgDomains: ctx.orgDomains,
+      mx,
+      lookup,
+      maxLookups: ASKED_LOOKUPS,
+      template,
+      maxVerifies: 0,
+    });
+  };
   const result = await sourcePeople(
     {
       unipile: s.unipile,
@@ -312,11 +363,7 @@ export async function runSourcing(
           domains: [workDomain(c.email), ...orgDomainsOf(c, ctx.orgDomains)].filter((d): d is string => !!d),
           year,
         }),
-      fillEmails: (cands) =>
-        withDeadline(
-          fillEmails(cands, { known: ctx.known, orgDomains: ctx.orgDomains, mx, lookup, verify, template }),
-          EMAIL_DEADLINE_MS,
-        ),
+      fillEmails: (cands) => withDeadline(emailsFor(cands), EMAIL_DEADLINE_MS),
       inPipeline: async (c) => {
         const k = await knownOf(c);
         if (!k || !goal) return false;
@@ -370,17 +417,42 @@ export async function addSourced(s: Services, userId: string, ids: unknown): Pro
   const db = s.db;
   const now = s.now();
   const out: SourceAddResponse['people'] = [];
+  type Rec = {
+    id: string;
+    goal_id: string | null;
+    person_id: string | null;
+    candidate: Candidate;
+    source: string;
+  };
+  const recs: Rec[] = [];
   for (const id of ids as string[]) {
-    const [rec] = await db.sql<{
-      id: string;
-      goal_id: string | null;
-      person_id: string | null;
-      candidate: Candidate;
-      source: string;
-    }>`
+    const [rec] = await db.sql<Rec>`
       select id, goal_id, person_id, candidate, source from orbit.recommendations
        where id = ${id}::uuid and user_id = ${userId}::uuid`;
     if (!rec) throw new HttpError(404, 'not_found', 'no such recommendation');
+    recs.push(rec);
+  }
+  // the student chose them: now their address is worth looking up (plan 35 C3), free sources first, a few at once
+  const needs = recs.filter((r) => !r.candidate.email && !r.candidate.emailLookedUp).slice(0, ADD_LOOKUPS);
+  if (needs.length) {
+    const [acct] = await db.sql<{ external_account_id: string | null }>`
+      select external_account_id from orbit.integration_accounts
+       where user_id = ${userId}::uuid and provider = 'linkedin' and status = 'active'`;
+    const tools = emailToolsFor(s, userId, acct?.external_account_id ?? undefined);
+    await withDeadline(
+      Promise.all(
+        needs.map(async (r) => {
+          const found = await findEmailFor(s, userId, r.candidate, { tools }).catch(() => undefined);
+          r.candidate = found
+            ? { ...r.candidate, email: found.email, emailConfidence: found.confidence, emailLookedUp: true }
+            : { ...r.candidate, emailLookedUp: true };
+          await db.sql`update orbit.recommendations set candidate = ${r.candidate}::jsonb where id = ${r.id}::uuid`;
+        }),
+      ).then(() => undefined),
+      EMAIL_DEADLINE_MS,
+    );
+  }
+  for (const rec of recs) {
     const c = rec.candidate;
     const personId =
       rec.person_id ??
@@ -407,10 +479,15 @@ export async function addSourced(s: Services, userId: string, ids: unknown): Pro
         insert into orbit.facts (user_id, person_id, type, text, source_table, source_id, confidence)
         select ${userId}::uuid, ${personId}::uuid, 'sourced', ${text}, 'recommendations', ${rec.id}::uuid, 0.7
          where not exists (select 1 from orbit.facts where person_id = ${personId}::uuid and text = ${text} and deleted_at is null)`;
+    // how it was found goes with it: a built or guessed address is verified before the first message (send.ts)
     if (c.email)
-      await db.sql`
-        update orbit.people set primary_email = ${normalizeEmail(c.email)}
-         where id = ${personId}::uuid and user_id = ${userId}::uuid and primary_email is null`;
+      await keepEmail(
+        db,
+        userId,
+        personId,
+        { email: c.email, confidence: c.emailConfidence ?? 'page' },
+        { fresh: !rec.person_id },
+      );
     // an address Orbit built rather than read is said so on the person, so a draft to it is sent knowingly
     const how =
       c.email && c.emailConfidence === 'guess'

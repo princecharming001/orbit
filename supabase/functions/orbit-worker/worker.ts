@@ -135,6 +135,7 @@ export const RESERVE_MS: Readonly<Record<string, number>> = {
   search_reading: 58_000,
   company_facts_sync: 30_000,
   'logos.sweep': 50_000,
+  'claude.batch.poll': 40_000,
 };
 export const DEFAULT_RESERVE_MS = 8_000;
 

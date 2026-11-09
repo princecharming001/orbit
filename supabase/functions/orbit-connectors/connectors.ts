@@ -143,7 +143,7 @@ export interface ConnectorDeps {
 
 /** One paid call a browser route made: the provider, what it was, credits or calls, and dollars. */
 export interface UsageRow {
-  provider: 'exa' | 'village';
+  provider: 'exa' | 'village' | 'anthropic';
   operation: string;
   units: number;
   costUsd: number;
@@ -752,7 +752,19 @@ export function makeHandler(deps: ConnectorDeps): (req: Request) => Promise<Resp
       const p = deps.postings ?? {};
       const answer = await readPosting(
         { url: text(body.url, 2000), text: text(body.text, 20_000) },
-        { ...p, fetch: p.fetch ?? doFetch },
+        {
+          ...p,
+          fetch: p.fetch ?? doFetch,
+          // plan 35 A5: each Haiku read lands in orbit.usage_ledger under the visitor
+          onUsage: (u) =>
+            recordQuietly(deps.usage, {
+              provider: 'anthropic',
+              operation: 'posting',
+              units: u.usage.input_tokens + u.usage.output_tokens,
+              costUsd: u.costUsd,
+              accountId: visitor,
+            }),
+        },
         {
           take: async () => {
             try {

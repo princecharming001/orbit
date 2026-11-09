@@ -2,7 +2,7 @@
  * Per-provider kill switches (plan 34 A5): orbit_private.provider_switches, read through public.orbit_providers_off()
  * (service role only) and kept 5 minutes per database handle, so flipping a row stops a provider within 5 minutes and
  * with no deploy. A provider with no row is on; when the switches cannot be read at all, everything stays on.
- * Names: anthropic, hunter, apollo, exa, unipile_reads, village, web_search.
+ * Names: anthropic, hunter, apollo, exa, unipile_reads, village, web_search, enrow, icypeas, reoon.
  */
 import type { Db } from './db.ts';
 
@@ -13,7 +13,11 @@ export type SwitchedProvider =
   | 'exa'
   | 'unipile_reads'
   | 'village'
-  | 'web_search';
+  | 'web_search'
+  /** the email finders and verifier behind Hunter (plan 35 E6) */
+  | 'enrow'
+  | 'icypeas'
+  | 'reoon';
 
 export const SWITCH_TTL_MS = 5 * 60_000;
 
