@@ -112,7 +112,7 @@ describe('tap-to-answer choices', () => {
     const pills = $$('[data-testid="choice-pill"]');
     expect(pills.map((p) => p.textContent)).toEqual(['Show my pipeline', 'What else can you do?']);
     // the same classes as the chips on the home
-    expect(pills[0]!.className).toMatch(/glass glass-hover type-chip rounded-full/);
+    expect(pills[0]!.className).toMatch(/glass glass-hover type-chip rounded-\[6px\]/);
     // two quick taps still send one turn
     await act(async () => {
       pills[0]!.click();

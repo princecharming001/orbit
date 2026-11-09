@@ -1,5 +1,6 @@
 import { Fragment, type ReactNode } from 'react';
 import { Link } from 'react-router-dom';
+import { cx } from '../../ui';
 import type { NamedPerson } from './names';
 
 /**
@@ -18,12 +19,12 @@ export function Markdown({
   const inline = (s: string) => inlineWith(s, people ?? []);
   const blocks = text.split(/\n{2,}/).filter((b) => b.trim());
   return (
-    <div className={className} data-testid="md">
+    <div className={cx('leading-[1.7] my-3 first:mt-0 last:mb-0', className)} data-testid="md">
       {blocks.map((block, i) => {
         const lines = block.split('\n');
         if (lines.every((l) => /^\s*[-*]\s+/.test(l)))
           return (
-            <ul key={i} className="list-disc pl-5 my-2 space-y-1">
+            <ul key={i} className="list-disc pl-5 my-3 space-y-1.5 first:mt-0 last:mb-0">
               {lines.map((l, j) => (
                 <li key={j}>{inline(l.replace(/^\s*[-*]\s+/, ''))}</li>
               ))}
@@ -31,14 +32,14 @@ export function Markdown({
           );
         if (lines.every((l) => /^\s*\d+[.)]\s+/.test(l)))
           return (
-            <ol key={i} className="list-decimal pl-5 my-2 space-y-1">
+            <ol key={i} className="list-decimal pl-5 my-3 space-y-1.5 first:mt-0 last:mb-0">
               {lines.map((l, j) => (
                 <li key={j}>{inline(l.replace(/^\s*\d+[.)]\s+/, ''))}</li>
               ))}
             </ol>
           );
         return (
-          <p key={i} className="my-2 first:mt-0 last:mb-0 whitespace-pre-wrap">
+          <p key={i} className="my-3 first:mt-0 last:mb-0 whitespace-pre-wrap">
             {lines.map((l, j) => (
               <Fragment key={j}>
                 {j > 0 && <br />}

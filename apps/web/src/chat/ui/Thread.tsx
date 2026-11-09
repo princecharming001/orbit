@@ -17,8 +17,9 @@ import { useShowReasoning } from '../../state/showReasoning';
 import { cx, useToast } from '../../ui';
 import { ChoicesContext } from './cards/Choices';
 import { withoutRefs } from './cards/next';
-import { DraftOwnersContext } from './cards/parts';
+import { DraftOwnersContext, TurnPersonCardsContext } from './cards/parts';
 import { type CardActions, editingDraftId, ResultCard } from './cards/ResultCard';
+import { readPerson } from './cards/shapes';
 import { Markdown } from './Markdown';
 import { type NamedPerson, namedPeople } from './names';
 import type { AssistantTurn, Block, ErrorKind, ToolBlock, Turn, WebBlock } from './threadStore';
@@ -52,7 +53,7 @@ export function Thread({
   return (
     <DraftOwnersContext.Provider value={owners}>
       <div className="type-body" data-testid="thread">
-        <ol className="space-y-4">
+        <ol className="space-y-8">
           {turns.map((t, i) => (
             <li key={t.id} className="min-w-0">
               {/* the day each part of the chat is from: a chat opened days later says so, instead of "Today" */}
@@ -70,7 +71,7 @@ export function Thread({
               {t.role === 'user' ? (
                 <div className="flex justify-end">
                   <div
-                    className="max-w-[85%] rounded-[20px] rounded-br-[8px] px-4 py-2.5 whitespace-pre-wrap break-words bg-[rgba(14,20,36,0.06)]"
+                    className="max-w-[85%] rounded-[8px] px-4 py-2.5 whitespace-pre-wrap break-words bg-[rgba(14,20,36,0.06)]"
                     data-testid="turn-user"
                   >
                     {withoutRefs(t.text)}
@@ -248,36 +249,49 @@ function Assistant({
   if (!streaming || showReasoning || answerStarted(turn.blocks)) revealedRef.current = true;
   const revealed = revealedRef.current;
   const activity = streaming ? currentStep(turn.blocks) : '';
+  const personCards = useMemo(
+    () =>
+      new Set(
+        turn.blocks.flatMap((b) =>
+          b.type === 'tool' && b.envelope?.kind === 'person'
+            ? [readPerson(b.envelope.data)?.person.id].filter((x): x is string => !!x)
+            : [],
+        ),
+      ),
+    [turn.blocks],
+  );
   return (
     <div className="group min-w-0" data-testid="turn-assistant" data-status={turn.status}>
-      <div aria-live="polite" aria-busy={streaming}>
-        {!revealed && <TurnStatus step={activity} />}
-        <ChoicesContext.Provider value={{ running, laterUserText }}>
-          {(revealed ? turnLayout(turn.blocks, streaming) : []).map((piece) =>
-            piece.type === 'work' ? (
-              <WorkLog
-                key={`work-${piece.items[0]!.i}`}
-                items={piece.items}
-                live={streaming}
-                showReasoning={showReasoning}
-                actions={actions}
-              />
-            ) : (
-              <BlockView
-                key={blockKey(piece.b, piece.i)}
-                b={piece.b}
-                i={piece.i}
-                last={turn.blocks.length - 1}
-                streaming={streaming}
-                showReasoning={showReasoning}
-                actions={actions}
-                people={people}
-              />
-            ),
-          )}
-        </ChoicesContext.Provider>
-        {revealed && streaming && <TurnStatus step={activity} quiet />}
-      </div>
+      <TurnPersonCardsContext.Provider value={personCards}>
+        <div aria-live="polite" aria-busy={streaming} className="space-y-4">
+          {!revealed && <TurnStatus step={activity} />}
+          <ChoicesContext.Provider value={{ running, laterUserText }}>
+            {(revealed ? turnLayout(turn.blocks, streaming) : []).map((piece) =>
+              piece.type === 'work' ? (
+                <WorkLog
+                  key={`work-${piece.items[0]!.i}`}
+                  items={piece.items}
+                  live={streaming}
+                  showReasoning={showReasoning}
+                  actions={actions}
+                />
+              ) : (
+                <BlockView
+                  key={blockKey(piece.b, piece.i)}
+                  b={piece.b}
+                  i={piece.i}
+                  last={turn.blocks.length - 1}
+                  streaming={streaming}
+                  showReasoning={showReasoning}
+                  actions={actions}
+                  people={people}
+                />
+              ),
+            )}
+          </ChoicesContext.Provider>
+          {revealed && streaming && <TurnStatus step={activity} quiet />}
+        </div>
+      </TurnPersonCardsContext.Provider>
       {turn.status === 'stopped' && (
         <p className="text-[12.5px] text-ink-3 mt-1" data-testid="turn-stopped">
           Stopped. What came through is kept.
@@ -517,7 +531,7 @@ function WorkLog({
         type="button"
         onClick={() => setOpen((o) => !o)}
         aria-expanded={open}
-        className="group/work flex w-full min-w-0 items-center gap-2 rounded-[12px] border border-line bg-canvas px-3 py-2 text-left text-[13px] shadow-[var(--shadow-pill)] hover:bg-canvas-2"
+        className="group/work flex w-full min-w-0 items-center gap-2 rounded-[6px] border border-line bg-canvas px-3 py-2 text-left text-[13px] shadow-[var(--shadow-pill)] hover:bg-canvas-2"
         data-testid="work-log-toggle"
       >
         <ListChecks
@@ -615,7 +629,7 @@ function WebSearchLine({ block, live }: { block: WebBlock; live: boolean }) {
                 target="_blank"
                 rel="noopener noreferrer"
                 title={s.title}
-                className="flex items-center gap-1.5 h-7 rounded-full border border-line bg-canvas px-2.5 text-[12px] text-ink-2 hover:bg-canvas-2 hover:text-ink"
+                className="flex items-center gap-1.5 h-7 rounded-[6px] border border-line bg-canvas px-2.5 text-[12px] text-ink-2 hover:bg-canvas-2 hover:text-ink"
                 data-testid="web-source"
               >
                 <span className="font-medium text-ink truncate">{hostOf(s.url)}</span>
@@ -628,7 +642,7 @@ function WebSearchLine({ block, live }: { block: WebBlock; live: boolean }) {
               <button
                 type="button"
                 onClick={() => setAll(true)}
-                className="h-7 rounded-full px-2.5 text-[12px] text-ink-3 hover:bg-canvas-2 hover:text-ink"
+                className="h-7 rounded-[6px] px-2.5 text-[12px] text-ink-3 hover:bg-canvas-2 hover:text-ink"
               >
                 {block.sources.length - SOURCES_SHOWN} more
               </button>
@@ -645,7 +659,7 @@ function ToolView({ block, actions }: { block: ToolBlock; actions: CardActions }
   if (block.status === 'running' || !block.envelope)
     return (
       <div
-        className="glass glass-strong rounded-[16px] px-4 py-3 my-2 max-w-[520px]"
+        className="glass glass-strong rounded-[6px] px-4 py-3 my-2 max-w-[520px]"
         data-testid="tool-status"
         role="status"
       >
@@ -695,7 +709,7 @@ function ErrorLine({ kind, message }: { kind: ErrorKind; message: string }) {
   if (isStaleChunk(message))
     return (
       <div
-        className="glass glass-strong rounded-[16px] px-4 py-3 my-2 text-[13.5px] flex flex-wrap items-center gap-x-3 gap-y-2"
+        className="glass glass-strong rounded-[6px] px-4 py-3 my-2 text-[13.5px] flex flex-wrap items-center gap-x-3 gap-y-2"
         role="alert"
         data-testid="turn-error"
         data-kind="updated"
@@ -708,7 +722,7 @@ function ErrorLine({ kind, message }: { kind: ErrorKind; message: string }) {
         <button
           type="button"
           onClick={() => window.location.reload()}
-          className="h-8 rounded-full bg-ink px-3.5 text-[13px] font-medium text-white hover:bg-ink/90"
+          className="h-8 rounded-[6px] bg-ink px-3.5 text-[13px] font-medium text-white hover:bg-ink/90"
           data-testid="turn-error-reload"
         >
           Reload
@@ -718,7 +732,7 @@ function ErrorLine({ kind, message }: { kind: ErrorKind; message: string }) {
   const c = ERROR_COPY[kind];
   return (
     <div
-      className="glass glass-strong rounded-[16px] px-4 py-3 my-2 border-bad/30 text-[13.5px] flex items-start gap-2"
+      className="glass glass-strong rounded-[6px] px-4 py-3 my-2 border-bad/30 text-[13.5px] flex items-start gap-2"
       role="alert"
       data-testid="turn-error"
       data-kind={kind}

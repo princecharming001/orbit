@@ -166,16 +166,10 @@ export function DraftsPreview() {
         </div>
         <div className="mt-3 flex flex-wrap items-center justify-end gap-2">
           <span className="h-8 px-3 inline-flex items-center text-[12.5px] text-ink-2">Close</span>
-          <span className="h-8 px-3 rounded-full border border-line inline-flex items-center text-[12.5px] text-ink-2">
-            Copy text
-          </span>
-          <span className="h-8 px-3.5 rounded-full bg-accent text-white inline-flex items-center text-[12.5px] font-medium">
-            Open email to Lena
+          <span className="h-8 px-3.5 rounded-[6px] bg-accent text-white inline-flex items-center text-[12.5px] font-medium">
+            Send to Lena
           </span>
         </div>
-        <p className="mt-3 text-[11.5px] text-ink-3">
-          Parts come from your notes: read it once as Lena will.
-        </p>
       </div>
     </div>
   );

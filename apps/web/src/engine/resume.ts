@@ -278,6 +278,10 @@ export async function saveResume(
     createdAt: now,
   };
   await db.resumes.add(resume);
+  // the file itself is kept too, so it can be attached to an email as it is
+  await import('./files')
+    .then(({ fileProblem, keepFile }) => (fileProblem(file) ? undefined : keepFile(user.id, file, 'resume')))
+    .catch(() => undefined);
   // Claude reads it with the student's own key (the resume switch on) or through Orbit's shared access; Orbit's own
   // parser otherwise, or when that fails
   let facets = claudeReachable('resume', 'resume')

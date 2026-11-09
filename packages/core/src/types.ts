@@ -977,6 +977,29 @@ export interface OutboundMessage {
    * same message under a rule; on LinkedIn it becomes its own message the student sends with a tap.
    */
   forwardNote?: string;
+  /** files sent with it (a resume), kept in this browser's files table; email only */
+  attachments?: DraftAttachment[];
+  createdAt: string;
+}
+
+/** A file on a draft: the bytes live in the browser's files table (and, for an account, in orbit.user_files). */
+export interface DraftAttachment {
+  id: ID;
+  name: string;
+  mimeType: string;
+  size: number;
+}
+
+/** A file the student keeps in Orbit to attach (their resume, or anything they attached once). */
+export interface StoredFile {
+  id: ID;
+  userId: ID;
+  kind: 'resume' | 'file';
+  name: string;
+  mimeType: string;
+  size: number;
+  /** the file's bytes (kept as bytes rather than a Blob, which some browsers' storage hands back unreadable) */
+  bytes: Uint8Array;
   createdAt: string;
 }
 

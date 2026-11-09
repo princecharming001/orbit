@@ -4,7 +4,7 @@
  * is due. Goals, explain_score, rate_closeness and memory work in local mode too (memory is then kept in this
  * browser); the rest need an Orbit account and say so in plain words (never an error) when there is none.
  */
-import type { Goal, GoalKind, MemoryKind, ReplyClass } from '@orbit/core';
+import type { Goal, GoalKind, MemoryKind, ReplyClass, SourcedCandidate } from '@orbit/core';
 import { GOAL_KINDS, newId, REPLY_CLASSES } from '@orbit/core';
 import { db } from '../../db/schema';
 import { calendarInvitesAvailable, sendCalendarInvite } from '../../engine/calendarInvite';
@@ -25,18 +25,13 @@ import {
   addLinkedInFound,
   LINKEDIN_FOUND_PREFIX,
   linkedInSearchReady,
+  rememberFound,
   searchLinkedInLive,
 } from '../../engine/linkedinSearch';
 import { forget, listMemories, MEMORY_KINDS, remember, searchMemories } from '../../engine/memory';
 import { AUTONOMY_TEXT, type AutonomyLevel, pauseOutreach, setAutonomy } from '../../engine/outreach';
 import { askForIntro, cachedPath } from '../../engine/paths';
-import {
-  blockingQuestions,
-  bookCall,
-  draftReply,
-  listReplies,
-  REPLY_CLASS_LABELS,
-} from '../../engine/replies';
+import { blockingQuestions, bookCall, draftReply, listReplies } from '../../engine/replies';
 import { dossierView, getDossier, localDossier } from '../../engine/research';
 import {
   addSourced,
@@ -46,6 +41,7 @@ import {
   searchPeople,
   tierChip,
 } from '../../engine/sourcing';
+import { mockSourcedPeople, mockSourcingFits, usesMockConnectors } from '../../integrations/connectorsMock';
 import { callApi, isAccountMode, isServerUser } from '../../integrations/orbitApi';
 import { z } from '../../zod';
 import type { ResultEnvelope, ToolContext } from '../types';
@@ -57,6 +53,7 @@ import {
   OPEN_PAUSE_UNTIL,
   ok,
   openEndedPause,
+  type Packed,
   plural,
   requirePerson,
   toModel,
@@ -684,8 +681,19 @@ export const findPeopleTool = defineTool({
   progress: 'Searching for people',
   async execute(input, ctx) {
     if (!accountReady(ctx)) {
-      if (!(await linkedInSearchReady(ctx.user))) return needsAccount('Finding new people');
-      return findOnLinkedIn(ctx, input.query, input.purpose);
+      // plan 36: the sample student finds made-up people, like the rest of the demo's connectors; its mock LinkedIn
+      // pool holds engineers and PMs, so an ask for investors, professors or a field it lacks goes to the mock sourcing
+      const mock = usesMockConnectors(ctx.user.id);
+      if (mock && mockSourcingFits(input)) return mockSourcing(ctx, input);
+      if (await linkedInSearchReady(ctx.user)) {
+        const env = await findOnLinkedIn(ctx, input.query, input.purpose);
+        if ((env.data as Packed<unknown, { results?: unknown[] }>).forModel.results?.length) return env;
+      }
+      if (mock) return mockSourcing(ctx, input);
+      return webRung(
+        input,
+        'This copy of Orbit has no people search of its own (that needs an Orbit account), so the next step is the web.',
+      );
     }
     const r = await searchPeople(ctx.user, {
       purpose: input.purpose,
@@ -699,8 +707,9 @@ export const findPeopleTool = defineTool({
     });
     if (!r.ok) throw new Error(r.message);
     const { results, unconfigured, relaxed, assumedPlace } = r.value;
-    const top = results.slice(0, 10);
-    for (const c of top) rememberSourced(c.id, candidateLine(c));
+    // plan 36: an account search that finds nobody goes on to the web, never ends empty
+    if (!results.length)
+      return webRung(input, 'The people search found no one for that, so the next step is the web.');
     const dropped = relaxed.filter((x) => x !== 'place');
     const quiet = [
       assumedPlace ? `No school or company was named, so it looked at ${assumedPlace}.` : '',
@@ -712,52 +721,121 @@ export const findPeopleTool = defineTool({
     ]
       .filter(Boolean)
       .join(' ');
-    return list(
-      `People for ${GOAL_KIND_LABELS[input.purpose].toLowerCase()}`,
-      top.map((c) => ({
-        id: c.id,
-        known: c.knownPersonId,
-        text: candidateLine(c),
-        chip: tierChip(c),
-        // the tier's reason first, then what the page said they work on, then the email and how sure it is
-        sub: [c.why ?? c.reasons[0], ...(c.evidence ?? []).slice(0, 1), emailNote(c)]
-          .filter(Boolean)
-          .join('. '),
-        href: c.knownPersonId ? `/people/${c.knownPersonId}` : c.url,
-        person: {
-          name: c.name,
-          role: [c.title, c.org].filter(Boolean).join(' at ') || undefined,
-          email: c.email,
-          emailConfidence: c.email ? (c.emailConfidence ?? 'page') : undefined,
-          why: c.why ?? c.evidence?.[0] ?? c.reasons[0],
-          tier: c.tier,
-          linkedinUrl: c.linkedinUrl,
-          url: c.url,
-        },
-      })),
-      {
-        results: top.map((c) => ({
-          recommendationId: c.id,
-          who: wrapped(ctx, 'sourced', candidateLine(c), 200),
-          location: c.location,
-          tier: c.tier,
-          why: c.why ? wrapped(ctx, 'sourced', c.why, 200) : undefined,
-          introVia: c.bridge ? { personId: c.bridge.personId, name: c.bridge.name } : undefined,
-          email: c.email ? wrapped(ctx, 'sourced', c.email, 120) : undefined,
-          emailConfidence: c.email ? (c.emailConfidence ?? 'page') : undefined,
-          context: (c.evidence ?? []).slice(0, 2).map((t) => wrapped(ctx, 'sourced', t, 200)),
-          reasons: c.reasons.slice(0, 2).map((t) => wrapped(ctx, 'sourced', t, 160)),
-          knownPersonId: c.knownPersonId,
-          rank: Math.round(c.rank * 100) / 100,
-        })),
-        more: Math.max(0, results.length - top.length),
-      },
-      `${results.length ? `Found ${plural(results.length, 'person', 'people')}. None are in your People until you pick them` : 'No one matched yet'}.${quiet ? ` ${quiet}` : ''}`,
-      '/discover?tab=find',
-    );
+    return sourcedList(ctx, input.purpose, results, quiet);
   },
   toModel,
 });
+
+type FindInput = {
+  purpose: GoalKind;
+  query?: string;
+  goalId?: string;
+  school?: string;
+  organization?: string;
+  topic?: string;
+};
+
+/** Sourced candidates as the found-people card and the model read them, warmest tier first. */
+function sourcedList(
+  ctx: ToolContext,
+  purpose: GoalKind,
+  results: SourcedCandidate[],
+  quiet: string,
+  note = '',
+) {
+  const top = results.slice(0, 10);
+  for (const c of top) rememberSourced(c.id, candidateLine(c));
+  return list(
+    `People for ${GOAL_KIND_LABELS[purpose].toLowerCase()}`,
+    top.map((c) => ({
+      id: c.id,
+      known: c.knownPersonId,
+      text: candidateLine(c),
+      chip: tierChip(c),
+      // the tier's reason first, then what the page said they work on, then the email and how sure it is
+      sub: [c.why ?? c.reasons[0], ...(c.evidence ?? []).slice(0, 1), emailNote(c)]
+        .filter(Boolean)
+        .join('. '),
+      href: c.knownPersonId ? `/people/${c.knownPersonId}` : c.url,
+      person: {
+        name: c.name,
+        role: [c.title, c.org].filter(Boolean).join(' at ') || undefined,
+        email: c.email,
+        emailConfidence: c.email ? (c.emailConfidence ?? 'page') : undefined,
+        why: c.why ?? c.evidence?.[0] ?? c.reasons[0],
+        tier: c.tier,
+        linkedinUrl: c.linkedinUrl,
+        url: c.url,
+      },
+    })),
+    {
+      results: top.map((c) => ({
+        recommendationId: c.id,
+        who: wrapped(ctx, 'sourced', candidateLine(c), 200),
+        location: c.location,
+        tier: c.tier,
+        why: c.why ? wrapped(ctx, 'sourced', c.why, 200) : undefined,
+        introVia: c.bridge ? { personId: c.bridge.personId, name: c.bridge.name } : undefined,
+        email: c.email ? wrapped(ctx, 'sourced', c.email, 120) : undefined,
+        emailConfidence: c.email ? (c.emailConfidence ?? 'page') : undefined,
+        context: (c.evidence ?? []).slice(0, 2).map((t) => wrapped(ctx, 'sourced', t, 200)),
+        reasons: c.reasons.slice(0, 2).map((t) => wrapped(ctx, 'sourced', t, 160)),
+        knownPersonId: c.knownPersonId,
+        rank: Math.round(c.rank * 100) / 100,
+      })),
+      more: Math.max(0, results.length - top.length),
+      howToAnswer:
+        'Someone with a knownPersonId is someone the student knows; everyone else is new to them: say so in one clause, then name the top two or three with their firm and why each fits.',
+    },
+    `${results.length ? `Found ${plural(results.length, 'person', 'people')}. None are in your People until you pick them` : 'No one matched yet'}.${note ? ` ${note}` : ''}${quiet ? ` ${quiet}` : ''}`,
+    '/discover?tab=find',
+  );
+}
+
+/** find_people on the sample student (plan 36): made-up candidates shaped like the server's, addable like LinkedIn finds. */
+function mockSourcing(ctx: ToolContext, input: FindInput): ResultEnvelope {
+  const found = mockSourcedPeople(input, 10);
+  const results: SourcedCandidate[] = found.map((m, i) => ({
+    id: rememberFound(m.found),
+    name: m.found.name,
+    title: m.title,
+    org: m.org,
+    location: m.location,
+    tier: m.tier,
+    why: m.why,
+    evidence: m.evidence,
+    source: 'unipile',
+    rank: 1 - i / 20,
+    fit: 0.8,
+    reach: m.tier === 4 ? 0.5 : 0.3,
+    responsiveness: 0.5,
+    reasons: [m.why],
+  }));
+  return sourcedList(
+    ctx,
+    input.purpose,
+    results,
+    '',
+    'They are new people you do not know yet: sample people, made up like the rest of the demo.',
+  );
+}
+
+/**
+ * The last rung (plan 36): no people search ran or it found nobody, so the model searches the web and lists named
+ * people and firms as rows, never a refusal.
+ */
+function webRung(input: FindInput, summary: string): ResultEnvelope {
+  const what = [input.query, input.topic, input.organization, input.school].filter(Boolean).join(', ');
+  return ok(
+    'text',
+    { available: false, next: 'web' },
+    {
+      found: 0,
+      nextStep: `In this same turn, use web_search for ${what || 'the people asked for'} (for a named person: how others have reached them, and who works with them). Then list up to ten named people or firms from the results, one per line, each with their role, firm and the source in words, labelled as found on the web and not people the student knows. Never refuse, and never name anyone the search did not return.`,
+    },
+    summary,
+  );
+}
 
 /** find_people without an account: the student's own LinkedIn, beyond their connections. */
 async function findOnLinkedIn(

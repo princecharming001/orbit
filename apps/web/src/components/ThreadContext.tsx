@@ -53,7 +53,7 @@ export function ThreadContext({
   const who = (m: ConversationItem) => (m.out ? 'You' : firstName);
   return (
     <div
-      className={cx('rounded-[10px] border border-line-2 bg-canvas-2/70 px-3 py-2.5 text-[13px]', className)}
+      className={cx('border-l-2 border-line pl-3 py-0.5 text-[13px]', className)}
       data-testid="thread-context"
     >
       {open ? (
@@ -68,7 +68,7 @@ export function ThreadContext({
               </span>
               <span
                 className={cx(
-                  'max-w-[92%] whitespace-pre-line rounded-[12px] px-2.5 py-1.5 leading-snug',
+                  'max-w-[92%] whitespace-pre-line rounded-[6px] px-2.5 py-1.5 leading-relaxed',
                   m.out ? 'bg-accent-soft text-ink' : 'bg-canvas border border-line-2 text-ink-2',
                 )}
               >
@@ -79,10 +79,10 @@ export function ThreadContext({
         </ol>
       ) : (
         <div data-testid="thread-context-last">
-          <div className="text-[11.5px] text-ink-3 mb-0.5">
+          <div className="text-[11.5px] text-ink-3 mb-1">
             {last.out ? 'You wrote' : `${firstName} wrote`} · {CHANNEL[last.channel]} · {relDate(last.at)}
           </div>
-          <p className="text-ink-2 line-clamp-3 whitespace-pre-line leading-snug">{preview(last.text)}</p>
+          <p className="text-ink-2 line-clamp-3 whitespace-pre-line leading-relaxed">{preview(last.text)}</p>
         </div>
       )}
       {sorted.length > 1 && (

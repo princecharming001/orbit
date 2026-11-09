@@ -41,6 +41,8 @@ export interface ChatRow {
   endAt?: string;
   minutes?: number;
   joinUrl?: string;
+  /** the same chat on the calendar again with a different link: worth checking which one the invite uses */
+  otherJoinUrls?: string[];
   /** the disclosure's three lines; each only when there is a stored row behind it */
   lines: { goal?: string; lastSaid?: string; fact?: string };
   after?: ChatAfter;
@@ -160,6 +162,8 @@ export function upcomingChats(input: ChatsInput, now: Date, tz: string): ChatsVi
 
   const rows: ChatRow[] = [];
   const seenChats = new Set<string>();
+  // the same chat on the calendar twice (two invites for one time, each with its own Meet link) is one chat
+  const seenSlots = new Map<string, ChatRow>();
   for (const ev of input.events) {
     if (ev.status === 'cancelled') continue;
     const viaChat = ev.chatId ? chatsById.get(ev.chatId) : undefined;
@@ -171,6 +175,13 @@ export function upcomingChats(input: ChatsInput, now: Date, tz: string): ChatsVi
     if (!person || person.hiddenAt) continue;
     const chat = viaChat ?? chatOf(person.id, ev.id);
     if (chat) seenChats.add(chat.id);
+    const slot = `${person.id}|${start}`;
+    const twin = seenSlots.get(slot);
+    if (twin) {
+      if (ev.conferenceUrl && twin.joinUrl && ev.conferenceUrl !== twin.joinUrl)
+        twin.otherJoinUrls = [...(twin.otherJoinUrls ?? []), ev.conferenceUrl];
+      continue;
+    }
     const ended = Date.parse(ev.endAt) <= t;
     rows.push({
       key: ev.id,
@@ -184,6 +195,7 @@ export function upcomingChats(input: ChatsInput, now: Date, tz: string): ChatsVi
       lines: { goal: goalFor(chat), lastSaid: lastSaid(person.id), fact: factFor(person.id) },
       after: ended ? afterOf(person, chat, ev) : undefined,
     });
+    seenSlots.set(slot, rows.at(-1)!);
   }
   // agreed to talk, no time on the calendar yet
   const noTime: ChatRow[] = [];

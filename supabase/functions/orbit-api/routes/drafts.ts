@@ -1,7 +1,7 @@
 /**
  * Drafts (§7, §8.5):
  *   POST /drafts/compose {personId, kind, goalId?, channel, replyToMessageId?}  → {draft}
- *   POST /drafts/approve {draftId, sendAt?, confirm?, body?, subject?}
+ *   POST /drafts/approve {draftId, sendAt?, confirm?, body?, subject?, attachments?}
  *                                                    → {draft}; no sendAt = the next send window; LinkedIn needs
  *                                                       confirm: true and goes at once; due now = sent now; a body or
  *                                                       subject approves the student's words and keeps the edit
@@ -11,8 +11,9 @@
 import type { DraftComposeRequest } from '@orbit/core/server/api';
 import type { MessageKind } from '@orbit/core/types';
 import { composeDraft } from '../../_shared/compose/compose.ts';
-import { toServerDraft } from '../../_shared/compose/drafts.ts';
+import { loadDraft, toServerDraft } from '../../_shared/compose/drafts.ts';
 import { badRequest, json } from '../../_shared/http.ts';
+import { parseIncomingFiles, setDraftFiles } from '../../_shared/sending/files.ts';
 import { approveDraft, cancelDraft, discardDraft } from '../../_shared/sending/send.ts';
 import { lookupPersonEmail } from '../../_shared/sourcing/ondemand.ts';
 import type { Ctx, Route } from '../api.ts';
@@ -62,8 +63,16 @@ async function compose(ctx: Ctx): Promise<Response> {
 
 async function approve(ctx: Ctx): Promise<Response> {
   const b = await body(ctx);
+  const draftId = uuid(b, 'draftId');
+  // files the student attached (a resume): kept and listed on the draft before it is approved, since approving a
+  // draft that is due now sends it
+  const files = parseIncomingFiles(b.attachments);
+  if (files) {
+    await loadDraft(ctx.db, ctx.userId!, draftId);
+    await setDraftFiles(ctx.db, ctx.userId!, draftId, files);
+  }
   const draft = await approveDraft(ctx.services(), ctx.userId!, {
-    draftId: uuid(b, 'draftId'),
+    draftId,
     sendAt: typeof b.sendAt === 'string' ? b.sendAt : undefined,
     confirm: b.confirm === true,
     ...(typeof b.undoSec === 'number' ? { undoSec: b.undoSec } : {}),

@@ -375,6 +375,11 @@ export async function writeFromServer(
         return typeof theirs !== 'string' || linkedInImageExpired(theirs) ? { ...r, photoUrl: mine } : r;
       });
     }
+    // a draft's files live in this browser (their ids are this browser's): the server's newer row keeps them
+    if (table === 'drafts' && ready.length) {
+      const had = await t.bulkGet(ready.map((r) => String(r.id)));
+      ready = ready.map((r, i) => (had[i]?.attachments ? { ...r, attachments: had[i].attachments } : r));
+    }
     if (ready.length) await t.bulkPut(ready);
     if (gone.length) await t.bulkDelete(gone);
     if (table === 'tie_scores')

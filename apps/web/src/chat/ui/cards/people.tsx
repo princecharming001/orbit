@@ -43,7 +43,7 @@ export function PeopleShell({
 }) {
   return (
     <div
-      className="@container isolate my-2 min-w-0 max-w-full overflow-hidden rounded-2xl border border-line bg-canvas text-[13.5px] leading-[1.45] shadow-[0_1px_2px_rgba(10,10,10,0.04)]"
+      className="@container isolate my-2 min-w-0 max-w-full overflow-hidden rounded-[6px] border border-line bg-canvas text-[13.5px] leading-[1.45] shadow-[0_1px_2px_rgba(10,10,10,0.04)]"
       data-testid={testId}
     >
       <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2 px-4 pt-3.5 pb-2">
@@ -224,11 +224,11 @@ export function PersonLine({
       .filter(([, v]) => v !== undefined)
       .map(([k, v]) => [`data-${k}`, v]),
   );
-  const cover = `absolute inset-0 rounded-xl ${FOCUS}`;
+  const cover = `absolute inset-0 rounded-[6px] ${FOCUS}`;
   const label = linkLabel ?? `Open ${name}`;
   return (
     <div
-      className="group/row relative flex items-center gap-3 rounded-xl px-2.5 py-2 transition-colors hover:bg-canvas-2 focus-within:bg-canvas-2"
+      className="group/row relative flex items-center gap-3 rounded-[6px] px-2.5 py-2 transition-colors hover:bg-canvas-2 focus-within:bg-canvas-2"
       data-testid={testId}
       {...dataAttrs}
     >
@@ -374,7 +374,7 @@ export function PeopleFooter({
         <button
           type="button"
           className={cx(
-            'inline-flex h-8 items-center gap-1 rounded-full px-2.5 text-[12.5px] font-medium text-ink-2 hover:bg-canvas-2 hover:text-ink',
+            'inline-flex h-8 items-center gap-1 rounded-[6px] px-2.5 text-[12.5px] font-medium text-ink-2 hover:bg-canvas-2 hover:text-ink',
             FOCUS,
           )}
           aria-expanded={fold.open}
@@ -402,7 +402,7 @@ export function PeopleFooter({
           </span>
           <button
             type="button"
-            className="h-8 rounded-full px-2.5 text-[12.5px] font-medium text-ink-3 hover:bg-canvas-2 hover:text-ink"
+            className="h-8 rounded-[6px] px-2.5 text-[12.5px] font-medium text-ink-3 hover:bg-canvas-2 hover:text-ink"
             onClick={onClear}
             data-testid="selection-all"
           >
@@ -413,7 +413,7 @@ export function PeopleFooter({
               key={s.label}
               type="button"
               className={cx(
-                'inline-flex h-8 items-center gap-1 rounded-full bg-ink px-3 text-[12.5px] font-medium text-canvas hover:opacity-90 disabled:pointer-events-none disabled:opacity-50',
+                'inline-flex h-8 items-center gap-1 rounded-[6px] bg-ink px-3 text-[12.5px] font-medium text-canvas hover:opacity-90 disabled:pointer-events-none disabled:opacity-50',
                 FOCUS,
               )}
               disabled={running}
@@ -439,7 +439,7 @@ export function PeopleFooter({
                 key={s.label}
                 type="button"
                 className={cx(
-                  'inline-flex h-8 items-center gap-1 rounded-full px-2.5 text-[12.5px] font-medium text-ink-2 hover:bg-canvas-2 hover:text-ink disabled:pointer-events-none disabled:opacity-50',
+                  'inline-flex h-8 items-center gap-1 rounded-[6px] px-2.5 text-[12.5px] font-medium text-ink-2 hover:bg-canvas-2 hover:text-ink disabled:pointer-events-none disabled:opacity-50',
                   FOCUS,
                 )}
                 disabled={running}

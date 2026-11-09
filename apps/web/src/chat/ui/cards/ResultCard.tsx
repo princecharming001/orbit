@@ -8,7 +8,7 @@
 import type { OutboundMessage, Person, Suggestion } from '@orbit/core';
 import { CHANNEL_LABELS, MEDIUM_TIE, MESSAGE_KIND_LABELS, STAGE_LABELS, STRONG_TIE } from '@orbit/core';
 import { useLiveQuery } from 'dexie-react-hooks';
-import { ArrowUpRight, Check, Copy, Download, TriangleAlert } from 'lucide-react';
+import { ArrowRight, ArrowUpRight, Check, Copy, Download, Map as MapIcon, TriangleAlert } from 'lucide-react';
 import { Fragment as Frag, type ReactNode, useContext, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { copyText } from '../../../components/approve';
@@ -24,6 +24,7 @@ import type { ResultEnvelope } from '../../types';
 import { Markdown } from '../Markdown';
 import type { ToolBlock } from '../threadStore';
 import { Choices } from './Choices';
+import { ChatsCard, WeekCard } from './goalCards';
 import { MessagesCard, readMessages } from './MessagesCard';
 import { addPicked, askForIntro, type Picked, writeTo } from './next';
 import { FoundPeopleCard, isPeopleList, KnownPeopleCard } from './PeopleCards';
@@ -39,6 +40,7 @@ import {
   PickBox,
   Section,
   SelectionBar,
+  TurnPersonCardsContext,
   useFold,
 } from './parts';
 import { SetupCard } from './Setup';
@@ -46,6 +48,7 @@ import {
   type PersonView,
   type RouteView,
   readBriefExtras,
+  readChatsCard,
   readChoices,
   readCompany,
   readConfirm,
@@ -68,6 +71,7 @@ import {
   readSuggestions,
   readText,
   readWarmIntros,
+  readWeekCard,
   type WarmIntro,
 } from './shapes';
 import { cardSteps, rowsFrom } from './steps';
@@ -109,6 +113,14 @@ export function ResultCard({ block, actions }: { block: ToolBlock; actions: Card
   return <Envelope env={env} block={block} actions={actions} />;
 }
 
+/** A list of people, unless it is one person this turn already shows a full card for. */
+function KnownPeople({ env, actions }: { env: ResultEnvelope; actions: CardActions }) {
+  const shown = useContext(TurnPersonCardsContext);
+  const rows = readPeople(env.data);
+  if (rows.length === 1 && shown.has(rows[0]!.person.id)) return null;
+  return <KnownPeopleCard env={env} actions={actions} />;
+}
+
 function Envelope({ env, block, actions }: { env: ResultEnvelope; block: ToolBlock; actions: CardActions }) {
   const d = env.data;
   switch (env.kind) {
@@ -119,7 +131,7 @@ function Envelope({ env, block, actions }: { env: ResultEnvelope; block: ToolBlo
       return r ? <PersonCard env={env} r={r} actions={actions} /> : <Summary env={env} />;
     }
     case 'people':
-      return readPeople(d).length ? <KnownPeopleCard env={env} actions={actions} /> : <Summary env={env} />;
+      return readPeople(d).length ? <KnownPeople env={env} actions={actions} /> : <Summary env={env} />;
     case 'people_table':
       return readTable(d) ? <PeopleTableCard env={env} send={actions.send} /> : <Summary env={env} />;
     case 'choices':
@@ -432,21 +444,35 @@ function DraftHead({
       firstKind ? (await conversationWith(draft.userId, draft.personId)).some((m) => !m.out) : false,
     [firstKind, draft.userId, draft.personId],
   );
+  const profile = `/people/${draft.personId}`;
   return (
     <CardHead
-      lead={name ? <Avatar name={name} src={person?.photoUrl} id={draft.personId} size={24} /> : undefined}
-      title={name ? `To ${name}` : 'Draft'}
-      chip={
-        <>
-          <Chip tone="accent">{talked ? MESSAGE_KIND_LABELS.reengage : MESSAGE_KIND_LABELS[draft.kind]}</Chip>
-          <span className="hidden sm:inline text-[12.5px] text-ink-3 shrink-0">
-            {CHANNEL_LABELS[draft.channel]}
-          </span>
-        </>
+      lead={
+        name ? (
+          <Link to={profile} tabIndex={-1} aria-hidden className="shrink-0">
+            <Avatar name={name} src={person?.photoUrl} id={draft.personId} size={32} />
+          </Link>
+        ) : undefined
       }
-      href={href ?? `/people/${draft.personId}`}
+      title={
+        name ? (
+          <>
+            <span className="font-normal text-ink-3">To </span>
+            <Link to={profile} className="hover:underline underline-offset-2" data-testid="draft-to">
+              {name}
+            </Link>
+          </>
+        ) : (
+          'Draft'
+        )
+      }
+      sub={[
+        talked ? MESSAGE_KIND_LABELS.reengage : MESSAGE_KIND_LABELS[draft.kind],
+        CHANNEL_LABELS[draft.channel],
+      ].join(' · ')}
+      href={href}
       aside={aside}
-      className="mb-2"
+      className="mb-3"
     />
   );
 }
@@ -466,7 +492,6 @@ function DraftCard({ block, env, actions }: { block: ToolBlock; env: ResultEnvel
     return <Outcome env={block.outcome} block={block} actions={actions} />;
   if (!draft) return <Summary env={env} />;
   const name = r.person?.displayName ?? person?.displayName ?? r.personName;
-  const href = `/people/${draft.personId}`;
   // a later card in the thread holds this draft's editor: this one folds to its header
   const owner = owners.get(draft.id);
   if (owner && owner !== block.toolUseId)
@@ -483,13 +508,13 @@ function DraftCard({ block, env, actions }: { block: ToolBlock; env: ResultEnvel
   if (!OPEN_DRAFT.has(draft.status))
     return (
       <GlassCard kind="draft">
-        <DraftHead draft={draft} name={name} person={person} href={href} />
+        <DraftHead draft={draft} name={name} person={person} />
         <OutboxStatus draft={draft} compact />
       </GlassCard>
     );
   return (
     <GlassCard kind="draft">
-      <DraftHead draft={draft} name={name} person={person} href={href} />
+      <DraftHead draft={draft} name={name} person={person} />
       <DraftEditor
         draft={draft}
         busy={busy}
@@ -618,13 +643,14 @@ function RoutesCard({ env, actions }: { env: ResultEnvelope; actions: CardAction
   return (
     <GlassCard kind="routes">
       <CardHead
-        lead={to ? <Avatar name={to.displayName} src={to.photoUrl} id={to.id} size={24} /> : undefined}
+        lead={to ? <Avatar name={to.displayName} src={to.photoUrl} id={to.id} size={32} /> : undefined}
         title={to ? `Routes to ${to.displayName}` : firstSentence(env.summary)}
-        href={env.href}
+        href={to ? `/map?reach=${encodeURIComponent(to.id)}` : env.href}
+        hrefText={to ? 'Show on map' : undefined}
       />
       {routes.length > 0 && (
         <>
-          <ol className="space-y-1.5 mt-1">
+          <ol className="divide-y divide-line-2 mt-1">
             {routeFold.shown.map(({ r, w }, i) => (
               <RouteRow key={i} r={r} warm={w} />
             ))}
@@ -655,7 +681,7 @@ function RouteRow({ r, warm }: { r: RouteView; warm?: WarmIntro }) {
   const why = [warm?.note, ...r.text].filter(Boolean).join('. ');
   const reasons = useShowReasoning();
   return (
-    <li className="flex items-start gap-2.5 min-w-0" data-testid={warm ? 'warm-intro' : 'route'}>
+    <li className="flex items-start gap-3 min-w-0 py-2" data-testid={warm ? 'warm-intro' : 'route'}>
       <RouteMeter score={r.score} />
       <div className="min-w-0 flex-1">
         <div className="flex items-center gap-1.5 min-w-0">
@@ -766,25 +792,74 @@ function HopName({ hop }: { hop: { id?: string; name: string; linkedinUrl?: stri
 }
 
 /** One warm intro path from Village: who introduces, how warm in a word, and the hops. */
-function WarmIntroRow({ w }: { w: WarmIntro }) {
+/** "You → Grace Lopez → Jordan Moreno → Bain": each hop a small face (the company its logo), joined by arrows. */
+function HopPath({ hops }: { hops: string[] }) {
+  if (hops.length < 2) return null;
   return (
-    <li className="min-w-0" data-testid="warm-intro">
-      <div className="flex items-center gap-1.5 min-w-0">
-        {w.introducerId ? (
-          <Link to={`/people/${w.introducerId}`} className="font-medium hover:underline truncate">
-            {w.introducer}
-          </Link>
-        ) : (
-          <span className="font-medium truncate">{w.introducer}</span>
-        )}
-        <Chip tone={w.warmthWord === 'warm' ? 'good' : w.warmthWord === 'good' ? 'accent' : 'neutral'}>
-          {w.warmthWord}
-        </Chip>
-      </div>
-      <div className="text-[12.5px] text-ink-3 line-clamp-1">
-        {w.hops.length > 1 ? w.hops.join(' → ') : null}
-        {w.hops.length > 1 && w.note ? '. ' : ''}
-        {w.note}
+    <div
+      role="list"
+      aria-label="The path"
+      className="flex flex-wrap items-center gap-x-1.5 gap-y-1 text-[12.5px] text-ink-2"
+      data-testid="warm-intro-path"
+    >
+      {hops.map((h, i) => {
+        const last = i === hops.length - 1;
+        return (
+          <span role="listitem" key={`${h}:${i}`} className="inline-flex items-center gap-1.5 min-w-0">
+            {i > 0 && <ArrowRight size={12} className="text-ink-3 shrink-0" aria-hidden />}
+            {h === 'You' ? (
+              <span className="text-ink-3">You</span>
+            ) : (
+              <span className="inline-flex items-center gap-1 min-w-0">
+                {last ? <CompanyLogo name={h} size={16} decorative /> : <Avatar name={h} size={16} />}
+                <span className="truncate max-w-[160px]">{h}</span>
+              </span>
+            )}
+          </span>
+        );
+      })}
+    </div>
+  );
+}
+
+function WarmIntroRow({ w }: { w: WarmIntro }) {
+  const person = useLiveQuery(
+    async () => (w.introducerId ? await db.people.get(w.introducerId) : undefined),
+    [w.introducerId],
+  );
+  const map = w.introducerId ? `/map?reach=${encodeURIComponent(w.introducerId)}` : undefined;
+  const name = w.introducerId ? (
+    <Link to={`/people/${w.introducerId}`} className="font-medium hover:underline truncate">
+      {w.introducer}
+    </Link>
+  ) : (
+    <span className="font-medium truncate">{w.introducer}</span>
+  );
+  return (
+    <li className="flex items-start gap-3 min-w-0 py-2" data-testid="warm-intro">
+      {map ? (
+        <Link to={map} className="shrink-0" tabIndex={-1} aria-hidden>
+          <Avatar name={w.introducer} src={person?.photoUrl} id={w.introducerId} size={32} />
+        </Link>
+      ) : (
+        <Avatar name={w.introducer} size={32} />
+      )}
+      <div className="min-w-0 flex-1">
+        <div className="flex items-baseline gap-2 min-w-0">
+          {name}
+          <span
+            className={cx(
+              'text-[12px] shrink-0',
+              w.warmthWord === 'warm' ? 'text-good' : w.warmthWord === 'good' ? 'text-accent' : 'text-ink-3',
+            )}
+          >
+            {w.warmthWord}
+          </span>
+        </div>
+        <div className="mt-1">
+          <HopPath hops={w.hops} />
+        </div>
+        {w.note && <p className="mt-1 text-[12.5px] text-ink-3 leading-relaxed line-clamp-2">{w.note}</p>}
       </div>
     </li>
   );
@@ -799,11 +874,14 @@ function WarmIntros({
   divided,
   after = [],
   title = 'Warm intros',
+  mapHref,
 }: {
   intros: WarmIntro[];
   divided?: boolean;
   after?: { key: string; node: ReactNode }[];
   title?: string;
+  /** the map focused on where these ways in lead, opened beside the chat */
+  mapHref?: string;
 }) {
   const rows = [
     ...intros.map((w) => ({ key: `${w.introducer}:${w.hops.join('>')}`, node: <WarmIntroRow w={w} /> })),
@@ -812,9 +890,20 @@ function WarmIntros({
   const fold = useFold(rows, 3);
   if (!rows.length) return null;
   return (
-    <div className={cx(divided ? 'mt-2.5 pt-2 border-t border-line-2' : 'mt-1')} data-testid="warm-intros">
-      <div className="text-[11.5px] font-medium text-ink-3 mb-1">{title}</div>
-      <ul className="space-y-1.5">
+    <div className={cx(divided ? 'mt-4 pt-3 border-t border-line-2' : 'mt-2')} data-testid="warm-intros">
+      <div className="flex items-center gap-2 mb-1">
+        <div className="text-[11.5px] font-medium text-ink-3">{title}</div>
+        {mapHref && (
+          <Link
+            to={mapHref}
+            className="ml-auto inline-flex items-center gap-1 text-[12.5px] font-medium text-ink-2 hover:text-ink"
+            data-testid="warm-intros-map"
+          >
+            <MapIcon size={13} aria-hidden /> Show on map
+          </Link>
+        )}
+      </div>
+      <ul className="divide-y divide-line-2">
         {fold.shown.map((r) => (
           <Frag key={r.key}>{r.node}</Frag>
         ))}
@@ -905,7 +994,7 @@ function BriefCard({ env }: { env: ResultEnvelope }) {
           rest > 0 ? (
             <Link
               to="/inbox"
-              className="inline-flex items-center gap-0.5 h-7 px-2 -mr-1.5 rounded-full text-[12.5px] font-medium text-ink-3 hover:text-ink hover:bg-canvas-2 shrink-0"
+              className="inline-flex items-center gap-0.5 h-7 px-2 -mr-1.5 rounded-[6px] text-[12.5px] font-medium text-ink-3 hover:text-ink hover:bg-canvas-2 shrink-0"
               data-testid="brief-more"
             >
               {rest} more in Drafts
@@ -1081,6 +1170,11 @@ function CompanyCard({ env, actions }: { env: ResultEnvelope; actions: CardActio
   const { name, industry, people, former, saved, target, via } = readCompany(env.data);
   const warm = readWarmIntros(env.data);
   const fold = useFold(people);
+  // the rows as Orbit has them now: the LinkedIn headline and photo the tool's summary leaves out
+  const livePeople = useLiveQuery(async () => {
+    const rows = await db.people.bulkGet(people.map((p) => p.id));
+    return new Map(rows.filter((x): x is Person => !!x).map((x) => [x.id, x]));
+  }, [people.map((p) => p.id).join(',')]);
   if (!name) return <Summary env={env} />;
   // a route through someone the student knows and a warm intro along the same chain are one way in, said once: the
   // warm intro (it has the warmth and why) stays, and only the routes it does not cover are listed after it
@@ -1124,10 +1218,19 @@ function CompanyCard({ env, actions }: { env: ResultEnvelope; actions: CardActio
       />
       {people.length > 0 ? (
         <>
-          <div>
-            {fold.shown.map((p) => (
-              <PersonRow key={p.id} person={p} sub={p.currentTitle} dense />
-            ))}
+          <div className="divide-y divide-line-2">
+            {fold.shown.map((p) => {
+              const live = livePeople?.get(p.id);
+              const me = live ? { ...p, ...live } : p;
+              return (
+                <PersonRow
+                  key={p.id}
+                  person={me}
+                  sub={me.headline || me.currentTitle}
+                  href={`/map?reach=${encodeURIComponent(p.id)}`}
+                />
+              );
+            })}
           </div>
           {fold.more}
         </>
@@ -1146,7 +1249,7 @@ function CompanyCard({ env, actions }: { env: ResultEnvelope; actions: CardActio
         </div>
       )}
       {former.length > 0 && (
-        <p className="mt-1.5 text-[12.5px] text-ink-3 line-clamp-2">
+        <p className="mt-3 text-[12.5px] text-ink-3 leading-relaxed line-clamp-2">
           Used to work there: {former.map((p) => p.displayName).join(', ')}
         </p>
       )}
@@ -1154,6 +1257,7 @@ function CompanyCard({ env, actions }: { env: ResultEnvelope; actions: CardActio
         intros={warm}
         after={viaRows}
         title={viaRows.length ? 'Warmer ways in' : 'Warm intros'}
+        mapHref={`/map?reach=1&company=${encodeURIComponent(name)}`}
         divided
       />
       <NextSteps steps={steps} send={actions.send} />
@@ -1274,6 +1378,17 @@ function ListCard({ env, block, actions }: { env: ResultEnvelope; block: ToolBlo
   const { title, items } = readList(env.data);
   const fold = useFold(items, 6);
   const picked = usePicked();
+  // the chats and the week have cards of their own
+  const chatRows = readChatsCard(env.data);
+  if (chatRows?.length)
+    return (
+      <ChatsCard rows={chatRows} href={env.href} steps={cardSteps(block.toolName, env)} send={actions.send} />
+    );
+  const week = readWeekCard(env.data);
+  if (week)
+    return (
+      <WeekCard week={week} href={env.href} steps={cardSteps(block.toolName, env)} send={actions.send} />
+    );
   if (!items.length) return <Summary env={env} />;
   // people found in a search: the people card's look, with the email and how sure it is
   if (isPeopleList(items))
@@ -1415,7 +1530,7 @@ function TextResult({ env, actions }: { env: ResultEnvelope; actions: CardAction
       </div>
       {quote && (
         <div className="mt-1.5">
-          <blockquote className="whitespace-pre-line rounded-[10px] bg-canvas-2 px-3 py-2 text-[13px]">
+          <blockquote className="whitespace-pre-line rounded-[6px] bg-canvas-2 px-3 py-2 text-[13px]">
             {quote}
           </blockquote>
           <Button

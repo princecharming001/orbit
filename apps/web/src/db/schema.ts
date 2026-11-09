@@ -28,6 +28,7 @@ import type {
   Resume,
   ResumeFacet,
   StageEvent,
+  StoredFile,
   Suggestion,
   TargetCompany,
   TargetPlan,
@@ -329,6 +330,7 @@ export class OrbitDB extends Dexie {
   goals!: EntityTable<RecruitingGoals, 'userId'>;
   targetCompanies!: EntityTable<TargetCompany, 'id'>;
   resumes!: EntityTable<Resume, 'id'>;
+  files!: EntityTable<StoredFile, 'id'>;
   resumeFacets!: EntityTable<ResumeFacet, 'id'>;
   organizations!: EntityTable<Organization, 'id'>;
   people!: EntityTable<Person, 'id'>;
@@ -535,6 +537,11 @@ export class OrbitDB extends Dexie {
     // plan 33: the LinkedIn profiles the server read for the student's people (About, jobs, the reading)
     this.version(15).stores({
       profileReads: 'personId, userId',
+    });
+    // files the student attaches to emails (their resume first), kept as blobs in this browser; outbound rows gain
+    // `attachments` (not indexed)
+    this.version(16).stores({
+      files: 'id, userId, kind, createdAt',
     });
   }
 }

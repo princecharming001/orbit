@@ -2136,7 +2136,6 @@ test.describe('Usability round 5: chats Orbit cannot see, and notes in shorthand
     await expect(body).toHaveValue(/your colleague Marcus Lee/);
     await expect(body).toHaveValue(/for McKinsey/);
     await expect(body).not.toHaveValue(/\bher colleague\b|\bMcK\b|reach out|advice to update you/);
-    await expect(card.getByTestId('draft-from-notes')).toContainText(/read it once as rachel will/i);
     await expect(card.getByTestId('draft-cancel')).toHaveText('Close');
   });
 });

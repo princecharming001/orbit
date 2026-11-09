@@ -90,6 +90,9 @@ export function toServerDraft(r: DraftRow): ServerDraft {
         ...(Array.isArray(r.needs) && r.needs.length && r.ask?.question ? [r.ask.question] : []),
       ]),
     ],
+    ...(Array.isArray(r.attachments) && r.attachments.length
+      ? { attachments: r.attachments as NonNullable<ServerDraft['attachments']> }
+      : {}),
     createdAt: iso(r.created_at)!,
     updatedAt: iso(r.updated_at)!,
   };

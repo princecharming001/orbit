@@ -20037,6 +20037,32 @@ async function checkBuiltAddress(s, userId, person) {
   return v === "invalid" ? "invalid" : "ok";
 }
 
+// supabase/functions/_shared/sending/files.ts
+var MAX_FILE_BYTES = 4 * 1024 * 1024;
+var MAX_DRAFT_FILE_BYTES = 5 * 1024 * 1024;
+function decodeBase64(b64) {
+  const bin = atob(b64.replace(/\s+/g, ""));
+  const out = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+  return out;
+}
+async function draftFiles(db2, userId, attachments) {
+  const list2 = Array.isArray(attachments) ? attachments : [];
+  if (!list2.length) return [];
+  const ids = list2.map((a) => a.id).filter((x) => typeof x === "string");
+  const rows = await db2.sql`
+    select id, name, mime_type, encode(bytes, 'base64') as b64 from orbit.user_files
+     where user_id = ${userId}::uuid and id = any(${ids}::uuid[])`;
+  const byId = new Map(rows.map((r) => [r.id, r]));
+  const out = [];
+  for (const a of list2) {
+    const r = byId.get(a.id);
+    if (!r) return void 0;
+    out.push({ name: r.name, mimeType: r.mime_type, bytes: decodeBase64(r.b64) });
+  }
+  return out;
+}
+
 // supabase/functions/_shared/sending/mime.ts
 var ascii = (s) => /^[\x20-\x7e]*$/.test(s);
 function headerValue(s) {
@@ -20060,6 +20086,17 @@ function b64Lines(bytes) {
   for (const b of bytes) bin += String.fromCharCode(b);
   return (btoa(bin).match(/.{1,76}/g) ?? []).join("\r\n");
 }
+function fileParam(name) {
+  const n = name.replace(/[\r\n]+/g, " ").trim() || "file";
+  if (ascii(n)) return `filename="${n.replace(/(["\\])/g, "\\$1")}"`;
+  const enc2 = [...new TextEncoder().encode(n)].map(
+    (b) => /[A-Za-z0-9!#$&+.^_`|~-]/.test(String.fromCharCode(b)) ? String.fromCharCode(b) : `%${b.toString(16).toUpperCase().padStart(2, "0")}`
+  ).join("");
+  return `filename*=UTF-8''${enc2}`;
+}
+function safeType(t) {
+  return /^[\w.+-]+\/[\w.+-]+$/.test(t) ? t : "application/octet-stream";
+}
 function buildMime(m) {
   const lines = [
     `From: ${address(m.from, m.fromName)}`,
@@ -20068,30 +20105,50 @@ function buildMime(m) {
     `Subject: ${headerValue(m.subject)}`,
     `Date: ${(m.date ?? /* @__PURE__ */ new Date()).toUTCString()}`,
     "MIME-Version: 1.0",
-    'Content-Type: text/plain; charset="UTF-8"',
-    "Content-Transfer-Encoding: base64",
     `X-Orbit-Draft-Id: ${m.draftId}`
   ];
   const irt = msgIds(m.inReplyTo);
   if (irt) lines.push(`In-Reply-To: ${irt}`);
   const refs = msgIds(m.references ?? m.inReplyTo);
   if (refs) lines.push(`References: ${refs}`);
-  const body = m.body.replace(/\r?\n/g, "\r\n");
+  const body = b64Lines(new TextEncoder().encode(m.body.replace(/\r?\n/g, "\r\n")));
+  const files = m.attachments ?? [];
+  if (!files.length) {
+    lines.push('Content-Type: text/plain; charset="UTF-8"', "Content-Transfer-Encoding: base64");
+    return `${lines.join("\r\n")}\r
+\r
+${body}\r
+`;
+  }
+  const boundary = `orbit-${m.draftId.replace(/[^\w-]/g, "")}-${files.length}`;
+  lines.push(`Content-Type: multipart/mixed; boundary="${boundary}"`);
+  const parts = [
+    ['Content-Type: text/plain; charset="UTF-8"', "Content-Transfer-Encoding: base64", "", body].join("\r\n"),
+    ...files.map(
+      (f) => [
+        `Content-Type: ${safeType(f.mimeType)}`,
+        `Content-Disposition: attachment; ${fileParam(f.name)}`,
+        "Content-Transfer-Encoding: base64",
+        "",
+        b64Lines(f.bytes)
+      ].join("\r\n")
+    )
+  ];
   return `${lines.join("\r\n")}\r
 \r
-${b64Lines(new TextEncoder().encode(body))}\r
+${parts.map((p) => `--${boundary}\r
+${p}\r
+`).join("")}--${boundary}--\r
 `;
-}
-function rawMessage(m) {
-  return base64url(new TextEncoder().encode(buildMime(m)));
 }
 
 // supabase/functions/_shared/sending/transport.ts
 var GMAIL_SEND_URL = "https://gmail.googleapis.com/gmail/v1/users/me/messages/send";
+var GMAIL_UPLOAD_URL = "https://gmail.googleapis.com/upload/gmail/v1/users/me/messages/send?uploadType=multipart";
 var GMAIL_THREAD_URL = "https://gmail.googleapis.com/gmail/v1/users/me/threads";
 var GMAIL_MESSAGES_URL = "https://gmail.googleapis.com/gmail/v1/users/me/messages";
 var SEND_TIMEOUT_MS = 25e3;
-async function gmailSend(s, userId, raw, threadId) {
+async function gmailSend(s, userId, raw, threadId, mime) {
   if (!s.tokens) return { ok: false, retry: false, error: "google_unconfigured" };
   for (let attempt = 0; attempt < 2; attempt++) {
     let token;
@@ -20103,7 +20160,27 @@ async function gmailSend(s, userId, raw, threadId) {
     }
     let res;
     try {
-      res = await s.fetch(GMAIL_SEND_URL, {
+      const boundary = "orbit-upload-boundary";
+      res = mime ? await s.fetch(GMAIL_UPLOAD_URL, {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${token}`,
+          "content-type": `multipart/related; boundary=${boundary}`
+        },
+        body: [
+          `--${boundary}`,
+          "Content-Type: application/json; charset=UTF-8",
+          "",
+          JSON.stringify(threadId ? { threadId } : {}),
+          `--${boundary}`,
+          "Content-Type: message/rfc822",
+          "",
+          mime,
+          `--${boundary}--`,
+          ""
+        ].join("\r\n"),
+        signal: AbortSignal.timeout(SEND_TIMEOUT_MS * 2)
+      }) : await s.fetch(GMAIL_SEND_URL, {
         method: "POST",
         headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
         body: JSON.stringify(threadId ? { raw, threadId } : { raw }),
@@ -20538,7 +20615,13 @@ ${d.body}`)) {
     const subject = d.subject ?? await threadSubject(db2, userId, d.thread_external_id) ?? "";
     const refs = d.in_reply_to ?? await lastMessageId(db2, userId, d.thread_external_id);
     const forward = d.kind === "forward_intro" ? d.via : null;
-    const raw = rawMessage({
+    const files = await draftFiles(db2, userId, d.attachments);
+    if (!files) {
+      await settle("failed", { error: "attachment_missing" });
+      await audit(db2, userId, "system", "draft.failed", d.id, { error: "attachment_missing" });
+      return { status: "failed", error: "attachment_missing" };
+    }
+    const mime = buildMime({
       from: u2.email,
       fromName: u2.full_name ?? void 0,
       to: person.primary_email,
@@ -20549,9 +20632,16 @@ ${d.body}`)) {
       inReplyTo: refs,
       references: refs,
       draftId: d.id,
-      date: now
+      date: now,
+      attachments: files
     });
-    out = copy ? { ok: true, providerMessageId: copy.id, threadId: copy.threadId } : await gmailSend(s, userId, raw, d.thread_external_id);
+    out = copy ? { ok: true, providerMessageId: copy.id, threadId: copy.threadId } : await gmailSend(
+      s,
+      userId,
+      base64url(new TextEncoder().encode(mime)),
+      d.thread_external_id,
+      files.length ? mime : void 0
+    );
   } else {
     const [acct] = await db2.sql`
       select external_account_id from orbit.integration_accounts

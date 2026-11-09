@@ -27,6 +27,24 @@ export function setConnectorsMockForTests(on: boolean | undefined): void {
   toggle = on;
 }
 
+/**
+ * Whether the demo's email sends through Orbit (as an account with Gmail's send permission does) rather than opening
+ * the mail app. On in the demo; the unit tests and the browser tests keep the mail-app hand-off they were written
+ * around (a window flag the e2e helper sets), and turn this on where they test the demo's own send.
+ */
+export const demoSend = {
+  direct: import.meta.env.MODE !== 'test',
+};
+export function demoSendsFromOrbit(userId: string | undefined): boolean {
+  if (!usesMockConnectors(userId)) return false;
+  if (
+    typeof window !== 'undefined' &&
+    (window as { __ORBIT_DEMO_HANDOFF__?: boolean }).__ORBIT_DEMO_HANDOFF__
+  )
+    return false;
+  return demoSend.direct;
+}
+
 export function usesMockConnectors(userId: string | undefined): boolean {
   if (toggle !== undefined) return toggle;
   return userId === DEMO_USER_ID || automationOverride() === 'mock';
@@ -708,4 +726,167 @@ export async function mockLinkedInCompany(identifier: string): Promise<LinkedInC
   );
   if (!org) return undefined;
   return { id: `mock_company_${slug}`, name: org.name, publicIdentifier: slug, logoUrl: mockLogo(slug) };
+}
+
+// ---------- sourcing (plan 36): new people for find_people on the sample student ----------
+
+/** A made-up person the mock sourcing finds: never someone the student knows, at a made-up firm. */
+export interface MockSourced {
+  found: LinkedInFound;
+  title: string;
+  org: string;
+  location: string;
+  why: string;
+  evidence: string[];
+  tier: 4 | 5;
+}
+
+/** Made-up firms by field, so no invented person is placed at a real company. */
+const MOCK_FIRMS: Record<string, { investors: string[]; companies: string[] }> = {
+  climate: {
+    investors: [
+      'Fernway Climate Ventures',
+      'Lowtide Capital',
+      'Gridline Ventures',
+      'Northlight Climate Fund',
+      'Cinderbrook Capital',
+      'Kelpwater Ventures',
+      'Tern Street Partners',
+      'Saltmarsh Seed',
+      'Heliotrope Ventures',
+      'Bluestem Climate Capital',
+    ],
+    companies: ['Voltaic Grid', 'Carbonfold', 'Sunmesh Energy', 'Tidewell Batteries', 'Greenrail Labs'],
+  },
+  fintech: {
+    investors: ['Ledgerline Ventures', 'Copperleaf Capital', 'Mintwood Partners', 'Tallyhouse Seed'],
+    companies: ['Clearpay Labs', 'Brightledger', 'Fundloop', 'Vaultline'],
+  },
+  ai: {
+    investors: ['Latent Ventures', 'Gradient Hill Capital', 'Tensorfield Partners', 'Quill Seed Fund'],
+    companies: ['Parallax AI', 'Inferwise', 'Contextual Labs', 'Promptworks'],
+  },
+  health: {
+    investors: ['Pulsewood Ventures', 'Carefield Capital', 'Meridian Health Seed', 'Willowbend Partners'],
+    companies: ['Clinica Labs', 'Vitalpath', 'Careloop', 'Bedside AI'],
+  },
+  any: {
+    investors: ['Harbor Lane Ventures', 'Foxglove Capital', 'Redwing Seed', 'Elmstead Partners'],
+    companies: ['Brightpath Labs', 'Northwind Systems', 'Kitewing', 'Lumen Works'],
+  },
+};
+
+const FIELD_OF: [RegExp, string, string][] = [
+  [
+    /\b(climate|clean ?energy|solar|carbon|sustainab|renewable|battery|batteries|ev|grid|energy)\b/i,
+    'climate',
+    'climate',
+  ],
+  [/\b(fintech|payments?|banking|lending|insurtech)\b/i, 'fintech', 'fintech'],
+  [/\b(ai|machine learning|ml|llm|agents?)\b/i, 'ai', 'AI'],
+  [/\b(health|healthcare|medical|biotech|bio)\b/i, 'health', 'health'],
+];
+
+const INVESTOR_ASK = /\b(investors?|vcs?|venture|angels?|funds?|seed|pre-?seed|series [a-c])\b/i;
+const PROFESSOR_ASK = /\b(professors?|faculty|labs?|researchers?|phd|postdoc)\b/i;
+const STAGE_OF = (s: string) =>
+  /\bpre-?seed\b/i.test(s)
+    ? 'pre-seed'
+    : /\bseed\b/i.test(s)
+      ? 'seed'
+      : /\bseries a\b/i.test(s)
+        ? 'Series A'
+        : undefined;
+
+/** An ask the mock LinkedIn pool (engineers and PMs at the demo's firms) cannot answer: investors, faculty or a field. */
+export function mockSourcingFits(q: { purpose: string; query?: string; topic?: string }): boolean {
+  const ask = [q.query, q.topic].filter(Boolean).join(' ');
+  return (
+    q.purpose === 'fundraising' ||
+    q.purpose === 'collaboration' ||
+    INVESTOR_ASK.test(ask) ||
+    PROFESSOR_ASK.test(ask) ||
+    FIELD_OF.some(([re, key]) => key !== 'ai' && re.test(ask))
+  );
+}
+
+/**
+ * New people for a sourcing ask on the sample student: believable made-up candidates shaped like what the server's
+ * sourcing returns (title, firm, why they fit, a warmth tier), at made-up firms. Seeded by the ask, so the same ask
+ * finds the same people.
+ */
+export function mockSourcedPeople(
+  q: { purpose: string; query?: string; organization?: string; school?: string; topic?: string },
+  limit = 10,
+): MockSourced[] {
+  const ask = [q.query, q.topic, q.organization, q.school].filter(Boolean).join(' ');
+  let h = 11;
+  for (const ch of ask.toLowerCase()) h = (h * 31 + ch.charCodeAt(0)) >>> 0;
+  const rand = seeded(h);
+  const field = FIELD_OF.find(([re]) => re.test(ask));
+  const firms = MOCK_FIRMS[field?.[1] ?? 'any']!;
+  const fieldWord = q.topic?.trim() || field?.[2] || '';
+  const investor = q.purpose === 'fundraising' || INVESTOR_ASK.test(ask);
+  const professor = !investor && (q.purpose === 'collaboration' || PROFESSOR_ASK.test(ask));
+  const stage = STAGE_OF(ask);
+  const software = /\bsoftware\b/i.test(ask);
+  const out: MockSourced[] = [];
+  const names = new Set<string>();
+  for (let i = 0; out.length < Math.min(limit, 20) && i < 400; i++) {
+    const first = FIRSTS[Math.floor(rand() * FIRSTS.length)]!;
+    const last = LASTS[Math.floor(rand() * LASTS.length)]!;
+    if (names.has(`${first} ${last}`)) continue;
+    names.add(`${first} ${last}`);
+    const n = out.length;
+    let title: string;
+    let org: string;
+    let why: string;
+    let evidence: string[];
+    if (investor) {
+      title = ['Partner', 'Principal', 'General Partner', 'Associate', 'Venture Partner'][n % 5]!;
+      org = firms.investors[n % firms.investors.length]!;
+      const what = [stage, fieldWord, software ? 'software' : ''].filter(Boolean).join(' ');
+      why = `Invests in ${what || 'early-stage'} companies at ${org}`;
+      evidence = [
+        `Leads ${stage ?? 'early'} rounds${fieldWord ? ` in ${fieldWord}` : ''}${software ? ' software' : ''}`,
+        `Writes first checks of $250k to $2M`,
+      ];
+    } else if (professor) {
+      title = ['Assistant Professor', 'Associate Professor', 'Professor', 'Postdoctoral Researcher'][n % 4]!;
+      org = q.school?.trim() || q.organization?.trim() || 'a research university';
+      why = `${fieldWord ? `Researches ${fieldWord}` : 'Runs a lab'} at ${org}`;
+      evidence = [
+        `Lists ${fieldWord || 'their research'} on the department page`,
+        'Takes undergraduate researchers',
+      ];
+    } else {
+      title = ['Software Engineer', 'Product Manager', 'Head of Operations', 'Founder', 'Data Scientist'][
+        n % 5
+      ]!;
+      org = q.organization?.trim() || firms.companies[n % firms.companies.length]!;
+      why = `${title} at ${org}${fieldWord ? `, working in ${fieldWord}` : ''}`;
+      evidence = [`Works on ${fieldWord || 'the product'} at ${org}`];
+    }
+    const location = PLACES[Math.floor(rand() * PLACES.length)]!;
+    const tier: MockSourced['tier'] = rand() < 0.35 ? 4 : 5;
+    const slug = `${first}-${last}`.toLowerCase();
+    out.push({
+      found: {
+        memberId: `demo-source-${slug}`,
+        name: `${first} ${last}`,
+        headline: `${title} at ${org}`,
+        location,
+        distance: 3,
+        pictureUrl: mockPhoto(slug),
+      },
+      title,
+      org,
+      location,
+      why: tier === 4 ? `${why}. Says they make time for students` : why,
+      evidence,
+      tier,
+    });
+  }
+  // open to students first, as the server's tiers rank
+  return out.sort((a, b) => a.tier - b.tier);
 }

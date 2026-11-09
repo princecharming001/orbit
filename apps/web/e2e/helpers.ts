@@ -9,6 +9,8 @@ export async function prep(page: Page, opts: { clock?: boolean } = {}) {
   await page.addInitScript(() => {
     // headless Chromium closes pages on mailto: popups; the app only uses window.open for hand-offs
     window.open = () => null;
+    // these tests were written around the demo's mail-app hand-off; the demo itself sends through Orbit
+    (window as unknown as { __ORBIT_DEMO_HANDOFF__?: boolean }).__ORBIT_DEMO_HANDOFF__ = true;
   });
   page.on('pageerror', (e) => console.log('PAGEERROR', e.message));
   page.on('console', (m) => {

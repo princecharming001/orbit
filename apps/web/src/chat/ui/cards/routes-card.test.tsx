@@ -134,8 +134,13 @@ describe('the routes card shows warm intros', () => {
       },
       summary: 'Stripe: 1 person there now. One warm intro too, the best through Maya Chen (good).',
     });
-    expect($('[data-testid="result-company"] [data-testid="warm-intro"]')?.textContent).toContain(
-      'You → Maya Chen → Priya Ahmed → Stripe',
+    // the path is drawn hop by hop (faces and arrows), each hop named in order
+    const hops = [
+      ...document.querySelectorAll('[data-testid="result-company"] [data-testid="warm-intro-path"] > [role="listitem"]'),
+    ].map((li) => (li.querySelector('.truncate') ?? li).textContent);
+    expect(hops).toEqual(['You', 'Maya Chen', 'Priya Ahmed', 'Stripe']);
+    expect($('[data-testid="result-company"] [data-testid="warm-intros-map"]')?.getAttribute('href')).toMatch(
+      /\/map\?reach=1&company=Stripe/,
     );
   });
 });

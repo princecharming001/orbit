@@ -336,7 +336,7 @@ function LinkedinWidget({ user, initial }: { user: User; initial?: SetupStatus }
   const dropzone = (
     <label
       className={cx(
-        'mt-3 flex flex-col items-center justify-center gap-1 rounded-[14px] border border-dashed px-4 py-5 text-center cursor-pointer transition-colors focus-within:ring-2 focus-within:ring-accent/40',
+        'mt-3 flex flex-col items-center justify-center gap-1 rounded-[6px] border border-dashed px-4 py-5 text-center cursor-pointer transition-colors focus-within:ring-2 focus-within:ring-accent/40',
         over ? 'border-accent bg-accent-soft' : 'border-line hover:bg-canvas-2/60',
         busy && 'opacity-60 pointer-events-none',
       )}
@@ -622,7 +622,7 @@ function ResumeWidget({ user, initial }: { user: User; initial?: SetupStatus }) 
           {status.addedAt ? `, added ${relDate(status.addedAt)}` : ''}.
         </p>
       )}
-      <label className="mt-3 inline-flex rounded-full focus-within:ring-2 focus-within:ring-accent/40">
+      <label className="mt-3 inline-flex rounded-[6px] focus-within:ring-2 focus-within:ring-accent/40">
         <input
           type="file"
           accept=".pdf,.txt,.md,.docx"
@@ -638,7 +638,7 @@ function ResumeWidget({ user, initial }: { user: User; initial?: SetupStatus }) 
         />
         <span
           className={cx(
-            'inline-flex items-center justify-center gap-1.5 rounded-full font-medium h-9 px-4 text-[14px] bg-accent text-white hover:bg-accent-2 cursor-pointer',
+            'inline-flex items-center justify-center gap-1.5 rounded-[6px] font-medium h-9 px-4 text-[14px] bg-accent text-white hover:bg-accent-2 cursor-pointer',
             busy && 'opacity-60 pointer-events-none',
           )}
         >

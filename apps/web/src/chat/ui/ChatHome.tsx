@@ -95,7 +95,7 @@ export function ChatHome() {
     <button
       type="button"
       className={cx(
-        'glass glass-hover h-10 rounded-full inline-flex items-center justify-center gap-2 text-[13.5px] font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40',
+        'glass glass-hover h-10 rounded-[6px] inline-flex items-center justify-center gap-2 text-[13.5px] font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40',
         compact ? 'w-10 sm:w-auto sm:px-3.5' : 'px-3.5',
         // on, it is filled so the mode is plain at a glance
         thread.temporary ? 'bg-ink! border-ink! text-white hover:bg-ink-2!' : 'text-ink-2',
@@ -248,7 +248,7 @@ export function ChatHome() {
               <button
                 type="button"
                 onClick={jump}
-                className="glass glass-hover h-9 px-3 rounded-full inline-flex items-center gap-1.5 text-[13px] font-medium text-ink-2 fade-up focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
+                className="glass glass-hover h-9 px-3 rounded-[6px] inline-flex items-center gap-1.5 text-[13px] font-medium text-ink-2 fade-up focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
                 data-testid="jump-latest"
               >
                 <ArrowDown size={14} aria-hidden /> Latest

@@ -522,6 +522,27 @@ export interface MimeOptions {
   /** full References chain of the message being answered (its References plus its Message-ID) */
   references?: string;
   orbitId: string;
+  /** files sent with it (a resume): the message becomes multipart/mixed, the text first */
+  attachments?: { name: string; mimeType: string; bytes: Uint8Array }[];
+}
+
+function bytesB64(bytes: Uint8Array): string {
+  let bin = '';
+  for (let i = 0; i < bytes.length; i += 0x8000) bin += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+  return btoa(bin);
+}
+
+/** A file name for Content-Disposition: plain ASCII quoted, otherwise RFC 2231 UTF-8. */
+function fileNameParam(name: string): string {
+  const n = sanitizeHeaderValue(name) || 'file';
+  if (isPrintableAscii(n)) return `filename="${n.replace(/(["\\])/g, '\\$1')}"`;
+  const enc = [...new TextEncoder().encode(n)]
+    .map((b) => {
+      const c = String.fromCharCode(b);
+      return /[A-Za-z0-9!#$&+.^_`|~-]/.test(c) ? c : `%${b.toString(16).toUpperCase().padStart(2, '0')}`;
+    })
+    .join('');
+  return `filename*=UTF-8''${enc}`;
 }
 
 /** Build an RFC 5322 message: encoded and folded headers, CR/LF neutralised, base64 UTF-8 body. */
@@ -534,8 +555,6 @@ export function buildMimeMessage(opts: MimeOptions): string {
     ...(opts.bcc ?? []).filter(Boolean).map((b) => addressHeader('Bcc', b)),
     unstructuredHeader('Subject', subject),
     'MIME-Version: 1.0',
-    'Content-Type: text/plain; charset="UTF-8"',
-    'Content-Transfer-Encoding: base64',
     `X-Orbit-Message-Id: ${sanitizeHeaderValue(opts.orbitId).replace(/[^\w.-]/g, '')}`,
   ];
   const inReplyTo = messageIdTokens(opts.inReplyTo)[0];
@@ -543,14 +562,57 @@ export function buildMimeMessage(opts: MimeOptions): string {
   const refs = messageIdTokens(opts.references, inReplyTo);
   if (refs.length) lines.push(foldHeader('References', refs));
   const body = opts.body.replace(/\r?\n/g, '\r\n');
-  const b64 = utf8Base64(body).replace(/.{76}(?=.)/g, '$&\r\n');
-  return `${lines.join('\r\n')}\r\n\r\n${b64}\r\n`;
+  const wrap = (b64: string) => b64.replace(/.{76}(?=.)/g, '$&\r\n');
+  const text = wrap(utf8Base64(body));
+  const files = opts.attachments ?? [];
+  if (!files.length) {
+    lines.push('Content-Type: text/plain; charset="UTF-8"', 'Content-Transfer-Encoding: base64');
+    return `${lines.join('\r\n')}\r\n\r\n${text}\r\n`;
+  }
+  const boundary = `orbit-${sanitizeHeaderValue(opts.orbitId).replace(/[^\w-]/g, '')}-${files.length}`;
+  lines.push(`Content-Type: multipart/mixed; boundary="${boundary}"`);
+  const parts = [
+    ['Content-Type: text/plain; charset="UTF-8"', 'Content-Transfer-Encoding: base64', '', text].join('\r\n'),
+    ...files.map((f) =>
+      [
+        `Content-Type: ${/^[\w.+-]+\/[\w.+-]+$/.test(f.mimeType) ? f.mimeType : 'application/octet-stream'}`,
+        `Content-Disposition: attachment; ${fileNameParam(f.name)}`,
+        'Content-Transfer-Encoding: base64',
+        '',
+        wrap(bytesB64(f.bytes)),
+      ].join('\r\n'),
+    ),
+  ];
+  return `${lines.join('\r\n')}\r\n\r\n${parts.map((p) => `--${boundary}\r\n${p}\r\n`).join('')}--${boundary}--\r\n`;
 }
 
 export async function gmailSend(
   opts: MimeOptions & { threadId?: string },
 ): Promise<{ id: string; threadId: string }> {
   const raw = buildMimeMessage(opts);
+  // a message with files goes to the upload endpoint as itself, the thread in a JSON part, so a large one fits
+  if (opts.attachments?.length) {
+    const boundary = 'orbit-upload-boundary';
+    return gfetch<{ id: string; threadId: string }>(
+      'https://gmail.googleapis.com/upload/gmail/v1/users/me/messages/send?uploadType=multipart',
+      {
+        method: 'POST',
+        headers: { 'Content-Type': `multipart/related; boundary=${boundary}` },
+        body: [
+          `--${boundary}`,
+          'Content-Type: application/json; charset=UTF-8',
+          '',
+          JSON.stringify(opts.threadId ? { threadId: opts.threadId } : {}),
+          `--${boundary}`,
+          'Content-Type: message/rfc822',
+          '',
+          raw,
+          `--${boundary}--`,
+          '',
+        ].join('\r\n'),
+      },
+    );
+  }
   const b64 = utf8Base64(raw).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
   return gfetch<{ id: string; threadId: string }>(
     'https://gmail.googleapis.com/gmail/v1/users/me/messages/send',

@@ -56,6 +56,10 @@ function b64urlToUtf8(s: string): string {
 }
 
 /** Parse our MIME: unfold headers, decode RFC 2047 words, decode the base64 body. */
+function parseHeaders(raw: string): Record<string, string> {
+  return parseMime(`${raw.split('\r\n\r\n')[0]}\r\n\r\n`).headers;
+}
+
 function parseMime(raw: string): { headers: Record<string, string>; body: string } {
   const [head, b64] = raw.split('\r\n\r\n') as [string, string];
   const headers: Record<string, string> = {};
@@ -73,6 +77,23 @@ function parseMime(raw: string): { headers: Record<string, string>; body: string
 
 function fakeGmail() {
   return vi.fn(async (url: string, init: RequestInit = {}) => {
+    if (url.includes('/upload/gmail/v1/users/me/messages/send')) {
+      // a message with files: multipart/related, the thread in a JSON part and the message itself after it
+      const text = String(init.body);
+      const raw = text
+        .split('Content-Type: message/rfc822\r\n\r\n')[1]!
+        .replace(/\r\n--orbit-upload-boundary--\r\n$/, '');
+      const id = `gm-${sent.length + 1}`;
+      const meta = JSON.parse(text.split('\r\n\r\n')[1]!.split('\r\n')[0]!) as { threadId?: string };
+      sent.push({
+        raw,
+        headers: parseHeaders(raw),
+        body: '',
+        threadId: meta.threadId ?? `gth-${id}`,
+        id,
+      });
+      return Response.json({ id, threadId: meta.threadId ?? `gth-${id}` });
+    }
     if (url.endsWith('/messages/send')) {
       if (failSends > 0) {
         failSends--;
@@ -1199,5 +1220,52 @@ describe('Google permissions (IS-10)', () => {
     disconnectGoogle();
     await connectGoogleOAuth();
     expect(prompts.at(-1)).toBe('consent');
+  });
+});
+
+describe('files on emails', () => {
+  it('a resume attached to a draft goes with it, as a multipart message through the upload endpoint', async () => {
+    await connectGoogle(user);
+    const { d } = await pendingDraft(user, 'thank_you');
+    const { attachFile, keepFile } = await import('./files');
+    const resume = new File([new Uint8Array([37, 80, 68, 70, 45, 49])], 'Resume.pdf', {
+      type: 'application/pdf',
+    });
+    const kept = await keepFile(user.id, resume, 'resume');
+    expect(await attachFile(d.id, kept)).toBeUndefined();
+    const body = `${d.bodyDraft}\n\nMy resume is attached.`;
+    const r = await approveAndSend(user, d.id, body, undefined, new Date(), { undoWindowMs: 0 });
+    expect(r).toEqual({ ok: true, status: 'sent' });
+    expect(sent).toHaveLength(1);
+    expect(sent[0]!.headers['content-type']).toMatch(/^multipart\/mixed; boundary=/);
+    expect(sent[0]!.raw).toContain('Content-Disposition: attachment; filename="Resume.pdf"');
+    expect(sent[0]!.raw).toContain('Content-Type: application/pdf');
+    expect(sent[0]!.raw).toContain(btoa('%PDF-1'));
+  });
+
+  it('a file that is no longer in this browser stops the send with words instead of going without it', async () => {
+    await connectGoogle(user);
+    const { d } = await pendingDraft(user, 'thank_you');
+    await db.outbound.update(d.id, {
+      attachments: [{ id: 'gone', name: 'Resume.pdf', mimeType: 'application/pdf', size: 9 }],
+    });
+    const r = await approveAndSend(user, d.id, d.bodyDraft, undefined, new Date(), { undoWindowMs: 0 });
+    expect(r.ok).toBe(false);
+    expect(!r.ok && r.error).toMatch(/Resume.pdf is no longer in this browser/);
+    expect(sent).toHaveLength(0);
+  });
+
+  it('the demo sends through Orbit like an account, without opening the mail app', async () => {
+    const { demoSend } = await import('../integrations/connectorsMock');
+    demoSend.direct = true;
+    try {
+      const { d } = await pendingDraft(user, 'thank_you');
+      const r = await approveAndSend(user, d.id, d.bodyDraft, undefined, new Date(), { undoWindowMs: 0 });
+      expect(r).toEqual({ ok: true, status: 'sent' });
+      expect((await db.outbound.get(d.id))?.status).toBe('sent');
+      expect(sent).toHaveLength(0);
+    } finally {
+      demoSend.direct = false;
+    }
   });
 });

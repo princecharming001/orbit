@@ -26,7 +26,7 @@ import {
 } from '@orbit/core';
 import { addTouchpoint, audit, feedback, notify, recomputePersonStrength } from '../db/repo';
 import { db } from '../db/schema';
-import { usesMockConnectors } from '../integrations/connectorsMock';
+import { demoSendsFromOrbit, usesMockConnectors } from '../integrations/connectorsMock';
 import {
   canSendWith,
   currentGoogleToken,
@@ -39,6 +39,7 @@ import {
 import { callApi, isServerUser } from '../integrations/orbitApi';
 import { AUTOPILOT_GAP_MIN, nextSlotAfter } from './autopilotTime';
 import { evaluateImmediateSuggestions, findReferrerFor } from './brief';
+import { bytesToBase64, draftFileBytes } from './files';
 import { checkIntroNote } from './introNote';
 import { linkedInSendActive, sendLinkedInLive, serverLinkedInSendId } from './linkedinLive';
 import { scheduleChatAt, upcomingMeeting } from './move';
@@ -520,6 +521,18 @@ export async function googleSendActive(userId: string): Promise<boolean> {
 }
 
 /**
+ * Whether Send on an email sends it from Orbit (Gmail's send permission here or on the server, or the demo, which
+ * sends like an account does) instead of opening the mail app.
+ */
+export async function emailSendsFromOrbit(
+  user: Pick<User, 'id'>,
+  msg: Pick<OutboundMessage, 'id' | 'channel'>,
+): Promise<boolean> {
+  if (demoSendsFromOrbit(user.id) || (await googleSendActive(user.id))) return true;
+  return !!(await serverEmailId(user, msg).catch(() => undefined));
+}
+
+/**
  * Plan 29 §B2.1: for an account, the server is the sender (the worker, with the Gmail token in the Vault) whenever its
  * Google connection may send. The id the draft has there, or undefined when this message goes out from the browser.
  */
@@ -555,9 +568,17 @@ async function approveOnServer(
   const sync = await import('./serverSync');
   // a draft made in this browser goes up first
   await sync.flushQueue().catch(() => undefined);
+  // the files go up with the approval (a LinkedIn message carries none)
+  let attachments: { name: string; mimeType: string; data: string }[] | undefined;
+  if (!confirm && msg.attachments) {
+    const files = await draftFileBytes(msg);
+    if ('error' in files) return { ok: false, error: files.error };
+    attachments = files.map((f) => ({ name: f.name, mimeType: f.mimeType, data: bytesToBase64(f.bytes) }));
+  }
   const r = await callApi('/drafts/approve', {
     draftId: serverId,
     body,
+    ...(attachments ? { attachments } : {}),
     ...(subject !== undefined ? { subject } : {}),
     ...(sendAt ? { sendAt: sendAt.toISOString() } : { undoSec: Math.round(undoMs / 1000) }),
     ...(confirm ? { confirm: true } : {}),
@@ -742,7 +763,9 @@ export async function approveAndSend(
   const direct =
     !opts.via &&
     (msg.channel === 'gmail'
-      ? (await googleSendActive(user.id)) || (!!opts.scheduleAt && usesMockConnectors(user.id))
+      ? (await googleSendActive(user.id)) ||
+        demoSendsFromOrbit(user.id) ||
+        (!!opts.scheduleAt && usesMockConnectors(user.id))
       : msg.channel === 'linkedin' && !isServerUser(user.id) && (await linkedInSendActive(user, person)));
   // the note goes in the same text by email and in anything handed off; a LinkedIn message Orbit sends itself goes
   // alone, and the note waits as a second message for the student's tap (every LinkedIn send is a tap)
@@ -1256,8 +1279,13 @@ async function deliver(
   if (!msg.toEmail) return fail(`There is no email address for ${person.firstName}.`);
   const env = await envelopeFor(msg, msg.subject);
   if (!env.subject) return fail('This email has no subject.');
-  // the demo's autopilot: recorded as sent, like everything else in the demo; nothing leaves the browser
-  if (msg.autopilot && usesMockConnectors(user.id) && !(await googleSendActive(user.id))) {
+  // the demo sends like an account does, through Orbit (its autopilot too): recorded as sent, and nothing leaves
+  // the browser
+  if (
+    (msg.autopilot || demoSendsFromOrbit(user.id)) &&
+    usesMockConnectors(user.id) &&
+    !(await googleSendActive(user.id))
+  ) {
     await finalizeSent(
       user,
       { ...msg, subject: env.subject },
@@ -1269,9 +1297,12 @@ async function deliver(
     );
     return { ok: true };
   }
+  const files = await draftFileBytes(msg);
+  if ('error' in files) return fail(files.error);
   let r: { id: string; threadId: string };
   try {
     r = await gmailSend({
+      attachments: files,
       to: msg.toEmail,
       bcc: msg.bccEmails,
       subject: env.subject,

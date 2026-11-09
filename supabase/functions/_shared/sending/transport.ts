@@ -7,6 +7,8 @@ import { NeedsReauth } from '../google.ts';
 import type { Services } from '../services.ts';
 
 export const GMAIL_SEND_URL = 'https://gmail.googleapis.com/gmail/v1/users/me/messages/send';
+export const GMAIL_UPLOAD_URL =
+  'https://gmail.googleapis.com/upload/gmail/v1/users/me/messages/send?uploadType=multipart';
 export const GMAIL_THREAD_URL = 'https://gmail.googleapis.com/gmail/v1/users/me/threads';
 export const GMAIL_MESSAGES_URL = 'https://gmail.googleapis.com/gmail/v1/users/me/messages';
 
@@ -26,6 +28,11 @@ export async function gmailSend(
   userId: string,
   raw: string,
   threadId: string | null,
+  /**
+   * the whole message as text, for one with files: it goes to Gmail's upload endpoint (multipart/related, the thread
+   * in the JSON part) instead of as `raw` in JSON, which keeps large messages within the request limit
+   */
+  mime?: string,
 ): Promise<SendOutcome> {
   if (!s.tokens) return { ok: false, retry: false, error: 'google_unconfigured' };
   for (let attempt = 0; attempt < 2; attempt++) {
@@ -38,12 +45,34 @@ export async function gmailSend(
     }
     let res: Response;
     try {
-      res = await s.fetch(GMAIL_SEND_URL, {
-        method: 'POST',
-        headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
-        body: JSON.stringify(threadId ? { raw, threadId } : { raw }),
-        signal: AbortSignal.timeout(SEND_TIMEOUT_MS),
-      });
+      const boundary = 'orbit-upload-boundary';
+      res = mime
+        ? await s.fetch(GMAIL_UPLOAD_URL, {
+            method: 'POST',
+            headers: {
+              authorization: `Bearer ${token}`,
+              'content-type': `multipart/related; boundary=${boundary}`,
+            },
+            body: [
+              `--${boundary}`,
+              'Content-Type: application/json; charset=UTF-8',
+              '',
+              JSON.stringify(threadId ? { threadId } : {}),
+              `--${boundary}`,
+              'Content-Type: message/rfc822',
+              '',
+              mime,
+              `--${boundary}--`,
+              '',
+            ].join('\r\n'),
+            signal: AbortSignal.timeout(SEND_TIMEOUT_MS * 2),
+          })
+        : await s.fetch(GMAIL_SEND_URL, {
+            method: 'POST',
+            headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+            body: JSON.stringify(threadId ? { raw, threadId } : { raw }),
+            signal: AbortSignal.timeout(SEND_TIMEOUT_MS),
+          });
     } catch {
       return { ok: false, retry: true, error: 'network', ambiguous: true };
     }

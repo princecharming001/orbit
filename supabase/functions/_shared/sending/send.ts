@@ -30,6 +30,7 @@ import { historyWith } from '../compose/compose.ts';
 import { type DraftMeta, type DraftRow, draftById, loadDraft, toServerDraft } from '../compose/drafts.ts';
 import { askUserMarkers } from '../compose/prompts.ts';
 import { nextSendWindow } from '../compose/window.ts';
+import { base64url } from '../crypto.ts';
 import type { Db } from '../db.ts';
 import { HttpError } from '../http.ts';
 import { breakerHolds, goalPaused, tripBreaker } from '../replies/breaker.ts';
@@ -39,7 +40,8 @@ import { moveChat } from '../slots/slots.ts';
 import { checkBuiltAddress } from '../sourcing/ondemand.ts';
 import { recordDraftEdit, voiceGate } from '../voice/voice.ts';
 import { validZone, zonedTime } from '../zones.ts';
-import { rawMessage } from './mime.ts';
+import { draftFiles } from './files.ts';
+import { buildMime } from './mime.ts';
 import {
   gmailSend,
   gmailSentCopy,
@@ -579,7 +581,14 @@ export async function sendDraft(s: Services, draftId: string): Promise<SendResul
     // a friend's intro passed on (plan 29 §A4) carries the friend in cc, so the reply reaches them without the
     // contact's address ever crossing to them
     const forward = d.kind === 'forward_intro' ? (d.via as { cc?: string; ccName?: string } | null) : null;
-    const raw = rawMessage({
+    // the files attached to it (a resume); one that is gone stops the send rather than going without it
+    const files = await draftFiles(db, userId, d.attachments);
+    if (!files) {
+      await settle('failed', { error: 'attachment_missing' });
+      await audit(db, userId, 'system', 'draft.failed', d.id, { error: 'attachment_missing' });
+      return { status: 'failed', error: 'attachment_missing' };
+    }
+    const mime = buildMime({
       from: u.email,
       fromName: u.full_name ?? undefined,
       to: person.primary_email,
@@ -591,10 +600,17 @@ export async function sendDraft(s: Services, draftId: string): Promise<SendResul
       references: refs,
       draftId: d.id,
       date: now,
+      attachments: files,
     });
     out = copy
       ? { ok: true, providerMessageId: copy.id, threadId: copy.threadId }
-      : await gmailSend(s, userId, raw, d.thread_external_id);
+      : await gmailSend(
+          s,
+          userId,
+          base64url(new TextEncoder().encode(mime)),
+          d.thread_external_id,
+          files.length ? mime : undefined,
+        );
   } else {
     const [acct] = await db.sql<{ external_account_id: string | null }>`
       select external_account_id from orbit.integration_accounts

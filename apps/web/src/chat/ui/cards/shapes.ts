@@ -776,3 +776,92 @@ export function readSetup(d: unknown): { what?: SetupWhat; status?: SetupStatus 
   const what = (['google', 'linkedin', 'claude_key', 'resume'] as const).find((w) => w === o.what);
   return what ? { what, status: o as unknown as SetupStatus } : {};
 }
+
+// ---------- chats and the week, drawn as their own cards ----------
+
+export interface ChatCardRow {
+  personId: string;
+  name: string;
+  photoUrl?: string;
+  role?: string;
+  /** "Just happened", "Tomorrow", "No time yet" */
+  when: string;
+  time?: string;
+  minutes?: number;
+  join?: string;
+  /** what came back from a chat that happened: "Notes in", "5 facts", "Thank-you ready" */
+  after?: string[];
+  href?: string;
+}
+
+/** list_upcoming_chats's `chats`, when the tool sent them. */
+export function readChatsCard(d: unknown): ChatCardRow[] | undefined {
+  const o = obj(unpack(d));
+  if (!Array.isArray(o.chats)) return undefined;
+  return arr(o.chats)
+    .map((x): ChatCardRow | undefined => {
+      const r = obj(x);
+      const personId = str(r.personId);
+      const name = str(r.name);
+      const when = str(r.when);
+      if (!personId || !name || !when) return undefined;
+      return {
+        personId,
+        name,
+        photoUrl: str(r.photoUrl),
+        role: str(r.role),
+        when,
+        time: str(r.time),
+        minutes: num(r.minutes),
+        join: str(r.join),
+        after: strings(r.after),
+        href: str(r.href),
+      };
+    })
+    .filter(present);
+}
+
+export interface WeekFace {
+  personId: string;
+  name: string;
+  photoUrl?: string;
+}
+
+export interface WeekCardView {
+  target: number;
+  reached: WeekFace[];
+  replied: WeekFace[];
+  booked: WeekFace[];
+  quiet: WeekFace[];
+  moved: (WeekFace & { text: string })[];
+}
+
+/** week_review's `week`, when the tool sent it. */
+export function readWeekCard(d: unknown): WeekCardView | undefined {
+  const w = obj(obj(unpack(d)).week);
+  if (!Object.keys(w).length) return undefined;
+  const faces = (x: unknown): WeekFace[] =>
+    arr(x)
+      .map((f) => {
+        const r = obj(f);
+        const personId = str(r.personId);
+        const name = str(r.name);
+        return personId && name ? { personId, name, photoUrl: str(r.photoUrl) } : undefined;
+      })
+      .filter(present);
+  return {
+    target: num(w.target) ?? 0,
+    reached: faces(w.reached),
+    replied: faces(w.replied),
+    booked: faces(w.booked),
+    quiet: faces(w.quiet),
+    moved: arr(w.moved)
+      .map((m) => {
+        const r = obj(m);
+        const text = str(r.text);
+        const personId = str(r.personId);
+        return text && personId ? { personId, name: str(r.name) ?? '', text } : undefined;
+      })
+      .filter(present),
+  };
+}

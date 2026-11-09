@@ -94,8 +94,10 @@ async function loadDemo(page: Page) {
     await route.fulfill({ response: res, headers: { ...res.headers(), 'access-control-allow-origin': '*' } });
   });
   await page.addInitScript(() => {
-    (window as unknown as { __ORBIT_ANTHROPIC_KEY__?: string }).__ORBIT_ANTHROPIC_KEY__ =
-      'sk-ant-shim-placeholder';
+    const w = window as unknown as { __ORBIT_ANTHROPIC_KEY__?: string; __ORBIT_DEMO_HANDOFF__?: boolean };
+    w.__ORBIT_ANTHROPIC_KEY__ = 'sk-ant-shim-placeholder';
+    // the gallery shows the demo as a student sees it: sending goes through Orbit, not the mail app hand-off
+    delete w.__ORBIT_DEMO_HANDOFF__;
   });
   await page.goto('');
   await page

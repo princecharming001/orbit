@@ -68,7 +68,29 @@ function rowOut(r: ChatRow, tz: string) {
     at: r.startAt ? clockOf(r.startAt, tz) : undefined,
     minutes: r.minutes,
     join: r.joinUrl,
+    ...(r.otherJoinUrls?.length ? { alsoOnCalendarWith: r.otherJoinUrls } : {}),
     after: r.after ? afterText(r.after) : undefined,
+  };
+}
+
+/** A chat as the chats card draws it: the face, when, and what came back or what is next. */
+function chatCardRow(r: ChatRow, tz: string, when: string, href: string) {
+  return {
+    personId: r.person.id,
+    name: r.person.displayName,
+    photoUrl: r.person.photoUrl,
+    role: [r.person.currentTitle, r.person.currentOrganizationRaw].filter(Boolean).join(' at ') || undefined,
+    when,
+    time: r.startAt ? clockOf(r.startAt, tz) : undefined,
+    minutes: r.minutes,
+    join: r.joinUrl,
+    after: r.after
+      ? afterText(r.after)
+          .split(' · ')
+          .map((x) => x.trim())
+          .filter(Boolean)
+      : undefined,
+    href,
   };
 }
 
@@ -124,9 +146,16 @@ export const listUpcomingChats = defineTool({
     const summary = items.length
       ? `${n ? `${n} ${n === 1 ? 'chat' : 'chats'} coming up${v.todayCount ? `, ${v.todayCount} today` : ''}` : 'No chats coming up'}${v.justHappened.length ? `; ${v.justHappened.length} just happened` : ''}${v.noTime.length ? `; ${v.noTime.length} with no time yet` : ''}.`
       : 'No chats booked. When someone agrees to talk, it shows up in Chats.';
+    const chatCard = [
+      ...v.justHappened.map((r) => chatCardRow(r, tz, 'Just happened', `/people/${r.person.id}`)),
+      ...v.days.flatMap((d) =>
+        d.rows.map((r) => chatCardRow(r, tz, d.label, `/people/${r.person.id}?tab=facts&prep=1`)),
+      ),
+      ...v.noTime.map((r) => chatCardRow(r, tz, 'No time yet', `/people/${r.person.id}`)),
+    ];
     return ok(
       'list',
-      { title: 'Your chats', items },
+      { title: 'Your chats', items, chats: chatCard },
       {
         days: v.days.map((d) => ({ day: d.label, chats: d.rows.map((r) => rowOut(r, tz)) })),
         justHappened: v.justHappened.map((r) => rowOut(r, tz)),
@@ -167,9 +196,21 @@ export const weekReviewTool = defineTool({
       ...r.moved.map((m) => ({ text: m.text, href: `/people/${m.personId}` })),
       ...(r.next.planLine ? [{ text: r.next.planLine }] : []),
     ];
+    const faces = async (xs: { personId: string; name: string }[]) => {
+      const rows = await db.people.bulkGet(xs.map((x) => x.personId));
+      return xs.map((x, i) => ({ personId: x.personId, name: x.name, photoUrl: rows[i]?.photoUrl }));
+    };
+    const week = {
+      target: r.target,
+      reached: await faces(r.reached),
+      replied: await faces(r.replied),
+      booked: await faces(r.booked),
+      quiet: await faces(r.quiet),
+      moved: r.moved.map((m) => ({ personId: m.personId, name: m.name, text: m.text })),
+    };
     return ok(
       'list',
-      { title: `Your week: ${r.headline}`, items },
+      { title: `Your week: ${r.headline}`, items, week },
       out,
       `${r.headline}. Your target is ${r.target} first messages a week.${r.waiting.suggestionIds.length ? ` ${r.waiting.suggestionIds.length} waiting on you in Drafts.` : ''}`,
       '/inbox?review=1',

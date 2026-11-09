@@ -39,7 +39,7 @@ export function Button({
   loading?: boolean;
 }) {
   const base =
-    'inline-flex items-center justify-center gap-1.5 rounded-full font-medium tracking-[0.005em] transition-[background-color,border-color,color,transform] duration-150 active:scale-[0.97] disabled:active:scale-100 disabled:opacity-40 disabled:cursor-not-allowed focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ink/25 focus-visible:ring-offset-1 whitespace-nowrap';
+    'inline-flex items-center justify-center gap-1.5 rounded-[6px] font-medium tracking-[0.005em] transition-[background-color,border-color,color,transform] duration-150 active:scale-[0.97] disabled:active:scale-100 disabled:opacity-40 disabled:cursor-not-allowed focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ink/25 focus-visible:ring-offset-1 whitespace-nowrap';
   const sizes = { sm: 'h-8 px-3 text-[13px]', md: 'h-9 px-4 text-[14px]', lg: 'h-11 px-5 text-[15px]' }[size];
   // after Tsenta: a deep green pill for the main action in the app (black on the landing page and setup), a white
   // pill on a hairline for the rest
@@ -112,7 +112,7 @@ export function Input({ className, ...rest }: InputHTMLAttributes<HTMLInputEleme
   return (
     <input
       className={cx(
-        'h-10 w-full rounded-[10px] border border-line bg-canvas px-3 text-[14px] placeholder:text-[#a59f97] focus:outline-none focus:ring-4 focus:ring-ink/[0.06] focus:border-[#bdbab5] transition-shadow',
+        'h-10 w-full rounded-[6px] border border-line bg-canvas px-3 text-[14px] placeholder:text-[#a59f97] focus:outline-none focus:ring-4 focus:ring-ink/[0.06] focus:border-[#bdbab5] transition-shadow',
         className,
       )}
       {...rest}
@@ -123,7 +123,7 @@ export function Textarea({ className, ...rest }: TextareaHTMLAttributes<HTMLText
   return (
     <textarea
       className={cx(
-        'w-full rounded-[10px] border border-line bg-canvas px-3 py-2 text-[14px] leading-relaxed placeholder:text-[#a59f97] focus:outline-none focus:ring-4 focus:ring-ink/[0.06] focus:border-[#bdbab5] transition-shadow',
+        'w-full rounded-[6px] border border-line bg-canvas px-3 py-2 text-[14px] leading-relaxed placeholder:text-[#a59f97] focus:outline-none focus:ring-4 focus:ring-ink/[0.06] focus:border-[#bdbab5] transition-shadow',
         className,
       )}
       {...rest}
@@ -181,7 +181,7 @@ export function Chip({
     <span
       {...rest}
       className={cx(
-        'inline-flex items-center gap-1 rounded-full border px-2 h-[22px] text-[12px] font-medium leading-none whitespace-nowrap shrink-0',
+        'inline-flex items-center gap-1 rounded-[4px] border px-1.5 h-[20px] text-[12px] font-medium leading-none whitespace-nowrap shrink-0',
         tones,
         className,
       )}
@@ -313,7 +313,7 @@ export function NotFound({
         action={
           <Link
             to={to}
-            className="inline-flex items-center h-9 px-4 rounded-full bg-ink text-white text-[14px] font-medium hover:bg-[#262626]"
+            className="inline-flex items-center h-9 px-4 rounded-[6px] bg-ink text-white text-[14px] font-medium hover:bg-[#262626]"
           >
             {linkLabel}
           </Link>
@@ -512,7 +512,7 @@ export function Tabs<T extends string>({
           aria-selected={value === it.value}
           onClick={() => onChange(it.value)}
           className={cx(
-            'px-2.5 sm:px-3 h-8 rounded-full border text-[12.5px] sm:text-[13px] transition-colors shrink-0 whitespace-nowrap focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ink/25',
+            'px-2.5 sm:px-3 h-8 rounded-[6px] border text-[12.5px] sm:text-[13px] transition-colors shrink-0 whitespace-nowrap focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ink/25',
             value === it.value
               ? 'bg-ink border-ink text-white font-medium'
               : 'bg-canvas border-line text-ink-2 hover:text-ink hover:bg-canvas-2',
@@ -646,7 +646,7 @@ export function Modal({
       <div
         ref={ref}
         tabIndex={-1}
-        className="relative my-auto bg-canvas rounded-[16px] border border-line shadow-[0_24px_60px_rgba(0,0,0,0.12)] w-full max-h-[calc(100dvh-32px)] overflow-y-auto pop-in focus:outline-none"
+        className="relative my-auto bg-canvas rounded-[8px] border border-line shadow-[0_24px_60px_rgba(0,0,0,0.12)] w-full max-h-[calc(100dvh-32px)] overflow-y-auto pop-in focus:outline-none"
         style={{ maxWidth: width }}
         role="dialog"
         aria-modal="true"
@@ -875,7 +875,7 @@ export function FunctionPicker({
             aria-pressed={on}
             onClick={() => onChange(on ? value.filter((x) => x !== k) : [...value, k])}
             className={cx(
-              'h-9 px-3.5 rounded-full border text-[13px] transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ink/25',
+              'h-9 px-3.5 rounded-[6px] border text-[13px] transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ink/25',
               on
                 ? 'bg-ink text-white border-ink'
                 : 'bg-canvas border-line text-ink-2 hover:bg-canvas-2 hover:text-ink',

@@ -16,6 +16,7 @@ import {
   runNetworkSearch,
   type SearchOutcome,
 } from '../../engine/networkSearch';
+import { climbLadder, type Ladder } from '../../engine/networkSearch/ladder';
 import { z } from '../../zod';
 import type { ResultEnvelope, ToolContext } from '../types';
 import { defineTool, err, ok } from './_shared';
@@ -323,7 +324,38 @@ export async function bandTableRows(
   return list ? toTableRows(list) : undefined;
 }
 
-async function tableData(o: Outcome) {
+/** The next rungs on the card (plan 36): who to show when nobody fits, each section labelled with its tier. */
+export interface FallbackSection {
+  tier: string;
+  label: string;
+  rows: TableRow[];
+}
+
+async function fallbackSections(l: Ladder | undefined): Promise<FallbackSection[] | undefined> {
+  if (!l?.rungs.length) return undefined;
+  const ids = l.rungs.flatMap((r) => r.rows.map((x) => x.personId));
+  const people = await db.people.bulkGet(ids);
+  const byId = new Map(people.filter((p): p is Person => !!p).map((p) => [p.id, p]));
+  return l.rungs.map((r) => ({
+    tier: r.tier,
+    label: r.label,
+    rows: r.rows.map((x) => ({
+      person: {
+        id: x.personId,
+        displayName: x.name,
+        currentTitle: x.title,
+        currentOrganizationRaw: x.company,
+        photoUrl: byId.get(x.personId)?.photoUrl,
+        linkedinUrl: byId.get(x.personId)?.linkedinUrl,
+      },
+      band: r.tier,
+      evidence: x.why,
+      warmth: x.warmth,
+    })),
+  }));
+}
+
+async function tableData(o: Outcome, ladder?: Ladder) {
   const rows = await toTableRows(o.rows);
   const c = o.set.result.counts;
   const unknownBy = Object.entries(o.set.result.unknownBy)
@@ -344,17 +376,48 @@ async function tableData(o: Outcome) {
     profilesRead: o.set.profilesRead,
     unsupported: o.set.spec.unsupported ?? [],
     rows,
+    /** what the ask was about, for the next rungs' wording */
+    topic: ladder?.topic,
+    /** someone in a related field or who used to work there: close to a match, not only someone to ask */
+    nearFit: ladder?.nearFit,
+    fallback: await fallbackSections(ladder),
   };
 }
 
-function summaryOf(d: Awaited<ReturnType<typeof tableData>>): string {
+type TableData = Awaited<ReturnType<typeof tableData>>;
+
+/** "3 in a related field (Ana Ruiz, Ben Ode), 2 who could know someone" */
+function fallbackLine(d: TableData): string {
+  return (d.fallback ?? [])
+    .map((s) => {
+      const names = s.rows
+        .slice(0, 2)
+        .map((r) => r.person.displayName)
+        .join(', ');
+      const what =
+        s.tier === 'related'
+          ? 'in a related field'
+          : s.tier === 'former'
+            ? 'who used to work there'
+            : s.tier === 'intro'
+              ? 'who can introduce you'
+              : 'who could know someone';
+      return `${s.rows.length} ${what} (${names})`;
+    })
+    .join(', ');
+}
+
+function summaryOf(d: TableData): string {
   const c = d.counts;
   const sure = c.strong;
   const likely = c.likely;
+  // plan 36: an empty answer is never the whole answer; the next tier comes first
+  if (!sure && !likely && d.fallback?.length)
+    return `No exact match for ${d.topic ?? 'that'} yet. Closest: ${fallbackLine(d)}.`;
   const parts: string[] = [];
   if (sure) parts.push(`${sure} ${sure === 1 ? 'person matches' : 'people match'}`);
   if (likely) parts.push(`${likely} likely`);
-  if (!sure && !likely) parts.push('Nobody in your network clearly matches');
+  if (!sure && !likely) parts.push('No exact match in your network yet');
   let s = parts.join(', ');
   // who could not be checked stays out of the answer when someone matched: the student asked who fits
   if (!sure && !likely && d.unknownBy[0])
@@ -367,21 +430,34 @@ function summaryOf(d: Awaited<ReturnType<typeof tableData>>): string {
 export const SEARCH_MODEL_ROWS = 10;
 
 /** What the model reads of a search: counts, guidance and the first SEARCH_MODEL_ROWS rows (the card shows all). */
-export function forModel(d: Awaited<ReturnType<typeof tableData>>) {
+export function forModel(d: TableData) {
   const found = d.counts.strong + d.counts.likely;
   return {
     setId: d.setId,
     // who could not be checked is only for explaining an empty answer
     counts: found ? { strong: d.counts.strong, likely: d.counts.likely } : d.counts,
-    replyStyle:
-      'The card already lists everyone. Answer in one or two short sentences: how many match, then name the two or three the student is closest to or talked with most recently, with their company. Write names exactly as given. Do not mention people who could not be checked.',
+    replyStyle: found
+      ? 'The card already lists everyone. Answer in one or two short sentences: how many match, then name the two or three the student is closest to or talked with most recently, with their company. Write names exactly as given. Do not mention people who could not be checked.'
+      : NO_MATCH_STYLE,
     notes: d.notes,
     relaxed: d.relaxed,
     unsupported: d.unsupported,
     notOnFile: found ? undefined : d.unknownBy,
-    nextStep: found
+    nextStep: found ? undefined : nextRung(d),
+    nextTier: found
       ? undefined
-      : 'Nobody in the network matches. Unless the student only asked about people they already know, call find_people now with the same ask (purpose, query, and the organization or school) to look beyond LinkedIn on the web, ranked warmest first with emails.',
+      : d.fallback?.map((s) => ({
+          tier: s.tier,
+          label: s.label,
+          rows: s.rows.slice(0, 5).map((r) => ({
+            personId: r.person.id,
+            name: r.person.displayName,
+            title: r.person.currentTitle,
+            company: r.person.currentOrganizationRaw,
+            why: r.evidence,
+            warmth: r.warmth,
+          })),
+        })),
     stillToCheck: d.remaining,
     judgeFailed: d.judgeFailed || undefined,
     profilesReadNow: d.profilesRead || undefined,
@@ -399,6 +475,19 @@ export function forModel(d: Awaited<ReturnType<typeof tableData>>) {
     })),
     shownToStudent: d.rows.length,
   };
+}
+
+/** How to word an answer whose exact search found nobody (plan 36): the tier in one clause, then people. */
+const NO_MATCH_STYLE =
+  'Nobody matched exactly, so never answer with nobody. The card shows the next tier (nextTier). Open with one honest clause on the tier ("Nobody you know works in climate itself; the closest are"), then name two or three people from nextTier with why each is there, in its words. A related-field or used-to-work-there person is someone the student knows, never a match; a could-know-someone person is a guess, never a fact about who they know. Then do nextStep.';
+
+/** The paid rung that comes next, for the model to run without asking (plan 36 §2). */
+function nextRung(d: TableData): string {
+  const topic = d.topic ?? 'that';
+  const source = `call find_people with the same ask (purpose, query, and the organization, school or topic) to show people in ${topic} the student could reach, labelled as new people they do not know yet`;
+  if (d.nearFit)
+    return `Present the closest people above. Then, if the student asked for people to reach or meet, ${source}, in this turn; if they only asked who they know, end with one short question offering to find people in ${topic} beyond their network.`;
+  return `Nobody the student knows is in ${topic} or near it. In this same turn, without asking, ${source}. If find_people cannot run or finds nobody, use web_search for people in ${topic} (for a named person: how others have reached them, and who works with them) and list them as rows with the source in words. Then answer with both tiers: the new people first, then who could introduce the student.`;
 }
 
 const strings = (what: string) => z.array(z.string()).optional().describe(what);
@@ -509,7 +598,12 @@ async function runSearch(input: QuerySpec, ctx: ToolContext): Promise<ResultEnve
     shown: input.limit,
   });
   if (!out.ok) return err(out.message);
-  const d = await tableData(out);
+  // plan 36: nobody who fits, so the free rungs run now (related field, past jobs, intro paths, people to ask)
+  const found = out.set.result.counts.strong + out.set.result.counts.likely;
+  const ladder = found
+    ? undefined
+    : await climbLadder(ctx.user, out.set, { now: ctx.now, signal: ctx.signal }).catch(() => undefined);
+  const d = await tableData(out, ladder);
   return ok('people_table', d, forModel(d), summaryOf(d));
 }
 

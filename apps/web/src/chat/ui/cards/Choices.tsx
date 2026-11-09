@@ -57,7 +57,7 @@ export function Choices({
           key={o.label}
           type="button"
           className={cx(
-            'glass glass-hover type-chip rounded-full min-h-10 px-4 text-ink-2 hover:text-ink text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:opacity-50 disabled:pointer-events-none max-w-full',
+            'glass glass-hover type-chip rounded-[6px] min-h-10 px-4 text-ink-2 hover:text-ink text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:opacity-50 disabled:pointer-events-none max-w-full',
           )}
           disabled={running}
           data-testid="choice-pill"

@@ -17,7 +17,8 @@ interface TableRow {
     Person,
     'id' | 'displayName' | 'currentTitle' | 'currentOrganizationRaw' | 'photoUrl' | 'linkedinUrl'
   >;
-  band: 'strong' | 'likely' | 'unchecked' | 'no';
+  /** a match band, or for a fallback section its tier (related, former, intro, connector) */
+  band: string;
   evidence?: string;
   missing?: string;
   warmth: string;
@@ -39,6 +40,10 @@ interface TableData {
   profilesRead?: number;
   unsupported: string[];
   rows: TableRow[];
+  /** what the ask was about ("climate") */
+  topic?: string;
+  /** plan 36: when nobody fits, the next tiers, each a labelled section of people the student knows */
+  fallback?: { tier: string; label: string; rows: TableRow[] }[];
 }
 
 const obj = (v: unknown): Record<string, unknown> =>
@@ -179,6 +184,12 @@ export function PeopleTableCard({
     });
   if (listed.length >= 25) steps.push({ label: 'Load more', message: 'Show more of those results' });
   const canPick = listed.length > 1;
+  // plan 36: nobody fits, so the card shows the next tiers instead of an empty list
+  const fallback = total
+    ? []
+    : (t.fallback ?? [])
+        .map((f) => ({ ...f, rows: f.rows.filter((r) => !hidden.has(r.person.id)) }))
+        .filter((f) => f.rows.length);
   const tabs: { id: Filter; label: string; n: number }[] = [
     { id: 'all', label: 'All', n: total },
     { id: 'strong', label: 'Confirmed', n: c.strong },
@@ -188,18 +199,26 @@ export function PeopleTableCard({
   return (
     <PeopleShell
       testId="result-people_table"
-      title={total ? `${total} ${total === 1 ? 'match' : 'matches'}` : 'No clear matches'}
+      title={
+        total
+          ? `${total} ${total === 1 ? 'match' : 'matches'}`
+          : fallback.length
+            ? 'Closest in your network'
+            : 'No exact match yet'
+      }
       sub={
         t.relaxed
           ? `Nobody matched exactly, so this loosened ${t.relaxed}.`
-          : t.judgeUnavailable
-            ? 'Checked from headlines only.'
-            : undefined
+          : !total && fallback.length
+            ? `No exact match${t.topic ? ` for ${t.topic}` : ''}, so these are the next best. Each line says why.`
+            : t.judgeUnavailable
+              ? 'Checked from headlines only.'
+              : undefined
       }
       aside={
         c.strong > 0 &&
         c.likely > 0 && (
-          <div className="flex rounded-full bg-canvas-2 p-0.5" role="tablist" aria-label="Show">
+          <div className="flex rounded-[6px] bg-canvas-2 p-0.5" role="tablist" aria-label="Show">
             {tabs.map((tab) => (
               <button
                 key={tab.id}
@@ -207,7 +226,7 @@ export function PeopleTableCard({
                 role="tab"
                 aria-selected={filter === tab.id}
                 className={cx(
-                  'h-7 rounded-full px-2.5 text-[12px] font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40',
+                  'h-7 rounded-[5px] px-2.5 text-[12px] font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40',
                   filter === tab.id
                     ? 'bg-canvas text-ink shadow-[0_1px_2px_rgba(10,10,10,0.08)]'
                     : 'text-ink-3 hover:text-ink',
@@ -222,13 +241,40 @@ export function PeopleTableCard({
         )
       }
     >
-      {shown.length === 0 ? (
+      {shown.length === 0 && fallback.length ? (
+        <ul className="px-1.5 pb-1.5" data-testid="people-fallback">
+          {fallback.map((f) => (
+            <li key={f.tier} className="list-none" data-tier={f.tier}>
+              <div
+                className="mx-2.5 mt-2 mb-1 flex items-center gap-2 text-[11px] font-medium uppercase tracking-[0.08em] text-ink-3"
+                role="heading"
+                aria-level={4}
+              >
+                {f.label}
+                <span className="h-px flex-1 bg-line-2" aria-hidden />
+              </div>
+              <ul>
+                {f.rows.map((r) => (
+                  <li key={r.person.id} className="list-none">
+                    <Row
+                      r={r}
+                      picking={false}
+                      picked={false}
+                      onNotAMatch={() => setHidden((h) => new Set(h).add(r.person.id))}
+                    />
+                  </li>
+                ))}
+              </ul>
+            </li>
+          ))}
+        </ul>
+      ) : shown.length === 0 ? (
         <div className="px-4 pb-4 text-ink-2" data-testid="people-empty">
           {need
             ? 'Loading…'
             : filter !== 'all' && wanted > 0
               ? `The ${wanted} ${filter === 'likely' ? 'likely' : 'confirmed'} matches are past this page. Ask again to see them.`
-              : 'Nobody to show.'}
+              : 'No exact match in your network. The next step looks beyond it.'}
         </div>
       ) : (
         <ul className="px-1.5 pb-1.5">

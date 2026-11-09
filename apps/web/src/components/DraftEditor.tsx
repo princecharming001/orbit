@@ -27,7 +27,7 @@ import {
   confirmHandoff,
   type DraftIssue,
   draftEnvelope,
-  googleSendActive,
+  emailSendsFromOrbit,
   handoffLink,
   isConnectionNote,
   pendingNoteFor,
@@ -45,6 +45,7 @@ import { googleClientId } from '../integrations/google';
 import { useSession } from '../state/session';
 import { Button, cx, Input, relDate, Textarea, useToast } from '../ui';
 import { copyText, openHandoff, runApproval } from './approve';
+import { DraftFiles } from './DraftFiles';
 import { ForwardNote } from './ForwardNote';
 import { ThreadContext } from './ThreadContext';
 
@@ -198,7 +199,7 @@ export function DraftEditor({
       !user
         ? false
         : draft.channel === 'gmail'
-          ? googleSendActive(user.id)
+          ? emailSendsFromOrbit(user, draft)
           : linkedInSendActive(user, person ?? undefined, draft.id),
     [user?.id, draft.id, draft.channel, person?.linkedinMemberId, person?.linkedinSlug],
   );
@@ -329,17 +330,18 @@ export function DraftEditor({
     prefilled.current = true;
     setInputs((v) => (v.connection ? v : { ...v, connection: whyThem }));
   }, [whyThem]);
-  // the message says the resume is attached: Orbit cannot attach files, so the student does it in their mail app
-  const attachResume =
-    (draft.needsInput ?? []).includes('resume') && !isLinkedIn && /\battached\b/i.test(body);
+  // the message says a file is attached: Orbit attaches it when it sends, and the mail app gets it from the student
+  const mentionsFile = !isLinkedIn && /\battached\b/i.test(body);
+  const fileCount = draft.attachments?.length ?? 0;
   const [attached, setAttached] = useState(false);
   const hasPlaceholder = !!placeholderIn(body);
   const missingLine =
     (needs.length > 0 && (hasPlaceholder || !edited)) || issues.some((i) => i.blocking) || !!notAllowed;
-  const blocked = missingLine || (attachResume && (!!direct || !attached));
+  const fileMissing = mentionsFile && !fileCount && (direct ? true : !attached);
+  const blocked = missingLine || fileMissing;
   // Copy text is how a resume goes out with a Gmail-sent message (pasted into Gmail, where the student attaches it),
   // so only the mail-app hand-off waits for "I will attach it"
-  const copyBlocked = missingLine || (attachResume && !direct && !attached);
+  const copyBlocked = missingLine || (mentionsFile && !direct && !attached);
   const shownError = error ?? (draft.status === 'failed' || draft.error ? draft.error : undefined);
   if (['queued', 'sending', 'handed_off', 'sent'].includes(draft.status))
     return (
@@ -461,7 +463,7 @@ export function DraftEditor({
       ttl: 8000,
     });
   };
-  const copyButton = !isLinkedIn && (!direct || attachResume) && !approveLabel && (
+  const copyButton = !isLinkedIn && !direct && !approveLabel && (
     <Button
       size="sm"
       onClick={copyAll}
@@ -470,7 +472,7 @@ export function DraftEditor({
         missingLine
           ? (notAllowed ?? issues.find((i) => i.blocking)?.text ?? 'Add the missing line first')
           : copyBlocked
-            ? 'Confirm you will attach your resume first'
+            ? 'Confirm you will attach the file first'
             : 'Copy the message to paste into Gmail in your browser'
       }
       data-testid="draft-copy"
@@ -503,13 +505,13 @@ export function DraftEditor({
       title={
         notAllowed ??
         issues.find((i) => i.blocking)?.text ??
-        (attachResume && direct
-          ? 'Orbit cannot attach your resume. Copy the text into Gmail instead.'
-          : attachResume && !attached
-            ? 'Confirm you will attach your resume first'
-            : blocked
-              ? 'Add the missing line first'
-              : undefined)
+        (fileMissing
+          ? direct
+            ? 'It says a file is attached: attach it first'
+            : 'Confirm you will attach the file first'
+          : blocked
+            ? 'Add the missing line first'
+            : undefined)
       }
       onClick={async () => {
         setError(undefined);
@@ -591,13 +593,6 @@ export function DraftEditor({
           </>
         ),
       });
-    if (!edited && draft.claims?.some((c) => c.factId) && ['thank_you', 'nurture'].includes(draft.kind))
-      lines.push({
-        key: 'notes',
-        tone: 'muted',
-        testId: 'draft-from-notes',
-        node: `Parts come from your notes: read it once as ${first} will.`,
-      });
     const rank = { bad: 0, warn: 1, muted: 2 };
     lines.sort((a, b) => rank[a.tone] - rank[b.tone]);
     const shownLines = showAllLines ? lines : lines.slice(0, 1);
@@ -608,10 +603,7 @@ export function DraftEditor({
           <ThreadContext userId={user.id} personId={draft.personId} firstName={first} className="mb-2" />
         )}
         {needs.length > 0 && (
-          <div
-            className="mb-2 rounded-[10px] border border-warn/30 bg-warn-soft/60 px-2.5 py-2"
-            data-testid="draft-needs-input"
-          >
+          <div className="mb-3 border-l-2 border-warn pl-3 py-0.5" data-testid="draft-needs-input">
             {needs.map((n) => (
               <div key={n} className="flex items-center gap-2 mb-1.5 last:mb-0">
                 <label
@@ -673,39 +665,13 @@ export function DraftEditor({
             )}
           </div>
         )}
-        {attachResume &&
-          (direct ? (
-            <p
-              className="mb-2 rounded-[10px] border border-warn/30 bg-warn-soft/60 px-2.5 py-1.5 text-[12.5px]"
-              data-testid="draft-attach-resume"
-            >
-              It says your resume is attached, and Orbit cannot attach files: copy the text into Gmail and
-              attach it there.
-            </p>
-          ) : (
-            <label
-              className="mb-2 flex items-center gap-2 rounded-[10px] border border-warn/30 bg-warn-soft/60 px-2.5 py-1.5 text-[12.5px] cursor-pointer"
-              data-testid="draft-attach-resume"
-            >
-              <input
-                type="checkbox"
-                checked={attached}
-                onChange={(e) => setAttached(e.target.checked)}
-                data-testid="draft-attach-confirm"
-              />
-              <span>
-                I will attach my resume before sending{' '}
-                <span className="text-ink-3">(it says it is attached; Orbit cannot attach files)</span>
-              </span>
-            </label>
-          ))}
         {!isLinkedIn && !!draft.bccEmails?.length && (
           <div className="text-[12px] text-ink-3 mb-1 truncate" data-testid="draft-bcc">
             Bcc: {draft.bccEmails.join(', ')}
           </div>
         )}
         {!isLinkedIn && !envelope.threaded && (
-          <div className="mb-1.5 flex items-center gap-2">
+          <div className="mb-2 flex items-center gap-2">
             <label htmlFor={`subject-${draft.id}`} className="text-[12px] text-ink-3 shrink-0">
               Subject
             </label>
@@ -722,13 +688,24 @@ export function DraftEditor({
           id={bodyId}
           value={body}
           onChange={(e) => setBody(e.target.value)}
-          rows={3}
-          className="resize-none !text-[13.5px] !leading-[1.5] !py-1.5"
+          rows={6}
+          className="resize-y !text-[14px] !leading-[1.65] !px-3 !py-2.5"
           aria-label="Message body"
         />
         <ResearchChip personId={draft.personId} body={body} setBody={setBody} fallback={ownLine} />
         <ForwardNote draft={draft} introducer={first} />
-        <div className="mt-1.5 flex items-center gap-x-2 gap-y-1.5 flex-wrap text-[12px] text-ink-3">
+        {user && (
+          <DraftFiles
+            draft={draft}
+            userId={user.id}
+            direct={!!direct}
+            mentionsFile={mentionsFile}
+            confirmed={attached}
+            onConfirm={setAttached}
+            className="mt-2.5"
+          />
+        )}
+        <div className="mt-3 flex items-center gap-x-2 gap-y-1.5 flex-wrap text-[12px] text-ink-3">
           <span className="flex items-center gap-2 min-w-0 mr-auto">
             {note && (
               <span
@@ -782,7 +759,7 @@ export function DraftEditor({
           </span>
         </div>
         {shownLines.length > 0 && (
-          <ul className="mt-1.5 space-y-0.5 text-[12px]">
+          <ul className="mt-2.5 space-y-1 text-[12px]">
             {shownLines.map((l, i) => (
               <li
                 key={l.key}
@@ -872,29 +849,16 @@ export function DraftEditor({
           )}
         </div>
       )}
-      {attachResume && (
-        <div
-          className="mb-3 rounded-lg border border-warn/40 bg-warn/5 p-3 text-[13px]"
-          data-testid="draft-attach-resume"
-        >
-          <div className="font-medium">Attach your resume</div>
-          <div className="text-ink-3 text-[12px] mb-1.5">
-            {direct
-              ? 'The message says your resume is attached, and Orbit cannot attach files. Copy the text into Gmail and attach it there.'
-              : 'The message says your resume is attached. Orbit cannot attach files, so add it in your mail app before you send.'}
-          </div>
-          {!direct && (
-            <label className="inline-flex items-center gap-2 text-[13px]">
-              <input
-                type="checkbox"
-                checked={attached}
-                onChange={(e) => setAttached(e.target.checked)}
-                data-testid="draft-attach-confirm"
-              />
-              I will attach it before sending
-            </label>
-          )}
-        </div>
+      {user && (
+        <DraftFiles
+          draft={draft}
+          userId={user.id}
+          direct={!!direct}
+          mentionsFile={mentionsFile}
+          confirmed={attached}
+          onConfirm={setAttached}
+          className="mb-3"
+        />
       )}
       {draft.holdUntil && new Date(draft.holdUntil).getTime() > Date.now() && (
         <div className="text-[12px] text-warn mb-1.5" data-testid="draft-hold">
@@ -1016,11 +980,6 @@ export function DraftEditor({
           >
             {enabling ? 'Waiting for Google…' : 'Connect Gmail'}
           </button>
-        </p>
-      )}
-      {!edited && draft.claims?.some((c) => c.factId) && ['thank_you', 'nurture'].includes(draft.kind) && (
-        <p className="mt-1.5 text-[12px] text-ink-3" data-testid="draft-from-notes">
-          Parts come from your notes: read it once as {first} will.
         </p>
       )}
       {otherAsk && (

@@ -16,6 +16,12 @@ import { ChoicesContext } from './Choices';
  */
 export const DraftOwnersContext = createContext<ReadonlyMap<string, string>>(new Map());
 
+/**
+ * The people this turn shows a full person card for: a one-person list of the same person beside it says nothing
+ * new, so it is left out.
+ */
+export const TurnPersonCardsContext = createContext<ReadonlySet<string>>(new Set());
+
 /** The label of the page an href opens, for the quiet link in a card's header. */
 export function hrefLabel(href: string): string {
   const path = href.split('?')[0]!.split('#')[0]!;
@@ -37,7 +43,7 @@ export function OpenInApp({ href, className, label }: { href?: string; className
     <Link
       to={href}
       className={cx(
-        'inline-flex items-center gap-0.5 h-7 px-2 rounded-full text-[12.5px] font-medium text-ink-3 hover:text-ink hover:bg-canvas-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 whitespace-nowrap',
+        'inline-flex items-center gap-0.5 h-7 px-2 rounded-[6px] text-[12.5px] font-medium text-ink-3 hover:text-ink hover:bg-canvas-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 whitespace-nowrap',
         className,
       )}
       data-testid="open-in-app"
@@ -61,7 +67,7 @@ export function GlassCard({
   return (
     <div
       className={cx(
-        'glass glass-strong rounded-[14px] px-3.5 py-3 my-2 min-w-0 max-w-full break-words text-[13.5px] leading-[1.45]',
+        'glass glass-strong rounded-[6px] px-4 py-3.5 my-3 min-w-0 max-w-full break-words text-[13.5px] leading-[1.55]',
         tone === 'bad' && 'border-bad/30',
         tone === 'warn' && 'border-warn/30',
         className,
@@ -95,7 +101,7 @@ export function CardHead({
   className?: string;
 }) {
   return (
-    <div className={cx('flex items-center gap-2.5 min-w-0 mb-1.5', className)}>
+    <div className={cx('flex items-center gap-3 min-w-0 mb-3', className)}>
       {lead}
       <div className="min-w-0 flex-1">
         <div className="flex items-center gap-2 min-w-0">
@@ -120,8 +126,8 @@ export function Section({
   className?: string;
 }) {
   return (
-    <div className={cx('mt-2.5', className)}>
-      <div className="text-[11.5px] font-medium text-ink-3 mb-1">{title}</div>
+    <div className={cx('mt-4', className)}>
+      <div className="text-[11.5px] font-medium text-ink-3 mb-2">{title}</div>
       {children}
     </div>
   );
@@ -148,13 +154,13 @@ export function PersonRow({
   const role = sub ?? [person.currentTitle, person.currentOrganizationRaw].filter(Boolean).join(' at ');
   const to = href ?? `/people/${person.id}`;
   return (
-    <div className={cx('flex items-center gap-2.5 min-w-0', dense ? 'py-1' : 'py-1.5')}>
+    <div className={cx('flex items-center gap-3 min-w-0', dense ? 'py-2' : 'py-2.5')}>
       <Link to={to} className="shrink-0" tabIndex={-1} aria-hidden>
         <Avatar
           name={person.displayName}
           src={person.photoUrl}
           id={person.id}
-          size={size ?? (dense ? 22 : 28)}
+          size={size ?? (dense ? 26 : 32)}
         />
       </Link>
       {dense ? (
@@ -250,7 +256,7 @@ export function SelectionBar({
             <button
               key={s.label}
               type="button"
-              className="inline-flex items-center gap-1 min-h-7 px-2.5 py-1 rounded-full border border-ink bg-ink text-canvas text-[12.5px] font-medium leading-tight hover:opacity-90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:opacity-50 disabled:pointer-events-none"
+              className="inline-flex items-center gap-1 min-h-7 px-2.5 py-1 rounded-[6px] border border-ink bg-ink text-canvas text-[12.5px] font-medium leading-tight hover:opacity-90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:opacity-50 disabled:pointer-events-none"
               disabled={running}
               title={s.message}
               data-testid="selection-step"
@@ -274,7 +280,7 @@ export function useFold<T>(items: T[], n = 5): { shown: T[]; more: ReactNode } {
   const more = fold ? (
     <button
       type="button"
-      className="mt-1 inline-flex items-center gap-1 h-7 px-2 -ml-2 rounded-full text-[12.5px] font-medium text-ink-3 hover:text-ink hover:bg-canvas-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
+      className="mt-1 inline-flex items-center gap-1 h-7 px-2 -ml-2 rounded-[6px] text-[12.5px] font-medium text-ink-3 hover:text-ink hover:bg-canvas-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
       aria-expanded={open}
       onClick={() => setOpen((v) => !v)}
       data-testid="show-all"
@@ -318,7 +324,7 @@ export function NextSteps({
         <button
           key={s.label}
           type="button"
-          className="inline-flex items-center gap-1 min-h-7 max-w-full px-2.5 py-1 rounded-full border border-line bg-canvas text-[12.5px] font-medium leading-tight text-ink-2 text-left hover:text-ink hover:bg-canvas-2 hover:border-[#d6d4d0] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:opacity-50 disabled:pointer-events-none"
+          className="inline-flex items-center gap-1 min-h-7 max-w-full px-2.5 py-1 rounded-[6px] border border-line bg-canvas text-[12.5px] font-medium leading-tight text-ink-2 text-left hover:text-ink hover:bg-canvas-2 hover:border-[#d6d4d0] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:opacity-50 disabled:pointer-events-none"
           disabled={running}
           title={s.message}
           data-testid="next-step"

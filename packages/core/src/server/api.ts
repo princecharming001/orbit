@@ -305,6 +305,8 @@ export interface ServerDraft {
   hooks: { text: string; sourceId: string }[];
   /** text the student must supply before it can be sent ([ASK USER: …], §8.6) */
   needsInput: string[];
+  /** files sent with it (a resume) */
+  attachments?: { id: string; name: string; mimeType: string; size: number }[];
   createdAt: string;
   updatedAt: string;
 }
@@ -333,6 +335,8 @@ export interface DraftApproveRequest {
    * the browser's ten seconds, kept when an account's email goes out from the server (plan 29 §B2.1)
    */
   undoSec?: number;
+  /** the files to send with it, base64 (at most 3, 4 MB each, 5 MB in all); replaces any it had */
+  attachments?: { name: string; mimeType: string; data: string; kind?: 'resume' | 'file' }[];
 }
 /** POST /drafts/cancel, POST /drafts/discard */
 export interface DraftIdRequest {

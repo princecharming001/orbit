@@ -193,7 +193,7 @@ export function Composer({
         <button
           type="button"
           className={cx(
-            'h-11 sm:h-10 px-3.5 rounded-full border border-line bg-canvas/70 inline-flex items-center gap-1.5 text-[14px] font-medium text-ink hover:bg-canvas focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40',
+            'h-11 sm:h-10 px-3.5 rounded-[6px] border border-line bg-canvas/70 inline-flex items-center gap-1.5 text-[14px] font-medium text-ink hover:bg-canvas focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40',
             menu === 'mode' && 'bg-canvas',
           )}
           aria-haspopup="menu"
@@ -206,7 +206,7 @@ export function Composer({
         {menu === 'attach' && (
           <div
             role="menu"
-            className="glass glass-strong absolute left-0 bottom-[calc(100%+8px)] z-20 min-w-[260px] p-1.5 rounded-[14px] fade-up"
+            className="glass glass-strong absolute left-0 bottom-[calc(100%+8px)] z-20 min-w-[260px] p-1.5 rounded-[6px] fade-up"
             data-testid="attach-menu"
           >
             {ATTACH.map(({ kind, label, icon: Icon }) => (
@@ -214,7 +214,7 @@ export function Composer({
                 key={kind}
                 role="menuitem"
                 type="button"
-                className="w-full h-11 sm:h-10 px-2.5 rounded-[10px] flex items-center gap-2.5 text-[14px] hover:bg-canvas-2 focus-visible:outline-none focus-visible:bg-accent-soft"
+                className="w-full h-11 sm:h-10 px-2.5 rounded-[6px] flex items-center gap-2.5 text-[14px] hover:bg-canvas-2 focus-visible:outline-none focus-visible:bg-accent-soft"
                 onClick={() => pickFile(kind)}
               >
                 <Icon size={16} className="text-ink-3" aria-hidden /> {label}
@@ -225,7 +225,7 @@ export function Composer({
         {menu === 'mode' && (
           <div
             role="menu"
-            className="glass glass-strong absolute left-0 bottom-[calc(100%+8px)] z-20 w-[300px] max-w-[calc(100vw-48px)] p-1.5 rounded-[14px] fade-up"
+            className="glass glass-strong absolute left-0 bottom-[calc(100%+8px)] z-20 w-[300px] max-w-[calc(100vw-48px)] p-1.5 rounded-[6px] fade-up"
             data-testid="mode-menu"
           >
             {mode === 'llm' ? (
@@ -236,7 +236,7 @@ export function Composer({
                   aria-checked={chatMode === m}
                   type="button"
                   className={cx(
-                    'w-full px-2.5 py-2 rounded-[10px] text-left hover:bg-canvas-2 focus-visible:outline-none focus-visible:bg-canvas-2',
+                    'w-full px-2.5 py-2 rounded-[6px] text-left hover:bg-canvas-2 focus-visible:outline-none focus-visible:bg-canvas-2',
                     chatMode === m && 'bg-canvas-2',
                   )}
                   onClick={() => {

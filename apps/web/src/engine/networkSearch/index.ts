@@ -375,6 +375,11 @@ const worlds = new Map<
   { world: SearchWorld; lexical?: Map<string, number>; onlyIds?: Set<string> }
 >();
 
+/** The people a kept set ran over, for the next rungs of an empty answer (ladder.ts). */
+export function worldOfSet(setId: string): SearchWorld | undefined {
+  return worlds.get(setId)?.world;
+}
+
 /** "Check more": judges the next people of a kept set and shows the next page. */
 export async function moreOfSet(
   setId: string,
