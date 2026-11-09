@@ -10,11 +10,13 @@ import {
   describeLlmFailure,
   LlmError,
   makeWrap,
+  neutralizeTags,
   overDailyCap,
   recordFailure,
   recordTokens,
   reserveRequest,
   toLlmError,
+  type Wrap,
 } from '../../integrations/anthropic';
 import type { ChatConversation, ResultEnvelope, ToolContext, ToolSpec, TurnEvent } from '../types';
 import { recordToolAction } from './actions';
@@ -52,7 +54,7 @@ export const ITERATION_HEADER = 'x-orbit-iterations';
 export const FALLBACK_MODELS = [{ model: 'claude-opus-5' }];
 /** Words before the pills that are a clause of intent, not an answer: what follows them is then the reply. */
 const CLAUSE_WORDS = 9;
-/** Consecutive unparseable-tool-JSON failures of one turn before giving up. */
+/** Unparseable-tool-JSON failures one turn may re-issue, counted over the whole turn (never reset by a good stream). */
 const MAX_PARSE_RETRIES = 2;
 
 export const COMPACTION_INSTRUCTIONS =
@@ -81,16 +83,65 @@ export class TruncatedToolInput extends Error {
   }
 }
 
-/** What the model reads as the tool_result: the envelope with `data` projected by the tool. */
-export function projectEnvelope(spec: ToolSpec | undefined, env: ResultEnvelope): string {
+/**
+ * The results whose data holds third-party text (an email, a note, a LinkedIn field). In the chat loop a tool's own
+ * `wrap` only neutralizes such text and marks the result here; the loop then wraps the whole projected data once,
+ * instead of every field in its own untrusted element with the nonce (plan 35 A3: list_inbox alone had 90).
+ */
+const UNTRUSTED_RESULTS = new WeakSet<ResultEnvelope>();
+
+/** A `wrap` for one tool call in the loop: neutralizes the text and remembers that the result needs the wrapper. */
+export function deferredWrap(): { wrap: Wrap; used: () => boolean } {
+  let used = false;
+  return {
+    wrap: (_source, text) => {
+      used = true;
+      return neutralizeTags(text);
+    },
+    used: () => used,
+  };
+}
+
+/** Marks a result as holding third-party text, so its data goes out inside one untrusted element. */
+export function markUntrusted(env: ResultEnvelope): void {
+  UNTRUSTED_RESULTS.add(env);
+}
+
+/**
+ * What the model reads as the tool_result: the envelope with `data` projected by the tool. When the data holds
+ * third-party text (see markUntrusted) and the conversation's wrap is given, the envelope's own fields stay JSON on
+ * the first line and the data follows inside one untrusted element.
+ */
+export function projectEnvelope(spec: ToolSpec | undefined, env: ResultEnvelope, wrapAll?: Wrap): string {
+  const data = spec?.toModel ? spec.toModel(env.data as never) : env.data;
+  const head = {
+    kind: env.kind,
+    summary: env.summary,
+    href: env.href,
+    confirmationId: env.confirmationId,
+    continues: env.continues,
+  };
+  if (wrapAll && UNTRUSTED_RESULTS.has(env) && data !== undefined)
+    return `${JSON.stringify(head)}\n${wrapAll(spec?.name ?? 'tool', JSON.stringify(data))}`;
   return JSON.stringify({
     kind: env.kind,
     summary: env.summary,
-    data: spec?.toModel ? spec.toModel(env.data as never) : env.data,
+    data,
     href: env.href,
     confirmationId: env.confirmationId,
     continues: env.continues,
   });
+}
+
+/** Reads a tool_result back (tests and tools that replay one): plain JSON, or the head line plus the wrapped data. */
+// biome-ignore lint/suspicious/noExplicitAny: like JSON.parse, the shape is the tool's own
+export function parseToolResult(text: string): any {
+  const nl = text.indexOf('\n<untrusted_');
+  if (nl < 0) return JSON.parse(text);
+  const head = JSON.parse(text.slice(0, nl)) as Record<string, unknown>;
+  const body = text.slice(nl + 1);
+  const inner = body.slice(body.indexOf('>\n') + 2, body.lastIndexOf('\n</untrusted_'));
+  return { ...head, data: JSON.parse(inner.replace(/&lt;(\s*\/?\s*untrusted)/gi, '<$1')) };
 }
 
 function cancelledContent(reason: string): string {
@@ -173,11 +224,18 @@ interface ToolHooks {
   signal?: AbortSignal;
   /** a line for the model appended to every tool result, such as the spent web search budget */
   note?: () => string | undefined;
+  /** the conversation's wrap, for results that hold third-party text (projectEnvelope) */
+  wrap?: Wrap;
 }
 
 /** What the model reads back from a tool: the projected envelope, then the turn's note when there is one. */
-export function toolResultText(spec: ToolSpec | undefined, env: ResultEnvelope, note?: string): string {
-  const content = projectEnvelope(spec, env);
+export function toolResultText(
+  spec: ToolSpec | undefined,
+  env: ResultEnvelope,
+  note?: string,
+  wrapAll?: Wrap,
+): string {
+  const content = projectEnvelope(spec, env, wrapAll);
   return note ? `${content}\n${note}` : content;
 }
 
@@ -364,7 +422,7 @@ export function buildRunnerTools(
       run: async (input, context) => {
         const id = context?.toolUse.id ?? newId('toolu');
         const env = await hooks.onRun(id, spec, input);
-        const content = toolResultText(spec, env, hooks.note?.());
+        const content = toolResultText(spec, env, hooks.note?.(), hooks.wrap);
         if (env.kind === 'error') throw new ToolError(content);
         return content;
       },
@@ -542,6 +600,7 @@ export async function runTurn(
   const tools = buildRunnerTools(registry, {
     signal,
     note: budgetNote,
+    wrap,
     onRun: async (toolUseId, spec, input) => {
       const cancelled = (reason: string): ResultEnvelope => ({
         kind: 'error',
@@ -569,17 +628,20 @@ export async function runTurn(
             'Not shown yet: the answer comes first. Write the answer from the other results now, in your own words, then call this on its own as the last thing. Never mention buttons or options in your words.',
         };
       else {
+        // third-party text is neutralized field by field and the result wrapped once (projectEnvelope)
+        const once = deferredWrap();
         try {
           env = await deps.execute(spec.name, input, {
             user,
             now: clock(),
             conversationId: conversation.id,
             nonce,
-            wrap,
+            wrap: once.wrap,
             toolUseId,
             signal,
             caller: 'llm',
           });
+          if (once.used()) markUntrusted(env);
         } catch (e) {
           env = signal?.aborted ? cancelled('user stopped') : thrownEnvelope(e);
         }
@@ -595,7 +657,7 @@ export async function runTurn(
         now: clock(),
       });
       results.set(toolUseId, {
-        content: toolResultText(spec, env, budgetNote()),
+        content: toolResultText(spec, env, budgetNote(), wrap),
         isError: env.kind === 'error',
       });
       // the pills close the turn only when they were the whole round: next to a read tool, the answer is still to come
@@ -723,7 +785,6 @@ export async function runTurn(
         await flushResults();
         const message = await stream.finalMessage();
         gate.flush();
-        attempt = 0;
         recordTokens(message.usage);
         webSearches += message.usage.server_tool_use?.web_search_requests ?? 0;
         // the next request the runner sends is the next of the turn
@@ -829,13 +890,18 @@ export async function runTurn(
 /** The tools that end a turn: words come before them, and a line after them would read as a doubled reply. */
 const CLOSING_TOOLS = new Set(['offer_choices', 'show_setup']);
 
-const SPEAK_UP =
+export const SPEAK_UP =
   "[Orbit] Your reply had no answer in words, only a lookup, cards or buttons. Answer the student's last message now in one to three plain, warm sentences from what the tools and searches returned, naming a source in words when it came from the web. Do not call any tools, and do not repeat what a card already lists.";
+
+const NOT_RUN = JSON.stringify({ kind: 'error', summary: 'Not run: answer in words now.' });
 
 /**
  * A turn must never end on cards alone: the prompt asks for words, and this is the backstop when the model still
- * gives none. One more request over the same params with tools off; its text streams as the end of this turn, and
- * the nudge and the answer are stored so the history replays exactly. Best effort: a failure leaves the turn as it was.
+ * gives none. One more request over the same params, the nudge appended and nothing else changed (the same tools and
+ * tool_choice, so the cached history is read, not written again; plan 35 A3), stopping after that one request. The
+ * nudge says not to call tools; a tool the model calls anyway is never run, and is answered "not run" so the stored
+ * history stays valid. Its text streams as the end of this turn, and the nudge and the answer are stored so the
+ * history replays exactly. Best effort: a failure leaves the turn as it was.
  */
 async function speakUp(
   deps: TurnDeps,
@@ -859,14 +925,19 @@ async function speakUp(
       role: last?.role === 'assistant' ? 'user' : 'system',
       content: [{ type: 'text', text: SPEAK_UP }],
     };
+    // the same tool definitions (what is sent is byte-identical); only what runs locally is swapped for "not run"
+    const tools = params.tools.map((t) =>
+      'run' in t && typeof t.run === 'function'
+        ? ({
+            ...t,
+            run: async () => {
+              throw new ToolError(NOT_RUN);
+            },
+          } as typeof t)
+        : t,
+    );
     const runner = deps.client.beta.messages.toolRunner(
-      {
-        ...params,
-        messages: [...messages, nudge],
-        tool_choice: { type: 'none' },
-        max_iterations: 1,
-        stream: true,
-      },
+      { ...params, tools, messages: [...messages, nudge], max_iterations: 1, stream: true },
       { signal, ...(headers ? { headers } : {}) },
     );
     let said: string | undefined;
@@ -881,6 +952,21 @@ async function speakUp(
       if (!text.trim()) return undefined;
       await deps.store.append(conversationId, nudge, clock());
       said = (await persistAssistant(message)).id;
+      const uses = toolUsesOf(message.content);
+      if (uses.length)
+        await deps.store.append(
+          conversationId,
+          {
+            role: 'user',
+            content: uses.map((u) => ({
+              type: 'tool_result' as const,
+              tool_use_id: u.id,
+              content: NOT_RUN,
+              is_error: true,
+            })),
+          },
+          clock(),
+        );
     }
     return said;
   } catch (e) {

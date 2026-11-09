@@ -111,6 +111,12 @@ import {
 
 const STAGES = STAGE_ORDER as [CoffeeChat['stage'], ...CoffeeChat['stage'][]];
 const DAY = 86_400_000;
+/** What get_person hands the model by default (plan 35 A3): the last 6 messages at 400 characters, 15 timeline rows. */
+export const PERSON_MESSAGES = 6;
+export const PERSON_MESSAGE_CHARS = 400;
+export const PERSON_TIMELINE = 15;
+/** A note's raw text as the model reads it; the note page shows the whole of it. */
+export const NOTE_CHARS = 1_200;
 
 async function userRows<T>(
   table: { where: (k: string) => { equals: (v: string) => { toArray: () => Promise<T[]> } } },
@@ -762,7 +768,7 @@ export const getPerson = defineTool({
           .map((d) => ({ at: d.sentAt!, kind: 'sent', text: `${MESSAGE_KIND_LABELS[d.kind]} sent` })),
       ]
         .sort((a, b) => b.at.localeCompare(a.at))
-        .slice(0, 30)
+        .slice(0, PERSON_TIMELINE)
         .map((t) => ({ ...t, when: fmtWhen(t.at, ctx) }));
       out.timeline = tl;
     }
@@ -770,13 +776,18 @@ export const getPerson = defineTool({
     if (want.has('conversation'))
       out.conversation = (await conversationWith(ctx.user.id, person.id))
         .filter((m) => m.channel !== 'text')
-        .slice(-12)
+        .slice(-PERSON_MESSAGES)
         .map((m) => ({
           from: m.out ? 'student' : person.firstName,
           channel: m.channel === 'linkedin' ? 'LinkedIn' : 'email',
           when: fmtWhen(m.at, ctx),
           subject: m.subject ? wrapped(ctx, 'email', m.subject, 160) : undefined,
-          text: wrapped(ctx, m.channel === 'linkedin' ? 'linkedin_message' : 'email', m.text, 800),
+          text: wrapped(
+            ctx,
+            m.channel === 'linkedin' ? 'linkedin_message' : 'email',
+            m.text,
+            PERSON_MESSAGE_CHARS,
+          ),
           sending: m.pending || undefined,
         }));
     if (want.has('drafts'))
@@ -1600,7 +1611,7 @@ export const listNotes = defineTool({
           .filter(Boolean)
           .map((p) => personRef(p!)),
         summary: wrapped(ctx, 'note', n.summary, 600),
-        text: wrapped(ctx, 'note', n.rawText, 3000),
+        text: wrapped(ctx, 'note', n.rawText, NOTE_CHARS),
         facts: facts.map((f) => ({ id: f.id, type: f.type, text: wrapped(ctx, 'fact', f.text, 200) })),
         promises: items.map((a) => ({
           actionItemId: a.id,

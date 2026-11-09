@@ -363,7 +363,11 @@ function summaryOf(d: Awaited<ReturnType<typeof tableData>>): string {
   return `${s}.`;
 }
 
-function forModel(d: Awaited<ReturnType<typeof tableData>>) {
+/** Rows of a result set the model reads (plan 35 A3); the rest are on the card and a search_network_more away. */
+export const SEARCH_MODEL_ROWS = 10;
+
+/** What the model reads of a search: counts, guidance and the first SEARCH_MODEL_ROWS rows (the card shows all). */
+export function forModel(d: Awaited<ReturnType<typeof tableData>>) {
   const found = d.counts.strong + d.counts.likely;
   return {
     setId: d.setId,
@@ -382,7 +386,7 @@ function forModel(d: Awaited<ReturnType<typeof tableData>>) {
     judgeFailed: d.judgeFailed || undefined,
     profilesReadNow: d.profilesRead || undefined,
     noAiCheck: d.judgeUnavailable || undefined,
-    rows: d.rows.slice(0, 10).map((r) => ({
+    rows: d.rows.slice(0, SEARCH_MODEL_ROWS).map((r) => ({
       personId: r.person.id,
       name: r.person.displayName,
       title: r.person.currentTitle,

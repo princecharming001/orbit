@@ -15,7 +15,14 @@ import { clearPrefs, writePrefs } from '../../integrations/prefs';
 import { ATTACH_TOOL, createChatEngine } from '../agent';
 import { CHIPS } from '../agent/chips';
 import { makeChatClient, setChatClientFactoryForTests } from '../agent/client';
-import { buildRunnerTools, CORE_TOOLS, MODEL_HIDDEN_TOOLS, STRICT_LIMITS, schemaCost } from '../agent/loop';
+import {
+  buildRunnerTools,
+  CORE_TOOLS,
+  MODEL_HIDDEN_TOOLS,
+  parseToolResult,
+  STRICT_LIMITS,
+  schemaCost,
+} from '../agent/loop';
 import { routeUtterance } from '../agent/router';
 import { CAPABILITIES } from '../capabilities';
 import { execute, registry, tools } from '../registry';
@@ -283,14 +290,18 @@ describe('Claude mode: scripted model turns calling the real tools', () => {
     return t;
   }
   /** the tool_result the model got back for a call, as JSON */
-  const resultSent = (toolUseId: string) => {
+  const rawResultSent = (toolUseId: string): string | undefined => {
     for (const r of messageRequests(fake))
       for (const m of r.body.messages)
         if (Array.isArray(m.content))
           for (const b of m.content)
             if (b.type === 'tool_result' && b.tool_use_id === toolUseId)
-              return JSON.parse(typeof b.content === 'string' ? b.content : b.content[0].text);
+              return typeof b.content === 'string' ? b.content : b.content[0].text;
     return undefined;
+  };
+  const resultSent = (toolUseId: string) => {
+    const raw = rawResultSent(toolUseId);
+    return raw === undefined ? undefined : parseToolResult(raw);
   };
 
   it('is in Claude mode with every registry tool but the admin ones offered to the model', async () => {
@@ -330,8 +341,8 @@ describe('Claude mode: scripted model turns calling the real tools', () => {
     expect(t.tools).toEqual(['search_people', 'get_person']);
     expect(resultSent(s.id).data.people[0].id).toBe('p2');
     expect(t.env?.kind).toBe('person');
-    // third-party text reaches the model wrapped, never bare
-    expect(JSON.stringify(resultSent(g.id))).toMatch(/untrusted_/);
+    // third-party text reaches the model wrapped, never bare: one untrusted element around the data (plan 35 A3)
+    expect(rawResultSent(g.id)!.match(/<untrusted_[0-9a-f]+[ >]/g)).toHaveLength(1);
   });
 
   let draftId = '';

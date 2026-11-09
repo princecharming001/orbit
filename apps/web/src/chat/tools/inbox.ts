@@ -71,6 +71,9 @@ export function replyRows(replies: ReplyItem[]): MessageRow[] {
   ).map(({ personKey: _k, ...r }) => r);
 }
 
+/** Conversations list_inbox reads (plan 35 A3: was 30); the Inbox page shows the rest. */
+export const INBOX_ROWS = 15;
+
 /** The replies card: one row a person, newest first, with the face and what their reply meant. */
 export function repliesEnvelope(ctx: ToolContext, replies: ReplyItem[]): ResultEnvelope {
   const rows = replyRows(replies).slice(0, 25);
@@ -142,7 +145,7 @@ export const listInboxTool = defineTool({
   async execute(input, ctx) {
     if (!isServerUser(ctx.user.id)) return needsAccount('Reading your inbox');
     const days = input.days ?? 7;
-    const r = await listInbox(ctx.user, { ...input, days, limit: 30 });
+    const r = await listInbox(ctx.user, { ...input, days, limit: INBOX_ROWS });
     if (!r.ok) throw new Error(r.message);
     const rows = inboxRows(r.items);
     const notes = [EMAIL_NOTE[r.email], LINKEDIN_NOTE[r.linkedin]].filter((x): x is string => !!x);

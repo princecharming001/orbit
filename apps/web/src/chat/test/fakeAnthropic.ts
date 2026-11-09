@@ -24,7 +24,16 @@ export interface ScriptedWebSearch {
   error?: string;
 }
 
+/** Claude's BM25 tool search in a scripted turn: the query and the deferred tools it loaded */
+export interface ScriptedToolSearch {
+  id?: string;
+  query: string;
+  found: string[];
+}
+
 export interface ScriptTurn {
+  /** tool searches Anthropic ran in this turn, before anything else */
+  toolSearch?: ScriptedToolSearch[];
   /** web searches Anthropic ran in this turn, before the text */
   webSearch?: ScriptedWebSearch[];
   /** progress notes streamed as thinking blocks before the text (display 'updates') */
@@ -154,6 +163,20 @@ export function encodeTurn(turn: ScriptTurn, requestedModel: string): string[] {
       ...split(note, 2).map((t) => ({ type: 'thinking_delta', thinking: t })),
       { type: 'signature_delta', signature: 'sig_' + nextId('t') },
     ]);
+  for (const t of turn.toolSearch ?? []) {
+    const id = t.id ?? nextId('srvtoolu');
+    block({ type: 'server_tool_use', id, name: 'tool_search_tool_bm25', input: {} }, [
+      { type: 'input_json_delta', partial_json: JSON.stringify({ query: t.query }) },
+    ]);
+    block({
+      type: 'tool_search_tool_result',
+      tool_use_id: id,
+      content: {
+        type: 'tool_search_tool_search_result',
+        tool_references: t.found.map((tool_name) => ({ type: 'tool_reference', tool_name })),
+      },
+    });
+  }
   for (const w of turn.webSearch ?? []) {
     const id = w.id ?? nextId('srvtoolu');
     block({ type: 'server_tool_use', id, name: 'web_search', input: {} }, [

@@ -11,7 +11,9 @@
  * - Memory: a turn whose message is at least 20 characters and states something (not only a question or a request)
  *   sends the last two student turns and the replies after them to /memory/extract, which keeps what is worth
  *   remembering (Settings, Memory lists it).
- * - Goals: a turn whose message mentions plans (the §1.6 keywords) sends the last six turns to /goals/infer. The
+ * - Goals: a turn whose message mentions plans (the §1.6 keywords) and also states something (the memory test above:
+ *   a plain question about jobs is not a plan) sends the last six turns to /goals/infer, at most once per
+ *   conversation every ten minutes (plan 35 A4: PLAN_WORDS alone matched most turns of a recruiting app). The
  *   first proposal that is not already a goal is offered under the reply: "Want me to track this as a goal?" with
  *   tap-to-answer choices (the offer_choices widget). The offer is shown live and not stored, so the history the
  *   model replays is left exactly as it was; instead the proposal goes into the next turn's snapshot, and on "yes"
@@ -39,6 +41,21 @@ export const MAX_CHARS = 8000;
 const TURN_CHARS = 2000;
 /** an offer nobody answered is dropped after this long */
 const OFFER_TTL_MS = 30 * 60_000;
+/** One /goals/infer per conversation in this long (plan 35 A4). */
+export const GOAL_INFER_EVERY_MS = 10 * 60_000;
+const lastInfer = new Map<string, number>();
+
+/**
+ * Whether this turn may ask the server for goals: it talks about plans and states something, and the conversation
+ * has not asked in the last ten minutes. Taking the slot records it.
+ */
+export function takeGoalInfer(conversationId: string, text: string, now = Date.now()): boolean {
+  if (!mentionsPlans(text) || !worthRemembering(text)) return false;
+  const at = lastInfer.get(conversationId);
+  if (at !== undefined && now - at < GOAL_INFER_EVERY_MS) return false;
+  lastInfer.set(conversationId, now);
+  return true;
+}
 
 export function mentionsPlans(text: string): boolean {
   return PLAN_WORDS.test(text);
@@ -142,6 +159,7 @@ export function offeredGoalLine(userId: string): string | undefined {
 /** Tests only. */
 export function resetGoalOffersForTests(): void {
   offers.clear();
+  lastInfer.clear();
 }
 
 /** The Yes choice: words the no-key router reads as set_goal, with the kind when the title does not say it. */
@@ -179,7 +197,7 @@ export async function learnAfterTurn(o: AfterTurn): Promise<void> {
       worthRemembering(last.text)
         ? extractFromChat(o.user, lastTurns(turns, 2)).catch(() => undefined)
         : undefined,
-      mentionsPlans(last.text)
+      takeGoalInfer(o.conversationId, last.text)
         ? offerGoal(o, lastTurns(turns, MAX_TURNS), seq).catch(() => undefined)
         : undefined,
     ]);
