@@ -171,43 +171,104 @@ function sameMessage(
   return a.length >= 20 && b.startsWith(a.slice(0, Math.min(a.length, b.length)));
 }
 
-/** Unipile: POST /api/v1/chats/{chat_id}/messages, or POST /api/v1/chats to start one (multipart). */
+/** LinkedIn caps the note on a connection request at this many characters. */
+export const LINKEDIN_NOTE_MAX = 300;
+
+/**
+ * Unipile, from the student's own LinkedIn: POST /api/v1/chats/{chat_id}/messages into the chat they already have, or
+ * POST /api/v1/chats to start one with a connection, or, when LinkedIn will not open a chat (they are not connected),
+ * POST /api/v1/users/invite: a connection request with the text as its note. The member is found from the profile
+ * address when Orbit has no member id yet (GET /api/v1/users/{slug}).
+ */
 export async function linkedinSend(
   s: Services,
-  p: { accountId: string; chatId?: string | null; attendeeId?: string | null; text: string },
-): Promise<SendOutcome & { chatId?: string }> {
+  p: {
+    accountId: string;
+    chatId?: string | null;
+    attendeeId?: string | null;
+    slug?: string | null;
+    /** known to be a 1st-degree connection: a chat, never a request */
+    connected?: boolean;
+    text: string;
+  },
+): Promise<SendOutcome & { chatId?: string; invited?: boolean; memberId?: string }> {
   const base = (s.env.unipileBase ?? '').replace(/\/+$/, '');
   if (!s.env.unipileKey || !base) return { ok: false, retry: false, error: 'unipile_unconfigured' };
-  const form = new FormData();
-  form.set('account_id', p.accountId);
-  form.set('text', p.text);
-  let url: string;
-  if (p.chatId) url = `${base}/api/v1/chats/${encodeURIComponent(p.chatId)}/messages`;
-  else if (p.attendeeId) {
-    url = `${base}/api/v1/chats`;
-    form.append('attendees_ids', p.attendeeId);
-  } else return { ok: false, retry: false, error: 'no_linkedin_chat' };
-  let res: Response;
-  try {
-    res = await s.fetch(url, {
-      method: 'POST',
-      headers: { 'X-API-KEY': s.env.unipileKey, accept: 'application/json' },
-      body: form,
-      signal: AbortSignal.timeout(SEND_TIMEOUT_MS),
-    });
-  } catch {
-    return { ok: false, retry: true, error: 'network', ambiguous: true };
-  }
-  if (res.status === 429 || res.status >= 500) {
+  const key = s.env.unipileKey;
+  const call = async (url: string, init: RequestInit): Promise<Response | 'network'> => {
+    try {
+      return await s.fetch(url, {
+        ...init,
+        headers: { 'X-API-KEY': key, accept: 'application/json', ...(init.headers ?? {}) },
+        signal: AbortSignal.timeout(SEND_TIMEOUT_MS),
+      });
+    } catch {
+      return 'network';
+    }
+  };
+  const failed = async (res: Response | 'network'): Promise<SendOutcome> => {
+    if (res === 'network') return { ok: false, retry: true, error: 'network', ambiguous: true };
     await res.body?.cancel();
-    return { ok: false, retry: true, error: `unipile_${res.status}`, ambiguous: res.status >= 500 };
-  }
-  if (!res.ok) {
-    await res.body?.cancel();
+    if (res.status === 429 || res.status >= 500)
+      return { ok: false, retry: true, error: `unipile_${res.status}`, ambiguous: res.status >= 500 };
     return { ok: false, retry: false, error: `unipile_${res.status}` };
+  };
+  const message = async (url: string, form: FormData) => {
+    const res = await call(url, { method: 'POST', body: form });
+    if (res === 'network' || !res.ok) return { res, out: await failed(res) };
+    const j = (await res.json().catch(() => ({}))) as { message_id?: string; chat_id?: string; id?: string };
+    const id = j.message_id ?? j.id;
+    if (!id) return { res, out: { ok: false, retry: false, error: 'unipile_no_id' } as SendOutcome };
+    return { res, out: { ok: true, providerMessageId: id } as SendOutcome, chatId: j.chat_id };
+  };
+  const form = () => {
+    const f = new FormData();
+    f.set('account_id', p.accountId);
+    f.set('text', p.text);
+    return f;
+  };
+
+  if (p.chatId) {
+    const r = await message(`${base}/api/v1/chats/${encodeURIComponent(p.chatId)}/messages`, form());
+    return r.out.ok ? { ...r.out, chatId: r.chatId ?? p.chatId } : r.out;
   }
-  const j = (await res.json().catch(() => ({}))) as { message_id?: string; chat_id?: string; id?: string };
-  const id = j.message_id ?? j.id;
-  if (!id) return { ok: false, retry: false, error: 'unipile_no_id' };
-  return { ok: true, providerMessageId: id, chatId: j.chat_id ?? p.chatId ?? undefined };
+
+  // who they are on LinkedIn: the member id Orbit keeps, else looked up from the profile address
+  let member = p.attendeeId ?? undefined;
+  if (!member && p.slug) {
+    const res = await call(
+      `${base}/api/v1/users/${encodeURIComponent(p.slug)}?account_id=${encodeURIComponent(p.accountId)}&notify=false`,
+      { method: 'GET' },
+    );
+    if (res === 'network' || res.status === 429 || res.status >= 500) {
+      const f = await failed(res);
+      // nothing was sent yet: a plain retry, never an unconfirmed send
+      return f.ok ? f : { ...f, ambiguous: false };
+    }
+    if (res.ok) member = ((await res.json().catch(() => ({}))) as { provider_id?: string }).provider_id;
+    else await res.body?.cancel();
+  }
+  if (!member) return { ok: false, retry: false, error: 'no_linkedin_member' };
+
+  // a new chat: LinkedIn opens one only with a connection; anyone else gets the request below
+  const f = form();
+  f.append('attendees_ids', member);
+  const chat = await message(`${base}/api/v1/chats`, f);
+  if (chat.out.ok) return { ...chat.out, chatId: chat.chatId, memberId: member };
+  if (p.connected || chat.out.retry || chat.out.error === 'unipile_no_id') return chat.out;
+
+  if (p.text.length > LINKEDIN_NOTE_MAX) return { ok: false, retry: false, error: 'linkedin_note_too_long' };
+  const res = await call(`${base}/api/v1/users/invite`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ account_id: p.accountId, provider_id: member, message: p.text }),
+  });
+  if (res === 'network' || !res.ok) return failed(res);
+  const b = (await res.json().catch(() => ({}))) as { invitation_id?: string };
+  return {
+    ok: true,
+    providerMessageId: b.invitation_id ?? `invite:${member}`,
+    invited: true,
+    memberId: member,
+  };
 }

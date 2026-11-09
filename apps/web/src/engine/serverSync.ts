@@ -958,6 +958,11 @@ export function googleStatus(s: SyncStatus | undefined = lastStatus) {
   return s?.integrations.find((i) => i.provider === 'google');
 }
 
+/** The LinkedIn integration as the server sees it. */
+export function linkedinStatus(s: SyncStatus | undefined = lastStatus) {
+  return s?.integrations.find((i) => i.provider === 'linkedin');
+}
+
 /** Google's import has finished (both the recent and the older email are in). */
 export function backfillDone(s: SyncStatus | undefined): boolean {
   const phase = googleStatus(s)?.backfill?.phase;

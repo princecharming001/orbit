@@ -353,8 +353,11 @@ export async function sendDraft(s: Services, draftId: string): Promise<SendResul
     headline: string | null;
     do_not_contact: boolean;
     linkedin_member_id: string | null;
+    linkedin_slug: string | null;
+    linkedin_connected_on: string | null;
   }>`
-    select display_name, first_name, primary_email, title, headline, do_not_contact, linkedin_member_id
+    select display_name, first_name, primary_email, title, headline, do_not_contact, linkedin_member_id,
+           linkedin_slug, linkedin_connected_on
       from orbit.people where id = ${d.person_id}::uuid`;
   if (!person) {
     await settle('failed', { error: 'no_person' });
@@ -588,12 +591,20 @@ export async function sendDraft(s: Services, draftId: string): Promise<SendResul
     const attendee = chatId
       ? null
       : await linkedinAttendee(db, userId, d.person_id, person.linkedin_member_id);
-    out = await linkedinSend(s, {
+    const li = await linkedinSend(s, {
       accountId: acct.external_account_id,
       chatId,
       attendeeId: attendee,
+      slug: person.linkedin_slug,
+      connected: !!person.linkedin_connected_on,
       text: d.body,
     });
+    // the member LinkedIn resolved is kept, so the next message needs no lookup
+    if (li.ok && li.memberId && !person.linkedin_member_id)
+      await db.sql`
+        update orbit.people set linkedin_member_id = ${li.memberId}
+         where id = ${d.person_id}::uuid and linkedin_member_id is null`.catch(() => undefined);
+    out = li;
   }
   if (!out.ok) {
     // the provider may have taken it: remembered, so the next try looks for the copy before sending again

@@ -79,6 +79,7 @@ export function toServerDraft(r: DraftRow): ServerDraft {
     status: r.status,
     sendAt: iso(r.send_at),
     sentAt: iso(r.sent_at),
+    error: r.error ?? null,
     validator: r.validator ?? null,
     generatedBy: r.generated_by === 'llm' ? 'llm' : 'template',
     hooks: Array.isArray(r.hooks) ? r.hooks : [],

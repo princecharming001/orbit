@@ -199,8 +199,8 @@ export function DraftEditor({
         ? false
         : draft.channel === 'gmail'
           ? googleSendActive(user.id)
-          : linkedInSendActive(user, person ?? undefined),
-    [user?.id, draft.channel, person?.linkedinMemberId, person?.linkedinSlug],
+          : linkedInSendActive(user, person ?? undefined, draft.id),
+    [user?.id, draft.id, draft.channel, person?.linkedinMemberId, person?.linkedinSlug],
   );
   // email that would open the mail app, in a copy of Orbit that can sign in to Google (never the made-up demo student)
   const canEnableSend =

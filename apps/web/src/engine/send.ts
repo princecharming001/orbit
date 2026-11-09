@@ -40,7 +40,7 @@ import { callApi, isServerUser } from '../integrations/orbitApi';
 import { AUTOPILOT_GAP_MIN, nextSlotAfter } from './autopilotTime';
 import { evaluateImmediateSuggestions, findReferrerFor } from './brief';
 import { checkIntroNote } from './introNote';
-import { linkedInSendActive, sendLinkedInLive } from './linkedinLive';
+import { linkedInSendActive, sendLinkedInLive, serverLinkedInSendId } from './linkedinLive';
 import { scheduleChatAt, upcomingMeeting } from './move';
 import { evaluateTrigger, recordAlreadyDone } from './stages';
 import { personZone } from './trust';
@@ -549,6 +549,8 @@ async function approveOnServer(
   undoMs: number,
   /** autopilot's planned time: the server holds it until then instead of the undo window */
   sendAt?: Date,
+  /** a LinkedIn message: the student's tap is the confirmation the server asks for, and it goes at once */
+  confirm = false,
 ): Promise<ApproveResult | undefined> {
   const sync = await import('./serverSync');
   // a draft made in this browser goes up first
@@ -558,6 +560,7 @@ async function approveOnServer(
     body,
     ...(subject !== undefined ? { subject } : {}),
     ...(sendAt ? { sendAt: sendAt.toISOString() } : { undoSec: Math.round(undoMs / 1000) }),
+    ...(confirm ? { confirm: true } : {}),
   });
   if (!r.ok) return r.code === 'not_found' ? undefined : { ok: false, error: r.message };
   await sync.keepServerDraft(r.value.draft, user.id);
@@ -567,7 +570,26 @@ async function approveOnServer(
     metadata: { channel: msg.channel, kind: msg.kind, sendAt: r.value.draft.sendAt, server: true },
   });
   if (r.value.draft.status === 'sent') return { ok: true, status: 'sent' };
+  // a LinkedIn message goes on the tap or not at all: what stopped it, in words
+  if (confirm) return { ok: false, error: linkedinSendError(r.value.draft.error, body.length) };
   return { ok: true, status: 'scheduled', sendAt: r.value.draft.sendAt ?? new Date().toISOString() };
+}
+
+/** Why the server's LinkedIn send did not go, for the student. */
+export function linkedinSendError(code: string | null | undefined, length?: number): string {
+  if (code === 'linkedin_note_too_long')
+    return `You are not connected yet, so this goes as a connection request, and LinkedIn caps its note at ${LINKEDIN_NOTE_MAX} characters${length ? ` (this one is ${length})` : ''}. Trim it and send again.`;
+  if (code === 'linkedin_not_connected')
+    return 'LinkedIn is not connected. Connect it in Settings, Integrations.';
+  if (code === 'no_linkedin_member')
+    return 'Orbit could not find them on LinkedIn. Open their profile from here and send it there.';
+  if (code === 'linkedin_unconfirmed')
+    return 'LinkedIn did not confirm the send. Check your chat with them on LinkedIn before sending again.';
+  if (code === 'linkedin_needs_fresh_approval' || code === 'linkedin_never_auto')
+    return 'LinkedIn messages go only on your tap. Press Send again.';
+  if (code?.startsWith('unipile_4'))
+    return 'LinkedIn would not take this message. They may have a pending request from you, or limit who can message them.';
+  return 'LinkedIn did not take it just now. Try again in a moment.';
 }
 
 /** Atomically move a message from one of `from` to `changes.status`; undefined when it was not in `from`. */
@@ -683,17 +705,20 @@ export async function approveAndSend(
         : 'Add a subject line.',
     };
   // an account's email goes out from the server, in the recipient's window or after the undo window (plan 29 §B2.1)
+  // and its LinkedIn message from the server too, through the LinkedIn it connected, sent now on this tap
   if (!opts.via) {
-    const serverId = await serverEmailId(user, msg);
+    const linkedin = msg.channel === 'linkedin' && isServerUser(user.id) && !opts.scheduleAt;
+    const serverId = linkedin ? await serverLinkedInSendId(msg.id) : await serverEmailId(user, msg);
     if (serverId) {
       const viaServer = await approveOnServer(
         user,
         msg,
         serverId,
         note ? withNote(bodyFinal, note) : bodyFinal,
-        env.threaded ? undefined : env.subject,
+        env.threaded || linkedin ? undefined : env.subject,
         opts.undoWindowMs ?? UNDO_WINDOW_MS,
         opts.scheduleAt,
+        linkedin,
       );
       if (viaServer) return viaServer;
     }
@@ -718,7 +743,7 @@ export async function approveAndSend(
     !opts.via &&
     (msg.channel === 'gmail'
       ? (await googleSendActive(user.id)) || (!!opts.scheduleAt && usesMockConnectors(user.id))
-      : msg.channel === 'linkedin' && (await linkedInSendActive(user, person)));
+      : msg.channel === 'linkedin' && !isServerUser(user.id) && (await linkedInSendActive(user, person)));
   // the note goes in the same text by email and in anything handed off; a LinkedIn message Orbit sends itself goes
   // alone, and the note waits as a second message for the student's tap (every LinkedIn send is a tap)
   const noteApart = !!note && msg.channel === 'linkedin' && !!direct;

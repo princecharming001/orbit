@@ -12945,6 +12945,7 @@ function toServerDraft(r) {
     status: r.status,
     sendAt: iso(r.send_at),
     sentAt: iso(r.sent_at),
+    error: r.error ?? null,
     validator: r.validator ?? null,
     generatedBy: r.generated_by === "llm" ? "llm" : "template",
     hooks: Array.isArray(r.hooks) ? r.hooks : [],
@@ -13132,41 +13133,80 @@ function sameMessage(subject, snippet, draftSubject, body2) {
   const b = plain(body2).slice(0, 80);
   return a.length >= 20 && b.startsWith(a.slice(0, Math.min(a.length, b.length)));
 }
+var LINKEDIN_NOTE_MAX2 = 300;
 async function linkedinSend(s, p) {
   const base = (s.env.unipileBase ?? "").replace(/\/+$/, "");
   if (!s.env.unipileKey || !base) return { ok: false, retry: false, error: "unipile_unconfigured" };
-  const form = new FormData();
-  form.set("account_id", p.accountId);
-  form.set("text", p.text);
-  let url;
-  if (p.chatId) url = `${base}/api/v1/chats/${encodeURIComponent(p.chatId)}/messages`;
-  else if (p.attendeeId) {
-    url = `${base}/api/v1/chats`;
-    form.append("attendees_ids", p.attendeeId);
-  } else return { ok: false, retry: false, error: "no_linkedin_chat" };
-  let res;
-  try {
-    res = await s.fetch(url, {
-      method: "POST",
-      headers: { "X-API-KEY": s.env.unipileKey, accept: "application/json" },
-      body: form,
-      signal: AbortSignal.timeout(SEND_TIMEOUT_MS)
-    });
-  } catch {
-    return { ok: false, retry: true, error: "network", ambiguous: true };
+  const key = s.env.unipileKey;
+  const call = async (url, init) => {
+    try {
+      return await s.fetch(url, {
+        ...init,
+        headers: { "X-API-KEY": key, accept: "application/json", ...init.headers ?? {} },
+        signal: AbortSignal.timeout(SEND_TIMEOUT_MS)
+      });
+    } catch {
+      return "network";
+    }
+  };
+  const failed = async (res2) => {
+    if (res2 === "network") return { ok: false, retry: true, error: "network", ambiguous: true };
+    await res2.body?.cancel();
+    if (res2.status === 429 || res2.status >= 500)
+      return { ok: false, retry: true, error: `unipile_${res2.status}`, ambiguous: res2.status >= 500 };
+    return { ok: false, retry: false, error: `unipile_${res2.status}` };
+  };
+  const message = async (url, form2) => {
+    const res2 = await call(url, { method: "POST", body: form2 });
+    if (res2 === "network" || !res2.ok) return { res: res2, out: await failed(res2) };
+    const j = await res2.json().catch(() => ({}));
+    const id = j.message_id ?? j.id;
+    if (!id) return { res: res2, out: { ok: false, retry: false, error: "unipile_no_id" } };
+    return { res: res2, out: { ok: true, providerMessageId: id }, chatId: j.chat_id };
+  };
+  const form = () => {
+    const f3 = new FormData();
+    f3.set("account_id", p.accountId);
+    f3.set("text", p.text);
+    return f3;
+  };
+  if (p.chatId) {
+    const r = await message(`${base}/api/v1/chats/${encodeURIComponent(p.chatId)}/messages`, form());
+    return r.out.ok ? { ...r.out, chatId: r.chatId ?? p.chatId } : r.out;
   }
-  if (res.status === 429 || res.status >= 500) {
-    await res.body?.cancel();
-    return { ok: false, retry: true, error: `unipile_${res.status}`, ambiguous: res.status >= 500 };
+  let member = p.attendeeId ?? void 0;
+  if (!member && p.slug) {
+    const res2 = await call(
+      `${base}/api/v1/users/${encodeURIComponent(p.slug)}?account_id=${encodeURIComponent(p.accountId)}&notify=false`,
+      { method: "GET" }
+    );
+    if (res2 === "network" || res2.status === 429 || res2.status >= 500) {
+      const f3 = await failed(res2);
+      return f3.ok ? f3 : { ...f3, ambiguous: false };
+    }
+    if (res2.ok) member = (await res2.json().catch(() => ({}))).provider_id;
+    else await res2.body?.cancel();
   }
-  if (!res.ok) {
-    await res.body?.cancel();
-    return { ok: false, retry: false, error: `unipile_${res.status}` };
-  }
-  const j = await res.json().catch(() => ({}));
-  const id = j.message_id ?? j.id;
-  if (!id) return { ok: false, retry: false, error: "unipile_no_id" };
-  return { ok: true, providerMessageId: id, chatId: j.chat_id ?? p.chatId ?? void 0 };
+  if (!member) return { ok: false, retry: false, error: "no_linkedin_member" };
+  const f2 = form();
+  f2.append("attendees_ids", member);
+  const chat = await message(`${base}/api/v1/chats`, f2);
+  if (chat.out.ok) return { ...chat.out, chatId: chat.chatId, memberId: member };
+  if (p.connected || chat.out.retry || chat.out.error === "unipile_no_id") return chat.out;
+  if (p.text.length > LINKEDIN_NOTE_MAX2) return { ok: false, retry: false, error: "linkedin_note_too_long" };
+  const res = await call(`${base}/api/v1/users/invite`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ account_id: p.accountId, provider_id: member, message: p.text })
+  });
+  if (res === "network" || !res.ok) return failed(res);
+  const b = await res.json().catch(() => ({}));
+  return {
+    ok: true,
+    providerMessageId: b.invitation_id ?? `invite:${member}`,
+    invited: true,
+    memberId: member
+  };
 }
 
 // supabase/functions/_shared/sending/send.ts
@@ -13389,7 +13429,8 @@ ${d.body}`)) {
   if (review && !Number.isNaN(review.getTime()) && review.getTime() > now.getTime())
     return later("review_window", review);
   const [person2] = await db2.sql`
-    select display_name, first_name, primary_email, title, headline, do_not_contact, linkedin_member_id
+    select display_name, first_name, primary_email, title, headline, do_not_contact, linkedin_member_id,
+           linkedin_slug, linkedin_connected_on
       from orbit.people where id = ${d.person_id}::uuid`;
   if (!person2) {
     await settle("failed", { error: "no_person" });
@@ -13579,12 +13620,19 @@ ${d.body}`)) {
     }
     const chatId = d.thread_external_id ?? await linkedinChatId(db2, userId, d.person_id);
     const attendee = chatId ? null : await linkedinAttendee(db2, userId, d.person_id, person2.linkedin_member_id);
-    out = await linkedinSend(s, {
+    const li = await linkedinSend(s, {
       accountId: acct.external_account_id,
       chatId,
       attendeeId: attendee,
+      slug: person2.linkedin_slug,
+      connected: !!person2.linkedin_connected_on,
       text: d.body
     });
+    if (li.ok && li.memberId && !person2.linkedin_member_id)
+      await db2.sql`
+        update orbit.people set linkedin_member_id = ${li.memberId}
+         where id = ${d.person_id}::uuid and linkedin_member_id is null`.catch(() => void 0);
+    out = li;
   }
   if (!out.ok) {
     if (out.ambiguous)

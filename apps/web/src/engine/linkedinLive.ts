@@ -892,12 +892,27 @@ export async function mutualsFor(
 export async function linkedInSendActive(
   user: User,
   person?: Pick<Person, 'linkedinMemberId' | 'linkedinSlug'>,
+  /** an account's draft: Orbit sends it from the server, so the server must hold it */
+  draftId?: string,
 ): Promise<boolean> {
-  if (isServerUser(user.id)) return false;
+  if (isServerUser(user.id)) return !!draftId && !!(await serverLinkedInSendId(draftId));
   if (person && !person.linkedinMemberId && !person.linkedinSlug) return false;
   const row = await liveLinkedInAccount(user.id);
   if (!isConnected(row)) return false;
   return usesMockConnectors(user.id) || (unipileConfigured() && !!row.accessToken);
+}
+
+/**
+ * An account's LinkedIn message goes out from the server, through the LinkedIn the student connected (each one on a
+ * tap of Send). The id the draft has there, or undefined when the server does not hold it or LinkedIn is not
+ * connected there.
+ */
+export async function serverLinkedInSendId(draftId: string): Promise<string | undefined> {
+  const sync = await import('./serverSync');
+  const id = sync.serverIdOf(draftId);
+  if (!id) return undefined;
+  const status = sync.syncStatusNow() ?? (await sync.refreshSyncStatus().catch(() => undefined));
+  return sync.linkedinStatus(status)?.status === 'active' ? id : undefined;
 }
 
 export type LinkedInSendResult =

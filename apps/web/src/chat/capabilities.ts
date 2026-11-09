@@ -639,7 +639,7 @@ export const CAPABILITIES: readonly Capability[] = [
   {
     id: 'draft_approve_send',
     area: 'Drafts and sending',
-    title: 'Send a draft: Gmail, your mail app, or copy and open LinkedIn',
+    title: 'Send a draft: Gmail or LinkedIn from Orbit, or your mail app',
     kind: 'risky',
     utterances: [
       'send the follow-up to Priya',

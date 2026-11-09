@@ -87,7 +87,8 @@ export interface FakeState {
   /** what /goals/infer proposes */
   proposals: ProposedGoal[];
   due: DueItem[];
-  linkedin: { status: string; relations: number };
+  /** `sendError`: what the server's LinkedIn send answers with instead of sending (`linkedin_note_too_long`, ...) */
+  linkedin: { status: string; relations: number; sendError?: string };
   /** what /people/history answers per person (empty lists otherwise) */
   history: Map<
     string,
@@ -630,6 +631,20 @@ export function createFakeOrbitApi(
               watchExpiresAt: null,
               backfill: state.status.google.backfill,
             },
+            ...(state.linkedin.status === 'active'
+              ? [
+                  {
+                    provider: 'linkedin',
+                    status: 'active',
+                    email: null,
+                    scopes: [],
+                    linked: true,
+                    lastSyncedAt: null,
+                    lastError: null,
+                    watchExpiresAt: null,
+                  },
+                ]
+              : []),
           ],
           jobs: { pending: 0 },
         });
@@ -902,6 +917,14 @@ export function createFakeOrbitApi(
             : typeof body.undoSec === 'number' && (state.user.autonomyLevel ?? 0) === 0
               ? iso(Date.now() + body.undoSec * 1000)
               : iso(clock + 18 * 3600_000);
+        // LinkedIn goes on the tap, at once, or fails with the reason (the server's sendDraft)
+        if (d.channel === 'linkedin') {
+          const now = iso(Date.now());
+          if (state.linkedin.sendError)
+            Object.assign(d, { status: 'failed', error: state.linkedin.sendError });
+          else Object.assign(d, { status: 'sent', sendAt: now, sentAt: now, error: null });
+          return json(200, { draft: d });
+        }
         // a held one approved again goes back in the batch at its planned time
         const back = state.autopilot.held.findIndex((h) => h.draftId === d.id && h.sendAt);
         if (back >= 0 && typeof body.sendAt === 'string') {

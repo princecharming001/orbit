@@ -280,6 +280,8 @@ export interface ServerDraft {
   status: 'draft' | 'approved' | 'scheduled' | 'sending' | 'sent' | 'failed' | 'discarded' | 'cancelled';
   sendAt: string | null;
   sentAt: string | null;
+  /** why the last send did not go (`linkedin_note_too_long`, `unipile_422`, ...), when it did not */
+  error?: string | null;
   validator: { ok: boolean; issues: string[]; words: number; grade: number } | null;
   generatedBy: 'llm' | 'template';
   hooks: { text: string; sourceId: string }[];
