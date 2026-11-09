@@ -21,6 +21,7 @@ create table if not exists orbit.user_files (
 create index if not exists user_files_user_idx on orbit.user_files (user_id, created_at desc);
 
 alter table orbit.user_files enable row level security;
-revoke all on orbit.user_files from anon, authenticated;
+revoke all on orbit.user_files from public, anon, authenticated;
+grant all on orbit.user_files to service_role;
 
 alter table orbit.drafts add column if not exists attachments jsonb not null default '[]'::jsonb;
