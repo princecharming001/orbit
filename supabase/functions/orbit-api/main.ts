@@ -22,13 +22,16 @@ const agentEnv = await agentEnvWithSecrets(env, db);
 // Unipile (account-mode LinkedIn), and where Google sends sign-in back: a function secret, else the value stored in
 // orbit_private.secrets. The redirect stays this function's own address until ORBIT_GOOGLE_REDIRECT_URI is stored
 // (https://tryorbit.today/auth/google/callback, the site page that passes sign-in on, once Google lists it).
-const [sessionSecret, unipileWebhookSecret, unipileKey, unipileBase, redirectUri] = await Promise.all([
-  resolveSecret(env, db, 'ORBIT_SESSION_SECRET', 'orbit_session_secret'),
-  resolveSecret(env, db, 'ORBIT_UNIPILE_WEBHOOK_SECRET', 'orbit_unipile_webhook_secret'),
-  providerSecret(env, db, 'UNIPILE_API_KEY'),
-  providerSecret(env, db, 'UNIPILE_BASE_URL'),
-  providerSecret(env, db, 'ORBIT_GOOGLE_REDIRECT_URI'),
-]);
+const [sessionSecret, unipileWebhookSecret, unipileKey, unipileBase, redirectUri, ownerId] =
+  await Promise.all([
+    resolveSecret(env, db, 'ORBIT_SESSION_SECRET', 'orbit_session_secret'),
+    resolveSecret(env, db, 'ORBIT_UNIPILE_WEBHOOK_SECRET', 'orbit_unipile_webhook_secret'),
+    providerSecret(env, db, 'UNIPILE_API_KEY'),
+    providerSecret(env, db, 'UNIPILE_BASE_URL'),
+    providerSecret(env, db, 'ORBIT_GOOGLE_REDIRECT_URI'),
+    // plan 34 E3: the account that may read /admin/costs
+    providerSecret(env, db, 'ORBIT_OWNER_ID'),
+  ]);
 const salt = env('ORBIT_LOG_SALT') ?? ((env('SUPABASE_SERVICE_ROLE_KEY') ?? '').slice(-16) || 'orbit');
 
 Deno.serve(
@@ -46,6 +49,7 @@ Deno.serve(
       unipileWebhookSecret,
       functionsUrl: supabaseUrl ? `${supabaseUrl}/functions/v1` : undefined,
       connectorsSigningKey: env('SUPABASE_SERVICE_ROLE_KEY'),
+      ownerId,
     },
     db,
     agent: { env: agentEnv },

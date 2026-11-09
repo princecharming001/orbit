@@ -26,7 +26,7 @@ export interface LookedUp {
 }
 export type EmailLookup = (c: Candidate) => Promise<LookedUp | undefined>;
 /** verified lookups in one run at most (each may spend a credit); the best-fitting candidates get them */
-export const MAX_LOOKUPS = 10;
+export const MAX_LOOKUPS = 5;
 /** Whether an address is deliverable, from a verifier (lookup.ts); undefined when it could not say. */
 export type Verify = (email: string) => Promise<'valid' | 'invalid' | 'risky' | undefined>;
 /** The address pattern a company uses, as Hunter writes it ("{first}", "{f}{last}"); undefined when unknown. */
@@ -44,7 +44,7 @@ export function fromTemplate(template: string, f: string, l: string): string | u
 }
 
 /** built addresses checked in one run at most (each may spend half a credit) */
-export const MAX_VERIFIES = 10;
+export const MAX_VERIFIES = 5;
 
 type Make = (f: string, l: string) => string;
 

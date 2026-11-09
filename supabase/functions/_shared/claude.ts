@@ -1,8 +1,10 @@
 /**
  * The one way Orbit's server tasks call Claude (§13.1): the model per task from one table, the stable system
  * prompt marked for caching, structured output through `messages.parse` with a Zod schema, `stop_reason` handled
- * (`refusal` → the caller's fallback path; `max_tokens` → one retry with twice the room), usage written to
- * orbit.usage_ledger, and the per-user caps of budget.ts checked first. With no key it answers
+ * (`refusal` → the caller's fallback path; `max_tokens` → one retry with twice the room, only when the cut answer
+ * did not parse and the task is not a cheap one in NO_RETRY_TASKS; the retry is its own `<task>:retry` ledger row),
+ * usage written to orbit.usage_ledger, the per-user caps of budget.ts checked first, and Anthropic's kill switch
+ * (switches.ts) honoured. With no key it answers
  * `{unconfigured: true}` and makes no call. The chat agent itself stays on the browser/orbit-claude path.
  */
 import Anthropic from '@anthropic-ai/sdk';
@@ -83,6 +85,17 @@ export const TASKS: Record<Task, TaskSetting> = {
 
 export { costUsd, PRICES, type Usage } from './prices.ts';
 
+/**
+ * Tasks that are cheap to leave `max_tokens`: a cut answer is dropped instead of paid for twice (plan 34 A6). The
+ * work they do is redone on a later pass anyway.
+ */
+export const NO_RETRY_TASKS: ReadonlySet<Task> = new Set<Task>([
+  'classify',
+  'reply_classify',
+  'fit',
+  'reading',
+]);
+
 export type ClaudeResult<T> =
   | { ok: true; data: T; model: string; costUsd: number; usage: Usage }
   | { ok: false; unconfigured: true }
@@ -98,6 +111,8 @@ export interface ClaudeDeps {
   now?: () => Date;
   /** a prepared client (tests); otherwise one is made from apiKey */
   client?: Anthropic;
+  /** Anthropic's kill switch (switches.ts): false answers budget_exceeded with cap 'provider_off' and makes no call */
+  enabled?: () => Promise<boolean>;
 }
 
 export interface StructuredRequest<S extends z.ZodType> {
@@ -126,6 +141,8 @@ export function makeClaude(deps: ClaudeDeps) {
     req: StructuredRequest<S>,
   ): Promise<ClaudeResult<z.infer<S>>> {
     if (!client) return { ok: false, unconfigured: true };
+    if (deps.enabled && !(await deps.enabled().catch(() => true)))
+      return { ok: false, budgetExceeded: true, cap: 'provider_off', resetsAt: '9999-12-31T00:00:00.000Z' };
     const setting = TASKS[req.task];
     if (deps.db && req.userId) {
       const verdict = await checkBudget(
@@ -171,7 +188,7 @@ export function makeClaude(deps: ClaudeDeps) {
         await recordUsage(deps.db, {
           userId: req.userId,
           provider: 'anthropic',
-          operation: req.task,
+          operation: attempt === 0 ? req.task : `${req.task}:retry`,
           units: usage.input_tokens + usage.output_tokens,
           costUsd: cost,
         });
@@ -179,14 +196,16 @@ export function makeClaude(deps: ClaudeDeps) {
         const details = (msg as { stop_details?: { category?: string | null } | null }).stop_details;
         return { ok: false, refused: true, category: details?.category ?? null };
       }
+      const parsed = msg.parsed_output as Safe<z.infer<S>> | null;
       if (msg.stop_reason === 'max_tokens') {
-        if (attempt === 0) {
+        // a cut answer that still parses is kept; a cheap task is not paid for twice
+        if (parsed?.ok) return { ok: true, data: parsed.value, model: setting.model, costUsd: cost, usage };
+        if (attempt === 0 && !NO_RETRY_TASKS.has(req.task)) {
           maxTokens *= 2;
           continue;
         }
         return { ok: false, error: 'max_tokens' };
       }
-      const parsed = msg.parsed_output as Safe<z.infer<S>> | null;
       if (!parsed?.ok) return { ok: false, error: 'invalid_output', detail: parsed?.error?.slice(0, 200) };
       return { ok: true, data: parsed.value, model: setting.model, costUsd: cost, usage };
     }

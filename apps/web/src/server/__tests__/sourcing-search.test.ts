@@ -7,7 +7,14 @@ import { createApollo } from '../../../../../supabase/functions/_shared/provider
 import { createExa } from '../../../../../supabase/functions/_shared/providers/exa';
 import { createSemanticScholar } from '../../../../../supabase/functions/_shared/providers/semanticScholar';
 import { createUnipileResearch } from '../../../../../supabase/functions/_shared/providers/unipileResearch';
+import type { SearchEngine } from '../../../../../supabase/functions/_shared/providers/webSearch';
 import type { ClaudePrompt } from '../../../../../supabase/functions/_shared/research/deps';
+import { engineWeb } from '../../../../../supabase/functions/_shared/research/engineWeb';
+import {
+  gatherFrom,
+  memorySharedCache,
+  type WebSource,
+} from '../../../../../supabase/functions/_shared/research/web';
 import {
   type Candidate,
   keywordFit,
@@ -419,5 +426,120 @@ describe('merge and fit rules', () => {
     const leo = out.results.find((r) => r.candidate.name === 'Leo Grant')!;
     expect(leo.candidate.warmth).toMatchObject({ tier: 2, bridge: { personId: 'kel' } });
     expect(leo.reasons[0]).toMatch(/Kelly is close to you/);
+  });
+});
+
+describe('plan 34: cheaper sourcing', () => {
+  it('B2 the same ask twice, from anyone: Exa and Apollo are asked once, and the second run pays nothing', async () => {
+    const net = fakeFetch((c: Call) => {
+      if (c.url.endsWith('api.exa.ai/search'))
+        return json((c.body as { category?: string }).category === 'company' ? exaFunds : exaInvestors);
+      if (c.url.includes('mixed_people/api_search')) return json(apolloInvestors);
+      return undefined;
+    });
+    const cache = memorySharedCache();
+    const run = async (userId: string) => {
+      const money = memoryBudget();
+      const llm = fakeClaude(fitAnswer({ 'Maya Patel': 0.9 }));
+      const out = await sourcePeople(
+        {
+          ...providers(net.fetch),
+          claude: llm.claude,
+          reachOf: () => null,
+          responsiveness: () => 0.5,
+          budget: money.budget,
+          cache,
+          clock: manualClock().clock,
+        },
+        { userId, goal: fundraising, user: { firstName: 'Ari' } },
+      );
+      return { out, money };
+    };
+    const first = await run('u1');
+    const callsAfterFirst = net.calls.length;
+    expect(callsAfterFirst).toBeGreaterThan(0);
+    expect(first.money.ledger.some((r) => r.provider === 'exa')).toBe(true);
+    const second = await run('u2');
+    expect(net.calls.length).toBe(callsAfterFirst);
+    expect(second.money.ledger.filter((r) => r.provider === 'exa')).toHaveLength(0);
+    expect(second.out.results.map((r) => r.candidate.name)).toEqual(
+      first.out.results.map((r) => r.candidate.name),
+    );
+  });
+
+  it('B5 a search engine goes first: pages by plain fetch, and Claude web search is never asked', async () => {
+    const searched: string[][] = [];
+    const serper: SearchEngine = {
+      name: 'serper',
+      configured: true,
+      usdPerCall: 0.001,
+      queriesPerCall: 1,
+      search: async (queries) => {
+        searched.push(queries);
+        return {
+          ok: true,
+          value: [{ url: 'https://lab.example.edu/people', title: 'People', snippet: 'Our lab' }],
+        };
+      },
+    };
+    const page = fakeFetch((c: Call) =>
+      c.url === 'https://lab.example.edu/people'
+        ? new Response(
+            `<html><title>People</title><body>${'Dr. Jane Doe runs the lab. '.repeat(20)}</body></html>`,
+            {
+              headers: { 'content-type': 'text/html' },
+            },
+          )
+        : undefined,
+    );
+    let claudeAsked = 0;
+    const claudeSource: WebSource = {
+      name: 'claude',
+      estimateUsd: () => 0.05,
+      gather: async () => {
+        claudeAsked++;
+        return { hits: [], pages: [], costUsd: 0.05, notes: [], steps: [] };
+      },
+    };
+    const cache = memorySharedCache();
+    const plan = { queries: [{ id: 'a', query: 'lab people' }], focus: 'lab people', maxPages: 2 };
+    const ctx = { budgetUsd: 0.25, timeoutMs: 10_000, select: (h: { url: string }[]) => h.map((x) => x.url) };
+    const g = await gatherFrom([engineWeb(serper, cache, page.fetch), claudeSource], plan, ctx);
+    expect(g.provider).toBe('serper');
+    expect(g.costUsd).toBeCloseTo(0.001, 6);
+    expect(g.pages[0]?.text).toContain('Jane Doe');
+    expect(claudeAsked).toBe(0);
+    // the same search again is free: cached by engine and query, and the page by URL
+    const again = await gatherFrom([engineWeb(serper, cache, page.fetch), claudeSource], plan, ctx);
+    expect(again.costUsd).toBe(0);
+    expect(searched).toHaveLength(1);
+    expect(page.calls).toHaveLength(1);
+  });
+
+  it('B5 an engine that cannot answer hands over to the next source', async () => {
+    const down: SearchEngine = {
+      name: 'parallel',
+      configured: true,
+      usdPerCall: 0.001,
+      queriesPerCall: 5,
+      search: async () => ({
+        ok: false,
+        kind: 'http',
+        provider: 'parallel',
+        status: 402,
+        message: 'parallel 402',
+      }),
+    };
+    const next: WebSource = {
+      name: 'claude',
+      estimateUsd: () => 0,
+      gather: async () => ({ hits: [], pages: [], costUsd: 0, notes: ['claude ran'], steps: [] }),
+    };
+    const g = await gatherFrom(
+      [engineWeb(down, memorySharedCache()), next],
+      { queries: [{ id: 'a', query: 'x' }], focus: 'x', maxPages: 1 },
+      { budgetUsd: 1, timeoutMs: 1000, select: () => [] },
+    );
+    expect(g.provider).toBe('claude');
   });
 });

@@ -4935,6 +4935,7 @@ var KIND_QUEUE = {
   company_facts_sync: "orbit_enrich",
   search_census: "orbit_enrich",
   search_reading: "orbit_enrich",
+  "cost.digest": "orbit_enrich",
   noop: "orbit_enrich"
 };
 function queueFor(kind) {

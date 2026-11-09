@@ -442,6 +442,14 @@ function backoffMs(attempt, random) {
   return Math.round(base * (1 + 0.25 * random()));
 }
 async function requestJson(opts, spec) {
+  if (opts.gate && !await opts.gate().catch(() => true))
+    return {
+      ok: false,
+      kind: "budget_exceeded",
+      provider: spec.provider,
+      reason: "off",
+      message: `${spec.provider}: switched off`
+    };
   const sleep = opts.sleep ?? defaultSleep;
   const random = opts.random ?? Math.random;
   const clock = opts.clock ?? Date.now;
@@ -524,8 +532,36 @@ function trimBase(base) {
 import { z } from "npm:zod@3.25.76/v4";
 z.config({ jitless: true });
 
+// supabase/functions/_shared/providers/exa.ts
+var EXA_SEARCH_USD = 7e-3;
+var costSchema = z.looseObject({ total: z.number().nullish() }).nullish();
+var exaResultSchema = z.looseObject({
+  id: z.string().nullish(),
+  url: z.string(),
+  title: z.string().nullish(),
+  publishedDate: z.string().nullish(),
+  author: z.string().nullish(),
+  text: z.string().nullish(),
+  highlights: z.array(z.string()).nullish(),
+  highlightScores: z.array(z.number()).nullish()
+});
+var exaSearchResponseSchema = z.looseObject({
+  requestId: z.string().nullish(),
+  results: z.array(exaResultSchema).default([]),
+  costDollars: costSchema
+});
+var exaContentsResponseSchema = z.looseObject({
+  requestId: z.string().nullish(),
+  results: z.array(exaResultSchema).default([]),
+  statuses: z.array(z.looseObject({ id: z.string().nullish(), status: z.string().nullish() })).nullish(),
+  costDollars: costSchema
+});
+
 // supabase/functions/_shared/providers/village.ts
 var VILLAGE_BASE = "https://api.village.do";
+var VILLAGE_PERSON_CREDITS = 5;
+var VILLAGE_COMPANY_CREDITS = 5;
+var VILLAGE_USD_PER_CREDIT = 0.02;
 var VILLAGE_TOKEN_TTL_MS = 50 * 6e4;
 var scoreMetaSchema = z.looseObject({ title: z.string().nullish(), description: z.string().nullish() });
 var profileSchema = z.looseObject({
@@ -711,6 +747,13 @@ function companyIntros(r) {
 
 // supabase/functions/orbit-connectors/connectors.ts
 var DEFAULT_LIMITS = { perMinute: 120, perDay: 3e3 };
+async function recordQuietly(sink, row) {
+  if (!sink) return;
+  try {
+    await sink(row);
+  } catch {
+  }
+}
 function postgrestCompanyCache(url2, serviceKey2, doFetch = fetch) {
   const auth = { apikey: serviceKey2, Authorization: `Bearer ${serviceKey2}` };
   const rpc = (fn, args) => doFetch(`${url2}/rest/v1/rpc/${fn}`, {
@@ -1210,6 +1253,16 @@ function makeHandler(deps) {
     const accountId = String(body.accountId ?? "");
     const spend = (kind, caller, units = 1) => spendLedger(take, totals, kind, caller, accountId, now(), units);
     if (isEnrich) return enrichmentRoute(deps, path, body, { h, doFetch, take, now, visitor, spend });
+    const villageCharge = async (kind) => {
+      const credits = kind === "person" ? VILLAGE_PERSON_CREDITS : VILLAGE_COMPANY_CREDITS;
+      await recordQuietly(deps.usage, {
+        provider: "village",
+        operation: `paths:${kind}`,
+        units: credits,
+        costUsd: credits * VILLAGE_USD_PER_CREDIT,
+        accountId: visitor
+      });
+    };
     if (isPosting) {
       const p = deps.postings ?? {};
       const answer = await readPosting(
@@ -1269,7 +1322,7 @@ function makeHandler(deps) {
       if (!within) return json(200, LEDGER_LIMIT, h);
     }
     try {
-      if (isVillage) return json(200, await villagePaths(village, deps.villageUser, body), h);
+      if (isVillage) return json(200, await villagePaths(village, deps.villageUser, body, villageCharge), h);
       const reconnect = text(body.reconnectAccountId, 200);
       if (reconnect && !await accountTokenOk(reconnect, body.token, deps.signingKey, browserKept))
         return json(403, { error: "this LinkedIn account is not linked to this browser" }, h);
@@ -2379,7 +2432,22 @@ async function enrichmentRoute(deps, path, body, ctx) {
     }
     if (kind === "company") return json(200, await unipileCompany(deps, body, doFetch), h);
     if (kind === "photo") return json(200, await unipilePhoto(deps, body, doFetch), h);
-    return json(200, await exaSearch(e, body, doFetch), h);
+    return json(
+      200,
+      await exaSearch(
+        e,
+        body,
+        doFetch,
+        () => recordQuietly(deps.usage, {
+          provider: "exa",
+          operation: "web",
+          units: 1,
+          costUsd: EXA_SEARCH_USD,
+          accountId: ctx.visitor
+        })
+      ),
+      h
+    );
   } catch (err) {
     return json(502, { error: err instanceof Error ? err.message : "upstream error" }, h);
   }
@@ -2620,7 +2688,7 @@ async function unipileCompany(deps, body, doFetch) {
     }
   };
 }
-async function exaSearch(e, body, doFetch) {
+async function exaSearch(e, body, doFetch, paid) {
   const name = text(body.name, 120);
   if (!name) return { ok: false, reason: "bad_request", message: "Say who to look up." };
   const query = [`"${name.replace(/"/g, "")}"`, text(body.company), text(body.school)].filter(Boolean).join(" ");
@@ -2632,6 +2700,7 @@ async function exaSearch(e, body, doFetch) {
   if (res.status >= 400 && res.status < 500)
     return { ok: false, reason: "refused", message: `The web search refused it (${res.status}).` };
   if (!res.ok) throw new Error(`exa ${res.status}`);
+  await paid?.();
   const b = await res.json();
   return {
     ok: true,
@@ -2647,7 +2716,7 @@ function looksLikeDomain(s) {
     s.trim().replace(/^https?:\/\//i, "").replace(/^www\./i, "")
   );
 }
-async function villagePaths(village, user, body) {
+async function villagePaths(village, user, body, paid) {
   const linkedinUrl = typeof body.linkedin_url === "string" ? body.linkedin_url.trim() : "";
   const company = typeof body.company === "string" ? body.company.trim() : "";
   const domain = typeof body.domain === "string" && body.domain.trim() ? body.domain.trim() : company && looksLikeDomain(company) ? company : "";
@@ -2659,6 +2728,7 @@ async function villagePaths(village, user, body) {
       return refused(r) ?? (() => {
         throw new Error(r.message);
       })();
+    await paid?.("person");
     intros = personIntros(r.value);
   } else if (domain) {
     const clean = domain.replace(/^https?:\/\//i, "").replace(/^www\./i, "").replace(/\/.*$/, "").toLowerCase();
@@ -2667,6 +2737,7 @@ async function villagePaths(village, user, body) {
       return refused(r) ?? (() => {
         throw new Error(r.message);
       })();
+    await paid?.("company");
     intros = companyIntros(r.value);
   } else return { paths: [] };
   const fallbackTarget = typeof body.name === "string" && body.name ? body.name : company;
@@ -2686,6 +2757,26 @@ async function villagePaths(village, user, body) {
       ].filter((h) => !!h),
       note: i.reasons[0] ?? i.scoreLabel
     }))
+  };
+}
+function postgrestUsage(url2, serviceKey2, doFetch = fetch) {
+  return async (row) => {
+    const r = await doFetch(`${url2}/rest/v1/rpc/orbit_usage_add`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        apikey: serviceKey2,
+        Authorization: `Bearer ${serviceKey2}`
+      },
+      body: JSON.stringify({
+        p_provider: row.provider,
+        p_operation: row.operation,
+        p_units: row.units,
+        p_cost_usd: row.costUsd,
+        p_account_id: row.accountId
+      })
+    });
+    if (!r.ok) throw new Error(`usage store ${r.status}`);
   };
 }
 function postgrestTake(url2, serviceKey2, doFetch = fetch, clock = Date.now) {
@@ -2813,6 +2904,8 @@ Deno.serve(
     shared: url && serviceKey ? postgrestSharedReads(url, serviceKey) : void 0,
     // LinkedIn companies found once for every student, logos copied into storage (orbit_private.linkedin_companies)
     companies: url && serviceKey ? postgrestCompanyCache(url, serviceKey) : void 0,
+    // plan 34 E1: Exa from /web and Village from /paths land in orbit.usage_ledger like the server's own calls
+    usage: url && serviceKey ? postgrestUsage(url, serviceKey) : void 0,
     postings: {
       anthropicKey,
       cache: url && serviceKey ? postgrestPostingCache(url, serviceKey) : void 0,

@@ -20,11 +20,14 @@ import type { Db } from '../db.ts';
 import { HttpError } from '../http.ts';
 import { bestReach, ensurePerson, loadGraph, resolvePersonRef, type UserGraph } from '../paths/find.ts';
 import { cleanLinkedInUrl, linkedInSlugOf } from '../providers/unipileResearch';
+import { createParallelSearch, createSerperSearch } from '../providers/webSearch';
 import { claudeDep, sqlBudget } from '../research/bind.ts';
+import { engineWeb, gatedWeb } from '../research/engineWeb';
 import { norm, normOrg } from '../research/guards';
 import { claudeWeb, exaWeb, GATHER_MODEL, sqlSharedCache, type WebSource } from '../research/web';
 import { firstNameOf } from '../rows.ts';
 import type { Services } from '../services.ts';
+import { switchGate } from '../switches.ts';
 import { dnsMx, EMAIL_DEADLINE_MS, fillEmails, type KnownAddress, orgDomainsOf, withDeadline } from './email';
 import { indexKnown, type KnownRow, matchKnown } from './known';
 import { domainTemplate, emailLookup, emailVerifier } from './lookup';
@@ -276,6 +279,7 @@ export async function runSourcing(
       web: webSourcesFor(s),
       fetch: s.fetch,
       budget,
+      cache,
       clock: () => now.getTime(),
       knownPerson: knownOf,
       reachOf: async (c) => {
@@ -459,20 +463,31 @@ export async function ensureChat(
 }
 
 /**
- * Where sourcing reads the public web (plan 31): Exa when its key is set, Claude's own search otherwise, both through
- * the shared research cache. Tests hand in their own sources.
+ * Where sourcing reads the public web (plan 31): Serper, then Parallel, when their keys are set (a search costs a
+ * tenth of Claude's, pages are plain fetches; plan 34 B5), then Exa, then Claude's own search, all through the shared
+ * research cache. Tests hand in their own sources.
  */
 export function webSourcesFor(s: Services): WebSource[] {
   if (s.web) return s.web;
   const cache = sqlSharedCache(s.db, () => s.now().getTime());
   const out: WebSource[] = [];
+  const gate = switchGate(s.db, 'web_search');
+  const engine = { fetch: s.fetch, timeoutMs: 10_000, maxRetries: 1, gate };
+  for (const e of [
+    createSerperSearch({ ...engine, apiKey: s.env.serperKey }),
+    createParallelSearch({ ...engine, apiKey: s.env.parallelKey }),
+  ])
+    if (e.configured) out.push(engineWeb(e, cache, s.fetch));
   if (s.exa.configured) out.push(exaWeb(s.exa, cache));
   const client =
     s.anthropic ??
     (s.env.anthropicKey
       ? new Anthropic({ apiKey: s.env.anthropicKey, fetch: s.fetch, maxRetries: 1 })
       : undefined);
-  if (client) out.push(claudeWeb(client, cache, { model: GATHER_MODEL }));
+  if (client)
+    out.push(
+      gatedWeb(claudeWeb(client, cache, { model: GATHER_MODEL }), [gate, switchGate(s.db, 'anthropic')]),
+    );
   return out;
 }
 

@@ -8,11 +8,16 @@
  * - only client tools plus Claude's own web search (the one server tool the chat uses, at most five searches a
  *   turn); no other server tools, MCP servers or containers
  * - a body size cap, and request counters per visitor (hashed IP) per minute and per day, plus a global daily cap
- * - a dollar cap per user per day (ORBIT_USER_CAP_USD, $20 by default, the UTC day): each answer's tokens are priced as
+ * - a dollar cap per user per day (ORBIT_USER_CAP_USD, $3 by default, the UTC day): each answer's tokens are priced as
  *   they stream past and added to the user's total for the day; once it reaches the cap the proxy answers 429
- *   `x-orbit-limit: budget` until the next day.
+ *   `x-orbit-limit: budget` until the next day. A signed-in user's spend is also added to their lifetime total
+ *   (`user:<uuid>`), the one the server's own caps read.
  *   The user is the signed-in account when the browser sends a valid Orbit session (`x-orbit-session`), else the
  *   browser's own id (`x-orbit-client`), else the hashed IP.
+ * - a switch: when the `anthropic` row of orbit_private.provider_switches is off the proxy answers 503
+ *   `x-orbit-limit: unconfigured` until it is on again (read every five minutes)
+ * - one usage row per answer (tokens, cache reads and writes, web searches, the turn's iteration from
+ *   `x-orbit-iterations`) in orbit_private.claude_usage, so the cache hit rate and the shape of a turn are measured
  *
  * - a call type in `x-orbit-call`: the chat (no header, or `chat`) as above; `memory` (reading what the student said
  *   after a chat turn) and `resume` (reading their resume) are structured-output calls with one message, no tools, no
@@ -75,16 +80,31 @@ export const DEFAULT_LIMITS: Limits = {
   globalPerDay: 100_000,
   perDayCall: DEFAULT_CALL_PER_DAY,
 };
-/** Dollars one user may spend on Orbit's key in a UTC day. */
-export const DEFAULT_CAP_USD = 20;
+/** Dollars one user may spend on Orbit's key in a UTC day (plan 34: the whole product's measured peak is $4.35). */
+export const DEFAULT_CAP_USD = 3;
 /**
  * Dollars a day from one network without a signed-in session. The browser id a request names is the caller's own
- * choice, so a fresh one is a fresh $30: without this a script rotating it spends Orbit's key until the global
+ * choice, so a fresh one is a fresh allowance: without this a script rotating it spends Orbit's key until the global
  * request count stops it.
  */
-export const DEFAULT_ANON_IP_DAILY_USD = 10;
+export const DEFAULT_ANON_IP_DAILY_USD = 1;
 /** Dollars a day on Orbit's key across everyone: the hard stop on the bill. */
-export const DEFAULT_GLOBAL_DAILY_USD = 200;
+export const DEFAULT_GLOBAL_DAILY_USD = 25;
+
+/** One answer's shape and price, written once the answer is complete (plan 34 C1). */
+export interface UsageRow {
+  subject: string;
+  call: CallType;
+  model: string | undefined;
+  input: number;
+  cacheRead: number;
+  cacheWrite: number;
+  output: number;
+  webSearches: number;
+  /** which model request of the chat turn this was, from `x-orbit-iterations` */
+  iterations: number | undefined;
+  usd: number;
+}
 
 /** Running dollar totals per user (see subjectOf). */
 export interface Spend {
@@ -116,8 +136,12 @@ export interface ProxyDeps {
   anonIpDailyUsd?: number;
   /** dollars a day across everyone */
   globalDailyUsd?: number;
-  /** ORBIT_SESSION_SECRET, to recognise a signed-in user's access token */
-  sessionSecret?: string;
+  /** ORBIT_SESSION_SECRET, to recognise a signed-in user's access token (or a lookup for it, cached by the caller) */
+  sessionSecret?: string | (() => Promise<string | undefined>);
+  /** whether Orbit's Anthropic access is switched on (orbit_private.provider_switches); absent means on */
+  enabled?: () => Promise<boolean>;
+  /** records one usage row per answer; absent means nothing is recorded */
+  usage?: (row: UsageRow) => Promise<void>;
 }
 
 const EXPOSE = [
@@ -347,15 +371,59 @@ export function answerCost(model: string | undefined, u: Usage): number {
  * the output tokens at message_delta (each charged as it arrives, so an answer cut short still pays for its
  * prompt); from a JSON answer, everything at the end.
  */
+export interface MeterTotals {
+  model: string | undefined;
+  input: number;
+  cacheRead: number;
+  cacheWrite: number;
+  output: number;
+  webSearches: number;
+  usd: number;
+}
+
 export function meter(
   body: ReadableStream<Uint8Array>,
   stream: boolean,
   charge: (usd: number) => Promise<void>,
+  done?: (totals: MeterTotals) => Promise<void>,
 ): ReadableStream<Uint8Array> {
   const decoder = new TextDecoder();
   let pending = '';
   let model: string | undefined;
   let started: Usage = { input_tokens: 0, output_tokens: 0 };
+  let seen = false;
+  const totals: MeterTotals = {
+    model: undefined,
+    input: 0,
+    cacheRead: 0,
+    cacheWrite: 0,
+    output: 0,
+    webSearches: 0,
+    usd: 0,
+  };
+  const tally = (u: Usage, usd: number) => {
+    seen = true;
+    totals.model = model;
+    totals.input += u.input_tokens ?? 0;
+    totals.cacheRead += u.cache_read_input_tokens ?? 0;
+    totals.cacheWrite += u.cache_creation_input_tokens ?? 0;
+    totals.output += u.output_tokens ?? 0;
+    totals.webSearches += u.server_tool_use?.web_search_requests ?? 0;
+    totals.usd += usd;
+  };
+  const priced = async (u: Usage) => {
+    const usd = answerCost(model, u);
+    tally(u, usd);
+    await safely(usd);
+  };
+  const finish = async () => {
+    if (!done || !seen) return;
+    try {
+      await done({ ...totals, usd: Math.round(totals.usd * 100_000) / 100_000 });
+    } catch {
+      // recording never breaks the answer
+    }
+  };
   const safely = async (usd: number) => {
     if (!(usd > 0)) return;
     try {
@@ -384,25 +452,20 @@ export function meter(
         cache_read_input_tokens: u.cache_read_input_tokens ?? 0,
         cache_creation_input_tokens: u.cache_creation_input_tokens ?? 0,
       };
-      await safely(answerCost(model, started));
+      await priced(started);
     } else if (d.type === 'message_delta' && d.usage) {
       // the totals at the end: the output, the searches, and any input read after the start (a web search's results
       // are read in further passes), less what message_start already charged
       const u = d.usage;
       const more = (n: number | null | undefined, had: number | null | undefined) =>
         Math.max(0, (n ?? 0) - (had ?? 0));
-      await safely(
-        answerCost(model, {
-          input_tokens: more(u.input_tokens, started.input_tokens),
-          output_tokens: u.output_tokens ?? 0,
-          cache_read_input_tokens: more(u.cache_read_input_tokens, started.cache_read_input_tokens),
-          cache_creation_input_tokens: more(
-            u.cache_creation_input_tokens,
-            started.cache_creation_input_tokens,
-          ),
-          server_tool_use: u.server_tool_use,
-        }),
-      );
+      await priced({
+        input_tokens: more(u.input_tokens, started.input_tokens),
+        output_tokens: u.output_tokens ?? 0,
+        cache_read_input_tokens: more(u.cache_read_input_tokens, started.cache_read_input_tokens),
+        cache_creation_input_tokens: more(u.cache_creation_input_tokens, started.cache_creation_input_tokens),
+        server_tool_use: u.server_tool_use,
+      });
     }
   };
   return body.pipeThrough(
@@ -424,14 +487,19 @@ export function meter(
         if (stream) {
           const line = pending.trim();
           if (line.startsWith('data:')) await onEvent(line.slice(5).trim());
+          await finish();
           return;
         }
         try {
           const d = JSON.parse(pending) as { model?: string; usage?: Usage };
-          if (d.usage) await safely(answerCost(d.model, d.usage));
+          if (d.usage) {
+            model = d.model;
+            await priced(d.usage);
+          }
         } catch {
           // not an answer we can price
         }
+        await finish();
       },
     }),
   );
@@ -472,6 +540,17 @@ export function makeHandler(deps: ProxyDeps): (req: Request) => Promise<Response
     }
     if (!apiKey)
       return apiError(503, 'api_error', 'Orbit’s shared Claude access is not set up yet.', h, {
+        'x-should-retry': 'false',
+        'x-orbit-limit': 'unconfigured',
+      });
+    let on = true;
+    try {
+      on = deps.enabled ? await deps.enabled() : true;
+    } catch {
+      on = true;
+    }
+    if (!on)
+      return apiError(503, 'api_error', 'Orbit’s shared Claude access is paused right now.', h, {
         'x-should-retry': 'false',
         'x-orbit-limit': 'unconfigured',
       });
@@ -522,11 +601,24 @@ export function makeHandler(deps: ProxyDeps): (req: Request) => Promise<Response
 
     // the per-user dollar cap for the day: counted before the call, charged as the answer streams back
     const day = now().toISOString().slice(0, 10);
-    const subject = `${await subjectOf(req, visitor, deps.sessionSecret, now())}:${day}`;
-    // also counted: the day's total for everyone, and the day's total for this network when nobody is signed in
+    let sessionSecret: string | undefined;
+    try {
+      sessionSecret =
+        typeof deps.sessionSecret === 'function' ? await deps.sessionSecret() : deps.sessionSecret;
+    } catch {
+      sessionSecret = undefined;
+    }
+    const who = await subjectOf(req, visitor, sessionSecret, now());
+    const subject = `${who}:${day}`;
+    // also counted: the day's total for everyone, the day's total for this network when nobody is signed in, and a
+    // signed-in user's lifetime total (the subject the server's caps read, so chat and server spend see each other)
     const globalDay = `global:${day}`;
-    const ipDay = subject.startsWith('user:') ? undefined : `ipday:${visitor}:${day}`;
-    const charged = [subject, globalDay, ...(ipDay ? [ipDay] : [])];
+    const signedIn = who.startsWith('user:');
+    const ipDay = signedIn ? undefined : `ipday:${visitor}:${day}`;
+    const charged = [subject, globalDay, ...(ipDay ? [ipDay] : []), ...(signedIn ? [who] : [])];
+    const iterHeader = Number(req.headers.get('x-orbit-iterations'));
+    const iterations =
+      Number.isInteger(iterHeader) && iterHeader >= 0 && iterHeader <= 1000 ? iterHeader : undefined;
     let spent = 0;
     if (deps.spend) {
       const spend = deps.spend;
@@ -606,10 +698,16 @@ export function makeHandler(deps: ProxyDeps): (req: Request) => Promise<Response
     if (!spend || !upstream.ok || !upstream.body)
       return new Response(upstream.body, { status: upstream.status, headers: out });
     const streamed = (upstream.headers.get('content-type') ?? '').includes('text/event-stream');
+    const usage = deps.usage;
     return new Response(
-      meter(upstream.body, streamed, async (usd) => {
-        await Promise.all(charged.map((c) => spend.add(c, usd)));
-      }),
+      meter(
+        upstream.body,
+        streamed,
+        async (usd) => {
+          await Promise.all(charged.map((c) => spend.add(c, usd)));
+        },
+        usage ? (t) => usage({ subject, call, ...t, iterations }) : undefined,
+      ),
       { status: upstream.status, headers: out },
     );
   };
@@ -659,6 +757,100 @@ export function postgrestTake(url: string, serviceKey: string, doFetch: typeof f
     const row = rows[0];
     if (!row) throw new Error('counter store returned nothing');
     return { allowed: row.allowed, over: row.over_bucket ?? undefined };
+  };
+}
+
+async function serviceRpc(
+  url: string,
+  serviceKey: string,
+  name: string,
+  args: Record<string, unknown>,
+  doFetch: typeof fetch,
+): Promise<unknown> {
+  const r = await doFetch(`${url}/rest/v1/rpc/${name}`, {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/json',
+      apikey: serviceKey,
+      Authorization: `Bearer ${serviceKey}`,
+    },
+    body: JSON.stringify(args),
+  });
+  if (!r.ok) throw new Error(`${name} ${r.status}`);
+  const text = await r.text();
+  return text ? JSON.parse(text) : null;
+}
+
+/** A value read through a service-role-only function, cached for five minutes (a miss is cached too). */
+export function postgrestCached<T>(
+  load: () => Promise<T>,
+  ttlMs = 5 * 60_000,
+  now: () => number = Date.now,
+): () => Promise<T> {
+  let cached: { value: T; at: number } | undefined;
+  return async () => {
+    if (cached && now() - cached.at < ttlMs) return cached.value;
+    const value = await load();
+    cached = { value, at: now() };
+    return value;
+  };
+}
+
+/** The session signing key kept in Vault (orbit_session_secret), the same one orbit-api signs with. */
+export function postgrestSessionSecret(
+  url: string,
+  serviceKey: string,
+  doFetch: typeof fetch = fetch,
+): () => Promise<string | undefined> {
+  return postgrestCached(
+    async () =>
+      ((await serviceRpc(url, serviceKey, 'orbit_session_secret', {}, doFetch)) as string | null) ||
+      undefined,
+  );
+}
+
+/** Whether a provider is switched on (orbit_provider_enabled); a store that cannot answer counts as on. */
+export function postgrestEnabled(
+  url: string,
+  serviceKey: string,
+  provider: string,
+  doFetch: typeof fetch = fetch,
+): () => Promise<boolean> {
+  return postgrestCached(async () => {
+    try {
+      const v = await serviceRpc(url, serviceKey, 'orbit_provider_enabled', { p: provider }, doFetch);
+      return v !== false;
+    } catch {
+      return true;
+    }
+  });
+}
+
+/** Writes one usage row per answer (orbit_claude_usage_add). */
+export function postgrestUsage(
+  url: string,
+  serviceKey: string,
+  doFetch: typeof fetch = fetch,
+): (row: UsageRow) => Promise<void> {
+  return async (row) => {
+    await serviceRpc(
+      url,
+      serviceKey,
+      'orbit_claude_usage_add',
+      {
+        p_subject: row.subject,
+        p_call: row.call,
+        p_model: row.model ?? null,
+        p_input: row.input,
+        p_cache_read: row.cacheRead,
+        p_cache_write: row.cacheWrite,
+        p_output: row.output,
+        p_web_searches: row.webSearches,
+        p_iterations: row.iterations ?? null,
+        p_usd: row.usd,
+      },
+      doFetch,
+    );
   };
 }
 

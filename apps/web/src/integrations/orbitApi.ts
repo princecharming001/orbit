@@ -286,8 +286,15 @@ export interface ApiRoutes {
   // profile reading (plan 33)
   '/search/profiles': [{ since?: string }, SearchProfilesResponse];
   '/search/read': [SearchReadRequest, SearchReadResponse];
+  // the owner's cost view (plan 34 E3); anyone else gets 404
+  '/admin/costs': [Record<string, never>, CostDigestResponse];
 }
 export type ClientRoute = keyof ApiRoutes;
+
+/** One `cost.digest` row the worker writes each morning (plan 34 E2), as /admin/costs returns it. */
+export interface CostDigestResponse {
+  rows: { at: string; details: Record<string, unknown> }[];
+}
 
 // ---- results ------------------------------------------------------------------------------------------------------
 

@@ -18,6 +18,7 @@ import { createUnipileResearch, type UnipileResearch } from './providers/unipile
 import { createVillage, type Village } from './providers/village';
 import { type Queue, sqlQueue } from './queue.ts';
 import type { WebSource } from './research/web';
+import { switchGate } from './switches.ts';
 import { sqlVault } from './vault.ts';
 
 export interface AgentEnv {
@@ -44,6 +45,9 @@ export interface AgentEnv {
   /** RESEND_API_KEY (+ RESEND_FROM): the transactional mailer plan 10 §1 names; unset, nothing is mailed */
   resendKey?: string;
   resendFrom?: string;
+  /** SERPER_API_KEY, PARALLEL_API_KEY: cheaper web searches for sourcing than Claude's web search (plan 34 B5) */
+  serperKey?: string;
+  parallelKey?: string;
 }
 
 /** gte-small sentence embedding (384 dims, mean-pooled, normalized), or null when the model is not available. */
@@ -178,6 +182,8 @@ export function makeServices(cfg: AgentConfig, base: { db: Db; now?: () => Date;
   const now = base.now ?? (() => new Date());
   const doFetch = cfg.fetch ?? ((...a: Parameters<typeof fetch>) => fetch(...a));
   const p = { fetch: doFetch, sleep: cfg.sleep, random: cfg.random, clock: () => now().getTime() };
+  // each paid provider answers budget_exceeded (reason 'off') while its switch is off (switches.ts, plan 34 A5)
+  const gate = (name: Parameters<typeof switchGate>[1]) => switchGate(base.db, name);
   const env = cfg.env;
   const google = googleConfigOf(env, doFetch, now);
   let tokens = cfg.tokens;
@@ -199,14 +205,20 @@ export function makeServices(cfg: AgentConfig, base: { db: Db; now?: () => Date;
       fetch: cfg.fetch,
       now,
       client: cfg.anthropic,
+      enabled: gate('anthropic'),
     }),
-    exa: createExa({ ...p, apiKey: env.exaKey }),
-    unipile: createUnipileResearch({ ...p, apiKey: env.unipileKey, baseUrl: env.unipileBase }),
-    apollo: createApollo({ ...p, apiKey: env.apolloKey }),
-    hunter: createHunter({ ...p, apiKey: env.hunterKey }),
+    exa: createExa({ ...p, apiKey: env.exaKey, gate: gate('exa') }),
+    unipile: createUnipileResearch({
+      ...p,
+      apiKey: env.unipileKey,
+      baseUrl: env.unipileBase,
+      gate: gate('unipile_reads'),
+    }),
+    apollo: createApollo({ ...p, apiKey: env.apolloKey, gate: gate('apollo') }),
+    hunter: createHunter({ ...p, apiKey: env.hunterKey, gate: gate('hunter') }),
     semanticScholar: createSemanticScholar({ ...p, apiKey: env.semanticScholarKey, anonymous: true }),
     village: villageFor(cfg, () =>
-      createVillage({ ...p, secretKey: env.villageKey, baseUrl: env.villageBase }),
+      createVillage({ ...p, secretKey: env.villageKey, baseUrl: env.villageBase, gate: gate('village') }),
     ),
     embed: cfg.embed ?? supabaseEmbed(),
     mailer: makeMailer(env, doFetch),
@@ -239,6 +251,8 @@ export const AGENT_SECRET_NAMES = [
   'VILLAGE_BASE_URL',
   'RESEND_API_KEY',
   'RESEND_FROM',
+  'SERPER_API_KEY',
+  'PARALLEL_API_KEY',
 ] as const;
 
 /**
@@ -284,5 +298,7 @@ export function agentEnvFrom(get: (name: string) => string | undefined): AgentEn
       (supabaseUrl ? `${supabaseUrl}/functions/v1/orbit-api/auth/google/callback` : undefined),
     resendKey: get('RESEND_API_KEY'),
     resendFrom: get('RESEND_FROM'),
+    serperKey: get('SERPER_API_KEY'),
+    parallelKey: get('PARALLEL_API_KEY'),
   };
 }

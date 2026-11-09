@@ -65,6 +65,7 @@ import {
   linkedInPaused,
   newRecord,
   noteField,
+  noteProfileMark,
   pauseLinkedIn,
   readBudget,
   readLastRun,
@@ -600,6 +601,9 @@ async function enrichOne(ctx: Ctx, personId: string, chats: Set<string>): Promis
     needs = needsOf(ctx, p, rec, chats.has(p.id));
   }
   await writeRecord(rec);
+  // a full profile read is noted by who they are on LinkedIn, so the photo queue and the hop reads skip them
+  if (rec.profileAt === ctx.now.toISOString())
+    await noteProfileMark(ctx.user.id, p.linkedinMemberId ?? p.linkedinSlug, { profileAt: rec.profileAt });
   return p.id;
 }
 

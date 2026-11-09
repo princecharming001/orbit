@@ -25,6 +25,24 @@ describe('the student voice', () => {
     // connecting runs the sample student's whole LinkedIn sync (83 connections): seconds of work on a busy machine
   }, 20_000);
 
+  it('reads LinkedIn messages at most once a week unless the student asks to learn again (plan 34 A8)', async () => {
+    const t0 = new Date('2026-11-09T12:00:00Z');
+    await learnStyle(user, { now: t0, force: true });
+    const first = (await db.styles.get(user.id))?.linkedinReadAt;
+    expect(first).toBe(t0.toISOString());
+    // an automatic relearn two days later reuses the last read
+    const two = await learnStyle(user, { now: new Date(t0.getTime() + 2 * 86_400_000) });
+    expect(two.ok && two.sources.linkedin).toBeGreaterThan(0);
+    expect((await db.styles.get(user.id))?.linkedinReadAt).toBe(first);
+    // the student's own Learn reads again, and so does an automatic one after a week
+    const asked = new Date(t0.getTime() + 3 * 86_400_000);
+    await learnStyle(user, { now: asked, force: true });
+    expect((await db.styles.get(user.id))?.linkedinReadAt).toBe(asked.toISOString());
+    const later = new Date(asked.getTime() + 8 * 86_400_000);
+    await learnStyle(user, { now: later });
+    expect((await db.styles.get(user.id))?.linkedinReadAt).toBe(later.toISOString());
+  });
+
   it('keeps what the student set by hand when it learns again', async () => {
     await updateStyle(user, {
       greetingPatterns: ['Hello {first},'],

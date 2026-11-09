@@ -7,8 +7,9 @@ import { connectDb } from '../_shared/db.ts';
 import { googleTokenSource } from '../_shared/google.ts';
 import { makeLogger } from '../_shared/http.ts';
 import { providerSecret, resolveSecret } from '../_shared/secrets.ts';
-import { agentEnvWithSecrets } from '../_shared/services.ts';
+import { agentEnvWithSecrets, makeMailer } from '../_shared/services.ts';
 import { sqlVault } from '../_shared/vault.ts';
+import { DEFAULT_COST_THRESHOLDS } from './handlers/cost.ts';
 import type { HandlerDeps } from './handlers/deps.ts';
 import { DEFAULT_BUDGET_MS, defaultHandlers, makeWorkerHandler, runTick } from './worker.ts';
 
@@ -27,11 +28,25 @@ const cronSecret = await resolveSecret(env, db, 'ORBIT_CRON_SECRET', 'orbit_cron
 // function secret when set, else the key Orbit's chat proxy reads from orbit_private.secrets. Only these jobs get it:
 // drafting and research read theirs through agentEnv. Spend goes through the per-user ledger and caps.
 // Unipile (LinkedIn sync) the same way.
-const [claudeKey, unipileKey, unipileBase] = await Promise.all([
+const [claudeKey, unipileKey, unipileBase, ownerId] = await Promise.all([
   providerSecret(env, db, 'ORBIT_ANTHROPIC_API_KEY'),
   providerSecret(env, db, 'UNIPILE_API_KEY'),
   providerSecret(env, db, 'UNIPILE_BASE_URL'),
+  providerSecret(env, db, 'ORBIT_OWNER_ID'),
 ]);
+
+// the daily cost digest (plan 34 E2): thresholds from the environment, the owner's email through Resend when set
+const limit = (name: string, fallback: number) => {
+  const v = Number(env(name));
+  return Number.isFinite(v) && v > 0 ? v : fallback;
+};
+const costThresholds = {
+  anthropicUsdDay: limit('ORBIT_COST_ANTHROPIC_USD_DAY', DEFAULT_COST_THRESHOLDS.anthropicUsdDay),
+  hunterMonthCredits: limit('ORBIT_COST_HUNTER_MONTH_CREDITS', DEFAULT_COST_THRESHOLDS.hunterMonthCredits),
+  linkedinShare: limit('ORBIT_COST_LINKEDIN_SHARE', DEFAULT_COST_THRESHOLDS.linkedinShare),
+  isolateDeaths: limit('ORBIT_COST_ISOLATE_DEATHS', DEFAULT_COST_THRESHOLDS.isolateDeaths),
+  deadLetters: limit('ORBIT_COST_DEAD_LETTERS', DEFAULT_COST_THRESHOLDS.deadLetters),
+};
 
 // the ingestion handlers: a provider whose secrets are missing ends its jobs as skipped
 const googleId = env('ORBIT_GOOGLE_CLIENT_ID');
@@ -47,6 +62,7 @@ const handlerDeps: HandlerDeps = {
   gmailTopic: env('GMAIL_PUBSUB_TOPIC'),
   unipile: { apiKey: unipileKey, baseUrl: unipileBase },
   claude: makeClaude({ apiKey: claudeKey, db }),
+  cost: { mailer: makeMailer(agentEnv, fetch), ownerId, thresholds: costThresholds },
 };
 const handlers = defaultHandlers({ ...handlerDeps, agents: { env: agentEnv } });
 

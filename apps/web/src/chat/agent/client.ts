@@ -41,6 +41,11 @@ export function makeChatClient(
   });
 }
 
+/** Whether the chat goes through Orbit's shared access (no key of the student's own), which meters each request. */
+export function usesSharedAccess(): boolean {
+  return !readPrefs().anthropicApiKey && sharedClaudeAvailable();
+}
+
 /**
  * The client for the saved key; without one, the client for Orbit's shared access when it is available; else
  * undefined. The shared client sends a placeholder key to Orbit's server function, never a real one.

@@ -110,16 +110,51 @@ describe('claude helper (§13.1)', () => {
     });
   });
 
-  it('retries once with twice the room after max_tokens', async () => {
+  it('retries once with twice the room after max_tokens, as its own ledger row', async () => {
+    const u = await makeUser(t.db);
     const cut = message({ content: [{ type: 'text', text: '{"kind":"inter' }], stop_reason: 'max_tokens' });
     const api = fakeApi([cut, message()]);
-    const c = makeClaude({ apiKey: 'sk-placeholder', fetch: api.fetch });
-    const r = await c.structured({ ...request, userId: null });
+    const c = makeClaude({ apiKey: 'sk-placeholder', fetch: api.fetch, db: t.db });
+    const r = await c.structured({ ...request, task: 'triage', userId: u });
     expect(r.ok).toBe(true);
     expect(api.calls.map((x) => JSON.parse(x.body).max_tokens)).toEqual([1000, 2000]);
+    const rows = await t.db.sql<{ operation: string }>`
+      select operation from orbit.usage_ledger where user_id = ${u}::uuid order by id`;
+    expect(rows.map((x) => x.operation)).toEqual(['triage', 'triage:retry']);
     const twice = fakeApi([cut, cut]);
     const c2 = makeClaude({ apiKey: 'sk-placeholder', fetch: twice.fetch });
-    expect(await c2.structured({ ...request, userId: null })).toEqual({ ok: false, error: 'max_tokens' });
+    expect(await c2.structured({ ...request, task: 'triage', userId: null })).toEqual({
+      ok: false,
+      error: 'max_tokens',
+    });
+  });
+
+  it('plan 34 A6: a cheap task cut at max_tokens is not paid for twice; a cut answer that parses is kept', async () => {
+    const cut = message({ content: [{ type: 'text', text: '{"kind":"inter' }], stop_reason: 'max_tokens' });
+    for (const task of ['classify', 'reply_classify', 'fit', 'reading'] as const) {
+      const api = fakeApi([cut, message()]);
+      const c = makeClaude({ apiKey: 'sk-placeholder', fetch: api.fetch });
+      expect(await c.structured({ ...request, task, userId: null })).toEqual({
+        ok: false,
+        error: 'max_tokens',
+      });
+      expect(api.calls).toHaveLength(1);
+    }
+    const whole = fakeApi([message({ stop_reason: 'max_tokens' })]);
+    const c3 = makeClaude({ apiKey: 'sk-placeholder', fetch: whole.fetch });
+    expect((await c3.structured({ ...request, task: 'triage', userId: null })).ok).toBe(true);
+    expect(whole.calls).toHaveLength(1);
+  });
+
+  it('plan 34 A5: makes no call while Anthropic is switched off', async () => {
+    const api = fakeApi([message()]);
+    const c = makeClaude({ apiKey: 'sk-placeholder', fetch: api.fetch, enabled: async () => false });
+    expect(await c.structured({ ...request, userId: null })).toMatchObject({
+      ok: false,
+      budgetExceeded: true,
+      cap: 'provider_off',
+    });
+    expect(api.calls).toHaveLength(0);
   });
 
   it('reports output that does not match the schema', async () => {

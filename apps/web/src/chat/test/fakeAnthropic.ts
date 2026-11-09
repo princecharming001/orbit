@@ -90,7 +90,7 @@ export function encodeTurn(turn: ScriptTurn, requestedModel: string): string[] {
     output_tokens: 0,
     cache_creation_input_tokens: turn.usage?.cache_creation_input_tokens ?? 0,
     cache_read_input_tokens: turn.usage?.cache_read_input_tokens ?? 0,
-    server_tool_use: null,
+    server_tool_use: turn.webSearch?.length ? { web_search_requests: turn.webSearch.length } : null,
     service_tier: 'standard',
     iterations: turn.fallback
       ? [

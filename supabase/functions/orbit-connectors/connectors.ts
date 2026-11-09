@@ -43,10 +43,14 @@ import { accountTokenOk, unipileBrowserKept } from '../_shared/accountToken.ts';
 import { timingSafeEqual } from '../_shared/crypto.ts';
 import { clientIp, defaultOrigins } from '../_shared/origins.ts';
 import { type PostingDeps, readPosting } from '../_shared/postings.ts';
+import { EXA_SEARCH_USD } from '../_shared/providers/exa.ts';
 import {
   companyIntros,
   createVillage,
   personIntros,
+  VILLAGE_COMPANY_CREDITS,
+  VILLAGE_PERSON_CREDITS,
+  VILLAGE_USD_PER_CREDIT,
   type Village,
   type VillageIntro,
   type VillageUser,
@@ -115,6 +119,33 @@ export interface ConnectorDeps {
   shared?: SharedReads;
   /** LinkedIn companies found once and kept for every student, with their logos in Orbit's own storage */
   companies?: CompanyCache;
+  /**
+   * Plan 34 E1: one orbit.usage_ledger row per paid call these routes make (Exa from /web, Village from /paths),
+   * with no user and the visitor hash as the account, so the daily cost view misses nothing. Without it nothing is
+   * recorded.
+   */
+  usage?: UsageSink;
+}
+
+/** One paid call a browser route made: the provider, what it was, credits or calls, and dollars. */
+export interface UsageRow {
+  provider: 'exa' | 'village';
+  operation: string;
+  units: number;
+  costUsd: number;
+  /** the visitor hash, never a raw IP */
+  accountId: string;
+}
+export type UsageSink = (row: UsageRow) => Promise<void>;
+
+/** Records a usage row without ever failing the route that paid for it. */
+async function recordQuietly(sink: UsageSink | undefined, row: UsageRow): Promise<void> {
+  if (!sink) return;
+  try {
+    await sink(row);
+  } catch {
+    // the cost view misses one row; the student's answer does not wait on it
+  }
 }
 
 /**
@@ -850,6 +881,16 @@ export function makeHandler(deps: ConnectorDeps): (req: Request) => Promise<Resp
     const spend = <K extends LedgerKind>(kind: K, caller: LedgerCaller<K>, units = 1) =>
       spendLedger(take, totals, kind, caller, accountId, now(), units);
     if (isEnrich) return enrichmentRoute(deps, path, body, { h, doFetch, take, now, visitor, spend });
+    const villageCharge = async (kind: 'person' | 'company') => {
+      const credits = kind === 'person' ? VILLAGE_PERSON_CREDITS : VILLAGE_COMPANY_CREDITS;
+      await recordQuietly(deps.usage, {
+        provider: 'village',
+        operation: `paths:${kind}`,
+        units: credits,
+        costUsd: credits * VILLAGE_USD_PER_CREDIT,
+        accountId: visitor,
+      });
+    };
     if (isPosting) {
       // plan 23 §4.1: a job posting read once and cached for everyone; only a fetch counts against the visitor's day
       const p = deps.postings ?? {};
@@ -924,7 +965,7 @@ export function makeHandler(deps: ConnectorDeps): (req: Request) => Promise<Resp
     }
 
     try {
-      if (isVillage) return json(200, await villagePaths(village, deps.villageUser!, body), h);
+      if (isVillage) return json(200, await villagePaths(village, deps.villageUser!, body, villageCharge), h);
       // a reconnect names the student's existing account; only the browser holding its token may ask for it
       const reconnect = text(body.reconnectAccountId, 200);
       if (reconnect && !(await accountTokenOk(reconnect, body.token, deps.signingKey, browserKept)))
@@ -2492,7 +2533,19 @@ async function enrichmentRoute(
     }
     if (kind === 'company') return json(200, await unipileCompany(deps, body, doFetch), h);
     if (kind === 'photo') return json(200, await unipilePhoto(deps, body, doFetch), h);
-    return json(200, await exaSearch(e, body, doFetch), h);
+    return json(
+      200,
+      await exaSearch(e, body, doFetch, () =>
+        recordQuietly(deps.usage, {
+          provider: 'exa',
+          operation: 'web',
+          units: 1,
+          costUsd: EXA_SEARCH_USD,
+          accountId: ctx.visitor,
+        }),
+      ),
+      h,
+    );
   } catch (err) {
     return json(502, { error: err instanceof Error ? err.message : 'upstream error' }, h);
   }
@@ -2832,7 +2885,12 @@ async function unipileCompany(deps: ConnectorDeps, body: Record<string, unknown>
  * A web search for one person (Exa: POST /search with the page text): their name in quotes plus a company or school
  * to tell namesakes apart. Results are links with a short excerpt; the browser decides what is surely them.
  */
-async function exaSearch(e: EnrichmentDeps, body: Record<string, unknown>, doFetch: typeof fetch) {
+async function exaSearch(
+  e: EnrichmentDeps,
+  body: Record<string, unknown>,
+  doFetch: typeof fetch,
+  paid?: () => Promise<void>,
+) {
   const name = text(body.name, 120);
   if (!name) return { ok: false, reason: 'bad_request', message: 'Say who to look up.' };
   const query = [`"${name.replace(/"/g, '')}"`, text(body.company), text(body.school)]
@@ -2846,6 +2904,7 @@ async function exaSearch(e: EnrichmentDeps, body: Record<string, unknown>, doFet
   if (res.status >= 400 && res.status < 500)
     return { ok: false, reason: 'refused', message: `The web search refused it (${res.status}).` };
   if (!res.ok) throw new Error(`exa ${res.status}`);
+  await paid?.();
   const b = (await res.json()) as { results?: Record<string, unknown>[] };
   return {
     ok: true,
@@ -2876,7 +2935,12 @@ function looksLikeDomain(s: string): boolean {
  * domain (`domain`, or a `company` that is one) asks `/v2/companies/paths`. Village has no name-only lookup, so a
  * bare name or company name gets no paths (and costs no credits).
  */
-async function villagePaths(village: Village, user: VillageUser, body: Record<string, unknown>) {
+async function villagePaths(
+  village: Village,
+  user: VillageUser,
+  body: Record<string, unknown>,
+  paid?: (kind: 'person' | 'company') => Promise<void>,
+) {
   const linkedinUrl = typeof body.linkedin_url === 'string' ? body.linkedin_url.trim() : '';
   const company = typeof body.company === 'string' ? body.company.trim() : '';
   const domain =
@@ -2901,6 +2965,7 @@ async function villagePaths(village: Village, user: VillageUser, body: Record<st
           throw new Error(r.message);
         })()
       );
+    await paid?.('person');
     intros = personIntros(r.value);
   } else if (domain) {
     const clean = domain
@@ -2916,6 +2981,7 @@ async function villagePaths(village: Village, user: VillageUser, body: Record<st
           throw new Error(r.message);
         })()
       );
+    await paid?.('company');
     intros = companyIntros(r.value);
   } else return { paths: [] };
   const fallbackTarget = typeof body.name === 'string' && body.name ? body.name : company;
@@ -2935,6 +3001,30 @@ async function villagePaths(village: Village, user: VillageUser, body: Record<st
       ].filter((h): h is string => !!h),
       note: i.reasons[0] ?? i.scoreLabel,
     })),
+  };
+}
+
+// ---- the usage ledger ------------------------------------------------------------------------------------------
+
+/** Usage rows over PostgREST (orbit_usage_add, service role only; supabase/migrations/20261113_orbit_claude_usage.sql). */
+export function postgrestUsage(url: string, serviceKey: string, doFetch: typeof fetch = fetch): UsageSink {
+  return async (row) => {
+    const r = await doFetch(`${url}/rest/v1/rpc/orbit_usage_add`, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        apikey: serviceKey,
+        Authorization: `Bearer ${serviceKey}`,
+      },
+      body: JSON.stringify({
+        p_provider: row.provider,
+        p_operation: row.operation,
+        p_units: row.units,
+        p_cost_usd: row.costUsd,
+        p_account_id: row.accountId,
+      }),
+    });
+    if (!r.ok) throw new Error(`usage store ${r.status}`);
   };
 }
 

@@ -473,6 +473,22 @@ describe('mutual connections', () => {
     }
   });
 
+  it('two Orbit rows for one LinkedIn member share one read for the day (plan 34 B4)', async () => {
+    await connectLinkedInLive(user);
+    const daniel = (await people()).find((p) => p.firstName === 'Daniel')!;
+    await db.people.put({ ...daniel, id: 'p_daniel_dup' });
+    let asked = 0;
+    vi.stubGlobal('fetch', (url: string) => {
+      if (!url.endsWith('/mutuals')) return Promise.resolve(new Response('{}', { status: 404 }));
+      asked++;
+      const answer = { verified: true, mutuals: [{ name: 'Sana Ahmed', member_id: 'm_sana' }] };
+      return Promise.resolve(new Response(JSON.stringify(answer), { status: 200 }));
+    });
+    expect(await mutualsFor(user, daniel)).toMatchObject({ ok: true });
+    expect(await mutualsFor(user, (await db.people.get('p_daniel_dup'))!)).toMatchObject({ ok: true });
+    expect(asked).toBe(1);
+  });
+
   it("today's reads used up: says when they come back, as a limit, not an error to retry", async () => {
     await connectLinkedInLive(user);
     const daniel = (await people()).find((p) => p.firstName === 'Daniel')!;

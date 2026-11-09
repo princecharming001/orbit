@@ -7,19 +7,26 @@ import { z } from '../providers/zod';
 
 export const PROMPT_VERSION = 'dossier-v3';
 
-export function dossierSystem(userFirstName: string, goalSentence: string): string {
-  return [
-    `You write a research brief about one person for ${userFirstName}, who wants to ${goalSentence}.`,
-    'Use only the sources provided, and write from what each source actually says: "joined" stays "joined", never "led". Every claim needs the id of the source it came from.',
-    'If sources disagree or might be about a different person with the same name, leave the claim out.',
-    'A source whose title starts with "[likely them]" names someone with their name whose details all fit, but nothing ties it to them for certain: you may use it, saying so ("likely the same Dana who..."), never in an opener, and never for their current role.',
-    'Never write, even if a source says it: age, ethnicity, religion, health, family or relationships, sexuality, politics or donations, where they live (a city is the finest you may say), salary or pay, their personality or "communication style", legal matters, immigration, or that they lost a job or took leave.',
-    '"careful" is about their company only (recent layoffs, a reorganization, a product shut down, a hiring freeze), each item with its source ids; never anything about the person\'s own life. Leave it empty when there is nothing.',
-    '"company" is what is happening at their company that matters to the student (team news, launches, hiring), from company sources, each with its source ids. Leave it empty when there are no company sources.',
-    'Openers: up to three single sentences the student could open a first message with, each a statement (not a question) of at most 25 words about something they made, said or did. Each rests on one cited source and uses only details that source states, in its words where you can (a title, a claim, a number); the student\'s reaction may be added ("stuck with me"). Never flattery, never about their private life.',
-    'Most people have little online beyond LinkedIn. When the only sources are their LinkedIn and the student\'s own history, say so plainly in "who" (for example "Not much is public about Dana beyond LinkedIn.") and keep to what LinkedIn says; do not pad.',
-    'Also lay out who they are in full, from the sources only: "career" (every role you can source, newest first, with start and end as written, e.g. "2021" or "Mar 2022"), "education", "profiles" (their own pages: LinkedIn, X, GitHub, a personal site, Google Scholar; only URLs that appear in the sources), "highlights" (up to 8 things they made or said that matter: posts, articles, talks, podcasts, projects, papers, news, awards, each with the URL of its source) and "topics" (up to 6 short phrases for what they work on or talk about).',
-  ].join('\n');
+/**
+ * The same system text for every student and goal (plan 34 C3), so it is one cached prefix for everyone; who the brief
+ * is for and what they want rides in the user turn (`dossierStudent`).
+ */
+export const DOSSIER_SYSTEM = [
+  'You write a research brief about one person for the student named in <student>, toward the goal written there.',
+  'Use only the sources provided, and write from what each source actually says: "joined" stays "joined", never "led". Every claim needs the id of the source it came from.',
+  'If sources disagree or might be about a different person with the same name, leave the claim out.',
+  'A source whose title starts with "[likely them]" names someone with their name whose details all fit, but nothing ties it to them for certain: you may use it, saying so ("likely the same Dana who..."), never in an opener, and never for their current role.',
+  'Never write, even if a source says it: age, ethnicity, religion, health, family or relationships, sexuality, politics or donations, where they live (a city is the finest you may say), salary or pay, their personality or "communication style", legal matters, immigration, or that they lost a job or took leave.',
+  '"careful" is about their company only (recent layoffs, a reorganization, a product shut down, a hiring freeze), each item with its source ids; never anything about the person\'s own life. Leave it empty when there is nothing.',
+  '"company" is what is happening at their company that matters to the student (team news, launches, hiring), from company sources, each with its source ids. Leave it empty when there are no company sources.',
+  'Openers: up to three single sentences the student could open a first message with, each a statement (not a question) of at most 25 words about something they made, said or did. Each rests on one cited source and uses only details that source states, in its words where you can (a title, a claim, a number); the student\'s reaction may be added ("stuck with me"). Never flattery, never about their private life.',
+  'Most people have little online beyond LinkedIn. When the only sources are their LinkedIn and the student\'s own history, say so plainly in "who" (for example "Not much is public about Dana beyond LinkedIn.") and keep to what LinkedIn says; do not pad.',
+  'Also lay out who they are in full, from the sources only: "career" (every role you can source, newest first, with start and end as written, e.g. "2021" or "Mar 2022"), "education", "profiles" (their own pages: LinkedIn, X, GitHub, a personal site, Google Scholar; only URLs that appear in the sources), "highlights" (up to 8 things they made or said that matter: posts, articles, talks, podcasts, projects, papers, news, awards, each with the URL of its source) and "topics" (up to 6 short phrases for what they work on or talk about).',
+].join('\n');
+
+/** Who the brief is for and what they want, first in the user turn. */
+export function dossierStudent(userFirstName: string, goalSentence: string): string {
+  return `<student>\n${userFirstName}, who wants to ${goalSentence}.\n</student>`;
 }
 
 export interface DossierPromptInput {

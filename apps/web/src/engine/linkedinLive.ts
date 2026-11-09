@@ -769,7 +769,7 @@ export type MutualsResult =
       mutuals: [];
     };
 
-/** LinkedIn's answer for a target, kept a day in db.kv under this prefix (plus user and person ids). */
+/** LinkedIn's answer for a target, kept a day in db.kv under this prefix (plus user and LinkedIn member ids). */
 // v3: answers saved before 2026-10-25 were never checked against LinkedIn's shared-connections count
 export const MUTUALS_KV = 'mutuals3:';
 
@@ -863,7 +863,8 @@ export async function mutualsFor(
       mutuals: [],
     };
   const day = (opts.now ?? new Date()).toISOString().slice(0, 10);
-  const key = `${MUTUALS_KV}${user.id}:${person.id}`;
+  // keyed by the LinkedIn member id (plan 34 B4): two Orbit rows for one person, before they are merged, share one read
+  const key = `${MUTUALS_KV}${user.id}:${person.linkedinMemberId}`;
   const kept = (await db.kv.get(key))?.value as
     | { day?: string; memberId?: string; mutuals?: Mutual[] }
     | undefined;

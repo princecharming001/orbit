@@ -269,31 +269,63 @@ describe('sync.linkedin', () => {
       ]);
     });
 
-    it('a sync soon after a full pass reads one page of the newest relations and no chats', async () => {
+    const linkedinState = async () =>
+      (
+        await t.db.sql<{
+          s: { linkedin: { stage: string; syncedAt: string; recentAt?: string } };
+        }>`select sync_state as s from orbit.integration_accounts where user_id = ${u}::uuid and provider = 'linkedin'`
+      )[0]!.s.linkedin;
+    const chatsAfter = (calls: string[]) =>
+      calls
+        .filter((c) => c.includes('/api/v1/chats?'))
+        .map((c) => new URL(c.slice(c.indexOf(' ') + 1)).searchParams.get('after'));
+
+    it('a sync soon after a full pass reads one page of the newest relations and only the recent chats', async () => {
       // the app asks for a sync on every open; walking 6,000 relations and two years of chats again each time kept
       // the worker busy for hours and rewrote every person (the browser then pulled them all again)
       const before = env.unipile.calls.length;
+      const full = await linkedinState();
       env.unipile.chats = [{ id: 'chat-new', attendees: [], messages: [] }];
       await sync(u, { mode: 'sync' });
       await drain(t, env.handlers, env.time.now);
       const calls = env.unipile.calls.slice(before);
       expect(calls.filter((c) => c.includes('/users/relations'))).toHaveLength(1);
-      expect(calls.filter((c) => c.includes('/api/v1/chats'))).toHaveLength(0);
-      const [a] = await t.db.sql<{ s: { linkedin: { stage: string; syncedAt: string } } }>`
-        select sync_state as s from orbit.integration_accounts where user_id = ${u}::uuid and provider = 'linkedin'`;
-      expect(a!.s.linkedin.stage).toBe('done');
-      // the next pass is still measured from the last full one
-      expect(Date.parse(a!.s.linkedin.syncedAt)).toBeLessThanOrEqual(NOW + 60_000);
+      // chats are listed once, only back to the end of the last pass, full or short
+      expect(chatsAfter(calls)).toEqual([[full.syncedAt, full.recentAt ?? ''].sort().at(-1)]);
+      const a = await linkedinState();
+      expect(a.stage).toBe('done');
+      expect(a.recentAt).toBeTruthy();
+      // the next full pass is still measured from the last full one
+      expect(a.syncedAt).toBe(full.syncedAt);
     });
 
-    it('a sync a day later walks everything again', async () => {
+    it('a sync a day later is still short, reading chats back to the last short pass', async () => {
       env.time.advance(21 * 3_600_000);
+      const before = env.unipile.calls.length;
+      const prev = await linkedinState();
+      const rebuilds = async () => (await jobRuns(t.db, u)).filter((r) => r.kind === 'score.user').length;
+      const rebuildsBefore = await rebuilds();
+      await sync(u, { mode: 'sync' });
+      await drain(t, env.handlers, env.time.now);
+      const calls = env.unipile.calls.slice(before);
+      expect(calls.filter((c) => c.includes('/users/relations'))).toHaveLength(1);
+      expect(chatsAfter(calls)).toEqual([prev.recentAt]);
+      // a short pass re-scores the people it touched, never the whole network
+      expect(await rebuilds()).toBe(rebuildsBefore);
+    });
+
+    it('a sync a week after the last full pass walks everything again', async () => {
+      env.time.advance(7 * 86_400_000);
       const before = env.unipile.calls.length;
       await sync(u, { mode: 'sync' });
       await drain(t, env.handlers, env.time.now);
       const calls = env.unipile.calls.slice(before);
       expect(calls.filter((c) => c.includes('/users/relations'))).toHaveLength(1);
-      expect(calls.filter((c) => c.includes('/api/v1/chats?'))).toHaveLength(1);
+      const [after] = chatsAfter(calls);
+      // two years back, not the last pass
+      expect(env.time.now().getTime() - Date.parse(after!)).toBeGreaterThan(700 * 86_400_000);
+      const a = await linkedinState();
+      expect(Date.parse(a.syncedAt)).toBeGreaterThan(Date.parse(a.recentAt!));
     });
   });
 
@@ -327,7 +359,7 @@ describe('sync.linkedin', () => {
       expect(a!.s.linkedin.stage).toBe('done');
     });
 
-    it('a job files at most four pages of relations, however much time is left, then hands on', async () => {
+    it('a job files at most two pages of relations, however much time is left, then hands on', async () => {
       // filing is CPU: about ten pages in one worker run used up its CPU and it was killed mid-job on every attempt
       const u = await connectedUser(t.db, { linkedinAccount: 'acc-pages' });
       const env = setup(true);
@@ -344,7 +376,7 @@ describe('sync.linkedin', () => {
       await sync(u, { mode: 'sync' });
       await drain(t, env.handlers, env.time.now);
       const runs = (await jobRuns(t.db, u)).filter((r) => r.kind === 'sync.linkedin');
-      expect(runs).toHaveLength(2);
+      expect(runs).toHaveLength(3);
       expect(runs.every((r) => r.status === 'ok')).toBe(true);
       const [n] = await t.db.sql<{ n: number }>`
         select count(*)::int as n from orbit.people where user_id = ${u}::uuid and linkedin_connected_on is not null`;

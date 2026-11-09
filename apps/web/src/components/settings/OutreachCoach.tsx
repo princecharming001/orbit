@@ -134,7 +134,7 @@ export function OutreachCoach({ user }: { user: User }) {
   const learn = async () => {
     setLearning(true);
     try {
-      const r = await learnStyle(user);
+      const r = await learnStyle(user, { force: true });
       toast.push(
         r.ok
           ? { text: `Learned your voice from ${r.learnedFrom} messages. Your tuning is kept.`, tone: 'good' }

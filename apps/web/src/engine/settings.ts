@@ -274,7 +274,7 @@ export async function learnStyleFromSent(
   user: Pick<User, 'id' | 'firstName'>,
   now = new Date(),
 ): Promise<{ ok: true; count: number } | { ok: false; reason: string }> {
-  const r = await learnStyle(user, { now });
+  const r = await learnStyle(user, { now, force: true });
   return r.ok ? { ok: true, count: r.learnedFrom } : r;
 }
 

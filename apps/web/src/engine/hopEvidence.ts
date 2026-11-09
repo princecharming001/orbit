@@ -19,6 +19,7 @@ import { usesMockConnectors } from '../integrations/connectorsMock';
 import { linkedInProfile, PREVIEW_SECTIONS, personRecommendations } from '../integrations/enrichmentProxy';
 import { type EngagementWant, linkedInEngagement, unipileConfigured } from '../integrations/unipile';
 import { countActivity, endActivity, startActivity } from './activity';
+import { readProfileMark } from './enrichment/store';
 import { liveLinkedInAccount } from './linkedinLive';
 
 const DAY = 86_400_000;
@@ -266,6 +267,8 @@ async function readRound(
   const profileStep = async (person: Pick<Person, 'id' | 'linkedinMemberId' | 'linkedinFollowers'>) => {
     const m = person.linkedinMemberId!;
     if (person.linkedinFollowers !== undefined || !(await needs(m, 'profileAt'))) return true;
+    // enrichment read this profile in full lately (plan 34 B6): it brought whatever followers LinkedIn shows
+    if (fresh((await readProfileMark(user.id, m)).profileAt, now)) return true;
     return step(
       m,
       () => reader.profile(m),

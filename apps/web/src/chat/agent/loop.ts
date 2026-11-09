@@ -19,12 +19,12 @@ import {
 import type { ChatConversation, ResultEnvelope, ToolContext, ToolSpec, TurnEvent } from '../types';
 import { recordToolAction } from './actions';
 import { sentenceGate, withoutButtonTalk } from './buttonTalk';
-import type { ChatClient } from './client';
+import { type ChatClient, usesSharedAccess } from './client';
 import { knowledgeTextFor } from './knowledge';
 import { buildSnapshot, memoryLineOf, snapshotIsStale, snapshotKeyOf, snapshotText } from './snapshot';
 import { type ChatStore, conversationNonce, toolResultsOf, toolUsesOf } from './store';
 import { systemBlocks } from './system';
-import { WEB_SEARCH_TOOL, webSources } from './webSearch';
+import { WEB_SEARCH_TOOL, WEB_SEARCH_TURN_BUDGET, webSources } from './webSearch';
 
 /**
  * One student turn against Claude: the beta tool runner with streaming over the injected tool registry. The loop
@@ -41,8 +41,14 @@ export const CHAT_BETAS = [
   'thinking-binding-controls-2026-08-01', // `thinking.block_binding.prefix_mismatch_behavior`
 ] as const;
 
-export const MAX_TOKENS = 16_000;
-export const MAX_ITERATIONS = 12;
+/** The longest real answers are under 2,000 tokens; a tool input cut off here is caught as TruncatedToolInput. */
+export const MAX_TOKENS = 8_000;
+/** Model requests a turn may make (plan 34 C2: was 12, the bench's longest real turns used five). */
+export const MAX_ITERATIONS = 8;
+/** Requests a re-issued turn may make after unparseable tool JSON: enough to finish, not to start over. */
+export const RETRY_MAX_ITERATIONS = 3;
+/** The header that tells Orbit's shared access which request of the turn this is, so the turn's shape is measured. */
+export const ITERATION_HEADER = 'x-orbit-iterations';
 export const FALLBACK_MODELS = [{ model: 'claude-opus-5' }];
 /** Words before the pills that are a clause of intent, not an answer: what follows them is then the reply. */
 const CLAUSE_WORDS = 9;
@@ -165,7 +171,19 @@ export function strictSchema<S extends object>(schema: S): S {
 interface ToolHooks {
   onRun: (toolUseId: string, spec: ToolSpec, input: unknown) => Promise<ResultEnvelope>;
   signal?: AbortSignal;
+  /** a line for the model appended to every tool result, such as the spent web search budget */
+  note?: () => string | undefined;
 }
+
+/** What the model reads back from a tool: the projected envelope, then the turn's note when there is one. */
+export function toolResultText(spec: ToolSpec | undefined, env: ResultEnvelope, note?: string): string {
+  const content = projectEnvelope(spec, env);
+  return note ? `${content}\n${note}` : content;
+}
+
+/** The note once the turn has run its share of web searches: kept in the messages, so the cached prefix holds. */
+export const WEB_BUDGET_NOTE =
+  '[Orbit] The web searches for this turn are used up. Answer from what you have found; do not search again.';
 
 /**
  * The runner tools over the registry: `betaZodTool` (the runner validates the input against the Zod schema before
@@ -203,7 +221,7 @@ export function buildRunnerTools(
       run: async (input, context) => {
         const id = context?.toolUse.id ?? newId('toolu');
         const env = await hooks.onRun(id, spec, input);
-        const content = projectEnvelope(spec, env);
+        const content = toolResultText(spec, env, hooks.note?.());
         if (env.kind === 'error') throw new ToolError(content);
         return content;
       },
@@ -352,8 +370,23 @@ export async function runTurn(
   let worked = false;
   let spokenAfterWork = '';
 
+  // Claude's web searches this turn: each request may run WEB_SEARCH_MAX_USES, and once the turn has run its share
+  // the tool results say so. Taking the tool away instead would change the tool list and miss the prompt cache for
+  // the rest of the turn, which costs more than the searches it saves
+  let webSearches = 0;
+  const budgetNote = () => (webSearches >= WEB_SEARCH_TURN_BUDGET ? WEB_BUDGET_NOTE : undefined);
+  // which request of the turn this is, sent to Orbit's shared access only (a student's own key goes straight to
+  // Anthropic, where an unknown header would fail the browser's CORS check)
+  const metered = usesSharedAccess();
+  let iteration = 1;
+  const requestOptions = () => ({
+    signal,
+    ...(metered ? { headers: { [ITERATION_HEADER]: String(iteration) } } : {}),
+  });
+
   const tools = buildRunnerTools(registry, {
     signal,
+    note: budgetNote,
     onRun: async (toolUseId, spec, input) => {
       const cancelled = (reason: string): ResultEnvelope => ({
         kind: 'error',
@@ -406,7 +439,10 @@ export async function runTurn(
         messageId: pending?.rowId,
         now: clock(),
       });
-      results.set(toolUseId, { content: projectEnvelope(spec, env), isError: env.kind === 'error' });
+      results.set(toolUseId, {
+        content: toolResultText(spec, env, budgetNote()),
+        isError: env.kind === 'error',
+      });
       // the pills close the turn only when they were the whole round: next to a read tool, the answer is still to come
       if (
         CLOSING_TOOLS.has(spec.name) &&
@@ -425,7 +461,7 @@ export async function runTurn(
   });
 
   const params = turnParams(deps, tools, messages, knowledge);
-  let runner = deps.client.beta.messages.toolRunner(params, { signal });
+  let runner = deps.client.beta.messages.toolRunner(params, requestOptions());
 
   /**
    * Answer every tool_use of the last stored assistant message. The runner's own tool_result message is preferred
@@ -534,6 +570,10 @@ export async function runTurn(
         gate.flush();
         attempt = 0;
         recordTokens(message.usage);
+        webSearches += message.usage.server_tool_use?.web_search_requests ?? 0;
+        // the next request the runner sends is the next of the turn
+        iteration++;
+        if (metered) runner.setRequestOptions(requestOptions());
         for (const t of message.input_transformations ?? [])
           if (t.type === 'thinking_dropped') console.warn('[orbit chat] thinking block dropped', t);
         if (message.usage.iterations?.some((i) => i.type === 'fallback_message'))
@@ -604,7 +644,11 @@ export async function runTurn(
       }
       // tool JSON the SDK could not parse at all: the failed turn was never appended, so re-issue it
       console.warn('[orbit chat] tool input was not parseable JSON, re-issuing the turn', err);
-      runner = deps.client.beta.messages.toolRunner({ ...runner.params, stream: true }, { signal });
+      iteration++;
+      runner = deps.client.beta.messages.toolRunner(
+        { ...runner.params, stream: true, max_iterations: RETRY_MAX_ITERATIONS },
+        requestOptions(),
+      );
     }
   }
   await flushResults();
@@ -620,6 +664,7 @@ export async function runTurn(
       onEvent,
       persistAssistant,
       signal,
+      metered ? { [ITERATION_HEADER]: String(iteration) } : undefined,
     );
     if (said) lastRowId = said;
   }
@@ -645,6 +690,7 @@ async function speakUp(
   onEvent: (e: TurnEvent) => void,
   persistAssistant: (m: Anthropic.Beta.BetaMessage) => Promise<{ id: string }>,
   signal?: AbortSignal,
+  headers?: Record<string, string>,
 ): Promise<string | undefined> {
   try {
     // an empty final assistant message cannot be replayed; the nudge stands between the turn and the answer
@@ -666,7 +712,7 @@ async function speakUp(
         max_iterations: 1,
         stream: true,
       },
-      { signal },
+      { signal, ...(headers ? { headers } : {}) },
     );
     let said: string | undefined;
     for await (const stream of runner) {

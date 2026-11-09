@@ -318,7 +318,7 @@ export async function relearnVoice(
   user: Pick<User, 'id' | 'firstName'>,
   now = new Date(),
 ): Promise<{ ok: boolean; message: string }> {
-  const learned = await learnStyle(user, { now });
+  const learned = await learnStyle(user, { now, force: true });
   if (learned.ok) await shareStyleCard(user.id, learned.card);
   if (isServerUser(user.id)) {
     const r = await callApi('/voice/relearn', {});

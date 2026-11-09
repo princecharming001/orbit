@@ -11,6 +11,8 @@ import { memorySharedCache } from '../../../../../supabase/functions/_shared/res
 import {
   fillEmails,
   fromTemplate,
+  MAX_LOOKUPS,
+  MAX_VERIFIES,
   withDeadline,
 } from '../../../../../supabase/functions/_shared/sourcing/email';
 import {
@@ -586,5 +588,76 @@ describe('the Hunter adapter: 2 cases', () => {
     const r = await createHunter({ fetch }).verifyEmail('a@x.com');
     expect(r.ok).toBe(false);
     expect(calls).toBe(0);
+  });
+});
+
+describe('plan 34 A4: Hunter spends less and shows every call', () => {
+  it('runs take 5 lookups and 5 verifications at most', () => {
+    expect([MAX_LOOKUPS, MAX_VERIFIES]).toEqual([5, 5]);
+  });
+
+  it('three candidates at one new domain share one domain search in a run', async () => {
+    const asked: string[] = [];
+    let release: () => void = () => undefined;
+    const gate = new Promise<void>((r) => {
+      release = r;
+    });
+    const hunter = {
+      configured: true,
+      domainPattern: async (d: string) => {
+        asked.push(d);
+        await gate;
+        return { ok: true, value: { data: { pattern: '{first}' } } };
+      },
+    } as unknown as Hunter;
+    const t = domainTemplate({ userId: 'u', hunter, cache: memorySharedCache() })!;
+    const all = Promise.all([t('Beta.io'), t('beta.io'), t('beta.io')]);
+    await new Promise((r) => setTimeout(r, 0));
+    release();
+    expect(await all).toEqual(['{first}', '{first}', '{first}']);
+    expect(asked).toEqual(['beta.io']);
+  });
+
+  it('a miss is kept at 0 credits as an attempt; a find is a credit', async () => {
+    const money = memoryBudget();
+    const h = fakeHunter(() => null);
+    await emailLookup({ userId: 'u', hunter: h.hunter, budget: money.budget, cache: memorySharedCache() })(
+      maya,
+    );
+    expect(money.ledger.map((r) => [r.provider, r.operation, r.units])).toEqual([
+      ['hunter', 'find:attempt', 0],
+    ]);
+    const money2 = memoryBudget();
+    const h2 = fakeHunter(() => ({
+      email: 'maya@stripe.com',
+      score: 95,
+      verification: { status: 'valid' },
+      sources: [],
+    }));
+    await emailLookup({ userId: 'u', hunter: h2.hunter, budget: money2.budget, cache: memorySharedCache() })(
+      maya,
+    );
+    expect(money2.ledger.map((r) => [r.provider, r.operation, r.units])).toEqual([['hunter', 'find', 1]]);
+  });
+
+  it('with a reserving budget the credit is held before the call and settled after', async () => {
+    const events: string[] = [];
+    const budget = {
+      check: async () => ({ ok: true as const }),
+      record: async () => undefined,
+      reserve: async (_u: string, e: { operation: string; units: number }) => {
+        events.push(`reserve ${e.operation} ${e.units}`);
+        return {
+          ok: true as const,
+          settle: async (a: { units: number; operation?: string }) => {
+            events.push(`settle ${a.operation ?? e.operation} ${a.units}`);
+          },
+        };
+      },
+    };
+    const h = fakeHunter(() => null, { 'a@x.com': 'valid' });
+    const v = emailVerifier({ userId: 'u', hunter: h.hunter, budget, cache: memorySharedCache() })!;
+    expect(await v('a@x.com')).toBe('valid');
+    expect(events).toEqual(['reserve verify 0.5', 'settle verify 0.5']);
   });
 });

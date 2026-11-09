@@ -68,6 +68,14 @@ function backoffMs(attempt, random) {
   return Math.round(base * (1 + 0.25 * random()));
 }
 async function requestJson(opts, spec) {
+  if (opts.gate && !await opts.gate().catch(() => true))
+    return {
+      ok: false,
+      kind: "budget_exceeded",
+      provider: spec.provider,
+      reason: "off",
+      message: `${spec.provider}: switched off`
+    };
   const sleep = opts.sleep ?? defaultSleep;
   const random = opts.random ?? Math.random;
   const clock = opts.clock ?? Date.now;
@@ -2423,6 +2431,14 @@ import { zodOutputFormat } from "npm:@anthropic-ai/sdk@0.133.0/helpers/zod";
 // supabase/functions/_shared/budget.ts
 var CAPS = [
   { id: "claude_daily_usd", provider: "anthropic", measure: "cost_usd", limit: 1.5, window: "day" },
+  {
+    id: "claude_total_daily_usd",
+    provider: "anthropic",
+    measure: "cost_usd",
+    limit: 4.5,
+    window: "day",
+    includeChat: true
+  },
   { id: "exa_daily_usd", provider: "exa", measure: "cost_usd", limit: 0.5, window: "day" },
   { id: "village_daily_credits", provider: "village", measure: "units", limit: 50, window: "day" },
   {
@@ -2434,6 +2450,14 @@ var CAPS = [
     window: "day"
   },
   { id: "hunter_daily_credits", provider: "hunter", measure: "units", limit: 10, window: "day" },
+  {
+    id: "hunter_monthly_credits_global",
+    provider: "hunter",
+    measure: "units",
+    limit: 40,
+    window: "month",
+    scope: "global"
+  },
   {
     id: "unipile_profile_views_daily",
     provider: "unipile",
@@ -2459,6 +2483,7 @@ async function checkBudget(db, userId, spend, now = /* @__PURE__ */ new Date()) 
     select provider, operation,
            coalesce(sum(units) filter (where created_at >= ${day}::timestamptz), 0)::text as day_units,
            coalesce(sum(cost_usd) filter (where created_at >= ${day}::timestamptz), 0)::text as day_usd,
+           coalesce(sum(units), 0)::text as month_units,
            coalesce(sum(cost_usd), 0)::text as month_usd
       from orbit.usage_ledger
      where user_id = ${userId}::uuid and created_at >= ${month}::timestamptz
@@ -2487,10 +2512,26 @@ async function checkBudget(db, userId, spend, now = /* @__PURE__ */ new Date()) 
       used: round(monthTotal),
       resetsAt: windowEnd("month", now).toISOString()
     };
+  let globalRows;
   for (const cap of CAPS) {
     if (cap.provider !== spend.provider) continue;
     if (cap.operation && cap.operation !== spend.operation) continue;
-    const used = rows.filter((r) => r.provider === cap.provider && (!cap.operation || r.operation === cap.operation)).reduce((s, r) => s + Number(cap.measure === "units" ? r.day_units : r.day_usd), 0);
+    let source = rows;
+    if (cap.scope === "global") {
+      globalRows ??= await db.sql`
+        select provider, operation,
+               coalesce(sum(units) filter (where created_at >= ${day}::timestamptz), 0)::text as day_units,
+               coalesce(sum(cost_usd) filter (where created_at >= ${day}::timestamptz), 0)::text as day_usd,
+               coalesce(sum(units), 0)::text as month_units,
+               coalesce(sum(cost_usd), 0)::text as month_usd
+          from orbit.usage_ledger
+         where provider = ${spend.provider} and created_at >= ${month}::timestamptz
+         group by provider, operation`;
+      source = globalRows;
+    }
+    const field = cap.window === "month" ? cap.measure === "units" ? "month_units" : "month_usd" : cap.measure === "units" ? "day_units" : "day_usd";
+    let used = source.filter((r) => r.provider === cap.provider && (!cap.operation || r.operation === cap.operation)).reduce((s, r) => s + Number(r[field]), 0);
+    if (cap.includeChat) used += await chatSpendToday(db, userId, now);
     const add = cap.measure === "units" ? spend.units ?? 1 : spend.costUsd ?? 0;
     if (used + add > cap.limit || used >= cap.limit && add === 0)
       return {
@@ -2504,11 +2545,23 @@ async function checkBudget(db, userId, spend, now = /* @__PURE__ */ new Date()) 
   }
   return { ok: true };
 }
+async function chatSpendToday(db, userId, now) {
+  const subject = `user:${userId}:${now.toISOString().slice(0, 10)}`;
+  try {
+    const [r] = await db.sql`
+      select usd::text as usd from public.orbit_proxy_spend where subject = ${subject}`;
+    return Number(r?.usd ?? 0);
+  } catch {
+    return 0;
+  }
+}
 async function recordUsage(db, entry) {
-  await db.sql`
+  const rows = await db.sql`
     insert into orbit.usage_ledger (user_id, provider, operation, units, cost_usd)
     values (${entry.userId}::uuid, ${entry.provider}, ${entry.operation}, ${entry.units}::numeric,
-            ${round(entry.costUsd)}::numeric)`;
+            ${round(entry.costUsd)}::numeric)
+    returning id::text as id`;
+  return rows[0]?.id;
 }
 var round = (n) => Math.round(n * 1e5) / 1e5;
 
@@ -2537,11 +2590,19 @@ var TASKS = {
   // the brief reads compact facts, not raw pages: the mid model writes it for about a tenth of the writing model's price
   research_brief: { model: "claude-sonnet-5-5", maxTokens: 8e3, flatNullable: true }
 };
+var NO_RETRY_TASKS = /* @__PURE__ */ new Set([
+  "classify",
+  "reply_classify",
+  "fit",
+  "reading"
+]);
 function makeClaude(deps) {
   const client = deps.apiKey ? deps.client ?? new Anthropic({ apiKey: deps.apiKey, fetch: deps.fetch, maxRetries: 2 }) : void 0;
   const now = deps.now ?? (() => /* @__PURE__ */ new Date());
   async function structured(req) {
     if (!client) return { ok: false, unconfigured: true };
+    if (deps.enabled && !await deps.enabled().catch(() => true))
+      return { ok: false, budgetExceeded: true, cap: "provider_off", resetsAt: "9999-12-31T00:00:00.000Z" };
     const setting = TASKS[req.task];
     if (deps.db && req.userId) {
       const verdict = await checkBudget(
@@ -2583,7 +2644,7 @@ function makeClaude(deps) {
         await recordUsage(deps.db, {
           userId: req.userId,
           provider: "anthropic",
-          operation: req.task,
+          operation: attempt === 0 ? req.task : `${req.task}:retry`,
           units: usage.input_tokens + usage.output_tokens,
           costUsd: cost
         });
@@ -2591,14 +2652,15 @@ function makeClaude(deps) {
         const details = msg.stop_details;
         return { ok: false, refused: true, category: details?.category ?? null };
       }
+      const parsed = msg.parsed_output;
       if (msg.stop_reason === "max_tokens") {
-        if (attempt === 0) {
+        if (parsed?.ok) return { ok: true, data: parsed.value, model: setting.model, costUsd: cost, usage };
+        if (attempt === 0 && !NO_RETRY_TASKS.has(req.task)) {
           maxTokens *= 2;
           continue;
         }
         return { ok: false, error: "max_tokens" };
       }
-      const parsed = msg.parsed_output;
       if (!parsed?.ok) return { ok: false, error: "invalid_output", detail: parsed?.error?.slice(0, 200) };
       return { ok: true, data: parsed.value, model: setting.model, costUsd: cost, usage };
     }
@@ -2987,19 +3049,22 @@ function aboutCompany(page, org) {
 
 // supabase/functions/_shared/research/prompts.ts
 var PROMPT_VERSION = "dossier-v3";
-function dossierSystem(userFirstName, goalSentence) {
-  return [
-    `You write a research brief about one person for ${userFirstName}, who wants to ${goalSentence}.`,
-    'Use only the sources provided, and write from what each source actually says: "joined" stays "joined", never "led". Every claim needs the id of the source it came from.',
-    "If sources disagree or might be about a different person with the same name, leave the claim out.",
-    'A source whose title starts with "[likely them]" names someone with their name whose details all fit, but nothing ties it to them for certain: you may use it, saying so ("likely the same Dana who..."), never in an opener, and never for their current role.',
-    'Never write, even if a source says it: age, ethnicity, religion, health, family or relationships, sexuality, politics or donations, where they live (a city is the finest you may say), salary or pay, their personality or "communication style", legal matters, immigration, or that they lost a job or took leave.',
-    `"careful" is about their company only (recent layoffs, a reorganization, a product shut down, a hiring freeze), each item with its source ids; never anything about the person's own life. Leave it empty when there is nothing.`,
-    '"company" is what is happening at their company that matters to the student (team news, launches, hiring), from company sources, each with its source ids. Leave it empty when there are no company sources.',
-    `Openers: up to three single sentences the student could open a first message with, each a statement (not a question) of at most 25 words about something they made, said or did. Each rests on one cited source and uses only details that source states, in its words where you can (a title, a claim, a number); the student's reaction may be added ("stuck with me"). Never flattery, never about their private life.`,
-    `Most people have little online beyond LinkedIn. When the only sources are their LinkedIn and the student's own history, say so plainly in "who" (for example "Not much is public about Dana beyond LinkedIn.") and keep to what LinkedIn says; do not pad.`,
-    'Also lay out who they are in full, from the sources only: "career" (every role you can source, newest first, with start and end as written, e.g. "2021" or "Mar 2022"), "education", "profiles" (their own pages: LinkedIn, X, GitHub, a personal site, Google Scholar; only URLs that appear in the sources), "highlights" (up to 8 things they made or said that matter: posts, articles, talks, podcasts, projects, papers, news, awards, each with the URL of its source) and "topics" (up to 6 short phrases for what they work on or talk about).'
-  ].join("\n");
+var DOSSIER_SYSTEM = [
+  "You write a research brief about one person for the student named in <student>, toward the goal written there.",
+  'Use only the sources provided, and write from what each source actually says: "joined" stays "joined", never "led". Every claim needs the id of the source it came from.',
+  "If sources disagree or might be about a different person with the same name, leave the claim out.",
+  'A source whose title starts with "[likely them]" names someone with their name whose details all fit, but nothing ties it to them for certain: you may use it, saying so ("likely the same Dana who..."), never in an opener, and never for their current role.',
+  'Never write, even if a source says it: age, ethnicity, religion, health, family or relationships, sexuality, politics or donations, where they live (a city is the finest you may say), salary or pay, their personality or "communication style", legal matters, immigration, or that they lost a job or took leave.',
+  `"careful" is about their company only (recent layoffs, a reorganization, a product shut down, a hiring freeze), each item with its source ids; never anything about the person's own life. Leave it empty when there is nothing.`,
+  '"company" is what is happening at their company that matters to the student (team news, launches, hiring), from company sources, each with its source ids. Leave it empty when there are no company sources.',
+  `Openers: up to three single sentences the student could open a first message with, each a statement (not a question) of at most 25 words about something they made, said or did. Each rests on one cited source and uses only details that source states, in its words where you can (a title, a claim, a number); the student's reaction may be added ("stuck with me"). Never flattery, never about their private life.`,
+  `Most people have little online beyond LinkedIn. When the only sources are their LinkedIn and the student's own history, say so plainly in "who" (for example "Not much is public about Dana beyond LinkedIn.") and keep to what LinkedIn says; do not pad.`,
+  'Also lay out who they are in full, from the sources only: "career" (every role you can source, newest first, with start and end as written, e.g. "2021" or "Mar 2022"), "education", "profiles" (their own pages: LinkedIn, X, GitHub, a personal site, Google Scholar; only URLs that appear in the sources), "highlights" (up to 8 things they made or said that matter: posts, articles, talks, podcasts, projects, papers, news, awards, each with the URL of its source) and "topics" (up to 6 short phrases for what they work on or talk about).'
+].join("\n");
+function dossierStudent(userFirstName, goalSentence) {
+  return `<student>
+${userFirstName}, who wants to ${goalSentence}.
+</student>`;
 }
 function dossierUser(input) {
   const block = (list) => list.map(
@@ -3740,12 +3805,11 @@ async function investigate(deps, input, opts) {
     };
   };
   const extract = async (page) => {
-    const key = await cacheKey("extract", {
-      v: EXTRACT_VERSION,
-      url: normalizeUrl(page.url),
-      who: card.fullName,
-      slug: card.slug ?? ""
-    });
+    const who = card.fullName?.trim();
+    const key = await cacheKey(
+      "extract",
+      who ? { v: EXTRACT_VERSION, url: normalizeUrl(page.url), who: card.fullName, slug: card.slug ?? "" } : { v: EXTRACT_VERSION, url: normalizeUrl(page.url) }
+    );
     const cached = await deps.cache.get(key);
     if (cached) return cached;
     if (out.costUsd + EXTRACT_ESTIMATE_USD > opts.budgetUsd) return void 0;
@@ -4311,8 +4375,10 @@ ${text}`);
   const allowed = sources.map((s) => s.id);
   const webCount = personPages.length;
   const prompt = {
-    system: dossierSystem(req.student.firstName, req.student.goalSentence),
-    user: dossierUser({
+    system: DOSSIER_SYSTEM,
+    user: `${dossierStudent(req.student.firstName, req.student.goalSentence)}
+
+${dossierUser({
       userContext: req.student.context,
       person: {
         name: card.fullName,
@@ -4325,7 +4391,7 @@ ${text}`);
       linkedin: linkedinLines.join("\n\n") || "(no LinkedIn profile)",
       sources: sources.filter((s) => s.kind === "web" && Number(s.id.slice(1)) < firstCompany),
       companySources: sources.filter((s) => Number(s.id.slice(1)) >= firstCompany)
-    })
+    })}`
   };
   let content = null;
   let model = BRIEF_MODEL;

@@ -211,8 +211,13 @@ describe('dossier pipeline (§5.6)', () => {
     );
 
     // the exact §5.4 instructions went out, and the stored row carries the prompt version and a 30-day expiry
+    // one system text for everyone (cached once, plan 34 C3); who it is for and their goal ride in the user turn
     expect(llm.calls[0]!.prompt.system).toContain(
-      'You write a research brief about one person for Sam, who wants to land a robotics engineering internship',
+      'You write a research brief about one person for the student named in <student>',
+    );
+    expect(llm.calls[0]!.prompt.system).not.toContain('Sam');
+    expect(llm.calls[0]!.prompt.user).toContain(
+      '<student>\nSam, who wants to land a robotics engineering internship',
     );
     expect(llm.calls[0]!.prompt.user).toContain(
       '<internal_history>2026-09-01 user → them · Robotics club demo',

@@ -6,8 +6,13 @@
  */
 import type Anthropic from '@anthropic-ai/sdk';
 
-/** Matches the prompt rule (one to three focused searches): the bench saw one query run three times under a cap of 5. */
-export const WEB_SEARCH_MAX_USES = 3;
+/**
+ * Searches a request may run. The prompt asks for one to three focused searches a turn; two a request (plan 34 C2)
+ * keeps a single request from spending the whole turn's share on one query rerun.
+ */
+export const WEB_SEARCH_MAX_USES = 2;
+/** Searches a whole turn should run; past it the tool results tell the model to answer from what it found. */
+export const WEB_SEARCH_TURN_BUDGET = 3;
 export const WEB_SEARCH_TOOL: Anthropic.Beta.BetaWebSearchTool20260209 = {
   type: 'web_search_20260209',
   name: 'web_search',

@@ -29,7 +29,12 @@ interface GoogleSyncState {
   lastSyncAt?: string;
   /** Gmail message ids whose download failed, with the number of failed attempts so far */
   failedIds?: Record<string, number>;
+  /** when the calendar was last listed; a quiet reply check lists it again only after CALENDAR_RELIST_MS */
+  calendarListedAt?: string;
 }
+
+/** A quiet check (every few minutes while Orbit is open) lists the calendar at most this often (plan 34 A8). */
+export const CALENDAR_RELIST_MS = 6 * 3_600_000;
 
 /** Message time: Gmail's internalDate, else the Date header, else now (never throws on a bad header). */
 export function messageSentAt(
@@ -157,7 +162,12 @@ async function syncGoogleOnce(
     total += stats.messages;
   }
   progress('Calendar', 0, 1);
-  const evs = await gcalList(new Date(Date.now() - 180 * 86_400_000), new Date(Date.now() + 90 * 86_400_000));
+  const listedAt = state.calendarListedAt ? Date.parse(state.calendarListedAt) : Number.NaN;
+  const calendarFresh = !!opts.quiet && Date.now() - listedAt < CALENDAR_RELIST_MS;
+  const calendarListedAt = calendarFresh ? state.calendarListedAt : new Date().toISOString();
+  const evs = calendarFresh
+    ? []
+    : await gcalList(new Date(Date.now() - 180 * 86_400_000), new Date(Date.now() + 90 * 86_400_000));
   const rawEvents: RawEvent[] = evs
     .filter((e) => e.start?.dateTime && e.end?.dateTime)
     .map((e) => ({
@@ -189,6 +199,7 @@ async function syncGoogleOnce(
   const nextState: GoogleSyncState = {
     ...state,
     lastSyncAt: startedAt,
+    calendarListedAt,
     failedIds: failed.size ? Object.fromEntries(failed) : undefined,
   };
   if (!nextState.failedIds) delete nextState.failedIds;

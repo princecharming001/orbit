@@ -28,6 +28,7 @@ import { type AgentConfig, makeServices, type Services } from '../_shared/servic
 import { checkSession, type SessionConfig, sessionSecretUsable, verifyBearer } from '../_shared/session.ts';
 import { accountDelete, accountExport } from './account.ts';
 import { googleCallback, googleStart, logout, me, refresh, session } from './auth.ts';
+import { adminRoutes } from './routes/admin.ts';
 import { autopilotRoutes } from './routes/autopilot.ts';
 import { cadenceRoutes } from './routes/cadence.ts';
 import { calendarRoutes } from './routes/calendar.ts';
@@ -66,6 +67,8 @@ export interface ApiEnv {
   functionsUrl?: string;
   /** what orbit-connectors signs account tokens with (SUPABASE_SERVICE_ROLE_KEY), for /linkedin/reader */
   connectorsSigningKey?: string;
+  /** ORBIT_OWNER_ID: the one account that may read /admin/costs (plan 34 E3) */
+  ownerId?: string;
 }
 
 export interface ApiLimits {
@@ -163,6 +166,7 @@ const ROUTES: Record<string, Route> = {
   ...autopilotRoutes,
   ...friendRoutes,
   ...voiceRoutes,
+  ...adminRoutes,
 };
 
 /** The secrets a route needs that are not set. */

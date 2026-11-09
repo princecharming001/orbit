@@ -5,7 +5,7 @@
  * and calendar events.
  */
 import { stripQuotedReply } from '@orbit/core/text/email';
-import { checkBudget, recordUsage, type Spend } from '../budget.ts';
+import { checkBudget, recordUsage, reserveUsage, type Spend } from '../budget.ts';
 import type { Claude } from '../claude.ts';
 import type { Db } from '../db.ts';
 import { VILLAGE_USD_PER_CREDIT } from '../providers/village';
@@ -44,6 +44,8 @@ function spendOf(p: BudgetProvider, estimate: number): Spend {
   switch (p) {
     case 'claude':
     case 'exa':
+    case 'serper':
+    case 'parallel':
       return { provider, operation, costUsd: estimate };
     case 'village':
       return { provider, operation, units: estimate, costUsd: estimate * VILLAGE_USD_PER_CREDIT };
@@ -75,6 +77,16 @@ export function sqlBudget(db: Db, now: () => Date): BudgetDep {
     async record(userId, e) {
       const { provider, operation } = ledgerName(e.provider, e.operation);
       await recordUsage(db, { userId, provider, operation, units: e.units, costUsd: e.costUsd });
+    },
+    async reserve(userId, e) {
+      const { provider, operation } = ledgerName(e.provider, e.operation);
+      const r = await reserveUsage(
+        db,
+        { userId, provider, operation, units: e.units, costUsd: e.costUsd },
+        now(),
+      );
+      if (!r.ok) return { ok: false, reason: 'budget_exceeded', resetsAt: r.verdict.resetsAt };
+      return { ok: true, settle: (actual) => r.settle(actual) };
     },
   };
 }

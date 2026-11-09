@@ -8,6 +8,7 @@ import {
   postgrestLinks,
   postgrestSharedReads,
   postgrestTake,
+  postgrestUsage,
 } from './connectors.ts';
 
 const url = Deno.env.get('SUPABASE_URL') ?? '';
@@ -104,6 +105,8 @@ Deno.serve(
     shared: url && serviceKey ? postgrestSharedReads(url, serviceKey) : undefined,
     // LinkedIn companies found once for every student, logos copied into storage (orbit_private.linkedin_companies)
     companies: url && serviceKey ? postgrestCompanyCache(url, serviceKey) : undefined,
+    // plan 34 E1: Exa from /web and Village from /paths land in orbit.usage_ledger like the server's own calls
+    usage: url && serviceKey ? postgrestUsage(url, serviceKey) : undefined,
     postings: {
       anthropicKey,
       cache: url && serviceKey ? postgrestPostingCache(url, serviceKey) : undefined,

@@ -70,6 +70,38 @@ export interface EnrichmentRecord {
 
 const recKey = (personId: string) => `enrich:rec:${personId}`;
 
+/**
+ * When this browser last read someone's LinkedIn profile in full (enrichment), by who they are on LinkedIn (member id,
+ * else public profile name) rather than by Orbit person (plan 34 B4, B6): two Orbit rows for one person before a merge,
+ * the photo queue and the hop evidence reads all look here before asking LinkedIn again.
+ */
+export interface ProfileMark {
+  profileAt?: string;
+}
+const markKey = (userId: string, who: string) => `profile:mark:${userId}:${who}`;
+
+export async function readProfileMark(userId: string, who: string | undefined): Promise<ProfileMark> {
+  if (!who) return {};
+  return ((await db.kv.get(markKey(userId, who)))?.value as ProfileMark | undefined) ?? {};
+}
+
+/** Every mark of this student's, by who, in one read (the photo queue looks at thousands of people a tick). */
+export async function allProfileMarks(userId: string): Promise<Map<string, ProfileMark>> {
+  const prefix = markKey(userId, '');
+  const rows = await db.kv.where('key').startsWith(prefix).toArray();
+  return new Map(rows.map((r) => [r.key.slice(prefix.length), r.value as ProfileMark]));
+}
+
+export async function noteProfileMark(
+  userId: string,
+  who: string | undefined,
+  patch: ProfileMark,
+): Promise<void> {
+  if (!who) return;
+  const cur = await readProfileMark(userId, who);
+  await db.kv.put({ key: markKey(userId, who), value: { ...cur, ...patch } });
+}
+
 export async function readRecord(personId: string): Promise<EnrichmentRecord | undefined> {
   return (await db.kv.get(recKey(personId)))?.value as EnrichmentRecord | undefined;
 }

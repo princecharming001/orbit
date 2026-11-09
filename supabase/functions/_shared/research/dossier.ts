@@ -31,9 +31,10 @@ import {
 } from './guards';
 import { type IdentityCard, identityCard, scorePage } from './identity';
 import {
+  DOSSIER_SYSTEM,
   type DossierContent,
   dossierSchema,
-  dossierSystem,
+  dossierStudent,
   dossierUser,
   PROMPT_VERSION,
   retryNote,
@@ -255,8 +256,8 @@ export async function buildDossier(deps: DossierDeps, input: DossierInput): Prom
 
   const allowed = sources.map((s) => s.id);
   const prompt = {
-    system: dossierSystem(input.user.firstName, input.goalSentence),
-    user: dossierUser({
+    system: DOSSIER_SYSTEM,
+    user: `${dossierStudent(input.user.firstName, input.goalSentence)}\n\n${dossierUser({
       userContext: input.user.context,
       person: {
         name: input.person.name,
@@ -271,7 +272,7 @@ export async function buildDossier(deps: DossierDeps, input: DossierInput): Prom
       internalHistory: formatHistory(history),
       linkedin: linkedinLines.join('\n\n'),
       sources: sources.filter((s) => s.kind === 'web'),
-    }),
+    })}`,
   };
 
   const thin = sources.filter((s) => s.kind === 'web').length === 0;

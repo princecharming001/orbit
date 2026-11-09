@@ -8,6 +8,7 @@ import type { Db } from '../../_shared/db.ts';
 import type { TokenSource } from '../../_shared/google.ts';
 import { type GoogleClient, googleClient, type QuotaPacer } from '../../_shared/googleApi.ts';
 import type { Embed } from '../../_shared/services.ts';
+import type { CostDigestDeps } from './cost.ts';
 
 export interface HandlerDeps {
   fetch?: typeof fetch;
@@ -25,6 +26,8 @@ export interface HandlerDeps {
   jobBudgetMs?: number;
   /** gte-small for the student's sent mail (plan 29 §B2.4a); the Edge Runtime's own model when not given */
   embed?: Embed;
+  /** the daily cost digest's mailer, owner and thresholds (plan 34 E2) */
+  cost?: CostDigestDeps;
 }
 
 export class JobSkipped extends Error {

@@ -11,8 +11,9 @@
  * Paging stays at one request a second per account, and one job makes at most 60 requests, or works for a minute,
  * before it saves {stage, cursor, chatsCursor, chatIndex} and queues the next one 5 s later (the time budget matters
  * more than the count: filing a page of relations is a minute or more, and a worker run that overstays is killed
- * without a trace, so a job that only counted requests was killed on every attempt and dead-lettered). A pass that
- * ended in the last 20 hours is not walked again: a sync asked for then reads one page of the newest relations.
+ * without a trace, so a job that only counted requests was killed on every attempt and dead-lettered). A full pass
+ * that ended in the last 7 days is not walked again (plan 34 A7): a sync asked for then reads one page of the newest
+ * relations and only the chats with activity since the last pass, full or short.
  * New inbound messages of the last 180 days are classified (on the first pass as history: listed, never answered by a
  * draft); the people touched are re-scored, and score.user runs when a full pass ends.
  */
@@ -36,13 +37,16 @@ export const JOB_BUDGET_MS = 60_000;
 /**
  * Pages of relations (50 each) one job files before it hands on. Filing is CPU, not waiting: about ten pages used up
  * an isolate's CPU and it was killed mid-job on every attempt, so a 7,500-person network stalled near 5,300 and the
- * job was dead-lettered. Four pages a job, one job a worker run, stays well inside it.
+ * job was dead-lettered. Two pages a job, one job a worker run, stays well inside it (four still died at times).
  */
-export const RELATION_PAGES_PER_JOB = 4;
+export const RELATION_PAGES_PER_JOB = 2;
 /** Chats filed by one job, for the same reason (each is a page of messages to store). */
-export const CHATS_PER_JOB = 8;
-/** a full pass that ended this recently is not walked again */
-export const FRESH_FOR_MS = 20 * 3_600_000;
+export const CHATS_PER_JOB = 4;
+/**
+ * A full pass that ended this recently is not walked again. It was 20 hours, so any sync asked for the next day
+ * re-walked 7,500 relations and two years of chats: 192 jobs and 3 hours of worker time on 2026-11-08.
+ */
+export const FRESH_FOR_MS = 7 * 86_400_000;
 const DAY = 86_400_000;
 
 interface LinkedinState {
@@ -53,6 +57,11 @@ interface LinkedinState {
   selfMemberId?: string;
   /** when the last full pass ended */
   syncedAt?: string;
+  /** when the last short pass (newest relations, recent chats) ended */
+  recentAt?: string;
+  /** this pass is a short one: chats with activity after `chatsAfter` only, and syncedAt is left as it is */
+  short?: boolean;
+  chatsAfter?: string;
 }
 
 const str = (v: unknown) => (typeof v === 'string' && v ? v : undefined);
@@ -115,7 +124,8 @@ export function linkedinHandlers(deps: HandlerDeps): Record<string, JobHandler> 
         now.getTime() - Date.parse(state.syncedAt) < FRESH_FOR_MS;
       // no full pass has ended yet: what this one reads is the user's history, from before Orbit
       const firstPass = !state.syncedAt;
-      if (state.stage === 'done' || !state.stage) state = { ...state, stage: 'relations', cursor: null };
+      if (state.stage === 'done' || !state.stage)
+        state = { ...state, stage: 'relations', cursor: null, short: false, chatsAfter: undefined };
       let requests = 0;
       let pages = 0;
       let chatsDone = 0;
@@ -152,6 +162,7 @@ export function linkedinHandlers(deps: HandlerDeps): Record<string, JobHandler> 
       const ownIds = new Set([...self.memberIds, ...(state.selfMemberId ? [state.selfMemberId] : [])]);
 
       let finished = false;
+      let shortPass = false;
       let outOfBudget = false;
       while (!outOfBudget && !finished) {
         if (requests >= REQUESTS_PER_JOB || overBudget()) {
@@ -170,11 +181,30 @@ export function linkedinHandlers(deps: HandlerDeps): Record<string, JobHandler> 
           const r = await ingestRelations(ctx.db, userId, rels, now);
           for (const pid of r.byMember.values()) touched.add(pid);
           if (fresh) {
-            // the last pass stands: its end time keeps the next sync short too
-            state = { ...state, stage: 'done', cursor: null };
-            await save({ stage: 'done', cursor: null });
-            finished = true;
-            break;
+            // the last full pass stands (its end time keeps the next sync short too); chats are read only back to
+            // the last pass of either kind
+            const since = [state.syncedAt, state.recentAt]
+              .filter((d): d is string => !!d)
+              .sort()
+              .at(-1)!;
+            state = {
+              ...state,
+              stage: 'chats',
+              cursor: null,
+              chatsCursor: null,
+              chatIndex: 0,
+              short: true,
+              chatsAfter: since,
+            };
+            await save({
+              stage: 'chats',
+              cursor: null,
+              chatsCursor: null,
+              chatIndex: 0,
+              short: true,
+              chatsAfter: since,
+            });
+            continue;
           }
           state = page.value.cursor
             ? { ...state, cursor: page.value.cursor }
@@ -188,7 +218,10 @@ export function linkedinHandlers(deps: HandlerDeps): Record<string, JobHandler> 
           continue;
         }
         // chats
-        const after = new Date(now.getTime() - 730 * DAY).toISOString();
+        const after =
+          state.short && state.chatsAfter
+            ? state.chatsAfter
+            : new Date(now.getTime() - 730 * DAY).toISOString();
         const page = await call(() => unipile.chats(accountId, { after, cursor: state.chatsCursor }));
         if (!page.ok) throw new Error(`unipile chats ${page.status ?? page.kind}`);
         const chats = page.value.items;
@@ -253,6 +286,18 @@ export function linkedinHandlers(deps: HandlerDeps): Record<string, JobHandler> 
         if (page.value.cursor) {
           state = { ...state, chatsCursor: page.value.cursor, chatIndex: 0 };
           await save({ chatsCursor: page.value.cursor, chatIndex: 0 });
+        } else if (state.short) {
+          // a short pass ends without a full rebuild: syncedAt stays, so a full walk still comes once a week
+          state = { ...state, stage: 'done', chatsCursor: null, chatIndex: 0, short: false };
+          await save({
+            stage: 'done',
+            chatsCursor: null,
+            chatIndex: 0,
+            short: false,
+            recentAt: now.toISOString(),
+          });
+          finished = true;
+          shortPass = true;
         } else {
           state = { ...state, stage: 'done', chatsCursor: null, chatIndex: 0 };
           await save({ stage: 'done', chatsCursor: null, chatIndex: 0, syncedAt: now.toISOString() });
@@ -261,14 +306,16 @@ export function linkedinHandlers(deps: HandlerDeps): Record<string, JobHandler> 
       }
 
       await scorePeople(ctx, userId, [...touched], `${job.msgId}`);
-      if (finished)
-        await ctx.queue.enqueue({
-          kind: 'score.user',
-          userId,
-          payload: { reason: 'linkedin' },
-          dedupeKey: `score.user:${userId}:linkedin:${now.toISOString().slice(0, 13)}`,
-        });
-      else
+      if (finished) {
+        // a short pass's people were re-scored above; only a full pass rebuilds everyone
+        if (!shortPass)
+          await ctx.queue.enqueue({
+            kind: 'score.user',
+            userId,
+            payload: { reason: 'linkedin' },
+            dedupeKey: `score.user:${userId}:linkedin:${now.toISOString().slice(0, 13)}`,
+          });
+      } else
         await ctx.queue.enqueue(
           {
             kind: 'sync.linkedin',

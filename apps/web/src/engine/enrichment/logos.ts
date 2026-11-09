@@ -3,7 +3,7 @@
  * it (its id, its public name and its logo), is kept on the organisation, and CompanyLogo shows that logo before any
  * guessed web-address icon. LinkedIn's image links expire, so an expired logo is fetched again from the company's page.
  */
-import type { Organization } from '@orbit/core';
+import { normalizeCompany, type Organization } from '@orbit/core';
 import { db } from '../../db/schema';
 import type { LinkedInCompany } from '../../integrations/enrichmentProxy';
 import { isLinkedInPhoto, linkedInImageExpired } from '../photos';
@@ -64,6 +64,8 @@ export async function refreshLogos(
   const seen = new Set<string>();
   // a company page that had no logo is asked again only after a week
   const tried = ((await db.kv.get(TRIED_KEY))?.value as Record<string, string> | undefined) ?? {};
+  const asked = await logosAskedAt();
+  const answered: string[] = [];
   for (const id of orgIds) {
     if (calls >= opts.limit) break;
     if (seen.has(id)) continue;
@@ -71,11 +73,15 @@ export async function refreshLogos(
     const org = await db.organizations.get(id);
     if (!org || !logoDue(org, now)) continue;
     if (now.getTime() - Date.parse(tried[id] ?? '1970-01-01') < RETRY_MS) continue;
+    const name = org.nameNormalized || normalizeCompany(org.name);
+    // the logo queue asked LinkedIn about this company by name this week and it had no logo then
+    if (!org.logoUrl && name && now.getTime() - Date.parse(asked[name] ?? '1970-01-01') < RETRY_MS) continue;
     tried[id] = now.toISOString();
     calls++;
     await opts.onCall?.();
     const r = await fetchCompany(org.linkedinCompanyId ?? org.linkedinSlug!);
     if (!r.ok) continue;
+    if (name) answered.push(name);
     const c = r.value;
     const patch = await adoptCompany(
       // the page answered for this organisation's own id: its logo is the one to keep
@@ -86,8 +92,27 @@ export async function refreshLogos(
     if (patch?.logoUrl) fixed++;
   }
   if (calls) await db.kv.put({ key: TRIED_KEY, value: tried });
+  await markLogosAsked(answered, now);
   return fixed;
 }
 
 const TRIED_KEY = 'enrich:logos:tried';
+
+/**
+ * One record of when LinkedIn last answered for a company, by its normalised name, shared by the logo queue (asks by
+ * name) and the logo refresh (asks by id), so a company LinkedIn found without a logo is not asked again by the other
+ * (plan 34 B6).
+ */
+const ASKED_KEY = 'logos:asked';
+
+export async function logosAskedAt(): Promise<Record<string, string>> {
+  return ((await db.kv.get(ASKED_KEY))?.value as Record<string, string> | undefined) ?? {};
+}
+
+export async function markLogosAsked(keys: string[], now: Date): Promise<void> {
+  if (!keys.length) return;
+  const asked = await logosAskedAt();
+  for (const k of keys) if (k) asked[k] = now.toISOString();
+  await db.kv.put({ key: ASKED_KEY, value: asked });
+}
 const RETRY_MS = 7 * 86_400_000;

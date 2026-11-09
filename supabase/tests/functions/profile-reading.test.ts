@@ -233,6 +233,42 @@ describe('a reading step', () => {
     expect(got.body.progress.read).toBe(2);
   });
 
+  it('plan 34 B1: a second student with the same person gets the first read and its reading, with no request', async () => {
+    // the first test's student read Ana (ACoAna) with Claude; another student who has her reads nothing new
+    const { userId } = await signedInUser(t);
+    const ana2 = await addPerson(t, userId, { name: 'Ana Park', memberId: 'ACoAna' });
+    const net = fakeNet(() => jsonRes(500, {}));
+    const calls: string[] = [];
+    const step = await runReadingStep(
+      t.db,
+      {
+        fetch: net.fetch,
+        apiKey: 'k',
+        baseUrl: UNIPILE,
+        claude: fakeClaude(calls),
+        sleep: instant,
+        random: () => 0,
+        clock: Date.now,
+      },
+      userId,
+      'acc-r2',
+      NOW,
+      { mode: 'ask', personIds: [ana2] },
+    );
+    expect(step.profiles).toBe(1);
+    expect(net.calls.filter((c) => c.url.includes('/api/v1/users/'))).toHaveLength(0);
+    // no model call for her either: the same text, the same reading
+    expect(calls.filter((u) => u.includes('Building Lumen'))).toHaveLength(0);
+    const [mine] = await t.db.sql<{ reading: Record<string, unknown>; about: string }>`
+      select reading, about from orbit.profile_reads where user_id = ${userId}::uuid and person_id = ${ana2}::uuid`;
+    expect(mine!.about).toContain('Building Lumen');
+    expect(mine!.reading).toMatchObject({ stage: { value: 'seed' }, teamSize: { value: 9 } });
+    const [p] = await t.db.sql<{
+      summary: string | null;
+    }>`select summary from orbit.people where id = ${ana2}::uuid`;
+    expect(p!.summary).toContain('Building Lumen');
+  });
+
   it('stops at its share of the profile ledger and reads by pattern without Claude', async () => {
     const { userId } = await signedInUser(t);
     const ids: string[] = [];

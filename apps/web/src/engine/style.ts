@@ -23,6 +23,8 @@ import { liveLinkedInAccount } from './linkedinLive';
 
 /** How far back LinkedIn messages are read for the student's voice. */
 const LINKEDIN_LOOKBACK_DAYS = 180;
+/** How long the LinkedIn messages read for the voice are reused before an automatic relearn reads them again. */
+const LINKEDIN_REREAD_MS = 7 * 86_400_000;
 /** At most this many examples are kept from any one place, newest first. */
 const PER_SOURCE = 150;
 /** Pasted examples kept at once. */
@@ -136,16 +138,26 @@ export type LearnResult =
  */
 export async function learnStyle(
   user: Pick<User, 'id' | 'firstName'>,
-  opts: { now?: Date } = {},
+  opts: { now?: Date; force?: boolean } = {},
 ): Promise<LearnResult> {
   const now = opts.now ?? new Date();
-  const [style, settings, emails, orbit, linkedin] = await Promise.all([
+  const [style, settings, emails, orbit] = await Promise.all([
     db.styles.get(user.id),
     db.settings.get(user.id),
     sentEmails(user.id),
     editedFromOrbit(user.id),
-    linkedInMessages(user, now),
   ]);
+  // the LinkedIn messages are read at most once a week (plan 34 A8): an automatic relearn after a sync reuses the
+  // last read; the student's own Learn or Relearn button passes force and reads them again
+  const readAt = style?.linkedinReadAt ? Date.parse(style.linkedinReadAt) : Number.NaN;
+  const fresh =
+    !opts.force &&
+    !!style?.linkedinSamples &&
+    now.getTime() - readAt < LINKEDIN_REREAD_MS &&
+    readAt <= now.getTime();
+  const read = fresh ? undefined : await linkedInMessages(user, now);
+  const linkedin = fresh ? style?.linkedinSamples : read;
+  const linkedinCache = read ? { linkedinSamples: read, linkedinReadAt: now.toISOString() } : {};
   const samples = [
     ...emails.map((text) => ({ text, source: 'email' as const })),
     ...(linkedin ?? []).map((text) => ({ text, source: 'linkedin' as const })),
@@ -160,7 +172,7 @@ export async function learnStyle(
         'Orbit needs at least three messages you wrote. Connect Gmail or LinkedIn, or paste a few messages you sent.',
     };
   const card = mergeStyleCard(learned, style?.card);
-  await db.styles.put({ ...style, userId: user.id, card, updatedAt: now.toISOString() });
+  await db.styles.put({ ...style, ...linkedinCache, userId: user.id, card, updatedAt: now.toISOString() });
   return { ok: true, card, learnedFrom: learned.builtFromCount, sources: learned.sources ?? {} };
 }
 

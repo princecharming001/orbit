@@ -10,6 +10,7 @@ const gmail = vi.hoisted(() => ({
   list: new Map<string, string[]>(),
   failing: new Set<string>(),
   messages: new Map<string, GmailMessageRaw>(),
+  calendarLists: 0,
 }));
 
 vi.mock('../integrations/google', async (orig) => ({
@@ -22,7 +23,10 @@ vi.mock('../integrations/google', async (orig) => ({
     if (!m) throw new Error('Google API 404');
     return m;
   },
-  gcalList: async () => [],
+  gcalList: async () => {
+    gmail.calendarLists++;
+    return [];
+  },
 }));
 
 const b64 = (s: string) => btoa(s).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
@@ -58,6 +62,7 @@ beforeEach(async () => {
   gmail.list.clear();
   gmail.failing.clear();
   gmail.messages.clear();
+  gmail.calendarLists = 0;
   user = await createLocalUser({
     email: 'sam@cornell.edu',
     firstName: 'Sam',
@@ -81,6 +86,23 @@ const syncNotes = async () =>
     .filter((n) => n.title === 'Google sync finished')
     .map((n) => n.body ?? '');
 const stored = async (id: string) => !!(await db.messages.where('externalMessageId').equals(id).first());
+
+describe('google sync calendar (plan 34 A8)', () => {
+  it('a quiet check lists the calendar at most every six hours; a full sync always lists it', async () => {
+    await syncGoogle(user, { useLlm: false, quiet: true });
+    expect(gmail.calendarLists).toBe(1);
+    await syncGoogle(user, { useLlm: false, quiet: true });
+    expect(gmail.calendarLists).toBe(1);
+    await syncGoogle(user, { useLlm: false });
+    expect(gmail.calendarLists).toBe(2);
+    // seven hours later the quiet check lists it again
+    const a = await account();
+    const old = new Date(Date.now() - 7 * 3_600_000).toISOString();
+    await db.integrations.update(a.id, { syncState: { ...(a.syncState ?? {}), calendarListedAt: old } });
+    await syncGoogle(user, { useLlm: false, quiet: true });
+    expect(gmail.calendarLists).toBe(3);
+  });
+});
 
 describe('google sync checkpoint', () => {
   it('keeps a message whose download failed and stores it on the next sync', async () => {

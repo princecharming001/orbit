@@ -16,7 +16,7 @@ import { mockLinkedInProfile } from '../integrations/connectorsMock';
 import { type EnrichOutcome, type LinkedInPhoto, linkedInPhoto } from '../integrations/enrichmentProxy';
 import { endActivity, startActivity } from './activity';
 import { liveAccountFor } from './enrichment/sources';
-import { allRecords, linkedInPaused, pauseLinkedIn, readBudget } from './enrichment/store';
+import { allProfileMarks, allRecords, linkedInPaused, pauseLinkedIn, readBudget } from './enrichment/store';
 import { brokenPhoto, onScreenRank, subscribePhotoSignals } from './photoSignals';
 import { freshPhoto, isGravatarPhoto, isLinkedInPhoto, linkedInImageExpired } from './photos';
 
@@ -127,19 +127,22 @@ export async function refreshOnePhoto(
   if (used >= PHOTOS_PER_DAY) return { step: 'paused' };
   const tried = await readTried(user.id);
   const records = await allRecords(user.id);
-  const readRecently = (id: string) => {
-    const at = records.get(id)?.profileAt;
-    return !!at && now.getTime() - Date.parse(at) < PROFILE_READ_FRESH_MS;
-  };
-  const due = (await db.people.where('userId').equals(user.id).toArray()).filter(
-    (p) =>
-      wantsPhoto(p, now) &&
-      now.getTime() - Date.parse(tried[p.id] ?? '1970-01-01') > PHOTO_RETRY_MS &&
-      !readRecently(p.id),
+  const marks = await allProfileMarks(user.id);
+  const recent = (at: string | undefined) => !!at && now.getTime() - Date.parse(at) < PROFILE_READ_FRESH_MS;
+  const candidates = (await db.people.where('userId').equals(user.id).toArray()).filter(
+    (p) => wantsPhoto(p, now) && !recent(records.get(p.id)?.profileAt),
+  );
+  // tried is kept by who they are on LinkedIn as well as by Orbit person (plan 34 B4): an unmerged duplicate is not
+  // asked about twice, and someone asked by profile name who came back with a member id is not asked again
+  const triedAt = (p: Person) =>
+    Math.max(Date.parse(tried[photoIdentifier(p)!] ?? '1970-01-01'), Date.parse(tried[p.id] ?? '1970-01-01'));
+  const due = candidates.filter(
+    (p) => now.getTime() - triedAt(p) > PHOTO_RETRY_MS && !recent(marks.get(photoIdentifier(p)!)?.profileAt),
   );
   const [p] = photoOrder(due, onScreenRank());
   if (!p) return { step: 'idle' };
   nextCall.set(user.id, now.getTime() + GAP_MS * (1 + jitter()));
+  tried[photoIdentifier(p)!] = now.toISOString();
   tried[p.id] = now.toISOString();
   await db.kv.put({ key: triedKey(user.id), value: tried });
   await db.kv.put({ key: dayKey(user.id), value: { day, used: used + 1 } });

@@ -240,6 +240,14 @@ import { zodOutputFormat } from "npm:@anthropic-ai/sdk@0.133.0/helpers/zod";
 // supabase/functions/_shared/budget.ts
 var CAPS = [
   { id: "claude_daily_usd", provider: "anthropic", measure: "cost_usd", limit: 1.5, window: "day" },
+  {
+    id: "claude_total_daily_usd",
+    provider: "anthropic",
+    measure: "cost_usd",
+    limit: 4.5,
+    window: "day",
+    includeChat: true
+  },
   { id: "exa_daily_usd", provider: "exa", measure: "cost_usd", limit: 0.5, window: "day" },
   { id: "village_daily_credits", provider: "village", measure: "units", limit: 50, window: "day" },
   {
@@ -251,6 +259,14 @@ var CAPS = [
     window: "day"
   },
   { id: "hunter_daily_credits", provider: "hunter", measure: "units", limit: 10, window: "day" },
+  {
+    id: "hunter_monthly_credits_global",
+    provider: "hunter",
+    measure: "units",
+    limit: 40,
+    window: "month",
+    scope: "global"
+  },
   {
     id: "unipile_profile_views_daily",
     provider: "unipile",
@@ -276,6 +292,7 @@ async function checkBudget(db2, userId, spend, now = /* @__PURE__ */ new Date())
     select provider, operation,
            coalesce(sum(units) filter (where created_at >= ${day2}::timestamptz), 0)::text as day_units,
            coalesce(sum(cost_usd) filter (where created_at >= ${day2}::timestamptz), 0)::text as day_usd,
+           coalesce(sum(units), 0)::text as month_units,
            coalesce(sum(cost_usd), 0)::text as month_usd
       from orbit.usage_ledger
      where user_id = ${userId}::uuid and created_at >= ${month}::timestamptz
@@ -304,10 +321,26 @@ async function checkBudget(db2, userId, spend, now = /* @__PURE__ */ new Date())
       used: round(monthTotal),
       resetsAt: windowEnd("month", now).toISOString()
     };
+  let globalRows;
   for (const cap of CAPS) {
     if (cap.provider !== spend.provider) continue;
     if (cap.operation && cap.operation !== spend.operation) continue;
-    const used = rows.filter((r) => r.provider === cap.provider && (!cap.operation || r.operation === cap.operation)).reduce((s, r) => s + Number(cap.measure === "units" ? r.day_units : r.day_usd), 0);
+    let source = rows;
+    if (cap.scope === "global") {
+      globalRows ??= await db2.sql`
+        select provider, operation,
+               coalesce(sum(units) filter (where created_at >= ${day2}::timestamptz), 0)::text as day_units,
+               coalesce(sum(cost_usd) filter (where created_at >= ${day2}::timestamptz), 0)::text as day_usd,
+               coalesce(sum(units), 0)::text as month_units,
+               coalesce(sum(cost_usd), 0)::text as month_usd
+          from orbit.usage_ledger
+         where provider = ${spend.provider} and created_at >= ${month}::timestamptz
+         group by provider, operation`;
+      source = globalRows;
+    }
+    const field = cap.window === "month" ? cap.measure === "units" ? "month_units" : "month_usd" : cap.measure === "units" ? "day_units" : "day_usd";
+    let used = source.filter((r) => r.provider === cap.provider && (!cap.operation || r.operation === cap.operation)).reduce((s, r) => s + Number(r[field]), 0);
+    if (cap.includeChat) used += await chatSpendToday(db2, userId, now);
     const add4 = cap.measure === "units" ? spend.units ?? 1 : spend.costUsd ?? 0;
     if (used + add4 > cap.limit || used >= cap.limit && add4 === 0)
       return {
@@ -321,11 +354,48 @@ async function checkBudget(db2, userId, spend, now = /* @__PURE__ */ new Date())
   }
   return { ok: true };
 }
+async function chatSpendToday(db2, userId, now) {
+  const subject = `user:${userId}:${now.toISOString().slice(0, 10)}`;
+  try {
+    const [r] = await db2.sql`
+      select usd::text as usd from public.orbit_proxy_spend where subject = ${subject}`;
+    return Number(r?.usd ?? 0);
+  } catch {
+    return 0;
+  }
+}
 async function recordUsage(db2, entry) {
-  await db2.sql`
+  const rows = await db2.sql`
     insert into orbit.usage_ledger (user_id, provider, operation, units, cost_usd)
     values (${entry.userId}::uuid, ${entry.provider}, ${entry.operation}, ${entry.units}::numeric,
-            ${round(entry.costUsd)}::numeric)`;
+            ${round(entry.costUsd)}::numeric)
+    returning id::text as id`;
+  return rows[0]?.id;
+}
+async function settleUsage(db2, id, actual) {
+  await db2.sql`
+    update orbit.usage_ledger set units = ${actual.units}::numeric,
+           cost_usd = coalesce(${actual.costUsd === void 0 ? null : round(actual.costUsd)}::numeric, cost_usd),
+           operation = coalesce(${actual.operation ?? null}, operation)
+     where id = ${id}::bigint`;
+}
+async function reserveUsage(db2, entry, now = /* @__PURE__ */ new Date()) {
+  if (entry.userId) {
+    const v = await checkBudget(
+      db2,
+      entry.userId,
+      { provider: entry.provider, operation: entry.operation, units: entry.units, costUsd: entry.costUsd },
+      now
+    );
+    if (!v.ok) return { ok: false, verdict: v };
+  }
+  const id = await recordUsage(db2, entry);
+  return {
+    ok: true,
+    async settle(actual) {
+      if (id) await settleUsage(db2, id, actual);
+    }
+  };
 }
 var round = (n) => Math.round(n * 1e5) / 1e5;
 
@@ -366,11 +436,19 @@ var TASKS = {
   // the brief reads compact facts, not raw pages: the mid model writes it for about a tenth of the writing model's price
   research_brief: { model: "claude-sonnet-5-5", maxTokens: 8e3, flatNullable: true }
 };
+var NO_RETRY_TASKS = /* @__PURE__ */ new Set([
+  "classify",
+  "reply_classify",
+  "fit",
+  "reading"
+]);
 function makeClaude(deps) {
   const client = deps.apiKey ? deps.client ?? new Anthropic({ apiKey: deps.apiKey, fetch: deps.fetch, maxRetries: 2 }) : void 0;
   const now = deps.now ?? (() => /* @__PURE__ */ new Date());
   async function structured(req) {
     if (!client) return { ok: false, unconfigured: true };
+    if (deps.enabled && !await deps.enabled().catch(() => true))
+      return { ok: false, budgetExceeded: true, cap: "provider_off", resetsAt: "9999-12-31T00:00:00.000Z" };
     const setting = TASKS[req.task];
     if (deps.db && req.userId) {
       const verdict = await checkBudget(
@@ -412,7 +490,7 @@ function makeClaude(deps) {
         await recordUsage(deps.db, {
           userId: req.userId,
           provider: "anthropic",
-          operation: req.task,
+          operation: attempt === 0 ? req.task : `${req.task}:retry`,
           units: usage.input_tokens + usage.output_tokens,
           costUsd: cost
         });
@@ -420,14 +498,15 @@ function makeClaude(deps) {
         const details = msg.stop_details;
         return { ok: false, refused: true, category: details?.category ?? null };
       }
+      const parsed = msg.parsed_output;
       if (msg.stop_reason === "max_tokens") {
-        if (attempt === 0) {
+        if (parsed?.ok) return { ok: true, data: parsed.value, model: setting.model, costUsd: cost, usage };
+        if (attempt === 0 && !NO_RETRY_TASKS.has(req.task)) {
           maxTokens *= 2;
           continue;
         }
         return { ok: false, error: "max_tokens" };
       }
-      const parsed = msg.parsed_output;
       if (!parsed?.ok) return { ok: false, error: "invalid_output", detail: parsed?.error?.slice(0, 200) };
       return { ok: true, data: parsed.value, model: setting.model, costUsd: cost, usage };
     }
@@ -587,14 +666,14 @@ async function revokeToken(cfg, token) {
   return res.ok || res.status === 400;
 }
 function googleTokenSource(cfg, deps) {
-  const cache = /* @__PURE__ */ new Map();
+  const cache2 = /* @__PURE__ */ new Map();
   const clock = () => (cfg.now ?? (() => /* @__PURE__ */ new Date()))().getTime();
   return {
     invalidate: (userId) => {
-      cache.delete(userId);
+      cache2.delete(userId);
     },
     async accessToken(userId) {
-      const hit = cache.get(userId);
+      const hit = cache2.get(userId);
       if (hit && hit.until > clock()) return hit.token;
       const [acct] = await deps.db.sql`
         select token_secret_id, status from orbit.integration_accounts
@@ -605,7 +684,7 @@ function googleTokenSource(cfg, deps) {
       if (!refresh2) throw new NeedsReauth();
       try {
         const t = await refreshAccessToken(cfg, refresh2);
-        cache.set(userId, { token: t.access_token, until: clock() + Math.max(0, t.expires_in - 300) * 1e3 });
+        cache2.set(userId, { token: t.access_token, until: clock() + Math.max(0, t.expires_in - 300) * 1e3 });
         return t.access_token;
       } catch (e) {
         if (e instanceof NeedsReauth)
@@ -636,6 +715,14 @@ function backoffMs(attempt, random) {
   return Math.round(base * (1 + 0.25 * random()));
 }
 async function requestJson(opts, spec) {
+  if (opts.gate && !await opts.gate().catch(() => true))
+    return {
+      ok: false,
+      kind: "budget_exceeded",
+      provider: spec.provider,
+      reason: "off",
+      message: `${spec.provider}: switched off`
+    };
   const sleep = opts.sleep ?? defaultSleep;
   const random = opts.random ?? Math.random;
   const clock = opts.clock ?? Date.now;
@@ -1643,6 +1730,7 @@ var KIND_QUEUE = {
   company_facts_sync: "orbit_enrich",
   search_census: "orbit_enrich",
   search_reading: "orbit_enrich",
+  "cost.digest": "orbit_enrich",
   noop: "orbit_enrich"
 };
 function queueFor(kind) {
@@ -1678,6 +1766,21 @@ function sqlQueue(db2) {
       await db2.sql`select msg_id from pgmq.set_vt(${queue}, ${msgId}::bigint, ${Math.floor(vtSec)}::int)`;
     }
   };
+}
+
+// supabase/functions/_shared/switches.ts
+var SWITCH_TTL_MS = 5 * 6e4;
+var cache = /* @__PURE__ */ new WeakMap();
+function providersOff(db2, clock = Date.now) {
+  const hit = cache.get(db2);
+  if (hit && clock() - hit.at < SWITCH_TTL_MS) return hit.off;
+  const off = db2.sql`select public.orbit_providers_off() as off`.then((rows) => new Set(rows[0]?.off ?? [])).catch(() => /* @__PURE__ */ new Set());
+  cache.set(db2, { at: clock(), off });
+  return off;
+}
+function switchGate(db2, provider, clock) {
+  if (!db2) return void 0;
+  return async () => !(await providersOff(db2, clock)).has(provider);
 }
 
 // supabase/functions/_shared/vault.ts
@@ -1753,6 +1856,7 @@ function makeServices(cfg, base) {
   const now = base.now ?? (() => /* @__PURE__ */ new Date());
   const doFetch = cfg.fetch ?? ((...a) => fetch(...a));
   const p = { fetch: doFetch, sleep: cfg.sleep, random: cfg.random, clock: () => now().getTime() };
+  const gate = (name) => switchGate(base.db, name);
   const env2 = cfg.env;
   const google = googleConfigOf(env2, doFetch, now);
   let tokens3 = cfg.tokens;
@@ -1773,16 +1877,22 @@ function makeServices(cfg, base) {
       db: base.db,
       fetch: cfg.fetch,
       now,
-      client: cfg.anthropic
+      client: cfg.anthropic,
+      enabled: gate("anthropic")
     }),
-    exa: createExa({ ...p, apiKey: env2.exaKey }),
-    unipile: createUnipileResearch({ ...p, apiKey: env2.unipileKey, baseUrl: env2.unipileBase }),
-    apollo: createApollo({ ...p, apiKey: env2.apolloKey }),
-    hunter: createHunter({ ...p, apiKey: env2.hunterKey }),
+    exa: createExa({ ...p, apiKey: env2.exaKey, gate: gate("exa") }),
+    unipile: createUnipileResearch({
+      ...p,
+      apiKey: env2.unipileKey,
+      baseUrl: env2.unipileBase,
+      gate: gate("unipile_reads")
+    }),
+    apollo: createApollo({ ...p, apiKey: env2.apolloKey, gate: gate("apollo") }),
+    hunter: createHunter({ ...p, apiKey: env2.hunterKey, gate: gate("hunter") }),
     semanticScholar: createSemanticScholar({ ...p, apiKey: env2.semanticScholarKey, anonymous: true }),
     village: villageFor(
       cfg,
-      () => createVillage({ ...p, secretKey: env2.villageKey, baseUrl: env2.villageBase })
+      () => createVillage({ ...p, secretKey: env2.villageKey, baseUrl: env2.villageBase, gate: gate("village") })
     ),
     embed: cfg.embed ?? supabaseEmbed(),
     mailer: makeMailer(env2, doFetch),
@@ -1811,7 +1921,9 @@ var AGENT_SECRET_NAMES = [
   "VILLAGE_SECRET_KEY",
   "VILLAGE_BASE_URL",
   "RESEND_API_KEY",
-  "RESEND_FROM"
+  "RESEND_FROM",
+  "SERPER_API_KEY",
+  "PARALLEL_API_KEY"
 ];
 async function agentEnvWithSecrets(get2, db2) {
   const stored = /* @__PURE__ */ new Map();
@@ -1842,7 +1954,9 @@ function agentEnvFrom(get2) {
     googleClientSecret: get2("ORBIT_GOOGLE_CLIENT_SECRET"),
     googleRedirectUri: get2("ORBIT_GOOGLE_REDIRECT_URI") ?? (supabaseUrl2 ? `${supabaseUrl2}/functions/v1/orbit-api/auth/google/callback` : void 0),
     resendKey: get2("RESEND_API_KEY"),
-    resendFrom: get2("RESEND_FROM")
+    resendFrom: get2("RESEND_FROM"),
+    serperKey: get2("SERPER_API_KEY"),
+    parallelKey: get2("PARALLEL_API_KEY")
   };
 }
 
@@ -2548,6 +2662,25 @@ async function me(ctx) {
   if (!user) throw unauthorized();
   return json(200, { user });
 }
+
+// supabase/functions/orbit-api/routes/admin.ts
+var COST_DIGEST_ROWS = 30;
+async function costs(ctx) {
+  const owner = ctx.env.ownerId?.trim().toLowerCase();
+  if (!owner || ctx.userId?.toLowerCase() !== owner) throw new HttpError(404, "not_found", "not found");
+  const rows = await ctx.db.sql`
+    select created_at as at, details from orbit.audit_log
+     where action = 'cost.digest' order by created_at desc limit ${COST_DIGEST_ROWS}`;
+  return json(200, {
+    rows: rows.map((r) => ({
+      at: r.at instanceof Date ? r.at.toISOString() : String(r.at),
+      details: r.details ?? {}
+    }))
+  });
+}
+var adminRoutes = {
+  "/admin/costs": { method: "GET|POST", auth: true, run: costs }
+};
 
 // packages/core/src/drafts/neverDo.ts
 var NEGATION = /\b(never|don'?t|do not|dont|avoid|no|not|stop|without)\b/i;
@@ -11475,8 +11608,8 @@ function underMode(rows, mode2, domains) {
     (r) => r.company_domain && want.has(r.company_domain.toLowerCase()) || r.company && names.has(normalizeCompany(r.company))
   );
 }
-function shareRefreshKey(ownerId, now, why = "change") {
-  return `friends:refresh:${ownerId}:${why}:${now.getTime()}`;
+function shareRefreshKey(ownerId2, now, why = "change") {
+  return `friends:refresh:${ownerId2}:${why}:${now.getTime()}`;
 }
 async function sharingFriends(db2, viewerId) {
   const rows = await db2.sql`
@@ -11579,6 +11712,8 @@ function spendOf(p, estimate) {
   switch (p) {
     case "claude":
     case "exa":
+    case "serper":
+    case "parallel":
       return { provider, operation, costUsd: estimate };
     case "village":
       return { provider, operation, units: estimate, costUsd: estimate * VILLAGE_USD_PER_CREDIT };
@@ -11609,6 +11744,16 @@ function sqlBudget(db2, now) {
     async record(userId, e) {
       const { provider, operation } = ledgerName(e.provider, e.operation);
       await recordUsage(db2, { userId, provider, operation, units: e.units, costUsd: e.costUsd });
+    },
+    async reserve(userId, e) {
+      const { provider, operation } = ledgerName(e.provider, e.operation);
+      const r = await reserveUsage(
+        db2,
+        { userId, provider, operation, units: e.units, costUsd: e.costUsd },
+        now()
+      );
+      if (!r.ok) return { ok: false, reason: "budget_exceeded", resetsAt: r.verdict.resetsAt };
+      return { ok: true, settle: (actual) => r.settle(actual) };
     }
   };
 }
@@ -11935,8 +12080,8 @@ var HOP_CACHE_MS = 30 * 864e5;
 var HOP_EVIDENCE_JOB = "hop_evidence";
 var HOP_JOB_MUTUALS = 25;
 var doneKey = (accountId, memberId) => cacheKey("unipile", { op: "hop_done", accountId, memberId });
-async function hopEvidenceFresh(cache, userId, accountId, memberId) {
-  return await cache.get(userId, await doneKey(accountId, memberId)) !== void 0;
+async function hopEvidenceFresh(cache2, userId, accountId, memberId) {
+  return await cache2.get(userId, await doneKey(accountId, memberId)) !== void 0;
 }
 async function linkedinAccountOf(db2, userId) {
   const [a] = await db2.sql`
@@ -15283,6 +15428,18 @@ var COMMON_WORD_ORGS = new Set(
 );
 
 // supabase/functions/_shared/research/prompts.ts
+var DOSSIER_SYSTEM = [
+  "You write a research brief about one person for the student named in <student>, toward the goal written there.",
+  'Use only the sources provided, and write from what each source actually says: "joined" stays "joined", never "led". Every claim needs the id of the source it came from.',
+  "If sources disagree or might be about a different person with the same name, leave the claim out.",
+  'A source whose title starts with "[likely them]" names someone with their name whose details all fit, but nothing ties it to them for certain: you may use it, saying so ("likely the same Dana who..."), never in an opener, and never for their current role.',
+  'Never write, even if a source says it: age, ethnicity, religion, health, family or relationships, sexuality, politics or donations, where they live (a city is the finest you may say), salary or pay, their personality or "communication style", legal matters, immigration, or that they lost a job or took leave.',
+  `"careful" is about their company only (recent layoffs, a reorganization, a product shut down, a hiring freeze), each item with its source ids; never anything about the person's own life. Leave it empty when there is nothing.`,
+  '"company" is what is happening at their company that matters to the student (team news, launches, hiring), from company sources, each with its source ids. Leave it empty when there are no company sources.',
+  `Openers: up to three single sentences the student could open a first message with, each a statement (not a question) of at most 25 words about something they made, said or did. Each rests on one cited source and uses only details that source states, in its words where you can (a title, a claim, a number); the student's reaction may be added ("stuck with me"). Never flattery, never about their private life.`,
+  `Most people have little online beyond LinkedIn. When the only sources are their LinkedIn and the student's own history, say so plainly in "who" (for example "Not much is public about Dana beyond LinkedIn.") and keep to what LinkedIn says; do not pad.`,
+  'Also lay out who they are in full, from the sources only: "career" (every role you can source, newest first, with start and end as written, e.g. "2021" or "Mar 2022"), "education", "profiles" (their own pages: LinkedIn, X, GitHub, a personal site, Google Scholar; only URLs that appear in the sources), "highlights" (up to 8 things they made or said that matter: posts, articles, talks, podcasts, projects, papers, news, awards, each with the URL of its source) and "topics" (up to 6 short phrases for what they work on or talk about).'
+].join("\n");
 var sourceIds = z.array(z.string());
 var dossierSchema = z.object({
   who: z.string(),
@@ -16889,10 +17046,45 @@ async function saveProfile(db2, userId, personId, memberId, raw, mode2, now) {
       reading_at = case when (profile_reads.about, profile_reads.experience) is distinct from (excluded.about, excluded.experience)
                         then null else profile_reads.reading_at end,
       updated_at = now()`;
+  await db2.sql`
+    insert into orbit_private.profile_pages (member_id, about, experience, status, read_at)
+    values (${memberId}, ${about}, ${JSON.stringify(experience)}::jsonb, 'ok', ${now.toISOString()}::timestamptz)
+    on conflict (member_id) do update set about = excluded.about, experience = excluded.experience, status = 'ok',
+      read_at = excluded.read_at,
+      reading = case when (profile_pages.about, profile_pages.experience) is distinct from (excluded.about, excluded.experience)
+                     then null else profile_pages.reading end,
+      reading_model = case when (profile_pages.about, profile_pages.experience) is distinct from (excluded.about, excluded.experience)
+                     then null else profile_pages.reading_model end,
+      reading_at = case when (profile_pages.about, profile_pages.experience) is distinct from (excluded.about, excluded.experience)
+                        then null else profile_pages.reading_at end`;
+  await fillSummary(db2, userId, personId, about);
+}
+async function fillSummary(db2, userId, personId, about) {
   if (about)
     await db2.sql`
       update orbit.people set summary = ${about}, updated_at = now()
        where id = ${personId}::uuid and user_id = ${userId}::uuid and (summary is null or summary = '')`;
+}
+async function copySharedProfile(db2, userId, personId, memberId, mode2, now) {
+  const [page2] = await db2.sql`
+    select about, experience, read_at::text as read_at, reading, reading_model, reading_at::text as reading_at
+      from orbit_private.profile_pages
+     where member_id = ${memberId} and status = 'ok'
+       and read_at > ${now.toISOString()}::timestamptz - make_interval(days => ${REREAD_DAYS})`;
+  if (!page2) return false;
+  await db2.sql`
+    insert into orbit.profile_reads (user_id, person_id, member_id, about, experience, status, read_by, read_at,
+      reading, reading_model, reading_at, updated_at)
+    values (${userId}::uuid, ${personId}::uuid, ${memberId}, ${page2.about}, ${JSON.stringify(page2.experience ?? [])}::jsonb,
+      'ok', ${mode2}, ${page2.read_at}::timestamptz,
+      ${page2.reading === null ? null : JSON.stringify(page2.reading)}::jsonb, ${page2.reading_model},
+      ${page2.reading_at}::timestamptz, now())
+    on conflict (user_id, person_id) do update set member_id = excluded.member_id, about = excluded.about,
+      experience = excluded.experience, status = 'ok', read_by = excluded.read_by, read_at = excluded.read_at,
+      reading = excluded.reading, reading_model = excluded.reading_model, reading_at = excluded.reading_at,
+      updated_at = now()`;
+  await fillSummary(db2, userId, personId, page2.about);
+  return true;
 }
 async function markProfile(db2, userId, personId, memberId, status3, mode2, now) {
   await db2.sql`
@@ -16990,7 +17182,7 @@ function rawOf(facts) {
 }
 async function readPeople(db2, claude, userId, limit, personIds) {
   const rows = await db2.sql`
-    select r.person_id, p.display_name as name, p.headline, r.about, r.experience
+    select r.person_id, r.member_id, p.display_name as name, p.headline, r.about, r.experience
       from orbit.profile_reads r join orbit.people p on p.id = r.person_id
      where r.user_id = ${userId}::uuid and r.reading_at is null and r.status = 'ok'
        and (${personIds ?? null}::uuid[] is null or r.person_id = any(${personIds ?? null}::uuid[]))
@@ -17039,6 +17231,13 @@ async function readPeople(db2, claude, userId, limit, personIds) {
         update orbit.profile_reads set reading = ${JSON.stringify(reading)}::jsonb, reading_model = ${modelName},
           reading_at = now(), updated_at = now()
          where user_id = ${userId}::uuid and person_id = ${part2[k].person_id}::uuid`;
+      const row = part2[k];
+      if (row.member_id && modelName)
+        await db2.sql`
+          update orbit_private.profile_pages set reading = ${JSON.stringify(reading)}::jsonb,
+            reading_model = ${modelName}, reading_at = now()
+           where member_id = ${row.member_id} and about is not distinct from ${row.about}
+             and experience = ${JSON.stringify(row.experience ?? [])}::jsonb`;
       n++;
     }
   }
@@ -17142,16 +17341,22 @@ async function readCompanyIds(db2, deps, accountId, ids, now, mode2, step, start
   }
 }
 async function readProfiles(db2, deps, userId, accountId, people, now, mode2, step, started, budgetMs) {
+  let fetched = 0;
   for (const p of people) {
     if (deps.clock() - started > budgetMs) {
       step.stopped = "time";
       return;
     }
+    if (await copySharedProfile(db2, userId, p.id, p.member, mode2, now)) {
+      step.profiles++;
+      step.readIds.push(p.id);
+      continue;
+    }
     if (!await spendRead(db2, "profile", accountId, now, mode2)) {
       step.stopped = "ledger";
       return;
     }
-    if (step.profiles > 0) await deps.sleep((mode2 === "ask" ? 300 : 2500) + Math.floor(deps.random() * 2500));
+    if (fetched++ > 0) await deps.sleep((mode2 === "ask" ? 300 : 2500) + Math.floor(deps.random() * 2500));
     const got = await getJson(deps, profilePath(accountId, p.member));
     if (!got.ok) {
       if (got.status === "throttled") {
@@ -17627,6 +17832,229 @@ var settingsRoutes = {
 // supabase/functions/_shared/sourcing/run.ts
 import Anthropic2 from "npm:@anthropic-ai/sdk@0.133.0";
 
+// supabase/functions/_shared/providers/webSearch.ts
+var PARALLEL_BASE = "https://api.parallel.ai";
+var SERPER_BASE = "https://google.serper.dev";
+var PARALLEL_SEARCH_USD = 1e-3;
+var SERPER_SEARCH_USD = 1e-3;
+var PARALLEL_QUERIES_PER_REQUEST = 5;
+var parallelResponse = z.looseObject({
+  results: z.array(
+    z.looseObject({
+      url: z.string(),
+      title: z.string().nullish(),
+      publish_date: z.string().nullish(),
+      excerpts: z.array(z.string()).nullish()
+    })
+  ).default([])
+});
+var serperResponse = z.looseObject({
+  organic: z.array(
+    z.looseObject({
+      link: z.string(),
+      title: z.string().nullish(),
+      snippet: z.string().nullish(),
+      date: z.string().nullish()
+    })
+  ).default([])
+});
+function createParallelSearch(opts) {
+  const base = trimBase(opts.baseUrl ?? PARALLEL_BASE);
+  return {
+    name: "parallel",
+    configured: !!opts.apiKey,
+    usdPerCall: PARALLEL_SEARCH_USD,
+    queriesPerCall: PARALLEL_QUERIES_PER_REQUEST,
+    async search(queries, objective) {
+      if (!opts.apiKey) return unconfigured2("parallel");
+      const r = await requestJson(opts, {
+        provider: "parallel",
+        url: `${base}/v1/search`,
+        method: "POST",
+        headers: { "x-api-key": opts.apiKey },
+        body: {
+          objective,
+          search_queries: queries.slice(0, PARALLEL_QUERIES_PER_REQUEST),
+          mode: "fast",
+          max_chars_total: 12e3
+        },
+        schema: parallelResponse
+      });
+      if (!r.ok) return r;
+      return {
+        ok: true,
+        value: r.value.results.map((x) => ({
+          url: x.url,
+          title: x.title ?? void 0,
+          snippet: (x.excerpts ?? []).join(" … ").slice(0, 1500) || void 0,
+          published: x.publish_date ?? null
+        }))
+      };
+    }
+  };
+}
+function createSerperSearch(opts) {
+  const base = trimBase(opts.baseUrl ?? SERPER_BASE);
+  return {
+    name: "serper",
+    configured: !!opts.apiKey,
+    usdPerCall: SERPER_SEARCH_USD,
+    queriesPerCall: 1,
+    async search(queries) {
+      if (!opts.apiKey) return unconfigured2("serper");
+      const r = await requestJson(opts, {
+        provider: "serper",
+        url: `${base}/search`,
+        method: "POST",
+        headers: { "X-API-KEY": opts.apiKey },
+        body: { q: queries[0] ?? "", num: 10, gl: "us", hl: "en" },
+        schema: serperResponse
+      });
+      if (!r.ok) return r;
+      return {
+        ok: true,
+        value: r.value.organic.map((x) => ({
+          url: x.link,
+          title: x.title ?? void 0,
+          snippet: x.snippet ?? void 0,
+          published: x.date ?? null
+        }))
+      };
+    }
+  };
+}
+
+// supabase/functions/_shared/research/pageText.ts
+var PAGE_TEXT_CHARS = 9e3;
+var MAX_BYTES = 15e5;
+var UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0 Safari/537.36";
+var ENTITIES = {
+  amp: "&",
+  lt: "<",
+  gt: ">",
+  quot: '"',
+  apos: "'",
+  nbsp: " ",
+  rsquo: "’",
+  lsquo: "‘",
+  rdquo: "”",
+  ldquo: "“",
+  mdash: "—",
+  ndash: "–",
+  hellip: "…"
+};
+function decodeEntities(s) {
+  return s.replace(/&#(\d+);/g, (_, n) => String.fromCodePoint(Number(n))).replace(/&#x([0-9a-f]+);/gi, (_, n) => String.fromCodePoint(Number.parseInt(n, 16))).replace(/&([a-z]+);/gi, (m, n) => ENTITIES[n.toLowerCase()] ?? m);
+}
+function meta(html, key) {
+  const re = new RegExp(
+    `<meta[^>]+(?:name|property)=["']${key}["'][^>]*content=["']([^"']*)["']|<meta[^>]+content=["']([^"']*)["'][^>]*(?:name|property)=["']${key}["']`,
+    "i"
+  );
+  const m = re.exec(html);
+  const v = m?.[1] ?? m?.[2];
+  return v ? decodeEntities(v).trim() : void 0;
+}
+function htmlToText(html) {
+  const title = decodeEntities(/<title[^>]*>([\s\S]*?)<\/title>/i.exec(html)?.[1] ?? "").trim() || void 0;
+  const description = meta(html, "og:description") ?? meta(html, "description");
+  const ogTitle = meta(html, "og:title");
+  const published = meta(html, "article:published_time") ?? meta(html, "og:published_time");
+  const body2 = html.replace(/<!--[\s\S]*?-->/g, " ").replace(/<(script|style|noscript|svg|template|iframe|head|nav|footer|form)\b[\s\S]*?<\/\1>/gi, " ").replace(/<br\s*\/?>/gi, "\n").replace(/<\/(p|div|li|h[1-6]|tr|section|article|header|blockquote|dd|dt)>/gi, "\n").replace(/<[^>]+>/g, " ");
+  const text3 = decodeEntities(body2).split("\n").map((l) => l.replace(/[ \t\f\v ]+/g, " ").trim()).filter((l) => l.length > 1).join("\n").replace(/\n{3,}/g, "\n\n");
+  const head = [ogTitle && ogTitle !== title ? ogTitle : "", description ?? ""].filter(Boolean).join("\n");
+  return { title: title ?? ogTitle, text: [head, text3].filter(Boolean).join("\n\n"), published };
+}
+var PROFILE_RES = [
+  /^https?:\/\/(?:www\.)?github\.com\/([A-Za-z0-9-]{1,39})\/?$/i,
+  /^https?:\/\/(?:www\.)?(?:x|twitter)\.com\/([A-Za-z0-9_]{1,15})\/?$/i,
+  /^https?:\/\/(?:www\.)?instagram\.com\/([A-Za-z0-9_.]{1,30})\/?$/i,
+  /^https?:\/\/(?:www\.)?youtube\.com\/@([A-Za-z0-9_.-]{3,30})\/?$/i,
+  /^https?:\/\/(?:www\.)?tiktok\.com\/@([A-Za-z0-9_.]{2,24})\/?$/i,
+  /^https?:\/\/(?:www\.)?threads\.(?:net|com)\/@([A-Za-z0-9_.]{1,30})\/?$/i,
+  /^https?:\/\/(?:www\.)?medium\.com\/@([A-Za-z0-9_.-]{1,30})\/?$/i,
+  /^https?:\/\/([a-z0-9-]{2,40})\.substack\.com\/?$/i,
+  /^https?:\/\/(?:www\.)?linktr\.ee\/([A-Za-z0-9_.]{2,30})\/?$/i,
+  /^https?:\/\/(?:www\.)?behance\.net\/([A-Za-z0-9_-]{2,30})\/?$/i,
+  /^https?:\/\/(?:www\.)?dribbble\.com\/([A-Za-z0-9_-]{2,30})\/?$/i,
+  /^https?:\/\/(?:www\.)?devpost\.com\/([A-Za-z0-9_-]{2,40})\/?$/i,
+  /^https?:\/\/(?:www\.)?huggingface\.co\/([A-Za-z0-9_-]{2,40})\/?$/i,
+  /^https?:\/\/bsky\.app\/profile\/([A-Za-z0-9_.-]{3,60})\/?$/i
+];
+var NOT_HANDLES = /* @__PURE__ */ new Set([
+  "about",
+  "explore",
+  "home",
+  "login",
+  "signup",
+  "search",
+  "settings",
+  "share",
+  "intent",
+  "features",
+  "pricing",
+  "topics",
+  "trending",
+  "sponsors",
+  "orgs",
+  "www",
+  "help",
+  "privacy",
+  "terms"
+]);
+function profileHandle(url) {
+  for (const re of PROFILE_RES) {
+    const m = re.exec(url.trim());
+    if (m?.[1] && !NOT_HANDLES.has(m[1].toLowerCase())) return m[1];
+  }
+  return void 0;
+}
+function profileLinks(html, base) {
+  const out = /* @__PURE__ */ new Set();
+  for (const m of html.matchAll(/href=["']([^"'#]+)["']/gi)) {
+    let u2;
+    try {
+      u2 = new URL(decodeEntities(m[1]), base).toString();
+    } catch {
+      continue;
+    }
+    if (profileHandle(u2)) out.add(u2.replace(/\/+$/, ""));
+  }
+  return [...out].slice(0, 40);
+}
+async function fetchPage(url, opts = {}) {
+  if (isBlockedSource(url) || !/^https?:\/\//i.test(url)) return void 0;
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), opts.timeoutMs ?? 6e3);
+  try {
+    const r = await (opts.fetch ?? fetch)(url, {
+      redirect: "follow",
+      signal: ctrl.signal,
+      headers: { "user-agent": UA, accept: "text/html,application/xhtml+xml", "accept-language": "en-US,en" }
+    });
+    if (!r.ok) return void 0;
+    const type = r.headers.get("content-type") ?? "";
+    if (type && !/html|xml|text\/plain/i.test(type)) return void 0;
+    const raw = (await r.text()).slice(0, MAX_BYTES);
+    const finalUrl = r.url || url;
+    if (/text\/plain/i.test(type))
+      return { url: finalUrl, text: raw.slice(0, PAGE_TEXT_CHARS), profiles: [], published: null };
+    const read2 = htmlToText(raw);
+    if (!read2.text.trim()) return void 0;
+    return {
+      url: finalUrl,
+      title: read2.title,
+      text: read2.text.slice(0, PAGE_TEXT_CHARS),
+      profiles: profileLinks(raw, finalUrl),
+      published: read2.published ?? null
+    };
+  } catch {
+    return void 0;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 // supabase/functions/_shared/research/web.ts
 var WEB_CACHE_MS = 7 * 864e5;
 var CLAUDE_SEARCH_USD = 0.01;
@@ -17662,19 +18090,19 @@ var pageKey = (url) => cacheKey("page", { url: normalizeUrl(url) });
 function normalizeUrl(u2) {
   return u2.trim().replace(/#.*$/, "").replace(/[?&](utm_[^=&]+|ref|fbclid|gclid)=[^&]*/g, "").replace(/\/+$/, "").toLowerCase();
 }
-async function cachedPages(cache, urls) {
+async function cachedPages(cache2, urls) {
   const hit = [];
   const miss = [];
   for (const url of urls) {
-    const v = await cache.get(await pageKey(url));
+    const v = await cache2.get(await pageKey(url));
     if (v?.text) hit.push(v);
     else miss.push(url);
   }
   return { hit, miss };
 }
-async function keepPages(cache, pages) {
+async function keepPages(cache2, pages) {
   for (const p of pages)
-    if (p.text && !isBlockedSource(p.url)) await cache.put(await pageKey(p.url), "page", p, WEB_CACHE_MS);
+    if (p.text && !isBlockedSource(p.url)) await cache2.put(await pageKey(p.url), "page", p, WEB_CACHE_MS);
 }
 var dedupe = (xs) => {
   const seen = /* @__PURE__ */ new Set();
@@ -17696,7 +18124,7 @@ function exaRequest(q, highlightQuestion) {
     contents: { highlights: { query: highlightQuestion, maxCharacters: 1200 } }
   };
 }
-function exaWeb(exa, cache) {
+function exaWeb(exa, cache2) {
   return {
     name: "exa",
     estimateUsd(plan2) {
@@ -17711,7 +18139,7 @@ function exaWeb(exa, cache) {
           const req = exaRequest(q, question);
           const key = await cacheKey("exa:search", req);
           const t0 = Date.now();
-          const hit2 = await cache.get(key);
+          const hit2 = await cache2.get(key);
           if (hit2) {
             out.hits.push(...hit2);
             out.steps.push({
@@ -17761,14 +18189,14 @@ function exaWeb(exa, cache) {
             ms: Date.now() - t0,
             n: hits.length
           });
-          await cache.put(key, "exa:search", hits, WEB_CACHE_MS);
+          await cache2.put(key, "exa:search", hits, WEB_CACHE_MS);
         })
       );
       if (failures === plan2.queries.length) throw new WebUnavailable("Exa is not answering");
       out.hits = dedupe(out.hits);
       const skip = new Set((plan2.skip ?? []).map(normalizeUrl));
       const want = ctx.select(out.hits).filter((u2) => !skip.has(normalizeUrl(u2))).slice(0, plan2.maxPages);
-      const { hit, miss } = await cachedPages(cache, want);
+      const { hit, miss } = await cachedPages(cache2, want);
       out.pages.push(...hit);
       if (miss.length) {
         const est = miss.length * EXA_PAGE_USD;
@@ -17802,7 +18230,7 @@ function exaWeb(exa, cache) {
               ms: Date.now() - t0,
               n: pages.length
             });
-            await keepPages(cache, pages);
+            await keepPages(cache2, pages);
           }
         }
       }
@@ -17930,7 +18358,7 @@ async function gatherCall(client, model, user, tools, timeoutMs, maxContinuation
   }
   return { blocks, use };
 }
-function claudeWeb(client, cache, opts = {}) {
+function claudeWeb(client, cache2, opts = {}) {
   const model = opts.model ?? GATHER_MODEL;
   const cont = opts.maxContinuations ?? 1;
   return {
@@ -17941,7 +18369,7 @@ function claudeWeb(client, cache, opts = {}) {
       const deadline = Date.now() + ctx.timeoutMs;
       const missing = [];
       for (const q of plan2.queries) {
-        const hit2 = await cache.get(await cacheKey("claude:search", { q: q.query }));
+        const hit2 = await cache2.get(await cacheKey("claude:search", { q: q.query }));
         if (hit2) {
           out.hits.push(...hit2);
           out.steps.push({
@@ -17987,7 +18415,7 @@ function claudeWeb(client, cache, opts = {}) {
           for (const q of missing) {
             const mine = read2.hits.filter((h) => h.query.trim() === q.query.trim());
             if (mine.length || !r.error)
-              await cache.put(
+              await cache2.put(
                 await cacheKey("claude:search", { q: q.query }),
                 "claude:search",
                 mine,
@@ -17999,7 +18427,7 @@ function claudeWeb(client, cache, opts = {}) {
       out.hits = dedupe(out.hits);
       const skip = new Set((plan2.skip ?? []).map(normalizeUrl));
       const want = ctx.select(out.hits).filter((u2) => !skip.has(normalizeUrl(u2))).slice(0, plan2.maxPages);
-      const { hit, miss } = await cachedPages(cache, want);
+      const { hit, miss } = await cachedPages(cache2, want);
       out.pages.push(...hit);
       if (miss.length) {
         const est = costUsd(model, {
@@ -18032,7 +18460,7 @@ function claudeWeb(client, cache, opts = {}) {
           });
           if (r.error) out.notes.push(`page reading cut short (${r.error})`);
           out.pages.push(...read2.pages);
-          await keepPages(cache, read2.pages);
+          await keepPages(cache2, read2.pages);
         }
       }
       for (const p of out.pages)
@@ -18054,6 +18482,134 @@ async function gatherFrom(sources, plan2, ctx) {
   }
   if (sources.length === 0) notes2.push("no web search is configured");
   return { hits: [], pages: [], costUsd: 0, notes: notes2, steps: [] };
+}
+
+// supabase/functions/_shared/research/engineWeb.ts
+var PAGE_FETCH_MS = 6e3;
+function engineWeb(engine, cache2, doFetch) {
+  return {
+    name: engine.name,
+    estimateUsd(plan2) {
+      return Math.ceil(plan2.queries.length / engine.queriesPerCall) * engine.usdPerCall;
+    },
+    async gather(plan2, ctx) {
+      const out = { hits: [], pages: [], costUsd: 0, notes: [], steps: [] };
+      let failures = 0;
+      await Promise.all(
+        plan2.queries.map(async (q) => {
+          const key = await cacheKey(`${engine.name}:search`, { q: q.query });
+          const t02 = Date.now();
+          const hit = await cache2.get(key).catch(() => void 0);
+          if (hit) {
+            out.hits.push(...hit);
+            out.steps.push({
+              step: `search:${q.id}`,
+              provider: engine.name,
+              costUsd: 0,
+              ms: 0,
+              n: hit.length,
+              cached: true
+            });
+            return;
+          }
+          if (out.costUsd + engine.usdPerCall > ctx.budgetUsd) {
+            out.notes.push(`search ${q.id} skipped: cost cap`);
+            return;
+          }
+          out.costUsd += engine.usdPerCall;
+          const r = await engine.search([q.query], plan2.focus);
+          if (!r.ok) {
+            failures++;
+            out.costUsd -= engine.usdPerCall;
+            out.notes.push(`${engine.name} search failed (${r.message})`);
+            out.steps.push({
+              step: `search:${q.id}`,
+              provider: engine.name,
+              costUsd: 0,
+              ms: Date.now() - t02,
+              error: r.message
+            });
+            return;
+          }
+          const hits = r.value.filter((x) => !isBlockedSource(x.url)).map((x) => ({
+            url: x.url,
+            title: x.title,
+            published: x.published ?? null,
+            snippet: x.snippet,
+            query: q.query
+          }));
+          out.hits.push(...hits);
+          out.steps.push({
+            step: `search:${q.id}`,
+            provider: engine.name,
+            costUsd: engine.usdPerCall,
+            ms: Date.now() - t02,
+            n: hits.length,
+            searches: 1
+          });
+          await cache2.put(key, `${engine.name}:search`, hits, WEB_CACHE_MS).catch(() => void 0);
+        })
+      );
+      if (plan2.queries.length && failures === plan2.queries.length)
+        throw new WebUnavailable(`${engine.name} is not answering`);
+      const seen = /* @__PURE__ */ new Set();
+      out.hits = out.hits.filter((h) => {
+        const k = normalizeUrl(h.url);
+        if (seen.has(k)) return false;
+        seen.add(k);
+        return true;
+      });
+      const skip = new Set((plan2.skip ?? []).map(normalizeUrl));
+      const want = ctx.select(out.hits).filter((u2) => !skip.has(normalizeUrl(u2))).slice(0, plan2.maxPages);
+      const t0 = Date.now();
+      const pages = await Promise.all(
+        want.map(async (url) => {
+          const key = await cacheKey("page", { url: normalizeUrl(url) });
+          const kept = await cache2.get(key).catch(() => void 0);
+          if (kept?.text) return kept;
+          const p = await fetchPage(url, { fetch: doFetch, timeoutMs: PAGE_FETCH_MS });
+          if (!p?.text) return void 0;
+          const page2 = {
+            url: p.url,
+            title: p.title,
+            published: p.published ?? null,
+            text: p.text.slice(0, PAGE_CHARS)
+          };
+          if (!isBlockedSource(page2.url))
+            await cache2.put(key, "page", page2, WEB_CACHE_MS).catch(() => void 0);
+          return page2;
+        })
+      );
+      for (const [i, url] of want.entries()) {
+        const p = pages[i];
+        if (p) out.pages.push(p);
+        else {
+          const h = out.hits.find((x) => normalizeUrl(x.url) === normalizeUrl(url));
+          if (h?.snippet)
+            out.pages.push({ url: h.url, title: h.title, published: h.published, text: h.snippet });
+        }
+      }
+      out.steps.push({
+        step: "read",
+        provider: "fetch",
+        costUsd: 0,
+        ms: Date.now() - t0,
+        n: out.pages.length
+      });
+      return out;
+    }
+  };
+}
+function gatedWeb(source, gates) {
+  return {
+    name: source.name,
+    estimateUsd: (plan2) => source.estimateUsd(plan2),
+    async gather(plan2, ctx) {
+      for (const g of gates)
+        if (g && !await g().catch(() => true)) throw new WebUnavailable(`${source.name} is switched off`);
+      return source.gather(plan2, ctx);
+    }
+  };
 }
 
 // supabase/functions/_shared/sourcing/warmth.ts
@@ -18336,12 +18892,12 @@ function studentFromResume(parsed, base) {
 }
 
 // supabase/functions/_shared/sourcing/email.ts
-var MAX_LOOKUPS = 10;
+var MAX_LOOKUPS = 5;
 function fromTemplate(template, f2, l) {
   const local = template.toLowerCase().replace(/\{first\}/g, f2).replace(/\{last\}/g, l).replace(/\{f\}/g, f2[0] ?? "").replace(/\{l\}/g, l[0] ?? "");
   return /^[a-z0-9][a-z0-9._-]{0,63}$/.test(local) ? local : void 0;
 }
-var MAX_VERIFIES = 10;
+var MAX_VERIFIES = 5;
 var PATTERNS = {
   "first.last": (f2, l) => `${f2}.${l}`,
   first: (f2) => f2,
@@ -18393,9 +18949,9 @@ function domainPattern(known, domain) {
   return void 0;
 }
 function dnsMx(doFetch, timeoutMs = 4e3) {
-  const cache = /* @__PURE__ */ new Map();
+  const cache2 = /* @__PURE__ */ new Map();
   return (domain) => {
-    let hit = cache.get(domain);
+    let hit = cache2.get(domain);
     if (!hit) {
       hit = (async () => {
         try {
@@ -18410,7 +18966,7 @@ function dnsMx(doFetch, timeoutMs = 4e3) {
           return false;
         }
       })();
-      cache.set(domain, hit);
+      cache2.set(domain, hit);
     }
     return hit;
   };
@@ -18542,6 +19098,20 @@ function matchKnown(idx, c, o) {
 
 // supabase/functions/_shared/sourcing/lookup.ts
 var LOOKUP_TTL_MS = 30 * 24 * 3600 * 1e3;
+async function take(d, provider, operation, units) {
+  const b = d.budget;
+  if (!b) return { settle: async () => void 0 };
+  const op = (u2) => u2 > 0 ? operation : `${operation}:attempt`;
+  if (b.reserve) {
+    const r = await b.reserve(d.userId, { provider, operation, units, costUsd: 0 });
+    if (!r.ok) return void 0;
+    return { settle: (u2) => r.settle({ units: u2, operation: op(u2) }).catch(() => void 0) };
+  }
+  if (!(await b.check(d.userId, provider, units)).ok) return void 0;
+  return {
+    settle: (u2) => b.record(d.userId, { provider, operation: op(u2), units: u2, costUsd: 0 }).catch(() => void 0)
+  };
+}
 function emailLookup(d) {
   return async (c) => {
     const slug = linkedInSlugOf(cleanLinkedInUrl(c.linkedinUrl));
@@ -18583,13 +19153,17 @@ async function fromHunter(d, c, slug, n, domain) {
   if (slug) asks.push({ by: "handle", params: { linkedin_handle: slug } });
   if (n && domain) asks.push({ by: "name", params: { first_name: n.f, last_name: n.l, domain } });
   for (const ask3 of asks) {
-    if (d.budget && !(await d.budget.check(d.userId, "hunter", 1)).ok) return void 0;
+    const slot2 = await take(d, "hunter", "find", 1);
+    if (!slot2) return void 0;
     const r = await d.hunter.findEmail(ask3.params);
-    if (!r.ok) return void 0;
+    if (!r.ok) {
+      await slot2.settle(0);
+      return void 0;
+    }
     const h = r.value.data;
     const email = h?.email?.trim().toLowerCase();
+    await slot2.settle(h && email?.includes("@") ? 1 : 0);
     if (!h || !email?.includes("@")) continue;
-    await d.budget?.record(d.userId, { provider: "hunter", operation: "find", units: 1, costUsd: 0 });
     const theirs = linkedInSlugOf(cleanLinkedInUrl(h.linkedin_url));
     if (slug && theirs && theirs !== slug) continue;
     const v = deliverability(h.verification?.status);
@@ -18614,18 +19188,31 @@ function notTheirRole(c, position) {
 function domainTemplate(d) {
   const hunter = d.hunter;
   if (!hunter?.configured) return void 0;
-  return async (domain) => {
-    const key = `pattern:${domain.toLowerCase()}`;
+  const asked = /* @__PURE__ */ new Map();
+  const ask3 = async (domain) => {
+    const key = `pattern:${domain}`;
     const hit = await d.cache.get(key).catch(() => void 0);
     if (hit) return hit.t;
-    if (d.budget && !(await d.budget.check(d.userId, "hunter", 1)).ok) return void 0;
+    const slot2 = await take(d, "hunter", "domain", 1);
+    if (!slot2) return void 0;
     const r = await hunter.domainPattern(domain);
-    if (!r.ok) return void 0;
+    if (!r.ok) {
+      await slot2.settle(0);
+      return void 0;
+    }
     const t = r.value.data?.pattern ?? void 0;
-    if (t)
-      await d.budget?.record(d.userId, { provider: "hunter", operation: "domain", units: 1, costUsd: 0 });
+    await slot2.settle(t ? 1 : 0);
     await d.cache.put(key, "email_pattern", t ? { t } : { none: true }, LOOKUP_TTL_MS).catch(() => void 0);
     return t;
+  };
+  return (domain) => {
+    const k = domain.toLowerCase();
+    let p = asked.get(k);
+    if (!p) {
+      p = ask3(k);
+      asked.set(k, p);
+    }
+    return p;
   };
 }
 function emailVerifier(d) {
@@ -18635,10 +19222,14 @@ function emailVerifier(d) {
     const key = `verify:${email.toLowerCase()}`;
     const hit = await d.cache.get(key).catch(() => void 0);
     if (hit?.v) return hit.v;
-    if (d.budget && !(await d.budget.check(d.userId, "hunter", 0.5)).ok) return void 0;
+    const slot2 = await take(d, "hunter", "verify", 0.5);
+    if (!slot2) return void 0;
     const r = await hunter.verifyEmail(email);
-    if (!r.ok) return void 0;
-    await d.budget?.record(d.userId, { provider: "hunter", operation: "verify", units: 0.5, costUsd: 0 });
+    if (!r.ok) {
+      await slot2.settle(0);
+      return void 0;
+    }
+    await slot2.settle(0.5);
     const v = deliverability(r.value.data?.status);
     await d.cache.put(key, "email_verify", { v }, LOOKUP_TTL_MS).catch(() => void 0);
     return v;
@@ -18652,10 +19243,11 @@ async function fromApollo(d, c, domain) {
   const lastName = c.lastName ?? rest.join(" ");
   const params = url ? { linkedin_url: url } : firstName && lastName && domain && !c.lastNameObfuscated ? { first_name: firstName, last_name: lastName, domain } : void 0;
   if (!params) return void 0;
-  if (d.budget && !(await d.budget.check(d.userId, "apollo_match", 1)).ok) return void 0;
+  const slot2 = await take(d, "apollo_match", "match", 1);
+  if (!slot2) return void 0;
   const r = await d.apollo.matchPerson({ ...params, reveal_personal_emails: false });
+  await slot2.settle(r.ok ? 1 : 0);
   if (!r.ok) return void 0;
-  await d.budget?.record(d.userId, { provider: "apollo_match", operation: "match", units: 1, costUsd: 0 });
   const p = r.value.person;
   const email = p?.email?.trim().toLowerCase();
   if (!email?.includes("@")) return void 0;
@@ -18681,137 +19273,6 @@ function fitUser(lookingFor, candidates) {
 var fitSchema = z.object({
   scores: z.array(z.object({ id: z.string(), fit: z.number(), reasons: z.array(z.string()) }))
 });
-
-// supabase/functions/_shared/research/pageText.ts
-var PAGE_TEXT_CHARS = 9e3;
-var MAX_BYTES = 15e5;
-var UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0 Safari/537.36";
-var ENTITIES = {
-  amp: "&",
-  lt: "<",
-  gt: ">",
-  quot: '"',
-  apos: "'",
-  nbsp: " ",
-  rsquo: "’",
-  lsquo: "‘",
-  rdquo: "”",
-  ldquo: "“",
-  mdash: "—",
-  ndash: "–",
-  hellip: "…"
-};
-function decodeEntities(s) {
-  return s.replace(/&#(\d+);/g, (_, n) => String.fromCodePoint(Number(n))).replace(/&#x([0-9a-f]+);/gi, (_, n) => String.fromCodePoint(Number.parseInt(n, 16))).replace(/&([a-z]+);/gi, (m, n) => ENTITIES[n.toLowerCase()] ?? m);
-}
-function meta(html, key) {
-  const re = new RegExp(
-    `<meta[^>]+(?:name|property)=["']${key}["'][^>]*content=["']([^"']*)["']|<meta[^>]+content=["']([^"']*)["'][^>]*(?:name|property)=["']${key}["']`,
-    "i"
-  );
-  const m = re.exec(html);
-  const v = m?.[1] ?? m?.[2];
-  return v ? decodeEntities(v).trim() : void 0;
-}
-function htmlToText(html) {
-  const title = decodeEntities(/<title[^>]*>([\s\S]*?)<\/title>/i.exec(html)?.[1] ?? "").trim() || void 0;
-  const description = meta(html, "og:description") ?? meta(html, "description");
-  const ogTitle = meta(html, "og:title");
-  const published = meta(html, "article:published_time") ?? meta(html, "og:published_time");
-  const body2 = html.replace(/<!--[\s\S]*?-->/g, " ").replace(/<(script|style|noscript|svg|template|iframe|head|nav|footer|form)\b[\s\S]*?<\/\1>/gi, " ").replace(/<br\s*\/?>/gi, "\n").replace(/<\/(p|div|li|h[1-6]|tr|section|article|header|blockquote|dd|dt)>/gi, "\n").replace(/<[^>]+>/g, " ");
-  const text3 = decodeEntities(body2).split("\n").map((l) => l.replace(/[ \t\f\v ]+/g, " ").trim()).filter((l) => l.length > 1).join("\n").replace(/\n{3,}/g, "\n\n");
-  const head = [ogTitle && ogTitle !== title ? ogTitle : "", description ?? ""].filter(Boolean).join("\n");
-  return { title: title ?? ogTitle, text: [head, text3].filter(Boolean).join("\n\n"), published };
-}
-var PROFILE_RES = [
-  /^https?:\/\/(?:www\.)?github\.com\/([A-Za-z0-9-]{1,39})\/?$/i,
-  /^https?:\/\/(?:www\.)?(?:x|twitter)\.com\/([A-Za-z0-9_]{1,15})\/?$/i,
-  /^https?:\/\/(?:www\.)?instagram\.com\/([A-Za-z0-9_.]{1,30})\/?$/i,
-  /^https?:\/\/(?:www\.)?youtube\.com\/@([A-Za-z0-9_.-]{3,30})\/?$/i,
-  /^https?:\/\/(?:www\.)?tiktok\.com\/@([A-Za-z0-9_.]{2,24})\/?$/i,
-  /^https?:\/\/(?:www\.)?threads\.(?:net|com)\/@([A-Za-z0-9_.]{1,30})\/?$/i,
-  /^https?:\/\/(?:www\.)?medium\.com\/@([A-Za-z0-9_.-]{1,30})\/?$/i,
-  /^https?:\/\/([a-z0-9-]{2,40})\.substack\.com\/?$/i,
-  /^https?:\/\/(?:www\.)?linktr\.ee\/([A-Za-z0-9_.]{2,30})\/?$/i,
-  /^https?:\/\/(?:www\.)?behance\.net\/([A-Za-z0-9_-]{2,30})\/?$/i,
-  /^https?:\/\/(?:www\.)?dribbble\.com\/([A-Za-z0-9_-]{2,30})\/?$/i,
-  /^https?:\/\/(?:www\.)?devpost\.com\/([A-Za-z0-9_-]{2,40})\/?$/i,
-  /^https?:\/\/(?:www\.)?huggingface\.co\/([A-Za-z0-9_-]{2,40})\/?$/i,
-  /^https?:\/\/bsky\.app\/profile\/([A-Za-z0-9_.-]{3,60})\/?$/i
-];
-var NOT_HANDLES = /* @__PURE__ */ new Set([
-  "about",
-  "explore",
-  "home",
-  "login",
-  "signup",
-  "search",
-  "settings",
-  "share",
-  "intent",
-  "features",
-  "pricing",
-  "topics",
-  "trending",
-  "sponsors",
-  "orgs",
-  "www",
-  "help",
-  "privacy",
-  "terms"
-]);
-function profileHandle(url) {
-  for (const re of PROFILE_RES) {
-    const m = re.exec(url.trim());
-    if (m?.[1] && !NOT_HANDLES.has(m[1].toLowerCase())) return m[1];
-  }
-  return void 0;
-}
-function profileLinks(html, base) {
-  const out = /* @__PURE__ */ new Set();
-  for (const m of html.matchAll(/href=["']([^"'#]+)["']/gi)) {
-    let u2;
-    try {
-      u2 = new URL(decodeEntities(m[1]), base).toString();
-    } catch {
-      continue;
-    }
-    if (profileHandle(u2)) out.add(u2.replace(/\/+$/, ""));
-  }
-  return [...out].slice(0, 40);
-}
-async function fetchPage(url, opts = {}) {
-  if (isBlockedSource(url) || !/^https?:\/\//i.test(url)) return void 0;
-  const ctrl = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(), opts.timeoutMs ?? 6e3);
-  try {
-    const r = await (opts.fetch ?? fetch)(url, {
-      redirect: "follow",
-      signal: ctrl.signal,
-      headers: { "user-agent": UA, accept: "text/html,application/xhtml+xml", "accept-language": "en-US,en" }
-    });
-    if (!r.ok) return void 0;
-    const type = r.headers.get("content-type") ?? "";
-    if (type && !/html|xml|text\/plain/i.test(type)) return void 0;
-    const raw = (await r.text()).slice(0, MAX_BYTES);
-    const finalUrl = r.url || url;
-    if (/text\/plain/i.test(type))
-      return { url: finalUrl, text: raw.slice(0, PAGE_TEXT_CHARS), profiles: [], published: null };
-    const read2 = htmlToText(raw);
-    if (!read2.text.trim()) return void 0;
-    return {
-      url: finalUrl,
-      title: read2.title,
-      text: read2.text.slice(0, PAGE_TEXT_CHARS),
-      profiles: profileLinks(raw, finalUrl),
-      published: read2.published ?? null
-    };
-  } catch {
-    return void 0;
-  } finally {
-    clearTimeout(timer);
-  }
-}
 
 // supabase/functions/_shared/sourcing/web.ts
 var WEB_MAX_PAGES = 6;
@@ -19081,10 +19542,11 @@ async function sourceFromWeb(o) {
     select: (hits) => selectPages(hits, o.ask, plan2.maxPages)
   });
   notes2.push(...gathered.notes);
+  const engine = gathered.provider === "serper" || gathered.provider === "parallel" ? gathered.provider : void 0;
   if (gathered.costUsd > 0)
     await o.budget?.record(o.userId, {
-      provider: "claude",
-      operation: "sourcing_web",
+      provider: engine ?? "claude",
+      operation: engine ? `sourcing_web:${engine}` : "sourcing_web",
       units: gathered.pages.length,
       costUsd: gathered.costUsd
     });
@@ -19234,6 +19696,23 @@ function cleanEmail(e) {
 var titleCase2 = (s) => s.replace(/\b\w/g, (c) => c.toUpperCase());
 
 // supabase/functions/_shared/sourcing/search.ts
+var DAY_MS2 = 864e5;
+var SOURCING_CACHE_TTL = {
+  exa: 7 * DAY_MS2,
+  apollo: 7 * DAY_MS2,
+  scholar: 30 * DAY_MS2,
+  searchParameters: 30 * DAY_MS2
+};
+async function cachedCall(ctx, kind, req, ttlMs, call) {
+  const cache2 = ctx.deps.cache;
+  if (!cache2) return call();
+  const key = await cacheKey(kind, req);
+  const hit = await cache2.get(key).catch(() => void 0);
+  if (hit !== void 0 && hit !== null) return { ok: true, value: hit };
+  const r = await call();
+  if (r?.ok) await cache2.put(key, kind, r.value, ttlMs).catch(() => void 0);
+  return r;
+}
 var WEIGHTS = { fit: 0.45, reach: 0.35, responsiveness: 0.2 };
 var REACH_TOP = 30;
 var LINKEDIN_MAX_RESULTS = 100;
@@ -19475,21 +19954,27 @@ async function exaCall(ctx, base, relax, entity) {
     contents: { highlights: { query: input.goal.title, maxCharacters: 600 } }
   };
   const est = estimateExaSearchUsd(req);
-  if (deps.budget) {
-    const v = await deps.budget.check(input.userId, "exa", est);
-    if (!v.ok) {
-      ctx.errors.add("exa: budget_exceeded");
-      return [];
+  let refused = false;
+  const r = await cachedCall(ctx, "sourcing:exa", req, SOURCING_CACHE_TTL.exa, async () => {
+    if (deps.budget && !(await deps.budget.check(input.userId, "exa", est)).ok) {
+      refused = true;
+      return null;
     }
-  }
-  const r = await deps.exa.search(req);
-  if (!note(ctx, r) || !r.ok) return [];
-  await deps.budget?.record(input.userId, {
-    provider: "exa",
-    operation: "search",
-    units: 1,
-    costUsd: exaCostUsd(r.value, est)
+    const got = await deps.exa.search(req);
+    if (got.ok)
+      await deps.budget?.record(input.userId, {
+        provider: "exa",
+        operation: "search",
+        units: 1,
+        costUsd: exaCostUsd(got.value, est)
+      });
+    return got;
   });
+  if (refused || !r) {
+    ctx.errors.add("exa: budget_exceeded");
+    return [];
+  }
+  if (!note(ctx, r) || !r.ok) return [];
   return r.value.results.map((x) => fromExa(ctx, x, entity)).filter((c) => !!c);
 }
 function fromExa(ctx, r, entity) {
@@ -19522,14 +20007,21 @@ async function apolloCall(ctx, relax, params) {
   }
   const loc = locationOf(ctx, relax);
   const g = input.goal;
-  const r = await deps.apollo.searchPeople({
+  const req = {
     ...params,
     person_locations: loc ? [loc] : void 0,
     person_seniorities: !relax.seniority && g.seniorities?.length ? g.seniorities : void 0,
     per_page: 25,
     page: 1
-  });
-  if (!note(ctx, r) || !r.ok) return [];
+  };
+  const r = await cachedCall(
+    ctx,
+    "sourcing:apollo",
+    req,
+    SOURCING_CACHE_TTL.apollo,
+    () => deps.apollo.searchPeople(req)
+  );
+  if (!r || !note(ctx, r) || !r.ok) return [];
   return r.value.people.map((p) => fromApollo2(ctx, p));
 }
 function fromApollo2(ctx, p) {
@@ -19554,10 +20046,14 @@ function fromApollo2(ctx, p) {
 async function paramId(ctx, type, keywords) {
   const k = `${type}:${norm(keywords)}`;
   if (ctx.idCache.has(k)) return ctx.idCache.get(k);
-  const r = await ctx.deps.unipile.searchParameters(ctx.input.unipileAccountId, type, keywords, {
-    limit: 1
-  });
-  const id = r.ok ? r.value[0]?.id : void 0;
+  const r = await cachedCall(
+    ctx,
+    "sourcing:li_param",
+    { type, keywords: norm(keywords) },
+    SOURCING_CACHE_TTL.searchParameters,
+    () => ctx.deps.unipile.searchParameters(ctx.input.unipileAccountId, type, keywords, { limit: 1 })
+  );
+  const id = r?.ok ? r.value[0]?.id : void 0;
   ctx.idCache.set(k, id);
   return id;
 }
@@ -19661,13 +20157,15 @@ async function scholarCall(ctx, _relax) {
     return [];
   }
   const g = input.goal;
-  const r = await deps.semanticScholar.searchPapers(
-    [g.topic, ...g.keywords ?? []].filter(Boolean).join(" "),
-    {
-      limit: 50
-    }
+  const q = [g.topic, ...g.keywords ?? []].filter(Boolean).join(" ");
+  const r = await cachedCall(
+    ctx,
+    "sourcing:s2_papers",
+    { q, limit: 50 },
+    SOURCING_CACHE_TTL.scholar,
+    () => deps.semanticScholar.searchPapers(q, { limit: 50 })
   );
-  if (!note(ctx, r) || !r.ok) return [];
+  if (!r || !note(ctx, r) || !r.ok) return [];
   const counts = /* @__PURE__ */ new Map();
   for (const p of r.value.data)
     for (const a of p.authors ?? []) {
@@ -19678,9 +20176,20 @@ async function scholarCall(ctx, _relax) {
       counts.set(a.authorId, c);
     }
   const top = [...counts.entries()].sort((a, b) => b[1].n - a[1].n || b[1].latest - a[1].latest).slice(0, 10);
-  const authors = await Promise.all(top.map(([id]) => deps.semanticScholar.author(id)));
+  const authors = await Promise.all(
+    top.map(
+      ([id]) => cachedCall(
+        ctx,
+        "sourcing:s2_author",
+        { id },
+        SOURCING_CACHE_TTL.scholar,
+        () => deps.semanticScholar.author(id)
+      )
+    )
+  );
   return top.map(([id, c], i) => {
-    const a = authors[i]?.ok ? authors[i].value : void 0;
+    const got = authors[i];
+    const a = got?.ok ? got.value : void 0;
     const name = a?.name ?? c.name;
     return {
       key: `c${++ctx.seq}`,
@@ -20057,7 +20566,7 @@ async function runSourcing(s, userId, req) {
   const mx = dnsMx(s.fetch);
   const year = now.getUTCFullYear();
   const budget = sqlBudget(db2, s.now);
-  const cache = sqlSharedCache(db2, () => now.getTime());
+  const cache2 = sqlSharedCache(db2, () => now.getTime());
   const lookup2 = emailLookup({
     userId,
     unipile: s.unipile,
@@ -20065,11 +20574,11 @@ async function runSourcing(s, userId, req) {
     hunter: s.hunter,
     apollo: s.apollo,
     budget,
-    cache,
+    cache: cache2,
     domainOf: (c) => orgDomainsOf(c, ctx.orgDomains)[0] ?? siteDomain(c.url)
   });
-  const verify = emailVerifier({ userId, hunter: s.hunter, budget, cache });
-  const template = domainTemplate({ userId, hunter: s.hunter, budget, cache });
+  const verify = emailVerifier({ userId, hunter: s.hunter, budget, cache: cache2 });
+  const template = domainTemplate({ userId, hunter: s.hunter, budget, cache: cache2 });
   const result = await sourcePeople(
     {
       unipile: s.unipile,
@@ -20080,6 +20589,7 @@ async function runSourcing(s, userId, req) {
       web: webSourcesFor(s),
       fetch: s.fetch,
       budget,
+      cache: cache2,
       clock: () => now.getTime(),
       knownPerson: knownOf,
       reachOf: async (c) => {
@@ -20225,11 +20735,21 @@ async function ensureChat(db2, userId, personId, goalId, now) {
 }
 function webSourcesFor(s) {
   if (s.web) return s.web;
-  const cache = sqlSharedCache(s.db, () => s.now().getTime());
+  const cache2 = sqlSharedCache(s.db, () => s.now().getTime());
   const out = [];
-  if (s.exa.configured) out.push(exaWeb(s.exa, cache));
+  const gate = switchGate(s.db, "web_search");
+  const engine = { fetch: s.fetch, timeoutMs: 1e4, maxRetries: 1, gate };
+  for (const e of [
+    createSerperSearch({ ...engine, apiKey: s.env.serperKey }),
+    createParallelSearch({ ...engine, apiKey: s.env.parallelKey })
+  ])
+    if (e.configured) out.push(engineWeb(e, cache2, s.fetch));
+  if (s.exa.configured) out.push(exaWeb(s.exa, cache2));
   const client = s.anthropic ?? (s.env.anthropicKey ? new Anthropic2({ apiKey: s.env.anthropicKey, fetch: s.fetch, maxRetries: 1 }) : void 0);
-  if (client) out.push(claudeWeb(client, cache, { model: GATHER_MODEL }));
+  if (client)
+    out.push(
+      gatedWeb(claudeWeb(client, cache2, { model: GATHER_MODEL }), [gate, switchGate(s.db, "anthropic")])
+    );
   return out;
 }
 async function warmContext(db2, userId, u2, homeCity, graph) {
@@ -20929,7 +21449,8 @@ var ROUTES = {
   ...cadenceRoutes,
   ...autopilotRoutes,
   ...friendRoutes,
-  ...voiceRoutes
+  ...voiceRoutes,
+  ...adminRoutes
 };
 function missingSecrets(deps, google) {
   const m = [];
@@ -20950,7 +21471,7 @@ function makeApiHandler(deps) {
   const salt2 = deps.salt ?? "orbit";
   const appUrl = (deps.env.appUrl || DEFAULT_APP_URL).replace(/\/+$/, "");
   const origins = originPolicy(appUrl);
-  const take = deps.take ?? (deps.db ? sqlTake(deps.db) : memoryTake(() => now().getTime()));
+  const take2 = deps.take ?? (deps.db ? sqlTake(deps.db) : memoryTake(() => now().getTime()));
   const google = deps.env.googleClientId && deps.env.googleClientSecret && deps.env.googleRedirectUri ? {
     clientId: deps.env.googleClientId,
     clientSecret: deps.env.googleClientSecret,
@@ -21070,7 +21591,7 @@ function makeApiHandler(deps) {
     async function limit(bs) {
       let verdict;
       try {
-        verdict = await take(bs);
+        verdict = await take2(bs);
       } catch {
         throw new HttpError(503, "unavailable", "unavailable right now");
       }
@@ -21100,12 +21621,14 @@ var supabaseUrl = env("SUPABASE_URL");
 var dbUrl = env("SUPABASE_DB_URL");
 var db = dbUrl ? connectDb(dbUrl) : void 0;
 var agentEnv = await agentEnvWithSecrets(env, db);
-var [sessionSecret, unipileWebhookSecret, unipileKey, unipileBase, redirectUri] = await Promise.all([
+var [sessionSecret, unipileWebhookSecret, unipileKey, unipileBase, redirectUri, ownerId] = await Promise.all([
   resolveSecret(env, db, "ORBIT_SESSION_SECRET", "orbit_session_secret"),
   resolveSecret(env, db, "ORBIT_UNIPILE_WEBHOOK_SECRET", "orbit_unipile_webhook_secret"),
   providerSecret(env, db, "UNIPILE_API_KEY"),
   providerSecret(env, db, "UNIPILE_BASE_URL"),
-  providerSecret(env, db, "ORBIT_GOOGLE_REDIRECT_URI")
+  providerSecret(env, db, "ORBIT_GOOGLE_REDIRECT_URI"),
+  // plan 34 E3: the account that may read /admin/costs
+  providerSecret(env, db, "ORBIT_OWNER_ID")
 ]);
 var salt = env("ORBIT_LOG_SALT") ?? ((env("SUPABASE_SERVICE_ROLE_KEY") ?? "").slice(-16) || "orbit");
 Deno.serve(
@@ -21120,7 +21643,8 @@ Deno.serve(
       unipileBase,
       unipileWebhookSecret,
       functionsUrl: supabaseUrl ? `${supabaseUrl}/functions/v1` : void 0,
-      connectorsSigningKey: env("SUPABASE_SERVICE_ROLE_KEY")
+      connectorsSigningKey: env("SUPABASE_SERVICE_ROLE_KEY"),
+      ownerId
     },
     db,
     agent: { env: agentEnv },

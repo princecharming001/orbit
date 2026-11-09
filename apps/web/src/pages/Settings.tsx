@@ -121,6 +121,7 @@ import {
 } from '../ui';
 import { Suggest } from '../ui/Suggest';
 import { AutopilotSection } from './settings/Autopilot';
+import { CostsSection } from './settings/Costs';
 import { VoiceSection } from './settings/Voice';
 
 /** The section with the LinkedIn import, the resume and the Claude key (its route keeps the older name). */
@@ -181,7 +182,9 @@ export function SettingsPage() {
   const { section = 'profile' } = useParams();
   const nav = useNavigate();
   const SECTIONS = sections();
-  if (!SECTIONS.some(([k]) => k === section))
+  // the owner's cost view (plan 34 E3) is not listed: it opens at /settings/costs in account mode
+  const hidden = section === 'costs' && isAccountMode();
+  if (!hidden && !SECTIONS.some(([k]) => k === section))
     // the words a student might guess ("writing", "tone") go to the section that has them
     return <Navigate to={`/settings/${SECTION_ALIASES[section] ?? 'profile'}`} replace />;
   return (
@@ -251,6 +254,7 @@ export function SettingsPage() {
             {section === 'account' && <AccountSection />}
             {section === 'outreach' && <OutreachSection />}
             {section === 'memory' && <MemorySection />}
+            {hidden && <CostsSection />}
           </div>
         </div>
       </div>

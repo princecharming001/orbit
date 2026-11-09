@@ -6,7 +6,8 @@
  * empty list and Orbit's own routes stand alone; Settings reads `villageHealth` to say which.
  *
  * One lookup per target is shared for a few minutes, so the Map's warm intros and its routes (engine/graph.ts
- * `reachPerson`, which adds Village introducers as candidates) ask Village once.
+ * `reachPerson`, which adds Village introducers as candidates) ask Village once, and its answer is kept on this
+ * device for a week.
  */
 import type { Person, User } from '@orbit/core';
 import { linkedInSlug, normalizeCompany, normalizeLinkedInUrl } from '@orbit/core';
@@ -57,7 +58,15 @@ export function setWarmIntros(on: boolean): void {
 }
 
 const SHARE_MS = 5 * 60_000;
+/** Village answers are kept on this device for a week (plan 34 A8): a reload or a Map recompute asks nothing new. */
+export const VILLAGE_KEEP_MS = 7 * 86_400_000;
 const shared = new Map<string, { at: number; p: Promise<VillagePath[] | undefined> }>();
+
+async function keptPaths(key: string, now: number): Promise<VillagePath[] | undefined> {
+  const row = await db.kv.get(`village:${key}`).catch(() => undefined);
+  const v = row?.value as { at?: number; paths?: VillagePath[] } | undefined;
+  return v?.paths && typeof v.at === 'number' && now - v.at < VILLAGE_KEEP_MS ? v.paths : undefined;
+}
 
 /** tests only */
 export function resetWarmIntrosCache(): void {
@@ -72,10 +81,18 @@ function sharedLookup(
   const now = Date.now();
   const hit = shared.get(key);
   if (hit && now - hit.at < SHARE_MS) return hit.p;
-  const p = villageLookup(target).then((r) => {
+  const p = keptPaths(key, now).then(async (kept) => {
+    if (kept) return kept;
+    const r = await villageLookup(target);
     // a failure is not kept: the next look asks again
-    if (!r.ok) shared.delete(key);
-    return r.ok ? r.value : undefined;
+    if (!r.ok) {
+      shared.delete(key);
+      return undefined;
+    }
+    await db.kv
+      .put({ key: `village:${key}`, value: { at: Date.now(), paths: r.value } })
+      .catch(() => undefined);
+    return r.value;
   });
   shared.set(key, { at: now, p });
   return p;

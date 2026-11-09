@@ -66,11 +66,16 @@ describe('orbit.enqueue_cadence (§9.4 test 1)', () => {
     const a = await makeUser(t.db);
     const b = await makeUser(t.db);
     const gone = await makeUser(t.db);
+    // plan 34 D1: only students seen in the last 14 days (or with open work) are walked every hour
+    const idle = await makeUser(t.db);
+    await t.db
+      .sql`update orbit.users set last_seen_at = now() where id in (${a}::uuid, ${b}::uuid, ${gone}::uuid)`;
+    await t.db.sql`update orbit.users set last_seen_at = now() - interval '30 days' where id = ${idle}::uuid`;
     await t.db.sql`update orbit.users set deleted_at = now() where id = ${gone}::uuid`;
     const [first] = await t.db.sql<{ n: number }>`select orbit.enqueue_cadence() as n`;
     const [second] = await t.db.sql<{ n: number }>`select orbit.enqueue_cadence() as n`;
     const msgs = (await queued('orbit_cadence')).map((r) => r.message);
-    const mine = msgs.filter((m) => [a, b, gone].includes(m.userId));
+    const mine = msgs.filter((m) => [a, b, gone, idle].includes(m.userId));
     expect(mine.map((m) => m.userId).sort()).toEqual([a, b].sort());
     expect(second!.n).toBe(0);
     expect(first!.n).toBe(msgs.length);

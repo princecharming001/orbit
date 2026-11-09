@@ -5,8 +5,16 @@ import { createLocalUser } from '../../engine/account';
 import { localRemember } from '../../engine/memoryLocal';
 import { MODEL } from '../../integrations/anthropic';
 import { clearPrefs, readPrefs, todaysLlmUsage, writePrefs } from '../../integrations/prefs';
+import { setSharedClaudeUrlForTests } from '../../integrations/shared-claude';
 import { makeChatClient, setChatClientFactoryForTests } from '../agent/client';
-import { CHAT_BETAS, runTurn, type TurnDeps } from '../agent/loop';
+import {
+  CHAT_BETAS,
+  ITERATION_HEADER,
+  MAX_ITERATIONS,
+  runTurn,
+  type TurnDeps,
+  WEB_BUDGET_NOTE,
+} from '../agent/loop';
 import { ChatStore, unpairedToolUses } from '../agent/store';
 import { type FakeAnthropic, messageRequests, type ScriptTurn, scriptedFetch } from '../test/fakeAnthropic';
 import { makeStubRegistry, type StubRegistry } from '../test/stubRegistry';
@@ -79,7 +87,7 @@ describe('request shape', () => {
     for (const b of CHAT_BETAS) expect(betas).toContain(b);
     const body = req!.body;
     expect(body.model).toBe(MODEL);
-    expect(body.max_tokens).toBe(16_000);
+    expect(body.max_tokens).toBe(8_000);
     expect(body.stream).toBe(true);
     expect(body.fallbacks).toEqual([{ model: 'claude-opus-5' }]);
     expect(body.context_management.edits[0].type).toBe('compact_20260112');
@@ -88,7 +96,13 @@ describe('request shape', () => {
     // and the conversation's tag rule follow, neither with a breakpoint of its own
     expect(body.system).toHaveLength(3);
     expect(body.system[0].cache_control).toEqual({ type: 'ephemeral' });
-    expect(body.system[1].cache_control).toBeUndefined();
+    // the playbook has its own breakpoint (plan 34 C3): four in all with the last tool's and the request's own
+    expect(body.system[1].cache_control).toEqual({ type: 'ephemeral' });
+    const breakpoints =
+      1 +
+      body.system.filter((b: { cache_control?: unknown }) => b.cache_control).length +
+      body.tools.filter((t: { cache_control?: unknown }) => t.cache_control).length;
+    expect(breakpoints).toBeLessThanOrEqual(4);
     expect(body.system[1].text).toMatch(/^Playbook\. What a sharp friend/);
     expect(body.system[1].text).toMatch(/## Networking etiquette/);
     expect(body.system[2].cache_control).toBeUndefined();
@@ -105,7 +119,7 @@ describe('request shape', () => {
     expect(web).toEqual({
       type: 'web_search_20260209',
       name: 'web_search',
-      max_uses: 3,
+      max_uses: 2,
       cache_control: { type: 'ephemeral' },
     });
     const client = body.tools.slice(0, -1);
@@ -799,5 +813,70 @@ describe('a turn ends on the pills', () => {
     expect(messageRequests(fake)).toHaveLength(2);
     const rows = await store.history(conversation.id);
     expect(rows.at(-1)?.role).toBe('assistant');
+  });
+});
+
+describe('the shape of a turn (plan 34 C1, C2)', () => {
+  const results = [{ title: 'Stripe careers', url: 'https://stripe.com/jobs' }];
+  const resultTexts = (req: { body: { messages: { role: string; content: unknown }[] } }) =>
+    JSON.stringify(req.body.messages.at(-1));
+
+  it('tells the model the web searches are used up once the turn has run three, without changing the tools', async () => {
+    await turn('stripe news', [
+      {
+        webSearch: [
+          { query: 'Stripe news', results },
+          { query: 'Stripe layoffs', results },
+        ],
+        toolCalls: [{ id: 'toolu_w1', name: 'list_pipeline', input: {} }],
+      },
+      {
+        webSearch: [{ query: 'Stripe hiring 2027', results }],
+        toolCalls: [{ id: 'toolu_w2', name: 'list_pipeline', input: {} }],
+      },
+      { text: 'Stripe is hiring.' },
+    ]);
+    const reqs = messageRequests(fake);
+    expect(reqs).toHaveLength(3);
+    expect(resultTexts(reqs[1]!)).not.toContain('used up');
+    expect(resultTexts(reqs[2]!)).toContain(JSON.stringify(WEB_BUDGET_NOTE).slice(1, -1));
+    // the tool list is byte-identical on every request of the turn, so the cached prefix holds
+    expect(JSON.stringify(reqs[2]!.body.tools)).toBe(JSON.stringify(reqs[0]!.body.tools));
+    // the stored history replays exactly what the model read
+    const stored = JSON.stringify(await store.history(conversation.id));
+    expect(stored).toContain(JSON.stringify(WEB_BUDGET_NOTE).slice(1, -1));
+  });
+
+  it('stops after MAX_ITERATIONS requests in one turn', async () => {
+    const loopTurn = { toolCalls: [{ name: 'list_pipeline', input: {} }] };
+    await turn(
+      'keep going',
+      Array.from({ length: MAX_ITERATIONS + 2 }, () => loopTurn),
+    );
+    expect(messageRequests(fake)).toHaveLength(MAX_ITERATIONS);
+  });
+
+  it('numbers each request of a turn for Orbit shared access, and never for a key of their own', async () => {
+    await turn('who is waiting', [
+      { toolCalls: [{ id: 'toolu_i', name: 'list_pipeline', input: {} }] },
+      { text: 'Lena is.' },
+    ]);
+    for (const r of messageRequests(fake)) expect(r.headers[ITERATION_HEADER]).toBeUndefined();
+
+    writePrefs({ anthropicApiKey: undefined });
+    setSharedClaudeUrlForTests('https://proxy.test/functions/v1/orbit-claude');
+    try {
+      const before = messageRequests(fake).length;
+      await turn('and then', [
+        { toolCalls: [{ id: 'toolu_j2', name: 'list_pipeline', input: {} }] },
+        { text: 'Then Dana.' },
+      ]);
+      const sent = messageRequests(fake)
+        .slice(before)
+        .map((r) => r.headers[ITERATION_HEADER]);
+      expect(sent).toEqual(['1', '2']);
+    } finally {
+      setSharedClaudeUrlForTests(undefined);
+    }
   });
 });

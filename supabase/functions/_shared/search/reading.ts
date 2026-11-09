@@ -324,11 +324,67 @@ export async function saveProfile(
       reading_at = case when (profile_reads.about, profile_reads.experience) is distinct from (excluded.about, excluded.experience)
                         then null else profile_reads.reading_at end,
       updated_at = now()`;
-  // their About where Orbit had none (an About the student or another source wrote is never replaced)
+  // the public text once for every student who has this person (plan 34 B1); a changed text drops the old reading
+  await db.sql`
+    insert into orbit_private.profile_pages (member_id, about, experience, status, read_at)
+    values (${memberId}, ${about}, ${JSON.stringify(experience)}::jsonb, 'ok', ${now.toISOString()}::timestamptz)
+    on conflict (member_id) do update set about = excluded.about, experience = excluded.experience, status = 'ok',
+      read_at = excluded.read_at,
+      reading = case when (profile_pages.about, profile_pages.experience) is distinct from (excluded.about, excluded.experience)
+                     then null else profile_pages.reading end,
+      reading_model = case when (profile_pages.about, profile_pages.experience) is distinct from (excluded.about, excluded.experience)
+                     then null else profile_pages.reading_model end,
+      reading_at = case when (profile_pages.about, profile_pages.experience) is distinct from (excluded.about, excluded.experience)
+                        then null else profile_pages.reading_at end`;
+  await fillSummary(db, userId, personId, about);
+}
+
+/** Their About where Orbit had none (an About the student or another source wrote is never replaced). */
+async function fillSummary(db: Db, userId: string, personId: string, about: string | null): Promise<void> {
   if (about)
     await db.sql`
       update orbit.people set summary = ${about}, updated_at = now()
        where id = ${personId}::uuid and user_id = ${userId}::uuid and (summary is null or summary = '')`;
+}
+
+/**
+ * The profile as another student's read left it, when that read is under REREAD_DAYS old: copied into this student's
+ * profile_reads with its reading, and no LinkedIn request. False when there is no such read.
+ */
+export async function copySharedProfile(
+  db: Db,
+  userId: string,
+  personId: string,
+  memberId: string,
+  mode: Mode,
+  now: Date,
+): Promise<boolean> {
+  const [page] = await db.sql<{
+    about: string | null;
+    experience: ProfileExperienceWire[];
+    read_at: string;
+    reading: ProfileReadingWire | null;
+    reading_model: string | null;
+    reading_at: string | null;
+  }>`
+    select about, experience, read_at::text as read_at, reading, reading_model, reading_at::text as reading_at
+      from orbit_private.profile_pages
+     where member_id = ${memberId} and status = 'ok'
+       and read_at > ${now.toISOString()}::timestamptz - make_interval(days => ${REREAD_DAYS})`;
+  if (!page) return false;
+  await db.sql`
+    insert into orbit.profile_reads (user_id, person_id, member_id, about, experience, status, read_by, read_at,
+      reading, reading_model, reading_at, updated_at)
+    values (${userId}::uuid, ${personId}::uuid, ${memberId}, ${page.about}, ${JSON.stringify(page.experience ?? [])}::jsonb,
+      'ok', ${mode}, ${page.read_at}::timestamptz,
+      ${page.reading === null ? null : JSON.stringify(page.reading)}::jsonb, ${page.reading_model},
+      ${page.reading_at}::timestamptz, now())
+    on conflict (user_id, person_id) do update set member_id = excluded.member_id, about = excluded.about,
+      experience = excluded.experience, status = 'ok', read_by = excluded.read_by, read_at = excluded.read_at,
+      reading = excluded.reading, reading_model = excluded.reading_model, reading_at = excluded.reading_at,
+      updated_at = now()`;
+  await fillSummary(db, userId, personId, page.about);
+  return true;
 }
 
 async function markProfile(
@@ -465,6 +521,7 @@ function rawOf(facts: z.infer<typeof personSchema>['people'][number]['facts']): 
 
 type Unread = {
   person_id: string;
+  member_id: string | null;
   name: string;
   headline: string | null;
   about: string | null;
@@ -480,7 +537,7 @@ export async function readPeople(
   personIds?: string[],
 ): Promise<number> {
   const rows = await db.sql<Unread>`
-    select r.person_id, p.display_name as name, p.headline, r.about, r.experience
+    select r.person_id, r.member_id, p.display_name as name, p.headline, r.about, r.experience
       from orbit.profile_reads r join orbit.people p on p.id = r.person_id
      where r.user_id = ${userId}::uuid and r.reading_at is null and r.status = 'ok'
        and (${personIds ?? null}::uuid[] is null or r.person_id = any(${personIds ?? null}::uuid[]))
@@ -534,6 +591,14 @@ export async function readPeople(
         update orbit.profile_reads set reading = ${JSON.stringify(reading)}::jsonb, reading_model = ${modelName},
           reading_at = now(), updated_at = now()
          where user_id = ${userId}::uuid and person_id = ${part[k]!.person_id}::uuid`;
+      // the same text gives the same reading: kept on the shared page for the next student (plan 34 B1)
+      const row = part[k]!;
+      if (row.member_id && modelName)
+        await db.sql`
+          update orbit_private.profile_pages set reading = ${JSON.stringify(reading)}::jsonb,
+            reading_model = ${modelName}, reading_at = now()
+           where member_id = ${row.member_id} and about is not distinct from ${row.about}
+             and experience = ${JSON.stringify(row.experience ?? [])}::jsonb`;
       n++;
     }
   }
@@ -683,16 +748,23 @@ async function readProfiles(
   started: number,
   budgetMs: number,
 ): Promise<void> {
+  let fetched = 0;
   for (const p of people) {
     if (deps.clock() - started > budgetMs) {
       step.stopped = 'time';
       return;
     }
+    // another student read this profile lately: their copy, with no LinkedIn request (plan 34 B1)
+    if (await copySharedProfile(db, userId, p.id, p.member, mode, now)) {
+      step.profiles++;
+      step.readIds.push(p.id);
+      continue;
+    }
     if (!(await spendRead(db, 'profile', accountId, now, mode))) {
       step.stopped = 'ledger';
       return;
     }
-    if (step.profiles > 0) await deps.sleep((mode === 'ask' ? 300 : 2500) + Math.floor(deps.random() * 2500));
+    if (fetched++ > 0) await deps.sleep((mode === 'ask' ? 300 : 2500) + Math.floor(deps.random() * 2500));
     const got = await getJson(deps, profilePath(accountId, p.member));
     if (!got.ok) {
       if (got.status === 'throttled') {

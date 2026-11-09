@@ -11,12 +11,14 @@
  * Each paid answer, found or not, is kept 30 days in the shared research cache so a person is looked up once for
  * everyone (a LinkedIn contact email never is: only the student's connections may see it);
  * every call goes through the per-user daily caps (budget.ts: 10 Hunter credits, 10 Apollo matches, 40 profile
- * views). Nothing here sends anything.
+ * views) and Hunter's 40 credits a month for everyone. A credit call reserves its credit before it goes out and
+ * settles after, so lookups running in parallel cannot pass a cap together; a miss is kept at 0 credits as
+ * `<operation>:attempt`, so the ledger shows every call Hunter saw (plan 34 A4). Nothing here sends anything.
  */
 import type { Apollo } from '../providers/apollo';
 import { deliverability, type Hunter } from '../providers/hunter';
 import { cleanLinkedInUrl, linkedInSlugOf, type UnipileResearch } from '../providers/unipileResearch';
-import type { BudgetDep } from '../research/deps';
+import type { BudgetDep, BudgetProvider } from '../research/deps';
 import type { SharedCache } from '../research/web';
 import {
   type DomainTemplate,
@@ -43,6 +45,33 @@ export interface LookupDeps {
 }
 
 type Cached = LookedUp | { none: true };
+
+/** A credit reserved for one call; `settle` writes what it cost (0 for a miss, kept as an attempt). */
+interface Slot {
+  settle(units: number): Promise<void>;
+}
+
+/** Reserves `units` of a credit provider for one call; undefined when a cap says no. */
+async function take(
+  d: Pick<LookupDeps, 'userId' | 'budget'>,
+  provider: BudgetProvider,
+  operation: string,
+  units: number,
+): Promise<Slot | undefined> {
+  const b = d.budget;
+  if (!b) return { settle: async () => undefined };
+  const op = (u: number) => (u > 0 ? operation : `${operation}:attempt`);
+  if (b.reserve) {
+    const r = await b.reserve(d.userId, { provider, operation, units, costUsd: 0 });
+    if (!r.ok) return undefined;
+    return { settle: (u) => r.settle({ units: u, operation: op(u) }).catch(() => undefined) };
+  }
+  if (!(await b.check(d.userId, provider, units)).ok) return undefined;
+  return {
+    settle: (u) =>
+      b.record(d.userId, { provider, operation: op(u), units: u, costUsd: 0 }).catch(() => undefined),
+  };
+}
 
 /** The lookup, one candidate at a time; undefined when nothing verified could be found or nothing identifies them. */
 export function emailLookup(d: LookupDeps): EmailLookup {
@@ -109,14 +138,18 @@ async function fromHunter(
   if (slug) asks.push({ by: 'handle', params: { linkedin_handle: slug } });
   if (n && domain) asks.push({ by: 'name', params: { first_name: n.f, last_name: n.l, domain } });
   for (const ask of asks) {
-    if (d.budget && !(await d.budget.check(d.userId, 'hunter', 1)).ok) return undefined;
+    const slot = await take(d, 'hunter', 'find', 1);
+    if (!slot) return undefined;
     const r = await d.hunter.findEmail(ask.params);
-    if (!r.ok) return undefined;
+    if (!r.ok) {
+      await slot.settle(0);
+      return undefined;
+    }
     const h = r.value.data;
     const email = h?.email?.trim().toLowerCase();
-    if (!h || !email?.includes('@')) continue;
     // charged only when it finds one
-    await d.budget?.record(d.userId, { provider: 'hunter', operation: 'find', units: 1, costUsd: 0 });
+    await slot.settle(h && email?.includes('@') ? 1 : 0);
+    if (!h || !email?.includes('@')) continue;
     // their LinkedIn profile is someone else's: a namesake
     const theirs = linkedInSlugOf(cleanLinkedInUrl(h.linkedin_url));
     if (slug && theirs && theirs !== slug) continue;
@@ -148,24 +181,40 @@ function notTheirRole(c: Candidate, position: string | null | undefined): boolea
   return !ACADEMIC_ROLE.test(position);
 }
 
-/** The pattern a company uses, from Hunter's domain search; cached 30 days for everyone, misses too. */
+/**
+ * The pattern a company uses, from Hunter's domain search; cached 30 days for everyone, misses too. One template per
+ * run: several candidates at a new domain share one domain search instead of each asking while the first is in flight.
+ */
 export function domainTemplate(
   d: Pick<LookupDeps, 'userId' | 'hunter' | 'budget' | 'cache'>,
 ): DomainTemplate | undefined {
   const hunter = d.hunter;
   if (!hunter?.configured) return undefined;
-  return async (domain) => {
-    const key = `pattern:${domain.toLowerCase()}`;
+  const asked = new Map<string, Promise<string | undefined>>();
+  const ask = async (domain: string): Promise<string | undefined> => {
+    const key = `pattern:${domain}`;
     const hit = (await d.cache.get(key).catch(() => undefined)) as { t?: string; none?: true } | undefined;
     if (hit) return hit.t;
-    if (d.budget && !(await d.budget.check(d.userId, 'hunter', 1)).ok) return undefined;
+    const slot = await take(d, 'hunter', 'domain', 1);
+    if (!slot) return undefined;
     const r = await hunter.domainPattern(domain);
-    if (!r.ok) return undefined;
+    if (!r.ok) {
+      await slot.settle(0);
+      return undefined;
+    }
     const t = r.value.data?.pattern ?? undefined;
-    if (t)
-      await d.budget?.record(d.userId, { provider: 'hunter', operation: 'domain', units: 1, costUsd: 0 });
+    await slot.settle(t ? 1 : 0);
     await d.cache.put(key, 'email_pattern', t ? { t } : { none: true }, LOOKUP_TTL_MS).catch(() => undefined);
     return t;
+  };
+  return (domain) => {
+    const k = domain.toLowerCase();
+    let p = asked.get(k);
+    if (!p) {
+      p = ask(k);
+      asked.set(k, p);
+    }
+    return p;
   };
 }
 
@@ -181,10 +230,14 @@ export function emailVerifier(
       | { v: 'valid' | 'invalid' | 'risky' }
       | undefined;
     if (hit?.v) return hit.v;
-    if (d.budget && !(await d.budget.check(d.userId, 'hunter', 0.5)).ok) return undefined;
+    const slot = await take(d, 'hunter', 'verify', 0.5);
+    if (!slot) return undefined;
     const r = await hunter.verifyEmail(email);
-    if (!r.ok) return undefined;
-    await d.budget?.record(d.userId, { provider: 'hunter', operation: 'verify', units: 0.5, costUsd: 0 });
+    if (!r.ok) {
+      await slot.settle(0);
+      return undefined;
+    }
+    await slot.settle(0.5);
     const v = deliverability(r.value.data?.status);
     await d.cache.put(key, 'email_verify', { v }, LOOKUP_TTL_MS).catch(() => undefined);
     return v;
@@ -208,10 +261,11 @@ async function fromApollo(
       ? { first_name: firstName, last_name: lastName, domain }
       : undefined;
   if (!params) return undefined;
-  if (d.budget && !(await d.budget.check(d.userId, 'apollo_match', 1)).ok) return undefined;
+  const slot = await take(d, 'apollo_match', 'match', 1);
+  if (!slot) return undefined;
   const r = await d.apollo.matchPerson({ ...params, reveal_personal_emails: false });
+  await slot.settle(r.ok ? 1 : 0);
   if (!r.ok) return undefined;
-  await d.budget?.record(d.userId, { provider: 'apollo_match', operation: 'match', units: 1, costUsd: 0 });
   const p = r.value.person;
   const email = p?.email?.trim().toLowerCase();
   if (!email?.includes('@')) return undefined;

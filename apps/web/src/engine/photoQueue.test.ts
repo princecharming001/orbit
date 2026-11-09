@@ -233,6 +233,21 @@ describe('the photo queue', () => {
     expect(await refreshOnePhoto(user, { now: at(GAP) })).toEqual({ step: 'idle' });
   });
 
+  it('asks once about one LinkedIn member with two Orbit rows, and skips anyone enrichment read under another row (plan 34 B4, B6)', async () => {
+    await db.people.bulkPut([
+      person({ id: 'p_a', firstName: 'Al', lastName: 'One', linkedinMemberId: 'm_same' }),
+      person({ id: 'p_a2', firstName: 'Al', lastName: 'One', linkedinMemberId: 'm_same' }),
+      person({ id: 'p_b', firstName: 'Bo', lastName: 'Two', linkedinMemberId: 'm_read' }),
+    ]);
+    await db.kv.put({
+      key: `profile:mark:${user.id}:m_read`,
+      value: { profileAt: at(-86_400_000).toISOString() },
+    });
+    expect((await refreshOnePhoto(user, { now: at(0) })).step).toBe('asked');
+    expect(await refreshOnePhoto(user, { now: at(GAP) })).toEqual({ step: 'idle' });
+    expect(calls.map((c) => c.identifier)).toEqual(['m_same']);
+  });
+
   it('fetches a fresh link for an expired LinkedIn photo, and clears a dead one LinkedIn no longer has', async () => {
     await db.people.bulkPut([
       person({

@@ -13,12 +13,14 @@
 import { isUuid, timingSafeEqual } from '../_shared/crypto.ts';
 import type { Db } from '../_shared/db.ts';
 import { HttpError, json, type Logger, silentLogger, unconfigured } from '../_shared/http.ts';
+import { isPaidError } from '../_shared/paid.ts';
 import { QUEUES, type Queue, type QueueName, sqlQueue } from '../_shared/queue.ts';
 import type { AgentConfig } from '../_shared/services.ts';
 import { agentHandlers } from './handlers/agents.ts';
 import { calendarHandlers } from './handlers/calendar.ts';
 import { classifyHandlers } from './handlers/classify.ts';
 import { contactsHandlers } from './handlers/contacts.ts';
+import { costHandlers } from './handlers/cost.ts';
 import { type HandlerDeps, JobSkipped } from './handlers/deps.ts';
 import { friendHandlers } from './handlers/friends.ts';
 import { gmailHandlers } from './handlers/gmail.ts';
@@ -79,6 +81,7 @@ export function defaultHandlers(
     ...scoreHandlers(deps),
     ...friendHandlers(),
     ...searchHandlers(deps),
+    ...costHandlers(deps.cost),
     ...classifyHandlers(deps, agents),
     ...agentHandlers(agents),
   };
@@ -105,7 +108,11 @@ export const DEFAULT_BUDGET_MS = 110_000;
  * next tick, a minute away, in a new isolate.
  */
 export const HEAVY_KINDS: ReadonlySet<string> = new Set(['score.user', 'score.page', 'score.person']);
-export const HEAVY_PER_TICK = 3;
+/**
+ * One a tick (plan 34 A7): with three, score.page runs shared one isolate's 2 s CPU allowance and 38 of them died
+ * with the isolate on 2026-11-08.
+ */
+export const HEAVY_PER_TICK = 1;
 /** Kinds that run once a worker run, alone in their CPU budget (the LinkedIn sync files pages, which is CPU). */
 export const ONCE_PER_TICK: ReadonlySet<string> = new Set(['sync.linkedin']);
 /** a heavy job is not started once the tick has already run this many jobs of any kind */
@@ -123,6 +130,16 @@ export const RESERVE_MS: Readonly<Record<string, number>> = {
 export const DEFAULT_RESERVE_MS = 8_000;
 
 export const backoffSec = (readCt: number) => 30 * 2 ** Math.max(0, readCt - 1);
+
+/**
+ * Plan 34 A6: a handler that threw after a paid call (Claude, Hunter, Exa) marks its error `paid: true`. Such a job
+ * is run again at most this many times after a paid failure, then dead-lettered, so one answer is not bought five
+ * times over.
+ */
+export const ATTEMPTS_AFTER_SPEND = 1;
+/** the prefix a paid failure's error carries in orbit.job_runs, so later reads can count them */
+export const PAID_ERROR_PREFIX = '[paid] ';
+export { isPaidError };
 
 export interface WorkerDeps {
   db: Db;
@@ -342,10 +359,22 @@ export async function runTick(deps: WorkerDeps): Promise<TickSummary> {
         });
         return;
       }
+      const paid = isPaidError(e);
       const err = short(e);
-      await finish(runId, 'error', started, err);
+      await finish(runId, 'error', started, paid ? `${PAID_ERROR_PREFIX}${err}`.slice(0, 500) : err);
       s.failed++;
-      if (readCt > MAX_READS) await deadLetter(q, msgId, message, err);
+      // paid failures of this message so far, this one included
+      const paidFailures = paid
+        ? Number(
+            (
+              await db.sql<{ n: number | string }>`
+                select count(*)::int as n from orbit.job_runs
+                 where queue = ${q} and msg_id = ${msgId}::bigint and status = 'error'
+                   and error like ${`${PAID_ERROR_PREFIX}%`}`
+            )[0]?.n ?? 0,
+          )
+        : 0;
+      if (readCt > MAX_READS || paidFailures > ATTEMPTS_AFTER_SPEND) await deadLetter(q, msgId, message, err);
       else await queue.setVt(q, msgId, backoffSec(readCt));
       await log.log({
         fn: 'orbit-worker',

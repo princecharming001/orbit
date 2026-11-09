@@ -1,10 +1,14 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { sqlQueue } from '../../functions/_shared/queue.ts';
+import { type CostDigest, costHandlers } from '../../functions/orbit-worker/handlers/cost.ts';
 import {
   backoffSec,
   defaultHandlers,
+  HEAVY_PER_TICK,
+  isPaidError,
   type JobHandler,
   makeWorkerHandler,
+  PAID_ERROR_PREFIX,
   PLACEHOLDER_KINDS,
   runTick,
 } from '../../functions/orbit-worker/worker.ts';
@@ -233,19 +237,62 @@ describe('runTick', () => {
     expect(visible).toHaveLength(1);
   });
 
-  it('runs a few CPU-heavy jobs per tick and leaves the rest for a fresh isolate', async () => {
+  it('runs one CPU-heavy job per tick and leaves the rest for a fresh isolate', async () => {
+    // plan 34 A7: three score.page runs in one isolate shared its 2 s of CPU and died with it
+    expect(HEAVY_PER_TICK).toBe(1);
     const ran = vi.fn(async () => {});
-    for (let i = 0; i < 5; i++)
+    for (let i = 0; i < 3; i++)
       await sqlQueue(t.db).enqueue({ kind: 'score.page', userId: null, payload: { i } });
-    const s = await runTick({ db: t.db, handlers: { 'score.page': ran } });
-    expect(ran).toHaveBeenCalledTimes(3);
+    const s = await runTick({ db: t.db, handlers: { 'score.page': ran, noop: async () => {} } });
+    expect(ran).toHaveBeenCalledTimes(1);
     expect(s.stoppedBy).toBe('cpu');
     expect(await left('orbit_score')).toBe(2);
     const visible = await t.db.sql`select 1 from pgmq.q_orbit_score where vt <= now()`;
     expect(visible).toHaveLength(2);
     const again = await runTick({ db: t.db, handlers: { 'score.page': ran } });
-    expect(again.processed).toBe(2);
-    expect(await left('orbit_score')).toBe(0);
+    expect(again.processed).toBe(1);
+    expect(await left('orbit_score')).toBe(1);
+  });
+
+  it('a job that failed after a paid call is run once more, then dead-lettered (plan 34 A6)', async () => {
+    let calls = 0;
+    const paidFailure: JobHandler = async () => {
+      calls++;
+      throw Object.assign(new Error('parse failed after the model answered'), { paid: true });
+    };
+    await sqlQueue(t.db).enqueue({ kind: 'paid', userId: null, payload: {} }, { queue: 'orbit_sync' });
+    await runTick({ db: t.db, handlers: { paid: paidFailure } });
+    // the first paid failure is retried like any other
+    expect(await left('orbit_sync')).toBe(1);
+    await t.pg.exec('update pgmq.q_orbit_sync set vt = now()');
+    const s = await runTick({ db: t.db, handlers: { paid: paidFailure } });
+    expect(calls).toBe(2);
+    expect(s.deadLettered).toBe(1);
+    expect(await left('orbit_sync')).toBe(0);
+    const r = await runs();
+    expect(r.map((x) => x.error)).toEqual([
+      `${PAID_ERROR_PREFIX}Error: parse failed after the model answered`,
+      `${PAID_ERROR_PREFIX}Error: parse failed after the model answered`,
+    ]);
+    expect(isPaidError(new Error('x'))).toBe(false);
+  });
+
+  it('an unpaid failure before a paid one does not count toward the paid retry', async () => {
+    let calls = 0;
+    const handler: JobHandler = async () => {
+      calls++;
+      if (calls === 1) throw new Error('upstream 500');
+      throw Object.assign(new Error('after spend'), { paid: true });
+    };
+    await sqlQueue(t.db).enqueue({ kind: 'mixed', userId: null, payload: {} }, { queue: 'orbit_sync' });
+    for (let i = 0; i < 3; i++) {
+      await runTick({ db: t.db, handlers: { mixed: handler } });
+      await t.pg.exec('update pgmq.q_orbit_sync set vt = now()');
+    }
+    // unpaid, paid (retried), paid (dead-lettered)
+    expect(calls).toBe(3);
+    expect(await left('orbit_sync')).toBe(0);
+    expect(await t.db.sql`select 1 from orbit.dead_letters`).toHaveLength(1);
   });
 
   it('health.snapshot writes orbit.health() to the audit log', async () => {
@@ -254,5 +301,107 @@ describe('runTick', () => {
     const rows = await t.db.sql<{ details: { queues: unknown[] } }>`
       select details from orbit.audit_log where action = 'health.snapshot' and actor = 'system'`;
     expect(rows.at(-1)!.details.queues).toHaveLength(6);
+  });
+});
+
+describe('cost.digest (plan 34 E2)', () => {
+  const NOW = new Date('2026-11-10T07:50:00Z');
+  const YESTERDAY = '2026-11-09T12:00:00Z';
+  beforeEach(async () => {
+    await t.pg.exec(`
+      delete from orbit.audit_log where action = 'cost.digest';
+      delete from orbit.usage_ledger; delete from public.orbit_proxy_spend; delete from public.orbit_proxy_counters;
+      delete from orbit_private.claude_usage; delete from public.orbit_research_runs;
+      update orbit_private.provider_switches set enabled = true;
+    `);
+  });
+  const digestRows = () =>
+    t.db.sql<{ details: CostDigest; target_id: string }>`
+      select details, target_id from orbit.audit_log where action = 'cost.digest' order by id`;
+  const mailer = () => {
+    const sent: { to: string; subject: string; text: string }[] = [];
+    return {
+      sent,
+      configured: true,
+      send: async (m: { to: string; subject: string; text: string }) => {
+        sent.push(m);
+        return { ok: true as const, id: 'm1' };
+      },
+    };
+  };
+  const run = async (deps: Parameters<typeof costHandlers>[0]) => {
+    // the cron enqueues to orbit_enrich over SQL (orbit.enqueue_cost_digest)
+    await sqlQueue(t.db).enqueue(
+      { kind: 'cost.digest', userId: null, payload: {} },
+      { queue: 'orbit_enrich' },
+    );
+    await runTick({ db: t.db, now: () => NOW, handlers: costHandlers(deps) });
+  };
+
+  it('writes one audit row for yesterday with spend per provider and per student, and mails nothing under the lines', async () => {
+    const u = await makeUser(t.db);
+    await t.db
+      .sql`insert into orbit.usage_ledger (user_id, provider, operation, units, cost_usd, created_at) values
+      (${u}::uuid, 'anthropic', 'classify', 1, 0.01, ${YESTERDAY}::timestamptz),
+      (${u}::uuid, 'hunter', 'find', 2, 0, ${YESTERDAY}::timestamptz),
+      (${u}::uuid, 'anthropic', 'classify', 1, 5, '2026-11-08T12:00:00Z'::timestamptz)`;
+    await t.db.sql`insert into public.orbit_proxy_spend (subject, usd, requests) values
+      ('global:2026-11-09', 1.5, 60), (${`user:${u}:2026-11-09`}, 1.2, 50), (${`user:${u}`}, 9, 400)`;
+    await t.db
+      .sql`insert into orbit_private.claude_usage (subject, at, input, cache_read, cache_write, output, web_searches, usd)
+      values (${`user:${u}`}, ${YESTERDAY}::timestamptz, 1000, 7000, 2000, 500, 2, 0.02)`;
+    await t.db.sql`insert into public.orbit_proxy_counters (bucket, count, expires_at)
+      values ('connectors:li:profile:2026-11-09:acc-1', 40, now() + interval '1 day')`;
+    const m = mailer();
+    await run({ mailer: m, ownerId: u });
+    const rows = await digestRows();
+    expect(rows).toHaveLength(1);
+    const d = rows[0]!.details;
+    expect(rows[0]!.target_id).toBe('2026-11-09');
+    expect(d.day).toBe('2026-11-09');
+    expect(d.anthropicUsd).toBeCloseTo(1.51, 5);
+    expect(d.totalUsd).toBeCloseTo(1.51, 5);
+    expect(d.providers.map((p) => `${p.provider}/${p.operation}`).sort()).toEqual(
+      ['anthropic/chat', 'anthropic/classify', 'hunter/find'].sort(),
+    );
+    expect(d.users).toEqual([{ userId: u, ledgerUsd: 0.01, chatUsd: 1.2, totalUsd: 1.21 }]);
+    expect(d.chat).toMatchObject({ answers: 1, cacheReadTokens: 7000, webSearches: 2, cacheReadShare: 0.7 });
+    expect(d.hunterMonthCredits).toBe(2);
+    expect(d.linkedin).toEqual([{ kind: 'profile', accountId: 'acc-1', count: 40, total: 100, share: 0.4 }]);
+    expect(d.jobs).toMatchObject({ isolateDeaths: 0, deadLetters: 0 });
+    expect(d.switchedOff).toEqual([]);
+    expect(d.unipileAccounts).toBeNull();
+    expect(d.crossed).toEqual([]);
+    expect(d.mailed).toBe(false);
+    expect(m.sent).toHaveLength(0);
+  });
+
+  it('mails the owner once when a threshold is crossed, in plain words', async () => {
+    const owner = await makeUser(t.db, { email: 'owner@example.com' });
+    await t.db
+      .sql`insert into public.orbit_proxy_spend (subject, usd, requests) values ('global:2026-11-09', 6, 200)`;
+    await t.pg.exec(`update orbit_private.provider_switches set enabled = false where provider = 'hunter'`);
+    const m = mailer();
+    await run({ mailer: m, ownerId: owner });
+    expect(m.sent).toHaveLength(1);
+    expect(m.sent[0]!.to).toBe('owner@example.com');
+    expect(m.sent[0]!.text).toContain('Anthropic spend in the day');
+    expect(m.sent[0]!.text).toContain('Switched off: hunter.');
+    expect(m.sent[0]!.text + m.sent[0]!.subject).not.toMatch(/[\u2014!]/);
+    const d = (await digestRows())[0]!.details;
+    expect(d.crossed.map((c) => c.key)).toEqual(['anthropicUsdDay', 'switchedOff']);
+    expect(d.mailed).toBe(true);
+  });
+
+  it('records why nothing was mailed when there is no mailer or no owner', async () => {
+    await t.db
+      .sql`insert into public.orbit_proxy_spend (subject, usd, requests) values ('global:2026-11-09', 6, 200)`;
+    await run({});
+    expect((await digestRows())[0]!.details.mailError).toBe('no_mailer');
+    await t.pg.exec(`delete from orbit.job_runs; delete from orbit.audit_log where action = 'cost.digest';`);
+    const m = mailer();
+    await run({ mailer: m, thresholds: { anthropicUsdDay: 1 } });
+    expect((await digestRows())[0]!.details.mailError).toBe('no_owner');
+    expect(m.sent).toHaveLength(0);
   });
 });

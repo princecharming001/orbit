@@ -4,7 +4,13 @@ import { db, wipeDatabase } from '../db/schema';
 import { setConnectorsMockForTests } from '../integrations/connectorsMock';
 import { clearPrefs, writePrefs } from '../integrations/prefs';
 import { setVillageUrlForTests } from '../integrations/village';
-import { villageAvailable, villageOffered, warmIntrosFor } from './warmIntros';
+import {
+  resetWarmIntrosCache,
+  VILLAGE_KEEP_MS,
+  villageAvailable,
+  villageOffered,
+  warmIntrosFor,
+} from './warmIntros';
 
 const BASE = 'https://proxy.test/functions/v1/orbit-connectors';
 const user = { id: 'u1' };
@@ -112,5 +118,23 @@ describe('warm intros from Village', () => {
     const r = await warmIntrosFor(user, { person: dana });
     expect(calls[0]).toMatchObject({ name: 'Dana Lee', company: 'Stripe' });
     expect(r.every((w) => w.targetPersonId === 'p_dana')).toBe(true);
+  });
+
+  it('keeps an answer on this device for a week, so a reload asks Village nothing new (plan 34 A8)', async () => {
+    writePrefs({ warmIntros: true });
+    resetWarmIntrosCache();
+    const first = await warmIntrosFor(user, { company: 'Acme Robotics' });
+    expect(calls).toHaveLength(1);
+    resetWarmIntrosCache();
+    const again = await warmIntrosFor(user, { company: 'Acme Robotics' });
+    expect(calls).toHaveLength(1);
+    expect(again).toEqual(first);
+    // past a week it asks again
+    const key = (await db.kv.toArray()).find((r) => r.key.startsWith('village:'))!;
+    const v = key.value as { at: number };
+    await db.kv.put({ key: key.key, value: { ...v, at: Date.now() - VILLAGE_KEEP_MS - 1 } });
+    resetWarmIntrosCache();
+    await warmIntrosFor(user, { company: 'Acme Robotics' });
+    expect(calls).toHaveLength(2);
   });
 });

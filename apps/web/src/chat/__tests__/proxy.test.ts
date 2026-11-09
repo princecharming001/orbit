@@ -13,6 +13,7 @@ import {
   subjectOf,
   type Take,
   UPSTREAM,
+  type UsageRow,
   verifyOrbitSession,
 } from '../../../../../supabase/functions/orbit-claude/proxy';
 import { describeLlmFailure, toLlmError } from '../../integrations/anthropic';
@@ -95,7 +96,9 @@ function harness(
     apiKey?: string | undefined;
     upstreamStatus?: number;
     spend?: Spend;
-    sessionSecret?: string;
+    sessionSecret?: string | (() => Promise<string | undefined>);
+    enabled?: () => Promise<boolean>;
+    usage?: (row: UsageRow) => Promise<void>;
     headers?: Record<string, string>;
   } = {},
 ) {
@@ -106,6 +109,8 @@ function harness(
     origins: defaultOrigins,
     spend: opts.spend,
     sessionSecret: opts.sessionSecret,
+    enabled: opts.enabled,
+    usage: opts.usage,
     take:
       opts.take ??
       (async (bs) => {
@@ -208,7 +213,7 @@ describe('Orbit Claude proxy', () => {
     const { client, upstream, taken } = harness();
     const bad = [
       { ...chatParams, model: 'claude-other' },
-      { ...chatParams, max_tokens: MAX_TOKENS + 1 },
+      { ...chatParams, max_tokens: 16_001 },
       { ...chatParams, tools: [{ type: 'web_search_20250305', name: 'web_search' }] },
       { ...chatParams, fallbacks: [{ model: 'claude-other' }] },
       { ...chatParams, mcp_servers: [{ type: 'url', url: 'https://x', name: 'x' }] },
@@ -401,7 +406,7 @@ async function accessToken(claims: Record<string, unknown>, secret = SECRET) {
 const USER = '0b7f6c2e-8a51-4c1e-9d0a-3f2b1c4d5e6f';
 const CLIENT = 'f00dfeedc0ffee0123456789abcdef01';
 
-describe('the $20 per-user daily cap on Orbit’s key', () => {
+describe('the $3 per-user daily cap on Orbit’s key', () => {
   afterEach(() => {
     setSharedClaudeUrlForTests(undefined);
     writePrefs({ sharedClaudePause: undefined });
@@ -411,7 +416,7 @@ describe('the $20 per-user daily cap on Orbit’s key', () => {
     const m = memSpend();
     const { client } = harness({ spend: m.spend, headers: { 'x-orbit-client': CLIENT } });
     const res = await client.beta.messages.create({ ...chatParams, stream: true }).withResponse();
-    expect(res.response.headers.get('x-orbit-budget-remaining')).toBe('20.00');
+    expect(res.response.headers.get('x-orbit-budget-remaining')).toBe('3.00');
     for await (const _ of res.data) {
       // read the stream through, as the chat does
     }
@@ -462,11 +467,92 @@ describe('the $20 per-user daily cap on Orbit’s key', () => {
     expect(signedIn.upstream).toHaveLength(1);
     expect(over.adds.map(([s]) => s).filter((s) => s.startsWith('ipday:'))).toHaveLength(0);
     expect(over.adds.map(([s]) => s)).toContain(`user:${USER}:${new Date().toISOString().slice(0, 10)}`);
+    // and to their lifetime total, the subject the server's own caps read: three adds per priced event
+    expect(over.adds.map(([s]) => s)).toContain(`user:${USER}`);
+    const perEvent = over.adds.filter(([s]) => !s.startsWith('ipday:'));
+    expect(perEvent).toHaveLength(6);
+  });
+
+  it('reads the session key through a lookup (the copy in Vault) and charges the signed-in user', async () => {
+    const day = new Date().toISOString().slice(0, 10);
+    const m = memSpend();
+    const signedIn = harness({
+      spend: m.spend,
+      sessionSecret: async () => SECRET,
+      headers: {
+        'x-orbit-session': await accessToken({
+          sub: USER,
+          aud: 'orbit',
+          exp: Math.floor(Date.now() / 1000) + 600,
+        }),
+        'x-orbit-client': CLIENT,
+      },
+    });
+    const ok = await signedIn.client.beta.messages.create({ ...chatParams, stream: true }).withResponse();
+    for await (const _ of ok.data) {
+      // read through
+    }
+    const subjects = new Set(m.adds.map(([s]) => s));
+    expect(subjects).toEqual(new Set([`user:${USER}:${day}`, `global:${day}`, `user:${USER}`]));
+    // a lookup that fails leaves the request counted by browser, never refused
+    const broken = memSpend();
+    const fallback = harness({
+      spend: broken.spend,
+      sessionSecret: async () => {
+        throw new Error('vault down');
+      },
+      headers: { 'x-orbit-client': CLIENT },
+    });
+    const res = await fallback.client.beta.messages.create({ ...chatParams, stream: true }).withResponse();
+    for await (const _ of res.data) {
+      // read through
+    }
+    expect(broken.adds.map(([s]) => s)).toContain(`client:${CLIENT}:${day}`);
+  });
+
+  it('answers unconfigured without calling Anthropic while the anthropic switch is off', async () => {
+    const off = harness({ enabled: async () => false, headers: { 'x-orbit-client': CLIENT } });
+    const raw = await off.client.beta.messages.create(chatParams).catch((e) => e);
+    expect(raw.status).toBe(503);
+    expect(raw.headers.get('x-orbit-limit')).toBe('unconfigured');
+    expect(off.upstream).toHaveLength(0);
+    // a switch store that cannot answer counts as on
+    const flaky = harness({
+      enabled: async () => {
+        throw new Error('store down');
+      },
+    });
+    await flaky.client.beta.messages.create(chatParams);
+    expect(flaky.upstream).toHaveLength(1);
+  });
+
+  it('writes one usage row per answer with its tokens, searches and the turn iteration', async () => {
+    const rows: UsageRow[] = [];
+    const m = memSpend();
+    const { client } = harness({
+      spend: m.spend,
+      usage: async (r) => {
+        rows.push(r);
+      },
+      headers: { 'x-orbit-client': CLIENT, 'x-orbit-iterations': '2' },
+    });
+    const res = await client.beta.messages.create({ ...chatParams, stream: true }).withResponse();
+    for await (const _ of res.data) {
+      // read through
+    }
+    expect(rows).toHaveLength(1);
+    const row = rows[0]!;
+    expect(row.subject).toBe(`client:${CLIENT}:${new Date().toISOString().slice(0, 10)}`);
+    expect(row.call).toBe('chat');
+    expect(row.iterations).toBe(2);
+    expect(row.input).toBe(10);
+    expect(row.output).toBe(1);
+    expect(row.usd).toBeCloseTo(0.00006, 8);
   });
 
   it('the day’s total across everyone is a hard stop before Anthropic is called', async () => {
     const day = new Date().toISOString().slice(0, 10);
-    const m = memSpend({ [`global:${day}`]: 200 });
+    const m = memSpend({ [`global:${day}`]: 25 });
     const { client, upstream } = harness({ spend: m.spend, headers: { 'x-orbit-client': CLIENT } });
     const raw = await client.beta.messages.create(chatParams).catch((e) => e);
     expect(raw).toBeInstanceOf(Anthropic.RateLimitError);
@@ -474,9 +560,9 @@ describe('the $20 per-user daily cap on Orbit’s key', () => {
     expect(upstream).toHaveLength(0);
   });
 
-  it('refuses before calling Anthropic once the user has spent today’s $20, and the chat pauses until midnight UTC', async () => {
+  it('refuses before calling Anthropic once the user has spent today’s $3, and the chat pauses until midnight UTC', async () => {
     setSharedClaudeUrlForTests(BASE);
-    const m = memSpend({ [`client:${CLIENT}:${new Date().toISOString().slice(0, 10)}`]: 20.0001 });
+    const m = memSpend({ [`client:${CLIENT}:${new Date().toISOString().slice(0, 10)}`]: 3.0001 });
     const { client, upstream } = harness({ spend: m.spend, headers: { 'x-orbit-client': CLIENT } });
     const raw = await client.beta.messages.create(chatParams).catch((e) => e);
     expect(raw).toBeInstanceOf(Anthropic.RateLimitError);
@@ -535,6 +621,20 @@ describe('the $20 per-user daily cap on Orbit’s key', () => {
     expect(charged[0]).toBeCloseTo((1000 * 4) / 1e6, 10);
     // 3,000 more input tokens read with the results, 300 output, and two searches at a cent each
     expect(charged[1]).toBeCloseTo((3000 * 4 + 300 * 20) / 1e6 + 0.02, 10);
+    // the totals for the usage row: every token once, the searches, and the whole price
+    let totals: { input: number; output: number; webSearches: number; usd: number } | undefined;
+    await new Response(
+      meter(
+        new Response(sse).body!,
+        true,
+        async () => {},
+        async (t) => {
+          totals = t;
+        },
+      ),
+    ).text();
+    expect(totals).toMatchObject({ input: 4000, output: 300, webSearches: 2 });
+    expect(totals!.usd).toBeCloseTo((4000 * 4 + 300 * 20) / 1e6 + 0.02, 5);
   });
 
   it('prices a JSON answer at the end, and never breaks the answer when the spend store fails', async () => {

@@ -245,15 +245,18 @@ export function stableSystemText(): string {
 
 /**
  * The `system` param: the frozen block with the cache breakpoint (tools and this block cached together, for everyone),
- * then the student's playbook block (plan 28: picked by their goals, the same for every turn of a conversation, so the
- * final cache breakpoint keeps it warm without a breakpoint of its own), then the conversation's own untrusted-content
- * rule, a few lines that are read fresh each time.
+ * then the student's playbook block with a breakpoint of its own (plan 34 C3: picked by their goals, so one warm entry
+ * serves every turn of every conversation of this student, not only the turns of one conversation), then the
+ * conversation's own untrusted-content rule, a few lines after the last system breakpoint that are read fresh each
+ * time. Breakpoints: the last tool, the frozen block, the playbook and the request's automatic one, four in all.
  */
 export function systemBlocks(nonce: string, knowledge?: string): Anthropic.Beta.BetaTextBlockParam[] {
   const { tag } = makeWrap(nonce);
   return [
     { type: 'text', text: stableSystemText(), cache_control: { type: 'ephemeral' } },
-    ...(knowledge ? [{ type: 'text' as const, text: knowledge }] : []),
+    ...(knowledge
+      ? [{ type: 'text' as const, text: knowledge, cache_control: { type: 'ephemeral' as const } }]
+      : []),
     { type: 'text', text: untrustedRule(tag) },
   ];
 }

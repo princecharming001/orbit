@@ -106,7 +106,8 @@ export interface GatherContext {
 }
 
 export interface WebSource {
-  readonly name: 'exa' | 'claude';
+  /** exa and claude here; serper and parallel are plain search engines with plain page fetches (engineWeb.ts) */
+  readonly name: 'exa' | 'claude' | 'serper' | 'parallel';
   /** a cost estimate for the plan, before any call */
   estimateUsd(plan: GatherPlan): number;
   gather(plan: GatherPlan, ctx: GatherContext): Promise<GatherResult>;
@@ -706,7 +707,7 @@ export async function gatherFrom(
   sources: WebSource[],
   plan: GatherPlan,
   ctx: GatherContext,
-): Promise<GatherResult & { provider?: 'exa' | 'claude' }> {
+): Promise<GatherResult & { provider?: WebSource['name'] }> {
   const notes: string[] = [];
   for (const s of sources) {
     try {

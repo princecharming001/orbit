@@ -94,6 +94,8 @@ describe('orbit core migration', () => {
       'orbit-cadence',
       // plan 32 §6.1: nightly YC company facts, scheduled by 20261108_orbit_network_search.sql
       'orbit-company-facts-nightly',
+      // plan 34 E2: the morning cost digest, scheduled by 20261115_orbit_housekeeping.sql
+      'orbit-cost-digest',
       // plan 29 §A4: the nightly projection refresh, scheduled by 20261101_orbit_friends.sql
       'orbit-friends-nightly',
       'orbit-health',

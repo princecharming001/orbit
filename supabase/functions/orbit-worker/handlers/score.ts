@@ -17,8 +17,11 @@ import { chunks } from '../../_shared/ingest/util.ts';
 import type { JobHandler } from '../worker.ts';
 import { type HandlerDeps, JobSkipped, LONG_VT_SEC } from './deps.ts';
 
-/** People scored per nightly page: a page's ties and scores are one short job, under the isolate's CPU allowance. */
-export const SCORE_PAGE = 300;
+/**
+ * People scored per nightly page: a page's ties and scores are one short job, under the isolate's CPU allowance.
+ * 300 a page often did not finish inside 2 s of CPU (plan 34 A7), so a page is 100.
+ */
+export const SCORE_PAGE = 100;
 
 export function scoreHandlers(_deps: HandlerDeps): Record<string, JobHandler> {
   return {

@@ -4,6 +4,7 @@ import {
   checkBudget,
   MONTHLY_TOTAL_USD,
   recordUsage,
+  reserveUsage,
   USER_TOTAL_USD,
 } from '../../functions/_shared/budget.ts';
 import {
@@ -38,6 +39,7 @@ import {
   requestId,
 } from '../../functions/_shared/http.ts';
 import { clientIp, defaultOrigins } from '../../functions/_shared/origins.ts';
+import { createHunter } from '../../functions/_shared/providers/hunter';
 import { queueFor, sqlQueue } from '../../functions/_shared/queue.ts';
 import { memoryTake, sqlTake, userBuckets } from '../../functions/_shared/ratelimit.ts';
 import {
@@ -52,6 +54,7 @@ import {
   signAccess,
   verifyAccess,
 } from '../../functions/_shared/session.ts';
+import { forgetSwitches, providersOff } from '../../functions/_shared/switches.ts';
 import { sqlVault } from '../../functions/_shared/vault.ts';
 import { CLIENT_ID, type FakeGoogle, fakeGoogle, jsonRes, recordingFetch } from '../helpers/google.ts';
 import { freshDb, makeUser, type TestDb } from '../helpers/pglite.ts';
@@ -517,5 +520,96 @@ describe('budget (§13.5)', () => {
       total: string;
     }>`select public.orbit_spend_total('client:abcdefghijklmnop')::text as total`;
     expect(Number(other!.total)).toBe(0);
+  });
+});
+
+describe('cost guards (plan 34)', () => {
+  it('A4: Hunter stops at 40 credits a month for everyone together; attempts are kept and do not count', async () => {
+    const now = new Date();
+    const a = await makeUser(t.db);
+    const b = await makeUser(t.db);
+    // 39 credits across two students this month, over several days' worth of rows (the per-day cap is per user)
+    await t.db.sql`insert into orbit.usage_ledger (user_id, provider, operation, units, cost_usd, created_at)
+      select ${a}::uuid, 'hunter', 'find', 1, 0, ${now.toISOString()}::timestamptz - make_interval(secs => g)
+        from generate_series(1, 9) g`;
+    await t.db.sql`insert into orbit.usage_ledger (user_id, provider, operation, units, cost_usd, created_at)
+      select null, 'hunter', 'find', 1, 0, date_trunc('month', ${now.toISOString()}::timestamptz) + interval '1 minute'
+        from generate_series(1, 30) g`;
+    // a miss is a row with 0 credits: visible, not counted
+    await recordUsage(t.db, {
+      userId: b,
+      provider: 'hunter',
+      operation: 'find:attempt',
+      units: 0,
+      costUsd: 0,
+    });
+    expect(await checkBudget(t.db, b, { provider: 'hunter', operation: 'find', units: 1 }, now)).toEqual({
+      ok: true,
+    });
+    const first = await reserveUsage(
+      t.db,
+      { userId: b, provider: 'hunter', operation: 'find', units: 1, costUsd: 0 },
+      now,
+    );
+    expect(first.ok).toBe(true);
+    // the reserved credit already counts: the 41st is refused before any call
+    const v = await checkBudget(t.db, b, { provider: 'hunter', operation: 'find', units: 1 }, now);
+    expect(v).toMatchObject({ ok: false, cap: 'hunter_monthly_credits_global', limit: 40 });
+    if (!v.ok) expect(new Date(v.resetsAt).getUTCDate()).toBe(1);
+    // the call missed: settled to an attempt, and the credit is free again
+    if (first.ok) await first.settle({ units: 0, operation: 'find:attempt' });
+    expect(await checkBudget(t.db, b, { provider: 'hunter', operation: 'find', units: 1 }, now)).toEqual({
+      ok: true,
+    });
+    const [n] = await t.db.sql<{ n: number }>`
+      select count(*)::int as n from orbit.usage_ledger where provider = 'hunter' and operation = 'find:attempt'`;
+    expect(n!.n).toBe(2);
+    await t.db.sql`delete from orbit.usage_ledger where provider = 'hunter'`;
+  });
+
+  it('A3: the chat spend today counts toward the combined day cap, not the server-only one', async () => {
+    const u = await makeUser(t.db);
+    const now = new Date();
+    await t.db
+      .sql`select public.orbit_spend_add(${`user:${u}:${now.toISOString().slice(0, 10)}`}, 4.4::numeric)`;
+    // a heavy chat day leaves server drafting open until chat and server together pass $4.50
+    expect(await checkBudget(t.db, u, { provider: 'anthropic', costUsd: 0.05 }, now)).toEqual({ ok: true });
+    expect(await checkBudget(t.db, u, { provider: 'anthropic', costUsd: 0.2 }, now)).toMatchObject({
+      ok: false,
+      cap: 'claude_total_daily_usd',
+    });
+    // yesterday's chat does not count today
+    const tomorrow = new Date(now.getTime() + 86_400_000);
+    expect(await checkBudget(t.db, u, { provider: 'anthropic', costUsd: 0.2 }, tomorrow)).toEqual({
+      ok: true,
+    });
+  });
+
+  it('A5: a switched-off provider answers budget_exceeded and never calls out', async () => {
+    forgetSwitches(t.db);
+    expect([...(await providersOff(t.db))]).toEqual([]);
+    await t.db.sql`update orbit_private.provider_switches set enabled = false where provider = 'hunter'`;
+    // cached for 5 minutes: the flip shows once the cache is past its time
+    expect((await providersOff(t.db)).has('hunter')).toBe(false);
+    forgetSwitches(t.db);
+    expect((await providersOff(t.db)).has('hunter')).toBe(true);
+    const [one] = await t.db.sql<{ on: boolean }>`select public.orbit_provider_enabled('hunter') as on`;
+    expect(one!.on).toBe(false);
+    const [none] = await t.db.sql<{ on: boolean }>`select public.orbit_provider_enabled('nobody') as on`;
+    expect(none!.on).toBe(true);
+    let calls = 0;
+    const hunter = createHunter({
+      fetch: async () => {
+        calls++;
+        return new Response('{}');
+      },
+      apiKey: 'k',
+      gate: async () => !(await providersOff(t.db)).has('hunter'),
+    });
+    const r = await hunter.verifyEmail('a@b.com');
+    expect(r).toMatchObject({ ok: false, kind: 'budget_exceeded', reason: 'off' });
+    expect(calls).toBe(0);
+    await t.db.sql`update orbit_private.provider_switches set enabled = true where provider = 'hunter'`;
+    forgetSwitches(t.db);
   });
 });

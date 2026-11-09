@@ -103,12 +103,13 @@ describe('stable system block', () => {
       expect(text).toMatch(/a company's news or a person's current role is checked on the web/);
     });
 
-    it('puts the student playbook in its own block between the frozen text and the tag rule, uncached on its own', () => {
+    it('puts the student playbook in its own block between the frozen text and the tag rule, with its own cache breakpoint (plan 34 C3)', () => {
       const playbook = 'Playbook. ## Investment banking recruiting\n\nThe timeline runs early.';
       const blocks = systemBlocks('0123456789abcdef', playbook);
       expect(blocks).toHaveLength(3);
       expect(blocks[0]).toEqual({ type: 'text', text, cache_control: { type: 'ephemeral' } });
-      expect(blocks[1]).toEqual({ type: 'text', text: playbook });
+      expect(blocks[1]).toEqual({ type: 'text', text: playbook, cache_control: { type: 'ephemeral' } });
+      expect(blocks[2]!.cache_control).toBeUndefined();
       expect(blocks[2]!.text).toMatch(/0123456789abcdef/);
       // and without one the shape of version 14 holds
       expect(systemBlocks('0123456789abcdef')).toHaveLength(2);

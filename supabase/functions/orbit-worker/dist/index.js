@@ -7,6 +7,14 @@ import { zodOutputFormat } from "npm:@anthropic-ai/sdk@0.133.0/helpers/zod";
 // supabase/functions/_shared/budget.ts
 var CAPS = [
   { id: "claude_daily_usd", provider: "anthropic", measure: "cost_usd", limit: 1.5, window: "day" },
+  {
+    id: "claude_total_daily_usd",
+    provider: "anthropic",
+    measure: "cost_usd",
+    limit: 4.5,
+    window: "day",
+    includeChat: true
+  },
   { id: "exa_daily_usd", provider: "exa", measure: "cost_usd", limit: 0.5, window: "day" },
   { id: "village_daily_credits", provider: "village", measure: "units", limit: 50, window: "day" },
   {
@@ -18,6 +26,14 @@ var CAPS = [
     window: "day"
   },
   { id: "hunter_daily_credits", provider: "hunter", measure: "units", limit: 10, window: "day" },
+  {
+    id: "hunter_monthly_credits_global",
+    provider: "hunter",
+    measure: "units",
+    limit: 40,
+    window: "month",
+    scope: "global"
+  },
   {
     id: "unipile_profile_views_daily",
     provider: "unipile",
@@ -43,6 +59,7 @@ async function checkBudget(db2, userId, spend, now = /* @__PURE__ */ new Date())
     select provider, operation,
            coalesce(sum(units) filter (where created_at >= ${day2}::timestamptz), 0)::text as day_units,
            coalesce(sum(cost_usd) filter (where created_at >= ${day2}::timestamptz), 0)::text as day_usd,
+           coalesce(sum(units), 0)::text as month_units,
            coalesce(sum(cost_usd), 0)::text as month_usd
       from orbit.usage_ledger
      where user_id = ${userId}::uuid and created_at >= ${month}::timestamptz
@@ -71,10 +88,26 @@ async function checkBudget(db2, userId, spend, now = /* @__PURE__ */ new Date())
       used: round(monthTotal),
       resetsAt: windowEnd("month", now).toISOString()
     };
+  let globalRows;
   for (const cap of CAPS) {
     if (cap.provider !== spend.provider) continue;
     if (cap.operation && cap.operation !== spend.operation) continue;
-    const used = rows.filter((r) => r.provider === cap.provider && (!cap.operation || r.operation === cap.operation)).reduce((s, r) => s + Number(cap.measure === "units" ? r.day_units : r.day_usd), 0);
+    let source = rows;
+    if (cap.scope === "global") {
+      globalRows ??= await db2.sql`
+        select provider, operation,
+               coalesce(sum(units) filter (where created_at >= ${day2}::timestamptz), 0)::text as day_units,
+               coalesce(sum(cost_usd) filter (where created_at >= ${day2}::timestamptz), 0)::text as day_usd,
+               coalesce(sum(units), 0)::text as month_units,
+               coalesce(sum(cost_usd), 0)::text as month_usd
+          from orbit.usage_ledger
+         where provider = ${spend.provider} and created_at >= ${month}::timestamptz
+         group by provider, operation`;
+      source = globalRows;
+    }
+    const field = cap.window === "month" ? cap.measure === "units" ? "month_units" : "month_usd" : cap.measure === "units" ? "day_units" : "day_usd";
+    let used = source.filter((r) => r.provider === cap.provider && (!cap.operation || r.operation === cap.operation)).reduce((s, r) => s + Number(r[field]), 0);
+    if (cap.includeChat) used += await chatSpendToday(db2, userId, now);
     const add2 = cap.measure === "units" ? spend.units ?? 1 : spend.costUsd ?? 0;
     if (used + add2 > cap.limit || used >= cap.limit && add2 === 0)
       return {
@@ -88,11 +121,48 @@ async function checkBudget(db2, userId, spend, now = /* @__PURE__ */ new Date())
   }
   return { ok: true };
 }
+async function chatSpendToday(db2, userId, now) {
+  const subject = `user:${userId}:${now.toISOString().slice(0, 10)}`;
+  try {
+    const [r] = await db2.sql`
+      select usd::text as usd from public.orbit_proxy_spend where subject = ${subject}`;
+    return Number(r?.usd ?? 0);
+  } catch {
+    return 0;
+  }
+}
 async function recordUsage(db2, entry) {
-  await db2.sql`
+  const rows = await db2.sql`
     insert into orbit.usage_ledger (user_id, provider, operation, units, cost_usd)
     values (${entry.userId}::uuid, ${entry.provider}, ${entry.operation}, ${entry.units}::numeric,
-            ${round(entry.costUsd)}::numeric)`;
+            ${round(entry.costUsd)}::numeric)
+    returning id::text as id`;
+  return rows[0]?.id;
+}
+async function settleUsage(db2, id, actual) {
+  await db2.sql`
+    update orbit.usage_ledger set units = ${actual.units}::numeric,
+           cost_usd = coalesce(${actual.costUsd === void 0 ? null : round(actual.costUsd)}::numeric, cost_usd),
+           operation = coalesce(${actual.operation ?? null}, operation)
+     where id = ${id}::bigint`;
+}
+async function reserveUsage(db2, entry, now = /* @__PURE__ */ new Date()) {
+  if (entry.userId) {
+    const v = await checkBudget(
+      db2,
+      entry.userId,
+      { provider: entry.provider, operation: entry.operation, units: entry.units, costUsd: entry.costUsd },
+      now
+    );
+    if (!v.ok) return { ok: false, verdict: v };
+  }
+  const id = await recordUsage(db2, entry);
+  return {
+    ok: true,
+    async settle(actual) {
+      if (id) await settleUsage(db2, id, actual);
+    }
+  };
 }
 var round = (n) => Math.round(n * 1e5) / 1e5;
 
@@ -133,11 +203,19 @@ var TASKS = {
   // the brief reads compact facts, not raw pages: the mid model writes it for about a tenth of the writing model's price
   research_brief: { model: "claude-sonnet-5-5", maxTokens: 8e3, flatNullable: true }
 };
+var NO_RETRY_TASKS = /* @__PURE__ */ new Set([
+  "classify",
+  "reply_classify",
+  "fit",
+  "reading"
+]);
 function makeClaude(deps) {
   const client = deps.apiKey ? deps.client ?? new Anthropic({ apiKey: deps.apiKey, fetch: deps.fetch, maxRetries: 2 }) : void 0;
   const now = deps.now ?? (() => /* @__PURE__ */ new Date());
   async function structured(req) {
     if (!client) return { ok: false, unconfigured: true };
+    if (deps.enabled && !await deps.enabled().catch(() => true))
+      return { ok: false, budgetExceeded: true, cap: "provider_off", resetsAt: "9999-12-31T00:00:00.000Z" };
     const setting = TASKS[req.task];
     if (deps.db && req.userId) {
       const verdict = await checkBudget(
@@ -179,7 +257,7 @@ function makeClaude(deps) {
         await recordUsage(deps.db, {
           userId: req.userId,
           provider: "anthropic",
-          operation: req.task,
+          operation: attempt === 0 ? req.task : `${req.task}:retry`,
           units: usage.input_tokens + usage.output_tokens,
           costUsd: cost
         });
@@ -187,14 +265,15 @@ function makeClaude(deps) {
         const details = msg.stop_details;
         return { ok: false, refused: true, category: details?.category ?? null };
       }
+      const parsed2 = msg.parsed_output;
       if (msg.stop_reason === "max_tokens") {
-        if (attempt === 0) {
+        if (parsed2?.ok) return { ok: true, data: parsed2.value, model: setting.model, costUsd: cost, usage };
+        if (attempt === 0 && !NO_RETRY_TASKS.has(req.task)) {
           maxTokens *= 2;
           continue;
         }
         return { ok: false, error: "max_tokens" };
       }
-      const parsed2 = msg.parsed_output;
       if (!parsed2?.ok) return { ok: false, error: "invalid_output", detail: parsed2?.error?.slice(0, 200) };
       return { ok: true, data: parsed2.value, model: setting.model, costUsd: cost, usage };
     }
@@ -404,14 +483,14 @@ async function refreshAccessToken(cfg, refreshToken) {
   }
 }
 function googleTokenSource(cfg, deps) {
-  const cache2 = /* @__PURE__ */ new Map();
+  const cache3 = /* @__PURE__ */ new Map();
   const clock = () => (cfg.now ?? (() => /* @__PURE__ */ new Date()))().getTime();
   return {
     invalidate: (userId) => {
-      cache2.delete(userId);
+      cache3.delete(userId);
     },
     async accessToken(userId) {
-      const hit = cache2.get(userId);
+      const hit = cache3.get(userId);
       if (hit && hit.until > clock()) return hit.token;
       const [acct] = await deps.db.sql`
         select token_secret_id, status from orbit.integration_accounts
@@ -422,7 +501,7 @@ function googleTokenSource(cfg, deps) {
       if (!refresh) throw new NeedsReauth();
       try {
         const t = await refreshAccessToken(cfg, refresh);
-        cache2.set(userId, { token: t.access_token, until: clock() + Math.max(0, t.expires_in - 300) * 1e3 });
+        cache3.set(userId, { token: t.access_token, until: clock() + Math.max(0, t.expires_in - 300) * 1e3 });
         return t.access_token;
       } catch (e) {
         if (e instanceof NeedsReauth)
@@ -512,6 +591,14 @@ function backoffMs(attempt, random) {
   return Math.round(base * (1 + 0.25 * random()));
 }
 async function requestJson(opts, spec) {
+  if (opts.gate && !await opts.gate().catch(() => true))
+    return {
+      ok: false,
+      kind: "budget_exceeded",
+      provider: spec.provider,
+      reason: "off",
+      message: `${spec.provider}: switched off`
+    };
   const sleep = opts.sleep ?? defaultSleep;
   const random = opts.random ?? Math.random;
   const clock = opts.clock ?? Date.now;
@@ -1505,6 +1592,7 @@ var KIND_QUEUE = {
   company_facts_sync: "orbit_enrich",
   search_census: "orbit_enrich",
   search_reading: "orbit_enrich",
+  "cost.digest": "orbit_enrich",
   noop: "orbit_enrich"
 };
 function queueFor(kind) {
@@ -1540,6 +1628,21 @@ function sqlQueue(db2) {
       await db2.sql`select msg_id from pgmq.set_vt(${queue}, ${msgId}::bigint, ${Math.floor(vtSec)}::int)`;
     }
   };
+}
+
+// supabase/functions/_shared/switches.ts
+var SWITCH_TTL_MS = 5 * 6e4;
+var cache = /* @__PURE__ */ new WeakMap();
+function providersOff(db2, clock = Date.now) {
+  const hit = cache.get(db2);
+  if (hit && clock() - hit.at < SWITCH_TTL_MS) return hit.off;
+  const off = db2.sql`select public.orbit_providers_off() as off`.then((rows) => new Set(rows[0]?.off ?? [])).catch(() => /* @__PURE__ */ new Set());
+  cache.set(db2, { at: clock(), off });
+  return off;
+}
+function switchGate(db2, provider, clock) {
+  if (!db2) return void 0;
+  return async () => !(await providersOff(db2, clock)).has(provider);
 }
 
 // supabase/functions/_shared/vault.ts
@@ -1614,6 +1717,7 @@ function makeServices(cfg, base) {
   const now = base.now ?? (() => /* @__PURE__ */ new Date());
   const doFetch = cfg.fetch ?? ((...a) => fetch(...a));
   const p = { fetch: doFetch, sleep: cfg.sleep, random: cfg.random, clock: () => now().getTime() };
+  const gate = (name) => switchGate(base.db, name);
   const env2 = cfg.env;
   const google = googleConfigOf(env2, doFetch, now);
   let tokens2 = cfg.tokens;
@@ -1634,16 +1738,22 @@ function makeServices(cfg, base) {
       db: base.db,
       fetch: cfg.fetch,
       now,
-      client: cfg.anthropic
+      client: cfg.anthropic,
+      enabled: gate("anthropic")
     }),
-    exa: createExa({ ...p, apiKey: env2.exaKey }),
-    unipile: createUnipileResearch({ ...p, apiKey: env2.unipileKey, baseUrl: env2.unipileBase }),
-    apollo: createApollo({ ...p, apiKey: env2.apolloKey }),
-    hunter: createHunter({ ...p, apiKey: env2.hunterKey }),
+    exa: createExa({ ...p, apiKey: env2.exaKey, gate: gate("exa") }),
+    unipile: createUnipileResearch({
+      ...p,
+      apiKey: env2.unipileKey,
+      baseUrl: env2.unipileBase,
+      gate: gate("unipile_reads")
+    }),
+    apollo: createApollo({ ...p, apiKey: env2.apolloKey, gate: gate("apollo") }),
+    hunter: createHunter({ ...p, apiKey: env2.hunterKey, gate: gate("hunter") }),
     semanticScholar: createSemanticScholar({ ...p, apiKey: env2.semanticScholarKey, anonymous: true }),
     village: villageFor(
       cfg,
-      () => createVillage({ ...p, secretKey: env2.villageKey, baseUrl: env2.villageBase })
+      () => createVillage({ ...p, secretKey: env2.villageKey, baseUrl: env2.villageBase, gate: gate("village") })
     ),
     embed: cfg.embed ?? supabaseEmbed(),
     mailer: makeMailer(env2, doFetch),
@@ -1672,7 +1782,9 @@ var AGENT_SECRET_NAMES = [
   "VILLAGE_SECRET_KEY",
   "VILLAGE_BASE_URL",
   "RESEND_API_KEY",
-  "RESEND_FROM"
+  "RESEND_FROM",
+  "SERPER_API_KEY",
+  "PARALLEL_API_KEY"
 ];
 async function agentEnvWithSecrets(get, db2) {
   const stored = /* @__PURE__ */ new Map();
@@ -1703,8 +1815,204 @@ function agentEnvFrom(get) {
     googleClientSecret: get("ORBIT_GOOGLE_CLIENT_SECRET"),
     googleRedirectUri: get("ORBIT_GOOGLE_REDIRECT_URI") ?? (supabaseUrl ? `${supabaseUrl}/functions/v1/orbit-api/auth/google/callback` : void 0),
     resendKey: get("RESEND_API_KEY"),
-    resendFrom: get("RESEND_FROM")
+    resendFrom: get("RESEND_FROM"),
+    serperKey: get("SERPER_API_KEY"),
+    parallelKey: get("PARALLEL_API_KEY")
   };
+}
+
+// supabase/functions/orbit-worker/handlers/cost.ts
+var DEFAULT_COST_THRESHOLDS = {
+  anthropicUsdDay: 5,
+  hunterMonthCredits: 30,
+  linkedinShare: 0.9,
+  isolateDeaths: 5,
+  deadLetters: 5
+};
+var LINKEDIN_LEDGER_TOTALS = {
+  profile: 100,
+  posts: 100,
+  search: 100,
+  company: 150
+};
+var num = (v) => v == null ? 0 : Number(v);
+var round2 = (v, d = 5) => Math.round(v * 10 ** d) / 10 ** d;
+async function buildCostDigest(db2, now, thresholds) {
+  const end = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
+  const start = new Date(end.getTime() - 864e5);
+  const day2 = start.toISOString().slice(0, 10);
+  const monthStart = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1));
+  const spend = await db2.sql`
+    select source, provider, operation, sum(calls) as calls, sum(units) as units, sum(usd) as usd,
+           sum(input_tokens) as input_tokens, sum(cache_read_tokens) as cache_read_tokens,
+           sum(cache_write_tokens) as cache_write_tokens, sum(output_tokens) as output_tokens,
+           sum(web_searches) as web_searches
+      from orbit.v_spend_daily where day = ${day2}::date
+     group by source, provider, operation order by sum(usd) desc nulls last`;
+  const priced = spend.filter((r) => r.source !== "claude_usage");
+  const providers = priced.map((r) => ({
+    source: r.source,
+    provider: r.provider,
+    operation: r.operation,
+    calls: num(r.calls),
+    units: r.units == null ? null : num(r.units),
+    usd: round2(num(r.usd))
+  }));
+  const totalUsd = round2(providers.reduce((a, r) => a + r.usd, 0));
+  const anthropicUsd = round2(
+    providers.filter((r) => r.provider === "anthropic").reduce((a, r) => a + r.usd, 0)
+  );
+  const tokens2 = spend.filter((r) => r.source === "claude_usage");
+  const t = (k) => tokens2.reduce((a, r) => a + num(r[k]), 0);
+  const chat = tokens2.length ? {
+    answers: t("calls"),
+    inputTokens: t("input_tokens"),
+    cacheReadTokens: t("cache_read_tokens"),
+    cacheWriteTokens: t("cache_write_tokens"),
+    outputTokens: t("output_tokens"),
+    webSearches: t("web_searches"),
+    cacheReadShare: (() => {
+      const all = t("cache_read_tokens") + t("cache_write_tokens") + t("input_tokens");
+      return all ? round2(t("cache_read_tokens") / all, 3) : null;
+    })()
+  } : null;
+  const userRows = await db2.sql`
+    with l as (
+      select user_id::text as user_id, sum(cost_usd) as usd from orbit.usage_ledger
+       where created_at >= ${start}::timestamptz and created_at < ${end}::timestamptz and user_id is not null
+       group by 1),
+    c as (
+      select substring(subject from '^user:([0-9a-f-]{36}):') as user_id, sum(usd) as usd
+        from public.orbit_proxy_spend where subject like ${`user:%:${day2}`} group by 1)
+    select coalesce(l.user_id, c.user_id) as user_id, coalesce(l.usd, 0) as ledger, coalesce(c.usd, 0) as chat
+      from l full join c on c.user_id = l.user_id`;
+  const users = userRows.map((r) => ({
+    userId: r.user_id,
+    ledgerUsd: round2(num(r.ledger)),
+    chatUsd: round2(num(r.chat)),
+    totalUsd: round2(num(r.ledger) + num(r.chat))
+  })).sort((a, b) => b.totalUsd - a.totalUsd);
+  const [hunter] = await db2.sql`
+    select sum(units) as credits from orbit.usage_ledger
+     where provider = 'hunter' and created_at >= ${monthStart}::timestamptz`;
+  const hunterMonthCredits = round2(num(hunter?.credits), 2);
+  const buckets = await db2.sql`
+    select bucket, count from public.orbit_proxy_counters where bucket like ${`connectors:li:%:${day2}:%`}`;
+  const linkedin = buckets.map((b) => {
+    const [, , kind = "", , accountId = ""] = b.bucket.split(":");
+    const total = LINKEDIN_LEDGER_TOTALS[kind] ?? 100;
+    return { kind, accountId, count: num(b.count), total, share: round2(num(b.count) / total, 3) };
+  }).sort((a, b) => b.share - a.share);
+  const linkedinPeakShare = linkedin.length ? linkedin[0].share : null;
+  const kinds = await db2.sql`
+    select kind, count(*) as runs, count(*) filter (where status = 'error') as errors,
+           count(*) filter (where error = 'died with the isolate') as deaths
+      from orbit.job_runs where started_at >= ${start}::timestamptz and started_at < ${end}::timestamptz
+     group by kind order by count(*) desc`;
+  const [dl] = await db2.sql`
+    select count(*) as n from orbit.dead_letters
+     where created_at >= ${start}::timestamptz and created_at < ${end}::timestamptz`;
+  const jobs = {
+    runs: kinds.reduce((a, r) => a + num(r.runs), 0),
+    errors: kinds.reduce((a, r) => a + num(r.errors), 0),
+    isolateDeaths: kinds.reduce((a, r) => a + num(r.deaths), 0),
+    deadLetters: num(dl?.n),
+    byKind: kinds.map((r) => ({ kind: r.kind, runs: num(r.runs), errors: num(r.errors) }))
+  };
+  let switchedOff = [];
+  const [sw] = await db2.sql`select to_regclass('orbit_private.provider_switches') is not null as ok`;
+  if (sw?.ok)
+    switchedOff = (await db2.sql`
+        select provider from orbit_private.provider_switches where not enabled order by provider`).map((r) => r.provider);
+  const crossed = [];
+  const check = (key2, value, limit2) => {
+    if (value != null && value > limit2) crossed.push({ key: key2, value, limit: limit2 });
+  };
+  check("anthropicUsdDay", anthropicUsd, thresholds.anthropicUsdDay);
+  check("hunterMonthCredits", hunterMonthCredits, thresholds.hunterMonthCredits);
+  check("linkedinShare", linkedinPeakShare, thresholds.linkedinShare);
+  check("isolateDeaths", jobs.isolateDeaths, thresholds.isolateDeaths);
+  check("deadLetters", jobs.deadLetters, thresholds.deadLetters);
+  check("switchedOff", switchedOff.length, 0);
+  return {
+    day: day2,
+    totalUsd,
+    anthropicUsd,
+    providers,
+    users,
+    chat,
+    hunterMonthCredits,
+    linkedin,
+    linkedinPeakShare,
+    jobs,
+    switchedOff,
+    unipileAccounts: null,
+    thresholds,
+    crossed,
+    mailed: false
+  };
+}
+var LABELS = {
+  anthropicUsdDay: "Anthropic spend in the day ($)",
+  hunterMonthCredits: "Hunter credits this month",
+  linkedinShare: "Fullest LinkedIn ledger (share of the daily total)",
+  isolateDeaths: "Worker runs that died with the isolate",
+  deadLetters: "Dead letters",
+  switchedOff: "Providers switched off"
+};
+function costDigestText(d) {
+  const lines = [
+    `Orbit spend for ${d.day} (UTC)`,
+    "",
+    "Over the line:",
+    ...d.crossed.map((c) => `- ${LABELS[c.key] ?? c.key}: ${c.value} (limit ${c.limit})`),
+    "",
+    `Total recorded: $${d.totalUsd.toFixed(2)}. Anthropic: $${d.anthropicUsd.toFixed(2)}.`,
+    `Hunter credits this month: ${d.hunterMonthCredits}.`,
+    `Jobs: ${d.jobs.runs} runs, ${d.jobs.errors} errors, ${d.jobs.isolateDeaths} isolate deaths, ${d.jobs.deadLetters} dead letters.`
+  ];
+  if (d.switchedOff.length) lines.push(`Switched off: ${d.switchedOff.join(", ")}.`);
+  if (d.providers.length) {
+    lines.push("", "By provider:");
+    for (const p of d.providers.slice(0, 12))
+      lines.push(`- ${p.provider} ${p.operation}: $${p.usd.toFixed(4)} over ${p.calls} calls`);
+  }
+  lines.push("", "The full digest is in the audit log (action cost.digest).");
+  return lines.join("\n");
+}
+function costHandlers(deps = {}) {
+  return {
+    "cost.digest": async (_job, ctx) => {
+      const thresholds = { ...DEFAULT_COST_THRESHOLDS, ...deps.thresholds };
+      const digest = await buildCostDigest(ctx.db, ctx.now(), thresholds);
+      if (digest.crossed.length) {
+        if (!deps.mailer?.configured) digest.mailError = "no_mailer";
+        else if (!deps.ownerId) digest.mailError = "no_owner";
+        else {
+          const [owner] = await ctx.db.sql`
+            select email from orbit.users where id = ${deps.ownerId}::uuid and deleted_at is null`;
+          if (!owner) digest.mailError = "no_owner";
+          else {
+            const sent = await deps.mailer.send({
+              to: owner.email,
+              subject: `Orbit spend ${digest.day}: ${digest.crossed.length} over the line`,
+              text: costDigestText(digest)
+            });
+            digest.mailed = sent.ok;
+            if (!sent.ok) digest.mailError = sent.error;
+          }
+        }
+      }
+      await ctx.db.sql`
+        insert into orbit.audit_log (user_id, actor, action, target_table, target_id, details)
+        values (null, 'system', 'cost.digest', 'v_spend_daily', ${digest.day}, ${JSON.stringify(digest)}::jsonb)`;
+    }
+  };
+}
+
+// supabase/functions/_shared/paid.ts
+function isPaidError(err) {
+  return !!err && typeof err === "object" && err.paid === true;
 }
 
 // packages/core/src/drafts/sector.ts
@@ -7082,7 +7390,7 @@ function isoRow(r) {
   for (const [k, v] of Object.entries(r)) out[k] = v instanceof Date ? v.toISOString() : v;
   return out;
 }
-var num = (v, fallback = 0) => {
+var num2 = (v, fallback = 0) => {
   const n = Number(v);
   return Number.isFinite(n) ? n : fallback;
 };
@@ -9564,13 +9872,13 @@ function transliterateChar(cp) {
     const out = `${HANGUL_INITIALS[l]}${HANGUL_VOWELS[v]}${HANGUL_FINALS[t]}`;
     return out.charAt(0).toUpperCase() + out.slice(1);
   }
-  const num2 = cp >>> 8;
-  let b = blocks.get(num2);
+  const num3 = cp >>> 8;
+  let b = blocks.get(num3);
   if (!b) {
-    const raw = TRANSLIT_BLOCKS[num2];
+    const raw = TRANSLIT_BLOCKS[num3];
     if (raw === void 0) return "";
     b = raw.split("	");
-    blocks.set(num2, b);
+    blocks.set(num3, b);
   }
   return b[cp & 255] ?? "";
 }
@@ -9596,14 +9904,14 @@ function foldWord(s) {
 function foldWords(s) {
   return transliterate(s).toLowerCase().split(/[\s\-‐–—_]+/).map((w) => w.replace(/[^a-z]/g, "")).filter(Boolean);
 }
-var cache = /* @__PURE__ */ new Map();
+var cache2 = /* @__PURE__ */ new Map();
 function foldName(name) {
   const key2 = typeof name === "string" || !name ? `w\0${name ?? ""}` : `p\0${name.first}\0${name.last}\0${name.full}`;
-  const hit = cache.get(key2);
+  const hit = cache2.get(key2);
   if (hit) return hit;
   const folded = fold(typeof name === "string" || !name ? parseName(name) : name);
-  if (cache.size > 5e4) cache.clear();
-  cache.set(key2, folded);
+  if (cache2.size > 5e4) cache2.clear();
+  cache2.set(key2, folded);
   return folded;
 }
 function fold(parts) {
@@ -10656,11 +10964,11 @@ async function embedMessages(db2, embed, rows) {
   }
   return n;
 }
-async function embedSent(db2, embed, userId, limit = EMBED_SENT_LIMIT) {
+async function embedSent(db2, embed, userId, limit2 = EMBED_SENT_LIMIT) {
   const rows = await db2.sql`
     select id, body_text from orbit.messages
      where user_id = ${userId}::uuid and direction = 'out' and body_text is not null and not is_automated
-     order by sent_at desc limit ${limit}::int`;
+     order by sent_at desc limit ${limit2}::int`;
   const todo = rows.filter((r) => r.body_text);
   const missing = await db2.sql`
     select id from orbit.messages where id = any(${todo.map((r) => r.id)}::uuid[]) and embedding is null`;
@@ -10952,7 +11260,7 @@ async function exemplars(s, userId, personId, situation, opts = {}) {
     q = null;
   }
   if (!q?.length) return [];
-  const limit = opts.limit ?? 3;
+  const limit2 = opts.limit ?? 3;
   const pick = (onlyReplies) => s.db.sql`
     select m.id, m.body_text, m.to_person_ids from orbit.messages m
      where m.user_id = ${userId}::uuid and m.direction = 'out' and m.embedding is not null
@@ -10960,11 +11268,11 @@ async function exemplars(s, userId, personId, situation, opts = {}) {
        and coalesce(array_length(regexp_split_to_array(btrim(m.body_text), '\\s+'), 1), 0) >= 25
        and (${onlyReplies}::boolean = false or m.in_reply_to is not null)
      order by m.embedding <=> ${vec(q)}::vector
-     limit ${limit}::int`;
+     limit ${limit2}::int`;
   let rows = await pick(!!opts.replies);
-  if (opts.replies && rows.length < limit) {
+  if (opts.replies && rows.length < limit2) {
     const more = await pick(false);
-    rows = [...rows, ...more.filter((m) => !rows.some((r) => r.id === m.id))].slice(0, limit);
+    rows = [...rows, ...more.filter((m) => !rows.some((r) => r.id === m.id))].slice(0, limit2);
   }
   const ids = [...new Set(rows.flatMap((r) => r.to_person_ids ?? []))];
   const names = ids.length ? await s.db.sql`
@@ -14277,7 +14585,7 @@ function underMode(rows, mode, domains) {
     (r) => r.company_domain && want.has(r.company_domain.toLowerCase()) || r.company && names.has(normalizeCompany(r.company))
   );
 }
-async function refreshFriendShares(db2, ownerId, now) {
+async function refreshFriendShares(db2, ownerId2, now) {
   const rows = await db2.sql`
     select p.id, p.display_name, p.title, p.headline, p.org_raw, o.name as org_name, o.domains, p.school, p.is_alumni,
            p.linkedin_member_id, p.linkedin_slug, p.primary_email, ts.share_score::int as share_score,
@@ -14286,11 +14594,11 @@ async function refreshFriendShares(db2, ownerId, now) {
       left join orbit.organizations o on o.id = p.org_id
       left join orbit.tie_scores ts on ts.user_id = p.user_id and ts.person_id = p.id
       left join orbit.tie_labels tl on tl.user_id = p.user_id and tl.person_id = p.id
-     where p.user_id = ${ownerId}::uuid and not p.is_self and p.deleted_at is null and p.merged_into is null
+     where p.user_id = ${ownerId2}::uuid and not p.is_self and p.deleted_at is null and p.merged_into is null
        and p.hidden_at is null and not p.do_not_contact and not p.private`;
   const identities = await db2.sql`
     select person_id, kind, value_norm from orbit.person_identities
-     where user_id = ${ownerId}::uuid and kind in ('email', 'linkedin_member', 'linkedin_slug')`;
+     where user_id = ${ownerId2}::uuid and kind in ('email', 'linkedin_member', 'linkedin_slug')`;
   const byPerson = /* @__PURE__ */ new Map();
   for (const i of identities) {
     const cur = byPerson.get(i.person_id) ?? {};
@@ -14309,7 +14617,7 @@ async function refreshFriendShares(db2, ownerId, now) {
     if (!member && !slug && !hash) continue;
     const closeness = r.share_score !== null ? shareCloseness(r.share_score) : r.label && TIE_LABEL_MIDPOINTS[r.label] !== void 0 ? shareCloseness(TIE_LABEL_MIDPOINTS[r.label]) : 1;
     out.push({
-      owner_user_id: ownerId,
+      owner_user_id: ownerId2,
       person_id: r.id,
       display_name: r.display_name,
       title: r.title ?? r.headline ?? null,
@@ -14324,14 +14632,14 @@ async function refreshFriendShares(db2, ownerId, now) {
     });
   }
   await db2.begin(async (tx) => {
-    await tx.sql`delete from orbit.friend_shares where owner_user_id = ${ownerId}::uuid`;
+    await tx.sql`delete from orbit.friend_shares where owner_user_id = ${ownerId2}::uuid`;
     for (let i = 0; i < out.length; i += 500) {
       const json2 = JSON.stringify(out.slice(i, i + 500));
       await tx.sql`
         insert into orbit.friend_shares (owner_user_id, person_id, display_name, title, company, company_domain,
                                          linkedin_member_id, linkedin_slug, email_hash, school, is_alumni, closeness,
                                          updated_at)
-        select ${ownerId}::uuid, (r ->> 'person_id')::uuid, r ->> 'display_name', r ->> 'title', r ->> 'company',
+        select ${ownerId2}::uuid, (r ->> 'person_id')::uuid, r ->> 'display_name', r ->> 'title', r ->> 'company',
                r ->> 'company_domain', r ->> 'linkedin_member_id', r ->> 'linkedin_slug', r ->> 'email_hash',
                r ->> 'school', (r ->> 'is_alumni')::boolean, (r ->> 'closeness')::smallint, ${now}::timestamptz
           from jsonb_array_elements(${json2}::jsonb) r`;
@@ -14339,13 +14647,13 @@ async function refreshFriendShares(db2, ownerId, now) {
   });
   return out.length;
 }
-function shareRefreshKey(ownerId, now, why = "change") {
-  return `friends:refresh:${ownerId}:${why}:${now.getTime()}`;
+function shareRefreshKey(ownerId2, now, why = "change") {
+  return `friends:refresh:${ownerId2}:${why}:${now.getTime()}`;
 }
-async function hasActiveFriend(db2, ownerId) {
+async function hasActiveFriend(db2, ownerId2) {
   const [r] = await db2.sql`
     select exists (select 1 from orbit.friendships f
-                    where f.status = 'active' and (f.a = ${ownerId}::uuid or f.b = ${ownerId}::uuid)) as ok`;
+                    where f.status = 'active' and (f.a = ${ownerId2}::uuid or f.b = ${ownerId2}::uuid)) as ok`;
   return !!r?.ok;
 }
 async function sharingFriends(db2, viewerId) {
@@ -14442,6 +14750,8 @@ function spendOf(p, estimate) {
   switch (p) {
     case "claude":
     case "exa":
+    case "serper":
+    case "parallel":
       return { provider, operation, costUsd: estimate };
     case "village":
       return { provider, operation, units: estimate, costUsd: estimate * VILLAGE_USD_PER_CREDIT };
@@ -14472,6 +14782,16 @@ function sqlBudget(db2, now) {
     async record(userId, e) {
       const { provider, operation } = ledgerName(e.provider, e.operation);
       await recordUsage(db2, { userId, provider, operation, units: e.units, costUsd: e.costUsd });
+    },
+    async reserve(userId, e) {
+      const { provider, operation } = ledgerName(e.provider, e.operation);
+      const r = await reserveUsage(
+        db2,
+        { userId, provider, operation, units: e.units, costUsd: e.costUsd },
+        now()
+      );
+      if (!r.ok) return { ok: false, reason: "budget_exceeded", resetsAt: r.verdict.resetsAt };
+      return { ok: true, settle: (actual) => r.settle(actual) };
     }
   };
 }
@@ -14495,9 +14815,9 @@ function sqlCache(db2, now) {
   };
 }
 function sqlResearchDb(db2, now) {
-  const cache2 = sqlCache(db2, now);
+  const cache3 = sqlCache(db2, now);
   return {
-    ...cache2,
+    ...cache3,
     internalHistory: (userId, personId) => internalHistory(db2, userId, personId),
     async getDossier(userId, personId) {
       const [r] = await db2.sql`
@@ -14511,7 +14831,7 @@ function sqlResearchDb(db2, now) {
         content: r.content ?? null,
         sources: r.sources ?? [],
         candidates: r.candidates ?? null,
-        cost_usd: num(r.cost_usd),
+        cost_usd: num2(r.cost_usd),
         model: r.model ?? null,
         prompt_version: r.prompt_version ?? null,
         error: r.error ?? null,
@@ -15260,16 +15580,16 @@ var HOP_JOB_MUTUALS = 25;
 var HOP_PACE_MS = [400, 1500];
 var dayStart = (d) => new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()));
 var SHARED_LEDGER_PER_DAY = { profile: 100, posts: 100 };
-function sharedLedgerBucket(kind, accountId, now, limit) {
+function sharedLedgerBucket(kind, accountId, now, limit2) {
   const day2 = now.toISOString().slice(0, 10);
   const end = /* @__PURE__ */ new Date(`${day2}T00:00:00Z`);
   end.setUTCDate(end.getUTCDate() + 1);
-  return { key: `connectors:li:${kind}:${day2}:${accountId}`, limit, expires: end.toISOString() };
+  return { key: `connectors:li:${kind}:${day2}:${accountId}`, limit: limit2, expires: end.toISOString() };
 }
 function sqlHopBudget(db2, now, opts = {}) {
-  const limit = opts.limit ?? HOP_READS_PER_DAY;
+  const limit2 = opts.limit ?? HOP_READS_PER_DAY;
   const shared = opts.shared ?? SHARED_LEDGER_PER_DAY;
-  const take = sqlTake(db2);
+  const take2 = sqlTake(db2);
   return {
     async take(accountId, userId, ledger) {
       const t = now();
@@ -15277,12 +15597,12 @@ function sqlHopBudget(db2, now, opts = {}) {
         select coalesce(sum(units), 0)::int as n from orbit.usage_ledger
          where account_id = ${accountId} and provider = 'unipile' and operation = ${HOP_READ_OPERATION}
            and created_at >= ${dayStart(t)}::timestamptz`;
-      if ((r?.n ?? 0) >= limit) return false;
+      if ((r?.n ?? 0) >= limit2) return false;
       const b = sharedLedgerBucket(ledger, accountId, t, shared[ledger]);
       const [used] = await db2.sql`
         select count from public.orbit_proxy_counters where bucket = ${b.key} and expires_at >= ${t}::timestamptz`;
       if ((used?.count ?? 0) >= b.limit) return false;
-      if (!(await take([b])).allowed) return false;
+      if (!(await take2([b])).allowed) return false;
       await db2.sql`
         insert into orbit.usage_ledger (user_id, provider, operation, units, cost_usd, account_id, created_at)
         values (${userId}::uuid, 'unipile', ${HOP_READ_OPERATION}, 1, 0, ${accountId}, ${t}::timestamptz)`;
@@ -15370,12 +15690,12 @@ async function runHopEvidenceJob(s, userId, payload) {
   const followers = {};
   for (const r2 of rows)
     if (typeof r2.linkedin_follower_count === "number") followers[r2.id] = r2.linkedin_follower_count;
-  const cache2 = sqlCache(s.db, s.now);
+  const cache3 = sqlCache(s.db, s.now);
   const [lo, hi] = HOP_PACE_MS;
   const r = await gatherHopEvidence(
     {
       unipile: s.unipile,
-      cache: cache2,
+      cache: cache3,
       budget: sqlHopBudget(s.db, s.now),
       clock: () => s.now().getTime(),
       pace: () => s.sleep(lo + Math.floor(s.random() * (hi - lo)))
@@ -15397,7 +15717,7 @@ async function runHopEvidenceJob(s, userId, payload) {
         linkedin_connections_count = coalesce(${r.target.connections ?? null}::int, linkedin_connections_count)
        where id = ${targetId}::uuid and user_id = ${userId}::uuid`;
   if (r.complete)
-    await cache2.put(userId, {
+    await cache3.put(userId, {
       key: await doneKey(accountId, t.linkedin_member_id),
       provider: "unipile",
       response: { at: now.toISOString(), reads: r.reads },
@@ -15456,7 +15776,7 @@ async function loadGraph(db2, userId, now) {
       name: r.first_name ?? r.display_name.split(/\s+/)[0],
       displayName: r.display_name,
       score: r.score ?? 0,
-      reciprocity: num(r.features?.reciprocity),
+      reciprocity: num2(r.features?.reciprocity),
       sharesGoalTargetOrg: !!org && targetOrgs.has(org.toLowerCase().trim()),
       askedRecently: mine.some((i) => now.getTime() - new Date(i.asked_at).getTime() < 30 * DAY11),
       introducedUserBefore: mine.some((i) => i.status === "intro_made" || i.status === "meeting"),
@@ -15484,8 +15804,8 @@ async function loadGraph(db2, userId, now) {
       aId: t.a_person_id,
       bId: t.b_person_id,
       kind: t.kind,
-      weight: num(t.weight),
-      confidence: num(t.confidence),
+      weight: num2(t.weight),
+      confidence: num2(t.confidence),
       evidence: t.evidence ?? {},
       firstSeenAt: iso(t.first_seen_at) ?? void 0,
       lastSeenAt: iso(t.last_seen_at) ?? void 0
@@ -17213,7 +17533,7 @@ async function loadCadence(db2, userId, now) {
   const awaiting = await db2.sql`
     select distinct person_id from orbit.suggestions
      where user_id = ${userId}::uuid and kind = 'needs_you' and status in ('pending', 'snoozed') and person_id is not null`;
-  const maxBumps = num(settings.max_bumps, 2);
+  const maxBumps = num2(settings.max_bumps, 2);
   const quiet = typeof settings.quiet_until === "string" ? settings.quiet_until : void 0;
   return {
     input: {
@@ -17231,7 +17551,7 @@ async function loadCadence(db2, userId, now) {
     goalsById: new Map(goals.map((g) => [g.id, g])),
     settings,
     awaitingStudent: new Set(awaiting.map((r) => r.person_id)),
-    autonomyLevel: num(u2?.autonomy_level, 0),
+    autonomyLevel: num2(u2?.autonomy_level, 0),
     autoKinds: Array.isArray(settings.auto_kinds) ? settings.auto_kinds.filter(
       (k) => typeof k === "string" && AUTO_KINDS.includes(k)
     ) : [],
@@ -17732,19 +18052,22 @@ function scorePage(page2, card) {
 
 // supabase/functions/_shared/research/prompts.ts
 var PROMPT_VERSION2 = "dossier-v3";
-function dossierSystem(userFirstName2, goalSentence2) {
-  return [
-    `You write a research brief about one person for ${userFirstName2}, who wants to ${goalSentence2}.`,
-    'Use only the sources provided, and write from what each source actually says: "joined" stays "joined", never "led". Every claim needs the id of the source it came from.',
-    "If sources disagree or might be about a different person with the same name, leave the claim out.",
-    'A source whose title starts with "[likely them]" names someone with their name whose details all fit, but nothing ties it to them for certain: you may use it, saying so ("likely the same Dana who..."), never in an opener, and never for their current role.',
-    'Never write, even if a source says it: age, ethnicity, religion, health, family or relationships, sexuality, politics or donations, where they live (a city is the finest you may say), salary or pay, their personality or "communication style", legal matters, immigration, or that they lost a job or took leave.',
-    `"careful" is about their company only (recent layoffs, a reorganization, a product shut down, a hiring freeze), each item with its source ids; never anything about the person's own life. Leave it empty when there is nothing.`,
-    '"company" is what is happening at their company that matters to the student (team news, launches, hiring), from company sources, each with its source ids. Leave it empty when there are no company sources.',
-    `Openers: up to three single sentences the student could open a first message with, each a statement (not a question) of at most 25 words about something they made, said or did. Each rests on one cited source and uses only details that source states, in its words where you can (a title, a claim, a number); the student's reaction may be added ("stuck with me"). Never flattery, never about their private life.`,
-    `Most people have little online beyond LinkedIn. When the only sources are their LinkedIn and the student's own history, say so plainly in "who" (for example "Not much is public about Dana beyond LinkedIn.") and keep to what LinkedIn says; do not pad.`,
-    'Also lay out who they are in full, from the sources only: "career" (every role you can source, newest first, with start and end as written, e.g. "2021" or "Mar 2022"), "education", "profiles" (their own pages: LinkedIn, X, GitHub, a personal site, Google Scholar; only URLs that appear in the sources), "highlights" (up to 8 things they made or said that matter: posts, articles, talks, podcasts, projects, papers, news, awards, each with the URL of its source) and "topics" (up to 6 short phrases for what they work on or talk about).'
-  ].join("\n");
+var DOSSIER_SYSTEM = [
+  "You write a research brief about one person for the student named in <student>, toward the goal written there.",
+  'Use only the sources provided, and write from what each source actually says: "joined" stays "joined", never "led". Every claim needs the id of the source it came from.',
+  "If sources disagree or might be about a different person with the same name, leave the claim out.",
+  'A source whose title starts with "[likely them]" names someone with their name whose details all fit, but nothing ties it to them for certain: you may use it, saying so ("likely the same Dana who..."), never in an opener, and never for their current role.',
+  'Never write, even if a source says it: age, ethnicity, religion, health, family or relationships, sexuality, politics or donations, where they live (a city is the finest you may say), salary or pay, their personality or "communication style", legal matters, immigration, or that they lost a job or took leave.',
+  `"careful" is about their company only (recent layoffs, a reorganization, a product shut down, a hiring freeze), each item with its source ids; never anything about the person's own life. Leave it empty when there is nothing.`,
+  '"company" is what is happening at their company that matters to the student (team news, launches, hiring), from company sources, each with its source ids. Leave it empty when there are no company sources.',
+  `Openers: up to three single sentences the student could open a first message with, each a statement (not a question) of at most 25 words about something they made, said or did. Each rests on one cited source and uses only details that source states, in its words where you can (a title, a claim, a number); the student's reaction may be added ("stuck with me"). Never flattery, never about their private life.`,
+  `Most people have little online beyond LinkedIn. When the only sources are their LinkedIn and the student's own history, say so plainly in "who" (for example "Not much is public about Dana beyond LinkedIn.") and keep to what LinkedIn says; do not pad.`,
+  'Also lay out who they are in full, from the sources only: "career" (every role you can source, newest first, with start and end as written, e.g. "2021" or "Mar 2022"), "education", "profiles" (their own pages: LinkedIn, X, GitHub, a personal site, Google Scholar; only URLs that appear in the sources), "highlights" (up to 8 things they made or said that matter: posts, articles, talks, podcasts, projects, papers, news, awards, each with the URL of its source) and "topics" (up to 6 short phrases for what they work on or talk about).'
+].join("\n");
+function dossierStudent(userFirstName2, goalSentence2) {
+  return `<student>
+${userFirstName2}, who wants to ${goalSentence2}.
+</student>`;
 }
 function dossierUser(input) {
   const block3 = (list2) => list2.map(
@@ -17941,8 +18264,10 @@ ${text2}`);
   }
   const allowed = sources.map((s) => s.id);
   const prompt = {
-    system: dossierSystem(input.user.firstName, input.goalSentence),
-    user: dossierUser({
+    system: DOSSIER_SYSTEM,
+    user: `${dossierStudent(input.user.firstName, input.goalSentence)}
+
+${dossierUser({
       userContext: input.user.context,
       person: {
         name: input.person.name,
@@ -17957,7 +18282,7 @@ ${text2}`);
       internalHistory: formatHistory(history),
       linkedin: linkedinLines.join("\n\n"),
       sources: sources.filter((s) => s.kind === "web")
-    })
+    })}`
   };
   const thin = sources.filter((s) => s.kind === "web").length === 0;
   let dossier = await synthesize(run, prompt, allowed);
@@ -18912,6 +19237,229 @@ var GOAL_KINDS = [
   "collaboration"
 ];
 
+// supabase/functions/_shared/providers/webSearch.ts
+var PARALLEL_BASE = "https://api.parallel.ai";
+var SERPER_BASE = "https://google.serper.dev";
+var PARALLEL_SEARCH_USD = 1e-3;
+var SERPER_SEARCH_USD = 1e-3;
+var PARALLEL_QUERIES_PER_REQUEST = 5;
+var parallelResponse = z.looseObject({
+  results: z.array(
+    z.looseObject({
+      url: z.string(),
+      title: z.string().nullish(),
+      publish_date: z.string().nullish(),
+      excerpts: z.array(z.string()).nullish()
+    })
+  ).default([])
+});
+var serperResponse = z.looseObject({
+  organic: z.array(
+    z.looseObject({
+      link: z.string(),
+      title: z.string().nullish(),
+      snippet: z.string().nullish(),
+      date: z.string().nullish()
+    })
+  ).default([])
+});
+function createParallelSearch(opts) {
+  const base = trimBase(opts.baseUrl ?? PARALLEL_BASE);
+  return {
+    name: "parallel",
+    configured: !!opts.apiKey,
+    usdPerCall: PARALLEL_SEARCH_USD,
+    queriesPerCall: PARALLEL_QUERIES_PER_REQUEST,
+    async search(queries, objective) {
+      if (!opts.apiKey) return unconfigured2("parallel");
+      const r = await requestJson(opts, {
+        provider: "parallel",
+        url: `${base}/v1/search`,
+        method: "POST",
+        headers: { "x-api-key": opts.apiKey },
+        body: {
+          objective,
+          search_queries: queries.slice(0, PARALLEL_QUERIES_PER_REQUEST),
+          mode: "fast",
+          max_chars_total: 12e3
+        },
+        schema: parallelResponse
+      });
+      if (!r.ok) return r;
+      return {
+        ok: true,
+        value: r.value.results.map((x) => ({
+          url: x.url,
+          title: x.title ?? void 0,
+          snippet: (x.excerpts ?? []).join(" … ").slice(0, 1500) || void 0,
+          published: x.publish_date ?? null
+        }))
+      };
+    }
+  };
+}
+function createSerperSearch(opts) {
+  const base = trimBase(opts.baseUrl ?? SERPER_BASE);
+  return {
+    name: "serper",
+    configured: !!opts.apiKey,
+    usdPerCall: SERPER_SEARCH_USD,
+    queriesPerCall: 1,
+    async search(queries) {
+      if (!opts.apiKey) return unconfigured2("serper");
+      const r = await requestJson(opts, {
+        provider: "serper",
+        url: `${base}/search`,
+        method: "POST",
+        headers: { "X-API-KEY": opts.apiKey },
+        body: { q: queries[0] ?? "", num: 10, gl: "us", hl: "en" },
+        schema: serperResponse
+      });
+      if (!r.ok) return r;
+      return {
+        ok: true,
+        value: r.value.organic.map((x) => ({
+          url: x.link,
+          title: x.title ?? void 0,
+          snippet: x.snippet ?? void 0,
+          published: x.date ?? null
+        }))
+      };
+    }
+  };
+}
+
+// supabase/functions/_shared/research/pageText.ts
+var PAGE_TEXT_CHARS = 9e3;
+var MAX_BYTES = 15e5;
+var UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0 Safari/537.36";
+var ENTITIES2 = {
+  amp: "&",
+  lt: "<",
+  gt: ">",
+  quot: '"',
+  apos: "'",
+  nbsp: " ",
+  rsquo: "’",
+  lsquo: "‘",
+  rdquo: "”",
+  ldquo: "“",
+  mdash: "—",
+  ndash: "–",
+  hellip: "…"
+};
+function decodeEntities2(s) {
+  return s.replace(/&#(\d+);/g, (_, n) => String.fromCodePoint(Number(n))).replace(/&#x([0-9a-f]+);/gi, (_, n) => String.fromCodePoint(Number.parseInt(n, 16))).replace(/&([a-z]+);/gi, (m, n) => ENTITIES2[n.toLowerCase()] ?? m);
+}
+function meta(html, key2) {
+  const re = new RegExp(
+    `<meta[^>]+(?:name|property)=["']${key2}["'][^>]*content=["']([^"']*)["']|<meta[^>]+content=["']([^"']*)["'][^>]*(?:name|property)=["']${key2}["']`,
+    "i"
+  );
+  const m = re.exec(html);
+  const v = m?.[1] ?? m?.[2];
+  return v ? decodeEntities2(v).trim() : void 0;
+}
+function htmlToText2(html) {
+  const title = decodeEntities2(/<title[^>]*>([\s\S]*?)<\/title>/i.exec(html)?.[1] ?? "").trim() || void 0;
+  const description = meta(html, "og:description") ?? meta(html, "description");
+  const ogTitle = meta(html, "og:title");
+  const published = meta(html, "article:published_time") ?? meta(html, "og:published_time");
+  const body = html.replace(/<!--[\s\S]*?-->/g, " ").replace(/<(script|style|noscript|svg|template|iframe|head|nav|footer|form)\b[\s\S]*?<\/\1>/gi, " ").replace(/<br\s*\/?>/gi, "\n").replace(/<\/(p|div|li|h[1-6]|tr|section|article|header|blockquote|dd|dt)>/gi, "\n").replace(/<[^>]+>/g, " ");
+  const text2 = decodeEntities2(body).split("\n").map((l) => l.replace(/[ \t\f\v ]+/g, " ").trim()).filter((l) => l.length > 1).join("\n").replace(/\n{3,}/g, "\n\n");
+  const head = [ogTitle && ogTitle !== title ? ogTitle : "", description ?? ""].filter(Boolean).join("\n");
+  return { title: title ?? ogTitle, text: [head, text2].filter(Boolean).join("\n\n"), published };
+}
+var PROFILE_RES = [
+  /^https?:\/\/(?:www\.)?github\.com\/([A-Za-z0-9-]{1,39})\/?$/i,
+  /^https?:\/\/(?:www\.)?(?:x|twitter)\.com\/([A-Za-z0-9_]{1,15})\/?$/i,
+  /^https?:\/\/(?:www\.)?instagram\.com\/([A-Za-z0-9_.]{1,30})\/?$/i,
+  /^https?:\/\/(?:www\.)?youtube\.com\/@([A-Za-z0-9_.-]{3,30})\/?$/i,
+  /^https?:\/\/(?:www\.)?tiktok\.com\/@([A-Za-z0-9_.]{2,24})\/?$/i,
+  /^https?:\/\/(?:www\.)?threads\.(?:net|com)\/@([A-Za-z0-9_.]{1,30})\/?$/i,
+  /^https?:\/\/(?:www\.)?medium\.com\/@([A-Za-z0-9_.-]{1,30})\/?$/i,
+  /^https?:\/\/([a-z0-9-]{2,40})\.substack\.com\/?$/i,
+  /^https?:\/\/(?:www\.)?linktr\.ee\/([A-Za-z0-9_.]{2,30})\/?$/i,
+  /^https?:\/\/(?:www\.)?behance\.net\/([A-Za-z0-9_-]{2,30})\/?$/i,
+  /^https?:\/\/(?:www\.)?dribbble\.com\/([A-Za-z0-9_-]{2,30})\/?$/i,
+  /^https?:\/\/(?:www\.)?devpost\.com\/([A-Za-z0-9_-]{2,40})\/?$/i,
+  /^https?:\/\/(?:www\.)?huggingface\.co\/([A-Za-z0-9_-]{2,40})\/?$/i,
+  /^https?:\/\/bsky\.app\/profile\/([A-Za-z0-9_.-]{3,60})\/?$/i
+];
+var NOT_HANDLES = /* @__PURE__ */ new Set([
+  "about",
+  "explore",
+  "home",
+  "login",
+  "signup",
+  "search",
+  "settings",
+  "share",
+  "intent",
+  "features",
+  "pricing",
+  "topics",
+  "trending",
+  "sponsors",
+  "orgs",
+  "www",
+  "help",
+  "privacy",
+  "terms"
+]);
+function profileHandle(url) {
+  for (const re of PROFILE_RES) {
+    const m = re.exec(url.trim());
+    if (m?.[1] && !NOT_HANDLES.has(m[1].toLowerCase())) return m[1];
+  }
+  return void 0;
+}
+function profileLinks(html, base) {
+  const out = /* @__PURE__ */ new Set();
+  for (const m of html.matchAll(/href=["']([^"'#]+)["']/gi)) {
+    let u2;
+    try {
+      u2 = new URL(decodeEntities2(m[1]), base).toString();
+    } catch {
+      continue;
+    }
+    if (profileHandle(u2)) out.add(u2.replace(/\/+$/, ""));
+  }
+  return [...out].slice(0, 40);
+}
+async function fetchPage(url, opts = {}) {
+  if (isBlockedSource(url) || !/^https?:\/\//i.test(url)) return void 0;
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), opts.timeoutMs ?? 6e3);
+  try {
+    const r = await (opts.fetch ?? fetch)(url, {
+      redirect: "follow",
+      signal: ctrl.signal,
+      headers: { "user-agent": UA, accept: "text/html,application/xhtml+xml", "accept-language": "en-US,en" }
+    });
+    if (!r.ok) return void 0;
+    const type = r.headers.get("content-type") ?? "";
+    if (type && !/html|xml|text\/plain/i.test(type)) return void 0;
+    const raw = (await r.text()).slice(0, MAX_BYTES);
+    const finalUrl = r.url || url;
+    if (/text\/plain/i.test(type))
+      return { url: finalUrl, text: raw.slice(0, PAGE_TEXT_CHARS), profiles: [], published: null };
+    const read = htmlToText2(raw);
+    if (!read.text.trim()) return void 0;
+    return {
+      url: finalUrl,
+      title: read.title,
+      text: read.text.slice(0, PAGE_TEXT_CHARS),
+      profiles: profileLinks(raw, finalUrl),
+      published: read.published ?? null
+    };
+  } catch {
+    return void 0;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 // supabase/functions/_shared/research/web.ts
 var WEB_CACHE_MS = 7 * 864e5;
 var CLAUDE_SEARCH_USD = 0.01;
@@ -18947,19 +19495,19 @@ var pageKey = (url) => cacheKey("page", { url: normalizeUrl(url) });
 function normalizeUrl(u2) {
   return u2.trim().replace(/#.*$/, "").replace(/[?&](utm_[^=&]+|ref|fbclid|gclid)=[^&]*/g, "").replace(/\/+$/, "").toLowerCase();
 }
-async function cachedPages(cache2, urls) {
+async function cachedPages(cache3, urls) {
   const hit = [];
   const miss = [];
   for (const url of urls) {
-    const v = await cache2.get(await pageKey(url));
+    const v = await cache3.get(await pageKey(url));
     if (v?.text) hit.push(v);
     else miss.push(url);
   }
   return { hit, miss };
 }
-async function keepPages(cache2, pages) {
+async function keepPages(cache3, pages) {
   for (const p of pages)
-    if (p.text && !isBlockedSource(p.url)) await cache2.put(await pageKey(p.url), "page", p, WEB_CACHE_MS);
+    if (p.text && !isBlockedSource(p.url)) await cache3.put(await pageKey(p.url), "page", p, WEB_CACHE_MS);
 }
 var dedupe = (xs) => {
   const seen = /* @__PURE__ */ new Set();
@@ -18981,7 +19529,7 @@ function exaRequest(q, highlightQuestion) {
     contents: { highlights: { query: highlightQuestion, maxCharacters: 1200 } }
   };
 }
-function exaWeb(exa, cache2) {
+function exaWeb(exa, cache3) {
   return {
     name: "exa",
     estimateUsd(plan2) {
@@ -18996,7 +19544,7 @@ function exaWeb(exa, cache2) {
           const req = exaRequest(q, question);
           const key2 = await cacheKey("exa:search", req);
           const t0 = Date.now();
-          const hit2 = await cache2.get(key2);
+          const hit2 = await cache3.get(key2);
           if (hit2) {
             out.hits.push(...hit2);
             out.steps.push({
@@ -19046,14 +19594,14 @@ function exaWeb(exa, cache2) {
             ms: Date.now() - t0,
             n: hits2.length
           });
-          await cache2.put(key2, "exa:search", hits2, WEB_CACHE_MS);
+          await cache3.put(key2, "exa:search", hits2, WEB_CACHE_MS);
         })
       );
       if (failures === plan2.queries.length) throw new WebUnavailable("Exa is not answering");
       out.hits = dedupe(out.hits);
       const skip = new Set((plan2.skip ?? []).map(normalizeUrl));
       const want = ctx.select(out.hits).filter((u2) => !skip.has(normalizeUrl(u2))).slice(0, plan2.maxPages);
-      const { hit, miss } = await cachedPages(cache2, want);
+      const { hit, miss } = await cachedPages(cache3, want);
       out.pages.push(...hit);
       if (miss.length) {
         const est = miss.length * EXA_PAGE_USD;
@@ -19087,7 +19635,7 @@ function exaWeb(exa, cache2) {
               ms: Date.now() - t0,
               n: pages.length
             });
-            await keepPages(cache2, pages);
+            await keepPages(cache3, pages);
           }
         }
       }
@@ -19215,7 +19763,7 @@ async function gatherCall(client, model, user, tools, timeoutMs, maxContinuation
   }
   return { blocks: blocks2, use };
 }
-function claudeWeb(client, cache2, opts = {}) {
+function claudeWeb(client, cache3, opts = {}) {
   const model = opts.model ?? GATHER_MODEL;
   const cont = opts.maxContinuations ?? 1;
   return {
@@ -19226,7 +19774,7 @@ function claudeWeb(client, cache2, opts = {}) {
       const deadline = Date.now() + ctx.timeoutMs;
       const missing = [];
       for (const q of plan2.queries) {
-        const hit2 = await cache2.get(await cacheKey("claude:search", { q: q.query }));
+        const hit2 = await cache3.get(await cacheKey("claude:search", { q: q.query }));
         if (hit2) {
           out.hits.push(...hit2);
           out.steps.push({
@@ -19272,7 +19820,7 @@ function claudeWeb(client, cache2, opts = {}) {
           for (const q of missing) {
             const mine = read.hits.filter((h) => h.query.trim() === q.query.trim());
             if (mine.length || !r.error)
-              await cache2.put(
+              await cache3.put(
                 await cacheKey("claude:search", { q: q.query }),
                 "claude:search",
                 mine,
@@ -19284,7 +19832,7 @@ function claudeWeb(client, cache2, opts = {}) {
       out.hits = dedupe(out.hits);
       const skip = new Set((plan2.skip ?? []).map(normalizeUrl));
       const want = ctx.select(out.hits).filter((u2) => !skip.has(normalizeUrl(u2))).slice(0, plan2.maxPages);
-      const { hit, miss } = await cachedPages(cache2, want);
+      const { hit, miss } = await cachedPages(cache3, want);
       out.pages.push(...hit);
       if (miss.length) {
         const est = costUsd(model, {
@@ -19317,7 +19865,7 @@ function claudeWeb(client, cache2, opts = {}) {
           });
           if (r.error) out.notes.push(`page reading cut short (${r.error})`);
           out.pages.push(...read.pages);
-          await keepPages(cache2, read.pages);
+          await keepPages(cache3, read.pages);
         }
       }
       for (const p of out.pages)
@@ -19339,6 +19887,134 @@ async function gatherFrom(sources, plan2, ctx) {
   }
   if (sources.length === 0) notes.push("no web search is configured");
   return { hits: [], pages: [], costUsd: 0, notes, steps: [] };
+}
+
+// supabase/functions/_shared/research/engineWeb.ts
+var PAGE_FETCH_MS = 6e3;
+function engineWeb(engine, cache3, doFetch) {
+  return {
+    name: engine.name,
+    estimateUsd(plan2) {
+      return Math.ceil(plan2.queries.length / engine.queriesPerCall) * engine.usdPerCall;
+    },
+    async gather(plan2, ctx) {
+      const out = { hits: [], pages: [], costUsd: 0, notes: [], steps: [] };
+      let failures = 0;
+      await Promise.all(
+        plan2.queries.map(async (q) => {
+          const key2 = await cacheKey(`${engine.name}:search`, { q: q.query });
+          const t02 = Date.now();
+          const hit = await cache3.get(key2).catch(() => void 0);
+          if (hit) {
+            out.hits.push(...hit);
+            out.steps.push({
+              step: `search:${q.id}`,
+              provider: engine.name,
+              costUsd: 0,
+              ms: 0,
+              n: hit.length,
+              cached: true
+            });
+            return;
+          }
+          if (out.costUsd + engine.usdPerCall > ctx.budgetUsd) {
+            out.notes.push(`search ${q.id} skipped: cost cap`);
+            return;
+          }
+          out.costUsd += engine.usdPerCall;
+          const r = await engine.search([q.query], plan2.focus);
+          if (!r.ok) {
+            failures++;
+            out.costUsd -= engine.usdPerCall;
+            out.notes.push(`${engine.name} search failed (${r.message})`);
+            out.steps.push({
+              step: `search:${q.id}`,
+              provider: engine.name,
+              costUsd: 0,
+              ms: Date.now() - t02,
+              error: r.message
+            });
+            return;
+          }
+          const hits2 = r.value.filter((x) => !isBlockedSource(x.url)).map((x) => ({
+            url: x.url,
+            title: x.title,
+            published: x.published ?? null,
+            snippet: x.snippet,
+            query: q.query
+          }));
+          out.hits.push(...hits2);
+          out.steps.push({
+            step: `search:${q.id}`,
+            provider: engine.name,
+            costUsd: engine.usdPerCall,
+            ms: Date.now() - t02,
+            n: hits2.length,
+            searches: 1
+          });
+          await cache3.put(key2, `${engine.name}:search`, hits2, WEB_CACHE_MS).catch(() => void 0);
+        })
+      );
+      if (plan2.queries.length && failures === plan2.queries.length)
+        throw new WebUnavailable(`${engine.name} is not answering`);
+      const seen = /* @__PURE__ */ new Set();
+      out.hits = out.hits.filter((h) => {
+        const k = normalizeUrl(h.url);
+        if (seen.has(k)) return false;
+        seen.add(k);
+        return true;
+      });
+      const skip = new Set((plan2.skip ?? []).map(normalizeUrl));
+      const want = ctx.select(out.hits).filter((u2) => !skip.has(normalizeUrl(u2))).slice(0, plan2.maxPages);
+      const t0 = Date.now();
+      const pages = await Promise.all(
+        want.map(async (url) => {
+          const key2 = await cacheKey("page", { url: normalizeUrl(url) });
+          const kept = await cache3.get(key2).catch(() => void 0);
+          if (kept?.text) return kept;
+          const p = await fetchPage(url, { fetch: doFetch, timeoutMs: PAGE_FETCH_MS });
+          if (!p?.text) return void 0;
+          const page2 = {
+            url: p.url,
+            title: p.title,
+            published: p.published ?? null,
+            text: p.text.slice(0, PAGE_CHARS)
+          };
+          if (!isBlockedSource(page2.url))
+            await cache3.put(key2, "page", page2, WEB_CACHE_MS).catch(() => void 0);
+          return page2;
+        })
+      );
+      for (const [i, url] of want.entries()) {
+        const p = pages[i];
+        if (p) out.pages.push(p);
+        else {
+          const h = out.hits.find((x) => normalizeUrl(x.url) === normalizeUrl(url));
+          if (h?.snippet)
+            out.pages.push({ url: h.url, title: h.title, published: h.published, text: h.snippet });
+        }
+      }
+      out.steps.push({
+        step: "read",
+        provider: "fetch",
+        costUsd: 0,
+        ms: Date.now() - t0,
+        n: out.pages.length
+      });
+      return out;
+    }
+  };
+}
+function gatedWeb(source, gates) {
+  return {
+    name: source.name,
+    estimateUsd: (plan2) => source.estimateUsd(plan2),
+    async gather(plan2, ctx) {
+      for (const g of gates)
+        if (g && !await g().catch(() => true)) throw new WebUnavailable(`${source.name} is switched off`);
+      return source.gather(plan2, ctx);
+    }
+  };
 }
 
 // supabase/functions/_shared/sourcing/warmth.ts
@@ -19621,12 +20297,12 @@ function studentFromResume(parsed2, base) {
 }
 
 // supabase/functions/_shared/sourcing/email.ts
-var MAX_LOOKUPS = 10;
+var MAX_LOOKUPS = 5;
 function fromTemplate(template, f, l) {
   const local = template.toLowerCase().replace(/\{first\}/g, f).replace(/\{last\}/g, l).replace(/\{f\}/g, f[0] ?? "").replace(/\{l\}/g, l[0] ?? "");
   return /^[a-z0-9][a-z0-9._-]{0,63}$/.test(local) ? local : void 0;
 }
-var MAX_VERIFIES = 10;
+var MAX_VERIFIES = 5;
 var PATTERNS2 = {
   "first.last": (f, l) => `${f}.${l}`,
   first: (f) => f,
@@ -19678,9 +20354,9 @@ function domainPattern(known, domain) {
   return void 0;
 }
 function dnsMx(doFetch, timeoutMs = 4e3) {
-  const cache2 = /* @__PURE__ */ new Map();
+  const cache3 = /* @__PURE__ */ new Map();
   return (domain) => {
-    let hit = cache2.get(domain);
+    let hit = cache3.get(domain);
     if (!hit) {
       hit = (async () => {
         try {
@@ -19695,7 +20371,7 @@ function dnsMx(doFetch, timeoutMs = 4e3) {
           return false;
         }
       })();
-      cache2.set(domain, hit);
+      cache3.set(domain, hit);
     }
     return hit;
   };
@@ -19827,6 +20503,20 @@ function matchKnown(idx, c, o) {
 
 // supabase/functions/_shared/sourcing/lookup.ts
 var LOOKUP_TTL_MS = 30 * 24 * 3600 * 1e3;
+async function take(d, provider, operation, units) {
+  const b = d.budget;
+  if (!b) return { settle: async () => void 0 };
+  const op = (u2) => u2 > 0 ? operation : `${operation}:attempt`;
+  if (b.reserve) {
+    const r = await b.reserve(d.userId, { provider, operation, units, costUsd: 0 });
+    if (!r.ok) return void 0;
+    return { settle: (u2) => r.settle({ units: u2, operation: op(u2) }).catch(() => void 0) };
+  }
+  if (!(await b.check(d.userId, provider, units)).ok) return void 0;
+  return {
+    settle: (u2) => b.record(d.userId, { provider, operation: op(u2), units: u2, costUsd: 0 }).catch(() => void 0)
+  };
+}
 function emailLookup(d) {
   return async (c) => {
     const slug = linkedInSlugOf(cleanLinkedInUrl(c.linkedinUrl));
@@ -19868,13 +20558,17 @@ async function fromHunter(d, c, slug, n, domain) {
   if (slug) asks.push({ by: "handle", params: { linkedin_handle: slug } });
   if (n && domain) asks.push({ by: "name", params: { first_name: n.f, last_name: n.l, domain } });
   for (const ask of asks) {
-    if (d.budget && !(await d.budget.check(d.userId, "hunter", 1)).ok) return void 0;
+    const slot = await take(d, "hunter", "find", 1);
+    if (!slot) return void 0;
     const r = await d.hunter.findEmail(ask.params);
-    if (!r.ok) return void 0;
+    if (!r.ok) {
+      await slot.settle(0);
+      return void 0;
+    }
     const h = r.value.data;
     const email = h?.email?.trim().toLowerCase();
+    await slot.settle(h && email?.includes("@") ? 1 : 0);
     if (!h || !email?.includes("@")) continue;
-    await d.budget?.record(d.userId, { provider: "hunter", operation: "find", units: 1, costUsd: 0 });
     const theirs = linkedInSlugOf(cleanLinkedInUrl(h.linkedin_url));
     if (slug && theirs && theirs !== slug) continue;
     const v = deliverability(h.verification?.status);
@@ -19899,18 +20593,31 @@ function notTheirRole(c, position) {
 function domainTemplate(d) {
   const hunter = d.hunter;
   if (!hunter?.configured) return void 0;
-  return async (domain) => {
-    const key2 = `pattern:${domain.toLowerCase()}`;
+  const asked = /* @__PURE__ */ new Map();
+  const ask = async (domain) => {
+    const key2 = `pattern:${domain}`;
     const hit = await d.cache.get(key2).catch(() => void 0);
     if (hit) return hit.t;
-    if (d.budget && !(await d.budget.check(d.userId, "hunter", 1)).ok) return void 0;
+    const slot = await take(d, "hunter", "domain", 1);
+    if (!slot) return void 0;
     const r = await hunter.domainPattern(domain);
-    if (!r.ok) return void 0;
+    if (!r.ok) {
+      await slot.settle(0);
+      return void 0;
+    }
     const t = r.value.data?.pattern ?? void 0;
-    if (t)
-      await d.budget?.record(d.userId, { provider: "hunter", operation: "domain", units: 1, costUsd: 0 });
+    await slot.settle(t ? 1 : 0);
     await d.cache.put(key2, "email_pattern", t ? { t } : { none: true }, LOOKUP_TTL_MS).catch(() => void 0);
     return t;
+  };
+  return (domain) => {
+    const k = domain.toLowerCase();
+    let p = asked.get(k);
+    if (!p) {
+      p = ask(k);
+      asked.set(k, p);
+    }
+    return p;
   };
 }
 function emailVerifier(d) {
@@ -19920,10 +20627,14 @@ function emailVerifier(d) {
     const key2 = `verify:${email.toLowerCase()}`;
     const hit = await d.cache.get(key2).catch(() => void 0);
     if (hit?.v) return hit.v;
-    if (d.budget && !(await d.budget.check(d.userId, "hunter", 0.5)).ok) return void 0;
+    const slot = await take(d, "hunter", "verify", 0.5);
+    if (!slot) return void 0;
     const r = await hunter.verifyEmail(email);
-    if (!r.ok) return void 0;
-    await d.budget?.record(d.userId, { provider: "hunter", operation: "verify", units: 0.5, costUsd: 0 });
+    if (!r.ok) {
+      await slot.settle(0);
+      return void 0;
+    }
+    await slot.settle(0.5);
     const v = deliverability(r.value.data?.status);
     await d.cache.put(key2, "email_verify", { v }, LOOKUP_TTL_MS).catch(() => void 0);
     return v;
@@ -19937,10 +20648,11 @@ async function fromApollo(d, c, domain) {
   const lastName = c.lastName ?? rest.join(" ");
   const params = url ? { linkedin_url: url } : firstName && lastName && domain && !c.lastNameObfuscated ? { first_name: firstName, last_name: lastName, domain } : void 0;
   if (!params) return void 0;
-  if (d.budget && !(await d.budget.check(d.userId, "apollo_match", 1)).ok) return void 0;
+  const slot = await take(d, "apollo_match", "match", 1);
+  if (!slot) return void 0;
   const r = await d.apollo.matchPerson({ ...params, reveal_personal_emails: false });
+  await slot.settle(r.ok ? 1 : 0);
   if (!r.ok) return void 0;
-  await d.budget?.record(d.userId, { provider: "apollo_match", operation: "match", units: 1, costUsd: 0 });
   const p = r.value.person;
   const email = p?.email?.trim().toLowerCase();
   if (!email?.includes("@")) return void 0;
@@ -19966,137 +20678,6 @@ function fitUser(lookingFor, candidates) {
 var fitSchema = z.object({
   scores: z.array(z.object({ id: z.string(), fit: z.number(), reasons: z.array(z.string()) }))
 });
-
-// supabase/functions/_shared/research/pageText.ts
-var PAGE_TEXT_CHARS = 9e3;
-var MAX_BYTES = 15e5;
-var UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0 Safari/537.36";
-var ENTITIES2 = {
-  amp: "&",
-  lt: "<",
-  gt: ">",
-  quot: '"',
-  apos: "'",
-  nbsp: " ",
-  rsquo: "’",
-  lsquo: "‘",
-  rdquo: "”",
-  ldquo: "“",
-  mdash: "—",
-  ndash: "–",
-  hellip: "…"
-};
-function decodeEntities2(s) {
-  return s.replace(/&#(\d+);/g, (_, n) => String.fromCodePoint(Number(n))).replace(/&#x([0-9a-f]+);/gi, (_, n) => String.fromCodePoint(Number.parseInt(n, 16))).replace(/&([a-z]+);/gi, (m, n) => ENTITIES2[n.toLowerCase()] ?? m);
-}
-function meta(html, key2) {
-  const re = new RegExp(
-    `<meta[^>]+(?:name|property)=["']${key2}["'][^>]*content=["']([^"']*)["']|<meta[^>]+content=["']([^"']*)["'][^>]*(?:name|property)=["']${key2}["']`,
-    "i"
-  );
-  const m = re.exec(html);
-  const v = m?.[1] ?? m?.[2];
-  return v ? decodeEntities2(v).trim() : void 0;
-}
-function htmlToText2(html) {
-  const title = decodeEntities2(/<title[^>]*>([\s\S]*?)<\/title>/i.exec(html)?.[1] ?? "").trim() || void 0;
-  const description = meta(html, "og:description") ?? meta(html, "description");
-  const ogTitle = meta(html, "og:title");
-  const published = meta(html, "article:published_time") ?? meta(html, "og:published_time");
-  const body = html.replace(/<!--[\s\S]*?-->/g, " ").replace(/<(script|style|noscript|svg|template|iframe|head|nav|footer|form)\b[\s\S]*?<\/\1>/gi, " ").replace(/<br\s*\/?>/gi, "\n").replace(/<\/(p|div|li|h[1-6]|tr|section|article|header|blockquote|dd|dt)>/gi, "\n").replace(/<[^>]+>/g, " ");
-  const text2 = decodeEntities2(body).split("\n").map((l) => l.replace(/[ \t\f\v ]+/g, " ").trim()).filter((l) => l.length > 1).join("\n").replace(/\n{3,}/g, "\n\n");
-  const head = [ogTitle && ogTitle !== title ? ogTitle : "", description ?? ""].filter(Boolean).join("\n");
-  return { title: title ?? ogTitle, text: [head, text2].filter(Boolean).join("\n\n"), published };
-}
-var PROFILE_RES = [
-  /^https?:\/\/(?:www\.)?github\.com\/([A-Za-z0-9-]{1,39})\/?$/i,
-  /^https?:\/\/(?:www\.)?(?:x|twitter)\.com\/([A-Za-z0-9_]{1,15})\/?$/i,
-  /^https?:\/\/(?:www\.)?instagram\.com\/([A-Za-z0-9_.]{1,30})\/?$/i,
-  /^https?:\/\/(?:www\.)?youtube\.com\/@([A-Za-z0-9_.-]{3,30})\/?$/i,
-  /^https?:\/\/(?:www\.)?tiktok\.com\/@([A-Za-z0-9_.]{2,24})\/?$/i,
-  /^https?:\/\/(?:www\.)?threads\.(?:net|com)\/@([A-Za-z0-9_.]{1,30})\/?$/i,
-  /^https?:\/\/(?:www\.)?medium\.com\/@([A-Za-z0-9_.-]{1,30})\/?$/i,
-  /^https?:\/\/([a-z0-9-]{2,40})\.substack\.com\/?$/i,
-  /^https?:\/\/(?:www\.)?linktr\.ee\/([A-Za-z0-9_.]{2,30})\/?$/i,
-  /^https?:\/\/(?:www\.)?behance\.net\/([A-Za-z0-9_-]{2,30})\/?$/i,
-  /^https?:\/\/(?:www\.)?dribbble\.com\/([A-Za-z0-9_-]{2,30})\/?$/i,
-  /^https?:\/\/(?:www\.)?devpost\.com\/([A-Za-z0-9_-]{2,40})\/?$/i,
-  /^https?:\/\/(?:www\.)?huggingface\.co\/([A-Za-z0-9_-]{2,40})\/?$/i,
-  /^https?:\/\/bsky\.app\/profile\/([A-Za-z0-9_.-]{3,60})\/?$/i
-];
-var NOT_HANDLES = /* @__PURE__ */ new Set([
-  "about",
-  "explore",
-  "home",
-  "login",
-  "signup",
-  "search",
-  "settings",
-  "share",
-  "intent",
-  "features",
-  "pricing",
-  "topics",
-  "trending",
-  "sponsors",
-  "orgs",
-  "www",
-  "help",
-  "privacy",
-  "terms"
-]);
-function profileHandle(url) {
-  for (const re of PROFILE_RES) {
-    const m = re.exec(url.trim());
-    if (m?.[1] && !NOT_HANDLES.has(m[1].toLowerCase())) return m[1];
-  }
-  return void 0;
-}
-function profileLinks(html, base) {
-  const out = /* @__PURE__ */ new Set();
-  for (const m of html.matchAll(/href=["']([^"'#]+)["']/gi)) {
-    let u2;
-    try {
-      u2 = new URL(decodeEntities2(m[1]), base).toString();
-    } catch {
-      continue;
-    }
-    if (profileHandle(u2)) out.add(u2.replace(/\/+$/, ""));
-  }
-  return [...out].slice(0, 40);
-}
-async function fetchPage(url, opts = {}) {
-  if (isBlockedSource(url) || !/^https?:\/\//i.test(url)) return void 0;
-  const ctrl = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(), opts.timeoutMs ?? 6e3);
-  try {
-    const r = await (opts.fetch ?? fetch)(url, {
-      redirect: "follow",
-      signal: ctrl.signal,
-      headers: { "user-agent": UA, accept: "text/html,application/xhtml+xml", "accept-language": "en-US,en" }
-    });
-    if (!r.ok) return void 0;
-    const type = r.headers.get("content-type") ?? "";
-    if (type && !/html|xml|text\/plain/i.test(type)) return void 0;
-    const raw = (await r.text()).slice(0, MAX_BYTES);
-    const finalUrl = r.url || url;
-    if (/text\/plain/i.test(type))
-      return { url: finalUrl, text: raw.slice(0, PAGE_TEXT_CHARS), profiles: [], published: null };
-    const read = htmlToText2(raw);
-    if (!read.text.trim()) return void 0;
-    return {
-      url: finalUrl,
-      title: read.title,
-      text: read.text.slice(0, PAGE_TEXT_CHARS),
-      profiles: profileLinks(raw, finalUrl),
-      published: read.published ?? null
-    };
-  } catch {
-    return void 0;
-  } finally {
-    clearTimeout(timer);
-  }
-}
 
 // supabase/functions/_shared/sourcing/web.ts
 var WEB_MAX_PAGES = 6;
@@ -20366,10 +20947,11 @@ async function sourceFromWeb(o) {
     select: (hits2) => selectPages(hits2, o.ask, plan2.maxPages)
   });
   notes.push(...gathered.notes);
+  const engine = gathered.provider === "serper" || gathered.provider === "parallel" ? gathered.provider : void 0;
   if (gathered.costUsd > 0)
     await o.budget?.record(o.userId, {
-      provider: "claude",
-      operation: "sourcing_web",
+      provider: engine ?? "claude",
+      operation: engine ? `sourcing_web:${engine}` : "sourcing_web",
       units: gathered.pages.length,
       costUsd: gathered.costUsd
     });
@@ -20519,6 +21101,23 @@ function cleanEmail(e) {
 var titleCase2 = (s) => s.replace(/\b\w/g, (c) => c.toUpperCase());
 
 // supabase/functions/_shared/sourcing/search.ts
+var DAY_MS = 864e5;
+var SOURCING_CACHE_TTL = {
+  exa: 7 * DAY_MS,
+  apollo: 7 * DAY_MS,
+  scholar: 30 * DAY_MS,
+  searchParameters: 30 * DAY_MS
+};
+async function cachedCall(ctx, kind, req, ttlMs, call) {
+  const cache3 = ctx.deps.cache;
+  if (!cache3) return call();
+  const key2 = await cacheKey(kind, req);
+  const hit = await cache3.get(key2).catch(() => void 0);
+  if (hit !== void 0 && hit !== null) return { ok: true, value: hit };
+  const r = await call();
+  if (r?.ok) await cache3.put(key2, kind, r.value, ttlMs).catch(() => void 0);
+  return r;
+}
 var WEIGHTS = { fit: 0.45, reach: 0.35, responsiveness: 0.2 };
 var REACH_TOP = 30;
 var LINKEDIN_MAX_RESULTS = 100;
@@ -20760,21 +21359,27 @@ async function exaCall(ctx, base, relax, entity) {
     contents: { highlights: { query: input.goal.title, maxCharacters: 600 } }
   };
   const est = estimateExaSearchUsd(req);
-  if (deps.budget) {
-    const v = await deps.budget.check(input.userId, "exa", est);
-    if (!v.ok) {
-      ctx.errors.add("exa: budget_exceeded");
-      return [];
+  let refused = false;
+  const r = await cachedCall(ctx, "sourcing:exa", req, SOURCING_CACHE_TTL.exa, async () => {
+    if (deps.budget && !(await deps.budget.check(input.userId, "exa", est)).ok) {
+      refused = true;
+      return null;
     }
-  }
-  const r = await deps.exa.search(req);
-  if (!note(ctx, r) || !r.ok) return [];
-  await deps.budget?.record(input.userId, {
-    provider: "exa",
-    operation: "search",
-    units: 1,
-    costUsd: exaCostUsd(r.value, est)
+    const got = await deps.exa.search(req);
+    if (got.ok)
+      await deps.budget?.record(input.userId, {
+        provider: "exa",
+        operation: "search",
+        units: 1,
+        costUsd: exaCostUsd(got.value, est)
+      });
+    return got;
   });
+  if (refused || !r) {
+    ctx.errors.add("exa: budget_exceeded");
+    return [];
+  }
+  if (!note(ctx, r) || !r.ok) return [];
   return r.value.results.map((x) => fromExa(ctx, x, entity)).filter((c) => !!c);
 }
 function fromExa(ctx, r, entity) {
@@ -20807,14 +21412,21 @@ async function apolloCall(ctx, relax, params) {
   }
   const loc = locationOf(ctx, relax);
   const g = input.goal;
-  const r = await deps.apollo.searchPeople({
+  const req = {
     ...params,
     person_locations: loc ? [loc] : void 0,
     person_seniorities: !relax.seniority && g.seniorities?.length ? g.seniorities : void 0,
     per_page: 25,
     page: 1
-  });
-  if (!note(ctx, r) || !r.ok) return [];
+  };
+  const r = await cachedCall(
+    ctx,
+    "sourcing:apollo",
+    req,
+    SOURCING_CACHE_TTL.apollo,
+    () => deps.apollo.searchPeople(req)
+  );
+  if (!r || !note(ctx, r) || !r.ok) return [];
   return r.value.people.map((p) => fromApollo2(ctx, p));
 }
 function fromApollo2(ctx, p) {
@@ -20839,10 +21451,14 @@ function fromApollo2(ctx, p) {
 async function paramId(ctx, type, keywords) {
   const k = `${type}:${norm(keywords)}`;
   if (ctx.idCache.has(k)) return ctx.idCache.get(k);
-  const r = await ctx.deps.unipile.searchParameters(ctx.input.unipileAccountId, type, keywords, {
-    limit: 1
-  });
-  const id = r.ok ? r.value[0]?.id : void 0;
+  const r = await cachedCall(
+    ctx,
+    "sourcing:li_param",
+    { type, keywords: norm(keywords) },
+    SOURCING_CACHE_TTL.searchParameters,
+    () => ctx.deps.unipile.searchParameters(ctx.input.unipileAccountId, type, keywords, { limit: 1 })
+  );
+  const id = r?.ok ? r.value[0]?.id : void 0;
   ctx.idCache.set(k, id);
   return id;
 }
@@ -20946,13 +21562,15 @@ async function scholarCall(ctx, _relax) {
     return [];
   }
   const g = input.goal;
-  const r = await deps.semanticScholar.searchPapers(
-    [g.topic, ...g.keywords ?? []].filter(Boolean).join(" "),
-    {
-      limit: 50
-    }
+  const q = [g.topic, ...g.keywords ?? []].filter(Boolean).join(" ");
+  const r = await cachedCall(
+    ctx,
+    "sourcing:s2_papers",
+    { q, limit: 50 },
+    SOURCING_CACHE_TTL.scholar,
+    () => deps.semanticScholar.searchPapers(q, { limit: 50 })
   );
-  if (!note(ctx, r) || !r.ok) return [];
+  if (!r || !note(ctx, r) || !r.ok) return [];
   const counts = /* @__PURE__ */ new Map();
   for (const p of r.value.data)
     for (const a of p.authors ?? []) {
@@ -20963,9 +21581,20 @@ async function scholarCall(ctx, _relax) {
       counts.set(a.authorId, c);
     }
   const top = [...counts.entries()].sort((a, b) => b[1].n - a[1].n || b[1].latest - a[1].latest).slice(0, 10);
-  const authors = await Promise.all(top.map(([id]) => deps.semanticScholar.author(id)));
+  const authors = await Promise.all(
+    top.map(
+      ([id]) => cachedCall(
+        ctx,
+        "sourcing:s2_author",
+        { id },
+        SOURCING_CACHE_TTL.scholar,
+        () => deps.semanticScholar.author(id)
+      )
+    )
+  );
   return top.map(([id, c], i) => {
-    const a = authors[i]?.ok ? authors[i].value : void 0;
+    const got = authors[i];
+    const a = got?.ok ? got.value : void 0;
     const name = a?.name ?? c.name;
     return {
       key: `c${++ctx.seq}`,
@@ -21342,7 +21971,7 @@ async function runSourcing(s, userId, req) {
   const mx = dnsMx(s.fetch);
   const year = now.getUTCFullYear();
   const budget2 = sqlBudget(db2, s.now);
-  const cache2 = sqlSharedCache(db2, () => now.getTime());
+  const cache3 = sqlSharedCache(db2, () => now.getTime());
   const lookup = emailLookup({
     userId,
     unipile: s.unipile,
@@ -21350,11 +21979,11 @@ async function runSourcing(s, userId, req) {
     hunter: s.hunter,
     apollo: s.apollo,
     budget: budget2,
-    cache: cache2,
+    cache: cache3,
     domainOf: (c) => orgDomainsOf(c, ctx.orgDomains)[0] ?? siteDomain(c.url)
   });
-  const verify = emailVerifier({ userId, hunter: s.hunter, budget: budget2, cache: cache2 });
-  const template = domainTemplate({ userId, hunter: s.hunter, budget: budget2, cache: cache2 });
+  const verify = emailVerifier({ userId, hunter: s.hunter, budget: budget2, cache: cache3 });
+  const template = domainTemplate({ userId, hunter: s.hunter, budget: budget2, cache: cache3 });
   const result = await sourcePeople(
     {
       unipile: s.unipile,
@@ -21365,6 +21994,7 @@ async function runSourcing(s, userId, req) {
       web: webSourcesFor(s),
       fetch: s.fetch,
       budget: budget2,
+      cache: cache3,
       clock: () => now.getTime(),
       knownPerson: knownOf,
       reachOf: async (c) => {
@@ -21441,11 +22071,21 @@ async function runSourcing(s, userId, req) {
 }
 function webSourcesFor(s) {
   if (s.web) return s.web;
-  const cache2 = sqlSharedCache(s.db, () => s.now().getTime());
+  const cache3 = sqlSharedCache(s.db, () => s.now().getTime());
   const out = [];
-  if (s.exa.configured) out.push(exaWeb(s.exa, cache2));
+  const gate = switchGate(s.db, "web_search");
+  const engine = { fetch: s.fetch, timeoutMs: 1e4, maxRetries: 1, gate };
+  for (const e of [
+    createSerperSearch({ ...engine, apiKey: s.env.serperKey }),
+    createParallelSearch({ ...engine, apiKey: s.env.parallelKey })
+  ])
+    if (e.configured) out.push(engineWeb(e, cache3, s.fetch));
+  if (s.exa.configured) out.push(exaWeb(s.exa, cache3));
   const client = s.anthropic ?? (s.env.anthropicKey ? new Anthropic2({ apiKey: s.env.anthropicKey, fetch: s.fetch, maxRetries: 1 }) : void 0);
-  if (client) out.push(claudeWeb(client, cache2, { model: GATHER_MODEL }));
+  if (client)
+    out.push(
+      gatedWeb(claudeWeb(client, cache3, { model: GATHER_MODEL }), [gate, switchGate(s.db, "anthropic")])
+    );
   return out;
 }
 async function warmContext(db2, userId, u2, homeCity, graph) {
@@ -21507,8 +22147,8 @@ function voiceHandlers(config) {
       if (!job.userId) throw new JobSkipped("no_user");
       const s = makeServices(config, { db: ctx.db, now: ctx.now, queue: ctx.queue });
       const asked = Number(job.payload.limit);
-      const limit = Number.isInteger(asked) && asked > 0 ? Math.min(asked, EMBED_SENT_LIMIT) : EMBED_SENT_LIMIT;
-      await embedSent(ctx.db, s.embed, job.userId, limit);
+      const limit2 = Number.isInteger(asked) && asked > 0 ? Math.min(asked, EMBED_SENT_LIMIT) : EMBED_SENT_LIMIT;
+      await embedSent(ctx.db, s.embed, job.userId, limit2);
     },
     "voice.card": async (job, ctx) => {
       if (!job.userId) throw new JobSkipped("no_user");
@@ -24153,11 +24793,11 @@ function createUnipileSync(opts) {
         schema: z.looseObject({ url: z.string() })
       });
     },
-    async searchPeople(accountId, keywords, limit = 8) {
+    async searchPeople(accountId, keywords, limit2 = 8) {
       if (!configured) return no();
       const r = await requestJson(opts, {
         provider: "unipile",
-        url: `${base}/api/v1/linkedin/search${query({ account_id: accountId, limit })}`,
+        url: `${base}/api/v1/linkedin/search${query({ account_id: accountId, limit: limit2 })}`,
         method: "POST",
         headers: headers(),
         body: { api: "classic", category: "people", keywords, network_distance: [1, 2, 3] },
@@ -24332,9 +24972,9 @@ async function storeChat(db2, userId, self, chat, messages, now, ownIds) {
 // supabase/functions/orbit-worker/handlers/linkedin.ts
 var REQUESTS_PER_JOB = 60;
 var JOB_BUDGET_MS = 6e4;
-var RELATION_PAGES_PER_JOB = 4;
-var CHATS_PER_JOB = 8;
-var FRESH_FOR_MS = 20 * 36e5;
+var RELATION_PAGES_PER_JOB = 2;
+var CHATS_PER_JOB = 4;
+var FRESH_FOR_MS = 7 * 864e5;
 var DAY17 = 864e5;
 var str3 = (v) => typeof v === "string" && v ? v : void 0;
 function linkedinHandlers(deps) {
@@ -24387,7 +25027,8 @@ function linkedinHandlers(deps) {
       let state = acct.syncState.linkedin ?? {};
       const fresh = state.stage === "done" && !!state.syncedAt && now.getTime() - Date.parse(state.syncedAt) < FRESH_FOR_MS;
       const firstPass = !state.syncedAt;
-      if (state.stage === "done" || !state.stage) state = { ...state, stage: "relations", cursor: null };
+      if (state.stage === "done" || !state.stage)
+        state = { ...state, stage: "relations", cursor: null, short: false, chatsAfter: void 0 };
       let requests = 0;
       let pages = 0;
       let chatsDone = 0;
@@ -24420,6 +25061,7 @@ function linkedinHandlers(deps) {
       }
       const ownIds = /* @__PURE__ */ new Set([...self.memberIds, ...state.selfMemberId ? [state.selfMemberId] : []]);
       let finished = false;
+      let shortPass = false;
       let outOfBudget = false;
       while (!outOfBudget && !finished) {
         if (requests >= REQUESTS_PER_JOB || overBudget()) {
@@ -24438,10 +25080,25 @@ function linkedinHandlers(deps) {
           const r = await ingestRelations(ctx.db, userId, rels, now);
           for (const pid of r.byMember.values()) touched.add(pid);
           if (fresh) {
-            state = { ...state, stage: "done", cursor: null };
-            await save2({ stage: "done", cursor: null });
-            finished = true;
-            break;
+            const since = [state.syncedAt, state.recentAt].filter((d) => !!d).sort().at(-1);
+            state = {
+              ...state,
+              stage: "chats",
+              cursor: null,
+              chatsCursor: null,
+              chatIndex: 0,
+              short: true,
+              chatsAfter: since
+            };
+            await save2({
+              stage: "chats",
+              cursor: null,
+              chatsCursor: null,
+              chatIndex: 0,
+              short: true,
+              chatsAfter: since
+            });
+            continue;
           }
           state = page3.value.cursor ? { ...state, cursor: page3.value.cursor } : { ...state, stage: "chats", cursor: null, chatsCursor: null, chatIndex: 0 };
           await save2({
@@ -24452,7 +25109,7 @@ function linkedinHandlers(deps) {
           });
           continue;
         }
-        const after = new Date(now.getTime() - 730 * DAY17).toISOString();
+        const after = state.short && state.chatsAfter ? state.chatsAfter : new Date(now.getTime() - 730 * DAY17).toISOString();
         const page2 = await call(() => unipile.chats(accountId, { after, cursor: state.chatsCursor }));
         if (!page2.ok) throw new Error(`unipile chats ${page2.status ?? page2.kind}`);
         const chats = page2.value.items;
@@ -24516,6 +25173,17 @@ function linkedinHandlers(deps) {
         if (page2.value.cursor) {
           state = { ...state, chatsCursor: page2.value.cursor, chatIndex: 0 };
           await save2({ chatsCursor: page2.value.cursor, chatIndex: 0 });
+        } else if (state.short) {
+          state = { ...state, stage: "done", chatsCursor: null, chatIndex: 0, short: false };
+          await save2({
+            stage: "done",
+            chatsCursor: null,
+            chatIndex: 0,
+            short: false,
+            recentAt: now.toISOString()
+          });
+          finished = true;
+          shortPass = true;
         } else {
           state = { ...state, stage: "done", chatsCursor: null, chatIndex: 0 };
           await save2({ stage: "done", chatsCursor: null, chatIndex: 0, syncedAt: now.toISOString() });
@@ -24523,14 +25191,15 @@ function linkedinHandlers(deps) {
         }
       }
       await scorePeople(ctx, userId, [...touched], `${job.msgId}`);
-      if (finished)
-        await ctx.queue.enqueue({
-          kind: "score.user",
-          userId,
-          payload: { reason: "linkedin" },
-          dedupeKey: `score.user:${userId}:linkedin:${now.toISOString().slice(0, 13)}`
-        });
-      else
+      if (finished) {
+        if (!shortPass)
+          await ctx.queue.enqueue({
+            kind: "score.user",
+            userId,
+            payload: { reason: "linkedin" },
+            dedupeKey: `score.user:${userId}:linkedin:${now.toISOString().slice(0, 13)}`
+          });
+      } else
         await ctx.queue.enqueue(
           {
             kind: "sync.linkedin",
@@ -24801,7 +25470,7 @@ async function scorePeople2(db2, userId, opts) {
 }
 
 // supabase/functions/orbit-worker/handlers/score.ts
-var SCORE_PAGE = 300;
+var SCORE_PAGE = 100;
 function scoreHandlers(_deps) {
   return {
     "score.person": async (job, ctx) => {
@@ -26368,10 +27037,45 @@ async function saveProfile(db2, userId, personId, memberId, raw, mode, now) {
       reading_at = case when (profile_reads.about, profile_reads.experience) is distinct from (excluded.about, excluded.experience)
                         then null else profile_reads.reading_at end,
       updated_at = now()`;
+  await db2.sql`
+    insert into orbit_private.profile_pages (member_id, about, experience, status, read_at)
+    values (${memberId}, ${about}, ${JSON.stringify(experience)}::jsonb, 'ok', ${now.toISOString()}::timestamptz)
+    on conflict (member_id) do update set about = excluded.about, experience = excluded.experience, status = 'ok',
+      read_at = excluded.read_at,
+      reading = case when (profile_pages.about, profile_pages.experience) is distinct from (excluded.about, excluded.experience)
+                     then null else profile_pages.reading end,
+      reading_model = case when (profile_pages.about, profile_pages.experience) is distinct from (excluded.about, excluded.experience)
+                     then null else profile_pages.reading_model end,
+      reading_at = case when (profile_pages.about, profile_pages.experience) is distinct from (excluded.about, excluded.experience)
+                        then null else profile_pages.reading_at end`;
+  await fillSummary(db2, userId, personId, about);
+}
+async function fillSummary(db2, userId, personId, about) {
   if (about)
     await db2.sql`
       update orbit.people set summary = ${about}, updated_at = now()
        where id = ${personId}::uuid and user_id = ${userId}::uuid and (summary is null or summary = '')`;
+}
+async function copySharedProfile(db2, userId, personId, memberId, mode, now) {
+  const [page2] = await db2.sql`
+    select about, experience, read_at::text as read_at, reading, reading_model, reading_at::text as reading_at
+      from orbit_private.profile_pages
+     where member_id = ${memberId} and status = 'ok'
+       and read_at > ${now.toISOString()}::timestamptz - make_interval(days => ${REREAD_DAYS})`;
+  if (!page2) return false;
+  await db2.sql`
+    insert into orbit.profile_reads (user_id, person_id, member_id, about, experience, status, read_by, read_at,
+      reading, reading_model, reading_at, updated_at)
+    values (${userId}::uuid, ${personId}::uuid, ${memberId}, ${page2.about}, ${JSON.stringify(page2.experience ?? [])}::jsonb,
+      'ok', ${mode}, ${page2.read_at}::timestamptz,
+      ${page2.reading === null ? null : JSON.stringify(page2.reading)}::jsonb, ${page2.reading_model},
+      ${page2.reading_at}::timestamptz, now())
+    on conflict (user_id, person_id) do update set member_id = excluded.member_id, about = excluded.about,
+      experience = excluded.experience, status = 'ok', read_by = excluded.read_by, read_at = excluded.read_at,
+      reading = excluded.reading, reading_model = excluded.reading_model, reading_at = excluded.reading_at,
+      updated_at = now()`;
+  await fillSummary(db2, userId, personId, page2.about);
+  return true;
 }
 async function markProfile(db2, userId, personId, memberId, status, mode, now) {
   await db2.sql`
@@ -26467,14 +27171,14 @@ function rawOf(facts) {
   }
   return raw;
 }
-async function readPeople(db2, claude, userId, limit, personIds) {
+async function readPeople(db2, claude, userId, limit2, personIds) {
   const rows = await db2.sql`
-    select r.person_id, p.display_name as name, p.headline, r.about, r.experience
+    select r.person_id, r.member_id, p.display_name as name, p.headline, r.about, r.experience
       from orbit.profile_reads r join orbit.people p on p.id = r.person_id
      where r.user_id = ${userId}::uuid and r.reading_at is null and r.status = 'ok'
        and (${personIds ?? null}::uuid[] is null or r.person_id = any(${personIds ?? null}::uuid[]))
      order by r.read_at
-     limit ${limit}`;
+     limit ${limit2}`;
   let n = 0;
   for (let i = 0; i < rows.length; i += READ_BATCH) {
     const part2 = rows.slice(i, i + READ_BATCH);
@@ -26518,18 +27222,25 @@ async function readPeople(db2, claude, userId, limit, personIds) {
         update orbit.profile_reads set reading = ${JSON.stringify(reading)}::jsonb, reading_model = ${modelName},
           reading_at = now(), updated_at = now()
          where user_id = ${userId}::uuid and person_id = ${part2[k].person_id}::uuid`;
+      const row = part2[k];
+      if (row.member_id && modelName)
+        await db2.sql`
+          update orbit_private.profile_pages set reading = ${JSON.stringify(reading)}::jsonb,
+            reading_model = ${modelName}, reading_at = now()
+           where member_id = ${row.member_id} and about is not distinct from ${row.about}
+             and experience = ${JSON.stringify(row.experience ?? [])}::jsonb`;
       n++;
     }
   }
   return n;
 }
-async function readCompanies(db2, claude, userId, limit, now) {
+async function readCompanies(db2, claude, userId, limit2, now) {
   const rows = await db2.sql`
     select linkedin_id, public_identifier, name, website, industries, tagline, description, employee_count,
            growth_12m, founded_year
       from orbit_private.company_pages
      where reading_at is null and status = 'ok'
-     order by read_at limit ${limit}`;
+     order by read_at limit ${limit2}`;
   let n = 0;
   for (let i = 0; i < rows.length; i += READ_BATCH) {
     const part2 = rows.slice(i, i + READ_BATCH);
@@ -26621,16 +27332,22 @@ async function readCompanyIds(db2, deps, accountId, ids, now, mode, step, starte
   }
 }
 async function readProfiles(db2, deps, userId, accountId, people, now, mode, step, started, budgetMs) {
+  let fetched = 0;
   for (const p of people) {
     if (deps.clock() - started > budgetMs) {
       step.stopped = "time";
       return;
     }
+    if (await copySharedProfile(db2, userId, p.id, p.member, mode, now)) {
+      step.profiles++;
+      step.readIds.push(p.id);
+      continue;
+    }
     if (!await spendRead(db2, "profile", accountId, now, mode)) {
       step.stopped = "ledger";
       return;
     }
-    if (step.profiles > 0) await deps.sleep((mode === "ask" ? 300 : 2500) + Math.floor(deps.random() * 2500));
+    if (fetched++ > 0) await deps.sleep((mode === "ask" ? 300 : 2500) + Math.floor(deps.random() * 2500));
     const got = await getJson(deps, profilePath(accountId, p.member));
     if (!got.ok) {
       if (got.status === "throttled") {
@@ -26789,6 +27506,7 @@ function defaultHandlers(opts = {}) {
     ...scoreHandlers(deps),
     ...friendHandlers(),
     ...searchHandlers(deps),
+    ...costHandlers(deps.cost),
     ...classifyHandlers(deps, agents),
     ...agentHandlers(agents)
   };
@@ -26804,7 +27522,7 @@ var MAX_READS = 5;
 var MAX_READS_UNFINISHED = MAX_READS + 5;
 var DEFAULT_BUDGET_MS = 11e4;
 var HEAVY_KINDS = /* @__PURE__ */ new Set(["score.user", "score.page", "score.person"]);
-var HEAVY_PER_TICK = 3;
+var HEAVY_PER_TICK = 1;
 var ONCE_PER_TICK = /* @__PURE__ */ new Set(["sync.linkedin"]);
 var HEAVY_AFTER_JOBS = 6;
 var RESERVE_MS = {
@@ -26818,6 +27536,8 @@ var RESERVE_MS = {
 };
 var DEFAULT_RESERVE_MS = 8e3;
 var backoffSec = (readCt) => 30 * 2 ** Math.max(0, readCt - 1);
+var ATTEMPTS_AFTER_SPEND = 1;
+var PAID_ERROR_PREFIX = "[paid] ";
 function parse(message) {
   if (!message || typeof message !== "object" || Array.isArray(message)) return void 0;
   const m = message;
@@ -26993,10 +27713,17 @@ async function runTick(deps) {
         });
         return;
       }
+      const paid = isPaidError(e);
       const err = short(e);
-      await finish2(runId, "error", started, err);
+      await finish2(runId, "error", started, paid ? `${PAID_ERROR_PREFIX}${err}`.slice(0, 500) : err);
       s.failed++;
-      if (readCt > MAX_READS) await deadLetter(q, msgId, message, err);
+      const paidFailures = paid ? Number(
+        (await db2.sql`
+                select count(*)::int as n from orbit.job_runs
+                 where queue = ${q} and msg_id = ${msgId}::bigint and status = 'error'
+                   and error like ${`${PAID_ERROR_PREFIX}%`}`)[0]?.n ?? 0
+      ) : 0;
+      if (readCt > MAX_READS || paidFailures > ATTEMPTS_AFTER_SPEND) await deadLetter(q, msgId, message, err);
       else await queue.setVt(q, msgId, backoffSec(readCt));
       await log2.log({
         fn: "orbit-worker",
@@ -27067,11 +27794,23 @@ var runtime = typeof EdgeRuntime !== "undefined" ? EdgeRuntime : void 0;
 var db = dbUrl ? connectDb(dbUrl, 2) : void 0;
 var agentEnv = await agentEnvWithSecrets(env, db);
 var cronSecret = await resolveSecret(env, db, "ORBIT_CRON_SECRET", "orbit_cron_secret");
-var [claudeKey, unipileKey, unipileBase] = await Promise.all([
+var [claudeKey, unipileKey, unipileBase, ownerId] = await Promise.all([
   providerSecret(env, db, "ORBIT_ANTHROPIC_API_KEY"),
   providerSecret(env, db, "UNIPILE_API_KEY"),
-  providerSecret(env, db, "UNIPILE_BASE_URL")
+  providerSecret(env, db, "UNIPILE_BASE_URL"),
+  providerSecret(env, db, "ORBIT_OWNER_ID")
 ]);
+var limit = (name, fallback) => {
+  const v = Number(env(name));
+  return Number.isFinite(v) && v > 0 ? v : fallback;
+};
+var costThresholds = {
+  anthropicUsdDay: limit("ORBIT_COST_ANTHROPIC_USD_DAY", DEFAULT_COST_THRESHOLDS.anthropicUsdDay),
+  hunterMonthCredits: limit("ORBIT_COST_HUNTER_MONTH_CREDITS", DEFAULT_COST_THRESHOLDS.hunterMonthCredits),
+  linkedinShare: limit("ORBIT_COST_LINKEDIN_SHARE", DEFAULT_COST_THRESHOLDS.linkedinShare),
+  isolateDeaths: limit("ORBIT_COST_ISOLATE_DEATHS", DEFAULT_COST_THRESHOLDS.isolateDeaths),
+  deadLetters: limit("ORBIT_COST_DEAD_LETTERS", DEFAULT_COST_THRESHOLDS.deadLetters)
+};
 var googleId = env("ORBIT_GOOGLE_CLIENT_ID");
 var googleSecret = env("ORBIT_GOOGLE_CLIENT_SECRET");
 var handlerDeps = {
@@ -27081,7 +27820,8 @@ var handlerDeps = {
   ) : void 0,
   gmailTopic: env("GMAIL_PUBSUB_TOPIC"),
   unipile: { apiKey: unipileKey, baseUrl: unipileBase },
-  claude: makeClaude({ apiKey: claudeKey, db })
+  claude: makeClaude({ apiKey: claudeKey, db }),
+  cost: { mailer: makeMailer(agentEnv, fetch), ownerId, thresholds: costThresholds }
 };
 var handlers = defaultHandlers({ ...handlerDeps, agents: { env: agentEnv } });
 Deno.serve(

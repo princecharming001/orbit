@@ -7,6 +7,7 @@ import type { User } from '@orbit/core';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { db, wipeDatabase } from '../db/schema';
 import type { CompanyAnswer } from '../integrations/enrichmentProxy';
+import { refreshLogos } from './enrichment/logos';
 import {
   type CompanySource,
   fetchLogos,
@@ -128,6 +129,36 @@ describe('logo queue', () => {
     wantCompanyLogo('Nova');
     await fetchLogos(user, { now: later(LOGO_RETRY_MS + 1), source });
     expect(source.calls.at(-1)).toEqual(['Nova']);
+  });
+
+  it('a company LinkedIn found without a logo is not asked again by name or by id for a while (plan 34 B6)', async () => {
+    const calls: string[][] = [];
+    const source: CompanySource = {
+      async byNames(names) {
+        calls.push(names);
+        const companies: Record<string, CompanyAnswer> = {};
+        for (const n of names)
+          companies[n] = { status: 'found', companyId: '7001', name: n, publicIdentifier: 'plain' };
+        return { ok: true, value: { companies, pending: 0 } };
+      },
+    };
+    wantCompanyLogo('Plain Co');
+    await fetchLogos(user, { now: NOW, source });
+    expect(calls).toEqual([['Plain Co']]);
+    wantCompanyLogo('Plain Co');
+    expect((await fetchLogos(user, { now: later(LOGO_GAP_MS * 3), source })).step).toBe('idle');
+    // the refresh by id skips it too: LinkedIn answered for it this week
+    const org = (await db.organizations.toArray()).find((o) => o.linkedinCompanyId === '7001')!;
+    let byId = 0;
+    await refreshLogos(
+      [org.id],
+      async () => {
+        byId++;
+        return { ok: false };
+      },
+      { now: later(60_000), limit: 5 },
+    );
+    expect(byId).toBe(0);
   });
 
   it('slows down when the day’s company reads are used, and pauses when LinkedIn says so', async () => {

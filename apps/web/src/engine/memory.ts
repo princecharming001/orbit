@@ -41,11 +41,30 @@ export async function listMemories(
   return r.ok ? { ok: true, memories: r.value.memories } : { ok: false, message: r.message };
 }
 
+type Found = { ok: true; memories: (MemoryItem & { score: number })[] };
+
+/**
+ * The server's answers to a memory search, kept ten minutes by the normalised query (plan 34 B3): the chat asks on
+ * every turn, and the same words a few turns apart get the same memories. Anything that adds or removes a memory
+ * clears it.
+ */
+export const MEMORY_SEARCH_KEEP_MS = 10 * 60_000;
+const searchMemo = new Map<string, { at: number; value: Found }>();
+
+/** tests, and anything that changed the memories */
+export function resetMemorySearchMemo(): void {
+  searchMemo.clear();
+}
+
+function memoKey(userId: string, query: string, personId: string | undefined, limit: number): string {
+  return [userId, personId ?? '', limit, query.toLowerCase().replace(/\s+/g, ' ').trim()].join('|');
+}
+
 export async function searchMemories(
   user: Pick<User, 'id'>,
   query: string,
   opts: { personId?: string; limit?: number; signal?: AbortSignal } = {},
-): Promise<{ ok: true; memories: (MemoryItem & { score: number })[] } | Fail> {
+): Promise<Found | Fail> {
   if (!isServerUser(user.id)) {
     const ranked = await localSearch(user.id, query, {
       personId: opts.personId,
@@ -54,13 +73,22 @@ export async function searchMemories(
     });
     return { ok: true, memories: ranked.map((m) => ({ ...toMemoryItem(m), score: m.score })) };
   }
+  const key = memoKey(user.id, query, opts.personId, opts.limit ?? 8);
+  const hit = searchMemo.get(key);
+  if (hit && Date.now() - hit.at < MEMORY_SEARCH_KEEP_MS) return hit.value;
   const r = await callApi(
     '/memory/search',
     { query, personId: opts.personId, limit: opts.limit ?? 8 },
     { signal: opts.signal },
   );
-  return r.ok ? { ok: true, memories: r.value.memories } : { ok: false, message: r.message };
+  if (!r.ok) return { ok: false, message: r.message };
+  const value: Found = { ok: true, memories: r.value.memories };
+  searchMemo.set(key, { at: Date.now(), value });
+  return value;
 }
+
+/** Words this short ("ok", "thanks") find nothing worth a server search for the chat's Remembered line. */
+export const MEMORY_SEARCH_MIN_CHARS = 12;
 
 export async function remember(
   user: Pick<User, 'id'>,
@@ -75,6 +103,7 @@ export async function remember(
       : { ok: false, message: 'Say what to remember.' };
   }
   const r = await callApi('/memory/add', { text: text.slice(0, 500), kind: m.kind, personId: m.personId });
+  if (r.ok) resetMemorySearchMemo();
   return r.ok
     ? { ok: true, memory: r.value.memory, deduped: r.value.deduped }
     : { ok: false, message: r.message };
@@ -86,6 +115,7 @@ export async function forget(user: Pick<User, 'id'>, memoryId: string): Promise<
       ? { ok: true }
       : { ok: false, message: 'Orbit has no memory with that id.' };
   const r = await callApi('/memory/forget', { id: memoryId });
+  if (r.ok) resetMemorySearchMemo();
   return r.ok ? { ok: true } : { ok: false, message: r.message };
 }
 
@@ -97,6 +127,7 @@ export async function extractFromChat(
   if (!isServerUser(user.id)) return notHere();
   if (!turns.length) return { ok: true, memories: [], added: 0 };
   const r = await callApi('/memory/extract', { turns });
+  if (r.ok && r.value.added > 0) resetMemorySearchMemo();
   return r.ok
     ? { ok: true, memories: r.value.memories, added: r.value.added }
     : { ok: false, message: r.message };
@@ -114,7 +145,9 @@ export async function rememberedLines(
   opts: { signal?: AbortSignal; maxChars?: number } = {},
 ): Promise<string[]> {
   if (!lastUserText?.trim()) return [];
-  const r = isServerUser(user.id)
+  const server = isServerUser(user.id);
+  if (server && lastUserText.trim().length < MEMORY_SEARCH_MIN_CHARS) return [];
+  const r = server
     ? await searchMemories(user, lastUserText.slice(0, 500), { limit: 8, signal: opts.signal })
     : {
         ok: true as const,

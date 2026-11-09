@@ -452,10 +452,13 @@ export async function sourceFromWeb(o: WebSourcingOptions): Promise<WebSourcingR
     select: (hits) => selectPages(hits, o.ask, plan.maxPages),
   });
   notes.push(...gathered.notes);
+  // a plain search engine is named in the row, so the ledger shows which one sourcing paid (plan 34 B5)
+  const engine =
+    gathered.provider === 'serper' || gathered.provider === 'parallel' ? gathered.provider : undefined;
   if (gathered.costUsd > 0)
     await o.budget?.record(o.userId, {
-      provider: 'claude',
-      operation: 'sourcing_web',
+      provider: engine ?? 'claude',
+      operation: engine ? `sourcing_web:${engine}` : 'sourcing_web',
       units: gathered.pages.length,
       costUsd: gathered.costUsd,
     });

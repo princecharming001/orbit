@@ -22,6 +22,8 @@ export interface ProviderOptions {
   timeoutMs?: number;
   /** retries after the first attempt, default 3 (capped at 3) */
   maxRetries?: number;
+  /** the provider's kill switch (switches.ts): false answers budget_exceeded with reason 'off' and makes no call */
+  gate?: () => Promise<boolean>;
 }
 
 export type ProviderErrorKind =
@@ -38,6 +40,8 @@ export interface ProviderError {
   provider: string;
   status?: number;
   message: string;
+  /** 'off' when the provider's switch is off (plan 34 A5) */
+  reason?: 'off';
 }
 
 export type ProviderResult<T> = { ok: true; value: T } | ProviderError;
@@ -81,6 +85,14 @@ export async function requestJson<S extends z.ZodType>(
   opts: ProviderOptions,
   spec: RequestSpec<S>,
 ): Promise<ProviderResult<z.output<S>>> {
+  if (opts.gate && !(await opts.gate().catch(() => true)))
+    return {
+      ok: false,
+      kind: 'budget_exceeded',
+      provider: spec.provider,
+      reason: 'off',
+      message: `${spec.provider}: switched off`,
+    };
   const sleep = opts.sleep ?? defaultSleep;
   const random = opts.random ?? Math.random;
   const clock = opts.clock ?? Date.now;

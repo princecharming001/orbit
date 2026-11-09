@@ -324,12 +324,14 @@ export async function investigate(
     title?: string;
     text: string;
   }): Promise<Extracted | undefined> => {
-    const key = await cacheKey('extract', {
-      v: EXTRACT_VERSION,
-      url: normalizeUrl(page.url),
-      who: card.fullName,
-      slug: card.slug ?? '',
-    });
+    // about a named person: their own reading of the page; with no one named, one reading of the page for everyone
+    const who = card.fullName?.trim();
+    const key = await cacheKey(
+      'extract',
+      who
+        ? { v: EXTRACT_VERSION, url: normalizeUrl(page.url), who: card.fullName, slug: card.slug ?? '' }
+        : { v: EXTRACT_VERSION, url: normalizeUrl(page.url) },
+    );
     const cached = (await deps.cache.get(key)) as Extracted | undefined;
     if (cached) return cached;
     if (out.costUsd + EXTRACT_ESTIMATE_USD > opts.budgetUsd) return undefined;

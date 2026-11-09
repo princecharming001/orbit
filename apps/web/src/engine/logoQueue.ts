@@ -20,7 +20,7 @@ import {
   linkedInCompanies,
 } from '../integrations/enrichmentProxy';
 import { endActivity, startActivity } from './activity';
-import { adoptCompany } from './enrichment/logos';
+import { adoptCompany, logosAskedAt, markLogosAsked } from './enrichment/logos';
 import { liveAccountFor } from './enrichment/sources';
 import { linkedInPaused, pauseLinkedIn, readBudget } from './enrichment/store';
 import { upsertOrganization } from './people';
@@ -99,13 +99,17 @@ async function namesToSend(
   now: Date,
 ): Promise<{ key: string; name: string }[]> {
   const orgs = await db.organizations.toArray();
+  const asked = await logosAskedAt();
   const done = new Set(
     orgs
       .filter((o) => o.logoUrl && o.linkedinCompanyId)
       .map((o) => o.nameNormalized || normalizeCompany(o.name)),
   );
+  // a company LinkedIn answered for without a logo (by name here, or by id in the logo refresh) waits like a miss
   const fresh = (key: string) =>
-    !done.has(key) && now.getTime() - Date.parse(tried[key] ?? '1970-01-01') > LOGO_RETRY_MS;
+    !done.has(key) &&
+    now.getTime() - Date.parse(tried[key] ?? '1970-01-01') > LOGO_RETRY_MS &&
+    now.getTime() - Date.parse(asked[key] ?? '1970-01-01') > LOGO_RETRY_MS;
   const out: { key: string; name: string }[] = [];
   const seen = new Set<string>();
   const add = (key: string, name: string) => {
@@ -161,10 +165,12 @@ export async function fetchLogos(
     return { step: 'asked', found: 0 };
   }
   let found = 0;
+  const answered: string[] = [];
   for (const { key, name } of batch) {
     const a = r.value.companies[name];
     if (!a) continue;
     wanted.delete(key);
+    if (a.status === 'found' && a.companyId) answered.push(key);
     if (a.status !== 'found' || !a.companyId) {
       tried[key] = now.toISOString();
       continue;
@@ -179,6 +185,7 @@ export async function fetchLogos(
     if (a.logoUrl) found++;
   }
   await db.kv.put({ key: triedKey(user.id), value: tried });
+  await markLogosAsked(answered, now);
   // today's company reads are used: the shared list still answers, so the queue keeps going, only slower
   if (r.value.stopped === 'limit') nextCall.set(user.id, now.getTime() + 30 * 60_000);
   if (r.value.stopped === 'throttled')

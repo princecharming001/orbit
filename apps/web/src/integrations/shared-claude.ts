@@ -40,7 +40,7 @@ export function sharedClaudeAvailable(now = new Date()): boolean {
 
 /**
  * Pause the shared access after it refused: until the next UTC midnight for a daily limit, an hour when the server
- * is not set up, and until the next UTC day once this student has used the day's allowance ($20 a day).
+ * is not set up, and until the next UTC day once this student has used the day's allowance ($3 a day).
  */
 function nextUtcMidnight(now: Date): Date {
   const d = new Date(now);

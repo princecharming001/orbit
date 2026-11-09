@@ -77,6 +77,9 @@ export interface StyleProfile {
   updatedAt: string;
   /** messages the student pasted in as examples of how they write */
   samples?: string[];
+  /** the LinkedIn messages last read for the voice and when, so a relearn within a week reads them from here */
+  linkedinSamples?: string[];
+  linkedinReadAt?: string;
 }
 
 export interface KV {

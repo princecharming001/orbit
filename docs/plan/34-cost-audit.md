@@ -1,6 +1,7 @@
 # 34. Cost audit: every paid call, what it costs, and the order to fix it
 
-Status: audit done 2026-11-09 (UTC), plan ready to execute. Extends 26 (cost and speed, 2026-10-26) with the work that
+Status: audit done 2026-11-09 (UTC); phases A to E shipped 2026-11-09 except the items in §10 that wait on Anish or on
+a week of C1 numbers. Extends 26 (cost and speed, 2026-10-26) with the work that
 landed since: web sourcing (31), network search (32), profile reading (33), the Hunter email finder, the chat proxy's
 global and anonymous caps. Written for an Opus 5.5 session to execute top to bottom. Everything in §1 to §4 is measured
 or read from the code at main `b6ef0cd` (2026-11-08); nothing is estimated unless the line says so. The full call-site
@@ -597,3 +598,45 @@ select (read_at at time zone 'utc')::date d, read_by, status, count(*) reads fro
 -- 9.9 crons
 select jobname, schedule, active from cron.job where jobname like 'orbit-%' order by 1;
 ```
+
+## 10. What shipped (2026-11-09)
+
+Shipped in one change, each item with its tests:
+
+- A2 caps $3 a student, $1 an anonymous network, $25 global a day. A3: the proxy read the session signing key only from
+  the `ORBIT_SESSION_SECRET` environment variable, while the key lives in Vault; it never verified a session, so every
+  signed-in request was charged to `client:`. It now reads the Vault copy through a service-role function (cached 5
+  minutes) and charges `user:<uuid>:<day>` plus the lifetime `user:<uuid>`. Chat spend counts toward a new combined cap
+  `claude_total_daily_usd` ($4.50 a day, chat and server work together), not the $1.50 server cap, so a heavy chat day
+  never blocks drafting on its own.
+- A4 Hunter: global 40 credits a month, attempts kept as `<op>:attempt` rows with 0 units, reserve then settle for Hunter
+  and Apollo, 5 lookups and 5 verifies a run, domain search memoised per run. A5 switches:
+  `orbit_private.provider_switches`, `public.orbit_provider_enabled(p)`, read by `services.ts` and the proxy, 5-minute
+  cache. A6: no `max_tokens` retry for classify, reply_classify, fit and reading; a retry gets its own `<task>:retry`
+  row; a job that failed after a paid call gets one more try, then a dead letter (`_shared/paid.ts`). A7: one heavy job a
+  tick, score pages of 100, the LinkedIn sync at 2 relation pages and 4 chats a job, with a 7-day fresh window whose short
+  pass reads one relations page and new chats only. A8: style relearn once a week, calendar list every 6 hours on a quiet
+  check, Village answers kept 7 days.
+- B1 shared profile text (`orbit_private.profile_pages`), B2 shared cache for sourcing Exa, Apollo, Semantic Scholar and
+  LinkedIn search parameters and page-only investigate extractions, B3 memory search memo, B4 mutuals by member id, B5
+  search-engine chain (Serper, Parallel, Exa, then Claude; no keys set, so behaviour today is unchanged), B6 one
+  profile-read and one logo-asked record in the browser.
+- C1 `orbit_private.claude_usage` with the turn iteration from `x-orbit-iterations`. C2 8 requests a turn, 8,000 output
+  tokens, 2 searches a request, a parse retry capped at 3 requests. Two departures, both on purpose: once a turn has run
+  3 searches, later tool results tell the model to stop searching instead of dropping the tool (a changed tool list
+  misses the prompt cache for the rest of the turn); and the nonce stays in the system prompt, after the playbook's new
+  breakpoint, so moving it gains nothing. C3 the playbook has its own breakpoint; the dossier system text is constant.
+- D1 cron filters (reading every 6 h only with unread profiles, census every 6 h, cadence for students seen in 14 days or
+  with open work, calendar resync on Sundays, `score.user` only when stale, heartbeat every 30 minutes, health hourly).
+  D3 retention sweeps and the `usage_ledger` index. E1 `orbit.v_spend_daily` and connectors ledger rows. E2 `cost.digest`
+  at 07:50 UTC. E3 `/admin/costs` and `/settings/costs` for the owner.
+
+Not done, and why:
+
+- A1 Anthropic workspace key, A9 Unipile prune, B5 Serper and Parallel signups, D2 GCP Pub/Sub, E4 Supabase project, the
+  Hunter plan: these need Anish's own accounts (§8).
+- `ORBIT_OWNER_ID` and `RESEND_API_KEY` are not set: until they are, `/admin/costs` answers 404 and the digest is a row
+  with `mailError` and no mail.
+- C4 Batch API: server Anthropic spend is under its $5 a month threshold. C5 model and effort changes: decisions that
+  wait on a week of C1 numbers and the bench. D4 CI: optional while the repo is public. A7's SQL `score_page`: only if
+  deaths stay above 2 a day with pages of 100.

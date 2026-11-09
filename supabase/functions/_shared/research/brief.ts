@@ -33,7 +33,7 @@ import {
 import { appearsMinor } from './guards';
 import { aboutCompany, type IdentityCard, identityCard, scorePage } from './identity';
 import { type FoundPage, investigate } from './investigate';
-import { type DossierContent, dossierSystem, dossierUser, PROMPT_VERSION } from './prompts';
+import { DOSSIER_SYSTEM, type DossierContent, dossierStudent, dossierUser, PROMPT_VERSION } from './prompts';
 import { supportCheck } from './support';
 import {
   type GatherPlan,
@@ -142,7 +142,7 @@ export type BriefOutcome =
       steps: BriefStep[];
       /** web pages surely about them (not LinkedIn), so Go deeper knows where to spend */
       strongPages: number;
-      provider?: 'exa' | 'claude' | 'investigate';
+      provider?: 'exa' | 'claude' | 'serper' | 'parallel' | 'investigate';
       checked: boolean;
       /** what the support check took out, for the live check only: never logged or sent on (it names the person) */
       debug?: { dropped: string[] };
@@ -433,7 +433,7 @@ export async function runBrief(
       .sort((a, b) => b.s.signals.length - a.s.signals.length)
       .map(({ h }) => h.url);
   const select = selectFor(false);
-  let provider: 'exa' | 'claude' | 'investigate' | undefined;
+  let provider: 'exa' | 'claude' | 'serper' | 'parallel' | 'investigate' | undefined;
   let deeperMode: 'person' | 'company' | undefined;
   const engines = (deps.engines ?? []).filter((e) => e.configured);
   if (engines.length && deps.cache) {
@@ -563,8 +563,8 @@ export async function runBrief(
   const webCount = personPages.length;
 
   const prompt = {
-    system: dossierSystem(req.student.firstName, req.student.goalSentence),
-    user: dossierUser({
+    system: DOSSIER_SYSTEM,
+    user: `${dossierStudent(req.student.firstName, req.student.goalSentence)}\n\n${dossierUser({
       userContext: req.student.context,
       person: {
         name: card.fullName,
@@ -577,7 +577,7 @@ export async function runBrief(
       linkedin: linkedinLines.join('\n\n') || '(no LinkedIn profile)',
       sources: sources.filter((s) => s.kind === 'web' && Number(s.id.slice(1)) < firstCompany),
       companySources: sources.filter((s) => Number(s.id.slice(1)) >= firstCompany),
-    }),
+    })}`,
   };
 
   let content: DossierContent | null = null;

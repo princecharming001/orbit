@@ -54,7 +54,10 @@ export type BudgetProvider =
   | 'apollo_match'
   | 'hunter'
   | 'unipile_profile'
-  | 'unipile_search';
+  | 'unipile_search'
+  /** plain web search engines for sourcing (plan 34 B5): dollars */
+  | 'serper'
+  | 'parallel';
 
 export type BudgetVerdict = { ok: true } | { ok: false; reason: 'budget_exceeded'; resetsAt?: string };
 
@@ -68,6 +71,17 @@ export interface BudgetDep {
     userId: string,
     entry: { provider: BudgetProvider; operation: string; units: number; costUsd: number },
   ): Promise<void>;
+  /**
+   * Check and write the expected spend in one step, before a credit call; `settle` then writes what it really cost
+   * (0 units for a miss, kept as `<operation>:attempt`). Optional: without it callers check, call, then record.
+   */
+  reserve?(
+    userId: string,
+    entry: { provider: BudgetProvider; operation: string; units: number; costUsd: number },
+  ): Promise<
+    | { ok: true; settle(actual: { units: number; operation?: string }): Promise<void> }
+    | { ok: false; reason: 'budget_exceeded'; resetsAt?: string }
+  >;
 }
 
 /** `orbit.research_cache` (primary key user_id + key). `get` returns only unexpired rows. */

@@ -35,7 +35,7 @@ export const DEFAULT_DAILY_REQUEST_CAP = 50;
 export const DEFAULT_DAILY_TOKEN_CAP = 300_000;
 /**
  * The built-in Claude's limits in this browser: high enough never to stop a day's use, since Orbit's server holds the
- * real one ($20 a day per student). The defaults above guard a student's own Anthropic key, which bills them.
+ * real one ($3 a day per student). The defaults above guard a student's own Anthropic key, which bills them.
  */
 export const SHARED_DAILY_REQUEST_CAP = 5_000;
 export const SHARED_DAILY_TOKEN_CAP = 60_000_000;

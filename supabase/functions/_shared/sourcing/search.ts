@@ -12,7 +12,7 @@ import {
   estimateExaSearchUsd,
   exaCostUsd,
 } from '../providers/exa';
-import type { ProviderResult } from '../providers/request';
+import { cacheKey, type ProviderResult } from '../providers/request';
 import type { S2Author, SemanticScholar } from '../providers/semanticScholar';
 import {
   cleanLinkedInUrl,
@@ -26,7 +26,7 @@ import {
 import type { BudgetDep, ClaudeDep, Clock } from '../research/deps';
 import type { GoalKind } from '../research/dossier';
 import { norm, normOrg, orgFromTitle } from '../research/guards';
-import type { WebSource } from '../research/web';
+import type { SharedCache, WebSource } from '../research/web';
 import type { EmailConfidence } from './email';
 import { FIT_BATCH, type FitCandidate, fitSchema, fitSystem, fitUser } from './prompts';
 import { type Warmth, warmRank } from './warmth';
@@ -139,8 +139,42 @@ export interface SourcingDeps {
   /** one pass over every candidate before ranking, alongside fit: who is known, which orgs have a domain (run.ts) */
   prefetch?: (cands: Candidate[]) => Promise<void>;
   budget?: BudgetDep;
+  /**
+   * The research cache shared by every student (plan 34 B2): Exa and Apollo searches 7 days, Semantic Scholar 30
+   * days, LinkedIn search parameter ids 30 days; the same ask from anyone is asked once.
+   */
+  cache?: SharedCache;
   clock: Clock;
   newId?: () => string;
+}
+
+const DAY_MS = 86_400_000;
+export const SOURCING_CACHE_TTL = {
+  exa: 7 * DAY_MS,
+  apollo: 7 * DAY_MS,
+  scholar: 30 * DAY_MS,
+  searchParameters: 30 * DAY_MS,
+} as const;
+
+/**
+ * A provider call through the shared cache: a hit is the stored answer, a miss calls and keeps an ok answer. `call`
+ * may answer null (it chose not to call, such as over a budget): nothing is kept then.
+ */
+async function cachedCall<T>(
+  ctx: Ctx,
+  kind: string,
+  req: unknown,
+  ttlMs: number,
+  call: () => Promise<ProviderResult<T> | null>,
+): Promise<ProviderResult<T> | null> {
+  const cache = ctx.deps.cache;
+  if (!cache) return call();
+  const key = await cacheKey(kind, req);
+  const hit = await cache.get(key).catch(() => undefined);
+  if (hit !== undefined && hit !== null) return { ok: true, value: hit as T };
+  const r = await call();
+  if (r?.ok) await cache.put(key, kind, r.value, ttlMs).catch(() => undefined);
+  return r;
 }
 
 /** An `orbit.recommendations` row (§11.3) without id and timestamps. */
@@ -497,21 +531,27 @@ async function exaCall(
     contents: { highlights: { query: input.goal.title, maxCharacters: 600 } },
   };
   const est = estimateExaSearchUsd(req);
-  if (deps.budget) {
-    const v = await deps.budget.check(input.userId, 'exa', est);
-    if (!v.ok) {
-      ctx.errors.add('exa: budget_exceeded');
-      return [];
+  let refused = false;
+  const r = await cachedCall(ctx, 'sourcing:exa', req, SOURCING_CACHE_TTL.exa, async () => {
+    if (deps.budget && !(await deps.budget.check(input.userId, 'exa', est)).ok) {
+      refused = true;
+      return null;
     }
-  }
-  const r = await deps.exa.search(req);
-  if (!note(ctx, r) || !r.ok) return [];
-  await deps.budget?.record(input.userId, {
-    provider: 'exa',
-    operation: 'search',
-    units: 1,
-    costUsd: exaCostUsd(r.value, est),
+    const got = await deps.exa.search(req);
+    if (got.ok)
+      await deps.budget?.record(input.userId, {
+        provider: 'exa',
+        operation: 'search',
+        units: 1,
+        costUsd: exaCostUsd(got.value, est),
+      });
+    return got;
   });
+  if (refused || !r) {
+    ctx.errors.add('exa: budget_exceeded');
+    return [];
+  }
+  if (!note(ctx, r) || !r.ok) return [];
   return r.value.results.map((x) => fromExa(ctx, x, entity)).filter((c): c is Candidate => !!c);
 }
 
@@ -546,14 +586,17 @@ async function apolloCall(ctx: Ctx, relax: Relax, params: ApolloPeopleSearch): P
   }
   const loc = locationOf(ctx, relax);
   const g = input.goal;
-  const r = await deps.apollo.searchPeople({
+  const req: ApolloPeopleSearch = {
     ...params,
     person_locations: loc ? [loc] : undefined,
     person_seniorities: !relax.seniority && g.seniorities?.length ? g.seniorities : undefined,
     per_page: 25,
     page: 1,
-  });
-  if (!note(ctx, r) || !r.ok) return [];
+  };
+  const r = await cachedCall(ctx, 'sourcing:apollo', req, SOURCING_CACHE_TTL.apollo, () =>
+    deps.apollo.searchPeople(req),
+  );
+  if (!r || !note(ctx, r) || !r.ok) return [];
   return r.value.people.map((p) => fromApollo(ctx, p));
 }
 
@@ -580,10 +623,15 @@ function fromApollo(ctx: Ctx, p: ApolloPerson): Candidate {
 async function paramId(ctx: Ctx, type: SearchParameterType, keywords: string): Promise<string | undefined> {
   const k = `${type}:${norm(keywords)}`;
   if (ctx.idCache.has(k)) return ctx.idCache.get(k);
-  const r = await ctx.deps.unipile.searchParameters(ctx.input.unipileAccountId!, type, keywords, {
-    limit: 1,
-  });
-  const id = r.ok ? r.value[0]?.id : undefined;
+  // a company's or school's LinkedIn id is the same for every account: shared for 30 days
+  const r = await cachedCall(
+    ctx,
+    'sourcing:li_param',
+    { type, keywords: norm(keywords) },
+    SOURCING_CACHE_TTL.searchParameters,
+    () => ctx.deps.unipile.searchParameters(ctx.input.unipileAccountId!, type, keywords, { limit: 1 }),
+  );
+  const id = r?.ok ? r.value[0]?.id : undefined;
   ctx.idCache.set(k, id);
   return id;
 }
@@ -700,13 +748,11 @@ async function scholarCall(ctx: Ctx, _relax: Relax): Promise<Candidate[]> {
     return [];
   }
   const g = input.goal;
-  const r = await deps.semanticScholar.searchPapers(
-    [g.topic, ...(g.keywords ?? [])].filter(Boolean).join(' '),
-    {
-      limit: 50,
-    },
+  const q = [g.topic, ...(g.keywords ?? [])].filter(Boolean).join(' ');
+  const r = await cachedCall(ctx, 'sourcing:s2_papers', { q, limit: 50 }, SOURCING_CACHE_TTL.scholar, () =>
+    deps.semanticScholar.searchPapers(q, { limit: 50 }),
   );
-  if (!note(ctx, r) || !r.ok) return [];
+  if (!r || !note(ctx, r) || !r.ok) return [];
   const counts = new Map<string, { name: string; n: number; latest: number }>();
   for (const p of r.value.data)
     for (const a of p.authors ?? []) {
@@ -717,9 +763,16 @@ async function scholarCall(ctx: Ctx, _relax: Relax): Promise<Candidate[]> {
       counts.set(a.authorId, c);
     }
   const top = [...counts.entries()].sort((a, b) => b[1].n - a[1].n || b[1].latest - a[1].latest).slice(0, 10);
-  const authors = await Promise.all(top.map(([id]) => deps.semanticScholar.author(id)));
+  const authors = await Promise.all(
+    top.map(([id]) =>
+      cachedCall(ctx, 'sourcing:s2_author', { id }, SOURCING_CACHE_TTL.scholar, () =>
+        deps.semanticScholar.author(id),
+      ),
+    ),
+  );
   return top.map(([id, c], i) => {
-    const a: S2Author | undefined = authors[i]?.ok ? authors[i].value : undefined;
+    const got = authors[i];
+    const a: S2Author | undefined = got?.ok ? got.value : undefined;
     const name = a?.name ?? c.name;
     return {
       key: `c${++ctx.seq}`,
