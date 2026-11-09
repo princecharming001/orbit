@@ -87,9 +87,11 @@ begin
     out := out || jsonb_build_object('claude_usage', n);
   end if;
 
-  -- pg_cron's own run log (two every-minute ticks write to it)
+  -- pg_cron's own run log, Orbit's jobs only: the project is shared and other apps keep their own history
   if to_regclass('cron.job_run_details') is not null then
-    execute 'delete from cron.job_run_details where end_time < now() - interval ''7 days''';
+    execute 'delete from cron.job_run_details d using cron.job j
+              where d.jobid = j.jobid and j.jobname like ''orbit-%''
+                and d.end_time < now() - interval ''7 days''';
     get diagnostics n = row_count;
     out := out || jsonb_build_object('cron_run_details', n);
   end if;

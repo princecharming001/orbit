@@ -522,7 +522,7 @@ Fill the "after" column in the commit that ships each item. Queries are in §9; 
 | Worker invocations a day (§9.5) | 367 | | | | |
 | Browser `/inbox` calls a day (§9.5) | not separated yet | | | | |
 | Unipile connected accounts (dashboard) | unknown | | | | |
-| `cron.job_run_details` rows (§9.7) | 84,811 | | | | |
+| `cron.job_run_details` rows (§9.7) | 84,811 | | | | 55,117 on 11-09 (Orbit's rows kept 7 days; the rest belong to the other apps on the project) |
 | CI runner minutes a push | 57 | | | | |
 
 ## 8. Decisions for Anish
@@ -630,6 +630,16 @@ Shipped in one change, each item with its tests:
   with open work, calendar resync on Sundays, `score.user` only when stale, heartbeat every 30 minutes, health hourly).
   D3 retention sweeps and the `usage_ledger` index. E1 `orbit.v_spend_daily` and connectors ledger rows. E2 `cost.digest`
   at 07:50 UTC. E3 `/admin/costs` and `/settings/costs` for the owner.
+
+Deployed 2026-11-09 04:05 UTC: migrations 20261111 to 20261115 applied, orbit-api, orbit-connectors, orbit-research,
+orbit-webhooks, orbit-worker and orbit-claude deployed at `93643af`. Checked live: every function boots, the proxy's
+preflight allows `x-orbit-iterations`, the first `cost.digest` ran in 71 ms and flagged 11-08's 47 isolate deaths and
+22 dead letters, and one `retention_purge` removed 30,187 old Orbit cron rows. The retention sweep of
+`cron.job_run_details` touches Orbit's jobs only, since the project is shared. The other "after" columns in §7 need a
+week of traffic, and chat numbers need the Anthropic account funded again (it still answers "credit balance is too
+low" on 11-09, so the chat bench could not run; C2's limits were checked against the recorded bench runs instead: of
+about 1,300 scenario runs, 4 turns used 8 or more tool calls, none ran more than 4 web searches, and the longest answer
+was 239 words).
 
 Not done, and why:
 
