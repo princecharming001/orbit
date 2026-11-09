@@ -305,7 +305,8 @@ async function profile(ctx: Ctx): Promise<Response> {
     await sqlQueue(ctx.db).enqueue({
       kind: 'score.user',
       userId,
-      payload: { reason: 'reply_tone' },
+      // every score moves: the whole network, not only the people with something new (plan 35 B1)
+      payload: { reason: 'reply_tone', full: true },
       dedupeKey: `score.user:${userId}:reply_tone:${Date.now()}`,
     });
   const str = (v: unknown) => (typeof v === 'string' && v ? v : null);

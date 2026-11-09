@@ -22,7 +22,7 @@ import { badRequest, json } from '../../_shared/http.ts';
 import { loadAccount } from '../../_shared/ingest/util.ts';
 import { loadCompanyFacts } from '../../_shared/search/companyFacts.ts';
 import { type LookupKind, runFacetLookup } from '../../_shared/search/lookup.ts';
-import { ASK_MAX, runReadingStep } from '../../_shared/search/reading.ts';
+import { ASK_MAX, requestReads, runReadingStep } from '../../_shared/search/reading.ts';
 import type { Ctx, Route } from '../api.ts';
 import { body } from './body.ts';
 
@@ -160,6 +160,8 @@ async function labels(ctx: Ctx): Promise<Response> {
     on conflict (user_id, person_id, ask_hash) do update set verdict = excluded.verdict, ask = excluded.ask,
       created_at = now()
     returning id`;
+  // a person judged against an ask is one the background reading should read (plan 35 B6)
+  if (row) await requestReads(ctx.db, ctx.userId!, [b.personId]);
   return json(200, { ok: !!row });
 }
 
@@ -212,6 +214,8 @@ async function read(ctx: Ctx): Promise<Response> {
     !b.personIds.every((x) => typeof x === 'string' && isUuid(x))
   )
     throw badRequest(`personIds is a list of up to ${ASK_MAX} person ids`);
+  // asked for by name: the background reading finishes what this request cannot (plan 35 B6)
+  await requestReads(ctx.db, ctx.userId!, b.personIds as string[]);
   const off = (reason: string) => json(200, { ok: false, read: [], reason });
   if (!ctx.env.unipileKey || !ctx.env.unipileBase) return off('unconfigured');
   const acct = await loadAccount(ctx.db, ctx.userId!, 'linkedin');

@@ -444,6 +444,26 @@ describe('friends over orbit-api', () => {
       { queue: 'orbit_score', msgId: 1, readCt: 1, kind: 'score.user', userId: ana.userId, payload: {} },
       ctx,
     );
+    // plan 35 B1: the run infers the ties once, one score.ties job per tie group, the last of which queues the pages
+    for (let step = 0; ; step++) {
+      const [tj] = await t.db.sql<{ msg_id: number; message: { payload: Record<string, unknown> } }>`
+        select msg_id, message from pgmq.q_orbit_score
+         where message ->> 'kind' = 'score.ties' and message ->> 'userId' = ${ana.userId}`;
+      if (!tj) break;
+      expect(step).toBeLessThan(10);
+      await t.db.sql`delete from pgmq.q_orbit_score where msg_id = ${tj.msg_id}`;
+      await handlers['score.ties']!(
+        {
+          queue: 'orbit_score',
+          msgId: 100 + step,
+          readCt: 1,
+          kind: 'score.ties',
+          userId: ana.userId,
+          payload: tj.message.payload,
+        },
+        ctx,
+      );
+    }
     // the rebuild runs a page of people at a time; the last page is what queues the refresh, once every score is fresh
     const pages = await t.db.sql<{ message: { payload: Record<string, unknown> } }>`
       select message from pgmq.q_orbit_score

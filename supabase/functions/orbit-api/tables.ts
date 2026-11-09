@@ -125,7 +125,14 @@ export const PULL_TABLES: PullTable[] = [
       weight: Number(r.weight) * Number(r.confidence),
     }),
   },
-  { table: 'tie_scores', key: 'person_id', cursor: 'updated_at' },
+  {
+    table: 'tie_scores',
+    key: 'person_id',
+    cursor: 'updated_at',
+    // plan 35 B2: the browser reads a score and its band; the person page asks /scores/explain for the sentences and
+    // the contributions behind them, and nothing in the browser reads the features
+    omit: ['features', 'contributions', 'explanation'],
+  },
   { table: 'tie_labels', key: 'person_id', cursor: 'updated_at' },
   {
     table: 'chats',

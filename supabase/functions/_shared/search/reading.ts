@@ -406,6 +406,29 @@ async function markProfile(
 
 // ---- choosing -----------------------------------------------------------------------------------------------------
 
+/** How long a request keeps a profile on the background reading's list (orbit.reading_candidates). */
+export const REQUEST_DAYS = 7;
+
+/**
+ * Mark profiles as wanted (plan 35 B6): a network search's read or labels, a Map target, an opened person page. The
+ * background reading takes only these (and the 50 closest once). Best effort: a failure here never fails the caller.
+ */
+export async function requestReads(db: Db, userId: string, personIds: readonly string[]): Promise<void> {
+  const ids = [...new Set(personIds.filter(Boolean))].slice(0, 200);
+  if (!ids.length) return;
+  try {
+    await db.sql`
+      insert into orbit.profile_requests (user_id, person_id, requested_at)
+      select ${userId}::uuid, p.id, now() from orbit.people p
+       where p.user_id = ${userId}::uuid and p.id = any(${ids}::uuid[])
+      on conflict (user_id, person_id) do update set requested_at = excluded.requested_at`;
+  } catch (e) {
+    console.log(
+      JSON.stringify({ fn: 'requestReads', error: String((e as Error)?.message ?? e).slice(0, 200) }),
+    );
+  }
+}
+
 export type Candidate = {
   id: string;
   member: string;
@@ -413,15 +436,16 @@ export type Candidate = {
   headline: string | null;
 };
 
-/** Who to read next: founders, investors and leaders first, then the closest ties, then the most recent. */
+/**
+ * Who to read next (plan 35 B6): only people someone asked about in the last 7 days (orbit.profile_requests) and, once,
+ * the 50 closest never read (orbit.reading_candidates, the same set the cron checks before queueing a step). Among
+ * them founders, investors and leaders first, then the closest ties, then the most recent.
+ */
 export async function pickPeople(db: Db, userId: string, n: number): Promise<Candidate[]> {
   return db.sql<Candidate>`
     select p.id, coalesce(p.linkedin_member_id, p.linkedin_slug) as member, p.display_name as name, p.headline
-      from orbit.people p
-      left join orbit.profile_reads r on r.user_id = p.user_id and r.person_id = p.id
-     where p.user_id = ${userId}::uuid and p.deleted_at is null and p.merged_into is null and p.hidden_at is null
-       and not p.is_self and coalesce(p.linkedin_member_id, p.linkedin_slug) is not null
-       and (r.person_id is null or r.read_at < now() - make_interval(days => ${REREAD_DAYS}))
+      from orbit.reading_candidates(${userId}::uuid) c
+      join orbit.people p on p.id = c.person_id
      order by (coalesce(p.headline, '') ~* '(founder|ceo|cto|coo|building|stealth|partner|investor|\\mvc\\M|angel|principal|head of|director|\\mvp\\M)')::int desc,
               coalesce(p.strength, 0) desc, p.last_interaction_at desc nulls last
      limit ${n}`;

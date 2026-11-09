@@ -107,7 +107,12 @@ export const DEFAULT_BUDGET_MS = 110_000;
  * shared by every job a tick runs, so a tick runs a few of these and only while it is fresh; the rest wait for the
  * next tick, a minute away, in a new isolate.
  */
-export const HEAVY_KINDS: ReadonlySet<string> = new Set(['score.user', 'score.page', 'score.person']);
+export const HEAVY_KINDS: ReadonlySet<string> = new Set([
+  'score.user',
+  'score.ties',
+  'score.page',
+  'score.person',
+]);
 /**
  * One a tick (plan 34 A7): with three, score.page runs shared one isolate's 2 s CPU allowance and 38 of them died
  * with the isolate on 2026-11-08.
@@ -123,6 +128,7 @@ export const RESERVE_MS: Readonly<Record<string, number>> = {
   'sync.gmail.backfill': 58_000,
   'score.user': 20_000,
   'score.page': 20_000,
+  'score.ties': 20_000,
   search_census: 58_000,
   search_reading: 58_000,
   company_facts_sync: 30_000,
