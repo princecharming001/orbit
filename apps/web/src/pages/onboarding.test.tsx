@@ -135,6 +135,7 @@ async function renderSetup(address: string, stored: number) {
           <Routes>
             <Route path="/onboarding/:step" element={<Onboarding />} />
             <Route path="/" element={<p data-testid="home">home</p>} />
+            <Route path="/welcome" element={<p data-testid="landing">landing</p>} />
           </Routes>
         </SessionProvider>
       </MemoryRouter>,
@@ -205,6 +206,15 @@ describe('setup addresses', () => {
   it('opens a new profile on Welcome, even from the address of the step after it', async () => {
     const { q, done } = await renderSetup('/onboarding/1', 1);
     expect(q('ob-welcome')).not.toBeNull();
+    done();
+  });
+
+  it('goes back from Welcome to the landing page', async () => {
+    const { host, q, done } = await renderSetup('/onboarding/0', 1);
+    expect(q('ob-welcome')).not.toBeNull();
+    await act(async () => (host.querySelector('button[aria-label="Back"]') as HTMLElement).click());
+    await settle();
+    expect(q('landing')).not.toBeNull();
     done();
   });
 

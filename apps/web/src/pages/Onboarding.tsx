@@ -181,7 +181,8 @@ export function Onboarding() {
     })();
   };
   const statuses = stepStatuses(STEPS, step, did ?? {});
-  const onBack = step === STEP.welcome ? undefined : () => back(before(step));
+  // Welcome's Back returns to the landing page (/welcome shows it to someone mid-setup, with "Continue setup")
+  const onBack = step === STEP.welcome ? () => nav('/welcome') : () => back(before(step));
   let body: ReactNode = null;
   if (step === STEP.welcome)
     body = (
