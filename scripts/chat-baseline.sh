@@ -6,6 +6,8 @@
 #   ANTHROPIC_API_KEY=... scripts/chat-baseline.sh [group=all] [out=docs/qa/chat-runs/<date>-<group>]
 #
 # SIM_STRICT=1 enforces the plan 28 bar instead of recording it; SIM_ONLY=id1,id2 runs a few scenarios.
+# Without a key, on your own Claude login through the claude command line (see scripts/claude-cli-shim.mjs):
+#   node scripts/claude-cli-shim.mjs &   ORBIT_SIM_PROXY=http://localhost:8787 scripts/chat-baseline.sh [group]
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -19,8 +21,12 @@ out="${2:-docs/qa/chat-runs/$(date +%Y-%m-%d)-$group}"
 mkdir -p "$out"
 echo "running sim group '$group' into $out"
 
+# a local stand-in (the command-line shim) is reached directly, never through the shell's HTTP proxy
+envproxy=1
+case "${ORBIT_SIM_PROXY:-}" in http://localhost*|http://127.0.0.1*) envproxy=0 ;; esac
+
 set +e
-NODE_USE_ENV_PROXY=1 SIM_GROUP="$group" SIM_DIR="$PWD/$out" \
+NODE_USE_ENV_PROXY=$envproxy SIM_GROUP="$group" SIM_DIR="$PWD/$out" \
   pnpm --filter @orbit/web exec vitest run src/chat/__tests__/sim/run --no-file-parallelism --reporter=dot \
   2>&1 | tee "$out/_run.log" | tail -40
 status=${PIPESTATUS[0]}
