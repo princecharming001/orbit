@@ -526,6 +526,23 @@ cards are action rows): `hydrate` now puts the card back under its turn, the lea
 button is still done after a reload in either mode. The router's "the second one" reads a question's options as the
 list. Two offline simulation threads cover the Juniper question and "the first one" after "tell me about Keiko".
 
+**Shipped.** Main `2414e7f` (CI run 298 green, Pages deployed 22:32 UTC), orbit-claude v20 from source at the same
+sha (22:35 UTC; no requests reached it in between). No migration and no bundle change: orbit-claude deploys from source.
+
+**Gallery round (2026-11-09, demo, Auto, through the CLI shim).** c01 "who do I know at Juniper": one line ("Do you mean
+Juniper Health or Juniper Capital?") with the two options under it; the tap shows "Juniper Health" as the student's turn
+and the company card. c02 "draft a thank you to Keiko": four Keikos with where each works; the tap drafts to the one
+picked. b01: "Add Juniper Health to targets" turns to "Added to targets", the chip to Target, no turn is added, and the
+next reply ("what should I do next there") does not offer it again. The first round put the question under its options
+(the model writes after the tool); the options now sit under the words. One wording slip left for the bench, outside this
+plan: c03 ("product people at Juniper", then Juniper Capital) found no product people there and the reply said "Nobody
+you know is at Juniper Capital", though Isabel works there in operations.
+
+**Not run.** The Auto bench (§5.4, about $16) waits for a yes. The full browser suite here had three failures that are
+not this work: an onboarding test that also fails on `cc02b34` (two headings during a step transition, 2 of 4 runs), a
+build-without-Google test that fails on `cc02b34` in this container's build, and a map test fixed in `ff20492` (a route's
+end lost its name tag at the edge of the screen once the demo grew by three people).
+
 **Tests added.** `chat/__tests__/clarify.test.ts` (20), `in-place.test.tsx` (5), `effort.test.ts` (45), the loop's
 question-back and per-message effort cases, `ui/cards/clarify.test.tsx`, `ui/composer-mode.test.tsx`, router field
 cases, e2e `ask-act.spec.ts`, and gallery cases c01 to c03 and b01 (with `tap:` and `step:` turns).
