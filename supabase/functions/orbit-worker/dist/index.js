@@ -12850,7 +12850,7 @@ var MinHeap = class {
     return [topK, topV];
   }
 };
-function boundedSearch(g, source, maxHops, target, removedEdges, removedNodes) {
+function boundedSearch(g, source, maxHops, target, removedEdges, removedNodes, toTarget) {
   const dist = /* @__PURE__ */ new Map();
   const prev = /* @__PURE__ */ new Map();
   const minSettledHops = /* @__PURE__ */ new Map();
@@ -12877,8 +12877,10 @@ function boundedSearch(g, source, maxHops, target, removedEdges, removedNodes) {
     if (!best.has(node)) best.set(node, { cost: d, hops });
     if (node === target) break;
     if (hops >= maxHops) continue;
+    const cutEdges = removedEdges?.size ? removedEdges : void 0;
     for (const [v, e] of g.adj.get(node) ?? []) {
-      if (v === source || removedNodes?.has(v) || removedEdges?.has(`${node}>${v}`)) continue;
+      if (v === source || removedNodes?.has(v) || cutEdges?.has(`${node}>${v}`)) continue;
+      if (toTarget && (toTarget.get(v) ?? Number.POSITIVE_INFINITY) > maxHops - hops - 1) continue;
       const s = minSettledHops.get(v);
       if (s !== void 0 && s <= hops + 1) continue;
       const nd = d + edgeCost(e.weight);
@@ -12902,10 +12904,32 @@ function reconstruct(search, node) {
   }
   return path;
 }
-function shortestPath(g, source, target, maxHops, removedEdges, removedNodes) {
+function shortestPath(g, source, target, maxHops, removedEdges, removedNodes, toTarget) {
   if (source === target) return [source];
-  const search = boundedSearch(g, source, maxHops, target, removedEdges, removedNodes);
+  const search = boundedSearch(g, source, maxHops, target, removedEdges, removedNodes, toTarget);
   return reconstruct(search, target);
+}
+function hopsToTarget(g, target, maxHops) {
+  const back = /* @__PURE__ */ new Map();
+  for (const [u2, nbrs] of g.adj)
+    for (const v of nbrs.keys()) {
+      const list2 = back.get(v);
+      if (list2) list2.push(u2);
+      else back.set(v, [u2]);
+    }
+  const out = /* @__PURE__ */ new Map([[target, 0]]);
+  let frontier = [target];
+  for (let h = 1; h <= maxHops && frontier.length; h++) {
+    const next = [];
+    for (const v of frontier)
+      for (const u2 of back.get(v) ?? [])
+        if (!out.has(u2)) {
+          out.set(u2, h);
+          next.push(u2);
+        }
+    frontier = next;
+  }
+  return out;
 }
 function pathCost(g, path) {
   let c = 0;
@@ -12914,7 +12938,19 @@ function pathCost(g, path) {
 }
 function kShortestPaths(g, source, target, k = 3, maxHops = 3) {
   if (!g.nodes.has(source) || !g.nodes.has(target)) return source === target ? [[source]] : [];
-  const first = shortestPath(g, source, target, maxHops, /* @__PURE__ */ new Set(), /* @__PURE__ */ new Set());
+  const toTarget = hopsToTarget(g, target, maxHops);
+  if (!toTarget.has(source)) return [];
+  const full = g;
+  g = makeGraph();
+  for (const [u2, nbrs] of full.adj) {
+    if (!toTarget.has(u2)) continue;
+    const kept = /* @__PURE__ */ new Map();
+    for (const [v, e] of nbrs) if (toTarget.has(v)) kept.set(v, e);
+    g.nodes.add(u2);
+    g.adj.set(u2, kept);
+  }
+  g.nodes.add(target);
+  const first = shortestPath(g, source, target, maxHops, /* @__PURE__ */ new Set(), /* @__PURE__ */ new Set(), toTarget);
   if (!first) return [];
   const A = [first];
   if (first.length === 1) return A;
@@ -12931,7 +12967,7 @@ function kShortestPaths(g, source, target, k = 3, maxHops = 3) {
         if (p.length > i + 1 && root.every((n, idx) => p[idx] === n)) removedEdges.add(`${p[i]}>${p[i + 1]}`);
       }
       for (const n of root) if (n !== spur) removedNodes.add(n);
-      const spurPath = shortestPath(g, spur, target, maxHops - i, removedEdges, removedNodes);
+      const spurPath = shortestPath(g, spur, target, maxHops - i, removedEdges, removedNodes, toTarget);
       if (!spurPath) continue;
       const total = [...root.slice(0, -1), ...spurPath];
       const key2 = total.join(">");

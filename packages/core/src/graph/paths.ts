@@ -113,6 +113,7 @@ function boundedSearch(
   target?: string,
   removedEdges?: Set<string>,
   removedNodes?: Set<string>,
+  toTarget?: ReadonlyMap<string, number>,
 ): BoundedSearch {
   const dist = new Map<string, number[]>();
   const prev = new Map<string, (string | undefined)[]>();
@@ -140,8 +141,11 @@ function boundedSearch(
     if (!best.has(node)) best.set(node, { cost: d, hops });
     if (node === target) break;
     if (hops >= maxHops) continue;
+    const cutEdges = removedEdges?.size ? removedEdges : undefined;
     for (const [v, e] of g.adj.get(node) ?? []) {
-      if (v === source || removedNodes?.has(v) || removedEdges?.has(`${node}>${v}`)) continue;
+      if (v === source || removedNodes?.has(v) || cutEdges?.has(`${node}>${v}`)) continue;
+      // a node that cannot reach the target in the hops left is never on a route to it (`hopsToTarget`)
+      if (toTarget && (toTarget.get(v) ?? Number.POSITIVE_INFINITY) > maxHops - hops - 1) continue;
       const s = minSettledHops.get(v);
       if (s !== undefined && s <= hops + 1) continue;
       const nd = d + edgeCost(e.weight);
@@ -174,10 +178,41 @@ function shortestPath(
   maxHops: number,
   removedEdges: Set<string>,
   removedNodes: Set<string>,
+  toTarget?: ReadonlyMap<string, number>,
 ): string[] | undefined {
   if (source === target) return [source];
-  const search = boundedSearch(g, source, maxHops, target, removedEdges, removedNodes);
+  const search = boundedSearch(g, source, maxHops, target, removedEdges, removedNodes, toTarget);
   return reconstruct(search, target);
+}
+
+/**
+ * Fewest hops from each node to `target` (edges followed backwards), for nodes within `maxHops` of it. A route of at
+ * most H hops only passes through a node v at hop h when v is within H − h of the target, so a search may skip every
+ * other node and still find exactly the routes it would have. Removing nodes or edges (Yen's spurs) only lengthens
+ * these distances, so the full graph's stay a safe bound. The student's own node fans out to every contact; this keeps
+ * a search to the few near the target instead of the whole network.
+ */
+export function hopsToTarget(g: WeightedGraph, target: string, maxHops: number): Map<string, number> {
+  const back = new Map<string, string[]>();
+  for (const [u, nbrs] of g.adj)
+    for (const v of nbrs.keys()) {
+      const list = back.get(v);
+      if (list) list.push(u);
+      else back.set(v, [u]);
+    }
+  const out = new Map<string, number>([[target, 0]]);
+  let frontier = [target];
+  for (let h = 1; h <= maxHops && frontier.length; h++) {
+    const next: string[] = [];
+    for (const v of frontier)
+      for (const u of back.get(v) ?? [])
+        if (!out.has(u)) {
+          out.set(u, h);
+          next.push(u);
+        }
+    frontier = next;
+  }
+  return out;
 }
 
 function pathCost(g: WeightedGraph, path: string[]): number {
@@ -195,7 +230,20 @@ export function kShortestPaths(
   maxHops = 3,
 ): string[][] {
   if (!g.nodes.has(source) || !g.nodes.has(target)) return source === target ? [[source]] : [];
-  const first = shortestPath(g, source, target, maxHops, new Set(), new Set());
+  const toTarget = hopsToTarget(g, target, maxHops);
+  if (!toTarget.has(source)) return [];
+  // only the nodes near the target, in the same edge order, so every search below walks a small graph
+  const full = g;
+  g = makeGraph();
+  for (const [u, nbrs] of full.adj) {
+    if (!toTarget.has(u)) continue;
+    const kept = new Map<string, { weight: number; type: ReachHop['type']; text: string }>();
+    for (const [v, e] of nbrs) if (toTarget.has(v)) kept.set(v, e);
+    g.nodes.add(u);
+    g.adj.set(u, kept);
+  }
+  g.nodes.add(target);
+  const first = shortestPath(g, source, target, maxHops, new Set(), new Set(), toTarget);
   if (!first) return [];
   const A: string[][] = [first];
   if (first.length === 1) return A;
@@ -212,7 +260,7 @@ export function kShortestPaths(
         if (p.length > i + 1 && root.every((n, idx) => p[idx] === n)) removedEdges.add(`${p[i]}>${p[i + 1]}`);
       }
       for (const n of root) if (n !== spur) removedNodes.add(n);
-      const spurPath = shortestPath(g, spur, target, maxHops - i, removedEdges, removedNodes);
+      const spurPath = shortestPath(g, spur, target, maxHops - i, removedEdges, removedNodes, toTarget);
       if (!spurPath) continue;
       const total = [...root.slice(0, -1), ...spurPath];
       const key = total.join('>');

@@ -9,7 +9,7 @@ import {
   sizeFactor,
 } from '../graph/edges';
 import { countOutsideWedges, countOverlaps, largestGap, orbitLayout, ringRotation } from '../graph/layout';
-import { addEdge, bestPathsFrom, kShortestPaths, makeGraph, toReachPath } from '../graph/paths';
+import { addEdge, bestPathsFrom, hopsToTarget, kShortestPaths, makeGraph, toReachPath } from '../graph/paths';
 import { computeStrength, interactionCount, isReciprocal, strengthTier } from '../scoring/strength';
 import { endOfNextBusinessDay } from '../suggestions/rules';
 import type { Affiliation, Edge, Organization, Person, Touchpoint } from '../types';
@@ -65,6 +65,40 @@ describe('paths', () => {
     addEdge(g, 'c', 't', 0.9, 'co_tenure', '');
     expect(kShortestPaths(g, 'user', 't', 1, 3)).toEqual([]);
     expect(kShortestPaths(g, 'user', 't', 1, 4).length).toBe(1);
+  });
+  it('counts hops to the target along edges as they point', () => {
+    const g = makeGraph();
+    addEdge(g, 'user', 'a', 0.9, 'strength', '', true);
+    addEdge(g, 'a', 't', 0.9, 'co_tenure', '');
+    addEdge(g, 't', 'z', 0.9, 'co_tenure', '', true); // t → z only: z cannot reach t
+    addEdge(g, 'b', 'c', 0.9, 'co_tenure', '');
+    const h = hopsToTarget(g, 't', 3);
+    expect(Object.fromEntries(h)).toEqual({ t: 0, a: 1, user: 2 });
+  });
+  it('finds the same routes from a student with thousands of contacts, without walking all of them', () => {
+    const g = makeGraph();
+    for (let i = 0; i < 5000; i++) addEdge(g, 'user', `p${i}`, 0.3 + (i % 7) / 10, 'strength', '', true);
+    for (let i = 0; i < 5000; i += 2) addEdge(g, `p${i}`, `p${i + 1}`, 0.4, 'co_tenure', '');
+    addEdge(g, 'p10', 't', 0.8, 'co_tenure', '');
+    addEdge(g, 'p11', 't', 0.6, 'co_tenure', '');
+    addEdge(g, 'p20', 'p10', 0.9, 'co_tenure', '');
+    // every loopless route of at most three hops, cheapest first: what Yen's k shortest must return the top of
+    const all: { path: string[]; cost: number }[] = [];
+    const walk = (path: string[], cost: number) => {
+      const at = path[path.length - 1]!;
+      if (at === 't') return all.push({ path, cost });
+      if (path.length > 3) return;
+      for (const [v, e] of g.adj.get(at) ?? [])
+        if (!path.includes(v)) walk([...path, v], cost - Math.log(Math.min(e.weight, 0.999_999)));
+    };
+    walk(['user'], 0);
+    all.sort((a, b) => a.cost - b.cost);
+    const paths = kShortestPaths(g, 'user', 't', 12, 3);
+    expect(paths.length).toBe(Math.min(12, all.length));
+    paths.forEach((p, i) => {
+      const cost = p.slice(1).reduce((c, v, j) => c - Math.log(g.adj.get(p[j]!)!.get(v)!.weight), 0);
+      expect(cost).toBeCloseTo(all[i]!.cost, 9);
+    });
   });
 });
 
