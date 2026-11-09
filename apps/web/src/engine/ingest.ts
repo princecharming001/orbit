@@ -107,7 +107,7 @@ async function orbitOutboundId(
   userId: string,
   m: { externalMessageId: string; headers: Record<string, string> },
 ): Promise<string | undefined> {
-  const id = m.headers['x-orbit-message-id']?.trim();
+  const id = m.headers?.['x-orbit-message-id']?.trim();
   if (id) {
     const o = await db.outbound.get(id);
     if (o && o.userId === userId) return o.id;
@@ -175,7 +175,7 @@ export async function ingestEmails(
       const exists = await db.messages.where('externalMessageId').equals(r.externalMessageId).first();
       if (exists) {
         // a message Orbit recorded when it sent it learns its real Message-ID here, for later replies
-        if (!exists.headers['message-id'] && r.headers['message-id'])
+        if (!exists.headers?.['message-id'] && r.headers?.['message-id'])
           await db.messages.update(exists.id, { headers: { ...r.headers, ...exists.headers } });
         stats.skipped++;
         continue;

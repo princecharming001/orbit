@@ -285,8 +285,8 @@ async function envelopeFor(msg: OutboundMessage, subjectArg?: string): Promise<E
   // In a thread the subject is always the thread's, never an empty or made-up one
   const subject = replySubject(thread?.subject ?? msg.subject ?? subjectArg);
   const msgs = thread ? await db.messages.where('threadId').equals(thread.id).sortBy('sentAt') : [];
-  const last = [...msgs].reverse().find((m) => !!m.headers['message-id']);
-  const inReplyTo = last?.headers['message-id'] ?? msg.inReplyToMessageId;
+  const last = [...msgs].reverse().find((m) => !!m.headers?.['message-id']);
+  const inReplyTo = last?.headers?.['message-id'] ?? msg.inReplyToMessageId;
   const references = messageIdTokens(last?.headers.references, inReplyTo).join(' ') || undefined;
   return {
     subject,

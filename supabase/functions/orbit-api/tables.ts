@@ -96,6 +96,11 @@ export const PULL_TABLES: PullTable[] = [
       toEmails: r.toAddrs ?? [],
       ccEmails: r.ccAddrs ?? [],
       bodyText: r.bodyText ?? '',
+      // what the browser reads for replies and to know a message is stored in full
+      headers: {
+        ...(r.rfcMessageId ? { 'message-id': r.rfcMessageId } : {}),
+        ...(r.inReplyTo ? { 'in-reply-to': r.inReplyTo } : {}),
+      },
       ...(r.provider === 'linkedin' ? { channel: 'linkedin' } : {}),
     }),
   },

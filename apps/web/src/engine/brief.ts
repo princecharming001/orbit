@@ -1189,7 +1189,7 @@ async function threadFor(
   const th = await db.threads.get(threadId);
   if (!th?.externalThreadId) return {};
   const last = (await db.messages.where('threadId').equals(threadId).sortBy('sentAt')).pop();
-  return { externalThreadId: th.externalThreadId, inReplyTo: last?.headers['message-id'] };
+  return { externalThreadId: th.externalThreadId, inReplyTo: last?.headers?.['message-id'] };
 }
 
 /**

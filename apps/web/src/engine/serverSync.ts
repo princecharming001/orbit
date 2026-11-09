@@ -228,9 +228,37 @@ function withDefaults(table: string, row: Record<string, unknown>, userId: strin
   // the map keys a company's wedge by nameNormalized: a server row names it nameNorm
   if (table === 'organizations')
     return stripNulls({ ...r, nameNormalized: r.nameNormalized ?? r.nameNorm ?? companyNorm(r.name) });
+  // a message's Message-ID and In-Reply-To: the Gmail sync and replies read them from headers
+  if (table === 'messages') return stripNulls({ ...r, headers: messageHeaders(r) });
   if (table === 'drafts' && typeof r.bodyDraft !== 'string' && typeof r.body === 'string')
     return stripNulls({ ...r, bodyDraft: r.body });
   return stripNulls(r);
+}
+
+/** The headers a stored message carries: the server's own when it sent them, else built from its columns. */
+function messageHeaders(r: Record<string, unknown>): Record<string, string> {
+  const given = r.headers;
+  if (given && typeof given === 'object') return given as Record<string, string>;
+  const h: Record<string, string> = {};
+  if (typeof r.rfcMessageId === 'string' && r.rfcMessageId) h['message-id'] = r.rfcMessageId;
+  if (typeof r.inReplyTo === 'string' && r.inReplyTo) h['in-reply-to'] = r.inReplyTo;
+  return h;
+}
+
+/**
+ * Messages pulled before the server sent headers have none, and the Gmail sync stopped on them ("Cannot read
+ * properties of undefined (reading 'message-id')"): give each the headers its columns hold, once, as a server write.
+ */
+export async function repairStoredMessages(): Promise<number> {
+  const t = db.messages as unknown as Table<Record<string, unknown>, string>;
+  return db.transaction('rw', t, async (tx) => {
+    serverTx.add(tx);
+    return t
+      .filter((m) => !m.headers || typeof m.headers !== 'object')
+      .modify((m) => {
+        m.headers = messageHeaders({ ...m, headers: undefined });
+      });
+  });
 }
 
 const companyNorm = (name: unknown) => (typeof name === 'string' ? normalizeCompany(name) : undefined);
@@ -928,6 +956,7 @@ let lastDerived = 0;
 export function startServerSync(o: SyncLoopOptions): () => void {
   installOutboxHooks();
   void repairStoredCompanies().catch(() => undefined);
+  void repairStoredMessages().catch(() => undefined);
   void repairStoredNames()
     .catch(() => undefined)
     .then(() => backfillServerTouchpoints(o.user.id))

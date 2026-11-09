@@ -39,8 +39,17 @@ export async function recordGoogleConnection(
   return row;
 }
 
-/** A connect or sync failed: Today's problems card points at Settings until it is fixed. */
+/** Google said no to the sign-in itself: an expired or revoked grant, a missing permission. Only these need the student. */
+const SIGN_IN_PROBLEM =
+  /\b401\b|\b403\b|unauthori[sz]ed|invalid_grant|invalid_token|token|sign(?:ed)? ?in|reconnect|consent|permission|scope|not connected/i;
+
+/**
+ * A connect or sync failed. Only a sign-in problem marks Google as needing the student (Drafts' problems card points
+ * at Settings for it); anything else is Orbit's to fix and the next sync retries it, so it is never shown as theirs
+ * (seen: a code error "reading 'message-id'" sat on Drafts with a Fix link that led to a connected Google).
+ */
 export async function markGoogleNeedsReauth(userId: string, error: string): Promise<void> {
+  if (!SIGN_IN_PROBLEM.test(error)) return;
   const g = await googleAccount(userId);
   if (g) await db.integrations.update(g.id, { status: 'needs_reauth', lastError: error });
 }

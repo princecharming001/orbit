@@ -73,7 +73,7 @@ export async function syncGoogle(
 /** A stored message need not be downloaded again, unless it still waits to learn its Message-ID (an Orbit send). */
 async function alreadyStored(id: string): Promise<boolean> {
   const m = await db.messages.where('externalMessageId').equals(id).first();
-  return !!m && !!m.headers['message-id'];
+  return !!m && !!m.headers?.['message-id'];
 }
 
 async function syncGoogleOnce(

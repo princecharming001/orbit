@@ -5,7 +5,7 @@
  */
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { db, wipeDatabase } from '../db/schema';
-import { repairStoredNames, withBrowserNames, writeFromServer } from './serverSync';
+import { repairStoredMessages, repairStoredNames, withBrowserNames, writeFromServer } from './serverSync';
 
 const U = '11111111-1111-4111-8111-111111111111';
 const P = '22222222-2222-4222-8222-222222222222';
@@ -105,5 +105,47 @@ describe('server rows under the browser names', () => {
     const theirs = 'https://media.licdn.com/dms/image/theirs/0?e=4102444800&v=beta&t=c';
     await writeFromServer('people', [{ id: P, displayName: 'Bo', photoUrl: theirs }], U);
     expect((await db.people.get(P))!.photoUrl).toBe(theirs);
+  });
+});
+
+describe('messages from the server carry headers', () => {
+  const T = '44444444-4444-4444-8444-444444444444';
+  const row = (id: string, extra: Record<string, unknown> = {}) => ({
+    id,
+    threadId: T,
+    externalMessageId: `g-${id}`,
+    direction: 'inbound',
+    fromEmail: 'a@b.co',
+    toEmails: [],
+    ccEmails: [],
+    sentAt: '2026-11-01T00:00:00.000Z',
+    bodyText: 'hi',
+    ...extra,
+  });
+
+  it('a pulled message without headers gets them from its columns', async () => {
+    await writeFromServer(
+      'messages',
+      [
+        row('55555555-5555-4555-8555-555555555551', { rfcMessageId: '<x@mail>', inReplyTo: '<w@mail>' }),
+        row('55555555-5555-4555-8555-555555555552'),
+      ],
+      U,
+    );
+    const all = await db.messages.toArray();
+    const a = all.find((m) => m.externalMessageId.endsWith('1'))!;
+    const b = all.find((m) => m.externalMessageId.endsWith('2'))!;
+    expect(a.headers).toEqual({ 'message-id': '<x@mail>', 'in-reply-to': '<w@mail>' });
+    expect(b.headers).toEqual({});
+  });
+
+  it('messages stored before that are repaired once, and reading them no longer throws', async () => {
+    await db.messages.add({
+      ...row('m-old', { rfcMessageId: '<old@mail>' }),
+      userId: U,
+    } as unknown as Parameters<typeof db.messages.add>[0]);
+    expect(await repairStoredMessages()).toBe(1);
+    expect((await db.messages.get('m-old'))?.headers).toEqual({ 'message-id': '<old@mail>' });
+    expect(await repairStoredMessages()).toBe(0);
   });
 });
