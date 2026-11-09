@@ -4926,6 +4926,7 @@ var KIND_QUEUE = {
   "health.snapshot": "orbit_cadence",
   "score.user": "orbit_score",
   "score.page": "orbit_score",
+  "score.ties": "orbit_score",
   "score.person": "orbit_score",
   friend_shares_refresh: "orbit_score",
   "enrich.dossier": "orbit_enrich",
@@ -4935,7 +4936,12 @@ var KIND_QUEUE = {
   company_facts_sync: "orbit_enrich",
   search_census: "orbit_enrich",
   search_reading: "orbit_enrich",
+  // plan 35 B4: the weekly shared logo pass (userId null)
+  "logos.sweep": "orbit_enrich",
   "cost.digest": "orbit_enrich",
+  "unipile.reconcile": "orbit_enrich",
+  "linkedin.park": "orbit_enrich",
+  "claude.batch.poll": "orbit_enrich",
   noop: "orbit_enrich"
 };
 function queueFor(kind) {
@@ -5157,7 +5163,7 @@ async function unipileEvent(db2, queueFor2, body2) {
     await db2.sql`
       update orbit.integration_accounts
          set status = ${next}, last_error = ${next === "active" ? null : String(status.message).slice(0, 40)}
-       where user_id = ${userId}::uuid and provider = 'linkedin'`;
+       where user_id = ${userId}::uuid and provider = 'linkedin' and status <> 'parked'`;
     return { result: `status:${next}`, userId };
   }
   const event = str(body2.event);
@@ -5210,6 +5216,24 @@ async function unipileEvent(db2, queueFor2, body2) {
   }
   return { result: "ignored", userId: null };
 }
+function unparkState(li) {
+  const parked = li.parked;
+  const since = typeof parked?.since === "string" && parked.since ? parked.since : void 0;
+  if (!since) return void 0;
+  const { parked: _drop, ...rest } = li;
+  return {
+    ...rest,
+    stage: "relations",
+    cursor: null,
+    chatsCursor: null,
+    chatIndex: 0,
+    short: true,
+    chatsAfter: since,
+    resume: true,
+    floor: typeof li.floor === "string" && li.floor > since ? li.floor : since,
+    unparkedAt: (/* @__PURE__ */ new Date()).toISOString()
+  };
+}
 async function unipileAccount(db2, queue, body2) {
   const status = String(body2.status ?? "").toUpperCase();
   const accountId = str(body2.account_id);
@@ -5222,14 +5246,24 @@ async function unipileAccount(db2, queue, body2) {
     select 1 from orbit.integration_accounts
      where provider = 'linkedin' and external_account_id = ${accountId} and user_id <> ${userId}::uuid`;
   if (taken.length) return { result: "account_in_use", userId };
+  const [prior] = await db2.sql`
+    select status, sync_state -> 'linkedin' as linkedin from orbit.integration_accounts
+     where user_id = ${userId}::uuid and provider = 'linkedin'`;
   await db2.sql`
     insert into orbit.integration_accounts (user_id, provider, external_account_id, status, last_error)
     values (${userId}::uuid, 'linkedin', ${accountId}, 'active', null)
     on conflict (user_id, provider) do update set
       external_account_id = excluded.external_account_id, status = 'active', last_error = null`;
+  const resumed = prior?.status === "parked" ? unparkState(prior.linkedin ?? {}) : void 0;
+  if (resumed)
+    await db2.sql`
+      update orbit.integration_accounts
+         set sync_state = coalesce(sync_state, '{}'::jsonb) || jsonb_build_object('linkedin', ${resumed}::jsonb)
+       where user_id = ${userId}::uuid and provider = 'linkedin'`;
   await db2.sql`
     insert into orbit.audit_log (user_id, actor, action, target_table, details)
-    values (${userId}::uuid, 'system', 'linkedin.connected', 'integration_accounts', ${{ status }}::jsonb)`;
+    values (${userId}::uuid, 'system', ${resumed ? "linkedin.unparked" : "linkedin.connected"}, 'integration_accounts',
+            ${{ status, ...resumed ? { since: resumed.floor } : {} }}::jsonb)`;
   await queue.enqueue({
     kind: "sync.linkedin",
     userId,

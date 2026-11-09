@@ -50,6 +50,70 @@ function unipileBrowserKept(base, key, doFetch, now = Date.now) {
   };
 }
 
+// supabase/functions/_shared/db.ts
+import postgres from "npm:postgres@3.4.9";
+function toText(strings) {
+  let text = strings[0] ?? "";
+  for (let i = 1; i < strings.length; i++) text += `$${i}${strings[i]}`;
+  return text;
+}
+function arrayLiteral(values) {
+  const items = values.map((v) => {
+    if (v === null || v === void 0) return "NULL";
+    if (Array.isArray(v)) return arrayLiteral(v);
+    const s = v instanceof Date ? v.toISOString() : typeof v === "object" ? JSON.stringify(v) : String(v);
+    return `"${s.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
+  });
+  return `{${items.join(",")}}`;
+}
+function toParam(v) {
+  if (v === void 0) return null;
+  if (v instanceof Date) return v.toISOString();
+  if (Array.isArray(v)) return arrayLiteral(v);
+  if (typeof v === "bigint") return v.toString();
+  if (v !== null && typeof v === "object" && !(v instanceof Uint8Array)) return JSON.stringify(v);
+  return v;
+}
+function wrapPostgres(sql, inTx) {
+  const run = async (text, params) => {
+    const rows = await sql.unsafe(text, params.map(toParam));
+    return Array.from(rows);
+  };
+  return {
+    sql: (strings, ...values) => run(toText(strings), values),
+    query: (text, params = []) => run(text, params),
+    begin: async (fn) => {
+      if (inTx)
+        return await sql.savepoint(
+          (tx) => fn(wrapPostgres(tx, true))
+        );
+      return await sql.begin((tx) => fn(wrapPostgres(tx, true)));
+    }
+  };
+}
+var pgTypes = {
+  json: {
+    to: 114,
+    from: [114, 3802],
+    serialize: (x) => typeof x === "string" ? x : JSON.stringify(x),
+    parse: (x) => JSON.parse(x)
+  }
+};
+function connectDb(url2, max = 4) {
+  const sql = postgres(url2, {
+    prepare: false,
+    types: pgTypes,
+    max,
+    // kept open across the app's polls (every 3 to 60 s): a new connection costs TCP, TLS and the password
+    // handshake across regions, about 0.6 s, which was most of /sync/status's time with a 20 s idle timeout
+    idle_timeout: 240,
+    connect_timeout: 10,
+    onnotice: () => {
+    }
+  });
+  return wrapPostgres(sql, false);
+}
+
 // supabase/functions/_shared/providers/request.ts
 function unconfigured(provider, what = "API key") {
   return { ok: false, kind: "unconfigured", provider, message: `${provider}: no ${what} configured` };
@@ -332,9 +396,10 @@ function createSerperSearch(opts) {
 // supabase/functions/_shared/prices.ts
 var PRICES = {
   "claude-opus-5-5": { input: 4, output: 20, cacheRead: 0.2, cacheWrite: 5 },
-  "claude-sonnet-5-5": { input: 2, output: 10, cacheRead: 0.2, cacheWrite: 2.5 },
+  "claude-sonnet-5-5": { input: 2, output: 10, cacheRead: 0.1, cacheWrite: 2.5 },
   "claude-haiku-5-5": { input: 0.1, output: 0.5, cacheRead: 0.01, cacheWrite: 0.125 }
 };
+var BATCH_DISCOUNT = 0.5;
 function costUsd(model, u) {
   const p = PRICES[model];
   if (!p) return 0;
@@ -2470,6 +2535,10 @@ var CAPS = [
     window: "month",
     scope: "global"
   },
+  // the finders and verifier behind Hunter (plan 35 E6): a day's lookups for one student, as Hunter's
+  { id: "enrow_daily_credits", provider: "enrow", measure: "units", limit: 10, window: "day" },
+  { id: "icypeas_daily_credits", provider: "icypeas", measure: "units", limit: 10, window: "day" },
+  { id: "reoon_daily_checks", provider: "reoon", measure: "units", limit: 25, window: "day" },
   {
     id: "unipile_profile_views_daily",
     provider: "unipile",
@@ -2488,10 +2557,10 @@ function windowStart(window, now) {
 function windowEnd(window, now) {
   return window === "day" ? new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + 1)) : new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 1));
 }
-async function checkBudget(db, userId, spend, now = /* @__PURE__ */ new Date()) {
+async function checkBudget(db2, userId, spend, now = /* @__PURE__ */ new Date()) {
   const day = windowStart("day", now);
   const month = windowStart("month", now);
-  const rows = await db.sql`
+  const rows = await db2.sql`
     select provider, operation,
            coalesce(sum(units) filter (where created_at >= ${day}::timestamptz), 0)::text as day_units,
            coalesce(sum(cost_usd) filter (where created_at >= ${day}::timestamptz), 0)::text as day_usd,
@@ -2502,7 +2571,7 @@ async function checkBudget(db, userId, spend, now = /* @__PURE__ */ new Date()) 
      group by provider, operation`;
   const monthTotal = rows.reduce((s, r) => s + Number(r.month_usd), 0);
   const adding = spend.costUsd ?? 0;
-  const [life] = await db.sql`
+  const [life] = await db2.sql`
     select (coalesce((select sum(cost_usd) from orbit.usage_ledger where user_id = ${userId}::uuid), 0)
           + coalesce((select usd from public.orbit_proxy_spend where subject = ${`user:${userId}`}), 0))::text as usd`;
   const lifetime = Number(life?.usd ?? 0);
@@ -2530,7 +2599,7 @@ async function checkBudget(db, userId, spend, now = /* @__PURE__ */ new Date()) 
     if (cap.operation && cap.operation !== spend.operation) continue;
     let source = rows;
     if (cap.scope === "global") {
-      globalRows ??= await db.sql`
+      globalRows ??= await db2.sql`
         select provider, operation,
                coalesce(sum(units) filter (where created_at >= ${day}::timestamptz), 0)::text as day_units,
                coalesce(sum(cost_usd) filter (where created_at >= ${day}::timestamptz), 0)::text as day_usd,
@@ -2543,10 +2612,10 @@ async function checkBudget(db, userId, spend, now = /* @__PURE__ */ new Date()) 
     }
     const field = cap.window === "month" ? cap.measure === "units" ? "month_units" : "month_usd" : cap.measure === "units" ? "day_units" : "day_usd";
     let used = source.filter((r) => r.provider === cap.provider && (!cap.operation || r.operation === cap.operation)).reduce((s, r) => s + Number(r[field]), 0);
-    if (cap.includeChat) used += await chatSpend(db, userId, cap.window, now);
+    if (cap.includeChat) used += await chatSpend(db2, userId, cap.window, now);
     const add = cap.measure === "units" ? spend.units ?? 1 : spend.costUsd ?? 0;
     const over = used + add > cap.limit || used >= cap.limit && add === 0;
-    if (over && cap.ownerExempt && await isOwner(db, userId)) continue;
+    if (over && cap.ownerExempt && await isOwner(db2, userId)) continue;
     if (over)
       return {
         ok: false,
@@ -2559,30 +2628,33 @@ async function checkBudget(db, userId, spend, now = /* @__PURE__ */ new Date()) 
   }
   return { ok: true };
 }
-async function isOwner(db, userId) {
+async function isOwner(db2, userId) {
   try {
-    const [r] = await db.sql`select public.orbit_secret('ORBIT_OWNER_ID') as v`;
+    const [r] = await db2.sql`select public.orbit_secret('ORBIT_OWNER_ID') as v`;
     return !!r?.v && r.v.trim() === userId;
   } catch {
     return false;
   }
 }
-async function chatSpend(db, userId, window, now) {
+async function chatSpend(db2, userId, window, now) {
   const iso = now.toISOString();
   const subject = window === "day" ? `user:${userId}:${iso.slice(0, 10)}` : `user:${userId}:m:${iso.slice(0, 7)}`;
   try {
-    const [r] = await db.sql`
+    const [r] = await db2.sql`
       select usd::text as usd from public.orbit_proxy_spend where subject = ${subject}`;
     return Number(r?.usd ?? 0);
   } catch {
     return 0;
   }
 }
-async function recordUsage(db, entry) {
-  const rows = await db.sql`
-    insert into orbit.usage_ledger (user_id, provider, operation, units, cost_usd)
+async function recordUsage(db2, entry) {
+  const t = entry.tokens;
+  const rows = await db2.sql`
+    insert into orbit.usage_ledger (user_id, provider, operation, units, cost_usd, input_tokens, cache_read_tokens,
+                                    cache_write_tokens, output_tokens)
     values (${entry.userId}::uuid, ${entry.provider}, ${entry.operation}, ${entry.units}::numeric,
-            ${round(entry.costUsd)}::numeric)
+            ${round(entry.costUsd)}::numeric, ${t ? t.input : null}::bigint, ${t ? t.cacheRead : null}::bigint,
+            ${t ? t.cacheWrite : null}::bigint, ${t ? t.output : null}::bigint)
     returning id::text as id`;
   return rows[0]?.id;
 }
@@ -2599,6 +2671,8 @@ var TASKS = {
   fit: { model: "claude-haiku-5-5", effort: "low", maxTokens: 3e3 },
   triage: { model: "claude-haiku-5-5", effort: "low", maxTokens: 1e3 },
   reading: { model: "claude-haiku-5-5", effort: "low", maxTokens: 3e3 },
+  rapport: { model: "claude-haiku-5-5", effort: "low", maxTokens: 1e3 },
+  sourcing_read: { model: "claude-haiku-5-5", effort: "low", maxTokens: 3e3 },
   classify: { model: "claude-haiku-5-5", effort: "low", maxTokens: 1e3 },
   extract_memory: { model: "claude-haiku-5-5", effort: "low", maxTokens: 1500 },
   extract_goal: { model: "claude-haiku-5-5", effort: "low", maxTokens: 1500 },
@@ -2617,8 +2691,20 @@ var NO_RETRY_TASKS = /* @__PURE__ */ new Set([
   "classify",
   "reply_classify",
   "fit",
-  "reading"
+  "reading",
+  "rapport",
+  "sourcing_read"
 ]);
+function tokensOf(u) {
+  return {
+    input: u.input_tokens ?? 0,
+    cacheRead: u.cache_read_input_tokens ?? 0,
+    cacheWrite: u.cache_creation_input_tokens ?? 0,
+    output: u.output_tokens ?? 0
+  };
+}
+var BATCH_WINDOW_MS = 24 * 3600 * 1e3;
+var BATCH_SUBMIT_MAX = 200;
 function makeClaude(deps) {
   const client = deps.apiKey ? deps.client ?? new Anthropic({ apiKey: deps.apiKey, fetch: deps.fetch, maxRetries: 2 }) : void 0;
   const now = deps.now ?? (() => /* @__PURE__ */ new Date());
@@ -2637,8 +2723,7 @@ function makeClaude(deps) {
       if (!verdict.ok)
         return { ok: false, budgetExceeded: true, cap: verdict.cap, resetsAt: verdict.resetsAt };
     }
-    const zf = zodOutputFormat(req.schema);
-    const base = setting.flatNullable ? { ...zf, schema: flattenNullable(zf.schema) } : zf;
+    const base = formatOf(req.schema, setting);
     const format = {
       ...base,
       parse: (content) => {
@@ -2669,7 +2754,8 @@ function makeClaude(deps) {
           provider: "anthropic",
           operation: attempt === 0 ? req.task : `${req.task}:retry`,
           units: usage.input_tokens + usage.output_tokens,
-          costUsd: cost
+          costUsd: cost,
+          tokens: tokensOf(usage)
         });
       if (msg.stop_reason === "refusal") {
         const details = msg.stop_details;
@@ -2702,7 +2788,208 @@ function makeClaude(deps) {
       );
     }
   }
-  return { configured: !!client, structured };
+  async function structuredBatch(req, job) {
+    if (!client) return { queued: false, reason: "unconfigured" };
+    if (!deps.batch || !deps.db) return { queued: false, reason: "off" };
+    if (deps.enabled && !await deps.enabled().catch(() => true))
+      return { queued: false, reason: "provider_off" };
+    const setting = TASKS[req.task];
+    if (req.userId) {
+      const verdict = await checkBudget(
+        deps.db,
+        req.userId,
+        { provider: "anthropic", operation: req.task },
+        now()
+      );
+      if (!verdict.ok) return { queued: false, reason: "budget" };
+    }
+    const base = formatOf(req.schema, setting);
+    const maxTokens = req.maxTokens ?? setting.maxTokens;
+    const params = {
+      model: setting.model,
+      max_tokens: maxTokens,
+      system: [{ type: "text", text: req.system, cache_control: { type: "ephemeral" } }],
+      messages: [{ role: "user", content: req.user }],
+      output_config: {
+        ...setting.effort ? { effort: setting.effort } : {},
+        format: { type: base.type, schema: base.schema }
+      }
+    };
+    const request = {
+      system: req.system,
+      user: req.user,
+      ...req.maxTokens ? { maxTokens: req.maxTokens } : {}
+    };
+    const rows = await deps.db.sql`
+      insert into orbit.claude_batch_requests (user_id, person_id, task, model, request, params, handler, payload,
+                                               dedupe_key, created_at)
+      values (${req.userId}::uuid, ${job.personId ?? null}::uuid, ${req.task}, ${setting.model}, ${request}::jsonb,
+              ${params}::jsonb, ${job.handler}, ${job.payload}::jsonb, ${job.dedupeKey ?? null}, ${now()}::timestamptz)
+      on conflict (dedupe_key) where dedupe_key is not null and status in ('queued', 'submitted') do nothing
+      returning id::text as id`;
+    return rows[0] ? { queued: true, id: rows[0].id } : { queued: false, reason: "duplicate" };
+  }
+  async function recordBatch(row, msg) {
+    const usage = msg.usage;
+    const cost = costUsd(TASKS[row.task].model, usage) * BATCH_DISCOUNT;
+    if (deps.db)
+      await recordUsage(deps.db, {
+        userId: row.user_id,
+        provider: "anthropic",
+        operation: `${row.task}:batch`,
+        units: usage.input_tokens + usage.output_tokens,
+        costUsd: cost,
+        tokens: tokensOf(usage)
+      });
+    return cost;
+  }
+  async function resolveBatch(row, outcome, schema) {
+    const sync = () => structured({
+      task: row.task,
+      system: row.request.system,
+      user: row.request.user,
+      schema,
+      userId: row.user_id,
+      maxTokens: row.request.maxTokens
+    });
+    if (!outcome.ok) return sync();
+    const setting = TASKS[row.task];
+    const msg = outcome.message;
+    const usage = msg.usage;
+    const cost = await recordBatch(row, msg);
+    if (msg.stop_reason === "refusal") {
+      const details = msg.stop_details;
+      return { ok: false, refused: true, category: details?.category ?? null };
+    }
+    const text = msg.content.filter((b) => b.type === "text").map((b) => b.text).join("");
+    try {
+      const value = formatOf(schema, setting).parse(text);
+      return { ok: true, data: value, model: setting.model, costUsd: cost, usage };
+    } catch {
+      return sync();
+    }
+  }
+  const batches = {
+    async submit(limit = BATCH_SUBMIT_MAX) {
+      if (!client || !deps.db || !deps.batch) return { submitted: 0 };
+      if (deps.enabled && !await deps.enabled().catch(() => true)) return { submitted: 0 };
+      const db2 = deps.db;
+      const queued = await db2.sql`
+        select id::text as id, params from orbit.claude_batch_requests
+         where status = 'queued' order by created_at limit ${limit}::int`;
+      if (!queued.length) return { submitted: 0 };
+      let made;
+      try {
+        made = await client.messages.batches.create({
+          requests: queued.map((r) => ({
+            custom_id: r.id,
+            params: r.params
+          }))
+        });
+      } catch (e) {
+        const error = e instanceof Error ? e.message.slice(0, 200) : "error";
+        await db2.sql`
+          update orbit.claude_batch_requests set error = ${error}
+           where id = any(${queued.map((r) => r.id)}::uuid[])`;
+        return { submitted: 0, error };
+      }
+      await db2.sql`
+        update orbit.claude_batch_requests
+           set status = 'submitted', batch_id = ${made.id}, submitted_at = ${now()}::timestamptz,
+               expires_at = ${made.expires_at}::timestamptz, error = null
+         where id = any(${queued.map((r) => r.id)}::uuid[]) and status = 'queued'`;
+      return { submitted: queued.length };
+    },
+    async collect() {
+      if (!deps.db) return [];
+      const db2 = deps.db;
+      const out = [];
+      const t = now().getTime();
+      const rows = await db2.sql`
+        select id::text as id, user_id::text as user_id, person_id::text as person_id, task, model, request, params,
+               handler, payload, status, batch_id, created_at, expires_at
+          from orbit.claude_batch_requests where status in ('queued', 'submitted') order by created_at`;
+      for (const r of rows.filter((x) => x.status === "queued")) {
+        if (!client || !deps.batch) out.push({ row: r, outcome: { ok: false, reason: "off" } });
+        else if (t - new Date(r.created_at).getTime() > BATCH_WINDOW_MS)
+          out.push({ row: r, outcome: { ok: false, reason: "expired", detail: "never submitted" } });
+      }
+      const byBatch = /* @__PURE__ */ new Map();
+      for (const r of rows)
+        if (r.status === "submitted" && r.batch_id)
+          byBatch.set(r.batch_id, [...byBatch.get(r.batch_id) ?? [], r]);
+      for (const [batchId, part] of byBatch) {
+        const late = part.every(
+          (r) => t > new Date(r.expires_at ?? r.created_at).getTime() + (r.expires_at ? 36e5 : BATCH_WINDOW_MS)
+        );
+        const lost = (detail) => {
+          for (const r of part) out.push({ row: r, outcome: { ok: false, reason: "lost", detail } });
+        };
+        if (!client) {
+          if (late) lost("no key");
+          continue;
+        }
+        let batch;
+        try {
+          batch = await client.messages.batches.retrieve(batchId);
+        } catch (e) {
+          if (late) lost(e instanceof Error ? e.message.slice(0, 200) : "retrieve failed");
+          continue;
+        }
+        if (batch.processing_status !== "ended") {
+          if (late) {
+            await client.messages.batches.cancel(batchId).catch(() => void 0);
+            for (const r of part) out.push({ row: r, outcome: { ok: false, reason: "expired" } });
+          }
+          continue;
+        }
+        const ids = new Map(part.map((r) => [r.id, r]));
+        try {
+          for await (const line of await client.messages.batches.results(batchId)) {
+            const r = ids.get(line.custom_id);
+            if (!r) continue;
+            ids.delete(line.custom_id);
+            const res = line.result;
+            out.push({
+              row: r,
+              outcome: res.type === "succeeded" ? { ok: true, message: res.message } : res.type === "errored" ? { ok: false, reason: "errored", detail: res.error?.error?.message?.slice(0, 200) } : { ok: false, reason: res.type }
+            });
+          }
+        } catch (e) {
+          if (!late) continue;
+          lost(e instanceof Error ? e.message.slice(0, 200) : "results failed");
+          continue;
+        }
+        for (const r of ids.values())
+          out.push({ row: r, outcome: { ok: false, reason: "lost", detail: "no result" } });
+      }
+      return out;
+    },
+    /** Records a batch answer its job did not need (it skipped): it was paid for all the same. */
+    async record(row, outcome) {
+      if (outcome.ok) await recordBatch(row, outcome.message);
+    },
+    /** Marks a request finished: done when its job ran on a batch answer, expired when it ran synchronously. */
+    async finish(id, status, error) {
+      if (!deps.db) return;
+      await deps.db.sql`
+        update orbit.claude_batch_requests set status = ${status}, finished_at = ${now()}::timestamptz,
+               error = ${error ?? null}
+         where id = ${id}::uuid`;
+    }
+  };
+  return {
+    configured: !!client,
+    batching: !!client && !!deps.batch && !!deps.db,
+    structured,
+    structuredBatch,
+    resolveBatch,
+    batches
+  };
+}
+function formatOf(schema, setting) {
+  const zf = zodOutputFormat(schema);
+  return setting.flatNullable ? { ...zf, schema: flattenNullable(zf.schema) } : zf;
 }
 function flattenNullable(schema) {
   if (Array.isArray(schema)) return schema.map(flattenNullable);
@@ -4502,6 +4789,18 @@ function markProfileOnly(d) {
 var round42 = (x) => Math.round(x * 1e4) / 1e4;
 
 // supabase/functions/orbit-research/research.ts
+async function userForAccount(db2, accountId) {
+  if (!accountId) return null;
+  try {
+    const [r] = await db2.sql`
+      select user_id::text as user_id from orbit.integration_accounts
+       where provider = 'linkedin' and external_account_id = ${accountId} and status = 'active'
+       order by created_at desc limit 1`;
+    return r?.user_id ?? null;
+  } catch {
+    return null;
+  }
+}
 var DEFAULT_PER_MONTH = 15;
 var DEFAULT_USD_PER_DAY = 40;
 var ROUTES = /* @__PURE__ */ new Set(["/quick", "/deeper", "/status", "/remove"]);
@@ -4620,7 +4919,7 @@ async function personKey(salt, req) {
   const id = slug ? `slug:${slug}` : `name:${norm(req.person.name)}|${normOrg(req.person.org)}`;
   return (await sha256(`${salt}:person:${id}`)).slice(0, 40);
 }
-function claudeDepOf(claude) {
+function claudeDepOf(claude, userId) {
   return {
     async parse(task, schema, prompt) {
       const r = await claude.structured({
@@ -4628,7 +4927,8 @@ function claudeDepOf(claude) {
         system: prompt.system,
         user: prompt.user,
         schema,
-        userId: null,
+        // the student whose account asked, so their caps apply (null: no database, or a browser-only link)
+        userId,
         timeoutMs: prompt.timeoutMs
       });
       if (r.ok) return { ok: true, value: r.data, costUsd: r.costUsd, model: r.model };
@@ -4856,7 +5156,8 @@ function makeHandler(deps) {
     const web = [];
     if (deps.exa?.configured) web.push(exaWeb(deps.exa, deps.cache));
     web.push(claudeWeb(client, deps.cache, { model: deps.gatherModel ?? GATHER_MODEL }));
-    const claude = claudeDepOf(makeClaude({ apiKey: key, fetch: doFetch, client }));
+    const userId = deps.db ? await userForAccount(deps.db, accountId) : null;
+    const claude = claudeDepOf(makeClaude({ apiKey: key, fetch: doFetch, client, db: deps.db }), userId);
     const started = Date.now();
     const deadlineMs = kind === "quick" ? deps.deadlines?.quick ?? QUICK_DEADLINE_MS : deps.deadlines?.deeper ?? DEEPER_DEADLINE_MS;
     let out;
@@ -5112,6 +5413,8 @@ var [unipileKey, unipileBase] = await Promise.all([
   providerSecret("UNIPILE_API_KEY"),
   providerSecret("UNIPILE_BASE_URL")
 ]);
+var dbUrl = Deno.env.get("SUPABASE_DB_URL");
+var db = dbUrl ? connectDb(dbUrl, 1) : void 0;
 var engines = [
   createParallelSearch({ fetch, apiKey: parallelKey, timeoutMs: 1e4, maxRetries: 1 }),
   createSerperSearch({ fetch, apiKey: serperKey, timeoutMs: 1e4, maxRetries: 1 })
@@ -5135,6 +5438,7 @@ Deno.serve(
     usdPerDay: num("ORBIT_RESEARCH_USD_PER_DAY", 40),
     accountPerDay: num("ORBIT_RESEARCH_ACCOUNT_PER_DAY", 40),
     visitorPerMinute: num("ORBIT_RESEARCH_PER_MINUTE", 20),
-    visitorPerDay: num("ORBIT_RESEARCH_PER_DAY", 200)
+    visitorPerDay: num("ORBIT_RESEARCH_PER_DAY", 200),
+    db
   })
 );
