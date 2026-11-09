@@ -162,6 +162,16 @@ export function InboxPage() {
                   e.attendeePersonIds.length > 0,
               )
               .toArray()
+              // the same chat on two calendars (or with two Meet links) is one chat: once per person and start time
+              .then((rows) => {
+                const seen = new Set<string>();
+                return rows.filter((e) => {
+                  const slot = `${[...e.attendeePersonIds].sort().join(',')}@${new Date(e.startAt).getTime()}`;
+                  if (seen.has(slot)) return false;
+                  seen.add(slot);
+                  return true;
+                });
+              })
           : [],
       [userId],
     ) ?? [];

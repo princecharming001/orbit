@@ -19,7 +19,7 @@ import { ChoicesContext } from './cards/Choices';
 import { withoutRefs } from './cards/next';
 import { DraftOwnersContext, TurnPersonCardsContext } from './cards/parts';
 import { type CardActions, editingDraftId, ResultCard } from './cards/ResultCard';
-import { readPerson } from './cards/shapes';
+import { readDraft, readPerson } from './cards/shapes';
 import { Markdown } from './Markdown';
 import { type NamedPerson, namedPeople } from './names';
 import type { AssistantTurn, Block, ErrorKind, ToolBlock, Turn, WebBlock } from './threadStore';
@@ -252,11 +252,20 @@ function Assistant({
   const personCards = useMemo(
     () =>
       new Set(
-        turn.blocks.flatMap((b) =>
-          b.type === 'tool' && b.envelope?.kind === 'person'
-            ? [readPerson(b.envelope.data)?.person.id].filter((x): x is string => !!x)
-            : [],
-        ),
+        // the people this turn shows a full card for: a person card, or a draft to them (its header names them)
+        turn.blocks.flatMap((b) => {
+          if (b.type !== 'tool' || !b.envelope) return [];
+          const id =
+            b.envelope.kind === 'person'
+              ? readPerson(b.envelope.data)?.person.id
+              : b.envelope.kind === 'draft'
+                ? (() => {
+                    const r = readDraft(b.envelope.data);
+                    return r?.draft?.personId ?? r?.person?.id;
+                  })()
+                : undefined;
+          return id ? [id] : [];
+        }),
       ),
     [turn.blocks],
   );

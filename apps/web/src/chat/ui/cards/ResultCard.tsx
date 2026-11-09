@@ -60,6 +60,7 @@ import {
   readList,
   readNote,
   readPeople,
+  readPeopleQuery,
   readPerson,
   readPipeline,
   readPrep,
@@ -113,11 +114,15 @@ export function ResultCard({ block, actions }: { block: ToolBlock; actions: Card
   return <Envelope env={env} block={block} actions={actions} />;
 }
 
-/** A list of people, unless it is one person this turn already shows a full card for. */
+/**
+ * A list of people, unless the turn already answered it: one person this turn shows a full card (or a draft) for, or a
+ * "Which Lena?" lookup the turn went on to settle by showing one of its people in full.
+ */
 function KnownPeople({ env, actions }: { env: ResultEnvelope; actions: CardActions }) {
   const shown = useContext(TurnPersonCardsContext);
   const rows = readPeople(env.data);
   if (rows.length === 1 && shown.has(rows[0]!.person.id)) return null;
+  if (readPeopleQuery(env.data).nameQuery && rows.some((r) => shown.has(r.person.id))) return null;
   return <KnownPeopleCard env={env} actions={actions} />;
 }
 
@@ -977,7 +982,10 @@ function BriefCard({ env }: { env: ResultEnvelope }) {
     [ids.join(',')],
   );
   const [openId, setOpenId] = useState<string>();
-  const pending = [...suggestions, ...(live ?? [])].filter((x) => x.status === 'pending');
+  // the cards as the result carried them, each replaced by its live row once read: one row per card, never both
+  const byId = new Map<string, Suggestion>();
+  for (const x of [...suggestions, ...(live ?? [])]) byId.set(x.id, x);
+  const pending = [...byId.values()].filter((x) => x.status === 'pending');
   const shown = pending.slice(0, 3);
   if (!shown.length) return <Summary env={env} />;
   const rest = pending.length - shown.length;
