@@ -633,6 +633,46 @@ export interface ListRow {
   href?: string;
   links: { label: string; url: string }[];
   avatar?: { name: string; src?: string };
+  /** a person found in a search: drawn as a people row */
+  person?: ListPerson;
+}
+
+export interface ListPerson {
+  name: string;
+  role?: string;
+  email?: string;
+  emailConfidence?: 'verified' | 'page' | 'pattern' | 'guess';
+  why?: string;
+  tier?: number;
+  linkedinUrl?: string;
+  url?: string;
+  photo?: string;
+}
+
+const SURE = new Set(['verified', 'page', 'pattern', 'guess']);
+const https = (u: string | undefined) => (u && /^https?:\/\//.test(u) ? u : undefined);
+
+function readListPerson(x: unknown): ListPerson | undefined {
+  const o = obj(x);
+  const name = str(o.name);
+  if (!name) return undefined;
+  const email = str(o.email);
+  const sure = str(o.emailConfidence);
+  const tier = typeof o.tier === 'number' ? o.tier : undefined;
+  return {
+    name,
+    role: str(o.role),
+    email: email && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) ? email : undefined,
+    emailConfidence: email && sure && SURE.has(sure) ? (sure as ListPerson['emailConfidence']) : undefined,
+    why: str(o.why),
+    tier,
+    linkedinUrl: https(str(o.linkedinUrl)),
+    url: https(str(o.url)),
+    photo: (() => {
+      const src = str(o.photo);
+      return src && /^https:\/\//.test(src) ? src : undefined;
+    })(),
+  };
 }
 
 /** list: `{ title, items: { text, sub?, chip?, href?, links? }[] }` */
@@ -665,6 +705,7 @@ export function readList(d: unknown): { title?: string; items: ListRow[] } {
           const src = str(a.src);
           return name ? { name, src: src && /^https:\/\//.test(src) ? src : undefined } : undefined;
         })(),
+        person: readListPerson(r.person),
       };
     })
     .filter(present);

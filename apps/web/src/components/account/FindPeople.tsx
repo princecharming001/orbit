@@ -3,9 +3,10 @@ import { GOAL_KINDS } from '@orbit/core';
 import { Search } from 'lucide-react';
 import { type FormEvent, useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
+import { Dot, EmailLine, NameTag, PeopleShell, PersonLine } from '../../chat/ui/cards/people';
 import { activeGoals, GOAL_KIND_LABELS } from '../../engine/goals';
-import { addSourced, providerNames, searchPeople } from '../../engine/sourcing';
-import { Avatar, Button, Chip, cx, EmptyState, Input, Spinner } from '../../ui';
+import { addSourced, providerNames, searchPeople, tierChip } from '../../engine/sourcing';
+import { Button, cx, EmptyState, Input, Spinner } from '../../ui';
 
 const PLACEHOLDER: Record<GoalKind, string> = {
   recruiting: 'Product managers at fintech startups',
@@ -122,66 +123,88 @@ export function FindPeople({ userId }: { userId: string }) {
         </div>
       ) : null}
       {results && results.length > 0 ? (
-        <ul
-          className="mt-5 border border-line rounded-[var(--radius-card)] divide-y divide-line"
-          data-testid="find-results"
-        >
-          {results.map((c) => {
-            const personId = added[c.id] ?? c.knownPersonId;
-            return (
-              <li key={c.id} className="p-3 flex items-start gap-3" data-testid="find-result">
-                <Avatar name={c.name} id={c.id} size={32} />
-                <div className="min-w-0 flex-1">
-                  <div className="flex flex-wrap items-center gap-2">
-                    <span className="font-medium">{c.name}</span>
-                    {c.knownPersonId ? <Chip tone="good">You know them</Chip> : null}
-                  </div>
-                  <div className="text-[12.5px] text-ink-3">
-                    {[c.title, c.org, c.location].filter(Boolean).join(' · ')}
-                  </div>
-                  {c.email ? (
-                    <div className="text-[12.5px] text-ink-2" data-testid="find-email">
-                      {c.email}
-                    </div>
-                  ) : null}
-                  {c.evidence?.length ? (
-                    <ul className="mt-1 text-[12.5px] text-ink-2 space-y-0.5" data-testid="find-context">
-                      {c.evidence.slice(0, 2).map((e, i) => (
-                        <li key={i}>{e}</li>
-                      ))}
-                    </ul>
-                  ) : null}
-                  {c.reasons.length ? (
-                    <ul className="mt-1 text-[12.5px] text-ink-2 space-y-0.5" data-testid="find-reasons">
-                      {c.reasons.slice(0, 3).map((r, i) => (
-                        <li key={i}>{r}</li>
-                      ))}
-                    </ul>
-                  ) : null}
-                </div>
-                <div className="shrink-0">
-                  {personId ? (
-                    <Link
-                      to={`/people/${personId}`}
-                      className="text-[13px] font-medium text-ink underline decoration-[#cfcdc9] underline-offset-4 hover:decoration-ink"
-                    >
-                      {added[c.id] ? 'Added, open' : 'Open'}
-                    </Link>
-                  ) : (
-                    <Button
-                      size="sm"
-                      onClick={() => add(c)}
-                      disabled={adding === c.id}
-                      data-testid="find-add"
-                    >
-                      {adding === c.id ? <Spinner /> : null} Add
-                    </Button>
-                  )}
-                </div>
-              </li>
-            );
-          })}
-        </ul>
+        <div className="mt-5" data-testid="find-results">
+          <PeopleShell
+            testId="find-results-card"
+            title={`${results.length} ${results.length === 1 ? 'person' : 'people'}`}
+            sub={(() => {
+              const withEmail = results.filter((c) => c.email);
+              const verified = withEmail.filter((c) => c.emailConfidence === 'verified').length;
+              return withEmail.length
+                ? `${withEmail.length} ${withEmail.length === 1 ? 'email' : 'emails'}${verified ? `, ${verified} verified` : ''}`
+                : undefined;
+            })()}
+          >
+            <ul className="px-1.5 pb-1.5">
+              {results.map((c) => {
+                const personId = added[c.id] ?? c.knownPersonId;
+                const why = c.evidence?.[0] ?? c.why ?? c.reasons[0];
+                const chip = tierChip(c);
+                return (
+                  <li key={c.id} className="list-none">
+                    <PersonLine
+                      name={c.name}
+                      avatar={{ id: c.id }}
+                      linkedinUrl={c.linkedinUrl}
+                      tag={
+                        chip && (
+                          <NameTag tone={(c.tier ?? 9) <= 2 || c.knownPersonId ? 'good' : 'quiet'}>
+                            {chip}
+                          </NameTag>
+                        )
+                      }
+                      line={
+                        <span className="truncate">
+                          {[[c.title, c.org].filter(Boolean).join(' at '), c.location]
+                            .filter(Boolean)
+                            .join(' · ')}
+                        </span>
+                      }
+                      extra={
+                        c.email || why ? (
+                          <>
+                            {c.email && (
+                              <EmailLine email={c.email} sureness={c.emailConfidence} testId="find-email" />
+                            )}
+                            {c.email && why && <Dot />}
+                            {why && (
+                              <span className="truncate" data-testid="find-context" title={why}>
+                                {why}
+                              </span>
+                            )}
+                          </>
+                        ) : undefined
+                      }
+                      to={personId ? `/people/${personId}` : undefined}
+                      href={personId ? undefined : c.url}
+                      linkLabel={personId ? `Open ${c.name}` : `The page ${c.name} was found on`}
+                      trailing={
+                        personId ? (
+                          <Link
+                            to={`/people/${personId}`}
+                            className="text-[13px] font-medium text-ink underline decoration-[#cfcdc9] underline-offset-4 hover:decoration-ink"
+                          >
+                            {added[c.id] ? 'Added, open' : 'Open'}
+                          </Link>
+                        ) : (
+                          <Button
+                            size="sm"
+                            onClick={() => add(c)}
+                            disabled={adding === c.id}
+                            data-testid="find-add"
+                          >
+                            {adding === c.id ? <Spinner /> : null} Add
+                          </Button>
+                        )
+                      }
+                      testId="find-result"
+                    />
+                  </li>
+                );
+              })}
+            </ul>
+          </PeopleShell>
+        </div>
       ) : null}
       {results && (quiet.relaxed.length > 0 || quiet.unconfigured.length > 0) ? (
         <p className="mt-3 text-[12px] text-ink-3" data-testid="find-quiet">

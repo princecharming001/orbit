@@ -162,3 +162,82 @@ describe('the routes to several people card', () => {
     ]);
   });
 });
+
+describe('people found in a search, in the people card look', () => {
+  const ui = {
+    title: 'People for fundraising',
+    items: [
+      {
+        id: 'r1',
+        text: 'Harris Stolzenberg, Partner at Pear VC',
+        chip: 'Intro via Maya',
+        person: {
+          name: 'Harris Stolzenberg',
+          role: 'Partner at Pear VC',
+          email: 'harris@pear.vc',
+          emailConfidence: 'verified',
+          why: 'Maya Chen worked with him at Pear',
+          tier: 2,
+          url: 'https://pear.vc/team',
+        },
+      },
+      {
+        id: 'r2',
+        text: 'Ajay Kamat',
+        person: {
+          name: 'Ajay Kamat',
+          role: 'Partner at Pear VC',
+          email: 'ajay@pear.vc',
+          emailConfidence: 'guess',
+        },
+      },
+      {
+        id: 'r3',
+        known: 'p7',
+        text: 'Maya Chen',
+        chip: 'You know them',
+        person: { name: 'Maya Chen', role: 'Designer at Stripe', email: 'not an email' },
+      },
+    ],
+  };
+  const env: ResultEnvelope = {
+    kind: 'list',
+    data: { ui, forModel: {} },
+    summary: 'Found 3 people. No place was named, so it searched the web by topic alone.',
+  };
+
+  it('shows the email and how sure Orbit is, counts them, and says what the search assumed', async () => {
+    await render(env);
+    const rows = $$('[data-testid="found-person"]');
+    expect(rows).toHaveLength(3);
+    const card = $('[data-testid="result-list"]')!;
+    expect(card.textContent).toContain('3 people');
+    expect(card.textContent).toContain('2 emails, 1 verified');
+    expect(card.textContent).toContain('No place was named');
+    expect(rows[0]!.querySelector('[data-testid="email-sureness"]')?.textContent).toBe('Verified');
+    expect(rows[1]!.querySelector('[data-testid="email-sureness"]')?.textContent).toBe('Unconfirmed');
+    // something that is not an address is never shown as one
+    expect(rows[2]!.querySelector('[data-testid="person-email"]')).toBeNull();
+    // someone known opens the warm path; a stranger opens the page they were found on
+    expect(rows[2]!.querySelector('a[href="/map?reach=p7"]')).not.toBeNull();
+    expect(rows[0]!.querySelector('a[href="https://pear.vc/team"]')?.getAttribute('target')).toBe('_blank');
+  });
+
+  it('picked people are added with their ids, then routes, People or a draft', async () => {
+    await render(env);
+    expect($('[data-testid="next-steps"]')).not.toBeNull();
+    const boxes = $$('[data-testid="pick-person"]');
+    expect(boxes).toHaveLength(3);
+    await click(boxes[0]!);
+    await click(boxes[2]!);
+    expect($('[data-testid="selection-count"]')?.textContent).toBe('2 picked');
+    const steps = $$('[data-testid="selection-step"]');
+    expect(steps.map((s) => s.textContent)).toEqual(['Find warm routes', 'Add to People', 'Write to them']);
+    await click(steps[2]!);
+    expect(sent).toEqual([
+      'Add to People and draft a message to each of: Harris Stolzenberg [rec r1] and Maya Chen',
+    ]);
+    await click($('[data-testid="selection-all"]'));
+    expect($('[data-testid="selection-count"]')).toBeNull();
+  });
+});

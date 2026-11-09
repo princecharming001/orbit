@@ -24,7 +24,8 @@ import type { ResultEnvelope } from '../../types';
 import { Markdown } from '../Markdown';
 import type { ToolBlock } from '../threadStore';
 import { Choices } from './Choices';
-import { addPicked, askForIntro, type Picked, routesToEach, writeTo, writeToEach } from './next';
+import { addPicked, askForIntro, type Picked, writeTo } from './next';
+import { FoundPeopleCard, isPeopleList, KnownPeopleCard } from './PeopleCards';
 import { PeopleTableCard, readTable } from './PeopleTable';
 import {
   CardHead,
@@ -55,7 +56,6 @@ import {
   readList,
   readNote,
   readPeople,
-  readPeopleQuery,
   readPerson,
   readPipeline,
   readPrep,
@@ -118,7 +118,7 @@ function Envelope({ env, block, actions }: { env: ResultEnvelope; block: ToolBlo
       return r ? <PersonCard env={env} r={r} actions={actions} /> : <Summary env={env} />;
     }
     case 'people':
-      return <PeopleCard env={env} actions={actions} />;
+      return readPeople(d).length ? <KnownPeopleCard env={env} actions={actions} /> : <Summary env={env} />;
     case 'people_table':
       return readTable(d) ? <PeopleTableCard env={env} send={actions.send} /> : <Summary env={env} />;
     case 'choices':
@@ -301,68 +301,7 @@ function PersonCard({ env, r, actions }: { env: ResultEnvelope; r: PersonView; a
   );
 }
 
-// ---------- people ----------
-
-function PeopleCard({ env, actions }: { env: ResultEnvelope; actions: CardActions }) {
-  const people = readPeople(env.data);
-  const { query, nameQuery } = readPeopleQuery(env.data);
-  const target = readRoutes(env.data).to;
-  const fold = useFold(people);
-  const picked = usePicked();
-  if (!people.length) return <Summary env={env} />;
-  // rows with a reason under the name keep two lines; a list of names and roles reads on one
-  const dense = !!target || !people.some((p) => p.why);
-  const steps = cardSteps('search_people', env);
-  // more than one person: each row can be picked, and the picked ones get routes or a draft together
-  const pickable = people.length > 1;
-  const names = people.filter((p) => picked.has(p.person.id)).map((p) => p.person.displayName);
-  const pickedSteps = [routesToEach(names), writeToEach(names)].filter((s): s is NextStep => !!s);
-  return (
-    <GlassCard kind="people">
-      <CardHead
-        title={
-          query && nameQuery && people.length > 1
-            ? `Which "${query}"?`
-            : firstSentence(env.summary).replace(/, including .*$/, '')
-        }
-        href={env.href}
-      />
-      <div className={dense ? undefined : 'divide-y divide-line-2'}>
-        {fold.shown.map(({ person, why, stage }) => (
-          <div key={person.id} className="flex items-center gap-2.5 min-w-0">
-            {pickable && (
-              <PickBox
-                checked={picked.has(person.id)}
-                onChange={(on) => picked.set(person.id, on)}
-                label={person.displayName}
-              />
-            )}
-            <div className="min-w-0 flex-1">
-              <PersonRow
-                person={person}
-                sub={why}
-                dense={dense}
-                aside={stage ? <Chip tone="neutral">{stage}</Chip> : undefined}
-              />
-            </div>
-          </div>
-        ))}
-      </div>
-      {fold.more}
-      {pickable && (
-        <SelectionBar
-          count={names.length}
-          total={fold.shown.length}
-          onAll={() => picked.setAll(fold.shown.map((p) => p.person.id))}
-          onClear={picked.clear}
-          steps={pickedSteps}
-          send={actions.send}
-        />
-      )}
-      {!names.length && <NextSteps steps={steps} send={actions.send} />}
-    </GlassCard>
-  );
-}
+// ---------- people: PeopleCards.tsx ----------
 
 /** Which rows of a card are picked: a set the checkboxes and the bar share. */
 function usePicked() {
@@ -1333,6 +1272,9 @@ function ListCard({ env, block, actions }: { env: ResultEnvelope; block: ToolBlo
   const fold = useFold(items, 6);
   const picked = usePicked();
   if (!items.length) return <Summary env={env} />;
+  // people found in a search: the people card's look, with the email and how sure it is
+  if (isPeopleList(items))
+    return <FoundPeopleCard env={env} block={block} items={items} title={title} actions={actions} />;
   const heading = title ?? firstSentence(env.summary);
   const steps = cardSteps(block.toolName, env);
   // rows that stand for people found in a search can be picked: added to People, with routes or a draft to each

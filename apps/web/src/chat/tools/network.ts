@@ -81,6 +81,18 @@ interface Item {
   links?: { label: string; url: string }[];
   /** a person's photo (or initials) at the start of the row */
   avatar?: { name: string; src?: string };
+  /** a person found in a search, drawn as a people row (name, role, email and how sure, why they fit) */
+  person?: {
+    name: string;
+    role?: string;
+    email?: string;
+    emailConfidence?: 'verified' | 'page' | 'pattern' | 'guess';
+    why?: string;
+    tier?: number;
+    linkedinUrl?: string;
+    url?: string;
+    photo?: string;
+  };
 }
 
 function list<M>(title: string, items: Item[], forModel: M, summary: string, href?: string): ResultEnvelope {
@@ -670,6 +682,16 @@ export const findPeopleTool = defineTool({
           .filter(Boolean)
           .join('. '),
         href: c.knownPersonId ? `/people/${c.knownPersonId}` : c.url,
+        person: {
+          name: c.name,
+          role: [c.title, c.org].filter(Boolean).join(' at ') || undefined,
+          email: c.email,
+          emailConfidence: c.email ? (c.emailConfidence ?? 'page') : undefined,
+          why: c.why ?? c.evidence?.[0] ?? c.reasons[0],
+          tier: c.tier,
+          linkedinUrl: c.linkedinUrl,
+          url: c.url,
+        },
       })),
       {
         results: top.map((c) => ({
@@ -716,6 +738,13 @@ async function findOnLinkedIn(
       href: p.knownPersonId ? `/people/${p.knownPersonId}` : undefined,
       links: p.profileUrl ? [{ label: 'LinkedIn', url: p.profileUrl }] : undefined,
       avatar: { name: p.name, src: p.pictureUrl },
+      person: {
+        name: p.name,
+        role: p.headline,
+        why: p.location,
+        linkedinUrl: p.profileUrl,
+        photo: p.pictureUrl,
+      },
     })),
     {
       results: top.map((p) => ({
