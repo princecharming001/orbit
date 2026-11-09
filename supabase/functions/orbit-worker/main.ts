@@ -2,7 +2,7 @@
  * orbit-worker entry: called every minute by pg_cron (orbit.cron_call_worker) with the x-orbit-cron header.
  * Bundled into dist/index.js by scripts/build-functions.mjs. Deploy with verify_jwt off.
  */
-import { makeClaude } from '../_shared/claude.ts';
+import { batchFlagOn, makeClaude } from '../_shared/claude.ts';
 import { connectDb } from '../_shared/db.ts';
 import { googleTokenSource } from '../_shared/google.ts';
 import { makeLogger } from '../_shared/http.ts';
@@ -61,7 +61,8 @@ const handlerDeps: HandlerDeps = {
       : undefined,
   gmailTopic: env('GMAIL_PUBSUB_TOPIC'),
   unipile: { apiKey: unipileKey, baseUrl: unipileBase },
-  claude: makeClaude({ apiKey: claudeKey, db }),
+  // the background reading pass (search_reading) batches through it too (plan 35 C2)
+  claude: makeClaude({ apiKey: claudeKey, db, batch: batchFlagOn(agentEnv.claudeBatch) }),
   cost: { mailer: makeMailer(agentEnv, fetch), ownerId, thresholds: costThresholds },
 };
 const handlers = defaultHandlers({ ...handlerDeps, agents: { env: agentEnv } });

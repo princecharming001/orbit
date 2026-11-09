@@ -77,7 +77,7 @@ export function classifyHandlers(
       const r = await classifyMessage(ctx.db, userId, id, { now: ctx.now(), claude: deps.claude });
       if (r.skipped === 'automated' && p.history !== true) await maybeBounce(ctx.db, userId, id, ctx.now());
       if (!r.replyClass) return;
-      const { personId } = await readRapport(ctx.db, userId, id, { claude: deps.claude });
+      const { personId } = await readRapport(ctx.db, userId, id, { claude: deps.claude, llm: r.rapport });
       if (personId)
         await ctx.queue.enqueue({
           kind: 'score.person',

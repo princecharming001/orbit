@@ -2,9 +2,12 @@
  * Sourcing (§6):
  *   POST /source/search {goalId?, purpose, query?, homeCity?, filters?, limit?}  → {batchId, results, unconfigured, relaxed}
  *   POST /source/add {recommendationIds}                              → {people: [{id, displayName, chatId}]}
+ *   POST /source/email {recommendationId} | {personId}                → {email?, emailConfidence?, emailStatus}
+ *        one person's address looked up on demand (plan 35 C3): a search no longer pays for everyone's
  */
 import type { SourceSearchRequest } from '@orbit/core/server/api';
 import { badRequest, json } from '../../_shared/http.ts';
+import { lookupPersonEmail, lookupRecommendationEmail } from '../../_shared/sourcing/ondemand.ts';
 import { addSourced, runSourcing } from '../../_shared/sourcing/run.ts';
 import type { Ctx, Route } from '../api.ts';
 import { body, optUuid } from './body.ts';
@@ -36,6 +39,7 @@ async function search(ctx: Ctx): Promise<Response> {
       keywords: list(f.keywords, 'keywords'),
     },
     limit: typeof b.limit === 'number' ? b.limit : undefined,
+    withEmails: b.withEmails === true ? true : undefined,
   };
   return json(200, await runSourcing(ctx.services(), ctx.userId!, req));
 }
@@ -45,7 +49,22 @@ async function add(ctx: Ctx): Promise<Response> {
   return json(200, await addSourced(ctx.services(), ctx.userId!, b.recommendationIds));
 }
 
+async function email(ctx: Ctx): Promise<Response> {
+  const b = await body(ctx);
+  const recommendationId = optUuid(b, 'recommendationId');
+  const personId = optUuid(b, 'personId');
+  if (!recommendationId === !personId) throw badRequest('send one of recommendationId or personId');
+  const s = ctx.services();
+  return json(
+    200,
+    recommendationId
+      ? await lookupRecommendationEmail(s, ctx.userId!, recommendationId)
+      : await lookupPersonEmail(s, ctx.userId!, personId!),
+  );
+}
+
 export const sourceRoutes: Record<string, Route> = {
   '/source/search': { method: 'POST', auth: true, run: search },
   '/source/add': { method: 'POST', auth: true, run: add },
+  '/source/email': { method: 'POST', auth: true, run: email },
 };

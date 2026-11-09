@@ -36,7 +36,7 @@ import { messageHash, SEND_CAPS } from '@orbit/core/safety/rules';
 import { voiceCheck } from '@orbit/core/style/voice';
 import { weekKeys, weekPace } from '@orbit/core/suggestions/pace';
 import type { GoalKind, MessageKind } from '@orbit/core/types';
-import { composeDraft } from '../compose/compose.ts';
+import { composeDraftBatched } from '../compose/compose.ts';
 import { exemplars, loadUserRow, userFirstName } from '../compose/context.ts';
 import type { DraftRow } from '../compose/drafts.ts';
 import { askUserMarkers } from '../compose/prompts.ts';
@@ -224,8 +224,12 @@ async function planGoals(
        and coalesce(d.send_at, d.sent_at) >= ${rollStart}::timestamptz
        and coalesce(d.send_at, d.sent_at) <= ${dayEnd}::timestamptz`;
   const onDayRows = ownFirst.filter((r) => dayKeyOf(new Date(r.at), tz) === planDay);
-  let onDay = onDayRows.length;
-  let thisWeek = ownFirst.length;
+  // first messages whose model turn is still in a batch (plan 35 C2) count toward the day and the week
+  const [waiting] = await db.sql<{ n: number }>`
+    select count(*)::int as n from orbit.claude_batch_requests
+     where user_id = ${userId}::uuid and handler = 'compose.first_touch' and status in ('queued', 'submitted')`;
+  let onDay = onDayRows.length + (waiting?.n ?? 0);
+  let thisWeek = ownFirst.length + (waiting?.n ?? 0);
   const firmsOnDay = onDayRows.map((r) => ({ firm: firmKey(r.org), name: r.name })).filter((f) => f.firm);
 
   // the week's pace: every first message the week holds, by hand or Orbit's own
@@ -362,7 +366,8 @@ async function planGoals(
         continue;
       }
       const queued = await writeFirstTouch(s, userId, goal, c, { user, now, tz });
-      if (queued === 'queued') {
+      // a batched one counts as queued here: it is most likely to be, and counting it keeps the caps
+      if (queued === 'queued' || queued === 'batched') {
         out.queued++;
         onDay++;
         thisWeek++;
@@ -398,7 +403,9 @@ async function candidateRows(
            exists (select 1 from orbit.drafts d where d.user_id = p.user_id and d.person_id = p.id
                     and d.kind = any(${FIRST_TOUCH}::text[])
                     and d.status in ('draft', 'approved', 'scheduled', 'sending')
-                    and d.id <> ${one?.draftId ?? null}::uuid is not false) as pending,
+                    and d.id <> ${one?.draftId ?? null}::uuid is not false)
+           or exists (select 1 from orbit.claude_batch_requests b where b.user_id = p.user_id and b.person_id = p.id
+                       and b.handler = 'compose.first_touch' and b.status in ('queued', 'submitted')) as pending,
            (exists (select 1 from orbit.dossiers ds where ds.user_id = p.user_id and ds.person_id = p.id
                      and ds.status in ('ready', 'partial')
                      and jsonb_array_length(coalesce(ds.content->'openers', '[]'::jsonb)) > 0)
@@ -496,14 +503,15 @@ async function writeFirstTouch(
   goal: GoalRow,
   c: FirstTouchCandidate,
   ctx: { user: Awaited<ReturnType<typeof loadUserRow>>; now: Date; tz: string },
-): Promise<'queued' | 'held' | 'skipped'> {
-  const db = s.db;
-  const { now } = ctx;
+): Promise<'queued' | 'held' | 'skipped' | 'batched'> {
   const kind: MessageKind = c.score >= 40 ? 'warm_first_touch' : 'first_touch';
   let draft: DraftRow;
   try {
-    draft = (
-      await composeDraft(s, {
+    // the message waits for the evening review anyway: its model turn goes through Message Batches when it can
+    // (plan 35 C2), and the checks below run when the answer comes (batchJobs.ts `compose.first_touch`)
+    const b = await composeDraftBatched(
+      s,
+      {
         userId,
         personId: c.personId,
         kind,
@@ -511,12 +519,57 @@ async function writeFirstTouch(
         goalId: goal.id,
         reason: `autopilot plan for ${goal.title}`,
         actor: 'agent',
-      })
-    ).draft;
+      },
+      {
+        handler: 'compose.first_touch',
+        payload: { goalId: goal.id, goalTitle: goal.title },
+        dedupeKey: `first_touch:${userId}:${c.personId}`,
+      },
+    );
+    if (b.batched) return b.duplicate ? 'skipped' : 'batched';
+    draft = b.result.draft;
   } catch (e) {
     if (e instanceof HttpError) return 'skipped';
     throw e;
   }
+  return afterFirstTouch(s, userId, { id: goal.id, title: goal.title }, c.personId, draft, ctx);
+}
+
+/**
+ * Whether a first message whose model turn went through a batch is still wanted when the answer comes (plan 35 C2):
+ * the student has not paused autopilot, and the goal is still active, on autopilot and not paused.
+ */
+export async function firstTouchStillWanted(s: Services, userId: string, goalId: string): Promise<boolean> {
+  const now = s.now();
+  const user = await loadUserRow(s.db, userId);
+  const settings = user.settings ?? {};
+  if (
+    typeof settings.autopilot_paused_until === 'string' &&
+    new Date(settings.autopilot_paused_until).getTime() > now.getTime()
+  )
+    return false;
+  const [g] = await s.db.sql<{ autonomy_level: number | null }>`
+    select autonomy_level from orbit.goals
+     where id = ${goalId}::uuid and user_id = ${userId}::uuid and status = 'active' and deleted_at is null`;
+  return (
+    !!g && Number(g.autonomy_level ?? user.autonomy_level ?? 0) === 2 && !goalPaused(settings, goalId, now)
+  );
+}
+
+/**
+ * The checks on a first message autopilot wrote, then the morning queue: held as a draft with the reason when the
+ * validator, the hook or the voice check says no; otherwise approved behind the review window and queued to send.
+ */
+export async function afterFirstTouch(
+  s: Services,
+  userId: string,
+  goal: { id: string; title: string },
+  personId: string,
+  draft: DraftRow,
+  ctx: { user: Awaited<ReturnType<typeof loadUserRow>>; now: Date; tz: string },
+): Promise<'queued' | 'held' | 'skipped'> {
+  const db = s.db;
+  const { now } = ctx;
   const hold = async (reason: string, detail?: string[]) => {
     await db.sql`
       update orbit.drafts set auto_rung = 'first_touch', error = ${reason}, autonomy_level = 2
@@ -535,7 +588,7 @@ async function writeFirstTouch(
   if (!voice.ok) return hold('voice', voice.problems);
 
   const [p] = await db.sql<{ timezone: string | null }>`
-    select timezone from orbit.people where id = ${c.personId}::uuid`;
+    select timezone from orbit.people where id = ${personId}::uuid`;
   // the recipient's morning, at least a full review window from now
   const at = new Date(
     nextSendWindow(earliestPlannedSend(now), validZone(p?.timezone) ?? ctx.tz, 'gmail', s.random).notBefore,

@@ -43,6 +43,7 @@ export const KIND_QUEUE: Record<string, QueueName> = {
   search_census: 'orbit_enrich',
   search_reading: 'orbit_enrich',
   'cost.digest': 'orbit_enrich',
+  'claude.batch.poll': 'orbit_enrich',
   noop: 'orbit_enrich',
 };
 

@@ -15,7 +15,7 @@
  */
 import { pairEvidenceTies } from '@orbit/core/graph/ties';
 import type { IntroAskResponse, PairCorrectionResponse, PathsFindRequest } from '@orbit/core/server/api';
-import { composeDraft } from '../../_shared/compose/compose.ts';
+import { composeIntroPair } from '../../_shared/compose/compose.ts';
 import { loadPerson } from '../../_shared/compose/context.ts';
 import type { Db } from '../../_shared/db.ts';
 import { badRequest, HttpError, json } from '../../_shared/http.ts';
@@ -57,8 +57,8 @@ async function ask(ctx: Ctx): Promise<Response> {
     returning id`;
   const via = { introducerId, pathScore, introRequestId: row!.id };
   const common = { userId, personId: introducerId, channel, goalId, targetPersonId: targetId, via } as const;
-  const request = await composeDraft(s, { ...common, kind: 'intro_request' });
-  const blurb = await composeDraft(s, { ...common, kind: 'forwardable_blurb' });
+  // one model call writes both messages (plan 35 C1)
+  const { request, blurb } = await composeIntroPair(s, common);
   const out: IntroAskResponse = { introRequestId: row!.id, draftIds: [request.draft.id, blurb.draft.id] };
   return json(200, out);
 }

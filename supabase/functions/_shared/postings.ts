@@ -9,6 +9,7 @@
  * Postings are public, so answers are cached by the address (hashed) for 7 days and shared. Kept free of Deno APIs
  * so it runs under Node tests.
  */
+import { costUsd, type Usage } from './prices.ts';
 
 export interface Posting {
   company: string;
@@ -51,6 +52,11 @@ export interface PostingDeps {
   fetch?: typeof fetch;
   /** how long a page fetch may take; the research function's 8 seconds */
   timeoutMs?: number;
+  /**
+   * What each model call cost, for orbit.usage_ledger (plan 35 A5: these reads were not recorded). orbit-connectors
+   * writes it under the visitor; the per-visitor posting allowance (`take`) is the cap on this anonymous route.
+   */
+  onUsage?: (u: { model: string; usage: Usage; costUsd: number }) => Promise<void> | void;
 }
 
 /** The research function's user agent, so a site sees the same reader. */
@@ -470,7 +476,15 @@ async function askModel(deps: PostingDeps, text: string, url: string | undefined
     signal: AbortSignal.timeout(20_000),
   });
   if (!res.ok) throw new Error(`model ${res.status}`);
-  const body = (await res.json()) as { content?: { type: string; input?: ModelOut }[] };
+  const body = (await res.json()) as { content?: { type: string; input?: ModelOut }[]; usage?: Usage };
+  if (body.usage && deps.onUsage) {
+    const model = deps.model ?? POSTING_MODEL;
+    try {
+      await deps.onUsage({ model, usage: body.usage, costUsd: costUsd(model, body.usage) });
+    } catch {
+      // the cost view misses one row; the answer does not wait on it
+    }
+  }
   return body.content?.find((c) => c.type === 'tool_use')?.input ?? {};
 }
 

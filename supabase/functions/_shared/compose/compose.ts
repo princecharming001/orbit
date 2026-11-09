@@ -28,6 +28,8 @@ import { messageHash, unansweredBefore } from '@orbit/core/safety/rules';
 import type { Slot } from '@orbit/core/server/api';
 import { stripQuotedReply } from '@orbit/core/text/email';
 import type { ComposedMessage, GoalKind, MessageKind } from '@orbit/core/types';
+import { z } from 'zod/v4';
+import type { ClaudeResult } from '../claude.ts';
 import type { Db } from '../db.ts';
 import { HttpError } from '../http.ts';
 import { firstNameOf, iso, lastNameOf } from '../rows.ts';
@@ -59,7 +61,12 @@ import {
   composeSystem,
   composeUser,
   PROMPT_VERSION,
+  REPLY_EXAMPLE_CHARS,
+  REPLY_EXAMPLES,
+  REPLY_THREAD_CHARS,
+  REPLY_THREAD_MESSAGES,
   retryNote,
+  type UserBlocks,
 } from './prompts.ts';
 import { nextSendWindow } from './window.ts';
 
@@ -95,8 +102,197 @@ export interface ComposeResult {
   attempts: number;
 }
 
+/**
+ * What a compose saw that must not change between asking the model and storing its answer: the free slots and send
+ * window it was given. A batched compose (plan 35 C2) keeps them with the request and lays them back on when the
+ * answer comes.
+ */
+export interface ComposeFrozen {
+  slots: Slot[];
+  windows: string[];
+  slotTz?: string;
+  window: { notBefore: string; tz: string };
+}
+
+/** A compose with its inputs built: the model's prompt, the check its answer must pass, and the step that stores it. */
+export interface PreparedCompose {
+  req: ComposeRequest;
+  task: 'compose' | 'reply';
+  system: string;
+  user: string;
+  /** false when the answer is fixed (a booked call's confirmation) or no model is configured: the template writes it */
+  useModel: boolean;
+  frozen: ComposeFrozen;
+  /** the user turn's blocks, for a call that writes two messages from the same inputs (composeIntroPair) */
+  blocks: UserBlocks;
+  check(out: ComposeOutput): string[];
+  finish(r: ModelRun): Promise<ComposeResult>;
+}
+
+/** What the model did for one compose: its answer that passed the check (none: the template), attempts, issues. */
+export interface ModelRun {
+  output?: ComposeOutput;
+  attempts: number;
+  lastIssues: string[];
+}
+
 /** The composed message as a stored draft. Throws HttpError for the refusals above. */
 export async function composeDraft(s: Services, req: ComposeRequest): Promise<ComposeResult> {
+  const p = await prepareCompose(s, req);
+  return p.finish(await runComposeModel(s, p));
+}
+
+/**
+ * The model's turns for a prepared compose (§7.3): an answer, checked; one retry with the issues listed; none at
+ * all when the answer is fixed. `first` is an answer already in hand (a batch's), used as the first turn.
+ */
+export async function runComposeModel(
+  s: Services,
+  p: Pick<PreparedCompose, 'req' | 'task' | 'system' | 'user' | 'useModel' | 'check'>,
+  first?: ClaudeResult<ComposeOutput>,
+): Promise<ModelRun> {
+  const run: ModelRun = { attempts: 0, lastIssues: [] };
+  if (!p.useModel) return run;
+  let turn = p.user;
+  for (let i = 0; i < 2; i++) {
+    run.attempts++;
+    const r =
+      i === 0 && first
+        ? first
+        : await s.claude.structured({
+            task: p.task,
+            system: p.system,
+            user: turn,
+            schema: composeSchema,
+            userId: p.req.userId,
+          });
+    if (!r.ok) break;
+    r.data.body = plainPhrases(r.data.body);
+    if (r.data.subject) r.data.subject = plainPhrases(r.data.subject);
+    const issues = p.check(r.data);
+    if (!issues.length) {
+      run.output = r.data;
+      break;
+    }
+    run.lastIssues = issues;
+    turn = p.user + retryNote(issues);
+  }
+  return run;
+}
+
+export type BatchedCompose =
+  | { batched: false; result: ComposeResult }
+  | { batched: true; duplicate?: boolean };
+
+/**
+ * A compose nobody waits on (plan 35 C2: cadence drafts, autopilot's first messages, replies drafted on their own):
+ * the model's turn goes through Message Batches at half price and `handler` (batchJobs.ts) stores the draft when the
+ * answer comes, with `payload` to carry on from there. Batching off, unavailable or over a cap: the compose runs now,
+ * exactly as composeDraft. A template draft (no model needed) is stored now too.
+ */
+export async function composeDraftBatched(
+  s: Services,
+  req: ComposeRequest,
+  job: { handler: string; payload?: Record<string, unknown>; dedupeKey?: string },
+): Promise<BatchedCompose> {
+  const p = await prepareCompose(s, req);
+  if (p.useModel && s.claude.structuredBatch && s.claude.batching) {
+    const q = await s.claude.structuredBatch(
+      { task: p.task, system: p.system, user: p.user, schema: composeSchema, userId: req.userId },
+      {
+        handler: job.handler,
+        payload: { ...(job.payload ?? {}), req, frozen: p.frozen },
+        dedupeKey: job.dedupeKey,
+        personId: req.personId,
+      },
+    );
+    if (q.queued) return { batched: true };
+    if (q.reason === 'duplicate') return { batched: true, duplicate: true };
+  }
+  return { batched: false, result: await p.finish(await runComposeModel(s, p)) };
+}
+
+/** The intro ask's two messages in one answer (plan 35 C1). */
+export const introPairSchema = z.object({ request: composeSchema, blurb: composeSchema });
+/** Room for two messages and the thinking behind them, against one message's 4,000. */
+export const INTRO_PAIR_MAX_TOKENS = 6000;
+
+/**
+ * The intro request and the forwardable blurb from one model call (plan 35 C1; they were two Opus calls on the same
+ * inputs, one after the other). Each message keeps its own rules, its own check and its own draft row; one that
+ * fails its check is asked for again once with its issues, and one that still fails is the template's, as before.
+ */
+export async function composeIntroPair(
+  s: Services,
+  base: Omit<ComposeRequest, 'kind'>,
+): Promise<{ request: ComposeResult; blurb: ComposeResult }> {
+  const a = await prepareCompose(s, { ...base, kind: 'intro_request' });
+  const b = await prepareCompose(s, { ...base, kind: 'forwardable_blurb' });
+  if (!a.useModel || !b.useModel)
+    return {
+      request: await a.finish(await runComposeModel(s, a)),
+      blurb: await b.finish(await runComposeModel(s, b)),
+    };
+  const system = [
+    'You write two messages in one answer, from the same inputs: "request" and "blurb". Each follows its own rules below. <task> says what each one is for.',
+    `<request_rules>\n${a.system}\n</request_rules>`,
+    `<blurb_rules>\n${b.system}\n</blurb_rules>`,
+  ].join('\n\n');
+  const user = composeUser({ ...a.blocks, task: `request: ${a.blocks.task}\n\nblurb: ${b.blocks.task}` });
+  const runs: Record<'request' | 'blurb', ModelRun> = {
+    request: { attempts: 0, lastIssues: [] },
+    blurb: { attempts: 0, lastIssues: [] },
+  };
+  const checks = { request: a.check, blurb: b.check };
+  let turn = user;
+  for (let i = 0; i < 2; i++) {
+    runs.request.attempts++;
+    runs.blurb.attempts++;
+    const r = await s.claude.structured({
+      task: 'compose',
+      system,
+      user: turn,
+      schema: introPairSchema,
+      userId: base.userId,
+      maxTokens: INTRO_PAIR_MAX_TOKENS,
+    });
+    if (!r.ok) break;
+    const notes: string[] = [];
+    for (const k of ['request', 'blurb'] as const) {
+      if (runs[k].output) continue;
+      const out = r.data[k];
+      out.body = plainPhrases(out.body);
+      if (out.subject) out.subject = plainPhrases(out.subject);
+      const issues = checks[k](out);
+      if (!issues.length) runs[k].output = out;
+      else {
+        runs[k].lastIssues = issues;
+        notes.push(`${k}:\n${issues.map((x) => `- ${x}`).join('\n')}`);
+      }
+    }
+    if (!notes.length) break;
+    turn = `${user}\n<issues>\n${notes.join('\n')}\n</issues>\nRewrite the messages so each passes every rule. Keep what was true and fix only these issues; a message with no issues listed stays as it was.`;
+  }
+  return { request: await a.finish(runs.request), blurb: await b.finish(runs.blurb) };
+}
+
+/** The draft from a batch's answer: the same inputs built again around the slots it was given, checked, stored. */
+export async function composeFromBatch(
+  s: Services,
+  req: ComposeRequest,
+  frozen: ComposeFrozen | undefined,
+  first: ClaudeResult<ComposeOutput>,
+): Promise<ComposeResult> {
+  const p = await prepareCompose(s, req, frozen);
+  return p.finish(await runComposeModel(s, p, first));
+}
+
+/** Builds a compose's inputs. Throws HttpError for the refusals above. */
+export async function prepareCompose(
+  s: Services,
+  req: ComposeRequest,
+  frozen?: ComposeFrozen,
+): Promise<PreparedCompose> {
   const db = s.db;
   const now = s.now();
   const user = await loadUserRow(db, req.userId);
@@ -186,21 +382,21 @@ export async function composeDraft(s: Services, req: ComposeRequest): Promise<Co
   const card = styleCardOf(user);
   const meFirst = userFirstName(user);
   const tz = validZone(person.timezone) ?? validZone(user.timezone) ?? 'America/New_York';
-  const window = nextSendWindow(now, tz, req.channel, s.random);
+  const window = frozen?.window ?? nextSendWindow(now, tz, req.channel, s.random);
 
   // thread
   const thread = await threadContext(db, req.userId, person.id, req.kind, replyTo, req.channel);
   const replyClass = (replyTo?.reply_class ?? undefined) as ReplyClass | undefined;
   const schedulingLink =
     typeof user.settings.scheduling_link === 'string' ? user.settings.scheduling_link : undefined;
-  let slots: Slot[] = [];
-  let windows: string[] = [];
-  let slotTz: string | undefined;
+  let slots: Slot[] = frozen ? [...frozen.slots] : [];
+  let windows: string[] = frozen ? [...frozen.windows] : [];
+  let slotTz: string | undefined = frozen?.slotTz;
   // the student's answer to a question the reply asked (plan 29 §B2.3), and a booked time to confirm
   const answer = replyTo?.answer?.trim() || undefined;
   const confirms = req.kind === 'reply' ? req.confirmSlot : undefined;
   const wantsTimes = !confirms && (replyClass === 'interested' || replyClass === 'scheduling');
-  if (req.kind === 'reply' && wantsTimes) {
+  if (req.kind === 'reply' && wantsTimes && !frozen) {
     try {
       const free = await slotsFor(s, req.userId, { personId: person.id, count: 3 });
       slots = free.slots;
@@ -239,13 +435,18 @@ export async function composeDraft(s: Services, req: ComposeRequest): Promise<Co
   ]
     .filter(Boolean)
     .join('\n');
-  const examples = await exemplars(
-    s,
-    req.userId,
-    person.id,
-    [req.kind, goalKind, person.title ?? '', thread.lastInbound ?? '', topic ?? ''].join(' '),
-    { replies: req.kind === 'reply' },
-  );
+  // a booked call's confirmation is a fixed line (plan 35 C1): no model, so no examples to find
+  const examples = confirms
+    ? []
+    : await exemplars(
+        s,
+        req.userId,
+        person.id,
+        [req.kind, goalKind, person.title ?? '', thread.lastInbound ?? '', topic ?? ''].join(' '),
+        req.kind === 'reply'
+          ? { replies: true, limit: REPLY_EXAMPLES, maxChars: REPLY_EXAMPLE_CHARS }
+          : { replies: false },
+      );
   // a slot is offered as its start: the call runs as long as they asked, not the calendar hold's 30 minutes
   const slotText = [
     ...slots.map((x) => `${x.start} = ${x.label.replace(/ to \d{1,2}:\d{2}( ?[ap]m)?/i, '')}`),
@@ -255,7 +456,7 @@ export async function composeDraft(s: Services, req: ComposeRequest): Promise<Co
   ]
     .filter(Boolean)
     .join('\n');
-  const userBlocks = composeUser({
+  const blocks: UserBlocks = {
     task,
     userContext,
     goal: goalText,
@@ -266,7 +467,8 @@ export async function composeDraft(s: Services, req: ComposeRequest): Promise<Co
     voice: voiceText(card),
     examples: examples.map((e, i) => `Example ${i + 1}:\n${e}`).join('\n\n'),
     ...(req.kind === 'reply' ? { freeSlots: slotText } : {}),
-  });
+  };
+  const userBlocks = composeUser(blocks);
   const system = `${composeSystem({
     userFirstName: meFirst,
     wordRange: range,
@@ -308,142 +510,128 @@ export async function composeDraft(s: Services, req: ComposeRequest): Promise<Co
   };
   const check = (out: ComposeOutput) => checkComposed(out, req, ctx, research);
 
-  let output: ComposeOutput | undefined;
-  let attempts = 0;
-  let generatedBy: 'llm' | 'template' = 'template';
-  let lastIssues: string[] = [];
-  if (s.claude.configured) {
-    let turn = userBlocks;
-    for (let i = 0; i < 2; i++) {
-      attempts++;
-      const r = await s.claude.structured({
-        task: req.kind === 'reply' ? 'reply' : 'compose',
-        system,
-        user: turn,
-        schema: composeSchema,
-        userId: req.userId,
+  return {
+    req,
+    task: req.kind === 'reply' ? 'reply' : 'compose',
+    system,
+    user: userBlocks,
+    // the funnel's confirmation of a booked time is the template's fixed line, never a model call (plan 35 C1)
+    useModel: s.claude.configured && !confirms,
+    frozen: { slots, windows, ...(slotTz ? { slotTz } : {}), window },
+    blocks,
+    check,
+    finish: (run) => finishCompose(run),
+  };
+
+  async function finishCompose({ output, attempts, lastIssues }: ModelRun): Promise<ComposeResult> {
+    const generatedBy: 'llm' | 'template' = output ? 'llm' : 'template';
+    let composed: Omit<ComposedMessage, 'validator'>;
+    let promptVersion = PROMPT_VERSION;
+    if (output) {
+      composed = {
+        id: '',
+        goalId: goal?.id ?? null,
+        personId: person.id,
+        kind: req.kind,
+        channel: req.channel,
+        subject:
+          req.channel === 'gmail' && req.kind !== 'reply' ? cleanSubject(output.subject ?? '') || null : null,
+        body: output.body.trim(),
+        ask: output.ask,
+        hooks: output.hooks.filter((h) => h.text.trim() && h.sourceId.trim()),
+        ...(req.via ? { via: { introducerId: req.via.introducerId, pathScore: req.via.pathScore } } : {}),
+        sendWindow: window,
+        promptVersion,
+        variant: null,
+      };
+    } else {
+      const t = templateMessage({
+        req,
+        user,
+        person,
+        target,
+        introducer,
+        goalKind,
+        niche: playbook.niche,
+        goalId: goal?.id ?? null,
+        research,
+        topic,
+        window,
+        replyClass,
+        slots,
+        answer,
+        confirms,
+        links: userContext.match(/^Links: (.+)$/m)?.[1]?.split(/\s+/) ?? [],
       });
-      if (!r.ok) break;
-      r.data.body = plainPhrases(r.data.body);
-      if (r.data.subject) r.data.subject = plainPhrases(r.data.subject);
-      const issues = check(r.data);
-      if (!issues.length) {
-        output = r.data;
-        generatedBy = 'llm';
-        break;
-      }
-      lastIssues = issues;
-      turn = userBlocks + retryNote(issues);
+      composed = t;
+      promptVersion = t.promptVersion;
     }
-  }
+    // an answer the student gave fills any marker the model still left; the reply never asks what was answered
+    if (answer && askUserMarkers(composed.body).length)
+      composed = { ...composed, body: composed.body.replace(ASK_USER, answer) };
 
-  let composed: Omit<ComposedMessage, 'validator'>;
-  let promptVersion = PROMPT_VERSION;
-  if (output) {
-    composed = {
-      id: '',
-      goalId: goal?.id ?? null,
-      personId: person.id,
-      kind: req.kind,
-      channel: req.channel,
-      subject:
-        req.channel === 'gmail' && req.kind !== 'reply' ? cleanSubject(output.subject ?? '') || null : null,
-      body: output.body.trim(),
-      ask: output.ask,
-      hooks: output.hooks.filter((h) => h.text.trim() && h.sourceId.trim()),
-      ...(req.via ? { via: { introducerId: req.via.introducerId, pathScore: req.via.pathScore } } : {}),
-      sendWindow: window,
-      promptVersion,
-      variant: null,
-    };
-  } else {
-    const t = templateMessage({
-      req,
-      user,
-      person,
-      target,
-      introducer,
-      goalKind,
-      niche: playbook.niche,
-      goalId: goal?.id ?? null,
-      research,
-      topic,
-      window,
-      replyClass,
-      slots,
-      answer,
-      confirms,
-      links: userContext.match(/^Links: (.+)$/m)?.[1]?.split(/\s+/) ?? [],
-    });
-    composed = t;
-    promptVersion = t.promptVersion;
-  }
-  // an answer the student gave fills any marker the model still left; the reply never asks what was answered
-  if (answer && askUserMarkers(composed.body).length)
-    composed = { ...composed, body: composed.body.replace(ASK_USER, answer) };
-
-  // one casing start to finish, the way the student types on this channel (@orbit/core drafts/typing)
-  if (!askUserMarkers(composed.body).length) {
-    const sent = await db.sql<{ b: string }>`
+    // one casing start to finish, the way the student types on this channel (@orbit/core drafts/typing)
+    if (!askUserMarkers(composed.body).length) {
+      const sent = await db.sql<{ b: string }>`
       select body_text as b from orbit.messages
        where user_id = ${req.userId}::uuid and provider = ${req.channel} and direction = 'out'
          and body_text is not null
        order by sent_at desc limit 80`;
-    const style = learnTyping(
-      sent.map((r) => r.b),
-      meFirst,
-    );
-    composed = {
-      ...composed,
-      body: applyTyping(composed.body, style, { channel: req.channel, firstName: meFirst }),
-    };
-  }
+      const style = learnTyping(
+        sent.map((r) => r.b),
+        meFirst,
+      );
+      composed = {
+        ...composed,
+        body: applyTyping(composed.body, style, { channel: req.channel, firstName: meFirst }),
+      };
+    }
 
-  // the compliance footer on a sales first touch (§7.7, §14.3), outside what the validator counts
-  let footer: string | undefined;
-  if (salesFirstTouch) {
-    const company = typeof user.settings.company === 'string' ? user.settings.company.trim() : '';
-    footer = [[user.full_name ?? meFirst, company].filter(Boolean).join(', '), postal, OPT_OUT_LINE]
-      .filter(Boolean)
-      .join('\n');
-  }
-  const forCheck = composed.body.replace(ASK_USER, '').trim();
-  const v = validateComposed({ ...composed, body: forCheck }, ctx);
-  const markers = askUserMarkers(composed.body);
-  const needs = markers.length ? ['answer'] : [];
-  const issues = v.issues
-    .filter((i) => i.blocking)
-    .map((i) => `${i.code}: ${i.detail}`)
-    .concat(markers.map((m) => `needs_input: ${m}`));
-  const validator = { ok: v.ok && markers.length === 0, issues, words: v.words, grade: v.grade };
-  const body = footer ? `${composed.body}\n\n${footer}` : composed.body;
-  // times the model offered from the free hours count as offered too, so a "Tuesday at 2 works" books the call
-  if (generatedBy === 'llm' && windows.length && !confirms) {
-    const named = extractProposedTimes(composed.body, now, slotTz)
-      .map((t) => new Date(t.startIso))
-      .filter((d) => d.getTime() > now.getTime())
-      .map((d) => ({
-        start: d.toISOString(),
-        end: new Date(d.getTime() + 30 * 60_000).toISOString(),
-        label: '',
-      }));
-    for (const n of named) if (!slots.some((x) => x.start === n.start)) slots.push(n);
-  }
-  const meta: DraftMeta = {
-    kind: composed.ask.kind,
-    text: composed.ask.text,
-    ...(replyTo ? { replyToMessageId: replyTo.id } : {}),
-    ...(slots.length ? { slots: slots.map((x) => x.start) } : {}),
-    ...(confirms ? { slots: [confirms.start], confirms } : {}),
-    ...(req.reason ? { reason: req.reason } : {}),
-    ...(footer ? { footer } : {}),
-    ...(markers.length ? { question: markers[0] } : {}),
-    ...(answer ? { answer } : {}),
-  };
-  const offeredSlots = confirms ? [confirms.start] : slots.length ? slots.map((x) => x.start) : null;
-  const level = goal?.autonomy_level ?? user.autonomy_level ?? 0;
-  const via = req.via ? { ...req.via } : null;
-  const [row] = await db.sql<DraftRow>`
+    // the compliance footer on a sales first touch (§7.7, §14.3), outside what the validator counts
+    let footer: string | undefined;
+    if (salesFirstTouch) {
+      const company = typeof user.settings.company === 'string' ? user.settings.company.trim() : '';
+      footer = [[user.full_name ?? meFirst, company].filter(Boolean).join(', '), postal, OPT_OUT_LINE]
+        .filter(Boolean)
+        .join('\n');
+    }
+    const forCheck = composed.body.replace(ASK_USER, '').trim();
+    const v = validateComposed({ ...composed, body: forCheck }, ctx);
+    const markers = askUserMarkers(composed.body);
+    const needs = markers.length ? ['answer'] : [];
+    const issues = v.issues
+      .filter((i) => i.blocking)
+      .map((i) => `${i.code}: ${i.detail}`)
+      .concat(markers.map((m) => `needs_input: ${m}`));
+    const validator = { ok: v.ok && markers.length === 0, issues, words: v.words, grade: v.grade };
+    const body = footer ? `${composed.body}\n\n${footer}` : composed.body;
+    // times the model offered from the free hours count as offered too, so a "Tuesday at 2 works" books the call
+    if (generatedBy === 'llm' && windows.length && !confirms) {
+      const named = extractProposedTimes(composed.body, now, slotTz)
+        .map((t) => new Date(t.startIso))
+        .filter((d) => d.getTime() > now.getTime())
+        .map((d) => ({
+          start: d.toISOString(),
+          end: new Date(d.getTime() + 30 * 60_000).toISOString(),
+          label: '',
+        }));
+      for (const n of named) if (!slots.some((x) => x.start === n.start)) slots.push(n);
+    }
+    const meta: DraftMeta = {
+      kind: composed.ask.kind,
+      text: composed.ask.text,
+      ...(replyTo ? { replyToMessageId: replyTo.id } : {}),
+      ...(slots.length ? { slots: slots.map((x) => x.start) } : {}),
+      ...(confirms ? { slots: [confirms.start], confirms } : {}),
+      ...(req.reason ? { reason: req.reason } : {}),
+      ...(footer ? { footer } : {}),
+      ...(markers.length ? { question: markers[0] } : {}),
+      ...(answer ? { answer } : {}),
+    };
+    const offeredSlots = confirms ? [confirms.start] : slots.length ? slots.map((x) => x.start) : null;
+    const level = goal?.autonomy_level ?? user.autonomy_level ?? 0;
+    const via = req.via ? { ...req.via } : null;
+    const [row] = await db.sql<DraftRow>`
     insert into orbit.drafts (user_id, person_id, chat_id, goal_id, channel, kind, subject, body, ask, hooks, via,
                               thread_external_id, in_reply_to, status, autonomy_level, validator, generated_by,
                               prompt_version, variant, offered_slots, needs)
@@ -453,15 +641,16 @@ export async function composeDraft(s: Services, req: ComposeRequest): Promise<Co
             ${level}::smallint, ${validator}::jsonb, ${generatedBy}, ${promptVersion}, null,
             ${offeredSlots ? JSON.stringify(offeredSlots) : null}::jsonb, ${needs}::text[])
     returning *`;
-  await db.sql`
+    await db.sql`
     insert into orbit.audit_log (user_id, actor, action, target_table, target_id, details)
     values (${req.userId}::uuid, ${req.actor ?? 'user'}, 'draft.compose', 'drafts', ${row!.id},
             ${{ kind: req.kind, channel: req.channel, generated_by: generatedBy, attempts, issues: lastIssues.length, codes: [...new Set(lastIssues.map((i) => i.split(':')[0]))], detail: lastIssues.slice(0, 4).map((i) => i.slice(0, 140)), niche: playbook.niche, hash: messageHash({ channel: req.channel, subject: composed.subject, body }) }}::jsonb)`;
-  return {
-    draft: row!,
-    composed: { ...composed, id: row!.id, body, validator },
-    attempts,
-  };
+    return {
+      draft: row!,
+      composed: { ...composed, id: row!.id, body, validator },
+      attempts,
+    };
+  }
 }
 
 /** The student's own links (GitHub, a portfolio, LinkedIn) in their context, which a message may use. */
@@ -607,8 +796,8 @@ export async function loadReplyMessage(db: Db, userId: string, messageId: string
 }
 
 /**
- * The thread as context: a reply sees the whole thread (≤ 8 messages, oldest first, quotes stripped); a bump sees the
- * message it follows up. Also the provider thread id the draft goes out on.
+ * The thread as context: a reply sees the newest four messages of the thread (oldest first, quotes stripped, 800
+ * characters each; plan 35 C1); a bump sees the message it follows up. Also the provider thread id the draft goes out on.
  */
 async function threadContext(
   db: Db,
@@ -640,11 +829,12 @@ async function threadContext(
     snippet: string | null;
   }>`
     select direction, sent_at, body_text, snippet from orbit.messages
-     where thread_id = ${threadId}::uuid order by sent_at desc limit ${kind === 'reply' ? 8 : 2}::int`;
+     where thread_id = ${threadId}::uuid order by sent_at desc limit ${kind === 'reply' ? REPLY_THREAD_MESSAGES : 2}::int`;
   const ordered = msgs.reverse();
+  const chars = kind === 'reply' ? REPLY_THREAD_CHARS : 1500;
   const lines = ordered.map(
     (m) =>
-      `${iso(m.sent_at)!.slice(0, 16).replace('T', ' ')} ${m.direction === 'in' ? 'them' : 'user'}: ${stripQuotedReply(m.body_text ?? m.snippet ?? '').slice(0, 1500)}`,
+      `${iso(m.sent_at)!.slice(0, 16).replace('T', ' ')} ${m.direction === 'in' ? 'them' : 'user'}: ${stripQuotedReply(m.body_text ?? m.snippet ?? '').slice(0, chars)}`,
   );
   const lastIn = [...ordered].reverse().find((m) => m.direction === 'in');
   return {

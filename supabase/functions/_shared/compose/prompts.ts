@@ -118,6 +118,16 @@ export interface UserBlocks {
   freeSlots?: string;
 }
 
+/**
+ * A reply's context (plan 35 C1): the newest four messages of the thread at 800 characters each, and two of the
+ * student's own replies at 800 as examples (was eight at 1,500 and three at 1,200). The answer is to the newest
+ * message; older turns rarely change it, and the input was most of a reply's cost after the output.
+ */
+export const REPLY_THREAD_MESSAGES = 4;
+export const REPLY_THREAD_CHARS = 800;
+export const REPLY_EXAMPLES = 2;
+export const REPLY_EXAMPLE_CHARS = 800;
+
 /** The per-call data, in the §7.6 order. */
 export function composeUser(b: UserBlocks): string {
   return [

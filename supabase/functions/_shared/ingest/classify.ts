@@ -17,10 +17,12 @@ import {
   REPLY_CLASSES,
   type ReplyClass,
 } from '@orbit/core/email/replyClass';
+import type { LlmRapport } from '@orbit/core/scoring/rapport';
 import { stripQuotedReply } from '@orbit/core/text/email';
 import { z } from 'zod/v4';
 import type { Claude } from '../claude.ts';
 import type { Db } from '../db.ts';
+import { RAPPORT_SYSTEM, RapportSchema, rapportWanted } from './rapport.ts';
 import { iso } from './util.ts';
 
 export const REPLY_CLASSIFY_SYSTEM = `Classify the newest message in this thread as one of: interested, scheduling, question, objection, referral, not_now, out_of_office, decline, unsubscribe, thanks, other.
@@ -38,11 +40,22 @@ export const ReplyClassSchema = z.object({
   question: z.string().nullable(),
 });
 
+/**
+ * The classifier's call when the rapport reading wants the model too (plan 35 A4): one Haiku call answers both, the
+ * rapport fields from the same guide rapport.ts uses alone.
+ */
+export const REPLY_RAPPORT_SYSTEM = `${REPLY_CLASSIFY_SYSTEM}
+Also fill "rapport" for the newest message. ${RAPPORT_SYSTEM}`;
+
+export const ReplyClassRapportSchema = ReplyClassSchema.extend({ rapport: RapportSchema });
+
 export interface ClassifyResult {
   skipped?: 'not_found' | 'outbound' | 'automated' | 'no_text';
   replyClass?: ReplyClass;
   confidence?: number;
   by?: 'heuristic' | 'llm';
+  /** the rapport fields the classifier's own Haiku call answered, for readRapport (no second call) */
+  rapport?: LlmRapport;
 }
 
 const THREAD_MAX = 8;
@@ -65,9 +78,11 @@ export async function classifyMessage(
     snippet: string | null;
     thread_external_id: string;
     timezone: string;
+    tone: boolean | null;
   }>`
     select m.id, m.thread_id, m.direction, m.is_automated, m.from_person_id, m.in_reply_to, m.sent_at, m.body_text,
-           m.snippet, t.external_id as thread_external_id, u.timezone
+           m.snippet, t.external_id as thread_external_id, u.timezone,
+           (u.settings ->> 'read_reply_tone')::boolean as tone
       from orbit.messages m join orbit.threads t on t.id = m.thread_id join orbit.users u on u.id = m.user_id
      where m.id = ${messageId}::uuid and m.user_id = ${userId}::uuid`;
   if (!m) return { skipped: 'not_found' };
@@ -95,6 +110,7 @@ export async function classifyMessage(
   let confidence = h.confidence;
   let by: 'heuristic' | 'llm' = 'heuristic';
   let llm: z.infer<typeof ReplyClassSchema> | undefined;
+  let rapport: LlmRapport | undefined;
 
   if (confidence < REPLY_CLASS_LLM_THRESHOLD && deps.claude?.configured) {
     const thread = await db.sql<{
@@ -114,15 +130,17 @@ export async function classifyMessage(
             x.body_text ?? x.snippet ?? '',
           ).slice(0, 4000)}\n</message>`,
       );
+    const both = rapportWanted(text, m.tone);
     const r = await deps.claude.structured({
       task: 'classify',
-      system: REPLY_CLASSIFY_SYSTEM,
+      system: both ? REPLY_RAPPORT_SYSTEM : REPLY_CLASSIFY_SYSTEM,
       user: `<thread>\n${lines.join('\n')}\n</thread>`,
-      schema: ReplyClassSchema,
+      schema: both ? ReplyClassRapportSchema : ReplyClassSchema,
       userId,
     });
     if (r.ok) {
       llm = r.data;
+      if (both && 'rapport' in r.data) rapport = (r.data as z.infer<typeof ReplyClassRapportSchema>).rapport;
       cls = r.data.class;
       confidence = Math.max(0, Math.min(1, r.data.confidence));
       by = 'llm';
@@ -191,5 +209,5 @@ export async function classifyMessage(
                            and d.thread_external_id = ${m.thread_external_id})
           order by r.asked_at desc limit 1)`;
 
-  return { replyClass: cls, confidence, by };
+  return { replyClass: cls, confidence, by, ...(rapport ? { rapport } : {}) };
 }

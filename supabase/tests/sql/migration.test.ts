@@ -92,6 +92,8 @@ describe('orbit core migration', () => {
     const jobs = await t.db.sql<{ jobname: string }>`select jobname from cron.job order by jobname`;
     expect(jobs.map((j) => j.jobname)).toEqual([
       'orbit-cadence',
+      // plan 35 C2: the Message Batches poll, every five minutes while a request waits, 20261118_orbit_usage_tokens.sql
+      'orbit-claude-batch',
       // plan 32 §6.1: nightly YC company facts, scheduled by 20261108_orbit_network_search.sql
       'orbit-company-facts-nightly',
       // plan 34 E2: the morning cost digest, scheduled by 20261115_orbit_housekeeping.sql

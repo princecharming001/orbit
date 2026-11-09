@@ -27,6 +27,7 @@
 import Anthropic from '@anthropic-ai/sdk';
 import { accountTokenOk } from '../_shared/accountToken.ts';
 import { makeClaude } from '../_shared/claude.ts';
+import type { Db } from '../_shared/db.ts';
 import { clientIp, defaultOrigins } from '../_shared/origins.ts';
 import type { Exa } from '../_shared/providers/exa';
 import type { SearchEngine } from '../_shared/providers/webSearch';
@@ -119,6 +120,25 @@ export interface ResearchDeps {
   fetch?: typeof fetch;
   /** tests pin the deadline */
   deadlines?: { quick: number; deeper: number };
+  /**
+   * Orbit's database (SUPABASE_DB_URL): with it, the brief's Claude calls are written to orbit.usage_ledger under the
+   * student whose LinkedIn account asked, and that student's caps apply (plan 35 A5); without it, as before.
+   */
+  db?: Db;
+}
+
+/** The student whose linked LinkedIn account this is; null when none is (a browser-only link). */
+export async function userForAccount(db: Db, accountId: string): Promise<string | null> {
+  if (!accountId) return null;
+  try {
+    const [r] = await db.sql<{ user_id: string }>`
+      select user_id::text as user_id from orbit.integration_accounts
+       where provider = 'linkedin' and external_account_id = ${accountId} and status = 'active'
+       order by created_at desc limit 1`;
+    return r?.user_id ?? null;
+  } catch {
+    return null;
+  }
 }
 
 export const DEFAULT_PER_MONTH = 15;
@@ -307,7 +327,7 @@ async function personKey(salt: string, req: BriefRequest): Promise<string> {
   return (await sha256(`${salt}:person:${id}`)).slice(0, 40);
 }
 
-function claudeDepOf(claude: ReturnType<typeof makeClaude>): ClaudeDep {
+function claudeDepOf(claude: ReturnType<typeof makeClaude>, userId: string | null): ClaudeDep {
   return {
     async parse(task, schema, prompt) {
       const r = await claude.structured({
@@ -324,7 +344,8 @@ function claudeDepOf(claude: ReturnType<typeof makeClaude>): ClaudeDep {
         system: prompt.system,
         user: prompt.user,
         schema,
-        userId: null,
+        // the student whose account asked, so their caps apply (null: no database, or a browser-only link)
+        userId,
         timeoutMs: prompt.timeoutMs,
       });
       if (r.ok) return { ok: true, value: r.data, costUsd: r.costUsd, model: r.model };
@@ -570,7 +591,8 @@ export function makeHandler(deps: ResearchDeps): (req: Request) => Promise<Respo
     const web: WebSource[] = [];
     if (deps.exa?.configured) web.push(exaWeb(deps.exa, deps.cache));
     web.push(claudeWeb(client, deps.cache, { model: deps.gatherModel ?? GATHER_MODEL }));
-    const claude = claudeDepOf(makeClaude({ apiKey: key, fetch: doFetch, client }));
+    const userId = deps.db ? await userForAccount(deps.db, accountId) : null;
+    const claude = claudeDepOf(makeClaude({ apiKey: key, fetch: doFetch, client, db: deps.db }), userId);
     const started = Date.now();
     const deadlineMs =
       kind === 'quick'

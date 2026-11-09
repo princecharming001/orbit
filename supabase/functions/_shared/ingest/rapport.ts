@@ -5,10 +5,18 @@
  * configured, the reply has some length and the student has not turned the tone reading off. The text goes only to
  * Claude; nothing is logged.
  *
+ * One Haiku call per reply (plan 35 A4): when the reply classifier asks Haiku anyway (its rules were unsure), the
+ * same call answers the rapport fields too (`REPLY_RAPPORT_SYSTEM`, `ReplyClassRapportSchema` in classify.ts) and is
+ * handed in as `llm`; only when the classifier's rules were sure does this read call Haiku on its own, logged as
+ * `rapport`. The readings stay the same: every reply the model read before is still read by the model, from the same
+ * guide, with the thread around it. A reply that asks not to be contacted keeps the lexical reading (-1), which is
+ * what the model's reading is forced to for that cue anyway.
+ *
  * `backfillRapport` reads up to a year of a user's stored replies that have no reading yet: lexical for all of them,
  * Haiku for the newest few, then everyone is rescored (rapport.backfill, once per user per version).
  */
 import {
+  type LlmRapport,
   RAPPORT_CUES,
   RAPPORT_LLM_GUIDE,
   type RapportReading,
@@ -31,7 +39,15 @@ export const RapportSchema = z.object({
 });
 
 /** Replies shorter than this keep the lexical reading: there is little for the model to read. */
-const LLM_MIN_CHARS = 20;
+export const RAPPORT_LLM_MIN_CHARS = 20;
+
+/** Whether the model reads this reply's rapport: long enough, the tone reading on, and not a request to stop. */
+export function rapportWanted(text: string, tone: boolean | null | undefined): boolean {
+  if (tone === false) return false;
+  const t = stripQuotedReply(text).trim();
+  if (t.length < RAPPORT_LLM_MIN_CHARS) return false;
+  return !replyRapport({ text: t }).cues.includes('asked_to_stop');
+}
 
 type MessageRow = {
   id: string;
@@ -80,6 +96,7 @@ async function readOne(
   m: MessageRow,
   claude: Claude | undefined,
   useLlm: boolean,
+  given?: LlmRapport,
 ): Promise<RapportReading> {
   const text = stripQuotedReply(m.body_text ?? m.snippet ?? '').trim();
   const prior = await answering(db, m);
@@ -89,9 +106,15 @@ async function readOne(
     answering: prior,
     valence: vaderValence,
   });
-  if (useLlm && m.tone !== false && claude?.configured && text.length >= LLM_MIN_CHARS) {
+  if (given && m.tone !== false) reading = rapportFromLlm(given);
+  else if (
+    useLlm &&
+    claude?.configured &&
+    rapportWanted(text, m.tone) &&
+    !reading.cues.includes('asked_to_stop')
+  ) {
     const r = await claude.structured({
-      task: 'classify',
+      task: 'rapport',
       system: RAPPORT_SYSTEM,
       user: `${prior ? `<student>\n${prior.slice(0, 1500)}\n</student>\n` : ''}<reply>\n${text.slice(0, 3000)}\n</reply>`,
       schema: RapportSchema,
@@ -110,11 +133,11 @@ export async function readRapport(
   db: Db,
   userId: string,
   messageId: string,
-  deps: { claude?: Claude },
+  deps: { claude?: Claude; llm?: LlmRapport },
 ): Promise<{ personId?: string; reading?: RapportReading }> {
   const [m] = await loadMessages(db, userId, { ids: [messageId], limit: 1 });
   if (!m) return {};
-  const reading = await readOne(db, userId, m, deps.claude, true);
+  const reading = await readOne(db, userId, m, deps.claude, true, deps.llm);
   return { personId: m.from_person_id ?? undefined, reading };
 }
 

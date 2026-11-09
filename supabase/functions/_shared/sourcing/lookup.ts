@@ -2,21 +2,30 @@
  * An address for someone found outside the student's inbox, from the first source that has one:
  *   linkedin  a 1st-degree connection's contact email, the one they chose to show (Unipile profile, contact_info);
  *             tested on 20 real connections, 17 showed one
- *   hunter    Hunter's Email Finder by LinkedIn handle, else by name and company domain (1 credit when found). An
- *             answer whose LinkedIn profile is someone else's is dropped: at a big domain a name alone finds
- *             namesakes (tested at Berkeley, one professor's name returned a staff member's address)
+ *   finder    the cheaper finder whose key is set (plan 35 E6): Enrow (ENROW_API_KEY) first, else Icypeas
+ *             (ICYPEAS_API_KEY); by name and company domain, with the LinkedIn URL when there is one
+ *   hunter    Hunter's Email Finder by LinkedIn handle, else by name and company domain (1 credit when found), the
+ *             fallback when the finder has nothing or no key is set. An answer whose LinkedIn profile is someone
+ *             else's is dropped: at a big domain a name alone finds namesakes (tested at Berkeley, one professor's
+ *             name returned a staff member's address)
  *   apollo    Apollo People Match by LinkedIn URL, else by name and company domain (1 credit)
- * Also what fillEmails uses for everyone past the lookups: a company's pattern from Hunter's domain search (1 credit
- * per domain, cached) and the verifier for the addresses it builds (half a credit).
+ * Lookups run on demand (plan 35 C3, ondemand.ts): when the student adds the person or asks to email them, or for the
+ * best three when a search asked for emails; never for a whole search. A company's pattern from Hunter's domain search
+ * (1 credit per domain, cached) is used then too, and a search itself reads only the cached patterns (free).
+ * The verifier (Reoon with REOON_API_KEY, else Hunter's) checks a built or guessed address before a send, never before.
  * Each paid answer, found or not, is kept 30 days in the shared research cache so a person is looked up once for
  * everyone (a LinkedIn contact email never is: only the student's connections may see it);
- * every call goes through the per-user daily caps (budget.ts: 10 Hunter credits, 10 Apollo matches, 40 profile
- * views) and Hunter's 40 credits a month for everyone. A credit call reserves its credit before it goes out and
- * settles after, so lookups running in parallel cannot pass a cap together; a miss is kept at 0 credits as
- * `<operation>:attempt`, so the ledger shows every call Hunter saw (plan 34 A4). Nothing here sends anything.
+ * every call goes through the per-user daily caps (budget.ts: 10 Hunter, Enrow or Icypeas credits, 10 Apollo matches,
+ * 25 Reoon checks, 40 profile views) and Hunter's 40 credits a month for everyone. A credit call reserves its credit
+ * before it goes out and settles after, so lookups running in parallel cannot pass a cap together; a miss is kept at
+ * 0 credits as `<operation>:attempt`, so the ledger shows every call a provider saw (plan 34 A4). Nothing here sends
+ * anything.
  */
 import type { Apollo } from '../providers/apollo';
+import type { Enrow } from '../providers/enrow';
 import { deliverability, type Hunter } from '../providers/hunter';
+import type { Icypeas } from '../providers/icypeas';
+import { type Reoon, reoonDeliverability } from '../providers/reoon';
 import { cleanLinkedInUrl, linkedInSlugOf, type UnipileResearch } from '../providers/unipileResearch';
 import type { BudgetDep, BudgetProvider } from '../research/deps';
 import type { SharedCache } from '../research/web';
@@ -32,12 +41,23 @@ import type { Candidate } from './search';
 
 export const LOOKUP_TTL_MS = 30 * 24 * 3600 * 1000;
 
+/**
+ * Dollars a credit, for the ledger: Enrow $17 and Icypeas $19 per 1,000 finds, Reoon $0.0012 a check (plan 35 E6).
+ * Hunter and Apollo are plan credits, kept at $0 as before.
+ */
+export const CREDIT_USD = { enrow: 0.017, icypeas: 0.019, reoon: 0.0012 } as const;
+
 export interface LookupDeps {
   userId: string;
   unipile?: UnipileResearch;
   unipileAccountId?: string;
   apollo?: Apollo;
   hunter?: Hunter;
+  /** the cheaper finders tried before Hunter (plan 35 E6), whichever has a key: Enrow first */
+  enrow?: Enrow;
+  icypeas?: Icypeas;
+  /** the verifier checked before a send, Hunter's without it */
+  reoon?: Reoon;
   budget?: BudgetDep;
   cache: SharedCache;
   /** the domain a candidate's org is known by, for a match by name when they have no LinkedIn URL */
@@ -57,19 +77,24 @@ async function take(
   provider: BudgetProvider,
   operation: string,
   units: number,
+  usdPerUnit = 0,
 ): Promise<Slot | undefined> {
   const b = d.budget;
   if (!b) return { settle: async () => undefined };
   const op = (u: number) => (u > 0 ? operation : `${operation}:attempt`);
   if (b.reserve) {
-    const r = await b.reserve(d.userId, { provider, operation, units, costUsd: 0 });
+    const r = await b.reserve(d.userId, { provider, operation, units, costUsd: units * usdPerUnit });
     if (!r.ok) return undefined;
-    return { settle: (u) => r.settle({ units: u, operation: op(u) }).catch(() => undefined) };
+    return {
+      settle: (u) => r.settle({ units: u, operation: op(u), costUsd: u * usdPerUnit }).catch(() => undefined),
+    };
   }
   if (!(await b.check(d.userId, provider, units)).ok) return undefined;
   return {
     settle: (u) =>
-      b.record(d.userId, { provider, operation: op(u), units: u, costUsd: 0 }).catch(() => undefined),
+      b
+        .record(d.userId, { provider, operation: op(u), units: u, costUsd: u * usdPerUnit })
+        .catch(() => undefined),
   };
 }
 
@@ -84,7 +109,8 @@ export function emailLookup(d: LookupDeps): EmailLookup {
     if (mine) return mine;
     // the paid sources' answers are the same for everyone; the key names which were asked, so a key added later
     // asks again instead of reading an old miss
-    const asked = `${d.hunter?.configured ? 'h' : ''}${d.apollo?.configured ? 'a' : ''}`;
+    const finder = d.enrow?.configured ? 'e' : d.icypeas?.configured ? 'i' : '';
+    const asked = `${finder}${d.hunter?.configured ? 'h' : ''}${d.apollo?.configured ? 'a' : ''}`;
     if (!asked) return undefined;
     const who = slug
       ? `li:${slug}`
@@ -97,7 +123,10 @@ export function emailLookup(d: LookupDeps): EmailLookup {
     const key = `email:${asked}:${who}`;
     const hit = (await d.cache.get(key).catch(() => undefined)) as Cached | undefined;
     if (hit) return 'none' in hit ? undefined : hit;
-    const found = (await fromHunter(d, c, slug, n, domain)) ?? (await fromApollo(d, c, domain));
+    const found =
+      (await fromFinder(d, c, n, domain)) ??
+      (await fromHunter(d, c, slug, n, domain)) ??
+      (await fromApollo(d, c, domain));
     await d.cache.put(key, 'email_lookup', found ?? { none: true }, LOOKUP_TTL_MS).catch(() => undefined);
     return found;
   };
@@ -123,6 +152,46 @@ async function fromLinkedIn(
   });
   const email = r.value.contact_info?.emails?.find((e) => typeof e === 'string' && e.includes('@'));
   return email ? { email: email.trim().toLowerCase(), source: 'linkedin', status: 'verified' } : undefined;
+}
+
+/**
+ * The cheaper finder whose key is set (plan 35 E6): Enrow, else Icypeas. Both search by name and company; an answer
+ * they call valid (Enrow) or 99% sure (Icypeas) is verified, Icypeas's 95% "probable" a guess; anything less is
+ * nothing, and Hunter is asked next.
+ */
+async function fromFinder(
+  d: LookupDeps,
+  c: Candidate,
+  n: { f: string; l: string } | undefined,
+  domain: string | undefined,
+): Promise<LookedUp | undefined> {
+  if (!n || !domain) return undefined;
+  if (d.enrow?.configured) {
+    const slot = await take(d, 'enrow', 'find', 1, CREDIT_USD.enrow);
+    if (!slot) return undefined;
+    const r = await d.enrow.findEmail({
+      fullname: `${n.f} ${n.l}`,
+      domain,
+      linkedinUrl: cleanLinkedInUrl(c.linkedinUrl) ?? undefined,
+    });
+    const email = r.ok ? r.value.email?.trim().toLowerCase() : undefined;
+    const valid = r.ok && (r.value.qualification ?? '').toLowerCase() === 'valid';
+    // one credit per address found; none for a miss
+    await slot.settle(email?.includes('@') ? Math.max(1, r.ok ? (r.value.credits_used ?? 1) : 1) : 0);
+    if (email?.includes('@') && valid && email.endsWith(`@${domain}`))
+      return { email, source: 'enrow', status: 'verified' };
+    return undefined;
+  }
+  if (d.icypeas?.configured) {
+    const slot = await take(d, 'icypeas', 'find', 1, CREDIT_USD.icypeas);
+    if (!slot) return undefined;
+    const r = await d.icypeas.findEmail({ firstname: n.f, lastname: n.l, domainOrCompany: domain });
+    await slot.settle(r.ok && r.value.debited ? 1 : 0);
+    if (!r.ok || !r.value.email?.includes('@')) return undefined;
+    const sure = /^(ultra_sure|very_sure)$/i.test(r.value.certainty ?? '');
+    return { email: r.value.email, source: 'icypeas', status: sure ? 'verified' : 'guess' };
+  }
+  return undefined;
 }
 
 /** Hunter's Email Finder: by LinkedIn handle (the person themself), else by name and company domain. */
@@ -218,29 +287,54 @@ export function domainTemplate(
   };
 }
 
-/** Whether an address Orbit built is deliverable, by Hunter's verifier; cached 30 days for everyone. */
+/**
+ * Whether an address Orbit built or guessed is deliverable: Reoon (REOON_API_KEY, plan 35 E6), else Hunter's verifier;
+ * cached 30 days for everyone. Run before a send (sending/send.ts), never during a search.
+ */
 export function emailVerifier(
-  d: Pick<LookupDeps, 'userId' | 'hunter' | 'budget' | 'cache'>,
+  d: Pick<LookupDeps, 'userId' | 'hunter' | 'reoon' | 'budget' | 'cache'>,
 ): Verify | undefined {
-  const hunter = d.hunter;
-  if (!hunter?.configured) return undefined;
+  const { hunter, reoon } = d;
+  if (!reoon?.configured && !hunter?.configured) return undefined;
   return async (email) => {
     const key = `verify:${email.toLowerCase()}`;
     const hit = (await d.cache.get(key).catch(() => undefined)) as
       | { v: 'valid' | 'invalid' | 'risky' }
       | undefined;
     if (hit?.v) return hit.v;
-    const slot = await take(d, 'hunter', 'verify', 0.5);
-    if (!slot) return undefined;
-    const r = await hunter.verifyEmail(email);
-    if (!r.ok) {
-      await slot.settle(0);
-      return undefined;
+    let v: 'valid' | 'invalid' | 'risky' | undefined;
+    if (reoon?.configured) {
+      const slot = await take(d, 'reoon', 'verify', 1, CREDIT_USD.reoon);
+      if (slot) {
+        const r = await reoon.verifyEmail(email, 'power');
+        await slot.settle(r.ok ? 1 : 0);
+        if (r.ok) v = reoonDeliverability(r.value);
+      }
     }
-    await slot.settle(0.5);
-    const v = deliverability(r.value.data?.status);
+    if (!v && hunter?.configured) {
+      const slot = await take(d, 'hunter', 'verify', 0.5);
+      if (!slot) return undefined;
+      const r = await hunter.verifyEmail(email);
+      if (!r.ok) {
+        await slot.settle(0);
+        return undefined;
+      }
+      await slot.settle(0.5);
+      v = deliverability(r.value.data?.status);
+    }
+    if (!v) return undefined;
     await d.cache.put(key, 'email_verify', { v }, LOOKUP_TTL_MS).catch(() => undefined);
     return v;
+  };
+}
+
+/** The pattern a company uses when it is already in the shared cache: free, no call (plan 35 C3). */
+export function cachedTemplate(cache: SharedCache): DomainTemplate {
+  return async (domain) => {
+    const hit = (await cache.get(`pattern:${domain.toLowerCase()}`).catch(() => undefined)) as
+      | { t?: string }
+      | undefined;
+    return hit?.t;
   };
 }
 

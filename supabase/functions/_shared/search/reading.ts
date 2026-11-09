@@ -33,7 +33,7 @@ import {
 } from '@orbit/core/search/reading';
 import type { ProfileExperienceWire, ProfileReadingWire } from '@orbit/core/server/api';
 import { z } from 'zod/v4';
-import type { Claude } from '../claude.ts';
+import type { Claude, ClaudeResult } from '../claude.ts';
 import type { Db } from '../db.ts';
 
 /** orbit-connectors DEFAULT_LEDGER: profile reads and company pages per account per day. */
@@ -528,6 +528,39 @@ type Unread = {
   experience: ProfileExperienceWire[];
 };
 
+/** How a reading pass asks Claude: now, or through Message Batches when it can (the background step; plan 35 C2). */
+export interface ReadOpts {
+  batch?: boolean;
+}
+
+/** The ids of a batch's part as a dedupe key: the same people are never in two waiting requests. */
+const partKey = (kind: string, owner: string | null, ids: string[]) =>
+  `${kind}:${owner ?? 'all'}:${[...ids].sort().join(',')}`;
+
+const peopleRequest = (userId: string, texts: string[], worth: boolean[]) => ({
+  task: 'reading' as const,
+  system: PERSON_READING_SYSTEM,
+  user: texts
+    .map((t, k) => (worth[k] ? block('person', `P${k + 1}`, t) : ''))
+    .filter(Boolean)
+    .join('\n\n'),
+  schema: personSchema,
+  userId,
+});
+
+const peopleTexts = (part: Unread[]) => ({
+  texts: part.map((r) =>
+    personReadingText({
+      name: r.name,
+      headline: r.headline ?? undefined,
+      about: r.about ?? undefined,
+      experience: r.experience ?? [],
+    }),
+  ),
+  // nothing of their own words to read: the pattern pass alone (an empty reading), no model call
+  worth: part.map((r) => !!r.about || (r.experience ?? []).some((e) => e.description)),
+});
+
 /** Reads what was fetched and not read yet (Claude when it can, plain patterns when it cannot). */
 export async function readPeople(
   db: Db,
@@ -535,75 +568,138 @@ export async function readPeople(
   userId: string,
   limit: number,
   personIds?: string[],
+  opts: ReadOpts = {},
 ): Promise<number> {
+  // a background pass leaves people whose reading is waiting in a batch to it; a student asking reads them now
   const rows = await db.sql<Unread>`
     select r.person_id, r.member_id, p.display_name as name, p.headline, r.about, r.experience
       from orbit.profile_reads r join orbit.people p on p.id = r.person_id
      where r.user_id = ${userId}::uuid and r.reading_at is null and r.status = 'ok'
        and (${personIds ?? null}::uuid[] is null or r.person_id = any(${personIds ?? null}::uuid[]))
+       and (${!opts.batch}::boolean or not exists (select 1 from orbit.claude_batch_requests b
+                        where b.user_id = r.user_id and b.handler = 'reading.people'
+                          and b.status in ('queued', 'submitted') and b.payload->'personIds' ? r.person_id::text))
      order by r.read_at
      limit ${limit}`;
   let n = 0;
   for (let i = 0; i < rows.length; i += READ_BATCH) {
     const part = rows.slice(i, i + READ_BATCH);
-    const texts = part.map((r) =>
-      personReadingText({
-        name: r.name,
-        headline: r.headline ?? undefined,
-        about: r.about ?? undefined,
-        experience: r.experience ?? [],
-      }),
-    );
-    // nothing of their own words to read: the pattern pass alone (an empty reading), no model call
-    const worth = part.map((r) => !!r.about || (r.experience ?? []).some((e) => e.description));
-    let model: Map<number, RawPersonReading> | undefined;
-    let modelName: string | null = null;
+    const { texts, worth } = peopleTexts(part);
+    let res: ClaudeResult<z.infer<typeof personSchema>> | undefined;
     if (claude?.configured && worth.some(Boolean)) {
-      const res = await claude.structured({
-        task: 'reading',
-        system: PERSON_READING_SYSTEM,
-        user: part
-          .map((_, k) => (worth[k] ? block('person', `P${k + 1}`, texts[k]!) : ''))
-          .filter(Boolean)
-          .join('\n\n'),
-        schema: personSchema,
-        userId,
-      });
-      if (res.ok) {
-        modelName = res.model;
-        model = new Map();
-        for (const p of res.data.people) {
-          const k = Number(/(\d+)/.exec(p.person)?.[1] ?? 0) - 1;
-          if (k >= 0 && k < part.length) model.set(k, rawOf(p.facts));
-        }
-      } else if ('budgetExceeded' in res) {
-        // over the student's Claude budget today: leave them unread for a later step
-        return n;
+      const request = peopleRequest(userId, texts, worth);
+      if (opts.batch && claude.structuredBatch && claude.batching) {
+        const ids = part.map((r) => r.person_id);
+        const q = await claude.structuredBatch(request, {
+          handler: 'reading.people',
+          payload: { personIds: ids },
+          dedupeKey: partKey('reading.people', userId, ids),
+        });
+        if (q.queued || q.reason === 'duplicate') continue;
       }
+      res = await claude.structured(request);
+      // over the student's Claude budget today: leave them unread for a later step
+      if (!res.ok && 'budgetExceeded' in res) return n;
     }
-    for (let k = 0; k < part.length; k++) {
-      const text = texts[k]!;
-      const reading: ProfileReadingWire = withPatterns(
-        settlePersonReading(model?.get(k), text),
-        readByPattern(text),
-      );
-      await db.sql`
-        update orbit.profile_reads set reading = ${JSON.stringify(reading)}::jsonb, reading_model = ${modelName},
-          reading_at = now(), updated_at = now()
-         where user_id = ${userId}::uuid and person_id = ${part[k]!.person_id}::uuid`;
-      // the same text gives the same reading: kept on the shared page for the next student (plan 34 B1)
-      const row = part[k]!;
-      if (row.member_id && modelName)
-        await db.sql`
-          update orbit_private.profile_pages set reading = ${JSON.stringify(reading)}::jsonb,
-            reading_model = ${modelName}, reading_at = now()
-           where member_id = ${row.member_id} and about is not distinct from ${row.about}
-             and experience = ${JSON.stringify(row.experience ?? [])}::jsonb`;
-      n++;
-    }
+    n += await writePeople(
+      db,
+      userId,
+      part.map((r, k) => ({ row: r, text: texts[k]! })),
+      res,
+    );
   }
   return n;
 }
+
+/**
+ * A batched reading's answer (batchJobs.ts): the people of the part in the order they were asked, those still
+ * unread written with the model's reading (P1 is the first asked, whoever has been read since).
+ */
+export async function readPeopleFromBatch(
+  db: Db,
+  userId: string,
+  personIds: string[],
+  answer: (schema: typeof personSchema) => Promise<ClaudeResult<z.infer<typeof personSchema>>>,
+): Promise<number> {
+  const res = await answer(personSchema);
+  if (!res.ok && 'budgetExceeded' in res) return 0;
+  const rows = await db.sql<Unread>`
+    select r.person_id, r.member_id, p.display_name as name, p.headline, r.about, r.experience
+      from orbit.profile_reads r join orbit.people p on p.id = r.person_id
+     where r.user_id = ${userId}::uuid and r.reading_at is null and r.status = 'ok'
+       and r.person_id = any(${personIds}::uuid[])`;
+  const byId = new Map(rows.map((r) => [r.person_id, r]));
+  const slots = personIds.map((id) => byId.get(id));
+  const { texts } = peopleTexts(slots.filter((r): r is Unread => !!r));
+  let t = 0;
+  const part = slots.map((r) => (r ? { row: r, text: texts[t++]! } : undefined));
+  return writePeople(db, userId, part, res);
+}
+
+async function writePeople(
+  db: Db,
+  userId: string,
+  part: ({ row: Unread; text: string } | undefined)[],
+  res: ClaudeResult<z.infer<typeof personSchema>> | undefined,
+): Promise<number> {
+  let model: Map<number, RawPersonReading> | undefined;
+  let modelName: string | null = null;
+  if (res?.ok) {
+    modelName = res.model;
+    model = new Map();
+    for (const p of res.data.people) {
+      const k = Number(/(\d+)/.exec(p.person)?.[1] ?? 0) - 1;
+      if (k >= 0 && k < part.length) model.set(k, rawOf(p.facts));
+    }
+  }
+  let n = 0;
+  for (let k = 0; k < part.length; k++) {
+    const one = part[k];
+    if (!one) continue;
+    const { row, text } = one;
+    const reading: ProfileReadingWire = withPatterns(
+      settlePersonReading(model?.get(k), text),
+      readByPattern(text),
+    );
+    await db.sql`
+      update orbit.profile_reads set reading = ${JSON.stringify(reading)}::jsonb, reading_model = ${modelName},
+        reading_at = now(), updated_at = now()
+       where user_id = ${userId}::uuid and person_id = ${row.person_id}::uuid`;
+    // the same text gives the same reading: kept on the shared page for the next student (plan 34 B1)
+    if (row.member_id && modelName)
+      await db.sql`
+        update orbit_private.profile_pages set reading = ${JSON.stringify(reading)}::jsonb,
+          reading_model = ${modelName}, reading_at = now()
+         where member_id = ${row.member_id} and about is not distinct from ${row.about}
+           and experience = ${JSON.stringify(row.experience ?? [])}::jsonb`;
+    n++;
+  }
+  return n;
+}
+
+type CompanyRow = {
+  linkedin_id: string;
+  public_identifier: string | null;
+  name: string;
+  website: string | null;
+  industries: string[];
+  tagline: string | null;
+  description: string | null;
+  employee_count: number | null;
+  growth_12m: number | null;
+  founded_year: number | null;
+};
+
+const companyTexts = (part: CompanyRow[]) => ({
+  texts: part.map((c) =>
+    companyReadingText({
+      name: c.name,
+      tagline: c.tagline ?? undefined,
+      about: c.description ?? undefined,
+    }),
+  ),
+  worth: part.map((c) => !!c.description || !!c.tagline),
+});
 
 export async function readCompanies(
   db: Db,
@@ -611,39 +707,25 @@ export async function readCompanies(
   userId: string | null,
   limit: number,
   now: Date,
+  opts: ReadOpts = {},
 ): Promise<number> {
-  const rows = await db.sql<{
-    linkedin_id: string;
-    public_identifier: string | null;
-    name: string;
-    website: string | null;
-    industries: string[];
-    tagline: string | null;
-    description: string | null;
-    employee_count: number | null;
-    growth_12m: number | null;
-    founded_year: number | null;
-  }>`
+  const rows = await db.sql<CompanyRow>`
     select linkedin_id, public_identifier, name, website, industries, tagline, description, employee_count,
            growth_12m, founded_year
-      from orbit_private.company_pages
+      from orbit_private.company_pages c
      where reading_at is null and status = 'ok'
+       and (${!opts.batch}::boolean or not exists (select 1 from orbit.claude_batch_requests b
+                        where b.handler = 'reading.companies' and b.status in ('queued', 'submitted')
+                          and b.payload->'linkedinIds' ? c.linkedin_id))
      order by read_at limit ${limit}`;
   let n = 0;
   for (let i = 0; i < rows.length; i += READ_BATCH) {
     const part = rows.slice(i, i + READ_BATCH);
-    const texts = part.map((c) =>
-      companyReadingText({
-        name: c.name,
-        tagline: c.tagline ?? undefined,
-        about: c.description ?? undefined,
-      }),
-    );
-    const raw = new Map<number, RawCompanyReading>();
-    const worth = part.map((c) => !!c.description || !!c.tagline);
+    const { texts, worth } = companyTexts(part);
+    let res: ClaudeResult<z.infer<typeof companySchema>> | undefined;
     if (claude?.configured && worth.some(Boolean)) {
-      const res = await claude.structured({
-        task: 'reading',
+      const request = {
+        task: 'reading' as const,
         system: COMPANY_READING_SYSTEM,
         user: part
           .map((_, k) => (worth[k] ? block('company', `C${k + 1}`, texts[k]!) : ''))
@@ -651,44 +733,95 @@ export async function readCompanies(
           .join('\n\n'),
         schema: companySchema,
         userId,
-      });
-      if (res.ok)
-        for (const c of res.data.companies) {
-          const k = Number(/(\d+)/.exec(c.company)?.[1] ?? 0) - 1;
-          if (k >= 0 && k < part.length)
-            raw.set(k, {
-              stage: c.stage.trim() ? { value: c.stage, quote: c.quote } : null,
-              kind: c.kind.trim() || null,
-              what: c.what.trim() || null,
-            });
-        }
-      else if ('budgetExceeded' in res) return n;
+      };
+      if (opts.batch && claude.structuredBatch && claude.batching) {
+        const ids = part.map((c) => c.linkedin_id);
+        const q = await claude.structuredBatch(request, {
+          handler: 'reading.companies',
+          payload: { linkedinIds: ids },
+          dedupeKey: partKey('reading.companies', null, ids),
+        });
+        if (q.queued || q.reason === 'duplicate') continue;
+      }
+      res = await claude.structured(request);
+      if (!res.ok && 'budgetExceeded' in res) return n;
     }
-    for (let k = 0; k < part.length; k++) {
-      const c = part[k]!;
-      const r = settleCompanyReading(raw.get(k), texts[k]!);
-      await db.sql`
-        update orbit_private.company_pages set reading = ${JSON.stringify(r)}::jsonb, reading_at = now()
-         where linkedin_id = ${c.linkedin_id}`;
-      await projectFact(
-        db,
-        {
-          linkedinId: c.linkedin_id,
-          publicIdentifier: c.public_identifier ?? undefined,
-          name: c.name,
-          website: c.website ?? undefined,
-          industries: c.industries ?? [],
-          tagline: c.tagline ?? undefined,
-          description: c.description ?? undefined,
-          employeeCount: c.employee_count ?? undefined,
-          growth12m: c.growth_12m ?? undefined,
-          foundedYear: c.founded_year ?? undefined,
-        },
-        r,
-        now,
-      );
-      n++;
+    n += await writeCompanies(
+      db,
+      part.map((c, k) => ({ row: c, text: texts[k]! })),
+      res,
+      now,
+    );
+  }
+  return n;
+}
+
+/** A batched company reading's answer (batchJobs.ts), as readPeopleFromBatch. */
+export async function readCompaniesFromBatch(
+  db: Db,
+  linkedinIds: string[],
+  answer: (schema: typeof companySchema) => Promise<ClaudeResult<z.infer<typeof companySchema>>>,
+  now: Date,
+): Promise<number> {
+  const res = await answer(companySchema);
+  if (!res.ok && 'budgetExceeded' in res) return 0;
+  const rows = await db.sql<CompanyRow>`
+    select linkedin_id, public_identifier, name, website, industries, tagline, description, employee_count,
+           growth_12m, founded_year
+      from orbit_private.company_pages
+     where reading_at is null and status = 'ok' and linkedin_id = any(${linkedinIds}::text[])`;
+  const byId = new Map(rows.map((r) => [r.linkedin_id, r]));
+  const slots = linkedinIds.map((id) => byId.get(id));
+  const { texts } = companyTexts(slots.filter((r): r is CompanyRow => !!r));
+  let t = 0;
+  const part = slots.map((r) => (r ? { row: r, text: texts[t++]! } : undefined));
+  return writeCompanies(db, part, res, now);
+}
+
+async function writeCompanies(
+  db: Db,
+  part: ({ row: CompanyRow; text: string } | undefined)[],
+  res: ClaudeResult<z.infer<typeof companySchema>> | undefined,
+  now: Date,
+): Promise<number> {
+  const raw = new Map<number, RawCompanyReading>();
+  if (res?.ok)
+    for (const c of res.data.companies) {
+      const k = Number(/(\d+)/.exec(c.company)?.[1] ?? 0) - 1;
+      if (k >= 0 && k < part.length)
+        raw.set(k, {
+          stage: c.stage.trim() ? { value: c.stage, quote: c.quote } : null,
+          kind: c.kind.trim() || null,
+          what: c.what.trim() || null,
+        });
     }
+  let n = 0;
+  for (let k = 0; k < part.length; k++) {
+    const one = part[k];
+    if (!one) continue;
+    const c = one.row;
+    const r = settleCompanyReading(raw.get(k), one.text);
+    await db.sql`
+      update orbit_private.company_pages set reading = ${JSON.stringify(r)}::jsonb, reading_at = now()
+       where linkedin_id = ${c.linkedin_id}`;
+    await projectFact(
+      db,
+      {
+        linkedinId: c.linkedin_id,
+        publicIdentifier: c.public_identifier ?? undefined,
+        name: c.name,
+        website: c.website ?? undefined,
+        industries: c.industries ?? [],
+        tagline: c.tagline ?? undefined,
+        description: c.description ?? undefined,
+        employeeCount: c.employee_count ?? undefined,
+        growth12m: c.growth_12m ?? undefined,
+        foundedYear: c.founded_year ?? undefined,
+      },
+      r,
+      now,
+    );
+    n++;
   }
   return n;
 }
@@ -819,7 +952,8 @@ export async function runReadingStep(
     await readProfiles(db, deps, userId, accountId, people, now, mode, step, started, budgetMs * 0.75);
   }
   step.stopped ??= stoppedAtCompanies;
-  step.readPeople = await readPeople(db, deps.claude, userId, 24);
-  step.readCompanies = await readCompanies(db, deps.claude, userId, 24, now);
+  // the background step waits on nobody: its readings go through Message Batches when they can (plan 35 C2)
+  step.readPeople = await readPeople(db, deps.claude, userId, 24, undefined, { batch: true });
+  step.readCompanies = await readCompanies(db, deps.claude, userId, 24, now, { batch: true });
   return step;
 }

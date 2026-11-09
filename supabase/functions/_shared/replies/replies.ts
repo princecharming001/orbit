@@ -11,9 +11,19 @@ import type { ReplyClass } from '@orbit/core/email/replyClass';
 import { autonomyAllows, messageHash } from '@orbit/core/safety/rules';
 import type { ReplyItem } from '@orbit/core/server/api';
 import { stripQuotedReply } from '@orbit/core/text/email';
-import { type ComposeResult, composeDraft, historyWith, loadReplyMessage } from '../compose/compose.ts';
+import type { ClaudeResult } from '../claude.ts';
+import {
+  type ComposeFrozen,
+  type ComposeRequest,
+  type ComposeResult,
+  composeDraft,
+  composeDraftBatched,
+  composeFromBatch,
+  historyWith,
+  loadReplyMessage,
+} from '../compose/compose.ts';
 import type { DraftMeta, DraftRow } from '../compose/drafts.ts';
-import { askUserMarkers } from '../compose/prompts.ts';
+import { askUserMarkers, type ComposeOutput } from '../compose/prompts.ts';
 import type { Db } from '../db.ts';
 import { HttpError } from '../http.ts';
 import { firstNameOf, iso, num } from '../rows.ts';
@@ -131,6 +141,25 @@ export function questionOf(extraction: Record<string, unknown> | null, text: str
   return sentence ?? (holdsQuestion(body) ? body.trim().slice(0, 200) : null);
 }
 
+/** The compose request for a reply to one inbound message. Throws HttpError when no reply is drafted. */
+function replyRequest(
+  m: Awaited<ReturnType<typeof loadReplyMessage>>,
+  userId: string,
+  actor: 'user' | 'agent',
+): ComposeRequest {
+  if (m.reply_class === 'unsubscribe')
+    throw new HttpError(409, 'unsubscribe', 'they asked not to be contacted; no reply is drafted');
+  if (!m.from_person_id) throw new HttpError(409, 'unknown_sender', 'Orbit does not know who sent this yet');
+  return {
+    userId,
+    personId: m.from_person_id,
+    kind: 'reply',
+    channel: m.provider,
+    replyToMessageId: m.id,
+    actor,
+  };
+}
+
 /** A reply in the user's voice to one inbound message (§8.3). */
 export async function draftReply(
   s: Services,
@@ -139,17 +168,7 @@ export async function draftReply(
   actor: 'user' | 'agent' = 'user',
 ): Promise<ComposeResult> {
   const m = await loadReplyMessage(s.db, userId, messageId);
-  if (m.reply_class === 'unsubscribe')
-    throw new HttpError(409, 'unsubscribe', 'they asked not to be contacted; no reply is drafted');
-  if (!m.from_person_id) throw new HttpError(409, 'unknown_sender', 'Orbit does not know who sent this yet');
-  return composeDraft(s, {
-    userId,
-    personId: m.from_person_id,
-    kind: 'reply',
-    channel: m.provider,
-    replyToMessageId: m.id,
-    actor,
-  });
+  return composeDraft(s, replyRequest(m, userId, actor));
 }
 
 /**
@@ -186,7 +205,9 @@ export type AutoReplyOutcome =
   | { action: 'closed'; reason: 'decline' }
   | { action: 'needs_you'; suggestionId: string }
   | { action: 'drafted'; draftId: string; reasons: string[] }
-  | { action: 'auto_sent'; draftId: string };
+  | { action: 'auto_sent'; draftId: string }
+  /** the answer is written through Message Batches (plan 35 C2); batchJobs.ts carries on from here when it comes */
+  | { action: 'batched' };
 
 /**
  * After a reply is classified (classify.message calls this, and funnel.reply for interested and scheduling): the
@@ -275,14 +296,52 @@ export async function maybeAutoReply(
          and d.ask->>'replyToMessageId' in (
            select id::text from orbit.messages
             where user_id = ${userId}::uuid and thread_id = ${m.thread_id}::uuid and id <> ${m.id}::uuid)`;
+    // nobody is waiting on an answer the student did not ask for: written at half price within the day (plan 35 C2)
     try {
-      draft = (await draftReply(s, userId, m.id, 'agent')).draft;
+      const r = await composeDraftBatched(s, replyRequest(m, userId, 'agent'), {
+        handler: 'compose.auto_reply',
+        payload: { messageId: m.id, cls },
+        dedupeKey: `reply:${m.id}`,
+      });
+      if (r.batched) return { action: 'batched' };
+      draft = r.result.draft;
     } catch (e) {
       if (e instanceof HttpError) return { action: 'none', reason: e.code };
       throw e;
     }
   }
   return approveIfAllowed(s, userId, draft, cls, now);
+}
+
+/**
+ * A batched auto reply's answer (batchJobs.ts): skipped (`null`, the answer unused) when a newer message came in the
+ * thread since, someone already answered, or the person is no longer to be written to; otherwise the draft is
+ * written from the answer and goes through `approveIfAllowed` as it would have then.
+ */
+export async function autoReplyFromBatch(
+  s: Services,
+  userId: string,
+  payload: { messageId: string; cls: ReplyClass; req: ComposeRequest; frozen?: ComposeFrozen },
+  answer: () => Promise<ClaudeResult<ComposeOutput>>,
+): Promise<AutoReplyOutcome | null> {
+  const db = s.db;
+  const m = await loadReplyMessage(db, userId, payload.messageId);
+  const [state] = await db.sql<{ newer: boolean; answered: boolean; dnc: boolean }>`
+    select exists (select 1 from orbit.messages o
+                    where o.user_id = ${userId}::uuid and o.thread_id = ${m.thread_id}::uuid and o.id <> ${m.id}::uuid
+                      and o.sent_at > ${new Date(m.sent_at)}::timestamptz) as newer,
+           exists (select 1 from orbit.drafts d
+                    where d.user_id = ${userId}::uuid and d.ask->>'replyToMessageId' = ${m.id}
+                      and d.status not in ('discarded', 'cancelled')) as answered,
+           coalesce((select do_not_contact from orbit.people where id = ${m.from_person_id}::uuid), false) as dnc`;
+  if (!state || state.newer || state.answered || state.dnc) return null;
+  try {
+    const draft = (await composeFromBatch(s, payload.req, payload.frozen, await answer())).draft;
+    return approveIfAllowed(s, userId, draft, payload.cls, s.now());
+  } catch (e) {
+    if (e instanceof HttpError) return { action: 'none', reason: e.code };
+    throw e;
+  }
 }
 
 /**

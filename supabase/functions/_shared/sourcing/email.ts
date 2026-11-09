@@ -21,7 +21,7 @@ export type EmailConfidence = 'verified' | 'page' | 'pattern' | 'guess';
 /** What a lookup (lookup.ts) found for one person. */
 export interface LookedUp {
   email: string;
-  source: 'linkedin' | 'hunter' | 'apollo';
+  source: 'linkedin' | 'enrow' | 'icypeas' | 'hunter' | 'apollo';
   status: 'verified' | 'guess';
 }
 export type EmailLookup = (c: Candidate) => Promise<LookedUp | undefined>;

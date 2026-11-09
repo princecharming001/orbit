@@ -90,6 +90,10 @@ export interface Candidate {
   email?: string;
   /** how the email was found: on a page, from the company's pattern, or a guess (email.ts) */
   emailConfidence?: EmailConfidence;
+  /** the company domains the search knew them by, kept so a lookup later can use them (ondemand.ts) */
+  domains?: string[];
+  /** a paid lookup ran for them (plan 35 C3); without it and without an email, nobody has looked yet */
+  emailLookedUp?: boolean;
   /** how warm the student is to them, in five tiers (warmth.ts) */
   warmth?: Warmth;
   url?: string;
