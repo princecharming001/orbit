@@ -68,6 +68,20 @@ describe('turns for the server', () => {
     expect(lastTurns(turns, 1)).toEqual([{ role: 'user', text: 'Thanks' }]);
   });
 
+  it("Orbit's own nudge for words is never read as the student's turn", () => {
+    const turns = textTurns([
+      msg(1, 'user', [{ type: 'text', text: 'find second degree connections then' }]),
+      msg(2, 'assistant', [{ type: 'tool_use', id: 't1', name: 'find_people', input: {} }]),
+      msg(3, 'user', [{ type: 'tool_result', tool_use_id: 't1', content: '{}' }]),
+      msg(4, 'user', [{ type: 'text', text: '[Orbit] Your reply had no answer in words. Answer now.' }]),
+      msg(5, 'assistant', [{ type: 'text', text: 'The only mutual is Anika.' }]),
+    ]);
+    expect(turns).toEqual([
+      { role: 'user', text: 'find second degree connections then' },
+      { role: 'assistant', text: 'The only mutual is Anika.' },
+    ]);
+  });
+
   it('stays within 6 turns and 8,000 characters', () => {
     const many = Array.from({ length: 10 }, (_, i) => ({
       role: i % 2 ? ('assistant' as const) : ('user' as const),

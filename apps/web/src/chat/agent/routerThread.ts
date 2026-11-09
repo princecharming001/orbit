@@ -16,6 +16,7 @@ import {
   readText,
 } from '../ui/cards/shapes';
 import { cardSteps } from '../ui/cards/steps';
+import { isOrbitNote } from './orbitNote';
 import { mentioned } from './routerMore';
 import type { ChatStore } from './store';
 
@@ -79,7 +80,9 @@ export async function threadContextFor(store: ChatStore, conversationId: string)
   // the person the student's last message named, when no card since then has been about anyone ("should I email
   // Marcus again?" then "ok, follow up with him")
   const current = messages.at(-1)?.role === 'user' ? messages.at(-1) : undefined;
-  const lastSaid = [...messages].reverse().find((m) => m.role === 'user' && !m.meta && m !== current);
+  const lastSaid = [...messages]
+    .reverse()
+    .find((m) => m.role === 'user' && !m.meta && !isOrbitNote(m) && m !== current);
   const spoken = async (): Promise<PersonRef | undefined> => {
     const text = (Array.isArray(lastSaid?.content) ? lastSaid.content : [])
       .map((b: { type?: string; text?: string }) => (b.type === 'text' ? (b.text ?? '') : ''))

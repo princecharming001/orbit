@@ -8,6 +8,7 @@
 
 import { useSyncExternalStore } from 'react';
 import { withoutButtonTalk } from '../agent/buttonTalk';
+import { isOrbitNote } from '../agent/orbitNote';
 import { SETUP_CHIPS } from '../agent/setupChips';
 import { webSources } from '../agent/webSearch';
 import type {
@@ -256,6 +257,9 @@ export function hydrate(messages: ChatMessage[], actions: ChatAction[]): Turn[] 
       });
       continue;
     }
+    // Orbit's own note to the model (the nudge for words after a turn of cards alone): not the student's, so no
+    // bubble, and the answer it asked for goes on in the same turn, as it read live
+    if (isOrbitNote(m)) continue;
     if (m.role === 'user') {
       // the agent's own user-role rows (tool results, a follow-up it asked itself for) have no words of the
       // student's: nothing to draw, not an empty bubble, and the answer goes on

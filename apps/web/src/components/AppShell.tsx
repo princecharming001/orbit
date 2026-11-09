@@ -694,9 +694,11 @@ function Recent({ chat }: { chat: ReturnType<typeof threadActions> }) {
                           type="button"
                           onClick={() => open(c.id)}
                           className={cx(
-                            'w-full h-8 px-2.5 pr-24 rounded-[10px] text-left text-[13.5px] text-ink-2 truncate hover:bg-[#f5f4f2] hover:text-ink transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ink/20',
+                            // the title has the whole row; room for pin, rename and archive opens only while they show
+                            'w-full h-8 px-2.5 group-hover:pr-24 group-focus-within:pr-24 rounded-[10px] text-left text-[13.5px] text-ink-2 truncate hover:bg-[#f5f4f2] hover:text-ink transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ink/20',
                             thread.conversation?.id === c.id && 'bg-[#f0efed] text-ink font-medium',
                           )}
+                          title={withoutRefs(c.title)}
                           data-testid="recent-item"
                         >
                           {isRunning(c.id) && !watching(c.id) && (

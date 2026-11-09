@@ -372,6 +372,33 @@ describe('the chat thread', () => {
     expect(err.querySelector('[data-testid="turn-error-reload"]')).not.toBeNull();
   });
 
+  it("a reopened chat never shows Orbit's own nudge as the student's message, and its answer joins the turn", () => {
+    const row = (seq: number, role: 'user' | 'assistant', content: unknown) => ({
+      id: `n${seq}`,
+      conversationId: 'c',
+      userId: 'u',
+      seq,
+      role,
+      content,
+      createdAt: '2026-11-08T00:00:00Z',
+    });
+    const turns = hydrate(
+      [
+        row(0, 'user', [{ type: 'text', text: 'find second degree connections then' }]),
+        row(1, 'assistant', [{ type: 'tool_use', id: 'tu9', name: 'find_people', input: {} }]),
+        row(2, 'user', [{ type: 'tool_result', tool_use_id: 'tu9', content: '{}' }]),
+        row(3, 'assistant', []),
+        row(4, 'user', [{ type: 'text', text: '[Orbit] Your reply had no answer in words. Answer now.' }]),
+        row(5, 'assistant', [{ type: 'text', text: 'The only mutual on LinkedIn is Anika.' }]),
+      ],
+      [],
+    );
+    expect(turns.map((t) => t.role)).toEqual(['user', 'assistant']);
+    expect(JSON.stringify(turns)).not.toContain('[Orbit]');
+    const answer = turns[1] as AssistantTurn;
+    expect(answer.blocks.map((b) => b.type)).toEqual(['tool', 'text']);
+  });
+
   it('rebuilds a stored conversation from its content blocks and actions', () => {
     const turns = hydrate(
       [
