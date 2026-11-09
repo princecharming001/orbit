@@ -229,6 +229,7 @@ describe('every tool parses and executes its example input against the demo', ()
       find_people: { purpose: 'fundraising', query: 'seed investors in climate' },
       add_sourced: { recommendationIds: ['rec_1'] },
       list_replies: {},
+      list_inbox: { channel: 'email' },
       draft_reply: { messageId: 'msg_1' },
       pause_outreach: { until: '2026-12-20' },
       list_due: {},

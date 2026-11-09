@@ -2354,6 +2354,14 @@ function normalizeEmail(raw) {
   }
   return `${local}@${domain}`;
 }
+function emailDomain(email) {
+  const e = normalizeEmail(email);
+  return e.slice(e.lastIndexOf("@") + 1);
+}
+function emailLocalPart(email) {
+  const e = normalizeEmail(email);
+  return e.slice(0, e.lastIndexOf("@"));
+}
 var GENERATIONAL = /* @__PURE__ */ new Set(["jr", "sr", "ii", "iii", "iv"]);
 var NAME_PARTICLES = /* @__PURE__ */ new Set([
   "de",
@@ -3627,6 +3635,190 @@ function extractTimes(text3, reference, opts = {}) {
 }
 
 // packages/core/src/text/email.ts
+var BULK_LOCAL = /^(no[-_.]?reply|do[-_.]?not[-_.]?reply|donotreply|invitations?|notify|notifications?|newsletters?|mailer|mailer[-_.]daemon|postmaster|bounces?|alerts?|updates?|news|digest|marketing|billing|invoices?|receipts?|dse(_\w+)?|automated|system|calendar|no[-_.]?reply[-_.+].*|.*[-_.+]no[-_.]?reply|.*[-_.]notifications?|.*[-_.]alerts?)$/i;
+var ROLE_TOKEN = /^(recruit|recruits|recruiting|recruitment|recruiter|campus|campusrecruiting|universityrecruiting|collegerecruiting|earlycareers?|careers?|jobs?|talent|talentacquisition|ta|hr|people|hiring|staffing|university|college|early|students?|programs?|internships?|interns|graduates?|grad|admissions|events|relations|ur|acquisition)$/i;
+var GENERIC_LOCAL = /^(team|hello|hi|hey|info|support|contact|help|office|admin|founders|general|inquiries|enquiries)$/i;
+var ROLE_NAME = /\b(recruiting|recruitment|careers?|talent( acquisition)?|admissions|human resources|university relations|campus|early careers|team|notifications?|no-?reply|support|newsletter|digest|alerts?|calendar|via linkedin|hiring)\b/i;
+function isRoleName(displayName) {
+  return Boolean(displayName) && ROLE_NAME.test(displayName);
+}
+function isRoleLocalPart(local) {
+  const tokens3 = local.toLowerCase().split(/[._+-]+/).filter(Boolean);
+  return tokens3.length > 0 && tokens3.every((t) => ROLE_TOKEN.test(t));
+}
+var NOTIFICATION_DOMAINS = /* @__PURE__ */ new Set([
+  "facebookmail.com",
+  "mail.instagram.com",
+  "mcsv.net",
+  "mcdlv.net",
+  "list-manage.com",
+  "sendgrid.net",
+  "hubspotemail.net",
+  "amazonses.com",
+  "mandrillapp.com",
+  "mailgun.org",
+  "calendar-notification.google.com",
+  "accounts.google.com",
+  "docs.google.com",
+  "mail.coursera.org",
+  "canvas.instructure.com",
+  "notifications.instructure.com",
+  "greenhouse-mail.io",
+  "hire.lever.co",
+  "myworkday.com",
+  "talent.icims.com",
+  "reddithelp.com",
+  "docusign.net",
+  "beehiiv.com",
+  "convertkit-mail.com",
+  "convertkit-mail2.com",
+  "klaviyomail.com",
+  "ccsend.com",
+  "rsgsv.net",
+  "mailchimpapp.net",
+  "sparkpostmail.com",
+  "mktomail.com",
+  "marketo.org",
+  "salesforce-mail.com",
+  "exacttarget.com"
+]);
+var EMPLOYER_MAIL_DOMAINS = /* @__PURE__ */ new Set([
+  "linkedin.com",
+  "google.com",
+  "capitalone.com",
+  "chase.com",
+  "jpmorgan.com",
+  "jpmchase.com",
+  "paypal.com",
+  "venmo.com",
+  "coinbase.com",
+  "robinhood.com",
+  "doordash.com",
+  "uber.com",
+  "ubereats.com",
+  "indeed.com",
+  "glassdoor.com",
+  "pinterest.com",
+  "tiktok.com",
+  "bytedance.com",
+  "medium.com",
+  "substack.com",
+  "quora.com",
+  "lever.co",
+  "greenhouse.io",
+  "joinhandshake.com",
+  "handshake.com",
+  "ziprecruiter.com",
+  "bankofamerica.com",
+  "wellsfargo.com",
+  "instructure.com",
+  "piazza.com",
+  "gradescope.com",
+  "icims.com",
+  "smartrecruiters.com",
+  "ashbyhq.com",
+  "eventbrite.com",
+  "meetup.com",
+  "ticketmaster.com",
+  "morningbrew.com",
+  "theskimm.com",
+  "mailchimp.com",
+  "coursera.org"
+]);
+function isNotificationDomain(domain) {
+  if (NOTIFICATION_DOMAINS.has(domain)) return true;
+  for (const d of NOTIFICATION_DOMAINS) if (domain.endsWith(`.${d}`)) return true;
+  for (const d of EMPLOYER_MAIL_DOMAINS) if (domain.endsWith(`.${d}`)) return true;
+  return false;
+}
+function isAutomatedSender(fromEmail, headers = {}, labels2 = [], displayName) {
+  if (headers["list-unsubscribe"] || headers["list-id"]) return true;
+  const prec = (headers.precedence ?? "").toLowerCase();
+  if (prec === "bulk" || prec === "list" || prec === "junk" || prec === "auto_reply") return true;
+  const auto = (headers["auto-submitted"] ?? "").toLowerCase();
+  if (auto && auto !== "no") return true;
+  const xa = (headers["x-autoreply"] ?? headers["x-autorespond"] ?? "").toLowerCase();
+  if (xa && xa !== "no") return true;
+  if (headers.sender) {
+    const sender = parseAddress(headers.sender).email;
+    if (sender.includes("@") && sender !== normalizeEmail(fromEmail)) {
+      if (sender === "calendar-notification@google.com") return true;
+      const sl = emailLocalPart(sender);
+      if (BULK_LOCAL.test(sl) || isRoleLocalPart(sl) || isNotificationDomain(emailDomain(sender)))
+        return true;
+    }
+  }
+  if (labels2.some((l) => /CATEGORY_(PROMOTIONS|SOCIAL|FORUMS|UPDATES)/i.test(l))) return true;
+  const local = emailLocalPart(fromEmail);
+  if (BULK_LOCAL.test(local) || isRoleLocalPart(local)) return true;
+  if (GENERIC_LOCAL.test(local)) {
+    const name = (displayName ?? "").trim();
+    const personal = Boolean(name) && !isRoleName(name) && /^[A-Z][a-z'’-]+(\s+[A-Z][A-Za-z'’.-]+){0,3}$/.test(name);
+    if (!personal) return true;
+  }
+  return isNotificationDomain(emailDomain(fromEmail));
+}
+var ATS_DOMAINS = [
+  "greenhouse.io",
+  "greenhouse-mail.io",
+  "lever.co",
+  "myworkday.com",
+  "workday.com",
+  "ashbyhq.com",
+  "icims.com",
+  "smartrecruiters.com",
+  "jobvite.com"
+];
+function isAtsSender(email) {
+  const e = normalizeEmail(email);
+  if (!e.includes("@")) return false;
+  const domain = emailDomain(e);
+  if (ATS_DOMAINS.some((d) => domain === d || domain.endsWith(`.${d}`))) return true;
+  return /^(no[-_.]?reply|do[-_.]?not[-_.]?reply|donotreply)([-_.+].*)?$|[-_.+]no[-_.]?reply$/i.test(
+    emailLocalPart(e)
+  );
+}
+function decodeWordBytes(charset, bytes) {
+  try {
+    return new TextDecoder(charset.toLowerCase().replace(/\*.*$/, ""), { fatal: false }).decode(bytes);
+  } catch {
+    return new TextDecoder("utf-8").decode(bytes);
+  }
+}
+function decodeMimeWords(header) {
+  if (!header.includes("=?")) return header;
+  return header.replace(/(\?=)\s+(?==\?)/g, "$1").replace(/=\?([^?\s]+)\?([BbQq])\?([^?\s]*)\?=/g, (all, charset, enc2, data) => {
+    try {
+      let bytes;
+      if (enc2.toUpperCase() === "B") {
+        const bin = atob(data);
+        bytes = Uint8Array.from(bin, (c) => c.charCodeAt(0));
+      } else {
+        const out = [];
+        const q = data.replace(/_/g, " ");
+        for (let i = 0; i < q.length; i++) {
+          if (q[i] === "=" && /^[0-9a-f]{2}$/i.test(q.slice(i + 1, i + 3))) {
+            out.push(Number.parseInt(q.slice(i + 1, i + 3), 16));
+            i += 2;
+          } else out.push(q.charCodeAt(i) & 255);
+        }
+        bytes = Uint8Array.from(out);
+      }
+      return decodeWordBytes(charset, bytes);
+    } catch {
+      return all;
+    }
+  });
+}
+function parseAddress(raw) {
+  const s = decodeMimeWords(raw.trim());
+  const m = s.match(/^(.*?)\s*<([^>]+)>\s*$/);
+  if (m) {
+    const name = m[1].trim().replace(/^"(.*)"$/, "$1").replace(/\\"/g, '"').trim();
+    return { email: normalizeEmail(m[2]), name: name || void 0 };
+  }
+  return { email: normalizeEmail(s.replace(/^mailto:/i, "")) };
+}
 var QUOTE_MARKERS = [
   { re: /^On\s[^\n]{5,200}(?:\n[^\n]{0,200}){0,2}?\s*wrote:\s*$/m, needsDateOrAddress: true },
   { re: /^-{2,}\s*Original Message\s*-{2,}/im },
@@ -6434,7 +6626,7 @@ async function bookSlot(s, userId, req, appUrl, opts = {}) {
   if (d.chat_id) await moveChat(s.db, userId, d.chat_id, "scheduled", "call booked", s.now());
   return { eventId };
 }
-async function moveChat(db2, userId, chatId, to, reason, now, actor = "system") {
+async function moveChat(db2, userId, chatId, to, reason2, now, actor = "system") {
   const [c] = await db2.sql`
     select stage from orbit.chats where id = ${chatId}::uuid and user_id = ${userId}::uuid`;
   if (!c || c.stage === to) return;
@@ -6443,7 +6635,7 @@ async function moveChat(db2, userId, chatId, to, reason, now, actor = "system") 
      where id = ${chatId}::uuid and user_id = ${userId}::uuid`;
   await db2.sql`
     insert into orbit.stage_events (user_id, chat_id, from_stage, to_stage, status, actor, reason, decided_at)
-    values (${userId}::uuid, ${chatId}::uuid, ${c.stage}, ${to}, 'applied', ${actor}, ${reason}, ${now}::timestamptz)`;
+    values (${userId}::uuid, ${chatId}::uuid, ${c.stage}, ${to}, 'applied', ${actor}, ${reason2}, ${now}::timestamptz)`;
 }
 
 // packages/core/src/ownWords.ts
@@ -8454,8 +8646,8 @@ function resumeLinks(text3) {
 function facetLines(parsed) {
   if (!parsed) return [];
   const out = [];
-  const list7 = (v) => Array.isArray(v) ? v : [];
-  for (const f2 of list7(parsed.facets)) {
+  const list8 = (v) => Array.isArray(v) ? v : [];
+  for (const f2 of list8(parsed.facets)) {
     const o = f2;
     if (o.excluded === true) continue;
     const t = [o.title ?? o.role, o.org ?? o.organization ?? o.organizationName, o.text].filter(
@@ -8463,17 +8655,17 @@ function facetLines(parsed) {
     );
     if (t.length) out.push(t.join(", "));
   }
-  for (const e of list7(parsed.experiences ?? parsed.experience)) {
+  for (const e of list8(parsed.experiences ?? parsed.experience)) {
     const o = e;
     const t = [o.title, o.org ?? o.company].filter((x) => typeof x === "string");
     if (t.length) out.push(t.join(" at "));
   }
-  for (const e of list7(parsed.education)) {
+  for (const e of list8(parsed.education)) {
     const o = e;
     const t = [o.degree, o.school].filter((x) => typeof x === "string");
     if (t.length) out.push(t.join(", "));
   }
-  const skills = list7(parsed.skills).filter((x) => typeof x === "string");
+  const skills = list8(parsed.skills).filter((x) => typeof x === "string");
   if (skills.length) out.push(`Skills: ${skills.slice(0, 12).join(", ")}`);
   return out.slice(0, 12);
 }
@@ -9289,7 +9481,10 @@ var REPLY_WINDOW_DAYS = 30;
 var needsYouKey = (messageId) => `needs_you:${messageId}`;
 async function listReplies(db2, userId, now) {
   const rows = await db2.sql`
-    select m.id, t.external_id as thread_external_id, m.from_person_id, p.display_name, p.org_raw, o.name as org_name,
+    select * from (
+    select m.id, p.photo_url, p.linkedin_url,
+           row_number() over (partition by m.thread_id order by m.sent_at desc) as rn,
+           (count(*) over (partition by m.thread_id))::int as n, t.external_id as thread_external_id, m.from_person_id, p.display_name, p.org_raw, o.name as org_name,
            m.from_addr, m.provider, m.reply_class, m.reply_confidence, m.sent_at, m.snippet, m.body_text, m.extraction,
            m.answer,
            (select d.id from orbit.drafts d
@@ -9311,13 +9506,21 @@ async function listReplies(db2, userId, now) {
       left join orbit.organizations o on o.id = p.org_id
      where m.user_id = ${userId}::uuid and m.direction = 'in' and m.reply_class is not null
        and m.sent_at >= ${new Date(now.getTime() - REPLY_WINDOW_DAYS * 864e5)}::timestamptz
-     order by m.sent_at desc
-     limit 200`;
+       and exists (
+         select 1 from orbit.messages o
+          where o.thread_id = m.thread_id and o.user_id = m.user_id and o.direction = 'out' and o.sent_at < m.sent_at)
+    ) x
+     where rn = 1
+     order by sent_at desc
+     limit 100`;
   return rows.map((r) => ({
     messageId: r.id,
     threadId: r.thread_external_id,
     personId: r.from_person_id,
     personName: r.display_name ?? r.from_addr?.split("@")[0] ?? "Someone",
+    photoUrl: r.photo_url ?? null,
+    linkedinUrl: r.linkedin_url ?? null,
+    count: num(r.n) || 1,
     company: r.org_name ?? r.org_raw ?? null,
     channel: r.provider,
     replyClass: r.reply_class,
@@ -9456,7 +9659,7 @@ async function itemRows(db2, userId, mode2, now, dayStart, draftId) {
               case when ${mode2}::text = 'sent' then d.sent_at end desc
      limit 50`;
 }
-function item(r, status3, reason) {
+function item(r, status3, reason2) {
   return {
     draftId: r.id,
     personId: r.person_id,
@@ -9469,7 +9672,7 @@ function item(r, status3, reason) {
     sentAt: iso(r.sent_at),
     ...validZone(r.timezone) ? { recipientTimeZone: validZone(r.timezone) } : {},
     status: status3,
-    ...reason ? { reason } : {},
+    ...reason2 ? { reason: reason2 } : {},
     ...r.auto_rung ? { autoRung: r.auto_rung } : {},
     ...r.outcome ? { outcome: r.outcome } : {},
     ...r.ask?.replyToMessageId ? { messageId: r.ask.replyToMessageId } : {}
@@ -9872,7 +10075,7 @@ function canTransition(from, to, actor = "system") {
   return ALLOWED[from].includes(to);
 }
 function decideTransition(from, trig) {
-  const d = (to, confidence, reason) => canTransition(from, to) ? { to, confidence, reason } : void 0;
+  const d = (to, confidence, reason2) => canTransition(from, to) ? { to, confidence, reason: reason2 } : void 0;
   switch (trig.type) {
     case "outbound_sent":
       if (trig.kind === "outreach" && (from === "identified" || from === "warming" || from === "nurturing" || from === "no_response"))
@@ -10543,9 +10746,9 @@ function personalizedPageRank(adj, source, opts = {}) {
       nodes.add(v);
     }
     if (total <= 0) continue;
-    const list7 = [];
-    for (const [v, w] of nbrs) if (w > 0 && Number.isFinite(w)) list7.push({ to: v, p: w / total });
-    out.set(u2, list7);
+    const list8 = [];
+    for (const [v, w] of nbrs) if (w > 0 && Number.isFinite(w)) list8.push({ to: v, p: w / total });
+    out.set(u2, list8);
   }
   let rank2 = /* @__PURE__ */ new Map([[source, 1]]);
   for (let it = 0; it < iterations; it++) {
@@ -10553,12 +10756,12 @@ function personalizedPageRank(adj, source, opts = {}) {
     let restart = alpha;
     for (const [u2, r] of rank2) {
       if (r === 0) continue;
-      const list7 = out.get(u2);
-      if (!list7) {
+      const list8 = out.get(u2);
+      if (!list8) {
         restart += (1 - alpha) * r;
         continue;
       }
-      for (const { to, p } of list7) next.set(to, (next.get(to) ?? 0) + (1 - alpha) * r * p);
+      for (const { to, p } of list8) next.set(to, (next.get(to) ?? 0) + (1 - alpha) * r * p);
     }
     next.set(source, (next.get(source) ?? 0) + restart);
     rank2 = next;
@@ -12890,15 +13093,15 @@ async function gmailSentCopy(s, userId, p) {
     const token = await s.tokens.accessToken(userId);
     const headers = { authorization: `Bearer ${token}` };
     const q = `in:sent to:${p.to} after:${Math.floor(p.since.getTime() / 1e3) - 60}`;
-    const list7 = await s.fetch(`${GMAIL_MESSAGES_URL}?maxResults=20&q=${encodeURIComponent(q)}`, {
+    const list8 = await s.fetch(`${GMAIL_MESSAGES_URL}?maxResults=20&q=${encodeURIComponent(q)}`, {
       headers,
       signal: AbortSignal.timeout(SEND_TIMEOUT_MS)
     });
-    if (!list7.ok) {
-      await list7.body?.cancel();
+    if (!list8.ok) {
+      await list8.body?.cancel();
       return void 0;
     }
-    const j = await list7.json();
+    const j = await list8.json();
     for (const m of j.messages ?? []) {
       const res = await s.fetch(
         `${GMAIL_MESSAGES_URL}/${encodeURIComponent(m.id)}?format=metadata&metadataHeaders=X-Orbit-Draft-Id&metadataHeaders=Subject`,
@@ -13162,19 +13365,19 @@ async function sendDraft(s, draftId) {
              send_at = coalesce(${fields.send_at ?? null}::timestamptz, send_at)
        where id = ${d.id}::uuid`;
   };
-  const later = async (reason, at) => {
-    await settle("approved", { error: reason, send_at: at });
+  const later = async (reason2, at) => {
+    await settle("approved", { error: reason2, send_at: at });
     await s.queue.enqueue(
       {
         kind: "send.draft",
         userId,
         payload: { draftId: d.id },
-        dedupeKey: `send:${d.id}:${reason}:${iso(at)}`
+        dedupeKey: `send:${d.id}:${reason2}:${iso(at)}`
       },
       { delaySec: Math.max(1, Math.ceil((at.getTime() - now.getTime()) / 1e3)) }
     );
-    await audit(db2, userId, "system", "draft.hold", d.id, { reason, until: iso(at) });
-    return { status: "held", reason };
+    await audit(db2, userId, "system", "draft.hold", d.id, { reason: reason2, until: iso(at) });
+    return { status: "held", reason: reason2 };
   };
   if (askUserMarkers(`${d.subject ?? ""}
 ${d.body}`).length || placeholderIn(`${d.subject ?? ""}
@@ -14786,6 +14989,425 @@ var historyRoutes = {
   "/people/history": { method: "POST", auth: true, run: history }
 };
 
+// supabase/functions/_shared/googleApi.ts
+var UNITS_PER_SECOND = 90;
+var MAX_IN_FLIGHT = 5;
+var MAX_RETRIES = 3;
+var GoogleApiError = class extends Error {
+  constructor(status3, reason2) {
+    super(`google ${status3} ${reason2}`);
+    this.status = status3;
+    this.reason = reason2;
+    this.name = "GoogleApiError";
+  }
+};
+var realSleep = (ms) => new Promise((r) => setTimeout(r, ms));
+var QuotaPacer = class {
+  rate;
+  max;
+  clock;
+  sleep;
+  spent = [];
+  inFlight = 0;
+  waiting = [];
+  constructor(o = {}) {
+    this.rate = o.unitsPerSecond ?? UNITS_PER_SECOND;
+    this.max = o.maxInFlight ?? MAX_IN_FLIGHT;
+    this.clock = o.clock ?? Date.now;
+    this.sleep = o.sleep ?? realSleep;
+  }
+  async run(units, fn) {
+    await this.acquire();
+    try {
+      return await this.spend(units, fn);
+    } finally {
+      this.release();
+    }
+  }
+  acquire() {
+    if (this.inFlight < this.max) {
+      this.inFlight++;
+      return Promise.resolve();
+    }
+    return new Promise((r) => this.waiting.push(r));
+  }
+  release() {
+    const next = this.waiting.shift();
+    if (next) next();
+    else this.inFlight--;
+  }
+  /** Records the spend and starts the request in one synchronous step, so the recorded time is the start time. */
+  async spend(units, fn) {
+    const u2 = Math.min(Math.max(0, units), this.rate);
+    for (; ; ) {
+      const now = this.clock();
+      this.spent = this.spent.filter((e) => e.t > now - 1e3);
+      const used = this.spent.reduce((s, e) => s + e.u, 0);
+      if (used + u2 <= this.rate) {
+        this.spent.push({ t: now, u: u2 });
+        return fn();
+      }
+      let over = used + u2 - this.rate;
+      let wait = 1;
+      for (const e of this.spent) {
+        over -= e.u;
+        wait = e.t + 1e3 - now;
+        if (over <= 0) break;
+      }
+      await this.sleep(Math.max(1, wait));
+    }
+  }
+};
+async function reason(res) {
+  try {
+    const body2 = await res.json();
+    if (typeof body2.error === "string") return body2.error;
+    return body2.error?.errors?.[0]?.reason ?? body2.error?.status ?? "error";
+  } catch {
+    return "error";
+  }
+}
+var RATE_REASONS = /* @__PURE__ */ new Set(["rateLimitExceeded", "userRateLimitExceeded", "RESOURCE_EXHAUSTED"]);
+function googleClient(deps) {
+  const doFetch = deps.fetch ?? fetch;
+  const clock = deps.clock ?? Date.now;
+  const sleep = deps.sleep ?? realSleep;
+  const random = deps.random ?? Math.random;
+  const pacers = deps.pacers ?? /* @__PURE__ */ new Map();
+  const pacer = (userId) => {
+    let p = pacers.get(userId);
+    if (!p) {
+      p = new QuotaPacer({ clock, sleep });
+      pacers.set(userId, p);
+    }
+    return p;
+  };
+  return {
+    async request(userId, r) {
+      let refreshed = false;
+      let attempt = 0;
+      for (; ; ) {
+        const token = await deps.tokens.accessToken(userId);
+        const res = await pacer(userId).run(
+          r.units,
+          () => doFetch(r.url, {
+            method: r.method ?? (r.body === void 0 ? "GET" : "POST"),
+            headers: {
+              authorization: `Bearer ${token}`,
+              accept: "application/json",
+              ...r.body === void 0 ? {} : { "content-type": "application/json" }
+            },
+            body: r.body === void 0 ? void 0 : JSON.stringify(r.body),
+            // a call Google never answers fails the job (which is retried) instead of holding the worker
+            signal: AbortSignal.timeout(3e4)
+          })
+        );
+        if (res.status === 401) {
+          await res.body?.cancel();
+          if (!refreshed) {
+            deps.tokens.invalidate(userId);
+            refreshed = true;
+            continue;
+          }
+          if (deps.db)
+            await deps.db.sql`
+              update orbit.integration_accounts set status = 'needs_reauth', last_error = 'unauthorized'
+               where user_id = ${userId}::uuid and provider = 'google'`;
+          throw new NeedsReauth();
+        }
+        if (res.ok) return await res.json();
+        const why = res.status === 429 || res.status >= 500 ? "retry" : await reason(res);
+        const retryable = why === "retry" || res.status === 403 && RATE_REASONS.has(why);
+        if (retryable && attempt < MAX_RETRIES) {
+          const wait = retryAfterMs(res.headers.get("retry-after"), clock()) ?? backoffMs(attempt, random);
+          if (why === "retry") await res.body?.cancel();
+          attempt++;
+          await sleep(wait);
+          continue;
+        }
+        if (why === "retry") await res.body?.cancel();
+        throw new GoogleApiError(res.status, why === "retry" ? `http_${res.status}` : why);
+      }
+    }
+  };
+}
+function qs(params) {
+  const q = new URLSearchParams();
+  for (const [k, v] of Object.entries(params)) {
+    if (v === void 0 || v === null) continue;
+    if (Array.isArray(v)) for (const x of v) q.append(k, x);
+    else q.set(k, String(v));
+  }
+  const s = q.toString();
+  return s ? `?${s}` : "";
+}
+
+// supabase/functions/_shared/gmail.ts
+var GMAIL_BASE = "https://gmail.googleapis.com/gmail/v1/users/me";
+var GMAIL_UNITS = {
+  list: 5,
+  get: 20,
+  thread: 40,
+  history: 2,
+  profile: 1,
+  watch: 100,
+  sendAs: 1
+};
+var METADATA_HEADERS = [
+  "From",
+  "To",
+  "Cc",
+  "Date",
+  "Subject",
+  "Message-ID",
+  "In-Reply-To",
+  "References",
+  "List-Unsubscribe",
+  "Auto-Submitted",
+  "Precedence"
+];
+function gmailApi(client, userId) {
+  const get2 = (path, units) => client.request(userId, { url: `${GMAIL_BASE}${path}`, units });
+  return {
+    list: (q, o = {}) => get2(`/messages${qs({ q, maxResults: o.maxResults ?? 500, pageToken: o.pageToken })}`, GMAIL_UNITS.list),
+    metadata: (id) => get2(
+      `/messages/${encodeURIComponent(id)}${qs({ format: "metadata", metadataHeaders: METADATA_HEADERS })}`,
+      GMAIL_UNITS.get
+    ),
+    thread: (id) => get2(`/threads/${encodeURIComponent(id)}${qs({ format: "full" })}`, GMAIL_UNITS.thread),
+    history: (startHistoryId, pageToken) => get2(
+      `/history${qs({ startHistoryId, historyTypes: "messageAdded", maxResults: 500, pageToken })}`,
+      GMAIL_UNITS.history
+    ),
+    profile: () => get2("/profile", GMAIL_UNITS.profile),
+    watch: (topicName) => client.request(userId, {
+      url: `${GMAIL_BASE}/watch`,
+      method: "POST",
+      body: { topicName, labelIds: ["INBOX", "SENT"], labelFilterBehavior: "include" },
+      units: GMAIL_UNITS.watch
+    }),
+    sendAs: async () => (await get2("/settings/sendAs", GMAIL_UNITS.sendAs)).sendAs ?? []
+  };
+}
+function headerMap(part2) {
+  const out = {};
+  for (const h of part2?.headers ?? []) {
+    const k = h.name.toLowerCase();
+    if (!(k in out)) out[k] = h.value;
+  }
+  return out;
+}
+
+// supabase/functions/_shared/inbox/inbox.ts
+var INBOX_DEFAULT_DAYS = 7;
+var INBOX_MAX_DAYS = 30;
+var INBOX_DEFAULT_LIMIT = 25;
+var INBOX_MAX_LIMIT = 50;
+var PARALLEL_READS = 8;
+var DAY10 = 864e5;
+function inboxOptions(b) {
+  const days = Math.min(
+    INBOX_MAX_DAYS,
+    Math.max(1, Math.round(num(b.days, INBOX_DEFAULT_DAYS)) || INBOX_DEFAULT_DAYS)
+  );
+  const limit = Math.min(
+    INBOX_MAX_LIMIT,
+    Math.max(1, Math.round(num(b.limit, INBOX_DEFAULT_LIMIT)) || INBOX_DEFAULT_LIMIT)
+  );
+  const channel = b.channel === "email" || b.channel === "linkedin" ? b.channel : "all";
+  const query2 = typeof b.query === "string" ? b.query.replace(/[\r\n]+/g, " ").trim().slice(0, 200) : "";
+  return {
+    channel,
+    days,
+    limit,
+    unreadOnly: b.unreadOnly === true,
+    includeAutomated: b.includeAutomated === true,
+    query: query2
+  };
+}
+function gmailQuery(o) {
+  return [
+    "in:inbox",
+    `newer_than:${o.days}d`,
+    ...o.includeAutomated ? [] : ["-category:promotions", "-category:social", "-category:forums"],
+    ...o.unreadOnly ? ["is:unread"] : [],
+    ...o.query ? [o.query] : []
+  ].join(" ");
+}
+async function pool(items, n, fn) {
+  const out = new Array(items.length);
+  let next = 0;
+  await Promise.all(
+    Array.from({ length: Math.min(n, items.length) }, async () => {
+      while (next < items.length) {
+        const i = next++;
+        out[i] = await fn(items[i]);
+      }
+    })
+  );
+  return out;
+}
+async function peopleByEmail(db2, userId, emails) {
+  const out = /* @__PURE__ */ new Map();
+  if (!emails.length) return out;
+  const rows = await db2.sql`
+    select pi.value_norm, p.id, p.display_name, p.photo_url, p.linkedin_url
+      from orbit.person_identities pi join orbit.people p on p.id = pi.person_id
+     where pi.user_id = ${userId}::uuid and pi.kind = 'email' and pi.value_norm = any(${emails}::text[])
+       and not p.is_self`;
+  for (const r of rows)
+    if (!out.has(r.value_norm))
+      out.set(r.value_norm, {
+        personId: r.id,
+        name: r.display_name,
+        photoUrl: r.photo_url,
+        linkedinUrl: r.linkedin_url
+      });
+  return out;
+}
+async function readEmail(deps, userId, o, self) {
+  if (!deps.gmail) return { items: [], status: "not_connected" };
+  let msgs;
+  try {
+    const page2 = await deps.gmail.list(gmailQuery(o), { maxResults: Math.min(100, o.limit * 2) });
+    const ids = page2.messages ?? [];
+    msgs = (await pool(ids, PARALLEL_READS, (m) => deps.gmail.metadata(m.id).catch(() => void 0))).filter(
+      (m) => !!m
+    );
+  } catch (e) {
+    if (e instanceof NeedsReauth || e?.name === "NeedsReauth")
+      return { items: [], status: "needs_reauth" };
+    return { items: [], status: "error" };
+  }
+  const own = (self.email ?? "").toLowerCase();
+  const parsed = msgs.map((m) => {
+    const h = headerMap(m.payload);
+    const from = parseAddress(h.from ?? "");
+    const labels2 = m.labelIds ?? [];
+    const at = Number(m.internalDate);
+    const when2 = Number.isFinite(at) && at > 0 ? new Date(at) : new Date(h.date ?? "");
+    return {
+      m,
+      from,
+      subject: h.subject ?? null,
+      at: Number.isNaN(when2.getTime()) ? deps.now : when2,
+      unread: labels2.includes("UNREAD"),
+      sentByMe: labels2.includes("SENT") || !!own && from.email === own,
+      automated: !from.email || isAutomatedSender(from.email, h, labels2, from.name) || isAtsSender(from.email)
+    };
+  }).filter((x) => !x.sentByMe && (o.includeAutomated || !x.automated));
+  const byThread = /* @__PURE__ */ new Map();
+  for (const x of parsed) {
+    const t = byThread.get(x.m.threadId);
+    if (!t) byThread.set(x.m.threadId, { row: x, n: 1, unread: x.unread });
+    else {
+      t.n++;
+      t.unread ||= x.unread;
+      if (x.at > t.row.at) t.row = x;
+    }
+  }
+  const threads = [...byThread.entries()];
+  const known = await peopleByEmail(deps.db, userId, [
+    ...new Set(threads.map(([, t]) => t.row.from.email).filter(Boolean))
+  ]);
+  const account = own ? `?authuser=${encodeURIComponent(own)}` : "";
+  const items = threads.map(([threadId, t]) => {
+    const p = known.get(t.row.from.email);
+    return {
+      key: `gmail:${threadId}`,
+      channel: "email",
+      fromName: p?.name ?? t.row.from.name ?? t.row.from.email.split("@")[0] ?? "Someone",
+      fromEmail: t.row.from.email || null,
+      personId: p?.personId ?? null,
+      photoUrl: p?.photoUrl ?? null,
+      linkedinUrl: p?.linkedinUrl ?? null,
+      subject: t.row.subject,
+      snippet: decodeEntities(t.row.m.snippet ?? "").slice(0, 220),
+      receivedAt: t.row.at.toISOString(),
+      count: t.n,
+      unread: t.unread,
+      automated: t.row.automated || void 0,
+      href: `https://mail.google.com/mail/${account}#inbox/${threadId}`
+    };
+  });
+  return { items, status: "ok" };
+}
+function decodeEntities(s) {
+  return s.replace(/&#39;/g, "'").replace(/&quot;/g, '"').replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&amp;/g, "&").replace(/\s+/g, " ").trim();
+}
+async function readLinkedIn(deps, userId, o) {
+  const [acct] = await deps.db.sql`
+    select status, last_synced_at from orbit.integration_accounts
+     where user_id = ${userId}::uuid and provider = 'linkedin' and external_account_id is not null`;
+  if (acct?.status !== "active") return { items: [], status: "not_connected", syncedAt: null };
+  const since2 = new Date(deps.now.getTime() - o.days * DAY10);
+  const like = o.query ? `%${o.query.replace(/[%_\\]/g, (c) => `\\${c}`)}%` : null;
+  const rows = await deps.db.sql`
+    select * from (
+      select m.thread_id, m.sent_at, m.snippet, m.body_text, p.id as person_id, p.display_name, p.photo_url,
+             p.linkedin_url,
+             row_number() over (partition by m.thread_id order by m.sent_at desc) as rn,
+             (count(*) over (partition by m.thread_id))::int as n,
+             exists (select 1 from orbit.messages o where o.thread_id = m.thread_id and o.user_id = m.user_id
+                        and o.direction = 'out' and o.sent_at < m.sent_at) as wrote
+        from orbit.messages m
+        left join orbit.people p on p.id = m.from_person_id
+       where m.user_id = ${userId}::uuid and m.provider = 'linkedin' and m.direction = 'in'
+         and m.sent_at >= ${since2}::timestamptz
+         and (${like}::text is null or m.body_text ilike ${like} or m.snippet ilike ${like}
+              or p.display_name ilike ${like})
+    ) x
+    where rn = 1
+    order by sent_at desc
+    limit ${o.limit}`;
+  const items = rows.map(
+    (r) => ({
+      key: `linkedin:${r.thread_id}`,
+      channel: "linkedin",
+      fromName: r.display_name ?? "Someone on LinkedIn",
+      personId: r.person_id,
+      photoUrl: r.photo_url,
+      linkedinUrl: r.linkedin_url,
+      snippet: (r.snippet ?? r.body_text ?? "").replace(/\s+/g, " ").trim().slice(0, 220),
+      receivedAt: iso(r.sent_at),
+      count: num(r.n) || 1,
+      replyToYou: r.wrote,
+      href: r.person_id ? `/people/${r.person_id}` : "https://www.linkedin.com/messaging/"
+    })
+  );
+  return { items, status: "ok", syncedAt: iso(acct.last_synced_at) };
+}
+async function listInbox(deps, userId, body2) {
+  const o = inboxOptions(body2);
+  const [u2] = await deps.db.sql`select email from orbit.users where id = ${userId}::uuid`;
+  const [email, linkedin] = await Promise.all([
+    o.channel === "linkedin" ? Promise.resolve({ items: [], status: "skipped" }) : readEmail(deps, userId, o, { email: u2?.email ?? null }),
+    o.channel === "email" ? Promise.resolve({ items: [], status: "skipped", syncedAt: null }) : readLinkedIn(deps, userId, o)
+  ]);
+  const items = [...email.items, ...linkedin.items].sort((a, b) => b.receivedAt.localeCompare(a.receivedAt)).slice(0, o.limit);
+  return { items, email: email.status, linkedin: linkedin.status, linkedinSyncedAt: linkedin.syncedAt };
+}
+
+// supabase/functions/orbit-api/routes/inbox.ts
+async function list4(ctx) {
+  const b = await body(ctx, true);
+  const userId = ctx.userId;
+  const [g] = await ctx.db.sql`
+    select status, scopes from orbit.integration_accounts where user_id = ${userId}::uuid and provider = 'google'`;
+  const canRead = g?.status === "active" && (g.scopes ?? []).some((s) => s.endsWith("gmail.readonly"));
+  let gmail;
+  if (canRead) {
+    const s = ctx.services();
+    if (s.tokens) gmail = gmailApi(googleClient({ tokens: s.tokens, db: ctx.db, fetch: s.fetch }), userId);
+  }
+  const out = await listInbox({ db: ctx.db, gmail, now: ctx.now() }, userId, b);
+  if (g?.status === "needs_reauth") out.email = "needs_reauth";
+  return json(200, out);
+}
+var inboxRoutes = {
+  "/inbox/list": { method: "POST", auth: true, run: list4 }
+};
+
 // supabase/functions/_shared/accountToken.ts
 async function accountToken(accountId, signingKey) {
   const key = await crypto.subtle.importKey(
@@ -15168,7 +15790,7 @@ async function add2(ctx) {
   );
   return json(200, r);
 }
-async function list4(ctx) {
+async function list5(ctx) {
   const b = await body(ctx, true);
   return json(200, { memories: await listMemories(ctx.db, ctx.userId, optUuid(b, "personId")) });
 }
@@ -15232,7 +15854,7 @@ async function extract(ctx) {
 var memoryRoutes = {
   "/memory/search": { method: "POST", auth: true, run: search },
   "/memory/add": { method: "POST", auth: true, run: add2 },
-  "/memory/list": { method: "POST", auth: true, run: list4 },
+  "/memory/list": { method: "POST", auth: true, run: list5 },
   "/memory/forget": { method: "POST", auth: true, run: forget },
   "/memory/extract": { method: "POST", auth: true, run: extract }
 };
@@ -15385,7 +16007,7 @@ var pathRoutes = {
 };
 
 // supabase/functions/orbit-api/routes/replies.ts
-async function list5(ctx) {
+async function list6(ctx) {
   return json(200, { replies: await listReplies(ctx.db, ctx.userId, ctx.now()) });
 }
 async function draft(ctx) {
@@ -15403,7 +16025,7 @@ async function answer(ctx) {
   return json(200, { draft: toServerDraft(r.draft) });
 }
 var replyRoutes = {
-  "/replies/list": { method: "POST", auth: true, run: list5 },
+  "/replies/list": { method: "POST", auth: true, run: list6 },
   "/replies/draft": { method: "POST", auth: true, run: draft },
   "/replies/answer": { method: "POST", auth: true, run: answer }
 };
@@ -16645,13 +17267,13 @@ async function runFacetLookup(db2, deps, userId, accountId, kind, value, now) {
       complete: true,
       cached: true
     };
-  const fail = (reason) => ({
+  const fail = (reason2) => ({
     ok: false,
     kind,
     value,
     personIds: [],
     complete: false,
-    reason
+    reason: reason2
   });
   const id = await parameterId(deps, accountId, kind, value);
   if (!id) return fail("unknown");
@@ -17504,7 +18126,7 @@ async function lookup(ctx) {
     throw badRequest("value names it");
   const kind = b.kind;
   const value = b.value.trim();
-  const off = (reason) => json(200, { ok: false, kind, value, personIds: [], complete: false, reason });
+  const off = (reason2) => json(200, { ok: false, kind, value, personIds: [], complete: false, reason: reason2 });
   if (!ctx.env.unipileKey || !ctx.env.unipileBase) return off("unconfigured");
   const acct = await loadAccount(ctx.db, ctx.userId, "linkedin");
   if (!acct?.externalAccountId || acct.status !== "active") return off("not_connected");
@@ -17571,7 +18193,7 @@ async function read(ctx) {
   const b = await body(ctx);
   if (!Array.isArray(b.personIds) || !b.personIds.length || b.personIds.length > ASK_MAX || !b.personIds.every((x) => typeof x === "string" && isUuid(x)))
     throw badRequest(`personIds is a list of up to ${ASK_MAX} person ids`);
-  const off = (reason) => json(200, { ok: false, read: [], reason });
+  const off = (reason2) => json(200, { ok: false, read: [], reason: reason2 });
   if (!ctx.env.unipileKey || !ctx.env.unipileBase) return off("unconfigured");
   const acct = await loadAccount(ctx.db, ctx.userId, "linkedin");
   if (!acct?.externalAccountId || acct.status !== "active") return off("not_connected");
@@ -17964,7 +18586,7 @@ var ENTITIES = {
   ndash: "–",
   hellip: "…"
 };
-function decodeEntities(s) {
+function decodeEntities2(s) {
   return s.replace(/&#(\d+);/g, (_, n) => String.fromCodePoint(Number(n))).replace(/&#x([0-9a-f]+);/gi, (_, n) => String.fromCodePoint(Number.parseInt(n, 16))).replace(/&([a-z]+);/gi, (m, n) => ENTITIES[n.toLowerCase()] ?? m);
 }
 function meta(html, key) {
@@ -17974,15 +18596,15 @@ function meta(html, key) {
   );
   const m = re.exec(html);
   const v = m?.[1] ?? m?.[2];
-  return v ? decodeEntities(v).trim() : void 0;
+  return v ? decodeEntities2(v).trim() : void 0;
 }
 function htmlToText(html) {
-  const title = decodeEntities(/<title[^>]*>([\s\S]*?)<\/title>/i.exec(html)?.[1] ?? "").trim() || void 0;
+  const title = decodeEntities2(/<title[^>]*>([\s\S]*?)<\/title>/i.exec(html)?.[1] ?? "").trim() || void 0;
   const description = meta(html, "og:description") ?? meta(html, "description");
   const ogTitle = meta(html, "og:title");
   const published = meta(html, "article:published_time") ?? meta(html, "og:published_time");
   const body2 = html.replace(/<!--[\s\S]*?-->/g, " ").replace(/<(script|style|noscript|svg|template|iframe|head|nav|footer|form)\b[\s\S]*?<\/\1>/gi, " ").replace(/<br\s*\/?>/gi, "\n").replace(/<\/(p|div|li|h[1-6]|tr|section|article|header|blockquote|dd|dt)>/gi, "\n").replace(/<[^>]+>/g, " ");
-  const text3 = decodeEntities(body2).split("\n").map((l) => l.replace(/[ \t\f\v ]+/g, " ").trim()).filter((l) => l.length > 1).join("\n").replace(/\n{3,}/g, "\n\n");
+  const text3 = decodeEntities2(body2).split("\n").map((l) => l.replace(/[ \t\f\v ]+/g, " ").trim()).filter((l) => l.length > 1).join("\n").replace(/\n{3,}/g, "\n\n");
   const head = [ogTitle && ogTitle !== title ? ogTitle : "", description ?? ""].filter(Boolean).join("\n");
   return { title: title ?? ogTitle, text: [head, text3].filter(Boolean).join("\n\n"), published };
 }
@@ -18035,7 +18657,7 @@ function profileLinks(html, base) {
   for (const m of html.matchAll(/href=["']([^"'#]+)["']/gi)) {
     let u2;
     try {
-      u2 = new URL(decodeEntities(m[1]), base).toString();
+      u2 = new URL(decodeEntities2(m[1]), base).toString();
     } catch {
       continue;
     }
@@ -18943,14 +19565,14 @@ function patternOf(local, f2, l) {
   return Object.entries(PATTERNS).find(([, make]) => make(f2, l) === lp)?.[0];
 }
 var ROLE_LOCAL = /^(info|hello|hi|team|founders?|support|admin|contact|office|admissions|housing|careers|jobs|hr|sales|press|media|noreply|no-reply|help|events|marketing|billing|accounts?|ops|legal|security|partners?|investors?|community|reshall|mailroom)\b/;
-var ROLE_NAME = /\b(team|founders|office|services|housing|support|admissions|corps|mailroom|invitational|department|committee|club|association|council|center|centre|newsletter|notifications?)\b/i;
+var ROLE_NAME2 = /\b(team|founders|office|services|housing|support|admissions|corps|mailroom|invitational|department|committee|club|association|council|center|centre|newsletter|notifications?)\b/i;
 function domainPattern(known, domain) {
   const counts = /* @__PURE__ */ new Map();
   let people = 0;
   let ids = 0;
   for (const k of known) {
     const [local, d] = k.email.toLowerCase().split("@");
-    if (!local || d !== domain || ROLE_LOCAL.test(local) || ROLE_NAME.test(k.name)) continue;
+    if (!local || d !== domain || ROLE_LOCAL.test(local) || ROLE_NAME2.test(k.name)) continue;
     const n = nameParts(k.name);
     if (!n) continue;
     people++;
@@ -19346,7 +19968,7 @@ function isAcademic(ask3) {
 function webQueries(ask3) {
   const faculty = !!ask3.role && ACADEMIC_ROLE2.test(ask3.role);
   const who = faculty ? "faculty" : ask3.role ?? "team";
-  const qs = ask3.broad ? [
+  const qs2 = ask3.broad ? [
     { id: "directory", query: `${ask3.subject} ${who} directory email` },
     { id: "people", query: `${ask3.subject} ${who} list contact` },
     faculty || !ask3.role ? { id: "labs", query: `${ask3.subject} lab research group people` } : { id: "team", query: `${ask3.subject} companies team page ${who}` }
@@ -19362,7 +19984,7 @@ function webQueries(ask3) {
     { id: "people", query: `${ask3.place} ${ask3.subject} people email` }
   ];
   const seen = /* @__PURE__ */ new Set();
-  return qs.filter((q) => {
+  return qs2.filter((q) => {
     const k = q.query.toLowerCase().replace(/\s+/g, " ");
     if (seen.has(k)) return false;
     seen.add(k);
@@ -19446,8 +20068,8 @@ function pageAnchors(html, base) {
   for (let n = 0; n < 3e3; n++) {
     const m = re.exec(html);
     if (!m) break;
-    const text3 = decodeEntities(m[2].replace(/<[^>]+>/g, " ")).replace(/\s+/g, " ").trim();
-    let href = decodeEntities(m[1].trim());
+    const text3 = decodeEntities2(m[2].replace(/<[^>]+>/g, " ")).replace(/\s+/g, " ").trim();
+    let href = decodeEntities2(m[1].trim());
     if (/^javascript:/i.test(href)) continue;
     if (!/^mailto:/i.test(href)) {
       try {
@@ -20812,7 +21434,7 @@ async function warmContext(db2, userId, u2, homeCity, graph) {
 }
 
 // supabase/functions/orbit-api/routes/source.ts
-var list6 = (v, key) => {
+var list7 = (v, key) => {
   if (v === void 0) return void 0;
   if (!Array.isArray(v) || v.length > 25 || !v.every((x) => typeof x === "string" && x.length <= 200))
     throw badRequest(`filters.${key} must be a list of short strings`);
@@ -20830,12 +21452,12 @@ async function search2(ctx) {
     query: typeof b.query === "string" ? b.query : void 0,
     homeCity: typeof b.homeCity === "string" && b.homeCity.length <= 80 ? b.homeCity : void 0,
     filters: {
-      organizations: list6(f2.organizations, "organizations"),
-      titles: list6(f2.titles, "titles"),
-      locations: list6(f2.locations, "locations"),
-      schools: list6(f2.schools, "schools"),
-      seniority: list6(f2.seniority, "seniority"),
-      keywords: list6(f2.keywords, "keywords")
+      organizations: list7(f2.organizations, "organizations"),
+      titles: list7(f2.titles, "titles"),
+      locations: list7(f2.locations, "locations"),
+      schools: list7(f2.schools, "schools"),
+      seniority: list7(f2.seniority, "seniority"),
+      keywords: list7(f2.keywords, "keywords")
     },
     limit: typeof b.limit === "number" ? b.limit : void 0
   };
@@ -21463,6 +22085,7 @@ var ROUTES = {
   ...pathRoutes,
   ...draftRoutes,
   ...replyRoutes,
+  ...inboxRoutes,
   ...calendarRoutes,
   ...searchRoutes,
   ...memoryRoutes,

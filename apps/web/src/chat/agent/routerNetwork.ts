@@ -1,6 +1,7 @@
 import type { GoalKind } from '@orbit/core';
 import type { MatchablePerson } from './people-match';
 import type { RouterIntent } from './router';
+import { inboxAsk } from './routerInbox';
 
 /**
  * The no-key router's phrases for the networking agent's tools (plan 16): goals, the tie score, research, finding
@@ -380,6 +381,13 @@ export function routeNetwork(text: string, lower: string, h: NetworkHelpers): Ro
         undefined,
         'answer an ask',
       );
+  }
+
+  // ---- the whole inbox: every email and LinkedIn message, not only replies to outreach ----
+  // (without an account the tool says in words that reading the inbox needs one)
+  {
+    const ask = inboxAsk(lower);
+    if (ask) return h.viaTool('list_inbox', { ...ask }, undefined, 'read your inbox');
   }
 
   // ---- replies and booking (account mode; without one, the older phrases keep their meaning) ----

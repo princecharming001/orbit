@@ -62,6 +62,7 @@ import {
   wrapped,
 } from './_shared';
 import { createDrafts } from './drafts';
+import { repliesEnvelope } from './inbox';
 import { routesToMany } from './read';
 
 const KINDS = GOAL_KINDS as unknown as [GoalKind, ...GoalKind[]];
@@ -947,7 +948,7 @@ export const listRepliesTool = defineTool({
   name: 'list_replies',
   kind: 'read',
   description:
-    'Call this when the student asks who replied, what people said back, or which replies need an answer. Lists replies to their outreach from the last 30 days, newest first, each with what it means (interested, picking a time, a question, a referral, not now, declined and so on). Needs an Orbit account.',
+    'Call this when the student asks who replied to their outreach, what people said back, or which replies need an answer. Lists replies in conversations the student started, from the last 30 days, one row a person, newest first, each with what it means (interested, picking a time, a question, a referral, not now, declined and so on). For the whole inbox (any email or LinkedIn message, "list my recent emails") use list_inbox instead. Needs an Orbit account.',
   input: z.object({
     replyClass: z.enum(REPLY_KINDS).optional().describe('Only replies of this kind.'),
   }),
@@ -957,31 +958,9 @@ export const listRepliesTool = defineTool({
     if (!accountReady(ctx)) return needsAccount('Reading replies');
     const r = await listReplies(ctx.user);
     if (!r.ok) throw new Error(r.message);
-    const rows = (
-      input.replyClass ? r.replies.filter((x) => x.replyClass === input.replyClass) : r.replies
-    ).slice(0, 15);
-    return list(
-      'Replies',
-      rows.map((x) => ({
-        text: x.personName,
-        chip: REPLY_CLASS_LABELS[x.replyClass],
-        sub: clip(x.snippet, 140),
-        href: x.personId ? `/people/${x.personId}` : '/inbox?tab=replies',
-      })),
-      {
-        replies: rows.map((x) => ({
-          messageId: x.messageId,
-          personId: x.personId,
-          person: wrapped(ctx, 'reply', x.personName, 80),
-          channel: x.channel,
-          kind: x.replyClass,
-          snippet: wrapped(ctx, 'reply', x.snippet, 300),
-          draftId: x.draftId,
-          received: x.receivedAt.slice(0, 10),
-        })),
-      },
-      rows.length ? `${plural(rows.length, 'reply', 'replies')}.` : 'No replies in the last 30 days.',
-      '/inbox?tab=replies',
+    return repliesEnvelope(
+      ctx,
+      input.replyClass ? r.replies.filter((x) => x.replyClass === input.replyClass) : r.replies,
     );
   },
   toModel,

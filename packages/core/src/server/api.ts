@@ -324,6 +324,11 @@ export interface ReplyItem {
   threadId: string;
   personId: string | null;
   personName: string;
+  /** their face and LinkedIn page, when Orbit has them */
+  photoUrl?: string | null;
+  linkedinUrl?: string | null;
+  /** messages they sent in this conversation in the window (the row is the latest one) */
+  count?: number;
   /** the sender's company, when Orbit knows it (plan 29: the breaker names it) */
   company?: string | null;
   channel: ApiChannel;
@@ -343,6 +348,50 @@ export interface ReplyItem {
 /** POST /replies/list: inbound replies to the student's outreach, newest first, last 30 days */
 export interface RepliesListResponse {
   replies: ReplyItem[];
+}
+/** One conversation in the student's inbox: its newest message from someone else, Gmail or LinkedIn. */
+export interface InboxItem {
+  /** gmail:<thread id> or linkedin:<thread row id> */
+  key: string;
+  channel: 'email' | 'linkedin';
+  fromName: string;
+  fromEmail?: string | null;
+  personId?: string | null;
+  photoUrl?: string | null;
+  linkedinUrl?: string | null;
+  subject?: string | null;
+  snippet: string;
+  receivedAt: string;
+  /** messages from them in the window, this one included */
+  count: number;
+  unread?: boolean;
+  /** a newsletter, receipt or notification (List-Unsubscribe, bulk precedence, no-reply sender) */
+  automated?: boolean;
+  /** the student wrote in this conversation before (a reply to them), as against a message out of the blue */
+  replyToYou?: boolean;
+  /** where to read it: the Gmail thread, or the person in Orbit */
+  href: string;
+}
+/** POST /inbox/list: the whole inbox, newest first; email read live from Gmail, LinkedIn from what Orbit synced */
+export interface InboxListRequest {
+  channel?: 'all' | 'email' | 'linkedin';
+  /** how far back, in days (default 7, at most 30) */
+  days?: number;
+  /** at most this many conversations (default 25, at most 50) */
+  limit?: number;
+  unreadOnly?: boolean;
+  /** words to look for (Gmail search syntax works for email) */
+  query?: string;
+  /** keep newsletters and notifications (default: left out) */
+  includeAutomated?: boolean;
+}
+export interface InboxListResponse {
+  items: InboxItem[];
+  /** what each side could read: ok, not connected, Google wants a new sign-in, or it failed this time */
+  email: 'ok' | 'not_connected' | 'needs_reauth' | 'error' | 'skipped';
+  linkedin: 'ok' | 'not_connected' | 'skipped';
+  /** when LinkedIn was last synced */
+  linkedinSyncedAt?: string | null;
 }
 /** POST /replies/draft */
 export interface ReplyDraftRequest {

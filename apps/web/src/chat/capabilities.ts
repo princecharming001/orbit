@@ -1829,6 +1829,13 @@ export const CAPABILITIES: readonly Capability[] = [
     utterances: ['who replied', 'any replies I need to answer', 'show the replies picking a time'],
   },
   {
+    id: 'inbox_list',
+    area: 'Networking agent',
+    title: 'Read the whole inbox: every email and LinkedIn message',
+    kind: 'read',
+    utterances: ['list my recent emails', 'any new LinkedIn messages', 'who messaged me today'],
+  },
+  {
     id: 'replies_draft',
     area: 'Networking agent',
     title: 'Draft an answer to a reply in your voice',

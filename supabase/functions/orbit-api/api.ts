@@ -36,6 +36,7 @@ import { draftRoutes } from './routes/drafts.ts';
 import { friendPatternRoute, friendRoutes } from './routes/friends.ts';
 import { goalRoutes } from './routes/goals.ts';
 import { historyRoutes } from './routes/history.ts';
+import { inboxRoutes } from './routes/inbox.ts';
 import { INTEGRATION_ROUTES } from './routes/integrations.ts';
 import { memoryRoutes } from './routes/memory.ts';
 import { pathRoutes } from './routes/paths.ts';
@@ -158,6 +159,7 @@ const ROUTES: Record<string, Route> = {
   ...pathRoutes,
   ...draftRoutes,
   ...replyRoutes,
+  ...inboxRoutes,
   ...calendarRoutes,
   ...searchRoutes,
   ...memoryRoutes,

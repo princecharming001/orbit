@@ -662,7 +662,7 @@ describe('sending (§8.5, §14.6, §16)', () => {
 });
 
 describe('replies (§8)', () => {
-  it('lists classified inbound replies of the last 30 days, newest first, with the draft that answers them', async () => {
+  it('lists replies of the last 30 days to the student’s own outreach, one row a conversation, with the draft answering it', async () => {
     const call = api(t, fakeNet(), { env: {} });
     const { userId, token } = await signedInUser(t);
     const maya = await addPerson(t, userId, { name: 'Maya Chen', email: 'maya@example.com' });
@@ -678,6 +678,16 @@ describe('replies (§8)', () => {
       { direction: 'in', at: iso(2 * DAY), body: 'Not classified yet' },
       { direction: 'in', at: iso(DAY), body: 'Happy to chat, what times work?', replyClass: 'interested' },
     ]);
+    // a cold pitch: the student never wrote to them, so it is inbox mail, not a reply
+    const pitch = await addPerson(t, userId, { name: 'Rob Pitch', email: 'rob@example.com' });
+    await addThread(t, userId, pitch, [
+      {
+        direction: 'in',
+        at: iso(DAY),
+        body: 'Curious what you are building, need help?',
+        replyClass: 'question',
+      },
+    ]);
     const r = await call<{
       replies: {
         messageId: string;
@@ -685,13 +695,15 @@ describe('replies (§8)', () => {
         personName: string;
         draftId: string | null;
         snippet: string;
+        count: number;
       }[];
     }>('/replies/list', token);
-    expect(r.body.replies.map((x) => x.replyClass)).toEqual(['interested', 'question']);
+    expect(r.body.replies.map((x) => x.replyClass)).toEqual(['interested']);
     expect(r.body.replies[0]).toMatchObject({
       personName: 'Maya Chen',
       draftId: null,
       snippet: 'Happy to chat, what times work?',
+      count: 2,
     });
     const d = await call<{ draft: { id: string } }>('/replies/draft', token, { messageId: th.messageIds[4] });
     const again = await call<{ replies: { draftId: string | null }[] }>('/replies/list', token);
@@ -815,10 +827,8 @@ describe('replies (§8)', () => {
       config: cfg,
       now: () => at,
     });
-    expect(cold).toMatchObject({
-      action: 'drafted',
-      reasons: expect.arrayContaining(['not a reply in a two-way thread']),
-    });
+    // they wrote first (a cold message): nothing is drafted, it is inbox mail
+    expect(cold).toEqual({ action: 'none', reason: 'not_their_outreach' });
     const li = await maybeAutoReply(t.db, userId, await two('linkedin', 'America/New_York'), {
       config: cfg,
       now: () => at,
@@ -851,7 +861,7 @@ describe('replies (§8)', () => {
     );
   });
 
-  it('classify.message leads to the reply: level 2 approves and queues a scheduling answer, level 0 only drafts', async () => {
+  it('classify.message leads to the reply: level 2 approves and queues a scheduling answer, level 0 drafts nothing', async () => {
     const claude = anthropic(() => CONFIRM_REPLY);
     const net = fakeNet(claude.answer, google());
     const cfg = agentConfig(net);
@@ -917,16 +927,16 @@ describe('replies (§8)', () => {
     await runTick({ db: t.db, handlers, now: () => at });
     expect(sends(net)).toHaveLength(1);
 
+    // autopilot off: drafts are the student's choice, so nothing is drafted until they tap Draft reply
     const manual = await scheduling(0);
-    expect(manual.drafts).toEqual([{ id: expect.any(String), status: 'draft', kind: 'reply' }]);
+    expect(manual.drafts).toEqual([]);
     expect(manual.queued).toEqual([]);
-    // classified again (a retried job): still one draft
     const [msg] = await t.db.sql<{ id: string }>`
       select id from orbit.messages where user_id = ${manual.userId}::uuid and direction = 'in'`;
     await classify(manual.userId, msg!.id);
     const [n] = await t.db.sql<{ n: number }>`
       select count(*)::int as n from orbit.drafts where user_id = ${manual.userId}::uuid`;
-    expect(n!.n).toBe(1);
+    expect(n!.n).toBe(0);
   });
 
   it('a reply read from the history is listed but not drafted; an unsubscribe there still counts', async () => {
@@ -974,6 +984,8 @@ describe('replies (§8)', () => {
     const net = fakeNet(google());
     const cfg = agentConfig(net, {});
     const { userId } = await signedInUser(t);
+    // assist is on: Orbit drafts answers on its own (with it off, nothing is drafted until asked)
+    await t.db.sql`update orbit.users set autonomy_level = 1 where id = ${userId}::uuid`;
     const twoReplies = async (name: string) => {
       const p = await addPerson(t, userId, {
         name,

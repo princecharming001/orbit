@@ -39,6 +39,8 @@ export type ResultKind =
   /** a titled list of rows (goals, a score's reasons, research, search results, replies, memories): data
    * `{ title, items: { text, sub?, chip?, href?, links?: { label, url }[] }[] }` */
   | 'list'
+  /** conversations in the people-card look (the inbox, the replies): data `{ title, sub?, rows: MessageRow[] }` */
+  | 'messages'
   | 'needs_confirmation'
   | 'error';
 

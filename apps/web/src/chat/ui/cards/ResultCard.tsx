@@ -24,6 +24,7 @@ import type { ResultEnvelope } from '../../types';
 import { Markdown } from '../Markdown';
 import type { ToolBlock } from '../threadStore';
 import { Choices } from './Choices';
+import { MessagesCard, readMessages } from './MessagesCard';
 import { addPicked, askForIntro, type Picked, writeTo } from './next';
 import { FoundPeopleCard, isPeopleList, KnownPeopleCard } from './PeopleCards';
 import { PeopleTableCard, readTable } from './PeopleTable';
@@ -155,6 +156,8 @@ function Envelope({ env, block, actions }: { env: ResultEnvelope; block: ToolBlo
       return <PrepCard env={env} />;
     case 'plan':
       return <PlanResult env={env} />;
+    case 'messages':
+      return readMessages(d) ? <MessagesCard env={env} send={actions.send} /> : <Summary env={env} />;
     case 'list':
       return <ListCard env={env} block={block} actions={actions} />;
     case 'needs_confirmation':

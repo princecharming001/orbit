@@ -14,6 +14,7 @@ import { connectorTools } from './tools/connectors';
 import { draftTools } from './tools/drafts';
 import { friendTools } from './tools/friends';
 import { goalFirstTools } from './tools/goalFirst';
+import { inboxTools } from './tools/inbox';
 import { networkTools } from './tools/network';
 import { noteTools } from './tools/notes';
 import { peopleTools } from './tools/people';
@@ -38,6 +39,7 @@ const all: AnyTool[] = [
   ...connectorTools,
   ...widgetTools,
   ...networkTools,
+  ...inboxTools,
   ...goalFirstTools,
   ...friendTools,
   ...autopilotTools,

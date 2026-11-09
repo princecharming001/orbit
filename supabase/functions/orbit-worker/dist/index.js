@@ -16093,6 +16093,19 @@ async function draftReply(s, userId, messageId, actor = "user") {
     actor
   });
 }
+async function draftsOnItsOwn(db2, userId, m) {
+  const [r] = await db2.sql`
+    select exists (
+             select 1 from orbit.messages o
+              where o.thread_id = ${m.thread_id}::uuid and o.user_id = ${userId}::uuid and o.direction = 'out'
+                and o.sent_at < ${new Date(m.sent_at)}::timestamptz) as wrote,
+           (select autonomy_level from orbit.users where id = ${userId}::uuid)::int as level,
+           (select g.autonomy_level from orbit.drafts d join orbit.goals g on g.id = d.goal_id
+             where d.user_id = ${userId}::uuid and d.person_id = ${m.from_person_id}::uuid and d.status = 'sent'
+             order by d.sent_at desc nulls last limit 1)::int as goal_level`;
+  const level = Math.max(num2(r?.level), num2(r?.goal_level));
+  return { theirOutreach: !!r?.wrote, autopilot: level >= 1 };
+}
 var DRAFT_CLASSES = new Set(
   Object.keys(REPLY_NEXT_ACTION).filter((c) => REPLY_NEXT_ACTION[c].drafts)
 );
@@ -16110,6 +16123,8 @@ async function maybeAutoReply(db2, userId, messageId, deps = {}) {
   }
   if (!m.from_person_id) return { action: "none", reason: "unknown_sender" };
   if (deps.history) return { action: "none", reason: "history" };
+  const own = await draftsOnItsOwn(db2, userId, m);
+  if (!own.theirOutreach) return { action: "none", reason: "not_their_outreach" };
   if (step.action === "needs_you") {
     const [full] = await db2.sql`
       select body_text, snippet, extraction, answer from orbit.messages where id = ${m.id}::uuid`;
@@ -16126,6 +16141,7 @@ async function maybeAutoReply(db2, userId, messageId, deps = {}) {
     return { action: "needs_you", suggestionId: id };
   }
   if (!step.drafts) return { action: "none", reason: `class ${cls}` };
+  if (!own.autopilot) return { action: "none", reason: "autopilot_off" };
   const [existing] = await db2.sql`
     select * from orbit.drafts
      where user_id = ${userId}::uuid and ask->>'replyToMessageId' = ${m.id}

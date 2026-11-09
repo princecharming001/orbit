@@ -100,6 +100,16 @@ const HANDLED: [string, string, Record<string, unknown>][] = [
   ['who wants to meet', 'list_replies', { replyClass: 'scheduling' }],
   ["answer Maya's question", 'list_replies', {}],
   ['book the call', 'list_replies', { replyClass: 'scheduling' }],
+  // the whole inbox
+  ['list my recent emails', 'list_inbox', { channel: 'email' }],
+  ['fetch my emails', 'list_inbox', { channel: 'email' }],
+  ['any new emails?', 'list_inbox', { channel: 'email' }],
+  ['show me my linkedin messages from today', 'list_inbox', { channel: 'linkedin', days: 1 }],
+  ['check my inbox', 'list_inbox', {}],
+  ['who messaged me on linkedin', 'list_inbox', { channel: 'linkedin' }],
+  ['who emailed me in the last 3 days', 'list_inbox', { channel: 'email', days: 3 }],
+  ['do i have unread mail', 'list_inbox', { channel: 'email', unreadOnly: true }],
+  ['my latest messages', 'list_inbox', {}],
   // autonomy
   ['draft only', 'set_autonomy', { level: 0 }],
   ['send after I approve', 'set_autonomy', { level: 1 }],

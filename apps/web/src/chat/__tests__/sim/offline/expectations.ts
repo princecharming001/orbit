@@ -200,6 +200,7 @@ export const CAP_EXPECT: Record<string, Expect> = Object.fromEntries([
   also('source_add', ['add_sourced'], ANSWER),
   also('intro_ask', ['ask_for_intro', 'create_draft', 'find_routes']),
   also('replies_list', ['list_replies', 'list_pipeline']),
+  also('inbox_list', ['list_inbox', 'list_pipeline']),
   also('replies_draft', ['draft_reply', 'create_draft', 'list_replies', 'list_pipeline']),
   also('calendar_book', ['book_call', 'schedule_chat', 'list_replies']),
   also('cadence_due', ['list_due', 'list_pipeline']),

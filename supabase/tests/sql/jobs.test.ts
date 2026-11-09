@@ -114,6 +114,31 @@ describe('orbit.enqueue_incremental_syncs and enqueue_nightly', () => {
     expect(again!.n).toBe(0);
   });
 
+  it('polls connected LinkedIn accounts of recently seen students not synced in 10 minutes', async () => {
+    await t.pg.exec('delete from pgmq.q_orbit_sync;');
+    const stale = await makeUser(t.db);
+    const fresh = await makeUser(t.db);
+    const idle = await makeUser(t.db);
+    const unlinked = await makeUser(t.db);
+    await t.db.sql`update orbit.users set last_seen_at = now()
+      where id in (${stale}::uuid, ${fresh}::uuid, ${unlinked}::uuid)`;
+    await t.db.sql`update orbit.users set last_seen_at = now() - interval '30 days' where id = ${idle}::uuid`;
+    await t.db
+      .sql`insert into orbit.integration_accounts (user_id, provider, external_account_id, last_synced_at)
+      values (${stale}::uuid, 'linkedin', 'acc-stale', now() - interval '1 hour'),
+             (${fresh}::uuid, 'linkedin', 'acc-fresh', now()),
+             (${idle}::uuid, 'linkedin', 'acc-idle', null),
+             (${unlinked}::uuid, 'linkedin', null, null)`;
+    await t.db.sql`select orbit.enqueue_incremental_syncs()`;
+    const msgs = (await queued('orbit_sync')).map((r) => r.message);
+    const li = msgs.filter((m) => m.kind === 'sync.linkedin');
+    expect(li.map((m) => m.userId)).toEqual([stale]);
+    expect(li[0]!.dedupeKey).toMatch(new RegExp(`^linkedin-poll:${stale}:`));
+    expect((li[0] as unknown as { payload: { mode: string } }).payload.mode).toBe('sync');
+    const [again] = await t.db.sql<{ n: number }>`select orbit.enqueue_incremental_syncs() as n`;
+    expect(again!.n).toBe(0);
+  });
+
   it('nightly queues a score for every user and renewals for connected ones, once a day', async () => {
     await t.pg.exec('delete from pgmq.q_orbit_score; delete from pgmq.q_orbit_sync;');
     const u = await makeUser(t.db);

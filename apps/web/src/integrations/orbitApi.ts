@@ -58,6 +58,8 @@ import type {
   GoalUpsertResponse,
   GoogleSyncRequest,
   IdRequest,
+  InboxListRequest,
+  InboxListResponse,
   IntroAskRequest,
   IntroAskResponse,
   LinkedinConnectStartResponse,
@@ -241,6 +243,7 @@ export interface ApiRoutes {
   '/drafts/cancel': [DraftIdRequest, DraftResponse];
   '/drafts/discard': [DraftIdRequest, DraftResponse];
   '/replies/list': [Record<string, never>, RepliesListResponse];
+  '/inbox/list': [InboxListRequest, InboxListResponse];
   '/replies/draft': [ReplyDraftRequest, DraftResponse];
   '/replies/answer': [ReplyAnswerRequest, ReplyAnswerResponse];
   '/autopilot/mode': [AutopilotModeRequest, AutopilotModeResponse];

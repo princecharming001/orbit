@@ -217,6 +217,7 @@ describe('local mode', () => {
       ['find_people', { purpose: 'sales' }],
       ['add_sourced', { recommendationIds: ['r1'] }],
       ['list_replies', {}],
+      ['list_inbox', {}],
       ['draft_reply', { messageId: 'm1' }],
       ['pause_outreach', { until: '2026-12-20' }],
       ['list_due', {}],
@@ -420,6 +421,48 @@ describe('account mode, against a fake orbit-api', () => {
     expect(env.summary).toMatch(/No warm route to Priya Shah/);
   });
 
+  it('list_inbox: email and LinkedIn in one card, one row a person, with faces, and says what it could not read', async () => {
+    const item = (key: string, name: string, channel: 'email' | 'linkedin', minsAgo: number, extra = {}) => ({
+      key,
+      channel,
+      fromName: name,
+      personId: name === 'Priya Shah' ? P1 : null,
+      photoUrl: name === 'Priya Shah' ? 'https://img.test/p.jpg' : null,
+      snippet: `From ${name}`,
+      receivedAt: new Date(Date.now() - minsAgo * 60_000).toISOString(),
+      count: 1,
+      href: `https://mail.google.com/mail/#inbox/${key}`,
+      ...extra,
+    });
+    api.state.inbox = {
+      items: [
+        item('gmail:a', 'Priya Shah', 'email', 5, { unread: true, subject: 'Coffee' }),
+        item('gmail:b', 'Priya Shah', 'email', 50, { count: 2 }),
+        item('linkedin:c', 'Tom Dee', 'linkedin', 20, { replyToYou: true }),
+      ],
+      email: 'ok',
+      linkedin: 'ok',
+    };
+    const all = await execute('list_inbox', {}, ctx());
+    expect(all.kind).toBe('messages');
+    expect(all.summary).toBe('2 conversations: 1 email, 1 LinkedIn in the last 7 days.');
+    const rows = (
+      all.data as { ui: { rows: { name: string; count: number; photoUrl: string | null; tag?: string }[] } }
+    ).ui.rows;
+    expect(rows.map((r) => [r.name, r.count])).toEqual([
+      ['Priya Shah', 3],
+      ['Tom Dee', 1],
+    ]);
+    expect(rows[0]).toMatchObject({ photoUrl: 'https://img.test/p.jpg', tag: 'Unread' });
+    expect(rows[1]!.tag).toBe('Replied to you');
+    const mail = await execute('list_inbox', { channel: 'email' }, ctx());
+    expect(mail.summary).toBe('1 conversation in the last 7 days.');
+    api.state.inbox = { items: [], email: 'needs_reauth', linkedin: 'not_connected' };
+    const none = await execute('list_inbox', { days: 1 }, ctx());
+    expect(none.summary).toMatch(/^Nothing today\. Google needs you to sign in again/);
+    plainSummary(none);
+  });
+
   it('list_replies, draft_reply (a question blocks approval) and book_call', async () => {
     api.state.replies = [
       {
@@ -448,9 +491,10 @@ describe('account mode, against a fake orbit-api', () => {
       },
     ];
     const list = await execute('list_replies', {}, ctx());
-    expect(list.summary).toBe('2 replies.');
+    expect(list.summary).toBe('2 people replied to your outreach in the last 30 days.');
+    expect(list.kind).toBe('messages');
     const only = await execute('list_replies', { replyClass: 'question' }, ctx());
-    expect(only.summary).toBe('1 reply.');
+    expect(only.summary).toBe('1 person replied to your outreach in the last 30 days.');
     const q = await execute('draft_reply', { messageId: 'm2' }, ctx());
     expect(q.summary).toMatch(/needs one answer from you first: What is your start date\?/);
     const d = await execute('draft_reply', { messageId: 'm1' }, ctx());

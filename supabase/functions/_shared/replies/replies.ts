@@ -28,7 +28,11 @@ export const REPLY_WINDOW_DAYS = 30;
 /** The dedupe key of the Needs you card for one reply. */
 export const needsYouKey = (messageId: string) => `needs_you:${messageId}`;
 
-/** Inbound replies with a class, newest first, last 30 days, with the person, thread and any draft answering it. */
+/**
+ * Replies to the student's own outreach, newest first, last 30 days: only conversations the student wrote in before the
+ * message came (a cold pitch or a connection note is inbox mail, never a reply), one row per conversation (its latest
+ * classified message, with how many came in the window), with the person, their face and any draft answering it.
+ */
 export async function listReplies(db: Db, userId: string, now: Date): Promise<ReplyItem[]> {
   const rows = await db.sql<{
     id: string;
@@ -49,8 +53,14 @@ export async function listReplies(db: Db, userId: string, now: Date): Promise<Re
     draft_id: string | null;
     outcome: string | null;
     offered: { draftId: string; slots: unknown } | null;
+    photo_url: string | null;
+    linkedin_url: string | null;
+    n: number;
   }>`
-    select m.id, t.external_id as thread_external_id, m.from_person_id, p.display_name, p.org_raw, o.name as org_name,
+    select * from (
+    select m.id, p.photo_url, p.linkedin_url,
+           row_number() over (partition by m.thread_id order by m.sent_at desc) as rn,
+           (count(*) over (partition by m.thread_id))::int as n, t.external_id as thread_external_id, m.from_person_id, p.display_name, p.org_raw, o.name as org_name,
            m.from_addr, m.provider, m.reply_class, m.reply_confidence, m.sent_at, m.snippet, m.body_text, m.extraction,
            m.answer,
            (select d.id from orbit.drafts d
@@ -72,13 +82,21 @@ export async function listReplies(db: Db, userId: string, now: Date): Promise<Re
       left join orbit.organizations o on o.id = p.org_id
      where m.user_id = ${userId}::uuid and m.direction = 'in' and m.reply_class is not null
        and m.sent_at >= ${new Date(now.getTime() - REPLY_WINDOW_DAYS * 86_400_000)}::timestamptz
-     order by m.sent_at desc
-     limit 200`;
+       and exists (
+         select 1 from orbit.messages o
+          where o.thread_id = m.thread_id and o.user_id = m.user_id and o.direction = 'out' and o.sent_at < m.sent_at)
+    ) x
+     where rn = 1
+     order by sent_at desc
+     limit 100`;
   return rows.map((r) => ({
     messageId: r.id,
     threadId: r.thread_external_id,
     personId: r.from_person_id,
     personName: r.display_name ?? r.from_addr?.split('@')[0] ?? 'Someone',
+    photoUrl: r.photo_url ?? null,
+    linkedinUrl: r.linkedin_url ?? null,
+    count: num(r.n) || 1,
     company: r.org_name ?? r.org_raw ?? null,
     channel: r.provider,
     replyClass: r.reply_class,
@@ -134,6 +152,29 @@ export async function draftReply(
   });
 }
 
+/**
+ * Whether Orbit may act on a reply without being asked. `theirOutreach`: the student wrote in this conversation before
+ * the message came. `autopilot`: assist or autopilot is on (level 1 or 2, the student's own or the goal of the last
+ * message sent to this person), the only time a reply is drafted on its own.
+ */
+export async function draftsOnItsOwn(
+  db: Db,
+  userId: string,
+  m: { id: string; thread_id: string; sent_at: Date | string; from_person_id: string | null },
+): Promise<{ theirOutreach: boolean; autopilot: boolean }> {
+  const [r] = await db.sql<{ wrote: boolean; level: number | null; goal_level: number | null }>`
+    select exists (
+             select 1 from orbit.messages o
+              where o.thread_id = ${m.thread_id}::uuid and o.user_id = ${userId}::uuid and o.direction = 'out'
+                and o.sent_at < ${new Date(m.sent_at)}::timestamptz) as wrote,
+           (select autonomy_level from orbit.users where id = ${userId}::uuid)::int as level,
+           (select g.autonomy_level from orbit.drafts d join orbit.goals g on g.id = d.goal_id
+             where d.user_id = ${userId}::uuid and d.person_id = ${m.from_person_id}::uuid and d.status = 'sent'
+             order by d.sent_at desc nulls last limit 1)::int as goal_level`;
+  const level = Math.max(num(r?.level), num(r?.goal_level));
+  return { theirOutreach: !!r?.wrote, autopilot: level >= 1 };
+}
+
 /** Classes that get a draft answer without being asked: the class table's rows with `drafts` (plan 29 §B2.3). */
 export const DRAFT_CLASSES: ReadonlySet<ReplyClass> = new Set(
   (Object.keys(REPLY_NEXT_ACTION) as ReplyClass[]).filter((c) => REPLY_NEXT_ACTION[c].drafts),
@@ -183,6 +224,9 @@ export async function maybeAutoReply(
   if (!m.from_person_id) return { action: 'none', reason: 'unknown_sender' };
   // it came before Orbit: the user dealt with it then, or can ask for a draft from the replies list
   if (deps.history) return { action: 'none', reason: 'history' };
+  const own = await draftsOnItsOwn(db, userId, m);
+  // a cold pitch or a connection note: the student never wrote to them, so it is inbox mail with nothing to act on
+  if (!own.theirOutreach) return { action: 'none', reason: 'not_their_outreach' };
 
   if (step.action === 'needs_you') {
     const [full] = await db.sql<{
@@ -209,6 +253,8 @@ export async function maybeAutoReply(
   // thanks needs no answer beyond the table's acknowledgement; an out-of-office is followed up by cadence after the
   // return date; "other" waits for the student to ask
   if (!step.drafts) return { action: 'none', reason: `class ${cls}` };
+  // drafts are the student's choice: with autopilot off nothing is drafted until they tap Draft reply or ask the chat
+  if (!own.autopilot) return { action: 'none', reason: 'autopilot_off' };
 
   const [existing] = await db.sql<DraftRow>`
     select * from orbit.drafts

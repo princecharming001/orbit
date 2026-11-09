@@ -15,6 +15,7 @@ import type {
   FriendShare,
   FriendShareMode,
   Goal,
+  InboxListResponse,
   MemoryItem,
   MemoryKind,
   ProposedGoal,
@@ -67,6 +68,8 @@ export interface FakeState {
   sourced: SourcedCandidate[];
   paths: Map<string, (WarmPath & { id: string; names: Record<string, string> })[]>;
   replies: ReplyItem[];
+  /** what /inbox/list answers */
+  inbox: InboxListResponse;
   drafts: Map<string, ServerDraft>;
   memories: MemoryItem[];
   autonomy: { level: number; goalId?: string }[];
@@ -201,6 +204,7 @@ export function createFakeOrbitApi(
     sourced: [],
     paths: new Map(),
     replies: [],
+    inbox: { items: [], email: 'ok', linkedin: 'ok' },
     drafts: new Map(),
     memories: [],
     autonomy: [],
@@ -854,6 +858,13 @@ export function createFakeOrbitApi(
       // replies and drafts
       case '/replies/list':
         return json(200, { replies: state.replies });
+      case '/inbox/list':
+        return json(200, {
+          ...state.inbox,
+          items: state.inbox.items.filter(
+            (x) => !body.channel || body.channel === 'all' || x.channel === body.channel,
+          ),
+        });
       case '/replies/draft': {
         const r = state.replies.find((x) => x.messageId === body.messageId);
         if (!r) return error(404, 'not_found', 'no such reply');
