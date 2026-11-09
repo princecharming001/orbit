@@ -28,7 +28,7 @@ import { answerTrustOffer, LADDER_WORDS, type LadderKind } from '../engine/trust
 import { useSession } from '../state/session';
 import { Avatar, Button, Chip, cx, useToast, useWorking } from '../ui';
 import { runApproval } from './approve';
-import { BreakerCard, NeedsYouCard } from './autopilot/NeedsYou';
+import { BreakerCard } from './autopilot/NeedsYou';
 import { CompanyLogo, PersonCompanyLogo } from './CompanyLogo';
 import { DraftEditor, OutboxStatus } from './DraftEditor';
 import { MergePair } from './MergePair';
@@ -292,7 +292,8 @@ export function SuggestionCard({
   const loadingPerson = !!s.personId && personRow === undefined;
   const loadingDraft = !!s.outboundMessageId && draftRow === undefined;
   // plan 29 §B1: a reply that needs the student, and the breaker's card, have their own shapes
-  if (s.kind === 'needs_you') return <NeedsYouCard s={s} />;
+  // a reply's question is answered in the chat now (plan 37 follow-up): no card for it on the brief or in Drafts
+  if (s.kind === 'needs_you') return null;
   if (s.kind === 'breaker') return <BreakerCard s={s} />;
   return (
     <div

@@ -141,21 +141,16 @@ test.describe('autopilot (plan 29 B7, fake orbit-api)', () => {
     await expect(page.getByTestId('sent-for-you')).toContainText('Grace Liu');
   });
 
-  test('a seeded reply of each class produces the right card or send', async ({ page }) => {
+  test('a seeded reply of each class produces the right send, and Drafts lists no reply questions', async ({
+    page,
+  }) => {
     await signedInOnAutopilot(page);
     await page.goto('drafts');
-    // question: Needs you, with the question in their words
-    await expect(page.getByTestId('needs-you')).toContainText('Daniel Okafor');
-    await expect(page.getByTestId('needs-you')).toContainText('applied through the portal');
     // scheduling: the confirmation went this morning under Sent for you
     await expect(page.getByTestId('sent-for-you')).toContainText('Lena Novak');
-    // decline and unsubscribe: closed, do not contact, no draft, said so
-    for (const name of ['Jonah Reyes', 'Chloe Dubois']) {
-      await expect(page.getByTestId('closed-threads')).toContainText(name);
-      await expect(page.getByTestId('needs-you-item').filter({ hasText: name })).toHaveCount(0);
-    }
-    await expect(page.getByTestId('closed-threads')).toContainText('asked to stop');
-    await expect(page.getByTestId('closed-threads')).toContainText('declined');
+    // a reply's question is answered in the chat, not in a list on Drafts (plan 37 follow-up)
+    await expect(page.getByTestId('needs-you')).toHaveCount(0);
+    await expect(page.getByTestId('closed-threads')).toHaveCount(0);
     // objection, referral and interested wait for the student as the server's drafts (agents-funnel.test.ts): nothing
     // of theirs is under Sent for you (Ethan's not now came after this morning's bump, which is there)
     for (const name of ['Victor Castro', 'Sofia Bennett', 'Maya Chen'])
@@ -166,9 +161,9 @@ test.describe('autopilot (plan 29 B7, fake orbit-api)', () => {
     page,
   }) => {
     const api = await signedInOnAutopilot(page);
-    // the card arrives with the first reply check, then the chat finds it by name
+    // the question arrives with the first reply check, then the chat finds it by name
     await page.goto('drafts');
-    await expect(page.getByTestId('needs-you')).toContainText('Daniel Okafor');
+    await expect(page.getByTestId('sent-for-you')).toContainText('Lena Novak');
     await page.goto('');
     await say(page, 'answer Dan: yes, applied Monday');
     const turn = page.getByTestId('turn-assistant').last();
@@ -181,16 +176,6 @@ test.describe('autopilot (plan 29 B7, fake orbit-api)', () => {
     expect(api.state.autopilot.needsYou).toHaveLength(0);
     // nothing was sent: the draft waits
     expect(api.state.drafts.get(DANIEL_QUESTION_DRAFT)?.status).toBe('draft');
-  });
-
-  test('Needs you is answered from the card and the card is done', async ({ page }) => {
-    const api = await signedInOnAutopilot(page);
-    await page.goto('drafts');
-    const item = page.getByTestId('needs-you-item').filter({ hasText: 'Daniel Okafor' });
-    await item.getByTestId('needs-you-answer').fill('yes, applied Monday');
-    await item.getByTestId('needs-you-send').click();
-    await expect(page.getByTestId('needs-you-item').filter({ hasText: 'Daniel Okafor' })).toHaveCount(0);
-    expect(api.state.drafts.get(DANIEL_QUESTION_DRAFT)?.body).toContain('yes, applied Monday');
   });
 
   test('a confirmed slot books the call and puts it on the calendar for its prep card', async ({ page }) => {

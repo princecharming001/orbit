@@ -1091,7 +1091,7 @@ export const draftReplyTool = defineTool({
         { closed: true },
         { closed: true, replyClass: item.replyClass },
         `${item.personName} ${item.replyClass === 'unsubscribe' ? 'asked to stop' : 'declined'}: the thread is closed and Orbit will not write to them again, so there is nothing to draft.`,
-        '/inbox?tab=replies',
+        '/inbox',
       );
     const r = await draftReply(ctx.user, input.messageId);
     if (!r.ok) throw new Error(r.message);
@@ -1111,7 +1111,7 @@ export const draftReplyTool = defineTool({
       open.length
         ? `Drafted a reply, but it needs one answer from you first: ${open[0]}`
         : `Drafted a reply${d.channel === 'linkedin' ? ' for LinkedIn' : ''}. Nothing is sent until you approve it in Drafts, Replies.`,
-      '/inbox?tab=replies',
+      '/inbox',
     );
   },
   toModel,
@@ -1173,7 +1173,7 @@ export const bookCallTool = defineTool({
         { eventId: r.eventId },
         { booked: true, eventId: r.eventId },
         `Booked ${input.label ?? 'the call'} and sent the invite.`,
-        '/inbox?tab=replies',
+        '/inbox',
       );
     }
     // this browser: the chat's time is saved, then Google adds the event and emails the invite

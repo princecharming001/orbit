@@ -709,7 +709,7 @@ export const answerReplyTool = defineTool({
       data,
       { ...data, body: wrapped(ctx, 'draft', body, 1500) },
       `${summary}\n\n${body}`,
-      personId ? `/people/${personId}?tab=messages` : '/inbox?tab=replies',
+      personId ? `/people/${personId}?tab=messages` : '/inbox',
     );
   },
   toModel,

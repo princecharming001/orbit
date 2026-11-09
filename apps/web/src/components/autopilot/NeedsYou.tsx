@@ -139,64 +139,26 @@ export function BreakerCard({ s }: { s: Suggestion }) {
 }
 
 /** The section on Drafts: the open questions, the breaker's cards, then the closed threads in one line each. */
-export function NeedsYou({ user }: { user: User }) {
+/**
+ * The one autopilot notice Drafts keeps (plan 37 follow-up): Orbit paused what it sends on its own for a goal, and
+ * why. The questions replies ask and the threads a reply closed are not listed here any more: a question is answered in
+ * the chat ("answer Dan: yes, applied Monday"), and a closed thread moves its card on the board by itself.
+ */
+export function AutopilotPaused({ user }: { user: User }) {
   const cards = useOpenAutopilotCards(user.id) ?? [];
-  const questions = cards.filter((s) => s.kind === 'needs_you' && !s.payload.closed);
   const breakers = cards.filter((s) => s.kind === 'breaker');
-  const closed = cards.filter((s) => s.kind === 'needs_you' && s.payload.closed);
-  if (!questions.length && !breakers.length && !closed.length) return null;
+  if (!breakers.length) return null;
   return (
-    <div className="mb-5 space-y-3" data-testid="needs-you">
-      {(questions.length > 0 || breakers.length > 0) && (
-        <Card>
-          <div className="font-medium">Needs you</div>
-          <p className="text-[12px] text-ink-3 mt-0.5">
-            {questions.length
-              ? 'A reply asked something only you know. One line here and Orbit drafts the answer.'
-              : 'Orbit paused what it sends on its own for a goal, and says why.'}
-          </p>
-          <div className="divide-y divide-line">
-            {questions.map((s) => (
-              <NeedsYouCard key={s.id} s={s} compact />
-            ))}
-          </div>
-          {breakers.length > 0 && (
-            <div className="mt-3 space-y-2">
-              {breakers.map((s) => (
-                <BreakerCard key={s.id} s={s} />
-              ))}
-            </div>
-          )}
-        </Card>
-      )}
-      {closed.length > 0 && (
-        <Card data-testid="closed-threads">
-          <div className="font-medium">Closed by their reply</div>
-          <ul className="mt-1.5 space-y-1">
-            {closed.map((s) => (
-              <li
-                key={s.id}
-                className="text-[13px] text-ink-2 flex items-center gap-2"
-                data-testid="closed-thread"
-              >
-                <Chip tone="bad">
-                  {s.payload.replyClass === 'unsubscribe' ? 'Asked to stop' : 'Declined'}
-                </Chip>
-                <span className="min-w-0 truncate">{s.reasonText}</span>
-                <button
-                  type="button"
-                  className="ml-auto shrink-0 whitespace-nowrap text-[12px] text-ink-3 underline underline-offset-2 hover:text-ink"
-                  onClick={() =>
-                    db.suggestions.update(s.id, { status: 'done', decidedAt: new Date().toISOString() })
-                  }
-                >
-                  Got it
-                </button>
-              </li>
-            ))}
-          </ul>
-        </Card>
-      )}
-    </div>
+    <Card className="mb-5" data-testid="autopilot-paused">
+      <div className="font-medium">Paused</div>
+      <p className="text-[12px] text-ink-3 mt-0.5">
+        Orbit paused what it sends on its own for a goal, and says why.
+      </p>
+      <div className="mt-3 space-y-2">
+        {breakers.map((s) => (
+          <BreakerCard key={s.id} s={s} />
+        ))}
+      </div>
+    </Card>
   );
 }

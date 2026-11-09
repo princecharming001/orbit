@@ -4,9 +4,8 @@ import { useLiveQuery } from 'dexie-react-hooks';
 import { RefreshCw } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
-import { RepliesPanel } from '../components/account/RepliesPanel';
 import { runApproval } from '../components/approve';
-import { NeedsYou } from '../components/autopilot/NeedsYou';
+import { AutopilotPaused } from '../components/autopilot/NeedsYou';
 import { TomorrowBatch } from '../components/autopilot/TomorrowBatch';
 import { useAutopilotStatus } from '../components/autopilot/useAutopilotStatus';
 import { PersonCompanyLogo } from '../components/CompanyLogo';
@@ -66,7 +65,7 @@ const PROVIDER_LABELS: Record<string, string> = {
  */
 export function InboxPage() {
   const { user, userId } = useSession();
-  const [tab, setTab] = useState<'pending' | 'scheduled' | 'snoozed' | 'outbox' | 'sent' | 'replies'>();
+  const [tab, setTab] = useState<'pending' | 'scheduled' | 'snoozed' | 'outbox' | 'sent'>();
   const [showLater, setShowLater] = useState(false);
   const [showMore, setShowMore] = useState(false);
   // Refresh and "They replied" each wait on Claude: the button spins, a working toast says so, a failure says so
@@ -264,19 +263,15 @@ export function InboxPage() {
   const visiblePeople = people.filter((p) => p.isHuman && !p.hiddenAt).length;
   // a message opened in the mail app or LinkedIn and not marked as sent comes first: it is waiting on the student.
   // A link to one card opens the cards instead.
-  // account mode: the server reads replies to the student's outreach and drafts answers (plan 16 §8)
-  const replies = isServerUser(userId);
   const shown =
     tab ??
-    (params.get('tab') === 'replies' && replies
-      ? 'replies'
-      : params.get('tab') === 'scheduled'
-        ? 'scheduled'
-        : focusCard || focusPerson
-          ? 'pending'
-          : notSent.some((o) => o.status === 'failed')
-            ? 'outbox'
-            : 'pending');
+    (params.get('tab') === 'scheduled'
+      ? 'scheduled'
+      : focusCard || focusPerson
+        ? 'pending'
+        : notSent.some((o) => o.status === 'failed')
+          ? 'outbox'
+          : 'pending');
   const refresh = async () => {
     if (!user) return;
     await refreshing.run('refresh', 'Reading your latest email, calendar and notes…', async () => {
@@ -379,11 +374,9 @@ export function InboxPage() {
               { value: 'outbox' as const, label: 'Not sent', count: notSent.length },
               { value: 'snoozed' as const, label: 'Snoozed', count: snoozed.length },
               { value: 'sent' as const, label: 'Sent', count: sent.length },
-              ...(replies ? [{ value: 'replies' as const, label: 'Replies', count: undefined }] : []),
             ].filter((t) => t.value === 'pending' || t.value === shown || t.count !== 0)}
           />
-          {shown === 'replies' && <RepliesPanel />}
-          {shown === 'pending' && user && <NeedsYou user={user} />}
+          {shown === 'pending' && user && <AutopilotPaused user={user} />}
           {shown === 'pending' && <TomorrowBatch view={autopilot} />}
           {shown === 'pending' && handedOff.length > 0 && (
             <div className="space-y-2 mb-5" data-testid="drafts-handed-off">

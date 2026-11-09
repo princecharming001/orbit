@@ -31,7 +31,7 @@ import {
   restoreFound,
 } from '../engine/discoverFeed';
 import { connectLinkedInLive, liveLinkedInAvailable } from '../engine/linkedinLive';
-import { loadPointContext } from '../engine/personPoints';
+import { type LoadedPointContext, loadPointContext } from '../engine/personPoints';
 import {
   dismissRecommendation,
   outreachChannelFor,
@@ -130,13 +130,43 @@ function DiscoverFeed({ tabs }: { tabs?: ReactNode }) {
           : '',
       [userId],
     ) ?? '';
-  const pointCtx = useLiveQuery(
-    () => (user && recIds ? loadPointContext(user, recIds.split(',')) : undefined),
-    [user?.id, recIds],
-  );
+  // read once for each list of people, not live: it reads every person, edge and thread, and a LinkedIn sync writes
+  // to those all the time, so a live query restarted on every write and, with a big network, never finished; the
+  // network cards waited on it and the page showed one person. The last result stays while a new one loads.
+  const [pointCtx, setPointCtx] = useState<LoadedPointContext>();
+  const [ctxFor, setCtxFor] = useState<string>();
+  const [ctxFailed, setCtxFailed] = useState(false);
+  useEffect(() => {
+    if (!user || !recIds) return;
+    let live = true;
+    // the refresh writes its people one at a time: wait for the list to settle before reading
+    const t = setTimeout(() => {
+      loadPointContext(user, recIds.split(','))
+        .then((c) => {
+          if (!live) return;
+          setPointCtx(c);
+          setCtxFailed(false);
+        })
+        .catch(() => live && setCtxFailed(true))
+        .finally(() => live && setCtxFor(recIds));
+    }, 300);
+    return () => {
+      live = false;
+      clearTimeout(t);
+    };
+  }, [user?.id, recIds]);
+  const networkLoading = !!recIds && ctxFor !== recIds;
   const view = useLiveQuery(
-    () => (user ? discoverView(user, new Date(), { pointCtx, readContext: false }) : undefined),
-    [user?.id, pointCtx],
+    () =>
+      user
+        ? discoverView(
+            user,
+            new Date(),
+            // a failed read is made again inside the view, so the cards still come
+            ctxFailed ? {} : { pointCtx, readContext: false },
+          )
+        : undefined,
+    [user?.id, pointCtx, ctxFailed],
   );
   const people =
     useLiveQuery(() => (userId ? db.people.where('userId').equals(userId).toArray() : []), [userId]) ?? [];
@@ -449,9 +479,9 @@ function DiscoverFeed({ tabs }: { tabs?: ReactNode }) {
         <ConnectPrompt available={liveLinkedInAvailable(user)} busy={connecting} onConnect={connect} />
       )}
       {view && <SuggestedRow cards={suggestions} found={foundH} network={networkH} />}
-      {!view || (nothing && (updating || loading)) ? (
+      {!view || (nothing && (updating || loading || networkLoading)) ? (
         <div>
-          {!view || updating ? (
+          {!view || updating || networkLoading ? (
             <p className="text-[13px] text-ink-3 mb-3" data-testid="discover-updating">
               Checking your network…
             </p>
@@ -492,7 +522,7 @@ function DiscoverFeed({ tabs }: { tabs?: ReactNode }) {
           <FeedFilters sort={sortBy} onSort={(s) => setFilter('by', s === 'best' ? undefined : s)} />
           <div
             role="feed"
-            aria-busy={loading}
+            aria-busy={loading || networkLoading}
             data-testid="discover-feed"
             className="stagger grid @3xl:grid-cols-2 @7xl:grid-cols-3 @[104rem]:grid-cols-4 gap-3 [&>*]:min-w-0"
           >
@@ -503,7 +533,7 @@ function DiscoverFeed({ tabs }: { tabs?: ReactNode }) {
                 <NetworkCardView key={c.id} card={c} h={networkH} />
               ),
             )}
-            {loading && view.connected && (
+            {((loading && view.connected) || networkLoading) && (
               <>
                 <CardSkeleton />
                 <CardSkeleton />

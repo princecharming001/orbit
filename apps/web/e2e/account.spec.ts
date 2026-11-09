@@ -479,56 +479,6 @@ test.describe('account mode (mocked orbit-api)', () => {
       });
     });
 
-    test('Drafts, Replies: draft a reply with times, approve it; LinkedIn needs a second tap', async ({
-      page,
-    }) => {
-      const api = await signedIn(page);
-      api.state.replies = [
-        {
-          messageId: 'm1',
-          threadId: 't1',
-          personId: P1,
-          personName: 'Priya Shah',
-          channel: 'gmail',
-          replyClass: 'scheduling',
-          confidence: 0.9,
-          receivedAt: '2026-10-06T08:00:00.000Z',
-          snippet: 'Happy to chat. What times work next week?',
-          draftId: null,
-        },
-        {
-          messageId: 'm2',
-          threadId: 't2',
-          personId: P2,
-          personName: 'Sam Lee',
-          channel: 'linkedin',
-          replyClass: 'interested',
-          confidence: 0.8,
-          receivedAt: '2026-10-05T08:00:00.000Z',
-          snippet: 'Sounds great.',
-          draftId: null,
-        },
-      ];
-      await page.goto('inbox?tab=replies');
-      const cards = page.getByTestId('reply-card');
-      await expect(cards).toHaveCount(2);
-      await expect(cards.first()).toContainText('Picking a time');
-      await cards.first().getByTestId('reply-draft-button').click();
-      await expect(cards.first().getByTestId('reply-slot')).toHaveCount(3);
-      await cards.first().getByTestId('reply-approve').click();
-      await expect(cards.first().getByTestId('reply-approved')).toContainText('Approved. It goes out');
-      // LinkedIn: Approve asks once more before anything goes
-      await cards.nth(1).getByTestId('reply-draft-button').click();
-      await cards.nth(1).getByTestId('reply-approve').click();
-      await expect(cards.nth(1).getByTestId('reply-confirm')).toContainText('your own LinkedIn account');
-      expect(api.calls.filter((c) => c.route === '/drafts/approve')).toHaveLength(1);
-      await cards.nth(1).getByTestId('reply-confirm-yes').click();
-      await expect(cards.nth(1).getByTestId('reply-approved')).toBeVisible();
-      expect(api.calls.filter((c) => c.route === '/drafts/approve').at(-1)?.body).toMatchObject({
-        confirm: true,
-      });
-    });
-
     test('Settings: the postal address and the booking link reach the server', async ({ page }) => {
       const api = await signedIn(page);
       await page.goto('settings/outreach');

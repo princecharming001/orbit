@@ -66,7 +66,7 @@ export function replyRows(replies: ReplyItem[]): MessageRow[] {
       count: x.count ?? 1,
       tag: REPLY_CLASS_LABELS[x.replyClass],
       good: GOOD_CLASSES.has(x.replyClass),
-      href: x.personId ? `/people/${x.personId}` : '/inbox?tab=replies',
+      href: x.personId ? `/people/${x.personId}` : '/inbox',
     })),
   ).map(({ personKey: _k, ...r }) => r);
 }
@@ -111,7 +111,7 @@ export function repliesEnvelope(ctx: ToolContext, replies: ReplyItem[]): ResultE
     rows.length
       ? `${plural(rows.length, 'person', 'people')} replied to your outreach in the last 30 days.`
       : 'No replies to your outreach in the last 30 days.',
-    '/inbox?tab=replies',
+    '/inbox',
   );
 }
 
