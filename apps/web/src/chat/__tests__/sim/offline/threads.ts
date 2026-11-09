@@ -338,10 +338,16 @@ export const THREADS: Thread[] = [
     { say: 'who do I know at Juniper', expect: { tool: 'find_routes', kind: 'clarify', ask: true } },
     { say: 'who do I know at Juniper Capital', expect: { tool: 'find_routes', kind: 'company' } },
   ]),
-  T('demo-which-person', 'demo', 'people', 'a first name several people share asks which, then the first one', [
-    { say: 'tell me about Keiko', expect: { kind: 'clarify', ask: true } },
-    { say: 'the first one', expect: { tool: 'get_person', kind: 'person' } },
-  ]),
+  T(
+    'demo-which-person',
+    'demo',
+    'people',
+    'a first name several people share asks which, then the first one',
+    [
+      { say: 'tell me about Keiko', expect: { kind: 'clarify', ask: true } },
+      { say: 'the first one', expect: { tool: 'get_person', kind: 'person' } },
+    ],
+  ),
   T('demo-ordinal-list', 'demo', 'people', 'search, pick the second', [
     { say: 'find Keiko', expect: { ask: true, tool: 'search_people' } },
     { say: 'the second one', expect: { tool: 'get_person' } },

@@ -221,6 +221,16 @@ function humanTool(name: string): string {
   return s.charAt(0).toUpperCase() + s.slice(1);
 }
 
+/**
+ * A question back reads question first, options under it (plan 37): the model writes its one line after the tool that
+ * found two things, so the options move below the words. Everything else keeps the order it streamed in.
+ */
+export function questionLast(blocks: Block[]): Block[] {
+  const ask = blocks.filter((b) => b.type === 'tool' && b.envelope?.kind === 'clarify');
+  if (!ask.length) return blocks;
+  return [...blocks.filter((b) => !ask.includes(b)), ...ask];
+}
+
 function Assistant({
   turn,
   actions,
@@ -293,7 +303,7 @@ function Assistant({
         <div aria-live="polite" aria-busy={streaming} className="space-y-4">
           {!revealed && <TurnStatus step={activity} />}
           <ChoicesContext.Provider value={{ running, laterUserText, askText, firstClarify }}>
-            {(revealed ? turnLayout(turn.blocks, streaming) : []).map((piece) =>
+            {(revealed ? turnLayout(questionLast(turn.blocks), streaming) : []).map((piece) =>
               piece.type === 'work' ? (
                 <WorkLog
                   key={`work-${piece.items[0]!.i}`}

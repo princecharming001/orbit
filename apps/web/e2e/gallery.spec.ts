@@ -61,12 +61,20 @@ const CASES: Case[] = [
   // plan 37: a name that fits two companies or several people asks first; a tap finishes the ask
   { id: 'c01', group: 'Ask before guessing', turns: ['who do I know at Juniper', 'tap:Juniper Health'] },
   { id: 'c02', group: 'Ask before guessing', turns: ['draft a thank you to Keiko', 'tap:'] },
-  { id: 'c03', group: 'Ask before guessing', turns: ['find me product people at Juniper', 'tap:Juniper Capital'] },
+  {
+    id: 'c03',
+    group: 'Ask before guessing',
+    turns: ['find me product people at Juniper', 'tap:Juniper Capital'],
+  },
   // plan 37: a card button that only changes data acts in place, and the next reply knows
   {
     id: 'b01',
     group: 'Buttons act in place',
-    turns: ['who do I know at Juniper Health', 'step:Add Juniper Health to targets', 'what should I do next there'],
+    turns: [
+      'who do I know at Juniper Health',
+      'step:Add Juniper Health to targets',
+      'what should I do next there',
+    ],
   },
 ];
 
@@ -173,7 +181,11 @@ test.describe('chat gallery: real answers photographed for review', () => {
         } else if (text.startsWith('step:')) {
           // a button that acts in place: it turns done and no turn is added
           const turnsBefore = await page.getByTestId('turn-user').count();
-          await page.getByTestId('next-step').filter({ hasText: text.slice(5).trim() }).last().click();
+          await page
+            .getByTestId('next-step')
+            .filter({ hasText: text.slice(5).trim() })
+            .last()
+            .click();
           await expect(page.locator('[data-testid="next-step"][data-state="done"]').last()).toBeVisible();
           expect(await page.getByTestId('turn-user').count()).toBe(turnsBefore);
         } else await ask(page, text);
@@ -203,6 +215,8 @@ test.describe('chat gallery: real answers photographed for review', () => {
         );
       }
       writeFileSync(`${DIR}/${c.id}.json`, JSON.stringify(shots, null, 2));
+      // a request still on its way to the shim when the case ends is not a failure of the case
+      await page.unrouteAll({ behavior: 'ignoreErrors' });
     });
   }
 });

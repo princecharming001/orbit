@@ -346,7 +346,10 @@ describe('a reopened chat without a key shows its cards again', () => {
     await engine.send(c.id, 'who do I know at Juniper Health', () => {});
     const { hydrate } = await import('../ui/threadStore');
     const turns = hydrate(await store.messages(c.id), await store.actions(c.id));
-    const reply = turns.find((t) => t.role === 'assistant') as Extract<(typeof turns)[number], { role: 'assistant' }>;
+    const reply = turns.find((t) => t.role === 'assistant') as Extract<
+      (typeof turns)[number],
+      { role: 'assistant' }
+    >;
     const tools = reply.blocks.filter((b) => b.type === 'tool');
     expect(tools).toHaveLength(1);
     expect((tools[0] as { envelope?: ResultEnvelope }).envelope?.kind).toBe('company');

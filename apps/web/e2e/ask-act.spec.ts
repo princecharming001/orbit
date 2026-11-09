@@ -56,7 +56,9 @@ test.describe('Ask before guessing, act in place', () => {
     await page.goto('');
     await page.getByTestId('recent-item').first().click();
     const again = page.getByTestId('result-company').last();
-    await expect(again.locator('[data-testid="next-step"][data-state="done"]')).toHaveText('Added to targets');
+    await expect(again.locator('[data-testid="next-step"][data-state="done"]')).toHaveText(
+      'Added to targets',
+    );
     await expect(again).toContainText('Target');
   });
 });

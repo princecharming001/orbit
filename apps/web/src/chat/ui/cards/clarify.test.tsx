@@ -119,3 +119,27 @@ describe('the question-back card', () => {
     expect($('[data-testid="result-clarify"]')).toBeNull();
   });
 });
+
+describe('a question back reads question first', () => {
+  it('puts the options under the words, whatever order they streamed in, and keeps them as a card', async () => {
+    const { questionLast, turnLayout } = await import('../Thread');
+    const blocks = [
+      {
+        type: 'tool' as const,
+        toolUseId: 't1',
+        toolName: 'find_routes',
+        envelope: env,
+        status: 'done' as const,
+      },
+      { type: 'text' as const, text: 'Juniper Health or Juniper Capital?' },
+    ];
+    const pieces = turnLayout(questionLast(blocks));
+    expect(pieces.map((p) => (p.type === 'work' ? 'work' : p.b.type))).toEqual(['text', 'tool']);
+    // a turn without a question keeps its order
+    const other = [
+      blocks[1]!,
+      { ...blocks[0]!, envelope: { kind: 'company' as const, data: {}, summary: '' } },
+    ];
+    expect(questionLast(other)).toBe(other);
+  });
+});
