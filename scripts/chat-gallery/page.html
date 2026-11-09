@@ -1,0 +1,301 @@
+<title>Orbit Chat Review</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Instrument+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap">
+<style>
+/* Layout: one reading column of exchanges, a sticky bar with progress and filters, a verdict row under each case */
+:root {
+  --bg: #f3f5f6;
+  --surface: #ffffff;
+  --ink: #16201f;
+  --ink-2: #56625f;
+  --line: #dde3e2;
+  --accent: #1f6f66;
+  --accent-soft: #e2f0ee;
+  --good: #2d7a3e;
+  --good-soft: #e3f3e6;
+  --fix: #a3560b;
+  --fix-soft: #fbeedd;
+  --shadow: 0 1px 2px rgba(22, 32, 31, 0.06), 0 8px 24px rgba(22, 32, 31, 0.05);
+  --font-body: "Instrument Sans", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0f1514; --surface: #172020; --ink: #e6eeec; --ink-2: #9aa9a6; --line: #2a3634;
+    --accent: #5cc2b4; --accent-soft: #173431; --good: #6fcf86; --good-soft: #17301d;
+    --fix: #f0a95c; --fix-soft: #3a2812; --shadow: 0 1px 2px rgba(0,0,0,.4), 0 8px 24px rgba(0,0,0,.25);
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #0f1514; --surface: #172020; --ink: #e6eeec; --ink-2: #9aa9a6; --line: #2a3634;
+  --accent: #5cc2b4; --accent-soft: #173431; --good: #6fcf86; --good-soft: #17301d;
+  --fix: #f0a95c; --fix-soft: #3a2812; --shadow: 0 1px 2px rgba(0,0,0,.4), 0 8px 24px rgba(0,0,0,.25);
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+body {
+  background: var(--bg); color: var(--ink); font-family: var(--font-body); font-size: 15px; line-height: 1.5;
+  padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px));
+}
+body::before { content: ""; position: fixed; inset: 0 0 auto; height: env(safe-area-inset-top, 0px); z-index: 10; background: var(--bg); }
+.wrap { max-width: 880px; margin: 0 auto; padding-block: 32px 80px; }
+header.intro h1 { font-size: 30px; font-weight: 700; letter-spacing: -0.01em; margin: 0 0 6px; text-wrap: balance; }
+header.intro p { margin: 0; color: var(--ink-2); max-width: 64ch; }
+.bar {
+  position: sticky; top: env(safe-area-inset-top, 0px); z-index: 5; background: var(--bg);
+  display: flex; flex-wrap: wrap; align-items: center; gap: 10px 16px; padding-block: 14px; margin-top: 18px;
+  border-bottom: 1px solid var(--line);
+}
+.progress { display: flex; align-items: center; gap: 10px; font-variant-numeric: tabular-nums; font-size: 14px; color: var(--ink-2); }
+.meter { width: 120px; height: 6px; border-radius: 3px; background: var(--line); overflow: hidden; }
+.meter > i { display: block; height: 100%; width: 0; background: var(--accent); transition: width .3s; }
+.chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.chip {
+  font: inherit; font-size: 13px; padding: 5px 11px; border-radius: 999px; border: 1px solid var(--line);
+  background: var(--surface); color: var(--ink); cursor: pointer;
+}
+.chip[aria-pressed="true"] { background: var(--ink); color: var(--bg); border-color: var(--ink); }
+.chip:focus-visible, button:focus-visible, textarea:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.spacer { flex: 1; }
+.copy { font: inherit; font-size: 13px; padding: 6px 12px; border-radius: 8px; border: 1px solid var(--accent); background: transparent; color: var(--accent); cursor: pointer; }
+.status { font-size: 12px; color: var(--ink-2); width: 100%; }
+.group-h { font-size: 12px; text-transform: uppercase; letter-spacing: .08em; color: var(--ink-2); margin: 36px 0 12px; font-weight: 600; }
+.case { background: var(--surface); border: 1px solid var(--line); border-radius: 14px; box-shadow: var(--shadow); margin-bottom: 22px; overflow: hidden; }
+.case.good { border-color: var(--good); }
+.case.fix { border-color: var(--fix); }
+.case-h { display: flex; align-items: baseline; gap: 12px; padding: 16px 20px 6px; flex-wrap: wrap; }
+.cid { font-family: var(--font-mono); font-size: 13px; font-weight: 500; color: var(--accent); background: var(--accent-soft); padding: 2px 8px; border-radius: 6px; }
+.ctitle { font-weight: 600; font-size: 16px; min-width: 0; }
+.turn { padding: 10px 20px 4px; }
+.turn + .turn { border-top: 1px dashed var(--line); margin-top: 8px; padding-top: 16px; }
+.said { display: flex; gap: 10px; align-items: baseline; font-size: 14px; margin-bottom: 8px; flex-wrap: wrap; }
+.said b { font-family: var(--font-mono); font-size: 11px; font-weight: 500; color: var(--ink-2); text-transform: uppercase; letter-spacing: .06em; }
+.meta { font-family: var(--font-mono); font-size: 11px; color: var(--ink-2); margin-left: auto; }
+.shot { display: block; width: 100%; border: 1px solid var(--line); border-radius: 10px; background: #fff; cursor: zoom-in; padding: 0; }
+.shot img { display: block; width: 100%; height: auto; border-radius: 9px; }
+.err { color: var(--fix); font-size: 13px; margin: 6px 0 0; }
+.verdict { display: grid; gap: 10px; padding: 14px 20px 18px; border-top: 1px solid var(--line); margin-top: 14px; background: color-mix(in srgb, var(--bg) 50%, var(--surface)); }
+.vbtns { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+.vbtn { font: inherit; font-size: 14px; padding: 7px 14px; border-radius: 8px; border: 1px solid var(--line); background: var(--surface); color: var(--ink); cursor: pointer; }
+.vbtn.good[aria-pressed="true"] { background: var(--good-soft); border-color: var(--good); color: var(--good); font-weight: 600; }
+.vbtn.fix[aria-pressed="true"] { background: var(--fix-soft); border-color: var(--fix); color: var(--fix); font-weight: 600; }
+.saved { font-size: 12px; color: var(--ink-2); margin-left: auto; }
+textarea {
+  font: inherit; font-size: 14px; width: 100%; min-height: 64px; resize: vertical; border-radius: 8px; padding: 9px 11px;
+  border: 1px solid var(--line); background: var(--surface); color: var(--ink);
+}
+.empty { text-align: center; color: var(--ink-2); padding: 48px 0; }
+dialog { border: 0; padding: 0; background: transparent; max-width: 96vw; max-height: 94vh; }
+dialog::backdrop { background: rgba(10, 15, 14, .8); }
+dialog img { display: block; max-width: 96vw; max-height: 94vh; border-radius: 8px; cursor: zoom-out; }
+@media (max-width: 560px) {
+  header.intro h1 { font-size: 24px; }
+  .case-h, .turn, .verdict { padding-left: 14px; padding-right: 14px; }
+  .meta { margin-left: 0; width: 100%; }
+}
+@media (prefers-reduced-motion: reduce) { .meter > i { transition: none; } }
+</style>
+
+<div class="wrap">
+  <header class="intro">
+    <h1>Orbit Chat Review</h1>
+    <p>Real answers from the new chat on the demo account (Alex Rivera, junior). Mark each one Looks good or Needs work and say what should change. Notes save as you type, and Claude reads them straight from this page.</p>
+  </header>
+
+  <div class="bar" role="region" aria-label="Progress and filters">
+    <div class="progress"><span class="meter"><i id="meterFill"></i></span><span id="progressText">0 of 0 reviewed</span></div>
+    <div class="chips" id="viewChips" role="group" aria-label="Show">
+      <button class="chip" data-view="all" aria-pressed="true">All</button>
+      <button class="chip" data-view="open" aria-pressed="false">Not reviewed</button>
+      <button class="chip" data-view="fix" aria-pressed="false">Needs work</button>
+    </div>
+    <span class="spacer"></span>
+    <button class="copy" id="copyAll" type="button">Copy all notes</button>
+    <div class="status" id="status" hidden></div>
+  </div>
+
+  <main id="list"></main>
+</div>
+
+<dialog id="zoom"><img id="zoomImg" alt=""></dialog>
+
+<script>
+const CASES = /*CASES*/[];
+const state = {}; // id -> {verdict, note}
+let view = 'all';
+let db = null;
+const timers = {};
+
+const $ = (s, el = document) => el.querySelector(s);
+function esc(s) { const d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
+
+function caseTitle(c) { return c.turns.map((t) => t.text).join('  →  '); }
+
+function render() {
+  const list = $('#list');
+  list.textContent = '';
+  let lastGroup = '';
+  let shown = 0;
+  for (const c of CASES) {
+    const s = state[c.id] || {};
+    if (view === 'open' && s.verdict) continue;
+    if (view === 'fix' && s.verdict !== 'fix') continue;
+    if (c.group !== lastGroup) {
+      const h = document.createElement('h2');
+      h.className = 'group-h';
+      h.textContent = c.group;
+      list.append(h);
+      lastGroup = c.group;
+    }
+    list.append(card(c, s));
+    shown++;
+  }
+  if (!shown) {
+    const p = document.createElement('p');
+    p.className = 'empty';
+    p.textContent = view === 'fix' ? 'Nothing marked Needs work yet.' : 'Every case has a verdict.';
+    list.append(p);
+  }
+  progress();
+}
+
+function card(c, s) {
+  const el = document.createElement('article');
+  el.className = 'case' + (s.verdict ? ' ' + s.verdict : '');
+  el.id = 'case-' + c.id;
+  el.innerHTML = `<div class="case-h"><span class="cid">${esc(c.id)}</span><span class="ctitle">${esc(c.turns[0].text)}</span></div>`;
+  for (const t of c.turns) {
+    const turn = document.createElement('div');
+    turn.className = 'turn';
+    const meta = `${t.seconds}s${t.cards && t.cards.length ? ' · ' + t.cards.join(', ') : ''}`;
+    turn.innerHTML = `<div class="said"><b>${c.turns.length > 1 ? 'Turn ' + t.turn : 'Student'}</b><span>${esc(t.text)}</span><span class="meta">${esc(meta)}</span></div>
+      <button class="shot" type="button" aria-label="Enlarge screenshot"><img loading="lazy" src="shots/${esc(t.file)}" alt="Orbit's reply to: ${esc(t.text)}"></button>
+      ${t.error ? `<p class="err">Error shown: ${esc(t.error)}</p>` : ''}`;
+    $('.shot', turn).addEventListener('click', () => zoom(`shots/${t.file}`));
+    el.append(turn);
+  }
+  const v = document.createElement('div');
+  v.className = 'verdict';
+  v.innerHTML = `<div class="vbtns">
+      <button class="vbtn good" type="button" aria-pressed="${s.verdict === 'good'}">Looks good</button>
+      <button class="vbtn fix" type="button" aria-pressed="${s.verdict === 'fix'}">Needs work</button>
+      <span class="saved"></span></div>
+    <label class="visually-hidden" for="note-${c.id}" hidden>Notes for ${esc(c.id)}</label>
+    <textarea id="note-${c.id}" placeholder="What should change? (tone, length, what it missed, what it should have done)">${esc(s.note || '')}</textarea>`;
+  const saved = $('.saved', v);
+  $('.vbtn.good', v).addEventListener('click', () => setVerdict(c.id, s.verdict === 'good' ? '' : 'good', saved));
+  $('.vbtn.fix', v).addEventListener('click', () => setVerdict(c.id, s.verdict === 'fix' ? '' : 'fix', saved));
+  $('textarea', v).addEventListener('input', (e) => {
+    state[c.id] = { ...(state[c.id] || {}), note: e.target.value };
+    saved.textContent = 'Saving…';
+    clearTimeout(timers[c.id]);
+    timers[c.id] = setTimeout(() => save(c.id, saved), 900);
+  });
+  el.append(v);
+  return el;
+}
+
+function setVerdict(id, verdict, saved) {
+  state[id] = { ...(state[id] || {}), verdict };
+  const y = window.scrollY;
+  save(id, saved).then(() => {});
+  render();
+  window.scrollTo(0, y);
+}
+
+const writing = {};
+async function save(id, savedEl) {
+  const s = state[id] || {};
+  const body = { caseId: id, verdict: s.verdict || '', note: s.note || '', prompt: caseTitle(CASES.find((c) => c.id === id)), updatedAt: new Date().toISOString() };
+  try { localStorage.setItem('orbit-review-' + id, JSON.stringify(body)); } catch {}
+  if (!db) { mark(id, 'Saved in this browser'); return; }
+  if (writing[id]) { writing[id].again = true; return; }
+  writing[id] = { again: false };
+  try {
+    await db.doc('feedback/' + id).set(body);
+    mark(id, 'Saved');
+  } catch (e) {
+    mark(id, e && e.code === 'invalid_argument' ? 'Only the owner can save notes' : 'Not saved, try again');
+  } finally {
+    const again = writing[id].again;
+    delete writing[id];
+    if (again) save(id);
+  }
+}
+function mark(id, text) {
+  const el = document.getElementById('case-' + id);
+  const s = el && el.querySelector('.saved');
+  if (s) s.textContent = text;
+}
+
+function progress() {
+  const n = CASES.length;
+  const done = CASES.filter((c) => state[c.id] && state[c.id].verdict).length;
+  const fix = CASES.filter((c) => state[c.id] && state[c.id].verdict === 'fix').length;
+  $('#progressText').textContent = `${done} of ${n} reviewed${fix ? ` · ${fix} need work` : ''}`;
+  $('#meterFill').style.width = n ? `${(done / n) * 100}%` : '0';
+}
+
+function zoom(src) {
+  $('#zoomImg').src = src;
+  $('#zoom').showModal();
+}
+$('#zoom').addEventListener('click', () => $('#zoom').close());
+
+for (const b of document.querySelectorAll('#viewChips .chip')) {
+  b.addEventListener('click', () => {
+    view = b.dataset.view;
+    for (const o of document.querySelectorAll('#viewChips .chip')) o.setAttribute('aria-pressed', String(o === b));
+    render();
+  });
+}
+
+$('#copyAll').addEventListener('click', () => {
+  const lines = CASES.filter((c) => state[c.id] && (state[c.id].verdict || state[c.id].note)).map((c) => {
+    const s = state[c.id];
+    return `${c.id} (${caseTitle(c)}): ${s.verdict === 'good' ? 'Looks good' : s.verdict === 'fix' ? 'Needs work' : 'No verdict'}${s.note ? ' — ' + s.note : ''}`;
+  });
+  const text = lines.join('\n') || 'No notes yet.';
+  const btn = $('#copyAll');
+  navigator.clipboard.writeText(text).then(
+    () => { btn.textContent = 'Copied'; setTimeout(() => (btn.textContent = 'Copy all notes'), 1500); },
+    () => { btn.textContent = 'Copy failed'; setTimeout(() => (btn.textContent = 'Copy all notes'), 1500); },
+  );
+});
+
+// local notes first, then the shared store when the viewer can reach it
+for (const c of CASES) {
+  try {
+    const raw = localStorage.getItem('orbit-review-' + c.id);
+    if (raw) { const b = JSON.parse(raw); state[c.id] = { verdict: b.verdict, note: b.note }; }
+  } catch {}
+}
+render();
+
+(async () => {
+  const use = window.claude && window.claude.use;
+  if (!use) return;
+  db = await window.claude.use('db').catch(() => null);
+  if (!db) return;
+  const status = $('#status');
+  const slow = setTimeout(() => { status.hidden = false; status.textContent = 'Saved notes are still loading.'; }, 10000);
+  db.collection('feedback').onSnapshot(
+    (snap) => {
+      if (!snap.metadata.fromCache) { clearTimeout(slow); status.hidden = true; }
+      let changed = false;
+      for (const d of snap.docs) {
+        const b = d.data();
+        if (!b) continue;
+        const cur = state[d.id] || {};
+        // keep what is being typed right now
+        if (timers[d.id] && document.activeElement && document.activeElement.id === 'note-' + d.id) continue;
+        if (cur.verdict !== b.verdict || cur.note !== b.note) { state[d.id] = { verdict: b.verdict, note: b.note }; changed = true; }
+      }
+      if (changed) { const y = window.scrollY; render(); window.scrollTo(0, y); }
+    },
+    () => { clearTimeout(slow); status.hidden = false; status.textContent = 'Saved notes could not be loaded. New notes still save in this browser.'; },
+  );
+})();
+</script>
