@@ -428,11 +428,26 @@ signup is free (2,500 searches). Until then every sourcing run pays Claude web s
 | Job runs a day, one student (§9.4) | 110 | | | | |
 | Hunter credits per sourced person | 1 to 2 | | | | |
 | Reply draft $ (§9.3) | $0.031 | | | | |
-| Unipile accounts (§9.6) | 11 (10 included) | | | | |
+| Unipile accounts (§9.6) | 11 (10 included) | | | | 7 on the key, 1 Orbit, 0 orphans (E1 first run 11-09; E2 done) |
 | Tool chars loaded in the cached prefix (offline, `context-budget.test.ts`) | 120,300 (114 tools, all loaded) | 29,444 (20 core, tool search, web_search; 82 deferred, sent but not loaded) | | | |
 | Fixed system block chars (`system.test.ts`) | 38,250 | 23,880 | | | |
 | Playbook block chars, IB recruiting student (header is now the section list) | 10,240 | 9,681 | | | |
 | Cached prefix chars before the conversation (loaded tools + fixed block + playbook; tokens wait for the bench) | 168,800 | 63,000 | | | |
+
+### 7.1 Shipped 2026-11-09
+
+- Live: migrations 20261118 to 20261122 applied in order; orbit-worker, orbit-api, orbit-webhooks, orbit-connectors,
+  orbit-research and orbit-claude deployed from 806dd91 (pushed first as `cost-35`); main pushed at 806dd91, which ships
+  the web side (tool search with the 400 fallback, one change mark instead of three polls, Find email on demand).
+- Phases A, B, C and E built and deployed. E2 done (four orphans deleted after checking each one). E5 on at the default
+  21 days (`ORBIT_LINKEDIN_PARK_DAYS` unset). E6 and E7 wait on the Enrow, Icypeas, Reoon and Serper keys.
+- Phase D not shipped: none of D1 to D4 ran its bench.
+- Chat check, old against new code, 14 scenarios through the local CLI shim (`docs/qa/chat-runs/cost35`, not committed):
+  scorecard 4.00 before, 3.93 after, 0 unsafe and 0 invented in both, 3 below the bar in both. The repeated reply and
+  repeated button row appear in both arms, so they predate this plan. The shim cannot price tool search or the caller's
+  cache breakpoints (it defers every tool and skips caching), so the dollar columns above wait for real traffic.
+- First checks after deploy: every job run ok, no dead letters, no orphaned runs; `orbit.user_marks` moved on the first
+  calendar sync; LinkedIn polls hourly. The remaining after numbers come from §9 once a day of traffic has run.
 
 ## 8. Decisions and approvals for Anish
 
