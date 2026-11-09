@@ -136,7 +136,9 @@ describe('the routes card shows warm intros', () => {
     });
     // the path is drawn hop by hop (faces and arrows), each hop named in order
     const hops = [
-      ...document.querySelectorAll('[data-testid="result-company"] [data-testid="warm-intro-path"] > [role="listitem"]'),
+      ...document.querySelectorAll(
+        '[data-testid="result-company"] [data-testid="warm-intro-path"] > [role="listitem"]',
+      ),
     ].map((li) => (li.querySelector('.truncate') ?? li).textContent);
     expect(hops).toEqual(['You', 'Maya Chen', 'Priya Ahmed', 'Stripe']);
     expect($('[data-testid="result-company"] [data-testid="warm-intros-map"]')?.getAttribute('href')).toMatch(
