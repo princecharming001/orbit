@@ -1,5 +1,6 @@
 import type { IntroWeb, OrbitCluster, OrbitGroup, OrbitLayout, OrbitNode, Person } from '@orbit/core';
 import { MEDIUM_TIE, ORBIT_PERIOD_MS } from '@orbit/core';
+import { seenPerson } from '../engine/photoSignals';
 import {
   type Clock,
   clamp01,
@@ -37,6 +38,9 @@ import {
   wedgeMid,
 } from './orbitGeometry';
 import { STAGE_COLOR } from './people/shared';
+
+/** A dot at least this many pixels across shows a face, so the person counts as seen (engine/photoSignals). */
+const SEEN_DOT_PX = 20;
 
 /*
  * The orbit map's scene. Every animated quantity on the canvas lives here as a tween or a spring, and one render
@@ -3180,6 +3184,8 @@ export class OrbitScene {
   private drawSprite(ctx: CanvasRenderingContext2D, v: NodeView, now: number): void {
     const d = v.pr * 2;
     if (d < 0.5) return;
+    // a dot big enough to carry a face is someone the student sees: their photo may be fetched (plan 35 B4)
+    if (d >= SEEN_DOT_PX && v.person && !v.cluster) seenPerson(v.person.id);
     const want = Math.max(d, this.spriteSize(v, now));
     const label = v.cluster ? v.label : '';
     const photo = v.person?.photoUrl ? this.imageFor(v.person) : undefined;

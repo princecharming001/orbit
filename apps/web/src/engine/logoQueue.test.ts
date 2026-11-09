@@ -1,7 +1,8 @@
 /**
- * Company logos straight from LinkedIn, for a whole network: tiles without one ask, the queue sends names in batches
- * to Orbit's shared company list (which answers companies anyone found before for free), and keeps each company's id
- * and logo on its organisation. LinkedIn's answer is the only source.
+ * Company logos straight from LinkedIn, for the companies the student sees: tiles without one ask, the queue sends
+ * names in batches to Orbit's shared company list (which answers companies anyone found before for free), and keeps
+ * each company's id and logo on its organisation. LinkedIn's answer is the only source. Plan 35 B4: a company no tile
+ * showed is never sent (the server's weekly sweep fills the shared list for the network's big companies).
  */
 import type { User } from '@orbit/core';
 import { beforeEach, describe, expect, it } from 'vitest';
@@ -98,22 +99,41 @@ describe('logo queue', () => {
     expect(org.logoUrl).toBe(kept('nozomio'));
   });
 
-  it('sends what tiles asked for first, then the whole network by how many people work there, in one batch', async () => {
+  it('sends only the companies tiles showed, never the rest of the network', async () => {
     const source = shared();
     await person('Stripe', 3);
     await person('folk.app', 1);
+    await person('Initech', 5);
     await person('UC Berkeley', 9); // a school: its own site icon stands in
     wantCompanyLogo('Nozomio');
+    wantCompanyLogo('Stripe');
+    wantCompanyLogo('UC Berkeley');
     await fetchLogos(user, { now: NOW, source });
-    expect(source.calls).toEqual([['Nozomio', 'Stripe', 'folk.app']]);
-    // all three now have their logo: nothing is sent again
+    expect(source.calls.map((c) => [...c].sort())).toEqual([['Nozomio', 'Stripe']]);
+    // both now have their logo, and nobody showed folk.app or Initech: nothing is sent again
     const again = await fetchLogos(user, { now: later(LOGO_GAP_MS + 1), source });
     expect(again.step).toBe('idle');
+    expect(source.calls.flat()).not.toContain('Initech');
+  });
+
+  it('remembers companies shown in an earlier visit', async () => {
+    const source = shared();
+    wantCompanyLogo('Nova');
+    wantCompanyLogo('folk.app');
+    // the visit ends before the queue ran: the next visit still knows they were shown
+    const first = await fetchLogos(user, {
+      now: NOW,
+      source: { byNames: async () => ({ ok: false, reason: 'error', message: 'down' }) },
+    });
+    expect(first.step).toBe('asked');
+    resetLogoQueueForTests();
+    await fetchLogos(user, { now: later(LOGO_GAP_MS * 3), source });
+    expect(source.calls.map((c) => [...c].sort())).toEqual([['Nova', 'folk.app']]);
   });
 
   it('sends at most one batch of names a call, and waits between calls', async () => {
     const source = shared();
-    for (let i = 0; i < LOGO_BATCH + 10; i++) await person(`Company ${i}`);
+    for (let i = 0; i < LOGO_BATCH + 10; i++) wantCompanyLogo(`Company ${i}`);
     await fetchLogos(user, { now: NOW, source });
     expect(source.calls[0]).toHaveLength(LOGO_BATCH);
     expect((await fetchLogos(user, { now: later(1000), source })).step).toBe('wait');

@@ -42,6 +42,8 @@ export const KIND_QUEUE: Record<string, QueueName> = {
   company_facts_sync: 'orbit_enrich',
   search_census: 'orbit_enrich',
   search_reading: 'orbit_enrich',
+  // plan 35 B4: the weekly shared logo pass (userId null)
+  'logos.sweep': 'orbit_enrich',
   'cost.digest': 'orbit_enrich',
   noop: 'orbit_enrich',
 };

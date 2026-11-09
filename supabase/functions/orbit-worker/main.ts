@@ -61,6 +61,7 @@ const handlerDeps: HandlerDeps = {
       : undefined,
   gmailTopic: env('GMAIL_PUBSUB_TOPIC'),
   unipile: { apiKey: unipileKey, baseUrl: unipileBase },
+  storage: { url: env('SUPABASE_URL'), serviceKey: env('SUPABASE_SERVICE_ROLE_KEY') },
   claude: makeClaude({ apiKey: claudeKey, db }),
   cost: { mailer: makeMailer(agentEnv, fetch), ownerId, thresholds: costThresholds },
 };
