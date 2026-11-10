@@ -142,17 +142,20 @@ function DiscoverFeed({ tabs }: { tabs?: ReactNode }) {
     let live = true;
     // the first read starts at once, so the network cards come with the page; later ones wait for the list to
     // settle (the refresh writes its people one at a time)
-    const t = setTimeout(() => {
-      loadPointContext(user, recIds.split(','))
-        .then((c) => {
-          if (!live) return;
-          settled.current = true;
-          setPointCtx(c);
-          setCtxFailed(false);
-        })
-        .catch(() => live && setCtxFailed(true))
-        .finally(() => live && setCtxFor(recIds));
-    }, settled.current ? 300 : 0);
+    const t = setTimeout(
+      () => {
+        loadPointContext(user, recIds.split(','))
+          .then((c) => {
+            if (!live) return;
+            settled.current = true;
+            setPointCtx(c);
+            setCtxFailed(false);
+          })
+          .catch(() => live && setCtxFailed(true))
+          .finally(() => live && setCtxFor(recIds));
+      },
+      settled.current ? 300 : 0,
+    );
     return () => {
       live = false;
       clearTimeout(t);
