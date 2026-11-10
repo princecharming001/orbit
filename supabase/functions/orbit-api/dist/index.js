@@ -598,7 +598,7 @@ function makeClaude(deps) {
         format: { type: base.type, schema: base.schema }
       }
     };
-    const request = {
+    const request2 = {
       system: req.system,
       user: req.user,
       ...req.maxTokens ? { maxTokens: req.maxTokens } : {}
@@ -606,7 +606,7 @@ function makeClaude(deps) {
     const rows = await deps.db.sql`
       insert into orbit.claude_batch_requests (user_id, person_id, task, model, request, params, handler, payload,
                                                dedupe_key, created_at)
-      values (${req.userId}::uuid, ${job.personId ?? null}::uuid, ${req.task}, ${setting.model}, ${request}::jsonb,
+      values (${req.userId}::uuid, ${job.personId ?? null}::uuid, ${req.task}, ${setting.model}, ${request2}::jsonb,
               ${params}::jsonb, ${job.handler}, ${job.payload}::jsonb, ${job.dedupeKey ?? null}, ${now()}::timestamptz)
       on conflict (dedupe_key) where dedupe_key is not null and status in ('queued', 'submitted') do nothing
       returning id::text as id`;
@@ -1070,8 +1070,8 @@ function stableJson(value) {
   }
   return JSON.stringify(value);
 }
-function cacheKey(provider, request) {
-  return sha256Hex2(`${provider}:${stableJson(request)}`);
+function cacheKey(provider, request2) {
+  return sha256Hex2(`${provider}:${stableJson(request2)}`);
 }
 
 // apps/web/src/zod.ts
@@ -8416,7 +8416,7 @@ var NICKNAME_DATA = [
 // packages/core/src/entity/nicknames.ts
 var NICKNAME_VARIANTS = (() => {
   const map = /* @__PURE__ */ new Map();
-  const link = (a, b) => {
+  const link2 = (a, b) => {
     const s = map.get(a) ?? /* @__PURE__ */ new Set();
     s.add(b);
     map.set(a, s);
@@ -8426,8 +8426,8 @@ var NICKNAME_VARIANTS = (() => {
     const name = row.slice(0, i);
     for (const nick of row.slice(i + 1).split(" ")) {
       if (!nick) continue;
-      link(name, nick);
-      link(nick, name);
+      link2(name, nick);
+      link2(nick, name);
     }
   }
   return map;
@@ -10890,7 +10890,7 @@ function cadenceActions(inp) {
     const pending = new Set(
       inp.drafts.filter((d) => ["draft", "approved", "queued", "scheduled"].includes(d.status)).map((d) => d.personId)
     );
-    const candidates = [];
+    const candidates2 = [];
     for (const [id, p] of inp.people) {
       if (blocked(id) || busy.has(id) || pending.has(id) || !p.nurtureReason || !room(id)) continue;
       const goal = goalPeople.get(id);
@@ -10898,7 +10898,7 @@ function cadenceActions(inp) {
       if (!days) continue;
       const last = p.lastContactAt ? new Date(p.lastContactAt).getTime() : Number.NEGATIVE_INFINITY;
       if (now.getTime() - last < days * DAY4) continue;
-      candidates.push({
+      candidates2.push({
         kind: "nurture",
         personId: id,
         ...goal ? { goalId: goal.id } : {},
@@ -10908,8 +10908,8 @@ function cadenceActions(inp) {
         score: p.score + (goal ? 100 : 0)
       });
     }
-    candidates.sort((a, b) => b.score - a.score || a.personId.localeCompare(b.personId));
-    for (const { score: _s, ...c } of candidates.slice(0, left)) out.push(c);
+    candidates2.sort((a, b) => b.score - a.score || a.personId.localeCompare(b.personId));
+    for (const { score: _s, ...c } of candidates2.slice(0, left)) out.push(c);
   }
   for (const d of inp.drafts) {
     if (!["approved", "scheduled", "queued"].includes(d.status) || !d.sendAt) continue;
@@ -11214,21 +11214,21 @@ function boundedSearch(g, source, maxHops, target, removedEdges, removedNodes, t
   }
   return { best, prev };
 }
-function reconstruct(search3, node) {
-  const b = search3.best.get(node);
+function reconstruct(search4, node) {
+  const b = search4.best.get(node);
   if (!b) return void 0;
   const path = [node];
   let cur = node;
   for (let h = b.hops; h > 0; h--) {
-    cur = search3.prev.get(cur)[h];
+    cur = search4.prev.get(cur)[h];
     path.unshift(cur);
   }
   return path;
 }
 function shortestPath(g, source, target, maxHops, removedEdges, removedNodes, toTarget) {
   if (source === target) return [source];
-  const search3 = boundedSearch(g, source, maxHops, target, removedEdges, removedNodes, toTarget);
-  return reconstruct(search3, target);
+  const search4 = boundedSearch(g, source, maxHops, target, removedEdges, removedNodes, toTarget);
+  return reconstruct(search4, target);
 }
 function hopsToTarget(g, target, maxHops) {
   const back = /* @__PURE__ */ new Map();
@@ -11840,7 +11840,7 @@ function mergeTies(pairs, ties, now = /* @__PURE__ */ new Date()) {
 }
 function withCommonContacts(pairs, now = /* @__PURE__ */ new Date()) {
   const adj = /* @__PURE__ */ new Map();
-  const link = (a, b, w) => {
+  const link2 = (a, b, w) => {
     let m = adj.get(a);
     if (!m) adj.set(a, m = /* @__PURE__ */ new Map());
     m.set(b, w);
@@ -11849,8 +11849,8 @@ function withCommonContacts(pairs, now = /* @__PURE__ */ new Date()) {
     const real = p.ties.filter((t) => ROUTABLE_TIE_KINDS.has(t.kind));
     if (!real.length) continue;
     const w = 1 - real.reduce((acc, t) => acc * (1 - Math.min(1, decayedTieWeight(t, now) * t.confidence)), 1);
-    link(p.aId, p.bId, w);
-    link(p.bId, p.aId, w);
+    link2(p.aId, p.bId, w);
+    link2(p.bId, p.aId, w);
   }
   const C = HOP_WEIGHTS.commonContacts;
   const add4 = [];
@@ -11960,10 +11960,10 @@ function dropBlocked(pairs, blocked) {
   for (const k of blocked) out.delete(k);
   return out;
 }
-function withExternal(pairs, targetId, candidates) {
-  if (!candidates.length) return pairs;
+function withExternal(pairs, targetId, candidates2) {
+  if (!candidates2.length) return pairs;
   const out = new Map(pairs);
-  for (const c of candidates) {
+  for (const c of candidates2) {
     if (c.introducerId === targetId) continue;
     const key = pk(c.introducerId, targetId);
     const [a, b] = key.split("|");
@@ -12107,10 +12107,10 @@ function pairPhrase(fromId, pair, toName, now = /* @__PURE__ */ new Date()) {
   if (!support || support === top) return head;
   return `${head}, and ${hopEvidence(fromId, support, toName)}`;
 }
-function mutualIntroducers(pairs, targetId, candidates) {
+function mutualIntroducers(pairs, targetId, candidates2) {
   const out = /* @__PURE__ */ new Set();
   if (!targetId) return out;
-  for (const c of candidates)
+  for (const c of candidates2)
     if (c.kind === "linkedin_mutual" && c.introducerId !== targetId) out.add(c.introducerId);
   for (const pair of pairs.values()) {
     if (!pair.kinds.includes("linkedin_mutual")) continue;
@@ -12163,14 +12163,14 @@ function rankWarmPaths(input) {
     return { score: target.score, band, text: `You know ${tName} (${band} · ${target.score})` };
   })() : void 0;
   const blocked = input.blockedPairs;
-  const candidates = (input.candidates ?? []).filter(
+  const candidates2 = (input.candidates ?? []).filter(
     (c) => !blocked?.has(pk(c.introducerId, input.targetId))
   );
   const pairs = withCommonContacts(
-    dropBlocked(withExternal(dropBlocked(input.pairs, blocked), input.targetId, candidates), blocked),
+    dropBlocked(withExternal(dropBlocked(input.pairs, blocked), input.targetId, candidates2), blocked),
     now
   );
-  const mutuals = mutualIntroducers(pairs, input.targetId, candidates);
+  const mutuals = mutualIntroducers(pairs, input.targetId, candidates2);
   const rg = routingGraph(input, pairs, now, mutuals);
   const { g, ask: ask3 } = rg;
   const rT = targetReceptivity(input.target ?? {});
@@ -13252,17 +13252,17 @@ async function readPeople(db2, claude, userId, limit, personIds, opts = {}) {
     const { texts, worth } = peopleTexts(part2);
     let res;
     if (claude?.configured && worth.some(Boolean)) {
-      const request = peopleRequest(userId, texts, worth);
+      const request2 = peopleRequest(userId, texts, worth);
       if (opts.batch && claude.structuredBatch && claude.batching) {
         const ids = part2.map((r) => r.person_id);
-        const q = await claude.structuredBatch(request, {
+        const q = await claude.structuredBatch(request2, {
           handler: "reading.people",
           payload: { personIds: ids },
           dedupeKey: partKey("reading.people", userId, ids)
         });
         if (q.queued || q.reason === "duplicate") continue;
       }
-      res = await claude.structured(request);
+      res = await claude.structured(request2);
       if (!res.ok && "budgetExceeded" in res) return n;
     }
     n += await writePeople(
@@ -13334,7 +13334,7 @@ async function readCompanies(db2, claude, userId, limit, now, opts = {}) {
     const { texts, worth } = companyTexts(part2);
     let res;
     if (claude?.configured && worth.some(Boolean)) {
-      const request = {
+      const request2 = {
         task: "reading",
         system: COMPANY_READING_SYSTEM,
         user: part2.map((_, k) => worth[k] ? block2("company", `C${k + 1}`, texts[k]) : "").filter(Boolean).join("\n\n"),
@@ -13343,14 +13343,14 @@ async function readCompanies(db2, claude, userId, limit, now, opts = {}) {
       };
       if (opts.batch && claude.structuredBatch && claude.batching) {
         const ids = part2.map((c) => c.linkedin_id);
-        const q = await claude.structuredBatch(request, {
+        const q = await claude.structuredBatch(request2, {
           handler: "reading.companies",
           payload: { linkedinIds: ids },
           dedupeKey: partKey("reading.companies", null, ids)
         });
         if (q.queued || q.reason === "duplicate") continue;
       }
-      res = await claude.structured(request);
+      res = await claude.structured(request2);
       if (!res.ok && "budgetExceeded" in res) return n;
     }
     n += await writeCompanies(
@@ -14868,12 +14868,12 @@ function fetchPrompt(urls) {
   return ["Fetch these pages, all at once in parallel:", ...urls].join("\n");
 }
 function claudeGatherEstimateUsd(plan2, model = GATHER_MODEL) {
-  const search3 = plan2.queries.length * CLAUDE_SEARCH_USD + costUsd(model, { input_tokens: 4e3 + plan2.queries.length * 11e3, output_tokens: 600 });
+  const search4 = plan2.queries.length * CLAUDE_SEARCH_USD + costUsd(model, { input_tokens: 4e3 + plan2.queries.length * 11e3, output_tokens: 600 });
   const read2 = costUsd(model, {
     input_tokens: 3e3 + plan2.maxPages * (FETCH_MAX_TOKENS + 500),
     output_tokens: 600
   });
-  return search3 + read2;
+  return search4 + read2;
 }
 function readGatherBlocks(content) {
   const hits = [];
@@ -17277,12 +17277,44 @@ async function list2(ctx) {
   const out = { friends, pending };
   return json(200, out);
 }
+async function requestFriendship(db2, from, otherId, now) {
+  const me2 = from.id;
+  if (otherId === me2) throw badRequest("that is you");
+  const [lo, hi] = me2 < otherId ? [me2, otherId] : [otherId, me2];
+  const [existing] = await db2.sql`
+    select id, status from orbit.friendships where a = ${lo}::uuid and b = ${hi}::uuid`;
+  if (existing?.status === "active") throw new HttpError(409, "already_friends", "you are already friends");
+  if (existing?.status === "blocked") throw new HttpError(409, "blocked", "that request cannot be sent");
+  const [f2] = existing ? await db2.sql`
+        update orbit.friendships set status = 'pending', requested_by = ${me2}::uuid, created_at = ${now}::timestamptz,
+               accepted_at = null, ended_at = null, ended_by = null
+         where id = ${existing.id}::uuid returning id` : await db2.sql`
+        insert into orbit.friendships (a, b, status, requested_by, created_at)
+        values (${lo}::uuid, ${hi}::uuid, 'pending', ${me2}::uuid, ${now}::timestamptz) returning id`;
+  const mine = defaultMode(from);
+  await db2.sql`
+    insert into orbit.friend_share_settings (friendship_id, owner_user_id, mode, company_domains)
+    values (${f2.id}::uuid, ${me2}::uuid, ${mine.mode}, ${mine.domains}::text[])
+    on conflict (friendship_id, owner_user_id) do update set mode = excluded.mode,
+      company_domains = excluded.company_domains, updated_at = now()`;
+  return f2.id;
+}
 async function invite(ctx) {
   const b = await body(ctx, true);
   const db2 = ctx.db;
   const me2 = ctx.userId;
   const now = ctx.now();
-  const email2 = typeof b.email === "string" && b.email.trim() ? normalizeEmail(b.email.trim()) : null;
+  const personId = optUuid(b, "personId");
+  let personEmail = null;
+  if (personId) {
+    const [p] = await db2.sql`
+      select primary_email from orbit.people
+       where id = ${personId}::uuid and user_id = ${me2}::uuid and deleted_at is null and not do_not_contact`;
+    if (!p?.primary_email) throw new HttpError(404, "not_found", "Orbit has no address for them");
+    personEmail = p.primary_email;
+  }
+  const rawEmail = personEmail ?? (typeof b.email === "string" ? b.email : "");
+  const email2 = rawEmail.trim() ? normalizeEmail(rawEmail.trim()) : null;
   if (email2 && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email2)) throw badRequest("that is not an email address");
   const u2 = await userLite(db2, me2);
   if (email2 && email2 === normalizeEmail(u2.email)) throw badRequest("that is your own address");
@@ -17297,8 +17329,7 @@ async function invite(ctx) {
     insert into orbit.friend_invites (from_user_id, to_email, code, status, created_at, expires_at)
     values (${me2}::uuid, ${email2}, ${code}, 'pending', ${now}::timestamptz, ${expires}::timestamptz)
     returning id, created_at`;
-  const link = `${ctx.env.appUrl}/friends/join/${code}`;
-  const mine = defaultMode(u2);
+  const link2 = `${ctx.env.appUrl}/friends/join/${code}`;
   let status3 = "link";
   let name = null;
   if (email2) {
@@ -17306,23 +17337,7 @@ async function invite(ctx) {
       select id, email, full_name, first_name, school, grad_year, avatar_url, settings from orbit.users
        where lower(email) = ${email2} and deleted_at is null`;
     if (other) {
-      const [lo, hi] = me2 < other.id ? [me2, other.id] : [other.id, me2];
-      const [existing] = await db2.sql`
-        select id, status from orbit.friendships where a = ${lo}::uuid and b = ${hi}::uuid`;
-      if (existing?.status === "active")
-        throw new HttpError(409, "already_friends", "you are already friends");
-      if (existing?.status === "blocked") throw new HttpError(409, "blocked", "that request cannot be sent");
-      const [f2] = existing ? await db2.sql`
-            update orbit.friendships set status = 'pending', requested_by = ${me2}::uuid, created_at = ${now}::timestamptz,
-                   accepted_at = null, ended_at = null, ended_by = null
-             where id = ${existing.id}::uuid returning id` : await db2.sql`
-            insert into orbit.friendships (a, b, status, requested_by, created_at)
-            values (${lo}::uuid, ${hi}::uuid, 'pending', ${me2}::uuid, ${now}::timestamptz) returning id`;
-      await db2.sql`
-        insert into orbit.friend_share_settings (friendship_id, owner_user_id, mode, company_domains)
-        values (${f2.id}::uuid, ${me2}::uuid, ${mine.mode}, ${mine.domains}::text[])
-        on conflict (friendship_id, owner_user_id) do update set mode = excluded.mode,
-          company_domains = excluded.company_domains, updated_at = now()`;
+      await requestFriendship(db2, u2, other.id, now);
       status3 = "requested";
       name = nameOf(other);
     } else {
@@ -17334,7 +17349,7 @@ async function invite(ctx) {
           text: [
             `${nameOf(u2)} invited you to be friends on Orbit.`,
             "Friends pool their networks: you see who they know and how well, they see yours, and intros happen in one tap. Nothing else crosses: not your messages, notes or contact details.",
-            `Open this link to sign in and accept: ${link}`,
+            `Open this link to sign in and accept: ${link2}`,
             `It stops working in ${INVITE_DAYS} days.`
           ].join("\n\n")
         });
@@ -17345,7 +17360,7 @@ async function invite(ctx) {
   await logAudit(ctx, "friends.invite", "friend_invites", row.id, { status: status3, byEmail: !!email2 });
   const out = {
     code,
-    link,
+    link: link2,
     status: status3,
     invite: {
       id: row.id,
@@ -17428,7 +17443,8 @@ async function accept(ctx) {
       on conflict (friendship_id, owner_user_id) do update set mode = excluded.mode,
         company_domains = excluded.company_domains, updated_at = now()`;
     if (p.inviteId)
-      await tx.sql`update orbit.friend_invites set status = 'accepted', answered_at = ${now}::timestamptz where id = ${p.inviteId}::uuid`;
+      await tx.sql`update orbit.friend_invites set status = 'accepted', answered_at = ${now}::timestamptz
+                     where id = ${p.inviteId}::uuid and to_email is not null`;
     return id;
   });
   await enqueueRefresh(ctx, [me2, p.fromUserId]);
@@ -17743,6 +17759,216 @@ var friendRoutes = {
     run: (ctx) => ctx.req.method === "GET" ? listAsks(ctx) : ask(ctx)
   },
   "/friends/asks/respond": { method: "POST", auth: true, run: respondFlat }
+};
+
+// supabase/functions/orbit-api/routes/friendsDiscover.ts
+var SUGGEST_ON_ORBIT = 30;
+var SUGGEST_TO_INVITE = 24;
+var SEARCH_RESULTS = 20;
+var LINK_DAYS = 90;
+var DAY_MS2 = 864e5;
+async function candidates(db2, me2, opts) {
+  const pattern = opts.q ? `%${opts.q.toLowerCase().replace(/[%_\\]/g, (c) => `\\${c}`)}%` : null;
+  return db2.sql`
+    with me as (
+      select id, lower(email) as email, school_domain, lower(coalesce(school, '')) as school, grad_year,
+             lower(coalesce(current_org, '')) as org
+        from orbit.users where id = ${me2}::uuid),
+    rel as (
+      select id, case when a = ${me2}::uuid then b else a end as other, status, requested_by
+        from orbit.friendships where a = ${me2}::uuid or b = ${me2}::uuid),
+    my_friends as (select other from rel where status = 'active'),
+    mine as (
+      select pi.value_norm as email,
+             max(coalesce(ts.score, round(coalesce(p.strength, 0) * 100)))::int as closeness
+        from orbit.person_identities pi
+        join orbit.people p on p.id = pi.person_id and p.deleted_at is null and p.merged_into is null
+        left join orbit.tie_scores ts on ts.person_id = p.id and ts.user_id = p.user_id
+       where pi.user_id = ${me2}::uuid and pi.kind = 'email'
+       group by 1),
+    c as (
+      select u.id, u.full_name, u.first_name, u.last_name, u.email, u.avatar_url, u.school, u.grad_year,
+             u.current_title, u.current_org, u.last_seen_at,
+             (select closeness from mine where mine.email = lower(u.email)) as in_contacts,
+             exists (
+               select 1 from orbit.person_identities pi2
+                 join orbit.people p2 on p2.id = pi2.person_id and p2.deleted_at is null
+                where pi2.user_id = u.id and pi2.kind = 'email' and pi2.value_norm = (select email from me)
+             ) as knows_me,
+             (select count(*) from orbit.friendships f
+               where f.status = 'active' and (f.a = u.id or f.b = u.id)
+                 and (case when f.a = u.id then f.b else f.a end) in (select other from my_friends))::int as mutual,
+             ((select school_domain from me) is not null and u.school_domain = (select school_domain from me))
+               or ((select school from me) <> '' and lower(coalesce(u.school, '')) = (select school from me))
+               as same_school,
+             (u.grad_year is not null and (select grad_year from me) is not null
+               and abs(u.grad_year - (select grad_year from me)) <= 1) as near_year,
+             ((select org from me) <> '' and lower(coalesce(u.current_org, '')) = (select org from me)) as same_org,
+             (select count(*) from orbit.people p3
+               where p3.user_id = u.id and p3.deleted_at is null and p3.merged_into is null
+                 and not coalesce(p3.is_self, false))::int as connections,
+             r.status as rel_status, r.requested_by, r.id as friendship_id
+        from orbit.users u
+        left join rel r on r.other = u.id
+       where u.id <> ${me2}::uuid and u.deleted_at is null
+         and coalesce(r.status, '') not in ('active', 'blocked'))
+    select * from c
+     where (${opts.email ?? null}::text is null or lower(c.email) = ${opts.email ?? null}::text)
+       and (${pattern}::text is null
+            or lower(coalesce(c.full_name, '')) like ${pattern}::text
+            or lower(coalesce(c.first_name, '') || ' ' || coalesce(c.last_name, '')) like ${pattern}::text)
+       and (not ${opts.tied}::boolean
+            or c.in_contacts is not null or c.knows_me or c.mutual > 0 or c.same_school or c.same_org)
+     limit ${opts.limit * 4}`;
+}
+function tieScore(c, now) {
+  let s = 0;
+  if (c.in_contacts !== null) s += 5 + Math.min(4, Math.max(0, c.in_contacts) / 25);
+  if (c.knows_me) s += 3;
+  s += 2 * Math.min(3, c.mutual);
+  if (c.same_school) s += c.near_year ? 3 : 2;
+  if (c.same_org) s += 1;
+  const seen = c.last_seen_at ? new Date(c.last_seen_at).getTime() : 0;
+  if (seen && now.getTime() - seen < 14 * DAY_MS2) s += 0.5;
+  return s;
+}
+var yy = (y) => y ? ` '${String(y).slice(-2)}` : "";
+function reasonFor(c) {
+  if (c.in_contacts !== null) return c.in_contacts >= 60 ? "You know them well" : "In your contacts";
+  if (c.mutual > 0) return c.mutual === 1 ? "1 mutual friend" : `${c.mutual} mutual friends`;
+  if (c.knows_me) return "Has you in their network";
+  if (c.same_school && c.school) return `${c.school}${yy(c.grad_year)}`;
+  if (c.same_org && c.current_org) return `Also at ${c.current_org}`;
+  return "On Orbit";
+}
+function view(c, me2) {
+  const headline = c.current_title && c.current_org ? `${c.current_title} at ${c.current_org}` : c.current_org || (c.school ? `${c.school}${yy(c.grad_year)}` : null);
+  const pending = c.rel_status === "pending";
+  const reason2 = reasonFor(c);
+  return {
+    userId: c.id,
+    name: nameOf(c),
+    avatarUrl: c.avatar_url,
+    // the reason and the headline are never the same words twice ("Cornell '26" under "Cornell '26")
+    headline: headline === reason2 ? null : headline,
+    connections: c.connections,
+    reason: reason2,
+    state: !pending ? "none" : c.requested_by === me2 ? "requested" : "incoming",
+    ...pending && c.requested_by !== me2 && c.friendship_id ? { friendshipId: c.friendship_id } : {}
+  };
+}
+function inviteReason(r, school, now) {
+  const days = r.last_interaction_at ? (now.getTime() - new Date(r.last_interaction_at).getTime()) / DAY_MS2 : null;
+  if ((r.closeness ?? 0) >= 60) return "You know them well";
+  if (r.is_alumni && school) return `${school} alum`;
+  if (days !== null && days <= 45) return "You talked recently";
+  return "In your People";
+}
+async function toInvite(db2, me2, school, now) {
+  const rows = await db2.sql`
+    select p.id, p.display_name, p.photo_url, p.title, p.org_raw, p.is_alumni, p.relationship_type,
+           p.last_interaction_at,
+           coalesce(ts.score, round(coalesce(p.strength, 0) * 100))::int as closeness
+      from orbit.people p
+      left join (select person_id, max(score) as score from orbit.tie_scores
+                  where user_id = ${me2}::uuid group by 1) ts on ts.person_id = p.id
+     where p.user_id = ${me2}::uuid and p.deleted_at is null and p.merged_into is null and p.hidden_at is null
+       and not p.do_not_contact and not coalesce(p.is_self, false) and not coalesce(p.private, false)
+       and p.primary_email is not null
+       and coalesce(p.relationship_type, '') <> 'recruiter'
+       and not exists (select 1 from orbit.users u where lower(u.email) = lower(p.primary_email) and u.deleted_at is null)
+       and not exists (select 1 from orbit.friend_invites fi
+                        where fi.from_user_id = ${me2}::uuid and fi.status = 'pending'
+                          and fi.to_email = lower(p.primary_email))
+     order by closeness desc nulls last, p.last_interaction_at desc nulls last
+     limit ${SUGGEST_TO_INVITE * 3}`;
+  const score = (r) => {
+    const days = r.last_interaction_at ? (now.getTime() - new Date(r.last_interaction_at).getTime()) / DAY_MS2 : Number.POSITIVE_INFINITY;
+    return (r.closeness ?? 0) + (r.is_alumni ? 15 : 0) + (["peer", "classmate", "friend", "family_friend", "colleague"].includes(r.relationship_type ?? "") ? 10 : 0) + (days <= 60 ? 10 : 0);
+  };
+  return rows.filter((r) => (r.closeness ?? 0) >= 20 || r.is_alumni).sort((a, b) => score(b) - score(a)).slice(0, SUGGEST_TO_INVITE).map((r) => ({
+    personId: r.id,
+    name: r.display_name,
+    photoUrl: r.photo_url,
+    headline: r.title && r.org_raw ? `${r.title} at ${r.org_raw}` : r.org_raw ?? r.title,
+    reason: inviteReason(r, school, now)
+  }));
+}
+async function suggest(ctx) {
+  const me2 = ctx.userId;
+  const now = ctx.now();
+  const u2 = await userLite(ctx.db, me2);
+  const found = await candidates(ctx.db, me2, { tied: true, limit: SUGGEST_ON_ORBIT });
+  const onOrbit = found.filter((c) => !(c.rel_status === "pending" && c.requested_by !== me2)).map((c) => ({ c, s: tieScore(c, now) })).sort((a, b) => b.s - a.s || b.c.connections - a.c.connections).slice(0, SUGGEST_ON_ORBIT).map(({ c }) => view(c, me2));
+  const out = { onOrbit, toInvite: await toInvite(ctx.db, me2, u2.school, now) };
+  return json(200, out);
+}
+async function search(ctx) {
+  const b = await body(ctx);
+  const me2 = ctx.userId;
+  const now = ctx.now();
+  const q = typeof b.q === "string" ? b.q.trim().replace(/\s+/g, " ") : "";
+  if (q.length < 2) throw badRequest("type at least two letters");
+  if (q.length > 120) throw badRequest("that is too long to search for");
+  const email2 = /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(q) ? normalizeEmail(q) : void 0;
+  const found = email2 ? await candidates(ctx.db, me2, { tied: false, email: email2, limit: 1 }) : await candidates(ctx.db, me2, { tied: true, q, limit: SEARCH_RESULTS });
+  const results = found.map((c) => ({ c, s: tieScore(c, now) })).sort((a, b2) => b2.s - a.s || nameOf(a.c).localeCompare(nameOf(b2.c))).slice(0, SEARCH_RESULTS).map(({ c }) => view(c, me2));
+  const out = { results };
+  return json(200, out);
+}
+async function request(ctx) {
+  const b = await body(ctx);
+  const me2 = ctx.userId;
+  const otherId = uuid(b, "userId");
+  const db2 = ctx.db;
+  const [other] = await db2.sql`
+    select id, email, full_name, first_name from orbit.users where id = ${otherId}::uuid and deleted_at is null`;
+  if (!other) throw new HttpError(404, "not_found", "no such person on Orbit");
+  const u2 = await userLite(db2, me2);
+  const friendshipId = await requestFriendship(db2, u2, other.id, ctx.now());
+  await db2.sql`
+    insert into orbit.audit_log (user_id, actor, action, target_table, target_id, details)
+    values (${me2}::uuid, 'user', 'friends.request', 'friendships', ${friendshipId}, ${{}}::jsonb)`;
+  const out = { friendshipId, name: nameOf(other) };
+  return json(200, out);
+}
+async function link(ctx) {
+  const b = await body(ctx, true);
+  const me2 = ctx.userId;
+  const now = ctx.now();
+  const db2 = ctx.db;
+  if (b.reset === true)
+    await db2.sql`
+      update orbit.friend_invites set status = 'revoked', answered_at = ${now}::timestamptz
+       where from_user_id = ${me2}::uuid and to_email is null and status = 'pending'`;
+  const [open] = await db2.sql`
+    select code, expires_at from orbit.friend_invites
+     where from_user_id = ${me2}::uuid and to_email is null and status = 'pending'
+       and expires_at > ${new Date(now.getTime() + DAY_MS2)}::timestamptz
+     order by created_at desc limit 1`;
+  let code = open?.code;
+  let expires = open ? new Date(open.expires_at) : void 0;
+  if (!code) {
+    code = "";
+    while (code.length < 22) code += randomToken(24).replace(/[^A-Za-z0-9]/g, "");
+    code = code.slice(0, 22);
+    expires = new Date(now.getTime() + LINK_DAYS * DAY_MS2);
+    await db2.sql`
+      insert into orbit.friend_invites (from_user_id, to_email, code, status, created_at, expires_at)
+      values (${me2}::uuid, null, ${code}, 'pending', ${now}::timestamptz, ${expires}::timestamptz)`;
+  }
+  const out = {
+    code,
+    link: `${ctx.env.appUrl}/friends/join/${code}`,
+    expiresAt: iso(expires)
+  };
+  return json(200, out);
+}
+var friendDiscoverRoutes = {
+  "/friends/suggest": { method: "GET|POST", auth: true, run: suggest },
+  "/friends/search": { method: "POST", auth: true, run: search },
+  "/friends/request": { method: "POST", auth: true, run: request },
+  "/friends/link": { method: "POST", auth: true, run: link }
 };
 
 // packages/core/src/types.ts
@@ -18912,7 +19138,7 @@ async function linkedinSearch(ctx) {
 }
 
 // supabase/functions/orbit-api/routes/memory.ts
-async function search(ctx) {
+async function search2(ctx) {
   const b = await body(ctx);
   const s = ctx.services();
   const memories = await searchMemories(
@@ -19007,7 +19233,7 @@ async function extract(ctx) {
   return json(200, out);
 }
 var memoryRoutes = {
-  "/memory/search": { method: "POST", auth: true, run: search },
+  "/memory/search": { method: "POST", auth: true, run: search2 },
   "/memory/add": { method: "POST", auth: true, run: add2 },
   "/memory/list": { method: "POST", auth: true, run: list5 },
   "/memory/forget": { method: "POST", auth: true, run: forget },
@@ -19070,8 +19296,8 @@ async function ask2(ctx) {
     returning id`;
   const via = { introducerId, pathScore, introRequestId: row.id };
   const common = { userId, personId: introducerId, channel, goalId, targetPersonId: targetId, via };
-  const { request, blurb } = await composeIntroPair(s, common);
-  const out = { introRequestId: row.id, draftIds: [request.draft.id, blurb.draft.id] };
+  const { request: request2, blurb } = await composeIntroPair(s, common);
+  const out = { introRequestId: row.id, draftIds: [request2.draft.id, blurb.draft.id] };
   return json(200, out);
 }
 var STUDENT = { actor: "user", reason: "pair_correction" };
@@ -20650,8 +20876,8 @@ async function profile(ctx) {
   const postal = optText(b, "postalAddress");
   if (postal && postal.length > POSTAL_ADDRESS_MAX)
     throw badRequest(`postalAddress is at most ${POSTAL_ADDRESS_MAX} characters`);
-  const link = optText(b, "schedulingLink");
-  if (link && (!isHttpsLink(link) || link.length > SCHEDULING_LINK_MAX))
+  const link2 = optText(b, "schedulingLink");
+  if (link2 && (!isHttpsLink(link2) || link2.length > SCHEDULING_LINK_MAX))
     throw badRequest("schedulingLink must be an https link");
   let tz;
   if (b.timezone !== void 0) {
@@ -20727,7 +20953,7 @@ async function profile(ctx) {
   const userId = ctx.userId;
   const given = {};
   if (postal !== void 0) given.postal_address = postal;
-  if (link !== void 0) given.scheduling_link = link;
+  if (link2 !== void 0) given.scheduling_link = link2;
   if (about !== void 0) given.about = about;
   if (tone !== void 0) given.read_reply_tone = tone ? null : false;
   if (autoKinds !== void 0) given.auto_kinds = autoKinds;
@@ -21199,10 +21425,10 @@ function fitSystem(userFirstName2) {
     "Judge only from the fields given. Do not reward fame. Give at most two short reasons."
   ].join("\n");
 }
-function fitUser(lookingFor, candidates) {
+function fitUser(lookingFor, candidates2) {
   return [
     `<looking_for>${JSON.stringify({ goal: lookingFor.title, criteria: lookingFor.criteria })}</looking_for>`,
-    `<candidates>${candidates.map((c) => JSON.stringify(c)).join("\n")}</candidates>`
+    `<candidates>${candidates2.map((c) => JSON.stringify(c)).join("\n")}</candidates>`
   ].join("\n");
 }
 var fitSchema = z.object({
@@ -21631,12 +21857,12 @@ function cleanEmail(e) {
 var titleCase2 = (s) => s.replace(/\b\w/g, (c) => c.toUpperCase());
 
 // supabase/functions/_shared/sourcing/search.ts
-var DAY_MS2 = 864e5;
+var DAY_MS3 = 864e5;
 var SOURCING_CACHE_TTL = {
-  exa: 7 * DAY_MS2,
-  apollo: 7 * DAY_MS2,
-  scholar: 30 * DAY_MS2,
-  searchParameters: 30 * DAY_MS2
+  exa: 7 * DAY_MS3,
+  apollo: 7 * DAY_MS3,
+  scholar: 30 * DAY_MS3,
+  searchParameters: 30 * DAY_MS3
 };
 async function cachedCall(ctx, kind, req, ttlMs, call) {
   const cache2 = ctx.deps.cache;
@@ -22783,7 +23009,7 @@ var list7 = (v, key) => {
     throw badRequest(`filters.${key} must be a list of short strings`);
   return v;
 };
-async function search2(ctx) {
+async function search3(ctx) {
   const b = await body(ctx);
   const f2 = b.filters ?? {};
   if (typeof f2 !== "object" || Array.isArray(f2)) throw badRequest("filters must be an object");
@@ -22823,7 +23049,7 @@ async function email(ctx) {
   );
 }
 var sourceRoutes = {
-  "/source/search": { method: "POST", auth: true, run: search2 },
+  "/source/search": { method: "POST", auth: true, run: search3 },
   "/source/add": { method: "POST", auth: true, run: add3 },
   "/source/email": { method: "POST", auth: true, run: email }
 };
@@ -23488,6 +23714,7 @@ var ROUTES = {
   ...cadenceRoutes,
   ...autopilotRoutes,
   ...friendRoutes,
+  ...friendDiscoverRoutes,
   ...voiceRoutes,
   ...adminRoutes
 };

@@ -34,6 +34,7 @@ import { cadenceRoutes } from './routes/cadence.ts';
 import { calendarRoutes } from './routes/calendar.ts';
 import { draftRoutes } from './routes/drafts.ts';
 import { friendPatternRoute, friendRoutes } from './routes/friends.ts';
+import { friendDiscoverRoutes } from './routes/friendsDiscover.ts';
 import { goalRoutes } from './routes/goals.ts';
 import { historyRoutes } from './routes/history.ts';
 import { inboxRoutes } from './routes/inbox.ts';
@@ -167,6 +168,7 @@ const ROUTES: Record<string, Route> = {
   ...cadenceRoutes,
   ...autopilotRoutes,
   ...friendRoutes,
+  ...friendDiscoverRoutes,
   ...voiceRoutes,
   ...adminRoutes,
 };

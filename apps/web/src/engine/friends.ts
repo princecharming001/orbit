@@ -12,6 +12,10 @@ import type {
   FriendInvite,
   FriendShare,
   FriendShareMode,
+  FriendSuggestion,
+  FriendsLinkResponse,
+  FriendsSuggestResponse,
+  InviteSuggestion,
   PathTarget,
   ServerDraft,
   User,
@@ -113,6 +117,52 @@ export async function inviteFriend(user: Pick<User, 'id'>, email?: string) {
   const r = await callApi('/friends/invite', e ? { email: e } : {});
   if (!r.ok) return fail(r);
   return { ok: true as const, value: r.value };
+}
+
+/** Invite someone in the student's People by id: the server sends to the address it has for them. */
+export async function invitePerson(user: Pick<User, 'id'>, personId: string) {
+  if (!friendsAvailable(user)) return needsAccount();
+  const r = await callApi('/friends/invite', { personId });
+  if (!r.ok) return fail(r);
+  return { ok: true as const, value: r.value };
+}
+
+/** People on Orbit the student may know, and people in their People worth inviting (plan 37 follow-up). */
+export async function suggestFriends(user: Pick<User, 'id'>): Promise<FriendsResult<FriendsSuggestResponse>> {
+  if (!friendsAvailable(user)) return needsAccount();
+  const r = await callApi('/friends/suggest', {});
+  if (!r.ok) return fail(r);
+  return { ok: true, value: r.value };
+}
+
+/** Someone on Orbit by name (among people with a tie to the student) or by exact address. */
+export async function searchOrbit(
+  user: Pick<User, 'id'>,
+  q: string,
+): Promise<FriendsResult<FriendSuggestion[]>> {
+  if (!friendsAvailable(user)) return needsAccount();
+  const r = await callApi('/friends/search', { q });
+  if (!r.ok) return fail(r);
+  return { ok: true, value: r.value.results };
+}
+
+/** A friend request to someone on Orbit; they accept it from their Friends page. */
+export async function requestFriend(user: Pick<User, 'id'>, userId: string) {
+  if (!friendsAvailable(user)) return needsAccount();
+  const r = await callApi('/friends/request', { userId });
+  if (!r.ok) return fail(r);
+  return { ok: true as const, value: r.value };
+}
+
+/** The standing invite link for a group chat; `reset` ends the old one and makes a new one. */
+export async function inviteLink(
+  user: Pick<User, 'id'>,
+  reset = false,
+): Promise<FriendsResult<FriendsLinkResponse>> {
+  if (!friendsAvailable(user)) return needsAccount();
+  const r = await callApi('/friends/link', reset ? { reset: true } : {});
+  if (!r.ok) return fail(r);
+  return { ok: true, value: r.value };
 }
 
 /** Accept a request or an invite code, sharing back in `mode` (everyone by default, plan 29 §A1). */
@@ -369,4 +419,12 @@ export function throughFriendsLine(routes: FriendRoute[]): string {
   return `Through friends: ${n} ${n === 1 ? 'person' : 'people'}`;
 }
 
-export type { Friend, FriendIntroAsk, FriendInvite, FriendShare, FriendShareMode };
+export type {
+  Friend,
+  FriendIntroAsk,
+  FriendInvite,
+  FriendShare,
+  FriendShareMode,
+  FriendSuggestion,
+  InviteSuggestion,
+};

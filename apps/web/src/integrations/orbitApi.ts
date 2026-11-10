@@ -48,9 +48,13 @@ import type {
   FriendsEndRequest,
   FriendsInviteRequest,
   FriendsInviteResponse,
+  FriendsLinkResponse,
   FriendsListResponse,
+  FriendsRequestResponse,
+  FriendsSearchResponse,
   FriendsSettingsRequest,
   FriendsSettingsResponse,
+  FriendsSuggestResponse,
   GoalsInferRequest,
   GoalsInferResponse,
   GoalsListResponse,
@@ -288,6 +292,11 @@ export interface ApiRoutes {
   '/friends/shares': [FriendSharesRequest, FriendSharesResponse];
   '/friends/asks': [FriendAskRequest | Record<string, never>, FriendAskResponse | FriendAsksResponse];
   '/friends/asks/respond': [FriendAskRespondByIdRequest, FriendAskRespondResponse];
+  // finding friends (plan 37 follow-up)
+  '/friends/suggest': [Record<string, never>, FriendsSuggestResponse];
+  '/friends/search': [{ q: string }, FriendsSearchResponse];
+  '/friends/request': [{ userId: string }, FriendsRequestResponse];
+  '/friends/link': [{ reset?: boolean }, FriendsLinkResponse];
   // the student's voice (plan 29 §B2.4)
   '/voice': [Record<string, never>, VoiceResponse];
   '/voice/notes': [VoiceNoteRequest, VoiceNoteResponse];

@@ -88,7 +88,7 @@ function inviteCode(): string {
   return code.slice(0, 22);
 }
 
-type UserLite = {
+export type UserLite = {
   id: string;
   email: string;
   full_name: string | null;
@@ -99,7 +99,7 @@ type UserLite = {
   settings: Record<string, unknown>;
 };
 
-async function userLite(db: Db, userId: string): Promise<UserLite> {
+export async function userLite(db: Db, userId: string): Promise<UserLite> {
   const [u] = await db.sql<UserLite>`
     select id, email, full_name, first_name, school, grad_year, avatar_url, settings
       from orbit.users where id = ${userId}::uuid and deleted_at is null`;
@@ -107,7 +107,7 @@ async function userLite(db: Db, userId: string): Promise<UserLite> {
   return { ...u, settings: u.settings ?? {} };
 }
 
-const nameOf = (u: Pick<UserLite, 'full_name' | 'first_name' | 'email'>) =>
+export const nameOf = (u: Pick<UserLite, 'full_name' | 'first_name' | 'email'>) =>
   u.full_name?.trim() || u.first_name?.trim() || u.email.split('@')[0]!;
 const firstOf = (u: Pick<UserLite, 'full_name' | 'first_name' | 'email'>) =>
   u.first_name?.trim() || nameOf(u).split(/\s+/)[0]!;
@@ -269,12 +269,53 @@ interface MailLike {
   send(m: { to: string; subject: string; text: string }): Promise<{ ok: boolean; error?: string }>;
 }
 
+/**
+ * A friend request from `from` to someone already on Orbit, with the sender's side set to share as they chose. A
+ * request already waiting is renewed; an active or blocked friendship is refused. Returns the friendship id.
+ */
+export async function requestFriendship(db: Db, from: UserLite, otherId: string, now: Date): Promise<string> {
+  const me = from.id;
+  if (otherId === me) throw badRequest('that is you');
+  const [lo, hi] = me < otherId ? [me, otherId] : [otherId, me];
+  const [existing] = await db.sql<{ id: string; status: string }>`
+    select id, status from orbit.friendships where a = ${lo}::uuid and b = ${hi}::uuid`;
+  if (existing?.status === 'active') throw new HttpError(409, 'already_friends', 'you are already friends');
+  if (existing?.status === 'blocked') throw new HttpError(409, 'blocked', 'that request cannot be sent');
+  const [f] = existing
+    ? await db.sql<{ id: string }>`
+        update orbit.friendships set status = 'pending', requested_by = ${me}::uuid, created_at = ${now}::timestamptz,
+               accepted_at = null, ended_at = null, ended_by = null
+         where id = ${existing.id}::uuid returning id`
+    : await db.sql<{ id: string }>`
+        insert into orbit.friendships (a, b, status, requested_by, created_at)
+        values (${lo}::uuid, ${hi}::uuid, 'pending', ${me}::uuid, ${now}::timestamptz) returning id`;
+  const mine = defaultMode(from);
+  await db.sql`
+    insert into orbit.friend_share_settings (friendship_id, owner_user_id, mode, company_domains)
+    values (${f!.id}::uuid, ${me}::uuid, ${mine.mode}, ${mine.domains}::text[])
+    on conflict (friendship_id, owner_user_id) do update set mode = excluded.mode,
+      company_domains = excluded.company_domains, updated_at = now()`;
+  return f!.id;
+}
+
 async function invite(ctx: Ctx): Promise<Response> {
   const b = await body(ctx, true);
   const db = ctx.db;
   const me = ctx.userId!;
   const now = ctx.now();
-  const email = typeof b.email === 'string' && b.email.trim() ? normalizeEmail(b.email.trim()) : null;
+  // an invite to someone in the student's own People goes to the address Orbit has for them (it never crosses to the
+  // browser in the suggestions)
+  const personId = optUuid(b, 'personId');
+  let personEmail: string | null = null;
+  if (personId) {
+    const [p] = await db.sql<{ primary_email: string | null }>`
+      select primary_email from orbit.people
+       where id = ${personId}::uuid and user_id = ${me}::uuid and deleted_at is null and not do_not_contact`;
+    if (!p?.primary_email) throw new HttpError(404, 'not_found', 'Orbit has no address for them');
+    personEmail = p.primary_email;
+  }
+  const rawEmail = personEmail ?? (typeof b.email === 'string' ? b.email : '');
+  const email = rawEmail.trim() ? normalizeEmail(rawEmail.trim()) : null;
   if (email && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) throw badRequest('that is not an email address');
   const u = await userLite(db, me);
   if (email && email === normalizeEmail(u.email)) throw badRequest('that is your own address');
@@ -290,7 +331,6 @@ async function invite(ctx: Ctx): Promise<Response> {
     values (${me}::uuid, ${email}, ${code}, 'pending', ${now}::timestamptz, ${expires}::timestamptz)
     returning id, created_at`;
   const link = `${ctx.env.appUrl}/friends/join/${code}`;
-  const mine = defaultMode(u);
   let status: FriendsInviteResponse['status'] = 'link';
   let name: string | null = null;
   if (email) {
@@ -299,25 +339,7 @@ async function invite(ctx: Ctx): Promise<Response> {
        where lower(email) = ${email} and deleted_at is null`;
     if (other) {
       // already on Orbit: a request they accept, with the student's side already set to share
-      const [lo, hi] = me < other.id ? [me, other.id] : [other.id, me];
-      const [existing] = await db.sql<{ id: string; status: string }>`
-        select id, status from orbit.friendships where a = ${lo}::uuid and b = ${hi}::uuid`;
-      if (existing?.status === 'active')
-        throw new HttpError(409, 'already_friends', 'you are already friends');
-      if (existing?.status === 'blocked') throw new HttpError(409, 'blocked', 'that request cannot be sent');
-      const [f] = existing
-        ? await db.sql<{ id: string }>`
-            update orbit.friendships set status = 'pending', requested_by = ${me}::uuid, created_at = ${now}::timestamptz,
-                   accepted_at = null, ended_at = null, ended_by = null
-             where id = ${existing.id}::uuid returning id`
-        : await db.sql<{ id: string }>`
-            insert into orbit.friendships (a, b, status, requested_by, created_at)
-            values (${lo}::uuid, ${hi}::uuid, 'pending', ${me}::uuid, ${now}::timestamptz) returning id`;
-      await db.sql`
-        insert into orbit.friend_share_settings (friendship_id, owner_user_id, mode, company_domains)
-        values (${f!.id}::uuid, ${me}::uuid, ${mine.mode}, ${mine.domains}::text[])
-        on conflict (friendship_id, owner_user_id) do update set mode = excluded.mode,
-          company_domains = excluded.company_domains, updated_at = now()`;
+      await requestFriendship(db, u, other.id, now);
       status = 'requested';
       name = nameOf(other);
     } else {
@@ -439,8 +461,11 @@ async function accept(ctx: Ctx): Promise<Response> {
       values (${id}::uuid, ${me}::uuid, ${mode}, ${domains}::text[])
       on conflict (friendship_id, owner_user_id) do update set mode = excluded.mode,
         company_domains = excluded.company_domains, updated_at = now()`;
+    // an email invite is for one person; a link shared in a group chat stays open for the next friend until it
+    // expires or the student resets it
     if (p.inviteId)
-      await tx.sql`update orbit.friend_invites set status = 'accepted', answered_at = ${now}::timestamptz where id = ${p.inviteId}::uuid`;
+      await tx.sql`update orbit.friend_invites set status = 'accepted', answered_at = ${now}::timestamptz
+                     where id = ${p.inviteId}::uuid and to_email is not null`;
     return id;
   });
   await enqueueRefresh(ctx, [me, p.fromUserId]);

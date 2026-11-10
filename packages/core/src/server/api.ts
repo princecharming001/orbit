@@ -640,6 +640,8 @@ export interface FriendInvite {
 /** POST /friends/invite { email? }: an email invite, or a link to copy when no email is given */
 export interface FriendsInviteRequest {
   email?: string;
+  /** someone in the student's People: the invite goes to the address Orbit has for them */
+  personId?: string;
 }
 export interface FriendsInviteResponse {
   code: string;
@@ -648,6 +650,51 @@ export interface FriendsInviteResponse {
   status: 'sent' | 'requested' | 'link';
   invite: FriendInvite;
 }
+/** Someone on Orbit the student may know (plan 37 follow-up): a card on Friends with Add. Never their address. */
+export interface FriendSuggestion {
+  userId: string;
+  name: string;
+  avatarUrl: string | null;
+  /** "Product Manager at Stripe", or their school and year */
+  headline: string | null;
+  /** how many people they have in Orbit, the size of the network a friendship would pool */
+  connections: number;
+  /** the strongest reason, in a few words ("In your contacts", "3 mutual friends", "Cornell '27") */
+  reason: string;
+  /** 'requested' once the student asked, 'incoming' when they asked the student */
+  state: 'none' | 'requested' | 'incoming';
+  /** the incoming request to accept, when there is one */
+  friendshipId?: string;
+}
+/** Someone in the student's People who is not on Orbit yet, worth inviting. The address stays on the server. */
+export interface InviteSuggestion {
+  personId: string;
+  name: string;
+  photoUrl: string | null;
+  headline: string | null;
+  reason: string;
+}
+/** POST /friends/suggest: people on Orbit the student may know, and people worth inviting, best first */
+export interface FriendsSuggestResponse {
+  onOrbit: FriendSuggestion[];
+  toInvite: InviteSuggestion[];
+}
+/** POST /friends/search { q }: someone on Orbit by name (among people with a tie to the student) or by exact email */
+export interface FriendsSearchResponse {
+  results: FriendSuggestion[];
+}
+/** POST /friends/request { userId }: a friend request to someone on Orbit */
+export interface FriendsRequestResponse {
+  friendshipId: string;
+  name: string;
+}
+/** POST /friends/link { reset? }: the student's standing invite link, for a group chat; reset makes a new one */
+export interface FriendsLinkResponse {
+  code: string;
+  link: string;
+  expiresAt: string;
+}
+
 /** POST /friends/accept { code | friendshipId, mode }: accepting shares back in the chosen mode */
 export interface FriendsAcceptRequest {
   code?: string;
@@ -1021,6 +1068,11 @@ export const API_ROUTES = [
   '/friends/asks',
   '/friends/asks/:id/respond',
   '/friends/asks/respond',
+  // plan 37 follow-up: finding friends
+  '/friends/suggest',
+  '/friends/search',
+  '/friends/request',
+  '/friends/link',
   // plan 29 Part B: autopilot and voice
   '/autopilot/mode',
   '/autopilot/status',

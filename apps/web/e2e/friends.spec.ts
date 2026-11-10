@@ -128,3 +128,79 @@ test.describe('friends (plan 29 A7, fake orbit-api)', () => {
     await expect(page.getByTestId('ob-google-signin')).toBeVisible();
   });
 });
+test.describe('finding friends (plan 37 follow-up, fake orbit-api)', () => {
+  test('people on Orbit you may know: Add turns to Requested, an incoming one is accepted in place', async ({
+    page,
+  }) => {
+    const api = await signedInWithAna(page);
+    api.state.friendInvites.push({
+      id: 'fs_priya',
+      direction: 'in',
+      email: null,
+      name: 'Priya Shah',
+      status: 'pending',
+      createdAt: '2026-10-06T08:00:00.000Z',
+    });
+    await page.goto('friends');
+    const grid = page.getByTestId('friends-on-orbit');
+    const tiles = grid.getByTestId('friend-suggestion');
+    // Priya asked first: she is under Requests, not suggested again beside it
+    await expect(tiles).toHaveCount(2);
+    await expect(grid).not.toContainText('Priya Shah');
+    await expect(tiles.first()).toContainText('Jordan Ellis');
+    await expect(tiles.first()).toContainText('In your contacts');
+    // no address ever shows
+    await expect(grid).not.toContainText('@');
+    await tiles.first().getByTestId('friend-suggestion-add').click();
+    await expect(tiles.first().getByTestId('friend-suggestion-add')).toHaveText('Requested');
+    expect(api.state.friendFinder.requests).toEqual(['u_jordan']);
+    // found by search, her tile offers Accept, and accepting makes her a friend
+    await page.getByTestId('friends-search-input').fill('priya');
+    const priya = page.getByTestId('friends-search-results').getByTestId('friend-suggestion');
+    await expect(priya.getByTestId('friend-suggestion-add')).toHaveText('Accept');
+    await priya.getByTestId('friend-suggestion-add').click();
+    await expect(priya.getByTestId('friend-suggestion-add')).toHaveText('Friends');
+    await expect(page.getByTestId('friends-list')).toContainText('Priya Shah');
+  });
+
+  test('people to invite: Invite turns to Invited and the invite goes to the address Orbit has', async ({
+    page,
+  }) => {
+    const api = await signedInWithAna(page);
+    await page.goto('friends');
+    const sam = page.getByTestId('friend-invitee').filter({ hasText: 'Sam Okafor' });
+    await expect(sam).toContainText('You know them well');
+    await sam.getByTestId('friend-invitee-invite').click();
+    await expect(sam.getByTestId('friend-invitee-invite')).toHaveText('Invited');
+    expect(api.state.friendFinder.invitedPeople).toEqual(['p_inv_sam']);
+  });
+
+  test('search: a name among people you may know, an exact address among everyone, and a plain miss', async ({
+    page,
+  }) => {
+    await signedInWithAna(page);
+    await page.goto('friends');
+    const input = page.getByTestId('friends-search-input');
+    await input.fill('jordan');
+    const results = page.getByTestId('friends-search-results');
+    await expect(results.getByTestId('friend-suggestion')).toHaveCount(1);
+    await expect(results).toContainText('Jordan Ellis');
+    await input.fill('noor@example.org');
+    await expect(results).toContainText('Noor Haddad');
+    await results.getByTestId('friend-suggestion-add').click();
+    await expect(results.getByTestId('friend-suggestion-add')).toHaveText('Requested');
+    await input.fill('zzzz');
+    await expect(page.getByTestId('friends-search-none')).toContainText('Try their email');
+  });
+
+  test('the invite link: shown, copied, and a reset makes a new one', async ({ page, context }) => {
+    await context.grantPermissions(['clipboard-read', 'clipboard-write']);
+    await signedInWithAna(page);
+    await page.goto('friends');
+    const text = page.getByTestId('friends-link-text');
+    await expect(text).toContainText('tryorbit.today/friends/join/standinglink0000000001');
+    await page.getByTestId('friends-link-copy').click();
+    await page.getByTestId('friends-link-reset').click();
+    await expect(text).not.toContainText('standinglink0000000001');
+  });
+});

@@ -14,8 +14,10 @@ import type {
   FriendInvite,
   FriendShare,
   FriendShareMode,
+  FriendSuggestion,
   Goal,
   InboxListResponse,
+  InviteSuggestion,
   MemoryItem,
   MemoryKind,
   ProposedGoal,
@@ -108,6 +110,15 @@ export interface FakeState {
   /** friends (plan 29 A): each with the people they share with the student */
   friends: FakeFriend[];
   friendInvites: FriendInvite[];
+  /** finding friends (plan 37 follow-up): who is suggested, who can be found by email, and the standing link */
+  friendFinder: {
+    onOrbit: (FriendSuggestion & { email: string })[];
+    others: (FriendSuggestion & { email: string })[];
+    toInvite: InviteSuggestion[];
+    linkCode: string;
+    requests: string[];
+    invitedPeople: string[];
+  };
   /** what the student shares back with every friend, unless a friend has their own setting */
   friendShareMode: FriendShareMode;
   friendCompanyDomains: string[];
@@ -223,6 +234,66 @@ export function createFakeOrbitApi(
     targets: [],
     friends: [],
     friendInvites: [],
+    friendFinder: {
+      onOrbit: [
+        {
+          userId: 'u_jordan',
+          name: 'Jordan Ellis',
+          email: 'jordan@cornell.edu',
+          avatarUrl: null,
+          headline: 'Product Manager at Notion',
+          connections: 2_840,
+          reason: 'In your contacts',
+          state: 'none',
+        },
+        {
+          userId: 'u_priya',
+          name: 'Priya Shah',
+          email: 'priya@cornell.edu',
+          avatarUrl: null,
+          headline: "Cornell '27",
+          connections: 412,
+          reason: '2 mutual friends',
+          state: 'incoming',
+          friendshipId: 'fs_priya',
+        },
+        {
+          userId: 'u_marcus',
+          name: 'Marcus Wei',
+          email: 'marcus@cornell.edu',
+          avatarUrl: null,
+          headline: "Cornell '26",
+          connections: 7_600,
+          reason: "Cornell '26",
+          state: 'none',
+        },
+      ],
+      others: [
+        {
+          userId: 'u_noor',
+          name: 'Noor Haddad',
+          email: 'noor@example.org',
+          avatarUrl: null,
+          headline: 'Analyst at Evercore',
+          connections: 150,
+          reason: 'On Orbit',
+          state: 'none',
+        },
+      ],
+      toInvite: [
+        {
+          personId: 'p_inv_sam',
+          name: 'Sam Okafor',
+          photoUrl: null,
+          headline: 'Engineer at Ramp',
+          reason: 'You know them well',
+        },
+        { personId: 'p_inv_lee', name: 'Lee Park', photoUrl: null, headline: null, reason: 'Cornell alum' },
+      ],
+      linkCode: 'standinglink0000000001',
+      requests: [],
+      invitedPeople: [],
+    },
     friendShareMode: 'all',
     friendCompanyDomains: [],
     ownShares: [],
@@ -352,6 +423,47 @@ export function createFakeOrbitApi(
       return json(200, { ask, draft: d });
     }
     switch (route) {
+      // finding friends (plan 37 follow-up)
+      case '/friends/suggest': {
+        const ff = state.friendFinder;
+        const view = (x: FriendSuggestion & { email: string }): FriendSuggestion => {
+          const { email: _e, ...rest } = x;
+          return ff.requests.includes(x.userId) ? { ...rest, state: 'requested' } : rest;
+        };
+        return json(200, {
+          onOrbit: ff.onOrbit.filter((x) => x.state !== 'incoming').map(view),
+          toInvite: ff.toInvite.filter((p) => !ff.invitedPeople.includes(p.personId)),
+        });
+      }
+      case '/friends/search': {
+        const q = typeof body.q === 'string' ? body.q.trim().toLowerCase() : '';
+        if (q.length < 2) return error(400, 'bad_request', 'type at least two letters');
+        const ff = state.friendFinder;
+        const hits = q.includes('@')
+          ? [...ff.onOrbit, ...ff.others].filter((x) => x.email === q)
+          : ff.onOrbit.filter((x) => x.name.toLowerCase().includes(q));
+        return json(200, {
+          results: hits.map(({ email: _e, ...x }) =>
+            ff.requests.includes(x.userId) ? { ...x, state: 'requested' } : x,
+          ),
+        });
+      }
+      case '/friends/request': {
+        const ff = state.friendFinder;
+        const who = [...ff.onOrbit, ...ff.others].find((x) => x.userId === body.userId);
+        if (!who) return error(404, 'not_found', 'no such person on Orbit');
+        if (!ff.requests.includes(who.userId)) ff.requests.push(who.userId);
+        return json(200, { friendshipId: `fs_${who.userId}`, name: who.name });
+      }
+      case '/friends/link': {
+        const ff = state.friendFinder;
+        if (body.reset === true) ff.linkCode = uuid().replace(/-/g, '').slice(0, 22);
+        return json(200, {
+          code: ff.linkCode,
+          link: `https://tryorbit.today/friends/join/${ff.linkCode}`,
+          expiresAt: iso(clock + 90 * 24 * 3600_000),
+        });
+      }
       // friends (plan 29 Part A)
       case '/friends':
         return json(200, {
@@ -363,8 +475,18 @@ export function createFakeOrbitApi(
           (i) => i.direction === 'out' && clock - Date.parse(i.createdAt) < 24 * 3600_000,
         );
         if (today.length >= 20) return error(429, 'rate_limited', 'at most 20 invites a day');
-        const email =
-          typeof body.email === 'string' && body.email.trim() ? body.email.trim().toLowerCase() : null;
+        const ffPerson =
+          typeof body.personId === 'string'
+            ? state.friendFinder.toInvite.find((p) => p.personId === body.personId)
+            : undefined;
+        if (typeof body.personId === 'string' && !ffPerson)
+          return error(404, 'not_found', 'Orbit has no address for them');
+        if (ffPerson) state.friendFinder.invitedPeople.push(ffPerson.personId);
+        const email = ffPerson
+          ? `${ffPerson.name.split(' ')[0]!.toLowerCase()}@example.org`
+          : typeof body.email === 'string' && body.email.trim()
+            ? body.email.trim().toLowerCase()
+            : null;
         if (email && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email))
           return error(400, 'bad_request', 'that is not an email address');
         const inviteCode = uuid().replace(/-/g, '').slice(0, 22);

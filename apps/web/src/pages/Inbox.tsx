@@ -22,7 +22,6 @@ import { discardDraft, restoreDraft, unsnoozeSuggestion } from '../engine/drafts
 import { moveChat } from '../engine/move';
 import { wentQuiet } from '../engine/pipeline';
 import { draftLists, notYetWritten, startedDrafts, todayCards } from '../engine/today';
-import { isServerUser } from '../integrations/orbitApi';
 import { useSession } from '../state/session';
 import {
   Avatar,
