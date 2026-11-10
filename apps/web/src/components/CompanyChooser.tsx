@@ -98,7 +98,7 @@ export function CompanyChooser({
                   else setState({ loading: false, options: state.options, note: r.message });
                 }}
                 className={cx(
-                  'w-full flex items-center gap-2.5 rounded-md px-1.5 py-1.5 text-left hover:bg-canvas-2 disabled:opacity-60',
+                  'w-full flex items-center gap-2.5 rounded-md px-1.5 py-1.5 text-left hover:bg-canvas-2 disabled:opacity-60 pointer-coarse:min-h-11',
                 )}
                 data-testid="company-chooser-option"
               >
@@ -126,7 +126,7 @@ export function CompanyChooser({
         <button
           type="button"
           onClick={() => onDone()}
-          className="h-7 px-2 rounded-md text-[12px] text-ink-3 hover:text-ink hover:bg-canvas-2"
+          className="h-7 px-2 rounded-md text-[12px] text-ink-3 hover:text-ink hover:bg-canvas-2 pointer-coarse:h-11"
           data-testid="company-chooser-close"
         >
           None of these
@@ -166,7 +166,7 @@ export function UnsettledCompany({
     <button
       type="button"
       onClick={() => setOpen(true)}
-      className="ml-8 -mt-0.5 mb-1 text-[12px] text-ink-3 underline underline-offset-2 hover:text-ink"
+      className="ml-8 -mt-0.5 mb-1 text-[12px] text-ink-3 underline underline-offset-2 hover:text-ink pointer-coarse:min-h-11"
       data-testid="company-which"
     >
       Which {name}?

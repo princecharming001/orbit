@@ -309,6 +309,27 @@ describe('Hunter in the lookup: 9 cases', () => {
     expect(h.finds[1]).toEqual({ first_name: 'maya', last_name: 'chen', domain: 'stripe.com' });
   });
 
+  it('H2b no domain known for their company: by name and the company’s name, Hunter finds the domain', async () => {
+    const h = fakeHunter((p) => (p.company ? ok('shubham@razorpay.com') : null));
+    const look = emailLookup({ userId: 'u', hunter: h.hunter, cache: memorySharedCache() });
+    const shubham = cand({
+      name: 'Shubham Bisht',
+      headline: 'Senior Product Manager at RazorPay (UPI payments)',
+      linkedinUrl: 'https://www.linkedin.com/in/shubham-bisht',
+    });
+    expect(await look(shubham)).toMatchObject({ email: 'shubham@razorpay.com' });
+    expect(h.finds).toEqual([
+      { linkedin_handle: 'shubham-bisht' },
+      { first_name: 'shubham', last_name: 'bisht', company: 'RazorPay' },
+    ]);
+    // nobody to ask about without a name and a company
+    const none = fakeHunter(() => null);
+    await emailLookup({ userId: 'u', hunter: none.hunter, cache: memorySharedCache() })(
+      cand({ name: 'Emily W.', linkedinUrl: undefined }),
+    );
+    expect(none.finds).toEqual([]);
+  });
+
   it('H3 a namesake (their LinkedIn is someone else) is dropped', async () => {
     const h = fakeHunter(() =>
       ok('joseph.gonzalez@berkeley.edu', { linkedin_url: 'https://linkedin.com/in/joseph-go99' }),
@@ -624,7 +645,9 @@ describe('plan 34 A4: Hunter spends less and shows every call', () => {
     await emailLookup({ userId: 'u', hunter: h.hunter, budget: money.budget, cache: memorySharedCache() })(
       maya,
     );
+    // by handle, then by name and company: two misses, no credit
     expect(money.ledger.map((r) => [r.provider, r.operation, r.units])).toEqual([
+      ['hunter', 'find:attempt', 0],
       ['hunter', 'find:attempt', 0],
     ]);
     const money2 = memoryBudget();

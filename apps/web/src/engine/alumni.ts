@@ -71,3 +71,43 @@ export async function recomputeAlumni(
   }
   return { lost, gained };
 }
+
+/** A headline's or title's pieces: "EECS @ UC Berkeley | ex-Google" is "EECS", "UC Berkeley", "ex-Google". */
+const PIECES = /\s*(?:[|·•,;/()[\]]|\s@\s|@|\s+at\s+|\s[-–—]\s)\s*/i;
+
+/**
+ * Whether a line of text names the school: one of its pieces, or two to six words in a row of one ("CS student UC
+ * Berkeley"), is the school as the school list knows it ("UC Berkeley", "Cal", "University of California, Berkeley").
+ * A single word inside a longer piece never counts ("Berkeley Lab" is not UC Berkeley).
+ */
+export function mentionsSchool(text: string | undefined, school: string | undefined): boolean {
+  if (!text?.trim() || !school?.trim()) return false;
+  for (const piece of text.split(PIECES)) {
+    const p = piece.trim();
+    if (!p || p.length > 120) continue;
+    if (sameSchool(p, school)) return true;
+    const words = p.split(/\s+/);
+    for (let n = Math.min(6, words.length - 1); n >= 2; n--)
+      for (let i = 0; i + n <= words.length; i++)
+        if (sameSchool(words.slice(i, i + n).join(' '), school)) return true;
+  }
+  return false;
+}
+
+/**
+ * How someone is tied to the student's school, for the lists that gather them ("Your school" on the Map, People):
+ * `alum` when Orbit has evidence they finished there (schoolTie), `school` when they study or work there or their
+ * LinkedIn headline names it. Load the school list first (loadSchoolIndex) so "UC Berkeley" and "University of
+ * California, Berkeley" are one school.
+ */
+export function schoolLink(
+  p: Pick<Person, 'isAlumni' | 'school' | 'currentOrganizationRaw' | 'headline' | 'currentTitle'>,
+  user: Pick<User, 'school'> | undefined,
+): 'alum' | 'school' | undefined {
+  if (p.isAlumni) return 'alum';
+  const school = user?.school;
+  if (!school?.trim()) return undefined;
+  if (sameSchool(p.school, school) || sameSchool(p.currentOrganizationRaw, school)) return 'school';
+  if (mentionsSchool(p.headline, school) || mentionsSchool(p.currentTitle, school)) return 'school';
+  return undefined;
+}

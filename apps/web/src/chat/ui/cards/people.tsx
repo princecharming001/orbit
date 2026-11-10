@@ -299,7 +299,11 @@ export function PersonLine({
           </div>
         )}
         {extra && (
-          <div className="flex min-w-0 items-center gap-1.5 text-[12.5px] leading-5 text-ink-3">{extra}</div>
+          // its buttons and links sit above the row's own link, so "Find email" finds the email instead of opening
+          // the page the row links to
+          <div className="flex min-w-0 items-center gap-1.5 text-[12.5px] leading-5 text-ink-3 [&_a]:relative [&_a]:z-10 [&_button]:relative [&_button]:z-10">
+            {extra}
+          </div>
         )}
       </div>
       {trailing ? (

@@ -19846,7 +19846,7 @@ function emailLookup(d) {
     const finder = d.enrow?.configured ? "e" : d.icypeas?.configured ? "i" : "";
     const asked = `${finder}${d.hunter?.configured ? "h" : ""}${d.apollo?.configured ? "a" : ""}`;
     if (!asked) return void 0;
-    const who = slug ? `li:${slug}` : c.memberId ? `mid:${c.memberId}` : n && domain ? `nd:${n.f}.${n.l}@${domain}` : void 0;
+    const who = slug ? `li:${slug}` : c.memberId ? `mid:${c.memberId}` : n && domain ? `nd:${n.f}.${n.l}@${domain}` : n && orgsOf(c)[0] ? `nc:${n.f}.${n.l}@${orgsOf(c)[0].toLowerCase()}` : void 0;
     if (!who) return void 0;
     const key2 = `email:${asked}:${who}`;
     const hit = await d.cache.get(key2).catch(() => void 0);
@@ -19905,6 +19905,8 @@ async function fromHunter(d, c, slug, n, domain) {
   const asks = [];
   if (slug) asks.push({ by: "handle", params: { linkedin_handle: slug } });
   if (n && domain) asks.push({ by: "name", params: { first_name: n.f, last_name: n.l, domain } });
+  const company = !domain ? orgsOf(c)[0] : void 0;
+  if (n && company) asks.push({ by: "name", params: { first_name: n.f, last_name: n.l, company } });
   for (const ask of asks) {
     const slot = await take(d, "hunter", "find", 1);
     if (!slot) return void 0;

@@ -15581,7 +15581,7 @@ function emailLookup(d) {
     const finder = d.enrow?.configured ? "e" : d.icypeas?.configured ? "i" : "";
     const asked = `${finder}${d.hunter?.configured ? "h" : ""}${d.apollo?.configured ? "a" : ""}`;
     if (!asked) return void 0;
-    const who = slug ? `li:${slug}` : c.memberId ? `mid:${c.memberId}` : n && domain ? `nd:${n.f}.${n.l}@${domain}` : void 0;
+    const who = slug ? `li:${slug}` : c.memberId ? `mid:${c.memberId}` : n && domain ? `nd:${n.f}.${n.l}@${domain}` : n && orgsOf(c)[0] ? `nc:${n.f}.${n.l}@${orgsOf(c)[0].toLowerCase()}` : void 0;
     if (!who) return void 0;
     const key = `email:${asked}:${who}`;
     const hit = await d.cache.get(key).catch(() => void 0);
@@ -15640,6 +15640,8 @@ async function fromHunter(d, c, slug, n, domain) {
   const asks = [];
   if (slug) asks.push({ by: "handle", params: { linkedin_handle: slug } });
   if (n && domain) asks.push({ by: "name", params: { first_name: n.f, last_name: n.l, domain } });
+  const company = !domain ? orgsOf(c)[0] : void 0;
+  if (n && company) asks.push({ by: "name", params: { first_name: n.f, last_name: n.l, company } });
   for (const ask3 of asks) {
     const slot2 = await take(d, "hunter", "find", 1);
     if (!slot2) return void 0;
@@ -15822,7 +15824,13 @@ async function domainsFor(db2, userId, c) {
        order by (source = 'linkedin') desc limit 3`;
     for (const f2 of facts) add4(siteDomain(f2.website));
   }
-  add4(siteDomain(c.url));
+  const page2 = siteDomain(c.url);
+  const label2 = page2?.split(".")[0] ?? "";
+  if (page2 && label2.length >= 3 && orgs.some((o) => {
+    const k = normOrg(o).replace(/[^a-z0-9]/g, "");
+    return k.length >= 3 && (k.includes(label2) || label2.includes(k));
+  }))
+    add4(page2);
   return out.slice(0, 4);
 }
 async function knownAt(db2, userId, domains) {

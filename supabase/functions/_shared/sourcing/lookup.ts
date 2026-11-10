@@ -38,6 +38,7 @@ import {
   type Verify,
 } from './email';
 import type { Candidate } from './search';
+import { orgsOf } from './warmth';
 
 export const LOOKUP_TTL_MS = 30 * 24 * 3600 * 1000;
 
@@ -118,7 +119,9 @@ export function emailLookup(d: LookupDeps): EmailLookup {
         ? `mid:${c.memberId}`
         : n && domain
           ? `nd:${n.f}.${n.l}@${domain}`
-          : undefined;
+          : n && orgsOf(c)[0]
+            ? `nc:${n.f}.${n.l}@${orgsOf(c)[0]!.toLowerCase()}`
+            : undefined;
     if (!who) return undefined;
     const key = `email:${asked}:${who}`;
     const hit = (await d.cache.get(key).catch(() => undefined)) as Cached | undefined;
@@ -206,6 +209,9 @@ async function fromHunter(
   const asks: { by: 'handle' | 'name'; params: Parameters<Hunter['findEmail']>[0] }[] = [];
   if (slug) asks.push({ by: 'handle', params: { linkedin_handle: slug } });
   if (n && domain) asks.push({ by: 'name', params: { first_name: n.f, last_name: n.l, domain } });
+  // no domain known for their company: Hunter finds it from the company's name (most people LinkedIn finds)
+  const company = !domain ? orgsOf(c)[0] : undefined;
+  if (n && company) asks.push({ by: 'name', params: { first_name: n.f, last_name: n.l, company } });
   for (const ask of asks) {
     const slot = await take(d, 'hunter', 'find', 1);
     if (!slot) return undefined;

@@ -110,7 +110,19 @@ export async function domainsFor(db: Db, userId: string, c: Candidate): Promise<
        order by (source = 'linkedin') desc limit 3`;
     for (const f of facts) add(siteDomain(f.website));
   }
-  add(siteDomain(c.url));
+  // the page they were found on is their company's own site only when its address names the company (a product or
+  // news page about them is someone else's site: guessing their address there finds a stranger's)
+  const page = siteDomain(c.url);
+  const label = page?.split('.')[0] ?? '';
+  if (
+    page &&
+    label.length >= 3 &&
+    orgs.some((o) => {
+      const k = normOrg(o).replace(/[^a-z0-9]/g, '');
+      return k.length >= 3 && (k.includes(label) || label.includes(k));
+    })
+  )
+    add(page);
   return out.slice(0, 4);
 }
 

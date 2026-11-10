@@ -9,7 +9,7 @@ import {
 } from '@orbit/core';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { Check, ChevronDown, Search } from 'lucide-react';
-import { useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 import { AddPersonButton } from '../components/AddPerson';
 import { LinkedInImportButton } from '../components/LinkedInImport';
@@ -20,7 +20,9 @@ import { QUIET_DAYS, STAGE_COLOR, useNarrow, wentQuiet } from '../components/peo
 import { useChatMove } from '../components/people/useChatMove';
 import { type PeopleFilter, type PeopleView, peopleFilterOf, peopleViewOf } from '../components/people/view';
 import { RepliesChecked } from '../components/RepliesChecked';
+import { loadSchoolIndex } from '../data/schoolMatch';
 import { db } from '../db/schema';
+import { schoolLink } from '../engine/alumni';
 import { filterPeople, type PeopleSort } from '../engine/search';
 import { useSession } from '../state/session';
 import { Button, cx, EmptyState, Input, PageHeader, Select, Skeleton, SkeletonRows } from '../ui';
@@ -41,7 +43,14 @@ const VIEWS: { value: PeopleView; label: string }[] = [
  * keeps the view and the filter (`?view=list&f=quiet`), so the chat and old links can open the page on either.
  */
 export function People() {
-  const { userId } = useSession();
+  const { userId, user } = useSession();
+  // the school list, so "UC Berkeley" in a headline and the student's "University of California, Berkeley" match
+  const [, setSchoolsReady] = useState(false);
+  useEffect(() => {
+    void loadSchoolIndex()
+      .catch(() => undefined)
+      .then(() => setSchoolsReady(true));
+  }, []);
   const [params, setParams] = useSearchParams();
   // The router hands a functional update the params of the last render, so a filter picked right after a tab click
   // would write the old view back. Changes build on the newest params: the ones last written, until the address moves.
@@ -145,7 +154,7 @@ export function People() {
     .filter((r) => matches(r.person))
     .filter((r) =>
       filter === 'alumni'
-        ? !!r.person.isAlumni
+        ? !!schoolLink(r.person, user)
         : filter === 'strong'
           ? r.person.strength >= 0.6
           : filter === 'targets'
@@ -302,7 +311,7 @@ export function People() {
             data-testid="people-filter"
           >
             <option value="all">Everyone</option>
-            <option value="alumni">Alumni</option>
+            <option value="alumni">Your school</option>
             <option value="strong">Close ties</option>
             <option value="chats">With a chat</option>
             <option value="targets">At target companies</option>

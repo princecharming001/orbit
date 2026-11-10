@@ -9,6 +9,7 @@ import {
   MEDIUM_TIE,
   normalizeCompany,
   orbitGroupKey,
+  STAGE_LABELS,
   TIE_BAND_LABELS,
   tieBand,
 } from '@orbit/core';
@@ -21,6 +22,7 @@ import { useAskIntro } from '../components/askIntro';
 import { UnsettledCompany } from '../components/CompanyChooser';
 import { CompanyLogo, LogoText } from '../components/CompanyLogo';
 import { ThroughFriends } from '../components/friends/ThroughFriends';
+import { LensList } from '../components/map/LensList';
 import { MapPersonCard } from '../components/map/MapPersonCard';
 import { PairNoteMenu } from '../components/map/PairNoteMenu';
 import { ReachMutuals } from '../components/map/ReachMutuals';
@@ -35,7 +37,9 @@ import { StrengthDots } from '../components/people/shared';
 import { ResizeHandle, useResizableWidth } from '../components/ResizeHandle';
 import { TargetPlanCard } from '../components/TargetPlanCard';
 import { useWarmIntros, WarmIntrosPanel } from '../components/WarmIntrosPanel';
+import { loadSchoolIndex } from '../data/schoolMatch';
 import { db } from '../db/schema';
+import { schoolLink } from '../engine/alumni';
 import { draftMessage } from '../engine/brief';
 import {
   buildReachGraph,
@@ -69,7 +73,7 @@ type Filter = 'all' | 'targets' | 'alumni' | 'chats' | 'recent' | 'intros';
 const FILTERS: [Filter, string][] = [
   ['all', 'Everyone'],
   ['targets', 'Target companies'],
-  ['alumni', 'Alumni'],
+  ['alumni', 'Your school'],
   ['chats', 'In pipeline'],
   ['recent', 'Last 90 days'],
   ['intros', 'Introductions'],
@@ -77,6 +81,10 @@ const FILTERS: [Filter, string][] = [
 
 /** How many people the pending-suggestion ripple marks at most: those behind the highest-priority suggestions. */
 const RIPPLE_TOP = 3;
+
+/** "Oct 3": the day someone was last in touch, for the Last 90 days list. */
+const shortDay = (iso: string) =>
+  new Date(iso).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
 /** On a touch screen every control on the map page is at least 44 px tall, so a thumb lands on it. */
 const TAP = 'pointer-coarse:min-h-11';
 /** The longest the map waits for the day's maintenance before it lays out anyway. */
@@ -276,23 +284,42 @@ export function MapPage() {
   const byId = useMemo(() => new Map(visible.map((p) => [p.id, p])), [visible]);
   // everyone the search can name (a target need not be someone the student already knows)
   const peopleById = useMemo(() => new Map(people.map((p) => [p.id, p])), [people]);
+  // the school list loads once, so "UC Berkeley" in a headline and "University of California, Berkeley" are one school
+  const [schoolsReady, setSchoolsReady] = useState(false);
+  useEffect(() => {
+    let live = true;
+    void loadSchoolIndex()
+      .catch(() => undefined)
+      .then(() => live && setSchoolsReady(true));
+    return () => {
+      live = false;
+    };
+  }, []);
+  // who each tab lights, and how many: the chips say the count, the panel lists them closest first
+  const lenses = useMemo(() => {
+    const now = Date.now();
+    const school = new Map<string, 'alum' | 'school'>();
+    if (schoolsReady)
+      for (const p of visible) {
+        const l = schoolLink(p, user);
+        if (l) school.set(p.id, l);
+      }
+    const by = (f: (p: Person) => boolean) =>
+      visible.filter(f).sort((a, b) => b.strength - a.strength || a.displayName.localeCompare(b.displayName));
+    return {
+      school,
+      targets: by((p) => isTarget(p)),
+      alumni: by((p) => school.has(p.id)),
+      chats: by((p) => stages.has(p.id)),
+      recent: by(
+        (p) => !!p.lastInteractionAt && now - new Date(p.lastInteractionAt).getTime() < 90 * 86_400_000,
+      ).sort((a, b) => (b.lastInteractionAt ?? '').localeCompare(a.lastInteractionAt ?? '')),
+    };
+  }, [visible, isTarget, stages, schoolsReady, user]);
   const highlightIds = useMemo(() => {
     if (filter === 'all' || filter === 'intros') return undefined;
-    const now = Date.now();
-    return new Set(
-      visible
-        .filter((p) =>
-          filter === 'targets'
-            ? isTarget(p)
-            : filter === 'alumni'
-              ? p.isAlumni
-              : filter === 'chats'
-                ? stages.has(p.id)
-                : !!p.lastInteractionAt && now - new Date(p.lastInteractionAt).getTime() < 90 * 86_400_000,
-        )
-        .map((p) => p.id),
-    );
-  }, [filter, visible, isTarget, stages]);
+    return new Set(lenses[filter].map((p) => p.id));
+  }, [filter, lenses]);
   // a search with several matches lights them on the map, so the student sees where each one is before picking
   const choiceIds = useMemo(() => {
     if (!choices) return undefined;
@@ -880,14 +907,23 @@ export function MapPage() {
           'target company',
           'target companies',
         )}.`;
-      case 'alumni':
-        return `Showing ${plural(highlightIds?.size ?? 0, 'alum', 'alumni')}${user?.school ? ` of ${user.school}` : ''}.`;
+      case 'alumni': {
+        if (!user?.school) return 'Add your school in Settings to see who is from it.';
+        if (!schoolsReady) return `Finding people from ${user.school}.`;
+        const n = highlightIds?.size ?? 0;
+        const alums = [...lenses.school.values()].filter((l) => l === 'alum').length;
+        if (n && alums === n) return `Showing ${plural(n, 'alum', 'alumni')} of ${user.school}.`;
+        return `Showing ${plural(n, 'person', 'people')} from ${user.school}${
+          alums ? `, ${plural(alums, 'alum', 'alumni')} among them` : ''
+        }.`;
+      }
       case 'chats':
         return `Showing ${plural(highlightIds?.size ?? 0, 'person', 'people')} in your pipeline.`;
       case 'recent':
         return `Showing ${plural(highlightIds?.size ?? 0, 'person', 'people')} you were in touch with in the last 90 days.`;
       case 'intros':
-        if (!web.links.length) return 'No introductions recorded yet.';
+        if (!web.links.length)
+          return 'No introductions yet. Orbit finds them in your email, when someone introduces you to someone, and when you mark who introduced you on a person’s page.';
         if (webFocus && !webLit && webFocus.group) return `Showing introductions at ${webFocus.label}.`;
         if (webFocus?.id && webLit === webFocus.id)
           return `Showing the introductions through ${webFocus.label}.`;
@@ -934,6 +970,14 @@ export function MapPage() {
                 data-testid={`map-filter-${k}`}
               >
                 {l}
+                {k !== 'all' && k !== 'intros' && !loading && (
+                  <span
+                    className={cx('ml-1.5 tabular', filter === k ? 'text-white/70' : 'text-ink-3')}
+                    data-testid={`map-count-${k}`}
+                  >
+                    {k === 'alumni' && !schoolsReady ? '' : lenses[k].length}
+                  </span>
+                )}
               </button>
             ))}
           </div>
@@ -1106,6 +1150,38 @@ export function MapPage() {
                     />
                   </div>
                 </Card>
+              )}
+              {(filter === 'alumni' || filter === 'chats' || filter === 'recent') && user && (
+                <LensList
+                  title={
+                    filter === 'alumni'
+                      ? `From ${user.school ?? 'your school'}`
+                      : filter === 'chats'
+                        ? 'In your pipeline'
+                        : 'In touch in the last 90 days'
+                  }
+                  people={lenses[filter]}
+                  note={
+                    filter === 'alumni'
+                      ? (p) => (lenses.school.get(p.id) === 'alum' ? 'Alum' : undefined)
+                      : filter === 'chats'
+                        ? (p) => {
+                            const st = stages.get(p.id);
+                            return st ? STAGE_LABELS[st] : undefined;
+                          }
+                        : (p) => (p.lastInteractionAt ? shortDay(p.lastInteractionAt) : undefined)
+                  }
+                  empty={
+                    filter === 'alumni'
+                      ? user.school
+                        ? `No one in your network lists ${user.school} yet. Orbit finds them from LinkedIn headlines, schools and alumni email addresses.`
+                        : 'Add your school in Settings, and Orbit lights everyone from it.'
+                      : filter === 'chats'
+                        ? 'No one is in your pipeline yet. Save someone to contact from People or Discover.'
+                        : 'No messages with anyone in the last 90 days. Connect Gmail or LinkedIn to bring them in.'
+                  }
+                  onPick={(p) => setParams({ reach: p.id })}
+                />
               )}
             </>
           )}

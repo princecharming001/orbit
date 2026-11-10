@@ -63,7 +63,11 @@ export function deliverability(status: string | null | undefined): Deliverabilit
 export interface Hunter {
   readonly configured: boolean;
   findEmail(
-    params: { linkedin_handle: string } | { first_name: string; last_name: string; domain: string },
+    params:
+      | { linkedin_handle: string }
+      | { first_name: string; last_name: string; domain: string }
+      // Hunter finds the company's domain itself from its name, when Orbit does not know it
+      | { first_name: string; last_name: string; company: string },
   ): Promise<ProviderResult<HunterFinder>>;
   domainPattern(domain: string): Promise<ProviderResult<z.infer<typeof hunterDomainSchema>>>;
   verifyEmail(email: string): Promise<ProviderResult<z.infer<typeof hunterVerifierSchema>>>;
