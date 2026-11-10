@@ -3225,7 +3225,7 @@ test.describe('Autopilot', () => {
     expect(n).toBeGreaterThan(1);
     // taken back, one goes to a draft again
     await items.first().getByTestId('scheduled-cancel').click();
-    await expect(page.getByTestId('toasts')).toContainText('Taken off autopilot');
+    await expect(page.getByTestId('toasts')).toContainText('is a draft again');
     await expect(items).toHaveCount(n - 1);
   });
 });
