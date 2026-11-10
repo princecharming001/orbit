@@ -28079,13 +28079,12 @@ var pageAddresses = (name) => {
   const key2 = companyNameKey(name);
   const joined = key2.replace(/[^a-z0-9]+/g, "");
   if (joined.length < 3) return [];
-  const hyphened = key2.replace(/[^a-z0-9]+/g, "-");
-  return hyphened === joined ? [joined] : [joined, hyphened];
+  return [key2.replace(/[^a-z0-9]+/g, "-")];
 };
 var LOOKUP_RULES_SINCE = Date.parse("2026-11-10T00:00:00Z");
 function rowSettled(r, now) {
   if (!r) return false;
-  if (r.status === "found") return true;
+  if (r.status === "found" && r.logoUrl) return true;
   const at = Date.parse(r.checkedAt);
   return at >= LOOKUP_RULES_SINCE && now.getTime() - at < COMPANY_RETRY_MS;
 }
@@ -28235,6 +28234,10 @@ async function lookupCompany(u2, o) {
         publicIdentifier: page2.company.publicIdentifier ?? c.publicIdentifier,
         logo: page2.company.logoUrl
       };
+  }
+  if (!c.logo && "id" in found) {
+    const own = await companyAtOwnName(u2, accountId, name, doFetch, { spend }).catch(() => void 0);
+    if (own?.logo) c = own;
   }
   return { looked: true, answer: await keepCompany(cache3, key2, c, doFetch, now) };
 }
@@ -29425,7 +29428,7 @@ function missing(candidates, rows, now) {
   return candidates.filter((c) => {
     if (rowSettled(rows[c.key], now)) return false;
     const cleaned = rows[companyNameKey(searchName(c.name))];
-    return cleaned?.status !== "found";
+    return !(cleaned?.status === "found" && cleaned.logoUrl);
   });
 }
 async function rowsFor(cache3, names) {
@@ -29494,7 +29497,7 @@ async function runLogoSweep(db2, deps, now) {
   result.remaining = todo.length - settled;
   return result;
 }
-var USER_SHARE = 0.7;
+var USER_SHARE = 0.9;
 var USER_MAX_PARTS = 24;
 var USER_CANDIDATES = 4e3;
 async function schoolKeys(db2) {

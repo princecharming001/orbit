@@ -162,13 +162,15 @@ export const pageAddress = (name: string): string | undefined => {
   return slug.length >= 3 ? slug : undefined;
 };
 
-/** The addresses a company's own page may be at: "Capital One" at capitalone and at capital-one. */
+/**
+ * The address a company's own page is most likely at, as LinkedIn writes one: "SpaceX" at spacex, "Capital One" at
+ * capital-one. One address, so a name that is not there costs one read.
+ */
 export const pageAddresses = (name: string): string[] => {
   const key = companyNameKey(name);
   const joined = key.replace(/[^a-z0-9]+/g, '');
   if (joined.length < 3) return [];
-  const hyphened = key.replace(/[^a-z0-9]+/g, '-');
-  return hyphened === joined ? [joined] : [joined, hyphened];
+  return [key.replace(/[^a-z0-9]+/g, '-')];
 };
 
 /**
@@ -178,9 +180,13 @@ export const pageAddresses = (name: string): string[] => {
 export const LOOKUP_RULES_SINCE = Date.parse('2026-11-10T00:00:00Z');
 
 /** Whether the shared list's row answers for now: found, or not pinned down within the month under today's rules. */
-export function rowSettled(r: Pick<CompanyRow, 'status' | 'checkedAt'> | undefined, now: Date): boolean {
+export function rowSettled(
+  r: Pick<CompanyRow, 'status' | 'checkedAt' | 'logoUrl'> | undefined,
+  now: Date,
+): boolean {
   if (!r) return false;
-  if (r.status === 'found') return true;
+  if (r.status === 'found' && r.logoUrl) return true;
+  // not pinned down, or found without a logo (a namesake's page, or one with none yet): again after a month
   const at = Date.parse(r.checkedAt);
   return at >= LOOKUP_RULES_SINCE && now.getTime() - at < COMPANY_RETRY_MS;
 }
@@ -427,6 +433,12 @@ export async function lookupCompany(
         publicIdentifier: page.company.publicIdentifier ?? c.publicIdentifier,
         logo: page.company.logoUrl,
       };
+  }
+  // still no logo: often a namesake's empty page ("REDUCTO" for Reducto); the page at the company's own name, when it
+  // has the name and a logo, is the company people mean
+  if (!c.logo && 'id' in found) {
+    const own = await companyAtOwnName(u, accountId, name, doFetch, { spend }).catch(() => undefined);
+    if (own?.logo) c = own;
   }
   return { looked: true, answer: await keepCompany(cache, key, c, doFetch, now) };
 }

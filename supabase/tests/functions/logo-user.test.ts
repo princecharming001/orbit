@@ -141,13 +141,13 @@ describe('logos.user', () => {
 
   it('stops at its share of the student account’s company ledger', async () => {
     const a = await connectedUser(t.db, { linkedinAccount: 'acc-v' });
-    for (let i = 0; i < 130; i++) await person(a, `Firm ${i}`);
+    for (let i = 0; i < 160; i++) await person(a, `Firm ${i}`);
     const r = await runUserLogos(t.db, a, deps(fakeUnipile()), NOW);
     expect(r.stopped).toBe('limit');
     const [used] = await t.db.sql<{ count: number }>`
       select count from public.orbit_proxy_counters where bucket = ${'connectors:li:company:2026-11-12:acc-v'}`;
     expect(used!.count).toBe(Math.round(150 * USER_SHARE));
-    expect(r.remaining).toBe(130 - Math.round(150 * USER_SHARE));
+    expect(r.remaining).toBe(160 - Math.round(150 * USER_SHARE));
   });
 
   it('the handler queues the next part while time ran out, and the cron queues every connected student', async () => {

@@ -812,13 +812,12 @@ var pageAddresses = (name) => {
   const key = companyNameKey(name);
   const joined = key.replace(/[^a-z0-9]+/g, "");
   if (joined.length < 3) return [];
-  const hyphened = key.replace(/[^a-z0-9]+/g, "-");
-  return hyphened === joined ? [joined] : [joined, hyphened];
+  return [key.replace(/[^a-z0-9]+/g, "-")];
 };
 var LOOKUP_RULES_SINCE = Date.parse("2026-11-10T00:00:00Z");
 function rowSettled(r, now) {
   if (!r) return false;
-  if (r.status === "found") return true;
+  if (r.status === "found" && r.logoUrl) return true;
   const at = Date.parse(r.checkedAt);
   return at >= LOOKUP_RULES_SINCE && now.getTime() - at < COMPANY_RETRY_MS;
 }
@@ -968,6 +967,10 @@ async function lookupCompany(u, o) {
         publicIdentifier: page.company.publicIdentifier ?? c.publicIdentifier,
         logo: page.company.logoUrl
       };
+  }
+  if (!c.logo && "id" in found) {
+    const own = await companyAtOwnName(u, accountId, name, doFetch, { spend }).catch(() => void 0);
+    if (own?.logo) c = own;
   }
   return { looked: true, answer: await keepCompany(cache, key, c, doFetch, now) };
 }

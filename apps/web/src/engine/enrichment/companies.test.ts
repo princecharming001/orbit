@@ -160,12 +160,12 @@ describe('/companies', () => {
     expect(pages).toEqual([]);
   });
 
-  it('settles namesakes at the company page at its own name, joined or hyphened', async () => {
+  it('settles namesakes at the company page at its own name, as LinkedIn writes it', async () => {
     const { handler, pages } = harness();
     const r = await (await handler(post({ accountId: 'a1', token: TOKEN, names: ['Capital One'] }))).json();
     // one of the two the search found, so taken although the page names itself in full
     expect(r.companies['Capital One']).toMatchObject({ status: 'found', companyId: '1419' });
-    expect(pages.map((u) => u.split('/company/')[1]!.split('?')[0])).toEqual(['capitalone', 'capital-one']);
+    expect(pages.map((u) => u.split('/company/')[1]!.split('?')[0])).toEqual(['capital-one']);
   });
 
   it('searches a messy name for the company alone, and answers the cleaned name from the list', async () => {
@@ -193,5 +193,27 @@ describe('/companies', () => {
     const r = await (await handler(post({ accountId: 'a1', token: TOKEN, names: ['Tesla'] }))).json();
     expect(r.companies.Tesla.status).toBe('found');
     expect(searches).toEqual(['Tesla']);
+  });
+
+  it("a namesake's page with no logo gives way to the page at the company's own name", async () => {
+    const { handler, searches, pages } = harness({
+      fetch: (async (url: string, init: RequestInit = {}) => {
+        if (url.startsWith('https://media.licdn.com/'))
+          return new Response(new Uint8Array([137, 80, 78, 71]), {
+            headers: { 'content-type': 'image/png' },
+          });
+        if (url.includes('/api/v1/linkedin/search')) {
+          searches.push(String(JSON.parse(String(init.body)).keywords));
+          return new Response(JSON.stringify({ items: [{ id: 500, name: 'REDUCTO' }] }));
+        }
+        pages.push(url);
+        if (/\/company\/500\?/.test(url)) return new Response(JSON.stringify({ id: '500', name: 'REDUCTO' }));
+        if (/\/company\/reducto\?/.test(url))
+          return new Response(JSON.stringify({ id: '600', name: 'Reducto', logo: licdn('reducto') }));
+        return new Response('{}', { status: 404 });
+      }) as unknown as typeof fetch,
+    });
+    const r = await (await handler(post({ accountId: 'a1', token: TOKEN, names: ['Reducto'] }))).json();
+    expect(r.companies.Reducto).toMatchObject({ status: 'found', companyId: '600' });
   });
 });
