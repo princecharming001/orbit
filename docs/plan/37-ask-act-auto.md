@@ -570,3 +570,12 @@ first, every few hours. An expired link counts as no logo, and the queue sends L
 itself, with Send and Discard. Someone the student has talked with before never gets a "First message": they get a
 check-in (`firstKindFor`), and older drafts show that label (`draftKindLabel`). A reconnect stays with Orbit's
 dormant-tie suggestions, which carry what was last said.
+
+**Live, 10 November.** The first runs on the student's account found Tesla, Capital One, Accenture, Deloitte, NASA and
+AWS ("Amazon Web Services (AWS)") with their logos. They also showed three faults, fixed the same day: a namesake in
+another script ("AWS بالعربي"), reads spent on schools LinkedIn's company search never lists (UCSC, Rutgers), and a
+namesake's empty page taken for the company ("REDUCTO"). The pace is LinkedIn's: Unipile advises about 150 company
+lookups a day for a premium account (80 for a free one), which is Orbit's ledger already. The background pass takes up
+to 70% of it, busiest companies first, so the companies with two or more of the student's people are done within days
+and the long tail of one-person companies over a few weeks. Companies on a profile the student opens are looked up that
+day from the rest.
