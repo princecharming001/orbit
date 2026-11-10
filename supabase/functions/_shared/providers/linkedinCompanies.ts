@@ -600,13 +600,13 @@ export async function lookupCompany(
   const chosen = chooseCompany(items, name);
   if (!('id' in chosen)) {
     const first = items[0];
-    // an older row LinkedIn still lists first for the name, as the company it names: it stays
+    // an older row LinkedIn still lists first for the name: it stays (Dell's page is "Dell Technologies" now, and
+    // LinkedIn still answers "Dell" with it)
     if (
       o.recheck?.status === 'found' &&
       o.recheck.companyId &&
       first &&
-      String(first.id) === o.recheck.companyId &&
-      namesCompany(first.name, name)
+      String(first.id) === o.recheck.companyId
     ) {
       const row = { ...o.recheck, checkedAt: now.toISOString(), rules: LOOKUP_RULES };
       await cache?.put(row).catch(() => undefined);

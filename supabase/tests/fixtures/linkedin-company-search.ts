@@ -63,4 +63,49 @@ export const LIVE_SEARCH: Record<string, { id: string; name: string; followers_c
     { id: '26676', name: 'A. O. Smith Corporation', followers_count: 672 },
     { id: '2715458', name: 'Smith', followers_count: 84 },
   ],
+  // 2026-11-10, a second batch (ids and names only)
+  Google: [
+    { id: '1441', name: 'Google', followers_count: 0 },
+    { id: '3648281', name: 'Google Cloud', followers_count: 0 },
+    { id: '1594050', name: 'Google DeepMind', followers_count: 0 },
+  ],
+  Apple: [
+    { id: '162479', name: 'Apple', followers_count: 0 },
+    { id: '3099084', name: 'Apple Leisure Group', followers_count: 0 },
+    { id: '10015761', name: 'Apple', followers_count: 0 },
+    { id: '1356007', name: 'Apple Bank', followers_count: 0 },
+  ],
+  Mercury: [
+    { id: '19107985', name: 'Mercury', followers_count: 0 },
+    { id: '42804', name: 'Mercury', followers_count: 0 },
+    { id: '83607', name: 'Mercury', followers_count: 0 },
+    { id: '10596', name: 'Mercury Marine', followers_count: 0 },
+  ],
+  Compass: [
+    { id: '2866215', name: 'Compass', followers_count: 0 },
+    { id: '852267', name: 'Compass Group', followers_count: 0 },
+    { id: '21384', name: 'Compass Lexecon', followers_count: 0 },
+  ],
+  Moonshot: [
+    { id: '10440912', name: 'X, The Moonshot Factory', followers_count: 0 },
+    { id: '123483980', name: 'Moonshot (YC s26)', followers_count: 0 },
+    { id: '80384835', name: 'Moonshot', followers_count: 0 },
+    { id: '96436171', name: 'Moonshot', followers_count: 0 },
+  ],
+  Dell: [
+    { id: '15088102', name: 'Dell Technologies', followers_count: 0 },
+    { id: '85638825', name: 'Dell Technologies Partner', followers_count: 0 },
+    { id: '93225', name: 'Michael & Susan Dell Foundation', followers_count: 0 },
+  ],
+  Pigeon: [
+    { id: '89228438', name: 'Pigeon', followers_count: 0 },
+    { id: '10865539', name: 'Pigeon Corporation', followers_count: 0 },
+    { id: '53513703', name: 'Pigeon', followers_count: 0 },
+    { id: '9428487', name: 'Pigeon', followers_count: 0 },
+  ],
+  Tesla: [
+    { id: '15564', name: 'Tesla', followers_count: 0 },
+    { id: '96666253', name: 'Tesla Energy', followers_count: 0 },
+    { id: '73998086', name: 'Tesla', followers_count: 0 },
+  ],
 };

@@ -394,6 +394,7 @@ describe('logos.user', () => {
     const a = await connectedUser(t.db, { linkedinAccount: 'acc-c' });
     await person(a, 'Tesla');
     await person(a, 'Smith');
+    await person(a, 'Dell');
     const cache = sqlCompanyCache(t.db, deps(fakeUnipile()).storeLogo);
     const old = '2026-11-01T00:00:00Z';
     await cache.put({
@@ -410,6 +411,14 @@ describe('logos.user', () => {
       logoUrl: 'https://store.test/1021736.png',
       checkedAt: old,
     });
+    // Dell's page, renamed Dell Technologies since: LinkedIn still answers "Dell" with it first
+    await cache.put({
+      key: 'dell',
+      status: 'found',
+      companyId: '15088102',
+      logoUrl: 'https://store.test/15088102.png',
+      checkedAt: old,
+    });
     await t.db.sql`update orbit_private.linkedin_companies set rules = 1`;
     const doFetch = (async (url: string, init: RequestInit = {}) => {
       const kw = String(JSON.parse(String(init.body ?? '{}')).keywords ?? '');
@@ -418,6 +427,13 @@ describe('logos.user', () => {
           items: [
             { id: '15564', name: 'Tesla', logo: logo('tesla') },
             { id: '600000', name: 'Tesla' },
+          ],
+        });
+      if (kw === 'Dell')
+        return Response.json({
+          items: [
+            { id: '15088102', name: 'Dell Technologies' },
+            { id: '93225', name: 'Michael & Susan Dell Foundation' },
           ],
         });
       if (kw === 'Smith')
@@ -438,6 +454,7 @@ describe('logos.user', () => {
     }>`
       select key, status, company_id, logo_url from orbit_private.linkedin_companies order by key`;
     expect(rows).toEqual([
+      { key: 'dell', status: 'found', company_id: '15088102', logo_url: 'https://store.test/15088102.png' },
       { key: 'smith', status: 'ambiguous', company_id: null, logo_url: null },
       { key: 'tesla', status: 'found', company_id: '15564', logo_url: 'https://store.test/15564.png' },
     ]);

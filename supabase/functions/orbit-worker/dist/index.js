@@ -28310,7 +28310,7 @@ async function lookupCompany(u2, o) {
   const chosen = chooseCompany(items, name);
   if (!("id" in chosen)) {
     const first = items[0];
-    if (o.recheck?.status === "found" && o.recheck.companyId && first && String(first.id) === o.recheck.companyId && namesCompany(first.name, name)) {
+    if (o.recheck?.status === "found" && o.recheck.companyId && first && String(first.id) === o.recheck.companyId) {
       const row2 = { ...o.recheck, checkedAt: now.toISOString(), rules: LOOKUP_RULES };
       await cache3?.put(row2).catch(() => void 0);
       return { looked: true, answer: answerOf(row2) };

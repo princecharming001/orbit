@@ -26,6 +26,18 @@ describe('chooseCompany on LinkedIn’s real answers', () => {
     const t = chooseCompany(LIVE_SEARCH.Triumph!, 'Triumph');
     expect('sameIds' in t && t.sameIds).toEqual(['74900938', '50454', '1515366']);
   });
+  it('the second live batch: plain names taken, shared names left, nothing guessed', () => {
+    expect(pick('Google')).toBe('1441');
+    expect(pick('Tesla')).toBe('15564');
+    expect(pick('Compass')).toBe('2866215');
+    // several pages called Mercury, Pigeon, Moonshot: none taken
+    for (const n of ['Mercury', 'Pigeon', 'Moonshot']) expect([n, pick(n)]).toEqual([n, 'ambiguous']);
+    // a newer page also called Apple: left unsettled for a new name (the shared list keeps Apple from before, and a
+    // person's position or the student's pick settles it); "Dell" answers as Dell Technologies, which is not the name
+    expect(pick('Apple')).toBe('ambiguous');
+    expect(pick('Dell')).toBe('not_found');
+  });
+
   it('follower counts decide nothing (LinkedIn cuts them to three digits)', () => {
     const items = [
       { id: '9', name: 'Acme', followers_count: 3 },
