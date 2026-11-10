@@ -29,7 +29,7 @@ import { MutualConnections } from '../components/MutualConnections';
 import { DossierCard } from '../components/people/DossierCard';
 import { InPlanChip } from '../components/people/InPlanChip';
 import { LinkedInHistory } from '../components/people/LinkedInHistory';
-import { PrepButton, prepIsDue } from '../components/people/PrepButton';
+import { PrepButton } from '../components/people/PrepButton';
 import { PrepDeck } from '../components/people/PrepDeck';
 import { ResearchDebrief } from '../components/people/ResearchDebrief';
 import { STAGE_COLOR, StrengthDots } from '../components/people/shared';
@@ -674,9 +674,13 @@ export function PersonPage() {
             >
               Write to {person.firstName}
             </Button>
-            {prepIsDue(nextEvent ?? pastEvent) && (
-              <PrepButton event={nextEvent ?? pastEvent} variant="ghost" testId="person-prep" />
-            )}
+            {/* on a phone the tabs fill their row, so Prep sits up here beside Write */}
+            <PrepButton
+              event={nextEvent ?? pastEvent}
+              variant="round"
+              className="sm:hidden"
+              testId="prep-open-phone"
+            />
           </div>
           <div className="contents text-[12px]">
             {/* the less frequent actions wait behind More, so the header leads with writing to them */}
@@ -998,6 +1002,9 @@ export function PersonPage() {
                 count: tabsLoading ? undefined : neighbours.filter(Boolean).length,
               },
             ]}
+            trailing={
+              <PrepButton event={nextEvent ?? pastEvent} variant="round" className="max-sm:hidden" />
+            }
           />
           {tab === 'timeline' && (
             <ol className="relative border-l border-line ml-3 space-y-4">
@@ -1044,92 +1051,98 @@ export function PersonPage() {
           )}
           {tab === 'conversation' && <Conversation person={person} />}
           {tab === 'facts' && (
-            <div className="space-y-4">
-              {/* who they are, straight from LinkedIn (everyone), then Deep research, a step further, from the web */}
-              <div className="flex flex-wrap items-center gap-x-3 gap-y-1" data-testid="about-prep">
-                <PrepButton event={nextEvent} />
-              </div>
-              <LinkedInHistory person={person} />
-              <ResearchDebrief person={person} userId={user.id} />
-              <h2 className="text-[13px] font-medium text-ink pt-2">What you've learned yourself</h2>
-              {tabsLoading && <SkeletonText lines={4} testId="facts-loading" />}
-              {!tabsLoading && ownFacts.length === 0 && (
-                <p className="text-ink-3 text-[12.5px] -mt-2" data-testid="facts-empty">
-                  Nothing yet. Facts come in from your emails and meeting notes, or add one below.
-                </p>
-              )}
-              {[...grouped.entries()].map(([type, fs]) => (
-                <div key={type}>
-                  <div className="text-[12px] uppercase tracking-wide text-ink-3 mb-1.5">
-                    {FACT_TYPE_LABELS[type as keyof typeof FACT_TYPE_LABELS] ?? 'Other'}
-                  </div>
-                  <ul className="space-y-1.5">
-                    {fs.map((f) => (
-                      <li key={f.id} className="group flex items-start gap-2 text-[13.5px]">
-                        <span className="flex-1">
-                          {/* stored as written in the notes ("She offered to intro me"); shown to the student as "you" */}
-                          {/* a "Why them" line was written to them, so it is shown as written, in quotes */}
-                          {f.sourceTable === 'outbound' ? `“${f.text}”` : toYou(f.text)}{' '}
-                          <span className="text-ink-3 text-[12px]">
-                            ·{' '}
-                            {f.sourceTable === 'notes'
-                              ? 'from notes'
-                              : f.sourceTable === 'manual'
-                                ? 'added by you'
-                                : f.sourceTable === 'outbound'
-                                  ? 'from a message you wrote'
-                                  : f.sourceTable === 'messages'
-                                    ? 'from email'
-                                    : f.sourceTable === 'dossiers'
-                                      ? 'from research'
-                                      : 'from Orbit'}
-                            {realDate(f.occurredAt) ? ` · ${realDate(f.occurredAt)}` : ''}
-                          </span>
-                          {conflicts.has(f.id) && (
-                            <span className="block text-[12px] text-warn mt-0.5" data-testid="fact-conflict">
-                              Disagrees with “{conflicts.get(f.id)}”. Delete the one that is wrong.
+            <div>
+              {/* who they are first (the research, as a profile's About), then their history straight from LinkedIn,
+                  then what the student learned: each its own section under a title, a hairline and room between.
+                  Prep for the call is the round button at the end of the tabs. */}
+              <div className="about-sections">
+                <ResearchDebrief person={person} userId={user.id} />
+                <LinkedInHistory person={person} />
+                <section className="space-y-4">
+                  <h2 className="section-title">What you've learned yourself</h2>
+                  {tabsLoading && <SkeletonText lines={4} testId="facts-loading" />}
+                  {!tabsLoading && ownFacts.length === 0 && (
+                    <p className="text-ink-3 text-[13px]" data-testid="facts-empty">
+                      Nothing yet. Facts come in from your emails and meeting notes, or add one below.
+                    </p>
+                  )}
+                  {[...grouped.entries()].map(([type, fs]) => (
+                    <div key={type}>
+                      <div className="text-[12px] uppercase tracking-wide text-ink-3 mb-1.5">
+                        {FACT_TYPE_LABELS[type as keyof typeof FACT_TYPE_LABELS] ?? 'Other'}
+                      </div>
+                      <ul className="space-y-1.5">
+                        {fs.map((f) => (
+                          <li key={f.id} className="group flex items-start gap-2 text-[13.5px]">
+                            <span className="flex-1">
+                              {/* stored as written ("She offered to intro me", "I'm going for PM roles"); shown to the
+                              student as "you", the line from a message they wrote too */}
+                              {toYou(f.text)}{' '}
+                              <span className="text-ink-3 text-[12px]">
+                                ·{' '}
+                                {f.sourceTable === 'notes'
+                                  ? 'from notes'
+                                  : f.sourceTable === 'manual'
+                                    ? 'added by you'
+                                    : f.sourceTable === 'outbound'
+                                      ? 'from a message you wrote'
+                                      : f.sourceTable === 'messages'
+                                        ? 'from email'
+                                        : f.sourceTable === 'dossiers'
+                                          ? 'from research'
+                                          : 'from Orbit'}
+                                {realDate(f.occurredAt) ? ` · ${realDate(f.occurredAt)}` : ''}
+                              </span>
+                              {conflicts.has(f.id) && (
+                                <span
+                                  className="block text-[12px] text-warn mt-0.5"
+                                  data-testid="fact-conflict"
+                                >
+                                  Disagrees with “{conflicts.get(f.id)}”. Delete the one that is wrong.
+                                </span>
+                              )}
                             </span>
-                          )}
-                        </span>
-                        <button
-                          className="shrink-0 -my-1 p-1.5 opacity-100 @3xl:opacity-0 @3xl:group-hover:opacity-100 focus-visible:opacity-100 [@media(hover:none)]:opacity-100 text-ink-3 hover:text-bad rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
-                          title="Delete this fact (it won't come back)"
-                          aria-label={`Delete fact: ${f.text}`}
-                          onClick={async () => {
-                            await deleteFact(user.id, f.id);
-                            toast.push({
-                              text: 'Fact deleted. Drafts will not use it.',
-                              action: { label: 'Undo', onClick: () => restoreFact(f.id) },
-                              ttl: 6000,
-                            });
-                          }}
-                        >
-                          <Trash2 size={14} />
-                        </button>
-                      </li>
-                    ))}
-                  </ul>
-                </div>
-              ))}
-              <AddFact personId={person.id} userId={user.id} />
-              {notes.length > 0 && (
-                <div>
-                  <div className="text-[12px] uppercase tracking-wide text-ink-3 mb-1.5">Notes</div>
-                  {notes.map((n) => (
-                    <details key={n.id} className="border border-line rounded-lg p-3 mb-2">
-                      <summary className="cursor-pointer text-[13.5px] font-medium">
-                        {n.title}{' '}
-                        <span className="text-ink-3 font-normal">
-                          · {shortDate(n.occurredAt)} · {NOTE_SOURCE_LABELS[n.source] ?? 'Note'}
-                        </span>
-                      </summary>
-                      <p className="text-[13px] text-ink-2 mt-2 whitespace-pre-line">
-                        {n.summary ?? n.rawText.slice(0, 600)}
-                      </p>
-                    </details>
+                            <button
+                              className="shrink-0 -my-1 p-1.5 opacity-100 @3xl:opacity-0 @3xl:group-hover:opacity-100 focus-visible:opacity-100 [@media(hover:none)]:opacity-100 text-ink-3 hover:text-bad rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
+                              title="Delete this fact (it won't come back)"
+                              aria-label={`Delete fact: ${f.text}`}
+                              onClick={async () => {
+                                await deleteFact(user.id, f.id);
+                                toast.push({
+                                  text: 'Fact deleted. Drafts will not use it.',
+                                  action: { label: 'Undo', onClick: () => restoreFact(f.id) },
+                                  ttl: 6000,
+                                });
+                              }}
+                            >
+                              <Trash2 size={14} />
+                            </button>
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
                   ))}
-                </div>
-              )}
+                  <AddFact personId={person.id} userId={user.id} />
+                  {notes.length > 0 && (
+                    <div>
+                      <div className="text-[12px] uppercase tracking-wide text-ink-3 mb-1.5">Notes</div>
+                      {notes.map((n) => (
+                        <details key={n.id} className="border border-line rounded-lg p-3 mb-2">
+                          <summary className="cursor-pointer text-[13.5px] font-medium">
+                            {n.title}{' '}
+                            <span className="text-ink-3 font-normal">
+                              · {shortDate(n.occurredAt)} · {NOTE_SOURCE_LABELS[n.source] ?? 'Note'}
+                            </span>
+                          </summary>
+                          <p className="text-[13px] text-ink-2 mt-2 whitespace-pre-line">
+                            {n.summary ?? n.rawText.slice(0, 600)}
+                          </p>
+                        </details>
+                      ))}
+                    </div>
+                  )}
+                </section>
+              </div>
             </div>
           )}
           {tab === 'connections' && (
@@ -1168,7 +1181,7 @@ export function PersonPage() {
             </div>
           )}
         </div>
-        <div className="space-y-4">
+        <div className="rail-flat">
           <TieScoreCard person={person} userId={user.id} />
           <TextsCard personId={person.id} />
           {isServerUser(user.id) && <DossierCard person={person} userId={user.id} />}

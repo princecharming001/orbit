@@ -24,7 +24,16 @@ const STEP_STATUS: Record<TargetPlanStep['status'], string | undefined> = {
   done: 'started',
 };
 
-export function TargetPlanCard({ plan, className }: { plan: TargetPlan; className?: string }) {
+export function TargetPlanCard({
+  plan,
+  className,
+  hideTarget,
+}: {
+  plan: TargetPlan;
+  className?: string;
+  /** the page already shows where the application stands and its deadline (the company page) */
+  hideTarget?: boolean;
+}) {
   const { user } = useSession();
   const nav = useNavigate();
   const toast = useToast();
@@ -100,7 +109,7 @@ export function TargetPlanCard({ plan, className }: { plan: TargetPlan; classNam
                 The posting <ExternalLink size={11} aria-hidden />
               </a>
             )}
-            {target && (
+            {target && !hideTarget && (
               <label className="inline-flex items-center gap-1">
                 <span>Target ·</span>
                 <Select
@@ -118,7 +127,7 @@ export function TargetPlanCard({ plan, className }: { plan: TargetPlan; classNam
                 </Select>
               </label>
             )}
-            {target && (
+            {target && !hideTarget && (
               <label className="inline-flex items-center gap-1">
                 <span>Deadline</span>
                 <Input
@@ -136,7 +145,7 @@ export function TargetPlanCard({ plan, className }: { plan: TargetPlan; classNam
       {plan.steps.length === 0 && (
         <p className="mt-3 text-[13px] text-ink-2" data-testid="target-plan-empty">
           {plan.cold
-            ? `Nobody in your network touches ${p.company} yet. Connect LinkedIn, and Orbit finds who can get you in.`
+            ? `Nobody you know is at ${p.company} yet. Search LinkedIn on the Map to find people there.`
             : `Everyone Orbit would pick at ${p.company} is already in your pipeline.`}
         </p>
       )}

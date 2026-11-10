@@ -38,7 +38,7 @@ import {
   declineFriend,
   endFriendship,
   FRIENDS_NEEDS_ACCOUNT,
-  FRIENDS_WHAT_CROSSES,
+  FRIENDS_SUBTITLE,
   friendsAvailable,
   inviteFriend,
   inviteLink,
@@ -71,7 +71,7 @@ function Section({
 }) {
   return (
     <section data-testid={testId} id={id} className="scroll-mt-6">
-      <h2 className="text-[17px] font-semibold mb-3">{title}</h2>
+      <h2 className="text-[16px] font-semibold mb-3">{title}</h2>
       {children}
     </section>
   );
@@ -361,7 +361,7 @@ export function FriendsPage() {
   const searching = query.length >= 2;
   return (
     <>
-      <PageHeader title="Friends" subtitle={FRIENDS_WHAT_CROSSES} />
+      <PageHeader title="Friends" subtitle={FRIENDS_SUBTITLE} />
       {code && (
         <Card className="mb-6" data-testid="friends-join">
           <p className="text-[14px]">
@@ -384,12 +384,12 @@ export function FriendsPage() {
           </Button>
         </Card>
       )}
-      <div className="grid gap-10 @5xl:grid-cols-[minmax(0,1fr)_320px] items-start">
+      <div className="grid gap-x-12 gap-y-10 @4xl:grid-cols-[minmax(0,1fr)_300px] items-start">
         <div className="min-w-0 space-y-10">
           <FriendSearch onSearch={(q) => void search(q)} />
           {searching && (
             <section data-testid="friends-search-results">
-              <h2 className="text-[17px] font-semibold mb-3">On Orbit</h2>
+              <h2 className="text-[16px] font-semibold mb-3">On Orbit</h2>
               {!results ? (
                 <p className="text-[13px] text-ink-3">Looking…</p>
               ) : results.length ? (
@@ -558,8 +558,18 @@ export function FriendsPage() {
           </Section>
         </div>
         {/* on a phone the link, the requests and the friends come first, above the grids */}
-        <aside className="min-w-0 order-first @5xl:order-none @5xl:sticky @5xl:top-6">
-          <InviteLinkSection link={link} onReset={() => void resetLink()} resetting={resetting} />
+        <aside className="min-w-0 order-first @4xl:order-none @4xl:sticky @4xl:top-6">
+          <InviteLinkSection link={link} onReset={() => void resetLink()} resetting={resetting}>
+            <div data-testid="friends-section-invite">
+              <InviteBox
+                pending={pending.filter((p) => p.direction === 'out')}
+                onInvite={invite}
+                onAccept={(i) => void accept(i)}
+                onDecline={(i) => void decline(i)}
+                busy={!!working.busy}
+              />
+            </div>
+          </InviteLinkSection>
           <RequestsSection
             pending={pending}
             onAccept={(i) => void accept(i)}
@@ -567,16 +577,6 @@ export function FriendsPage() {
             busy={!!working.busy}
           />
           <FriendsListSection friends={friends} loading={!loaded} onOpen={openFriend} />
-          <section className="py-5 border-t border-line-2" data-testid="friends-section-invite">
-            <h2 className="text-[15px] font-semibold mb-2">Invite by email</h2>
-            <InviteBox
-              pending={pending.filter((p) => p.direction === 'out')}
-              onInvite={invite}
-              onAccept={(i) => void accept(i)}
-              onDecline={(i) => void decline(i)}
-              busy={!!working.busy}
-            />
-          </section>
         </aside>
       </div>
     </>

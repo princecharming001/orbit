@@ -84,7 +84,9 @@ describe('Settings, Autopilot', () => {
     await mount('page');
     await until(() => !!q('autopilot-rung-first_touch'), 'the rungs');
     expect(q('autopilot-mode-off')!.textContent).toContain('Orbit writes, you send.');
-    expect(q('autopilot-mode-assist')!.textContent).toContain('Tuesday to Thursday morning');
+    expect(q('autopilot-mode-assist')!.textContent).toContain('You approve each message with one tap');
+    // the chosen mode is spelled out in full under the three
+    expect(q('autopilot-mode-body')!.textContent).toContain("Tomorrow's batch");
     expect(q('autopilot-mode-autopilot')!.getAttribute('aria-checked')).toBe('true');
     const rules = q('autopilot-rules')!.textContent!;
     for (const r of [

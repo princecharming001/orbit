@@ -57,15 +57,15 @@ export function InviteBox({
           type="email"
           value={email}
           onChange={(e) => setEmail(e.target.value)}
-          placeholder="friend@school.edu"
+          placeholder="Their email"
           className="min-w-0 flex-1 h-10"
           aria-label="Your friend's email"
           data-testid="friends-invite-email"
         />
         <Button
           type="submit"
-          variant="primary"
-          className={`h-10 ${TAP}`}
+          variant={email.trim() ? 'primary' : 'secondary'}
+          className={`h-10 ${TAP} disabled:opacity-100 disabled:text-ink-3`}
           loading={busy}
           disabled={!email.trim()}
           data-testid="friends-invite-send"

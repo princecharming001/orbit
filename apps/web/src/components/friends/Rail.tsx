@@ -1,9 +1,10 @@
 /**
- * The Friends tab's side column (plan 37 follow-up): the standing invite link for a group chat (Copy, Reset link),
- * requests waiting on the student, and their friends, five at a time. Flat sections, no box inside a box.
+ * The Friends tab's side column (plan 37 follow-up): one Invite section (the standing link on a flat strip with Copy,
+ * the email box under it, Reset link last and quiet), requests waiting on the student, and their friends, five at a
+ * time. Flat sections, no box inside a box.
  */
 import type { Friend, FriendInvite } from '@orbit/core';
-import { Link2 } from 'lucide-react';
+import { Check, Link2 } from 'lucide-react';
 import { type ReactNode, useState } from 'react';
 import { Avatar, Button, Skeleton, useToast } from '../../ui';
 import { friendLine } from './FriendRow';
@@ -23,9 +24,9 @@ function RailSection({
   testId: string;
 }) {
   return (
-    <section className="py-5 first:pt-0 border-b border-line-2 last:border-0" data-testid={testId}>
-      <div className="flex items-center justify-between gap-3 mb-2">
-        <h2 className="text-[15px] font-semibold">{title}</h2>
+    <section className="py-6 first:pt-0 border-b border-line-2 last:border-0" data-testid={testId}>
+      <div className="flex items-center justify-between gap-3 mb-1.5">
+        <h2 className="text-[14px] font-semibold">{title}</h2>
         {aside}
       </div>
       {children}
@@ -37,16 +38,22 @@ export function InviteLinkSection({
   link,
   onReset,
   resetting,
+  children,
 }: {
   link?: string;
   onReset: () => void;
   resetting?: boolean;
+  /** the email box, under the link */
+  children?: ReactNode;
 }) {
   const toast = useToast();
+  const [copied, setCopied] = useState(false);
   const copy = async () => {
     if (!link) return;
     try {
       await navigator.clipboard.writeText(link);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
       toast.push({
         text: 'Link copied. Anyone with it can ask to be your friend until you reset it.',
         tone: 'good',
@@ -56,42 +63,41 @@ export function InviteLinkSection({
     }
   };
   return (
-    <RailSection
-      title="Invite link"
-      testId="friends-invite-link"
-      aside={
-        <button
-          type="button"
-          className="text-[12.5px] text-ink-3 hover:text-ink underline-offset-2 hover:underline disabled:opacity-50"
-          onClick={onReset}
-          disabled={!link || resetting}
-          data-testid="friends-link-reset"
-        >
-          Reset link
-        </button>
-      }
-    >
-      <p className="text-[12.5px] text-ink-3 mb-2.5">
-        Share it in a group chat. Whoever opens it can add you.
+    <RailSection title="Invite friends" testId="friends-invite-link">
+      <p className="text-[13px] text-ink-3 mb-3">
+        Send your link to a group chat, or invite someone by email.
       </p>
       {link ? (
-        <div className="flex items-center gap-2 border border-line rounded-[6px] pl-3 pr-1 h-11">
-          <span className="min-w-0 flex-1 truncate text-[13px] text-ink-2" data-testid="friends-link-text">
+        <div className="flex items-center h-10 rounded-[8px] bg-canvas-2 pl-3 pr-1">
+          <span
+            className="min-w-0 flex-1 truncate font-mono text-[12px] text-ink-2"
+            data-testid="friends-link-text"
+          >
             {link.replace(/^https?:\/\//, '')}
           </span>
-          <Button
-            size="sm"
-            variant="secondary"
-            className={TAP}
+          <button
+            type="button"
+            className={`shrink-0 inline-flex items-center gap-1.5 h-8 px-2.5 rounded-[6px] text-[13px] font-medium text-ink hover:bg-line-2 ${TAP}`}
             onClick={() => void copy()}
             data-testid="friends-link-copy"
           >
-            <Link2 size={14} aria-hidden /> Copy
-          </Button>
+            {copied ? <Check size={14} aria-hidden /> : <Link2 size={14} aria-hidden />}
+            {copied ? 'Copied' : 'Copy'}
+          </button>
         </div>
       ) : (
-        <Skeleton className="h-11 rounded-[6px]" />
+        <Skeleton className="h-10 rounded-[8px]" />
       )}
+      {children && <div className="mt-3">{children}</div>}
+      <button
+        type="button"
+        className="mt-3 text-[12px] text-ink-3 hover:text-ink underline-offset-2 hover:underline disabled:opacity-50"
+        onClick={onReset}
+        disabled={!link || resetting}
+        data-testid="friends-link-reset"
+      >
+        Reset link
+      </button>
     </RailSection>
   );
 }
@@ -210,7 +216,7 @@ export function FriendsListSection({
         </ul>
       ) : (
         <p className="text-[13px] text-ink-3" data-testid="friends-empty">
-          No friends on Orbit yet. Add someone you know, or share the link.
+          None yet. People who accept show up here.
         </p>
       )}
     </RailSection>

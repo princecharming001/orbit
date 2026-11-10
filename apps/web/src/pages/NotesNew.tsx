@@ -7,7 +7,7 @@ import { chatTimeLabel } from '../components/ScheduleChat';
 import { db } from '../db/schema';
 import { ingestNote, namedPeopleLabel, previewNoteMatch, rematchNote } from '../engine/notes';
 import { useSession } from '../state/session';
-import { Avatar, Button, Card, Input, Label, PageHeader, Select, Textarea, useToast } from '../ui';
+import { Avatar, Button, Input, Label, PageHeader, Select, Textarea, useToast } from '../ui';
 
 const DRAFT_KEY = 'orbit.capture.draft';
 const readDraft = () => {
@@ -264,7 +264,7 @@ export function NotesNew() {
   return (
     <div className="max-w-[760px]">
       <PageHeader title={existing ? 'Who was this note with?' : 'Add a note'} subtitle={existing?.title} />
-      <Card className="space-y-4">
+      <div className="space-y-5">
         {existing ? (
           <div className="rounded-lg bg-canvas-2 p-3 text-[13px] whitespace-pre-line max-h-64 overflow-y-auto">
             {existing.rawText.slice(0, 2000)}
@@ -489,7 +489,7 @@ export function NotesNew() {
                 : 'Save note'}
           </Button>
         </div>
-      </Card>
+      </div>
     </div>
   );
 }

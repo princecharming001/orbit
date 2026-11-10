@@ -34,11 +34,11 @@ function Photo({ src }: { src?: string | null }) {
     />
   ) : (
     <div
-      className="w-full aspect-square rounded-[8px] flex items-end justify-center overflow-hidden bg-[#e9e7e3] text-[#bdb9b2]"
+      className="w-full aspect-square rounded-[8px] flex items-end justify-center overflow-hidden bg-[linear-gradient(180deg,#f3f2ef,#ebe9e5)] text-[#d6d2cb]"
       aria-hidden
       data-testid="tile-no-photo"
     >
-      <UserRound className="w-3/5 h-3/5 translate-y-[12%]" strokeWidth={1.25} />
+      <UserRound className="w-1/2 h-1/2 translate-y-[10%]" strokeWidth={1} />
     </div>
   );
 }
@@ -62,18 +62,15 @@ export function PersonTile({
   void seed;
   return (
     <li
-      className="min-w-0 flex flex-col rounded-[12px] border border-line bg-canvas p-2.5 transition-shadow hover:shadow-[0_2px_10px_rgba(0,0,0,0.05)]"
+      className="min-w-0 flex flex-col rounded-[12px] border border-line-2 bg-canvas p-2 transition-[border-color,box-shadow] hover:border-line hover:shadow-[0_2px_12px_rgba(0,0,0,0.04)]"
       data-testid={testId}
     >
       <Photo src={photo} />
-      <div className="mt-2.5 font-medium text-[14px] leading-snug truncate" title={name}>
-        {name}
-      </div>
+      <div className="mt-2.5 font-medium text-[14px] leading-snug truncate">{name}</div>
       {shown.map((l, i) => (
         <div
           key={l}
           className={cx('text-[12.5px] leading-snug truncate', i === 0 ? 'text-ink-2' : 'text-ink-3')}
-          title={l}
         >
           {l}
         </div>
@@ -149,14 +146,12 @@ export function TileSection({
   return (
     <section data-testid={testId}>
       <div className="flex items-center justify-between gap-3 mb-3">
-        <h2 className="text-[17px] font-semibold">{title}</h2>
+        <h2 className="text-[16px] font-semibold">
+          {title}
+          {count > 0 && <span className="ml-2 font-normal text-ink-3">{count}</span>}
+        </h2>
         {fold && (
-          <Button
-            size="sm"
-            variant="secondary"
-            onClick={() => setOpen((v) => !v)}
-            data-testid={`${testId}-more`}
-          >
+          <Button size="sm" variant="ghost" onClick={() => setOpen((v) => !v)} data-testid={`${testId}-more`}>
             {open ? 'See fewer' : 'See more'}
           </Button>
         )}
@@ -243,9 +238,6 @@ export function InviteTile({
       action={
         <TileButton
           label="Invite"
-          title={
-            s.via === 'linkedin' ? `Sends ${s.name.split(' ')[0]} your invite link on LinkedIn` : undefined
-          }
           icon={s.via === 'linkedin' ? 'linkedin' : 'invite'}
           done={state === 'invited' ? 'Invited' : undefined}
           busy={state === 'busy'}

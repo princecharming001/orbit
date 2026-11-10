@@ -7,9 +7,16 @@
 import type { AutopilotMode, AutopilotRung, Goal } from '@orbit/core';
 import { firstTouchRungLine } from '@orbit/core';
 import { useLiveQuery } from 'dexie-react-hooks';
+import { Check } from 'lucide-react';
 import { useState } from 'react';
 import { useAutopilotStatus } from '../../components/autopilot/useAutopilotStatus';
-import { SettingsCard, SettingsHeader, SettingsRow, SettingsStack } from '../../components/settings/kit';
+import {
+  ChoiceTiles,
+  SettingsCard,
+  SettingsHeader,
+  SettingsRow,
+  SettingsStack,
+} from '../../components/settings/kit';
 import { db } from '../../db/schema';
 import {
   AUTOPILOT_MODE_TEXT,
@@ -23,7 +30,7 @@ import {
 import { GOAL_KIND_LABELS } from '../../engine/goals';
 import { LADDER_WORDS, type LadderKind, setAutoKind } from '../../engine/trust';
 import { useSession } from '../../state/session';
-import { Button, cx, relDate, Switch, useToast, Working } from '../../ui';
+import { Button, relDate, Switch, useToast } from '../../ui';
 
 const MODES: AutopilotMode[] = ['off', 'assist', 'autopilot'];
 const DAY = 86_400_000;
@@ -123,56 +130,48 @@ export function AutopilotSection() {
           </p>
         )}
         <SettingsCard title="Mode">
-          <div className="space-y-2 p-4" role="radiogroup" aria-label="Autopilot mode">
-            {MODES.map((m) => (
-              <button
-                key={m}
-                type="button"
-                role="radio"
-                aria-checked={mode === m}
-                onClick={() => void choose(m)}
-                disabled={!!busy}
-                className={cx(
-                  'w-full text-left rounded-[10px] border px-3.5 py-3 flex items-start gap-3 transition-colors',
-                  mode === m ? 'border-ink bg-canvas-2/60' : 'border-line hover:bg-canvas-2/60',
-                )}
-                data-testid={`autopilot-mode-${m}`}
+          <div className="p-4">
+            <ChoiceTiles
+              label="Autopilot mode"
+              value={mode}
+              onChange={(m) => void choose(m)}
+              disabled={!!busy}
+              busy={MODES.find((m) => busy === `mode:${m}`)}
+              options={MODES.map((m) => ({
+                value: m,
+                title: AUTOPILOT_MODE_TEXT[m].title,
+                line: AUTOPILOT_MODE_TEXT[m].summary,
+                testId: `autopilot-mode-${m}`,
+              }))}
+            />
+            {mode !== 'off' && (
+              <p
+                className="mt-4 text-[13px] leading-relaxed text-ink-2 max-w-[68ch]"
+                data-testid="autopilot-mode-body"
               >
-                <span
-                  className={cx(
-                    'mt-0.5 h-4 w-4 shrink-0 rounded-full border-[1.5px] inline-flex items-center justify-center',
-                    mode === m ? 'border-ink' : 'border-line',
-                  )}
-                  aria-hidden
-                >
-                  {mode === m && <span className="h-2 w-2 rounded-full bg-ink" />}
-                </span>
-                <span className="min-w-0">
-                  <span className="text-[13.5px] font-medium flex items-center gap-2">
-                    {AUTOPILOT_MODE_TEXT[m].title}
-                    {busy === `mode:${m}` && <Working />}
-                  </span>
-                  <span className="block text-[12.5px] text-ink-3 mt-0.5">{AUTOPILOT_MODE_TEXT[m].body}</span>
-                  {m === 'autopilot' && (
-                    <ul
-                      className="mt-2 space-y-1 text-[12.5px] text-ink-2 list-disc pl-4"
-                      data-testid="autopilot-rules"
-                    >
-                      {AUTOPILOT_RULES.map((r) => (
-                        <li key={r}>{r}</li>
-                      ))}
-                      <li>{FIRST_TOUCH_RUNG_RULE}</li>
-                    </ul>
-                  )}
-                </span>
-              </button>
-            ))}
+                {AUTOPILOT_MODE_TEXT[mode].body}
+              </p>
+            )}
           </div>
+        </SettingsCard>
+
+        <SettingsCard title="Rules Autopilot never breaks" description="They hold whenever Autopilot is on.">
+          <ul
+            className="p-4 grid gap-x-8 gap-y-2.5 @[34rem]:grid-cols-2 text-[13px] text-ink-2"
+            data-testid="autopilot-rules"
+          >
+            {[...AUTOPILOT_RULES, FIRST_TOUCH_RUNG_RULE].map((r) => (
+              <li key={r} className="flex items-start gap-2.5">
+                <Check size={14} className="mt-[3px] shrink-0 text-good" aria-hidden />
+                <span>{r}</span>
+              </li>
+            ))}
+          </ul>
         </SettingsCard>
 
         <SettingsCard
           title="What Orbit has earned"
-          description="Each kind is earned by approvals you sent without changing a word. Bumps, thank-yous and scheduling replies ask you once they are earned; first messages are the last rung."
+          description="Orbit earns each kind when you approve its drafts unchanged. First messages come last."
           data-testid="autopilot-rungs"
         >
           {rungs.map((r) => {
@@ -272,7 +271,7 @@ export function AutopilotSection() {
 
         <SettingsCard
           title="Pause"
-          description="Nothing Orbit chose a time for goes out while it is paused. Stop everything also puts tomorrow's batch back in your drafts."
+          description="Nothing goes out while paused. Stop everything also returns tomorrow's batch to your drafts."
           data-testid="autopilot-pause"
           footer={
             pausedUntil ? (

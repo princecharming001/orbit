@@ -243,13 +243,10 @@ function DeepResearch({ person, stored }: { person: Person; stored: Dossier | nu
   const choosing = stored?.status === 'needs_disambiguation';
   const v = choosing ? dossierView(stored) : undefined;
   return (
-    <div
-      className="rounded-[var(--radius-card)] border border-line bg-canvas p-5"
-      data-testid="research-card"
-    >
+    <div data-testid="research-card">
       <div className="flex items-center gap-2">
         <Search size={15} className="text-ink-3" aria-hidden />
-        <h2 className="text-[15px] font-medium">Deep research</h2>
+        <h2 className="section-title">Deep research</h2>
       </div>
       {busy ? (
         <p
@@ -360,14 +357,11 @@ function Debrief({
   const recently = v.recently.filter((r) => !titles.has(r.text.toLowerCase()));
   const side = v.inCommon.length > 0 || v.openers.length > 0 || v.carefulClaims.length > 0;
   return (
-    <div
-      className="rounded-[var(--radius-card)] border border-line bg-canvas p-5"
-      data-testid="research-debrief"
-    >
+    <div data-testid="research-debrief">
       {/* who they are, in a line, with the pages that are theirs */}
       <div className="flex items-start gap-3">
         <div className="min-w-0 flex-1">
-          <h2 className="text-[17px] font-medium tracking-[-0.01em]">Who {first} is</h2>
+          <h2 className="section-title">Who {first} is</h2>
           {v.who && <p className="text-[14px] text-ink-2 mt-1 leading-relaxed">{v.who}</p>}
           {v.now && (
             <p className="text-[13px] text-ink-3 mt-1.5 flex items-center gap-1.5">

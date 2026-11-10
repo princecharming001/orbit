@@ -511,7 +511,7 @@ describe('the weekly review line (plan 29 §B1)', () => {
   it('the modes and the rules are worded as Settings prints them, with no dash or exclamation mark', async () => {
     const { AUTOPILOT_MODE_TEXT, AUTOPILOT_RULES, FIRST_TOUCH_RUNG_RULE } = await import('./autopilotMode');
     for (const t of [
-      ...Object.values(AUTOPILOT_MODE_TEXT).map((m) => m.body),
+      ...Object.values(AUTOPILOT_MODE_TEXT).flatMap((m) => [m.body, m.summary]),
       ...AUTOPILOT_RULES,
       FIRST_TOUCH_RUNG_RULE,
     ])

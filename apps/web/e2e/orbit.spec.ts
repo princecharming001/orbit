@@ -2208,7 +2208,8 @@ test.describe('Usability round 5 on a phone', () => {
     const tabs = page.getByRole('tablist');
     await expect(tabs.getByRole('tab', { name: /^about/i })).toBeVisible();
     await tabs.getByRole('tab', { name: /^about/i }).click();
-    await page.getByTestId('prep-open').click();
+    // on a phone Prep is the round button beside Write, so the tabs keep their row
+    await page.getByTestId('prep-open-phone').click();
     const deck = page.getByTestId('prep-deck');
     await expect(deck).toBeVisible();
     const sheet = await deck.boundingBox();

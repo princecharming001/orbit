@@ -24,19 +24,8 @@ import {
 } from '../../engine/resume';
 import { useAccount } from '../../state/account';
 import { useSession } from '../../state/session';
-import {
-  Button,
-  cx,
-  Input,
-  relDate,
-  Select,
-  Spinner,
-  Textarea,
-  useToast,
-  useWorking,
-  Working,
-} from '../../ui';
-import { SettingsCard, SettingsHeader, SettingsRow, SettingsStack } from '../settings/kit';
+import { Button, Input, relDate, Select, Spinner, Textarea, useToast, useWorking } from '../../ui';
+import { ChoiceTiles, SettingsCard, SettingsHeader, SettingsRow, SettingsStack } from '../settings/kit';
 
 function download(json: string, name: string) {
   const blob = new Blob([json], { type: 'application/json' });
@@ -102,7 +91,7 @@ function PostalAddressCard({ userId, sales, initial }: { userId: string; sales: 
   return (
     <SettingsCard
       title="Postal address"
-      description="The law asks commercial email to carry the sender's postal address. Orbit adds it to sales messages and will not send a sales email without it."
+      description="Sales email must carry your postal address by law. Orbit adds it for you."
       aside={
         <span className="text-[12px] text-ink-3">
           {sales ? 'Required for sales email' : 'For sales email'}
@@ -195,7 +184,7 @@ export function AccountSection() {
           />
           <SettingsRow
             label="Download your data"
-            description="One file with everything Orbit's server keeps for you: people, threads, notes, drafts, goals and memories. Keep it private."
+            description="Everything Orbit keeps for you, in one file. Keep it private."
             control={
               <Button onClick={doExport} disabled={!!busy} data-testid="settings-account-export">
                 {busy === 'export' ? <Spinner /> : <Download size={14} />} Download my data
@@ -206,7 +195,7 @@ export function AccountSection() {
         <SettingsCard title="Danger zone" tone="danger">
           <SettingsRow
             label="Delete my account"
-            description="Removes everything Orbit keeps for you, on its server and in this browser, stops reading your Gmail and unlinks LinkedIn. It cannot be undone. Type DELETE to confirm."
+            description="Removes everything Orbit keeps and unlinks Gmail and LinkedIn. It cannot be undone. Type DELETE to confirm."
           >
             <div className="flex flex-wrap items-center gap-2">
               <Input
@@ -294,38 +283,25 @@ export function OutreachSection() {
       {header}
       <SettingsStack>
         <SettingsCard title="How much Orbit may do">
-          <div className="space-y-2 p-4" role="radiogroup" aria-label="Autonomy">
-            {([0, 1, 2] as const).map((l) => (
-              <button
-                key={l}
-                type="button"
-                role="radio"
-                aria-checked={shown === l}
-                onClick={() => choose(l)}
-                className={cx(
-                  'w-full text-left rounded-[10px] border px-3.5 py-3 flex items-start gap-3 transition-colors',
-                  shown === l ? 'border-ink bg-canvas-2/60' : 'border-line hover:bg-canvas-2/60',
-                )}
-                data-testid={`autonomy-${l}`}
-              >
-                <span
-                  className={cx(
-                    'mt-0.5 h-4 w-4 shrink-0 rounded-full border-[1.5px] inline-flex items-center justify-center',
-                    shown === l ? 'border-ink' : 'border-line',
-                  )}
-                  aria-hidden
-                >
-                  {shown === l && <span className="h-2 w-2 rounded-full bg-ink" />}
-                </span>
-                <span className="min-w-0">
-                  <span className="text-[13.5px] font-medium flex items-center gap-2">
-                    {AUTONOMY_TEXT[l].title}
-                    {pending && !pending.goalId && pending.l === l && <Working />}
-                  </span>
-                  <span className="block text-[12.5px] text-ink-3 mt-0.5">{AUTONOMY_TEXT[l].body}</span>
-                </span>
-              </button>
-            ))}
+          <div className="p-4">
+            <ChoiceTiles
+              label="Autonomy"
+              value={shown}
+              onChange={(l) => void choose(l)}
+              busy={pending && !pending.goalId ? pending.l : undefined}
+              options={([0, 1, 2] as const).map((l) => ({
+                value: l,
+                title: AUTONOMY_TEXT[l].title,
+                line: AUTONOMY_TEXT[l].line,
+                testId: `autonomy-${l}`,
+              }))}
+            />
+            <p
+              className="mt-4 text-[13px] leading-relaxed text-ink-2 max-w-[68ch]"
+              data-testid="autonomy-body"
+            >
+              {AUTONOMY_TEXT[shown].body}
+            </p>
           </div>
           {goals.map((g) => (
             <SettingsRow

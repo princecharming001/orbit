@@ -35,6 +35,10 @@ export const FRIENDS_EMPTY =
 export const FRIENDS_WHAT_CROSSES =
   'A friend sees name, title, company, public LinkedIn profile, school, whether someone is your alum, and a closeness word built from LinkedIn, your labels and your own answers. Never your emails, notes, drafts, scores, addresses or anyone you hid.';
 
+/** Under the Friends title: what pooling is for, and the one line that matters about privacy. */
+export const FRIENDS_SUBTITLE =
+  'Pool networks for warm intros. Friends see who you know, never your messages.';
+
 /** The tab in local mode: one paragraph, then the Google sign-in (plan 29 §A2.1). */
 export const FRIENDS_NEEDS_ACCOUNT = `${FRIENDS_EMPTY} Friends needs an Orbit account, because in this copy nothing leaves your browser: sign in with Google to pool your network with a friend's.`;
 

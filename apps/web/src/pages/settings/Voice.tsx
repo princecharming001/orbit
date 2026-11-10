@@ -80,7 +80,7 @@ export function VoiceSection() {
     <>
       <SettingsHeader
         title="Voice"
-        description="How Orbit writes as you: your style in plain sentences, your own words from setup, and what it learned from the drafts you changed."
+        description="How Orbit writes as you, and what it learned from your edits."
       />
       {!view ? (
         <Spinner />
@@ -132,7 +132,7 @@ export function VoiceSection() {
 
           <SettingsCard
             title="What Orbit learned from your edits"
-            description="Each time you change a draft before it goes, Orbit notes what you changed. Keep what is right; forget what is not and it is never learned again."
+            description="What Orbit picked up when you changed a draft. Keep what is right, forget the rest."
             aside={
               view.edits ? (
                 <span className="text-[12px] text-ink-3">

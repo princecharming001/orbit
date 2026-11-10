@@ -4,7 +4,7 @@
  * the right) or of fields (a form in a grid).
  */
 import type { ReactNode } from 'react';
-import { cx } from '../../ui';
+import { cx, Working } from '../../ui';
 
 /** A page's title, one line on what it is for, and (on the right) how its saving stands. */
 export function SettingsHeader({
@@ -167,4 +167,70 @@ export function CardFields({ children, className }: { children: ReactNode; class
 /** The cards of one page, spaced the same everywhere. */
 export function SettingsStack({ children, className }: { children: ReactNode; className?: string }) {
   return <div className={cx('space-y-10 pb-10', className)}>{children}</div>;
+}
+
+/**
+ * A choice of a few modes as tiles side by side (stacked when narrow): the name and its radio dot on top, one short
+ * line under it. The chosen tile is outlined in ink. Longer words about the chosen mode go under the tiles, not in them.
+ */
+export function ChoiceTiles<T extends string | number>({
+  options,
+  value,
+  onChange,
+  label,
+  busy,
+  disabled,
+}: {
+  options: { value: T; title: string; line: string; testId: string }[];
+  value: T;
+  onChange: (v: T) => void;
+  label: string;
+  /** the option being saved, which shows a spinner in place of its dot */
+  busy?: T;
+  disabled?: boolean;
+}) {
+  return (
+    <div
+      className={cx('grid gap-2', options.length === 3 ? '@[34rem]:grid-cols-3' : '@[34rem]:grid-cols-2')}
+      role="radiogroup"
+      aria-label={label}
+    >
+      {options.map((o) => {
+        const on = o.value === value;
+        return (
+          <button
+            key={String(o.value)}
+            type="button"
+            role="radio"
+            aria-checked={on}
+            onClick={() => onChange(o.value)}
+            disabled={disabled}
+            className={cx(
+              'text-left rounded-[10px] border px-3.5 py-3 transition-[border-color,box-shadow] disabled:cursor-progress',
+              on ? 'border-ink shadow-[0_0_0_1px_var(--color-ink)]' : 'border-line hover:border-[#cfcbc5]',
+            )}
+            data-testid={o.testId}
+          >
+            <span className="text-[14px] font-medium flex items-center justify-between gap-2">
+              {o.title}
+              {busy === o.value ? (
+                <Working />
+              ) : (
+                <span
+                  className={cx(
+                    'h-4 w-4 shrink-0 rounded-full border-[1.5px] inline-flex items-center justify-center',
+                    on ? 'border-ink' : 'border-line',
+                  )}
+                  aria-hidden
+                >
+                  {on && <span className="h-2 w-2 rounded-full bg-ink" />}
+                </span>
+              )}
+            </span>
+            <span className="block text-[12.5px] leading-snug text-ink-3 mt-1">{o.line}</span>
+          </button>
+        );
+      })}
+    </div>
+  );
 }

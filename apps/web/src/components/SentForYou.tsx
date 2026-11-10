@@ -108,7 +108,7 @@ export function SentForYou({ view }: { view?: AutopilotView }) {
   return (
     <Card data-testid="sent-for-you">
       <div className="font-medium mb-1">Sent for you</div>
-      <p className="text-[12px] text-ink-3 mb-3">
+      <p className="text-[12.5px] text-ink-3 mb-3">
         What Orbit sends on its own, the kinds you handed over in{' '}
         <Link to="/settings/limits" className="underline underline-offset-2 hover:text-ink">
           Settings

@@ -14,7 +14,7 @@ import { answerPlanAsk, holdSend, tapBatchItem } from '../../engine/autopilotMod
 import { approveAndSend } from '../../engine/send';
 import { callApi, isServerUser } from '../../integrations/orbitApi';
 import { useSession } from '../../state/session';
-import { Button, Card, Chip, useToast } from '../../ui';
+import { Button, Card, useToast } from '../../ui';
 import type { AutopilotView } from './useAutopilotStatus';
 
 const when = (iso: string | null, tz?: string) =>
@@ -78,51 +78,73 @@ export function TomorrowBatch({ view }: { view: AutopilotView }) {
     await view.refresh();
   };
   return (
-    <Card className="mb-5" data-testid="tomorrow-batch">
-      <div className="font-medium">Tomorrow's batch</div>
-      <p className="text-[12px] text-ink-3 mt-0.5 mb-3">
+    <Card className="mb-5 @container" data-testid="tomorrow-batch">
+      <div className="flex items-baseline justify-between gap-3">
+        <div className="text-[15px] font-semibold">Tomorrow's batch</div>
+        <span className="text-[12.5px] text-ink-3 tabular">
+          {items.length} {items.length === 1 ? 'message' : 'messages'}
+        </span>
+      </div>
+      <p className="text-[13px] text-ink-3 mt-0.5">
         {view.local
           ? `${items.length === 1 ? 'This goes' : 'These go'} at the times shown, in each person's morning. ${view.note ?? ''}`
           : `${items.length === 1 ? 'This goes' : 'These go'} in the morning, each in the person's own time, unless you hold it.`}
       </p>
       {waiting && rung && (
-        <p
-          className="mb-3 rounded-[10px] bg-canvas-2/70 px-3 py-2 text-[12.5px] text-ink-2"
-          data-testid="batch-rung"
-        >
-          {firstTouchRungLine({ unchanged: rung.unchanged, needed: rung.needed, earned: rung.unlocked })}
-        </p>
+        <div className="mt-3 flex items-center gap-3" data-testid="batch-rung">
+          <span className="h-1 w-24 shrink-0 rounded-full bg-line-2 overflow-hidden" aria-hidden>
+            <span
+              className="block h-full bg-accent"
+              style={{
+                width: `${Math.min(100, Math.round((rung.unchanged / Math.max(1, rung.needed)) * 100))}%`,
+              }}
+            />
+          </span>
+          <p className="text-[12.5px] text-ink-2">
+            {firstTouchRungLine({ unchanged: rung.unchanged, needed: rung.needed, earned: rung.unlocked })}
+          </p>
+        </div>
       )}
-      <ul className="divide-y divide-line">
+      <ul className="mt-3 divide-y divide-line-2 border-t border-line-2">
         {items.map((i) => (
           // the actions sit under the words until there is room beside them, so a name never breaks in two
           <li
             key={i.draftId}
-            className="py-2.5 flex flex-col gap-2 lg:flex-row lg:items-start lg:gap-3"
+            className="py-3 flex flex-col gap-2 @lg:flex-row @lg:items-center @lg:gap-4"
             data-testid="batch-item"
           >
             <div className="min-w-0 flex-1">
-              <div className="flex items-center gap-2 text-[13.5px] flex-wrap">
+              <div className="flex items-baseline gap-2 text-[14px] min-w-0">
                 {i.personId ? (
                   <Link
                     to={`/people/${i.personId}`}
-                    className="font-medium whitespace-nowrap hover:underline"
+                    className="font-medium whitespace-nowrap hover:underline underline-offset-2"
                   >
                     {i.personName}
                   </Link>
                 ) : (
                   <span className="font-medium whitespace-nowrap">{i.personName}</span>
                 )}
-                {i.company && <span className="text-ink-3">{i.company}</span>}
-                <Chip>{MESSAGE_KIND_LABELS[i.kind]}</Chip>
-                {i.status === 'needs_tap' && <Chip data-testid="batch-needs-tap">Waits for your tap</Chip>}
-                <span className="ml-auto text-[12.5px] text-ink-2 tabular" data-testid="batch-when">
+                {i.company && <span className="text-ink-3 truncate">{i.company}</span>}
+              </div>
+              {i.subject && <p className="text-[13px] text-ink-2 mt-0.5 line-clamp-1">{i.subject}</p>}
+              <div className="mt-1 flex flex-wrap items-center gap-x-1.5 text-[12px] text-ink-3">
+                <span>{MESSAGE_KIND_LABELS[i.kind]}</span>
+                <span aria-hidden>·</span>
+                <span className="tabular" data-testid="batch-when">
                   {when(i.sendAt, user.timezone)} their time
                 </span>
+                {i.status === 'needs_tap' && (
+                  <>
+                    <span aria-hidden>·</span>
+                    <span className="text-warn" data-testid="batch-needs-tap">
+                      Waits for your tap
+                    </span>
+                  </>
+                )}
               </div>
-              {i.subject && <p className="text-[13px] text-ink-3 mt-0.5 line-clamp-1">{i.subject}</p>}
             </div>
-            <div className="flex flex-wrap items-center gap-1 lg:shrink-0">
+            <div className="flex flex-wrap items-center gap-1 -ml-3 @lg:ml-0 @lg:shrink-0">
               <Button size="sm" variant="ghost" onClick={() => void hold(i)} data-testid="batch-hold">
                 Hold
               </Button>
@@ -137,12 +159,17 @@ export function TomorrowBatch({ view }: { view: AutopilotView }) {
                   Edit
                 </Button>
               )}
-              {i.status === 'needs_tap' && (
+              {i.status === 'needs_tap' ? (
                 <Button size="sm" variant="primary" onClick={() => void tap(i)} data-testid="batch-tap">
                   Send in the morning
                 </Button>
-              )}
-              <Button size="sm" onClick={() => void sendNow(i)} data-testid="batch-send-now">
+              ) : null}
+              <Button
+                size="sm"
+                variant={i.status === 'needs_tap' ? 'ghost' : 'secondary'}
+                onClick={() => void sendNow(i)}
+                data-testid="batch-send-now"
+              >
                 Send now
               </Button>
             </div>
@@ -155,7 +182,7 @@ export function TomorrowBatch({ view }: { view: AutopilotView }) {
           <p className="text-[12px] text-ink-3 mt-0.5 mb-2">
             These people are reached through a friend, so the ask goes to the friend, never to them.
           </p>
-          <ul className="divide-y divide-line">
+          <ul className="divide-y divide-line-2">
             {asks.map((a) => (
               <li
                 key={a.id}

@@ -654,14 +654,16 @@ export async function answerReply(
 // ---- the words Settings, the chat and the review share (plan 29 §B1) -------------------------------------------------
 
 /** What each mode means, in the student's words, exactly as Settings prints it (plan 29 §B1). */
-export const AUTOPILOT_MODE_TEXT: Record<AutopilotMode, { title: string; body: string }> = {
-  off: { title: 'Off', body: 'Orbit writes, you send.' },
+export const AUTOPILOT_MODE_TEXT: Record<AutopilotMode, { title: string; summary: string; body: string }> = {
+  off: { title: 'Off', summary: 'Orbit writes, you send.', body: 'Orbit writes, you send.' },
   assist: {
     title: 'Assist',
+    summary: 'You approve each message with one tap. Orbit sends it at the right time.',
     body: "You approve each message with one tap and it goes at the right time: the recipient's Tuesday to Thursday morning, spaced like a person. Bumps, thank-yous and scheduling replies go on their own once you have approved ten of a kind unchanged, each shown after with a minute to undo.",
   },
   autopilot: {
     title: 'Autopilot',
+    summary: 'Orbit plans your week, sends first messages each morning and handles simple replies.',
     body: "Everything in Assist, and: Orbit plans your week to your target, writes the first messages, shows them to you the evening before as Tomorrow's batch, and sends them in the morning unless you hold one. When someone replies, Orbit answers scheduling and thank-you replies itself, offers three times from your calendar when they say yes, books the call when they pick one, and asks you in chat only when a reply needs something only you know.",
   },
 };

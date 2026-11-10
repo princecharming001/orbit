@@ -1,7 +1,7 @@
 /**
- * What you share (plan 29 §A1): three choices for all friends (everyone I know, only at these companies, nothing yet),
- * a company picker for the second, "Hide a person from friends", and the preview button that renders the projection
- * as a friend's Map would.
+ * What you share (plan 29 §A1), as settings rows: who friends see (everyone I know, only at these companies, nothing
+ * yet) with the count it shares, a company picker for the second, who is hidden (Hide someone opens the search), and
+ * one line on what crosses with the preview that renders the projection as a friend's Map would.
  */
 import type { Friend, FriendShareMode, Person } from '@orbit/core';
 import { useLiveQuery } from 'dexie-react-hooks';
@@ -28,10 +28,11 @@ export function previewLine(
     mode === 'companies' && domains.length
       ? ` at ${domains.map((d) => d.replace(/\.[a-z]+$/, '')).join(', ')}`
       : '';
-  if (!friends.length)
-    return mode === 'none'
-      ? 'Friends you add will see nothing until you choose.'
-      : `Nobody sees your network yet. A friend you add will see ${people}${where}.`;
+  if (!friends.length) {
+    if (mode === 'none') return 'Friends you add see nothing until you choose';
+    if (total === 0) return 'Nothing to share yet: your people are still arriving';
+    return `A friend you add will see ${people}${where}`;
+  }
   const who = friends.length === 1 ? friends[0]!.name.split(' ')[0]! : 'Friends';
   const verb = friends.length === 1 ? 'sees' : 'see';
   if (mode === 'none') return `${who} ${verb} nothing yet`;
@@ -84,44 +85,35 @@ export function ShareSettings({
         .filter(Boolean),
     ),
   ];
+  const [hiding, setHiding] = useState(false);
+  const firstFriend = friends.length === 1 ? friends[0]!.name.split(' ')[0] : undefined;
   return (
-    <div className="space-y-4">
-      <div className="grid gap-1.5">
-        <div className="text-[13px] font-medium">What friends see</div>
-        <div className="flex flex-wrap items-center gap-2">
-          <Select
-            value={mode}
-            onChange={(e) => onMode(e.target.value as FriendShareMode, parseDomains(domainText))}
-            aria-label="What you share with friends"
-            data-testid="friend-share-mode"
-            disabled={busy}
-            className="h-9 w-56"
-          >
-            {MODES.map((m) => (
-              <option key={m} value={m}>
-                {SHARE_MODE_LABELS[m]}
-              </option>
-            ))}
-          </Select>
-          <Button
-            size="sm"
-            variant="ghost"
-            className={cx('h-9', TAP)}
-            onClick={onPreview}
-            data-testid="friend-share-preview-open"
-          >
-            {friends.length === 1
-              ? `See exactly what ${friends[0]!.name.split(' ')[0]} sees`
-              : 'See exactly what friends see'}
-          </Button>
+    <div className="border-y border-line-2 divide-y divide-line-2">
+      <div className="py-4 flex flex-wrap items-center justify-between gap-x-6 gap-y-3">
+        <div className="min-w-0">
+          <div className="text-[14px] font-medium">Who friends see</div>
+          <p className="text-[13px] text-ink-3 mt-0.5" data-testid="friend-share-preview">
+            {previewLine(friends, mode, domains, total)}
+          </p>
         </div>
-        <p className="text-[12.5px] text-ink-3" data-testid="friend-share-preview">
-          {previewLine(friends, mode, domains, total)}
-        </p>
+        <Select
+          value={mode}
+          onChange={(e) => onMode(e.target.value as FriendShareMode, parseDomains(domainText))}
+          aria-label="What you share with friends"
+          data-testid="friend-share-mode"
+          disabled={busy}
+          className="h-9 w-52"
+        >
+          {MODES.map((m) => (
+            <option key={m} value={m}>
+              {SHARE_MODE_LABELS[m]}
+            </option>
+          ))}
+        </Select>
       </div>
       {mode === 'companies' && (
         <form
-          className="flex flex-wrap items-center gap-2"
+          className="py-4 flex flex-wrap items-center gap-2"
           onSubmit={(e) => {
             e.preventDefault();
             onMode('companies', parseDomains(domainText));
@@ -132,7 +124,7 @@ export function ShareSettings({
             onChange={(e) => setDomainText(e.target.value)}
             placeholder="stripe.com, ramp.com"
             aria-label="Company domains to share"
-            className="max-w-sm"
+            className="max-w-sm h-9"
             data-testid="friend-share-domains"
           />
           <Button type="submit" size="sm" variant="secondary" className={TAP} loading={busy}>
@@ -140,44 +132,75 @@ export function ShareSettings({
           </Button>
         </form>
       )}
-      <div className="space-y-1.5">
-        <div className="text-[13px] font-medium">Hide someone from friends</div>
-        <Input
-          value={hideQuery}
-          onChange={(e) => setHideQuery(e.target.value)}
-          placeholder="Search your people"
-          aria-label="Hide a person from friends"
-          className="w-full max-w-sm h-9"
-          data-testid="friend-hide-search"
-        />
-        {hits.length > 0 && (
-          <ul className="text-[13px] divide-y divide-line-2" data-testid="friend-hide-hits">
-            {hits.map((p) => (
-              <li key={p.id} className="py-1.5 flex items-center gap-2">
-                <span className="truncate">{p.displayName}</span>
-                <span className="text-ink-3 text-[12.5px] truncate">{p.currentOrganizationRaw}</span>
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  className={cx('ml-auto', TAP)}
-                  onClick={() => {
-                    void markPrivate(p.id, true);
-                    setHideQuery('');
-                  }}
-                  data-testid="friend-hide-person"
-                >
-                  Hide
-                </Button>
-              </li>
-            ))}
-          </ul>
+      <div className="py-4">
+        <div className="flex flex-wrap items-center justify-between gap-x-6 gap-y-3">
+          <div className="min-w-0">
+            <div className="text-[14px] font-medium">Hidden from friends</div>
+            <p className="text-[13px] text-ink-3 mt-0.5">
+              {hidden.length
+                ? `${hidden.length} ${hidden.length === 1 ? 'person' : 'people'} never shown`
+                : 'Anyone you hide never shows, nor anyone who asked not to be contacted'}
+            </p>
+          </div>
+          {!hiding && (
+            <Button
+              size="sm"
+              variant="secondary"
+              className={TAP}
+              onClick={() => setHiding(true)}
+              data-testid="friend-hide-open"
+            >
+              Hide someone
+            </Button>
+          )}
+        </div>
+        {hiding && (
+          <div className="mt-3 max-w-sm">
+            <Input
+              autoFocus
+              value={hideQuery}
+              onChange={(e) => setHideQuery(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Escape') {
+                  setHideQuery('');
+                  setHiding(false);
+                }
+              }}
+              placeholder="Search your people"
+              aria-label="Hide a person from friends"
+              className="h-9"
+              data-testid="friend-hide-search"
+            />
+            {hits.length > 0 && (
+              <ul className="mt-1 text-[13px]" data-testid="friend-hide-hits">
+                {hits.map((p) => (
+                  <li key={p.id} className="py-1 flex items-center gap-2">
+                    <span className="truncate font-medium">{p.displayName}</span>
+                    <span className="text-ink-3 text-[12.5px] truncate">{p.currentOrganizationRaw}</span>
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      className={cx('ml-auto', TAP)}
+                      onClick={() => {
+                        void markPrivate(p.id, true);
+                        setHideQuery('');
+                        setHiding(false);
+                      }}
+                      data-testid="friend-hide-person"
+                    >
+                      Hide
+                    </Button>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
         )}
         {hidden.length > 0 && (
           <div
-            className="flex flex-wrap items-center gap-1.5 text-[12.5px]"
+            className="mt-3 flex flex-wrap items-center gap-1.5 text-[12.5px]"
             data-testid="friend-hidden-people"
           >
-            <span className="text-ink-3">Hidden:</span>
             {hidden.map((p) => (
               <Chip key={p.id}>
                 {p.displayName}
@@ -193,10 +216,21 @@ export function ShareSettings({
             ))}
           </div>
         )}
-        <p className="text-[12px] text-ink-3">
-          People you hide here, hide from your own view, or who asked not to be contacted never show to
-          friends.
+      </div>
+      <div className="py-4 flex flex-wrap items-center justify-between gap-x-6 gap-y-2">
+        <p className="text-[13px] text-ink-3 max-w-[56ch]">
+          Friends see names, titles, companies, schools and how well you know someone. Never your emails,
+          notes or drafts.
         </p>
+        <Button
+          size="sm"
+          variant="ghost"
+          className={cx('-mr-2', TAP)}
+          onClick={onPreview}
+          data-testid="friend-share-preview-open"
+        >
+          {firstFriend ? `Preview what ${firstFriend} sees` : 'Preview what friends see'}
+        </Button>
       </div>
     </div>
   );

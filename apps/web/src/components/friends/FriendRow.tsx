@@ -33,78 +33,77 @@ export function FriendRow({
   const [confirm, setConfirm] = useState(false);
   const who = [friend.school, friend.gradYear].filter(Boolean).join(' ');
   return (
-    <li className="py-3" data-testid="friend-row" data-friend-id={friend.userId}>
-      <div className="flex items-start gap-3">
-        <Avatar name={friend.name} src={friend.avatarUrl ?? undefined} id={friend.userId} size={36} />
+    <li className="py-4" data-testid="friend-row" data-friend-id={friend.userId}>
+      <div className="flex items-center gap-3">
+        <Avatar name={friend.name} src={friend.avatarUrl ?? undefined} id={friend.userId} size={40} />
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2 min-w-0">
-            <span className="font-medium truncate">{friend.name}</span>
+            <span className="text-[14.5px] font-medium truncate">{friend.name}</span>
             {who && <span className="text-[12.5px] text-ink-3 truncate">{who}</span>}
             {friend.shares === 0 && friend.myMode !== 'none' && <Chip>Shares nothing yet</Chip>}
           </div>
-          <div className="text-[13px] text-ink-2 mt-0.5" data-testid="friend-line">
+          <div className="text-[13px] text-ink-3 mt-0.5 truncate" data-testid="friend-line">
             {friendLine(friend)}
           </div>
-          <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-2 text-[12.5px]">
-            <label className="flex items-center gap-1.5 text-ink-3">
-              <span>You share</span>
-              <Select
-                value={friend.myMode}
-                onChange={(e) => onShareMode(friend, e.target.value as FriendShareMode)}
-                className="h-8 text-[12.5px]"
-                aria-label={`What you share with ${friend.name}`}
-                data-testid="friend-row-share-mode"
-                disabled={busy}
-              >
-                {(Object.keys(SHARE_MODE_LABELS) as FriendShareMode[]).map((m) => (
-                  <option key={m} value={m}>
-                    {SHARE_MODE_LABELS[m]}
-                  </option>
-                ))}
-              </Select>
-            </label>
+        </div>
+        <Button
+          size="sm"
+          variant="secondary"
+          className={cx('shrink-0', TAP)}
+          onClick={() => onAsk(friend)}
+          disabled={friend.shares === 0}
+          data-testid="friend-ask-intro"
+        >
+          Ask for an intro
+        </Button>
+      </div>
+      <div className="mt-2.5 pl-[52px] flex flex-wrap items-center gap-x-4 gap-y-2 text-[12.5px]">
+        <label className="flex items-center gap-2 text-ink-3">
+          <span>You share</span>
+          <Select
+            value={friend.myMode}
+            onChange={(e) => onShareMode(friend, e.target.value as FriendShareMode)}
+            className="h-8 w-auto text-[12.5px]"
+            aria-label={`What you share with ${friend.name}`}
+            data-testid="friend-row-share-mode"
+            disabled={busy}
+          >
+            {(Object.keys(SHARE_MODE_LABELS) as FriendShareMode[]).map((m) => (
+              <option key={m} value={m}>
+                {SHARE_MODE_LABELS[m]}
+              </option>
+            ))}
+          </Select>
+        </label>
+        {confirm ? (
+          <span className="flex items-center gap-2">
+            <span className="text-ink-3">Ends it both ways, at once.</span>
             <Button
               size="sm"
-              variant="secondary"
+              variant="danger"
               className={TAP}
-              onClick={() => onAsk(friend)}
-              disabled={friend.shares === 0}
-              title={friend.shares === 0 ? `${friend.name} shares nobody with you yet` : undefined}
-              data-testid="friend-ask-intro"
+              onClick={() => {
+                setConfirm(false);
+                onEnd(friend);
+              }}
+              data-testid="friend-end-confirm"
             >
-              Ask for an intro
+              End friendship
             </Button>
-            {confirm ? (
-              <span className="flex items-center gap-2">
-                <span className="text-ink-3">Ends it both ways, at once.</span>
-                <Button
-                  size="sm"
-                  variant="danger"
-                  className={TAP}
-                  onClick={() => {
-                    setConfirm(false);
-                    onEnd(friend);
-                  }}
-                  data-testid="friend-end-confirm"
-                >
-                  End friendship
-                </Button>
-                <Button size="sm" variant="ghost" className={TAP} onClick={() => setConfirm(false)}>
-                  Keep
-                </Button>
-              </span>
-            ) : (
-              <button
-                type="button"
-                className={cx('text-ink-3 underline underline-offset-4 hover:text-ink', TAP)}
-                onClick={() => setConfirm(true)}
-                data-testid="friend-end"
-              >
-                End
-              </button>
-            )}
-          </div>
-        </div>
+            <Button size="sm" variant="ghost" className={TAP} onClick={() => setConfirm(false)}>
+              Keep
+            </Button>
+          </span>
+        ) : (
+          <button
+            type="button"
+            className={cx('ml-auto text-ink-3 hover:text-bad', TAP)}
+            onClick={() => setConfirm(true)}
+            data-testid="friend-end"
+          >
+            End friendship
+          </button>
+        )}
       </div>
     </li>
   );

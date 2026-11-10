@@ -64,9 +64,11 @@ export function PeopleList({
                       </Chip>
                     )}
                   </span>
-                  <LogoText person={p} className="text-[12.5px] text-ink-2" wrap>
-                    {p.currentTitle ?? p.currentOrganizationRaw ?? '—'}
-                  </LogoText>
+                  {(p.currentTitle || p.currentOrganizationRaw) && (
+                    <LogoText person={p} className="text-[12.5px] text-ink-2" wrap>
+                      {[p.currentTitle, p.currentOrganizationRaw].filter(Boolean).join(' at ')}
+                    </LogoText>
+                  )}
                   <span className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-[12px] text-ink-3">
                     <span className="inline-flex items-center gap-1">
                       Closeness <StrengthDots v={p.strength} />
@@ -129,11 +131,20 @@ export function PeopleList({
                     </Link>
                   </td>
                   <td className="px-2 text-ink-2 min-w-[150px]">
-                    <LogoText person={p} wrap>
-                      {p.currentTitle ?? p.currentOrganizationRaw ?? '—'}
-                    </LogoText>
+                    {p.currentTitle || p.currentOrganizationRaw ? (
+                      <LogoText person={p} wrap>
+                        <span className="block leading-snug">
+                          {p.currentTitle ?? p.currentOrganizationRaw}
+                        </span>
+                        {p.currentTitle && p.currentOrganizationRaw && (
+                          <span className="block text-[12px] text-ink-3 leading-snug">
+                            {p.currentOrganizationRaw}
+                          </span>
+                        )}
+                      </LogoText>
+                    ) : null}
                   </td>
-                  <td className="px-2 text-ink-2">{role(p) ?? '—'}</td>
+                  <td className="px-2 text-ink-2">{role(p) ?? ''}</td>
                   <td className="px-2">
                     <StrengthDots v={p.strength} />
                   </td>
@@ -152,9 +163,7 @@ export function PeopleList({
                           </option>
                         ))}
                       </Select>
-                    ) : p.hiddenAt ? (
-                      <span className="text-ink-3">—</span>
-                    ) : (
+                    ) : p.hiddenAt ? null : (
                       <Link
                         to={`/people/${p.id}?draft=outreach`}
                         className="text-[12.5px] text-accent font-medium whitespace-nowrap hover:underline"
@@ -167,9 +176,7 @@ export function PeopleList({
                   <td className="px-2 text-ink-2 min-w-[96px] leading-snug">
                     <LastTouch person={p} chat={c} />
                   </td>
-                  <td className="px-2">
-                    {next ? <NextLink s={next} /> : <span className="text-ink-3">—</span>}
-                  </td>
+                  <td className="px-2">{next ? <NextLink s={next} /> : null}</td>
                 </tr>
               );
             })}

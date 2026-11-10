@@ -613,3 +613,27 @@ know X is one short line a person.
 
 Not done: Apollo stays unconfigured (a paid key, the user's call). Logos for the whole network arrive at LinkedIn's
 pace (about 105 company lookups and up to 60 profile reads a day on one account), targets and visible tiles first.
+
+## Follow-up: a quieter look across the app (2026-11-10)
+
+A pass over every page for crowded or boxed-in components, from screenshots of each page signed in.
+
+- **Friends.** The subtitle is one line. The side column is one Invite section: the link on a flat strip with Copy, the
+  email box under it, Reset link last and quiet. It sits beside the page from a narrower width. What you share is
+  settings rows (who friends see, hidden from friends, the preview), with Hide someone opening the search. A friend's row
+  has one button (Ask for an intro) and the rest on a quiet second line. Tiles lost their hover tooltips, which covered
+  the page title.
+- **Drafts.** Tomorrow's batch has no box inside the card: the rung is a thin bar and a line, each message is name,
+  subject and one quiet line of kind, time and state. The card that pointed at the batch from the same page is gone.
+  The side column is flat sections, not boxes (`.rail-flat`, which the person page uses too).
+- **A person.** About reads as a profile: who they are, Experience, Education, what you learned, each under a title
+  with a hairline and room between (`.section-title`, `.about-sections`). Prep for the call is a round button at the end
+  of the tabs, green when a call is near. A line the student wrote ("I'm going for PM roles", "we talked in May") is
+  read back as "you".
+- **A company.** The plan shows only when it names people to write to, as "Who to write first", without the target and
+  deadline the page already has.
+- **Settings.** Autopilot and Outreach choose between three short tiles (`ChoiceTiles`); the chosen one is spelled out
+  under them, and Autopilot's rules are a checklist of their own. Long descriptions are a sentence. Data & privacy says
+  logos come from LinkedIn.
+- **Everywhere.** An empty list is a quiet sentence and the next step, not a bordered box. The People table has no
+  dashes in empty cells and shows the company under the title.

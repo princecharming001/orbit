@@ -146,15 +146,17 @@ export function DossierCard({ person, userId }: { person: Person; userId: string
           <Spinner /> Researching {person.firstName || 'them'}. This takes about a minute.
         </p>
       ) : !v ? (
-        <div className="mt-2">
+        <div className="mt-1 flex items-center justify-between gap-3">
+          <p className="text-[13px] text-ink-3">Their work, posts and what to bring up.</p>
           <Button
             size="sm"
-            variant="primary"
+            variant="secondary"
+            className="shrink-0"
             onClick={() => research(false)}
             disabled={busy}
             data-testid="dossier-research"
           >
-            {busy ? <Spinner className="border-white/30 border-t-white" /> : null} Research
+            {busy ? <Spinner /> : null} Research
           </Button>
         </div>
       ) : v.status === 'needs_disambiguation' ? (

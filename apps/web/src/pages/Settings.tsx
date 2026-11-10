@@ -30,6 +30,7 @@ import {
   Trash2,
   Upload,
   UserRound,
+  Users,
 } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 import { Navigate, NavLink, useNavigate, useParams } from 'react-router-dom';
@@ -1729,7 +1730,7 @@ function Privacy() {
     ['Claude', 'only for the features you turn on', 'claude.ai'],
     ['LinkedIn', 'through Unipile, if you connect it live', 'linkedin.com'],
     ['Village', 'a name and company per warm-intro lookup', 'village.do'],
-    ['Company logos', "a company's web address, to DuckDuckGo's icon service", 'duckduckgo.com'],
+    ['Company logos', "a company's name, to find its logo on LinkedIn", 'linkedin.com'],
     // plan 29 §A6: what a friend on Orbit sees, and what never crosses
     [
       'Friends on Orbit',
@@ -1748,19 +1749,17 @@ function Privacy() {
           description="Only for the connections you use."
           footer={
             <p className="mr-auto text-[12px] text-ink-3" data-testid="privacy-friends">
-              Your Claude key is kept apart from the rest, and only Orbit's own code
-              {sources.google ? " and Google's sign-in" : ''} runs on this page. A friend you pool networks
-              with sees the name, title, company and public LinkedIn profile of the people you share and how
-              well you know them in a word, built from LinkedIn, your labels and your own answers. Nothing
-              derived from Gmail or Calendar, no contact details, notes or messages, and nobody you hid is
-              ever part of it; you can stop sharing at any moment and it takes effect at once.
+              Your Claude key is kept apart, and only Orbit's own code
+              {sources.google ? " and Google's sign-in" : ''} runs on this page. Friends see who you share and
+              how well you know them, never anything from Gmail or Calendar, contact details, notes or
+              messages. Stop sharing at any time and it takes effect at once.
             </p>
           }
         >
           <ul className="divide-y divide-line-2" data-testid="privacy-leaves">
             {leaves.map(([name, what, logo]) => (
               <li key={name} className="flex items-center gap-3 px-5 py-3 text-[13.5px]">
-                <AppMark logo={logo}>{name[0]}</AppMark>
+                <AppMark logo={logo}>{logo ? name[0] : <Users size={15} aria-hidden />}</AppMark>
                 <span className="font-medium w-32 shrink-0">{name}</span>
                 <span className="text-ink-3 text-[12.5px] min-w-0">{what}</span>
               </li>

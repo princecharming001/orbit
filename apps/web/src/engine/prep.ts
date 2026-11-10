@@ -117,19 +117,29 @@ function lastTouchSentence(tp: Touchpoint, first: string, when: string): string 
  */
 export function toYou(text: string): string {
   // note shorthand ("McK", "first round apps") is written out wherever Orbit shows a note back
-  return expandShorthand(text)
-    .replace(/\bI'm\b/g, "you're")
-    .replace(/\bI've\b/g, "you've")
-    .replace(/\bI'll\b/g, "you'll")
-    .replace(/\bI'd\b/g, "you'd")
-    .replace(/\bI am\b/g, 'you are')
-    .replace(/\bI was\b/g, 'you were')
-    .replace(/\bI\b/g, 'you')
-    .replace(/\bmyself\b/gi, 'yourself')
-    .replace(/\bmy\b/g, 'your')
-    .replace(/\bMy\b/g, 'Your')
-    .replace(/\bmine\b/g, 'yours')
-    .replace(/\bme\b/g, 'you');
+  return (
+    expandShorthand(text)
+      .replace(/\bI'm\b/g, "you're")
+      .replace(/\bI've\b/g, "you've")
+      .replace(/\bI'll\b/g, "you'll")
+      .replace(/\bI'd\b/g, "you'd")
+      .replace(/\bI am\b/g, 'you are')
+      .replace(/\bI was\b/g, 'you were')
+      .replace(/\bI\b/g, 'you')
+      .replace(/\bmyself\b/gi, 'yourself')
+      .replace(/\bmy\b/g, 'your')
+      .replace(/\bMy\b/g, 'Your')
+      .replace(/\bmine\b/g, 'yours')
+      .replace(/\bme\b/g, 'you')
+      // "we talked in May" is the student and the person: from the student's side it is "you talked"
+      .replace(/\bWe\b/g, 'You')
+      .replace(/\bwe\b/g, 'you')
+      .replace(/\bOur\b/g, 'Your')
+      .replace(/\bour\b/g, 'your')
+      .replace(/\bours\b/g, 'yours')
+      .replace(/\bus\b/g, 'you')
+      .replace(/^you\b/, 'You')
+  );
 }
 
 /** The template summary and talking points shown on a person's page when no model is configured. */

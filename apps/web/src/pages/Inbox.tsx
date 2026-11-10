@@ -192,8 +192,10 @@ export function InboxPage() {
   const { cards, more } = todayCards(live, latest, now);
   // Needs you and the breaker have their own section above (plan 29 §B1)
   const own = (s: Suggestion) => s.kind === 'needs_you' || s.kind === 'breaker';
-  const otherCards = cards.filter((s) => !isMessageSuggestion(s.kind) && !own(s));
-  const otherMore = more.filter((s) => !isMessageSuggestion(s.kind) && !own(s));
+  // the batch itself is on this page, so the card that points at it would only say it twice
+  const elsewhere = (s: { kind: string }) => s.kind !== 'batch_ready';
+  const otherCards = cards.filter((s) => !isMessageSuggestion(s.kind) && !own(s) && elsewhere(s));
+  const otherMore = more.filter((s) => !isMessageSuggestion(s.kind) && !own(s) && elsewhere(s));
   // someone added by hand and not written to yet: the next step is to write to them
   const toWrite = notYetWritten(people, chats, outbound, suggestions, now).slice(0, 3);
   const undrafted = pending
@@ -557,7 +559,7 @@ export function InboxPage() {
               <EmptyState title="Nothing sent yet" />
             ))}
         </div>
-        <div className="space-y-4 min-w-0">
+        <div className="rail-flat min-w-0">
           <ComingUp events={events} warming={warming} byId={byId} now={now} />
           <SentForYou view={autopilot} />
           {quiet.length > 0 && user && (

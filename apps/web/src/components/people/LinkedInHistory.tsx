@@ -62,47 +62,52 @@ export function LinkedInHistory({ person }: { person: Person }) {
   const reading = onLinkedIn && !readAt && (rec === undefined || !mine?.result);
   const why = onLinkedIn && !readAt && mine?.result ? whyNotRead(mine.result, first) : undefined;
 
-  return (
-    <section className="space-y-3" data-testid="linkedin-history">
-      <div className="flex items-baseline justify-between gap-3">
-        <span className="text-[12px] text-ink-3" data-testid="linkedin-history-status">
-          {reading ? (
-            <span className="inline-flex items-center gap-1.5">
-              <span className="h-1.5 w-1.5 rounded-full bg-ink-3 animate-pulse" aria-hidden />
-              Reading {first}'s LinkedIn…
-            </span>
-          ) : readAt ? (
-            `Read ${relDate(readAt, now)}`
-          ) : why ? (
-            <span data-testid="linkedin-history-why">
-              {why.text}{' '}
-              {why.retry && (
-                <button
-                  type="button"
-                  className="underline underline-offset-2 hover:text-ink"
-                  onClick={() => setAttempt((n) => n + 1)}
-                  data-testid="linkedin-history-retry"
-                >
-                  Try again
-                </button>
-              )}
-              {why.connect && (
-                <Link to="/settings/integrations" className="underline underline-offset-2 hover:text-ink">
-                  Connect LinkedIn
-                </Link>
-              )}
-            </span>
-          ) : onLinkedIn ? (
-            ''
-          ) : (
-            'Not matched to a LinkedIn profile yet'
+  const status = (
+    <span className="text-[12px] text-ink-3" data-testid="linkedin-history-status">
+      {reading ? (
+        <span className="inline-flex items-center gap-1.5">
+          <span className="h-1.5 w-1.5 rounded-full bg-ink-3 animate-pulse" aria-hidden />
+          Reading {first}'s LinkedIn…
+        </span>
+      ) : readAt ? (
+        `Read ${relDate(readAt, now)}`
+      ) : why ? (
+        <span data-testid="linkedin-history-why">
+          {why.text}{' '}
+          {why.retry && (
+            <button
+              type="button"
+              className="underline underline-offset-2 hover:text-ink"
+              onClick={() => setAttempt((n) => n + 1)}
+              data-testid="linkedin-history-retry"
+            >
+              Try again
+            </button>
+          )}
+          {why.connect && (
+            <Link to="/settings/integrations" className="underline underline-offset-2 hover:text-ink">
+              Connect LinkedIn
+            </Link>
           )}
         </span>
-      </div>
+      ) : onLinkedIn ? (
+        ''
+      ) : (
+        'Not matched to a LinkedIn profile yet'
+      )}
+    </span>
+  );
+  return (
+    <section className="space-y-8" data-testid="linkedin-history">
+      {/* how fresh the history is, beside the first title (alone when there is no history yet) */}
+      {!work.length && <div className="flex items-baseline justify-between gap-3">{status}</div>}
       {work.length > 0 && (
         <div>
-          <div className="text-[12px] uppercase tracking-wide text-ink-3 mb-2">Experience</div>
-          <ol className="relative ml-3 border-l border-line space-y-3" data-testid="linkedin-experience">
+          <div className="mb-4 flex items-baseline justify-between gap-3">
+            <h2 className="section-title">Experience</h2>
+            {status}
+          </div>
+          <ol className="relative ml-3 border-l border-line space-y-5" data-testid="linkedin-experience">
             {work.map((a) => (
               <li key={a.id} className="relative pl-6" data-testid="linkedin-role">
                 <span className="absolute -left-[13px] top-0.5 rounded-[6px] bg-canvas">
@@ -125,8 +130,8 @@ export function LinkedInHistory({ person }: { person: Person }) {
       )}
       {schools.length > 0 && (
         <div>
-          <div className="text-[12px] uppercase tracking-wide text-ink-3 mb-2">Education</div>
-          <ul className="space-y-2" data-testid="linkedin-education">
+          <h2 className="section-title mb-4">Education</h2>
+          <ul className="space-y-4" data-testid="linkedin-education">
             {schools.map((a) => (
               <li key={a.id} className="flex items-start gap-2.5">
                 <CompanyLogo name={a.nameRaw} orgId={a.organizationId} size={24} decorative />

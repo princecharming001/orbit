@@ -186,7 +186,7 @@ export function CompanyPage() {
           busy={working.busy}
         />
       )}
-      {tc && plan === null && user && reach && (
+      {tc && plan === null && user && reach && reach.people.length > 0 && (
         <div className="mt-6">
           <Button
             onClick={() =>
@@ -206,10 +206,12 @@ export function CompanyPage() {
           </Button>
         </div>
       )}
-      {plan && (
-        <section className="mt-6" data-testid="company-plan-card">
-          <h2 className="label-mono mb-2">Suggested plan</h2>
-          <TargetPlanCard plan={plan} />
+      {/* the plan only earns a place here when it names people to write to; where the application stands and the
+          deadline are already at the top of the page */}
+      {plan && plan.steps.length > 0 && (
+        <section className="mt-8" data-testid="company-plan-card">
+          <h2 className="text-[16px] font-semibold mb-3">Who to write first</h2>
+          <TargetPlanCard plan={plan} hideTarget />
         </section>
       )}
     </div>

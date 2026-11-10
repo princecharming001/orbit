@@ -12,17 +12,20 @@ import { pushProfileSettings } from './settings';
 export type AutonomyLevel = 0 | 1 | 2;
 
 /** What each level means, in the student's words. */
-export const AUTONOMY_TEXT: Record<AutonomyLevel, { title: string; body: string }> = {
+export const AUTONOMY_TEXT: Record<AutonomyLevel, { title: string; line: string; body: string }> = {
   0: {
     title: 'Draft only',
+    line: 'You send every message.',
     body: 'Orbit writes drafts. You send every message yourself.',
   },
   1: {
     title: 'Send after I approve',
+    line: 'One tap, and Orbit sends it.',
     body: 'One tap approves a draft, and Orbit sends it in the next good window. You can cancel until then.',
   },
   2: {
     title: 'Send simple replies for me',
+    line: 'Orbit confirms times and says thanks.',
     body: 'Orbit may answer on its own only inside an email thread where you both have written, and only to confirm a time or say thanks, a few times a day at most. First messages and LinkedIn always wait for you.',
   },
 };

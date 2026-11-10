@@ -101,6 +101,7 @@ export function Card({
         padded && 'p-4',
         className,
       )}
+      data-card=""
       data-testid={testId}
     >
       {children}
@@ -285,10 +286,11 @@ export function PageHeader({
 
 export function EmptyState({ title, body, action }: { title: string; body?: string; action?: ReactNode }) {
   return (
-    <div className="border border-line bg-canvas rounded-[var(--radius-card)] p-10 text-center">
-      <p className="text-[16px] font-medium tracking-[-0.01em]">{title}</p>
-      {body && <p className="text-ink-3 mt-1 text-[13px] max-w-md mx-auto">{body}</p>}
-      {action && <div className="mt-4 flex justify-center">{action}</div>}
+    // flat on the page: an empty list is a quiet sentence and the next step, not a box around nothing
+    <div className="py-14 px-4 text-center">
+      <p className="text-[15px] font-medium tracking-[-0.01em]">{title}</p>
+      {body && <p className="text-ink-3 mt-1.5 text-[13.5px] leading-relaxed max-w-md mx-auto">{body}</p>}
+      {action && <div className="mt-5 flex justify-center">{action}</div>}
     </div>
   );
 }
@@ -494,10 +496,13 @@ export function Tabs<T extends string>({
   value,
   onChange,
   items,
+  trailing,
 }: {
   value: T;
   onChange: (v: T) => void;
   items: { value: T; label: string; count?: number }[];
+  /** a control that sits at the end of the row, after the last tab (a round icon button) */
+  trailing?: ReactNode;
 }) {
   return (
     <div
@@ -532,6 +537,7 @@ export function Tabs<T extends string>({
           )}
         </button>
       ))}
+      {trailing}
     </div>
   );
 }
@@ -831,7 +837,7 @@ export function calendarDaysBetween(a: Date, b: Date): number {
 }
 
 export function relDate(iso: string | undefined, now = new Date()): string {
-  if (!iso) return '—';
+  if (!iso) return 'never';
   const d = new Date(iso);
   const diff = now.getTime() - d.getTime();
   const days = calendarDaysBetween(d, now);
