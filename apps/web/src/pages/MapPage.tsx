@@ -284,9 +284,27 @@ export function MapPage() {
   const byId = useMemo(() => new Map(visible.map((p) => [p.id, p])), [visible]);
   // everyone the search can name (a target need not be someone the student already knows)
   const peopleById = useMemo(() => new Map(people.map((p) => [p.id, p])), [people]);
-  // the school list loads once, so "UC Berkeley" in a headline and "University of California, Berkeley" are one school
+  // the school list loads once, so "UC Berkeley" in a headline and "University of California, Berkeley" are one school.
+  // It is large: it loads when Your school is opened, or once the map has arrived and the browser is idle, never while
+  // the map animates in
   const [schoolsReady, setSchoolsReady] = useState(false);
+  const [wantSchools, setWantSchools] = useState(false);
   useEffect(() => {
+    if (filter === 'alumni') setWantSchools(true);
+  }, [filter]);
+  useEffect(() => {
+    if (loading || wantSchools) return;
+    const w = window as Window & {
+      requestIdleCallback?: (cb: () => void, o?: { timeout: number }) => number;
+    };
+    const t = setTimeout(() => {
+      if (w.requestIdleCallback) w.requestIdleCallback(() => setWantSchools(true), { timeout: 10_000 });
+      else setWantSchools(true);
+    }, 6000);
+    return () => clearTimeout(t);
+  }, [loading, wantSchools]);
+  useEffect(() => {
+    if (!wantSchools) return;
     let live = true;
     void loadSchoolIndex()
       .catch(() => undefined)
@@ -294,32 +312,56 @@ export function MapPage() {
     return () => {
       live = false;
     };
-  }, []);
-  // who each tab lights, and how many: the chips say the count, the panel lists them closest first
-  const lenses = useMemo(() => {
-    const now = Date.now();
-    const school = new Map<string, 'alum' | 'school'>();
-    if (schoolsReady)
-      for (const p of visible) {
-        const l = schoolLink(p, user);
-        if (l) school.set(p.id, l);
+  }, [wantSchools]);
+  // each person's tie to the school, kept by what it is read from, so a sync that changes others asks nothing again
+  const schoolCache = useRef(new Map<string, 'alum' | 'school' | undefined>());
+  const schoolOf = useMemo(() => {
+    const out = new Map<string, 'alum' | 'school'>();
+    if (!schoolsReady || !user?.school) return out;
+    for (const p of visible) {
+      const k = `${p.id}|${user.school}|${p.isAlumni ? 1 : 0}|${p.school ?? ''}|${p.currentOrganizationRaw ?? ''}|${p.headline ?? ''}|${p.currentTitle ?? ''}`;
+      let l = schoolCache.current.get(k);
+      if (!schoolCache.current.has(k)) {
+        l = schoolLink(p, user);
+        schoolCache.current.set(k, l);
       }
-    const by = (f: (p: Person) => boolean) =>
-      visible.filter(f).sort((a, b) => b.strength - a.strength || a.displayName.localeCompare(b.displayName));
+      if (l) out.set(p.id, l);
+    }
+    return out;
+  }, [visible, schoolsReady, user]);
+  // who each tab lights: the chips say how many (a count, cheap), the panel lists the open tab's closest first
+  const inLens = useMemo(() => {
+    const now = Date.now();
     return {
-      school,
-      targets: by((p) => isTarget(p)),
-      alumni: by((p) => school.has(p.id)),
-      chats: by((p) => stages.has(p.id)),
-      recent: by(
-        (p) => !!p.lastInteractionAt && now - new Date(p.lastInteractionAt).getTime() < 90 * 86_400_000,
-      ).sort((a, b) => (b.lastInteractionAt ?? '').localeCompare(a.lastInteractionAt ?? '')),
+      targets: (p: Person) => isTarget(p),
+      alumni: (p: Person) => schoolOf.has(p.id),
+      chats: (p: Person) => stages.has(p.id),
+      recent: (p: Person) =>
+        !!p.lastInteractionAt && now - new Date(p.lastInteractionAt).getTime() < 90 * 86_400_000,
     };
-  }, [visible, isTarget, stages, schoolsReady, user]);
+  }, [isTarget, schoolOf, stages]);
+  const lensCounts = useMemo(() => {
+    const c = { targets: 0, alumni: schoolOf.size, chats: 0, recent: 0 };
+    for (const p of visible) {
+      if (inLens.targets(p)) c.targets++;
+      if (inLens.chats(p)) c.chats++;
+      if (inLens.recent(p)) c.recent++;
+    }
+    return c;
+  }, [visible, inLens, schoolOf]);
+  const lensPeople = useMemo(() => {
+    if (filter === 'all' || filter === 'intros') return [];
+    const list = visible
+      .filter(inLens[filter])
+      .sort((a, b) => b.strength - a.strength || a.displayName.localeCompare(b.displayName));
+    if (filter === 'recent')
+      list.sort((a, b) => (b.lastInteractionAt ?? '').localeCompare(a.lastInteractionAt ?? ''));
+    return list;
+  }, [filter, visible, inLens]);
   const highlightIds = useMemo(() => {
     if (filter === 'all' || filter === 'intros') return undefined;
-    return new Set(lenses[filter].map((p) => p.id));
-  }, [filter, lenses]);
+    return new Set(lensPeople.map((p) => p.id));
+  }, [filter, lensPeople]);
   // a search with several matches lights them on the map, so the student sees where each one is before picking
   const choiceIds = useMemo(() => {
     if (!choices) return undefined;
@@ -911,7 +953,7 @@ export function MapPage() {
         if (!user?.school) return 'Add your school in Settings to see who is from it.';
         if (!schoolsReady) return `Finding people from ${user.school}.`;
         const n = highlightIds?.size ?? 0;
-        const alums = [...lenses.school.values()].filter((l) => l === 'alum').length;
+        const alums = [...schoolOf.values()].filter((l) => l === 'alum').length;
         if (n && alums === n) return `Showing ${plural(n, 'alum', 'alumni')} of ${user.school}.`;
         return `Showing ${plural(n, 'person', 'people')} from ${user.school}${
           alums ? `, ${plural(alums, 'alum', 'alumni')} among them` : ''
@@ -975,7 +1017,7 @@ export function MapPage() {
                     className={cx('ml-1.5 tabular', filter === k ? 'text-white/70' : 'text-ink-3')}
                     data-testid={`map-count-${k}`}
                   >
-                    {k === 'alumni' && !schoolsReady ? '' : lenses[k].length}
+                    {k === 'alumni' && !schoolsReady ? '' : lensCounts[k]}
                   </span>
                 )}
               </button>
@@ -1160,10 +1202,10 @@ export function MapPage() {
                         ? 'In your pipeline'
                         : 'In touch in the last 90 days'
                   }
-                  people={lenses[filter]}
+                  people={lensPeople}
                   note={
                     filter === 'alumni'
-                      ? (p) => (lenses.school.get(p.id) === 'alum' ? 'Alum' : undefined)
+                      ? (p) => (schoolOf.get(p.id) === 'alum' ? 'Alum' : undefined)
                       : filter === 'chats'
                         ? (p) => {
                             const st = stages.get(p.id);
