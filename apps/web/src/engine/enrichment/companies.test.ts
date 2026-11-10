@@ -216,4 +216,65 @@ describe('/companies', () => {
     const r = await (await handler(post({ accountId: 'a1', token: TOKEN, names: ['Reducto'] }))).json();
     expect(r.companies.Reducto).toMatchObject({ status: 'found', companyId: '600' });
   });
+
+  it('a profile read answers with permanent copies of the logos on it, and keeps its companies for everyone', async () => {
+    const cache = memoryCompanyCache();
+    await cache.put({
+      key: 'ramp',
+      status: 'found',
+      companyId: '1406226',
+      logoUrl: 'https://logos.test/1406226.png',
+      checkedAt: '2026-11-11T00:00:00.000Z',
+    });
+    const fetched: string[] = [];
+    const { handler } = harness({
+      companies: cache,
+      fetch: (async (url: string) => {
+        fetched.push(url);
+        if (url.startsWith('https://media.licdn.com/'))
+          return new Response(new Uint8Array([137, 80, 78, 71]), {
+            headers: { 'content-type': 'image/png' },
+          });
+        if (url.includes('/api/v1/users/'))
+          return new Response(
+            JSON.stringify({
+              provider_id: 'ACoAAA',
+              first_name: 'Maya',
+              last_name: 'Chen',
+              work_experience: [
+                { position: 'PM', company: 'Weave', company_id: '4242', company_picture_url: licdn('weave') },
+                {
+                  position: 'APM',
+                  company: 'Ramp',
+                  company_id: '1406226',
+                  company_picture_url: licdn('ramp'),
+                },
+              ],
+              education: [
+                { school: 'Cornell University', school_id: '1234', school_picture_url: licdn('cornell') },
+              ],
+            }),
+          );
+        return new Response('{}', { status: 404 });
+      }) as unknown as typeof fetch,
+    });
+    const res = await handler(
+      new Request(`${BASE}/profile`, {
+        method: 'POST',
+        headers: { origin: ORIGIN, 'content-type': 'application/json', 'x-forwarded-for': '203.0.113.9' },
+        body: JSON.stringify({ accountId: 'a1', token: TOKEN, identifier: 'maya', sections: ['experience'] }),
+      }),
+    );
+    const body = await res.json();
+    const [weave, ramp] = body.profile.experience;
+    expect(weave.logoUrl).toBe('https://logos.test/4242.png');
+    // Ramp's copy was kept already: no image fetched for it
+    expect(ramp.logoUrl).toBe('https://logos.test/1406226.png');
+    expect(fetched.some((u) => u.includes('ramp'))).toBe(false);
+    expect(body.profile.education[0].logoUrl).toBe('https://logos.test/1234.png');
+    // Weave is now in the shared list, from the position itself
+    expect(cache.rows.get('weave')).toMatchObject({ status: 'found', companyId: '4242' });
+    // no company lookup was spent on any of it
+    expect(fetched.filter((u) => u.includes('/linkedin/'))).toEqual([]);
+  });
 });

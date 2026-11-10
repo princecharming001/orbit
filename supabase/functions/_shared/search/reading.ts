@@ -35,6 +35,7 @@ import type { ProfileExperienceWire, ProfileReadingWire } from '@orbit/core/serv
 import { z } from 'zod/v4';
 import type { Claude, ClaudeResult } from '../claude.ts';
 import type { Db } from '../db.ts';
+import type { ProfileOrg } from '../providers/linkedinCompanies.ts';
 
 /** orbit-connectors DEFAULT_LEDGER: profile reads and company pages per account per day. */
 export const LEDGER_TOTAL = { profile: 100, company: 150 } as const;
@@ -62,6 +63,29 @@ export interface ReadingDeps {
   sleep: (ms: number) => Promise<void>;
   random: () => number;
   clock: () => number;
+  /**
+   * Keeps the logos a profile read shows (each position's and school's, by LinkedIn's id) as Orbit's own copies in
+   * the shared company list: no extra read (orbit-worker wires keepProfileLogos)
+   */
+  keepLogos?: (orgs: ProfileOrg[]) => Promise<unknown>;
+}
+
+/** The companies and schools on a raw profile, with LinkedIn's ids and logos, for `keepLogos`. */
+export function profileOrgs(raw: Record<string, unknown>): ProfileOrg[] {
+  const list = (v: unknown) =>
+    (Array.isArray(v) ? v : []).filter((x): x is Record<string, unknown> => !!x && typeof x === 'object');
+  return [
+    ...list(raw.work_experience).map((x) => ({
+      company: txt(x.company, 160),
+      companyId: x.company_id == null ? undefined : txt(String(x.company_id), 60),
+      logoUrl: txt(x.company_picture_url, 1000),
+    })),
+    ...list(raw.education).map((x) => ({
+      school: txt(x.school, 160),
+      schoolId: x.school_id == null ? undefined : txt(String(x.school_id), 60),
+      logoUrl: txt(x.school_picture_url, 1000),
+    })),
+  ].filter((o) => o.logoUrl);
 }
 
 export interface ReadingStep {
@@ -943,6 +967,7 @@ async function readProfiles(
       continue;
     }
     await saveProfile(db, userId, p.id, p.member, got.value, mode, now);
+    if (deps.keepLogos) await deps.keepLogos(profileOrgs(got.value)).catch(() => undefined);
     step.profiles++;
     step.readIds.push(p.id);
   }

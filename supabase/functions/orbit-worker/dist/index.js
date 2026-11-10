@@ -15999,6 +15999,21 @@ var ASK_MAX = 6;
 var REREAD_DAYS = 180;
 var COMPANY_REREAD_DAYS = 90;
 var READ_BATCH = 8;
+function profileOrgs(raw) {
+  const list2 = (v) => (Array.isArray(v) ? v : []).filter((x) => !!x && typeof x === "object");
+  return [
+    ...list2(raw.work_experience).map((x) => ({
+      company: txt(x.company, 160),
+      companyId: x.company_id == null ? void 0 : txt(String(x.company_id), 60),
+      logoUrl: txt(x.company_picture_url, 1e3)
+    })),
+    ...list2(raw.education).map((x) => ({
+      school: txt(x.school, 160),
+      schoolId: x.school_id == null ? void 0 : txt(String(x.school_id), 60),
+      logoUrl: txt(x.school_picture_url, 1e3)
+    }))
+  ].filter((o) => o.logoUrl);
+}
 function bucket(kind, accountId, now, share) {
   const day2 = now.toISOString().slice(0, 10);
   const end = /* @__PURE__ */ new Date(`${day2}T00:00:00Z`);
@@ -16584,6 +16599,7 @@ async function readProfiles(db2, deps, userId, accountId, people, now, mode, ste
       continue;
     }
     await saveProfile(db2, userId, p.id, p.member, got.value, mode, now);
+    if (deps.keepLogos) await deps.keepLogos(profileOrgs(got.value)).catch(() => void 0);
     step.profiles++;
     step.readIds.push(p.id);
   }
@@ -28183,6 +28199,60 @@ async function keepCompany(cache3, key2, c, doFetch, now) {
   if (kept || !c.logo) await cache3?.put(row).catch(() => void 0);
   return { ...answerOf(row), logoUrl: kept ?? c.logo };
 }
+async function copyLogo(cache3, id, url, doFetch) {
+  try {
+    const res = await doFetch(url);
+    const type = res.headers.get("content-type") ?? "image/jpeg";
+    const bytes = await res.arrayBuffer();
+    if (!res.ok || !type.startsWith("image/") || !bytes.byteLength || bytes.byteLength > LOGO_MAX_BYTES)
+      return void 0;
+    return await cache3.storeLogo(id, bytes, type);
+  } catch {
+    return void 0;
+  }
+}
+async function keepProfileLogos(cache3, orgs, doFetch, now) {
+  if (!cache3) return 0;
+  const linked = orgs.filter(
+    (o) => o.logoUrl && isLinkedInImage(o.logoUrl) && /^\d+$/.test(o.companyId ?? o.schoolId ?? "")
+  );
+  if (!linked.length) return 0;
+  const keys = [...new Set(linked.map((o) => companyNameKey(o.company ?? "")).filter(Boolean))];
+  const rows = keys.length ? await cache3.getMany(keys).catch(() => ({})) : {};
+  const copies = /* @__PURE__ */ new Map();
+  let kept = 0;
+  await Promise.all(
+    linked.map(async (o) => {
+      const id = o.companyId ?? o.schoolId;
+      const key2 = o.company ? companyNameKey(o.company) : "";
+      const row = key2 ? rows[key2] : void 0;
+      if (row?.companyId === id && row.logoUrl) {
+        o.logoUrl = row.logoUrl;
+        return;
+      }
+      let copy = copies.get(id);
+      if (!copy) {
+        copy = copyLogo(cache3, id, o.logoUrl, doFetch);
+        copies.set(id, copy);
+      }
+      const url = await copy;
+      if (!url) return;
+      o.logoUrl = url;
+      kept++;
+      if (key2 && (!row || !(row.status === "found" && row.logoUrl)))
+        await cache3.put({
+          key: key2,
+          status: "found",
+          companyId: id,
+          publicIdentifier: o.companySlug,
+          name: o.company,
+          logoUrl: url,
+          checkedAt: now.toISOString()
+        }).catch(() => void 0);
+    })
+  );
+  return kept;
+}
 async function lookupCompany(u2, o) {
   const { accountId, key: key2, cache: cache3, doFetch, now, spend } = o;
   if (!await spend()) return { looked: false, stopped: "limit" };
@@ -29768,7 +29838,17 @@ function searchHandlers(deps) {
           claude: deps.claude,
           sleep: deps.sleep ?? ((ms2) => new Promise((r) => setTimeout(r, ms2))),
           random: deps.random ?? Math.random,
-          clock: deps.clock ?? Date.now
+          clock: deps.clock ?? Date.now,
+          // the logos a profile read shows, kept as Orbit's own copies for everyone (no extra read)
+          keepLogos: deps.storage?.url && deps.storage.serviceKey ? (orgs) => keepProfileLogos(
+            sqlCompanyCache(
+              ctx.db,
+              storageLogoWriter(deps.storage.url, deps.storage.serviceKey, doFetch)
+            ),
+            orgs,
+            doFetch,
+            ctx.now()
+          ) : void 0
         },
         userId,
         acct.externalAccountId,

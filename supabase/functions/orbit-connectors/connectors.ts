@@ -54,6 +54,7 @@ import {
   companyNameKey,
   companyPage,
   isLinkedInImage,
+  keepProfileLogos,
   lookupCompany,
   rowSettled,
   searchName,
@@ -2388,6 +2389,15 @@ async function enrichmentRoute(
   try {
     if (kind === 'profile') {
       const read = await unipileProfile(deps, body, doFetch);
+      // the logos LinkedIn shows on the profile, copied into Orbit's storage so they never expire (and kept for
+      // everyone in the shared company list): the profile answers with the copies
+      if (read.ok && 'profile' in read && read.profile)
+        await keepProfileLogos(
+          deps.companies,
+          [...(read.profile.experience ?? []), ...(read.profile.education ?? [])],
+          doFetch,
+          now(),
+        ).catch(() => 0);
       // every full read refreshes the shared copy, with only what anyone would see; a read LinkedIn held sections
       // back on is this account's alone
       if (read.ok && 'profile' in read && read.profile && !read.profile.throttled.length) {

@@ -12909,6 +12909,21 @@ var ASK_MAX = 6;
 var REREAD_DAYS = 180;
 var COMPANY_REREAD_DAYS = 90;
 var READ_BATCH = 8;
+function profileOrgs(raw) {
+  const list8 = (v) => (Array.isArray(v) ? v : []).filter((x) => !!x && typeof x === "object");
+  return [
+    ...list8(raw.work_experience).map((x) => ({
+      company: txt(x.company, 160),
+      companyId: x.company_id == null ? void 0 : txt(String(x.company_id), 60),
+      logoUrl: txt(x.company_picture_url, 1e3)
+    })),
+    ...list8(raw.education).map((x) => ({
+      school: txt(x.school, 160),
+      schoolId: x.school_id == null ? void 0 : txt(String(x.school_id), 60),
+      logoUrl: txt(x.school_picture_url, 1e3)
+    }))
+  ].filter((o) => o.logoUrl);
+}
 function bucket(kind, accountId, now, share) {
   const day2 = now.toISOString().slice(0, 10);
   const end2 = /* @__PURE__ */ new Date(`${day2}T00:00:00Z`);
@@ -13479,6 +13494,7 @@ async function readProfiles(db2, deps, userId, accountId, people, now, mode2, st
       continue;
     }
     await saveProfile(db2, userId, p.id, p.member, got.value, mode2, now);
+    if (deps.keepLogos) await deps.keepLogos(profileOrgs(got.value)).catch(() => void 0);
     step.profiles++;
     step.readIds.push(p.id);
   }

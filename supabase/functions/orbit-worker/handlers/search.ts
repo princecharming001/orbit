@@ -12,13 +12,14 @@
  */
 
 import { loadAccount } from '../../_shared/ingest/util.ts';
-import { storageLogoWriter } from '../../_shared/providers/linkedinCompanies.ts';
+import { keepProfileLogos, storageLogoWriter } from '../../_shared/providers/linkedinCompanies.ts';
 import { runCensusStep } from '../../_shared/search/census.ts';
 import { syncCompanyFacts, syncYcFounders } from '../../_shared/search/companyFacts.ts';
 import {
   runLogoSweep,
   runUserLogos,
   SWEEP_MAX_PARTS,
+  sqlCompanyCache,
   USER_MAX_PARTS,
 } from '../../_shared/search/logoSweep.ts';
 import { runReadingStep } from '../../_shared/search/reading.ts';
@@ -179,6 +180,20 @@ export function searchHandlers(deps: HandlerDeps): Record<string, JobHandler> {
           sleep: deps.sleep ?? ((ms) => new Promise<void>((r) => setTimeout(r, ms))),
           random: deps.random ?? Math.random,
           clock: deps.clock ?? Date.now,
+          // the logos a profile read shows, kept as Orbit's own copies for everyone (no extra read)
+          keepLogos:
+            deps.storage?.url && deps.storage.serviceKey
+              ? (orgs) =>
+                  keepProfileLogos(
+                    sqlCompanyCache(
+                      ctx.db,
+                      storageLogoWriter(deps.storage!.url!, deps.storage!.serviceKey!, doFetch),
+                    ),
+                    orgs,
+                    doFetch,
+                    ctx.now(),
+                  )
+              : undefined,
         },
         userId,
         acct.externalAccountId,

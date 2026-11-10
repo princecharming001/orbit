@@ -916,6 +916,60 @@ async function keepCompany(cache, key, c, doFetch, now) {
   if (kept || !c.logo) await cache?.put(row).catch(() => void 0);
   return { ...answerOf(row), logoUrl: kept ?? c.logo };
 }
+async function copyLogo(cache, id, url2, doFetch) {
+  try {
+    const res = await doFetch(url2);
+    const type = res.headers.get("content-type") ?? "image/jpeg";
+    const bytes = await res.arrayBuffer();
+    if (!res.ok || !type.startsWith("image/") || !bytes.byteLength || bytes.byteLength > LOGO_MAX_BYTES)
+      return void 0;
+    return await cache.storeLogo(id, bytes, type);
+  } catch {
+    return void 0;
+  }
+}
+async function keepProfileLogos(cache, orgs, doFetch, now) {
+  if (!cache) return 0;
+  const linked = orgs.filter(
+    (o) => o.logoUrl && isLinkedInImage(o.logoUrl) && /^\d+$/.test(o.companyId ?? o.schoolId ?? "")
+  );
+  if (!linked.length) return 0;
+  const keys = [...new Set(linked.map((o) => companyNameKey(o.company ?? "")).filter(Boolean))];
+  const rows = keys.length ? await cache.getMany(keys).catch(() => ({})) : {};
+  const copies = /* @__PURE__ */ new Map();
+  let kept = 0;
+  await Promise.all(
+    linked.map(async (o) => {
+      const id = o.companyId ?? o.schoolId;
+      const key = o.company ? companyNameKey(o.company) : "";
+      const row = key ? rows[key] : void 0;
+      if (row?.companyId === id && row.logoUrl) {
+        o.logoUrl = row.logoUrl;
+        return;
+      }
+      let copy = copies.get(id);
+      if (!copy) {
+        copy = copyLogo(cache, id, o.logoUrl, doFetch);
+        copies.set(id, copy);
+      }
+      const url2 = await copy;
+      if (!url2) return;
+      o.logoUrl = url2;
+      kept++;
+      if (key && (!row || !(row.status === "found" && row.logoUrl)))
+        await cache.put({
+          key,
+          status: "found",
+          companyId: id,
+          publicIdentifier: o.companySlug,
+          name: o.company,
+          logoUrl: url2,
+          checkedAt: now.toISOString()
+        }).catch(() => void 0);
+    })
+  );
+  return kept;
+}
 async function lookupCompany(u, o) {
   const { accountId, key, cache, doFetch, now, spend } = o;
   if (!await spend()) return { looked: false, stopped: "limit" };
@@ -2777,6 +2831,13 @@ async function enrichmentRoute(deps, path, body, ctx) {
   try {
     if (kind === "profile") {
       const read = await unipileProfile(deps, body, doFetch);
+      if (read.ok && "profile" in read && read.profile)
+        await keepProfileLogos(
+          deps.companies,
+          [...read.profile.experience ?? [], ...read.profile.education ?? []],
+          doFetch,
+          now()
+        ).catch(() => 0);
       if (read.ok && "profile" in read && read.profile && !read.profile.throttled.length) {
         const key = await profileShareKey(body);
         if (key) await sharedPut(deps, key, publicProfile(read.profile), 30);

@@ -5,8 +5,18 @@
  * schools are left to their own icons, and the student's own account's share of its company ledger is the limit.
  */
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
-import { sameCompanyName, searchName } from '../../functions/_shared/providers/linkedinCompanies.ts';
-import { runUserLogos, USER_SHARE, userLogoCandidates } from '../../functions/_shared/search/logoSweep.ts';
+import {
+  keepProfileLogos,
+  sameCompanyName,
+  searchName,
+} from '../../functions/_shared/providers/linkedinCompanies.ts';
+import {
+  runUserLogos,
+  sqlCompanyCache,
+  USER_SHARE,
+  userLogoCandidates,
+} from '../../functions/_shared/search/logoSweep.ts';
+import { profileOrgs } from '../../functions/_shared/search/reading.ts';
 import { searchHandlers } from '../../functions/orbit-worker/handlers/search.ts';
 import { connectedUser } from '../helpers/ingest.ts';
 import { freshDb, makeUser, type TestDb } from '../helpers/pglite.ts';
@@ -185,5 +195,30 @@ describe('logos.user', () => {
     ]);
     const [n] = await t.db.sql<{ n: number }>`select orbit.enqueue_logos_users() as n`;
     expect(n!.n).toBe(1);
+  });
+
+  it('a profile read keeps the logos on it for everyone, by LinkedIn id, with no lookup', async () => {
+    const orgs = profileOrgs({
+      work_experience: [
+        { company: 'Weave', company_id: 4242, company_picture_url: logo('weave') },
+        { company: 'No Logo Co', company_id: '77' },
+      ],
+      education: [{ school: 'Cornell University', school_id: '1234', school_picture_url: logo('cornell') }],
+    });
+    expect(orgs).toHaveLength(2);
+    const f = fakeUnipile();
+    const cache = sqlCompanyCache(t.db, deps(f).storeLogo);
+    expect(await keepProfileLogos(cache, orgs, f.fetch, NOW)).toBe(2);
+    expect(orgs[0]!.logoUrl).toBe('https://store.test/storage/v1/object/public/company-logos/4242.png');
+    const rows = await t.db.sql<{ key: string; company_id: string; logo_url: string }>`
+      select key, company_id, logo_url from orbit_private.linkedin_companies`;
+    expect(rows).toEqual([
+      {
+        key: 'weave',
+        company_id: '4242',
+        logo_url: 'https://store.test/storage/v1/object/public/company-logos/4242.png',
+      },
+    ]);
+    expect(f.asked).toEqual([]);
   });
 });

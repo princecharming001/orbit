@@ -351,6 +351,93 @@ export async function keepCompany(
   return { ...answerOf(row), logoUrl: kept ?? c.logo };
 }
 
+/** A logo's bytes into Orbit's storage under its LinkedIn id; the address it is served from, or nothing. */
+async function copyLogo(
+  cache: CompanyCache,
+  id: string,
+  url: string,
+  doFetch: typeof fetch,
+): Promise<string | undefined> {
+  try {
+    const res = await doFetch(url);
+    const type = res.headers.get('content-type') ?? 'image/jpeg';
+    const bytes = await res.arrayBuffer();
+    if (!res.ok || !type.startsWith('image/') || !bytes.byteLength || bytes.byteLength > LOGO_MAX_BYTES)
+      return undefined;
+    return await cache.storeLogo(id, bytes, type);
+  } catch {
+    return undefined;
+  }
+}
+
+/** A position or a school on a profile, as orbit-connectors maps it. */
+export interface ProfileOrg {
+  company?: string;
+  companyId?: string;
+  companySlug?: string;
+  school?: string;
+  schoolId?: string;
+  logoUrl?: string;
+}
+
+/**
+ * A profile read names every company and school on it by LinkedIn's id, with LinkedIn's logo: the logos LinkedIn shows
+ * on that profile, for no extra read. Each is copied into Orbit's storage (LinkedIn's links expire after a few weeks)
+ * and the profile is answered with the copies, so a profile's logos show the first time it is opened and keep showing.
+ * A company the shared list has not pinned down yet is kept there too, for everyone: a position names the company
+ * itself, nothing is guessed. A name the list already answers with another company is left as it is.
+ */
+export async function keepProfileLogos(
+  cache: CompanyCache | undefined,
+  orgs: ProfileOrg[],
+  doFetch: typeof fetch,
+  now: Date,
+): Promise<number> {
+  if (!cache) return 0;
+  const linked = orgs.filter(
+    (o) => o.logoUrl && isLinkedInImage(o.logoUrl) && /^\d+$/.test(o.companyId ?? o.schoolId ?? ''),
+  );
+  if (!linked.length) return 0;
+  const keys = [...new Set(linked.map((o) => companyNameKey(o.company ?? '')).filter(Boolean))];
+  const rows = keys.length ? await cache.getMany(keys).catch(() => ({}) as Record<string, CompanyRow>) : {};
+  const copies = new Map<string, Promise<string | undefined>>();
+  let kept = 0;
+  await Promise.all(
+    linked.map(async (o) => {
+      const id = (o.companyId ?? o.schoolId)!;
+      const key = o.company ? companyNameKey(o.company) : '';
+      const row = key ? rows[key] : undefined;
+      // this company's own copy is kept already: answer with it
+      if (row?.companyId === id && row.logoUrl) {
+        o.logoUrl = row.logoUrl;
+        return;
+      }
+      let copy = copies.get(id);
+      if (!copy) {
+        copy = copyLogo(cache, id, o.logoUrl!, doFetch);
+        copies.set(id, copy);
+      }
+      const url = await copy;
+      if (!url) return;
+      o.logoUrl = url;
+      kept++;
+      if (key && (!row || !(row.status === 'found' && row.logoUrl)))
+        await cache
+          .put({
+            key,
+            status: 'found',
+            companyId: id,
+            publicIdentifier: o.companySlug,
+            name: o.company,
+            logoUrl: url,
+            checkedAt: now.toISOString(),
+          })
+          .catch(() => undefined);
+    }),
+  );
+  return kept;
+}
+
 /** What one lookup did: the answer, whether it spent anything, and why it stopped when it could not go on. */
 export interface LookupOutcome {
   answer?: CompanyAnswer;
