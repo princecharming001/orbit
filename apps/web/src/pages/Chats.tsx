@@ -7,6 +7,7 @@ import { useLiveQuery } from 'dexie-react-hooks';
 import { ChevronDown, Video } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
+import { WeekCalendar } from '../components/chats/WeekCalendar';
 import { PersonRow } from '../components/PersonRow';
 import { db } from '../db/schema';
 import {
@@ -20,7 +21,7 @@ import {
 import { useFlag } from '../engine/flags';
 import { checkNotes, connectedNotetaker } from '../engine/notesCheck';
 import { useSession } from '../state/session';
-import { Button, Card, cx, PageHeader, SkeletonRows } from '../ui';
+import { Button, cx, PageHeader, SkeletonRows } from '../ui';
 
 /** Everything the view reads, live, so a note landing or a time booked updates the page at once. */
 export function useChatsView() {
@@ -92,15 +93,16 @@ export function ChatsPage() {
     );
   const empty = !view.days.length && !view.justHappened.length && !view.noTime.length;
   return (
-    <div className="max-w-[760px]" data-testid="chats-page">
+    <div className="max-w-[1040px]" data-testid="chats-page">
       <PageHeader title="Chats" />
+      {user && <WeekCalendar userId={user.id} />}
       {empty && (
-        <Card padded data-testid="chats-empty">
-          <p className="text-[14px]">No chats booked.</p>
+        <div className="max-w-[760px]" data-testid="chats-empty">
+          <p className="text-[14px] text-ink-2">No chats booked yet.</p>
           <Link to="/inbox" className="inline-block mt-3">
-            <Button variant="primary">Who's replied?</Button>
+            <Button variant="secondary">Who's replied?</Button>
           </Link>
-        </Card>
+        </div>
       )}
       {view.justHappened.length > 0 && (
         <Group title="Just happened" testId="chats-just-happened">
@@ -129,7 +131,7 @@ export function ChatsPage() {
 
 function Group({ title, testId, children }: { title: string; testId: string; children: React.ReactNode }) {
   return (
-    <section className="mb-6" data-testid={testId}>
+    <section className="mb-6 max-w-[760px]" data-testid={testId}>
       <h2 className="label-mono mb-1">{title}</h2>
       <ul className="divide-y divide-line-2">{children}</ul>
     </section>

@@ -1,4 +1,4 @@
-import { interactionCount, normalizeCompany, type Person } from '@orbit/core';
+import { interactionCount, isRecruiter, normalizeCompany, type Person } from '@orbit/core';
 
 /**
  * Rank people for a typed query the way the command palette does: an exact name (or first name) first, then a
@@ -39,7 +39,15 @@ export function lastTouch(p: Person): string | undefined {
   return b.lastConversationAt ?? (interactionCount(b.counts) > 0 ? p.lastInteractionAt : undefined);
 }
 
-export type PeopleFilter = 'all' | 'alumni' | 'strong' | 'chats' | 'targets' | 'quiet' | 'hidden';
+export type PeopleFilter =
+  | 'all'
+  | 'alumni'
+  | 'strong'
+  | 'chats'
+  | 'targets'
+  | 'recruiters'
+  | 'quiet'
+  | 'hidden';
 export type PeopleSort = 'strength' | 'recent' | 'name';
 
 /**
@@ -82,9 +90,11 @@ export function filterPeople<P extends Person>(
               ? opts.targetNames.has((p.currentOrganizationRaw ?? '').toLowerCase()) ||
                 (!!p.currentOrganizationRaw &&
                   opts.targetNames.has(normalizeCompany(p.currentOrganizationRaw)))
-              : filter === 'quiet'
-                ? !!opts.quiet?.has(p.id)
-                : true,
+              : filter === 'recruiters'
+                ? p.relationshipType === 'recruiter' || isRecruiter(p.currentTitle ?? p.headline ?? undefined)
+                : filter === 'quiet'
+                  ? !!opts.quiet?.has(p.id)
+                  : true,
     )
     .sort((a, b) =>
       sort === 'strength'

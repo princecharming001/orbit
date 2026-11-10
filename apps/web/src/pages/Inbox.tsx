@@ -7,19 +7,19 @@ import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { runApproval } from '../components/approve';
 import { TomorrowBatch } from '../components/autopilot/TomorrowBatch';
 import { useAutopilotStatus } from '../components/autopilot/useAutopilotStatus';
-import { PersonCompanyLogo } from '../components/CompanyLogo';
 import { DraftEditor, OutboxStatus } from '../components/DraftEditor';
 import { DraftsSplit } from '../components/DraftsSplit';
+import { Queue } from '../components/Queue';
 import { RepliesChecked } from '../components/RepliesChecked';
 import { SentForYou } from '../components/SentForYou';
 import { KIND_LABEL, SuggestionCard } from '../components/SuggestionCard';
 import { openWeekReview } from '../components/WeekReview';
 import { db } from '../db/schema';
-import { cancelScheduled } from '../engine/autopilot';
 import { ensureDrafts, generateBrief, isMessageSuggestion, revalidatePending } from '../engine/brief';
 import { discardDraft, restoreDraft, unsnoozeSuggestion } from '../engine/drafts';
 import { moveChat } from '../engine/move';
 import { wentQuiet } from '../engine/pipeline';
+import { isScheduled } from '../engine/queue';
 import { lastTouch } from '../engine/search';
 import { draftLists, notYetWritten, startedDrafts, todayCards } from '../engine/today';
 import { useSession } from '../state/session';
@@ -129,7 +129,14 @@ export function InboxPage() {
         ? db.outbound
             .where('userId')
             .equals(userId)
-            .filter((o) => o.status === 'sent' || o.status === 'draft' || IN_FLIGHT.includes(o.status))
+            .filter(
+              (o) =>
+                o.status === 'sent' ||
+                o.status === 'draft' ||
+                IN_FLIGHT.includes(o.status) ||
+                // an account's email the server holds for its time (plan 38 §C)
+                (o.status === 'approved' && !!o.sendAt),
+            )
             .toArray()
         : [],
     [userId],
@@ -228,9 +235,7 @@ export function InboxPage() {
     .filter((o) => o.status === 'sent')
     .sort((a, b) => (b.sentAt ?? '').localeCompare(a.sentAt ?? ''));
   // autopilot's sends wait under Scheduled with their times, not with the ones opened in the mail app
-  const scheduled = outbound
-    .filter((o) => o.autopilot && o.status === 'queued' && !!o.sendAt)
-    .sort((a, b) => a.sendAt!.localeCompare(b.sendAt!));
+  const scheduled = outbound.filter((o) => isScheduled(o)).sort((a, b) => a.sendAt!.localeCompare(b.sendAt!));
   const outbox = outbound
     .filter((o) => IN_FLIGHT.includes(o.status) && !(o.autopilot && o.status === 'queued'))
     .sort((a, b) => (b.queuedAt ?? b.createdAt).localeCompare(a.queuedAt ?? a.createdAt));
@@ -510,26 +515,7 @@ export function InboxPage() {
             ) : (
               <EmptyState title="Nothing waiting" />
             ))}
-          {shown === 'scheduled' &&
-            (scheduled.length ? (
-              <div data-testid="drafts-scheduled">
-                <p className="text-[13px] text-ink-3 mb-3">
-                  Autopilot sends these at their times, spaced apart on weekdays between 9 and 5. Each is
-                  checked again first and held back if they replied. Orbit sends while it is open in a tab;
-                  one it misses goes at the next free slot.
-                </p>
-                <ul className="divide-y divide-line border border-line rounded-[var(--radius-card)] bg-canvas">
-                  {scheduled.map((o) => (
-                    <ScheduledItem key={o.id} o={o} person={byId.get(o.personId)} />
-                  ))}
-                </ul>
-              </div>
-            ) : (
-              <EmptyState
-                title="Nothing scheduled"
-                body="Ask the chat to send your drafts on autopilot, and they wait here with the time each one goes."
-              />
-            ))}
+          {shown === 'scheduled' && user && <Queue user={user} rows={scheduled} byId={byId} />}
           {shown === 'sent' &&
             (sent.length ? (
               <ul className="divide-y divide-line border border-line rounded-[var(--radius-card)]">
@@ -850,46 +836,3 @@ function OutboxItem({ o, person }: { o: OutboundMessage; person?: Person }) {
 }
 
 /** One message autopilot will send: who, when, the first line, and Cancel (it goes back to a draft). */
-function ScheduledItem({ o, person }: { o: OutboundMessage; person?: Person }) {
-  const { userId } = useSession();
-  const toast = useToast();
-  const at = new Date(o.sendAt!);
-  return (
-    <li className="p-3 flex items-start gap-3" data-testid="scheduled-item">
-      {person && <Avatar name={person.displayName} src={person.photoUrl} id={person.id} size={30} />}
-      <div className="min-w-0 flex-1">
-        <div className="flex items-center gap-2 text-[13.5px] flex-wrap">
-          <Link to={person ? `/people/${person.id}` : '#'} className="font-medium">
-            {person?.displayName ?? 'Unknown'}
-          </Link>
-          {person && <PersonCompanyLogo person={person} size={14} />}
-          <Chip>{draftKindLabel(o.kind, person && lastTouch(person))}</Chip>
-          <Chip>{CHANNEL_LABELS[o.channel]}</Chip>
-          <span className="ml-auto text-[12.5px] text-ink-2 tabular" data-testid="scheduled-at">
-            {at.toLocaleString('en-US', {
-              weekday: 'short',
-              month: 'short',
-              day: 'numeric',
-              hour: 'numeric',
-              minute: '2-digit',
-            })}
-          </span>
-        </div>
-        <p className="text-[13px] text-ink-3 mt-1 line-clamp-1">{o.bodyFinal ?? o.bodyDraft}</p>
-      </div>
-      <Button
-        size="sm"
-        variant="ghost"
-        onClick={async () => {
-          if (userId && (await cancelScheduled(userId, o.id)))
-            toast.push({
-              text: `Taken off autopilot. The message to ${person?.firstName ?? 'them'} is a draft again.`,
-            });
-        }}
-        data-testid="scheduled-cancel"
-      >
-        Cancel
-      </Button>
-    </li>
-  );
-}

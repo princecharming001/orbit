@@ -20,6 +20,7 @@ export * from './drafts/thread';
 export { whenLabel } from './drafts/time';
 export * from './drafts/typing';
 export * from './drafts/validate';
+export * from './email/funnel';
 export * from './email/nextAction';
 export * from './email/replyClass';
 export * from './email/triage';

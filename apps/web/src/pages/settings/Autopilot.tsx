@@ -27,6 +27,7 @@ import {
   setGoalAutopilot,
   setMode,
 } from '../../engine/autopilotMode';
+import { setAutoReplies } from '../../engine/funnels';
 import { GOAL_KIND_LABELS } from '../../engine/goals';
 import { LADDER_WORDS, type LadderKind, setAutoKind } from '../../engine/trust';
 import { useSession } from '../../state/session';
@@ -153,6 +154,33 @@ export function AutopilotSection() {
               </p>
             )}
           </div>
+        </SettingsCard>
+
+        <SettingsCard
+          title="Replies"
+          description="Works in any mode, for threads you started."
+          data-testid="autopilot-replies"
+        >
+          <SettingsRow
+            label="Answer simple replies for me"
+            description="Booking a time, thank-yous and interested replies go on their own. A question or a no waits for you."
+            control={
+              <Switch
+                checked={!!settings?.autoReplies}
+                onChange={(v: boolean) =>
+                  void run(
+                    'replies',
+                    async () => {
+                      await setAutoReplies(user.id, v);
+                      return { ok: true };
+                    },
+                    v ? 'Orbit answers simple replies for you now.' : 'Replies wait for your tap again.',
+                  )
+                }
+                label="Answer simple replies for me"
+              />
+            }
+          />
         </SettingsCard>
 
         <SettingsCard title="Rules Autopilot never breaks" description="They hold whenever Autopilot is on.">

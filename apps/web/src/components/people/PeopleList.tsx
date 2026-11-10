@@ -1,8 +1,9 @@
 import type { ChatStage, CoffeeChat, Person, Suggestion } from '@orbit/core';
 import { ACTIVE_STAGES, CLOSED_STAGES, RELATIONSHIP_LABELS, STAGE_LABELS } from '@orbit/core';
+import { Send } from 'lucide-react';
 import { Link, useNavigate } from 'react-router-dom';
 import { lastTouch } from '../../engine/search';
-import { Avatar, Chip, relDate, Select } from '../../ui';
+import { Avatar, Button, Chip, relDate, Select } from '../../ui';
 import { LogoText } from '../CompanyLogo';
 import { NextLink } from './PipelineBoard';
 import { StrengthDots, wentQuiet } from './shared';
@@ -30,18 +31,97 @@ function LastTouch({ person, chat }: { person: Person; chat?: CoffeeChat }) {
  * chat's stage changes right in the row; someone without a chat has a Start a chat link that opens the first message
  * on their page. Phones get one person per row instead of the table.
  */
+export interface Selection {
+  selected: Set<string>;
+  /** everyone the filter shows (not only this page of rows), for Select all */
+  all: string[];
+  onChange: (next: Set<string>) => void;
+}
+
+/** The sticky bar while people are selected: how many, write to them, clear. */
+export function SelectionBar({
+  count,
+  onWrite,
+  onClear,
+}: {
+  count: number;
+  onWrite: () => void;
+  onClear: () => void;
+}) {
+  return (
+    <div className="sticky bottom-4 z-20 mt-4 flex justify-center pointer-events-none">
+      <div
+        className="pointer-events-auto flex items-center gap-2 rounded-full border border-line bg-canvas/95 backdrop-blur pl-4 pr-1.5 py-1.5 shadow-[0_8px_30px_rgba(0,0,0,0.1)]"
+        data-testid="people-selection-bar"
+      >
+        <span className="text-[13.5px] font-medium tabular" data-testid="people-selected-count">
+          {count} selected
+        </span>
+        <Button size="sm" variant="ghost" onClick={onClear}>
+          Clear
+        </Button>
+        <Button size="sm" variant="primary" onClick={onWrite} data-testid="people-write-selected">
+          <Send size={13} aria-hidden /> Write to them
+        </Button>
+      </div>
+    </div>
+  );
+}
+
+function Check({
+  on,
+  onToggle,
+  label,
+  mixed,
+  testId,
+}: {
+  on: boolean;
+  onToggle: () => void;
+  label: string;
+  mixed?: boolean;
+  testId?: string;
+}) {
+  return (
+    <input
+      type="checkbox"
+      checked={on}
+      ref={(el) => {
+        if (el) el.indeterminate = !!mixed;
+      }}
+      onChange={onToggle}
+      onClick={(e) => e.stopPropagation()}
+      aria-label={label}
+      className="h-4 w-4 accent-[var(--color-accent)] cursor-pointer pointer-coarse:h-5 pointer-coarse:w-5"
+      data-testid={testId}
+    />
+  );
+}
+
 export function PeopleList({
   people,
   chatFor,
   nextFor,
   move,
+  selection,
 }: {
   people: Person[];
   chatFor: (personId: string) => CoffeeChat | undefined;
   nextFor: (chatId: string, personId: string) => Suggestion | undefined;
   move: (chat: CoffeeChat, to: ChatStage) => void;
+  /** Select mode (plan 38): a box on every row and one for everyone the filter shows */
+  selection?: Selection;
 }) {
   const nav = useNavigate();
+  const toggle = (id: string) => {
+    if (!selection) return;
+    const next = new Set(selection.selected);
+    if (next.has(id)) next.delete(id);
+    else next.add(id);
+    selection.onChange(next);
+  };
+  const allOn =
+    !!selection && selection.all.length > 0 && selection.all.every((id) => selection.selected.has(id));
+  const someOn = !!selection && !allOn && selection.selected.size > 0;
   return (
     <>
       {/* phones get a list: one person per row, nothing cut mid-word, nothing off to the side */}
@@ -52,8 +132,26 @@ export function PeopleList({
         {people.map((p) => {
           const c = chatFor(p.id);
           return (
-            <li key={p.id}>
-              <Link to={`/people/${p.id}`} className="flex items-start gap-3 p-3 hover:bg-canvas-2/60">
+            <li key={p.id} className={selection ? 'flex items-start gap-1 pl-3' : undefined}>
+              {selection && (
+                <span className="pt-4">
+                  <Check
+                    on={selection.selected.has(p.id)}
+                    onToggle={() => toggle(p.id)}
+                    label={`Select ${p.displayName}`}
+                  />
+                </span>
+              )}
+              <Link
+                to={`/people/${p.id}`}
+                className="flex flex-1 min-w-0 items-start gap-3 p-3 hover:bg-canvas-2/60"
+                onClick={(e) => {
+                  if (selection) {
+                    e.preventDefault();
+                    toggle(p.id);
+                  }
+                }}
+              >
                 <Avatar name={p.displayName} src={p.photoUrl} id={p.id} size={32} />
                 <span className="min-w-0 flex-1">
                   <span className="flex items-center gap-1.5 flex-wrap">
@@ -87,6 +185,17 @@ export function PeopleList({
         <table className="w-full text-[13.5px]" data-testid="people-table">
           <thead className="bg-canvas-2 text-ink-3 text-[12px] uppercase tracking-wide">
             <tr>
+              {selection && (
+                <th className="w-8 pl-3 pr-1 py-1.5">
+                  <Check
+                    on={allOn}
+                    mixed={someOn}
+                    onToggle={() => selection.onChange(allOn ? new Set() : new Set(selection.all))}
+                    label={allOn ? 'Select nobody' : `Select all ${selection.all.length}`}
+                    testId="people-select-all"
+                  />
+                </th>
+              )}
               {[
                 'Name',
                 'Title · Company',
@@ -113,9 +222,22 @@ export function PeopleList({
                   className="hover:bg-canvas-2/60 cursor-pointer"
                   data-testid="people-row"
                   onClick={(e) => {
-                    if (!(e.target as HTMLElement).closest('a,button,select')) nav(`/people/${p.id}`);
+                    if ((e.target as HTMLElement).closest('a,button,select,input')) return;
+                    if (selection) toggle(p.id);
+                    else nav(`/people/${p.id}`);
                   }}
+                  data-selected={selection?.selected.has(p.id) || undefined}
                 >
+                  {selection && (
+                    <td className="w-8 pl-3 pr-1">
+                      <Check
+                        on={selection.selected.has(p.id)}
+                        onToggle={() => toggle(p.id)}
+                        label={`Select ${p.displayName}`}
+                        testId="people-row-select"
+                      />
+                    </td>
+                  )}
                   <td className="px-2 h-12">
                     <Link
                       to={`/people/${p.id}`}

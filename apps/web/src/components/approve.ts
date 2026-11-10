@@ -4,6 +4,33 @@ import type { useToast } from '../ui';
 
 type Toaster = ReturnType<typeof useToast>;
 
+/**
+ * The next time a message the limits held back can go: the recipient's next working hours after the wait ends, or
+ * from tomorrow when the day's limit is used up.
+ */
+export async function laterTime(
+  user: User,
+  draft: OutboundMessage,
+  retryAt?: string,
+  now = new Date(),
+): Promise<Date | undefined> {
+  const [{ db }, { nextBatchOpen, seeded }, { personZone }] = await Promise.all([
+    import('../db/schema'),
+    import('../engine/batchTime'),
+    import('../engine/trust'),
+  ]);
+  const person = await db.people.get(draft.personId);
+  const zone = (person && personZone(person)) || user.timezone || 'America/New_York';
+  let from: Date;
+  if (retryAt) from = new Date(Math.max(Date.parse(retryAt), now.getTime()));
+  else {
+    from = new Date(now);
+    from.setDate(from.getDate() + 1);
+    from.setHours(0, 0, 0, 0);
+  }
+  return nextBatchOpen(from, zone, 'steady', seeded(draft.id.length * 13 + now.getUTCHours()));
+}
+
 /** Write to the clipboard; true only when the browser confirmed the write. */
 export async function copyText(text: string): Promise<boolean> {
   try {
@@ -74,7 +101,37 @@ export async function runApproval(
       : Promise.resolve(false);
   const r = await approveAndSend(user, draft.id, body, subject, new Date(), via ? { via } : {});
   const copied = await copying;
-  if (!r.ok) return r.error;
+  if (!r.ok) {
+    // plan 38 §D: a limit that only means "not today" or "not yet" offers the next time it can go
+    if ((r.code === 'daily_cap' || r.code === 'cooldown') && draft.channel === 'gmail' && !via) {
+      const at = await laterTime(user, draft, r.retryAt);
+      if (at) {
+        const when = at.toLocaleString('en-US', {
+          weekday: 'short',
+          hour: 'numeric',
+          minute: '2-digit',
+          timeZone: user.timezone || undefined,
+        });
+        toast.push({
+          text: r.error,
+          ttl: 15_000,
+          action: {
+            label: `Send ${when} instead`,
+            onClick: () => {
+              void approveAndSend(user, draft.id, body, subject, new Date(), { scheduleAt: at }).then((s) =>
+                toast.push(
+                  s.ok
+                    ? { text: `Scheduled for ${when}. It is under Drafts, Scheduled.`, tone: 'good' }
+                    : { text: s.error, tone: 'bad' },
+                ),
+              );
+            },
+          },
+        });
+      }
+    }
+    return r.error;
+  }
   if (r.status === 'handed_off') {
     const url = r.handoffUrl;
     if (openHandoff(url))

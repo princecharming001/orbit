@@ -1002,9 +1002,7 @@ export function PersonPage() {
                 count: tabsLoading ? undefined : neighbours.filter(Boolean).length,
               },
             ]}
-            trailing={
-              <PrepButton event={nextEvent ?? pastEvent} variant="round" className="max-sm:hidden" />
-            }
+            trailing={<PrepButton event={nextEvent ?? pastEvent} variant="round" className="max-sm:hidden" />}
           />
           {tab === 'timeline' && (
             <ol className="relative border-l border-line ml-3 space-y-4">

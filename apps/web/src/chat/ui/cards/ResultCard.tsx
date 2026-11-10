@@ -433,6 +433,19 @@ function DraftsCard({ env, actions }: { env: ResultEnvelope; actions: CardAction
           Skipped {skipped.map((s) => `${s.name} (${s.why})`).join(', ')}.
         </p>
       )}
+      {/* plan 38: several drafts at once go on to Send to many, where they are read once and spaced out */}
+      {made && drafts.filter((d) => !d.status || d.status === 'draft').length >= 2 && (
+        <Link
+          to={`/send?drafts=${drafts
+            .filter((d) => !d.status || d.status === 'draft')
+            .map((d) => d.id)
+            .join(',')}`}
+          className="mt-2 inline-flex items-center gap-1.5 h-8 px-3 rounded-[6px] bg-accent text-[#fdfcfc] text-[13px] font-medium hover:bg-accent-2"
+          data-testid="drafts-schedule-all"
+        >
+          Review and schedule all
+        </Link>
+      )}
       <NextSteps steps={steps} send={actions.send} />
     </GlassCard>
   );

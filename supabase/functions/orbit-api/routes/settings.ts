@@ -18,6 +18,8 @@
  *          autopilot plan step paces against (plan 29 §B4)
  *   The pause also sets autopilot_paused_until, so the send job holds what Orbit chose a time for.
  */
+
+import { parseFunnels } from '@orbit/core/email/funnel';
 import { cleanAnswer, cleanCurrentJob, OWN_WORDS_KEYS, type OwnWords } from '@orbit/core/ownWords';
 import {
   AUTO_KINDS,
@@ -209,6 +211,12 @@ async function profile(ctx: Ctx): Promise<Response> {
       throw badRequest(`autoKinds must be a list from ${AUTO_KINDS.join(', ')}`);
     autoKinds = [...new Set(b.autoKinds as string[])];
   }
+  // plan 38 §E, §G: replies answered without Autopilot mode, and each group's funnel
+  if (b.autoReplies !== undefined && typeof b.autoReplies !== 'boolean')
+    throw badRequest('autoReplies must be true or false');
+  const autoReplies = b.autoReplies as boolean | undefined;
+  const funnels = b.replyFunnels === undefined ? undefined : parseFunnels(b.replyFunnels);
+  if (funnels && 'error' in funnels) throw badRequest(funnels.error);
   let mode: AutopilotMode | undefined;
   if (b.autopilotMode !== undefined) {
     if (typeof b.autopilotMode !== 'string' || !AUTOPILOT_MODES.includes(b.autopilotMode as AutopilotMode))
@@ -247,6 +255,9 @@ async function profile(ctx: Ctx): Promise<Response> {
   // on is the default, so only "off" is stored
   if (tone !== undefined) given.read_reply_tone = tone ? null : false;
   if (autoKinds !== undefined) given.auto_kinds = autoKinds;
+  // off is the default, so only "on" is stored
+  if (autoReplies !== undefined) given.auto_replies = autoReplies ? true : null;
+  if (funnels !== undefined) given.reply_funnels = funnels.length ? funnels : null;
   if (mode !== undefined) given.autopilot_mode = mode;
   if (pausedUntil !== undefined) given.autopilot_paused_until = pausedUntil;
   if (capGmail !== undefined) given.daily_send_cap_gmail = capGmail;

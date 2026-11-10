@@ -7,6 +7,7 @@
  * header `x-orbit-connector: unconfigured` and body `{ error: { code: 'unconfigured', missing: string[] } }`.
  */
 
+import type { ReplyFunnel } from '../email/funnel';
 import type { ReplyClass } from '../email/replyClass';
 import type { WarmPath } from '../graph/route';
 import type { OwnWords } from '../ownWords';
@@ -553,6 +554,13 @@ export interface ProfileSettingsRequest {
    * users.settings.style_card; null removes it
    */
   styleCard?: StyleCard | null;
+  /**
+   * plan 38 §E: Orbit answers simple replies itself (offers times or books the call, says thanks, an interested reply
+   * without a question) in threads the student started, without Autopilot mode: users.settings.auto_replies
+   */
+  autoReplies?: boolean;
+  /** plan 38 §G: each group's funnel (what an interested reply gets, the follow-up's words): users.settings.reply_funnels */
+  replyFunnels?: ReplyFunnel[];
 }
 export interface ProfileSettingsResponse {
   postalAddress: string | null;

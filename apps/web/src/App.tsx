@@ -24,6 +24,7 @@ import {
   People,
   PersonPage,
   RemoveMePage,
+  SendManyPage,
   SettingsPage,
 } from './pages/lazyPages';
 import { onboardingPath } from './pages/onboardingPath';
@@ -118,6 +119,8 @@ export function App({ chatEngine }: { chatEngine?: ChatEngine }) {
                     {/* the nav calls this page Drafts: a typed or bookmarked /drafts lands there too */}
                     <Route path="/drafts" element={<Navigate to="/inbox" replace />} />
                     <Route path="/notes/new" element={<NotesNew />} />
+                    {/* plan 38: many people, one review, one press */}
+                    <Route path="/send" element={<SendManyPage />} />
                     <Route path="/settings" element={<SettingsPage />} />
                     <Route path="/settings/:section" element={<SettingsPage />} />
                   </Route>

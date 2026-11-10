@@ -10,6 +10,7 @@ import { RouteBadge } from '../components/map/RouteBadge';
 import { PersonRow } from '../components/PersonRow';
 import { TargetPlanCard } from '../components/TargetPlanCard';
 import { db } from '../db/schema';
+import { createBatch } from '../engine/batch';
 import { startWarmUpOrOutreach } from '../engine/brief';
 import {
   COMPANY_TEAM_LABELS,
@@ -276,6 +277,19 @@ function CompanyBody({
     () => people.filter((c) => (filter === 'all' ? true : filter === 'alumni' ? c.alum : c.team === filter)),
     [people, filter],
   );
+  const navTo = useNavigate();
+  // plan 38: everyone shown (a team chip narrows it) goes to Send to many in one press
+  const writeToAll = async () => {
+    if (!user) return;
+    const b = await createBatch(
+      user,
+      shown.map((c) => c.person.id),
+      {
+        name: `${filter === 'all' || filter === 'alumni' ? name : `${name} ${COMPANY_TEAM_LABELS[filter as CompanyTeam]}`}, ${new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}`,
+      },
+    );
+    navTo(`/send?batch=${b.id}`);
+  };
   const groups = useMemo(() => {
     const order = counts.map(([t]) => t);
     const by = new Map<CompanyTeam, CompanyPerson[]>();
@@ -340,6 +354,17 @@ function CompanyBody({
           ))}
           {alumni > 0 && (
             <TeamChip on={filter === 'alumni'} onClick={() => setFilter('alumni')} label="Alumni only" />
+          )}
+          {shown.length >= 2 && user && (
+            <Button
+              size="sm"
+              variant="secondary"
+              className="ml-auto pointer-coarse:min-h-11"
+              onClick={() => void writeToAll()}
+              data-testid="company-write-all"
+            >
+              Write to all {shown.length}
+            </Button>
           )}
         </div>
       )}

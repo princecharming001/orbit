@@ -3,6 +3,7 @@ import {
   ACTIVE_STAGES,
   CLOSED_STAGES,
   isKnownContact,
+  isRecruiter,
   normalizeCompany,
   STAGE_HELP,
   STAGE_LABELS,
@@ -10,11 +11,11 @@ import {
 import { useLiveQuery } from 'dexie-react-hooks';
 import { Check, ChevronDown, Search } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Link, useSearchParams } from 'react-router-dom';
+import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { AddPersonButton } from '../components/AddPerson';
 import { LinkedInImportButton } from '../components/LinkedInImport';
 import { CompaniesView } from '../components/people/CompaniesView';
-import { PeopleList } from '../components/people/PeopleList';
+import { PeopleList, SelectionBar } from '../components/people/PeopleList';
 import { BoardSkeleton, type ChatRow, PipelineBoard } from '../components/people/PipelineBoard';
 import { QUIET_DAYS, STAGE_COLOR, useNarrow, wentQuiet } from '../components/people/shared';
 import { useChatMove } from '../components/people/useChatMove';
@@ -23,6 +24,7 @@ import { RepliesChecked } from '../components/RepliesChecked';
 import { loadSchoolIndex } from '../data/schoolMatch';
 import { db } from '../db/schema';
 import { schoolLink } from '../engine/alumni';
+import { createBatch } from '../engine/batch';
 import { filterPeople, type PeopleSort } from '../engine/search';
 import { useSession } from '../state/session';
 import { Button, cx, EmptyState, Input, PageHeader, Select, Skeleton, SkeletonRows } from '../ui';
@@ -44,6 +46,7 @@ const VIEWS: { value: PeopleView; label: string }[] = [
  */
 export function People() {
   const { userId, user } = useSession();
+  const nav = useNavigate();
   // the school list, so "UC Berkeley" in a headline and the student's "University of California, Berkeley" match
   const [, setSchoolsReady] = useState(false);
   useEffect(() => {
@@ -159,9 +162,12 @@ export function People() {
           ? r.person.strength >= 0.6
           : filter === 'targets'
             ? isTarget(r.person)
-            : filter === 'quiet'
-              ? wentQuiet(r.chat)
-              : true,
+            : filter === 'recruiters'
+              ? r.person.relationshipType === 'recruiter' ||
+                isRecruiter(r.person.currentTitle ?? r.person.headline ?? undefined)
+              : filter === 'quiet'
+                ? wentQuiet(r.chat)
+                : true,
     )
     .sort((a, b) => b.chat.updatedAt.localeCompare(a.chat.updatedAt));
   const visibleChats = chats.filter((c) => byId.get(c.personId) && !byId.get(c.personId)!.hiddenAt);
@@ -197,6 +203,15 @@ export function People() {
     };
     return found.slice().sort((a, b) => rank(a) - rank(b));
   }, [people, known, chats, chatByPerson, q, filter, sort, showClosed, targetNames]);
+  // plan 38: pick many people and write to them all from Send to many
+  const [selecting, setSelecting] = useState(false);
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const writeToSelected = async () => {
+    if (!user || !selected.size) return;
+    const ids = list.map((p) => p.id).filter((id) => selected.has(id));
+    const b = await createBatch(user, ids);
+    nav(`/send?batch=${b.id}`);
+  };
   const updateParams = (change: (p: URLSearchParams) => void) => {
     const next = new URLSearchParams(latestParams.current);
     change(next);
@@ -233,7 +248,23 @@ export function People() {
       <PageHeader
         title="People"
         subtitle={loading ? <Skeleton className="h-3 w-40 mt-1" /> : subtitle}
-        actions={<AddPersonButton />}
+        actions={
+          <>
+            {view === 'list' && total > 0 && (
+              <Button
+                variant={selecting ? 'subtle' : 'secondary'}
+                onClick={() => {
+                  setSelecting((v) => !v);
+                  setSelected(new Set());
+                }}
+                data-testid="people-select"
+              >
+                {selecting ? 'Done' : 'Select'}
+              </Button>
+            )}
+            <AddPersonButton />
+          </>
+        }
       />
       <div className="flex flex-wrap items-center gap-x-4 gap-y-2 mb-5">
         <div
@@ -315,6 +346,7 @@ export function People() {
             <option value="strong">Close ties</option>
             <option value="chats">With a chat</option>
             <option value="targets">At target companies</option>
+            <option value="recruiters">Recruiters</option>
             <option
               value="quiet"
               data-testid="filter-quiet"
@@ -412,7 +444,23 @@ export function People() {
               chatFor={(id) => chatByPerson.get(id)}
               nextFor={nextFor}
               move={move}
+              selection={
+                selecting
+                  ? {
+                      selected,
+                      all: list.map((p) => p.id),
+                      onChange: setSelected,
+                    }
+                  : undefined
+              }
             />
+            {selecting && selected.size > 0 && (
+              <SelectionBar
+                count={selected.size}
+                onClear={() => setSelected(new Set())}
+                onWrite={() => void writeToSelected()}
+              />
+            )}
             {list.length > limit && (
               <div className="mt-3 flex flex-wrap items-center gap-3">
                 <Button onClick={() => setLimit((n) => n + PAGE)} data-testid="people-show-more">

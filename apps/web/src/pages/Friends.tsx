@@ -20,6 +20,7 @@ import { AskIntroBox } from '../components/friends/AskIntroBox';
 import { MyAskRow, ReceivedAskRow } from '../components/friends/AskRow';
 import {
   FriendSearch,
+  GhostTiles,
   GRID,
   InviteTile,
   SuggestionTile,
@@ -418,11 +419,7 @@ export function FriendsPage() {
             count={onOrbit.length}
             loading={!suggested}
             testId="friends-on-orbit"
-            empty={
-              <p className="text-[13.5px] text-ink-2 max-w-[62ch]" data-testid="friends-on-orbit-empty">
-                Nobody you know is on Orbit yet. Invite the people below, or share your link in a group chat.
-              </p>
-            }
+            empty={<GhostTiles label="Friends who join show up here" testId="friends-on-orbit-empty" />}
           >
             {(limit) =>
               onOrbit
@@ -443,11 +440,7 @@ export function FriendsPage() {
             count={toInvite.length}
             loading={!suggested}
             testId="friends-to-invite"
-            empty={
-              <p className="text-[13.5px] text-ink-2 max-w-[62ch]">
-                Everyone you know well with an address is on Orbit or invited already.
-              </p>
-            }
+            empty={<GhostTiles label="Everyone you know well is invited" />}
           >
             {(limit) =>
               toInvite

@@ -13,6 +13,8 @@
  * Then the plan step (plan 29 §B4, `autopilot/plan.ts`): for the goals on autopilot, the next morning's first
  * messages, queued behind the evening review, and the batch card at 18:00.
  */
+
+import { fillFunnelText, funnelFor, type ReplyFunnel } from '@orbit/core/email/funnel';
 import type {
   CadenceAction,
   CadenceDraft,
@@ -270,6 +272,24 @@ export async function cadenceLadder(
 ): Promise<'approved' | 'capped' | 'none'> {
   const db = s.db;
   const now = s.now();
+  // plan 38 §G: a follow-up to someone in a group with its own follow-up words says those words
+  if (a.draftKind === 'bump') {
+    const f = funnelFor(st.settings?.reply_funnels as ReplyFunnel[] | undefined, a.personId);
+    if (f?.followUp) {
+      const [who] = await db.sql<{ first_name: string | null; org: string | null; full_name: string | null }>`
+        select p.first_name, p.org_raw as org, u.full_name
+          from orbit.people p join orbit.users u on u.id = p.user_id where p.id = ${a.personId}::uuid`;
+      const words = fillFunnelText(f.followUp, {
+        first: who?.first_name,
+        company: who?.org,
+        link: typeof st.settings?.scheduling_link === 'string' ? st.settings.scheduling_link : undefined,
+        signOff: (who?.full_name ?? '').split(/\s+/)[0] || undefined,
+      });
+      const [kept] = await db.sql<DraftRow>`
+        update orbit.drafts set body = ${words} where id = ${draft.id}::uuid and status = 'draft' returning *`;
+      if (kept) draft = kept;
+    }
+  }
   // the ladder (plan 23 §4.9, plan 29 §B2.1): a kind the student handed to Orbit is approved for the recipient's
   // next window on its own, under the browser's conditions; the send job checks it all again at send time
   const goal = a.goalId ? st.goalsById.get(a.goalId) : undefined;

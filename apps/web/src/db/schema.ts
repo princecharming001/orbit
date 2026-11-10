@@ -324,6 +324,23 @@ Dexie.on('storagemutated', (parts) => {
   }
 });
 
+/** Plan 38: one Send to many batch, as the student scheduled it. */
+export interface BatchRow {
+  id: string;
+  userId: string;
+  name: string;
+  createdAt: string;
+  /** the people asked for, in the order shown */
+  personIds: string[];
+  /** the drafts written for them (outbound ids), filled in as they are written */
+  draftIds: string[];
+  pace: 'steady' | 'faster' | 'gentle';
+  /** when it was scheduled; unset while the student is still reviewing */
+  scheduledAt?: string;
+  /** the student's own words, when they wrote one message for everyone */
+  template?: { subject: string; body: string };
+}
+
 export class OrbitDB extends Dexie {
   users!: EntityTable<User, 'id'>;
   settings!: EntityTable<UserSettings, 'userId'>;
@@ -378,6 +395,7 @@ export class OrbitDB extends Dexie {
   searchCache!: EntityTable<SearchCacheRow, 'key'>;
   facetAssertions!: EntityTable<FacetRow, 'id'>;
   profileReads!: EntityTable<ProfileReadRow, 'personId'>;
+  batches!: EntityTable<BatchRow, 'id'>;
 
   constructor(name = 'orbit') {
     super(name);
@@ -542,6 +560,11 @@ export class OrbitDB extends Dexie {
     // `attachments` (not indexed)
     this.version(16).stores({
       files: 'id, userId, kind, createdAt',
+    });
+    // plan 38: Send to many. A batch is the people and drafts the student scheduled together, so the queue can show
+    // its progress and cancel the rest; the messages themselves stay in outbound
+    this.version(17).stores({
+      batches: 'id, userId, createdAt',
     });
   }
 }

@@ -175,6 +175,42 @@ export function TileSection({
   );
 }
 
+/**
+ * An empty grid, shown as the grid it will become: faded cards that breathe one after another, with a quiet line on
+ * the first. No paragraph of advice.
+ */
+export function GhostTiles({ label, testId }: { label: string; testId?: string }) {
+  // one row at every width: as many ghosts as the grid has columns, fading off to the right
+  const shown = ['', '', 'hidden @2xl:flex', 'hidden @4xl:flex', 'hidden @6xl:flex'];
+  return (
+    <div className="relative [mask-image:linear-gradient(90deg,#000_55%,transparent)]" data-testid={testId}>
+      <ul className={GRID} aria-hidden>
+        {shown.map((when, i) => (
+          <li
+            key={i}
+            className={cx(
+              'ghost-tile min-w-0 flex flex-col rounded-[12px] border border-dashed border-line p-2',
+              when,
+            )}
+            style={{ animationDelay: `${i * 220}ms` }}
+          >
+            <div className="w-full aspect-square rounded-[8px] bg-[linear-gradient(180deg,#f4f3f0,#eeece8)] flex items-end justify-center overflow-hidden">
+              <UserRound className="w-1/2 h-1/2 translate-y-[10%] text-[#e2ded8]" strokeWidth={1} />
+            </div>
+            <div className="mt-2.5 h-2.5 w-2/3 rounded-full bg-[#efedea]" />
+            <div className="mt-1.5 h-2 w-1/2 rounded-full bg-[#f3f2ef]" />
+            <div className="mt-3 h-8 rounded-[6px] border border-dashed border-line-2" />
+          </li>
+        ))}
+      </ul>
+      <p className="sr-only">{label}</p>
+      <span className="pointer-events-none absolute left-[28%] top-[38%] -translate-x-1/2 -translate-y-1/2 whitespace-nowrap rounded-full bg-canvas/90 px-3 py-1 text-[12.5px] text-ink-3 shadow-[0_1px_6px_rgba(0,0,0,0.05)]">
+        {label}
+      </span>
+    </div>
+  );
+}
+
 export const GRID = 'grid grid-cols-2 @2xl:grid-cols-3 @4xl:grid-cols-4 @6xl:grid-cols-5 gap-3';
 
 /** The state a tile's button shows: what the server said, or what the student just did here. */

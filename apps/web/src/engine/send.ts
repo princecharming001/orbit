@@ -79,10 +79,13 @@ const ANSWERED_STAGES: CoffeeChat['stage'][] = [
 const ANSWER_STAGES: CoffeeChat['stage'][] = ANSWERED_STAGES.filter((st) => st !== 'followed_up');
 const INACTIVE_STAGES: CoffeeChat['stage'][] = ['declined', 'no_response', 'archived'];
 /** Statuses that count as "already written" for caps and cooldowns; a hand-off counts from the moment it opened. */
-const COMMITTED: OutboundStatus[] = ['sent', 'queued', 'sending', 'handed_off'];
+const COMMITTED: OutboundStatus[] = ['sent', 'queued', 'sending', 'handed_off', 'approved'];
 
+/** When a committed message counts: when it went, or the time it is planned for (an account's held email included). */
 function committedAt(o: OutboundMessage): string | undefined {
-  return o.status === 'sent' ? o.sentAt : o.queuedAt;
+  if (o.status === 'sent') return o.sentAt;
+  if (o.status === 'approved') return o.sendAt;
+  return o.queuedAt ?? o.sendAt;
 }
 
 /** "just now", "20 minutes ago", "5 hours ago", "2 days ago" for the cooldown message (never "0 hours ago"). */
@@ -129,6 +132,17 @@ async function declineWindowPassed(chat: CoffeeChat, now: Date): Promise<boolean
   return !chat.lastOutboundAt || new Date(chat.lastOutboundAt) < saidAt;
 }
 
+/**
+ * Whether a message may go at `now`. A refusal that only means "not today" (`daily_cap`) or "not yet" (`cooldown`,
+ * with `retryAt`) carries a code, so the caller can offer the next time it can go instead of a no.
+ */
+export interface SendAllowed {
+  allowed: boolean;
+  reason?: string;
+  code?: 'daily_cap' | 'cooldown';
+  retryAt?: string;
+}
+
 export async function checkSendAllowed(
   userId: string,
   personId: string,
@@ -136,12 +150,15 @@ export async function checkSendAllowed(
   kind: OutboundMessage['kind'],
   now = new Date(),
   opts: { chatId?: string; excludeMessageId?: string; goalId?: string } = {},
-): Promise<{ allowed: boolean; reason?: string }> {
+): Promise<SendAllowed> {
   const settings = await db.settings.get(userId);
   const person = await db.people.get(personId);
   if (!person || person.hiddenAt) return { allowed: false, reason: 'This person is hidden.' };
+  // the day the message goes, in the student's own time: a send planned for Thursday counts against Thursday alone
   const dayStart = new Date(now);
   dayStart.setHours(0, 0, 0, 0);
+  const dayEnd = new Date(dayStart);
+  dayEnd.setDate(dayEnd.getDate() + 1);
   // a sales goal's first touches by email have their own, larger day (the cap table, plan 29 §B2.1)
   const salesFirstTouch =
     channel === 'gmail' &&
@@ -162,7 +179,7 @@ export async function checkSendAllowed(
       const at = committedAt(o);
       if (o.id === opts.excludeMessageId || !COMMITTED.includes(o.status) || o.channel !== channel || !at)
         return false;
-      if (new Date(at) < dayStart) return false;
+      if (new Date(at) < dayStart || new Date(at) >= dayEnd) return false;
       return salesGoalIds ? FIRST_TOUCH_KINDS.has(o.kind) && !!o.goalId && salesGoalIds.has(o.goalId) : true;
     })
     .count();
@@ -175,6 +192,7 @@ export async function checkSendAllowed(
   if (sentToday >= cap)
     return {
       allowed: false,
+      code: 'daily_cap',
       reason: salesGoalIds
         ? `Daily limit reached: ${cap} first sales emails today. It resets at midnight.`
         : `Daily limit reached: ${cap} ${channel === 'linkedin' ? 'LinkedIn messages' : 'emails'} today. It resets at midnight.`,
@@ -208,6 +226,8 @@ export async function checkSendAllowed(
       if (!answered)
         return {
           allowed: false,
+          code: 'cooldown',
+          retryAt: new Date(lastAt.getTime() + cooldownHours * HOUR).toISOString(),
           reason: `You wrote to ${person.firstName} ${timeAgo(now.getTime() - lastAt.getTime())} and they have not replied yet. Orbit waits ${cooldownHours} hours before another unanswered message to the same person.`,
         };
     }
@@ -504,7 +524,8 @@ export type ApproveResult =
   | { ok: true; status: 'scheduled'; sendAt: string }
   | { ok: true; status: 'sent' }
   | { ok: true; status: 'handed_off'; handoffUrl: string; via: HandoffVia; threaded: boolean }
-  | { ok: false; error: string; issues?: DraftIssue[] };
+  /** `code`: a limit that only means not now (the day's limit, the wait after an unanswered message) */
+  | { ok: false; error: string; issues?: DraftIssue[]; code?: SendAllowed['code']; retryAt?: string };
 
 /**
  * True when approved email goes out through the Gmail API: Google is connected and the student granted the send
@@ -710,7 +731,13 @@ export async function approveAndSend(
       goalId: msg.goalId,
     },
   );
-  if (!allowed.allowed) return { ok: false, error: allowed.reason ?? 'Not allowed' };
+  if (!allowed.allowed)
+    return {
+      ok: false,
+      error: allowed.reason ?? 'Not allowed',
+      ...(allowed.code ? { code: allowed.code } : {}),
+      ...(allowed.retryAt ? { retryAt: allowed.retryAt } : {}),
+    };
   // plan 23 §4.3: an intro ask carries the note the introducer can forward, checked as hard as anything Orbit writes
   const note = msg.kind === 'intro_request' ? msg.forwardNote?.trim() || undefined : undefined;
   if (note) {
@@ -1132,7 +1159,9 @@ export async function sendDueQueued(
           }
         }
         // missed while Orbit was closed, or too soon after the last one: the next slot, never a burst
-        const tooSoon = !!lastAuto && now.getTime() - lastAuto.getTime() < AUTOPILOT_GAP_MIN.min * 60_000;
+        // (only what Orbit approved itself keeps autopilot's gap; a batch the student planned keeps its own spacing)
+        const tooSoon =
+          !!o.autoSent && !!lastAuto && now.getTime() - lastAuto.getTime() < AUTOPILOT_GAP_MIN.min * 60_000;
         if (late > STALE_QUEUE_MS || tooSoon) {
           // each one moved goes a gap after the one before it, in the recipient's window
           const person = await db.people.get(o.personId);
@@ -1156,10 +1185,15 @@ export async function sendDueQueued(
             sendAt: undefined,
             queuedAt: undefined,
             autopilot: undefined,
-            error: `Autopilot held this back: ${still.reason ?? 'it is not a good time to send it'}`,
+            error: `${o.autoSent ? 'Autopilot held this back' : 'Held back at its time'}: ${still.reason ?? 'it is not a good time to send it'}`,
           });
           if (m) {
-            await notify(user.id, 'system', 'Autopilot held a message back', m.error ?? '');
+            await notify(
+              user.id,
+              'system',
+              o.autoSent ? 'Autopilot held a message back' : 'A scheduled message was held back',
+              m.error ?? '',
+            );
             out.push({ id: o.id, ok: false, error: m.error });
           }
           continue;

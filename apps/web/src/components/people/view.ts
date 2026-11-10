@@ -9,7 +9,16 @@ export type { PeopleFilter };
 export type PeopleView = 'board' | 'list' | 'companies';
 
 const VIEWS: PeopleView[] = ['board', 'list', 'companies'];
-const FILTERS: PeopleFilter[] = ['all', 'alumni', 'strong', 'chats', 'targets', 'quiet', 'hidden'];
+const FILTERS: PeopleFilter[] = [
+  'all',
+  'alumni',
+  'strong',
+  'chats',
+  'targets',
+  'recruiters',
+  'quiet',
+  'hidden',
+];
 
 /** The view a People address asks for; the board when it names none (or an unknown one). */
 export function peopleViewOf(params: URLSearchParams): PeopleView {

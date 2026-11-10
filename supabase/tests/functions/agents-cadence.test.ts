@@ -341,3 +341,35 @@ describe('MIME (§8.5)', () => {
     expect(raw).toContain('X-Orbit-Draft-Id: d1');
   });
 });
+
+describe("plan 38 §G: a group's follow-up words", () => {
+  it('a bump to someone in a group with its own follow-up says those words, filled in', async () => {
+    const net = fakeNet();
+    const s = makeServices(agentConfig(net, {}), { db: t.db, now: () => NOW });
+    const { userId } = await signedInUser(t);
+    const p = await addPerson(t, userId, { name: 'Gina Group', email: 'gina@example.com', org: 'Figma' });
+    await t.db.sql`
+      update orbit.users set settings = settings || ${{
+        reply_funnels: [
+          {
+            id: 'g1',
+            name: 'Recruiters',
+            personIds: [p],
+            interested: 'slots',
+            followUp:
+              'Hi {first}, floating this back up in case it got buried. Is {company} still hiring for spring?',
+            createdAt: '2026-10-01T00:00:00.000Z',
+          },
+        ],
+      }}::jsonb where id = ${userId}::uuid`;
+    await addThread(t, userId, p, [{ direction: 'out', at: ago(12 * DAY), body: 'Hi Gina, could we talk?' }]);
+    await outreachChat(userId, p, 12);
+    expect((await runCadence(s, userId)).drafted).toBe(1);
+    const [d] = await t.db.sql<{ kind: string; body: string }>`
+      select kind, body from orbit.drafts where user_id = ${userId}::uuid`;
+    expect(d!.kind).toBe('bump');
+    expect(d!.body).toContain(
+      'Hi Gina, floating this back up in case it got buried. Is Figma still hiring for spring?',
+    );
+  });
+});

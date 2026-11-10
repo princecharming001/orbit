@@ -6212,6 +6212,36 @@ async function tripBreaker(db2, userId, p) {
   return { tripped: true, text: text3 };
 }
 
+// packages/core/src/email/funnel.ts
+var FUNNEL_LIMITS = { funnels: 30, people: 500, text: 4e3 };
+function parseFunnels(v) {
+  if (!Array.isArray(v)) return { error: "replyFunnels must be a list" };
+  if (v.length > FUNNEL_LIMITS.funnels) return { error: `at most ${FUNNEL_LIMITS.funnels} groups` };
+  const out = [];
+  for (const x of v) {
+    if (!x || typeof x !== "object") return { error: "a group must be an object" };
+    const r = x;
+    if (typeof r.id !== "string" || !r.id || r.id.length > 80) return { error: "a group needs an id" };
+    if (typeof r.name !== "string" || r.name.length > 160) return { error: "a group needs a name" };
+    if (!Array.isArray(r.personIds) || r.personIds.length > FUNNEL_LIMITS.people)
+      return { error: `a group holds at most ${FUNNEL_LIMITS.people} people` };
+    const ids = r.personIds.filter((p) => typeof p === "string" && /^[0-9a-f-]{36}$/i.test(p));
+    if (!["slots", "link", "own"].includes(r.interested))
+      return { error: "interested is slots, link or own" };
+    const text3 = (t) => typeof t === "string" && t.trim() ? t.slice(0, FUNNEL_LIMITS.text) : void 0;
+    out.push({
+      id: r.id,
+      name: r.name,
+      personIds: [...new Set(ids.map((i) => i.toLowerCase()))],
+      interested: r.interested,
+      reply: text3(r.reply),
+      followUp: text3(r.followUp),
+      createdAt: typeof r.createdAt === "string" ? r.createdAt : (/* @__PURE__ */ new Date(0)).toISOString()
+    });
+  }
+  return out;
+}
+
 // packages/core/src/knowledge/index.ts
 var ASK_RULES = {
   bank: 'A banker is asked about their group and path: how they chose it, what the first year looks like, what separates the summer analysts who do well. Never about staffing or an office (consulting words), never whether the group still has seats, never off-cycle or diversity programs. When the summer cycle is already late, ask how they would approach recruiting from here, never "before recruiting starts".',
@@ -21004,6 +21034,11 @@ async function profile(ctx) {
       throw badRequest(`autoKinds must be a list from ${AUTO_KINDS.join(", ")}`);
     autoKinds = [...new Set(b.autoKinds)];
   }
+  if (b.autoReplies !== void 0 && typeof b.autoReplies !== "boolean")
+    throw badRequest("autoReplies must be true or false");
+  const autoReplies = b.autoReplies;
+  const funnels = b.replyFunnels === void 0 ? void 0 : parseFunnels(b.replyFunnels);
+  if (funnels && "error" in funnels) throw badRequest(funnels.error);
   let mode2;
   if (b.autopilotMode !== void 0) {
     if (typeof b.autopilotMode !== "string" || !AUTOPILOT_MODES.includes(b.autopilotMode))
@@ -21039,6 +21074,8 @@ async function profile(ctx) {
   if (about !== void 0) given.about = about;
   if (tone !== void 0) given.read_reply_tone = tone ? null : false;
   if (autoKinds !== void 0) given.auto_kinds = autoKinds;
+  if (autoReplies !== void 0) given.auto_replies = autoReplies ? true : null;
+  if (funnels !== void 0) given.reply_funnels = funnels.length ? funnels : null;
   if (mode2 !== void 0) given.autopilot_mode = mode2;
   if (pausedUntil !== void 0) given.autopilot_paused_until = pausedUntil;
   if (capGmail !== void 0) given.daily_send_cap_gmail = capGmail;

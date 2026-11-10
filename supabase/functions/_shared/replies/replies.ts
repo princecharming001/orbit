@@ -6,9 +6,11 @@
  * drafts the classes that get a draft, and at autonomy level 2 approves for sending only what `autonomyAllows` says
  * may go on its own. `answerReply` takes the student's one line for a question and drafts the reply around it.
  */
+
+import { funnelFor, funnelReply, type ReplyFunnel } from '@orbit/core/email/funnel';
 import { holdsQuestion, REPLY_NEXT_ACTION } from '@orbit/core/email/nextAction';
 import type { ReplyClass } from '@orbit/core/email/replyClass';
-import { autonomyAllows, messageHash } from '@orbit/core/safety/rules';
+import { AUTO_SEND_MIN_SCORE, autonomyAllows, messageHash } from '@orbit/core/safety/rules';
 import type { ReplyItem } from '@orbit/core/server/api';
 import { stripQuotedReply } from '@orbit/core/text/email';
 import type { ClaudeResult } from '../claude.ts';
@@ -181,8 +183,14 @@ export async function draftsOnItsOwn(
   userId: string,
   m: { id: string; thread_id: string; sent_at: Date | string; from_person_id: string | null },
 ): Promise<{ theirOutreach: boolean; autopilot: boolean }> {
-  const [r] = await db.sql<{ wrote: boolean; level: number | null; goal_level: number | null }>`
-    select exists (
+  const [r] = await db.sql<{
+    wrote: boolean;
+    level: number | null;
+    goal_level: number | null;
+    settings: Record<string, unknown> | null;
+  }>`
+    select (select settings from orbit.users where id = ${userId}::uuid) as settings,
+           exists (
              select 1 from orbit.messages o
               where o.thread_id = ${m.thread_id}::uuid and o.user_id = ${userId}::uuid and o.direction = 'out'
                 and o.sent_at < ${new Date(m.sent_at)}::timestamptz) as wrote,
@@ -191,7 +199,12 @@ export async function draftsOnItsOwn(
              where d.user_id = ${userId}::uuid and d.person_id = ${m.from_person_id}::uuid and d.status = 'sent'
              order by d.sent_at desc nulls last limit 1)::int as goal_level`;
   const level = Math.max(num(r?.level), num(r?.goal_level));
-  return { theirOutreach: !!r?.wrote, autopilot: level >= 1 };
+  // plan 38: replies answered on their own, or the person is in a group with its own funnel, draft as autopilot does
+  const repliesOn = r?.settings?.auto_replies === true;
+  const inFunnel =
+    !!m.from_person_id &&
+    !!funnelFor(r?.settings?.reply_funnels as ReplyFunnel[] | undefined, m.from_person_id);
+  return { theirOutreach: !!r?.wrote, autopilot: level >= 1 || repliesOn || inFunnel };
 }
 
 /** Classes that get a draft answer without being asked: the class table's rows with `drafts` (plan 29 §B2.3). */
@@ -390,6 +403,29 @@ export async function approveIfAllowed(
   const [today] = await db.sql<{ n: number }>`
     select count(*)::int as n from orbit.audit_log
      where user_id = ${userId}::uuid and action = 'draft.auto_approve' and created_at >= ${dayStart}::timestamptz`;
+  // plan 38 §G: an interested reply from someone in a group gets that group's words (the booking link, or the
+  // student's own), not three times
+  const funnel = funnelFor(u!.settings?.reply_funnels as ReplyFunnel[] | undefined, draft.person_id);
+  if (cls === 'interested' && funnel) {
+    const [who] = await db.sql<{ first_name: string | null; org: string | null }>`
+      select first_name, org_raw as org from orbit.people where id = ${draft.person_id}::uuid`;
+    const words = funnelReply(funnel, {
+      first: who?.first_name,
+      company: who?.org,
+      link: typeof u!.settings?.scheduling_link === 'string' ? u!.settings.scheduling_link : undefined,
+      signOff: (u!.full_name ?? '').split(/\s+/)[0] || undefined,
+    });
+    if (words && words !== draft.body) {
+      const [kept] = await db.sql<DraftRow>`
+        update orbit.drafts set body = ${words}, ask = coalesce(ask, '{}'::jsonb) - 'slots'
+         where id = ${draft.id}::uuid and status = 'draft' returning *`;
+      if (kept) draft = kept;
+    }
+  }
+  // plan 38 §E: "Answer simple replies for me" lets a reply go at level 2 without Autopilot mode, and a cold
+  // recipient's score does not hold back an answer in a thread the student started (inThread and both sides still
+  // must hold)
+  const repliesOn = u!.settings?.auto_replies === true;
   const meta = (draft.ask ?? {}) as DraftMeta;
   const history = await historyWith(db, userId, draft.person_id);
   const level = (n: number | null | undefined) => (n === 0 || n === 1 || n === 2 ? n : undefined);
@@ -421,12 +457,12 @@ export async function approveIfAllowed(
         typeof u!.settings?.scheduling_link === 'string' ? u!.settings.scheduling_link : undefined,
       offeredSlots: [...(meta.slots ?? []), ...(extra.offeredSlots ?? [])],
       timeZone: userTz,
-      userAutonomy: level(u!.autonomy_level) ?? 0,
-      goalAutonomy: level(g?.autonomy_level),
+      userAutonomy: repliesOn ? 2 : (level(u!.autonomy_level) ?? 0),
+      goalAutonomy: repliesOn ? undefined : level(g?.autonomy_level),
       replyClass: cls,
       replyHoldsQuestion: holdsQuestion(replyTo?.body_text ?? replyTo?.snippet ?? ''),
       inThread: !!draft.thread_external_id,
-      recipientScore: p?.score ?? 0,
+      recipientScore: repliesOn ? Math.max(p?.score ?? 0, AUTO_SEND_MIN_SCORE) : (p?.score ?? 0),
       validatorOk: !!draft.validator?.ok,
       autoSentToday: today?.n ?? 0,
       recipientTimeZone: validZone(p?.timezone) ?? userTz,

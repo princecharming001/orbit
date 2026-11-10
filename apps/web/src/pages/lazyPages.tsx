@@ -20,6 +20,7 @@ const load = {
   CompanyPage: () => import('./Company').then((m) => ({ default: m.CompanyPage })),
   FriendsPage: () => import('./Friends').then((m) => ({ default: m.FriendsPage })),
   NotesNew: () => import('./NotesNew').then((m) => ({ default: m.NotesNew })),
+  SendManyPage: () => import('./SendMany').then((m) => ({ default: m.SendManyPage })),
 };
 export const Landing = lazy(load.Landing);
 export const LogInPage = lazy(load.LogInPage);
@@ -34,6 +35,7 @@ export const ChatsPage = lazy(load.ChatsPage);
 export const Discover = lazy(load.Discover);
 export const CompanyPage = lazy(load.CompanyPage);
 export const FriendsPage = lazy(load.FriendsPage);
+export const SendManyPage = lazy(load.SendManyPage);
 export const NotesNew = lazy(load.NotesNew);
 
 let preloaded = false;

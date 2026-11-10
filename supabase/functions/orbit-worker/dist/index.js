@@ -17752,6 +17752,35 @@ async function pushbackOnAutoFirst(db2, userId, m, now) {
   return r.tripped;
 }
 
+// packages/core/src/email/funnel.ts
+var LINK_REPLY = "Hi {first},\n\nThanks so much for getting back to me. Here is my calendar, pick any time that works for you:\n\n{link}\n\nLooking forward to it.";
+function funnelFor(funnels, personId) {
+  if (!funnels?.length) return void 0;
+  let best;
+  for (const f of funnels)
+    if (f.personIds.includes(personId) && (!best || f.createdAt > best.createdAt)) best = f;
+  return best;
+}
+function fillFunnelText(text3, v) {
+  const out = text3.replace(/\{\{?\s*(first|company|link)\s*\}?\}/gi, (_w, name) => {
+    const key2 = name.toLowerCase();
+    return v[key2]?.trim() || (key2 === "first" ? "there" : "");
+  }).replace(/[ \t]+([,.!?])/g, "$1").replace(/[ \t]{2,}/g, " ").trim();
+  const sign = v.signOff?.trim();
+  return sign && !out.toLowerCase().endsWith(sign.toLowerCase()) ? `${out}
+
+Best,
+${sign}` : out;
+}
+function funnelReply(f, v) {
+  if (!f || f.interested === "slots") return void 0;
+  if (f.interested === "link") {
+    if (!v.link) return void 0;
+    return fillFunnelText(f.reply?.trim() || LINK_REPLY, v);
+  }
+  return f.reply?.trim() ? fillFunnelText(f.reply, v) : void 0;
+}
+
 // supabase/functions/_shared/replies/replies.ts
 var needsYouKey = (messageId) => `needs_you:${messageId}`;
 function questionOf(extraction, text3) {
@@ -17778,7 +17807,8 @@ function replyRequest(m, userId, actor) {
 }
 async function draftsOnItsOwn(db2, userId, m) {
   const [r] = await db2.sql`
-    select exists (
+    select (select settings from orbit.users where id = ${userId}::uuid) as settings,
+           exists (
              select 1 from orbit.messages o
               where o.thread_id = ${m.thread_id}::uuid and o.user_id = ${userId}::uuid and o.direction = 'out'
                 and o.sent_at < ${new Date(m.sent_at)}::timestamptz) as wrote,
@@ -17787,7 +17817,9 @@ async function draftsOnItsOwn(db2, userId, m) {
              where d.user_id = ${userId}::uuid and d.person_id = ${m.from_person_id}::uuid and d.status = 'sent'
              order by d.sent_at desc nulls last limit 1)::int as goal_level`;
   const level = Math.max(num2(r?.level), num2(r?.goal_level));
-  return { theirOutreach: !!r?.wrote, autopilot: level >= 1 };
+  const repliesOn = r?.settings?.auto_replies === true;
+  const inFunnel = !!m.from_person_id && !!funnelFor(r?.settings?.reply_funnels, m.from_person_id);
+  return { theirOutreach: !!r?.wrote, autopilot: level >= 1 || repliesOn || inFunnel };
 }
 var DRAFT_CLASSES = new Set(
   Object.keys(REPLY_NEXT_ACTION).filter((c) => REPLY_NEXT_ACTION[c].drafts)
@@ -17896,6 +17928,24 @@ async function approveIfAllowed(s, userId, draft, cls, now, extra = {}) {
   const [today] = await db2.sql`
     select count(*)::int as n from orbit.audit_log
      where user_id = ${userId}::uuid and action = 'draft.auto_approve' and created_at >= ${dayStart2}::timestamptz`;
+  const funnel = funnelFor(u2.settings?.reply_funnels, draft.person_id);
+  if (cls === "interested" && funnel) {
+    const [who] = await db2.sql`
+      select first_name, org_raw as org from orbit.people where id = ${draft.person_id}::uuid`;
+    const words6 = funnelReply(funnel, {
+      first: who?.first_name,
+      company: who?.org,
+      link: typeof u2.settings?.scheduling_link === "string" ? u2.settings.scheduling_link : void 0,
+      signOff: (u2.full_name ?? "").split(/\s+/)[0] || void 0
+    });
+    if (words6 && words6 !== draft.body) {
+      const [kept] = await db2.sql`
+        update orbit.drafts set body = ${words6}, ask = coalesce(ask, '{}'::jsonb) - 'slots'
+         where id = ${draft.id}::uuid and status = 'draft' returning *`;
+      if (kept) draft = kept;
+    }
+  }
+  const repliesOn = u2.settings?.auto_replies === true;
   const meta2 = draft.ask ?? {};
   const history = await historyWith(db2, userId, draft.person_id);
   const level = (n) => n === 0 || n === 1 || n === 2 ? n : void 0;
@@ -17922,12 +17972,12 @@ async function approveIfAllowed(s, userId, draft, cls, now, extra = {}) {
       schedulingLink: typeof u2.settings?.scheduling_link === "string" ? u2.settings.scheduling_link : void 0,
       offeredSlots: [...meta2.slots ?? [], ...extra.offeredSlots ?? []],
       timeZone: userTz,
-      userAutonomy: level(u2.autonomy_level) ?? 0,
-      goalAutonomy: level(g?.autonomy_level),
+      userAutonomy: repliesOn ? 2 : level(u2.autonomy_level) ?? 0,
+      goalAutonomy: repliesOn ? void 0 : level(g?.autonomy_level),
       replyClass: cls,
       replyHoldsQuestion: holdsQuestion(replyTo?.body_text ?? replyTo?.snippet ?? ""),
       inThread: !!draft.thread_external_id,
-      recipientScore: p?.score ?? 0,
+      recipientScore: repliesOn ? Math.max(p?.score ?? 0, AUTO_SEND_MIN_SCORE) : p?.score ?? 0,
       validatorOk: !!draft.validator?.ok,
       autoSentToday: today?.n ?? 0,
       recipientTimeZone: validZone(p?.timezone) ?? userTz
@@ -21016,6 +21066,23 @@ async function autoApprovedOn(db2, userId, at, tz) {
 async function cadenceLadder(s, userId, st, a, channel, draft) {
   const db2 = s.db;
   const now = s.now();
+  if (a.draftKind === "bump") {
+    const f = funnelFor(st.settings?.reply_funnels, a.personId);
+    if (f?.followUp) {
+      const [who] = await db2.sql`
+        select p.first_name, p.org_raw as org, u.full_name
+          from orbit.people p join orbit.users u on u.id = p.user_id where p.id = ${a.personId}::uuid`;
+      const words6 = fillFunnelText(f.followUp, {
+        first: who?.first_name,
+        company: who?.org,
+        link: typeof st.settings?.scheduling_link === "string" ? st.settings.scheduling_link : void 0,
+        signOff: (who?.full_name ?? "").split(/\s+/)[0] || void 0
+      });
+      const [kept] = await db2.sql`
+        update orbit.drafts set body = ${words6} where id = ${draft.id}::uuid and status = 'draft' returning *`;
+      if (kept) draft = kept;
+    }
+  }
   const goal = a.goalId ? st.goalsById.get(a.goalId) : void 0;
   const level = goal?.autonomyLevel ?? st.autonomyLevel;
   const paused = !!st.pausedUntil && now.getTime() < new Date(st.pausedUntil).getTime() || goalPaused(st.settings, a.goalId ?? null, now);

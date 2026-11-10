@@ -286,6 +286,10 @@ export interface UserSettings {
   introNote?: { text: string; editedAt: string };
   /** kinds of message the student handed to Orbit to send on its own, after earning it (plan 23 §4.9) */
   autoKinds?: MessageKind[];
+  /** plan 38 §E: Orbit answers simple replies on its own (times, a booking, thanks) without Autopilot mode */
+  autoReplies?: boolean;
+  /** plan 38 §G: each group's funnel, with this browser's person ids (the server keeps its own ids) */
+  replyFunnels?: import('./email/funnel').ReplyFunnel[];
   /**
    * How much Orbit does on its own (plan 29 §B1): off, Orbit writes and the student sends; assist, one tap and it
    * goes in the recipient's morning window, the ladder's kinds on their own; autopilot, first messages too, after

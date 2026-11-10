@@ -1384,6 +1384,11 @@ export async function draftMessage(
   const where = await threadFor(kind, chat, ctx);
   // a goal other than recruiting writes in its own register (plan 16 §7.3)
   const forGoal = await goalRegisterDraft(user, person, kind, written, chat?.goalId);
+  // plan 38 §G: the person's group may have its own words for this (an interested reply, a follow-up)
+  const grouped =
+    written === 'gmail'
+      ? await import('./funnels').then((f) => f.funnelWordsForDraft(user, person, kind, chat))
+      : undefined;
   const msg: OutboundMessage = {
     id: newId('out'),
     userId: user.id,
@@ -1398,11 +1403,12 @@ export async function draftMessage(
     toEmail: person.primaryEmail,
     toLinkedinUrl: person.linkedinUrl,
     subject: forGoal ? (written === 'gmail' ? forGoal.subject : undefined) : out.subject,
-    bodyDraft: forGoal ? forGoal.body : bodyFor(out, written, kind, !!person.linkedinConnectedOn),
+    bodyDraft:
+      grouped ?? (forGoal ? forGoal.body : bodyFor(out, written, kind, !!person.linkedinConnectedOn)),
     status: 'draft',
-    generatedBy: forGoal ? 'template' : generatedBy,
-    claims: forGoal ? undefined : out.claims,
-    needsInput: !forGoal && out.needsInput.length ? out.needsInput : undefined,
+    generatedBy: grouped || forGoal ? 'template' : generatedBy,
+    claims: forGoal || grouped ? undefined : out.claims,
+    needsInput: !forGoal && !grouped && out.needsInput.length ? out.needsInput : undefined,
     opening: out.opening,
     holdUntil: out.holdUntil,
     createdAt: new Date().toISOString(),
