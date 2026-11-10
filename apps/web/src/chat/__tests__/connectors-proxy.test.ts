@@ -107,16 +107,6 @@ function harness(over: Partial<ConnectorDeps> = {}, upstreamOver?: Upstream) {
         }),
         { status: 200 },
       );
-    if (url.includes('/api/v1/accounts?'))
-      return new Response(
-        JSON.stringify({
-          items: [
-            { id: 'acc_other', name: 'someone else', sources: [{ status: 'OK' }] },
-            { id: 'acc_1', name: 'orbit_ref1', sources: [{ status: 'OK' }] },
-          ],
-        }),
-        { status: 200 },
-      );
     if (url.includes('/api/v1/accounts/')) return new Response(JSON.stringify({ object: 'AccountDeleted' }));
     if (url.endsWith('/v2/auth/tokens'))
       return new Response(
@@ -167,11 +157,19 @@ const post = (path: string, body: unknown, origin = ORIGIN, ip = '203.0.113.7') 
     body: JSON.stringify(body),
   });
 
-const accounts =
-  (items: unknown[], status = 200): Upstream =>
+/** Orbit's record of finished sign-ins, with Unipile's report for one: reference orbit_ref1 made account acc_1. */
+async function reported(accountId = 'acc_1', status = 'CREATION_SUCCESS') {
+  const links = memoryLinks();
+  await links.put('orbit_ref1', accountId, status);
+  return links;
+}
+
+/** One account as Unipile gives it: named after the person, never after Orbit's reference. */
+const account =
+  (source: string, status = 200, id = 'acc_1'): Upstream =>
   (url) =>
-    url.includes('/api/v1/accounts?')
-      ? new Response(JSON.stringify({ items }), { status })
+    url.endsWith(`/api/v1/accounts/${id}`)
+      ? new Response(JSON.stringify({ id, name: 'Dana Lee', sources: [{ status: source }] }), { status })
       : new Response('{}', { status: 404 });
 
 describe('orbit-connectors proxy', () => {
@@ -289,7 +287,7 @@ describe('orbit-connectors proxy', () => {
     // orbit-api names a linked account after the Orbit user id, which friends can see: asking for that id must not
     // return the account or a token for it
     const victim = '5b1f0c2e-8d4a-4c3b-9e7f-1a2b3c4d5e6f';
-    const h = harness({}, accounts([{ id: 'acc_victim', name: victim, sources: [{ status: 'OK' }] }]));
+    const h = harness({ links: await reported('acc_victim') }, account('OK', 200, 'acc_victim'));
     const r = await h.handler(post('/connect/status', { ref: victim }));
     const body = (await r.json()) as Record<string, unknown>;
     expect(body.status).toBe('error');
@@ -299,37 +297,30 @@ describe('orbit-connectors proxy', () => {
   });
 
   it('maps the connect status: connected, pending, failed sign-ins as error', async () => {
-    const ok = harness();
+    const ok = harness({ links: await reported() }, account('OK'));
     expect(await (await ok.handler(post('/connect/status', { ref: 'orbit_ref1' }))).json()).toEqual({
       status: 'connected',
       accountId: 'acc_1',
       token: TOKEN.acc_1,
     });
-    const waiting = harness(
-      {},
-      accounts([{ id: 'acc_1', name: 'orbit_ref1', sources: [{ status: 'CONNECTING' }] }]),
-    );
+    const waiting = harness({ links: await reported() }, account('CONNECTING'));
     expect(await (await waiting.handler(post('/connect/status', { ref: 'orbit_ref1' }))).json()).toEqual({
       status: 'pending',
     });
-    const notYet = harness({}, accounts([]));
+    // Unipile has not reported the sign-in yet: still waiting, and its accounts are not listed to look for it
+    const notYet = harness({ links: memoryLinks() }, account('OK'));
     expect(await (await notYet.handler(post('/connect/status', { ref: 'orbit_ref1' }))).json()).toEqual({
       status: 'pending',
     });
-    const badCreds = harness(
-      {},
-      accounts([{ id: 'acc_1', name: 'orbit_ref1', sources: [{ status: 'CREDENTIALS' }] }]),
-    );
+    expect(notYet.upstream).toEqual([]);
+    const badCreds = harness({ links: await reported() }, account('CREDENTIALS'));
     expect(
       await (await badCreds.handler(post('/connect/status', { ref: 'orbit_ref1' }))).json(),
     ).toMatchObject({
       status: 'error',
       message: expect.stringMatching(/did not accept the sign-in/),
     });
-    const stopped = harness(
-      {},
-      accounts([{ id: 'acc_1', name: 'orbit_ref1', sources: [{ status: 'STOPPED' }] }]),
-    );
+    const stopped = harness({ links: await reported() }, account('STOPPED'));
     expect(
       await (await stopped.handler(post('/connect/status', { ref: 'orbit_ref1' }))).json(),
     ).toMatchObject({
@@ -367,14 +358,8 @@ describe('orbit-connectors proxy', () => {
   });
 
   it("opens an account linked through orbit-api only with orbit-api's second-version token, never the first-version one /connect/status could once hand out by user id", async () => {
-    // the real Unipile check: acc_1 was linked through orbit-api, so Unipile names it after its owner's user id
-    const named =
-      (name: string): Upstream =>
-      (url) =>
-        url.includes('/api/v1/accounts/acc_1')
-          ? new Response(JSON.stringify({ id: 'acc_1', name, sources: [{ status: 'OK' }] }), { status: 200 })
-          : new Response('{}', { status: 404 });
-    const serverLinked = harness({ browserKept: undefined }, named('390cf6d9-fd4b-47ce-942d-7689cda5d312'));
+    // the real check (no stand-in): acc_1 was linked through orbit-api, so no browser sign-in of Orbit's made it
+    const serverLinked = harness({ browserKept: undefined, links: memoryLinks() }, account('OK'));
     const old = await serverLinked.handler(post('/account', { accountId: 'acc_1', token: TOKEN.acc_1 }));
     expect(old.status).toBe(403);
     const v2 = await accountTokenV2('acc_1', SIGNING);
@@ -383,19 +368,68 @@ describe('orbit-connectors proxy', () => {
     ).toEqual({
       status: 'connected',
     });
-    // an account a browser linked through /connect/start keeps its first-version token
-    const browser = harness({ browserKept: undefined }, named('orbit_3f2a9c1e-77aa-4b1c-9d0e-1234567890ab'));
+    // an account a browser linked through /connect/start keeps its first-version token, whatever Unipile names it
+    const browser = harness({ browserKept: undefined, links: await reported() }, account('OK'));
     expect(
       await (await browser.handler(post('/account', { accountId: 'acc_1', token: TOKEN.acc_1 }))).json(),
     ).toEqual({ status: 'connected' });
+    // a sign-in that only signed an existing account in again proves nothing about who linked it
+    const again = harness(
+      { browserKept: undefined, links: await reported('acc_1', 'RECONNECTED') },
+      account('OK'),
+    );
+    expect((await again.handler(post('/account', { accountId: 'acc_1', token: TOKEN.acc_1 }))).status).toBe(
+      403,
+    );
+  });
+
+  it('a browser that has just connected LinkedIn can sync straight away (the 403 testers saw)', async () => {
+    // Unipile as it really answers: the new account is named after the person, and the reference comes back only
+    // in the report to notify_url. The old check looked for the reference in the name and refused every new account.
+    const links = memoryLinks();
+    const { handler, upstream } = harness(
+      { browserKept: undefined, links, publicUrl: 'https://x.supabase.co/functions/v1/orbit-connectors' },
+      (url) =>
+        url.includes('/hosted/accounts/link')
+          ? new Response(JSON.stringify({ url: 'https://unipile/login' }), { status: 200 })
+          : url.endsWith('/api/v1/accounts/acc_9')
+            ? new Response(
+                JSON.stringify({ id: 'acc_9', name: 'Anish Polakala', sources: [{ status: 'OK' }] }),
+                { status: 200 },
+              )
+            : url.includes('/users/relations')
+              ? new Response(JSON.stringify({ items: [], cursor: null }), { status: 200 })
+              : new Response('{}', { status: 404 }),
+    );
+    const start = (await (await handler(post('/connect/start', {}))).json()) as { ref: string };
+    const notifyUrl = String((upstream[0]!.body as { notify_url?: string }).notify_url);
+    await handler(
+      new Request(notifyUrl, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ status: 'CREATION_SUCCESS', account_id: 'acc_9', name: start.ref }),
+      }),
+    );
+    const st = (await (await handler(post('/connect/status', { ref: start.ref }))).json()) as {
+      status: string;
+      accountId: string;
+      token: string;
+    };
+    expect(st).toMatchObject({ status: 'connected', accountId: 'acc_9' });
+    // the calls the app makes next, with the token it was just given
+    for (const path of ['/relations', '/account'])
+      expect((await handler(post(path, { accountId: st.accountId, token: st.token }))).status).toBe(200);
+    // the token is still no use for another account, or without one
+    expect((await handler(post('/relations', { accountId: 'acc_other', token: st.token }))).status).toBe(403);
+    expect((await handler(post('/relations', { accountId: st.accountId }))).status).toBe(403);
   });
 
   it('reads a 404 from Unipile as still waiting and any other failure as a 502', async () => {
-    const missing = harness({}, accounts([], 404));
+    const missing = harness({ links: await reported() }, account('OK', 404));
     const r1 = await missing.handler(post('/connect/status', { ref: 'orbit_ref1' }));
     expect(r1.status).toBe(200);
     expect(await r1.json()).toEqual({ status: 'pending' });
-    const broken = harness({}, accounts([], 500));
+    const broken = harness({ links: await reported() }, () => new Response('{}', { status: 500 }));
     expect((await broken.handler(post('/connect/status', { ref: 'orbit_ref1' }))).status).toBe(502);
     const down = harness({}, () => new Response('{}', { status: 500 }));
     const r2 = await down.handler(post('/relations', { accountId: 'a1', token: TOKEN.a1 }));

@@ -1,35 +1,43 @@
 /**
  * Account tokens after 2026-11-05: orbit-api hands a signed-in student a second-version token for their own account;
- * a first-version token (what /connect/status hands a browser) opens only an account Unipile names orbit_<random>,
- * so one handed out by user id for an account linked through orbit-api opens nothing.
+ * a first-version token (what /connect/status hands a browser) opens only an account one of Orbit's own browser
+ * sign-ins made (public.orbit_unipile_links), so one handed out by user id for an account linked through orbit-api
+ * opens nothing.
  */
 import { describe, expect, it } from 'vitest';
 import {
   accountToken,
   accountTokenOk,
   accountTokenV2,
-  unipileBrowserKept,
+  linkedBrowserKept,
+  postgrestLinkCreated,
 } from '../../functions/_shared/accountToken.ts';
 
 const KEY = 'signing-placeholder';
-const BASE = 'https://api1.unipile.com:443';
+const URL_ = 'https://x.supabase.co';
 
-function unipile(names: Record<string, string | number>) {
+/** PostgREST over the links table: `rows` maps an account to the statuses its sign-ins were reported with. */
+function linksTable(rows: Record<string, string[] | number>) {
   const calls: string[] = [];
   const doFetch = (async (url: string, init: RequestInit = {}) => {
     calls.push(url);
-    expect((init.headers as Record<string, string>)['X-API-KEY']).toBe('u-key');
-    const id = decodeURIComponent(url.slice(`${BASE}/api/v1/accounts/`.length));
-    const name = names[id];
-    if (typeof name === 'number') return new Response('{}', { status: name });
-    if (name === undefined) return new Response('{}', { status: 404 });
-    return new Response(JSON.stringify({ id, name }), { status: 200 });
+    const h = init.headers as Record<string, string>;
+    expect(h.apikey).toBe('service-placeholder');
+    expect(h.Authorization).toBe('Bearer service-placeholder');
+    const q = new URL(url).searchParams;
+    const id = (q.get('account_id') ?? '').replace(/^eq\./, '');
+    const status = (q.get('status') ?? '').replace(/^eq\./, '');
+    const found = rows[id];
+    if (typeof found === 'number') return new Response('{}', { status: found });
+    return new Response(JSON.stringify((found ?? []).filter((s) => s === status).map(() => ({ ref: 'r' }))), {
+      status: 200,
+    });
   }) as unknown as typeof fetch;
-  return { calls, doFetch };
+  return { calls, created: postgrestLinkCreated(URL_, 'service-placeholder', doFetch) };
 }
 
 describe('account tokens', () => {
-  it('a second-version token opens its account without asking Unipile; another account or key does not', async () => {
+  it('a second-version token opens its account without asking anything; another account or key does not', async () => {
     const ask = async () => {
       throw new Error('asked');
     };
@@ -42,37 +50,52 @@ describe('account tokens', () => {
   });
 
   it('a first-version token opens only an account a browser linked through /connect/start', async () => {
-    const u = unipile({
-      'acc-browser': 'orbit_3f2a9c1e-77aa-4b1c-9d0e-1234567890ab',
-      'acc-server': '390cf6d9-fd4b-47ce-942d-7689cda5d312',
-    });
-    const kept = unipileBrowserKept(BASE, 'u-key', u.doFetch);
+    // Orbit's record: acc-browser was made new by one of its browser sign-ins; acc-server (linked through orbit-api)
+    // was not; acc-again was only ever signed in again
+    const t = linksTable({ 'acc-browser': ['CREATION_SUCCESS'], 'acc-again': ['RECONNECTED'] });
+    const kept = linkedBrowserKept(t.created);
     expect(await accountTokenOk('acc-browser', await accountToken('acc-browser', KEY), KEY, kept)).toBe(true);
-    // the account orbit-api linked is named after its owner's user id: the token /connect/status once handed out for it
+    // the token /connect/status once handed out by user id for an account orbit-api linked
     expect(await accountTokenOk('acc-server', await accountToken('acc-server', KEY), KEY, kept)).toBe(false);
     expect(await accountTokenOk('acc-server', await accountTokenV2('acc-server', KEY), KEY, kept)).toBe(true);
+    expect(await accountTokenOk('acc-again', await accountToken('acc-again', KEY), KEY, kept)).toBe(false);
     expect(await accountTokenOk('acc-browser', 'forged', KEY, kept)).toBe(false);
+    // a forged token never reaches the record
+    expect(t.calls.filter((u) => u.includes('acc-browser'))).toHaveLength(1);
   });
 
-  it('Unipile answers are kept for an hour; a failed answer counts as no and is asked again', async () => {
+  it('asks for exactly the new-account row of that account', async () => {
+    const t = linksTable({ 'acc/1 x': ['CREATION_SUCCESS'] });
+    expect(await t.created('acc/1 x')).toBe(true);
+    expect(t.calls[0]).toBe(
+      `${URL_}/rest/v1/orbit_unipile_links?account_id=eq.acc%2F1%20x&status=eq.CREATION_SUCCESS&select=ref&limit=1`,
+    );
+  });
+
+  it('a yes is kept for an hour; a no, or a record that cannot be read, is asked again and never passes', async () => {
     let at = 0;
-    const u = unipile({ a: 'orbit_abcd1234', b: 500 });
-    const kept = unipileBrowserKept(BASE, 'u-key', u.doFetch, () => at);
+    const rows: Record<string, string[] | number> = { a: ['CREATION_SUCCESS'], b: 500 };
+    const t = linksTable(rows);
+    const kept = linkedBrowserKept(t.created, () => at);
     expect(await kept('a')).toBe(true);
     expect(await kept('a')).toBe(true);
-    expect(u.calls).toHaveLength(1);
+    expect(t.calls).toHaveLength(1);
     at = 3_600_001;
     expect(await kept('a')).toBe(true);
-    expect(u.calls).toHaveLength(2);
+    expect(t.calls).toHaveLength(2);
     expect(await kept('b')).toBe(false);
     expect(await kept('b')).toBe(false);
-    expect(u.calls).toHaveLength(4);
-    expect(await kept('missing')).toBe(false);
-    expect(await unipileBrowserKept(undefined, 'u-key', u.doFetch)('a')).toBe(false);
+    expect(t.calls).toHaveLength(4);
+    // a sign-in that finishes a moment later passes at once: the no was not remembered
+    expect(await kept('late')).toBe(false);
+    rows.late = ['CREATION_SUCCESS'];
+    expect(await kept('late')).toBe(true);
+    expect(await kept('')).toBe(false);
+    expect(await postgrestLinkCreated(undefined, 'k')('a')).toBe(false);
     // a lookup that throws is a no, never a pass
-    const broken = unipileBrowserKept(BASE, 'u-key', (async () => {
+    const broken = linkedBrowserKept(async () => {
       throw new Error('down');
-    }) as unknown as typeof fetch);
+    });
     expect(await accountTokenOk('a', await accountToken('a', KEY), KEY, broken)).toBe(false);
   });
 });

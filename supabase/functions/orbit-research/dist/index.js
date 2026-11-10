@@ -29,24 +29,33 @@ async function accountTokenOk(accountId, token, signingKey, browserKept) {
   if (!sameText(await accountToken(accountId, signingKey), token)) return false;
   return browserKept(accountId).catch(() => false);
 }
-function unipileBrowserKept(base, key, doFetch, now = Date.now) {
-  const known = /* @__PURE__ */ new Map();
+var LINK_CREATED = "CREATION_SUCCESS";
+function linkedBrowserKept(created, now = Date.now) {
+  const yes = /* @__PURE__ */ new Map();
   return async (accountId) => {
-    if (!base || !key) return false;
-    const hit = known.get(accountId);
-    if (hit && now() - hit.at < 36e5) return hit.kept;
-    const res = await doFetch(`${base}/api/v1/accounts/${encodeURIComponent(accountId)}`, {
-      headers: { accept: "application/json", "X-API-KEY": key },
-      signal: AbortSignal.timeout(8e3)
-    });
-    if (!res.ok) {
-      await res.body?.cancel();
+    if (!accountId) return false;
+    const at = yes.get(accountId);
+    if (at !== void 0 && now() - at < 36e5) return true;
+    if (!await created(accountId)) return false;
+    yes.set(accountId, now());
+    return true;
+  };
+}
+function postgrestLinkCreated(url2, serviceKey2, doFetch = fetch) {
+  return async (accountId) => {
+    if (!url2 || !serviceKey2) return false;
+    const r = await doFetch(
+      `${url2}/rest/v1/orbit_unipile_links?account_id=eq.${encodeURIComponent(accountId)}&status=eq.${LINK_CREATED}&select=ref&limit=1`,
+      {
+        headers: { apikey: serviceKey2, Authorization: `Bearer ${serviceKey2}` },
+        signal: AbortSignal.timeout(8e3)
+      }
+    );
+    if (!r.ok) {
+      await r.body?.cancel();
       return false;
     }
-    const a = await res.json();
-    const kept = typeof a.name === "string" && /^orbit_[A-Za-z0-9-]{4,64}$/.test(a.name);
-    known.set(accountId, { kept, at: now() });
-    return kept;
+    return (await r.json()).length > 0;
   };
 }
 
@@ -5409,10 +5418,6 @@ async function providerSecret(name) {
 var exaKey = await providerSecret("EXA_API_KEY");
 var parallelKey = await providerSecret("PARALLEL_API_KEY");
 var serperKey = await providerSecret("SERPER_API_KEY");
-var [unipileKey, unipileBase] = await Promise.all([
-  providerSecret("UNIPILE_API_KEY"),
-  providerSecret("UNIPILE_BASE_URL")
-]);
 var dbUrl = Deno.env.get("SUPABASE_DB_URL");
 var db = dbUrl ? connectDb(dbUrl, 1) : void 0;
 var engines = [
@@ -5424,7 +5429,8 @@ Deno.serve(
     origins: defaultOrigins,
     // account tokens are signed by orbit-connectors with the service role key, which never leaves the server
     signingKey: serviceKey || void 0,
-    browserKept: unipileBrowserKept(unipileBase, unipileKey, fetch),
+    // first-version account tokens open research only for accounts a browser linked (Orbit's record of its sign-ins)
+    browserKept: linkedBrowserKept(postgrestLinkCreated(url, serviceKey)),
     salt: serviceKey.slice(-16) || "orbit",
     take: postgrestTake(url, serviceKey),
     store: postgrestStore(url, serviceKey),

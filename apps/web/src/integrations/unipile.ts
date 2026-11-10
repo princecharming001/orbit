@@ -79,6 +79,10 @@ export interface CallOpts {
   token?: string;
 }
 
+/** What a refused account call says: the server could not match this browser to the LinkedIn account. */
+export const LINKEDIN_NOT_CONFIRMED =
+  'Orbit could not confirm this LinkedIn connection. Turn LinkedIn off, then on again.';
+
 /** One POST to the proxy, as an outcome: never throws. */
 async function call<T>(path: string, body: unknown, opts: CallOpts = {}): Promise<ConnectorOutcome<T>> {
   const base = unipileUrl();
@@ -103,6 +107,8 @@ async function call<T>(path: string, body: unknown, opts: CallOpts = {}): Promis
     });
     if (isUnconfigured(res))
       return connectorFailure('unconfigured', 'Live LinkedIn is not switched on yet.', res.status);
+    // Orbit's server refused this browser for the account (not LinkedIn failing): say what puts it right
+    if (res.status === 403) return connectorFailure('error', LINKEDIN_NOT_CONFIRMED, res.status);
     if (!res.ok) return connectorFailure('error', `LinkedIn did not answer (${res.status}).`, res.status);
     return { ok: true, value: (await res.json()) as T };
   } catch (e) {

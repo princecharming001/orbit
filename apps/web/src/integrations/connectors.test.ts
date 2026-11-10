@@ -136,6 +136,18 @@ describe('Unipile (live LinkedIn) adapter', () => {
     });
   });
 
+  it('a call the server refuses for this browser says how to put it right, not that LinkedIn failed', async () => {
+    setUnipileUrlForTests(BASE);
+    const { fn } = stub({
+      '/relations': { status: 403, body: { error: 'this LinkedIn account is not linked to this browser' } },
+    });
+    const r = await linkedInConnections('a', { fetch: fn });
+    expect(r).toMatchObject({ ok: false, reason: 'error', status: 403 });
+    expect(r.ok ? '' : r.message).toBe(
+      'Orbit could not confirm this LinkedIn connection. Turn LinkedIn off, then on again.',
+    );
+  });
+
   it('pages all connections and maps them to the import shape', async () => {
     setUnipileUrlForTests(BASE);
     let page = 0;

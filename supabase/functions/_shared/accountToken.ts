@@ -39,7 +39,8 @@ function sameText(a: string, b: string): boolean {
 
 /**
  * Whether `token` opens `accountId`: a second-version token always; a first-version one only for an account a browser
- * linked through /connect/start (Unipile names those orbit_<random>), never for one linked through orbit-api.
+ * linked through /connect/start (Orbit keeps each of those sign-ins: `linkedBrowserKept`), never for one linked
+ * through orbit-api.
  */
 export async function accountTokenOk(
   accountId: string,
@@ -53,32 +54,55 @@ export async function accountTokenOk(
   return browserKept(accountId).catch(() => false);
 }
 
+/** The status Unipile reports to /connect/notify when a hosted sign-in made a new account. */
+export const LINK_CREATED = 'CREATION_SUCCESS';
+
 /**
- * Asks Unipile whether an account was linked through /connect/start (its name is orbit_<random>), remembering each
- * answer for an hour. Anything Unipile cannot answer counts as no, and is asked again next time.
+ * Whether an account was linked by a browser through /connect/start, from Orbit's own record of those sign-ins
+ * (public.orbit_unipile_links: /connect/notify writes a row, under the signed reference only /connect/start issues,
+ * when Unipile reports the new account). `created` reads that record.
+ *
+ * Until 2026-11-10 this asked Unipile for the account's name and expected the sign-in's reference there. Unipile
+ * names a LinkedIn account after the person, and hands the reference back only to notify_url, so every account a
+ * browser linked was refused: "LinkedIn did not answer (403)" on the first sync after connecting.
+ *
+ * A yes is remembered for an hour. A no is asked again each time (a sign-in that has just finished must pass at
+ * once), and a record that cannot be read counts as no.
  */
-export function unipileBrowserKept(
-  base: string | undefined,
-  key: string | undefined,
-  doFetch: typeof fetch,
+export function linkedBrowserKept(
+  created: (accountId: string) => Promise<boolean>,
   now: () => number = Date.now,
 ): (accountId: string) => Promise<boolean> {
-  const known = new Map<string, { kept: boolean; at: number }>();
+  const yes = new Map<string, number>();
   return async (accountId) => {
-    if (!base || !key) return false;
-    const hit = known.get(accountId);
-    if (hit && now() - hit.at < 3_600_000) return hit.kept;
-    const res = await doFetch(`${base}/api/v1/accounts/${encodeURIComponent(accountId)}`, {
-      headers: { accept: 'application/json', 'X-API-KEY': key },
-      signal: AbortSignal.timeout(8000),
-    });
-    if (!res.ok) {
-      await res.body?.cancel();
+    if (!accountId) return false;
+    const at = yes.get(accountId);
+    if (at !== undefined && now() - at < 3_600_000) return true;
+    if (!(await created(accountId))) return false;
+    yes.set(accountId, now());
+    return true;
+  };
+}
+
+/** `created` over PostgREST with the service role key: a new-account row for this account in orbit_unipile_links. */
+export function postgrestLinkCreated(
+  url: string | undefined,
+  serviceKey: string | undefined,
+  doFetch: typeof fetch = fetch,
+): (accountId: string) => Promise<boolean> {
+  return async (accountId) => {
+    if (!url || !serviceKey) return false;
+    const r = await doFetch(
+      `${url}/rest/v1/orbit_unipile_links?account_id=eq.${encodeURIComponent(accountId)}&status=eq.${LINK_CREATED}&select=ref&limit=1`,
+      {
+        headers: { apikey: serviceKey, Authorization: `Bearer ${serviceKey}` },
+        signal: AbortSignal.timeout(8000),
+      },
+    );
+    if (!r.ok) {
+      await r.body?.cancel();
       return false;
     }
-    const a = (await res.json()) as { name?: unknown };
-    const kept = typeof a.name === 'string' && /^orbit_[A-Za-z0-9-]{4,64}$/.test(a.name);
-    known.set(accountId, { kept, at: now() });
-    return kept;
+    return ((await r.json()) as unknown[]).length > 0;
   };
 }

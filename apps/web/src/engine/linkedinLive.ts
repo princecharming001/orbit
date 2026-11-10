@@ -591,7 +591,7 @@ async function syncLinkedInLiveOnce(
     return { ok: true, rows, added: 0, updated: 0, recommended: 0 };
   }
   // linked through Orbit's server (no browser token): only the signed-in session can sync it; reading LinkedIn from
-  // the browser would be refused (the 403 "LinkedIn did not answer"), so ask for a sign-in and leave the row as it is
+  // the browser would be refused (a 403), so ask for a sign-in and leave the row as it is
   if (serverLinked(row) && !usesMockConnectors(user.id))
     return { ok: false, reason: 'not_connected', message: SIGN_IN_AGAIN };
   let conns: LiveConnection[];

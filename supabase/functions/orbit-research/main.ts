@@ -1,4 +1,4 @@
-import { unipileBrowserKept } from '../_shared/accountToken.ts';
+import { linkedBrowserKept, postgrestLinkCreated } from '../_shared/accountToken.ts';
 import { connectDb } from '../_shared/db.ts';
 import { createExa } from '../_shared/providers/exa';
 import { createParallelSearch, createSerperSearch } from '../_shared/providers/webSearch';
@@ -31,11 +31,6 @@ const exaKey = await providerSecret('EXA_API_KEY');
 // Parallel is out of credit; with neither set, research searches the way it did before
 const parallelKey = await providerSecret('PARALLEL_API_KEY');
 const serperKey = await providerSecret('SERPER_API_KEY');
-// first-version account tokens open research only for accounts a browser linked (Unipile names those orbit_<random>)
-const [unipileKey, unipileBase] = await Promise.all([
-  providerSecret('UNIPILE_API_KEY'),
-  providerSecret('UNIPILE_BASE_URL'),
-]);
 // plan 35 A5: the brief's Claude calls land in orbit.usage_ledger under the student who asked, inside their caps
 const dbUrl = Deno.env.get('SUPABASE_DB_URL');
 const db = dbUrl ? connectDb(dbUrl, 1) : undefined;
@@ -50,7 +45,8 @@ Deno.serve(
     origins: defaultOrigins,
     // account tokens are signed by orbit-connectors with the service role key, which never leaves the server
     signingKey: serviceKey || undefined,
-    browserKept: unipileBrowserKept(unipileBase, unipileKey, fetch),
+    // first-version account tokens open research only for accounts a browser linked (Orbit's record of its sign-ins)
+    browserKept: linkedBrowserKept(postgrestLinkCreated(url, serviceKey)),
     salt: serviceKey.slice(-16) || 'orbit',
     take: postgrestTake(url, serviceKey),
     store: postgrestStore(url, serviceKey),

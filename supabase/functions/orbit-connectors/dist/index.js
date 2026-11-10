@@ -567,24 +567,33 @@ async function accountTokenOk(accountId, token, signingKey, browserKept) {
   if (!sameText(await accountToken(accountId, signingKey), token)) return false;
   return browserKept(accountId).catch(() => false);
 }
-function unipileBrowserKept(base, key, doFetch, now = Date.now) {
-  const known = /* @__PURE__ */ new Map();
+var LINK_CREATED = "CREATION_SUCCESS";
+function linkedBrowserKept(created, now = Date.now) {
+  const yes = /* @__PURE__ */ new Map();
   return async (accountId) => {
-    if (!base || !key) return false;
-    const hit = known.get(accountId);
-    if (hit && now() - hit.at < 36e5) return hit.kept;
-    const res = await doFetch(`${base}/api/v1/accounts/${encodeURIComponent(accountId)}`, {
-      headers: { accept: "application/json", "X-API-KEY": key },
-      signal: AbortSignal.timeout(8e3)
-    });
-    if (!res.ok) {
-      await res.body?.cancel();
+    if (!accountId) return false;
+    const at = yes.get(accountId);
+    if (at !== void 0 && now() - at < 36e5) return true;
+    if (!await created(accountId)) return false;
+    yes.set(accountId, now());
+    return true;
+  };
+}
+function postgrestLinkCreated(url2, serviceKey2, doFetch = fetch) {
+  return async (accountId) => {
+    if (!url2 || !serviceKey2) return false;
+    const r = await doFetch(
+      `${url2}/rest/v1/orbit_unipile_links?account_id=eq.${encodeURIComponent(accountId)}&status=eq.${LINK_CREATED}&select=ref&limit=1`,
+      {
+        headers: { apikey: serviceKey2, Authorization: `Bearer ${serviceKey2}` },
+        signal: AbortSignal.timeout(8e3)
+      }
+    );
+    if (!r.ok) {
+      await r.body?.cancel();
       return false;
     }
-    const a = await res.json();
-    const kept = typeof a.name === "string" && /^orbit_[A-Za-z0-9-]{4,64}$/.test(a.name);
-    known.set(accountId, { kept, at: now() });
-    return kept;
+    return (await r.json()).length > 0;
   };
 }
 
@@ -1339,10 +1348,11 @@ function postingBucket(visitor, now, perDay) {
 function memoryLinks() {
   const m = /* @__PURE__ */ new Map();
   return {
-    put: async (ref, id) => {
-      m.set(ref, id);
+    put: async (ref, id, status) => {
+      m.set(ref, { id, status });
     },
-    get: async (ref) => m.get(ref)
+    get: async (ref) => m.get(ref)?.id,
+    created: async (accountId) => [...m.values()].some((l) => l.id === accountId && l.status === LINK_CREATED)
   };
 }
 function postgrestLinks(url2, serviceKey2, doFetch = fetch) {
@@ -1368,7 +1378,8 @@ function postgrestLinks(url2, serviceKey2, doFetch = fetch) {
       if (!r.ok) throw new Error(`links store ${r.status}`);
       const rows = await r.json();
       return rows[0]?.account_id || void 0;
-    }
+    },
+    created: postgrestLinkCreated(url2, serviceKey2, doFetch)
   };
 }
 async function accountToken2(accountId, signingKey) {
@@ -1585,7 +1596,8 @@ var ACCOUNT_ROUTES = /* @__PURE__ */ new Set([
 ]);
 function makeHandler(deps) {
   const doFetch = deps.fetch ?? fetch;
-  deps.browserKept ??= unipileBrowserKept(deps.unipileBase, deps.unipileKey, doFetch);
+  const links = deps.links;
+  deps.browserKept ??= linkedBrowserKept(async (id) => links ? links.created(id) : false);
   const browserKept = deps.browserKept;
   const limits = deps.limits ?? DEFAULT_LIMITS;
   const now = deps.now ?? (() => /* @__PURE__ */ new Date());
@@ -1815,28 +1827,21 @@ async function unipileConnectStatus(deps, body, doFetch) {
   if (!ISSUED_REF.test(ref)) return { status: "error", message: "No connection was started." };
   const reconnect = text2(body.reconnectAccountId, 200);
   if (reconnect) {
-    const one = await doFetch(`${deps.unipileBase}/api/v1/accounts/${encodeURIComponent(reconnect)}`, {
+    const one2 = await doFetch(`${deps.unipileBase}/api/v1/accounts/${encodeURIComponent(reconnect)}`, {
       headers: uHeaders(deps)
     });
-    if (one.ok) return accountState(await one.json(), reconnect);
-    if (one.status !== 404) throw new Error(`unipile ${one.status}`);
+    if (one2.ok) return accountState(await one2.json(), reconnect);
+    if (one2.status !== 404) throw new Error(`unipile ${one2.status}`);
     return { status: "error", message: "LinkedIn no longer has that account. Connect it again." };
   }
   const linked = await deps.links?.get(ref).catch(() => void 0);
-  if (linked) {
-    const one = await doFetch(`${deps.unipileBase}/api/v1/accounts/${encodeURIComponent(linked)}`, {
-      headers: uHeaders(deps)
-    });
-    if (one.ok) return accountState(await one.json(), linked);
-    if (one.status !== 404) throw new Error(`unipile ${one.status}`);
-  }
-  const res = await doFetch(`${deps.unipileBase}/api/v1/accounts?limit=250`, { headers: uHeaders(deps) });
-  if (res.status === 404) return { status: "pending" };
-  if (!res.ok) throw new Error(`unipile ${res.status}`);
-  const b = await res.json();
-  const acc = b.items?.find((a) => a.name === ref);
-  if (!acc) return { status: "pending" };
-  return accountState(acc, acc.id);
+  if (!linked) return { status: "pending" };
+  const one = await doFetch(`${deps.unipileBase}/api/v1/accounts/${encodeURIComponent(linked)}`, {
+    headers: uHeaders(deps)
+  });
+  if (one.ok) return accountState(await one.json(), linked);
+  if (one.status === 404) return { status: "pending" };
+  throw new Error(`unipile ${one.status}`);
 }
 async function unipileAccountHealth(deps, accountId, doFetch) {
   const res = await doFetch(`${deps.unipileBase}/api/v1/accounts/${encodeURIComponent(accountId)}`, {

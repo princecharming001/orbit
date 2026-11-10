@@ -39,7 +39,12 @@
  * keys only changes this file (Village's lives in _shared/providers/village.ts, shared with the server).
  */
 
-import { accountTokenOk, unipileBrowserKept } from '../_shared/accountToken.ts';
+import {
+  accountTokenOk,
+  LINK_CREATED,
+  linkedBrowserKept,
+  postgrestLinkCreated,
+} from '../_shared/accountToken.ts';
 import { timingSafeEqual } from '../_shared/crypto.ts';
 import { clientIp, defaultOrigins } from '../_shared/origins.ts';
 import { type PostingDeps, readPosting } from '../_shared/postings.ts';
@@ -327,15 +332,19 @@ export function postingBucket(visitor: string, now: Date, perDay: number): Bucke
 export interface LinkStore {
   put(ref: string, accountId: string, status: string): Promise<void>;
   get(ref: string): Promise<string | undefined>;
+  /** whether a sign-in made this account new: the proof a browser linked it (accountTokenOk) */
+  created(accountId: string): Promise<boolean>;
 }
 
 export function memoryLinks(): LinkStore {
-  const m = new Map<string, string>();
+  const m = new Map<string, { id: string; status: string }>();
   return {
-    put: async (ref, id) => {
-      m.set(ref, id);
+    put: async (ref, id, status) => {
+      m.set(ref, { id, status });
     },
-    get: async (ref) => m.get(ref),
+    get: async (ref) => m.get(ref)?.id,
+    created: async (accountId) =>
+      [...m.values()].some((l) => l.id === accountId && l.status === LINK_CREATED),
   };
 }
 
@@ -364,6 +373,7 @@ export function postgrestLinks(url: string, serviceKey: string, doFetch: typeof 
       const rows = (await r.json()) as { account_id?: string }[];
       return rows[0]?.account_id || undefined;
     },
+    created: postgrestLinkCreated(url, serviceKey, doFetch),
   };
 }
 
@@ -667,8 +677,10 @@ const ACCOUNT_ROUTES = new Set([
 
 export function makeHandler(deps: ConnectorDeps): (req: Request) => Promise<Response> {
   const doFetch = deps.fetch ?? fetch;
-  // one Unipile answer cache per handler, shared by every route that checks an account token
-  deps.browserKept ??= unipileBrowserKept(deps.unipileBase, deps.unipileKey, doFetch);
+  // which accounts a browser linked, from Orbit's record of its own sign-ins; one cache per handler, shared by every
+  // route that checks an account token
+  const links = deps.links;
+  deps.browserKept ??= linkedBrowserKept(async (id) => (links ? links.created(id) : false));
   const browserKept = deps.browserKept;
   const limits = deps.limits ?? DEFAULT_LIMITS;
   const now = deps.now ?? (() => new Date());
@@ -896,10 +908,6 @@ function uHeaders(deps: ConnectorDeps): Record<string, string> {
   return { 'content-type': 'application/json', accept: 'application/json', 'X-API-KEY': deps.unipileKey! };
 }
 
-/**
- * A hosted sign-in link for a new LinkedIn account. The account is created with our reference as its name, so the
- * status check can find it among the accounts once the student has signed in.
- */
 /** The signed address Unipile calls when a sign-in finishes; only the reference it was made for can use it. */
 async function notifyUrl(deps: ConnectorDeps, ref: string): Promise<string | undefined> {
   if (!deps.publicUrl || !deps.signingKey || !deps.links) return undefined;
@@ -953,9 +961,9 @@ async function unipileConnectStatus(
 ): Promise<ConnectStatus> {
   const ref = String(body.ref ?? '');
   if (!ref) return { status: 'error', message: 'No connection was started.' };
-  // only a ref this function issued (/connect/start: orbit_<random>) can find an account by its name. orbit-api names
-  // the accounts it links after the Orbit user id, and a user id is no secret (friends see each other's), so a bare
-  // id here would hand anyone that user's LinkedIn account and a token for it
+  // only a ref this function issued (/connect/start: orbit_<random>, unguessable) finds an account. orbit-api's
+  // sign-ins carry the Orbit user id as their reference, and a user id is no secret (friends see each other's), so a
+  // bare id here must never hand anyone that user's LinkedIn account and a token for it
   if (!ISSUED_REF.test(ref)) return { status: 'error', message: 'No connection was started.' };
   // a reconnect keeps the account's id: its own state says when the sign-in is through (the handler checked the token)
   const reconnect = text(body.reconnectAccountId, 200);
@@ -967,23 +975,18 @@ async function unipileConnectStatus(
     if (one.status !== 404) throw new Error(`unipile ${one.status}`);
     return { status: 'error', message: 'LinkedIn no longer has that account. Connect it again.' };
   }
-  // the account Unipile reported for this sign-in (notify_url): read its state directly
+  // the account Unipile reported for this sign-in (notify_url), and nothing else: Unipile names a LinkedIn account
+  // after the person, never after the reference, so the reference cannot be looked for among the accounts (and the
+  // account's later calls are refused without that report: accountTokenOk). Until it arrives, still waiting.
   const linked = await deps.links?.get(ref).catch(() => undefined);
-  if (linked) {
-    const one = await doFetch(`${deps.unipileBase}/api/v1/accounts/${encodeURIComponent(linked)}`, {
-      headers: uHeaders(deps),
-    });
-    if (one.ok) return accountState((await one.json()) as UnipileAccount, linked);
-    if (one.status !== 404) throw new Error(`unipile ${one.status}`);
-  }
-  const res = await doFetch(`${deps.unipileBase}/api/v1/accounts?limit=250`, { headers: uHeaders(deps) });
-  // not there yet is still waiting; anything else is Unipile failing
-  if (res.status === 404) return { status: 'pending' };
-  if (!res.ok) throw new Error(`unipile ${res.status}`);
-  const b = (await res.json()) as { items?: UnipileAccount[] };
-  const acc = b.items?.find((a) => a.name === ref);
-  if (!acc) return { status: 'pending' };
-  return accountState(acc, acc.id);
+  if (!linked) return { status: 'pending' };
+  const one = await doFetch(`${deps.unipileBase}/api/v1/accounts/${encodeURIComponent(linked)}`, {
+    headers: uHeaders(deps),
+  });
+  if (one.ok) return accountState((await one.json()) as UnipileAccount, linked);
+  // reported but not readable yet is still waiting; anything else is Unipile failing
+  if (one.status === 404) return { status: 'pending' };
+  throw new Error(`unipile ${one.status}`);
 }
 
 type UnipileAccount = { id?: string; name?: string; sources?: { status?: string }[] };
