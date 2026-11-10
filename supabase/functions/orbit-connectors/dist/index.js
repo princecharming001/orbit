@@ -761,6 +761,14 @@ var exaContentsResponseSchema = z.looseObject({
 });
 
 // supabase/functions/_shared/providers/linkedinCompanies.ts
+var pickAnswer = (p) => ({
+  status: "found",
+  companyId: p.companyId,
+  publicIdentifier: p.publicIdentifier,
+  name: p.name,
+  logoUrl: p.logoUrl,
+  exact: true
+});
 var COMPANY_RETRY_MS = 30 * 864e5;
 var LOGO_MAX_BYTES = 3e5;
 var text = (v, max = 120) => typeof v === "string" && v.trim() ? v.trim().slice(0, max) : void 0;
@@ -817,18 +825,12 @@ function sameCompanyName(theirs, asked) {
   const short = /\(([^)]{2,40})\)\s*$/.exec(String(theirs ?? ""))?.[1];
   return !!short && wide(short) === want;
 }
-var pageAddresses = (name) => {
-  const key = companyNameKey(name);
-  const joined = key.replace(/[^a-z0-9]+/g, "");
-  if (joined.length < 3) return [];
-  return [key.replace(/[^a-z0-9]+/g, "-")];
-};
-var LOOKUP_RULES_SINCE = Date.parse("2026-11-10T00:00:00Z");
+var LOOKUP_RULES = 2;
 function rowSettled(r, now) {
   if (!r) return false;
   if (r.status === "found" && r.logoUrl) return true;
   const at = Date.parse(r.checkedAt);
-  return at >= LOOKUP_RULES_SINCE && now.getTime() - at < COMPANY_RETRY_MS;
+  return (r.rules ?? 1) >= LOOKUP_RULES && now.getTime() - at < COMPANY_RETRY_MS;
 }
 var answerOf = (r) => ({
   status: r.status,
@@ -837,33 +839,65 @@ var answerOf = (r) => ({
   name: r.name,
   logoUrl: r.logoUrl
 });
-var followersOf = (c) => [c.followers_count, c.followerCount, c.followers].find((n) => typeof n === "number") ?? 0;
-var FOLLOWERS_CLEAR = 500;
+function words(v) {
+  return String(v ?? "").toLowerCase().normalize("NFKD").replace(/[\u0300-\u036f]/g, "").replace(/&/g, " and ").replace(/[^\p{L}\p{N}]+/gu, " ").trim().split(" ").filter(Boolean);
+}
+var SMALL_WORDS = /* @__PURE__ */ new Set(["of", "the", "and", "at", "for", "in", "de", "la"]);
+function namesCompany(theirs, asked) {
+  if (sameCompanyName(theirs, asked)) return true;
+  const t = String(theirs ?? "");
+  const head = /^(.+?)\s*(?:\s[-–—|:]\s|\()/.exec(t)?.[1];
+  if (head && sameCompanyName(head, asked)) return true;
+  const want = words(asked).join("");
+  if (want.length < 3 || want.length > 8 || words(asked).length !== 1) return false;
+  const all = words(t);
+  const initials = (ws) => ws.map((w) => w[0]).join("");
+  return initials(all) === want || initials(all.filter((w) => !SMALL_WORDS.has(w))) === want;
+}
+var ESTABLISHED_RATIO = 2e3;
+function chooseCompany(items, asked) {
+  const listed = items.filter(
+    (c) => typeof c.id === "string" && /^\d+$/.test(c.id) || typeof c.id === "number" && c.id > 0
+  );
+  const idOf = (c) => Number(c.id);
+  const same = listed.filter((c) => sameCompanyName(c.name, asked) || namesCompany(c.name, asked));
+  const first = listed[0];
+  if (first && namesCompany(first.name, asked)) {
+    const rivals = listed.slice(1).filter((c) => sameCompanyName(c.name, asked) || sameCompanyName(bare(c.name), asked));
+    if (rivals.every((r) => idOf(r) >= ESTABLISHED_RATIO * idOf(first)))
+      return { id: String(first.id), item: first };
+    return { reason: "ambiguous", sameIds: [first, ...rivals].map((c) => String(c.id)) };
+  }
+  const exact = listed.filter((c) => sameCompanyName(c.name, asked));
+  if (exact.length === 1) return { id: String(exact[0].id), item: exact[0] };
+  if (exact.length > 1) return { reason: "ambiguous", sameIds: exact.map((c) => String(c.id)) };
+  return same.length > 1 ? { reason: "ambiguous", sameIds: same.map((c) => String(c.id)) } : { reason: "not_found", sameIds: [] };
+}
+var bare = (v) => String(v ?? "").replace(/\s*\([^)]*\)\s*$/, "");
 async function companyByName(u, accountId, name, doFetch) {
+  const items = await searchCompanies(u, accountId, name, doFetch);
+  if (!Array.isArray(items)) return items;
+  const c = chooseCompany(items, name);
+  if ("id" in c) return { id: c.id, item: c.item };
+  return c.reason === "ambiguous" ? {
+    ok: false,
+    reason: "ambiguous",
+    message: "LinkedIn has more than one company of that name.",
+    sameIds: c.sameIds
+  } : { ok: false, reason: "not_found", message: "LinkedIn could not find that company." };
+}
+async function searchCompanies(u, accountId, keywords, doFetch) {
   const q = new URLSearchParams({ account_id: accountId, limit: "10" });
   const res = await doFetch(`${u.base}/api/v1/linkedin/search?${q}`, {
     method: "POST",
     headers: headers(u),
-    body: JSON.stringify({ api: "classic", category: "companies", keywords: name })
+    body: JSON.stringify({ api: "classic", category: "companies", keywords })
   });
   if (res.status === 429) return THROTTLED;
   if (res.status >= 400 && res.status < 500)
     return { ok: false, reason: "refused", message: await unipileError(res) };
   if (!res.ok) throw new Error(`unipile ${res.status}`);
-  const items = (await res.json()).items ?? [];
-  const same = items.filter(
-    (c) => sameCompanyName(c.name, name) && (typeof c.id === "string" || typeof c.id === "number")
-  );
-  if (same.length === 1) return { id: String(same[0].id), item: same[0] };
-  const ranked = [...same].sort((a, b) => followersOf(b) - followersOf(a));
-  if (ranked.length > 1 && followersOf(ranked[0]) >= FOLLOWERS_CLEAR && followersOf(ranked[0]) >= 3 * followersOf(ranked[1]))
-    return { id: String(ranked[0].id), item: ranked[0] };
-  return same.length ? {
-    ok: false,
-    reason: "ambiguous",
-    message: "LinkedIn has more than one company of that name.",
-    sameIds: same.map((c) => String(c.id))
-  } : { ok: false, reason: "not_found", message: "LinkedIn could not find that company." };
+  return (await res.json()).items ?? [];
 }
 async function companyPage(u, accountId, identifier, doFetch) {
   const q = new URLSearchParams({ account_id: accountId });
@@ -890,17 +924,6 @@ async function companyPage(u, accountId, identifier, doFetch) {
     }
   };
 }
-async function companyAtOwnName(u, accountId, name, doFetch, opts = {}) {
-  for (const slug of pageAddresses(name)) {
-    if (opts.spend && !await opts.spend()) return void 0;
-    const page = await companyPage(u, accountId, slug, doFetch).catch(() => void 0);
-    if (!page || !("company" in page) || !page.company?.id) continue;
-    const c = page.company;
-    if (!sameCompanyName(c.name, name) && !opts.among?.includes(c.id)) continue;
-    return { id: c.id, name: c.name, publicIdentifier: c.publicIdentifier, logo: c.logoUrl };
-  }
-  return void 0;
-}
 async function keepCompany(cache, key, c, doFetch, now) {
   let kept;
   if (c.logo && cache) {
@@ -920,7 +943,8 @@ async function keepCompany(cache, key, c, doFetch, now) {
     publicIdentifier: c.publicIdentifier,
     name: c.name,
     logoUrl: kept,
-    checkedAt: now.toISOString()
+    checkedAt: now.toISOString(),
+    rules: LOOKUP_RULES
   };
   if (kept || !c.logo) await cache?.put(row).catch(() => void 0);
   return { ...answerOf(row), logoUrl: kept ?? c.logo };
@@ -937,43 +961,45 @@ async function copyLogo(cache, id, url2, doFetch) {
     return void 0;
   }
 }
-async function keepProfileLogos(cache, orgs, doFetch, now) {
+async function keepProfileLogos(cache, orgs, doFetch, now, opts = {}) {
   if (!cache) return 0;
   const linked = orgs.filter(
     (o) => o.logoUrl && isLinkedInImage(o.logoUrl) && /^\d+$/.test(o.companyId ?? o.schoolId ?? "")
   );
   if (!linked.length) return 0;
-  const keys = [...new Set(linked.map((o) => companyNameKey(o.company ?? "")).filter(Boolean))];
+  const keyOf = (o) => companyNameKey(o.company ?? o.school ?? "");
+  const keys = [...new Set(linked.map(keyOf).filter(Boolean))];
   const rows = keys.length ? await cache.getMany(keys).catch(() => ({})) : {};
   const copies = /* @__PURE__ */ new Map();
   let kept = 0;
   await Promise.all(
     linked.map(async (o) => {
       const id = o.companyId ?? o.schoolId;
-      const key = o.company ? companyNameKey(o.company) : "";
+      const key = keyOf(o);
       const row = key ? rows[key] : void 0;
-      if (row?.companyId === id && row.logoUrl) {
-        o.logoUrl = row.logoUrl;
-        return;
+      let url2;
+      if (row?.companyId === id && row.logoUrl) url2 = row.logoUrl;
+      else {
+        let copy = copies.get(id);
+        if (!copy) {
+          copy = copyLogo(cache, id, o.logoUrl, doFetch);
+          copies.set(id, copy);
+        }
+        url2 = await copy;
+        if (!url2) return;
+        kept++;
+        if (row?.status === "found" && row.companyId === id && !row.logoUrl)
+          await cache.put({ ...row, logoUrl: url2, checkedAt: now.toISOString() }).catch(() => void 0);
       }
-      let copy = copies.get(id);
-      if (!copy) {
-        copy = copyLogo(cache, id, o.logoUrl, doFetch);
-        copies.set(id, copy);
-      }
-      const url2 = await copy;
-      if (!url2) return;
       o.logoUrl = url2;
-      kept++;
-      if (key && (!row || !(row.status === "found" && row.logoUrl)))
-        await cache.put({
+      if (opts.accountId && key && cache.putPick)
+        await cache.putPick(opts.accountId, {
           key,
-          status: "found",
           companyId: id,
           publicIdentifier: o.companySlug,
-          name: o.company,
+          name: o.company ?? o.school,
           logoUrl: url2,
-          checkedAt: now.toISOString()
+          source: "position"
         }).catch(() => void 0);
     })
   );
@@ -986,41 +1012,46 @@ async function lookupCompany(u, o) {
     const page = await companyPage(u, accountId, o.companyId, doFetch).catch(() => void 0);
     if (page && "company" in page && page.company) {
       const c2 = page.company;
-      return {
-        looked: true,
-        answer: await keepCompany(
-          cache,
-          key,
-          { id: c2.id ?? o.companyId, name: c2.name, publicIdentifier: c2.publicIdentifier, logo: c2.logoUrl },
-          doFetch,
-          now
-        )
+      const logoUrl = c2.logoUrl && cache ? await copyLogo(cache, c2.id ?? o.companyId, c2.logoUrl, doFetch) : void 0;
+      const pick = {
+        key,
+        companyId: c2.id ?? o.companyId,
+        publicIdentifier: c2.publicIdentifier,
+        name: c2.name,
+        logoUrl,
+        source: "position"
       };
+      await cache?.putPick?.(accountId, pick).catch(() => void 0);
+      return { looked: true, answer: { ...pickAnswer(pick), logoUrl: logoUrl ?? c2.logoUrl } };
     }
     if (page && !("company" in page) && page.reason === "throttled")
       return { looked: true, stopped: "throttled" };
     if (!await spend()) return { looked: true, stopped: "limit" };
   }
   const name = searchName(o.name);
-  const found = await companyByName(u, accountId, name, doFetch);
-  let c;
-  if ("id" in found)
-    c = {
-      id: found.id,
-      name: text(found.item.name, 160),
-      publicIdentifier: text(found.item.public_identifier, 160),
-      logo: licdn(found.item.logo)
-    };
-  else {
-    if (found.reason === "throttled") return { looked: true, stopped: "throttled" };
-    if (found.reason !== "ambiguous" && found.reason !== "not_found") return { looked: true };
-    c = await companyAtOwnName(u, accountId, name, doFetch, { among: found.sameIds, spend });
-    if (!c) {
-      const row = { key, status: found.reason, checkedAt: now.toISOString() };
-      await cache?.put(row).catch(() => void 0);
-      return { looked: true, answer: answerOf(row) };
-    }
+  const items = await searchCompanies(u, accountId, name, doFetch);
+  if (!Array.isArray(items)) {
+    if (items.reason === "throttled") return { looked: true, stopped: "throttled" };
+    return { looked: true };
   }
+  const chosen = chooseCompany(items, name);
+  if (!("id" in chosen)) {
+    const first = items[0];
+    if (o.recheck?.status === "found" && o.recheck.companyId && first && String(first.id) === o.recheck.companyId && namesCompany(first.name, name)) {
+      const row2 = { ...o.recheck, checkedAt: now.toISOString(), rules: LOOKUP_RULES };
+      await cache?.put(row2).catch(() => void 0);
+      return { looked: true, answer: answerOf(row2) };
+    }
+    const row = { key, status: chosen.reason, checkedAt: now.toISOString(), rules: LOOKUP_RULES };
+    await cache?.put(row).catch(() => void 0);
+    return { looked: true, answer: answerOf(row) };
+  }
+  let c = {
+    id: chosen.id,
+    name: text(chosen.item.name, 160),
+    publicIdentifier: text(chosen.item.public_identifier, 160),
+    logo: licdn(chosen.item.logo)
+  };
   if (!c.logo && await spend()) {
     const page = await companyPage(u, accountId, c.id, doFetch).catch(() => void 0);
     if (page && "company" in page && page.company)
@@ -1030,10 +1061,6 @@ async function lookupCompany(u, o) {
         publicIdentifier: page.company.publicIdentifier ?? c.publicIdentifier,
         logo: page.company.logoUrl
       };
-  }
-  if (!c.logo && "id" in found) {
-    const own = await companyAtOwnName(u, accountId, name, doFetch, { spend }).catch(() => void 0);
-    if (own?.logo) c = own;
   }
   return { looked: true, answer: await keepCompany(cache, key, c, doFetch, now) };
 }
@@ -1276,22 +1303,54 @@ function postgrestCompanyCache(url2, serviceKey2, doFetch = fetch) {
             publicIdentifier: x.public_identifier ?? void 0,
             name: x.name ?? void 0,
             logoUrl: x.logo_url ?? void 0,
-            checkedAt: String(x.checked_at)
+            checkedAt: String(x.checked_at),
+            rules: Number(x.rules ?? 1)
           }
         ])
       );
     },
     put: async (row) => {
-      await rpc("orbit_linkedin_companies_put", {
+      await rpc("orbit_linkedin_companies_put2", {
         p_key: row.key,
         p_status: row.status,
         p_company_id: row.companyId ?? null,
         p_public_identifier: row.publicIdentifier ?? null,
         p_name: row.name ?? null,
-        p_logo_url: row.logoUrl ?? null
+        p_logo_url: row.logoUrl ?? null,
+        p_rules: row.rules ?? LOOKUP_RULES
       });
     },
-    storeLogo: storageLogoWriter(url2, serviceKey2, doFetch)
+    storeLogo: storageLogoWriter(url2, serviceKey2, doFetch),
+    getPicks: async (accountId, keys) => {
+      if (!keys.length || !accountId) return {};
+      const r = await rpc("orbit_linkedin_company_picks_get", { p_account: accountId, p_keys: keys });
+      if (!r.ok) return {};
+      const rows = await r.json() ?? [];
+      return Object.fromEntries(
+        rows.map((x) => [
+          String(x.key),
+          {
+            key: String(x.key),
+            companyId: String(x.company_id),
+            publicIdentifier: x.public_identifier ?? void 0,
+            name: x.name ?? void 0,
+            logoUrl: x.logo_url ?? void 0,
+            source: x.source === "student" ? "student" : "position"
+          }
+        ])
+      );
+    },
+    putPick: async (accountId, p) => {
+      await rpc("orbit_linkedin_company_picks_put", {
+        p_account: accountId,
+        p_key: p.key,
+        p_company_id: p.companyId,
+        p_public_identifier: p.publicIdentifier ?? null,
+        p_name: p.name ?? null,
+        p_logo_url: p.logoUrl ?? null,
+        p_source: p.source
+      });
+    }
   };
 }
 function postgrestSharedReads(url2, serviceKey2, doFetch = fetch) {
@@ -1423,10 +1482,16 @@ async function companiesRoute(deps, body, ctx) {
   const clean = new Map([...byKey].map(([k, n]) => [k, companyNameKey(searchName(n))]));
   const keys = [.../* @__PURE__ */ new Set([...byKey.keys(), ...[...clean.values()].filter(Boolean)])];
   const rows = cache ? await cache.getMany(keys).catch(() => ({})) : {};
+  const picks = cache?.getPicks && accountId ? await cache.getPicks(accountId, [...byKey.keys()]).catch(() => ({})) : {};
   const now = ctx.now();
   const companies = {};
   const misses = [];
   for (const [key, name] of byKey) {
+    const pick = picks[key];
+    if (pick) {
+      companies[name] = pickAnswer(pick);
+      continue;
+    }
     const own = rows[key];
     const cleaned = rows[clean.get(key) ?? ""];
     const r = own?.status === "found" ? own : cleaned?.status === "found" ? cleaned : own;
@@ -1462,6 +1527,57 @@ async function companiesRoute(deps, body, ctx) {
     pending: Math.max(0, misses.length - looked),
     ...stopped ? { stopped } : {}
   };
+}
+async function companyOptionsRoute(deps, body, ctx) {
+  const accountId = String(body.accountId ?? "");
+  const name = text2(body.name, 120);
+  if (!name || name.length < 2) return { ok: false, reason: "bad_request", message: "Type a company name." };
+  if (!await ctx.spend("company", "logos")) return LEDGER_LIMIT;
+  const u = { base: deps.unipileBase ?? "", key: deps.unipileKey ?? "" };
+  const items = await searchCompanies(u, accountId, name, ctx.doFetch);
+  if (!Array.isArray(items)) return { ok: false, reason: items.reason, message: items.message };
+  const options = [];
+  for (const c of items) {
+    const id = c.id === void 0 || c.id === null ? "" : String(c.id);
+    const n = text2(c.name, 160);
+    if (!/^\d+$/.test(id) || !n) continue;
+    const industry = Array.isArray(c.industry) ? c.industry.find((x) => typeof x === "string") : c.industry;
+    options.push({
+      id,
+      name: n,
+      industry: text2(industry, 80),
+      location: text2(c.location, 80),
+      logoUrl: licdn2(c.logo),
+      publicIdentifier: text2(c.public_identifier, 160)
+    });
+    if (options.length >= 8) break;
+  }
+  return { ok: true, options };
+}
+async function companyPickRoute(deps, body, ctx) {
+  const accountId = String(body.accountId ?? "");
+  const name = text2(body.name, 160);
+  const companyId = text2(body.companyId, 40);
+  const key = name ? companyNameKey(name) : "";
+  if (!key || !companyId || !/^\d+$/.test(companyId))
+    return { ok: false, reason: "bad_request", message: "Say which company." };
+  if (!await ctx.spend("company", "logos")) return LEDGER_LIMIT;
+  const u = { base: deps.unipileBase ?? "", key: deps.unipileKey ?? "" };
+  const page = await companyPage(u, accountId, companyId, ctx.doFetch);
+  if (!("company" in page) || !page.company) return page;
+  const c = page.company;
+  const cache = deps.companies;
+  const logoUrl = c.logoUrl && cache ? await copyLogo(cache, c.id ?? companyId, c.logoUrl, ctx.doFetch) : void 0;
+  const pick = {
+    key,
+    companyId: c.id ?? companyId,
+    publicIdentifier: c.publicIdentifier,
+    name: c.name,
+    logoUrl,
+    source: "student"
+  };
+  await cache?.putPick?.(accountId, pick).catch(() => void 0);
+  return { ok: true, company: { ...pickAnswer(pick), logoUrl: logoUrl ?? c.logoUrl } };
 }
 var DEFAULT_LEDGER = { profile: 100, posts: 100, search: 100, company: 150 };
 var LEDGER_CEILINGS = {
@@ -1564,6 +1680,8 @@ function memoryTake(clock = Date.now) {
 }
 var UNIPILE_ROUTES = /* @__PURE__ */ new Set([
   "/companies",
+  "/companies/options",
+  "/companies/pick",
   "/connect/start",
   "/connect/status",
   "/relations",
@@ -1581,6 +1699,8 @@ var UNIPILE_ROUTES = /* @__PURE__ */ new Set([
 ]);
 var ACCOUNT_ROUTES = /* @__PURE__ */ new Set([
   "/companies",
+  "/companies/options",
+  "/companies/pick",
   "/account",
   "/relations",
   "/mutuals",
@@ -1729,6 +1849,10 @@ function makeHandler(deps) {
     }
     if (path === "/ledger") return ledgerReport(take, totals, accountId, now(), h);
     if (path === "/companies") return json(200, await companiesRoute(deps, body, { doFetch, spend, now }), h);
+    if (path === "/companies/options")
+      return json(200, await companyOptionsRoute(deps, body, { doFetch, spend }), h);
+    if (path === "/companies/pick")
+      return json(200, await companyPickRoute(deps, body, { doFetch, spend, now }), h);
     let engagement;
     if (path === "/engagement") {
       const parsed = engagementRequest(body);
@@ -2841,7 +2965,8 @@ async function enrichmentRoute(deps, path, body, ctx) {
           deps.companies,
           [...read.profile.experience ?? [], ...read.profile.education ?? []],
           doFetch,
-          now()
+          now(),
+          { accountId: String(body.accountId ?? "") || void 0 }
         ).catch(() => 0);
       if (read.ok && "profile" in read && read.profile && !read.profile.throttled.length) {
         const key = await profileShareKey(body);

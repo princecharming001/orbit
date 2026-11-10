@@ -54,14 +54,19 @@ import {
   COMPANY_RETRY_MS,
   type CompanyAnswer,
   type CompanyCache,
+  type CompanyPick,
   type CompanyRow,
   companyByName,
   companyNameKey,
   companyPage,
+  copyLogo as copyCompanyLogo,
   isLinkedInImage,
   keepProfileLogos,
+  LOOKUP_RULES,
   lookupCompany,
+  pickAnswer,
   rowSettled,
+  searchCompanies,
   searchName,
   storageLogoWriter,
 } from '../_shared/providers/linkedinCompanies.ts';
@@ -192,16 +197,37 @@ export function memorySharedReads(): SharedReads {
   };
 }
 
-export function memoryCompanyCache(): CompanyCache & { rows: Map<string, CompanyRow> } {
+export function memoryCompanyCache(): CompanyCache & {
+  rows: Map<string, CompanyRow>;
+  picks: Map<string, CompanyPick>;
+} {
   const rows = new Map<string, CompanyRow>();
+  const picks = new Map<string, CompanyPick>();
   return {
     rows,
+    picks,
     getMany: async (keys) =>
       Object.fromEntries(keys.flatMap((k) => (rows.has(k) ? [[k, rows.get(k)!]] : []))),
     put: async (row) => {
-      rows.set(row.key, row);
+      const had = rows.get(row.key);
+      // as orbit_linkedin_companies_put: a stored logo stays only for the same company still found
+      const keep = row.status === 'found' && had?.companyId === row.companyId ? had?.logoUrl : undefined;
+      rows.set(row.key, { ...row, logoUrl: row.logoUrl ?? keep });
     },
     storeLogo: async (id) => `https://logos.test/${id}.png`,
+    getPicks: async (accountId, keys) =>
+      Object.fromEntries(
+        keys.flatMap((k) => {
+          const p = picks.get(`${accountId}|${k}`);
+          return p ? [[k, p]] : [];
+        }),
+      ),
+    putPick: async (accountId, pick) => {
+      const had = picks.get(`${accountId}|${pick.key}`);
+      // as orbit_linkedin_company_picks_put: the student's own pick is never replaced by a position
+      if (had?.source === 'student' && pick.source !== 'student') return;
+      picks.set(`${accountId}|${pick.key}`, pick);
+    },
   };
 }
 
@@ -235,21 +261,53 @@ export function postgrestCompanyCache(
             name: (x.name as string | null) ?? undefined,
             logoUrl: (x.logo_url as string | null) ?? undefined,
             checkedAt: String(x.checked_at),
+            rules: Number(x.rules ?? 1),
           },
         ]),
       );
     },
     put: async (row) => {
-      await rpc('orbit_linkedin_companies_put', {
+      await rpc('orbit_linkedin_companies_put2', {
         p_key: row.key,
         p_status: row.status,
         p_company_id: row.companyId ?? null,
         p_public_identifier: row.publicIdentifier ?? null,
         p_name: row.name ?? null,
         p_logo_url: row.logoUrl ?? null,
+        p_rules: row.rules ?? LOOKUP_RULES,
       });
     },
     storeLogo: storageLogoWriter(url, serviceKey, doFetch),
+    getPicks: async (accountId, keys) => {
+      if (!keys.length || !accountId) return {};
+      const r = await rpc('orbit_linkedin_company_picks_get', { p_account: accountId, p_keys: keys });
+      if (!r.ok) return {};
+      const rows = ((await r.json()) as Record<string, unknown>[] | null) ?? [];
+      return Object.fromEntries(
+        rows.map((x) => [
+          String(x.key),
+          {
+            key: String(x.key),
+            companyId: String(x.company_id),
+            publicIdentifier: (x.public_identifier as string | null) ?? undefined,
+            name: (x.name as string | null) ?? undefined,
+            logoUrl: (x.logo_url as string | null) ?? undefined,
+            source: x.source === 'student' ? 'student' : 'position',
+          } satisfies CompanyPick,
+        ]),
+      );
+    },
+    putPick: async (accountId, p) => {
+      await rpc('orbit_linkedin_company_picks_put', {
+        p_account: accountId,
+        p_key: p.key,
+        p_company_id: p.companyId,
+        p_public_identifier: p.publicIdentifier ?? null,
+        p_name: p.name ?? null,
+        p_logo_url: p.logoUrl ?? null,
+        p_source: p.source,
+      });
+    },
   };
 }
 
@@ -453,10 +511,19 @@ async function companiesRoute(
   const clean = new Map([...byKey].map(([k, n]) => [k, companyNameKey(searchName(n))] as const));
   const keys = [...new Set([...byKey.keys(), ...[...clean.values()].filter(Boolean)])];
   const rows = (cache ? await cache.getMany(keys).catch(() => ({})) : {}) as Record<string, CompanyRow>;
+  // what this account's own people's positions, or the student, settled: before anything the shared list says
+  const picks = (
+    cache?.getPicks && accountId ? await cache.getPicks(accountId, [...byKey.keys()]).catch(() => ({})) : {}
+  ) as Record<string, CompanyPick>;
   const now = ctx.now();
   const companies: Record<string, CompanyAnswer> = {};
   const misses: [string, string][] = [];
   for (const [key, name] of byKey) {
+    const pick = picks[key];
+    if (pick) {
+      companies[name] = pickAnswer(pick);
+      continue;
+    }
     const own = rows[key];
     const cleaned = rows[clean.get(key) ?? ''];
     const r = own?.status === 'found' ? own : cleaned?.status === 'found' ? cleaned : own;
@@ -492,6 +559,96 @@ async function companiesRoute(
     pending: Math.max(0, misses.length - looked),
     ...(stopped ? { stopped } : {}),
   };
+}
+
+/** One company LinkedIn's search lists for a name, for the student to choose from (its logo is LinkedIn's link). */
+export interface CompanyOption {
+  id: string;
+  name: string;
+  industry?: string;
+  location?: string;
+  logoUrl?: string;
+  publicIdentifier?: string;
+}
+
+/**
+ * POST /companies/options {accountId, token, name} → {ok, options}: the companies LinkedIn's own search lists for a
+ * name, in LinkedIn's order, so the student picks the one they mean ("Triumph": Triumph Labs in San Francisco, TRIUMPH
+ * the aerospace group, ...). One company search from the account's ledger; the logos are LinkedIn's links, shown now
+ * and copied only for the one picked.
+ */
+async function companyOptionsRoute(
+  deps: ConnectorDeps,
+  body: Record<string, unknown>,
+  ctx: {
+    doFetch: typeof fetch;
+    spend: <K extends LedgerKind>(kind: K, caller: LedgerCaller<K>) => Promise<boolean>;
+  },
+): Promise<Record<string, unknown>> {
+  const accountId = String(body.accountId ?? '');
+  const name = text(body.name, 120);
+  if (!name || name.length < 2) return { ok: false, reason: 'bad_request', message: 'Type a company name.' };
+  if (!(await ctx.spend('company', 'logos'))) return LEDGER_LIMIT;
+  const u = { base: deps.unipileBase ?? '', key: deps.unipileKey ?? '' };
+  const items = await searchCompanies(u, accountId, name, ctx.doFetch);
+  if (!Array.isArray(items)) return { ok: false, reason: items.reason, message: items.message };
+  const options: CompanyOption[] = [];
+  for (const c of items) {
+    const id = c.id === undefined || c.id === null ? '' : String(c.id);
+    const n = text(c.name, 160);
+    if (!/^\d+$/.test(id) || !n) continue;
+    const industry = Array.isArray(c.industry) ? c.industry.find((x) => typeof x === 'string') : c.industry;
+    options.push({
+      id,
+      name: n,
+      industry: text(industry, 80),
+      location: text(c.location, 80),
+      logoUrl: licdn(c.logo),
+      publicIdentifier: text(c.public_identifier, 160),
+    });
+    if (options.length >= 8) break;
+  }
+  return { ok: true, options };
+}
+
+/**
+ * POST /companies/pick {accountId, token, name, companyId} → {ok, company}: the student says which LinkedIn company a
+ * name means. Its page is read by that id (one company read), its logo copied into Orbit's storage, and it becomes
+ * this account's pick for the name: exact, and never changed by a position read later.
+ */
+async function companyPickRoute(
+  deps: ConnectorDeps,
+  body: Record<string, unknown>,
+  ctx: {
+    doFetch: typeof fetch;
+    spend: <K extends LedgerKind>(kind: K, caller: LedgerCaller<K>) => Promise<boolean>;
+    now: () => Date;
+  },
+): Promise<Record<string, unknown>> {
+  const accountId = String(body.accountId ?? '');
+  const name = text(body.name, 160);
+  const companyId = text(body.companyId, 40);
+  const key = name ? companyNameKey(name) : '';
+  if (!key || !companyId || !/^\d+$/.test(companyId))
+    return { ok: false, reason: 'bad_request', message: 'Say which company.' };
+  if (!(await ctx.spend('company', 'logos'))) return LEDGER_LIMIT;
+  const u = { base: deps.unipileBase ?? '', key: deps.unipileKey ?? '' };
+  const page = await companyPage(u, accountId, companyId, ctx.doFetch);
+  if (!('company' in page) || !page.company) return page;
+  const c = page.company;
+  const cache = deps.companies;
+  const logoUrl =
+    c.logoUrl && cache ? await copyCompanyLogo(cache, c.id ?? companyId, c.logoUrl, ctx.doFetch) : undefined;
+  const pick: CompanyPick = {
+    key,
+    companyId: c.id ?? companyId,
+    publicIdentifier: c.publicIdentifier,
+    name: c.name,
+    logoUrl,
+    source: 'student',
+  };
+  await cache?.putPick?.(accountId, pick).catch(() => undefined);
+  return { ok: true, company: { ...pickAnswer(pick), logoUrl: logoUrl ?? c.logoUrl } };
 }
 
 /** The LinkedIn ledgers: profile reads, post reads, search calls (plan 21 §6), and company lookups for logos. */
@@ -643,6 +800,8 @@ export function memoryTake(clock: () => number = Date.now): Take {
 
 const UNIPILE_ROUTES = new Set([
   '/companies',
+  '/companies/options',
+  '/companies/pick',
   '/connect/start',
   '/connect/status',
   '/relations',
@@ -661,6 +820,8 @@ const UNIPILE_ROUTES = new Set([
 /** Routes that act on a connected account, so need its token. */
 const ACCOUNT_ROUTES = new Set([
   '/companies',
+  '/companies/options',
+  '/companies/pick',
   '/account',
   '/relations',
   '/mutuals',
@@ -824,6 +985,10 @@ export function makeHandler(deps: ConnectorDeps): (req: Request) => Promise<Resp
     }
     if (path === '/ledger') return ledgerReport(take, totals, accountId, now(), h);
     if (path === '/companies') return json(200, await companiesRoute(deps, body, { doFetch, spend, now }), h);
+    if (path === '/companies/options')
+      return json(200, await companyOptionsRoute(deps, body, { doFetch, spend }), h);
+    if (path === '/companies/pick')
+      return json(200, await companyPickRoute(deps, body, { doFetch, spend, now }), h);
     let engagement: EngagementRequest | undefined;
     if (path === '/engagement') {
       const parsed = engagementRequest(body);
@@ -2400,6 +2565,7 @@ async function enrichmentRoute(
           [...(read.profile.experience ?? []), ...(read.profile.education ?? [])],
           doFetch,
           now(),
+          { accountId: String(body.accountId ?? '') || undefined },
         ).catch(() => 0);
       // every full read refreshes the shared copy, with only what anyone would see; a read LinkedIn held sections
       // back on is this account's alone

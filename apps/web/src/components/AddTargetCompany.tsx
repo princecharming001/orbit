@@ -5,10 +5,13 @@ import { suggestCompanies } from '../data/companies';
 import { addTargetCompanies } from '../engine/targets';
 import { cx } from '../ui';
 import { Suggest } from '../ui/Suggest';
+import { keepLinkedInPick, linkedInCompanySuggestions } from './CompanyChooser';
 
 /**
- * One line that adds a target company where the list is shown: suggestions with each company's logo as you type, a
- * pick adds it at once, Enter (or a comma-separated list) adds what was typed. A company already on the list says so.
+ * One line that adds a target company where the list is shown: suggestions with each company's logo as you type (the
+ * student's network and well-known companies at once, LinkedIn's own list once typing pauses, so any company on
+ * LinkedIn can be found and the right one of several namesakes picked), a pick adds it at once, Enter (or a
+ * comma-separated list) adds what was typed. A company already on the list says so.
  */
 export function AddTargetCompany({
   userId,
@@ -72,7 +75,8 @@ export function AddTargetCompany({
             if (note) setNote('');
           }}
           suggest={(q) => suggestCompanies(q, taken)}
-          onPick={(s) => void add(s.value)}
+          more={(q, current) => linkedInCompanySuggestions({ id: userId }, q, current)}
+          onPick={(s) => void add(s.value).then(() => keepLinkedInPick({ id: userId }, s))}
           onKeyDown={(e) => {
             if (e.key !== 'Enter') return;
             // Enter on a highlighted suggestion picks it (Suggest handles that)

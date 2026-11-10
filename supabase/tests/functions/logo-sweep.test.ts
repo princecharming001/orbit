@@ -33,7 +33,7 @@ async function people(userId: string, org: string, n: number) {
       values (${userId}::uuid, ${`P ${org} ${i}`}, ${`p ${org.toLowerCase()} ${i}`}, ${org})`;
 }
 
-/** Unipile: Stripe's page at its own name, a search for the rest; logos and storage answer. */
+/** Unipile: a search finds Stripe and Ramp, nothing else; logos and storage answer. */
 function fakeUnipile() {
   const asked: string[] = [];
   const stored: string[] = [];
@@ -63,6 +63,10 @@ function fakeUnipile() {
       if (kw === 'Ramp')
         return Response.json({
           items: [{ id: '1406226', name: 'Ramp', public_identifier: 'ramp', logo: logo('ramp') }],
+        });
+      if (kw === 'Stripe')
+        return Response.json({
+          items: [{ id: '2135371', name: 'Stripe', public_identifier: 'stripe', logo: logo('stripe') }],
         });
       return Response.json({ items: [] });
     }
@@ -128,10 +132,10 @@ describe('logos.sweep', () => {
 
   it('stops at the account share of the ledger and leaves the rest for later', async () => {
     const a = await connectedUser(t.db, { linkedinAccount: 'acc-b' });
-    for (let i = 0; i < 40; i++) await people(a, `Firm ${i}`, 3);
+    for (let i = 0; i < 60; i++) await people(a, `Firm ${i}`, 3);
     const f = fakeUnipile();
     const r = await runLogoSweep(t.db, deps(f), NOW);
-    // each name takes up to two reads (its own page, then a search); the share is SWEEP_SHARE of 150
+    // each name takes one read (a search); the share is SWEEP_SHARE of 150
     expect(r.stopped).toBe('limit');
     const [used] = await t.db.sql<{ count: number }>`
       select count from public.orbit_proxy_counters where bucket = ${`connectors:li:company:2026-11-22:acc-b`}`;
@@ -140,7 +144,7 @@ describe('logos.sweep', () => {
     const [kept] = await t.db.sql<{
       n: number;
     }>`select count(*)::int as n from orbit_private.linkedin_companies`;
-    expect(kept!.n + r.remaining).toBe(40);
+    expect(kept!.n + r.remaining).toBe(60);
     expect(companyNameKey('Firm 1, Inc.')).toBe('firm 1');
   });
 

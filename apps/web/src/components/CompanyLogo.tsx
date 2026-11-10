@@ -1,13 +1,12 @@
 import type { Organization, Person } from '@orbit/core';
-import { companyDomain, companyInitials, looksLikeSchool, normalizeCompany } from '@orbit/core';
+import { companyDomain, normalizeCompany } from '@orbit/core';
 import { useLiveQuery } from 'dexie-react-hooks';
-import { Users } from 'lucide-react';
+import { Building2, Users } from 'lucide-react';
 import type React from 'react';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useInView } from 'react-intersection-observer';
-import { findSchoolDomain } from '../data/schools';
 import { db } from '../db/schema';
-import { bundledLogo, forgetLogo, isBundledLogo, knownLogo, resolveLogo } from '../engine/logoImage';
+import { bundledLogo } from '../engine/logoImage';
 import { wantCompanyLogo } from '../engine/logoQueue';
 import { linkedInImageExpired } from '../engine/photos';
 import { cx } from '../ui';
@@ -17,15 +16,16 @@ const usableLogo = (o: Organization | undefined, failed?: string) =>
   o?.logoUrl && o.logoUrl !== failed && !linkedInImageExpired(o.logoUrl) ? o.logoUrl : undefined;
 
 /**
- * A company's logo, small and square, with its name on hover. Logos come from LinkedIn (the student's rule: never a
- * guessed one). The company's own LinkedIn logo comes first (kept on the organisation by enrichment and by the logo
- * queue, which looks a company up on LinkedIn when a tile shows it without one; an expired link is skipped until it
- * is fetched again), from the organisation by id or any organisation of the same name. Until LinkedIn has answered,
- * only a logo shipped with the app stands in, and only for a web address Orbit knows for certain (a stored domain,
- * the list of well-known companies and universities): never a name turned into a ".com", never a work address, never
- * an icon service's answer for a company. A school's official address may still show its own site icon. Otherwise
- * it is the company's initials on a tile coloured by its name, so a row of them still lines up and the same company
- * always looks the same.
+ * A company's logo, small and square, with its name on hover. Logos come from LinkedIn and are that exact company's
+ * (the student's rule: never a guessed one, never another company's of the same name). The company's own LinkedIn logo
+ * comes first: kept on the organisation by enrichment (a position on someone's profile names the company) and by the
+ * logo queue (engine/logoQueue: Orbit's shared list, and the companies this student's people's profiles settled), from
+ * the organisation by id or any organisation of the same name. Schools too: LinkedIn lists them like companies.
+ *
+ * Until LinkedIn has answered, only a logo shipped with the app stands in, and only for a web address Orbit knows for
+ * certain (a stored domain, the list of well-known companies and universities). Otherwise, and for a company LinkedIn
+ * shows no logo for, the tile is LinkedIn's own placeholder for a company without one: a plain building, never
+ * letters made up from the name.
  */
 export function CompanyLogo({
   name,
@@ -61,59 +61,22 @@ export function CompanyLogo({
   const org = orgs?.[0];
   const inViewRef = useRef(false);
   const [ownFailed, setOwnFailed] = useState<string>();
-  const ownOrg = orgs?.find((o) => usableLogo(o, ownFailed));
+  // the organisation's own row first: a logo settled for it beats one on another row of the same name
+  // an organisation settled exactly (a position, or the student's pick) shows only its own logo, never the logo of
+  // another row that merely shares the name
+  const ownOrg = (org?.linkedinCompanyExact ? [org] : orgs)?.find((o) => usableLogo(o, ownFailed));
   const own = usableLogo(ownOrg, ownFailed);
   const companyName = name ?? org?.name;
   // cheap (core caches by name), so it is computed each render rather than memoised on a list rebuilt by callers
   const known =
     domain ?? companyDomain(companyName, { domains: orgs?.flatMap((o) => o.domains ?? []), guess: false });
-  const named = !!companyName && looksLikeSchool(companyName);
-  // no LinkedIn logo yet: ask LinkedIn (engine/logoQueue), once the orgs are read and the tile is near the screen;
-  // never for a school (its own site icon stands in, and LinkedIn's company search does not list schools)
-  const schoolRef = useRef(false);
+  // no LinkedIn logo yet: ask LinkedIn (engine/logoQueue), once the orgs are read and the tile is near the screen
   useEffect(() => {
-    if (orgs && !own && companyName && inViewRef.current && !schoolRef.current) wantCompanyLogo(companyName);
+    if (orgs && !own && companyName && inViewRef.current) wantCompanyLogo(companyName);
   });
-  // the school list and the icon are looked for once the tile is near the screen
   const { ref, inView } = useInView({ triggerOnce: true, rootMargin: '200px', fallbackInView: true });
   inViewRef.current = inView;
-  // a school the short list does not know: the full school list, also for short names that do not read like one
-  // ("sjsu", "UCSC"); the list loads and is indexed once, and each name is answered once
-  const [schoolDomain, setSchoolDomain] = useState<string>();
-  useEffect(() => {
-    setSchoolDomain(undefined);
-    if (known || !companyName || !inView) return;
-    let live = true;
-    findSchoolDomain(companyName)
-      .then((d) => live && setSchoolDomain(d))
-      .catch(() => undefined);
-    return () => {
-      live = false;
-    };
-  }, [known, companyName, inView]);
-  const d = known ?? schoolDomain;
-  // a school by its name, by the school list, or by its address: its own site icon stands in for a LinkedIn logo
-  const school = named || !!schoolDomain || (!!d && /\.edu$|\.ac\.[a-z]{2}$/.test(d));
-  schoolRef.current = school;
-  const [found, setFound] = useState<{ domain: string; src: string | null }>();
-  useEffect(() => {
-    if (!d || own || !inView) return;
-    // a company: the logo shipped with the app for its known address, or nothing (no icon services)
-    if (!school) {
-      setFound({ domain: d, src: bundledLogo(d) ?? null });
-      return;
-    }
-    const k = knownLogo(d);
-    if (k !== undefined) {
-      setFound({ domain: d, src: k });
-      return;
-    }
-    let live = true;
-    resolveLogo(d).then((src) => live && setFound({ domain: d, src }));
-    return () => {
-      live = false;
-    };
-  }, [d, own, inView, school]);
+  const [bundledFailed, setBundledFailed] = useState<string>();
   if (!companyName && !org) return null;
   const label = labelOverride ?? companyName ?? '';
   const box = { width: size, height: size };
@@ -138,15 +101,11 @@ export function CompanyLogo({
   );
   // the company's own logo, from LinkedIn
   if (own) return img(own, 'linkedin', () => setOwnFailed(own));
-  const src = d && found?.domain === d ? found.src : undefined;
-  if (src)
-    return img(src, isBundledLogo(src) ? 'bundled' : 'icon', () => {
-      forgetLogo(d!);
-      setFound({ domain: d!, src: null });
-    });
+  // a logo shipped with the app, for a web address Orbit knows for certain, while LinkedIn answers
+  const shipped = known ? bundledLogo(known) : undefined;
+  if (shipped && shipped !== bundledFailed) return img(shipped, 'bundled', () => setBundledFailed(shipped));
   return (
-    <Monogram
-      name={companyName ?? label}
+    <NoLogo
       label={label}
       size={size}
       decorative={decorative}
@@ -156,52 +115,38 @@ export function CompanyLogo({
   );
 }
 
-/** A company's initials on a tile whose colour comes from its name: the same company always looks the same. */
-function Monogram({
-  name,
+/**
+ * LinkedIn's own placeholder for a company with no logo: a plain building on a grey tile. Shown while LinkedIn has
+ * not answered for the company yet, and for a company LinkedIn has no logo for. Nothing about it is made up.
+ */
+export function NoLogo({
   label,
   size,
   decorative,
   className,
   tileRef,
 }: {
-  name: string;
   label: string;
   size: number;
   decorative?: boolean;
   className?: string;
   tileRef?: (el: Element | null) => void;
 }) {
-  const hue = useMemo(() => {
-    let h = 0;
-    const key = normalizeCompany(name) || name;
-    for (let i = 0; i < key.length; i++) h = (h * 31 + key.charCodeAt(i)) >>> 0;
-    return h % 360;
-  }, [name]);
-  // two letters where they fit (16 px and up), one on the smallest tiles
-  const text = companyInitials(name, size >= 16 ? 2 : 1) || '?';
   const a11y = decorative ? { 'aria-hidden': true } : { role: 'img', 'aria-label': label };
   return (
     <span
       ref={tileRef}
       className={cx(
-        'inline-flex shrink-0 items-center justify-center font-semibold border tracking-[-0.02em] select-none',
+        'inline-flex shrink-0 items-center justify-center border border-line-2 bg-canvas-2 text-ink-3 select-none',
         className,
       )}
-      style={{
-        width: size,
-        height: size,
-        fontSize: Math.max(7, size * (text.length > 1 ? 0.44 : 0.55)),
-        background: `hsl(${hue} 38% 94%)`,
-        color: `hsl(${hue} 32% 34%)`,
-        borderColor: `hsl(${hue} 28% 86%)`,
-      }}
+      style={{ width: size, height: size }}
       title={label}
       {...a11y}
       data-testid="company-logo"
       data-fallback="true"
     >
-      {text}
+      <Building2 size={Math.max(8, Math.round(size * 0.6))} strokeWidth={1.75} aria-hidden />
     </span>
   );
 }
@@ -272,5 +217,26 @@ export function LogoText({
       <PersonCompanyLogo person={person} size={size} className={wrap ? 'mt-[3px]' : undefined} />
       <span className={wrap ? 'min-w-0' : 'truncate min-w-0'}>{children}</span>
     </span>
+  );
+}
+
+/** A company's logo as LinkedIn's list gives it (a picker's row), or LinkedIn's plain placeholder when it has none. */
+export function OptionLogo({ src, label, size = 20 }: { src?: string; label: string; size?: number }) {
+  const [failed, setFailed] = useState(false);
+  const radius = size <= 18 ? 'rounded-[4px]' : 'rounded-[6px]';
+  if (!src || failed) return <NoLogo label={label} size={size} decorative className={radius} />;
+  return (
+    <img
+      src={src}
+      alt=""
+      aria-hidden
+      width={size}
+      height={size}
+      referrerPolicy="no-referrer"
+      className={cx('shrink-0 object-contain bg-white border border-line-2', radius)}
+      style={{ width: size, height: size }}
+      onError={() => setFailed(true)}
+      data-testid="option-logo"
+    />
   );
 }

@@ -245,6 +245,8 @@ export interface CompanyAnswer {
   name?: string;
   /** a logo that does not expire (kept in Orbit's storage), or for now LinkedIn's own link */
   logoUrl?: string;
+  /** settled by a position on a profile of the student's people, or by the student's own pick */
+  exact?: boolean;
 }
 
 export interface CompaniesAnswer {
@@ -290,6 +292,62 @@ export async function linkedInCompanies(
     ok: true,
     value: { companies: r.value.companies, pending: r.value.pending ?? 0, stopped: r.value.stopped },
   };
+}
+
+/** One company LinkedIn's search lists for a name (orbit-connectors /companies/options). */
+export interface CompanyOption {
+  id: string;
+  name: string;
+  industry?: string;
+  location?: string;
+  /** LinkedIn's own logo link (it expires; the one picked is copied into Orbit's storage) */
+  logoUrl?: string;
+  publicIdentifier?: string;
+}
+
+/** The companies LinkedIn lists for a name, in LinkedIn's order, for the student to pick the one they mean. */
+export async function linkedInCompanyOptions(
+  accountId: string,
+  name: string,
+  opts: CallOpts = {},
+): Promise<EnrichOutcome<CompanyOption[]>> {
+  const r = await unipileProxyCall<{
+    ok?: boolean;
+    reason?: string;
+    message?: string;
+    options?: CompanyOption[];
+  }>('/companies/options', { accountId, token: opts.token, name }, { timeoutMs: 30_000, ...opts });
+  if (!r.ok) return { ok: false, reason: r.reason, message: r.message };
+  if (r.value.ok === false || !r.value.options)
+    return {
+      ok: false,
+      reason: r.value.reason === 'limit' ? 'limit' : 'refused',
+      message: r.value.message ?? 'LinkedIn did not answer.',
+    };
+  return { ok: true, value: r.value.options };
+}
+
+/** The student says which LinkedIn company a name means: kept as theirs, with its logo copied to Orbit's storage. */
+export async function pickLinkedInCompany(
+  accountId: string,
+  name: string,
+  companyId: string,
+  opts: CallOpts = {},
+): Promise<EnrichOutcome<CompanyAnswer>> {
+  const r = await unipileProxyCall<{
+    ok?: boolean;
+    reason?: string;
+    message?: string;
+    company?: CompanyAnswer;
+  }>('/companies/pick', { accountId, token: opts.token, name, companyId }, { timeoutMs: 30_000, ...opts });
+  if (!r.ok) return { ok: false, reason: r.reason, message: r.message };
+  if (r.value.ok === false || !r.value.company)
+    return {
+      ok: false,
+      reason: r.value.reason === 'limit' ? 'limit' : 'refused',
+      message: r.value.message ?? 'LinkedIn did not answer.',
+    };
+  return { ok: true, value: r.value.company };
 }
 
 /** Web pages about a person (Exa), when Orbit's server has a key for it; `unconfigured` otherwise. */

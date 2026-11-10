@@ -34,6 +34,7 @@ import {
 import { useEffect, useRef, useState } from 'react';
 import { Navigate, NavLink, useNavigate, useParams } from 'react-router-dom';
 import { AccountSection, MemorySection, OutreachSection } from '../components/account/AccountSettings';
+import { keepLinkedInPick, linkedInCompanySuggestions } from '../components/CompanyChooser';
 import { CompanyLogo } from '../components/CompanyLogo';
 import { LinkedInLiveCard, WarmIntrosCard } from '../components/ConnectorCards';
 import { AppMark, IntegrationRow, RowGroup, RowStatus } from '../components/IntegrationRow';
@@ -656,9 +657,9 @@ function GoalsForm({ goals, tcs }: { goals: UserGoals; tcs: TargetCompany[] }) {
   const [company, setCompany] = useState('');
   const toast = useToast();
   // "Evercore, Lazard" adds two companies
-  const addCompany = async () => {
+  const addCompany = async (picked?: string) => {
     // take the text now and clear the box at once, so a company typed while this one saves is kept
-    const value = company;
+    const value = picked ?? company;
     setCompany('');
     let r: Awaited<ReturnType<typeof addTargetCompanies>>;
     try {
@@ -793,6 +794,8 @@ function GoalsForm({ goals, tcs }: { goals: UserGoals; tcs: TargetCompany[] }) {
                   tcs.map((t) => t.nameRaw),
                 )
               }
+              more={(q, current) => linkedInCompanySuggestions(user, q, current)}
+              onPick={(sg) => void addCompany(sg.value).then(() => keepLinkedInPick(user, sg))}
               minChars={1}
               placeholder="Add a company, like Stripe"
               aria-label="Add a target company"
@@ -804,7 +807,7 @@ function GoalsForm({ goals, tcs }: { goals: UserGoals; tcs: TargetCompany[] }) {
                   addCompany();
               }}
             />
-            <Button variant="primary" onClick={addCompany} disabled={!company.trim()}>
+            <Button variant="primary" onClick={() => void addCompany()} disabled={!company.trim()}>
               <Plus size={14} /> Add
             </Button>
           </div>

@@ -42,6 +42,7 @@ import {
 import { Navigate, useLocation, useNavigate, useParams } from 'react-router-dom';
 import { Logo } from '../components/AppShell';
 import { ImportProgress } from '../components/account/ImportProgress';
+import { keepLinkedInPick, linkedInCompanySuggestions } from '../components/CompanyChooser';
 import { CompanyLogo } from '../components/CompanyLogo';
 import {
   ObBack,
@@ -77,7 +78,7 @@ import { postingFromPath, readPosting } from '../integrations/postings';
 import { envGoogleClientId } from '../integrations/prefs';
 import { useAccount } from '../state/account';
 import { useSession } from '../state/session';
-import { cx, Spinner } from '../ui';
+import { cx, FunctionPicker, Spinner } from '../ui';
 import { Suggest } from '../ui/Suggest';
 import {
   OPTIONAL_STEPS,
@@ -709,7 +710,6 @@ function StepGoals({ onNext, onBack }: { onNext: () => void; onBack: () => void 
     });
     await updateLimits(user.id, { weeklyOutreachTarget: weekly });
   };
-  const extra = fns.filter((v) => !FUNCTION_LABELS[v]);
   const example = COMPANY_EXAMPLE[fns[0] ?? ''] ?? 'Stripe';
   return (
     <div>
@@ -751,28 +751,7 @@ function StepGoals({ onNext, onBack }: { onNext: () => void; onBack: () => void 
         {recruiting && (
           <div>
             <ObLabel>What kind of work</ObLabel>
-            <div className="flex flex-wrap gap-2" role="group" aria-label="Kind of work">
-              {[...Object.entries(FUNCTION_LABELS), ...extra.map((x) => [x, x] as const)].map(([k, l]) => {
-                const on = fns.includes(k);
-                return (
-                  <button
-                    key={k}
-                    type="button"
-                    aria-pressed={on}
-                    onClick={() => setFns(on ? fns.filter((x) => x !== k) : [...fns, k])}
-                    className={cx(
-                      'h-9 px-3.5 rounded-full text-[14px] transition-colors focus-visible:outline-none focus-visible:ring-[3px] focus-visible:ring-ink/15',
-                      on
-                        ? 'bg-ink text-white border border-ink'
-                        : 'bg-white border border-line text-ink-2 hover:text-ink hover:border-[#d4d2ce]',
-                    )}
-                    data-testid={`ob-fn-${k}`}
-                  >
-                    {l}
-                  </button>
-                );
-              })}
-            </div>
+            <FunctionPicker value={fns} onChange={setFns} testIdPrefix="ob-fn" variant="pill" />
           </div>
         )}
         <div>
@@ -817,7 +796,8 @@ function StepGoals({ onNext, onBack }: { onNext: () => void; onBack: () => void 
                   tcs.map((t) => t.nameRaw),
                 )
               }
-              onPick={(sg) => void addCompany(sg.value)}
+              more={(q, current) => linkedInCompanySuggestions(user, q, current)}
+              onPick={(sg) => void addCompany(sg.value).then(() => keepLinkedInPick(user, sg))}
               onKeyDown={(e) => {
                 if (e.key !== 'Enter' && e.key !== ',') return;
                 // Enter on a highlighted suggestion picks it (Suggest handles that)

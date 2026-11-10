@@ -18,6 +18,7 @@ import { type CSSProperties, useEffect, useMemo, useRef, useState, useSyncExtern
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { AddTargetCompany, TargetToggle } from '../components/AddTargetCompany';
 import { useAskIntro } from '../components/askIntro';
+import { UnsettledCompany } from '../components/CompanyChooser';
 import { CompanyLogo, LogoText } from '../components/CompanyLogo';
 import { ThroughFriends } from '../components/friends/ThroughFriends';
 import { MapPersonCard } from '../components/map/MapPersonCard';
@@ -1092,6 +1093,8 @@ export function MapPage() {
                             <X size={13} aria-hidden />
                           </button>
                         )}
+                        {/* a target Orbit cannot put a logo to yet: the student says which company it is */}
+                        {g.tc && <UnsettledCompany user={user} name={g.label} orgId={g.orgId} />}
                       </li>
                     ))}
                   </ul>

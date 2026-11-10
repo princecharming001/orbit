@@ -25,6 +25,8 @@ export interface Suggestion {
   sub?: string;
   /** a small mark on the left: a logo, an initial */
   mark?: ReactNode;
+  /** what the caller needs back when it is picked (a LinkedIn company's id) */
+  data?: unknown;
 }
 
 const MENU_MAX = 320;
@@ -33,6 +35,7 @@ export function Suggest({
   value,
   onChange,
   suggest,
+  more,
   minChars = 1,
   /** suggestions shown before anything is typed (the common choices for a cycle) */
   initial,
@@ -45,6 +48,11 @@ export function Suggest({
   value: string;
   onChange: (value: string) => void;
   suggest: (query: string) => Suggestion[] | Promise<Suggestion[]>;
+  /**
+   * slower suggestions added after the first ones once typing pauses (LinkedIn's own list); `n` is the request's
+   * turn, `current(n)` says whether it is still the latest, so a superseded one can skip its lookup
+   */
+  more?: (query: string, current: () => boolean) => Promise<Suggestion[]>;
   minChars?: number;
   initial?: Suggestion[];
   /** a suggestion was picked (typing alone only calls onChange) */
@@ -74,12 +82,17 @@ export function Suggest({
       return;
     }
     const n = ++latest.current;
-    void Promise.resolve(suggest(q)).then((r) => {
+    void Promise.resolve(suggest(q)).then(async (r) => {
       if (n !== latest.current) return;
       setItems(r);
       setActive(r.length ? 0 : -1);
+      if (!more) return;
+      const extra = await more(q, () => n === latest.current).catch(() => []);
+      if (n !== latest.current || !extra.length) return;
+      const have = new Set(r.map((x) => x.value.toLowerCase()));
+      setItems([...r, ...extra.filter((x) => x.data !== undefined || !have.has(x.value.toLowerCase()))]);
     });
-  }, [value, open, minChars, suggest, initial]);
+  }, [value, open, minChars, suggest, more, initial]);
 
   const place = () => {
     const el = wrap.current;

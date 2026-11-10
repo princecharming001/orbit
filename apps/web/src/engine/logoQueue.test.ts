@@ -107,13 +107,13 @@ describe('logo queue', () => {
     await person('Stripe', 3);
     await person('folk.app', 1);
     await person('Initech', 5);
-    await person('UC Berkeley', 9); // a school: its own site icon stands in
+    await person('UC Berkeley', 9); // a school: LinkedIn lists schools too, so it is asked like a company
     wantCompanyLogo('Nozomio');
     wantCompanyLogo('Stripe');
     wantCompanyLogo('UC Berkeley');
     await fetchLogos(user, { now: NOW, source });
-    expect(source.calls.map((c) => [...c].sort())).toEqual([['Nozomio', 'Stripe']]);
-    // both now have their logo, and nobody showed folk.app or Initech: nothing is sent again
+    expect(source.calls.map((c) => [...c].sort())).toEqual([['Nozomio', 'Stripe', 'UC Berkeley']]);
+    // they are answered, and nobody showed folk.app or Initech: nothing is sent again
     const again = await fetchLogos(user, { now: later(LOGO_GAP_MS + 1), source });
     expect(again.step).toBe('idle');
     expect(source.calls.flat()).not.toContain('Initech');
@@ -227,17 +227,22 @@ describe('logo queue', () => {
         updatedAt: NOW.toISOString(),
       } as never);
     expect(await pullKnownLogos(user, { now: NOW, source })).toBe(2);
-    // never a LinkedIn read (resolve 0), never the school, Stripe (3 people) first
+    // never a LinkedIn read (resolve 0), schools too (LinkedIn lists them), Stripe (3 people) first
     expect(calls).toHaveLength(1);
     expect(calls[0]!.resolve).toBe(0);
     expect(calls[0]!.names[0]).toBe('Stripe');
-    expect(calls[0]!.names).not.toContain('Stanford University');
+    expect(calls[0]!.names).toContain('Stanford University');
     expect((await db.organizations.get(stripe.id))!.logoUrl).toBe(kept('stripe'));
-    // within the next few hours: nothing is asked again; after, only the ones still without a logo
+    // within the next few hours: nothing is asked again; after, everything not settled exactly (a name search's
+    // answer can still be overruled by a position, or found to be shared by several companies)
     await pullKnownLogos(user, { now: later(60_000), source });
     expect(calls).toHaveLength(1);
     await pullKnownLogos(user, { now: later(LOGO_PULL_EVERY_MS + 1), source });
-    expect(calls[1]!.names).toEqual(['Initech']);
+    expect([...calls[1]!.names].sort()).toEqual(['Initech', 'Nozomio', 'Stanford University', 'Stripe']);
+    // settled exactly with Orbit's own copy of its logo: not asked again
+    await db.organizations.update(stripe.id, { linkedinCompanyExact: true });
+    await pullKnownLogos(user, { now: later(2 * LOGO_PULL_EVERY_MS + 2), source });
+    expect(calls[2]!.names).not.toContain('Stripe');
   });
 
   it('asks again for a company whose LinkedIn link expired, and sends LinkedIn’s id when a profile gave one', async () => {
@@ -257,5 +262,55 @@ describe('logo queue', () => {
     await fetchLogos(user, { now: NOW, source });
     expect(seen[0]).toEqual({ names: ['Stripe'], ids: { Stripe: '2135371' } });
     expect((await db.organizations.get(org.id))!.logoUrl).toBe(kept('stripe'));
+  });
+
+  it('a company a position settled overrides what a name search found, and a name search never overrides it', async () => {
+    const org = (await upsertOrganization('Nova'))!;
+    // a name search under older rules took the Madrid Nova
+    await db.organizations.update(org.id, { linkedinCompanyId: '9509', logoUrl: kept('nova-madrid') });
+    const answers: Record<string, CompanyAnswer> = {
+      Nova: { status: 'found', companyId: '43215181', logoUrl: kept('nova-sf'), exact: true },
+    };
+    const source: CompanySource = {
+      byNames: async (names) => ({
+        ok: true,
+        value: { companies: Object.fromEntries(names.map((n) => [n, answers[n]!])), pending: 0 },
+      }),
+    };
+    await pullKnownLogos(user, { now: NOW, source });
+    expect(await db.organizations.get(org.id)).toMatchObject({
+      linkedinCompanyId: '43215181',
+      logoUrl: kept('nova-sf'),
+      linkedinCompanyExact: true,
+    });
+    // a later answer by name alone (another company) changes nothing
+    answers.Nova = { status: 'found', companyId: '9509', logoUrl: kept('nova-madrid') };
+    await pullKnownLogos(user, { now: later(LOGO_PULL_EVERY_MS + 1), source });
+    expect((await db.organizations.get(org.id))!.logoUrl).toBe(kept('nova-sf'));
+  });
+
+  it('a name the shared list no longer stands by loses the logo a name search gave it, never an exact one', async () => {
+    const nasa = (await upsertOrganization('NASA'))!;
+    const triumph = (await upsertOrganization('Triumph'))!;
+    await db.organizations.update(nasa.id, { linkedinCompanyId: '99952564', logoUrl: kept('nasa-fan') });
+    await db.organizations.update(triumph.id, {
+      linkedinCompanyId: '74900938',
+      logoUrl: kept('triumph-labs'),
+      linkedinCompanyExact: true,
+    });
+    const source: CompanySource = {
+      byNames: async (names) => ({
+        ok: true,
+        value: {
+          companies: Object.fromEntries(names.map((n) => [n, { status: 'ambiguous' as const }])),
+          pending: 0,
+        },
+      }),
+    };
+    await pullKnownLogos(user, { now: NOW, source });
+    const n = (await db.organizations.get(nasa.id))!;
+    expect(n.logoUrl).toBeUndefined();
+    expect(n.linkedinCompanyId).toBeUndefined();
+    expect((await db.organizations.get(triumph.id))!.logoUrl).toBe(kept('triumph-labs'));
   });
 });

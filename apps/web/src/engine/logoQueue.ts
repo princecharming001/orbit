@@ -13,10 +13,10 @@
  * from the account's own company allowance (a company page is not a profile view, so it never takes reads from
  * people). LinkedIn's company search answers only when exactly one company has the name (two "Nova"s are two
  * companies, so neither is taken); the company's LinkedIn id, public name and logo are then kept on the organisation
- * (enrichment/logos `adoptCompany`). Schools are left to their own site icons. The sample student's companies come
- * from the mock connector.
+ * (enrichment/logos `adoptCompany`). Schools too: LinkedIn lists them like companies. The sample student's companies
+ * come from the mock connector.
  */
-import { looksLikeSchool, normalizeCompany, type User } from '@orbit/core';
+import { normalizeCompany, type User } from '@orbit/core';
 import { db } from '../db/schema';
 import { mockCompanyByName } from '../integrations/connectorsMock';
 import {
@@ -26,7 +26,7 @@ import {
   linkedInCompanies,
 } from '../integrations/enrichmentProxy';
 import { endActivity, startActivity } from './activity';
-import { adoptCompany, logosAskedAt, markLogosAsked } from './enrichment/logos';
+import { adoptCompany, dropNameMatch, logosAskedAt, markLogosAsked } from './enrichment/logos';
 import { liveAccountFor } from './enrichment/sources';
 import { linkedInPaused, pauseLinkedIn, readBudget } from './enrichment/store';
 import { upsertOrganization } from './people';
@@ -140,8 +140,8 @@ export type LogoStep = 'asked' | 'idle' | 'wait' | 'paused' | 'off';
 
 /**
  * The names to send next: those tiles asked for this visit (most recent first), then those shown in the last two
- * weeks. Never one that already has a LinkedIn logo, a school (its site icon stands in), or one LinkedIn could not pin
- * down in the last two weeks, and never a company no tile showed (plan 35 B4).
+ * weeks. Never one that already has a LinkedIn logo or one LinkedIn could not pin down in the last two weeks, and
+ * never a company no tile showed (plan 35 B4).
  */
 async function namesToSend(
   userId: string,
@@ -164,7 +164,7 @@ async function namesToSend(
   const out: { key: string; name: string }[] = [];
   const seen = new Set<string>();
   const add = (key: string, name: string) => {
-    if (seen.has(key) || !fresh(key) || looksLikeSchool(name)) return;
+    if (seen.has(key) || !fresh(key)) return;
     seen.add(key);
     out.push({ key, name });
   };
@@ -211,15 +211,13 @@ export async function fetchLogos(
     if (a.status === 'found' && a.companyId) answered.push(key);
     if (a.status !== 'found' || !a.companyId) {
       tried[key] = now.toISOString();
+      // LinkedIn no longer stands by a company a name search gave this organisation: its logo goes
+      await dropNameMatchesFor(key);
       continue;
     }
     const org = await upsertOrganization(name);
     if (!org) continue;
-    await adoptCompany(
-      org,
-      { companyId: a.companyId, companySlug: a.publicIdentifier, logoUrl: a.logoUrl },
-      now,
-    );
+    await adoptCompany(org, factsOf(a), now);
     if (a.logoUrl) found++;
   }
   await db.kv.put({ key: triedKey(user.id), value: tried });
@@ -250,6 +248,20 @@ async function linkedInIds(batch: { key: string; name: string }[]): Promise<Reco
 
 const pulledKey = (userId: string) => `logos:pulled:${userId}`;
 
+/** A shared-list answer as facts for adoptCompany. */
+const factsOf = (a: CompanyAnswer) => ({
+  companyId: a.companyId,
+  companySlug: a.publicIdentifier,
+  logoUrl: a.logoUrl,
+  exact: a.exact,
+});
+
+/** Every organisation of this name whose company came from a name search loses it (enrichment/logos dropNameMatch). */
+async function dropNameMatchesFor(key: string): Promise<void> {
+  const orgs = await db.organizations.where('nameNormalized').equals(key).toArray();
+  for (const o of orgs) await dropNameMatch(o);
+}
+
 /**
  * Bring what the shared list knows to this browser for every company of the student's without a LinkedIn logo (not
  * only those a tile showed): free, no LinkedIn read, in batches of LOGO_BATCH, each company at most every
@@ -267,9 +279,10 @@ export async function pullKnownLogos(
   const byKey = new Map<string, string>();
   for (const o of orgs) {
     const key = o.nameNormalized || normalizeCompany(o.name);
-    if (!key || !o.name || byKey.has(key) || looksLikeSchool(o.name)) continue;
-    // Orbit's own copy of a LinkedIn logo never expires; LinkedIn's link does, so it is swapped for the copy
-    if (o.logoUrl && o.linkedinCompanyId && !isLinkedInPhoto(o.logoUrl)) continue;
+    if (!key || !o.name || byKey.has(key)) continue;
+    // settled exactly, with Orbit's own copy of its logo (which never expires): nothing to ask. Anything a name
+    // search gave is asked again, so a position that settles it later, or a name found to be shared, reaches here
+    if (o.logoUrl && o.linkedinCompanyExact && !isLinkedInPhoto(o.logoUrl)) continue;
     if (now.getTime() - (pulled[key] ?? 0) < LOGO_PULL_EVERY_MS) continue;
     byKey.set(key, o.name);
   }
@@ -293,14 +306,15 @@ export async function pullKnownLogos(
     for (const [key, name] of batch) {
       pulled[key] = now.getTime();
       const a = r.value.companies[name];
-      if (a?.status !== 'found' || !a.companyId) continue;
+      if (!a) continue;
+      if (a.status !== 'found' || !a.companyId) {
+        // the shared list no longer stands by the company a name search gave: no other company's logo stays
+        if (a.status === 'ambiguous' || a.status === 'not_found') await dropNameMatchesFor(key);
+        continue;
+      }
       const org = await upsertOrganization(name);
       if (!org) continue;
-      const patch = await adoptCompany(
-        org,
-        { companyId: a.companyId, companySlug: a.publicIdentifier, logoUrl: a.logoUrl },
-        now,
-      );
+      const patch = await adoptCompany(org, factsOf(a), now);
       if (patch?.logoUrl) put++;
       wanted.delete(key);
     }

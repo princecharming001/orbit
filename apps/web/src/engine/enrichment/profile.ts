@@ -183,9 +183,15 @@ export async function applyLinkedInProfile(
   if (cur?.company) {
     const org = await upsertOrganization(cur.company);
     if (org) {
+      // the person's own position names the company: exact, it overrides what a name search found
       const adopted = await adoptCompany(
         org,
-        { companyId: cur.companyId, companySlug: cur.companySlug, logoUrl: cur.logoUrl },
+        {
+          companyId: cur.companyId,
+          companySlug: cur.companySlug,
+          logoUrl: cur.logoUrl,
+          exact: !!cur.companyId,
+        },
         now,
       );
       logo = !!adopted?.logoUrl;
@@ -280,8 +286,8 @@ export async function applyLinkedInProfile(
     const name = 'school' in x ? x.school : x.company;
     const facts =
       'school' in x
-        ? { companyId: x.schoolId, logoUrl: x.logoUrl }
-        : { companyId: x.companyId, companySlug: x.companySlug, logoUrl: x.logoUrl };
+        ? { companyId: x.schoolId, logoUrl: x.logoUrl, exact: !!x.schoolId }
+        : { companyId: x.companyId, companySlug: x.companySlug, logoUrl: x.logoUrl, exact: !!x.companyId };
     if (!name || (!facts.logoUrl && !facts.companyId)) continue;
     const org = await upsertOrganization(name);
     if (org && (await adoptCompany(org, facts, now))?.logoUrl) logo = true;

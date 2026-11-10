@@ -12,7 +12,11 @@
  */
 
 import { loadAccount } from '../../_shared/ingest/util.ts';
-import { keepProfileLogos, storageLogoWriter } from '../../_shared/providers/linkedinCompanies.ts';
+import {
+  keepProfileLogos,
+  logosPublicBase,
+  storageLogoWriter,
+} from '../../_shared/providers/linkedinCompanies.ts';
 import { runCensusStep } from '../../_shared/search/census.ts';
 import { syncCompanyFacts, syncYcFounders } from '../../_shared/search/companyFacts.ts';
 import {
@@ -94,6 +98,7 @@ export function searchHandlers(deps: HandlerDeps): Record<string, JobHandler> {
           apiKey,
           baseUrl,
           storeLogo: storageLogoWriter(url, serviceKey, doFetch),
+          logosBase: logosPublicBase(url),
           sleep: deps.sleep ?? ((ms) => new Promise<void>((res) => setTimeout(res, ms))),
           random: deps.random ?? Math.random,
           clock: deps.clock ?? Date.now,
@@ -192,6 +197,7 @@ export function searchHandlers(deps: HandlerDeps): Record<string, JobHandler> {
                     orgs,
                     doFetch,
                     ctx.now(),
+                    { accountId: acct.externalAccountId ?? undefined },
                   )
               : undefined,
         },

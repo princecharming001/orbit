@@ -58,7 +58,7 @@ describe('CompanyLogo', () => {
     await byName.unmount();
   });
 
-  it('skips an expired LinkedIn logo (it is fetched again) and falls back to the letter tile', async () => {
+  it('skips an expired LinkedIn logo (it is fetched again) and shows LinkedIn’s plain placeholder, never letters', async () => {
     await db.organizations.put({
       id: 'org_enactus',
       name: 'Enactus Berkeley',
@@ -70,7 +70,9 @@ describe('CompanyLogo', () => {
     const tile = host.querySelector('[data-testid="company-logo"]') as HTMLElement;
     expect(tile.tagName).toBe('SPAN');
     expect(tile.dataset.fallback).toBe('true');
-    expect(tile.textContent).toBe('EB');
+    expect(tile.textContent).toBe('');
+    expect(tile.querySelector('svg')).not.toBeNull();
+    expect(tile.getAttribute('aria-label')).toBe('Enactus Berkeley');
     await unmount();
   });
 
@@ -97,34 +99,36 @@ describe('CompanyLogo', () => {
     await unmount();
   });
 
-  it('shows a university by its own domain, and a school inside one by its own', async () => {
+  it('a well-known university shows the logo shipped with the app until LinkedIn answers, and asks LinkedIn', async () => {
+    const asked = vi.spyOn(logoQueue, 'wantCompanyLogo');
     const { host, unmount } = await mount(<CompanyLogo name="UC Berkeley" size={22} />);
     const img = host.querySelector('img')!;
     expect(img.getAttribute('src')).toMatch(/\/logos\/berkeley\.png$/);
+    // schools are looked up on LinkedIn like companies
+    expect(asked).toHaveBeenCalledWith('UC Berkeley');
+    asked.mockRestore();
     await unmount();
   });
 
-  it('falls back to two initials on a tile whose colour follows the name, never a blank or a chevron', async () => {
-    const a = await mount(<CompanyLogo name="NYU Stern" size={22} />);
-    const tile = a.host.querySelector('[data-testid="company-logo"]') as HTMLElement;
-    // the icon is still being looked for (no network here): the initials show meanwhile and after
-    expect(tile.tagName).toBe('SPAN');
-    expect(tile.textContent).toBe('NS');
-    expect(tile.style.background).toBeTruthy();
-    const b = await mount(<CompanyLogo name="NYU Stern" size={22} />);
-    const same = b.host.querySelector('[data-testid="company-logo"]') as HTMLElement;
-    expect(same.style.background).toBe(tile.style.background);
-    const c = await mount(<CompanyLogo name="Blue Harbor Partners" size={22} />);
-    const other = c.host.querySelector('[data-testid="company-logo"]') as HTMLElement;
-    expect(other.textContent).toBe('BH');
-    expect(other.style.background).not.toBe(tile.style.background);
-    // the smallest tiles keep one letter
-    const d = await mount(<CompanyLogo name="Blue Harbor Partners" size={14} />);
-    expect(d.host.querySelector('[data-testid="company-logo"]')?.textContent).toBe('B');
-    await a.unmount();
-    await b.unmount();
-    await c.unmount();
-    await d.unmount();
+  it('a school Orbit has no logo for shows the plain placeholder, never an icon service’s guess', async () => {
+    const images: string[] = [];
+    const real = globalThis.Image;
+    globalThis.Image = class extends real {
+      set src(v: string) {
+        images.push(v);
+      }
+    } as typeof Image;
+    try {
+      const { host, unmount } = await mount(<CompanyLogo name="NYU Stern" size={22} />);
+      const tile = host.querySelector('[data-testid="company-logo"]') as HTMLElement;
+      expect(tile.tagName).toBe('SPAN');
+      expect(tile.dataset.fallback).toBe('true');
+      expect(tile.textContent).toBe('');
+      expect(images).toEqual([]);
+      await unmount();
+    } finally {
+      globalThis.Image = real;
+    }
   });
 
   it('never makes a logo up: no name turned into a ".com", no work address, no icon service for a company', async () => {
@@ -148,7 +152,7 @@ describe('CompanyLogo', () => {
       );
       const tile = host.querySelector('[data-testid="company-logo"]') as HTMLElement;
       expect(tile.tagName).toBe('SPAN');
-      expect(tile.textContent).toBe('N');
+      expect(tile.textContent).toBe('');
       expect(images).toEqual([]);
       // the tile asks LinkedIn for the real one
       expect(asked).toHaveBeenCalledWith('Nozomio');
@@ -159,7 +163,7 @@ describe('CompanyLogo', () => {
     }
   });
 
-  it('a LinkedIn logo found later replaces the initials, and wins over a shipped logo', async () => {
+  it('a LinkedIn logo found later replaces the placeholder, and wins over a shipped logo', async () => {
     const { host, unmount } = await mount(<CompanyLogo name="Stripe" size={22} />);
     expect(host.querySelector('img')?.getAttribute('src')).toMatch(/\/logos\/stripe\.png$/);
     await act(async () => {

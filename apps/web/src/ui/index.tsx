@@ -853,19 +853,44 @@ export function relDate(iso: string | undefined, now = new Date()): string {
   });
 }
 
-/** Chip picker for recruiting functions; stores codes, shows words. Used by onboarding and Settings. */
+/**
+ * The kinds of work a student can aim for: the common ones as chips, and any other they type ("Policy", "Biotech
+ * research"), kept as typed. A typed name that is one of the common ones turns that chip on instead.
+ */
 export function FunctionPicker({
   value,
   onChange,
   testIdPrefix = 'fn',
+  variant = 'square',
 }: {
   value: string[];
   onChange: (next: string[]) => void;
   testIdPrefix?: string;
+  /** pills (onboarding) or squarer chips (Settings) */
+  variant?: 'pill' | 'square';
 }) {
   const extra = value.filter((v) => !FUNCTION_LABELS[v]);
+  const [adding, setAdding] = useState(false);
+  const [text, setText] = useState('');
+  const chip =
+    variant === 'pill'
+      ? 'h-9 px-3.5 rounded-full text-[14px] border focus-visible:outline-none focus-visible:ring-[3px] focus-visible:ring-ink/15'
+      : 'h-9 px-3.5 rounded-[6px] border text-[13px] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ink/25';
+  const off =
+    variant === 'pill'
+      ? 'bg-white border-line text-ink-2 hover:text-ink hover:border-[#d4d2ce]'
+      : 'bg-canvas border-line text-ink-2 hover:bg-canvas-2 hover:text-ink';
+  const commit = () => {
+    const t = text.trim().replace(/\s+/g, ' ').slice(0, 60);
+    setText('');
+    setAdding(false);
+    if (!t) return;
+    const code = Object.entries(FUNCTION_LABELS).find(([, l]) => l.toLowerCase() === t.toLowerCase())?.[0];
+    const key = code ?? (extra.find((x) => x.toLowerCase() === t.toLowerCase()) || t);
+    if (!value.includes(key)) onChange([...value, key]);
+  };
   return (
-    <div className="flex flex-wrap gap-2" role="group" aria-label="Functions">
+    <div className="flex flex-wrap gap-2" role="group" aria-label="Kind of work">
       {[...Object.entries(FUNCTION_LABELS), ...extra.map((x) => [x, x] as const)].map(([k, l]) => {
         const on = value.includes(k);
         return (
@@ -874,18 +899,47 @@ export function FunctionPicker({
             type="button"
             aria-pressed={on}
             onClick={() => onChange(on ? value.filter((x) => x !== k) : [...value, k])}
-            className={cx(
-              'h-9 px-3.5 rounded-[6px] border text-[13px] transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ink/25',
-              on
-                ? 'bg-ink text-white border-ink'
-                : 'bg-canvas border-line text-ink-2 hover:bg-canvas-2 hover:text-ink',
-            )}
+            className={cx(chip, 'transition-colors', on ? 'bg-ink text-white border-ink' : off)}
             data-testid={`${testIdPrefix}-${k}`}
           >
             {l}
           </button>
         );
       })}
+      {adding ? (
+        <input
+          // biome-ignore lint/a11y/noAutofocus: opened by the student's own click on "Add your own"
+          autoFocus
+          value={text}
+          onChange={(e) => setText(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') {
+              e.preventDefault();
+              commit();
+            } else if (e.key === 'Escape') {
+              setText('');
+              setAdding(false);
+            }
+          }}
+          onBlur={commit}
+          placeholder="Type a kind of work"
+          aria-label="Add your own kind of work"
+          className={cx(chip, 'w-52 bg-white border-ink/40 text-ink outline-none placeholder:text-ink-3')}
+          data-testid={`${testIdPrefix}-own-input`}
+        />
+      ) : (
+        <button
+          type="button"
+          onClick={() => setAdding(true)}
+          className={cx(
+            chip,
+            'border-dashed bg-transparent border-line text-ink-3 hover:text-ink hover:border-[#d4d2ce]',
+          )}
+          data-testid={`${testIdPrefix}-own`}
+        >
+          + Add your own
+        </button>
+      )}
     </div>
   );
 }

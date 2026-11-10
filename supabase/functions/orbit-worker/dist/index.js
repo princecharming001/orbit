@@ -3697,8 +3697,8 @@ function mentionTarget(clause2) {
   if (!m) return void 0;
   const what = m[1].replace(/^that\s+/i, "").replace(/^I\s+(?:go to|attend|am at|study at|went to|transferred from|am|was|have|had)\s+/i, "").replace(/^I'm\s+(?=(an?|the)\s)/i, (x) => /\bstudent\b/i.test(m[1]) ? x : "");
   if (/^(I|I'm|I am|I go)$/i.test(what.trim())) return void 0;
-  const words5 = what.replace(/^["'‘“]+|["'’”]+$/g, "").replace(/\b(in|to|on|with|when|unless|because|anywhere|ever|at all|please)\b.*$/i, "").replace(/^(my|the|that|about|any|a|an|our)\s+/i, "").trim().split(/\s+/).slice(0, 4);
-  const phrase = words5.join(" ").trim();
+  const words6 = what.replace(/^["'‘“]+|["'’”]+$/g, "").replace(/\b(in|to|on|with|when|unless|because|anywhere|ever|at all|please)\b.*$/i, "").replace(/^(my|the|that|about|any|a|an|our)\s+/i, "").trim().split(/\s+/).slice(0, 4);
+  const phrase = words6.join(" ").trim();
   if (phrase.length < 2 || VAGUE.has(phrase.toLowerCase())) return void 0;
   return phrase;
 }
@@ -4116,9 +4116,9 @@ function tokenize(text3) {
       const ish = Boolean(mm[5]);
       const rest = text3.slice(end);
       if (NOT_TIME_AFTER.test(rest)) continue;
-      const bare2 = !ap && !mm[2] && !ish;
-      if (bare2 && COUNT_RANGE_AFTER.test(rest)) continue;
-      if (bare2 && placeAfterNumber(text3, start, rest)) continue;
+      const bare3 = !ap && !mm[2] && !ish;
+      if (bare3 && COUNT_RANGE_AFTER.test(rest)) continue;
+      if (bare3 && placeAfterNumber(text3, start, rest)) continue;
       if (ap && (h < 1 || h > 12)) continue;
       if (!ap && !mm[2] && (h < 1 || h > 12)) continue;
       if (mm[2] && h > 23) continue;
@@ -4959,8 +4959,8 @@ function htmlToText(html) {
       const text3 = decodeEntities(inner.replace(/<[^>]+>/g, "")).trim();
       const url = decodeEntities(href.trim());
       if (!/^https?:\/\//i.test(url)) return text3 || url.replace(/^mailto:/i, "");
-      const bare2 = (u2) => u2.replace(/^https?:\/\/(www\.)?/i, "").replace(/\/$/, "");
-      if (!text3 || bare2(text3) === bare2(url)) return url;
+      const bare3 = (u2) => u2.replace(/^https?:\/\/(www\.)?/i, "").replace(/\/$/, "");
+      if (!text3 || bare3(text3) === bare3(url)) return url;
       return `${text3} (${url})`;
     }
   );
@@ -5210,11 +5210,11 @@ function phrasesOf(bodies, firstName) {
   const name = firstName.toLowerCase();
   for (const b of bodies) {
     const lines = b.split("\n").map((l) => l.trim().replace(GREETING2, "").trim()).filter((l) => l && !SIGNOFF.test(l));
-    const words5 = lines.join(" ").toLowerCase().replace(/[^a-z0-9' ]+/g, " ").split(/\s+/).filter(Boolean);
+    const words6 = lines.join(" ").toLowerCase().replace(/[^a-z0-9' ]+/g, " ").split(/\s+/).filter(Boolean);
     const mine = /* @__PURE__ */ new Set();
-    for (let i = 0; i + 3 <= words5.length; i++) {
-      const g = words5.slice(i, i + 3).join(" ");
-      const parts = words5.slice(i, i + 3);
+    for (let i = 0; i + 3 <= words6.length; i++) {
+      const g = words6.slice(i, i + 3).join(" ");
+      const parts = words6.slice(i, i + 3);
       if (g.includes(name) || FILLER.has(g) || parts.some((w) => /\d/.test(w))) continue;
       if (parts.filter((w) => !PLAIN.has(w) && w.length > 2).length < 2) continue;
       mine.add(g);
@@ -5854,11 +5854,11 @@ function unsupportedDetails(body, context) {
     const sentenceStart = /(^|[.!?:;"]\s+|\n\s*|\(\s*)$/.test(before);
     const phrase = m[0].replace(/'s$/, "").replace(/[.'-]+$/, "");
     if (!phrase || has2(phrase)) continue;
-    const words5 = phrase.split(/\s+/);
-    const unknown = words5.filter((w, i) => {
-      const bare2 = w.replace(/'s$/, "").replace(/[.'-]+$/, "");
-      if (!bare2 || COMMON_CAPS.has(bare2.toLowerCase()) || has2(bare2)) return false;
-      if (i === 0 && sentenceStart && words5.length === 1 && /^[A-Z][a-z]+(?:'(?:ll|ve|re|d|s|m|t))?$/.test(bare2))
+    const words6 = phrase.split(/\s+/);
+    const unknown = words6.filter((w, i) => {
+      const bare3 = w.replace(/'s$/, "").replace(/[.'-]+$/, "");
+      if (!bare3 || COMMON_CAPS.has(bare3.toLowerCase()) || has2(bare3)) return false;
+      if (i === 0 && sentenceStart && words6.length === 1 && /^[A-Z][a-z]+(?:'(?:ll|ve|re|d|s|m|t))?$/.test(bare3))
         return false;
       return true;
     });
@@ -6729,10 +6729,10 @@ function checkIntroAsk(d) {
   return d.kind === "intro_request" || d.kind === "forwardable_blurb" ? [approval("intro_ask_needs_approval", "asking a third party for an introduction is approved")] : [];
 }
 function checkCrossThread(d, ctx) {
-  const words5 = (s) => s.toLowerCase().match(/[a-z0-9']+/g) ?? [];
-  const body = ` ${words5(d.body).join(" ")} `;
+  const words6 = (s) => s.toLowerCase().match(/[a-z0-9']+/g) ?? [];
+  const body = ` ${words6(d.body).join(" ")} `;
   for (const t of ctx.otherThreads ?? []) {
-    const w = words5(t);
+    const w = words6(t);
     for (let i = 0; i + 8 <= w.length; i++) {
       const run = ` ${w.slice(i, i + 8).join(" ")} `;
       if (body.includes(run))
@@ -7032,15 +7032,15 @@ function cardProse(card) {
   if (g && s) out.push(`${g} and ${s}.`);
   else if (g) out.push(`${g}.`);
   else if (s) out.push(`You ${s}.`);
-  const words5 = Math.round(card.avgMessageWords);
-  const length = words5 <= 70 ? "short" : words5 <= 130 ? "at medium length" : "long";
+  const words6 = Math.round(card.avgMessageWords);
+  const length = words6 <= 70 ? "short" : words6 <= 130 ? "at medium length" : "long";
   const marks = card.exclamationsPerMessage <= 0.05 ? "no exclamation marks" : card.exclamationsPerMessage < 0.5 ? "an exclamation mark now and then" : "exclamation marks often";
   const parts = [
     card.contractions ? "contractions" : "no contractions",
     marks,
     ...card.emoji ? ["the odd emoji"] : []
   ];
-  out.push(`You write ${length}, about ${words5} words, with ${listWords(parts)}.`);
+  out.push(`You write ${length}, about ${words6} words, with ${listWords(parts)}.`);
   out.push(`Your sentences run about ${Math.round(card.avgSentenceWords)} words.`);
   if (card.characteristicPhrases.length)
     out.push(`Phrases of yours: ${listWords(card.characteristicPhrases.slice(0, 5).map((p) => `'${p}'`))}.`);
@@ -7840,14 +7840,14 @@ function prose(body) {
   );
   const text3 = lines.join(" ");
   const sentences3 = text3.split(/(?<=[.!?])\s+/).map((s) => s.trim()).filter((s) => /[A-Za-z]/.test(s));
-  const words5 = text3.match(/[A-Za-z][A-Za-z'’-]*/g) ?? [];
-  return { words: words5, sentences: sentences3 };
+  const words6 = text3.match(/[A-Za-z][A-Za-z'’-]*/g) ?? [];
+  return { words: words6, sentences: sentences3 };
 }
 function fleschKincaidGrade(body) {
-  const { words: words5, sentences: sentences3 } = prose(body);
-  if (!words5.length || !sentences3.length) return 0;
-  const syl = words5.reduce((s, w) => s + syllables(w), 0);
-  return 0.39 * (words5.length / sentences3.length) + 11.8 * (syl / words5.length) - 15.59;
+  const { words: words6, sentences: sentences3 } = prose(body);
+  if (!words6.length || !sentences3.length) return 0;
+  const syl = words6.reduce((s, w) => s + syllables(w), 0);
+  return 0.39 * (words6.length / sentences3.length) + 11.8 * (syl / words6.length) - 15.59;
 }
 var ASK_PHRASE = /\b(would you|could you|could we|can we|can you|are you open|open to|worth a (quick )?look|happy to (chat|talk|hop)|let me know if|would it be|do you have|are you up for|might you|would love (it )?if you)\b/i;
 function asksIn(body) {
@@ -7865,7 +7865,7 @@ function validateComposed(msg, ctx) {
   const block3 = (code, detail) => issues.push({ code, detail, blocking: true });
   const body = msg.body;
   const lower = body.toLowerCase();
-  const words5 = wordsIn(body);
+  const words6 = wordsIn(body);
   const grade = Math.round(fleschKincaidGrade(body) * 10) / 10;
   const v1 = validateDraft(
     {
@@ -7899,10 +7899,10 @@ function validateComposed(msg, ctx) {
         ctx.connectionNote ? "connection_note_too_long" : "linkedin_too_long",
         `${body.length} characters, at most ${max}`
       );
-    if (FIRST_TOUCH_KINDS.has(msg.kind) && words5 < 12) block3("words_out_of_range", `${words5} words`);
+    if (FIRST_TOUCH_KINDS.has(msg.kind) && words6 < 12) block3("words_out_of_range", `${words6} words`);
   } else {
     const [min, max] = wordRange(msg.kind, ctx.goal, ctx.niche);
-    if (words5 < min || words5 > max) block3("words_out_of_range", `${words5} words, want ${min}–${max}`);
+    if (words6 < min || words6 > max) block3("words_out_of_range", `${words6} words, want ${min}–${max}`);
   }
   const gradeMax = ctx.niche ? NICHE_FORM[ctx.niche].gradeMax : READING_GRADE_MAX;
   if (grade > gradeMax + READING_GRADE_SLACK)
@@ -7966,7 +7966,7 @@ ${body}`, ctx.inputs))
     seen.add(k);
     return true;
   });
-  return { ok: !deduped.some((i) => i.blocking), issues: deduped, words: words5, grade };
+  return { ok: !deduped.some((i) => i.blocking), issues: deduped, words: words6, grade };
 }
 
 // packages/core/src/drafts/typing.ts
@@ -8057,8 +8057,8 @@ function firstNameOf(p) {
 function lastNameOf(p) {
   const l = typeof p.last_name === "string" && p.last_name.trim() ? p.last_name.trim() : "";
   if (l) return l;
-  const words5 = (typeof p.display_name === "string" ? p.display_name.trim() : "").split(/\s+/);
-  return words5.length > 1 ? words5[words5.length - 1] : void 0;
+  const words6 = (typeof p.display_name === "string" ? p.display_name.trim() : "").split(/\s+/);
+  return words6.length > 1 ? words6[words6.length - 1] : void 0;
 }
 
 // supabase/functions/_shared/zones.ts
@@ -11964,14 +11964,14 @@ async function exemplars(s, userId, personId, situation, opts = {}) {
   const names = ids.length ? await s.db.sql`
         select first_name, last_name, display_name from orbit.people
          where user_id = ${userId}::uuid and id = any(${ids}::uuid[])` : [];
-  const words5 = [
+  const words6 = [
     ...new Set(
       names.flatMap((n) => [n.display_name, n.first_name, n.last_name]).filter((x) => !!x?.trim())
     )
   ].sort((a, b) => b.length - a.length);
   return rows.map((r) => {
     let text3 = stripQuotedReply(r.body_text).trim().slice(0, opts.maxChars ?? 1200);
-    for (const w of words5) text3 = text3.replace(new RegExp(`\\b${escapeRe3(w)}\\b`, "g"), "[name]");
+    for (const w of words6) text3 = text3.replace(new RegExp(`\\b${escapeRe3(w)}\\b`, "g"), "[name]");
     return text3.replace(/^(hi|hey|hello|dear)\s+[A-Z][a-z]+/i, (m) => `${m.split(/\s+/)[0]} [name]`);
   });
 }
@@ -15766,8 +15766,8 @@ function isAmbiguousKey(key2, common) {
   if (!key2) return true;
   if (key2.replace(/\s/g, "").length <= 3) return true;
   if (common.has(key2)) return true;
-  const words5 = key2.split(" ");
-  return words5.length === 2 && words5.every((w) => common.has(w));
+  const words6 = key2.split(" ");
+  return words6.length === 2 && words6.every((w) => common.has(w));
 }
 var KIND_OF = {};
 var KIND_LISTS = [
@@ -19669,9 +19669,9 @@ var PATTERNS2 = {
 };
 var part = (s) => norm(s).replace(/[^a-z]/g, "").slice(0, 40);
 function nameParts(name, first, last) {
-  const words5 = norm(name).replace(/\b(dr|prof|professor|mr|ms|mrs|phd|md|jr|sr|ii|iii|iv)\b\.?/g, " ").replace(/\([^)]*\)/g, " ").split(/[\s,]+/).filter(Boolean);
-  const f = part(first ?? words5[0]);
-  const l = part(last ?? words5.at(-1));
+  const words6 = norm(name).replace(/\b(dr|prof|professor|mr|ms|mrs|phd|md|jr|sr|ii|iii|iv)\b\.?/g, " ").replace(/\([^)]*\)/g, " ").split(/[\s,]+/).filter(Boolean);
+  const f = part(first ?? words6[0]);
+  const l = part(last ?? words6.at(-1));
   if (!f || !l || f === l || l.length < 2) return void 0;
   return { f, l };
 }
@@ -20439,7 +20439,7 @@ async function sendDraft(s, draftId) {
     returning *`;
   if (!d) return { status: "skipped", reason: "not_claimed" };
   const userId = d.user_id;
-  const settle = async (status, fields) => {
+  const settle2 = async (status, fields) => {
     await db2.sql`
       update orbit.drafts set status = ${status},
              error = ${fields.error ?? null},
@@ -20448,7 +20448,7 @@ async function sendDraft(s, draftId) {
        where id = ${d.id}::uuid`;
   };
   const later = async (reason2, at) => {
-    await settle("approved", { error: reason2, send_at: at });
+    await settle2("approved", { error: reason2, send_at: at });
     await s.queue.enqueue(
       {
         kind: "send.draft",
@@ -20464,7 +20464,7 @@ async function sendDraft(s, draftId) {
   if (askUserMarkers(`${d.subject ?? ""}
 ${d.body}`).length || placeholderIn(`${d.subject ?? ""}
 ${d.body}`)) {
-    await settle("draft", { error: "needs_input" });
+    await settle2("draft", { error: "needs_input" });
     return { status: "held", reason: "needs_input" };
   }
   const review = d.review_until ? new Date(d.review_until) : void 0;
@@ -20475,7 +20475,7 @@ ${d.body}`)) {
            linkedin_slug, linkedin_connected_on, email_confidence, email_checked_at
       from orbit.people where id = ${d.person_id}::uuid`;
   if (!person) {
-    await settle("failed", { error: "no_person" });
+    await settle2("failed", { error: "no_person" });
     return { status: "failed", error: "no_person" };
   }
   const history = await historyWith(db2, userId, d.person_id);
@@ -20493,7 +20493,7 @@ ${d.body}`)) {
   if (!replied.cancel && d.channel === "gmail" && d.thread_external_id)
     live = await gmailThreadHasNewerInbound(s, userId, d.thread_external_id, new Date(createdAt));
   if (replied.cancel || live) {
-    await settle("cancelled", { cancel_reason: "replied" });
+    await settle2("cancelled", { cancel_reason: "replied" });
     await audit(db2, userId, "system", "draft.cancel", d.id, { reason: "replied" });
     return { status: "cancelled", reason: "replied" };
   }
@@ -20508,7 +20508,7 @@ ${d.body}`)) {
   const agentApproved = approvals.some((a) => a.action === "draft.auto_approve" && a.details?.hash === hash);
   const u2 = await loadUser(db2, userId);
   if (!u2) {
-    await settle("failed", { error: "no_user" });
+    await settle2("failed", { error: "no_user" });
     return { status: "failed", error: "no_user" };
   }
   const paused = aheadOf(u2.settings, "autopilot_paused_until", now);
@@ -20518,7 +20518,7 @@ ${d.body}`)) {
       new Date(Math.min(paused.getTime(), now.getTime() + PAUSE_RECHECK_SEC * 1e3))
     );
   if (agentApproved && !userApproved && breakerHolds(d.kind) && goalPaused(u2.settings, d.goal_id, now)) {
-    await settle("draft", { error: "goal_paused" });
+    await settle2("draft", { error: "goal_paused" });
     await audit(db2, userId, "system", "draft.hold", d.id, { reason: "goal_paused", goalId: d.goal_id });
     return { status: "held", reason: "goal_paused" };
   }
@@ -20527,18 +20527,18 @@ ${d.body}`)) {
     const gate = await firstTouchSendGate(s, userId, d);
     if (!gate.go && "later" in gate) return later(gate.later, gate.until);
     if (!gate.go && (gate.rule === "do_not_contact" || gate.rule === "minor")) {
-      await settle("cancelled", { cancel_reason: gate.rule });
+      await settle2("cancelled", { cancel_reason: gate.rule });
       await audit(db2, userId, "system", "draft.blocked", d.id, { rule: gate.rule });
       return { status: "cancelled", reason: gate.rule };
     }
     if (!gate.go) {
-      await settle("draft", { error: gate.hold });
+      await settle2("draft", { error: gate.hold });
       await audit(db2, userId, "system", "draft.hold", d.id, { reason: gate.hold });
       return { status: "held", reason: gate.hold };
     }
   }
   if (d.channel === "linkedin" && agentApproved && !userApproved) {
-    await settle("draft", { error: "linkedin_never_auto" });
+    await settle2("draft", { error: "linkedin_never_auto" });
     await audit(db2, userId, "system", "draft.hold", d.id, { reason: "linkedin_never_auto" });
     return { status: "held", reason: "linkedin_never_auto" };
   }
@@ -20547,13 +20547,13 @@ ${d.body}`)) {
       (a) => a.action === "draft.confirm" && a.actor === "user" && a.details?.hash === hash && now.getTime() - new Date(a.created_at).getTime() <= LINKEDIN_CONFIRM_MS
     );
     if (!fresh) {
-      await settle("draft", { error: "linkedin_needs_fresh_approval" });
+      await settle2("draft", { error: "linkedin_needs_fresh_approval" });
       await audit(db2, userId, "system", "draft.hold", d.id, { reason: "linkedin_needs_fresh_approval" });
       return { status: "held", reason: "linkedin_needs_fresh_approval" };
     }
   }
   if (!userApproved && !agentApproved) {
-    await settle("draft", { error: "not_approved" });
+    await settle2("draft", { error: "not_approved" });
     return { status: "held", reason: "not_approved" };
   }
   const meta2 = d.ask ?? {};
@@ -20578,22 +20578,22 @@ ${d.body}`)) {
   ).filter((v) => !(firstTouchStanding && v.rule === "first_message_needs_approval"));
   const forbidden = violations.find((v) => v.kind === "forbidden");
   if (forbidden) {
-    await settle("cancelled", { cancel_reason: forbidden.rule });
+    await settle2("cancelled", { cancel_reason: forbidden.rule });
     await audit(db2, userId, "system", "draft.blocked", d.id, { rule: forbidden.rule });
     return { status: "cancelled", reason: forbidden.rule };
   }
   if (violations.length) {
-    await settle("draft", { error: `needs_approval:${violations.map((v) => v.rule).join(",")}` });
+    await settle2("draft", { error: `needs_approval:${violations.map((v) => v.rule).join(",")}` });
     return { status: "held", reason: violations[0].rule };
   }
   if (await salesFirstTouch(db2, d) && (!await postalAddress(db2, userId) || !meta2.footer)) {
-    await settle("draft", { error: "needs_postal_address" });
+    await settle2("draft", { error: "needs_postal_address" });
     return { status: "held", reason: "needs_postal_address" };
   }
   if (agentApproved && !userApproved) {
     const gate = await voiceGate(s, u2, d, { firstMessage: FIRST_TOUCH_KINDS.has(d.kind) });
     if (!gate.ok) {
-      await settle("draft", { error: "voice" });
+      await settle2("draft", { error: "voice" });
       await audit(db2, userId, "system", "draft.hold", d.id, {
         reason: "voice",
         text: VOICE_HOLD_REASON,
@@ -20608,14 +20608,14 @@ ${d.body}`)) {
     const next = new Date(
       nextSendWindow(new Date(now.getTime() + 864e5), u2.timezone, d.channel, s.random).notBefore
     );
-    await settle(d.channel === "linkedin" ? "draft" : "approved", { error: cap, send_at: next });
+    await settle2(d.channel === "linkedin" ? "draft" : "approved", { error: cap, send_at: next });
     await audit(db2, userId, "system", "draft.hold", d.id, { reason: cap, until: iso2(next) });
     return { status: "held", reason: cap };
   }
   let out;
   if (d.channel === "gmail") {
     if (!person.primary_email) {
-      await settle("failed", { error: "no_email" });
+      await settle2("failed", { error: "no_email" });
       return { status: "failed", error: "no_email" };
     }
     const address2 = await checkBuiltAddress(s, userId, {
@@ -20625,7 +20625,7 @@ ${d.body}`)) {
       checkedAt: person.email_checked_at
     });
     if (address2 === "invalid") {
-      await settle("draft", { error: "email_invalid" });
+      await settle2("draft", { error: "email_invalid" });
       await audit(db2, userId, "system", "draft.hold", d.id, { reason: "email_invalid" });
       return { status: "held", reason: "email_invalid" };
     }
@@ -20639,11 +20639,11 @@ ${d.body}`)) {
     if (copy === void 0) {
       const first = approvals.filter((a) => a.action === "draft.send_unconfirmed").reduce((t, a) => Math.min(t, new Date(a.created_at).getTime()), now.getTime());
       if (now.getTime() - first >= UNCONFIRMED_WAIT_MS) {
-        await settle("failed", { error: "gmail_unconfirmed" });
+        await settle2("failed", { error: "gmail_unconfirmed" });
         await audit(db2, userId, "system", "draft.failed", d.id, { error: "gmail_unconfirmed" });
         return { status: "failed", error: "gmail_unconfirmed" };
       }
-      await settle("approved", { error: "send_unconfirmed" });
+      await settle2("approved", { error: "send_unconfirmed" });
       throw new SendRetry("send_unconfirmed");
     }
     const subject = d.subject ?? await threadSubject(db2, userId, d.thread_external_id) ?? "";
@@ -20651,7 +20651,7 @@ ${d.body}`)) {
     const forward = d.kind === "forward_intro" ? d.via : null;
     const files = await draftFiles(db2, userId, d.attachments);
     if (!files) {
-      await settle("failed", { error: "attachment_missing" });
+      await settle2("failed", { error: "attachment_missing" });
       await audit(db2, userId, "system", "draft.failed", d.id, { error: "attachment_missing" });
       return { status: "failed", error: "attachment_missing" };
     }
@@ -20681,7 +20681,7 @@ ${d.body}`)) {
       select external_account_id from orbit.integration_accounts
        where user_id = ${userId}::uuid and provider = 'linkedin' and status = 'active'`;
     if (!acct?.external_account_id) {
-      await settle("failed", { error: "linkedin_not_connected" });
+      await settle2("failed", { error: "linkedin_not_connected" });
       return { status: "failed", error: "linkedin_not_connected" };
     }
     const chatId = d.thread_external_id ?? await linkedinChatId(db2, userId, d.person_id);
@@ -20704,7 +20704,7 @@ ${d.body}`)) {
     if (out.ambiguous)
       await audit(db2, userId, "system", "draft.send_unconfirmed", d.id, { error: out.error, at: iso2(now) });
     if (out.retry && out.ambiguous && d.channel === "linkedin") {
-      await settle("failed", { error: "linkedin_unconfirmed" });
+      await settle2("failed", { error: "linkedin_unconfirmed" });
       await audit(db2, userId, "system", "draft.failed", d.id, {
         error: "linkedin_unconfirmed",
         cause: out.error
@@ -20712,10 +20712,10 @@ ${d.body}`)) {
       return { status: "failed", error: "linkedin_unconfirmed" };
     }
     if (out.retry) {
-      await settle("approved", { error: out.error });
+      await settle2("approved", { error: out.error });
       throw new SendRetry(out.error);
     }
-    await settle("failed", { error: out.error });
+    await settle2("failed", { error: out.error });
     await audit(db2, userId, "system", "draft.failed", d.id, { error: out.error });
     if (d.channel === "gmail")
       await tripBreaker(db2, userId, {
@@ -23533,7 +23533,7 @@ async function gather(calls, relax) {
 function plan(ctx) {
   const g = ctx.input.goal;
   const roles = g.roles ?? [];
-  const words5 = (...xs) => xs.filter((x) => x?.trim()).join(" ");
+  const words6 = (...xs) => xs.filter((x) => x?.trim()).join(" ");
   const exaPeople = (q, extra = {}) => (r) => exaCall(ctx, { query: q, category: "people", ...extra }, r, "person");
   const web = [(r) => webCall(ctx, r)];
   switch (g.kind) {
@@ -23550,16 +23550,16 @@ function plan(ctx) {
         (r) => apolloCall(ctx, r, {
           person_titles: roles.length ? roles : void 0,
           q_organization_domains_list: g.domains?.length ? g.domains : void 0,
-          q_keywords: g.domains?.length ? g.keywords?.join(" ") : words5(...g.orgs ?? [], ...g.keywords ?? [])
+          q_keywords: g.domains?.length ? g.keywords?.join(" ") : words6(...g.orgs ?? [], ...g.keywords ?? [])
         })
       ];
     case "fundraising":
       return [
         ...web,
         exaPeople(
-          words5(
+          words6(
             roles[0] ?? "partner",
-            `at a ${words5(g.stage) || "venture"} fund investing in`,
+            `at a ${words6(g.stage) || "venture"} fund investing in`,
             g.sector ?? g.keywords?.join(" ")
           ),
           {}
@@ -23567,7 +23567,7 @@ function plan(ctx) {
         (r) => exaCall(
           ctx,
           {
-            query: words5(g.stage, "venture fund investing in", g.sector ?? g.keywords?.join(" ")),
+            query: words6(g.stage, "venture fund investing in", g.sector ?? g.keywords?.join(" ")),
             category: "company"
           },
           r,
@@ -23575,7 +23575,7 @@ function plan(ctx) {
         ),
         (r) => apolloCall(ctx, r, {
           person_titles: ["Partner", "Principal", "General Partner", "Investor"],
-          q_keywords: words5(g.sector, g.stage, ...g.keywords ?? []) || void 0
+          q_keywords: words6(g.sector, g.stage, ...g.keywords ?? []) || void 0
         })
       ];
     case "sales":
@@ -23584,7 +23584,7 @@ function plan(ctx) {
         (r) => apolloCall(ctx, r, {
           person_titles: roles.length ? roles : void 0,
           organization_num_employees_ranges: g.employeeRanges,
-          q_keywords: words5(g.sector, ...g.keywords ?? []) || void 0,
+          q_keywords: words6(g.sector, ...g.keywords ?? []) || void 0,
           q_organization_domains_list: g.domains?.length ? g.domains : void 0
         })
       ];
@@ -23592,18 +23592,18 @@ function plan(ctx) {
       const calls = [
         ...web,
         (r) => linkedInCall(ctx, r, {
-          keywords: words5(orJoin(roles), ...g.skills ?? []),
+          keywords: words6(orJoin(roles), ...g.skills ?? []),
           pastCompanies: g.pastCompanies,
           school: ctx.input.user.school,
           distance: [2, 3]
         }),
-        exaPeople(words5(roles[0], ...g.skills ?? []))
+        exaPeople(words6(roles[0], ...g.skills ?? []))
       ];
       if (roles.some((x) => /engineer|developer|programmer|software|ml|data scientist/i.test(x)))
         calls.push(
           (r) => exaCall(
             ctx,
-            { query: words5(roles[0], ...g.skills ?? []), includeDomains: ["github.com"] },
+            { query: words6(roles[0], ...g.skills ?? []), includeDomains: ["github.com"] },
             r,
             "person"
           )
@@ -23613,8 +23613,8 @@ function plan(ctx) {
     case "cofounder":
       return [
         ...web,
-        exaPeople(words5(...g.skills ?? [], g.topic, "founder")),
-        (r) => linkedInCall(ctx, r, { keywords: words5(...g.skills ?? [], g.topic), distance: [2] })
+        exaPeople(words6(...g.skills ?? [], g.topic, "founder")),
+        (r) => linkedInCall(ctx, r, { keywords: words6(...g.skills ?? [], g.topic), distance: [2] })
       ];
     case "collaboration":
       return [
@@ -23622,14 +23622,14 @@ function plan(ctx) {
         (r) => scholarCall(ctx, r),
         (r) => exaCall(
           ctx,
-          { query: words5(g.topic, ...g.keywords ?? []), category: "publication" },
+          { query: words6(g.topic, ...g.keywords ?? []), category: "publication" },
           r,
           "person"
         )
       ];
     case "community":
       return [
-        (r) => linkedInCall(ctx, r, { keywords: words5(g.topic, ...g.keywords ?? []), distance: [1, 2] }),
+        (r) => linkedInCall(ctx, r, { keywords: words6(g.topic, ...g.keywords ?? []), distance: [1, 2] }),
         ...web
       ];
   }
@@ -26218,8 +26218,8 @@ function readIntroduction(msg, people, userEmails, ctx = {}) {
       ).test(cl.toLowerCase())
     );
     const vocative = clauses2.map((cl) => {
-      const words5 = cl.replace(/[!.?]+/g, " ").split(/\s+/).filter(Boolean);
-      return words5.length > 0 && words5.length <= 5 && words5.every((w) => GREETING_WORDS.has(w.toLowerCase()) || isStudentWord(w) || isCandidateWord(w)) && words5.some((w) => isStudentWord(w) || isCandidateWord(w));
+      const words6 = cl.replace(/[!.?]+/g, " ").split(/\s+/).filter(Boolean);
+      return words6.length > 0 && words6.length <= 5 && words6.every((w) => GREETING_WORDS.has(w.toLowerCase()) || isStudentWord(w) || isCandidateWord(w)) && words6.some((w) => isStudentWord(w) || isCandidateWord(w));
     });
     let aimed = false;
     let introducing = false;
@@ -28035,6 +28035,14 @@ function scoreHandlers(_deps) {
 }
 
 // supabase/functions/_shared/providers/linkedinCompanies.ts
+var pickAnswer = (p) => ({
+  status: "found",
+  companyId: p.companyId,
+  publicIdentifier: p.publicIdentifier,
+  name: p.name,
+  logoUrl: p.logoUrl,
+  exact: true
+});
 var COMPANY_RETRY_MS = 30 * 864e5;
 var LOGO_MAX_BYTES = 3e5;
 var text2 = (v, max = 120) => typeof v === "string" && v.trim() ? v.trim().slice(0, max) : void 0;
@@ -28091,18 +28099,12 @@ function sameCompanyName(theirs, asked) {
   const short2 = /\(([^)]{2,40})\)\s*$/.exec(String(theirs ?? ""))?.[1];
   return !!short2 && wide(short2) === want;
 }
-var pageAddresses = (name) => {
-  const key2 = companyNameKey(name);
-  const joined = key2.replace(/[^a-z0-9]+/g, "");
-  if (joined.length < 3) return [];
-  return [key2.replace(/[^a-z0-9]+/g, "-")];
-};
-var LOOKUP_RULES_SINCE = Date.parse("2026-11-10T00:00:00Z");
+var LOOKUP_RULES = 2;
 function rowSettled(r, now) {
   if (!r) return false;
   if (r.status === "found" && r.logoUrl) return true;
   const at = Date.parse(r.checkedAt);
-  return at >= LOOKUP_RULES_SINCE && now.getTime() - at < COMPANY_RETRY_MS;
+  return (r.rules ?? 1) >= LOOKUP_RULES && now.getTime() - at < COMPANY_RETRY_MS;
 }
 var answerOf = (r) => ({
   status: r.status,
@@ -28111,33 +28113,53 @@ var answerOf = (r) => ({
   name: r.name,
   logoUrl: r.logoUrl
 });
-var followersOf = (c) => [c.followers_count, c.followerCount, c.followers].find((n) => typeof n === "number") ?? 0;
-var FOLLOWERS_CLEAR = 500;
-async function companyByName(u2, accountId, name, doFetch) {
+function words5(v) {
+  return String(v ?? "").toLowerCase().normalize("NFKD").replace(/[\u0300-\u036f]/g, "").replace(/&/g, " and ").replace(/[^\p{L}\p{N}]+/gu, " ").trim().split(" ").filter(Boolean);
+}
+var SMALL_WORDS = /* @__PURE__ */ new Set(["of", "the", "and", "at", "for", "in", "de", "la"]);
+function namesCompany(theirs, asked) {
+  if (sameCompanyName(theirs, asked)) return true;
+  const t = String(theirs ?? "");
+  const head = /^(.+?)\s*(?:\s[-–—|:]\s|\()/.exec(t)?.[1];
+  if (head && sameCompanyName(head, asked)) return true;
+  const want = words5(asked).join("");
+  if (want.length < 3 || want.length > 8 || words5(asked).length !== 1) return false;
+  const all = words5(t);
+  const initials = (ws) => ws.map((w) => w[0]).join("");
+  return initials(all) === want || initials(all.filter((w) => !SMALL_WORDS.has(w))) === want;
+}
+var ESTABLISHED_RATIO = 2e3;
+function chooseCompany(items, asked) {
+  const listed = items.filter(
+    (c) => typeof c.id === "string" && /^\d+$/.test(c.id) || typeof c.id === "number" && c.id > 0
+  );
+  const idOf = (c) => Number(c.id);
+  const same = listed.filter((c) => sameCompanyName(c.name, asked) || namesCompany(c.name, asked));
+  const first = listed[0];
+  if (first && namesCompany(first.name, asked)) {
+    const rivals = listed.slice(1).filter((c) => sameCompanyName(c.name, asked) || sameCompanyName(bare2(c.name), asked));
+    if (rivals.every((r) => idOf(r) >= ESTABLISHED_RATIO * idOf(first)))
+      return { id: String(first.id), item: first };
+    return { reason: "ambiguous", sameIds: [first, ...rivals].map((c) => String(c.id)) };
+  }
+  const exact = listed.filter((c) => sameCompanyName(c.name, asked));
+  if (exact.length === 1) return { id: String(exact[0].id), item: exact[0] };
+  if (exact.length > 1) return { reason: "ambiguous", sameIds: exact.map((c) => String(c.id)) };
+  return same.length > 1 ? { reason: "ambiguous", sameIds: same.map((c) => String(c.id)) } : { reason: "not_found", sameIds: [] };
+}
+var bare2 = (v) => String(v ?? "").replace(/\s*\([^)]*\)\s*$/, "");
+async function searchCompanies(u2, accountId, keywords, doFetch) {
   const q = new URLSearchParams({ account_id: accountId, limit: "10" });
   const res = await doFetch(`${u2.base}/api/v1/linkedin/search?${q}`, {
     method: "POST",
     headers: headers2(u2),
-    body: JSON.stringify({ api: "classic", category: "companies", keywords: name })
+    body: JSON.stringify({ api: "classic", category: "companies", keywords })
   });
   if (res.status === 429) return THROTTLED;
   if (res.status >= 400 && res.status < 500)
     return { ok: false, reason: "refused", message: await unipileError(res) };
   if (!res.ok) throw new Error(`unipile ${res.status}`);
-  const items = (await res.json()).items ?? [];
-  const same = items.filter(
-    (c) => sameCompanyName(c.name, name) && (typeof c.id === "string" || typeof c.id === "number")
-  );
-  if (same.length === 1) return { id: String(same[0].id), item: same[0] };
-  const ranked = [...same].sort((a, b) => followersOf(b) - followersOf(a));
-  if (ranked.length > 1 && followersOf(ranked[0]) >= FOLLOWERS_CLEAR && followersOf(ranked[0]) >= 3 * followersOf(ranked[1]))
-    return { id: String(ranked[0].id), item: ranked[0] };
-  return same.length ? {
-    ok: false,
-    reason: "ambiguous",
-    message: "LinkedIn has more than one company of that name.",
-    sameIds: same.map((c) => String(c.id))
-  } : { ok: false, reason: "not_found", message: "LinkedIn could not find that company." };
+  return (await res.json()).items ?? [];
 }
 async function companyPage(u2, accountId, identifier, doFetch) {
   const q = new URLSearchParams({ account_id: accountId });
@@ -28164,17 +28186,6 @@ async function companyPage(u2, accountId, identifier, doFetch) {
     }
   };
 }
-async function companyAtOwnName(u2, accountId, name, doFetch, opts = {}) {
-  for (const slug of pageAddresses(name)) {
-    if (opts.spend && !await opts.spend()) return void 0;
-    const page2 = await companyPage(u2, accountId, slug, doFetch).catch(() => void 0);
-    if (!page2 || !("company" in page2) || !page2.company?.id) continue;
-    const c = page2.company;
-    if (!sameCompanyName(c.name, name) && !opts.among?.includes(c.id)) continue;
-    return { id: c.id, name: c.name, publicIdentifier: c.publicIdentifier, logo: c.logoUrl };
-  }
-  return void 0;
-}
 async function keepCompany(cache3, key2, c, doFetch, now) {
   let kept;
   if (c.logo && cache3) {
@@ -28194,7 +28205,8 @@ async function keepCompany(cache3, key2, c, doFetch, now) {
     publicIdentifier: c.publicIdentifier,
     name: c.name,
     logoUrl: kept,
-    checkedAt: now.toISOString()
+    checkedAt: now.toISOString(),
+    rules: LOOKUP_RULES
   };
   if (kept || !c.logo) await cache3?.put(row).catch(() => void 0);
   return { ...answerOf(row), logoUrl: kept ?? c.logo };
@@ -28211,47 +28223,58 @@ async function copyLogo(cache3, id, url, doFetch) {
     return void 0;
   }
 }
-async function keepProfileLogos(cache3, orgs, doFetch, now) {
+async function keepProfileLogos(cache3, orgs, doFetch, now, opts = {}) {
   if (!cache3) return 0;
   const linked = orgs.filter(
     (o) => o.logoUrl && isLinkedInImage(o.logoUrl) && /^\d+$/.test(o.companyId ?? o.schoolId ?? "")
   );
   if (!linked.length) return 0;
-  const keys = [...new Set(linked.map((o) => companyNameKey(o.company ?? "")).filter(Boolean))];
+  const keyOf3 = (o) => companyNameKey(o.company ?? o.school ?? "");
+  const keys = [...new Set(linked.map(keyOf3).filter(Boolean))];
   const rows = keys.length ? await cache3.getMany(keys).catch(() => ({})) : {};
   const copies = /* @__PURE__ */ new Map();
   let kept = 0;
   await Promise.all(
     linked.map(async (o) => {
       const id = o.companyId ?? o.schoolId;
-      const key2 = o.company ? companyNameKey(o.company) : "";
+      const key2 = keyOf3(o);
       const row = key2 ? rows[key2] : void 0;
-      if (row?.companyId === id && row.logoUrl) {
-        o.logoUrl = row.logoUrl;
-        return;
+      let url;
+      if (row?.companyId === id && row.logoUrl) url = row.logoUrl;
+      else {
+        let copy = copies.get(id);
+        if (!copy) {
+          copy = copyLogo(cache3, id, o.logoUrl, doFetch);
+          copies.set(id, copy);
+        }
+        url = await copy;
+        if (!url) return;
+        kept++;
+        if (row?.status === "found" && row.companyId === id && !row.logoUrl)
+          await cache3.put({ ...row, logoUrl: url, checkedAt: now.toISOString() }).catch(() => void 0);
       }
-      let copy = copies.get(id);
-      if (!copy) {
-        copy = copyLogo(cache3, id, o.logoUrl, doFetch);
-        copies.set(id, copy);
-      }
-      const url = await copy;
-      if (!url) return;
       o.logoUrl = url;
-      kept++;
-      if (key2 && (!row || !(row.status === "found" && row.logoUrl)))
-        await cache3.put({
+      if (opts.accountId && key2 && cache3.putPick)
+        await cache3.putPick(opts.accountId, {
           key: key2,
-          status: "found",
           companyId: id,
           publicIdentifier: o.companySlug,
-          name: o.company,
+          name: o.company ?? o.school,
           logoUrl: url,
-          checkedAt: now.toISOString()
+          source: "position"
         }).catch(() => void 0);
     })
   );
   return kept;
+}
+async function keptLogoFor(id, doFetch, publicBase) {
+  if (!publicBase) return void 0;
+  for (const ext of ["png", "jpg", "webp"]) {
+    const url = `${publicBase.replace(/\/+$/, "")}/${id}.${ext}`;
+    const r = await doFetch(url, { method: "HEAD" }).catch(() => void 0);
+    if (r?.ok) return url;
+  }
+  return void 0;
 }
 async function lookupCompany(u2, o) {
   const { accountId, key: key2, cache: cache3, doFetch, now, spend } = o;
@@ -28260,41 +28283,46 @@ async function lookupCompany(u2, o) {
     const page2 = await companyPage(u2, accountId, o.companyId, doFetch).catch(() => void 0);
     if (page2 && "company" in page2 && page2.company) {
       const c2 = page2.company;
-      return {
-        looked: true,
-        answer: await keepCompany(
-          cache3,
-          key2,
-          { id: c2.id ?? o.companyId, name: c2.name, publicIdentifier: c2.publicIdentifier, logo: c2.logoUrl },
-          doFetch,
-          now
-        )
+      const logoUrl = c2.logoUrl && cache3 ? await copyLogo(cache3, c2.id ?? o.companyId, c2.logoUrl, doFetch) : void 0;
+      const pick = {
+        key: key2,
+        companyId: c2.id ?? o.companyId,
+        publicIdentifier: c2.publicIdentifier,
+        name: c2.name,
+        logoUrl,
+        source: "position"
       };
+      await cache3?.putPick?.(accountId, pick).catch(() => void 0);
+      return { looked: true, answer: { ...pickAnswer(pick), logoUrl: logoUrl ?? c2.logoUrl } };
     }
     if (page2 && !("company" in page2) && page2.reason === "throttled")
       return { looked: true, stopped: "throttled" };
     if (!await spend()) return { looked: true, stopped: "limit" };
   }
   const name = searchName(o.name);
-  const found = await companyByName(u2, accountId, name, doFetch);
-  let c;
-  if ("id" in found)
-    c = {
-      id: found.id,
-      name: text2(found.item.name, 160),
-      publicIdentifier: text2(found.item.public_identifier, 160),
-      logo: licdn(found.item.logo)
-    };
-  else {
-    if (found.reason === "throttled") return { looked: true, stopped: "throttled" };
-    if (found.reason !== "ambiguous" && found.reason !== "not_found") return { looked: true };
-    c = await companyAtOwnName(u2, accountId, name, doFetch, { among: found.sameIds, spend });
-    if (!c) {
-      const row = { key: key2, status: found.reason, checkedAt: now.toISOString() };
-      await cache3?.put(row).catch(() => void 0);
-      return { looked: true, answer: answerOf(row) };
-    }
+  const items = await searchCompanies(u2, accountId, name, doFetch);
+  if (!Array.isArray(items)) {
+    if (items.reason === "throttled") return { looked: true, stopped: "throttled" };
+    return { looked: true };
   }
+  const chosen = chooseCompany(items, name);
+  if (!("id" in chosen)) {
+    const first = items[0];
+    if (o.recheck?.status === "found" && o.recheck.companyId && first && String(first.id) === o.recheck.companyId && namesCompany(first.name, name)) {
+      const row2 = { ...o.recheck, checkedAt: now.toISOString(), rules: LOOKUP_RULES };
+      await cache3?.put(row2).catch(() => void 0);
+      return { looked: true, answer: answerOf(row2) };
+    }
+    const row = { key: key2, status: chosen.reason, checkedAt: now.toISOString(), rules: LOOKUP_RULES };
+    await cache3?.put(row).catch(() => void 0);
+    return { looked: true, answer: answerOf(row) };
+  }
+  let c = {
+    id: chosen.id,
+    name: text2(chosen.item.name, 160),
+    publicIdentifier: text2(chosen.item.public_identifier, 160),
+    logo: licdn(chosen.item.logo)
+  };
   if (!c.logo && await spend()) {
     const page2 = await companyPage(u2, accountId, c.id, doFetch).catch(() => void 0);
     if (page2 && "company" in page2 && page2.company)
@@ -28305,12 +28333,9 @@ async function lookupCompany(u2, o) {
         logo: page2.company.logoUrl
       };
   }
-  if (!c.logo && "id" in found) {
-    const own = await companyAtOwnName(u2, accountId, name, doFetch, { spend }).catch(() => void 0);
-    if (own?.logo) c = own;
-  }
   return { looked: true, answer: await keepCompany(cache3, key2, c, doFetch, now) };
 }
+var logosPublicBase = (url) => `${url.replace(/\/+$/, "")}/storage/v1/object/public/company-logos`;
 function storageLogoWriter(url, serviceKey, doFetch = fetch) {
   return async (companyId, bytes, contentType) => {
     const ext = contentType.includes("png") ? "png" : contentType.includes("webp") ? "webp" : "jpg";
@@ -29126,7 +29151,7 @@ function ycOssFact(c, asOf) {
   const name = clip2(c.name, 160);
   const key2 = name ? orgKey(name) : "";
   if (!name || !key2) return void 0;
-  const words5 = [...c.industries ?? [], ...c.tags ?? []].filter((w) => typeof w === "string" && !!w.trim()).map((w) => w.trim().slice(0, 60));
+  const words6 = [...c.industries ?? [], ...c.tags ?? []].filter((w) => typeof w === "string" && !!w.trim()).map((w) => w.trim().slice(0, 60));
   const team = typeof c.team_size === "number" && Number.isFinite(c.team_size) && c.team_size >= 0 ? c.team_size : void 0;
   const formerNames = (c.former_names ?? []).filter((n) => typeof n === "string" && !!n.trim()).slice(0, 5);
   const f = { key: key2, name, source: "yc" };
@@ -29138,7 +29163,7 @@ function ycOssFact(c, asOf) {
   if (c.status && STATUSES.has(c.status)) f.ycStatus = c.status;
   if (c.stage && STAGES2.has(c.stage)) f.ycStage = c.stage;
   if (team !== void 0) f.teamSize = team;
-  const industries = [...new Set(words5)].slice(0, 16);
+  const industries = [...new Set(words6)].slice(0, 16);
   if (industries.length) f.industries = industries;
   const oneLiner = clip2(c.one_liner, 300);
   if (oneLiner) f.oneLiner = oneLiner;
@@ -29469,7 +29494,7 @@ function sqlCompanyCache(db2, storeLogo) {
     getMany: async (keys) => {
       if (!keys.length) return {};
       const rows = await db2.sql`
-        select key, status, company_id, public_identifier, name, logo_url, checked_at::text as checked_at
+        select key, status, company_id, public_identifier, name, logo_url, checked_at::text as checked_at, rules
           from orbit_private.linkedin_companies where key = any(${keys}::text[])`;
       return Object.fromEntries(
         rows.map((r) => [
@@ -29481,17 +29506,43 @@ function sqlCompanyCache(db2, storeLogo) {
             publicIdentifier: r.public_identifier ?? void 0,
             name: r.name ?? void 0,
             logoUrl: r.logo_url ?? void 0,
-            checkedAt: new Date(r.checked_at).toISOString()
+            checkedAt: new Date(r.checked_at).toISOString(),
+            rules: Number(r.rules)
           }
         ])
       );
     },
     put: async (row) => {
       await db2.sql`
-        select public.orbit_linkedin_companies_put(${row.key}, ${row.status}, ${row.companyId ?? null},
-          ${row.publicIdentifier ?? null}, ${row.name ?? null}, ${row.logoUrl ?? null})`;
+        select public.orbit_linkedin_companies_put2(${row.key}, ${row.status}, ${row.companyId ?? null},
+          ${row.publicIdentifier ?? null}, ${row.name ?? null}, ${row.logoUrl ?? null},
+          ${row.rules ?? LOOKUP_RULES}::smallint)`;
     },
-    storeLogo
+    storeLogo,
+    getPicks: async (accountId, keys) => {
+      if (!keys.length) return {};
+      const rows = await db2.sql`
+        select key, company_id, public_identifier, name, logo_url, source
+          from orbit_private.linkedin_company_picks where account_id = ${accountId} and key = any(${keys}::text[])`;
+      return Object.fromEntries(
+        rows.map((r) => [
+          r.key,
+          {
+            key: r.key,
+            companyId: r.company_id,
+            publicIdentifier: r.public_identifier ?? void 0,
+            name: r.name ?? void 0,
+            logoUrl: r.logo_url ?? void 0,
+            source: r.source === "student" ? "student" : "position"
+          }
+        ])
+      );
+    },
+    putPick: async (accountId, p) => {
+      await db2.sql`
+        select public.orbit_linkedin_company_picks_put(${accountId}, ${p.key}, ${p.companyId},
+          ${p.publicIdentifier ?? null}, ${p.name ?? null}, ${p.logoUrl ?? null}, ${p.source})`;
+    }
   };
 }
 function missing(candidates, rows, now) {
@@ -29568,8 +29619,10 @@ async function runLogoSweep(db2, deps, now) {
   return result;
 }
 var USER_SHARE = 0.7;
+var PROFILE_SHARE = 0.6;
 var USER_MAX_PARTS = 24;
 var USER_CANDIDATES = 4e3;
+var TARGET_WEIGHT = 1e6;
 async function schoolKeys(db2) {
   const rows = await db2.sql`
     select coalesce(o.name, a.org_raw) as name,
@@ -29612,57 +29665,126 @@ async function userLogoCandidates(db2, userId) {
               '[^a-z0-9]+', ' ', 'g'), ${SUFFIX_RE}, ' ', 'g'), ' +', ' ', 'g'))
      order by count(distinct pid) filter (where current) desc, count(distinct pid) desc, 1
      limit ${USER_CANDIDATES}`;
+  const targets = await db2.sql`
+    select distinct trim(t.name) as name
+      from orbit.goals g, jsonb_array_elements_text(coalesce(g.targets->'organizations', '[]'::jsonb)) t(name)
+     where g.user_id = ${userId}::uuid and g.deleted_at is null and trim(t.name) <> ''`;
   const idRows = await db2.sql`
     select distinct on (e->>'company') e->>'company' as name, e->>'companyId' as id
       from orbit.profile_reads r, jsonb_array_elements(case when jsonb_typeof(r.experience) = 'array'
                                                              then r.experience else '[]'::jsonb end) e
      where r.user_id = ${userId}::uuid and e->>'companyId' ~ '^[0-9]+$' and e->>'company' is not null`;
-  const schools = await schoolKeys(db2);
   const ids = /* @__PURE__ */ new Map();
   for (const r of idRows) {
     const k = companyNameKey(r.name);
     if (k && !ids.has(k)) ids.set(k, r.id);
   }
   const byKey = /* @__PURE__ */ new Map();
+  for (const t of targets) {
+    const key2 = companyNameKey(t.name);
+    if (key2 && !byKey.has(key2))
+      byKey.set(key2, { key: key2, name: t.name, n: TARGET_WEIGHT, now: 0, target: true, companyId: ids.get(key2) });
+  }
   for (const r of rows) {
     const key2 = companyNameKey(r.name);
-    if (!key2 || looksLikeSchool(r.name) || schools.has(key2)) continue;
+    if (!key2) continue;
     const had = byKey.get(key2);
-    if (had) had.n += r.n;
-    else byKey.set(key2, { key: key2, name: r.name.trim(), n: r.n, companyId: ids.get(key2) });
+    if (had) {
+      had.n += r.n;
+      had.now = (had.now ?? 0) + r.now;
+    } else byKey.set(key2, { key: key2, name: r.name.trim(), n: r.n, now: r.now, companyId: ids.get(key2) });
   }
   for (const r of idRows) {
     const key2 = companyNameKey(r.name);
-    if (key2 && !byKey.has(key2) && !looksLikeSchool(r.name) && !schools.has(key2))
-      byKey.set(key2, { key: key2, name: r.name.trim(), n: 1, companyId: r.id });
+    if (key2 && !byKey.has(key2)) byKey.set(key2, { key: key2, name: r.name.trim(), n: 1, now: 0, companyId: r.id });
   }
-  return [...byKey.values()];
+  return [...byKey.values()].sort((a, b) => b.n - a.n);
+}
+function positionFor(experience, orgName) {
+  const clean3 = searchName(orgName);
+  return experience.find(
+    (e) => !!e.companyId && !!e.current && (sameCompanyName(e.company, orgName) || sameCompanyName(e.company, clean3) || namesCompany(e.company, orgName) || namesCompany(e.company, clean3) || namesCompany(orgName, e.company ?? ""))
+  );
+}
+async function settle(cache3, accountId, pick, shared, now) {
+  await cache3.putPick?.(accountId, pick);
+  if (shared?.status === "found" && shared.companyId && shared.companyId !== pick.companyId && (shared.rules ?? 1) < LOOKUP_RULES)
+    await cache3.put({ key: shared.key, status: "ambiguous", checkedAt: now.toISOString() });
+}
+async function logoForId(db2, id, deps) {
+  const [row] = await db2.sql`
+    select logo_url from orbit_private.linkedin_companies where company_id = ${id} and logo_url is not null
+    union all
+    select logo_url from orbit_private.linkedin_company_picks where company_id = ${id} and logo_url is not null
+    limit 1`;
+  return row?.logo_url ?? await keptLogoFor(id, deps.fetch, deps.logosBase);
 }
 async function runUserLogos(db2, userId, deps, now) {
   const deadline = deps.clock() + SWEEP_JOB_MS;
   const candidates = await userLogoCandidates(db2, userId);
   const cache3 = sqlCompanyCache(db2, deps.storeLogo);
-  const rows = await rowsFor(cache3, candidates);
-  const todo = missing(candidates, rows, now);
-  const withLogo = candidates.filter((c) => rows[c.key]?.logoUrl).length;
   const [acct] = await db2.sql`
     select a.external_account_id as id from orbit.integration_accounts a
      where a.user_id = ${userId}::uuid and a.provider = 'linkedin' and a.status = 'active'
        and a.external_account_id is not null
      limit 1`;
+  const rows = await rowsFor(cache3, candidates);
   const result = {
     candidates: candidates.length,
-    remaining: todo.length,
+    remaining: 0,
     looked: 0,
     found: 0,
     accounts: acct ? 1 : 0,
-    withLogo
+    withLogo: 0,
+    fromReads: 0,
+    peopleRead: 0
   };
-  if (!todo.length) return result;
-  if (!acct) return { ...result, stopped: "no_accounts" };
+  if (!acct) {
+    result.withLogo = candidates.filter((c) => rows[c.key]?.logoUrl).length;
+    return { ...result, remaining: missing(candidates, rows, now).length, stopped: "no_accounts" };
+  }
+  const picks = await cache3.getPicks?.(
+    acct.id,
+    candidates.map((c) => c.key)
+  ) ?? {};
+  const reads = await db2.sql`
+    select coalesce(o.name, p.org_raw) as name, r.experience
+      from orbit.profile_reads r
+      join orbit.people p on p.id = r.person_id and p.deleted_at is null
+      left join orbit.organizations o on o.id = p.org_id
+     where r.user_id = ${userId}::uuid and r.status = 'ok' and coalesce(o.name, p.org_raw) is not null
+       and jsonb_typeof(r.experience) = 'array'`;
+  for (const r of reads) {
+    const key2 = companyNameKey(r.name);
+    if (!key2 || picks[key2]) continue;
+    const pos = positionFor(
+      r.experience,
+      r.name
+    );
+    if (!pos) continue;
+    const pick = {
+      key: key2,
+      companyId: pos.companyId,
+      name: pos.company,
+      logoUrl: await logoForId(db2, pos.companyId, deps),
+      source: "position"
+    };
+    await settle(cache3, acct.id, pick, rows[key2], now);
+    picks[key2] = pick;
+    result.fromReads++;
+  }
+  const fresh = missing(
+    candidates.filter((c) => !picks[c.key]),
+    rows,
+    now
+  );
+  const stale = candidates.filter((c) => {
+    const r = rows[c.key];
+    return !picks[c.key] && r?.status === "found" && (r.rules ?? 1) < LOOKUP_RULES;
+  });
   const u2 = { base: deps.baseUrl.replace(/\/+$/, ""), key: deps.apiKey };
-  let settled = 0;
-  for (const c of todo) {
+  let companyLimit = false;
+  for (const c of [...fresh, ...stale]) {
     if (deps.clock() >= deadline) {
       result.stopped = "time";
       break;
@@ -29676,17 +29798,105 @@ async function runUserLogos(db2, userId, deps, now) {
       cache: cache3,
       doFetch: deps.fetch,
       now,
-      spend: () => spendShare(db2, "company", acct.id, now, USER_SHARE)
+      spend: () => spendShare(db2, "company", acct.id, now, USER_SHARE),
+      recheck: fresh.includes(c) ? void 0 : rows[c.key]
     }).catch(() => ({ looked: true, answer: void 0, stopped: void 0 }));
     if (r.looked) result.looked++;
     if (r.answer?.status === "found" && r.answer.logoUrl) result.found++;
+    if (r.answer) {
+      if (r.answer.exact && r.answer.companyId)
+        picks[c.key] = {
+          key: c.key,
+          companyId: r.answer.companyId,
+          logoUrl: r.answer.logoUrl,
+          source: "position"
+        };
+      else
+        rows[c.key] = {
+          key: c.key,
+          status: r.answer.status,
+          companyId: r.answer.companyId,
+          name: r.answer.name,
+          logoUrl: r.answer.logoUrl,
+          checkedAt: now.toISOString()
+        };
+    }
     if (r.stopped) {
-      result.stopped = "limit";
+      companyLimit = true;
       break;
     }
-    settled++;
   }
-  result.remaining = todo.length - settled;
+  const unsettled = candidates.filter((c) => {
+    const r = rows[c.key];
+    if (picks[c.key] || !(c.now ?? 0)) return false;
+    if (r?.status === "found") return !r.logoUrl && (r.rules ?? 1) < LOOKUP_RULES;
+    return true;
+  });
+  if (result.stopped !== "time" && unsettled.length) {
+    const people = await db2.sql`
+      select distinct on (k) p.id, p.linkedin_member_id as member, coalesce(o.name, p.org_raw) as name,
+             trim(regexp_replace(regexp_replace(regexp_replace(replace(lower(coalesce(o.name, p.org_raw)), '&', ' and '),
+               '[^a-z0-9]+', ' ', 'g'), ${SUFFIX_RE}, ' ', 'g'), ' +', ' ', 'g')) as k
+        from orbit.people p
+        left join orbit.organizations o on o.id = p.org_id
+        left join orbit.profile_reads r on r.person_id = p.id and r.user_id = p.user_id
+       where p.user_id = ${userId}::uuid and p.deleted_at is null and p.merged_into is null and not p.is_self
+         and p.hidden_at is null and p.linkedin_member_id is not null and coalesce(o.name, p.org_raw) is not null
+         and (r.person_id is null or r.status <> 'ok')
+       order by k, p.updated_at desc`;
+    const byKey = new Map(people.map((p) => [companyNameKey(p.name), p]));
+    let reads2 = 0;
+    for (const c of unsettled) {
+      if (deps.clock() >= deadline) {
+        result.stopped = "time";
+        break;
+      }
+      const p = byKey.get(c.key);
+      if (!p) continue;
+      if (!await spendShare(db2, "profile", acct.id, now, PROFILE_SHARE)) {
+        result.stopped = "limit";
+        break;
+      }
+      if (reads2++ > 0) await deps.sleep(2500 + Math.floor(deps.random() * 2500));
+      const q = new URLSearchParams({ account_id: acct.id, notify: "false" });
+      q.append("linkedin_sections", "about");
+      q.append("linkedin_sections", "experience");
+      const res = await deps.fetch(`${u2.base}/api/v1/users/${encodeURIComponent(p.member)}?${q}`, {
+        headers: { "X-API-KEY": deps.apiKey, accept: "application/json" }
+      }).catch(() => void 0);
+      if (!res) continue;
+      if (res.status === 429) {
+        result.stopped = "limit";
+        break;
+      }
+      if (!res.ok) {
+        await res.body?.cancel();
+        continue;
+      }
+      const raw = await res.json();
+      result.peopleRead++;
+      await saveProfile(db2, userId, p.id, p.member, raw, "background", now).catch(() => void 0);
+      const orgs = profileOrgs(raw);
+      await keepProfileLogos(cache3, orgs, deps.fetch, now, { accountId: acct.id }).catch(() => 0);
+      const pos = positionFor(experienceOf(raw.work_experience), p.name);
+      if (!pos) continue;
+      const pick = {
+        key: c.key,
+        companyId: pos.companyId,
+        name: pos.company,
+        logoUrl: orgs.find((o) => o.companyId === pos.companyId)?.logoUrl ?? await logoForId(db2, pos.companyId, deps),
+        source: "position"
+      };
+      await settle(cache3, acct.id, pick, rows[c.key], now);
+      picks[c.key] = pick;
+    }
+  }
+  if (companyLimit && !result.stopped) result.stopped = "limit";
+  result.withLogo = candidates.filter((c) => (picks[c.key] ?? rows[c.key])?.logoUrl).length;
+  result.remaining = candidates.filter((c) => {
+    const r = rows[c.key];
+    return !picks[c.key] && !rowSettled(r, now);
+  }).length;
   return result;
 }
 
@@ -29757,6 +29967,7 @@ function searchHandlers(deps) {
           apiKey,
           baseUrl,
           storeLogo: storageLogoWriter(url, serviceKey, doFetch),
+          logosBase: logosPublicBase(url),
           sleep: deps.sleep ?? ((ms2) => new Promise((res) => setTimeout(res, ms2))),
           random: deps.random ?? Math.random,
           clock: deps.clock ?? Date.now
@@ -29847,7 +30058,8 @@ function searchHandlers(deps) {
             ),
             orgs,
             doFetch,
-            ctx.now()
+            ctx.now(),
+            { accountId: acct.externalAccountId ?? void 0 }
           ) : void 0
         },
         userId,

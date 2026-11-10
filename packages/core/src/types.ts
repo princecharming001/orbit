@@ -510,6 +510,11 @@ export interface Organization {
   linkedinSlug?: string;
   /** LinkedIn's own id for the company (from a profile's current position), for looking its page up again */
   linkedinCompanyId?: string;
+  /**
+   * the LinkedIn company was settled exactly: a position on a profile of the student's people named it, or the
+   * student picked it. Otherwise it came from LinkedIn's search for the name, which a position later overrides.
+   */
+  linkedinCompanyExact?: boolean;
   industry?: string;
   sizeBucket?: string;
   /** the company's logo, from its LinkedIn page; LinkedIn's image links expire, so it is fetched again when it does */

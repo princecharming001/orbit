@@ -55,8 +55,8 @@ function harness(over: Partial<ConnectorDeps> = {}) {
                 ]
               : kw === 'Tesla'
                 ? [
-                    { id: 15564, name: 'Tesla', followers_count: 9_000_000, logo: licdn('tesla') },
-                    { id: 77, name: 'Tesla', followers_count: 1200 },
+                    { id: 15564, name: 'Tesla', followers_count: 9, logo: licdn('tesla') },
+                    { id: 99000001, name: 'Tesla', followers_count: 999 },
                   ]
                 : kw === 'Capital One'
                   ? [
@@ -152,7 +152,7 @@ describe('/companies', () => {
     expect(res.status).toBe(403);
   });
 
-  it('takes the company with by far the most followers among namesakes ("Tesla" beside its fan pages)', async () => {
+  it('takes LinkedIn’s first result when it is the long-established page beside newer namesakes (Tesla beside fan pages)', async () => {
     const { handler, searches, pages } = harness();
     const r = await (await handler(post({ accountId: 'a1', token: TOKEN, names: ['Tesla'] }))).json();
     expect(r.companies.Tesla).toMatchObject({ status: 'found', companyId: '15564' });
@@ -160,12 +160,36 @@ describe('/companies', () => {
     expect(pages).toEqual([]);
   });
 
-  it('settles namesakes at the company page at its own name, as LinkedIn writes it', async () => {
+  it('never settles namesakes by guessing: no follower counts, no page at the company’s own name', async () => {
     const { handler, pages } = harness();
     const r = await (await handler(post({ accountId: 'a1', token: TOKEN, names: ['Capital One'] }))).json();
-    // one of the two the search found, so taken although the page names itself in full
-    expect(r.companies['Capital One']).toMatchObject({ status: 'found', companyId: '1419' });
-    expect(pages.map((u) => u.split('/company/')[1]!.split('?')[0])).toEqual(['capital-one']);
+    expect(r.companies['Capital One']).toEqual({ status: 'ambiguous' });
+    expect(pages).toEqual([]);
+  });
+
+  it('answers what this account’s own people’s positions settled, first and exactly', async () => {
+    const { handler, searches, cache } = harness();
+    await cache.put({ key: 'nova', status: 'ambiguous', checkedAt: '2026-11-12T00:00:00.000Z', rules: 2 });
+    await cache.putPick!('a1', {
+      key: 'nova',
+      companyId: '43215181',
+      name: 'Nova (acquired)',
+      logoUrl: 'https://logos.test/43215181.png',
+      source: 'position',
+    });
+    const r = await (await handler(post({ accountId: 'a1', token: TOKEN, names: ['Nova'] }))).json();
+    expect(r.companies.Nova).toEqual({
+      status: 'found',
+      companyId: '43215181',
+      name: 'Nova (acquired)',
+      logoUrl: 'https://logos.test/43215181.png',
+      exact: true,
+    });
+    expect(searches).toEqual([]);
+    // another account is not told this student's Nova
+    const TOKEN_B = await accountToken('b1', SIGNING);
+    const other = await (await handler(post({ accountId: 'b1', token: TOKEN_B, names: ['Nova'] }))).json();
+    expect(other.companies.Nova).toEqual({ status: 'ambiguous' });
   });
 
   it('searches a messy name for the company alone, and answers the cleaned name from the list', async () => {
@@ -195,13 +219,9 @@ describe('/companies', () => {
     expect(searches).toEqual(['Tesla']);
   });
 
-  it("a namesake's page with no logo gives way to the page at the company's own name", async () => {
+  it('a page LinkedIn names the company by but without a logo is kept without one, not swapped for another page', async () => {
     const { handler, searches, pages } = harness({
       fetch: (async (url: string, init: RequestInit = {}) => {
-        if (url.startsWith('https://media.licdn.com/'))
-          return new Response(new Uint8Array([137, 80, 78, 71]), {
-            headers: { 'content-type': 'image/png' },
-          });
         if (url.includes('/api/v1/linkedin/search')) {
           searches.push(String(JSON.parse(String(init.body)).keywords));
           return new Response(JSON.stringify({ items: [{ id: 500, name: 'REDUCTO' }] }));
@@ -214,10 +234,12 @@ describe('/companies', () => {
       }) as unknown as typeof fetch,
     });
     const r = await (await handler(post({ accountId: 'a1', token: TOKEN, names: ['Reducto'] }))).json();
-    expect(r.companies.Reducto).toMatchObject({ status: 'found', companyId: '600' });
+    expect(r.companies.Reducto).toMatchObject({ status: 'found', companyId: '500' });
+    expect(r.companies.Reducto.logoUrl).toBeUndefined();
+    expect(pages.map((u) => u.split('/company/')[1]!.split('?')[0])).toEqual(['500']);
   });
 
-  it('a profile read answers with permanent copies of the logos on it, and keeps its companies for everyone', async () => {
+  it('a profile read answers with permanent copies of the logos on it, and keeps its companies as this account’s', async () => {
     const cache = memoryCompanyCache();
     await cache.put({
       key: 'ramp',
@@ -272,8 +294,12 @@ describe('/companies', () => {
     expect(ramp.logoUrl).toBe('https://logos.test/1406226.png');
     expect(fetched.some((u) => u.includes('ramp'))).toBe(false);
     expect(body.profile.education[0].logoUrl).toBe('https://logos.test/1234.png');
-    // Weave is now in the shared list, from the position itself
-    expect(cache.rows.get('weave')).toMatchObject({ status: 'found', companyId: '4242' });
+    // Weave is now this account's pick, from the position itself; the shared list is not decided by one profile
+    expect(cache.picks.get('a1|weave')).toMatchObject({
+      companyId: '4242',
+      logoUrl: 'https://logos.test/4242.png',
+    });
+    expect(cache.rows.has('weave')).toBe(false);
     // no company lookup was spent on any of it
     expect(fetched.filter((u) => u.includes('/linkedin/'))).toEqual([]);
   });

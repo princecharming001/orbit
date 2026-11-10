@@ -13,12 +13,18 @@ export interface CompanyFacts {
   companyId?: string;
   companySlug?: string;
   logoUrl?: string;
+  /**
+   * settled exactly: a LinkedIn position named this company, or the student picked it. It overrides a company found
+   * by searching the name; a company found by searching never overrides an exact one.
+   */
+  exact?: boolean;
 }
 
 /**
  * Keep LinkedIn's id, public name and logo on the organisation. A logo replaces none, an expired one, or an older
- * LinkedIn link for the same company; it never replaces a logo from elsewhere, and a different LinkedIn company that
- * happens to share the name never takes over the organisation.
+ * LinkedIn link for the same company; it never replaces a logo from elsewhere. A different LinkedIn company that
+ * shares the name takes over the organisation only when it is exact and what the organisation holds is not (a
+ * position on someone's profile says "Triumph" here is Triumph Labs, whatever the name search found).
  */
 export async function adoptCompany(
   org: Organization,
@@ -26,20 +32,45 @@ export async function adoptCompany(
   now = new Date(),
 ): Promise<Partial<Organization> | undefined> {
   const patch: Partial<Organization> = {};
-  const sameCompany = !org.linkedinCompanyId || !facts.companyId || org.linkedinCompanyId === facts.companyId;
-  if (!sameCompany) return undefined;
-  if (facts.companyId && !org.linkedinCompanyId) patch.linkedinCompanyId = facts.companyId;
-  if (facts.companySlug && !org.linkedinSlug) patch.linkedinSlug = facts.companySlug;
-  if (
-    facts.logoUrl &&
-    facts.logoUrl !== org.logoUrl &&
-    (!org.logoUrl || isLinkedInPhoto(org.logoUrl) || linkedInImageExpired(org.logoUrl, now))
-  )
+  const other = !!org.linkedinCompanyId && !!facts.companyId && org.linkedinCompanyId !== facts.companyId;
+  if (other && !(facts.exact && !org.linkedinCompanyExact)) return undefined;
+  if (other) {
+    // another company after all: nothing of the one found by name stays
+    patch.linkedinCompanyId = facts.companyId;
+    patch.linkedinSlug = facts.companySlug;
     patch.logoUrl = facts.logoUrl;
+    patch.linkedinCompanyExact = true;
+  } else {
+    if (facts.companyId && !org.linkedinCompanyId) patch.linkedinCompanyId = facts.companyId;
+    if (facts.companySlug && !org.linkedinSlug) patch.linkedinSlug = facts.companySlug;
+    if (facts.exact && facts.companyId && !org.linkedinCompanyExact) patch.linkedinCompanyExact = true;
+    if (
+      facts.logoUrl &&
+      facts.logoUrl !== org.logoUrl &&
+      (!org.logoUrl || isLinkedInPhoto(org.logoUrl) || linkedInImageExpired(org.logoUrl, now))
+    )
+      patch.logoUrl = facts.logoUrl;
+  }
   if (!Object.keys(patch).length) return undefined;
   await db.organizations.update(org.id, patch);
   Object.assign(org, patch);
   return patch;
+}
+
+/**
+ * LinkedIn no longer stands by the company a name search gave this organisation (the name turned out to be shared by
+ * several companies): its id and logo go, so no other company's logo shows for it. Exact ones are never dropped.
+ */
+export async function dropNameMatch(org: Organization): Promise<boolean> {
+  if (org.linkedinCompanyExact || !org.linkedinCompanyId) return false;
+  const patch: Partial<Organization> = {
+    linkedinCompanyId: undefined,
+    linkedinSlug: undefined,
+    logoUrl: undefined,
+  };
+  await db.organizations.update(org.id, patch);
+  Object.assign(org, patch);
+  return true;
 }
 
 /** An organisation whose LinkedIn logo is missing or has expired, and that LinkedIn can be asked about. */
