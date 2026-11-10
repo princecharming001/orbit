@@ -246,7 +246,7 @@ export function ReachMutuals({
   return (
     <div data-testid="reach-mutuals">
       {heading}
-      <ul className="space-y-2">
+      <ul className="space-y-1">
         {(all ? rows : rows.slice(0, SHOWN)).map(({ m, person, score, standing }) => {
           const name = person?.displayName ?? m.name;
           const mFirst = person?.firstName || name.split(' ')[0] || name;
@@ -254,10 +254,10 @@ export function ReachMutuals({
           return (
             <li
               key={`${m.name}:${m.memberId ?? m.personId ?? ''}`}
-              className="group flex items-center gap-2.5 text-[13px] min-w-0"
+              className="group flex items-center gap-3 py-1 text-[13px] min-w-0"
               data-testid="reach-mutual"
             >
-              <Avatar name={name} src={m.pictureUrl ?? person?.photoUrl} id={person?.id ?? name} size={30} />
+              <Avatar name={name} src={m.pictureUrl ?? person?.photoUrl} id={person?.id ?? name} size={32} />
               <div className="min-w-0 flex-1">
                 <div className="flex items-center gap-1.5 min-w-0">
                   {person ? (
@@ -270,16 +270,17 @@ export function ReachMutuals({
                   {url && /linkedin\.com/i.test(url) && <LinkedInMark url={url} name={name} />}
                 </div>
                 <div
-                  className="text-[12px] text-ink-3"
-                  title={`How close you are to them, and how well they know ${first}`}
+                  className="text-[12px] leading-[1.35] text-ink-3 line-clamp-2"
+                  // the scores behind the words, on hover
+                  title={
+                    person
+                      ? `Your tie: ${score} of 100${standing ? ` · how well they know ${first}: ${Math.round(standing.know * 100)} of 100` : ''}`
+                      : undefined
+                  }
                   data-testid="reach-mutual-closeness"
                 >
                   {person
-                    ? `You: ${TIE_BAND_LABELS[tieBand(score)].toLowerCase()} · ${score}${
-                        standing
-                          ? ` · ${knowWords(standing.band, first)} · ${Math.round(standing.know * 100)}`
-                          : ''
-                      }`
+                    ? `${TIE_BAND_LABELS[tieBand(score)]} tie${standing ? ` · ${knowWords(standing.band, first)}` : ''}`
                     : 'Not in your Orbit yet'}
                 </div>
                 {person && standing && reasons && (
@@ -303,12 +304,14 @@ export function ReachMutuals({
                 <Button
                   size="sm"
                   variant="secondary"
-                  className={cx('shrink-0', TAP)}
+                  className={cx('shrink-0 self-center', TAP)}
                   onClick={() => onAsk(person.id, score / 100)}
                   loading={isAsking?.(person.id)}
+                  aria-label={`Ask ${mFirst} for an intro`}
+                  title={`Ask ${mFirst} for an intro to ${first}`}
                   data-testid="reach-mutual-ask"
                 >
-                  Ask {mFirst} for an intro
+                  Ask for intro
                 </Button>
               )}
             </li>

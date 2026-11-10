@@ -589,7 +589,7 @@ test.describe('Map reach through LinkedIn mutuals (plan 17 §C)', () => {
     const KNOW = ['unclear with', 'connected to', 'knows', 'close to'];
     const bandsNow = async () =>
       (await panel.getByTestId('reach-mutual-closeness').allInnerTexts()).map((t) =>
-        KNOW.indexOf(/· (unclear with|connected to|knows|close to) Kenji · \d+$/.exec(t)?.[1] ?? ''),
+        KNOW.indexOf(/· (unclear with|connected to|knows|close to) Kenji$/.exec(t)?.[1] ?? ''),
       );
     // each row's standing is read a moment after the list shows: wait until every row has one
     await expect.poll(async () => (await bandsNow()).every((b) => b >= 0), { timeout: 15_000 }).toBe(true);
@@ -610,7 +610,7 @@ test.describe('Map reach through LinkedIn mutuals (plan 17 §C)', () => {
       await page.screenshot({ path: process.env.REACH_SHOT });
     }
     // plan 21: each row says how close the student is to them and how well they know Kenji
-    await expect(panel.getByTestId('reach-mutual-closeness').first()).toContainText(/^You: .+ · \d+ · /);
+    await expect(panel.getByTestId('reach-mutual-closeness').first()).toContainText(/^\w+ tie · /);
     // the student's word on a hop: "they don't really know each other" takes that route away, everywhere, until undone
     const firstVia = await route.getByTestId('reach-path-action').innerText();
     await route.click();
