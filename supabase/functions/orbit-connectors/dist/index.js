@@ -791,10 +791,26 @@ function companyNameKey(name) {
     " "
   ).replace(/\s+/g, " ").trim();
 }
-var pageAddress = (name) => {
-  const slug = companyNameKey(name).replace(/[^a-z0-9]+/g, "");
-  return slug.length >= 3 ? slug : void 0;
+function searchName(name) {
+  let n = String(name ?? "").replace(/\s*[([{][^)\]}]*[)\]}]?/g, " ").replace(/\b(?:yc|y combinator)\s*[-']?\s*[wsfx]?\s*'?\d{2,4}\b/gi, " ").replace(/\b(?:yc|y combinator)\b\s*$/i, " ");
+  n = n.split(/\s+[-–—|·•/]\s+|\s*[|·•]\s*|,\s+|\s+@\s+/)[0] ?? n;
+  n = n.replace(/\s+/g, " ").trim();
+  return n.length >= 2 ? n.slice(0, 120) : String(name ?? "").trim();
+}
+var pageAddresses = (name) => {
+  const key = companyNameKey(name);
+  const joined = key.replace(/[^a-z0-9]+/g, "");
+  if (joined.length < 3) return [];
+  const hyphened = key.replace(/[^a-z0-9]+/g, "-");
+  return hyphened === joined ? [joined] : [joined, hyphened];
 };
+var LOOKUP_RULES_SINCE = Date.parse("2026-11-10T00:00:00Z");
+function rowSettled(r, now) {
+  if (!r) return false;
+  if (r.status === "found") return true;
+  const at = Date.parse(r.checkedAt);
+  return at >= LOOKUP_RULES_SINCE && now.getTime() - at < COMPANY_RETRY_MS;
+}
 var answerOf = (r) => ({
   status: r.status,
   companyId: r.companyId,
@@ -802,6 +818,8 @@ var answerOf = (r) => ({
   name: r.name,
   logoUrl: r.logoUrl
 });
+var followersOf = (c) => [c.followers_count, c.followerCount, c.followers].find((n) => typeof n === "number") ?? 0;
+var FOLLOWERS_CLEAR = 500;
 async function companyByName(u, accountId, name, doFetch) {
   const q = new URLSearchParams({ account_id: accountId, limit: "10" });
   const res = await doFetch(`${u.base}/api/v1/linkedin/search?${q}`, {
@@ -819,11 +837,15 @@ async function companyByName(u, accountId, name, doFetch) {
     (c) => companyNameKey(c.name) === key && (typeof c.id === "string" || typeof c.id === "number")
   );
   if (same.length === 1) return { id: String(same[0].id), item: same[0] };
-  const followers = (c) => [c.followers_count, c.followerCount, c.followers].find((n) => typeof n === "number") ?? 0;
-  const ranked = [...same].sort((a, b) => followers(b) - followers(a));
-  if (ranked.length > 1 && followers(ranked[0]) >= 5e3 && followers(ranked[0]) >= 10 * followers(ranked[1]))
+  const ranked = [...same].sort((a, b) => followersOf(b) - followersOf(a));
+  if (ranked.length > 1 && followersOf(ranked[0]) >= FOLLOWERS_CLEAR && followersOf(ranked[0]) >= 3 * followersOf(ranked[1]))
     return { id: String(ranked[0].id), item: ranked[0] };
-  return same.length ? { ok: false, reason: "ambiguous", message: "LinkedIn has more than one company of that name." } : { ok: false, reason: "not_found", message: "LinkedIn could not find that company." };
+  return same.length ? {
+    ok: false,
+    reason: "ambiguous",
+    message: "LinkedIn has more than one company of that name.",
+    sameIds: same.map((c) => String(c.id))
+  } : { ok: false, reason: "not_found", message: "LinkedIn could not find that company." };
 }
 async function companyPage(u, accountId, identifier, doFetch) {
   const q = new URLSearchParams({ account_id: accountId });
@@ -850,19 +872,17 @@ async function companyPage(u, accountId, identifier, doFetch) {
     }
   };
 }
-async function companyAtOwnName(u, accountId, name, doFetch) {
+async function companyAtOwnName(u, accountId, name, doFetch, opts = {}) {
   const key = companyNameKey(name);
-  const slug = pageAddress(name);
-  if (!slug) return void 0;
-  const page = await companyPage(u, accountId, slug, doFetch);
-  if (!("company" in page) || !page.company?.id) return void 0;
-  if (companyNameKey(page.company.name) !== key) return void 0;
-  return {
-    id: page.company.id,
-    name: page.company.name,
-    publicIdentifier: page.company.publicIdentifier,
-    logo: page.company.logoUrl
-  };
+  for (const slug of pageAddresses(name)) {
+    if (opts.spend && !await opts.spend()) return void 0;
+    const page = await companyPage(u, accountId, slug, doFetch).catch(() => void 0);
+    if (!page || !("company" in page) || !page.company?.id) continue;
+    const c = page.company;
+    if (companyNameKey(c.name) !== key && !opts.among?.includes(c.id)) continue;
+    return { id: c.id, name: c.name, publicIdentifier: c.publicIdentifier, logo: c.logoUrl };
+  }
+  return void 0;
 }
 async function keepCompany(cache, key, c, doFetch, now) {
   let kept;
@@ -885,36 +905,56 @@ async function keepCompany(cache, key, c, doFetch, now) {
     logoUrl: kept,
     checkedAt: now.toISOString()
   };
-  if (kept) await cache?.put(row).catch(() => void 0);
+  if (kept || !c.logo) await cache?.put(row).catch(() => void 0);
   return { ...answerOf(row), logoUrl: kept ?? c.logo };
 }
 async function lookupCompany(u, o) {
-  const { accountId, key, name, cache, doFetch, now, spend } = o;
+  const { accountId, key, cache, doFetch, now, spend } = o;
   if (!await spend()) return { looked: false, stopped: "limit" };
-  if (pageAddress(name)) {
-    const atName = await companyAtOwnName(u, accountId, name, doFetch).catch(() => void 0);
-    if (atName) return { looked: true, answer: await keepCompany(cache, key, atName, doFetch, now) };
+  if (o.companyId && /^\d+$/.test(o.companyId)) {
+    const page = await companyPage(u, accountId, o.companyId, doFetch).catch(() => void 0);
+    if (page && "company" in page && page.company) {
+      const c2 = page.company;
+      return {
+        looked: true,
+        answer: await keepCompany(
+          cache,
+          key,
+          { id: c2.id ?? o.companyId, name: c2.name, publicIdentifier: c2.publicIdentifier, logo: c2.logoUrl },
+          doFetch,
+          now
+        )
+      };
+    }
+    if (page && !("company" in page) && page.reason === "throttled")
+      return { looked: true, stopped: "throttled" };
     if (!await spend()) return { looked: true, stopped: "limit" };
   }
+  const name = searchName(o.name);
   const found = await companyByName(u, accountId, name, doFetch);
-  if (!("id" in found)) {
+  let c;
+  if ("id" in found)
+    c = {
+      id: found.id,
+      name: text(found.item.name, 160),
+      publicIdentifier: text(found.item.public_identifier, 160),
+      logo: licdn(found.item.logo)
+    };
+  else {
     if (found.reason === "throttled") return { looked: true, stopped: "throttled" };
     if (found.reason !== "ambiguous" && found.reason !== "not_found") return { looked: true };
-    const row = { key, status: found.reason, checkedAt: now.toISOString() };
-    await cache?.put(row).catch(() => void 0);
-    return { looked: true, answer: answerOf(row) };
+    c = await companyAtOwnName(u, accountId, name, doFetch, { among: found.sameIds, spend });
+    if (!c) {
+      const row = { key, status: found.reason, checkedAt: now.toISOString() };
+      await cache?.put(row).catch(() => void 0);
+      return { looked: true, answer: answerOf(row) };
+    }
   }
-  let c = {
-    id: found.id,
-    name: text(found.item.name, 160),
-    publicIdentifier: text(found.item.public_identifier, 160),
-    logo: licdn(found.item.logo)
-  };
   if (!c.logo && await spend()) {
-    const page = await companyPage(u, accountId, found.id, doFetch).catch(() => void 0);
+    const page = await companyPage(u, accountId, c.id, doFetch).catch(() => void 0);
     if (page && "company" in page && page.company)
       c = {
-        id: found.id,
+        id: c.id,
         name: page.company.name ?? c.name,
         publicIdentifier: page.company.publicIdentifier ?? c.publicIdentifier,
         logo: page.company.logoUrl
@@ -1296,20 +1336,24 @@ var COMPANIES_PER_CALL = 8;
 async function companiesRoute(deps, body, ctx) {
   const accountId = String(body.accountId ?? "");
   const names2 = (Array.isArray(body.names) ? body.names : []).map((n) => text2(n, 160)).filter((n) => !!n).slice(0, 60);
+  const idsIn = body.ids && typeof body.ids === "object" ? body.ids : {};
   const byKey = /* @__PURE__ */ new Map();
   for (const n of names2) {
     const k = companyNameKey(n);
     if (k && !byKey.has(k)) byKey.set(k, n);
   }
   const cache = deps.companies;
-  const rows = cache ? await cache.getMany([...byKey.keys()]).catch(() => ({})) : {};
+  const clean = new Map([...byKey].map(([k, n]) => [k, companyNameKey(searchName(n))]));
+  const keys = [.../* @__PURE__ */ new Set([...byKey.keys(), ...[...clean.values()].filter(Boolean)])];
+  const rows = cache ? await cache.getMany(keys).catch(() => ({})) : {};
   const now = ctx.now();
   const companies = {};
   const misses = [];
   for (const [key, name] of byKey) {
-    const r = rows[key];
-    if (r && (r.status === "found" || now.getTime() - Date.parse(r.checkedAt) < COMPANY_RETRY_MS))
-      companies[name] = answerOf(r);
+    const own = rows[key];
+    const cleaned = rows[clean.get(key) ?? ""];
+    const r = own?.status === "found" ? own : cleaned?.status === "found" ? cleaned : own;
+    if (r && rowSettled(r, now)) companies[name] = answerOf(r);
     else misses.push([key, name]);
   }
   const want = Math.min(Number(body.resolve ?? COMPANIES_PER_CALL) || 0, COMPANIES_PER_CALL);
@@ -1321,6 +1365,7 @@ async function companiesRoute(deps, body, ctx) {
       accountId,
       key,
       name,
+      companyId: text2(idsIn[name], 40),
       cache,
       doFetch: ctx.doFetch,
       now,

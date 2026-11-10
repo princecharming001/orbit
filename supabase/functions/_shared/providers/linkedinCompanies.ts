@@ -4,10 +4,11 @@
  * orbit-connectors /companies (a browser asking for the tiles on its screen) and orbit-worker logos.sweep (plan 35
  * B4: the weekly pass over companies 3 or more people work at across all students).
  *
- * A name is looked up at its own page first ("SpaceX" at /company/spacex, kept only when that page's name is exactly
- * the one asked for), then by LinkedIn's company search, kept only when exactly one result has the same name (or one
- * has by far the most followers). A name LinkedIn cannot pin down is kept as such, so nobody searches it again for a
- * month.
+ * A company is read at its page by LinkedIn's id when a position named it. A name is cleaned of what was typed after
+ * the company ("Deel (YC 19)" is Deel) and searched, kept when exactly one result has the same name or one has by far
+ * the most followers; when the search cannot choose, or finds none, the page at the company's own name settles it
+ * ("SpaceX" at /company/spacex, kept only when that page has the name, or is one of the namesakes found). A name
+ * LinkedIn cannot pin down is kept as such, so nobody searches it again for a month.
  */
 
 /** One company as the shared list keeps it. */
@@ -114,11 +115,49 @@ export function companyNameKey(name: unknown): string {
     .trim();
 }
 
+/**
+ * The company a messy name means, for searching LinkedIn: what a student's contacts typed after the company goes ("Deel
+ * (YC 19)", "Intuit - ex PayPal", "Weave YC W25", "Acme | Growth"), so the search asks for the company alone. The
+ * shared list still keeps the answer under the name as written.
+ */
+export function searchName(name: string): string {
+  let n = String(name ?? '')
+    .replace(/\s*[([{][^)\]}]*[)\]}]?/g, ' ')
+    .replace(/\b(?:yc|y combinator)\s*[-']?\s*[wsfx]?\s*'?\d{2,4}\b/gi, ' ')
+    .replace(/\b(?:yc|y combinator)\b\s*$/i, ' ');
+  n = n.split(/\s+[-–—|·•/]\s+|\s*[|·•]\s*|,\s+|\s+@\s+/)[0] ?? n;
+  n = n.replace(/\s+/g, ' ').trim();
+  return n.length >= 2 ? n.slice(0, 120) : String(name ?? '').trim();
+}
+
 /** Where a company's LinkedIn page would be if it is at its own name ("SpaceX" -> spacex), for names of 3+ letters. */
 export const pageAddress = (name: string): string | undefined => {
   const slug = companyNameKey(name).replace(/[^a-z0-9]+/g, '');
   return slug.length >= 3 ? slug : undefined;
 };
+
+/** The addresses a company's own page may be at: "Capital One" at capitalone and at capital-one. */
+export const pageAddresses = (name: string): string[] => {
+  const key = companyNameKey(name);
+  const joined = key.replace(/[^a-z0-9]+/g, '');
+  if (joined.length < 3) return [];
+  const hyphened = key.replace(/[^a-z0-9]+/g, '-');
+  return hyphened === joined ? [joined] : [joined, hyphened];
+};
+
+/**
+ * A non-found answer kept before this moment is asked again (plan 37 follow-up: names were then searched as written,
+ * "Deel (YC 19)", and a common name with a namesake page, "Tesla", was never taken).
+ */
+export const LOOKUP_RULES_SINCE = Date.parse('2026-11-10T00:00:00Z');
+
+/** Whether the shared list's row answers for now: found, or not pinned down within the month under today's rules. */
+export function rowSettled(r: Pick<CompanyRow, 'status' | 'checkedAt'> | undefined, now: Date): boolean {
+  if (!r) return false;
+  if (r.status === 'found') return true;
+  const at = Date.parse(r.checkedAt);
+  return at >= LOOKUP_RULES_SINCE && now.getTime() - at < COMPANY_RETRY_MS;
+}
 
 export const answerOf = (r: CompanyRow): CompanyAnswer => ({
   status: r.status,
@@ -128,16 +167,23 @@ export const answerOf = (r: CompanyRow): CompanyAnswer => ({
   logoUrl: r.logoUrl,
 });
 
+/** A search result's followers, under any of the names Unipile has used for them. */
+const followersOf = (c: Record<string, unknown>) =>
+  [c.followers_count, c.followerCount, c.followers].find((n): n is number => typeof n === 'number') ?? 0;
+
 /**
- * A company found on LinkedIn by its name: LinkedIn's company search, kept only when exactly one result has the same
- * name (two "Nova"s are two companies, so neither is guessed), or when one has by far the most followers.
+ * A company found on LinkedIn by its name: LinkedIn's company search, kept when exactly one result has the same name,
+ * or when one of several has by far the most followers (three times the next, and at least FOLLOWERS_CLEAR: "Tesla"
+ * beside its fan pages). Otherwise `ambiguous`, with the same-name results' ids, so the company's own page can settle
+ * it; a namesake's logo is never taken on a guess.
  */
+export const FOLLOWERS_CLEAR = 500;
 export async function companyByName(
   u: UnipileAuth,
   accountId: string,
   name: string,
   doFetch: typeof fetch,
-): Promise<{ id: string; item: Record<string, unknown> } | CompanyFailure> {
+): Promise<{ id: string; item: Record<string, unknown> } | (CompanyFailure & { sameIds?: string[] })> {
   const q = new URLSearchParams({ account_id: accountId, limit: '10' });
   const res = await doFetch(`${u.base}/api/v1/linkedin/search?${q}`, {
     method: 'POST',
@@ -154,19 +200,20 @@ export async function companyByName(
     (c) => companyNameKey(c.name) === key && (typeof c.id === 'string' || typeof c.id === 'number'),
   );
   if (same.length === 1) return { id: String(same[0]!.id), item: same[0]! };
-  // several of the same name ("SpaceX" and its fan pages, a regional office): the real company when one has by far
-  // the most followers (ten times the next, and thousands of them); otherwise a namesake's logo is never taken
-  const followers = (c: Record<string, unknown>) =>
-    [c.followers_count, c.followerCount, c.followers].find((n): n is number => typeof n === 'number') ?? 0;
-  const ranked = [...same].sort((a, b) => followers(b) - followers(a));
+  const ranked = [...same].sort((a, b) => followersOf(b) - followersOf(a));
   if (
     ranked.length > 1 &&
-    followers(ranked[0]!) >= 5000 &&
-    followers(ranked[0]!) >= 10 * followers(ranked[1]!)
+    followersOf(ranked[0]!) >= FOLLOWERS_CLEAR &&
+    followersOf(ranked[0]!) >= 3 * followersOf(ranked[1]!)
   )
     return { id: String(ranked[0]!.id), item: ranked[0]! };
   return same.length
-    ? { ok: false, reason: 'ambiguous', message: 'LinkedIn has more than one company of that name.' }
+    ? {
+        ok: false,
+        reason: 'ambiguous',
+        message: 'LinkedIn has more than one company of that name.',
+        sameIds: same.map((c) => String(c.id)),
+      }
     : { ok: false, reason: 'not_found', message: 'LinkedIn could not find that company.' };
 }
 
@@ -216,27 +263,27 @@ export async function companyPage(
 }
 
 /**
- * The company whose LinkedIn page is at the asked name itself ("SpaceX" at /company/spacex), when that page's name is
- * exactly the one asked for; nothing otherwise.
+ * The company whose LinkedIn page is at the asked name itself ("SpaceX" at /company/spacex, "Capital One" at
+ * /company/capital-one), when that page's name is exactly the one asked for, or when it is one of `among` (the
+ * same-name results a search could not choose between); nothing otherwise. Each address tried takes `spend` first.
  */
 export async function companyAtOwnName(
   u: UnipileAuth,
   accountId: string,
   name: string,
   doFetch: typeof fetch,
+  opts: { among?: string[]; spend?: () => Promise<boolean> } = {},
 ): Promise<FoundCompany | undefined> {
   const key = companyNameKey(name);
-  const slug = pageAddress(name);
-  if (!slug) return undefined;
-  const page = await companyPage(u, accountId, slug, doFetch);
-  if (!('company' in page) || !page.company?.id) return undefined;
-  if (companyNameKey(page.company.name) !== key) return undefined;
-  return {
-    id: page.company.id,
-    name: page.company.name,
-    publicIdentifier: page.company.publicIdentifier,
-    logo: page.company.logoUrl,
-  };
+  for (const slug of pageAddresses(name)) {
+    if (opts.spend && !(await opts.spend())) return undefined;
+    const page = await companyPage(u, accountId, slug, doFetch).catch(() => undefined);
+    if (!page || !('company' in page) || !page.company?.id) continue;
+    const c = page.company;
+    if (companyNameKey(c.name) !== key && !opts.among?.includes(c.id!)) continue;
+    return { id: c.id!, name: c.name, publicIdentifier: c.publicIdentifier, logo: c.logoUrl };
+  }
+  return undefined;
 }
 
 /** Copy a found company's logo into Orbit's storage and keep the company for everyone; the answer for the student. */
@@ -268,7 +315,9 @@ export async function keepCompany(
     logoUrl: kept,
     checkedAt: now.toISOString(),
   };
-  if (kept) await cache?.put(row).catch(() => undefined);
+  // kept with its logo, or kept without one when LinkedIn has none (so it is not looked up again); a logo that did not
+  // copy leaves the company to be looked up again later
+  if (kept || !c.logo) await cache?.put(row).catch(() => undefined);
   return { ...answerOf(row), logoUrl: kept ?? c.logo };
 }
 
@@ -282,7 +331,10 @@ export interface LookupOutcome {
 
 /**
  * Look one company up on LinkedIn and keep what is found for everyone. `spend` takes one company read from the
- * account's ledger (false: the day's reads are used, nothing more is asked).
+ * account's ledger (false: the day's reads are used, nothing more is asked). With LinkedIn's id for it (a profile's
+ * position names it) the company's page is read straight away, and nothing is guessed. By name, the search goes first
+ * (with the name cleaned of what was typed after the company, `searchName`); when it cannot choose, or finds none, the
+ * page at the company's own name settles it.
  */
 export async function lookupCompany(
   u: UnipileAuth,
@@ -290,41 +342,63 @@ export async function lookupCompany(
     accountId: string;
     key: string;
     name: string;
+    /** LinkedIn's id for the company, when a position named it */
+    companyId?: string;
     cache: CompanyCache | undefined;
     doFetch: typeof fetch;
     now: Date;
     spend: () => Promise<boolean>;
   },
 ): Promise<LookupOutcome> {
-  const { accountId, key, name, cache, doFetch, now, spend } = o;
+  const { accountId, key, cache, doFetch, now, spend } = o;
   if (!(await spend())) return { looked: false, stopped: 'limit' };
-  // a well-known company's page is usually at its own name (linkedin.com/company/spacex), while a search for it can
-  // list only its namesakes: that page first, kept only when its name is exactly the one asked for
-  if (pageAddress(name)) {
-    const atName = await companyAtOwnName(u, accountId, name, doFetch).catch(() => undefined);
-    if (atName) return { looked: true, answer: await keepCompany(cache, key, atName, doFetch, now) };
+  if (o.companyId && /^\d+$/.test(o.companyId)) {
+    const page = await companyPage(u, accountId, o.companyId, doFetch).catch(() => undefined);
+    if (page && 'company' in page && page.company) {
+      const c = page.company;
+      return {
+        looked: true,
+        answer: await keepCompany(
+          cache,
+          key,
+          { id: c.id ?? o.companyId, name: c.name, publicIdentifier: c.publicIdentifier, logo: c.logoUrl },
+          doFetch,
+          now,
+        ),
+      };
+    }
+    if (page && !('company' in page) && page.reason === 'throttled')
+      return { looked: true, stopped: 'throttled' };
+    // the id did not answer: by name, from the next read
     if (!(await spend())) return { looked: true, stopped: 'limit' };
   }
+  const name = searchName(o.name);
   const found = await companyByName(u, accountId, name, doFetch);
-  if (!('id' in found)) {
+  let c: FoundCompany | undefined;
+  if ('id' in found)
+    c = {
+      id: found.id,
+      name: text(found.item.name, 160),
+      publicIdentifier: text(found.item.public_identifier, 160),
+      logo: licdn(found.item.logo),
+    };
+  else {
     if (found.reason === 'throttled') return { looked: true, stopped: 'throttled' };
     if (found.reason !== 'ambiguous' && found.reason !== 'not_found') return { looked: true };
-    const row: CompanyRow = { key, status: found.reason, checkedAt: now.toISOString() };
-    await cache?.put(row).catch(() => undefined);
-    return { looked: true, answer: answerOf(row) };
+    // the company's own page: it settles a search with namesakes, and finds one a search lists under another name
+    c = await companyAtOwnName(u, accountId, name, doFetch, { among: found.sameIds, spend });
+    if (!c) {
+      const row: CompanyRow = { key, status: found.reason, checkedAt: now.toISOString() };
+      await cache?.put(row).catch(() => undefined);
+      return { looked: true, answer: answerOf(row) };
+    }
   }
   // the search result names the company and carries its logo; its page is read only when it does not
-  let c: FoundCompany = {
-    id: found.id,
-    name: text(found.item.name, 160),
-    publicIdentifier: text(found.item.public_identifier, 160),
-    logo: licdn(found.item.logo),
-  };
   if (!c.logo && (await spend())) {
-    const page = await companyPage(u, accountId, found.id, doFetch).catch(() => undefined);
+    const page = await companyPage(u, accountId, c.id, doFetch).catch(() => undefined);
     if (page && 'company' in page && page.company)
       c = {
-        id: found.id,
+        id: c.id,
         name: page.company.name ?? c.name,
         publicIdentifier: page.company.publicIdentifier ?? c.publicIdentifier,
         logo: page.company.logoUrl,

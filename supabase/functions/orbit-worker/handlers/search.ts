@@ -6,13 +6,21 @@
  *                        sections and jobs, and Claude's reading of them
  *   logos.sweep          weekly, for everyone (plan 35 B4): LinkedIn logos for companies 3 or more people work at
  *                        across all students, into the shared company list; queues its next part while names are left
+ *   logos.user           daily per student with LinkedIn (plan 37 follow-up): every company in their network, most
+ *                        people first, from their own account; queues its next part while names and the day's share
+ *                        are left
  */
 
 import { loadAccount } from '../../_shared/ingest/util.ts';
 import { storageLogoWriter } from '../../_shared/providers/linkedinCompanies.ts';
 import { runCensusStep } from '../../_shared/search/census.ts';
 import { syncCompanyFacts, syncYcFounders } from '../../_shared/search/companyFacts.ts';
-import { runLogoSweep, SWEEP_MAX_PARTS } from '../../_shared/search/logoSweep.ts';
+import {
+  runLogoSweep,
+  runUserLogos,
+  SWEEP_MAX_PARTS,
+  USER_MAX_PARTS,
+} from '../../_shared/search/logoSweep.ts';
 import { runReadingStep } from '../../_shared/search/reading.ts';
 import type { JobHandler } from '../worker.ts';
 import { type HandlerDeps, JobSkipped, LONG_VT_SEC } from './deps.ts';
@@ -67,6 +75,44 @@ export function searchHandlers(deps: HandlerDeps): Record<string, JobHandler> {
             dedupeKey: `weekly:logos.sweep:${isoWeek(now)}:${part + 1}`,
           },
           { delaySec: 300 },
+        );
+    },
+    'logos.user': async (job, ctx) => {
+      const userId = job.userId;
+      if (!userId) throw new JobSkipped('no_user');
+      const { apiKey, baseUrl } = deps.unipile ?? {};
+      const { url, serviceKey } = deps.storage ?? {};
+      if (!apiKey || !baseUrl || !url || !serviceKey) throw new JobSkipped('unconfigured');
+      await ctx.queue.setVt(job.queue, job.msgId, LONG_VT_SEC);
+      const now = ctx.now();
+      const r = await runUserLogos(
+        ctx.db,
+        userId,
+        {
+          fetch: doFetch,
+          apiKey,
+          baseUrl,
+          storeLogo: storageLogoWriter(url, serviceKey, doFetch),
+          sleep: deps.sleep ?? ((ms) => new Promise<void>((res) => setTimeout(res, ms))),
+          random: deps.random ?? Math.random,
+          clock: deps.clock ?? Date.now,
+        },
+        now,
+      );
+      console.log(JSON.stringify({ fn: 'orbit-worker', step: 'logos_user', ...r }));
+      if (r.stopped === 'no_accounts') throw new JobSkipped('not_connected');
+      // time ran out with names left: the next part in two minutes; a spent share waits for tomorrow's run
+      const part = Number(job.payload.part ?? 0) || 0;
+      const day = now.toISOString().slice(0, 10);
+      if (r.stopped === 'time' && r.remaining > 0 && part + 1 < USER_MAX_PARTS)
+        await ctx.queue.enqueue(
+          {
+            kind: 'logos.user',
+            userId,
+            payload: { part: part + 1 },
+            dedupeKey: `logos.user:${userId}:${day}:${part + 1}`,
+          },
+          { delaySec: 120 },
         );
     },
     search_census: async (job, ctx) => {

@@ -262,11 +262,27 @@ export interface CompaniesAnswer {
 export async function linkedInCompanies(
   accountId: string,
   names: string[],
-  opts: CallOpts = {},
+  opts: CallOpts & {
+    /** LinkedIn's id for a company, by the name sent (a read profile's position named it): read by id */
+    ids?: Record<string, string>;
+    /** new companies to look up on LinkedIn this call (0: only what the shared list already knows, free) */
+    resolve?: number;
+  } = {},
 ): Promise<EnrichOutcome<CompaniesAnswer>> {
+  const { ids, resolve, ...call } = opts;
   const r = await unipileProxyCall<
     { ok?: boolean; reason?: string; message?: string } & Partial<CompaniesAnswer>
-  >('/companies', { accountId, token: opts.token, names }, { timeoutMs: 60_000, ...opts });
+  >(
+    '/companies',
+    {
+      accountId,
+      token: opts.token,
+      names,
+      ...(ids && Object.keys(ids).length ? { ids } : {}),
+      ...(resolve !== undefined ? { resolve } : {}),
+    },
+    { timeoutMs: 60_000, ...call },
+  );
   if (!r.ok) return { ok: false, reason: r.reason, message: r.message };
   if (r.value.ok === false || !r.value.companies)
     return { ok: false, reason: 'refused', message: r.value.message ?? 'LinkedIn did not answer.' };

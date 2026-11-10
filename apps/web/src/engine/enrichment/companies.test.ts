@@ -34,8 +34,8 @@ function harness(over: Partial<ConnectorDeps> = {}) {
     signingKey: SIGNING,
     browserKept: async () => true,
     companies: cache,
-    now: () => new Date('2026-10-27T12:00:00Z'),
-    take: memoryTake(() => Date.parse('2026-10-27T12:00:00Z')),
+    now: () => new Date('2026-11-12T12:00:00Z'),
+    take: memoryTake(() => Date.parse('2026-11-12T12:00:00Z')),
     fetch: (async (url: string, init: RequestInit = {}) => {
       if (url.startsWith('https://media.licdn.com/'))
         return new Response(new Uint8Array([137, 80, 78, 71]), { headers: { 'content-type': 'image/png' } });
@@ -53,11 +53,31 @@ function harness(over: Partial<ConnectorDeps> = {}) {
                   { id: 2, name: 'Nova' },
                   { id: 3, name: 'NOVA' },
                 ]
-              : [];
+              : kw === 'Tesla'
+                ? [
+                    { id: 15564, name: 'Tesla', followers_count: 9_000_000, logo: licdn('tesla') },
+                    { id: 77, name: 'Tesla', followers_count: 1200 },
+                  ]
+                : kw === 'Capital One'
+                  ? [
+                      { id: 1419, name: 'Capital One', followers_count: 900 },
+                      { id: 88, name: 'Capital One', followers_count: 700 },
+                    ]
+                  : kw === 'Deel'
+                    ? [{ id: 18583501, name: 'Deel', logo: licdn('deel') }]
+                    : [];
         return new Response(JSON.stringify({ items }));
       }
       if (url.includes('/api/v1/linkedin/company/')) {
         pages.push(url);
+        // Capital One's page is at capital-one (not capitalone), and names itself differently
+        if (/\/company\/(capital-one|1419)\?/.test(url))
+          return new Response(
+            JSON.stringify({ id: '1419', name: 'Capital One Financial', logo: licdn('capone') }),
+          );
+        // Weave by LinkedIn's id
+        if (/\/company\/4242\?/.test(url))
+          return new Response(JSON.stringify({ id: '4242', name: 'Weave', logo: licdn('weave') }));
         // Stripe's page is at its own name (and its id); no one else has a page at theirs
         if (!/\/company\/(stripe|2135371)\?/.test(url)) return new Response('{}', { status: 404 });
         return new Response(
@@ -93,14 +113,14 @@ describe('/companies', () => {
       publicIdentifier: 'stripe',
       logoUrl: 'https://logos.test/2135371.png',
     });
-    // found at its own page address: no search at all
-    expect(searches).toEqual([]);
+    // one search (one Stripe of that name), and its page for the logo the search did not carry
+    expect(searches).toEqual(['Stripe']);
     expect(pages).toHaveLength(1);
     expect(cache.rows.get('stripe')?.logoUrl).toBe('https://logos.test/2135371.png');
     // another student, another day: no LinkedIn read at all
     const again = await (await handler(post({ accountId: 'a1', token: TOKEN, names: ['stripe'] }))).json();
     expect(again.companies.stripe.status).toBe('found');
-    expect(searches).toEqual([]);
+    expect(searches).toEqual(['Stripe']);
     expect(pages).toHaveLength(1);
   });
 
@@ -130,5 +150,48 @@ describe('/companies', () => {
     expect(r.stopped).toBe('limit');
     const res = await handler(post({ accountId: 'a1', token: 'nope', names: ['Stripe'] }));
     expect(res.status).toBe(403);
+  });
+
+  it('takes the company with by far the most followers among namesakes ("Tesla" beside its fan pages)', async () => {
+    const { handler, searches, pages } = harness();
+    const r = await (await handler(post({ accountId: 'a1', token: TOKEN, names: ['Tesla'] }))).json();
+    expect(r.companies.Tesla).toMatchObject({ status: 'found', companyId: '15564' });
+    expect(searches).toEqual(['Tesla']);
+    expect(pages).toEqual([]);
+  });
+
+  it('settles namesakes at the company page at its own name, joined or hyphened', async () => {
+    const { handler, pages } = harness();
+    const r = await (await handler(post({ accountId: 'a1', token: TOKEN, names: ['Capital One'] }))).json();
+    // one of the two the search found, so taken although the page names itself in full
+    expect(r.companies['Capital One']).toMatchObject({ status: 'found', companyId: '1419' });
+    expect(pages.map((u) => u.split('/company/')[1]!.split('?')[0])).toEqual(['capitalone', 'capital-one']);
+  });
+
+  it('searches a messy name for the company alone, and answers the cleaned name from the list', async () => {
+    const { handler, searches, cache } = harness();
+    const r = await (await handler(post({ accountId: 'a1', token: TOKEN, names: ['Deel (YC W19)'] }))).json();
+    expect(r.companies['Deel (YC W19)']).toMatchObject({ status: 'found', companyId: '18583501' });
+    expect(searches).toEqual(['Deel']);
+    // kept under the name as written; "Deel" itself, asked later, answers from the row kept for "Deel (YC W19)"
+    expect(cache.rows.get('deel yc w19')?.status).toBe('found');
+  });
+
+  it('reads a company by the LinkedIn id a profile gave, with no search', async () => {
+    const { handler, searches, pages } = harness();
+    const r = await (
+      await handler(post({ accountId: 'a1', token: TOKEN, names: ['Weave'], ids: { Weave: '4242' } }))
+    ).json();
+    expect(r.companies.Weave).toMatchObject({ status: 'found', companyId: '4242' });
+    expect(searches).toEqual([]);
+    expect(pages).toHaveLength(1);
+  });
+
+  it('asks again about a name the old rules could not pin down', async () => {
+    const { handler, searches, cache } = harness();
+    await cache.put({ key: 'tesla', status: 'ambiguous', checkedAt: '2026-11-01T00:00:00.000Z' });
+    const r = await (await handler(post({ accountId: 'a1', token: TOKEN, names: ['Tesla'] }))).json();
+    expect(r.companies.Tesla.status).toBe('found');
+    expect(searches).toEqual(['Tesla']);
   });
 });

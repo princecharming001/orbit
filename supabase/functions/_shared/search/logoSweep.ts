@@ -12,11 +12,12 @@
 import { looksLikeSchool } from '@orbit/core/resume/schools';
 import type { Db } from '../db.ts';
 import {
-  COMPANY_RETRY_MS,
   type CompanyCache,
   type CompanyRow,
   companyNameKey,
   lookupCompany,
+  rowSettled,
+  searchName,
 } from '../providers/linkedinCompanies.ts';
 import { spendShare } from './reading.ts';
 
@@ -125,19 +126,31 @@ export function sqlCompanyCache(db: Db, storeLogo: CompanyCache['storeLogo']): C
   };
 }
 
-/** Names the shared list does not answer yet: never looked up, or not pinned down over a month ago. */
-export function missing(
-  candidates: { key: string; name: string }[],
+/**
+ * Names the shared list does not answer yet: never looked up, not pinned down over a month ago, or not pinned down
+ * under the old rules (LOOKUP_RULES_SINCE). A name found under its cleaned form ("Deel (YC 19)" as Deel) is answered.
+ */
+export function missing<T extends { key: string; name: string }>(
+  candidates: T[],
   rows: Record<string, CompanyRow>,
   now: Date,
-): { key: string; name: string }[] {
+): T[] {
   return candidates.filter((c) => {
-    const r = rows[c.key];
-    if (!r) return true;
-    // found with a logo kept, or found and kept by a browser: done; not pinned down: again after a month
-    if (r.status === 'found') return false;
-    return now.getTime() - Date.parse(r.checkedAt) >= COMPANY_RETRY_MS;
+    if (rowSettled(rows[c.key], now)) return false;
+    const cleaned = rows[companyNameKey(searchName(c.name))];
+    return cleaned?.status !== 'found';
   });
+}
+
+/** The shared list's rows for these names, under the name as written and as cleaned. */
+async function rowsFor(cache: CompanyCache, names: { key: string; name: string }[]) {
+  const keys = new Set<string>();
+  for (const c of names) {
+    keys.add(c.key);
+    const k = companyNameKey(searchName(c.name));
+    if (k) keys.add(k);
+  }
+  return cache.getMany([...keys]);
 }
 
 /** One part of the weekly sweep. */
@@ -145,7 +158,7 @@ export async function runLogoSweep(db: Db, deps: SweepDeps, now: Date): Promise<
   const deadline = deps.clock() + SWEEP_JOB_MS;
   const candidates = await sweepCandidates(db);
   const cache = sqlCompanyCache(db, deps.storeLogo);
-  const rows = await cache.getMany(candidates.map((c) => c.key));
+  const rows = await rowsFor(cache, candidates);
   const todo = missing(candidates, rows, now);
   const accounts = (
     await db.sql<{ id: string }>`
@@ -199,6 +212,144 @@ export async function runLogoSweep(db: Db, deps: SweepDeps, now: Date): Promise<
       queue.shift();
       settled++;
     }
+  }
+  result.remaining = todo.length - settled;
+  return result;
+}
+
+// ---- one student's companies (plan 37 follow-up) ---------------------------------------------------------------------
+
+/**
+ * logos.user: every company in one student's network, not only those 3 or more people share, so every logo on their
+ * People, Map and profile pages comes from LinkedIn. Their people's current companies and the companies in the work
+ * histories Orbit has read, most people first; a company a read profile names by LinkedIn's id is read by that id
+ * (nothing guessed). Reads come from the student's own LinkedIn account, up to USER_SHARE of its daily company
+ * ledger (the rest stays for the pages they open, which orbit-connectors /companies answers first). One part works
+ * for SWEEP_JOB_MS; the handler queues the next while names are left and the day's share is not spent.
+ */
+export const USER_SHARE = 0.7;
+/** Parts a day at most for one student (each SWEEP_JOB_MS): the share runs out well before. */
+export const USER_MAX_PARTS = 24;
+/** The most companies one student's run considers, most people first. */
+export const USER_CANDIDATES = 4000;
+
+export interface UserCandidate {
+  key: string;
+  name: string;
+  /** people at it (now, or in their work history) */
+  n: number;
+  /** LinkedIn's id for it, from a read profile's position */
+  companyId?: string;
+}
+
+export async function userLogoCandidates(db: Db, userId: string): Promise<UserCandidate[]> {
+  const rows = await db.sql<{ name: string; n: number; now: number }>`
+    with named as (
+      select coalesce(o.name, p.org_raw) as name, p.id as pid, true as current
+        from orbit.people p
+        left join orbit.organizations o on o.id = p.org_id
+       where p.user_id = ${userId}::uuid and p.deleted_at is null and p.merged_into is null
+         and not p.is_self and p.hidden_at is null and coalesce(o.name, p.org_raw) is not null
+      union all
+      select coalesce(o.name, a.org_raw), a.person_id, coalesce(a.is_current, false)
+        from orbit.affiliations a
+        join orbit.people p on p.id = a.person_id and p.deleted_at is null and p.merged_into is null
+        left join orbit.organizations o on o.id = a.org_id
+       where a.user_id = ${userId}::uuid and a.kind = 'employment' and coalesce(o.name, a.org_raw) is not null
+    )
+    select mode() within group (order by name) as name, count(distinct pid)::int as n,
+           count(distinct pid) filter (where current)::int as now
+      from named
+     group by trim(regexp_replace(regexp_replace(regexp_replace(replace(lower(name), '&', ' and '),
+              '[^a-z0-9]+', ' ', 'g'), ${SUFFIX_RE}, ' ', 'g'), ' +', ' ', 'g'))
+     order by count(distinct pid) filter (where current) desc, count(distinct pid) desc, 1
+     limit ${USER_CANDIDATES}`;
+  // LinkedIn's ids for companies, from the positions of the profiles Orbit has read for this student
+  const idRows = await db.sql<{ name: string; id: string }>`
+    select distinct on (e->>'company') e->>'company' as name, e->>'companyId' as id
+      from orbit.profile_reads r, jsonb_array_elements(case when jsonb_typeof(r.experience) = 'array'
+                                                             then r.experience else '[]'::jsonb end) e
+     where r.user_id = ${userId}::uuid and e->>'companyId' ~ '^[0-9]+$' and e->>'company' is not null`;
+  const ids = new Map<string, string>();
+  for (const r of idRows) {
+    const k = companyNameKey(r.name);
+    if (k && !ids.has(k)) ids.set(k, r.id);
+  }
+  const byKey = new Map<string, UserCandidate>();
+  for (const r of rows) {
+    const key = companyNameKey(r.name);
+    if (!key || looksLikeSchool(r.name)) continue;
+    const had = byKey.get(key);
+    if (had) had.n += r.n;
+    else byKey.set(key, { key, name: r.name.trim(), n: r.n, companyId: ids.get(key) });
+  }
+  // a company only a read profile names (not yet among their people's rows) still counts
+  for (const r of idRows) {
+    const key = companyNameKey(r.name);
+    if (key && !byKey.has(key) && !looksLikeSchool(r.name))
+      byKey.set(key, { key, name: r.name.trim(), n: 1, companyId: r.id });
+  }
+  return [...byKey.values()];
+}
+
+export interface UserLogoResult extends SweepResult {
+  /** the student's companies the shared list answers with a logo */
+  withLogo: number;
+}
+
+/** One part of one student's pass. */
+export async function runUserLogos(
+  db: Db,
+  userId: string,
+  deps: SweepDeps,
+  now: Date,
+): Promise<UserLogoResult> {
+  const deadline = deps.clock() + SWEEP_JOB_MS;
+  const candidates = await userLogoCandidates(db, userId);
+  const cache = sqlCompanyCache(db, deps.storeLogo);
+  const rows = await rowsFor(cache, candidates);
+  const todo = missing(candidates, rows, now);
+  const withLogo = candidates.filter((c) => rows[c.key]?.logoUrl).length;
+  const [acct] = await db.sql<{ id: string }>`
+    select a.external_account_id as id from orbit.integration_accounts a
+     where a.user_id = ${userId}::uuid and a.provider = 'linkedin' and a.status = 'active'
+       and a.external_account_id is not null
+     limit 1`;
+  const result: UserLogoResult = {
+    candidates: candidates.length,
+    remaining: todo.length,
+    looked: 0,
+    found: 0,
+    accounts: acct ? 1 : 0,
+    withLogo,
+  };
+  if (!todo.length) return result;
+  if (!acct) return { ...result, stopped: 'no_accounts' };
+  const u = { base: deps.baseUrl.replace(/\/+$/, ''), key: deps.apiKey };
+  let settled = 0;
+  for (const c of todo) {
+    if (deps.clock() >= deadline) {
+      result.stopped = 'time';
+      break;
+    }
+    if (result.looked > 0) await deps.sleep(800 + Math.floor(deps.random() * 1200));
+    const r = await lookupCompany(u, {
+      accountId: acct.id,
+      key: c.key,
+      name: c.name,
+      companyId: c.companyId,
+      cache,
+      doFetch: deps.fetch,
+      now,
+      spend: () => spendShare(db, 'company', acct.id, now, USER_SHARE),
+    }).catch(() => ({ looked: true, answer: undefined, stopped: undefined }));
+    if (r.looked) result.looked++;
+    if (r.answer?.status === 'found' && r.answer.logoUrl) result.found++;
+    if (r.stopped) {
+      result.stopped = 'limit';
+      break;
+    }
+    settled++;
   }
   result.remaining = todo.length - settled;
   return result;

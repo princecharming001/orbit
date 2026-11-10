@@ -546,3 +546,27 @@ end lost its name tag at the edge of the screen once the demo grew by three peop
 **Tests added.** `chat/__tests__/clarify.test.ts` (20), `in-place.test.tsx` (5), `effort.test.ts` (45), the loop's
 question-back and per-message effort cases, `ui/cards/clarify.test.tsx`, `ui/composer-mode.test.tsx`, router field
 cases, e2e `ask-act.spec.ts`, and gallery cases c01 to c03 and b01 (with `tap:` and `step:` turns).
+
+### Follow-up: company logos for the whole network, and Drafts
+
+**Why logos stayed letters.** The weekly server sweep only took companies 3 or more people share across students, and
+it had not run yet; the browser looked up only tiles on screen, a few a day. Of the student's 2,021 companies, 82 had a
+logo and 1,895 had never been asked about. LinkedIn's search took a name only when exactly one company had it, so Tesla,
+Capital One and Mercor were "ambiguous", and names were searched as typed ("Deel (YC 19)"). A logo kept as LinkedIn's
+own link expired after a few weeks, and the queue still counted the company as done, so it fell back to its initials
+for good.
+
+**Now.** `orbit-worker logos.user` runs daily for each student with LinkedIn (cron `orbit-logos-users`): every company
+in their network, current companies first and the most people first, including the companies in work histories Orbit
+read. A company a read profile names by LinkedIn's id is read by that id. Reads come from the student's own account, up
+to 70% of its daily company ledger, and the job chains parts while names and share are left. Lookups clean the name
+first (`searchName`), search before trying the page at the company's own name (joined and hyphened), take one of several
+namesakes when it has three times the followers of the next (at least 500) or when the page at its own name is one of
+them, and ask again about anything the old rules missed (`LOOKUP_RULES_SINCE`). In the browser, `pullKnownLogos`
+fetches from the shared list, for free, every company that has no logo or only LinkedIn's expiring link, the busiest
+first, every few hours. An expired link counts as no logo, and the queue sends LinkedIn's ids along.
+
+**Drafts.** The Paused section is gone (it mostly answered marketers). Continue writing opens a started draft on Drafts
+itself, with Send and Discard. Someone the student has talked with before never gets a "First message": they get a
+check-in (`firstKindFor`), and older drafts show that label (`draftKindLabel`). A reconnect stays with Orbit's
+dormant-tie suggestions, which carry what was last said.

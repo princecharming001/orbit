@@ -2043,6 +2043,8 @@ var KIND_QUEUE = {
   search_reading: "orbit_enrich",
   // plan 35 B4: the weekly shared logo pass (userId null)
   "logos.sweep": "orbit_enrich",
+  // plan 37 follow-up: every company in one student's network, from their own LinkedIn account
+  "logos.user": "orbit_enrich",
   "cost.digest": "orbit_enrich",
   "unipile.reconcile": "orbit_enrich",
   "linkedin.park": "orbit_enrich",
@@ -18532,6 +18534,22 @@ async function raiseBatchCard(db2, userId, tz, now) {
   return true;
 }
 
+// packages/core/src/labels.ts
+var FUNCTION_LABELS = {
+  swe: "Software engineering",
+  pm: "Product management",
+  ib: "Investment banking",
+  consulting: "Consulting",
+  data: "Data science and ML",
+  design: "Product design",
+  finance: "Finance",
+  marketing: "Marketing",
+  research: "Research",
+  vc: "Venture capital",
+  ops: "Operations"
+};
+var FUNCTION_CODES = Object.keys(FUNCTION_LABELS);
+
 // packages/core/src/pipeline/transitions.ts
 var ACTIVE_STAGES = [
   "identified",
@@ -28040,10 +28058,26 @@ function companyNameKey(name) {
     " "
   ).replace(/\s+/g, " ").trim();
 }
-var pageAddress = (name) => {
-  const slug = companyNameKey(name).replace(/[^a-z0-9]+/g, "");
-  return slug.length >= 3 ? slug : void 0;
+function searchName(name) {
+  let n = String(name ?? "").replace(/\s*[([{][^)\]}]*[)\]}]?/g, " ").replace(/\b(?:yc|y combinator)\s*[-']?\s*[wsfx]?\s*'?\d{2,4}\b/gi, " ").replace(/\b(?:yc|y combinator)\b\s*$/i, " ");
+  n = n.split(/\s+[-–—|·•/]\s+|\s*[|·•]\s*|,\s+|\s+@\s+/)[0] ?? n;
+  n = n.replace(/\s+/g, " ").trim();
+  return n.length >= 2 ? n.slice(0, 120) : String(name ?? "").trim();
+}
+var pageAddresses = (name) => {
+  const key2 = companyNameKey(name);
+  const joined = key2.replace(/[^a-z0-9]+/g, "");
+  if (joined.length < 3) return [];
+  const hyphened = key2.replace(/[^a-z0-9]+/g, "-");
+  return hyphened === joined ? [joined] : [joined, hyphened];
 };
+var LOOKUP_RULES_SINCE = Date.parse("2026-11-10T00:00:00Z");
+function rowSettled(r, now) {
+  if (!r) return false;
+  if (r.status === "found") return true;
+  const at = Date.parse(r.checkedAt);
+  return at >= LOOKUP_RULES_SINCE && now.getTime() - at < COMPANY_RETRY_MS;
+}
 var answerOf = (r) => ({
   status: r.status,
   companyId: r.companyId,
@@ -28051,6 +28085,8 @@ var answerOf = (r) => ({
   name: r.name,
   logoUrl: r.logoUrl
 });
+var followersOf = (c) => [c.followers_count, c.followerCount, c.followers].find((n) => typeof n === "number") ?? 0;
+var FOLLOWERS_CLEAR = 500;
 async function companyByName(u2, accountId, name, doFetch) {
   const q = new URLSearchParams({ account_id: accountId, limit: "10" });
   const res = await doFetch(`${u2.base}/api/v1/linkedin/search?${q}`, {
@@ -28068,11 +28104,15 @@ async function companyByName(u2, accountId, name, doFetch) {
     (c) => companyNameKey(c.name) === key2 && (typeof c.id === "string" || typeof c.id === "number")
   );
   if (same.length === 1) return { id: String(same[0].id), item: same[0] };
-  const followers = (c) => [c.followers_count, c.followerCount, c.followers].find((n) => typeof n === "number") ?? 0;
-  const ranked = [...same].sort((a, b) => followers(b) - followers(a));
-  if (ranked.length > 1 && followers(ranked[0]) >= 5e3 && followers(ranked[0]) >= 10 * followers(ranked[1]))
+  const ranked = [...same].sort((a, b) => followersOf(b) - followersOf(a));
+  if (ranked.length > 1 && followersOf(ranked[0]) >= FOLLOWERS_CLEAR && followersOf(ranked[0]) >= 3 * followersOf(ranked[1]))
     return { id: String(ranked[0].id), item: ranked[0] };
-  return same.length ? { ok: false, reason: "ambiguous", message: "LinkedIn has more than one company of that name." } : { ok: false, reason: "not_found", message: "LinkedIn could not find that company." };
+  return same.length ? {
+    ok: false,
+    reason: "ambiguous",
+    message: "LinkedIn has more than one company of that name.",
+    sameIds: same.map((c) => String(c.id))
+  } : { ok: false, reason: "not_found", message: "LinkedIn could not find that company." };
 }
 async function companyPage(u2, accountId, identifier, doFetch) {
   const q = new URLSearchParams({ account_id: accountId });
@@ -28099,19 +28139,17 @@ async function companyPage(u2, accountId, identifier, doFetch) {
     }
   };
 }
-async function companyAtOwnName(u2, accountId, name, doFetch) {
+async function companyAtOwnName(u2, accountId, name, doFetch, opts = {}) {
   const key2 = companyNameKey(name);
-  const slug = pageAddress(name);
-  if (!slug) return void 0;
-  const page2 = await companyPage(u2, accountId, slug, doFetch);
-  if (!("company" in page2) || !page2.company?.id) return void 0;
-  if (companyNameKey(page2.company.name) !== key2) return void 0;
-  return {
-    id: page2.company.id,
-    name: page2.company.name,
-    publicIdentifier: page2.company.publicIdentifier,
-    logo: page2.company.logoUrl
-  };
+  for (const slug of pageAddresses(name)) {
+    if (opts.spend && !await opts.spend()) return void 0;
+    const page2 = await companyPage(u2, accountId, slug, doFetch).catch(() => void 0);
+    if (!page2 || !("company" in page2) || !page2.company?.id) continue;
+    const c = page2.company;
+    if (companyNameKey(c.name) !== key2 && !opts.among?.includes(c.id)) continue;
+    return { id: c.id, name: c.name, publicIdentifier: c.publicIdentifier, logo: c.logoUrl };
+  }
+  return void 0;
 }
 async function keepCompany(cache3, key2, c, doFetch, now) {
   let kept;
@@ -28134,36 +28172,56 @@ async function keepCompany(cache3, key2, c, doFetch, now) {
     logoUrl: kept,
     checkedAt: now.toISOString()
   };
-  if (kept) await cache3?.put(row).catch(() => void 0);
+  if (kept || !c.logo) await cache3?.put(row).catch(() => void 0);
   return { ...answerOf(row), logoUrl: kept ?? c.logo };
 }
 async function lookupCompany(u2, o) {
-  const { accountId, key: key2, name, cache: cache3, doFetch, now, spend } = o;
+  const { accountId, key: key2, cache: cache3, doFetch, now, spend } = o;
   if (!await spend()) return { looked: false, stopped: "limit" };
-  if (pageAddress(name)) {
-    const atName = await companyAtOwnName(u2, accountId, name, doFetch).catch(() => void 0);
-    if (atName) return { looked: true, answer: await keepCompany(cache3, key2, atName, doFetch, now) };
+  if (o.companyId && /^\d+$/.test(o.companyId)) {
+    const page2 = await companyPage(u2, accountId, o.companyId, doFetch).catch(() => void 0);
+    if (page2 && "company" in page2 && page2.company) {
+      const c2 = page2.company;
+      return {
+        looked: true,
+        answer: await keepCompany(
+          cache3,
+          key2,
+          { id: c2.id ?? o.companyId, name: c2.name, publicIdentifier: c2.publicIdentifier, logo: c2.logoUrl },
+          doFetch,
+          now
+        )
+      };
+    }
+    if (page2 && !("company" in page2) && page2.reason === "throttled")
+      return { looked: true, stopped: "throttled" };
     if (!await spend()) return { looked: true, stopped: "limit" };
   }
+  const name = searchName(o.name);
   const found = await companyByName(u2, accountId, name, doFetch);
-  if (!("id" in found)) {
+  let c;
+  if ("id" in found)
+    c = {
+      id: found.id,
+      name: text2(found.item.name, 160),
+      publicIdentifier: text2(found.item.public_identifier, 160),
+      logo: licdn(found.item.logo)
+    };
+  else {
     if (found.reason === "throttled") return { looked: true, stopped: "throttled" };
     if (found.reason !== "ambiguous" && found.reason !== "not_found") return { looked: true };
-    const row = { key: key2, status: found.reason, checkedAt: now.toISOString() };
-    await cache3?.put(row).catch(() => void 0);
-    return { looked: true, answer: answerOf(row) };
+    c = await companyAtOwnName(u2, accountId, name, doFetch, { among: found.sameIds, spend });
+    if (!c) {
+      const row = { key: key2, status: found.reason, checkedAt: now.toISOString() };
+      await cache3?.put(row).catch(() => void 0);
+      return { looked: true, answer: answerOf(row) };
+    }
   }
-  let c = {
-    id: found.id,
-    name: text2(found.item.name, 160),
-    publicIdentifier: text2(found.item.public_identifier, 160),
-    logo: licdn(found.item.logo)
-  };
   if (!c.logo && await spend()) {
-    const page2 = await companyPage(u2, accountId, found.id, doFetch).catch(() => void 0);
+    const page2 = await companyPage(u2, accountId, c.id, doFetch).catch(() => void 0);
     if (page2 && "company" in page2 && page2.company)
       c = {
-        id: found.id,
+        id: c.id,
         name: page2.company.name ?? c.name,
         publicIdentifier: page2.company.publicIdentifier ?? c.publicIdentifier,
         logo: page2.company.logoUrl
@@ -29355,17 +29413,25 @@ function sqlCompanyCache(db2, storeLogo) {
 }
 function missing(candidates, rows, now) {
   return candidates.filter((c) => {
-    const r = rows[c.key];
-    if (!r) return true;
-    if (r.status === "found") return false;
-    return now.getTime() - Date.parse(r.checkedAt) >= COMPANY_RETRY_MS;
+    if (rowSettled(rows[c.key], now)) return false;
+    const cleaned = rows[companyNameKey(searchName(c.name))];
+    return cleaned?.status !== "found";
   });
+}
+async function rowsFor(cache3, names) {
+  const keys = /* @__PURE__ */ new Set();
+  for (const c of names) {
+    keys.add(c.key);
+    const k = companyNameKey(searchName(c.name));
+    if (k) keys.add(k);
+  }
+  return cache3.getMany([...keys]);
 }
 async function runLogoSweep(db2, deps, now) {
   const deadline = deps.clock() + SWEEP_JOB_MS;
   const candidates = await sweepCandidates(db2);
   const cache3 = sqlCompanyCache(db2, deps.storeLogo);
-  const rows = await cache3.getMany(candidates.map((c) => c.key));
+  const rows = await rowsFor(cache3, candidates);
   const todo = missing(candidates, rows, now);
   const accounts = (await db2.sql`
       select distinct a.external_account_id as id
@@ -29414,6 +29480,107 @@ async function runLogoSweep(db2, deps, now) {
       queue.shift();
       settled++;
     }
+  }
+  result.remaining = todo.length - settled;
+  return result;
+}
+var USER_SHARE = 0.7;
+var USER_MAX_PARTS = 24;
+var USER_CANDIDATES = 4e3;
+async function userLogoCandidates(db2, userId) {
+  const rows = await db2.sql`
+    with named as (
+      select coalesce(o.name, p.org_raw) as name, p.id as pid, true as current
+        from orbit.people p
+        left join orbit.organizations o on o.id = p.org_id
+       where p.user_id = ${userId}::uuid and p.deleted_at is null and p.merged_into is null
+         and not p.is_self and p.hidden_at is null and coalesce(o.name, p.org_raw) is not null
+      union all
+      select coalesce(o.name, a.org_raw), a.person_id, coalesce(a.is_current, false)
+        from orbit.affiliations a
+        join orbit.people p on p.id = a.person_id and p.deleted_at is null and p.merged_into is null
+        left join orbit.organizations o on o.id = a.org_id
+       where a.user_id = ${userId}::uuid and a.kind = 'employment' and coalesce(o.name, a.org_raw) is not null
+    )
+    select mode() within group (order by name) as name, count(distinct pid)::int as n,
+           count(distinct pid) filter (where current)::int as now
+      from named
+     group by trim(regexp_replace(regexp_replace(regexp_replace(replace(lower(name), '&', ' and '),
+              '[^a-z0-9]+', ' ', 'g'), ${SUFFIX_RE}, ' ', 'g'), ' +', ' ', 'g'))
+     order by count(distinct pid) filter (where current) desc, count(distinct pid) desc, 1
+     limit ${USER_CANDIDATES}`;
+  const idRows = await db2.sql`
+    select distinct on (e->>'company') e->>'company' as name, e->>'companyId' as id
+      from orbit.profile_reads r, jsonb_array_elements(case when jsonb_typeof(r.experience) = 'array'
+                                                             then r.experience else '[]'::jsonb end) e
+     where r.user_id = ${userId}::uuid and e->>'companyId' ~ '^[0-9]+$' and e->>'company' is not null`;
+  const ids = /* @__PURE__ */ new Map();
+  for (const r of idRows) {
+    const k = companyNameKey(r.name);
+    if (k && !ids.has(k)) ids.set(k, r.id);
+  }
+  const byKey = /* @__PURE__ */ new Map();
+  for (const r of rows) {
+    const key2 = companyNameKey(r.name);
+    if (!key2 || looksLikeSchool(r.name)) continue;
+    const had = byKey.get(key2);
+    if (had) had.n += r.n;
+    else byKey.set(key2, { key: key2, name: r.name.trim(), n: r.n, companyId: ids.get(key2) });
+  }
+  for (const r of idRows) {
+    const key2 = companyNameKey(r.name);
+    if (key2 && !byKey.has(key2) && !looksLikeSchool(r.name))
+      byKey.set(key2, { key: key2, name: r.name.trim(), n: 1, companyId: r.id });
+  }
+  return [...byKey.values()];
+}
+async function runUserLogos(db2, userId, deps, now) {
+  const deadline = deps.clock() + SWEEP_JOB_MS;
+  const candidates = await userLogoCandidates(db2, userId);
+  const cache3 = sqlCompanyCache(db2, deps.storeLogo);
+  const rows = await rowsFor(cache3, candidates);
+  const todo = missing(candidates, rows, now);
+  const withLogo = candidates.filter((c) => rows[c.key]?.logoUrl).length;
+  const [acct] = await db2.sql`
+    select a.external_account_id as id from orbit.integration_accounts a
+     where a.user_id = ${userId}::uuid and a.provider = 'linkedin' and a.status = 'active'
+       and a.external_account_id is not null
+     limit 1`;
+  const result = {
+    candidates: candidates.length,
+    remaining: todo.length,
+    looked: 0,
+    found: 0,
+    accounts: acct ? 1 : 0,
+    withLogo
+  };
+  if (!todo.length) return result;
+  if (!acct) return { ...result, stopped: "no_accounts" };
+  const u2 = { base: deps.baseUrl.replace(/\/+$/, ""), key: deps.apiKey };
+  let settled = 0;
+  for (const c of todo) {
+    if (deps.clock() >= deadline) {
+      result.stopped = "time";
+      break;
+    }
+    if (result.looked > 0) await deps.sleep(800 + Math.floor(deps.random() * 1200));
+    const r = await lookupCompany(u2, {
+      accountId: acct.id,
+      key: c.key,
+      name: c.name,
+      companyId: c.companyId,
+      cache: cache3,
+      doFetch: deps.fetch,
+      now,
+      spend: () => spendShare(db2, "company", acct.id, now, USER_SHARE)
+    }).catch(() => ({ looked: true, answer: void 0, stopped: void 0 }));
+    if (r.looked) result.looked++;
+    if (r.answer?.status === "found" && r.answer.logoUrl) result.found++;
+    if (r.stopped) {
+      result.stopped = "limit";
+      break;
+    }
+    settled++;
   }
   result.remaining = todo.length - settled;
   return result;
@@ -29468,6 +29635,43 @@ function searchHandlers(deps) {
             dedupeKey: `weekly:logos.sweep:${isoWeek(now)}:${part2 + 1}`
           },
           { delaySec: 300 }
+        );
+    },
+    "logos.user": async (job, ctx) => {
+      const userId = job.userId;
+      if (!userId) throw new JobSkipped("no_user");
+      const { apiKey, baseUrl } = deps.unipile ?? {};
+      const { url, serviceKey } = deps.storage ?? {};
+      if (!apiKey || !baseUrl || !url || !serviceKey) throw new JobSkipped("unconfigured");
+      await ctx.queue.setVt(job.queue, job.msgId, LONG_VT_SEC);
+      const now = ctx.now();
+      const r = await runUserLogos(
+        ctx.db,
+        userId,
+        {
+          fetch: doFetch,
+          apiKey,
+          baseUrl,
+          storeLogo: storageLogoWriter(url, serviceKey, doFetch),
+          sleep: deps.sleep ?? ((ms2) => new Promise((res) => setTimeout(res, ms2))),
+          random: deps.random ?? Math.random,
+          clock: deps.clock ?? Date.now
+        },
+        now
+      );
+      console.log(JSON.stringify({ fn: "orbit-worker", step: "logos_user", ...r }));
+      if (r.stopped === "no_accounts") throw new JobSkipped("not_connected");
+      const part2 = Number(job.payload.part ?? 0) || 0;
+      const day2 = now.toISOString().slice(0, 10);
+      if (r.stopped === "time" && r.remaining > 0 && part2 + 1 < USER_MAX_PARTS)
+        await ctx.queue.enqueue(
+          {
+            kind: "logos.user",
+            userId,
+            payload: { part: part2 + 1 },
+            dedupeKey: `logos.user:${userId}:${day2}:${part2 + 1}`
+          },
+          { delaySec: 120 }
         );
     },
     search_census: async (job, ctx) => {
@@ -29608,6 +29812,7 @@ var RESERVE_MS = {
   search_reading: 58e3,
   company_facts_sync: 3e4,
   "logos.sweep": 5e4,
+  "logos.user": 5e4,
   "claude.batch.poll": 4e4
 };
 var DEFAULT_RESERVE_MS = 8e3;

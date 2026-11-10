@@ -2181,6 +2181,8 @@ var KIND_QUEUE = {
   search_reading: "orbit_enrich",
   // plan 35 B4: the weekly shared logo pass (userId null)
   "logos.sweep": "orbit_enrich",
+  // plan 37 follow-up: every company in one student's network, from their own LinkedIn account
+  "logos.user": "orbit_enrich",
   "cost.digest": "orbit_enrich",
   "unipile.reconcile": "orbit_enrich",
   "linkedin.park": "orbit_enrich",
@@ -10577,6 +10579,22 @@ var autopilotRoutes = {
   "/autopilot/pause": { method: "POST", auth: true, run: pause },
   "/autopilot/dismiss": { method: "POST", auth: true, run: dismiss }
 };
+
+// packages/core/src/labels.ts
+var FUNCTION_LABELS = {
+  swe: "Software engineering",
+  pm: "Product management",
+  ib: "Investment banking",
+  consulting: "Consulting",
+  data: "Data science and ML",
+  design: "Product design",
+  finance: "Finance",
+  marketing: "Marketing",
+  research: "Research",
+  vc: "Venture capital",
+  ops: "Operations"
+};
+var FUNCTION_CODES = Object.keys(FUNCTION_LABELS);
 
 // packages/core/src/pipeline/transitions.ts
 var ACTIVE_STAGES = [

@@ -14,13 +14,16 @@ import {
   fetchLogos,
   LOGO_BATCH,
   LOGO_GAP_MS,
+  LOGO_PULL_EVERY_MS,
   LOGO_RETRY_MS,
+  pullKnownLogos,
   resetLogoQueueForTests,
   setLogoJitterForTests,
   wantCompanyLogo,
 } from './logoQueue';
+import { upsertOrganization } from './people';
 
-const NOW = new Date('2026-10-25T12:00:00Z');
+const NOW = new Date('2026-11-12T12:00:00Z');
 const user = { id: 'u1' } as User;
 const kept = (slug: string) => `https://store.test/company-logos/${slug}.png`;
 const later = (ms: number) => new Date(NOW.getTime() + ms);
@@ -197,5 +200,62 @@ describe('logo queue', () => {
   it('does nothing without a LinkedIn to ask', async () => {
     wantCompanyLogo('Nozomio');
     expect((await fetchLogos(user, { now: NOW })).step).toBe('off');
+  });
+
+  it('brings what the shared list knows for every company without a logo, free, the busiest first', async () => {
+    const calls: { names: string[]; resolve?: number }[] = [];
+    const base = shared();
+    const source: CompanySource = {
+      byNames: async (names, o) => {
+        calls.push({ names, resolve: o?.resolve });
+        return base.byNames(names, o);
+      },
+    };
+    for (const n of ['Initech', 'Stripe', 'Nozomio', 'Stanford University']) await upsertOrganization(n);
+    const stripe = (await db.organizations.where('nameNormalized').equals('stripe').first())!;
+    for (let i = 0; i < 3; i++)
+      await db.people.add({
+        id: `s${i}`,
+        userId: user.id,
+        displayName: 'S',
+        isHuman: true,
+        emails: [],
+        sources: [],
+        currentOrganizationId: stripe.id,
+        strength: 0,
+        createdAt: NOW.toISOString(),
+        updatedAt: NOW.toISOString(),
+      } as never);
+    expect(await pullKnownLogos(user, { now: NOW, source })).toBe(2);
+    // never a LinkedIn read (resolve 0), never the school, Stripe (3 people) first
+    expect(calls).toHaveLength(1);
+    expect(calls[0]!.resolve).toBe(0);
+    expect(calls[0]!.names[0]).toBe('Stripe');
+    expect(calls[0]!.names).not.toContain('Stanford University');
+    expect((await db.organizations.get(stripe.id))!.logoUrl).toBe(kept('stripe'));
+    // within the next few hours: nothing is asked again; after, only the ones still without a logo
+    await pullKnownLogos(user, { now: later(60_000), source });
+    expect(calls).toHaveLength(1);
+    await pullKnownLogos(user, { now: later(LOGO_PULL_EVERY_MS + 1), source });
+    expect(calls[1]!.names).toEqual(['Initech']);
+  });
+
+  it('asks again for a company whose LinkedIn link expired, and sends LinkedIn’s id when a profile gave one', async () => {
+    const seen: { names: string[]; ids?: Record<string, string> }[] = [];
+    const source: CompanySource = {
+      byNames: async (names, o) => {
+        seen.push({ names, ids: o?.ids });
+        return shared().byNames(names, o);
+      },
+    };
+    const org = (await upsertOrganization('Stripe'))!;
+    await db.organizations.update(org.id, {
+      linkedinCompanyId: '2135371',
+      logoUrl: 'https://media.licdn.com/dms/image/v2/x/company-logo_200_200?e=1700000000&t=y',
+    });
+    wantCompanyLogo('Stripe');
+    await fetchLogos(user, { now: NOW, source });
+    expect(seen[0]).toEqual({ names: ['Stripe'], ids: { Stripe: '2135371' } });
+    expect((await db.organizations.get(org.id))!.logoUrl).toBe(kept('stripe'));
   });
 });

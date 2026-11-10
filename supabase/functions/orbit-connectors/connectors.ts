@@ -55,6 +55,8 @@ import {
   companyPage,
   isLinkedInImage,
   lookupCompany,
+  rowSettled,
+  searchName,
   storageLogoWriter,
 } from '../_shared/providers/linkedinCompanies.ts';
 import {
@@ -428,20 +430,26 @@ async function companiesRoute(
     .map((n) => text(n, 160))
     .filter((n): n is string => !!n)
     .slice(0, 60);
+  // LinkedIn's id for a company, by the name sent, when a profile's position named it: read by id, nothing guessed
+  const idsIn = (body.ids && typeof body.ids === 'object' ? body.ids : {}) as Record<string, unknown>;
   const byKey = new Map<string, string>();
   for (const n of names) {
     const k = companyNameKey(n);
     if (k && !byKey.has(k)) byKey.set(k, n);
   }
   const cache = deps.companies;
-  const rows = cache ? await cache.getMany([...byKey.keys()]).catch(() => ({})) : {};
+  // the name as written, and the company it names once cleaned ("Deel (YC 19)" is Deel): either answers
+  const clean = new Map([...byKey].map(([k, n]) => [k, companyNameKey(searchName(n))] as const));
+  const keys = [...new Set([...byKey.keys(), ...[...clean.values()].filter(Boolean)])];
+  const rows = (cache ? await cache.getMany(keys).catch(() => ({})) : {}) as Record<string, CompanyRow>;
   const now = ctx.now();
   const companies: Record<string, CompanyAnswer> = {};
   const misses: [string, string][] = [];
   for (const [key, name] of byKey) {
-    const r = (rows as Record<string, CompanyRow>)[key];
-    if (r && (r.status === 'found' || now.getTime() - Date.parse(r.checkedAt) < COMPANY_RETRY_MS))
-      companies[name] = answerOf(r);
+    const own = rows[key];
+    const cleaned = rows[clean.get(key) ?? ''];
+    const r = own?.status === 'found' ? own : cleaned?.status === 'found' ? cleaned : own;
+    if (r && rowSettled(r, now)) companies[name] = answerOf(r);
     else misses.push([key, name]);
   }
   const want = Math.min(Number(body.resolve ?? COMPANIES_PER_CALL) || 0, COMPANIES_PER_CALL);
@@ -453,6 +461,7 @@ async function companiesRoute(
       accountId,
       key,
       name,
+      companyId: text(idsIn[name], 40),
       cache,
       doFetch: ctx.doFetch,
       now,

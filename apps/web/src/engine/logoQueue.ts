@@ -5,9 +5,11 @@
  * storage so it never expires. While the app is open this queue sends, in batches, the names of companies a tile
  * showed without a LinkedIn logo (`wantCompanyLogo`, also `seenCompany`: the Map, People, Pipeline and Discover rows
  * all draw their logos through CompanyLogo, which calls it once a tile is near the screen), this visit first, then
- * those shown in the last two weeks (kept in this browser). Plan 35 B4: the rest of the network is never swept from
- * the browser; a weekly server job (orbit-worker logos.sweep) fills the shared list for companies 3 or more people
- * work at across all students, so most tiles answer from it for free. A few new companies are looked up per call,
+ * those shown in the last two weeks (kept in this browser). Plan 35 B4: the rest of the network is never looked up
+ * from the browser; the server fills the shared list (orbit-worker logos.sweep weekly for companies 3 or more people
+ * work at across all students, and logos.user daily for every company in each student's own network), and
+ * `pullKnownLogos` brings its answers to this browser for every company without a logo, for free. A LinkedIn logo link
+ * that has expired counts as no logo, so it is asked for again (the answer is Orbit's own copy, which never expires). A few new companies are looked up per call,
  * from the account's own company allowance (a company page is not a profile view, so it never takes reads from
  * people). LinkedIn's company search answers only when exactly one company has the name (two "Nova"s are two
  * companies, so neither is taken); the company's LinkedIn id, public name and logo are then kept on the organisation
@@ -28,6 +30,11 @@ import { adoptCompany, logosAskedAt, markLogosAsked } from './enrichment/logos';
 import { liveAccountFor } from './enrichment/sources';
 import { linkedInPaused, pauseLinkedIn, readBudget } from './enrichment/store';
 import { upsertOrganization } from './people';
+import { isLinkedInPhoto, linkedInImageExpired } from './photos';
+
+/** A logo that shows: Orbit's own copy, or LinkedIn's link while it lasts. */
+const showsLogo = (o: { logoUrl?: string }, now: Date) =>
+  !!o.logoUrl && !(isLinkedInPhoto(o.logoUrl) && linkedInImageExpired(o.logoUrl, now));
 
 /** Names sent in one call (the shared list answers all of them; only new ones cost LinkedIn reads). */
 export const LOGO_BATCH = 60;
@@ -39,6 +46,14 @@ export const LOGO_RETRY_MS = 14 * 86_400_000;
 export const LOGO_SEEN_KEEP_MS = 14 * 86_400_000;
 /** The most companies kept as shown, the latest first. */
 export const LOGO_SEEN_MAX = 300;
+/**
+ * Every company of the student's without a LinkedIn logo is asked of the shared list (free, no LinkedIn read) this
+ * often: the server's daily pass (orbit-worker logos.user) fills it for their whole network, and this brings what it
+ * found to this browser, not only to the tiles on screen.
+ */
+export const LOGO_PULL_EVERY_MS = 6 * 3_600_000;
+/** A miss kept before the lookup rules changed (orbit-connectors LOOKUP_RULES_SINCE) is asked again. */
+export const LOGO_RULES_SINCE = Date.parse('2026-11-10T00:00:00Z');
 
 let jitter = () => Math.random();
 /** Unit-test hook: the random share of each gap (0 to 1). */
@@ -64,7 +79,10 @@ export const seenCompany = wantCompanyLogo;
 
 /** Where company answers come from: Orbit's shared list through the proxy, or the demo's mock connector. */
 export interface CompanySource {
-  byNames(names: string[]): Promise<EnrichOutcome<CompaniesAnswer>>;
+  byNames(
+    names: string[],
+    opts?: { ids?: Record<string, string>; resolve?: number },
+  ): Promise<EnrichOutcome<CompaniesAnswer>>;
 }
 
 export async function companySourceFor(user: Pick<User, 'id'>): Promise<CompanySource | undefined> {
@@ -90,7 +108,7 @@ export async function companySourceFor(user: Pick<User, 'id'>): Promise<CompanyS
       },
     };
   const { accountId, token } = live;
-  return { byNames: (names) => linkedInCompanies(accountId, names, { token }) };
+  return { byNames: (names, o) => linkedInCompanies(accountId, names, { token, ...o }) };
 }
 
 type Tried = Record<string, string>;
@@ -132,16 +150,17 @@ async function namesToSend(
 ): Promise<{ key: string; name: string }[]> {
   const orgs = await db.organizations.toArray();
   const asked = await logosAskedAt();
+  // a LinkedIn link that has expired shows nothing: the company is asked for again (the answer is Orbit's own copy)
   const done = new Set(
     orgs
-      .filter((o) => o.logoUrl && o.linkedinCompanyId)
+      .filter((o) => showsLogo(o, now) && o.linkedinCompanyId)
       .map((o) => o.nameNormalized || normalizeCompany(o.name)),
   );
   // a company LinkedIn answered for without a logo (by name here, or by id in the logo refresh) waits like a miss
-  const fresh = (key: string) =>
-    !done.has(key) &&
-    now.getTime() - Date.parse(tried[key] ?? '1970-01-01') > LOGO_RETRY_MS &&
-    now.getTime() - Date.parse(asked[key] ?? '1970-01-01') > LOGO_RETRY_MS;
+  const since = (at: string | undefined) => Math.max(Date.parse(at ?? '1970-01-01'), 0);
+  const recent = (at: string | undefined) =>
+    since(at) >= LOGO_RULES_SINCE && now.getTime() - since(at) <= LOGO_RETRY_MS;
+  const fresh = (key: string) => !done.has(key) && !recent(tried[key]) && !recent(asked[key]);
   const out: { key: string; name: string }[] = [];
   const seen = new Set<string>();
   const add = (key: string, name: string) => {
@@ -172,7 +191,10 @@ export async function fetchLogos(
   const batch = await namesToSend(user.id, tried, now);
   if (!batch.length) return { step: 'idle' };
   nextCall.set(user.id, now.getTime() + LOGO_GAP_MS * (1 + jitter()));
-  const r = await source.byNames(batch.map((b) => b.name));
+  const r = await source.byNames(
+    batch.map((b) => b.name),
+    { ids: await linkedInIds(batch) },
+  );
   if (!r.ok) {
     if (r.reason === 'throttled') {
       await pauseLinkedIn(user.id, now, 'LinkedIn asked Orbit to slow down. It carries on tomorrow.');
@@ -209,6 +231,84 @@ export async function fetchLogos(
   return { step: 'asked', found, pending: r.value.pending };
 }
 
+/** LinkedIn's ids for these companies, where a read profile's position named one (kept on the organisation). */
+async function linkedInIds(batch: { key: string; name: string }[]): Promise<Record<string, string>> {
+  const keys = new Set(batch.map((b) => b.key));
+  const ids: Record<string, string> = {};
+  const orgs = await db.organizations
+    .where('nameNormalized')
+    .anyOf([...keys])
+    .toArray();
+  for (const b of batch) {
+    const id = orgs.find(
+      (o) => o.nameNormalized === b.key && /^\d+$/.test(o.linkedinCompanyId ?? ''),
+    )?.linkedinCompanyId;
+    if (id) ids[b.name] = id;
+  }
+  return ids;
+}
+
+const pulledKey = (userId: string) => `logos:pulled:${userId}`;
+
+/**
+ * Bring what the shared list knows to this browser for every company of the student's without a LinkedIn logo (not
+ * only those a tile showed): free, no LinkedIn read, in batches of LOGO_BATCH, each company at most every
+ * LOGO_PULL_EVERY_MS. Answers how many logos it put on organisations.
+ */
+export async function pullKnownLogos(
+  user: Pick<User, 'id'>,
+  opts: { now?: Date; source?: CompanySource; maxCalls?: number } = {},
+): Promise<number> {
+  const now = opts.now ?? new Date();
+  const source = opts.source ?? (await companySourceFor(user));
+  if (!source) return 0;
+  const pulled = ((await db.kv.get(pulledKey(user.id)))?.value as Record<string, number> | undefined) ?? {};
+  const orgs = await db.organizations.toArray();
+  const byKey = new Map<string, string>();
+  for (const o of orgs) {
+    const key = o.nameNormalized || normalizeCompany(o.name);
+    if (!key || !o.name || byKey.has(key) || looksLikeSchool(o.name)) continue;
+    // Orbit's own copy of a LinkedIn logo never expires; LinkedIn's link does, so it is swapped for the copy
+    if (o.logoUrl && o.linkedinCompanyId && !isLinkedInPhoto(o.logoUrl)) continue;
+    if (now.getTime() - (pulled[key] ?? 0) < LOGO_PULL_EVERY_MS) continue;
+    byKey.set(key, o.name);
+  }
+  // the companies the most people work at first, so a short visit still fills the rows seen most
+  const keyOf = new Map(orgs.map((o) => [o.id, o.nameNormalized || normalizeCompany(o.name)] as const));
+  const count = new Map<string, number>();
+  await db.people.each((p) => {
+    const k = p.currentOrganizationId ? keyOf.get(p.currentOrganizationId) : undefined;
+    if (k) count.set(k, (count.get(k) ?? 0) + 1);
+  });
+  const todo = [...byKey].sort((a, b) => (count.get(b[0]) ?? 0) - (count.get(a[0]) ?? 0));
+  let put = 0;
+  let calls = 0;
+  for (let i = 0; i < todo.length && calls < (opts.maxCalls ?? 60); i += LOGO_BATCH, calls++) {
+    const batch = todo.slice(i, i + LOGO_BATCH);
+    const r = await source.byNames(
+      batch.map(([, name]) => name),
+      { resolve: 0 },
+    );
+    if (!r.ok) break;
+    for (const [key, name] of batch) {
+      pulled[key] = now.getTime();
+      const a = r.value.companies[name];
+      if (a?.status !== 'found' || !a.companyId) continue;
+      const org = await upsertOrganization(name);
+      if (!org) continue;
+      const patch = await adoptCompany(
+        org,
+        { companyId: a.companyId, companySlug: a.publicIdentifier, logoUrl: a.logoUrl },
+        now,
+      );
+      if (patch?.logoUrl) put++;
+      wanted.delete(key);
+    }
+  }
+  await db.kv.put({ key: pulledKey(user.id), value: pulled });
+  return put;
+}
+
 let autoRun = import.meta.env.MODE !== 'test';
 /** Unit-test hook: the background loop is off under vitest unless a test turns it on. */
 export function setLogoQueueAutoRunForTests(on: boolean): void {
@@ -236,6 +336,7 @@ export function startLogoQueue(user: Pick<User, 'id'>): () => void {
     let wait = 60_000;
     if (typeof document === 'undefined' || document.visibilityState !== 'hidden') {
       busy = true;
+      await pull();
       const r = await fetchLogos(user).catch(() => ({ step: 'off' as const }));
       busy = false;
       if (r.step === 'asked') startActivity('logos', 'Fetching company logos', { quiet: true });
@@ -244,6 +345,13 @@ export function startLogoQueue(user: Pick<User, 'id'>): () => void {
       wait = r.step === 'asked' || r.step === 'wait' ? gap : r.step === 'idle' ? 60_000 : 10 * 60_000;
     }
     if (!stopped) schedule(wait);
+  };
+  // what the shared list knows, for every company without a logo: soon after the app opens, then every few hours
+  let lastPull = 0;
+  const pull = async () => {
+    if (stopped || Date.now() - lastPull < LOGO_PULL_EVERY_MS / 6) return;
+    lastPull = Date.now();
+    await pullKnownLogos(user).catch(() => 0);
   };
   const onWant = () => {
     if (stopped || busy) return;
