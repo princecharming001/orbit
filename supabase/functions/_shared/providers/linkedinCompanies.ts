@@ -130,6 +130,32 @@ export function searchName(name: string): string {
   return n.length >= 2 ? n.slice(0, 120) : String(name ?? '').trim();
 }
 
+/**
+ * Whether a LinkedIn company's name is the name asked for: the same once case, punctuation and legal suffixes are set
+ * aside, keeping letters of every script ("AWS" is not "AWS بالعربي", a fan page), or the short name LinkedIn writes in
+ * brackets after the full one ("AWS" is "Amazon Web Services (AWS)").
+ */
+export function sameCompanyName(theirs: unknown, asked: string): boolean {
+  const wide = (v: unknown) =>
+    String(v ?? '')
+      .toLowerCase()
+      .normalize('NFKD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .replace(/&/g, ' and ')
+      .replace(/[^\p{L}\p{N}]+/gu, ' ')
+      .replace(
+        /(^| )(the|inc|incorporated|llc|ltd|limited|corp|corporation|co|company|gmbh|plc|sa|ag|bv|lp|llp)(?= |$)/g,
+        ' ',
+      )
+      .replace(/\s+/g, ' ')
+      .trim();
+  const want = wide(asked);
+  if (!want) return false;
+  if (wide(theirs) === want) return true;
+  const short = /\(([^)]{2,40})\)\s*$/.exec(String(theirs ?? ''))?.[1];
+  return !!short && wide(short) === want;
+}
+
 /** Where a company's LinkedIn page would be if it is at its own name ("SpaceX" -> spacex), for names of 3+ letters. */
 export const pageAddress = (name: string): string | undefined => {
   const slug = companyNameKey(name).replace(/[^a-z0-9]+/g, '');
@@ -195,9 +221,8 @@ export async function companyByName(
     return { ok: false, reason: 'refused', message: await unipileError(res) };
   if (!res.ok) throw new Error(`unipile ${res.status}`);
   const items = ((await res.json()) as { items?: Record<string, unknown>[] }).items ?? [];
-  const key = companyNameKey(name);
   const same = items.filter(
-    (c) => companyNameKey(c.name) === key && (typeof c.id === 'string' || typeof c.id === 'number'),
+    (c) => sameCompanyName(c.name, name) && (typeof c.id === 'string' || typeof c.id === 'number'),
   );
   if (same.length === 1) return { id: String(same[0]!.id), item: same[0]! };
   const ranked = [...same].sort((a, b) => followersOf(b) - followersOf(a));
@@ -274,13 +299,12 @@ export async function companyAtOwnName(
   doFetch: typeof fetch,
   opts: { among?: string[]; spend?: () => Promise<boolean> } = {},
 ): Promise<FoundCompany | undefined> {
-  const key = companyNameKey(name);
   for (const slug of pageAddresses(name)) {
     if (opts.spend && !(await opts.spend())) return undefined;
     const page = await companyPage(u, accountId, slug, doFetch).catch(() => undefined);
     if (!page || !('company' in page) || !page.company?.id) continue;
     const c = page.company;
-    if (companyNameKey(c.name) !== key && !opts.among?.includes(c.id!)) continue;
+    if (!sameCompanyName(c.name, name) && !opts.among?.includes(c.id!)) continue;
     return { id: c.id!, name: c.name, publicIdentifier: c.publicIdentifier, logo: c.logoUrl };
   }
   return undefined;

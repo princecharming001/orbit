@@ -68,9 +68,11 @@ export function CompanyLogo({
   const known =
     domain ?? companyDomain(companyName, { domains: orgs?.flatMap((o) => o.domains ?? []), guess: false });
   const named = !!companyName && looksLikeSchool(companyName);
-  // no LinkedIn logo yet: ask LinkedIn (engine/logoQueue), once the orgs are read and the tile is near the screen
+  // no LinkedIn logo yet: ask LinkedIn (engine/logoQueue), once the orgs are read and the tile is near the screen;
+  // never for a school (its own site icon stands in, and LinkedIn's company search does not list schools)
+  const schoolRef = useRef(false);
   useEffect(() => {
-    if (orgs && !own && companyName && inViewRef.current) wantCompanyLogo(companyName);
+    if (orgs && !own && companyName && inViewRef.current && !schoolRef.current) wantCompanyLogo(companyName);
   });
   // the school list and the icon are looked for once the tile is near the screen
   const { ref, inView } = useInView({ triggerOnce: true, rootMargin: '200px', fallbackInView: true });
@@ -92,6 +94,7 @@ export function CompanyLogo({
   const d = known ?? schoolDomain;
   // a school by its name, by the school list, or by its address: its own site icon stands in for a LinkedIn logo
   const school = named || !!schoolDomain || (!!d && /\.edu$|\.ac\.[a-z]{2}$/.test(d));
+  schoolRef.current = school;
   const [found, setFound] = useState<{ domain: string; src: string | null }>();
   useEffect(() => {
     if (!d || own || !inView) return;

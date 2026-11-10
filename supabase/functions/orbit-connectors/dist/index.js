@@ -797,6 +797,17 @@ function searchName(name) {
   n = n.replace(/\s+/g, " ").trim();
   return n.length >= 2 ? n.slice(0, 120) : String(name ?? "").trim();
 }
+function sameCompanyName(theirs, asked) {
+  const wide = (v) => String(v ?? "").toLowerCase().normalize("NFKD").replace(/[\u0300-\u036f]/g, "").replace(/&/g, " and ").replace(/[^\p{L}\p{N}]+/gu, " ").replace(
+    /(^| )(the|inc|incorporated|llc|ltd|limited|corp|corporation|co|company|gmbh|plc|sa|ag|bv|lp|llp)(?= |$)/g,
+    " "
+  ).replace(/\s+/g, " ").trim();
+  const want = wide(asked);
+  if (!want) return false;
+  if (wide(theirs) === want) return true;
+  const short = /\(([^)]{2,40})\)\s*$/.exec(String(theirs ?? ""))?.[1];
+  return !!short && wide(short) === want;
+}
 var pageAddresses = (name) => {
   const key = companyNameKey(name);
   const joined = key.replace(/[^a-z0-9]+/g, "");
@@ -832,9 +843,8 @@ async function companyByName(u, accountId, name, doFetch) {
     return { ok: false, reason: "refused", message: await unipileError(res) };
   if (!res.ok) throw new Error(`unipile ${res.status}`);
   const items = (await res.json()).items ?? [];
-  const key = companyNameKey(name);
   const same = items.filter(
-    (c) => companyNameKey(c.name) === key && (typeof c.id === "string" || typeof c.id === "number")
+    (c) => sameCompanyName(c.name, name) && (typeof c.id === "string" || typeof c.id === "number")
   );
   if (same.length === 1) return { id: String(same[0].id), item: same[0] };
   const ranked = [...same].sort((a, b) => followersOf(b) - followersOf(a));
@@ -873,13 +883,12 @@ async function companyPage(u, accountId, identifier, doFetch) {
   };
 }
 async function companyAtOwnName(u, accountId, name, doFetch, opts = {}) {
-  const key = companyNameKey(name);
   for (const slug of pageAddresses(name)) {
     if (opts.spend && !await opts.spend()) return void 0;
     const page = await companyPage(u, accountId, slug, doFetch).catch(() => void 0);
     if (!page || !("company" in page) || !page.company?.id) continue;
     const c = page.company;
-    if (companyNameKey(c.name) !== key && !opts.among?.includes(c.id)) continue;
+    if (!sameCompanyName(c.name, name) && !opts.among?.includes(c.id)) continue;
     return { id: c.id, name: c.name, publicIdentifier: c.publicIdentifier, logo: c.logoUrl };
   }
   return void 0;

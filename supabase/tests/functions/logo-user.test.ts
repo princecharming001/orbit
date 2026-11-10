@@ -5,7 +5,7 @@
  * schools are left to their own icons, and the student's own account's share of its company ledger is the limit.
  */
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
-import { searchName } from '../../functions/_shared/providers/linkedinCompanies.ts';
+import { sameCompanyName, searchName } from '../../functions/_shared/providers/linkedinCompanies.ts';
 import { runUserLogos, USER_SHARE, userLogoCandidates } from '../../functions/_shared/search/logoSweep.ts';
 import { searchHandlers } from '../../functions/orbit-worker/handlers/search.ts';
 import { connectedUser } from '../helpers/ingest.ts';
@@ -78,6 +78,26 @@ describe('logos.user', () => {
     expect(searchName('Context [YC S26]')).toBe('Context');
     expect(searchName('Capital One')).toBe('Capital One');
     expect(searchName('M&T Bank')).toBe('M&T Bank');
+  });
+
+  it('takes a name as the same only in every script, or as the short name in brackets', () => {
+    expect(sameCompanyName('Stripe, Inc.', 'stripe')).toBe(true);
+    expect(sameCompanyName('AWS بالعربي', 'AWS')).toBe(false);
+    expect(sameCompanyName('Amazon Web Services (AWS)', 'AWS')).toBe(true);
+    expect(sameCompanyName('Nestlé', 'Nestle')).toBe(true);
+    expect(sameCompanyName('Stripe Partners', 'Stripe')).toBe(false);
+  });
+
+  it('leaves names people list under education to their own icons', async () => {
+    const a = await connectedUser(t.db, { linkedinAccount: 'acc-s' });
+    const maya = await person(a, 'UCSC');
+    await person(a, 'Ramp');
+    for (const org of ['UCSC', 'Rutgers'])
+      await t.db.sql`
+        insert into orbit.affiliations (user_id, person_id, org_raw, kind, source)
+        values (${a}::uuid, ${maya}::uuid, ${org}, 'education', 'linkedin_profile')`;
+    const c = await userLogoCandidates(t.db, a);
+    expect(c.map((x) => x.name)).toEqual(['Ramp']);
   });
 
   it('looks up every company in the network, current ones first, by id when a read profile gives one', async () => {

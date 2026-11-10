@@ -28064,6 +28064,17 @@ function searchName(name) {
   n = n.replace(/\s+/g, " ").trim();
   return n.length >= 2 ? n.slice(0, 120) : String(name ?? "").trim();
 }
+function sameCompanyName(theirs, asked) {
+  const wide = (v) => String(v ?? "").toLowerCase().normalize("NFKD").replace(/[\u0300-\u036f]/g, "").replace(/&/g, " and ").replace(/[^\p{L}\p{N}]+/gu, " ").replace(
+    /(^| )(the|inc|incorporated|llc|ltd|limited|corp|corporation|co|company|gmbh|plc|sa|ag|bv|lp|llp)(?= |$)/g,
+    " "
+  ).replace(/\s+/g, " ").trim();
+  const want = wide(asked);
+  if (!want) return false;
+  if (wide(theirs) === want) return true;
+  const short2 = /\(([^)]{2,40})\)\s*$/.exec(String(theirs ?? ""))?.[1];
+  return !!short2 && wide(short2) === want;
+}
 var pageAddresses = (name) => {
   const key2 = companyNameKey(name);
   const joined = key2.replace(/[^a-z0-9]+/g, "");
@@ -28099,9 +28110,8 @@ async function companyByName(u2, accountId, name, doFetch) {
     return { ok: false, reason: "refused", message: await unipileError(res) };
   if (!res.ok) throw new Error(`unipile ${res.status}`);
   const items = (await res.json()).items ?? [];
-  const key2 = companyNameKey(name);
   const same = items.filter(
-    (c) => companyNameKey(c.name) === key2 && (typeof c.id === "string" || typeof c.id === "number")
+    (c) => sameCompanyName(c.name, name) && (typeof c.id === "string" || typeof c.id === "number")
   );
   if (same.length === 1) return { id: String(same[0].id), item: same[0] };
   const ranked = [...same].sort((a, b) => followersOf(b) - followersOf(a));
@@ -28140,13 +28150,12 @@ async function companyPage(u2, accountId, identifier, doFetch) {
   };
 }
 async function companyAtOwnName(u2, accountId, name, doFetch, opts = {}) {
-  const key2 = companyNameKey(name);
   for (const slug of pageAddresses(name)) {
     if (opts.spend && !await opts.spend()) return void 0;
     const page2 = await companyPage(u2, accountId, slug, doFetch).catch(() => void 0);
     if (!page2 || !("company" in page2) || !page2.company?.id) continue;
     const c = page2.company;
-    if (companyNameKey(c.name) !== key2 && !opts.among?.includes(c.id)) continue;
+    if (!sameCompanyName(c.name, name) && !opts.among?.includes(c.id)) continue;
     return { id: c.id, name: c.name, publicIdentifier: c.publicIdentifier, logo: c.logoUrl };
   }
   return void 0;
@@ -29371,10 +29380,11 @@ async function sweepCandidates(db2) {
     having count(*) >= ${SWEEP_MIN_PEOPLE}
      order by count(*) desc
      limit ${SWEEP_CANDIDATES}`;
+  const schools = await schoolKeys(db2);
   const byKey = /* @__PURE__ */ new Map();
   for (const r of rows) {
     const key2 = companyNameKey(r.name);
-    if (!key2 || looksLikeSchool(r.name)) continue;
+    if (!key2 || looksLikeSchool(r.name) || schools.has(key2)) continue;
     const had = byKey.get(key2);
     if (had) had.n += r.n;
     else byKey.set(key2, { key: key2, name: r.name.trim(), n: r.n });
@@ -29487,6 +29497,26 @@ async function runLogoSweep(db2, deps, now) {
 var USER_SHARE = 0.7;
 var USER_MAX_PARTS = 24;
 var USER_CANDIDATES = 4e3;
+async function schoolKeys(db2) {
+  const rows = await db2.sql`
+    select coalesce(o.name, a.org_raw) as name,
+           count(*) filter (where a.kind = 'education')::int as edu,
+           count(*) filter (where a.kind = 'employment')::int as work
+      from orbit.affiliations a
+      left join orbit.organizations o on o.id = a.org_id
+     where coalesce(o.name, a.org_raw) is not null
+     group by 1`;
+  const tally = /* @__PURE__ */ new Map();
+  for (const r of rows) {
+    const k = companyNameKey(r.name);
+    if (!k) continue;
+    const t = tally.get(k) ?? { edu: 0, work: 0 };
+    t.edu += r.edu;
+    t.work += r.work;
+    tally.set(k, t);
+  }
+  return new Set([...tally].filter(([, t]) => t.edu > t.work).map(([k]) => k));
+}
 async function userLogoCandidates(db2, userId) {
   const rows = await db2.sql`
     with named as (
@@ -29514,6 +29544,7 @@ async function userLogoCandidates(db2, userId) {
       from orbit.profile_reads r, jsonb_array_elements(case when jsonb_typeof(r.experience) = 'array'
                                                              then r.experience else '[]'::jsonb end) e
      where r.user_id = ${userId}::uuid and e->>'companyId' ~ '^[0-9]+$' and e->>'company' is not null`;
+  const schools = await schoolKeys(db2);
   const ids = /* @__PURE__ */ new Map();
   for (const r of idRows) {
     const k = companyNameKey(r.name);
@@ -29522,14 +29553,14 @@ async function userLogoCandidates(db2, userId) {
   const byKey = /* @__PURE__ */ new Map();
   for (const r of rows) {
     const key2 = companyNameKey(r.name);
-    if (!key2 || looksLikeSchool(r.name)) continue;
+    if (!key2 || looksLikeSchool(r.name) || schools.has(key2)) continue;
     const had = byKey.get(key2);
     if (had) had.n += r.n;
     else byKey.set(key2, { key: key2, name: r.name.trim(), n: r.n, companyId: ids.get(key2) });
   }
   for (const r of idRows) {
     const key2 = companyNameKey(r.name);
-    if (key2 && !byKey.has(key2) && !looksLikeSchool(r.name))
+    if (key2 && !byKey.has(key2) && !looksLikeSchool(r.name) && !schools.has(key2))
       byKey.set(key2, { key: key2, name: r.name.trim(), n: 1, companyId: r.id });
   }
   return [...byKey.values()];

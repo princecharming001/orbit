@@ -75,10 +75,11 @@ export async function sweepCandidates(db: Db): Promise<{ key: string; name: stri
     having count(*) >= ${SWEEP_MIN_PEOPLE}
      order by count(*) desc
      limit ${SWEEP_CANDIDATES}`;
+  const schools = await schoolKeys(db);
   const byKey = new Map<string, { key: string; name: string; n: number }>();
   for (const r of rows) {
     const key = companyNameKey(r.name);
-    if (!key || looksLikeSchool(r.name)) continue;
+    if (!key || looksLikeSchool(r.name) || schools.has(key)) continue;
     const had = byKey.get(key);
     if (had) had.n += r.n;
     else byKey.set(key, { key, name: r.name.trim(), n: r.n });
@@ -242,6 +243,32 @@ export interface UserCandidate {
   companyId?: string;
 }
 
+/**
+ * Names that are schools by how people list them: more often under education than under work, across every student
+ * ("UCSC", "Rutgers", "NYU Stern" read like no school word). A school's own site icon stands in for its logo, and
+ * LinkedIn's company search does not list schools, so looking one up only spends a read.
+ */
+export async function schoolKeys(db: Db): Promise<Set<string>> {
+  const rows = await db.sql<{ name: string; edu: number; work: number }>`
+    select coalesce(o.name, a.org_raw) as name,
+           count(*) filter (where a.kind = 'education')::int as edu,
+           count(*) filter (where a.kind = 'employment')::int as work
+      from orbit.affiliations a
+      left join orbit.organizations o on o.id = a.org_id
+     where coalesce(o.name, a.org_raw) is not null
+     group by 1`;
+  const tally = new Map<string, { edu: number; work: number }>();
+  for (const r of rows) {
+    const k = companyNameKey(r.name);
+    if (!k) continue;
+    const t = tally.get(k) ?? { edu: 0, work: 0 };
+    t.edu += r.edu;
+    t.work += r.work;
+    tally.set(k, t);
+  }
+  return new Set([...tally].filter(([, t]) => t.edu > t.work).map(([k]) => k));
+}
+
 export async function userLogoCandidates(db: Db, userId: string): Promise<UserCandidate[]> {
   const rows = await db.sql<{ name: string; n: number; now: number }>`
     with named as (
@@ -270,6 +297,7 @@ export async function userLogoCandidates(db: Db, userId: string): Promise<UserCa
       from orbit.profile_reads r, jsonb_array_elements(case when jsonb_typeof(r.experience) = 'array'
                                                              then r.experience else '[]'::jsonb end) e
      where r.user_id = ${userId}::uuid and e->>'companyId' ~ '^[0-9]+$' and e->>'company' is not null`;
+  const schools = await schoolKeys(db);
   const ids = new Map<string, string>();
   for (const r of idRows) {
     const k = companyNameKey(r.name);
@@ -278,7 +306,7 @@ export async function userLogoCandidates(db: Db, userId: string): Promise<UserCa
   const byKey = new Map<string, UserCandidate>();
   for (const r of rows) {
     const key = companyNameKey(r.name);
-    if (!key || looksLikeSchool(r.name)) continue;
+    if (!key || looksLikeSchool(r.name) || schools.has(key)) continue;
     const had = byKey.get(key);
     if (had) had.n += r.n;
     else byKey.set(key, { key, name: r.name.trim(), n: r.n, companyId: ids.get(key) });
@@ -286,7 +314,7 @@ export async function userLogoCandidates(db: Db, userId: string): Promise<UserCa
   // a company only a read profile names (not yet among their people's rows) still counts
   for (const r of idRows) {
     const key = companyNameKey(r.name);
-    if (key && !byKey.has(key) && !looksLikeSchool(r.name))
+    if (key && !byKey.has(key) && !looksLikeSchool(r.name) && !schools.has(key))
       byKey.set(key, { key, name: r.name.trim(), n: 1, companyId: r.id });
   }
   return [...byKey.values()];
