@@ -313,4 +313,26 @@ describe('logo queue', () => {
     expect(n.linkedinCompanyId).toBeUndefined();
     expect((await db.organizations.get(triumph.id))!.logoUrl).toBe(kept('triumph-labs'));
   });
+
+  it('a company found by name follows the shared list when it corrects itself (a fan page, then NASA’s own)', async () => {
+    const org = (await upsertOrganization('NASA'))!;
+    await db.organizations.update(org.id, { linkedinCompanyId: '99952564', logoUrl: kept('nasa-fan') });
+    const source: CompanySource = {
+      byNames: async (names) => ({
+        ok: true,
+        value: {
+          companies: Object.fromEntries(
+            names.map((n) => [n, { status: 'found' as const, companyId: '2003', logoUrl: kept('nasa') }]),
+          ),
+          pending: 0,
+        },
+      }),
+    };
+    await pullKnownLogos(user, { now: NOW, source });
+    expect(await db.organizations.get(org.id)).toMatchObject({
+      linkedinCompanyId: '2003',
+      logoUrl: kept('nasa'),
+      linkedinCompanyExact: false,
+    });
+  });
 });

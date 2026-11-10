@@ -22,9 +22,9 @@ export interface CompanyFacts {
 
 /**
  * Keep LinkedIn's id, public name and logo on the organisation. A logo replaces none, an expired one, or an older
- * LinkedIn link for the same company; it never replaces a logo from elsewhere. A different LinkedIn company that
- * shares the name takes over the organisation only when it is exact and what the organisation holds is not (a
- * position on someone's profile says "Triumph" here is Triumph Labs, whatever the name search found).
+ * LinkedIn link for the same company; it never replaces a logo from elsewhere. A different LinkedIn company takes over
+ * an organisation whose company came from a name search (a position says "Triumph" here is Triumph Labs; the shared
+ * list found NASA's own page where it once took a fan page), never one settled exactly.
  */
 export async function adoptCompany(
   org: Organization,
@@ -33,13 +33,15 @@ export async function adoptCompany(
 ): Promise<Partial<Organization> | undefined> {
   const patch: Partial<Organization> = {};
   const other = !!org.linkedinCompanyId && !!facts.companyId && org.linkedinCompanyId !== facts.companyId;
-  if (other && !(facts.exact && !org.linkedinCompanyExact)) return undefined;
+  // settled exactly (the student's pick, or a position): nothing changes it
+  if (other && org.linkedinCompanyExact) return undefined;
   if (other) {
-    // another company after all: nothing of the one found by name stays
+    // another company after all (a position says so, or the shared list corrected what it found by name): nothing of
+    // the one found by name stays
     patch.linkedinCompanyId = facts.companyId;
     patch.linkedinSlug = facts.companySlug;
     patch.logoUrl = facts.logoUrl;
-    patch.linkedinCompanyExact = true;
+    patch.linkedinCompanyExact = !!facts.exact;
   } else {
     if (facts.companyId && !org.linkedinCompanyId) patch.linkedinCompanyId = facts.companyId;
     if (facts.companySlug && !org.linkedinSlug) patch.linkedinSlug = facts.companySlug;
