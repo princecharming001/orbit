@@ -29497,7 +29497,7 @@ async function runLogoSweep(db2, deps, now) {
   result.remaining = todo.length - settled;
   return result;
 }
-var USER_SHARE = 0.9;
+var USER_SHARE = 0.7;
 var USER_MAX_PARTS = 24;
 var USER_CANDIDATES = 4e3;
 async function schoolKeys(db2) {

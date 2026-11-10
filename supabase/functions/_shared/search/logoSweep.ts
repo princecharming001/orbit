@@ -228,7 +228,7 @@ export async function runLogoSweep(db: Db, deps: SweepDeps, now: Date): Promise<
  * ledger (the rest stays for the pages they open, which orbit-connectors /companies answers first). One part works
  * for SWEEP_JOB_MS; the handler queues the next while names are left and the day's share is not spent.
  */
-export const USER_SHARE = 0.9;
+export const USER_SHARE = 0.7;
 /** Parts a day at most for one student (each SWEEP_JOB_MS): the share runs out well before. */
 export const USER_MAX_PARTS = 24;
 /** The most companies one student's run considers, most people first. */
