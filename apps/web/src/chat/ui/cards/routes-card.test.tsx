@@ -92,7 +92,10 @@ describe('the routes card shows warm intros', () => {
     expect(row.querySelector('a')?.getAttribute('href')).toBe('/people/p9');
     expect(card.textContent).not.toMatch(/0\.74|74/);
     // the next step asks the first person on the best route for the intro
-    expect($('[data-testid="next-step"]')?.textContent).toBe('Ask Maya for an intro');
+    // the ask sits on the route's own row, as one press (one tidy list)
+    const ask = row.querySelector('[data-role="route-ask"]');
+    expect(ask?.textContent).toBe('Ask Maya');
+    expect(ask?.getAttribute('title')).toMatch(/Maya/);
   });
 
   it('on their own when Orbit has no route (Village found one)', async () => {

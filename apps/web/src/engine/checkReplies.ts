@@ -166,6 +166,8 @@ async function checkOnce(
   const before = now.toISOString();
   const settings = await db.settings.get(user.id);
   await runTimedStageRules(user.id, settings?.maxBumps ?? 2, now).catch(() => undefined);
+  // a connection note's follow-up, once they accepted: drafted for a tap
+  await import('./afterAccept').then((m) => m.draftAcceptedFollowUps(user, now)).catch(() => undefined);
   const moved = await db.stageEvents
     .where('userId')
     .equals(user.id)

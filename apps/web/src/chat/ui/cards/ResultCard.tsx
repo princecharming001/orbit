@@ -36,7 +36,7 @@ import { ClarifyCard } from './Clarify';
 import { ChatsCard, WeekCard } from './goalCards';
 import { MessagesCard, readMessages } from './MessagesCard';
 import { addPicked, askForIntro, type Picked, writeTo } from './next';
-import { FoundPeopleCard, isPeopleList, KnownPeopleCard } from './PeopleCards';
+import { FoundPeopleCard, isPeopleList, KnownPeopleCard, PersonTile } from './PeopleCards';
 import { PeopleTableCard, readTable } from './PeopleTable';
 import {
   CardHead,
@@ -468,6 +468,8 @@ function Outcome({ env, block, actions }: { env: ResultEnvelope; block: ToolBloc
   );
 }
 
+const FIRST_KINDS = new Set<string>(['outreach', 'first_touch', 'warm_first_touch']);
+
 /** The header of a draft: who, the kind of message, and how it goes. */
 function DraftHead({
   draft,
@@ -491,6 +493,9 @@ function DraftHead({
     [firstKind, draft.userId, draft.personId],
   );
   const profile = `/people/${draft.personId}`;
+  // a connection note goes with its follow-up after they accept (DraftEditor's two steps)
+  const twoSteps =
+    draft.channel === 'linkedin' && !!person && !person.linkedinConnectedOn && FIRST_KINDS.has(draft.kind);
   return (
     <CardHead
       lead={
@@ -503,7 +508,9 @@ function DraftHead({
       title={
         name ? (
           <>
-            <span className="font-normal text-ink-3">To </span>
+            <span className="font-normal text-ink-3">
+              {draft.channel === 'gmail' ? 'Email to ' : twoSteps ? 'Two messages to ' : 'To '}
+            </span>
             <Link to={profile} className="hover:underline underline-offset-2" data-testid="draft-to">
               {name}
             </Link>
@@ -514,10 +521,22 @@ function DraftHead({
       }
       sub={[
         talked ? MESSAGE_KIND_LABELS.reengage : MESSAGE_KIND_LABELS[draft.kind],
-        CHANNEL_LABELS[draft.channel],
-      ].join(' · ')}
+        draft.channel === 'gmail' ? undefined : CHANNEL_LABELS[draft.channel],
+      ]
+        .filter(Boolean)
+        .join(' · ')}
       href={href}
-      aside={aside}
+      aside={
+        aside ??
+        (draft.channel === 'gmail' && draft.toEmail ? (
+          <span
+            className="shrink-0 rounded-full bg-good-soft px-2.5 py-0.5 text-[12px] font-medium text-good"
+            data-testid="draft-email-found"
+          >
+            Email found
+          </span>
+        ) : undefined)
+      }
       className="mb-3"
     />
   );
@@ -685,7 +704,14 @@ function RoutesCard({ env, actions }: { env: ResultEnvelope; actions: CardAction
       </GlassCard>
     );
   }
-  const steps = cardSteps('find_routes', env);
+  // each row carries its own ask; the chips below keep what is not on a row
+  const rowStep = (r: RouteView): NextStep | undefined => {
+    const target = to?.displayName ?? r.hops[r.hops.length - 1]?.name;
+    if (!target) return undefined;
+    return r.hops.length > 1 ? askForIntro(r.hops[0]!.name, target) : writeTo(target);
+  };
+  const onRows = new Set(routeFold.shown.map(({ r }) => rowStep(r)?.message).filter(Boolean));
+  const steps = cardSteps('find_routes', env).filter((s) => !onRows.has(s.message));
   return (
     <GlassCard kind="routes">
       <CardHead
@@ -698,7 +724,7 @@ function RoutesCard({ env, actions }: { env: ResultEnvelope; actions: CardAction
         <>
           <ol className="divide-y divide-line-2 mt-1">
             {routeFold.shown.map(({ r, w }, i) => (
-              <RouteRow key={i} r={r} warm={w} />
+              <RouteRow key={i} r={r} warm={w} step={rowStep(r)} primary={i === 0} send={actions.send} />
             ))}
           </ol>
           {routeFold.more}
@@ -721,24 +747,65 @@ function RoutesCard({ env, actions }: { env: ResultEnvelope; actions: CardAction
   );
 }
 
-function RouteRow({ r, warm }: { r: RouteView; warm?: WarmIntro }) {
+/** How strong a way in is, as three bars (and its word for a screen reader). */
+export function StrengthBars({ score, label }: { score: number; label: string }) {
+  const lit = score >= 0.67 ? 3 : score >= 0.34 ? 2 : 1;
+  return (
+    <span className="inline-flex shrink-0 items-end gap-[3px]" role="img" aria-label={label} title={label}>
+      {[8, 12, 16].map((h, i) => (
+        <span
+          key={h}
+          className={cx('w-[4px] rounded-[1px]', i < lit ? 'bg-accent' : 'bg-line')}
+          style={{ height: h }}
+        />
+      ))}
+    </span>
+  );
+}
+
+/**
+ * One way in, as a row of one tidy list: the person to ask (with the person it reaches tucked under their face), the
+ * path in small type, the strength as bars, and the one thing to do: Ask Kevin, or Write to them when it is direct.
+ */
+function RouteRow({
+  r,
+  warm,
+  step,
+  primary,
+  send,
+}: {
+  r: RouteView;
+  warm?: WarmIntro;
+  step?: NextStep;
+  primary?: boolean;
+  send?: (text: string) => Promise<void> | void;
+}) {
   const band =
     r.bandLabel ?? (r.band === 'strong' ? 'strong' : r.band === 'possible' ? 'possible' : 'long shot');
   const why = [warm?.note, ...r.text].filter(Boolean).join('. ');
   const reasons = useShowReasoning();
+  const first = r.hops[0];
+  const target = r.hops[r.hops.length - 1];
+  const via = r.hops.length > 1 ? first : undefined;
+  const face = via ?? target;
   return (
-    <li className="flex items-start gap-3 min-w-0 py-2" data-testid={warm ? 'warm-intro' : 'route'}>
-      <RouteMeter score={r.score} />
+    <li className="flex items-center gap-3 min-w-0 py-2.5" data-testid={warm ? 'warm-intro' : 'route'}>
+      <span className="relative h-10 w-11 shrink-0">
+        {face && <Avatar name={face.name} id={face.id ?? face.name} size={34} />}
+        {via && target && (
+          <span className="absolute right-0 bottom-0 rounded-full ring-2 ring-canvas">
+            <Avatar name={target.name} id={target.id ?? target.name} size={20} />
+          </span>
+        )}
+      </span>
       <div className="min-w-0 flex-1">
-        <div className="flex items-center gap-1.5 min-w-0">
-          <span className="font-medium truncate" title={why || undefined}>
-            You
-            {r.hops.map((h, k) => (
-              <span key={`${h.id ?? h.name}-${k}`}>
-                {' → '}
-                <HopName hop={k === 0 && warm?.introducerId ? { ...h, id: warm.introducerId } : h} />
-              </span>
-            ))}
+        <div className="flex items-center gap-1.5 min-w-0 text-[14px]">
+          <span className="font-medium truncate">
+            {face ? (
+              <HopName hop={via && warm?.introducerId ? { ...face, id: warm.introducerId } : face} />
+            ) : (
+              'You'
+            )}
           </span>
           {warm ? (
             <Chip tone={warm.warmthWord === 'warm' ? 'good' : 'neutral'}>{warm.warmthWord}</Chip>
@@ -746,12 +813,36 @@ function RouteRow({ r, warm }: { r: RouteView; warm?: WarmIntro }) {
             <span className="text-[12px] text-ink-3 shrink-0 lowercase">{band}</span>
           )}
         </div>
-        {why && reasons && (
-          <div className="text-[12.5px] text-ink-3 line-clamp-1" title={why}>
-            {why}
-          </div>
-        )}
+        <div className="text-[12.5px] text-ink-3 truncate" title={why || undefined}>
+          You
+          {r.hops.map((h, k) => (
+            <span key={`${h.id ?? h.name}-${k}`}>
+              {' → '}
+              {h.name}
+            </span>
+          ))}
+        </div>
+        {why && reasons && <div className="text-[12.5px] text-ink-3 line-clamp-1">{why}</div>}
       </div>
+      <StrengthBars score={r.score} label={`Route strength: ${band}`} />
+      {step && send && (
+        <button
+          type="button"
+          className={cx(
+            'shrink-0 h-8 px-3 rounded-[6px] text-[13px] font-medium transition-colors',
+            primary
+              ? 'bg-accent text-[#fdfcfc] hover:bg-accent-2'
+              : 'border border-line bg-canvas text-ink hover:bg-canvas-2',
+          )}
+          onClick={() => void send(step.message)}
+          title={step.message}
+          // a next step like the chips below it (the chat's tests and the simulator tap it the same way)
+          data-testid="next-step"
+          data-role="route-ask"
+        >
+          {step.label.replace(/ for an intro$/, '')}
+        </button>
+      )}
     </li>
   );
 }
@@ -1278,19 +1369,26 @@ function CompanyCard({ env, actions }: { env: ResultEnvelope; actions: CardActio
       />
       {people.length > 0 ? (
         <>
-          <div className="divide-y divide-line-2">
-            {fold.shown.map((p) => {
-              const live = livePeople?.get(p.id);
-              const me = live ? { ...p, ...live } : p;
-              return (
-                <PersonRow
-                  key={p.id}
-                  person={me}
-                  sub={me.headline || me.currentTitle}
-                  href={`/map?reach=${encodeURIComponent(p.id)}`}
-                />
-              );
-            })}
+          {/* the people as cards, two to a row: who, where, how close, and Write to them */}
+          <div className="@container -mx-1">
+            <ul
+              className="grid grid-cols-1 @md:grid-cols-2 border-t border-line-2"
+              data-testid="company-people"
+            >
+              {fold.shown.map((p) => {
+                const live = livePeople?.get(p.id);
+                const me = (live ? { ...p, ...live } : p) as Person;
+                return (
+                  <PersonTile
+                    key={p.id}
+                    person={me}
+                    line={me.headline || me.currentTitle}
+                    href={`/map?reach=${encodeURIComponent(p.id)}`}
+                    onWrite={() => void actions.send(`Write to ${me.displayName}`)}
+                  />
+                );
+              })}
+            </ul>
           </div>
           {fold.more}
         </>

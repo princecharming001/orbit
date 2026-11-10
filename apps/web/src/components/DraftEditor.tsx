@@ -1,4 +1,4 @@
-import type { DraftNeed, OutboundMessage } from '@orbit/core';
+import type { DraftNeed, OutboundMessage, Person } from '@orbit/core';
 import {
   LINKEDIN_NOTE_MAX,
   LINKEDIN_NOTE_TARGET,
@@ -15,6 +15,7 @@ import {
 import { useLiveQuery } from 'dexie-react-hooks';
 import { type ReactNode, useEffect, useId, useLayoutEffect, useRef, useState } from 'react';
 import { db } from '../db/schema';
+import { defaultFollowUp, followUpFor, saveFollowUp } from '../engine/afterAccept';
 import { regenerateDraft } from '../engine/brief';
 import { researchOpeners } from '../engine/deepResearch';
 import { restoreDraftText, saveDraftEdits as saveEdits } from '../engine/drafts';
@@ -43,7 +44,7 @@ import {
 import { usesMockConnectors } from '../integrations/connectorsMock';
 import { googleClientId } from '../integrations/google';
 import { useSession } from '../state/session';
-import { Button, cx, Input, relDate, Textarea, useToast } from '../ui';
+import { Avatar, Button, cx, Input, relDate, Textarea, useToast } from '../ui';
 import { copyText, openHandoff, runApproval } from './approve';
 import { DraftFiles } from './DraftFiles';
 import { ForwardNote } from './ForwardNote';
@@ -670,28 +671,62 @@ export function DraftEditor({
             Bcc: {draft.bccEmails.join(', ')}
           </div>
         )}
-        {!isLinkedIn && !envelope.threaded && (
-          <div className="mb-2 flex items-center gap-2">
-            <label htmlFor={`subject-${draft.id}`} className="text-[12px] text-ink-3 shrink-0">
-              Subject
-            </label>
-            <Input
-              id={`subject-${draft.id}`}
-              className="!h-8 !text-[13px]"
-              value={subject}
-              onChange={(e) => setSubject(e.target.value)}
-              placeholder="Subject"
+        {/* an email reads as the email it will be: To, Subject, the words, hairlines between, no box in a box */}
+        {!isLinkedIn && (
+          <div className="divide-y divide-line-2 border-y border-line-2 -mx-1" data-testid="draft-mail">
+            <div className="flex items-center gap-3 px-1 py-2">
+              <span className="w-14 shrink-0 text-[12.5px] text-ink-3">To</span>
+              <span className="flex min-w-0 items-center gap-2 text-[13.5px]" data-testid="draft-mail-to">
+                {person && (
+                  <Avatar name={person.displayName} src={person.photoUrl} id={person.id} size={22} />
+                )}
+                <span className="truncate">{draft.toEmail ?? person?.primaryEmail ?? first}</span>
+              </span>
+            </div>
+            {!envelope.threaded && (
+              <div className="flex items-center gap-3 px-1 py-1">
+                <label htmlFor={`subject-${draft.id}`} className="w-14 shrink-0 text-[12.5px] text-ink-3">
+                  Subject
+                </label>
+                <Input
+                  id={`subject-${draft.id}`}
+                  className="!h-8 !text-[13.5px] !border-transparent !bg-transparent !px-0 focus:!ring-0 hover:!bg-canvas-2/60 focus:!bg-canvas-2/60 focus:!px-2"
+                  value={subject}
+                  onChange={(e) => setSubject(e.target.value)}
+                  placeholder="Subject"
+                />
+              </div>
+            )}
+            <Textarea
+              id={bodyId}
+              value={body}
+              onChange={(e) => setBody(e.target.value)}
+              rows={7}
+              className="resize-y !rounded-none !border-0 !bg-transparent !text-[14px] !leading-[1.65] !px-1 !py-3 focus:!ring-0"
+              aria-label="Message body"
             />
           </div>
         )}
-        <Textarea
-          id={bodyId}
-          value={body}
-          onChange={(e) => setBody(e.target.value)}
-          rows={6}
-          className="resize-y !text-[14px] !leading-[1.65] !px-3 !py-2.5"
-          aria-label="Message body"
-        />
+        {isLinkedIn && note && (
+          <AfterAcceptSteps
+            draft={draft}
+            person={person ?? undefined}
+            first={first}
+            body={body}
+            setBody={setBody}
+            bodyId={bodyId}
+          />
+        )}
+        {isLinkedIn && !note && (
+          <Textarea
+            id={bodyId}
+            value={body}
+            onChange={(e) => setBody(e.target.value)}
+            rows={6}
+            className="resize-y !text-[14px] !leading-[1.65] !px-3 !py-2.5"
+            aria-label="Message body"
+          />
+        )}
         <ResearchChip personId={draft.personId} body={body} setBody={setBody} fallback={ownLine} />
         <ForwardNote draft={draft} introducer={first} />
         {user && (
@@ -707,6 +742,11 @@ export function DraftEditor({
         )}
         <div className="mt-3 flex items-center gap-x-2 gap-y-1.5 flex-wrap text-[12px] text-ink-3">
           <span className="flex items-center gap-2 min-w-0 mr-auto">
+            {!isLinkedIn && direct && user?.email && (
+              <span className="truncate" data-testid="draft-sends-from">
+                Sends from {user.email}
+              </span>
+            )}
             {note && (
               <span
                 className={cx(
@@ -1365,5 +1405,90 @@ function ResearchChip({
         {next ? 'Swap' : 'Write my own'}
       </button>
     </div>
+  );
+}
+
+/**
+ * A connection note and the follow-up after it (the chat's LinkedIn card): step 1 is the note, sent now; step 2 is the
+ * ask, kept until they accept, then drafted for a tap (engine/afterAccept.ts). LinkedIn never sends on its own.
+ */
+function AfterAcceptSteps({
+  draft,
+  person,
+  first,
+  body,
+  setBody,
+  bodyId,
+}: {
+  draft: OutboundMessage;
+  person?: Person;
+  first: string;
+  body: string;
+  setBody: (v: string) => void;
+  bodyId: string;
+}) {
+  // null while it is read, false when none is kept yet
+  const kept = useLiveQuery(
+    async () => (await followUpFor(draft.personId)) ?? (false as const),
+    [draft.personId],
+    null,
+  );
+  const [follow, setFollow] = useState<string>();
+  const shown = follow ?? (kept ? kept.text : defaultFollowUp(first, person?.currentOrganizationRaw));
+  // the follow-up is kept from the start, so a note sent without touching step 2 still gets it
+  useEffect(() => {
+    if (kept === false) void saveFollowUp(draft.personId, shown, draft.id);
+  }, [kept === false, draft.id]);
+  const she = first;
+  return (
+    <ol className="divide-y divide-line-2 border-y border-line-2 -mx-1" data-testid="draft-after-accept">
+      <li className="flex gap-3 px-1 py-3">
+        <span className="mt-0.5 h-6 w-6 shrink-0 rounded-full bg-accent text-white text-[12px] font-semibold inline-flex items-center justify-center">
+          1
+        </span>
+        <div className="min-w-0 flex-1">
+          <div className="flex items-baseline justify-between gap-2">
+            <label htmlFor={bodyId} className="text-[13.5px] font-medium">
+              Connection note
+            </label>
+            <span className="text-[12px] text-ink-3">Sends now</span>
+          </div>
+          <Textarea
+            id={bodyId}
+            value={body}
+            onChange={(e) => setBody(e.target.value)}
+            rows={3}
+            className="mt-1 resize-y !rounded-none !border-0 !bg-transparent !text-[14px] !leading-[1.6] !px-0 !py-1 focus:!ring-0"
+            aria-label="Connection note"
+          />
+        </div>
+      </li>
+      <li className="flex gap-3 px-1 py-3">
+        <span className="mt-0.5 h-6 w-6 shrink-0 rounded-full border border-line text-ink-3 text-[12px] font-semibold inline-flex items-center justify-center">
+          2
+        </span>
+        <div className="min-w-0 flex-1">
+          <div className="flex items-baseline justify-between gap-2">
+            <label htmlFor={`${bodyId}-follow`} className="text-[13.5px] font-medium">
+              Follow up
+            </label>
+            <span className="text-[12px] text-ink-3">When {she} accepts</span>
+          </div>
+          <Textarea
+            id={`${bodyId}-follow`}
+            value={shown}
+            onChange={(e) => setFollow(e.target.value)}
+            onBlur={() => void saveFollowUp(draft.personId, shown, draft.id)}
+            rows={3}
+            className="mt-1 resize-y !rounded-none !border-0 !bg-transparent !text-[14px] !leading-[1.6] !px-0 !py-1 focus:!ring-0"
+            aria-label="Follow up after they accept"
+            data-testid="draft-follow-up"
+          />
+          <p className="text-[12px] text-ink-3">
+            When {she} accepts, Orbit drafts this for you. It goes on your tap.
+          </p>
+        </div>
+      </li>
+    </ol>
   );
 }
