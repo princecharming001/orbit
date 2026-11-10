@@ -136,20 +136,23 @@ function DiscoverFeed({ tabs }: { tabs?: ReactNode }) {
   const [pointCtx, setPointCtx] = useState<LoadedPointContext>();
   const [ctxFor, setCtxFor] = useState<string>();
   const [ctxFailed, setCtxFailed] = useState(false);
+  const settled = useRef(false);
   useEffect(() => {
     if (!user || !recIds) return;
     let live = true;
-    // the refresh writes its people one at a time: wait for the list to settle before reading
+    // the first read starts at once, so the network cards come with the page; later ones wait for the list to
+    // settle (the refresh writes its people one at a time)
     const t = setTimeout(() => {
       loadPointContext(user, recIds.split(','))
         .then((c) => {
           if (!live) return;
+          settled.current = true;
           setPointCtx(c);
           setCtxFailed(false);
         })
         .catch(() => live && setCtxFailed(true))
         .finally(() => live && setCtxFor(recIds));
-    }, 300);
+    }, settled.current ? 300 : 0);
     return () => {
       live = false;
       clearTimeout(t);
@@ -533,7 +536,9 @@ function DiscoverFeed({ tabs }: { tabs?: ReactNode }) {
                 <NetworkCardView key={c.id} card={c} h={networkH} />
               ),
             )}
-            {((loading && view.connected) || networkLoading) && (
+            {/* placeholders while the network loads only when the feed is empty: below cards already shown they
+                would push the load-more trigger out of view as the student scrolls */}
+            {((loading && view.connected) || (networkLoading && !feed.length)) && (
               <>
                 <CardSkeleton />
                 <CardSkeleton />
