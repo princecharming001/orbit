@@ -46,6 +46,8 @@ export interface CompanyPick {
   name?: string;
   logoUrl?: string;
   source: 'position' | 'student';
+  /** when it was last kept (a pick without a logo has its page read again only after a while) */
+  pickedAt?: string;
 }
 
 /** A pick as the student is told it. */
@@ -565,6 +567,8 @@ export async function lookupCompany(
     now: Date;
     spend: () => Promise<boolean>;
     recheck?: CompanyRow;
+    /** only the page at `companyId` (a settled company's logo): never a search by name when it does not answer */
+    idOnly?: boolean;
   },
 ): Promise<LookupOutcome> {
   const { accountId, key, cache, doFetch, now, spend } = o;
@@ -588,6 +592,7 @@ export async function lookupCompany(
     }
     if (page && !('company' in page) && page.reason === 'throttled')
       return { looked: true, stopped: 'throttled' };
+    if (o.idOnly) return { looked: true };
     // the id did not answer: by name, from the next read
     if (!(await spend())) return { looked: true, stopped: 'limit' };
   }

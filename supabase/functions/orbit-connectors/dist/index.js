@@ -1026,6 +1026,7 @@ async function lookupCompany(u, o) {
     }
     if (page && !("company" in page) && page.reason === "throttled")
       return { looked: true, stopped: "throttled" };
+    if (o.idOnly) return { looked: true };
     if (!await spend()) return { looked: true, stopped: "limit" };
   }
   const name = searchName(o.name);

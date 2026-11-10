@@ -28299,6 +28299,7 @@ async function lookupCompany(u2, o) {
     }
     if (page2 && !("company" in page2) && page2.reason === "throttled")
       return { looked: true, stopped: "throttled" };
+    if (o.idOnly) return { looked: true };
     if (!await spend()) return { looked: true, stopped: "limit" };
   }
   const name = searchName(o.name);
@@ -29524,7 +29525,7 @@ function sqlCompanyCache(db2, storeLogo) {
     getPicks: async (accountId, keys) => {
       if (!keys.length) return {};
       const rows = await db2.sql`
-        select key, company_id, public_identifier, name, logo_url, source
+        select key, company_id, public_identifier, name, logo_url, source, picked_at::text as picked_at
           from orbit_private.linkedin_company_picks where account_id = ${accountId} and key = any(${keys}::text[])`;
       return Object.fromEntries(
         rows.map((r) => [
@@ -29535,7 +29536,8 @@ function sqlCompanyCache(db2, storeLogo) {
             publicIdentifier: r.public_identifier ?? void 0,
             name: r.name ?? void 0,
             logoUrl: r.logo_url ?? void 0,
-            source: r.source === "student" ? "student" : "position"
+            source: r.source === "student" ? "student" : "position",
+            pickedAt: new Date(r.picked_at).toISOString()
           }
         ])
       );
@@ -29624,6 +29626,7 @@ var USER_SHARE = 0.7;
 var PROFILE_SHARE = 0.6;
 var USER_MAX_PARTS = 24;
 var USER_CANDIDATES = 4e3;
+var PICK_LOGO_RETRY_MS = 7 * 864e5;
 var TARGET_WEIGHT = 1e6;
 async function schoolKeys(db2) {
   const rows = await db2.sql`
@@ -29708,10 +29711,8 @@ function positionFor(experience, orgName) {
     (e) => !!e.companyId && !!e.current && (sameCompanyName(e.company, orgName) || sameCompanyName(e.company, clean3) || namesCompany(e.company, orgName) || namesCompany(e.company, clean3) || namesCompany(orgName, e.company ?? ""))
   );
 }
-async function settle(cache3, accountId, pick, shared, now) {
+async function settle(cache3, accountId, pick) {
   await cache3.putPick?.(accountId, pick);
-  if (shared?.status === "found" && shared.companyId && shared.companyId !== pick.companyId && (shared.rules ?? 1) < LOOKUP_RULES)
-    await cache3.put({ key: shared.key, status: "ambiguous", checkedAt: now.toISOString() });
 }
 async function logoForId(db2, id, deps) {
   const [row] = await db2.sql`
@@ -29771,9 +29772,42 @@ async function runUserLogos(db2, userId, deps, now) {
       logoUrl: await logoForId(db2, pos.companyId, deps),
       source: "position"
     };
-    await settle(cache3, acct.id, pick, rows[key2], now);
+    await settle(cache3, acct.id, pick);
     picks[key2] = pick;
     result.fromReads++;
+  }
+  const u2 = { base: deps.baseUrl.replace(/\/+$/, ""), key: deps.apiKey };
+  let companyLimit = false;
+  for (const c of candidates) {
+    const pk2 = picks[c.key];
+    if (!pk2 || pk2.logoUrl || !((c.now ?? 0) > 0 || c.target)) continue;
+    if (pk2.pickedAt && now.getTime() - Date.parse(pk2.pickedAt) < PICK_LOGO_RETRY_MS) continue;
+    if (deps.clock() >= deadline) {
+      result.stopped = "time";
+      break;
+    }
+    if (result.looked > 0) await deps.sleep(800 + Math.floor(deps.random() * 1200));
+    const r = await lookupCompany(u2, {
+      accountId: acct.id,
+      key: c.key,
+      name: c.name,
+      companyId: pk2.companyId,
+      idOnly: true,
+      cache: cache3,
+      doFetch: deps.fetch,
+      now,
+      spend: () => spendShare(db2, "company", acct.id, now, USER_SHARE)
+    }).catch(() => ({ looked: true, answer: void 0, stopped: void 0 }));
+    if (r.looked) result.looked++;
+    if (!r.answer && r.looked) await cache3.putPick?.(acct.id, pk2).catch(() => void 0);
+    if (r.answer?.logoUrl) {
+      result.found++;
+      picks[c.key] = { ...pk2, logoUrl: r.answer.logoUrl };
+    }
+    if (r.stopped) {
+      companyLimit = true;
+      break;
+    }
   }
   const fresh = missing(
     candidates.filter((c) => !picks[c.key]),
@@ -29784,9 +29818,7 @@ async function runUserLogos(db2, userId, deps, now) {
     const r = rows[c.key];
     return !picks[c.key] && r?.status === "found" && (r.rules ?? 1) < LOOKUP_RULES;
   });
-  const u2 = { base: deps.baseUrl.replace(/\/+$/, ""), key: deps.apiKey };
-  let companyLimit = false;
-  for (const c of [...fresh, ...stale]) {
+  for (const c of companyLimit || result.stopped ? [] : [...fresh, ...stale]) {
     if (deps.clock() >= deadline) {
       result.stopped = "time";
       break;
@@ -29889,7 +29921,7 @@ async function runUserLogos(db2, userId, deps, now) {
         logoUrl: orgs.find((o) => o.companyId === pos.companyId)?.logoUrl ?? await logoForId(db2, pos.companyId, deps),
         source: "position"
       };
-      await settle(cache3, acct.id, pick, rows[c.key], now);
+      await settle(cache3, acct.id, pick);
       picks[c.key] = pick;
     }
   }

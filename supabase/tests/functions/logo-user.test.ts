@@ -288,7 +288,7 @@ describe('logos.user', () => {
     ]);
   });
 
-  it('settles a company from a profile Orbit already read, for free, and stops trusting a shared row that disagrees', async () => {
+  it('settles a company from a profile Orbit already read, for free, for this student only', async () => {
     const a = await connectedUser(t.db, { linkedinAccount: 'acc-r' });
     const p = await person(a, 'Nova');
     await t.db.sql`
@@ -328,9 +328,10 @@ describe('logos.user', () => {
       company_id: '43215181',
       logo_url: 'https://store.test/storage/v1/object/public/company-logos/43215181.png',
     });
+    // the shared list is not decided by one student's people: its row stays until LinkedIn's search says otherwise
     const [shared] = await t.db.sql<{ status: string; logo_url: string | null }>`
       select status, logo_url from orbit_private.linkedin_companies where key = 'nova'`;
-    expect(shared).toEqual({ status: 'ambiguous', logo_url: null });
+    expect(shared).toEqual({ status: 'found', logo_url: 'https://store.test/9509.png' });
     // no search was spent on Nova
     expect(f.asked.filter((x) => x.includes('Nova'))).toEqual([]);
   });
@@ -536,5 +537,40 @@ describe('logos.user', () => {
     const r = await runUserLogos(t.db, a, deps(f), NOW);
     expect(r.peopleRead).toBe(0);
     expect(f.asked).toEqual([]);
+  });
+
+  it('a company settled without a logo has its page read by id for one, then not again for a week', async () => {
+    const a = await connectedUser(t.db, { linkedinAccount: 'acc-l' });
+    const p = await person(a, 'Rho');
+    await t.db.sql`
+      insert into orbit.profile_reads (user_id, person_id, status, experience)
+      values (${a}::uuid, ${p}::uuid, 'ok', ${JSON.stringify([{ company: 'Rho', companyId: '13051540', current: true }])}::jsonb)`;
+    const asked: string[] = [];
+    const doFetch = (async (url: string) => {
+      const u = new URL(url);
+      if (u.hostname === 'media.licdn.com')
+        return new Response(new Uint8Array([1, 2, 3]), { headers: { 'content-type': 'image/png' } });
+      if (u.pathname.startsWith('/api/v1/linkedin/company/')) {
+        asked.push(u.pathname);
+        return Response.json({ id: '13051540', name: 'Rho', logo: logo('rho') });
+      }
+      return new Response('{}', { status: 404 });
+    }) as typeof fetch;
+    await runUserLogos(t.db, a, { ...deps({ fetch: doFetch, asked }), fetch: doFetch }, NOW);
+    expect(asked).toEqual(['/api/v1/linkedin/company/13051540']);
+    const [pick] = await t.db.sql<{ logo_url: string }>`
+      select logo_url from orbit_private.linkedin_company_picks where account_id = 'acc-l' and key = 'rho'`;
+    expect(pick!.logo_url).toBe('https://store.test/storage/v1/object/public/company-logos/13051540.png');
+    // a company whose page has no logo is not read again the next day
+    await t.db
+      .sql`update orbit_private.linkedin_company_picks set logo_url = null where account_id = 'acc-l'`;
+    asked.length = 0;
+    await runUserLogos(
+      t.db,
+      a,
+      { ...deps({ fetch: doFetch, asked }), fetch: doFetch },
+      new Date(NOW.getTime() + 86_400_000),
+    );
+    expect(asked).toEqual([]);
   });
 });

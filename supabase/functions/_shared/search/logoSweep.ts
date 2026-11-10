@@ -144,8 +144,9 @@ export function sqlCompanyCache(db: Db, storeLogo: CompanyCache['storeLogo']): C
         name: string | null;
         logo_url: string | null;
         source: string;
+        picked_at: string;
       }>`
-        select key, company_id, public_identifier, name, logo_url, source
+        select key, company_id, public_identifier, name, logo_url, source, picked_at::text as picked_at
           from orbit_private.linkedin_company_picks where account_id = ${accountId} and key = any(${keys}::text[])`;
       return Object.fromEntries(
         rows.map((r) => [
@@ -157,6 +158,7 @@ export function sqlCompanyCache(db: Db, storeLogo: CompanyCache['storeLogo']): C
             name: r.name ?? undefined,
             logoUrl: r.logo_url ?? undefined,
             source: r.source === 'student' ? 'student' : 'position',
+            pickedAt: new Date(r.picked_at).toISOString(),
           } satisfies CompanyPick,
         ]),
       );
@@ -284,6 +286,8 @@ export const PROFILE_SHARE = 0.6;
 export const USER_MAX_PARTS = 24;
 /** The most companies one student's run considers, most people first. */
 export const USER_CANDIDATES = 4000;
+/** A company settled without a logo has its LinkedIn page read for one again after this long. */
+export const PICK_LOGO_RETRY_MS = 7 * 86_400_000;
 /** A target company counts as this many people, so the student's targets are always looked up first. */
 const TARGET_WEIGHT = 1_000_000;
 
@@ -419,24 +423,13 @@ export function positionFor(
   );
 }
 
-/** Keep `pick` for the account; a shared row that names another company for the same name is no longer trusted. */
-async function settle(
-  cache: CompanyCache,
-  accountId: string,
-  pick: CompanyPick,
-  shared: CompanyRow | undefined,
-  now: Date,
-): Promise<void> {
+/**
+ * Keep `pick` for the account. The shared list is left as it is: one student's people may sit on another page of the
+ * same name (a contact's position on an old Whop page), and that is no reason to take Whop's logo from everyone.
+ * A row the older rules made is checked against LinkedIn's search again anyway (phase 2).
+ */
+async function settle(cache: CompanyCache, accountId: string, pick: CompanyPick): Promise<void> {
   await cache.putPick?.(accountId, pick);
-  // only a row found under older rules is let go (a row today's rules found stays for everyone else: one profile,
-  // perhaps tied to a fan page by its owner, does not take a company's logo from every student)
-  if (
-    shared?.status === 'found' &&
-    shared.companyId &&
-    shared.companyId !== pick.companyId &&
-    (shared.rules ?? 1) < LOOKUP_RULES
-  )
-    await cache.put({ key: shared.key, status: 'ambiguous', checkedAt: now.toISOString() });
 }
 
 /** A logo already kept for a company id: on a shared row or a pick of it, or the copy a profile read made. */
@@ -512,9 +505,45 @@ export async function runUserLogos(
       logoUrl: await logoForId(db, pos.companyId, deps),
       source: 'position',
     };
-    await settle(cache, acct.id, pick, rows[key], now);
+    await settle(cache, acct.id, pick);
     picks[key] = pick;
     result.fromReads++;
+  }
+
+  // 1b. a company settled without a logo (the profile it came from had none to copy): its page, by id, once a week
+  const u = { base: deps.baseUrl.replace(/\/+$/, ''), key: deps.apiKey };
+  let companyLimit = false;
+  for (const c of candidates) {
+    const pk = picks[c.key];
+    if (!pk || pk.logoUrl || !((c.now ?? 0) > 0 || c.target)) continue;
+    if (pk.pickedAt && now.getTime() - Date.parse(pk.pickedAt) < PICK_LOGO_RETRY_MS) continue;
+    if (deps.clock() >= deadline) {
+      result.stopped = 'time';
+      break;
+    }
+    if (result.looked > 0) await deps.sleep(800 + Math.floor(deps.random() * 1200));
+    const r = await lookupCompany(u, {
+      accountId: acct.id,
+      key: c.key,
+      name: c.name,
+      companyId: pk.companyId,
+      idOnly: true,
+      cache,
+      doFetch: deps.fetch,
+      now,
+      spend: () => spendShare(db, 'company', acct.id, now, USER_SHARE),
+    }).catch(() => ({ looked: true, answer: undefined, stopped: undefined }));
+    if (r.looked) result.looked++;
+    // a page that did not answer: tried again after a while, like one with no logo
+    if (!r.answer && r.looked) await cache.putPick?.(acct.id, pk).catch(() => undefined);
+    if (r.answer?.logoUrl) {
+      result.found++;
+      picks[c.key] = { ...pk, logoUrl: r.answer.logoUrl };
+    }
+    if (r.stopped) {
+      companyLimit = true;
+      break;
+    }
   }
 
   // 2. by name: new names first (targets lead), then rows found under older rules
@@ -527,9 +556,7 @@ export async function runUserLogos(
     const r = rows[c.key];
     return !picks[c.key] && r?.status === 'found' && (r.rules ?? 1) < LOOKUP_RULES;
   });
-  const u = { base: deps.baseUrl.replace(/\/+$/, ''), key: deps.apiKey };
-  let companyLimit = false;
-  for (const c of [...fresh, ...stale]) {
+  for (const c of companyLimit || result.stopped ? [] : [...fresh, ...stale]) {
     if (deps.clock() >= deadline) {
       result.stopped = 'time';
       break;
@@ -640,7 +667,7 @@ export async function runUserLogos(
           (await logoForId(db, pos.companyId, deps)),
         source: 'position',
       };
-      await settle(cache, acct.id, pick, rows[c.key], now);
+      await settle(cache, acct.id, pick);
       picks[c.key] = pick;
     }
   }
