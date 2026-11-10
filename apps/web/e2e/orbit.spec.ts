@@ -1712,9 +1712,12 @@ test.describe("Never losing the student's work, and honest hand-offs", () => {
       .getByTestId('drafts-started')
       .getByRole('button', { name: /continue writing/i })
       .click();
+    // it opens right there, with Send: nothing leaves Drafts
+    await expect(page.getByTestId('started-draft-editor')).toBeVisible();
     await expect(box).toHaveValue(/Glad to/);
-    // Write to opens the same draft, without asking about the warm-up again
-    await page.reload();
+    await expect(page).toHaveURL(/\/inbox|\/drafts/);
+    // on their page, Write to opens the same draft, without asking about the warm-up again
+    await page.getByTestId('started-draft').getByRole('link', { name: 'Daniel Kim' }).click();
     await page.getByTestId('person-write').click();
     await expect(page.getByTestId('warmup-choice')).toBeHidden();
     await expect(box).toHaveValue(/Glad to/);

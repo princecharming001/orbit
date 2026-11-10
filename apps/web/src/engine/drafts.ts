@@ -13,6 +13,7 @@ import { draftForSuggestion, draftMessage, needsWarmUp, startWarmUpOrOutreach, u
 import { latestReply, newer } from './conversation';
 import { type AskPosting, introNoteBase, noteForAsk } from './introNote';
 import { currentResumeFacets, sharesOrgNow } from './resume';
+import { lastTouch } from './search';
 
 // ---------- the student's edits ----------
 
@@ -144,8 +145,12 @@ export async function nextMessageKind(
   personId: string,
   now = new Date(),
 ): Promise<ReturnType<typeof composeKindFor> & { chat?: CoffeeChat }> {
-  const chat = await liveChatOf(personId);
-  const next = composeKindFor(chat, now, { lastInbound: await lastInboundOf(chat), timezone: user.timezone });
+  const [chat, person] = await Promise.all([liveChatOf(personId), db.people.get(personId)]);
+  const next = composeKindFor(chat, now, {
+    lastInbound: await lastInboundOf(chat),
+    timezone: user.timezone,
+    talkedAt: person && lastTouch(person),
+  });
   return { ...next, chat };
 }
 

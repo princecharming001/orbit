@@ -1,4 +1,5 @@
 import { inboundNeedsAnswer, type ThreadState } from '../drafts/thread';
+import { MESSAGE_KIND_LABELS } from '../labels';
 import { addBusinessDays } from '../suggestions/calendar';
 import type { ChatStage, CoffeeChat, MessageKind } from '../types';
 
@@ -348,14 +349,40 @@ export function reengageDueAt(re: Reengage, saidAt: Date): Date {
  * out-of-office return (plus two business days); a reply is only a reply when their last message waits on an answer
  * (a months-old "Good luck this fall" calls for a check-in, not "Thank you for the reply").
  */
+/**
+ * The opening kind for someone: a first message to a stranger, a check-in to someone the student has talked with
+ * before (`talkedAt`). A reconnect stays with Orbit's own dormant-tie suggestions, which carry what was last said.
+ */
+export function firstKindFor(talkedAt: string | undefined): MessageKind {
+  return talkedAt && !Number.isNaN(Date.parse(talkedAt)) ? 'nurture' : 'outreach';
+}
+
+/**
+ * What a draft is, in the student's words: a draft written as a first message to someone they have talked with
+ * since (or before) reads as the check-in it is, never "First message".
+ */
+export function draftKindLabel(kind: MessageKind, talkedAt: string | undefined): string {
+  const opening = kind === 'outreach' || kind === 'first_touch' || kind === 'warm_first_touch';
+  return MESSAGE_KIND_LABELS[opening ? (firstKindFor(talkedAt) === 'outreach' ? kind : 'nurture') : kind];
+}
+
 export function composeKindFor(
   chat:
     | Pick<CoffeeChat, 'stage' | 'lastOutboundAt' | 'lastInboundAt' | 'outOfOfficeUntil' | 'bumpNotBefore'>
     | undefined,
   now: Date,
-  opts: { lastInbound?: ThreadState; timezone?: string } = {},
+  opts: {
+    lastInbound?: ThreadState;
+    timezone?: string;
+    /**
+     * When the student last actually dealt with them (a message, a meeting, a note; becoming LinkedIn connections is
+     * not one): someone they have written to or heard from before never gets a first message, but a check-in.
+     */
+    talkedAt?: string;
+  } = {},
 ): { kind: MessageKind } | { wait: { since: string; until?: string; reason?: 'away' | 'too_soon' } } {
-  if (!chat) return { kind: 'outreach' };
+  const first = (): { kind: MessageKind } => ({ kind: firstKindFor(opts.talkedAt) });
+  if (!chat) return first();
   const lastOut = chat.lastOutboundAt ? new Date(chat.lastOutboundAt).getTime() : undefined;
   const repliedSince = !!chat.lastInboundAt && (!lastOut || new Date(chat.lastInboundAt).getTime() > lastOut);
   // with the message in hand, "replied" means it waits on an answer; without it, any reply since counts
@@ -393,7 +420,7 @@ export function composeKindFor(
         return { wait: { since: chat.lastOutboundAt! } };
       return { kind: 'nurture' };
     default:
-      return { kind: 'outreach' };
+      return first();
   }
 }
 

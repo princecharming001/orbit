@@ -1,11 +1,10 @@
 import type { CalendarEvent, CoffeeChat, OutboundMessage, Person, Suggestion } from '@orbit/core';
-import { CHANNEL_LABELS, MESSAGE_KIND_LABELS, warmUpProgress } from '@orbit/core';
+import { CHANNEL_LABELS, draftKindLabel, MESSAGE_KIND_LABELS, warmUpProgress } from '@orbit/core';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { RefreshCw } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { runApproval } from '../components/approve';
-import { AutopilotPaused } from '../components/autopilot/NeedsYou';
 import { TomorrowBatch } from '../components/autopilot/TomorrowBatch';
 import { useAutopilotStatus } from '../components/autopilot/useAutopilotStatus';
 import { PersonCompanyLogo } from '../components/CompanyLogo';
@@ -21,6 +20,7 @@ import { ensureDrafts, generateBrief, isMessageSuggestion, revalidatePending } f
 import { discardDraft, restoreDraft, unsnoozeSuggestion } from '../engine/drafts';
 import { moveChat } from '../engine/move';
 import { wentQuiet } from '../engine/pipeline';
+import { lastTouch } from '../engine/search';
 import { draftLists, notYetWritten, startedDrafts, todayCards } from '../engine/today';
 import { useSession } from '../state/session';
 import {
@@ -375,7 +375,6 @@ export function InboxPage() {
               { value: 'sent' as const, label: 'Sent', count: sent.length },
             ].filter((t) => t.value === 'pending' || t.value === shown || t.count !== 0)}
           />
-          {shown === 'pending' && user && <AutopilotPaused user={user} />}
           {shown === 'pending' && <TomorrowBatch view={autopilot} />}
           {shown === 'pending' && handedOff.length > 0 && (
             <div className="space-y-2 mb-5" data-testid="drafts-handed-off">
@@ -737,9 +736,23 @@ function ToWrite({ people }: { people: Person[] }) {
   );
 }
 
-/** A draft the student started on a person's page: open it there to keep writing, or drop it. */
+/**
+ * A draft the student started on a person's page: Continue writing opens it right here, with Send, and Discard drops
+ * it. Nothing leaves the Drafts page.
+ */
 function StartedItem({ o, person }: { o: OutboundMessage; person?: Person }) {
+  const { user } = useSession();
   const toast = useToast();
+  const [open, setOpen] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const discard = async () => {
+    await discardDraft(o.id);
+    toast.push({
+      text: 'Draft discarded.',
+      action: { label: 'Undo', onClick: () => restoreDraft(o.id) },
+      ttl: 7000,
+    });
+  };
   return (
     <div className="border border-line rounded-[var(--radius-card)] p-3" data-testid="started-draft">
       <div className="flex items-center gap-2 text-[13.5px] flex-wrap">
@@ -747,35 +760,52 @@ function StartedItem({ o, person }: { o: OutboundMessage; person?: Person }) {
         <Link to={person ? `/people/${person.id}` : '#'} className="font-medium">
           {person?.displayName ?? 'Unknown'}
         </Link>
-        <Chip>{MESSAGE_KIND_LABELS[o.kind]}</Chip>
+        <Chip>{draftKindLabel(o.kind, person && lastTouch(person))}</Chip>
         <span className="text-ink-3 text-[12px] ml-auto">started {relDate(o.createdAt)}</span>
       </div>
-      <p className="text-[13px] text-ink-2 mt-1.5 line-clamp-2 whitespace-pre-line">
-        {o.bodyFinal ?? o.bodyDraft}
-      </p>
-      <div className="mt-2 flex flex-wrap gap-2">
-        {person && (
-          <Link to={`/people/${person.id}?open=${o.id}`}>
-            <Button size="sm" variant="primary">
+      {open && user ? (
+        <div className="mt-2" data-testid="started-draft-editor">
+          <DraftEditor
+            draft={o}
+            thread
+            focusOnOpen
+            busy={busy}
+            onApprove={async (body, subject) => {
+              setBusy(true);
+              try {
+                return await runApproval(user, o, body, subject, toast, person?.firstName);
+              } finally {
+                setBusy(false);
+              }
+            }}
+            onCancel={() => setOpen(false)}
+            extraActions={
+              <Button size="sm" variant="ghost" onClick={() => void discard()}>
+                Discard draft
+              </Button>
+            }
+          />
+        </div>
+      ) : (
+        <>
+          <p className="text-[13px] text-ink-2 mt-1.5 line-clamp-2 whitespace-pre-line">
+            {o.bodyFinal ?? o.bodyDraft}
+          </p>
+          <div className="mt-2 flex flex-wrap gap-2">
+            <Button
+              size="sm"
+              variant="primary"
+              onClick={() => setOpen(true)}
+              data-testid="started-draft-continue"
+            >
               Continue writing
             </Button>
-          </Link>
-        )}
-        <Button
-          size="sm"
-          variant="ghost"
-          onClick={async () => {
-            await discardDraft(o.id);
-            toast.push({
-              text: 'Draft discarded.',
-              action: { label: 'Undo', onClick: () => restoreDraft(o.id) },
-              ttl: 7000,
-            });
-          }}
-        >
-          Discard draft
-        </Button>
-      </div>
+            <Button size="sm" variant="ghost" onClick={() => void discard()}>
+              Discard draft
+            </Button>
+          </div>
+        </>
+      )}
     </div>
   );
 }
@@ -792,7 +822,7 @@ function OutboxItem({ o, person }: { o: OutboundMessage; person?: Person }) {
         <Link to={person ? `/people/${person.id}` : '#'} className="font-medium">
           {person?.displayName ?? 'Unknown'}
         </Link>
-        <Chip>{MESSAGE_KIND_LABELS[o.kind]}</Chip>
+        <Chip>{draftKindLabel(o.kind, person && lastTouch(person))}</Chip>
         <Chip>{CHANNEL_LABELS[o.channel]}</Chip>
         {o.status === 'failed' && <Chip tone="bad">Not sent</Chip>}
       </div>
@@ -831,7 +861,7 @@ function ScheduledItem({ o, person }: { o: OutboundMessage; person?: Person }) {
             {person?.displayName ?? 'Unknown'}
           </Link>
           {person && <PersonCompanyLogo person={person} size={14} />}
-          <Chip>{MESSAGE_KIND_LABELS[o.kind]}</Chip>
+          <Chip>{draftKindLabel(o.kind, person && lastTouch(person))}</Chip>
           <Chip>{CHANNEL_LABELS[o.channel]}</Chip>
           <span className="ml-auto text-[12.5px] text-ink-2 tabular" data-testid="scheduled-at">
             {at.toLocaleString('en-US', {

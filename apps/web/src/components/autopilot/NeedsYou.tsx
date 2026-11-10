@@ -3,14 +3,14 @@
  * person's words and one line to answer it; the answer drafts the reply, which then waits for approval like any other.
  * Under it, the threads the funnel closed (a decline, an unsubscribe) so the student knows, and the breaker's cards.
  */
-import type { Suggestion, User } from '@orbit/core';
+import type { Suggestion } from '@orbit/core';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { db } from '../../db/schema';
 import { answerReply } from '../../engine/autopilotMode';
 import { useSession } from '../../state/session';
-import { Button, Card, Chip, Input, useToast } from '../../ui';
+import { Button, Chip, Input, useToast } from '../../ui';
 
 export function useOpenAutopilotCards(userId: string | undefined) {
   return useLiveQuery(
@@ -139,26 +139,3 @@ export function BreakerCard({ s }: { s: Suggestion }) {
 }
 
 /** The section on Drafts: the open questions, the breaker's cards, then the closed threads in one line each. */
-/**
- * The one autopilot notice Drafts keeps (plan 37 follow-up): Orbit paused what it sends on its own for a goal, and
- * why. The questions replies ask and the threads a reply closed are not listed here any more: a question is answered in
- * the chat ("answer Dan: yes, applied Monday"), and a closed thread moves its card on the board by itself.
- */
-export function AutopilotPaused({ user }: { user: User }) {
-  const cards = useOpenAutopilotCards(user.id) ?? [];
-  const breakers = cards.filter((s) => s.kind === 'breaker');
-  if (!breakers.length) return null;
-  return (
-    <Card className="mb-5" data-testid="autopilot-paused">
-      <div className="font-medium">Paused</div>
-      <p className="text-[12px] text-ink-3 mt-0.5">
-        Orbit paused what it sends on its own for a goal, and says why.
-      </p>
-      <div className="mt-3 space-y-2">
-        {breakers.map((s) => (
-          <BreakerCard key={s.id} s={s} />
-        ))}
-      </div>
-    </Card>
-  );
-}

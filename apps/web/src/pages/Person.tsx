@@ -56,6 +56,7 @@ import { loadPersonHistory } from '../engine/personHistory';
 import { moveChatGuarded } from '../engine/pipeline';
 import { personSummary, toYou } from '../engine/prep';
 import { SUMMARY_RULES_AT } from '../engine/repair';
+import { lastTouch } from '../engine/search';
 import { SUGGESTION_KIND_LABELS } from '../engine/today';
 import { isServerUser } from '../integrations/orbitApi';
 import { useSession } from '../state/session';
@@ -654,6 +655,7 @@ export function PersonPage() {
                 const next = composeKindFor(chat, new Date(), {
                   lastInbound: lastInbound ?? undefined,
                   timezone: user?.timezone,
+                  talkedAt: lastTouch(person),
                 });
                 if ('wait' in next)
                   toast.push({

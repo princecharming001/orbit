@@ -201,18 +201,15 @@ test.describe('autopilot (plan 29 B7, fake orbit-api)', () => {
     expect(api.calls.filter((c) => c.route === '/calendar/book')).toHaveLength(1);
   });
 
-  test('the breaker pauses first messages at the first unsubscribe and tells the student', async ({
+  test('the breaker pauses first messages at the first unsubscribe, without a Paused list on Drafts', async ({
     page,
   }) => {
     const api = await signedInOnAutopilot(page);
     await page.goto('drafts');
-    const card = page.getByTestId('autopilot-breaker-card');
-    await expect(card).toContainText('Chloe Dubois');
-    await expect(card).toContainText('Paused Ramp first messages');
-    // the card can show before the fake server records the pause: wait for it, never read it once
     await expect.poll(() => api.state.autopilot.pausedGoals[0]?.goalId).toBe('goal_internships');
-    // nothing is said with a dash or an exclamation mark
-    await expect(card).not.toContainText(/[–—!]/);
+    // the student asked for no Paused section: replies like these are mostly marketers, not people to answer
+    await expect(page.getByTestId('autopilot-paused')).toHaveCount(0);
+    await expect(page.getByTestId('autopilot-breaker-card')).toHaveCount(0);
   });
 
   test('Sent for you lists the replies answered and the calls booked, each with when it went', async ({
