@@ -263,6 +263,8 @@ export function FriendsPage() {
     tile(s.personId, 'invited');
     const first = s.name.split(' ')[0];
     if (r.value.status === 'sent') toast.push({ text: `Invite sent to ${first}.`, tone: 'good' });
+    else if (r.value.status === 'linkedin')
+      toast.push({ text: `Invite sent to ${first} on LinkedIn.`, tone: 'good' });
     else if (r.value.status === 'requested')
       toast.push({ text: `${first} is on Orbit already: the request is waiting on them.`, tone: 'good' });
     else {
@@ -530,7 +532,7 @@ export function FriendsPage() {
               friends={friends}
               mode={mode}
               domains={domains}
-              total={preview?.total ?? 0}
+              total={preview?.total}
               onMode={(m, d) => void share(m, d)}
               onPreview={() => setPreviewOpen((v) => !v)}
               busy={!!working.busy}

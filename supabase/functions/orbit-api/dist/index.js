@@ -17348,12 +17348,26 @@ async function invite(ctx) {
   const now = ctx.now();
   const personId = optUuid(b, "personId");
   let personEmail = null;
+  let viaLinkedIn;
   if (personId) {
     const [p] = await db2.sql`
-      select primary_email from orbit.people
+      select primary_email, linkedin_member_id, first_name, display_name from orbit.people
        where id = ${personId}::uuid and user_id = ${me2}::uuid and deleted_at is null and not do_not_contact`;
-    if (!p?.primary_email) throw new HttpError(404, "not_found", "Orbit has no address for them");
-    personEmail = p.primary_email;
+    if (!p) throw new HttpError(404, "not_found", "no such person");
+    if (p.primary_email) personEmail = p.primary_email;
+    else {
+      const [acct] = await db2.sql`
+        select external_account_id as id from orbit.integration_accounts
+         where user_id = ${me2}::uuid and provider = 'linkedin' and status = 'active' and external_account_id is not null
+         limit 1`;
+      if (!p.linkedin_member_id || !acct)
+        throw new HttpError(404, "not_found", "Orbit has no address or LinkedIn for them");
+      viaLinkedIn = {
+        member: p.linkedin_member_id,
+        first: p.first_name || p.display_name.split(/\s+/)[0] || "",
+        accountId: acct.id
+      };
+    }
   }
   const rawEmail = personEmail ?? (typeof b.email === "string" ? b.email : "");
   const email2 = rawEmail.trim() ? normalizeEmail(rawEmail.trim()) : null;
@@ -17368,12 +17382,30 @@ async function invite(ctx) {
   const code = inviteCode();
   const expires = new Date(now.getTime() + INVITE_DAYS * DAY_MS);
   const [row] = await db2.sql`
-    insert into orbit.friend_invites (from_user_id, to_email, code, status, created_at, expires_at)
-    values (${me2}::uuid, ${email2}, ${code}, 'pending', ${now}::timestamptz, ${expires}::timestamptz)
+    insert into orbit.friend_invites (from_user_id, to_email, to_person_id, code, status, created_at, expires_at)
+    values (${me2}::uuid, ${email2}, ${viaLinkedIn ? personId : null}::uuid, ${code}, 'pending', ${now}::timestamptz,
+            ${expires}::timestamptz)
     returning id, created_at`;
   const link2 = `${ctx.env.appUrl}/friends/join/${code}`;
   let status3 = "link";
   let name = null;
+  if (viaLinkedIn) {
+    const sent = await linkedinSend(ctx.services(), {
+      accountId: viaLinkedIn.accountId,
+      attendeeId: viaLinkedIn.member,
+      connected: true,
+      text: `${viaLinkedIn.first ? `Hi ${viaLinkedIn.first}, ` : ""}I'm using Orbit to keep track of my network and make intros easier. Want to pool our networks? Here's my invite: ${link2}`
+    });
+    if (!sent.ok) {
+      await db2.sql`update orbit.friend_invites set status = 'revoked' where id = ${row.id}::uuid`;
+      throw new HttpError(
+        502,
+        "linkedin_send_failed",
+        "LinkedIn did not send the invite. Try again in a moment."
+      );
+    }
+    status3 = "linkedin";
+  }
   if (email2) {
     const [other] = await db2.sql`
       select id, email, full_name, first_name, school, grad_year, avatar_url, settings from orbit.users
@@ -17907,33 +17939,41 @@ function inviteReason(r, school, now) {
   return "In your People";
 }
 async function toInvite(db2, me2, school, now) {
+  const [li] = await db2.sql`
+    select count(*)::int as n from orbit.integration_accounts
+     where user_id = ${me2}::uuid and provider = 'linkedin' and status = 'active' and external_account_id is not null`;
+  const canMessage = (li?.n ?? 0) > 0;
   const rows = await db2.sql`
     select p.id, p.display_name, p.photo_url, p.title, p.org_raw, p.is_alumni, p.relationship_type,
-           p.last_interaction_at,
+           p.last_interaction_at, p.primary_email is not null as has_email, p.linkedin_member_id,
            coalesce(ts.score, round(coalesce(p.strength, 0) * 100))::int as closeness
       from orbit.people p
       left join (select person_id, max(score) as score from orbit.tie_scores
                   where user_id = ${me2}::uuid group by 1) ts on ts.person_id = p.id
      where p.user_id = ${me2}::uuid and p.deleted_at is null and p.merged_into is null and p.hidden_at is null
        and not p.do_not_contact and not coalesce(p.is_self, false) and not coalesce(p.private, false)
-       and p.primary_email is not null
+       and p.linkedin_member_id is not null
+       and (p.primary_email is not null or ${canMessage}::boolean)
+       and p.display_name ~ '^[^[:space:]]+[[:space:]]+[^[:space:]]' and p.display_name !~ '@'
        and coalesce(p.relationship_type, '') <> 'recruiter'
-       and not exists (select 1 from orbit.users u where lower(u.email) = lower(p.primary_email) and u.deleted_at is null)
+       and not exists (select 1 from orbit.users u where p.primary_email is not null
+                         and lower(u.email) = lower(p.primary_email) and u.deleted_at is null)
        and not exists (select 1 from orbit.friend_invites fi
                         where fi.from_user_id = ${me2}::uuid and fi.status = 'pending'
-                          and fi.to_email = lower(p.primary_email))
-     order by closeness desc nulls last, p.last_interaction_at desc nulls last
+                          and (fi.to_person_id = p.id or fi.to_email = lower(p.primary_email)))
+     order by closeness desc nulls last, (p.photo_url is not null) desc, p.last_interaction_at desc nulls last
      limit ${SUGGEST_TO_INVITE * 3}`;
   const score = (r) => {
     const days = r.last_interaction_at ? (now.getTime() - new Date(r.last_interaction_at).getTime()) / DAY_MS2 : Number.POSITIVE_INFINITY;
-    return (r.closeness ?? 0) + (r.is_alumni ? 15 : 0) + (["peer", "classmate", "friend", "family_friend", "colleague"].includes(r.relationship_type ?? "") ? 10 : 0) + (days <= 60 ? 10 : 0);
+    return (r.closeness ?? 0) + (r.is_alumni ? 15 : 0) + (["peer", "classmate", "friend", "family_friend", "colleague"].includes(r.relationship_type ?? "") ? 10 : 0) + (days <= 60 ? 10 : 0) + (r.photo_url ? 5 : 0);
   };
-  return rows.filter((r) => (r.closeness ?? 0) >= 20 || r.is_alumni).sort((a, b) => score(b) - score(a)).slice(0, SUGGEST_TO_INVITE).map((r) => ({
+  return rows.sort((a, b) => score(b) - score(a)).slice(0, SUGGEST_TO_INVITE).map((r) => ({
     personId: r.id,
     name: r.display_name,
     photoUrl: r.photo_url,
     headline: r.title && r.org_raw ? `${r.title} at ${r.org_raw}` : r.org_raw ?? r.title,
-    reason: inviteReason(r, school, now)
+    reason: inviteReason(r, school, now),
+    via: r.has_email ? "email" : "linkedin"
   }));
 }
 async function suggest(ctx) {

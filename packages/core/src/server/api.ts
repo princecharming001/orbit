@@ -646,8 +646,11 @@ export interface FriendsInviteRequest {
 export interface FriendsInviteResponse {
   code: string;
   link: string;
-  /** 'requested' when the invitee is already on Orbit (they see a request), 'sent' when the link went by email */
-  status: 'sent' | 'requested' | 'link';
+  /**
+   * 'requested' when the invitee is already on Orbit (they see a request), 'sent' when the link went by email,
+   * 'linkedin' when it went as a LinkedIn message from the student's own account
+   */
+  status: 'sent' | 'requested' | 'link' | 'linkedin';
   invite: FriendInvite;
 }
 /** Someone on Orbit the student may know (plan 37 follow-up): a card on Friends with Add. Never their address. */
@@ -673,6 +676,8 @@ export interface InviteSuggestion {
   photoUrl: string | null;
   headline: string | null;
   reason: string;
+  /** how Invite reaches them: their address, or a LinkedIn message from the student's account */
+  via: 'email' | 'linkedin';
 }
 /** POST /friends/suggest: people on Orbit the student may know, and people worth inviting, best first */
 export interface FriendsSuggestResponse {

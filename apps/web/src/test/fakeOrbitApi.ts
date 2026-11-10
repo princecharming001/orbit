@@ -295,8 +295,16 @@ export function createFakeOrbitApi(
           photoUrl: null,
           headline: 'Engineer at Ramp',
           reason: 'You know them well',
+          via: 'email',
         },
-        { personId: 'p_inv_lee', name: 'Lee Park', photoUrl: null, headline: null, reason: 'Cornell alum' },
+        {
+          personId: 'p_inv_lee',
+          name: 'Lee Park',
+          photoUrl: null,
+          headline: null,
+          reason: 'Cornell alum',
+          via: 'linkedin',
+        },
       ],
       linkCode: 'standinglink0000000001',
       requests: [],
@@ -490,8 +498,11 @@ export function createFakeOrbitApi(
         if (typeof body.personId === 'string' && !ffPerson)
           return error(404, 'not_found', 'Orbit has no address for them');
         if (ffPerson) state.friendFinder.invitedPeople.push(ffPerson.personId);
+        // someone with no address is invited on LinkedIn (the server sends it from the student's account)
         const email = ffPerson
-          ? `${ffPerson.name.split(' ')[0]!.toLowerCase()}@example.org`
+          ? ffPerson.via === 'linkedin'
+            ? null
+            : `${ffPerson.name.split(' ')[0]!.toLowerCase()}@example.org`
           : typeof body.email === 'string' && body.email.trim()
             ? body.email.trim().toLowerCase()
             : null;
@@ -510,7 +521,7 @@ export function createFakeOrbitApi(
         return json(200, {
           code: inviteCode,
           link: `https://tryorbit.today/friends/join/${inviteCode}`,
-          status: email ? 'sent' : 'link',
+          status: ffPerson?.via === 'linkedin' ? 'linkedin' : email ? 'sent' : 'link',
           invite,
         });
       }

@@ -1,11 +1,11 @@
 /**
  * Finding friends on the Friends tab (plan 37 follow-up): people on Orbit the student may know, a search for someone
- * they are looking for, and people in their People worth inviting. Each is a tile: a square photo (or their initials),
- * the name, why they are here in a few words, and one button that acts in place (Add turns to Requested, Invite to
- * Invited). Flat: tiles sit on the page, never a box inside a box.
+ * they are looking for, and the student's LinkedIn connections worth inviting. Each is a card: their photo, the name,
+ * why they are here in a few words, and one button that acts in place (Add turns to Requested, Invite to Invited). A
+ * card without a photo shows a plain silhouette, never letters made up from the name.
  */
 import type { FriendSuggestion, InviteSuggestion } from '@orbit/core';
-import { Check, Mail, Search, UserPlus } from 'lucide-react';
+import { Check, Linkedin, Mail, Search, UserPlus, UserRound } from 'lucide-react';
 import { type ReactNode, useEffect, useRef, useState } from 'react';
 import { Button, cx, Input, Skeleton } from '../../ui';
 
@@ -21,22 +21,7 @@ export function connectionsLabel(n: number): string | undefined {
   return `${k >= 10 ? Math.round(k) : k.toFixed(1).replace(/\.0$/, '')}K connections`;
 }
 
-const initials = (name: string) =>
-  name
-    .split(/\s+/)
-    .filter(Boolean)
-    .slice(0, 2)
-    .map((w) => w[0]!.toUpperCase())
-    .join('');
-
-/** A tint from the name, so a tile without a photo still reads as someone. */
-function tint(seed: string): string {
-  let h = 0;
-  for (const ch of seed) h = (h * 31 + ch.charCodeAt(0)) % 360;
-  return `hsl(${h} 32% 88%)`;
-}
-
-function Photo({ name, src, seed }: { name: string; src?: string | null; seed: string }) {
+function Photo({ src }: { src?: string | null }) {
   const [broken, setBroken] = useState(false);
   return src && !broken ? (
     <img
@@ -45,15 +30,15 @@ function Photo({ name, src, seed }: { name: string; src?: string | null; seed: s
       loading="lazy"
       referrerPolicy="no-referrer"
       onError={() => setBroken(true)}
-      className="w-full aspect-square object-cover rounded-[6px] bg-canvas-2"
+      className="w-full aspect-square object-cover rounded-[8px] bg-canvas-2"
     />
   ) : (
     <div
-      className="w-full aspect-square rounded-[6px] flex items-center justify-center text-[26px] font-semibold text-ink-2"
-      style={{ background: tint(seed) }}
+      className="w-full aspect-square rounded-[8px] flex items-end justify-center overflow-hidden bg-[#e9e7e3] text-[#bdb9b2]"
       aria-hidden
+      data-testid="tile-no-photo"
     >
-      {initials(name)}
+      <UserRound className="w-3/5 h-3/5 translate-y-[12%]" strokeWidth={1.25} />
     </div>
   );
 }
@@ -74,10 +59,14 @@ export function PersonTile({
   testId: string;
 }) {
   const shown = lines.filter((l): l is string => !!l).slice(0, 2);
+  void seed;
   return (
-    <li className="min-w-0 flex flex-col" data-testid={testId}>
-      <Photo name={name} src={photo} seed={seed} />
-      <div className="mt-2 font-medium text-[14px] leading-snug line-clamp-2" title={name}>
+    <li
+      className="min-w-0 flex flex-col rounded-[12px] border border-line bg-canvas p-2.5 transition-shadow hover:shadow-[0_2px_10px_rgba(0,0,0,0.05)]"
+      data-testid={testId}
+    >
+      <Photo src={photo} />
+      <div className="mt-2.5 font-medium text-[14px] leading-snug truncate" title={name}>
         {name}
       </div>
       {shown.map((l, i) => (
@@ -102,13 +91,15 @@ export function TileButton({
   onClick,
   busy,
   testId,
+  title,
 }: {
   label: string;
   done?: string;
-  icon: 'add' | 'invite' | 'accept';
+  icon: 'add' | 'invite' | 'linkedin' | 'accept';
   onClick: () => void;
   busy?: boolean;
   testId: string;
+  title?: string;
 }) {
   if (done)
     return (
@@ -120,13 +111,15 @@ export function TileButton({
         <Check size={14} aria-hidden /> {done}
       </span>
     );
-  const Icon = icon === 'invite' ? Mail : icon === 'accept' ? Check : UserPlus;
+  const Icon =
+    icon === 'invite' ? Mail : icon === 'linkedin' ? Linkedin : icon === 'accept' ? Check : UserPlus;
   return (
     <Button
       variant={icon === 'accept' ? 'primary' : 'secondary'}
       className={cx('w-full h-9', TAP)}
       onClick={onClick}
       loading={busy}
+      title={title}
       data-testid={testId}
       data-state="ready"
     >
@@ -171,8 +164,8 @@ export function TileSection({
       {loading ? (
         <ul className={GRID} aria-busy>
           {Array.from({ length: 5 }, (_, i) => (
-            <li key={i}>
-              <Skeleton className="w-full aspect-square rounded-[6px]" />
+            <li key={i} className="rounded-[12px] border border-line p-2.5">
+              <Skeleton className="w-full aspect-square rounded-[8px]" />
               <Skeleton className="h-3 mt-2 w-3/4" />
               <Skeleton className="h-3 mt-1.5 w-1/2" />
             </li>
@@ -187,7 +180,7 @@ export function TileSection({
   );
 }
 
-export const GRID = 'grid grid-cols-2 @xl:grid-cols-3 @3xl:grid-cols-4 @5xl:grid-cols-5 gap-x-3 gap-y-5';
+export const GRID = 'grid grid-cols-2 @2xl:grid-cols-3 @4xl:grid-cols-4 @6xl:grid-cols-5 gap-3';
 
 /** The state a tile's button shows: what the server said, or what the student just did here. */
 export type TileState = 'none' | 'busy' | 'requested' | 'friends' | 'invited';
@@ -250,7 +243,10 @@ export function InviteTile({
       action={
         <TileButton
           label="Invite"
-          icon="invite"
+          title={
+            s.via === 'linkedin' ? `Sends ${s.name.split(' ')[0]} your invite link on LinkedIn` : undefined
+          }
+          icon={s.via === 'linkedin' ? 'linkedin' : 'invite'}
           done={state === 'invited' ? 'Invited' : undefined}
           busy={state === 'busy'}
           onClick={() => onInvite(s)}

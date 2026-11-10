@@ -176,6 +176,8 @@ type InviteRow = {
   relationship_type: string | null;
   last_interaction_at: Date | string | null;
   closeness: number | null;
+  has_email: boolean;
+  linkedin_member_id: string | null;
 };
 
 /** Why someone in the student's People is worth inviting, in a few words. */
@@ -189,24 +191,36 @@ export function inviteReason(r: InviteRow, school: string | null, now: Date): st
   return 'In your People';
 }
 
-/** People the student knows who are not on Orbit and have an address, closest first: the ones a pooled network gains. */
+/**
+ * People worth inviting: the student's own LinkedIn connections (a real name, a LinkedIn photo where they have one),
+ * not on Orbit and not invited yet, closest first. Invite reaches them by their address when Orbit has one, else as a
+ * LinkedIn message from the student's account (only when that account is linked). Address-book entries and handles
+ * ("jeff", "mbeltowski") are never offered.
+ */
 async function toInvite(db: Db, me: string, school: string | null, now: Date): Promise<InviteSuggestion[]> {
+  const [li] = await db.sql<{ n: number }>`
+    select count(*)::int as n from orbit.integration_accounts
+     where user_id = ${me}::uuid and provider = 'linkedin' and status = 'active' and external_account_id is not null`;
+  const canMessage = (li?.n ?? 0) > 0;
   const rows = await db.sql<InviteRow>`
     select p.id, p.display_name, p.photo_url, p.title, p.org_raw, p.is_alumni, p.relationship_type,
-           p.last_interaction_at,
+           p.last_interaction_at, p.primary_email is not null as has_email, p.linkedin_member_id,
            coalesce(ts.score, round(coalesce(p.strength, 0) * 100))::int as closeness
       from orbit.people p
       left join (select person_id, max(score) as score from orbit.tie_scores
                   where user_id = ${me}::uuid group by 1) ts on ts.person_id = p.id
      where p.user_id = ${me}::uuid and p.deleted_at is null and p.merged_into is null and p.hidden_at is null
        and not p.do_not_contact and not coalesce(p.is_self, false) and not coalesce(p.private, false)
-       and p.primary_email is not null
+       and p.linkedin_member_id is not null
+       and (p.primary_email is not null or ${canMessage}::boolean)
+       and p.display_name ~ '^[^[:space:]]+[[:space:]]+[^[:space:]]' and p.display_name !~ '@'
        and coalesce(p.relationship_type, '') <> 'recruiter'
-       and not exists (select 1 from orbit.users u where lower(u.email) = lower(p.primary_email) and u.deleted_at is null)
+       and not exists (select 1 from orbit.users u where p.primary_email is not null
+                         and lower(u.email) = lower(p.primary_email) and u.deleted_at is null)
        and not exists (select 1 from orbit.friend_invites fi
                         where fi.from_user_id = ${me}::uuid and fi.status = 'pending'
-                          and fi.to_email = lower(p.primary_email))
-     order by closeness desc nulls last, p.last_interaction_at desc nulls last
+                          and (fi.to_person_id = p.id or fi.to_email = lower(p.primary_email)))
+     order by closeness desc nulls last, (p.photo_url is not null) desc, p.last_interaction_at desc nulls last
      limit ${SUGGEST_TO_INVITE * 3}`;
   const score = (r: InviteRow) => {
     const days = r.last_interaction_at
@@ -218,11 +232,11 @@ async function toInvite(db: Db, me: string, school: string | null, now: Date): P
       (['peer', 'classmate', 'friend', 'family_friend', 'colleague'].includes(r.relationship_type ?? '')
         ? 10
         : 0) +
-      (days <= 60 ? 10 : 0)
+      (days <= 60 ? 10 : 0) +
+      (r.photo_url ? 5 : 0)
     );
   };
   return rows
-    .filter((r) => (r.closeness ?? 0) >= 20 || r.is_alumni)
     .sort((a, b) => score(b) - score(a))
     .slice(0, SUGGEST_TO_INVITE)
     .map((r) => ({
@@ -231,6 +245,7 @@ async function toInvite(db: Db, me: string, school: string | null, now: Date): P
       photoUrl: r.photo_url,
       headline: r.title && r.org_raw ? `${r.title} at ${r.org_raw}` : (r.org_raw ?? r.title),
       reason: inviteReason(r, school, now),
+      via: r.has_email ? 'email' : 'linkedin',
     }));
 }
 

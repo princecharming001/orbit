@@ -13,20 +13,29 @@ import { Button, Chip, cx, Input, Select } from '../../ui';
 const TAP = 'pointer-coarse:min-h-11';
 const MODES = Object.keys(SHARE_MODE_LABELS) as FriendShareMode[];
 
-/** "Ana sees 120 people", "Ana sees nothing yet", "Friends see 12 people at Stripe and Ramp". */
+/**
+ * "Ana sees 120 people", "Ana sees nothing yet", "Friends see 12 people at Stripe and Ramp"; with no friends yet,
+ * what a friend would see once there is one. `total` is unknown while it is being counted.
+ */
 export function previewLine(
   friends: Friend[],
   mode: FriendShareMode,
   domains: string[],
-  total: number,
+  total: number | undefined,
 ): string {
+  const people = total === undefined ? 'your people' : `${total} ${total === 1 ? 'person' : 'people'}`;
+  const where =
+    mode === 'companies' && domains.length
+      ? ` at ${domains.map((d) => d.replace(/\.[a-z]+$/, '')).join(', ')}`
+      : '';
+  if (!friends.length)
+    return mode === 'none'
+      ? 'Friends you add will see nothing until you choose.'
+      : `Nobody sees your network yet. A friend you add will see ${people}${where}.`;
   const who = friends.length === 1 ? friends[0]!.name.split(' ')[0]! : 'Friends';
   const verb = friends.length === 1 ? 'sees' : 'see';
   if (mode === 'none') return `${who} ${verb} nothing yet`;
-  const people = `${total} ${total === 1 ? 'person' : 'people'}`;
-  if (mode === 'companies')
-    return `${who} ${verb} ${people}${domains.length ? ` at ${domains.map((d) => d.replace(/\.[a-z]+$/, '')).join(', ')}` : ''}`;
-  return `${who} ${verb} ${people}`;
+  return `${who} ${verb} ${people}${where}`;
 }
 
 export function ShareSettings({
@@ -43,8 +52,8 @@ export function ShareSettings({
   friends: Friend[];
   mode: FriendShareMode;
   domains: string[];
-  /** how many people the projection holds under the mode */
-  total: number;
+  /** how many people the projection holds under the mode (unknown while counted) */
+  total: number | undefined;
   onMode: (mode: FriendShareMode, domains: string[]) => void;
   onPreview: () => void;
   busy?: boolean;
@@ -76,36 +85,39 @@ export function ShareSettings({
     ),
   ];
   return (
-    <div className="space-y-3">
-      <div className="flex flex-wrap items-center gap-2">
-        <Select
-          value={mode}
-          onChange={(e) => onMode(e.target.value as FriendShareMode, parseDomains(domainText))}
-          aria-label="What you share with friends"
-          data-testid="friend-share-mode"
-          disabled={busy}
-          className="h-9"
-        >
-          {MODES.map((m) => (
-            <option key={m} value={m}>
-              {SHARE_MODE_LABELS[m]}
-            </option>
-          ))}
-        </Select>
-        <span className="text-[13px] text-ink-3" data-testid="friend-share-preview">
+    <div className="space-y-4">
+      <div className="grid gap-1.5">
+        <div className="text-[13px] font-medium">What friends see</div>
+        <div className="flex flex-wrap items-center gap-2">
+          <Select
+            value={mode}
+            onChange={(e) => onMode(e.target.value as FriendShareMode, parseDomains(domainText))}
+            aria-label="What you share with friends"
+            data-testid="friend-share-mode"
+            disabled={busy}
+            className="h-9 w-56"
+          >
+            {MODES.map((m) => (
+              <option key={m} value={m}>
+                {SHARE_MODE_LABELS[m]}
+              </option>
+            ))}
+          </Select>
+          <Button
+            size="sm"
+            variant="ghost"
+            className={cx('h-9', TAP)}
+            onClick={onPreview}
+            data-testid="friend-share-preview-open"
+          >
+            {friends.length === 1
+              ? `See exactly what ${friends[0]!.name.split(' ')[0]} sees`
+              : 'See exactly what friends see'}
+          </Button>
+        </div>
+        <p className="text-[12.5px] text-ink-3" data-testid="friend-share-preview">
           {previewLine(friends, mode, domains, total)}
-        </span>
-        <Button
-          size="sm"
-          variant="secondary"
-          className={cx('ml-auto', TAP)}
-          onClick={onPreview}
-          data-testid="friend-share-preview-open"
-        >
-          {friends.length === 1
-            ? `See exactly what ${friends[0]!.name.split(' ')[0]} sees`
-            : 'See exactly what friends see'}
-        </Button>
+        </p>
       </div>
       {mode === 'companies' && (
         <form
@@ -129,13 +141,13 @@ export function ShareSettings({
         </form>
       )}
       <div className="space-y-1.5">
-        <div className="text-[13px] font-medium">Hide a person from friends</div>
+        <div className="text-[13px] font-medium">Hide someone from friends</div>
         <Input
           value={hideQuery}
           onChange={(e) => setHideQuery(e.target.value)}
           placeholder="Search your people"
           aria-label="Hide a person from friends"
-          className="max-w-sm"
+          className="w-full max-w-sm h-9"
           data-testid="friend-hide-search"
         />
         {hits.length > 0 && (
@@ -182,8 +194,8 @@ export function ShareSettings({
           </div>
         )}
         <p className="text-[12px] text-ink-3">
-          Hidden people, anyone you hid from your own view and anyone who asked not to be contacted never
-          show.
+          People you hide here, hide from your own view, or who asked not to be contacted never show to
+          friends.
         </p>
       </div>
     </div>

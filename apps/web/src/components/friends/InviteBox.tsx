@@ -19,7 +19,9 @@ export function InviteBox({
 }: {
   pending: FriendInvite[];
   /** returns the link to copy, or nothing when it failed (the caller said why) */
-  onInvite: (email?: string) => Promise<{ link: string; status: 'sent' | 'requested' | 'link' } | undefined>;
+  onInvite: (
+    email?: string,
+  ) => Promise<{ link: string; status: 'sent' | 'requested' | 'link' | 'linkedin' } | undefined>;
   onAccept: (inv: FriendInvite) => void;
   onDecline: (inv: FriendInvite) => void;
   busy?: boolean;
@@ -42,19 +44,10 @@ export function InviteBox({
       });
     setEmail('');
   };
-  const copy = async () => {
-    if (!link) return;
-    try {
-      await navigator.clipboard.writeText(link);
-      toast.push({ text: 'Link copied.', tone: 'good' });
-    } catch {
-      toast.push({ text: link, tone: 'neutral', ttl: 10_000 });
-    }
-  };
   return (
     <div className="space-y-3">
       <form
-        className="flex flex-wrap items-center gap-2"
+        className="flex items-center gap-2"
         onSubmit={(e) => {
           e.preventDefault();
           void send();
@@ -65,34 +58,19 @@ export function InviteBox({
           value={email}
           onChange={(e) => setEmail(e.target.value)}
           placeholder="friend@school.edu"
-          className="max-w-xs"
+          className="min-w-0 flex-1 h-10"
           aria-label="Your friend's email"
           data-testid="friends-invite-email"
         />
         <Button
           type="submit"
           variant="primary"
-          className={TAP}
+          className={`h-10 ${TAP}`}
           loading={busy}
+          disabled={!email.trim()}
           data-testid="friends-invite-send"
         >
           Invite
-        </Button>
-        <Button
-          type="button"
-          variant="ghost"
-          className={TAP}
-          onClick={() => {
-            if (link) return void copy();
-            void onInvite().then((r) => {
-              if (!r) return;
-              setLink(r.link);
-              void navigator.clipboard?.writeText(r.link).catch(() => undefined);
-            });
-          }}
-          data-testid="friends-invite-link"
-        >
-          {link ? 'Copy the link' : 'Get a link to send'}
         </Button>
       </form>
       <EmailTypoHint email={email} onFix={setEmail} />

@@ -173,6 +173,13 @@ test.describe('finding friends (plan 37 follow-up, fake orbit-api)', () => {
     await sam.getByTestId('friend-invitee-invite').click();
     await expect(sam.getByTestId('friend-invitee-invite')).toHaveText('Invited');
     expect(api.state.friendFinder.invitedPeople).toEqual(['p_inv_sam']);
+    // someone with no address: the invite goes as a LinkedIn message, and the toast says so
+    const lee = page.getByTestId('friend-invitee').filter({ hasText: 'Lee Park' });
+    await lee.getByTestId('friend-invitee-invite').click();
+    await expect(lee.getByTestId('friend-invitee-invite')).toHaveText('Invited');
+    await expect(page.getByTestId('toasts')).toContainText('Invite sent to Lee on LinkedIn.');
+    // no photo: a plain silhouette, never letters made up from the name
+    await expect(lee.getByTestId('tile-no-photo')).toBeVisible();
   });
 
   test('search: a name among people you may know, an exact address among everyone, and a plain miss', async ({

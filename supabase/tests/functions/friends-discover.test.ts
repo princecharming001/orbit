@@ -1,10 +1,11 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { addPerson, api, fakeNet, signedInUser } from '../helpers/agents.ts';
+import { addPerson, api, fakeNet, jsonRes, signedInUser } from '../helpers/agents.ts';
 import { freshDb, type TestDb } from '../helpers/pglite.ts';
 
 /**
  * Finding friends (plan 37 follow-up): people on Orbit the student may know, ranked by their ties and never without
- * one; people in their People worth inviting, never anyone on Orbit already, a recruiter or a faint tie; a search by
+ * one; their LinkedIn connections worth inviting (by email, or a LinkedIn message when Orbit has no address), never
+ * anyone on Orbit already, a recruiter, an address-book entry or a handle; a search by
  * name among people with a tie, and by exact address among everyone; a request by id; one standing link for a group
  * chat that more than one friend can use, and a reset that ends it. No address crosses.
  */
@@ -25,7 +26,7 @@ type Suggestion = {
   connections: number;
   friendshipId?: string;
 };
-type Invitee = { personId: string; name: string; reason: string };
+type Invitee = { personId: string; name: string; reason: string; via: string };
 
 async function world() {
   const call = api(t, fakeNet(), { env: {} });
@@ -53,16 +54,44 @@ async function world() {
     await t.db.sql`insert into orbit.friendships (a, b, status, requested_by, accepted_at)
                    values (${lo}::uuid, ${hi}::uuid, 'active', ${a.userId}::uuid, now())`;
   }
-  // Maya's people not on Orbit: Gail she knows well, Hal a recruiter, Ivy barely, Jo an alum she barely knows
-  const gail = await addPerson(t, maya.userId, { name: 'Gail Park', email: 'gail@example.org', score: 82 });
-  await addPerson(t, maya.userId, { name: 'Hal Recruiter', email: 'hal@example.org', score: 90 });
+  // Maya's LinkedIn connections not on Orbit: Gail she knows well, Hal a recruiter, Ivy barely, Jo an alum she
+  // barely knows, Nia with no address; and two that are not LinkedIn people: an address-book entry, and a handle
+  const gail = await addPerson(t, maya.userId, {
+    name: 'Gail Park',
+    email: 'gail@example.org',
+    memberId: 'ACoGail',
+    score: 82,
+  });
+  await addPerson(t, maya.userId, {
+    name: 'Hal Recruiter',
+    email: 'hal@example.org',
+    memberId: 'ACoHal',
+    score: 90,
+  });
   await t.db
     .sql`update orbit.people set relationship_type = 'recruiter' where display_name = 'Hal Recruiter'`;
-  await addPerson(t, maya.userId, { name: 'Ivy Faint', email: 'ivy@example.org', score: 5 });
-  const jo = await addPerson(t, maya.userId, { name: 'Jo Alum', email: 'jo@example.org', score: 10 });
+  await addPerson(t, maya.userId, {
+    name: 'Ivy Faint',
+    email: 'ivy@example.org',
+    memberId: 'ACoIvy',
+    score: 5,
+  });
+  const jo = await addPerson(t, maya.userId, {
+    name: 'Jo Alum',
+    email: 'jo@example.org',
+    memberId: 'ACoJo',
+    score: 10,
+  });
   await t.db.sql`update orbit.people set is_alumni = true where id = ${jo}::uuid`;
-  await addPerson(t, maya.userId, { name: 'No Address', score: 95 });
-  return { call, maya, ana, ben, cara, dina, frank, gail, jo };
+  const nia = await addPerson(t, maya.userId, { name: 'Nia Noaddress', memberId: 'ACoNia', score: 95 });
+  await addPerson(t, maya.userId, { name: 'Book Only', email: 'book@example.org', score: 85 });
+  await addPerson(t, maya.userId, {
+    name: 'jeff',
+    email: 'jeff@example.org',
+    memberId: 'ACoJeff',
+    score: 88,
+  });
+  return { call, maya, ana, ben, cara, dina, frank, gail, jo, nia };
 }
 
 describe('finding friends over orbit-api', () => {
@@ -89,14 +118,17 @@ describe('finding friends over orbit-api', () => {
     expect(JSON.stringify(r.body)).not.toMatch(/@example\.(com|org)/);
   });
 
-  it('suggests people to invite: close or alumni, with an address, not on Orbit, never a recruiter', async () => {
+  it('suggests LinkedIn connections to invite, closest first: never a recruiter, an address book entry or a handle', async () => {
     const w = await world();
     const r = await w.call<{ toInvite: Invitee[] }>('/friends/suggest', w.maya.token, {});
     const names = r.body.toInvite.map((s) => s.name);
     expect(names[0]).toBe('Gail Park');
     expect(names).toContain('Jo Alum');
-    for (const n of ['Hal Recruiter', 'Ivy Faint', 'No Address', 'Ana Rivera'])
+    expect(names).toContain('Ivy Faint');
+    // Nia has no address and Maya has no LinkedIn linked: nothing could reach her
+    for (const n of ['Hal Recruiter', 'Nia Noaddress', 'Ana Rivera', 'Book Only', 'jeff'])
       expect(names).not.toContain(n);
+    expect(r.body.toInvite.every((s) => s.via === 'email')).toBe(true);
     expect(r.body.toInvite[0]!.reason).toBe('You know them well');
     expect(r.body.toInvite.find((s) => s.name === 'Jo Alum')!.reason).toBe('Stanford alum');
     // inviting by id sends to the address Orbit has; Gail is no longer suggested once invited
@@ -110,6 +142,56 @@ describe('finding friends over orbit-api', () => {
     // someone else's person cannot be invited by id
     const other = await w.call('/friends/invite', w.ana.token, { personId: w.gail });
     expect(other.status).toBe(404);
+  });
+
+  it('someone with no address is invited on LinkedIn from the student’s account, once', async () => {
+    const w = await world();
+    await t.db.sql`insert into orbit.integration_accounts (user_id, provider, external_account_id, status)
+      values (${w.maya.userId}::uuid, 'linkedin', 'acc-maya', 'active')`;
+    const r = await w.call<{ toInvite: Invitee[] }>('/friends/suggest', w.maya.token, {});
+    const nia = r.body.toInvite.find((s) => s.name === 'Nia Noaddress');
+    expect(nia).toMatchObject({ via: 'linkedin' });
+    expect(r.body.toInvite.find((s) => s.name === 'Gail Park')!.via).toBe('email');
+    const net = fakeNet((c) =>
+      c.url.endsWith('/api/v1/chats') && c.method === 'POST'
+        ? jsonRes(201, { chat_id: 'chat-nia', message_id: 'msg-1' })
+        : undefined,
+    );
+    const call = api(t, net, {
+      env: { unipileKey: 'unipile-placeholder', unipileBase: 'https://unipile.test' },
+    });
+    const inv = await call<{ status: string; link: string }>('/friends/invite', w.maya.token, {
+      personId: w.nia,
+    });
+    expect(inv.status).toBe(200);
+    expect(inv.body.status).toBe('linkedin');
+    const sent = net.calls.find((c) => c.url.endsWith('/api/v1/chats'))!;
+    expect(sent.body).toMatchObject({ account_id: 'acc-maya', attendees_ids: 'ACoNia' });
+    expect(String((sent.body as { text: string }).text)).toContain(inv.body.link);
+    expect(String((sent.body as { text: string }).text)).toMatch(/^Hi Nia, /);
+    expect(String((sent.body as { text: string }).text)).not.toMatch(/[!—–]/);
+    const again = await w.call<{ toInvite: Invitee[] }>('/friends/suggest', w.maya.token, {});
+    expect(again.body.toInvite.map((s) => s.name)).not.toContain('Nia Noaddress');
+  });
+
+  it('a LinkedIn invite LinkedIn did not send is not left waiting, and says so', async () => {
+    const w = await world();
+    await t.db.sql`insert into orbit.integration_accounts (user_id, provider, external_account_id, status)
+      values (${w.maya.userId}::uuid, 'linkedin', 'acc-maya2', 'active')`;
+    const call = api(
+      t,
+      fakeNet((c) => (c.url.endsWith('/api/v1/chats') ? jsonRes(422, {}) : undefined)),
+      {
+        env: { unipileKey: 'unipile-placeholder', unipileBase: 'https://unipile.test' },
+      },
+    );
+    const inv = await call('/friends/invite', w.maya.token, { personId: w.nia });
+    expect(inv.status).toBe(502);
+    const rows = await t.db.sql<{ status: string }>`
+      select status from orbit.friend_invites where from_user_id = ${w.maya.userId}::uuid and to_person_id = ${w.nia}::uuid`;
+    expect(rows.map((x) => x.status)).toEqual(['revoked']);
+    const r = await w.call<{ toInvite: Invitee[] }>('/friends/suggest', w.maya.token, {});
+    expect(r.body.toInvite.map((s) => s.name)).toContain('Nia Noaddress');
   });
 
   it('search: by name among people with a tie, by exact address among everyone', async () => {

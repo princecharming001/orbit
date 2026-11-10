@@ -54,6 +54,7 @@ import {
 import { badRequest, HttpError, json } from '../../_shared/http.ts';
 import { settleCard } from '../../_shared/replies/cards.ts';
 import { iso } from '../../_shared/rows.ts';
+import { linkedinSend } from '../../_shared/sending/transport.ts';
 import type { Ctx, Route } from '../api.ts';
 import { body, optUuid, text, uuid } from './body.ts';
 
@@ -307,12 +308,32 @@ async function invite(ctx: Ctx): Promise<Response> {
   // browser in the suggestions)
   const personId = optUuid(b, 'personId');
   let personEmail: string | null = null;
+  // someone with no address: the invite goes as a LinkedIn message from the student's own account
+  let viaLinkedIn: { member: string; first: string; accountId: string } | undefined;
   if (personId) {
-    const [p] = await db.sql<{ primary_email: string | null }>`
-      select primary_email from orbit.people
+    const [p] = await db.sql<{
+      primary_email: string | null;
+      linkedin_member_id: string | null;
+      first_name: string | null;
+      display_name: string;
+    }>`
+      select primary_email, linkedin_member_id, first_name, display_name from orbit.people
        where id = ${personId}::uuid and user_id = ${me}::uuid and deleted_at is null and not do_not_contact`;
-    if (!p?.primary_email) throw new HttpError(404, 'not_found', 'Orbit has no address for them');
-    personEmail = p.primary_email;
+    if (!p) throw new HttpError(404, 'not_found', 'no such person');
+    if (p.primary_email) personEmail = p.primary_email;
+    else {
+      const [acct] = await db.sql<{ id: string }>`
+        select external_account_id as id from orbit.integration_accounts
+         where user_id = ${me}::uuid and provider = 'linkedin' and status = 'active' and external_account_id is not null
+         limit 1`;
+      if (!p.linkedin_member_id || !acct)
+        throw new HttpError(404, 'not_found', 'Orbit has no address or LinkedIn for them');
+      viaLinkedIn = {
+        member: p.linkedin_member_id,
+        first: p.first_name || p.display_name.split(/\s+/)[0] || '',
+        accountId: acct.id,
+      };
+    }
   }
   const rawEmail = personEmail ?? (typeof b.email === 'string' ? b.email : '');
   const email = rawEmail.trim() ? normalizeEmail(rawEmail.trim()) : null;
@@ -327,12 +348,31 @@ async function invite(ctx: Ctx): Promise<Response> {
   const code = inviteCode();
   const expires = new Date(now.getTime() + INVITE_DAYS * DAY_MS);
   const [row] = await db.sql<{ id: string; created_at: Date }>`
-    insert into orbit.friend_invites (from_user_id, to_email, code, status, created_at, expires_at)
-    values (${me}::uuid, ${email}, ${code}, 'pending', ${now}::timestamptz, ${expires}::timestamptz)
+    insert into orbit.friend_invites (from_user_id, to_email, to_person_id, code, status, created_at, expires_at)
+    values (${me}::uuid, ${email}, ${viaLinkedIn ? personId! : null}::uuid, ${code}, 'pending', ${now}::timestamptz,
+            ${expires}::timestamptz)
     returning id, created_at`;
   const link = `${ctx.env.appUrl}/friends/join/${code}`;
   let status: FriendsInviteResponse['status'] = 'link';
   let name: string | null = null;
+  if (viaLinkedIn) {
+    const sent = await linkedinSend(ctx.services(), {
+      accountId: viaLinkedIn.accountId,
+      attendeeId: viaLinkedIn.member,
+      connected: true,
+      text: `${viaLinkedIn.first ? `Hi ${viaLinkedIn.first}, ` : ''}I'm using Orbit to keep track of my network and make intros easier. Want to pool our networks? Here's my invite: ${link}`,
+    });
+    if (!sent.ok) {
+      // nothing went out: the invite does not stay waiting on them
+      await db.sql`update orbit.friend_invites set status = 'revoked' where id = ${row!.id}::uuid`;
+      throw new HttpError(
+        502,
+        'linkedin_send_failed',
+        'LinkedIn did not send the invite. Try again in a moment.',
+      );
+    }
+    status = 'linkedin';
+  }
   if (email) {
     const [other] = await db.sql<UserLite>`
       select id, email, full_name, first_name, school, grad_year, avatar_url, settings from orbit.users
