@@ -630,9 +630,15 @@ async function syncLinkedInLiveOnce(
       void adoptLinkedInPhoto(user.id, row.externalAccountId!, row.accessToken).catch(() => false);
     if (!pulled.ok) {
       if (pulled.reason === 'unconfigured') return { ok: false, reason: 'unconfigured', message: LIVE_SOON };
-      await db.integrations.update(row.id, { status: 'error', lastError: pulled.message });
-      setProgress({ phase: 'failed', message: pulled.message });
-      return { ok: false, reason: 'error', message: pulled.message };
+      // refused for an account Orbit's server linked (this browser kept a token from before it signed out of
+      // Orbit): only the signed-in session can sync it, and connecting again here would make a second account
+      const message =
+        pulled.status === 403 && (row.syncState as { server?: boolean } | undefined)?.server
+          ? SIGN_IN_AGAIN
+          : pulled.message;
+      await db.integrations.update(row.id, { status: 'error', lastError: message });
+      setProgress({ phase: 'failed', message });
+      return { ok: false, reason: 'error', message };
     }
     conns = pulled.value;
   }

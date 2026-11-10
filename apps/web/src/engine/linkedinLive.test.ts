@@ -353,6 +353,31 @@ describe('syncing, disconnecting and the daily re-sync', () => {
     expect((await linkedInLiveStatus(user)).error).toBeTruthy();
   });
 
+  it('a sync the server refuses says how to put it right, and the next sync that goes through clears it', async () => {
+    await connectLinkedInLive(user);
+    const refused = { status: 403, body: { error: 'this LinkedIn account is not linked to this browser' } };
+    routes['/relations'] = refused;
+    expect(await syncLinkedInLive(user)).toMatchObject({
+      ok: false,
+      reason: 'error',
+      message: 'Orbit could not confirm this LinkedIn connection. Turn LinkedIn off, then on again.',
+    });
+    expect((await linkedInLiveStatus(user)).error).toMatch(/could not confirm/);
+    // the server accepts the account again (what the fix of 2026-11-10 did for everyone refused): nothing to redo
+    routes['/relations'] = { body: RELATIONS };
+    expect(await syncLinkedInLive(user)).toMatchObject({ ok: true });
+    expect(await liveLinkedInAccount(user.id)).toMatchObject({ status: 'active' });
+    expect((await linkedInLiveStatus(user)).error).toBeUndefined();
+    // an account Orbit's server linked, in a browser that signed out of Orbit with an old token: sign in, not reconnect
+    const row = (await liveLinkedInAccount(user.id))!;
+    await db.integrations.update(row.id, { syncState: { ...row.syncState, server: true } });
+    routes['/relations'] = refused;
+    expect(await syncLinkedInLive(user)).toMatchObject({
+      ok: false,
+      message: 'Sign in to Orbit again to keep LinkedIn syncing. It is still connected.',
+    });
+  });
+
   it('cannot sync before connecting', async () => {
     expect(await syncLinkedInLive(user)).toMatchObject({ ok: false, reason: 'not_connected' });
   });
