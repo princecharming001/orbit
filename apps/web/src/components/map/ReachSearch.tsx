@@ -3,19 +3,26 @@ import { Building2, Search } from 'lucide-react';
 import { type ReactNode, useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import type { ReachCandidate } from '../../engine/graph';
-import { type FoundView, linkedInSearchReady, searchLinkedInLive } from '../../engine/linkedinSearch';
+import { type FoundView, linkedInLookupReady, lookUpLinkedInPeople } from '../../engine/linkedinSearch';
 import { Avatar, cx, Spinner, Working } from '../../ui';
 
 /** LinkedIn is asked once typing pauses this long, and only from this many letters (LinkedIn limits searches a day). */
 const LINKEDIN_PAUSE_MS = 650;
 const LINKEDIN_MIN_CHARS = 3;
 
+/** What the list says when LinkedIn could not be searched. */
+const LINKEDIN_LIMIT = "That's today's LinkedIn searches. They come back tomorrow.";
+const LINKEDIN_DOWN = 'LinkedIn could not be searched just now. Try again in a moment.';
+
 /**
- * LinkedIn people for what the student is typing, once they pause: their photos, names and headlines. Answers are
- * kept for the visit, so going back over a word asks LinkedIn nothing new.
+ * LinkedIn people for what the student is typing, once they pause: their photos, names and headlines, anyone on
+ * LinkedIn (with an Orbit account the server searches, from the LinkedIn linked there; otherwise the LinkedIn
+ * connected in this browser does). Answers are kept for the visit, so going back over a word asks LinkedIn nothing
+ * new.
  */
 function useLinkedInResults(userId: string, q: string) {
-  const [ready, setReady] = useState(false);
+  // undefined until Orbit knows: the "Connect LinkedIn" line never flashes at someone who has it connected
+  const [ready, setReady] = useState<boolean>();
   const [state, setState] = useState<{ q: string; people: FoundView[]; loading: boolean; error?: string }>({
     q: '',
     people: [],
@@ -24,7 +31,10 @@ function useLinkedInResults(userId: string, q: string) {
   const cache = useRef(new Map<string, FoundView[]>());
   useEffect(() => {
     let live = true;
-    void linkedInSearchReady({ id: userId }).then((r) => live && setReady(r));
+    setReady(undefined);
+    void linkedInLookupReady({ id: userId })
+      .catch(() => false)
+      .then((r) => live && setReady(r));
     return () => {
       live = false;
     };
@@ -43,13 +53,24 @@ function useLinkedInResults(userId: string, q: string) {
     setState((s) => ({ ...s, loading: true }));
     let live = true;
     const t = setTimeout(async () => {
-      const r = await searchLinkedInLive({ id: userId }, query);
+      const r = await lookUpLinkedInPeople({ id: userId }, query).catch(
+        () => ({ ok: false, reason: 'unavailable' }) as const,
+      );
       if (!live) return;
       if (r.ok) {
         const people = r.people.slice(0, 6);
         cache.current.set(query.toLowerCase(), people);
         setState({ q: query, people, loading: false });
-      } else setState({ q: query, people: [], loading: false, error: r.message });
+        return;
+      }
+      // the server says LinkedIn is not linked after all (signed out by LinkedIn, or disconnected elsewhere)
+      if (r.reason === 'not_connected') setReady(false);
+      setState({
+        q: query,
+        people: [],
+        loading: false,
+        error: r.reason === 'limit' ? LINKEDIN_LIMIT : r.reason === 'unavailable' ? LINKEDIN_DOWN : undefined,
+      });
     }, LINKEDIN_PAUSE_MS);
     return () => {
       live = false;
@@ -208,7 +229,7 @@ export function ReachSearch({
       {!q && !compact && hint !== undefined && hint !== null && (
         <p className="px-1 text-[13px] text-ink-3">{hint}</p>
       )}
-      {!q && !compact && hint === undefined && !li.ready && (
+      {!q && !compact && hint === undefined && li.ready === false && (
         <p className="px-1 text-[13px] text-ink-3">
           <Link to="/settings/integrations" className="underline underline-offset-2 hover:text-ink">
             Connect LinkedIn
@@ -291,11 +312,18 @@ export function ReachSearch({
               <Spinner /> Searching LinkedIn…
             </p>
           )}
-          {!rows.length && !li.loading && (
+          {li.error && !li.loading && li.q === q && (
+            <p className="px-1 pt-3 text-[12.5px] text-ink-3" data-testid="map-linkedin-note">
+              {li.error}
+            </p>
+          )}
+          {!rows.length && !li.loading && !(li.error && li.q === q) && (
             <p className="px-1 text-[13px] text-ink-3">
               {li.ready && q.length < LINKEDIN_MIN_CHARS
                 ? 'Keep typing to search LinkedIn.'
-                : 'No one by that name yet.'}
+                : li.ready === false
+                  ? 'No one by that name in your network. Connect LinkedIn in Settings to search everyone.'
+                  : 'No one by that name yet.'}
             </p>
           )}
         </div>

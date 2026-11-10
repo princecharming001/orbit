@@ -92,7 +92,15 @@ export interface FakeState {
   proposals: ProposedGoal[];
   due: DueItem[];
   /** `sendError`: what the server's LinkedIn send answers with instead of sending (`linkedin_note_too_long`, ...) */
-  linkedin: { status: string; relations: number; sendError?: string };
+  linkedin: {
+    status: string;
+    relations: number;
+    sendError?: string;
+    /** who /linkedin/search finds (matched on the typed words), and a reason it answers with instead */
+    found?: { memberId: string; name: string; headline?: string; distance?: number }[];
+    searchReason?: 'limit' | 'error';
+    searches?: string[];
+  };
   /** what /people/history answers per person (empty lists otherwise) */
   history: Map<
     string,
@@ -829,6 +837,17 @@ export function createFakeOrbitApi(
         });
       case '/linkedin/sync':
         return json(200, { queued: true });
+      // people on LinkedIn a typed name finds, from the account linked on the server
+      case '/linkedin/search': {
+        if (state.linkedin.status !== 'active') return json(200, { ok: false, reason: 'not_connected' });
+        if (state.linkedin.searchReason) return json(200, { ok: false, reason: state.linkedin.searchReason });
+        const q = String(body.q ?? '').toLowerCase();
+        state.linkedin.searches = [...(state.linkedin.searches ?? []), q];
+        return json(200, {
+          ok: true,
+          people: (state.linkedin.found ?? []).filter((p) => p.name.toLowerCase().includes(q)),
+        });
+      }
       // everything with one person, for their page
       case '/people/history':
         return json(

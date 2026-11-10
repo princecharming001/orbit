@@ -1,7 +1,8 @@
 /**
- * Finding new people on LinkedIn without an Orbit account: with LinkedIn connected live in this browser, the search
- * runs from the student's own LinkedIn (second- and third-degree people, so the results are people they do not know
- * yet), and the ones they pick become people in Orbit with a chat at "to contact". The sample student searches a
+ * Finding new people on LinkedIn. With LinkedIn connected live in this browser (no Orbit account), the search runs
+ * from the student's own LinkedIn (second- and third-degree people, so the results are people they do not know yet);
+ * with an Orbit account a typed name is searched by Orbit's server, from the LinkedIn linked there (anyone on
+ * LinkedIn). The ones they pick become people in Orbit with a chat at "to contact". The sample student searches a
  * mock pool.
  */
 import type { CoffeeChat, User } from '@orbit/core';
@@ -17,7 +18,7 @@ import {
   unipileConfigured,
 } from '../integrations/unipile';
 import { updateEdgesFor } from './graph';
-import { LIVE_SOON, liveLinkedInAccount } from './linkedinLive';
+import { LIVE_SOON, liveLinkedInAccount, refreshLinkedInFromServer } from './linkedinLive';
 import { addPersonByHand } from './people';
 import { freshPhoto } from './photos';
 
@@ -39,6 +40,22 @@ export async function linkedInSearchReady(user: Pick<User, 'id'>): Promise<boole
   const row = await liveLinkedInAccount(user.id);
   if (!row || row.status === 'revoked' || !row.externalAccountId) return false;
   return usesMockConnectors(user.id) || (unipileConfigured() && !!row.accessToken);
+}
+
+/**
+ * A typed name can be looked up on LinkedIn (lookUpLinkedInPeople): with an Orbit account, LinkedIn is linked on
+ * Orbit's server and the server searches; otherwise the LinkedIn connected in this browser does. A signed-in browser
+ * that has not mirrored the server's link yet asks the server once before saying no.
+ */
+export async function linkedInLookupReady(user: Pick<User, 'id'>): Promise<boolean> {
+  if (!isServerUser(user.id)) return linkedInSearchReady(user);
+  const linked = async () => {
+    const row = await liveLinkedInAccount(user.id);
+    return !!row && row.status !== 'revoked' && !!row.externalAccountId;
+  };
+  if (await linked()) return true;
+  await refreshLinkedInFromServer(user).catch(() => false);
+  return linked();
 }
 
 export type LinkedInSearchOutcome =

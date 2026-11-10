@@ -132,7 +132,10 @@ export const SERVER_SYNC_STOPPED = "LinkedIn's sync stopped on Orbit's server. T
  * held at connect time: 0 connections, never synced, and any error an older browser-side read left on it.
  * Gives false when there is nothing to mirror (not an account, or the server did not answer).
  */
-export async function refreshLinkedInFromServer(user: User, signal?: AbortSignal): Promise<boolean> {
+export async function refreshLinkedInFromServer(
+  user: Pick<User, 'id'>,
+  signal?: AbortSignal,
+): Promise<boolean> {
   if (!isServerUser(user.id) || usesMockConnectors(user.id)) return false;
   const st = await callApi('/linkedin/status', {}, { signal });
   if (!st.ok) return false;
