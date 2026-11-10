@@ -579,3 +579,37 @@ lookups a day for a premium account (80 for a free one), which is Orbit's ledger
 to 70% of it, busiest companies first, so the companies with two or more of the student's people are done within days
 and the long tail of one-person companies over a few weeks. Companies on a profile the student opens are looked up that
 day from the rest.
+
+### Follow-up: logos that are the company's own, and the beta testers' round (2026-11-10)
+
+What the live data showed. LinkedIn's company search gives follower counts cut to three digits ("579" for NASA), so
+the follower rule took a fan page called "NASA" and a club page for "SJSU"; the page at a company's own name took
+/company/smith for anyone's Smith and ADEN Group for ADEN (YC W20); a target with nobody there yet ("Triumph") was
+never looked up, and a tile with no logo showed letters made up from the name.
+
+The rules now (supabase/functions/_shared/providers/linkedinCompanies.ts, logoSweep.ts):
+
+- By name (`chooseCompany`): LinkedIn's first result, when it names the company (the same name, the name LinkedIn
+  writes it under, or its initials), and every other page of that name is at least 2,000 times newer (LinkedIn's ids
+  count up). Otherwise ambiguous. Checked on LinkedIn's real answers for NASA, SJSU, Nova, Triumph, Smith, Google,
+  Apple, Mercury, Compass, Moonshot, Dell, Pigeon and Tesla (supabase/tests/fixtures).
+- Exactly, per account (orbit_private.linkedin_company_picks): a position on a profile of the student's own people
+  (only one whose company LinkedIn names as the row does: an out-of-date row never takes a new job's logo), or the
+  student's own pick from LinkedIn's list. /companies answers picks first. A profile never decides the shared list.
+- logos.user: targets first; companies settled free from profiles already read; by name; then one profile read of
+  someone in the network for a name the search cannot settle. Rows of the old rules (rules = 1) are checked again: a
+  row LinkedIn still lists first stays (Dell, now "Dell Technologies"), any other loses its logo.
+- The browser: an exact answer takes over a name match, a name match follows the shared list when it corrects itself,
+  an exact one never changes (engine/logos.sim.test.ts runs random sequences of answers against this). No logo is
+  LinkedIn's own plain building placeholder, never letters. Schools are looked up like companies.
+- "Which Triumph?" under a target Orbit cannot put a logo to, and LinkedIn's own list (logo, industry, place) in the
+  target company suggestions.
+
+The same round: the Map search finds anyone on LinkedIn for a signed-in student; Map tabs count and list who they
+light, and Alumni became Your school (headline, school or company naming it); Find email no longer opens the page a
+person was found on, and Hunter is asked by company name when no domain is known; kinds of work take any the student
+types; Friends invites the student's LinkedIn connections only, as cards, by email or a LinkedIn message; People who
+know X is one short line a person.
+
+Not done: Apollo stays unconfigured (a paid key, the user's call). Logos for the whole network arrive at LinkedIn's
+pace (about 105 company lookups and up to 60 profile reads a day on one account), targets and visible tiles first.
