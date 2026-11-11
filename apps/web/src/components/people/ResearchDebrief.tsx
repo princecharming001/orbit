@@ -347,6 +347,17 @@ function Debrief({
   const toast = useToast();
   const v = dossierView(d);
   const first = person.firstName || 'them';
+  // the Experience section under the brief shows their jobs and schools (LinkedIn's own, or what was found): the brief
+  // never repeats them, and says them only for someone Orbit has no history for
+  const history = useLiveQuery(async () => {
+    const affs = await db.affiliations.where('personId').equals(person.id).toArray();
+    return {
+      work: affs.some((a) => a.kind === 'employment'),
+      school: affs.some((a) => a.kind === 'education'),
+    };
+  }, [person.id]);
+  const showCareer = !!history && !history.work && v.career.length > 0;
+  const showEducation = !!history && !history.school && v.education.length > 0;
   const sources = v.sources;
   const copy = async (text: string) => {
     try {
@@ -421,7 +432,7 @@ function Debrief({
 
       <div className={cx('mt-5 grid gap-x-8', side && '@3xl:grid-cols-[minmax(0,1fr)_minmax(0,280px)]')}>
         <div className="min-w-0">
-          {v.career.length > 0 && (
+          {showCareer && (
             <Block title="Career" testId="debrief-career">
               <ol className="space-y-2.5">
                 {v.career.map((c, i) => (
@@ -441,7 +452,7 @@ function Debrief({
               </ol>
             </Block>
           )}
-          {v.education.length > 0 && (
+          {showEducation && (
             <Block title="Education" testId="debrief-education">
               <ul className="space-y-2">
                 {v.education.map((e, i) => (

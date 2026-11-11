@@ -82,6 +82,10 @@ test.describe('Research', () => {
     // every line carries its numbered source, and the sources are listed
     await expect(debrief.getByTestId('debrief-openers')).toContainText('[3]');
     await expect(debrief.getByTestId('debrief-sources')).toContainText('3 sources');
+    // her jobs and schools are under Experience: the brief never repeats them
+    await expect(page.getByTestId('linkedin-history')).toContainText('Ramp');
+    await expect(debrief.getByTestId('debrief-career')).toHaveCount(0);
+    await expect(debrief.getByTestId('debrief-education')).toHaveCount(0);
     await expect(debrief.getByTestId('research-footer')).toHaveText(
       'Public professional sources only, every line cited, kept 90 days.',
     );
