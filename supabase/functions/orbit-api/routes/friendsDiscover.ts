@@ -31,6 +31,8 @@ import { nameOf, requestFriendship, userLite } from './friends.ts';
 export const SUGGEST_ON_ORBIT = 30;
 export const SUGGEST_TO_INVITE = 24;
 export const SEARCH_RESULTS = 20;
+/** the furthest "Show more" goes: nobody pages past this many, and a made-up number cannot ask for the table */
+export const SUGGEST_SHOWN_MAX = 2000;
 /** A standing link lasts this long; reset makes a new one at once. */
 export const LINK_DAYS = 90;
 const DAY_MS = 86_400_000;
@@ -212,7 +214,13 @@ export function inviteReason(r: InviteRow, school: string | null, now: Date): st
  * LinkedIn message from the student's account (only when that account is linked). Address-book entries and handles
  * ("jeff", "mbeltowski") are never offered.
  */
-async function toInvite(db: Db, me: string, school: string | null, now: Date): Promise<InviteSuggestion[]> {
+async function toInvite(
+  db: Db,
+  me: string,
+  school: string | null,
+  now: Date,
+  skip = 0,
+): Promise<{ rows: InviteSuggestion[]; more: boolean }> {
   const [li] = await db.sql<{ n: number }>`
     select count(*)::int as n from orbit.integration_accounts
      where user_id = ${me}::uuid and provider = 'linkedin' and status = 'active' and external_account_id is not null`;
@@ -236,7 +244,7 @@ async function toInvite(db: Db, me: string, school: string | null, now: Date): P
                         where fi.from_user_id = ${me}::uuid and fi.status = 'pending'
                           and (fi.to_person_id = p.id or fi.to_email = lower(p.primary_email)))
      order by closeness desc nulls last, (p.photo_url is not null) desc, p.last_interaction_at desc nulls last
-     limit ${SUGGEST_TO_INVITE * 3}`;
+     limit ${(skip + SUGGEST_TO_INVITE) * 3 + 1}`;
   const score = (r: InviteRow) => {
     const days = r.last_interaction_at
       ? (now.getTime() - new Date(r.last_interaction_at).getTime()) / DAY_MS
@@ -251,32 +259,50 @@ async function toInvite(db: Db, me: string, school: string | null, now: Date): P
       (r.photo_url ? 5 : 0)
     );
   };
-  return rows
-    .sort((a, b) => score(b) - score(a))
-    .slice(0, SUGGEST_TO_INVITE)
-    .map((r) => ({
+  // the next batch after `skip`: the same order every time (closeness, then the person's id), so a later page
+  // never repeats or drops anyone the student has already been shown
+  const ranked = rows.sort((a, b) => score(b) - score(a) || a.id.localeCompare(b.id));
+  const page = ranked.slice(skip, skip + SUGGEST_TO_INVITE).map(
+    (r): InviteSuggestion => ({
       personId: r.id,
       name: r.display_name,
       photoUrl: r.photo_url,
       headline: r.title && r.org_raw ? `${r.title} at ${r.org_raw}` : (r.org_raw ?? r.title),
       reason: inviteReason(r, school, now),
       via: r.has_email ? 'email' : 'linkedin',
-    }));
+    }),
+  );
+  return { rows: page, more: ranked.length > skip + SUGGEST_TO_INVITE };
+}
+
+/** How many the student has already been shown, from the request: a whole number from 0 up, else 0. */
+function shown(b: Record<string, unknown>, key: string): number {
+  const v = Number(b[key]);
+  return Number.isInteger(v) && v > 0 ? Math.min(v, SUGGEST_SHOWN_MAX) : 0;
 }
 
 async function suggest(ctx: Ctx): Promise<Response> {
   const me = ctx.userId!;
   const now = ctx.now();
   const u = await userLite(ctx.db, me);
-  const found = await candidates(ctx.db, me, { tied: true, limit: SUGGEST_ON_ORBIT });
+  // "Show more": the batch after the ones already on screen, for either list
+  const b = ctx.req.method === 'POST' ? await body(ctx, true) : {};
+  const skipOrbit = shown(b, 'onOrbitShown');
+  const skipInvite = shown(b, 'toInviteShown');
+  const found = await candidates(ctx.db, me, { tied: true, limit: skipOrbit + SUGGEST_ON_ORBIT + 1 });
   // someone who already asked the student is under Requests, not suggested again beside it
-  const onOrbit = found
+  const ranked = found
     .filter((c) => !(c.rel_status === 'pending' && c.requested_by !== me))
     .map((c) => ({ c, s: tieScore(c, now) }))
-    .sort((a, b) => b.s - a.s || b.c.connections - a.c.connections)
-    .slice(0, SUGGEST_ON_ORBIT)
-    .map(({ c }) => view(c, me));
-  const out: FriendsSuggestResponse = { onOrbit, toInvite: await toInvite(ctx.db, me, u.school, now) };
+    .sort((a, b) => b.s - a.s || b.c.connections - a.c.connections || a.c.id.localeCompare(b.c.id));
+  const onOrbit = ranked.slice(skipOrbit, skipOrbit + SUGGEST_ON_ORBIT).map(({ c }) => view(c, me));
+  const invite = await toInvite(ctx.db, me, u.school, now, skipInvite);
+  const out: FriendsSuggestResponse = {
+    onOrbit,
+    toInvite: invite.rows,
+    moreOnOrbit: ranked.length > skipOrbit + SUGGEST_ON_ORBIT,
+    moreToInvite: invite.more,
+  };
   return json(200, out);
 }
 

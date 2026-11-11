@@ -209,4 +209,82 @@ test.describe('finding friends (plan 37 follow-up, fake orbit-api)', () => {
     await page.getByTestId('friends-link-reset').click();
     await expect(text).not.toContainText('standinglink0000000001');
   });
+
+  test('there is always a way to see more people to invite, until there is nobody left', async ({ page }) => {
+    const api = await signedInWithAna(page);
+    // sixty connections worth inviting: more than one batch from the server (24 at a time)
+    api.state.friendFinder.toInvite = Array.from({ length: 60 }, (_, i) => ({
+      personId: `p_inv_${String(i).padStart(2, '0')}`,
+      name: `Pat Number${String(i).padStart(2, '0')}`,
+      photoUrl: null,
+      headline: 'Engineer at Ramp',
+      reason: 'You know them well',
+      via: 'email' as const,
+    }));
+    await page.goto('friends');
+    const grid = page.getByTestId('friends-to-invite');
+    const tiles = grid.getByTestId('friend-invitee');
+    const more = grid.getByTestId('friends-to-invite-more');
+    // two rows first, and the count says there are more than the batch in hand
+    await expect(tiles).toHaveCount(10);
+    await expect(grid.getByTestId('friends-to-invite-count')).toHaveText('24+');
+    await expect(more).toHaveText(/Show more/);
+    // each tap adds three rows: from what is loaded, then from the server
+    const calls = () => api.calls.filter((c) => c.route === '/friends/suggest').length;
+    const before = calls();
+    await more.click();
+    await expect(tiles).toHaveCount(25);
+    expect(calls()).toBe(before + 1);
+    await more.click();
+    await expect(tiles).toHaveCount(40);
+    await more.click();
+    await expect(tiles).toHaveCount(55);
+    await more.click();
+    await expect(tiles).toHaveCount(60);
+    // everyone, once each, in the server's order
+    const names = await tiles.getByTestId('tile-name').allTextContents();
+    expect(new Set(names).size).toBe(60);
+    expect(names[0]).toBe('Pat Number00');
+    expect(names[59]).toBe('Pat Number59');
+    // the end says so, and the count is the real one
+    await expect(grid.getByTestId('friends-to-invite-end')).toHaveText('That is everyone');
+    await expect(more).toHaveCount(0);
+    await expect(grid.getByTestId('friends-to-invite-count')).toHaveText('60');
+    // and it folds back to two rows
+    await grid.getByTestId('friends-to-invite-fewer').click();
+    await expect(tiles).toHaveCount(10);
+    await expect(more).toBeVisible();
+  });
+
+  test('inviting someone and then asking for more never skips or repeats anyone', async ({ page }) => {
+    const api = await signedInWithAna(page);
+    api.state.friendFinder.toInvite = Array.from({ length: 30 }, (_, i) => ({
+      personId: `p_inv_${String(i).padStart(2, '0')}`,
+      name: `Pat Number${String(i).padStart(2, '0')}`,
+      photoUrl: null,
+      headline: 'Engineer at Ramp',
+      reason: 'You know them well',
+      via: 'email' as const,
+    }));
+    await page.goto('friends');
+    const grid = page.getByTestId('friends-to-invite');
+    const tiles = grid.getByTestId('friend-invitee');
+    await expect(tiles).toHaveCount(10);
+    // invite the first two: they leave the server's list, so the next batch starts two earlier
+    await tiles
+      .nth(0)
+      .getByRole('button', { name: /invite/i })
+      .click();
+    await tiles
+      .nth(1)
+      .getByRole('button', { name: /invite/i })
+      .click();
+    await expect.poll(() => api.state.friendFinder.invitedPeople.length).toBe(2);
+    await grid.getByTestId('friends-to-invite-more').click();
+    await grid.getByTestId('friends-to-invite-more').click();
+    await expect(tiles).toHaveCount(30);
+    const names = await tiles.getByTestId('tile-name').allTextContents();
+    expect(new Set(names).size).toBe(30);
+    await expect(grid.getByTestId('friends-to-invite-end')).toBeVisible();
+  });
 });

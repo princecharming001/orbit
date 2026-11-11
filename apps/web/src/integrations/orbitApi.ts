@@ -293,7 +293,7 @@ export interface ApiRoutes {
   '/friends/asks': [FriendAskRequest | Record<string, never>, FriendAskResponse | FriendAsksResponse];
   '/friends/asks/respond': [FriendAskRespondByIdRequest, FriendAskRespondResponse];
   // finding friends (plan 37 follow-up)
-  '/friends/suggest': [Record<string, never>, FriendsSuggestResponse];
+  '/friends/suggest': [{ onOrbitShown?: number; toInviteShown?: number }, FriendsSuggestResponse];
   '/friends/search': [{ q: string }, FriendsSearchResponse];
   '/friends/request': [{ userId: string }, FriendsRequestResponse];
   '/friends/link': [{ reset?: boolean }, FriendsLinkResponse];

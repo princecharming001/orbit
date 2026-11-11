@@ -150,7 +150,12 @@ export function FriendsPage() {
     [asks, userId],
   );
   // finding friends (plan 37 follow-up)
-  const [suggested, setSuggested] = useState<{ onOrbit: FriendSuggestion[]; toInvite: InviteSuggestion[] }>();
+  const [suggested, setSuggested] = useState<{
+    onOrbit: FriendSuggestion[];
+    toInvite: InviteSuggestion[];
+    moreOnOrbit?: boolean;
+    moreToInvite?: boolean;
+  }>();
   const [tiles, setTiles] = useState<Record<string, TileState>>({});
   const [query, setQuery] = useState('');
   const [results, setResults] = useState<FriendSuggestion[]>();
@@ -356,6 +361,36 @@ export function FriendsPage() {
 
   const onOrbit = suggested?.onOrbit ?? [];
   const toInvite = suggested?.toInvite ?? [];
+  /**
+   * "Show more": the batch after the ones on screen. Someone invited in this visit has left the server's list, so
+   * they are not counted as shown; anyone who comes back twice is dropped.
+   */
+  const loadMore = async (which: 'onOrbit' | 'toInvite') => {
+    if (!user || !suggested) return;
+    const stillListed =
+      which === 'toInvite'
+        ? suggested.toInvite.filter((x) => (tiles[x.personId] ?? 'none') === 'none').length
+        : suggested.onOrbit.length;
+    const r = await suggestFriends(user, { [which]: stillListed });
+    if (!r.ok) return;
+    setSuggested((cur) => {
+      if (!cur) return cur;
+      if (which === 'toInvite') {
+        const have = new Set(cur.toInvite.map((x) => x.personId));
+        return {
+          ...cur,
+          toInvite: [...cur.toInvite, ...r.value.toInvite.filter((x) => !have.has(x.personId))],
+          moreToInvite: r.value.moreToInvite,
+        };
+      }
+      const have = new Set(cur.onOrbit.map((x) => x.userId));
+      return {
+        ...cur,
+        onOrbit: [...cur.onOrbit, ...r.value.onOrbit.filter((x) => !have.has(x.userId))],
+        moreOnOrbit: r.value.moreOnOrbit,
+      };
+    });
+  };
   const searching = query.length >= 2;
   return (
     <>
@@ -416,6 +451,8 @@ export function FriendsPage() {
             count={onOrbit.length}
             loading={!suggested}
             testId="friends-on-orbit"
+            hasMore={suggested?.moreOnOrbit}
+            onMore={() => loadMore('onOrbit')}
             empty={<GhostTiles label="Friends who join show up here" testId="friends-on-orbit-empty" />}
           >
             {(limit) =>
@@ -437,6 +474,8 @@ export function FriendsPage() {
             count={toInvite.length}
             loading={!suggested}
             testId="friends-to-invite"
+            hasMore={suggested?.moreToInvite}
+            onMore={() => loadMore('toInvite')}
             empty={<GhostTiles label="Everyone you know well is invited" />}
           >
             {(limit) =>

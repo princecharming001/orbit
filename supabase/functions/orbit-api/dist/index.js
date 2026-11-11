@@ -17889,6 +17889,7 @@ var friendRoutes = {
 var SUGGEST_ON_ORBIT = 30;
 var SUGGEST_TO_INVITE = 24;
 var SEARCH_RESULTS = 20;
+var SUGGEST_SHOWN_MAX = 2e3;
 var LINK_DAYS = 90;
 var DAY_MS2 = 864e5;
 async function candidates(db2, me2, opts) {
@@ -17999,7 +18000,7 @@ function inviteReason(r, school, now) {
   if (days !== null && days <= 45) return "You talked recently";
   return "In your People";
 }
-async function toInvite(db2, me2, school, now) {
+async function toInvite(db2, me2, school, now, skip = 0) {
   const [li] = await db2.sql`
     select count(*)::int as n from orbit.integration_accounts
      where user_id = ${me2}::uuid and provider = 'linkedin' and status = 'active' and external_account_id is not null`;
@@ -18023,12 +18024,13 @@ async function toInvite(db2, me2, school, now) {
                         where fi.from_user_id = ${me2}::uuid and fi.status = 'pending'
                           and (fi.to_person_id = p.id or fi.to_email = lower(p.primary_email)))
      order by closeness desc nulls last, (p.photo_url is not null) desc, p.last_interaction_at desc nulls last
-     limit ${SUGGEST_TO_INVITE * 3}`;
+     limit ${(skip + SUGGEST_TO_INVITE) * 3 + 1}`;
   const score = (r) => {
     const days = r.last_interaction_at ? (now.getTime() - new Date(r.last_interaction_at).getTime()) / DAY_MS2 : Number.POSITIVE_INFINITY;
     return (r.closeness ?? 0) + (r.is_alumni ? 15 : 0) + (["peer", "classmate", "friend", "family_friend", "colleague"].includes(r.relationship_type ?? "") ? 10 : 0) + (days <= 60 ? 10 : 0) + (r.photo_url ? 5 : 0);
   };
-  return rows.sort((a, b) => score(b) - score(a)).slice(0, SUGGEST_TO_INVITE).map((r) => ({
+  const ranked = rows.sort((a, b) => score(b) - score(a) || a.id.localeCompare(b.id));
+  const page2 = ranked.slice(skip, skip + SUGGEST_TO_INVITE).map((r) => ({
     personId: r.id,
     name: r.display_name,
     photoUrl: r.photo_url,
@@ -18036,14 +18038,29 @@ async function toInvite(db2, me2, school, now) {
     reason: inviteReason(r, school, now),
     via: r.has_email ? "email" : "linkedin"
   }));
+  return { rows: page2, more: ranked.length > skip + SUGGEST_TO_INVITE };
+}
+function shown(b, key) {
+  const v = Number(b[key]);
+  return Number.isInteger(v) && v > 0 ? Math.min(v, SUGGEST_SHOWN_MAX) : 0;
 }
 async function suggest(ctx) {
   const me2 = ctx.userId;
   const now = ctx.now();
   const u2 = await userLite(ctx.db, me2);
-  const found = await candidates(ctx.db, me2, { tied: true, limit: SUGGEST_ON_ORBIT });
-  const onOrbit = found.filter((c) => !(c.rel_status === "pending" && c.requested_by !== me2)).map((c) => ({ c, s: tieScore(c, now) })).sort((a, b) => b.s - a.s || b.c.connections - a.c.connections).slice(0, SUGGEST_ON_ORBIT).map(({ c }) => view(c, me2));
-  const out = { onOrbit, toInvite: await toInvite(ctx.db, me2, u2.school, now) };
+  const b = ctx.req.method === "POST" ? await body(ctx, true) : {};
+  const skipOrbit = shown(b, "onOrbitShown");
+  const skipInvite = shown(b, "toInviteShown");
+  const found = await candidates(ctx.db, me2, { tied: true, limit: skipOrbit + SUGGEST_ON_ORBIT + 1 });
+  const ranked = found.filter((c) => !(c.rel_status === "pending" && c.requested_by !== me2)).map((c) => ({ c, s: tieScore(c, now) })).sort((a, b2) => b2.s - a.s || b2.c.connections - a.c.connections || a.c.id.localeCompare(b2.c.id));
+  const onOrbit = ranked.slice(skipOrbit, skipOrbit + SUGGEST_ON_ORBIT).map(({ c }) => view(c, me2));
+  const invite2 = await toInvite(ctx.db, me2, u2.school, now, skipInvite);
+  const out = {
+    onOrbit,
+    toInvite: invite2.rows,
+    moreOnOrbit: ranked.length > skipOrbit + SUGGEST_ON_ORBIT,
+    moreToInvite: invite2.more
+  };
   return json(200, out);
 }
 async function search(ctx) {

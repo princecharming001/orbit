@@ -447,9 +447,17 @@ export function createFakeOrbitApi(
           const { email: _e, ...rest } = x;
           return ff.requests.includes(x.userId) ? { ...rest, state: 'requested' } : rest;
         };
+        // batches like the server's: 30 on Orbit, 24 to invite, after the ones already shown
+        const skip = (k: string) =>
+          Number.isInteger(body[k]) && (body[k] as number) > 0 ? (body[k] as number) : 0;
+        const orbit = ff.onOrbit.filter((x) => x.state !== 'incoming').map(view);
+        const invite = ff.toInvite.filter((p) => !ff.invitedPeople.includes(p.personId));
+        const [so, si] = [skip('onOrbitShown'), skip('toInviteShown')];
         return json(200, {
-          onOrbit: ff.onOrbit.filter((x) => x.state !== 'incoming').map(view),
-          toInvite: ff.toInvite.filter((p) => !ff.invitedPeople.includes(p.personId)),
+          onOrbit: orbit.slice(so, so + 30),
+          toInvite: invite.slice(si, si + 24),
+          moreOnOrbit: orbit.length > so + 30,
+          moreToInvite: invite.length > si + 24,
         });
       }
       case '/friends/search': {

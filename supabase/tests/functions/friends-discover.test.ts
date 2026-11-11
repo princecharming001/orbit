@@ -1,4 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { SUGGEST_TO_INVITE } from '../../functions/orbit-api/routes/friendsDiscover.ts';
 import { addPerson, api, fakeNet, jsonRes, signedInUser } from '../helpers/agents.ts';
 import { freshDb, type TestDb } from '../helpers/pglite.ts';
 
@@ -120,6 +121,54 @@ describe('finding friends over orbit-api', () => {
     expect(by('Ana Rivera').personId).toMatch(/^[0-9a-f-]{36}$/);
     expect(by('Cara Rivera').personId).toBeUndefined();
     expect(JSON.stringify(r.body)).not.toMatch(/@example\.(com|org)/);
+  });
+
+  it('there is always a next batch to ask for, until there is nobody left, and nobody comes twice', async () => {
+    const w = await world();
+    type Page = { toInvite: Invitee[]; moreToInvite?: boolean; onOrbit: Suggestion[]; moreOnOrbit?: boolean };
+    const first = await w.call<Page>('/friends/suggest', w.maya.token, {});
+    // a handful of connections: one batch holds them all, and it says so
+    expect(first.body.moreToInvite).toBe(false);
+    expect(first.body.moreOnOrbit).toBe(false);
+    const before = first.body.toInvite.length;
+    // sixty more connections: three batches
+    for (let i = 0; i < 60; i++)
+      await addPerson(t, w.maya.userId, {
+        name: `Pat Number${String(i).padStart(2, '0')}`,
+        email: `pat${i}@example.org`,
+        memberId: `ACoPat${i}`,
+        score: 70 - (i % 50),
+      });
+    const total = before + 60;
+    const seen: string[] = [];
+    let shown = 0;
+    let more = true;
+    let pages = 0;
+    while (more && pages < 10) {
+      const r = await w.call<Page>('/friends/suggest', w.maya.token, { toInviteShown: shown });
+      expect(r.status).toBe(200);
+      seen.push(...r.body.toInvite.map((x) => x.personId));
+      shown += r.body.toInvite.length;
+      more = r.body.moreToInvite === true;
+      pages++;
+      if (more) expect(r.body.toInvite).toHaveLength(SUGGEST_TO_INVITE);
+    }
+    expect(pages).toBe(Math.ceil(total / SUGGEST_TO_INVITE));
+    expect(seen).toHaveLength(total);
+    expect(new Set(seen).size).toBe(total);
+    // the first batch is the same people as before paging existed: the closest ones
+    const again = await w.call<Page>('/friends/suggest', w.maya.token, {});
+    expect(again.body.toInvite.map((x) => x.personId)).toEqual(seen.slice(0, SUGGEST_TO_INVITE));
+    expect(again.body.moreToInvite).toBe(true);
+    // past the end, and a number that is not one: an empty batch, never an error
+    const past = await w.call<Page>('/friends/suggest', w.maya.token, { toInviteShown: 5000 });
+    expect(past.body.toInvite).toEqual([]);
+    expect(past.body.moreToInvite).toBe(false);
+    const junk = await w.call<Page>('/friends/suggest', w.maya.token, {
+      toInviteShown: 'lots',
+      onOrbitShown: -3,
+    });
+    expect(junk.body.toInvite).toHaveLength(SUGGEST_TO_INVITE);
   });
 
   it('suggests LinkedIn connections to invite, closest first: never a recruiter, an address book entry or a handle', async () => {

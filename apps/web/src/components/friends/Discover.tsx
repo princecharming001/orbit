@@ -5,7 +5,7 @@
  * card without a photo shows a plain silhouette, never letters made up from the name.
  */
 import type { FriendSuggestion, InviteSuggestion } from '@orbit/core';
-import { Check, Linkedin, Mail, Search, UserPlus, UserRound } from 'lucide-react';
+import { Check, ChevronDown, Linkedin, Mail, Search, UserPlus, UserRound } from 'lucide-react';
 import { type ReactNode, useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { Button, cx, Input, Skeleton } from '../../ui';
@@ -183,7 +183,14 @@ export function TileButton({
   );
 }
 
-/** A titled grid of tiles with See more, folded to two rows. */
+/** How many tiles each "Show more" adds: three rows of five. */
+export const TILES_STEP = 15;
+
+/**
+ * A titled grid of tiles, folded to two rows, with one quiet control under it: "Show more" adds three rows at a
+ * time, first from what is loaded and then from the server (`onMore`) for as long as there is anyone left
+ * (`hasMore`), so the list never just ends. "Show fewer" folds it back.
+ */
 export function TileSection({
   title,
   count,
@@ -191,6 +198,8 @@ export function TileSection({
   children,
   empty,
   loading,
+  hasMore,
+  onMore,
 }: {
   title: string;
   count: number;
@@ -198,21 +207,39 @@ export function TileSection({
   children: (limit: number) => ReactNode;
   empty?: ReactNode;
   loading?: boolean;
+  /** the server holds more than `count` */
+  hasMore?: boolean;
+  /** load the next batch; `count` grows when it lands */
+  onMore?: () => Promise<void> | void;
 }) {
-  const [open, setOpen] = useState(false);
-  const fold = count > TILES_FOLDED;
+  const [shown, setShown] = useState(TILES_FOLDED);
+  const [busy, setBusy] = useState(false);
+  const visible = Math.min(shown, count);
+  const more = visible < count || (!!hasMore && !!onMore);
+  const showMore = async () => {
+    const next = shown + TILES_STEP;
+    if (next > count && hasMore && onMore) {
+      setBusy(true);
+      try {
+        await onMore();
+      } finally {
+        setBusy(false);
+      }
+    }
+    setShown(next);
+  };
   return (
     <section data-testid={testId}>
       <div className="flex items-center justify-between gap-3 mb-3">
         <h2 className="text-[16px] font-semibold">
           {title}
-          {count > 0 && <span className="ml-2 font-normal text-ink-3">{count}</span>}
+          {count > 0 && (
+            <span className="ml-2 font-normal text-ink-3" data-testid={`${testId}-count`}>
+              {count}
+              {hasMore ? '+' : ''}
+            </span>
+          )}
         </h2>
-        {fold && (
-          <Button size="sm" variant="ghost" onClick={() => setOpen((v) => !v)} data-testid={`${testId}-more`}>
-            {open ? 'See fewer' : 'See more'}
-          </Button>
-        )}
       </div>
       {loading ? (
         <ul className={GRID} aria-busy>
@@ -225,7 +252,47 @@ export function TileSection({
           ))}
         </ul>
       ) : count ? (
-        <ul className={GRID}>{children(open || !fold ? count : TILES_FOLDED)}</ul>
+        <>
+          <ul className={GRID}>{children(visible)}</ul>
+          {(more || visible > TILES_FOLDED) && (
+            <div className="mt-5 flex items-center gap-4 text-[13px]" data-testid={`${testId}-pager`}>
+              <span className="h-px flex-1 bg-line" aria-hidden />
+              {more ? (
+                <button
+                  type="button"
+                  onClick={() => void showMore()}
+                  disabled={busy}
+                  className={cx(
+                    TAP,
+                    'inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 font-medium text-ink-2 hover:bg-canvas-2 hover:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:opacity-60',
+                  )}
+                  data-testid={`${testId}-more`}
+                >
+                  {busy ? 'Loading' : 'Show more'}
+                  <ChevronDown size={14} aria-hidden className={busy ? 'animate-pulse' : undefined} />
+                </button>
+              ) : (
+                <span className="text-ink-3" data-testid={`${testId}-end`}>
+                  That is everyone
+                </span>
+              )}
+              {visible > TILES_FOLDED && (
+                <button
+                  type="button"
+                  onClick={() => setShown(TILES_FOLDED)}
+                  className={cx(
+                    TAP,
+                    'rounded-full px-2 py-1.5 text-ink-3 hover:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40',
+                  )}
+                  data-testid={`${testId}-fewer`}
+                >
+                  Show fewer
+                </button>
+              )}
+              <span className="h-px flex-1 bg-line" aria-hidden />
+            </div>
+          )}
+        </>
       ) : (
         empty
       )}

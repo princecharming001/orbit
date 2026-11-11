@@ -132,9 +132,16 @@ export async function invitePerson(user: Pick<User, 'id'>, personId: string) {
 }
 
 /** People on Orbit the student may know, and people in their People worth inviting (plan 37 follow-up). */
-export async function suggestFriends(user: Pick<User, 'id'>): Promise<FriendsResult<FriendsSuggestResponse>> {
+export async function suggestFriends(
+  user: Pick<User, 'id'>,
+  /** "Show more": how many of each list are already on screen; the answer is the batch after them */
+  shown: { onOrbit?: number; toInvite?: number } = {},
+): Promise<FriendsResult<FriendsSuggestResponse>> {
   if (!friendsAvailable(user)) return needsAccount();
-  const r = await callApi('/friends/suggest', {});
+  const r = await callApi('/friends/suggest', {
+    ...(shown.onOrbit ? { onOrbitShown: shown.onOrbit } : {}),
+    ...(shown.toInvite ? { toInviteShown: shown.toInvite } : {}),
+  });
   if (!r.ok) return fail(r);
   return { ok: true, value: r.value };
 }

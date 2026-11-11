@@ -696,9 +696,13 @@ export interface InviteSuggestion {
   via: 'email' | 'linkedin';
 }
 /** POST /friends/suggest: people on Orbit the student may know, and people worth inviting, best first */
+/** Sent with `onOrbitShown` / `toInviteShown` (how many are already on screen), it answers the batch after them. */
 export interface FriendsSuggestResponse {
   onOrbit: FriendSuggestion[];
   toInvite: InviteSuggestion[];
+  /** there are more of each beyond this batch ("Show more") */
+  moreOnOrbit?: boolean;
+  moreToInvite?: boolean;
 }
 /** POST /friends/search { q }: someone on Orbit by name (among people with a tie to the student) or by exact email */
 export interface FriendsSearchResponse {
