@@ -2,6 +2,7 @@ import type { GoalKind, OwnWordsKey, User } from '@orbit/core';
 import {
   answeredCount,
   CURRENT_JOB_MAX,
+  countryForTimeZone,
   currentJobInput,
   currentJobLabel,
   FUNCTION_LABELS,
@@ -57,6 +58,7 @@ import {
   ObTextArea,
   OnboardingLayout,
 } from '../components/onboarding/OnboardingLayout';
+import { PhoneField, type PhoneValue } from '../components/PhoneField';
 import { useWeeklyLimits, WeeklyTargetSlider } from '../components/WeeklyTargetSlider';
 import { suggestCompanies } from '../data/companies';
 import { suggestSchools } from '../data/schools';
@@ -67,6 +69,7 @@ import { archiveGoal, GOAL_KIND_LABELS, GOAL_KIND_TITLES, listGoals, saveGoal } 
 import { connectAndSyncGoogle } from '../engine/integrations';
 import { connectionsText, importLinkedInExport } from '../engine/linkedin';
 import { connectLinkedInLive, liveLinkedInAvailable } from '../engine/linkedinLive';
+import { saveContact } from '../engine/notify';
 import { type OwnWordsPatch, saveOwnWords } from '../engine/ownWords';
 import { saveResume } from '../engine/resume';
 import { pullNow } from '../engine/serverSync';
@@ -130,6 +133,7 @@ export function Onboarding() {
       [STEP.job]: !!w.currentJob,
       [STEP.linkedin]: ints.some((i) => isLinkedIn(i.provider)),
       [STEP.gmail]: ints.some((i) => i.provider === 'google'),
+      [STEP.phone]: !!(await db.kv.get(phoneGivenKey(user.id)))?.value,
     } as Record<number, boolean>;
   }, [user?.id]);
   const google = !!googleClientId();
@@ -197,6 +201,13 @@ export function Onboarding() {
     );
   else if (step === STEP.linkedin)
     body = <StepLinkedIn signedIn={signedIn} onNext={() => go(after(STEP.linkedin))} />;
+  else if (step === STEP.phone)
+    body = (
+      <StepPhone
+        email={signedIn ? (account.user?.email ?? user.email) : user.email}
+        onNext={() => go(after(STEP.phone))}
+      />
+    );
   else if (step === STEP.gmail) body = <StepGmail onNext={() => go(after(STEP.gmail))} />;
   else if (step === STEP.ready)
     body = (
@@ -1472,6 +1483,91 @@ function StepLinkedIn({ onNext, signedIn }: { onNext: () => void; signedIn?: boo
         )}
       </div>
     </div>
+  );
+}
+
+/** Setup's own record that a number was given here, so the progress bar shows the step as done, not skipped. */
+const phoneGivenKey = (userId: string) => `onboarding:phone:${userId}`;
+
+/**
+ * Plan 40: a phone number for the "Orbit is ready" text. The import takes a few minutes, so the student can leave
+ * and hear when it is done; the email goes either way. Optional: Skip keeps the email only.
+ */
+function StepPhone({ email, onNext }: { email?: string; onNext: () => void }) {
+  const user = useSession().user!;
+  const [phone, setPhone] = useState<PhoneValue>();
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string>();
+  const saved = useLiveQuery(() => db.kv.get(phoneGivenKey(user.id)), [user.id]);
+  const given = (saved?.value ?? undefined) as { e164?: string; country?: string } | undefined;
+  const save = async () => {
+    if (!phone?.valid || !phone.e164) return;
+    setBusy(true);
+    setError(undefined);
+    try {
+      const r = await saveContact(user, { phone: phone.e164, country: phone.country, smsOn: true });
+      if (!r.ok) {
+        setError(r.message);
+        return;
+      }
+      await db.kv.put({ key: phoneGivenKey(user.id), value: { e164: phone.e164, country: phone.country } });
+      onNext();
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <form
+      onSubmit={(e) => {
+        e.preventDefault();
+        void save();
+      }}
+      data-testid="ob-phone"
+    >
+      <ObHeader
+        title="Get a text when Orbit is ready"
+        subtitle={
+          <>
+            Importing your network takes a few minutes. We'll text you
+            {email ? (
+              <>
+                , and email you at <span className="text-ink-2">{email}</span>,
+              </>
+            ) : null}{' '}
+            the moment it's done.
+          </>
+        }
+      />
+      <ObLabel htmlFor="ob-phone-input">Mobile number</ObLabel>
+      <PhoneField
+        id="ob-phone-input"
+        label="Mobile number"
+        autoFocus
+        value={given}
+        defaultCountry={countryForTimeZone(user.timezone) ?? 'US'}
+        onChange={setPhone}
+      />
+      {error && (
+        <p className="mt-2 text-[13px] text-bad" role="alert" data-testid="ob-phone-error">
+          {error}
+        </p>
+      )}
+      <p className="mt-3 text-[12.5px] leading-[1.5] text-ink-3">
+        Only for telling you Orbit is ready. You can remove it any time in Settings, Profile.
+      </p>
+      <ObPrimary type="submit" className="mt-8" disabled={!phone?.valid || busy} data-testid="ob-phone-save">
+        {busy ? (
+          <>
+            <Spinner className="border-white/30 border-t-white" /> Saving…
+          </>
+        ) : (
+          'Continue'
+        )}
+      </ObPrimary>
+      <ObQuiet className="mt-3" type="button" onClick={onNext} data-testid="ob-phone-skip">
+        Skip, just email me
+      </ObQuiet>
+    </form>
   );
 }
 

@@ -20,6 +20,8 @@ export const STEP = {
   style: 3.8,
   job: 3.9,
   linkedin: 4,
+  /** plan 40: a phone number for the "Orbit is ready" text; 4.5 never meant anything in an older setup */
+  phone: 4.5,
   gmail: 5,
   ready: 6,
 } as const;
@@ -35,6 +37,7 @@ export const STEP_TITLES: Record<number, string> = {
   [STEP.style]: 'How Orbit helps',
   [STEP.job]: 'A job',
   [STEP.linkedin]: 'LinkedIn',
+  [STEP.phone]: 'Phone',
   [STEP.gmail]: 'Gmail',
   [STEP.ready]: 'Ready',
 };
@@ -49,11 +52,17 @@ const WORD_ADDRESS: Record<number, string> = {
   [STEP.people]: 'people',
   [STEP.style]: 'style',
   [STEP.job]: 'job',
+  [STEP.phone]: 'phone',
 };
 const STEP_OF_WORD = new Map(Object.entries(WORD_ADDRESS).map(([n, w]) => [w, Number(n)]));
 
 /** Steps the student may skip; the progress bar marks a skipped one as skipped, never as done. */
-export const OPTIONAL_STEPS: ReadonlySet<number> = new Set([...QUESTION_STEPS, STEP.linkedin, STEP.gmail]);
+export const OPTIONAL_STEPS: ReadonlySet<number> = new Set([
+  ...QUESTION_STEPS,
+  STEP.linkedin,
+  STEP.phone,
+  STEP.gmail,
+]);
 
 /**
  * The steps shown, in order. Gmail is a step only on a copy of Orbit where Google sign-in is set up: a step that could
@@ -61,7 +70,7 @@ export const OPTIONAL_STEPS: ReadonlySet<number> = new Set([...QUESTION_STEPS, S
  * sign-in, so there is no Gmail step.
  */
 export function visibleSteps(google: boolean, account = false): number[] {
-  const start = [STEP.welcome, STEP.you, STEP.goals, ...QUESTION_STEPS, STEP.linkedin];
+  const start = [STEP.welcome, STEP.you, STEP.goals, ...QUESTION_STEPS, STEP.linkedin, STEP.phone];
   if (account) return [...start, STEP.ready];
   return google ? [...start, STEP.gmail, STEP.ready] : [...start, STEP.ready];
 }

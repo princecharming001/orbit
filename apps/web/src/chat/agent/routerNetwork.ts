@@ -585,6 +585,13 @@ export function routeNetwork(text: string, lower: string, h: NetworkHelpers): Ro
       return h.viaTool('remember', { text: what.slice(0, 300), kind }, undefined, 'remember something');
     }
   }
+  // plan 40: the student's own number, for a text when Orbit is ready ("text me at 415 555 0123", "my cell is ...")
+  {
+    const m = text.match(
+      /^(?:(?:you can )?text me (?:at|on)|(?:here'?s |this is )?my (?:phone|cell|mobile|number|phone number|cell number)(?: number)?(?: is|:)?|(?:my )?(?:phone|cell|number):?)\s*(\+?[\d\s().-]{7,22}\d)\b(?:\s*(?:when|once|if)\b.*)?[.!]?$/i,
+    );
+    if (m) return h.viaTool('save_phone', { phone: m[1]!.trim() }, undefined, 'save your number');
+  }
   // an earlier conversation with Orbit (plan 39): "what were we talking about", "pick up where we left off",
   // "find that list you gave me last week", "what did I ask you about Ramp before"
   {

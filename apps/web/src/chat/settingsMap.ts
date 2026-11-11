@@ -289,6 +289,14 @@ export const SETTINGS: SettingSpot[] = [
     words: /\b(grad(uation)? year|class of|when i graduate)\b/i,
   },
   {
+    id: 'phone',
+    label: 'Phone',
+    section: 'profile',
+    target: '[data-testid="settings-phone"]',
+    what: 'The number Orbit texts when your network is ready, and whether to email or text you.',
+    words: /\b(phone|mobile|cell|text me|sms)\b/i,
+  },
+  {
     id: 'timezone',
     label: 'Time zone',
     section: 'profile',

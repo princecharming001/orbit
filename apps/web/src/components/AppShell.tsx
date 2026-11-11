@@ -45,6 +45,7 @@ import { MorningBrief } from './MorningBrief';
 import { NotesWatch } from './NotesWatch';
 import { OutboxScheduler } from './OutboxScheduler';
 import { ReplyWatch } from './ReplyWatch';
+import { ReadinessChip, ReadinessWatch } from './sync/ReadinessChip';
 import { useLogOut } from './useLogOut';
 import { WeekReviewLauncher } from './WeekReview';
 
@@ -267,6 +268,7 @@ export function AppShell() {
       <LinkedInAutoSync />
       <MeetingNotesAutoSync />
       <LinkedInProgressBanner />
+      <ReadinessWatch />
       <MorningBrief />
       <RatePrompt />
       <aside
@@ -318,6 +320,8 @@ export function AppShell() {
         {expanded && <Recent chat={chat} />}
         <div className={cx('mt-auto pb-3 pt-2 flex flex-col gap-0.5', !expanded && 'items-center')}>
           {/* what Orbit is doing, in one quiet line above the account row (plan 23 §4.7) */}
+          {/* plan 40: where the first import stands, and the checklist behind it */}
+          <ReadinessChip compact={!expanded} className={expanded ? 'mb-0.5' : undefined} />
           <ActivityLine compact={!expanded} className={expanded ? 'mb-1' : undefined} />
           {railLink('/settings', 'Settings', Settings)}
           {user && <AccountMenu user={user} gmail={gmail} expanded={expanded} />}
@@ -413,6 +417,7 @@ export function AppShell() {
                   <X size={16} />
                 </button>
               </div>
+              <ReadinessChip className="px-0.5" />
               <ActivityLine below className="px-0.5 pb-1" />
               {PHONE_MORE.map(({ to, label, icon: Icon }) => (
                 <NavLink

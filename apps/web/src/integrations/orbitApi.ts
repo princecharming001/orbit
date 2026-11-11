@@ -15,6 +15,7 @@
  * 401. Refresh tokens rotate on every use, so tabs refresh one at a time (a Web Lock where there is one) and tell
  * each other the new pair on a BroadcastChannel.
  */
+import type { Readiness } from '@orbit/core';
 import type {
   AutonomyRequest,
   AutopilotDismissRequest,
@@ -179,6 +180,34 @@ export interface SyncStatus {
   setup?: boolean;
 }
 
+/** POST /notify/status: the first import's readiness as the server works it out, and how the student is told. */
+export interface NotifyStatus {
+  readiness: Readiness;
+  contact: {
+    /** the account's email: where "Orbit is ready" goes */
+    email: string | null;
+    /** E.164 ("+14155550123"), when the student gave one */
+    phone: string | null;
+    /** ISO country the number was entered for ("US") */
+    country: string | null;
+    emailOn: boolean;
+    smsOn: boolean;
+  };
+  /** when "Orbit is ready" went out, if it has */
+  notifiedAt: string | null;
+  /** texting is set up on this server (an SMS provider's keys are saved) */
+  smsAvailable: boolean;
+  emailAvailable: boolean;
+}
+
+/** POST /notify/contact: a phone number (or none) and which ways to be told. */
+export interface NotifyContactRequest {
+  phone?: string | null;
+  country?: string | null;
+  emailOn?: boolean;
+  smsOn?: boolean;
+}
+
 /** POST /sync/pull */
 export interface SyncPullRequest {
   cursor?: string;
@@ -297,6 +326,9 @@ export interface ApiRoutes {
   '/friends/search': [{ q: string }, FriendsSearchResponse];
   '/friends/request': [{ userId: string }, FriendsRequestResponse];
   '/friends/link': [{ reset?: boolean }, FriendsLinkResponse];
+  // plan 40: where the first import stands, and how to tell the student it is done (orbit-notify)
+  '/notify/status': [Record<string, never>, NotifyStatus];
+  '/notify/contact': [NotifyContactRequest, NotifyStatus];
   // the student's voice (plan 29 §B2.4)
   '/voice': [Record<string, never>, VoiceResponse];
   '/voice/notes': [VoiceNoteRequest, VoiceNoteResponse];
@@ -415,7 +447,9 @@ async function rawCall(
   opts: { token?: string; method?: 'GET' | 'POST'; signal?: AbortSignal } = {},
 ): Promise<Response | ApiFailure> {
   const waitMs = SLOW_ROUTES[route] ?? REQUEST_TIMEOUT_MS;
-  const base = orbitApiBase();
+  // plan 40: /notify/* lives in its own function (orbit-notify), next to orbit-api, with the same session
+  const api = orbitApiBase();
+  const base = api && route.startsWith('/notify/') ? api.replace(/\/orbit-api$/, '/orbit-notify') : api;
   if (!base) return failure('off', NO_SERVER);
   const headers: Record<string, string> = { accept: 'application/json' };
   if (opts.token) headers.authorization = `Bearer ${opts.token}`;

@@ -939,14 +939,9 @@ function setStatus(s: SyncStatus | undefined): void {
   if (json === lastStatusJson) return;
   lastStatusJson = json;
   lastStatus = s;
-  // the status line: what the server still has queued for this account (the import, the reads it runs)
-  const pending = s?.jobs.pending ?? 0;
-  if (pending > 0)
-    startActivity(
-      'server-jobs',
-      `Orbit's server is reading your accounts · ${pending} ${pending === 1 ? 'job' : 'jobs'} left`,
-    );
-  else endActivity('server-jobs');
+  // what the server still has queued is shown by the setup chip (plan 40: components/sync/ReadinessChip), which
+  // says it per step; the activity line keeps to what this browser is doing
+  endActivity('server-jobs');
   for (const l of statusListeners) l(s);
 }
 

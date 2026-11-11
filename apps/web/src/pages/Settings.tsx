@@ -52,6 +52,7 @@ import {
   SettingsStack,
 } from '../components/settings/kit';
 import { OutreachCoach } from '../components/settings/OutreachCoach';
+import { PhoneSetting } from '../components/settings/PhoneSetting';
 import { useWeeklyLimits, WeeklyTargetSlider } from '../components/WeeklyTargetSlider';
 import { suggestCompanies } from '../data/companies';
 import {
@@ -512,6 +513,7 @@ function Profile() {
                 </optgroup>
               </Select>
             </div>
+            <PhoneSetting user={user} />
           </CardFields>
         </SettingsCard>
         <SettingsCard title="School">

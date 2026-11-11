@@ -3,6 +3,7 @@
  * and rotate, sync pages, goals, scores, dossiers, sourcing, routes, replies, memory and settings. It answers through
  * a `fetch` the client is pointed at (setOrbitApiFetchForTests), so no test ever reaches a real server.
  */
+import { readiness } from '@orbit/core';
 import type {
   AutopilotItem,
   AutopilotStatus,
@@ -52,6 +53,18 @@ export interface FakeState {
   pushed: { table: string; op: string; id: string; row?: Record<string, unknown> }[];
   /** push ids the server refuses, with the code */
   rejectPush: Map<string, string>;
+  /** plan 40: how the student hears "Orbit is ready", the queue the network step waits on, and LinkedIn's stage */
+  notify: {
+    phone: string | null;
+    country: string | null;
+    emailOn: boolean;
+    smsOn: boolean;
+    notifiedAt: string | null;
+    emailAvailable: boolean;
+    smsAvailable: boolean;
+    pending: number;
+    linkedinStage?: 'relations' | 'chats' | 'done';
+  };
   status: {
     counts: Record<string, number>;
     google: {
@@ -214,6 +227,16 @@ export function createFakeOrbitApi(
     pages: [],
     pushed: [],
     rejectPush: new Map(),
+    notify: {
+      phone: null,
+      country: null,
+      emailOn: true,
+      smsOn: false,
+      notifiedAt: null,
+      emailAvailable: true,
+      smsAvailable: true,
+      pending: 0,
+    },
     status: {
       counts: { people: 0, messages: 0, threads: 0, ties: 0, goals: 0, chats: 0, drafts: 0 },
       google: { status: 'active', backfill: { phase: 'recent', done: 0, total: null } },
@@ -801,6 +824,45 @@ export function createFakeOrbitApi(
           jobs: { pending: 0 },
           ...(state.status.marks ? { marks: state.status.marks } : {}),
         });
+      case '/notify/contact':
+      case '/notify/status': {
+        const n = state.notify;
+        if (route === '/notify/contact') {
+          if ('phone' in body) {
+            const phone = typeof body.phone === 'string' && body.phone ? body.phone : null;
+            if (phone && !/^\+[1-9]\d{6,14}$/.test(phone))
+              return json(400, { error: { code: 'bad_phone', message: 'That number does not look complete.' } });
+            n.phone = phone;
+            n.country = phone && typeof body.country === 'string' ? body.country : null;
+            if (!phone) n.smsOn = false;
+            else if (typeof body.smsOn !== 'boolean') n.smsOn = true;
+          }
+          if (typeof body.emailOn === 'boolean') n.emailOn = body.emailOn;
+          if (typeof body.smsOn === 'boolean' && n.phone) n.smsOn = body.smsOn;
+        }
+        const g = state.status.google;
+        return json(200, {
+          readiness: readiness({
+            google: { status: g.status, phase: g.backfill?.phase ?? 'recent', done: g.backfill?.done, total: g.backfill?.total },
+            linkedin:
+              state.linkedin.status === 'active'
+                ? { status: 'active', stage: n.linkedinStage ?? 'done', syncedAt: n.linkedinStage === 'done' || !n.linkedinStage ? 'x' : null }
+                : undefined,
+            pending: n.pending,
+            counts: state.status.counts,
+          }),
+          contact: {
+            email: state.user.email,
+            phone: n.phone,
+            country: n.country,
+            emailOn: n.emailOn,
+            smsOn: n.smsOn,
+          },
+          notifiedAt: n.notifiedAt,
+          emailAvailable: n.emailAvailable,
+          smsAvailable: n.smsAvailable,
+        });
+      }
       case '/sync/pull': {
         const at = typeof body.cursor === 'string' && body.cursor ? Number(body.cursor.slice(1)) : 0;
         const page = state.pages[at];

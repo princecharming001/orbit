@@ -9,8 +9,8 @@ describe('capability manifest', () => {
     // the 184 of the capability inventory plus the networking agent's 22 (plan 16, and plan 20's research), autopilot, and small talk (plan 19)
     // plus plan 23's job plan and chats, plan 28's playbook lookup, and plan 29's eight autopilot and five friends capabilities,
     // and plan 32's network search
-    expect(CAPABILITIES).toHaveLength(230);
-    expect(CAPABILITY_IDS.size).toBe(230);
+    expect(CAPABILITIES).toHaveLength(231);
+    expect(CAPABILITY_IDS.size).toBe(231);
     for (const c of CAPABILITIES) {
       expect(c.id).toMatch(/^[a-z0-9_]+$/);
       expect(c.area.length).toBeGreaterThan(0);
@@ -62,8 +62,8 @@ describe('registry coverage', () => {
     // five friends tools; plan 29 phase 3: the eight autopilot tools (the two voice ones honest stubs until phase 4);
     // plan 32: search_network and search_network_more; plan 35 A1: search_network_spec, the router's compiled form
     // (the model sees the flat search_network)
-    expect(names.length).toBe(115);
-    expect(names.length).toBeLessThanOrEqual(115);
+    expect(names.length).toBe(116);
+    expect(names.length).toBeLessThanOrEqual(116);
     expect(registry.size).toBe(names.length);
     const counts = toolCountByKind();
     expect(counts.read + counts.write + counts.risky).toBe(names.length);

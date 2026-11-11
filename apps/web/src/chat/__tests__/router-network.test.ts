@@ -262,3 +262,20 @@ describe('an earlier conversation with Orbit (plan 39)', () => {
       expect(chats(t), t).toBeUndefined();
   });
 });
+
+describe('a phone number for "Orbit is ready" (plan 40)', () => {
+  const phone = (text: string) => {
+    const r = routeUtterance(text, ctx());
+    return r.kind === 'tool' && r.tool === 'save_phone' ? (r.input as { phone: string }).phone : undefined;
+  };
+  it('saves the number the student gives as their own', () => {
+    expect(phone('text me at 415 555 0123')).toBe('415 555 0123');
+    expect(phone('my number is +44 7700 900123')).toBe('+44 7700 900123');
+    expect(phone('my cell is (212) 555-0188 when it is ready')).toBe('(212) 555-0188');
+    expect(phone('phone: +1 415-555-0199')).toBe('+1 415-555-0199');
+  });
+  it('a number in any other sentence is not theirs to save', () => {
+    for (const t of ["Maya's number is 415 555 0123", 'call 415 555 0123', 'who works at Stripe'])
+      expect(phone(t), t).toBeUndefined();
+  });
+});

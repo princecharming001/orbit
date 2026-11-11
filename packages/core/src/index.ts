@@ -76,6 +76,7 @@ export * from './style/voice';
 export { isBusinessDayKey, usHolidayName, usHolidays } from './suggestions/calendar';
 export * from './suggestions/pace';
 export * from './suggestions/rules';
+export * from './sync/readiness';
 export * from './text/companyDomain';
 export * from './text/email';
 export * from './text/jaro';

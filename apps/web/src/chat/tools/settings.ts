@@ -5,12 +5,15 @@ import {
   FUNCTION_LABELS,
   functionCodeFor,
   OWN_WORDS_KEYS,
+  ownPhone,
   parseCurrentJob,
+  phoneRegionFor,
   TARGET_STATUS_LABELS,
 } from '@orbit/core';
 import { db } from '../../db/schema';
 import { finishOnboarding, ONBOARDING_DONE_STEP, setOnboardingStep } from '../../engine/account';
 import { recommendationsRefresh } from '../../engine/brief';
+import { saveContact } from '../../engine/notify';
 import { type OwnWordsPatch, saveOwnWords } from '../../engine/ownWords';
 import {
   dismissRecommendation,
@@ -751,6 +754,48 @@ export const advanceOnboarding = defineTool({
   toModel,
 });
 
+/**
+ * Plan 40: a phone number for "Orbit is ready" (and nothing else). Read in the student's own country when it has no
+ * country code; refused with a plain line when it is not a whole number.
+ */
+export const savePhone = defineTool({
+  name: 'save_phone',
+  kind: 'write',
+  description:
+    'Call this when the student gives their own phone number to be texted when Orbit is ready ("text me at 415 555 0123", "my number is +44 7700 900123"). Pass the number as they wrote it. Only their own number, never someone else\'s.',
+  input: z.object({
+    phone: z.string().min(4).max(40).describe('The number as the student wrote it.'),
+    country: z
+      .string()
+      .regex(/^[A-Z]{2}$/)
+      .optional()
+      .describe('Their country as an ISO code ("US"), only when they said it and the number has no +.'),
+  }),
+  capabilities: ['notify_phone'],
+  progress: 'Saving your number',
+  async execute(input, ctx) {
+    const region = input.country ?? phoneRegionFor(ctx.user);
+    const p = ownPhone(input.phone, region);
+    if (!p)
+      return ok(
+        'text',
+        { saved: false },
+        { saved: false, reason: 'not_a_whole_number' },
+        "That number doesn't look complete. Send it with the country code, like +1 415 555 0123.",
+      );
+    const r = await saveContact(ctx.user, { phone: p.e164, country: p.country, smsOn: true });
+    if (!r.ok) throw new Error(r.message);
+    return ok(
+      'text',
+      { saved: true, phone: p.e164 },
+      { saved: true, phone: p.e164, country: p.country },
+      `Saved ${p.e164}. Orbit will text it when your network is in.`,
+      '/settings/profile#phone',
+    );
+  },
+  toModel,
+});
+
 export const settingsTools: AnyTool[] = [
   manageTargetCompany,
   deleteTargetCompany,
@@ -761,4 +806,5 @@ export const settingsTools: AnyTool[] = [
   setLlmFeature,
   updateResumeFacet,
   advanceOnboarding,
+  savePhone,
 ];

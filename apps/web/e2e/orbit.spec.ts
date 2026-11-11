@@ -790,7 +790,7 @@ test.describe('Manual onboarding', () => {
     // the written questions (plan 24): each optional, two at most on a screen, saved on Continue
     await expect(page).toHaveURL(/\/onboarding\/aim$/);
     await expect(page.getByTestId('ob-eyebrow')).toHaveText(/in your words · 1 of 5/i);
-    await expect(page.getByTestId('ob-progress')).toHaveText(/step 4 of 10 · optional/i);
+    await expect(page.getByTestId('ob-progress')).toHaveText(/step 4 of 11 · optional/i);
     await expect(page.getByRole('heading', { name: 'Start with your why' })).toBeVisible();
     await page
       .getByTestId('ob-q-aim')
@@ -836,6 +836,9 @@ test.describe('Manual onboarding', () => {
     });
     await expect(page.getByText(/2 people added/i)).toBeVisible();
     await page.getByRole('button', { name: /^continue$/i }).click();
+    // plan 40: a phone number for the "Orbit is ready" text, optional
+    await expect(page).toHaveURL(/\/onboarding\/phone$/);
+    await page.getByTestId('ob-phone-skip').click();
     // the last step sums up what is set up
     await expect(page).toHaveURL(/\/onboarding\/5$/);
     await expect(page.getByTestId('ob-ready-linkedin')).toHaveAttribute('data-status', 'done');
@@ -1354,12 +1357,12 @@ test.describe('Setup without Google', () => {
       .first()
       .click();
     // without Google sign-in there are ten steps: Welcome, You, Goals, five written questions, LinkedIn, Ready
-    await expect(page.getByTestId('ob-progress')).toHaveText(/step 1 of 10/i);
+    await expect(page.getByTestId('ob-progress')).toHaveText(/step 1 of 11/i);
     await page
       .getByTestId('ob-welcome')
       .getByRole('button', { name: /get started/i })
       .click();
-    await expect(page.getByTestId('ob-progress')).toHaveText(/step 2 of 10/i);
+    await expect(page.getByTestId('ob-progress')).toHaveText(/step 2 of 11/i);
     await expect(page.getByTestId('ob-step-1')).toHaveAttribute('data-status', 'done');
     // Continue says what is missing while it is disabled
     await expect(page.getByRole('button', { name: /^continue$/i })).toBeDisabled();
@@ -1394,13 +1397,15 @@ test.describe('Setup without Google', () => {
     // without a Google sign-in set up on this build there is no Gmail step that could only say "not available"
     await expect(page.getByTestId('ob-google-unavailable')).toHaveCount(0);
     await expect(page.getByRole('heading', { name: /linkedin/i })).toBeVisible();
-    await expect(page.getByTestId('ob-progress')).toHaveText(/step 9 of 10 · optional/i);
+    await expect(page.getByTestId('ob-progress')).toHaveText(/step 9 of 11 · optional/i);
     await expect(page.getByTestId('ob-step-3')).toHaveAttribute('data-status', 'done');
     // a written question passed with nothing written is skipped, not done
     await expect(page.getByTestId('ob-step-4')).toHaveAttribute('data-status', 'skipped');
     await expect(page.getByTestId('ob-step-9')).toHaveAttribute('data-status', 'current');
     await page.getByTestId('ob-skip').click(); // linkedin
     await expect(page.getByTestId('ob-step-9')).toHaveAttribute('data-status', 'skipped');
+    await page.getByTestId('ob-phone-skip').click();
+    await expect(page.getByTestId('ob-step-10')).toHaveAttribute('data-status', 'skipped');
     await expect(page.getByTestId('ob-ready-words')).toHaveAttribute('data-status', 'skipped');
     await expect(page.getByTestId('ob-ready-linkedin')).toHaveAttribute('data-status', 'skipped');
     await expect(page.getByTestId('ob-ready-goals')).toContainText(/Consulting · 1 target company/);
@@ -1449,6 +1454,7 @@ test.describe('Setup without Google', () => {
     // LinkedIn (no Gmail step on this build)
     await expect(page.getByRole('heading', { name: /linkedin/i })).toBeVisible();
     await page.getByTestId('ob-skip').click();
+    await page.getByTestId('ob-phone-skip').click();
     await page.getByRole('button', { name: /open orbit/i }).click();
     await expect(page.getByTestId('greeting')).toContainText(/Hey Jamie/, {
       timeout: 30_000,
@@ -1537,6 +1543,7 @@ async function newStudent(page: Page) {
   await page.getByRole('button', { name: /^continue$/i }).click();
   await skipQuestions(page);
   await page.getByTestId('ob-skip').click(); // linkedin
+  await page.getByTestId('ob-phone-skip').click();
   await page.getByRole('button', { name: /open orbit/i }).click();
   await expect(page.getByTestId('greeting')).toContainText(/Hey Sam/, {
     timeout: 30_000,
@@ -2049,6 +2056,7 @@ test.describe('Usability round 5: one draft, kept edits, saved settings, chats t
     await expect(page.getByTestId('ob-linkedin-done')).toContainText(/2 connections imported/i);
     await expect(page.getByTestId('ob-skip')).toHaveCount(0);
     await page.getByRole('button', { name: /^continue$/i }).click();
+    await page.getByTestId('ob-phone-skip').click();
     await page.getByRole('button', { name: /open orbit/i }).click();
     await expect(page.getByTestId('greeting')).toBeVisible({ timeout: 30_000 });
     await expect(page).toHaveURL(/\/orbit\/?$/);
@@ -2190,7 +2198,7 @@ test.describe('Usability round 5 on a phone', () => {
       .click();
     const progress = page.getByTestId('ob-progress');
     await expect(progress).toBeVisible();
-    await expect(progress).toContainText('1 of 10');
+    await expect(progress).toContainText('1 of 11');
     await expect(page.getByTestId('ob-progress-bar')).toBeVisible();
     await fits();
     await page
@@ -2206,11 +2214,11 @@ test.describe('Usability round 5 on a phone', () => {
     await fits();
     await page.getByRole('button', { name: /^continue$/i }).click();
     // the written questions are optional, with a Skip, and fit too
-    await expect(progress).toContainText(/4 of 10 · optional/i);
+    await expect(progress).toContainText(/4 of 11 · optional/i);
     await expect(page.getByTestId('ob-q-skip')).toBeVisible();
     await fits();
     await skipQuestions(page);
-    await expect(progress).toContainText(/9 of 10 · optional/i);
+    await expect(progress).toContainText(/9 of 11 · optional/i);
     await expect(page.getByTestId('ob-skip')).toBeVisible();
     expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(390);
   });

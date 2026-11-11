@@ -44,6 +44,8 @@ describe('the map of settings', () => {
       ['change my major', 'majors'],
       ['fix my graduation year', 'grad-year'],
       ['change my time zone', 'timezone'],
+      ['update my phone number', 'phone'],
+      ['how do I change the number you text me at', 'phone'],
       ['where is memory', 'memory'],
       ['how do I delete my data', 'delete-data'],
       ['where are the privacy settings', 'privacy'],

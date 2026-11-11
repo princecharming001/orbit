@@ -1652,6 +1652,17 @@ export const CAPABILITIES: readonly Capability[] = [
     utterances: ['import this LinkedIn zip', 'upload my connections', 'skip LinkedIn'],
   },
   {
+    id: 'notify_phone',
+    area: 'Settings and account',
+    title: 'Get a text when Orbit is ready',
+    kind: 'write',
+    utterances: [
+      'text me at 415 555 0123 when it is ready',
+      'my number is +44 7700 900123',
+      'my cell is (212) 555-0188',
+    ],
+  },
+  {
     id: 'onboarding_prefs',
     area: 'Onboarding',
     title: 'Setup: preferences',

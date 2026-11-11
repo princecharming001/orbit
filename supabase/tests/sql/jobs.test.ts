@@ -284,6 +284,7 @@ describe('orbit.delete_user (§10.4 test 4)', () => {
       insert into orbit.drafts (user_id, person_id, channel, kind, body) values ('${u}', '${p2}', 'gmail', 'first_touch', 'hi');
       insert into orbit.notes (user_id, source, occurred_at, raw_text) values ('${u}', 'chat', now(), 'n');
       insert into orbit.uploads (user_id, kind, text) values ('${u}', 'resume', 'r');
+      insert into orbit.user_notify (user_id, phone_e164, phone_country, sms_on) values ('${u}', '+14155550123', 'US', true);
       insert into orbit.user_files (user_id, kind, name, mime_type, size, bytes) values ('${u}', 'resume', 'Resume.pdf', 'application/pdf', 4, '\\x25504446');
       insert into orbit.facts (user_id, person_id, type, text) values ('${u}', '${p2}', 'role', 'PM');
       insert into orbit.dossiers (user_id, person_id, status) values ('${u}', '${p2}', 'ready');

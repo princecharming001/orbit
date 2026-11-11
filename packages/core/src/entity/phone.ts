@@ -139,3 +139,25 @@ export function samePhone(a: string | undefined, b: string | undefined, region?:
   const x = toE164(a, region);
   return !!x && x === toE164(b, region);
 }
+
+/**
+ * A number someone gave as their own (plan 40: "text me when Orbit is ready"): read in `region` when it has no
+ * country code, and kept only when it is a valid number there, with the country it belongs to. Stricter than
+ * toE164, which keeps anything that might be a number so the same one written twice still matches.
+ */
+export function ownPhone(
+  raw: string | undefined,
+  region: string = DEFAULT_PHONE_REGION,
+): { e164: string; country: string } | undefined {
+  if (!raw) return undefined;
+  let s = raw.trim().replace(/^tel:/i, '');
+  const digits = s.replace(/\D/g, '');
+  if (!s.startsWith('+') && digits.startsWith('00')) s = `+${digits.slice(2)}`;
+  const p = parsePhoneNumberFromString(s, supported(region) ? region : DEFAULT_PHONE_REGION);
+  if (!p?.isValid()) return undefined;
+  const home = supported(region) ? region : DEFAULT_PHONE_REGION;
+  // a number with the student's own dial code stays in their country: +44 7911 is filed under Guernsey, +1 under
+  // whichever of the 25 countries sharing +1 libphonenumber picks, and the student typed it as a UK or US number
+  const same = p.countryCallingCode === getCountryCallingCode(home);
+  return { e164: p.number, country: same ? home : (p.country ?? home) };
+}

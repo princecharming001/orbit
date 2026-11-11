@@ -1,5 +1,5 @@
 import type { ChatStage, Suggestion } from '@orbit/core';
-import { CHAT_LINE_ORDER, ownWordsLines, STAGE_LABELS, todayKey } from '@orbit/core';
+import { CHAT_LINE_ORDER, ownWordsLines, progressLabel, STAGE_LABELS, todayKey } from '@orbit/core';
 import { db } from '../../db/schema';
 import { DEMO_USER_ID } from '../../engine/demo';
 import { activeGoals, goalLine } from '../../engine/goals';
@@ -14,6 +14,7 @@ import { googleClientId } from '../../integrations/google';
 import { isServerUser } from '../../integrations/orbitApi';
 import { llmFeatures, readPrefs } from '../../integrations/prefs';
 import { sharedClaudeAvailable } from '../../integrations/shared-claude';
+import { type ReadinessView, readinessNow } from '../../state/readiness';
 import { getPanelHint } from '../panel/panelHint';
 import { offeredGoalLine } from './afterTurn';
 import { chatDigests, earlierChatsLine, recentActivityLine } from './chatContext';
@@ -280,6 +281,7 @@ export async function buildSnapshot(
     : [];
   const offered = account ? offeredGoalLine(userId) : undefined;
   const [earlierLine, activityLine] = await Promise.all([earlier, activity]);
+  const syncLine = readinessLine(readinessNow());
   const resumeLine = await resumeOffer;
   const resumeText = await resumeContext;
   const lines = [
@@ -294,6 +296,7 @@ export async function buildSnapshot(
     `Today's brief (ids): ${cardLines.length ? cardLines.join('; ') : 'nothing pending'}${moreCards ? `; ${moreCards} more` : ''}.`,
     `Drafts unsent: ${draftLine}.${inFlight ? ` In flight (queued or handed off): ${inFlight}.` : ''}`,
     ...(activityLine ? [activityLine] : []),
+    ...(syncLine ? [syncLine] : []),
     ...(earlierLine ? [earlierLine] : []),
     `Integrations: ${integ}. Claude features: ${claude}.`,
     setup,
@@ -308,6 +311,31 @@ export async function buildSnapshot(
     day: todayKey(now, tz),
     ...(memory.length ? { memory: `${REMEMBERED_PREFIX}${memory.join('; ')}.` } : {}),
   };
+}
+
+/**
+ * Plan 40: while the first import runs, where it stands and how the student will hear it is done, so the chat can
+ * say "still reading your email" and ask once for a number to text. Nothing once Orbit is ready.
+ */
+export function readinessLine(v: ReadinessView | undefined): string | undefined {
+  if (!v) return undefined;
+  const r = v.readiness;
+  if (r.state === 'ready' || r.state === 'nothing') return undefined;
+  const steps = r.steps.map((s) => `${s.label} ${s.state}${s.detail ? ` (${s.detail})` : ''}`).join('; ');
+  const c = v.notify?.contact;
+  const tell = v.notify
+    ? `Told when done: ${
+        [
+          c?.emailOn && v.notify.emailAvailable && c.email ? 'by email' : '',
+          c?.smsOn && v.notify.smsAvailable && c.phone ? 'by text' : '',
+        ]
+          .filter(Boolean)
+          .join(' and ') || 'only in the app'
+      }. Phone on file: ${c?.phone ? 'yes' : 'no'}${
+        v.notify.smsAvailable ? '' : ' (texting is not set up on this server)'
+      }.`
+    : '';
+  return `Setup still running (${progressLabel(r)}, ${r.state}): ${steps}. ${tell}`.trim();
 }
 
 /** Rough token estimate for the budget test (about four characters a token for English prose). */

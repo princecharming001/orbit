@@ -238,6 +238,7 @@ describe('every tool parses and executes its example input against the demo', ()
       remember: { text: 'Prefers morning calls', kind: 'preference' },
       recall: { query: 'calls' },
       search_chats: { query: 'Stripe' },
+      save_phone: { phone: '+1 415 555 0123' },
       ask_for_intro: { pathId: 'path_1' },
       book_call: { draftId: 'out_1', slotStart: '2026-10-21T14:00:00Z' },
       set_autonomy: { level: 1 },

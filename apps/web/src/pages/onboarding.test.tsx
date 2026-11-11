@@ -38,11 +38,11 @@ vi.mock('../engine/linkedinLive', () => ({
 
 describe('setup steps', () => {
   it('shows Gmail only when Google sign-in is set up', () => {
-    expect(visibleSteps(true)).toEqual([1, 2, 3, ...QUESTION_STEPS, 4, 5, 6]);
-    expect(visibleSteps(false)).toEqual([1, 2, 3, ...QUESTION_STEPS, 4, 6]);
+    expect(visibleSteps(true)).toEqual([1, 2, 3, ...QUESTION_STEPS, 4, 4.5, 5, 6]);
+    expect(visibleSteps(false)).toEqual([1, 2, 3, ...QUESTION_STEPS, 4, 4.5, 6]);
     expect(visibleSteps(false)).not.toContain(STEP.gmail);
     // signed in: no Gmail step (sign-in connected it) and no Rate step (a popup days later asks)
-    expect(visibleSteps(false, true)).toEqual([1, 2, 3, ...QUESTION_STEPS, 4, 6]);
+    expect(visibleSteps(false, true)).toEqual([1, 2, 3, ...QUESTION_STEPS, 4, 4.5, 6]);
   });
 
   it('puts the five written questions between Goals and LinkedIn, at word addresses', () => {
@@ -114,9 +114,11 @@ describe('setup steps', () => {
       'skipped',
       'skipped',
       'skipped',
+      'skipped',
       'current',
     ]);
     expect(stepStatuses(steps, STEP.ready, { [STEP.linkedin]: true })[8]).toBe('done');
+    expect(stepStatuses(steps, STEP.ready, { [STEP.phone]: true })[9]).toBe('done');
     expect(stepStatuses(steps, STEP.you, {}).slice(0, 4)).toEqual(['done', 'current', 'todo', 'todo']);
   });
 });
@@ -240,6 +242,58 @@ function type(el: HTMLTextAreaElement | HTMLInputElement, value: string) {
   Object.getOwnPropertyDescriptor(proto, 'value')!.set!.call(el, value);
   el.dispatchEvent(new Event('input', { bubbles: true }));
 }
+
+describe('the phone step (plan 40)', () => {
+  beforeEach(async () => {
+    await db.delete();
+    await db.open();
+  });
+
+  it('comes after LinkedIn at /onboarding/phone, optional, and every step after it moves forward', () => {
+    expect(STEP.phone).toBeGreaterThan(STEP.linkedin);
+    expect(STEP.phone).toBeLessThan(STEP.gmail);
+    expect(stepAddress(STEP.phone)).toBe('phone');
+    expect(stepFromAddress('phone')).toBe(STEP.phone);
+    expect(resolveStep(STEP.phone, false, true)).toBe(STEP.phone);
+    // the old Rate step (a stored 5.5) still lands on Ready, never back on Phone
+    expect(resolveStep(5.5, false, true)).toBe(STEP.ready);
+  });
+
+  it('saves a whole number with its country and moves on; Continue waits for a whole one', async () => {
+    const { host, q, done } = await renderSetup('/onboarding/phone', STEP.phone);
+    expect(q('ob-phone')!.textContent).toContain('Get a text when Orbit is ready');
+    expect(q('ob-phone')!.textContent).not.toMatch(/[—!]/);
+    const input = q('phone-input') as HTMLInputElement;
+    const save = q('ob-phone-save') as HTMLButtonElement;
+    expect(save.disabled).toBe(true);
+    await act(async () => {
+      const set = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!;
+      set.call(input, '4155550123');
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    expect(input.value).toBe('(415) 555-0123');
+    expect(save.disabled).toBe(false);
+    await act(async () => save.click());
+    for (let i = 0; i < 20 && host.querySelector('[data-testid="ob-phone"]'); i++)
+      await act(() => new Promise((r) => setTimeout(r, 10)));
+    expect(q('ob-phone')).toBeNull();
+    const users = await db.users.toArray();
+    const kv = await db.kv.get(`notify:contact:${users[0]!.id}`);
+    expect(kv?.value).toMatchObject({ phone: '+14155550123', country: 'US', smsOn: true });
+    done();
+  });
+
+  it('Skip saves nothing', async () => {
+    const { host, q, done } = await renderSetup('/onboarding/phone', STEP.phone);
+    await act(async () => q('ob-phone-skip')!.click());
+    for (let i = 0; i < 20 && host.querySelector('[data-testid="ob-phone"]'); i++)
+      await act(() => new Promise((r) => setTimeout(r, 10)));
+    expect(q('ob-phone')).toBeNull();
+    const users = await db.users.toArray();
+    expect(await db.kv.get(`notify:contact:${users[0]!.id}`)).toBeUndefined();
+    done();
+  });
+});
 
 describe('the written questions (plan 24)', () => {
   beforeEach(async () => {

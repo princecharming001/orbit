@@ -169,6 +169,7 @@ test.describe('account mode (mocked orbit-api)', () => {
     await expect(page.locator('main')).not.toContainText(/export/i);
     await expect.poll(() => api.state.goals.map((g) => g.kind).sort()).toEqual(['fundraising', 'recruiting']);
     await page.getByTestId('ob-skip').click();
+    await page.getByTestId('ob-phone-skip').click();
     // no Rate step in setup: it is asked in a popup a couple of days later, once Orbit has read enough email
     await expect(page.getByTestId('ob-ready-gmail')).toContainText('Connected as maya@cornell.edu');
     await expect(page.getByTestId('ob-ready-goals')).toContainText(/Product management and Fundraising/i);
@@ -260,6 +261,7 @@ test.describe('account mode (mocked orbit-api)', () => {
       await page.getByRole('button', { name: /^continue$/i }).click();
       await skipQuestions(page);
       await page.getByTestId('ob-skip').click();
+      await page.getByTestId('ob-phone-skip').click();
       await page.getByRole('button', { name: /open orbit/i }).click();
       await expect(page.getByTestId('greeting')).toBeVisible({ timeout: 30_000 });
       return api;

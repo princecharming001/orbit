@@ -4,6 +4,7 @@ import { Link } from 'react-router-dom';
 import { ActivityLine } from '../../components/ActivityLine';
 import { CurrentJobPlan } from '../../components/CurrentJobPlan';
 import { NextChatLine } from '../../components/NextChatLine';
+import { ReadinessBanner } from '../../components/sync/ReadinessChip';
 import { useSession } from '../../state/session';
 import { cx } from '../../ui';
 import { chipRows, homeChips } from '../agent/chips';
@@ -152,6 +153,8 @@ export function ChatHome() {
           {!thread.temporary && (
             <CurrentJobPlan networkIn={status.ready && !status.empty && status.linkedin} />
           )}
+          {/* plan 40: while the first import runs, what is still coming in, one tap from the checklist */}
+          {!thread.temporary && <ReadinessBanner className="mb-4" />}
           {/* on a phone the status line has no sidebar: it sits here, quietly (plan 23 §4.7) */}
           <div className="md:hidden flex justify-center -mt-2 mb-3">
             <ActivityLine below className="max-w-[320px]" />

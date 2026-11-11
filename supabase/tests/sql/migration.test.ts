@@ -109,6 +109,8 @@ describe('orbit core migration', () => {
       'orbit-logos-users',
       'orbit-logos-weekly',
       'orbit-nightly',
+      // plan 40: "Orbit is ready", every two minutes while someone is waiting, scheduled by 20261128_orbit_user_notify.sql
+      'orbit-notify-ready',
       // plan 29 §B2.5: the hourly outcome roll, scheduled by 20261101_orbit_autopilot_phase3.sql
       'orbit-outcomes',
       'orbit-retention',
