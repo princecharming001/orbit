@@ -49,6 +49,8 @@ export interface DossierView {
   profiles: { kind: string; url: string }[];
   highlights: (Claim & { kind: string; title: string; url?: string; summary?: string })[];
   topics: string[];
+  /** deep research's hard-to-find finds beyond LinkedIn (dossier v4): clubs, awards, projects, races, causes */
+  deepCuts: (Claim & { kind: string })[];
   sources: { n: number; url?: string; title?: string; demo?: boolean }[];
   /** for needs_disambiguation: the people it might be */
   candidates: { index: number; label: string; url?: string }[];
@@ -188,6 +190,13 @@ export function dossierView(d: Dossier): DossierView {
     topics: arr(field(c, 'topics'))
       .map(str)
       .filter((x): x is string => !!x),
+    deepCuts: arr(field(c, 'deep_cuts'))
+      .map((x) => {
+        const base = claim(x);
+        return base ? { ...base, kind: str(obj(x)?.kind) ?? 'other' } : undefined;
+      })
+      .filter((x): x is NonNullable<typeof x> => !!x)
+      .slice(0, 6),
     sources: sources.map(({ n, url, title, demo }) => ({ n, url, title, demo })),
     candidates: arr(d.candidates).map((x, index) => {
       const o = obj(x) ?? {};

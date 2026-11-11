@@ -5,7 +5,7 @@
  */
 import { z } from '../providers/zod';
 
-export const PROMPT_VERSION = 'dossier-v3';
+export const PROMPT_VERSION = 'dossier-v4';
 
 /**
  * The same system text for every student and goal (plan 34 C3), so it is one cached prefix for everyone; who the brief
@@ -20,6 +20,10 @@ export const DOSSIER_SYSTEM = [
   '"careful" is about their company only (recent layoffs, a reorganization, a product shut down, a hiring freeze), each item with its source ids; never anything about the person\'s own life. Leave it empty when there is nothing.',
   '"company" is what is happening at their company that matters to the student (team news, launches, hiring), from company sources, each with its source ids. Leave it empty when there are no company sources.',
   'Openers: up to three single sentences the student could open a first message with, each a statement (not a question) of at most 25 words about something they made, said or did. Each rests on one cited source and uses only details that source states, in its words where you can (a title, a claim, a number); the student\'s reaction may be added ("stuck with me"). Never flattery, never about their private life.',
+  'Dig past the obvious. The student wants the person to see they did real homework, so what matters most is what a quick look at their LinkedIn or a first-page search would not show: the club or chapter they ran, an award or competition result an organization published, a hackathon project, a side project or repo, a talk, podcast or panel, a post on their own blog or newsletter, a race, tournament or team they were on, a cause or nonprofit they volunteer for, a hobby or creative work they put out publicly, something specific they wrote or said. Prefer these over their job titles and schools, which the student can already see.',
+  '"deep_cuts": up to 6 of those hard-to-find things, the most specific and least obvious first, each one sentence that names the thing exactly (the club, the award and its year, the project, the race, the post\'s title) with its source ids. Use only web sources (never the LinkedIn profile or posts, which the student has already read). Their own public interests and pursuits outside work count (a sport, music, writing, a cause), as long as they made them public themselves or an organization published them. Leave it empty when the sources hold nothing beyond LinkedIn; never pad it with what LinkedIn already says.',
+  'Go back through their whole timeline, not just the last few years: an old source is often the best one (a college club, a team they played on, a 2015 award, an early project or post). Say the year so the student knows how far back it is, and never present an old role or fact as current.',
+  'Openers: when "deep_cuts" has anything, at least one opener rests on one of them: a specific detail most people would not know to mention.',
   'Most people have little online beyond LinkedIn. When the only sources are their LinkedIn and the student\'s own history, say so plainly in "who" (for example "Not much is public about Dana beyond LinkedIn.") and keep to what LinkedIn says; do not pad.',
   'Also lay out who they are in full, from the sources only: "career" (every role you can source, newest first, with start and end as written, e.g. "2021" or "Mar 2022"), "education", "profiles" (their own pages: LinkedIn, X, GitHub, a personal site, Google Scholar; only URLs that appear in the sources), "highlights" (up to 8 things they made or said that matter: posts, articles, talks, podcasts, projects, papers, news, awards, each with the URL of its source) and "topics" (up to 6 short phrases for what they work on or talk about).',
 ].join('\n');
@@ -142,6 +146,28 @@ export const dossierSchema = z.object({
   topics: z.array(z.string()).optional(),
   // v2: what is happening at their company, from company pages (Go deeper)
   company: z.array(z.object({ text: z.string(), source_ids: sourceIds })).optional(),
+  // v4: the hard-to-find, specific things deep research turned up beyond LinkedIn (clubs, awards, projects, talks,
+  // their public pursuits outside work), each from a web source
+  deep_cuts: z
+    .array(
+      z.object({
+        kind: z.enum([
+          'club',
+          'award',
+          'project',
+          'talk',
+          'writing',
+          'team',
+          'volunteer',
+          'interest',
+          'other',
+        ]),
+        text: z.string(),
+        date: z.string().nullable(),
+        source_ids: sourceIds,
+      }),
+    )
+    .optional(),
 });
 
 export type DossierContent = z.infer<typeof dossierSchema>;

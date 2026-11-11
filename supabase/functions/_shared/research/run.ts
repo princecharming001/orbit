@@ -11,10 +11,13 @@ import { buildUserContext, loadUserRow, userFirstName } from '../compose/context
 import type { Db } from '../db.ts';
 import { HttpError } from '../http.ts';
 import { cleanLinkedInUrl, linkedInSlugOf } from '../providers/unipileResearch';
+import { createParallelSearch, createSerperSearch } from '../providers/webSearch';
 import { isoRow } from '../rows.ts';
 import type { Services } from '../services.ts';
+import { switchGate } from '../switches.ts';
 import { claudeDep, sqlBudget, sqlResearchDb } from './bind.ts';
 import { buildDossier, type DisambiguationCandidate, type DossierOutcome, type GoalKind } from './dossier';
+import { sqlSharedCache } from './web';
 
 const GOAL_SENTENCE: Record<GoalKind, (title: string) => string> = {
   recruiting: (t) => `find their next role (${t})`,
@@ -178,6 +181,8 @@ export async function runDossierJob(
     select external_account_id from orbit.integration_accounts
      where user_id = ${userId}::uuid and provider = 'linkedin' and status = 'active'`;
   const chosen = payload.chosen as DisambiguationCandidate | undefined;
+  // the investigator loop's engines: Parallel takes plain queries, Serper (Google) the ones with operators
+  const engine = { fetch: s.fetch, timeoutMs: 10_000, maxRetries: 1, gate: switchGate(db, 'web_search') };
   return buildDossier(
     {
       exa: s.exa,
@@ -186,6 +191,12 @@ export async function runDossierJob(
       db: sqlResearchDb(db, s.now),
       budget: sqlBudget(db, s.now),
       clock: () => s.now().getTime(),
+      engines: [
+        createParallelSearch({ ...engine, apiKey: s.env.parallelKey }),
+        createSerperSearch({ ...engine, apiKey: s.env.serperKey }),
+      ],
+      cache: sqlSharedCache(db, () => s.now().getTime()),
+      fetch: s.fetch,
     },
     {
       userId,

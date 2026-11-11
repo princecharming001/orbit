@@ -13,7 +13,15 @@ import { type DossierContent, type SupportClaim, supportSchema, supportSystem, s
 export type Support = 'full' | 'partial' | 'unchecked';
 
 /** A list section of the brief whose items carry `source_ids`. */
-const LIST_SECTIONS = ['recently', 'in_common', 'openers', 'highlights', 'company', 'careful'] as const;
+const LIST_SECTIONS = [
+  'recently',
+  'in_common',
+  'openers',
+  'highlights',
+  'deep_cuts',
+  'company',
+  'careful',
+] as const;
 type ListSection = (typeof LIST_SECTIONS)[number];
 
 /** How each part of the brief is named to the checker. */
@@ -24,6 +32,7 @@ const KIND: Record<string, string> = {
   in_common: 'in common with the student',
   openers: 'opener',
   highlights: 'highlight',
+  deep_cuts: 'something specific they did, found beyond LinkedIn',
   company: 'company news',
   careful: 'company caution',
 };

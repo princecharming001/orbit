@@ -15840,8 +15840,8 @@ var JOB_CHARS = 500;
 var COMPANY_ABOUT_CHARS = 1500;
 var COMPANY_ABOUT_KEEP = 600;
 var fold3 = (s) => s.toLowerCase().replace(/[‘’]/g, "'").replace(/[“”]/g, '"').replace(/[\u2010-\u2015\u2212]/g, "-").replace(/\s+/g, " ").trim();
-function quoteIn(text3, quote) {
-  const q = (quote ?? "").trim().replace(/^["'“”]+|["'“”]+$/g, "");
+function quoteIn(text3, quote2) {
+  const q = (quote2 ?? "").trim().replace(/^["'“”]+|["'“”]+$/g, "");
   if (q.replace(/\W/g, "").length < 3 || q.length > 220) return void 0;
   return fold3(text3).includes(fold3(q)) ? q : void 0;
 }
@@ -21340,6 +21340,98 @@ function cadenceUser(config) {
   };
 }
 
+// supabase/functions/_shared/providers/webSearch.ts
+var PARALLEL_BASE = "https://api.parallel.ai";
+var SERPER_BASE = "https://google.serper.dev";
+var PARALLEL_SEARCH_USD = 1e-3;
+var SERPER_SEARCH_USD = 1e-3;
+var PARALLEL_QUERIES_PER_REQUEST = 5;
+var parallelResponse = z.looseObject({
+  results: z.array(
+    z.looseObject({
+      url: z.string(),
+      title: z.string().nullish(),
+      publish_date: z.string().nullish(),
+      excerpts: z.array(z.string()).nullish()
+    })
+  ).default([])
+});
+var serperResponse = z.looseObject({
+  organic: z.array(
+    z.looseObject({
+      link: z.string(),
+      title: z.string().nullish(),
+      snippet: z.string().nullish(),
+      date: z.string().nullish()
+    })
+  ).default([])
+});
+function createParallelSearch(opts) {
+  const base = trimBase(opts.baseUrl ?? PARALLEL_BASE);
+  return {
+    name: "parallel",
+    configured: !!opts.apiKey,
+    usdPerCall: PARALLEL_SEARCH_USD,
+    queriesPerCall: PARALLEL_QUERIES_PER_REQUEST,
+    async search(queries, objective) {
+      if (!opts.apiKey) return unconfigured2("parallel");
+      const r = await requestJson(opts, {
+        provider: "parallel",
+        url: `${base}/v1/search`,
+        method: "POST",
+        headers: { "x-api-key": opts.apiKey },
+        body: {
+          objective,
+          search_queries: queries.slice(0, PARALLEL_QUERIES_PER_REQUEST),
+          mode: "fast",
+          max_chars_total: 12e3
+        },
+        schema: parallelResponse
+      });
+      if (!r.ok) return r;
+      return {
+        ok: true,
+        value: r.value.results.map((x) => ({
+          url: x.url,
+          title: x.title ?? void 0,
+          snippet: (x.excerpts ?? []).join(" … ").slice(0, 1500) || void 0,
+          published: x.publish_date ?? null
+        }))
+      };
+    }
+  };
+}
+function createSerperSearch(opts) {
+  const base = trimBase(opts.baseUrl ?? SERPER_BASE);
+  return {
+    name: "serper",
+    configured: !!opts.apiKey,
+    usdPerCall: SERPER_SEARCH_USD,
+    queriesPerCall: 1,
+    async search(queries) {
+      if (!opts.apiKey) return unconfigured2("serper");
+      const r = await requestJson(opts, {
+        provider: "serper",
+        url: `${base}/search`,
+        method: "POST",
+        headers: { "X-API-KEY": opts.apiKey },
+        body: { q: queries[0] ?? "", num: 10, gl: "us", hl: "en" },
+        schema: serperResponse
+      });
+      if (!r.ok) return r;
+      return {
+        ok: true,
+        value: r.value.organic.map((x) => ({
+          url: x.link,
+          title: x.title ?? void 0,
+          snippet: x.snippet ?? void 0,
+          published: x.date ?? null
+        }))
+      };
+    }
+  };
+}
+
 // supabase/functions/_shared/research/identity.ts
 var COMPANY_ALIASES = [
   ["Meta", "Meta Platforms", "Facebook"],
@@ -21685,8 +21777,594 @@ function scorePage(page2, card) {
   return { strength: strength2, signals, conflict, linkedinCopy, blocked };
 }
 
+// supabase/functions/_shared/research/handles.ts
+var HANDLE_SITES = [
+  {
+    name: "GitHub",
+    url: "https://github.com/{u}",
+    probe: "https://api.github.com/users/{u}",
+    check: "status",
+    pattern: /^[a-zA-Z0-9](?:[a-zA-Z0-9]|-(?=[a-zA-Z0-9])){0,38}$/
+  },
+  {
+    name: "YouTube",
+    url: "https://www.youtube.com/@{u}/about",
+    check: "present",
+    strs: ["visitorData"],
+    headers: { "user-agent": "curl/8.6.0", accept: "*/*" },
+    pattern: /^[^/]+$/
+  },
+  { name: "Medium", url: "https://medium.com/@{u}", probe: "https://medium.com/feed/@{u}", check: "status" },
+  {
+    name: "Substack",
+    url: "https://substack.com/@{u}",
+    probe: "https://substack.com/api/v1/user/{u}/public_profile",
+    check: "status"
+  },
+  {
+    name: "Hugging Face",
+    url: "https://huggingface.co/{u}",
+    probe: "https://huggingface.co/api/users/{u}/overview",
+    check: "status"
+  },
+  { name: "Behance", url: "https://www.behance.net/{u}", check: "status", headers: { "user-agent": "Curl" } },
+  {
+    name: "Dribbble",
+    url: "https://dribbble.com/{u}",
+    check: "absent",
+    strs: ["Whoops, that page is gone."],
+    pattern: /^[a-zA-Z][a-zA-Z0-9_-]*$/
+  },
+  { name: "Linktree", url: "https://linktr.ee/{u}", check: "status" },
+  { name: "DEV", url: "https://dev.to/{u}", check: "status", pattern: /^[a-zA-Z][a-zA-Z0-9_-]*$/ },
+  {
+    name: "GitLab",
+    url: "https://gitlab.com/{u}",
+    probe: "https://gitlab.com/api/v4/users?username={u}",
+    check: "absent",
+    strs: ["[]"]
+  },
+  {
+    name: "Bluesky",
+    url: "https://bsky.app/profile/{u}.bsky.social",
+    probe: "https://public.api.bsky.app/xrpc/app.bsky.actor.getProfile?actor={u}.bsky.social",
+    check: "present",
+    strs: ['"did"']
+  },
+  {
+    name: "Chess.com",
+    url: "https://www.chess.com/member/{u}",
+    probe: "https://api.chess.com/pub/player/{u}",
+    check: "present",
+    strs: ['"player_id":']
+  },
+  {
+    name: "Letterboxd",
+    url: "https://letterboxd.com/{u}",
+    check: "absent",
+    strs: ["Sorry, we can’t find the page you’ve requested."]
+  },
+  {
+    name: "CodePen",
+    url: "https://codepen.io/{u}",
+    check: "absent",
+    strs: ["I'm afraid you've found a page that doesn't exist on CodePen"]
+  },
+  {
+    name: "Speaker Deck",
+    url: "https://speakerdeck.com/{u}",
+    check: "absent",
+    strs: ["User Not Found"],
+    pattern: /^[^.]+$/
+  }
+];
+function distinctiveSlug(slug) {
+  const s = (slug ?? "").toLowerCase().trim();
+  return /^[a-z]{10,30}$/.test(s) ? s : void 0;
+}
+async function exists(site, handle, doFetch, timeoutMs) {
+  if (site.pattern && !site.pattern.test(handle)) return false;
+  const target = (site.probe ?? site.url).replaceAll("{u}", encodeURIComponent(handle));
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), timeoutMs);
+  try {
+    const r = await doFetch(target, {
+      redirect: "follow",
+      signal: ctrl.signal,
+      headers: { "user-agent": "Mozilla/5.0 (Orbit research)", ...site.headers ?? {} }
+    });
+    if (site.check === "status") return r.ok;
+    if (!r.ok && r.status !== 404) return false;
+    const body = (await r.text()).slice(0, 4e5);
+    if (site.check === "absent") return r.ok && !(site.strs ?? []).some((s) => body.includes(s));
+    return (site.strs ?? []).some((s) => body.includes(s));
+  } catch {
+    return false;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+async function findAccounts(handles, opts = {}) {
+  const doFetch = opts.fetch ?? fetch;
+  const sites = opts.sites ?? HANDLE_SITES;
+  const unique = [...new Set(handles.map((h) => h.trim()).filter((h) => h.length >= 3))].slice(0, 3);
+  const checks = unique.flatMap(
+    (handle) => sites.map(
+      async (site) => await exists(site, handle, doFetch, opts.timeoutMs ?? 6e3) ? { site: site.name, handle, url: site.url.replaceAll("{u}", encodeURIComponent(handle)) } : void 0
+    )
+  );
+  return (await Promise.all(checks)).filter((x) => !!x);
+}
+
+// supabase/functions/_shared/research/pageText.ts
+var PAGE_TEXT_CHARS = 9e3;
+var MAX_BYTES = 15e5;
+var UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0 Safari/537.36";
+var ENTITIES2 = {
+  amp: "&",
+  lt: "<",
+  gt: ">",
+  quot: '"',
+  apos: "'",
+  nbsp: " ",
+  rsquo: "’",
+  lsquo: "‘",
+  rdquo: "”",
+  ldquo: "“",
+  mdash: "—",
+  ndash: "–",
+  hellip: "…"
+};
+function decodeEntities2(s) {
+  return s.replace(/&#(\d+);/g, (_, n) => String.fromCodePoint(Number(n))).replace(/&#x([0-9a-f]+);/gi, (_, n) => String.fromCodePoint(Number.parseInt(n, 16))).replace(/&([a-z]+);/gi, (m, n) => ENTITIES2[n.toLowerCase()] ?? m);
+}
+function meta(html, key2) {
+  const re = new RegExp(
+    `<meta[^>]+(?:name|property)=["']${key2}["'][^>]*content=["']([^"']*)["']|<meta[^>]+content=["']([^"']*)["'][^>]*(?:name|property)=["']${key2}["']`,
+    "i"
+  );
+  const m = re.exec(html);
+  const v = m?.[1] ?? m?.[2];
+  return v ? decodeEntities2(v).trim() : void 0;
+}
+function htmlToText2(html) {
+  const title = decodeEntities2(/<title[^>]*>([\s\S]*?)<\/title>/i.exec(html)?.[1] ?? "").trim() || void 0;
+  const description = meta(html, "og:description") ?? meta(html, "description");
+  const ogTitle = meta(html, "og:title");
+  const published = meta(html, "article:published_time") ?? meta(html, "og:published_time");
+  const body = html.replace(/<!--[\s\S]*?-->/g, " ").replace(/<(script|style|noscript|svg|template|iframe|head|nav|footer|form)\b[\s\S]*?<\/\1>/gi, " ").replace(/<br\s*\/?>/gi, "\n").replace(/<\/(p|div|li|h[1-6]|tr|section|article|header|blockquote|dd|dt)>/gi, "\n").replace(/<[^>]+>/g, " ");
+  const text3 = decodeEntities2(body).split("\n").map((l) => l.replace(/[ \t\f\v ]+/g, " ").trim()).filter((l) => l.length > 1).join("\n").replace(/\n{3,}/g, "\n\n");
+  const head = [ogTitle && ogTitle !== title ? ogTitle : "", description ?? ""].filter(Boolean).join("\n");
+  return { title: title ?? ogTitle, text: [head, text3].filter(Boolean).join("\n\n"), published };
+}
+var PROFILE_RES = [
+  /^https?:\/\/(?:www\.)?github\.com\/([A-Za-z0-9-]{1,39})\/?$/i,
+  /^https?:\/\/(?:www\.)?(?:x|twitter)\.com\/([A-Za-z0-9_]{1,15})\/?$/i,
+  /^https?:\/\/(?:www\.)?instagram\.com\/([A-Za-z0-9_.]{1,30})\/?$/i,
+  /^https?:\/\/(?:www\.)?youtube\.com\/@([A-Za-z0-9_.-]{3,30})\/?$/i,
+  /^https?:\/\/(?:www\.)?tiktok\.com\/@([A-Za-z0-9_.]{2,24})\/?$/i,
+  /^https?:\/\/(?:www\.)?threads\.(?:net|com)\/@([A-Za-z0-9_.]{1,30})\/?$/i,
+  /^https?:\/\/(?:www\.)?medium\.com\/@([A-Za-z0-9_.-]{1,30})\/?$/i,
+  /^https?:\/\/([a-z0-9-]{2,40})\.substack\.com\/?$/i,
+  /^https?:\/\/(?:www\.)?linktr\.ee\/([A-Za-z0-9_.]{2,30})\/?$/i,
+  /^https?:\/\/(?:www\.)?behance\.net\/([A-Za-z0-9_-]{2,30})\/?$/i,
+  /^https?:\/\/(?:www\.)?dribbble\.com\/([A-Za-z0-9_-]{2,30})\/?$/i,
+  /^https?:\/\/(?:www\.)?devpost\.com\/([A-Za-z0-9_-]{2,40})\/?$/i,
+  /^https?:\/\/(?:www\.)?huggingface\.co\/([A-Za-z0-9_-]{2,40})\/?$/i,
+  /^https?:\/\/bsky\.app\/profile\/([A-Za-z0-9_.-]{3,60})\/?$/i
+];
+var NOT_HANDLES = /* @__PURE__ */ new Set([
+  "about",
+  "explore",
+  "home",
+  "login",
+  "signup",
+  "search",
+  "settings",
+  "share",
+  "intent",
+  "features",
+  "pricing",
+  "topics",
+  "trending",
+  "sponsors",
+  "orgs",
+  "www",
+  "help",
+  "privacy",
+  "terms"
+]);
+function profileHandle(url) {
+  for (const re of PROFILE_RES) {
+    const m = re.exec(url.trim());
+    if (m?.[1] && !NOT_HANDLES.has(m[1].toLowerCase())) return m[1];
+  }
+  return void 0;
+}
+function profileLinks(html, base) {
+  const out = /* @__PURE__ */ new Set();
+  for (const m of html.matchAll(/href=["']([^"'#]+)["']/gi)) {
+    let u2;
+    try {
+      u2 = new URL(decodeEntities2(m[1]), base).toString();
+    } catch {
+      continue;
+    }
+    if (profileHandle(u2)) out.add(u2.replace(/\/+$/, ""));
+  }
+  return [...out].slice(0, 40);
+}
+async function fetchPage(url, opts = {}) {
+  if (isBlockedSource(url) || !/^https?:\/\//i.test(url)) return void 0;
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), opts.timeoutMs ?? 6e3);
+  try {
+    const r = await (opts.fetch ?? fetch)(url, {
+      redirect: "follow",
+      signal: ctrl.signal,
+      headers: { "user-agent": UA, accept: "text/html,application/xhtml+xml", "accept-language": "en-US,en" }
+    });
+    if (!r.ok) return void 0;
+    const type = r.headers.get("content-type") ?? "";
+    if (type && !/html|xml|text\/plain/i.test(type)) return void 0;
+    const raw = (await r.text()).slice(0, MAX_BYTES);
+    const finalUrl = r.url || url;
+    if (/text\/plain/i.test(type))
+      return { url: finalUrl, text: raw.slice(0, PAGE_TEXT_CHARS), profiles: [], published: null };
+    const read = htmlToText2(raw);
+    if (!read.text.trim()) return void 0;
+    return {
+      url: finalUrl,
+      title: read.title,
+      text: read.text.slice(0, PAGE_TEXT_CHARS),
+      profiles: profileLinks(raw, finalUrl),
+      published: read.published ?? null
+    };
+  } catch {
+    return void 0;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+// supabase/functions/_shared/research/investigate.ts
+var EXTRACT_VERSION = "extract-v1";
+var WIDE_PAGES = 18;
+var FOLLOW_PAGES = 10;
+var WIDE_QUERIES = 24;
+var LEADS_PER_ROUND = 6;
+var EXTRACT_CONCURRENCY = 8;
+var EXTRACT_ESTIMATE_USD = 12e-4;
+var quote = (s) => `"${s}"`;
+var hasOperator = (q) => /\bsite:|\sOR\s/.test(q);
+function widePlan(card, title) {
+  const name = quote(card.fullName);
+  const now = card.employers.find((e) => e.current) ?? card.employers[0];
+  const before = card.employers.filter((e) => e !== now).slice(0, 5);
+  const qs2 = [
+    name,
+    now ? `${name} ${now.name}` : void 0,
+    ...before.map((e) => `${name} ${e.name}`),
+    ...card.schools.slice(0, 4).map((s) => `${name} ${s.name}`),
+    card.city ? `${name} ${card.city}` : void 0,
+    `${name} award OR officer OR president OR captain OR team`,
+    `${name} hackathon OR project OR founder OR built`,
+    `${name} podcast OR interview OR talk OR speaker`,
+    card.schools[0] ? `${name} ${card.schools[0].name} club OR society OR chapter` : void 0,
+    `${name} site:instagram.com`,
+    `${name} site:youtube.com OR site:tiktok.com`,
+    `${name} site:github.com OR site:devpost.com`,
+    `${name} site:medium.com OR site:substack.com`,
+    // the record outside work that shows real homework: their own writing, causes, races and tournaments, their X
+    `${name} blog OR newsletter OR "personal site"`,
+    `${name} volunteer OR nonprofit OR mentor OR board`,
+    `${name} marathon OR tournament OR competition OR championship`,
+    `${name} site:x.com OR site:twitter.com`,
+    title && now ? `${name} ${title}` : void 0
+  ];
+  return [...new Set(qs2.filter((q) => !!q?.trim()))].slice(0, WIDE_QUERIES);
+}
+function followUps(card, leads, ran) {
+  const name = quote(card.fullName);
+  const out = [];
+  for (const lead of leads) {
+    const l = lead.replace(/["“”]/g, "").trim();
+    if (l.length < 3 || l.length > 60) continue;
+    if (card.names.some((n) => l.toLowerCase().includes(n))) continue;
+    const q = `${name} ${l}`;
+    const k = q.toLowerCase();
+    if (ran.has(k) || out.some((x) => x.toLowerCase() === k)) continue;
+    out.push(q);
+  }
+  return out.slice(0, LEADS_PER_ROUND);
+}
+var extractSchema = z.object({
+  match: z.enum(["yes", "likely", "no"]),
+  why: z.string(),
+  facts: z.array(z.object({ text: z.string(), date: z.string(), quote: z.string() })),
+  leads: z.array(z.string())
+});
+function extractSystem() {
+  return [
+    "You read one web page for a research tool and report what it says about one specific person, described in <person>.",
+    'match: "yes" when the page is clearly about this person: their name and something that ties it to them (a school, employer, team, city or link of theirs). "likely" when it names someone with their name and everything on it fits their timeline, places and field, but nothing ties it to them for certain. "no" when it is about someone else, contradicts their timeline, places or field, or does not mention them. why: one short sentence saying what decided it.',
+    'facts: up to 8 things the page says this person did, made, won, led, joined, wrote or said, including pursuits outside work they made public themselves (a sport, a race or tournament result, music, art, writing, a cause they volunteer for), the most specific first (the exact club, award, project, event or title), each one sentence in plain words, with the date or year the page gives ("" when none) and a quote of at most 25 words copied exactly from the page that supports it. Only what the page itself states about this person; nothing about anyone else.',
+    "Never include, even when the page says it: age or birthday, ethnicity, religion, health, family members or relationships, sexuality, politics or donations, where they live (a city is the finest), phone numbers, email addresses, money or pay, grades, legal matters or immigration.",
+    "Anything from when they were under 18: keep only achievements an organization published about them (an award, an officer role, a team they were on, a competition result), nothing personal, and nothing from their own social accounts from that time.",
+    'leads: up to 5 short phrases (2 to 6 words) worth searching next together with their name: organizations, clubs, teams, programs, awards, competitions, projects, events or publications this page connects them to (for example "DECA", "National Society of High School Scholars"). Not their name, not generic words.',
+    'With match "no", leave facts and leads empty.'
+  ].join("\n");
+}
+function extractUser(input, page2) {
+  return [
+    `<person>
+Name: ${input.card.fullName}
+${input.profile}
+</person>`,
+    `<page>
+url: ${page2.url}
+${page2.title ? `title: ${page2.title}
+` : ""}${page2.text}
+</page>`
+  ].join("\n");
+}
+function factsText(facts) {
+  return [
+    "What this page says about them:",
+    ...facts.map((f) => `- ${f.text}${f.date ? ` (${f.date})` : ""}${f.quote ? ` Quote: "${f.quote}"` : ""}`)
+  ].join("\n");
+}
+async function mapLimit(xs, n, f) {
+  const out = new Array(xs.length);
+  let i = 0;
+  await Promise.all(
+    Array.from({ length: Math.min(n, xs.length) }, async () => {
+      while (i < xs.length) {
+        const k = i++;
+        out[k] = await f(xs[k]);
+      }
+    })
+  );
+  return out;
+}
+async function investigate(deps, input, opts) {
+  const { card } = input;
+  const out = {
+    pages: [],
+    costUsd: 0,
+    notes: [],
+    steps: [],
+    queries: [],
+    rounds: 0,
+    accounts: []
+  };
+  const left = () => opts.deadline - deps.clock();
+  const ran = /* @__PURE__ */ new Set();
+  const seen = /* @__PURE__ */ new Set();
+  const handles = /* @__PURE__ */ new Set();
+  const slug = distinctiveSlug(card.slug);
+  if (slug) handles.add(slug);
+  const objective = `Pages about ${card.fullName}${input.title ? `, ${input.title}` : ""}${card.employers[0] ? ` at ${card.employers[0].name}` : ""}${card.schools[0] ? `, ${card.schools[0].name}` : ""}: what they did, won, led, made or said.`;
+  const engines = deps.engines.filter((e) => e.configured);
+  const plain2 = engines.find((e) => e.name === "parallel") ?? engines[0];
+  const operator = engines.find((e) => e.name === "serper") ?? engines[0];
+  if (!plain2 || !operator) {
+    out.notes.push("no search engine is configured for the investigator loop");
+    return out;
+  }
+  const searchCall = async (engine, queries) => {
+    const key2 = await cacheKey(`${engine.name}:search`, {
+      q: queries,
+      o: engine.name === "parallel" ? objective : ""
+    });
+    const cached = await deps.cache.get(key2);
+    if (cached) {
+      out.steps.push({ step: "search", provider: engine.name, costUsd: 0, ms: 0, n: cached.length });
+      return cached;
+    }
+    if (out.costUsd + engine.usdPerCall > opts.budgetUsd) {
+      out.notes.push("a search was skipped: cost cap");
+      return [];
+    }
+    const t0 = deps.clock();
+    let r = await engine.search(queries, objective);
+    out.costUsd += engine.usdPerCall;
+    if (!r.ok && engine !== operator && operator.configured) {
+      out.notes.push(`${engine.name} search failed (${r.message.slice(0, 80)}); used ${operator.name}`);
+      const hits3 = [];
+      for (const q of queries) {
+        const s = await operator.search([q], objective);
+        out.costUsd += operator.usdPerCall;
+        if (s.ok) hits3.push(...s.value);
+      }
+      r = { ok: true, value: hits3 };
+    }
+    if (!r.ok) {
+      out.steps.push({
+        step: "search",
+        provider: engine.name,
+        costUsd: 0,
+        ms: deps.clock() - t0,
+        error: r.message
+      });
+      out.notes.push(`${engine.name} search failed (${r.message.slice(0, 80)})`);
+      return [];
+    }
+    const hits2 = r.value.filter((h) => !isBlockedSource(h.url));
+    out.steps.push({
+      step: "search",
+      provider: engine.name,
+      costUsd: engine.usdPerCall,
+      ms: deps.clock() - t0,
+      n: hits2.length
+    });
+    await deps.cache.put(key2, `${engine.name}:search`, hits2, WEB_CACHE_MS);
+    return hits2;
+  };
+  const search = async (queries) => {
+    for (const q of queries) ran.add(q.toLowerCase());
+    out.queries.push(...queries);
+    const ops = queries.filter((q) => hasOperator(q) && operator.name === "serper");
+    const rest = queries.filter((q) => !ops.includes(q));
+    const calls = [];
+    for (let i = 0; i < rest.length; i += plain2.queriesPerCall)
+      calls.push(searchCall(plain2, rest.slice(i, i + plain2.queriesPerCall)));
+    for (const q of ops) calls.push(searchCall(operator, [q]));
+    return (await Promise.all(calls)).flat();
+  };
+  const read = async (hit) => {
+    const key2 = await cacheKey("page", { url: normalizeUrl(hit.url) });
+    const cached = await deps.cache.get(key2);
+    if (cached?.text) return { ...cached, profiles: cached.profiles ?? [] };
+    const page2 = await fetchPage(hit.url, {
+      fetch: deps.fetch,
+      timeoutMs: Math.min(6e3, Math.max(1500, left() - 2e3))
+    });
+    if (page2) {
+      await deps.cache.put(key2, "page", page2, WEB_CACHE_MS);
+      return page2;
+    }
+    if (!hit.snippet) return void 0;
+    return {
+      url: hit.url,
+      title: hit.title,
+      text: hit.snippet,
+      profiles: [],
+      published: hit.published,
+      fromExcerpt: true
+    };
+  };
+  const extract = async (page2) => {
+    const who = card.fullName?.trim();
+    const key2 = await cacheKey(
+      "extract",
+      who ? { v: EXTRACT_VERSION, url: normalizeUrl(page2.url), who: card.fullName, slug: card.slug ?? "" } : { v: EXTRACT_VERSION, url: normalizeUrl(page2.url) }
+    );
+    const cached = await deps.cache.get(key2);
+    if (cached) return cached;
+    if (out.costUsd + EXTRACT_ESTIMATE_USD > opts.budgetUsd) return void 0;
+    if (left() < 4e3) return void 0;
+    const r = await deps.claude.parse("extract", extractSchema, {
+      system: extractSystem(),
+      user: extractUser(input, page2),
+      timeoutMs: Math.min(25e3, left() - 1e3)
+    });
+    out.costUsd += r.costUsd ?? 0;
+    if (!r.ok) return void 0;
+    await deps.cache.put(key2, "extract", r.value, WEB_CACHE_MS);
+    return r.value;
+  };
+  const take2 = async (hits2, max) => {
+    const fresh = [];
+    for (const h of hits2) {
+      const k = normalizeUrl(h.url);
+      if (seen.has(k) || isLinkedInCopy(h.url) || isBlockedSource(h.url)) continue;
+      const s = scorePage({ url: h.url, title: h.title, text: h.snippet }, card);
+      if (s.strength === "none" && h.snippet) continue;
+      seen.add(k);
+      fresh.push(h);
+    }
+    const ranked = fresh.map((h) => ({ h, n: scorePage({ url: h.url, title: h.title, text: h.snippet }, card).signals.length })).sort((a, b) => b.n - a.n).slice(0, max).map((x) => x.h);
+    const t0 = deps.clock();
+    const pages = (await Promise.all(
+      ranked.map(async (h) => {
+        const p = await read(h);
+        if (p && h.snippet && !p.fromExcerpt && scorePage(p, card).strength === "none")
+          return { ...p, text: `${h.snippet}
+
+${p.text}` };
+        return p;
+      })
+    )).filter((p) => !!p);
+    out.steps.push({ step: "read", provider: "direct", costUsd: 0, ms: deps.clock() - t0, n: pages.length });
+    const named = pages.filter((p) => scorePage(p, card).strength !== "none");
+    const t1 = deps.clock();
+    const spentBefore = out.costUsd;
+    const readings2 = await mapLimit(named, EXTRACT_CONCURRENCY, extract);
+    out.steps.push({
+      step: "extract",
+      provider: "claude-haiku-5-5",
+      costUsd: round4(out.costUsd - spentBefore),
+      ms: deps.clock() - t1,
+      n: readings2.filter(Boolean).length
+    });
+    const leads2 = [];
+    named.forEach((p, i) => {
+      const x = readings2[i];
+      if (!x || x.match === "no") return;
+      const strong = scorePage(p, card).strength === "strong";
+      const match = strong && x.match === "yes" ? "yes" : "likely";
+      const facts = x.facts.filter((f) => f.text.trim() && !sensitiveCategory(`${f.text} ${f.quote}`)).map((f) => ({
+        text: f.text.trim(),
+        date: f.date?.trim() || void 0,
+        quote: f.quote?.trim() || void 0
+      }));
+      if (!facts.length) return;
+      out.pages.push({
+        url: p.url,
+        title: p.title,
+        published: p.published ?? null,
+        match,
+        facts,
+        text: factsText(facts)
+      });
+      leads2.push(...x.leads);
+      if (match === "yes")
+        for (const l of p.profiles) {
+          const h = profileHandle(l);
+          if (h) handles.add(h);
+        }
+    });
+    return leads2;
+  };
+  const reserve2 = 3e3;
+  let leads = await take2(await search(widePlan(card, input.title)), WIDE_PAGES);
+  if (handles.size && left() > 2e4) {
+    const t0 = deps.clock();
+    const found = await findAccounts([...handles], {
+      fetch: deps.fetch,
+      timeoutMs: Math.min(6e3, left() - 12e3)
+    });
+    out.accounts = found.map((a) => a.url);
+    out.steps.push({
+      step: "accounts",
+      provider: "maigret-sites",
+      costUsd: 0,
+      ms: deps.clock() - t0,
+      n: found.length
+    });
+    if (found.length)
+      leads.push(
+        ...await take2(
+          found.map((a) => ({ url: a.url, title: `${a.site}: ${a.handle}` })),
+          FOLLOW_PAGES
+        )
+      );
+  }
+  for (let round3 = 1; round3 <= opts.rounds; round3++) {
+    if (left() < 18e3 + reserve2) {
+      out.notes.push("follow-up searches stopped: out of time");
+      break;
+    }
+    if (out.costUsd >= opts.budgetUsd * 0.85) {
+      out.notes.push("follow-up searches stopped: cost cap");
+      break;
+    }
+    const next = followUps(card, leads, ran);
+    if (!next.length) break;
+    out.rounds = round3;
+    leads = await take2(await search(next), FOLLOW_PAGES);
+  }
+  out.costUsd = round4(out.costUsd);
+  out.pages.sort(
+    (a, b) => a.match === b.match ? b.facts.length - a.facts.length : a.match === "yes" ? -1 : 1
+  );
+  return out;
+}
+var round4 = (x) => Math.round(x * 1e4) / 1e4;
+
 // supabase/functions/_shared/research/prompts.ts
-var PROMPT_VERSION2 = "dossier-v3";
+var PROMPT_VERSION2 = "dossier-v4";
 var DOSSIER_SYSTEM = [
   "You write a research brief about one person for the student named in <student>, toward the goal written there.",
   'Use only the sources provided, and write from what each source actually says: "joined" stays "joined", never "led". Every claim needs the id of the source it came from.',
@@ -21696,6 +22374,10 @@ var DOSSIER_SYSTEM = [
   `"careful" is about their company only (recent layoffs, a reorganization, a product shut down, a hiring freeze), each item with its source ids; never anything about the person's own life. Leave it empty when there is nothing.`,
   '"company" is what is happening at their company that matters to the student (team news, launches, hiring), from company sources, each with its source ids. Leave it empty when there are no company sources.',
   `Openers: up to three single sentences the student could open a first message with, each a statement (not a question) of at most 25 words about something they made, said or did. Each rests on one cited source and uses only details that source states, in its words where you can (a title, a claim, a number); the student's reaction may be added ("stuck with me"). Never flattery, never about their private life.`,
+  "Dig past the obvious. The student wants the person to see they did real homework, so what matters most is what a quick look at their LinkedIn or a first-page search would not show: the club or chapter they ran, an award or competition result an organization published, a hackathon project, a side project or repo, a talk, podcast or panel, a post on their own blog or newsletter, a race, tournament or team they were on, a cause or nonprofit they volunteer for, a hobby or creative work they put out publicly, something specific they wrote or said. Prefer these over their job titles and schools, which the student can already see.",
+  `"deep_cuts": up to 6 of those hard-to-find things, the most specific and least obvious first, each one sentence that names the thing exactly (the club, the award and its year, the project, the race, the post's title) with its source ids. Use only web sources (never the LinkedIn profile or posts, which the student has already read). Their own public interests and pursuits outside work count (a sport, music, writing, a cause), as long as they made them public themselves or an organization published them. Leave it empty when the sources hold nothing beyond LinkedIn; never pad it with what LinkedIn already says.`,
+  "Go back through their whole timeline, not just the last few years: an old source is often the best one (a college club, a team they played on, a 2015 award, an early project or post). Say the year so the student knows how far back it is, and never present an old role or fact as current.",
+  'Openers: when "deep_cuts" has anything, at least one opener rests on one of them: a specific detail most people would not know to mention.',
   `Most people have little online beyond LinkedIn. When the only sources are their LinkedIn and the student's own history, say so plainly in "who" (for example "Not much is public about Dana beyond LinkedIn.") and keep to what LinkedIn says; do not pad.`,
   'Also lay out who they are in full, from the sources only: "career" (every role you can source, newest first, with start and end as written, e.g. "2021" or "Mar 2022"), "education", "profiles" (their own pages: LinkedIn, X, GitHub, a personal site, Google Scholar; only URLs that appear in the sources), "highlights" (up to 8 things they made or said that matter: posts, articles, talks, podcasts, projects, papers, news, awards, each with the URL of its source) and "topics" (up to 6 short phrases for what they work on or talk about).'
 ].join("\n");
@@ -21783,7 +22465,27 @@ var dossierSchema = z.object({
   ).optional(),
   topics: z.array(z.string()).optional(),
   // v2: what is happening at their company, from company pages (Go deeper)
-  company: z.array(z.object({ text: z.string(), source_ids: sourceIds })).optional()
+  company: z.array(z.object({ text: z.string(), source_ids: sourceIds })).optional(),
+  // v4: the hard-to-find, specific things deep research turned up beyond LinkedIn (clubs, awards, projects, talks,
+  // their public pursuits outside work), each from a web source
+  deep_cuts: z.array(
+    z.object({
+      kind: z.enum([
+        "club",
+        "award",
+        "project",
+        "talk",
+        "writing",
+        "team",
+        "volunteer",
+        "interest",
+        "other"
+      ]),
+      text: z.string(),
+      date: z.string().nullable(),
+      source_ids: sourceIds
+    })
+  ).optional()
 });
 function retryNote2(bad, allowed) {
   return `
@@ -21804,6 +22506,10 @@ var supportSchema = z.object({
 
 // supabase/functions/_shared/research/dossier.ts
 var DOSSIER_CAP_USD = 0.3;
+var INVESTIGATE_BUDGET_USD = 0.12;
+var INVESTIGATE_ROUNDS = 3;
+var INVESTIGATE_MS = 55e3;
+var INVESTIGATE_PAGES = 16;
 var DOSSIER_REUSE_MS = 30 * 864e5;
 var EXA_CACHE_MS = 7 * 864e5;
 var DOSSIER_MODEL = "claude-opus-5-5";
@@ -21854,7 +22560,9 @@ async function buildDossier(deps, input) {
     await save(run, { status: "failed", error: "minor" }, now);
     return { status: "failed", error: "minor", costUsd: run.spent, cached: false };
   }
-  const kept = dedupeByUrl([...keptPeople, ...keptOther]).slice(0, 8);
+  const found = identity.kind === "anchored" ? await investigateStep(run, identity.card, linkedin.profile) : [];
+  const foundUrls = new Set(found.map((p) => normalizeUrl(p.url)));
+  const kept = dedupeByUrl([...keptPeople, ...keptOther]).filter((r) => !foundUrls.has(normalizeUrl(r.url))).slice(0, 8);
   const texts = await contentsStep(
     run,
     kept.map((r) => r.url)
@@ -21897,6 +22605,17 @@ ${text3}`);
       text: text3
     });
   }
+  for (const p of found) {
+    sources.push({
+      id: nextId(),
+      kind: "web",
+      url: p.url,
+      // the writer may use a likely page only as likely (prompts.ts)
+      title: `${p.match === "likely" ? "[likely them] " : ""}${p.title ?? ""}`.trim() || void 0,
+      published: p.published ?? null,
+      text: p.text
+    });
+  }
   const allowed = sources.map((s) => s.id);
   const prompt = {
     system: DOSSIER_SYSTEM,
@@ -21937,12 +22656,65 @@ ${dossierUser({
     status,
     dossier,
     sources: storedSources,
-    costUsd: round4(run.spent),
+    costUsd: round42(run.spent),
     cached: false,
     model,
     promptVersion: PROMPT_VERSION2,
     notes: run.notes
   };
+}
+async function investigateStep(run, card, profile) {
+  const { deps, input } = run;
+  const engines = (deps.engines ?? []).filter((e) => e.configured);
+  if (engines.length === 0 || !deps.cache) return [];
+  const budgetUsd = Math.min(INVESTIGATE_BUDGET_USD, DOSSIER_CAP_USD - run.spent - SYNTH_OUT_USD * 2);
+  if (budgetUsd <= 0) {
+    run.notes.push("deep search skipped: cost cap");
+    run.partial = true;
+    return [];
+  }
+  try {
+    const inv = await investigate(
+      { engines, claude: deps.claude, cache: deps.cache, fetch: deps.fetch, clock: deps.clock },
+      {
+        card,
+        profile: profile ? formatProfile(profile) : focusText(card, input.person.title),
+        title: input.person.title
+      },
+      { rounds: INVESTIGATE_ROUNDS, budgetUsd, deadline: deps.clock() + INVESTIGATE_MS }
+    );
+    run.spent += inv.costUsd;
+    const byEngine = /* @__PURE__ */ new Map();
+    for (const st of inv.steps) {
+      if (st.step !== "search" || st.costUsd <= 0) continue;
+      if (st.provider !== "parallel" && st.provider !== "serper") continue;
+      const e = byEngine.get(st.provider) ?? { units: 0, costUsd: 0 };
+      e.units += 1;
+      e.costUsd += st.costUsd;
+      byEngine.set(st.provider, e);
+    }
+    for (const [provider, e] of byEngine)
+      await deps.budget.record(input.userId, {
+        provider,
+        operation: "investigate",
+        units: e.units,
+        costUsd: round42(e.costUsd)
+      }).catch(() => void 0);
+    for (const n of inv.notes) if (!run.notes.includes(n)) run.notes.push(n);
+    return inv.pages.filter((p) => !isBlockedSource(p.url)).slice(0, INVESTIGATE_PAGES);
+  } catch {
+    run.notes.push("deep search failed; the brief uses the other sources");
+    return [];
+  }
+}
+function focusText(card, title) {
+  const now = card.employers.find((e) => e.current) ?? card.employers[0];
+  return [
+    card.fullName,
+    now ? `${title ? `${title} at ` : ""}${now.name}` : title,
+    card.schools[0]?.name,
+    card.city
+  ].filter(Boolean).join(", ");
 }
 async function linkedInStep(run) {
   const { deps, input } = run;
@@ -22189,7 +22961,8 @@ function invalidSourceIds(d, allowed) {
     ...(d.career ?? []).flatMap((x) => x.source_ids),
     ...(d.education ?? []).flatMap((x) => x.source_ids),
     ...(d.highlights ?? []).flatMap((x) => x.source_ids),
-    ...(d.company ?? []).flatMap((x) => x.source_ids)
+    ...(d.company ?? []).flatMap((x) => x.source_ids),
+    ...(d.deep_cuts ?? []).flatMap((x) => x.source_ids)
   ];
   return [...new Set(all.filter((id) => !ok.has(id)))];
 }
@@ -22289,6 +23062,7 @@ function dropUncited(d, allowed) {
     education: keep(d.education),
     highlights: keep(d.highlights),
     company: keep(d.company),
+    deep_cuts: keep(d.deep_cuts),
     confidence: "low"
   };
 }
@@ -22310,6 +23084,7 @@ function finish(d, history, noOutsideSources) {
     highlights: (d.highlights ?? []).filter((h) => !sensitiveCategory(`${h.title} ${h.summary ?? ""}`)).filter((h) => !h.url || !/^https?:\/\//i.test(h.url) || !isBlockedSource(h.url)).map((h) => ({ ...h, url: h.url && /^https?:\/\//i.test(h.url) ? h.url : null })).slice(0, 8),
     topics: (d.topics ?? []).filter((t) => !sensitiveCategory(t)).slice(0, 6),
     company: clean3(d.company ?? []).slice(0, 5),
+    deep_cuts: clean3(d.deep_cuts ?? []).slice(0, 6),
     history: {
       first_contact: d.history.first_contact ?? history.firstContact ?? null,
       last_contact: d.history.last_contact ?? history.lastContact ?? null,
@@ -22394,7 +23169,7 @@ function formatHistory(h) {
   for (const e of h.events) lines.push(`event ${e.at.slice(0, 10)}: ${e.title}`);
   return lines.join("\n") || "(none)";
 }
-var round4 = (x) => Math.round(x * 1e4) / 1e4;
+var round42 = (x) => Math.round(x * 1e4) / 1e4;
 async function save(run, r, now) {
   const { deps, input } = run;
   await deps.db.putDossier({
@@ -22405,7 +23180,7 @@ async function save(run, r, now) {
     content: r.content ?? null,
     sources: r.sources ?? [],
     candidates: r.candidates ?? null,
-    cost_usd: round4(run.spent),
+    cost_usd: round42(run.spent),
     model: r.model ?? null,
     prompt_version: r.content ? PROMPT_VERSION2 : null,
     error: r.error ?? null,
@@ -22459,6 +23234,7 @@ async function runDossierJob(s, userId, payload) {
     select external_account_id from orbit.integration_accounts
      where user_id = ${userId}::uuid and provider = 'linkedin' and status = 'active'`;
   const chosen = payload.chosen;
+  const engine = { fetch: s.fetch, timeoutMs: 1e4, maxRetries: 1, gate: switchGate(db2, "web_search") };
   return buildDossier(
     {
       exa: s.exa,
@@ -22466,7 +23242,13 @@ async function runDossierJob(s, userId, payload) {
       claude: claudeDep(s.claude, userId),
       db: sqlResearchDb(db2, s.now),
       budget: sqlBudget(db2, s.now),
-      clock: () => s.now().getTime()
+      clock: () => s.now().getTime(),
+      engines: [
+        createParallelSearch({ ...engine, apiKey: s.env.parallelKey }),
+        createSerperSearch({ ...engine, apiKey: s.env.serperKey })
+      ],
+      cache: sqlSharedCache(db2, () => s.now().getTime()),
+      fetch: s.fetch
     },
     {
       userId,
@@ -22693,229 +23475,6 @@ var GOAL_KINDS = [
   "community",
   "collaboration"
 ];
-
-// supabase/functions/_shared/providers/webSearch.ts
-var PARALLEL_BASE = "https://api.parallel.ai";
-var SERPER_BASE = "https://google.serper.dev";
-var PARALLEL_SEARCH_USD = 1e-3;
-var SERPER_SEARCH_USD = 1e-3;
-var PARALLEL_QUERIES_PER_REQUEST = 5;
-var parallelResponse = z.looseObject({
-  results: z.array(
-    z.looseObject({
-      url: z.string(),
-      title: z.string().nullish(),
-      publish_date: z.string().nullish(),
-      excerpts: z.array(z.string()).nullish()
-    })
-  ).default([])
-});
-var serperResponse = z.looseObject({
-  organic: z.array(
-    z.looseObject({
-      link: z.string(),
-      title: z.string().nullish(),
-      snippet: z.string().nullish(),
-      date: z.string().nullish()
-    })
-  ).default([])
-});
-function createParallelSearch(opts) {
-  const base = trimBase(opts.baseUrl ?? PARALLEL_BASE);
-  return {
-    name: "parallel",
-    configured: !!opts.apiKey,
-    usdPerCall: PARALLEL_SEARCH_USD,
-    queriesPerCall: PARALLEL_QUERIES_PER_REQUEST,
-    async search(queries, objective) {
-      if (!opts.apiKey) return unconfigured2("parallel");
-      const r = await requestJson(opts, {
-        provider: "parallel",
-        url: `${base}/v1/search`,
-        method: "POST",
-        headers: { "x-api-key": opts.apiKey },
-        body: {
-          objective,
-          search_queries: queries.slice(0, PARALLEL_QUERIES_PER_REQUEST),
-          mode: "fast",
-          max_chars_total: 12e3
-        },
-        schema: parallelResponse
-      });
-      if (!r.ok) return r;
-      return {
-        ok: true,
-        value: r.value.results.map((x) => ({
-          url: x.url,
-          title: x.title ?? void 0,
-          snippet: (x.excerpts ?? []).join(" … ").slice(0, 1500) || void 0,
-          published: x.publish_date ?? null
-        }))
-      };
-    }
-  };
-}
-function createSerperSearch(opts) {
-  const base = trimBase(opts.baseUrl ?? SERPER_BASE);
-  return {
-    name: "serper",
-    configured: !!opts.apiKey,
-    usdPerCall: SERPER_SEARCH_USD,
-    queriesPerCall: 1,
-    async search(queries) {
-      if (!opts.apiKey) return unconfigured2("serper");
-      const r = await requestJson(opts, {
-        provider: "serper",
-        url: `${base}/search`,
-        method: "POST",
-        headers: { "X-API-KEY": opts.apiKey },
-        body: { q: queries[0] ?? "", num: 10, gl: "us", hl: "en" },
-        schema: serperResponse
-      });
-      if (!r.ok) return r;
-      return {
-        ok: true,
-        value: r.value.organic.map((x) => ({
-          url: x.link,
-          title: x.title ?? void 0,
-          snippet: x.snippet ?? void 0,
-          published: x.date ?? null
-        }))
-      };
-    }
-  };
-}
-
-// supabase/functions/_shared/research/pageText.ts
-var PAGE_TEXT_CHARS = 9e3;
-var MAX_BYTES = 15e5;
-var UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0 Safari/537.36";
-var ENTITIES2 = {
-  amp: "&",
-  lt: "<",
-  gt: ">",
-  quot: '"',
-  apos: "'",
-  nbsp: " ",
-  rsquo: "’",
-  lsquo: "‘",
-  rdquo: "”",
-  ldquo: "“",
-  mdash: "—",
-  ndash: "–",
-  hellip: "…"
-};
-function decodeEntities2(s) {
-  return s.replace(/&#(\d+);/g, (_, n) => String.fromCodePoint(Number(n))).replace(/&#x([0-9a-f]+);/gi, (_, n) => String.fromCodePoint(Number.parseInt(n, 16))).replace(/&([a-z]+);/gi, (m, n) => ENTITIES2[n.toLowerCase()] ?? m);
-}
-function meta(html, key2) {
-  const re = new RegExp(
-    `<meta[^>]+(?:name|property)=["']${key2}["'][^>]*content=["']([^"']*)["']|<meta[^>]+content=["']([^"']*)["'][^>]*(?:name|property)=["']${key2}["']`,
-    "i"
-  );
-  const m = re.exec(html);
-  const v = m?.[1] ?? m?.[2];
-  return v ? decodeEntities2(v).trim() : void 0;
-}
-function htmlToText2(html) {
-  const title = decodeEntities2(/<title[^>]*>([\s\S]*?)<\/title>/i.exec(html)?.[1] ?? "").trim() || void 0;
-  const description = meta(html, "og:description") ?? meta(html, "description");
-  const ogTitle = meta(html, "og:title");
-  const published = meta(html, "article:published_time") ?? meta(html, "og:published_time");
-  const body = html.replace(/<!--[\s\S]*?-->/g, " ").replace(/<(script|style|noscript|svg|template|iframe|head|nav|footer|form)\b[\s\S]*?<\/\1>/gi, " ").replace(/<br\s*\/?>/gi, "\n").replace(/<\/(p|div|li|h[1-6]|tr|section|article|header|blockquote|dd|dt)>/gi, "\n").replace(/<[^>]+>/g, " ");
-  const text3 = decodeEntities2(body).split("\n").map((l) => l.replace(/[ \t\f\v ]+/g, " ").trim()).filter((l) => l.length > 1).join("\n").replace(/\n{3,}/g, "\n\n");
-  const head = [ogTitle && ogTitle !== title ? ogTitle : "", description ?? ""].filter(Boolean).join("\n");
-  return { title: title ?? ogTitle, text: [head, text3].filter(Boolean).join("\n\n"), published };
-}
-var PROFILE_RES = [
-  /^https?:\/\/(?:www\.)?github\.com\/([A-Za-z0-9-]{1,39})\/?$/i,
-  /^https?:\/\/(?:www\.)?(?:x|twitter)\.com\/([A-Za-z0-9_]{1,15})\/?$/i,
-  /^https?:\/\/(?:www\.)?instagram\.com\/([A-Za-z0-9_.]{1,30})\/?$/i,
-  /^https?:\/\/(?:www\.)?youtube\.com\/@([A-Za-z0-9_.-]{3,30})\/?$/i,
-  /^https?:\/\/(?:www\.)?tiktok\.com\/@([A-Za-z0-9_.]{2,24})\/?$/i,
-  /^https?:\/\/(?:www\.)?threads\.(?:net|com)\/@([A-Za-z0-9_.]{1,30})\/?$/i,
-  /^https?:\/\/(?:www\.)?medium\.com\/@([A-Za-z0-9_.-]{1,30})\/?$/i,
-  /^https?:\/\/([a-z0-9-]{2,40})\.substack\.com\/?$/i,
-  /^https?:\/\/(?:www\.)?linktr\.ee\/([A-Za-z0-9_.]{2,30})\/?$/i,
-  /^https?:\/\/(?:www\.)?behance\.net\/([A-Za-z0-9_-]{2,30})\/?$/i,
-  /^https?:\/\/(?:www\.)?dribbble\.com\/([A-Za-z0-9_-]{2,30})\/?$/i,
-  /^https?:\/\/(?:www\.)?devpost\.com\/([A-Za-z0-9_-]{2,40})\/?$/i,
-  /^https?:\/\/(?:www\.)?huggingface\.co\/([A-Za-z0-9_-]{2,40})\/?$/i,
-  /^https?:\/\/bsky\.app\/profile\/([A-Za-z0-9_.-]{3,60})\/?$/i
-];
-var NOT_HANDLES = /* @__PURE__ */ new Set([
-  "about",
-  "explore",
-  "home",
-  "login",
-  "signup",
-  "search",
-  "settings",
-  "share",
-  "intent",
-  "features",
-  "pricing",
-  "topics",
-  "trending",
-  "sponsors",
-  "orgs",
-  "www",
-  "help",
-  "privacy",
-  "terms"
-]);
-function profileHandle(url) {
-  for (const re of PROFILE_RES) {
-    const m = re.exec(url.trim());
-    if (m?.[1] && !NOT_HANDLES.has(m[1].toLowerCase())) return m[1];
-  }
-  return void 0;
-}
-function profileLinks(html, base) {
-  const out = /* @__PURE__ */ new Set();
-  for (const m of html.matchAll(/href=["']([^"'#]+)["']/gi)) {
-    let u2;
-    try {
-      u2 = new URL(decodeEntities2(m[1]), base).toString();
-    } catch {
-      continue;
-    }
-    if (profileHandle(u2)) out.add(u2.replace(/\/+$/, ""));
-  }
-  return [...out].slice(0, 40);
-}
-async function fetchPage(url, opts = {}) {
-  if (isBlockedSource(url) || !/^https?:\/\//i.test(url)) return void 0;
-  const ctrl = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(), opts.timeoutMs ?? 6e3);
-  try {
-    const r = await (opts.fetch ?? fetch)(url, {
-      redirect: "follow",
-      signal: ctrl.signal,
-      headers: { "user-agent": UA, accept: "text/html,application/xhtml+xml", "accept-language": "en-US,en" }
-    });
-    if (!r.ok) return void 0;
-    const type = r.headers.get("content-type") ?? "";
-    if (type && !/html|xml|text\/plain/i.test(type)) return void 0;
-    const raw = (await r.text()).slice(0, MAX_BYTES);
-    const finalUrl = r.url || url;
-    if (/text\/plain/i.test(type))
-      return { url: finalUrl, text: raw.slice(0, PAGE_TEXT_CHARS), profiles: [], published: null };
-    const read = htmlToText2(raw);
-    if (!read.text.trim()) return void 0;
-    return {
-      url: finalUrl,
-      title: read.title,
-      text: read.text.slice(0, PAGE_TEXT_CHARS),
-      profiles: profileLinks(raw, finalUrl),
-      published: read.published ?? null
-    };
-  } catch {
-    return void 0;
-  } finally {
-    clearTimeout(timer);
-  }
-}
 
 // supabase/functions/_shared/research/engineWeb.ts
 var PAGE_FETCH_MS = 6e3;
@@ -24179,7 +24738,7 @@ function llmFitScorer(claude) {
     return out;
   };
 }
-var round42 = (x) => Math.round(x * 1e4) / 1e4;
+var round43 = (x) => Math.round(x * 1e4) / 1e4;
 async function rank(ctx, cands, batchId) {
   const { deps, input } = ctx;
   if (cands.length === 0) return [];
@@ -24215,10 +24774,10 @@ async function rank(ctx, cands, batchId) {
       candidate,
       source: c.sources.join("+"),
       external_id: c.memberId ?? c.externalIds.apollo ?? c.externalIds.semantic_scholar ?? c.linkedinUrl ?? c.url ?? null,
-      rank: round42(warmth ? warmRank(base, f.fit, warmth.tier) : base),
-      fit: round42(f.fit),
-      reach: round42(reach),
-      responsiveness: round42(responsiveness),
+      rank: round43(warmth ? warmRank(base, f.fit, warmth.tier) : base),
+      fit: round43(f.fit),
+      reach: round43(reach),
+      responsiveness: round43(responsiveness),
       reasons,
       status: "new",
       batch_id: batchId
@@ -27916,7 +28475,7 @@ async function scorePeople2(db2, userId, opts) {
     const tie = scoreTie(h, now, TIE_WEIGHTS, calibration);
     const score = FLOOR_TYPES.has(relationship.get(p.id) ?? "") ? Math.max(80, tie.score) : tie.score;
     const share = shareScore(h, now, TIE_WEIGHTS, calibration);
-    const exists = !tie.facts.never || h.linkedinConnected || h.intros > 0;
+    const exists2 = !tie.facts.never || h.linkedinConnected || h.intros > 0;
     const lastAt = [
       ...h.messages.filter((m) => !m.automated && m.threadParticipants <= 9).map((m) => m.at),
       ...h.meetings.map((m) => m.at)
@@ -27930,7 +28489,7 @@ async function scorePeople2(db2, userId, opts) {
       contributions: tie.contributions,
       explanation: tie.explanation,
       model: tie.modelVersion,
-      strength: exists ? score / 100 : 0,
+      strength: exists2 ? score / 100 : 0,
       last: lastAt ?? null
     };
   });
@@ -30240,7 +30799,9 @@ var RESERVE_MS = {
   company_facts_sync: 3e4,
   "logos.sweep": 5e4,
   "logos.user": 5e4,
-  "claude.batch.poll": 4e4
+  "claude.batch.poll": 4e4,
+  // deep research: the investigator loop (up to 55 s) and the brief's writer (about 40 s)
+  "enrich.dossier": 1e5
 };
 var DEFAULT_RESERVE_MS = 8e3;
 var backoffSec = (readCt) => 30 * 2 ** Math.max(0, readCt - 1);

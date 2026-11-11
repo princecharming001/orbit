@@ -1,7 +1,10 @@
 /**
  * The `enrich.dossier` pipeline (§5.2 steps 1–7) as one orchestration function over injected dependencies:
- * internal history → LinkedIn profile and posts → three Exa searches → identity check (or stop and ask) → contents
- * for the top 6 kept pages → Opus synthesis with source-id validation (one retry) → cache.
+ * internal history → LinkedIn profile and posts → three Exa searches → identity check (or stop and ask) → the
+ * investigator loop when Parallel or Serper is set up (investigate.ts: wide searches from every anchor, each page read
+ * and judged, leads followed for up to three rounds, across their whole timeline) → contents for the top kept Exa pages → Opus synthesis with source-id
+ * validation (one retry) → cache. The loop is what reaches the niche record a basic search misses (the club they ran,
+ * the award, the race, the side project), which the brief puts first ("deep_cuts").
  *
  * Money: everything paid counts toward a $0.30 cap per dossier (the quick brief's cap, docs/plan/20); a step that
  * would cross it is skipped and the dossier is marked partial. Exa responses are cached by request hash for 7 days,
@@ -17,6 +20,7 @@ import {
 } from '../providers/exa';
 import { cacheKey } from '../providers/request';
 import type { UnipilePost, UnipileProfile, UnipileResearch } from '../providers/unipileResearch';
+import type { SearchEngine } from '../providers/webSearch';
 import type { BudgetDep, ClaudeDep, Clock, DossierRow, InternalHistory, ResearchDb } from './deps';
 import {
   appearsMinor,
@@ -30,6 +34,7 @@ import {
   stripSensitiveSentences,
 } from './guards';
 import { type IdentityCard, identityCard, scorePage } from './identity';
+import { type FoundPage, investigate } from './investigate';
 import {
   DOSSIER_SYSTEM,
   type DossierContent,
@@ -39,8 +44,15 @@ import {
   PROMPT_VERSION,
   retryNote,
 } from './prompts';
+import { normalizeUrl, type SharedCache } from './web';
 
 export const DOSSIER_CAP_USD = 0.3;
+/** the investigator loop's share of the cap, its follow-up rounds, how long it may take, and the pages it hands on */
+export const INVESTIGATE_BUDGET_USD = 0.12;
+export const INVESTIGATE_ROUNDS = 3;
+/** the worker's tick is 110 s and the writer takes about 40: the loop stops following leads after this */
+export const INVESTIGATE_MS = 55_000;
+export const INVESTIGATE_PAGES = 16;
 export const DOSSIER_REUSE_MS = 30 * 86_400_000;
 export const EXA_CACHE_MS = 7 * 86_400_000;
 export const DOSSIER_MODEL = 'claude-opus-5-5';
@@ -55,6 +67,12 @@ export interface DossierDeps {
   db: ResearchDb;
   budget: BudgetDep;
   clock: Clock;
+  /** Parallel and Serper (PARALLEL_API_KEY, SERPER_API_KEY): with one configured and a cache, the investigator loop runs */
+  engines?: SearchEngine[];
+  /** the shared 7-day research cache the loop keeps its searches, pages and readings in */
+  cache?: SharedCache;
+  /** page fetches for the loop (tests pass a fake) */
+  fetch?: typeof fetch;
 }
 
 export type GoalKind =
@@ -206,14 +224,21 @@ export async function buildDossier(deps: DossierDeps, input: DossierInput): Prom
     return { status: 'failed', error: 'minor', costUsd: run.spent, cached: false };
   }
 
-  // 5. contents for the top 6 kept pages
-  const kept = dedupeByUrl([...keptPeople, ...keptOther]).slice(0, 8);
+  // 5. the investigator loop: the niche record past LinkedIn and the first page of results
+  const found =
+    identity.kind === 'anchored' ? await investigateStep(run, identity.card, linkedin.profile) : [];
+
+  // 6. contents for the top kept Exa pages (one the loop already read is not paid for twice)
+  const foundUrls = new Set(found.map((p) => normalizeUrl(p.url)));
+  const kept = dedupeByUrl([...keptPeople, ...keptOther])
+    .filter((r) => !foundUrls.has(normalizeUrl(r.url)))
+    .slice(0, 8);
   const texts = await contentsStep(
     run,
     kept.map((r) => r.url),
   );
 
-  // 6. synthesis over numbered sources
+  // 7. synthesis over numbered sources
   const sources: (DossierSource & { text: string })[] = [];
   let n = 0;
   const nextId = () => `S${++n}`;
@@ -251,6 +276,18 @@ export async function buildDossier(deps: DossierDeps, input: DossierInput): Prom
       title: r.title ?? undefined,
       published: r.publishedDate,
       text,
+    });
+  }
+
+  for (const p of found) {
+    sources.push({
+      id: nextId(),
+      kind: 'web',
+      url: p.url,
+      // the writer may use a likely page only as likely (prompts.ts)
+      title: `${p.match === 'likely' ? '[likely them] ' : ''}${p.title ?? ''}`.trim() || undefined,
+      published: p.published ?? null,
+      text: p.text,
     });
   }
 
@@ -300,6 +337,79 @@ export async function buildDossier(deps: DossierDeps, input: DossierInput): Prom
     promptVersion: PROMPT_VERSION,
     notes: run.notes,
   };
+}
+
+// ---- step 5: the investigator loop -----------------------------------------------------------------------------
+
+/**
+ * Run investigate.ts when a search engine is set up: wide searches from every anchor the profile gives, every page
+ * read and judged against who they are, leads followed for up to three rounds. Its searches are paid from this dossier's cap
+ * and recorded per engine; its page readings go through the Claude helper, which records its own usage. Never throws.
+ */
+async function investigateStep(
+  run: Run,
+  card: IdentityCard,
+  profile: UnipileProfile | null,
+): Promise<FoundPage[]> {
+  const { deps, input } = run;
+  const engines = (deps.engines ?? []).filter((e) => e.configured);
+  if (engines.length === 0 || !deps.cache) return [];
+  // leave the writer what it needs: the loop never takes more than its share or what the cap has left
+  const budgetUsd = Math.min(INVESTIGATE_BUDGET_USD, DOSSIER_CAP_USD - run.spent - SYNTH_OUT_USD * 2);
+  if (budgetUsd <= 0) {
+    run.notes.push('deep search skipped: cost cap');
+    run.partial = true;
+    return [];
+  }
+  try {
+    const inv = await investigate(
+      { engines, claude: deps.claude, cache: deps.cache, fetch: deps.fetch, clock: deps.clock },
+      {
+        card,
+        profile: profile ? formatProfile(profile) : focusText(card, input.person.title),
+        title: input.person.title,
+      },
+      { rounds: INVESTIGATE_ROUNDS, budgetUsd, deadline: deps.clock() + INVESTIGATE_MS },
+    );
+    run.spent += inv.costUsd;
+    // searches by engine into the user's ledger (the page readings are already there, through the Claude helper)
+    const byEngine = new Map<'parallel' | 'serper', { units: number; costUsd: number }>();
+    for (const st of inv.steps) {
+      if (st.step !== 'search' || st.costUsd <= 0) continue;
+      if (st.provider !== 'parallel' && st.provider !== 'serper') continue;
+      const e = byEngine.get(st.provider) ?? { units: 0, costUsd: 0 };
+      e.units += 1;
+      e.costUsd += st.costUsd;
+      byEngine.set(st.provider, e);
+    }
+    for (const [provider, e] of byEngine)
+      await deps.budget
+        .record(input.userId, {
+          provider,
+          operation: 'investigate',
+          units: e.units,
+          costUsd: round4(e.costUsd),
+        })
+        .catch(() => undefined);
+    for (const n of inv.notes) if (!run.notes.includes(n)) run.notes.push(n);
+    return inv.pages.filter((p) => !isBlockedSource(p.url)).slice(0, INVESTIGATE_PAGES);
+  } catch {
+    run.notes.push('deep search failed; the brief uses the other sources');
+    return [];
+  }
+}
+
+/** Who they are in a line, for the loop's judge when there is no LinkedIn profile. */
+function focusText(card: IdentityCard, title?: string): string {
+  const now = card.employers.find((e) => e.current) ?? card.employers[0];
+  return [
+    card.fullName,
+    now ? `${title ? `${title} at ` : ''}${now.name}` : title,
+    card.schools[0]?.name,
+    card.city,
+  ]
+    .filter(Boolean)
+    .join(', ');
 }
 
 // ---- step 2: LinkedIn ---------------------------------------------------------------------------------------
@@ -612,6 +722,7 @@ export function invalidSourceIds(d: DossierContent, allowed: string[]): string[]
     ...(d.education ?? []).flatMap((x) => x.source_ids),
     ...(d.highlights ?? []).flatMap((x) => x.source_ids),
     ...(d.company ?? []).flatMap((x) => x.source_ids),
+    ...(d.deep_cuts ?? []).flatMap((x) => x.source_ids),
   ];
   return [...new Set(all.filter((id) => !ok.has(id)))];
 }
@@ -760,6 +871,7 @@ export function dropUncited(d: DossierContent, allowed: string[]): DossierConten
     education: keep(d.education),
     highlights: keep(d.highlights),
     company: keep(d.company),
+    deep_cuts: keep(d.deep_cuts),
     confidence: 'low',
   };
 }
@@ -797,6 +909,7 @@ export function finish(
       .slice(0, 8),
     topics: (d.topics ?? []).filter((t) => !sensitiveCategory(t)).slice(0, 6),
     company: clean(d.company ?? []).slice(0, 5),
+    deep_cuts: clean(d.deep_cuts ?? []).slice(0, 6),
     history: {
       first_contact: d.history.first_contact ?? history.firstContact ?? null,
       last_contact: d.history.last_contact ?? history.lastContact ?? null,

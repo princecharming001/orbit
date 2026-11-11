@@ -2,7 +2,7 @@
  * The investigator loop (docs/plan/20, "investigator" section): how deep research reaches past LinkedIn to the niche
  * public record of a person (the club they ran, the award a school published, the talk, the side project) cheaply.
  *
- *   1. Wide: 12 to 16 searches from every anchor LinkedIn gives (each employer, each school including high school,
+ *   1. Wide: 12 to 24 searches from every anchor LinkedIn gives (each employer, each school including high school,
  *      their city) and from the kinds of pages niche facts live on (awards, officer roles, teams, hackathons, talks,
  *      their own accounts). Plain queries go to Parallel (fast mode, five per request); queries with operators
  *      (site:, OR) to Serper, which is Google. Either does all of them when the other is not set up.
@@ -35,6 +35,8 @@ export const EXTRACT_VERSION = 'extract-v1';
 /** pages read in the first round, and in each follow-up */
 export const WIDE_PAGES = 18;
 export const FOLLOW_PAGES = 10;
+/** searches in the first round */
+export const WIDE_QUERIES = 24;
 /** new searches a round of leads may add */
 export const LEADS_PER_ROUND = 6;
 /** extraction calls at once */
@@ -105,7 +107,8 @@ const hasOperator = (q: string) => /\bsite:|\sOR\s/.test(q);
 export function widePlan(card: IdentityCard, title?: string): string[] {
   const name = quote(card.fullName);
   const now = card.employers.find((e) => e.current) ?? card.employers[0];
-  const before = card.employers.filter((e) => e !== now).slice(0, 2);
+  // every past employer, not just the last two: old pages (a 2015 team page, an early award) say the most
+  const before = card.employers.filter((e) => e !== now).slice(0, 5);
   const qs = [
     name,
     now ? `${name} ${now.name}` : undefined,
@@ -120,9 +123,14 @@ export function widePlan(card: IdentityCard, title?: string): string[] {
     `${name} site:youtube.com OR site:tiktok.com`,
     `${name} site:github.com OR site:devpost.com`,
     `${name} site:medium.com OR site:substack.com`,
+    // the record outside work that shows real homework: their own writing, causes, races and tournaments, their X
+    `${name} blog OR newsletter OR "personal site"`,
+    `${name} volunteer OR nonprofit OR mentor OR board`,
+    `${name} marathon OR tournament OR competition OR championship`,
+    `${name} site:x.com OR site:twitter.com`,
     title && now ? `${name} ${title}` : undefined,
   ];
-  return [...new Set(qs.filter((q): q is string => !!q?.trim()))].slice(0, 16);
+  return [...new Set(qs.filter((q): q is string => !!q?.trim()))].slice(0, WIDE_QUERIES);
 }
 
 /** Lead phrases into new searches with their name: never one already run, never the name alone. */
@@ -155,7 +163,7 @@ export function extractSystem(): string {
   return [
     'You read one web page for a research tool and report what it says about one specific person, described in <person>.',
     'match: "yes" when the page is clearly about this person: their name and something that ties it to them (a school, employer, team, city or link of theirs). "likely" when it names someone with their name and everything on it fits their timeline, places and field, but nothing ties it to them for certain. "no" when it is about someone else, contradicts their timeline, places or field, or does not mention them. why: one short sentence saying what decided it.',
-    'facts: up to 8 things the page says this person did, made, won, led, joined, wrote or said, each one sentence in plain words, with the date or year the page gives ("" when none) and a quote of at most 25 words copied exactly from the page that supports it. Only what the page itself states about this person; nothing about anyone else.',
+    'facts: up to 8 things the page says this person did, made, won, led, joined, wrote or said, including pursuits outside work they made public themselves (a sport, a race or tournament result, music, art, writing, a cause they volunteer for), the most specific first (the exact club, award, project, event or title), each one sentence in plain words, with the date or year the page gives ("" when none) and a quote of at most 25 words copied exactly from the page that supports it. Only what the page itself states about this person; nothing about anyone else.',
     'Never include, even when the page says it: age or birthday, ethnicity, religion, health, family members or relationships, sexuality, politics or donations, where they live (a city is the finest), phone numbers, email addresses, money or pay, grades, legal matters or immigration.',
     'Anything from when they were under 18: keep only achievements an organization published about them (an award, an officer role, a team they were on, a competition result), nothing personal, and nothing from their own social accounts from that time.',
     'leads: up to 5 short phrases (2 to 6 words) worth searching next together with their name: organizations, clubs, teams, programs, awards, competitions, projects, events or publications this page connects them to (for example "DECA", "National Society of High School Scholars"). Not their name, not generic words.',

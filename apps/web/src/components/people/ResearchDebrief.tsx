@@ -474,6 +474,20 @@ function Debrief({
               </ul>
             </Block>
           )}
+          {v.deepCuts.length > 0 && (
+            <Block title="Off the beaten path" testId="debrief-deep-cuts">
+              <ul className="space-y-1.5 text-[13.5px] text-ink-2">
+                {v.deepCuts.map((d, i) => (
+                  <li key={i} className="flex gap-2">
+                    <span className="mt-[7px] w-1.5 h-1.5 rounded-full bg-accent shrink-0" />
+                    <span>
+                      <ClaimLine claim={d} sources={sources} />
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            </Block>
+          )}
           {v.highlights.length > 0 && (
             <Block title="What they've made and said" testId="debrief-highlights">
               <div className="grid @xl:grid-cols-2 gap-2.5">

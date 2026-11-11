@@ -3366,312 +3366,6 @@ function aboutCompany(page, org) {
   return mentionsOrg([page.title ?? "", page.text ?? ""].join(" \n "), companyAliases(org));
 }
 
-// supabase/functions/_shared/research/prompts.ts
-var PROMPT_VERSION = "dossier-v3";
-var DOSSIER_SYSTEM = [
-  "You write a research brief about one person for the student named in <student>, toward the goal written there.",
-  'Use only the sources provided, and write from what each source actually says: "joined" stays "joined", never "led". Every claim needs the id of the source it came from.',
-  "If sources disagree or might be about a different person with the same name, leave the claim out.",
-  'A source whose title starts with "[likely them]" names someone with their name whose details all fit, but nothing ties it to them for certain: you may use it, saying so ("likely the same Dana who..."), never in an opener, and never for their current role.',
-  'Never write, even if a source says it: age, ethnicity, religion, health, family or relationships, sexuality, politics or donations, where they live (a city is the finest you may say), salary or pay, their personality or "communication style", legal matters, immigration, or that they lost a job or took leave.',
-  `"careful" is about their company only (recent layoffs, a reorganization, a product shut down, a hiring freeze), each item with its source ids; never anything about the person's own life. Leave it empty when there is nothing.`,
-  '"company" is what is happening at their company that matters to the student (team news, launches, hiring), from company sources, each with its source ids. Leave it empty when there are no company sources.',
-  `Openers: up to three single sentences the student could open a first message with, each a statement (not a question) of at most 25 words about something they made, said or did. Each rests on one cited source and uses only details that source states, in its words where you can (a title, a claim, a number); the student's reaction may be added ("stuck with me"). Never flattery, never about their private life.`,
-  `Most people have little online beyond LinkedIn. When the only sources are their LinkedIn and the student's own history, say so plainly in "who" (for example "Not much is public about Dana beyond LinkedIn.") and keep to what LinkedIn says; do not pad.`,
-  'Also lay out who they are in full, from the sources only: "career" (every role you can source, newest first, with start and end as written, e.g. "2021" or "Mar 2022"), "education", "profiles" (their own pages: LinkedIn, X, GitHub, a personal site, Google Scholar; only URLs that appear in the sources), "highlights" (up to 8 things they made or said that matter: posts, articles, talks, podcasts, projects, papers, news, awards, each with the URL of its source) and "topics" (up to 6 short phrases for what they work on or talk about).'
-].join("\n");
-function dossierStudent(userFirstName, goalSentence) {
-  return `<student>
-${userFirstName}, who wants to ${goalSentence}.
-</student>`;
-}
-function dossierUser(input) {
-  const block = (list) => list.map(
-    (s) => [
-      `<source id="${s.id}">`,
-      `url: ${s.url}`,
-      s.title ? `title: ${s.title}` : "",
-      s.published ? `published: ${s.published}` : "",
-      s.text,
-      "</source>"
-    ].filter(Boolean).join("\n")
-  ).join("\n");
-  return [
-    `<user_context>${input.userContext}</user_context>`,
-    `<person>${JSON.stringify(input.person)}</person>`,
-    `<internal_history>${input.internalHistory}</internal_history>`,
-    `<linkedin>${input.linkedin}</linkedin>`,
-    `<sources>${block(input.sources)}</sources>`,
-    ...input.companySources?.length ? [`<company_sources>${block(input.companySources)}</company_sources>`] : []
-  ].join("\n");
-}
-var sourceIds = z.array(z.string());
-var dossierSchema = z.object({
-  who: z.string(),
-  now: z.object({
-    role: z.string(),
-    org: z.string(),
-    since: z.string().nullable(),
-    source_ids: sourceIds
-  }),
-  recently: z.array(z.object({ date: z.string().nullable(), text: z.string(), source_ids: sourceIds })),
-  in_common: z.array(
-    z.object({
-      text: z.string(),
-      kind: z.enum(["school", "employer", "person", "interest", "place"]),
-      source_ids: sourceIds
-    })
-  ),
-  history: z.object({
-    first_contact: z.string().nullable(),
-    last_contact: z.string().nullable(),
-    summary: z.string().nullable()
-  }),
-  openers: z.array(z.object({ text: z.string(), source_ids: sourceIds })),
-  // v2: each item cited like every other line (v1 wrote plain strings; readers accept both)
-  careful: z.array(z.object({ text: z.string(), source_ids: sourceIds })),
-  confidence: z.enum(["high", "medium", "low"]),
-  // the full picture (v1.1); optional so a dossier written before them still reads
-  career: z.array(
-    z.object({
-      role: z.string(),
-      org: z.string(),
-      start: z.string().nullable(),
-      end: z.string().nullable(),
-      source_ids: sourceIds
-    })
-  ).optional(),
-  education: z.array(
-    z.object({
-      school: z.string(),
-      degree: z.string().nullable(),
-      years: z.string().nullable(),
-      source_ids: sourceIds
-    })
-  ).optional(),
-  profiles: z.array(
-    z.object({ kind: z.enum(["linkedin", "x", "github", "website", "scholar", "other"]), url: z.string() })
-  ).optional(),
-  highlights: z.array(
-    z.object({
-      kind: z.enum(["post", "article", "talk", "podcast", "project", "paper", "news", "award", "other"]),
-      title: z.string(),
-      date: z.string().nullable(),
-      url: z.string().nullable(),
-      summary: z.string().nullable(),
-      source_ids: sourceIds
-    })
-  ).optional(),
-  topics: z.array(z.string()).optional(),
-  // v2: what is happening at their company, from company pages (Go deeper)
-  company: z.array(z.object({ text: z.string(), source_ids: sourceIds })).optional()
-});
-function retryNote(bad, allowed) {
-  return `
-
-Your previous answer cited source ids that do not exist (${bad.join(", ")}). Cite only these ids: ${allowed.join(", ") || "(none)"}. Leave out any claim you cannot cite.`;
-}
-var supportSystem = [
-  "You check a research brief against its sources. For each numbered claim, read the sources it cites and give one verdict:",
-  '"supported": the cited sources state it, or it is a fair summary or paraphrase of what they state.',
-  '"partial": the sources back only part of it, or it says more than they do: a stronger verb ("led" where they say "joined"), a different date or number, or a role, place or detail they do not give.',
-  '"unsupported": the cited sources do not say it, or say something else.',
-  `Each claim says what kind it is. An opener is a line the student would say to them: judge only what it states about them or their work; the student's own reaction ("stuck with me", "I liked") is not a claim. A highlight names something of theirs (a post, talk, article, project): supported when the cited source is that item or describes it.`,
-  "Judge only against the cited source text given here, never what you know."
-].join("\n");
-function supportUser(claims, sources) {
-  const used = new Set(claims.flatMap((c) => c.sourceIds));
-  const src = sources.filter((s) => used.has(s.id)).map((s) => `<source id="${s.id}">${s.title ? `
-title: ${s.title}` : ""}
-${s.text}
-</source>`).join("\n");
-  const list = claims.map((c) => `${c.id}. ${c.kind ? `(${c.kind}) ` : ""}[${c.sourceIds.join(", ")}] ${c.text}`).join("\n");
-  return `<sources>
-${src}
-</sources>
-<claims>
-${list}
-</claims>`;
-}
-var supportSchema = z.object({
-  verdicts: z.array(z.object({ id: z.string(), verdict: z.enum(["supported", "partial", "unsupported"]) }))
-});
-
-// supabase/functions/_shared/research/dossier.ts
-var DOSSIER_REUSE_MS = 30 * 864e5;
-var EXA_CACHE_MS = 7 * 864e5;
-var SYNTH_OUT_USD = 2e3 * 2e-5;
-var synthEstimateUsd = (promptChars) => promptChars / 4 * 4e-6 + SYNTH_OUT_USD;
-var pageText = (r) => [r.url, r.title, r.author, r.text, ...r.highlights ?? []].filter(Boolean).join(" \n ");
-function pickIdentity(card, people) {
-  const named = people.filter(
-    (r) => !isBlockedSource(r.url) && scorePage({ ...r, text: pageText(r) }, card).signals.includes("name")
-  );
-  const byOrg = /* @__PURE__ */ new Map();
-  for (const r of named) {
-    const o = orgFromTitle(r.title, card.fullName);
-    const k = o ? normOrg(o) : norm(r.url);
-    if (!byOrg.has(k))
-      byOrg.set(k, {
-        name: card.fullName,
-        org: o,
-        title: r.title ?? void 0,
-        url: r.url,
-        snippet: (r.highlights?.[0] ?? r.text ?? "").slice(0, 240) || void 0
-      });
-  }
-  const linkedIn = !!card.slug;
-  if (linkedIn) return { kind: "anchored", card };
-  if (card.employers.length > 0 || card.domains.length > 0) {
-    if (named.some((r) => scorePage({ ...r, text: pageText(r) }, card).strength === "strong"))
-      return { kind: "anchored", card };
-    if (byOrg.size >= 2) return { kind: "ambiguous", candidates: [...byOrg.values()].slice(0, 5) };
-    return { kind: "anchored", card };
-  }
-  if (byOrg.size >= 2) return { kind: "ambiguous", candidates: [...byOrg.values()].slice(0, 5) };
-  const only = [...byOrg.values()][0];
-  if (only?.org)
-    return {
-      kind: "anchored",
-      card: { ...card, employers: [{ name: only.org, aliases: [only.org], current: true }], anchored: true }
-    };
-  return { kind: "none" };
-}
-function invalidSourceIds(d, allowed) {
-  const ok = new Set(allowed);
-  const all = [
-    ...d.now.source_ids,
-    ...d.recently.flatMap((x) => x.source_ids),
-    ...d.in_common.flatMap((x) => x.source_ids),
-    ...d.openers.flatMap((x) => x.source_ids),
-    ...carefulItems(d.careful).flatMap((x) => x.source_ids),
-    ...(d.career ?? []).flatMap((x) => x.source_ids),
-    ...(d.education ?? []).flatMap((x) => x.source_ids),
-    ...(d.highlights ?? []).flatMap((x) => x.source_ids),
-    ...(d.company ?? []).flatMap((x) => x.source_ids)
-  ];
-  return [...new Set(all.filter((id) => !ok.has(id)))];
-}
-function carefulItems(c) {
-  return (Array.isArray(c) ? c : []).map(
-    (x) => typeof x === "string" ? { text: x, source_ids: [] } : x && typeof x === "object" && typeof x.text === "string" ? {
-      text: x.text,
-      source_ids: Array.isArray(x.source_ids) ? x.source_ids.filter(
-        (i) => typeof i === "string"
-      ) : []
-    } : void 0
-  ).filter((x) => !!x);
-}
-var writeEstimateUsd = synthEstimateUsd;
-async function writeBrief(claude, prompt, allowed, budget, task = "dossier") {
-  let user = prompt.user;
-  let first;
-  for (let attempt = 0; attempt < 2; attempt++) {
-    const est = synthEstimateUsd(prompt.system.length + user.length);
-    if (budget.spent + est > budget.cap) {
-      if (first) {
-        budget.notes.push(
-          "source-id retry skipped: cost cap; kept the first answer without its uncited lines"
-        );
-        return { content: dropUncited(first, allowed), partial: true };
-      }
-      budget.notes.push("synthesis skipped: cost cap");
-      return { content: null, partial: true };
-    }
-    const r = await claude.parse(task, dossierSchema, { system: prompt.system, user });
-    budget.spent += r.costUsd ?? 0;
-    if (!r.ok) {
-      if (first) {
-        budget.notes.push(
-          `source-id retry failed (${r.reason}); kept the first answer without its uncited lines`
-        );
-        return { content: dropUncited(first, allowed), partial: true };
-      }
-      budget.notes.push(
-        `synthesis unavailable (${r.reason}${r.message ? `: ${r.message.slice(0, 160)}` : ""})`
-      );
-      return { content: null, partial: true };
-    }
-    const value = blankToNull(r.value);
-    const bad = invalidSourceIds(value, allowed);
-    if (bad.length === 0) return { content: value, partial: false };
-    if (attempt === 1) {
-      budget.notes.push("uncited claims removed");
-      return { content: dropUncited(value, allowed), partial: true };
-    }
-    first = value;
-    user = prompt.user + retryNote(bad, allowed);
-  }
-  return { content: first ? dropUncited(first, allowed) : null, partial: true };
-}
-function blankToNull(d) {
-  const n = (v) => typeof v === "string" && v.trim() ? v : null;
-  return {
-    ...d,
-    now: { ...d.now, since: n(d.now.since) },
-    recently: d.recently.map((x) => ({ ...x, date: n(x.date) })),
-    history: {
-      first_contact: n(d.history.first_contact),
-      last_contact: n(d.history.last_contact),
-      summary: n(d.history.summary)
-    },
-    ...d.career ? { career: d.career.map((x) => ({ ...x, start: n(x.start), end: n(x.end) })) } : {},
-    ...d.education ? { education: d.education.map((x) => ({ ...x, degree: n(x.degree), years: n(x.years) })) } : {},
-    ...d.highlights ? {
-      highlights: d.highlights.map((x) => ({
-        ...x,
-        date: n(x.date),
-        url: n(x.url),
-        summary: n(x.summary)
-      }))
-    } : {}
-  };
-}
-function dropUncited(d, allowed) {
-  const ok = new Set(allowed);
-  const f = (ids) => ids.filter((i) => ok.has(i));
-  const keep = (xs) => (xs ?? []).map((x) => ({ ...x, source_ids: f(x.source_ids) })).filter((x) => x.source_ids.length);
-  return {
-    ...d,
-    now: { ...d.now, source_ids: f(d.now.source_ids) },
-    recently: keep(d.recently),
-    in_common: keep(d.in_common),
-    openers: keep(d.openers),
-    careful: keep(carefulItems(d.careful)),
-    career: keep(d.career),
-    education: keep(d.education),
-    highlights: keep(d.highlights),
-    company: keep(d.company),
-    confidence: "low"
-  };
-}
-var words = (s) => s.trim().split(/\s+/).filter(Boolean).length;
-function finish(d, history, noOutsideSources) {
-  const clean = (xs) => xs.filter((x) => !sensitiveCategory(x.text));
-  return {
-    ...d,
-    who: stripSensitiveSentences(d.who),
-    recently: clean(d.recently).slice(0, 3),
-    in_common: clean(d.in_common),
-    openers: clean(d.openers).filter((o) => words(o.text) <= 25).slice(0, 3),
-    // company context only, each line cited; nothing about the person's own life (guards.ts)
-    careful: carefulItems(d.careful).filter((c) => carefulAllowed(c.text) && c.source_ids.length > 0),
-    career: (d.career ?? []).slice(0, 12),
-    education: (d.education ?? []).slice(0, 6),
-    // a profile link has to be a web address, never anything a page could run, and never a blocked site
-    profiles: (d.profiles ?? []).filter((p) => /^https?:\/\//i.test(p.url) && !isBlockedSource(p.url)).slice(0, 6),
-    highlights: (d.highlights ?? []).filter((h) => !sensitiveCategory(`${h.title} ${h.summary ?? ""}`)).filter((h) => !h.url || !/^https?:\/\//i.test(h.url) || !isBlockedSource(h.url)).map((h) => ({ ...h, url: h.url && /^https?:\/\//i.test(h.url) ? h.url : null })).slice(0, 8),
-    topics: (d.topics ?? []).filter((t) => !sensitiveCategory(t)).slice(0, 6),
-    company: clean(d.company ?? []).slice(0, 5),
-    history: {
-      first_contact: d.history.first_contact ?? history.firstContact ?? null,
-      last_contact: d.history.last_contact ?? history.lastContact ?? null,
-      summary: d.history.summary ? stripSensitiveSentences(d.history.summary) || null : null
-    },
-    confidence: noOutsideSources ? "low" : d.confidence
-  };
-}
-
 // supabase/functions/_shared/research/handles.ts
 var HANDLE_SITES = [
   {
@@ -3926,6 +3620,7 @@ async function fetchPage(url2, opts = {}) {
 var EXTRACT_VERSION = "extract-v1";
 var WIDE_PAGES = 18;
 var FOLLOW_PAGES = 10;
+var WIDE_QUERIES = 24;
 var LEADS_PER_ROUND = 6;
 var EXTRACT_CONCURRENCY = 8;
 var EXTRACT_ESTIMATE_USD = 12e-4;
@@ -3934,7 +3629,7 @@ var hasOperator = (q2) => /\bsite:|\sOR\s/.test(q2);
 function widePlan(card, title) {
   const name = quote(card.fullName);
   const now = card.employers.find((e) => e.current) ?? card.employers[0];
-  const before = card.employers.filter((e) => e !== now).slice(0, 2);
+  const before = card.employers.filter((e) => e !== now).slice(0, 5);
   const qs = [
     name,
     now ? `${name} ${now.name}` : void 0,
@@ -3949,9 +3644,14 @@ function widePlan(card, title) {
     `${name} site:youtube.com OR site:tiktok.com`,
     `${name} site:github.com OR site:devpost.com`,
     `${name} site:medium.com OR site:substack.com`,
+    // the record outside work that shows real homework: their own writing, causes, races and tournaments, their X
+    `${name} blog OR newsletter OR "personal site"`,
+    `${name} volunteer OR nonprofit OR mentor OR board`,
+    `${name} marathon OR tournament OR competition OR championship`,
+    `${name} site:x.com OR site:twitter.com`,
     title && now ? `${name} ${title}` : void 0
   ];
-  return [...new Set(qs.filter((q2) => !!q2?.trim()))].slice(0, 16);
+  return [...new Set(qs.filter((q2) => !!q2?.trim()))].slice(0, WIDE_QUERIES);
 }
 function followUps(card, leads, ran) {
   const name = quote(card.fullName);
@@ -3977,7 +3677,7 @@ function extractSystem() {
   return [
     "You read one web page for a research tool and report what it says about one specific person, described in <person>.",
     'match: "yes" when the page is clearly about this person: their name and something that ties it to them (a school, employer, team, city or link of theirs). "likely" when it names someone with their name and everything on it fits their timeline, places and field, but nothing ties it to them for certain. "no" when it is about someone else, contradicts their timeline, places or field, or does not mention them. why: one short sentence saying what decided it.',
-    'facts: up to 8 things the page says this person did, made, won, led, joined, wrote or said, each one sentence in plain words, with the date or year the page gives ("" when none) and a quote of at most 25 words copied exactly from the page that supports it. Only what the page itself states about this person; nothing about anyone else.',
+    'facts: up to 8 things the page says this person did, made, won, led, joined, wrote or said, including pursuits outside work they made public themselves (a sport, a race or tournament result, music, art, writing, a cause they volunteer for), the most specific first (the exact club, award, project, event or title), each one sentence in plain words, with the date or year the page gives ("" when none) and a quote of at most 25 words copied exactly from the page that supports it. Only what the page itself states about this person; nothing about anyone else.',
     "Never include, even when the page says it: age or birthday, ethnicity, religion, health, family members or relationships, sexuality, politics or donations, where they live (a city is the finest), phone numbers, email addresses, money or pay, grades, legal matters or immigration.",
     "Anything from when they were under 18: keep only achievements an organization published about them (an award, an officer role, a team they were on, a competition result), nothing personal, and nothing from their own social accounts from that time.",
     'leads: up to 5 short phrases (2 to 6 words) worth searching next together with their name: organizations, clubs, teams, programs, awards, competitions, projects, events or publications this page connects them to (for example "DECA", "National Society of High School Scholars"). Not their name, not generic words.',
@@ -4252,8 +3952,349 @@ ${p.text}` };
 }
 var round4 = (x) => Math.round(x * 1e4) / 1e4;
 
+// supabase/functions/_shared/research/prompts.ts
+var PROMPT_VERSION = "dossier-v4";
+var DOSSIER_SYSTEM = [
+  "You write a research brief about one person for the student named in <student>, toward the goal written there.",
+  'Use only the sources provided, and write from what each source actually says: "joined" stays "joined", never "led". Every claim needs the id of the source it came from.',
+  "If sources disagree or might be about a different person with the same name, leave the claim out.",
+  'A source whose title starts with "[likely them]" names someone with their name whose details all fit, but nothing ties it to them for certain: you may use it, saying so ("likely the same Dana who..."), never in an opener, and never for their current role.',
+  'Never write, even if a source says it: age, ethnicity, religion, health, family or relationships, sexuality, politics or donations, where they live (a city is the finest you may say), salary or pay, their personality or "communication style", legal matters, immigration, or that they lost a job or took leave.',
+  `"careful" is about their company only (recent layoffs, a reorganization, a product shut down, a hiring freeze), each item with its source ids; never anything about the person's own life. Leave it empty when there is nothing.`,
+  '"company" is what is happening at their company that matters to the student (team news, launches, hiring), from company sources, each with its source ids. Leave it empty when there are no company sources.',
+  `Openers: up to three single sentences the student could open a first message with, each a statement (not a question) of at most 25 words about something they made, said or did. Each rests on one cited source and uses only details that source states, in its words where you can (a title, a claim, a number); the student's reaction may be added ("stuck with me"). Never flattery, never about their private life.`,
+  "Dig past the obvious. The student wants the person to see they did real homework, so what matters most is what a quick look at their LinkedIn or a first-page search would not show: the club or chapter they ran, an award or competition result an organization published, a hackathon project, a side project or repo, a talk, podcast or panel, a post on their own blog or newsletter, a race, tournament or team they were on, a cause or nonprofit they volunteer for, a hobby or creative work they put out publicly, something specific they wrote or said. Prefer these over their job titles and schools, which the student can already see.",
+  `"deep_cuts": up to 6 of those hard-to-find things, the most specific and least obvious first, each one sentence that names the thing exactly (the club, the award and its year, the project, the race, the post's title) with its source ids. Use only web sources (never the LinkedIn profile or posts, which the student has already read). Their own public interests and pursuits outside work count (a sport, music, writing, a cause), as long as they made them public themselves or an organization published them. Leave it empty when the sources hold nothing beyond LinkedIn; never pad it with what LinkedIn already says.`,
+  "Go back through their whole timeline, not just the last few years: an old source is often the best one (a college club, a team they played on, a 2015 award, an early project or post). Say the year so the student knows how far back it is, and never present an old role or fact as current.",
+  'Openers: when "deep_cuts" has anything, at least one opener rests on one of them: a specific detail most people would not know to mention.',
+  `Most people have little online beyond LinkedIn. When the only sources are their LinkedIn and the student's own history, say so plainly in "who" (for example "Not much is public about Dana beyond LinkedIn.") and keep to what LinkedIn says; do not pad.`,
+  'Also lay out who they are in full, from the sources only: "career" (every role you can source, newest first, with start and end as written, e.g. "2021" or "Mar 2022"), "education", "profiles" (their own pages: LinkedIn, X, GitHub, a personal site, Google Scholar; only URLs that appear in the sources), "highlights" (up to 8 things they made or said that matter: posts, articles, talks, podcasts, projects, papers, news, awards, each with the URL of its source) and "topics" (up to 6 short phrases for what they work on or talk about).'
+].join("\n");
+function dossierStudent(userFirstName, goalSentence) {
+  return `<student>
+${userFirstName}, who wants to ${goalSentence}.
+</student>`;
+}
+function dossierUser(input) {
+  const block = (list) => list.map(
+    (s) => [
+      `<source id="${s.id}">`,
+      `url: ${s.url}`,
+      s.title ? `title: ${s.title}` : "",
+      s.published ? `published: ${s.published}` : "",
+      s.text,
+      "</source>"
+    ].filter(Boolean).join("\n")
+  ).join("\n");
+  return [
+    `<user_context>${input.userContext}</user_context>`,
+    `<person>${JSON.stringify(input.person)}</person>`,
+    `<internal_history>${input.internalHistory}</internal_history>`,
+    `<linkedin>${input.linkedin}</linkedin>`,
+    `<sources>${block(input.sources)}</sources>`,
+    ...input.companySources?.length ? [`<company_sources>${block(input.companySources)}</company_sources>`] : []
+  ].join("\n");
+}
+var sourceIds = z.array(z.string());
+var dossierSchema = z.object({
+  who: z.string(),
+  now: z.object({
+    role: z.string(),
+    org: z.string(),
+    since: z.string().nullable(),
+    source_ids: sourceIds
+  }),
+  recently: z.array(z.object({ date: z.string().nullable(), text: z.string(), source_ids: sourceIds })),
+  in_common: z.array(
+    z.object({
+      text: z.string(),
+      kind: z.enum(["school", "employer", "person", "interest", "place"]),
+      source_ids: sourceIds
+    })
+  ),
+  history: z.object({
+    first_contact: z.string().nullable(),
+    last_contact: z.string().nullable(),
+    summary: z.string().nullable()
+  }),
+  openers: z.array(z.object({ text: z.string(), source_ids: sourceIds })),
+  // v2: each item cited like every other line (v1 wrote plain strings; readers accept both)
+  careful: z.array(z.object({ text: z.string(), source_ids: sourceIds })),
+  confidence: z.enum(["high", "medium", "low"]),
+  // the full picture (v1.1); optional so a dossier written before them still reads
+  career: z.array(
+    z.object({
+      role: z.string(),
+      org: z.string(),
+      start: z.string().nullable(),
+      end: z.string().nullable(),
+      source_ids: sourceIds
+    })
+  ).optional(),
+  education: z.array(
+    z.object({
+      school: z.string(),
+      degree: z.string().nullable(),
+      years: z.string().nullable(),
+      source_ids: sourceIds
+    })
+  ).optional(),
+  profiles: z.array(
+    z.object({ kind: z.enum(["linkedin", "x", "github", "website", "scholar", "other"]), url: z.string() })
+  ).optional(),
+  highlights: z.array(
+    z.object({
+      kind: z.enum(["post", "article", "talk", "podcast", "project", "paper", "news", "award", "other"]),
+      title: z.string(),
+      date: z.string().nullable(),
+      url: z.string().nullable(),
+      summary: z.string().nullable(),
+      source_ids: sourceIds
+    })
+  ).optional(),
+  topics: z.array(z.string()).optional(),
+  // v2: what is happening at their company, from company pages (Go deeper)
+  company: z.array(z.object({ text: z.string(), source_ids: sourceIds })).optional(),
+  // v4: the hard-to-find, specific things deep research turned up beyond LinkedIn (clubs, awards, projects, talks,
+  // their public pursuits outside work), each from a web source
+  deep_cuts: z.array(
+    z.object({
+      kind: z.enum([
+        "club",
+        "award",
+        "project",
+        "talk",
+        "writing",
+        "team",
+        "volunteer",
+        "interest",
+        "other"
+      ]),
+      text: z.string(),
+      date: z.string().nullable(),
+      source_ids: sourceIds
+    })
+  ).optional()
+});
+function retryNote(bad, allowed) {
+  return `
+
+Your previous answer cited source ids that do not exist (${bad.join(", ")}). Cite only these ids: ${allowed.join(", ") || "(none)"}. Leave out any claim you cannot cite.`;
+}
+var supportSystem = [
+  "You check a research brief against its sources. For each numbered claim, read the sources it cites and give one verdict:",
+  '"supported": the cited sources state it, or it is a fair summary or paraphrase of what they state.',
+  '"partial": the sources back only part of it, or it says more than they do: a stronger verb ("led" where they say "joined"), a different date or number, or a role, place or detail they do not give.',
+  '"unsupported": the cited sources do not say it, or say something else.',
+  `Each claim says what kind it is. An opener is a line the student would say to them: judge only what it states about them or their work; the student's own reaction ("stuck with me", "I liked") is not a claim. A highlight names something of theirs (a post, talk, article, project): supported when the cited source is that item or describes it.`,
+  "Judge only against the cited source text given here, never what you know."
+].join("\n");
+function supportUser(claims, sources) {
+  const used = new Set(claims.flatMap((c) => c.sourceIds));
+  const src = sources.filter((s) => used.has(s.id)).map((s) => `<source id="${s.id}">${s.title ? `
+title: ${s.title}` : ""}
+${s.text}
+</source>`).join("\n");
+  const list = claims.map((c) => `${c.id}. ${c.kind ? `(${c.kind}) ` : ""}[${c.sourceIds.join(", ")}] ${c.text}`).join("\n");
+  return `<sources>
+${src}
+</sources>
+<claims>
+${list}
+</claims>`;
+}
+var supportSchema = z.object({
+  verdicts: z.array(z.object({ id: z.string(), verdict: z.enum(["supported", "partial", "unsupported"]) }))
+});
+
+// supabase/functions/_shared/research/dossier.ts
+var DOSSIER_REUSE_MS = 30 * 864e5;
+var EXA_CACHE_MS = 7 * 864e5;
+var SYNTH_OUT_USD = 2e3 * 2e-5;
+var synthEstimateUsd = (promptChars) => promptChars / 4 * 4e-6 + SYNTH_OUT_USD;
+var pageText = (r) => [r.url, r.title, r.author, r.text, ...r.highlights ?? []].filter(Boolean).join(" \n ");
+function pickIdentity(card, people) {
+  const named = people.filter(
+    (r) => !isBlockedSource(r.url) && scorePage({ ...r, text: pageText(r) }, card).signals.includes("name")
+  );
+  const byOrg = /* @__PURE__ */ new Map();
+  for (const r of named) {
+    const o = orgFromTitle(r.title, card.fullName);
+    const k = o ? normOrg(o) : norm(r.url);
+    if (!byOrg.has(k))
+      byOrg.set(k, {
+        name: card.fullName,
+        org: o,
+        title: r.title ?? void 0,
+        url: r.url,
+        snippet: (r.highlights?.[0] ?? r.text ?? "").slice(0, 240) || void 0
+      });
+  }
+  const linkedIn = !!card.slug;
+  if (linkedIn) return { kind: "anchored", card };
+  if (card.employers.length > 0 || card.domains.length > 0) {
+    if (named.some((r) => scorePage({ ...r, text: pageText(r) }, card).strength === "strong"))
+      return { kind: "anchored", card };
+    if (byOrg.size >= 2) return { kind: "ambiguous", candidates: [...byOrg.values()].slice(0, 5) };
+    return { kind: "anchored", card };
+  }
+  if (byOrg.size >= 2) return { kind: "ambiguous", candidates: [...byOrg.values()].slice(0, 5) };
+  const only = [...byOrg.values()][0];
+  if (only?.org)
+    return {
+      kind: "anchored",
+      card: { ...card, employers: [{ name: only.org, aliases: [only.org], current: true }], anchored: true }
+    };
+  return { kind: "none" };
+}
+function invalidSourceIds(d, allowed) {
+  const ok = new Set(allowed);
+  const all = [
+    ...d.now.source_ids,
+    ...d.recently.flatMap((x) => x.source_ids),
+    ...d.in_common.flatMap((x) => x.source_ids),
+    ...d.openers.flatMap((x) => x.source_ids),
+    ...carefulItems(d.careful).flatMap((x) => x.source_ids),
+    ...(d.career ?? []).flatMap((x) => x.source_ids),
+    ...(d.education ?? []).flatMap((x) => x.source_ids),
+    ...(d.highlights ?? []).flatMap((x) => x.source_ids),
+    ...(d.company ?? []).flatMap((x) => x.source_ids),
+    ...(d.deep_cuts ?? []).flatMap((x) => x.source_ids)
+  ];
+  return [...new Set(all.filter((id) => !ok.has(id)))];
+}
+function carefulItems(c) {
+  return (Array.isArray(c) ? c : []).map(
+    (x) => typeof x === "string" ? { text: x, source_ids: [] } : x && typeof x === "object" && typeof x.text === "string" ? {
+      text: x.text,
+      source_ids: Array.isArray(x.source_ids) ? x.source_ids.filter(
+        (i) => typeof i === "string"
+      ) : []
+    } : void 0
+  ).filter((x) => !!x);
+}
+var writeEstimateUsd = synthEstimateUsd;
+async function writeBrief(claude, prompt, allowed, budget, task = "dossier") {
+  let user = prompt.user;
+  let first;
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const est = synthEstimateUsd(prompt.system.length + user.length);
+    if (budget.spent + est > budget.cap) {
+      if (first) {
+        budget.notes.push(
+          "source-id retry skipped: cost cap; kept the first answer without its uncited lines"
+        );
+        return { content: dropUncited(first, allowed), partial: true };
+      }
+      budget.notes.push("synthesis skipped: cost cap");
+      return { content: null, partial: true };
+    }
+    const r = await claude.parse(task, dossierSchema, { system: prompt.system, user });
+    budget.spent += r.costUsd ?? 0;
+    if (!r.ok) {
+      if (first) {
+        budget.notes.push(
+          `source-id retry failed (${r.reason}); kept the first answer without its uncited lines`
+        );
+        return { content: dropUncited(first, allowed), partial: true };
+      }
+      budget.notes.push(
+        `synthesis unavailable (${r.reason}${r.message ? `: ${r.message.slice(0, 160)}` : ""})`
+      );
+      return { content: null, partial: true };
+    }
+    const value = blankToNull(r.value);
+    const bad = invalidSourceIds(value, allowed);
+    if (bad.length === 0) return { content: value, partial: false };
+    if (attempt === 1) {
+      budget.notes.push("uncited claims removed");
+      return { content: dropUncited(value, allowed), partial: true };
+    }
+    first = value;
+    user = prompt.user + retryNote(bad, allowed);
+  }
+  return { content: first ? dropUncited(first, allowed) : null, partial: true };
+}
+function blankToNull(d) {
+  const n = (v) => typeof v === "string" && v.trim() ? v : null;
+  return {
+    ...d,
+    now: { ...d.now, since: n(d.now.since) },
+    recently: d.recently.map((x) => ({ ...x, date: n(x.date) })),
+    history: {
+      first_contact: n(d.history.first_contact),
+      last_contact: n(d.history.last_contact),
+      summary: n(d.history.summary)
+    },
+    ...d.career ? { career: d.career.map((x) => ({ ...x, start: n(x.start), end: n(x.end) })) } : {},
+    ...d.education ? { education: d.education.map((x) => ({ ...x, degree: n(x.degree), years: n(x.years) })) } : {},
+    ...d.highlights ? {
+      highlights: d.highlights.map((x) => ({
+        ...x,
+        date: n(x.date),
+        url: n(x.url),
+        summary: n(x.summary)
+      }))
+    } : {}
+  };
+}
+function dropUncited(d, allowed) {
+  const ok = new Set(allowed);
+  const f = (ids) => ids.filter((i) => ok.has(i));
+  const keep = (xs) => (xs ?? []).map((x) => ({ ...x, source_ids: f(x.source_ids) })).filter((x) => x.source_ids.length);
+  return {
+    ...d,
+    now: { ...d.now, source_ids: f(d.now.source_ids) },
+    recently: keep(d.recently),
+    in_common: keep(d.in_common),
+    openers: keep(d.openers),
+    careful: keep(carefulItems(d.careful)),
+    career: keep(d.career),
+    education: keep(d.education),
+    highlights: keep(d.highlights),
+    company: keep(d.company),
+    deep_cuts: keep(d.deep_cuts),
+    confidence: "low"
+  };
+}
+var words = (s) => s.trim().split(/\s+/).filter(Boolean).length;
+function finish(d, history, noOutsideSources) {
+  const clean = (xs) => xs.filter((x) => !sensitiveCategory(x.text));
+  return {
+    ...d,
+    who: stripSensitiveSentences(d.who),
+    recently: clean(d.recently).slice(0, 3),
+    in_common: clean(d.in_common),
+    openers: clean(d.openers).filter((o) => words(o.text) <= 25).slice(0, 3),
+    // company context only, each line cited; nothing about the person's own life (guards.ts)
+    careful: carefulItems(d.careful).filter((c) => carefulAllowed(c.text) && c.source_ids.length > 0),
+    career: (d.career ?? []).slice(0, 12),
+    education: (d.education ?? []).slice(0, 6),
+    // a profile link has to be a web address, never anything a page could run, and never a blocked site
+    profiles: (d.profiles ?? []).filter((p) => /^https?:\/\//i.test(p.url) && !isBlockedSource(p.url)).slice(0, 6),
+    highlights: (d.highlights ?? []).filter((h) => !sensitiveCategory(`${h.title} ${h.summary ?? ""}`)).filter((h) => !h.url || !/^https?:\/\//i.test(h.url) || !isBlockedSource(h.url)).map((h) => ({ ...h, url: h.url && /^https?:\/\//i.test(h.url) ? h.url : null })).slice(0, 8),
+    topics: (d.topics ?? []).filter((t) => !sensitiveCategory(t)).slice(0, 6),
+    company: clean(d.company ?? []).slice(0, 5),
+    deep_cuts: clean(d.deep_cuts ?? []).slice(0, 6),
+    history: {
+      first_contact: d.history.first_contact ?? history.firstContact ?? null,
+      last_contact: d.history.last_contact ?? history.lastContact ?? null,
+      summary: d.history.summary ? stripSensitiveSentences(d.history.summary) || null : null
+    },
+    confidence: noOutsideSources ? "low" : d.confidence
+  };
+}
+
 // supabase/functions/_shared/research/support.ts
-var LIST_SECTIONS = ["recently", "in_common", "openers", "highlights", "company", "careful"];
+var LIST_SECTIONS = [
+  "recently",
+  "in_common",
+  "openers",
+  "highlights",
+  "deep_cuts",
+  "company",
+  "careful"
+];
 var KIND = {
   who: "summary",
   now: "current role",
@@ -4261,6 +4302,7 @@ var KIND = {
   in_common: "in common with the student",
   openers: "opener",
   highlights: "highlight",
+  deep_cuts: "something specific they did, found beyond LinkedIn",
   company: "company news",
   careful: "company caution"
 };

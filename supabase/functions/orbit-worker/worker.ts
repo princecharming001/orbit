@@ -137,6 +137,8 @@ export const RESERVE_MS: Readonly<Record<string, number>> = {
   'logos.sweep': 50_000,
   'logos.user': 50_000,
   'claude.batch.poll': 40_000,
+  // deep research: the investigator loop (up to 55 s) and the brief's writer (about 40 s)
+  'enrich.dossier': 100_000,
 };
 export const DEFAULT_RESERVE_MS = 8_000;
 

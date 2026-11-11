@@ -8,6 +8,7 @@ import postsJane from '../../../../../supabase/functions/_shared/__fixtures__/un
 import profileJane from '../../../../../supabase/functions/_shared/__fixtures__/unipile-profile-jane.json';
 import { createExa } from '../../../../../supabase/functions/_shared/providers/exa';
 import { createUnipileResearch } from '../../../../../supabase/functions/_shared/providers/unipileResearch';
+import type { SearchEngine } from '../../../../../supabase/functions/_shared/providers/webSearch';
 import type { ClaudePrompt } from '../../../../../supabase/functions/_shared/research/deps';
 import {
   buildDossier,
@@ -24,6 +25,7 @@ import {
   sensitiveCategory,
 } from '../../../../../supabase/functions/_shared/research/guards';
 import { dossierSchema, PROMPT_VERSION } from '../../../../../supabase/functions/_shared/research/prompts';
+import { memorySharedCache } from '../../../../../supabase/functions/_shared/research/web';
 import {
   type Call,
   DAY,
@@ -525,5 +527,120 @@ describe('research guards', () => {
     const done = finish(dropped, { messages: [], notes: [], events: [] } as never, false);
     expect(done.highlights?.[0]?.url).toBeNull();
     expect(done.profiles?.map((p) => p.url)).toEqual(['https://github.com/janedoe']);
+  });
+});
+
+describe('deep research in the dossier (investigator loop)', () => {
+  it('runs Parallel and Serper past LinkedIn, hands the found pages to the writer, and keeps the deep cuts', async () => {
+    const s = setup();
+    const clubUrl = 'https://bayarearobotics.example/2014-team';
+    const queries: string[][] = [];
+    const engineOf = (name: 'parallel' | 'serper'): SearchEngine => ({
+      name,
+      configured: true,
+      usdPerCall: 0.001,
+      queriesPerCall: name === 'parallel' ? 5 : 1,
+      async search(qs) {
+        queries.push(qs);
+        return {
+          ok: true,
+          value: qs.some((q) => q.includes('Jane Doe'))
+            ? [
+                {
+                  url: clubUrl,
+                  title: 'Bay Area Robotics League: 2014 champions',
+                  snippet: 'Jane Doe, Stanford',
+                },
+              ]
+            : [],
+        };
+      },
+    });
+    const pages = (async (input: RequestInfo | URL) => {
+      if (String(input) !== clubUrl) return new Response('not found', { status: 404 });
+      return new Response(
+        "<html><head><title>Bay Area Robotics League</title></head><body><p>2014 champions: Stanford, captained by Jane Doe, who built the team's autonomous arm.</p></body></html>",
+        { status: 200, headers: { 'content-type': 'text/html' } },
+      );
+    }) as typeof fetch;
+    let writerPrompt: ClaudePrompt | undefined;
+    const llm = fakeClaude(
+      (task, p) => {
+        if (task === 'extract')
+          return {
+            match: 'yes',
+            why: 'Stanford and robotics',
+            facts: [
+              {
+                text: 'Captained the Stanford team that won the 2014 Bay Area Robotics League',
+                date: '2014',
+                quote: '2014 champions: Stanford, captained by Jane Doe',
+              },
+            ],
+            leads: [],
+          };
+        writerPrompt = p;
+        const ids = idsIn(p);
+        const club = ids[ids.length - 1]!;
+        return goodDossier(p, {
+          deep_cuts: [
+            {
+              kind: 'team',
+              text: 'Captained Stanford to the 2014 Bay Area Robotics League title.',
+              date: '2014',
+              source_ids: [club],
+            },
+          ],
+        });
+      },
+      { costUsd: 0.01, ledger: s.money.ledger },
+    );
+    const out = await buildDossier(
+      {
+        exa: s.exa,
+        unipile: s.unipile,
+        claude: llm.claude,
+        db: s.db,
+        budget: s.money.budget,
+        clock: s.time.clock,
+        engines: [engineOf('parallel'), engineOf('serper')],
+        cache: memorySharedCache(s.time.clock),
+        fetch: pages,
+      },
+      jane,
+    );
+    expect(out.status === 'ready' || out.status === 'partial').toBe(true);
+    if (out.status !== 'ready' && out.status !== 'partial') return;
+    // the wide round reached past the current job: schools, every past employer, the record outside work
+    const flat = queries.flat();
+    expect(flat.some((q) => /volunteer OR nonprofit/.test(q))).toBe(true);
+    // the page the loop found is a numbered source, its facts in the writer's prompt
+    const club = out.sources.find((x) => x.url === clubUrl);
+    expect(club).toBeDefined();
+    expect(writerPrompt?.user).toContain('2014 Bay Area Robotics League');
+    expect(out.dossier.deep_cuts?.[0]?.source_ids).toEqual([club!.id]);
+    // its searches are in the user's ledger, by engine
+    expect(s.money.ledger.some((r) => r.provider === 'parallel' && r.operation === 'investigate')).toBe(true);
+    expect(out.costUsd).toBeLessThanOrEqual(DOSSIER_CAP_USD);
+  });
+
+  it('runs as before when no search engine is set up', async () => {
+    const s = setup();
+    const llm = fakeClaude((_t, p) => goodDossier(p), { costUsd: 0.14, ledger: s.money.ledger });
+    const out = await buildDossier(
+      {
+        exa: s.exa,
+        unipile: s.unipile,
+        claude: llm.claude,
+        db: s.db,
+        budget: s.money.budget,
+        clock: s.time.clock,
+        engines: [],
+        cache: memorySharedCache(s.time.clock),
+      },
+      jane,
+    );
+    expect(out.status).toBe('ready');
+    expect(llm.calls.some((c) => c.task === 'extract')).toBe(false);
   });
 });
