@@ -706,3 +706,64 @@ body {
     opacity: 0.8;
   }
 }
+
+/*
+  Settings, written like a document: a field is the words on a hairline, not a box. No border around it, no fill, no
+  rounded corners; the line under it darkens while it has focus, and a text area grows with what is written. Selects
+  keep a quiet outline (they need to read as a choice). Scoped to the settings pages (.settings-flat).
+*/
+.settings-flat
+input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):not([type="file"]):not(
+  [role="switch"]
+):not(.settings-chip-input),
+.settings-flat textarea {
+  border: 0 !important;
+  border-bottom: 1px solid var(--color-line) !important;
+  border-radius: 0 !important;
+  background: transparent !important;
+  box-shadow: none !important;
+  padding-left: 0 !important;
+  padding-right: 0 !important;
+  transition: border-color 0.15s ease;
+}
+.settings-flat
+  input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):not([type="file"]):not(
+    [role="switch"]
+  ):not(.settings-chip-input):hover,
+.settings-flat textarea:hover {
+  border-bottom-color: #cfccc6 !important;
+}
+.settings-flat
+  input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):not([type="file"]):not(
+    [role="switch"]
+  ):not(.settings-chip-input):focus,
+.settings-flat textarea:focus {
+  border-bottom-color: var(--color-ink) !important;
+  outline: none !important;
+}
+.settings-flat textarea {
+  resize: none !important;
+  field-sizing: content;
+  min-height: 2.6em;
+  padding-top: 0.35rem !important;
+  padding-bottom: 0.55rem !important;
+  line-height: 1.6;
+}
+/* a choice in settings reads as words with a small chevron on a hairline, like the fields around it */
+.settings-flat [data-select-box] {
+  border: 0 !important;
+  border-bottom: 1px solid var(--color-line) !important;
+  border-radius: 0 !important;
+  background: transparent !important;
+  box-shadow: none !important;
+  transition: border-color 0.15s ease;
+}
+.settings-flat [data-select-box]:hover {
+  border-bottom-color: #cfccc6 !important;
+}
+.settings-flat [data-select-box]:focus-within {
+  border-bottom-color: var(--color-ink) !important;
+}
+.settings-flat [data-select-box] > button {
+  padding-left: 0 !important;
+}

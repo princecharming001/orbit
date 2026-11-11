@@ -2456,6 +2456,8 @@ export const PROFILE_SECTIONS = new Set([
   'skills',
   'languages',
   'certifications',
+  'volunteering_experience',
+  'projects',
   'experience_preview',
   'education_preview',
   'skills_preview',
@@ -2742,7 +2744,71 @@ export function mapProfile(p: Record<string, unknown>, opts: { recommendations?:
     followerCount: num(p.follower_count),
     connectionsCount: num(p.connections_count),
     recommendations: opts.recommendations ? mapRecommendations(p) : undefined,
+    // the rest of a full read (the student's own profile asks for every section); absent when not asked for
+    ...extraSections(p, str, list),
   };
+}
+
+/** Skills, languages, certifications, projects and volunteering, mapped tolerantly (a name or an object). */
+function extraSections(
+  p: Record<string, unknown>,
+  str: (v: unknown, max?: number) => string | undefined,
+  list: (v: unknown) => Record<string, unknown>[],
+) {
+  const named = (v: unknown) =>
+    (Array.isArray(v) ? v : [])
+      .map((x) =>
+        typeof x === 'string' ? x : x && typeof x === 'object' ? (x as { name?: unknown }).name : undefined,
+      )
+      .map((x) => str(x, 80))
+      .filter((x): x is string => !!x);
+  const out: Record<string, unknown> = {};
+  if (Array.isArray(p.skills)) out.skills = named(p.skills).slice(0, 50);
+  if (Array.isArray(p.languages))
+    out.languages = (p.languages as unknown[])
+      .map((x) =>
+        typeof x === 'string'
+          ? { name: str(x, 60) }
+          : x && typeof x === 'object'
+            ? {
+                name: str((x as { name?: unknown }).name, 60),
+                proficiency: str((x as { proficiency?: unknown }).proficiency, 60),
+              }
+            : {},
+      )
+      .filter((x) => !!x.name)
+      .slice(0, 12);
+  if (Array.isArray(p.certifications))
+    out.certifications = list(p.certifications)
+      .map((x) => ({
+        name: str(x.name, 160),
+        authority: str(x.organization ?? x.authority, 120),
+        year: dateText(x.start ?? x.date)?.slice(0, 4),
+      }))
+      .filter((x) => !!x.name)
+      .slice(0, 20);
+  if (Array.isArray(p.projects))
+    out.projects = list(p.projects)
+      .map((x) => ({
+        name: str(x.name ?? x.title, 160),
+        description: str(x.description, 300),
+        start: dateText(x.start),
+        end: dateText(x.end),
+      }))
+      .filter((x) => !!x.name)
+      .slice(0, 12);
+  if (Array.isArray(p.volunteering_experience))
+    out.volunteering = list(p.volunteering_experience)
+      .map((x) => ({
+        role: str(x.role ?? x.position, 120),
+        organization: str(x.company ?? x.organization, 160),
+        cause: str(x.cause, 80),
+        start: dateText(x.start),
+        end: dateText(x.end),
+      }))
+      .filter((x) => !!(x.role || x.organization))
+      .slice(0, 12);
+  return out;
 }
 
 /**

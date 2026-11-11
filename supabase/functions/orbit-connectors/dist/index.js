@@ -2884,6 +2884,8 @@ var PROFILE_SECTIONS = /* @__PURE__ */ new Set([
   "skills",
   "languages",
   "certifications",
+  "volunteering_experience",
+  "projects",
   "experience_preview",
   "education_preview",
   "skills_preview",
@@ -3099,8 +3101,46 @@ function mapProfile(p, opts = {}) {
     throttled: strings(p.throttled_sections, 12),
     followerCount: num2(p.follower_count),
     connectionsCount: num2(p.connections_count),
-    recommendations: opts.recommendations ? mapRecommendations(p) : void 0
+    recommendations: opts.recommendations ? mapRecommendations(p) : void 0,
+    // the rest of a full read (the student's own profile asks for every section); absent when not asked for
+    ...extraSections(p, str2, list)
   };
+}
+function extraSections(p, str2, list) {
+  const named = (v) => (Array.isArray(v) ? v : []).map(
+    (x) => typeof x === "string" ? x : x && typeof x === "object" ? x.name : void 0
+  ).map((x) => str2(x, 80)).filter((x) => !!x);
+  const out = {};
+  if (Array.isArray(p.skills)) out.skills = named(p.skills).slice(0, 50);
+  if (Array.isArray(p.languages))
+    out.languages = p.languages.map(
+      (x) => typeof x === "string" ? { name: str2(x, 60) } : x && typeof x === "object" ? {
+        name: str2(x.name, 60),
+        proficiency: str2(x.proficiency, 60)
+      } : {}
+    ).filter((x) => !!x.name).slice(0, 12);
+  if (Array.isArray(p.certifications))
+    out.certifications = list(p.certifications).map((x) => ({
+      name: str2(x.name, 160),
+      authority: str2(x.organization ?? x.authority, 120),
+      year: dateText(x.start ?? x.date)?.slice(0, 4)
+    })).filter((x) => !!x.name).slice(0, 20);
+  if (Array.isArray(p.projects))
+    out.projects = list(p.projects).map((x) => ({
+      name: str2(x.name ?? x.title, 160),
+      description: str2(x.description, 300),
+      start: dateText(x.start),
+      end: dateText(x.end)
+    })).filter((x) => !!x.name).slice(0, 12);
+  if (Array.isArray(p.volunteering_experience))
+    out.volunteering = list(p.volunteering_experience).map((x) => ({
+      role: str2(x.role ?? x.position, 120),
+      organization: str2(x.company ?? x.organization, 160),
+      cause: str2(x.cause, 80),
+      start: dateText(x.start),
+      end: dateText(x.end)
+    })).filter((x) => !!(x.role || x.organization)).slice(0, 12);
+  return out;
 }
 async function unipileProfile(deps, body, doFetch) {
   const accountId = String(body.accountId ?? "");

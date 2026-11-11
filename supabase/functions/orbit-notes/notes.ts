@@ -5,6 +5,9 @@
  * - POST /fathom/meetings {apiKey, createdAfter?, cursor?}: the student's recorded meetings from Fathom, each with its
  *   guest list, AI summary and action items, trimmed to what Orbit files as a note.
  * - POST /calcom/event-types {apiKey}: the student's Cal.com username and event types, each with its booking link.
+ * - POST /calendly/event-types {accessToken}: the same for Calendly, with the token from signing in.
+ * - POST /scheduling/public {app, username}: the public event types on a Cal.com or Calendly booking page, read with
+ *   no key or sign-in at all (both apps show them to anyone who opens the page).
  * - POST /mcp/call {server, accessToken, calls}: up to ten read-only tool calls on Granola's or Wispr Flow's meeting
  *   server (MCP), in one session, with the token the student got by signing in. Wispr Flow's server turns browsers
  *   away, so the calls come through here; only those two servers are reachable.
@@ -55,7 +58,7 @@ export interface NotesDeps {
   salt?: string;
   limits?: Limits;
   /** "Connect with Cal.com" and "Connect with Fathom": on once each app's client is set */
-  oauth?: { calcom?: OAuthClient; fathom?: OAuthClient };
+  oauth?: { calcom?: OAuthClient; fathom?: OAuthClient; calendly?: OAuthClient };
 }
 
 export const CALCOM_AUTHORIZE = 'https://app.cal.com/auth/oauth2/authorize';
@@ -65,6 +68,11 @@ export const CALCOM_SCOPES = 'EVENT_TYPE_READ PROFILE_READ';
 export const FATHOM_AUTHORIZE = 'https://fathom.video/external/v1/oauth2/authorize';
 export const FATHOM_TOKEN = 'https://api.fathom.ai/external/v1/oauth2/token';
 export const FATHOM_SCOPES = 'public_api';
+export const CALENDLY_AUTHORIZE = 'https://auth.calendly.com/oauth/authorize';
+export const CALENDLY_TOKEN = 'https://auth.calendly.com/oauth/token';
+export const CALENDLY_API = 'https://api.calendly.com';
+/** Calendly's own booking pages read their event types from here; open to anyone, like the page itself */
+export const CALENDLY_PUBLIC = 'https://calendly.com/api/booking/profiles';
 
 /** A Fathom meeting, as Orbit files it. */
 export interface FathomMeeting {
@@ -264,9 +272,19 @@ async function fathomMeetings(
   return { ok: true, meetings, nextCursor: str(j.next_cursor) ?? null };
 }
 
+const TOKEN_URL = { calcom: CALCOM_TOKEN, fathom: FATHOM_TOKEN, calendly: CALENDLY_TOKEN } as const;
+
 /** Which "Connect with …" buttons work: the public client ids, never a secret. */
-export function oauthConfig(deps: NotesDeps): { calcom: string | null; fathom: string | null } {
-  return { calcom: deps.oauth?.calcom?.clientId ?? null, fathom: deps.oauth?.fathom?.clientId ?? null };
+export function oauthConfig(deps: NotesDeps): {
+  calcom: string | null;
+  fathom: string | null;
+  calendly: string | null;
+} {
+  return {
+    calcom: deps.oauth?.calcom?.clientId ?? null,
+    fathom: deps.oauth?.fathom?.clientId ?? null,
+    calendly: deps.oauth?.calendly?.clientId ?? null,
+  };
 }
 
 /**
@@ -279,7 +297,10 @@ async function oauthToken(
   doFetch: typeof fetch,
 ): Promise<Result<{ accessToken: string; refreshToken?: string; expiresIn?: number }>> {
   if (body.provider === 'granola' || body.provider === 'wispr') return mcpToken(deps, body, doFetch);
-  const provider = body.provider === 'calcom' ? 'calcom' : body.provider === 'fathom' ? 'fathom' : undefined;
+  const provider =
+    body.provider === 'calcom' || body.provider === 'fathom' || body.provider === 'calendly'
+      ? body.provider
+      : undefined;
   const client = provider ? deps.oauth?.[provider] : undefined;
   if (!provider || !client)
     return { ok: false, reason: 'refused', message: 'Signing in to this app is not set up yet.' };
@@ -299,7 +320,7 @@ async function oauthToken(
       return { ok: false, reason: 'refused', message: 'That sign-in did not come back to Orbit.' };
     Object.assign(params, { grant_type: 'authorization_code', code, redirect_uri: redirect });
   }
-  const res = await doFetch(provider === 'calcom' ? CALCOM_TOKEN : FATHOM_TOKEN, {
+  const res = await doFetch(TOKEN_URL[provider], {
     method: 'POST',
     headers: { 'content-type': 'application/x-www-form-urlencoded', accept: 'application/json' },
     body: new URLSearchParams(params).toString(),
@@ -651,6 +672,125 @@ async function calEventTypes(
   return { ok: true, username, eventTypes };
 }
 
+/** A booking page's username as either app writes it: letters, digits, dots, dashes and underscores. */
+export function validUsername(u: unknown): u is string {
+  return typeof u === 'string' && /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(u.trim());
+}
+
+/** A Calendly event type from its API or its public booking page. */
+export function mapCalendlyType(username: string, e: Record<string, unknown>): CalEventType | undefined {
+  const slug = str(e.slug);
+  const given = str(e.scheduling_url);
+  const url =
+    given && /^https:\/\/calendly\.com\//.test(given)
+      ? given
+      : slug
+        ? `https://calendly.com/${encodeURIComponent(username)}/${encodeURIComponent(slug)}`
+        : undefined;
+  const id = str(e.uuid) ?? str(e.uri) ?? slug;
+  if (!url || !slug || !id) return undefined;
+  const minutes = Number(e.duration);
+  return {
+    id,
+    title: str(e.name) ?? slug,
+    slug,
+    minutes: Number.isFinite(minutes) && minutes > 0 ? minutes : undefined,
+    hidden: e.secret === true || e.active === false,
+    url,
+  };
+}
+
+/**
+ * The event types anyone sees on the student's booking page, read with no key: Cal.com's API answers them for a
+ * username, Calendly's booking page reads them the same way. A username with no page is a plain "not found".
+ */
+async function publicEventTypes(
+  body: Record<string, unknown>,
+  doFetch: typeof fetch,
+): Promise<Result<{ username: string; eventTypes: CalEventType[] }>> {
+  const app = body.app === 'calendly' ? 'calendly' : body.app === 'calcom' ? 'calcom' : undefined;
+  if (!app || !validUsername(body.username))
+    return { ok: false, reason: 'refused', message: 'That does not look like a booking page username.' };
+  const username = body.username.trim();
+  const name = app === 'calcom' ? 'Cal.com' : 'Calendly';
+  const missing = `${name} has no booking page for ${username}.`;
+  const headers = { accept: 'application/json' };
+  if (app === 'calcom') {
+    const q = new URL(`${CALCOM_BASE}/event-types`);
+    q.searchParams.set('username', username);
+    const res = await doFetch(q.toString(), {
+      headers: { ...headers, 'cal-api-version': CALCOM_EVENT_TYPES_VERSION },
+    });
+    if (res.status === 404) return { ok: false, reason: 'refused', message: missing };
+    if (!res.ok)
+      return {
+        ok: false,
+        reason: 'upstream',
+        message: `Cal.com is not answering right now (${res.status}).`,
+      };
+    const j = (await res.json()) as { data?: unknown };
+    const raw = Array.isArray(j.data) ? j.data : [];
+    const eventTypes = raw
+      .filter((e): e is Record<string, unknown> => !!e && typeof e === 'object')
+      .map((e) => mapEventType(username, e))
+      .filter((e): e is CalEventType => !!e && !e.hidden);
+    // Cal.com answers an empty list for a username nobody has
+    if (!eventTypes.length) return { ok: false, reason: 'refused', message: missing };
+    return { ok: true, username, eventTypes };
+  }
+  const page = `${CALENDLY_PUBLIC}/${encodeURIComponent(username)}`;
+  const profile = await doFetch(page, { headers });
+  if (profile.status === 404) return { ok: false, reason: 'refused', message: missing };
+  if (!profile.ok)
+    return {
+      ok: false,
+      reason: 'upstream',
+      message: `Calendly is not answering right now (${profile.status}).`,
+    };
+  const res = await doFetch(`${page}/event_types`, { headers });
+  if (!res.ok)
+    return { ok: false, reason: 'upstream', message: `Calendly is not answering right now (${res.status}).` };
+  const raw = (await res.json()) as unknown;
+  const eventTypes = (Array.isArray(raw) ? raw : [])
+    .filter((e): e is Record<string, unknown> => !!e && typeof e === 'object')
+    .map((e) => mapCalendlyType(username, e))
+    .filter((e): e is CalEventType => !!e && !e.hidden);
+  return { ok: true, username, eventTypes };
+}
+
+/** The signed-in Calendly user's event types, from its API. */
+async function calendlyEventTypes(
+  body: Record<string, unknown>,
+  doFetch: typeof fetch,
+): Promise<Result<{ username?: string; eventTypes: CalEventType[] }>> {
+  const cred = authOf(body)!;
+  const token = 'accessToken' in cred ? cred.accessToken : cred.apiKey;
+  const auth = { Authorization: `Bearer ${token}`, accept: 'application/json' };
+  const me = await doFetch(`${CALENDLY_API}/users/me`, { headers: auth });
+  if (me.status === 401 || me.status === 403)
+    return { ok: false, reason: 'bad_key', message: 'Calendly needs you to connect again.' };
+  if (!me.ok)
+    return { ok: false, reason: 'upstream', message: `Calendly is not answering right now (${me.status}).` };
+  const user = ((await me.json()) as { resource?: Record<string, unknown> }).resource ?? {};
+  const uri = str(user.uri);
+  const username = str(user.slug) ?? str(user.scheduling_url)?.replace(/^https:\/\/calendly\.com\//, '');
+  if (!uri) return { ok: false, reason: 'upstream', message: 'Calendly gave no account.' };
+  const q = new URL(`${CALENDLY_API}/event_types`);
+  q.searchParams.set('user', uri);
+  q.searchParams.set('count', '100');
+  const res = await doFetch(q.toString(), { headers: auth });
+  if (res.status === 401 || res.status === 403)
+    return { ok: false, reason: 'bad_key', message: 'Calendly needs you to connect again.' };
+  if (!res.ok)
+    return { ok: false, reason: 'upstream', message: `Calendly is not answering right now (${res.status}).` };
+  const list = ((await res.json()) as { collection?: unknown }).collection;
+  const eventTypes = (Array.isArray(list) ? list : [])
+    .filter((e): e is Record<string, unknown> => !!e && typeof e === 'object')
+    .map((e) => mapCalendlyType(username ?? '', e))
+    .filter((e): e is CalEventType => !!e);
+  return { ok: true, username, eventTypes };
+}
+
 export function makeHandler(deps: NotesDeps): (req: Request) => Promise<Response> {
   const doFetch = deps.fetch ?? fetch;
   const limits = deps.limits ?? DEFAULT_LIMITS;
@@ -677,6 +817,8 @@ export function makeHandler(deps: NotesDeps): (req: Request) => Promise<Response
     const routes = [
       '/fathom/meetings',
       '/calcom/event-types',
+      '/calendly/event-types',
+      '/scheduling/public',
       '/oauth/config',
       '/oauth/token',
       '/oauth/register',
@@ -691,7 +833,11 @@ export function makeHandler(deps: NotesDeps): (req: Request) => Promise<Response
     } catch {
       return json(400, { error: 'the body must be JSON' }, h);
     }
-    if (!body || typeof body !== 'object' || (!path.startsWith('/oauth/') && !authOf(body)))
+    if (
+      !body ||
+      typeof body !== 'object' ||
+      (!path.startsWith('/oauth/') && path !== '/scheduling/public' && !authOf(body))
+    )
       return json(400, { error: 'an API key or a sign-in is needed' }, h);
     const visitor = (await sha256(`${deps.salt ?? 'orbit'}:${clientIp(req)}`)).slice(0, 32);
     let verdict: { allowed: boolean; over?: string };
@@ -718,7 +864,11 @@ export function makeHandler(deps: NotesDeps): (req: Request) => Promise<Response
               ? await mcpCalls(body, doFetch)
               : path === '/fathom/meetings'
                 ? await fathomMeetings(body, doFetch)
-                : await calEventTypes(body, doFetch);
+                : path === '/scheduling/public'
+                  ? await publicEventTypes(body, doFetch)
+                  : path === '/calendly/event-types'
+                    ? await calendlyEventTypes(body, doFetch)
+                    : await calEventTypes(body, doFetch);
       return json(200, out, h);
     } catch {
       // never echo an upstream error: it could carry the key back

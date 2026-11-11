@@ -118,7 +118,7 @@ export function evaluateDoc(
   if (compiled.keywords) checks.push(checkKeywords(doc, compiled.keywords, text));
   if (spec.relationship) {
     checks.push(...checkRelationship(doc.id, spec.relationship, ctx));
-    if (spec.relationship.alumOfMySchool) checks.push(checkAlum(doc, ctx));
+    if (spec.relationship.alumOfMySchool) checks.push(checkAlum(doc, ctx, spec.relationship.mySchoolLevel));
   }
   const judgedHere = opts.judged?.get(doc.id);
   if (judgedHere)

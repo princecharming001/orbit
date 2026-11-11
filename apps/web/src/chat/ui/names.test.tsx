@@ -71,4 +71,30 @@ describe('names in an answer', () => {
       'You talked with Andrew Israel at PropelAuth and Chris Pisarski at Crustdata.',
     );
   });
+  it('people found outside the network link to their LinkedIn; a row about someone in Orbit links to their page', () => {
+    const found = {
+      ui: {
+        items: [
+          {
+            id: 'rec_1',
+            href: 'https://bio.example.edu/belfu',
+            person: { name: 'Belfu Berkol', linkedinUrl: 'https://www.linkedin.com/in/belfu-berkol' },
+          },
+          { id: 'rec_2', known: 'p9', href: '/people/p9', person: { name: 'Vivaan Gupta' } },
+          // a company is not a person
+          { name: 'Addition Therapeutics', url: 'https://addition.bio' },
+        ],
+      },
+    };
+    const people = namedPeople([found]);
+    expect(people.find((p) => p.name === 'Belfu Berkol')).toMatchObject({
+      href: 'https://www.linkedin.com/in/belfu-berkol',
+      external: true,
+    });
+    expect(people.find((p) => p.name === 'Vivaan Gupta')).toMatchObject({
+      href: '/people/p9',
+      external: false,
+    });
+    expect(people.some((p) => p.name === 'Addition Therapeutics')).toBe(false);
+  });
 });

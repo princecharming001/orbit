@@ -12,7 +12,10 @@ import { checkVillage, setVillageUrlForTests, villageHealth } from '../integrati
 import { resetTargetMutualsForTests, targetMutuals } from './externalRoutes';
 import { reachPerson, updateEdgesFor } from './graph';
 import { addLinkedInFound, searchLinkedInLive } from './linkedinSearch';
-import { resetWarmIntrosCache } from './warmIntros';
+import { resetWarmIntrosCache, setVillageEnabledForTests } from './warmIntros';
+
+// Village is off for students; its engine is still tested here
+setVillageEnabledForTests(true);
 
 const LI = 'https://proxy.test/functions/v1/orbit-connectors';
 const VILLAGE = 'https://village.test/functions/v1/orbit-connectors';

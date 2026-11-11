@@ -785,6 +785,8 @@ export async function buildDraftContext(
         repliedEver:
           msgs.some((m) => m.direction === 'inbound') && msgs.some((m) => m.direction === 'outbound'),
         threadId: recent && lastThread?.externalThreadId ? lastThread.id : undefined,
+        // where it last passed, so the draft says "your message", not "your email", about a LinkedIn chat
+        channel: last.channel === 'linkedin' ? 'linkedin' : 'email',
       };
       if (history.repliedEver && history.threadId && channel === 'gmail')
         thread = { inThread: true, subject: lastThread?.subject };
@@ -800,6 +802,7 @@ export async function buildDraftContext(
           lastInbound: !lastSaid.out,
           repliedEver: said.some((m) => !m.out) && said.some((m) => m.out),
           threadId: undefined,
+          channel: lastSaid.channel === 'gmail' ? 'email' : lastSaid.channel,
         };
         const lastIn = [...said].reverse().find((m) => !m.out);
         if (!thread && lastIn) thread = { lastInboundBody: lastIn.text, lastInboundAt: lastIn.at };

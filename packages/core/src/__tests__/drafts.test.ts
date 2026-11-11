@@ -18,6 +18,7 @@ import {
   proposeWindows,
   schoolShort,
   sinceLabel,
+  talkedBefore,
   targetLabel,
   WHY_THEM_GAP,
   whenLabel,
@@ -2015,5 +2016,96 @@ describe('a reply Orbit never saw (UX round 6)', () => {
       base({ kind: 'schedule', thread: { lastSignal: 'positive', lastInboundBody: 'Happy to chat!' } }),
     );
     expect(seen.body).toMatch(/that would be great|That's great/);
+  });
+});
+
+describe('reconnecting on LinkedIn with someone the student has talked to', () => {
+  const aryaan = {
+    firstName: 'Aryaan',
+    fullName: 'Aryaan Shah',
+    title: 'Product Manager',
+    org: 'Stripe',
+    relationshipType: 'professional' as const,
+    strength: 0.5,
+  };
+  const chatBefore = {
+    lastAt: '2026-05-05T15:00:00Z',
+    lastInbound: true,
+    repliedEver: true,
+    channel: 'linkedin' as const,
+  };
+
+  it('opens "Hey Aryaan," and calls the earlier LinkedIn chat a message, said once', () => {
+    for (const kind of ['outreach', 'thank_you', 'nurture'] as const) {
+      const d = generateDraft(
+        base({
+          kind,
+          channel: 'linkedin',
+          person: aryaan,
+          history: chatBefore,
+          chat: kind === 'thank_you' ? { meetingAt: '2026-10-05T19:00:00Z' } : undefined,
+        }),
+      );
+      expect(d.body.startsWith('Hey Aryaan,'), `${kind}: ${d.body}`).toBe(true);
+    }
+    const d = generateDraft(base({ channel: 'linkedin', person: aryaan, history: chatBefore }));
+    expect(d.body).toMatch(/Thanks again for your message in May/);
+    expect(d.body).not.toMatch(/email/);
+    // what the student is after is said once, not again after their proof line
+    expect(d.body.match(/recruiting for/g)).toHaveLength(1);
+    const ours = generateDraft(
+      base({ channel: 'linkedin', person: aryaan, history: { ...chatBefore, lastInbound: false } }),
+    );
+    expect(ours.body).toMatch(/We traded messages in May/);
+  });
+
+  it('an earlier email exchange, picked up on LinkedIn, is still an email', () => {
+    const d = generateDraft(
+      base({ channel: 'linkedin', person: aryaan, history: { ...chatBefore, channel: 'email' } }),
+    );
+    expect(d.body).toMatch(/^Hey Aryaan,/);
+    expect(d.body).toMatch(/your email in May/);
+  });
+
+  it('a stranger, someone who never wrote back, or an email keeps "Hi"', () => {
+    expect(generateDraft(base({ channel: 'linkedin', person: aryaan })).body).toMatch(/^Hi Aryaan,/);
+    const ignored = generateDraft(
+      base({
+        channel: 'linkedin',
+        person: aryaan,
+        history: { ...chatBefore, lastInbound: false, repliedEver: false },
+      }),
+    );
+    expect(ignored.body).toMatch(/^Hi Aryaan,/);
+    expect(generateDraft(base({ channel: 'gmail', person: aryaan, history: chatBefore })).body).toMatch(
+      /^Hi Aryaan,/,
+    );
+    expect(talkedBefore(base({ person: aryaan, history: chatBefore }))).toBe(true);
+    expect(talkedBefore(base({ person: aryaan, chat: { introducedAt: '2026-10-01T00:00:00Z' } }))).toBe(
+      false,
+    );
+  });
+
+  it('the short LinkedIn note to someone they met says "Hey" too', () => {
+    const d = generateDraft(
+      base({
+        channel: 'linkedin',
+        person: { ...aryaan, linkedinConnected: false },
+        chat: { meetingAt: '2026-09-05T19:00:00Z' },
+      }),
+    );
+    if (d.bodyShort) expect(d.bodyShort).toMatch(/^Hey Aryaan,/);
+  });
+
+  it('a greeting the student taught Orbit wins when it is already casual', () => {
+    const card = {
+      ...defaultStyleCard('warm', 'Alex'),
+      greetingPatterns: ['Yo {first},'],
+      source: 'learned' as never,
+    };
+    const d = generateDraft(
+      base({ channel: 'linkedin', person: aryaan, history: chatBefore, styleCard: card }),
+    );
+    expect(d.body).toMatch(/^(Yo|Hey) Aryaan,/);
   });
 });

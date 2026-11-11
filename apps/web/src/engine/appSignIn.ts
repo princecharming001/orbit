@@ -1,7 +1,7 @@
 /**
  * "Connect with Cal.com", "Fathom", "Granola" and "Wispr Flow": the app's own sign-in in a small window, the way most
  * apps connect. The student approves on the app's site, it sends them to Orbit's /auth/app page, which hands the code
- * back to this tab. For Cal.com and Fathom, Orbit's server trades it for tokens with the secret only it holds.
+ * back to this tab. For Cal.com, Calendly and Fathom, Orbit's server trades it for tokens with the secret only it holds.
  * Granola and Wispr Flow open their meeting servers (MCP) to any app that registers itself, so Orbit registers
  * itself, proves the code is its own (PKCE) and trades it as a public client; no secret is involved. Their sign-in
  * servers answer without the CORS header a browser needs, so the registration and the token calls go through
@@ -11,7 +11,7 @@
 import { db, type IntegrationAccount } from '../db/schema';
 import { type AppAuth, oauthClients, oauthRegister, oauthTokens } from '../integrations/notesApps';
 
-export type SignInApp = 'calcom' | 'fathom' | 'granola' | 'wispr';
+export type SignInApp = 'calcom' | 'fathom' | 'calendly' | 'granola' | 'wispr';
 /** apps whose meeting server lets Orbit register itself: sign-in needs nothing set up on Orbit's side */
 export type McpApp = 'granola' | 'wispr';
 export const isMcpApp = (app: SignInApp): app is McpApp => app === 'granola' || app === 'wispr';
@@ -38,22 +38,33 @@ export const MCP_APPS: Record<
   },
 };
 
-const AUTHORIZE: Record<'calcom' | 'fathom', { url: string; scope: string }> = {
+const AUTHORIZE: Record<'calcom' | 'fathom' | 'calendly', { url: string; scope?: string }> = {
   calcom: { url: 'https://app.cal.com/auth/oauth2/authorize', scope: 'EVENT_TYPE_READ PROFILE_READ' },
   fathom: { url: 'https://fathom.video/external/v1/oauth2/authorize', scope: 'public_api' },
+  // Calendly grants what the app was registered for; no scope in the request
+  calendly: { url: 'https://auth.calendly.com/oauth/authorize' },
 };
 
-/** Where every app's sign-in comes back; register exactly this address with Cal.com and Fathom. */
+/** Where every app's sign-in comes back; register exactly this address with Cal.com, Calendly and Fathom. */
 export function appRedirectUri(): string {
   const base = (import.meta.env.BASE_URL as string | undefined) ?? '/';
   return `${window.location.origin}${base.replace(/\/?$/, '/')}auth/app`;
 }
 
-let clients: Promise<{ calcom: string | null; fathom: string | null }> | undefined;
+export interface SignInClients {
+  calcom: string | null;
+  fathom: string | null;
+  calendly: string | null;
+}
+let clients: Promise<SignInClients> | undefined;
 
-/** The apps Orbit can sign in to (asked once per visit); a pasted key works for the others. */
-export function signInClients(): Promise<{ calcom: string | null; fathom: string | null }> {
-  clients ??= oauthClients().then((r) => (r.ok ? r.value : { calcom: null, fathom: null }));
+/** The apps Orbit can sign in to (asked once per visit); a pasted key or link works for the others. */
+export function signInClients(): Promise<SignInClients> {
+  clients ??= oauthClients().then((r) =>
+    r.ok
+      ? { calcom: r.value.calcom, fathom: r.value.fathom, calendly: r.value.calendly ?? null }
+      : { calcom: null, fathom: null, calendly: null },
+  );
   return clients;
 }
 
@@ -143,9 +154,10 @@ export async function signInToApp(app: SignInApp): Promise<SignInOutcome> {
     client_id: clientId,
     redirect_uri: redirectUri,
     response_type: 'code',
-    scope: AUTHORIZE[app].scope,
     state,
   });
+  const scope = AUTHORIZE[app].scope;
+  if (scope) q.set('scope', scope);
   const answer = await awaitCode(`${AUTHORIZE[app].url}?${q}`, state);
   const no = refusal(answer);
   if (no || answer === 'blocked' || !answer?.code) return no ?? { ok: false, message: 'Try again.' };

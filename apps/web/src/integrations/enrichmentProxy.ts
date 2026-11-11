@@ -57,6 +57,12 @@ export interface LinkedInProfile {
   connectionsCount?: number;
   /** who recommended them and whom they recommended, when asked for: never the recommendation's text */
   recommendations?: LinkedInRecommendation[];
+  /** the rest of a full read (the student's own profile asks for every section) */
+  skills?: string[];
+  languages?: { name: string; proficiency?: string }[];
+  certifications?: { name: string; authority?: string; year?: string }[];
+  projects?: { name: string; description?: string; start?: string; end?: string }[];
+  volunteering?: { role?: string; organization?: string; cause?: string; start?: string; end?: string }[];
 }
 
 /** Recommendations as a person keeps them (Person.linkedinRecommendations). */

@@ -507,13 +507,42 @@ export function Tabs<T extends string>({
   onChange,
   items,
   trailing,
+  variant = 'pill',
 }: {
   value: T;
   onChange: (v: T) => void;
   items: { value: T; label: string; count?: number }[];
   /** a control that sits at the end of the row, after the last tab (a round icon button) */
   trailing?: ReactNode;
+  /** 'line': words on a hairline, the open one underlined (settings); 'pill' (default): filled buttons */
+  variant?: 'pill' | 'line';
 }) {
+  if (variant === 'line')
+    return (
+      <div className="mb-4 flex flex-wrap items-center gap-x-5 border-b border-line-2" role="tablist">
+        {items.map((it) => (
+          <button
+            key={it.value}
+            role="tab"
+            type="button"
+            aria-selected={value === it.value}
+            onClick={() => onChange(it.value)}
+            className={cx(
+              '-mb-px h-9 border-b-[1.5px] text-[13px] transition-colors whitespace-nowrap focus-visible:outline-none',
+              value === it.value
+                ? 'border-ink text-ink font-medium'
+                : 'border-transparent text-ink-3 hover:text-ink',
+            )}
+          >
+            {it.label}
+            {it.count !== undefined && (
+              <span className="ml-1.5 text-[12px] tabular text-ink-3">{it.count}</span>
+            )}
+          </button>
+        ))}
+        {trailing}
+      </div>
+    );
   return (
     <div
       // tabs wrap on a narrow screen instead of hiding the last one off the edge

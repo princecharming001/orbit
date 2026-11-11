@@ -14,6 +14,8 @@ export type IntegrationProvider =
   | 'wispr'
   /** the student's Cal.com account: its event types become the booking link drafts offer */
   | 'calcom'
+  /** the student's Calendly booking page, read the same way */
+  | 'calendly'
   | 'wispr_export'
   | 'tracker_import'
   /** the Mac's Messages database, imported and read in the browser */

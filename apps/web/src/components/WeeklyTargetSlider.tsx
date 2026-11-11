@@ -175,8 +175,8 @@ export function WeeklyTargetSlider({
               // a new kind of note rises in; one that stays keeps still while the number moves
               key={n.kind}
               className={cx(
-                'flex items-start gap-2 rounded-[10px] px-3 py-2 text-[12.5px] leading-[1.45] fade-up',
-                n.kind === 'cap' ? 'bg-warn-soft text-warn' : 'bg-canvas-2 text-ink-2',
+                'flex items-start gap-2 py-1 text-[12.5px] leading-[1.45] fade-up',
+                n.kind === 'cap' ? 'text-warn' : 'text-ink-3',
               )}
             >
               {n.kind === 'cap' ? (

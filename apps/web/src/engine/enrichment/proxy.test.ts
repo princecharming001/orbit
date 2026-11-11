@@ -187,6 +187,37 @@ describe('enrichment routes of the connector proxy', () => {
     });
   });
 
+  it('maps the rest of a full read: skills, languages, certifications, projects and volunteering', () => {
+    const p = mapProfile({
+      ...UNIPILE_PROFILE,
+      skills: [{ name: 'Python', endorsement_count: 12 }, 'SQL', { nope: 1 }],
+      languages: [{ name: 'Spanish', proficiency: 'Professional working' }, 'English'],
+      certifications: [
+        { name: 'AWS Cloud Practitioner', organization: 'Amazon Web Services', start: '2024-03' },
+      ],
+      projects: [
+        { name: 'Campus marketplace', description: 'Textbooks, with Postgres search', start: '2025' },
+      ],
+      volunteering_experience: [{ role: 'Mentor', company: 'Girls Who Code', cause: 'Education' }],
+    }) as Record<string, unknown>;
+    expect(p.skills).toEqual(['Python', 'SQL']);
+    expect(p.languages).toEqual([
+      { name: 'Spanish', proficiency: 'Professional working' },
+      { name: 'English' },
+    ]);
+    expect(p.certifications).toEqual([
+      { name: 'AWS Cloud Practitioner', authority: 'Amazon Web Services', year: '2024' },
+    ]);
+    expect(p.projects).toMatchObject([
+      { name: 'Campus marketplace', description: 'Textbooks, with Postgres search' },
+    ]);
+    expect(p.volunteering).toMatchObject([
+      { role: 'Mentor', organization: 'Girls Who Code', cause: 'Education' },
+    ]);
+    // a read that did not ask for them has none of these fields
+    expect(Object.keys(mapProfile(UNIPILE_PROFILE) as object)).not.toContain('skills');
+  });
+
   it('passes on throttled sections, and says not found, throttled and refused apart', async () => {
     expect(mapProfile({ throttled_sections: ['experience', 'education'] }).throttled).toEqual([
       'experience',

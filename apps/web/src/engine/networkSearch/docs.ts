@@ -15,6 +15,7 @@ import {
   type SearchContext,
 } from '@orbit/core/search';
 import { db, type FacetRow } from '../../db/schema';
+import { aboutMe, schoolsOf } from '../selfProfile';
 import { companyFacts, facetsByPerson, placeIndex, profilesByPerson, schoolIndex } from './data';
 import { loadScans } from './lookup';
 
@@ -192,7 +193,11 @@ export async function loadWorld(
     connected: channelSince[c] !== undefined,
     since: channelSince[c] || undefined,
   });
+  // the student's schools: every one on their own LinkedIn profile (the high school too) and the one from setup
+  const me = await aboutMe({ id: user.id, school: user.school });
+  const canon = (names: string[]) => [...new Set(names.map((n) => schools.lookup(n) ?? n))];
   const mine = user.school ? schools.lookup(user.school) : undefined;
+  const allMine = canon(schoolsOf(me));
   const ctx: SearchContext = {
     facts,
     places,
@@ -204,7 +209,12 @@ export async function loadWorld(
       text: channel('text'),
       linkedin: channel('linkedin'),
     },
-    mySchools: mine ? [mine] : user.school ? [user.school] : [],
+    mySchools: allMine.length ? allMine : mine ? [mine] : user.school ? [user.school] : [],
+    mySchoolsByLevel: {
+      high_school: canon(schoolsOf(me, 'high_school')),
+      college: canon(schoolsOf(me, 'college')),
+      graduate: canon(schoolsOf(me, 'graduate')),
+    },
     now: Date.now(),
   };
   return { docs, ctx, people: map };

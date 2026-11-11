@@ -43,13 +43,22 @@ export interface WarmIntro {
  * route lookup sends the target's name and company to Village, so it is the student's choice (Settings,
  * Integrations).
  */
-export function villageAvailable(user: Pick<User, 'id'>): boolean {
-  return usesMockConnectors(user.id) || (villageConfigured() && readPrefs().warmIntros === true);
+/**
+ * Village is no longer offered to students (it was taken out of Settings): only the sample student's made-up intros
+ * show. The engine stays, behind this switch, for its tests.
+ */
+let villageOn = false;
+export function setVillageEnabledForTests(on: boolean): void {
+  villageOn = on;
 }
 
-/** Warm intros can be turned on here: Village is in the build, or this is the sample student (always on). */
+export function villageAvailable(user: Pick<User, 'id'>): boolean {
+  return usesMockConnectors(user.id) || (villageOn && villageConfigured() && readPrefs().warmIntros === true);
+}
+
+/** Warm intros can be turned on here: the sample student only (always on), unless the switch is on. */
 export function villageOffered(user: Pick<User, 'id'>): boolean {
-  return usesMockConnectors(user.id) || villageConfigured();
+  return usesMockConnectors(user.id) || (villageOn && villageConfigured());
 }
 
 /** Turn warm intros on or off for this browser. */

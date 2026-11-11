@@ -55,21 +55,17 @@ export function FoundPeopleCard({
   env,
   block,
   items,
-  title,
   actions,
 }: {
   env: ResultEnvelope;
   block: ToolBlock;
   items: ListRow[];
+  /** the tool's own title ("People for advice"): no longer shown, the card says "outside your network" */
   title?: string;
   actions: CardActions;
 }) {
   const picked = usePickSet();
   const fold = useRowFold(items);
-  const withEmail = items.filter((it) => it.person?.email);
-  const verified = withEmail.filter((it) => it.person?.emailConfidence === 'verified').length;
-  // what the search left out or assumed, said once under the title
-  const quiet = env.summary.replace(/^.*?[.?!](\s|$)/, '').trim();
   const pickable = items.filter((it) => !!it.id);
   const canPick = pickable.length > 1;
   const chosen = pickable.filter((it) => picked.has(it.id!));
@@ -80,17 +76,14 @@ export function FoundPeopleCard({
   const pickedSteps = [addPicked(rows, 'routes'), addPicked(rows), addPicked(rows, 'drafts')].filter(
     (s): s is NextStep => !!s,
   );
-  const emails = withEmail.length
-    ? `${plural(withEmail.length, 'email', 'emails')}${verified ? `, ${verified} verified` : ''}`
-    : undefined;
   return (
     <PeopleShell
       testId="result-list"
-      title={plural(items.length, 'person', 'people')}
-      sub={
+      // one line that tells this card from the network's own: who they are, nothing more
+      title={
         <>
-          {[title, emails].filter(Boolean).join(' · ')}
-          {quiet && <span className="mt-0.5 block text-ink-3/90">{quiet}</span>}
+          {plural(items.length, 'person', 'people')}
+          <span className="font-normal text-ink-3">: outside your network</span>
         </>
       }
       aside={<OpenInApp href={env.href} className="shrink-0 -mr-1.5" />}

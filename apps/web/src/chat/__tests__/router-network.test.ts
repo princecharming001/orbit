@@ -220,3 +220,20 @@ describe('a field in a network ask (plan 37: the known router gap)', () => {
     expect((r as { input?: { keywords?: unknown } }).input?.keywords).toBeUndefined();
   });
 });
+
+describe("the student's own schools (their LinkedIn profile names them)", () => {
+  it.each([
+    ['list out people who went to my high school', 'high_school'],
+    ['who went to my high school', 'high_school'],
+    ['people I know from my college', 'college'],
+    ['who in my network went to my university', 'college'],
+    ['alumni from my school in my network', undefined],
+  ])('%s searches for alums of their own school', (text, level) => {
+    const r = routeUtterance(text, ctx());
+    expect(r).toMatchObject({ kind: 'tool', tool: 'search_network_spec' });
+    const rel = (r as { input: { relationship?: { alumOfMySchool?: boolean; mySchoolLevel?: string } } })
+      .input.relationship;
+    expect(rel?.alumOfMySchool).toBe(true);
+    expect(rel?.mySchoolLevel).toBe(level);
+  });
+});

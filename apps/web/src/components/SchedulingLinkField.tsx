@@ -1,14 +1,14 @@
 import type { User } from '@orbit/core';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { useState } from 'react';
-import { calStatus, eventTypeLabel } from '../engine/calcom';
+import { allEventTypes, eventTypeLabel } from '../engine/calcom';
 import { Input, Label, Select } from '../ui';
 
 const OTHER = '__other';
 
 /**
- * The booking link drafts offer when proposing times. With Cal.com connected it is picked from the student's event
- * types (or "Other link…" for any other page); without it, it is typed in.
+ * The booking link drafts offer when proposing times. With Cal.com or Calendly connected it is picked from the
+ * student's event types (or "Other link…" for any other page); without either, it is typed in.
  */
 export function SchedulingLinkField({
   user,
@@ -22,8 +22,8 @@ export function SchedulingLinkField({
   /** inside the Cal.com row: no heading or hint, the row says what it is */
   compact?: boolean;
 }) {
-  const status = useLiveQuery(() => calStatus(user), [user.id]);
-  const types = status?.connected ? status.eventTypes.filter((t) => !t.hidden || t.url === value) : [];
+  const all = useLiveQuery(() => allEventTypes(user), [user.id]);
+  const types = (all ?? []).filter((t) => !t.hidden || t.url === value);
   const matched = types.some((t) => t.url === value);
   const [other, setOther] = useState(false);
   const showPicker = types.length > 0;

@@ -30,6 +30,21 @@ function visit(v: unknown, out: Map<string, NamedPerson>, depth: number): void {
         external: !!li,
       });
   }
+  // someone found outside the network ({ name, linkedinUrl }), or a row naming a person it links to in Orbit
+  const plain = typeof o.name === 'string' ? o.name.trim() : '';
+  if (!name && plain && /\S+\s+\S+/.test(plain) && plain.length <= 80 && !out.has(plain.toLowerCase())) {
+    const li = typeof o.linkedinUrl === 'string' && LINKEDIN.test(o.linkedinUrl) ? o.linkedinUrl : undefined;
+    if (li) out.set(plain.toLowerCase(), { name: plain, href: li, external: true });
+  }
+  const row = o.person && typeof o.person === 'object' ? (o.person as Record<string, unknown>) : undefined;
+  const rowName = typeof row?.name === 'string' ? row.name.trim() : '';
+  if (
+    rowName &&
+    typeof o.href === 'string' &&
+    o.href.startsWith('/people/') &&
+    !out.has(rowName.toLowerCase())
+  )
+    out.set(rowName.toLowerCase(), { name: rowName, href: o.href, external: false });
   for (const [k, x] of Object.entries(o)) if (k !== 'forModel') visit(x, out, depth + 1);
 }
 

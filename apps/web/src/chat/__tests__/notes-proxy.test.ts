@@ -6,9 +6,11 @@ import {
   MCP_AUTH,
   MCP_SERVERS,
   makeHandler,
+  mapCalendlyType,
   mapFathomMeeting,
   memoryTake,
   readRpc,
+  validUsername,
 } from '../../../../../supabase/functions/orbit-notes/notes';
 
 const ORIGIN = 'https://tryorbit.today';
@@ -192,10 +194,10 @@ describe('signing in to Cal.com and Fathom', () => {
   it('says which sign-ins are set up, with the public ids only', async () => {
     const r = await withOAuth(vi.fn() as unknown as typeof fetch)(post('/oauth/config', {}));
     const j = await r.json();
-    expect(j).toEqual({ ok: true, calcom: 'cal_client', fathom: 'fathom_client' });
+    expect(j).toEqual({ ok: true, calcom: 'cal_client', fathom: 'fathom_client', calendly: null });
     expect(JSON.stringify(j)).not.toContain('secret');
     const off = await handler(vi.fn() as unknown as typeof fetch)(post('/oauth/config', {}));
-    expect(await off.json()).toEqual({ ok: true, calcom: null, fathom: null });
+    expect(await off.json()).toEqual({ ok: true, calcom: null, fathom: null, calendly: null });
   });
 
   it('trades a code for tokens with the secret it holds, only for a redirect back to Orbit', async () => {
@@ -464,5 +466,195 @@ describe('orbit-notes: registering with and signing in to Granola and Wispr Flow
       reason: 'bad_key',
       message: 'Wispr Flow needs you to connect again.',
     });
+  });
+});
+
+describe('orbit-notes: booking pages with no key (Cal.com, Calendly)', () => {
+  const calType = (id: number, slug: string, extra: Record<string, unknown> = {}) => ({
+    id,
+    slug,
+    title: `${slug} chat`,
+    lengthInMinutes: 30,
+    ...extra,
+  });
+
+  it('reads a Cal.com page by username alone, with no key sent, and drops hidden types', async () => {
+    const seen: { url: string; headers: Record<string, string> }[] = [];
+    const f = vi.fn(async (url: string, init?: RequestInit) => {
+      seen.push({ url, headers: (init?.headers ?? {}) as Record<string, string> });
+      return ok({ status: 'success', data: [calType(1, '30min'), calType(2, 'secret', { hidden: true })] });
+    }) as unknown as typeof fetch;
+    const r = await handler(f)(post('/scheduling/public', { app: 'calcom', username: 'alex-rivera' }));
+    const j = await r.json();
+    expect(j).toMatchObject({
+      ok: true,
+      username: 'alex-rivera',
+      eventTypes: [{ slug: '30min', url: 'https://cal.com/alex-rivera/30min', minutes: 30, hidden: false }],
+    });
+    expect(j.eventTypes).toHaveLength(1);
+    expect(seen).toHaveLength(1);
+    expect(seen[0]!.url).toBe('https://api.cal.com/v2/event-types?username=alex-rivera');
+    expect(seen[0]!.headers.Authorization).toBeUndefined();
+    expect(seen[0]!.headers['cal-api-version']).toBe(CALCOM_EVENT_TYPES_VERSION);
+  });
+
+  it('a Cal.com username nobody has reads as not found, not as an empty page', async () => {
+    const f = vi.fn(async () => ok({ status: 'success', data: [] })) as unknown as typeof fetch;
+    const j = await (
+      await handler(f)(post('/scheduling/public', { app: 'calcom', username: 'nobody-here' }))
+    ).json();
+    expect(j).toEqual({
+      ok: false,
+      reason: 'refused',
+      message: 'Cal.com has no booking page for nobody-here.',
+    });
+  });
+
+  it('reads a Calendly page from its public profile, and a missing one says so', async () => {
+    const urls: string[] = [];
+    const f = vi.fn(async (url: string) => {
+      urls.push(url);
+      if (url.includes('/nobody')) return new Response('{"message":"not found"}', { status: 404 });
+      if (url.endsWith('/event_types'))
+        return ok([
+          { name: '15 Minute Meeting', slug: '15min', uuid: 'AAA' },
+          { name: 'No slug', uuid: 'BBB' },
+        ]);
+      return ok({ id: 1, name: 'Alex' });
+    }) as unknown as typeof fetch;
+    const h = handler(f);
+    const j = await (await h(post('/scheduling/public', { app: 'calendly', username: 'alex' }))).json();
+    expect(j).toEqual({
+      ok: true,
+      username: 'alex',
+      eventTypes: [
+        {
+          id: 'AAA',
+          title: '15 Minute Meeting',
+          slug: '15min',
+          minutes: undefined,
+          hidden: false,
+          url: 'https://calendly.com/alex/15min',
+        },
+      ],
+    });
+    expect(urls).toEqual([
+      'https://calendly.com/api/booking/profiles/alex',
+      'https://calendly.com/api/booking/profiles/alex/event_types',
+    ]);
+    const miss = await (await h(post('/scheduling/public', { app: 'calendly', username: 'nobody' }))).json();
+    expect(miss).toMatchObject({ ok: false, message: 'Calendly has no booking page for nobody.' });
+  });
+
+  it('refuses a username that is not one, or an app it does not know, without calling out', async () => {
+    const f = vi.fn() as unknown as typeof fetch;
+    const h = handler(f);
+    for (const body of [
+      { app: 'calcom', username: '../admin' },
+      { app: 'calcom', username: 'a b' },
+      { app: 'zoom', username: 'alex' },
+      { app: 'calendly' },
+    ]) {
+      const j = await (await h(post('/scheduling/public', body))).json();
+      expect(j.ok).toBe(false);
+    }
+    expect(f).not.toHaveBeenCalled();
+    expect(validUsername('alex.rivera_2')).toBe(true);
+    expect(validUsername('-alex')).toBe(false);
+  });
+
+  it('a signed-in Calendly lists its event types with the token as a bearer, secret ones marked hidden', async () => {
+    const seen: { url: string; auth?: string }[] = [];
+    const f = vi.fn(async (url: string, init?: RequestInit) => {
+      seen.push({ url, auth: ((init?.headers ?? {}) as Record<string, string>).Authorization });
+      if (url.endsWith('/users/me'))
+        return ok({
+          resource: {
+            uri: 'https://api.calendly.com/users/U1',
+            slug: 'alex',
+            scheduling_url: 'https://calendly.com/alex',
+          },
+        });
+      return ok({
+        collection: [
+          {
+            uri: 'https://api.calendly.com/event_types/E1',
+            name: 'Chat',
+            slug: 'chat',
+            duration: 20,
+            scheduling_url: 'https://calendly.com/alex/chat',
+          },
+          {
+            uri: 'https://api.calendly.com/event_types/E2',
+            name: 'Private',
+            slug: 'p',
+            duration: 30,
+            secret: true,
+          },
+        ],
+      });
+    }) as unknown as typeof fetch;
+    const j = await (
+      await handler(f)(post('/calendly/event-types', { accessToken: 'cly_token_1234567890' }))
+    ).json();
+    expect(j.username).toBe('alex');
+    expect(j.eventTypes).toEqual([
+      {
+        id: 'https://api.calendly.com/event_types/E1',
+        title: 'Chat',
+        slug: 'chat',
+        minutes: 20,
+        hidden: false,
+        url: 'https://calendly.com/alex/chat',
+      },
+      {
+        id: 'https://api.calendly.com/event_types/E2',
+        title: 'Private',
+        slug: 'p',
+        minutes: 30,
+        hidden: true,
+        url: 'https://calendly.com/alex/p',
+      },
+    ]);
+    expect(seen[1]!.url).toBe(
+      'https://api.calendly.com/event_types?user=https%3A%2F%2Fapi.calendly.com%2Fusers%2FU1&count=100',
+    );
+    expect(seen.every((s) => s.auth === 'Bearer cly_token_1234567890')).toBe(true);
+  });
+
+  it('a Calendly event type keeps only a calendly.com link, else builds one from the slug', () => {
+    expect(
+      mapCalendlyType('alex', { slug: 's', name: 'S', scheduling_url: 'https://evil.test/x', uuid: 'u' })
+        ?.url,
+    ).toBe('https://calendly.com/alex/s');
+    expect(mapCalendlyType('alex', { name: 'No slug', uuid: 'u' })).toBeUndefined();
+  });
+
+  it('trades a Calendly sign-in code at Calendly with the secret it holds', async () => {
+    const urls: string[] = [];
+    const f = vi.fn(async (url: string) => {
+      urls.push(url);
+      return ok({ access_token: 'acc_123456789012', refresh_token: 'ref_123456789012', expires_in: 7200 });
+    }) as unknown as typeof fetch;
+    const h = makeHandler({
+      origins: defaultOrigins,
+      take: memoryTake(),
+      fetch: f,
+      oauth: { calendly: { clientId: 'cly_client', clientSecret: 'cly_secret' } },
+    });
+    const conf = await (await h(post('/oauth/config', {}))).json();
+    expect(conf.calendly).toBe('cly_client');
+    const j = await (
+      await h(
+        post('/oauth/token', {
+          provider: 'calendly',
+          grant: 'code',
+          code: 'code_1234567890',
+          redirectUri: 'https://tryorbit.today/auth/app',
+        }),
+      )
+    ).json();
+    expect(j).toMatchObject({ ok: true, accessToken: 'acc_123456789012' });
+    expect(urls).toEqual(['https://auth.calendly.com/oauth/token']);
   });
 });

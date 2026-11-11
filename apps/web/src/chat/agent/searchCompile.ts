@@ -23,7 +23,7 @@ const ROLE_WORDS: [RegExp, { families?: TitleFamily[]; founder?: boolean; titles
 ];
 
 const NETWORK =
-  /\b(in my network|my network|i know|do i know|people i know|my connections|my contacts|alums?|alumni|y ?c\b|y combinator|(?:not|haven'?t|have not|never) (?:talked|spoken|reached out))\b/i;
+  /\b(in my network|my network|i know|do i know|people i know|my connections|my contacts|alums?|alumni|y ?c\b|y combinator|(?:not|haven'?t|have not|never) (?:talked|spoken|reached out)|(?:went to|go to|from|at|attended) my (?:high ?school|hs|secondary school|college|university|uni|school|alma mater))\b/i;
 
 const BATCH =
   /\b(?:yc\s*)?([wsfx])\s?'?(\d{2})\b|\b(winter|summer|fall|spring)\s+(?:of\s+)?'?(\d{2}|\d{4})\b/gi;
@@ -146,8 +146,26 @@ export function compileSearch(text: string): QuerySpec | undefined {
       spec.positions = [position];
     }
   }
-  const schools = schoolsIn(t);
-  if (schools.length) spec.schools = [{ names: schools }];
+  // "my high school", "my college", "my school": the student's own (their LinkedIn profile names them)
+  const own =
+    /\bmy (high ?school|hs|secondary school|college|university|uni|grad(?:uate)? school|business school|alma mater|school)\b/i.exec(
+      t,
+    )?.[1];
+  const schools = own ? [] : schoolsIn(t);
+  if (own) {
+    const w = own.toLowerCase();
+    spec.relationship = {
+      ...spec.relationship,
+      alumOfMySchool: true,
+      ...(/high ?school|hs|secondary/.test(w)
+        ? { mySchoolLevel: 'high_school' as const }
+        : /college|university|uni/.test(w)
+          ? { mySchoolLevel: 'college' as const }
+          : /grad|business/.test(w)
+            ? { mySchoolLevel: 'graduate' as const }
+            : {}),
+    };
+  } else if (schools.length) spec.schools = [{ names: schools }];
   else if (/\b(alums?|alumni)\b/i.test(t) && /\b(my network|i know|my connections|my contacts)\b/i.test(t))
     spec.relationship = { ...spec.relationship, alumOfMySchool: true };
   const places = placesIn(t);

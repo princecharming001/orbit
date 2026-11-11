@@ -52,6 +52,7 @@ export interface IntegrationAccount {
     | 'fireflies'
     | 'wispr'
     | 'calcom'
+    | 'calendly'
     | 'wispr_export'
     | 'tracker_import'
     | 'imessage'

@@ -165,6 +165,7 @@ export function OutreachCoach({ user }: { user: User }) {
       </section>
 
       <Tabs
+        variant="line"
         value={type}
         onChange={(t) => setType(t)}
         items={COACH_TYPES.map((t) => ({ value: t.id, label: t.label, count: counts[t.id] || undefined }))}
@@ -172,11 +173,8 @@ export function OutreachCoach({ user }: { user: User }) {
       {info.blurb && <p className="-mt-2 mb-3 text-[12.5px] text-ink-3">{info.blurb}</p>}
 
       {/* the sample */}
-      <section
-        className="rounded-[var(--radius-card)] border border-line bg-canvas shadow-[var(--shadow-card)]"
-        data-testid="coach-sample"
-      >
-        <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-0.5 border-b border-line-2 px-4 py-2.5 text-[12px] text-ink-3">
+      <section className="border-y border-line-2" data-testid="coach-sample">
+        <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-0.5 border-b border-line-2 py-2.5 text-[12px] text-ink-3">
           <span className="min-w-0 truncate">
             To {COACH_SAMPLE_RECIPIENT.name}, {COACH_SAMPLE_RECIPIENT.title} at {COACH_SAMPLE_RECIPIENT.org}
           </span>
@@ -185,7 +183,7 @@ export function OutreachCoach({ user }: { user: User }) {
           </span>
         </div>
         {shown.subject && (
-          <div className="border-b border-line-2 px-4 py-2 text-[13px]">
+          <div className="border-b border-line-2 py-2 text-[13px]">
             <span className="text-ink-3">Subject </span>
             <span className="font-medium" data-testid="coach-sample-subject">
               {shown.subject}
@@ -193,13 +191,13 @@ export function OutreachCoach({ user }: { user: User }) {
           </div>
         )}
         <pre
-          className="whitespace-pre-wrap break-words px-4 py-3.5 font-sans text-[13.5px] leading-relaxed text-ink"
+          className="whitespace-pre-wrap break-words py-3.5 font-sans text-[14px] leading-[1.7] text-ink"
           data-testid="coach-sample-body"
         >
           {shown.body}
         </pre>
         {claudeOn && (
-          <div className="flex flex-wrap items-center justify-end gap-2 border-t border-line-2 px-4 py-2 text-[12px] text-ink-3">
+          <div className="flex flex-wrap items-center justify-end gap-2 border-t border-line-2 py-2 text-[12px] text-ink-3">
             {shown === sample ? (
               <button
                 type="button"

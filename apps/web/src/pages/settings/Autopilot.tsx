@@ -122,16 +122,8 @@ export function AutopilotSection() {
         }
       />
       <SettingsStack>
-        {view.local && (
-          <p
-            className="-mt-4 rounded-[10px] bg-canvas-2/70 px-3.5 py-2.5 text-[12.5px] text-ink-2"
-            data-testid="autopilot-local-note"
-          >
-            {LOCAL_AUTOPILOT_NOTE}
-          </p>
-        )}
         <SettingsCard title="Mode">
-          <div className="p-4">
+          <div className="py-1">
             <ChoiceTiles
               label="Autopilot mode"
               value={mode}

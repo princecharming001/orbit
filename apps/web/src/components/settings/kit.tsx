@@ -189,12 +189,9 @@ export function ChoiceTiles<T extends string | number>({
   busy?: T;
   disabled?: boolean;
 }) {
+  // a list of choices on hairlines, the chosen one's dot filled: no boxes around each
   return (
-    <div
-      className={cx('grid gap-2', options.length === 3 ? '@[34rem]:grid-cols-3' : '@[34rem]:grid-cols-2')}
-      role="radiogroup"
-      aria-label={label}
-    >
+    <div className="divide-y divide-line-2 border-y border-line-2" role="radiogroup" aria-label={label}>
       {options.map((o) => {
         const on = o.value === value;
         return (
@@ -205,21 +202,17 @@ export function ChoiceTiles<T extends string | number>({
             aria-checked={on}
             onClick={() => onChange(o.value)}
             disabled={disabled}
-            className={cx(
-              'text-left rounded-[10px] border px-3.5 py-3 transition-[border-color,box-shadow] disabled:cursor-progress',
-              on ? 'border-ink shadow-[0_0_0_1px_var(--color-ink)]' : 'border-line hover:border-[#cfcbc5]',
-            )}
+            className="group flex w-full items-start gap-3 py-3 text-left disabled:cursor-progress"
             data-testid={o.testId}
           >
-            <span className="text-[14px] font-medium flex items-center justify-between gap-2">
-              {o.title}
+            <span className="mt-[3px] inline-flex h-4 w-4 shrink-0 items-center justify-center">
               {busy === o.value ? (
                 <Working />
               ) : (
                 <span
                   className={cx(
-                    'h-4 w-4 shrink-0 rounded-full border-[1.5px] inline-flex items-center justify-center',
-                    on ? 'border-ink' : 'border-line',
+                    'inline-flex h-4 w-4 items-center justify-center rounded-full border-[1.5px] transition-colors',
+                    on ? 'border-ink' : 'border-[#cfcbc5] group-hover:border-ink-3',
                   )}
                   aria-hidden
                 >
@@ -227,7 +220,17 @@ export function ChoiceTiles<T extends string | number>({
                 </span>
               )}
             </span>
-            <span className="block text-[12.5px] leading-snug text-ink-3 mt-1">{o.line}</span>
+            <span className="min-w-0">
+              <span
+                className={cx(
+                  'block text-[14px]',
+                  on ? 'font-medium text-ink' : 'text-ink-2 group-hover:text-ink',
+                )}
+              >
+                {o.title}
+              </span>
+              <span className="mt-0.5 block text-[12.5px] leading-snug text-ink-3">{o.line}</span>
+            </span>
           </button>
         );
       })}

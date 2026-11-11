@@ -558,6 +558,8 @@ async function syncLinkedInLiveRun(user: User, opts: SyncOptions): Promise<LiveS
     // then, in the background: profiles, logos and schools for the people the student knows, and LinkedIn for the
     // ones known only from mail and texts (engine/enrichment)
     if (r.ok) void import('./enrichment').then((m) => m.scheduleEnrichment(user)).catch(() => undefined);
+    // the student's own profile, read in full once LinkedIn is connected (again every two weeks)
+    if (r.ok) void import('./selfProfile').then((m) => m.readOwnProfile(user)).catch(() => undefined);
     return r;
   } catch (e) {
     // something LinkedIn sent that Orbit could not read: say so on the row instead of failing silently

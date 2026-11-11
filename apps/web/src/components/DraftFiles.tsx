@@ -17,6 +17,7 @@ export function DraftFiles({
   confirmed,
   onConfirm,
   className,
+  part,
 }: {
   draft: OutboundMessage;
   userId: string;
@@ -27,6 +28,8 @@ export function DraftFiles({
   confirmed: boolean;
   onConfirm: (v: boolean) => void;
   className?: string;
+  /** the files list (under the words) or the attach buttons (beside Send); both when not given */
+  part?: 'list' | 'actions';
 }) {
   const input = useRef<HTMLInputElement>(null);
   const [asResume, setAsResume] = useState(false);
@@ -34,7 +37,7 @@ export function DraftFiles({
   const files = draft.attachments ?? [];
   if (draft.channel !== 'gmail') return null;
   if (!direct)
-    return mentionsFile ? (
+    return mentionsFile && part !== 'actions' ? (
       <label
         className={cx('flex items-center gap-2 text-[12.5px] text-warn cursor-pointer', className)}
         data-testid="draft-attach-resume"
@@ -61,53 +64,63 @@ export function DraftFiles({
     if (e) setError(e);
   };
   const hasResume = files.some((f) => /resume|cv/i.test(f.name));
+  const showList = part !== 'actions';
+  const showActions = part !== 'list';
+  if (showList && !showActions && !files.length && !(mentionsFile && !files.length)) return null;
   return (
-    <div className={cx('text-[12.5px]', className)} data-testid="draft-files">
-      {files.length > 0 && (
-        <ul className="mb-2 divide-y divide-line-2 border-y border-line-2">
+    <div
+      className={cx('text-[12.5px]', showActions && !showList && 'inline-flex items-center gap-3', className)}
+      data-testid={showList ? 'draft-files' : 'draft-files-actions'}
+    >
+      {showList && files.length > 0 && (
+        <ul className="flex flex-wrap gap-x-5 gap-y-1">
           {files.map((f) => (
-            <li key={f.id} className="flex items-center gap-2 py-1.5" data-testid="draft-file">
+            <li key={f.id} className="group inline-flex items-center gap-1.5 py-1" data-testid="draft-file">
               <Paperclip size={13} className="text-ink-3 shrink-0" aria-hidden />
-              <span className="truncate text-ink">{f.name}</span>
+              <span className="truncate max-w-[240px] text-[13px] text-ink">{f.name}</span>
               <span className="text-ink-3 shrink-0 tabular">{sizeLabel(f.size)}</span>
               <button
                 type="button"
-                className="ml-auto shrink-0 p-1 text-ink-3 hover:text-ink"
+                className="shrink-0 p-0.5 text-ink-3 hover:text-ink opacity-60 group-hover:opacity-100"
                 aria-label={`Remove ${f.name}`}
                 onClick={() => detachFile(draft.id, f.id)}
               >
-                <X size={13} />
+                <X size={12} />
               </button>
             </li>
           ))}
         </ul>
       )}
-      <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
-        {!hasResume && (
+      {showList && mentionsFile && !files.length && (
+        <p className="py-1 text-warn" data-testid="draft-attach-needed">
+          It says a file is attached. Attach it before sending.
+        </p>
+      )}
+      {showActions && (
+        <span className="inline-flex items-center gap-3">
           <button
             type="button"
-            className="inline-flex items-center gap-1.5 font-medium text-ink-2 hover:text-ink"
-            onClick={attachResume}
-            data-testid="draft-attach-resume-file"
+            className="inline-flex h-8 w-8 items-center justify-center rounded-[6px] text-ink-2 hover:bg-canvas-2 hover:text-ink"
+            onClick={() => pick(false)}
+            aria-label="Attach a file"
+            title="Attach a file"
+            data-testid="draft-attach-file"
           >
-            <Paperclip size={13} aria-hidden /> Attach resume
+            <Paperclip size={15} aria-hidden />
           </button>
-        )}
-        <button
-          type="button"
-          className="inline-flex items-center gap-1.5 font-medium text-ink-2 hover:text-ink"
-          onClick={() => pick(false)}
-          data-testid="draft-attach-file"
-        >
-          <Paperclip size={13} aria-hidden /> Attach file
-        </button>
-        {mentionsFile && !files.length && (
-          <span className="text-warn" data-testid="draft-attach-needed">
-            It says a file is attached. Attach it before sending.
-          </span>
-        )}
-        {error && <span className="text-bad">{error}</span>}
-      </div>
+          {!hasResume && (
+            <button
+              type="button"
+              className="text-ink-3 hover:text-ink"
+              onClick={attachResume}
+              data-testid="draft-attach-resume-file"
+            >
+              Attach resume
+            </button>
+          )}
+          {error && <span className="text-bad">{error}</span>}
+        </span>
+      )}
       <input
         ref={input}
         type="file"

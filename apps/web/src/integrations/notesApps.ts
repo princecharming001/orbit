@@ -1,5 +1,5 @@
 /**
- * The student's own meeting-notes and scheduling apps (Fathom, Granola, Wispr Flow, Cal.com), reached through
+ * The student's own meeting-notes and scheduling apps (Fathom, Granola, Wispr Flow, Cal.com, Calendly), reached through
  * Orbit's orbit-notes server function because their APIs are not meant to be called from a browser. The student's
  * key or sign-in travels with each call and is never kept on the server. The function's address is the shared
  * Claude proxy's, with orbit-notes in place of orbit-claude, so no extra build setting is needed. Off in automated
@@ -109,7 +109,7 @@ const authBody = (auth: AppAuth) =>
 
 /** Which apps Orbit can sign in to (its OAuth client ids); null where only a pasted key works. */
 export function oauthClients(): Promise<
-  ConnectorOutcome<{ calcom: string | null; fathom: string | null }> | NotesFailure
+  ConnectorOutcome<{ calcom: string | null; fathom: string | null; calendly?: string | null }> | NotesFailure
 > {
   return call('/oauth/config', {});
 }
@@ -120,8 +120,8 @@ export function oauthClients(): Promise<
  */
 export function oauthTokens(
   body:
-    | { provider: 'calcom' | 'fathom'; grant: 'code'; code: string; redirectUri: string }
-    | { provider: 'calcom' | 'fathom'; grant: 'refresh'; refreshToken: string }
+    | { provider: 'calcom' | 'fathom' | 'calendly'; grant: 'code'; code: string; redirectUri: string }
+    | { provider: 'calcom' | 'fathom' | 'calendly'; grant: 'refresh'; refreshToken: string }
     | {
         provider: 'granola' | 'wispr';
         grant: 'code';
@@ -168,6 +168,23 @@ export function calEventTypes(
   opts: { fetch?: typeof fetch; signal?: AbortSignal } = {},
 ): Promise<ConnectorOutcome<{ username?: string; eventTypes: CalEventType[] }> | NotesFailure> {
   return call('/calcom/event-types', authBody(auth), opts);
+}
+
+/** The signed-in Calendly user's username and event types. */
+export function calendlyEventTypes(
+  accessToken: string,
+  opts: { fetch?: typeof fetch; signal?: AbortSignal } = {},
+): Promise<ConnectorOutcome<{ username?: string; eventTypes: CalEventType[] }> | NotesFailure> {
+  return call('/calendly/event-types', { accessToken }, opts);
+}
+
+/** The event types anyone sees on a Cal.com or Calendly booking page: no key, no sign-in. */
+export function publicEventTypes(
+  app: 'calcom' | 'calendly',
+  username: string,
+  opts: { fetch?: typeof fetch; signal?: AbortSignal } = {},
+): Promise<ConnectorOutcome<{ username: string; eventTypes: CalEventType[] }> | NotesFailure> {
+  return call('/scheduling/public', { app, username }, opts);
 }
 
 /** What one tool call on a meeting app's MCP server answered: its text, and its structured result when it has one. */

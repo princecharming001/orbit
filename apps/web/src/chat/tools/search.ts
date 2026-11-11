@@ -228,6 +228,10 @@ const spec = z
         hasChat: z.boolean().optional().describe('true: there is a chat with them in Orbit.'),
         tags: z.array(z.string()).optional().describe("The student's own tags on people."),
         alumOfMySchool: z.boolean().optional().describe("true: went to the student's school."),
+        mySchoolLevel: z
+          .enum(['high_school', 'college', 'graduate'])
+          .optional()
+          .describe("With alumOfMySchool: only the student's high school, college or graduate school."),
       })
       .strict()
       .optional()
@@ -521,7 +525,18 @@ const flat = z
     talkedWithinDays: z.number().int().optional().describe('Talked within this many days.'),
     quietForDays: z.number().int().optional().describe('Not talked for this many days or more.'),
     neverTalked: z.boolean().optional().describe('true: never emailed, met or messaged.'),
-    alumOfMySchool: z.boolean().optional().describe("true: went to the student's school."),
+    alumOfMySchool: z
+      .boolean()
+      .optional()
+      .describe(
+        "true: went to one of the student's own schools (their LinkedIn profile lists them, the high school too). Use it for 'my school', 'my high school', 'my college': never ask which school.",
+      ),
+    mySchoolLevel: z
+      .enum(['high_school', 'college', 'graduate'])
+      .optional()
+      .describe(
+        "With alumOfMySchool: 'my high school' is high_school, 'my college' or 'my university' is college.",
+      ),
     criteria: strings(
       'At most 3 things no field can say ("works on AI agents"), checked by reading each person.',
     ),
@@ -572,7 +587,8 @@ export function specOfFlat(f: FlatSearch): QuerySpec {
   if (f.talkedWithinDays) rel.talkedWithinDays = f.talkedWithinDays;
   if (f.quietForDays) rel.quietForDays = f.quietForDays;
   if (f.neverTalked) rel.everTalked = false;
-  if (f.alumOfMySchool) rel.alumOfMySchool = true;
+  if (f.alumOfMySchool || f.mySchoolLevel) rel.alumOfMySchool = true;
+  if (f.mySchoolLevel) rel.mySchoolLevel = f.mySchoolLevel;
   if (Object.keys(rel).length) spec.relationship = rel;
   if (some(f.criteria).length)
     spec.criteria = some(f.criteria)

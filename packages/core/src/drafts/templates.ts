@@ -291,6 +291,8 @@ export interface DraftContext {
     repliedEver: boolean;
     /** the app's id for the thread the outreach replies in, when it picks that thread back up */
     threadId?: string;
+    /** where the last of it passed: an email, a LinkedIn chat or texts (an email when unset) */
+    channel?: 'email' | 'linkedin' | 'text';
   };
   /** open promises the student made to this person ("I will send my resume by Friday"), kept in the thank-you */
   promises?: string[];
@@ -516,6 +518,27 @@ function knowsStudent(ctx: DraftContext): boolean {
 }
 
 /**
+ * They have actually talked (a call, a two-way exchange, a reply waiting, a friend), and this goes out as a chat (a
+ * LinkedIn message), so it opens "Hey {first}," like the conversation it picks back up. An introduction
+ * alone, or a note they never answered, is not that yet.
+ */
+export function talkedBefore(ctx: DraftContext): boolean {
+  return (
+    !!(ctx.chat?.meetingAt ?? ctx.chat?.completedAt) ||
+    isFriend(ctx.person) ||
+    !!ctx.history?.repliedEver ||
+    !!ctx.thread?.lastInboundBody
+  );
+}
+function casualReconnect(ctx: DraftContext): boolean {
+  return ctx.channel === 'linkedin' && talkedBefore(ctx);
+}
+/** "Hey" for a reconnect on LinkedIn, else "Hi": for the one-line notes that start "Hi Maya, ...". */
+function hi(ctx: DraftContext): string {
+  return casualReconnect(ctx) ? 'Hey' : 'Hi';
+}
+
+/**
  * "Dear {first}" only when the student chose the formal preset and writes to a stranger in banking: a VP or above at
  * a bank or a fund with no shared school and nobody who sent them, or a bank's or consulting firm's recruiter. An
  * alum, an introduction, anyone in consulting, tech, trading or venture, and anyone writing in a warm or direct
@@ -524,6 +547,9 @@ function knowsStudent(ctx: DraftContext): boolean {
 function greeting(ctx: DraftContext, sector: Sector, recruiterFirst: boolean): string {
   const first = firstNameOf(ctx.person);
   const learned = personalStyle(ctx.styleCard) && ctx.styleCard.greetingPatterns[0];
+  // picking a chat back up with someone the student has talked to: "Hey Aryaan,", the way a reconnect reads
+  if (casualReconnect(ctx))
+    return learned && /^(hey|yo|hiya)\b/i.test(learned) ? learned.replace('{first}', first) : `Hey ${first},`;
   if (learned && !/^dear/i.test(learned)) return learned.replace('{first}', first);
   // a LinkedIn message is a chat, not a letter
   if (knowsStudent(ctx) || ctx.channel === 'linkedin') return `Hi ${first},`;
@@ -1238,7 +1264,10 @@ function reconnectLine(ctx: DraftContext, c: Connection, now: Date): string {
           'reconnect-friend',
         )
       : 'Hope things are good.';
-  const medium = ctx.channel === 'linkedin' ? 'email' : 'note';
+  // what the earlier exchange was: a LinkedIn chat or texts are "messages", an email read on LinkedIn an "email"
+  const was = ctx.history?.channel;
+  const chatBefore = was === 'linkedin' || was === 'text';
+  const medium = chatBefore ? 'message' : ctx.channel === 'linkedin' ? 'email' : 'note';
   const topic = talkTopic(subjectTopic(ctx.thread?.subject));
   const about = topic ? ` about ${topic}` : '';
   if (c.lastInbound)
@@ -1249,7 +1278,7 @@ function reconnectLine(ctx: DraftContext, c: Connection, now: Date): string {
   // "we traded emails" only for a real exchange: they wrote to the student and the student wrote to them
   if (ctx.history && !ctx.history.repliedEver)
     return `I wrote to you${since ? ` ${since}` : ''}${about}, and wanted to follow up.`;
-  return `We traded emails${since ? ` ${since}` : ''}${about}, and I wanted to pick that conversation back up.`;
+  return `We traded ${chatBefore ? 'messages' : 'emails'}${since ? ` ${since}` : ''}${about}, and I wanted to pick that conversation back up.`;
 }
 
 /** "at Jane Street", "on Meta's Ads Infrastructure team", "in Goldman's TMT group", "in Bain's Boston office". */
@@ -2073,7 +2102,7 @@ export function generateDraft(input: DraftContext): DraftOutput {
           const notes = [
             ...(known
               ? [
-                  `Hi ${first}, ${lower1(shortConnection(ctx, known))} ${shortStatus} ${shortQ} Thanks, ${ctx.user.firstName}`,
+                  `${hi(ctx)} ${first}, ${lower1(shortConnection(ctx, known))} ${shortStatus} ${shortQ} Thanks, ${ctx.user.firstName}`,
                 ]
               : []),
             `Hi ${first}, ${school} ${yl} here. ${shortStatus} ${shortQ} Thank you, ${ctx.user.firstName}`,
@@ -2152,7 +2181,7 @@ export function generateDraft(input: DraftContext): DraftOutput {
       // and never to someone who already knows the student
       const cred =
         op && ctx.user.credibility && !friend && c?.kind !== 'met' && credibilityFits(ctx, sector, firm)
-          ? appLine || sit
+          ? appLine || sit || op.text.includes(pursuit(ctx))
             ? `I ${softLower(strip(ctx.user.credibility))}.`
             : `I ${softLower(strip(ctx.user.credibility))}, and I'm ${pursuit(ctx)}.`
           : '';
@@ -2235,7 +2264,7 @@ export function generateDraft(input: DraftContext): DraftOutput {
           : school
             ? pick([`I'm ${article(yl)} ${yl} at ${school}.`, `${school} ${yl} here.`], seed, 'note-intro')
             : `I'm ${article(yl)} ${yl}.`;
-        const lead = `Hi ${first}, ${
+        const lead = `${hi(ctx)} ${first}, ${
           intro
             ? `${intro} ${short}`
             : afterComma(short)
@@ -2258,7 +2287,7 @@ export function generateDraft(input: DraftContext): DraftOutput {
           // who the student is comes first and stays: a long "Why them" line shortens the question, then drops it for
           // "a few questions", and only then the line saying who is writing
           `${lead} Would you have ${minutes} minutes for a few questions? Thanks, ${name}`,
-          `Hi ${first}, ${afterComma(short)} Would you have ${minutes} minutes to talk about ${qq.reacted ? qq.short : pathTo}? Thanks, ${name}`,
+          `${hi(ctx)} ${first}, ${afterComma(short)} Would you have ${minutes} minutes to talk about ${qq.reacted ? qq.short : pathTo}? Thanks, ${name}`,
         ];
         bodyShort =
           candidates.find((x) => x.length <= LINKEDIN_NOTE_TARGET) ??
@@ -2282,7 +2311,7 @@ export function generateDraft(input: DraftContext): DraftOutput {
                   seed,
                   'li-soft',
                 )}`;
-          body = `${recent ? `Hi ${first}, thanks for connecting. ` : `${G}\n\n`}${join(openText, sit, roleSentence, appLine, aboutLine, cred)} ${ending}\n\n${S}`;
+          body = `${recent && !talkedBefore(ctx) ? `Hi ${first}, thanks for connecting. ` : `${G}\n\n`}${join(openText, sit, roleSentence, appLine, aboutLine, cred)} ${ending}\n\n${S}`;
         }
         subject = undefined;
       }

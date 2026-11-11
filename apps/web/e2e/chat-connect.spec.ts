@@ -99,8 +99,9 @@ test.describe('Connect LinkedIn and Gmail, live LinkedIn and warm intros', () =>
     // the people stay (the list shows everyone; the board only people with a chat)
     await page.goto('people?view=list');
     await expect(page.getByText('Priya Raman').filter({ visible: true }).first()).toBeVisible();
+    // Village is no longer a Settings row
     await page.goto('settings/integrations');
-    await expect(page.getByTestId('settings-warm-intros-status')).toHaveText(/On/);
+    await expect(page.getByTestId('settings-warm-intros-status')).toHaveCount(0);
     await page.goto('settings/privacy');
     await expect(page.getByTestId('privacy-leaves')).toContainText(
       /LinkedIn\s*through Unipile, if you connect it live/,

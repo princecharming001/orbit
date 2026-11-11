@@ -1,7 +1,8 @@
 /**
  * Settings, Integrations: the meeting notetaker (Fathom, Granola, Fireflies or Wispr Flow: notes from recorded
- * meetings, filed on each person; the student picks one) and Cal.com (booking links for drafts). Each connects by
- * signing in to the app, or with the student's own API key; either way the credentials stay in this browser.
+ * meetings, filed on each person; the student picks one) and Cal.com or Calendly (booking links for drafts). Each
+ * connects by signing in to the app, with the student's own API key, or for the booking apps with the link alone;
+ * credentials stay in this browser.
  */
 import type { User } from '@orbit/core';
 import { useLiveQuery } from 'dexie-react-hooks';
@@ -10,11 +11,15 @@ import { useEffect, useState } from 'react';
 import { db } from '../db/schema';
 import { signInClients } from '../engine/appSignIn';
 import {
-  calStatus,
+  type CalResult,
   connectCalcom,
-  connectCalcomSignedIn,
-  disconnectCalcom,
-  refreshCalcom,
+  connectSchedSignedIn,
+  connectSchedulingLink,
+  disconnectScheduling,
+  refreshScheduling,
+  SCHED_NAME,
+  type SchedApp,
+  schedStatus,
 } from '../engine/calcom';
 import {
   connectFathom,
@@ -39,7 +44,7 @@ import { AppMark, IntegrationRow, RowStatus } from './IntegrationRow';
 import { SchedulingLinkField } from './SchedulingLinkField';
 
 /** This copy of Orbit can sign in to the app (its OAuth client is set), so Connect opens the app's own sign-in. */
-function useCanSignIn(app: 'calcom' | 'fathom', userId: string): boolean {
+function useCanSignIn(app: 'calcom' | 'fathom' | 'calendly', userId: string): boolean {
   const [can, setCan] = useState(false);
   useEffect(() => {
     if (usesMockConnectors(userId)) return;
@@ -405,28 +410,112 @@ export function MeetingAppRow({ user, app }: { user: User; app: MeetingApp }) {
   );
 }
 
-export function CalcomRow({ user }: { user: User }) {
-  const settings = useLiveQuery(() => db.settings.get(user.id), [user.id]);
+const SCHED_LINK: Record<SchedApp, { host: string; logo: string; initials: string }> = {
+  calcom: { host: 'cal.com', logo: 'cal.com', initials: 'Cal' },
+  calendly: { host: 'calendly.com', logo: 'calendly.com', initials: 'Cy' },
+};
+
+/** "cal.com/" then the username, typed in one line: the quickest way to connect, no key and no sign-in. */
+function BookingPageField({
+  app,
+  busy,
+  onSubmit,
+  onCancel,
+  extra,
+}: {
+  app: SchedApp;
+  busy?: string;
+  onSubmit: (page: string) => void;
+  onCancel: () => void;
+  extra?: React.ReactNode;
+}) {
+  const [page, setPage] = useState('');
+  const { host } = SCHED_LINK[app];
+  return (
+    <form
+      className="space-y-1.5"
+      onSubmit={(e) => {
+        e.preventDefault();
+        if (page.trim()) onSubmit(page.trim());
+      }}
+    >
+      <div className="flex flex-wrap items-center gap-2">
+        <label className="flex min-w-0 max-w-sm flex-1 items-baseline border-b border-line focus-within:border-ink">
+          <span className="text-[13.5px] text-ink-3">{host}/</span>
+          <input
+            id={`${app}-page`}
+            // biome-ignore lint/a11y/noAutofocus: the field opens because the student just asked to connect
+            autoFocus
+            value={page}
+            onChange={(e) => setPage(e.target.value)}
+            placeholder="your-name"
+            aria-label={`Your ${SCHED_NAME[app]} link or username`}
+            autoComplete="off"
+            spellCheck={false}
+            className="min-w-0 flex-1 bg-transparent py-1.5 text-[13.5px] text-ink outline-none placeholder:text-ink-4"
+            data-testid={`settings-${app}-page`}
+          />
+        </label>
+        <Button
+          size="sm"
+          variant="primary"
+          type="submit"
+          disabled={!page.trim() || !!busy}
+          data-testid={`settings-${app}-page-save`}
+        >
+          {busy ? (
+            <>
+              <Spinner /> {busy}
+            </>
+          ) : (
+            'Connect'
+          )}
+        </Button>
+        <Button size="sm" variant="ghost" type="button" onClick={onCancel} disabled={!!busy}>
+          Cancel
+        </Button>
+      </div>
+      <p className="text-[12px] text-ink-3">
+        Paste your booking link or type your username. Orbit reads the event types on your public page; no key
+        needed.{extra ? <> {extra}</> : null}
+      </p>
+    </form>
+  );
+}
+
+/**
+ * Cal.com or Calendly: connect with the booking link alone (the public event types, no key), by signing in to the
+ * app when Orbit's client for it is set, or, for Cal.com, with an API key. The event types fill the "Link in
+ * drafts" picker below the rows.
+ */
+export function SchedulingRow({ user, app }: { user: User; app: SchedApp }) {
   const toast = useToast();
-  const status = useLiveQuery(() => calStatus(user), [user.id]);
-  const [asking, setAsking] = useState(false);
+  const status = useLiveQuery(() => schedStatus(user, app), [user.id, app]);
+  const [asking, setAsking] = useState<'page' | 'key'>();
   const [busy, setBusy] = useState<string>();
   const [error, setError] = useState<string>();
-  const canSignIn = useCanSignIn('calcom', user.id);
+  const canSignIn = useCanSignIn(app, user.id);
   if (!status) return null;
-  const connect = async (key = '', signedIn = false) => {
+  const name = SCHED_NAME[app];
+  const { host, logo, initials } = SCHED_LINK[app];
+  const done = (r: CalResult) => {
+    if (r.ok) {
+      setAsking(undefined);
+      const n = r.eventTypes.length;
+      toast.push({
+        text: n
+          ? `${name} connected: ${n} event type${n === 1 ? '' : 's'}. Pick the one drafts offer just below.`
+          : `${name} connected. Drafts offer your booking page.`,
+        tone: 'good',
+        ttl: 7000,
+      });
+    } else setError(r.message);
+  };
+  const run = async (label: string, go: () => Promise<CalResult>) => {
     setError(undefined);
-    setBusy(signedIn ? 'Waiting for Cal.com…' : 'Connecting…');
+    setBusy(label);
     try {
-      const r = signedIn ? await connectCalcomSignedIn(user) : await connectCalcom(user, key);
-      if (r.ok) {
-        setAsking(false);
-        toast.push({
-          text: `Cal.com connected: ${r.eventTypes.length} event type${r.eventTypes.length === 1 ? '' : 's'}. Pick the one drafts offer under Limits and schedule.`,
-          tone: 'good',
-          ttl: 7000,
-        });
-      } else setError(r.message);
+      done(await go());
     } finally {
       setBusy(undefined);
     }
@@ -435,25 +524,26 @@ export function CalcomRow({ user }: { user: User }) {
     setError(undefined);
     setBusy('Refreshing…');
     try {
-      const r = await refreshCalcom(user);
+      const r = await refreshScheduling(user, app);
       if (!r.ok) setError(r.message);
     } finally {
       setBusy(undefined);
     }
   };
+  const n = status.eventTypes.length;
   return (
     <IntegrationRow
-      testId="settings-calcom"
-      mark={<AppMark logo="cal.com">Cal</AppMark>}
-      name="Cal.com"
+      testId={`settings-${app}`}
+      mark={<AppMark logo={logo}>{initials}</AppMark>}
+      name={name}
       status={
         status.connected ? (
-          <RowStatus testId="settings-calcom-status">
-            <Check size={12} /> Connected{status.username ? ` · cal.com/${status.username}` : ''} ·{' '}
-            {status.eventTypes.length} event type{status.eventTypes.length === 1 ? '' : 's'}
+          <RowStatus testId={`settings-${app}-status`}>
+            <Check size={12} /> Connected{status.username ? ` · ${host}/${status.username}` : ''}
+            {n ? ` · ${n} event type${n === 1 ? '' : 's'}` : ''}
           </RowStatus>
         ) : status.needsKey ? (
-          <RowStatus tone="bad">Key no longer works</RowStatus>
+          <RowStatus tone="bad">Needs you to connect again</RowStatus>
         ) : undefined
       }
       line={status.available ? undefined : 'Not available yet'}
@@ -466,25 +556,26 @@ export function CalcomRow({ user }: { user: User }) {
                 variant="ghost"
                 onClick={refresh}
                 disabled={!!busy}
-                data-testid="settings-calcom-refresh"
+                data-testid={`settings-${app}-refresh`}
               >
                 {busy ? <Spinner /> : 'Refresh'}
               </Button>
             )}
             <Switch
-              checked={status.connected || asking}
-              label="Cal.com"
+              checked={status.connected || !!asking}
+              label={name}
               busy={!!busy && !status.connected}
-              title={status.connected ? 'Disconnect Cal.com' : 'Connect Cal.com'}
+              title={status.connected ? `Disconnect ${name}` : `Connect ${name}`}
               onChange={(on) => {
-                if (status.connected) return void disconnectCalcom(user);
-                if (!on) return setAsking(false);
-                if (usesMockConnectors(user.id)) return void connect();
-                // Cal.com's own sign-in when Orbit has it, else the key field
-                if (canSignIn) return void connect('', true);
-                setAsking(true);
+                if (status.connected) return void disconnectScheduling(user, app);
+                if (!on) return setAsking(undefined);
+                if (usesMockConnectors(user.id))
+                  return void run('Connecting…', () => connectSchedulingLink(user, app, ''));
+                // the app's own sign-in when Orbit has it, else the booking link
+                if (canSignIn) return void run(`Waiting for ${name}…`, () => connectSchedSignedIn(user, app));
+                setAsking('page');
               }}
-              data-testid={status.connected ? 'settings-calcom-disconnect' : 'settings-calcom-connect'}
+              data-testid={status.connected ? `settings-${app}-disconnect` : `settings-${app}-connect`}
             />
           </>
         )
@@ -494,13 +585,33 @@ export function CalcomRow({ user }: { user: User }) {
         <button
           type="button"
           className="text-[12px] text-ink-3 underline underline-offset-2 hover:text-ink"
-          onClick={() => setAsking(true)}
-          data-testid="settings-calcom-use-key"
+          onClick={() => setAsking('page')}
+          data-testid={`settings-${app}-use-link`}
         >
-          Use an API key instead
+          Use your booking link instead
         </button>
       )}
-      {asking && !status.connected && (
+      {asking === 'page' && !status.connected && (
+        <BookingPageField
+          app={app}
+          busy={busy}
+          onSubmit={(page) => void run('Reading…', () => connectSchedulingLink(user, app, page))}
+          onCancel={() => setAsking(undefined)}
+          extra={
+            app === 'calcom' ? (
+              <button
+                type="button"
+                className="underline underline-offset-2 hover:text-ink"
+                onClick={() => setAsking('key')}
+                data-testid="settings-calcom-use-key"
+              >
+                Hidden event types too? Use an API key.
+              </button>
+            ) : undefined
+          }
+        />
+      )}
+      {asking === 'key' && app === 'calcom' && !status.connected && (
         <KeyField
           id="calcom-key"
           label="Cal.com API key"
@@ -508,8 +619,8 @@ export function CalcomRow({ user }: { user: User }) {
           submitLabel="Connect"
           busy={busy}
           testId="settings-calcom"
-          onSubmit={(k) => connect(k)}
-          onCancel={() => setAsking(false)}
+          onSubmit={(k) => void run('Connecting…', () => connectCalcom(user, k))}
+          onCancel={() => setAsking('page')}
           hint={
             <>
               In Cal.com: Settings, Developer, API keys, New.{' '}
@@ -527,21 +638,38 @@ export function CalcomRow({ user }: { user: User }) {
         />
       )}
       {error && (
-        <p className="text-[12.5px] text-bad" role="alert" data-testid="settings-calcom-error">
+        <p className="text-[12.5px] text-bad" role="alert" data-testid={`settings-${app}-error`}>
           {error}
         </p>
       )}
-      {/* the link itself, in the same row: one of the event types above, or any other page */}
-      {settings && (status.connected || !asking) && (
-        <div className="max-w-xl" data-testid="settings-booking-link">
-          <SchedulingLinkField
-            user={user}
-            compact
-            value={settings.schedulingLink}
-            onChange={(link) => void setSchedulingLink(user.id, link)}
-          />
-        </div>
-      )}
     </IntegrationRow>
+  );
+}
+
+export const CalcomRow = ({ user }: { user: User }) => <SchedulingRow user={user} app="calcom" />;
+export const CalendlyRow = ({ user }: { user: User }) => <SchedulingRow user={user} app="calendly" />;
+
+/** The one link drafts add when proposing times: picked from the connected apps' event types, or typed in. */
+export function BookingLinkRow({ user }: { user: User }) {
+  const settings = useLiveQuery(() => db.settings.get(user.id), [user.id]);
+  if (!settings) return null;
+  return (
+    <div
+      className="flex flex-wrap items-baseline gap-x-6 gap-y-1.5 py-3.5"
+      data-testid="settings-booking-link"
+    >
+      <div className="w-full sm:w-40 shrink-0">
+        <div className="text-[13.5px] font-medium text-ink">Link in drafts</div>
+        <div className="text-[12px] text-ink-3">Added when you propose times</div>
+      </div>
+      <div className="min-w-0 flex-1 max-w-xl">
+        <SchedulingLinkField
+          user={user}
+          compact
+          value={settings.schedulingLink}
+          onChange={(link) => void setSchedulingLink(user.id, link)}
+        />
+      </div>
+    </div>
   );
 }

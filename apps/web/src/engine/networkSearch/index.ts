@@ -281,6 +281,36 @@ async function readNow(userId: string, ids: string[], signal?: AbortSignal): Pro
 /**
  * Runs one ask. `caller: 'router'` means no model compiled it and none can judge it: criteria are dropped by lint.
  */
+/** "My high school" when Orbit does not know it yet: said plainly, so the answer asks once instead of guessing. */
+function ownSchoolNotes(spec: QuerySpec, ctx: SearchWorld['ctx']): string[] {
+  const rel = spec.relationship;
+  if (!rel?.alumOfMySchool) return [];
+  const level = rel.mySchoolLevel;
+  const known = level ? (ctx.mySchoolsByLevel?.[level] ?? []) : ctx.mySchools;
+  if (known.length)
+    return [
+      `The student's ${level === 'high_school' ? 'high school' : level === 'graduate' ? 'graduate school' : 'school'}: ${known.join(', ')}.`,
+    ];
+  return [
+    `Orbit does not know the student's ${level === 'high_school' ? 'high school' : 'school'} yet: their own LinkedIn profile has not been read (it is read once LinkedIn is connected). Ask for the school's name once, then search for it.`,
+  ];
+}
+
+/** The student's own school, named: alumOfMySchool becomes a school by its name when Orbit knows which. */
+function withOwnSchools(spec: QuerySpec, ctx: SearchWorld['ctx']): QuerySpec {
+  const rel = spec.relationship;
+  if (!rel?.alumOfMySchool) return spec;
+  const level = rel.mySchoolLevel;
+  const known = level ? (ctx.mySchoolsByLevel?.[level] ?? []) : ctx.mySchools;
+  if (!known.length) return spec;
+  const { alumOfMySchool: _a, mySchoolLevel: _l, ...restRel } = rel;
+  return {
+    ...spec,
+    relationship: Object.keys(restRel).length ? restRel : undefined,
+    schools: [...(spec.schools ?? []), { names: known }],
+  };
+}
+
 export async function runNetworkSearch(
   user: Pick<User, 'id' | 'school'>,
   input: QuerySpec,
@@ -293,13 +323,17 @@ export async function runNetworkSearch(
       reason: 'empty',
       message: 'Say who to look for: a role, company, school, place or topic.',
     };
-  const spec = linted.spec;
+  let spec = linted.spec;
   // what the server learned since the last search (census, lookups); never waits long
   await Promise.race([
     Promise.all([refreshFacets(user.id).catch(() => null), refreshProfiles(user.id).catch(() => null)]),
     new Promise((r) => setTimeout(r, 1500)),
   ]);
   let world = await loadWorld(user, { touches: needsTouches(spec) });
+  // "my high school": the school by its name, once known (their LinkedIn profile names it), so LinkedIn's lookups and
+  // the steps beyond the network look for that school, not for people in general
+  const ownNotes = ownSchoolNotes(spec, world.ctx);
+  spec = withOwnSchools(spec, world.ctx);
   // what LinkedIn lists for the companies, schools and places the ask names (a few searches while the student waits)
   if (await runLookups(user, lookupsFor(compileSpec(spec, world.ctx)), opts.signal).catch(() => false))
     world = await loadWorld(user, { touches: needsTouches(spec) });
@@ -316,7 +350,7 @@ export async function runNetworkSearch(
     ask: spec.ask,
     askHash: hashString(JSON.stringify({ ...spec, ask: '', refine: undefined, lint: undefined })),
     spec,
-    notes: linted.notes,
+    notes: [...linted.notes, ...ownNotes],
     result: runSpec(spec, world.docs, world.ctx, {
       lexical,
       onlyIds,

@@ -37,11 +37,11 @@ import { Navigate, NavLink, useNavigate, useParams } from 'react-router-dom';
 import { AccountSection, MemorySection, OutreachSection } from '../components/account/AccountSettings';
 import { keepLinkedInPick, linkedInCompanySuggestions } from '../components/CompanyChooser';
 import { CompanyLogo } from '../components/CompanyLogo';
-import { LinkedInLiveCard, WarmIntrosCard } from '../components/ConnectorCards';
+import { LinkedInLiveCard } from '../components/ConnectorCards';
 import { AppMark, IntegrationRow, RowGroup, RowStatus } from '../components/IntegrationRow';
 import { LinkedInImportButton } from '../components/LinkedInImport';
 import { openMorningBrief } from '../components/MorningBrief';
-import { CalcomRow, FathomRow, MeetingAppRow } from '../components/NotesAppRows';
+import { BookingLinkRow, CalcomRow, CalendlyRow, FathomRow, MeetingAppRow } from '../components/NotesAppRows';
 import { ResumeFacetList } from '../components/ResumeFacets';
 import {
   CardFields,
@@ -58,6 +58,7 @@ import {
   INDUSTRY_OPTIONS,
   LOCATION_OPTIONS,
   listField,
+  MAJOR_OPTIONS,
   ROLE_OPTIONS,
   suggestFrom,
 } from '../data/options';
@@ -121,6 +122,7 @@ import {
   useWorking,
   Working,
 } from '../ui';
+import { ChipsField } from '../ui/ChipsField';
 import { Suggest } from '../ui/Suggest';
 import { AutopilotSection } from './settings/Autopilot';
 import { CostsSection } from './settings/Costs';
@@ -243,7 +245,7 @@ export function SettingsPage() {
             );
           })}
         </nav>
-        <div className="min-w-0 @container max-w-[760px]" key={section}>
+        <div className="settings-flat min-w-0 @container max-w-[760px]" key={section}>
           <div className="page-in">
             {section === 'profile' && <Profile />}
             {section === 'goals' && <Goals />}
@@ -534,10 +536,13 @@ function Profile() {
             </div>
             <div>
               <Label htmlFor="profile-majors">Majors</Label>
-              <Input
+              <ChipsField
                 id="profile-majors"
-                value={f.majors}
-                onChange={(e) => setF({ ...f, majors: e.target.value })}
+                values={splitList(f.majors)}
+                onChange={(v) => setF((cur) => ({ ...cur, majors: v.join(', ') }))}
+                options={MAJOR_OPTIONS}
+                placeholder="e.g. Computer Science, Economics"
+                testId="profile-majors"
               />
             </div>
           </CardFields>
@@ -721,56 +726,36 @@ function GoalsForm({ goals, tcs }: { goals: UserGoals; tcs: TargetCompany[] }) {
               />
             </div>
             <div className="@[40rem]:col-span-2">
-              <Label htmlFor="goals-roles" hint="comma-separated">
-                Target roles
-              </Label>
-              <Suggest
+              <Label htmlFor="goals-roles">Target roles</Label>
+              <ChipsField
                 id="goals-roles"
-                value={f.targetRoles}
-                onChange={(targetRoles) => setF({ ...f, targetRoles })}
-                suggest={roles.suggest}
-                onPick={(s) =>
-                  setF((cur) => ({
-                    ...cur,
-                    targetRoles: roles.pick(cur.targetRoles, s.value),
-                  }))
-                }
-                minChars={0}
+                values={split(f.targetRoles)}
+                onChange={(v) => setF((cur) => ({ ...cur, targetRoles: v.join(', ') }))}
+                suggest={(q) => roles.suggest(q)}
                 placeholder="e.g. Product Manager, Software Engineer"
+                testId="goals-roles"
               />
             </div>
             <div>
               <Label htmlFor="goals-industries">Industries</Label>
-              <Suggest
+              <ChipsField
                 id="goals-industries"
-                value={f.targetIndustries}
-                onChange={(targetIndustries) => setF({ ...f, targetIndustries })}
-                suggest={industries.suggest}
-                onPick={(s) =>
-                  setF((cur) => ({
-                    ...cur,
-                    targetIndustries: industries.pick(cur.targetIndustries, s.value),
-                  }))
-                }
-                minChars={0}
+                values={split(f.targetIndustries)}
+                onChange={(v) => setF((cur) => ({ ...cur, targetIndustries: v.join(', ') }))}
+                suggest={(q) => industries.suggest(q)}
                 placeholder="e.g. Fintech, Consumer"
+                testId="goals-industries"
               />
             </div>
             <div>
               <Label htmlFor="goals-locations">Locations</Label>
-              <Suggest
+              <ChipsField
                 id="goals-locations"
-                value={f.targetLocations}
-                onChange={(targetLocations) => setF({ ...f, targetLocations })}
-                suggest={locations.suggest}
-                onPick={(s) =>
-                  setF((cur) => ({
-                    ...cur,
-                    targetLocations: locations.pick(cur.targetLocations, s.value),
-                  }))
-                }
-                minChars={0}
+                values={split(f.targetLocations)}
+                onChange={(v) => setF((cur) => ({ ...cur, targetLocations: v.join(', ') }))}
+                suggest={(q) => locations.suggest(q)}
                 placeholder="e.g. New York City, Remote"
+                testId="goals-locations"
               />
             </div>
           </CardFields>
@@ -784,7 +769,7 @@ function GoalsForm({ goals, tcs }: { goals: UserGoals; tcs: TargetCompany[] }) {
               : 'Discover and drafts lean toward the companies you add here.'
           }
         >
-          <div className="flex gap-2 p-4 bg-canvas-2/50">
+          <div className="flex items-end gap-3 pb-2">
             <Suggest
               className="flex-1 min-w-0"
               value={company}
@@ -1179,7 +1164,6 @@ function Integrations() {
             actions={<LinkedInImportButton label="Upload" testId="settings-linkedin" />}
           />
         )}
-        <WarmIntrosCard user={user} />
       </RowGroup>
       <RowGroup title="Meeting notes">
         <FathomRow user={user} />
@@ -1189,6 +1173,8 @@ function Integrations() {
       </RowGroup>
       <RowGroup title="Scheduling">
         <CalcomRow user={user} />
+        <CalendlyRow user={user} />
+        <BookingLinkRow user={user} />
       </RowGroup>
       <RowGroup title="About you">
         <ResumeRow user={user} resume={resume} />
@@ -1199,12 +1185,6 @@ function Integrations() {
       </RowGroup>
     </div>
   );
-}
-
-/** "PDF", "DOCX": the file's kind, for the tile the resume row shows. */
-function fileKind(filename: string): string {
-  const ext = filename.split('.').pop()?.toLowerCase() ?? '';
-  return ['pdf', 'docx', 'txt', 'md'].includes(ext) ? ext.toUpperCase() : 'DOC';
 }
 
 /**
@@ -1223,53 +1203,39 @@ function ResumeRow({ user, resume }: { user: User; resume?: Resume }) {
   return (
     <IntegrationRow
       mark={
-        resume ? (
-          <span
-            className="relative inline-flex h-9 w-9 shrink-0 flex-col items-center justify-center rounded-[10px] bg-[#fff1ec] text-[#d4380d]"
-            aria-hidden
-          >
-            <FileText size={15} strokeWidth={1.75} />
-            <span className="mt-px text-[7.5px] font-bold tracking-wide">{fileKind(resume.filename)}</span>
-          </span>
-        ) : (
-          <AppMark>
-            <FileText size={15} />
-          </AppMark>
-        )
+        <AppMark>
+          <FileText size={15} />
+        </AppMark>
       }
       name="Resume"
       status={
-        <RowStatus tone={resume ? 'good' : 'muted'} testId="resume-on-file">
-          {resume ? 'On file' : 'No resume yet'}
-        </RowStatus>
+        // the file itself says it is on file: its name, and when it came in
+        <span className="inline-flex min-w-0 items-baseline gap-2 text-[13px]" data-testid="resume-on-file">
+          {resume ? (
+            <>
+              <span className="truncate max-w-[28ch] text-ink" data-testid="resume-file-name">
+                {resume.filename}
+              </span>
+              <span className="shrink-0 text-ink-3">added {relDate(resume.createdAt)}</span>
+            </>
+          ) : (
+            <span className="text-ink-3">No resume yet. PDF, Word or text.</span>
+          )}
+        </span>
       }
       line={
-        resume ? (
-          <span className="inline-flex flex-wrap items-center gap-x-1.5">
-            <span className="truncate max-w-[22ch] font-medium text-ink-2" data-testid="resume-file-name">
-              {resume.filename}
-            </span>
-            <span aria-hidden>·</span>
-            <span>added {relDate(resume.createdAt)}</span>
-            {facets && facets.length > 0 && (
-              <>
-                <span aria-hidden>·</span>
-                <button
-                  type="button"
-                  onClick={() => setOpen((o) => !o)}
-                  aria-expanded={open}
-                  className="inline-flex items-center gap-0.5 underline-offset-2 hover:text-ink hover:underline"
-                  data-testid="resume-lines-toggle"
-                >
-                  {used} of {facets.length} lines used
-                  <ChevronDown size={13} className={cx('transition-transform', open && 'rotate-180')} />
-                </button>
-              </>
-            )}
-          </span>
-        ) : (
-          'PDF, Word or text'
-        )
+        resume && facets && facets.length > 0 ? (
+          <button
+            type="button"
+            onClick={() => setOpen((o) => !o)}
+            aria-expanded={open}
+            className="inline-flex items-center gap-0.5 text-ink-3 underline-offset-2 hover:text-ink hover:underline"
+            data-testid="resume-lines-toggle"
+          >
+            {open ? 'Hide what Orbit read' : `What Orbit read (${used} of ${facets.length} lines)`}
+            <ChevronDown size={13} className={cx('transition-transform', open && 'rotate-180')} />
+          </button>
+        ) : undefined
       }
       actions={
         <label className="inline-flex rounded-full focus-within:ring-2 focus-within:ring-accent/40">
@@ -1298,7 +1264,7 @@ function ResumeRow({ user, resume }: { user: User; resume?: Resume }) {
               }
             }}
           />
-          <span className="inline-flex items-center justify-center gap-1.5 rounded-full font-medium h-8 px-3 text-[13px] bg-canvas border border-line shadow-[var(--shadow-pill)] hover:bg-canvas-2 cursor-pointer">
+          <span className="inline-flex items-center gap-1.5 h-8 text-[13px] font-medium text-ink-2 underline-offset-2 hover:text-ink hover:underline cursor-pointer">
             {reading ? (
               <>
                 <Working /> Reading…
@@ -1729,7 +1695,6 @@ function Privacy() {
       : []),
     ['Claude', 'only for the features you turn on', 'claude.ai'],
     ['LinkedIn', 'through Unipile, if you connect it live', 'linkedin.com'],
-    ['Village', 'a name and company per warm-intro lookup', 'village.do'],
     ['Company logos', "a company's name, to find its logo on LinkedIn", 'linkedin.com'],
     // plan 29 §A6: what a friend on Orbit sees, and what never crosses
     [

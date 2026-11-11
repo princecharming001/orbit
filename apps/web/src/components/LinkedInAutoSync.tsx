@@ -3,6 +3,7 @@ import { autoSyncLinkedInActivity } from '../engine/linkedinActivity';
 import { autoSyncLinkedInLive } from '../engine/linkedinLive';
 import { startLogoQueue } from '../engine/logoQueue';
 import { startPhotoQueue } from '../engine/photoQueue';
+import { readOwnProfile } from '../engine/selfProfile';
 import { useSession } from '../state/session';
 
 /**
@@ -26,6 +27,9 @@ export function LinkedInAutoSync() {
       .catch(() => undefined)
       // a LinkedIn message history read that was cut short carries on
       .then(() => autoSyncLinkedInActivity(u))
+      .catch(() => undefined)
+      // the student's own profile, in full, so the chat knows them (every two weeks; one read)
+      .then(() => readOwnProfile(u))
       .catch(() => undefined);
     const stopPhotos = startPhotoQueue(u);
     // company logos from LinkedIn for the tiles that have none yet (engine/logoQueue)

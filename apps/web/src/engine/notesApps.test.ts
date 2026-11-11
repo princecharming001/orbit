@@ -3,7 +3,19 @@ import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { db } from '../db/schema';
 import { setConnectorsMockForTests } from '../integrations/connectorsMock';
 import { setNotesProxyUrlForTests } from '../integrations/notesApps';
-import { calStatus, connectCalcom, disconnectCalcom, eventTypeLabel, offeredEventTypes } from './calcom';
+import {
+  allEventTypes,
+  calStatus,
+  connectCalcom,
+  connectSchedulingLink,
+  disconnectCalcom,
+  disconnectScheduling,
+  eventTypeLabel,
+  offeredEventTypes,
+  parseBookingPage,
+  refreshScheduling,
+  schedStatus,
+} from './calcom';
 import { loadDemo } from './demo';
 import {
   autoSyncFathom,
@@ -191,5 +203,132 @@ describe('Cal.com', () => {
       url: `https://cal.com/a/${minutes}`,
     });
     expect(offeredEventTypes([t(1, 60), t(2, 15, true), t(3, 30)]).map((x) => x.id)).toEqual([3, 1, 2]);
+  });
+});
+
+describe('Booking pages with no key (Cal.com and Calendly)', () => {
+  it('reads a link, a bare username or an @handle, and names a link to the other app', () => {
+    expect(parseBookingPage('calcom', 'https://cal.com/alex-rivera/30min')).toEqual({
+      ok: true,
+      username: 'alex-rivera',
+      slug: '30min',
+    });
+    expect(parseBookingPage('calcom', 'app.cal.com/alex')).toEqual({
+      ok: true,
+      username: 'alex',
+      slug: undefined,
+    });
+    expect(parseBookingPage('calendly', 'calendly.com/alex?month=2026-11')).toMatchObject({
+      ok: true,
+      username: 'alex',
+    });
+    expect(parseBookingPage('calendly', '@alex')).toMatchObject({ ok: true, username: 'alex' });
+    expect(parseBookingPage('calcom', 'https://calendly.com/alex')).toEqual({
+      ok: false,
+      message: 'That is a Calendly link. Add it in the Calendly row.',
+    });
+    expect(parseBookingPage('calendly', 'cal.com/alex')).toMatchObject({
+      ok: false,
+      message: /Cal\.com link/,
+    });
+    expect(parseBookingPage('calcom', 'cal.com/team/acme')).toMatchObject({
+      ok: false,
+      message: /team page/,
+    });
+    expect(parseBookingPage('calcom', 'zoom.us/j/1')).toMatchObject({ ok: false });
+    expect(parseBookingPage('calcom', '')).toMatchObject({ ok: false });
+  });
+
+  it('connects Cal.com from the link alone: no key is sent, and the linked event type becomes the scheduling link', async () => {
+    setConnectorsMockForTests(false);
+    setNotesProxyUrlForTests('https://proxy.test/orbit-notes');
+    await db.settings.update(user.id, { schedulingLink: undefined });
+    const bodies: Record<string, unknown>[] = [];
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (url, init) => {
+      expect(String(url)).toBe('https://proxy.test/orbit-notes/scheduling/public');
+      bodies.push(JSON.parse(String(init?.body)));
+      return json({
+        ok: true,
+        username: 'sam',
+        eventTypes: [
+          {
+            id: 1,
+            title: 'Quick',
+            slug: '15min',
+            minutes: 15,
+            hidden: false,
+            url: 'https://cal.com/sam/15min',
+          },
+          {
+            id: 2,
+            title: 'Coffee',
+            slug: '30min',
+            minutes: 30,
+            hidden: false,
+            url: 'https://cal.com/sam/30min',
+          },
+        ],
+      });
+    });
+    const r = await connectSchedulingLink(user, 'calcom', 'https://cal.com/sam/30min');
+    expect(r).toMatchObject({ ok: true, username: 'sam' });
+    expect(bodies[0]).toEqual({ app: 'calcom', username: 'sam' });
+    expect((await db.settings.get(user.id))?.schedulingLink).toBe('https://cal.com/sam/30min');
+    const st = await calStatus(user);
+    expect(st).toMatchObject({ connected: true, viaLink: true, username: 'sam' });
+    // refreshing reads the public page again, still with no key
+    const again = await refreshScheduling(user, 'calcom');
+    expect(again.ok).toBe(true);
+    expect(bodies[1]).toEqual({ app: 'calcom', username: 'sam' });
+    await disconnectCalcom(user);
+    expect((await calStatus(user)).connected).toBe(false);
+  });
+
+  it('a Calendly page with no public event types still connects, and drafts offer the page itself', async () => {
+    setConnectorsMockForTests(false);
+    setNotesProxyUrlForTests('https://proxy.test/orbit-notes');
+    await db.settings.update(user.id, { schedulingLink: undefined });
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(json({ ok: true, username: 'sam-o', eventTypes: [] }));
+    const r = await connectSchedulingLink(user, 'calendly', 'calendly.com/sam-o');
+    expect(r).toMatchObject({ ok: true, eventTypes: [] });
+    expect((await db.settings.get(user.id))?.schedulingLink).toBe('https://calendly.com/sam-o');
+    expect((await schedStatus(user, 'calendly')).connected).toBe(true);
+    await disconnectScheduling(user, 'calendly');
+  });
+
+  it('a page that is not there says so plainly and connects nothing', async () => {
+    setConnectorsMockForTests(false);
+    setNotesProxyUrlForTests('https://proxy.test/orbit-notes');
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      json({ ok: false, reason: 'refused', message: 'Calendly has no booking page for nobody.' }),
+    );
+    const r = await connectSchedulingLink(user, 'calendly', 'nobody');
+    expect(r).toEqual({ ok: false, reason: 'error', message: 'Calendly has no booking page for nobody.' });
+    expect((await schedStatus(user, 'calendly')).connected).toBe(false);
+  });
+
+  it('a link to the wrong app never calls out', async () => {
+    setConnectorsMockForTests(false);
+    setNotesProxyUrlForTests('https://proxy.test/orbit-notes');
+    const f = vi.spyOn(globalThis, 'fetch');
+    const r = await connectSchedulingLink(user, 'calendly', 'https://cal.com/sam');
+    expect(r).toMatchObject({ ok: false, message: 'That is a Cal.com link. Add it in the Cal.com row.' });
+    expect(f).not.toHaveBeenCalled();
+  });
+
+  it('the sample student: Calendly gets its own made-up event types, and both apps feed the link picker', async () => {
+    await connectCalcom(user, '');
+    const r = await connectSchedulingLink(user, 'calendly', '');
+    expect(r.ok && r.eventTypes.every((t) => t.url.startsWith('https://calendly.com/'))).toBe(true);
+    const all = await allEventTypes(user);
+    expect(all.map((t) => t.url.split('/')[2])).toEqual([
+      'cal.com',
+      'cal.com',
+      'calendly.com',
+      'calendly.com',
+    ]);
+    await disconnectScheduling(user, 'calendly');
+    await disconnectCalcom(user);
+    expect(await allEventTypes(user)).toEqual([]);
   });
 });

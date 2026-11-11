@@ -6,11 +6,15 @@ import { clearPrefs, writePrefs } from '../integrations/prefs';
 import { setVillageUrlForTests } from '../integrations/village';
 import {
   resetWarmIntrosCache,
+  setVillageEnabledForTests,
   VILLAGE_KEEP_MS,
   villageAvailable,
   villageOffered,
   warmIntrosFor,
 } from './warmIntros';
+
+// Village is off for students; its engine is still tested here
+setVillageEnabledForTests(true);
 
 const BASE = 'https://proxy.test/functions/v1/orbit-connectors';
 const user = { id: 'u1' };

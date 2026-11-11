@@ -20,6 +20,7 @@ Deno.serve(
     oauth: {
       calcom: client('CALCOM_CLIENT_ID', 'CALCOM_CLIENT_SECRET'),
       fathom: client('FATHOM_CLIENT_ID', 'FATHOM_CLIENT_SECRET'),
+      calendly: client('CALENDLY_CLIENT_ID', 'CALENDLY_CLIENT_SECRET'),
     },
     // per-visitor counters in the store the other proxies use; in memory when it is not reachable from here
     take: url && serviceKey ? postgrestTake(url, serviceKey) : memoryTake(),

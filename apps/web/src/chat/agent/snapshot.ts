@@ -6,6 +6,7 @@ import { activeGoals, goalLine } from '../../engine/goals';
 import { liveLinkedInAvailable } from '../../engine/linkedinLive';
 import { rememberedLines } from '../../engine/memory';
 import { resumeContextLine, resumeProposalLine } from '../../engine/resume';
+import { aboutMe, aboutMeLines } from '../../engine/selfProfile';
 import { googleStatus, syncStatusNow } from '../../engine/serverSync';
 import { todayCards } from '../../engine/today';
 import { villageAvailable } from '../../engine/warmIntros';
@@ -100,6 +101,8 @@ const REMEMBERED_TIMEOUT_MS = 2500;
 const REMEMBERED_MAX_CHARS = 1200;
 /** The student's own words take at most this many characters of the snapshot. */
 const OWN_WORDS_SNAPSHOT_MAX = 600;
+/** The student's own LinkedIn profile takes at most this many characters. */
+const SELF_SNAPSHOT_MAX = 1400;
 
 export async function buildSnapshot(
   userId: string,
@@ -254,11 +257,21 @@ export async function buildSnapshot(
     : '';
 
   const memory = await remembered;
+  // who the student is beyond setup's answers: their own LinkedIn profile, read in full (engine/selfProfile)
+  const me = user ? await aboutMe(user).catch(() => undefined) : undefined;
+  // only once their profile is read: before that it would repeat the school on the Student line
+  const meLines = me?.readAt ? aboutMeLines(me, SELF_SNAPSHOT_MAX) : [];
+  const meBlock = meLines.length
+    ? [
+        `About the student, from their own LinkedIn profile (use it for "my school", "my high school", "my old company", "people like me"; never ask what is here): ${meLines.join(' | ')}`,
+      ]
+    : [];
   const offered = account ? offeredGoalLine(userId) : undefined;
   const resumeLine = await resumeOffer;
   const resumeText = await resumeContext;
   const lines = [
     `Student: ${student}.${goalBits.length ? ` Goals: ${goalBits.join(', ')}.` : ''}`,
+    ...meBlock,
     ...(wordsLine ? [wordsLine] : []),
     `Active goals (ids): ${goalsV3.length ? goalsV3.map((g) => `${g.id} ${goalLine(g)}`).join('; ') : 'none tracked'}.`,
     ...(offered ? [offered] : []),

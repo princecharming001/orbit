@@ -240,6 +240,7 @@ export function Select({
   return (
     <span
       ref={boxRef}
+      data-select-box=""
       className={cx(
         'relative inline-flex rounded-[10px] border border-line bg-canvas align-middle transition-shadow',
         'focus-within:ring-4 focus-within:ring-ink/[0.06] focus-within:border-[#bdbab5]',

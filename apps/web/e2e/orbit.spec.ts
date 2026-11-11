@@ -1917,7 +1917,10 @@ test.describe('Usability round 5: one draft, kept edits, saved settings, chats t
     await expect(page.locator('#profile-city')).toHaveValue('Ann Arbor, MI');
     await page.goto('settings/goals');
     await expect(page.getByText('What kind of work')).toBeVisible();
+    // locations are chips: typed, then Enter adds one
     await page.locator('#goals-locations').fill('Chicago');
+    await page.locator('#goals-locations').press('Enter');
+    await expect(page.getByTestId('goals-locations-chip').filter({ hasText: 'Chicago' })).toHaveCount(1);
     await expect(page.getByTestId('autosave').first()).toContainText(/save as you make them/i);
     // the demo student's own words from setup are there to edit, and save the same way
     await expect(page.getByTestId('goals-neverDo')).toHaveValue(/Never mention my GPA/);
@@ -1927,14 +1930,14 @@ test.describe('Usability round 5: one draft, kept edits, saved settings, chats t
       'saved',
     );
     await page.reload();
-    await expect(page.locator('#goals-locations')).toHaveValue('Chicago');
+    await expect(page.getByTestId('goals-locations-chip').filter({ hasText: 'Chicago' })).toHaveCount(1);
     await expect(page.getByTestId('goals-success')).toHaveValue('Three chats at Stripe by November.');
     // without Google, nothing here talks about reading email
     await page.goto('settings/privacy');
     await expect(page.getByRole('main')).not.toContainText(/Google/);
     await page.goto('settings/integrations');
     await expect(page.getByTestId('ai-feature-emailTriage')).toHaveCount(0);
-    await expect(page.getByTestId('resume-on-file')).toContainText(/on file/i);
+    await expect(page.getByTestId('resume-file-name')).toBeVisible();
   });
 
   test('a card moved to Replied gets a next step in Drafts; a booked chat shows its time or asks for it', async ({
@@ -3175,9 +3178,9 @@ test.describe('Chat memory (plan 17 §G)', () => {
     await expect(item).toContainText('Targeting product manager internships at fintech startups in New York');
     await expect(item).toContainText('About a goal');
     await page.goto('settings/goals');
-    await expect(page.locator('#goals-industries')).toHaveValue(/Fintech/);
-    await expect(page.locator('#goals-locations')).toHaveValue(/New York City/);
-    await expect(page.locator('#goals-roles')).toHaveValue(/Product Manager/);
+    await expect(page.getByTestId('goals-industries')).toContainText(/Fintech/);
+    await expect(page.getByTestId('goals-locations')).toContainText(/New York City/);
+    await expect(page.getByTestId('goals-roles')).toContainText(/Product Manager/);
     // deleting it in Settings, Memory removes it for good
     await page.goto('settings/memory');
     await page.getByTestId('memory-delete').click();

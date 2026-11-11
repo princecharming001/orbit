@@ -48,7 +48,7 @@ import { Avatar, Button, cx, Input, relDate, Textarea, useToast } from '../ui';
 import { copyText, openHandoff, runApproval } from './approve';
 import { DraftFiles } from './DraftFiles';
 import { ForwardNote } from './ForwardNote';
-import { ThreadContext } from './ThreadContext';
+import { HistoryPeek, ThreadContext } from './ThreadContext';
 
 type PromptNeed = Exclude<DraftNeed, 'post' | 'resume'>;
 /** Messages that ask a favour: two of them to one person at once is too much. */
@@ -481,23 +481,8 @@ export function DraftEditor({
       Copy text
     </Button>
   );
-  const handoffButton = isLinkedIn && direct && !approveLabel && (
-    <Button
-      size="sm"
-      variant="ghost"
-      disabled={busy || !body.trim() || blocked}
-      title="Copy the text and send it yourself on LinkedIn"
-      onClick={async () => {
-        if (!user) return;
-        setError(undefined);
-        const e = await runApproval(user, draft, body, undefined, toast, person?.firstName, 'handoff');
-        if (e) setError(e);
-      }}
-      data-testid="draft-linkedin-handoff"
-    >
-      Open in LinkedIn instead
-    </Button>
-  );
+  // one way to send: Orbit sends it (a LinkedIn hand-off button beside Send only made the choice harder)
+  const handoffButton = null;
   const primaryButton = (
     <Button
       variant="primary"
@@ -533,6 +518,8 @@ export function DraftEditor({
       // the missing-line row above already says the bracketed line has to go
       if (needs.length > 0 && i.code === 'placeholder') continue;
       const fix = i.blocking || (blocked && i.code === 'placeholder');
+      // only what holds Send back is said: a suggestion under every draft was noise
+      if (!fix) continue;
       lines.push({
         key: `${i.code}:${i.text}`,
         tone: fix ? 'bad' : 'warn',
@@ -829,9 +816,6 @@ export function DraftEditor({
   }
   return (
     <div>
-      {thread && user && (
-        <ThreadContext userId={user.id} personId={draft.personId} firstName={first} className="mb-3" />
-      )}
       {needs.length > 0 && (
         <div
           className="mb-3 rounded-lg border border-warn/40 bg-warn/5 p-3 text-[13px]"
@@ -907,42 +891,76 @@ export function DraftEditor({
           Bcc: {draft.bccEmails.join(', ')}
         </div>
       )}
-      {!isLinkedIn && !envelope.threaded && (
-        <div className="mb-2 flex items-center gap-2">
-          <label htmlFor={`subject-${draft.id}`} className="text-[12px] text-ink-3 shrink-0">
-            Subject
-          </label>
-          <Input
-            id={`subject-${draft.id}`}
-            value={subject}
-            onChange={(e) => setSubject(e.target.value)}
-            placeholder="Subject"
-          />
-        </div>
-      )}
-      <Textarea
-        id={bodyId}
-        value={body}
-        onChange={(e) => setBody(e.target.value)}
-        rows={6}
-        className="resize-none overflow-hidden"
-        aria-label="Message body"
-      />
-      <ResearchChip personId={draft.personId} body={body} setBody={setBody} fallback={ownLine} />
-      <ForwardNote draft={draft} introducer={first} />
-      {/* files go under the words, beside Send, as in Gmail */}
-      {user && (
-        <DraftFiles
-          draft={draft}
-          userId={user.id}
-          direct={!!direct}
-          mentionsFile={mentionsFile}
-          confirmed={attached}
-          onConfirm={setAttached}
-          className="mt-2.5"
+      {/* the letter: who, what about and the words on hairlines, the files under them; the conversation behind it
+          waits under a mark in the To line, shown on hover */}
+      <div className="border-y border-line-2" data-testid="draft-sheet">
+        {/* who it goes to: a line only where the editor stands alone (a card names its person already) */}
+        {thread && (
+          <div className="flex items-center gap-3 border-b border-line-2 py-2 text-[14px] leading-none">
+            <span className="w-[62px] shrink-0 text-[13px] text-ink-3">To</span>
+            <span className="min-w-0 flex-1 truncate" data-testid="draft-to">
+              {isLinkedIn
+                ? `${person?.displayName ?? first} on LinkedIn`
+                : (draft.toEmail ?? person?.primaryEmail ?? first)}
+            </span>
+            {user && <HistoryPeek userId={user.id} personId={draft.personId} firstName={first} />}
+          </div>
+        )}
+        {!isLinkedIn && !envelope.threaded && (
+          <div className="flex items-center gap-3 border-b border-line-2 py-1 text-[14px]">
+            <label htmlFor={`subject-${draft.id}`} className="w-[62px] shrink-0 text-[13px] text-ink-3">
+              Subject
+            </label>
+            <input
+              id={`subject-${draft.id}`}
+              value={subject}
+              onChange={(e) => setSubject(e.target.value)}
+              placeholder="Subject"
+              className="min-w-0 flex-1 h-9 bg-transparent font-medium outline-none placeholder:text-ink-3"
+            />
+          </div>
+        )}
+        <textarea
+          id={bodyId}
+          value={body}
+          onChange={(e) => setBody(e.target.value)}
+          rows={6}
+          className="block w-full resize-none overflow-hidden bg-transparent py-3.5 text-[14.5px] leading-[1.7] outline-none"
+          aria-label="Message body"
         />
-      )}
-      <div className="mt-2 flex items-center gap-3 text-[12px] text-ink-3 flex-wrap">
+        <ResearchChip personId={draft.personId} body={body} setBody={setBody} fallback={ownLine} />
+        <ForwardNote draft={draft} introducer={first} />
+        {user && (
+          <DraftFiles
+            draft={draft}
+            userId={user.id}
+            direct={!!direct}
+            mentionsFile={mentionsFile}
+            confirmed={attached}
+            onConfirm={setAttached}
+            part="list"
+            className="pb-2"
+          />
+        )}
+      </div>
+      <div className="mt-3 flex items-center gap-3 text-[12px] text-ink-3 flex-wrap">
+        {/* Send first, as in Gmail, with the paperclip beside it */}
+        <span className="flex items-center gap-2">
+          {primaryButton}
+          {handoffButton}
+          {copyButton}
+        </span>
+        {user && (
+          <DraftFiles
+            draft={draft}
+            userId={user.id}
+            direct={!!direct}
+            mentionsFile={mentionsFile}
+            confirmed={attached}
+            onConfirm={setAttached}
+            part="actions"
+          />
+        )}
         {wc > max && (
           <span className="tabular text-warn" data-testid="draft-word-count">
             {wc} words (aim for {max} or fewer)
@@ -983,16 +1001,11 @@ export function DraftEditor({
             Reset to suggested
           </button>
         )}
-        <span className="ml-auto flex gap-2">
-          {onCancel && (
-            <Button variant="ghost" size="sm" onClick={cancel} data-testid="draft-cancel">
-              Close
-            </Button>
-          )}
-          {copyButton}
-          {handoffButton}
-          {primaryButton}
-        </span>
+        {onCancel && (
+          <Button variant="ghost" size="sm" onClick={cancel} className="ml-auto" data-testid="draft-cancel">
+            Close
+          </Button>
+        )}
       </div>
       {canEnableSend && (
         // without send permission the button opens the mail app; one click lets Orbit send it itself
@@ -1039,24 +1052,28 @@ export function DraftEditor({
             Add the missing line above, or replace the text in brackets, to send this.
           </p>
         )}
-      {(shownError || notAllowed || issues.length > 0) && (
+      {(shownError ||
+        notAllowed ||
+        issues.some((i) => i.blocking || (blocked && i.code === 'placeholder'))) && (
         <ul className="mt-2 space-y-1 text-[12.5px]" data-testid="draft-issues">
           {shownError && <li className="text-bad">Not sent: {shownError}</li>}
           {notAllowed && notAllowed !== shownError && (
             <li className="text-bad">Can't send this yet: {notAllowed}</li>
           )}
-          {issues.map((i) => (
-            // a placeholder holds the button back while the line is missing, so it reads as a fix, not a suggestion
-            <li
-              key={`${i.code}:${i.text}`}
-              className={i.blocking || (blocked && i.code === 'placeholder') ? 'text-bad' : 'text-warn'}
-            >
-              {i.blocking || (blocked && i.code === 'placeholder')
-                ? 'Fix before sending: '
-                : 'Worth a look: '}
-              {i.text}
-            </li>
-          ))}
+          {issues
+            .filter((i) => i.blocking || (blocked && i.code === 'placeholder'))
+            .map((i) => (
+              // a placeholder holds the button back while the line is missing, so it reads as a fix, not a suggestion
+              <li
+                key={`${i.code}:${i.text}`}
+                className={i.blocking || (blocked && i.code === 'placeholder') ? 'text-bad' : 'text-warn'}
+              >
+                {i.blocking || (blocked && i.code === 'placeholder')
+                  ? 'Fix before sending: '
+                  : 'Worth a look: '}
+                {i.text}
+              </li>
+            ))}
         </ul>
       )}
     </div>

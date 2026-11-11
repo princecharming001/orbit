@@ -920,11 +920,20 @@ export function PersonPage() {
         </div>
       )}
       {composing && draft && (
-        <Card className="mb-5 border-accent/40">
-          <div className="flex flex-wrap items-center justify-between gap-2 mb-2">
+        <section className="mb-8" data-testid="person-composer">
+          <div className="flex flex-wrap items-center justify-between gap-2 mb-3">
             <div className="min-w-0">
-              <div className="font-medium">
-                {MESSAGE_KIND_LABELS[composing]} · {CHANNEL_LABELS[draft.channel]}
+              <div className="text-[15px] font-semibold">
+                {MESSAGE_KIND_LABELS[composing]} to{' '}
+                <Link
+                  to={`/people/${person.id}`}
+                  className="underline decoration-line underline-offset-[3px] hover:decoration-ink"
+                >
+                  {person.displayName}
+                </Link>
+                <span className="ml-2 text-[12.5px] font-normal text-ink-3">
+                  {CHANNEL_LABELS[draft.channel]}
+                </span>
               </div>
               {composing === 'outreach' && !hasBrief && !tps.some((t) => t.kind !== 'linkedin_connected') && (
                 <Link
@@ -945,7 +954,7 @@ export function PersonPage() {
             </div>
             {/* one kind only: nothing to switch to, so no button that looks like one (it used to restart the draft) */}
             {composeKinds(chat?.stage, composing, { referral: referralFits }).length > 1 && (
-              <div className="flex flex-wrap gap-1 text-[12px]" role="group" aria-label="Kind of message">
+              <div className="flex flex-wrap gap-4 text-[13px]" role="group" aria-label="Kind of message">
                 {composeKinds(chat?.stage, composing, { referral: referralFits }).map((k) => (
                   <button
                     key={k}
@@ -961,8 +970,10 @@ export function PersonPage() {
                     }}
                     aria-pressed={composing === k}
                     className={cx(
-                      'px-2.5 h-8 rounded-full border inline-flex items-center gap-1.5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40',
-                      composing === k ? 'border-ink bg-ink text-white' : 'border-line text-ink-2',
+                      'h-8 border-b-[1.5px] inline-flex items-center gap-1.5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40',
+                      composing === k
+                        ? 'border-ink text-ink font-medium'
+                        : 'border-transparent text-ink-3 hover:text-ink',
                     )}
                   >
                     {drafting.busy === `compose:${k}` && <Working />}
@@ -984,7 +995,7 @@ export function PersonPage() {
             }}
             busy={busy}
           />
-        </Card>
+        </section>
       )}
 
       <div className="grid @4xl:grid-cols-[minmax(0,1fr)_320px] gap-6 items-start">

@@ -84,8 +84,10 @@ export interface SearchContext {
   rel(personId: string): RelInfo | undefined;
   /** which channels Orbit can see, and since when (ISO), so silence means something */
   channels: Record<Channel, { connected: boolean; since?: string }>;
-  /** the student's own schools, canonical */
+  /** the student's own schools, canonical: every one on their LinkedIn and the one from setup */
   mySchools: string[];
+  /** the same, by kind, when known ("my high school" is only the high school) */
+  mySchoolsByLevel?: Partial<Record<'high_school' | 'college' | 'graduate', string[]>>;
   now: number;
   /** router mode: no model, criteria cannot be checked */
   noJudge?: boolean;
@@ -835,24 +837,25 @@ export function checkRelationship(personId: string, r: RelationshipSpec, ctx: Se
 }
 
 /** The alum-of-my-school check needs the doc's schools: kept apart from the relationship block's other checks. */
-export function checkAlum(doc: PersonDoc, ctx: SearchContext): Check {
-  const mine = new Set(ctx.mySchools);
+export function checkAlum(
+  doc: PersonDoc,
+  ctx: SearchContext,
+  level?: 'high_school' | 'college' | 'graduate',
+): Check {
+  const list = level ? (ctx.mySchoolsByLevel?.[level] ?? []) : ctx.mySchools;
+  const mine = new Set(list);
   const hit = doc.schools.find((s) => mine.has(s.name));
   const full = doc.schools.some(
     (x) => x.source === 'affiliation' || x.source === 'profile' || x.source === 'manual',
   );
   return {
     key: 'rel:alum',
-    label: 'went to your school',
+    label: level === 'high_school' ? 'went to your high school' : 'went to your school',
     need: 'must',
     answer: hit ? 'yes' : full ? 'no' : 'unknown',
     evidence: hit?.evidence,
     source: hit?.source,
     signal:
-      hit || full
-        ? undefined
-        : ctx.mySchools.some((s) => hasWord(docText(doc), s.toLowerCase()))
-          ? 'hint'
-          : 'none',
+      hit || full ? undefined : list.some((s) => hasWord(docText(doc), s.toLowerCase())) ? 'hint' : 'none',
   };
 }

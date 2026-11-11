@@ -90,6 +90,8 @@ export interface RelationshipSpec {
   mutualWith?: string;
   throughFriend?: string;
   alumOfMySchool?: boolean;
+  /** which of the student's schools: their high school, college or graduate school (all when not given) */
+  mySchoolLevel?: 'high_school' | 'college' | 'graduate';
 }
 
 export interface CriterionSpec {
