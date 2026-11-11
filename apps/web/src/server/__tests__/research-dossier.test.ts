@@ -584,12 +584,7 @@ describe('deep research in the dossier (investigator loop)', () => {
         const club = ids[ids.length - 1]!;
         return goodDossier(p, {
           deep_cuts: [
-            {
-              kind: 'team',
-              text: 'Captained Stanford to the 2014 Bay Area Robotics League title.',
-              date: '2014',
-              source_ids: [club],
-            },
+            { text: 'Captained Stanford to the 2014 Bay Area Robotics League title.', source_ids: [club] },
           ],
         });
       },

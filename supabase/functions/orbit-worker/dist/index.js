@@ -22375,7 +22375,7 @@ var DOSSIER_SYSTEM = [
   '"company" is what is happening at their company that matters to the student (team news, launches, hiring), from company sources, each with its source ids. Leave it empty when there are no company sources.',
   `Openers: up to three single sentences the student could open a first message with, each a statement (not a question) of at most 25 words about something they made, said or did. Each rests on one cited source and uses only details that source states, in its words where you can (a title, a claim, a number); the student's reaction may be added ("stuck with me"). Never flattery, never about their private life.`,
   "Dig past the obvious. The student wants the person to see they did real homework, so what matters most is what a quick look at their LinkedIn or a first-page search would not show: the club or chapter they ran, an award or competition result an organization published, a hackathon project, a side project or repo, a talk, podcast or panel, a post on their own blog or newsletter, a race, tournament or team they were on, a cause or nonprofit they volunteer for, a hobby or creative work they put out publicly, something specific they wrote or said. Prefer these over their job titles and schools, which the student can already see.",
-  `"deep_cuts": up to 6 of those hard-to-find things, the most specific and least obvious first, each one sentence that names the thing exactly (the club, the award and its year, the project, the race, the post's title) with its source ids. Use only web sources (never the LinkedIn profile or posts, which the student has already read). Their own public interests and pursuits outside work count (a sport, music, writing, a cause), as long as they made them public themselves or an organization published them. Leave it empty when the sources hold nothing beyond LinkedIn; never pad it with what LinkedIn already says.`,
+  `"deep_cuts": up to 6 of those hard-to-find things, the most specific and least obvious first, each one sentence that names the thing exactly and gives its year when the source has one (the club, the award, the project, the race, the post's title) with its source ids. Use only web sources (never the LinkedIn profile or posts, which the student has already read). Their own public interests and pursuits outside work count (a sport, music, writing, a cause), as long as they made them public themselves or an organization published them. Leave it empty when the sources hold nothing beyond LinkedIn; never pad it with what LinkedIn already says.`,
   "Go back through their whole timeline, not just the last few years: an old source is often the best one (a college club, a team they played on, a 2015 award, an early project or post). Say the year so the student knows how far back it is, and never present an old role or fact as current.",
   'Openers: when "deep_cuts" has anything, at least one opener rests on one of them: a specific detail most people would not know to mention.',
   `Most people have little online beyond LinkedIn. When the only sources are their LinkedIn and the student's own history, say so plainly in "who" (for example "Not much is public about Dana beyond LinkedIn.") and keep to what LinkedIn says; do not pad.`,
@@ -22467,25 +22467,10 @@ var dossierSchema = z.object({
   // v2: what is happening at their company, from company pages (Go deeper)
   company: z.array(z.object({ text: z.string(), source_ids: sourceIds })).optional(),
   // v4: the hard-to-find, specific things deep research turned up beyond LinkedIn (clubs, awards, projects, talks,
-  // their public pursuits outside work), each from a web source
-  deep_cuts: z.array(
-    z.object({
-      kind: z.enum([
-        "club",
-        "award",
-        "project",
-        "talk",
-        "writing",
-        "team",
-        "volunteer",
-        "interest",
-        "other"
-      ]),
-      text: z.string(),
-      date: z.string().nullable(),
-      source_ids: sourceIds
-    })
-  ).optional()
+  // their public pursuits outside work), each from a web source. Kept to text and ids on purpose: a kind enum and a
+  // date field made the compiled output grammar too large for the API ("The compiled grammar is too large"), and
+  // every brief fell back to LinkedIn alone. The year goes in the sentence instead.
+  deep_cuts: z.array(z.object({ text: z.string(), source_ids: sourceIds })).optional()
 });
 function retryNote2(bad, allowed) {
   return `
@@ -22651,7 +22636,8 @@ ${dossierUser({
     run.notes.push("assembled without web research or the model; check it before relying on it");
   const storedSources = sources.map(({ text: _t, ...s }) => s);
   const status = run.partial ? "partial" : "ready";
-  await save(run, { status, content: dossier, sources: storedSources, model }, now);
+  const why = run.notes.length ? run.notes.join("; ").slice(0, 1e3) : void 0;
+  await save(run, { status, content: dossier, sources: storedSources, model, error: why }, now);
   return {
     status,
     dossier,

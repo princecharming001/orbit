@@ -326,7 +326,9 @@ export async function buildDossier(deps: DossierDeps, input: DossierInput): Prom
 
   const storedSources: DossierSource[] = sources.map(({ text: _t, ...s }) => s);
   const status = run.partial ? 'partial' : 'ready';
-  await save(run, { status, content: dossier, sources: storedSources, model }, now);
+  // what was skipped or degraded, kept with the brief (the model's failure used to leave no trace anywhere)
+  const why = run.notes.length ? run.notes.join('; ').slice(0, 1000) : undefined;
+  await save(run, { status, content: dossier, sources: storedSources, model, error: why }, now);
   return {
     status,
     dossier,
