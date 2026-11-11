@@ -212,21 +212,70 @@ describe('the chat thread', () => {
       tool('5', 'needs_confirmation', 'Save this?'),
       { type: 'text', text: 'Your best three: David, Craig and Ethan.' },
     ]);
-    expect(busy.map((p) => p.type)).toEqual(['work', 'block', 'block']);
+    // the work folds; the last card of people found stays beside the answer, right under the fold
+    expect(busy.map((p) => p.type)).toEqual(['work', 'block', 'block', 'block']);
     const work = busy[0] as Extract<TurnPiece, { type: 'work' }>;
     expect(
       work.items.map(({ b }) => (b.type === 'text' ? b.text : b.type === 'tool' ? b.toolUseId : '')),
-    ).toEqual([
-      'Checking your network first.',
-      '1',
-      '2',
-      '3',
-      'A few fits so far. Digging a bit wider.',
-      '4',
-    ]);
+    ).toEqual(['Checking your network first.', '1', '2', '3', 'A few fits so far. Digging a bit wider.']);
     const kept = busy.slice(1) as Extract<TurnPiece, { type: 'block' }>[];
-    expect(kept[0]!.b).toMatchObject({ toolUseId: '5' });
-    expect(kept[1]!.b).toMatchObject({ text: 'Your best three: David, Craig and Ethan.' });
+    expect(kept[0]!.b).toMatchObject({ toolUseId: '4' });
+    expect(kept[1]!.b).toMatchObject({ toolUseId: '5' });
+    expect(kept[2]!.b).toMatchObject({ text: 'Your best three: David, Craig and Ethan.' });
+  });
+
+  it('never ends a search as words alone: the cards of who was found stay beside the answer', () => {
+    const found = (id: string, kind: ResultKind, data: unknown): Block => ({
+      type: 'tool',
+      toolUseId: id,
+      toolName: 'find_people',
+      status: 'done',
+      envelope: { kind, data, summary: id },
+    });
+    const row = (name: string) => ({ text: name, person: { name } });
+    // the user's own turn: a network search, a company lookup, then 9 people found; the answer names the found ones
+    const blocks: Block[] = [
+      found('net', 'people_table', { rows: [{ person: { displayName: 'Facundo Godoy', id: 'p1' } }] }),
+      found('memory', 'list', { title: 'Notes', items: [{ text: 'You asked about agencies before' }] }),
+      found('sourced', 'list', {
+        title: 'People for sales',
+        items: [row('Aleric Heck'), row('David Melman'), row('Joel Kaplan'), row('Zach Brown')],
+      }),
+      {
+        type: 'text',
+        text: 'I found 9 people, all cold. The strongest fits are Aleric Heck and David Melman, plus Joel Kaplan. Facundo Godoy is the only loose match you already know.',
+      },
+    ];
+    const pieces = turnLayout(blocks);
+    expect(
+      pieces.map((p) => (p.type === 'work' ? 'work' : p.b.type === 'tool' ? p.b.toolUseId : 'text')),
+    ).toEqual([
+      'work',
+      // most named first: the 9 found, then the one known match; the notes stay folded
+      'net',
+      'sourced',
+      'text',
+    ]);
+    const work = pieces[0] as Extract<TurnPiece, { type: 'work' }>;
+    expect(work.items.map(({ b }) => (b.type === 'tool' ? b.toolUseId : ''))).toEqual(['memory']);
+    // no more than two cards beside an answer, the ones it names most
+    const many = turnLayout([
+      found('a', 'person', { person: { displayName: 'Ana Ruiz', id: 'a' } }),
+      found('b', 'person', { person: { displayName: 'Ben Ode', id: 'b' } }),
+      found('c', 'person', { person: { displayName: 'Cy Lam', id: 'c' } }),
+      { type: 'text', text: 'Ana Ruiz and Ben Ode know her well; Cy Lam less so. Ana Ruiz first.' },
+    ]);
+    expect(many.filter((p) => p.type === 'block' && p.b.type === 'tool')).toHaveLength(2);
+    // words naming nobody on a card: the last card of who was found still shows
+    const quiet = turnLayout([
+      found('x', 'list', { title: 'Notes', items: [{ text: 'a' }] }),
+      found('y', 'people', { people: [{ displayName: 'Mo Ali', id: 'm' }] }),
+      found('z', 'people', { people: [{ displayName: 'Jo Kim', id: 'j' }] }),
+      { type: 'text', text: 'Two people fit.' },
+    ]);
+    expect(
+      quiet.map((p) => (p.type === 'work' ? 'work' : p.b.type === 'tool' ? p.b.toolUseId : 'text')),
+    ).toEqual(['work', 'z', 'text']);
   });
 
   it('appends streamed text deltas to one paragraph', async () => {

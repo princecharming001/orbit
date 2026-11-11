@@ -3,7 +3,7 @@ import { ACTIVE_STAGES, CLOSED_STAGES, RELATIONSHIP_LABELS, STAGE_LABELS } from 
 import { Send } from 'lucide-react';
 import { Link, useNavigate } from 'react-router-dom';
 import { lastTouch } from '../../engine/search';
-import { Avatar, Button, Chip, relDate, Select } from '../../ui';
+import { Avatar, Button, Chip, PickCircle, relDate, Select } from '../../ui';
 import { LogoText } from '../CompanyLogo';
 import { NextLink } from './PipelineBoard';
 import { StrengthDots, wentQuiet } from './shared';
@@ -82,17 +82,15 @@ function Check({
   testId?: string;
 }) {
   return (
-    <input
-      type="checkbox"
+    <PickCircle
       checked={on}
-      ref={(el) => {
-        if (el) el.indeterminate = !!mixed;
-      }}
+      mixed={mixed}
       onChange={onToggle}
       onClick={(e) => e.stopPropagation()}
-      aria-label={label}
-      className="h-4 w-4 accent-[var(--color-accent)] cursor-pointer pointer-coarse:h-5 pointer-coarse:w-5"
-      data-testid={testId}
+      label={label}
+      size={18}
+      className="pointer-coarse:!h-[22px] pointer-coarse:!w-[22px]"
+      testId={testId}
     />
   );
 }

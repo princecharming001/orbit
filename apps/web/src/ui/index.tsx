@@ -257,6 +257,64 @@ export function Avatar({
 }
 
 /** A LinkedIn profile, as LinkedIn's small blue mark: opens the profile in a new tab. */
+/**
+ * The round tick for picking someone (or a row): a hairline circle that fills with ink and a white check when picked,
+ * with a dash for "some". A real checkbox underneath, so the keyboard, screen readers and tests treat it as one.
+ */
+export function PickCircle({
+  checked,
+  onChange,
+  label,
+  size = 20,
+  mixed,
+  className,
+  testId = 'pick-person',
+  onClick,
+}: {
+  checked: boolean;
+  onChange: (next: boolean) => void;
+  label: string;
+  size?: number;
+  mixed?: boolean;
+  className?: string;
+  testId?: string;
+  onClick?: (e: React.MouseEvent<HTMLInputElement>) => void;
+}) {
+  const on = checked || !!mixed;
+  return (
+    <span className={cx('relative inline-flex shrink-0', className)} style={{ width: size, height: size }}>
+      <input
+        type="checkbox"
+        checked={checked}
+        ref={(el) => {
+          if (el) el.indeterminate = !!mixed && !checked;
+        }}
+        onChange={(e) => onChange(e.target.checked)}
+        onClick={onClick}
+        aria-label={label}
+        className="peer absolute inset-0 z-10 m-0 cursor-pointer appearance-none rounded-full opacity-0"
+        data-testid={testId}
+      />
+      <span
+        aria-hidden
+        className={cx(
+          'pointer-events-none flex h-full w-full items-center justify-center rounded-full border-[1.5px] transition-[background-color,border-color,transform,box-shadow] duration-150 ease-out',
+          'peer-focus-visible:ring-2 peer-focus-visible:ring-accent/40 peer-active:scale-90',
+          on
+            ? 'border-ink bg-ink text-canvas'
+            : 'border-[#cfccc6] bg-canvas shadow-[inset_0_1px_1px_rgba(0,0,0,0.04)] peer-hover:border-ink-3',
+        )}
+      >
+        {checked ? (
+          <Check size={Math.round(size * 0.56)} strokeWidth={3} className="pop-in" />
+        ) : mixed ? (
+          <span className="h-[2px] w-[44%] rounded-full bg-current" />
+        ) : null}
+      </span>
+    </span>
+  );
+}
+
 export function LinkedInMark({ url, name, testId }: { url: string; name: string; testId?: string }) {
   return (
     <a

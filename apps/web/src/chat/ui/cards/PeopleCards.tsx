@@ -6,7 +6,7 @@
 import type { Person } from '@orbit/core';
 import { Link } from 'react-router-dom';
 import { PersonCompanyLogo } from '../../../components/CompanyLogo';
-import { Avatar, cx } from '../../../ui';
+import { Avatar, cx, PickCircle } from '../../../ui';
 import type { ResultEnvelope } from '../../types';
 import type { ToolBlock } from '../threadStore';
 import { addPicked, type Picked, routesToEach, writeToEach } from './next';
@@ -288,16 +288,16 @@ export function PersonTile({
         <Avatar name={person.displayName} src={person.photoUrl} id={person.id} size={40} />
         <span className="flex items-center gap-2">
           {pick && (
-            <input
-              type="checkbox"
-              className={cx(
-                'relative z-10 h-4 w-4 accent-[var(--color-accent)] cursor-pointer transition-opacity',
-                pick.picking ? 'opacity-100' : 'opacity-0 group-hover/tile:opacity-100 focus:opacity-100',
-              )}
+            <PickCircle
               checked={pick.picked}
-              onChange={(e) => pick.onPick(e.target.checked)}
-              aria-label={`Pick ${person.displayName}`}
-              data-testid="pick-person"
+              onChange={pick.onPick}
+              label={`Pick ${person.displayName}`}
+              className={cx(
+                'z-10 transition-opacity',
+                pick.picking
+                  ? 'opacity-100'
+                  : 'opacity-0 group-hover/tile:opacity-100 focus-within:opacity-100',
+              )}
             />
           )}
           <span className={cx('rounded-full px-2.5 py-0.5 text-[12px] font-medium', TONE[t.tone])}>

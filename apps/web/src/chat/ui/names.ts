@@ -54,3 +54,28 @@ export function namedPeople(datas: unknown[]): NamedPerson[] {
   for (const d of datas) visit(d, out, 0);
   return [...out.values()].sort((a, b) => b.name.length - a.name.length);
 }
+
+/**
+ * Every person a card names, whatever the shape (a profile's `displayName`, a search row's `name`, a list row's
+ * `person.name`), links or not: what the answer's words can be checked against. Lowercased.
+ */
+export function cardNames(data: unknown): Set<string> {
+  const out = new Set<string>();
+  const two = (v: unknown) =>
+    typeof v === 'string' && /\S+\s+\S+/.test(v.trim()) && v.trim().length <= 80 ? v.trim() : '';
+  const walk = (v: unknown, depth: number) => {
+    if (!v || typeof v !== 'object' || depth > 5) return;
+    if (Array.isArray(v)) {
+      for (const x of v.slice(0, 200)) walk(x, depth + 1);
+      return;
+    }
+    const o = v as Record<string, unknown>;
+    for (const k of ['displayName', 'name']) {
+      const n = two(o[k]);
+      if (n) out.add(n.toLowerCase());
+    }
+    for (const [k, x] of Object.entries(o)) if (k !== 'forModel') walk(x, depth + 1);
+  };
+  walk(data, 0);
+  return out;
+}

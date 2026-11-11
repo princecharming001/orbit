@@ -9,7 +9,7 @@ import { ArrowRight, ArrowUpRight, Check, ChevronDown, Loader2 } from 'lucide-re
 import { createContext, type ReactNode, useContext, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { db } from '../../../db/schema';
-import { Avatar, cx, LinkedInMark } from '../../../ui';
+import { Avatar, cx, LinkedInMark, PickCircle } from '../../../ui';
 import { type ResultEnvelope, type StepRun, tapActionId } from '../../types';
 import { ChoicesContext } from './Choices';
 
@@ -200,16 +200,7 @@ export function PickBox({
   onChange: (next: boolean) => void;
   label: string;
 }) {
-  return (
-    <input
-      type="checkbox"
-      checked={checked}
-      onChange={(e) => onChange(e.target.checked)}
-      aria-label={`Pick ${label}`}
-      className="h-4 w-4 shrink-0 accent-accent cursor-pointer"
-      data-testid="pick-person"
-    />
-  );
+  return <PickCircle checked={checked} onChange={onChange} label={`Pick ${label}`} />;
 }
 
 /**
@@ -395,7 +386,7 @@ function StepBox({ done, busy }: { done?: boolean; busy?: boolean }) {
   return (
     <span
       className={cx(
-        'inline-flex h-[18px] w-[18px] shrink-0 items-center justify-center rounded-[5px] border',
+        'inline-flex h-[18px] w-[18px] shrink-0 items-center justify-center rounded-full border-[1.5px]',
         done ? 'border-accent bg-accent text-white' : 'border-[#cfccc6] bg-canvas',
       )}
       aria-hidden

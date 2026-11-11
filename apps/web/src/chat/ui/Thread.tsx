@@ -21,7 +21,7 @@ import { DraftOwnersContext, TurnPersonCardsContext } from './cards/parts';
 import { type CardActions, editingDraftId, ResultCard } from './cards/ResultCard';
 import { readDraft, readPerson } from './cards/shapes';
 import { Markdown } from './Markdown';
-import { type NamedPerson, namedPeople } from './names';
+import { cardNames, type NamedPerson, namedPeople } from './names';
 import type { AssistantTurn, Block, ErrorKind, ToolBlock, Turn, WebBlock } from './threadStore';
 
 export interface ThreadActions extends CardActions {
@@ -139,6 +139,53 @@ const OUTCOME_KINDS = new Set([
 /** A turn that looked this many things up reads as work, then an answer: the lookups fold into one line. */
 export const WORK_FOLD_AT = 3;
 
+/** Cards that show who or what was found: the answer is about them, so the right ones stay out of the fold. */
+const SHOWCASE_KINDS = new Set([
+  'person',
+  'people',
+  'people_table',
+  'routes',
+  'routes_many',
+  'company',
+  'pipeline',
+]);
+/** The most found-things cards one folded turn shows beside its answer. */
+export const SHOWCASE_MAX = 2;
+
+/** A card of people or companies found: one of SHOWCASE_KINDS, or a list whose rows are people. */
+function isShowcase(b: Block): boolean {
+  if (b.type !== 'tool' || !b.envelope || b.status === 'pending') return false;
+  if (SHOWCASE_KINDS.has(b.envelope.kind)) return true;
+  if (b.envelope.kind !== 'list') return false;
+  const items = (b.envelope.data as { items?: unknown } | undefined)?.items;
+  return Array.isArray(items) && items.some((x) => !!x && typeof x === 'object' && 'person' in x);
+}
+
+/**
+ * Which found-things cards a folded turn keeps beside its answer: the ones whose people the answer names, most named
+ * first, at most SHOWCASE_MAX, in the order they came; when the answer names nobody on any card, the last one. The
+ * student came to see who was found, so a search never ends as words alone.
+ */
+export function showcaseCards(ordered: { b: Block; i: number }[]): Set<number> {
+  const cards = ordered.filter(({ b }) => isShowcase(b));
+  if (!cards.length) return new Set();
+  const said = ordered
+    .map(({ b }) => (b.type === 'text' ? b.text : ''))
+    .join(' ')
+    .toLowerCase();
+  const scored = cards
+    .map(({ b, i }) => {
+      const names = b.type === 'tool' ? cardNames(b.envelope?.data) : new Set<string>();
+      let hits = 0;
+      for (const n of names) if (said.includes(n)) hits++;
+      return { i, hits };
+    })
+    .filter((c) => c.hits > 0)
+    .sort((a, b) => b.hits - a.hits || b.i - a.i)
+    .slice(0, SHOWCASE_MAX);
+  return new Set(scored.length ? scored.map((c) => c.i) : [cards.at(-1)!.i]);
+}
+
 export type TurnPiece =
   | { type: 'block'; b: Block; i: number }
   /** the folded lookups, with the words said between them, in order */
@@ -175,6 +222,8 @@ export function turnLayout(blocks: Block[], streaming = false): TurnPiece[] {
     b.type === 'tool' && b.status !== 'pending' && !(b.envelope && OUTCOME_KINDS.has(b.envelope.kind));
   const lookups = ordered.filter(({ b }) => isLookup(b)).length;
   if (lookups < WORK_FOLD_AT) return ordered.map(({ b, i }) => ({ type: 'block', b, i }));
+  // the cards of who was found stay beside the answer (they show right after the folded work line)
+  const shown = showcaseCards(ordered);
   let lastTool = -1;
   // the answer is what comes after the last lookup: a card the student acts on (pills, a draft, a setup) after the
   // words is not work, so the words before it stay out of the fold
@@ -182,20 +231,24 @@ export function turnLayout(blocks: Block[], streaming = false): TurnPiece[] {
     if ((b.type === 'tool' && isLookup(b) && !failed(b)) || b.type === 'web') lastTool = i;
   });
   const isWork = ({ b, i }: { b: Block; i: number }) =>
-    isLookup(b) || b.type === 'progress' || (b.type === 'text' && i < lastTool);
+    (isLookup(b) && !shown.has(i)) || b.type === 'progress' || (b.type === 'text' && i < lastTool);
   const out: TurnPiece[] = [];
   let work: { type: 'work'; items: { b: Block; i: number }[] } | undefined;
+  const cards = ordered.filter(({ i }) => shown.has(i));
   for (const x of ordered) {
+    if (shown.has(x.i)) continue;
     if (!isWork(x)) {
       out.push({ type: 'block', b: x.b, i: x.i });
       continue;
     }
     if (!work) {
       work = { type: 'work', items: [] };
-      out.push(work);
+      out.push(work, ...cards.map(({ b, i }) => ({ type: 'block' as const, b, i })));
     }
     work.items.push(x);
   }
+  // nothing folded after all: the cards keep their place at the top
+  if (!work) out.unshift(...cards.map(({ b, i }) => ({ type: 'block' as const, b, i })));
   return out;
 }
 

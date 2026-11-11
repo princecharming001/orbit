@@ -205,9 +205,10 @@ test.describe('Chat home', () => {
     await expect(turn).toContainText('Your best three', { timeout: 30_000 });
     const work = page.getByTestId('work-log');
     await expect(work).toHaveCount(1);
-    await expect(work).toContainText('Looked through 6 things');
-    // the lookups and the line between them are folded, the answer is not
-    await expect(turn.getByTestId('result-people')).toHaveCount(0);
+    await expect(work).toContainText('Looked through 5 things');
+    // the lookups and the line between them are folded, the answer is not; the last card of people found stays
+    // beside the answer, so a search never ends as words alone
+    await expect(turn.getByTestId('result-people')).toHaveCount(1);
     await expect(turn).not.toContainText('Digging a bit wider');
     await shot(page, 'e2e-laptop-work-search');
     await page.getByTestId('work-log-toggle').click();
@@ -608,11 +609,12 @@ test.describe('Chat home', () => {
     const turn = page.getByTestId('turn-assistant');
     await expect(turn).toContainText('you know two people there', { timeout: 30_000 });
     await expect(page.getByTestId('work-log')).toHaveCount(1);
-    await expect(page.getByTestId('work-log')).toContainText('Looked through 3 things');
+    await expect(page.getByTestId('work-log')).toContainText('Looked through 2 things');
     await expect(page.getByTestId('web-search')).toHaveCount(1);
     await expect(page.getByTestId('web-search')).toContainText('Stripe layoffs 2026');
+    // the person the answer is about stays beside it; the other lookups fold
     await expect(turn.getByTestId('result-people')).toHaveCount(0);
-    await expect(turn.getByTestId('result-person')).toHaveCount(0);
+    await expect(turn.getByTestId('result-person')).toHaveCount(1);
     await shot(page, 'e2e-laptop-work-mixed');
     await page.getByTestId('work-log-toggle').click();
     await expect(turn.getByTestId('result-people')).toHaveCount(1);

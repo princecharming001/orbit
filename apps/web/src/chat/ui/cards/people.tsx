@@ -7,7 +7,7 @@ import { ArrowRight, ArrowUpRight, Check, ChevronDown, Copy, Mail, X } from 'luc
 import { type ReactNode, useContext, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { copyText } from '../../../components/approve';
-import { Avatar, cx, LinkedInMark } from '../../../ui';
+import { Avatar, cx, LinkedInMark, PickCircle } from '../../../ui';
 import { ChoicesContext } from './Choices';
 import type { NextStep } from './parts';
 
@@ -263,23 +263,7 @@ export function PersonLine({
               pick.picking ? 'opacity-100' : 'opacity-0 group-hover/row:opacity-100 focus-within:opacity-100',
             )}
           >
-            <input
-              type="checkbox"
-              className="peer absolute inset-0 z-10 m-0 cursor-pointer appearance-none rounded-full opacity-0"
-              checked={pick.picked}
-              onChange={(e) => pick.onPick(e.target.checked)}
-              aria-label={`Pick ${name}`}
-              data-testid="pick-person"
-            />
-            <span
-              className={cx(
-                'pointer-events-none flex h-[18px] w-[18px] items-center justify-center rounded-[5px] border transition-colors peer-focus-visible:ring-2 peer-focus-visible:ring-accent/40',
-                pick.picked ? 'border-ink bg-ink text-canvas' : 'border-[#cfccc6] bg-canvas',
-              )}
-              aria-hidden
-            >
-              {pick.picked && <Check size={12} strokeWidth={3} />}
-            </span>
+            <PickCircle checked={pick.picked} onChange={pick.onPick} label={`Pick ${name}`} size={22} />
           </label>
         )}
       </div>
