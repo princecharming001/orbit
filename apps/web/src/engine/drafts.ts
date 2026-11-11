@@ -181,7 +181,10 @@ export async function composeDraft(
   const chat = opts.chat === undefined ? await liveChatOf(personId) : (opts.chat ?? undefined);
   const started = await unsentDraftOf(personId, kind);
   if (started) return { kind: 'draft', draft: started, reopened: true };
-  if (kind === 'outreach' && !chat && !opts.confirmed) {
+  // a card at To contact (Add a person puts one there) with nothing sent is not a started chat: the first message
+  // still asks about a warm-up, and still opens through startWarmUpOrOutreach
+  const fresh = !chat || chat.stage === 'identified';
+  if (kind === 'outreach' && fresh && !opts.confirmed) {
     const settings = await db.settings.get(user.id);
     if (
       needsWarmUp(
@@ -193,7 +196,7 @@ export async function composeDraft(
     )
       return { kind: 'warmup_choice' };
   }
-  if (kind === 'outreach' && (!chat || (chat.stage === 'warming' && opts.skipWarmUp))) {
+  if (kind === 'outreach' && (fresh || (chat!.stage === 'warming' && opts.skipWarmUp))) {
     const r = await startWarmUpOrOutreach(user, personId, channel, 'manual', { skipWarmUp: opts.skipWarmUp });
     if (!r.draft) return { kind: 'warmup_started', chat: r.chat! };
     return { kind: 'draft', draft: r.draft, reopened: false };

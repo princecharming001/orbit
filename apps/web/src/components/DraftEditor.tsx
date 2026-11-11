@@ -889,17 +889,6 @@ export function DraftEditor({
           )}
         </div>
       )}
-      {user && (
-        <DraftFiles
-          draft={draft}
-          userId={user.id}
-          direct={!!direct}
-          mentionsFile={mentionsFile}
-          confirmed={attached}
-          onConfirm={setAttached}
-          className="mb-3"
-        />
-      )}
       {draft.holdUntil && new Date(draft.holdUntil).getTime() > Date.now() && (
         <div className="text-[12px] text-warn mb-1.5" data-testid="draft-hold">
           Your last note to {person?.firstName ?? 'them'} went out only a few days ago. Wait until{' '}
@@ -941,6 +930,18 @@ export function DraftEditor({
       />
       <ResearchChip personId={draft.personId} body={body} setBody={setBody} fallback={ownLine} />
       <ForwardNote draft={draft} introducer={first} />
+      {/* files go under the words, beside Send, as in Gmail */}
+      {user && (
+        <DraftFiles
+          draft={draft}
+          userId={user.id}
+          direct={!!direct}
+          mentionsFile={mentionsFile}
+          confirmed={attached}
+          onConfirm={setAttached}
+          className="mt-2.5"
+        />
+      )}
       <div className="mt-2 flex items-center gap-3 text-[12px] text-ink-3 flex-wrap">
         {wc > max && (
           <span className="tabular text-warn" data-testid="draft-word-count">

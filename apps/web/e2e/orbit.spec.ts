@@ -1418,16 +1418,15 @@ test.describe('Setup without Google', () => {
     await expect(page.getByTestId('add-person-save')).toBeDisabled(); // needs a way to reach them
     await page.getByTestId('add-person-email').fill('priya.shah@evercore.com');
     await page.getByTestId('add-person-save').click();
-    await expect(page).toHaveURL(/\/people\//);
-    await expect(page.getByRole('heading', { name: 'Priya Shah' })).toBeVisible();
-    // looking at a first draft does not put her on the Pipeline
-    await page.getByTestId('person-write').click();
-    await expect(page.getByLabel('Message body')).toBeVisible({
-      timeout: 15_000,
-    });
+    // adding someone puts them on the Pipeline at To contact, and the student stays on People
+    await expect(page.getByTestId('toasts')).toContainText(
+      'Added Priya Shah to your pipeline, under To contact.',
+    );
+    await expect(page).toHaveURL(/\/people(\?|$)/);
     await page.goto('pipeline');
-    await expect(page.getByText(/no chats yet/i)).toBeVisible();
-    await expect(page.locator('[data-testid^="chat-card-"]')).toHaveCount(0);
+    await expect(page.locator('[data-testid^="chat-card-"]').filter({ hasText: 'Priya Shah' })).toHaveCount(
+      1,
+    );
   });
   test('an empty People page imports LinkedIn in place, says who to meet, and a note about someone met in person brings a thank-you', async ({
     page,
@@ -1562,6 +1561,11 @@ async function addByHand(
   if (how.email) await page.getByTestId('add-person-email').fill(how.email);
   if (how.linkedin) await page.getByTestId('add-person-linkedin').fill(how.linkedin);
   await page.getByTestId('add-person-save').click();
+  // added to the Pipeline; the toast opens their page
+  await page
+    .getByTestId('toasts')
+    .getByRole('button', { name: /^Open / })
+    .click();
   await expect(page).toHaveURL(/\/people\//);
 }
 
@@ -1683,9 +1687,11 @@ test.describe("Never losing the student's work, and honest hand-offs", () => {
     const next = page.getByTestId('drafts-to-write');
     await expect(next).toContainText('Daniel Kim');
     await expect(next.getByTestId('drafts-write')).toHaveText(/^Write to Daniel$/);
-    // Discover is up to date without a Refresh
-    await page.goto('discover');
-    await expect(page.getByTestId('rec-card').filter({ hasText: 'Daniel Kim' })).toBeVisible();
+    // he is on the Pipeline at To contact (so Discover, which leaves out people already there, does not list him)
+    await page.goto('pipeline');
+    await expect(page.locator('[data-testid^="chat-card-"]').filter({ hasText: 'Daniel Kim' })).toHaveCount(
+      1,
+    );
     await openDrafts(page);
     await page.getByTestId('drafts-write').click();
     await expect(page.getByTestId('warmup-choice')).toBeVisible();
@@ -2068,6 +2074,10 @@ test.describe('Usability round 5: one draft, kept edits, saved settings, chats t
     await page.getByTestId('add-person-company').fill('McKinsey');
     await page.getByTestId('add-person-email').fill('rachel.kim@mckinsey.com');
     await page.getByTestId('add-person-save').click();
+    await page
+      .getByTestId('toasts')
+      .getByRole('button', { name: /^open rachel$/i })
+      .click();
     await expect(page).toHaveURL(/\/people\//);
     await page.getByTestId('person-write').click();
     await page.getByRole('button', { name: /^open email to rachel$/i }).click();

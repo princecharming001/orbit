@@ -541,6 +541,28 @@ function normalizeCompany(raw) {
   return ORG_ALIASES[core] ?? (core.replace(/[\s&]/g, "") ? core : legal);
 }
 
+// packages/core/src/linkedin/headline.ts
+var PARTS = /\s+[|·•]\s+|\s+[–—-]\s+/;
+var AT = /^(.+?)\s+(?:at|@)\s*(.+)$|^(.+?)\s*@\s*(.+)$/i;
+var LEAD_OF = /^((?:(?:co-?)?founder|ceo|cto|coo|cfo|cpo|cmo|president|chair(?:man|woman|person)?|managing (?:director|partner)|general partner|partner|owner|principal)(?:\s*(?:&|and|,|\/)\s*(?:(?:co-?)?founder|ceo|cto|coo|cfo|cpo|president|chair))*)\s+of\s+(.+)$/i;
+var SENTENCE = /(?<!\b(?:Sr|Jr|Snr|Dr|Mr|Mrs|Ms|St|Prof|Mgr|Asst|Assoc|Eng|Gen|Corp|Co|Inc|Ltd|No|vs|prev|Prev|ex|Ex|approx|U\.S|e\.g|i\.e))\.\s+(?=\p{Lu})/u;
+var NOT_NOW = /^(?:former(?:ly)?|ex[\s-]|ex$|previously|prev\.?|past|retired|incoming|future|soon[\s-]to[\s-]be|aspiring|seeking|looking\s+for|open\s+to)\b/i;
+function roleFromHeadline(headline) {
+  const first = headline?.trim().split(PARTS)[0]?.split(SENTENCE)[0]?.trim();
+  if (!first) return {};
+  if (NOT_NOW.test(first)) return { notCurrent: true };
+  const lead = LEAD_OF.exec(first);
+  if (lead) {
+    const org2 = lead[2].split(/\s*[,;]\s+/)[0].replace(/[.,;!]+$/, "").trim();
+    if (org2 && org2.length <= 60) return { title: lead[1].trim(), org: org2 };
+  }
+  const m = AT.exec(first);
+  if (!m) return { title: first.length <= 80 ? first : void 0 };
+  const title = (m[1] ?? m[3]).trim().replace(/[,;]$/, "");
+  const org = (m[2] ?? m[4]).trim().split(/\s*[,;]\s+|\s+\/\s+/)[0].replace(/\s*\(.*\)$/, "").replace(/[.,;!]+$/, "").trim();
+  return { title: title || void 0, org: org || void 0 };
+}
+
 // apps/web/src/zod.ts
 import { z } from "npm:zod@3.25.76/v4";
 z.config({ jitless: true });
@@ -609,10 +631,8 @@ function unipileTime(v) {
   return Number.isNaN(d.getTime()) ? void 0 : d.toISOString();
 }
 function parseHeadline(headline) {
-  const h = (headline ?? "").split("|")[0].trim();
-  const m = /^(.{2,80}?)\s+(?:at|@)\s+(.{2,80})$/i.exec(h);
-  if (!m) return {};
-  return { title: m[1].trim(), company: m[2].replace(/[.,;]+$/, "").trim() };
+  const r = roleFromHeadline(headline ?? void 0);
+  return { title: r.title, company: r.org };
 }
 
 // packages/core/src/email/when.ts

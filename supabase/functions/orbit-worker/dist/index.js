@@ -15292,6 +15292,28 @@ function weakLink(f, input, pairs, nameOf2) {
   return ` The weak link: ${from} ${hopEvidence(weakest.fromId, top, nameOf2(weakest.toId))}.`;
 }
 
+// packages/core/src/linkedin/headline.ts
+var PARTS = /\s+[|·•]\s+|\s+[–—-]\s+/;
+var AT = /^(.+?)\s+(?:at|@)\s*(.+)$|^(.+?)\s*@\s*(.+)$/i;
+var LEAD_OF = /^((?:(?:co-?)?founder|ceo|cto|coo|cfo|cpo|cmo|president|chair(?:man|woman|person)?|managing (?:director|partner)|general partner|partner|owner|principal)(?:\s*(?:&|and|,|\/)\s*(?:(?:co-?)?founder|ceo|cto|coo|cfo|cpo|president|chair))*)\s+of\s+(.+)$/i;
+var SENTENCE = /(?<!\b(?:Sr|Jr|Snr|Dr|Mr|Mrs|Ms|St|Prof|Mgr|Asst|Assoc|Eng|Gen|Corp|Co|Inc|Ltd|No|vs|prev|Prev|ex|Ex|approx|U\.S|e\.g|i\.e))\.\s+(?=\p{Lu})/u;
+var NOT_NOW2 = /^(?:former(?:ly)?|ex[\s-]|ex$|previously|prev\.?|past|retired|incoming|future|soon[\s-]to[\s-]be|aspiring|seeking|looking\s+for|open\s+to)\b/i;
+function roleFromHeadline(headline) {
+  const first = headline?.trim().split(PARTS)[0]?.split(SENTENCE)[0]?.trim();
+  if (!first) return {};
+  if (NOT_NOW2.test(first)) return { notCurrent: true };
+  const lead = LEAD_OF.exec(first);
+  if (lead) {
+    const org2 = lead[2].split(/\s*[,;]\s+/)[0].replace(/[.,;!]+$/, "").trim();
+    if (org2 && org2.length <= 60) return { title: lead[1].trim(), org: org2 };
+  }
+  const m = AT.exec(first);
+  if (!m) return { title: first.length <= 80 ? first : void 0 };
+  const title = (m[1] ?? m[3]).trim().replace(/[,;]$/, "");
+  const org = (m[2] ?? m[4]).trim().split(/\s*[,;]\s+|\s+\/\s+/)[0].replace(/\s*\(.*\)$/, "").replace(/[.,;!]+$/, "").trim();
+  return { title: title || void 0, org: org || void 0 };
+}
+
 // packages/core/src/recommend/wantToMeet.ts
 var ROLES = [
   [/\b(co-?)?founders?\b/, "Founder"],
@@ -27845,10 +27867,8 @@ function unipileTime(v) {
   return Number.isNaN(d.getTime()) ? void 0 : d.toISOString();
 }
 function parseHeadline(headline) {
-  const h = (headline ?? "").split("|")[0].trim();
-  const m = /^(.{2,80}?)\s+(?:at|@)\s+(.{2,80})$/i.exec(h);
-  if (!m) return {};
-  return { title: m[1].trim(), company: m[2].replace(/[.,;]+$/, "").trim() };
+  const r = roleFromHeadline(headline ?? void 0);
+  return { title: r.title, company: r.org };
 }
 
 // supabase/functions/_shared/ingest/linkedin.ts
@@ -27905,6 +27925,28 @@ async function ingestRelations(db2, userId, relations, now) {
   }
   return { byMember, created: res.created.size };
 }
+async function fillRolesFromHeadlines(db2, userId, now, limit2 = 500) {
+  const rows = await db2.sql`
+    select id, headline from orbit.people
+     where user_id = ${userId}::uuid and deleted_at is null and merged_into is null and not coalesce(is_self, false)
+       and title is null and org_raw is null and headline is not null and headline <> ''
+       and coalesce(roles_from_headline_at, 'epoch'::timestamptz) < ${HEADLINE_READER_SINCE}::timestamptz
+     order by updated_at desc
+     limit ${limit2}`;
+  const filled = [];
+  for (const r of rows) {
+    const { title, company } = parseHeadline(r.headline);
+    if (company) await upsertCurrentEmployment(db2, userId, r.id, company, title, "linkedin", now);
+    else if (title)
+      await db2.sql`update orbit.people set title = ${title} where id = ${r.id}::uuid and title is null`;
+    if (title || company) filled.push(r.id);
+  }
+  if (rows.length)
+    await db2.sql`update orbit.people set roles_from_headline_at = ${now.toISOString()}::timestamptz
+                  where id = any(${rows.map((r) => r.id)}::uuid[])`;
+  return filled;
+}
+var HEADLINE_READER_SINCE = "2026-11-11T00:00:00Z";
 async function upsertCurrentEmployment(db2, userId, personId, company, title, source, now) {
   const orgId = await upsertOrganization(db2, userId, company);
   if (!orgId) return;
@@ -28054,6 +28096,8 @@ function linkedinHandlers(deps) {
         return fn();
       };
       const save2 = (patch) => patchSyncState(ctx.db, userId, "linkedin", "linkedin", patch, { lastSyncedAt: now, lastError: null });
+      const filled = await fillRolesFromHeadlines(ctx.db, userId, now).catch(() => []);
+      await scorePeople(ctx, userId, filled, `${job.msgId}:roles`).catch(() => void 0);
       const self = await loadSelf(ctx.db, userId);
       if (!state.selfMemberId) {
         const me = await call(() => unipile.me(accountId));

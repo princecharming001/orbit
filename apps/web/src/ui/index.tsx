@@ -1,4 +1,5 @@
 import { FUNCTION_LABELS, initials } from '@orbit/core';
+import { useLiveQuery } from 'dexie-react-hooks';
 import { Check, CircleAlert, Info, X } from 'lucide-react';
 import {
   type ButtonHTMLAttributes,
@@ -16,6 +17,7 @@ import {
 } from 'react';
 import { createPortal } from 'react-dom';
 import { Link, useLocation } from 'react-router-dom';
+import { db } from '../db/schema';
 import { photoBroken, photoWanted } from '../engine/photoSignals';
 import { linkedInImageExpired } from '../engine/photos';
 
@@ -214,10 +216,15 @@ export function Avatar({
     for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) >>> 0;
     return h % 360;
   }, [id, name]);
+  // The person's own record is read for their photo: a card keeps the link it was given when it was made (a chat
+  // answer, a search result), and LinkedIn's links expire, so a card's link can be old or missing while the record
+  // already has a fresh one from the photo queue. The record's photo comes first; the given link is the fallback.
+  const current = useLiveQuery(async () => (id ? ((await db.people.get(id))?.photoUrl ?? null) : null), [id]);
   // LinkedIn's photo links expire: one past its date is not even tried, and the photo queue fetches a fresh one
   // (engine/photoQueue, which hears who is on screen). A picture that fails to load is tried once more, then the
   // initials show and the queue hears of it; a new link from the queue starts over.
-  const usable = src && !linkedInImageExpired(src) ? src : undefined;
+  const freshLink = (u?: string | null) => (u && !linkedInImageExpired(u) ? u : undefined);
+  const usable = freshLink(current) ?? freshLink(src);
   const [failed, setFailed] = useState<{ src: string; tries: number }>();
   const tries = failed && failed.src === usable ? failed.tries : 0;
   const shown = usable && tries < 2 ? usable : undefined;

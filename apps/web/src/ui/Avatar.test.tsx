@@ -61,3 +61,38 @@ describe('Avatar', () => {
     expect(onScreenRank().has('p_morgan')).toBe(false);
   });
 });
+
+describe('Avatar reads the person’s own photo', () => {
+  it('a card with an old link or none shows the photo the record has now, and follows it when it changes', async () => {
+    const { db } = await import('../db/schema');
+    const now = new Date().toISOString();
+    await db.people.put({
+      id: 'p_record',
+      userId: 'u_photo',
+      displayName: 'Rae Kim',
+      firstName: 'Rae',
+      photoUrl: licdn('fresh'),
+      createdAt: now,
+      updatedAt: now,
+    } as never);
+    const settle = async () => {
+      for (let i = 0; i < 8; i++) await act(() => new Promise((r) => setTimeout(r, 10)));
+    };
+    // the card was given an expired link (a chat answer made weeks ago): the record's fresh one shows
+    act(() => root.render(<Avatar name="Rae Kim" src={licdn('stale', 1_700_000_000)} id="p_record" />));
+    await settle();
+    expect(img()?.getAttribute('src')).toBe(licdn('fresh'));
+    // no link at all: still the record's
+    act(() => root.render(<Avatar name="Rae Kim" id="p_record" />));
+    await settle();
+    expect(img()?.getAttribute('src')).toBe(licdn('fresh'));
+    // the photo queue writes a newer one: the avatar follows it
+    await db.people.update('p_record', { photoUrl: licdn('newer') });
+    await settle();
+    expect(img()?.getAttribute('src')).toBe(licdn('newer'));
+    // an id that is not a person keeps the link it was given
+    act(() => root.render(<Avatar name="Sam" src="https://example.com/sam.jpg" id="Sam-0" />));
+    await settle();
+    expect(img()?.getAttribute('src')).toBe('https://example.com/sam.jpg');
+  });
+});

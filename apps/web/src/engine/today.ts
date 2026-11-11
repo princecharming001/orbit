@@ -147,13 +147,14 @@ export function notYetWritten<
   P extends Pick<Person, 'id' | 'isHuman' | 'hiddenAt' | 'sources' | 'createdAt'>,
 >(
   people: P[],
-  chats: Pick<CoffeeChat, 'personId'>[],
+  chats: Pick<CoffeeChat, 'personId' | 'stage'>[],
   outbound: Pick<OutboundMessage, 'personId' | 'status'>[],
   suggestions: Pick<Suggestion, 'personId' | 'status'>[],
   now: Date,
 ): P[] {
   const busy = new Set([
-    ...chats.map((c) => c.personId),
+    // a card at To contact (Add a person puts one there) is still someone to write to
+    ...chats.filter((c) => c.stage !== 'identified').map((c) => c.personId),
     ...outbound.filter((o) => o.status !== 'cancelled').map((o) => o.personId),
     ...suggestions.filter((s) => s.status === 'pending' && s.personId).map((s) => s.personId!),
   ]);

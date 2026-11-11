@@ -397,7 +397,8 @@ export async function ingestNote(user: User, inp: CaptureInput, now = new Date()
     attendees,
     personIds: ids,
     // an unconfirmed guess touches nothing in the pipeline until the student confirms it
-    chatId: sure && !bookedLater ? chat?.id : undefined,
+    // a card at To contact (nothing sent yet) is moved to completed below, as for someone met with no card
+    chatId: sure && !bookedLater && chat?.stage !== 'identified' ? chat?.id : undefined,
     calendarEventId,
     // a large meeting with nobody the student has a chat with is filed with nobody, and asks nothing
     matchStatus: inp.group ? (ids.length ? 'auto' : 'rejected') : sure ? 'auto' : 'unmatched',
@@ -780,7 +781,39 @@ export async function processNote(
       .equals(primary.id)
       .filter((c) => !['declined', 'no_response', 'archived'].includes(c.stage))
       .first();
-    if (open) {
+    if (open && open.stage === 'identified') {
+      // on the pipeline at To contact (Add a person) and met before anything was sent: the card moves to completed,
+      // so the thank-you comes next, as for someone with no card
+      const at = now.toISOString();
+      await db.chats.update(open.id, {
+        stage: 'completed',
+        stageEnteredAt: note.occurredAt,
+        completedAt: note.occurredAt,
+        updatedAt: at,
+      });
+      await db.stageEvents.add({
+        id: newId('se'),
+        userId: user.id,
+        chatId: open.id,
+        fromStage: 'identified',
+        toStage: 'completed',
+        status: 'applied',
+        actor: 'system',
+        reason: NOTE_OPENED_CHAT,
+        evidenceRefTable: 'notes',
+        evidenceRefId: note.id,
+        confidence: note.matchConfidence ?? 0.8,
+        createdAt: at,
+        decidedAt: at,
+      });
+      note.chatId = open.id;
+      const firstMessage = await db.suggestions
+        .where('personId')
+        .equals(primary.id)
+        .filter((x) => x.kind === 'new_outreach' && (x.status === 'pending' || x.status === 'snoozed'))
+        .toArray();
+      if (firstMessage.length) await retireSuggestions(firstMessage, 'superseded:met', now);
+    } else if (open) {
       note.chatId = open.id;
     } else {
       const at = now.toISOString();

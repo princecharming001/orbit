@@ -91,6 +91,41 @@ export async function ingestRelations(
 }
 
 /**
+ * Title and company from the headline Orbit already holds, for people who have neither: connections synced before the
+ * server read headlines the way the app does were left with a blank title and company (and so no logo). Reads no
+ * LinkedIn; a batch a sync, so a big network is filled over a few passes. A profile read later still wins.
+ */
+export async function fillRolesFromHeadlines(
+  db: Db,
+  userId: string,
+  now: Date,
+  limit = 500,
+): Promise<string[]> {
+  const rows = await db.sql<{ id: string; headline: string }>`
+    select id, headline from orbit.people
+     where user_id = ${userId}::uuid and deleted_at is null and merged_into is null and not coalesce(is_self, false)
+       and title is null and org_raw is null and headline is not null and headline <> ''
+       and coalesce(roles_from_headline_at, 'epoch'::timestamptz) < ${HEADLINE_READER_SINCE}::timestamptz
+     order by updated_at desc
+     limit ${limit}`;
+  const filled: string[] = [];
+  for (const r of rows) {
+    const { title, company } = parseHeadline(r.headline);
+    if (company) await upsertCurrentEmployment(db, userId, r.id, company, title, 'linkedin', now);
+    else if (title)
+      await db.sql`update orbit.people set title = ${title} where id = ${r.id}::uuid and title is null`;
+    if (title || company) filled.push(r.id);
+  }
+  // each row is read once by this reader, filled or not, so a headline with no role in it is not read every pass
+  if (rows.length)
+    await db.sql`update orbit.people set roles_from_headline_at = ${now.toISOString()}::timestamptz
+                  where id = any(${rows.map((r) => r.id)}::uuid[])`;
+  return filled;
+}
+/** when this headline reader replaced the old one: rows read before it are read again */
+const HEADLINE_READER_SINCE = '2026-11-11T00:00:00Z';
+
+/**
  * The person's current employer: kept when it is the same organization, otherwise the previous current LinkedIn
  * employment is closed and a new one opened, and people.org_id / org_raw / title follow it.
  */

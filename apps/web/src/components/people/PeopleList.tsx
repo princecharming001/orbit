@@ -162,10 +162,17 @@ export function PeopleList({
                       </Chip>
                     )}
                   </span>
-                  {(p.currentTitle || p.currentOrganizationRaw) && (
+                  {p.currentTitle || p.currentOrganizationRaw ? (
                     <LogoText person={p} className="text-[12.5px] text-ink-2" wrap>
                       {[p.currentTitle, p.currentOrganizationRaw].filter(Boolean).join(' at ')}
                     </LogoText>
+                  ) : (
+                    p.headline && (
+                      // no title read yet: their LinkedIn headline says what they do
+                      <span className="text-[12.5px] text-ink-2 line-clamp-1" title={p.headline}>
+                        {p.headline}
+                      </span>
+                    )
                   )}
                   <span className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-[12px] text-ink-3">
                     <span className="inline-flex items-center gap-1">
@@ -264,6 +271,15 @@ export function PeopleList({
                           </span>
                         )}
                       </LogoText>
+                    ) : p.headline ? (
+                      // no title read yet: their LinkedIn headline says what they do
+                      <span
+                        className="block max-w-[340px] text-[12.5px] leading-snug text-ink-3 line-clamp-2"
+                        title={p.headline}
+                        data-testid="people-row-headline"
+                      >
+                        {p.headline}
+                      </span>
                     ) : null}
                   </td>
                   <td className="px-2 text-ink-2">{role(p) ?? ''}</td>

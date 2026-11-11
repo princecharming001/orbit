@@ -9,6 +9,12 @@
 const PARTS = /\s+[|·•]\s+|\s+[–—-]\s+/;
 const AT = /^(.+?)\s+(?:at|@)\s*(.+)$|^(.+?)\s*@\s*(.+)$/i;
 /** A first part that names a past, future or wished-for role, not where they are now. */
+/** "CEO of Pond AI", "Co-Founder & CEO of Foam", "Head of Growth of Ramp" is not one (its "of" is the title's own) */
+const LEAD_OF =
+  /^((?:(?:co-?)?founder|ceo|cto|coo|cfo|cpo|cmo|president|chair(?:man|woman|person)?|managing (?:director|partner)|general partner|partner|owner|principal)(?:\s*(?:&|and|,|\/)\s*(?:(?:co-?)?founder|ceo|cto|coo|cfo|cpo|president|chair))*)\s+of\s+(.+)$/i;
+/** A sentence's end: a full stop then a capital, never after a short form ("Sr. Product Manager", "(prev. JPM)") */
+const SENTENCE =
+  /(?<!\b(?:Sr|Jr|Snr|Dr|Mr|Mrs|Ms|St|Prof|Mgr|Asst|Assoc|Eng|Gen|Corp|Co|Inc|Ltd|No|vs|prev|Prev|ex|Ex|approx|U\.S|e\.g|i\.e))\.\s+(?=\p{Lu})/u;
 const NOT_NOW =
   /^(?:former(?:ly)?|ex[\s-]|ex$|previously|prev\.?|past|retired|incoming|future|soon[\s-]to[\s-]be|aspiring|seeking|looking\s+for|open\s+to)\b/i;
 
@@ -18,9 +24,18 @@ export function roleFromHeadline(headline: string | undefined): {
   /** the first part names a past, future or wished-for role: nothing in it is where they are now */
   notCurrent?: true;
 } {
-  const first = headline?.trim().split(PARTS)[0]?.trim();
+  // the role is the first part, and only its first sentence ("CEO of Pond AI. A platform with 7K builders")
+  const first = headline?.trim().split(PARTS)[0]?.split(SENTENCE)[0]?.trim();
   if (!first) return {};
   if (NOT_NOW.test(first)) return { notCurrent: true };
+  const lead = LEAD_OF.exec(first);
+  if (lead) {
+    const org = lead[2]!
+      .split(/\s*[,;]\s+/)[0]!
+      .replace(/[.,;!]+$/, '')
+      .trim();
+    if (org && org.length <= 60) return { title: lead[1]!.trim(), org };
+  }
   const m = AT.exec(first);
   if (!m) return { title: first.length <= 80 ? first : undefined };
   const title = (m[1] ?? m[3])!.trim().replace(/[,;]$/, '');

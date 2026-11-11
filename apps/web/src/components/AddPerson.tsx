@@ -6,6 +6,7 @@ import { suggestCompanies } from '../data/companies';
 import { db } from '../db/schema';
 import { addLinkedInFound, type FoundView, lookUpLinkedInPeople } from '../engine/linkedinSearch';
 import { addPersonByHand } from '../engine/people';
+import { addToPipeline } from '../engine/pipelineAdd';
 import { useSession } from '../state/session';
 import { Avatar, Button, cx, Input, Label, Modal, Spinner, useToast } from '../ui';
 import { Suggest } from '../ui/Suggest';
@@ -13,7 +14,8 @@ import { EmailTypoHint } from './EmailTypoHint';
 
 /**
  * "Add a person": the way into Orbit that needs no Google and no LinkedIn export. The student types who they want to
- * talk to; Orbit opens that person's page, where "Write to ..." drafts the first message.
+ * talk to and picks them (someone already in Orbit, someone on LinkedIn, or typed in by hand): they go on the
+ * pipeline at "To contact", the student stays where they are, and the toast offers Write to them and Open pipeline.
  */
 export function AddPersonButton({
   label = 'Add a person',
@@ -145,18 +147,26 @@ export function AddPersonDialog({
   useEffect(() => setActive(0), [q]);
   if (!user) return null;
 
-  const done = (personId: string, text: string) => {
+  const done = async (personId: string, name?: string) => {
     onClose();
     if (onAdded) {
       onAdded(personId);
-      toast.push({ text, tone: 'good' });
       return;
     }
-    toast.push({ text, tone: 'good', ttl: 5000 });
-    nav(`/people/${personId}`);
+    // every pick goes on the pipeline at To contact; someone already on it keeps their card
+    const r = await addToPipeline(user, personId, { reason: 'add_person' });
+    const first = (name ?? 'them').split(/\s+/)[0];
+    toast.push({
+      text: r?.added
+        ? `Added ${name ?? 'them'} to your pipeline, under To contact.`
+        : `${name ?? 'They'} ${r ? 'is already on your pipeline' : 'is in Orbit'}.`,
+      tone: 'good',
+      ttl: 8000,
+      action: { label: `Open ${first}`, onClick: () => nav(`/people/${personId}`) },
+    });
   };
   const pick = async (o: Option) => {
-    if (o.kind === 'mine') return done(o.person.id, `${o.person.displayName} is already in Orbit.`);
+    if (o.kind === 'mine') return done(o.person.id, o.person.displayName);
     setAdding(o.found.id);
     try {
       const r = await addLinkedInFound(user, [o.found.id]);
@@ -164,7 +174,7 @@ export function AddPersonDialog({
         toast.push({ text: r.ok ? 'Could not add them just now.' : r.message, tone: 'bad' });
         return;
       }
-      done(r.people[0].id, `Added ${r.people[0].displayName}. Write to them when you're ready.`);
+      await done(r.people[0].id, r.people[0].displayName);
     } finally {
       setAdding(undefined);
     }
@@ -269,9 +279,7 @@ export function AddPersonDialog({
                     {adding === row.key ? (
                       <Spinner />
                     ) : (
-                      <span className="shrink-0 text-[12px] text-ink-3">
-                        {o.kind === 'mine' ? 'Open' : 'Add'}
-                      </span>
+                      <span className="shrink-0 text-[12px] text-ink-3">Add to pipeline</span>
                     )}
                   </button>
                 </div>
@@ -354,7 +362,7 @@ function ByHand({
   initialName: string;
   company?: string;
   onCancel: () => void;
-  onDone: (personId: string, text: string) => void;
+  onDone: (personId: string, name: string) => void;
 }) {
   const [f, setF] = useState({
     name: initialName.trim(),
@@ -376,12 +384,7 @@ function ByHand({
     try {
       const r = await addPersonByHand(userId, f, school);
       if (!r) return setError('Add their name first.');
-      onDone(
-        r.person.id,
-        r.created
-          ? `Added ${r.person.displayName}. Write to them when you're ready.`
-          : `${r.person.displayName} was already in Orbit, so their details were updated.`,
-      );
+      onDone(r.person.id, r.person.displayName);
     } finally {
       setBusy(false);
     }
