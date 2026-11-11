@@ -70,7 +70,8 @@ export function internalHrefOf(anchor: HTMLAnchorElement): string | undefined {
   try {
     const u = new URL(raw, window.location.href);
     if (u.origin !== window.location.origin) return undefined;
-    path = u.pathname + u.search;
+    // the hash stays: it names the spot on the page (a setting to scroll to and light up)
+    path = u.pathname + u.search + u.hash;
   } catch {
     return undefined;
   }

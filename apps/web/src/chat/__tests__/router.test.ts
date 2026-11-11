@@ -258,7 +258,7 @@ const HANDLED: [string, string, Record<string, unknown>][] = [
 
 /** utterance, expected href */
 const POINTERS: [string, string][] = [
-  ['where do I change my tone', '/settings/style'],
+  ['where are my preferences for the app', '/settings'],
   ['settings', '/settings'],
   ["what's my daily limit", '/settings/limits'],
   ['add a note', '/notes/new'],

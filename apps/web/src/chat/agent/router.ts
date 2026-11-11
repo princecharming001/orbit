@@ -2,6 +2,7 @@ import type { ChatStage, MessageKind } from '@orbit/core';
 import { findPlaybookSection, mayHoldFacts } from '@orbit/core';
 import { flagOffInCode } from '../../engine/flags';
 import { isJobBoardLink, linkIn, saysApplying } from '../../integrations/postings';
+import { findSetting, settingAsked } from '../settingsMap';
 import type { ChoiceOption, ToolSpec } from '../types';
 import { type MatchablePerson, resolvePerson } from './people-match';
 import { followUp, resolveReferences } from './routerFollowUp';
@@ -1510,6 +1511,16 @@ function routeInner(raw: string, ctx: RouterContext): RouterIntent {
     if (r) return r;
   }
 
+  // a setting to change or find, when nothing above does it in the chat itself: a card with a button straight to
+  // that spot in Settings ("where do I add my resume", "change my tone", "connect Calendly")
+  {
+    // bringing LinkedIn connections in is its own flow, just below
+    const importing = /linkedin/i.test(lower) && /\b(import|export|upload|csv|zip|load)\b/i.test(lower);
+    const spot = importing ? undefined : settingAsked(text);
+    if (spot && has('open_page'))
+      return viaTool('open_page', { page: 'settings', setting: spot.id }, undefined, `open ${spot.label}`);
+  }
+
   // LinkedIn import
   if (/linkedin/i.test(lower) && /\b(import|export|upload|connections|csv|zip|load|add)\b/i.test(lower)) {
     if (has('show_setup'))
@@ -1550,6 +1561,10 @@ function routeInner(raw: string, ctx: RouterContext): RouterIntent {
       lower,
     )
   ) {
+    // the one setting they named gets its card, straight to that spot; a broader word gets the section
+    const spot = findSetting(text);
+    if (spot && has('open_page'))
+      return viaTool('open_page', { page: 'settings', setting: spot.id }, undefined, `open ${spot.label}`);
     const topic = SETTINGS_TOPICS.find((t) => t.re.test(lower));
     return topic
       ? { kind: 'text', text: topic.text, href: `/settings/${topic.section}` }
@@ -1565,8 +1580,12 @@ function routeInner(raw: string, ctx: RouterContext): RouterIntent {
       topic &&
       /\b(how|where|what|which|is|are|do|does|can|my)\b/i.test(lower) &&
       !/\b(who|draft|note|move)\b/i.test(lower)
-    )
+    ) {
+      const spot = settingAsked(text);
+      if (spot && has('open_page'))
+        return viaTool('open_page', { page: 'settings', setting: spot.id }, undefined, `open ${spot.label}`);
       return { kind: 'text', text: topic.text, href: `/settings/${topic.section}` };
+    }
   }
 
   // find or open a person by name

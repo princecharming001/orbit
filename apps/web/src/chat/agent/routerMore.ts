@@ -1,4 +1,5 @@
 import type { ChatStage, MessageKind } from '@orbit/core';
+import { findSetting } from '../settingsMap';
 import type { ChoiceOption } from '../types';
 import { type MatchablePerson, resolvePerson } from './people-match';
 import type { RouterContext, RouterIntent } from './router';
@@ -2146,6 +2147,17 @@ export function routeMore(
           undefined,
           'remove your scheduling link',
         );
+      // connecting reads the event types from the booking page: the card goes straight to that row
+      {
+        const spot = findSetting(text);
+        if (spot)
+          return h.viaTool(
+            'open_page',
+            { page: 'settings', setting: spot.id },
+            undefined,
+            `open ${spot.label}`,
+          );
+      }
       return {
         kind: 'text',
         text: 'What is the link? Paste it like: my Calendly is https://calendly.com/you/20min.',

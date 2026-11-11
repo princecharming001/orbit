@@ -28,6 +28,8 @@ export type ResultKind =
   | 'facts'
   | 'company'
   | 'settings'
+  /** one setting and the way straight to it: data `{ id, label, section, what, now?, href }` (settingsMap.ts) */
+  | 'setting'
   | 'import'
   | 'prep'
   /** a plan from a job posting (plan 23 §4.1): data `{ planId }`, drawn live from the stored plan */

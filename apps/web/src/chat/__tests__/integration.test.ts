@@ -150,7 +150,7 @@ const REQUESTS: [string, string, Expect][] = [
   ['settings', 'add Evercore to my target companies', { tool: 'manage_target_company', kinds: ['settings'] }],
   ['settings', 'turn on claude notes', { tool: 'set_llm_feature', kinds: ['needs_confirmation'] }],
   ['settings', 'export my data', { tool: 'export_data', kinds: ['needs_confirmation'] }],
-  ['settings', 'where do I change my tone', { href: '/settings/style' }],
+  ['settings', 'where do I change my tone', { tool: 'open_page', kinds: ['setting'] }],
   // 10 onboarding, 11 demo
   ['demo', 'load the demo', { tool: 'load_demo', kinds: ['needs_confirmation'] }],
   ['demo', 'delete all my data', { tool: 'delete_all_data', kinds: ['needs_confirmation'] }],

@@ -148,6 +148,16 @@ const CASES: Case[] = [
   },
   { id: 'ctx08', group: 'Context', turns: ['who have I not answered yet', 'draft a reply to the first one'] },
   { id: 'ctx09', group: 'Context', turns: ['who did I message last and did they write back'] },
+  // a setting to change or find gets a card with one button straight to it
+  { id: 'set01', group: 'Settings', turns: ['where do I add my resume'] },
+  {
+    id: 'set02',
+    group: 'Settings',
+    turns: ['I want my messages to sound less formal, where do I change that'],
+  },
+  { id: 'set03', group: 'Settings', turns: ['I use Granola for my calls, can Orbit use it'] },
+  { id: 'set04', group: 'Settings', turns: ['how do I let people book time with me'] },
+  { id: 'set05', group: 'Settings', turns: ['change how many people I reach out to each week'] },
   // plan 37: a name that fits two companies or several people asks first; a tap finishes the ask
   { id: 'c01', group: 'Ask before guessing', turns: ['who do I know at Juniper', 'tap:Juniper Health'] },
   { id: 'c02', group: 'Ask before guessing', turns: ['draft a thank you to Keiko', 'tap:'] },

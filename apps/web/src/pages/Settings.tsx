@@ -33,7 +33,8 @@ import {
   Users,
 } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
-import { Navigate, NavLink, useNavigate, useParams } from 'react-router-dom';
+import { Navigate, NavLink, useLocation, useNavigate, useParams } from 'react-router-dom';
+import { settingById } from '../chat/settingsMap';
 import { AccountSection, MemorySection, OutreachSection } from '../components/account/AccountSettings';
 import { keepLinkedInPick, linkedInCompanySuggestions } from '../components/CompanyChooser';
 import { CompanyLogo } from '../components/CompanyLogo';
@@ -182,9 +183,47 @@ const SECTION_ALIASES: Record<string, string> = {
   google: 'integrations',
 };
 
+/**
+ * A link from the chat lands on one setting (`/settings/integrations#resume`): once that spot is on the page it is
+ * scrolled into the middle and lit for a moment, and a field takes the cursor, so the student never hunts for it.
+ */
+function useSettingFocus(section: string) {
+  const { hash } = useLocation();
+  useEffect(() => {
+    const spot = settingById(decodeURIComponent(hash.replace(/^#/, '')));
+    if (!spot?.target || spot.section !== section) return;
+    let tries = 0;
+    let lit: Element | undefined;
+    let clear: ReturnType<typeof setTimeout> | undefined;
+    // the section draws after its data loads: look until it is there, for a few seconds
+    const look = setInterval(() => {
+      const el = document.querySelector(spot.target!);
+      if (!el && ++tries < 40) return;
+      clearInterval(look);
+      if (!el) return;
+      lit = el;
+      el.scrollIntoView({ block: 'center', behavior: 'smooth' });
+      el.setAttribute('data-setting-flash', spot.id);
+      if (
+        el instanceof HTMLInputElement ||
+        el instanceof HTMLTextAreaElement ||
+        el instanceof HTMLSelectElement
+      )
+        el.focus({ preventScroll: true });
+      clear = setTimeout(() => el.removeAttribute('data-setting-flash'), 2600);
+    }, 100);
+    return () => {
+      clearInterval(look);
+      if (clear) clearTimeout(clear);
+      lit?.removeAttribute('data-setting-flash');
+    };
+  }, [hash, section]);
+}
+
 export function SettingsPage() {
   const { section = 'profile' } = useParams();
   const nav = useNavigate();
+  useSettingFocus(section);
   const SECTIONS = sections();
   // the owner's cost view (plan 34 E3) is not listed: it opens at /settings/costs in account mode
   const hidden = section === 'costs' && isAccountMode();
@@ -762,6 +801,7 @@ function GoalsForm({ goals, tcs }: { goals: UserGoals; tcs: TargetCompany[] }) {
         </SettingsCard>
         <OwnWordsSection goals={goals} />
         <SettingsCard
+          id="target-companies"
           title="Target companies"
           description={
             tcs.length
@@ -1202,6 +1242,7 @@ function ResumeRow({ user, resume }: { user: User; resume?: Resume }) {
   const used = (facets ?? []).filter((f) => !f.excluded).length;
   return (
     <IntegrationRow
+      testId="settings-resume"
       mark={
         <AppMark>
           <FileText size={15} />
@@ -1748,7 +1789,7 @@ function Privacy() {
             }
           />
         </SettingsCard>
-        <SettingsCard title="Danger zone" tone="danger">
+        <SettingsCard id="danger-zone" title="Danger zone" tone="danger">
           <DemoResetRow />
           <SettingsRow
             label="Delete all data"

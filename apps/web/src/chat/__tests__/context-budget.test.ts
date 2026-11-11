@@ -130,7 +130,8 @@ describe('the tools loaded up front (plan 35 A1)', () => {
     note('whole tool list (chars)', JSON.stringify(all).length);
     expect(loaded.map((t) => t.name).sort()).toEqual([...CORE_TOOLS].sort());
     // 30k, plus search_chats (plan 39): a student who says "last time" must never wait on a tool search to be heard
-    expect(loadedChars).toBeLessThan(30_300);
+    // and open_page names every setting it can go straight to (settingsMap.ts)
+    expect(loadedChars).toBeLessThan(30_900);
     expect(deferred.length).toBeGreaterThanOrEqual(80);
     expect(deferred.every((t) => t.cache_control === undefined)).toBe(true);
   });

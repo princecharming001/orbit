@@ -23,6 +23,7 @@ import {
   Copy,
   Download,
   Map as MapIcon,
+  SlidersHorizontal,
   TriangleAlert,
 } from 'lucide-react';
 import { Fragment as Frag, type ReactNode, useContext, useMemo, useState } from 'react';
@@ -205,6 +206,8 @@ function Envelope({ env, block, actions }: { env: ResultEnvelope; block: ToolBlo
       return <CompanyCard env={env} actions={actions} />;
     case 'settings':
       return <SettingsCard env={env} />;
+    case 'setting':
+      return <SettingLinkCard env={env} />;
     case 'import':
       return <ImportCard env={env} actions={actions} />;
     case 'prep':
@@ -1534,6 +1537,53 @@ function SettingsCard({ env }: { env: ResultEnvelope }) {
       </dl>
       {fold.more}
     </GlassCard>
+  );
+}
+
+/**
+ * One setting and the way straight to it: what it is, what it holds now, and a single button that opens Settings at
+ * that exact spot (the page scrolls to it and lights it up).
+ */
+function SettingLinkCard({ env }: { env: ResultEnvelope }) {
+  const d = (unpack(env.data) ?? {}) as {
+    id?: string;
+    label?: string;
+    section?: string;
+    what?: string;
+    now?: string;
+    href?: string;
+  };
+  if (!d.label || !d.href) return <Summary env={env} />;
+  return (
+    <div
+      className="my-3 flex flex-wrap items-center gap-x-4 gap-y-2.5 border-y border-line py-3 text-[13.5px]"
+      data-testid="result-setting"
+      data-setting={d.id}
+    >
+      <span
+        className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-canvas-2 text-ink-2"
+        aria-hidden
+      >
+        <SlidersHorizontal size={15} />
+      </span>
+      <div className="min-w-0 flex-1 basis-56">
+        <div className="flex flex-wrap items-baseline gap-x-2">
+          <span className="font-semibold text-ink">{d.label}</span>
+          <span className="text-[12px] text-ink-3">Settings · {d.section}</span>
+        </div>
+        <div className="text-[12.5px] leading-[1.45] text-ink-3">
+          {d.now ? <span className="text-ink-2">{d.now}. </span> : null}
+          {d.what}
+        </div>
+      </div>
+      <Link
+        to={d.href}
+        className="inline-flex h-8 shrink-0 items-center gap-1 rounded-full bg-ink px-3.5 text-[12.5px] font-medium text-canvas hover:opacity-90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
+        data-testid="setting-open"
+      >
+        Open {d.label} <ArrowUpRight size={13} aria-hidden />
+      </Link>
+    </div>
   );
 }
 

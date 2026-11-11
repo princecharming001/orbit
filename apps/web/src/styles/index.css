@@ -767,3 +767,30 @@ input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):not([type="
 .settings-flat [data-select-box] > button {
   padding-left: 0 !important;
 }
+
+/* A setting the chat sent the student to: lit for a moment, then quiet again. */
+@keyframes setting-flash {
+  0% {
+    box-shadow: 0 0 0 0 color-mix(in srgb, var(--color-accent) 0%, transparent);
+    background-color: transparent;
+  }
+  18% {
+    box-shadow: 0 0 0 6px color-mix(in srgb, var(--color-accent) 22%, transparent);
+    background-color: color-mix(in srgb, var(--color-accent) 7%, transparent);
+  }
+  100% {
+    box-shadow: 0 0 0 6px color-mix(in srgb, var(--color-accent) 0%, transparent);
+    background-color: transparent;
+  }
+}
+[data-setting-flash] {
+  border-radius: 6px;
+  animation: setting-flash 2.4s ease-out 1;
+}
+@media (prefers-reduced-motion: reduce) {
+  [data-setting-flash] {
+    animation: none;
+    outline: 2px solid color-mix(in srgb, var(--color-accent) 45%, transparent);
+    outline-offset: 4px;
+  }
+}

@@ -88,6 +88,7 @@ import { sharedClaudeAvailable } from '../../integrations/shared-claude';
 import { stepAddress } from '../../pages/onboardingSteps';
 import { z } from '../../zod';
 import { clarifyResult, resolutionTerm } from '../clarify';
+import { SECTION_NAMES, SETTING_IDS, settingById, settingHref } from '../settingsMap';
 import type { ResultEnvelope, ToolContext } from '../types';
 import {
   type AnyTool,
@@ -2073,11 +2074,41 @@ const PAGES = {
   pipeline: '/people?view=board',
 } as const;
 
+/** What a setting holds right now, in a few words, where Orbit can say ("No resume yet", "Connected"). */
+async function settingNow(userId: string, id: string): Promise<string | undefined> {
+  if (id === 'resume') {
+    const all = await db.resumes.where('userId').equals(userId).toArray();
+    const r = all.find((x) => x.isCurrent) ?? all.sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0];
+    return r ? `On file: ${r.filename}` : 'No resume yet';
+  }
+  const provider: Record<string, string[]> = {
+    calendly: ['calendly'],
+    calcom: ['calcom'],
+    fathom: ['fathom'],
+    granola: ['granola'],
+    fireflies: ['fireflies'],
+    wispr: ['wispr'],
+    linkedin: ['linkedin_live', 'linkedin_csv'],
+    google: ['google'],
+    notetaker: ['fathom', 'granola', 'fireflies', 'wispr'],
+  };
+  if (provider[id]) {
+    const rows = await db.integrations.where('userId').equals(userId).toArray();
+    const on = rows.some((i) => provider[id]!.includes(i.provider) && i.status !== 'revoked');
+    return on ? 'Connected' : 'Not connected yet';
+  }
+  if (id === 'booking-link') {
+    const link = (await db.settings.get(userId))?.schedulingLink;
+    return link ? `Now ${link.replace(/^https?:\/\//, '')}` : 'No link yet';
+  }
+  return undefined;
+}
+
 export const openPage = defineTool({
   name: 'open_page',
   kind: 'read',
   description:
-    'Call this when the student asks to go to, open or show a page of the app (People with its board, list and companies views, a person, a company, the Map, reach mode, Discover, Drafts, Add note, a Settings section, the landing page), or to change a view the page itself holds (a People view, a Map filter). Returns the in-app link the UI offers as "Open in app"; nothing else changes.',
+    'Call this when the student wants to change, add, connect or find a setting (pass `setting`), or asks to go to, open or show a page of the app (People with its board, list and companies views, a person, a company, the Map, reach mode, Discover, Drafts, Add note, a Settings section, the landing page), or to change a view the page itself holds (a People view, a Map filter). Returns the in-app link the UI offers as "Open in app"; nothing else changes.',
   input: z.object({
     page: z.enum(Object.keys(PAGES) as [keyof typeof PAGES, ...(keyof typeof PAGES)[]]).describe('The page.'),
     id: z.string().optional().describe('The person or organization id for a person or company page.'),
@@ -2099,10 +2130,17 @@ export const openPage = defineTool({
       ),
     cardId: z.string().optional().describe('Drafts focused on this card.'),
     company: z.string().optional().describe('Map reach mode for this company name.'),
+    setting: z
+      .enum(SETTING_IDS)
+      .optional()
+      .describe('One setting, as a card with a button straight to it (page is then ignored).'),
   }),
   capabilities: [
     'nav_go',
     'settings_section_nav',
+    // a setting named without its new value goes to the card for it
+    'limits_scheduling_link',
+    'onboarding_prefs',
     'pipeline_view_switch',
     'map_filter',
     'map_find_path_button',
@@ -2116,7 +2154,27 @@ export const openPage = defineTool({
     'landing_get_started',
   ],
   progress: 'Opening the page',
-  async execute(input) {
+  async execute(input, ctx) {
+    const spot = settingById(input.setting);
+    if (spot) {
+      const href = settingHref(spot);
+      const now = await settingNow(ctx.user.id, spot.id).catch(() => undefined);
+      const data = {
+        id: spot.id,
+        label: spot.label,
+        section: SECTION_NAMES[spot.section],
+        what: spot.what,
+        now,
+        href,
+      };
+      return ok(
+        'setting',
+        data,
+        data,
+        `${spot.label} is in Settings, ${SECTION_NAMES[spot.section]}.${now ? ` ${now}.` : ''} The card has the button.`,
+        href,
+      );
+    }
     let href: string = PAGES[input.page];
     if (input.page === 'person')
       href = `/people/${input.id ?? input.personId ?? ''}${input.tab ? `?tab=${input.tab}` : ''}`;
