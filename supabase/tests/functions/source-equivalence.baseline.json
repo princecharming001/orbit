@@ -15,10 +15,7 @@
         "fit": 0.77,
         "reach": 0.72,
         "responsiveness": 0.475,
-        "reasons": [
-          "You've talked with Ben before",
-          "Ben Park designs products"
-        ],
+        "reasons": ["You've talked with Ben before", "Ben Park designs products"],
         "knownPersonId": "known"
       },
       {
@@ -62,10 +59,7 @@
         "fit": 0.88,
         "reach": 0,
         "responsiveness": 0.475,
-        "reasons": [
-          "Lia is close to you and also at Plaid, so ask for an intro",
-          "Gus Diaz designs products"
-        ]
+        "reasons": ["Lia is close to you and also at Plaid, so ask for an intro", "Gus Diaz designs products"]
       },
       {
         "name": "Jia Novak",
@@ -84,10 +78,7 @@
         "fit": 0.87,
         "reach": 0,
         "responsiveness": 0.475,
-        "reasons": [
-          "Ben is close to you and also at Ramp, so ask for an intro",
-          "Jia Novak designs products"
-        ]
+        "reasons": ["Ben is close to you and also at Ramp, so ask for an intro", "Jia Novak designs products"]
       },
       {
         "name": "Ivo Shah 28",
@@ -330,9 +321,7 @@
         "fit": 0.99,
         "reach": 0,
         "responsiveness": 0.475,
-        "reasons": [
-          "Jia Ito 19 designs products"
-        ]
+        "reasons": ["Jia Ito 19 designs products"]
       },
       {
         "name": "Eli Shah 14",
@@ -370,9 +359,7 @@
         "fit": 0.97,
         "reach": 0,
         "responsiveness": 0.475,
-        "reasons": [
-          "Hana Shah designs products"
-        ]
+        "reasons": ["Hana Shah designs products"]
       },
       {
         "name": "Hana Diaz 27",
@@ -387,9 +374,7 @@
         "fit": 0.94,
         "reach": 0,
         "responsiveness": 0.475,
-        "reasons": [
-          "Hana Diaz 27 designs products"
-        ]
+        "reasons": ["Hana Diaz 27 designs products"]
       },
       {
         "name": "Dev Chen",
@@ -404,9 +389,7 @@
         "fit": 0.9,
         "reach": 0,
         "responsiveness": 0.475,
-        "reasons": [
-          "Dev Chen designs products"
-        ]
+        "reasons": ["Dev Chen designs products"]
       },
       {
         "name": "Eli Chen 24",
@@ -444,9 +427,7 @@
         "fit": 0.66,
         "reach": 0,
         "responsiveness": 0.475,
-        "reasons": [
-          "Fay Park 15 designs products"
-        ]
+        "reasons": ["Fay Park 15 designs products"]
       },
       {
         "name": "Fay Ito",
@@ -465,10 +446,7 @@
         "fit": 0.11,
         "reach": 0,
         "responsiveness": 0.475,
-        "reasons": [
-          "Ben is close to you and also at Ramp, so ask for an intro",
-          "Fay Ito designs products"
-        ]
+        "reasons": ["Ben is close to you and also at Ramp, so ask for an intro", "Fay Ito designs products"]
       },
       {
         "name": "Dev Diaz 13",
@@ -538,9 +516,7 @@
         ]
       }
     ],
-    "unconfigured": [
-      "web"
-    ],
+    "unconfigured": ["web"],
     "relaxed": []
   },
   "stored": [
@@ -556,9 +532,7 @@
           "tier": 1
         },
         "domains": [],
-        "sources": [
-          "unipile"
-        ],
+        "sources": ["unipile"],
         "headline": "Product Designer at Ramp",
         "lastName": "Park",
         "location": "San Francisco Bay Area",
@@ -576,10 +550,7 @@
       "fit": 0.77,
       "reach": 0.72,
       "responsiveness": 0.475,
-      "reasons": [
-        "You've talked with Ben before",
-        "Ben Park designs products"
-      ],
+      "reasons": ["You've talked with Ben before", "Ben Park designs products"],
       "status": "new"
     },
     {
@@ -598,12 +569,8 @@
             "personId": "bridge"
           }
         },
-        "domains": [
-          "stripe.com"
-        ],
-        "sources": [
-          "unipile"
-        ],
+        "domains": ["stripe.com"],
+        "sources": ["unipile"],
         "headline": "Design Lead at Stripe",
         "lastName": "Okafor",
         "location": "San Francisco Bay Area",
@@ -644,12 +611,8 @@
             "personId": "bridge"
           }
         },
-        "domains": [
-          "plaid.com"
-        ],
-        "sources": [
-          "unipile"
-        ],
+        "domains": ["plaid.com"],
+        "sources": ["unipile"],
         "headline": "Design Lead at Plaid",
         "lastName": "Diaz",
         "location": "San Francisco Bay Area",
@@ -668,10 +631,7 @@
       "fit": 0.88,
       "reach": 0,
       "responsiveness": 0.475,
-      "reasons": [
-        "Lia is close to you and also at Plaid, so ask for an intro",
-        "Gus Diaz designs products"
-      ],
+      "reasons": ["Lia is close to you and also at Plaid, so ask for an intro", "Gus Diaz designs products"],
       "status": "new"
     },
     {
@@ -690,9 +650,7 @@
           }
         },
         "domains": [],
-        "sources": [
-          "unipile"
-        ],
+        "sources": ["unipile"],
         "headline": "Product Designer at Ramp",
         "lastName": "Novak",
         "location": "San Francisco Bay Area",
@@ -710,10 +668,7 @@
       "fit": 0.87,
       "reach": 0,
       "responsiveness": 0.475,
-      "reasons": [
-        "Ben is close to you and also at Ramp, so ask for an intro",
-        "Jia Novak designs products"
-      ],
+      "reasons": ["Ben is close to you and also at Ramp, so ask for an intro", "Jia Novak designs products"],
       "status": "new"
     },
     {
@@ -732,12 +687,8 @@
             "personId": "bridge"
           }
         },
-        "domains": [
-          "stripe.com"
-        ],
-        "sources": [
-          "unipile"
-        ],
+        "domains": ["stripe.com"],
+        "sources": ["unipile"],
         "headline": "Design Lead at Stripe",
         "lastName": "Shah 28",
         "location": "San Francisco Bay Area",
@@ -778,12 +729,8 @@
             "personId": "bridge"
           }
         },
-        "domains": [
-          "plaid.com"
-        ],
-        "sources": [
-          "unipile"
-        ],
+        "domains": ["plaid.com"],
+        "sources": ["unipile"],
         "headline": "Design Lead at Plaid",
         "lastName": "Ito 26",
         "location": "San Francisco Bay Area",
@@ -824,9 +771,7 @@
           }
         },
         "domains": [],
-        "sources": [
-          "unipile"
-        ],
+        "sources": ["unipile"],
         "headline": "Product Designer at Ramp",
         "lastName": "Shah 21",
         "location": "San Francisco Bay Area",
@@ -866,9 +811,7 @@
           }
         },
         "domains": [],
-        "sources": [
-          "unipile"
-        ],
+        "sources": ["unipile"],
         "headline": "Product Designer at Ramp",
         "lastName": "Park 29",
         "location": "San Francisco Bay Area",
@@ -908,12 +851,8 @@
             "personId": "bridge"
           }
         },
-        "domains": [
-          "stripe.com"
-        ],
-        "sources": [
-          "unipile"
-        ],
+        "domains": ["stripe.com"],
+        "sources": ["unipile"],
         "headline": "Design Lead at Stripe",
         "lastName": "Shah",
         "location": "San Francisco Bay Area",
@@ -954,12 +893,8 @@
             "personId": "bridge"
           }
         },
-        "domains": [
-          "plaid.com"
-        ],
-        "sources": [
-          "unipile"
-        ],
+        "domains": ["plaid.com"],
+        "sources": ["unipile"],
         "headline": "Design Lead at Plaid",
         "lastName": "Chen 10",
         "location": "San Francisco Bay Area",
@@ -1000,12 +935,8 @@
             "personId": "bridge"
           }
         },
-        "domains": [
-          "stripe.com"
-        ],
-        "sources": [
-          "unipile"
-        ],
+        "domains": ["stripe.com"],
+        "sources": ["unipile"],
         "headline": "Design Lead at Stripe",
         "lastName": "Diaz 20",
         "location": "San Francisco Bay Area",
@@ -1046,12 +977,8 @@
             "personId": "bridge"
           }
         },
-        "domains": [
-          "stripe.com"
-        ],
-        "sources": [
-          "unipile"
-        ],
+        "domains": ["stripe.com"],
+        "sources": ["unipile"],
         "headline": "Design Lead at Stripe",
         "lastName": "Ito 12",
         "location": "San Francisco Bay Area",
@@ -1092,12 +1019,8 @@
             "personId": "bridge"
           }
         },
-        "domains": [
-          "stripe.com"
-        ],
-        "sources": [
-          "unipile"
-        ],
+        "domains": ["stripe.com"],
+        "sources": ["unipile"],
         "headline": "Design Lead at Stripe",
         "lastName": "Novak 16",
         "location": "San Francisco Bay Area",
@@ -1138,12 +1061,8 @@
             "personId": "bridge"
           }
         },
-        "domains": [
-          "stripe.com"
-        ],
-        "sources": [
-          "unipile"
-        ],
+        "domains": ["stripe.com"],
+        "sources": ["unipile"],
         "headline": "Design Lead at Stripe",
         "lastName": "Park",
         "location": "San Francisco Bay Area",
@@ -1179,9 +1098,7 @@
           "tier": 5
         },
         "domains": [],
-        "sources": [
-          "unipile"
-        ],
+        "sources": ["unipile"],
         "headline": "Product Designer at Notion",
         "lastName": "Ito 19",
         "location": "San Francisco Bay Area",
@@ -1199,9 +1116,7 @@
       "fit": 0.99,
       "reach": 0,
       "responsiveness": 0.475,
-      "reasons": [
-        "Jia Ito 19 designs products"
-      ],
+      "reasons": ["Jia Ito 19 designs products"],
       "status": "new"
     },
     {
@@ -1220,12 +1135,8 @@
             "personId": "bridge"
           }
         },
-        "domains": [
-          "plaid.com"
-        ],
-        "sources": [
-          "unipile"
-        ],
+        "domains": ["plaid.com"],
+        "sources": ["unipile"],
         "headline": "Design Lead at Plaid",
         "lastName": "Shah 14",
         "location": "San Francisco Bay Area",
@@ -1261,9 +1172,7 @@
           "tier": 5
         },
         "domains": [],
-        "sources": [
-          "unipile"
-        ],
+        "sources": ["unipile"],
         "headline": "Product Designer at Notion",
         "lastName": "Shah",
         "location": "San Francisco Bay Area",
@@ -1281,9 +1190,7 @@
       "fit": 0.97,
       "reach": 0,
       "responsiveness": 0.475,
-      "reasons": [
-        "Hana Shah designs products"
-      ],
+      "reasons": ["Hana Shah designs products"],
       "status": "new"
     },
     {
@@ -1297,9 +1204,7 @@
           "tier": 5
         },
         "domains": [],
-        "sources": [
-          "unipile"
-        ],
+        "sources": ["unipile"],
         "headline": "Product Designer at Notion",
         "lastName": "Diaz 27",
         "location": "San Francisco Bay Area",
@@ -1317,9 +1222,7 @@
       "fit": 0.94,
       "reach": 0,
       "responsiveness": 0.475,
-      "reasons": [
-        "Hana Diaz 27 designs products"
-      ],
+      "reasons": ["Hana Diaz 27 designs products"],
       "status": "new"
     },
     {
@@ -1333,9 +1236,7 @@
           "tier": 5
         },
         "domains": [],
-        "sources": [
-          "unipile"
-        ],
+        "sources": ["unipile"],
         "headline": "Product Designer at Notion",
         "lastName": "Chen",
         "location": "San Francisco Bay Area",
@@ -1353,9 +1254,7 @@
       "fit": 0.9,
       "reach": 0,
       "responsiveness": 0.475,
-      "reasons": [
-        "Dev Chen designs products"
-      ],
+      "reasons": ["Dev Chen designs products"],
       "status": "new"
     },
     {
@@ -1374,12 +1273,8 @@
             "personId": "bridge"
           }
         },
-        "domains": [
-          "stripe.com"
-        ],
-        "sources": [
-          "unipile"
-        ],
+        "domains": ["stripe.com"],
+        "sources": ["unipile"],
         "headline": "Design Lead at Stripe",
         "lastName": "Chen 24",
         "location": "San Francisco Bay Area",
@@ -1415,9 +1310,7 @@
           "tier": 5
         },
         "domains": [],
-        "sources": [
-          "unipile"
-        ],
+        "sources": ["unipile"],
         "headline": "Product Designer at Notion",
         "lastName": "Park 15",
         "location": "San Francisco Bay Area",
@@ -1435,9 +1328,7 @@
       "fit": 0.66,
       "reach": 0,
       "responsiveness": 0.475,
-      "reasons": [
-        "Fay Park 15 designs products"
-      ],
+      "reasons": ["Fay Park 15 designs products"],
       "status": "new"
     },
     {
@@ -1456,9 +1347,7 @@
           }
         },
         "domains": [],
-        "sources": [
-          "unipile"
-        ],
+        "sources": ["unipile"],
         "headline": "Product Designer at Ramp",
         "lastName": "Diaz 13",
         "location": "San Francisco Bay Area",
@@ -1498,9 +1387,7 @@
           }
         },
         "domains": [],
-        "sources": [
-          "unipile"
-        ],
+        "sources": ["unipile"],
         "headline": "Product Designer at Ramp",
         "lastName": "Chen 17",
         "location": "San Francisco Bay Area",
@@ -1540,12 +1427,8 @@
             "personId": "bridge"
           }
         },
-        "domains": [
-          "plaid.com"
-        ],
-        "sources": [
-          "unipile"
-        ],
+        "domains": ["plaid.com"],
+        "sources": ["unipile"],
         "headline": "Design Lead at Plaid",
         "lastName": "Okafor 18",
         "location": "San Francisco Bay Area",
@@ -1586,9 +1469,7 @@
           }
         },
         "domains": [],
-        "sources": [
-          "unipile"
-        ],
+        "sources": ["unipile"],
         "headline": "Product Designer at Ramp",
         "lastName": "Ito",
         "location": "San Francisco Bay Area",
@@ -1606,10 +1487,7 @@
       "fit": 0.11,
       "reach": 0,
       "responsiveness": 0.475,
-      "reasons": [
-        "Ben is close to you and also at Ramp, so ask for an intro",
-        "Fay Ito designs products"
-      ],
+      "reasons": ["Ben is close to you and also at Ramp, so ask for an intro", "Fay Ito designs products"],
       "status": "new"
     }
   ]

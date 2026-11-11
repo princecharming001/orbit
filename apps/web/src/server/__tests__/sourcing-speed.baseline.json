@@ -9,10 +9,7 @@
           "org": "Notion",
           "email": "hana@example.com",
           "warmth": null,
-          "sources": [
-            "apollo",
-            "unipile"
-          ],
+          "sources": ["apollo", "unipile"],
           "source": "unipile+apollo",
           "external_id": "ACoA7",
           "person_id": null,
@@ -20,9 +17,7 @@
           "fit": 0.92,
           "reach": 0.3,
           "responsiveness": 0.35,
-          "reasons": [
-            "Hana Reyes fits"
-          ]
+          "reasons": ["Hana Reyes fits"]
         },
         {
           "name": "Cara Haas li15",
@@ -30,9 +25,7 @@
           "org": "Vercel",
           "email": null,
           "warmth": null,
-          "sources": [
-            "unipile"
-          ],
+          "sources": ["unipile"],
           "source": "unipile",
           "external_id": "ACoA15",
           "person_id": null,
@@ -40,10 +33,7 @@
           "fit": 0.8,
           "reach": 0.3,
           "responsiveness": 0.49,
-          "reasons": [
-            "Cara Haas li15 fits",
-            "2nd-degree on LinkedIn"
-          ]
+          "reasons": ["Cara Haas li15 fits", "2nd-degree on LinkedIn"]
         },
         {
           "name": "Cara Haas ap15",
@@ -51,9 +41,7 @@
           "org": "Vercel",
           "email": null,
           "warmth": null,
-          "sources": [
-            "apollo"
-          ],
+          "sources": ["apollo"],
           "source": "apollo",
           "external_id": "ap_15",
           "person_id": null,
@@ -61,9 +49,7 @@
           "fit": 0.86,
           "reach": 0.3,
           "responsiveness": 0.34,
-          "reasons": [
-            "Cara Haas ap15 fits"
-          ]
+          "reasons": ["Cara Haas ap15 fits"]
         },
         {
           "name": "Dev Ito",
@@ -71,10 +57,7 @@
           "org": "Linear",
           "email": "dev@example.com",
           "warmth": null,
-          "sources": [
-            "apollo",
-            "unipile"
-          ],
+          "sources": ["apollo", "unipile"],
           "source": "unipile+apollo",
           "external_id": "ACoA3",
           "person_id": null,
@@ -82,10 +65,7 @@
           "fit": 0.92,
           "reach": 0.3,
           "responsiveness": 0.16,
-          "reasons": [
-            "Dev Ito fits",
-            "2nd-degree on LinkedIn"
-          ]
+          "reasons": ["Dev Ito fits", "2nd-degree on LinkedIn"]
         },
         {
           "name": "Fay Reyes li18",
@@ -93,9 +73,7 @@
           "org": "Figma",
           "email": "fay@example.com",
           "warmth": null,
-          "sources": [
-            "unipile"
-          ],
+          "sources": ["unipile"],
           "source": "unipile",
           "external_id": "ACoA18",
           "person_id": null,
@@ -103,10 +81,7 @@
           "fit": 0.97,
           "reach": 0.05,
           "responsiveness": 0.44,
-          "reasons": [
-            "Fay Reyes li18 fits",
-            "2nd-degree on LinkedIn"
-          ]
+          "reasons": ["Fay Reyes li18 fits", "2nd-degree on LinkedIn"]
         },
         {
           "name": "Eli Shah ap17",
@@ -114,9 +89,7 @@
           "org": "Linear",
           "email": "eli@example.com",
           "warmth": null,
-          "sources": [
-            "apollo"
-          ],
+          "sources": ["apollo"],
           "source": "apollo",
           "external_id": "ap_17",
           "person_id": null,
@@ -124,9 +97,7 @@
           "fit": 0.9,
           "reach": 0,
           "responsiveness": 0.59,
-          "reasons": [
-            "Eli Shah ap17 fits"
-          ]
+          "reasons": ["Eli Shah ap17 fits"]
         },
         {
           "name": "Ben Ito li14",
@@ -134,9 +105,7 @@
           "org": "Notion",
           "email": null,
           "warmth": null,
-          "sources": [
-            "unipile"
-          ],
+          "sources": ["unipile"],
           "source": "unipile",
           "external_id": "ACoA14",
           "person_id": null,
@@ -144,9 +113,7 @@
           "fit": 0.69,
           "reach": 0.3,
           "responsiveness": 0.5,
-          "reasons": [
-            "Ben Ito li14 fits"
-          ]
+          "reasons": ["Ben Ito li14 fits"]
         },
         {
           "name": "Jia Chen ap22",
@@ -154,9 +121,7 @@
           "org": "Vercel",
           "email": null,
           "warmth": null,
-          "sources": [
-            "apollo"
-          ],
+          "sources": ["apollo"],
           "source": "apollo",
           "external_id": "ap_22",
           "person_id": null,
@@ -164,9 +129,7 @@
           "fit": 0.76,
           "reach": 0,
           "responsiveness": 0.78,
-          "reasons": [
-            "Jia Chen ap22 fits"
-          ]
+          "reasons": ["Jia Chen ap22 fits"]
         },
         {
           "name": "Ivo Novak li21",
@@ -174,9 +137,7 @@
           "org": "Notion",
           "email": null,
           "warmth": null,
-          "sources": [
-            "unipile"
-          ],
+          "sources": ["unipile"],
           "source": "unipile",
           "external_id": "ACoA21",
           "person_id": null,
@@ -184,10 +145,7 @@
           "fit": 0.75,
           "reach": 0.05,
           "responsiveness": 0.7,
-          "reasons": [
-            "Ivo Novak li21 fits",
-            "2nd-degree on LinkedIn"
-          ]
+          "reasons": ["Ivo Novak li21 fits", "2nd-degree on LinkedIn"]
         },
         {
           "name": "Ivo Novak ap21",
@@ -195,9 +153,7 @@
           "org": "Notion",
           "email": null,
           "warmth": null,
-          "sources": [
-            "apollo"
-          ],
+          "sources": ["apollo"],
           "source": "apollo",
           "external_id": "ap_21",
           "person_id": null,
@@ -205,9 +161,7 @@
           "fit": 0.71,
           "reach": 0,
           "responsiveness": 0.78,
-          "reasons": [
-            "Ivo Novak ap21 fits"
-          ]
+          "reasons": ["Ivo Novak ap21 fits"]
         },
         {
           "name": "Max Ito li25",
@@ -215,9 +169,7 @@
           "org": "Figma",
           "email": null,
           "warmth": null,
-          "sources": [
-            "unipile"
-          ],
+          "sources": ["unipile"],
           "source": "unipile",
           "external_id": "ACoA25",
           "person_id": null,
@@ -225,9 +177,7 @@
           "fit": 0.62,
           "reach": 0.3,
           "responsiveness": 0.28,
-          "reasons": [
-            "Max Ito li25 fits"
-          ]
+          "reasons": ["Max Ito li25 fits"]
         },
         {
           "name": "Lea Chen",
@@ -235,10 +185,7 @@
           "org": "Figma",
           "email": null,
           "warmth": null,
-          "sources": [
-            "apollo",
-            "unipile"
-          ],
+          "sources": ["apollo", "unipile"],
           "source": "unipile+apollo",
           "external_id": "ACoA11",
           "person_id": null,
@@ -246,9 +193,7 @@
           "fit": 0.64,
           "reach": 0,
           "responsiveness": 0.63,
-          "reasons": [
-            "Lea Chen fits"
-          ]
+          "reasons": ["Lea Chen fits"]
         },
         {
           "name": "Ana Okafor ap13",
@@ -256,9 +201,7 @@
           "org": "Plaid",
           "email": "ana@example.com",
           "warmth": null,
-          "sources": [
-            "apollo"
-          ],
+          "sources": ["apollo"],
           "source": "apollo",
           "external_id": "ap_13",
           "person_id": null,
@@ -266,9 +209,7 @@
           "fit": 0.92,
           "reach": 0,
           "responsiveness": 0,
-          "reasons": [
-            "Ana Okafor ap13 fits"
-          ]
+          "reasons": ["Ana Okafor ap13 fits"]
         },
         {
           "name": "Fay Reyes ap18",
@@ -276,9 +217,7 @@
           "org": "Figma",
           "email": null,
           "warmth": null,
-          "sources": [
-            "apollo"
-          ],
+          "sources": ["apollo"],
           "source": "apollo",
           "external_id": "ap_18",
           "person_id": null,
@@ -286,9 +225,7 @@
           "fit": 0.89,
           "reach": 0,
           "responsiveness": 0.04,
-          "reasons": [
-            "Fay Reyes ap18 fits"
-          ]
+          "reasons": ["Fay Reyes ap18 fits"]
         },
         {
           "name": "Hana Sato li20",
@@ -296,9 +233,7 @@
           "org": "Plaid",
           "email": null,
           "warmth": null,
-          "sources": [
-            "unipile"
-          ],
+          "sources": ["unipile"],
           "source": "unipile",
           "external_id": "ACoA20",
           "person_id": null,
@@ -306,9 +241,7 @@
           "fit": 0.65,
           "reach": 0,
           "responsiveness": 0.53,
-          "reasons": [
-            "Hana Sato li20 fits"
-          ]
+          "reasons": ["Hana Sato li20 fits"]
         },
         {
           "name": "Gus Park ap19",
@@ -316,9 +249,7 @@
           "org": "Ramp",
           "email": null,
           "warmth": null,
-          "sources": [
-            "apollo"
-          ],
+          "sources": ["apollo"],
           "source": "apollo",
           "external_id": "ap_19",
           "person_id": null,
@@ -326,9 +257,7 @@
           "fit": 0.72,
           "reach": 0,
           "responsiveness": 0.32,
-          "reasons": [
-            "Gus Park ap19 fits"
-          ]
+          "reasons": ["Gus Park ap19 fits"]
         },
         {
           "name": "Eli Shah li17",
@@ -336,9 +265,7 @@
           "org": "Linear",
           "email": null,
           "warmth": null,
-          "sources": [
-            "unipile"
-          ],
+          "sources": ["unipile"],
           "source": "unipile",
           "external_id": "ACoA17",
           "person_id": null,
@@ -346,9 +273,7 @@
           "fit": 0.53,
           "reach": 0,
           "responsiveness": 0.72,
-          "reasons": [
-            "Eli Shah li17 fits"
-          ]
+          "reasons": ["Eli Shah li17 fits"]
         },
         {
           "name": "Lea Okafor ap24",
@@ -356,9 +281,7 @@
           "org": "Linear",
           "email": null,
           "warmth": null,
-          "sources": [
-            "apollo"
-          ],
+          "sources": ["apollo"],
           "source": "apollo",
           "external_id": "ap_24",
           "person_id": null,
@@ -366,9 +289,7 @@
           "fit": 0.43,
           "reach": 0,
           "responsiveness": 0.91,
-          "reasons": [
-            "Lea Okafor ap24 fits"
-          ]
+          "reasons": ["Lea Okafor ap24 fits"]
         },
         {
           "name": "Kai Novak",
@@ -376,10 +297,7 @@
           "org": "Linear",
           "email": null,
           "warmth": null,
-          "sources": [
-            "apollo",
-            "unipile"
-          ],
+          "sources": ["apollo", "unipile"],
           "source": "unipile+apollo",
           "external_id": "ACoA10",
           "person_id": null,
@@ -387,9 +305,7 @@
           "fit": 0.52,
           "reach": 0.3,
           "responsiveness": 0.14,
-          "reasons": [
-            "Kai Novak fits"
-          ]
+          "reasons": ["Kai Novak fits"]
         },
         {
           "name": "Kai Moreau ap23",
@@ -397,9 +313,7 @@
           "org": "Stripe",
           "email": null,
           "warmth": null,
-          "sources": [
-            "apollo"
-          ],
+          "sources": ["apollo"],
           "source": "apollo",
           "external_id": "ap_23",
           "person_id": null,
@@ -407,9 +321,7 @@
           "fit": 0.71,
           "reach": 0,
           "responsiveness": 0.21,
-          "reasons": [
-            "Kai Moreau ap23 fits"
-          ]
+          "reasons": ["Kai Moreau ap23 fits"]
         },
         {
           "name": "Ivo Park",
@@ -417,10 +329,7 @@
           "org": "Vercel",
           "email": null,
           "warmth": null,
-          "sources": [
-            "apollo",
-            "unipile"
-          ],
+          "sources": ["apollo", "unipile"],
           "source": "unipile+apollo",
           "external_id": "ACoA8",
           "person_id": null,
@@ -428,9 +337,7 @@
           "fit": 0.37,
           "reach": 0,
           "responsiveness": 0.96,
-          "reasons": [
-            "Ivo Park fits"
-          ]
+          "reasons": ["Ivo Park fits"]
         },
         {
           "name": "Cara Okafor",
@@ -438,10 +345,7 @@
           "org": "Stripe",
           "email": null,
           "warmth": null,
-          "sources": [
-            "apollo",
-            "unipile"
-          ],
+          "sources": ["apollo", "unipile"],
           "source": "unipile+apollo",
           "external_id": "ACoA2",
           "person_id": null,
@@ -449,9 +353,7 @@
           "fit": 0.48,
           "reach": 0,
           "responsiveness": 0.57,
-          "reasons": [
-            "Cara Okafor fits"
-          ]
+          "reasons": ["Cara Okafor fits"]
         },
         {
           "name": "Max Moreau",
@@ -459,10 +361,7 @@
           "org": "Ramp",
           "email": null,
           "warmth": null,
-          "sources": [
-            "apollo",
-            "unipile"
-          ],
+          "sources": ["apollo", "unipile"],
           "source": "unipile+apollo",
           "external_id": "ACoA12",
           "person_id": null,
@@ -470,10 +369,7 @@
           "fit": 0.57,
           "reach": 0.05,
           "responsiveness": 0.27,
-          "reasons": [
-            "Max Moreau fits",
-            "2nd-degree on LinkedIn"
-          ]
+          "reasons": ["Max Moreau fits", "2nd-degree on LinkedIn"]
         },
         {
           "name": "Hana Sato ap20",
@@ -481,9 +377,7 @@
           "org": "Plaid",
           "email": null,
           "warmth": null,
-          "sources": [
-            "apollo"
-          ],
+          "sources": ["apollo"],
           "source": "apollo",
           "external_id": "ap_20",
           "person_id": null,
@@ -491,9 +385,7 @@
           "fit": 0.4,
           "reach": 0,
           "responsiveness": 0.57,
-          "reasons": [
-            "Hana Sato ap20 fits"
-          ]
+          "reasons": ["Hana Sato ap20 fits"]
         },
         {
           "name": "Fay Diaz",
@@ -501,10 +393,7 @@
           "org": "Ramp",
           "email": null,
           "warmth": null,
-          "sources": [
-            "apollo",
-            "unipile"
-          ],
+          "sources": ["apollo", "unipile"],
           "source": "unipile+apollo",
           "external_id": "ACoA5",
           "person_id": null,
@@ -512,9 +401,7 @@
           "fit": 0.55,
           "reach": 0,
           "responsiveness": 0.22,
-          "reasons": [
-            "Fay Diaz fits"
-          ]
+          "reasons": ["Fay Diaz fits"]
         },
         {
           "name": "Ben Diaz li27",
@@ -522,9 +409,7 @@
           "org": "Plaid",
           "email": null,
           "warmth": null,
-          "sources": [
-            "unipile"
-          ],
+          "sources": ["unipile"],
           "source": "unipile",
           "external_id": "ACoA27",
           "person_id": null,
@@ -532,10 +417,7 @@
           "fit": 0.41,
           "reach": 0.05,
           "responsiveness": 0.34,
-          "reasons": [
-            "Ben Diaz li27 fits",
-            "2nd-degree on LinkedIn"
-          ]
+          "reasons": ["Ben Diaz li27 fits", "2nd-degree on LinkedIn"]
         },
         {
           "name": "Ana Haas li26",
@@ -543,9 +425,7 @@
           "org": "Ramp",
           "email": null,
           "warmth": null,
-          "sources": [
-            "unipile"
-          ],
+          "sources": ["unipile"],
           "source": "unipile",
           "external_id": "ACoA26",
           "person_id": null,
@@ -553,9 +433,7 @@
           "fit": 0.45,
           "reach": 0,
           "responsiveness": 0.29,
-          "reasons": [
-            "Ana Haas li26 fits"
-          ]
+          "reasons": ["Ana Haas li26 fits"]
         },
         {
           "name": "Gus Shah",
@@ -563,10 +441,7 @@
           "org": "Plaid",
           "email": null,
           "warmth": null,
-          "sources": [
-            "apollo",
-            "unipile"
-          ],
+          "sources": ["apollo", "unipile"],
           "source": "unipile+apollo",
           "external_id": "ACoA6",
           "person_id": null,
@@ -574,10 +449,7 @@
           "fit": 0.22,
           "reach": 0.05,
           "responsiveness": 0.69,
-          "reasons": [
-            "Gus Shah fits",
-            "2nd-degree on LinkedIn"
-          ]
+          "reasons": ["Gus Shah fits", "2nd-degree on LinkedIn"]
         },
         {
           "name": "Jia Chen li22",
@@ -585,9 +457,7 @@
           "org": "Vercel",
           "email": null,
           "warmth": null,
-          "sources": [
-            "unipile"
-          ],
+          "sources": ["unipile"],
           "source": "unipile",
           "external_id": "ACoA22",
           "person_id": null,
@@ -595,9 +465,7 @@
           "fit": 0.48,
           "reach": 0,
           "responsiveness": 0.17,
-          "reasons": [
-            "Jia Chen li22 fits"
-          ]
+          "reasons": ["Jia Chen li22 fits"]
         },
         {
           "name": "Cara Shah li28",
@@ -605,9 +473,7 @@
           "org": "Notion",
           "email": null,
           "warmth": null,
-          "sources": [
-            "unipile"
-          ],
+          "sources": ["unipile"],
           "source": "unipile",
           "external_id": "ACoA28",
           "person_id": null,
@@ -615,9 +481,7 @@
           "fit": 0.14,
           "reach": 0,
           "responsiveness": 0.85,
-          "reasons": [
-            "Cara Shah li28 fits"
-          ]
+          "reasons": ["Cara Shah li28 fits"]
         },
         {
           "name": "Ana Chen",
@@ -625,10 +489,7 @@
           "org": "Notion",
           "email": null,
           "warmth": null,
-          "sources": [
-            "apollo",
-            "unipile"
-          ],
+          "sources": ["apollo", "unipile"],
           "source": "unipile+apollo",
           "external_id": "ACoA0",
           "person_id": null,
@@ -636,10 +497,7 @@
           "fit": 0.1,
           "reach": 0.05,
           "responsiveness": 0.85,
-          "reasons": [
-            "Ana Chen fits",
-            "2nd-degree on LinkedIn"
-          ]
+          "reasons": ["Ana Chen fits", "2nd-degree on LinkedIn"]
         },
         {
           "name": "Ana Okafor li13",
@@ -647,9 +505,7 @@
           "org": "Plaid",
           "email": null,
           "warmth": null,
-          "sources": [
-            "unipile"
-          ],
+          "sources": ["unipile"],
           "source": "unipile",
           "external_id": "ACoA13",
           "person_id": null,
@@ -657,9 +513,7 @@
           "fit": 0.2,
           "reach": 0,
           "responsiveness": 0.71,
-          "reasons": [
-            "Ana Okafor li13 fits"
-          ]
+          "reasons": ["Ana Okafor li13 fits"]
         },
         {
           "name": "Ben Ito ap14",
@@ -667,9 +521,7 @@
           "org": "Notion",
           "email": null,
           "warmth": null,
-          "sources": [
-            "apollo"
-          ],
+          "sources": ["apollo"],
           "source": "apollo",
           "external_id": "ap_14",
           "person_id": null,
@@ -677,9 +529,7 @@
           "fit": 0.02,
           "reach": 0,
           "responsiveness": 0.89,
-          "reasons": [
-            "Ben Ito ap14 fits"
-          ]
+          "reasons": ["Ben Ito ap14 fits"]
         },
         {
           "name": "Dev Diaz ap16",
@@ -687,9 +537,7 @@
           "org": "Stripe",
           "email": null,
           "warmth": null,
-          "sources": [
-            "apollo"
-          ],
+          "sources": ["apollo"],
           "source": "apollo",
           "external_id": "ap_16",
           "person_id": null,
@@ -697,9 +545,7 @@
           "fit": 0.35,
           "reach": 0,
           "responsiveness": 0.14,
-          "reasons": [
-            "Dev Diaz ap16 fits"
-          ]
+          "reasons": ["Dev Diaz ap16 fits"]
         },
         {
           "name": "Eli Haas",
@@ -707,10 +553,7 @@
           "org": "Figma",
           "email": null,
           "warmth": null,
-          "sources": [
-            "apollo",
-            "unipile"
-          ],
+          "sources": ["apollo", "unipile"],
           "source": "unipile+apollo",
           "external_id": "ACoA4",
           "person_id": null,
@@ -718,9 +561,7 @@
           "fit": 0.17,
           "reach": 0,
           "responsiveness": 0.42,
-          "reasons": [
-            "Eli Haas fits"
-          ]
+          "reasons": ["Eli Haas fits"]
         },
         {
           "name": "Dev Diaz li16",
@@ -728,9 +569,7 @@
           "org": "Stripe",
           "email": null,
           "warmth": null,
-          "sources": [
-            "unipile"
-          ],
+          "sources": ["unipile"],
           "source": "unipile",
           "external_id": "ACoA16",
           "person_id": null,
@@ -738,9 +577,7 @@
           "fit": 0.2,
           "reach": 0,
           "responsiveness": 0.34,
-          "reasons": [
-            "Dev Diaz li16 fits"
-          ]
+          "reasons": ["Dev Diaz li16 fits"]
         },
         {
           "name": "Gus Park li19",
@@ -748,9 +585,7 @@
           "org": "Ramp",
           "email": null,
           "warmth": null,
-          "sources": [
-            "unipile"
-          ],
+          "sources": ["unipile"],
           "source": "unipile",
           "external_id": "ACoA19",
           "person_id": null,
@@ -758,9 +593,7 @@
           "fit": 0.15,
           "reach": 0,
           "responsiveness": 0.44,
-          "reasons": [
-            "Gus Park li19 fits"
-          ]
+          "reasons": ["Gus Park li19 fits"]
         },
         {
           "name": "Kai Moreau li23",
@@ -768,9 +601,7 @@
           "org": "Stripe",
           "email": null,
           "warmth": null,
-          "sources": [
-            "unipile"
-          ],
+          "sources": ["unipile"],
           "source": "unipile",
           "external_id": "ACoA23",
           "person_id": null,
@@ -778,9 +609,7 @@
           "fit": 0.09,
           "reach": 0,
           "responsiveness": 0.52,
-          "reasons": [
-            "Kai Moreau li23 fits"
-          ]
+          "reasons": ["Kai Moreau li23 fits"]
         },
         {
           "name": "Ben Moreau",
@@ -788,10 +617,7 @@
           "org": "Vercel",
           "email": null,
           "warmth": null,
-          "sources": [
-            "apollo",
-            "unipile"
-          ],
+          "sources": ["apollo", "unipile"],
           "source": "unipile+apollo",
           "external_id": "ACoA1",
           "person_id": null,
@@ -799,9 +625,7 @@
           "fit": 0.02,
           "reach": 0,
           "responsiveness": 0.44,
-          "reasons": [
-            "Ben Moreau fits"
-          ]
+          "reasons": ["Ben Moreau fits"]
         },
         {
           "name": "Dev Reyes li29",
@@ -809,9 +633,7 @@
           "org": "Vercel",
           "email": null,
           "warmth": null,
-          "sources": [
-            "unipile"
-          ],
+          "sources": ["unipile"],
           "source": "unipile",
           "external_id": "ACoA29",
           "person_id": null,
@@ -819,9 +641,7 @@
           "fit": 0.05,
           "reach": 0,
           "responsiveness": 0.16,
-          "reasons": [
-            "Dev Reyes li29 fits"
-          ]
+          "reasons": ["Dev Reyes li29 fits"]
         },
         {
           "name": "Jia Sato",
@@ -829,10 +649,7 @@
           "org": "Stripe",
           "email": null,
           "warmth": null,
-          "sources": [
-            "apollo",
-            "unipile"
-          ],
+          "sources": ["apollo", "unipile"],
           "source": "unipile+apollo",
           "external_id": "ACoA9",
           "person_id": null,
@@ -840,10 +657,7 @@
           "fit": 0,
           "reach": 0.05,
           "responsiveness": 0.15,
-          "reasons": [
-            "Jia Sato fits",
-            "2nd-degree on LinkedIn"
-          ]
+          "reasons": ["Jia Sato fits", "2nd-degree on LinkedIn"]
         },
         {
           "name": "Lea Okafor li24",
@@ -851,9 +665,7 @@
           "org": "Linear",
           "email": null,
           "warmth": null,
-          "sources": [
-            "unipile"
-          ],
+          "sources": ["unipile"],
           "source": "unipile",
           "external_id": "ACoA24",
           "person_id": null,
@@ -861,10 +673,7 @@
           "fit": 0.01,
           "reach": 0.05,
           "responsiveness": 0.1,
-          "reasons": [
-            "Lea Okafor li24 fits",
-            "2nd-degree on LinkedIn"
-          ]
+          "reasons": ["Lea Okafor li24 fits", "2nd-degree on LinkedIn"]
         }
       ],
       "unconfigured": [],
@@ -882,10 +691,7 @@
           "org": "Notion",
           "email": "hana@example.com",
           "warmth": null,
-          "sources": [
-            "exa",
-            "unipile"
-          ],
+          "sources": ["exa", "unipile"],
           "source": "unipile+exa",
           "external_id": "ACoA7",
           "person_id": null,
@@ -893,9 +699,7 @@
           "fit": 0.92,
           "reach": 0.3,
           "responsiveness": 0.35,
-          "reasons": [
-            "Hana Reyes fits"
-          ]
+          "reasons": ["Hana Reyes fits"]
         },
         {
           "name": "Cara Haas li15",
@@ -903,9 +707,7 @@
           "org": "Vercel",
           "email": "cara@example.com",
           "warmth": null,
-          "sources": [
-            "unipile"
-          ],
+          "sources": ["unipile"],
           "source": "unipile",
           "external_id": "ACoA15",
           "person_id": null,
@@ -913,10 +715,7 @@
           "fit": 0.8,
           "reach": 0.3,
           "responsiveness": 0.49,
-          "reasons": [
-            "Cara Haas li15 fits",
-            "2nd-degree on LinkedIn"
-          ]
+          "reasons": ["Cara Haas li15 fits", "2nd-degree on LinkedIn"]
         },
         {
           "name": "Dev Ito",
@@ -924,10 +723,7 @@
           "org": "Linear",
           "email": "dev@example.com",
           "warmth": null,
-          "sources": [
-            "exa",
-            "unipile"
-          ],
+          "sources": ["exa", "unipile"],
           "source": "unipile+exa",
           "external_id": "ACoA3",
           "person_id": null,
@@ -935,10 +731,7 @@
           "fit": 0.92,
           "reach": 0.3,
           "responsiveness": 0.16,
-          "reasons": [
-            "Dev Ito fits",
-            "2nd-degree on LinkedIn"
-          ]
+          "reasons": ["Dev Ito fits", "2nd-degree on LinkedIn"]
         },
         {
           "name": "Fay Reyes li18",
@@ -946,9 +739,7 @@
           "org": "Figma",
           "email": "fay@example.com",
           "warmth": null,
-          "sources": [
-            "unipile"
-          ],
+          "sources": ["unipile"],
           "source": "unipile",
           "external_id": "ACoA18",
           "person_id": null,
@@ -956,10 +747,7 @@
           "fit": 0.97,
           "reach": 0.05,
           "responsiveness": 0.44,
-          "reasons": [
-            "Fay Reyes li18 fits",
-            "2nd-degree on LinkedIn"
-          ]
+          "reasons": ["Fay Reyes li18 fits", "2nd-degree on LinkedIn"]
         },
         {
           "name": "Ben Ito li14",
@@ -967,9 +755,7 @@
           "org": "Notion",
           "email": null,
           "warmth": null,
-          "sources": [
-            "unipile"
-          ],
+          "sources": ["unipile"],
           "source": "unipile",
           "external_id": "ACoA14",
           "person_id": null,
@@ -977,9 +763,7 @@
           "fit": 0.69,
           "reach": 0.3,
           "responsiveness": 0.5,
-          "reasons": [
-            "Ben Ito li14 fits"
-          ]
+          "reasons": ["Ben Ito li14 fits"]
         },
         {
           "name": "Ivo Novak li21",
@@ -987,9 +771,7 @@
           "org": "Notion",
           "email": "ivo@example.com",
           "warmth": null,
-          "sources": [
-            "unipile"
-          ],
+          "sources": ["unipile"],
           "source": "unipile",
           "external_id": "ACoA21",
           "person_id": null,
@@ -997,10 +779,7 @@
           "fit": 0.75,
           "reach": 0.05,
           "responsiveness": 0.7,
-          "reasons": [
-            "Ivo Novak li21 fits",
-            "2nd-degree on LinkedIn"
-          ]
+          "reasons": ["Ivo Novak li21 fits", "2nd-degree on LinkedIn"]
         },
         {
           "name": "Max Ito li25",
@@ -1008,9 +787,7 @@
           "org": "Figma",
           "email": null,
           "warmth": null,
-          "sources": [
-            "unipile"
-          ],
+          "sources": ["unipile"],
           "source": "unipile",
           "external_id": "ACoA25",
           "person_id": null,
@@ -1018,9 +795,7 @@
           "fit": 0.62,
           "reach": 0.3,
           "responsiveness": 0.28,
-          "reasons": [
-            "Max Ito li25 fits"
-          ]
+          "reasons": ["Max Ito li25 fits"]
         },
         {
           "name": "Lea Chen",
@@ -1028,9 +803,7 @@
           "org": "Figma",
           "email": null,
           "warmth": null,
-          "sources": [
-            "unipile"
-          ],
+          "sources": ["unipile"],
           "source": "unipile",
           "external_id": "ACoA11",
           "person_id": null,
@@ -1038,9 +811,7 @@
           "fit": 0.64,
           "reach": 0,
           "responsiveness": 0.63,
-          "reasons": [
-            "Lea Chen fits"
-          ]
+          "reasons": ["Lea Chen fits"]
         },
         {
           "name": "Hana Sato li20",
@@ -1048,9 +819,7 @@
           "org": "Plaid",
           "email": null,
           "warmth": null,
-          "sources": [
-            "unipile"
-          ],
+          "sources": ["unipile"],
           "source": "unipile",
           "external_id": "ACoA20",
           "person_id": null,
@@ -1058,9 +827,7 @@
           "fit": 0.65,
           "reach": 0,
           "responsiveness": 0.53,
-          "reasons": [
-            "Hana Sato li20 fits"
-          ]
+          "reasons": ["Hana Sato li20 fits"]
         },
         {
           "name": "Eli Shah li17",
@@ -1068,9 +835,7 @@
           "org": "Linear",
           "email": null,
           "warmth": null,
-          "sources": [
-            "unipile"
-          ],
+          "sources": ["unipile"],
           "source": "unipile",
           "external_id": "ACoA17",
           "person_id": null,
@@ -1078,9 +843,7 @@
           "fit": 0.53,
           "reach": 0,
           "responsiveness": 0.72,
-          "reasons": [
-            "Eli Shah li17 fits"
-          ]
+          "reasons": ["Eli Shah li17 fits"]
         },
         {
           "name": "Kai Novak",
@@ -1088,9 +851,7 @@
           "org": "Linear",
           "email": null,
           "warmth": null,
-          "sources": [
-            "unipile"
-          ],
+          "sources": ["unipile"],
           "source": "unipile",
           "external_id": "ACoA10",
           "person_id": null,
@@ -1098,9 +859,7 @@
           "fit": 0.52,
           "reach": 0.3,
           "responsiveness": 0.14,
-          "reasons": [
-            "Kai Novak fits"
-          ]
+          "reasons": ["Kai Novak fits"]
         },
         {
           "name": "Ivo Park",
@@ -1108,10 +867,7 @@
           "org": "Vercel",
           "email": null,
           "warmth": null,
-          "sources": [
-            "exa",
-            "unipile"
-          ],
+          "sources": ["exa", "unipile"],
           "source": "unipile+exa",
           "external_id": "ACoA8",
           "person_id": null,
@@ -1119,9 +875,7 @@
           "fit": 0.37,
           "reach": 0,
           "responsiveness": 0.96,
-          "reasons": [
-            "Ivo Park fits"
-          ]
+          "reasons": ["Ivo Park fits"]
         },
         {
           "name": "Ana Okafor li13",
@@ -1129,9 +883,7 @@
           "org": "Plaid",
           "email": null,
           "warmth": null,
-          "sources": [
-            "unipile"
-          ],
+          "sources": ["unipile"],
           "source": "unipile",
           "external_id": "ACoA13",
           "person_id": null,
@@ -1139,9 +891,7 @@
           "fit": 0.2,
           "reach": 0.3,
           "responsiveness": 0.71,
-          "reasons": [
-            "Ana Okafor li13 fits"
-          ]
+          "reasons": ["Ana Okafor li13 fits"]
         },
         {
           "name": "Cara Okafor",
@@ -1149,10 +899,7 @@
           "org": "Stripe",
           "email": null,
           "warmth": null,
-          "sources": [
-            "exa",
-            "unipile"
-          ],
+          "sources": ["exa", "unipile"],
           "source": "unipile+exa",
           "external_id": "ACoA2",
           "person_id": null,
@@ -1160,9 +907,7 @@
           "fit": 0.48,
           "reach": 0,
           "responsiveness": 0.57,
-          "reasons": [
-            "Cara Okafor fits"
-          ]
+          "reasons": ["Cara Okafor fits"]
         },
         {
           "name": "Max Moreau",
@@ -1170,9 +915,7 @@
           "org": "Ramp",
           "email": null,
           "warmth": null,
-          "sources": [
-            "unipile"
-          ],
+          "sources": ["unipile"],
           "source": "unipile",
           "external_id": "ACoA12",
           "person_id": null,
@@ -1180,10 +923,7 @@
           "fit": 0.57,
           "reach": 0.05,
           "responsiveness": 0.27,
-          "reasons": [
-            "Max Moreau fits",
-            "2nd-degree on LinkedIn"
-          ]
+          "reasons": ["Max Moreau fits", "2nd-degree on LinkedIn"]
         },
         {
           "name": "Fay Diaz",
@@ -1191,10 +931,7 @@
           "org": "Ramp",
           "email": null,
           "warmth": null,
-          "sources": [
-            "exa",
-            "unipile"
-          ],
+          "sources": ["exa", "unipile"],
           "source": "unipile+exa",
           "external_id": "ACoA5",
           "person_id": null,
@@ -1202,9 +939,7 @@
           "fit": 0.55,
           "reach": 0,
           "responsiveness": 0.22,
-          "reasons": [
-            "Fay Diaz fits"
-          ]
+          "reasons": ["Fay Diaz fits"]
         },
         {
           "name": "Ben Diaz li27",
@@ -1212,9 +947,7 @@
           "org": "Plaid",
           "email": null,
           "warmth": null,
-          "sources": [
-            "unipile"
-          ],
+          "sources": ["unipile"],
           "source": "unipile",
           "external_id": "ACoA27",
           "person_id": null,
@@ -1222,10 +955,7 @@
           "fit": 0.41,
           "reach": 0.05,
           "responsiveness": 0.34,
-          "reasons": [
-            "Ben Diaz li27 fits",
-            "2nd-degree on LinkedIn"
-          ]
+          "reasons": ["Ben Diaz li27 fits", "2nd-degree on LinkedIn"]
         },
         {
           "name": "Gus Park li19",
@@ -1233,9 +963,7 @@
           "org": "Ramp",
           "email": null,
           "warmth": null,
-          "sources": [
-            "unipile"
-          ],
+          "sources": ["unipile"],
           "source": "unipile",
           "external_id": "ACoA19",
           "person_id": null,
@@ -1243,9 +971,7 @@
           "fit": 0.15,
           "reach": 0.3,
           "responsiveness": 0.44,
-          "reasons": [
-            "Gus Park li19 fits"
-          ]
+          "reasons": ["Gus Park li19 fits"]
         },
         {
           "name": "Ana Haas li26",
@@ -1253,9 +979,7 @@
           "org": "Ramp",
           "email": null,
           "warmth": null,
-          "sources": [
-            "unipile"
-          ],
+          "sources": ["unipile"],
           "source": "unipile",
           "external_id": "ACoA26",
           "person_id": null,
@@ -1263,9 +987,7 @@
           "fit": 0.45,
           "reach": 0,
           "responsiveness": 0.29,
-          "reasons": [
-            "Ana Haas li26 fits"
-          ]
+          "reasons": ["Ana Haas li26 fits"]
         },
         {
           "name": "Gus Shah",
@@ -1273,10 +995,7 @@
           "org": "Plaid",
           "email": null,
           "warmth": null,
-          "sources": [
-            "exa",
-            "unipile"
-          ],
+          "sources": ["exa", "unipile"],
           "source": "unipile+exa",
           "external_id": "ACoA6",
           "person_id": null,
@@ -1284,10 +1003,7 @@
           "fit": 0.22,
           "reach": 0.05,
           "responsiveness": 0.69,
-          "reasons": [
-            "Gus Shah fits",
-            "2nd-degree on LinkedIn"
-          ]
+          "reasons": ["Gus Shah fits", "2nd-degree on LinkedIn"]
         },
         {
           "name": "Jia Chen li22",
@@ -1295,9 +1011,7 @@
           "org": "Vercel",
           "email": null,
           "warmth": null,
-          "sources": [
-            "unipile"
-          ],
+          "sources": ["unipile"],
           "source": "unipile",
           "external_id": "ACoA22",
           "person_id": null,
@@ -1305,9 +1019,7 @@
           "fit": 0.48,
           "reach": 0,
           "responsiveness": 0.17,
-          "reasons": [
-            "Jia Chen li22 fits"
-          ]
+          "reasons": ["Jia Chen li22 fits"]
         },
         {
           "name": "Kai Moreau li23",
@@ -1315,9 +1027,7 @@
           "org": "Stripe",
           "email": null,
           "warmth": null,
-          "sources": [
-            "unipile"
-          ],
+          "sources": ["unipile"],
           "source": "unipile",
           "external_id": "ACoA23",
           "person_id": null,
@@ -1325,9 +1035,7 @@
           "fit": 0.09,
           "reach": 0.3,
           "responsiveness": 0.52,
-          "reasons": [
-            "Kai Moreau li23 fits"
-          ]
+          "reasons": ["Kai Moreau li23 fits"]
         },
         {
           "name": "Cara Shah li28",
@@ -1335,9 +1043,7 @@
           "org": "Notion",
           "email": null,
           "warmth": null,
-          "sources": [
-            "unipile"
-          ],
+          "sources": ["unipile"],
           "source": "unipile",
           "external_id": "ACoA28",
           "person_id": null,
@@ -1345,9 +1051,7 @@
           "fit": 0.14,
           "reach": 0,
           "responsiveness": 0.85,
-          "reasons": [
-            "Cara Shah li28 fits"
-          ]
+          "reasons": ["Cara Shah li28 fits"]
         },
         {
           "name": "Ana Chen",
@@ -1355,10 +1059,7 @@
           "org": "Notion",
           "email": null,
           "warmth": null,
-          "sources": [
-            "exa",
-            "unipile"
-          ],
+          "sources": ["exa", "unipile"],
           "source": "unipile+exa",
           "external_id": "ACoA0",
           "person_id": null,
@@ -1366,10 +1067,7 @@
           "fit": 0.1,
           "reach": 0.05,
           "responsiveness": 0.85,
-          "reasons": [
-            "Ana Chen fits",
-            "2nd-degree on LinkedIn"
-          ]
+          "reasons": ["Ana Chen fits", "2nd-degree on LinkedIn"]
         },
         {
           "name": "Eli Haas",
@@ -1377,10 +1075,7 @@
           "org": "Figma",
           "email": null,
           "warmth": null,
-          "sources": [
-            "exa",
-            "unipile"
-          ],
+          "sources": ["exa", "unipile"],
           "source": "unipile+exa",
           "external_id": "ACoA4",
           "person_id": null,
@@ -1388,9 +1083,7 @@
           "fit": 0.17,
           "reach": 0,
           "responsiveness": 0.42,
-          "reasons": [
-            "Eli Haas fits"
-          ]
+          "reasons": ["Eli Haas fits"]
         },
         {
           "name": "Dev Reyes li29",
@@ -1398,9 +1091,7 @@
           "org": "Vercel",
           "email": null,
           "warmth": null,
-          "sources": [
-            "unipile"
-          ],
+          "sources": ["unipile"],
           "source": "unipile",
           "external_id": "ACoA29",
           "person_id": null,
@@ -1408,9 +1099,7 @@
           "fit": 0.05,
           "reach": 0.3,
           "responsiveness": 0.16,
-          "reasons": [
-            "Dev Reyes li29 fits"
-          ]
+          "reasons": ["Dev Reyes li29 fits"]
         },
         {
           "name": "Dev Diaz li16",
@@ -1418,9 +1107,7 @@
           "org": "Stripe",
           "email": null,
           "warmth": null,
-          "sources": [
-            "unipile"
-          ],
+          "sources": ["unipile"],
           "source": "unipile",
           "external_id": "ACoA16",
           "person_id": null,
@@ -1428,9 +1115,7 @@
           "fit": 0.2,
           "reach": 0,
           "responsiveness": 0.34,
-          "reasons": [
-            "Dev Diaz li16 fits"
-          ]
+          "reasons": ["Dev Diaz li16 fits"]
         },
         {
           "name": "Jia Sato",
@@ -1438,10 +1123,7 @@
           "org": "Stripe",
           "email": null,
           "warmth": null,
-          "sources": [
-            "exa",
-            "unipile"
-          ],
+          "sources": ["exa", "unipile"],
           "source": "unipile+exa",
           "external_id": "ACoA9",
           "person_id": null,
@@ -1449,10 +1131,7 @@
           "fit": 0,
           "reach": 0.3,
           "responsiveness": 0.15,
-          "reasons": [
-            "Jia Sato fits",
-            "2nd-degree on LinkedIn"
-          ]
+          "reasons": ["Jia Sato fits", "2nd-degree on LinkedIn"]
         },
         {
           "name": "Ben Moreau",
@@ -1460,10 +1139,7 @@
           "org": "Vercel",
           "email": null,
           "warmth": null,
-          "sources": [
-            "exa",
-            "unipile"
-          ],
+          "sources": ["exa", "unipile"],
           "source": "unipile+exa",
           "external_id": "ACoA1",
           "person_id": null,
@@ -1471,9 +1147,7 @@
           "fit": 0.02,
           "reach": 0,
           "responsiveness": 0.44,
-          "reasons": [
-            "Ben Moreau fits"
-          ]
+          "reasons": ["Ben Moreau fits"]
         },
         {
           "name": "Lea Okafor li24",
@@ -1481,9 +1155,7 @@
           "org": "Linear",
           "email": null,
           "warmth": null,
-          "sources": [
-            "unipile"
-          ],
+          "sources": ["unipile"],
           "source": "unipile",
           "external_id": "ACoA24",
           "person_id": null,
@@ -1491,10 +1163,7 @@
           "fit": 0.01,
           "reach": 0.05,
           "responsiveness": 0.1,
-          "reasons": [
-            "Lea Okafor li24 fits",
-            "2nd-degree on LinkedIn"
-          ]
+          "reasons": ["Lea Okafor li24 fits", "2nd-degree on LinkedIn"]
         }
       ],
       "unconfigured": [],
@@ -1512,10 +1181,7 @@
           "org": "Notion",
           "email": "hana@example.com",
           "warmth": null,
-          "sources": [
-            "apollo",
-            "unipile"
-          ],
+          "sources": ["apollo", "unipile"],
           "source": "unipile+apollo",
           "external_id": "ACoA7",
           "person_id": null,
@@ -1523,9 +1189,7 @@
           "fit": 0.92,
           "reach": 0.3,
           "responsiveness": 0.35,
-          "reasons": [
-            "Hana Reyes fits"
-          ]
+          "reasons": ["Hana Reyes fits"]
         },
         {
           "name": "Cara Haas li15",
@@ -1533,9 +1197,7 @@
           "org": "Vercel",
           "email": null,
           "warmth": null,
-          "sources": [
-            "unipile"
-          ],
+          "sources": ["unipile"],
           "source": "unipile",
           "external_id": "ACoA15",
           "person_id": null,
@@ -1543,10 +1205,7 @@
           "fit": 0.8,
           "reach": 0.3,
           "responsiveness": 0.49,
-          "reasons": [
-            "Cara Haas li15 fits",
-            "2nd-degree on LinkedIn"
-          ]
+          "reasons": ["Cara Haas li15 fits", "2nd-degree on LinkedIn"]
         },
         {
           "name": "Cara Haas ap15",
@@ -1554,9 +1213,7 @@
           "org": "Vercel",
           "email": null,
           "warmth": null,
-          "sources": [
-            "apollo"
-          ],
+          "sources": ["apollo"],
           "source": "apollo",
           "external_id": "ap_15",
           "person_id": null,
@@ -1564,9 +1221,7 @@
           "fit": 0.86,
           "reach": 0.3,
           "responsiveness": 0.34,
-          "reasons": [
-            "Cara Haas ap15 fits"
-          ]
+          "reasons": ["Cara Haas ap15 fits"]
         },
         {
           "name": "Dev Ito",
@@ -1574,10 +1229,7 @@
           "org": "Linear",
           "email": "dev@example.com",
           "warmth": null,
-          "sources": [
-            "apollo",
-            "unipile"
-          ],
+          "sources": ["apollo", "unipile"],
           "source": "unipile+apollo",
           "external_id": "ACoA3",
           "person_id": null,
@@ -1585,10 +1237,7 @@
           "fit": 0.92,
           "reach": 0.3,
           "responsiveness": 0.16,
-          "reasons": [
-            "Dev Ito fits",
-            "2nd-degree on LinkedIn"
-          ]
+          "reasons": ["Dev Ito fits", "2nd-degree on LinkedIn"]
         },
         {
           "name": "Fay Reyes li18",
@@ -1596,9 +1245,7 @@
           "org": "Figma",
           "email": "fay@example.com",
           "warmth": null,
-          "sources": [
-            "unipile"
-          ],
+          "sources": ["unipile"],
           "source": "unipile",
           "external_id": "ACoA18",
           "person_id": null,
@@ -1606,10 +1253,7 @@
           "fit": 0.97,
           "reach": 0.05,
           "responsiveness": 0.44,
-          "reasons": [
-            "Fay Reyes li18 fits",
-            "2nd-degree on LinkedIn"
-          ]
+          "reasons": ["Fay Reyes li18 fits", "2nd-degree on LinkedIn"]
         },
         {
           "name": "Eli Shah ap17",
@@ -1617,9 +1261,7 @@
           "org": "Linear",
           "email": "eli@example.com",
           "warmth": null,
-          "sources": [
-            "apollo"
-          ],
+          "sources": ["apollo"],
           "source": "apollo",
           "external_id": "ap_17",
           "person_id": null,
@@ -1627,9 +1269,7 @@
           "fit": 0.9,
           "reach": 0,
           "responsiveness": 0.59,
-          "reasons": [
-            "Eli Shah ap17 fits"
-          ]
+          "reasons": ["Eli Shah ap17 fits"]
         },
         {
           "name": "Ben Ito li14",
@@ -1637,9 +1277,7 @@
           "org": "Notion",
           "email": null,
           "warmth": null,
-          "sources": [
-            "unipile"
-          ],
+          "sources": ["unipile"],
           "source": "unipile",
           "external_id": "ACoA14",
           "person_id": null,
@@ -1647,9 +1285,7 @@
           "fit": 0.69,
           "reach": 0.3,
           "responsiveness": 0.5,
-          "reasons": [
-            "Ben Ito li14 fits"
-          ]
+          "reasons": ["Ben Ito li14 fits"]
         },
         {
           "name": "Jia Chen ap22",
@@ -1657,9 +1293,7 @@
           "org": "Vercel",
           "email": null,
           "warmth": null,
-          "sources": [
-            "apollo"
-          ],
+          "sources": ["apollo"],
           "source": "apollo",
           "external_id": "ap_22",
           "person_id": null,
@@ -1667,9 +1301,7 @@
           "fit": 0.76,
           "reach": 0,
           "responsiveness": 0.78,
-          "reasons": [
-            "Jia Chen ap22 fits"
-          ]
+          "reasons": ["Jia Chen ap22 fits"]
         },
         {
           "name": "Ivo Novak li21",
@@ -1677,9 +1309,7 @@
           "org": "Notion",
           "email": null,
           "warmth": null,
-          "sources": [
-            "unipile"
-          ],
+          "sources": ["unipile"],
           "source": "unipile",
           "external_id": "ACoA21",
           "person_id": null,
@@ -1687,10 +1317,7 @@
           "fit": 0.75,
           "reach": 0.05,
           "responsiveness": 0.7,
-          "reasons": [
-            "Ivo Novak li21 fits",
-            "2nd-degree on LinkedIn"
-          ]
+          "reasons": ["Ivo Novak li21 fits", "2nd-degree on LinkedIn"]
         },
         {
           "name": "Ivo Novak ap21",
@@ -1698,9 +1325,7 @@
           "org": "Notion",
           "email": null,
           "warmth": null,
-          "sources": [
-            "apollo"
-          ],
+          "sources": ["apollo"],
           "source": "apollo",
           "external_id": "ap_21",
           "person_id": null,
@@ -1708,9 +1333,7 @@
           "fit": 0.71,
           "reach": 0,
           "responsiveness": 0.78,
-          "reasons": [
-            "Ivo Novak ap21 fits"
-          ]
+          "reasons": ["Ivo Novak ap21 fits"]
         },
         {
           "name": "Max Ito li25",
@@ -1718,9 +1341,7 @@
           "org": "Figma",
           "email": null,
           "warmth": null,
-          "sources": [
-            "unipile"
-          ],
+          "sources": ["unipile"],
           "source": "unipile",
           "external_id": "ACoA25",
           "person_id": null,
@@ -1728,9 +1349,7 @@
           "fit": 0.62,
           "reach": 0.3,
           "responsiveness": 0.28,
-          "reasons": [
-            "Max Ito li25 fits"
-          ]
+          "reasons": ["Max Ito li25 fits"]
         },
         {
           "name": "Lea Chen",
@@ -1738,10 +1357,7 @@
           "org": "Figma",
           "email": null,
           "warmth": null,
-          "sources": [
-            "apollo",
-            "unipile"
-          ],
+          "sources": ["apollo", "unipile"],
           "source": "unipile+apollo",
           "external_id": "ACoA11",
           "person_id": null,
@@ -1749,9 +1365,7 @@
           "fit": 0.64,
           "reach": 0,
           "responsiveness": 0.63,
-          "reasons": [
-            "Lea Chen fits"
-          ]
+          "reasons": ["Lea Chen fits"]
         },
         {
           "name": "Ana Okafor ap13",
@@ -1759,9 +1373,7 @@
           "org": "Plaid",
           "email": "ana@example.com",
           "warmth": null,
-          "sources": [
-            "apollo"
-          ],
+          "sources": ["apollo"],
           "source": "apollo",
           "external_id": "ap_13",
           "person_id": null,
@@ -1769,9 +1381,7 @@
           "fit": 0.92,
           "reach": 0,
           "responsiveness": 0,
-          "reasons": [
-            "Ana Okafor ap13 fits"
-          ]
+          "reasons": ["Ana Okafor ap13 fits"]
         },
         {
           "name": "Fay Reyes ap18",
@@ -1779,9 +1389,7 @@
           "org": "Figma",
           "email": null,
           "warmth": null,
-          "sources": [
-            "apollo"
-          ],
+          "sources": ["apollo"],
           "source": "apollo",
           "external_id": "ap_18",
           "person_id": null,
@@ -1789,9 +1397,7 @@
           "fit": 0.89,
           "reach": 0,
           "responsiveness": 0.04,
-          "reasons": [
-            "Fay Reyes ap18 fits"
-          ]
+          "reasons": ["Fay Reyes ap18 fits"]
         },
         {
           "name": "Hana Sato li20",
@@ -1799,9 +1405,7 @@
           "org": "Plaid",
           "email": null,
           "warmth": null,
-          "sources": [
-            "unipile"
-          ],
+          "sources": ["unipile"],
           "source": "unipile",
           "external_id": "ACoA20",
           "person_id": null,
@@ -1809,9 +1413,7 @@
           "fit": 0.65,
           "reach": 0,
           "responsiveness": 0.53,
-          "reasons": [
-            "Hana Sato li20 fits"
-          ]
+          "reasons": ["Hana Sato li20 fits"]
         },
         {
           "name": "Gus Park ap19",
@@ -1819,9 +1421,7 @@
           "org": "Ramp",
           "email": null,
           "warmth": null,
-          "sources": [
-            "apollo"
-          ],
+          "sources": ["apollo"],
           "source": "apollo",
           "external_id": "ap_19",
           "person_id": null,
@@ -1829,9 +1429,7 @@
           "fit": 0.72,
           "reach": 0,
           "responsiveness": 0.32,
-          "reasons": [
-            "Gus Park ap19 fits"
-          ]
+          "reasons": ["Gus Park ap19 fits"]
         },
         {
           "name": "Eli Shah li17",
@@ -1839,9 +1437,7 @@
           "org": "Linear",
           "email": null,
           "warmth": null,
-          "sources": [
-            "unipile"
-          ],
+          "sources": ["unipile"],
           "source": "unipile",
           "external_id": "ACoA17",
           "person_id": null,
@@ -1849,9 +1445,7 @@
           "fit": 0.53,
           "reach": 0,
           "responsiveness": 0.72,
-          "reasons": [
-            "Eli Shah li17 fits"
-          ]
+          "reasons": ["Eli Shah li17 fits"]
         },
         {
           "name": "Lea Okafor ap24",
@@ -1859,9 +1453,7 @@
           "org": "Linear",
           "email": null,
           "warmth": null,
-          "sources": [
-            "apollo"
-          ],
+          "sources": ["apollo"],
           "source": "apollo",
           "external_id": "ap_24",
           "person_id": null,
@@ -1869,9 +1461,7 @@
           "fit": 0.43,
           "reach": 0,
           "responsiveness": 0.91,
-          "reasons": [
-            "Lea Okafor ap24 fits"
-          ]
+          "reasons": ["Lea Okafor ap24 fits"]
         },
         {
           "name": "Kai Novak",
@@ -1879,10 +1469,7 @@
           "org": "Linear",
           "email": null,
           "warmth": null,
-          "sources": [
-            "apollo",
-            "unipile"
-          ],
+          "sources": ["apollo", "unipile"],
           "source": "unipile+apollo",
           "external_id": "ACoA10",
           "person_id": null,
@@ -1890,9 +1477,7 @@
           "fit": 0.52,
           "reach": 0.3,
           "responsiveness": 0.14,
-          "reasons": [
-            "Kai Novak fits"
-          ]
+          "reasons": ["Kai Novak fits"]
         },
         {
           "name": "Kai Moreau ap23",
@@ -1900,9 +1485,7 @@
           "org": "Stripe",
           "email": null,
           "warmth": null,
-          "sources": [
-            "apollo"
-          ],
+          "sources": ["apollo"],
           "source": "apollo",
           "external_id": "ap_23",
           "person_id": null,
@@ -1910,9 +1493,7 @@
           "fit": 0.71,
           "reach": 0,
           "responsiveness": 0.21,
-          "reasons": [
-            "Kai Moreau ap23 fits"
-          ]
+          "reasons": ["Kai Moreau ap23 fits"]
         },
         {
           "name": "Ivo Park",
@@ -1920,10 +1501,7 @@
           "org": "Vercel",
           "email": null,
           "warmth": null,
-          "sources": [
-            "apollo",
-            "unipile"
-          ],
+          "sources": ["apollo", "unipile"],
           "source": "unipile+apollo",
           "external_id": "ACoA8",
           "person_id": null,
@@ -1931,9 +1509,7 @@
           "fit": 0.37,
           "reach": 0,
           "responsiveness": 0.96,
-          "reasons": [
-            "Ivo Park fits"
-          ]
+          "reasons": ["Ivo Park fits"]
         },
         {
           "name": "Cara Okafor",
@@ -1941,10 +1517,7 @@
           "org": "Stripe",
           "email": null,
           "warmth": null,
-          "sources": [
-            "apollo",
-            "unipile"
-          ],
+          "sources": ["apollo", "unipile"],
           "source": "unipile+apollo",
           "external_id": "ACoA2",
           "person_id": null,
@@ -1952,9 +1525,7 @@
           "fit": 0.48,
           "reach": 0,
           "responsiveness": 0.57,
-          "reasons": [
-            "Cara Okafor fits"
-          ]
+          "reasons": ["Cara Okafor fits"]
         },
         {
           "name": "Max Moreau",
@@ -1962,10 +1533,7 @@
           "org": "Ramp",
           "email": null,
           "warmth": null,
-          "sources": [
-            "apollo",
-            "unipile"
-          ],
+          "sources": ["apollo", "unipile"],
           "source": "unipile+apollo",
           "external_id": "ACoA12",
           "person_id": null,
@@ -1973,10 +1541,7 @@
           "fit": 0.57,
           "reach": 0.05,
           "responsiveness": 0.27,
-          "reasons": [
-            "Max Moreau fits",
-            "2nd-degree on LinkedIn"
-          ]
+          "reasons": ["Max Moreau fits", "2nd-degree on LinkedIn"]
         },
         {
           "name": "Hana Sato ap20",
@@ -1984,9 +1549,7 @@
           "org": "Plaid",
           "email": null,
           "warmth": null,
-          "sources": [
-            "apollo"
-          ],
+          "sources": ["apollo"],
           "source": "apollo",
           "external_id": "ap_20",
           "person_id": null,
@@ -1994,9 +1557,7 @@
           "fit": 0.4,
           "reach": 0,
           "responsiveness": 0.57,
-          "reasons": [
-            "Hana Sato ap20 fits"
-          ]
+          "reasons": ["Hana Sato ap20 fits"]
         },
         {
           "name": "Fay Diaz",
@@ -2004,10 +1565,7 @@
           "org": "Ramp",
           "email": null,
           "warmth": null,
-          "sources": [
-            "apollo",
-            "unipile"
-          ],
+          "sources": ["apollo", "unipile"],
           "source": "unipile+apollo",
           "external_id": "ACoA5",
           "person_id": null,
@@ -2015,9 +1573,7 @@
           "fit": 0.55,
           "reach": 0,
           "responsiveness": 0.22,
-          "reasons": [
-            "Fay Diaz fits"
-          ]
+          "reasons": ["Fay Diaz fits"]
         },
         {
           "name": "Ben Diaz li27",
@@ -2025,9 +1581,7 @@
           "org": "Plaid",
           "email": null,
           "warmth": null,
-          "sources": [
-            "unipile"
-          ],
+          "sources": ["unipile"],
           "source": "unipile",
           "external_id": "ACoA27",
           "person_id": null,
@@ -2035,10 +1589,7 @@
           "fit": 0.41,
           "reach": 0.05,
           "responsiveness": 0.34,
-          "reasons": [
-            "Ben Diaz li27 fits",
-            "2nd-degree on LinkedIn"
-          ]
+          "reasons": ["Ben Diaz li27 fits", "2nd-degree on LinkedIn"]
         },
         {
           "name": "Ana Haas li26",
@@ -2046,9 +1597,7 @@
           "org": "Ramp",
           "email": null,
           "warmth": null,
-          "sources": [
-            "unipile"
-          ],
+          "sources": ["unipile"],
           "source": "unipile",
           "external_id": "ACoA26",
           "person_id": null,
@@ -2056,9 +1605,7 @@
           "fit": 0.45,
           "reach": 0,
           "responsiveness": 0.29,
-          "reasons": [
-            "Ana Haas li26 fits"
-          ]
+          "reasons": ["Ana Haas li26 fits"]
         },
         {
           "name": "Gus Shah",
@@ -2066,10 +1613,7 @@
           "org": "Plaid",
           "email": null,
           "warmth": null,
-          "sources": [
-            "apollo",
-            "unipile"
-          ],
+          "sources": ["apollo", "unipile"],
           "source": "unipile+apollo",
           "external_id": "ACoA6",
           "person_id": null,
@@ -2077,10 +1621,7 @@
           "fit": 0.22,
           "reach": 0.05,
           "responsiveness": 0.69,
-          "reasons": [
-            "Gus Shah fits",
-            "2nd-degree on LinkedIn"
-          ]
+          "reasons": ["Gus Shah fits", "2nd-degree on LinkedIn"]
         },
         {
           "name": "Jia Chen li22",
@@ -2088,9 +1629,7 @@
           "org": "Vercel",
           "email": null,
           "warmth": null,
-          "sources": [
-            "unipile"
-          ],
+          "sources": ["unipile"],
           "source": "unipile",
           "external_id": "ACoA22",
           "person_id": null,
@@ -2098,9 +1637,7 @@
           "fit": 0.48,
           "reach": 0,
           "responsiveness": 0.17,
-          "reasons": [
-            "Jia Chen li22 fits"
-          ]
+          "reasons": ["Jia Chen li22 fits"]
         },
         {
           "name": "Cara Shah li28",
@@ -2108,9 +1645,7 @@
           "org": "Notion",
           "email": null,
           "warmth": null,
-          "sources": [
-            "unipile"
-          ],
+          "sources": ["unipile"],
           "source": "unipile",
           "external_id": "ACoA28",
           "person_id": null,
@@ -2118,9 +1653,7 @@
           "fit": 0.14,
           "reach": 0,
           "responsiveness": 0.85,
-          "reasons": [
-            "Cara Shah li28 fits"
-          ]
+          "reasons": ["Cara Shah li28 fits"]
         },
         {
           "name": "Ana Chen",
@@ -2128,10 +1661,7 @@
           "org": "Notion",
           "email": null,
           "warmth": null,
-          "sources": [
-            "apollo",
-            "unipile"
-          ],
+          "sources": ["apollo", "unipile"],
           "source": "unipile+apollo",
           "external_id": "ACoA0",
           "person_id": null,
@@ -2139,10 +1669,7 @@
           "fit": 0.1,
           "reach": 0.05,
           "responsiveness": 0.85,
-          "reasons": [
-            "Ana Chen fits",
-            "2nd-degree on LinkedIn"
-          ]
+          "reasons": ["Ana Chen fits", "2nd-degree on LinkedIn"]
         },
         {
           "name": "Ana Okafor li13",
@@ -2150,9 +1677,7 @@
           "org": "Plaid",
           "email": null,
           "warmth": null,
-          "sources": [
-            "unipile"
-          ],
+          "sources": ["unipile"],
           "source": "unipile",
           "external_id": "ACoA13",
           "person_id": null,
@@ -2160,9 +1685,7 @@
           "fit": 0.2,
           "reach": 0,
           "responsiveness": 0.71,
-          "reasons": [
-            "Ana Okafor li13 fits"
-          ]
+          "reasons": ["Ana Okafor li13 fits"]
         },
         {
           "name": "Ben Ito ap14",
@@ -2170,9 +1693,7 @@
           "org": "Notion",
           "email": null,
           "warmth": null,
-          "sources": [
-            "apollo"
-          ],
+          "sources": ["apollo"],
           "source": "apollo",
           "external_id": "ap_14",
           "person_id": null,
@@ -2180,9 +1701,7 @@
           "fit": 0.02,
           "reach": 0,
           "responsiveness": 0.89,
-          "reasons": [
-            "Ben Ito ap14 fits"
-          ]
+          "reasons": ["Ben Ito ap14 fits"]
         },
         {
           "name": "Dev Diaz ap16",
@@ -2190,9 +1709,7 @@
           "org": "Stripe",
           "email": null,
           "warmth": null,
-          "sources": [
-            "apollo"
-          ],
+          "sources": ["apollo"],
           "source": "apollo",
           "external_id": "ap_16",
           "person_id": null,
@@ -2200,9 +1717,7 @@
           "fit": 0.35,
           "reach": 0,
           "responsiveness": 0.14,
-          "reasons": [
-            "Dev Diaz ap16 fits"
-          ]
+          "reasons": ["Dev Diaz ap16 fits"]
         },
         {
           "name": "Eli Haas",
@@ -2210,10 +1725,7 @@
           "org": "Figma",
           "email": null,
           "warmth": null,
-          "sources": [
-            "apollo",
-            "unipile"
-          ],
+          "sources": ["apollo", "unipile"],
           "source": "unipile+apollo",
           "external_id": "ACoA4",
           "person_id": null,
@@ -2221,9 +1733,7 @@
           "fit": 0.17,
           "reach": 0,
           "responsiveness": 0.42,
-          "reasons": [
-            "Eli Haas fits"
-          ]
+          "reasons": ["Eli Haas fits"]
         },
         {
           "name": "Dev Diaz li16",
@@ -2231,9 +1741,7 @@
           "org": "Stripe",
           "email": null,
           "warmth": null,
-          "sources": [
-            "unipile"
-          ],
+          "sources": ["unipile"],
           "source": "unipile",
           "external_id": "ACoA16",
           "person_id": null,
@@ -2241,9 +1749,7 @@
           "fit": 0.2,
           "reach": 0,
           "responsiveness": 0.34,
-          "reasons": [
-            "Dev Diaz li16 fits"
-          ]
+          "reasons": ["Dev Diaz li16 fits"]
         },
         {
           "name": "Gus Park li19",
@@ -2251,9 +1757,7 @@
           "org": "Ramp",
           "email": null,
           "warmth": null,
-          "sources": [
-            "unipile"
-          ],
+          "sources": ["unipile"],
           "source": "unipile",
           "external_id": "ACoA19",
           "person_id": null,
@@ -2261,9 +1765,7 @@
           "fit": 0.15,
           "reach": 0,
           "responsiveness": 0.44,
-          "reasons": [
-            "Gus Park li19 fits"
-          ]
+          "reasons": ["Gus Park li19 fits"]
         },
         {
           "name": "Kai Moreau li23",
@@ -2271,9 +1773,7 @@
           "org": "Stripe",
           "email": null,
           "warmth": null,
-          "sources": [
-            "unipile"
-          ],
+          "sources": ["unipile"],
           "source": "unipile",
           "external_id": "ACoA23",
           "person_id": null,
@@ -2281,9 +1781,7 @@
           "fit": 0.09,
           "reach": 0,
           "responsiveness": 0.52,
-          "reasons": [
-            "Kai Moreau li23 fits"
-          ]
+          "reasons": ["Kai Moreau li23 fits"]
         },
         {
           "name": "Ben Moreau",
@@ -2291,10 +1789,7 @@
           "org": "Vercel",
           "email": null,
           "warmth": null,
-          "sources": [
-            "apollo",
-            "unipile"
-          ],
+          "sources": ["apollo", "unipile"],
           "source": "unipile+apollo",
           "external_id": "ACoA1",
           "person_id": null,
@@ -2302,9 +1797,7 @@
           "fit": 0.02,
           "reach": 0,
           "responsiveness": 0.44,
-          "reasons": [
-            "Ben Moreau fits"
-          ]
+          "reasons": ["Ben Moreau fits"]
         },
         {
           "name": "Dev Reyes li29",
@@ -2312,9 +1805,7 @@
           "org": "Vercel",
           "email": null,
           "warmth": null,
-          "sources": [
-            "unipile"
-          ],
+          "sources": ["unipile"],
           "source": "unipile",
           "external_id": "ACoA29",
           "person_id": null,
@@ -2322,9 +1813,7 @@
           "fit": 0.05,
           "reach": 0,
           "responsiveness": 0.16,
-          "reasons": [
-            "Dev Reyes li29 fits"
-          ]
+          "reasons": ["Dev Reyes li29 fits"]
         },
         {
           "name": "Jia Sato",
@@ -2332,10 +1821,7 @@
           "org": "Stripe",
           "email": null,
           "warmth": null,
-          "sources": [
-            "apollo",
-            "unipile"
-          ],
+          "sources": ["apollo", "unipile"],
           "source": "unipile+apollo",
           "external_id": "ACoA9",
           "person_id": null,
@@ -2343,10 +1829,7 @@
           "fit": 0,
           "reach": 0.05,
           "responsiveness": 0.15,
-          "reasons": [
-            "Jia Sato fits",
-            "2nd-degree on LinkedIn"
-          ]
+          "reasons": ["Jia Sato fits", "2nd-degree on LinkedIn"]
         },
         {
           "name": "Lea Okafor li24",
@@ -2354,9 +1837,7 @@
           "org": "Linear",
           "email": null,
           "warmth": null,
-          "sources": [
-            "unipile"
-          ],
+          "sources": ["unipile"],
           "source": "unipile",
           "external_id": "ACoA24",
           "person_id": null,
@@ -2364,10 +1845,7 @@
           "fit": 0.01,
           "reach": 0.05,
           "responsiveness": 0.1,
-          "reasons": [
-            "Lea Okafor li24 fits",
-            "2nd-degree on LinkedIn"
-          ]
+          "reasons": ["Lea Okafor li24 fits", "2nd-degree on LinkedIn"]
         }
       ],
       "unconfigured": [],

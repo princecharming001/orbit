@@ -140,7 +140,7 @@ function slowClaude() {
   let running = 0;
   const stats = { calls: 0, peak: 0 };
   const claude: ClaudeDep = {
-    async parse(task, schema, prompt: ClaudePrompt) {
+    async parse(_task, schema, prompt: ClaudePrompt) {
       stats.calls++;
       running++;
       stats.peak = Math.max(stats.peak, running);
