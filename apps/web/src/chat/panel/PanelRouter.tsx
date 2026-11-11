@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react';
-import { Suspense, useMemo } from 'react';
+import { lazy, Suspense, useMemo } from 'react';
 import {
   createPath,
   UNSAFE_LocationContext as LocationContext,
@@ -25,6 +25,9 @@ import {
   SettingsPage,
 } from '../../pages/lazyPages';
 import { panelAnchorHref } from './routes';
+
+/** A card button's result (plan 42), drawn as the chat's own card. */
+const ResultPanel = lazy(() => import('./ResultPanel'));
 
 /**
  * Runs the app's own pages inside the side panel. The panel is not a second router: it is a small navigation scope
@@ -109,6 +112,7 @@ export function PanelRoutes() {
         <Route path="/notes/new" element={<NotesNew />} />
         <Route path="/settings" element={<SettingsPage />} />
         <Route path="/settings/:section" element={<SettingsPage />} />
+        <Route path="/result/:id" element={<ResultPanel />} />
         <Route path="*" element={<Navigate to="/people" replace />} />
       </Routes>
     </Suspense>

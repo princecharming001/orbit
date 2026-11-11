@@ -17,7 +17,14 @@ const PANEL_ROUTES: RegExp[] = [
   /^\/drafts$/,
   /^\/notes\/new$/,
   /^\/settings(\/[^/]+)?$/,
+  // a card button's result (plan 42): drawn only in the panel, never a page of its own
+  /^\/result\/[^/]+$/,
 ];
+
+/** Whether an href is a real page of the app (the panel can also show a card button's result, which is not). */
+export function isAppPage(href: string): boolean {
+  return !pathOf(href).startsWith('/result/');
+}
 
 /** The path part of an in-app href ("/people/p4?tab=facts&prep=1" gives "/people/p4"). */
 export function pathOf(href: string): string {
@@ -101,5 +108,6 @@ export function staticTitle(href: string): string {
   if (path.startsWith('/people/')) return 'Profile';
   if (path.startsWith('/companies/')) return 'Company';
   if (path.startsWith('/settings/')) return 'Settings';
+  if (path.startsWith('/result/')) return 'Result';
   return 'Orbit';
 }

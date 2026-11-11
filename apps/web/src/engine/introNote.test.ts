@@ -141,20 +141,16 @@ describe('the ask and its note', () => {
     await db.people.bulkPut([KENJI, PRIYA]);
   });
 
-  it('the ask has four lines or fewer and no quoted note inside it; the note sits beside it', async () => {
+  it('one message: the ask, then the note quoted inside it, exactly what goes out; no separate note', async () => {
     const r = (await requestIntro(user, KENJI.id, PRIYA.id, { path: { score: 0.5 }, now: NOW }))!;
     const ask = (await db.outbound.get(r.draft!.id))!;
-    const lines = ask.bodyDraft.split(/\n\n+/).slice(1, -1);
-    expect(lines.length).toBeLessThanOrEqual(2);
-    const sentences = lines
-      .join(' ')
-      .split(/(?<=[.?!])\s+/)
-      .filter(Boolean);
-    expect(sentences.length).toBeLessThanOrEqual(4);
-    expect(ask.bodyDraft).not.toContain('"');
-    expect(ask.bodyDraft).toMatch(/if you think Priya would be open to it/i);
-    expect(ask.forwardNote).toMatch(/^Ravi Jain is /);
-    expect(ask.forwardNote).toMatch(/15 minutes with Priya/);
+    expect(ask.bodyDraft).toMatch(
+      /if you think Priya would be open to it, here's a short note you could forward:\n\n"Ravi Jain is /i,
+    );
+    expect(ask.bodyDraft).toMatch(/15 minutes with Priya[^"]*"\n\nNo worries at all if not\./);
+    expect(ask.bodyDraft).not.toMatch(/note below/i);
+    // nothing on the side: the editor shows no second box
+    expect(ask.forwardNote).toBeUndefined();
   });
 
   it('every ask reuses the note the student saved, rebuilt from it', async () => {
@@ -163,20 +159,31 @@ describe('the ask and its note', () => {
       'Ravi Jain is a junior at Michigan who builds payments tools.',
     );
     const r = (await requestIntro(user, KENJI.id, PRIYA.id, { path: { score: 0.5 }, now: NOW }))!;
-    expect((await db.outbound.get(r.draft!.id))!.forwardNote).toMatch(
-      /^Ravi Jain is a junior at Michigan who builds payments tools\. Ravi would love 15 minutes with Priya/,
+    expect((await db.outbound.get(r.draft!.id))!.bodyDraft).toMatch(
+      /"Ravi Jain is a junior at Michigan who builds payments tools\. Ravi would love 15 minutes with Priya/,
     );
   });
 
-  it('by email it goes as one message: the ask, a rule, the note; the editor gets the ask back alone', async () => {
+  it('by email it goes as the one message the student read, nothing added', async () => {
     const r = (await requestIntro(user, KENJI.id, PRIYA.id, { path: { score: 0.5 }, now: NOW }))!;
     const ask = (await db.outbound.get(r.draft!.id))!;
     const out = await approveAndSend(user, ask.id, ask.bodyDraft, ask.subject, NOW, { via: 'copy' });
     expect(out.ok).toBe(true);
     const sent = (await db.outbound.get(ask.id))!;
-    expect(sent.bodyFinal).toBe(withNote(ask.bodyDraft, ask.forwardNote));
-    expect(sent.bodyFinal).toContain(NOTE_RULE);
-    expect(withoutNote(sent.bodyFinal!, ask.forwardNote)).toBe(ask.bodyDraft.trimEnd());
+    expect(sent.bodyFinal).toBe(ask.bodyDraft);
+    expect(sent.bodyFinal).not.toContain(NOTE_RULE);
+  });
+
+  it('an ask from before keeps its note beside it, and it still goes out with the ask', async () => {
+    const r = (await requestIntro(user, KENJI.id, PRIYA.id, { path: { score: 0.5 }, now: NOW }))!;
+    const note = 'Ravi Jain is a junior at Michigan. Ravi would love 15 minutes with Priya.';
+    await db.outbound.update(r.draft!.id, { forwardNote: note });
+    const ask = (await db.outbound.get(r.draft!.id))!;
+    const out = await approveAndSend(user, ask.id, ask.bodyDraft, ask.subject, NOW, { via: 'copy' });
+    expect(out.ok).toBe(true);
+    const sent = (await db.outbound.get(ask.id))!;
+    expect(sent.bodyFinal).toBe(withNote(ask.bodyDraft, note));
+    expect(withoutNote(sent.bodyFinal!, note)).toBe(ask.bodyDraft.trimEnd());
   });
 
   it('a note that slipped into the first person is not sent', async () => {
@@ -188,19 +195,20 @@ describe('the ask and its note', () => {
     if (!out.ok) expect(out.error).toMatch(/note to forward/i);
   });
 
-  it('on LinkedIn the ask goes alone and the note waits as a second message for its tap', async () => {
+  it('as a LinkedIn connection note (300 characters) the ask goes alone, with no pointer to a note', async () => {
     live.on = true;
     try {
       await db.people.put({ ...KENJI, primaryEmail: undefined, emails: [], linkedinSlug: 'kenji-w' });
       const r = (await requestIntro(user, KENJI.id, PRIYA.id, { path: { score: 0.5 }, now: NOW }))!;
       const ask = (await db.outbound.get(r.draft!.id))!;
       expect(ask.channel).toBe('linkedin');
+      expect(ask.bodyDraft).not.toMatch(/short note/i);
+      expect(ask.forwardNote).toBeUndefined();
       const out = await approveAndSend(user, ask.id, ask.bodyDraft, undefined, NOW);
       expect(out).toMatchObject({ ok: true, status: 'queued' });
       expect((await db.outbound.get(ask.id))!.bodyFinal).toBe(ask.bodyDraft);
-      const note = await pendingNoteFor(ask);
-      expect(note).toMatchObject({ kind: 'forwardable_blurb', status: 'draft', channel: 'linkedin' });
-      expect(note!.bodyDraft).toBe(ask.forwardNote);
+      // and nothing waits as a second message
+      expect(await pendingNoteFor(ask)).toBeUndefined();
     } finally {
       live.on = false;
     }

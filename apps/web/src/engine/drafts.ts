@@ -11,7 +11,7 @@ import { composeKindFor, newId } from '@orbit/core';
 import { db } from '../db/schema';
 import { draftForSuggestion, draftMessage, needsWarmUp, startWarmUpOrOutreach, unsentDraftOf } from './brief';
 import { latestReply, newer } from './conversation';
-import { type AskPosting, introNoteBase, noteForAsk } from './introNote';
+import { type AskPosting, introNoteBase, noteForAsk, withNoteInline, withoutNotePointer } from './introNote';
 import { currentResumeFacets, sharesOrgNow } from './resume';
 import { lastTouch } from './search';
 
@@ -281,9 +281,10 @@ export async function requestIntro(
   await db.suggestions.add(s);
   const draft = await draftForSuggestion(user, s, now);
   if (draft) {
-    // the note the introducer can forward: the student's saved lines, and a last line for this ask
+    // the note the introducer can forward (the student's saved lines, and a last line for this ask), written into the
+    // ask itself: the one message the student edits is exactly what is sent
     const base = await introNoteBase(user, now);
-    draft.forwardNote = noteForAsk(
+    const note = noteForAsk(
       base.text,
       user,
       {
@@ -293,7 +294,12 @@ export async function requestIntro(
       },
       opts.posting,
     );
-    await db.outbound.update(draft.id, { forwardNote: draft.forwardNote });
+    // a LinkedIn connection note has 300 characters: the ask goes alone there, with no pointer to a note
+    const { connectionNoteFor } = await import('./send');
+    draft.bodyDraft = (await connectionNoteFor(draft, connector))
+      ? withoutNotePointer(draft.bodyDraft)
+      : withNoteInline(draft.bodyDraft, note);
+    await db.outbound.update(draft.id, { bodyDraft: draft.bodyDraft });
   }
   return { suggestion: s, draft, existed: false };
 }

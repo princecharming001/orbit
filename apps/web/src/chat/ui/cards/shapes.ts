@@ -235,13 +235,13 @@ export function readDrafts(d: unknown): DraftRow[] {
 }
 
 /** create_drafts: the people it did not write to, and why */
-export function readSkipped(d: unknown): { name: string; why: string }[] {
+export function readSkipped(d: unknown): { name: string; why: string; id?: string }[] {
   return arr(obj(unpack(d)).skipped)
     .map((x) => {
       const r = obj(x);
       const name = str(obj(r.person).name) ?? str(r.person);
       const why = str(r.why);
-      return name && why ? { name, why } : undefined;
+      return name && why ? { name, why, id: str(obj(r.person).id) } : undefined;
     })
     .filter(present);
 }

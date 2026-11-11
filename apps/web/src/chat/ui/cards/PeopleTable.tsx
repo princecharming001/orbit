@@ -174,8 +174,12 @@ export function PeopleTableCard({
   };
   const c = t.counts;
   const total = c.strong + c.likely;
-  const names = listed.filter((r) => picked.has(r.person.id)).map((r) => r.person.displayName);
-  const pickedSteps = [routesToEach(names), writeToEach(names)].filter((s): s is NextStep => !!s);
+  const chosen = listed.filter((r) => picked.has(r.person.id));
+  const names = chosen.map((r) => r.person.displayName);
+  const ids = chosen.map((r) => r.person.id);
+  const pickedSteps = [routesToEach(names, ids), writeToEach(names, undefined, ids)].filter(
+    (s): s is NextStep => !!s,
+  );
   const steps: NextStep[] = [];
   if (t.remaining > 0)
     steps.push({

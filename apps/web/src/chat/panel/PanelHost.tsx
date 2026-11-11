@@ -4,7 +4,7 @@ import { useNavigate } from 'react-router-dom';
 import { cx } from '../../ui';
 import { usePanel } from './PanelProvider';
 import { PanelRouter, PanelRoutes } from './PanelRouter';
-import { panelKey, pathOf } from './routes';
+import { isAppPage, panelKey, pathOf } from './routes';
 import { usePanelTitle } from './usePanelTitle';
 
 const WIDTH_KEY = 'orbit.panel.width';
@@ -195,9 +195,11 @@ export function PanelHost() {
         </IconButton>
       )}
       <PanelTitle href={href} />
-      <IconButton label="Open as a page" onClick={openAsPage} testId="panel-open-page">
-        <ArrowUpRight size={17} aria-hidden />
-      </IconButton>
+      {isAppPage(href) && (
+        <IconButton label="Open as a page" onClick={openAsPage} testId="panel-open-page">
+          <ArrowUpRight size={17} aria-hidden />
+        </IconButton>
+      )}
       {desktop && (
         <IconButton
           label={panel.expanded ? 'Shrink the panel' : 'Expand the panel'}

@@ -4,12 +4,13 @@
  * people the student already has (search_people and the like).
  */
 import type { Person } from '@orbit/core';
+import { Loader2 } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import { PersonCompanyLogo } from '../../../components/CompanyLogo';
 import { Avatar, cx, PickCircle } from '../../../ui';
 import type { ResultEnvelope } from '../../types';
 import type { ToolBlock } from '../threadStore';
-import { addPicked, type Picked, routesToEach, writeToEach } from './next';
+import { addPicked, type Picked, routesToEach, writeTo, writeToEach } from './next';
 import { type NextStep, OpenInApp } from './parts';
 import {
   BatchTag,
@@ -24,6 +25,7 @@ import {
   useRowFold,
 } from './people';
 import { type ListRow, readPeople, readPeopleQuery } from './shapes';
+import { useStepGo } from './stepGo';
 import { cardSteps } from './steps';
 
 type CardActions = { send: (text: string) => Promise<void> | void };
@@ -71,7 +73,7 @@ export function FoundPeopleCard({
   const chosen = pickable.filter((it) => picked.has(it.id!));
   // someone found in a search goes by name alone; the id finds them for add_sourced
   const rows: Picked[] = chosen.map((it) =>
-    it.known ? { name: it.person!.name } : { name: it.person!.name, rec: it.id },
+    it.known ? { name: it.person!.name, id: it.known } : { name: it.person!.name, rec: it.id },
   );
   const pickedSteps = [addPicked(rows, 'routes'), addPicked(rows), addPicked(rows, 'drafts')].filter(
     (s): s is NextStep => !!s,
@@ -164,8 +166,12 @@ export function KnownPeopleCard({ env, actions }: { env: ResultEnvelope; actions
   const picked = usePickSet();
   const fold = useRowFold(people);
   const canPick = people.length > 1;
-  const names = people.filter((p) => picked.has(p.person.id)).map((p) => p.person.displayName);
-  const pickedSteps = [routesToEach(names), writeToEach(names)].filter((s): s is NextStep => !!s);
+  const chosenPeople = people.filter((p) => picked.has(p.person.id));
+  const names = chosenPeople.map((p) => p.person.displayName);
+  const ids = chosenPeople.map((p) => p.person.id);
+  const pickedSteps = [routesToEach(names, ids), writeToEach(names, undefined, ids)].filter(
+    (s): s is NextStep => !!s,
+  );
   const title =
     query && nameQuery && people.length > 1
       ? `Which "${query}"?`
@@ -193,7 +199,8 @@ export function KnownPeopleCard({ env, actions }: { env: ResultEnvelope; actions
                   }
                 : undefined
             }
-            onWrite={() => void actions.send(`Write to ${person.displayName}`)}
+            write={writeTo(person.displayName, undefined, person.id)}
+            send={actions.send}
           />
         ))}
       </ul>
@@ -261,7 +268,8 @@ export function PersonTile({
   line,
   tag,
   pick,
-  onWrite,
+  write,
+  send,
   href,
 }: {
   person: Person;
@@ -270,7 +278,9 @@ export function PersonTile({
   /** where the tile opens; their page unless given (the company card opens the Map at the warmest way in) */
   href?: string;
   pick?: { picking: boolean; picked: boolean; onPick: (on: boolean) => void };
-  onWrite: () => void;
+  /** the tile's one action: a draft to them, opened beside the chat */
+  write: NextStep;
+  send: (text: string) => Promise<void> | void;
 }) {
   const t = tileTag(person, tag);
   const first = person.firstName || person.displayName.split(' ')[0];
@@ -315,15 +325,38 @@ export function PersonTile({
       )}
       <div className="mt-3 flex items-center justify-between gap-2">
         <ClosenessSignal value={closenessOf(person)} />
-        <button
-          type="button"
-          className="relative z-10 h-8 px-3 rounded-[6px] border border-line bg-canvas text-[13px] font-medium hover:bg-canvas-2"
-          onClick={onWrite}
-          data-testid="known-person-write"
-        >
-          Write to {first}
-        </button>
+        <TileWrite step={write} send={send} first={first ?? person.displayName} />
       </div>
     </li>
+  );
+}
+
+/** A tile's "Write to Dana": the draft opens beside the chat; once written, the button opens it again. */
+function TileWrite({
+  step,
+  send,
+  first,
+}: {
+  step: NextStep;
+  send: (text: string) => Promise<void> | void;
+  first: string;
+}) {
+  const g = useStepGo(step, send);
+  const done = g.state === 'done' && g.mode !== 'send';
+  return (
+    <button
+      type="button"
+      className="relative z-10 inline-flex h-8 items-center gap-1.5 px-3 rounded-[6px] border border-line bg-canvas text-[13px] font-medium hover:bg-canvas-2 disabled:opacity-60"
+      onClick={g.go}
+      disabled={g.blocked || g.state === 'running'}
+      aria-busy={g.state === 'running'}
+      data-testid="known-person-write"
+      data-state={g.state}
+      data-mode={g.mode}
+      title={g.mode === 'panel' ? 'Opens beside the chat' : undefined}
+    >
+      {g.state === 'running' && <Loader2 size={13} className="animate-spin" aria-hidden />}
+      {done ? 'Open draft' : `Write to ${first}`}
+    </button>
   );
 }

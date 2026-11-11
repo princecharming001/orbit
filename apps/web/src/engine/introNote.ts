@@ -113,6 +113,40 @@ export function noteForAsk(
 }
 
 /**
+ * The note inside the ask itself, so the one message the student reads and edits is exactly what goes out (the owner
+ * found a separate "note they can forward" unclear). The ask's pointer to a note "below" becomes the lead-in, with
+ * the note quoted under it; an ask without that line gets the note as its own paragraph before the sign-off.
+ */
+export function withNoteInline(body: string, note: string): string {
+  const quoted = `"${note.trim().replace(/^"|"$/g, '')}"`;
+  const pointer = /(t)here's a short note below (?:that )?you could forward\./i;
+  const m = body.match(pointer);
+  if (m) {
+    const lead =
+      m[1] === 't' ? "here's a short note you could forward:" : "Here's a short note you could forward:";
+    return body.replace(pointer, `${lead}\n\n${quoted}`);
+  }
+  const parts = body.trimEnd().split(/\n{2,}/);
+  if (parts.length >= 3) {
+    const sign = parts.pop()!;
+    return [...parts, `Here's a short note you could forward:\n\n${quoted}`, sign].join('\n\n');
+  }
+  return `${body.trimEnd()}\n\nHere's a short note you could forward:\n\n${quoted}`;
+}
+
+/**
+ * The ask alone, with no pointer to a note: for a LinkedIn connection note, where 300 characters leave no room for one.
+ */
+export function withoutNotePointer(body: string): string {
+  return body
+    .replace(
+      /\s*If you think [^.?!\n]+ would be open to it, there's a short note below (?:that )?you could forward\./i,
+      '',
+    )
+    .replace(/\s*there's a short note below (?:that )?you could forward\./i, '');
+}
+
+/**
  * What is wrong with a note, in words the student can act on; empty when it is fine to send. The same rules hold
  * for the version Orbit writes and the one the student edits.
  */

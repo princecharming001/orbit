@@ -48,7 +48,7 @@ describe('create_drafts', () => {
     const p = people.find((x) => x.isHuman && !x.hiddenAt)!;
     await db.people.update(p.id, { hiddenAt: NOW.toISOString() });
     const env = await execute('create_drafts', { personIds: [p.id] }, makeCtx(user));
-    expect(readSkipped(env.data)).toEqual([{ name: p.displayName, why: 'hidden' }]);
+    expect(readSkipped(env.data)).toEqual([{ name: p.displayName, why: 'hidden', id: p.id }]);
     expect(env.summary).toMatch(/^No drafts written\. Skipped /);
     await db.people.update(p.id, { hiddenAt: undefined });
   });

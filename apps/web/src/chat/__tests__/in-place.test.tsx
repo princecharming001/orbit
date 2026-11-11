@@ -17,7 +17,19 @@ import { ChatStore } from '../agent/store';
 import { execute, registry } from '../registry';
 import { type FakeAnthropic, messageRequests, scriptedFetch } from '../test/fakeAnthropic';
 import { type ResultEnvelope, type StepRun, tapActionId } from '../types';
-import { addPicked, addTarget } from '../ui/cards/next';
+import {
+  addPicked,
+  addTarget,
+  afterStage,
+  askForIntro,
+  introTo,
+  prepFor,
+  routesToEach,
+  warmUpFirst,
+  writeNow,
+  writeTo,
+  writeToEach,
+} from '../ui/cards/next';
 import type { NextStep } from '../ui/cards/parts';
 import { ResultCard } from '../ui/cards/ResultCard';
 import { cardSteps } from '../ui/cards/steps';
@@ -53,8 +65,60 @@ describe('the steps that act in place', () => {
     expect(addPicked([{ name: 'Dana Lee', rec: 'li:1' }, { name: 'Kai Ito' }])!.run!.input).toEqual({
       recommendationIds: ['li:1'],
     });
-    // adding and then writing or routing is still a turn: it needs the model or the router to go on
-    expect(addPicked([{ name: 'Dana Lee', rec: 'li:1' }], 'drafts')!.run).toBeUndefined();
+    // adding and then writing or routing opens beside the chat (plan 42); a mix the card cannot name by id is a turn
+    expect(addPicked([{ name: 'Dana Lee', rec: 'li:1' }], 'drafts')!.run).toMatchObject({
+      tool: 'add_sourced',
+      input: { recommendationIds: ['li:1'], next: 'drafts' },
+      show: 'panel',
+    });
+    expect(
+      addPicked([{ name: 'Dana Lee', rec: 'li:1' }, { name: 'Kai Ito' }], 'routes')!.run,
+    ).toBeUndefined();
+  });
+
+  it('every step that opens beside the chat names a real tool with an input it accepts (plan 42)', () => {
+    const panel: NextStep[] = [
+      writeTo('Zain Kundi', undefined, 'p_zain'),
+      writeTo('Zain Kundi', 'thank_you', 'p_zain'),
+      writeToEach(['Zain Kundi', 'Vyom K'], 'bump', ['p_zain', 'p_vyom'])!,
+      routesToEach(['Zain Kundi'], ['p_zain'])!,
+      routesToEach(['Zain Kundi', 'Vyom K'], ['p_zain', 'p_vyom'])!,
+      introTo('Zain Kundi', 'p_zain'),
+      askForIntro('Arnav Goel', 'Zain Kundi', 'p_arnav', 'p_zain'),
+      warmUpFirst('Zain Kundi', 'p_zain'),
+      writeNow('Zain Kundi', 'p_zain'),
+      addPicked([{ name: 'Dana Lee', rec: 'li:1' }], 'routes')!,
+      addPicked(
+        [
+          { name: 'Dana Lee', id: 'p_dana' },
+          { name: 'Kai Ito', id: 'p_kai' },
+        ],
+        'drafts',
+      )!,
+      afterStage('Zain Kundi', 'completed', 'p_zain')!,
+    ];
+    for (const s of panel) {
+      expect(s.run?.show, s.label).toBe('panel');
+      const spec = registry.get(s.run!.tool);
+      expect(spec, s.run!.tool).toBeDefined();
+      expect(spec!.input.safeParse(s.run!.input).success, `${s.label}: ${JSON.stringify(s.run!.input)}`).toBe(
+        true,
+      );
+      // the same request in words stays, for "do it" and the no-key router
+      expect(s.message.length).toBeGreaterThan(5);
+      expect(s.run!.done).not.toMatch(/[—–!]/);
+    }
+    // prep is a page: the person's prep deck beside the chat, no tool
+    expect(prepFor('Zain Kundi', 'p_zain')).toMatchObject({ open: '/people/p_zain?prep=1' });
+    expect(prepFor('Zain Kundi', 'p_zain').run).toBeUndefined();
+    // by name alone a step stays the message, as before
+    for (const s of [
+      writeTo('Zain Kundi'),
+      introTo('Zain Kundi'),
+      askForIntro('Arnav Goel', 'Zain Kundi'),
+      prepFor('Zain'),
+    ])
+      expect(s.run ?? s.open).toBeUndefined();
   });
 
   it('a different input on the same card is another tap', () => {

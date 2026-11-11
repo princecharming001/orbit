@@ -86,10 +86,10 @@ function stepsOf(toolName: string, env: ResultEnvelope): NextStep[] {
         ];
       const { person, chat, questions } = r;
       const steps: NextStep[] = [];
-      if (!r.nextMessage?.wait) steps.push(writeTo(person.displayName, r.nextMessage?.kind));
+      if (!r.nextMessage?.wait) steps.push(writeTo(person.displayName, r.nextMessage?.kind, person.id));
       if ((chat?.stage === 'scheduled' || chat?.stage === 'scheduling') && !questions.length)
-        steps.push(prepFor(person.displayName));
-      if (!chat && person.strength < MEDIUM_TIE) steps.push(introTo(person.displayName));
+        steps.push(prepFor(person.displayName, person.id));
+      if (!chat && person.strength < MEDIUM_TIE) steps.push(introTo(person.displayName, person.id));
       return steps;
     }
     case 'people': {
@@ -98,18 +98,23 @@ function stepsOf(toolName: string, env: ResultEnvelope): NextStep[] {
       const target = readRoutes(d).to;
       if (!people.length) return [];
       const names = people.map((p) => p.person.displayName);
+      const ids = people.map((p) => p.person.id);
       // mutual connections: ask the closest one for the intro
-      if (target && people[0]) return [askForIntro(people[0].person.displayName, target.displayName)];
+      if (target && people[0])
+        return [
+          askForIntro(people[0].person.displayName, target.displayName, people[0].person.id, target.id),
+        ];
       // a list (not a name search that needs a pick): one draft each
       if (!query || people.length === 1) {
-        const each = people.length === 1 ? writeTo(names[0]!) : writeToEach(names);
+        const each =
+          people.length === 1 ? writeTo(names[0]!, undefined, ids[0]) : writeToEach(names, undefined, ids);
         return each ? [each] : [];
       }
       return [];
     }
     case 'drafts': {
       const warmUp = readSkipped(d).find((s) => /linkedin only/i.test(s.why));
-      return warmUp ? [writeTo(warmUp.name)] : [];
+      return warmUp ? [writeTo(warmUp.name, undefined, warmUp.id)] : [];
     }
     case 'pipeline': {
       const { items } = readPipeline(d);
@@ -117,14 +122,15 @@ function stepsOf(toolName: string, env: ResultEnvelope): NextStep[] {
       if (items.length === 1) {
         const one = items[0]!;
         const step = one.quiet
-          ? writeTo(one.person.displayName, 'bump')
-          : afterStage(one.person.displayName, one.stage);
+          ? writeTo(one.person.displayName, 'bump', one.person.id)
+          : afterStage(one.person.displayName, one.stage, one.person.id);
         return step ? [step] : [];
       }
       if (quiet.length) {
         const each = writeToEach(
           quiet.map((q) => q.person.displayName),
           'bump',
+          quiet.map((q) => q.person.id),
         );
         if (!each) return [];
         return [
@@ -133,6 +139,7 @@ function stepsOf(toolName: string, env: ResultEnvelope): NextStep[] {
             : {
                 label: quiet.length <= 5 ? `Follow up with the ${quiet.length} quiet ones` : each.label,
                 message: each.message,
+                run: each.run,
               },
         ];
       }
@@ -144,29 +151,38 @@ function stepsOf(toolName: string, env: ResultEnvelope): NextStep[] {
       const { sorted, rest } = routeRows(d);
       const best = sorted[0];
       if (!to) return [];
-      if (best && best.names.length > 1) return [askForIntro(best.names[0]!, to.displayName)];
+      if (best && best.names.length > 1)
+        return [askForIntro(best.names[0]!, to.displayName, best.hops[0]?.id, to.id)];
       // a Village introducer only when they are someone in Orbit, so the request has someone to go to
       if (!best && rest[0]?.introducerId && rest[0].hops.length > 2)
-        return [askForIntro(rest[0].introducer, to.displayName)];
-      return [writeTo(to.displayName)];
+        return [askForIntro(rest[0].introducer, to.displayName, rest[0].introducerId, to.id)];
+      return [writeTo(to.displayName, undefined, to.id)];
     }
     case 'note': {
       const n = readNote(d);
       if (n.notes.length || n.candidates.length) return [];
       if (n.person && n.thankYouDraftId)
         return [
-          { label: 'Review the thank-you', message: `Open the thank-you draft to ${n.person.displayName}` },
+          {
+            label: 'Review the thank-you',
+            message: `Open the thank-you draft to ${n.person.displayName}`,
+            open: `/people/${n.person.id}?open=${encodeURIComponent(n.thankYouDraftId)}`,
+          },
         ];
-      if (n.person) return [writeTo(n.person.displayName)];
+      if (n.person) return [writeTo(n.person.displayName, undefined, n.person.id)];
       return [];
     }
     case 'company': {
       const { name, people, target } = readCompany(d);
       if (!name) return [];
       const steps: NextStep[] = [];
-      if (people[0]) steps.push(writeTo(people[0].displayName));
+      if (people[0]) steps.push(writeTo(people[0].displayName, undefined, people[0].id));
       if (people.length >= 2) {
-        const each = writeToEach(people.map((p) => p.displayName));
+        const each = writeToEach(
+          people.map((p) => p.displayName),
+          undefined,
+          people.map((p) => p.id),
+        );
         if (each) steps.push(each);
       }
       if (!target) steps.push(addTarget(name));
@@ -207,15 +223,23 @@ function stepsOf(toolName: string, env: ResultEnvelope): NextStep[] {
       // mutual connections need LinkedIn live: Orbit's own routes still answer the question
       const mutual = unpack(d) as { target?: { name?: string }; reason?: string } | undefined;
       if (toolName === 'get_mutual_connections' && mutual?.target?.name)
-        return [introTo(mutual.target.name), { label: 'Connect LinkedIn', message: 'Connect my LinkedIn' }];
+        return [
+          introTo(mutual.target.name, (mutual.target as { id?: string }).id),
+          { label: 'Connect LinkedIn', message: 'Connect my LinkedIn' },
+        ];
       const { warmUpFor, wait } = readText(d);
-      if (warmUpFor) return [warmUpFirst(warmUpFor.displayName), writeNow(warmUpFor.displayName)];
+      if (warmUpFor)
+        return [
+          warmUpFirst(warmUpFor.displayName, warmUpFor.id),
+          writeNow(warmUpFor.displayName, warmUpFor.id),
+        ];
       if (wait)
         return [
           {
             ...writeTo(
               wait.person.displayName,
               wait.reason === 'too_soon' || wait.reason === 'away' ? 'bump' : 'nurture',
+              wait.person.id,
             ),
             label: 'Write anyway',
           },

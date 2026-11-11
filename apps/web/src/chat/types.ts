@@ -130,6 +130,11 @@ export interface StepRun {
   input: Record<string, unknown>;
   /** the button's words once it ran ("Added to targets") */
   done: string;
+  /**
+   * Where the result goes: `panel` opens it in the side panel beside the chat (a draft to edit and send, the routes
+   * to someone), so the tap adds nothing to the thread. Without it the button only says it is done.
+   */
+  show?: 'panel';
 }
 
 /**

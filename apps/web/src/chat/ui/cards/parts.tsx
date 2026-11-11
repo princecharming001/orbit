@@ -4,14 +4,12 @@
  * next steps that sends a message the chat's tools understand.
  */
 import type { Person } from '@orbit/core';
-import { useLiveQuery } from 'dexie-react-hooks';
-import { ArrowRight, ArrowUpRight, Check, ChevronDown, Loader2 } from 'lucide-react';
-import { createContext, type ReactNode, useContext, useRef, useState } from 'react';
+import { ArrowRight, ArrowUpRight, Check, ChevronDown, Loader2, PanelRight } from 'lucide-react';
+import { createContext, type ReactNode, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { db } from '../../../db/schema';
 import { Avatar, cx, LinkedInMark, PickCircle } from '../../../ui';
-import { type ResultEnvelope, type StepRun, tapActionId } from '../../types';
-import { ChoicesContext } from './Choices';
+import type { ResultEnvelope, StepRun } from '../../types';
+import { useStepGo } from './stepGo';
 
 /**
  * Which card holds each draft's editor (draft id to tool use id): the newest one in the thread, so the same draft is
@@ -222,8 +220,6 @@ export function SelectionBar({
   steps: NextStep[];
   send: (text: string) => Promise<void> | void;
 }) {
-  const { running } = useContext(ChoicesContext);
-  const runner = useContext(StepRunnerContext);
   if (!total) return null;
   return (
     <div
@@ -247,29 +243,9 @@ export function SelectionBar({
       </button>
       {count > 0 && (
         <span className="flex flex-wrap gap-1.5">
-          {steps.map((s) =>
-            s.run && runner.run && runner.origin ? (
-              <InPlaceStep
-                key={s.label}
-                step={{ label: s.label, run: s.run }}
-                origin={runner.origin}
-                run={runner.run}
-              />
-            ) : (
-              <button
-                key={s.label}
-                type="button"
-                className="inline-flex items-center gap-1 min-h-7 px-2.5 py-1 rounded-[6px] border border-ink bg-ink text-canvas text-[12.5px] font-medium leading-tight hover:opacity-90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:opacity-50 disabled:pointer-events-none"
-                disabled={running}
-                title={s.message}
-                data-testid="selection-step"
-                onClick={() => void send(s.message)}
-              >
-                <ArrowRight size={12} aria-hidden className="shrink-0" />
-                {s.label}
-              </button>
-            ),
-          )}
+          {steps.map((s) => (
+            <StepPill key={s.label} step={s} send={send} />
+          ))}
         </span>
       )}
     </div>
@@ -305,6 +281,8 @@ export interface NextStep {
   label: string;
   message: string;
   run?: StepRun;
+  /** a page of the app to open in the side panel instead (a person's prep deck): no tool, no turn */
+  open?: string;
 }
 
 /** The card's own tool_use id and how to run one of its buttons in place; empty where a card cannot act. */
@@ -324,60 +302,160 @@ export function NextSteps({
   steps: NextStep[];
   send: (text: string) => Promise<void> | void;
 }) {
-  const { running } = useContext(ChoicesContext);
-  const runner = useContext(StepRunnerContext);
-  const sending = useRef(false);
   const list = steps.slice(0, 3);
-  // a step the student tapped here: ticked off in place, so the list reads as done (their pick, a checklist)
-  const [done, setDone] = useState<Set<string>>(new Set());
   if (!list.length) return null;
   return (
     <div className="mt-3" role="group" aria-label="Next steps" data-testid="next-steps">
       <div className="mb-0.5 text-[11.5px] font-medium uppercase tracking-wide text-ink-3">Next steps</div>
       <div className="divide-y divide-line-2 border-y border-line-2">
-        {list.map((s) =>
-          s.run && runner.run && runner.origin ? (
-            <InPlaceStep
-              key={s.label}
-              step={{ label: s.label, run: s.run }}
-              origin={runner.origin}
-              run={runner.run}
-            />
-          ) : (
-            <button
-              key={s.label}
-              type="button"
-              className={cx(
-                STEP_ROW,
-                'group/step hover:bg-canvas-2/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:opacity-60',
-              )}
-              disabled={running}
-              title={s.message}
-              data-testid="next-step"
-              data-state={done.has(s.label) ? 'done' : 'ready'}
-              onClick={() => {
-                if (sending.current || running) return;
-                sending.current = true;
-                setDone((d) => new Set(d).add(s.label));
-                void Promise.resolve(send(s.message)).finally(() => {
-                  sending.current = false;
-                });
-              }}
-            >
-              <StepBox done={done.has(s.label)} />
-              <span className={cx('min-w-0 flex-1', done.has(s.label) && 'text-ink-3 line-through')}>
-                {s.label}
-              </span>
-              <ArrowRight
-                size={14}
-                aria-hidden
-                className="shrink-0 text-ink-3 transition-transform group-hover/step:translate-x-0.5"
-              />
-            </button>
-          ),
-        )}
+        {list.map((s) => (
+          <StepRow key={s.label} step={s} send={send} />
+        ))}
       </div>
     </div>
+  );
+}
+
+/**
+ * One next step as a row: a round tick, the words, and where it goes. A step that runs in place or opens in the side
+ * panel (plan 42) does its work where the student is: once done the row says what it did, and a result in the panel
+ * opens again from here. A step that is a message is sent as the next turn, and reads as ticked off.
+ */
+export function StepRow({ step, send }: { step: NextStep; send: (text: string) => Promise<void> | void }) {
+  const g = useStepGo(step, send);
+  const done = g.state === 'done';
+  const reopens = done && (g.mode === 'panel' || g.mode === 'open');
+  const inert = done && g.mode === 'place';
+  const words = done && g.mode !== 'send' ? g.doneLabel : step.label;
+  const body = (
+    <>
+      <StepBox done={done} busy={g.state === 'running'} />
+      <span
+        className={cx(
+          'min-w-0 flex-1',
+          done && g.mode === 'send' && 'text-ink-3 line-through',
+          inert && 'text-ink-3',
+        )}
+      >
+        {words}
+      </span>
+      {!inert &&
+        (reopens ? (
+          <span className="inline-flex shrink-0 items-center gap-1 text-[12px] font-medium text-ink-3 group-hover/step:text-ink">
+            Open
+            <PanelRight size={14} aria-hidden />
+          </span>
+        ) : g.mode === 'panel' || g.mode === 'open' ? (
+          <PanelRight
+            size={14}
+            aria-hidden
+            className="shrink-0 text-ink-3 transition-colors group-hover/step:text-ink"
+          />
+        ) : (
+          <ArrowRight
+            size={14}
+            aria-hidden
+            className="shrink-0 text-ink-3 transition-transform group-hover/step:translate-x-0.5"
+          />
+        ))}
+    </>
+  );
+  return (
+    <span className="block">
+      {inert ? (
+        <span
+          className={STEP_ROW}
+          data-testid="next-step"
+          data-state="done"
+          data-mode={g.mode}
+          aria-live="polite"
+        >
+          {body}
+        </span>
+      ) : (
+        <button
+          type="button"
+          className={cx(
+            STEP_ROW,
+            'group/step hover:bg-canvas-2/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:opacity-60',
+          )}
+          disabled={g.blocked || g.state === 'running'}
+          aria-busy={g.state === 'running'}
+          title={g.mode === 'panel' || g.mode === 'open' ? 'Opens beside the chat' : step.message}
+          data-testid="next-step"
+          data-state={g.state}
+          data-mode={g.mode}
+          onClick={g.go}
+        >
+          {body}
+        </button>
+      )}
+      {g.state === 'failed' && g.error && (
+        <span className="block px-1 pb-2 text-[12.5px] text-bad" data-testid="next-step-error">
+          {g.error}
+        </span>
+      )}
+    </span>
+  );
+}
+
+/**
+ * A step as a dark pill (the bar under picked people): the same work as a row. Once done it says what it did and,
+ * for a result in the side panel, opens it again.
+ */
+export function StepPill({ step, send }: { step: NextStep; send: (text: string) => Promise<void> | void }) {
+  const g = useStepGo(step, send);
+  const done = g.state === 'done';
+  const inert = done && g.mode === 'place';
+  if (inert)
+    return (
+      <span
+        className="inline-flex min-h-7 items-center gap-1 px-1.5 py-1 text-[12.5px] font-medium text-ink-3"
+        data-testid="selection-step"
+        data-state="done"
+        data-mode={g.mode}
+        aria-live="polite"
+      >
+        <Check size={12} strokeWidth={3} aria-hidden className="text-accent" />
+        {g.doneLabel}
+      </span>
+    );
+  return (
+    <span className="inline-flex flex-col">
+      <button
+        type="button"
+        className={cx(
+          'inline-flex items-center gap-1 min-h-7 px-2.5 py-1 rounded-[6px] text-[12.5px] font-medium leading-tight focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:opacity-50 disabled:pointer-events-none',
+          done && g.mode !== 'send'
+            ? 'border border-line bg-canvas text-ink hover:bg-canvas-2'
+            : 'border border-ink bg-ink text-canvas hover:opacity-90',
+        )}
+        disabled={g.blocked || g.state === 'running'}
+        aria-busy={g.state === 'running'}
+        title={g.mode === 'panel' || g.mode === 'open' ? 'Opens beside the chat' : step.message}
+        data-testid="selection-step"
+        data-state={g.state}
+        data-mode={g.mode}
+        onClick={g.go}
+      >
+        {g.state === 'running' ? (
+          <Loader2 size={12} aria-hidden className="shrink-0 animate-spin" />
+        ) : done && g.mode !== 'send' ? (
+          <Check size={12} strokeWidth={3} aria-hidden className="shrink-0 text-accent" />
+        ) : (
+          <ArrowRight size={12} aria-hidden className="shrink-0" />
+        )}
+        {done && g.mode !== 'send' ? g.doneLabel : step.label}
+        {done && (g.mode === 'panel' || g.mode === 'open') && (
+          <PanelRight size={12} aria-hidden className="shrink-0" />
+        )}
+      </button>
+      {g.state === 'failed' && g.error && (
+        <span className="pt-1 text-[12px] text-bad" data-testid="next-step-error">
+          {g.error}
+        </span>
+      )}
+    </span>
   );
 }
 
@@ -404,69 +482,14 @@ const STEP_ROW = 'flex w-full items-center gap-3 px-1 py-2.5 text-left text-[13.
 
 /**
  * A button that does its thing where it is (plan 37 §4): "Add Stripe to targets" runs, then reads "Added to targets"
- * with a check. Nothing is said in the thread. The tap is recorded under the card, so a reload shows it done; a
- * failure says so in one line and the button can be tapped again.
+ * with a check. Nothing is said in the thread. Kept for callers that hold a step's run alone; the row is StepRow.
  */
 export function InPlaceStep({
   step,
-  origin,
-  run,
 }: {
   step: { label: string; run: StepRun };
-  origin: string;
-  run: (step: { label: string; run: StepRun }) => Promise<ResultEnvelope>;
+  origin?: string;
+  run?: unknown;
 }) {
-  const id = tapActionId(origin, step);
-  // a tap recorded earlier (this conversation, before a reload); a temporary chat keeps it only in this state
-  const stored = useLiveQuery(() => db.chatActions.get(id), [id]);
-  const [local, setLocal] = useState<'running' | 'done' | 'failed'>();
-  const [error, setError] = useState<string>();
-  const state = local ?? (stored?.status === 'done' ? 'done' : undefined);
-  const go = async () => {
-    if (state === 'running' || state === 'done') return;
-    setLocal('running');
-    setError(undefined);
-    try {
-      const env = await run(step);
-      if (env.kind === 'error' || env.kind === 'needs_confirmation') {
-        setLocal('failed');
-        setError(env.kind === 'error' ? env.summary : 'That needs your approval in a message.');
-      } else setLocal('done');
-    } catch (e) {
-      setLocal('failed');
-      setError(e instanceof Error ? e.message : 'That did not go through.');
-    }
-  };
-  if (state === 'done')
-    return (
-      <span className={STEP_ROW} data-testid="next-step" data-state="done" aria-live="polite">
-        <StepBox done />
-        <span className="min-w-0 flex-1 text-ink-3">{step.run.done}</span>
-      </span>
-    );
-  return (
-    <span className="block">
-      <button
-        type="button"
-        className={cx(
-          STEP_ROW,
-          'hover:bg-canvas-2/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:opacity-60',
-        )}
-        disabled={state === 'running'}
-        aria-busy={state === 'running'}
-        data-testid="next-step"
-        data-state={state ?? 'ready'}
-        onClick={() => void go()}
-      >
-        <StepBox busy={state === 'running'} />
-        <span className="min-w-0 flex-1">{step.label}</span>
-        <ArrowRight size={14} aria-hidden className="shrink-0 text-ink-3" />
-      </button>
-      {state === 'failed' && error && (
-        <span className="block px-1 pb-2 text-[12.5px] text-bad" data-testid="next-step-error">
-          {error}
-        </span>
-      )}
-    </span>
-  );
+  return <StepRow step={{ label: step.label, message: step.label, run: step.run }} send={() => undefined} />;
 }

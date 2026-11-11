@@ -444,7 +444,8 @@ export function isConnectionNote(
   return !chats.some(answeredOnLinkedin);
 }
 
-async function connectionNoteFor(msg: OutboundMessage, person: Person): Promise<boolean> {
+/** Whether this LinkedIn message would go as a connection note (capped at 300 characters), not a message. */
+export async function connectionNoteFor(msg: OutboundMessage, person: Person): Promise<boolean> {
   if (msg.channel !== 'linkedin' || person.linkedinConnectedOn) return false;
   return isConnectionNote(msg, person, await db.chats.where('personId').equals(person.id).toArray());
 }

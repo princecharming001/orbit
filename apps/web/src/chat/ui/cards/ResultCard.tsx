@@ -22,6 +22,7 @@ import {
   ChevronDown,
   Copy,
   Download,
+  Loader2,
   Map as MapIcon,
   SlidersHorizontal,
   TriangleAlert,
@@ -97,6 +98,7 @@ import {
   unpack,
   type WarmIntro,
 } from './shapes';
+import { useStepGo } from './stepGo';
 import { cardSteps, rowsFrom } from './steps';
 
 export { GlassCard, hrefLabel, OpenInApp } from './parts';
@@ -721,7 +723,10 @@ function RoutesCard({ env, actions }: { env: ResultEnvelope; actions: CardAction
   const rowStep = (r: RouteView): NextStep | undefined => {
     const target = to?.displayName ?? r.hops[r.hops.length - 1]?.name;
     if (!target) return undefined;
-    return r.hops.length > 1 ? askForIntro(r.hops[0]!.name, target) : writeTo(target);
+    const targetId = to?.id ?? r.hops[r.hops.length - 1]?.id;
+    return r.hops.length > 1
+      ? askForIntro(r.hops[0]!.name, target, r.hops[0]!.id, targetId)
+      : writeTo(target, undefined, targetId);
   };
   const onRows = new Set(routeFold.shown.map(({ r }) => rowStep(r)?.message).filter(Boolean));
   const steps = cardSteps('find_routes', env).filter((s) => !onRows.has(s.message));
@@ -838,25 +843,48 @@ function RouteRow({
         {why && reasons && <div className="text-[12.5px] text-ink-3 line-clamp-1">{why}</div>}
       </div>
       <StrengthBars score={r.score} label={`Route strength: ${band}`} />
-      {step && send && (
-        <button
-          type="button"
-          className={cx(
-            'shrink-0 h-8 px-3 rounded-[6px] text-[13px] font-medium transition-colors',
-            primary
-              ? 'bg-accent text-[#fdfcfc] hover:bg-accent-2'
-              : 'border border-line bg-canvas text-ink hover:bg-canvas-2',
-          )}
-          onClick={() => void send(step.message)}
-          title={step.message}
-          // a next step like the chips below it (the chat's tests and the simulator tap it the same way)
-          data-testid="next-step"
-          data-role="route-ask"
-        >
-          {step.label.replace(/ for an intro$/, '')}
-        </button>
-      )}
+      {step && send && <RouteAsk step={step} send={send} primary={primary} />}
     </li>
+  );
+}
+
+/**
+ * A route's own ask ("Ask Arnav"): the draft opens beside the chat (plan 42), and once written the button opens it
+ * again instead of writing a second one.
+ */
+function RouteAsk({
+  step,
+  send,
+  primary,
+}: {
+  step: NextStep;
+  send: (text: string) => Promise<void> | void;
+  primary?: boolean;
+}) {
+  const g = useStepGo(step, send);
+  const done = g.state === 'done' && g.mode !== 'send';
+  return (
+    <button
+      type="button"
+      className={cx(
+        'shrink-0 inline-flex items-center gap-1 h-8 px-3 rounded-[6px] text-[13px] font-medium transition-colors disabled:opacity-60',
+        primary && !done
+          ? 'bg-accent text-[#fdfcfc] hover:bg-accent-2'
+          : 'border border-line bg-canvas text-ink hover:bg-canvas-2',
+      )}
+      onClick={g.go}
+      disabled={g.blocked || g.state === 'running'}
+      aria-busy={g.state === 'running'}
+      title={g.mode === 'panel' ? 'Opens beside the chat' : step.message}
+      // a next step like the chips below it (the chat's tests and the simulator tap it the same way)
+      data-testid="next-step"
+      data-role="route-ask"
+      data-state={g.state}
+      data-mode={g.mode}
+    >
+      {g.state === 'running' && <Loader2 size={13} className="animate-spin" aria-hidden />}
+      {done ? 'Open draft' : step.label.replace(/ for an intro$/, '')}
+    </button>
   );
 }
 
@@ -876,8 +904,8 @@ function RoutesManyCard({ env, actions }: { env: ResultEnvelope; actions: CardAc
           const best = rows[0];
           const intro = best && best.r.names.length > 1 ? best.r.names[0] : undefined;
           const steps = [
-            intro && to ? askForIntro(intro, to.displayName) : undefined,
-            to ? writeTo(to.displayName) : undefined,
+            intro && to ? askForIntro(intro, to.displayName, best?.r.hops[0]?.id, to.id) : undefined,
+            to ? writeTo(to.displayName, undefined, to.id) : undefined,
           ].filter((s): s is NextStep => !!s);
           return (
             <li key={to!.id} className="py-2 first:pt-0 last:pb-0" data-testid="routes-many-person">
@@ -1698,7 +1726,7 @@ function ListCard({ env, block, actions }: { env: ResultEnvelope; block: ToolBlo
   // someone found in a search goes by name alone (their title is on the card); the id finds them
   const rows: Picked[] = chosen.map((it) =>
     it.known
-      ? { name: it.text }
+      ? { name: it.text, id: it.known }
       : { name: it.text.split(/,\s|\s\|\s|\s·\s/)[0]!.trim() || it.text, rec: it.id },
   );
   const pickedSteps = [addPicked(rows, 'routes'), addPicked(rows), addPicked(rows, 'drafts')].filter(

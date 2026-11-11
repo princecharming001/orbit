@@ -3,13 +3,13 @@
  * the name and its LinkedIn mark, one quiet line under it, the whole row a link, a checkbox where the face is on
  * hover, and one footer for "Show all" and what to do with the picked people.
  */
-import { ArrowRight, ArrowUpRight, Check, ChevronDown, Copy, Mail, X } from 'lucide-react';
-import { type ReactNode, useContext, useState } from 'react';
+import { ArrowRight, ArrowUpRight, Check, ChevronDown, Copy, Loader2, Mail, X } from 'lucide-react';
+import { type ReactNode, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { copyText } from '../../../components/approve';
 import { Avatar, cx, LinkedInMark, PickCircle } from '../../../ui';
-import { ChoicesContext } from './Choices';
-import type { NextStep } from './parts';
+import { type NextStep, StepPill } from './parts';
+import { useStepGo } from './stepGo';
 
 /** "Co-Founder at Turnstone (YC W26)": the words without the batch, and the batch as its own tag. */
 export function splitBatch(text: string | undefined): { text?: string; batch?: string } {
@@ -354,7 +354,6 @@ export function PeopleFooter({
   steps: NextStep[];
   send: (text: string) => Promise<void> | void;
 }) {
-  const { running } = useContext(ChoicesContext);
   if (!fold.folds && !picked && !steps.length) return null;
   return (
     <div className="flex flex-wrap items-center gap-1.5 border-t border-line-2 px-3 py-2">
@@ -397,21 +396,7 @@ export function PeopleFooter({
             Clear
           </button>
           {pickedSteps.map((s) => (
-            <button
-              key={s.label}
-              type="button"
-              className={cx(
-                'inline-flex h-8 items-center gap-1 rounded-[6px] bg-ink px-3 text-[12.5px] font-medium text-canvas hover:opacity-90 disabled:pointer-events-none disabled:opacity-50',
-                FOCUS,
-              )}
-              disabled={running}
-              title={s.message}
-              data-testid="selection-step"
-              onClick={() => void send(s.message)}
-            >
-              {s.label}
-              <ArrowRight size={13} aria-hidden />
-            </button>
+            <StepPill key={s.label} step={s} send={send} />
           ))}
         </div>
       ) : (
@@ -423,20 +408,7 @@ export function PeopleFooter({
             data-testid="next-steps"
           >
             {steps.slice(0, 3).map((s) => (
-              <button
-                key={s.label}
-                type="button"
-                className={cx(
-                  'inline-flex h-8 items-center gap-1 rounded-[6px] px-2.5 text-[12.5px] font-medium text-ink-2 hover:bg-canvas-2 hover:text-ink disabled:pointer-events-none disabled:opacity-50',
-                  FOCUS,
-                )}
-                disabled={running}
-                title={s.message}
-                data-testid="next-step"
-                onClick={() => void send(s.message)}
-              >
-                {s.label}
-              </button>
+              <QuietStep key={s.label} step={s} send={send} />
             ))}
           </div>
         )
@@ -460,4 +432,33 @@ export function usePickSet() {
       }),
     clear: () => setIds(new Set()),
   };
+}
+
+/**
+ * A next step under a people card, as a quiet button: the same work as a step row (plan 42). A draft or routes open
+ * beside the chat, and once done the button says what it did and opens it again.
+ */
+function QuietStep({ step, send }: { step: NextStep; send: (text: string) => Promise<void> | void }) {
+  const g = useStepGo(step, send);
+  const done = g.state === 'done' && g.mode !== 'send';
+  return (
+    <button
+      type="button"
+      className={cx(
+        'inline-flex h-8 items-center gap-1 rounded-[6px] px-2.5 text-[12.5px] font-medium text-ink-2 hover:bg-canvas-2 hover:text-ink disabled:pointer-events-none disabled:opacity-50',
+        FOCUS,
+      )}
+      disabled={g.blocked || g.state === 'running' || (done && g.mode === 'place')}
+      aria-busy={g.state === 'running'}
+      title={g.mode === 'panel' || g.mode === 'open' ? 'Opens beside the chat' : step.message}
+      data-testid="next-step"
+      data-state={g.state}
+      data-mode={g.mode}
+      onClick={g.go}
+    >
+      {g.state === 'running' && <Loader2 size={12} className="animate-spin" aria-hidden />}
+      {done && <Check size={12} strokeWidth={3} className="text-accent" aria-hidden />}
+      {done ? g.doneLabel : step.label}
+    </button>
+  );
 }
