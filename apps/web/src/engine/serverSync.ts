@@ -38,7 +38,7 @@ import {
   type PushChange,
   type SyncStatus,
 } from '../integrations/orbitApi';
-import { endActivity, startActivity } from './activity';
+import { endActivity } from './activity';
 import { linkedInImageExpired } from './photos';
 import { backfillServerTouchpoints, touchpointsFromServer } from './serverTouchpoints';
 

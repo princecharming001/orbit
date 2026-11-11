@@ -3,7 +3,7 @@
  * and rotate, sync pages, goals, scores, dossiers, sourcing, routes, replies, memory and settings. It answers through
  * a `fetch` the client is pointed at (setOrbitApiFetchForTests), so no test ever reaches a real server.
  */
-import { readiness } from '@orbit/core';
+
 import type {
   AutopilotItem,
   AutopilotStatus,
@@ -30,6 +30,7 @@ import type {
   WarmHop,
   WarmPath,
 } from '@orbit/core';
+import { readiness } from '@orbit/core';
 import type { AccountUser } from '../integrations/orbitApi';
 
 export const FAKE_API_BASE = 'https://orbit-api.test/functions/v1/orbit-api';
@@ -831,7 +832,9 @@ export function createFakeOrbitApi(
           if ('phone' in body) {
             const phone = typeof body.phone === 'string' && body.phone ? body.phone : null;
             if (phone && !/^\+[1-9]\d{6,14}$/.test(phone))
-              return json(400, { error: { code: 'bad_phone', message: 'That number does not look complete.' } });
+              return json(400, {
+                error: { code: 'bad_phone', message: 'That number does not look complete.' },
+              });
             n.phone = phone;
             n.country = phone && typeof body.country === 'string' ? body.country : null;
             if (!phone) n.smsOn = false;
@@ -843,10 +846,19 @@ export function createFakeOrbitApi(
         const g = state.status.google;
         return json(200, {
           readiness: readiness({
-            google: { status: g.status, phase: g.backfill?.phase ?? 'recent', done: g.backfill?.done, total: g.backfill?.total },
+            google: {
+              status: g.status,
+              phase: g.backfill?.phase ?? 'recent',
+              done: g.backfill?.done,
+              total: g.backfill?.total,
+            },
             linkedin:
               state.linkedin.status === 'active'
-                ? { status: 'active', stage: n.linkedinStage ?? 'done', syncedAt: n.linkedinStage === 'done' || !n.linkedinStage ? 'x' : null }
+                ? {
+                    status: 'active',
+                    stage: n.linkedinStage ?? 'done',
+                    syncedAt: n.linkedinStage === 'done' || !n.linkedinStage ? 'x' : null,
+                  }
                 : undefined,
             pending: n.pending,
             counts: state.status.counts,

@@ -10,7 +10,10 @@ import { skipQuestions } from './helpers';
  */
 async function signUp(page: Page) {
   await page.goto('');
-  await page.getByRole('button', { name: /^get started/i }).first().click();
+  await page
+    .getByRole('button', { name: /^get started/i })
+    .first()
+    .click();
   await page.getByTestId('ob-google-signin').click();
   await expect(page).toHaveURL(/\/onboarding\/1$/, { timeout: 20_000 });
   await page.getByTestId('ob-year').selectOption('2027');
@@ -23,7 +26,9 @@ async function signUp(page: Page) {
 }
 
 test.describe('where setup stands (plan 40, fake orbit-api)', () => {
-  test('the chip, its checklist and the chat line show each step, then "Orbit is ready" once', async ({ page }) => {
+  test('the chip, its checklist and the chat line show each step, then "Orbit is ready" once', async ({
+    page,
+  }) => {
     test.setTimeout(120_000);
     const api = await withFakeApi(page);
     // LinkedIn still reading connections, Gmail on its recent mail, five jobs queued
@@ -76,7 +81,9 @@ test.describe('where setup stands (plan 40, fake orbit-api)', () => {
     api.state.notify.pending = 0;
     await expect(chip).toHaveAttribute('data-state', 'ready', { timeout: 15_000 });
     await expect(chip).toHaveText(/Ready/);
-    await expect(page.getByText('Orbit is ready. Your network is in and your first suggestions are waiting.')).toBeVisible();
+    await expect(
+      page.getByText('Orbit is ready. Your network is in and your first suggestions are waiting.'),
+    ).toBeVisible();
     await expect(banner).toHaveCount(0);
   });
 

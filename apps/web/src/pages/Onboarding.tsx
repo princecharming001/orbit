@@ -59,6 +59,7 @@ import {
   OnboardingLayout,
 } from '../components/onboarding/OnboardingLayout';
 import { PhoneField, type PhoneValue } from '../components/PhoneField';
+import { ReadyChecklist } from '../components/sync/ReadyChecklist';
 import { useWeeklyLimits, WeeklyTargetSlider } from '../components/WeeklyTargetSlider';
 import { suggestCompanies } from '../data/companies';
 import { suggestSchools } from '../data/schools';
@@ -80,6 +81,7 @@ import { startGoogleSignIn } from '../integrations/orbitApi';
 import { postingFromPath, readPosting } from '../integrations/postings';
 import { envGoogleClientId } from '../integrations/prefs';
 import { useAccount } from '../state/account';
+import { useReadiness, watchReadiness } from '../state/readiness';
 import { useSession } from '../state/session';
 import { cx, FunctionPicker, Spinner } from '../ui';
 import { Suggest } from '../ui/Suggest';
@@ -1733,6 +1735,10 @@ function StepReady({
 }) {
   const user = useSession().user!;
   const [busy, setBusy] = useState(false);
+  // the first import, live (account mode): where it stands and how the student will hear it is done
+  useEffect(() => watchReadiness(), []);
+  const live = useReadiness();
+  const importing = !!live && live.readiness.state !== 'nothing' && live.readiness.state !== 'ready';
   const info = useLiveQuery(async () => {
     const [goals, companies, ints, kinds] = await Promise.all([
       db.goals.get(user.id),
@@ -1824,7 +1830,10 @@ function StepReady({
             <Check size={22} aria-hidden />
           </span>
         }
-        title="You're all set"
+        title={importing ? "You're set up" : "You're all set"}
+        subtitle={
+          importing ? 'Orbit is reading your network now. You can start while it finishes.' : undefined
+        }
       />
       <ObPanel>
         <ul className="stagger divide-y divide-[#eef0f3]">
@@ -1860,6 +1869,11 @@ function StepReady({
           ))}
         </ul>
       </ObPanel>
+      {importing && live && (
+        <section className="mt-8 border-t border-line pt-5" aria-label="Your network, coming in">
+          <ReadyChecklist readiness={live.readiness} notify={live.notify} />
+        </section>
+      )}
       <ObPrimary
         className="mt-8"
         disabled={busy}

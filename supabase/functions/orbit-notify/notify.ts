@@ -12,7 +12,7 @@
  * Its own function, so the API and the worker are not redeployed for it. It reads the same rows /sync/status reads.
  * No message text, address or number is ever logged.
  */
-import { readiness, type ReadinessInput } from '@orbit/core/sync/readiness';
+import { type ReadinessInput, readiness } from '@orbit/core/sync/readiness';
 import { timingSafeEqual } from '../_shared/crypto.ts';
 import type { Db } from '../_shared/db.ts';
 import { corsHeaders, errorResponse, HttpError, json, preflight, readJson } from '../_shared/http.ts';
@@ -42,7 +42,12 @@ export const SWEEP_MAX = 200;
 const DAY = 86_400_000;
 
 /** the queues the first import's work runs on; sends and cadence are what Orbit does later, not the import */
-export const IMPORT_QUEUES: readonly QueueName[] = ['orbit_sync', 'orbit_classify', 'orbit_score', 'orbit_enrich'];
+export const IMPORT_QUEUES: readonly QueueName[] = [
+  'orbit_sync',
+  'orbit_classify',
+  'orbit_score',
+  'orbit_enrich',
+];
 
 type ContactRow = {
   phone_e164: string | null;
@@ -146,10 +151,14 @@ export function checkPhone(
   country: unknown,
 ): { ok: true; e164: string | null; country: string | null } | { ok: false; message: string } {
   if (phone === null || phone === '') return { ok: true, e164: null, country: null };
-  if (typeof phone !== 'string' || phone.length > 40) return { ok: false, message: 'That is not a phone number.' };
+  if (typeof phone !== 'string' || phone.length > 40)
+    return { ok: false, message: 'That is not a phone number.' };
   const e164 = phone.replace(/[\s().-]/g, '');
   if (!/^\+[1-9]\d{6,14}$/.test(e164))
-    return { ok: false, message: 'That number does not look complete. Check the country code and the digits.' };
+    return {
+      ok: false,
+      message: 'That number does not look complete. Check the country code and the digits.',
+    };
   const cc = typeof country === 'string' && /^[A-Z]{2}$/.test(country) ? country : null;
   return { ok: true, e164, country: cc };
 }
@@ -180,7 +189,12 @@ async function saveContact(db: Db, userId: string, b: Record<string, unknown>, n
 const esc = (s: string) => s.replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
 
 /** "Orbit is ready": what was read, and one button back in. Plain words; no em dashes or exclamation marks. */
-export function readyEmail(o: { firstName: string | null; people: number; messages: number; appUrl: string }) {
+export function readyEmail(o: {
+  firstName: string | null;
+  people: number;
+  messages: number;
+  appUrl: string;
+}) {
   const hi = o.firstName ? `Hi ${o.firstName},` : 'Hi,';
   const what = [
     o.people ? `${o.people.toLocaleString('en-US')} people` : '',
@@ -283,7 +297,11 @@ export async function sweepOne(deps: NotifyDeps, db: Db, userId: string, now: Da
       else errors.push(e.error);
     }
     if (row.sms_on && row.phone_e164) {
-      const s = await sendSms(deps, row.phone_e164, readySms({ firstName: u?.first_name ?? null, appUrl: deps.appUrl }));
+      const s = await sendSms(
+        deps,
+        row.phone_e164,
+        readySms({ firstName: u?.first_name ?? null, appUrl: deps.appUrl }),
+      );
       if (s.ok) sent.push('sms');
       else errors.push(s.error);
     }
@@ -313,7 +331,8 @@ export async function sweep(deps: NotifyDeps, db: Db, now: Date) {
      order by u.created_at desc
      limit ${SWEEP_MAX}`;
   const out = [];
-  for (const u of users) out.push(await sweepOne(deps, db, u.id, now).catch(() => ({ userId: u.id, failed: true })));
+  for (const u of users)
+    out.push(await sweepOne(deps, db, u.id, now).catch(() => ({ userId: u.id, failed: true })));
   return out;
 }
 
@@ -345,7 +364,8 @@ export function makeNotifyHandler(deps: NotifyDeps): (req: Request) => Promise<R
         return json(200, { ok: true, looked: results.length, told }, h);
       }
 
-      if (path !== '/notify/status' && path !== '/notify/contact') throw new HttpError(404, 'not_found', 'no such route');
+      if (path !== '/notify/status' && path !== '/notify/contact')
+        throw new HttpError(404, 'not_found', 'no such route');
       if (!deps.sessionSecret) throw new HttpError(503, 'unconfigured', 'no session secret');
       const cfg: SessionConfig = { secret: deps.sessionSecret, now };
       const claims = await verifyBearer(cfg, req.headers.get('authorization'));

@@ -97,7 +97,7 @@ export function ReadinessChip({ compact, className }: { compact?: boolean; class
           role="dialog"
           aria-label="Setup progress"
           className={cx(
-            'pop-in absolute z-[80] bottom-full mb-2 w-[300px] rounded-[var(--radius-card)] border border-line bg-canvas p-4 shadow-[var(--shadow-card)]',
+            'pop-in absolute z-[80] bottom-full mb-2 w-[330px] rounded-[var(--radius-card)] border border-line bg-canvas p-4 shadow-[var(--shadow-card)]',
             compact ? 'left-full ml-2 bottom-0 mb-0' : 'left-0',
           )}
           data-testid="readiness-panel"

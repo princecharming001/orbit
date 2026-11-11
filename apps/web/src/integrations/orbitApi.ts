@@ -15,7 +15,6 @@
  * 401. Refresh tokens rotate on every use, so tabs refresh one at a time (a Web Lock where there is one) and tell
  * each other the new pair on a BroadcastChannel.
  */
-import type { Readiness } from '@orbit/core';
 import type {
   AutonomyRequest,
   AutopilotDismissRequest,
@@ -84,6 +83,7 @@ import type {
   ProfileSettingsRequest,
   ProfileSettingsResponse,
   QueuedResponse,
+  Readiness,
   RepliesListResponse,
   ReplyAnswerRequest,
   ReplyAnswerResponse,

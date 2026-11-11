@@ -302,7 +302,12 @@ var WAIT_DAYS = 7;
 var LATE_HOURS = 12;
 var SWEEP_MAX = 200;
 var DAY = 864e5;
-var IMPORT_QUEUES = ["orbit_sync", "orbit_classify", "orbit_score", "orbit_enrich"];
+var IMPORT_QUEUES = [
+  "orbit_sync",
+  "orbit_classify",
+  "orbit_score",
+  "orbit_enrich"
+];
 async function readinessInput(db2, userId) {
   const [accounts, counts, pending] = await Promise.all([
     db2.sql`
@@ -379,10 +384,14 @@ async function statusOf(deps, db2, userId) {
 }
 function checkPhone(phone, country) {
   if (phone === null || phone === "") return { ok: true, e164: null, country: null };
-  if (typeof phone !== "string" || phone.length > 40) return { ok: false, message: "That is not a phone number." };
+  if (typeof phone !== "string" || phone.length > 40)
+    return { ok: false, message: "That is not a phone number." };
   const e164 = phone.replace(/[\s().-]/g, "");
   if (!/^\+[1-9]\d{6,14}$/.test(e164))
-    return { ok: false, message: "That number does not look complete. Check the country code and the digits." };
+    return {
+      ok: false,
+      message: "That number does not look complete. Check the country code and the digits."
+    };
   const cc = typeof country === "string" && /^[A-Z]{2}$/.test(country) ? country : null;
   return { ok: true, e164, country: cc };
 }
@@ -503,7 +512,11 @@ async function sweepOne(deps, db2, userId, now) {
       else errors.push(e.error);
     }
     if (row.sms_on && row.phone_e164) {
-      const s = await sendSms(deps, row.phone_e164, readySms({ firstName: u?.first_name ?? null, appUrl: deps.appUrl }));
+      const s = await sendSms(
+        deps,
+        row.phone_e164,
+        readySms({ firstName: u?.first_name ?? null, appUrl: deps.appUrl })
+      );
       if (s.ok) sent.push("sms");
       else errors.push(s.error);
     }
@@ -531,7 +544,8 @@ async function sweep(deps, db2, now) {
      order by u.created_at desc
      limit ${SWEEP_MAX}`;
   const out = [];
-  for (const u of users) out.push(await sweepOne(deps, db2, u.id, now).catch(() => ({ userId: u.id, failed: true })));
+  for (const u of users)
+    out.push(await sweepOne(deps, db2, u.id, now).catch(() => ({ userId: u.id, failed: true })));
   return out;
 }
 function makeNotifyHandler(deps) {
@@ -558,7 +572,8 @@ function makeNotifyHandler(deps) {
         deps.log?.({ fn: "orbit-notify", route: path, looked: results.length, told });
         return json(200, { ok: true, looked: results.length, told }, h);
       }
-      if (path !== "/notify/status" && path !== "/notify/contact") throw new HttpError(404, "not_found", "no such route");
+      if (path !== "/notify/status" && path !== "/notify/contact")
+        throw new HttpError(404, "not_found", "no such route");
       if (!deps.sessionSecret) throw new HttpError(503, "unconfigured", "no session secret");
       const cfg = { secret: deps.sessionSecret, now };
       const claims = await verifyBearer(cfg, req.headers.get("authorization"));

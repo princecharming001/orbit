@@ -160,15 +160,13 @@ export function ReadyChecklist({
             data-state={s.state}
           >
             <StepMark s={s} />
-            <span
-              className={cx('min-w-0 flex-1 truncate', s.state === 'waiting' ? 'text-ink-3' : 'text-ink')}
-            >
+            <span className={cx('shrink-0', s.state === 'waiting' ? 'text-ink-3' : 'text-ink')}>
               {s.label}
             </span>
             {s.detail && (
               <span
                 className={cx(
-                  'shrink-0 truncate max-w-[55%] text-right tabular-nums text-[12.5px]',
+                  'min-w-0 flex-1 truncate text-right tabular-nums text-[12.5px]',
                   s.state === 'problem' ? 'text-warn' : 'text-ink-3',
                 )}
               >

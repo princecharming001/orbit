@@ -92,7 +92,13 @@ describe('orbit-notify: where the first import stands', () => {
       // jobs are queued, but nothing has come in for them to map yet
       'network:waiting',
     ]);
-    expect(r.body.contact).toEqual({ email: u.email, phone: null, country: null, emailOn: true, smsOn: false });
+    expect(r.body.contact).toEqual({
+      email: u.email,
+      phone: null,
+      country: null,
+      emailOn: true,
+      smsOn: false,
+    });
     expect(r.body).toMatchObject({ emailAvailable: true, smsAvailable: false, notifiedAt: null });
     expect((await w.call('/notify/status', {})).status).toBe(401);
     expect((await w.call('/notify/status', {}, { authorization: 'Bearer nope' })).status).toBe(401);
@@ -112,7 +118,12 @@ describe('orbit-notify: where the first import stands', () => {
     const auth = { authorization: `Bearer ${u.token}` };
     const saved = await w.call('/notify/contact', { phone: '+1 (415) 555-0123', country: 'US' }, auth);
     expect(saved.status).toBe(200);
-    expect(saved.body.contact).toMatchObject({ phone: '+14155550123', country: 'US', smsOn: true, emailOn: true });
+    expect(saved.body.contact).toMatchObject({
+      phone: '+14155550123',
+      country: 'US',
+      smsOn: true,
+      emailOn: true,
+    });
     const off = await w.call('/notify/contact', { smsOn: false, emailOn: false }, auth);
     expect(off.body.contact).toMatchObject({ phone: '+14155550123', smsOn: false, emailOn: false });
     const bad = await w.call('/notify/contact', { phone: '4155550123' }, auth);
@@ -140,8 +151,15 @@ describe('orbit-notify: "Orbit is ready", once', () => {
       TWILIO_FROM: '+15005550006',
     });
     const u = await signedInUser(t, { firstName: 'Lena' });
-    await w.call('/notify/contact', { phone: '+14155550199', country: 'US' }, { authorization: `Bearer ${u.token}` });
-    const mine = () => w.net.calls.filter((c) => JSON.stringify(c.body).includes(u.email) || JSON.stringify(c.body).includes('4155550199'));
+    await w.call(
+      '/notify/contact',
+      { phone: '+14155550199', country: 'US' },
+      { authorization: `Bearer ${u.token}` },
+    );
+    const mine = () =>
+      w.net.calls.filter(
+        (c) => JSON.stringify(c.body).includes(u.email) || JSON.stringify(c.body).includes('4155550199'),
+      );
     // still reading: nothing goes out
     await importAt(u.userId, { gmail: 'deep', linkedin: 'done', jobs: 0 });
     await w.call('/notify/sweep', {}, { 'x-orbit-cron': CRON });
@@ -175,7 +193,8 @@ describe('orbit-notify: "Orbit is ready", once', () => {
     const quiet = world();
     const u = await signedInUser(t);
     await importAt(u.userId, { gmail: 'complete', linkedin: null, jobs: 0 });
-    await t.db.sql`delete from orbit.integration_accounts where user_id = ${u.userId}::uuid and provider = 'linkedin'`;
+    await t.db
+      .sql`delete from orbit.integration_accounts where user_id = ${u.userId}::uuid and provider = 'linkedin'`;
     await quiet.call('/notify/sweep', {}, { 'x-orbit-cron': CRON });
     const [row] = await t.db.sql<{ notified_at: Date | null; notified_via: string[] }>`
       select notified_at, notified_via from orbit.user_notify where user_id = ${u.userId}::uuid`;
@@ -205,14 +224,21 @@ describe('orbit-notify: "Orbit is ready", once', () => {
   });
 
   it('the words: what was read, one button, no em dashes or exclamation marks; the text fits one message', () => {
-    const m = readyEmail({ firstName: 'Ana', people: 1240, messages: 18_400, appUrl: 'https://tryorbit.today' });
+    const m = readyEmail({
+      firstName: 'Ana',
+      people: 1240,
+      messages: 18_400,
+      appUrl: 'https://tryorbit.today',
+    });
     expect(m.text).toContain('1,240 people and 18,400 messages are in');
     expect(readyEmail({ firstName: null, people: 0, messages: 0, appUrl: 'https://x' }).text).toMatch(/^Hi,/);
     const sms = readySms({ firstName: 'Ana', appUrl: 'https://tryorbit.today' });
     expect(sms.length).toBeLessThanOrEqual(160);
     expect(`${m.text}${m.html.replace(/<[^>]*>/g, ' ')}${sms}`).not.toMatch(/[—–!]/);
     // a name with markup in it is text in the email, never markup
-    expect(readyEmail({ firstName: '<b>x</b>', people: 1, messages: 1, appUrl: 'https://x' }).html).not.toContain('<b>x</b>');
+    expect(
+      readyEmail({ firstName: '<b>x</b>', people: 1, messages: 1, appUrl: 'https://x' }).html,
+    ).not.toContain('<b>x</b>');
   });
 });
 
@@ -222,12 +248,15 @@ describe('orbit-notify: what counts as the import still working', () => {
     const u = await signedInUser(t);
     await importAt(u.userId, { gmail: 'complete', jobs: 0 });
     await t.db.sql`select pgmq.send('orbit_send', ${{ kind: 'send.draft', userId: u.userId }}::jsonb, 0)`;
-    await t.db.sql`select pgmq.send('orbit_cadence', ${{ kind: 'cadence.user', userId: u.userId }}::jsonb, 0)`;
-    await t.db.sql`select pgmq.send('orbit_sync', ${{ kind: 'sync.gmail.incremental', userId: u.userId }}::jsonb, 3600)`;
+    await t.db
+      .sql`select pgmq.send('orbit_cadence', ${{ kind: 'cadence.user', userId: u.userId }}::jsonb, 0)`;
+    await t.db
+      .sql`select pgmq.send('orbit_sync', ${{ kind: 'sync.gmail.incremental', userId: u.userId }}::jsonb, 3600)`;
     const s = await w.call('/notify/status', {}, { authorization: `Bearer ${u.token}` });
     expect(s.body.readiness.state).toBe('ready');
     // a read due now is the import still working
-    await t.db.sql`select pgmq.send('orbit_classify', ${{ kind: 'classify.message', userId: u.userId }}::jsonb, 0)`;
+    await t.db
+      .sql`select pgmq.send('orbit_classify', ${{ kind: 'classify.message', userId: u.userId }}::jsonb, 0)`;
     const busy = await w.call('/notify/status', {}, { authorization: `Bearer ${u.token}` });
     expect(busy.body.readiness.state).toBe('usable');
   });
