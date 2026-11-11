@@ -97,14 +97,13 @@ test.describe('the company page', () => {
   });
 });
 
-/** Plan 23 §4.3: the intro ask is two texts, the ask and the note the introducer can forward. */
+/**
+ * Plan 23 §4.3, as plan 42 changed it: the note the introducer can forward is inside the ask itself, so the one text the
+ * student reads and edits is exactly what goes out. No second box beside it.
+ */
 test.describe('the intro ask with its note', () => {
-  test('one card, two texts; Copy copies the note alone; approving sends ask, rule, note as one message', async ({
-    page,
-    context,
-  }) => {
+  test('one card, one text with the note inside it; approving sends exactly that text', async ({ page }) => {
     test.setTimeout(120_000);
-    await context.grantPermissions(['clipboard-read', 'clipboard-write']);
     await loadDemo(page);
     await openStripe(page);
     const ask = page.getByTestId('company-person-action').filter({ hasText: /^Ask / }).first();
@@ -112,21 +111,18 @@ test.describe('the intro ask with its note', () => {
     await ask.click();
     await expect(page).toHaveURL(/\/inbox\?card=/);
     const card = page.getByTestId('suggestion-intro_request').filter({ hasText: via }).first();
-    // one card, two texts: the ask, and under it the note to forward
-    await expect(card.getByTestId('draft-preview-note')).toContainText(`The note ${via} can forward`);
+    // no separate note under the preview, and none in the editor
+    await expect(card.getByTestId('draft-preview-note')).toHaveCount(0);
     await card.getByTestId('draft-review').click();
-    const note = card.getByTestId('forward-note');
-    await expect(note).toBeVisible();
-    await expect(note).toContainText(`The note ${via} can forward`);
-    const noteText = await note.getByTestId('forward-note-text').inputValue();
-    expect(noteText).not.toMatch(/\b(I|my|me)\b/);
-    // the ask above it has no quoted note of its own
+    await expect(card.getByTestId('forward-note')).toHaveCount(0);
+    // the note is in the ask: a lead-in, then the note in quotes, about the student in the third person
     const askText = await card.getByLabel('Message body').inputValue();
-    expect(askText).not.toContain('"');
-    expect(askText).toMatch(/note below you could forward/);
-    await note.getByTestId('forward-note-copy').click();
-    expect(await page.evaluate(() => navigator.clipboard.readText())).toBe(noteText);
-    // approving: the ask and the note go together, under a rule
+    expect(askText).toMatch(/here's a short note you could forward:\n\n"/i);
+    expect(askText).not.toMatch(/note below/i);
+    const quoted = askText.match(/"([^"]+)"/)?.[1] ?? '';
+    expect(quoted).toMatch(/15 minutes/);
+    expect(quoted).not.toMatch(/\b(I|my|me)\b/);
+    // approving sends that text as it is: nothing is added under it
     await page
       .getByRole('button', { name: /^(Open email to|Send to|Copy & open LinkedIn)/ })
       .first()
@@ -147,6 +143,18 @@ test.describe('the intro ask with its note', () => {
           return o?.bodyFinal ?? '';
         }),
       )
-      .toContain(`\n\n----\n\n${noteText.trim()}`);
+      .toContain(quoted);
+    const sent = await page.evaluate(async () => {
+      const db = (
+        window as unknown as {
+          __orbitDb: {
+            outbound: { toArray(): Promise<{ kind: string; bodyFinal?: string; status: string }[]> };
+          };
+        }
+      ).__orbitDb;
+      return (await db.outbound.toArray()).find((x) => x.kind === 'intro_request' && x.status !== 'draft')
+        ?.bodyFinal;
+    });
+    expect(sent).not.toContain('\n\n----\n\n');
   });
 });
