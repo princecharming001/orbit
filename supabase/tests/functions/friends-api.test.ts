@@ -26,6 +26,8 @@ type Friend = {
   shares: number;
   atTargets: number;
   myMode: string;
+  personId?: string;
+  linkedinUrl?: string;
 };
 type Share = Record<string, unknown> & { personId: string; displayName: string; closeness: number };
 type Found = {

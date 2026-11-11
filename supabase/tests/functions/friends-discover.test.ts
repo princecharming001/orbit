@@ -25,6 +25,7 @@ type Suggestion = {
   state: string;
   connections: number;
   friendshipId?: string;
+  personId?: string;
 };
 type Invitee = { personId: string; name: string; reason: string; via: string };
 
