@@ -18,9 +18,13 @@ import {
 import { type Claim, type DossierView, dossierView, getDossier, researchPerson } from '../../engine/research';
 import { isServerUser } from '../../integrations/orbitApi';
 import { useSession } from '../../state/session';
-import { Button, Chip, cx, relDate, Spinner, useToast } from '../../ui';
+import { Button, cx, relDate, Spinner, useToast } from '../../ui';
 import { CompanyLogo } from '../CompanyLogo';
 import { DossierCard } from './DossierCard';
+
+/** One pill for the links and the topics under a brief: the same height, radius and border, so the row reads even. */
+const PILL =
+  'inline-flex items-center h-8 px-3.5 rounded-full border border-line-2 text-[13px] leading-none whitespace-nowrap transition-colors';
 
 type Source = DossierView['sources'][number];
 
@@ -390,14 +394,17 @@ function Debrief({
         </p>
       )}
       {(v.topics.length > 0 || v.profiles.length > 0) && (
-        <div className="mt-3 flex flex-wrap items-center gap-1.5" data-testid="debrief-topics">
+        <div className="mt-3 flex flex-wrap items-center gap-2" data-testid="debrief-topics">
           {v.profiles.map((p) => (
             <a
               key={p.url}
               href={p.url}
               target="_blank"
               rel="noreferrer noopener"
-              className="inline-flex items-center gap-1.5 h-7 px-2.5 rounded-full border border-line text-[12.5px] hover:bg-canvas-2"
+              className={cx(
+                PILL,
+                'gap-1.5 bg-canvas text-ink font-medium hover:bg-canvas-2 hover:border-line',
+              )}
               data-testid="debrief-profile"
             >
               <SiteIcon url={p.url} size={13} />
@@ -405,9 +412,9 @@ function Debrief({
             </a>
           ))}
           {v.topics.map((t) => (
-            <Chip key={t} className="h-7 px-2.5 text-[12.5px]">
+            <span key={t} className={cx(PILL, 'bg-canvas-2/60 text-ink-2')} data-testid="debrief-topic">
               {t}
-            </Chip>
+            </span>
           ))}
         </div>
       )}
