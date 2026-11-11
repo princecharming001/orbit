@@ -207,7 +207,7 @@ export function TileSection({
   children: (limit: number) => ReactNode;
   empty?: ReactNode;
   loading?: boolean;
-  /** the server holds more than `count` */
+  /** the server holds more than `count`; undefined when it did not say (an older server that does not page) */
   hasMore?: boolean;
   /** load the next batch; `count` grows when it lands */
   onMore?: () => Promise<void> | void;
@@ -271,11 +271,13 @@ export function TileSection({
                   {busy ? 'Loading' : 'Show more'}
                   <ChevronDown size={14} aria-hidden className={busy ? 'animate-pulse' : undefined} />
                 </button>
-              ) : (
+              ) : hasMore === false ? (
+                // only when the server said so: one that does not page yet gives no answer, and the list must not
+                // claim to be complete
                 <span className="text-ink-3" data-testid={`${testId}-end`}>
                   That is everyone
                 </span>
-              )}
+              ) : null}
               {visible > TILES_FOLDED && (
                 <button
                   type="button"
