@@ -1,0 +1,1616 @@
+{
+  "answer": {
+    "results": [
+      {
+        "name": "Ben Park",
+        "title": "Product Designer",
+        "org": "Ramp",
+        "location": "San Francisco Bay Area",
+        "linkedinUrl": "https://www.linkedin.com/in/li-person-1",
+        "emailStatus": "not looked up",
+        "tier": 1,
+        "why": "You've talked with Ben before",
+        "source": "unipile",
+        "rank": 1.2107,
+        "fit": 0.77,
+        "reach": 0.72,
+        "responsiveness": 0.475,
+        "reasons": [
+          "You've talked with Ben before",
+          "Ben Park designs products"
+        ],
+        "knownPersonId": "known"
+      },
+      {
+        "name": "Eli Okafor",
+        "title": "Design Lead",
+        "org": "Stripe",
+        "location": "San Francisco Bay Area",
+        "linkedinUrl": "https://www.linkedin.com/in/li-person-4",
+        "email": "eli.okafor@stripe.com",
+        "emailConfidence": "pattern",
+        "tier": 2,
+        "why": "Wendy is close to you and also at Stripe, so ask for an intro",
+        "bridge": {
+          "name": "Wendy Warm"
+        },
+        "source": "unipile",
+        "rank": 0.9405,
+        "fit": 0.9,
+        "reach": 0.05,
+        "responsiveness": 0.475,
+        "reasons": [
+          "Wendy is close to you and also at Stripe, so ask for an intro",
+          "Eli Okafor designs products"
+        ]
+      },
+      {
+        "name": "Gus Diaz",
+        "title": "Design Lead",
+        "org": "Plaid",
+        "location": "San Francisco Bay Area",
+        "linkedinUrl": "https://www.linkedin.com/in/li-person-6",
+        "email": "gus.diaz@plaid.com",
+        "emailConfidence": "guess",
+        "tier": 2,
+        "why": "Lia is close to you and also at Plaid, so ask for an intro",
+        "bridge": {
+          "name": "Lia Lee"
+        },
+        "source": "unipile",
+        "rank": 0.9086,
+        "fit": 0.88,
+        "reach": 0,
+        "responsiveness": 0.475,
+        "reasons": [
+          "Lia is close to you and also at Plaid, so ask for an intro",
+          "Gus Diaz designs products"
+        ]
+      },
+      {
+        "name": "Jia Novak",
+        "title": "Product Designer",
+        "org": "Ramp",
+        "location": "San Francisco Bay Area",
+        "linkedinUrl": "https://www.linkedin.com/in/li-person-9",
+        "emailStatus": "not looked up",
+        "tier": 2,
+        "why": "Ben is close to you and also at Ramp, so ask for an intro",
+        "bridge": {
+          "name": "Ben Park"
+        },
+        "source": "unipile",
+        "rank": 0.9014,
+        "fit": 0.87,
+        "reach": 0,
+        "responsiveness": 0.475,
+        "reasons": [
+          "Ben is close to you and also at Ramp, so ask for an intro",
+          "Jia Novak designs products"
+        ]
+      },
+      {
+        "name": "Ivo Shah 28",
+        "title": "Design Lead",
+        "org": "Stripe",
+        "location": "San Francisco Bay Area",
+        "linkedinUrl": "https://www.linkedin.com/in/li-person-28",
+        "email": "ivo.shah@stripe.com",
+        "emailConfidence": "pattern",
+        "tier": 2,
+        "why": "Wendy is close to you and also at Stripe, so ask for an intro",
+        "bridge": {
+          "name": "Wendy Warm"
+        },
+        "source": "unipile",
+        "rank": 0.8037,
+        "fit": 0.71,
+        "reach": 0.05,
+        "responsiveness": 0.475,
+        "reasons": [
+          "Wendy is close to you and also at Stripe, so ask for an intro",
+          "Ivo Shah 28 designs products"
+        ]
+      },
+      {
+        "name": "Gus Ito 26",
+        "title": "Design Lead",
+        "org": "Plaid",
+        "location": "San Francisco Bay Area",
+        "linkedinUrl": "https://www.linkedin.com/in/li-person-26",
+        "email": "gus.ito@plaid.com",
+        "emailConfidence": "guess",
+        "tier": 2,
+        "why": "Lia is close to you and also at Plaid, so ask for an intro",
+        "bridge": {
+          "name": "Lia Lee"
+        },
+        "source": "unipile",
+        "rank": 0.7502,
+        "fit": 0.66,
+        "reach": 0,
+        "responsiveness": 0.475,
+        "reasons": [
+          "Lia is close to you and also at Plaid, so ask for an intro",
+          "Gus Ito 26 designs products"
+        ]
+      },
+      {
+        "name": "Ben Shah 21",
+        "title": "Product Designer",
+        "org": "Ramp",
+        "location": "San Francisco Bay Area",
+        "linkedinUrl": "https://www.linkedin.com/in/li-person-21",
+        "emailStatus": "not looked up",
+        "tier": 2,
+        "why": "Ben is close to you and also at Ramp, so ask for an intro",
+        "bridge": {
+          "name": "Ben Park"
+        },
+        "source": "unipile",
+        "rank": 0.7214,
+        "fit": 0.62,
+        "reach": 0,
+        "responsiveness": 0.475,
+        "reasons": [
+          "Ben is close to you and also at Ramp, so ask for an intro",
+          "Ben Shah 21 designs products"
+        ]
+      },
+      {
+        "name": "Jia Park 29",
+        "title": "Product Designer",
+        "org": "Ramp",
+        "location": "San Francisco Bay Area",
+        "linkedinUrl": "https://www.linkedin.com/in/li-person-29",
+        "emailStatus": "not looked up",
+        "tier": 2,
+        "why": "Ben is close to you and also at Ramp, so ask for an intro",
+        "bridge": {
+          "name": "Ben Park"
+        },
+        "source": "unipile",
+        "rank": 0.7142,
+        "fit": 0.61,
+        "reach": 0,
+        "responsiveness": 0.475,
+        "reasons": [
+          "Ben is close to you and also at Ramp, so ask for an intro",
+          "Jia Park 29 designs products"
+        ]
+      },
+      {
+        "name": "Ana Shah",
+        "title": "Design Lead",
+        "org": "Stripe",
+        "location": "San Francisco Bay Area",
+        "linkedinUrl": "https://www.linkedin.com/in/li-person-0",
+        "email": "ana.shah@stripe.com",
+        "emailConfidence": "pattern",
+        "tier": 2,
+        "why": "Wendy is close to you and also at Stripe, so ask for an intro",
+        "bridge": {
+          "name": "Wendy Warm"
+        },
+        "source": "unipile",
+        "rank": 0.6237,
+        "fit": 0.46,
+        "reach": 0.05,
+        "responsiveness": 0.475,
+        "reasons": [
+          "Wendy is close to you and also at Stripe, so ask for an intro",
+          "Ana Shah designs products"
+        ]
+      },
+      {
+        "name": "Ana Chen 10",
+        "title": "Design Lead",
+        "org": "Plaid",
+        "location": "San Francisco Bay Area",
+        "linkedinUrl": "https://www.linkedin.com/in/li-person-10",
+        "email": "ana.chen@plaid.com",
+        "emailConfidence": "guess",
+        "tier": 2,
+        "why": "Lia is close to you and also at Plaid, so ask for an intro",
+        "bridge": {
+          "name": "Lia Lee"
+        },
+        "source": "unipile",
+        "rank": 0.6206,
+        "fit": 0.48,
+        "reach": 0,
+        "responsiveness": 0.475,
+        "reasons": [
+          "Lia is close to you and also at Plaid, so ask for an intro",
+          "Ana Chen 10 designs products"
+        ]
+      },
+      {
+        "name": "Ana Diaz 20",
+        "title": "Design Lead",
+        "org": "Stripe",
+        "location": "San Francisco Bay Area",
+        "linkedinUrl": "https://www.linkedin.com/in/li-person-20",
+        "email": "ana.diaz@stripe.com",
+        "emailConfidence": "pattern",
+        "tier": 2,
+        "why": "Wendy is close to you and also at Stripe, so ask for an intro",
+        "bridge": {
+          "name": "Wendy Warm"
+        },
+        "source": "unipile",
+        "rank": 0.6165,
+        "fit": 0.45,
+        "reach": 0.05,
+        "responsiveness": 0.475,
+        "reasons": [
+          "Wendy is close to you and also at Stripe, so ask for an intro",
+          "Ana Diaz 20 designs products"
+        ]
+      },
+      {
+        "name": "Cara Ito 12",
+        "title": "Design Lead",
+        "org": "Stripe",
+        "location": "San Francisco Bay Area",
+        "linkedinUrl": "https://www.linkedin.com/in/li-person-12",
+        "email": "cara.ito@stripe.com",
+        "emailConfidence": "pattern",
+        "tier": 2,
+        "why": "Wendy is close to you and also at Stripe, so ask for an intro",
+        "bridge": {
+          "name": "Wendy Warm"
+        },
+        "source": "unipile",
+        "rank": 0.6093,
+        "fit": 0.44,
+        "reach": 0.05,
+        "responsiveness": 0.475,
+        "reasons": [
+          "Wendy is close to you and also at Stripe, so ask for an intro",
+          "Cara Ito 12 designs products"
+        ]
+      },
+      {
+        "name": "Gus Novak 16",
+        "title": "Design Lead",
+        "org": "Stripe",
+        "location": "San Francisco Bay Area",
+        "linkedinUrl": "https://www.linkedin.com/in/li-person-16",
+        "email": "gus.novak@stripe.com",
+        "emailConfidence": "pattern",
+        "tier": 2,
+        "why": "Wendy is close to you and also at Stripe, so ask for an intro",
+        "bridge": {
+          "name": "Wendy Warm"
+        },
+        "source": "unipile",
+        "rank": 0.5661,
+        "fit": 0.38,
+        "reach": 0.05,
+        "responsiveness": 0.475,
+        "reasons": [
+          "Wendy is close to you and also at Stripe, so ask for an intro",
+          "Gus Novak 16 designs products"
+        ]
+      },
+      {
+        "name": "Ivo Park",
+        "title": "Design Lead",
+        "org": "Stripe",
+        "location": "San Francisco Bay Area",
+        "linkedinUrl": "https://www.linkedin.com/in/li-person-8",
+        "email": "ivo.park@stripe.com",
+        "emailConfidence": "pattern",
+        "tier": 2,
+        "why": "Wendy is close to you and also at Stripe, so ask for an intro",
+        "bridge": {
+          "name": "Wendy Warm"
+        },
+        "source": "unipile",
+        "rank": 0.5589,
+        "fit": 0.37,
+        "reach": 0.05,
+        "responsiveness": 0.475,
+        "reasons": [
+          "Wendy is close to you and also at Stripe, so ask for an intro",
+          "Ivo Park designs products"
+        ]
+      },
+      {
+        "name": "Jia Ito 19",
+        "title": "Product Designer",
+        "org": "Notion",
+        "location": "San Francisco Bay Area",
+        "linkedinUrl": "https://www.linkedin.com/in/li-person-19",
+        "emailStatus": "not looked up",
+        "tier": 5,
+        "source": "unipile",
+        "rank": 0.5405,
+        "fit": 0.99,
+        "reach": 0,
+        "responsiveness": 0.475,
+        "reasons": [
+          "Jia Ito 19 designs products"
+        ]
+      },
+      {
+        "name": "Eli Shah 14",
+        "title": "Design Lead",
+        "org": "Plaid",
+        "location": "San Francisco Bay Area",
+        "linkedinUrl": "https://www.linkedin.com/in/li-person-14",
+        "email": "eli.shah@plaid.com",
+        "emailConfidence": "guess",
+        "tier": 2,
+        "why": "Lia is close to you and also at Plaid, so ask for an intro",
+        "bridge": {
+          "name": "Lia Lee"
+        },
+        "source": "unipile",
+        "rank": 0.5342,
+        "fit": 0.36,
+        "reach": 0,
+        "responsiveness": 0.475,
+        "reasons": [
+          "Lia is close to you and also at Plaid, so ask for an intro",
+          "Eli Shah 14 designs products"
+        ]
+      },
+      {
+        "name": "Hana Shah",
+        "title": "Product Designer",
+        "org": "Notion",
+        "location": "San Francisco Bay Area",
+        "linkedinUrl": "https://www.linkedin.com/in/li-person-7",
+        "emailStatus": "not looked up",
+        "tier": 5,
+        "source": "unipile",
+        "rank": 0.5315,
+        "fit": 0.97,
+        "reach": 0,
+        "responsiveness": 0.475,
+        "reasons": [
+          "Hana Shah designs products"
+        ]
+      },
+      {
+        "name": "Hana Diaz 27",
+        "title": "Product Designer",
+        "org": "Notion",
+        "location": "San Francisco Bay Area",
+        "linkedinUrl": "https://www.linkedin.com/in/li-person-27",
+        "emailStatus": "not looked up",
+        "tier": 5,
+        "source": "unipile",
+        "rank": 0.518,
+        "fit": 0.94,
+        "reach": 0,
+        "responsiveness": 0.475,
+        "reasons": [
+          "Hana Diaz 27 designs products"
+        ]
+      },
+      {
+        "name": "Dev Chen",
+        "title": "Product Designer",
+        "org": "Notion",
+        "location": "San Francisco Bay Area",
+        "linkedinUrl": "https://www.linkedin.com/in/li-person-3",
+        "emailStatus": "not looked up",
+        "tier": 5,
+        "source": "unipile",
+        "rank": 0.5,
+        "fit": 0.9,
+        "reach": 0,
+        "responsiveness": 0.475,
+        "reasons": [
+          "Dev Chen designs products"
+        ]
+      },
+      {
+        "name": "Eli Chen 24",
+        "title": "Design Lead",
+        "org": "Stripe",
+        "location": "San Francisco Bay Area",
+        "linkedinUrl": "https://www.linkedin.com/in/li-person-24",
+        "email": "eli.chen@stripe.com",
+        "emailConfidence": "pattern",
+        "tier": 2,
+        "why": "Wendy is close to you and also at Stripe, so ask for an intro",
+        "bridge": {
+          "name": "Wendy Warm"
+        },
+        "source": "unipile",
+        "rank": 0.4869,
+        "fit": 0.27,
+        "reach": 0.05,
+        "responsiveness": 0.475,
+        "reasons": [
+          "Wendy is close to you and also at Stripe, so ask for an intro",
+          "Eli Chen 24 designs products"
+        ]
+      },
+      {
+        "name": "Fay Park 15",
+        "title": "Product Designer",
+        "org": "Notion",
+        "location": "San Francisco Bay Area",
+        "linkedinUrl": "https://www.linkedin.com/in/li-person-15",
+        "emailStatus": "not looked up",
+        "tier": 5,
+        "source": "unipile",
+        "rank": 0.392,
+        "fit": 0.66,
+        "reach": 0,
+        "responsiveness": 0.475,
+        "reasons": [
+          "Fay Park 15 designs products"
+        ]
+      },
+      {
+        "name": "Fay Ito",
+        "title": "Product Designer",
+        "org": "Ramp",
+        "location": "San Francisco Bay Area",
+        "linkedinUrl": "https://www.linkedin.com/in/li-person-5",
+        "emailStatus": "not looked up",
+        "tier": 2,
+        "why": "Ben is close to you and also at Ramp, so ask for an intro",
+        "bridge": {
+          "name": "Ben Park"
+        },
+        "source": "unipile",
+        "rank": 0.3542,
+        "fit": 0.11,
+        "reach": 0,
+        "responsiveness": 0.475,
+        "reasons": [
+          "Ben is close to you and also at Ramp, so ask for an intro",
+          "Fay Ito designs products"
+        ]
+      },
+      {
+        "name": "Dev Diaz 13",
+        "title": "Product Designer",
+        "org": "Ramp",
+        "location": "San Francisco Bay Area",
+        "linkedinUrl": "https://www.linkedin.com/in/li-person-13",
+        "emailStatus": "not looked up",
+        "tier": 2,
+        "why": "Ben is close to you and also at Ramp, so ask for an intro",
+        "bridge": {
+          "name": "Ben Park"
+        },
+        "source": "unipile",
+        "rank": 0.3542,
+        "fit": 0.11,
+        "reach": 0,
+        "responsiveness": 0.475,
+        "reasons": [
+          "Ben is close to you and also at Ramp, so ask for an intro",
+          "Dev Diaz 13 designs products"
+        ]
+      },
+      {
+        "name": "Hana Chen 17",
+        "title": "Product Designer",
+        "org": "Ramp",
+        "location": "San Francisco Bay Area",
+        "linkedinUrl": "https://www.linkedin.com/in/li-person-17",
+        "emailStatus": "not looked up",
+        "tier": 2,
+        "why": "Ben is close to you and also at Ramp, so ask for an intro",
+        "bridge": {
+          "name": "Ben Park"
+        },
+        "source": "unipile",
+        "rank": 0.3542,
+        "fit": 0.11,
+        "reach": 0,
+        "responsiveness": 0.475,
+        "reasons": [
+          "Ben is close to you and also at Ramp, so ask for an intro",
+          "Hana Chen 17 designs products"
+        ]
+      },
+      {
+        "name": "Ivo Okafor 18",
+        "title": "Design Lead",
+        "org": "Plaid",
+        "location": "San Francisco Bay Area",
+        "linkedinUrl": "https://www.linkedin.com/in/li-person-18",
+        "email": "ivo.okafor@plaid.com",
+        "emailConfidence": "guess",
+        "tier": 2,
+        "why": "Lia is close to you and also at Plaid, so ask for an intro",
+        "bridge": {
+          "name": "Lia Lee"
+        },
+        "source": "unipile",
+        "rank": 0.3542,
+        "fit": 0.11,
+        "reach": 0,
+        "responsiveness": 0.475,
+        "reasons": [
+          "Lia is close to you and also at Plaid, so ask for an intro",
+          "Ivo Okafor 18 designs products"
+        ]
+      }
+    ],
+    "unconfigured": [
+      "web"
+    ],
+    "relaxed": []
+  },
+  "stored": [
+    {
+      "person_id": "known",
+      "candidate": {
+        "org": "Ramp",
+        "name": "Ben Park",
+        "title": "Product Designer",
+        "entity": "person",
+        "warmth": {
+          "why": "You've talked with Ben before",
+          "tier": 1
+        },
+        "domains": [],
+        "sources": [
+          "unipile"
+        ],
+        "headline": "Product Designer at Ramp",
+        "lastName": "Park",
+        "location": "San Francisco Bay Area",
+        "memberId": "ACoA1",
+        "firstName": "Ben",
+        "externalIds": {
+          "unipile": "ACoA1"
+        },
+        "linkedinUrl": "https://www.linkedin.com/in/li-person-1",
+        "networkDistance": 3
+      },
+      "source": "unipile",
+      "external_id": "ACoA1",
+      "rank": 1.2107,
+      "fit": 0.77,
+      "reach": 0.72,
+      "responsiveness": 0.475,
+      "reasons": [
+        "You've talked with Ben before",
+        "Ben Park designs products"
+      ],
+      "status": "new"
+    },
+    {
+      "person_id": null,
+      "candidate": {
+        "org": "Stripe",
+        "name": "Eli Okafor",
+        "email": "eli.okafor@stripe.com",
+        "title": "Design Lead",
+        "entity": "person",
+        "warmth": {
+          "why": "Wendy is close to you and also at Stripe, so ask for an intro",
+          "tier": 2,
+          "bridge": {
+            "name": "Wendy Warm",
+            "personId": "bridge"
+          }
+        },
+        "domains": [
+          "stripe.com"
+        ],
+        "sources": [
+          "unipile"
+        ],
+        "headline": "Design Lead at Stripe",
+        "lastName": "Okafor",
+        "location": "San Francisco Bay Area",
+        "memberId": "ACoA4",
+        "firstName": "Eli",
+        "externalIds": {
+          "unipile": "ACoA4"
+        },
+        "linkedinUrl": "https://www.linkedin.com/in/li-person-4",
+        "emailConfidence": "pattern",
+        "networkDistance": 2
+      },
+      "source": "unipile",
+      "external_id": "ACoA4",
+      "rank": 0.9405,
+      "fit": 0.9,
+      "reach": 0.05,
+      "responsiveness": 0.475,
+      "reasons": [
+        "Wendy is close to you and also at Stripe, so ask for an intro",
+        "Eli Okafor designs products"
+      ],
+      "status": "new"
+    },
+    {
+      "person_id": null,
+      "candidate": {
+        "org": "Plaid",
+        "name": "Gus Diaz",
+        "email": "gus.diaz@plaid.com",
+        "title": "Design Lead",
+        "entity": "person",
+        "warmth": {
+          "why": "Lia is close to you and also at Plaid, so ask for an intro",
+          "tier": 2,
+          "bridge": {
+            "name": "Lia Lee",
+            "personId": "bridge"
+          }
+        },
+        "domains": [
+          "plaid.com"
+        ],
+        "sources": [
+          "unipile"
+        ],
+        "headline": "Design Lead at Plaid",
+        "lastName": "Diaz",
+        "location": "San Francisco Bay Area",
+        "memberId": "ACoA6",
+        "firstName": "Gus",
+        "externalIds": {
+          "unipile": "ACoA6"
+        },
+        "linkedinUrl": "https://www.linkedin.com/in/li-person-6",
+        "emailConfidence": "guess",
+        "networkDistance": 3
+      },
+      "source": "unipile",
+      "external_id": "ACoA6",
+      "rank": 0.9086,
+      "fit": 0.88,
+      "reach": 0,
+      "responsiveness": 0.475,
+      "reasons": [
+        "Lia is close to you and also at Plaid, so ask for an intro",
+        "Gus Diaz designs products"
+      ],
+      "status": "new"
+    },
+    {
+      "person_id": null,
+      "candidate": {
+        "org": "Ramp",
+        "name": "Jia Novak",
+        "title": "Product Designer",
+        "entity": "person",
+        "warmth": {
+          "why": "Ben is close to you and also at Ramp, so ask for an intro",
+          "tier": 2,
+          "bridge": {
+            "name": "Ben Park",
+            "personId": "bridge"
+          }
+        },
+        "domains": [],
+        "sources": [
+          "unipile"
+        ],
+        "headline": "Product Designer at Ramp",
+        "lastName": "Novak",
+        "location": "San Francisco Bay Area",
+        "memberId": "ACoA9",
+        "firstName": "Jia",
+        "externalIds": {
+          "unipile": "ACoA9"
+        },
+        "linkedinUrl": "https://www.linkedin.com/in/li-person-9",
+        "networkDistance": 3
+      },
+      "source": "unipile",
+      "external_id": "ACoA9",
+      "rank": 0.9014,
+      "fit": 0.87,
+      "reach": 0,
+      "responsiveness": 0.475,
+      "reasons": [
+        "Ben is close to you and also at Ramp, so ask for an intro",
+        "Jia Novak designs products"
+      ],
+      "status": "new"
+    },
+    {
+      "person_id": null,
+      "candidate": {
+        "org": "Stripe",
+        "name": "Ivo Shah 28",
+        "email": "ivo.shah@stripe.com",
+        "title": "Design Lead",
+        "entity": "person",
+        "warmth": {
+          "why": "Wendy is close to you and also at Stripe, so ask for an intro",
+          "tier": 2,
+          "bridge": {
+            "name": "Wendy Warm",
+            "personId": "bridge"
+          }
+        },
+        "domains": [
+          "stripe.com"
+        ],
+        "sources": [
+          "unipile"
+        ],
+        "headline": "Design Lead at Stripe",
+        "lastName": "Shah 28",
+        "location": "San Francisco Bay Area",
+        "memberId": "ACoA28",
+        "firstName": "Ivo",
+        "externalIds": {
+          "unipile": "ACoA28"
+        },
+        "linkedinUrl": "https://www.linkedin.com/in/li-person-28",
+        "emailConfidence": "pattern",
+        "networkDistance": 2
+      },
+      "source": "unipile",
+      "external_id": "ACoA28",
+      "rank": 0.8037,
+      "fit": 0.71,
+      "reach": 0.05,
+      "responsiveness": 0.475,
+      "reasons": [
+        "Wendy is close to you and also at Stripe, so ask for an intro",
+        "Ivo Shah 28 designs products"
+      ],
+      "status": "new"
+    },
+    {
+      "person_id": null,
+      "candidate": {
+        "org": "Plaid",
+        "name": "Gus Ito 26",
+        "email": "gus.ito@plaid.com",
+        "title": "Design Lead",
+        "entity": "person",
+        "warmth": {
+          "why": "Lia is close to you and also at Plaid, so ask for an intro",
+          "tier": 2,
+          "bridge": {
+            "name": "Lia Lee",
+            "personId": "bridge"
+          }
+        },
+        "domains": [
+          "plaid.com"
+        ],
+        "sources": [
+          "unipile"
+        ],
+        "headline": "Design Lead at Plaid",
+        "lastName": "Ito 26",
+        "location": "San Francisco Bay Area",
+        "memberId": "ACoA26",
+        "firstName": "Gus",
+        "externalIds": {
+          "unipile": "ACoA26"
+        },
+        "linkedinUrl": "https://www.linkedin.com/in/li-person-26",
+        "emailConfidence": "guess",
+        "networkDistance": 3
+      },
+      "source": "unipile",
+      "external_id": "ACoA26",
+      "rank": 0.7502,
+      "fit": 0.66,
+      "reach": 0,
+      "responsiveness": 0.475,
+      "reasons": [
+        "Lia is close to you and also at Plaid, so ask for an intro",
+        "Gus Ito 26 designs products"
+      ],
+      "status": "new"
+    },
+    {
+      "person_id": null,
+      "candidate": {
+        "org": "Ramp",
+        "name": "Ben Shah 21",
+        "title": "Product Designer",
+        "entity": "person",
+        "warmth": {
+          "why": "Ben is close to you and also at Ramp, so ask for an intro",
+          "tier": 2,
+          "bridge": {
+            "name": "Ben Park",
+            "personId": "bridge"
+          }
+        },
+        "domains": [],
+        "sources": [
+          "unipile"
+        ],
+        "headline": "Product Designer at Ramp",
+        "lastName": "Shah 21",
+        "location": "San Francisco Bay Area",
+        "memberId": "ACoA21",
+        "firstName": "Ben",
+        "externalIds": {
+          "unipile": "ACoA21"
+        },
+        "linkedinUrl": "https://www.linkedin.com/in/li-person-21",
+        "networkDistance": 3
+      },
+      "source": "unipile",
+      "external_id": "ACoA21",
+      "rank": 0.7214,
+      "fit": 0.62,
+      "reach": 0,
+      "responsiveness": 0.475,
+      "reasons": [
+        "Ben is close to you and also at Ramp, so ask for an intro",
+        "Ben Shah 21 designs products"
+      ],
+      "status": "new"
+    },
+    {
+      "person_id": null,
+      "candidate": {
+        "org": "Ramp",
+        "name": "Jia Park 29",
+        "title": "Product Designer",
+        "entity": "person",
+        "warmth": {
+          "why": "Ben is close to you and also at Ramp, so ask for an intro",
+          "tier": 2,
+          "bridge": {
+            "name": "Ben Park",
+            "personId": "bridge"
+          }
+        },
+        "domains": [],
+        "sources": [
+          "unipile"
+        ],
+        "headline": "Product Designer at Ramp",
+        "lastName": "Park 29",
+        "location": "San Francisco Bay Area",
+        "memberId": "ACoA29",
+        "firstName": "Jia",
+        "externalIds": {
+          "unipile": "ACoA29"
+        },
+        "linkedinUrl": "https://www.linkedin.com/in/li-person-29",
+        "networkDistance": 3
+      },
+      "source": "unipile",
+      "external_id": "ACoA29",
+      "rank": 0.7142,
+      "fit": 0.61,
+      "reach": 0,
+      "responsiveness": 0.475,
+      "reasons": [
+        "Ben is close to you and also at Ramp, so ask for an intro",
+        "Jia Park 29 designs products"
+      ],
+      "status": "new"
+    },
+    {
+      "person_id": null,
+      "candidate": {
+        "org": "Stripe",
+        "name": "Ana Shah",
+        "email": "ana.shah@stripe.com",
+        "title": "Design Lead",
+        "entity": "person",
+        "warmth": {
+          "why": "Wendy is close to you and also at Stripe, so ask for an intro",
+          "tier": 2,
+          "bridge": {
+            "name": "Wendy Warm",
+            "personId": "bridge"
+          }
+        },
+        "domains": [
+          "stripe.com"
+        ],
+        "sources": [
+          "unipile"
+        ],
+        "headline": "Design Lead at Stripe",
+        "lastName": "Shah",
+        "location": "San Francisco Bay Area",
+        "memberId": "ACoA0",
+        "firstName": "Ana",
+        "externalIds": {
+          "unipile": "ACoA0"
+        },
+        "linkedinUrl": "https://www.linkedin.com/in/li-person-0",
+        "emailConfidence": "pattern",
+        "networkDistance": 2
+      },
+      "source": "unipile",
+      "external_id": "ACoA0",
+      "rank": 0.6237,
+      "fit": 0.46,
+      "reach": 0.05,
+      "responsiveness": 0.475,
+      "reasons": [
+        "Wendy is close to you and also at Stripe, so ask for an intro",
+        "Ana Shah designs products"
+      ],
+      "status": "new"
+    },
+    {
+      "person_id": null,
+      "candidate": {
+        "org": "Plaid",
+        "name": "Ana Chen 10",
+        "email": "ana.chen@plaid.com",
+        "title": "Design Lead",
+        "entity": "person",
+        "warmth": {
+          "why": "Lia is close to you and also at Plaid, so ask for an intro",
+          "tier": 2,
+          "bridge": {
+            "name": "Lia Lee",
+            "personId": "bridge"
+          }
+        },
+        "domains": [
+          "plaid.com"
+        ],
+        "sources": [
+          "unipile"
+        ],
+        "headline": "Design Lead at Plaid",
+        "lastName": "Chen 10",
+        "location": "San Francisco Bay Area",
+        "memberId": "ACoA10",
+        "firstName": "Ana",
+        "externalIds": {
+          "unipile": "ACoA10"
+        },
+        "linkedinUrl": "https://www.linkedin.com/in/li-person-10",
+        "emailConfidence": "guess",
+        "networkDistance": 3
+      },
+      "source": "unipile",
+      "external_id": "ACoA10",
+      "rank": 0.6206,
+      "fit": 0.48,
+      "reach": 0,
+      "responsiveness": 0.475,
+      "reasons": [
+        "Lia is close to you and also at Plaid, so ask for an intro",
+        "Ana Chen 10 designs products"
+      ],
+      "status": "new"
+    },
+    {
+      "person_id": null,
+      "candidate": {
+        "org": "Stripe",
+        "name": "Ana Diaz 20",
+        "email": "ana.diaz@stripe.com",
+        "title": "Design Lead",
+        "entity": "person",
+        "warmth": {
+          "why": "Wendy is close to you and also at Stripe, so ask for an intro",
+          "tier": 2,
+          "bridge": {
+            "name": "Wendy Warm",
+            "personId": "bridge"
+          }
+        },
+        "domains": [
+          "stripe.com"
+        ],
+        "sources": [
+          "unipile"
+        ],
+        "headline": "Design Lead at Stripe",
+        "lastName": "Diaz 20",
+        "location": "San Francisco Bay Area",
+        "memberId": "ACoA20",
+        "firstName": "Ana",
+        "externalIds": {
+          "unipile": "ACoA20"
+        },
+        "linkedinUrl": "https://www.linkedin.com/in/li-person-20",
+        "emailConfidence": "pattern",
+        "networkDistance": 2
+      },
+      "source": "unipile",
+      "external_id": "ACoA20",
+      "rank": 0.6165,
+      "fit": 0.45,
+      "reach": 0.05,
+      "responsiveness": 0.475,
+      "reasons": [
+        "Wendy is close to you and also at Stripe, so ask for an intro",
+        "Ana Diaz 20 designs products"
+      ],
+      "status": "new"
+    },
+    {
+      "person_id": null,
+      "candidate": {
+        "org": "Stripe",
+        "name": "Cara Ito 12",
+        "email": "cara.ito@stripe.com",
+        "title": "Design Lead",
+        "entity": "person",
+        "warmth": {
+          "why": "Wendy is close to you and also at Stripe, so ask for an intro",
+          "tier": 2,
+          "bridge": {
+            "name": "Wendy Warm",
+            "personId": "bridge"
+          }
+        },
+        "domains": [
+          "stripe.com"
+        ],
+        "sources": [
+          "unipile"
+        ],
+        "headline": "Design Lead at Stripe",
+        "lastName": "Ito 12",
+        "location": "San Francisco Bay Area",
+        "memberId": "ACoA12",
+        "firstName": "Cara",
+        "externalIds": {
+          "unipile": "ACoA12"
+        },
+        "linkedinUrl": "https://www.linkedin.com/in/li-person-12",
+        "emailConfidence": "pattern",
+        "networkDistance": 2
+      },
+      "source": "unipile",
+      "external_id": "ACoA12",
+      "rank": 0.6093,
+      "fit": 0.44,
+      "reach": 0.05,
+      "responsiveness": 0.475,
+      "reasons": [
+        "Wendy is close to you and also at Stripe, so ask for an intro",
+        "Cara Ito 12 designs products"
+      ],
+      "status": "new"
+    },
+    {
+      "person_id": null,
+      "candidate": {
+        "org": "Stripe",
+        "name": "Gus Novak 16",
+        "email": "gus.novak@stripe.com",
+        "title": "Design Lead",
+        "entity": "person",
+        "warmth": {
+          "why": "Wendy is close to you and also at Stripe, so ask for an intro",
+          "tier": 2,
+          "bridge": {
+            "name": "Wendy Warm",
+            "personId": "bridge"
+          }
+        },
+        "domains": [
+          "stripe.com"
+        ],
+        "sources": [
+          "unipile"
+        ],
+        "headline": "Design Lead at Stripe",
+        "lastName": "Novak 16",
+        "location": "San Francisco Bay Area",
+        "memberId": "ACoA16",
+        "firstName": "Gus",
+        "externalIds": {
+          "unipile": "ACoA16"
+        },
+        "linkedinUrl": "https://www.linkedin.com/in/li-person-16",
+        "emailConfidence": "pattern",
+        "networkDistance": 2
+      },
+      "source": "unipile",
+      "external_id": "ACoA16",
+      "rank": 0.5661,
+      "fit": 0.38,
+      "reach": 0.05,
+      "responsiveness": 0.475,
+      "reasons": [
+        "Wendy is close to you and also at Stripe, so ask for an intro",
+        "Gus Novak 16 designs products"
+      ],
+      "status": "new"
+    },
+    {
+      "person_id": null,
+      "candidate": {
+        "org": "Stripe",
+        "name": "Ivo Park",
+        "email": "ivo.park@stripe.com",
+        "title": "Design Lead",
+        "entity": "person",
+        "warmth": {
+          "why": "Wendy is close to you and also at Stripe, so ask for an intro",
+          "tier": 2,
+          "bridge": {
+            "name": "Wendy Warm",
+            "personId": "bridge"
+          }
+        },
+        "domains": [
+          "stripe.com"
+        ],
+        "sources": [
+          "unipile"
+        ],
+        "headline": "Design Lead at Stripe",
+        "lastName": "Park",
+        "location": "San Francisco Bay Area",
+        "memberId": "ACoA8",
+        "firstName": "Ivo",
+        "externalIds": {
+          "unipile": "ACoA8"
+        },
+        "linkedinUrl": "https://www.linkedin.com/in/li-person-8",
+        "emailConfidence": "pattern",
+        "networkDistance": 2
+      },
+      "source": "unipile",
+      "external_id": "ACoA8",
+      "rank": 0.5589,
+      "fit": 0.37,
+      "reach": 0.05,
+      "responsiveness": 0.475,
+      "reasons": [
+        "Wendy is close to you and also at Stripe, so ask for an intro",
+        "Ivo Park designs products"
+      ],
+      "status": "new"
+    },
+    {
+      "person_id": null,
+      "candidate": {
+        "org": "Notion",
+        "name": "Jia Ito 19",
+        "title": "Product Designer",
+        "entity": "person",
+        "warmth": {
+          "tier": 5
+        },
+        "domains": [],
+        "sources": [
+          "unipile"
+        ],
+        "headline": "Product Designer at Notion",
+        "lastName": "Ito 19",
+        "location": "San Francisco Bay Area",
+        "memberId": "ACoA19",
+        "firstName": "Jia",
+        "externalIds": {
+          "unipile": "ACoA19"
+        },
+        "linkedinUrl": "https://www.linkedin.com/in/li-person-19",
+        "networkDistance": 3
+      },
+      "source": "unipile",
+      "external_id": "ACoA19",
+      "rank": 0.5405,
+      "fit": 0.99,
+      "reach": 0,
+      "responsiveness": 0.475,
+      "reasons": [
+        "Jia Ito 19 designs products"
+      ],
+      "status": "new"
+    },
+    {
+      "person_id": null,
+      "candidate": {
+        "org": "Plaid",
+        "name": "Eli Shah 14",
+        "email": "eli.shah@plaid.com",
+        "title": "Design Lead",
+        "entity": "person",
+        "warmth": {
+          "why": "Lia is close to you and also at Plaid, so ask for an intro",
+          "tier": 2,
+          "bridge": {
+            "name": "Lia Lee",
+            "personId": "bridge"
+          }
+        },
+        "domains": [
+          "plaid.com"
+        ],
+        "sources": [
+          "unipile"
+        ],
+        "headline": "Design Lead at Plaid",
+        "lastName": "Shah 14",
+        "location": "San Francisco Bay Area",
+        "memberId": "ACoA14",
+        "firstName": "Eli",
+        "externalIds": {
+          "unipile": "ACoA14"
+        },
+        "linkedinUrl": "https://www.linkedin.com/in/li-person-14",
+        "emailConfidence": "guess",
+        "networkDistance": 3
+      },
+      "source": "unipile",
+      "external_id": "ACoA14",
+      "rank": 0.5342,
+      "fit": 0.36,
+      "reach": 0,
+      "responsiveness": 0.475,
+      "reasons": [
+        "Lia is close to you and also at Plaid, so ask for an intro",
+        "Eli Shah 14 designs products"
+      ],
+      "status": "new"
+    },
+    {
+      "person_id": null,
+      "candidate": {
+        "org": "Notion",
+        "name": "Hana Shah",
+        "title": "Product Designer",
+        "entity": "person",
+        "warmth": {
+          "tier": 5
+        },
+        "domains": [],
+        "sources": [
+          "unipile"
+        ],
+        "headline": "Product Designer at Notion",
+        "lastName": "Shah",
+        "location": "San Francisco Bay Area",
+        "memberId": "ACoA7",
+        "firstName": "Hana",
+        "externalIds": {
+          "unipile": "ACoA7"
+        },
+        "linkedinUrl": "https://www.linkedin.com/in/li-person-7",
+        "networkDistance": 3
+      },
+      "source": "unipile",
+      "external_id": "ACoA7",
+      "rank": 0.5315,
+      "fit": 0.97,
+      "reach": 0,
+      "responsiveness": 0.475,
+      "reasons": [
+        "Hana Shah designs products"
+      ],
+      "status": "new"
+    },
+    {
+      "person_id": null,
+      "candidate": {
+        "org": "Notion",
+        "name": "Hana Diaz 27",
+        "title": "Product Designer",
+        "entity": "person",
+        "warmth": {
+          "tier": 5
+        },
+        "domains": [],
+        "sources": [
+          "unipile"
+        ],
+        "headline": "Product Designer at Notion",
+        "lastName": "Diaz 27",
+        "location": "San Francisco Bay Area",
+        "memberId": "ACoA27",
+        "firstName": "Hana",
+        "externalIds": {
+          "unipile": "ACoA27"
+        },
+        "linkedinUrl": "https://www.linkedin.com/in/li-person-27",
+        "networkDistance": 3
+      },
+      "source": "unipile",
+      "external_id": "ACoA27",
+      "rank": 0.518,
+      "fit": 0.94,
+      "reach": 0,
+      "responsiveness": 0.475,
+      "reasons": [
+        "Hana Diaz 27 designs products"
+      ],
+      "status": "new"
+    },
+    {
+      "person_id": null,
+      "candidate": {
+        "org": "Notion",
+        "name": "Dev Chen",
+        "title": "Product Designer",
+        "entity": "person",
+        "warmth": {
+          "tier": 5
+        },
+        "domains": [],
+        "sources": [
+          "unipile"
+        ],
+        "headline": "Product Designer at Notion",
+        "lastName": "Chen",
+        "location": "San Francisco Bay Area",
+        "memberId": "ACoA3",
+        "firstName": "Dev",
+        "externalIds": {
+          "unipile": "ACoA3"
+        },
+        "linkedinUrl": "https://www.linkedin.com/in/li-person-3",
+        "networkDistance": 3
+      },
+      "source": "unipile",
+      "external_id": "ACoA3",
+      "rank": 0.5,
+      "fit": 0.9,
+      "reach": 0,
+      "responsiveness": 0.475,
+      "reasons": [
+        "Dev Chen designs products"
+      ],
+      "status": "new"
+    },
+    {
+      "person_id": null,
+      "candidate": {
+        "org": "Stripe",
+        "name": "Eli Chen 24",
+        "email": "eli.chen@stripe.com",
+        "title": "Design Lead",
+        "entity": "person",
+        "warmth": {
+          "why": "Wendy is close to you and also at Stripe, so ask for an intro",
+          "tier": 2,
+          "bridge": {
+            "name": "Wendy Warm",
+            "personId": "bridge"
+          }
+        },
+        "domains": [
+          "stripe.com"
+        ],
+        "sources": [
+          "unipile"
+        ],
+        "headline": "Design Lead at Stripe",
+        "lastName": "Chen 24",
+        "location": "San Francisco Bay Area",
+        "memberId": "ACoA24",
+        "firstName": "Eli",
+        "externalIds": {
+          "unipile": "ACoA24"
+        },
+        "linkedinUrl": "https://www.linkedin.com/in/li-person-24",
+        "emailConfidence": "pattern",
+        "networkDistance": 2
+      },
+      "source": "unipile",
+      "external_id": "ACoA24",
+      "rank": 0.4869,
+      "fit": 0.27,
+      "reach": 0.05,
+      "responsiveness": 0.475,
+      "reasons": [
+        "Wendy is close to you and also at Stripe, so ask for an intro",
+        "Eli Chen 24 designs products"
+      ],
+      "status": "new"
+    },
+    {
+      "person_id": null,
+      "candidate": {
+        "org": "Notion",
+        "name": "Fay Park 15",
+        "title": "Product Designer",
+        "entity": "person",
+        "warmth": {
+          "tier": 5
+        },
+        "domains": [],
+        "sources": [
+          "unipile"
+        ],
+        "headline": "Product Designer at Notion",
+        "lastName": "Park 15",
+        "location": "San Francisco Bay Area",
+        "memberId": "ACoA15",
+        "firstName": "Fay",
+        "externalIds": {
+          "unipile": "ACoA15"
+        },
+        "linkedinUrl": "https://www.linkedin.com/in/li-person-15",
+        "networkDistance": 3
+      },
+      "source": "unipile",
+      "external_id": "ACoA15",
+      "rank": 0.392,
+      "fit": 0.66,
+      "reach": 0,
+      "responsiveness": 0.475,
+      "reasons": [
+        "Fay Park 15 designs products"
+      ],
+      "status": "new"
+    },
+    {
+      "person_id": null,
+      "candidate": {
+        "org": "Ramp",
+        "name": "Dev Diaz 13",
+        "title": "Product Designer",
+        "entity": "person",
+        "warmth": {
+          "why": "Ben is close to you and also at Ramp, so ask for an intro",
+          "tier": 2,
+          "bridge": {
+            "name": "Ben Park",
+            "personId": "bridge"
+          }
+        },
+        "domains": [],
+        "sources": [
+          "unipile"
+        ],
+        "headline": "Product Designer at Ramp",
+        "lastName": "Diaz 13",
+        "location": "San Francisco Bay Area",
+        "memberId": "ACoA13",
+        "firstName": "Dev",
+        "externalIds": {
+          "unipile": "ACoA13"
+        },
+        "linkedinUrl": "https://www.linkedin.com/in/li-person-13",
+        "networkDistance": 3
+      },
+      "source": "unipile",
+      "external_id": "ACoA13",
+      "rank": 0.3542,
+      "fit": 0.11,
+      "reach": 0,
+      "responsiveness": 0.475,
+      "reasons": [
+        "Ben is close to you and also at Ramp, so ask for an intro",
+        "Dev Diaz 13 designs products"
+      ],
+      "status": "new"
+    },
+    {
+      "person_id": null,
+      "candidate": {
+        "org": "Ramp",
+        "name": "Hana Chen 17",
+        "title": "Product Designer",
+        "entity": "person",
+        "warmth": {
+          "why": "Ben is close to you and also at Ramp, so ask for an intro",
+          "tier": 2,
+          "bridge": {
+            "name": "Ben Park",
+            "personId": "bridge"
+          }
+        },
+        "domains": [],
+        "sources": [
+          "unipile"
+        ],
+        "headline": "Product Designer at Ramp",
+        "lastName": "Chen 17",
+        "location": "San Francisco Bay Area",
+        "memberId": "ACoA17",
+        "firstName": "Hana",
+        "externalIds": {
+          "unipile": "ACoA17"
+        },
+        "linkedinUrl": "https://www.linkedin.com/in/li-person-17",
+        "networkDistance": 3
+      },
+      "source": "unipile",
+      "external_id": "ACoA17",
+      "rank": 0.3542,
+      "fit": 0.11,
+      "reach": 0,
+      "responsiveness": 0.475,
+      "reasons": [
+        "Ben is close to you and also at Ramp, so ask for an intro",
+        "Hana Chen 17 designs products"
+      ],
+      "status": "new"
+    },
+    {
+      "person_id": null,
+      "candidate": {
+        "org": "Plaid",
+        "name": "Ivo Okafor 18",
+        "email": "ivo.okafor@plaid.com",
+        "title": "Design Lead",
+        "entity": "person",
+        "warmth": {
+          "why": "Lia is close to you and also at Plaid, so ask for an intro",
+          "tier": 2,
+          "bridge": {
+            "name": "Lia Lee",
+            "personId": "bridge"
+          }
+        },
+        "domains": [
+          "plaid.com"
+        ],
+        "sources": [
+          "unipile"
+        ],
+        "headline": "Design Lead at Plaid",
+        "lastName": "Okafor 18",
+        "location": "San Francisco Bay Area",
+        "memberId": "ACoA18",
+        "firstName": "Ivo",
+        "externalIds": {
+          "unipile": "ACoA18"
+        },
+        "linkedinUrl": "https://www.linkedin.com/in/li-person-18",
+        "emailConfidence": "guess",
+        "networkDistance": 3
+      },
+      "source": "unipile",
+      "external_id": "ACoA18",
+      "rank": 0.3542,
+      "fit": 0.11,
+      "reach": 0,
+      "responsiveness": 0.475,
+      "reasons": [
+        "Lia is close to you and also at Plaid, so ask for an intro",
+        "Ivo Okafor 18 designs products"
+      ],
+      "status": "new"
+    },
+    {
+      "person_id": null,
+      "candidate": {
+        "org": "Ramp",
+        "name": "Fay Ito",
+        "title": "Product Designer",
+        "entity": "person",
+        "warmth": {
+          "why": "Ben is close to you and also at Ramp, so ask for an intro",
+          "tier": 2,
+          "bridge": {
+            "name": "Ben Park",
+            "personId": "bridge"
+          }
+        },
+        "domains": [],
+        "sources": [
+          "unipile"
+        ],
+        "headline": "Product Designer at Ramp",
+        "lastName": "Ito",
+        "location": "San Francisco Bay Area",
+        "memberId": "ACoA5",
+        "firstName": "Fay",
+        "externalIds": {
+          "unipile": "ACoA5"
+        },
+        "linkedinUrl": "https://www.linkedin.com/in/li-person-5",
+        "networkDistance": 3
+      },
+      "source": "unipile",
+      "external_id": "ACoA5",
+      "rank": 0.3542,
+      "fit": 0.11,
+      "reach": 0,
+      "responsiveness": 0.475,
+      "reasons": [
+        "Ben is close to you and also at Ramp, so ask for an intro",
+        "Fay Ito designs products"
+      ],
+      "status": "new"
+    }
+  ]
+}

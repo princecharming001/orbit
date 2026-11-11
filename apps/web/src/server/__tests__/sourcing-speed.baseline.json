@@ -1,0 +1,2378 @@
+{
+  "recruiting": {
+    "ms": 3484,
+    "result": {
+      "results": [
+        {
+          "name": "Hana Reyes",
+          "title": "Product Designer",
+          "org": "Notion",
+          "email": "hana@example.com",
+          "warmth": null,
+          "sources": [
+            "apollo",
+            "unipile"
+          ],
+          "source": "unipile+apollo",
+          "external_id": "ACoA7",
+          "person_id": null,
+          "rank": 0.589,
+          "fit": 0.92,
+          "reach": 0.3,
+          "responsiveness": 0.35,
+          "reasons": [
+            "Hana Reyes fits"
+          ]
+        },
+        {
+          "name": "Cara Haas li15",
+          "title": "Product Designer",
+          "org": "Vercel",
+          "email": null,
+          "warmth": null,
+          "sources": [
+            "unipile"
+          ],
+          "source": "unipile",
+          "external_id": "ACoA15",
+          "person_id": null,
+          "rank": 0.563,
+          "fit": 0.8,
+          "reach": 0.3,
+          "responsiveness": 0.49,
+          "reasons": [
+            "Cara Haas li15 fits",
+            "2nd-degree on LinkedIn"
+          ]
+        },
+        {
+          "name": "Cara Haas ap15",
+          "title": "Product Designer",
+          "org": "Vercel",
+          "email": null,
+          "warmth": null,
+          "sources": [
+            "apollo"
+          ],
+          "source": "apollo",
+          "external_id": "ap_15",
+          "person_id": null,
+          "rank": 0.56,
+          "fit": 0.86,
+          "reach": 0.3,
+          "responsiveness": 0.34,
+          "reasons": [
+            "Cara Haas ap15 fits"
+          ]
+        },
+        {
+          "name": "Dev Ito",
+          "title": "Product Designer",
+          "org": "Linear",
+          "email": "dev@example.com",
+          "warmth": null,
+          "sources": [
+            "apollo",
+            "unipile"
+          ],
+          "source": "unipile+apollo",
+          "external_id": "ACoA3",
+          "person_id": null,
+          "rank": 0.551,
+          "fit": 0.92,
+          "reach": 0.3,
+          "responsiveness": 0.16,
+          "reasons": [
+            "Dev Ito fits",
+            "2nd-degree on LinkedIn"
+          ]
+        },
+        {
+          "name": "Fay Reyes li18",
+          "title": "Product Designer",
+          "org": "Figma",
+          "email": "fay@example.com",
+          "warmth": null,
+          "sources": [
+            "unipile"
+          ],
+          "source": "unipile",
+          "external_id": "ACoA18",
+          "person_id": null,
+          "rank": 0.542,
+          "fit": 0.97,
+          "reach": 0.05,
+          "responsiveness": 0.44,
+          "reasons": [
+            "Fay Reyes li18 fits",
+            "2nd-degree on LinkedIn"
+          ]
+        },
+        {
+          "name": "Eli Shah ap17",
+          "title": "Product Designer",
+          "org": "Linear",
+          "email": "eli@example.com",
+          "warmth": null,
+          "sources": [
+            "apollo"
+          ],
+          "source": "apollo",
+          "external_id": "ap_17",
+          "person_id": null,
+          "rank": 0.523,
+          "fit": 0.9,
+          "reach": 0,
+          "responsiveness": 0.59,
+          "reasons": [
+            "Eli Shah ap17 fits"
+          ]
+        },
+        {
+          "name": "Ben Ito li14",
+          "title": "Product Designer",
+          "org": "Notion",
+          "email": null,
+          "warmth": null,
+          "sources": [
+            "unipile"
+          ],
+          "source": "unipile",
+          "external_id": "ACoA14",
+          "person_id": null,
+          "rank": 0.5155,
+          "fit": 0.69,
+          "reach": 0.3,
+          "responsiveness": 0.5,
+          "reasons": [
+            "Ben Ito li14 fits"
+          ]
+        },
+        {
+          "name": "Jia Chen ap22",
+          "title": "Product Designer",
+          "org": "Vercel",
+          "email": null,
+          "warmth": null,
+          "sources": [
+            "apollo"
+          ],
+          "source": "apollo",
+          "external_id": "ap_22",
+          "person_id": null,
+          "rank": 0.498,
+          "fit": 0.76,
+          "reach": 0,
+          "responsiveness": 0.78,
+          "reasons": [
+            "Jia Chen ap22 fits"
+          ]
+        },
+        {
+          "name": "Ivo Novak li21",
+          "title": "Product Designer",
+          "org": "Notion",
+          "email": null,
+          "warmth": null,
+          "sources": [
+            "unipile"
+          ],
+          "source": "unipile",
+          "external_id": "ACoA21",
+          "person_id": null,
+          "rank": 0.495,
+          "fit": 0.75,
+          "reach": 0.05,
+          "responsiveness": 0.7,
+          "reasons": [
+            "Ivo Novak li21 fits",
+            "2nd-degree on LinkedIn"
+          ]
+        },
+        {
+          "name": "Ivo Novak ap21",
+          "title": "Product Designer",
+          "org": "Notion",
+          "email": null,
+          "warmth": null,
+          "sources": [
+            "apollo"
+          ],
+          "source": "apollo",
+          "external_id": "ap_21",
+          "person_id": null,
+          "rank": 0.4755,
+          "fit": 0.71,
+          "reach": 0,
+          "responsiveness": 0.78,
+          "reasons": [
+            "Ivo Novak ap21 fits"
+          ]
+        },
+        {
+          "name": "Max Ito li25",
+          "title": "Product Designer",
+          "org": "Figma",
+          "email": null,
+          "warmth": null,
+          "sources": [
+            "unipile"
+          ],
+          "source": "unipile",
+          "external_id": "ACoA25",
+          "person_id": null,
+          "rank": 0.44,
+          "fit": 0.62,
+          "reach": 0.3,
+          "responsiveness": 0.28,
+          "reasons": [
+            "Max Ito li25 fits"
+          ]
+        },
+        {
+          "name": "Lea Chen",
+          "title": "Product Designer",
+          "org": "Figma",
+          "email": null,
+          "warmth": null,
+          "sources": [
+            "apollo",
+            "unipile"
+          ],
+          "source": "unipile+apollo",
+          "external_id": "ACoA11",
+          "person_id": null,
+          "rank": 0.414,
+          "fit": 0.64,
+          "reach": 0,
+          "responsiveness": 0.63,
+          "reasons": [
+            "Lea Chen fits"
+          ]
+        },
+        {
+          "name": "Ana Okafor ap13",
+          "title": "Product Designer",
+          "org": "Plaid",
+          "email": "ana@example.com",
+          "warmth": null,
+          "sources": [
+            "apollo"
+          ],
+          "source": "apollo",
+          "external_id": "ap_13",
+          "person_id": null,
+          "rank": 0.414,
+          "fit": 0.92,
+          "reach": 0,
+          "responsiveness": 0,
+          "reasons": [
+            "Ana Okafor ap13 fits"
+          ]
+        },
+        {
+          "name": "Fay Reyes ap18",
+          "title": "Product Designer",
+          "org": "Figma",
+          "email": null,
+          "warmth": null,
+          "sources": [
+            "apollo"
+          ],
+          "source": "apollo",
+          "external_id": "ap_18",
+          "person_id": null,
+          "rank": 0.4085,
+          "fit": 0.89,
+          "reach": 0,
+          "responsiveness": 0.04,
+          "reasons": [
+            "Fay Reyes ap18 fits"
+          ]
+        },
+        {
+          "name": "Hana Sato li20",
+          "title": "Product Designer",
+          "org": "Plaid",
+          "email": null,
+          "warmth": null,
+          "sources": [
+            "unipile"
+          ],
+          "source": "unipile",
+          "external_id": "ACoA20",
+          "person_id": null,
+          "rank": 0.3985,
+          "fit": 0.65,
+          "reach": 0,
+          "responsiveness": 0.53,
+          "reasons": [
+            "Hana Sato li20 fits"
+          ]
+        },
+        {
+          "name": "Gus Park ap19",
+          "title": "Product Designer",
+          "org": "Ramp",
+          "email": null,
+          "warmth": null,
+          "sources": [
+            "apollo"
+          ],
+          "source": "apollo",
+          "external_id": "ap_19",
+          "person_id": null,
+          "rank": 0.388,
+          "fit": 0.72,
+          "reach": 0,
+          "responsiveness": 0.32,
+          "reasons": [
+            "Gus Park ap19 fits"
+          ]
+        },
+        {
+          "name": "Eli Shah li17",
+          "title": "Product Designer",
+          "org": "Linear",
+          "email": null,
+          "warmth": null,
+          "sources": [
+            "unipile"
+          ],
+          "source": "unipile",
+          "external_id": "ACoA17",
+          "person_id": null,
+          "rank": 0.3825,
+          "fit": 0.53,
+          "reach": 0,
+          "responsiveness": 0.72,
+          "reasons": [
+            "Eli Shah li17 fits"
+          ]
+        },
+        {
+          "name": "Lea Okafor ap24",
+          "title": "Product Designer",
+          "org": "Linear",
+          "email": null,
+          "warmth": null,
+          "sources": [
+            "apollo"
+          ],
+          "source": "apollo",
+          "external_id": "ap_24",
+          "person_id": null,
+          "rank": 0.3755,
+          "fit": 0.43,
+          "reach": 0,
+          "responsiveness": 0.91,
+          "reasons": [
+            "Lea Okafor ap24 fits"
+          ]
+        },
+        {
+          "name": "Kai Novak",
+          "title": "Product Designer",
+          "org": "Linear",
+          "email": null,
+          "warmth": null,
+          "sources": [
+            "apollo",
+            "unipile"
+          ],
+          "source": "unipile+apollo",
+          "external_id": "ACoA10",
+          "person_id": null,
+          "rank": 0.367,
+          "fit": 0.52,
+          "reach": 0.3,
+          "responsiveness": 0.14,
+          "reasons": [
+            "Kai Novak fits"
+          ]
+        },
+        {
+          "name": "Kai Moreau ap23",
+          "title": "Product Designer",
+          "org": "Stripe",
+          "email": null,
+          "warmth": null,
+          "sources": [
+            "apollo"
+          ],
+          "source": "apollo",
+          "external_id": "ap_23",
+          "person_id": null,
+          "rank": 0.3615,
+          "fit": 0.71,
+          "reach": 0,
+          "responsiveness": 0.21,
+          "reasons": [
+            "Kai Moreau ap23 fits"
+          ]
+        },
+        {
+          "name": "Ivo Park",
+          "title": "Product Designer",
+          "org": "Vercel",
+          "email": null,
+          "warmth": null,
+          "sources": [
+            "apollo",
+            "unipile"
+          ],
+          "source": "unipile+apollo",
+          "external_id": "ACoA8",
+          "person_id": null,
+          "rank": 0.3585,
+          "fit": 0.37,
+          "reach": 0,
+          "responsiveness": 0.96,
+          "reasons": [
+            "Ivo Park fits"
+          ]
+        },
+        {
+          "name": "Cara Okafor",
+          "title": "Product Designer",
+          "org": "Stripe",
+          "email": null,
+          "warmth": null,
+          "sources": [
+            "apollo",
+            "unipile"
+          ],
+          "source": "unipile+apollo",
+          "external_id": "ACoA2",
+          "person_id": null,
+          "rank": 0.33,
+          "fit": 0.48,
+          "reach": 0,
+          "responsiveness": 0.57,
+          "reasons": [
+            "Cara Okafor fits"
+          ]
+        },
+        {
+          "name": "Max Moreau",
+          "title": "Product Designer",
+          "org": "Ramp",
+          "email": null,
+          "warmth": null,
+          "sources": [
+            "apollo",
+            "unipile"
+          ],
+          "source": "unipile+apollo",
+          "external_id": "ACoA12",
+          "person_id": null,
+          "rank": 0.328,
+          "fit": 0.57,
+          "reach": 0.05,
+          "responsiveness": 0.27,
+          "reasons": [
+            "Max Moreau fits",
+            "2nd-degree on LinkedIn"
+          ]
+        },
+        {
+          "name": "Hana Sato ap20",
+          "title": "Product Designer",
+          "org": "Plaid",
+          "email": null,
+          "warmth": null,
+          "sources": [
+            "apollo"
+          ],
+          "source": "apollo",
+          "external_id": "ap_20",
+          "person_id": null,
+          "rank": 0.294,
+          "fit": 0.4,
+          "reach": 0,
+          "responsiveness": 0.57,
+          "reasons": [
+            "Hana Sato ap20 fits"
+          ]
+        },
+        {
+          "name": "Fay Diaz",
+          "title": "Product Designer",
+          "org": "Ramp",
+          "email": null,
+          "warmth": null,
+          "sources": [
+            "apollo",
+            "unipile"
+          ],
+          "source": "unipile+apollo",
+          "external_id": "ACoA5",
+          "person_id": null,
+          "rank": 0.2915,
+          "fit": 0.55,
+          "reach": 0,
+          "responsiveness": 0.22,
+          "reasons": [
+            "Fay Diaz fits"
+          ]
+        },
+        {
+          "name": "Ben Diaz li27",
+          "title": "Product Designer",
+          "org": "Plaid",
+          "email": null,
+          "warmth": null,
+          "sources": [
+            "unipile"
+          ],
+          "source": "unipile",
+          "external_id": "ACoA27",
+          "person_id": null,
+          "rank": 0.27,
+          "fit": 0.41,
+          "reach": 0.05,
+          "responsiveness": 0.34,
+          "reasons": [
+            "Ben Diaz li27 fits",
+            "2nd-degree on LinkedIn"
+          ]
+        },
+        {
+          "name": "Ana Haas li26",
+          "title": "Product Designer",
+          "org": "Ramp",
+          "email": null,
+          "warmth": null,
+          "sources": [
+            "unipile"
+          ],
+          "source": "unipile",
+          "external_id": "ACoA26",
+          "person_id": null,
+          "rank": 0.2605,
+          "fit": 0.45,
+          "reach": 0,
+          "responsiveness": 0.29,
+          "reasons": [
+            "Ana Haas li26 fits"
+          ]
+        },
+        {
+          "name": "Gus Shah",
+          "title": "Product Designer",
+          "org": "Plaid",
+          "email": null,
+          "warmth": null,
+          "sources": [
+            "apollo",
+            "unipile"
+          ],
+          "source": "unipile+apollo",
+          "external_id": "ACoA6",
+          "person_id": null,
+          "rank": 0.2545,
+          "fit": 0.22,
+          "reach": 0.05,
+          "responsiveness": 0.69,
+          "reasons": [
+            "Gus Shah fits",
+            "2nd-degree on LinkedIn"
+          ]
+        },
+        {
+          "name": "Jia Chen li22",
+          "title": "Product Designer",
+          "org": "Vercel",
+          "email": null,
+          "warmth": null,
+          "sources": [
+            "unipile"
+          ],
+          "source": "unipile",
+          "external_id": "ACoA22",
+          "person_id": null,
+          "rank": 0.25,
+          "fit": 0.48,
+          "reach": 0,
+          "responsiveness": 0.17,
+          "reasons": [
+            "Jia Chen li22 fits"
+          ]
+        },
+        {
+          "name": "Cara Shah li28",
+          "title": "Product Designer",
+          "org": "Notion",
+          "email": null,
+          "warmth": null,
+          "sources": [
+            "unipile"
+          ],
+          "source": "unipile",
+          "external_id": "ACoA28",
+          "person_id": null,
+          "rank": 0.233,
+          "fit": 0.14,
+          "reach": 0,
+          "responsiveness": 0.85,
+          "reasons": [
+            "Cara Shah li28 fits"
+          ]
+        },
+        {
+          "name": "Ana Chen",
+          "title": "Product Designer",
+          "org": "Notion",
+          "email": null,
+          "warmth": null,
+          "sources": [
+            "apollo",
+            "unipile"
+          ],
+          "source": "unipile+apollo",
+          "external_id": "ACoA0",
+          "person_id": null,
+          "rank": 0.2325,
+          "fit": 0.1,
+          "reach": 0.05,
+          "responsiveness": 0.85,
+          "reasons": [
+            "Ana Chen fits",
+            "2nd-degree on LinkedIn"
+          ]
+        },
+        {
+          "name": "Ana Okafor li13",
+          "title": "Product Designer",
+          "org": "Plaid",
+          "email": null,
+          "warmth": null,
+          "sources": [
+            "unipile"
+          ],
+          "source": "unipile",
+          "external_id": "ACoA13",
+          "person_id": null,
+          "rank": 0.232,
+          "fit": 0.2,
+          "reach": 0,
+          "responsiveness": 0.71,
+          "reasons": [
+            "Ana Okafor li13 fits"
+          ]
+        },
+        {
+          "name": "Ben Ito ap14",
+          "title": "Product Designer",
+          "org": "Notion",
+          "email": null,
+          "warmth": null,
+          "sources": [
+            "apollo"
+          ],
+          "source": "apollo",
+          "external_id": "ap_14",
+          "person_id": null,
+          "rank": 0.187,
+          "fit": 0.02,
+          "reach": 0,
+          "responsiveness": 0.89,
+          "reasons": [
+            "Ben Ito ap14 fits"
+          ]
+        },
+        {
+          "name": "Dev Diaz ap16",
+          "title": "Product Designer",
+          "org": "Stripe",
+          "email": null,
+          "warmth": null,
+          "sources": [
+            "apollo"
+          ],
+          "source": "apollo",
+          "external_id": "ap_16",
+          "person_id": null,
+          "rank": 0.1855,
+          "fit": 0.35,
+          "reach": 0,
+          "responsiveness": 0.14,
+          "reasons": [
+            "Dev Diaz ap16 fits"
+          ]
+        },
+        {
+          "name": "Eli Haas",
+          "title": "Product Designer",
+          "org": "Figma",
+          "email": null,
+          "warmth": null,
+          "sources": [
+            "apollo",
+            "unipile"
+          ],
+          "source": "unipile+apollo",
+          "external_id": "ACoA4",
+          "person_id": null,
+          "rank": 0.1605,
+          "fit": 0.17,
+          "reach": 0,
+          "responsiveness": 0.42,
+          "reasons": [
+            "Eli Haas fits"
+          ]
+        },
+        {
+          "name": "Dev Diaz li16",
+          "title": "Product Designer",
+          "org": "Stripe",
+          "email": null,
+          "warmth": null,
+          "sources": [
+            "unipile"
+          ],
+          "source": "unipile",
+          "external_id": "ACoA16",
+          "person_id": null,
+          "rank": 0.158,
+          "fit": 0.2,
+          "reach": 0,
+          "responsiveness": 0.34,
+          "reasons": [
+            "Dev Diaz li16 fits"
+          ]
+        },
+        {
+          "name": "Gus Park li19",
+          "title": "Product Designer",
+          "org": "Ramp",
+          "email": null,
+          "warmth": null,
+          "sources": [
+            "unipile"
+          ],
+          "source": "unipile",
+          "external_id": "ACoA19",
+          "person_id": null,
+          "rank": 0.1555,
+          "fit": 0.15,
+          "reach": 0,
+          "responsiveness": 0.44,
+          "reasons": [
+            "Gus Park li19 fits"
+          ]
+        },
+        {
+          "name": "Kai Moreau li23",
+          "title": "Product Designer",
+          "org": "Stripe",
+          "email": null,
+          "warmth": null,
+          "sources": [
+            "unipile"
+          ],
+          "source": "unipile",
+          "external_id": "ACoA23",
+          "person_id": null,
+          "rank": 0.1445,
+          "fit": 0.09,
+          "reach": 0,
+          "responsiveness": 0.52,
+          "reasons": [
+            "Kai Moreau li23 fits"
+          ]
+        },
+        {
+          "name": "Ben Moreau",
+          "title": "Product Designer",
+          "org": "Vercel",
+          "email": null,
+          "warmth": null,
+          "sources": [
+            "apollo",
+            "unipile"
+          ],
+          "source": "unipile+apollo",
+          "external_id": "ACoA1",
+          "person_id": null,
+          "rank": 0.097,
+          "fit": 0.02,
+          "reach": 0,
+          "responsiveness": 0.44,
+          "reasons": [
+            "Ben Moreau fits"
+          ]
+        },
+        {
+          "name": "Dev Reyes li29",
+          "title": "Product Designer",
+          "org": "Vercel",
+          "email": null,
+          "warmth": null,
+          "sources": [
+            "unipile"
+          ],
+          "source": "unipile",
+          "external_id": "ACoA29",
+          "person_id": null,
+          "rank": 0.0545,
+          "fit": 0.05,
+          "reach": 0,
+          "responsiveness": 0.16,
+          "reasons": [
+            "Dev Reyes li29 fits"
+          ]
+        },
+        {
+          "name": "Jia Sato",
+          "title": "Product Designer",
+          "org": "Stripe",
+          "email": null,
+          "warmth": null,
+          "sources": [
+            "apollo",
+            "unipile"
+          ],
+          "source": "unipile+apollo",
+          "external_id": "ACoA9",
+          "person_id": null,
+          "rank": 0.0475,
+          "fit": 0,
+          "reach": 0.05,
+          "responsiveness": 0.15,
+          "reasons": [
+            "Jia Sato fits",
+            "2nd-degree on LinkedIn"
+          ]
+        },
+        {
+          "name": "Lea Okafor li24",
+          "title": "Product Designer",
+          "org": "Linear",
+          "email": null,
+          "warmth": null,
+          "sources": [
+            "unipile"
+          ],
+          "source": "unipile",
+          "external_id": "ACoA24",
+          "person_id": null,
+          "rank": 0.042,
+          "fit": 0.01,
+          "reach": 0.05,
+          "responsiveness": 0.1,
+          "reasons": [
+            "Lea Okafor li24 fits",
+            "2nd-degree on LinkedIn"
+          ]
+        }
+      ],
+      "unconfigured": [],
+      "relaxed": [],
+      "errors": []
+    }
+  },
+  "hiring": {
+    "ms": 2764,
+    "result": {
+      "results": [
+        {
+          "name": "Hana Reyes",
+          "title": "Product Designer",
+          "org": "Notion",
+          "email": "hana@example.com",
+          "warmth": null,
+          "sources": [
+            "exa",
+            "unipile"
+          ],
+          "source": "unipile+exa",
+          "external_id": "ACoA7",
+          "person_id": null,
+          "rank": 0.589,
+          "fit": 0.92,
+          "reach": 0.3,
+          "responsiveness": 0.35,
+          "reasons": [
+            "Hana Reyes fits"
+          ]
+        },
+        {
+          "name": "Cara Haas li15",
+          "title": "Product Designer",
+          "org": "Vercel",
+          "email": "cara@example.com",
+          "warmth": null,
+          "sources": [
+            "unipile"
+          ],
+          "source": "unipile",
+          "external_id": "ACoA15",
+          "person_id": null,
+          "rank": 0.563,
+          "fit": 0.8,
+          "reach": 0.3,
+          "responsiveness": 0.49,
+          "reasons": [
+            "Cara Haas li15 fits",
+            "2nd-degree on LinkedIn"
+          ]
+        },
+        {
+          "name": "Dev Ito",
+          "title": "Product Designer",
+          "org": "Linear",
+          "email": "dev@example.com",
+          "warmth": null,
+          "sources": [
+            "exa",
+            "unipile"
+          ],
+          "source": "unipile+exa",
+          "external_id": "ACoA3",
+          "person_id": null,
+          "rank": 0.551,
+          "fit": 0.92,
+          "reach": 0.3,
+          "responsiveness": 0.16,
+          "reasons": [
+            "Dev Ito fits",
+            "2nd-degree on LinkedIn"
+          ]
+        },
+        {
+          "name": "Fay Reyes li18",
+          "title": "Product Designer",
+          "org": "Figma",
+          "email": "fay@example.com",
+          "warmth": null,
+          "sources": [
+            "unipile"
+          ],
+          "source": "unipile",
+          "external_id": "ACoA18",
+          "person_id": null,
+          "rank": 0.542,
+          "fit": 0.97,
+          "reach": 0.05,
+          "responsiveness": 0.44,
+          "reasons": [
+            "Fay Reyes li18 fits",
+            "2nd-degree on LinkedIn"
+          ]
+        },
+        {
+          "name": "Ben Ito li14",
+          "title": "Product Designer",
+          "org": "Notion",
+          "email": null,
+          "warmth": null,
+          "sources": [
+            "unipile"
+          ],
+          "source": "unipile",
+          "external_id": "ACoA14",
+          "person_id": null,
+          "rank": 0.5155,
+          "fit": 0.69,
+          "reach": 0.3,
+          "responsiveness": 0.5,
+          "reasons": [
+            "Ben Ito li14 fits"
+          ]
+        },
+        {
+          "name": "Ivo Novak li21",
+          "title": "Product Designer",
+          "org": "Notion",
+          "email": "ivo@example.com",
+          "warmth": null,
+          "sources": [
+            "unipile"
+          ],
+          "source": "unipile",
+          "external_id": "ACoA21",
+          "person_id": null,
+          "rank": 0.495,
+          "fit": 0.75,
+          "reach": 0.05,
+          "responsiveness": 0.7,
+          "reasons": [
+            "Ivo Novak li21 fits",
+            "2nd-degree on LinkedIn"
+          ]
+        },
+        {
+          "name": "Max Ito li25",
+          "title": "Product Designer",
+          "org": "Figma",
+          "email": null,
+          "warmth": null,
+          "sources": [
+            "unipile"
+          ],
+          "source": "unipile",
+          "external_id": "ACoA25",
+          "person_id": null,
+          "rank": 0.44,
+          "fit": 0.62,
+          "reach": 0.3,
+          "responsiveness": 0.28,
+          "reasons": [
+            "Max Ito li25 fits"
+          ]
+        },
+        {
+          "name": "Lea Chen",
+          "title": "Product Designer",
+          "org": "Figma",
+          "email": null,
+          "warmth": null,
+          "sources": [
+            "unipile"
+          ],
+          "source": "unipile",
+          "external_id": "ACoA11",
+          "person_id": null,
+          "rank": 0.414,
+          "fit": 0.64,
+          "reach": 0,
+          "responsiveness": 0.63,
+          "reasons": [
+            "Lea Chen fits"
+          ]
+        },
+        {
+          "name": "Hana Sato li20",
+          "title": "Product Designer",
+          "org": "Plaid",
+          "email": null,
+          "warmth": null,
+          "sources": [
+            "unipile"
+          ],
+          "source": "unipile",
+          "external_id": "ACoA20",
+          "person_id": null,
+          "rank": 0.3985,
+          "fit": 0.65,
+          "reach": 0,
+          "responsiveness": 0.53,
+          "reasons": [
+            "Hana Sato li20 fits"
+          ]
+        },
+        {
+          "name": "Eli Shah li17",
+          "title": "Product Designer",
+          "org": "Linear",
+          "email": null,
+          "warmth": null,
+          "sources": [
+            "unipile"
+          ],
+          "source": "unipile",
+          "external_id": "ACoA17",
+          "person_id": null,
+          "rank": 0.3825,
+          "fit": 0.53,
+          "reach": 0,
+          "responsiveness": 0.72,
+          "reasons": [
+            "Eli Shah li17 fits"
+          ]
+        },
+        {
+          "name": "Kai Novak",
+          "title": "Product Designer",
+          "org": "Linear",
+          "email": null,
+          "warmth": null,
+          "sources": [
+            "unipile"
+          ],
+          "source": "unipile",
+          "external_id": "ACoA10",
+          "person_id": null,
+          "rank": 0.367,
+          "fit": 0.52,
+          "reach": 0.3,
+          "responsiveness": 0.14,
+          "reasons": [
+            "Kai Novak fits"
+          ]
+        },
+        {
+          "name": "Ivo Park",
+          "title": "Product Designer",
+          "org": "Vercel",
+          "email": null,
+          "warmth": null,
+          "sources": [
+            "exa",
+            "unipile"
+          ],
+          "source": "unipile+exa",
+          "external_id": "ACoA8",
+          "person_id": null,
+          "rank": 0.3585,
+          "fit": 0.37,
+          "reach": 0,
+          "responsiveness": 0.96,
+          "reasons": [
+            "Ivo Park fits"
+          ]
+        },
+        {
+          "name": "Ana Okafor li13",
+          "title": "Product Designer",
+          "org": "Plaid",
+          "email": null,
+          "warmth": null,
+          "sources": [
+            "unipile"
+          ],
+          "source": "unipile",
+          "external_id": "ACoA13",
+          "person_id": null,
+          "rank": 0.337,
+          "fit": 0.2,
+          "reach": 0.3,
+          "responsiveness": 0.71,
+          "reasons": [
+            "Ana Okafor li13 fits"
+          ]
+        },
+        {
+          "name": "Cara Okafor",
+          "title": "Product Designer",
+          "org": "Stripe",
+          "email": null,
+          "warmth": null,
+          "sources": [
+            "exa",
+            "unipile"
+          ],
+          "source": "unipile+exa",
+          "external_id": "ACoA2",
+          "person_id": null,
+          "rank": 0.33,
+          "fit": 0.48,
+          "reach": 0,
+          "responsiveness": 0.57,
+          "reasons": [
+            "Cara Okafor fits"
+          ]
+        },
+        {
+          "name": "Max Moreau",
+          "title": "Product Designer",
+          "org": "Ramp",
+          "email": null,
+          "warmth": null,
+          "sources": [
+            "unipile"
+          ],
+          "source": "unipile",
+          "external_id": "ACoA12",
+          "person_id": null,
+          "rank": 0.328,
+          "fit": 0.57,
+          "reach": 0.05,
+          "responsiveness": 0.27,
+          "reasons": [
+            "Max Moreau fits",
+            "2nd-degree on LinkedIn"
+          ]
+        },
+        {
+          "name": "Fay Diaz",
+          "title": "Product Designer",
+          "org": "Ramp",
+          "email": null,
+          "warmth": null,
+          "sources": [
+            "exa",
+            "unipile"
+          ],
+          "source": "unipile+exa",
+          "external_id": "ACoA5",
+          "person_id": null,
+          "rank": 0.2915,
+          "fit": 0.55,
+          "reach": 0,
+          "responsiveness": 0.22,
+          "reasons": [
+            "Fay Diaz fits"
+          ]
+        },
+        {
+          "name": "Ben Diaz li27",
+          "title": "Product Designer",
+          "org": "Plaid",
+          "email": null,
+          "warmth": null,
+          "sources": [
+            "unipile"
+          ],
+          "source": "unipile",
+          "external_id": "ACoA27",
+          "person_id": null,
+          "rank": 0.27,
+          "fit": 0.41,
+          "reach": 0.05,
+          "responsiveness": 0.34,
+          "reasons": [
+            "Ben Diaz li27 fits",
+            "2nd-degree on LinkedIn"
+          ]
+        },
+        {
+          "name": "Gus Park li19",
+          "title": "Product Designer",
+          "org": "Ramp",
+          "email": null,
+          "warmth": null,
+          "sources": [
+            "unipile"
+          ],
+          "source": "unipile",
+          "external_id": "ACoA19",
+          "person_id": null,
+          "rank": 0.2605,
+          "fit": 0.15,
+          "reach": 0.3,
+          "responsiveness": 0.44,
+          "reasons": [
+            "Gus Park li19 fits"
+          ]
+        },
+        {
+          "name": "Ana Haas li26",
+          "title": "Product Designer",
+          "org": "Ramp",
+          "email": null,
+          "warmth": null,
+          "sources": [
+            "unipile"
+          ],
+          "source": "unipile",
+          "external_id": "ACoA26",
+          "person_id": null,
+          "rank": 0.2605,
+          "fit": 0.45,
+          "reach": 0,
+          "responsiveness": 0.29,
+          "reasons": [
+            "Ana Haas li26 fits"
+          ]
+        },
+        {
+          "name": "Gus Shah",
+          "title": "Product Designer",
+          "org": "Plaid",
+          "email": null,
+          "warmth": null,
+          "sources": [
+            "exa",
+            "unipile"
+          ],
+          "source": "unipile+exa",
+          "external_id": "ACoA6",
+          "person_id": null,
+          "rank": 0.2545,
+          "fit": 0.22,
+          "reach": 0.05,
+          "responsiveness": 0.69,
+          "reasons": [
+            "Gus Shah fits",
+            "2nd-degree on LinkedIn"
+          ]
+        },
+        {
+          "name": "Jia Chen li22",
+          "title": "Product Designer",
+          "org": "Vercel",
+          "email": null,
+          "warmth": null,
+          "sources": [
+            "unipile"
+          ],
+          "source": "unipile",
+          "external_id": "ACoA22",
+          "person_id": null,
+          "rank": 0.25,
+          "fit": 0.48,
+          "reach": 0,
+          "responsiveness": 0.17,
+          "reasons": [
+            "Jia Chen li22 fits"
+          ]
+        },
+        {
+          "name": "Kai Moreau li23",
+          "title": "Product Designer",
+          "org": "Stripe",
+          "email": null,
+          "warmth": null,
+          "sources": [
+            "unipile"
+          ],
+          "source": "unipile",
+          "external_id": "ACoA23",
+          "person_id": null,
+          "rank": 0.2495,
+          "fit": 0.09,
+          "reach": 0.3,
+          "responsiveness": 0.52,
+          "reasons": [
+            "Kai Moreau li23 fits"
+          ]
+        },
+        {
+          "name": "Cara Shah li28",
+          "title": "Product Designer",
+          "org": "Notion",
+          "email": null,
+          "warmth": null,
+          "sources": [
+            "unipile"
+          ],
+          "source": "unipile",
+          "external_id": "ACoA28",
+          "person_id": null,
+          "rank": 0.233,
+          "fit": 0.14,
+          "reach": 0,
+          "responsiveness": 0.85,
+          "reasons": [
+            "Cara Shah li28 fits"
+          ]
+        },
+        {
+          "name": "Ana Chen",
+          "title": "Product Designer",
+          "org": "Notion",
+          "email": null,
+          "warmth": null,
+          "sources": [
+            "exa",
+            "unipile"
+          ],
+          "source": "unipile+exa",
+          "external_id": "ACoA0",
+          "person_id": null,
+          "rank": 0.2325,
+          "fit": 0.1,
+          "reach": 0.05,
+          "responsiveness": 0.85,
+          "reasons": [
+            "Ana Chen fits",
+            "2nd-degree on LinkedIn"
+          ]
+        },
+        {
+          "name": "Eli Haas",
+          "title": "Product Designer",
+          "org": "Figma",
+          "email": null,
+          "warmth": null,
+          "sources": [
+            "exa",
+            "unipile"
+          ],
+          "source": "unipile+exa",
+          "external_id": "ACoA4",
+          "person_id": null,
+          "rank": 0.1605,
+          "fit": 0.17,
+          "reach": 0,
+          "responsiveness": 0.42,
+          "reasons": [
+            "Eli Haas fits"
+          ]
+        },
+        {
+          "name": "Dev Reyes li29",
+          "title": "Product Designer",
+          "org": "Vercel",
+          "email": null,
+          "warmth": null,
+          "sources": [
+            "unipile"
+          ],
+          "source": "unipile",
+          "external_id": "ACoA29",
+          "person_id": null,
+          "rank": 0.1595,
+          "fit": 0.05,
+          "reach": 0.3,
+          "responsiveness": 0.16,
+          "reasons": [
+            "Dev Reyes li29 fits"
+          ]
+        },
+        {
+          "name": "Dev Diaz li16",
+          "title": "Product Designer",
+          "org": "Stripe",
+          "email": null,
+          "warmth": null,
+          "sources": [
+            "unipile"
+          ],
+          "source": "unipile",
+          "external_id": "ACoA16",
+          "person_id": null,
+          "rank": 0.158,
+          "fit": 0.2,
+          "reach": 0,
+          "responsiveness": 0.34,
+          "reasons": [
+            "Dev Diaz li16 fits"
+          ]
+        },
+        {
+          "name": "Jia Sato",
+          "title": "Product Designer",
+          "org": "Stripe",
+          "email": null,
+          "warmth": null,
+          "sources": [
+            "exa",
+            "unipile"
+          ],
+          "source": "unipile+exa",
+          "external_id": "ACoA9",
+          "person_id": null,
+          "rank": 0.135,
+          "fit": 0,
+          "reach": 0.3,
+          "responsiveness": 0.15,
+          "reasons": [
+            "Jia Sato fits",
+            "2nd-degree on LinkedIn"
+          ]
+        },
+        {
+          "name": "Ben Moreau",
+          "title": "Product Designer",
+          "org": "Vercel",
+          "email": null,
+          "warmth": null,
+          "sources": [
+            "exa",
+            "unipile"
+          ],
+          "source": "unipile+exa",
+          "external_id": "ACoA1",
+          "person_id": null,
+          "rank": 0.097,
+          "fit": 0.02,
+          "reach": 0,
+          "responsiveness": 0.44,
+          "reasons": [
+            "Ben Moreau fits"
+          ]
+        },
+        {
+          "name": "Lea Okafor li24",
+          "title": "Product Designer",
+          "org": "Linear",
+          "email": null,
+          "warmth": null,
+          "sources": [
+            "unipile"
+          ],
+          "source": "unipile",
+          "external_id": "ACoA24",
+          "person_id": null,
+          "rank": 0.042,
+          "fit": 0.01,
+          "reach": 0.05,
+          "responsiveness": 0.1,
+          "reasons": [
+            "Lea Okafor li24 fits",
+            "2nd-degree on LinkedIn"
+          ]
+        }
+      ],
+      "unconfigured": [],
+      "relaxed": [],
+      "errors": []
+    }
+  },
+  "advice": {
+    "ms": 3339,
+    "result": {
+      "results": [
+        {
+          "name": "Hana Reyes",
+          "title": "Product Designer",
+          "org": "Notion",
+          "email": "hana@example.com",
+          "warmth": null,
+          "sources": [
+            "apollo",
+            "unipile"
+          ],
+          "source": "unipile+apollo",
+          "external_id": "ACoA7",
+          "person_id": null,
+          "rank": 0.589,
+          "fit": 0.92,
+          "reach": 0.3,
+          "responsiveness": 0.35,
+          "reasons": [
+            "Hana Reyes fits"
+          ]
+        },
+        {
+          "name": "Cara Haas li15",
+          "title": "Product Designer",
+          "org": "Vercel",
+          "email": null,
+          "warmth": null,
+          "sources": [
+            "unipile"
+          ],
+          "source": "unipile",
+          "external_id": "ACoA15",
+          "person_id": null,
+          "rank": 0.563,
+          "fit": 0.8,
+          "reach": 0.3,
+          "responsiveness": 0.49,
+          "reasons": [
+            "Cara Haas li15 fits",
+            "2nd-degree on LinkedIn"
+          ]
+        },
+        {
+          "name": "Cara Haas ap15",
+          "title": "Product Designer",
+          "org": "Vercel",
+          "email": null,
+          "warmth": null,
+          "sources": [
+            "apollo"
+          ],
+          "source": "apollo",
+          "external_id": "ap_15",
+          "person_id": null,
+          "rank": 0.56,
+          "fit": 0.86,
+          "reach": 0.3,
+          "responsiveness": 0.34,
+          "reasons": [
+            "Cara Haas ap15 fits"
+          ]
+        },
+        {
+          "name": "Dev Ito",
+          "title": "Product Designer",
+          "org": "Linear",
+          "email": "dev@example.com",
+          "warmth": null,
+          "sources": [
+            "apollo",
+            "unipile"
+          ],
+          "source": "unipile+apollo",
+          "external_id": "ACoA3",
+          "person_id": null,
+          "rank": 0.551,
+          "fit": 0.92,
+          "reach": 0.3,
+          "responsiveness": 0.16,
+          "reasons": [
+            "Dev Ito fits",
+            "2nd-degree on LinkedIn"
+          ]
+        },
+        {
+          "name": "Fay Reyes li18",
+          "title": "Product Designer",
+          "org": "Figma",
+          "email": "fay@example.com",
+          "warmth": null,
+          "sources": [
+            "unipile"
+          ],
+          "source": "unipile",
+          "external_id": "ACoA18",
+          "person_id": null,
+          "rank": 0.542,
+          "fit": 0.97,
+          "reach": 0.05,
+          "responsiveness": 0.44,
+          "reasons": [
+            "Fay Reyes li18 fits",
+            "2nd-degree on LinkedIn"
+          ]
+        },
+        {
+          "name": "Eli Shah ap17",
+          "title": "Product Designer",
+          "org": "Linear",
+          "email": "eli@example.com",
+          "warmth": null,
+          "sources": [
+            "apollo"
+          ],
+          "source": "apollo",
+          "external_id": "ap_17",
+          "person_id": null,
+          "rank": 0.523,
+          "fit": 0.9,
+          "reach": 0,
+          "responsiveness": 0.59,
+          "reasons": [
+            "Eli Shah ap17 fits"
+          ]
+        },
+        {
+          "name": "Ben Ito li14",
+          "title": "Product Designer",
+          "org": "Notion",
+          "email": null,
+          "warmth": null,
+          "sources": [
+            "unipile"
+          ],
+          "source": "unipile",
+          "external_id": "ACoA14",
+          "person_id": null,
+          "rank": 0.5155,
+          "fit": 0.69,
+          "reach": 0.3,
+          "responsiveness": 0.5,
+          "reasons": [
+            "Ben Ito li14 fits"
+          ]
+        },
+        {
+          "name": "Jia Chen ap22",
+          "title": "Product Designer",
+          "org": "Vercel",
+          "email": null,
+          "warmth": null,
+          "sources": [
+            "apollo"
+          ],
+          "source": "apollo",
+          "external_id": "ap_22",
+          "person_id": null,
+          "rank": 0.498,
+          "fit": 0.76,
+          "reach": 0,
+          "responsiveness": 0.78,
+          "reasons": [
+            "Jia Chen ap22 fits"
+          ]
+        },
+        {
+          "name": "Ivo Novak li21",
+          "title": "Product Designer",
+          "org": "Notion",
+          "email": null,
+          "warmth": null,
+          "sources": [
+            "unipile"
+          ],
+          "source": "unipile",
+          "external_id": "ACoA21",
+          "person_id": null,
+          "rank": 0.495,
+          "fit": 0.75,
+          "reach": 0.05,
+          "responsiveness": 0.7,
+          "reasons": [
+            "Ivo Novak li21 fits",
+            "2nd-degree on LinkedIn"
+          ]
+        },
+        {
+          "name": "Ivo Novak ap21",
+          "title": "Product Designer",
+          "org": "Notion",
+          "email": null,
+          "warmth": null,
+          "sources": [
+            "apollo"
+          ],
+          "source": "apollo",
+          "external_id": "ap_21",
+          "person_id": null,
+          "rank": 0.4755,
+          "fit": 0.71,
+          "reach": 0,
+          "responsiveness": 0.78,
+          "reasons": [
+            "Ivo Novak ap21 fits"
+          ]
+        },
+        {
+          "name": "Max Ito li25",
+          "title": "Product Designer",
+          "org": "Figma",
+          "email": null,
+          "warmth": null,
+          "sources": [
+            "unipile"
+          ],
+          "source": "unipile",
+          "external_id": "ACoA25",
+          "person_id": null,
+          "rank": 0.44,
+          "fit": 0.62,
+          "reach": 0.3,
+          "responsiveness": 0.28,
+          "reasons": [
+            "Max Ito li25 fits"
+          ]
+        },
+        {
+          "name": "Lea Chen",
+          "title": "Product Designer",
+          "org": "Figma",
+          "email": null,
+          "warmth": null,
+          "sources": [
+            "apollo",
+            "unipile"
+          ],
+          "source": "unipile+apollo",
+          "external_id": "ACoA11",
+          "person_id": null,
+          "rank": 0.414,
+          "fit": 0.64,
+          "reach": 0,
+          "responsiveness": 0.63,
+          "reasons": [
+            "Lea Chen fits"
+          ]
+        },
+        {
+          "name": "Ana Okafor ap13",
+          "title": "Product Designer",
+          "org": "Plaid",
+          "email": "ana@example.com",
+          "warmth": null,
+          "sources": [
+            "apollo"
+          ],
+          "source": "apollo",
+          "external_id": "ap_13",
+          "person_id": null,
+          "rank": 0.414,
+          "fit": 0.92,
+          "reach": 0,
+          "responsiveness": 0,
+          "reasons": [
+            "Ana Okafor ap13 fits"
+          ]
+        },
+        {
+          "name": "Fay Reyes ap18",
+          "title": "Product Designer",
+          "org": "Figma",
+          "email": null,
+          "warmth": null,
+          "sources": [
+            "apollo"
+          ],
+          "source": "apollo",
+          "external_id": "ap_18",
+          "person_id": null,
+          "rank": 0.4085,
+          "fit": 0.89,
+          "reach": 0,
+          "responsiveness": 0.04,
+          "reasons": [
+            "Fay Reyes ap18 fits"
+          ]
+        },
+        {
+          "name": "Hana Sato li20",
+          "title": "Product Designer",
+          "org": "Plaid",
+          "email": null,
+          "warmth": null,
+          "sources": [
+            "unipile"
+          ],
+          "source": "unipile",
+          "external_id": "ACoA20",
+          "person_id": null,
+          "rank": 0.3985,
+          "fit": 0.65,
+          "reach": 0,
+          "responsiveness": 0.53,
+          "reasons": [
+            "Hana Sato li20 fits"
+          ]
+        },
+        {
+          "name": "Gus Park ap19",
+          "title": "Product Designer",
+          "org": "Ramp",
+          "email": null,
+          "warmth": null,
+          "sources": [
+            "apollo"
+          ],
+          "source": "apollo",
+          "external_id": "ap_19",
+          "person_id": null,
+          "rank": 0.388,
+          "fit": 0.72,
+          "reach": 0,
+          "responsiveness": 0.32,
+          "reasons": [
+            "Gus Park ap19 fits"
+          ]
+        },
+        {
+          "name": "Eli Shah li17",
+          "title": "Product Designer",
+          "org": "Linear",
+          "email": null,
+          "warmth": null,
+          "sources": [
+            "unipile"
+          ],
+          "source": "unipile",
+          "external_id": "ACoA17",
+          "person_id": null,
+          "rank": 0.3825,
+          "fit": 0.53,
+          "reach": 0,
+          "responsiveness": 0.72,
+          "reasons": [
+            "Eli Shah li17 fits"
+          ]
+        },
+        {
+          "name": "Lea Okafor ap24",
+          "title": "Product Designer",
+          "org": "Linear",
+          "email": null,
+          "warmth": null,
+          "sources": [
+            "apollo"
+          ],
+          "source": "apollo",
+          "external_id": "ap_24",
+          "person_id": null,
+          "rank": 0.3755,
+          "fit": 0.43,
+          "reach": 0,
+          "responsiveness": 0.91,
+          "reasons": [
+            "Lea Okafor ap24 fits"
+          ]
+        },
+        {
+          "name": "Kai Novak",
+          "title": "Product Designer",
+          "org": "Linear",
+          "email": null,
+          "warmth": null,
+          "sources": [
+            "apollo",
+            "unipile"
+          ],
+          "source": "unipile+apollo",
+          "external_id": "ACoA10",
+          "person_id": null,
+          "rank": 0.367,
+          "fit": 0.52,
+          "reach": 0.3,
+          "responsiveness": 0.14,
+          "reasons": [
+            "Kai Novak fits"
+          ]
+        },
+        {
+          "name": "Kai Moreau ap23",
+          "title": "Product Designer",
+          "org": "Stripe",
+          "email": null,
+          "warmth": null,
+          "sources": [
+            "apollo"
+          ],
+          "source": "apollo",
+          "external_id": "ap_23",
+          "person_id": null,
+          "rank": 0.3615,
+          "fit": 0.71,
+          "reach": 0,
+          "responsiveness": 0.21,
+          "reasons": [
+            "Kai Moreau ap23 fits"
+          ]
+        },
+        {
+          "name": "Ivo Park",
+          "title": "Product Designer",
+          "org": "Vercel",
+          "email": null,
+          "warmth": null,
+          "sources": [
+            "apollo",
+            "unipile"
+          ],
+          "source": "unipile+apollo",
+          "external_id": "ACoA8",
+          "person_id": null,
+          "rank": 0.3585,
+          "fit": 0.37,
+          "reach": 0,
+          "responsiveness": 0.96,
+          "reasons": [
+            "Ivo Park fits"
+          ]
+        },
+        {
+          "name": "Cara Okafor",
+          "title": "Product Designer",
+          "org": "Stripe",
+          "email": null,
+          "warmth": null,
+          "sources": [
+            "apollo",
+            "unipile"
+          ],
+          "source": "unipile+apollo",
+          "external_id": "ACoA2",
+          "person_id": null,
+          "rank": 0.33,
+          "fit": 0.48,
+          "reach": 0,
+          "responsiveness": 0.57,
+          "reasons": [
+            "Cara Okafor fits"
+          ]
+        },
+        {
+          "name": "Max Moreau",
+          "title": "Product Designer",
+          "org": "Ramp",
+          "email": null,
+          "warmth": null,
+          "sources": [
+            "apollo",
+            "unipile"
+          ],
+          "source": "unipile+apollo",
+          "external_id": "ACoA12",
+          "person_id": null,
+          "rank": 0.328,
+          "fit": 0.57,
+          "reach": 0.05,
+          "responsiveness": 0.27,
+          "reasons": [
+            "Max Moreau fits",
+            "2nd-degree on LinkedIn"
+          ]
+        },
+        {
+          "name": "Hana Sato ap20",
+          "title": "Product Designer",
+          "org": "Plaid",
+          "email": null,
+          "warmth": null,
+          "sources": [
+            "apollo"
+          ],
+          "source": "apollo",
+          "external_id": "ap_20",
+          "person_id": null,
+          "rank": 0.294,
+          "fit": 0.4,
+          "reach": 0,
+          "responsiveness": 0.57,
+          "reasons": [
+            "Hana Sato ap20 fits"
+          ]
+        },
+        {
+          "name": "Fay Diaz",
+          "title": "Product Designer",
+          "org": "Ramp",
+          "email": null,
+          "warmth": null,
+          "sources": [
+            "apollo",
+            "unipile"
+          ],
+          "source": "unipile+apollo",
+          "external_id": "ACoA5",
+          "person_id": null,
+          "rank": 0.2915,
+          "fit": 0.55,
+          "reach": 0,
+          "responsiveness": 0.22,
+          "reasons": [
+            "Fay Diaz fits"
+          ]
+        },
+        {
+          "name": "Ben Diaz li27",
+          "title": "Product Designer",
+          "org": "Plaid",
+          "email": null,
+          "warmth": null,
+          "sources": [
+            "unipile"
+          ],
+          "source": "unipile",
+          "external_id": "ACoA27",
+          "person_id": null,
+          "rank": 0.27,
+          "fit": 0.41,
+          "reach": 0.05,
+          "responsiveness": 0.34,
+          "reasons": [
+            "Ben Diaz li27 fits",
+            "2nd-degree on LinkedIn"
+          ]
+        },
+        {
+          "name": "Ana Haas li26",
+          "title": "Product Designer",
+          "org": "Ramp",
+          "email": null,
+          "warmth": null,
+          "sources": [
+            "unipile"
+          ],
+          "source": "unipile",
+          "external_id": "ACoA26",
+          "person_id": null,
+          "rank": 0.2605,
+          "fit": 0.45,
+          "reach": 0,
+          "responsiveness": 0.29,
+          "reasons": [
+            "Ana Haas li26 fits"
+          ]
+        },
+        {
+          "name": "Gus Shah",
+          "title": "Product Designer",
+          "org": "Plaid",
+          "email": null,
+          "warmth": null,
+          "sources": [
+            "apollo",
+            "unipile"
+          ],
+          "source": "unipile+apollo",
+          "external_id": "ACoA6",
+          "person_id": null,
+          "rank": 0.2545,
+          "fit": 0.22,
+          "reach": 0.05,
+          "responsiveness": 0.69,
+          "reasons": [
+            "Gus Shah fits",
+            "2nd-degree on LinkedIn"
+          ]
+        },
+        {
+          "name": "Jia Chen li22",
+          "title": "Product Designer",
+          "org": "Vercel",
+          "email": null,
+          "warmth": null,
+          "sources": [
+            "unipile"
+          ],
+          "source": "unipile",
+          "external_id": "ACoA22",
+          "person_id": null,
+          "rank": 0.25,
+          "fit": 0.48,
+          "reach": 0,
+          "responsiveness": 0.17,
+          "reasons": [
+            "Jia Chen li22 fits"
+          ]
+        },
+        {
+          "name": "Cara Shah li28",
+          "title": "Product Designer",
+          "org": "Notion",
+          "email": null,
+          "warmth": null,
+          "sources": [
+            "unipile"
+          ],
+          "source": "unipile",
+          "external_id": "ACoA28",
+          "person_id": null,
+          "rank": 0.233,
+          "fit": 0.14,
+          "reach": 0,
+          "responsiveness": 0.85,
+          "reasons": [
+            "Cara Shah li28 fits"
+          ]
+        },
+        {
+          "name": "Ana Chen",
+          "title": "Product Designer",
+          "org": "Notion",
+          "email": null,
+          "warmth": null,
+          "sources": [
+            "apollo",
+            "unipile"
+          ],
+          "source": "unipile+apollo",
+          "external_id": "ACoA0",
+          "person_id": null,
+          "rank": 0.2325,
+          "fit": 0.1,
+          "reach": 0.05,
+          "responsiveness": 0.85,
+          "reasons": [
+            "Ana Chen fits",
+            "2nd-degree on LinkedIn"
+          ]
+        },
+        {
+          "name": "Ana Okafor li13",
+          "title": "Product Designer",
+          "org": "Plaid",
+          "email": null,
+          "warmth": null,
+          "sources": [
+            "unipile"
+          ],
+          "source": "unipile",
+          "external_id": "ACoA13",
+          "person_id": null,
+          "rank": 0.232,
+          "fit": 0.2,
+          "reach": 0,
+          "responsiveness": 0.71,
+          "reasons": [
+            "Ana Okafor li13 fits"
+          ]
+        },
+        {
+          "name": "Ben Ito ap14",
+          "title": "Product Designer",
+          "org": "Notion",
+          "email": null,
+          "warmth": null,
+          "sources": [
+            "apollo"
+          ],
+          "source": "apollo",
+          "external_id": "ap_14",
+          "person_id": null,
+          "rank": 0.187,
+          "fit": 0.02,
+          "reach": 0,
+          "responsiveness": 0.89,
+          "reasons": [
+            "Ben Ito ap14 fits"
+          ]
+        },
+        {
+          "name": "Dev Diaz ap16",
+          "title": "Product Designer",
+          "org": "Stripe",
+          "email": null,
+          "warmth": null,
+          "sources": [
+            "apollo"
+          ],
+          "source": "apollo",
+          "external_id": "ap_16",
+          "person_id": null,
+          "rank": 0.1855,
+          "fit": 0.35,
+          "reach": 0,
+          "responsiveness": 0.14,
+          "reasons": [
+            "Dev Diaz ap16 fits"
+          ]
+        },
+        {
+          "name": "Eli Haas",
+          "title": "Product Designer",
+          "org": "Figma",
+          "email": null,
+          "warmth": null,
+          "sources": [
+            "apollo",
+            "unipile"
+          ],
+          "source": "unipile+apollo",
+          "external_id": "ACoA4",
+          "person_id": null,
+          "rank": 0.1605,
+          "fit": 0.17,
+          "reach": 0,
+          "responsiveness": 0.42,
+          "reasons": [
+            "Eli Haas fits"
+          ]
+        },
+        {
+          "name": "Dev Diaz li16",
+          "title": "Product Designer",
+          "org": "Stripe",
+          "email": null,
+          "warmth": null,
+          "sources": [
+            "unipile"
+          ],
+          "source": "unipile",
+          "external_id": "ACoA16",
+          "person_id": null,
+          "rank": 0.158,
+          "fit": 0.2,
+          "reach": 0,
+          "responsiveness": 0.34,
+          "reasons": [
+            "Dev Diaz li16 fits"
+          ]
+        },
+        {
+          "name": "Gus Park li19",
+          "title": "Product Designer",
+          "org": "Ramp",
+          "email": null,
+          "warmth": null,
+          "sources": [
+            "unipile"
+          ],
+          "source": "unipile",
+          "external_id": "ACoA19",
+          "person_id": null,
+          "rank": 0.1555,
+          "fit": 0.15,
+          "reach": 0,
+          "responsiveness": 0.44,
+          "reasons": [
+            "Gus Park li19 fits"
+          ]
+        },
+        {
+          "name": "Kai Moreau li23",
+          "title": "Product Designer",
+          "org": "Stripe",
+          "email": null,
+          "warmth": null,
+          "sources": [
+            "unipile"
+          ],
+          "source": "unipile",
+          "external_id": "ACoA23",
+          "person_id": null,
+          "rank": 0.1445,
+          "fit": 0.09,
+          "reach": 0,
+          "responsiveness": 0.52,
+          "reasons": [
+            "Kai Moreau li23 fits"
+          ]
+        },
+        {
+          "name": "Ben Moreau",
+          "title": "Product Designer",
+          "org": "Vercel",
+          "email": null,
+          "warmth": null,
+          "sources": [
+            "apollo",
+            "unipile"
+          ],
+          "source": "unipile+apollo",
+          "external_id": "ACoA1",
+          "person_id": null,
+          "rank": 0.097,
+          "fit": 0.02,
+          "reach": 0,
+          "responsiveness": 0.44,
+          "reasons": [
+            "Ben Moreau fits"
+          ]
+        },
+        {
+          "name": "Dev Reyes li29",
+          "title": "Product Designer",
+          "org": "Vercel",
+          "email": null,
+          "warmth": null,
+          "sources": [
+            "unipile"
+          ],
+          "source": "unipile",
+          "external_id": "ACoA29",
+          "person_id": null,
+          "rank": 0.0545,
+          "fit": 0.05,
+          "reach": 0,
+          "responsiveness": 0.16,
+          "reasons": [
+            "Dev Reyes li29 fits"
+          ]
+        },
+        {
+          "name": "Jia Sato",
+          "title": "Product Designer",
+          "org": "Stripe",
+          "email": null,
+          "warmth": null,
+          "sources": [
+            "apollo",
+            "unipile"
+          ],
+          "source": "unipile+apollo",
+          "external_id": "ACoA9",
+          "person_id": null,
+          "rank": 0.0475,
+          "fit": 0,
+          "reach": 0.05,
+          "responsiveness": 0.15,
+          "reasons": [
+            "Jia Sato fits",
+            "2nd-degree on LinkedIn"
+          ]
+        },
+        {
+          "name": "Lea Okafor li24",
+          "title": "Product Designer",
+          "org": "Linear",
+          "email": null,
+          "warmth": null,
+          "sources": [
+            "unipile"
+          ],
+          "source": "unipile",
+          "external_id": "ACoA24",
+          "person_id": null,
+          "rank": 0.042,
+          "fit": 0.01,
+          "reach": 0.05,
+          "responsiveness": 0.1,
+          "reasons": [
+            "Lea Okafor li24 fits",
+            "2nd-degree on LinkedIn"
+          ]
+        }
+      ],
+      "unconfigured": [],
+      "relaxed": [],
+      "errors": []
+    }
+  }
+}

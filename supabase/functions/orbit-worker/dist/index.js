@@ -24125,7 +24125,16 @@ async function sourcePeople(deps, input) {
   const calls = plan(ctx);
   const relax = { location: false, seniority: false, place: false };
   const relaxed = [];
+  const t0 = Date.now();
+  let mark = t0;
+  const lap = () => {
+    const now = Date.now();
+    const ms2 = now - mark;
+    mark = now;
+    return ms2;
+  };
   let merged = await gather(calls, relax);
+  const gatherMs = lap();
   const g = input.goal;
   const canDropLocation = !!g.location;
   const canDropSeniority = !!g.seniorities?.length;
@@ -24144,12 +24153,15 @@ async function sourcePeople(deps, input) {
     relaxed.push("place");
     merged = await gather([(r) => webCall(ctx, r)], relax);
   }
+  const relaxMs = lap();
   if (deps.inPipeline) {
-    const keep = [];
-    for (const c of merged) if (!await deps.inPipeline(c)) keep.push(c);
-    merged = keep;
+    const inPipeline = deps.inPipeline;
+    const drop = await mapLimit2(merged, LOOKUP_CONCURRENCY, (c) => inPipeline(c));
+    merged = merged.filter((_, i) => !drop[i]);
   }
+  const dedupeMs = lap();
   const rows = await rank(ctx, merged.slice(0, MAX_SCORED), batchId);
+  const rankMs = lap();
   return {
     results: rows.slice(0, input.limit ?? 50),
     unconfigured: [...ctx.unconfigured].sort(),
@@ -24157,8 +24169,22 @@ async function sourcePeople(deps, input) {
     ...ctx.assumedPlace ? { assumedPlace: ctx.assumedPlace } : {},
     errors: [...ctx.errors].sort(),
     notes: [...ctx.notes],
-    batchId
+    batchId,
+    timings: { gather: gatherMs, relax: relaxMs, dedupe: dedupeMs, rank: rankMs, total: Date.now() - t0 }
   };
+}
+var LOOKUP_CONCURRENCY = 8;
+async function mapLimit2(xs, n, f) {
+  const out = new Array(xs.length);
+  let next = 0;
+  const worker = async () => {
+    while (next < xs.length) {
+      const i = next++;
+      out[i] = await f(xs[i], i);
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(n, xs.length) }, worker));
+  return out;
 }
 async function gather(calls, relax) {
   const lists = await Promise.all(calls.map((c) => c(relax)));
@@ -24462,19 +24488,27 @@ async function linkedInCall(ctx, relax, q) {
       return [];
     }
   }
-  if (ctx.salesNav === void 0) {
+  const loc = locationOf(ctx, relax);
+  const ids = async (type, names) => (await Promise.all((names ?? []).slice(0, 3).map((n) => paramId(ctx, type, n)))).filter(
+    (x) => !!x
+  );
+  const salesNavCheck = async () => {
+    if (ctx.salesNav !== void 0) return;
     if (input.salesNavigator !== void 0) ctx.salesNav = input.salesNavigator;
     else {
       const me = await deps.unipile.me(accountId);
       ctx.salesNav = me.ok ? hasSalesNavigator(me.value) : false;
     }
-  }
-  const loc = locationOf(ctx, relax);
-  const ids = async (type, names) => (await Promise.all((names ?? []).slice(0, 3).map((n) => paramId(ctx, type, n)))).filter(
-    (x) => !!x
-  );
-  const locationIds = loc ? await ids("LOCATION", [loc]) : [];
-  const schoolIds = q.school ? await ids("SCHOOL", [q.school]) : [];
+  };
+  const knowsSalesNav = ctx.salesNav !== void 0 || input.salesNavigator !== void 0;
+  const classicLikely = knowsSalesNav ? !(ctx.salesNav ?? input.salesNavigator) : true;
+  const [, locationIds, schoolIds, companyIdsMaybe, pastIdsMaybe] = await Promise.all([
+    salesNavCheck(),
+    loc ? ids("LOCATION", [loc]) : Promise.resolve([]),
+    q.school ? ids("SCHOOL", [q.school]) : Promise.resolve([]),
+    classicLikely ? ids("COMPANY", q.companies) : Promise.resolve([]),
+    classicLikely ? ids("COMPANY", q.pastCompanies) : Promise.resolve([])
+  ]);
   let body;
   if (ctx.salesNav) {
     const g = input.goal;
@@ -24490,8 +24524,8 @@ async function linkedInCall(ctx, relax, q) {
       location: locationIds.length ? { include: locationIds } : void 0
     };
   } else {
-    const companyIds = await ids("COMPANY", q.companies);
-    const pastIds = await ids("COMPANY", q.pastCompanies);
+    const companyIds = classicLikely ? companyIdsMaybe : await ids("COMPANY", q.companies);
+    const pastIds = classicLikely ? pastIdsMaybe : await ids("COMPANY", q.pastCompanies);
     body = {
       api: "classic",
       category: "people",
@@ -24717,30 +24751,33 @@ function keywordFit(goal, c) {
 function llmFitScorer(claude) {
   return async (goal, user, cands) => {
     const out = /* @__PURE__ */ new Map();
-    for (let i = 0; i < cands.length; i += FIT_BATCH) {
-      const batch = cands.slice(i, i + FIT_BATCH);
-      const payload = batch.map((c) => ({
-        id: c.key,
-        name: c.name,
-        title: c.title,
-        org: c.org,
-        location: c.location,
-        headline: c.headline,
-        evidence: c.evidence?.slice(0, 3),
-        source: c.sources.join("+")
-      }));
-      const r = await claude.parse("sourcing_fit", fitSchema, {
-        system: fitSystem(user.firstName),
-        user: fitUser({ title: goal.title, criteria: goal.criteria }, payload)
-      });
-      if (r.ok)
-        for (const s of r.value.scores) {
-          if (!batch.some((c) => c.key === s.id)) continue;
-          const fit = Number.isFinite(s.fit) ? Math.max(0, Math.min(1, s.fit)) : 0;
-          out.set(s.id, { fit, reasons: s.reasons.slice(0, 2) });
-        }
-      for (const c of batch) if (!out.has(c.key)) out.set(c.key, keywordFit(goal, c));
-    }
+    const batches = [];
+    for (let i = 0; i < cands.length; i += FIT_BATCH) batches.push(cands.slice(i, i + FIT_BATCH));
+    await Promise.all(
+      batches.map(async (batch) => {
+        const payload = batch.map((c) => ({
+          id: c.key,
+          name: c.name,
+          title: c.title,
+          org: c.org,
+          location: c.location,
+          headline: c.headline,
+          evidence: c.evidence?.slice(0, 3),
+          source: c.sources.join("+")
+        }));
+        const r = await claude.parse("sourcing_fit", fitSchema, {
+          system: fitSystem(user.firstName),
+          user: fitUser({ title: goal.title, criteria: goal.criteria }, payload)
+        });
+        if (r.ok)
+          for (const s of r.value.scores) {
+            if (!batch.some((c) => c.key === s.id)) continue;
+            const fit = Number.isFinite(s.fit) ? Math.max(0, Math.min(1, s.fit)) : 0;
+            out.set(s.id, { fit, reasons: s.reasons.slice(0, 2) });
+          }
+        for (const c of batch) if (!out.has(c.key)) out.set(c.key, keywordFit(goal, c));
+      })
+    );
     return out;
   };
 }
@@ -24757,13 +24794,20 @@ async function rank(ctx, cands, batchId) {
   const byFit = [...cands].sort((a, b) => fitOf(b).fit - fitOf(a).fit);
   const reachTop = new Set(byFit.slice(0, REACH_TOP).map((c) => c.key));
   if (deps.fillEmails) await deps.fillEmails(byFit.slice(0, 60)).catch(() => void 0);
+  const looked = await mapLimit2(byFit, LOOKUP_CONCURRENCY, async (c) => {
+    const [p, resp, known] = await Promise.all([
+      reachTop.has(c.key) ? deps.reachOf(c) : null,
+      deps.responsiveness(c),
+      deps.knownPerson ? deps.knownPerson(c) : null
+    ]);
+    return { p, resp, known };
+  });
   const rows = [];
-  for (const c of byFit) {
+  for (const [i, c] of byFit.entries()) {
     const f = fitOf(c);
-    const p = reachTop.has(c.key) ? await deps.reachOf(c) : null;
+    const { p, resp, known } = looked[i];
     const reach = typeof p === "number" && p > 0 ? Math.min(1, p) : c.networkDistance === 2 ? 0.05 : 0;
-    const responsiveness = Math.max(0, Math.min(1, await deps.responsiveness(c)));
-    const known = deps.knownPerson ? await deps.knownPerson(c) : null;
+    const responsiveness = Math.max(0, Math.min(1, resp));
     const reasons = [...f.reasons];
     const warmth = deps.warmthOf?.(c, known);
     if (warmth) c.warmth = warmth;
@@ -24861,21 +24905,21 @@ async function runSourcing(s, userId, req) {
   if (!GOAL_KINDS.includes(req.purpose)) throw new HttpError(400, "bad_request", "unknown purpose");
   const db2 = s.db;
   const now = s.now();
-  let goal;
-  if (req.goalId) {
-    [goal] = await db2.sql`
-      select id, kind, title, targets, criteria from orbit.goals
-       where id = ${req.goalId}::uuid and user_id = ${userId}::uuid and deleted_at is null`;
-    if (!goal) throw new HttpError(404, "not_found", "no such goal");
-  }
-  const [u2] = await db2.sql`
-    select first_name, full_name, email, school, majors, current_org, grad_year from orbit.users
-     where id = ${userId}::uuid`;
-  const [acct] = await db2.sql`
-    select external_account_id from orbit.integration_accounts
-     where user_id = ${userId}::uuid and provider = 'linkedin' and status = 'active'`;
+  const [goalRows, [u2], [acct]] = await Promise.all([
+    req.goalId ? db2.sql`
+          select id, kind, title, targets, criteria from orbit.goals
+           where id = ${req.goalId}::uuid and user_id = ${userId}::uuid and deleted_at is null` : Promise.resolve([]),
+    db2.sql`
+      select first_name, full_name, email, school, majors, current_org, grad_year from orbit.users
+       where id = ${userId}::uuid`,
+    db2.sql`
+      select external_account_id from orbit.integration_accounts
+       where user_id = ${userId}::uuid and provider = 'linkedin' and status = 'active'`
+  ]);
+  const goal = goalRows[0];
+  if (req.goalId && !goal) throw new HttpError(404, "not_found", "no such goal");
   let graph;
-  const g = async () => graph ??= await loadGraph(db2, userId, now);
+  const g = () => graph ??= loadGraph(db2, userId, now);
   const known = /* @__PURE__ */ new Map();
   const knownOf = async (c) => {
     if (known.has(c.key)) return known.get(c.key);
@@ -24901,7 +24945,19 @@ async function runSourcing(s, userId, req) {
     return v;
   };
   const user = { school: u2?.school ?? "", majors: u2?.majors ?? [] };
-  const ctx = await warmContext(db2, userId, u2, req.homeCity, g);
+  const sGoal = sourcingGoal(req, goal);
+  const ctxP = warmContext(db2, userId, u2, req.homeCity, g).then((c) => {
+    sGoal.orgs?.forEach((o, i) => {
+      const d = sGoal.domains?.[i];
+      if (d) c.orgDomains.set(norm(o), d.toLowerCase());
+    });
+    return c;
+  });
+  ctxP.catch(() => void 0);
+  let ctx;
+  const ready = async () => {
+    ctx ??= await ctxP;
+  };
   const slugOf3 = (c) => linkedInSlugOf(cleanLinkedInUrl(c.linkedinUrl)) ?? void 0;
   const uniq = (xs) => [...new Set(xs.filter((x) => !!x))];
   const knownBatch = async (todo) => {
@@ -24950,11 +25006,6 @@ async function runSourcing(s, userId, req) {
       if (d) ctx.orgDomains.set(f.key, d);
     }
   };
-  const sGoal = sourcingGoal(req, goal);
-  sGoal.orgs?.forEach((o, i) => {
-    const d = sGoal.domains?.[i];
-    if (d) ctx.orgDomains.set(norm(o), d.toLowerCase());
-  });
   const mx = dnsMx(s.fetch);
   const year = now.getUTCFullYear();
   const budget2 = sqlBudget(db2, s.now);
@@ -25029,6 +25080,7 @@ async function runSourcing(s, userId, req) {
         user
       ),
       prefetch: async (cands) => {
+        await ready();
         const todo = cands.filter((c) => !known.has(c.key));
         await domainBatch(todo);
         await knownBatch(todo);
@@ -25040,7 +25092,10 @@ async function runSourcing(s, userId, req) {
         domains: [workDomain(c.email), ...orgDomainsOf(c, ctx.orgDomains)].filter((d) => !!d),
         year
       }),
-      fillEmails: (cands) => withDeadline(emailsFor(cands), EMAIL_DEADLINE_MS),
+      fillEmails: async (cands) => {
+        await ready();
+        return withDeadline(emailsFor(cands), EMAIL_DEADLINE_MS);
+      },
       inPipeline: async (c) => {
         const k = await knownOf(c);
         if (!k || !goal) return false;
@@ -25061,8 +25116,22 @@ async function runSourcing(s, userId, req) {
       limit: Math.max(1, Math.min(50, req.limit ?? 25))
     }
   );
-  const results = [];
-  for (const r of result.results) {
+  await ready();
+  console.log(
+    JSON.stringify({
+      ts: (/* @__PURE__ */ new Date()).toISOString(),
+      fn: "sourcing",
+      kind: req.purpose,
+      status: "ok",
+      duration_ms: result.timings.total,
+      timings: result.timings,
+      results: result.results.length,
+      provider_errors: result.errors.map((e) => e.slice(0, 120)),
+      unconfigured: result.unconfigured,
+      relaxed: result.relaxed
+    })
+  );
+  const results = await mapLimit2(result.results, LOOKUP_CONCURRENCY, async (r) => {
     const [row] = await db2.sql`
       insert into orbit.recommendations (user_id, goal_id, person_id, candidate, source, external_id, rank, fit, reach,
                                          responsiveness, reasons, status, batch_id)
@@ -25070,8 +25139,8 @@ async function runSourcing(s, userId, req) {
               ${r.external_id}, ${r.rank}::real, ${r.fit}::real, ${r.reach}::real, ${r.responsiveness}::real,
               ${r.reasons}::text[], 'new', ${result.batchId}::uuid)
       returning id`;
-    results.push(toSourced(row.id, r));
-  }
+    return toSourced(row.id, r);
+  });
   return {
     batchId: result.batchId,
     results,
@@ -25101,19 +25170,22 @@ function webSourcesFor(s) {
   return out;
 }
 async function warmContext(db2, userId, u2, homeCity, graph) {
-  const [resume] = await db2.sql`
-    select parsed from orbit.uploads
-     where user_id = ${userId}::uuid and kind = 'resume' and is_current order by created_at desc limit 1`;
+  const [[resume], emails, gr] = await Promise.all([
+    db2.sql`
+      select parsed from orbit.uploads
+       where user_id = ${userId}::uuid and kind = 'resume' and is_current order by created_at desc limit 1`,
+    db2.sql`
+      select id, display_name, org_raw, primary_email as email from orbit.people
+       where user_id = ${userId}::uuid and primary_email is not null and deleted_at is null and not is_self
+       limit 5000`,
+    graph()
+  ]);
   const student = studentFromResume(resume?.parsed, {
     school: u2?.school,
     currentOrg: u2?.current_org,
     gradYear: u2?.grad_year,
     homeCity: typeof homeCity === "string" ? homeCity.slice(0, 80) : void 0
   });
-  const emails = await db2.sql`
-    select id, display_name, org_raw, primary_email as email from orbit.people
-     where user_id = ${userId}::uuid and primary_email is not null and deleted_at is null and not is_self
-     limit 5000`;
   const known = emails.map((e) => ({ name: e.display_name, email: e.email }));
   const emailOf = new Map(emails.map((e) => [e.id, e.email]));
   const tally = /* @__PURE__ */ new Map();
@@ -25127,7 +25199,6 @@ async function warmContext(db2, userId, u2, homeCity, graph) {
   }
   const orgDomains = /* @__PURE__ */ new Map();
   for (const [k, m] of tally) orgDomains.set(k, [...m].sort((a, b) => b[1] - a[1])[0][0]);
-  const gr = await graph();
   const warm = [...gr.people.values()].filter((p) => p.score >= WARM_SCORE && !p.hidden && !p.doNotContact).sort((a, b) => b.score - a.score).map((p) => ({
     personId: p.id,
     name: p.displayName,

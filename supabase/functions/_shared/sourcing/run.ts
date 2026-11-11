@@ -49,6 +49,8 @@ import {
 } from './ondemand';
 import {
   type Candidate,
+  LOOKUP_CONCURRENCY,
+  mapLimit,
   type RecommendationRow,
   type SourceName,
   type SourcingGoal,
@@ -156,37 +158,41 @@ export async function runSourcing(
   if (!GOAL_KINDS.includes(req.purpose)) throw new HttpError(400, 'bad_request', 'unknown purpose');
   const db = s.db;
   const now = s.now();
-  let goal:
-    | {
-        id: string;
-        kind: string;
-        title: string;
-        targets: Record<string, unknown>;
-        criteria: Record<string, unknown>;
-      }
-    | undefined;
-  if (req.goalId) {
-    [goal] = await db.sql<NonNullable<typeof goal>>`
-      select id, kind, title, targets, criteria from orbit.goals
-       where id = ${req.goalId}::uuid and user_id = ${userId}::uuid and deleted_at is null`;
-    if (!goal) throw new HttpError(404, 'not_found', 'no such goal');
-  }
-  const [u] = await db.sql<{
-    first_name: string | null;
-    full_name: string | null;
-    email: string;
-    school: string | null;
-    majors: string[];
-    current_org: string | null;
-    grad_year: number | null;
-  }>`
-    select first_name, full_name, email, school, majors, current_org, grad_year from orbit.users
-     where id = ${userId}::uuid`;
-  const [acct] = await db.sql<{ external_account_id: string | null }>`
-    select external_account_id from orbit.integration_accounts
-     where user_id = ${userId}::uuid and provider = 'linkedin' and status = 'active'`;
-  let graph: UserGraph | undefined;
-  const g = async () => (graph ??= await loadGraph(db, userId, now));
+  type GoalRow = {
+    id: string;
+    kind: string;
+    title: string;
+    targets: Record<string, unknown>;
+    criteria: Record<string, unknown>;
+  };
+  // the goal, the student and their LinkedIn account are independent reads: one round trip, not three
+  const [goalRows, [u], [acct]] = await Promise.all([
+    req.goalId
+      ? db.sql<GoalRow>`
+          select id, kind, title, targets, criteria from orbit.goals
+           where id = ${req.goalId}::uuid and user_id = ${userId}::uuid and deleted_at is null`
+      : Promise.resolve([] as GoalRow[]),
+    db.sql<{
+      first_name: string | null;
+      full_name: string | null;
+      email: string;
+      school: string | null;
+      majors: string[];
+      current_org: string | null;
+      grad_year: number | null;
+    }>`
+      select first_name, full_name, email, school, majors, current_org, grad_year from orbit.users
+       where id = ${userId}::uuid`,
+    db.sql<{ external_account_id: string | null }>`
+      select external_account_id from orbit.integration_accounts
+       where user_id = ${userId}::uuid and provider = 'linkedin' and status = 'active'`,
+  ]);
+  const goal: GoalRow | undefined = goalRows[0];
+  if (req.goalId && !goal) throw new HttpError(404, 'not_found', 'no such goal');
+  // one load of the student's graph, however many lookups ask for it at once (they now run side by side, and the
+  // old `graph ??= await loadGraph(...)` started a load for each caller that arrived before the first finished)
+  let graph: Promise<UserGraph> | undefined;
+  const g = () => (graph ??= loadGraph(db, userId, now));
   const known = new Map<string, { personId: string; score?: number } | null>();
   const knownOf = async (c: Candidate) => {
     if (known.has(c.key)) return known.get(c.key)!;
@@ -212,7 +218,23 @@ export async function runSourcing(
     return v;
   };
   const user = { school: u?.school ?? '', majors: u?.majors ?? [] };
-  const ctx = await warmContext(db, userId, u, req.homeCity, g);
+  // the student's context (résumé, contacts' addresses, warm people) loads while the providers search: nothing in the
+  // search itself needs it, only ranking, which waits for it (`ready`) before the first use
+  const sGoal = sourcingGoal(req, goal);
+  const ctxP = warmContext(db, userId, u, req.homeCity, g).then((c) => {
+    // the ask's own org → domain pairs come first; the student's contacts teach the rest
+    sGoal.orgs?.forEach((o, i) => {
+      const d = sGoal.domains?.[i];
+      if (d) c.orgDomains.set(norm(o), d.toLowerCase());
+    });
+    return c;
+  });
+  // a failure is thrown where it is awaited below, never as an unhandled rejection while the search runs
+  ctxP.catch(() => undefined);
+  let ctx!: WarmCtx;
+  const ready = async () => {
+    ctx ??= await ctxP;
+  };
   const slugOf = (c: Candidate) => linkedInSlugOf(cleanLinkedInUrl(c.linkedinUrl)) ?? undefined;
   const uniq = (xs: (string | undefined | null)[]) => [...new Set(xs.filter((x): x is string => !!x))];
   // every candidate against the student's people in one query, instead of two or three per candidate
@@ -264,12 +286,6 @@ export async function runSourcing(
       if (d) ctx.orgDomains.set(f.key, d);
     }
   };
-  const sGoal = sourcingGoal(req, goal);
-  // the ask's own org → domain pairs come first; the student's contacts teach the rest
-  sGoal.orgs?.forEach((o, i) => {
-    const d = sGoal.domains?.[i];
-    if (d) ctx.orgDomains.set(norm(o), d.toLowerCase());
-  });
   const mx = dnsMx(s.fetch);
   const year = now.getUTCFullYear();
   const budget = sqlBudget(db, s.now);
@@ -351,6 +367,7 @@ export async function runSourcing(
           user,
         ),
       prefetch: async (cands) => {
+        await ready();
         const todo = cands.filter((c) => !known.has(c.key));
         await domainBatch(todo);
         await knownBatch(todo);
@@ -363,7 +380,10 @@ export async function runSourcing(
           domains: [workDomain(c.email), ...orgDomainsOf(c, ctx.orgDomains)].filter((d): d is string => !!d),
           year,
         }),
-      fillEmails: (cands) => withDeadline(emailsFor(cands), EMAIL_DEADLINE_MS),
+      fillEmails: async (cands) => {
+        await ready();
+        return withDeadline(emailsFor(cands), EMAIL_DEADLINE_MS);
+      },
       inPipeline: async (c) => {
         const k = await knownOf(c);
         if (!k || !goal) return false;
@@ -384,8 +404,26 @@ export async function runSourcing(
       limit: Math.max(1, Math.min(50, req.limit ?? 25)),
     },
   );
-  const results: SourcedCandidate[] = [];
-  for (const r of result.results) {
+  // the context's own failure surfaces here, as it did when it was loaded first
+  await ready();
+  // one line per search: how long each stage took and which providers failed (an Apollo plan without search
+  // access answered 403 on every search, unseen, until plan 39 put it here); no names, no query text
+  console.log(
+    JSON.stringify({
+      ts: new Date().toISOString(),
+      fn: 'sourcing',
+      kind: req.purpose,
+      status: 'ok',
+      duration_ms: result.timings.total,
+      timings: result.timings,
+      results: result.results.length,
+      provider_errors: result.errors.map((e) => e.slice(0, 120)),
+      unconfigured: result.unconfigured,
+      relaxed: result.relaxed,
+    }),
+  );
+  // the rows are saved a few at a time (they used to be one round trip after another), in the ranked order
+  const results: SourcedCandidate[] = await mapLimit(result.results, LOOKUP_CONCURRENCY, async (r) => {
     const [row] = await db.sql<{ id: string }>`
       insert into orbit.recommendations (user_id, goal_id, person_id, candidate, source, external_id, rank, fit, reach,
                                          responsiveness, reasons, status, batch_id)
@@ -393,8 +431,8 @@ export async function runSourcing(
               ${r.external_id}, ${r.rank}::real, ${r.fit}::real, ${r.reach}::real, ${r.responsiveness}::real,
               ${r.reasons}::text[], 'new', ${result.batchId}::uuid)
       returning id`;
-    results.push(toSourced(row!.id, r));
-  }
+    return toSourced(row!.id, r);
+  });
   return {
     batchId: result.batchId,
     results,
@@ -584,19 +622,23 @@ async function warmContext(
   homeCity: string | undefined,
   graph: () => Promise<UserGraph>,
 ): Promise<WarmCtx> {
-  const [resume] = await db.sql<{ parsed: Record<string, unknown> | null }>`
-    select parsed from orbit.uploads
-     where user_id = ${userId}::uuid and kind = 'resume' and is_current order by created_at desc limit 1`;
+  // the résumé, the contacts' addresses and the graph are independent reads: all three at once
+  const [[resume], emails, gr] = await Promise.all([
+    db.sql<{ parsed: Record<string, unknown> | null }>`
+      select parsed from orbit.uploads
+       where user_id = ${userId}::uuid and kind = 'resume' and is_current order by created_at desc limit 1`,
+    db.sql<{ id: string; display_name: string; org_raw: string | null; email: string }>`
+      select id, display_name, org_raw, primary_email as email from orbit.people
+       where user_id = ${userId}::uuid and primary_email is not null and deleted_at is null and not is_self
+       limit 5000`,
+    graph(),
+  ]);
   const student = studentFromResume(resume?.parsed, {
     school: u?.school,
     currentOrg: u?.current_org,
     gradYear: u?.grad_year,
     homeCity: typeof homeCity === 'string' ? homeCity.slice(0, 80) : undefined,
   });
-  const emails = await db.sql<{ id: string; display_name: string; org_raw: string | null; email: string }>`
-    select id, display_name, org_raw, primary_email as email from orbit.people
-     where user_id = ${userId}::uuid and primary_email is not null and deleted_at is null and not is_self
-     limit 5000`;
   const known = emails.map((e) => ({ name: e.display_name, email: e.email }));
   const emailOf = new Map(emails.map((e) => [e.id, e.email]));
   // the domain most contacts at an org use
@@ -611,7 +653,6 @@ async function warmContext(
   }
   const orgDomains = new Map<string, string>();
   for (const [k, m] of tally) orgDomains.set(k, [...m].sort((a, b) => b[1] - a[1])[0]![0]);
-  const gr = await graph();
   const warm: WarmContact[] = [...gr.people.values()]
     .filter((p) => p.score >= WARM_SCORE && !p.hidden && !p.doNotContact)
     .sort((a, b) => b.score - a.score)
