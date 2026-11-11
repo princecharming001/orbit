@@ -210,6 +210,8 @@ export interface SourcingResult {
   /** what the web pass did (plan 31), for the log */
   notes: string[];
   batchId: string;
+  /** how long each stage took, in milliseconds, for the log (plan 39) */
+  timings: { gather: number; relax: number; dedupe: number; rank: number; total: number };
 }
 
 export const WEIGHTS = { fit: 0.45, reach: 0.35, responsiveness: 0.2 };
@@ -265,8 +267,17 @@ export async function sourcePeople(deps: SourcingDeps, input: SourcingInput): Pr
   const calls = plan(ctx);
   const relax: Relax = { location: false, seniority: false, place: false };
   const relaxed: SourcingResult['relaxed'] = [];
+  const t0 = Date.now();
+  let mark = t0;
+  const lap = () => {
+    const now = Date.now();
+    const ms = now - mark;
+    mark = now;
+    return ms;
+  };
 
   let merged = await gather(calls, relax);
+  const gatherMs = lap();
   const g = input.goal;
   const canDropLocation = !!g.location;
   const canDropSeniority = !!g.seniorities?.length;
@@ -294,14 +305,18 @@ export async function sourcePeople(deps: SourcingDeps, input: SourcingInput): Pr
     merged = await gather([(r) => webCall(ctx, r)], relax);
   }
 
-  // dedupe against the pipeline for this goal
+  const relaxMs = lap();
+
+  // dedupe against the pipeline for this goal: each check is a lookup, so a few run at once (order is kept)
   if (deps.inPipeline) {
-    const keep: Candidate[] = [];
-    for (const c of merged) if (!(await deps.inPipeline(c))) keep.push(c);
-    merged = keep;
+    const inPipeline = deps.inPipeline;
+    const drop = await mapLimit(merged, LOOKUP_CONCURRENCY, (c) => inPipeline(c));
+    merged = merged.filter((_, i) => !drop[i]);
   }
+  const dedupeMs = lap();
 
   const rows = await rank(ctx, merged.slice(0, MAX_SCORED), batchId);
+  const rankMs = lap();
   return {
     results: rows.slice(0, input.limit ?? 50),
     unconfigured: [...ctx.unconfigured].sort(),
@@ -310,7 +325,25 @@ export async function sourcePeople(deps: SourcingDeps, input: SourcingInput): Pr
     errors: [...ctx.errors].sort(),
     notes: [...ctx.notes],
     batchId,
+    timings: { gather: gatherMs, relax: relaxMs, dedupe: dedupeMs, rank: rankMs, total: Date.now() - t0 },
   };
+}
+
+/** Lookups (the student's own people, their reach) a few at a time, so a search never floods the database. */
+export const LOOKUP_CONCURRENCY = 8;
+
+/** Map with at most `n` calls in flight, keeping the input's order in the output. */
+export async function mapLimit<T, R>(xs: T[], n: number, f: (x: T, i: number) => Promise<R>): Promise<R[]> {
+  const out: R[] = new Array(xs.length);
+  let next = 0;
+  const worker = async () => {
+    while (next < xs.length) {
+      const i = next++;
+      out[i] = await f(xs[i]!, i);
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(n, xs.length) }, worker));
+  return out;
 }
 
 async function gather(calls: Call[], relax: Relax): Promise<Candidate[]> {
@@ -664,20 +697,30 @@ async function linkedInCall(
       return [];
     }
   }
-  if (ctx.salesNav === undefined) {
-    if (input.salesNavigator !== undefined) ctx.salesNav = input.salesNavigator;
-    else {
-      const me = await deps.unipile.me(accountId);
-      ctx.salesNav = me.ok ? hasSalesNavigator(me.value) : false;
-    }
-  }
   const loc = locationOf(ctx, relax);
   const ids = async (type: SearchParameterType, names: string[] | undefined) =>
     (await Promise.all((names ?? []).slice(0, 3).map((n) => paramId(ctx, type, n)))).filter(
       (x): x is string => !!x,
     );
-  const locationIds = loc ? await ids('LOCATION', [loc]) : [];
-  const schoolIds = q.school ? await ids('SCHOOL', [q.school]) : [];
+  // the Sales Navigator check and every name-to-id lookup go out together (they used to wait in line); company ids
+  // are only used by a classic search, so they are dropped when the account has a seat
+  const salesNavCheck = async () => {
+    if (ctx.salesNav !== undefined) return;
+    if (input.salesNavigator !== undefined) ctx.salesNav = input.salesNavigator;
+    else {
+      const me = await deps.unipile.me(accountId);
+      ctx.salesNav = me.ok ? hasSalesNavigator(me.value) : false;
+    }
+  };
+  const knowsSalesNav = ctx.salesNav !== undefined || input.salesNavigator !== undefined;
+  const classicLikely = knowsSalesNav ? !(ctx.salesNav ?? input.salesNavigator) : true;
+  const [, locationIds, schoolIds, companyIdsMaybe, pastIdsMaybe] = await Promise.all([
+    salesNavCheck(),
+    loc ? ids('LOCATION', [loc]) : Promise.resolve([] as string[]),
+    q.school ? ids('SCHOOL', [q.school]) : Promise.resolve([] as string[]),
+    classicLikely ? ids('COMPANY', q.companies) : Promise.resolve([] as string[]),
+    classicLikely ? ids('COMPANY', q.pastCompanies) : Promise.resolve([] as string[]),
+  ]);
   let body: PeopleSearch;
   if (ctx.salesNav) {
     const g = input.goal;
@@ -693,8 +736,8 @@ async function linkedInCall(
       location: locationIds.length ? { include: locationIds } : undefined,
     };
   } else {
-    const companyIds = await ids('COMPANY', q.companies);
-    const pastIds = await ids('COMPANY', q.pastCompanies);
+    const companyIds = classicLikely ? companyIdsMaybe : await ids('COMPANY', q.companies);
+    const pastIds = classicLikely ? pastIdsMaybe : await ids('COMPANY', q.pastCompanies);
     body = {
       api: 'classic',
       category: 'people',
@@ -942,30 +985,34 @@ export function keywordFit(goal: SourcingGoal, c: Candidate): FitScore {
 export function llmFitScorer(claude: ClaudeDep): FitScorer {
   return async (goal, user, cands) => {
     const out = new Map<string, FitScore>();
-    for (let i = 0; i < cands.length; i += FIT_BATCH) {
-      const batch = cands.slice(i, i + FIT_BATCH);
-      const payload: FitCandidate[] = batch.map((c) => ({
-        id: c.key,
-        name: c.name,
-        title: c.title,
-        org: c.org,
-        location: c.location,
-        headline: c.headline,
-        evidence: c.evidence?.slice(0, 3),
-        source: c.sources.join('+'),
-      }));
-      const r = await claude.parse('sourcing_fit', fitSchema, {
-        system: fitSystem(user.firstName),
-        user: fitUser({ title: goal.title, criteria: goal.criteria }, payload),
-      });
-      if (r.ok)
-        for (const s of r.value.scores) {
-          if (!batch.some((c) => c.key === s.id)) continue;
-          const fit = Number.isFinite(s.fit) ? Math.max(0, Math.min(1, s.fit)) : 0;
-          out.set(s.id, { fit, reasons: s.reasons.slice(0, 2) });
-        }
-      for (const c of batch) if (!out.has(c.key)) out.set(c.key, keywordFit(goal, c));
-    }
+    const batches: Candidate[][] = [];
+    for (let i = 0; i < cands.length; i += FIT_BATCH) batches.push(cands.slice(i, i + FIT_BATCH));
+    // every batch goes out at once (at most five: MAX_SCORED / FIT_BATCH); they used to wait for each other
+    await Promise.all(
+      batches.map(async (batch) => {
+        const payload: FitCandidate[] = batch.map((c) => ({
+          id: c.key,
+          name: c.name,
+          title: c.title,
+          org: c.org,
+          location: c.location,
+          headline: c.headline,
+          evidence: c.evidence?.slice(0, 3),
+          source: c.sources.join('+'),
+        }));
+        const r = await claude.parse('sourcing_fit', fitSchema, {
+          system: fitSystem(user.firstName),
+          user: fitUser({ title: goal.title, criteria: goal.criteria }, payload),
+        });
+        if (r.ok)
+          for (const s of r.value.scores) {
+            if (!batch.some((c) => c.key === s.id)) continue;
+            const fit = Number.isFinite(s.fit) ? Math.max(0, Math.min(1, s.fit)) : 0;
+            out.set(s.id, { fit, reasons: s.reasons.slice(0, 2) });
+          }
+        for (const c of batch) if (!out.has(c.key)) out.set(c.key, keywordFit(goal, c));
+      }),
+    );
     return out;
   };
 }
@@ -992,13 +1039,22 @@ async function rank(ctx: Ctx, cands: Candidate[], batchId: string): Promise<Reco
   const reachTop = new Set(byFit.slice(0, REACH_TOP).map((c) => c.key));
   if (deps.fillEmails) await deps.fillEmails(byFit.slice(0, 60)).catch(() => undefined);
 
+  // each candidate's reach, reply prior and "do they know them" are lookups: a few at a time (they used to run one
+  // candidate after another), then the rows are built in the same order as before
+  const looked = await mapLimit(byFit, LOOKUP_CONCURRENCY, async (c) => {
+    const [p, resp, known] = await Promise.all([
+      reachTop.has(c.key) ? deps.reachOf(c) : null,
+      deps.responsiveness(c),
+      deps.knownPerson ? deps.knownPerson(c) : null,
+    ]);
+    return { p, resp, known };
+  });
   const rows: RecommendationRow[] = [];
-  for (const c of byFit) {
+  for (const [i, c] of byFit.entries()) {
     const f = fitOf(c);
-    const p = reachTop.has(c.key) ? await deps.reachOf(c) : null;
+    const { p, resp, known } = looked[i]!;
     const reach = typeof p === 'number' && p > 0 ? Math.min(1, p) : c.networkDistance === 2 ? 0.05 : 0;
-    const responsiveness = Math.max(0, Math.min(1, await deps.responsiveness(c)));
-    const known = deps.knownPerson ? await deps.knownPerson(c) : null;
+    const responsiveness = Math.max(0, Math.min(1, resp));
     const reasons = [...f.reasons];
     const warmth = deps.warmthOf?.(c, known);
     if (warmth) c.warmth = warmth;
