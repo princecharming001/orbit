@@ -78,12 +78,15 @@ for (const size of [
       await expect(pipeline).toBeVisible({ timeout: 20_000 });
       const step = pipeline.getByTestId('next-step').first();
       await expect(step).toBeVisible();
+      const turns = await page.getByTestId('turn-user').count();
       await step.click();
+      // plan 42: the follow-ups open beside the chat, and the thread gets no new message
       await expect(
-        lastTurn(page).locator('[data-testid="result-drafts"], [data-testid="result-draft"]'),
+        page.getByTestId('panel').locator('[data-testid="result-drafts"], [data-testid="result-draft"]'),
       ).toBeVisible({
         timeout: 20_000,
       });
+      expect(await page.getByTestId('turn-user').count()).toBe(turns);
       await shot(page, `${size.name}-quiet-followup`);
     });
   });

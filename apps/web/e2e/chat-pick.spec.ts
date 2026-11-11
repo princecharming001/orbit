@@ -38,13 +38,12 @@ test.describe('Picking people on a card', () => {
       .slice(0, 2)
       .map((t) => t.replace(/^Pick /, '').trim());
     // picking someone not in Orbit yet says Add on the button: pressing it is the choice to add them
+    const turns = await page.getByTestId('turn-user').count();
     await list.getByTestId('selection-step').filter({ hasText: 'Add and find routes' }).click();
-    // the message names them, with the ids the add needs, and the answer is one card with both
-    await expect(page.getByTestId('turn-user').last()).toContainText(
-      'Add to People and find warm routes to each of',
-    );
-    const card = page.getByTestId('result-routes_many').last();
+    // plan 42: they are added and one card with both opens beside the chat, with no new message in the thread
+    const card = page.getByTestId('panel').getByTestId('result-routes_many');
     await expect(card).toBeVisible({ timeout: 30_000 });
+    expect(await page.getByTestId('turn-user').count()).toBe(turns);
     const rows = card.getByTestId('routes-many-person');
     await expect(rows).toHaveCount(2);
     for (const name of names) await expect(card).toContainText(name.split(' ')[0]!);
