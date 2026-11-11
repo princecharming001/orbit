@@ -117,10 +117,12 @@ export async function buildSnapshot(
     (opts.lastUserText ?? '').trim().length < 40 && opts.recentUserText
       ? `${opts.lastUserText ?? ''} ${opts.recentUserText}`.trim()
       : opts.lastUserText;
-  const earlier = chatDigests(userId, { except: opts.conversationId })
-    .then((d) => earlierChatsLine(d, now))
+  // days are counted where the student lives: "yesterday" is their yesterday
+  const zone = db.users.get(userId).then((u) => u?.timezone || undefined);
+  const earlier = Promise.all([chatDigests(userId, { except: opts.conversationId }), zone])
+    .then(([d, z]) => earlierChatsLine(d, now, undefined, z))
     .catch(() => undefined);
-  const activity = recentActivityLine(userId, now).catch(() => undefined);
+  const activity = zone.then((z) => recentActivityLine(userId, now, z)).catch(() => undefined);
   const remembered = rememberedLines({ id: userId }, recallBy, {
     signal: AbortSignal.timeout(REMEMBERED_TIMEOUT_MS),
     maxChars: REMEMBERED_MAX_CHARS,

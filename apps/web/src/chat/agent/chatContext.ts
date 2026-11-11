@@ -89,9 +89,26 @@ export async function chatDigests(
   return out;
 }
 
-/** "today", "yesterday", "3 d ago", "2 wk ago". */
-export function ago(iso: string, now: Date): string {
-  const days = Math.floor((now.getTime() - new Date(iso).getTime()) / DAY);
+/** The calendar day of a moment where the student lives, as a day count (so two moments compare by date). */
+function dayNumber(d: Date, tz?: string): number {
+  let key: string;
+  try {
+    key = new Intl.DateTimeFormat('en-CA', {
+      timeZone: tz,
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+    }).format(d);
+  } catch {
+    key = d.toISOString().slice(0, 10);
+  }
+  const [y, m, day] = key.split('-').map(Number);
+  return Math.round(Date.UTC(y!, m! - 1, day!) / DAY);
+}
+
+/** "today", "yesterday", "3 d ago", "2 wk ago": by calendar day in the student's timezone, never by 24-hour blocks. */
+export function ago(iso: string, now: Date, tz?: string): string {
+  const days = dayNumber(now, tz) - dayNumber(new Date(iso), tz);
   if (days <= 0) return 'today';
   if (days === 1) return 'yesterday';
   return days < 14 ? `${days} d ago` : `${Math.round(days / 7)} wk ago`;
@@ -107,6 +124,7 @@ export function earlierChatsLine(
   digests: ChatDigest[],
   now: Date,
   maxChars = EARLIER_CHATS_MAX,
+  tz?: string,
 ): string | undefined {
   if (!digests.length) return undefined;
   const parts = digests.map((d, i) => {
@@ -115,7 +133,7 @@ export function earlierChatsLine(
     const said = asks.map((s) => `"${cut(s, room)}"`).join(' then ');
     const more = d.said.length > asks.length ? ` (${d.said.length} messages)` : '';
     const did = d.did.at(-1) ? `; Orbit: ${cut(d.did.at(-1)!, 80)}` : '';
-    return `[${d.id}] ${ago(d.at, now)}: ${said}${more}${did}`;
+    return `[${d.id}] ${ago(d.at, now, tz)}: ${said}${more}${did}`;
   });
   const head =
     'Earlier chats (a record of past conversations, newest first; use it when the student refers to before, last time or "what we were doing", and call search_chats for anything not here): ';
@@ -131,7 +149,11 @@ export const ACTIVITY_DAYS = 14;
 const ACTIVITY_ROWS = 6;
 
 /** Who the student wrote to lately and who wrote back: names, channels and days only, never anyone's words. */
-export async function recentActivityLine(userId: string, now: Date): Promise<string | undefined> {
+export async function recentActivityLine(
+  userId: string,
+  now: Date,
+  tz?: string,
+): Promise<string | undefined> {
   const since = new Date(now.getTime() - ACTIVITY_DAYS * DAY).toISOString();
   const [mail, people, outbound] = await Promise.all([
     db.messages.where('sentAt').aboveOrEqual(since).toArray(),
@@ -193,11 +215,11 @@ export async function recentActivityLine(userId: string, now: Date): Promise<str
   const who = (r: Row) => `${names.get(r.personId)} [${r.personId}]`;
   const sentBits = sent.slice(0, ACTIVITY_ROWS).map((r) => {
     const back = heardAt.get(r.personId);
-    return `${who(r)} ${r.channel} ${ago(r.at, now)}, ${back && back > r.at ? 'replied' : 'no reply yet'}`;
+    return `${who(r)} ${r.channel} ${ago(r.at, now, tz)}, ${back && back > r.at ? 'replied' : 'no reply yet'}`;
   });
   const heardBits = heard.slice(0, ACTIVITY_ROWS).map((r) => {
     const answered = sentAt.get(r.personId);
-    return `${who(r)} ${r.channel} ${ago(r.at, now)}, ${answered && answered > r.at ? 'answered' : 'not answered yet'}`;
+    return `${who(r)} ${r.channel} ${ago(r.at, now, tz)}, ${answered && answered > r.at ? 'answered' : 'not answered yet'}`;
   });
   const more = (n: number) => (n > ACTIVITY_ROWS ? ` (+${n - ACTIVITY_ROWS} more)` : '');
   return [

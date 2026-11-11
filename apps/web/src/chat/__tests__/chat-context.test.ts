@@ -175,6 +175,10 @@ describe('earlier chats', () => {
     expect(line).toContain('question number 0');
     expect(earlierChatsLine([], NOW)).toBeUndefined();
     expect(ago(at(0), NOW)).toBe('today');
+    // by calendar day where the student lives: 20 hours ago was yesterday, and late last night in New York was not today
+    expect(ago('2026-10-11T19:00:00Z', NOW, 'UTC')).toBe('yesterday');
+    expect(ago('2026-10-12T03:30:00Z', NOW, 'America/New_York')).toBe('yesterday');
+    expect(ago('2026-10-12T03:30:00Z', NOW, 'UTC')).toBe('today');
     expect(ago(at(20), NOW)).toBe('3 wk ago');
   });
 
