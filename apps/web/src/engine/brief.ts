@@ -2342,6 +2342,7 @@ export async function recommendationsRefresh(
       initialName: cleanName(named.get(r.personId)?.displayName).quality === 'initial',
     });
   };
+  const fresh: typeof recs = [];
   for (const r of recs) {
     r.bestPath = undefined;
     // someone the student met pointed them at this person: that comes first, and no warm-up is needed
@@ -2364,12 +2365,20 @@ export async function recommendationsRefresh(
     }
     const prev = existing.find((e) => e.personId === r.personId && e.status === 'saved');
     if (prev) continue;
-    await db.recommendations
-      .where('personId')
-      .equals(r.personId)
-      .filter((e) => e.status === 'new')
-      .delete();
-    await db.recommendations.put(r);
+    fresh.push(r);
   }
+  // one write for the whole list: written one person at a time (each removed, then put back), the list changed
+  // dozens of times while Discover was open, and every change restarted what the page reads for its network cards,
+  // so the network section stayed empty until the refresh ended
+  if (fresh.length)
+    await db.transaction('rw', db.recommendations, async () => {
+      const ids = new Set(fresh.map((r) => r.personId));
+      await db.recommendations
+        .where('personId')
+        .anyOf([...ids])
+        .filter((e) => e.status === 'new')
+        .delete();
+      await db.recommendations.bulkPut(fresh);
+    });
   return recs.length;
 }

@@ -137,29 +137,39 @@ function DiscoverFeed({ tabs }: { tabs?: ReactNode }) {
   const [ctxFor, setCtxFor] = useState<string>();
   const [ctxFailed, setCtxFailed] = useState(false);
   const settled = useRef(false);
+  // each read is numbered; one that ends is used unless a later one already landed. A read that the list changed
+  // under is still good for the people it read (the feed shows only the people a read covers), so it is never thrown
+  // away: thrown away, a list that kept changing kept the network section empty
+  const started = useRef(0);
+  const landed = useRef(0);
+  const mounted = useRef(true);
+  useEffect(
+    () => () => {
+      mounted.current = false;
+    },
+    [],
+  );
   useEffect(() => {
     if (!user || !recIds) return;
-    let live = true;
     // the first read starts at once, so the network cards come with the page; later ones wait for the list to
-    // settle (the refresh writes its people one at a time)
+    // settle (a refresh writes its list in one go, a sync may write several times)
     const t = setTimeout(
       () => {
+        const n = ++started.current;
         loadPointContext(user, recIds.split(','))
           .then((c) => {
-            if (!live) return;
+            if (!mounted.current || n < landed.current) return;
+            landed.current = n;
             settled.current = true;
             setPointCtx(c);
             setCtxFailed(false);
           })
-          .catch(() => live && setCtxFailed(true))
-          .finally(() => live && setCtxFor(recIds));
+          .catch(() => mounted.current && setCtxFailed(true))
+          .finally(() => mounted.current && n >= landed.current && setCtxFor(recIds));
       },
       settled.current ? 300 : 0,
     );
-    return () => {
-      live = false;
-      clearTimeout(t);
-    };
+    return () => clearTimeout(t);
   }, [user?.id, recIds]);
   const networkLoading = !!recIds && ctxFor !== recIds;
   const view = useLiveQuery(
@@ -541,7 +551,7 @@ function DiscoverFeed({ tabs }: { tabs?: ReactNode }) {
             )}
             {/* placeholders while the network loads only when the feed is empty: below cards already shown they
                 would push the load-more trigger out of view as the student scrolls */}
-            {((loading && view.connected) || (networkLoading && !feed.length)) && (
+            {((loading && view.connected) || (networkLoading && !view.network.length)) && (
               <>
                 <CardSkeleton />
                 <CardSkeleton />
