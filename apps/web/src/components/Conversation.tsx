@@ -43,6 +43,38 @@ const when = (iso: string) =>
     hour: 'numeric',
     minute: '2-digit',
   });
+const clock = (iso: string) =>
+  new Date(iso).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
+const dayOf = (iso: string) => new Date(iso).toDateString();
+/** "Today", "Yesterday", "Thu, May 15", with the year when it is not this one */
+function dayLabel(iso: string, now = new Date()): string {
+  const d = new Date(iso);
+  const days = Math.round(
+    (new Date(now.toDateString()).getTime() - new Date(d.toDateString()).getTime()) / 86_400_000,
+  );
+  if (days === 0) return 'Today';
+  if (days === 1) return 'Yesterday';
+  return d.toLocaleDateString('en-US', {
+    weekday: 'short',
+    month: 'short',
+    day: 'numeric',
+    ...(d.getFullYear() !== now.getFullYear() ? { year: 'numeric' } : {}),
+  });
+}
+/** A run: one side's messages in a row, on one channel, with no gap of over an hour between them. */
+function sameRun(
+  a: { out: boolean; at: string; channel: string } | undefined,
+  b: { out: boolean; at: string; channel: string } | undefined,
+): boolean {
+  return (
+    !!a &&
+    !!b &&
+    a.out === b.out &&
+    a.channel === b.channel &&
+    dayOf(a.at) === dayOf(b.at) &&
+    Math.abs(Date.parse(b.at) - Date.parse(a.at)) < 3_600_000
+  );
+}
 
 export function Conversation({ person }: { person: Person }) {
   const { user } = useSession();
@@ -191,7 +223,7 @@ export function Conversation({ person }: { person: Person }) {
           No messages with {person.firstName} yet.
         </p>
       ) : (
-        <ol className="space-y-1" aria-label={`Messages with ${person.firstName}`}>
+        <ol className="pt-1" aria-label={`Messages with ${person.firstName}`}>
           {shown.map((m, i) => {
             // an email's subject when it starts a new email thread (a "Re:" or a LinkedIn message between is not one)
             const prevMail = shown
@@ -202,33 +234,54 @@ export function Conversation({ person }: { person: Person }) {
               m.channel === 'gmail' &&
               !!m.subject &&
               bareSubject(m.subject) !== bareSubject(prevMail?.subject);
+            const prev = shown[i - 1];
+            const next = shown[i + 1];
+            const newDay = !prev || dayOf(prev.at) !== dayOf(m.at);
+            const startsRun = !sameRun(prev, m);
+            const endsRun = !sameRun(m, next);
+            // a day on one channel says it once, by the date; a day that mixes them says it under each run
+            const sameDay = shown.filter((x) => dayOf(x.at) === dayOf(m.at));
+            const oneChannel = sameDay.every((x) => x.channel === m.channel);
             return (
               <li
                 key={m.id}
                 className={cx(
                   'flex flex-col',
                   m.out ? 'items-end' : 'items-start',
-                  i > 0 && shown[i - 1]!.out !== m.out && 'pt-2',
+                  newDay ? (i > 0 ? 'pt-7' : '') : startsRun ? 'pt-4' : 'pt-[3px]',
                 )}
                 data-testid="conversation-message"
                 data-channel={m.channel}
                 data-out={m.out ? 'true' : 'false'}
               >
-                {newSubject && <div className="mb-1 text-[12px] font-medium text-ink-2">{m.subject}</div>}
+                {newDay && (
+                  <div
+                    className="self-stretch mb-4 text-center text-[12px] font-medium text-ink-3"
+                    data-testid="conversation-day"
+                  >
+                    {dayLabel(m.at)}
+                    {oneChannel ? ` · ${CHANNEL_NAME[m.channel]}` : ''}
+                  </div>
+                )}
+                {newSubject && (
+                  <div className="mb-1.5 px-1 text-[12.5px] font-medium text-ink-2">{m.subject}</div>
+                )}
                 <div
                   className={cx(
-                    bubbleClass(m.out, shown[i + 1]?.out !== m.out),
-                    'max-w-[80%] whitespace-pre-wrap text-[14px]',
+                    bubbleClass(m.out, endsRun),
+                    'max-w-[min(72%,560px)] whitespace-pre-wrap text-[14.5px]',
                     m.pending && 'opacity-70',
                   )}
+                  title={when(m.at)}
                 >
                   {m.text}
                 </div>
                 {/* the time once at the end of a run, as a messaging app does */}
-                {shown[i + 1]?.out !== m.out && (
-                  <div className="mt-1 px-1 text-[11.5px] text-ink-3">
-                    {m.out ? 'You' : person.firstName} · {CHANNEL_NAME[m.channel]}
-                    {m.group ? ' · group thread' : ''} · {when(m.at)}
+                {endsRun && (
+                  <div className="mt-1.5 px-2 text-[11.5px] text-ink-3">
+                    {clock(m.at)}
+                    {oneChannel ? '' : ` · ${CHANNEL_NAME[m.channel]}`}
+                    {m.group ? ' · group thread' : ''}
                     {m.pending ? ' · sending' : ''}
                   </div>
                 )}
@@ -366,7 +419,7 @@ function SuggestedLine({ s, userId, onGone }: { s: Suggestion; userId: string; o
  */
 export function bubbleClass(out: boolean, lastOfRun: boolean): string {
   return cx(
-    'break-words rounded-[20px] px-3.5 py-2 leading-[1.45]',
+    'break-words rounded-[20px] px-4 py-2.5 leading-[1.5]',
     out ? 'bg-accent text-[#fdfcfc]' : 'bg-[#ecebe8] text-ink',
     lastOfRun && (out ? 'rounded-br-[6px]' : 'rounded-bl-[6px]'),
   );
