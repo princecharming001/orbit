@@ -414,49 +414,61 @@ async function saveContact(db2, userId, b, now) {
     on conflict (user_id) do update set phone_e164 = excluded.phone_e164, phone_country = excluded.phone_country,
       email_on = excluded.email_on, sms_on = excluded.sms_on, updated_at = excluded.updated_at`;
 }
-var esc = (s) => s.replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
-function readyEmail(o) {
-  const hi = o.firstName ? `Hi ${o.firstName},` : "Hi,";
+function readyEmail(o, from = {}) {
+  const who = from.name?.trim();
+  const hi = o.firstName ? `Hey ${o.firstName},` : "Hey,";
   const what = [
     o.people ? `${o.people.toLocaleString("en-US")} people` : "",
     o.messages ? `${o.messages.toLocaleString("en-US")} messages` : ""
   ].filter(Boolean);
-  const read = what.length ? `Orbit finished reading your accounts: ${what.join(" and ")} are in, and your network is mapped.` : "Orbit finished reading your accounts, and your network is mapped.";
+  const read = what.length ? `${what.join(" and ")} are in and your network is mapped` : "your accounts are read and your network is mapped";
+  const lead = who ? `${who} here. I'm building Orbit, and yours just finished setting up: ${read}.` : `Your Orbit just finished setting up: ${read}.`;
   const next = "Your first suggestions of who to reach out to are waiting.";
-  const subject = "Orbit is ready";
-  const text = `${hi}
-
-${read} ${next}
-
-Open Orbit: ${o.appUrl}
-
-Orbit`;
-  const html = `<!doctype html><html><body style="margin:0;padding:0;background:#f7f6f3">
-<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#f7f6f3;padding:40px 16px">
-<tr><td align="center">
-<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:480px;background:#ffffff;border:1px solid #e9e7e2;border-radius:14px;padding:32px 32px 28px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Inter,Helvetica,Arial,sans-serif;color:#1b1b1a">
-<tr><td>
-<div style="display:inline-block;width:36px;height:36px;border-radius:50%;background:#1b1b1a;color:#ffffff;text-align:center;line-height:36px;font-size:18px">&#10003;</div>
-<h1 style="margin:20px 0 8px;font-size:22px;line-height:1.3;font-weight:600">Orbit is ready</h1>
-<p style="margin:0 0 14px;font-size:15px;line-height:1.6;color:#45443f">${esc(hi)}</p>
-<p style="margin:0 0 14px;font-size:15px;line-height:1.6;color:#45443f">${esc(read)} ${esc(next)}</p>
-<p style="margin:24px 0 4px"><a href="${esc(o.appUrl)}" style="display:inline-block;background:#1b1b1a;color:#ffffff;text-decoration:none;font-size:14px;font-weight:600;padding:11px 20px;border-radius:999px">Open Orbit</a></p>
-</td></tr></table>
-<p style="margin:16px 0 0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif;font-size:12px;color:#8a8780">You asked to hear when Orbit finished setting up. Change this in Settings, Profile.</p>
-</td></tr></table></body></html>`;
-  return { subject, text, html };
+  const reply = from.replies ? who ? "If anything looks off or confusing, just reply to this email. It comes straight to me." : "If anything looks off or confusing, just reply to this email." : "";
+  const subject = o.firstName ? `${o.firstName}, your Orbit is ready` : "Your Orbit is ready";
+  const text = [
+    hi,
+    `${lead} ${next}`,
+    o.appUrl,
+    reply,
+    who ?? "Orbit",
+    "P.S. This is the one note you get about setup."
+  ].filter(Boolean).join("\n\n");
+  return { subject, text };
 }
-function readySms(o) {
-  return `${o.firstName ? `${o.firstName}, ` : ""}Orbit is ready: your network is in and your first suggestions are waiting. ${o.appUrl}`;
+function readySms(o, from = {}) {
+  const who = from.name?.trim();
+  const hi = o.firstName ? `Hey ${o.firstName}, ` : "";
+  const lead = who ? `${hi}it's ${who} from Orbit. Your` : `${hi}your`;
+  const start = lead.charAt(0).toUpperCase() + lead.slice(1);
+  return `${start} network is in and your first suggestions are waiting: ${o.appUrl}`;
 }
-async function sendEmail(deps, to, m) {
+async function senderOf(deps) {
+  const [name, replyTo] = await Promise.all([
+    deps.secret("NOTIFY_SIGN_NAME"),
+    deps.secret("RESEND_REPLY_TO")
+  ]);
+  return {
+    name: name?.trim() || void 0,
+    replyTo: replyTo?.trim() || void 0,
+    replies: !!replyTo?.trim()
+  };
+}
+async function sendEmail(deps, to, m, replyTo) {
   const key = await deps.secret("RESEND_API_KEY");
   if (!key) return { ok: false, error: "unconfigured" };
   const from = await deps.secret("RESEND_FROM") || "Orbit <orbit@tryorbit.today>";
   const res = await (deps.fetch ?? fetch)("https://api.resend.com/emails", {
     method: "POST",
     headers: { authorization: `Bearer ${key}`, "content-type": "application/json" },
-    body: JSON.stringify({ from, to: [to], subject: m.subject, text: m.text, html: m.html })
+    // text only: a note someone typed has no template; a reply goes to a real inbox when one is set
+    body: JSON.stringify({
+      from,
+      to: [to],
+      subject: m.subject,
+      text: m.text,
+      ...replyTo ? { reply_to: replyTo } : {}
+    })
   });
   await res.body?.cancel().catch(() => void 0);
   return res.ok ? { ok: true } : { ok: false, error: `resend ${res.status}` };
@@ -500,14 +512,18 @@ async function sweepOne(deps, db2, userId, now) {
   const sent = [];
   const errors = [];
   if (!late) {
+    const sender = await senderOf(deps);
     if (row.email_on && u?.email) {
-      const m = readyEmail({
-        firstName: u.first_name,
-        people: input.counts?.people ?? 0,
-        messages: input.counts?.messages ?? 0,
-        appUrl: deps.appUrl
-      });
-      const e = await sendEmail(deps, u.email, m);
+      const m = readyEmail(
+        {
+          firstName: u.first_name,
+          people: input.counts?.people ?? 0,
+          messages: input.counts?.messages ?? 0,
+          appUrl: deps.appUrl
+        },
+        sender
+      );
+      const e = await sendEmail(deps, u.email, m, sender.replyTo);
       if (e.ok) sent.push("email");
       else errors.push(e.error);
     }
@@ -515,7 +531,7 @@ async function sweepOne(deps, db2, userId, now) {
       const s = await sendSms(
         deps,
         row.phone_e164,
-        readySms({ firstName: u?.first_name ?? null, appUrl: deps.appUrl })
+        readySms({ firstName: u?.first_name ?? null, appUrl: deps.appUrl }, sender)
       );
       if (s.ok) sent.push("sms");
       else errors.push(s.error);

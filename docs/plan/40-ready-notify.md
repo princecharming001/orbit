@@ -64,9 +64,23 @@ was reached and when the message went out.
 
 ## What has to be set up to send
 
-- **Email:** `RESEND_API_KEY` in `orbit_private.secrets` (or a function secret), and optionally `RESEND_FROM`. Without
-  it the default sender is `Orbit <orbit@tryorbit.today>`, so `tryorbit.today` must be a verified domain in Resend.
+- **Email:** `RESEND_API_KEY` in `orbit_private.secrets` (or a function secret), and the sender's domain verified in
+  Resend. Without `RESEND_FROM` the sender is `Orbit <orbit@tryorbit.today>`.
 - **Texts:** `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN` and `TWILIO_FROM` (a number, or a Messaging Service id starting
   `MG`). Until they are saved, the app does not offer texts and no number is texted.
 
-Both are read on each send, so a key saved later works without a redeploy.
+All are read on each send, so a value saved later works without a redeploy.
+
+## A note from a person
+
+The email is a short note someone typed, not a product email: plain text only, no template, no button, no logo. Three
+more values say who it is from, kept with the keys:
+
+| Value | What it does |
+|---|---|
+| `RESEND_FROM` | The sender line, such as `Sam Rivera <sam@tryorbit.today>`. |
+| `NOTIFY_SIGN_NAME` | The first name the note is written and signed in ("Sam here. I'm building Orbit…"). Without it the note is signed "Orbit". |
+| `RESEND_REPLY_TO` | The inbox a reply goes to. Only when it is set does the note say "just reply to this email". |
+
+`tryorbit.today` receives no mail, so without `RESEND_REPLY_TO` a reply would bounce and the note never invites one.
+The text follows the same rule: with a name it opens "Hey Ana, it's Sam from Orbit."

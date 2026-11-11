@@ -149,6 +149,10 @@ describe('orbit-notify: "Orbit is ready", once', () => {
       TWILIO_ACCOUNT_SID: 'AC_placeholder',
       TWILIO_AUTH_TOKEN: 'token_placeholder',
       TWILIO_FROM: '+15005550006',
+      // who the note is from: a person, with replies going to their inbox
+      RESEND_FROM: 'Sam Rivera <sam@tryorbit.today>',
+      RESEND_REPLY_TO: 'sam@founder.example',
+      NOTIFY_SIGN_NAME: 'Sam',
     });
     const u = await signedInUser(t, { firstName: 'Lena' });
     await w.call(
@@ -175,10 +179,18 @@ describe('orbit-notify: "Orbit is ready", once', () => {
     const sent = mine();
     expect(sent.map((c) => new URL(c.url).hostname).sort()).toEqual(['api.resend.com', 'api.twilio.com']);
     const email = sent.find((c) => c.url.includes('resend'))!.body as Record<string, any>;
-    expect(email).toMatchObject({ to: [u.email], subject: 'Orbit is ready' });
-    expect(email.text).toMatch(/^Hi Lena,/);
-    expect(email.html).toContain('Open Orbit');
-    expect(`${email.text}${email.html.replace(/<[^>]*>/g, ' ')}`).not.toMatch(/[—–!]/);
+    // a note from a person: their name on it, replies to their inbox, plain text with no template
+    expect(email).toMatchObject({
+      to: [u.email],
+      subject: 'Lena, your Orbit is ready',
+      from: 'Sam Rivera <sam@tryorbit.today>',
+      reply_to: 'sam@founder.example',
+    });
+    expect(email).not.toHaveProperty('html');
+    expect(email.text).toMatch(/^Hey Lena,\n\nSam here\. I'm building Orbit/);
+    expect(email.text).toContain('just reply to this email. It comes straight to me.');
+    expect(email.text).toMatch(/\n\nSam\n\nP\.S\./);
+    expect(email.text).not.toMatch(/[—–!]/);
     const sms = sent.find((c) => c.url.includes('twilio'))!;
     expect(String(sms.body)).toContain('To=%2B14155550199');
     // the status says so, and later sweeps send nothing more
@@ -223,22 +235,40 @@ describe('orbit-notify: "Orbit is ready", once', () => {
     expect(w.net.calls.filter((c) => JSON.stringify(c.body).includes(u.email))).toHaveLength(0);
   });
 
-  it('the words: what was read, one button, no em dashes or exclamation marks; the text fits one message', () => {
-    const m = readyEmail({
-      firstName: 'Ana',
-      people: 1240,
-      messages: 18_400,
-      appUrl: 'https://tryorbit.today',
-    });
-    expect(m.text).toContain('1,240 people and 18,400 messages are in');
-    expect(readyEmail({ firstName: null, people: 0, messages: 0, appUrl: 'https://x' }).text).toMatch(/^Hi,/);
-    const sms = readySms({ firstName: 'Ana', appUrl: 'https://tryorbit.today' });
+  it('the words: a short note someone typed, what was read, the link, no em dashes or exclamation marks', () => {
+    const ana = { firstName: 'Ana', people: 1240, messages: 18_400, appUrl: 'https://tryorbit.today' };
+    // from a person whose inbox a reply reaches
+    const m = readyEmail(ana, { name: 'Sam', replies: true });
+    expect(m.subject).toBe('Ana, your Orbit is ready');
+    expect(m.text).toBe(
+      [
+        'Hey Ana,',
+        "Sam here. I'm building Orbit, and yours just finished setting up: 1,240 people and 18,400 messages are in and your network is mapped. Your first suggestions of who to reach out to are waiting.",
+        'https://tryorbit.today',
+        'If anything looks off or confusing, just reply to this email. It comes straight to me.',
+        'Sam',
+        'P.S. This is the one note you get about setup.',
+      ].join('\n\n'),
+    );
+    // plain text only: nothing to render, so a name with markup in it stays text
+    expect(m).not.toHaveProperty('html');
+    // nobody's name set and no inbox for replies: signed Orbit, and it never invites a reply that would bounce
+    const plain = readyEmail({ firstName: null, people: 0, messages: 0, appUrl: 'https://x' });
+    expect(plain.subject).toBe('Your Orbit is ready');
+    expect(plain.text).toMatch(/^Hey,\n\nYour Orbit just finished setting up: your accounts are read/);
+    expect(plain.text).not.toContain('reply');
+    expect(plain.text).toContain('\n\nOrbit\n\n');
+    // a name with no inbox behind it still never says "it comes straight to me"
+    expect(readyEmail(ana, { name: 'Sam' }).text).not.toContain('reply');
+    const sms = readySms({ firstName: 'Ana', appUrl: 'https://tryorbit.today' }, { name: 'Sam' });
+    expect(sms).toBe(
+      "Hey Ana, it's Sam from Orbit. Your network is in and your first suggestions are waiting: https://tryorbit.today",
+    );
+    expect(readySms({ firstName: null, appUrl: 'https://x' })).toBe(
+      'Your network is in and your first suggestions are waiting: https://x',
+    );
     expect(sms.length).toBeLessThanOrEqual(160);
-    expect(`${m.text}${m.html.replace(/<[^>]*>/g, ' ')}${sms}`).not.toMatch(/[—–!]/);
-    // a name with markup in it is text in the email, never markup
-    expect(
-      readyEmail({ firstName: '<b>x</b>', people: 1, messages: 1, appUrl: 'https://x' }).html,
-    ).not.toContain('<b>x</b>');
+    expect(`${m.text}${plain.text}${sms}`).not.toMatch(/[—–!]/);
   });
 });
 
