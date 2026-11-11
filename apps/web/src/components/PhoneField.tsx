@@ -167,6 +167,8 @@ export function PhoneField({
     return { country, text: saved ? formatNational(saved.nationalNumber, country) : '' };
     // a saved number read once, when the field opens or the saved number changes
   }, [value?.e164, value?.country, defaultCountry]);
+  const onChangeRef = useRef(onChange);
+  onChangeRef.current = onChange;
   const [country, setCountry] = useState<CountryCode>(start.country);
   const [text, setText] = useState(start.text);
   const [touched, setTouched] = useState(false);
@@ -176,6 +178,8 @@ export function PhoneField({
   useEffect(() => {
     setCountry(start.country);
     setText(start.text);
+    // a saved number counts as typed: a Continue waiting on a whole number is ready at once
+    if (start.text) onChangeRef.current?.(readPhone(start.text, start.country));
   }, [start]);
 
   const auto = useId();
@@ -328,8 +332,9 @@ export function PhoneField({
           }}
           aria-invalid={showHint || undefined}
           aria-describedby={showHint ? `${inputId}-hint` : undefined}
+          // settings-chip-input: the Settings pages' flat field style is the wrapper's here, not this input's
           className={cx(
-            'min-w-0 flex-1 bg-transparent text-[15px] tabular-nums text-ink placeholder:text-[#a59f97] focus:outline-none',
+            'settings-chip-input min-w-0 flex-1 bg-transparent text-[15px] tabular-nums text-ink placeholder:text-[#a59f97] focus:outline-none',
             line ? 'pl-2.5' : 'rounded-r-[10px] pl-3 pr-3.5',
           )}
           data-testid="phone-input"
@@ -362,7 +367,7 @@ export function PhoneField({
               aria-activedescendant={list[active] ? `${listId}-${active}` : undefined}
               aria-autocomplete="list"
               aria-label="Search countries"
-              className="h-10 min-w-0 flex-1 bg-transparent text-[14px] text-ink placeholder:text-ink-4 focus:outline-none"
+              className="settings-chip-input h-10 min-w-0 flex-1 bg-transparent text-[14px] text-ink placeholder:text-ink-4 focus:outline-none"
               data-testid="phone-country-search"
             />
           </div>

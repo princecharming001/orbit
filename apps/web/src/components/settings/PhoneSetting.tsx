@@ -47,7 +47,7 @@ export function PhoneSetting({ user }: { user: Pick<User, 'id' | 'email' | 'time
       <Label htmlFor="profile-phone">Phone</Label>
       {contact ? (
         <>
-          <div className="max-w-sm">
+          <div>
             <PhoneField
               id="profile-phone"
               label="Phone"
