@@ -8554,13 +8554,10 @@ var BLOCKED_SOURCE_DOMAINS = [
   "echovita.com",
   "dignitymemorial.com",
   "everloved.com",
-  // personal social accounts
+  // personal social accounts (public Instagram, TikTok and Reddit posts are allowed: the owner asked for them)
   "facebook.com",
-  "instagram.com",
-  "tiktok.com",
   "snapchat.com",
   "pinterest.com",
-  "reddit.com",
   "tumblr.com",
   "vk.com",
   "ok.ru",

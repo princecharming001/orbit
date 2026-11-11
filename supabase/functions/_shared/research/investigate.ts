@@ -122,6 +122,7 @@ export function widePlan(card: IdentityCard, title?: string): string[] {
     `${name} site:instagram.com`,
     `${name} site:youtube.com OR site:tiktok.com`,
     `${name} site:github.com OR site:devpost.com`,
+    `${name} site:reddit.com`,
     `${name} site:medium.com OR site:substack.com`,
     // the record outside work that shows real homework: their own writing, causes, races and tournaments, their X
     `${name} blog OR newsletter OR "personal site"`,
@@ -165,7 +166,7 @@ export function extractSystem(): string {
     'match: "yes" when the page is clearly about this person: their name and something that ties it to them (a school, employer, team, city or link of theirs). "likely" when it names someone with their name and everything on it fits their timeline, places and field, but nothing ties it to them for certain. "no" when it is about someone else, contradicts their timeline, places or field, or does not mention them. why: one short sentence saying what decided it.',
     'facts: up to 8 things the page says this person did, made, won, led, joined, wrote or said, including pursuits outside work they made public themselves (a sport, a race or tournament result, music, art, writing, a cause they volunteer for), the most specific first (the exact club, award, project, event or title), each one sentence in plain words, with the date or year the page gives ("" when none) and a quote of at most 25 words copied exactly from the page that supports it. Only what the page itself states about this person; nothing about anyone else.',
     'Never include, even when the page says it: age or birthday, ethnicity, religion, health, family members or relationships, sexuality, politics or donations, where they live (a city is the finest), phone numbers, email addresses, money or pay, grades, legal matters or immigration.',
-    'Anything from when they were under 18: keep only achievements an organization published about them (an award, an officer role, a team they were on, a competition result), nothing personal, and nothing from their own social accounts from that time.',
+    'Anything from when they were under 18: keep what they did in public view (awards, officer roles, teams, competition results, clubs, performances, projects or writing they published, a school or local news story about them), but nothing from their own personal social accounts (Instagram, TikTok, Reddit) from that time.',
     'leads: up to 5 short phrases (2 to 6 words) worth searching next together with their name: organizations, clubs, teams, programs, awards, competitions, projects, events or publications this page connects them to (for example "DECA", "National Society of High School Scholars"). Not their name, not generic words.',
     'With match "no", leave facts and leads empty.',
   ].join('\n');
