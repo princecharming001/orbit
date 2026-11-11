@@ -6,6 +6,7 @@
  */
 import { Check } from 'lucide-react';
 import { useContext, useRef } from 'react';
+import { cx } from '../../../ui';
 import { parsePick, pickMessage, withoutPick } from '../../clarify';
 import type { ClarifyData } from '../../types';
 import { ChoicesContext } from './Choices';
@@ -40,19 +41,25 @@ export function ClarifyCard({
       </div>
     );
   }
+  // choice chips (the student's pick): a few likely answers as taps, and a way out to type their own
   return (
     <div
-      className="my-2 flex flex-col gap-1.5 max-w-[460px]"
+      className="my-2 flex flex-wrap gap-2"
       role="group"
       aria-label={data.question}
       data-testid="result-clarify"
       data-state="open"
     >
-      {data.options.map((o) => (
+      {data.options.map((o, i) => (
         <button
           key={o.id}
           type="button"
-          className="w-full text-left px-3.5 py-2.5 rounded-[6px] border border-line bg-canvas hover:bg-canvas-2 hover:border-[#d6d4d0] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:opacity-50 disabled:pointer-events-none"
+          className={cx(
+            'inline-flex max-w-full items-baseline gap-1.5 rounded-full border px-4 py-2 text-left text-[14px] transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:opacity-50 disabled:pointer-events-none pointer-coarse:min-h-11',
+            i === 0
+              ? 'border-accent/50 bg-accent-soft text-ink hover:bg-[#dcebe4]'
+              : 'border-line bg-canvas text-ink hover:bg-canvas-2 hover:border-[#d6d4d0]',
+          )}
           disabled={running}
           data-testid="clarify-option"
           onClick={() => {
@@ -63,10 +70,21 @@ export function ClarifyCard({
             });
           }}
         >
-          <span className="block text-[14px] font-medium text-ink">{o.label}</span>
-          {o.sub && <span className="block text-[12.5px] text-ink-3 mt-0.5">{o.sub}</span>}
+          <span className="font-medium truncate">{o.label}</span>
+          {o.sub && <span className="text-[12.5px] text-ink-3 truncate">{o.sub}</span>}
         </button>
       ))}
+      <button
+        type="button"
+        className="rounded-full border border-dashed border-line px-4 py-2 text-[14px] text-ink-3 hover:text-ink hover:border-[#cfcbc5] pointer-coarse:min-h-11"
+        onClick={() => {
+          const box = document.querySelector<HTMLTextAreaElement>('[data-testid="composer-input"]');
+          box?.focus();
+        }}
+        data-testid="clarify-other"
+      >
+        Something else
+      </button>
     </div>
   );
 }

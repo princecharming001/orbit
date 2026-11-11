@@ -115,6 +115,9 @@ describe('finding friends over orbit-api', () => {
     expect(by('Ben Rivera').reason).toBe('Has you in their network');
     expect(by('Cara Rivera').reason).toBe('1 mutual friend');
     expect(by('Ben Rivera').connections).toBe(1);
+    // the name opens the student's own record of someone in their people; never for someone who is not
+    expect(by('Ana Rivera').personId).toMatch(/^[0-9a-f-]{36}$/);
+    expect(by('Cara Rivera').personId).toBeUndefined();
     expect(JSON.stringify(r.body)).not.toMatch(/@example\.(com|org)/);
   });
 

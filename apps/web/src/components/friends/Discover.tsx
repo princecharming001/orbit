@@ -7,6 +7,7 @@
 import type { FriendSuggestion, InviteSuggestion } from '@orbit/core';
 import { Check, Linkedin, Mail, Search, UserPlus, UserRound } from 'lucide-react';
 import { type ReactNode, useEffect, useRef, useState } from 'react';
+import { Link } from 'react-router-dom';
 import { Button, cx, Input, Skeleton } from '../../ui';
 
 const TAP = 'pointer-coarse:min-h-11';
@@ -50,10 +51,16 @@ export function PersonTile({
   lines,
   action,
   testId,
+  to,
+  href,
 }: {
   name: string;
   photo?: string | null;
   seed: string;
+  /** their page in Orbit, which the photo and name open */
+  to?: string;
+  /** their LinkedIn, opened in a new tab when there is no page in Orbit */
+  href?: string;
   lines: (string | undefined | null)[];
   action: ReactNode;
   testId: string;
@@ -65,8 +72,17 @@ export function PersonTile({
       className="min-w-0 flex flex-col rounded-[12px] border border-line-2 bg-canvas p-2 transition-[border-color,box-shadow] hover:border-line hover:shadow-[0_2px_12px_rgba(0,0,0,0.04)]"
       data-testid={testId}
     >
-      <Photo src={photo} />
-      <div className="mt-2.5 font-medium text-[14px] leading-snug truncate">{name}</div>
+      <NameLink to={to} href={href} label={`Open ${name}`} className="block rounded-[8px]">
+        <Photo src={photo} />
+      </NameLink>
+      <NameLink
+        to={to}
+        href={href}
+        className="mt-2.5 font-medium text-[14px] leading-snug truncate hover:underline underline-offset-2"
+        testId="tile-name"
+      >
+        {name}
+      </NameLink>
       {shown.map((l, i) => (
         <div
           key={l}
@@ -77,6 +93,48 @@ export function PersonTile({
       ))}
       <div className="mt-auto pt-2.5">{action}</div>
     </li>
+  );
+}
+
+/** A name or a photo that opens the person: their page in Orbit, else their LinkedIn, else plain text. */
+function NameLink({
+  to,
+  href,
+  className,
+  label,
+  testId,
+  children,
+}: {
+  to?: string;
+  href?: string;
+  className?: string;
+  label?: string;
+  testId?: string;
+  children: ReactNode;
+}) {
+  if (to)
+    return (
+      <Link to={to} className={className} aria-label={label} data-testid={testId}>
+        {children}
+      </Link>
+    );
+  if (href)
+    return (
+      <a
+        href={href}
+        target="_blank"
+        rel="noreferrer"
+        className={className}
+        aria-label={label}
+        data-testid={testId}
+      >
+        {children}
+      </a>
+    );
+  return (
+    <div className={className} data-testid={testId}>
+      {children}
+    </div>
   );
 }
 
@@ -239,6 +297,8 @@ export function SuggestionTile({
       name={s.name}
       photo={s.avatarUrl}
       seed={s.userId}
+      to={s.personId ? `/people/${s.personId}` : undefined}
+      href={s.linkedinUrl}
       lines={[s.reason, s.headline && s.headline !== s.reason ? s.headline : connectionsLabel(s.connections)]}
       testId="friend-suggestion"
       action={
@@ -269,6 +329,7 @@ export function InviteTile({
       name={s.name}
       photo={s.photoUrl}
       seed={s.personId}
+      to={`/people/${s.personId}`}
       lines={[s.reason, s.headline]}
       testId="friend-invitee"
       action={

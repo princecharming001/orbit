@@ -279,8 +279,13 @@ describe('the chat thread', () => {
     await mount();
     await act(() => threadActions(engine).send('send it'));
     await settle();
+    expect($('[data-testid="result-needs_confirmation"]')!.textContent).toMatch(/Needs your approval/i);
+    // the summary first; the exact words open below for a read or a change
+    await settle();
+    expect($('[data-testid="confirm-facts"]')?.textContent).toMatch(/To/);
+    act(() => ($('[data-testid="confirm-expand"]') as HTMLButtonElement).click());
+    await settle();
     const card = $('[data-testid="result-needs_confirmation"]')!;
-    expect(card.textContent).toMatch(/Needs your approval/i);
     const box = card.querySelector<HTMLTextAreaElement>('textarea[aria-label="Message body"]')!;
     act(() => type(box, `${box.value}\n\nP.S. Edited in the chat.`));
     await settle(30);
@@ -310,7 +315,10 @@ describe('the chat thread', () => {
     await settle(5);
     const cancelled = engine.calls.find((c) => c.method === 'cancel');
     expect(cancelled?.args[0]).toMatch(/^conf_/);
-    expect(second.querySelector('[data-testid="confirm-decided"]')?.textContent).toMatch(/Cancelled/);
+    expect(
+      $$('[data-testid="result-needs_confirmation"]').at(-1)!.querySelector('[data-testid="confirm-decided"]')
+        ?.textContent,
+    ).toMatch(/Cancelled/);
     expect($$('[data-testid="turn-decision"]').at(-1)?.textContent?.trim()).toMatch(/^Cancelled/);
   });
 

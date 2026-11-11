@@ -271,6 +271,7 @@ export function createFakeOrbitApi(
           email: 'marcus@cornell.edu',
           avatarUrl: null,
           headline: "Cornell '26",
+          linkedinUrl: 'https://www.linkedin.com/in/marcus-wei',
           connections: 7_600,
           reason: "Cornell '26",
           state: 'none',

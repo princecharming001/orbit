@@ -191,7 +191,7 @@ export function Conversation({ person }: { person: Person }) {
           No messages with {person.firstName} yet.
         </p>
       ) : (
-        <ol className="space-y-2.5" aria-label={`Messages with ${person.firstName}`}>
+        <ol className="space-y-1" aria-label={`Messages with ${person.firstName}`}>
           {shown.map((m, i) => {
             // an email's subject when it starts a new email thread (a "Re:" or a LinkedIn message between is not one)
             const prevMail = shown
@@ -205,7 +205,11 @@ export function Conversation({ person }: { person: Person }) {
             return (
               <li
                 key={m.id}
-                className={cx('flex flex-col', m.out ? 'items-end' : 'items-start')}
+                className={cx(
+                  'flex flex-col',
+                  m.out ? 'items-end' : 'items-start',
+                  i > 0 && shown[i - 1]!.out !== m.out && 'pt-2',
+                )}
                 data-testid="conversation-message"
                 data-channel={m.channel}
                 data-out={m.out ? 'true' : 'false'}
@@ -213,18 +217,21 @@ export function Conversation({ person }: { person: Person }) {
                 {newSubject && <div className="mb-1 text-[12px] font-medium text-ink-2">{m.subject}</div>}
                 <div
                   className={cx(
-                    'max-w-[85%] whitespace-pre-wrap break-words rounded-[14px] px-3 py-2 text-[13.5px] leading-relaxed',
-                    m.out ? 'bg-ink text-canvas' : 'border border-line bg-canvas-2 text-ink',
+                    bubbleClass(m.out, shown[i + 1]?.out !== m.out),
+                    'max-w-[80%] whitespace-pre-wrap text-[14px]',
                     m.pending && 'opacity-70',
                   )}
                 >
                   {m.text}
                 </div>
-                <div className="mt-0.5 text-[11.5px] text-ink-3">
-                  {m.out ? 'You' : person.firstName} · {CHANNEL_NAME[m.channel]}
-                  {m.group ? ' · group thread' : ''} · {when(m.at)}
-                  {m.pending ? ' · sending' : ''}
-                </div>
+                {/* the time once at the end of a run, as a messaging app does */}
+                {shown[i + 1]?.out !== m.out && (
+                  <div className="mt-1 px-1 text-[11.5px] text-ink-3">
+                    {m.out ? 'You' : person.firstName} · {CHANNEL_NAME[m.channel]}
+                    {m.group ? ' · group thread' : ''} · {when(m.at)}
+                    {m.pending ? ' · sending' : ''}
+                  </div>
+                )}
               </li>
             );
           })}
@@ -350,5 +357,17 @@ function SuggestedLine({ s, userId, onGone }: { s: Suggestion; userId: string; o
         </button>
       </span>
     </div>
+  );
+}
+
+/**
+ * A message bubble shaped like a phone's messages: round, yours green on the right, theirs soft grey on the left, and
+ * the corner at the bottom on the speaker's side tucked in on the last of a run (the tail).
+ */
+export function bubbleClass(out: boolean, lastOfRun: boolean): string {
+  return cx(
+    'break-words rounded-[20px] px-3.5 py-2 leading-[1.45]',
+    out ? 'bg-accent text-[#fdfcfc]' : 'bg-[#ecebe8] text-ink',
+    lastOfRun && (out ? 'rounded-br-[6px]' : 'rounded-bl-[6px]'),
   );
 }

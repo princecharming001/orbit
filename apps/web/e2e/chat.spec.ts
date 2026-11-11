@@ -281,7 +281,10 @@ test.describe('Chat home', () => {
     await ask(page, 'send it');
     const card = page.getByTestId('result-needs_confirmation');
     await expect(card).toContainText('Needs your approval');
-    await expect(card.getByTestId('confirm-text')).toHaveText(/Send the thank-you to \w+ by email\./);
+    // a summary first (to, from, subject, when); the exact words open below for a read or a change
+    await expect(card.getByTestId('confirm-text')).toHaveText(/^Send this email to .+\?$/);
+    await expect(card.getByTestId('confirm-facts')).toContainText('To');
+    await card.getByTestId('confirm-expand').click();
     const box = card.getByLabel('Message body');
     await box.fill(`${await box.inputValue()}\n\nP.S. Edited in the chat.`);
     const approve = card.getByRole('button', { name: 'Approve & send' });

@@ -30,8 +30,6 @@ import {
 import { FriendRow } from '../components/friends/FriendRow';
 import { InviteBox } from '../components/friends/InviteBox';
 import { FriendsListSection, InviteLinkSection, RequestsSection } from '../components/friends/Rail';
-import { SharePreview } from '../components/friends/SharePreview';
-import { ShareSettings } from '../components/friends/ShareSettings';
 import { db } from '../db/schema';
 import {
   acceptFriend,
@@ -122,7 +120,6 @@ export function FriendsPage() {
     shares: FriendShare[];
     total: number;
   }>();
-  const [previewOpen, setPreviewOpen] = useState(false);
   const [asking, setAsking] = useState<{ friend: Friend; target?: string }>();
   const userId = user?.id ?? '';
   const available = friendsAvailable(user);
@@ -519,36 +516,6 @@ export function FriendsPage() {
               </div>
             </Section>
           )}
-          <Section title="What you share" testId="friends-section-share">
-            <ShareSettings
-              userId={user.id}
-              friends={friends}
-              mode={mode}
-              domains={domains}
-              total={preview?.total}
-              onMode={(m, d) => void share(m, d)}
-              onPreview={() => setPreviewOpen((v) => !v)}
-              busy={!!working.busy}
-            />
-            {previewOpen && preview && (
-              <div className="mt-4 border-t border-line-2 pt-4">
-                <SharePreview
-                  mode={preview.mode}
-                  shares={preview.shares}
-                  total={preview.total}
-                  friendFirst={friends.length === 1 ? friends[0]!.name.split(' ')[0] : undefined}
-                />
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  className={`mt-2 ${TAP}`}
-                  onClick={() => setPreviewOpen(false)}
-                >
-                  Close
-                </Button>
-              </div>
-            )}
-          </Section>
         </div>
         {/* on a phone the link, the requests and the friends come first, above the grids */}
         <aside className="min-w-0 order-first @4xl:order-none @4xl:sticky @4xl:top-6">

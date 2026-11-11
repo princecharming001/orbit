@@ -91,9 +91,9 @@ test.describe('friends (plan 29 A7, fake orbit-api)', () => {
     const api = await signedInWithAna(page);
     await page.goto('friends');
     await expect(page.getByTestId('friend-row').first()).toBeVisible();
-    await page.getByTestId('friend-share-mode').first().selectOption('none');
-    await expect(page.getByTestId('friend-share-preview')).toContainText('Ana sees nothing yet');
-    await expect.poll(() => api.state.friendShareMode).toBe('none');
+    // what the student shares is set on the friend's own row
+    await page.getByTestId('friend-row-share-mode').first().selectOption('none');
+    await expect.poll(() => api.state.friends[0]?.myMode).toBe('none');
     // the other direction: ending the friendship removes Ana's people from Reach within the same load
     await page.getByTestId('friend-end').first().click();
     await page.getByRole('button', { name: /^end friendship/i }).click();
@@ -101,17 +101,6 @@ test.describe('friends (plan 29 A7, fake orbit-api)', () => {
     await page.goto('map?reach=1&company=Stripe');
     await expect(page.getByTestId('company-none')).toBeVisible({ timeout: 20_000 });
     await expect(page.getByTestId('reach-through-friends')).toHaveCount(0);
-  });
-
-  test('the preview equals the projection row for row, and never carries an address', async ({ page }) => {
-    const api = await signedInWithAna(page);
-    await page.goto('friends');
-    await page.getByTestId('friend-share-preview-open').click();
-    const rows = page.getByTestId('share-preview-row');
-    await expect(rows).toHaveCount(api.state.ownShares.length);
-    for (const row of api.state.ownShares)
-      await expect(page.getByText(row.displayName).first()).toBeVisible();
-    await expect(page.getByTestId('share-preview')).not.toContainText('@');
   });
 
   test('local mode: the tab is one paragraph and the sign-in', async ({ page }) => {
@@ -151,6 +140,16 @@ test.describe('finding friends (plan 37 follow-up, fake orbit-api)', () => {
     await expect(tiles.first()).toContainText('In your contacts');
     // no address ever shows
     await expect(grid).not.toContainText('@');
+    // a name opens the person: their LinkedIn here, in a new tab
+    await expect(tiles.nth(1).getByTestId('tile-name')).toHaveAttribute(
+      'href',
+      'https://www.linkedin.com/in/marcus-wei',
+    );
+    // someone to invite opens their page in Orbit
+    await expect(page.getByTestId('friend-invitee').first().getByTestId('tile-name')).toHaveAttribute(
+      'href',
+      /\/people\/p_inv_sam$/,
+    );
     await tiles.first().getByTestId('friend-suggestion-add').click();
     await expect(tiles.first().getByTestId('friend-suggestion-add')).toHaveText('Requested');
     expect(api.state.friendFinder.requests).toEqual(['u_jordan']);

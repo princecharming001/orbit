@@ -1,5 +1,5 @@
 import { FUNCTION_LABELS, initials } from '@orbit/core';
-import { X } from 'lucide-react';
+import { Check, CircleAlert, Info, X } from 'lucide-react';
 import {
   type ButtonHTMLAttributes,
   type CSSProperties,
@@ -731,31 +731,49 @@ export function ToastProvider({ children }: { children: ReactNode }) {
         {items.map((t) => (
           <div
             key={t.id}
-            className={cx(
-              'pointer-events-auto fade-up flex items-center gap-3 rounded-full px-4 py-2.5 min-h-10 max-w-full md:max-w-[420px] shadow-[0_8px_30px_rgba(0,0,0,0.18)] text-[13px] leading-snug',
-              t.tone === 'bad'
-                ? 'bg-bad text-white'
-                : t.tone === 'good'
-                  ? 'bg-accent text-white'
-                  : 'bg-ink text-white',
-            )}
+            className="pointer-events-auto fade-up flex items-start gap-3 w-full md:w-[380px] max-w-full rounded-[14px] border border-line-2 bg-canvas pl-3.5 pr-2 py-3 shadow-[0_12px_32px_rgba(20,20,15,0.10),0_2px_6px_rgba(20,20,15,0.05)]"
             role="status"
+            data-tone={t.tone ?? 'neutral'}
           >
-            {t.working && <Working />}
-            <span className="min-w-0">{t.text}</span>
-            {t.action && (
-              <button
-                className="shrink-0 font-semibold underline underline-offset-2 hover:no-underline"
-                onClick={() => {
-                  t.action!.onClick();
-                  dismiss(t.id);
-                }}
-              >
-                {t.action.label}
-              </button>
-            )}
+            <span
+              className={cx(
+                'shrink-0 mt-px grid place-items-center size-[22px] rounded-full',
+                t.tone === 'bad'
+                  ? 'bg-[#fbeaea] text-bad'
+                  : t.tone === 'good'
+                    ? 'bg-accent-soft text-accent'
+                    : 'bg-canvas-2 text-ink-2',
+              )}
+              aria-hidden
+            >
+              {t.working ? (
+                <Working />
+              ) : t.tone === 'bad' ? (
+                <CircleAlert size={13} strokeWidth={2.25} />
+              ) : t.tone === 'good' ? (
+                <Check size={13} strokeWidth={2.5} />
+              ) : (
+                <Info size={13} strokeWidth={2.25} />
+              )}
+            </span>
+            <div className="min-w-0 flex-1 pt-[2px]">
+              <p className="text-[13.5px] leading-[1.45] text-ink">{t.text}</p>
+              {t.action && (
+                <button
+                  type="button"
+                  className="mt-1.5 text-[13px] font-medium text-accent hover:underline underline-offset-2"
+                  onClick={() => {
+                    t.action!.onClick();
+                    dismiss(t.id);
+                  }}
+                >
+                  {t.action.label}
+                </button>
+              )}
+            </div>
             <button
-              className="shrink-0 -mr-1 p-1 rounded-full opacity-70 hover:opacity-100"
+              type="button"
+              className="shrink-0 grid place-items-center size-7 -mt-0.5 rounded-full text-ink-3 hover:text-ink hover:bg-canvas-2"
               onClick={() => dismiss(t.id)}
               aria-label="Close message"
             >

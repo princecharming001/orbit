@@ -5,7 +5,7 @@
  */
 import type { Person } from '@orbit/core';
 import { useLiveQuery } from 'dexie-react-hooks';
-import { ArrowRight, ArrowUpRight, Check, ChevronDown, Loader2, Plus } from 'lucide-react';
+import { ArrowRight, ArrowUpRight, Check, ChevronDown, Loader2 } from 'lucide-react';
 import { createContext, type ReactNode, useContext, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { db } from '../../../db/schema';
@@ -337,49 +337,79 @@ export function NextSteps({
   const runner = useContext(StepRunnerContext);
   const sending = useRef(false);
   const list = steps.slice(0, 3);
+  // a step the student tapped here: ticked off in place, so the list reads as done (their pick, a checklist)
+  const [done, setDone] = useState<Set<string>>(new Set());
   if (!list.length) return null;
   return (
-    <div
-      className="mt-2.5 flex flex-wrap gap-1.5"
-      role="group"
-      aria-label="Next steps"
-      data-testid="next-steps"
-    >
-      {list.map((s) =>
-        s.run && runner.run && runner.origin ? (
-          <InPlaceStep
-            key={s.label}
-            step={{ label: s.label, run: s.run }}
-            origin={runner.origin}
-            run={runner.run}
-          />
-        ) : (
-          <button
-            key={s.label}
-            type="button"
-            className="inline-flex items-center gap-1 min-h-7 max-w-full px-2.5 py-1 rounded-[6px] border border-line bg-canvas text-[12.5px] font-medium leading-tight text-ink-2 text-left hover:text-ink hover:bg-canvas-2 hover:border-[#d6d4d0] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:opacity-50 disabled:pointer-events-none"
-            disabled={running}
-            title={s.message}
-            data-testid="next-step"
-            onClick={() => {
-              if (sending.current || running) return;
-              sending.current = true;
-              void Promise.resolve(send(s.message)).finally(() => {
-                sending.current = false;
-              });
-            }}
-          >
-            <ArrowRight size={12} aria-hidden className="shrink-0 text-ink-3" />
-            <span className="min-w-0">{s.label}</span>
-          </button>
-        ),
-      )}
+    <div className="mt-3" role="group" aria-label="Next steps" data-testid="next-steps">
+      <div className="mb-0.5 text-[11.5px] font-medium uppercase tracking-wide text-ink-3">Next steps</div>
+      <div className="divide-y divide-line-2 border-y border-line-2">
+        {list.map((s) =>
+          s.run && runner.run && runner.origin ? (
+            <InPlaceStep
+              key={s.label}
+              step={{ label: s.label, run: s.run }}
+              origin={runner.origin}
+              run={runner.run}
+            />
+          ) : (
+            <button
+              key={s.label}
+              type="button"
+              className={cx(
+                STEP_ROW,
+                'group/step hover:bg-canvas-2/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:opacity-60',
+              )}
+              disabled={running}
+              title={s.message}
+              data-testid="next-step"
+              data-state={done.has(s.label) ? 'done' : 'ready'}
+              onClick={() => {
+                if (sending.current || running) return;
+                sending.current = true;
+                setDone((d) => new Set(d).add(s.label));
+                void Promise.resolve(send(s.message)).finally(() => {
+                  sending.current = false;
+                });
+              }}
+            >
+              <StepBox done={done.has(s.label)} />
+              <span className={cx('min-w-0 flex-1', done.has(s.label) && 'text-ink-3 line-through')}>
+                {s.label}
+              </span>
+              <ArrowRight
+                size={14}
+                aria-hidden
+                className="shrink-0 text-ink-3 transition-transform group-hover/step:translate-x-0.5"
+              />
+            </button>
+          ),
+        )}
+      </div>
     </div>
   );
 }
 
-const STEP_CHIP =
-  'inline-flex items-center gap-1 min-h-7 max-w-full px-2.5 py-1 rounded-[6px] border text-[12.5px] font-medium leading-tight text-left';
+/** The box at the start of a step: empty, or ticked once it is done. */
+function StepBox({ done, busy }: { done?: boolean; busy?: boolean }) {
+  return (
+    <span
+      className={cx(
+        'inline-flex h-[18px] w-[18px] shrink-0 items-center justify-center rounded-[5px] border',
+        done ? 'border-accent bg-accent text-white' : 'border-[#cfccc6] bg-canvas',
+      )}
+      aria-hidden
+    >
+      {busy ? (
+        <Loader2 size={11} className="animate-spin text-ink-3" />
+      ) : done ? (
+        <Check size={12} strokeWidth={3} />
+      ) : null}
+    </span>
+  );
+}
+
+const STEP_ROW = 'flex w-full items-center gap-3 px-1 py-2.5 text-left text-[13.5px] leading-snug text-ink';
 
 /**
  * A button that does its thing where it is (plan 37 §4): "Add Stripe to targets" runs, then reads "Added to targets"
@@ -418,23 +448,18 @@ export function InPlaceStep({
   };
   if (state === 'done')
     return (
-      <span
-        className={cx(STEP_CHIP, 'border-line-2 bg-canvas-2 text-ink-3')}
-        data-testid="next-step"
-        data-state="done"
-        aria-live="polite"
-      >
-        <Check size={12} aria-hidden className="shrink-0" />
-        <span className="min-w-0">{step.run.done}</span>
+      <span className={STEP_ROW} data-testid="next-step" data-state="done" aria-live="polite">
+        <StepBox done />
+        <span className="min-w-0 flex-1 text-ink-3">{step.run.done}</span>
       </span>
     );
   return (
-    <span className="inline-flex flex-wrap items-center gap-x-2 gap-y-1">
+    <span className="block">
       <button
         type="button"
         className={cx(
-          STEP_CHIP,
-          'border-line bg-canvas text-ink-2 hover:text-ink hover:bg-canvas-2 hover:border-[#d6d4d0] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:opacity-50 disabled:pointer-events-none',
+          STEP_ROW,
+          'hover:bg-canvas-2/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:opacity-60',
         )}
         disabled={state === 'running'}
         aria-busy={state === 'running'}
@@ -442,15 +467,12 @@ export function InPlaceStep({
         data-state={state ?? 'ready'}
         onClick={() => void go()}
       >
-        {state === 'running' ? (
-          <Loader2 size={12} aria-hidden className="shrink-0 animate-spin text-ink-3" />
-        ) : (
-          <Plus size={12} aria-hidden className="shrink-0 text-ink-3" />
-        )}
-        <span className="min-w-0">{step.label}</span>
+        <StepBox busy={state === 'running'} />
+        <span className="min-w-0 flex-1">{step.label}</span>
+        <ArrowRight size={14} aria-hidden className="shrink-0 text-ink-3" />
       </button>
       {state === 'failed' && error && (
-        <span className="text-[12.5px] text-bad" data-testid="next-step-error">
+        <span className="block px-1 pb-2 text-[12.5px] text-bad" data-testid="next-step-error">
           {error}
         </span>
       )}

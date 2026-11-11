@@ -3,6 +3,7 @@ import { ChevronDown } from 'lucide-react';
 import { useState } from 'react';
 import { type ConversationItem, conversationWith } from '../engine/conversation';
 import { cx, relDate } from '../ui';
+import { bubbleClass } from './Conversation';
 
 const CHANNEL: Record<ConversationItem['channel'], string> = {
   gmail: 'Email',
@@ -58,18 +59,20 @@ export function ThreadContext({
     >
       {open ? (
         <ol
-          className="space-y-2.5 max-h-[320px] overflow-y-auto scroll-thin pr-1"
+          className="space-y-1 max-h-[320px] overflow-y-auto scroll-thin pr-1"
           data-testid="thread-context-all"
         >
-          {recent.map((m) => (
+          {recent.map((m, i) => (
             <li key={m.id} className={cx('flex flex-col', m.out ? 'items-end' : 'items-start')}>
-              <span className="text-[11.5px] text-ink-3 mb-0.5">
-                {who(m)} · {CHANNEL[m.channel]} · {relDate(m.at)}
-              </span>
+              {recent[i - 1]?.out !== m.out && (
+                <span className="text-[11.5px] text-ink-3 mb-0.5 px-1">
+                  {who(m)} · {CHANNEL[m.channel]} · {relDate(m.at)}
+                </span>
+              )}
               <span
                 className={cx(
-                  'max-w-[92%] whitespace-pre-line rounded-[6px] px-2.5 py-1.5 leading-relaxed',
-                  m.out ? 'bg-accent-soft text-ink' : 'bg-canvas border border-line-2 text-ink-2',
+                  bubbleClass(m.out, recent[i + 1]?.out !== m.out),
+                  'max-w-[88%] whitespace-pre-line text-[13.5px]',
                 )}
               >
                 {m.text.trim()}

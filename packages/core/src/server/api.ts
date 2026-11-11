@@ -670,6 +670,10 @@ export interface FriendSuggestion {
   headline: string | null;
   /** how many people they have in Orbit, the size of the network a friendship would pool */
   connections: number;
+  /** the student's own record of them, when they are in the student's people: the name opens it */
+  personId?: string;
+  /** their LinkedIn profile, when known: the name opens it when there is no record of them */
+  linkedinUrl?: string;
   /** the strongest reason, in a few words ("In your contacts", "3 mutual friends", "Cornell '27") */
   reason: string;
   /** 'requested' once the student asked, 'incoming' when they asked the student */

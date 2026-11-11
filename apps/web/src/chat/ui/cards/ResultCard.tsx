@@ -15,8 +15,17 @@ import {
   STRONG_TIE,
 } from '@orbit/core';
 import { useLiveQuery } from 'dexie-react-hooks';
-import { ArrowRight, ArrowUpRight, Check, Copy, Download, Map as MapIcon, TriangleAlert } from 'lucide-react';
-import { Fragment as Frag, type ReactNode, useContext, useState } from 'react';
+import {
+  ArrowRight,
+  ArrowUpRight,
+  Check,
+  ChevronDown,
+  Copy,
+  Download,
+  Map as MapIcon,
+  TriangleAlert,
+} from 'lucide-react';
+import { Fragment as Frag, type ReactNode, useContext, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { copyText } from '../../../components/approve';
 import { CompanyLogo, LogoText } from '../../../components/CompanyLogo';
@@ -25,6 +34,7 @@ import { KIND_LABEL, SuggestionCard } from '../../../components/SuggestionCard';
 import { TargetPlanCard } from '../../../components/TargetPlanCard';
 import { db } from '../../../db/schema';
 import { conversationWith } from '../../../engine/conversation';
+import { useSession } from '../../../state/session';
 import { useShowReasoning } from '../../../state/showReasoning';
 import { Avatar, Button, Chip, cx, LinkedInMark, relDate } from '../../../ui';
 import { readClarify } from '../../clarify';
@@ -36,7 +46,7 @@ import { ClarifyCard } from './Clarify';
 import { ChatsCard, WeekCard } from './goalCards';
 import { MessagesCard, readMessages } from './MessagesCard';
 import { addPicked, askForIntro, type Picked, writeTo } from './next';
-import { FoundPeopleCard, isPeopleList, KnownPeopleCard, PersonTile } from './PeopleCards';
+import { ClosenessSignal, closenessOf, FoundPeopleCard, isPeopleList, KnownPeopleCard } from './PeopleCards';
 import { PeopleTableCard, readTable } from './PeopleTable';
 import {
   CardHead,
@@ -655,7 +665,7 @@ const chainKey = (names: string[]) =>
     .map((n) => n.toLowerCase())
     .join('>');
 
-function RouteMeter({ score }: { score: number }) {
+function _RouteMeter({ score }: { score: number }) {
   return (
     <span
       className="mt-[7px] shrink-0 w-8 h-1 rounded-full bg-line-2 overflow-hidden"
@@ -1306,10 +1316,53 @@ function FactsCard({ env }: { env: ResultEnvelope }) {
 
 // ---------- company ----------
 
+/** Faces of the people the student could go through, overlapping, with "+2" for the rest (the company card). */
+export function FaceStack({
+  people,
+  max = 3,
+  size = 26,
+}: {
+  people: { name: string; id?: string; photoUrl?: string }[];
+  max?: number;
+  size?: number;
+}) {
+  const shown = people.slice(0, max);
+  const rest = people.length - shown.length;
+  const names = people.map((p) => p.name).join(', ');
+  return (
+    <span className="inline-flex shrink-0 items-center" title={`Through ${names}`} data-testid="face-stack">
+      <span className="sr-only">Through {names}</span>
+      {shown.map((p, i) => (
+        <span
+          key={`${p.id ?? p.name}-${i}`}
+          className="rounded-full ring-2 ring-canvas"
+          style={{ marginLeft: i ? -size * 0.3 : 0, zIndex: max - i }}
+          aria-hidden
+        >
+          <Avatar name={p.name} src={p.photoUrl} id={p.id ?? p.name} size={size} />
+        </span>
+      ))}
+      {rest > 0 && (
+        <span
+          className="inline-flex items-center justify-center rounded-full bg-canvas-2 text-[11px] font-medium text-ink-2 ring-2 ring-canvas"
+          style={{ width: size, height: size, marginLeft: -size * 0.3 }}
+          aria-hidden
+        >
+          +{rest}
+        </span>
+      )}
+    </span>
+  );
+}
+
+/**
+ * A small company page (the student's pick, "header, numbers, people"): the logo and what the company is, three
+ * numbers that matter (people you know, alumni, ways in), then the people: someone the student knows with how close,
+ * someone reached through others with the faces of everyone they could go through. The warm intros keep their paths.
+ */
 function CompanyCard({ env, actions }: { env: ResultEnvelope; actions: CardActions }) {
   const { name, industry, people, former, saved, target: wasTarget, via } = readCompany(env.data);
   const warm = readWarmIntros(env.data);
-  const fold = useFold(people);
   // the targets as they are now: "Add to targets" tapped on this card turns the chip to Target at once (plan 37 §4)
   const organizationId = (unpack(env.data) as { organizationId?: string } | undefined)?.organizationId;
   const liveTarget = useLiveQuery(async () => {
@@ -1321,103 +1374,139 @@ function CompanyCard({ env, actions }: { env: ResultEnvelope; actions: CardActio
     );
   }, [name, organizationId]);
   const target = liveTarget ?? wasTarget;
-  // the rows as Orbit has them now: the LinkedIn headline and photo the tool's summary leaves out
-  const livePeople = useLiveQuery(async () => {
+  // the people as Orbit has them now (photo, headline, closeness), and the ones a route goes through, by name
+  const throughNames = [...new Set(via.map((v) => v.through))];
+  const live = useLiveQuery(async () => {
     const rows = await db.people.bulkGet(people.map((p) => p.id));
-    return new Map(rows.filter((x): x is Person => !!x).map((x) => [x.id, x]));
-  }, [people.map((p) => p.id).join(',')]);
+    const byId = new Map(rows.filter((x): x is Person => !!x).map((x) => [x.id, x]));
+    const byName = new Map<string, Person>();
+    if (throughNames.length) {
+      const wanted = new Set(throughNames);
+      const all = await db.people.filter((p) => wanted.has(p.displayName)).toArray();
+      for (const p of all) if (!byName.has(p.displayName)) byName.set(p.displayName, p);
+    }
+    return { byId, byName };
+  }, [people.map((p) => p.id).join(','), throughNames.join(',')]);
+  // everyone reached through someone, once each, with all the people they could go through
+  const reached = useMemo(() => {
+    const m = new Map<string, { target: Person; throughs: string[] }>();
+    for (const v of via) {
+      const k = v.target.id;
+      if (!m.has(k)) m.set(k, { target: v.target, throughs: [] });
+      if (!m.get(k)!.throughs.includes(v.through)) m.get(k)!.throughs.push(v.through);
+    }
+    return [...m.values()].sort((a, b) => b.throughs.length - a.throughs.length);
+  }, [via]);
+  const rows = [
+    ...people.map((p) => ({ kind: 'known' as const, p })),
+    ...reached.map((r) => ({ kind: 'via' as const, p: r.target, throughs: r.throughs })),
+  ];
+  const fold = useFold(rows, 5);
   if (!name) return <Summary env={env} />;
-  // a route through someone the student knows and a warm intro along the same chain are one way in, said once: the
-  // warm intro (it has the warmth and why) stays, and only the routes it does not cover are listed after it
-  const viaRows = via
-    .filter((v) => {
-      const key = chainKey([v.through, v.target.displayName]);
-      return !warm.some((x) => chainKey(x.hops).startsWith(key));
-    })
-    .map((v) => ({
-      key: `via:${v.target.id}`,
-      node: (
-        <li className="min-w-0 truncate" data-testid="company-via">
-          <Link to={`/people/${v.target.id}`} className="font-medium hover:underline">
-            {v.target.displayName}
-          </Link>
-          <span className="text-ink-3"> via {v.through}</span>
-        </li>
-      ),
-    }));
-  const counts = [
-    people.length ? `${people.length} you know there` : saved.length ? 'nobody you know there yet' : '',
-    saved.length ? `${saved.length} saved to contact` : '',
-    former.length ? `${former.length} used to be` : '',
-    via.length ? `${via.length} through someone you know` : '',
-  ].filter(Boolean);
+  const me = (p: Person) => ({ ...p, ...(live?.byId.get(p.id) ?? {}) }) as Person;
+  const alumni = people.filter((p) => me(p).isAlumni).length;
+  const waysIn = reached.length + warm.length;
+  const stats = [
+    { n: people.length, label: people.length === 1 ? 'person you know' : 'people you know' },
+    { n: alumni, label: alumni === 1 ? 'alum' : 'alumni' },
+    { n: waysIn, label: waysIn === 1 ? 'way in through others' : 'ways in through others' },
+  ];
   const steps = cardSteps('find_routes', env);
+  const subline = [
+    industry,
+    saved.length ? `${saved.length} saved to contact` : '',
+    former.length ? `${former.length} used to work there` : '',
+  ]
+    .filter(Boolean)
+    .join(' · ');
   return (
     <GlassCard kind="company">
-      <CardHead
-        lead={<CompanyLogo name={name} size={24} decorative />}
-        title={name}
-        chip={
-          target ? (
-            <Chip tone="accent">Target</Chip>
-          ) : industry ? (
-            <Chip tone="neutral">{industry}</Chip>
-          ) : undefined
-        }
-        sub={counts.join(' · ') || undefined}
-        href={env.href}
-      />
-      {people.length > 0 ? (
-        <>
-          {/* the people as cards, two to a row: who, where, how close, and Write to them */}
-          <div className="@container -mx-1">
-            <ul
-              className="grid grid-cols-1 @md:grid-cols-2 border-t border-line-2"
-              data-testid="company-people"
-            >
-              {fold.shown.map((p) => {
-                const live = livePeople?.get(p.id);
-                const me = (live ? { ...p, ...live } : p) as Person;
-                return (
-                  <PersonTile
-                    key={p.id}
-                    person={me}
-                    line={me.headline || me.currentTitle}
-                    href={`/map?reach=${encodeURIComponent(p.id)}`}
-                    onWrite={() => void actions.send(`Write to ${me.displayName}`)}
-                  />
-                );
-              })}
-            </ul>
+      <div className="flex items-center gap-3">
+        <CompanyLogo name={name} size={44} decorative />
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center gap-2 min-w-0">
+            <span className="text-[16.5px] font-semibold tracking-[-0.01em] truncate">{name}</span>
+            {target && <Chip tone="accent">Target</Chip>}
           </div>
+          {subline && <div className="text-[13px] text-ink-3 truncate">{subline}</div>}
+        </div>
+        {env.href && <OpenInApp href={env.href} className="shrink-0 self-start" />}
+      </div>
+      <dl className="mt-4 grid grid-cols-3 gap-3" data-testid="company-stats">
+        {stats.map((s) => (
+          <div key={s.label} className="min-w-0">
+            <dt className="sr-only">{s.label}</dt>
+            <dd className="text-[22px] font-semibold leading-none tabular">{s.n}</dd>
+            <div className="mt-1 text-[12.5px] text-ink-3 truncate">{s.label}</div>
+          </div>
+        ))}
+      </dl>
+      {rows.length > 0 ? (
+        <>
+          <ul
+            className="mt-4 divide-y divide-line-2 border-t border-line-2 -mx-1"
+            data-testid="company-people"
+          >
+            {fold.shown.map((r) => {
+              const p = me(r.p);
+              return (
+                <li
+                  key={`${r.kind}:${p.id}`}
+                  className="relative flex items-center gap-3 px-1 py-2.5"
+                  data-testid={r.kind === 'via' ? 'company-via' : 'company-known'}
+                >
+                  <Link
+                    to={`/map?reach=${encodeURIComponent(p.id)}`}
+                    className="absolute inset-0 rounded-[6px] hover:bg-canvas-2/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
+                    aria-label={`The ways to ${p.displayName}`}
+                  />
+                  <Avatar name={p.displayName} src={p.photoUrl} id={p.id} size={30} />
+                  <span className="relative min-w-0 flex-1 pointer-events-none">
+                    <span className="text-[14px] font-medium">{p.displayName}</span>
+                    {(p.currentTitle || p.headline) && (
+                      <span className="text-[13px] text-ink-3"> {p.currentTitle || p.headline}</span>
+                    )}
+                  </span>
+                  <span className="relative pointer-events-none">
+                    {r.kind === 'via' ? (
+                      <FaceStack
+                        people={r.throughs.map((t) => {
+                          const k = live?.byName.get(t);
+                          return { name: t, id: k?.id, photoUrl: k?.photoUrl };
+                        })}
+                      />
+                    ) : p.isAlumni ? (
+                      <span className="text-[12.5px] text-ink-2">Alum</span>
+                    ) : (
+                      <ClosenessSignal value={closenessOf(p)} />
+                    )}
+                  </span>
+                </li>
+              );
+            })}
+          </ul>
           {fold.more}
         </>
-      ) : saved.length === 0 ? (
-        <p className="text-ink-2">{env.summary}</p>
-      ) : null}
-      {saved.length > 0 && (
-        <div
-          className={people.length ? 'mt-2 pt-2 border-t border-line-2' : undefined}
-          data-testid="company-saved"
-        >
-          <div className="text-[12px] text-ink-3 mb-0.5">Saved to contact</div>
-          {saved.map((p) => (
-            <PersonRow key={p.id} person={p} sub={p.currentTitle} dense />
-          ))}
-        </div>
-      )}
-      {former.length > 0 && (
-        <p className="mt-3 text-[12.5px] text-ink-3 leading-relaxed line-clamp-2">
-          Used to work there: {former.map((p) => p.displayName).join(', ')}
-        </p>
+      ) : (
+        <p className="mt-3 text-ink-2">{env.summary}</p>
       )}
       <WarmIntros
         intros={warm}
-        after={viaRows}
-        title={viaRows.length ? 'Warmer ways in' : 'Warm intros'}
+        title="Warm intros"
         mapHref={`/map?reach=1&company=${encodeURIComponent(name)}`}
         divided
       />
+      <div className="mt-3 flex flex-wrap items-center gap-2">
+        {rows.length > 0 && (
+          <Link
+            to={`/map?reach=1&company=${encodeURIComponent(name)}`}
+            className="inline-flex items-center h-8 px-3 rounded-[6px] bg-accent text-[#fdfcfc] text-[13px] font-medium hover:bg-accent-2"
+            data-testid="company-see-all"
+          >
+            See all {rows.length} {rows.length === 1 ? 'person' : 'people'}
+          </Link>
+        )}
+      </div>
       <NextSteps steps={steps} send={actions.send} />
     </GlassCard>
   );
@@ -1738,6 +1827,106 @@ function splitIntent(text: string): { title: string; how?: string } {
   return { title: text.slice(0, at), how: how ? how.charAt(0).toUpperCase() + how.slice(1) : undefined };
 }
 
+/**
+ * A send waiting for the student (their pick, "summary with Send"): who it goes to, from where, the subject and when,
+ * then Send and Not yet. The exact words open below for a read or a change before it goes.
+ */
+function SendSummary({
+  draft,
+  title,
+  how,
+  blocked,
+  busy,
+  error,
+  onSend,
+  cancel,
+}: {
+  draft: OutboundMessage;
+  title: string;
+  how?: string;
+  blocked?: string;
+  busy: boolean;
+  error?: string;
+  onSend: (edited?: { body: string; subject?: string }) => Promise<string | undefined>;
+  cancel: ReactNode;
+}) {
+  const { user } = useSession();
+  const person = useLiveQuery(() => db.people.get(draft.personId), [draft.personId]);
+  const [open, setOpen] = useState(false);
+  const email = draft.channel === 'gmail';
+  const name = person?.displayName ?? 'them';
+  const rows: [string, ReactNode][] = [
+    ['To', email ? (draft.toEmail ?? person?.primaryEmail ?? name) : `${name} on LinkedIn`],
+    ['From', email ? (user?.email ?? 'Your Gmail') : 'Your LinkedIn'],
+    ...(email && draft.subject ? ([['Subject', draft.subject]] as [string, ReactNode][]) : []),
+    ['When', how ?? 'Now'],
+  ];
+  return (
+    <GlassCard kind="needs_confirmation" tone={blocked ? 'warn' : undefined}>
+      <div className="flex items-start justify-between gap-3">
+        <p className="text-[15px] font-semibold leading-snug" data-testid="confirm-text" title={title}>
+          {email ? `Send this email to ${name}?` : `Send this LinkedIn message to ${name}?`}
+        </p>
+        <Chip tone={blocked ? 'warn' : 'accent'}>Needs your approval</Chip>
+      </div>
+      <p className="sr-only">{title}</p>
+      {blocked && (
+        <p className="mt-1 text-[12.5px] text-warn flex items-start gap-1.5" data-testid="confirm-blocked">
+          <TriangleAlert size={13} className="shrink-0 mt-0.5" aria-hidden /> {blocked}
+        </p>
+      )}
+      <dl
+        className="mt-3 divide-y divide-line-2 border-y border-line-2 text-[13.5px]"
+        data-testid="confirm-facts"
+      >
+        {rows.map(([k, v]) => (
+          <div key={k} className="flex gap-3 py-2">
+            <dt className="w-20 shrink-0 text-ink-3">{k}</dt>
+            <dd className="min-w-0 flex-1 truncate">{v}</dd>
+          </div>
+        ))}
+      </dl>
+      {open ? (
+        <div className="mt-3" data-testid="confirm-exact">
+          <DraftEditor
+            draft={draft}
+            compact
+            thread
+            busy={busy || !!blocked}
+            approveLabel="Approve & send"
+            onApprove={(body, subject) => onSend({ body, subject })}
+            extraActions={cancel}
+          />
+        </div>
+      ) : (
+        <div className="mt-3 flex flex-wrap items-center gap-2">
+          <Button
+            variant="primary"
+            size="sm"
+            loading={busy}
+            disabled={!!blocked}
+            onClick={() => void onSend()}
+            data-testid="confirm-approve"
+          >
+            Send
+          </Button>
+          {cancel}
+          <button
+            type="button"
+            className="ml-auto inline-flex items-center gap-1 text-[12.5px] text-ink-2 hover:text-ink"
+            onClick={() => setOpen(true)}
+            aria-expanded={open}
+            data-testid="confirm-expand"
+          >
+            Read the exact text <ChevronDown size={13} aria-hidden />
+          </button>
+        </div>
+      )}
+      {error && <p className="mt-2 text-[12.5px] text-bad">{error}</p>}
+    </GlassCard>
+  );
+}
+
 /** A risky action waits here: nothing runs until Approve. A blocked one says why and keeps Approve off. */
 function ConfirmCard({
   block,
@@ -1782,6 +1971,19 @@ function ConfirmCard({
     </Button>
   );
   const { title, how } = editable ? splitIntent(text) : { title: text, how: undefined };
+  if (editable && draft && !decided)
+    return (
+      <SendSummary
+        draft={draft}
+        title={title}
+        how={how}
+        blocked={c.blockedReason}
+        busy={busy}
+        error={error}
+        onSend={(edited) => approve(edited)}
+        cancel={cancel}
+      />
+    );
   return (
     <GlassCard kind="needs_confirmation" tone={c.blockedReason ? 'warn' : undefined}>
       <div className="flex items-start gap-2 mb-1">

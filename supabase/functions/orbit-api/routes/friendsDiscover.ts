@@ -47,6 +47,10 @@ type Candidate = {
   current_org: string | null;
   last_seen_at: Date | string | null;
   in_contacts: number | null;
+  /** the student's own record of them, when they are in the student's people, so the name opens it */
+  person_id?: string | null;
+  /** their LinkedIn, from the student's record of them or their own */
+  linkedin_url?: string | null;
   knows_me: boolean;
   mutual: number;
   same_school: boolean;
@@ -79,7 +83,10 @@ async function candidates(
     my_friends as (select other from rel where status = 'active'),
     mine as (
       select pi.value_norm as email,
-             max(coalesce(ts.score, round(coalesce(p.strength, 0) * 100)))::int as closeness
+             max(coalesce(ts.score, round(coalesce(p.strength, 0) * 100)))::int as closeness,
+             (array_agg(p.id::text order by p.updated_at desc))[1] as person_id,
+             (array_agg(p.linkedin_url order by p.updated_at desc) filter (where p.linkedin_url is not null))[1]
+               as linkedin_url
         from orbit.person_identities pi
         join orbit.people p on p.id = pi.person_id and p.deleted_at is null and p.merged_into is null
         left join orbit.tie_scores ts on ts.person_id = p.id and ts.user_id = p.user_id
@@ -89,6 +96,12 @@ async function candidates(
       select u.id, u.full_name, u.first_name, u.last_name, u.email, u.avatar_url, u.school, u.grad_year,
              u.current_title, u.current_org, u.last_seen_at,
              (select closeness from mine where mine.email = lower(u.email)) as in_contacts,
+             (select person_id from mine where mine.email = lower(u.email)) as person_id,
+             coalesce(
+               (select linkedin_url from mine where mine.email = lower(u.email)),
+               (select p4.linkedin_url from orbit.people p4
+                 where p4.user_id = u.id and p4.is_self and p4.deleted_at is null and p4.linkedin_url is not null
+                 limit 1)) as linkedin_url,
              exists (
                select 1 from orbit.person_identities pi2
                  join orbit.people p2 on p2.id = pi2.person_id and p2.deleted_at is null
@@ -160,6 +173,8 @@ function view(c: Candidate, me: string): FriendSuggestion {
     // the reason and the headline are never the same words twice ("Cornell '26" under "Cornell '26")
     headline: headline === reason ? null : headline,
     connections: c.connections,
+    ...(c.person_id ? { personId: c.person_id } : {}),
+    ...(c.linkedin_url ? { linkedinUrl: c.linkedin_url } : {}),
     reason,
     state: !pending ? 'none' : c.requested_by === me ? 'requested' : 'incoming',
     ...(pending && c.requested_by !== me && c.friendship_id ? { friendshipId: c.friendship_id } : {}),
