@@ -8554,13 +8554,10 @@ var BLOCKED_SOURCE_DOMAINS = [
   "echovita.com",
   "dignitymemorial.com",
   "everloved.com",
-  // personal social accounts
+  // personal social accounts (public Instagram, TikTok and Reddit posts are allowed: the owner asked for them)
   "facebook.com",
-  "instagram.com",
-  "tiktok.com",
   "snapchat.com",
   "pinterest.com",
-  "reddit.com",
   "tumblr.com",
   "vk.com",
   "ok.ru",
@@ -19572,6 +19569,98 @@ var replyRoutes = {
   "/replies/answer": { method: "POST", auth: true, run: answer }
 };
 
+// supabase/functions/_shared/providers/webSearch.ts
+var PARALLEL_BASE = "https://api.parallel.ai";
+var SERPER_BASE = "https://google.serper.dev";
+var PARALLEL_SEARCH_USD = 1e-3;
+var SERPER_SEARCH_USD = 1e-3;
+var PARALLEL_QUERIES_PER_REQUEST = 5;
+var parallelResponse = z.looseObject({
+  results: z.array(
+    z.looseObject({
+      url: z.string(),
+      title: z.string().nullish(),
+      publish_date: z.string().nullish(),
+      excerpts: z.array(z.string()).nullish()
+    })
+  ).default([])
+});
+var serperResponse = z.looseObject({
+  organic: z.array(
+    z.looseObject({
+      link: z.string(),
+      title: z.string().nullish(),
+      snippet: z.string().nullish(),
+      date: z.string().nullish()
+    })
+  ).default([])
+});
+function createParallelSearch(opts) {
+  const base = trimBase(opts.baseUrl ?? PARALLEL_BASE);
+  return {
+    name: "parallel",
+    configured: !!opts.apiKey,
+    usdPerCall: PARALLEL_SEARCH_USD,
+    queriesPerCall: PARALLEL_QUERIES_PER_REQUEST,
+    async search(queries, objective) {
+      if (!opts.apiKey) return unconfigured2("parallel");
+      const r = await requestJson(opts, {
+        provider: "parallel",
+        url: `${base}/v1/search`,
+        method: "POST",
+        headers: { "x-api-key": opts.apiKey },
+        body: {
+          objective,
+          search_queries: queries.slice(0, PARALLEL_QUERIES_PER_REQUEST),
+          mode: "fast",
+          max_chars_total: 12e3
+        },
+        schema: parallelResponse
+      });
+      if (!r.ok) return r;
+      return {
+        ok: true,
+        value: r.value.results.map((x) => ({
+          url: x.url,
+          title: x.title ?? void 0,
+          snippet: (x.excerpts ?? []).join(" … ").slice(0, 1500) || void 0,
+          published: x.publish_date ?? null
+        }))
+      };
+    }
+  };
+}
+function createSerperSearch(opts) {
+  const base = trimBase(opts.baseUrl ?? SERPER_BASE);
+  return {
+    name: "serper",
+    configured: !!opts.apiKey,
+    usdPerCall: SERPER_SEARCH_USD,
+    queriesPerCall: 1,
+    async search(queries) {
+      if (!opts.apiKey) return unconfigured2("serper");
+      const r = await requestJson(opts, {
+        provider: "serper",
+        url: `${base}/search`,
+        method: "POST",
+        headers: { "X-API-KEY": opts.apiKey },
+        body: { q: queries[0] ?? "", num: 10, gl: "us", hl: "en" },
+        schema: serperResponse
+      });
+      if (!r.ok) return r;
+      return {
+        ok: true,
+        value: r.value.organic.map((x) => ({
+          url: x.link,
+          title: x.title ?? void 0,
+          snippet: x.snippet ?? void 0,
+          published: x.date ?? null
+        }))
+      };
+    }
+  };
+}
+
 // supabase/functions/_shared/research/identity.ts
 var COMMON_WORD_ORGS = new Set(
   [
@@ -19612,6 +19701,145 @@ var COMMON_WORD_ORGS = new Set(
   ].map((s) => s.toLowerCase())
 );
 
+// supabase/functions/_shared/research/pageText.ts
+var PAGE_TEXT_CHARS = 9e3;
+var MAX_BYTES = 15e5;
+var UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0 Safari/537.36";
+var ENTITIES = {
+  amp: "&",
+  lt: "<",
+  gt: ">",
+  quot: '"',
+  apos: "'",
+  nbsp: " ",
+  rsquo: "’",
+  lsquo: "‘",
+  rdquo: "”",
+  ldquo: "“",
+  mdash: "—",
+  ndash: "–",
+  hellip: "…"
+};
+function decodeEntities2(s) {
+  return s.replace(/&#(\d+);/g, (_, n) => String.fromCodePoint(Number(n))).replace(/&#x([0-9a-f]+);/gi, (_, n) => String.fromCodePoint(Number.parseInt(n, 16))).replace(/&([a-z]+);/gi, (m, n) => ENTITIES[n.toLowerCase()] ?? m);
+}
+function meta(html, key) {
+  const re = new RegExp(
+    `<meta[^>]+(?:name|property)=["']${key}["'][^>]*content=["']([^"']*)["']|<meta[^>]+content=["']([^"']*)["'][^>]*(?:name|property)=["']${key}["']`,
+    "i"
+  );
+  const m = re.exec(html);
+  const v = m?.[1] ?? m?.[2];
+  return v ? decodeEntities2(v).trim() : void 0;
+}
+function htmlToText(html) {
+  const title = decodeEntities2(/<title[^>]*>([\s\S]*?)<\/title>/i.exec(html)?.[1] ?? "").trim() || void 0;
+  const description = meta(html, "og:description") ?? meta(html, "description");
+  const ogTitle = meta(html, "og:title");
+  const published = meta(html, "article:published_time") ?? meta(html, "og:published_time");
+  const body2 = html.replace(/<!--[\s\S]*?-->/g, " ").replace(/<(script|style|noscript|svg|template|iframe|head|nav|footer|form)\b[\s\S]*?<\/\1>/gi, " ").replace(/<br\s*\/?>/gi, "\n").replace(/<\/(p|div|li|h[1-6]|tr|section|article|header|blockquote|dd|dt)>/gi, "\n").replace(/<[^>]+>/g, " ");
+  const text3 = decodeEntities2(body2).split("\n").map((l) => l.replace(/[ \t\f\v ]+/g, " ").trim()).filter((l) => l.length > 1).join("\n").replace(/\n{3,}/g, "\n\n");
+  const head = [ogTitle && ogTitle !== title ? ogTitle : "", description ?? ""].filter(Boolean).join("\n");
+  return { title: title ?? ogTitle, text: [head, text3].filter(Boolean).join("\n\n"), published };
+}
+var PROFILE_RES = [
+  /^https?:\/\/(?:www\.)?github\.com\/([A-Za-z0-9-]{1,39})\/?$/i,
+  /^https?:\/\/(?:www\.)?(?:x|twitter)\.com\/([A-Za-z0-9_]{1,15})\/?$/i,
+  /^https?:\/\/(?:www\.)?instagram\.com\/([A-Za-z0-9_.]{1,30})\/?$/i,
+  /^https?:\/\/(?:www\.)?youtube\.com\/@([A-Za-z0-9_.-]{3,30})\/?$/i,
+  /^https?:\/\/(?:www\.)?tiktok\.com\/@([A-Za-z0-9_.]{2,24})\/?$/i,
+  /^https?:\/\/(?:www\.)?threads\.(?:net|com)\/@([A-Za-z0-9_.]{1,30})\/?$/i,
+  /^https?:\/\/(?:www\.)?medium\.com\/@([A-Za-z0-9_.-]{1,30})\/?$/i,
+  /^https?:\/\/([a-z0-9-]{2,40})\.substack\.com\/?$/i,
+  /^https?:\/\/(?:www\.)?linktr\.ee\/([A-Za-z0-9_.]{2,30})\/?$/i,
+  /^https?:\/\/(?:www\.)?behance\.net\/([A-Za-z0-9_-]{2,30})\/?$/i,
+  /^https?:\/\/(?:www\.)?dribbble\.com\/([A-Za-z0-9_-]{2,30})\/?$/i,
+  /^https?:\/\/(?:www\.)?devpost\.com\/([A-Za-z0-9_-]{2,40})\/?$/i,
+  /^https?:\/\/(?:www\.)?huggingface\.co\/([A-Za-z0-9_-]{2,40})\/?$/i,
+  /^https?:\/\/bsky\.app\/profile\/([A-Za-z0-9_.-]{3,60})\/?$/i
+];
+var NOT_HANDLES = /* @__PURE__ */ new Set([
+  "about",
+  "explore",
+  "home",
+  "login",
+  "signup",
+  "search",
+  "settings",
+  "share",
+  "intent",
+  "features",
+  "pricing",
+  "topics",
+  "trending",
+  "sponsors",
+  "orgs",
+  "www",
+  "help",
+  "privacy",
+  "terms"
+]);
+function profileHandle(url) {
+  for (const re of PROFILE_RES) {
+    const m = re.exec(url.trim());
+    if (m?.[1] && !NOT_HANDLES.has(m[1].toLowerCase())) return m[1];
+  }
+  return void 0;
+}
+function profileLinks(html, base) {
+  const out = /* @__PURE__ */ new Set();
+  for (const m of html.matchAll(/href=["']([^"'#]+)["']/gi)) {
+    let u2;
+    try {
+      u2 = new URL(decodeEntities2(m[1]), base).toString();
+    } catch {
+      continue;
+    }
+    if (profileHandle(u2)) out.add(u2.replace(/\/+$/, ""));
+  }
+  return [...out].slice(0, 40);
+}
+async function fetchPage(url, opts = {}) {
+  if (isBlockedSource(url) || !/^https?:\/\//i.test(url)) return void 0;
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), opts.timeoutMs ?? 6e3);
+  try {
+    const r = await (opts.fetch ?? fetch)(url, {
+      redirect: "follow",
+      signal: ctrl.signal,
+      headers: { "user-agent": UA, accept: "text/html,application/xhtml+xml", "accept-language": "en-US,en" }
+    });
+    if (!r.ok) return void 0;
+    const type = r.headers.get("content-type") ?? "";
+    if (type && !/html|xml|text\/plain/i.test(type)) return void 0;
+    const raw = (await r.text()).slice(0, MAX_BYTES);
+    const finalUrl = r.url || url;
+    if (/text\/plain/i.test(type))
+      return { url: finalUrl, text: raw.slice(0, PAGE_TEXT_CHARS), profiles: [], published: null };
+    const read2 = htmlToText(raw);
+    if (!read2.text.trim()) return void 0;
+    return {
+      url: finalUrl,
+      title: read2.title,
+      text: read2.text.slice(0, PAGE_TEXT_CHARS),
+      profiles: profileLinks(raw, finalUrl),
+      published: read2.published ?? null
+    };
+  } catch {
+    return void 0;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+// supabase/functions/_shared/research/investigate.ts
+var extractSchema = z.object({
+  match: z.enum(["yes", "likely", "no"]),
+  why: z.string(),
+  facts: z.array(z.object({ text: z.string(), date: z.string(), quote: z.string() })),
+  leads: z.array(z.string())
+});
+
 // supabase/functions/_shared/research/prompts.ts
 var DOSSIER_SYSTEM = [
   "You write a research brief about one person for the student named in <student>, toward the goal written there.",
@@ -19622,6 +19850,10 @@ var DOSSIER_SYSTEM = [
   `"careful" is about their company only (recent layoffs, a reorganization, a product shut down, a hiring freeze), each item with its source ids; never anything about the person's own life. Leave it empty when there is nothing.`,
   '"company" is what is happening at their company that matters to the student (team news, launches, hiring), from company sources, each with its source ids. Leave it empty when there are no company sources.',
   `Openers: up to three single sentences the student could open a first message with, each a statement (not a question) of at most 25 words about something they made, said or did. Each rests on one cited source and uses only details that source states, in its words where you can (a title, a claim, a number); the student's reaction may be added ("stuck with me"). Never flattery, never about their private life.`,
+  "Dig past the obvious. The student wants the person to see they did real homework, so what matters most is what a quick look at their LinkedIn or a first-page search would not show: the club or chapter they ran, an award or competition result an organization published, a hackathon project, a side project or repo, a talk, podcast or panel, a post on their own blog or newsletter, a race, tournament or team they were on, a cause or nonprofit they volunteer for, a hobby or creative work they put out publicly, something specific they wrote or said. Prefer these over their job titles and schools, which the student can already see.",
+  `"deep_cuts": up to 6 of those hard-to-find things, the most specific and least obvious first, each one sentence that names the thing exactly and gives its year when the source has one (the club, the award, the project, the race, the post's title) with its source ids. Use only web sources (never the LinkedIn profile or posts, which the student has already read). Their own public interests and pursuits outside work count (a sport, music, writing, a cause), as long as they made them public themselves or an organization published them. Leave it empty when the sources hold nothing beyond LinkedIn; never pad it with what LinkedIn already says.`,
+  "Go back through their whole timeline, not just the last few years: an old source is often the best one (a college club, a team they played on, a 2015 award, an early project or post). Say the year so the student knows how far back it is, and never present an old role or fact as current.",
+  'Openers: when "deep_cuts" has anything, at least one opener rests on one of them: a specific detail most people would not know to mention.',
   `Most people have little online beyond LinkedIn. When the only sources are their LinkedIn and the student's own history, say so plainly in "who" (for example "Not much is public about Dana beyond LinkedIn.") and keep to what LinkedIn says; do not pad.`,
   'Also lay out who they are in full, from the sources only: "career" (every role you can source, newest first, with start and end as written, e.g. "2021" or "Mar 2022"), "education", "profiles" (their own pages: LinkedIn, X, GitHub, a personal site, Google Scholar; only URLs that appear in the sources), "highlights" (up to 8 things they made or said that matter: posts, articles, talks, podcasts, projects, papers, news, awards, each with the URL of its source) and "topics" (up to 6 short phrases for what they work on or talk about).'
 ].join("\n");
@@ -19684,7 +19916,12 @@ var dossierSchema = z.object({
   ).optional(),
   topics: z.array(z.string()).optional(),
   // v2: what is happening at their company, from company pages (Go deeper)
-  company: z.array(z.object({ text: z.string(), source_ids: sourceIds })).optional()
+  company: z.array(z.object({ text: z.string(), source_ids: sourceIds })).optional(),
+  // v4: the hard-to-find, specific things deep research turned up beyond LinkedIn (clubs, awards, projects, talks,
+  // their public pursuits outside work), each from a web source. Kept to text and ids on purpose: a kind enum and a
+  // date field made the compiled output grammar too large for the API ("The compiled grammar is too large"), and
+  // every brief fell back to LinkedIn alone. The year goes in the sentence instead.
+  deep_cuts: z.array(z.object({ text: z.string(), source_ids: sourceIds })).optional()
 });
 var supportSystem = [
   "You check a research brief against its sources. For each numbered claim, read the sources it cites and give one verdict:",
@@ -21197,229 +21434,6 @@ var settingsRoutes = {
 
 // supabase/functions/_shared/sourcing/run.ts
 import Anthropic2 from "npm:@anthropic-ai/sdk@0.133.0";
-
-// supabase/functions/_shared/providers/webSearch.ts
-var PARALLEL_BASE = "https://api.parallel.ai";
-var SERPER_BASE = "https://google.serper.dev";
-var PARALLEL_SEARCH_USD = 1e-3;
-var SERPER_SEARCH_USD = 1e-3;
-var PARALLEL_QUERIES_PER_REQUEST = 5;
-var parallelResponse = z.looseObject({
-  results: z.array(
-    z.looseObject({
-      url: z.string(),
-      title: z.string().nullish(),
-      publish_date: z.string().nullish(),
-      excerpts: z.array(z.string()).nullish()
-    })
-  ).default([])
-});
-var serperResponse = z.looseObject({
-  organic: z.array(
-    z.looseObject({
-      link: z.string(),
-      title: z.string().nullish(),
-      snippet: z.string().nullish(),
-      date: z.string().nullish()
-    })
-  ).default([])
-});
-function createParallelSearch(opts) {
-  const base = trimBase(opts.baseUrl ?? PARALLEL_BASE);
-  return {
-    name: "parallel",
-    configured: !!opts.apiKey,
-    usdPerCall: PARALLEL_SEARCH_USD,
-    queriesPerCall: PARALLEL_QUERIES_PER_REQUEST,
-    async search(queries, objective) {
-      if (!opts.apiKey) return unconfigured2("parallel");
-      const r = await requestJson(opts, {
-        provider: "parallel",
-        url: `${base}/v1/search`,
-        method: "POST",
-        headers: { "x-api-key": opts.apiKey },
-        body: {
-          objective,
-          search_queries: queries.slice(0, PARALLEL_QUERIES_PER_REQUEST),
-          mode: "fast",
-          max_chars_total: 12e3
-        },
-        schema: parallelResponse
-      });
-      if (!r.ok) return r;
-      return {
-        ok: true,
-        value: r.value.results.map((x) => ({
-          url: x.url,
-          title: x.title ?? void 0,
-          snippet: (x.excerpts ?? []).join(" … ").slice(0, 1500) || void 0,
-          published: x.publish_date ?? null
-        }))
-      };
-    }
-  };
-}
-function createSerperSearch(opts) {
-  const base = trimBase(opts.baseUrl ?? SERPER_BASE);
-  return {
-    name: "serper",
-    configured: !!opts.apiKey,
-    usdPerCall: SERPER_SEARCH_USD,
-    queriesPerCall: 1,
-    async search(queries) {
-      if (!opts.apiKey) return unconfigured2("serper");
-      const r = await requestJson(opts, {
-        provider: "serper",
-        url: `${base}/search`,
-        method: "POST",
-        headers: { "X-API-KEY": opts.apiKey },
-        body: { q: queries[0] ?? "", num: 10, gl: "us", hl: "en" },
-        schema: serperResponse
-      });
-      if (!r.ok) return r;
-      return {
-        ok: true,
-        value: r.value.organic.map((x) => ({
-          url: x.link,
-          title: x.title ?? void 0,
-          snippet: x.snippet ?? void 0,
-          published: x.date ?? null
-        }))
-      };
-    }
-  };
-}
-
-// supabase/functions/_shared/research/pageText.ts
-var PAGE_TEXT_CHARS = 9e3;
-var MAX_BYTES = 15e5;
-var UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0 Safari/537.36";
-var ENTITIES = {
-  amp: "&",
-  lt: "<",
-  gt: ">",
-  quot: '"',
-  apos: "'",
-  nbsp: " ",
-  rsquo: "’",
-  lsquo: "‘",
-  rdquo: "”",
-  ldquo: "“",
-  mdash: "—",
-  ndash: "–",
-  hellip: "…"
-};
-function decodeEntities2(s) {
-  return s.replace(/&#(\d+);/g, (_, n) => String.fromCodePoint(Number(n))).replace(/&#x([0-9a-f]+);/gi, (_, n) => String.fromCodePoint(Number.parseInt(n, 16))).replace(/&([a-z]+);/gi, (m, n) => ENTITIES[n.toLowerCase()] ?? m);
-}
-function meta(html, key) {
-  const re = new RegExp(
-    `<meta[^>]+(?:name|property)=["']${key}["'][^>]*content=["']([^"']*)["']|<meta[^>]+content=["']([^"']*)["'][^>]*(?:name|property)=["']${key}["']`,
-    "i"
-  );
-  const m = re.exec(html);
-  const v = m?.[1] ?? m?.[2];
-  return v ? decodeEntities2(v).trim() : void 0;
-}
-function htmlToText(html) {
-  const title = decodeEntities2(/<title[^>]*>([\s\S]*?)<\/title>/i.exec(html)?.[1] ?? "").trim() || void 0;
-  const description = meta(html, "og:description") ?? meta(html, "description");
-  const ogTitle = meta(html, "og:title");
-  const published = meta(html, "article:published_time") ?? meta(html, "og:published_time");
-  const body2 = html.replace(/<!--[\s\S]*?-->/g, " ").replace(/<(script|style|noscript|svg|template|iframe|head|nav|footer|form)\b[\s\S]*?<\/\1>/gi, " ").replace(/<br\s*\/?>/gi, "\n").replace(/<\/(p|div|li|h[1-6]|tr|section|article|header|blockquote|dd|dt)>/gi, "\n").replace(/<[^>]+>/g, " ");
-  const text3 = decodeEntities2(body2).split("\n").map((l) => l.replace(/[ \t\f\v ]+/g, " ").trim()).filter((l) => l.length > 1).join("\n").replace(/\n{3,}/g, "\n\n");
-  const head = [ogTitle && ogTitle !== title ? ogTitle : "", description ?? ""].filter(Boolean).join("\n");
-  return { title: title ?? ogTitle, text: [head, text3].filter(Boolean).join("\n\n"), published };
-}
-var PROFILE_RES = [
-  /^https?:\/\/(?:www\.)?github\.com\/([A-Za-z0-9-]{1,39})\/?$/i,
-  /^https?:\/\/(?:www\.)?(?:x|twitter)\.com\/([A-Za-z0-9_]{1,15})\/?$/i,
-  /^https?:\/\/(?:www\.)?instagram\.com\/([A-Za-z0-9_.]{1,30})\/?$/i,
-  /^https?:\/\/(?:www\.)?youtube\.com\/@([A-Za-z0-9_.-]{3,30})\/?$/i,
-  /^https?:\/\/(?:www\.)?tiktok\.com\/@([A-Za-z0-9_.]{2,24})\/?$/i,
-  /^https?:\/\/(?:www\.)?threads\.(?:net|com)\/@([A-Za-z0-9_.]{1,30})\/?$/i,
-  /^https?:\/\/(?:www\.)?medium\.com\/@([A-Za-z0-9_.-]{1,30})\/?$/i,
-  /^https?:\/\/([a-z0-9-]{2,40})\.substack\.com\/?$/i,
-  /^https?:\/\/(?:www\.)?linktr\.ee\/([A-Za-z0-9_.]{2,30})\/?$/i,
-  /^https?:\/\/(?:www\.)?behance\.net\/([A-Za-z0-9_-]{2,30})\/?$/i,
-  /^https?:\/\/(?:www\.)?dribbble\.com\/([A-Za-z0-9_-]{2,30})\/?$/i,
-  /^https?:\/\/(?:www\.)?devpost\.com\/([A-Za-z0-9_-]{2,40})\/?$/i,
-  /^https?:\/\/(?:www\.)?huggingface\.co\/([A-Za-z0-9_-]{2,40})\/?$/i,
-  /^https?:\/\/bsky\.app\/profile\/([A-Za-z0-9_.-]{3,60})\/?$/i
-];
-var NOT_HANDLES = /* @__PURE__ */ new Set([
-  "about",
-  "explore",
-  "home",
-  "login",
-  "signup",
-  "search",
-  "settings",
-  "share",
-  "intent",
-  "features",
-  "pricing",
-  "topics",
-  "trending",
-  "sponsors",
-  "orgs",
-  "www",
-  "help",
-  "privacy",
-  "terms"
-]);
-function profileHandle(url) {
-  for (const re of PROFILE_RES) {
-    const m = re.exec(url.trim());
-    if (m?.[1] && !NOT_HANDLES.has(m[1].toLowerCase())) return m[1];
-  }
-  return void 0;
-}
-function profileLinks(html, base) {
-  const out = /* @__PURE__ */ new Set();
-  for (const m of html.matchAll(/href=["']([^"'#]+)["']/gi)) {
-    let u2;
-    try {
-      u2 = new URL(decodeEntities2(m[1]), base).toString();
-    } catch {
-      continue;
-    }
-    if (profileHandle(u2)) out.add(u2.replace(/\/+$/, ""));
-  }
-  return [...out].slice(0, 40);
-}
-async function fetchPage(url, opts = {}) {
-  if (isBlockedSource(url) || !/^https?:\/\//i.test(url)) return void 0;
-  const ctrl = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(), opts.timeoutMs ?? 6e3);
-  try {
-    const r = await (opts.fetch ?? fetch)(url, {
-      redirect: "follow",
-      signal: ctrl.signal,
-      headers: { "user-agent": UA, accept: "text/html,application/xhtml+xml", "accept-language": "en-US,en" }
-    });
-    if (!r.ok) return void 0;
-    const type = r.headers.get("content-type") ?? "";
-    if (type && !/html|xml|text\/plain/i.test(type)) return void 0;
-    const raw = (await r.text()).slice(0, MAX_BYTES);
-    const finalUrl = r.url || url;
-    if (/text\/plain/i.test(type))
-      return { url: finalUrl, text: raw.slice(0, PAGE_TEXT_CHARS), profiles: [], published: null };
-    const read2 = htmlToText(raw);
-    if (!read2.text.trim()) return void 0;
-    return {
-      url: finalUrl,
-      title: read2.title,
-      text: read2.text.slice(0, PAGE_TEXT_CHARS),
-      profiles: profileLinks(raw, finalUrl),
-      published: read2.published ?? null
-    };
-  } catch {
-    return void 0;
-  } finally {
-    clearTimeout(timer);
-  }
-}
 
 // supabase/functions/_shared/research/engineWeb.ts
 var PAGE_FETCH_MS = 6e3;

@@ -264,13 +264,15 @@ describe('guards: what research never reads or writes', () => {
       'https://www.gofundme.com/f/x',
       'https://www.legacy.com/us/obituaries/x',
       'https://www.facebook.com/dana',
-      'https://www.instagram.com/dana',
       'https://m.facebook.com/dana',
       'javascript:alert(1)',
     ])
       expect(isBlockedSource(url), url).toBe(true);
     for (const url of [
       'https://github.com/dana',
+      'https://www.instagram.com/dana',
+      'https://www.tiktok.com/@dana',
+      'https://www.reddit.com/user/dana',
       'https://dana.substack.com/p/x',
       'https://www.youtube.com/watch?v=1',
     ])

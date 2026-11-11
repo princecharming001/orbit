@@ -230,7 +230,8 @@ describe('the investigator loop', () => {
     expect(qs).toContain('"Bhavya Mehta" NYU Stern School of Business');
     expect(qs.some((q) => q.includes('site:instagram.com'))).toBe(true);
     expect(qs.some((q) => /award OR officer/.test(q))).toBe(true);
-    expect(qs.length).toBeLessThanOrEqual(16);
+    expect(qs.length).toBeLessThanOrEqual(24);
+    expect(qs.some((q) => /volunteer OR nonprofit/.test(q))).toBe(true);
   });
 
   it('turns leads into new searches with their name, never one already run or their name alone', () => {
