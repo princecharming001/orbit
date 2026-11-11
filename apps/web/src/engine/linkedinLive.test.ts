@@ -13,6 +13,7 @@ import {
   linkedInProgress,
   liveLinkedInAccount,
   liveLinkedInAvailable,
+  MUTUALS_KEEP_MS,
   MUTUALS_TIMEOUT_MS,
   mutualsFor,
   readsBackAt,
@@ -512,6 +513,27 @@ describe('mutual connections', () => {
     expect(await mutualsFor(user, daniel)).toMatchObject({ ok: true });
     expect(await mutualsFor(user, (await db.people.get('p_daniel_dup'))!)).toMatchObject({ ok: true });
     expect(asked).toBe(1);
+  });
+
+  it('keeps LinkedIn’s answer two weeks, then asks again (plan 41)', async () => {
+    await connectLinkedInLive(user);
+    const daniel = (await people()).find((p) => p.firstName === 'Daniel')!;
+    let asked = 0;
+    vi.stubGlobal('fetch', (url: string) => {
+      if (!url.endsWith('/mutuals')) return Promise.resolve(new Response('{}', { status: 404 }));
+      asked++;
+      const answer = { verified: true, mutuals: [{ name: 'Sana Ahmed', member_id: 'm_sana' }] };
+      return Promise.resolve(new Response(JSON.stringify(answer), { status: 200 }));
+    });
+    const day0 = new Date('2026-11-01T10:00:00Z');
+    const later = (ms: number) => new Date(day0.getTime() + ms);
+    expect(await mutualsFor(user, daniel, { now: day0 })).toMatchObject({ ok: true });
+    // the next day, and on the thirteenth: the kept answer, nothing read
+    expect(await mutualsFor(user, daniel, { now: later(86_400_000) })).toMatchObject({ ok: true });
+    expect(await mutualsFor(user, daniel, { now: later(MUTUALS_KEEP_MS - 1) })).toMatchObject({ ok: true });
+    expect(asked).toBe(1);
+    expect(await mutualsFor(user, daniel, { now: later(MUTUALS_KEEP_MS + 1) })).toMatchObject({ ok: true });
+    expect(asked).toBe(2);
   });
 
   it("today's reads used up: says when they come back, as a limit, not an error to retry", async () => {

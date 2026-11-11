@@ -428,18 +428,21 @@ describe('enrichment routes of the connector proxy', () => {
     for (let i = 0; i < 3; i++) expect(await (await photo()).json()).toMatchObject({ ok: true });
     expect(await (await photo()).json()).toMatchObject({ ok: false, reason: 'limit' });
     expect(await (await read()).json()).toMatchObject({ ok: true });
+    // a company page is not a profile view: it comes out of the company ledger and leaves the profile reads alone
     expect(await (await company()).json()).toMatchObject({ ok: true });
+    expect(await (await read()).json()).toMatchObject({ ok: true });
     expect(await (await read()).json()).toEqual({
       ok: false,
       reason: 'limit',
       message: 'Orbit has read as much from LinkedIn as it allows today. It carries on tomorrow.',
     });
-    expect(await (await company()).json()).toMatchObject({ ok: false, reason: 'limit' });
+    expect(await (await company()).json()).toMatchObject({ ok: true });
     // a refused photo costs the route reads nothing
     expect(await (await photo()).json()).toMatchObject({ ok: false, reason: 'limit' });
     for (let i = 0; i < 4; i++) expect(await (await route()).json()).toMatchObject({ ok: true });
     expect(await (await route()).json()).toMatchObject({ ok: false, reason: 'limit' });
-    expect(upstream).toHaveLength(9);
+    // 3 photos, 2 reads, 4 route reads and 2 company pages
+    expect(upstream).toHaveLength(11);
   });
 
   it('finds a company by its name only when exactly one LinkedIn company has that name', async () => {

@@ -45,7 +45,9 @@ function person(over: Partial<Person> & Pick<Person, 'id' | 'firstName' | 'lastN
   };
 }
 
-let calls: { identifier: string }[];
+let calls: { identifier: string; known?: string; keepOnly?: boolean }[];
+/** A photo in Orbit's own storage (plan 41): it never expires and is never asked about again. */
+const KEPT = 'https://orbit.test/storage/v1/object/public/people-photos/abc.jpg';
 let answers: Record<string, unknown>;
 
 beforeEach(async () => {
@@ -72,9 +74,18 @@ beforeEach(async () => {
   answers = {};
   vi.stubGlobal('fetch', async (url: string, init: RequestInit) => {
     expect(url).toBe(`${BASE}/photo`);
-    const body = JSON.parse(init.body as string) as { identifier: string; token?: string };
+    const body = JSON.parse(init.body as string) as {
+      identifier: string;
+      token?: string;
+      known?: string;
+      keepOnly?: boolean;
+    };
     expect(body.token).toBe('tok');
-    calls.push({ identifier: body.identifier });
+    calls.push({
+      identifier: body.identifier,
+      ...(body.known ? { known: body.known } : {}),
+      ...(body.keepOnly ? { keepOnly: true } : {}),
+    });
     const a = answers[body.identifier] ?? { ok: false, reason: 'not_found', message: 'no' };
     return new Response(JSON.stringify(a), { status: 200, headers: { 'content-type': 'application/json' } });
   });
@@ -154,7 +165,7 @@ describe('the photo queue', () => {
         linkedinMemberId: 'm_seen',
         createdAt: '2026-05-01',
       }),
-      // has a fresh photo: not asked about
+      // has a working LinkedIn photo: never read, only copied into Orbit's storage once nobody is missing one
       person({
         id: 'p_ok',
         firstName: 'All',
@@ -180,10 +191,15 @@ describe('the photo queue', () => {
     const old = (await db.people.get('p_old'))!;
     expect(old.photoUrl).toBeUndefined();
     expect(old.linkedinMemberId).toBe('ACo_old');
-    // everyone due was asked once: nothing more today, and not again for a week
-    expect(await refreshOnePhoto(user, { now: at(3 * GAP) })).toEqual({ step: 'idle' });
+    // everyone missing a photo was asked once; now the working link is copied (plan 41): a copy, not a read
+    answers.m_ok = { ok: true, photo: { pictureUrl: KEPT, kept: true } };
+    expect(await refreshOnePhoto(user, { now: at(3 * GAP) })).toEqual({ step: 'kept', personId: 'p_ok' });
+    expect(calls[3]).toEqual({ identifier: 'm_ok', known: licdn('ok'), keepOnly: true });
+    expect((await db.people.get('p_ok'))!.photoUrl).toBe(KEPT);
+    // nothing more today, and not again for a week
+    expect(await refreshOnePhoto(user, { now: at(4 * GAP) })).toEqual({ step: 'idle' });
     expect(await refreshOnePhoto(user, { now: at(PHOTO_RETRY_MS - 1) })).toEqual({ step: 'idle' });
-    expect(calls).toHaveLength(3);
+    expect(calls).toHaveLength(4);
   });
 
   it('spaces calls out to a few a minute and stops at the day’s allowance', async () => {
@@ -300,10 +316,11 @@ describe('the photo queue', () => {
         photoUrl: licdn('same'),
       }),
     ]);
-    expect(await refreshOnePhoto(user, { now: at(0) })).toEqual({ step: 'idle' });
+    // the screen could not load it: a link that does not work is not worth copying, so they are asked about
     photoBroken('p_b', licdn('same'));
     answers.m_b = { ok: true, photo: { pictureUrl: licdn('same') } };
     expect(await refreshOnePhoto(user, { now: at(GAP) })).toEqual({ step: 'asked', personId: 'p_b' });
+    expect(calls[0]).toEqual({ identifier: 'm_b' });
     expect(await refreshOnePhoto(user, { now: at(2 * GAP) })).toEqual({ step: 'idle' });
     expect(calls).toHaveLength(1);
   });

@@ -37,8 +37,8 @@ async function postingKey(raw) {
   u.hash = "";
   for (const k of [...u.searchParams.keys()])
     if (/^(utm_|gh_src|source|ref|lever-source|trk|refid|trackingid)/i.test(k)) u.searchParams.delete(k);
-  const norm = `${u.protocol}//${u.hostname.toLowerCase()}${u.pathname.replace(/\/+$/, "")}${u.search}`;
-  const d = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(norm));
+  const norm2 = `${u.protocol}//${u.hostname.toLowerCase()}${u.pathname.replace(/\/+$/, "")}${u.search}`;
+  const d = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(norm2));
   return `posting:${[...new Uint8Array(d)].map((b) => b.toString(16).padStart(2, "0")).join("")}`;
 }
 var ENTITIES = { amp: "&", lt: "<", gt: ">", quot: '"', apos: "'", nbsp: " " };
@@ -980,12 +980,12 @@ async function keepProfileLogos(cache, orgs, doFetch, now, opts = {}) {
       let url2;
       if (row?.companyId === id && row.logoUrl) url2 = row.logoUrl;
       else {
-        let copy = copies.get(id);
-        if (!copy) {
-          copy = copyLogo(cache, id, o.logoUrl, doFetch);
-          copies.set(id, copy);
+        let copy2 = copies.get(id);
+        if (!copy2) {
+          copy2 = copyLogo(cache, id, o.logoUrl, doFetch);
+          copies.set(id, copy2);
         }
-        url2 = await copy;
+        url2 = await copy2;
         if (!url2) return;
         kept++;
         if (row?.status === "found" && row.companyId === id && !row.logoUrl)
@@ -1272,6 +1272,176 @@ function companyIntros(r) {
   ).filter((x) => !!x).sort((a, b) => b.warmth - a.warmth);
 }
 
+// supabase/functions/orbit-connectors/people.ts
+var PERSON_DAYS = 30;
+var VIEWER_DAYS = 14;
+var PHOTO_DAYS = 365;
+var NO_PHOTO_DAYS = 30;
+var PHOTO_MAX_BYTES = 6e5;
+async function sha256(text3) {
+  const buf = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(text3));
+  return Array.from(new Uint8Array(buf), (x) => x.toString(16).padStart(2, "0")).join("");
+}
+var norm = (id) => id.trim().toLowerCase();
+var personKey = async (id) => `pp2:${await sha256(norm(id))}`;
+var viewerKey = async (accountId, id) => `pv1:${await sha256(`${accountId}|${norm(id)}`)}`;
+var photoKey = async (id) => `ph1:${await sha256(norm(id))}`;
+var ownPhotoKey = async (accountId, id) => `pa1:${await sha256(`${accountId}|${norm(id)}`)}`;
+var mutualsKey = async (accountId, target) => `mu1:${await sha256(`${accountId}|${norm(target)}`)}`;
+function aliases(ids) {
+  const seen = /* @__PURE__ */ new Set();
+  const out = [];
+  for (const id of ids) {
+    const v = typeof id === "string" ? id.trim() : "";
+    if (!v || seen.has(norm(v))) continue;
+    seen.add(norm(v));
+    out.push(v);
+  }
+  return out;
+}
+var quiet = async (p) => p.catch(() => void 0);
+function covers(rec, sections, recommendations) {
+  if (recommendations && !rec.recommendations) return false;
+  const have = new Set(rec.sections);
+  return sections.every((s) => have.has(s));
+}
+async function getPerson(store, id) {
+  const v = await quiet(personKey(id).then((k) => store.get(k)));
+  if (!v || typeof v.profile !== "object" || !v.profile || !Array.isArray(v.sections)) return void 0;
+  return {
+    profile: v.profile,
+    sections: v.sections.map(String),
+    recommendations: v.recommendations === true,
+    at: String(v.at ?? "")
+  };
+}
+async function putPerson(store, ids, rec) {
+  for (const id of aliases(ids)) {
+    const had = await getPerson(store, id);
+    if (had && covers(had, rec.sections, rec.recommendations) && !covers(rec, had.sections, had.recommendations))
+      continue;
+    await quiet(personKey(id).then((k) => store.put(k, { ...rec }, PERSON_DAYS)));
+  }
+}
+async function getViewer(store, accountId, id) {
+  const v = await quiet(viewerKey(accountId, id).then((k) => store.get(k)));
+  if (!v) return void 0;
+  return {
+    mutualCount: typeof v.mutualCount === "number" ? v.mutualCount : void 0,
+    distance: typeof v.distance === "number" ? v.distance : void 0,
+    contact: v.contact ?? void 0,
+    at: String(v.at ?? "")
+  };
+}
+async function putViewer(store, accountId, ids, rec) {
+  const value = JSON.parse(JSON.stringify(rec));
+  for (const id of aliases(ids))
+    await quiet(viewerKey(accountId, id).then((k) => store.put(k, value, VIEWER_DAYS)));
+}
+var photoOf = (v) => {
+  if (!v) return void 0;
+  const url2 = typeof v.url === "string" && v.url ? v.url : void 0;
+  if (!url2 && v.none !== true) return void 0;
+  return {
+    url: url2,
+    none: v.none === true || void 0,
+    providerId: typeof v.providerId === "string" ? v.providerId : void 0,
+    publicIdentifier: typeof v.publicIdentifier === "string" ? v.publicIdentifier : void 0,
+    at: String(v.at ?? "")
+  };
+};
+async function getPhoto(store, accountId, id) {
+  const shared = photoOf(await quiet(photoKey(id).then((k) => store.get(k))));
+  if (shared?.url) return shared;
+  const own = photoOf(await quiet(ownPhotoKey(accountId, id).then((k) => store.get(k))));
+  return own?.url ? own : shared;
+}
+async function copy(write, name, url2, doFetch) {
+  try {
+    const res = await doFetch(url2);
+    const type = res.headers.get("content-type") ?? "image/jpeg";
+    const bytes = await res.arrayBuffer();
+    if (!res.ok || !type.startsWith("image/") || !bytes.byteLength || bytes.byteLength > PHOTO_MAX_BYTES)
+      return void 0;
+    return await write(name, bytes, type);
+  } catch {
+    return void 0;
+  }
+}
+async function keepReadPhoto(store, write, who, urls, doFetch, now) {
+  const ids = aliases(who.ids);
+  if (!ids.length) return void 0;
+  const base = { providerId: who.providerId, publicIdentifier: who.publicIdentifier, at: now.toISOString() };
+  const links = urls.filter((u) => !!u);
+  if (!links.length) {
+    for (const id of ids)
+      await quiet(photoKey(id).then((k) => store.put(k, clean({ ...base, none: true }), NO_PHOTO_DAYS)));
+    return void 0;
+  }
+  if (!write) return void 0;
+  const name = (await sha256(norm(who.providerId ?? ids[0]))).slice(0, 40);
+  let kept;
+  for (const u of links) {
+    kept = await copy(write, name, u, doFetch);
+    if (kept) break;
+  }
+  if (!kept) return void 0;
+  for (const id of ids)
+    await quiet(photoKey(id).then((k) => store.put(k, clean({ ...base, url: kept }), PHOTO_DAYS)));
+  return kept;
+}
+async function keepOwnPhoto(store, write, accountId, ids, url2, doFetch, now) {
+  const names2 = aliases(ids);
+  if (!write || !names2.length) return void 0;
+  const name = `a-${(await sha256(`${accountId}|${norm(names2[0])}`)).slice(0, 40)}`;
+  const kept = await copy(write, name, url2, doFetch);
+  if (!kept) return void 0;
+  for (const id of names2)
+    await quiet(
+      ownPhotoKey(accountId, id).then((k) => store.put(k, { url: kept, at: now.toISOString() }, PHOTO_DAYS))
+    );
+  return kept;
+}
+var clean = (v) => JSON.parse(JSON.stringify(v));
+function storagePhotoWriter(url2, serviceKey2, doFetch = fetch) {
+  return async (name, bytes, contentType) => {
+    const ext = contentType.includes("png") ? "png" : contentType.includes("webp") ? "webp" : "jpg";
+    const path = `${name.replace(/[^\w-]/g, "")}.${ext}`;
+    const r = await doFetch(`${url2}/storage/v1/object/people-photos/${path}`, {
+      method: "POST",
+      headers: {
+        apikey: serviceKey2,
+        Authorization: `Bearer ${serviceKey2}`,
+        "content-type": contentType,
+        "x-upsert": "true",
+        "cache-control": "31536000"
+      },
+      body: bytes
+    });
+    return r.ok ? `${url2}/storage/v1/object/public/people-photos/${path}` : void 0;
+  };
+}
+function postgrestCallSink(url2, serviceKey2, doFetch = fetch) {
+  return async (row) => {
+    await doFetch(`${url2}/rest/v1/rpc/orbit_linkedin_calls_add`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        apikey: serviceKey2,
+        Authorization: `Bearer ${serviceKey2}`
+      },
+      body: JSON.stringify({
+        p_account: row.accountId,
+        p_kind: row.kind,
+        p_caller: row.caller,
+        p_made: row.made ?? 0,
+        p_saved: row.saved ?? 0,
+        p_refused: row.refused ?? 0
+      })
+    });
+  };
+}
+
 // supabase/functions/orbit-connectors/connectors.ts
 var DEFAULT_LIMITS = { perMinute: 120, perDay: 3e3 };
 async function recordQuietly(sink, row) {
@@ -1387,18 +1557,53 @@ async function sharedPut(deps, key, value, days) {
   if (!deps.shared) return;
   await deps.shared.put(key, value, days).catch(() => void 0);
 }
+async function countCalls(deps, row) {
+  if (!deps.calls || !row.accountId) return;
+  await deps.calls(row).catch(() => void 0);
+}
+function profileWant(body) {
+  const sections = (Array.isArray(body.sections) ? body.sections : []).map(String).filter((x) => PROFILE_SECTIONS.has(x));
+  return { sections: [...new Set(sections)].sort(), recommendations: body.recommendations === true };
+}
+async function rememberRead(deps, accountId, identifier, profile, pictures, want, doFetch, now) {
+  if (!deps.shared) return profile;
+  const ids = aliases([identifier, profile.providerId, profile.publicIdentifier]);
+  const kept = await keepReadPhoto(
+    deps.shared,
+    deps.photos,
+    { ids, providerId: profile.providerId, publicIdentifier: profile.publicIdentifier },
+    pictures,
+    doFetch,
+    now
+  );
+  const out = kept ? { ...profile, pictureUrl: kept } : profile;
+  await putViewer(deps.shared, accountId, ids, {
+    mutualCount: profile.mutualCount,
+    distance: profile.distance,
+    contact: profile.contact,
+    at: now.toISOString()
+  });
+  const whole = !profile.throttled.length;
+  await putPerson(deps.shared, ids, {
+    profile: publicProfile(out),
+    sections: whole ? want.sections : [],
+    recommendations: whole && want.recommendations,
+    at: now.toISOString()
+  });
+  return out;
+}
 async function profileShareKey(body) {
   const identifier = text2(body.identifier, 200)?.toLowerCase();
   if (!identifier) return void 0;
   const sections = (Array.isArray(body.sections) ? body.sections : []).map(String).filter((x) => PROFILE_SECTIONS.has(x)).sort();
-  return `p1:${await sha256(`${identifier}|${[...new Set(sections)].join(",")}|${body.recommendations === true}`)}`;
+  return `p1:${await sha2562(`${identifier}|${[...new Set(sections)].join(",")}|${body.recommendations === true}`)}`;
 }
 async function engagementShareKey(r) {
   if (r.cursor) return void 0;
-  return `e1:${await sha256(`${r.want}|${(r.want === "thread" ? r.postId : r.memberId) ?? ""}`)}`;
+  return `e1:${await sha2562(`${r.want}|${(r.want === "thread" ? r.postId : r.memberId) ?? ""}`)}`;
 }
 function publicProfile(p) {
-  const { distance: _d, contact: _c, ...rest } = p;
+  const { distance: _d, contact: _c, mutualCount: _m, ...rest } = p;
   return rest;
 }
 function postingBucket(visitor, now, perDay) {
@@ -1480,8 +1685,8 @@ async function companiesRoute(deps, body, ctx) {
     if (k && !byKey.has(k)) byKey.set(k, n);
   }
   const cache = deps.companies;
-  const clean = new Map([...byKey].map(([k, n]) => [k, companyNameKey(searchName(n))]));
-  const keys = [.../* @__PURE__ */ new Set([...byKey.keys(), ...[...clean.values()].filter(Boolean)])];
+  const clean2 = new Map([...byKey].map(([k, n]) => [k, companyNameKey(searchName(n))]));
+  const keys = [.../* @__PURE__ */ new Set([...byKey.keys(), ...[...clean2.values()].filter(Boolean)])];
   const rows = cache ? await cache.getMany(keys).catch(() => ({})) : {};
   const picks = cache?.getPicks && accountId ? await cache.getPicks(accountId, [...byKey.keys()]).catch(() => ({})) : {};
   const now = ctx.now();
@@ -1494,7 +1699,7 @@ async function companiesRoute(deps, body, ctx) {
       continue;
     }
     const own = rows[key];
-    const cleaned = rows[clean.get(key) ?? ""];
+    const cleaned = rows[clean2.get(key) ?? ""];
     const r = own?.status === "found" ? own : cleaned?.status === "found" ? cleaned : own;
     if (r && rowSettled(r, now)) companies[name] = answerOf(r);
     else misses.push([key, name]);
@@ -1636,7 +1841,7 @@ function json(status, body, headers2) {
   });
 }
 var unconfigured2 = (h) => json(503, { error: "not configured" }, { ...h, "x-orbit-connector": "unconfigured" });
-async function sha256(text3) {
+async function sha2562(text3) {
   const buf = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(text3));
   return Array.from(new Uint8Array(buf), (x) => x.toString(16).padStart(2, "0")).join("");
 }
@@ -1767,7 +1972,7 @@ function makeHandler(deps) {
       return unconfigured2(h);
     if (!isVillage && !isEnrich && !isPosting && (!deps.unipileKey || !deps.unipileBase))
       return unconfigured2(h);
-    const visitor = (await sha256(`${deps.salt ?? "orbit"}:${clientIp(req)}`)).slice(0, 32);
+    const visitor = (await sha2562(`${deps.salt ?? "orbit"}:${clientIp(req)}`)).slice(0, 32);
     let verdict;
     try {
       verdict = await take(buckets(visitor, now(), limits));
@@ -1788,8 +1993,18 @@ function makeHandler(deps) {
     }
     const totals = { ...DEFAULT_LEDGER, ...deps.ledger };
     const accountId = String(body.accountId ?? "");
-    const spend = (kind, caller, units = 1) => spendLedger(take, totals, kind, caller, accountId, now(), units);
-    if (isEnrich) return enrichmentRoute(deps, path, body, { h, doFetch, take, now, visitor, spend });
+    const spend = async (kind, caller, units = 1) => {
+      const within = await spendLedger(take, totals, kind, caller, accountId, now(), units);
+      await countCalls(deps, {
+        accountId,
+        kind,
+        caller: String(caller),
+        ...within ? { made: units } : { refused: units }
+      });
+      return within;
+    };
+    const saved = (kind, caller, units = 1) => countCalls(deps, { accountId, kind, caller: String(caller), saved: units });
+    if (isEnrich) return enrichmentRoute(deps, path, body, { h, doFetch, take, now, visitor, spend, saved });
     const villageCharge = async (kind) => {
       const credits = kind === "person" ? VILLAGE_PERSON_CREDITS : VILLAGE_COMPANY_CREDITS;
       await recordQuietly(deps.usage, {
@@ -1889,7 +2104,8 @@ function makeHandler(deps) {
       if (path === "/account") return json(200, await unipileAccountHealth(deps, accountId, doFetch), h);
       if (path === "/send") return json(200, await unipileSend(deps, body, doFetch), h);
       if (path === "/relations") return json(200, await unipileRelations(deps, body, doFetch), h);
-      if (path === "/mutuals") return json(200, await unipileMutuals(deps, body, doFetch, spend), h);
+      if (path === "/mutuals")
+        return json(200, await unipileMutuals(deps, body, doFetch, spend, { saved, now: now() }), h);
       if (path === "/inbox") return json(200, await unipileInbox(deps, body, doFetch), h);
       if (path === "/search") return json(200, await unipileSearch(deps, body, doFetch), h);
       if (path === "/me") return json(200, await unipileMe(deps, body, doFetch), h);
@@ -2127,7 +2343,7 @@ async function unipileRelations(deps, body, doFetch) {
     cursor: b.cursor ?? b.next_cursor ?? null
   };
 }
-var PHOTO_MAX_BYTES = 4e5;
+var PHOTO_MAX_BYTES2 = 4e5;
 function base64(bytes) {
   let bin = "";
   for (let i = 0; i < bytes.length; i += 32768) bin += String.fromCharCode(...bytes.subarray(i, i + 32768));
@@ -2151,7 +2367,7 @@ async function unipileMe(deps, body, doFetch) {
       const img = await doFetch(pictureUrl);
       const type = img.headers.get("content-type") ?? "";
       const bytes = img.ok && type.startsWith("image/") ? new Uint8Array(await img.arrayBuffer()) : void 0;
-      if (bytes && bytes.length <= PHOTO_MAX_BYTES)
+      if (bytes && bytes.length <= PHOTO_MAX_BYTES2)
         picture = `data:${type.split(";")[0]};base64,${base64(bytes)}`;
     } catch {
     }
@@ -2176,27 +2392,53 @@ async function upstreamError(res) {
   }
   return new Error(`unipile ${res.status}${detail ? `: ${detail}` : ""}`);
 }
-async function sharedConnectionCount(deps, accountId, target, doFetch) {
-  const q = new URLSearchParams({ account_id: accountId, notify: "false" });
-  const res = await doFetch(`${deps.unipileBase}/api/v1/users/${encodeURIComponent(target)}?${q}`, {
-    headers: uHeaders(deps)
-  });
-  if (!res.ok) {
-    if (res.status >= 500) throw await upstreamError(res);
-    return void 0;
-  }
-  const p = await res.json();
-  const n = p.shared_connections_count;
-  return typeof n === "number" && Number.isFinite(n) && n >= 0 ? n : void 0;
-}
-async function unipileMutuals(deps, body, doFetch, spend) {
+async function unipileMutuals(deps, body, doFetch, spend, ctx) {
   const accountId = String(body.accountId ?? "");
   const target = String(body.targetMemberId ?? "").trim();
   if (!target) return { mutuals: [], verified: false, reason: "no_target" };
-  if (!await spend("profile", "mutuals")) return LEDGER_LIMIT;
-  const shared = await sharedConnectionCount(deps, accountId, target, doFetch);
+  const fresh = body.fresh === true;
+  const mkey = deps.shared ? await mutualsKey(accountId, target) : void 0;
+  if (mkey && !fresh) {
+    const hit = await sharedGet(deps, mkey);
+    if (hit) {
+      await ctx.saved("search", "mutuals");
+      return { ...hit, kept: true };
+    }
+  }
+  let shared;
+  const mine = deps.shared && !fresh ? await getViewer(deps.shared, accountId, target) : void 0;
+  if (mine?.mutualCount !== void 0) {
+    shared = mine.mutualCount;
+    await ctx.saved("profile", "mutuals");
+  } else {
+    if (!await spend("profile", "mutuals")) return LEDGER_LIMIT;
+    const q = new URLSearchParams({ account_id: accountId, notify: "false" });
+    const res = await doFetch(`${deps.unipileBase}/api/v1/users/${encodeURIComponent(target)}?${q}`, {
+      headers: uHeaders(deps)
+    });
+    if (!res.ok && res.status >= 500) throw await upstreamError(res);
+    if (res.ok) {
+      const p = await res.json();
+      const profile = mapProfile(p);
+      shared = profile.mutualCount;
+      await rememberRead(
+        deps,
+        accountId,
+        target,
+        profile,
+        [licdn2(p.profile_picture_url_large), licdn2(p.profile_picture_url)],
+        { sections: [], recommendations: false },
+        doFetch,
+        ctx.now
+      );
+    }
+  }
   if (shared === void 0) return { mutuals: [], verified: false, reason: "no_shared_count" };
-  if (shared === 0) return { mutuals: [], verified: true, count: 0 };
+  if (shared === 0) {
+    const none = { mutuals: [], verified: true, count: 0 };
+    if (mkey) await sharedPut(deps, mkey, none, VIEWER_DAYS);
+    return none;
+  }
   const mutuals = [];
   let cursor;
   let total;
@@ -2238,7 +2480,7 @@ async function unipileMutuals(deps, body, doFetch, spend) {
     cursor = typeof b.cursor === "string" && b.cursor ? b.cursor : void 0;
     if (!cursor || !(b.items ?? []).length || mutuals.length >= shared) break;
   }
-  return {
+  const answer = {
     verified: true,
     count: shared,
     ...limited ? { limited: true } : {},
@@ -2253,6 +2495,8 @@ async function unipileMutuals(deps, body, doFetch, spend) {
       )
     }))
   };
+  if (mkey && !limited) await sharedPut(deps, mkey, answer, VIEWER_DAYS);
+  return answer;
 }
 var INBOX_MAX_PAGES = 4;
 var INBOX_MAX_CHATS = 40;
@@ -2938,15 +3182,74 @@ async function enrichmentRoute(deps, path, body, ctx) {
       deps.browserKept ?? (async () => false)
     ))
       return json(403, { error: "this LinkedIn account is not linked to this browser" }, h);
-    if (kind === "profile" && body.public === true) {
+    const accountId = String(body.accountId ?? "");
+    const identifier = text2(body.identifier, 200);
+    const caller = kind === "photo" ? "photo" : kind === "profile" && body.purpose === "route" ? "route" : "enrich";
+    const fresh = body.fresh === true;
+    if (kind === "profile" && identifier && deps.shared && !fresh) {
+      const want = profileWant(body);
+      const rec = await getPerson(deps.shared, identifier);
+      if (rec && covers(rec, want.sections, want.recommendations)) {
+        const mine = body.public === true ? void 0 : await getViewer(deps.shared, accountId, identifier);
+        if (body.public === true || mine) {
+          await ctx.saved("profile", caller);
+          const profile = mine ? {
+            ...rec.profile,
+            distance: mine.distance,
+            contact: mine.contact,
+            mutualCount: mine.mutualCount
+          } : rec.profile;
+          return json(200, { ok: true, profile, shared: true }, h);
+        }
+      }
+    }
+    if (kind === "profile" && body.public === true && !fresh) {
       const key = await profileShareKey(body);
       const hit = key ? await sharedGet(deps, key) : void 0;
-      if (hit) return json(200, { ok: true, profile: hit, shared: true }, h);
+      if (hit) {
+        await ctx.saved("profile", caller);
+        return json(200, { ok: true, profile: hit, shared: true }, h);
+      }
     }
-    const caller = kind === "photo" ? "photo" : kind === "profile" && body.purpose === "route" ? "route" : "enrich";
+    if (kind === "photo" && identifier && deps.shared && !fresh) {
+      const known = licdn2(body.known);
+      const had = await getPhoto(deps.shared, accountId, identifier);
+      if (had && (had.url || !known)) {
+        await ctx.saved("profile", "photo");
+        return json(
+          200,
+          {
+            ok: true,
+            photo: {
+              pictureUrl: had.url,
+              providerId: had.providerId,
+              publicIdentifier: had.publicIdentifier,
+              kept: true
+            }
+          },
+          h
+        );
+      }
+      if (known) {
+        const kept = await keepOwnPhoto(
+          deps.shared,
+          deps.photos,
+          accountId,
+          [identifier],
+          known,
+          doFetch,
+          now()
+        );
+        if (kept) {
+          await ctx.saved("profile", "photo");
+          return json(200, { ok: true, photo: { pictureUrl: kept, kept: true } }, h);
+        }
+        if (body.keepOnly === true) return json(200, { ok: true, photo: { kept: false } }, h);
+      }
+    }
     let within;
     try {
-      within = await ctx.spend("profile", caller);
+      within = kind === "company" ? await ctx.spend("company", "logos") : await ctx.spend("profile", caller);
     } catch {
       return json(503, { error: "unavailable right now" }, h);
     }
@@ -2975,10 +3278,52 @@ async function enrichmentRoute(deps, path, body, ctx) {
         const key = await profileShareKey(body);
         if (key) await sharedPut(deps, key, publicProfile(read.profile), 30);
       }
+      if (read.ok && "profile" in read && read.profile) {
+        const profile = await rememberRead(
+          deps,
+          String(body.accountId ?? ""),
+          text2(body.identifier, 200) ?? "",
+          read.profile,
+          read.pictures,
+          profileWant(body),
+          doFetch,
+          now()
+        );
+        return json(200, { ok: true, profile }, h);
+      }
       return json(200, read, h);
     }
     if (kind === "company") return json(200, await unipileCompany(deps, body, doFetch), h);
-    if (kind === "photo") return json(200, await unipilePhoto(deps, body, doFetch), h);
+    if (kind === "photo") {
+      const accountId = String(body.accountId ?? "");
+      const identifier = text2(body.identifier, 200);
+      if (!identifier)
+        return json(200, { ok: false, reason: "bad_request", message: "Say whose photo to fetch." }, h);
+      const read = await readPlain(deps, accountId, identifier, doFetch);
+      if (!("profile" in read)) return json(200, read, h);
+      const profile = await rememberRead(
+        deps,
+        accountId,
+        identifier,
+        read.profile,
+        read.pictures,
+        { sections: [], recommendations: false },
+        doFetch,
+        now()
+      );
+      return json(
+        200,
+        {
+          ok: true,
+          photo: {
+            pictureUrl: profile.pictureUrl,
+            providerId: profile.providerId,
+            publicIdentifier: profile.publicIdentifier
+          }
+        },
+        h
+      );
+    }
     return json(
       200,
       await exaSearch(
@@ -3077,6 +3422,8 @@ function mapProfile(p, opts = {}) {
     about: str2(p.summary, 600),
     pictureUrl: licdn2(p.profile_picture_url_large) ?? licdn2(p.profile_picture_url),
     distance,
+    // how many connections the reader shares with them, as LinkedIn states it on the profile (the reader's alone)
+    mutualCount: num2(p.shared_connections_count),
     experience: list(p.work_experience).slice(0, 20).map((x) => ({
       title: str2(x.position, 160),
       company: str2(x.company, 160),
@@ -3156,9 +3503,11 @@ async function unipileProfile(deps, body, doFetch) {
   });
   const failed = await profileFailure(res);
   if (failed) return failed;
+  const p = await res.json();
   return {
     ok: true,
-    profile: mapProfile(await res.json(), { recommendations })
+    profile: mapProfile(p, { recommendations }),
+    pictures: [licdn2(p.profile_picture_url_large), licdn2(p.profile_picture_url)]
   };
 }
 async function profileFailure(res) {
@@ -3175,10 +3524,7 @@ async function profileFailure(res) {
   if (!res.ok) throw new Error(`unipile ${res.status}`);
   return void 0;
 }
-async function unipilePhoto(deps, body, doFetch) {
-  const accountId = String(body.accountId ?? "");
-  const identifier = text2(body.identifier, 200);
-  if (!identifier) return { ok: false, reason: "bad_request", message: "Say whose photo to fetch." };
+async function readPlain(deps, accountId, identifier, doFetch) {
   const q = new URLSearchParams({ account_id: accountId, notify: "false" });
   const res = await doFetch(`${deps.unipileBase}/api/v1/users/${encodeURIComponent(identifier)}?${q}`, {
     headers: uHeaders(deps)
@@ -3188,11 +3534,8 @@ async function unipilePhoto(deps, body, doFetch) {
   const p = await res.json();
   return {
     ok: true,
-    photo: {
-      pictureUrl: licdn2(p.profile_picture_url_large) ?? licdn2(p.profile_picture_url),
-      providerId: text2(p.provider_id, 200),
-      publicIdentifier: text2(p.public_identifier, 200)
-    }
+    profile: mapProfile(p),
+    pictures: [licdn2(p.profile_picture_url_large), licdn2(p.profile_picture_url)]
   };
 }
 async function unipileCompany(deps, body, doFetch) {
@@ -3251,8 +3594,8 @@ async function villagePaths(village, user, body, paid) {
     await paid?.("person");
     intros = personIntros(r.value);
   } else if (domain) {
-    const clean = domain.replace(/^https?:\/\//i, "").replace(/^www\./i, "").replace(/\/.*$/, "").toLowerCase();
-    const r = await village.companyPaths(user, { domain: clean, limit: 25 });
+    const clean2 = domain.replace(/^https?:\/\//i, "").replace(/^www\./i, "").replace(/\/.*$/, "").toLowerCase();
+    const r = await village.companyPaths(user, { domain: clean2, limit: 25 });
     if (!r.ok)
       return refused(r) ?? (() => {
         throw new Error(r.message);
@@ -3424,6 +3767,9 @@ Deno.serve(
     shared: url && serviceKey ? postgrestSharedReads(url, serviceKey) : void 0,
     // LinkedIn companies found once for every student, logos copied into storage (orbit_private.linkedin_companies)
     companies: url && serviceKey ? postgrestCompanyCache(url, serviceKey) : void 0,
+    // plan 41: people's photos kept in storage, and the daily count of reads made, saved and refused
+    photos: url && serviceKey ? storagePhotoWriter(url, serviceKey) : void 0,
+    calls: url && serviceKey ? postgrestCallSink(url, serviceKey) : void 0,
     // plan 34 E1: Exa from /web and Village from /paths land in orbit.usage_ledger like the server's own calls
     usage: url && serviceKey ? postgrestUsage(url, serviceKey) : void 0,
     postings: {

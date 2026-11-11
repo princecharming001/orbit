@@ -809,7 +809,13 @@ export type MutualsResult =
       mutuals: [];
     };
 
-/** LinkedIn's answer for a target, kept a day in db.kv under this prefix (plus user and LinkedIn member ids). */
+/**
+ * How long LinkedIn's answer for a target is kept (plan 41): who two people both know changes slowly, and every
+ * fresh answer costs a profile read and up to five searches of the day's allowance.
+ */
+export const MUTUALS_KEEP_MS = 14 * 86_400_000;
+
+/** LinkedIn's answer for a target, kept two weeks in db.kv under this prefix (plus user and LinkedIn member ids). */
 // v3: answers saved before 2026-10-25 were never checked against LinkedIn's shared-connections count
 export const MUTUALS_KV = 'mutuals3:';
 
@@ -902,13 +908,16 @@ export async function mutualsFor(
       message: `${person.firstName} did not come from your live LinkedIn sync, so LinkedIn cannot look up mutual connections.`,
       mutuals: [],
     };
-  const day = (opts.now ?? new Date()).toISOString().slice(0, 10);
+  const at = opts.now ?? new Date();
   // keyed by the LinkedIn member id (plan 34 B4): two Orbit rows for one person, before they are merged, share one read
   const key = `${MUTUALS_KV}${user.id}:${person.linkedinMemberId}`;
   const kept = (await db.kv.get(key))?.value as
-    | { day?: string; memberId?: string; mutuals?: Mutual[] }
+    | { day?: string; at?: string; memberId?: string; mutuals?: Mutual[] }
     | undefined;
-  if (kept?.day === day && kept.memberId === person.linkedinMemberId && kept.mutuals)
+  // `day`: an answer kept before plan 41, which said only which day it was read
+  const keptAt = Date.parse(kept?.at ?? (kept?.day ? `${kept.day}T00:00:00Z` : ''));
+  const stillGood = Number.isFinite(keptAt) && at.getTime() - keptAt < MUTUALS_KEEP_MS;
+  if (stillGood && kept?.memberId === person.linkedinMemberId && kept.mutuals)
     return { ok: true, source: 'linkedin', mutuals: kept.mutuals.map(resolve) };
   // not tied to this caller's signal: another panel may be waiting on the same read, and the answer is kept a day
   const r = await askMutualsOnce(live.accountId, person.linkedinMemberId, live.token);
@@ -921,7 +930,10 @@ export async function mutualsFor(
       message: r.reason === 'unconfigured' ? LIVE_SOON : r.message,
       mutuals: [],
     };
-  await db.kv.put({ key, value: { day, memberId: person.linkedinMemberId, mutuals: r.value } });
+  await db.kv.put({
+    key,
+    value: { at: at.toISOString(), memberId: person.linkedinMemberId, mutuals: r.value },
+  });
   return { ok: true, source: 'linkedin', mutuals: r.value.map(resolve) };
 }
 

@@ -196,17 +196,29 @@ export interface LinkedInPhoto {
   pictureUrl?: string;
   providerId?: string;
   publicIdentifier?: string;
+  /** answered from a copy Orbit keeps (plan 41): nothing was read from LinkedIn, and the link does not expire */
+  kept?: boolean;
 }
 
-/** A person's LinkedIn photo link, by their member id or public profile name: the lightest profile read. */
+/**
+ * A person's photo, by their member id or public profile name. Orbit's kept copy when there is one; else `known` (a
+ * LinkedIn picture link the browser already has) is copied and kept; else the lightest profile read, unless
+ * `keepOnly` says a read is not worth it.
+ */
 export async function linkedInPhoto(
   accountId: string,
   identifier: string,
-  opts: CallOpts = {},
+  opts: CallOpts & { known?: string; keepOnly?: boolean } = {},
 ): Promise<EnrichOutcome<LinkedInPhoto>> {
   const r = await unipileProxyCall<Answer<'photo', LinkedInPhoto>>(
     '/photo',
-    { accountId, token: opts.token, identifier },
+    {
+      accountId,
+      token: opts.token,
+      identifier,
+      ...(opts.known ? { known: opts.known } : {}),
+      ...(opts.keepOnly ? { keepOnly: true } : {}),
+    },
     opts,
   );
   return unwrap(r, 'photo');

@@ -81,6 +81,22 @@ import {
   type VillageIntro,
   type VillageUser,
 } from '../_shared/providers/village';
+import {
+  aliases,
+  type CallCount,
+  type CallSink,
+  covers,
+  getPerson,
+  getPhoto,
+  getViewer,
+  keepOwnPhoto,
+  keepReadPhoto,
+  mutualsKey,
+  type PhotoWriter,
+  putPerson,
+  putViewer,
+  VIEWER_DAYS,
+} from './people.ts';
 
 export type { CompanyAnswer, CompanyCache, CompanyRow };
 export { COMPANY_RETRY_MS, clientIp, companyNameKey, defaultOrigins, isLinkedInImage };
@@ -146,6 +162,10 @@ export interface ConnectorDeps {
   shared?: SharedReads;
   /** LinkedIn companies found once and kept for every student, with their logos in Orbit's own storage */
   companies?: CompanyCache;
+  /** plan 41: people's photos copied into Orbit's storage, so a picture is read from LinkedIn once */
+  photos?: PhotoWriter;
+  /** plan 41: the daily count of LinkedIn reads made, saved and refused, per account, ledger and caller */
+  calls?: CallSink;
   /**
    * Plan 34 E1: one orbit.usage_ledger row per paid call these routes make (Exa from /web, Village from /paths),
    * with no user and the visitor hash as the account, so the daily cost view misses nothing. Without it nothing is
@@ -357,6 +377,63 @@ async function sharedPut(
   await deps.shared.put(key, value, days).catch(() => undefined);
 }
 
+/** One row for the day's count of LinkedIn reads; the student's answer never waits on a count that failed. */
+async function countCalls(deps: ConnectorDeps, row: CallCount): Promise<void> {
+  if (!deps.calls || !row.accountId) return;
+  await deps.calls(row).catch(() => undefined);
+}
+
+/** Which sections a profile read asks for, as the read and what is kept of it both name them. */
+function profileWant(body: Record<string, unknown>): { sections: string[]; recommendations: boolean } {
+  const sections = (Array.isArray(body.sections) ? body.sections : [])
+    .map(String)
+    .filter((x) => PROFILE_SECTIONS.has(x));
+  return { sections: [...new Set(sections)].sort(), recommendations: body.recommendations === true };
+}
+
+/**
+ * Plan 41: keep everything one profile read brought, so no other route reads this person again for it. The photo is
+ * copied into storage (the answer carries the copy, which never expires), what depends on the reader is kept for this
+ * account, and what anyone would see is kept for every student under each name LinkedIn has for them. A read LinkedIn
+ * held sections back on is kept as a read of no sections.
+ */
+async function rememberRead(
+  deps: ConnectorDeps,
+  accountId: string,
+  identifier: string,
+  profile: ReturnType<typeof mapProfile>,
+  pictures: (string | undefined)[],
+  want: { sections: string[]; recommendations: boolean },
+  doFetch: typeof fetch,
+  now: Date,
+): Promise<ReturnType<typeof mapProfile>> {
+  if (!deps.shared) return profile;
+  const ids = aliases([identifier, profile.providerId, profile.publicIdentifier]);
+  const kept = await keepReadPhoto(
+    deps.shared,
+    deps.photos,
+    { ids, providerId: profile.providerId, publicIdentifier: profile.publicIdentifier },
+    pictures,
+    doFetch,
+    now,
+  );
+  const out = kept ? { ...profile, pictureUrl: kept } : profile;
+  await putViewer(deps.shared, accountId, ids, {
+    mutualCount: profile.mutualCount,
+    distance: profile.distance,
+    contact: profile.contact,
+    at: now.toISOString(),
+  });
+  const whole = !profile.throttled.length;
+  await putPerson(deps.shared, ids, {
+    profile: publicProfile(out as Record<string, unknown>),
+    sections: whole ? want.sections : [],
+    recommendations: whole && want.recommendations,
+    at: now.toISOString(),
+  });
+  return out;
+}
+
 /** The shared key for one profile read: who (as written), which sections, and whether recommendations were read. */
 export async function profileShareKey(body: Record<string, unknown>): Promise<string | undefined> {
   const identifier = text(body.identifier, 200)?.toLowerCase();
@@ -376,7 +453,7 @@ export async function engagementShareKey(r: EngagementRequest): Promise<string |
 
 /** What anyone on LinkedIn would see of a profile: never contact details or how far they are from the reader. */
 export function publicProfile(p: Record<string, unknown>): Record<string, unknown> {
-  const { distance: _d, contact: _c, ...rest } = p;
+  const { distance: _d, contact: _c, mutualCount: _m, ...rest } = p;
   return rest;
 }
 
@@ -917,9 +994,20 @@ export function makeHandler(deps: ConnectorDeps): (req: Request) => Promise<Resp
 
     const totals: LedgerTotals = { ...DEFAULT_LEDGER, ...deps.ledger };
     const accountId = String(body.accountId ?? '');
-    const spend = <K extends LedgerKind>(kind: K, caller: LedgerCaller<K>, units = 1) =>
-      spendLedger(take, totals, kind, caller, accountId, now(), units);
-    if (isEnrich) return enrichmentRoute(deps, path, body, { h, doFetch, take, now, visitor, spend });
+    // every read is counted for the day's report, whether it was made, refused, or answered from what Orbit kept
+    const spend = async <K extends LedgerKind>(kind: K, caller: LedgerCaller<K>, units = 1) => {
+      const within = await spendLedger(take, totals, kind, caller, accountId, now(), units);
+      await countCalls(deps, {
+        accountId,
+        kind,
+        caller: String(caller),
+        ...(within ? { made: units } : { refused: units }),
+      });
+      return within;
+    };
+    const saved = <K extends LedgerKind>(kind: K, caller: LedgerCaller<K>, units = 1) =>
+      countCalls(deps, { accountId, kind, caller: String(caller), saved: units });
+    if (isEnrich) return enrichmentRoute(deps, path, body, { h, doFetch, take, now, visitor, spend, saved });
     const villageCharge = async (kind: 'person' | 'company') => {
       const credits = kind === 'person' ? VILLAGE_PERSON_CREDITS : VILLAGE_COMPANY_CREDITS;
       await recordQuietly(deps.usage, {
@@ -1037,7 +1125,8 @@ export function makeHandler(deps: ConnectorDeps): (req: Request) => Promise<Resp
       if (path === '/account') return json(200, await unipileAccountHealth(deps, accountId, doFetch), h);
       if (path === '/send') return json(200, await unipileSend(deps, body, doFetch), h);
       if (path === '/relations') return json(200, await unipileRelations(deps, body, doFetch), h);
-      if (path === '/mutuals') return json(200, await unipileMutuals(deps, body, doFetch, spend), h);
+      if (path === '/mutuals')
+        return json(200, await unipileMutuals(deps, body, doFetch, spend, { saved, now: now() }), h);
       if (path === '/inbox') return json(200, await unipileInbox(deps, body, doFetch), h);
       if (path === '/search') return json(200, await unipileSearch(deps, body, doFetch), h);
       if (path === '/me') return json(200, await unipileMe(deps, body, doFetch), h);
@@ -1422,30 +1511,6 @@ async function upstreamError(res: Response): Promise<Error> {
 }
 
 /**
- * How many connections the student shares with a LinkedIn member, as LinkedIn states it on that member's profile
- * (`shared_connections_count`; the plain profile, no sections, is the lightest read). Undefined when LinkedIn did not
- * say: not found, throttled, refused, or a profile without the field.
- */
-async function sharedConnectionCount(
-  deps: ConnectorDeps,
-  accountId: string,
-  target: string,
-  doFetch: typeof fetch,
-): Promise<number | undefined> {
-  const q = new URLSearchParams({ account_id: accountId, notify: 'false' });
-  const res = await doFetch(`${deps.unipileBase}/api/v1/users/${encodeURIComponent(target)}?${q}`, {
-    headers: uHeaders(deps),
-  });
-  if (!res.ok) {
-    if (res.status >= 500) throw await upstreamError(res);
-    return undefined;
-  }
-  const p = (await res.json()) as { shared_connections_count?: unknown };
-  const n = p.shared_connections_count;
-  return typeof n === 'number' && Number.isFinite(n) && n >= 0 ? n : undefined;
-}
-
-/**
  * The student's 1st-degree connections who are also connected to the target: LinkedIn's "Connections of" filter
  * (`connections_of`, a list of member ids) on a search of the student's own connections. Unipile echoes the filters
  * it parsed (`config.params`) but not whether LinkedIn honoured them, so the answer is held against the target's
@@ -1457,15 +1522,58 @@ async function unipileMutuals(
   body: Record<string, unknown>,
   doFetch: typeof fetch,
   spend: <K extends LedgerKind>(kind: K, caller: LedgerCaller<K>) => Promise<boolean>,
+  ctx: { saved: <K extends LedgerKind>(kind: K, caller: LedgerCaller<K>) => Promise<void>; now: Date },
 ) {
   const accountId = String(body.accountId ?? '');
   const target = String(body.targetMemberId ?? '').trim();
   if (!target) return { mutuals: [], verified: false, reason: 'no_target' };
-  // the target's profile is a route read (the highest profile ceiling); each search page is one search-ledger unit
-  if (!(await spend('profile', 'mutuals'))) return LEDGER_LIMIT;
-  const shared = await sharedConnectionCount(deps, accountId, target, doFetch);
+  // plan 41: who two people both know changes slowly, so a checked answer is kept two weeks for this account
+  // (`fresh` asks LinkedIn again)
+  const fresh = body.fresh === true;
+  const mkey = deps.shared ? await mutualsKey(accountId, target) : undefined;
+  if (mkey && !fresh) {
+    const hit = await sharedGet(deps, mkey);
+    if (hit) {
+      await ctx.saved('search', 'mutuals');
+      return { ...hit, kept: true };
+    }
+  }
+  // how many connections the two share: from this account's last read of them when it is still kept, else from their
+  // plain profile (a route read, the highest profile ceiling), and that read is kept for every other route
+  let shared: number | undefined;
+  const mine = deps.shared && !fresh ? await getViewer(deps.shared, accountId, target) : undefined;
+  if (mine?.mutualCount !== undefined) {
+    shared = mine.mutualCount;
+    await ctx.saved('profile', 'mutuals');
+  } else {
+    if (!(await spend('profile', 'mutuals'))) return LEDGER_LIMIT;
+    const q = new URLSearchParams({ account_id: accountId, notify: 'false' });
+    const res = await doFetch(`${deps.unipileBase}/api/v1/users/${encodeURIComponent(target)}?${q}`, {
+      headers: uHeaders(deps),
+    });
+    if (!res.ok && res.status >= 500) throw await upstreamError(res);
+    if (res.ok) {
+      const p = (await res.json()) as Record<string, unknown>;
+      const profile = mapProfile(p);
+      shared = profile.mutualCount;
+      await rememberRead(
+        deps,
+        accountId,
+        target,
+        profile,
+        [licdn(p.profile_picture_url_large), licdn(p.profile_picture_url)],
+        { sections: [], recommendations: false },
+        doFetch,
+        ctx.now,
+      );
+    }
+  }
   if (shared === undefined) return { mutuals: [], verified: false, reason: 'no_shared_count' };
-  if (shared === 0) return { mutuals: [], verified: true, count: 0 };
+  if (shared === 0) {
+    const none = { mutuals: [], verified: true, count: 0 };
+    if (mkey) await sharedPut(deps, mkey, none, VIEWER_DAYS);
+    return none;
+  }
   const mutuals: Record<string, unknown>[] = [];
   let cursor: string | undefined;
   let total: number | undefined;
@@ -1519,7 +1627,7 @@ async function unipileMutuals(
     cursor = typeof b.cursor === 'string' && b.cursor ? b.cursor : undefined;
     if (!cursor || !(b.items ?? []).length || mutuals.length >= shared) break;
   }
-  return {
+  const answer = {
     verified: true,
     count: shared,
     ...(limited ? { limited: true } : {}),
@@ -1534,6 +1642,9 @@ async function unipileMutuals(
       ),
     })),
   };
+  // a whole answer is kept; one cut short by today's allowance is asked again tomorrow
+  if (mkey && !limited) await sharedPut(deps, mkey, answer as Record<string, unknown>, VIEWER_DAYS);
+  return answer;
 }
 
 /** At most this many pages of 250 messages per inbox call, and this many chats looked up one by one per call. */
@@ -2495,6 +2606,7 @@ async function enrichmentRoute(
     now: () => Date;
     visitor: string;
     spend: <K extends LedgerKind>(kind: K, caller: LedgerCaller<K>) => Promise<boolean>;
+    saved: <K extends LedgerKind>(kind: K, caller: LedgerCaller<K>) => Promise<void>;
   },
 ): Promise<Response> {
   const { h, doFetch, take, now } = ctx;
@@ -2530,18 +2642,87 @@ async function enrichmentRoute(
       ))
     )
       return json(403, { error: 'this LinkedIn account is not linked to this browser' }, h);
-    // a read that only needs what anyone would see (`public`): another student's account may have read it today
-    if (kind === 'profile' && body.public === true) {
-      const key = await profileShareKey(body);
-      const hit = key ? await sharedGet(deps, key) : undefined;
-      if (hit) return json(200, { ok: true, profile: hit, shared: true }, h);
-    }
+    const accountId = String(body.accountId ?? '');
+    const identifier = text(body.identifier, 200);
     // a profile read for a route the student is looking at may use most of the ledger; enrichment and photos less
     const caller =
       kind === 'photo' ? 'photo' : kind === 'profile' && body.purpose === 'route' ? 'route' : 'enrich';
+    // plan 41: what Orbit already kept of this person answers first, with no read and nothing spent
+    // (`fresh` asks LinkedIn again)
+    const fresh = body.fresh === true;
+    if (kind === 'profile' && identifier && deps.shared && !fresh) {
+      const want = profileWant(body);
+      const rec = await getPerson(deps.shared, identifier);
+      if (rec && covers(rec, want.sections, want.recommendations)) {
+        // what anyone would see is enough (`public`), or this account's own read of them is still kept
+        const mine = body.public === true ? undefined : await getViewer(deps.shared, accountId, identifier);
+        if (body.public === true || mine) {
+          await ctx.saved('profile', caller);
+          const profile = mine
+            ? {
+                ...rec.profile,
+                distance: mine.distance,
+                contact: mine.contact,
+                mutualCount: mine.mutualCount,
+              }
+            : rec.profile;
+          return json(200, { ok: true, profile, shared: true }, h);
+        }
+      }
+    }
+    // a read that only needs what anyone would see (`public`): another student's account may have read it today
+    if (kind === 'profile' && body.public === true && !fresh) {
+      const key = await profileShareKey(body);
+      const hit = key ? await sharedGet(deps, key) : undefined;
+      if (hit) {
+        await ctx.saved('profile', caller);
+        return json(200, { ok: true, profile: hit, shared: true }, h);
+      }
+    }
+    if (kind === 'photo' && identifier && deps.shared && !fresh) {
+      // a picture link the browser already has (the connections list, a search row, a chat): copied, not read
+      const known = licdn(body.known);
+      // a photo already kept (from any read of them, or handed over by this account's browser); "LinkedIn has no
+      // picture for them" stands only while the browser has none either
+      const had = await getPhoto(deps.shared, accountId, identifier);
+      if (had && (had.url || !known)) {
+        await ctx.saved('profile', 'photo');
+        return json(
+          200,
+          {
+            ok: true,
+            photo: {
+              pictureUrl: had.url,
+              providerId: had.providerId,
+              publicIdentifier: had.publicIdentifier,
+              kept: true,
+            },
+          },
+          h,
+        );
+      }
+      if (known) {
+        const kept = await keepOwnPhoto(
+          deps.shared,
+          deps.photos,
+          accountId,
+          [identifier],
+          known,
+          doFetch,
+          now(),
+        );
+        if (kept) {
+          await ctx.saved('profile', 'photo');
+          return json(200, { ok: true, photo: { pictureUrl: kept, kept: true } }, h);
+        }
+        // the link would not copy and nothing else is known: the browser keeps the link it has
+        if (body.keepOnly === true) return json(200, { ok: true, photo: { kept: false } }, h);
+      }
+    }
     let within: boolean;
     try {
-      within = await ctx.spend('profile', caller);
+      // a company page is not a profile view (nobody is told): it comes out of the company ledger
+      within = kind === 'company' ? await ctx.spend('company', 'logos') : await ctx.spend('profile', caller);
     } catch {
       return json(503, { error: 'unavailable right now' }, h);
     }
@@ -2577,10 +2758,53 @@ async function enrichmentRoute(
         // after 45 days anyway
         if (key) await sharedPut(deps, key, publicProfile(read.profile as Record<string, unknown>), 30);
       }
+      if (read.ok && 'profile' in read && read.profile) {
+        const profile = await rememberRead(
+          deps,
+          String(body.accountId ?? ''),
+          text(body.identifier, 200) ?? '',
+          read.profile,
+          read.pictures,
+          profileWant(body),
+          doFetch,
+          now(),
+        );
+        return json(200, { ok: true, profile }, h);
+      }
       return json(200, read, h);
     }
     if (kind === 'company') return json(200, await unipileCompany(deps, body, doFetch), h);
-    if (kind === 'photo') return json(200, await unipilePhoto(deps, body, doFetch), h);
+    if (kind === 'photo') {
+      const accountId = String(body.accountId ?? '');
+      const identifier = text(body.identifier, 200);
+      if (!identifier)
+        return json(200, { ok: false, reason: 'bad_request', message: 'Say whose photo to fetch.' }, h);
+      const read = await readPlain(deps, accountId, identifier, doFetch);
+      if (!('profile' in read)) return json(200, read, h);
+      // the plainest read still says who they are, how many connections are shared and what they look like: all kept
+      const profile = await rememberRead(
+        deps,
+        accountId,
+        identifier,
+        read.profile,
+        read.pictures,
+        { sections: [], recommendations: false },
+        doFetch,
+        now(),
+      );
+      return json(
+        200,
+        {
+          ok: true,
+          photo: {
+            pictureUrl: profile.pictureUrl,
+            providerId: profile.providerId,
+            publicIdentifier: profile.publicIdentifier,
+          },
+        },
+        h,
+      );
+    }
     return json(
       200,
       await exaSearch(e, body, doFetch, () =>
@@ -2713,6 +2937,8 @@ export function mapProfile(p: Record<string, unknown>, opts: { recommendations?:
     about: str(p.summary, 600),
     pictureUrl: licdn(p.profile_picture_url_large) ?? licdn(p.profile_picture_url),
     distance,
+    // how many connections the reader shares with them, as LinkedIn states it on the profile (the reader's alone)
+    mutualCount: num(p.shared_connections_count),
     experience: list(p.work_experience)
       .slice(0, 20)
       .map((x) => ({
@@ -2835,9 +3061,11 @@ async function unipileProfile(deps: ConnectorDeps, body: Record<string, unknown>
   });
   const failed = await profileFailure(res);
   if (failed) return failed;
+  const p = (await res.json()) as Record<string, unknown>;
   return {
-    ok: true,
-    profile: mapProfile((await res.json()) as Record<string, unknown>, { recommendations }),
+    ok: true as const,
+    profile: mapProfile(p, { recommendations }),
+    pictures: [licdn(p.profile_picture_url_large), licdn(p.profile_picture_url)],
   };
 }
 
@@ -2858,14 +3086,11 @@ async function profileFailure(res: Response) {
 }
 
 /**
- * Someone's LinkedIn photo link, and who they are on LinkedIn, from the plain profile with no sections: the lightest
- * read there is. It is how people added from a search, an export or a typed-in link get their picture, and how an
- * expired link gets a fresh one (engine/photoQueue.ts). The link comes back, not the image: the browser loads it.
+ * The plain profile with no sections: the lightest read there is. It says who they are on LinkedIn, what they look
+ * like and how many connections the reader shares with them. /photo and /mutuals make it only when nothing kept
+ * answers (plan 41), and everything it brings is kept (rememberRead).
  */
-async function unipilePhoto(deps: ConnectorDeps, body: Record<string, unknown>, doFetch: typeof fetch) {
-  const accountId = String(body.accountId ?? '');
-  const identifier = text(body.identifier, 200);
-  if (!identifier) return { ok: false, reason: 'bad_request', message: 'Say whose photo to fetch.' };
+async function readPlain(deps: ConnectorDeps, accountId: string, identifier: string, doFetch: typeof fetch) {
   const q = new URLSearchParams({ account_id: accountId, notify: 'false' });
   const res = await doFetch(`${deps.unipileBase}/api/v1/users/${encodeURIComponent(identifier)}?${q}`, {
     headers: uHeaders(deps),
@@ -2874,12 +3099,9 @@ async function unipilePhoto(deps: ConnectorDeps, body: Record<string, unknown>, 
   if (failed) return failed;
   const p = (await res.json()) as Record<string, unknown>;
   return {
-    ok: true,
-    photo: {
-      pictureUrl: licdn(p.profile_picture_url_large) ?? licdn(p.profile_picture_url),
-      providerId: text(p.provider_id, 200),
-      publicIdentifier: text(p.public_identifier, 200),
-    },
+    ok: true as const,
+    profile: mapProfile(p),
+    pictures: [licdn(p.profile_picture_url_large), licdn(p.profile_picture_url)],
   };
 }
 

@@ -61,6 +61,20 @@ export function wantsPhoto(
   return linkedInImageExpired(url, now) || brokenPhoto(p.id) === url;
 }
 
+/**
+ * A LinkedIn picture link that still works: Orbit copies it into its own storage before it expires (plan 41), which
+ * is a download of the picture and not a read of the person, so they are never read from LinkedIn for a photo later.
+ */
+export function keepablePhoto(
+  p: Identified & Pick<Person, 'id' | 'photoUrl' | 'hiddenAt' | 'isHuman'>,
+  now = new Date(),
+): boolean {
+  if (p.hiddenAt || !p.isHuman || !photoIdentifier(p)) return false;
+  return (
+    isLinkedInPhoto(p.photoUrl) && !linkedInImageExpired(p.photoUrl, now) && brokenPhoto(p.id) !== p.photoUrl
+  );
+}
+
 /** Who first: people on screen (the ones that appeared last first), then the newest people. */
 export function photoOrder<T extends Pick<Person, 'id' | 'createdAt'>>(
   people: T[],
@@ -74,7 +88,11 @@ export function photoOrder<T extends Pick<Person, 'id' | 'createdAt'>>(
 
 /** Where photos are fetched from: LinkedIn through the proxy, or the demo's mock connector. */
 export interface PhotoSource {
-  photo(identifier: string): Promise<EnrichOutcome<LinkedInPhoto>>;
+  /** `known`: a working LinkedIn picture link to copy and keep; with `keepOnly`, nobody is read when it will not copy */
+  photo(
+    identifier: string,
+    opts?: { known?: string; keepOnly?: boolean },
+  ): Promise<EnrichOutcome<LinkedInPhoto>>;
 }
 
 /** The source for this student, or undefined when there is nothing to fetch with (no live LinkedIn). */
@@ -92,7 +110,7 @@ export async function photoSourceFor(user: Pick<User, 'id'>): Promise<PhotoSourc
       },
     };
   const { accountId, token } = live;
-  return { photo: (identifier) => linkedInPhoto(accountId, identifier, { token }) };
+  return { photo: (identifier, opts) => linkedInPhoto(accountId, identifier, { token, ...opts }) };
 }
 
 type Tried = Record<string, string>;
@@ -135,10 +153,11 @@ async function readUsed(userId: string, day: string): Promise<number> {
 const nextCall = new Map<string, number>();
 
 /**
- * What one tick did: `asked` one person about, `idle` nobody is waiting, `wait` the last call was too recent,
- * `paused` today's photos (or LinkedIn's patience) are used up, `off` nothing to fetch with.
+ * What one tick did: `asked` one person about, `kept` a working link copied into Orbit's storage (no read), `idle`
+ * nobody is waiting, `wait` the last call was too recent, `paused` today's photos (or LinkedIn's patience) are used
+ * up, `off` nothing to fetch with.
  */
-export type PhotoStep = 'asked' | 'idle' | 'wait' | 'paused' | 'off';
+export type PhotoStep = 'asked' | 'kept' | 'idle' | 'wait' | 'paused' | 'off';
 
 /** One tick of the queue: the next person's photo, when the pace and the day's allowance let it. */
 export async function refreshOnePhoto(
@@ -152,7 +171,8 @@ export async function refreshOnePhoto(
   if (linkedInPaused(await readBudget(user.id, now), now)) return { step: 'paused' };
   const day = now.toISOString().slice(0, 10);
   const used = await readUsed(user.id, day);
-  if (used >= PHOTOS_PER_DAY) return { step: 'paused' };
+  // today's reads are used up: links that still work are kept all the same (a copy, not a read)
+  const capped = used >= PHOTOS_PER_DAY;
   // only people a screen showed (plan 35 B4): nobody's photo is fetched for a network nobody looks through
   const shown = await shownPeople(user.id, now);
   if (!shown.size) return { step: 'idle' };
@@ -160,10 +180,12 @@ export async function refreshOnePhoto(
   const records = await allRecords(user.id);
   const marks = await allProfileMarks(user.id);
   const recent = (at: string | undefined) => !!at && now.getTime() - Date.parse(at) < PROFILE_READ_FRESH_MS;
-  const candidates = (await db.people.bulkGet([...shown.keys()])).filter(
-    (p): p is Person =>
-      !!p && p.userId === user.id && wantsPhoto(p, now) && !recent(records.get(p.id)?.profileAt),
+  const mine = (await db.people.bulkGet([...shown.keys()])).filter(
+    (p): p is Person => !!p && p.userId === user.id,
   );
+  const candidates = capped
+    ? []
+    : mine.filter((p) => wantsPhoto(p, now) && !recent(records.get(p.id)?.profileAt));
   // tried is kept by who they are on LinkedIn as well as by Orbit person (plan 34 B4): an unmerged duplicate is not
   // asked about twice, and someone asked by profile name who came back with a member id is not asked again
   const triedAt = (p: Person) =>
@@ -171,14 +193,24 @@ export async function refreshOnePhoto(
   const due = candidates.filter(
     (p) => now.getTime() - triedAt(p) > PHOTO_RETRY_MS && !recent(marks.get(photoIdentifier(p)!)?.profileAt),
   );
-  const [p] = photoOrder(due, onScreenRank());
-  if (!p) return { step: 'idle' };
+  // nobody is missing a photo: the next working LinkedIn link is copied before it expires
+  const keeps = due.length
+    ? []
+    : mine.filter((p) => keepablePhoto(p, now) && now.getTime() - triedAt(p) > PHOTO_RETRY_MS);
+  const [p] = photoOrder(due.length ? due : keeps, onScreenRank());
+  if (!p) return { step: capped ? 'paused' : 'idle' };
+  const keeping = !due.length;
   nextCall.set(user.id, now.getTime() + GAP_MS * (1 + jitter()));
   tried[photoIdentifier(p)!] = now.toISOString();
   tried[p.id] = now.toISOString();
   await db.kv.put({ key: triedKey(user.id), value: tried });
-  await db.kv.put({ key: dayKey(user.id), value: { day, used: used + 1 } });
-  const r = await source.photo(photoIdentifier(p)!);
+  if (!keeping) await db.kv.put({ key: dayKey(user.id), value: { day, used: used + 1 } });
+  const r = await source.photo(
+    photoIdentifier(p)!,
+    keeping ? { known: p.photoUrl, keepOnly: true } : undefined,
+  );
+  // answered from Orbit's kept copy: nothing was read, so it does not count against today's reads
+  if (!keeping && r.ok && r.value.kept) await db.kv.put({ key: dayKey(user.id), value: { day, used } });
   if (!r.ok) {
     if (r.reason === 'throttled') {
       await pauseLinkedIn(user.id, now, 'LinkedIn asked Orbit to slow down. It carries on tomorrow.');
@@ -188,10 +220,11 @@ export async function refreshOnePhoto(
       await db.kv.put({ key: dayKey(user.id), value: { day, used: PHOTOS_PER_DAY } });
       return { step: 'paused', personId: p.id };
     }
-    return { step: 'asked', personId: p.id };
+    return { step: keeping ? 'kept' : 'asked', personId: p.id };
   }
-  await applyPhoto(p.id, r.value, now);
-  return { step: 'asked', personId: p.id };
+  // a link that would not copy stays as it is: nothing to write
+  if (!keeping || r.value.pictureUrl) await applyPhoto(p.id, r.value, now);
+  return { step: keeping ? 'kept' : 'asked', personId: p.id };
 }
 
 /** Write what LinkedIn said: the photo by the usual rule, and who they are on LinkedIn where Orbit had no id. */
@@ -256,7 +289,12 @@ export function startPhotoQueue(user: Pick<User, 'id'>): () => void {
       if (r.step === 'asked') startActivity('photos', 'Fetching profile photos', { quiet: true });
       else if (r.step !== 'wait') endActivity('photos');
       const gap = Math.max(500, (nextCall.get(user.id) ?? 0) - Date.now());
-      wait = r.step === 'asked' || r.step === 'wait' ? gap : r.step === 'idle' ? 60_000 : 10 * 60_000;
+      wait =
+        r.step === 'asked' || r.step === 'kept' || r.step === 'wait'
+          ? gap
+          : r.step === 'idle'
+            ? 60_000
+            : 10 * 60_000;
     }
     if (!stopped) schedule(wait);
   };

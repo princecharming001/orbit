@@ -11,6 +11,7 @@ import { setUnipileUrlForTests } from '../integrations/unipile';
 import { checkVillage, setVillageUrlForTests, villageHealth } from '../integrations/village';
 import { resetTargetMutualsForTests, targetMutuals } from './externalRoutes';
 import { reachPerson, updateEdgesFor } from './graph';
+import { MUTUALS_KEEP_MS } from './linkedinLive';
 import { addLinkedInFound, searchLinkedInLive } from './linkedinSearch';
 import { resetWarmIntrosCache, setVillageEnabledForTests } from './warmIntros';
 
@@ -229,8 +230,12 @@ describe('a second-degree person found on LinkedIn', () => {
     expect((await reachPerson(user.id, sara.id)).length).toBe(1);
     expect(searchCalls()).toHaveLength(1);
     expect(mutualsCalls()).toHaveLength(1);
-    // the next day the mutuals are asked for again
+    // the next day too: who two people both know is kept two weeks (plan 41), then asked for again
     vi.setSystemTime(new Date(NOW.getTime() + 86_400_000));
+    resetTargetMutualsForTests();
+    await reachPerson(user.id, sara.id);
+    expect(mutualsCalls()).toHaveLength(1);
+    vi.setSystemTime(new Date(NOW.getTime() + MUTUALS_KEEP_MS + 1));
     resetTargetMutualsForTests();
     await reachPerson(user.id, sara.id);
     expect(mutualsCalls()).toHaveLength(2);

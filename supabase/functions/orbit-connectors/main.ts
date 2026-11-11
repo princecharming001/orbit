@@ -10,6 +10,7 @@ import {
   postgrestTake,
   postgrestUsage,
 } from './connectors.ts';
+import { postgrestCallSink, storagePhotoWriter } from './people.ts';
 
 const url = Deno.env.get('SUPABASE_URL') ?? '';
 const serviceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? '';
@@ -105,6 +106,9 @@ Deno.serve(
     shared: url && serviceKey ? postgrestSharedReads(url, serviceKey) : undefined,
     // LinkedIn companies found once for every student, logos copied into storage (orbit_private.linkedin_companies)
     companies: url && serviceKey ? postgrestCompanyCache(url, serviceKey) : undefined,
+    // plan 41: people's photos kept in storage, and the daily count of reads made, saved and refused
+    photos: url && serviceKey ? storagePhotoWriter(url, serviceKey) : undefined,
+    calls: url && serviceKey ? postgrestCallSink(url, serviceKey) : undefined,
     // plan 34 E1: Exa from /web and Village from /paths land in orbit.usage_ledger like the server's own calls
     usage: url && serviceKey ? postgrestUsage(url, serviceKey) : undefined,
     postings: {
