@@ -118,6 +118,16 @@ test.describe('Send to many, in the demo (plan 38)', () => {
     await expect(page.getByTestId('chats-week-call').first()).toBeVisible();
     await page.getByTestId('chats-week-next').click();
     await expect(page.getByTestId('chats-week')).toContainText(/Next week/);
+    // a month, and a list of what is coming and what happened
+    await page.getByTestId('chats-view-month').click();
+    await expect(page.getByTestId('chats-month')).toBeVisible();
+    await expect(page.getByTestId('chats-month-call').first()).toBeVisible();
+    await page.getByTestId('chats-view-list').click();
+    await expect(page.getByTestId('chats-list-upcoming')).toBeVisible();
+    await expect(page.getByTestId('chats-list-call').first()).toBeVisible();
+    // the choice is kept for the next visit
+    await page.reload();
+    await expect(page.getByTestId('chats-list')).toBeVisible();
   });
 });
 

@@ -122,3 +122,27 @@ describe('isKnownContact for people kept on Orbit server', () => {
     ).toBe(false);
   });
 });
+
+describe('roleFromHeadline, leaders and sentences', () => {
+  it('reads a leader "of" a company, and only the first sentence of a headline', () => {
+    expect(
+      roleFromHeadline('CEO of Pond AI. A platform with 7K AI builders to source custom AI agents.'),
+    ).toEqual({
+      title: 'CEO',
+      org: 'Pond AI',
+    });
+    expect(roleFromHeadline('Co-Founder & CEO of Foam')).toEqual({ title: 'Co-Founder & CEO', org: 'Foam' });
+    // "Head of Growth" is a title, not a company
+    expect(roleFromHeadline('Head of Growth')).toEqual({ title: 'Head of Growth' });
+    expect(roleFromHeadline('Head of Partnerships at The Founder Engine')).toEqual({
+      title: 'Head of Partnerships',
+      org: 'The Founder Engine',
+    });
+    // a title alone, before a bar
+    expect(roleFromHeadline('Canfield Business Honors Student | Finance | Statistics')).toEqual({
+      title: 'Canfield Business Honors Student',
+    });
+    // a sentence with no role stays a long line: no title made from it
+    expect(roleFromHeadline('Text a safe and free AI doctor -> pymanderhealth.com').title).toBeDefined();
+  });
+});

@@ -213,6 +213,44 @@ describe('sync.linkedin', () => {
       expect(self!.linkedin_member_id).toBe('ACoMaya');
     });
 
+    it('people synced with only a headline get their title and company from it on the next sync, read once', async () => {
+      const [pond] = await t.db.sql<{ id: string }>`
+        insert into orbit.people (user_id, display_name, first_name, name_norm, headline, sources)
+        values (${u}::uuid, 'Dylan Zhang', 'Dylan', 'dylan zhang',
+                'CEO of Pond AI. A platform with 7K AI builders to source custom AI agents.', ${['linkedin']}::text[])
+        returning id`;
+      const [stu] = await t.db.sql<{ id: string }>`
+        insert into orbit.people (user_id, display_name, first_name, name_norm, headline, sources)
+        values (${u}::uuid, 'Arnav Goel', 'Arnav', 'arnav goel',
+                'Canfield Business Honors Student | Finance | Statistics', ${['linkedin']}::text[])
+        returning id`;
+      await sync(u);
+      await drain(t, env.handlers, env.time.now);
+      const read = async (id: string) =>
+        (
+          await t.db.sql<{
+            title: string | null;
+            org_raw: string | null;
+            at: string | null;
+            updated: string;
+          }>`
+            select title, org_raw, roles_from_headline_at::text as at, updated_at::text as updated
+              from orbit.people where id = ${id}::uuid`
+        )[0]!;
+      const a = await read(pond!.id);
+      expect(a).toMatchObject({ title: 'CEO', org_raw: 'Pond AI' });
+      expect(a.at).not.toBeNull();
+      const affs = await t.db.sql<{ org_raw: string; is_current: boolean }>`
+        select org_raw, is_current from orbit.affiliations where person_id = ${pond!.id}::uuid`;
+      expect(affs).toEqual([{ org_raw: 'Pond AI', is_current: true }]);
+      expect(await read(stu!.id)).toMatchObject({ title: 'Canfield Business Honors Student', org_raw: null });
+      // read once: the next pass leaves the rows as they are, and marking them changes nothing the browser pulls
+      const before = await read(stu!.id);
+      await sync(u);
+      await drain(t, env.handlers, env.time.now);
+      expect((await read(stu!.id)).updated).toBe(before.updated);
+    });
+
     it('a relation carries the day they connected, so the browser counts them as known', async () => {
       const priya = await person(u, { member: 'ACoPriya' });
       const [row] = await t.db.sql<{ connected: Date }>`

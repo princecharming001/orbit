@@ -2137,6 +2137,30 @@ export async function startWarmUpOrOutreach(
     const draft = await draftMessage(user, personId, 'outreach', channel, null);
     return { draft };
   }
+  // a card at To contact (Add a person) that a warm-up now starts on: the same card moves to Warming up
+  if (chat && chat.stage === 'identified' && cold) {
+    const warmUp = buildWarmUpPlan(person.linkedinSlug!, now, settings?.warmUpDays ?? 4, user.timezone);
+    await db.chats.update(chat.id, {
+      stage: 'warming',
+      stageEnteredAt: now.toISOString(),
+      warmUp,
+      outreachChannel: channel,
+      updatedAt: now.toISOString(),
+    });
+    await db.stageEvents.add({
+      id: newId('se'),
+      userId: user.id,
+      chatId: chat.id,
+      fromStage: 'identified',
+      toStage: 'warming',
+      status: 'applied',
+      actor: 'user',
+      reason: 'warmup:started',
+      createdAt: now.toISOString(),
+      decidedAt: now.toISOString(),
+    });
+    chat = { ...chat, stage: 'warming', warmUp };
+  }
   if (!chat) {
     const referrer = await findReferrerFor(user.id, person);
     chat = {

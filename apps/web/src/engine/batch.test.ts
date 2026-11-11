@@ -16,7 +16,7 @@ import {
   takenSends,
 } from './batch';
 import { studentDay } from './batchTime';
-import { callsWeek, outreachFunnel, weekStart } from './callsWeek';
+import { callsList, callsMonth, callsWeek, monthStart, outreachFunnel, weekStart } from './callsWeek';
 import { loadDemo } from './demo';
 import { funnelWords, saveFunnel, setAutoReplies } from './funnels';
 import { cancelSend, isScheduled, moveToNextDay, queueDays, sendNow } from './queue';
@@ -251,5 +251,25 @@ describe('the calls (plan 38 §F)', () => {
     const f = await outreachFunnel(user.id);
     expect(f.replied).toBeLessThanOrEqual(f.wrote);
     expect(f.booked).toBeLessThanOrEqual(f.replied);
+  });
+  it('a month is whole weeks from Monday holding every day of it; the list splits coming from past', async () => {
+    const now = new Date();
+    const m = await callsMonth(user.id, monthStart(now));
+    expect(m.days.length).toBe(m.weeks * 7);
+    expect(m.days[0]!.date.getDay()).toBe(1);
+    const own = m.days.filter((d) => d.date.getMonth() === now.getMonth());
+    expect(own.length).toBe(new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate());
+    // the week's calls are the month's calls on those days
+    const w = await callsWeek(user.id, weekStart(now));
+    for (const d of w.days) {
+      const same = m.days.find((x) => x.date.getTime() === d.date.getTime());
+      if (same) expect(same.calls.map((c) => c.id)).toEqual(d.calls.map((c) => c.id));
+    }
+    const l = await callsList(user.id, now);
+    for (const c of l.upcoming) expect(Date.parse(c.endAt)).toBeGreaterThanOrEqual(now.getTime());
+    for (const c of l.past) expect(Date.parse(c.endAt)).toBeLessThan(now.getTime());
+    // upcoming soonest first, past latest first
+    expect(l.upcoming.map((c) => c.startAt)).toEqual([...l.upcoming.map((c) => c.startAt)].sort());
+    expect(l.past.map((c) => c.startAt)).toEqual([...l.past.map((c) => c.startAt)].sort().reverse());
   });
 });

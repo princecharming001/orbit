@@ -480,6 +480,30 @@ describe('a note about someone the student never messaged', () => {
     expect(kinds).not.toContain('new_outreach');
   });
 
+  it('someone on the pipeline at To contact (Add a person) and met before any message: their card moves to completed', async () => {
+    await db.users.put({ ...user, onboardingCompletedAt: '2026-09-01T00:00:00.000Z' });
+    const rachel = await person('Rachel Kim', 'rachel.kim@mckinsey.com', 'McKinsey');
+    const { addToPipeline } = await import('./pipelineAdd');
+    const added = await addToPipeline(user, rachel.id);
+    await ingestNote(
+      user,
+      {
+        source: 'manual',
+        personIds: [rachel.id],
+        occurredAt: new Date(NOW.getTime() - 3 * 3_600_000).toISOString(),
+        text: 'Coffee chat with Rachel Kim. She offered to look over my resume.',
+      },
+      NOW,
+    );
+    const chats = await db.chats.where('personId').equals(rachel.id).toArray();
+    expect(chats.map((c) => [c.id, c.stage])).toEqual([[added!.chat.id, 'completed']]);
+    await evaluateImmediateSuggestions(user.id, { personId: rachel.id, chatId: chats[0]!.id }, NOW);
+    const kinds = (await db.suggestions.where('personId').equals(rachel.id).toArray())
+      .filter((x) => x.status === 'pending')
+      .map((x) => x.kind);
+    expect(kinds).toContain('thank_you');
+  });
+
   it('a chat the note opened goes away when the note is moved to someone else', async () => {
     const daniel = await person('Daniel Okafor', 'daniel@goldman.com', 'Goldman Sachs');
     const maya = await person('Maya Chen', 'maya@stripe.com', 'Stripe');

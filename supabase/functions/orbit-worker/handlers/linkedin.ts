@@ -22,6 +22,7 @@ import { CLASSIFY_WINDOW_DAYS } from '../../_shared/ingest/gmail.ts';
 import {
   CHAT_MAX_ATTENDEES,
   type ChatAttendeeInput,
+  fillRolesFromHeadlines,
   ingestRelations,
   relationFromUnipile,
   storeChat,
@@ -145,6 +146,11 @@ export function linkedinHandlers(deps: HandlerDeps): Record<string, JobHandler> 
       const save = (patch: LinkedinState & Record<string, unknown>) =>
         patchSyncState(ctx.db, userId, 'linkedin', 'linkedin', patch, { lastSyncedAt: now, lastError: null });
 
+      // people synced before the headline reader matched the app's get their title and company from it: no LinkedIn
+      // read, and never a reason for the sync itself to fail
+      // (their scores read the title: they are scored again)
+      const filled = await fillRolesFromHeadlines(ctx.db, userId, now).catch(() => [] as string[]);
+      await scorePeople(ctx, userId, filled, `${job.msgId}:roles`).catch(() => undefined);
       const self = await loadSelf(ctx.db, userId);
       if (!state.selfMemberId) {
         const me = await call(() => unipile.me(accountId));

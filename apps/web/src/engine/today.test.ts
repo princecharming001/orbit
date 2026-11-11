@@ -134,10 +134,15 @@ describe('started drafts and people not written to yet (round 3)', () => {
       person('chatting', ['manual'], '2026-10-05T10:00:00Z'),
       person('drafted', ['manual'], '2026-10-05T10:00:00Z'),
       person('dropped', ['manual'], '2026-10-04T10:00:00Z'),
+      person('added', ['manual'], '2026-10-03T10:00:00Z'),
     ];
     const r = notYetWritten(
       people,
-      [{ personId: 'chatting' }],
+      [
+        { personId: 'chatting', stage: 'outreach_sent' },
+        // on the pipeline at To contact, not written to yet: still listed
+        { personId: 'added', stage: 'identified' },
+      ],
       [
         { personId: 'drafted', status: 'draft' },
         { personId: 'dropped', status: 'cancelled' },
@@ -145,6 +150,6 @@ describe('started drafts and people not written to yet (round 3)', () => {
       [],
       NOW,
     );
-    expect(r.map((p) => p.id)).toEqual(['new', 'dropped']);
+    expect(r.map((p) => p.id)).toEqual(['new', 'dropped', 'added']);
   });
 });

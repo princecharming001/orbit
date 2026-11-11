@@ -37,30 +37,20 @@ export function isCall(e: CalendarEvent): boolean {
   return e.status !== 'cancelled' && (!!e.isCoffeeChat || e.attendeePersonIds.length > 0);
 }
 
-export async function callsWeek(userId: string, start: Date): Promise<WeekView> {
-  const end = new Date(start.getTime() + 7 * DAY + 3_600_000);
+/** Every call between two times, by start, one per person and time (a booking and the calendar's copy are one). */
+export async function callsBetween(userId: string, from: Date, to: Date): Promise<WeekCall[]> {
   const events = await db.events
     .where('userId')
     .equals(userId)
-    .filter((e) => isCall(e) && e.startAt >= start.toISOString() && e.startAt < end.toISOString())
+    .filter((e) => isCall(e) && e.startAt >= from.toISOString() && e.startAt < to.toISOString())
     .toArray();
-  const days = Array.from({ length: 7 }, (_, i) => {
-    const date = new Date(start);
-    date.setDate(start.getDate() + i);
-    return { date, calls: [] as WeekCall[] };
-  });
-  // one call per person and time (a booking and the calendar's copy of it are the same call)
   const seen = new Set<string>();
+  const out: WeekCall[] = [];
   for (const e of events.sort((a, b) => a.startAt.localeCompare(b.startAt))) {
     const key = `${e.attendeePersonIds[0] ?? e.title}|${e.startAt}`;
     if (seen.has(key)) continue;
     seen.add(key);
-    const d = new Date(e.startAt);
-    const i = Math.floor(
-      (new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime() - start.getTime()) / DAY,
-    );
-    if (i < 0 || i > 6) continue;
-    days[i]!.calls.push({
+    out.push({
       id: e.id,
       startAt: e.startAt,
       endAt: e.endAt,
@@ -69,7 +59,62 @@ export async function callsWeek(userId: string, start: Date): Promise<WeekView> 
       conferenceUrl: e.conferenceUrl,
     });
   }
+  return out;
+}
+
+/** The calls of `count` days from `start` (a local midnight), placed on their own day. */
+async function callsByDay(userId: string, start: Date, count: number): Promise<WeekView> {
+  const days = Array.from({ length: count }, (_, i) => {
+    const date = new Date(start);
+    date.setDate(start.getDate() + i);
+    return { date, calls: [] as WeekCall[] };
+  });
+  const end = new Date(days[count - 1]!.date);
+  end.setDate(end.getDate() + 1);
+  const key = (d: Date) => `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}`;
+  const byKey = new Map(days.map((d) => [key(d.date), d]));
+  for (const c of await callsBetween(userId, start, end)) byKey.get(key(new Date(c.startAt)))?.calls.push(c);
   return { start, days, total: days.reduce((n, d) => n + d.calls.length, 0) };
+}
+
+export async function callsWeek(userId: string, start: Date): Promise<WeekView> {
+  return callsByDay(userId, start, 7);
+}
+
+/** The first of the month `offset` months from the one `at` falls in. */
+export function monthStart(at: Date, offset = 0): Date {
+  return new Date(at.getFullYear(), at.getMonth() + offset, 1);
+}
+
+/** A month as whole weeks, Monday to Sunday: the days around it are there, and `inMonth` says which are its own. */
+export async function callsMonth(
+  userId: string,
+  month: Date,
+): Promise<WeekView & { month: Date; weeks: number }> {
+  const first = weekStart(month);
+  const last = new Date(month.getFullYear(), month.getMonth() + 1, 0);
+  const weeks = Math.ceil((Math.round((last.getTime() - first.getTime()) / DAY) + 1) / 7);
+  const v = await callsByDay(userId, first, weeks * 7);
+  return { ...v, month, weeks };
+}
+
+/** The list: calls from today on (the next `ahead` days), and the last `behind` days' calls, latest first. */
+export async function callsList(
+  userId: string,
+  now = new Date(),
+  ahead = 90,
+  behind = 30,
+): Promise<{ upcoming: WeekCall[]; past: WeekCall[] }> {
+  const all = await callsBetween(
+    userId,
+    new Date(now.getTime() - behind * DAY),
+    new Date(now.getTime() + ahead * DAY),
+  );
+  const at = now.toISOString();
+  return {
+    upcoming: all.filter((c) => c.endAt >= at),
+    past: all.filter((c) => c.endAt < at).reverse(),
+  };
 }
 
 export interface OutreachFunnel {

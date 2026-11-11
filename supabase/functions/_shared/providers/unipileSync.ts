@@ -12,6 +12,8 @@
  * - `POST /api/v1/hosted/accounts/link` → `{url}` (hosted auth, §12.3 "Connect").
  * Everything is read tolerantly (loose objects, nullish fields). Failures come back as ProviderResult errors.
  */
+
+import { roleFromHeadline } from '@orbit/core/linkedin/headline';
 import {
   type ProviderOptions,
   type ProviderResult,
@@ -242,10 +244,13 @@ export function unipileTime(v: string | number | null | undefined): string | und
   return Number.isNaN(d.getTime()) ? undefined : d.toISOString();
 }
 
-/** "Product Designer at Figma" → title and company; undefined when the headline does not read that way. */
+/**
+ * A LinkedIn headline into a title and company, read the way the app reads it (@orbit/core roleFromHeadline):
+ * "PM @Stripe", "Product Manager at Google · Bengaluru", "CEO of Pond AI. A platform…", a title alone before a bar
+ * ("Founder & CEO | …"). A past or wished-for role ("Former Analyst at Goldman", "Aspiring PM") gives neither. The
+ * server used to read only "Title at Company" before the first bar, so most connections had no title or company.
+ */
 export function parseHeadline(headline: string | null | undefined): { title?: string; company?: string } {
-  const h = (headline ?? '').split('|')[0]!.trim();
-  const m = /^(.{2,80}?)\s+(?:at|@)\s+(.{2,80})$/i.exec(h);
-  if (!m) return {};
-  return { title: m[1]!.trim(), company: m[2]!.replace(/[.,;]+$/, '').trim() };
+  const r = roleFromHeadline(headline ?? undefined);
+  return { title: r.title, company: r.org };
 }
