@@ -64,7 +64,7 @@ const CLAUSE_WORDS = 9;
 const MAX_PARSE_RETRIES = 2;
 
 export const COMPACTION_INSTRUCTIONS =
-  "Keep the student's name and goals, every pending confirmation and its id, every draft id and person id mentioned, every decision the student made (approved, cancelled, moved, dismissed), and what the student asked for last.";
+  "Keep the student's name and goals, every pending confirmation and its id, every draft id and person id mentioned, every decision the student made (approved, cancelled, moved, dismissed), and what the student asked for last. Also keep, in order: each thing the student asked for and what came of it; every company named and what was found there; each list of people shown, as names with their ids in the order shown; everything the student said about themselves, what they want and what they do not want; and any correction they made.";
 
 export type ExecuteFn = (name: string, input: unknown, ctx: ToolContext) => Promise<ResultEnvelope>;
 
@@ -326,6 +326,7 @@ export const CORE_TOOLS: ReadonlySet<string> = new Set([
   'offer_choices',
   'open_page',
   'remember',
+  'search_chats',
   'search_network',
   'search_people',
   'send_draft',
@@ -590,7 +591,21 @@ export async function runTurn(
     .map((b) => (b.type === 'text' && !isOrbitText(b.text) ? b.text : ''))
     .join(' ')
     .trim();
-  const snapshot = await buildSnapshot(user.id, clock(), { lastUserText });
+  // what the student said in the turns before this one: a short follow-up recalls memory by them too
+  const recentUserText = history
+    .filter((m) => m.role === 'user')
+    .slice(-4)
+    .flatMap((m) => (Array.isArray(m.content) ? m.content : []))
+    .map((b) => (b.type === 'text' && !isOrbitText(b.text) ? b.text : ''))
+    .filter(Boolean)
+    .slice(-2)
+    .join(' ')
+    .slice(0, 400);
+  const snapshot = await buildSnapshot(user.id, clock(), {
+    lastUserText,
+    recentUserText,
+    conversationId: conversation.id,
+  });
   // the playbook for this student's goals, after the frozen block (plan 28); a failure here is never a failed turn
   const knowledge = await knowledgeTextFor(user.id).catch(() => undefined);
   const previous = await store.lastContextTexts(conversation.id);

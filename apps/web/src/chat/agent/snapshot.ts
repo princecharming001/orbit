@@ -16,6 +16,7 @@ import { llmFeatures, readPrefs } from '../../integrations/prefs';
 import { sharedClaudeAvailable } from '../../integrations/shared-claude';
 import { getPanelHint } from '../panel/panelHint';
 import { offeredGoalLine } from './afterTurn';
+import { chatDigests, earlierChatsLine, recentActivityLine } from './chatContext';
 import { setupLine } from './setup';
 
 /**
@@ -107,11 +108,20 @@ const SELF_SNAPSHOT_MAX = 1400;
 export async function buildSnapshot(
   userId: string,
   now: Date,
-  opts: { lastUserText?: string } = {},
+  opts: { lastUserText?: string; recentUserText?: string; conversationId?: string } = {},
 ): Promise<Snapshot> {
   const account = isServerUser(userId);
   // the server's memories in account mode, this browser's otherwise (engine/memory.ts picks)
-  const remembered = rememberedLines({ id: userId }, opts.lastUserText, {
+  // a short follow-up ("why them", "and her?") recalls by what the student has been saying, not by its own few words
+  const recallBy =
+    (opts.lastUserText ?? '').trim().length < 40 && opts.recentUserText
+      ? `${opts.lastUserText ?? ''} ${opts.recentUserText}`.trim()
+      : opts.lastUserText;
+  const earlier = chatDigests(userId, { except: opts.conversationId })
+    .then((d) => earlierChatsLine(d, now))
+    .catch(() => undefined);
+  const activity = recentActivityLine(userId, now).catch(() => undefined);
+  const remembered = rememberedLines({ id: userId }, recallBy, {
     signal: AbortSignal.timeout(REMEMBERED_TIMEOUT_MS),
     maxChars: REMEMBERED_MAX_CHARS,
   }).catch(() => [] as string[]);
@@ -267,6 +277,7 @@ export async function buildSnapshot(
       ]
     : [];
   const offered = account ? offeredGoalLine(userId) : undefined;
+  const [earlierLine, activityLine] = await Promise.all([earlier, activity]);
   const resumeLine = await resumeOffer;
   const resumeText = await resumeContext;
   const lines = [
@@ -280,6 +291,8 @@ export async function buildSnapshot(
     `Pipeline (chats by stage, ${chats.filter((c) => !c.archivedAt).length} total): ${pipeline || 'empty'}. People: ${humans}.`,
     `Today's brief (ids): ${cardLines.length ? cardLines.join('; ') : 'nothing pending'}${moreCards ? `; ${moreCards} more` : ''}.`,
     `Drafts unsent: ${draftLine}.${inFlight ? ` In flight (queued or handed off): ${inFlight}.` : ''}`,
+    ...(activityLine ? [activityLine] : []),
+    ...(earlierLine ? [earlierLine] : []),
     `Integrations: ${integ}. Claude features: ${claude}.`,
     setup,
     ...(panelLine ? [panelLine] : []),

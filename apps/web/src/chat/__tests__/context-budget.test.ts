@@ -89,8 +89,9 @@ describe('the context of one turn, demo account', () => {
     const snap = await buildSnapshot(user.id, NOW, { lastUserText: 'who should I meet this week?' });
     note('snapshot (tokens)', (await countTokens({ text: snap.text })) - base);
     note('snapshot (chars)', snap.text.length);
-    // 700 plus the Resume line (at most 520 characters), so the chat knows the student's background every turn
-    expect(estimateTokens(snap.text)).toBeLessThanOrEqual(800);
+    // 700 plus the Resume line (at most 520 characters), so the chat knows the student's background every turn, plus
+    // plan 39's two records: recent messages (names and days) and the earlier chats (at most 900 characters)
+    expect(estimateTokens(snap.text)).toBeLessThanOrEqual(1250);
 
     const ctx = () => makeCtx(user, { caller: 'llm' });
     const samples: [string, Record<string, unknown>][] = [
@@ -128,7 +129,8 @@ describe('the tools loaded up front (plan 35 A1)', () => {
     note('loaded tool list (chars)', loadedChars);
     note('whole tool list (chars)', JSON.stringify(all).length);
     expect(loaded.map((t) => t.name).sort()).toEqual([...CORE_TOOLS].sort());
-    expect(loadedChars).toBeLessThan(30_000);
+    // 30k, plus search_chats (plan 39): a student who says "last time" must never wait on a tool search to be heard
+    expect(loadedChars).toBeLessThan(30_300);
     expect(deferred.length).toBeGreaterThanOrEqual(80);
     expect(deferred.every((t) => t.cache_control === undefined)).toBe(true);
   });

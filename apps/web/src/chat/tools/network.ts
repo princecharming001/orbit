@@ -45,6 +45,7 @@ import {
 import { mockSourcedPeople, mockSourcingFits, usesMockConnectors } from '../../integrations/connectorsMock';
 import { callApi, isAccountMode, isServerUser } from '../../integrations/orbitApi';
 import { z } from '../../zod';
+import { searchChats } from '../agent/chatContext';
 import { clarifyResult } from '../clarify';
 import type { ResultEnvelope, ToolContext } from '../types';
 import {
@@ -1409,6 +1410,39 @@ export const recallTool = defineTool({
   toModel,
 });
 
+export const searchChatsTool = defineTool({
+  name: 'search_chats',
+  kind: 'read',
+  description:
+    'Call this when the student refers to an earlier conversation with Orbit that is not in this chat or the Earlier chats context ("what were we talking about", "that list from last week", "pick up where we left off"). Searches every past chat by words; an empty query gives the latest ones.',
+  input: z.object({
+    query: z.string().max(200).optional().describe('A name, company or topic. Empty for the latest chats.'),
+  }),
+  capabilities: ['chat_recall'],
+  progress: 'Looking through earlier chats',
+  async execute(input, ctx) {
+    const hits = await searchChats(ctx.user.id, input.query ?? '', { except: ctx.conversationId });
+    const chats = new Set(hits.map((h) => h.conversationId)).size;
+    return list(
+      'From earlier chats',
+      hits.map((h) => ({ text: `${h.who === 'student' ? 'You' : 'Orbit'}: ${h.text}` })),
+      {
+        hits: hits.map((h) => ({
+          conversationId: h.conversationId,
+          title: h.title,
+          at: h.at,
+          who: h.who,
+          text: h.text,
+        })),
+      },
+      hits.length
+        ? `${plural(hits.length, 'line')} from ${plural(chats, 'earlier chat')}.`
+        : 'Nothing in earlier chats about that.',
+    );
+  },
+  toModel,
+});
+
 export const forgetTool = defineTool({
   name: 'forget',
   kind: 'risky',
@@ -1475,5 +1509,6 @@ export const networkTools: AnyTool[] = [
   listDueTool,
   rememberTool,
   recallTool,
+  searchChatsTool,
   forgetTool,
 ];

@@ -67,6 +67,87 @@ const CASES: Case[] = [
     group: 'Knows you',
     turns: ['write a first message to Lena and mention something we have in common'],
   },
+  // context: the newest message is read with what was said earlier in the chat, in earlier chats, and with what the
+  // student sent out and heard back ("new:" starts a fresh chat mid-case)
+  {
+    id: 'ctx01',
+    group: 'Context',
+    turns: [
+      'who do I know at Stripe',
+      'which of them have I actually talked to',
+      'draft a note to the second one',
+    ],
+  },
+  {
+    id: 'ctx02',
+    group: 'Context',
+    turns: [
+      "I'm trying to break into climate tech, ideally product roles in Boston",
+      'who should I talk to first',
+      'why them',
+    ],
+  },
+  {
+    id: 'ctx03',
+    group: 'Context',
+    turns: [
+      'tell me about Lena Novak',
+      'when did we last talk',
+      'what did she say',
+      'where does she work again',
+    ],
+  },
+  {
+    id: 'ctx04',
+    group: 'Context',
+    turns: [
+      'who do I know at Ramp',
+      'when is my next chat',
+      'go back to the Ramp people, who is the most senior',
+    ],
+  },
+  { id: 'ctx05', group: 'Context', turns: ['draft a thank-you to Lena', 'actually I meant Hannah'] },
+  {
+    id: 'ctx06',
+    group: 'Context',
+    turns: ['what did I send out most recently and has anyone replied', 'what exactly did they say back'],
+  },
+  { id: 'ctx07', group: 'Context', turns: ['who do I know at Stripe', 'who else there should I meet'] },
+  {
+    id: 'xc01',
+    group: 'Context',
+    turns: [
+      'I only want roles in New York, and I never want my messages to mention my GPA',
+      'new:',
+      'what do you know about what I am looking for',
+    ],
+  },
+  {
+    id: 'xc02',
+    group: 'Context',
+    turns: [
+      'who do I know at Stripe',
+      'new:',
+      'what were we just talking about in my last chat',
+      'pick that back up',
+    ],
+  },
+  {
+    id: 'xc03',
+    group: 'Context',
+    turns: ['who do I know at Ramp', 'new:', 'draft a note to that engineering manager we looked at earlier'],
+  },
+  {
+    id: 'xc04',
+    group: 'Context',
+    turns: [
+      "I'm trying to break into climate tech, ideally product roles in Boston",
+      'new:',
+      'pick up where we left off',
+    ],
+  },
+  { id: 'ctx08', group: 'Context', turns: ['who have I not answered yet', 'draft a reply to the first one'] },
+  { id: 'ctx09', group: 'Context', turns: ['who did I message last and did they write back'] },
   // plan 37: a name that fits two companies or several people asks first; a tap finishes the ask
   { id: 'c01', group: 'Ask before guessing', turns: ['who do I know at Juniper', 'tap:Juniper Health'] },
   { id: 'c02', group: 'Ask before guessing', turns: ['draft a thank you to Keiko', 'tap:'] },
@@ -97,6 +178,8 @@ interface Shot {
   status: string;
   cards: string[];
   error: string | null;
+  /** the reply as text, for reading a run without opening each photo */
+  said: string;
 }
 
 async function loadDemo(page: Page) {
@@ -182,6 +265,14 @@ test.describe('chat gallery: real answers photographed for review', () => {
       const shots: Shot[] = [];
       for (const [i, text] of c.turns.entries()) {
         const started = Date.now();
+        if (text === 'new:') {
+          // a fresh chat: what was said before now lives only in Orbit's memory of earlier chats
+          await expect(page.getByTestId('composer-stop')).toHaveCount(0, { timeout: 300_000 });
+          await page.waitForTimeout(4000);
+          await page.getByTestId('new-chat').click();
+          await expect(page.getByTestId('turn-user')).toHaveCount(0);
+          continue;
+        }
         if (text.startsWith('tap:')) {
           // a question back: tap the option (the first when no label is given); the pick is the next turn
           const label = text.slice(4).trim();
@@ -207,6 +298,7 @@ test.describe('chat gallery: real answers photographed for review', () => {
             n.getAttribute('data-testid')!.replace('result-', ''),
           ),
           error: el.querySelector('[data-testid="turn-error"]')?.textContent ?? null,
+          said: ((el as HTMLElement).innerText ?? '').replace(/\n{2,}/g, '\n').slice(0, 1800),
         }));
         const file = `${c.id}-${i + 1}.png`;
         await photograph(page, `${DIR}/${file}`);

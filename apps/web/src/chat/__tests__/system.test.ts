@@ -22,10 +22,10 @@ const VOICE_FIXTURE = [
 ];
 
 describe('stable system block', () => {
-  it('is version 28 and byte-identical for every conversation; the tag rule follows in its own small block', () => {
-    expect(STABLE_SYSTEM_VERSION).toBe(28);
-    // plan 35 A2: the fixed block is under 24k characters
-    expect(text.length).toBeLessThan(24_000);
+  it('is version 29 and byte-identical for every conversation; the tag rule follows in its own small block', () => {
+    expect(STABLE_SYSTEM_VERSION).toBe(29);
+    // plan 35 A2 kept the fixed block under 24k characters; plan 39's three lines on reading with context take it to 25k
+    expect(text.length).toBeLessThan(25_000);
     expect(stableSystemText()).toBe(text);
     const a = systemBlocks('0123456789abcdef');
     const b = systemBlocks('fedcba9876543210');

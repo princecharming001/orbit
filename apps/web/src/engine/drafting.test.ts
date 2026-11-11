@@ -444,7 +444,7 @@ describe('drafting against the demo data', () => {
     await db.people.update(chloe.id, { linkedinConnectedOn: undefined });
     const note = await draftMessage(user, chloe.id, 'outreach', 'linkedin');
     expect(note.bodyDraft.length).toBeLessThanOrEqual(300);
-    expect(note.bodyDraft).toMatch(/^Hi Chloe, (we traded emails|following up on my note)/);
+    expect(note.bodyDraft).toMatch(/^Hey Chloe, (we traded (emails|messages)|following up on my note)/);
   });
 
   it('a reply asking for the resume and the teams gets both before any times (EG-03)', async () => {

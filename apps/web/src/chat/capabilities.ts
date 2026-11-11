@@ -1897,6 +1897,17 @@ export const CAPABILITIES: readonly Capability[] = [
     ],
   },
   {
+    id: 'chat_recall',
+    area: 'Networking agent',
+    title: 'Pick an earlier conversation back up',
+    kind: 'read',
+    utterances: [
+      'what were we talking about last time',
+      'pick up where we left off',
+      'find that list you gave me last week',
+    ],
+  },
+  {
     id: 'memory_forget',
     area: 'Networking agent',
     title: 'Make Orbit forget something',

@@ -585,6 +585,32 @@ export function routeNetwork(text: string, lower: string, h: NetworkHelpers): Ro
       return h.viaTool('remember', { text: what.slice(0, 300), kind }, undefined, 'remember something');
     }
   }
+  // an earlier conversation with Orbit (plan 39): "what were we talking about", "pick up where we left off",
+  // "find that list you gave me last week", "what did I ask you about Ramp before"
+  {
+    const earlier =
+      /\b(last time|earlier chat|previous chat|last chat|other chat|past chats?|(?:the )?other day|before|last week|yesterday)\b/i;
+    const general =
+      /^(?:so )?(?:what (?:were|was) (?:we|i) (?:just )?(?:talking|chatting|working) (?:about|on)|where (?:did|were) we (?:leave|left) off|pick (?:(?:that|this|it|things) )?(?:back )?up(?: where we left off)?|(?:let'?s )?pick up where we left off|continue (?:from )?where we left off|what did (?:we|i) (?:cover|discuss|talk about|ask(?: you)?)(?: about)?)\b(.*)$/i;
+    const g = text.match(general);
+    const find = text.match(
+      /^(?:find|show|get|pull up|bring back|what was|where is|where'?s) (?:me )?(?:that|the) (.+?) (?:you (?:gave|showed|sent|made|found)(?: (?:me|for me))?|we (?:talked about|looked at|discussed|made)|i asked (?:you )?(?:about|for))\b(.*)$/i,
+    );
+    if (g || (find && earlier.test(text))) {
+      const topic = (g ? g[1]! : find![1]!)
+        .replace(earlier, ' ')
+        .replace(/\b(in|from|on|about|my|our|the|a|an|just|again|please|you|me|we|i|for|that|this)\b/gi, ' ')
+        .replace(/[?.!,]/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim();
+      return h.viaTool(
+        'search_chats',
+        topic ? { query: topic.slice(0, 200) } : {},
+        undefined,
+        'earlier chats',
+      );
+    }
+  }
   {
     const m = text.match(/^what do you remember(?: about (.+))?$/i);
     if (m) {

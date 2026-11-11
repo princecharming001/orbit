@@ -223,8 +223,10 @@ describe('people found in a search, in the people card look', () => {
     expect(rows).toHaveLength(3);
     const card = $('[data-testid="result-list"]')!;
     expect(card.textContent).toContain('3 people');
-    expect(card.textContent).toContain('2 emails, 1 verified');
-    expect(card.textContent).toContain('No place was named');
+    // the title alone says what the card is: found outside the student's network, no count lines under it
+    expect(card.textContent).toContain('3 people: outside your network');
+    expect(card.textContent).not.toContain('2 emails, 1 verified');
+    expect(card.textContent).not.toContain('No place was named');
     expect(rows[0]!.querySelector('[data-testid="email-sureness"]')?.textContent).toBe('Verified');
     expect(rows[1]!.querySelector('[data-testid="email-sureness"]')?.textContent).toBe('Unconfirmed');
     // something that is not an address is never shown as one

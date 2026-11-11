@@ -4,6 +4,7 @@ import { db } from '../../db/schema';
 import { createLocalUser } from '../../engine/account';
 import { loadDemo } from '../../engine/demo';
 import { connectLinkedInLive, linkedInLiveStatus } from '../../engine/linkedinLive';
+import { setVillageEnabledForTests } from '../../engine/warmIntros';
 import { setConnectorsMockForTests } from '../../integrations/connectorsMock';
 import { writePrefs } from '../../integrations/prefs';
 import { setUnipileUrlForTests } from '../../integrations/unipile';
@@ -95,6 +96,9 @@ describe('live LinkedIn from the chat (the sample student, on the mock connector
     expect(again.summary).toMatch(/blocked right now: LinkedIn is not connected live/);
   });
 });
+
+// Village is off for students; these tests cover the wiring that stays behind the flag
+setVillageEnabledForTests(true);
 
 describe('find_routes with warm intros', () => {
   it('adds warm intros to a person, with warmth in words and the hops, and says so', async () => {

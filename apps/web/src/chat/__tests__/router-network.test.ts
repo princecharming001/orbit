@@ -237,3 +237,28 @@ describe("the student's own schools (their LinkedIn profile names them)", () => 
     expect(rel?.mySchoolLevel).toBe(level);
   });
 });
+
+describe('an earlier conversation with Orbit (plan 39)', () => {
+  const chats = (text: string) => {
+    const r = routeUtterance(text, ctx());
+    return r.kind === 'tool' && r.tool === 'search_chats' ? (r.input as { query?: string }) : undefined;
+  };
+  it('asks the earlier chats, with no words when none were named', () => {
+    for (const t of [
+      'what were we talking about last time',
+      'pick up where we left off',
+      'what were we just talking about in my last chat',
+      'pick that back up',
+      'where did we leave off',
+    ])
+      expect(chats(t), t).toEqual({});
+  });
+  it('carries the topic when one was named', () => {
+    expect(chats('find that list you gave me last week')).toEqual({ query: 'list' });
+    expect(chats('what did we talk about Ramp before')?.query).toMatch(/Ramp/);
+  });
+  it('leaves everything else to its own route', () => {
+    for (const t of ['what do you remember about Maya', 'who do I know at Stripe', 'find people at Ramp'])
+      expect(chats(t), t).toBeUndefined();
+  });
+});
