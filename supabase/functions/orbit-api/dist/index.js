@@ -17259,6 +17259,25 @@ async function targetNames(db2, userId) {
   for (const g of goals) for (const o of g.targets?.organizations ?? []) if (!out.includes(o)) out.push(o);
   return out;
 }
+async function friendLinks(db2, me2, otherId) {
+  const [r] = await db2.sql`
+    with mine as (
+      select p.id::text as person_id, p.linkedin_url
+        from orbit.person_identities pi
+        join orbit.people p on p.id = pi.person_id and p.deleted_at is null and p.merged_into is null
+       where pi.user_id = ${me2}::uuid and pi.kind = 'email'
+         and pi.value_norm = (select lower(email) from orbit.users where id = ${otherId}::uuid)
+       order by p.updated_at desc limit 1)
+    select (select person_id from mine) as person_id,
+           coalesce((select linkedin_url from mine),
+                    (select p.linkedin_url from orbit.people p
+                      where p.user_id = ${otherId}::uuid and p.is_self and p.deleted_at is null
+                        and p.linkedin_url is not null limit 1)) as linkedin_url`;
+  return {
+    ...r?.person_id ? { personId: r.person_id } : {},
+    ...r?.linkedin_url ? { linkedinUrl: r.linkedin_url } : {}
+  };
+}
 async function friendView(db2, me2, f2, targets) {
   const otherId = f2.a === me2 ? f2.b : f2.a;
   const other = await userLite(db2, otherId);
@@ -17295,7 +17314,8 @@ async function friendView(db2, me2, f2, targets) {
     knowsAt,
     myMode: mine?.mode ?? "none",
     myCompanyDomains: mine?.company_domains ?? [],
-    since: iso(f2.accepted_at ?? f2.created_at)
+    since: iso(f2.accepted_at ?? f2.created_at),
+    ...await friendLinks(db2, me2, otherId)
   };
 }
 async function list2(ctx) {

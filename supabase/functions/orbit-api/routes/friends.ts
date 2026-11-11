@@ -163,6 +163,31 @@ async function targetNames(db: Db, userId: string): Promise<string[]> {
   return out;
 }
 
+/** Where a friend's name leads: the student's own record of them (matched by their address), else their LinkedIn. */
+async function friendLinks(
+  db: Db,
+  me: string,
+  otherId: string,
+): Promise<{ personId?: string; linkedinUrl?: string }> {
+  const [r] = await db.sql<{ person_id: string | null; linkedin_url: string | null }>`
+    with mine as (
+      select p.id::text as person_id, p.linkedin_url
+        from orbit.person_identities pi
+        join orbit.people p on p.id = pi.person_id and p.deleted_at is null and p.merged_into is null
+       where pi.user_id = ${me}::uuid and pi.kind = 'email'
+         and pi.value_norm = (select lower(email) from orbit.users where id = ${otherId}::uuid)
+       order by p.updated_at desc limit 1)
+    select (select person_id from mine) as person_id,
+           coalesce((select linkedin_url from mine),
+                    (select p.linkedin_url from orbit.people p
+                      where p.user_id = ${otherId}::uuid and p.is_self and p.deleted_at is null
+                        and p.linkedin_url is not null limit 1)) as linkedin_url`;
+  return {
+    ...(r?.person_id ? { personId: r.person_id } : {}),
+    ...(r?.linkedin_url ? { linkedinUrl: r.linkedin_url } : {}),
+  };
+}
+
 async function friendView(db: Db, me: string, f: FriendshipRow, targets: string[]): Promise<Friend> {
   const otherId = f.a === me ? f.b : f.a;
   const other = await userLite(db, otherId);
@@ -202,6 +227,7 @@ async function friendView(db: Db, me: string, f: FriendshipRow, targets: string[
     myMode: mine?.mode ?? 'none',
     myCompanyDomains: mine?.company_domains ?? [],
     since: iso(f.accepted_at ?? f.created_at)!,
+    ...(await friendLinks(db, me, otherId)),
   };
 }
 

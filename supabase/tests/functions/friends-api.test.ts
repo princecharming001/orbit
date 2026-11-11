@@ -188,6 +188,22 @@ describe('friends over orbit-api', () => {
     expect(notHers.status).toBe(403);
   });
 
+  it("a friend's name opens the student's own record of them, else their LinkedIn", async () => {
+    const { call, maya, ana } = await twoFriends();
+    const before = await call<{ friends: Friend[] }>('/friends', maya.token, {});
+    expect(before.body.friends[0]!.personId).toBeUndefined();
+    const id = await addPerson(t, maya.userId, {
+      name: 'Ana Rivera',
+      email: ana.email,
+      linkedinUrl: 'https://www.linkedin.com/in/ana-rivera',
+    });
+    const after = await call<{ friends: Friend[] }>('/friends', maya.token, {});
+    expect(after.body.friends[0]).toMatchObject({
+      personId: id,
+      linkedinUrl: 'https://www.linkedin.com/in/ana-rivera',
+    });
+  });
+
   it('a stranger cannot read a projection (403), and nothing Google-derived crosses in what a friend reads', async () => {
     const { call, ana, maya } = await twoFriends();
     await refreshFriendShares(t.db, ana.userId, new Date());

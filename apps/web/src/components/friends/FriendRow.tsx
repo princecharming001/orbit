@@ -6,6 +6,7 @@ import type { Friend, FriendShareMode } from '@orbit/core';
 import { useState } from 'react';
 import { SHARE_MODE_LABELS } from '../../engine/friends';
 import { Avatar, Button, Chip, cx, Select } from '../../ui';
+import { NameLink } from './Discover';
 
 const TAP = 'pointer-coarse:min-h-11';
 
@@ -38,7 +39,14 @@ export function FriendRow({
         <Avatar name={friend.name} src={friend.avatarUrl ?? undefined} id={friend.userId} size={40} />
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2 min-w-0">
-            <span className="text-[14.5px] font-medium truncate">{friend.name}</span>
+            <NameLink
+              to={friend.personId ? `/people/${friend.personId}` : undefined}
+              href={friend.linkedinUrl}
+              className="text-[14.5px] font-medium truncate hover:underline underline-offset-2"
+              testId="friend-row-name"
+            >
+              {friend.name}
+            </NameLink>
             {who && <span className="text-[12.5px] text-ink-3 truncate">{who}</span>}
             {friend.shares === 0 && friend.myMode !== 'none' && <Chip>Shares nothing yet</Chip>}
           </div>

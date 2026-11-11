@@ -632,6 +632,10 @@ export interface Friend {
   myMode: FriendShareMode;
   myCompanyDomains: string[];
   since: string;
+  /** the student's own record of them, which their name opens */
+  personId?: string;
+  /** their LinkedIn, which their name opens when there is no record */
+  linkedinUrl?: string;
 }
 
 /** An invite or request waiting on someone: sent by the viewer (out) or sent to them (in). */

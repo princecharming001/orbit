@@ -97,7 +97,7 @@ export function PersonTile({
 }
 
 /** A name or a photo that opens the person: their page in Orbit, else their LinkedIn, else plain text. */
-function NameLink({
+export function NameLink({
   to,
   href,
   className,

@@ -114,7 +114,7 @@ test.describe('Chat home on the real engine (no key)', () => {
     await ask(page, 'draft a thank-you to Lena');
     const card = lastTurn(page).getByTestId('result-draft');
     await expect(card).toBeVisible({ timeout: 20_000 });
-    await expect(card).toContainText('To Lena Novak');
+    await expect(card).toContainText('Email to Lena Novak');
     const body = card.getByLabel('Message body');
     await expect(body).toHaveValue(/Lena/);
     await body.fill(`${await body.inputValue()}\n\nPS edited in the chat`);
