@@ -18030,14 +18030,16 @@ async function toInvite(db2, me2, school, now, skip = 0) {
     return (r.closeness ?? 0) + (r.is_alumni ? 15 : 0) + (["peer", "classmate", "friend", "family_friend", "colleague"].includes(r.relationship_type ?? "") ? 10 : 0) + (days <= 60 ? 10 : 0) + (r.photo_url ? 5 : 0);
   };
   const ranked = rows.sort((a, b) => score(b) - score(a) || a.id.localeCompare(b.id));
-  const page2 = ranked.slice(skip, skip + SUGGEST_TO_INVITE).map((r) => ({
-    personId: r.id,
-    name: r.display_name,
-    photoUrl: r.photo_url,
-    headline: r.title && r.org_raw ? `${r.title} at ${r.org_raw}` : r.org_raw ?? r.title,
-    reason: inviteReason(r, school, now),
-    via: r.has_email ? "email" : "linkedin"
-  }));
+  const page2 = ranked.slice(skip, skip + SUGGEST_TO_INVITE).map(
+    (r) => ({
+      personId: r.id,
+      name: r.display_name,
+      photoUrl: r.photo_url,
+      headline: r.title && r.org_raw ? `${r.title} at ${r.org_raw}` : r.org_raw ?? r.title,
+      reason: inviteReason(r, school, now),
+      via: r.has_email ? "email" : "linkedin"
+    })
+  );
   return { rows: page2, more: ranked.length > skip + SUGGEST_TO_INVITE };
 }
 function shown(b, key) {
