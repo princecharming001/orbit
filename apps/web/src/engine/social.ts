@@ -319,6 +319,17 @@ export function useShareFollows(userId: string | undefined): boolean {
   return !!s?.shareFollows?.instagram;
 }
 
+/** The platforms Orbit sends on itself, on the student's tap: connected and in use (the rest hand off to the app). */
+export async function socialSendsHere(userId: string): Promise<Set<string>> {
+  const inUse = await socialInUse(userId);
+  const out = new Set<string>();
+  for (const p of inUse) {
+    const st = await keptStatus(userId, p);
+    if (!st || st.status === 'active') out.add(p);
+  }
+  return out;
+}
+
 // ---- accounts attached to people ----------------------------------------------------------------------------------
 
 /** A person's Instagram and X accounts, only for the platforms in use (an off source's handles are hidden). */

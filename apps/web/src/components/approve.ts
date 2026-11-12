@@ -68,6 +68,12 @@ export function handoffToast(via: HandoffVia, copied: boolean, _threaded: boolea
   // the card underneath says what to do next, so the toast only says what just happened
   if (via === 'mailto') return 'Opened in your mail app.';
   if (via === 'sms') return 'Opened in Messages with your text written.';
+  if (via === 'instagram_dm' || via === 'x_dm') {
+    const where = via === 'x_dm' ? 'X' : 'Instagram';
+    return copied
+      ? `Copied. Paste it into your chat on ${where}, send it, then say it went.`
+      : `${where} is open. Copy the message from the card, send it there, then say it went.`;
+  }
   if (via === 'linkedin_connect')
     return copied
       ? 'Note copied. Click Connect on their profile, add a note and paste it.'
@@ -97,7 +103,7 @@ export async function runApproval(
   // the copy starts inside the click (an await first would lose the browser's permission); a LinkedIn message Orbit
   // sends itself is copied too, which does no harm
   const copying =
-    draft.channel === 'linkedin'
+    draft.channel === 'linkedin' || draft.channel === 'instagram' || draft.channel === 'x'
       ? copyText(draft.kind === 'intro_request' ? withNote(body, draft.forwardNote) : body)
       : Promise.resolve(false);
   const r = await approveAndSend(user, draft.id, body, subject, new Date(), via ? { via } : {});
