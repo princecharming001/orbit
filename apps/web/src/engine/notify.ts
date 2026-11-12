@@ -70,6 +70,41 @@ export function withTextsStep(r: Readiness, texts: ReadinessInput['texts'] | und
   return step ? { ...r, steps: [...r.steps, step] } : r;
 }
 
+/** Instagram's and X's optional steps (plan 43 §3.10), added to readiness however it came; never hold up "ready". */
+export function withSocialSteps(
+  r: Readiness,
+  social: Pick<ReadinessInput, 'instagram' | 'x'> | undefined,
+): Readiness {
+  if (!social || (!social.instagram && !social.x)) return r;
+  const have = new Set(r.steps.map((s) => s.key));
+  const extra = readiness({ pending: 0, ...social }).steps.filter(
+    (s) => (s.key === 'instagram' || s.key === 'x') && !have.has(s.key),
+  );
+  return extra.length ? { ...r, steps: [...r.steps, ...extra] } : r;
+}
+
+/** Where Instagram and X stand, for their steps: only while each is switched on. */
+export async function socialReadiness(
+  userId: string | undefined,
+): Promise<Pick<ReadinessInput, 'instagram' | 'x'> | undefined> {
+  if (!userId) return undefined;
+  const social = await import('./social');
+  const on = await social.socialInUse(userId);
+  if (!on.size) return undefined;
+  const out: Pick<ReadinessInput, 'instagram' | 'x'> = {};
+  if (on.has('instagram')) {
+    const st = await social.refreshInstagram(userId).catch(() => undefined);
+    const v = st && 'steps' in st ? st : await social.keptStatus(userId, 'instagram');
+    if (v) out.instagram = { status: v.status, reading: social.instagramProgress(v) };
+  }
+  if (on.has('x')) {
+    const st = await social.refreshX(userId).catch(() => undefined);
+    const v = st && 'spentThisMonthUsd' in st ? st : await social.keptStatus(userId, 'x');
+    if (v) out.x = { status: v.status };
+  }
+  return out;
+}
+
 /** Where the student's texts stand, for the Texts step: only while they are switched on. */
 export async function textsReadiness(userId: string | undefined): Promise<ReadinessInput['texts']> {
   if (!userId) return undefined;

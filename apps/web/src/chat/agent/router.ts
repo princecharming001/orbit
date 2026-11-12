@@ -928,6 +928,57 @@ function routeInner(raw: string, ctx: RouterContext): RouterIntent {
   )
     return setupLinkedin("Here's LinkedIn. Connect it and I'll bring your connections in.");
 
+  // plan 43: Instagram, X and texts. A check for a way in to someone, where each stands, and connecting each (the
+  // card says plainly when this Orbit does not offer it)
+  {
+    const SRC = '(instagram|insta|ig|x|twitter)';
+    const check =
+      text.match(new RegExp(`^check ${SRC} for (.+)$`, 'i')) ??
+      text.match(new RegExp(`^who (?:do i know (?:who|that) )?follows (.+?) on ${SRC}\\??$`, 'i'));
+    if (check && has('check_social_paths')) {
+      const first = /^check/i.test(text);
+      const where = (first ? check[1] : check[2])!.toLowerCase();
+      const name = stripName((first ? check[2] : check[1])!);
+      const platform = where === 'x' || where === 'twitter' ? 'x' : 'instagram';
+      const r = person(name);
+      if (r.person)
+        return viaTool(
+          'check_social_paths',
+          { personId: r.person.id, platform },
+          undefined,
+          'check a platform',
+        );
+      if (r.candidates.length) return ambiguous(name, r.candidates);
+      return nobody(name);
+    }
+    if (
+      has('social_status') &&
+      (new RegExp(`\\b(is|are) (my )?${SRC}\\b.*\\b(connected|on|off|reading|working|still)\\b`, 'i').test(
+        lower,
+      ) ||
+        /\b(spent|cost|spend)\b.*\b(on )?(x|twitter)\b/i.test(lower))
+    )
+      return viaTool('social_status', {}, undefined, 'say where the optional sources stand');
+    const connect = lower.match(
+      /^(?:connect|add|link|sign in with|use)\s+(?:my\s+)?(instagram|insta|x|twitter|texts|imessages?|messages)\b/,
+    );
+    if (connect && has('show_setup')) {
+      const w = connect[1]!;
+      const what = /^(x|twitter)$/.test(w)
+        ? 'x'
+        : /^(texts|imessages?|messages)$/.test(w)
+          ? 'texts'
+          : 'instagram';
+      const name = what === 'x' ? 'X' : what === 'texts' ? 'your texts' : 'Instagram';
+      return withTool(
+        'show_setup',
+        { what },
+        `Here is how to add ${name}.`,
+        `Add ${name} under Settings, Integrations.`,
+      );
+    }
+  }
+
   // who the student knows who knows someone (mutual connections), or anyone at a company
   {
     const m = text.match(

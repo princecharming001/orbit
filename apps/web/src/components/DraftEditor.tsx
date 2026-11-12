@@ -37,11 +37,13 @@ import {
   revertHandoff,
   reviewDraft,
   sendHandedOffFromOrbit,
+  sendOnSocial,
   snapshotPerson,
   undoQueued,
   withNote,
   withoutNote,
 } from '../engine/send';
+import { PLATFORM_NAME, socialSendsHere, usePersonLinks } from '../engine/social';
 import { useSources } from '../engine/sources';
 import { usesMockConnectors } from '../integrations/connectorsMock';
 import { googleClientId } from '../integrations/google';
@@ -257,6 +259,19 @@ export function DraftEditor({
   const sources = useSources(user?.id);
   const canText =
     !!person?.phones?.length && !!sources?.offered.includes('imessage') && draft.channel !== 'imessage';
+  // plan 43 §4, §5: Instagram for someone with an attached account, X when they accept messages from the student
+  const socialLinks = usePersonLinks(user?.id, draft.personId);
+  const socialWays = socialLinks.filter(
+    (l, i, all) =>
+      all.findIndex((x) => x.platform === l.platform) === i &&
+      draft.channel !== l.platform &&
+      (l.platform === 'instagram' || l.acceptsDms === true),
+  );
+  const [sendingOn, setSendingOn] = useState<'instagram' | 'x'>();
+  const socialHere = useLiveQuery(
+    async () => (user ? socialSendsHere(user.id) : new Set<string>()),
+    [user?.id, sources?.inUse.size],
+  );
   // edits are kept as they are typed, so leaving the page (to check LinkedIn) and coming back loses nothing; the
   // latest text is also written when the editor closes, so a change made just before leaving is never dropped
   const latest = useRef({ body, subject, draft });
@@ -416,9 +431,13 @@ export function DraftEditor({
         : 'Copy & open LinkedIn'
     : draft.channel === 'imessage'
       ? `Open in Messages to ${first}`
-      : direct
-        ? `Send to ${first}`
-        : `Open email to ${first}`;
+      : draft.channel === 'instagram' || draft.channel === 'x'
+        ? socialHere?.has(draft.channel)
+          ? `Send to ${first} on ${PLATFORM_NAME[draft.channel]}`
+          : `Open in ${PLATFORM_NAME[draft.channel]}`
+        : direct
+          ? `Send to ${first}`
+          : `Open email to ${first}`;
   const canRegenerate = needs.every(
     (n) => (inputs[n] ?? '').trim().length >= (n === 'mutual' ? 2 : n === 'role' ? 4 : 8),
   );
@@ -521,6 +540,73 @@ export function DraftEditor({
       Open in Messages
     </Button>
   );
+  // each send on Instagram or X is its own tap, never automatic: from Orbit while it is connected, else the app's chat
+  // opens with the draft copied and the message waits for "I sent it"
+  const socialButtons =
+    !approveLabel &&
+    socialWays.map((l) => {
+      const fromOrbit = !!socialHere?.has(l.platform);
+      const where = PLATFORM_NAME[l.platform];
+      return (
+        <Button
+          key={l.platform}
+          size="sm"
+          disabled={busy || !!sendingOn || !body.trim() || missingLine}
+          title={
+            l.platform === 'instagram' && l.followsYou === false
+              ? 'They do not follow you on Instagram, so it lands in their message requests.'
+              : fromOrbit
+                ? `Send to ${first} on ${where}, after a few seconds to undo`
+                : `Open ${where} with this copied`
+          }
+          onClick={async () => {
+            if (!user) return;
+            setError(undefined);
+            setSendingOn(l.platform);
+            // the copy starts inside the tap: browsers drop clipboard access after a long wait
+            const copying = fromOrbit ? Promise.resolve(false) : copyText(body);
+            try {
+              const r = await sendOnSocial(user, draft.id, l.platform, body);
+              const copied = await copying;
+              if (!r.ok) setError(r.error);
+              else if (r.status === 'handed_off') {
+                if (openHandoff(r.handoffUrl))
+                  toast.push({ text: handoffToast(r.via, copied, false), tone: 'good', ttl: 8000 });
+                else
+                  toast.push({
+                    text: `Your browser blocked ${where}, so open it here.`,
+                    ttl: 15_000,
+                    action: { label: `Open ${where}`, onClick: () => openHandoff(r.handoffUrl) },
+                  });
+              } else if (r.status === 'queued')
+                toast.push({
+                  text: `Sending to ${first} on ${where} in a few seconds.`,
+                  ttl: 6000,
+                  action: {
+                    label: 'Undo',
+                    onClick: () =>
+                      void undoQueued(user, draft.id).then((u) =>
+                        toast.push({
+                          text: u ? 'Not sent. The draft is back.' : 'Too late, it already went out.',
+                        }),
+                      ),
+                  },
+                });
+              else toast.push({ text: `Sent to ${first} on ${where}.`, tone: 'good' });
+            } finally {
+              setSendingOn(undefined);
+            }
+          }}
+          data-testid={`draft-${l.platform}`}
+        >
+          {fromOrbit ? `Send on ${where}` : `Open in ${where}`}
+        </Button>
+      );
+    });
+  const requestsNote =
+    socialWays.some((l) => l.platform === 'instagram' && l.followsYou === false) ||
+    (draft.channel === 'instagram' &&
+      socialLinks.some((l) => l.platform === 'instagram' && l.followsYou === false));
   const primaryButton = (
     <Button
       variant="primary"
@@ -820,9 +906,15 @@ export function DraftEditor({
             {extraActions}
             {copyButton}
             {handoffButton}
+            {socialButtons}
             {primaryButton}
           </span>
         </div>
+        {requestsNote && (
+          <p className="mt-1.5 text-[12px] text-ink-3" data-testid="draft-requests-note">
+            {first} does not follow you on Instagram. It lands in their message requests.
+          </p>
+        )}
         {shownLines.length > 0 && (
           <ul className="mt-2.5 space-y-1 text-[12px]">
             {shownLines.map((l, i) => (
@@ -986,8 +1078,14 @@ export function DraftEditor({
         <span className="flex items-center gap-2">
           {primaryButton}
           {handoffButton}
+          {socialButtons}
           {copyButton}
         </span>
+        {requestsNote && (
+          <span className="basis-full" data-testid="draft-requests-note">
+            {first} does not follow you on Instagram. It lands in their message requests.
+          </span>
+        )}
         {user && (
           <DraftFiles
             draft={draft}
@@ -1122,6 +1220,8 @@ export function DraftEditor({
 export function handoffWhere(o: Pick<OutboundMessage, 'channel' | 'handoffVia'>): string {
   if (o.handoffVia === 'copy') return 'copied to paste into Gmail';
   if (o.channel === 'imessage' || o.handoffVia === 'sms') return 'opened in Messages';
+  if (o.channel === 'instagram' || o.handoffVia === 'instagram_dm') return 'opened in Instagram';
+  if (o.channel === 'x' || o.handoffVia === 'x_dm') return 'opened in X';
   return o.channel === 'linkedin' ? 'opened in LinkedIn' : 'opened in your mail app';
 }
 

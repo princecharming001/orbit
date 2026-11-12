@@ -1113,12 +1113,16 @@ function pathView(
     bandLabel: REACH_BAND_LABELS[path.band],
     score: Math.round(path.score * 100) / 100,
     cold: isColdDirect(path as never),
+    // plan 43 §3.7: a route that rests on a follow and nothing else is a weaker route, and says so
+    ...((path as { weak?: boolean }).weak ? { weak: true } : {}),
     hops: path.hops.map((h) => ({
       from: h.fromId === 'user' ? 'you' : people.get(h.fromId)?.displayName,
       to: people.get(h.toId)?.displayName,
       toId: h.toId,
       toLinkedin: people.get(h.toId)?.linkedinUrl,
       tie: Math.round(h.weight * 100) / 100,
+      // what the hop rests on (instagram_mutual, x_follow, ...), so the card can name the platform
+      kind: h.type,
       how: wrapped(ctx, 'edge', h.text, 160),
     })),
     firstHopId: path.hops[0]?.toId,

@@ -28,7 +28,7 @@ export async function withFakeApi(page: Page): Promise<FakeOrbitApi> {
     const res = await api.fetch(req.url(), {
       method: req.method(),
       headers: req.headers(),
-      body: req.method() === 'POST' ? (req.postData() ?? '') : undefined,
+      body: req.method() === 'POST' || req.method() === 'PUT' ? (req.postData() ?? '') : undefined,
     });
     await route.fulfill({
       status: res.status,

@@ -26,6 +26,7 @@ import {
   HOP_WEIGHTS,
   hasHistoryWith,
   hopBand,
+  hopEvidence,
   inferEdges,
   kShortestPaths,
   MEDIUM_TIE,
@@ -33,6 +34,7 @@ import {
   makeGraph,
   mergeTies,
   normalizeCompany,
+  type OptionalSource,
   type PathTable,
   pAsk,
   pairEvidenceTies,
@@ -43,7 +45,10 @@ import {
   rankCompanyTargets,
   rankWarmPaths,
   responsePrior,
+  SOURCES,
   seniorityClass,
+  socialFollowWeight,
+  TIE_CONFIDENCE,
   toReachPath,
   USER_NODE,
   type WeightedGraph,
@@ -51,6 +56,7 @@ import {
 import { db, writeStamp } from '../db/schema';
 import { storedEvidence } from './hopEvidence';
 import { pairNotesFor } from './pairNotes';
+import { sourcesNow, sourcesVersion } from './sources';
 
 /** The normalised company key for a person: their organization's normalised name, else their raw company. */
 function companyKey(
@@ -151,7 +157,17 @@ export async function updateEdgesFor(userId: string, personIds: string[]): Promi
 type ReachGraph = { g: WeightedGraph; people: Map<string, Person>; edges: Edge[] };
 
 /** Every table the reach graph reads: a write to any of them builds it again. */
-const REACH_TABLES = ['people', 'edges', 'users', 'chats', 'outbound', 'pairNotes', 'engagement'] as const;
+const REACH_TABLES = [
+  'people',
+  'edges',
+  'users',
+  'chats',
+  'outbound',
+  'pairNotes',
+  'engagement',
+  'socialTies',
+  'socialLinks',
+] as const;
 /** A graph built for "now" serves later asks for "now" this long, while none of its tables changed. */
 export const REACH_GRAPH_REUSE_MS = 60_000;
 
@@ -170,7 +186,8 @@ const reachBuilds = new Map<string, ReachBuild>();
  * caller's own reuses only a graph built for that same time. Callers only read it.
  */
 export function buildReachGraph(userId: string, now?: Date): Promise<ReachGraph> {
-  const stamp = writeStamp(REACH_TABLES);
+  // an optional source switched on or off changes which ties count (plan 43 §3.2)
+  const stamp = `${writeStamp(REACH_TABLES)}#${sourcesVersion()}`;
   const at = (now ?? new Date()).getTime();
   const prev = reachBuilds.get(userId);
   if (
@@ -186,7 +203,8 @@ export function buildReachGraph(userId: string, now?: Date): Promise<ReachGraph>
   // a write while it was being read: the graph answers this ask, but is not kept for the next one
   build.graph.then(
     () => {
-      if (writeStamp(REACH_TABLES) !== stamp && reachBuilds.get(userId) === build) reachBuilds.delete(userId);
+      if (`${writeStamp(REACH_TABLES)}#${sourcesVersion()}` !== stamp && reachBuilds.get(userId) === build)
+        reachBuilds.delete(userId);
     },
     () => {
       if (reachBuilds.get(userId) === build) reachBuilds.delete(userId);
@@ -200,7 +218,7 @@ export function resetReachGraphForTests(): void {
 }
 
 async function buildReachGraphNow(userId: string, now: Date): Promise<ReachGraph> {
-  const [people, edges, user, chats, asks] = await Promise.all([
+  const [people, allEdges, user, chats, asks, sources] = await Promise.all([
     db.people.where('userId').equals(userId).toArray(),
     db.edges.where('userId').equals(userId).toArray(),
     db.users.get(userId),
@@ -210,13 +228,98 @@ async function buildReachGraphNow(userId: string, now: Date): Promise<ReachGraph
       .equals(userId)
       .filter((o) => o.kind === 'intro_request')
       .toArray(),
+    sourcesNow(userId),
   ]);
+  // a tie from an optional source that is off is left out, its row kept (plan 43 §3.2): an account's arrive as edges
+  const off = offTieKinds(sources.inUse);
+  const edges = off.size ? allEdges.filter((e) => !off.has(e.type)) : allEdges;
+  const evidence = await evidenceTies(userId, people, now);
+  const social = await socialTies(userId, people, sources.inUse);
   return reachGraphFrom(people, edges, now, {
     user,
     chats,
     introAsks: asks,
-    evidence: await evidenceTies(userId, people, now),
+    evidence: { ...evidence, ties: [...evidence.ties, ...social] },
   });
+}
+
+/** The tie kinds of the optional sources not in use. */
+function offTieKinds(inUse: ReadonlySet<OptionalSource>): Set<string> {
+  const out = new Set<string>();
+  for (const s of Object.values(SOURCES)) if (!inUse.has(s.id)) for (const k of s.tieKinds) out.add(k);
+  return out;
+}
+
+/**
+ * The demo's follow ties (plan 43 §3.7), as the server would write them: following each other carries a route, one
+ * way only supports it, with who follows. Only for sources in use, between people still in the graph.
+ */
+async function socialTies(
+  userId: string,
+  people: Person[],
+  inUse: ReadonlySet<OptionalSource>,
+): Promise<Tie[]> {
+  if (!inUse.has('instagram') && !inUse.has('x')) return [];
+  const rows = (await db.socialTies.where('userId').equals(userId).toArray()).filter((t) =>
+    inUse.has(t.platform),
+  );
+  if (!rows.length) return [];
+  const ids = new Set(people.filter((p) => p.isHuman && !p.hiddenAt).map((p) => p.id));
+  // a tie rests on both people's accounts: one detached ("Not their account") takes it away
+  const linked = new Set(
+    (await db.socialLinks.where('userId').equals(userId).toArray()).map((l) => `${l.platform}:${l.personId}`),
+  );
+  return rows
+    .filter((t) => ids.has(t.aId) && ids.has(t.bId))
+    .filter((t) => linked.has(`${t.platform}:${t.aId}`) && linked.has(`${t.platform}:${t.bId}`))
+    .map((t) => {
+      const [a, b] = t.aId < t.bId ? [t.aId, t.bId] : [t.bId, t.aId];
+      const mutual = t.kind === 'instagram_mutual' || t.kind === 'x_mutual';
+      return {
+        id: `${userId}:${t.id}`,
+        userId,
+        aId: a,
+        bId: b,
+        kind: t.kind,
+        weight: mutual ? socialFollowWeight() : socialFollowWeight() / 2,
+        confidence: TIE_CONFIDENCE[t.kind],
+        evidence: { source: t.platform, ...(t.followerId ? { followerId: t.followerId } : {}) },
+        lastSeenAt: t.createdAt,
+      } satisfies Tie;
+    });
+}
+
+/** A bridge to someone on Instagram or X, for the "People who know" list and the person page. */
+export interface SocialBridge {
+  personId: string;
+  platform: 'instagram' | 'x';
+  /** they follow each other (a route), or one follows the other (support only) */
+  mutual: boolean;
+  /** core hopEvidence's words after the bridge's first name: "follows Jules on Instagram and they follow back" */
+  phrase: string;
+}
+
+/** Who follows the target on Instagram or X, from the same pairs the routes rank on (so the two never disagree). */
+export function socialBridgesIn(g: WeightedGraph, targetId: string): SocialBridge[] {
+  const ctx = contexts.get(g);
+  if (!ctx) return [];
+  const tName = ctx.people.get(targetId)?.firstName || ctx.people.get(targetId)?.displayName || 'them';
+  const out: SocialBridge[] = [];
+  for (const pair of ctx.pairs.values()) {
+    if (pair.aId !== targetId && pair.bId !== targetId) continue;
+    const other = pair.aId === targetId ? pair.bId : pair.aId;
+    const tie =
+      pair.ties.find((t) => t.kind === 'instagram_mutual' || t.kind === 'x_mutual') ??
+      pair.ties.find((t) => t.kind === 'instagram_follow' || t.kind === 'x_follow');
+    if (!tie) continue;
+    out.push({
+      personId: other,
+      platform: tie.kind.startsWith('instagram') ? 'instagram' : 'x',
+      mutual: tie.kind.endsWith('_mutual'),
+      phrase: hopEvidence(other, tie, tName),
+    });
+  }
+  return out.sort((a, b) => Number(b.mutual) - Number(a.mutual) || a.personId.localeCompare(b.personId));
 }
 
 /** Plan 21's pair evidence for the reach graph: stored LinkedIn activity and what the student said about pairs. */

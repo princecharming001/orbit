@@ -40,7 +40,12 @@ export const MORNING_MAX_DECISIONS = 6;
 export const MORNING_MAX_MOVES = 4;
 
 /** Cards that ask the student a question with a yes or no: they take a second each. */
-const QUESTIONS = new Set<Suggestion['kind']>(['confirm_stage', 'confirm_intro', 'confirm_merge']);
+const QUESTIONS = new Set<Suggestion['kind']>([
+  'confirm_stage',
+  'confirm_intro',
+  'confirm_merge',
+  'confirm_social_match',
+]);
 /** Cards tied to a time today (a chat to prep, a time someone is waiting on): they go first. */
 const TIMELY = new Set<Suggestion['kind']>(['prep_brief', 'schedule_confirm']);
 
@@ -543,6 +548,9 @@ export function decisionActions(
           hint: 'Combines the two records into one. Asks first, since it cannot be undone',
         },
       ];
+    // plan 43 §3.4: the question's own Yes and No are on its card (they may need a pick first)
+    case 'confirm_social_match':
+      return [TOMORROW];
     case 'confirm_intro':
       return [
         {

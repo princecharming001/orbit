@@ -8,6 +8,8 @@ import { useLiveQuery } from 'dexie-react-hooks';
 import { Check, TriangleAlert, Upload } from 'lucide-react';
 import { type DragEvent, type ReactNode, useCallback, useEffect, useId, useState } from 'react';
 import { Link } from 'react-router-dom';
+import { InstagramSetup, XConsent } from '../../../components/SocialRows';
+import { TextsSetup } from '../../../components/TextsRow';
 import { connectAndSyncGoogle, markGoogleNeedsReauth } from '../../../engine/integrations';
 import { connectionsText, importLinkedInExport } from '../../../engine/linkedin';
 import { connectLinkedInLive, LIVE_SOON, syncLinkedInLive } from '../../../engine/linkedinLive';
@@ -24,6 +26,7 @@ import {
   type ResumeSetup,
   readSetupStatus,
   type SetupStatus,
+  type SourceSetup,
 } from '../../setupStatus';
 import type { SetupWhat } from '../../types';
 import { GlassCard } from './ResultCard';
@@ -87,7 +90,65 @@ export function SetupCard({ what, status }: { what: SetupWhat; status?: SetupSta
       return <ClaudeKeyWidget initial={status} />;
     case 'resume':
       return <ResumeWidget user={user} initial={status} />;
+    case 'instagram':
+    case 'x':
+    case 'texts':
+      return <SourceWidget user={user} what={what} initial={status} />;
   }
+}
+
+// ---------- Instagram, X and texts (plan 43) ----------
+
+const SOURCE_TITLES = { instagram: 'Connect Instagram', x: 'Connect X', texts: 'Add your texts' } as const;
+
+/**
+ * The optional sources' cards, the same setup Settings uses: Instagram's risk note and sign-in, X's consent then its
+ * sign-in, texts' Messages folder. A source this Orbit does not offer says so and offers nothing.
+ */
+function SourceWidget({
+  user,
+  what,
+  initial,
+}: {
+  user: User;
+  what: 'instagram' | 'x' | 'texts';
+  initial?: SetupStatus;
+}) {
+  const status = useSetupStatus(what, initial) as SourceSetup | undefined;
+  const [done, setDone] = useState(false);
+  const name = what === 'x' ? 'X' : what === 'texts' ? 'Texts' : 'Instagram';
+  if (!status)
+    return (
+      <Shell what={what} title={SOURCE_TITLES[what]}>
+        {null}
+      </Shell>
+    );
+  if (!status.offered)
+    return (
+      <Shell what={what} title={SOURCE_TITLES[what]}>
+        <p className="text-[13px] text-ink-2">{name} is not part of this version of Orbit.</p>
+      </Shell>
+    );
+  const on = status.state === 'on' && (what === 'texts' || status.connected);
+  return (
+    <Shell what={what} title={SOURCE_TITLES[what]}>
+      {on || done ? (
+        <Good testId={`setup-${what}-on`}>
+          {name} is on{status.username ? ` as @${status.username}` : ''}.
+          {status.reading ? ` ${status.reading}.` : ''}{' '}
+          <Link to="/settings/integrations" className={linkClass}>
+            Settings
+          </Link>
+        </Good>
+      ) : what === 'instagram' ? (
+        <InstagramSetup user={user} onDone={() => setDone(true)} />
+      ) : what === 'x' ? (
+        <XConsent user={user} onDone={() => setDone(true)} />
+      ) : (
+        <TextsSetup user={user} onDone={() => setDone(true)} />
+      )}
+    </Shell>
+  );
 }
 
 // ---------- Google ----------

@@ -32,6 +32,7 @@ import { BreakerCard } from './autopilot/NeedsYou';
 import { CompanyLogo, PersonCompanyLogo } from './CompanyLogo';
 import { DraftEditor, OutboxStatus } from './DraftEditor';
 import { MergePair } from './MergePair';
+import { SocialAskCard } from './SocialPeople';
 
 /** Kept here for older imports; the labels live in the engine so the chat and the cards share them. */
 export const KIND_LABEL = SUGGESTION_KIND_LABELS;
@@ -55,6 +56,12 @@ export function SuggestionCard({
   highlight?: boolean;
 }) {
   const { user, settings } = useSession();
+  // plan 43 §3.4: the "same person" question a card asks
+  const socialAskId = s.kind === 'confirm_social_match' ? (s.payload.askId as string | undefined) : undefined;
+  const socialAsk = useLiveQuery(
+    async () => (socialAskId ? db.socialAsks.get(socialAskId) : undefined),
+    [socialAskId],
+  );
   const nav = useNavigate();
   const toast = useToast();
   const [open, setOpen] = useState(!!defaultOpen);
@@ -537,6 +544,17 @@ export function SuggestionCard({
           {s.kind === 'confirm_merge' && person && other && (
             <MergeChoice a={person} b={other} asking={mergeAsk} onAsk={setMergeAsk} onDecide={confirmMerge} />
           )}
+          {s.kind === 'confirm_social_match' && user && socialAsk?.status === 'open' && (
+            <div className="mt-2">
+              <SocialAskCard
+                user={user}
+                ask={socialAsk}
+                bare
+                hideQuestion
+                onAnswered={() => void db.suggestions.update(s.id, { status: 'done' })}
+              />
+            </div>
+          )}
           {s.kind === 'confirm_intro' && evidence && (
             <blockquote
               className="mt-2 rounded-lg bg-canvas-2 px-3 py-2 text-[13px] text-ink-2"
@@ -728,44 +746,45 @@ export function SuggestionCard({
           />
         </div>
       )}
-      {!['confirm_stage', 'confirm_merge', 'confirm_intro'].includes(s.kind) && !inFlight && (
-        <div className="mt-2 flex flex-wrap items-center gap-0.5 text-[12px]">
-          {!dismissing ? (
-            <button
-              className={cx('ml-auto', CARD_SMALL_BUTTON)}
-              onClick={() => setDismissing(true)}
-              title="Remove this card and tell Orbit why, so it suggests better next time"
-            >
-              Dismiss
-            </button>
-          ) : (
-            <>
-              <span className="text-ink-3 mr-1">Why remove it?</span>
-              {[
-                ['already_did', 'Already did this'],
-                ['not_now', 'Not now'],
-                ['wrong_person', 'Wrong person'],
-                // only a card with a message can have a bad draft
-                ...(draft ? [['bad_draft', 'Bad draft']] : []),
-              ].map(([k, l]) => (
-                <button
-                  key={k}
-                  className="px-2 h-10 @[40rem]:h-8 rounded-md bg-canvas-2 hover:bg-line-2"
-                  onClick={() => dismiss(k!)}
-                >
-                  {l}
-                </button>
-              ))}
+      {!['confirm_stage', 'confirm_merge', 'confirm_intro', 'confirm_social_match'].includes(s.kind) &&
+        !inFlight && (
+          <div className="mt-2 flex flex-wrap items-center gap-0.5 text-[12px]">
+            {!dismissing ? (
               <button
-                className="ml-auto px-2 h-10 @[40rem]:h-8 text-ink-3"
-                onClick={() => setDismissing(false)}
+                className={cx('ml-auto', CARD_SMALL_BUTTON)}
+                onClick={() => setDismissing(true)}
+                title="Remove this card and tell Orbit why, so it suggests better next time"
               >
-                Cancel
+                Dismiss
               </button>
-            </>
-          )}
-        </div>
-      )}
+            ) : (
+              <>
+                <span className="text-ink-3 mr-1">Why remove it?</span>
+                {[
+                  ['already_did', 'Already did this'],
+                  ['not_now', 'Not now'],
+                  ['wrong_person', 'Wrong person'],
+                  // only a card with a message can have a bad draft
+                  ...(draft ? [['bad_draft', 'Bad draft']] : []),
+                ].map(([k, l]) => (
+                  <button
+                    key={k}
+                    className="px-2 h-10 @[40rem]:h-8 rounded-md bg-canvas-2 hover:bg-line-2"
+                    onClick={() => dismiss(k!)}
+                  >
+                    {l}
+                  </button>
+                ))}
+                <button
+                  className="ml-auto px-2 h-10 @[40rem]:h-8 text-ink-3"
+                  onClick={() => setDismissing(false)}
+                >
+                  Cancel
+                </button>
+              </>
+            )}
+          </div>
+        )}
     </div>
   );
 }

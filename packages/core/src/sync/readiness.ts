@@ -19,7 +19,15 @@
 export type StepState = 'waiting' | 'working' | 'done' | 'problem';
 
 export interface ReadyStep {
-  key: 'linkedin_people' | 'linkedin_messages' | 'email_recent' | 'email_older' | 'network' | 'texts';
+  key:
+    | 'linkedin_people'
+    | 'linkedin_messages'
+    | 'email_recent'
+    | 'email_older'
+    | 'network'
+    | 'texts'
+    | 'instagram'
+    | 'x';
   label: string;
   state: StepState;
   /** "1,240 connections so far", "3,100 of 9,800" */
@@ -70,6 +78,13 @@ export interface ReadinessInput {
    * done once an import has run and waits for one otherwise. It never holds up "ready".
    */
   texts?: { state: 'on' | 'off'; people?: number; importedAt?: string | null };
+  /**
+   * Instagram (plan 43 §4), when the student switched it on: done once its first days' reading is through, working
+   * while it reads (`reading` says what), a problem when Instagram asked to sign in again. Never holds up "ready".
+   */
+  instagram?: { status: string; reading?: string };
+  /** X (plan 43 §5), when switched on: done once connected. Never holds up "ready". */
+  x?: { status: string };
 }
 
 const fmt = (n: number) => n.toLocaleString('en-US');
@@ -206,6 +221,38 @@ export function readiness(i: ReadinessInput): Readiness {
       detail: t.importedAt
         ? `${fmt(t.people ?? 0)} ${(t.people ?? 0) === 1 ? 'person' : 'people'}`
         : 'Update from your Mac when you like',
+      optional: true,
+    });
+  const ig = i.instagram;
+  if (ig)
+    steps.push({
+      key: 'instagram',
+      label: 'Instagram',
+      state: BROKEN.has(ig.status)
+        ? 'problem'
+        : ig.status === 'active' && !ig.reading
+          ? 'done'
+          : ig.status === 'active' || ig.status === 'connecting'
+            ? 'working'
+            : 'waiting',
+      detail: BROKEN.has(ig.status)
+        ? 'Sign in to Instagram again'
+        : ig.status === 'active'
+          ? (ig.reading ?? 'Up to date')
+          : 'Not connected yet',
+      optional: true,
+    });
+  const xs = i.x;
+  if (xs)
+    steps.push({
+      key: 'x',
+      label: 'X',
+      state: BROKEN.has(xs.status) ? 'problem' : xs.status === 'active' ? 'done' : 'waiting',
+      detail: BROKEN.has(xs.status)
+        ? 'Sign in with X again'
+        : xs.status === 'active'
+          ? 'Connected'
+          : 'Not connected yet',
       optional: true,
     });
   return { state, steps, progress: state === 'ready' ? 1 : progress, headline };

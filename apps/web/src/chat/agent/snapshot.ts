@@ -8,6 +8,7 @@ import { rememberedLines } from '../../engine/memory';
 import { resumeContextLine, resumeProposalLine } from '../../engine/resume';
 import { aboutMe, aboutMeLines } from '../../engine/selfProfile';
 import { googleStatus, syncStatusNow } from '../../engine/serverSync';
+import { optionalSourcesLine } from '../../engine/social';
 import { todayCards } from '../../engine/today';
 import { villageAvailable } from '../../engine/warmIntros';
 import { googleClientId } from '../../integrations/google';
@@ -230,6 +231,8 @@ export async function buildSnapshot(
         ]
       : []),
     ...(villageAvailable({ id: userId }) ? ['warm intros on'] : []),
+    // plan 43: the optional sources this Orbit offers, and where the student stands with each (none: nothing said)
+    ...(await optionalSourcesLine(userId)),
   ].join(', ');
 
   const prefs = readPrefs();

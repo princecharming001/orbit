@@ -60,6 +60,7 @@ import {
   OnboardingLayout,
 } from '../components/onboarding/OnboardingLayout';
 import { PhoneField, type PhoneValue } from '../components/PhoneField';
+import { InstagramSetup, XConsent } from '../components/SocialRows';
 import { ReadyChecklist } from '../components/sync/ReadyChecklist';
 import { importSummary, TextsSetup, useTextsOffered } from '../components/TextsRow';
 import { useWeeklyLimits, WeeklyTargetSlider } from '../components/WeeklyTargetSlider';
@@ -77,6 +78,8 @@ import { type OwnWordsPatch, saveOwnWords } from '../engine/ownWords';
 import { saveResume } from '../engine/resume';
 import { pullNow } from '../engine/serverSync';
 import { removeTargetCompany, saveGoals, updateLimits, updateProfile } from '../engine/settings';
+import { useSocialOffered } from '../engine/social';
+import { sourceState } from '../engine/sources';
 import { addTargetCompanies } from '../engine/targets';
 import { googleClientId } from '../integrations/google';
 import { startGoogleSignIn } from '../integrations/orbitApi';
@@ -137,6 +140,8 @@ export function Onboarding() {
       [STEP.job]: !!w.currentJob,
       [STEP.linkedin]: ints.some((i) => isLinkedIn(i.provider)),
       [STEP.texts]: ints.some((i) => i.provider === 'imessage' && i.status === 'active'),
+      [STEP.instagram]: (await sourceState('instagram', user.id)) === 'on',
+      [STEP.x]: (await sourceState('x', user.id)) === 'on',
       [STEP.gmail]: ints.some((i) => i.provider === 'google'),
       [STEP.phone]: !!(await db.kv.get(phoneGivenKey(user.id)))?.value,
     } as Record<number, boolean>;
@@ -145,7 +150,11 @@ export function Onboarding() {
   // plan 43 §6: a Texts step after LinkedIn, on a Mac when this Orbit offers texts
   const textsOffered = useTextsOffered(user?.id);
   const texts = !!textsOffered;
-  const STEPS = visibleSteps(google, signedIn, texts);
+  // plan 43 §4, §5: Instagram and X after LinkedIn, when this Orbit offers them
+  const igOffered = useSocialOffered(user?.id, 'instagram');
+  const xOffered = useSocialOffered(user?.id, 'x');
+  const social = { instagram: !!igOffered, x: !!xOffered };
+  const STEPS = visibleSteps(google, signedIn, texts, social);
   useEffect(() => {
     // each step opens at its title, not scrolled down to where the last step's button was
     void step;
@@ -153,7 +162,7 @@ export function Onboarding() {
   }, [step]);
   if (!user) return null;
   // whether the Texts step is shown is still being read: wait, rather than send the student past it
-  if (textsOffered === undefined) return null;
+  if (textsOffered === undefined || igOffered === undefined || xOffered === undefined) return null;
   const idx = STEPS.indexOf(step);
   const done = !!user.onboardingCompletedAt;
   // An unknown step (an old link, a typo) goes back to where the user actually is; after setup, to the chat.
@@ -162,9 +171,9 @@ export function Onboarding() {
     // a hidden step (Gmail without Google) or a step of the older setup moves forward to the next one shown, but
     // never past the furthest step reached: setup is not skipped by typing an address. A step change made here
     // carries `fromStep`, and the stored step is written before it, so only addresses from outside are checked.
-    const furthest = resolveStep(user.onboardingStep, google, signedIn, texts);
+    const furthest = resolveStep(user.onboardingStep, google, signedIn, texts, social);
     const internal = (location.state as { fromStep?: number } | null)?.fromStep !== undefined;
-    let target = resolveStep(step, google, signedIn, texts);
+    let target = resolveStep(step, google, signedIn, texts, social);
     if (!internal && target > furthest) target = furthest;
     if (target !== step) return <Navigate to={`/onboarding/${stepAddress(target)}`} replace />;
   }
@@ -212,6 +221,15 @@ export function Onboarding() {
   else if (step === STEP.linkedin)
     body = <StepLinkedIn signedIn={signedIn} onNext={() => go(after(STEP.linkedin))} />;
   else if (step === STEP.texts) body = <StepTexts user={user} onNext={() => go(after(STEP.texts))} />;
+  else if (step === STEP.instagram || step === STEP.x)
+    body = (
+      <StepSocial
+        user={user}
+        platform={step === STEP.x ? 'x' : 'instagram'}
+        done={!!did?.[step]}
+        onNext={() => go(after(step))}
+      />
+    );
   else if (step === STEP.phone)
     body = (
       <StepPhone
@@ -1488,6 +1506,65 @@ function StepLinkedIn({ onNext, signedIn }: { onNext: () => void; signedIn?: boo
           </>
         ) : null}
         {!done && (
+          <ObQuiet onClick={onNext} data-testid="ob-skip">
+            I'll do this later
+          </ObQuiet>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Plan 43 §4, §5: Instagram or X. Optional and skippable, the same setup as in Settings: Instagram's risk note and
+ * sign-in, X's consent before its sign-in.
+ */
+function StepSocial({
+  user,
+  platform,
+  done,
+  onNext,
+}: {
+  user: User;
+  platform: 'instagram' | 'x';
+  done: boolean;
+  onNext: () => void;
+}) {
+  const [connected, setConnected] = useState(false);
+  const on = done || connected;
+  const name = platform === 'x' ? 'X' : 'Instagram';
+  return (
+    <div data-testid={`ob-${platform}`}>
+      <ObHeader
+        icon={
+          <StepMark>
+            <span className="text-[18px] font-semibold">{platform === 'x' ? 'X' : 'IG'}</span>
+          </StepMark>
+        }
+        title={`Add ${name}`}
+        subtitle={
+          platform === 'x'
+            ? 'Who you follow on X, and who follows you back, can show a way in to someone. Orbit checks a person only when you ask, with the price first.'
+            : 'Who you message and follow on Instagram shows who you are close to, and who follows someone you want to meet.'
+        }
+      />
+      {on ? (
+        <div
+          className="flex items-center gap-3 border-y border-line px-1 py-3.5 text-[14px]"
+          data-testid={`ob-${platform}-done`}
+        >
+          <Check size={16} className="text-good" aria-hidden />
+          <span className="text-ink">{name} is connected.</span>
+        </div>
+      ) : platform === 'x' ? (
+        <XConsent user={user} onDone={() => setConnected(true)} />
+      ) : (
+        <InstagramSetup user={user} onDone={() => setConnected(true)} />
+      )}
+      <div className="mt-8 space-y-3">
+        {on ? (
+          <ObPrimary onClick={onNext}>Continue</ObPrimary>
+        ) : (
           <ObQuiet onClick={onNext} data-testid="ob-skip">
             I'll do this later
           </ObQuiet>

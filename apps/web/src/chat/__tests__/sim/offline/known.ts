@@ -33,4 +33,11 @@ export const KNOWN: Known[] = [
     why: 'needs a LinkedIn search card earlier in the thread to pick from (chat-pick e2e covers the flow)',
     match: 'Search again, then pick who to add',
   },
+  // plan 43: Instagram, X and texts are optional sources the owner switches on; the no-key chat's router has no
+  // words for them, so these go to the model (show_setup instagram, x or texts; social_status; check_social_paths).
+  // Their tools and cards are covered in social.test.ts, SocialRows.test.tsx and e2e/social.spec.ts.
+  ...['instagram_connect', 'x_connect', 'texts_connect', 'social_status', 'social_check_paths'].map((c) => ({
+    id: `cap:${c}:`,
+    why: 'plan 43 optional sources: the no-key router has no words for them; the model routes them',
+  })),
 ];

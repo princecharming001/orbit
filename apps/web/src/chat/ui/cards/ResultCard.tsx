@@ -32,6 +32,7 @@ import { Link } from 'react-router-dom';
 import { copyText } from '../../../components/approve';
 import { CompanyLogo, LogoText } from '../../../components/CompanyLogo';
 import { DraftEditor, OutboxStatus } from '../../../components/DraftEditor';
+import { PlatformMark, SocialCheckButton, SocialCheckResult } from '../../../components/SocialPeople';
 import { KIND_LABEL, SuggestionCard } from '../../../components/SuggestionCard';
 import { TargetPlanCard } from '../../../components/TargetPlanCard';
 import { db } from '../../../db/schema';
@@ -760,8 +761,28 @@ function RoutesCard({ env, actions }: { env: ResultEnvelope; actions: CardAction
       )}
       {routes.length === 0 && stories.length === 0 && <p className="text-ink-2">{env.summary}</p>}
       <WarmIntros intros={rest} divided={routes.length > 0 || stories.length > 0} />
+      {to && <RouteChecks to={to} />}
       <NextSteps steps={steps} send={actions.send} />
     </GlassCard>
+  );
+}
+
+/**
+ * Plan 43 §3.6: "Check Instagram for Jules" under the routes, while Instagram (or X) is in use and Orbit knows their
+ * account for sure, with what the check found. Nothing shows otherwise.
+ */
+function RouteChecks({ to }: { to: Pick<Person, 'id' | 'firstName' | 'displayName'> }) {
+  const { user } = useSession();
+  if (!user) return null;
+  return (
+    <div className="mt-2 flex flex-col gap-1.5 empty:hidden" data-testid="route-checks">
+      {(['instagram', 'x'] as const).map((p) => (
+        <Frag key={p}>
+          <SocialCheckButton user={user} person={to} platform={p} />
+          <SocialCheckResult user={user} person={to} platform={p} />
+        </Frag>
+      ))}
+    </div>
   );
 }
 
@@ -841,6 +862,26 @@ function RouteRow({
           ))}
         </div>
         {why && reasons && <div className="text-[12.5px] text-ink-3 line-clamp-1">{why}</div>}
+        {/* plan 43 §3.7: a hop through Instagram or X always says so, and a follow alone is a weaker route */}
+        {r.platforms.length > 0 && (
+          <div
+            className="flex items-center gap-1.5 text-[12.5px] text-ink-3 min-w-0"
+            data-testid="route-platform"
+          >
+            {r.platforms.map((p) => (
+              <PlatformMark key={p} platform={p} size={12} />
+            ))}
+            <span className="truncate">
+              {r.text.find((t) => /\bon (Instagram|X)\b/.test(t)) ??
+                `Through ${r.platforms.map((p) => (p === 'x' ? 'X' : 'Instagram')).join(' and ')}`}
+            </span>
+          </div>
+        )}
+        {r.weak && (
+          <div className="text-[12px] text-ink-3" data-testid="route-weak">
+            A weaker route: it rests on a follow alone.
+          </div>
+        )}
       </div>
       <StrengthBars score={r.score} label={`Route strength: ${band}`} />
       {step && send && <RouteAsk step={step} send={send} primary={primary} />}
