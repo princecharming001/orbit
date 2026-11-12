@@ -574,6 +574,11 @@ export interface Person {
   emails: string[];
   /** phone numbers, as +15551234567 (from the student's Contacts when they import their texts) */
   phones?: string[];
+  /**
+   * Instagram and X handles the student's own Contacts card for them lists (plan 43 §3.4): hard proof that an account
+   * is theirs, kept for the matcher. Read in the browser from the exported contacts file
+   */
+  contactHandles?: { instagram?: string[]; x?: string[] };
   linkedinUrl?: string;
   linkedinSlug?: string;
   /** LinkedIn's member id, kept from a live (Unipile) sync so mutual-connection lookups can name this person */
@@ -992,9 +997,10 @@ export interface OutboundMessage {
   status: OutboundStatus;
   /**
    * How a hand-off left Orbit (status `handed_off`): opened in the mail app, opened on LinkedIn, or copied for the
-   * student to paste into Gmail in the browser. Either way it waits for the student's "I sent it".
+   * student to paste into Gmail in the browser, or opened in Messages with the draft written (`sms`, plan 43). Either
+   * way it waits for the student's "I sent it".
    */
-  handoffVia?: 'mailto' | 'linkedin_compose' | 'linkedin_connect' | 'copy';
+  handoffVia?: 'mailto' | 'linkedin_compose' | 'linkedin_connect' | 'copy' | 'sms';
   approvedAt?: string;
   queuedAt?: string;
   /** end of the undo window for a queued provider send; for an autopilot send, the time it is planned for */

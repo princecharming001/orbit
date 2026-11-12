@@ -19,13 +19,18 @@
 export type StepState = 'waiting' | 'working' | 'done' | 'problem';
 
 export interface ReadyStep {
-  key: 'linkedin_people' | 'linkedin_messages' | 'email_recent' | 'email_older' | 'network';
+  key: 'linkedin_people' | 'linkedin_messages' | 'email_recent' | 'email_older' | 'network' | 'texts';
   label: string;
   state: StepState;
   /** "1,240 connections so far", "3,100 of 9,800" */
   detail?: string;
   /** 0 to 1 when the step knows how far along it is */
   share?: number;
+  /**
+   * an optional source's step (plan 43 §3.10): shown in the list, never counted in the progress or the state, so
+   * it never holds up "ready"
+   */
+  optional?: boolean;
 }
 
 export type ReadyState = 'nothing' | 'syncing' | 'usable' | 'ready' | 'problem';
@@ -60,6 +65,11 @@ export interface ReadinessInput {
   /** background jobs still queued for this account (scoring, matching, classifying) */
   pending: number;
   counts?: { people?: number; messages?: number; ties?: number };
+  /**
+   * Texts from the Mac's Messages (plan 43 §6), when the student switched them on: read in the browser, so the step is
+   * done once an import has run and waits for one otherwise. It never holds up "ready".
+   */
+  texts?: { state: 'on' | 'off'; people?: number; importedAt?: string | null };
 }
 
 const fmt = (n: number) => n.toLocaleString('en-US');
@@ -186,6 +196,18 @@ export function readiness(i: ReadinessInput): Readiness {
               : working?.key.startsWith('email')
                 ? 'Reading your email'
                 : 'Getting your network ready';
+  // optional sources come last and are left out of everything above: texts never hold up "ready"
+  const t = i.texts;
+  if (t?.state === 'on')
+    steps.push({
+      key: 'texts',
+      label: 'Texts',
+      state: t.importedAt ? 'done' : 'waiting',
+      detail: t.importedAt
+        ? `${fmt(t.people ?? 0)} ${(t.people ?? 0) === 1 ? 'person' : 'people'}`
+        : 'Update from your Mac when you like',
+      optional: true,
+    });
   return { state, steps, progress: state === 'ready' ? 1 : progress, headline };
 }
 

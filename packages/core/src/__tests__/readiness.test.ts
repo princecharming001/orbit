@@ -81,6 +81,31 @@ describe('readiness: is Orbit ready yet', () => {
     );
   });
 
+  it('a Texts step shows when texts are on and never holds up "ready" (plan 43)', () => {
+    const done = { status: 'active', phase: 'complete' } as const;
+    const base = readiness({ google: done, pending: 0 });
+    const waiting = readiness({ google: done, pending: 0, texts: { state: 'on' } });
+    expect(base.state).toBe('ready');
+    expect(waiting.state).toBe('ready');
+    expect(waiting.progress).toBe(1);
+    expect(waiting.headline).toBe(base.headline);
+    expect(keys(waiting)).toEqual([...keys(base), 'texts:waiting']);
+    expect(waiting.steps.at(-1)).toMatchObject({ optional: true, label: 'Texts' });
+    const imported = readiness({
+      google: { status: 'active', phase: 'recent' },
+      pending: 3,
+      texts: { state: 'on', people: 12, importedAt: '2026-11-10T00:00:00Z' },
+    });
+    const without = readiness({ google: { status: 'active', phase: 'recent' }, pending: 3 });
+    expect(imported.state).toBe(without.state);
+    expect(imported.progress).toBe(without.progress);
+    expect(imported.steps.at(-1)).toMatchObject({ key: 'texts', state: 'done', detail: '12 people' });
+    // off, or never set up: no step at all
+    expect(keys(readiness({ google: done, pending: 0, texts: { state: 'off' } }))).toEqual(keys(base));
+    // texts alone are nothing to wait for
+    expect(readiness({ pending: 0, texts: { state: 'on' } }).state).toBe('nothing');
+  });
+
   it('never an em dash or an exclamation mark in what it says', () => {
     const all = [
       readiness({ pending: 0 }),
