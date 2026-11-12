@@ -69,6 +69,19 @@ export interface AgentEnv {
    */
   // spelled out rather than imported: the web app compiles this file and cannot resolve @orbit/core from here
   extraSources?: ('instagram' | 'x' | 'imessage')[];
+  /**
+   * X's app and limits (plan 43 §5, social/x/config.ts `XConfig`, spelled out for the same reason): sending a draft
+   * on X needs them. Undefined: X drafts are not sent.
+   */
+  x?: {
+    clientId?: string;
+    clientSecret?: string;
+    redirectUri?: string;
+    studentMonthlyUsd: number;
+    orbitMonthlyUsd: number;
+    listLimit: number;
+    offered: boolean;
+  };
 }
 
 /** gte-small sentence embedding (384 dims, mean-pooled, normalized), or null when the model is not available. */

@@ -47,7 +47,7 @@ export interface RemovalCounts {
 }
 
 /** Drafts waiting to go out on the source's channel: back to drafts, with the note. Returns their ids. */
-async function holdDrafts(
+export async function holdDrafts(
   db: Db,
   userId: string,
   source: OptionalSource,
@@ -145,10 +145,19 @@ export async function removeSourceRows(
         delete from orbit.social_list_reads where owner_user_id = ${userId}::uuid and platform = ${platform}
         returning id`)
     : 0;
-  const textDays =
-    source === 'imessage'
-      ? await count(db.sql`delete from orbit.text_days where user_id = ${userId}::uuid returning person_id`)
-      : 0;
+  let textDays = 0;
+  if (source === 'imessage') {
+    const gone = await db.sql<{ k: string }>`
+      delete from orbit.text_days where user_id = ${userId}::uuid
+      returning person_id::text || ':' || to_char(day, 'YYYY-MM-DD') as k`;
+    textDays = gone.length;
+    // the browser drops each day by its id, personId:day, as /sync/pull reports hard deletes
+    if (gone.length)
+      await db.sql`
+        insert into orbit.audit_log (user_id, actor, action, target_table, target_id, details)
+        select ${userId}::uuid, 'system', 'sync.delete', 'text_days', k, ${{ reason: 'source_removed', source }}::jsonb
+          from unnest(${gone.map((g) => g.k)}::text[]) as k`;
+  }
 
   // people only this source knows: deleted, unless the student has a chat or a note with them; then they stay as
   // the student's own, without the handle
@@ -268,4 +277,37 @@ export async function switchSource(
     dedupeKey: runKey,
   });
   return result;
+}
+
+/**
+ * The owner launched a source or stopped offering it (orbit_private.source_launch, PUT /admin/sources/:source). Each
+ * student who has it on keeps their own switch and everything taken: stopping it works as Off does for them (drafts
+ * waiting on that channel go back to drafts with the note, reading stops, the rows are hidden) and launching it again
+ * brings it all back. Either way each of them gets the switch job, which rescores with the source in or out, rebuilds
+ * the friend projection and moves the graph mark. Returns how many students were queued.
+ */
+export async function queueOwnerSwitch(
+  db: Db,
+  queue: Queue,
+  source: OptionalSource,
+  offered: boolean,
+  now: Date,
+): Promise<number> {
+  const students = await db.sql<{ user_id: string }>`
+    select s.user_id from orbit.source_states s join orbit.users u on u.id = s.user_id and u.deleted_at is null
+     where s.source = ${source} and s.state = 'on'`;
+  for (const { user_id: userId } of students) {
+    if (!offered) await holdDrafts(db, userId, source, 'off');
+    const runKey = switchJobKey(userId, source, now);
+    await db.sql`
+      insert into orbit.user_marks (user_id, switch_run) values (${userId}::uuid, ${runKey})
+      on conflict (user_id) do update set switch_run = excluded.switch_run`;
+    await queue.enqueue({
+      kind: 'sources.switch',
+      userId,
+      payload: { source, state: offered ? 'on' : 'off', by: 'owner', runKey },
+      dedupeKey: runKey,
+    });
+  }
+  return students.length;
 }

@@ -1364,15 +1364,19 @@ export interface SocialLookupView {
   updatedAt: string;
 }
 
-/** Texts with one person on one local day, never the words (pulled `text_days`, plan 43 §6). */
+/**
+ * Texts with one person on one local day, never the words (pulled `text_days`, plan 43 §6), in the browser's own
+ * field names (its `textDays` rows). A deleted day comes back in `deleted.text_days` as `personId:day`.
+ */
 export interface TextDayView {
   personId: string;
   /** YYYY-MM-DD, the student's local day */
   day: string;
-  in: number;
-  out: number;
+  inCount: number;
+  outCount: number;
   /** everyone in the smallest chat that day, the student included */
-  group: number;
+  groupSize: number;
+  /** something was written that day (not only reactions); never the words themselves */
   words: boolean;
   updatedAt: string;
 }

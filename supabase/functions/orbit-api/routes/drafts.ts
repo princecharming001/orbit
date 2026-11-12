@@ -1,8 +1,8 @@
 /**
  * Drafts (§7, §8.5):
- *   POST /drafts/compose {personId, kind, goalId?, channel, replyToMessageId?}  → {draft}; channel gmail, linkedin or
- *                                                       instagram (plan 43: a tap to send, and `note` when it will
- *                                                       land in their requests)
+ *   POST /drafts/compose {personId, kind, goalId?, channel, replyToMessageId?}  → {draft}; channel gmail, linkedin,
+ *                                                       instagram or x (plan 43: a tap to send; Instagram's `note`
+ *                                                       when it will land in their requests)
  *   POST /drafts/approve {draftId, sendAt?, confirm?, body?, subject?, attachments?}
  *                                                    → {draft}; no sendAt = the next send window; LinkedIn needs
  *                                                       confirm: true and goes at once; due now = sent now; a body or
@@ -17,6 +17,7 @@ import { type DraftRow, loadDraft, toServerDraft } from '../../_shared/compose/d
 import { badRequest, HttpError, json } from '../../_shared/http.ts';
 import { parseIncomingFiles, setDraftFiles } from '../../_shared/sending/files.ts';
 import { approveDraft, cancelDraft, discardDraft, instagramRequestNote } from '../../_shared/sending/send.ts';
+import { isOffered, sourceIsOn } from '../../_shared/sources/states.ts';
 import { lookupPersonEmail } from '../../_shared/sourcing/ondemand.ts';
 import type { Ctx, Route } from '../api.ts';
 import { body, optUuid, uuid } from './body.ts';
@@ -42,11 +43,11 @@ async function compose(ctx: Ctx): Promise<Response> {
   const b = await body(ctx);
   const kind = b.kind as DraftComposeRequest['kind'];
   if (!KINDS.includes(kind)) throw badRequest('kind is not a message kind');
-  if (b.channel !== 'gmail' && b.channel !== 'linkedin' && b.channel !== 'instagram')
-    throw badRequest('channel is gmail, linkedin or instagram');
+  if (b.channel !== 'gmail' && b.channel !== 'linkedin' && b.channel !== 'instagram' && b.channel !== 'x')
+    throw badRequest('channel is gmail, linkedin, instagram or x');
   const s = ctx.services();
   const personId = uuid(b, 'personId');
-  if (b.channel === 'instagram') return composeInstagram(ctx, kind, personId, b);
+  if (b.channel === 'instagram' || b.channel === 'x') return composeSocial(ctx, b.channel, kind, personId, b);
   // an email to someone Orbit has no address for: the student asked to email them, so the address is looked up now
   // (plan 35 C3), the free sources first; without one the draft is written all the same, as before
   if (b.channel === 'gmail' && kind !== 'reply') {
@@ -66,20 +67,27 @@ async function compose(ctx: Ctx): Promise<Response> {
 }
 
 /**
- * An Instagram draft (plan 43 §4 "Sending"): written as a short chat message, the way a LinkedIn one is, then put on
- * the Instagram channel, in the chat the student has with them when there is one. When they do not follow the
- * student, the draft carries the note that it lands in their requests. Sending it always takes the student's tap.
+ * An Instagram or X draft (plan 43 §4, §5 "Sending"): written as a short chat message, the way a LinkedIn one is, then
+ * put on that channel, in the chat the student has with them when there is one. On Instagram, when they do not follow
+ * the student, the draft carries the note that it lands in their requests. Sending it always takes the student's tap.
+ * A source not offered or off for the student is 404 or 409.
  */
-async function composeInstagram(
+async function composeSocial(
   ctx: Ctx,
+  channel: 'instagram' | 'x',
   kind: DraftComposeRequest['kind'],
   personId: string,
   b: Record<string, unknown>,
 ): Promise<Response> {
   const userId = ctx.userId!;
+  const name = channel === 'x' ? 'X' : 'Instagram';
+  const env = channel === 'x' && ctx.env.x?.offered ? [...ctx.offered, 'x' as const] : ctx.offered;
+  if (!(await isOffered(ctx.db, channel, env))) throw new HttpError(404, 'not_found', 'not found');
+  if (!(await sourceIsOn(ctx.db, userId, channel, env)))
+    throw new HttpError(409, 'source_off', `${name} is off. Turn it on in Settings first.`);
   const [acct] = await ctx.db.sql<{ status: string }>`
-    select status from orbit.integration_accounts where user_id = ${userId}::uuid and provider = 'instagram'`;
-  if (acct?.status !== 'active') throw new HttpError(409, 'not_connected', 'Instagram is not connected');
+    select status from orbit.integration_accounts where user_id = ${userId}::uuid and provider = ${channel}`;
+  if (acct?.status !== 'active') throw new HttpError(409, 'not_connected', `${name} is not connected`);
   const r = await composeDraft(ctx.services(), {
     userId,
     personId,
@@ -90,14 +98,14 @@ async function composeInstagram(
   });
   const [t] = await ctx.db.sql<{ external_id: string }>`
     select external_id from orbit.threads
-     where user_id = ${userId}::uuid and provider = 'instagram' and participant_count <= 1
+     where user_id = ${userId}::uuid and provider = ${channel} and participant_count <= 1
        and ${personId}::uuid = any(participant_person_ids)
      order by last_at desc nulls last limit 1`;
-  const note = await instagramRequestNote(ctx.db, userId, personId);
+  const note = channel === 'instagram' ? await instagramRequestNote(ctx.db, userId, personId) : null;
   const [row] = await ctx.db.sql<DraftRow>`
     update orbit.drafts
-       set channel = 'instagram', subject = null, thread_external_id = ${t?.external_id ?? null},
-           ask = coalesce(ask, '{}'::jsonb) || ${{ channel: 'instagram', ...(note ? { note } : {}) }}::jsonb
+       set channel = ${channel}, subject = null, thread_external_id = ${t?.external_id ?? null},
+           ask = coalesce(ask, '{}'::jsonb) || ${{ channel, ...(note ? { note } : {}) }}::jsonb
      where id = ${r.draft.id}::uuid
     returning *`;
   return json(200, { draft: toServerDraft(row ?? r.draft) });

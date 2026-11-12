@@ -5,26 +5,23 @@
  *                                            what Orbit stores first; the agreement is written to the audit log with
  *                                            its time and the consent screen's version.
  *   GET  /x/callback?code&state          → tokens into Vault, the integration row (social_account_id from
- *                                            /2/users/me), 302 <app>/settings?x=connected (or x=failed)
+ *                                            /2/users/me), the first days queued (sync.x), 302
+ *                                            <app>/settings?x=connected (or x=failed)
  *   GET  /x/status                       → {status, username?, spentThisMonthUsd, limitUsd, orbitLimitReached}
  *   POST /x/disconnect                   → revokes the token at X, deletes it from Vault, marks the row revoked
  *
- * Without ORBIT_X_CLIENT_ID and ORBIT_X_CLIENT_SECRET, or with `x` missing from ORBIT_EXTRA_SOURCES, every route
- * answers 503 "X is not set up".
+ * Without ORBIT_X_CLIENT_ID and ORBIT_X_CLIENT_SECRET, or with X not offered (neither in ORBIT_EXTRA_SOURCES nor
+ * launched by the owner, `offeredNow`), every route answers 503 "X is not set up".
  */
 
 import { randomToken } from '../../_shared/crypto.ts';
 import { pkcePair } from '../../_shared/google.ts';
 import { badRequest, json, readJson, redirect } from '../../_shared/http.ts';
+import { sqlQueue } from '../../_shared/queue.ts';
 import { SocialBudgetSpent } from '../../_shared/social/adapter.ts';
 import { createXAdapter } from '../../_shared/social/x/adapter.ts';
-import {
-  X_CONSENT_VERSION,
-  X_NOT_SET_UP,
-  X_SCOPES,
-  type XConfig,
-  xMissing,
-} from '../../_shared/social/x/config.ts';
+import { xSetupMissing } from '../../_shared/social/x/client.ts';
+import { X_CONSENT_VERSION, X_NOT_SET_UP, X_SCOPES, type XConfig } from '../../_shared/social/x/config.ts';
 import {
   loadXState,
   storeXTokens,
@@ -56,9 +53,9 @@ function notSetUp(missing: string[]): Response {
   );
 }
 
-function setup(ctx: Ctx): { cfg: XConfig; oauth: XOAuthConfig } | Response {
+async function setup(ctx: Ctx): Promise<{ cfg: XConfig; oauth: XOAuthConfig } | Response> {
   const cfg = ctx.env.x;
-  const missing = xMissing(cfg);
+  const missing = await xSetupMissing(ctx.db, cfg);
   if (missing.length || !cfg) return notSetUp(missing);
   return {
     cfg,
@@ -75,7 +72,7 @@ const settings = (ctx: Ctx, outcome: 'connected' | 'failed') =>
   redirect(`${ctx.env.appUrl}/settings?x=${outcome}`);
 
 export async function xConnectStart(ctx: Ctx): Promise<Response> {
-  const s = setup(ctx);
+  const s = await setup(ctx);
   if (s instanceof Response) return s;
   const body = await readJson(ctx.req, { optional: true });
   if (body.consent !== true) throw badRequest('consent is required before signing in with X');
@@ -103,7 +100,7 @@ export async function xConnectStart(ctx: Ctx): Promise<Response> {
 }
 
 export async function xCallback(ctx: Ctx): Promise<Response> {
-  const s = setup(ctx);
+  const s = await setup(ctx);
   if (s instanceof Response) return settings(ctx, 'failed');
   const q = ctx.url.searchParams;
   const state = q.get('state');
@@ -198,11 +195,18 @@ export async function xCallback(ctx: Ctx): Promise<Response> {
       insert into orbit.audit_log (user_id, actor, action, target_table, details)
       values (${userId}::uuid, 'user', 'x.connected', 'integration_accounts', ${{ scopes: scopes.length }}::jsonb)`;
   });
+  // the first days: the student's own following list, read to the end once, then their DMs (orbit-worker sync.x)
+  await sqlQueue(ctx.db).enqueue({
+    kind: 'sync.x',
+    userId,
+    payload: {},
+    dedupeKey: `sync.x:${userId}:${me.id}:${ctx.now().toISOString()}`,
+  });
   return settings(ctx, 'connected');
 }
 
 export async function xStatus(ctx: Ctx): Promise<Response> {
-  const s = setup(ctx);
+  const s = await setup(ctx);
   if (s instanceof Response) return s;
   const userId = ctx.userId!;
   const row = await loadXState(ctx.db, userId);
@@ -224,7 +228,7 @@ export async function xStatus(ctx: Ctx): Promise<Response> {
 }
 
 export async function xDisconnect(ctx: Ctx): Promise<Response> {
-  const s = setup(ctx);
+  const s = await setup(ctx);
   if (s instanceof Response) return s;
   await readJson(ctx.req, { optional: true });
   const userId = ctx.userId!;

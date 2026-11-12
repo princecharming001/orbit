@@ -27,9 +27,11 @@ import {
   type LookupState,
   nextLookupStep,
 } from '@orbit/core/graph/socialLookup';
+import type { OptionalSource } from '@orbit/core/sources';
 import type { Db } from '../db.ts';
 import { HttpError } from '../http.ts';
 import type { Queue } from '../queue.ts';
+import { sourceIsOn } from '../sources/states.ts';
 import { type SocialAdapter, SocialBudgetSpent, SocialSignInNeeded } from './adapter.ts';
 import {
   CountedSet,
@@ -66,14 +68,6 @@ interface SavedState {
   calls?: number;
 }
 
-// TODO(plan 43): replace with `sourceIsOn` from _shared/sources once the server-base builder adds it.
-/** The student has this optional source switched on (orbit.source_states). */
-export async function socialSourceOn(db: Db, userId: string, platform: SocialPlatform): Promise<boolean> {
-  const [r] = await db.sql<{ state: string }>`
-    select state from orbit.source_states where user_id = ${userId}::uuid and source = ${platform}`;
-  return r?.state === 'on';
-}
-
 /** The account attached to a person on a platform, the newest when there are several. */
 export async function attachedAccount(
   db: Db,
@@ -95,8 +89,10 @@ export async function startLookup(
   userId: string,
   platform: SocialPlatform,
   personId: string,
+  /** the owner's env list (ORBIT_EXTRA_SOURCES); the launch switches are joined to it */
+  envList: readonly OptionalSource[] = [],
 ): Promise<{ lookupId: string; status: LookupStatus }> {
-  if (!(await socialSourceOn(db, userId, platform)))
+  if (!(await sourceIsOn(db, userId, platform, envList)))
     throw new HttpError(409, 'source_off', `${platformName(platform)} is not on`);
   const account = await attachedAccount(db, userId, platform, personId);
   if (!account)
@@ -301,7 +297,7 @@ export async function runLookup(
   db: Db,
   adapter: SocialAdapter,
   lookupId: string,
-  o: { now: Date; callsPerRun?: number },
+  o: { now: Date; callsPerRun?: number; offered?: readonly OptionalSource[] },
 ): Promise<RunOutcome> {
   const [l] = await db.sql<{
     user_id: string;
@@ -331,7 +327,7 @@ export async function runLookup(
     await save('failed', { bridges: [], oneWay: [], partial: true, reason });
     return { status: 'failed' as const };
   };
-  if (!(await socialSourceOn(db, userId, platform))) return fail('source_off');
+  if (!(await sourceIsOn(db, userId, platform, o.offered))) return fail('source_off');
   if ((await suppressedOf(db, platform, [target])).size) return fail('suppressed');
   await save('running');
 
@@ -347,7 +343,7 @@ export async function runLookup(
           now: o.now,
         });
         await save('done', result);
-        await notify(db, userId, l.target_person_id, platform, result, lookupId);
+        await notifyLookup(db, userId, l.target_person_id, platform, result, lookupId);
         return { status: 'done' };
       }
       if (calls >= allowance) {
@@ -480,7 +476,8 @@ async function finish(
   return result;
 }
 
-async function notify(
+/** Tells the student a lookup ended, once (the X check uses it too). */
+export async function notifyLookup(
   db: Db,
   userId: string,
   personId: string,

@@ -4,10 +4,10 @@
  *   GET  /auth/google/start?redirect=<app url>  → 302 to Google's consent screen (PKCE S256, phase-1 scopes)
  *   GET  /auth/google/callback?code&state       → user, self person, Vault refresh token, integration row,
  *                                                 login code → 302 <app>/auth/done#code=…  (errors: #error=…)
- *   POST /auth/session {code}                   → {accessToken, refreshToken, expiresAt, user}
+ *   POST /auth/session {code}                   → {accessToken, refreshToken, expiresAt, user, isOwner}
  *   POST /auth/refresh {refreshToken}           → a rotated pair
  *   POST /auth/logout {refreshToken?}           → revokes this session
- *   GET  /auth/me                               → the user
+ *   GET  /auth/me                               → {user, isOwner}: isOwner when the user is ORBIT_OWNER_ID
  */
 import { normalizeEmail, parseName } from '@orbit/core/text/normalize';
 import { randomToken } from '../_shared/crypto.ts';
@@ -24,6 +24,7 @@ import {
 } from '../_shared/session.ts';
 import { googleRefreshName, sqlVault } from '../_shared/vault.ts';
 import type { Ctx } from './api.ts';
+import { isOwner } from './routes/admin.ts';
 
 const STATE_TTL_MS = 10 * 60_000;
 
@@ -220,6 +221,7 @@ export async function session(ctx: Ctx): Promise<Response> {
     refreshToken: t.refreshToken,
     expiresAt: t.expiresAt,
     user,
+    isOwner: isOwner({ env: ctx.env, userId }),
   });
 }
 
@@ -241,8 +243,9 @@ export async function logout(ctx: Ctx): Promise<Response> {
   return json(200, { ok: true });
 }
 
+/** The signed-in user, and whether they are the owner (ORBIT_OWNER_ID), so the browser can show the owner's views. */
 export async function me(ctx: Ctx): Promise<Response> {
   const user = await loadUser(ctx.db, ctx.userId!);
   if (!user) throw unauthorized();
-  return json(200, { user });
+  return json(200, { user, isOwner: isOwner(ctx) });
 }

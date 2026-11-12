@@ -1,6 +1,7 @@
 /**
- * sources.switch {source, state, pass?, page?} (plan 43 §3.2 item 3): after a student switched an optional source on,
- * off or removed it. No row changed, so the delta rescore would do nothing; this job does all of it:
+ * sources.switch {source, state, pass?, page?, by?} (plan 43 §3.2 item 3): after a student switched an optional source
+ * on, off or removed it, or the owner launched or stopped offering it (`by: 'owner'`, one job per student who has it
+ * on). No row changed, so the delta rescore would do nothing; this job does all of it:
  *
  *   1. a full rescore of the student's people with a refit, twice: a person's score reads the neighbours' previous
  *      scores, so the first pass scores without them (scores from before the switch, made with the source in or out,
@@ -19,7 +20,7 @@ import { isUuid } from '../../_shared/crypto.ts';
 import { hasActiveFriend, refreshFriendShares } from '../../_shared/friends/shares.ts';
 import { scorePeople } from '../../_shared/ingest/score.ts';
 import { chunks } from '../../_shared/ingest/util.ts';
-import { sourcesFor } from '../../_shared/sources/states.ts';
+import { forgetOffered, sourcesFor } from '../../_shared/sources/states.ts';
 import type { JobHandler } from '../worker.ts';
 import { type HandlerDeps, JobSkipped, LONG_VT_SEC } from './deps.ts';
 import { SCORE_PAGE } from './score.ts';
@@ -43,6 +44,8 @@ export function sourceHandlers(deps: Pick<HandlerDeps, 'offered'> = {}): Record<
           select switch_run from orbit.user_marks where user_id = ${userId}::uuid`;
         if (mark?.switch_run && mark.switch_run !== job.payload.runKey) return;
       }
+      // the owner's launch switch moved (PUT /admin/sources/:source): read it fresh, not from this isolate's minute
+      if (job.payload.by === 'owner' && page === 0 && pass === 1) forgetOffered(ctx.db);
       const src = await sourcesFor(ctx.db, userId, offered);
       // the people in use, in a fixed order, so every page of a pass sees the same list
       const ids = (

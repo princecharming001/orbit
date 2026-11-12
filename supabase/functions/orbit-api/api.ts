@@ -30,7 +30,7 @@ import { checkSession, type SessionConfig, sessionSecretUsable, verifyBearer } f
 import type { XConfig } from '../_shared/social/x/config.ts';
 import { accountDelete, accountExport } from './account.ts';
 import { googleCallback, googleStart, logout, me, refresh, session } from './auth.ts';
-import { adminRoutes } from './routes/admin.ts';
+import { adminPatternRoute, adminRoutes } from './routes/admin.ts';
 import { autopilotRoutes } from './routes/autopilot.ts';
 import { cadenceRoutes } from './routes/cadence.ts';
 import { calendarRoutes } from './routes/calendar.ts';
@@ -233,6 +233,7 @@ export function makeApiHandler(deps: ApiDeps): (req: Request) => Promise<Respons
       unipileKey: deps.env.unipileKey,
       unipileBase: deps.env.unipileBase,
       ...(deps.env.extraSources ? { extraSources: deps.env.extraSources } : {}),
+      ...(deps.env.x ? { x: deps.env.x } : {}),
       ...defined(deps.agent?.env),
     },
   };
@@ -305,7 +306,11 @@ export function makeApiHandler(deps: ApiDeps): (req: Request) => Promise<Respons
       // the fixed table first; the few routes with an id in the path (plan 29: /friends/shares/:id,
       // /friends/asks/:id/respond) are matched by pattern
       const r =
-        ROUTES[path] ?? friendPatternRoute(path) ?? socialPatternRoute(path) ?? sourcesPatternRoute(path);
+        ROUTES[path] ??
+        friendPatternRoute(path) ??
+        socialPatternRoute(path) ??
+        sourcesPatternRoute(path) ??
+        adminPatternRoute(path);
       if (!r) throw notFound();
       if (!r.method.split('|').includes(req.method)) throw new HttpError(405, 'method_not_allowed', r.method);
       await providerSecrets();

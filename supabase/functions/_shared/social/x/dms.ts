@@ -18,6 +18,7 @@ import { sqlQueue } from '../../queue.ts';
 import { sourcesFor } from '../../sources/states.ts';
 import { SocialBudgetSpent, type SocialChat, type SocialMessage } from '../adapter.ts';
 import { groupDmEvents, X_DM_PAGE, type XAdapter, type XDmEvent, XRateLimited } from './adapter.ts';
+import { xOfferedNow } from './client.ts';
 import type { XConfig } from './config.ts';
 import { loadXState, saveXState } from './oauth.ts';
 
@@ -73,10 +74,10 @@ export async function xDmsDue(
   cfg: Pick<XConfig, 'offered'>,
   now = new Date(),
 ): Promise<boolean> {
-  if (!cfg.offered) return false;
+  if (!(await xOfferedNow(db, cfg))) return false;
   const row = await loadXState(db, userId);
   if (row?.status !== 'active' || !row.state.consent) return false;
-  const s = await sourcesFor(db, userId, ['x']);
+  const s = await sourcesFor(db, userId, cfg.offered ? ['x'] : []);
   if (!s.inUse.has('x')) return false;
   const waiting = await xWaitingOnReply(db, userId, now);
   return xDmsNextAt(row.state.dmReadAt, waiting).getTime() <= now.getTime();
@@ -161,7 +162,7 @@ export async function enqueueDueXDms(
   cfg: Pick<XConfig, 'offered'>,
   now = new Date(),
 ): Promise<number> {
-  if (!cfg.offered) return 0;
+  if (!(await xOfferedNow(db, cfg))) return 0;
   const rows = await db.sql<{ user_id: string }>`
     select a.user_id from orbit.integration_accounts a
       join orbit.users u on u.id = a.user_id

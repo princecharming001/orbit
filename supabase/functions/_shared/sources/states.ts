@@ -1,11 +1,14 @@
 /**
- * Which optional sources count for one student (plan 43 §3.1, §3.2): offered by the owner (`ORBIT_EXTRA_SOURCES`,
- * read once per process and passed in) and switched on by the student (orbit.source_states). Every server reader of
+ * Which optional sources count for one student (plan 43 §3.1, §3.2): offered by the owner and switched on by the student
+ * (orbit.source_states). What the owner offers is `offeredNow`: the env list (`ORBIT_EXTRA_SOURCES`, read once per
+ * process and passed in) together with the launch switches in orbit_private.source_launch (20261204_orbit_launch.sql),
+ * read through one cached function, so the owner launches or stops a source with no redeploy, everywhere within a
+ * minute. `sourcesFor` and `sourceIsOn` take the env list and ask `offeredNow` themselves. Every server reader of
  * closeness, ties, messages and identities asks `sourcesFor` and filters with what it returns, so a source that is
  * off is left out everywhere without its rows being deleted.
  *
- * With nothing offered (the default) this makes no query and excludes every optional kind, so behaviour is exactly
- * what it was before plan 43.
+ * With nothing offered (the default: the env list empty and no launch row offered) this reads no student state and
+ * excludes every optional kind, so behaviour is exactly what it was before plan 43.
  *
  * People count too: a person known only from a source not in use (people.sources holds nothing else, or the person
  * was made from an account on that platform, people.source_account) is left out wherever people are read, with
@@ -82,6 +85,61 @@ export interface SourcesInUse {
 /** The owner's list, from the environment value. */
 export const offeredSources = (raw: string | undefined | null): OptionalSource[] => parseExtraSources(raw);
 
+/** How long the launch switches are kept per database handle. */
+export const OFFERED_TTL_MS = 60_000;
+
+interface LaunchEntry {
+  at: number;
+  launched: Promise<OptionalSource[]>;
+}
+const launchCache = new WeakMap<object, LaunchEntry>();
+
+/**
+ * The optional sources the owner launched (orbit_private.source_launch rows that are offered), read through
+ * public.orbit_sources_offered() and kept OFFERED_TTL_MS per database handle, like `providersOff`. When the switches
+ * cannot be read, none: what is offered falls back to the env list alone.
+ */
+export function launchedSources(db: Db, clock: () => number = Date.now): Promise<OptionalSource[]> {
+  const hit = launchCache.get(db);
+  if (hit && clock() - hit.at < OFFERED_TTL_MS) return hit.launched;
+  // a handle that throws at once counts as a failed read too
+  const launched = Promise.resolve()
+    .then(() => db.sql<{ offered: string[] | null }>`select public.orbit_sources_offered() as offered`)
+    .then((rows) => OPTIONAL_SOURCES.filter((s) => (rows[0]?.offered ?? []).includes(s)))
+    .catch(() => [] as OptionalSource[]);
+  launchCache.set(db, { at: clock(), launched });
+  return launched;
+}
+
+/**
+ * What the owner offers right now (plan 43 §3.1): the env list, then every launched source it does not name. Every
+ * place that needs the owner's switch asks this (directly, or through `sourcesFor` and `sourceIsOn`).
+ */
+export async function offeredNow(
+  db: Db,
+  envList: readonly OptionalSource[] = [],
+  clock?: () => number,
+): Promise<OptionalSource[]> {
+  const launched = await launchedSources(db, clock);
+  const out = [...envList];
+  for (const s of launched) if (!out.includes(s)) out.push(s);
+  return out;
+}
+
+/** Whether one optional source is offered right now. */
+export async function isOffered(
+  db: Db,
+  source: OptionalSource,
+  envList: readonly OptionalSource[] = [],
+): Promise<boolean> {
+  return (await offeredNow(db, envList)).includes(source);
+}
+
+/** Forget the cached launch switches (tests, and the owner's route that has just flipped one). */
+export function forgetOffered(db: Db): void {
+  launchCache.delete(db);
+}
+
 /** The owner's list as a function carries it (AgentEnv, ApiEnv, HandlerDeps): empty when unset. */
 export const offeredOf = (
   holder: { extraSources?: readonly OptionalSource[] } | undefined,
@@ -99,12 +157,13 @@ export async function loadSourceStates(db: Db, userId: string): Promise<SourceSt
 
 const hiddenOf = (inUse: ReadonlySet<OptionalSource>) => OPTIONAL_SOURCES.filter((s) => !inUse.has(s));
 
-/** What counts for this student right now. */
+/** What counts for this student right now; `envList` is the owner's env list, joined with the launch switches here. */
 export async function sourcesFor(
   db: Db,
   userId: string,
-  offered: readonly OptionalSource[],
+  envList: readonly OptionalSource[],
 ): Promise<SourcesInUse> {
+  const offered = await offeredNow(db, envList);
   const states = offered.length ? await loadSourceStates(db, userId) : {};
   const inUse = sourcesInUse(offered, states);
   return { offered: [...offered], states, inUse, excluded: excludedBy(inUse), hidden: hiddenOf(inUse) };
@@ -136,16 +195,17 @@ export async function hiddenPeople(db: Db, userId: string, src: SourcesInUse): P
 }
 
 /**
- * Whether a source may be read and stored from right now (plan 43 §3.1): offered by the owner and switched on by the
- * student. Webhook and worker writers ask this before they store a new row; a source that is off stores nothing.
+ * Whether a source may be read and stored from right now (plan 43 §3.1): offered by the owner (`offeredNow`, from the
+ * env list given and the launch switches) and switched on by the student. Routes, webhook and worker writers ask this
+ * before they read or store anything; a source that is off stores nothing.
  */
 export async function sourceIsOn(
   db: Db,
   userId: string,
   source: OptionalSource,
-  offered: readonly OptionalSource[],
+  envList: readonly OptionalSource[] = [],
 ): Promise<boolean> {
-  if (!offered.includes(source)) return false;
+  if (!(await isOffered(db, source, envList))) return false;
   const [r] = await db.sql<{ state: string }>`
     select state from orbit.source_states where user_id = ${userId}::uuid and source = ${source}`;
   return r?.state === 'on';

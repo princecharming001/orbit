@@ -1,6 +1,8 @@
 /**
- * Plan 43, Instagram (and later X) on the server. Every job does nothing while the source is off for the student,
- * and every call it makes is paid for from the account's rolling budget first (_shared/social/budget.ts).
+ * Plan 43, Instagram and X on the server. Every job does nothing while the source is not offered by the owner
+ * (`offeredNow`: ORBIT_EXTRA_SOURCES with the launch switches) or is off for the student (`sourceIsOn`), and every call
+ * it makes is paid for first: Instagram from the account's rolling budget (_shared/social/budget.ts), X from the
+ * student's money budget (_shared/social/x/spend.ts).
  *
  *   sync.instagram {}                  the first days (profile and chats, who the student follows, who follows
  *                                      them), then a page of their lists at uneven hours (_shared/social/firstDays.ts).
@@ -11,17 +13,22 @@
  *   social.words {platform, personId}  a person entered the pipeline: their one-to-one chats are read again and the
  *                                      words of messages stored without them filled in.
  *   social.lookup {lookupId}           who could introduce the student to a target (_shared/social/lookup.ts),
- *                                      resumed until it ends.
+ *                                      resumed until it ends. An X lookup is a check the student confirmed at a price
+ *                                      (_shared/social/x/lookup.ts): run under that price, lists to the end or not
+ *                                      at all.
  */
 import { type SocialPlatform, socialBlock } from '@orbit/core/entity/social';
 import { SocialBudgetSpent } from '../../_shared/social/adapter.ts';
 import { unevenMs } from '../../_shared/social/budget.ts';
 import { storeSocialChat } from '../../_shared/social/chats.ts';
-import { adapterFor, connectedAccount } from '../../_shared/social/factory.ts';
+import { adapterFor, connectedAccount, socialAdapterFor } from '../../_shared/social/factory.ts';
 import { runSocialSync } from '../../_shared/social/firstDays.ts';
 import { accountOfRow, loadAccounts, upsertAccounts } from '../../_shared/social/graph.ts';
-import { runLookup, socialSourceOn } from '../../_shared/social/lookup.ts';
+import { runLookup } from '../../_shared/social/lookup.ts';
 import { matchAccount, socialCandidates } from '../../_shared/social/people.ts';
+import { upsertXAccount } from '../../_shared/social/x/lists.ts';
+import { runXLookup } from '../../_shared/social/x/lookup.ts';
+import { sourceIsOn } from '../../_shared/sources/states.ts';
 import type { Job, JobContext, JobHandler } from '../worker.ts';
 import { type HandlerDeps, JobSkipped } from './deps.ts';
 
@@ -35,12 +42,18 @@ const isPlatform = (v: unknown): v is SocialPlatform => v === 'instagram' || v =
 
 export function socialHandlers(deps: HandlerDeps): Record<string, JobHandler> {
   const random = deps.random ?? Math.random;
-  const env = (ctx: JobContext) => ({ fetch: deps.fetch ?? fetch, unipile: deps.unipile, now: ctx.now });
+  const offered = deps.offered ?? [];
+  const env = (ctx: JobContext) => ({
+    fetch: deps.fetch ?? fetch,
+    unipile: deps.unipile,
+    now: ctx.now,
+    ...(deps.x ? { x: deps.x } : {}),
+  });
 
   async function ready(job: Job, ctx: JobContext, platform: SocialPlatform) {
     const userId = job.userId;
     if (!userId) throw new JobSkipped('no_user');
-    if (!(await socialSourceOn(ctx.db, userId, platform))) throw new JobSkipped('source_off');
+    if (!(await sourceIsOn(ctx.db, userId, platform, offered))) throw new JobSkipped('source_off');
     const account = await connectedAccount(ctx.db, userId, platform);
     if (!account) throw new JobSkipped('not_connected');
     return { userId, account };
@@ -94,7 +107,7 @@ export function socialHandlers(deps: HandlerDeps): Record<string, JobHandler> {
         (x): x is string => typeof x === 'string' && !!x,
       );
       if (!ids.length) return;
-      const adapter = adapterFor(ctx.db, env(ctx), platform, account, 'background');
+      const adapter = await socialAdapterFor(ctx.db, env(ctx), platform, account, 'background');
       const pool = await socialCandidates(ctx.db, userId, platform);
       const stored = await loadAccounts(ctx.db, platform, ids);
       const left: string[] = [];
@@ -106,7 +119,9 @@ export function socialHandlers(deps: HandlerDeps): Record<string, JobHandler> {
         if (worth && adapter && !row?.bio) {
           try {
             const read = await adapter.profile(id);
-            await upsertAccounts(ctx.db, [read.account], { full: true, now: ctx.now() });
+            // X rows keep X's 30 days (x/lists.ts); a protected X account is dropped, not stored
+            if (platform === 'x') await upsertXAccount(ctx.db, read.account, ctx.now());
+            else await upsertAccounts(ctx.db, [read.account], { full: true, now: ctx.now() });
             acct = read.account;
             row = (await loadAccounts(ctx.db, platform, [id])).get(id);
           } catch (e) {
@@ -135,7 +150,7 @@ export function socialHandlers(deps: HandlerDeps): Record<string, JobHandler> {
       const personId = job.payload.personId;
       if (!isPlatform(platform) || typeof personId !== 'string') throw new JobSkipped('bad_payload');
       const { userId, account } = await ready(job, ctx, platform);
-      const adapter = adapterFor(ctx.db, env(ctx), platform, account, 'student');
+      const adapter = await socialAdapterFor(ctx.db, env(ctx), platform, account, 'student');
       if (!adapter) throw new JobSkipped('unconfigured');
       const threads = await ctx.db.sql<{
         external_id: string;
@@ -169,6 +184,24 @@ export function socialHandlers(deps: HandlerDeps): Record<string, JobHandler> {
       const [l] = await ctx.db.sql<{ user_id: string; platform: SocialPlatform }>`
         select user_id, platform from orbit.social_lookups where id = ${lookupId}::uuid`;
       if (!l) return;
+      if (l.platform === 'x') {
+        if (!deps.x) throw new JobSkipped('unconfigured');
+        const out = await runXLookup(ctx.db, lookupId, {
+          ...deps.x,
+          fetch: deps.x.fetch ?? deps.fetch,
+          now: ctx.now,
+          offered,
+        });
+        if (out.status === 'waiting')
+          await later(ctx, job, Math.max(MIN, (out.retryAt?.getTime() ?? 0) - ctx.now().getTime()), 'resume');
+        return;
+      }
+      if (!(await sourceIsOn(ctx.db, l.user_id, l.platform, offered))) {
+        await ctx.db.sql`
+          update orbit.social_lookups set status = 'failed', result = ${{ bridges: [], oneWay: [], partial: true, reason: 'source_off' }}::jsonb
+           where id = ${lookupId}::uuid and status not in ('done', 'failed')`;
+        return;
+      }
       const account = await connectedAccount(ctx.db, l.user_id, l.platform);
       const adapter = account ? adapterFor(ctx.db, env(ctx), l.platform, account, 'student') : undefined;
       if (!adapter) {
@@ -177,7 +210,7 @@ export function socialHandlers(deps: HandlerDeps): Record<string, JobHandler> {
            where id = ${lookupId}::uuid and status not in ('done', 'failed')`;
         return;
       }
-      const out = await runLookup(ctx.db, adapter, lookupId, { now: ctx.now() });
+      const out = await runLookup(ctx.db, adapter, lookupId, { now: ctx.now(), offered });
       if (out.status !== 'waiting') return;
       const ms = out.retryAt
         ? Math.max(MIN, out.retryAt.getTime() - ctx.now().getTime()) + unevenMs(2 * MIN, random)
