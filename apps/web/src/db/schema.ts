@@ -281,6 +281,83 @@ export interface TextDayRow {
 }
 
 /**
+ * Plan 43 §3.4: an Instagram or X account attached to one of the student's people. Pulled from the server
+ * (social_links) in account mode; the demo keeps its own. The platform's id is the key; the handle is a label.
+ */
+export interface SocialLinkRow {
+  id: string;
+  userId: string;
+  platform: 'instagram' | 'x';
+  accountId: string;
+  personId: string;
+  /** the handle, without the @ */
+  username?: string;
+  /** the name on the account */
+  name?: string;
+  via: 'proof' | 'score' | 'student';
+  proof?: 'own_links' | 'links_back' | 'contact' | 'address_book';
+  score?: number;
+  /** they follow the student back: a message lands in their inbox, not their requests (plan 43 §4) */
+  followsYou?: boolean;
+  /** X only: they accept messages from the student (plan 43 §5) */
+  acceptsDms?: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** Plan 43 §3.4: "Is @handle the person you know?", asked of the student (social_match_asks). */
+export interface SocialAskRow {
+  id: string;
+  userId: string;
+  platform: 'instagram' | 'x';
+  accountId: string;
+  personId: string;
+  username?: string;
+  name?: string;
+  personName?: string;
+  score: number;
+  /** the evidence both ways: `for` and `against`, each a list of plain lines, when the server gives them */
+  signals: Record<string, unknown>;
+  status: 'open' | 'yes' | 'no' | 'stale';
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** Plan 43 §3.6: one "who could introduce me" check on Instagram or X, and what it found. */
+export interface SocialLookupRow {
+  id: string;
+  userId: string;
+  platform: 'instagram' | 'x';
+  targetPersonId: string;
+  status: 'queued' | 'running' | 'waiting' | 'done' | 'failed';
+  result?: {
+    bridges: { personId: string; accountId: string; name: string }[];
+    oneWay: { personId: string; accountId: string; followerId: string }[];
+    partial: boolean;
+    reason?: string;
+  };
+  createdAt: string;
+  updatedAt: string;
+}
+
+/**
+ * Plan 43 §3.7, the demo only: who follows whom between two people on Instagram or X, as the sample student's fake
+ * accounts say. An account's server keeps these as ties, which arrive as edges; the demo's are read into the graph
+ * only while the source is in use.
+ */
+export interface SocialTieRow {
+  id: string;
+  userId: string;
+  platform: 'instagram' | 'x';
+  kind: 'instagram_mutual' | 'instagram_follow' | 'x_mutual' | 'x_follow';
+  aId: string;
+  bId: string;
+  /** a one-way follow: who follows */
+  followerId?: string;
+  createdAt: string;
+}
+
+/**
  * Something the student told Orbit that it keeps for later chats, in this browser (local mode; account mode keeps
  * memories on the server). The same shape as the server's memories: what to remember in the third person, the
  * student's own words it came from, a kind, an importance and the chat turn it came from. Forgetting one blanks its
@@ -418,6 +495,10 @@ export class OrbitDB extends Dexie {
   facetAssertions!: EntityTable<FacetRow, 'id'>;
   profileReads!: EntityTable<ProfileReadRow, 'personId'>;
   batches!: EntityTable<BatchRow, 'id'>;
+  socialLinks!: EntityTable<SocialLinkRow, 'id'>;
+  socialAsks!: EntityTable<SocialAskRow, 'id'>;
+  socialLookups!: EntityTable<SocialLookupRow, 'id'>;
+  socialTies!: EntityTable<SocialTieRow, 'id'>;
 
   constructor(name = 'orbit') {
     super(name);
@@ -592,6 +673,14 @@ export class OrbitDB extends Dexie {
     // file; people gain contactHandles (not indexed)
     this.version(18).stores({
       textDays: 'id, userId, personId',
+    });
+    // plan 43: Instagram and X accounts attached to people, the "same person" questions, the lookups (pulled in account
+    // mode), and the demo's follow ties
+    this.version(19).stores({
+      socialLinks: 'id, userId, personId, accountId',
+      socialAsks: 'id, userId, personId, status',
+      socialLookups: 'id, userId, targetPersonId',
+      socialTies: 'id, userId, aId, bId',
     });
   }
 }

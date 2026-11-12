@@ -139,6 +139,11 @@ export interface AccountUser {
   settings: Record<string, unknown>;
   onboarding: Record<string, unknown>;
   createdAt: string;
+  /**
+   * Plan 43: this account is the owner's (ORBIT_OWNER_ID), who switches the optional sources on for every student from
+   * Settings, Launch. Missing from a server from before it, which reads as not the owner.
+   */
+  isOwner?: boolean;
 }
 
 export interface SessionResponse {
@@ -239,10 +244,16 @@ export interface PushResult {
   error?: { code: string; message: string };
 }
 
-/** GET /sources (plan 43 §3.1): the optional sources the owner offers, and where the student stands with each. */
+/**
+ * GET /sources (plan 43 §3.1): the optional sources the owner offers, and where the student stands with each. The
+ * server answers each source with its state, when it went off and whether friends may find paths through it; an older
+ * answer (and the tests' fake, once) gave the state alone.
+ */
 export interface SourcesResponse {
   offered: OptionalSource[];
-  states: SourceStates;
+  states: Partial<
+    Record<OptionalSource, SourceState | { state: SourceState; offSince?: string; shareFollows?: boolean }>
+  >;
 }
 
 /**
@@ -275,9 +286,37 @@ export interface TextDaysRequest {
 export interface ApiRoutes {
   // plan 43: optional sources (GET, and PUT per source) and the texts a signed-in student's browser sends up
   '/sources': [Record<string, never>, SourcesResponse];
-  '/sources/instagram': [{ state: SourceState }, { source: OptionalSource; state: SourceState }];
+  '/sources/instagram': [
+    { state: SourceState; shareFollows?: boolean },
+    { source: OptionalSource; state: SourceState },
+  ];
   '/sources/x': [{ state: SourceState }, { source: OptionalSource; state: SourceState }];
   '/sources/imessage': [{ state: SourceState }, { source: OptionalSource; state: SourceState }];
+  // plan 43: Instagram (Unipile) and X, the accounts under people, the match questions and the lookups
+  '/instagram/connect/start': [{ replace?: boolean }, { url?: string; replaced?: boolean }];
+  '/instagram/status': [Record<string, never>, InstagramStatusResponse];
+  '/instagram/disconnect': [Record<string, never>, { ok: boolean }];
+  '/x/connect/start': [{ consent: true }, { url: string }];
+  '/x/status': [Record<string, never>, XStatusResponse];
+  '/x/disconnect': [Record<string, never>, { ok: boolean }];
+  '/social/links': [
+    { platform: 'instagram' | 'x'; accountId: string; personId: string },
+    { linkId: string },
+  ];
+  '/social/asks': [Record<string, never>, { asks: SocialAskResponse[] }];
+  '/social/lookups': [
+    { platform: 'instagram' | 'x'; personId: string; confirm?: boolean },
+    SocialLookupStartResponse,
+  ];
+  // the owner's Launch section (plan 43, the owner's switch at run time); anyone else gets 404
+  '/admin/sources': [Record<string, never>, AdminSourcesResponse];
+  [route: `/admin/sources/${string}`]: [{ offered: boolean }, { ok: true }];
+  [route: `/social/links/${string}`]: [Record<string, never>, { ok: boolean; accountPersonId?: string }];
+  [route: `/social/asks/${string}`]: [{ answer: 'yes' | 'no' }, { status: 'yes' | 'no' }];
+  [route: `/social/lookups/${string}`]: [
+    Record<string, never>,
+    { status: SocialLookupStatus; result: SocialLookupResult | null },
+  ];
   '/texts/days': [TextDaysRequest, { written: number; people?: Record<string, string> }];
   '/auth/logout': [{ refreshToken?: string }, { ok: boolean }];
   '/auth/me': [Record<string, never>, { user: AccountUser }];
@@ -387,6 +426,69 @@ export interface ApiRoutes {
 }
 export type ClientRoute = keyof ApiRoutes;
 
+// ---- plan 43: Instagram, X and the social accounts layer ------------------------------------------------------------
+
+export type SocialStep = 'done' | 'reading' | 'waiting';
+
+/** GET /instagram/status */
+export interface InstagramStatusResponse {
+  status: 'not_connected' | 'connecting' | 'active' | 'needs_reauth' | 'parked' | 'different_account' | 'error';
+  username?: string;
+  steps: { profile: SocialStep; chats: SocialStep; following: SocialStep; followers: SocialStep };
+}
+
+/** GET /x/status */
+export interface XStatusResponse {
+  status: 'not_connected' | 'connecting' | 'active' | 'needs_reauth' | 'error';
+  username?: string;
+  spentThisMonthUsd: number;
+  limitUsd: number;
+  orbitLimitReached: boolean;
+}
+
+/** One open "is this the same person" question (GET /social/asks). */
+export interface SocialAskResponse {
+  id: string;
+  platform: 'instagram' | 'x';
+  accountId: string;
+  username: string | null;
+  name: string | null;
+  personId: string;
+  personName: string;
+  score: number;
+  signals: Record<string, unknown>;
+}
+
+/** What a finished lookup found (GET /social/lookups/:id `result`). */
+export interface SocialLookupResult {
+  bridges: { personId: string; accountId: string; name: string }[];
+  oneWay: { personId: string; accountId: string; followerId: string }[];
+  partial: boolean;
+  reason?: 'private' | 'none' | 'no_circle' | 'source_off' | 'sign_in' | 'suppressed';
+}
+
+export type SocialLookupStatus = 'queued' | 'running' | 'waiting' | 'done' | 'failed';
+
+/**
+ * POST /social/lookups: the lookup started (or the one already running), or for X without `confirm` the price first:
+ * how many people it reads, from which list, and what it would cost.
+ */
+export type SocialLookupStartResponse =
+  | { lookupId: string; status: SocialLookupStatus }
+  | { status: 'quote'; quoteUsd: number; list: string; size: number; reason?: string };
+
+/** GET /admin/sources: each optional source, whether students are offered it, whether it is ready to be. */
+export interface AdminSourcesResponse {
+  sources: {
+    source: OptionalSource;
+    offered: boolean;
+    ready: boolean;
+    /** what is missing before it can be offered, by name (`unipile_key`, `x_app`, `x_limit`, ...) */
+    missing: string[];
+    students: { on: number; connected: number };
+  }[];
+}
+
 /** One `cost.digest` row the worker writes each morning (plan 34 E2), as /admin/costs returns it. */
 export interface CostDigestResponse {
   rows: { at: string; details: Record<string, unknown> }[];
@@ -415,6 +517,8 @@ export interface ApiFailure {
   code?: string;
   /** for `unconfigured`: what the server is missing */
   missing?: string[];
+  /** a 409's whole answer, for callers that offer a choice (plan 43's pick_person lists both people) */
+  body?: Record<string, unknown>;
 }
 export type ApiResult<T> = { ok: true; value: T } | ApiFailure;
 
@@ -504,7 +608,7 @@ async function rawCall(
   const headers: Record<string, string> = { accept: 'application/json' };
   if (opts.token) headers.authorization = `Bearer ${opts.token}`;
   const method = opts.method ?? 'POST';
-  const sends = method !== 'GET';
+  const sends = method === 'POST' || method === 'PUT';
   if (sends) headers['content-type'] = 'application/json';
   const timeout =
     typeof AbortSignal !== 'undefined' && 'timeout' in AbortSignal ? AbortSignal.timeout(waitMs) : undefined;
@@ -573,7 +677,7 @@ async function interpret<T>(res: Response): Promise<ApiResult<T>> {
       (res.status >= 500
         ? "Orbit's server had a problem. Try again in a moment."
         : 'Orbit could not do that.'),
-    { status: res.status, code },
+    { status: res.status, code, ...(res.status === 409 ? { body: body as Record<string, unknown> } : {}) },
   );
 }
 

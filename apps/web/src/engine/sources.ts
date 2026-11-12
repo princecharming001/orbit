@@ -34,13 +34,22 @@ export interface SourcesView {
   offered: OptionalSource[];
   states: SourceStates;
   inUse: Set<OptionalSource>;
+  /** the student lets Orbit friends find paths through who they follow there (plan 43 §3.6; Instagram only) */
+  shareFollows?: Partial<Record<OptionalSource, boolean>>;
 }
 
 interface Stored {
   states: SourceStates;
   /** account mode: what the server last said it offers */
   offered?: OptionalSource[];
+  shareFollows?: Partial<Record<OptionalSource, boolean>>;
   at?: string;
+}
+
+/** Bumped on every change to what is offered or on, so caches built on it (the reach graph) know to rebuild. */
+let version = 0;
+export function sourcesVersion(): number {
+  return version;
 }
 
 let extraOverride: string | null | undefined;
@@ -65,7 +74,11 @@ async function currentUser(userId?: string): Promise<string | undefined> {
 
 async function stored(userId: string): Promise<Stored> {
   const v = (await db.kv.get(statesKey(userId)))?.value as Stored | undefined;
-  return { states: { ...(v?.states ?? {}) }, ...(v?.offered ? { offered: v.offered } : {}) };
+  return {
+    states: { ...(v?.states ?? {}) },
+    ...(v?.offered ? { offered: v.offered } : {}),
+    ...(v?.shareFollows ? { shareFollows: v.shareFollows } : {}),
+  };
 }
 
 function offeredFrom(userId: string, s: Stored): OptionalSource[] {
@@ -88,7 +101,12 @@ export function sourcesNow(userId?: string): Promise<SourcesView> {
 async function viewFor(id: string): Promise<SourcesView> {
   const s = await stored(id);
   const offered = offeredFrom(id, s);
-  return { offered, states: s.states, inUse: sourcesInUse(offered, s.states) };
+  return {
+    offered,
+    states: s.states,
+    inUse: sourcesInUse(offered, s.states),
+    ...(s.shareFollows ? { shareFollows: s.shareFollows } : {}),
+  };
 }
 
 /**
@@ -101,9 +119,20 @@ export async function loadSources(userId?: string): Promise<SourcesView> {
     const r = await callApi('/sources', {});
     if (r.ok) {
       const offered = (r.value.offered ?? []).filter((s) => OPTIONAL_SOURCES.includes(s));
+      // the server answers each source as {state, offSince, shareFollows}; an older answer gave the state alone
+      const states: SourceStates = {};
+      const shareFollows: Partial<Record<OptionalSource, boolean>> = {};
+      for (const [k, v] of Object.entries(r.value.states ?? {})) {
+        const src = k as OptionalSource;
+        if (!OPTIONAL_SOURCES.includes(src) || !v) continue;
+        states[src] = typeof v === 'string' ? v : v.state;
+        if (typeof v === 'object' && v.shareFollows) shareFollows[src] = true;
+      }
+      const before = await stored(id);
+      if (JSON.stringify([before.offered, before.states]) !== JSON.stringify([offered, states])) version++;
       await db.kv.put({
         key: statesKey(id),
-        value: { states: r.value.states ?? {}, offered, at: new Date().toISOString() } satisfies Stored,
+        value: { states, offered, shareFollows, at: new Date().toISOString() } satisfies Stored,
       });
     }
   }
@@ -149,8 +178,18 @@ export async function setSourceState(
   }
   const s = await stored(id);
   s.states[source] = state;
+  // removing a source takes the friends' switch with it (plan 43 §3.6)
+  if (state === 'removed' && s.shareFollows) delete s.shareFollows[source];
+  version++;
   await db.kv.put({ key: statesKey(id), value: { ...s, at: new Date().toISOString() } satisfies Stored });
   return { ok: true, state };
+}
+
+/** Keep the friends' follow-list switch here once the server has it (or, for the demo, here alone). */
+export async function setShareFollowsKept(userId: string, on: boolean, source: OptionalSource = 'instagram') {
+  const s = await stored(userId);
+  s.shareFollows = { ...(s.shareFollows ?? {}), [source]: on };
+  await db.kv.put({ key: statesKey(userId), value: { ...s, at: new Date().toISOString() } satisfies Stored });
 }
 
 /**
