@@ -330,6 +330,29 @@ export async function socialSendsHere(userId: string): Promise<Set<string>> {
   return out;
 }
 
+/**
+ * What the chat's model is told about the optional sources: only those this Orbit offers, each with where the student
+ * stands ("Instagram on as @maya", "X off", "Texts not connected"). Nothing offered: nothing said.
+ */
+export async function optionalSourcesLine(userId: string): Promise<string[]> {
+  const s = await sourcesNow(userId);
+  const out: string[] = [];
+  for (const src of s.offered) {
+    if ((src === 'instagram' || src === 'x') && !socialSupported(userId)) continue;
+    const name = src === 'imessage' ? 'Texts' : PLATFORM_NAME[src];
+    const state = s.states[src] ?? 'not_connected';
+    const st = src === 'imessage' ? undefined : await keptStatus(userId, src);
+    out.push(
+      state === 'on'
+        ? `${name} on${st?.username ? ` as @${st.username}` : ''} (show_setup ${src === 'imessage' ? 'texts' : src} to manage)`
+        : state === 'off'
+          ? `${name} off (kept, not counted)`
+          : `${name} offered, not connected (show_setup ${src === 'imessage' ? 'texts' : src})`,
+    );
+  }
+  return out;
+}
+
 // ---- accounts attached to people ----------------------------------------------------------------------------------
 
 /** A person's Instagram and X accounts, only for the platforms in use (an off source's handles are hidden). */

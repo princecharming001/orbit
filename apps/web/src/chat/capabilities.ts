@@ -1399,6 +1399,46 @@ export const CAPABILITIES: readonly Capability[] = [
     kind: 'risky',
     utterances: ['disconnect LinkedIn', 'unlink my LinkedIn account', 'stop syncing LinkedIn'],
   },
+  // plan 43: the optional sources, only while this Orbit offers them
+  {
+    id: 'instagram_connect',
+    area: 'Integrations and imports',
+    title: 'Connect Instagram so who you follow and message counts in warm paths',
+    kind: 'write',
+    utterances: ['connect my Instagram', 'add Instagram', 'use my Instagram to find paths'],
+  },
+  {
+    id: 'x_connect',
+    area: 'Integrations and imports',
+    title: 'Connect X, after seeing what Orbit stores from it',
+    kind: 'write',
+    utterances: ['connect my X account', 'add Twitter', 'sign in with X'],
+  },
+  {
+    id: 'texts_connect',
+    area: 'Integrations and imports',
+    title: "Add your texts from the Mac's Messages",
+    kind: 'write',
+    utterances: ['add my texts', 'read my iMessages', 'use my Messages to rank people'],
+  },
+  {
+    id: 'social_status',
+    area: 'Integrations and imports',
+    title: 'Say where Instagram, X and texts stand',
+    kind: 'read',
+    utterances: ['is my Instagram connected', 'how much have I spent on X', 'is Instagram still reading'],
+  },
+  {
+    id: 'social_check_paths',
+    area: 'Network',
+    title: 'Check Instagram or X for who could introduce you to someone',
+    kind: 'risky',
+    utterances: [
+      'check Instagram for Jules',
+      'who follows Priya on X',
+      'does anyone I know follow her on Instagram',
+    ],
+  },
   // Area 9. Settings and account
   {
     id: 'settings_profile_update',

@@ -12,6 +12,7 @@ import {
   mutualsFor,
   syncLinkedInLive,
 } from '../../engine/linkedinLive';
+import { quoteLine, refreshInstagram, refreshX, startCheck } from '../../engine/social';
 import { z } from '../../zod';
 import { readSetupStatus } from '../setupStatus';
 import type { ResultEnvelope } from '../types';
@@ -140,4 +141,100 @@ export const getMutualConnections = defineTool({
   toModel,
 });
 
-export const connectorTools: AnyTool[] = [syncLinkedinTool, disconnectLinkedinTool, getMutualConnections];
+/** Plan 43: where Instagram, X and texts stand, for the sources this Orbit offers. */
+export const socialStatusTool = defineTool({
+  name: 'social_status',
+  kind: 'read',
+  description:
+    'Call this when the student asks whether Instagram, X or texts are connected, on or off, what Instagram is still reading, or what X has cost this month. It answers only for the sources this Orbit offers; to connect one, show_setup instagram, x or texts instead.',
+  input: z.object({}),
+  capabilities: ['social_status'],
+  progress: 'Checking Instagram, X and texts',
+  async execute(_input, ctx) {
+    const out: Record<string, unknown> = {};
+    const lines: string[] = [];
+    for (const what of ['instagram', 'x', 'texts'] as const) {
+      if (what === 'instagram') await refreshInstagram(ctx.user.id).catch(() => undefined);
+      if (what === 'x') await refreshX(ctx.user.id).catch(() => undefined);
+      const s = await readSetupStatus(ctx.user.id, what);
+      if (s.what !== what || !s.offered) continue;
+      out[what] = s;
+      const name = what === 'x' ? 'X' : what === 'texts' ? 'Texts' : 'Instagram';
+      lines.push(
+        s.state === 'on'
+          ? `${name} is on${s.username ? ` as @${s.username}` : ''}${s.reading ? `, ${s.reading.toLowerCase()}` : ''}${s.what === 'x' && s.spentUsd !== undefined ? `, $${s.spentUsd} of $${s.limitUsd} spent this month` : ''}`
+          : s.state === 'off'
+            ? `${name} is off`
+            : `${name} is not connected`,
+      );
+    }
+    if (!lines.length)
+      return ok('text', {}, { offered: [] }, 'Instagram, X and texts are not part of this version of Orbit.');
+    return ok('settings', out, out, `${lines.join('. ')}.`, '/settings/integrations');
+  },
+  toModel,
+});
+
+/**
+ * Plan 43 §3.6, §5: "Check Instagram for Jules" / "Check X for Jules". Risky because X costs money: the approval card
+ * shows X's price before anything is read, and the yes carries that price.
+ */
+export const checkSocialPathsTool = defineTool({
+  name: 'check_social_paths',
+  kind: 'risky',
+  description:
+    "Call this when the student asks who they know who follows someone on Instagram or X, or to check Instagram or X for a way in to a person (personId from search_people). Orbit asks the platform who in the student's circle follows them and is followed back. On X it costs money, so the approval says the price first and nothing is read until the student says yes. Only while that source is on and Orbit knows the person's account for sure.",
+  input: z.object({
+    personId: z.string().describe('The person to check (from search_people).'),
+    platform: z.enum(['instagram', 'x']).describe('Which platform to check.'),
+  }),
+  capabilities: ['social_check_paths'],
+  progress: 'Checking who follows them',
+  async summarizeIntent(input, ctx) {
+    const target = await requirePerson(ctx, input.personId);
+    const where = input.platform === 'x' ? 'X' : 'Instagram';
+    if (input.platform === 'instagram')
+      return {
+        text: `Check Instagram for ${target.firstName}. It can take a few hours; Orbit says when it is done.`,
+      };
+    const q = await startCheck(ctx.user.id, 'x', target.id);
+    if (!q.ok) return { text: `Check ${where} for ${target.firstName}.`, blockedReason: q.message };
+    if ('quote' in q) return { text: `Check X for ${target.firstName}. ${quoteLine(q.quote)}` };
+    return { text: `Check X for ${target.firstName}.` };
+  },
+  async execute(input, ctx) {
+    const target = await requirePerson(ctx, input.personId);
+    const where = input.platform === 'x' ? 'X' : 'Instagram';
+    let r = await startCheck(ctx.user.id, input.platform, target.id);
+    // X: the price was shown on the approval card, and the yes carries it
+    if (r.ok && 'quote' in r)
+      r = await startCheck(ctx.user.id, input.platform, target.id, {
+        confirm: true,
+        quoteUsd: r.quote.quoteUsd,
+      });
+    if (!r.ok) throw new Error(r.message);
+    if (!('lookupId' in r)) throw new Error(`${where} did not start the check. Try again.`);
+    const out = {
+      target: personRef(target),
+      platform: input.platform,
+      lookupId: r.lookupId,
+      status: 'running',
+    };
+    return ok(
+      'text',
+      out,
+      out,
+      `Checking ${where} for ${target.firstName}. The result shows on ${target.firstName}'s page and on the routes when it is done.`,
+      `/people/${target.id}`,
+    );
+  },
+  toModel,
+});
+
+export const connectorTools: AnyTool[] = [
+  syncLinkedinTool,
+  disconnectLinkedinTool,
+  getMutualConnections,
+  socialStatusTool,
+  checkSocialPathsTool,
+];

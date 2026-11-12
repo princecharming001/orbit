@@ -65,7 +65,8 @@ export interface ResultEnvelope<D = unknown> {
 }
 
 /** Which setup widget a `setup` envelope asks for. */
-export type SetupWhat = 'google' | 'linkedin' | 'claude_key' | 'resume';
+/** plan 43: instagram, x and texts only while this Orbit offers them */
+export type SetupWhat = 'google' | 'linkedin' | 'claude_key' | 'resume' | 'instagram' | 'x' | 'texts';
 
 /** One tap-to-answer option: `label` is the pill, `message` is sent as the student's turn when tapped. */
 export interface ChoiceOption {

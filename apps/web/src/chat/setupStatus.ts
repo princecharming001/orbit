@@ -14,7 +14,15 @@ import { envGoogleClientId, readPrefs } from '../integrations/prefs';
 import { sharedClaudeUrl } from '../integrations/shared-claude';
 import type { SetupWhat } from './types';
 
-export const SETUP_WHAT: readonly SetupWhat[] = ['google', 'linkedin', 'claude_key', 'resume'];
+export const SETUP_WHAT: readonly SetupWhat[] = [
+  'google',
+  'linkedin',
+  'claude_key',
+  'resume',
+  'instagram',
+  'x',
+  'texts',
+];
 
 export interface GoogleSetup {
   what: 'google';
@@ -64,7 +72,22 @@ export interface ResumeSetup {
   filename?: string;
   addedAt?: string;
 }
-export type SetupStatus = GoogleSetup | LinkedinSetup | ClaudeKeySetup | ResumeSetup;
+/** Plan 43: Instagram, X or texts, as the chat's card shows them: offered at all, and where the student stands. */
+export interface SourceSetup {
+  what: 'instagram' | 'x' | 'texts';
+  /** this Orbit offers it to this student (and, for Instagram and X, they can use it here) */
+  offered: boolean;
+  state: 'not_connected' | 'on' | 'off' | 'removed';
+  /** Instagram and X: connected, with the handle */
+  connected?: boolean;
+  username?: string;
+  /** Instagram: what is being read now */
+  reading?: string;
+  /** X: what has been spent this month and the limit, in dollars */
+  spentUsd?: number;
+  limitUsd?: number;
+}
+export type SetupStatus = GoogleSetup | LinkedinSetup | ClaudeKeySetup | ResumeSetup | SourceSetup;
 
 export async function readSetupStatus(userId: string, what: SetupWhat): Promise<SetupStatus> {
   switch (what) {
@@ -136,7 +159,49 @@ export async function readSetupStatus(userId: string, what: SetupWhat): Promise<
         .sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0];
       return { what, onFile: !!r, filename: r?.filename, addedAt: r?.createdAt };
     }
+    case 'instagram':
+    case 'x':
+    case 'texts':
+      return sourceSetup(userId, what);
   }
+}
+
+async function sourceSetup(userId: string, what: SourceSetup['what']): Promise<SourceSetup> {
+  const { sourcesNow } = await import('../engine/sources');
+  const s = await sourcesNow(userId);
+  if (what === 'texts') {
+    const { isMac } = await import('../integrations/messagesFolder');
+    return {
+      what,
+      offered: s.offered.includes('imessage') && isMac(),
+      state: s.states.imessage ?? 'not_connected',
+    };
+  }
+  const social = await import('../engine/social');
+  const offered = social.socialSupported(userId) && s.offered.includes(what);
+  const state = s.states[what] ?? 'not_connected';
+  if (!offered) return { what, offered, state };
+  if (what === 'instagram') {
+    const st = await social.keptStatus(userId, 'instagram');
+    return {
+      what,
+      offered,
+      state,
+      connected: !!st && st.status !== 'not_connected' && st.status !== 'connecting',
+      username: st?.username,
+      reading: social.instagramProgress(st),
+    };
+  }
+  const st = await social.keptStatus(userId, 'x');
+  return {
+    what,
+    offered,
+    state,
+    connected: !!st && (st.status === 'active' || st.status === 'needs_reauth'),
+    username: st?.username,
+    spentUsd: st?.spentThisMonthUsd,
+    limitUsd: st?.limitUsd,
+  };
 }
 
 function demoAccount(userId: string) {

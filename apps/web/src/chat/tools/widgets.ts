@@ -52,7 +52,7 @@ export const showSetup = defineTool({
   name: 'show_setup',
   kind: 'read',
   description:
-    'Call this when the student needs to connect or add something (Gmail and Google Calendar, LinkedIn, a Claude key, a resume) instead of describing Settings: it shows a small widget in the chat where they do it, with the current status. Pick google for Gmail and Calendar, linkedin to connect LinkedIn live (it keeps their connections in sync) or upload the connections export, claude_key for their own Claude API key, resume for their resume file. Nothing changes until the student acts in the widget.',
+    "Call this when the student needs to connect or add something (Gmail and Google Calendar, LinkedIn, a Claude key, a resume, and when this Orbit offers them Instagram, X or texts) instead of describing Settings: it shows a small widget in the chat where they do it, with the current status. Pick google for Gmail and Calendar, linkedin to connect LinkedIn live (it keeps their connections in sync) or upload the connections export, claude_key for their own Claude API key, resume for their resume file, instagram or x to connect that account (Orbit reads who they follow and their messages to find warm paths), texts for the Mac's Messages. Instagram, X and texts are optional: offer them only when the snapshot lists them as offered. Nothing changes until the student acts in the widget.",
   input: z.object({
     what: z.enum(SETUP_WHAT as [SetupWhat, ...SetupWhat[]]).describe('Which widget to show.'),
   }),
@@ -62,6 +62,9 @@ export const showSetup = defineTool({
     'linkedin_live_connect',
     'claude_key_save_test',
     'resume_upload',
+    'instagram_connect',
+    'x_connect',
+    'texts_connect',
   ],
   progress: 'Getting the setup ready',
   async execute(input, ctx) {
@@ -108,6 +111,19 @@ const SUMMARIES: Record<SetupWhat, (s: Awaited<ReturnType<typeof readSetupStatus
       : s.onFile
         ? `A resume is on file (${s.filename}). The widget replaces it.`
         : 'No resume yet. The widget takes a PDF, Word or text file.',
+  instagram: (s) => sourceSummary(s, 'Instagram'),
+  x: (s) => sourceSummary(s, 'X'),
+  texts: (s) => sourceSummary(s, 'Texts'),
 };
+
+function sourceSummary(s: Awaited<ReturnType<typeof readSetupStatus>>, name: string): string {
+  if (s.what !== 'instagram' && s.what !== 'x' && s.what !== 'texts') return '';
+  if (!s.offered) return `${name} is not part of this version of Orbit. Do not offer it.`;
+  if (s.state === 'on')
+    return `${name} is on${s.username ? ` as @${s.username}` : ''}.${s.reading ? ` Orbit is ${s.reading.toLowerCase()}.` : ''} The widget can switch it off.`;
+  if (s.state === 'off')
+    return `${name} is off: kept, and left out of closeness and paths. The widget switches it on.`;
+  return `${name} is not connected. The widget connects it${s.what === 'x' ? ', after saying what Orbit stores' : s.what === 'instagram' ? ', after a plain note on the risk' : ''}.`;
+}
 
 export const widgetTools: AnyTool[] = [offerChoices, showSetup];
