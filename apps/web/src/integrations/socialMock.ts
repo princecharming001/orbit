@@ -16,9 +16,9 @@
  */
 import type { Person } from '@orbit/core';
 import { newId } from '@orbit/core';
+import { db, type SocialLinkRow, type SocialLookupRow } from '../db/schema';
 import { recomputeEdges } from '../engine/graph';
 import { setSourceState } from '../engine/sources';
-import { db, type SocialLinkRow, type SocialLookupRow } from '../db/schema';
 import type { InstagramStatusResponse, SocialStep, XStatusResponse } from './orbitApi';
 
 type Platform = 'instagram' | 'x';
@@ -116,7 +116,9 @@ export async function connectX(userId: string): Promise<void> {
   const s = await load(userId);
   s.x = {
     connectedAt: new Date().toISOString(),
-    username: user ? `${user.firstName}${user.lastName}`.toLowerCase().replace(/[^a-z0-9_]/g, '') : 'alexstudent',
+    username: user
+      ? `${user.firstName}${user.lastName}`.toLowerCase().replace(/[^a-z0-9_]/g, '')
+      : 'alexstudent',
     status: 'active',
     spentUsd: s.x?.spentUsd ?? 0,
   };
@@ -233,10 +235,18 @@ async function seedInstagram(userId: string): Promise<void> {
   // attached by score, to the wrong person: the one "Not their account" undoes
   if (wrong)
     links.push(
-      link(userId, 'instagram', wrong, handleFor(wrong, '.photo'), `${wrong.firstName} ${wrong.lastName}`, 'score', {
-        score: 0.96,
-        followsYou: false,
-      }),
+      link(
+        userId,
+        'instagram',
+        wrong,
+        handleFor(wrong, '.photo'),
+        `${wrong.firstName} ${wrong.lastName}`,
+        'score',
+        {
+          score: 0.96,
+          followsYou: false,
+        },
+      ),
     );
   await db.socialLinks.bulkPut(links);
   if (asked) {
@@ -296,14 +306,25 @@ async function seedX(userId: string): Promise<void> {
   const target = (await db.people.get(MOCK_TARGET_ID)) ?? (await ensureTarget(userId));
   const links: SocialLinkRow[] = [
     // X accounts are attached from public proof only (plan 43 §5): her site links it
-    link(userId, 'x', target, 'julesmoreau', 'Jules Moreau', 'proof', { proof: 'links_back', acceptsDms: false }),
+    link(userId, 'x', target, 'julesmoreau', 'Jules Moreau', 'proof', {
+      proof: 'links_back',
+      acceptsDms: false,
+    }),
   ];
   if (second)
     links.push(
-      link(userId, 'x', second, `${second.firstName}${second.lastName}`.toLowerCase(), second.displayName, 'proof', {
-        proof: 'own_links',
-        acceptsDms: true,
-      }),
+      link(
+        userId,
+        'x',
+        second,
+        `${second.firstName}${second.lastName}`.toLowerCase(),
+        second.displayName,
+        'proof',
+        {
+          proof: 'own_links',
+          acceptsDms: true,
+        },
+      ),
     );
   await db.socialLinks.bulkPut(links);
 }
@@ -416,7 +437,11 @@ async function finishLookup(userId: string, lookupId: string): Promise<void> {
       ? ({ mutual: 'instagram_mutual', follow: 'instagram_follow' } as const)
       : ({ mutual: 'x_mutual', follow: 'x_follow' } as const);
   if (l.targetPersonId === MOCK_TARGET_ID && bridge) {
-    result.bridges.push({ personId: bridge.id, accountId: `${l.platform}_${bridge.id}`, name: bridge.displayName });
+    result.bridges.push({
+      personId: bridge.id,
+      accountId: `${l.platform}_${bridge.id}`,
+      name: bridge.displayName,
+    });
     await db.socialTies.put({
       id: `st_${kinds.mutual}_${bridge.id}_${l.targetPersonId}`,
       userId,

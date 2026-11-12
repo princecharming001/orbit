@@ -23,6 +23,7 @@ import {
   type LucideIcon,
   PenLine,
   Plus,
+  Rocket,
   Send,
   ShieldCheck,
   Target,
@@ -44,6 +45,7 @@ import { LinkedInImportButton } from '../components/LinkedInImport';
 import { openMorningBrief } from '../components/MorningBrief';
 import { BookingLinkRow, CalcomRow, CalendlyRow, FathomRow, MeetingAppRow } from '../components/NotesAppRows';
 import { ResumeFacetList } from '../components/ResumeFacets';
+import { INSTAGRAM_PRIVACY, InstagramRow, X_PRIVACY, XRow } from '../components/SocialRows';
 import {
   CardFields,
   SettingsCard,
@@ -93,6 +95,7 @@ import {
   updateLimits,
   updateProfile,
 } from '../engine/settings';
+import { useSocialOffered } from '../engine/social';
 import { addTargetCompanies } from '../engine/targets';
 import { approvalStreaks, LADDER_KINDS, LADDER_WORDS, OFFER_AT, setAutoKind } from '../engine/trust';
 import { fmtFailureTime } from '../integrations/anthropic';
@@ -129,6 +132,7 @@ import { ChipsField } from '../ui/ChipsField';
 import { Suggest } from '../ui/Suggest';
 import { AutopilotSection } from './settings/Autopilot';
 import { CostsSection } from './settings/Costs';
+import { isOwnerAccount, LaunchSection } from './settings/Launch';
 import { VoiceSection } from './settings/Voice';
 
 /** The section with the LinkedIn import, the resume and the Claude key (its route keeps the older name). */
@@ -167,10 +171,15 @@ const SECTION_ICONS: Record<string, LucideIcon> = {
   account: CircleUserRound,
   outreach: Send,
   memory: Brain,
+  launch: Rocket,
 };
 
+/** Plan 43: the owner's switch for the optional sources, in the menu for the owner's account only. */
+const LAUNCH_SECTION = ['launch', 'Launch'] as const;
+
 function sections(): readonly (readonly [string, string])[] {
-  return isAccountMode() ? [...BASE_SECTIONS, ...ACCOUNT_SECTIONS] : [...BASE_SECTIONS, MEMORY_SECTION];
+  if (!isAccountMode()) return [...BASE_SECTIONS, MEMORY_SECTION];
+  return [...BASE_SECTIONS, ...ACCOUNT_SECTIONS, ...(isOwnerAccount() ? [LAUNCH_SECTION] : [])];
 }
 
 const SECTION_ALIASES: Record<string, string> = {
@@ -225,8 +234,12 @@ function useSettingFocus(section: string) {
 export function SettingsPage() {
   const { section = 'profile' } = useParams();
   const nav = useNavigate();
+  const { search } = useLocation();
   useSettingFocus(section);
   const SECTIONS = sections();
+  // back from Instagram's or X's sign-in (/settings?x=connected): the rows that say how it went are under Integrations
+  if (section !== 'integrations' && /[?&](x|instagram)=/.test(search))
+    return <Navigate to={`/settings/integrations${search}`} replace />;
   // the owner's cost view (plan 34 E3) is not listed: it opens at /settings/costs in account mode
   const hidden = section === 'costs' && isAccountMode();
   if (!hidden && !SECTIONS.some(([k]) => k === section))
@@ -299,6 +312,7 @@ export function SettingsPage() {
             {section === 'account' && <AccountSection />}
             {section === 'outreach' && <OutreachSection />}
             {section === 'memory' && <MemorySection />}
+            {section === 'launch' && <LaunchSection />}
             {hidden && <CostsSection />}
           </div>
         </div>
@@ -1174,7 +1188,9 @@ function Integrations() {
           </IntegrationRow>
         )}
         <LinkedInLiveCard user={user} />
-        {/* plan 43 §6: texts from the Mac's Messages, on a Mac when this Orbit offers them */}
+        {/* plan 43 §4, §5, §6: Instagram, X and texts, each only when this Orbit offers it */}
+        <InstagramRow user={user} />
+        <XRow user={user} />
         <TextsRow user={user} />
         {/* the file upload only for a build without live LinkedIn; with it, LinkedIn connects through its sign-in */}
         {!liveLinkedInAvailable(user) && (
@@ -1716,6 +1732,8 @@ function Privacy() {
   const toast = useToast();
   const sources = useSources(user?.id ?? '');
   const texts = useTextsOffered(user?.id);
+  const instagram = useSocialOffered(user?.id, 'instagram');
+  const x = useSocialOffered(user?.id, 'x');
   const working = useWorking();
   if (!user) return null;
   const exportAll = () => working.run('export', 'Gathering your data…', downloadAll);
@@ -1743,7 +1761,10 @@ function Privacy() {
     ['Claude', 'only for the features you turn on', 'claude.ai'],
     ['LinkedIn', 'through Unipile, if you connect it live', 'linkedin.com'],
     ['Company logos', "a company's name, to find its logo on LinkedIn", 'linkedin.com'],
-    // plan 43 §9: texts are the most private thing Orbit touches; the words never leave the browser
+    // plan 43 §9: each optional source by name, what is read, what is shared and for how long
+    ...(instagram ? ([['Instagram', INSTAGRAM_PRIVACY, 'instagram.com']] as [string, string, string][]) : []),
+    ...(x ? ([['X', X_PRIVACY, 'x.com']] as [string, string, string][]) : []),
+    // texts are the most private thing Orbit touches; the words never leave the browser
     ...(texts
       ? ([['Texts', textsPrivacyLine(isServerUser(user.id))]] as [string, string][])
       : ([] as [string, string][])),

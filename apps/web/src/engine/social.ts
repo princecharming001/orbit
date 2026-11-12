@@ -165,7 +165,9 @@ export async function connectInstagram(
   });
   if (!start.ok)
     return fail(
-      start.reason === 'unconfigured' ? 'Instagram is not set up on Orbit yet. Try again later.' : start.message,
+      start.reason === 'unconfigured'
+        ? 'Instagram is not set up on Orbit yet. Try again later.'
+        : start.message,
     );
   if (start.value.replaced) {
     await loadSources(userId);
@@ -174,7 +176,8 @@ export async function connectInstagram(
   }
   const url = start.value.url;
   if (!url) return fail('Instagram sign-in is unavailable right now.');
-  const win = typeof window !== 'undefined' ? window.open(url, 'orbit-instagram', 'width=520,height=720') : null;
+  const win =
+    typeof window !== 'undefined' ? window.open(url, 'orbit-instagram', 'width=520,height=720') : null;
   if (!win) return fail('Your browser blocked the Instagram window. Allow pop-ups for Orbit and try again.');
   for (let i = 0; i < poll.tries; i++) {
     await sleep(poll.everyMs);
@@ -268,10 +271,26 @@ export async function switchSocial(
 
 /** What this browser holds from a platform, deleted (Removed). */
 async function forgetLocal(userId: string, p: Platform): Promise<void> {
-  await db.socialLinks.where('userId').equals(userId).filter((l) => l.platform === p).delete();
-  await db.socialAsks.where('userId').equals(userId).filter((a) => a.platform === p).delete();
-  await db.socialLookups.where('userId').equals(userId).filter((l) => l.platform === p).delete();
-  await db.socialTies.where('userId').equals(userId).filter((t) => t.platform === p).delete();
+  await db.socialLinks
+    .where('userId')
+    .equals(userId)
+    .filter((l) => l.platform === p)
+    .delete();
+  await db.socialAsks
+    .where('userId')
+    .equals(userId)
+    .filter((a) => a.platform === p)
+    .delete();
+  await db.socialLookups
+    .where('userId')
+    .equals(userId)
+    .filter((l) => l.platform === p)
+    .delete();
+  await db.socialTies
+    .where('userId')
+    .equals(userId)
+    .filter((t) => t.platform === p)
+    .delete();
   const kinds = p === 'instagram' ? ['instagram_in', 'instagram_out'] : ['x_in', 'x_out'];
   await db.touchpoints
     .where('userId')
@@ -399,7 +418,8 @@ export async function refreshAsks(userId: string): Promise<void> {
   const open = new Set(r.value.asks.map((a) => a.id));
   await db.transaction('rw', db.socialAsks, async () => {
     const had = await db.socialAsks.where('userId').equals(userId).toArray();
-    for (const h of had) if (h.status === 'open' && !open.has(h.id)) await db.socialAsks.update(h.id, { status: 'stale' });
+    for (const h of had)
+      if (h.status === 'open' && !open.has(h.id)) await db.socialAsks.update(h.id, { status: 'stale' });
     for (const a of r.value.asks)
       await db.socialAsks.put({
         id: a.id,
@@ -445,7 +465,8 @@ export function askEvidence(a: Pick<SocialAskRow, 'signals'>): { for: string[]; 
   // a server that sends the signals by name: each one said in words
   if (!out.for.length && !out.against.length)
     for (const [k, v] of Object.entries(s)) {
-      if (v === true || (typeof v === 'number' && v > 0)) out.for.push(SIGNAL_WORDS[k] ?? k.replace(/_/g, ' '));
+      if (v === true || (typeof v === 'number' && v > 0))
+        out.for.push(SIGNAL_WORDS[k] ?? k.replace(/_/g, ' '));
       if (typeof v === 'number' && v < 0) out.against.push(SIGNAL_WORDS[k] ?? k.replace(/_/g, ' '));
     }
   return out;

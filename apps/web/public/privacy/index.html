@@ -43,7 +43,7 @@
         Orbit
       </a>
       <h1>Privacy policy</h1>
-      <p class="muted">Effective October 26, 2026</p>
+      <p class="muted">Effective November 12, 2026</p>
 
       <p>
         Orbit (tryorbit.today) helps students find people worth a coffee chat, write to them, and keep track of each
@@ -64,6 +64,25 @@
           </ul>
         </li>
         <li><strong>LinkedIn</strong>, when you connect it: your connections, the profiles and public activity of people you look at, and your LinkedIn messages with them, to find who you know and the warmest way to reach someone.</li>
+        <li>
+          <strong>Instagram</strong>, only when Orbit offers it and you connect it, through Unipile, signed in as you:
+          who you follow, who follows you, and your chats. For chats with people you are reaching out to through
+          Orbit, the words are kept; for every other chat, only when a message was sent and which way, never the words.
+          To find who could introduce you to someone, Orbit reads that person's public follower and following lists.
+          Instagram does not allow automation: Orbit reads far more than it writes, stays under Unipile's limits, and
+          never sends a message without your tap.
+        </li>
+        <li>
+          <strong>X</strong>, only when Orbit offers it and you agree on the screen before signing in, with X's own
+          sign-in: who you follow, who follows you back, and your last 30 days of X messages. Nothing you post, and
+          Orbit never posts. Checking someone on X costs money, so Orbit shows the price first and reads nothing until
+          you say go.
+        </li>
+        <li>
+          <strong>Texts</strong>, only on a Mac, when Orbit offers it and you pick your Messages file: who you text and
+          how often. The words never leave your browser. With an Orbit account, Orbit's server gets, per person and per
+          day, how many texts went each way, and for a friend only in your texts their name and number.
+        </li>
         <li><strong>What you give Orbit</strong>: your answers during setup, your resume if you upload one, notes you write, and meeting notes from a notetaker you connect (Fathom, Granola, Fireflies or Wispr Flow).</li>
       </ul>
 
@@ -88,7 +107,8 @@
       <ul>
         <li><strong>Supabase</strong> stores your account data and runs Orbit's server.</li>
         <li><strong>Anthropic</strong> (Claude) writes drafts, answers your questions in the chat, and summarises conversations. It receives only what a task needs and does not use it to train its models.</li>
-        <li><strong>Unipile</strong> connects your LinkedIn account when you choose to.</li>
+        <li><strong>Unipile</strong> connects your LinkedIn and Instagram accounts when you choose to.</li>
+        <li><strong>X</strong> provides your X follows and messages when you sign in with X.</li>
         <li><strong>Google</strong> provides Gmail, Calendar and Contacts when you sign in with Google.</li>
         <li><strong>GitHub Pages</strong> serves the website.</li>
         <li>Only if you connect or turn them on: <strong>Fathom, Granola, Fireflies and Wispr Flow</strong> (your meeting notes), <strong>Cal.com</strong> (your scheduling link), and <strong>Village</strong> (warm introduction paths; it sees the names you look up).</li>
@@ -104,14 +124,20 @@
         contacted; a contact's research brief is never part of it. You choose what you share (everyone, only people at
         some companies, or nothing yet), you can see exactly what a friend sees, and stopping takes effect at once.
       </p>
+      <p>
+        Your texts and X are never part of what a friend sees. Who you follow on Instagram is used to find paths for a
+        friend only if you turn on "Let my Orbit friends find paths through who I follow on Instagram", which is off
+        until you do. What you follow on X is never shared, because X's rules do not allow it.
+      </p>
 
       <h2>People you look up</h2>
       <p>
         When you ask for Deep research on someone, Orbit reads public professional sources about them (their LinkedIn
         profile and public web pages), and writes a short brief with every line cited. Briefs are kept for 90 days.
         Public search results may be reused across students for up to 7 days, and public LinkedIn profile and activity
-        reads for up to 1 day, so the same person is not looked up again and again. Orbit never keeps anyone's contact
-        details from those shared reads. Anyone can ask to be left out of research at
+        reads for up to 30 days (a profile photo for up to 400 days), so the same person is not looked up again and
+        again. Public Instagram and X follow lists are kept as account ids only, for up to 30 days, and are dropped
+        when an account turns private. Orbit never keeps anyone's contact details from those shared reads. Anyone can ask to be left out of research at
         <a href="/remove-me">tryorbit.today/remove-me</a>.
       </p>
 
@@ -120,7 +146,8 @@
         <li>Without an Orbit account, your data stays in your own browser. Clearing the browser's site data, or Settings, Delete all data, removes it.</li>
         <li>With an Orbit account, your data is kept on Orbit's server while your account is open.</li>
         <li>Disconnecting Google or LinkedIn in Settings stops Orbit from reading it. What was already brought in stays until you delete it.</li>
-        <li>Deleting your account (Settings, Account) revokes Orbit's Google access, disconnects LinkedIn, and deletes your data from Orbit's server.</li>
+        <li>Instagram, X and Texts each have one switch in Settings. Off stops reading at once and keeps what was taken, hidden and left out of everything. Remove what Orbit took deletes it, including your rows in the shared follow graph. An Instagram account left off for 21 days is signed out at Unipile. X data expires after 30 days.</li>
+        <li>Deleting your account (Settings, Account) revokes Orbit's Google and X access, disconnects LinkedIn and Instagram, and deletes your data from Orbit's server, your rows in the shared follow graph included.</li>
         <li>You can download everything Orbit keeps about you from Settings at any time.</li>
       </ul>
 
