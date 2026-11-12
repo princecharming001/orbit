@@ -798,6 +798,50 @@ function makeLogger(salt2, sink = (l) => console.log(l), now = () => /* @__PURE_
 var silentLogger = { log: async () => {
 } };
 
+// supabase/functions/_shared/linkedinTargets.ts
+var DEFAULT_TARGET_LIMITS = { accountsPerDay: 3, gapSeconds: 1200 };
+var SWARM_KIND = "swarm";
+var normTarget = (id) => id.trim().toLowerCase();
+function targetLimitsFrom(get) {
+  const num4 = (name, fallback) => {
+    const v = Number(get(name));
+    return Number.isFinite(v) && v > 0 ? Math.floor(v) : fallback;
+  };
+  return {
+    accountsPerDay: num4("ORBIT_LINKEDIN_TARGET_ACCOUNTS_PER_DAY", DEFAULT_TARGET_LIMITS.accountsPerDay),
+    gapSeconds: num4("ORBIT_LINKEDIN_TARGET_GAP_SECONDS", DEFAULT_TARGET_LIMITS.gapSeconds)
+  };
+}
+function targetVerdict(v) {
+  const o = v && typeof v === "object" ? v : {};
+  return {
+    allowed: o.allowed === true,
+    ...typeof o.retryAt === "string" && o.retryAt ? { retryAt: o.retryAt } : {}
+  };
+}
+function sqlTargetTake(db2, limits = {}, opts = {}) {
+  const { accountsPerDay, gapSeconds } = { ...DEFAULT_TARGET_LIMITS, ...limits };
+  const now = opts.now ?? (() => /* @__PURE__ */ new Date());
+  return async (accountId, target, caller = "server") => {
+    const id = normTarget(target);
+    if (!accountId || !id) return { allowed: false };
+    let verdict;
+    try {
+      const [row] = await db2.sql`
+        select public.orbit_linkedin_target_take(${id}, ${accountId}, ${accountsPerDay}::int, ${gapSeconds}::int) as v`;
+      verdict = targetVerdict(row?.v);
+    } catch {
+      return { allowed: false, retryAt: new Date(now().getTime() + gapSeconds * 1e3).toISOString() };
+    }
+    if (!verdict.allowed)
+      await db2.sql`
+        select public.orbit_linkedin_calls_add(${accountId}, ${SWARM_KIND}, ${caller}, 0, 0, 1)`.catch(
+        () => void 0
+      );
+    return verdict;
+  };
+}
+
 // supabase/functions/_shared/secrets.ts
 async function resolveSecret(env2, db2, envName, vaultName) {
   const fromEnv = env2(envName);
@@ -1567,26 +1611,45 @@ function createUnipileResearch(opts) {
   const base = trimBase(opts.baseUrl ?? "");
   const headers3 = () => ({ "X-API-KEY": opts.apiKey ?? "" });
   const notConfigured = () => unconfigured2("unipile", "API key or base URL");
+  const busy = async (accountId, target, caller) => {
+    if (!opts.targetTake) return void 0;
+    const v = await opts.targetTake(accountId, normTarget(target), caller);
+    if (v.allowed) return void 0;
+    return {
+      ok: false,
+      kind: "busy",
+      provider: "unipile",
+      message: "unipile: other accounts looked this person up lately; Orbit tries again later",
+      ...v.retryAt ? { retryAt: v.retryAt } : {}
+    };
+  };
+  const readProfile = (accountId, identifier, o) => {
+    const q = query({
+      account_id: accountId,
+      // one parameter per section: Unipile refuses several joined with commas
+      linkedin_sections: o.sections ?? DOSSIER_SECTIONS,
+      linkedin_api: o.linkedinApi,
+      notify: "false"
+    });
+    return requestJson(opts, {
+      provider: "unipile",
+      url: `${base}/api/v1/users/${encodeURIComponent(identifier)}${q}`,
+      headers: headers3(),
+      schema: unipileProfileSchema
+    });
+  };
   const api = {
     configured: configured2,
     async profile(accountId, identifier, o = {}) {
       if (!configured2) return notConfigured();
-      const q = query({
-        account_id: accountId,
-        // one parameter per section: Unipile refuses several joined with commas
-        linkedin_sections: o.sections ?? DOSSIER_SECTIONS,
-        linkedin_api: o.linkedinApi,
-        notify: "false"
-      });
-      return requestJson(opts, {
-        provider: "unipile",
-        url: `${base}/api/v1/users/${encodeURIComponent(identifier)}${q}`,
-        headers: headers3(),
-        schema: unipileProfileSchema
-      });
+      const refused = await busy(accountId, identifier, "profile");
+      if (refused) return refused;
+      return readProfile(accountId, identifier, o);
     },
     async posts(accountId, identifier, o = {}) {
       if (!configured2) return notConfigured();
+      const refused = await busy(accountId, identifier, "posts");
+      if (refused) return refused;
       const r = await requestJson(opts, {
         provider: "unipile",
         url: `${base}/api/v1/users/${encodeURIComponent(identifier)}/posts${query({ account_id: accountId, limit: o.limit ?? 10 })}`,
@@ -1597,6 +1660,8 @@ function createUnipileResearch(opts) {
     },
     async postsOf(accountId, memberId, o = {}) {
       if (!configured2) return notConfigured();
+      const refused = await busy(accountId, memberId, "activity");
+      if (refused) return refused;
       const r = await requestJson(opts, {
         provider: "unipile",
         url: `${base}/api/v1/users/${encodeURIComponent(memberId)}/posts${query({ account_id: accountId, limit: o.limit ?? 100 })}`,
@@ -1609,6 +1674,8 @@ function createUnipileResearch(opts) {
     },
     async reactionsOf(accountId, memberId, o = {}) {
       if (!configured2) return notConfigured();
+      const refused = await busy(accountId, memberId, "activity");
+      if (refused) return refused;
       const r = await requestJson(opts, {
         provider: "unipile",
         url: `${base}/api/v1/users/${encodeURIComponent(memberId)}/reactions${query({ account_id: accountId, limit: o.limit ?? 100 })}`,
@@ -1627,6 +1694,8 @@ function createUnipileResearch(opts) {
     },
     async commentsOf(accountId, memberId, o = {}) {
       if (!configured2) return notConfigured();
+      const refused = await busy(accountId, memberId, "activity");
+      if (refused) return refused;
       const r = await requestJson(opts, {
         provider: "unipile",
         url: `${base}/api/v1/users/${encodeURIComponent(memberId)}/comments${query({ account_id: accountId, limit: o.limit ?? 100 })}`,
@@ -1702,7 +1771,9 @@ function createUnipileResearch(opts) {
     },
     async mutuals(accountId, memberId, o = {}) {
       if (!configured2) return notConfigured();
-      const prof = await api.profile(accountId, memberId, { sections: [] });
+      const refused = await busy(accountId, memberId, "mutuals");
+      if (refused) return refused;
+      const prof = await readProfile(accountId, memberId, { sections: [] });
       if (!prof.ok) return prof;
       const shared = prof.value.shared_connections_count;
       if (typeof shared !== "number")
@@ -2193,6 +2264,7 @@ function makeServices(cfg, base) {
     tokens2 = tokenSources.get(cfg) ?? googleTokenSource(google, { db: base.db, vault: sqlVault(base.db) });
     tokenSources.set(cfg, tokens2);
   }
+  const targetTake = env2.linkedinTarget ? sqlTargetTake(base.db, env2.linkedinTarget, { now }) : void 0;
   return {
     db: base.db,
     queue: base.queue ?? sqlQueue(base.db),
@@ -2215,7 +2287,8 @@ function makeServices(cfg, base) {
       ...p,
       apiKey: env2.unipileKey,
       baseUrl: env2.unipileBase,
-      gate: gate("unipile_reads")
+      gate: gate("unipile_reads"),
+      targetTake
     }),
     apollo: createApollo({ ...p, apiKey: env2.apolloKey, gate: gate("apollo") }),
     hunter: createHunter({ ...p, apiKey: env2.hunterKey, gate: gate("hunter") }),
@@ -2232,7 +2305,8 @@ function makeServices(cfg, base) {
     google,
     tokens: tokens2,
     anthropic: cfg.anthropic,
-    web: cfg.web
+    web: cfg.web,
+    targetTake
   };
 }
 function villageFor(cfg, make) {
@@ -16993,6 +17067,10 @@ async function readProfiles(db2, deps, userId, accountId, people, now, mode, ste
       step.readIds.push(p.id);
       continue;
     }
+    if (deps.targetTake && !(await deps.targetTake(accountId, p.member, "reading")).allowed) {
+      step.later = (step.later ?? 0) + 1;
+      continue;
+    }
     if (!await spendRead(db2, "profile", accountId, now, mode)) {
       step.stopped = "ledger";
       return;
@@ -17369,12 +17447,20 @@ async function gatherHopEvidence(deps, input) {
       return hit;
     }
     if (!network || out.stoppedBy) return void 0;
+    if (op !== "thread" && deps.targetTake && !(await deps.targetTake(acct, id, "hop")).allowed) {
+      out.errors.push(`${op}: not now`);
+      return void 0;
+    }
     if (!await deps.budget.take(acct, input.userId, op === "profile" ? "profile" : "posts")) {
       out.stoppedBy = "budget";
       return void 0;
     }
     if (out.reads > 0) await deps.pace?.();
     const r = await fetcher();
+    if (!r.ok && r.kind === "busy") {
+      out.errors.push(`${op}: not now`);
+      return void 0;
+    }
     out.reads++;
     if (!r.ok && r.kind === "unconfigured") {
       out.errors.push(`${op}: ${r.message}`);
@@ -17756,7 +17842,8 @@ async function runHopEvidenceJob(s, userId, payload) {
       cache: cache3,
       budget: sqlHopBudget(s.db, s.now),
       clock: () => s.now().getTime(),
-      pace: () => s.sleep(lo + Math.floor(s.random() * (hi - lo)))
+      pace: () => s.sleep(lo + Math.floor(s.random() * (hi - lo))),
+      targetTake: s.targetTake
     },
     {
       userId,
@@ -34063,6 +34150,7 @@ async function runUserLogos(db2, userId, deps, now) {
       }
       const p = byKey.get(c.key);
       if (!p) continue;
+      if (deps.targetTake && !(await deps.targetTake(acct.id, p.member, "logos")).allowed) continue;
       if (!await spendShare(db2, "profile", acct.id, now, PROFILE_SHARE)) {
         result.stopped = "limit";
         break;
@@ -34113,6 +34201,7 @@ async function runUserLogos(db2, userId, deps, now) {
 // supabase/functions/orbit-worker/handlers/search.ts
 function searchHandlers(deps) {
   const doFetch = deps.fetch ?? fetch;
+  const targetTake = (db2) => deps.linkedinTarget ? sqlTargetTake(db2, deps.linkedinTarget) : void 0;
   return {
     company_facts_sync: async (_job, ctx) => {
       const clock = deps.clock ?? Date.now;
@@ -34180,7 +34269,8 @@ function searchHandlers(deps) {
           logosBase: logosPublicBase(url),
           sleep: deps.sleep ?? ((ms2) => new Promise((res) => setTimeout(res, ms2))),
           random: deps.random ?? Math.random,
-          clock: deps.clock ?? Date.now
+          clock: deps.clock ?? Date.now,
+          targetTake: targetTake(ctx.db)
         },
         now
       );
@@ -34260,6 +34350,7 @@ function searchHandlers(deps) {
           sleep: deps.sleep ?? ((ms2) => new Promise((r) => setTimeout(r, ms2))),
           random: deps.random ?? Math.random,
           clock: deps.clock ?? Date.now,
+          targetTake: targetTake(ctx.db),
           // the logos a profile read shows, kept as Orbit's own copies for everyone (no extra read)
           keepLogos: deps.storage?.url && deps.storage.serviceKey ? (orgs) => keepProfileLogos(
             sqlCompanyCache(
@@ -35465,7 +35556,8 @@ var runtime = typeof EdgeRuntime !== "undefined" ? EdgeRuntime : void 0;
 var db = dbUrl ? connectDb(dbUrl, 2) : void 0;
 var offered = offeredSources(env("ORBIT_EXTRA_SOURCES"));
 var xCfg = xConfigFromEnv(env);
-var agentEnv = { ...await agentEnvWithSecrets(env, db), extraSources: offered, x: xCfg };
+var linkedinTarget = targetLimitsFrom(env);
+var agentEnv = { ...await agentEnvWithSecrets(env, db), extraSources: offered, x: xCfg, linkedinTarget };
 var cronSecret = await resolveSecret(env, db, "ORBIT_CRON_SECRET", "orbit_cron_secret");
 var [claudeKey, unipileKey, unipileBase, ownerId, parkRaw] = await Promise.all([
   providerSecret(env, db, "ORBIT_ANTHROPIC_API_KEY"),
@@ -35501,7 +35593,8 @@ var handlerDeps = {
   park: { days: parkDays(parkRaw) },
   // plan 43 §5: X's app and limits; DMs go through the personal-lane writer (handlers/x.ts)
   x: { cfg: xCfg },
-  offered
+  offered,
+  linkedinTarget
 };
 var handlers = defaultHandlers({ ...handlerDeps, agents: { env: agentEnv } });
 Deno.serve(

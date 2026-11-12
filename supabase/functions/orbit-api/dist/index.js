@@ -209,6 +209,50 @@ function makeLogger(salt2, sink = (l) => console.log(l), now = () => /* @__PURE_
 var silentLogger = { log: async () => {
 } };
 
+// supabase/functions/_shared/linkedinTargets.ts
+var DEFAULT_TARGET_LIMITS = { accountsPerDay: 3, gapSeconds: 1200 };
+var SWARM_KIND = "swarm";
+var normTarget = (id) => id.trim().toLowerCase();
+function targetLimitsFrom(get2) {
+  const num4 = (name, fallback) => {
+    const v = Number(get2(name));
+    return Number.isFinite(v) && v > 0 ? Math.floor(v) : fallback;
+  };
+  return {
+    accountsPerDay: num4("ORBIT_LINKEDIN_TARGET_ACCOUNTS_PER_DAY", DEFAULT_TARGET_LIMITS.accountsPerDay),
+    gapSeconds: num4("ORBIT_LINKEDIN_TARGET_GAP_SECONDS", DEFAULT_TARGET_LIMITS.gapSeconds)
+  };
+}
+function targetVerdict(v) {
+  const o = v && typeof v === "object" ? v : {};
+  return {
+    allowed: o.allowed === true,
+    ...typeof o.retryAt === "string" && o.retryAt ? { retryAt: o.retryAt } : {}
+  };
+}
+function sqlTargetTake(db2, limits = {}, opts = {}) {
+  const { accountsPerDay, gapSeconds } = { ...DEFAULT_TARGET_LIMITS, ...limits };
+  const now = opts.now ?? (() => /* @__PURE__ */ new Date());
+  return async (accountId, target, caller = "server") => {
+    const id = normTarget(target);
+    if (!accountId || !id) return { allowed: false };
+    let verdict;
+    try {
+      const [row] = await db2.sql`
+        select public.orbit_linkedin_target_take(${id}, ${accountId}, ${accountsPerDay}::int, ${gapSeconds}::int) as v`;
+      verdict = targetVerdict(row?.v);
+    } catch {
+      return { allowed: false, retryAt: new Date(now().getTime() + gapSeconds * 1e3).toISOString() };
+    }
+    if (!verdict.allowed)
+      await db2.sql`
+        select public.orbit_linkedin_calls_add(${accountId}, ${SWARM_KIND}, ${caller}, 0, 0, 1)`.catch(
+        () => void 0
+      );
+    return verdict;
+  };
+}
+
 // supabase/functions/_shared/secrets.ts
 async function resolveSecret(env2, db2, envName, vaultName) {
   const fromEnv = env2(envName);
@@ -1690,26 +1734,45 @@ function createUnipileResearch(opts) {
   const base = trimBase(opts.baseUrl ?? "");
   const headers2 = () => ({ "X-API-KEY": opts.apiKey ?? "" });
   const notConfigured = () => unconfigured2("unipile", "API key or base URL");
+  const busy = async (accountId, target, caller) => {
+    if (!opts.targetTake) return void 0;
+    const v = await opts.targetTake(accountId, normTarget(target), caller);
+    if (v.allowed) return void 0;
+    return {
+      ok: false,
+      kind: "busy",
+      provider: "unipile",
+      message: "unipile: other accounts looked this person up lately; Orbit tries again later",
+      ...v.retryAt ? { retryAt: v.retryAt } : {}
+    };
+  };
+  const readProfile = (accountId, identifier, o) => {
+    const q = query({
+      account_id: accountId,
+      // one parameter per section: Unipile refuses several joined with commas
+      linkedin_sections: o.sections ?? DOSSIER_SECTIONS,
+      linkedin_api: o.linkedinApi,
+      notify: "false"
+    });
+    return requestJson(opts, {
+      provider: "unipile",
+      url: `${base}/api/v1/users/${encodeURIComponent(identifier)}${q}`,
+      headers: headers2(),
+      schema: unipileProfileSchema
+    });
+  };
   const api = {
     configured: configured2,
     async profile(accountId, identifier, o = {}) {
       if (!configured2) return notConfigured();
-      const q = query({
-        account_id: accountId,
-        // one parameter per section: Unipile refuses several joined with commas
-        linkedin_sections: o.sections ?? DOSSIER_SECTIONS,
-        linkedin_api: o.linkedinApi,
-        notify: "false"
-      });
-      return requestJson(opts, {
-        provider: "unipile",
-        url: `${base}/api/v1/users/${encodeURIComponent(identifier)}${q}`,
-        headers: headers2(),
-        schema: unipileProfileSchema
-      });
+      const refused = await busy(accountId, identifier, "profile");
+      if (refused) return refused;
+      return readProfile(accountId, identifier, o);
     },
     async posts(accountId, identifier, o = {}) {
       if (!configured2) return notConfigured();
+      const refused = await busy(accountId, identifier, "posts");
+      if (refused) return refused;
       const r = await requestJson(opts, {
         provider: "unipile",
         url: `${base}/api/v1/users/${encodeURIComponent(identifier)}/posts${query({ account_id: accountId, limit: o.limit ?? 10 })}`,
@@ -1720,6 +1783,8 @@ function createUnipileResearch(opts) {
     },
     async postsOf(accountId, memberId, o = {}) {
       if (!configured2) return notConfigured();
+      const refused = await busy(accountId, memberId, "activity");
+      if (refused) return refused;
       const r = await requestJson(opts, {
         provider: "unipile",
         url: `${base}/api/v1/users/${encodeURIComponent(memberId)}/posts${query({ account_id: accountId, limit: o.limit ?? 100 })}`,
@@ -1732,6 +1797,8 @@ function createUnipileResearch(opts) {
     },
     async reactionsOf(accountId, memberId, o = {}) {
       if (!configured2) return notConfigured();
+      const refused = await busy(accountId, memberId, "activity");
+      if (refused) return refused;
       const r = await requestJson(opts, {
         provider: "unipile",
         url: `${base}/api/v1/users/${encodeURIComponent(memberId)}/reactions${query({ account_id: accountId, limit: o.limit ?? 100 })}`,
@@ -1750,6 +1817,8 @@ function createUnipileResearch(opts) {
     },
     async commentsOf(accountId, memberId, o = {}) {
       if (!configured2) return notConfigured();
+      const refused = await busy(accountId, memberId, "activity");
+      if (refused) return refused;
       const r = await requestJson(opts, {
         provider: "unipile",
         url: `${base}/api/v1/users/${encodeURIComponent(memberId)}/comments${query({ account_id: accountId, limit: o.limit ?? 100 })}`,
@@ -1825,7 +1894,9 @@ function createUnipileResearch(opts) {
     },
     async mutuals(accountId, memberId, o = {}) {
       if (!configured2) return notConfigured();
-      const prof = await api.profile(accountId, memberId, { sections: [] });
+      const refused = await busy(accountId, memberId, "mutuals");
+      if (refused) return refused;
+      const prof = await readProfile(accountId, memberId, { sections: [] });
       if (!prof.ok) return prof;
       const shared = prof.value.shared_connections_count;
       if (typeof shared !== "number")
@@ -2332,6 +2403,7 @@ function makeServices(cfg, base) {
     tokens3 = tokenSources.get(cfg) ?? googleTokenSource(google, { db: base.db, vault: sqlVault(base.db) });
     tokenSources.set(cfg, tokens3);
   }
+  const targetTake = env2.linkedinTarget ? sqlTargetTake(base.db, env2.linkedinTarget, { now }) : void 0;
   return {
     db: base.db,
     queue: base.queue ?? sqlQueue(base.db),
@@ -2354,7 +2426,8 @@ function makeServices(cfg, base) {
       ...p,
       apiKey: env2.unipileKey,
       baseUrl: env2.unipileBase,
-      gate: gate("unipile_reads")
+      gate: gate("unipile_reads"),
+      targetTake
     }),
     apollo: createApollo({ ...p, apiKey: env2.apolloKey, gate: gate("apollo") }),
     hunter: createHunter({ ...p, apiKey: env2.hunterKey, gate: gate("hunter") }),
@@ -2371,7 +2444,8 @@ function makeServices(cfg, base) {
     google,
     tokens: tokens3,
     anthropic: cfg.anthropic,
-    web: cfg.web
+    web: cfg.web,
+    targetTake
   };
 }
 function villageFor(cfg, make) {
@@ -14119,6 +14193,10 @@ async function readProfiles(db2, deps, userId, accountId, people, now, mode2, st
       step.readIds.push(p.id);
       continue;
     }
+    if (deps.targetTake && !(await deps.targetTake(accountId, p.member, "reading")).allowed) {
+      step.later = (step.later ?? 0) + 1;
+      continue;
+    }
     if (!await spendRead(db2, "profile", accountId, now, mode2)) {
       step.stopped = "ledger";
       return;
@@ -14309,6 +14387,11 @@ async function mutualsFor(deps, input, out) {
     return hit.items;
   }
   const r = await deps.unipile.mutuals(input.unipileAccountId, t.memberId);
+  if (!r.ok && r.kind === "busy") {
+    out.skipped.push("mutuals: not checked yet");
+    out.mutualsPending = r.retryAt ? { retryAt: r.retryAt } : {};
+    return [];
+  }
   if (!r.ok) {
     out.skipped.push(`mutuals: ${r.message}`);
     return [];
@@ -15123,7 +15206,8 @@ async function findPaths(s, userId, req) {
     ...r.direct ? { direct: { personId: targetId, ...r.direct } } : {},
     sources: sourcesOf(ext, layer),
     unconfigured: ext.unconfigured,
-    ...hopEvidence2 ? { hopEvidence: hopEvidence2 } : {}
+    ...hopEvidence2 ? { hopEvidence: hopEvidence2 } : {},
+    ...ext.mutualsPending ? { mutualsPending: ext.mutualsPending } : {}
   };
 }
 async function learnMemberIds(db2, userId, ext) {
@@ -23832,7 +23916,8 @@ async function read(ctx) {
       claude: svc.claude,
       sleep: svc.sleep,
       random: svc.random,
-      clock: Date.now
+      clock: Date.now,
+      targetTake: svc.targetTake
     },
     ctx.userId,
     acct.externalAccountId,
@@ -28376,7 +28461,7 @@ var num3 = (name, fallback) => {
 var supabaseUrl = env("SUPABASE_URL");
 var dbUrl = env("SUPABASE_DB_URL");
 var db = dbUrl ? connectDb(dbUrl) : void 0;
-var agentEnv = await agentEnvWithSecrets(env, db);
+var agentEnv = { ...await agentEnvWithSecrets(env, db), linkedinTarget: targetLimitsFrom(env) };
 var extraSources = offeredSources(env("ORBIT_EXTRA_SOURCES"));
 var [sessionSecret, unipileWebhookSecret, unipileKey, unipileBase, redirectUri, ownerId] = await Promise.all([
   resolveSecret(env, db, "ORBIT_SESSION_SECRET", "orbit_session_secret"),
