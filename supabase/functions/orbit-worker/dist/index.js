@@ -8400,13 +8400,13 @@ function slotLabel(start, end, tz) {
   return `${day2}, ${hm(start)} to ${hm(end)} ${zoneAbbrev(start, tz)}`;
 }
 function pickSlots(busy, opts) {
-  const count = opts.count ?? 3;
+  const count2 = opts.count ?? 3;
   const from = opts.now.getTime() + LEAD_HOURS * 36e5;
   const until = (opts.until ?? addBusinessDays(opts.now, HORIZON_BUSINESS_DAYS, opts.userTz)).getTime();
   const out = [];
   const buffer = BUFFER_MIN * 6e4;
   let key2 = localParts(new Date(from), opts.userTz).key;
-  for (let i = 0; i < 31 && out.length < count; i++, key2 = addDaysKey(key2, 1)) {
+  for (let i = 0; i < 31 && out.length < count2; i++, key2 = addDaysKey(key2, 1)) {
     const dow = weekdayOfKey(key2);
     if (dow === 0 || dow === 6 || usHolidays(Number(key2.slice(0, 4))).has(key2)) continue;
     const dayStart2 = zonedTime(key2, DAY_START.hour, DAY_START.minute, opts.userTz).getTime();
@@ -8535,9 +8535,9 @@ async function slotsFor(s, userId, opts = {}) {
     busy = await storedBusy(s.db, userId, timeMin, timeMax);
     source = "stored";
   }
-  const count = Math.max(1, Math.min(5, opts.count ?? 3));
+  const count2 = Math.max(1, Math.min(5, opts.count ?? 3));
   return {
-    slots: pickSlots(busy, { now, userTz, labelTz, count, until: timeMax }),
+    slots: pickSlots(busy, { now, userTz, labelTz, count: count2, until: timeMax }),
     windows: freeWindows(busy, { now, userTz, labelTz, until: timeMax }),
     tz: labelTz,
     source
@@ -16500,7 +16500,7 @@ function pageOf(id, raw) {
     return typeof v === "number" && Number.isFinite(v) ? Math.round(v) : void 0;
   };
   const range = raw.employee_count_range;
-  const count = typeof raw.employee_count === "number" ? raw.employee_count : Number(ins?.totalCount) || void 0;
+  const count2 = typeof raw.employee_count === "number" ? raw.employee_count : Number(ins?.totalCount) || void 0;
   const founded = /(\d{4})/.exec(String(raw.foundation_date ?? ""))?.[1];
   const loc = Array.isArray(raw.locations) ? raw.locations.find((l) => l.is_headquarter) ?? raw.locations[0] : void 0;
   const industries = (Array.isArray(raw.industry) ? raw.industry : [raw.industry]).map((x) => txt(x, 80)).filter((x) => !!x).slice(0, 4);
@@ -16512,7 +16512,7 @@ function pageOf(id, raw) {
     industries,
     tagline: txt(raw.tagline, 300),
     description: txt(raw.description, COMPANY_ABOUT_CHARS),
-    employeeCount: count && count > 0 ? Math.round(count) : void 0,
+    employeeCount: count2 && count2 > 0 ? Math.round(count2) : void 0,
     employeeRange: range?.from ? `${range.from}-${range.to ?? ""}` : void 0,
     growth6m: g(6),
     growth12m: g(12),
@@ -19940,6 +19940,7 @@ async function readListPage(db2, adapter, o) {
         delete from orbit.social_follows
          where platform = ${platform} and follower_id = ${o.accountId} and seen_at < ${start}::timestamptz
            and coalesce(owner_user_id, ${NO_OWNER}::uuid) = coalesce(${o.owner}::uuid, ${NO_OWNER}::uuid)`;
+    if (o.owner && o.list === "followers") await touchLinks(db2, o.owner, platform);
   }
   return { ended, complete, ids, accounts };
 }
@@ -19986,12 +19987,87 @@ async function dropSharedLists(db2, platform, accountId) {
     delete from orbit.social_follows
      where platform = ${platform} and owner_user_id is null and (followed_id = ${accountId} or follower_id = ${accountId})`;
 }
+async function touchLinks(db2, userId, platform) {
+  await db2.sql`
+    update orbit.social_links set refreshed_at = clock_timestamp()
+     where user_id = ${userId}::uuid and platform = ${platform}`;
+}
 
 // supabase/functions/_shared/social/keys.ts
 var identityKind = (p) => `${p}_id`;
 var sourceAccount = (p, id) => `${p}:${id}`;
 var factSource = (p, id) => `social:${p}:${id}`;
 var platformName = (p) => p === "instagram" ? "Instagram" : "X";
+
+// supabase/functions/_shared/social/evidence.ts
+var FOLLOWS_MANY = 2e3;
+var FOLLOWED_BY_MANY = 1e4;
+var count = (n) => Math.round(n).toLocaleString("en-US");
+var PROOF_LINE = {
+  own_links: "Their own page links to this account",
+  links_back: "The account links to their LinkedIn",
+  contact: "The account shows an email or phone you have for them",
+  address_book: "Your contacts list this handle on their card"
+};
+function sharedLink(a, c) {
+  const theirs = new Set((c?.links ?? []).map(normalizeLink).filter((l) => !!l));
+  for (const l of a.links ?? []) {
+    const n = normalizeLink(l);
+    if (n && theirs.has(n)) return n;
+  }
+  return void 0;
+}
+function askLines(a, c, signals) {
+  const out = { for: [], against: [] };
+  const p = c?.person;
+  const where = platformName(a.platform);
+  if (signals.proof) out.for.push(PROOF_LINE[signals.proof]);
+  const accountName = (a.name ?? "").trim();
+  const personName = p ? (p.displayName || `${p.firstName ?? ""} ${p.lastName ?? ""}`).trim() : "";
+  const name = typeof signals.name === "number" ? signals.name : accountName && personName ? compareNames(accountName, personName).score : void 0;
+  if (name !== void 0 && accountName) {
+    if (name >= 0.95) out.for.push(`The name on the account is ${accountName}`);
+    else if (name >= 0.75) out.for.push(`A close name on the account: ${accountName}`);
+    else out.against.push(`The name on the account is ${accountName}`);
+  }
+  if (signals.handle) out.for.push(`The handle @${a.username} spells their name`);
+  const org = p?.currentOrganizationRaw?.trim();
+  if (signals.employer_role_small) out.for.push(`Their bio names ${org || "their employer"} and their role`);
+  else if (signals.employer) out.for.push(`Their bio names ${org || "their employer"}`);
+  const school = p?.school?.trim();
+  if (signals.school_year) out.for.push(`Their bio names ${school || "their school"} and their class year`);
+  else if (signals.school) out.for.push(`Their bio names ${school || "their school"}`);
+  if (signals.same_link) {
+    const l = sharedLink(a, c);
+    out.for.push(l ? `Both link to ${l}` : "Both link to the same page");
+  }
+  if (signals.same_picture) out.for.push("The same profile picture");
+  if (signals.place) {
+    const city = p?.location?.split(",")[0]?.trim();
+    out.for.push(city ? `Their bio names ${city}` : "Their bio names the same city");
+  }
+  if (signals.rare_name) out.for.push("An uncommon last name, and it matches");
+  if (signals.neighbours) {
+    const n = c?.sharedNeighbours ?? signals.neighbours;
+    out.for.push(
+      n === 1 ? "One person you know is tied to both" : `${count(n)} people you know are tied to both`
+    );
+  }
+  if (signals.public_figure) out.against.push("The account looks like a public figure");
+  if (signals.other_handle) {
+    const other = c?.otherHandles?.[0];
+    out.against.push(
+      other ? `They already have another ${where} account attached, @${other}` : `They already have another ${where} account attached`
+    );
+  }
+  if (typeof a.following === "number" && a.following >= FOLLOWS_MANY)
+    out.against.push(`The account follows ${count(a.following)} people`);
+  if (typeof a.followers === "number" && a.followers >= FOLLOWED_BY_MANY && !signals.public_figure)
+    out.against.push(`The account has ${count(a.followers)} followers`);
+  if (a.defaultPicture) out.against.push("The account has no profile picture");
+  if (a.isPrivate) out.against.push("The account is private, so Orbit saw only its profile");
+  return out;
+}
 
 // supabase/functions/_shared/social/ties.ts
 var mutualKind = (p) => `${p}_mutual`;
@@ -20087,6 +20163,16 @@ async function rebuildAccountTies(db2, userId, platform, accountId, personId, no
 }
 
 // supabase/functions/_shared/social/links.ts
+async function accountPeople(db2, userId, platform, accountId, except) {
+  const rows = await db2.sql`
+    select p.id from orbit.people p
+     where p.user_id = ${userId}::uuid and p.deleted_at is null and p.merged_into is null
+       and p.id <> coalesce(${except ?? null}::uuid, '00000000-0000-0000-0000-000000000000'::uuid)
+       and (p.source_account = ${sourceAccount(platform, accountId)}
+         or exists (select 1 from orbit.person_identities i where i.person_id = p.id
+                      and i.kind = ${identityKind(platform)} and i.value_norm = ${accountId}))`;
+  return rows.map((r) => r.id);
+}
 var SocialMergeRefused = class extends Error {
   constructor(personId) {
     super(
@@ -20192,15 +20278,13 @@ async function attachAccount(db2, userId, a) {
      where user_id = ${userId}::uuid and platform = ${a.platform} and account_id = ${a.accountId}`;
   if (link?.person_id === a.personId) return { status: "exists", linkId: link.id };
   if (link) return { status: "linked_elsewhere", personId: link.person_id };
-  const own = await db2.sql`
-    select p.id from orbit.people p
-     where p.user_id = ${userId}::uuid and p.deleted_at is null and p.merged_into is null and p.id <> ${a.personId}::uuid
-       and (p.source_account = ${sourceAccount(a.platform, a.accountId)}
-         or exists (select 1 from orbit.person_identities i where i.person_id = p.id
-                      and i.kind = ${identityKind(a.platform)} and i.value_norm = ${a.accountId}))`;
-  for (const o of own)
-    if (await hasUnstamped(db2, userId, o.id, a.accountId))
-      return { status: "conflict", accountPersonId: o.id, personId: a.personId };
+  const own = (await accountPeople(db2, userId, a.platform, a.accountId, a.personId)).map((id) => ({ id }));
+  const leave = a.ownPerson === "leave";
+  if (!leave) {
+    for (const o of own)
+      if (await hasUnstamped(db2, userId, o.id, a.accountId))
+        return { status: "conflict", accountPersonId: o.id, personId: a.personId };
+  }
   return db2.begin(async (tx) => {
     let folded;
     for (const o of own) {
@@ -20214,6 +20298,7 @@ async function attachAccount(db2, userId, a) {
            and not exists (select 1 from orbit.social_match_asks x where x.user_id = ${userId}::uuid
                              and x.platform = orbit.social_match_asks.platform
                              and x.account_id = orbit.social_match_asks.account_id and x.person_id = ${a.personId}::uuid)`;
+      if (leave) continue;
       await tx.sql`delete from orbit.people where id = ${o.id}::uuid and user_id = ${userId}::uuid`;
       folded = o.id;
     }
@@ -20453,15 +20538,17 @@ async function matchAccount(db2, userId, account2, o) {
   const rejected2 = await rejectedFor(db2, userId, account2.platform, account2.id);
   const x = account2.platform === "x";
   let match;
+  let pool2;
   if (o.target) {
     match = rejected2.has(o.target.person.id) ? { kind: "none", reason: "no_candidate" } : x ? matchXTarget(account2, o.target) : matchTargetAccount(account2, o.target);
   } else if (x) {
-    const pool2 = o.candidates ?? await socialCandidates(db2, userId, account2.platform);
+    pool2 = o.candidates ?? await socialCandidates(db2, userId, account2.platform);
     match = matchXAccount(account2, pool2, { rejected: rejected2 });
   } else {
-    const pool2 = o.candidates ?? await socialCandidates(db2, userId, account2.platform);
+    pool2 = o.candidates ?? await socialCandidates(db2, userId, account2.platform);
     match = matchSocialAccount(account2, socialBlock(account2, pool2), { rejected: rejected2 });
   }
+  const candidate = (id) => o.target?.person.id === id ? o.target : pool2?.find((c) => c.person.id === id);
   if (match.kind === "attach") {
     const r = await attachAccount(db2, userId, {
       platform: account2.platform,
@@ -20477,21 +20564,38 @@ async function matchAccount(db2, userId, account2, o) {
       return { kind: "attached", personId: match.personId, match };
     const known = await knownPeople(db2, userId, [match.personId]);
     if (x || !known.has(match.personId)) return { kind: "none", match, conflict: true };
-    await askAbout(db2, userId, account2, match.personId, match.via === "score" ? match.score : 0.94, {
-      proof: match.via === "proof" ? match.proof : void 0
-    });
+    await askAbout(
+      db2,
+      userId,
+      account2,
+      match.personId,
+      match.via === "score" ? match.score : 0.94,
+      match.via === "score" ? match.signals : { proof: match.proof },
+      candidate(match.personId)
+    );
     return { kind: "asked", personId: match.personId, match };
   }
   if (match.kind === "ask" && !x) {
-    await askAbout(db2, userId, account2, match.personId, match.score, match.signals);
+    await askAbout(
+      db2,
+      userId,
+      account2,
+      match.personId,
+      match.score,
+      match.signals,
+      candidate(match.personId)
+    );
     return { kind: "asked", personId: match.personId, match };
   }
   return { kind: "none", match };
 }
-async function askAbout(db2, userId, account2, personId, score, signals) {
+async function askAbout(db2, userId, account2, personId, score, signals, candidate) {
+  const raw = Object.fromEntries(Object.entries(signals).filter(([, v]) => v !== void 0));
+  const lines = askLines(account2, candidate, signals);
+  const stored = { ...raw, for: lines.for, against: lines.against };
   await db2.sql`
     insert into orbit.social_match_asks (user_id, platform, account_id, person_id, score, signals)
-    values (${userId}::uuid, ${account2.platform}, ${account2.id}, ${personId}::uuid, ${score}::real, ${signals}::jsonb)
+    values (${userId}::uuid, ${account2.platform}, ${account2.id}, ${personId}::uuid, ${score}::real, ${stored}::jsonb)
     on conflict (user_id, platform, account_id, person_id) do nothing`;
 }
 
@@ -21358,10 +21462,12 @@ async function dropXAccount(db2, accountId, why) {
          where platform = 'x' and (follower_id = ${accountId} or followed_id = ${accountId})`;
   });
 }
-async function readXProfile(db2, adapter, ref) {
+async function readXProfile(db2, adapter, ref, viewer) {
   try {
     const profile = await adapter.profile(ref);
     if (profile.account.isPrivate) await dropXAccount(db2, profile.account.id, "protected");
+    if (viewer && typeof profile.receivesYourDm === "boolean")
+      await keepAcceptsDms(db2, viewer, profile.account.id, profile.receivesYourDm);
     return { ok: true, profile };
   } catch (e) {
     if (e instanceof XAccountGone) {
@@ -21372,6 +21478,13 @@ async function readXProfile(db2, adapter, ref) {
     if (e instanceof XRateLimited) return { ok: false, reason: "rate_limited" };
     throw e;
   }
+}
+async function keepAcceptsDms(db2, userId, accountId, accepts, now = /* @__PURE__ */ new Date()) {
+  await db2.sql`
+    update orbit.social_links set accepts_dms = ${accepts}, accepts_dms_at = ${now}::timestamptz
+     where user_id = ${userId}::uuid and platform = 'x' and account_id = ${accountId}
+       and (accepts_dms is distinct from ${accepts} or accepts_dms_at is null
+         or accepts_dms_at < ${now}::timestamptz - interval '1 day')`;
 }
 async function readXListToEnd(db2, adapter, o) {
   const now = o.now ?? (() => /* @__PURE__ */ new Date());
@@ -21389,7 +21502,7 @@ async function readXListToEnd(db2, adapter, o) {
     };
   let size = o.size;
   if (size === void 0) {
-    const p = await readXProfile(db2, adapter, o.accountId);
+    const p = await readXProfile(db2, adapter, o.accountId, o.readBy);
     if (!p.ok) return { ok: false, reason: p.reason === "limit" ? "budget" : p.reason };
     if (p.profile.account.isPrivate) return { ok: false, reason: "protected" };
     size = (o.list === "following" ? p.profile.account.following : p.profile.account.followers) ?? 0;
@@ -21483,6 +21596,7 @@ async function storeXListRead(db2, r, o) {
       values ('x', ${r.accountId}, ${r.list}, ${o.ownerUserId}::uuid, ${o.readBy}::uuid, ${ids.length}::int,
               ${o.total}::int, true, ${o.now}::timestamptz, ${until}::timestamptz)`;
   });
+  if (own) await touchLinks(db2, o.ownerUserId, "x");
   if (own)
     for (const a of r.accounts) {
       if (suppressed.has(a.id)) continue;
@@ -21514,17 +21628,17 @@ function xSpend(db2, o) {
   const now = o.now ?? (() => /* @__PURE__ */ new Date());
   const caller = o.caller ?? "x";
   let charged = 0;
-  const count = (kind, made, refused, cost) => db2.sql`select orbit.social_calls_add('x', ${o.userId}, ${kind}, ${caller}, ${made}::int, 0, ${refused}::int,
+  const count2 = (kind, made, refused, cost) => db2.sql`select orbit.social_calls_add('x', ${o.userId}, ${kind}, ${caller}, ${made}::int, 0, ${refused}::int,
                                          ${cost}::numeric)`;
   async function reserve2(kind, units) {
     const n = Math.max(0, Math.floor(units));
     const cost = xPrice(kind, n);
     if (kind === "search") {
-      await count(kind, 0, 1, 0);
+      await count2(kind, 0, 1, 0);
       return void 0;
     }
     if (o.ceilingUsd !== void 0 && charged + cost > o.ceilingUsd + 1e-9) {
-      await count(kind, 0, 1, 0);
+      await count2(kind, 0, 1, 0);
       return void 0;
     }
     const at = now();
@@ -21548,7 +21662,7 @@ function xSpend(db2, o) {
       return row.id;
     });
     if (!id) {
-      await count(kind, 0, 1, 0);
+      await count2(kind, 0, 1, 0);
       return void 0;
     }
     charged = roundUsd(charged + cost);
@@ -21563,7 +21677,7 @@ function xSpend(db2, o) {
         await db2.sql`
           update orbit.usage_ledger set units = ${used}::numeric, cost_usd = ${actual}::numeric
            where id = ${id}::bigint`;
-        await count(kind, 1, 0, actual);
+        await count2(kind, 1, 0, actual);
       }
     };
   }
@@ -21991,7 +22105,7 @@ async function sendXMessage(db2, userId, personAccountId, text3, deps) {
   if (body.length > X_DM_MAX_CHARS) return no("too_long");
   const client = await xAdapterFor(db2, userId, deps, { caller: "send" });
   if (!client) return no("not_connected");
-  const read = await readXProfile(db2, client.adapter, personAccountId);
+  const read = await readXProfile(db2, client.adapter, personAccountId, userId);
   if (!read.ok) return no(read.reason === "protected" ? "not_accepting" : read.reason);
   if (read.profile.receivesYourDm === false) return no("not_accepting");
   const before = client.spend.chargedUsd();
@@ -28741,11 +28855,12 @@ async function suggestMerge(db2, userId, a, b, score, features) {
     values (${userId}::uuid, ${a}::uuid, ${b}::uuid, ${score}::real, ${features}::jsonb)`;
 }
 var dedupeArray = (col) => `array(select distinct x from unnest(array_replace(${col}, $2::uuid, $3::uuid)) x)`;
-async function mergePeople(db2, userId, survivor, loser) {
+async function mergePeople(db2, userId, survivor, loser, o = {}) {
   if (survivor === loser) return false;
-  await refuseSocialMerge(db2, userId, [survivor, loser]);
+  const picked = !!o.pickedByStudent;
+  if (!picked) await refuseSocialMerge(db2, userId, [survivor, loser]);
   const [a, b] = survivor < loser ? [survivor, loser] : [loser, survivor];
-  const blocked = await db2.sql`
+  const blocked = picked ? [] : await db2.sql`
     select 1 from orbit.do_not_merge where user_id = ${userId}::uuid
        and ((person_a = ${a}::uuid and person_b = ${b}::uuid) or (person_a = ${b}::uuid and person_b = ${a}::uuid))`;
   if (blocked.length) return false;
@@ -28850,13 +28965,70 @@ async function mergePeople(db2, userId, survivor, loser) {
           and (person_a = $2::uuid or person_b = $2::uuid)`,
       p.slice(0, 2)
     );
+    if (picked) await moveSocialRows(tx, p);
     await tx.query(
       `insert into orbit.audit_log (user_id, actor, action, target_table, target_id, details)
-       values ($1::uuid, 'system', 'people.merge', 'people', $3::text, jsonb_build_object('merged', $2::text))`,
-      p
+       values ($1::uuid, $4::text, 'people.merge', 'people', $3::text,
+               jsonb_build_object('merged', $2::text) || case when $4::text = 'user' then '{"undoable": false}'::jsonb else '{}'::jsonb end)`,
+      [...p, picked ? "user" : "system"]
     );
     return true;
   });
+}
+async function moveSocialRows(tx, p) {
+  await tx.query(
+    `update orbit.people s set
+       listed = s.listed or l.listed,
+       source_account = case when s.source_account is not null and l.source_account is null then null
+                             else s.source_account end
+      from orbit.people l
+     where s.id = $3::uuid and l.id = $2::uuid and s.user_id = $1::uuid and l.user_id = $1::uuid`,
+    p
+  );
+  await tx.query(
+    `update orbit.social_links set person_id = $3::uuid where user_id = $1::uuid and person_id = $2::uuid`,
+    p
+  );
+  await tx.query(
+    `update orbit.social_match_asks k set person_id = $3::uuid
+      where k.user_id = $1::uuid and k.person_id = $2::uuid
+        and not exists (select 1 from orbit.social_match_asks x where x.user_id = $1::uuid and x.platform = k.platform
+                          and x.account_id = k.account_id and x.person_id = $3::uuid)`,
+    p
+  );
+  await tx.query(
+    `delete from orbit.social_match_asks where user_id = $1::uuid and person_id = $2::uuid`,
+    p.slice(0, 2)
+  );
+  await tx.query(
+    `update orbit.social_lookups set target_person_id = $3::uuid where user_id = $1::uuid and target_person_id = $2::uuid`,
+    p
+  );
+  await tx.query(
+    `insert into orbit.social_not_same (user_id, platform, account_id, person_id)
+     select user_id, platform, account_id, $3::uuid from orbit.social_not_same where user_id = $1::uuid and person_id = $2::uuid
+     on conflict do nothing`,
+    p
+  );
+  await tx.query(
+    `delete from orbit.social_not_same where user_id = $1::uuid and person_id = $2::uuid`,
+    p.slice(0, 2)
+  );
+  await tx.query(
+    `insert into orbit.text_days (user_id, person_id, day, in_count, out_count, group_size, words)
+     select user_id, $3::uuid, day, in_count, out_count, group_size, words from orbit.text_days
+      where user_id = $1::uuid and person_id = $2::uuid
+     on conflict (user_id, person_id, day) do update set
+       in_count = orbit.text_days.in_count + excluded.in_count,
+       out_count = orbit.text_days.out_count + excluded.out_count,
+       group_size = least(orbit.text_days.group_size, excluded.group_size),
+       words = orbit.text_days.words or excluded.words`,
+    p
+  );
+  await tx.query(
+    `delete from orbit.text_days where user_id = $1::uuid and person_id = $2::uuid`,
+    p.slice(0, 2)
+  );
 }
 
 // supabase/functions/_shared/ingest/calendar.ts
@@ -31442,11 +31614,11 @@ function linkedinHandlers(deps) {
             headline: a.specifics?.occupation,
             isSelf: a.is_self === 1 || a.is_self === true || !!a.provider_id && ownIds.has(a.provider_id)
           }));
-          const count = Math.max(
+          const count2 = Math.max(
             attendees.length,
             attendees.some((a) => a.isSelf) ? 0 : attendees.length + 1
           );
-          if (count > CHAT_MAX_ATTENDEES) continue;
+          if (count2 > CHAT_MAX_ATTENDEES) continue;
           const msgs = await call(() => unipile.messages(chat.id));
           if (!msgs.ok) throw new Error(`unipile messages ${msgs.status ?? msgs.kind}`);
           const floor = state.floor;
@@ -34217,6 +34389,7 @@ async function runSocialSync(db2, queue, adapters, userId, o) {
           stage: "chats",
           replace: false,
           pending: null,
+          previousAccountId: null,
           chatsCursor: null,
           chatQueue: [],
           chatsRead: 0

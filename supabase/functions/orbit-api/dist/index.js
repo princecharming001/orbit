@@ -11582,6 +11582,10 @@ function socialLinkFromRow(r) {
     via: r.via,
     proof: u(r.proof),
     score: r.score == null ? void 0 : Number(r.score),
+    username: r.username ?? void 0,
+    // unknown is said as null, so a browser drops what it knew before rather than keep it
+    followsYou: r.follows_you === void 0 ? void 0 : r.follows_you,
+    acceptsDms: r.platform !== "x" || r.accepts_dms === void 0 ? void 0 : r.accepts_dms,
     createdAt: tsOf(r.created_at),
     updatedAt: tsOf(r.updated_at)
   });
@@ -15389,6 +15393,12 @@ var sourceAccount = (p, id) => `${p}:${id}`;
 var factSource = (p, id) => `social:${p}:${id}`;
 var platformName = (p) => p === "instagram" ? "Instagram" : "X";
 
+// supabase/functions/_shared/social/evidence.ts
+var CONTACT_DETACHED_LINES = {
+  for: ["An email or phone they share matched this account"],
+  against: ["That email or phone came from an account you said was not theirs"]
+};
+
 // supabase/functions/_shared/social/ties.ts
 var mutualKind = (p) => `${p}_mutual`;
 var followKind = (p) => `${p}_follow`;
@@ -15483,6 +15493,35 @@ async function rebuildAccountTies(db2, userId, platform, accountId, personId, no
 }
 
 // supabase/functions/_shared/social/links.ts
+async function accountPeople(db2, userId, platform, accountId, except) {
+  const rows = await db2.sql`
+    select p.id from orbit.people p
+     where p.user_id = ${userId}::uuid and p.deleted_at is null and p.merged_into is null
+       and p.id <> coalesce(${except ?? null}::uuid, '00000000-0000-0000-0000-000000000000'::uuid)
+       and (p.source_account = ${sourceAccount(platform, accountId)}
+         or exists (select 1 from orbit.person_identities i where i.person_id = p.id
+                      and i.kind = ${identityKind(platform)} and i.value_norm = ${accountId}))`;
+  return rows.map((r) => r.id);
+}
+var SocialMergeRefused = class extends Error {
+  constructor(personId) {
+    super(
+      "This person has an Instagram or X account attached, so they are not merged. Attach the account to the other person instead."
+    );
+    this.personId = personId;
+    this.name = "SocialMergeRefused";
+  }
+};
+async function refuseSocialMerge(db2, userId, personIds) {
+  const [r] = await db2.sql`
+    select l.person_id::text as id from orbit.social_links l
+     where l.user_id = ${userId}::uuid and l.person_id = any(${personIds}::uuid[])
+    union all
+    select p.id::text from orbit.people p
+     where p.user_id = ${userId}::uuid and p.id = any(${personIds}::uuid[]) and p.source_account is not null
+    limit 1`;
+  if (r) throw new SocialMergeRefused(r.id);
+}
 async function hasUnstamped(db2, userId, personId, accountId) {
   const [r] = await db2.sql`
     select exists (select 1 from orbit.notes where user_id = ${userId}::uuid and ${personId}::uuid = any(person_ids))
@@ -15569,15 +15608,13 @@ async function attachAccount(db2, userId, a) {
      where user_id = ${userId}::uuid and platform = ${a.platform} and account_id = ${a.accountId}`;
   if (link2?.person_id === a.personId) return { status: "exists", linkId: link2.id };
   if (link2) return { status: "linked_elsewhere", personId: link2.person_id };
-  const own = await db2.sql`
-    select p.id from orbit.people p
-     where p.user_id = ${userId}::uuid and p.deleted_at is null and p.merged_into is null and p.id <> ${a.personId}::uuid
-       and (p.source_account = ${sourceAccount(a.platform, a.accountId)}
-         or exists (select 1 from orbit.person_identities i where i.person_id = p.id
-                      and i.kind = ${identityKind(a.platform)} and i.value_norm = ${a.accountId}))`;
-  for (const o of own)
-    if (await hasUnstamped(db2, userId, o.id, a.accountId))
-      return { status: "conflict", accountPersonId: o.id, personId: a.personId };
+  const own = (await accountPeople(db2, userId, a.platform, a.accountId, a.personId)).map((id) => ({ id }));
+  const leave = a.ownPerson === "leave";
+  if (!leave) {
+    for (const o of own)
+      if (await hasUnstamped(db2, userId, o.id, a.accountId))
+        return { status: "conflict", accountPersonId: o.id, personId: a.personId };
+  }
   return db2.begin(async (tx) => {
     let folded;
     for (const o of own) {
@@ -15591,6 +15628,7 @@ async function attachAccount(db2, userId, a) {
            and not exists (select 1 from orbit.social_match_asks x where x.user_id = ${userId}::uuid
                              and x.platform = orbit.social_match_asks.platform
                              and x.account_id = orbit.social_match_asks.account_id and x.person_id = ${a.personId}::uuid)`;
+      if (leave) continue;
       await tx.sql`delete from orbit.people where id = ${o.id}::uuid and user_id = ${userId}::uuid`;
       folded = o.id;
     }
@@ -15710,7 +15748,8 @@ async function detachLink(db2, userId, linkId, now) {
         await tx.sql`delete from orbit.social_links where id = ${p.id}::uuid`;
         await tx.sql`
           insert into orbit.social_match_asks (user_id, platform, account_id, person_id, score, signals, status)
-          values (${userId}::uuid, ${p.platform}, ${p.account_id}, ${old}::uuid, 0.6, ${{ review: "contact_detached" }}::jsonb, 'open')
+          values (${userId}::uuid, ${p.platform}, ${p.account_id}, ${old}::uuid, 0.6,
+                  ${{ review: "contact_detached", ...CONTACT_DETACHED_LINES }}::jsonb, 'open')
           on conflict (user_id, platform, account_id, person_id) do update set status = 'open', signals = excluded.signals`;
         reviews++;
       }
@@ -16690,10 +16729,12 @@ async function dropXAccount(db2, accountId, why) {
          where platform = 'x' and (follower_id = ${accountId} or followed_id = ${accountId})`;
   });
 }
-async function readXProfile(db2, adapter, ref) {
+async function readXProfile(db2, adapter, ref, viewer) {
   try {
     const profile2 = await adapter.profile(ref);
     if (profile2.account.isPrivate) await dropXAccount(db2, profile2.account.id, "protected");
+    if (viewer && typeof profile2.receivesYourDm === "boolean")
+      await keepAcceptsDms(db2, viewer, profile2.account.id, profile2.receivesYourDm);
     return { ok: true, profile: profile2 };
   } catch (e) {
     if (e instanceof XAccountGone) {
@@ -16704,6 +16745,13 @@ async function readXProfile(db2, adapter, ref) {
     if (e instanceof XRateLimited) return { ok: false, reason: "rate_limited" };
     throw e;
   }
+}
+async function keepAcceptsDms(db2, userId, accountId, accepts, now = /* @__PURE__ */ new Date()) {
+  await db2.sql`
+    update orbit.social_links set accepts_dms = ${accepts}, accepts_dms_at = ${now}::timestamptz
+     where user_id = ${userId}::uuid and platform = 'x' and account_id = ${accountId}
+       and (accepts_dms is distinct from ${accepts} or accepts_dms_at is null
+         or accepts_dms_at < ${now}::timestamptz - interval '1 day')`;
 }
 
 // supabase/functions/_shared/social/x/spend.ts
@@ -16815,7 +16863,7 @@ async function quoteXCheck(db2, userId, targetRef, deps) {
   const limit = deps.cfg.listLimit;
   const client = await xAdapterFor(db2, userId, deps, { caller: "quote" });
   if (!client) return { quoteUsd: 0, list: null, size: 0, reason: "not_connected" };
-  const read2 = await readXProfile(db2, client.adapter, targetRef);
+  const read2 = await readXProfile(db2, client.adapter, targetRef, userId);
   if (!read2.ok) return { quoteUsd: 0, list: null, size: 0, reason: read2.reason };
   const t = read2.profile.account;
   if (t.isPrivate) return { quoteUsd: 0, list: null, size: 0, reason: "protected", targetAccountId: t.id };
@@ -16994,7 +17042,7 @@ async function sendXMessage(db2, userId, personAccountId, text3, deps) {
   if (body2.length > X_DM_MAX_CHARS) return no("too_long");
   const client = await xAdapterFor(db2, userId, deps, { caller: "send" });
   if (!client) return no("not_connected");
-  const read2 = await readXProfile(db2, client.adapter, personAccountId);
+  const read2 = await readXProfile(db2, client.adapter, personAccountId, userId);
   if (!read2.ok) return no(read2.reason === "protected" ? "not_accepting" : read2.reason);
   if (read2.profile.receivesYourDm === false) return no("not_accepting");
   const before = client.spend.chargedUsd();
@@ -20863,6 +20911,29 @@ var goalRoutes = {
 // supabase/functions/orbit-api/tables.ts
 var personInUse = (col) => `not exists (select 1 from orbit.people q where q.id = ${col}
                 and not orbit.person_in_use(q.sources, q.source_account, $hidden::text[]))`;
+var SOCIAL_LINK_EXTRA = `jsonb_build_object(
+  'username', (select a.username from orbit.social_accounts a where a.platform = t.platform and a.account_id = t.account_id),
+  'follows_you', (
+    select case
+      when i.social_account_id is null then null
+      when exists (select 1 from orbit.social_follows f
+                    where f.platform = t.platform and f.owner_user_id = t.user_id and f.follower_id = t.account_id
+                      and f.followed_id = i.social_account_id and f.expires_at > now()) then true
+      when exists (select 1 from orbit.social_list_reads r
+                    where r.platform = t.platform and r.owner_user_id = t.user_id and r.account_id = i.social_account_id
+                      and r.list = 'followers' and r.ended and r.expires_at > now()
+                      and (r.total is null or r.total <= 0 or r.rows_read >= 0.9 * r.total)) then false
+      when t.platform = 'x'
+       and exists (select 1 from orbit.social_list_reads r
+                    where r.platform = 'x' and r.owner_user_id = t.user_id and r.account_id = i.social_account_id
+                      and r.list = 'following' and r.ended and r.expires_at > now())
+       and exists (select 1 from orbit.social_follows g
+                    where g.platform = 'x' and g.owner_user_id = t.user_id and g.follower_id = i.social_account_id
+                      and g.followed_id = t.account_id and g.expires_at > now()) then false
+      else null end
+      from orbit.integration_accounts i where i.user_id = t.user_id and i.provider = t.platform),
+  'accepts_dms', case when t.platform = 'x' and t.accepts_dms_at > now() - interval '30 days' then t.accepts_dms end
+)`;
 var PULL_TABLES = [
   {
     table: "organizations",
@@ -21036,6 +21107,8 @@ var PULL_TABLES = [
     key: "id",
     cursor: "updated_at",
     sources: `t.platform <> all($hidden::text[]) and ${personInUse("t.person_id")}`,
+    omit: ["accepts_dms_at", "refreshed_at"],
+    extra: SOCIAL_LINK_EXTRA,
     fromRow: (r) => ({ ...socialLinkFromRow(r) })
   },
   {
@@ -24129,6 +24202,256 @@ async function patchSocialState(db2, userId, platform, patch) {
      where user_id = ${userId}::uuid and provider = ${platform}`;
 }
 
+// supabase/functions/_shared/ingest/people.ts
+var dedupeArray = (col) => `array(select distinct x from unnest(array_replace(${col}, $2::uuid, $3::uuid)) x)`;
+async function mergePeople(db2, userId, survivor, loser, o = {}) {
+  if (survivor === loser) return false;
+  const picked = !!o.pickedByStudent;
+  if (!picked) await refuseSocialMerge(db2, userId, [survivor, loser]);
+  const [a, b] = survivor < loser ? [survivor, loser] : [loser, survivor];
+  const blocked = picked ? [] : await db2.sql`
+    select 1 from orbit.do_not_merge where user_id = ${userId}::uuid
+       and ((person_a = ${a}::uuid and person_b = ${b}::uuid) or (person_a = ${b}::uuid and person_b = ${a}::uuid))`;
+  if (blocked.length) return false;
+  return db2.begin(async (tx) => {
+    const p = [userId, loser, survivor];
+    await tx.query(
+      `update orbit.person_identities set person_id = $3::uuid where user_id = $1::uuid and person_id = $2::uuid`,
+      p
+    );
+    await tx.query(
+      `update orbit.people s set
+         primary_email = coalesce(s.primary_email, l.primary_email), headline = coalesce(s.headline, l.headline),
+         title = coalesce(s.title, l.title), org_id = coalesce(s.org_id, l.org_id), org_raw = coalesce(s.org_raw, l.org_raw),
+         location = coalesce(s.location, l.location), school = coalesce(s.school, l.school),
+         photo_url = coalesce(s.photo_url, l.photo_url), linkedin_url = coalesce(s.linkedin_url, l.linkedin_url),
+         linkedin_slug = coalesce(s.linkedin_slug, l.linkedin_slug),
+         linkedin_member_id = coalesce(s.linkedin_member_id, l.linkedin_member_id),
+         sources = array(select distinct x from unnest(s.sources || l.sources) x),
+         first_seen_at = least(s.first_seen_at, l.first_seen_at),
+         last_interaction_at = greatest(s.last_interaction_at, l.last_interaction_at),
+         do_not_contact = s.do_not_contact or l.do_not_contact
+        from orbit.people l
+       where s.id = $3::uuid and l.id = $2::uuid and s.user_id = $1::uuid and l.user_id = $1::uuid`,
+      p
+    );
+    await tx.query(
+      `update orbit.people set merged_into = $3::uuid, primary_email = null, linkedin_member_id = null,
+         linkedin_slug = null where id = $2::uuid and user_id = $1::uuid`,
+      p
+    );
+    await tx.query(
+      `update orbit.messages set from_person_id = $3::uuid where user_id = $1::uuid and from_person_id = $2::uuid`,
+      p
+    );
+    await tx.query(
+      `update orbit.messages set to_person_ids = ${dedupeArray("to_person_ids")},
+         cc_person_ids = ${dedupeArray("cc_person_ids")}
+       where user_id = $1::uuid and ($2::uuid = any(to_person_ids) or $2::uuid = any(cc_person_ids))`,
+      p
+    );
+    await tx.query(
+      `update orbit.threads set participant_person_ids = ${dedupeArray("participant_person_ids")}
+        where user_id = $1::uuid and $2::uuid = any(participant_person_ids)`,
+      p
+    );
+    await tx.query(
+      `update orbit.calendar_events set attendee_person_ids = ${dedupeArray("attendee_person_ids")}
+        where user_id = $1::uuid and $2::uuid = any(attendee_person_ids)`,
+      p
+    );
+    await tx.query(
+      `update orbit.notes set person_ids = ${dedupeArray("person_ids")}
+        where user_id = $1::uuid and $2::uuid = any(person_ids)`,
+      p
+    );
+    for (const table of ["affiliations", "chats", "drafts", "facts", "recommendations", "memories"])
+      await tx.query(
+        `update orbit.${table} set person_id = $3::uuid where user_id = $1::uuid and person_id = $2::uuid`,
+        p
+      );
+    await tx.query(
+      `delete from orbit.dossiers d where d.user_id = $1::uuid and d.person_id = $2::uuid
+         and exists (select 1 from orbit.dossiers s where s.user_id = $1::uuid and s.person_id = $3::uuid)`,
+      p
+    );
+    await tx.query(
+      `update orbit.dossiers set person_id = $3::uuid where user_id = $1::uuid and person_id = $2::uuid`,
+      p
+    );
+    await tx.query(
+      `update orbit.intro_requests set target_person_id = case when target_person_id = $2::uuid then $3::uuid else target_person_id end,
+         introducer_person_id = case when introducer_person_id = $2::uuid then $3::uuid else introducer_person_id end
+       where user_id = $1::uuid and $2::uuid in (target_person_id, introducer_person_id)`,
+      p
+    );
+    await tx.query(
+      `insert into orbit.tie_labels (user_id, person_id, closeness, created_at)
+       select user_id, $3::uuid, closeness, created_at from orbit.tie_labels where user_id = $1::uuid and person_id = $2::uuid
+       on conflict (user_id, person_id) do nothing`,
+      p
+    );
+    await tx.query(
+      `delete from orbit.tie_labels where user_id = $1::uuid and person_id = $2::uuid`,
+      p.slice(0, 2)
+    );
+    await tx.query(
+      `delete from orbit.tie_scores where user_id = $1::uuid and person_id = $2::uuid`,
+      p.slice(0, 2)
+    );
+    await tx.query(
+      `delete from orbit.ties where user_id = $1::uuid and (a_person_id = $2::uuid or b_person_id = $2::uuid)`,
+      p.slice(0, 2)
+    );
+    await tx.query(
+      `update orbit.merge_suggestions set status = 'merged', decided_at = now()
+        where user_id = $1::uuid and status = 'open'
+          and ((person_a = $2::uuid and person_b = $3::uuid) or (person_a = $3::uuid and person_b = $2::uuid))`,
+      p
+    );
+    await tx.query(
+      `delete from orbit.merge_suggestions where user_id = $1::uuid and status = 'open'
+          and (person_a = $2::uuid or person_b = $2::uuid)`,
+      p.slice(0, 2)
+    );
+    if (picked) await moveSocialRows(tx, p);
+    await tx.query(
+      `insert into orbit.audit_log (user_id, actor, action, target_table, target_id, details)
+       values ($1::uuid, $4::text, 'people.merge', 'people', $3::text,
+               jsonb_build_object('merged', $2::text) || case when $4::text = 'user' then '{"undoable": false}'::jsonb else '{}'::jsonb end)`,
+      [...p, picked ? "user" : "system"]
+    );
+    return true;
+  });
+}
+async function moveSocialRows(tx, p) {
+  await tx.query(
+    `update orbit.people s set
+       listed = s.listed or l.listed,
+       source_account = case when s.source_account is not null and l.source_account is null then null
+                             else s.source_account end
+      from orbit.people l
+     where s.id = $3::uuid and l.id = $2::uuid and s.user_id = $1::uuid and l.user_id = $1::uuid`,
+    p
+  );
+  await tx.query(
+    `update orbit.social_links set person_id = $3::uuid where user_id = $1::uuid and person_id = $2::uuid`,
+    p
+  );
+  await tx.query(
+    `update orbit.social_match_asks k set person_id = $3::uuid
+      where k.user_id = $1::uuid and k.person_id = $2::uuid
+        and not exists (select 1 from orbit.social_match_asks x where x.user_id = $1::uuid and x.platform = k.platform
+                          and x.account_id = k.account_id and x.person_id = $3::uuid)`,
+    p
+  );
+  await tx.query(
+    `delete from orbit.social_match_asks where user_id = $1::uuid and person_id = $2::uuid`,
+    p.slice(0, 2)
+  );
+  await tx.query(
+    `update orbit.social_lookups set target_person_id = $3::uuid where user_id = $1::uuid and target_person_id = $2::uuid`,
+    p
+  );
+  await tx.query(
+    `insert into orbit.social_not_same (user_id, platform, account_id, person_id)
+     select user_id, platform, account_id, $3::uuid from orbit.social_not_same where user_id = $1::uuid and person_id = $2::uuid
+     on conflict do nothing`,
+    p
+  );
+  await tx.query(
+    `delete from orbit.social_not_same where user_id = $1::uuid and person_id = $2::uuid`,
+    p.slice(0, 2)
+  );
+  await tx.query(
+    `insert into orbit.text_days (user_id, person_id, day, in_count, out_count, group_size, words)
+     select user_id, $3::uuid, day, in_count, out_count, group_size, words from orbit.text_days
+      where user_id = $1::uuid and person_id = $2::uuid
+     on conflict (user_id, person_id, day) do update set
+       in_count = orbit.text_days.in_count + excluded.in_count,
+       out_count = orbit.text_days.out_count + excluded.out_count,
+       group_size = least(orbit.text_days.group_size, excluded.group_size),
+       words = orbit.text_days.words or excluded.words`,
+    p
+  );
+  await tx.query(
+    `delete from orbit.text_days where user_id = $1::uuid and person_id = $2::uuid`,
+    p.slice(0, 2)
+  );
+}
+
+// supabase/functions/_shared/social/keep.ts
+var KEEP_CANNOT_BE_UNDONE = "Merged into the one you kept. This cannot be undone.";
+async function attachKeeping(db2, userId, a, keep) {
+  const [link2] = await db2.sql`
+    select id, person_id from orbit.social_links
+     where user_id = ${userId}::uuid and platform = ${a.platform} and account_id = ${a.accountId}`;
+  if (link2 && link2.person_id !== keep) return { status: "linked_elsewhere", personId: link2.person_id };
+  const own = await accountPeople(db2, userId, a.platform, a.accountId);
+  let losers;
+  if (own.includes(keep)) {
+    let other = a.personId !== keep ? a.personId : void 0;
+    if (!other) {
+      const asked = await openAskPeople(db2, userId, a.platform, a.accountId, [...own]);
+      if (asked.length > 1) return { status: "ambiguous" };
+      other = asked[0];
+    }
+    losers = [...own.filter((id) => id !== keep), ...other ? [other] : []];
+  } else if (keep === a.personId) {
+    losers = own;
+  } else return { status: "bad_keep" };
+  const people = await db2.sql`
+    select id from orbit.people
+     where user_id = ${userId}::uuid and id = any(${[keep, ...losers]}::uuid[])
+       and deleted_at is null and merged_into is null and not is_self`;
+  if (!people.some((p) => p.id === keep)) return { status: "no_person" };
+  losers = [...new Set(losers)].filter((id) => id !== keep && people.some((p) => p.id === id));
+  return db2.begin(async (tx) => {
+    const r = await attachAccount(tx, userId, { ...a, personId: keep, ownPerson: "leave" });
+    if (r.status === "no_person") return r;
+    if (r.status === "linked_elsewhere") return r;
+    if (r.status === "conflict") throw new Error("attachKeeping: unexpected conflict");
+    const merged = [];
+    for (const loser of losers)
+      if (await mergePeople(tx, userId, keep, loser, { pickedByStudent: true })) merged.push(loser);
+    const links = await tx.sql`
+      select platform, account_id from orbit.social_links where user_id = ${userId}::uuid and person_id = ${keep}::uuid`;
+    for (const l of links) await rebuildAccountTies(tx, userId, l.platform, l.account_id, keep, a.now);
+    await tx.sql`
+      update orbit.social_match_asks set status = 'yes', decided_at = ${a.now}::timestamptz
+       where user_id = ${userId}::uuid and platform = ${a.platform} and account_id = ${a.accountId}
+         and person_id = ${keep}::uuid and status in ('open', 'stale')`;
+    await tx.sql`
+      insert into orbit.audit_log (user_id, actor, action, target_table, target_id, details)
+      values (${userId}::uuid, 'user', 'social.keep', 'social_links', ${r.linkId},
+              ${{ platform: a.platform, accountId: a.accountId, kept: keep, merged, undoable: false }}::jsonb)`;
+    if (merged.length) {
+      const q = sqlQueue(tx);
+      await q.enqueue({
+        kind: "score.person",
+        userId,
+        payload: { personIds: [keep] },
+        dedupeKey: `score.person:${userId}:social:keep:${r.linkId}`
+      });
+      await q.enqueue({
+        kind: "friend_shares_refresh",
+        userId,
+        payload: {},
+        dedupeKey: `friend_shares_refresh:${userId}:social:keep:${r.linkId}`
+      });
+    }
+    return { status: "attached", linkId: r.linkId, kept: keep, merged };
+  });
+}
+async function openAskPeople(db2, userId, platform, accountId, except) {
+  const rows = await db2.sql`
+    select distinct k.person_id from orbit.social_match_asks k
+      join orbit.people p on p.id = k.person_id and p.deleted_at is null and p.merged_into is null
+     where k.user_id = ${userId}::uuid and k.platform = ${platform} and k.account_id = ${accountId}
+       and k.status = 'open' and not (k.person_id = any(${except}::uuid[]))`;
+  return rows.map((r) => r.person_id);
+}
+
 // supabase/functions/_shared/social/x/lookup.ts
 var QUOTE_FRESH_MS = 15 * 6e4;
 var CANNOT_RUN = {
@@ -24291,6 +24614,54 @@ async function status2(ctx) {
     steps: { profile: step(0), chats: step(1), following: step(2), followers: step(3) }
   });
 }
+async function keepOld(ctx) {
+  await mustBeOffered(ctx, "instagram");
+  await body(ctx, true);
+  const userId = ctx.userId;
+  const row = await instagramRow(ctx);
+  if (!held(row)) throw new HttpError(409, "nothing_held", "No different Instagram account is waiting.");
+  const state = row?.sync_state?.instagram ?? {};
+  const fresh = row?.external_account_id ?? null;
+  const previous = state.previousAccountId && state.previousAccountId !== fresh ? state.previousAccountId : null;
+  let released = false;
+  if (fresh && ctx.env.unipileKey && ctx.env.unipileBase) {
+    const opts = { fetch: ctx.fetch, apiKey: ctx.env.unipileKey, baseUrl: ctx.env.unipileBase };
+    const one = await getUnipileAccount(opts, fresh);
+    if (!one.ok)
+      throw new HttpError(502, "upstream", "Instagram is unavailable right now. Try again in a minute.");
+    if (one.value && one.value.id === fresh && (one.value.type ?? "").toUpperCase() === "INSTAGRAM" && (one.value.name ?? "").toLowerCase() === userId.toLowerCase()) {
+      const del = await deleteUnipileAccount(opts, fresh);
+      if (!del.ok)
+        throw new HttpError(502, "upstream", "Instagram is unavailable right now. Try again in a minute.");
+      released = true;
+    } else if (!one.value) released = true;
+  }
+  const back = previous && row?.social_account_id;
+  await ctx.db.sql`
+    update orbit.integration_accounts
+       set external_account_id = ${back ? previous : null},
+           status = ${back ? "active" : "needs_reauth"},
+           last_error = ${back ? null : "sign_in"}
+     where user_id = ${userId}::uuid and provider = 'instagram'`;
+  await patchSocialState(ctx.db, userId, "instagram", {
+    pending: null,
+    replace: false,
+    previousAccountId: null,
+    stage: state.syncedAt ? "refresh" : "profile"
+  });
+  await ctx.db.sql`
+    insert into orbit.audit_log (user_id, actor, action, target_table, details)
+    values (${userId}::uuid, 'user', 'instagram.kept_old', 'integration_accounts',
+            ${{ released, releasedAccountId: fresh, back: !!back }}::jsonb)`;
+  if (back)
+    await sqlQueue(ctx.db).enqueue({
+      kind: "sync.instagram",
+      userId,
+      payload: {},
+      dedupeKey: `sync.instagram:${userId}:${previous}:kept:${ctx.now().toISOString()}`
+    });
+  return json(200, { ok: true });
+}
 async function disconnect(ctx) {
   await body(ctx, true);
   const userId = ctx.userId;
@@ -24323,6 +24694,7 @@ async function attach(ctx) {
   const personId = uuid(b, "personId");
   if (b.platform === "x")
     throw new HttpError(403, "public_proof_only", "An X account is attached only from public proof");
+  if (b.keep !== void 0) return attachKept(ctx, b.platform, b.accountId, personId, uuid(b, "keep"));
   const r = await attachAccount(ctx.db, ctx.userId, {
     platform: b.platform,
     accountId: b.accountId,
@@ -24346,6 +24718,32 @@ async function attach(ctx) {
       people: await peopleOf(ctx, [r.accountPersonId, r.personId])
     });
   return json(200, { linkId: r.linkId });
+}
+async function attachKept(ctx, platform, accountId, personId, keep) {
+  const r = await attachKeeping(
+    ctx.db,
+    ctx.userId,
+    { platform, accountId, personId, via: "student", now: ctx.now() },
+    keep
+  );
+  if (r.status === "no_person") throw new HttpError(404, "not_found", "no such person");
+  if (r.status === "bad_keep")
+    throw new HttpError(400, "bad_request", "keep is one of the two people Orbit asked about");
+  if (r.status === "ambiguous")
+    throw new HttpError(409, "ambiguous", "Say which person the account is being attached to.");
+  if (r.status === "linked_elsewhere")
+    throw new HttpError(
+      409,
+      "linked_elsewhere",
+      "That account is attached to someone else. Detach it first."
+    );
+  return json(200, {
+    linkId: r.linkId,
+    kept: r.kept,
+    merged: r.merged,
+    undoable: false,
+    message: KEEP_CANNOT_BE_UNDONE
+  });
 }
 async function detach(ctx, id) {
   const r = await detachLink(ctx.db, ctx.userId, id, ctx.now());
@@ -24436,6 +24834,7 @@ async function lookupGet(ctx, id) {
 var socialRoutes = {
   "/instagram/connect/start": { method: "POST", auth: true, run: connectStart },
   "/instagram/status": { method: "GET|POST", auth: true, run: status2 },
+  "/instagram/connect/keep": { method: "POST", auth: true, run: keepOld },
   "/instagram/disconnect": { method: "POST", auth: true, run: disconnect },
   "/social/links": { method: "POST", auth: true, run: attach },
   "/social/asks": { method: "GET|POST", auth: true, run: asks },
@@ -26899,7 +27298,8 @@ async function pull(db2, userId, o) {
       o.tables.map((t) => {
         const pos = o.cursor[t.table];
         const del = t.deletedWhen ? `(${t.deletedWhen})` : "false";
-        const row = ["to_jsonb(t)", ...(t.omit ?? []).map((c) => `'${c}'`)].join(" - ");
+        const stored = ["to_jsonb(t)", ...(t.omit ?? []).map((c) => `'${c}'`)].join(" - ");
+        const row = t.extra ? `(${stored}) || ${t.extra}` : stored;
         const key = t.keySql ?? `t.${t.key}::text`;
         const params = [userId, pos?.t ?? PULL_FROM, pos?.k ?? "", o.upTo, o.limit];
         const off = sourceFilter(t, src, params);

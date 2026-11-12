@@ -4278,6 +4278,10 @@ var COMMON_SURNAMES = new Set(
   "smith johnson williams brown jones garcia miller davis rodriguez martinez hernandez lopez gonzalez wilson anderson thomas taylor moore jackson martin lee perez thompson white harris sanchez clark ramirez lewis robinson walker young allen king wright scott torres nguyen hill flores green adams nelson baker hall rivera campbell mitchell carter roberts gomez phillips evans turner diaz parker cruz edwards collins reyes stewart morris morales murphy cook rogers gutierrez ortiz morgan cooper peterson bailey reed kelly howard ramos kim cox ward richardson watson brooks chavez wood james bennett gray mendoza ruiz hughes price alvarez castillo sanders patel myers long ross foster jimenez chen wang li zhang liu singh kumar shah khan park choi wu huang lin yang zhao zhou xu sun ma zhu hu guo he gao luo tran le pham kaur gupta sharma ali ahmed hassan cohen ng wong chan cheung lam ho tan lim".split(/\s+/)
 );
 
+// supabase/functions/_shared/social/keys.ts
+var identityKind = (p) => `${p}_id`;
+var sourceAccount = (p, id) => `${p}:${id}`;
+
 // supabase/functions/_shared/social/graph.ts
 var DAY = 864e5;
 var GRAPH_KEEP_MS = 30 * DAY;
@@ -4290,10 +4294,6 @@ async function loadAccounts(db2, platform, ids) {
       from orbit.social_accounts where platform = ${platform} and account_id = any(${ids}::text[])`;
   return new Map(rows.map((r) => [r.account_id, r]));
 }
-
-// supabase/functions/_shared/social/keys.ts
-var identityKind = (p) => `${p}_id`;
-var sourceAccount = (p, id) => `${p}:${id}`;
 
 // packages/core/src/graph/orgSize.ts
 var KNOWN_SIZES = {};
@@ -4914,11 +4914,12 @@ async function suggestMerge(db2, userId, a, b, score, features) {
     values (${userId}::uuid, ${a}::uuid, ${b}::uuid, ${score}::real, ${features}::jsonb)`;
 }
 var dedupeArray = (col) => `array(select distinct x from unnest(array_replace(${col}, $2::uuid, $3::uuid)) x)`;
-async function mergePeople(db2, userId, survivor, loser) {
+async function mergePeople(db2, userId, survivor, loser, o = {}) {
   if (survivor === loser) return false;
-  await refuseSocialMerge(db2, userId, [survivor, loser]);
+  const picked = !!o.pickedByStudent;
+  if (!picked) await refuseSocialMerge(db2, userId, [survivor, loser]);
   const [a, b] = survivor < loser ? [survivor, loser] : [loser, survivor];
-  const blocked = await db2.sql`
+  const blocked = picked ? [] : await db2.sql`
     select 1 from orbit.do_not_merge where user_id = ${userId}::uuid
        and ((person_a = ${a}::uuid and person_b = ${b}::uuid) or (person_a = ${b}::uuid and person_b = ${a}::uuid))`;
   if (blocked.length) return false;
@@ -5023,13 +5024,70 @@ async function mergePeople(db2, userId, survivor, loser) {
           and (person_a = $2::uuid or person_b = $2::uuid)`,
       p.slice(0, 2)
     );
+    if (picked) await moveSocialRows(tx, p);
     await tx.query(
       `insert into orbit.audit_log (user_id, actor, action, target_table, target_id, details)
-       values ($1::uuid, 'system', 'people.merge', 'people', $3::text, jsonb_build_object('merged', $2::text))`,
-      p
+       values ($1::uuid, $4::text, 'people.merge', 'people', $3::text,
+               jsonb_build_object('merged', $2::text) || case when $4::text = 'user' then '{"undoable": false}'::jsonb else '{}'::jsonb end)`,
+      [...p, picked ? "user" : "system"]
     );
     return true;
   });
+}
+async function moveSocialRows(tx, p) {
+  await tx.query(
+    `update orbit.people s set
+       listed = s.listed or l.listed,
+       source_account = case when s.source_account is not null and l.source_account is null then null
+                             else s.source_account end
+      from orbit.people l
+     where s.id = $3::uuid and l.id = $2::uuid and s.user_id = $1::uuid and l.user_id = $1::uuid`,
+    p
+  );
+  await tx.query(
+    `update orbit.social_links set person_id = $3::uuid where user_id = $1::uuid and person_id = $2::uuid`,
+    p
+  );
+  await tx.query(
+    `update orbit.social_match_asks k set person_id = $3::uuid
+      where k.user_id = $1::uuid and k.person_id = $2::uuid
+        and not exists (select 1 from orbit.social_match_asks x where x.user_id = $1::uuid and x.platform = k.platform
+                          and x.account_id = k.account_id and x.person_id = $3::uuid)`,
+    p
+  );
+  await tx.query(
+    `delete from orbit.social_match_asks where user_id = $1::uuid and person_id = $2::uuid`,
+    p.slice(0, 2)
+  );
+  await tx.query(
+    `update orbit.social_lookups set target_person_id = $3::uuid where user_id = $1::uuid and target_person_id = $2::uuid`,
+    p
+  );
+  await tx.query(
+    `insert into orbit.social_not_same (user_id, platform, account_id, person_id)
+     select user_id, platform, account_id, $3::uuid from orbit.social_not_same where user_id = $1::uuid and person_id = $2::uuid
+     on conflict do nothing`,
+    p
+  );
+  await tx.query(
+    `delete from orbit.social_not_same where user_id = $1::uuid and person_id = $2::uuid`,
+    p.slice(0, 2)
+  );
+  await tx.query(
+    `insert into orbit.text_days (user_id, person_id, day, in_count, out_count, group_size, words)
+     select user_id, $3::uuid, day, in_count, out_count, group_size, words from orbit.text_days
+      where user_id = $1::uuid and person_id = $2::uuid
+     on conflict (user_id, person_id, day) do update set
+       in_count = orbit.text_days.in_count + excluded.in_count,
+       out_count = orbit.text_days.out_count + excluded.out_count,
+       group_size = least(orbit.text_days.group_size, excluded.group_size),
+       words = orbit.text_days.words or excluded.words`,
+    p
+  );
+  await tx.query(
+    `delete from orbit.text_days where user_id = $1::uuid and person_id = $2::uuid`,
+    p.slice(0, 2)
+  );
 }
 
 // supabase/functions/_shared/ingest/ties.ts
@@ -5816,6 +5874,11 @@ async function instagramAccount(db2, queue, userId, accountId, status) {
     select 1 from orbit.integration_accounts
      where provider = 'instagram' and external_account_id = ${accountId} and user_id <> ${userId}::uuid`;
   if (taken.length) return { result: "account_in_use", userId };
+  const [before] = await db2.sql`
+    select external_account_id, status, last_error, sync_state -> 'instagram' ->> 'previousAccountId' as previous
+      from orbit.integration_accounts where user_id = ${userId}::uuid and provider = 'instagram'`;
+  const heldBefore = before?.status === "error" && before.last_error === "different_account";
+  const previous = heldBefore ? before?.previous ?? null : before?.external_account_id && before.external_account_id !== accountId ? before.external_account_id : null;
   await db2.sql`
     insert into orbit.integration_accounts (user_id, provider, external_account_id, status, last_error)
     values (${userId}::uuid, 'instagram', ${accountId}, 'active', null)
@@ -5825,7 +5888,7 @@ async function instagramAccount(db2, queue, userId, accountId, status) {
     update orbit.integration_accounts
        set sync_state = coalesce(sync_state, '{}'::jsonb)
              || jsonb_build_object('instagram', coalesce(sync_state -> 'instagram', '{}'::jsonb)
-                  || ${{ stage: "profile", pending: null }}::jsonb)
+                  || ${{ stage: "profile", pending: null, previousAccountId: previous }}::jsonb)
      where user_id = ${userId}::uuid and provider = 'instagram'`;
   await db2.sql`
     insert into orbit.source_states (user_id, source, state, off_since)
