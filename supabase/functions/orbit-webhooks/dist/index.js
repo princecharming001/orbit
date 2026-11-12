@@ -156,6 +156,96 @@ async function resolveSecret(env2, db2, envName, vaultName) {
   }
 }
 
+// packages/core/src/sources.ts
+var OPTIONAL_SOURCES = ["instagram", "x", "imessage"];
+var SOURCES = {
+  instagram: {
+    id: "instagram",
+    name: "Instagram",
+    provider: "instagram",
+    messageProvider: "instagram",
+    touchKinds: ["instagram_in", "instagram_out"],
+    tieKinds: ["instagram_mutual", "instagram_follow"],
+    identityKind: "instagram_id",
+    personSource: "instagram",
+    signedInOnly: true,
+    send: "tap",
+    mutuals: true
+  },
+  x: {
+    id: "x",
+    name: "X",
+    provider: "x",
+    messageProvider: "x",
+    touchKinds: ["x_in", "x_out"],
+    tieKinds: ["x_mutual", "x_follow"],
+    identityKind: "x_id",
+    personSource: "x",
+    signedInOnly: true,
+    send: "tap",
+    mutuals: true
+  },
+  imessage: {
+    id: "imessage",
+    name: "Texts",
+    provider: "imessage",
+    touchKinds: ["text_in", "text_out"],
+    tieKinds: [],
+    personSource: "imessage",
+    signedInOnly: false,
+    send: "handoff",
+    mutuals: false
+  }
+};
+var isSource = (s) => OPTIONAL_SOURCES.includes(s);
+function parseExtraSources(raw) {
+  if (!raw) return [];
+  const out = [];
+  for (const part of raw.split(/[\s,]+/)) {
+    const name = part.trim().toLowerCase();
+    const id = name === "texts" ? "imessage" : name;
+    if (isSource(id) && !out.includes(id)) out.push(id);
+  }
+  return out;
+}
+var TOUCH_SOURCE = /* @__PURE__ */ new Map();
+var TIE_SOURCE = /* @__PURE__ */ new Map();
+var PROVIDER_SOURCE = /* @__PURE__ */ new Map();
+var IDENTITY_SOURCE = /* @__PURE__ */ new Map();
+for (const info of Object.values(SOURCES)) {
+  for (const k of info.touchKinds) TOUCH_SOURCE.set(k, info.id);
+  for (const k of info.tieKinds) TIE_SOURCE.set(k, info.id);
+  if (info.messageProvider) PROVIDER_SOURCE.set(info.messageProvider, info.id);
+  if (info.identityKind) IDENTITY_SOURCE.set(info.identityKind, info.id);
+}
+function excludedBy(inUse) {
+  const out = {
+    touchKinds: [],
+    tieKinds: [],
+    providers: [],
+    identityKinds: []
+  };
+  for (const info of Object.values(SOURCES)) {
+    if (inUse.has(info.id)) continue;
+    out.touchKinds.push(...info.touchKinds);
+    out.tieKinds.push(...info.tieKinds);
+    if (info.messageProvider) out.providers.push(info.messageProvider);
+    if (info.identityKind) out.identityKinds.push(info.identityKind);
+  }
+  return out;
+}
+
+// supabase/functions/_shared/sources/states.ts
+var offeredSources = (raw) => parseExtraSources(raw);
+var hiddenOf = (inUse) => OPTIONAL_SOURCES.filter((s) => !inUse.has(s));
+var NO_SOURCES = {
+  offered: [],
+  states: {},
+  inUse: /* @__PURE__ */ new Set(),
+  excluded: excludedBy(/* @__PURE__ */ new Set()),
+  hidden: hiddenOf(/* @__PURE__ */ new Set())
+};
+
 // packages/core/src/text/normalize.ts
 var HONORIFICS = /* @__PURE__ */ new Set(["dr", "mr", "mrs", "ms", "mx", "prof", "professor", "sir"]);
 var CREDENTIALS = /* @__PURE__ */ new Set([
@@ -4088,6 +4178,8 @@ var KIND_QUEUE = {
   "score.ties": "orbit_score",
   "score.person": "orbit_score",
   friend_shares_refresh: "orbit_score",
+  // plan 43: a source switched on, off or removed: rescore twice, the friend projection, the graph mark
+  "sources.switch": "orbit_score",
   "enrich.dossier": "orbit_enrich",
   "source.search": "orbit_enrich",
   hop_evidence: "orbit_enrich",
@@ -5741,6 +5833,8 @@ Deno.serve(
     db,
     pubsubToken,
     unipileSecret,
+    // plan 43 §3.1: the optional sources the owner offers, read once; unset is none and nothing changes
+    offered: offeredSources(env("ORBIT_EXTRA_SOURCES")),
     log: makeLogger(salt)
   })
 );

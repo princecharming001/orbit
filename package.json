@@ -16,6 +16,7 @@
     "@biomejs/biome": "^2.0.0",
     "esbuild": "0.25.12",
     "jose": "6.2.12",
+    "libphonenumber-js": "1.13.14",
     "postgres": "3.4.9",
     "tldts": "7.4.18",
     "typescript": "^5.7.0",

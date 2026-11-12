@@ -306,6 +306,84 @@ async function checkSession(db2, cfg, claims) {
   if (!rows.length) throw unauthorized("the session has ended");
 }
 
+// packages/core/src/sources.ts
+var OPTIONAL_SOURCES = ["instagram", "x", "imessage"];
+var SOURCES = {
+  instagram: {
+    id: "instagram",
+    name: "Instagram",
+    provider: "instagram",
+    messageProvider: "instagram",
+    touchKinds: ["instagram_in", "instagram_out"],
+    tieKinds: ["instagram_mutual", "instagram_follow"],
+    identityKind: "instagram_id",
+    personSource: "instagram",
+    signedInOnly: true,
+    send: "tap",
+    mutuals: true
+  },
+  x: {
+    id: "x",
+    name: "X",
+    provider: "x",
+    messageProvider: "x",
+    touchKinds: ["x_in", "x_out"],
+    tieKinds: ["x_mutual", "x_follow"],
+    identityKind: "x_id",
+    personSource: "x",
+    signedInOnly: true,
+    send: "tap",
+    mutuals: true
+  },
+  imessage: {
+    id: "imessage",
+    name: "Texts",
+    provider: "imessage",
+    touchKinds: ["text_in", "text_out"],
+    tieKinds: [],
+    personSource: "imessage",
+    signedInOnly: false,
+    send: "handoff",
+    mutuals: false
+  }
+};
+var TOUCH_SOURCE = /* @__PURE__ */ new Map();
+var TIE_SOURCE = /* @__PURE__ */ new Map();
+var PROVIDER_SOURCE = /* @__PURE__ */ new Map();
+var IDENTITY_SOURCE = /* @__PURE__ */ new Map();
+for (const info of Object.values(SOURCES)) {
+  for (const k of info.touchKinds) TOUCH_SOURCE.set(k, info.id);
+  for (const k of info.tieKinds) TIE_SOURCE.set(k, info.id);
+  if (info.messageProvider) PROVIDER_SOURCE.set(info.messageProvider, info.id);
+  if (info.identityKind) IDENTITY_SOURCE.set(info.identityKind, info.id);
+}
+function excludedBy(inUse) {
+  const out = {
+    touchKinds: [],
+    tieKinds: [],
+    providers: [],
+    identityKinds: []
+  };
+  for (const info of Object.values(SOURCES)) {
+    if (inUse.has(info.id)) continue;
+    out.touchKinds.push(...info.touchKinds);
+    out.tieKinds.push(...info.tieKinds);
+    if (info.messageProvider) out.providers.push(info.messageProvider);
+    if (info.identityKind) out.identityKinds.push(info.identityKind);
+  }
+  return out;
+}
+
+// supabase/functions/_shared/sources/states.ts
+var hiddenOf = (inUse) => OPTIONAL_SOURCES.filter((s) => !inUse.has(s));
+var NO_SOURCES = {
+  offered: [],
+  states: {},
+  inUse: /* @__PURE__ */ new Set(),
+  excluded: excludedBy(/* @__PURE__ */ new Set()),
+  hidden: hiddenOf(/* @__PURE__ */ new Set())
+};
+
 // supabase/functions/orbit-notify/notify.ts
 var WAIT_DAYS = 7;
 var LATE_HOURS = 12;
@@ -322,12 +400,16 @@ async function readinessInput(db2, userId) {
     db2.sql`
       select provider, status, sync_state from orbit.integration_accounts
        where user_id = ${userId}::uuid and provider in ('google', 'linkedin')`,
+    // plan 43 §3.10: optional sources never hold up "ready", so readiness counts what LinkedIn and Google brought
     db2.sql`
       select
-        (select count(*) from orbit.people where user_id = ${userId}::uuid and not is_self
-           and deleted_at is null and merged_into is null)::int as people,
-        (select count(*) from orbit.messages where user_id = ${userId}::uuid)::int as messages,
-        (select count(*) from orbit.ties where user_id = ${userId}::uuid)::int as ties`,
+        (select count(*) from orbit.people p where p.user_id = ${userId}::uuid and not p.is_self
+           and p.deleted_at is null and p.merged_into is null
+           and orbit.person_in_use(p.sources, p.source_account, ${NO_SOURCES.hidden}::text[]))::int as people,
+        (select count(*) from orbit.messages where user_id = ${userId}::uuid
+           and provider <> all(${NO_SOURCES.excluded.providers}::text[]))::int as messages,
+        (select count(*) from orbit.ties where user_id = ${userId}::uuid
+           and kind <> all(${NO_SOURCES.excluded.tieKinds}::text[]))::int as ties`,
     // the import's own work (reading, classifying, scoring, matching), due now or within a couple of minutes: a send
     // scheduled for tomorrow morning or a cadence check-in next week is not the import, and would keep it waiting
     db2.query(

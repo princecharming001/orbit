@@ -2177,6 +2177,8 @@ var KIND_QUEUE = {
   "score.ties": "orbit_score",
   "score.person": "orbit_score",
   friend_shares_refresh: "orbit_score",
+  // plan 43: a source switched on, off or removed: rescore twice, the friend projection, the graph mark
+  "sources.switch": "orbit_score",
   "enrich.dossier": "orbit_enrich",
   "source.search": "orbit_enrich",
   hop_evidence: "orbit_enrich",
@@ -2488,6 +2490,11 @@ function parseExtraSources(raw) {
   }
   return out;
 }
+function sourcesInUse(offered, states) {
+  const out = /* @__PURE__ */ new Set();
+  for (const s of offered) if (states?.[s] === "on") out.add(s);
+  return out;
+}
 var TOUCH_SOURCE = /* @__PURE__ */ new Map();
 var TIE_SOURCE = /* @__PURE__ */ new Map();
 var PROVIDER_SOURCE = /* @__PURE__ */ new Map();
@@ -2497,6 +2504,22 @@ for (const info of Object.values(SOURCES)) {
   for (const k of info.tieKinds) TIE_SOURCE.set(k, info.id);
   if (info.messageProvider) PROVIDER_SOURCE.set(info.messageProvider, info.id);
   if (info.identityKind) IDENTITY_SOURCE.set(info.identityKind, info.id);
+}
+function excludedBy(inUse) {
+  const out = {
+    touchKinds: [],
+    tieKinds: [],
+    providers: [],
+    identityKinds: []
+  };
+  for (const info of Object.values(SOURCES)) {
+    if (inUse.has(info.id)) continue;
+    out.touchKinds.push(...info.touchKinds);
+    out.tieKinds.push(...info.tieKinds);
+    if (info.messageProvider) out.providers.push(info.messageProvider);
+    if (info.identityKind) out.identityKinds.push(info.identityKind);
+  }
+  return out;
 }
 
 // supabase/functions/_shared/social/x/config.ts
@@ -2536,6 +2559,45 @@ function xMissing(cfg) {
   return m;
 }
 var roundUsd = (n) => Math.round(n * 1e5) / 1e5;
+
+// supabase/functions/_shared/sources/states.ts
+var offeredSources = (raw) => parseExtraSources(raw);
+var offeredOf = (holder) => [...holder?.extraSources ?? []];
+async function loadSourceStates(db2, userId) {
+  const rows = await db2.sql`
+    select source, state from orbit.source_states where user_id = ${userId}::uuid`;
+  const out = {};
+  for (const r of rows)
+    if (OPTIONAL_SOURCES.includes(r.source))
+      out[r.source] = r.state;
+  return out;
+}
+var hiddenOf = (inUse) => OPTIONAL_SOURCES.filter((s) => !inUse.has(s));
+async function sourcesFor(db2, userId, offered) {
+  const states = offered.length ? await loadSourceStates(db2, userId) : {};
+  const inUse = sourcesInUse(offered, states);
+  return { offered: [...offered], states, inUse, excluded: excludedBy(inUse), hidden: hiddenOf(inUse) };
+}
+var NO_SOURCES = {
+  offered: [],
+  states: {},
+  inUse: /* @__PURE__ */ new Set(),
+  excluded: excludedBy(/* @__PURE__ */ new Set()),
+  hidden: hiddenOf(/* @__PURE__ */ new Set())
+};
+async function hiddenPeople(db2, userId, src) {
+  if (!src.hidden.length) return /* @__PURE__ */ new Set();
+  const rows = await db2.sql`
+    select id from orbit.people
+     where user_id = ${userId}::uuid and not orbit.person_in_use(sources, source_account, ${src.hidden}::text[])`;
+  return new Set(rows.map((r) => r.id));
+}
+async function sourceIsOn(db2, userId, source, offered) {
+  if (!offered.includes(source)) return false;
+  const [r] = await db2.sql`
+    select state from orbit.source_states where user_id = ${userId}::uuid and source = ${source}`;
+  return r?.state === "on";
+}
 
 // supabase/functions/_shared/ratelimit.ts
 function sqlTake(db2) {
@@ -7002,13 +7064,13 @@ function slotLabel(start, end2, tz) {
   return `${day2}, ${hm(start)} to ${hm(end2)} ${zoneAbbrev(start, tz)}`;
 }
 function pickSlots(busy, opts) {
-  const count = opts.count ?? 3;
+  const count2 = opts.count ?? 3;
   const from = opts.now.getTime() + LEAD_HOURS * 36e5;
   const until = (opts.until ?? addBusinessDays(opts.now, HORIZON_BUSINESS_DAYS, opts.userTz)).getTime();
   const out = [];
   const buffer = BUFFER_MIN * 6e4;
   let key = localParts(new Date(from), opts.userTz).key;
-  for (let i = 0; i < 31 && out.length < count; i++, key = addDaysKey(key, 1)) {
+  for (let i = 0; i < 31 && out.length < count2; i++, key = addDaysKey(key, 1)) {
     const dow = weekdayOfKey(key);
     if (dow === 0 || dow === 6 || usHolidays(Number(key.slice(0, 4))).has(key)) continue;
     const dayStart = zonedTime(key, DAY_START.hour, DAY_START.minute, opts.userTz).getTime();
@@ -7137,9 +7199,9 @@ async function slotsFor(s, userId, opts = {}) {
     busy = await storedBusy(s.db, userId, timeMin, timeMax);
     source = "stored";
   }
-  const count = Math.max(1, Math.min(5, opts.count ?? 3));
+  const count2 = Math.max(1, Math.min(5, opts.count ?? 3));
   return {
-    slots: pickSlots(busy, { now, userTz, labelTz, count, until: timeMax }),
+    slots: pickSlots(busy, { now, userTz, labelTz, count: count2, until: timeMax }),
     windows: freeWindows(busy, { now, userTz, labelTz, until: timeMax }),
     tz: labelTz,
     source
@@ -9150,7 +9212,7 @@ async function loadUserRow(db2, userId) {
   return { ...u2, settings: u2.settings ?? {}, majors: u2.majors ?? [] };
 }
 var userFirstName = (u2) => u2.first_name?.trim() || u2.full_name?.trim().split(/\s+/)[0] || u2.email.split("@")[0];
-async function loadPerson(db2, userId, personId) {
+async function loadPerson(db2, userId, personId, hidden = NO_SOURCES.hidden) {
   if (typeof personId !== "string" || !/^[0-9a-f-]{36}$/i.test(personId))
     throw new HttpError(400, "bad_request", "personId is required");
   const [p] = await db2.sql`
@@ -9163,7 +9225,8 @@ async function loadPerson(db2, userId, personId) {
       from orbit.people p
       left join orbit.organizations o on o.id = p.org_id
       left join orbit.tie_scores ts on ts.user_id = p.user_id and ts.person_id = p.id
-     where p.id = ${personId}::uuid and p.user_id = ${userId}::uuid and p.deleted_at is null`;
+     where p.id = ${personId}::uuid and p.user_id = ${userId}::uuid and p.deleted_at is null
+       and orbit.person_in_use(p.sources, p.source_account, ${[...hidden]}::text[])`;
   if (!p) throw new HttpError(404, "not_found", "no such person");
   const emails = [...new Set([p.primary_email, ...p.emails ?? []].filter((e) => !!e))];
   return { ...p, emails };
@@ -9232,8 +9295,8 @@ function resumeLinks(text3) {
 function facetLines(parsed) {
   if (!parsed) return [];
   const out = [];
-  const list8 = (v) => Array.isArray(v) ? v : [];
-  for (const f2 of list8(parsed.facets)) {
+  const list9 = (v) => Array.isArray(v) ? v : [];
+  for (const f2 of list9(parsed.facets)) {
     const o = f2;
     if (o.excluded === true) continue;
     const t = [o.title ?? o.role, o.org ?? o.organization ?? o.organizationName, o.text].filter(
@@ -9241,17 +9304,17 @@ function facetLines(parsed) {
     );
     if (t.length) out.push(t.join(", "));
   }
-  for (const e of list8(parsed.experiences ?? parsed.experience)) {
+  for (const e of list9(parsed.experiences ?? parsed.experience)) {
     const o = e;
     const t = [o.title, o.org ?? o.company].filter((x) => typeof x === "string");
     if (t.length) out.push(t.join(" at "));
   }
-  for (const e of list8(parsed.education)) {
+  for (const e of list9(parsed.education)) {
     const o = e;
     const t = [o.degree, o.school].filter((x) => typeof x === "string");
     if (t.length) out.push(t.join(", "));
   }
-  const skills = list8(parsed.skills).filter((x) => typeof x === "string");
+  const skills = list9(parsed.skills).filter((x) => typeof x === "string");
   if (skills.length) out.push(`Skills: ${skills.slice(0, 12).join(", ")}`);
   return out.slice(0, 12);
 }
@@ -9279,6 +9342,7 @@ function voiceText(c) {
 }
 var escapeRe3 = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 async function exemplars(s, userId, personId, situation, opts = {}) {
+  const excluded = [...opts.excludedProviders ?? NO_SOURCES.excluded.providers];
   let q = null;
   try {
     q = await s.embed(situation);
@@ -9290,6 +9354,7 @@ async function exemplars(s, userId, personId, situation, opts = {}) {
   const pick = (onlyReplies) => s.db.sql`
     select m.id, m.body_text, m.to_person_ids from orbit.messages m
      where m.user_id = ${userId}::uuid and m.direction = 'out' and m.embedding is not null
+       and m.provider <> all(${excluded}::text[])
        and m.body_text is not null and not (${personId}::uuid = any(m.to_person_ids))
        and coalesce(array_length(regexp_split_to_array(btrim(m.body_text), '\\s+'), 1), 0) >= 25
        and (${onlyReplies}::boolean = false or m.in_reply_to is not null)
@@ -9598,8 +9663,9 @@ Rewrite the messages so each passes every rule. Keep what was true and fix only 
 async function prepareCompose(s, req, frozen) {
   const db2 = s.db;
   const now = s.now();
+  const src = await sourcesFor(db2, req.userId, offeredOf(s.env));
   const user = await loadUserRow(db2, req.userId);
-  const person2 = await loadPerson(db2, req.userId, req.personId);
+  const person2 = await loadPerson(db2, req.userId, req.personId, src.hidden);
   if (person2.is_self) throw new HttpError(400, "bad_request", "that is you");
   if (person2.do_not_contact)
     throw new HttpError(
@@ -9629,7 +9695,7 @@ async function prepareCompose(s, req, frozen) {
     kind: req.kind,
     goalBrief: typeof goalCriteria.playbook === "string" ? goalCriteria.playbook : void 0
   });
-  const history2 = await historyWith(db2, req.userId, person2.id);
+  const history2 = await historyWith(db2, req.userId, person2.id, src.excluded.providers);
   const sendsToThem = req.kind !== "forwardable_blurb";
   if (sendsToThem && req.kind !== "reply" && unansweredBefore(history2) >= 3)
     throw new HttpError(409, "unanswered_limit", "three messages already went unanswered");
@@ -9651,8 +9717,8 @@ async function prepareCompose(s, req, frozen) {
       "needs_postal_address",
       "add a postal address in Settings before the first sales email (CAN-SPAM)"
     );
-  const target = req.targetPersonId ? await loadPerson(db2, req.userId, req.targetPersonId) : void 0;
-  const introducer = req.via && req.via.introducerId !== person2.id ? await loadPerson(db2, req.userId, req.via.introducerId).catch(() => void 0) : req.via ? person2 : void 0;
+  const target = req.targetPersonId ? await loadPerson(db2, req.userId, req.targetPersonId, src.hidden) : void 0;
+  const introducer = req.via && req.via.introducerId !== person2.id ? await loadPerson(db2, req.userId, req.via.introducerId, src.hidden).catch(() => void 0) : req.via ? person2 : void 0;
   const research = await loadResearch(db2, req.userId, person2.id);
   const userContext = await buildUserContext(db2, user);
   const aboutThem = await db2.sql`
@@ -9706,7 +9772,12 @@ async function prepareCompose(s, req, frozen) {
     req.userId,
     person2.id,
     [req.kind, goalKind, person2.title ?? "", thread.lastInbound ?? "", topic ?? ""].join(" "),
-    req.kind === "reply" ? { replies: true, limit: REPLY_EXAMPLES, maxChars: REPLY_EXAMPLE_CHARS } : { replies: false }
+    req.kind === "reply" ? {
+      replies: true,
+      limit: REPLY_EXAMPLES,
+      maxChars: REPLY_EXAMPLE_CHARS,
+      excludedProviders: src.excluded.providers
+    } : { replies: false, excludedProviders: src.excluded.providers }
   );
   const slotText = [
     ...slots2.map((x) => `${x.start} = ${x.label.replace(/ to \d{1,2}:\d{2}( ?[ap]m)?/i, "")}`),
@@ -9950,10 +10021,10 @@ async function chatFor(db2, userId, personId, goalId) {
      order by (goal_id is not distinct from ${goalId}::uuid) desc, updated_at desc limit 1`;
   return c?.id ?? null;
 }
-async function historyWith(db2, userId, personId) {
+async function historyWith(db2, userId, personId, excludedProviders = NO_SOURCES.excluded.providers) {
   const rows = await db2.sql`
     select direction, sent_at as at, external_id from orbit.messages
-     where user_id = ${userId}::uuid
+     where user_id = ${userId}::uuid and provider <> all(${[...excludedProviders]}::text[])
        and (from_person_id = ${personId}::uuid or ${personId}::uuid = any(to_person_ids))
        and not is_automated
     union all
@@ -10151,7 +10222,7 @@ ${p.slots.slice(0, 3).map((x) => `- ${x.label}`).join("\n")}`;
 // supabase/functions/_shared/replies/replies.ts
 var REPLY_WINDOW_DAYS = 30;
 var needsYouKey = (messageId) => `needs_you:${messageId}`;
-async function listReplies(db2, userId, now) {
+async function listReplies(db2, userId, now, src = NO_SOURCES) {
   const rows = await db2.sql`
     select * from (
     select m.id, p.photo_url, p.linkedin_url,
@@ -10177,6 +10248,8 @@ async function listReplies(db2, userId, now) {
       left join orbit.people p on p.id = m.from_person_id
       left join orbit.organizations o on o.id = p.org_id
      where m.user_id = ${userId}::uuid and m.direction = 'in' and m.reply_class is not null
+       and m.provider <> all(${src.excluded.providers}::text[])
+       and (p.id is null or orbit.person_in_use(p.sources, p.source_account, ${src.hidden}::text[]))
        and m.sent_at >= ${new Date(now.getTime() - REPLY_WINDOW_DAYS * 864e5)}::timestamptz
        and exists (
          select 1 from orbit.messages o
@@ -10426,7 +10499,7 @@ async function autopilotStatus(db2, userId, now) {
        and exists (select 1 from orbit.audit_log a where a.target_table = 'drafts' and a.target_id = d.id::text
                     and a.action = 'draft.approve')
      group by d.kind`;
-  const count = (kinds) => approvals.filter((a) => kinds.includes(a.kind)).reduce((s, a) => s + a.n, 0);
+  const count2 = (kinds) => approvals.filter((a) => kinds.includes(a.kind)).reduce((s, a) => s + a.n, 0);
   const autoKinds = Array.isArray(settings3.auto_kinds) ? settings3.auto_kinds : [];
   const first = await firstTouchRungOf(db2, userId);
   const rungs = ["bump", "thank_you", "schedule", "first_touch"].map((kind) => {
@@ -10436,7 +10509,7 @@ async function autopilotStatus(db2, userId, now) {
     return {
       kind,
       needed,
-      unchanged: Math.min(needed, count([kind])),
+      unchanged: Math.min(needed, count2([kind])),
       unlocked: autoKinds.includes(kind)
     };
   });
@@ -11173,6 +11246,66 @@ function dossierFromRow(r) {
     expiresAt: r.expires_at
   });
 }
+var tsOf = (v) => v == null ? void 0 : v instanceof Date ? v.toISOString() : String(v);
+var dayOf = (v) => v instanceof Date ? v.toISOString().slice(0, 10) : String(v ?? "").slice(0, 10);
+function sourceStateFromRow(r) {
+  return compact({
+    source: r.source,
+    state: r.state,
+    offSince: tsOf(r.off_since),
+    shareFollows: !!r.share_follows,
+    updatedAt: tsOf(r.updated_at)
+  });
+}
+function socialLinkFromRow(r) {
+  return compact({
+    id: r.id,
+    platform: r.platform,
+    accountId: r.account_id,
+    personId: r.person_id,
+    via: r.via,
+    proof: u(r.proof),
+    score: r.score == null ? void 0 : Number(r.score),
+    createdAt: tsOf(r.created_at),
+    updatedAt: tsOf(r.updated_at)
+  });
+}
+function socialMatchAskFromRow(r) {
+  return compact({
+    id: r.id,
+    platform: r.platform,
+    accountId: r.account_id,
+    personId: r.person_id,
+    score: Number(r.score),
+    signals: r.signals ?? {},
+    status: r.status,
+    decidedAt: tsOf(r.decided_at),
+    createdAt: tsOf(r.created_at),
+    updatedAt: tsOf(r.updated_at)
+  });
+}
+function socialLookupFromRow(r) {
+  return compact({
+    id: r.id,
+    platform: r.platform,
+    targetPersonId: r.target_person_id,
+    status: r.status,
+    result: r.result ?? void 0,
+    createdAt: tsOf(r.created_at),
+    updatedAt: tsOf(r.updated_at)
+  });
+}
+function textDayFromRow(r) {
+  return {
+    personId: r.person_id,
+    day: dayOf(r.day),
+    in: Number(r.in_count),
+    out: Number(r.out_count),
+    group: Number(r.group_size),
+    words: !!r.words,
+    updatedAt: tsOf(r.updated_at)
+  };
+}
 
 // packages/core/src/scoring/rapport.ts
 var RAPPORT_CUES = [
@@ -11388,8 +11521,8 @@ function hopsToTarget(g, target, maxHops) {
   const back = /* @__PURE__ */ new Map();
   for (const [u2, nbrs] of g.adj)
     for (const v of nbrs.keys()) {
-      const list8 = back.get(v);
-      if (list8) list8.push(u2);
+      const list9 = back.get(v);
+      if (list9) list9.push(u2);
       else back.set(v, [u2]);
     }
   const out = /* @__PURE__ */ new Map([[target, 0]]);
@@ -11473,9 +11606,9 @@ function personalizedPageRank(adj, source, opts = {}) {
       nodes.add(v);
     }
     if (total <= 0) continue;
-    const list8 = [];
-    for (const [v, w] of nbrs) if (w > 0 && Number.isFinite(w)) list8.push({ to: v, p: w / total });
-    out.set(u2, list8);
+    const list9 = [];
+    for (const [v, w] of nbrs) if (w > 0 && Number.isFinite(w)) list9.push({ to: v, p: w / total });
+    out.set(u2, list9);
   }
   let rank2 = /* @__PURE__ */ new Map([[source, 1]]);
   for (let it = 0; it < iterations; it++) {
@@ -11483,12 +11616,12 @@ function personalizedPageRank(adj, source, opts = {}) {
     let restart = alpha;
     for (const [u2, r] of rank2) {
       if (r === 0) continue;
-      const list8 = out.get(u2);
-      if (!list8) {
+      const list9 = out.get(u2);
+      if (!list9) {
         restart += (1 - alpha) * r;
         continue;
       }
-      for (const { to, p } of list8) next.set(to, (next.get(to) ?? 0) + (1 - alpha) * r * p);
+      for (const { to, p } of list9) next.set(to, (next.get(to) ?? 0) + (1 - alpha) * r * p);
     }
     next.set(source, (next.get(source) ?? 0) + restart);
     rank2 = next;
@@ -11899,7 +12032,7 @@ function pairEvidenceTies(input) {
   const now = input.now ?? /* @__PURE__ */ new Date();
   const out = /* @__PURE__ */ new Map();
   const ok = (a, b) => a !== b && input.people.has(a) && input.people.has(b);
-  const put = (t, a, b) => {
+  const put2 = (t, a, b) => {
     if (!ok(a, b)) return;
     const [x, y] = pairKey(a, b);
     const id = `${x}|${y}|${t.kind}`;
@@ -11924,7 +12057,7 @@ function pairEvidenceTies(input) {
       now
     });
     if (sc.E <= 0) continue;
-    put(
+    put2(
       {
         kind: "linkedin_engagement",
         // the pair as a whole: reciprocal engagement only; one-way acts count per direction (pKnowDirected)
@@ -11951,7 +12084,7 @@ function pairEvidenceTies(input) {
   }
   for (const r of input.recommendations ?? []) {
     const at = r.year ? `${r.year}-07-01T00:00:00.000Z` : void 0;
-    put(
+    put2(
       {
         kind: "linkedin_recommendation",
         weight: HOP_WEIGHTS.recommendation,
@@ -11973,7 +12106,7 @@ function pairEvidenceTies(input) {
   }
   for (const m of input.mentions ?? []) {
     const tagged = Math.max(1, m.tagged);
-    put(
+    put2(
       {
         kind: "linkedin_mention",
         weight: HOP_WEIGHTS.mention / Math.max(1, tagged - 1),
@@ -11995,7 +12128,7 @@ function pairEvidenceTies(input) {
     );
   }
   for (const s of input.studentSays ?? [])
-    put(
+    put2(
       {
         kind: "student_says_close",
         weight: HOP_WEIGHTS.studentSaysClose,
@@ -12638,16 +12771,19 @@ async function visibleShares(db2, friend) {
      order by display_name`;
   return underMode(rows, friend.mode, friend.domains);
 }
-async function matchShares(db2, viewerId, shares2) {
+async function matchShares(db2, viewerId, shares2, hidden = NO_SOURCES.hidden) {
   const out = /* @__PURE__ */ new Map();
   if (!shares2.length) return out;
   const people = await db2.sql`
     select p.id, p.display_name, p.org_raw, o.name as org_name, p.linkedin_member_id, p.linkedin_slug, p.primary_email
       from orbit.people p left join orbit.organizations o on o.id = p.org_id
-     where p.user_id = ${viewerId}::uuid and not p.is_self and p.deleted_at is null and p.merged_into is null`;
+     where p.user_id = ${viewerId}::uuid and not p.is_self and p.deleted_at is null and p.merged_into is null
+       and orbit.person_in_use(p.sources, p.source_account, ${[...hidden]}::text[])`;
   const identities = await db2.sql`
-    select person_id, kind, value_norm from orbit.person_identities
-     where user_id = ${viewerId}::uuid and kind in ('email', 'linkedin_member', 'linkedin_slug')`;
+    select i.person_id, i.kind, i.value_norm from orbit.person_identities i
+     where i.user_id = ${viewerId}::uuid and i.kind in ('email', 'linkedin_member', 'linkedin_slug')
+       and not exists (select 1 from orbit.people q where q.id = i.person_id
+                        and not orbit.person_in_use(q.sources, q.source_account, ${[...hidden]}::text[]))`;
   const byMember = /* @__PURE__ */ new Map();
   const bySlug = /* @__PURE__ */ new Map();
   const emails = /* @__PURE__ */ new Map();
@@ -13094,14 +13230,14 @@ var REREAD_DAYS = 180;
 var COMPANY_REREAD_DAYS = 90;
 var READ_BATCH = 8;
 function profileOrgs(raw) {
-  const list8 = (v) => (Array.isArray(v) ? v : []).filter((x) => !!x && typeof x === "object");
+  const list9 = (v) => (Array.isArray(v) ? v : []).filter((x) => !!x && typeof x === "object");
   return [
-    ...list8(raw.work_experience).map((x) => ({
+    ...list9(raw.work_experience).map((x) => ({
       company: txt(x.company, 160),
       companyId: x.company_id == null ? void 0 : txt(String(x.company_id), 60),
       logoUrl: txt(x.company_picture_url, 1e3)
     })),
-    ...list8(raw.education).map((x) => ({
+    ...list9(raw.education).map((x) => ({
       school: txt(x.school, 160),
       schoolId: x.school_id == null ? void 0 : txt(String(x.school_id), 60),
       logoUrl: txt(x.school_picture_url, 1e3)
@@ -13185,7 +13321,7 @@ function pageOf(id, raw) {
     return typeof v === "number" && Number.isFinite(v) ? Math.round(v) : void 0;
   };
   const range = raw.employee_count_range;
-  const count = typeof raw.employee_count === "number" ? raw.employee_count : Number(ins?.totalCount) || void 0;
+  const count2 = typeof raw.employee_count === "number" ? raw.employee_count : Number(ins?.totalCount) || void 0;
   const founded = /(\d{4})/.exec(String(raw.foundation_date ?? ""))?.[1];
   const loc = Array.isArray(raw.locations) ? raw.locations.find((l) => l.is_headquarter) ?? raw.locations[0] : void 0;
   const industries = (Array.isArray(raw.industry) ? raw.industry : [raw.industry]).map((x) => txt(x, 80)).filter((x) => !!x).slice(0, 4);
@@ -13197,7 +13333,7 @@ function pageOf(id, raw) {
     industries,
     tagline: txt(raw.tagline, 300),
     description: txt(raw.description, COMPANY_ABOUT_CHARS),
-    employeeCount: count && count > 0 ? Math.round(count) : void 0,
+    employeeCount: count2 && count2 > 0 ? Math.round(count2) : void 0,
     employeeRange: range?.from ? `${range.from}-${range.to ?? ""}` : void 0,
     growth6m: g(6),
     growth12m: g(12),
@@ -14033,13 +14169,14 @@ async function deleteTies(db2, userId, aId, bId, kinds, keep = [], by = { actor:
 // supabase/functions/_shared/paths/find.ts
 var DAY7 = 864e5;
 var TIE_KIND_SET = new Set(TIE_KINDS);
-var PERSON_COLUMNS = `p.id, p.is_self, p.display_name, p.first_name, p.title, p.org_raw, o.name as org_name, p.is_alumni,
-       p.linkedin_url, p.linkedin_member_id, p.hidden_at, p.do_not_contact, p.last_interaction_at,
-       ts.score::int as score, ts.features->'reciprocity' as reciprocity
+var personColumns = (hidden) => `p.id, p.is_self, p.display_name, p.first_name, p.title, p.org_raw,
+       o.name as org_name, p.is_alumni, p.linkedin_url, p.linkedin_member_id, p.hidden_at, p.do_not_contact,
+       p.last_interaction_at, ts.score::int as score, ts.features->'reciprocity' as reciprocity
   from orbit.people p
   left join orbit.organizations o on o.id = p.org_id
   left join orbit.tie_scores ts on ts.user_id = p.user_id and ts.person_id = p.id
- where p.user_id = $1::uuid and p.deleted_at is null and p.merged_into is null`;
+ where p.user_id = $1::uuid and p.deleted_at is null and p.merged_into is null
+   and orbit.person_in_use(p.sources, p.source_account, ${hidden}::text[])`;
 var RANKING_EVIDENCE_KEYS = [
   "reciprocal",
   "wBy",
@@ -14058,7 +14195,7 @@ var slimKey = (k) => k === "current" ? `'current', case when jsonb_typeof(t.evid
 var SLIM_EVIDENCE = `jsonb_strip_nulls(jsonb_build_object(${RANKING_EVIDENCE_KEYS.map(slimKey).join(", ")}))`;
 var TIE_COLUMNS = (slim) => `t.a_person_id, t.b_person_id, t.kind, t.weight, t.confidence, ${slim ? SLIM_EVIDENCE : "t.evidence"} as evidence,
    t.first_seen_at, t.last_seen_at`;
-async function graphContext(db2, userId, now) {
+async function graphContext(db2, userId, now, src = NO_SOURCES) {
   const intros = await db2.sql`
     select introducer_person_id, status, asked_at, outcome_at from orbit.intro_requests
      where user_id = ${userId}::uuid and introducer_person_id is not null`;
@@ -14071,6 +14208,7 @@ async function graphContext(db2, userId, now) {
     select distinct m.from_person_id as person_id from orbit.threads t
       join orbit.messages m on m.thread_id = t.id and m.sent_at = t.last_at
      where t.user_id = ${userId}::uuid and t.last_direction = 'in' and t.is_networking
+       and t.provider <> all(${src.excluded.providers}::text[])
        and m.from_person_id is not null and t.last_at > ${new Date(now.getTime() - 30 * DAY7)}::timestamptz`;
   const blockedRows = await db2.sql`
     select a_person_id, b_person_id from orbit.blocked_pairs where user_id = ${userId}::uuid`;
@@ -14078,7 +14216,9 @@ async function graphContext(db2, userId, now) {
     intros,
     targetOrgs,
     owes: new Set(owes.map((o) => o.person_id)),
-    blocked: new Set(blockedRows.map((b) => pairKeyOf(b.a_person_id, b.b_person_id)))
+    blocked: new Set(blockedRows.map((b) => pairKeyOf(b.a_person_id, b.b_person_id))),
+    src,
+    hidden: await hiddenPeople(db2, userId, src)
   };
 }
 function graphPerson(r, c, now) {
@@ -14122,8 +14262,10 @@ function tieOf(t, userId) {
   };
 }
 function addTies(g, rows) {
+  const off = new Set(g.ctx.src.excluded.tieKinds);
   for (const t of rows) {
     if (!TIE_KIND_SET.has(t.kind) || t.a_person_id === g.selfId || t.b_person_id === g.selfId) continue;
+    if (off.has(t.kind) || g.ctx.hidden.has(t.a_person_id) || g.ctx.hidden.has(t.b_person_id)) continue;
     const tie = tieOf(t, g.userId);
     g.ties.set(tie.id, tie);
   }
@@ -14132,11 +14274,11 @@ function rebuildPairs(g) {
   g.pairs = combineTies([...g.ties.values()], g.now);
 }
 async function loadGraph(db2, userId, now, opts = {}) {
-  return loadWhole(db2, userId, now, opts.slim ?? false);
+  return loadWhole(db2, userId, now, opts.slim ?? false, opts.sources);
 }
-async function loadWhole(db2, userId, now, slim) {
-  const rows = await db2.query(`select ${PERSON_COLUMNS}`, [userId]);
-  const ctx = await graphContext(db2, userId, now);
+async function loadWhole(db2, userId, now, slim, src = NO_SOURCES) {
+  const rows = await db2.query(`select ${personColumns("$2")}`, [userId, src.hidden]);
+  const ctx = await graphContext(db2, userId, now, src);
   const g = graphOf(userId, now, ctx, rows);
   addTies(
     g,
@@ -14168,7 +14310,7 @@ function graphOf(userId, now, ctx, rows) {
   };
 }
 var NEIGHBOURHOOD_HOPS = 2;
-async function nearby(db2, userId, seeds) {
+async function nearby(db2, userId, seeds, ctx) {
   if (!seeds.length) return /* @__PURE__ */ new Map();
   const rows = await db2.query(
     `with recursive me as (
@@ -14179,25 +14321,35 @@ async function nearby(db2, userId, seeds) {
        select x.other, n.depth + 1
          from near n
          cross join lateral (
-           select t.b_person_id as other from orbit.ties t where t.user_id = $1::uuid and t.a_person_id = n.id
+           select t.b_person_id as other from orbit.ties t
+            where t.user_id = $1::uuid and t.a_person_id = n.id and t.kind <> all($5::text[])
            union all
-           select t.a_person_id from orbit.ties t where t.user_id = $1::uuid and t.b_person_id = n.id
+           select t.a_person_id from orbit.ties t
+            where t.user_id = $1::uuid and t.b_person_id = n.id and t.kind <> all($5::text[])
          ) x
         where n.depth < $4 and n.id not in (select id from me) and x.other not in (select id from me)
+          and x.other <> all($6::uuid[])
      )
      select id, min(depth)::int as depth from near group by id`,
-    [userId, seeds.map((s) => s.id), seeds.map((s) => s.depth), NEIGHBOURHOOD_HOPS]
+    [
+      userId,
+      seeds.map((s) => s.id),
+      seeds.map((s) => s.depth),
+      NEIGHBOURHOOD_HOPS,
+      ctx.src.excluded.tieKinds,
+      [...ctx.hidden]
+    ]
   );
   return new Map(rows.map((r) => [r.id, r.depth]));
 }
-async function loadNeighbourhood(db2, userId, targetId, now) {
-  const depth = await nearby(db2, userId, [{ id: targetId, depth: 0 }]);
+async function loadNeighbourhood(db2, userId, targetId, now, src = NO_SOURCES) {
+  const ctx = await graphContext(db2, userId, now, src);
+  const depth = await nearby(db2, userId, [{ id: targetId, depth: 0 }], ctx);
   const ids = [...depth.keys()];
   const rows = await db2.query(
-    `select ${PERSON_COLUMNS} and (p.is_self or p.id = any($2::uuid[]))`,
-    [userId, ids]
+    `select ${personColumns("$3")} and (p.is_self or p.id = any($2::uuid[]))`,
+    [userId, ids, src.hidden]
   );
-  const ctx = await graphContext(db2, userId, now);
   const g = graphOf(userId, now, ctx, rows);
   g.depth = depth;
   addTies(g, await tiesTouching(db2, userId, ids, ids));
@@ -14243,14 +14395,14 @@ async function extendNeighbourhood(db2, g, added, learned) {
           if (via <= NEIGHBOURHOOD_HOPS && via < at(x)) nearer.set(x, via);
         }
     const seeds = [...nearer].map(([id, dd]) => ({ id, depth: dd }));
-    const reach = await nearby(db2, g.userId, seeds);
+    const reach = await nearby(db2, g.userId, seeds, g.ctx);
     const fresh = [...reach.keys()].filter((id) => !depth.has(id));
     for (const [id, dd] of reach) if (dd < d(id)) depth.set(id, dd);
     if (fresh.length) {
-      const rows = await db2.query(`select ${PERSON_COLUMNS} and p.id = any($2::uuid[])`, [
-        g.userId,
-        fresh
-      ]);
+      const rows = await db2.query(
+        `select ${personColumns("$3")} and p.id = any($2::uuid[])`,
+        [g.userId, fresh, g.ctx.src.hidden]
+      );
       for (const r of rows) if (!r.is_self) g.people.set(r.id, graphPerson(r, g.ctx, g.now));
       addTies(g, await tiesTouching(db2, g.userId, fresh, [...depth.keys()]));
     }
@@ -14280,7 +14432,7 @@ async function withFullEvidence(db2, g, paths) {
   for (const k of want) g.full.add(k);
   return true;
 }
-async function loadFriendLayer(db2, userId) {
+async function loadFriendLayer(db2, userId, hidden = NO_SOURCES.hidden) {
   const friends = await sharingFriends(db2, userId);
   if (!friends.length) return { friends, shares: [] };
   const all = [];
@@ -14289,7 +14441,8 @@ async function loadFriendLayer(db2, userId) {
   const matches = await matchShares(
     db2,
     userId,
-    all.map((x) => x.share)
+    all.map((x) => x.share),
+    hidden
   );
   return {
     friends,
@@ -14491,6 +14644,7 @@ function personLike(p) {
 async function findPaths(s, userId, req) {
   const db2 = s.db;
   const now = s.now();
+  const src = await sourcesFor(db2, userId, offeredOf(s.env));
   let goalKind;
   if (req.goalId) {
     const [g2] = await db2.sql`
@@ -14530,8 +14684,8 @@ async function findPaths(s, userId, req) {
         });
     }
     await upsertTies2(db2, ext2.ties);
-    const g2 = await loadWhole(db2, userId, now, true);
-    const layer2 = await loadFriendLayer(db2, userId);
+    const g2 = await loadWhole(db2, userId, now, true, src);
+    const layer2 = await loadFriendLayer(db2, userId, src.hidden);
     const friendShares = sharesAt(layer2, company, domain);
     applyFriendLayer(g2, friendShares);
     const atCompany = await db2.sql`
@@ -14601,7 +14755,7 @@ async function findPaths(s, userId, req) {
       "paths"
     );
   } else throw new HttpError(400, "bad_request", "target needs personId, linkedinUrl or company");
-  const g = await loadNeighbourhood(db2, userId, targetId, now);
+  const g = await loadNeighbourhood(db2, userId, targetId, now, src);
   const target = g.people.get(targetId);
   if (!target) throw new HttpError(404, "not_found", "no such person");
   if (looksLikeMinor({ title: target.title })) return { paths: [], sources: [], unconfigured: [] };
@@ -14619,7 +14773,7 @@ async function findPaths(s, userId, req) {
     await upsertTies2(db2, ext.ties);
     await extendNeighbourhood(db2, g, ext.ties, learned);
   }
-  const layer = await loadFriendLayer(db2, userId);
+  const layer = await loadFriendLayer(db2, userId, src.hidden);
   applyFriendLayer(g, sharesFor(layer, targetId));
   const rank2 = () => rankWarmPaths({
     targetId,
@@ -14734,7 +14888,7 @@ function bestReach(g, personId, goal, now) {
 var DAY8 = 864e5;
 var FIRST_TOUCH2 = ["outreach", "first_touch", "warm_first_touch"];
 var dayKeyOf = (d, tz) => localParts(d, tz).key;
-async function candidateRows(db2, userId, one) {
+async function candidateRows(db2, userId, one, hidden = NO_SOURCES.hidden) {
   return db2.sql`
     select p.id, p.display_name, p.first_name, p.title, p.headline, coalesce(o.name, p.org_raw) as org, p.is_alumni,
            p.primary_email, p.hidden_at, p.do_not_contact, coalesce(p.private, false) as private, p.timezone,
@@ -14761,6 +14915,7 @@ async function candidateRows(db2, userId, one) {
       left join orbit.organizations o on o.id = p.org_id
       left join orbit.tie_scores ts on ts.user_id = p.user_id and ts.person_id = p.id
      where p.user_id = ${userId}::uuid and not p.is_self and p.deleted_at is null and p.merged_into is null
+       and orbit.person_in_use(p.sources, p.source_account, ${[...hidden]}::text[])
        and (${one?.personId ?? null}::uuid is null or p.id = ${one?.personId ?? null}::uuid)
        and (${one?.personId ?? null}::uuid is not null or coalesce(o.name, p.org_raw) is not null)`;
 }
@@ -14772,7 +14927,12 @@ async function firstTouchSendGate(s, userId, d) {
   const [goal] = d.goal_id ? await db2.sql`
         select id, kind, title, targets, autonomy_level, priority from orbit.goals
          where id = ${d.goal_id}::uuid and user_id = ${userId}::uuid and deleted_at is null and status = 'active'` : [];
-  const [p] = await candidateRows(db2, userId, { personId: d.person_id, draftId: d.id });
+  const [p] = await candidateRows(
+    db2,
+    userId,
+    { personId: d.person_id, draftId: d.id },
+    (await sourcesFor(db2, userId, offeredOf(s.env))).hidden
+  );
   if (!p) return { go: false, hold: "first_touch:hidden", rule: "hidden" };
   const rule = firstTouchBlock(
     {
@@ -15651,7 +15811,7 @@ function createInstagramAdapter(o) {
   };
   return {
     platform: "instagram",
-    pageSize: (list8) => INSTAGRAM_PAGE[list8],
+    pageSize: (list9) => INSTAGRAM_PAGE[list9],
     async me() {
       return profileRead(await call("profile", `/api/v1/users/me${q({ account_id: o.accountId })}`));
     },
@@ -15663,10 +15823,10 @@ function createInstagramAdapter(o) {
         )
       );
     },
-    async listPage(accountId, list8, cursor) {
+    async listPage(accountId, list9, cursor) {
       const r = await call(
         "list",
-        `/api/v1/users/${list8}${q({ account_id: o.accountId, user_id: accountId, cursor, limit: INSTAGRAM_PAGE[list8] })}`
+        `/api/v1/users/${list9}${q({ account_id: o.accountId, user_id: accountId, cursor, limit: INSTAGRAM_PAGE[list9] })}`
       );
       const items = Array.isArray(r.items) ? r.items : [];
       const accounts = items.map(accountFromItem).filter((a) => !!a);
@@ -17140,7 +17300,7 @@ function parseIncomingFiles(v) {
   });
 }
 async function setDraftFiles(db2, userId, draftId, files) {
-  const list8 = [];
+  const list9 = [];
   for (const f2 of files) {
     const bytes = decodeBase64(f2.data);
     if (!bytes.length) throw new HttpError(400, "bad_request", `${f2.name} is empty`);
@@ -17150,23 +17310,23 @@ async function setDraftFiles(db2, userId, draftId, files) {
       values (${userId}::uuid, ${f2.kind ?? "file"}, ${f2.name}, ${f2.mimeType}, ${bytes.length},
               decode(${f2.data.replace(/\s+/g, "")}, 'base64'))
       returning id`;
-    list8.push({ id: r.id, name: f2.name, mimeType: f2.mimeType, size: bytes.length });
+    list9.push({ id: r.id, name: f2.name, mimeType: f2.mimeType, size: bytes.length });
   }
   await db2.sql`
-    update orbit.drafts set attachments = ${JSON.stringify(list8)}::jsonb
+    update orbit.drafts set attachments = ${JSON.stringify(list9)}::jsonb
      where id = ${draftId}::uuid and user_id = ${userId}::uuid`;
-  return list8;
+  return list9;
 }
 async function draftFiles(db2, userId, attachments) {
-  const list8 = Array.isArray(attachments) ? attachments : [];
-  if (!list8.length) return [];
-  const ids = list8.map((a) => a.id).filter((x) => typeof x === "string");
+  const list9 = Array.isArray(attachments) ? attachments : [];
+  if (!list9.length) return [];
+  const ids = list9.map((a) => a.id).filter((x) => typeof x === "string");
   const rows = await db2.sql`
     select id, name, mime_type, encode(bytes, 'base64') as b64 from orbit.user_files
      where user_id = ${userId}::uuid and id = any(${ids}::uuid[])`;
   const byId = new Map(rows.map((r) => [r.id, r]));
   const out = [];
-  for (const a of list8) {
+  for (const a of list9) {
     const r = byId.get(a.id);
     if (!r) return void 0;
     out.push({ name: r.name, mimeType: r.mime_type, bytes: decodeBase64(r.b64) });
@@ -17345,15 +17505,15 @@ async function gmailSentCopy(s, userId, p) {
     const token = await s.tokens.accessToken(userId);
     const headers2 = { authorization: `Bearer ${token}` };
     const q = `in:sent to:${p.to} after:${Math.floor(p.since.getTime() / 1e3) - 60}`;
-    const list8 = await s.fetch(`${GMAIL_MESSAGES_URL}?maxResults=20&q=${encodeURIComponent(q)}`, {
+    const list9 = await s.fetch(`${GMAIL_MESSAGES_URL}?maxResults=20&q=${encodeURIComponent(q)}`, {
       headers: headers2,
       signal: AbortSignal.timeout(SEND_TIMEOUT_MS)
     });
-    if (!list8.ok) {
-      await list8.body?.cancel();
+    if (!list9.ok) {
+      await list9.body?.cancel();
       return void 0;
     }
-    const j = await list8.json();
+    const j = await list9.json();
     for (const m of j.messages ?? []) {
       const res = await s.fetch(
         `${GMAIL_MESSAGES_URL}/${encodeURIComponent(m.id)}?format=metadata&metadataHeaders=X-Orbit-Draft-Id&metadataHeaders=Subject`,
@@ -18162,7 +18322,7 @@ function goalFrom(r) {
   const due2 = r.due_at instanceof Date ? r.due_at.toISOString().slice(0, 10) : r.due_at;
   return goalFromRow({ ...isoRow(r), due_at: due2 });
 }
-async function loadCadence(db2, userId, now) {
+async function loadCadence(db2, userId, now, src = NO_SOURCES) {
   const [u2] = await db2.sql`
     select timezone, autonomy_level, settings from orbit.users where id = ${userId}::uuid`;
   const tz = validZone(u2?.timezone) ?? "America/New_York";
@@ -18188,7 +18348,7 @@ async function loadCadence(db2, userId, now) {
   }));
   const msgRows = await db2.sql`
     select direction, sent_at, provider, from_person_id, to_person_ids from orbit.messages
-     where user_id = ${userId}::uuid and not is_automated
+     where user_id = ${userId}::uuid and not is_automated and provider <> all(${src.excluded.providers}::text[])
        and sent_at > ${new Date(now.getTime() - 365 * DAY10)}::timestamptz`;
   const messages = [];
   for (const m of msgRows) {
@@ -18225,6 +18385,7 @@ async function loadCadence(db2, userId, now) {
       left join orbit.tie_scores ts on ts.user_id = p.user_id and ts.person_id = p.id
       left join orbit.dossiers d on d.user_id = p.user_id and d.person_id = p.id and d.status in ('ready', 'partial')
      where p.user_id = ${userId}::uuid and not p.is_self and p.deleted_at is null and p.merged_into is null
+       and orbit.person_in_use(p.sources, p.source_account, ${src.hidden}::text[])
        and (ts.score >= 60 or p.id = any(${wanted}::uuid[]))`;
   const people = /* @__PURE__ */ new Map();
   for (const p of peopleRows) {
@@ -18282,14 +18443,15 @@ var toDue = (a) => ({
   reason: a.reason,
   dueAt: a.dueAt
 });
-async function dueItems(db2, userId, now) {
-  const st = await loadCadence(db2, userId, now);
+async function dueItems(db2, userId, now, src = NO_SOURCES) {
+  const st = await loadCadence(db2, userId, now, src);
   return cadenceActions(st.input).map(toDue);
 }
 
 // supabase/functions/orbit-api/routes/cadence.ts
 async function due(ctx) {
-  return json(200, { items: await dueItems(ctx.db, ctx.userId, ctx.now()) });
+  const src = await sourcesFor(ctx.db, ctx.userId, ctx.offered);
+  return json(200, { items: await dueItems(ctx.db, ctx.userId, ctx.now(), src) });
 }
 var cadenceRoutes = {
   "/cadence/due": { method: "POST", auth: true, run: due }
@@ -18299,11 +18461,11 @@ var cadenceRoutes = {
 async function slots(ctx) {
   const b = await body(ctx, true);
   if (b.tz !== void 0 && typeof b.tz !== "string") throw badRequest("tz must be an IANA zone");
-  const count = b.count === void 0 ? void 0 : Number(b.count);
+  const count2 = b.count === void 0 ? void 0 : Number(b.count);
   const r = await slotsFor(ctx.services(), ctx.userId, {
     personId: optUuid(b, "personId"),
     tz: b.tz,
-    count: Number.isFinite(count) ? count : void 0
+    count: Number.isFinite(count2) ? count2 : void 0
   });
   return json(200, { slots: r.slots, tz: r.tz });
 }
@@ -19137,6 +19299,7 @@ var SUGGEST_SHOWN_MAX = 2e3;
 var LINK_DAYS = 90;
 var DAY_MS2 = 864e5;
 async function candidates(db2, me2, opts) {
+  const hidden = opts.hidden ?? NO_SOURCES.hidden;
   const pattern = opts.q ? `%${opts.q.toLowerCase().replace(/[%_\\]/g, (c) => `\\${c}`)}%` : null;
   return db2.sql`
     with me as (
@@ -19155,6 +19318,7 @@ async function candidates(db2, me2, opts) {
                as linkedin_url
         from orbit.person_identities pi
         join orbit.people p on p.id = pi.person_id and p.deleted_at is null and p.merged_into is null
+         and orbit.person_in_use(p.sources, p.source_account, ${hidden}::text[])
         left join orbit.tie_scores ts on ts.person_id = p.id and ts.user_id = p.user_id
        where pi.user_id = ${me2}::uuid and pi.kind = 'email'
        group by 1),
@@ -19244,7 +19408,7 @@ function inviteReason(r, school, now) {
   if (days !== null && days <= 45) return "You talked recently";
   return "In your People";
 }
-async function toInvite(db2, me2, school, now, skip = 0) {
+async function toInvite(db2, me2, school, now, skip = 0, hidden = NO_SOURCES.hidden) {
   const [li] = await db2.sql`
     select count(*)::int as n from orbit.integration_accounts
      where user_id = ${me2}::uuid and provider = 'linkedin' and status = 'active' and external_account_id is not null`;
@@ -19258,6 +19422,7 @@ async function toInvite(db2, me2, school, now, skip = 0) {
                   where user_id = ${me2}::uuid group by 1) ts on ts.person_id = p.id
      where p.user_id = ${me2}::uuid and p.deleted_at is null and p.merged_into is null and p.hidden_at is null
        and not p.do_not_contact and not coalesce(p.is_self, false) and not coalesce(p.private, false)
+       and p.listed and orbit.person_in_use(p.sources, p.source_account, ${hidden}::text[])
        and p.linkedin_member_id is not null
        and (p.primary_email is not null or ${canMessage}::boolean)
        and p.display_name ~ '^[^[:space:]]+[[:space:]]+[^[:space:]]' and p.display_name !~ '@'
@@ -19297,10 +19462,11 @@ async function suggest(ctx) {
   const b = ctx.req.method === "POST" ? await body(ctx, true) : {};
   const skipOrbit = shown(b, "onOrbitShown");
   const skipInvite = shown(b, "toInviteShown");
-  const found = await candidates(ctx.db, me2, { tied: true, limit: skipOrbit + SUGGEST_ON_ORBIT + 1 });
+  const { hidden } = await sourcesFor(ctx.db, me2, ctx.offered);
+  const found = await candidates(ctx.db, me2, { tied: true, limit: skipOrbit + SUGGEST_ON_ORBIT + 1, hidden });
   const ranked = found.filter((c) => !(c.rel_status === "pending" && c.requested_by !== me2)).map((c) => ({ c, s: tieScore(c, now) })).sort((a, b2) => b2.s - a.s || b2.c.connections - a.c.connections || a.c.id.localeCompare(b2.c.id));
   const onOrbit = ranked.slice(skipOrbit, skipOrbit + SUGGEST_ON_ORBIT).map(({ c }) => view(c, me2));
-  const invite2 = await toInvite(ctx.db, me2, u2.school, now, skipInvite);
+  const invite2 = await toInvite(ctx.db, me2, u2.school, now, skipInvite, hidden);
   const out = {
     onOrbit,
     toInvite: invite2.rows,
@@ -19317,7 +19483,17 @@ async function search(ctx) {
   if (q.length < 2) throw badRequest("type at least two letters");
   if (q.length > 120) throw badRequest("that is too long to search for");
   const email2 = /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(q) ? normalizeEmail(q) : void 0;
-  const found = email2 ? await candidates(ctx.db, me2, { tied: false, email: email2, limit: 1 }) : await candidates(ctx.db, me2, { tied: true, q, limit: SEARCH_RESULTS });
+  const found = email2 ? await candidates(ctx.db, me2, {
+    tied: false,
+    email: email2,
+    limit: 1,
+    hidden: (await sourcesFor(ctx.db, me2, ctx.offered)).hidden
+  }) : await candidates(ctx.db, me2, {
+    tied: true,
+    q,
+    limit: SEARCH_RESULTS,
+    hidden: (await sourcesFor(ctx.db, me2, ctx.offered)).hidden
+  });
   const results = found.map((c) => ({ c, s: tieScore(c, now) })).sort((a, b2) => b2.s - a.s || nameOf(a.c).localeCompare(nameOf(b2.c))).slice(0, SEARCH_RESULTS).map(({ c }) => view(c, me2));
   const out = { results };
   return json(200, out);
@@ -19570,6 +19746,8 @@ var goalRoutes = {
 };
 
 // supabase/functions/orbit-api/tables.ts
+var personInUse = (col) => `not exists (select 1 from orbit.people q where q.id = ${col}
+                and not orbit.person_in_use(q.sources, q.source_account, $hidden::text[]))`;
 var PULL_TABLES = [
   {
     table: "organizations",
@@ -19584,6 +19762,8 @@ var PULL_TABLES = [
     key: "id",
     cursor: "updated_at",
     deletedWhen: "t.deleted_at is not null or t.merged_into is not null",
+    // plan 43: people only an optional source out of use knows, and people not listed yet, are not sent
+    sources: "t.listed and orbit.person_in_use(t.sources, t.source_account, $hidden::text[])",
     // a Person: the columns under the names the browser's screens read
     map: (r) => ({
       ...r,
@@ -19593,11 +19773,17 @@ var PULL_TABLES = [
       currentOrganizationRaw: r.orgRaw
     })
   },
-  { table: "person_identities", key: "id", cursor: "created_at" },
+  {
+    table: "person_identities",
+    key: "id",
+    cursor: "created_at",
+    sources: `t.kind <> all($identityKinds::text[]) and ${personInUse("t.person_id")}`
+  },
   {
     table: "affiliations",
     key: "id",
     cursor: "updated_at",
+    sources: personInUse("t.person_id"),
     // an Affiliation: the company as the browser names it, so a role shows where it was and the company's logo
     map: (r) => ({ ...r, nameRaw: r.orgRaw ?? "", organizationId: r.orgId })
   },
@@ -19620,6 +19806,7 @@ var PULL_TABLES = [
     key: "id",
     cursor: "updated_at",
     filter: "t.is_networking and coalesce(t.last_at, t.created_at) > now() - interval '180 days'",
+    sources: "t.provider <> all($providers::text[])",
     // LinkedIn threads carry their channel, as the browser's own LinkedIn reader writes them
     map: (r) => ({
       ...r,
@@ -19634,6 +19821,7 @@ var PULL_TABLES = [
     key: "id",
     cursor: "updated_at",
     filter: "t.sent_at > now() - interval '180 days' and exists (select 1 from orbit.threads th where th.id = t.thread_id and th.is_networking)",
+    sources: "t.provider <> all($providers::text[])",
     omit: ["embedding"],
     map: (r) => ({
       ...r,
@@ -19662,6 +19850,7 @@ var PULL_TABLES = [
     table: "ties",
     key: "id",
     cursor: "updated_at",
+    sources: `t.kind <> all($tieKinds::text[]) and ${personInUse("t.a_person_id")} and ${personInUse("t.b_person_id")}`,
     // an Edge: type = kind, weight = w · c
     map: (r) => ({
       ...r,
@@ -19676,11 +19865,12 @@ var PULL_TABLES = [
     table: "tie_scores",
     key: "person_id",
     cursor: "updated_at",
+    sources: personInUse("t.person_id"),
     // plan 35 B2: the browser reads a score and its band; the person page asks /scores/explain for the sentences and
     // the contributions behind them, and nothing in the browser reads the features
     omit: ["features", "contributions", "explanation"]
   },
-  { table: "tie_labels", key: "person_id", cursor: "updated_at" },
+  { table: "tie_labels", key: "person_id", cursor: "updated_at", sources: personInUse("t.person_id") },
   {
     table: "chats",
     key: "id",
@@ -19717,7 +19907,45 @@ var PULL_TABLES = [
     cursor: "updated_at",
     map: (r) => ({ ...r, outboundMessageId: r.draftId ?? void 0, carriedOver: r.carriedOver ?? 0 })
   },
-  { table: "notifications", key: "id", cursor: "updated_at" }
+  { table: "notifications", key: "id", cursor: "updated_at" },
+  // plan 43: the student's optional sources, their attached accounts, the "same person" questions, the lookups (status
+  // and result only) and the texts a browser sent (counts, never words); core's mappers give the browser's shapes
+  {
+    table: "source_states",
+    key: "source",
+    cursor: "updated_at",
+    fromRow: (r) => ({ ...sourceStateFromRow(r) })
+  },
+  {
+    table: "social_links",
+    key: "id",
+    cursor: "updated_at",
+    sources: `t.platform <> all($hidden::text[]) and ${personInUse("t.person_id")}`,
+    fromRow: (r) => ({ ...socialLinkFromRow(r) })
+  },
+  {
+    table: "social_match_asks",
+    key: "id",
+    cursor: "updated_at",
+    sources: `t.platform <> all($hidden::text[]) and ${personInUse("t.person_id")}`,
+    fromRow: (r) => ({ ...socialMatchAskFromRow(r) })
+  },
+  {
+    table: "social_lookups",
+    key: "id",
+    cursor: "updated_at",
+    sources: "t.platform <> all($hidden::text[])",
+    omit: ["state", "quoted_usd", "cost_usd", "notified", "target_account_id"],
+    fromRow: (r) => ({ ...socialLookupFromRow(r) })
+  },
+  {
+    table: "text_days",
+    key: "day_key",
+    keySql: "t.person_id::text || ':' || t.day::text",
+    cursor: "updated_at",
+    sources: `'imessage' <> all($hidden::text[]) and ${personInUse("t.person_id")}`,
+    fromRow: (r) => ({ ...textDayFromRow(r) })
+  }
 ];
 var PULL_BY_NAME = new Map(PULL_TABLES.map((t) => [t.table, t]));
 var camel = (s) => s.replace(/_([a-z0-9])/g, (_, c) => c.toUpperCase());
@@ -19729,6 +19957,7 @@ function toCamel(row) {
 function shapeRow(t, row) {
   const r = { ...row };
   for (const c2 of t.omit ?? []) delete r[c2];
+  if (t.fromRow) return t.fromRow(r);
   const c = toCamel(r);
   return t.map ? t.map(c) : c;
 }
@@ -19740,14 +19969,16 @@ var HISTORY_EVENTS = 40;
 async function history(ctx) {
   const personId = uuid(await body(ctx), "personId");
   const userId = ctx.userId;
+  const src = await sourcesFor(ctx.db, userId, ctx.offered);
   const [p] = await ctx.db.sql`
-    select 1 from orbit.people where id = ${personId}::uuid and user_id = ${userId}::uuid and deleted_at is null`;
+    select 1 from orbit.people p where p.id = ${personId}::uuid and p.user_id = ${userId}::uuid and p.deleted_at is null
+       and orbit.person_in_use(p.sources, p.source_account, ${src.hidden}::text[])`;
   if (!p) throw new HttpError(404, "not_found", "no such person");
   const threads = await ctx.db.query(
     `select to_jsonb(t) as row from orbit.threads t
-      where t.user_id = $1::uuid and $2::uuid = any(t.participant_person_ids)
+      where t.user_id = $1::uuid and $2::uuid = any(t.participant_person_ids) and t.provider <> all($4::text[])
       order by coalesce(t.last_at, t.created_at) desc limit $3`,
-    [userId, personId, HISTORY_THREADS]
+    [userId, personId, HISTORY_THREADS, src.excluded.providers]
   );
   const ids = threads.map((t) => String(t.row.id));
   const [messages, events] = await Promise.all([
@@ -20033,14 +20264,14 @@ async function pool(items, n, fn) {
   );
   return out;
 }
-async function peopleByEmail(db2, userId, emails) {
+async function peopleByEmail(db2, userId, emails, hidden = NO_SOURCES.hidden) {
   const out = /* @__PURE__ */ new Map();
   if (!emails.length) return out;
   const rows = await db2.sql`
     select pi.value_norm, p.id, p.display_name, p.photo_url, p.linkedin_url
       from orbit.person_identities pi join orbit.people p on p.id = pi.person_id
      where pi.user_id = ${userId}::uuid and pi.kind = 'email' and pi.value_norm = any(${emails}::text[])
-       and not p.is_self`;
+       and not p.is_self and orbit.person_in_use(p.sources, p.source_account, ${[...hidden]}::text[])`;
   for (const r of rows)
     if (!out.has(r.value_norm))
       out.set(r.value_norm, {
@@ -20093,9 +20324,12 @@ async function readEmail(deps, userId, o, self) {
     }
   }
   const threads = [...byThread.entries()];
-  const known = await peopleByEmail(deps.db, userId, [
-    ...new Set(threads.map(([, t]) => t.row.from.email).filter(Boolean))
-  ]);
+  const known = await peopleByEmail(
+    deps.db,
+    userId,
+    [...new Set(threads.map(([, t]) => t.row.from.email).filter(Boolean))],
+    deps.hidden
+  );
   const account = own ? `?authuser=${encodeURIComponent(own)}` : "";
   const items = threads.map(([threadId, t]) => {
     const p = known.get(t.row.from.email);
@@ -20128,6 +20362,7 @@ async function readLinkedIn(deps, userId, o) {
   if (acct?.status !== "active") return { items: [], status: "not_connected", syncedAt: null };
   const since2 = new Date(deps.now.getTime() - o.days * DAY11);
   const like = o.query ? `%${o.query.replace(/[%_\\]/g, (c) => `\\${c}`)}%` : null;
+  const hidden = [...deps.hidden ?? NO_SOURCES.hidden];
   const rows = await deps.db.sql`
     select * from (
       select m.thread_id, m.sent_at, m.snippet, m.body_text, p.id as person_id, p.display_name, p.photo_url,
@@ -20139,6 +20374,7 @@ async function readLinkedIn(deps, userId, o) {
         from orbit.messages m
         left join orbit.people p on p.id = m.from_person_id
        where m.user_id = ${userId}::uuid and m.provider = 'linkedin' and m.direction = 'in'
+         and (p.id is null or orbit.person_in_use(p.sources, p.source_account, ${hidden}::text[]))
          and m.sent_at >= ${since2}::timestamptz
          and (${like}::text is null or m.body_text ilike ${like} or m.snippet ilike ${like}
               or p.display_name ilike ${like})
@@ -20186,7 +20422,8 @@ async function list4(ctx) {
     const s = ctx.services();
     if (s.tokens) gmail = gmailApi(googleClient({ tokens: s.tokens, db: ctx.db, fetch: s.fetch }), userId);
   }
-  const out = await listInbox({ db: ctx.db, gmail, now: ctx.now() }, userId, b);
+  const { hidden } = await sourcesFor(ctx.db, userId, ctx.offered);
+  const out = await listInbox({ db: ctx.db, gmail, now: ctx.now(), hidden }, userId, b);
   if (g?.status === "needs_reauth") out.email = "needs_reauth";
   return json(200, out);
 }
@@ -20794,7 +21031,8 @@ var pathRoutes = {
 
 // supabase/functions/orbit-api/routes/replies.ts
 async function list6(ctx) {
-  return json(200, { replies: await listReplies(ctx.db, ctx.userId, ctx.now()) });
+  const src = await sourcesFor(ctx.db, ctx.userId, ctx.offered);
+  return json(200, { replies: await listReplies(ctx.db, ctx.userId, ctx.now(), src) });
 }
 async function draft(ctx) {
   const messageId = uuid(await body(ctx), "messageId");
@@ -24436,7 +24674,8 @@ async function runSourcing(s, userId, req) {
   const goal = goalRows[0];
   if (req.goalId && !goal) throw new HttpError(404, "not_found", "no such goal");
   let graph;
-  const g = () => graph ??= loadGraph(db2, userId, now);
+  const src = await sourcesFor(db2, userId, offeredOf(s.env));
+  const g = () => graph ??= loadGraph(db2, userId, now, { sources: src });
   const known = /* @__PURE__ */ new Map();
   const knownOf = async (c) => {
     if (known.has(c.key)) return known.get(c.key);
@@ -24491,6 +24730,7 @@ async function runSourcing(s, userId, req) {
                         where i.person_id = p.id and i.kind in ('linkedin_slug', 'linkedin_member')), '{}') as linkedin_ids
         from orbit.people p
        where p.user_id = ${userId}::uuid and p.deleted_at is null and not p.is_self
+         and orbit.person_in_use(p.sources, p.source_account, ${src.hidden}::text[])
          and (lower(p.linkedin_slug) = any(${slugs}::text[]) or p.linkedin_member_id = any(${members}::text[])
            or lower(p.primary_email) = any(${emails}::text[]) or lower(p.display_name) = any(${names}::text[])
            or exists (select 1 from orbit.person_identities i where i.person_id = p.id
@@ -24872,679 +25112,574 @@ var sourceRoutes = {
   "/source/email": { method: "POST", auth: true, run: email }
 };
 
-// supabase/functions/orbit-api/routes/voice.ts
-async function status3(ctx) {
-  if (ctx.req.method === "POST") await ctx.req.body?.cancel();
-  return json(200, await voiceStatus(ctx.db, ctx.userId, ctx.now()));
+// supabase/functions/_shared/sources/switch.ts
+var draftNote = (source, state) => `source_${state}:${source}`;
+function draftNoteText(source, state) {
+  const name = SOURCES[source].name;
+  return state === "off" ? `${name} is off, so this was not sent. Pick another way to send it.` : `${name} was removed, so this was not sent. Copy it and send it another way.`;
 }
-async function notes(ctx) {
+async function holdDrafts(db2, userId, source, state) {
+  const rows = await db2.sql`
+    update orbit.drafts set status = 'draft', send_at = null, error = ${draftNote(source, state)},
+           cancel_reason = null
+     where user_id = ${userId}::uuid and channel = ${source} and status in ('approved', 'scheduled')
+    returning id`;
+  for (const r of rows)
+    await db2.sql`
+      insert into orbit.audit_log (user_id, actor, action, target_table, target_id, details)
+      values (${userId}::uuid, 'system', ${state === "off" ? "draft.paused" : "draft.unsent"}, 'drafts', ${r.id},
+              ${{ source, note: draftNoteText(source, state) }}::jsonb)`;
+  return rows.map((r) => r.id);
+}
+async function removeSourceRows(db2, userId, source) {
+  const info = SOURCES[source];
+  const provider = info.messageProvider ?? null;
+  const tieKinds = [...info.tieKinds];
+  const identityKind2 = info.identityKind ?? null;
+  const platform = provider;
+  const count2 = async (q) => (await q).length;
+  if (provider)
+    await db2.sql`
+      update orbit.stage_events se set evidence = coalesce(se.evidence, '{}'::jsonb)
+                                                  || jsonb_build_object('sourceRemoved', ${source}::text)
+       where se.user_id = ${userId}::uuid
+         and (se.evidence ->> 'provider' = ${provider} or se.evidence ->> 'channel' = ${provider}
+              or exists (select 1 from orbit.messages m
+                          where m.user_id = se.user_id and m.provider = ${provider}
+                            and m.id::text = se.evidence ->> 'messageId'))`;
+  const messages = provider ? await count2(
+    db2.sql`delete from orbit.messages where user_id = ${userId}::uuid and provider = ${provider} returning id`
+  ) : 0;
+  const threads = provider ? await count2(
+    db2.sql`delete from orbit.threads where user_id = ${userId}::uuid and provider = ${provider} returning id`
+  ) : 0;
+  const ties = tieKinds.length ? await count2(
+    db2.sql`delete from orbit.ties where user_id = ${userId}::uuid and kind = any(${tieKinds}::text[]) returning id`
+  ) : 0;
+  const identities = await count2(db2.sql`
+    delete from orbit.person_identities i
+     where i.user_id = ${userId}::uuid
+       and (i.kind = ${identityKind2 ?? ""}
+            or (${source} = 'imessage' and i.source = 'imessage')
+            or (i.social_account_id is not null and ${platform ?? ""} <> ''
+                and exists (select 1 from orbit.social_links l
+                             where l.user_id = i.user_id and l.platform = ${platform ?? ""}
+                               and l.account_id = i.social_account_id)))
+    returning i.id`);
+  const links = platform ? await count2(
+    db2.sql`delete from orbit.social_links where user_id = ${userId}::uuid and platform = ${platform} returning id`
+  ) : 0;
+  const asks2 = platform ? await count2(
+    db2.sql`delete from orbit.social_match_asks where user_id = ${userId}::uuid and platform = ${platform} returning id`
+  ) : 0;
+  const lookups = platform ? await count2(
+    db2.sql`delete from orbit.social_lookups where user_id = ${userId}::uuid and platform = ${platform} returning id`
+  ) : 0;
+  const follows = platform ? await count2(db2.sql`
+        delete from orbit.social_follows where owner_user_id = ${userId}::uuid and platform = ${platform}
+        returning id`) : 0;
+  const listReads = platform ? await count2(db2.sql`
+        delete from orbit.social_list_reads where owner_user_id = ${userId}::uuid and platform = ${platform}
+        returning id`) : 0;
+  const textDays = source === "imessage" ? await count2(db2.sql`delete from orbit.text_days where user_id = ${userId}::uuid returning person_id`) : 0;
+  const only = await db2.sql`
+    select p.id,
+           (exists (select 1 from orbit.chats c where c.user_id = p.user_id and c.person_id = p.id)
+            or exists (select 1 from orbit.notes n where n.user_id = p.user_id and p.id = any(n.person_ids))) as kept
+      from orbit.people p
+     where p.user_id = ${userId}::uuid and not p.is_self
+       and ((cardinality(p.sources) > 0 and p.sources <@ array[${source}]::text[])
+            or (${platform ?? ""} <> '' and p.source_account like ${`${platform ?? ""}:%`}))`;
+  const keep = only.filter((p) => p.kept).map((p) => p.id);
+  const drop = only.filter((p) => !p.kept).map((p) => p.id);
+  if (keep.length)
+    await db2.sql`
+      update orbit.people set source_account = null, listed = true,
+             sources = case when cardinality(array_remove(sources, ${source}::text)) = 0 then array['manual']::text[]
+                            else array_remove(sources, ${source}::text) end
+       where id = any(${keep}::uuid[])`;
+  if (drop.length) {
+    await db2.sql`delete from orbit.people where id = any(${drop}::uuid[])`;
+    for (const id of drop)
+      await db2.sql`
+        insert into orbit.audit_log (user_id, actor, action, target_table, target_id, details)
+        values (${userId}::uuid, 'system', 'sync.delete', 'people', ${id}, ${{ reason: "source_removed", source }}::jsonb)`;
+  }
+  await db2.sql`
+    update orbit.people set sources = array_remove(sources, ${source}::text)
+     where user_id = ${userId}::uuid and ${source} = any(sources) and cardinality(sources) > 1`;
+  if (platform)
+    await db2.sql`
+      update orbit.people set source_account = null
+       where user_id = ${userId}::uuid and source_account like ${`${platform}:%`}`;
+  const drafts = (await holdDrafts(db2, userId, source, "removed")).length;
+  if (platform)
+    await db2.sql`
+      update orbit.integration_accounts set status = 'revoked', social_account_id = null
+       where user_id = ${userId}::uuid and provider = ${platform}`;
+  return {
+    messages,
+    threads,
+    ties,
+    identities,
+    links,
+    follows,
+    listReads,
+    lookups,
+    asks: asks2,
+    textDays,
+    peopleDeleted: drop.length,
+    peopleKept: keep.length,
+    drafts
+  };
+}
+var switchJobKey = (userId, source, now) => `sources.switch:${userId}:${source}:${now.getTime()}:${crypto.randomUUID()}`;
+async function switchSource(db2, queue, userId, source, next, now) {
+  const result = await db2.begin(async (tx) => {
+    const [cur] = await tx.sql`
+      select state, share_follows from orbit.source_states
+       where user_id = ${userId}::uuid and source = ${source} for update`;
+    const previous = cur?.state ?? "not_connected";
+    const share = next.state === "removed" ? false : next.shareFollows ?? cur?.share_follows ?? false;
+    await tx.sql`
+      insert into orbit.source_states (user_id, source, state, off_since, share_follows)
+      values (${userId}::uuid, ${source}, ${next.state},
+              ${next.state === "off" ? now.toISOString() : null}::timestamptz, ${share})
+      on conflict (user_id, source) do update set
+        state = excluded.state,
+        off_since = case when excluded.state = 'off'
+                         then coalesce(orbit.source_states.off_since, excluded.off_since) else null end,
+        share_follows = excluded.share_follows`;
+    let paused = 0;
+    let removed;
+    if (next.state === "off") paused = (await holdDrafts(tx, userId, source, "off")).length;
+    if (next.state === "removed") removed = await removeSourceRows(tx, userId, source);
+    await tx.sql`
+      insert into orbit.audit_log (user_id, actor, action, target_table, target_id, details)
+      values (${userId}::uuid, 'user', ${`source.${next.state}`}, 'source_states', ${source},
+              ${{ previous, state: next.state, shareFollows: share, ...removed ? { removed } : {} }}::jsonb)`;
+    return { state: next.state, previous, paused, ...removed ? { removed } : {} };
+  });
+  const runKey = switchJobKey(userId, source, now);
+  await db2.sql`
+    insert into orbit.user_marks (user_id, switch_run) values (${userId}::uuid, ${runKey})
+    on conflict (user_id) do update set switch_run = excluded.switch_run`;
+  await queue.enqueue({
+    kind: "sources.switch",
+    userId,
+    payload: { source, state: next.state, runKey },
+    dedupeKey: runKey
+  });
+  return result;
+}
+
+// supabase/functions/orbit-api/routes/sources.ts
+async function list8(ctx) {
+  const rows = ctx.offered.length ? await ctx.db.sql`
+        select source, state, off_since, share_follows from orbit.source_states
+         where user_id = ${ctx.userId}::uuid and source = any(${ctx.offered}::text[])` : [];
+  const states = {};
+  for (const s of ctx.offered) {
+    const r = rows.find((x) => x.source === s);
+    states[s] = {
+      state: r?.state ?? "not_connected",
+      ...r?.off_since ? { offSince: iso(r.off_since) } : {},
+      shareFollows: !!r?.share_follows
+    };
+  }
+  const out = { offered: [...ctx.offered], states };
+  return json(200, out);
+}
+var STATES = ["on", "off", "removed"];
+async function put(ctx, raw) {
+  const source = raw.toLowerCase();
+  if (!OPTIONAL_SOURCES.includes(source) || !ctx.offered.includes(source))
+    throw new HttpError(404, "not_found", "no such source");
   const b = await body(ctx);
-  if (typeof b.id !== "string" || !b.id.trim() || b.id.length > 100) throw badRequest("id names a note");
-  if (b.action !== "keep" && b.action !== "forget") throw badRequest("action is keep or forget");
-  const note2 = await decideNote(ctx.db, ctx.userId, b.id, b.action, ctx.now());
-  if (!note2) throw new HttpError(404, "not_found", "no such note");
-  await ctx.db.sql`
-    insert into orbit.audit_log (user_id, actor, action, target_table, target_id, details)
-    values (${ctx.userId}::uuid, 'user', ${`voice.note.${b.action}`}, 'users', ${ctx.userId}, ${{ note: b.id }}::jsonb)`;
-  const out = { note: note2 };
-  return json(200, out);
-}
-async function relearn(ctx) {
-  await ctx.req.body?.cancel();
-  await queueRelearn(ctx.services().queue, ctx.userId, ctx.now());
-  const out = { queued: true };
-  return json(200, out);
-}
-var voiceRoutes = {
-  "/voice": { method: "GET|POST", auth: true, run: status3 },
-  "/voice/notes": { method: "POST", auth: true, run: notes },
-  "/voice/relearn": { method: "POST", auth: true, run: relearn }
-};
-
-// supabase/functions/_shared/social/x/adapter.ts
-var X_USER_FIELDS = [
-  "username",
-  "name",
-  "description",
-  "entities",
-  "location",
-  "verified",
-  "protected",
-  "public_metrics",
-  "profile_image_url",
-  "url",
-  "connection_status",
-  "receives_your_dm"
-].join(",");
-var X_DM_FIELDS = "id,text,event_type,created_at,dm_conversation_id,sender_id,participant_ids";
-var X_LIST_PAGE = 1e3;
-var X_DM_PAGE = 100;
-var XApiError = class extends Error {
-  constructor(status4, type, detail) {
-    super(`x ${status4} ${type}`);
-    this.status = status4;
-    this.type = type;
-    this.detail = detail;
-  }
-  /** the short name at the end of X's problem type URL ("dm-recipient-not-accepting") */
-  get problem() {
-    return this.type.split("/").pop() ?? this.type;
-  }
-};
-var XAccountGone = class extends Error {
-  constructor(ref, why) {
-    super(`x account ${why}`);
-    this.ref = ref;
-    this.why = why;
-  }
-};
-var XAccountProtected = class extends Error {
-  constructor(accountId) {
-    super("x account protected");
-    this.accountId = accountId;
-  }
-};
-var XRateLimited = class extends Error {
-  constructor(resetAt) {
-    super("x rate limited");
-    this.resetAt = resetAt;
-  }
-};
-function mapXUser(u2) {
-  const links = /* @__PURE__ */ new Set();
-  for (const e of [...u2.entities?.url?.urls ?? [], ...u2.entities?.description?.urls ?? []]) {
-    const l = e.expanded_url ?? e.display_url ?? e.url;
-    if (l) links.add(l);
-  }
-  if (!u2.entities?.url?.urls?.length && u2.url) links.add(u2.url);
-  const a = { platform: "x", id: u2.id, username: u2.username };
-  if (u2.name) a.name = u2.name;
-  if (u2.description) a.bio = u2.description;
-  if (links.size) a.links = [...links];
-  if (typeof u2.public_metrics?.followers_count === "number") a.followers = u2.public_metrics.followers_count;
-  if (typeof u2.public_metrics?.following_count === "number") a.following = u2.public_metrics.following_count;
-  if (typeof u2.verified === "boolean") a.verified = u2.verified;
-  if (typeof u2.protected === "boolean") a.isPrivate = u2.protected;
-  if (u2.profile_image_url) a.defaultPicture = /default_profile_images/.test(u2.profile_image_url);
-  return a;
-}
-function xRelation(u2) {
-  const s = new Set(u2.connection_status ?? []);
-  return { following: s.has("following"), followedBy: s.has("followed_by") };
-}
-function oneToOneIds(conversationId) {
-  const m = conversationId.match(/^(\d+)-(\d+)$/);
-  return m ? [m[1], m[2]] : void 0;
-}
-function groupDmEvents(events, meId) {
-  const byChat = /* @__PURE__ */ new Map();
-  const messages = [];
-  for (const e of events) {
-    const chatId = e.dm_conversation_id;
-    if (!chatId) continue;
-    let c = byChat.get(chatId);
-    if (!c) {
-      c = { people: new Set(oneToOneIds(chatId) ?? []) };
-      byChat.set(chatId, c);
-    }
-    if (e.sender_id) c.people.add(e.sender_id);
-    for (const p of e.participant_ids ?? []) c.people.add(p);
-    if (e.created_at && (!c.lastAt || e.created_at > c.lastAt)) c.lastAt = e.created_at;
-    if (e.event_type !== "MessageCreate") continue;
-    const text3 = e.text ?? "";
-    messages.push({
-      messageId: e.id,
-      chatId,
-      at: e.created_at ?? "",
-      fromStudent: !!meId && e.sender_id === meId,
-      senderAccountId: e.sender_id ?? "",
-      text: text3,
-      hasWords: text3.trim().length > 0
-    });
-  }
-  const chats = [...byChat].map(([chatId, c]) => {
-    if (meId) c.people.add(meId);
-    const others = [...c.people].filter((p) => p !== meId).map((accountId) => ({ accountId }));
-    return { chatId, participants: c.people.size, others, ...c.lastAt ? { lastAt: c.lastAt } : {} };
-  });
-  return { chats, messages };
-}
-function createXAdapter(o) {
-  const base = (o.base ?? X_API).replace(/\/+$/, "");
-  const doFetch = o.fetch ?? fetch;
-  async function call(method, path, query2, body2) {
-    const q = new URLSearchParams();
-    for (const [k, v] of Object.entries(query2 ?? {})) if (v !== void 0 && v !== "") q.set(k, String(v));
-    const url = `${base}${path}${q.size ? `?${q}` : ""}`;
-    const send = (token) => doFetch(url, {
-      method,
-      headers: {
-        authorization: `Bearer ${token}`,
-        accept: "application/json",
-        ...body2 !== void 0 ? { "content-type": "application/json" } : {}
-      },
-      body: body2 !== void 0 ? JSON.stringify(body2) : void 0,
-      signal: AbortSignal.timeout(2e4)
-    });
-    let res = await send(await o.tokens.accessToken());
-    if (res.status === 401) {
-      await res.body?.cancel();
-      res = await send(await o.tokens.refreshed());
-      if (res.status === 401) {
-        await res.body?.cancel();
-        throw new SocialSignInNeeded("x");
-      }
-    }
-    let parsed = {};
-    try {
-      parsed = await res.json();
-    } catch {
-      parsed = {};
-    }
-    if (res.status === 429) {
-      const reset = Number(res.headers.get("x-rate-limit-reset"));
-      throw new XRateLimited(Number.isFinite(reset) && reset > 0 ? new Date(reset * 1e3) : void 0);
-    }
-    if (!res.ok) {
-      const errs = parsed.errors;
-      const type = String(parsed.type ?? errs?.[0]?.type ?? `http_${res.status}`);
-      throw new XApiError(res.status, type, String(parsed.detail ?? errs?.[0]?.detail ?? ""));
-    }
-    return { status: res.status, body: parsed };
-  }
-  async function priced(kind, units, run) {
-    const r = await o.budget.reserve(kind, units);
-    if (!r) throw new SocialBudgetSpent(kind, await o.budget.retryAt?.(kind) ?? void 0);
-    let used = 0;
-    try {
-      const out = await run();
-      used = Math.min(units, out.used);
-      return out.value;
-    } finally {
-      await r.settle(used);
-    }
-  }
-  function gone(ref, b) {
-    const err = b.errors?.[0];
-    const text3 = `${err?.title ?? ""} ${err?.detail ?? ""}`.toLowerCase();
-    return new XAccountGone(ref, text3.includes("suspend") ? "suspended" : "not_found");
-  }
-  function profileRead(u2) {
-    const out = { account: mapXUser(u2), relation: xRelation(u2) };
-    if (typeof u2.receives_your_dm === "boolean") out.receivesYourDm = u2.receives_your_dm;
-    if (u2.location) out.location = u2.location;
-    return out;
-  }
-  const userPath = (ref) => {
-    const r = ref.trim().replace(/^@/, "");
-    return /^\d+$/.test(r) ? `/2/users/${r}` : `/2/users/by/username/${encodeURIComponent(r)}`;
-  };
-  async function dmPage(path, maxResults, cursor) {
-    const n = Math.max(1, Math.min(X_DM_PAGE, Math.floor(maxResults)));
-    return priced("messages", n, async () => {
-      const { body: body2 } = await call("GET", path, {
-        max_results: n,
-        pagination_token: cursor,
-        event_types: "MessageCreate,ParticipantsJoin,ParticipantsLeave",
-        "dm_event.fields": X_DM_FIELDS
-      });
-      const events = body2.data ?? [];
-      const meta2 = body2.meta ?? {};
-      const grouped = groupDmEvents(events, o.meId);
-      return {
-        value: { events, ...grouped, ...meta2.next_token ? { cursor: meta2.next_token } : {} },
-        used: meta2.result_count ?? events.length
-      };
-    });
-  }
-  return {
-    platform: "x",
-    pageSize: () => X_LIST_PAGE,
-    me: () => priced("profile", 1, async () => {
-      const { body: body2 } = await call("GET", "/2/users/me", { "user.fields": X_USER_FIELDS });
-      const u2 = body2.data;
-      if (!u2?.id) throw gone("me", body2);
-      return { value: profileRead(u2), used: 1 };
-    }),
-    profile: (ref) => priced("profile", 1, async () => {
-      const { body: body2 } = await call("GET", userPath(ref), { "user.fields": X_USER_FIELDS });
-      const data = body2.data;
-      if (!data?.id) throw gone(ref, body2);
-      return { value: profileRead(data), used: 1 };
-    }),
-    listPage: (accountId, list8, cursor, maxResults = X_LIST_PAGE) => {
-      const n = Math.max(1, Math.min(X_LIST_PAGE, Math.floor(maxResults)));
-      return priced("list", n, async () => {
-        const { body: body2 } = await call("GET", `/2/users/${encodeURIComponent(accountId)}/${list8}`, {
-          max_results: n,
-          pagination_token: cursor,
-          "user.fields": X_USER_FIELDS
-        });
-        const users = body2.data;
-        if (!users && body2.errors?.length) {
-          const err = body2.errors[0];
-          const text3 = `${err.title ?? ""} ${err.detail ?? ""} ${err.type ?? ""}`.toLowerCase();
-          if (text3.includes("suspend")) throw new XAccountGone(accountId, "suspended");
-          if (text3.includes("not-found") || text3.includes("not found"))
-            throw new XAccountGone(accountId, "not_found");
-          throw new XAccountProtected(accountId);
-        }
-        const meta2 = body2.meta ?? {};
-        const page2 = {
-          ids: (users ?? []).map((u2) => u2.id),
-          accounts: (users ?? []).map(mapXUser),
-          relations: Object.fromEntries((users ?? []).map((u2) => [u2.id, xRelation(u2)]))
-        };
-        if (meta2.next_token) page2.cursor = meta2.next_token;
-        return { value: page2, used: meta2.result_count ?? page2.ids.length };
-      });
-    },
-    dmEvents: (opts = {}) => dmPage("/2/dm_events", opts.maxResults ?? X_DM_PAGE, opts.cursor),
-    async chats(cursor) {
-      const page2 = await dmPage("/2/dm_events", X_DM_PAGE, cursor);
-      return { items: page2.chats, ...page2.cursor ? { cursor: page2.cursor } : {} };
-    },
-    async messages(chatId, cursor) {
-      const pair = oneToOneIds(chatId);
-      const other = pair && o.meId ? pair.find((p) => p !== o.meId) : void 0;
-      const path = other ? `/2/dm_conversations/with/${other}/dm_events` : `/2/dm_conversations/${encodeURIComponent(chatId)}/dm_events`;
-      const page2 = await dmPage(path, X_DM_PAGE, cursor);
-      return {
-        items: page2.messages.filter((m) => m.chatId === chatId),
-        ...page2.cursor ? { cursor: page2.cursor } : {}
-      };
-    },
-    send: (to, text3) => priced("send", 1, async () => {
-      const path = to.accountId ? `/2/dm_conversations/with/${encodeURIComponent(to.accountId)}/messages` : to.chatId ? `/2/dm_conversations/${encodeURIComponent(to.chatId)}/messages` : void 0;
-      if (!path) throw new Error("send needs a chat or an account");
-      const { body: body2 } = await call("POST", path, void 0, { text: text3 });
-      const d = body2.data;
-      return {
-        value: { messageId: d?.dm_event_id ?? "", chatId: d?.dm_conversation_id ?? to.chatId ?? "" },
-        used: 1
-      };
-    })
-  };
-}
-
-// supabase/functions/_shared/social/x/oauth.ts
-var xAccessName = (userId) => `x_access:${userId}`;
-var xRefreshName = (userId) => `x_refresh:${userId}`;
-var XTokenError = class extends Error {
-  constructor(status4, code) {
-    super(`x token ${status4} ${code}`);
-    this.status = status4;
-    this.code = code;
-  }
-};
-function xAuthUrl(cfg, p) {
-  const q = new URLSearchParams({
-    response_type: "code",
-    client_id: cfg.clientId,
-    redirect_uri: cfg.redirectUri,
-    scope: X_SCOPES.join(" "),
-    state: p.state,
-    code_challenge: p.challenge,
-    code_challenge_method: "S256"
-  });
-  return `${X_AUTHORIZE_URL}?${q}`;
-}
-var basic = (cfg) => `Basic ${btoa(`${cfg.clientId}:${cfg.clientSecret}`)}`;
-async function tokenCall2(cfg, form) {
-  const res = await (cfg.fetch ?? fetch)(X_TOKEN_URL, {
-    method: "POST",
-    headers: {
-      "content-type": "application/x-www-form-urlencoded",
-      accept: "application/json",
-      authorization: basic(cfg)
-    },
-    body: new URLSearchParams({ ...form, client_id: cfg.clientId }),
-    signal: AbortSignal.timeout(15e3)
-  });
-  let body2 = {};
-  try {
-    body2 = await res.json();
-  } catch {
-    body2 = {};
-  }
-  if (!res.ok) throw new XTokenError(res.status, String(body2.error ?? "token_error"));
-  if (typeof body2.access_token !== "string") throw new XTokenError(502, "no_access_token");
-  return body2;
-}
-function xExchangeCode(cfg, code, verifier) {
-  return tokenCall2(cfg, {
-    grant_type: "authorization_code",
-    code,
-    code_verifier: verifier,
-    redirect_uri: cfg.redirectUri
-  });
-}
-async function xRevoke(cfg, token, hint) {
-  try {
-    const res = await (cfg.fetch ?? fetch)(X_REVOKE_URL, {
-      method: "POST",
-      headers: { "content-type": "application/x-www-form-urlencoded", authorization: basic(cfg) },
-      body: new URLSearchParams({ token, token_type_hint: hint, client_id: cfg.clientId }),
-      signal: AbortSignal.timeout(15e3)
-    });
-    await res.body?.cancel();
-    return res.ok;
-  } catch {
-    return false;
-  }
-}
-async function loadXState(db2, userId) {
-  const [a] = await db2.sql`
-    select status, social_account_id, token_secret_id, sync_state->'x' as x
-      from orbit.integration_accounts where user_id = ${userId}::uuid and provider = 'x'`;
-  if (!a) return void 0;
-  return {
-    status: a.status,
-    socialAccountId: a.social_account_id,
-    refreshSecretId: a.token_secret_id,
-    state: a.x ?? {}
-  };
-}
-async function storeXTokens(vault, userId, t, now) {
-  const accessSecretId = await vault.put(xAccessName(userId), t.access_token);
-  const refreshSecretId = t.refresh_token ? await vault.put(xRefreshName(userId), t.refresh_token) : void 0;
-  const accessExpiresAt = new Date(now.getTime() + Math.max(60, t.expires_in ?? 7200) * 1e3).toISOString();
-  return { accessSecretId, refreshSecretId, accessExpiresAt };
-}
-
-// supabase/functions/_shared/social/x/spend.ts
-function xPrice(kind, units) {
-  if (kind === "send") return roundUsd(units * X_SEND_USD);
-  return roundUsd(units * X_READ_USD);
-}
-var monthStart = (now) => new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1));
-async function xSpendThisMonth(db2, userId, now = /* @__PURE__ */ new Date()) {
-  const [r] = await db2.sql`
-    select coalesce(sum(cost_usd) filter (where user_id = ${userId}::uuid), 0)::text as student,
-           coalesce(sum(cost_usd), 0)::text as orbit
-      from orbit.usage_ledger
-     where provider = 'x' and created_at >= ${monthStart(now)}::timestamptz`;
-  return { studentUsd: roundUsd(Number(r?.student ?? 0)), orbitUsd: roundUsd(Number(r?.orbit ?? 0)) };
-}
-async function xOrbitLimitReached(db2, cfg, now = /* @__PURE__ */ new Date()) {
-  if (cfg.orbitMonthlyUsd <= 0) return true;
-  const [r] = await db2.sql`
-    select coalesce(sum(cost_usd), 0)::text as orbit from orbit.usage_ledger
-     where provider = 'x' and created_at >= ${monthStart(now)}::timestamptz`;
-  return Number(r?.orbit ?? 0) + X_READ_USD > cfg.orbitMonthlyUsd + 1e-9;
-}
-var SPEND_LOCK = "orbit:x:spend";
-function xSpend(db2, o) {
-  const now = o.now ?? (() => /* @__PURE__ */ new Date());
-  const caller = o.caller ?? "x";
-  let charged = 0;
-  const count = (kind, made, refused, cost) => db2.sql`select orbit.social_calls_add('x', ${o.userId}, ${kind}, ${caller}, ${made}::int, 0, ${refused}::int,
-                                         ${cost}::numeric)`;
-  async function reserve(kind, units) {
-    const n = Math.max(0, Math.floor(units));
-    const cost = xPrice(kind, n);
-    if (kind === "search") {
-      await count(kind, 0, 1, 0);
-      return void 0;
-    }
-    if (o.ceilingUsd !== void 0 && charged + cost > o.ceilingUsd + 1e-9) {
-      await count(kind, 0, 1, 0);
-      return void 0;
-    }
-    const at = now();
-    const id = await db2.begin(async (tx) => {
-      await tx.sql`select pg_advisory_xact_lock(hashtext(${SPEND_LOCK}))`;
-      const [row] = await tx.sql`
-        insert into orbit.usage_ledger (user_id, provider, operation, units, cost_usd, created_at)
-        values (${o.userId}::uuid, 'x', ${kind}, ${n}::numeric, ${cost}::numeric, ${at}::timestamptz)
-        returning id::text as id`;
-      const [s] = await tx.sql`
-        select coalesce(sum(cost_usd) filter (where user_id = ${o.userId}::uuid), 0)::text as student,
-               coalesce(sum(cost_usd), 0)::text as orbit
-          from orbit.usage_ledger
-         where provider = 'x' and created_at >= ${monthStart(at)}::timestamptz`;
-      const over = Number(s.student) > o.limits.studentMonthlyUsd + 1e-9 || Number(s.orbit) > o.limits.orbitMonthlyUsd + 1e-9 || // a limit of 0 is off, even for a call priced at nothing
-      o.limits.orbitMonthlyUsd <= 0 || o.limits.studentMonthlyUsd <= 0;
-      if (over) {
-        await tx.sql`delete from orbit.usage_ledger where id = ${row.id}::bigint`;
-        return void 0;
-      }
-      return row.id;
-    });
-    if (!id) {
-      await count(kind, 0, 1, 0);
-      return void 0;
-    }
-    charged = roundUsd(charged + cost);
-    let settled = false;
-    return {
-      async settle(unitsUsed) {
-        if (settled) return;
-        settled = true;
-        const used = Math.max(0, Math.min(n, Math.floor(unitsUsed)));
-        const actual = xPrice(kind, used);
-        charged = roundUsd(charged - cost + actual);
-        await db2.sql`
-          update orbit.usage_ledger set units = ${used}::numeric, cost_usd = ${actual}::numeric
-           where id = ${id}::bigint`;
-        await count(kind, 1, 0, actual);
-      }
-    };
-  }
-  return {
-    reserve,
-    async spend(kind, opts = {}) {
-      const units = opts.units ?? 1;
-      const r = await reserve(kind, units);
-      if (!r) return false;
-      await r.settle(units);
-      return true;
-    },
-    retryAt: async () => void 0,
-    chargedUsd: () => charged
-  };
-}
-
-// supabase/functions/orbit-api/routes/x.ts
-var STATE_TTL_MS3 = 10 * 6e4;
-function notSetUp(missing) {
-  return json(
-    503,
-    { error: { code: "unconfigured", message: X_NOT_SET_UP, missing } },
-    { "x-orbit-connector": "unconfigured" }
+  if (typeof b.state !== "string" || !STATES.includes(b.state))
+    throw badRequest("state is on, off or removed");
+  if (b.shareFollows !== void 0 && typeof b.shareFollows !== "boolean")
+    throw badRequest("shareFollows is true or false");
+  if (source === "x" && b.shareFollows === true)
+    throw badRequest("who you follow on X cannot be shared with friends: X's rules do not allow it");
+  if (source === "imessage" && b.shareFollows === true)
+    throw badRequest("texts have no follow list to share");
+  const r = await switchSource(
+    ctx.db,
+    sqlQueue(ctx.db),
+    ctx.userId,
+    source,
+    { state: b.state, shareFollows: b.shareFollows },
+    ctx.now()
   );
+  return json(200, { ok: true, state: r.state });
 }
-function setup(ctx) {
-  const cfg = ctx.env.x;
-  const missing = xMissing(cfg);
-  if (missing.length || !cfg) return notSetUp(missing);
-  return {
-    cfg,
-    oauth: {
-      clientId: cfg.clientId,
-      clientSecret: cfg.clientSecret,
-      redirectUri: cfg.redirectUri ?? `${functionsBase(ctx)}/orbit-api/x/callback`,
-      fetch: ctx.fetch
-    }
-  };
-}
-var settings2 = (ctx, outcome) => redirect(`${ctx.env.appUrl}/settings?x=${outcome}`);
-async function xConnectStart(ctx) {
-  const s = setup(ctx);
-  if (s instanceof Response) return s;
-  const body2 = await readJson(ctx.req, { optional: true });
-  if (body2.consent !== true) throw badRequest("consent is required before signing in with X");
-  const userId = ctx.userId;
-  const now = ctx.now();
-  const consent = { version: X_CONSENT_VERSION, at: now.toISOString() };
-  const state = randomToken(32);
-  const { verifier, challenge } = await pkcePair();
-  await ctx.db.sql`
-    insert into orbit.oauth_states (state, code_verifier, redirect_to, user_id, scopes, created_at, expires_at)
-    values (${state}, ${verifier}, ${`${ctx.env.appUrl}/settings`}, ${userId}::uuid, ${X_SCOPES}::text[],
-            ${now}::timestamptz, ${new Date(now.getTime() + STATE_TTL_MS3)}::timestamptz)`;
-  await ctx.db.sql`
-    insert into orbit.audit_log (user_id, actor, action, target_table, details)
-    values (${userId}::uuid, 'user', 'x.consent', 'integration_accounts', ${consent}::jsonb)`;
-  await ctx.db.sql`
-    insert into orbit.integration_accounts (user_id, provider, status, sync_state)
-    values (${userId}::uuid, 'x', 'connecting', ${{ x: { consent } }}::jsonb)
-    on conflict (user_id, provider) do update set
-      status = case when orbit.integration_accounts.status = 'active' then 'active' else 'connecting' end,
-      sync_state = jsonb_set(coalesce(orbit.integration_accounts.sync_state, '{}'::jsonb), '{x}',
-                             coalesce(orbit.integration_accounts.sync_state->'x', '{}'::jsonb)
-                               || ${{ consent }}::jsonb)`;
-  return json(200, { url: xAuthUrl(s.oauth, { state, challenge }) });
-}
-async function xCallback(ctx) {
-  const s = setup(ctx);
-  if (s instanceof Response) return settings2(ctx, "failed");
-  const q = ctx.url.searchParams;
-  const state = q.get("state");
-  if (!state) return settings2(ctx, "failed");
-  const [st] = await ctx.db.sql`
-    delete from orbit.oauth_states where state = ${state}
-    returning code_verifier, user_id, scopes, expires_at`;
-  if (!st?.user_id || !st.scopes.includes("dm.read") || new Date(st.expires_at).getTime() < ctx.now().getTime())
-    return settings2(ctx, "failed");
-  const userId = st.user_id;
-  const fail = async (why) => {
-    await ctx.db.sql`
-      update orbit.integration_accounts set status = case when status = 'active' then status else 'error' end,
-             last_error = ${why}
-       where user_id = ${userId}::uuid and provider = 'x'`;
-    return settings2(ctx, "failed");
-  };
-  if (q.get("error")) return fail("x_denied");
-  const code = q.get("code");
-  if (!code) return fail("no_code");
-  const vault = sqlVault(ctx.db);
-  let tokens3;
-  try {
-    tokens3 = await xExchangeCode(s.oauth, code, st.code_verifier);
-  } catch {
-    return fail("token_exchange");
-  }
-  let me2;
-  try {
-    const adapter = createXAdapter({
-      tokens: { accessToken: async () => tokens3.access_token, refreshed: async () => tokens3.access_token },
-      budget: xSpend(ctx.db, { userId, limits: s.cfg, caller: "connect", now: ctx.now }),
-      fetch: ctx.fetch
-    });
-    const read2 = await adapter.me();
-    me2 = { id: read2.account.id, username: read2.account.username };
-  } catch (e) {
-    if (tokens3.refresh_token) await xRevoke(s.oauth, tokens3.refresh_token, "refresh_token");
-    return fail(e instanceof SocialBudgetSpent ? "x_limit" : "x_me");
-  }
-  const stored = await storeXTokens(vault, userId, tokens3, ctx.now());
-  const scopes = (tokens3.scope ?? X_SCOPES.join(" ")).split(/\s+/).filter(Boolean);
-  const before = await loadXState(ctx.db, userId);
-  await ctx.db.begin(async (tx) => {
-    if (before?.socialAccountId && before.socialAccountId !== me2.id) {
-      await tx.sql`delete from orbit.social_follows where platform = 'x' and owner_user_id = ${userId}::uuid`;
-      await tx.sql`delete from orbit.social_list_reads where platform = 'x' and owner_user_id = ${userId}::uuid`;
-      await tx.sql`
-        insert into orbit.audit_log (user_id, actor, action, target_table, details)
-        values (${userId}::uuid, 'user', 'x.account_changed', 'integration_accounts',
-                ${{ from: before.socialAccountId, to: me2.id }}::jsonb)`;
-    }
-    const x = {
-      username: me2.username,
-      accessSecretId: stored.accessSecretId,
-      accessExpiresAt: stored.accessExpiresAt,
-      ...before?.socialAccountId && before.socialAccountId !== me2.id ? { dmCursor: null, dmReadAt: null } : {}
-    };
-    await tx.sql`
-      insert into orbit.integration_accounts (user_id, provider, status, scopes, social_account_id, token_secret_id,
-                                              sync_state, last_error)
-      values (${userId}::uuid, 'x', 'active', ${scopes}::text[], ${me2.id}, ${stored.refreshSecretId ?? null}::uuid,
-              ${{ x }}::jsonb, null)
-      on conflict (user_id, provider) do update set
-        status = case when coalesce(excluded.token_secret_id, orbit.integration_accounts.token_secret_id) is null
-                      then 'needs_reauth' else 'active' end,
-        scopes = excluded.scopes,
-        social_account_id = excluded.social_account_id,
-        token_secret_id = coalesce(excluded.token_secret_id, orbit.integration_accounts.token_secret_id),
-        sync_state = jsonb_set(coalesce(orbit.integration_accounts.sync_state, '{}'::jsonb), '{x}',
-                               jsonb_strip_nulls(coalesce(orbit.integration_accounts.sync_state->'x', '{}'::jsonb)
-                                                 || ${x}::jsonb)),
-        last_error = null`;
-    await tx.sql`
-      insert into orbit.source_states (user_id, source, state) values (${userId}::uuid, 'x', 'on')
-      on conflict (user_id, source) do update set state = 'on', off_since = null`;
-    await tx.sql`
-      insert into orbit.audit_log (user_id, actor, action, target_table, details)
-      values (${userId}::uuid, 'user', 'x.connected', 'integration_accounts', ${{ scopes: scopes.length }}::jsonb)`;
-  });
-  return settings2(ctx, "connected");
-}
-async function xStatus(ctx) {
-  const s = setup(ctx);
-  if (s instanceof Response) return s;
-  const userId = ctx.userId;
-  const row = await loadXState(ctx.db, userId);
-  const spent = await xSpendThisMonth(ctx.db, userId, ctx.now());
-  const status4 = !row || row.status === "revoked" ? "not_connected" : row.status === "active" || row.status === "connecting" || row.status === "needs_reauth" ? row.status : "error";
-  const out = {
-    status: status4,
-    ...status4 !== "not_connected" && row?.state.username ? { username: row.state.username } : {},
-    spentThisMonthUsd: spent.studentUsd,
-    limitUsd: s.cfg.studentMonthlyUsd,
-    orbitLimitReached: await xOrbitLimitReached(ctx.db, s.cfg, ctx.now())
-  };
-  return json(200, out);
-}
-async function xDisconnect(ctx) {
-  const s = setup(ctx);
-  if (s instanceof Response) return s;
-  await readJson(ctx.req, { optional: true });
-  const userId = ctx.userId;
-  const row = await loadXState(ctx.db, userId);
-  if (!row) return json(200, { ok: true });
-  const vault = sqlVault(ctx.db);
-  let revoked = false;
-  if (row.refreshSecretId) {
-    const refresh2 = await vault.get(row.refreshSecretId);
-    if (refresh2) revoked = await xRevoke(s.oauth, refresh2, "refresh_token");
-  }
-  if (!revoked && row.state.accessSecretId) {
-    const access = await vault.get(row.state.accessSecretId);
-    if (access) revoked = await xRevoke(s.oauth, access, "access_token");
-  }
-  if (row.refreshSecretId) await vault.delete(row.refreshSecretId);
-  if (row.state.accessSecretId) await vault.delete(row.state.accessSecretId);
-  await ctx.db.sql`
-    update orbit.integration_accounts
-       set status = 'revoked', token_secret_id = null, last_error = null,
-           sync_state = jsonb_set(coalesce(sync_state, '{}'::jsonb), '{x}',
-                                  coalesce(sync_state->'x', '{}'::jsonb) - 'accessSecretId' - 'accessExpiresAt')
-     where user_id = ${userId}::uuid and provider = 'x'`;
-  await ctx.db.sql`
-    insert into orbit.audit_log (user_id, actor, action, target_table, details)
-    values (${userId}::uuid, 'user', 'x.disconnect', 'integration_accounts', ${{ revokedAtX: revoked }}::jsonb)`;
-  return json(200, { ok: true, revokedAtX: revoked });
-}
-var xRoutes = {
-  "/x/connect/start": { method: "POST", auth: true, run: xConnectStart },
-  "/x/callback": { method: "GET", auth: false, run: xCallback },
-  "/x/status": { method: "GET|POST", auth: true, run: xStatus },
-  "/x/disconnect": { method: "POST", auth: true, run: xDisconnect }
+var sourcesRoutes = {
+  "/sources": { method: "GET", auth: true, run: list8 }
 };
+function sourcesPatternRoute(path) {
+  const m = /^\/sources\/([a-z]{1,20})$/i.exec(path);
+  if (!m) return void 0;
+  return { method: "PUT", auth: true, run: (ctx) => put(ctx, m[1]) };
+}
+
+// packages/core/src/entity/phone.ts
+import {
+  getCountryCallingCode,
+  isSupportedCountry,
+  parsePhoneNumberFromString
+} from "npm:libphonenumber-js@1.13.14/min";
+
+// packages/core/src/entity/zones.data.ts
+var ZONE_COUNTRIES = [
+  "AD:Europe/Andorra",
+  "AE:Asia/Dubai",
+  "AF:Asia/Kabul",
+  "AG:America/Antigua",
+  "AI:America/Anguilla",
+  "AL:Europe/Tirane",
+  "AM:Asia/Yerevan",
+  "AO:Africa/Luanda",
+  "AQ:Antarctica/Casey Antarctica/Davis Antarctica/DumontDUrville Antarctica/Mawson Antarctica/McMurdo Antarctica/Palmer Antarctica/Rothera Antarctica/Syowa Antarctica/Troll Antarctica/Vostok",
+  "AR:America/Argentina/Buenos_Aires America/Argentina/Catamarca America/Argentina/Cordoba America/Argentina/Jujuy America/Argentina/La_Rioja America/Argentina/Mendoza America/Argentina/Rio_Gallegos America/Argentina/Salta America/Argentina/San_Juan America/Argentina/San_Luis America/Argentina/Tucuman America/Argentina/Ushuaia America/Buenos_Aires",
+  "AS:Pacific/Pago_Pago",
+  "AT:Europe/Vienna",
+  "AU:Antarctica/Macquarie Australia/ACT Australia/Adelaide Australia/Brisbane Australia/Broken_Hill Australia/Darwin Australia/Eucla Australia/Hobart Australia/Lindeman Australia/Lord_Howe Australia/Melbourne Australia/NSW Australia/Perth Australia/Queensland Australia/Sydney Australia/Victoria Australia/West",
+  "AW:America/Aruba",
+  "AX:Europe/Mariehamn",
+  "AZ:Asia/Baku",
+  "BA:Europe/Sarajevo",
+  "BB:America/Barbados",
+  "BD:Asia/Dacca Asia/Dhaka",
+  "BE:Europe/Brussels",
+  "BF:Africa/Ouagadougou",
+  "BG:Europe/Sofia",
+  "BH:Asia/Bahrain",
+  "BI:Africa/Bujumbura",
+  "BJ:Africa/Porto-Novo",
+  "BL:America/St_Barthelemy",
+  "BM:Atlantic/Bermuda",
+  "BN:Asia/Brunei",
+  "BO:America/La_Paz",
+  "BQ:America/Kralendijk",
+  "BR:America/Araguaina America/Bahia America/Belem America/Boa_Vista America/Campo_Grande America/Cuiaba America/Eirunepe America/Fortaleza America/Maceio America/Manaus America/Noronha America/Porto_Velho America/Recife America/Rio_Branco America/Santarem America/Sao_Paulo",
+  "BS:America/Nassau",
+  "BT:Asia/Thimbu Asia/Thimphu",
+  "BW:Africa/Gaborone",
+  "BY:Europe/Minsk",
+  "BZ:America/Belize",
+  "CA:America/Atikokan America/Blanc-Sablon America/Cambridge_Bay America/Creston America/Dawson America/Dawson_Creek America/Edmonton America/Fort_Nelson America/Glace_Bay America/Goose_Bay America/Halifax America/Inuvik America/Iqaluit America/Moncton America/Montreal America/Rankin_Inlet America/Regina America/Resolute America/St_Johns America/Swift_Current America/Toronto America/Vancouver America/Whitehorse America/Winnipeg Canada/Atlantic Canada/Central Canada/Eastern Canada/Mountain Canada/Pacific",
+  "CC:Indian/Cocos",
+  "CD:Africa/Kinshasa Africa/Lubumbashi",
+  "CF:Africa/Bangui",
+  "CG:Africa/Brazzaville",
+  "CH:Europe/Zurich",
+  "CI:Africa/Abidjan",
+  "CK:Pacific/Rarotonga",
+  "CL:America/Coyhaique America/Punta_Arenas America/Santiago Pacific/Easter",
+  "CM:Africa/Douala",
+  "CN:Asia/Chongqing Asia/Harbin Asia/Shanghai Asia/Urumqi",
+  "CO:America/Bogota",
+  "CR:America/Costa_Rica",
+  "CU:America/Havana",
+  "CV:Atlantic/Cape_Verde",
+  "CW:America/Curacao",
+  "CX:Indian/Christmas",
+  "CY:Asia/Famagusta Asia/Nicosia",
+  "CZ:Europe/Prague",
+  "DE:Europe/Berlin Europe/Busingen",
+  "DJ:Africa/Djibouti",
+  "DK:Europe/Copenhagen",
+  "DM:America/Dominica",
+  "DO:America/Santo_Domingo",
+  "DZ:Africa/Algiers",
+  "EC:America/Guayaquil Pacific/Galapagos",
+  "EE:Europe/Tallinn",
+  "EG:Africa/Cairo",
+  "EH:Africa/El_Aaiun",
+  "ER:Africa/Asmara",
+  "ES:Africa/Ceuta Atlantic/Canary Europe/Madrid",
+  "ET:Africa/Addis_Ababa",
+  "FI:Europe/Helsinki",
+  "FJ:Pacific/Fiji",
+  "FK:Atlantic/Stanley",
+  "FM:Pacific/Chuuk Pacific/Kosrae Pacific/Pohnpei Pacific/Truk",
+  "FO:Atlantic/Faeroe Atlantic/Faroe",
+  "FR:Europe/Paris",
+  "GA:Africa/Libreville",
+  "GB:Europe/Belfast Europe/London",
+  "GD:America/Grenada",
+  "GE:Asia/Tbilisi",
+  "GF:America/Cayenne",
+  "GG:Europe/Guernsey",
+  "GH:Africa/Accra",
+  "GI:Europe/Gibraltar",
+  "GL:America/Danmarkshavn America/Nuuk America/Scoresbysund America/Thule",
+  "GM:Africa/Banjul",
+  "GN:Africa/Conakry",
+  "GP:America/Guadeloupe",
+  "GQ:Africa/Malabo",
+  "GR:Europe/Athens",
+  "GS:Atlantic/South_Georgia",
+  "GT:America/Guatemala",
+  "GU:Pacific/Guam",
+  "GW:Africa/Bissau",
+  "GY:America/Guyana",
+  "HK:Asia/Hong_Kong",
+  "HN:America/Tegucigalpa",
+  "HR:Europe/Zagreb",
+  "HT:America/Port-au-Prince",
+  "HU:Europe/Budapest",
+  "ID:Asia/Jakarta Asia/Jayapura Asia/Makassar Asia/Pontianak",
+  "IE:Europe/Dublin",
+  "IL:Asia/Jerusalem Asia/Tel_Aviv",
+  "IM:Europe/Isle_of_Man",
+  "IN:Asia/Calcutta Asia/Kolkata",
+  "IO:Indian/Chagos",
+  "IQ:Asia/Baghdad",
+  "IR:Asia/Tehran",
+  "IS:Atlantic/Reykjavik",
+  "IT:Europe/Rome",
+  "JE:Europe/Jersey",
+  "JM:America/Jamaica",
+  "JO:Asia/Amman",
+  "JP:Asia/Tokyo",
+  "KE:Africa/Nairobi",
+  "KG:Asia/Bishkek",
+  "KH:Asia/Phnom_Penh",
+  "KI:Pacific/Kanton Pacific/Kiritimati Pacific/Tarawa",
+  "KM:Indian/Comoro",
+  "KN:America/St_Kitts",
+  "KP:Asia/Pyongyang",
+  "KR:Asia/Seoul",
+  "KW:Asia/Kuwait",
+  "KY:America/Cayman",
+  "KZ:Asia/Almaty Asia/Aqtau Asia/Aqtobe Asia/Atyrau Asia/Oral Asia/Qostanay Asia/Qyzylorda",
+  "LA:Asia/Vientiane",
+  "LB:Asia/Beirut",
+  "LC:America/St_Lucia",
+  "LI:Europe/Vaduz",
+  "LK:Asia/Colombo",
+  "LR:Africa/Monrovia",
+  "LS:Africa/Maseru",
+  "LT:Europe/Vilnius",
+  "LU:Europe/Luxembourg",
+  "LV:Europe/Riga",
+  "LY:Africa/Tripoli",
+  "MA:Africa/Casablanca",
+  "MC:Europe/Monaco",
+  "MD:Europe/Chisinau",
+  "ME:Europe/Podgorica",
+  "MF:America/Marigot",
+  "MG:Indian/Antananarivo",
+  "MH:Pacific/Kwajalein Pacific/Majuro",
+  "MK:Europe/Skopje",
+  "ML:Africa/Bamako",
+  "MM:Asia/Rangoon Asia/Yangon",
+  "MN:Asia/Hovd Asia/Ulaanbaatar Asia/Ulan_Bator",
+  "MO:Asia/Macao Asia/Macau",
+  "MP:Pacific/Saipan",
+  "MQ:America/Martinique",
+  "MR:Africa/Nouakchott",
+  "MS:America/Montserrat",
+  "MT:Europe/Malta",
+  "MU:Indian/Mauritius",
+  "MV:Indian/Maldives",
+  "MW:Africa/Blantyre",
+  "MX:America/Bahia_Banderas America/Cancun America/Chihuahua America/Ciudad_Juarez America/Hermosillo America/Matamoros America/Mazatlan America/Merida America/Mexico_City America/Monterrey America/Ojinaga America/Tijuana",
+  "MY:Asia/Kuala_Lumpur Asia/Kuching",
+  "MZ:Africa/Maputo",
+  "NA:Africa/Windhoek",
+  "NC:Pacific/Noumea",
+  "NE:Africa/Niamey",
+  "NF:Pacific/Norfolk",
+  "NG:Africa/Lagos",
+  "NI:America/Managua",
+  "NL:Europe/Amsterdam",
+  "NO:Europe/Oslo",
+  "NP:Asia/Kathmandu Asia/Katmandu",
+  "NR:Pacific/Nauru",
+  "NU:Pacific/Niue",
+  "NZ:Pacific/Auckland Pacific/Chatham",
+  "OM:Asia/Muscat",
+  "PA:America/Panama",
+  "PE:America/Lima",
+  "PF:Pacific/Gambier Pacific/Marquesas Pacific/Tahiti",
+  "PG:Pacific/Bougainville Pacific/Port_Moresby",
+  "PH:Asia/Manila",
+  "PK:Asia/Karachi",
+  "PL:Europe/Warsaw",
+  "PM:America/Miquelon",
+  "PN:Pacific/Pitcairn",
+  "PR:America/Puerto_Rico",
+  "PS:Asia/Gaza Asia/Hebron",
+  "PT:Atlantic/Azores Atlantic/Madeira Europe/Lisbon",
+  "PW:Pacific/Palau",
+  "PY:America/Asuncion",
+  "QA:Asia/Qatar",
+  "RE:Indian/Reunion",
+  "RO:Europe/Bucharest",
+  "RS:Europe/Belgrade",
+  "RU:Asia/Anadyr Asia/Barnaul Asia/Chita Asia/Irkutsk Asia/Kamchatka Asia/Khandyga Asia/Krasnoyarsk Asia/Magadan Asia/Novokuznetsk Asia/Novosibirsk Asia/Omsk Asia/Sakhalin Asia/Srednekolymsk Asia/Tomsk Asia/Ust-Nera Asia/Vladivostok Asia/Yakutsk Asia/Yekaterinburg Europe/Astrakhan Europe/Kaliningrad Europe/Kirov Europe/Moscow Europe/Samara Europe/Saratov Europe/Ulyanovsk Europe/Volgograd",
+  "RW:Africa/Kigali",
+  "SA:Asia/Riyadh",
+  "SB:Pacific/Guadalcanal",
+  "SC:Indian/Mahe",
+  "SD:Africa/Khartoum",
+  "SE:Europe/Stockholm",
+  "SG:Asia/Singapore",
+  "SH:Atlantic/St_Helena",
+  "SI:Europe/Ljubljana",
+  "SJ:Arctic/Longyearbyen",
+  "SK:Europe/Bratislava",
+  "SL:Africa/Freetown",
+  "SM:Europe/San_Marino",
+  "SN:Africa/Dakar",
+  "SO:Africa/Mogadishu",
+  "SR:America/Paramaribo",
+  "SS:Africa/Juba",
+  "ST:Africa/Sao_Tome",
+  "SV:America/El_Salvador",
+  "SX:America/Lower_Princes",
+  "SY:Asia/Damascus",
+  "SZ:Africa/Mbabane",
+  "TC:America/Grand_Turk",
+  "TD:Africa/Ndjamena",
+  "TF:Indian/Kerguelen",
+  "TG:Africa/Lome",
+  "TH:Asia/Bangkok",
+  "TJ:Asia/Dushanbe",
+  "TK:Pacific/Fakaofo",
+  "TL:Asia/Dili",
+  "TM:Asia/Ashgabat",
+  "TN:Africa/Tunis",
+  "TO:Pacific/Tongatapu",
+  "TR:Asia/Istanbul Europe/Istanbul",
+  "TT:America/Port_of_Spain",
+  "TV:Pacific/Funafuti",
+  "TW:Asia/Taipei",
+  "TZ:Africa/Dar_es_Salaam",
+  "UA:Europe/Kiev Europe/Kyiv Europe/Simferopol",
+  "UG:Africa/Kampala",
+  "UM:Pacific/Midway Pacific/Wake",
+  "US:America/Adak America/Anchorage America/Boise America/Chicago America/Denver America/Detroit America/Fort_Wayne America/Indiana/Indianapolis America/Indiana/Knox America/Indiana/Marengo America/Indiana/Petersburg America/Indiana/Tell_City America/Indiana/Vevay America/Indiana/Vincennes America/Indiana/Winamac America/Indianapolis America/Juneau America/Kentucky/Louisville America/Kentucky/Monticello America/Los_Angeles America/Louisville America/Menominee America/Metlakatla America/New_York America/Nome America/North_Dakota/Beulah America/North_Dakota/Center America/North_Dakota/New_Salem America/Phoenix America/Sitka America/Yakutat Pacific/Honolulu US/Alaska US/Arizona US/Central US/Eastern US/Hawaii US/Mountain US/Pacific",
+  "UY:America/Montevideo",
+  "UZ:Asia/Samarkand Asia/Tashkent",
+  "VA:Europe/Vatican",
+  "VC:America/St_Vincent",
+  "VE:America/Caracas",
+  "VG:America/Tortola",
+  "VI:America/St_Thomas",
+  "VN:Asia/Ho_Chi_Minh Asia/Saigon",
+  "VU:Pacific/Efate",
+  "WF:Pacific/Wallis",
+  "WS:Pacific/Apia",
+  "YE:Asia/Aden",
+  "YT:Indian/Mayotte",
+  "ZA:Africa/Johannesburg",
+  "ZM:Africa/Lusaka",
+  "ZW:Africa/Harare"
+];
+
+// packages/core/src/entity/phone.ts
+var DEFAULT_PHONE_REGION = "US";
+var zoneCountry;
+function countryForTimeZone(tz) {
+  if (!tz) return void 0;
+  if (!zoneCountry) {
+    zoneCountry = /* @__PURE__ */ new Map();
+    for (const row of ZONE_COUNTRIES) {
+      const [cc, zones] = row.split(":");
+      for (const z9 of zones?.split(" ") ?? []) if (cc) zoneCountry.set(z9, cc);
+    }
+  }
+  return zoneCountry.get(tz.trim());
+}
+var PLACES = [
+  [/\b(usa|united states|america)\b/, "US"],
+  [/\b(canada|toronto|vancouver|montreal|ottawa|waterloo)\b/, "CA"],
+  [/\b(uk|united kingdom|england|scotland|wales|london|oxford|cambridge, uk|edinburgh|manchester)\b/, "GB"],
+  [/\b(ireland|dublin)\b/, "IE"],
+  [/\b(india|mumbai|delhi|bangalore|bengaluru|hyderabad|chennai|pune|kolkata)\b/, "IN"],
+  [/\b(pakistan|karachi|lahore)\b/, "PK"],
+  [/\b(bangladesh|dhaka)\b/, "BD"],
+  [/\b(china|beijing|shanghai|shenzhen|guangzhou|hangzhou)\b/, "CN"],
+  [/\b(hong kong)\b/, "HK"],
+  [/\b(taiwan|taipei)\b/, "TW"],
+  [/\b(japan|tokyo|osaka|kyoto)\b/, "JP"],
+  [/\b(korea|seoul|busan)\b/, "KR"],
+  [/\b(singapore)\b/, "SG"],
+  [/\b(vietnam|hanoi|ho chi minh)\b/, "VN"],
+  [/\b(philippines|manila)\b/, "PH"],
+  [/\b(indonesia|jakarta)\b/, "ID"],
+  [/\b(malaysia|kuala lumpur)\b/, "MY"],
+  [/\b(australia|sydney|melbourne|brisbane|perth)\b/, "AU"],
+  [/\b(new zealand|auckland)\b/, "NZ"],
+  [/\b(germany|berlin|munich|hamburg|frankfurt)\b/, "DE"],
+  [/\b(france|paris|lyon)\b/, "FR"],
+  [/\b(spain|madrid|barcelona)\b/, "ES"],
+  [/\b(italy|rome|milan)\b/, "IT"],
+  [/\b(netherlands|amsterdam)\b/, "NL"],
+  [/\b(switzerland|zurich|geneva)\b/, "CH"],
+  [/\b(sweden|stockholm)\b/, "SE"],
+  [/\b(israel|tel aviv|jerusalem)\b/, "IL"],
+  [/\b(uae|dubai|abu dhabi)\b/, "AE"],
+  [/\b(brazil|sao paulo|rio de janeiro)\b/, "BR"],
+  [/\b(mexico)\b/, "MX"],
+  [/\b(nigeria|lagos)\b/, "NG"],
+  [/\b(kenya|nairobi)\b/, "KE"]
+];
+var US_STATE = /,\s*(al|ak|az|ar|ca|co|ct|de|dc|fl|ga|hi|id|il|in|ia|ks|ky|la|me|md|ma|mi|mn|ms|mo|mt|ne|nv|nh|nj|nm|ny|nc|nd|oh|ok|or|pa|ri|sc|sd|tn|tx|ut|vt|va|wa|wv|wi|wy)\b/i;
+function countryForCity(city) {
+  if (!city?.trim()) return void 0;
+  if (US_STATE.test(city)) return "US";
+  const c = city.normalize("NFKD").replace(/[̀-ͯ]/g, "").toLowerCase();
+  return PLACES.find(([re]) => re.test(c))?.[1];
+}
+var supported = (cc) => !!cc && isSupportedCountry(cc);
+function phoneRegionFor(user, numbers = []) {
+  const tz = countryForTimeZone(user?.timezone);
+  const guess = supported(tz) ? tz : supported(countryForCity(user?.currentCity)) ? countryForCity(user?.currentCity) : DEFAULT_PHONE_REGION;
+  const intl = numbers.filter((n) => n.startsWith("+"));
+  if (intl.length < 5) return guess;
+  const byCode = /* @__PURE__ */ new Map();
+  for (const n of intl) {
+    const p = parsePhoneNumberFromString(n);
+    if (!p) continue;
+    const e = byCode.get(p.countryCallingCode) ?? { n: 0, countries: /* @__PURE__ */ new Map() };
+    e.n++;
+    if (p.country) e.countries.set(p.country, (e.countries.get(p.country) ?? 0) + 1);
+    byCode.set(p.countryCallingCode, e);
+  }
+  const [code, top] = [...byCode.entries()].sort((a, b) => b[1].n - a[1].n)[0] ?? [];
+  if (!code || !top || top.n < intl.length * 0.6 || code === getCountryCallingCode(guess)) return guess;
+  const country = [...top.countries.entries()].sort((a, b) => b[1] - a[1])[0]?.[0];
+  return supported(country) ? country : code === "1" ? "US" : guess;
+}
+function toE164(raw, region = DEFAULT_PHONE_REGION) {
+  if (!raw) return void 0;
+  let s = raw.trim().replace(/^tel:/i, "");
+  const digits = s.replace(/\D/g, "");
+  if (digits.length < 7 || digits.length > 15 + 2) return void 0;
+  if (!s.startsWith("+") && digits.startsWith("00")) s = `+${digits.slice(2)}`;
+  const p = parsePhoneNumberFromString(s, supported(region) ? region : DEFAULT_PHONE_REGION);
+  if (p?.isPossible()) return p.number;
+  const d = s.replace(/\D/g, "");
+  return d.length >= 7 ? `+${d}` : void 0;
+}
 
 // supabase/functions/orbit-api/sync.ts
 import { z as z8 } from "npm:zod@3.25.76/v4";
 async function syncStatus(ctx) {
-  return json(200, await statusFor(ctx.db, ctx.userId));
+  return json(200, await statusFor(ctx.db, ctx.userId, await sourcesFor(ctx.db, ctx.userId, ctx.offered)));
 }
 var MARK_ISO = 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"';
-async function statusFor(db2, userId) {
+async function statusFor(db2, userId, src = NO_SOURCES) {
   const [marks, accounts, users] = await Promise.all([
     db2.sql`
     select to_char(changed_at at time zone 'utc', ${MARK_ISO}) as changed_at,
            to_char(linkedin_at at time zone 'utc', ${MARK_ISO}) as linkedin_at,
-           to_char(autopilot_at at time zone 'utc', ${MARK_ISO}) as autopilot_at,
+           to_char(autopilot_at at time zone 'utc', ${MARK_ISO}) as autopilot_at, graph_version,
            counts, (counts is not null and counts_at >= changed_at) as fresh
       from orbit.user_marks where user_id = ${userId}::uuid`,
     db2.sql`
@@ -25588,7 +25723,7 @@ async function statusFor(db2, userId) {
     ) : Promise.resolve([{ n: 0 }]),
     (async () => {
       if (counts) return;
-      counts = await countsFor(db2, userId);
+      counts = await countsFor(db2, userId, src);
       const [m] = await db2.sql`
         insert into orbit.user_marks as m (user_id, counts, counts_at)
         values (${userId}::uuid, ${counts}::jsonb, coalesce(${mark?.changed_at ?? null}::timestamptz, now()))
@@ -25596,7 +25731,7 @@ async function statusFor(db2, userId) {
         returning to_char(m.changed_at at time zone 'utc', ${MARK_ISO}) as changed_at,
                   to_char(m.linkedin_at at time zone 'utc', ${MARK_ISO}) as linkedin_at,
                   to_char(m.autopilot_at at time zone 'utc', ${MARK_ISO}) as autopilot_at`;
-      if (m) mark = { ...m, counts, fresh: true };
+      if (m) mark = { ...m, graph_version: mark?.graph_version ?? 0, counts, fresh: true };
     })()
   ]);
   const out = {
@@ -25606,22 +25741,27 @@ async function statusFor(db2, userId) {
     marks: {
       changed: mark?.changed_at ?? null,
       linkedin: mark?.linkedin_at ?? null,
-      autopilot: mark?.autopilot_at ?? null
+      autopilot: mark?.autopilot_at ?? null,
+      graph: Number(mark?.graph_version ?? 0)
     },
     setup: setup2
   };
   return out;
 }
-async function countsFor(db2, userId) {
+async function countsFor(db2, userId, src) {
   const [counts] = await db2.sql`
     select
-      (select count(*) from orbit.people where user_id = ${userId}::uuid and not is_self
-         and deleted_at is null and merged_into is null)::int as people,
+      (select count(*) from orbit.people p where p.user_id = ${userId}::uuid and not p.is_self
+         and p.deleted_at is null and p.merged_into is null and p.listed
+         and orbit.person_in_use(p.sources, p.source_account, ${src.hidden}::text[]))::int as people,
       (select count(*) from orbit.organizations where user_id = ${userId}::uuid)::int as organizations,
-      (select count(*) from orbit.threads where user_id = ${userId}::uuid)::int as threads,
-      (select count(*) from orbit.messages where user_id = ${userId}::uuid)::int as messages,
+      (select count(*) from orbit.threads where user_id = ${userId}::uuid
+         and provider <> all(${src.excluded.providers}::text[]))::int as threads,
+      (select count(*) from orbit.messages where user_id = ${userId}::uuid
+         and provider <> all(${src.excluded.providers}::text[]))::int as messages,
       (select count(*) from orbit.calendar_events where user_id = ${userId}::uuid)::int as events,
-      (select count(*) from orbit.ties where user_id = ${userId}::uuid)::int as ties,
+      (select count(*) from orbit.ties where user_id = ${userId}::uuid
+         and kind <> all(${src.excluded.tieKinds}::text[]))::int as ties,
       (select count(*) from orbit.goals where user_id = ${userId}::uuid and deleted_at is null and status = 'active')::int as goals,
       (select count(*) from orbit.chats where user_id = ${userId}::uuid and archived_at is null)::int as chats,
       (select count(*) from orbit.drafts where user_id = ${userId}::uuid and status = 'draft')::int as drafts`;
@@ -25667,10 +25807,30 @@ async function syncPull(ctx) {
     tables = PULL_TABLES.filter((t) => body2.tables.includes(t.table));
   }
   const upTo = new Date(ctx.now().getTime() - ctx.pullLagMs);
-  const out = await pull(ctx.db, ctx.userId, { cursor, tables, limit, upTo });
+  const sources = await sourcesFor(ctx.db, ctx.userId, ctx.offered);
+  const out = await pull(ctx.db, ctx.userId, { cursor, tables, limit, upTo, sources });
   return json(200, out);
 }
+function sourceFilter(t, src, params) {
+  if (!t.sources) return "";
+  const values = {
+    hidden: src.hidden,
+    providers: src.excluded.providers,
+    tieKinds: src.excluded.tieKinds,
+    identityKinds: src.excluded.identityKinds
+  };
+  const at = /* @__PURE__ */ new Map();
+  const sql = t.sources.replace(/\$(hidden|providers|tieKinds|identityKinds)\b/g, (_, name) => {
+    if (!at.has(name)) {
+      params.push(values[name]);
+      at.set(name, params.length);
+    }
+    return `$${at.get(name)}`;
+  });
+  return `and ${sql}`;
+}
 async function pull(db2, userId, o) {
+  const src = o.sources ?? NO_SOURCES;
   const changes = {};
   const deleted = {};
   const next = { ...o.cursor };
@@ -25682,22 +25842,22 @@ async function pull(db2, userId, o) {
         const pos = o.cursor[t.table];
         const del = t.deletedWhen ? `(${t.deletedWhen})` : "false";
         const row = ["to_jsonb(t)", ...(t.omit ?? []).map((c) => `'${c}'`)].join(" - ");
+        const key = t.keySql ?? `t.${t.key}::text`;
+        const params = [userId, pos?.t ?? PULL_FROM, pos?.k ?? "", o.upTo, o.limit];
+        const off = sourceFilter(t, src, params);
         return db2.query(
           `select ${row} as row,
                   to_char(t.${t.cursor} at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') as _ts,
-                  t.${t.key}::text as _k, ${del} as _del
+                  ${key} as _k, ${del} as _del
              from orbit.${t.table} t
             where t.user_id = $1::uuid
-              and (t.${t.cursor}, t.${t.key}::text) > (($2::text)::timestamptz, $3::text)
+              and (t.${t.cursor}, ${key}) > (($2::text)::timestamptz, $3::text)
               and t.${t.cursor} <= $4::timestamptz
               ${t.filter ? `and ${t.filter}` : ""}
-            order by t.${t.cursor}, t.${t.key}::text
+              ${off}
+            order by t.${t.cursor}, ${key}
             limit $5`,
-          // The cursor time goes over as text and is cast in SQL: a timestamptz parameter is turned into a JS Date
-          // by postgres.js first, which keeps milliseconds only, so a page of rows sharing one microsecond (a score
-          // run writes thousands in one statement) came back again and again and the pull never got past it. A
-          // table never pulled starts from a real date ('-infinity' is not one; every pull failed on it once).
-          [userId, pos?.t ?? PULL_FROM, pos?.k ?? "", o.upTo, o.limit]
+          params
         );
       })
     ),
@@ -25956,13 +26116,16 @@ async function applyChange(db2, userId, raw) {
     const c = parsed.data;
     const spec = PUSH[c.table];
     if (!spec) throw new ChangeError("not_allowed", `${c.table} cannot be changed from the app`);
+    const phones = spec.table === "people" && c.op === "upsert" ? phonesOf(c.row ?? {}) : void 0;
     const row = await db2.begin(async (tx) => {
       if (c.op === "delete") return remove(tx, userId, spec, c.id);
       if (spec.table === "drafts") return pushDraft(tx, userId, c.id, c.row ?? {});
       if (spec.table === "draft_edits") return pushEdit(tx, userId, c.id, c.row ?? {});
       if (spec.write === "none")
         throw new ChangeError("not_allowed", `${c.table} can only be deleted from the app`);
-      return write(tx, userId, spec, c.id, c.row ?? {});
+      const out = await write(tx, userId, spec, c.id, c.row ?? {});
+      if (phones?.length) await addPhoneIdentities(tx, userId, c.id, phones, "manual");
+      return out;
     });
     return { ...ref, ok: true, ...row ? { row } : {} };
   } catch (e) {
@@ -25974,6 +26137,32 @@ async function applyChange(db2, userId, raw) {
       error: { code: "failed", message: "this change could not be applied" }
     };
   }
+}
+var PhonesS = z8.array(z8.string().trim().min(3).max(40)).max(20);
+function phonesOf(row) {
+  if (!("phones" in row) || row.phones == null) return void 0;
+  const r = PhonesS.safeParse(row.phones);
+  if (!r.success) throw new ChangeError("invalid", `phones: ${r.error.issues[0]?.message ?? "invalid"}`);
+  return r.data;
+}
+async function addPhoneIdentities(db2, userId, personId, raw, source) {
+  const [u2] = await db2.sql`
+    select timezone, current_city from orbit.users where id = ${userId}::uuid`;
+  const region = phoneRegionFor({
+    timezone: u2?.timezone ?? void 0,
+    currentCity: u2?.current_city ?? void 0
+  });
+  const out = [];
+  for (const p of raw) {
+    const e164 = toE164(p, region);
+    if (!e164 || out.includes(e164)) continue;
+    await db2.sql`
+      insert into orbit.person_identities (user_id, person_id, kind, value_norm, value_raw, source)
+      values (${userId}::uuid, ${personId}::uuid, 'phone', ${e164}, ${p}, ${source})
+      on conflict (user_id, kind, value_norm) do nothing`;
+    out.push(e164);
+  }
+  return out;
 }
 var shape = (table, row) => {
   const t = PULL_BY_NAME.get(table);
@@ -26130,6 +26319,817 @@ async function pushEdit(db2, userId, id, row) {
   return r;
 }
 
+// supabase/functions/orbit-api/routes/texts.ts
+var TEXT_DAYS_MAX = 5e3;
+var TEXT_PEOPLE_MAX = 2e3;
+var DAY_KEYS = /* @__PURE__ */ new Set(["personId", "ref", "day", "in", "out", "group", "words"]);
+var PERSON_KEYS = /* @__PURE__ */ new Set(["ref", "name", "phones"]);
+var DAY_RE = /^\d{4}-\d{2}-\d{2}$/;
+var count = (v, what, min, max) => {
+  if (typeof v !== "number" || !Number.isInteger(v) || v < min || v > max)
+    throw badRequest(`${what} is a whole number from ${min} to ${max}`);
+  return v;
+};
+function onlyKeys(o, allowed, what) {
+  for (const k of Object.keys(o))
+    if (!allowed.has(k)) throw badRequest(`${what} has ${k}: only counts are accepted, never the words`);
+}
+function parseTextDays(b, now) {
+  onlyKeys(b, /* @__PURE__ */ new Set(["days", "people"]), "the body");
+  if (!Array.isArray(b.days)) throw badRequest("days is a list");
+  if (b.days.length > TEXT_DAYS_MAX) throw badRequest(`at most ${TEXT_DAYS_MAX} days at once`);
+  const peopleRaw = b.people ?? [];
+  if (!Array.isArray(peopleRaw)) throw badRequest("people is a list");
+  if (peopleRaw.length > TEXT_PEOPLE_MAX) throw badRequest(`at most ${TEXT_PEOPLE_MAX} people at once`);
+  const latest = new Date(now.getTime() + 2 * 864e5).toISOString().slice(0, 10);
+  const people = peopleRaw.map((x) => {
+    if (!x || typeof x !== "object" || Array.isArray(x)) throw badRequest("each person is an object");
+    const p = x;
+    onlyKeys(p, PERSON_KEYS, "a person");
+    if (typeof p.ref !== "string" || !p.ref.trim() || p.ref.length > 100)
+      throw badRequest("ref names the person");
+    if (typeof p.name !== "string" || !p.name.trim() || p.name.length > 200)
+      throw badRequest("name is required");
+    if (!Array.isArray(p.phones) || !p.phones.length || p.phones.length > 10)
+      throw badRequest("phones lists one to ten numbers");
+    for (const n of p.phones)
+      if (typeof n !== "string" || n.length > 40 || !/^[+\d\s().-]+$/.test(n))
+        throw badRequest("phones are numbers");
+    return { ref: p.ref.trim(), name: p.name.trim(), phones: p.phones };
+  });
+  const refs = new Set(people.map((p) => p.ref));
+  const days = b.days.map((x) => {
+    if (!x || typeof x !== "object" || Array.isArray(x)) throw badRequest("each day is an object");
+    const d = x;
+    onlyKeys(d, DAY_KEYS, "a day");
+    const personId = d.personId;
+    const ref = d.ref;
+    if (personId !== void 0 && (typeof personId !== "string" || !UUID.test(personId)))
+      throw badRequest("personId is a person id");
+    if (ref !== void 0 && (typeof ref !== "string" || !refs.has(ref.trim())))
+      throw badRequest("ref names a person in people");
+    if (!personId === !ref) throw badRequest("each day has a personId or a ref");
+    if (typeof d.day !== "string" || !DAY_RE.test(d.day) || Number.isNaN(Date.parse(`${d.day}T00:00:00Z`)))
+      throw badRequest("day is YYYY-MM-DD");
+    if (d.day > latest) throw badRequest("day is not in the future");
+    if (typeof d.words !== "boolean") throw badRequest("words is true or false");
+    return {
+      ...personId ? { personId: personId.toLowerCase() } : {},
+      ...ref ? { ref: ref.trim() } : {},
+      day: d.day,
+      in: count(d.in, "in", 0, 1e5),
+      out: count(d.out, "out", 0, 1e5),
+      group: count(d.group, "group", 2, 1e4),
+      words: d.words
+    };
+  });
+  return { days, people };
+}
+async function upload(ctx) {
+  const userId = ctx.userId;
+  const now = ctx.now();
+  if (!ctx.offered.includes("imessage")) throw new HttpError(404, "not_found", "texts are not offered");
+  if (!await sourceIsOn(ctx.db, userId, "imessage", ctx.offered))
+    throw new HttpError(409, "source_off", "turn Texts on first");
+  const { days, people } = parseTextDays(await body(ctx), now);
+  const src = await sourcesFor(ctx.db, userId, ctx.offered);
+  const [u2] = await ctx.db.sql`
+    select timezone, current_city from orbit.users where id = ${userId}::uuid`;
+  const region = phoneRegionFor({
+    timezone: u2?.timezone ?? void 0,
+    currentCity: u2?.current_city ?? void 0
+  });
+  const out = await ctx.db.begin(async (tx) => {
+    const byRef = {};
+    let created = 0;
+    for (const p of people) {
+      const numbers = [...new Set(p.phones.map((n) => toE164(n, region)).filter((n) => !!n))];
+      if (!numbers.length) continue;
+      const [hit] = await tx.sql`
+        select coalesce(q.merged_into, q.id) as person_id from orbit.person_identities i
+          join orbit.people q on q.id = i.person_id and q.deleted_at is null
+         where i.user_id = ${userId}::uuid and i.kind = 'phone' and i.value_norm = any(${numbers}::text[])
+         order by q.merged_into is null desc, i.created_at limit 1`;
+      let id = hit?.person_id;
+      if (!id) {
+        const n = parseName(p.name);
+        const [row] = await tx.sql`
+          insert into orbit.people (user_id, display_name, first_name, last_name, name_norm, sources, first_seen_at)
+          values (${userId}::uuid, ${p.name}, ${n.first || p.name.split(/\s+/)[0] || null}, ${n.last || null},
+                  ${n.normalized || p.name.toLowerCase()}, array['imessage']::text[], ${now.toISOString()}::timestamptz)
+          returning id`;
+        id = row.id;
+        created++;
+      }
+      await addPhoneIdentities(tx, userId, id, p.phones, "imessage");
+      byRef[p.ref] = id;
+    }
+    const named = [...new Set(days.map((d) => d.personId).filter((x) => !!x))];
+    const mine = new Set(
+      named.length ? (await tx.sql`
+              select p.id from orbit.people p
+               where p.user_id = ${userId}::uuid and p.id = any(${named}::uuid[]) and p.deleted_at is null
+                 and orbit.person_in_use(p.sources, p.source_account, ${src.hidden}::text[])`).map((r) => r.id) : []
+    );
+    const rows = days.map((d) => ({ ...d, person: d.personId ?? (d.ref ? byRef[d.ref] : void 0) })).filter((d) => !!d.person && (!d.personId || mine.has(d.personId)));
+    if (days.some((d) => d.personId && !mine.has(d.personId)))
+      throw new HttpError(404, "not_found", "a personId is not one of your people");
+    const merged = /* @__PURE__ */ new Map();
+    for (const r of rows) merged.set(`${r.person}|${r.day}`, r);
+    const list9 = [...merged.values()];
+    if (list9.length)
+      await tx.sql`
+        insert into orbit.text_days (user_id, person_id, day, in_count, out_count, group_size, words)
+        select ${userId}::uuid, (r ->> 'person')::uuid, (r ->> 'day')::date, (r ->> 'in')::int, (r ->> 'out')::int,
+               (r ->> 'group')::int, (r ->> 'words')::boolean
+          from jsonb_array_elements(${JSON.stringify(list9)}::jsonb) r
+        on conflict (user_id, person_id, day) do update set
+          in_count = excluded.in_count, out_count = excluded.out_count, group_size = excluded.group_size,
+          words = excluded.words
+        where (orbit.text_days.in_count, orbit.text_days.out_count, orbit.text_days.group_size, orbit.text_days.words)
+              is distinct from (excluded.in_count, excluded.out_count, excluded.group_size, excluded.words)`;
+    await tx.sql`
+      insert into orbit.audit_log (user_id, actor, action, target_table, target_id, details)
+      values (${userId}::uuid, 'user', 'texts.days', 'text_days', 'imessage',
+              ${{ days: list9.length, people: people.length, created }}::jsonb)`;
+    return { byRef, created, list: list9 };
+  });
+  const touched = [...new Set(out.list.map((r) => r.person))];
+  if (touched.length)
+    await sqlQueue(ctx.db).enqueue({
+      kind: "score.person",
+      userId,
+      payload: { personIds: touched, reason: "texts" },
+      dedupeKey: `score.person:${userId}:texts:${now.getTime()}`
+    });
+  const res = { ok: true, days: out.list.length, people: out.byRef, created: out.created };
+  return json(200, res);
+}
+var textsRoutes = {
+  "/texts/days": { method: "POST", auth: true, run: upload }
+};
+
+// supabase/functions/orbit-api/routes/voice.ts
+async function status3(ctx) {
+  if (ctx.req.method === "POST") await ctx.req.body?.cancel();
+  return json(200, await voiceStatus(ctx.db, ctx.userId, ctx.now()));
+}
+async function notes(ctx) {
+  const b = await body(ctx);
+  if (typeof b.id !== "string" || !b.id.trim() || b.id.length > 100) throw badRequest("id names a note");
+  if (b.action !== "keep" && b.action !== "forget") throw badRequest("action is keep or forget");
+  const note2 = await decideNote(ctx.db, ctx.userId, b.id, b.action, ctx.now());
+  if (!note2) throw new HttpError(404, "not_found", "no such note");
+  await ctx.db.sql`
+    insert into orbit.audit_log (user_id, actor, action, target_table, target_id, details)
+    values (${ctx.userId}::uuid, 'user', ${`voice.note.${b.action}`}, 'users', ${ctx.userId}, ${{ note: b.id }}::jsonb)`;
+  const out = { note: note2 };
+  return json(200, out);
+}
+async function relearn(ctx) {
+  await ctx.req.body?.cancel();
+  await queueRelearn(ctx.services().queue, ctx.userId, ctx.now());
+  const out = { queued: true };
+  return json(200, out);
+}
+var voiceRoutes = {
+  "/voice": { method: "GET|POST", auth: true, run: status3 },
+  "/voice/notes": { method: "POST", auth: true, run: notes },
+  "/voice/relearn": { method: "POST", auth: true, run: relearn }
+};
+
+// supabase/functions/_shared/social/x/adapter.ts
+var X_USER_FIELDS = [
+  "username",
+  "name",
+  "description",
+  "entities",
+  "location",
+  "verified",
+  "protected",
+  "public_metrics",
+  "profile_image_url",
+  "url",
+  "connection_status",
+  "receives_your_dm"
+].join(",");
+var X_DM_FIELDS = "id,text,event_type,created_at,dm_conversation_id,sender_id,participant_ids";
+var X_LIST_PAGE = 1e3;
+var X_DM_PAGE = 100;
+var XApiError = class extends Error {
+  constructor(status4, type, detail) {
+    super(`x ${status4} ${type}`);
+    this.status = status4;
+    this.type = type;
+    this.detail = detail;
+  }
+  /** the short name at the end of X's problem type URL ("dm-recipient-not-accepting") */
+  get problem() {
+    return this.type.split("/").pop() ?? this.type;
+  }
+};
+var XAccountGone = class extends Error {
+  constructor(ref, why) {
+    super(`x account ${why}`);
+    this.ref = ref;
+    this.why = why;
+  }
+};
+var XAccountProtected = class extends Error {
+  constructor(accountId) {
+    super("x account protected");
+    this.accountId = accountId;
+  }
+};
+var XRateLimited = class extends Error {
+  constructor(resetAt) {
+    super("x rate limited");
+    this.resetAt = resetAt;
+  }
+};
+function mapXUser(u2) {
+  const links = /* @__PURE__ */ new Set();
+  for (const e of [...u2.entities?.url?.urls ?? [], ...u2.entities?.description?.urls ?? []]) {
+    const l = e.expanded_url ?? e.display_url ?? e.url;
+    if (l) links.add(l);
+  }
+  if (!u2.entities?.url?.urls?.length && u2.url) links.add(u2.url);
+  const a = { platform: "x", id: u2.id, username: u2.username };
+  if (u2.name) a.name = u2.name;
+  if (u2.description) a.bio = u2.description;
+  if (links.size) a.links = [...links];
+  if (typeof u2.public_metrics?.followers_count === "number") a.followers = u2.public_metrics.followers_count;
+  if (typeof u2.public_metrics?.following_count === "number") a.following = u2.public_metrics.following_count;
+  if (typeof u2.verified === "boolean") a.verified = u2.verified;
+  if (typeof u2.protected === "boolean") a.isPrivate = u2.protected;
+  if (u2.profile_image_url) a.defaultPicture = /default_profile_images/.test(u2.profile_image_url);
+  return a;
+}
+function xRelation(u2) {
+  const s = new Set(u2.connection_status ?? []);
+  return { following: s.has("following"), followedBy: s.has("followed_by") };
+}
+function oneToOneIds(conversationId) {
+  const m = conversationId.match(/^(\d+)-(\d+)$/);
+  return m ? [m[1], m[2]] : void 0;
+}
+function groupDmEvents(events, meId) {
+  const byChat = /* @__PURE__ */ new Map();
+  const messages = [];
+  for (const e of events) {
+    const chatId = e.dm_conversation_id;
+    if (!chatId) continue;
+    let c = byChat.get(chatId);
+    if (!c) {
+      c = { people: new Set(oneToOneIds(chatId) ?? []) };
+      byChat.set(chatId, c);
+    }
+    if (e.sender_id) c.people.add(e.sender_id);
+    for (const p of e.participant_ids ?? []) c.people.add(p);
+    if (e.created_at && (!c.lastAt || e.created_at > c.lastAt)) c.lastAt = e.created_at;
+    if (e.event_type !== "MessageCreate") continue;
+    const text3 = e.text ?? "";
+    messages.push({
+      messageId: e.id,
+      chatId,
+      at: e.created_at ?? "",
+      fromStudent: !!meId && e.sender_id === meId,
+      senderAccountId: e.sender_id ?? "",
+      text: text3,
+      hasWords: text3.trim().length > 0
+    });
+  }
+  const chats = [...byChat].map(([chatId, c]) => {
+    if (meId) c.people.add(meId);
+    const others = [...c.people].filter((p) => p !== meId).map((accountId) => ({ accountId }));
+    return { chatId, participants: c.people.size, others, ...c.lastAt ? { lastAt: c.lastAt } : {} };
+  });
+  return { chats, messages };
+}
+function createXAdapter(o) {
+  const base = (o.base ?? X_API).replace(/\/+$/, "");
+  const doFetch = o.fetch ?? fetch;
+  async function call(method, path, query2, body2) {
+    const q = new URLSearchParams();
+    for (const [k, v] of Object.entries(query2 ?? {})) if (v !== void 0 && v !== "") q.set(k, String(v));
+    const url = `${base}${path}${q.size ? `?${q}` : ""}`;
+    const send = (token) => doFetch(url, {
+      method,
+      headers: {
+        authorization: `Bearer ${token}`,
+        accept: "application/json",
+        ...body2 !== void 0 ? { "content-type": "application/json" } : {}
+      },
+      body: body2 !== void 0 ? JSON.stringify(body2) : void 0,
+      signal: AbortSignal.timeout(2e4)
+    });
+    let res = await send(await o.tokens.accessToken());
+    if (res.status === 401) {
+      await res.body?.cancel();
+      res = await send(await o.tokens.refreshed());
+      if (res.status === 401) {
+        await res.body?.cancel();
+        throw new SocialSignInNeeded("x");
+      }
+    }
+    let parsed = {};
+    try {
+      parsed = await res.json();
+    } catch {
+      parsed = {};
+    }
+    if (res.status === 429) {
+      const reset = Number(res.headers.get("x-rate-limit-reset"));
+      throw new XRateLimited(Number.isFinite(reset) && reset > 0 ? new Date(reset * 1e3) : void 0);
+    }
+    if (!res.ok) {
+      const errs = parsed.errors;
+      const type = String(parsed.type ?? errs?.[0]?.type ?? `http_${res.status}`);
+      throw new XApiError(res.status, type, String(parsed.detail ?? errs?.[0]?.detail ?? ""));
+    }
+    return { status: res.status, body: parsed };
+  }
+  async function priced(kind, units, run) {
+    const r = await o.budget.reserve(kind, units);
+    if (!r) throw new SocialBudgetSpent(kind, await o.budget.retryAt?.(kind) ?? void 0);
+    let used = 0;
+    try {
+      const out = await run();
+      used = Math.min(units, out.used);
+      return out.value;
+    } finally {
+      await r.settle(used);
+    }
+  }
+  function gone(ref, b) {
+    const err = b.errors?.[0];
+    const text3 = `${err?.title ?? ""} ${err?.detail ?? ""}`.toLowerCase();
+    return new XAccountGone(ref, text3.includes("suspend") ? "suspended" : "not_found");
+  }
+  function profileRead(u2) {
+    const out = { account: mapXUser(u2), relation: xRelation(u2) };
+    if (typeof u2.receives_your_dm === "boolean") out.receivesYourDm = u2.receives_your_dm;
+    if (u2.location) out.location = u2.location;
+    return out;
+  }
+  const userPath = (ref) => {
+    const r = ref.trim().replace(/^@/, "");
+    return /^\d+$/.test(r) ? `/2/users/${r}` : `/2/users/by/username/${encodeURIComponent(r)}`;
+  };
+  async function dmPage(path, maxResults, cursor) {
+    const n = Math.max(1, Math.min(X_DM_PAGE, Math.floor(maxResults)));
+    return priced("messages", n, async () => {
+      const { body: body2 } = await call("GET", path, {
+        max_results: n,
+        pagination_token: cursor,
+        event_types: "MessageCreate,ParticipantsJoin,ParticipantsLeave",
+        "dm_event.fields": X_DM_FIELDS
+      });
+      const events = body2.data ?? [];
+      const meta2 = body2.meta ?? {};
+      const grouped = groupDmEvents(events, o.meId);
+      return {
+        value: { events, ...grouped, ...meta2.next_token ? { cursor: meta2.next_token } : {} },
+        used: meta2.result_count ?? events.length
+      };
+    });
+  }
+  return {
+    platform: "x",
+    pageSize: () => X_LIST_PAGE,
+    me: () => priced("profile", 1, async () => {
+      const { body: body2 } = await call("GET", "/2/users/me", { "user.fields": X_USER_FIELDS });
+      const u2 = body2.data;
+      if (!u2?.id) throw gone("me", body2);
+      return { value: profileRead(u2), used: 1 };
+    }),
+    profile: (ref) => priced("profile", 1, async () => {
+      const { body: body2 } = await call("GET", userPath(ref), { "user.fields": X_USER_FIELDS });
+      const data = body2.data;
+      if (!data?.id) throw gone(ref, body2);
+      return { value: profileRead(data), used: 1 };
+    }),
+    listPage: (accountId, list9, cursor, maxResults = X_LIST_PAGE) => {
+      const n = Math.max(1, Math.min(X_LIST_PAGE, Math.floor(maxResults)));
+      return priced("list", n, async () => {
+        const { body: body2 } = await call("GET", `/2/users/${encodeURIComponent(accountId)}/${list9}`, {
+          max_results: n,
+          pagination_token: cursor,
+          "user.fields": X_USER_FIELDS
+        });
+        const users = body2.data;
+        if (!users && body2.errors?.length) {
+          const err = body2.errors[0];
+          const text3 = `${err.title ?? ""} ${err.detail ?? ""} ${err.type ?? ""}`.toLowerCase();
+          if (text3.includes("suspend")) throw new XAccountGone(accountId, "suspended");
+          if (text3.includes("not-found") || text3.includes("not found"))
+            throw new XAccountGone(accountId, "not_found");
+          throw new XAccountProtected(accountId);
+        }
+        const meta2 = body2.meta ?? {};
+        const page2 = {
+          ids: (users ?? []).map((u2) => u2.id),
+          accounts: (users ?? []).map(mapXUser),
+          relations: Object.fromEntries((users ?? []).map((u2) => [u2.id, xRelation(u2)]))
+        };
+        if (meta2.next_token) page2.cursor = meta2.next_token;
+        return { value: page2, used: meta2.result_count ?? page2.ids.length };
+      });
+    },
+    dmEvents: (opts = {}) => dmPage("/2/dm_events", opts.maxResults ?? X_DM_PAGE, opts.cursor),
+    async chats(cursor) {
+      const page2 = await dmPage("/2/dm_events", X_DM_PAGE, cursor);
+      return { items: page2.chats, ...page2.cursor ? { cursor: page2.cursor } : {} };
+    },
+    async messages(chatId, cursor) {
+      const pair = oneToOneIds(chatId);
+      const other = pair && o.meId ? pair.find((p) => p !== o.meId) : void 0;
+      const path = other ? `/2/dm_conversations/with/${other}/dm_events` : `/2/dm_conversations/${encodeURIComponent(chatId)}/dm_events`;
+      const page2 = await dmPage(path, X_DM_PAGE, cursor);
+      return {
+        items: page2.messages.filter((m) => m.chatId === chatId),
+        ...page2.cursor ? { cursor: page2.cursor } : {}
+      };
+    },
+    send: (to, text3) => priced("send", 1, async () => {
+      const path = to.accountId ? `/2/dm_conversations/with/${encodeURIComponent(to.accountId)}/messages` : to.chatId ? `/2/dm_conversations/${encodeURIComponent(to.chatId)}/messages` : void 0;
+      if (!path) throw new Error("send needs a chat or an account");
+      const { body: body2 } = await call("POST", path, void 0, { text: text3 });
+      const d = body2.data;
+      return {
+        value: { messageId: d?.dm_event_id ?? "", chatId: d?.dm_conversation_id ?? to.chatId ?? "" },
+        used: 1
+      };
+    })
+  };
+}
+
+// supabase/functions/_shared/social/x/oauth.ts
+var xAccessName = (userId) => `x_access:${userId}`;
+var xRefreshName = (userId) => `x_refresh:${userId}`;
+var XTokenError = class extends Error {
+  constructor(status4, code) {
+    super(`x token ${status4} ${code}`);
+    this.status = status4;
+    this.code = code;
+  }
+};
+function xAuthUrl(cfg, p) {
+  const q = new URLSearchParams({
+    response_type: "code",
+    client_id: cfg.clientId,
+    redirect_uri: cfg.redirectUri,
+    scope: X_SCOPES.join(" "),
+    state: p.state,
+    code_challenge: p.challenge,
+    code_challenge_method: "S256"
+  });
+  return `${X_AUTHORIZE_URL}?${q}`;
+}
+var basic = (cfg) => `Basic ${btoa(`${cfg.clientId}:${cfg.clientSecret}`)}`;
+async function tokenCall2(cfg, form) {
+  const res = await (cfg.fetch ?? fetch)(X_TOKEN_URL, {
+    method: "POST",
+    headers: {
+      "content-type": "application/x-www-form-urlencoded",
+      accept: "application/json",
+      authorization: basic(cfg)
+    },
+    body: new URLSearchParams({ ...form, client_id: cfg.clientId }),
+    signal: AbortSignal.timeout(15e3)
+  });
+  let body2 = {};
+  try {
+    body2 = await res.json();
+  } catch {
+    body2 = {};
+  }
+  if (!res.ok) throw new XTokenError(res.status, String(body2.error ?? "token_error"));
+  if (typeof body2.access_token !== "string") throw new XTokenError(502, "no_access_token");
+  return body2;
+}
+function xExchangeCode(cfg, code, verifier) {
+  return tokenCall2(cfg, {
+    grant_type: "authorization_code",
+    code,
+    code_verifier: verifier,
+    redirect_uri: cfg.redirectUri
+  });
+}
+async function xRevoke(cfg, token, hint) {
+  try {
+    const res = await (cfg.fetch ?? fetch)(X_REVOKE_URL, {
+      method: "POST",
+      headers: { "content-type": "application/x-www-form-urlencoded", authorization: basic(cfg) },
+      body: new URLSearchParams({ token, token_type_hint: hint, client_id: cfg.clientId }),
+      signal: AbortSignal.timeout(15e3)
+    });
+    await res.body?.cancel();
+    return res.ok;
+  } catch {
+    return false;
+  }
+}
+async function loadXState(db2, userId) {
+  const [a] = await db2.sql`
+    select status, social_account_id, token_secret_id, sync_state->'x' as x
+      from orbit.integration_accounts where user_id = ${userId}::uuid and provider = 'x'`;
+  if (!a) return void 0;
+  return {
+    status: a.status,
+    socialAccountId: a.social_account_id,
+    refreshSecretId: a.token_secret_id,
+    state: a.x ?? {}
+  };
+}
+async function storeXTokens(vault, userId, t, now) {
+  const accessSecretId = await vault.put(xAccessName(userId), t.access_token);
+  const refreshSecretId = t.refresh_token ? await vault.put(xRefreshName(userId), t.refresh_token) : void 0;
+  const accessExpiresAt = new Date(now.getTime() + Math.max(60, t.expires_in ?? 7200) * 1e3).toISOString();
+  return { accessSecretId, refreshSecretId, accessExpiresAt };
+}
+
+// supabase/functions/_shared/social/x/spend.ts
+function xPrice(kind, units) {
+  if (kind === "send") return roundUsd(units * X_SEND_USD);
+  return roundUsd(units * X_READ_USD);
+}
+var monthStart = (now) => new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1));
+async function xSpendThisMonth(db2, userId, now = /* @__PURE__ */ new Date()) {
+  const [r] = await db2.sql`
+    select coalesce(sum(cost_usd) filter (where user_id = ${userId}::uuid), 0)::text as student,
+           coalesce(sum(cost_usd), 0)::text as orbit
+      from orbit.usage_ledger
+     where provider = 'x' and created_at >= ${monthStart(now)}::timestamptz`;
+  return { studentUsd: roundUsd(Number(r?.student ?? 0)), orbitUsd: roundUsd(Number(r?.orbit ?? 0)) };
+}
+async function xOrbitLimitReached(db2, cfg, now = /* @__PURE__ */ new Date()) {
+  if (cfg.orbitMonthlyUsd <= 0) return true;
+  const [r] = await db2.sql`
+    select coalesce(sum(cost_usd), 0)::text as orbit from orbit.usage_ledger
+     where provider = 'x' and created_at >= ${monthStart(now)}::timestamptz`;
+  return Number(r?.orbit ?? 0) + X_READ_USD > cfg.orbitMonthlyUsd + 1e-9;
+}
+var SPEND_LOCK = "orbit:x:spend";
+function xSpend(db2, o) {
+  const now = o.now ?? (() => /* @__PURE__ */ new Date());
+  const caller = o.caller ?? "x";
+  let charged = 0;
+  const count2 = (kind, made, refused, cost) => db2.sql`select orbit.social_calls_add('x', ${o.userId}, ${kind}, ${caller}, ${made}::int, 0, ${refused}::int,
+                                         ${cost}::numeric)`;
+  async function reserve(kind, units) {
+    const n = Math.max(0, Math.floor(units));
+    const cost = xPrice(kind, n);
+    if (kind === "search") {
+      await count2(kind, 0, 1, 0);
+      return void 0;
+    }
+    if (o.ceilingUsd !== void 0 && charged + cost > o.ceilingUsd + 1e-9) {
+      await count2(kind, 0, 1, 0);
+      return void 0;
+    }
+    const at = now();
+    const id = await db2.begin(async (tx) => {
+      await tx.sql`select pg_advisory_xact_lock(hashtext(${SPEND_LOCK}))`;
+      const [row] = await tx.sql`
+        insert into orbit.usage_ledger (user_id, provider, operation, units, cost_usd, created_at)
+        values (${o.userId}::uuid, 'x', ${kind}, ${n}::numeric, ${cost}::numeric, ${at}::timestamptz)
+        returning id::text as id`;
+      const [s] = await tx.sql`
+        select coalesce(sum(cost_usd) filter (where user_id = ${o.userId}::uuid), 0)::text as student,
+               coalesce(sum(cost_usd), 0)::text as orbit
+          from orbit.usage_ledger
+         where provider = 'x' and created_at >= ${monthStart(at)}::timestamptz`;
+      const over = Number(s.student) > o.limits.studentMonthlyUsd + 1e-9 || Number(s.orbit) > o.limits.orbitMonthlyUsd + 1e-9 || // a limit of 0 is off, even for a call priced at nothing
+      o.limits.orbitMonthlyUsd <= 0 || o.limits.studentMonthlyUsd <= 0;
+      if (over) {
+        await tx.sql`delete from orbit.usage_ledger where id = ${row.id}::bigint`;
+        return void 0;
+      }
+      return row.id;
+    });
+    if (!id) {
+      await count2(kind, 0, 1, 0);
+      return void 0;
+    }
+    charged = roundUsd(charged + cost);
+    let settled = false;
+    return {
+      async settle(unitsUsed) {
+        if (settled) return;
+        settled = true;
+        const used = Math.max(0, Math.min(n, Math.floor(unitsUsed)));
+        const actual = xPrice(kind, used);
+        charged = roundUsd(charged - cost + actual);
+        await db2.sql`
+          update orbit.usage_ledger set units = ${used}::numeric, cost_usd = ${actual}::numeric
+           where id = ${id}::bigint`;
+        await count2(kind, 1, 0, actual);
+      }
+    };
+  }
+  return {
+    reserve,
+    async spend(kind, opts = {}) {
+      const units = opts.units ?? 1;
+      const r = await reserve(kind, units);
+      if (!r) return false;
+      await r.settle(units);
+      return true;
+    },
+    retryAt: async () => void 0,
+    chargedUsd: () => charged
+  };
+}
+
+// supabase/functions/orbit-api/routes/x.ts
+var STATE_TTL_MS3 = 10 * 6e4;
+function notSetUp(missing) {
+  return json(
+    503,
+    { error: { code: "unconfigured", message: X_NOT_SET_UP, missing } },
+    { "x-orbit-connector": "unconfigured" }
+  );
+}
+function setup(ctx) {
+  const cfg = ctx.env.x;
+  const missing = xMissing(cfg);
+  if (missing.length || !cfg) return notSetUp(missing);
+  return {
+    cfg,
+    oauth: {
+      clientId: cfg.clientId,
+      clientSecret: cfg.clientSecret,
+      redirectUri: cfg.redirectUri ?? `${functionsBase(ctx)}/orbit-api/x/callback`,
+      fetch: ctx.fetch
+    }
+  };
+}
+var settings2 = (ctx, outcome) => redirect(`${ctx.env.appUrl}/settings?x=${outcome}`);
+async function xConnectStart(ctx) {
+  const s = setup(ctx);
+  if (s instanceof Response) return s;
+  const body2 = await readJson(ctx.req, { optional: true });
+  if (body2.consent !== true) throw badRequest("consent is required before signing in with X");
+  const userId = ctx.userId;
+  const now = ctx.now();
+  const consent = { version: X_CONSENT_VERSION, at: now.toISOString() };
+  const state = randomToken(32);
+  const { verifier, challenge } = await pkcePair();
+  await ctx.db.sql`
+    insert into orbit.oauth_states (state, code_verifier, redirect_to, user_id, scopes, created_at, expires_at)
+    values (${state}, ${verifier}, ${`${ctx.env.appUrl}/settings`}, ${userId}::uuid, ${X_SCOPES}::text[],
+            ${now}::timestamptz, ${new Date(now.getTime() + STATE_TTL_MS3)}::timestamptz)`;
+  await ctx.db.sql`
+    insert into orbit.audit_log (user_id, actor, action, target_table, details)
+    values (${userId}::uuid, 'user', 'x.consent', 'integration_accounts', ${consent}::jsonb)`;
+  await ctx.db.sql`
+    insert into orbit.integration_accounts (user_id, provider, status, sync_state)
+    values (${userId}::uuid, 'x', 'connecting', ${{ x: { consent } }}::jsonb)
+    on conflict (user_id, provider) do update set
+      status = case when orbit.integration_accounts.status = 'active' then 'active' else 'connecting' end,
+      sync_state = jsonb_set(coalesce(orbit.integration_accounts.sync_state, '{}'::jsonb), '{x}',
+                             coalesce(orbit.integration_accounts.sync_state->'x', '{}'::jsonb)
+                               || ${{ consent }}::jsonb)`;
+  return json(200, { url: xAuthUrl(s.oauth, { state, challenge }) });
+}
+async function xCallback(ctx) {
+  const s = setup(ctx);
+  if (s instanceof Response) return settings2(ctx, "failed");
+  const q = ctx.url.searchParams;
+  const state = q.get("state");
+  if (!state) return settings2(ctx, "failed");
+  const [st] = await ctx.db.sql`
+    delete from orbit.oauth_states where state = ${state}
+    returning code_verifier, user_id, scopes, expires_at`;
+  if (!st?.user_id || !st.scopes.includes("dm.read") || new Date(st.expires_at).getTime() < ctx.now().getTime())
+    return settings2(ctx, "failed");
+  const userId = st.user_id;
+  const fail = async (why) => {
+    await ctx.db.sql`
+      update orbit.integration_accounts set status = case when status = 'active' then status else 'error' end,
+             last_error = ${why}
+       where user_id = ${userId}::uuid and provider = 'x'`;
+    return settings2(ctx, "failed");
+  };
+  if (q.get("error")) return fail("x_denied");
+  const code = q.get("code");
+  if (!code) return fail("no_code");
+  const vault = sqlVault(ctx.db);
+  let tokens3;
+  try {
+    tokens3 = await xExchangeCode(s.oauth, code, st.code_verifier);
+  } catch {
+    return fail("token_exchange");
+  }
+  let me2;
+  try {
+    const adapter = createXAdapter({
+      tokens: { accessToken: async () => tokens3.access_token, refreshed: async () => tokens3.access_token },
+      budget: xSpend(ctx.db, { userId, limits: s.cfg, caller: "connect", now: ctx.now }),
+      fetch: ctx.fetch
+    });
+    const read2 = await adapter.me();
+    me2 = { id: read2.account.id, username: read2.account.username };
+  } catch (e) {
+    if (tokens3.refresh_token) await xRevoke(s.oauth, tokens3.refresh_token, "refresh_token");
+    return fail(e instanceof SocialBudgetSpent ? "x_limit" : "x_me");
+  }
+  const stored = await storeXTokens(vault, userId, tokens3, ctx.now());
+  const scopes = (tokens3.scope ?? X_SCOPES.join(" ")).split(/\s+/).filter(Boolean);
+  const before = await loadXState(ctx.db, userId);
+  await ctx.db.begin(async (tx) => {
+    if (before?.socialAccountId && before.socialAccountId !== me2.id) {
+      await tx.sql`delete from orbit.social_follows where platform = 'x' and owner_user_id = ${userId}::uuid`;
+      await tx.sql`delete from orbit.social_list_reads where platform = 'x' and owner_user_id = ${userId}::uuid`;
+      await tx.sql`
+        insert into orbit.audit_log (user_id, actor, action, target_table, details)
+        values (${userId}::uuid, 'user', 'x.account_changed', 'integration_accounts',
+                ${{ from: before.socialAccountId, to: me2.id }}::jsonb)`;
+    }
+    const x = {
+      username: me2.username,
+      accessSecretId: stored.accessSecretId,
+      accessExpiresAt: stored.accessExpiresAt,
+      ...before?.socialAccountId && before.socialAccountId !== me2.id ? { dmCursor: null, dmReadAt: null } : {}
+    };
+    await tx.sql`
+      insert into orbit.integration_accounts (user_id, provider, status, scopes, social_account_id, token_secret_id,
+                                              sync_state, last_error)
+      values (${userId}::uuid, 'x', 'active', ${scopes}::text[], ${me2.id}, ${stored.refreshSecretId ?? null}::uuid,
+              ${{ x }}::jsonb, null)
+      on conflict (user_id, provider) do update set
+        status = case when coalesce(excluded.token_secret_id, orbit.integration_accounts.token_secret_id) is null
+                      then 'needs_reauth' else 'active' end,
+        scopes = excluded.scopes,
+        social_account_id = excluded.social_account_id,
+        token_secret_id = coalesce(excluded.token_secret_id, orbit.integration_accounts.token_secret_id),
+        sync_state = jsonb_set(coalesce(orbit.integration_accounts.sync_state, '{}'::jsonb), '{x}',
+                               jsonb_strip_nulls(coalesce(orbit.integration_accounts.sync_state->'x', '{}'::jsonb)
+                                                 || ${x}::jsonb)),
+        last_error = null`;
+    await tx.sql`
+      insert into orbit.source_states (user_id, source, state) values (${userId}::uuid, 'x', 'on')
+      on conflict (user_id, source) do update set state = 'on', off_since = null`;
+    await tx.sql`
+      insert into orbit.audit_log (user_id, actor, action, target_table, details)
+      values (${userId}::uuid, 'user', 'x.connected', 'integration_accounts', ${{ scopes: scopes.length }}::jsonb)`;
+  });
+  return settings2(ctx, "connected");
+}
+async function xStatus(ctx) {
+  const s = setup(ctx);
+  if (s instanceof Response) return s;
+  const userId = ctx.userId;
+  const row = await loadXState(ctx.db, userId);
+  const spent = await xSpendThisMonth(ctx.db, userId, ctx.now());
+  const status4 = !row || row.status === "revoked" ? "not_connected" : row.status === "active" || row.status === "connecting" || row.status === "needs_reauth" ? row.status : "error";
+  const out = {
+    status: status4,
+    ...status4 !== "not_connected" && row?.state.username ? { username: row.state.username } : {},
+    spentThisMonthUsd: spent.studentUsd,
+    limitUsd: s.cfg.studentMonthlyUsd,
+    orbitLimitReached: await xOrbitLimitReached(ctx.db, s.cfg, ctx.now())
+  };
+  return json(200, out);
+}
+async function xDisconnect(ctx) {
+  const s = setup(ctx);
+  if (s instanceof Response) return s;
+  await readJson(ctx.req, { optional: true });
+  const userId = ctx.userId;
+  const row = await loadXState(ctx.db, userId);
+  if (!row) return json(200, { ok: true });
+  const vault = sqlVault(ctx.db);
+  let revoked = false;
+  if (row.refreshSecretId) {
+    const refresh2 = await vault.get(row.refreshSecretId);
+    if (refresh2) revoked = await xRevoke(s.oauth, refresh2, "refresh_token");
+  }
+  if (!revoked && row.state.accessSecretId) {
+    const access = await vault.get(row.state.accessSecretId);
+    if (access) revoked = await xRevoke(s.oauth, access, "access_token");
+  }
+  if (row.refreshSecretId) await vault.delete(row.refreshSecretId);
+  if (row.state.accessSecretId) await vault.delete(row.state.accessSecretId);
+  await ctx.db.sql`
+    update orbit.integration_accounts
+       set status = 'revoked', token_secret_id = null, last_error = null,
+           sync_state = jsonb_set(coalesce(sync_state, '{}'::jsonb), '{x}',
+                                  coalesce(sync_state->'x', '{}'::jsonb) - 'accessSecretId' - 'accessExpiresAt')
+     where user_id = ${userId}::uuid and provider = 'x'`;
+  await ctx.db.sql`
+    insert into orbit.audit_log (user_id, actor, action, target_table, details)
+    values (${userId}::uuid, 'user', 'x.disconnect', 'integration_accounts', ${{ revokedAtX: revoked }}::jsonb)`;
+  return json(200, { ok: true, revokedAtX: revoked });
+}
+var xRoutes = {
+  "/x/connect/start": { method: "POST", auth: true, run: xConnectStart },
+  "/x/callback": { method: "GET", auth: false, run: xCallback },
+  "/x/status": { method: "GET|POST", auth: true, run: xStatus },
+  "/x/disconnect": { method: "POST", auth: true, run: xDisconnect }
+};
+
 // supabase/functions/orbit-api/api.ts
 var DEFAULT_APP_URL = "https://tryorbit.today";
 var DEFAULT_LIMITS = { ipPerMinute: 120, userPerMinute: 240, userPerDay: 2e4 };
@@ -26168,7 +27168,10 @@ var ROUTES = {
   ...voiceRoutes,
   ...adminRoutes,
   ...xRoutes,
-  ...socialRoutes
+  ...socialRoutes,
+  // plan 43: the optional sources' switches (PUT /sources/:source is matched by pattern) and texts' day counts
+  ...sourcesRoutes,
+  ...textsRoutes
 };
 function missingSecrets(deps, google) {
   const m = [];
@@ -26207,9 +27210,11 @@ function makeApiHandler(deps) {
       googleRedirectUri: deps.env.googleRedirectUri,
       unipileKey: deps.env.unipileKey,
       unipileBase: deps.env.unipileBase,
+      ...deps.env.extraSources ? { extraSources: deps.env.extraSources } : {},
       ...defined(deps.agent?.env)
     }
   };
+  const offered = [...agent.env.extraSources ?? []];
   let secretsTriedAt = 0;
   async function providerSecrets() {
     if (deps.env.unipileKey && deps.env.unipileBase || !deps.refreshProviderSecrets) return;
@@ -26259,10 +27264,10 @@ function makeApiHandler(deps) {
     async function route() {
       if (req.method === "OPTIONS") {
         if (!allowedOrigin) return new Response(null, { status: 403, headers: h });
-        return preflight(req, h, "GET, POST, DELETE, OPTIONS");
+        return preflight(req, h, "GET, POST, PUT, DELETE, OPTIONS");
       }
       if (origin && !allowedOrigin) throw new HttpError(403, "forbidden", "origin not allowed");
-      const r = ROUTES[path] ?? friendPatternRoute(path) ?? socialPatternRoute(path);
+      const r = ROUTES[path] ?? friendPatternRoute(path) ?? socialPatternRoute(path) ?? sourcesPatternRoute(path);
       if (!r) throw notFound();
       if (!r.method.split("|").includes(req.method)) throw new HttpError(405, "method_not_allowed", r.method);
       await providerSecrets();
@@ -26283,7 +27288,8 @@ function makeApiHandler(deps) {
         now,
         requestId: rid,
         pullLagMs: deps.pullLagMs ?? 2e3,
-        services: () => services ??= makeServices(agent, { db: db2, now })
+        services: () => services ??= makeServices(agent, { db: db2, now }),
+        offered
       };
       if (r.auth) {
         const claims = await verifyBearer(ctx.session, req.headers.get("authorization")).catch(async (e) => {
@@ -26339,6 +27345,7 @@ var supabaseUrl = env("SUPABASE_URL");
 var dbUrl = env("SUPABASE_DB_URL");
 var db = dbUrl ? connectDb(dbUrl) : void 0;
 var agentEnv = await agentEnvWithSecrets(env, db);
+var extraSources = offeredSources(env("ORBIT_EXTRA_SOURCES"));
 var [sessionSecret, unipileWebhookSecret, unipileKey, unipileBase, redirectUri, ownerId] = await Promise.all([
   resolveSecret(env, db, "ORBIT_SESSION_SECRET", "orbit_session_secret"),
   resolveSecret(env, db, "ORBIT_UNIPILE_WEBHOOK_SECRET", "orbit_unipile_webhook_secret"),
@@ -26363,10 +27370,11 @@ Deno.serve(
       functionsUrl: supabaseUrl ? `${supabaseUrl}/functions/v1` : void 0,
       connectorsSigningKey: env("SUPABASE_SERVICE_ROLE_KEY"),
       ownerId,
-      x: xConfigFromEnv(env)
+      x: xConfigFromEnv(env),
+      extraSources
     },
     db,
-    agent: { env: agentEnv },
+    agent: { env: { ...agentEnv, extraSources } },
     refreshProviderSecrets: async () => {
       const [unipileKey2, unipileBase2] = await Promise.all([
         providerSecret(env, db, "UNIPILE_API_KEY"),

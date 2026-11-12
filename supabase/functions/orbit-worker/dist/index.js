@@ -2039,6 +2039,8 @@ var KIND_QUEUE = {
   "score.ties": "orbit_score",
   "score.person": "orbit_score",
   friend_shares_refresh: "orbit_score",
+  // plan 43: a source switched on, off or removed: rescore twice, the friend projection, the graph mark
+  "sources.switch": "orbit_score",
   "enrich.dossier": "orbit_enrich",
   "source.search": "orbit_enrich",
   hop_evidence: "orbit_enrich",
@@ -2349,9 +2351,9 @@ function parseExtraSources(raw) {
   }
   return out;
 }
-function sourcesInUse(offered, states) {
+function sourcesInUse(offered2, states) {
   const out = /* @__PURE__ */ new Set();
-  for (const s of offered) if (states?.[s] === "on") out.add(s);
+  for (const s of offered2) if (states?.[s] === "on") out.add(s);
   return out;
 }
 var TOUCH_SOURCE = /* @__PURE__ */ new Map();
@@ -2364,6 +2366,7 @@ for (const info of Object.values(SOURCES)) {
   if (info.messageProvider) PROVIDER_SOURCE.set(info.messageProvider, info.id);
   if (info.identityKind) IDENTITY_SOURCE.set(info.identityKind, info.id);
 }
+var sourceOfProvider = (provider) => provider ? PROVIDER_SOURCE.get(provider) : void 0;
 function excludedBy(inUse) {
   const out = {
     touchKinds: [],
@@ -2415,6 +2418,39 @@ function xMissing(cfg) {
   return m;
 }
 var roundUsd = (n) => Math.round(n * 1e5) / 1e5;
+
+// supabase/functions/_shared/sources/states.ts
+var offeredSources = (raw) => parseExtraSources(raw);
+var offeredOf = (holder) => [...holder?.extraSources ?? []];
+async function loadSourceStates(db2, userId) {
+  const rows = await db2.sql`
+    select source, state from orbit.source_states where user_id = ${userId}::uuid`;
+  const out = {};
+  for (const r of rows)
+    if (OPTIONAL_SOURCES.includes(r.source))
+      out[r.source] = r.state;
+  return out;
+}
+var hiddenOf = (inUse) => OPTIONAL_SOURCES.filter((s) => !inUse.has(s));
+async function sourcesFor(db2, userId, offered2) {
+  const states = offered2.length ? await loadSourceStates(db2, userId) : {};
+  const inUse = sourcesInUse(offered2, states);
+  return { offered: [...offered2], states, inUse, excluded: excludedBy(inUse), hidden: hiddenOf(inUse) };
+}
+var NO_SOURCES = {
+  offered: [],
+  states: {},
+  inUse: /* @__PURE__ */ new Set(),
+  excluded: excludedBy(/* @__PURE__ */ new Set()),
+  hidden: hiddenOf(/* @__PURE__ */ new Set())
+};
+async function hiddenPeople(db2, userId, src) {
+  if (!src.hidden.length) return /* @__PURE__ */ new Set();
+  const rows = await db2.sql`
+    select id from orbit.people
+     where user_id = ${userId}::uuid and not orbit.person_in_use(sources, source_account, ${src.hidden}::text[])`;
+  return new Set(rows.map((r) => r.id));
+}
 
 // supabase/functions/orbit-worker/handlers/cost.ts
 var DEFAULT_COST_THRESHOLDS = {
@@ -6897,9 +6933,9 @@ function checkLinks(d, ctx) {
   return links.length ? [approval("link_needs_approval", links.join(", "))] : [];
 }
 function checkTimeCommitments(d, ctx) {
-  const offered = (ctx.offeredSlots ?? []).map((s) => new Date(s).getTime());
+  const offered2 = (ctx.offeredSlots ?? []).map((s) => new Date(s).getTime());
   const extra = extractProposedTimes(d.body, ctx.now, ctx.timeZone).filter(
-    (t) => !offered.some((o) => Math.abs(o - new Date(t.startIso).getTime()) <= 15 * 6e4)
+    (t) => !offered2.some((o) => Math.abs(o - new Date(t.startIso).getTime()) <= 15 * 6e4)
   );
   return extra.length ? [approval("time_commitment_needs_approval", `commits to ${extra.map((t) => t.raw).join(", ")}`)] : [];
 }
@@ -11811,13 +11847,14 @@ async function embedSent(db2, embed, userId, limit2 = EMBED_SENT_LIMIT) {
   );
   return { embedded, looked: rows.length };
 }
-async function relearnCard(db2, userId, now) {
+async function relearnCard(db2, userId, now, excludedProviders = NO_SOURCES.excluded.providers) {
   const [u2] = await db2.sql`
     select settings, first_name, full_name from orbit.users where id = ${userId}::uuid`;
   if (!u2) return null;
   const sent = await db2.sql`
     select body_text from orbit.messages
      where user_id = ${userId}::uuid and direction = 'out' and body_text is not null and not is_automated
+       and provider <> all(${[...excludedProviders]}::text[])
      order by sent_at desc limit ${CARD_SAMPLES}::int`;
   const first = u2.first_name ?? u2.full_name?.split(/\s+/)[0] ?? "";
   const preset = u2.settings?.tone_preset;
@@ -11988,7 +12025,7 @@ async function loadUserRow(db2, userId) {
   return { ...u2, settings: u2.settings ?? {}, majors: u2.majors ?? [] };
 }
 var userFirstName = (u2) => u2.first_name?.trim() || u2.full_name?.trim().split(/\s+/)[0] || u2.email.split("@")[0];
-async function loadPerson(db2, userId, personId) {
+async function loadPerson(db2, userId, personId, hidden = NO_SOURCES.hidden) {
   if (typeof personId !== "string" || !/^[0-9a-f-]{36}$/i.test(personId))
     throw new HttpError(400, "bad_request", "personId is required");
   const [p] = await db2.sql`
@@ -12001,7 +12038,8 @@ async function loadPerson(db2, userId, personId) {
       from orbit.people p
       left join orbit.organizations o on o.id = p.org_id
       left join orbit.tie_scores ts on ts.user_id = p.user_id and ts.person_id = p.id
-     where p.id = ${personId}::uuid and p.user_id = ${userId}::uuid and p.deleted_at is null`;
+     where p.id = ${personId}::uuid and p.user_id = ${userId}::uuid and p.deleted_at is null
+       and orbit.person_in_use(p.sources, p.source_account, ${[...hidden]}::text[])`;
   if (!p) throw new HttpError(404, "not_found", "no such person");
   const emails = [...new Set([p.primary_email, ...p.emails ?? []].filter((e) => !!e))];
   return { ...p, emails };
@@ -12117,6 +12155,7 @@ function voiceText(c) {
 }
 var escapeRe3 = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 async function exemplars(s, userId, personId, situation, opts = {}) {
+  const excluded = [...opts.excludedProviders ?? NO_SOURCES.excluded.providers];
   let q = null;
   try {
     q = await s.embed(situation);
@@ -12128,6 +12167,7 @@ async function exemplars(s, userId, personId, situation, opts = {}) {
   const pick = (onlyReplies) => s.db.sql`
     select m.id, m.body_text, m.to_person_ids from orbit.messages m
      where m.user_id = ${userId}::uuid and m.direction = 'out' and m.embedding is not null
+       and m.provider <> all(${excluded}::text[])
        and m.body_text is not null and not (${personId}::uuid = any(m.to_person_ids))
        and coalesce(array_length(regexp_split_to_array(btrim(m.body_text), '\\s+'), 1), 0) >= 25
        and (${onlyReplies}::boolean = false or m.in_reply_to is not null)
@@ -12395,8 +12435,9 @@ async function composeFromBatch(s, req, frozen, first) {
 async function prepareCompose(s, req, frozen) {
   const db2 = s.db;
   const now = s.now();
+  const src = await sourcesFor(db2, req.userId, offeredOf(s.env));
   const user = await loadUserRow(db2, req.userId);
-  const person = await loadPerson(db2, req.userId, req.personId);
+  const person = await loadPerson(db2, req.userId, req.personId, src.hidden);
   if (person.is_self) throw new HttpError(400, "bad_request", "that is you");
   if (person.do_not_contact)
     throw new HttpError(
@@ -12426,7 +12467,7 @@ async function prepareCompose(s, req, frozen) {
     kind: req.kind,
     goalBrief: typeof goalCriteria.playbook === "string" ? goalCriteria.playbook : void 0
   });
-  const history = await historyWith(db2, req.userId, person.id);
+  const history = await historyWith(db2, req.userId, person.id, src.excluded.providers);
   const sendsToThem = req.kind !== "forwardable_blurb";
   if (sendsToThem && req.kind !== "reply" && unansweredBefore(history) >= 3)
     throw new HttpError(409, "unanswered_limit", "three messages already went unanswered");
@@ -12448,8 +12489,8 @@ async function prepareCompose(s, req, frozen) {
       "needs_postal_address",
       "add a postal address in Settings before the first sales email (CAN-SPAM)"
     );
-  const target = req.targetPersonId ? await loadPerson(db2, req.userId, req.targetPersonId) : void 0;
-  const introducer = req.via && req.via.introducerId !== person.id ? await loadPerson(db2, req.userId, req.via.introducerId).catch(() => void 0) : req.via ? person : void 0;
+  const target = req.targetPersonId ? await loadPerson(db2, req.userId, req.targetPersonId, src.hidden) : void 0;
+  const introducer = req.via && req.via.introducerId !== person.id ? await loadPerson(db2, req.userId, req.via.introducerId, src.hidden).catch(() => void 0) : req.via ? person : void 0;
   const research = await loadResearch(db2, req.userId, person.id);
   const userContext = await buildUserContext(db2, user);
   const aboutThem = await db2.sql`
@@ -12503,7 +12544,12 @@ async function prepareCompose(s, req, frozen) {
     req.userId,
     person.id,
     [req.kind, goalKind, person.title ?? "", thread.lastInbound ?? "", topic ?? ""].join(" "),
-    req.kind === "reply" ? { replies: true, limit: REPLY_EXAMPLES, maxChars: REPLY_EXAMPLE_CHARS } : { replies: false }
+    req.kind === "reply" ? {
+      replies: true,
+      limit: REPLY_EXAMPLES,
+      maxChars: REPLY_EXAMPLE_CHARS,
+      excludedProviders: src.excluded.providers
+    } : { replies: false, excludedProviders: src.excluded.providers }
   );
   const slotText = [
     ...slots.map((x) => `${x.start} = ${x.label.replace(/ to \d{1,2}:\d{2}( ?[ap]m)?/i, "")}`),
@@ -12747,10 +12793,10 @@ async function chatFor(db2, userId, personId, goalId) {
      order by (goal_id is not distinct from ${goalId}::uuid) desc, updated_at desc limit 1`;
   return c?.id ?? null;
 }
-async function historyWith(db2, userId, personId) {
+async function historyWith(db2, userId, personId, excludedProviders = NO_SOURCES.excluded.providers) {
   const rows = await db2.sql`
     select direction, sent_at as at, external_id from orbit.messages
-     where user_id = ${userId}::uuid
+     where user_id = ${userId}::uuid and provider <> all(${[...excludedProviders]}::text[])
        and (from_person_id = ${personId}::uuid or ${personId}::uuid = any(to_person_ids))
        and not is_automated
     union all
@@ -15679,7 +15725,7 @@ function underMode(rows, mode, domains) {
     (r) => r.company_domain && want.has(r.company_domain.toLowerCase()) || r.company && names.has(normalizeCompany(r.company))
   );
 }
-async function refreshFriendShares(db2, ownerId2, now) {
+async function refreshFriendShares(db2, ownerId2, now, src = NO_SOURCES) {
   const rows = await db2.sql`
     select p.id, p.display_name, p.title, p.headline, p.org_raw, o.name as org_name, o.domains, p.school, p.is_alumni,
            p.linkedin_member_id, p.linkedin_slug, p.primary_email, ts.share_score::int as share_score,
@@ -15689,7 +15735,8 @@ async function refreshFriendShares(db2, ownerId2, now) {
       left join orbit.tie_scores ts on ts.user_id = p.user_id and ts.person_id = p.id
       left join orbit.tie_labels tl on tl.user_id = p.user_id and tl.person_id = p.id
      where p.user_id = ${ownerId2}::uuid and not p.is_self and p.deleted_at is null and p.merged_into is null
-       and p.hidden_at is null and not p.do_not_contact and not p.private`;
+       and p.hidden_at is null and not p.do_not_contact and not p.private and p.listed
+       and orbit.person_in_use(p.sources, p.source_account, ${src.hidden}::text[])`;
   const identities = await db2.sql`
     select person_id, kind, value_norm from orbit.person_identities
      where user_id = ${ownerId2}::uuid and kind in ('email', 'linkedin_member', 'linkedin_slug')`;
@@ -15778,16 +15825,19 @@ async function visibleShares(db2, friend) {
      order by display_name`;
   return underMode(rows, friend.mode, friend.domains);
 }
-async function matchShares(db2, viewerId, shares) {
+async function matchShares(db2, viewerId, shares, hidden = NO_SOURCES.hidden) {
   const out = /* @__PURE__ */ new Map();
   if (!shares.length) return out;
   const people = await db2.sql`
     select p.id, p.display_name, p.org_raw, o.name as org_name, p.linkedin_member_id, p.linkedin_slug, p.primary_email
       from orbit.people p left join orbit.organizations o on o.id = p.org_id
-     where p.user_id = ${viewerId}::uuid and not p.is_self and p.deleted_at is null and p.merged_into is null`;
+     where p.user_id = ${viewerId}::uuid and not p.is_self and p.deleted_at is null and p.merged_into is null
+       and orbit.person_in_use(p.sources, p.source_account, ${[...hidden]}::text[])`;
   const identities = await db2.sql`
-    select person_id, kind, value_norm from orbit.person_identities
-     where user_id = ${viewerId}::uuid and kind in ('email', 'linkedin_member', 'linkedin_slug')`;
+    select i.person_id, i.kind, i.value_norm from orbit.person_identities i
+     where i.user_id = ${viewerId}::uuid and i.kind in ('email', 'linkedin_member', 'linkedin_slug')
+       and not exists (select 1 from orbit.people q where q.id = i.person_id
+                        and not orbit.person_in_use(q.sources, q.source_account, ${[...hidden]}::text[]))`;
   const byMember = /* @__PURE__ */ new Map();
   const bySlug = /* @__PURE__ */ new Map();
   const emails = /* @__PURE__ */ new Map();
@@ -17714,13 +17764,14 @@ async function runHopEvidenceJob(s, userId, payload) {
 // supabase/functions/_shared/paths/find.ts
 var DAY9 = 864e5;
 var TIE_KIND_SET = new Set(TIE_KINDS);
-var PERSON_COLUMNS2 = `p.id, p.is_self, p.display_name, p.first_name, p.title, p.org_raw, o.name as org_name, p.is_alumni,
-       p.linkedin_url, p.linkedin_member_id, p.hidden_at, p.do_not_contact, p.last_interaction_at,
-       ts.score::int as score, ts.features->'reciprocity' as reciprocity
+var personColumns = (hidden) => `p.id, p.is_self, p.display_name, p.first_name, p.title, p.org_raw,
+       o.name as org_name, p.is_alumni, p.linkedin_url, p.linkedin_member_id, p.hidden_at, p.do_not_contact,
+       p.last_interaction_at, ts.score::int as score, ts.features->'reciprocity' as reciprocity
   from orbit.people p
   left join orbit.organizations o on o.id = p.org_id
   left join orbit.tie_scores ts on ts.user_id = p.user_id and ts.person_id = p.id
- where p.user_id = $1::uuid and p.deleted_at is null and p.merged_into is null`;
+ where p.user_id = $1::uuid and p.deleted_at is null and p.merged_into is null
+   and orbit.person_in_use(p.sources, p.source_account, ${hidden}::text[])`;
 var RANKING_EVIDENCE_KEYS = [
   "reciprocal",
   "wBy",
@@ -17739,7 +17790,7 @@ var slimKey = (k) => k === "current" ? `'current', case when jsonb_typeof(t.evid
 var SLIM_EVIDENCE = `jsonb_strip_nulls(jsonb_build_object(${RANKING_EVIDENCE_KEYS.map(slimKey).join(", ")}))`;
 var TIE_COLUMNS = (slim) => `t.a_person_id, t.b_person_id, t.kind, t.weight, t.confidence, ${slim ? SLIM_EVIDENCE : "t.evidence"} as evidence,
    t.first_seen_at, t.last_seen_at`;
-async function graphContext(db2, userId, now) {
+async function graphContext(db2, userId, now, src = NO_SOURCES) {
   const intros = await db2.sql`
     select introducer_person_id, status, asked_at, outcome_at from orbit.intro_requests
      where user_id = ${userId}::uuid and introducer_person_id is not null`;
@@ -17752,6 +17803,7 @@ async function graphContext(db2, userId, now) {
     select distinct m.from_person_id as person_id from orbit.threads t
       join orbit.messages m on m.thread_id = t.id and m.sent_at = t.last_at
      where t.user_id = ${userId}::uuid and t.last_direction = 'in' and t.is_networking
+       and t.provider <> all(${src.excluded.providers}::text[])
        and m.from_person_id is not null and t.last_at > ${new Date(now.getTime() - 30 * DAY9)}::timestamptz`;
   const blockedRows = await db2.sql`
     select a_person_id, b_person_id from orbit.blocked_pairs where user_id = ${userId}::uuid`;
@@ -17759,7 +17811,9 @@ async function graphContext(db2, userId, now) {
     intros,
     targetOrgs,
     owes: new Set(owes.map((o) => o.person_id)),
-    blocked: new Set(blockedRows.map((b) => pairKeyOf(b.a_person_id, b.b_person_id)))
+    blocked: new Set(blockedRows.map((b) => pairKeyOf(b.a_person_id, b.b_person_id))),
+    src,
+    hidden: await hiddenPeople(db2, userId, src)
   };
 }
 function graphPerson(r, c, now) {
@@ -17803,8 +17857,10 @@ function tieOf(t, userId) {
   };
 }
 function addTies(g, rows) {
+  const off = new Set(g.ctx.src.excluded.tieKinds);
   for (const t of rows) {
     if (!TIE_KIND_SET.has(t.kind) || t.a_person_id === g.selfId || t.b_person_id === g.selfId) continue;
+    if (off.has(t.kind) || g.ctx.hidden.has(t.a_person_id) || g.ctx.hidden.has(t.b_person_id)) continue;
     const tie = tieOf(t, g.userId);
     g.ties.set(tie.id, tie);
   }
@@ -17813,11 +17869,11 @@ function rebuildPairs(g) {
   g.pairs = combineTies([...g.ties.values()], g.now);
 }
 async function loadGraph(db2, userId, now, opts = {}) {
-  return loadWhole(db2, userId, now, opts.slim ?? false);
+  return loadWhole(db2, userId, now, opts.slim ?? false, opts.sources);
 }
-async function loadWhole(db2, userId, now, slim) {
-  const rows = await db2.query(`select ${PERSON_COLUMNS2}`, [userId]);
-  const ctx = await graphContext(db2, userId, now);
+async function loadWhole(db2, userId, now, slim, src = NO_SOURCES) {
+  const rows = await db2.query(`select ${personColumns("$2")}`, [userId, src.hidden]);
+  const ctx = await graphContext(db2, userId, now, src);
   const g = graphOf(userId, now, ctx, rows);
   addTies(
     g,
@@ -17848,7 +17904,7 @@ function graphOf(userId, now, ctx, rows) {
     full: /* @__PURE__ */ new Set()
   };
 }
-async function loadFriendLayer(db2, userId) {
+async function loadFriendLayer(db2, userId, hidden = NO_SOURCES.hidden) {
   const friends = await sharingFriends(db2, userId);
   if (!friends.length) return { friends, shares: [] };
   const all = [];
@@ -17857,7 +17913,8 @@ async function loadFriendLayer(db2, userId) {
   const matches = await matchShares(
     db2,
     userId,
-    all.map((x) => x.share)
+    all.map((x) => x.share),
+    hidden
   );
   return {
     friends,
@@ -18584,8 +18641,9 @@ async function planGoals(s, userId, user, tz, goals, out) {
   });
   let remaining = pace.remaining;
   const daysLeft = sendDaysLeft(planDay);
-  const people = await candidateRows(db2, userId);
-  const layer = await loadFriendLayer(db2, userId).catch(() => ({ friends: [], shares: [] }));
+  const src = await sourcesFor(db2, userId, offeredOf(s.env));
+  const people = await candidateRows(db2, userId, void 0, src.hidden);
+  const layer = await loadFriendLayer(db2, userId, src.hidden).catch(() => ({ friends: [], shares: [] }));
   const asked = new Set(
     (await db2.sql`
         select friend_user_id::text || ':' || target_person_id::text as key from orbit.friend_intro_asks
@@ -18703,7 +18761,7 @@ async function planGoals(s, userId, user, tz, goals, out) {
   out.skipped = skipsAll.length;
   await keepSkips(db2, userId, planDay, skipsAll, now);
 }
-async function candidateRows(db2, userId, one) {
+async function candidateRows(db2, userId, one, hidden = NO_SOURCES.hidden) {
   return db2.sql`
     select p.id, p.display_name, p.first_name, p.title, p.headline, coalesce(o.name, p.org_raw) as org, p.is_alumni,
            p.primary_email, p.hidden_at, p.do_not_contact, coalesce(p.private, false) as private, p.timezone,
@@ -18730,6 +18788,7 @@ async function candidateRows(db2, userId, one) {
       left join orbit.organizations o on o.id = p.org_id
       left join orbit.tie_scores ts on ts.user_id = p.user_id and ts.person_id = p.id
      where p.user_id = ${userId}::uuid and not p.is_self and p.deleted_at is null and p.merged_into is null
+       and orbit.person_in_use(p.sources, p.source_account, ${[...hidden]}::text[])
        and (${one?.personId ?? null}::uuid is null or p.id = ${one?.personId ?? null}::uuid)
        and (${one?.personId ?? null}::uuid is not null or coalesce(o.name, p.org_raw) is not null)`;
 }
@@ -18741,7 +18800,12 @@ async function firstTouchSendGate(s, userId, d) {
   const [goal] = d.goal_id ? await db2.sql`
         select id, kind, title, targets, autonomy_level, priority from orbit.goals
          where id = ${d.goal_id}::uuid and user_id = ${userId}::uuid and deleted_at is null and status = 'active'` : [];
-  const [p] = await candidateRows(db2, userId, { personId: d.person_id, draftId: d.id });
+  const [p] = await candidateRows(
+    db2,
+    userId,
+    { personId: d.person_id, draftId: d.id },
+    (await sourcesFor(db2, userId, offeredOf(s.env))).hidden
+  );
   if (!p) return { go: false, hold: "first_touch:hidden", rule: "hidden" };
   const rule = firstTouchBlock(
     {
@@ -23156,7 +23220,7 @@ function goalFrom(r) {
   const due = r.due_at instanceof Date ? r.due_at.toISOString().slice(0, 10) : r.due_at;
   return goalFromRow({ ...isoRow(r), due_at: due });
 }
-async function loadCadence(db2, userId, now) {
+async function loadCadence(db2, userId, now, src = NO_SOURCES) {
   const [u2] = await db2.sql`
     select timezone, autonomy_level, settings from orbit.users where id = ${userId}::uuid`;
   const tz = validZone(u2?.timezone) ?? "America/New_York";
@@ -23182,7 +23246,7 @@ async function loadCadence(db2, userId, now) {
   }));
   const msgRows = await db2.sql`
     select direction, sent_at, provider, from_person_id, to_person_ids from orbit.messages
-     where user_id = ${userId}::uuid and not is_automated
+     where user_id = ${userId}::uuid and not is_automated and provider <> all(${src.excluded.providers}::text[])
        and sent_at > ${new Date(now.getTime() - 365 * DAY14)}::timestamptz`;
   const messages = [];
   for (const m of msgRows) {
@@ -23219,6 +23283,7 @@ async function loadCadence(db2, userId, now) {
       left join orbit.tie_scores ts on ts.user_id = p.user_id and ts.person_id = p.id
       left join orbit.dossiers d on d.user_id = p.user_id and d.person_id = p.id and d.status in ('ready', 'partial')
      where p.user_id = ${userId}::uuid and not p.is_self and p.deleted_at is null and p.merged_into is null
+       and orbit.person_in_use(p.sources, p.source_account, ${src.hidden}::text[])
        and (ts.score >= 60 or p.id = any(${wanted}::uuid[]))`;
   const people = /* @__PURE__ */ new Map();
   for (const p of peopleRows) {
@@ -23338,7 +23403,7 @@ async function runCadence(s, userId) {
   const db2 = s.db;
   const now = s.now();
   const recovered = await recoverStuckSends(s, userId);
-  const st = await loadCadence(db2, userId, now);
+  const st = await loadCadence(db2, userId, now, await sourcesFor(db2, userId, offeredOf(s.env)));
   const out = {
     quiet: false,
     actions: 0,
@@ -23461,7 +23526,7 @@ var BATCH_CONTINUATIONS = {
     if (!userId) return "no_user";
     try {
       const draft = (await composeFromBatch(s, p.req, p.frozen, await composeAnswer(answer))).draft;
-      const st = await loadCadence(s.db, userId, s.now());
+      const st = await loadCadence(s.db, userId, s.now(), await sourcesFor(s.db, userId, offeredOf(s.env)));
       return cadenceLadder(
         s,
         userId,
@@ -25506,11 +25571,11 @@ async function offeredSlotsFor(s, userId, personId, before) {
   }
   return void 0;
 }
-function matchOfferedSlot(text3, offered, reference, timeZone) {
+function matchOfferedSlot(text3, offered2, reference, timeZone) {
   const proposed = extractProposedTimes(text3, reference, timeZone);
   for (const p of proposed) {
     const t = new Date(p.startIso).getTime();
-    const hit = offered.find((o) => Math.abs(new Date(o).getTime() - t) <= SLOT_MATCH_MIN * 6e4);
+    const hit = offered2.find((o) => Math.abs(new Date(o).getTime() - t) <= SLOT_MATCH_MIN * 6e4);
     if (hit) return hit;
   }
   return void 0;
@@ -25536,8 +25601,8 @@ async function runReplyFunnel(s, userId, messageId, opts = {}) {
     return maybeAutoReply(db2, userId, messageId, { services: s });
   const [full] = await db2.sql`
     select body_text, snippet from orbit.messages where id = ${m.id}::uuid`;
-  const offered = await offeredSlotsFor(s, userId, m.from_person_id, new Date(m.sent_at));
-  if (!offered) return maybeAutoReply(db2, userId, messageId, { services: s });
+  const offered2 = await offeredSlotsFor(s, userId, m.from_person_id, new Date(m.sent_at));
+  if (!offered2) return maybeAutoReply(db2, userId, messageId, { services: s });
   const [u2] = await db2.sql`
     select timezone, settings from orbit.users where id = ${userId}::uuid`;
   const [p] = await db2.sql`
@@ -25545,7 +25610,7 @@ async function runReplyFunnel(s, userId, messageId, opts = {}) {
   const userTz = validZone(u2?.timezone) ?? "America/New_York";
   const tz = validZone(p?.timezone) ?? userTz;
   const text3 = full?.body_text ?? full?.snippet ?? "";
-  const slotStart = matchOfferedSlot(text3, offered.slots, new Date(m.sent_at), tz);
+  const slotStart = matchOfferedSlot(text3, offered2.slots, new Date(m.sent_at), tz);
   if (!slotStart) return maybeAutoReply(db2, userId, messageId, { services: s });
   const start = new Date(slotStart);
   if (start.getTime() <= now.getTime()) return maybeAutoReply(db2, userId, messageId, { services: s });
@@ -25560,7 +25625,7 @@ async function runReplyFunnel(s, userId, messageId, opts = {}) {
     const booked = await bookSlot(
       s,
       userId,
-      { draftId: offered.draft.id, slotStart },
+      { draftId: offered2.draft.id, slotStart },
       opts.appUrl ?? APP_URL,
       { actor: "agent" }
     );
@@ -25569,10 +25634,10 @@ async function runReplyFunnel(s, userId, messageId, opts = {}) {
       return { action: "needs_consent", url: booked.needsConsent.url, slotStart };
     }
     eventId = booked.eventId;
-    await db2.sql`update orbit.drafts set outcome = 'booked' where id = ${offered.draft.id}::uuid`;
+    await db2.sql`update orbit.drafts set outcome = 'booked' where id = ${offered2.draft.id}::uuid`;
     await db2.sql`
       insert into orbit.audit_log (user_id, actor, action, target_table, target_id, details)
-      values (${userId}::uuid, 'agent', 'call.booked', 'drafts', ${offered.draft.id},
+      values (${userId}::uuid, 'agent', 'call.booked', 'drafts', ${offered2.draft.id},
               ${{ start: iso2(start), eventId, messageId: m.id, personId: m.from_person_id }}::jsonb)`;
   }
   const label = slotLabel(start, new Date(start.getTime() + SLOT_MINUTES * 6e4), tz);
@@ -25599,7 +25664,7 @@ async function runReplyFunnel(s, userId, messageId, opts = {}) {
           action: "booked",
           eventId,
           slotStart,
-          draftId: offered.draft.id,
+          draftId: offered2.draft.id,
           confirmation: { action: "none", reason: e.code }
         };
       throw e;
@@ -25618,6 +25683,11 @@ function funnelReplyHandler(config) {
     if (!job.userId) throw new JobSkipped("no_user");
     const id = job.payload.messageId;
     if (!isUuid(id)) throw new JobSkipped("no_message");
+    const [m] = await ctx.db.sql`
+      select provider from orbit.messages where id = ${id}::uuid and user_id = ${job.userId}::uuid`;
+    const source = sourceOfProvider(m?.provider);
+    if (source && !(await sourcesFor(ctx.db, job.userId, offeredOf(config.env))).inUse.has(source))
+      throw new JobSkipped("source_off");
     await runReplyFunnel(
       makeServices(config, { db: ctx.db, now: ctx.now, queue: ctx.queue }),
       job.userId,
@@ -27114,7 +27184,8 @@ async function runSourcing(s, userId, req) {
   const goal = goalRows[0];
   if (req.goalId && !goal) throw new HttpError(404, "not_found", "no such goal");
   let graph;
-  const g = () => graph ??= loadGraph(db2, userId, now);
+  const src = await sourcesFor(db2, userId, offeredOf(s.env));
+  const g = () => graph ??= loadGraph(db2, userId, now, { sources: src });
   const known = /* @__PURE__ */ new Map();
   const knownOf = async (c) => {
     if (known.has(c.key)) return known.get(c.key);
@@ -27169,6 +27240,7 @@ async function runSourcing(s, userId, req) {
                         where i.person_id = p.id and i.kind in ('linkedin_slug', 'linkedin_member')), '{}') as linkedin_ids
         from orbit.people p
        where p.user_id = ${userId}::uuid and p.deleted_at is null and not p.is_self
+         and orbit.person_in_use(p.sources, p.source_account, ${src.hidden}::text[])
          and (lower(p.linkedin_slug) = any(${slugs}::text[]) or p.linkedin_member_id = any(${members}::text[])
            or lower(p.primary_email) = any(${emails}::text[]) or lower(p.display_name) = any(${names}::text[])
            or exists (select 1 from orbit.person_identities i where i.person_id = p.id
@@ -27430,7 +27502,8 @@ function voiceHandlers(config) {
     },
     "voice.card": async (job, ctx) => {
       if (!job.userId) throw new JobSkipped("no_user");
-      await relearnCard(ctx.db, job.userId, ctx.now());
+      const src = await sourcesFor(ctx.db, job.userId, offeredOf(config.env));
+      await relearnCard(ctx.db, job.userId, ctx.now(), src.excluded.providers);
     },
     "voice.distill": async (job, ctx) => {
       if (!job.userId) throw new JobSkipped("no_user");
@@ -28621,12 +28694,13 @@ function contactsHandlers(deps) {
 }
 
 // supabase/functions/orbit-worker/handlers/friends.ts
-function friendHandlers() {
+function friendHandlers(deps = {}) {
   return {
     friend_shares_refresh: async (job, ctx) => {
       if (!job.userId) throw new JobSkipped("no_user");
       await ctx.db.sql`select orbit.expire_friend_asks()`;
-      await refreshFriendShares(ctx.db, job.userId, ctx.now());
+      const src = await sourcesFor(ctx.db, job.userId, deps.offered ?? []);
+      await refreshFriendShares(ctx.db, job.userId, ctx.now(), src);
     }
   };
 }
@@ -30572,25 +30646,27 @@ async function scorePeople(ctx, userId, personIds, key2) {
 // supabase/functions/_shared/ingest/score.ts
 var HOUR2 = 36e5;
 var FLOOR_TYPES = /* @__PURE__ */ new Set(["family", "partner"]);
+var channelOf = (m) => m.text ? "text" : m.provider === "linkedin" ? "linkedin" : m.provider === "instagram" ? "instagram" : m.provider === "x" ? "x" : "email";
 function readCalibration(settings) {
   const c = settings.tie_calibration;
   if (!c || typeof c.a !== "number" || typeof c.c !== "number") return void 0;
   if (!Number.isFinite(c.a) || !Number.isFinite(c.c)) return void 0;
   return { a: c.a, c: c.c };
 }
-async function loadHistories(db2, userId, now, personIds) {
+async function loadHistories(db2, userId, now, personIds, src = NO_SOURCES, structural = true) {
   const people = (await db2.query(
     `select ${PERSON_COLUMNS} from orbit.people p
         where p.user_id = $1::uuid and not p.is_self and p.deleted_at is null and p.merged_into is null
-          and ($2::uuid[] is null or p.id = any($2::uuid[]))`,
-    [userId, personIds ?? null]
+          and ($2::uuid[] is null or p.id = any($2::uuid[]))
+          and orbit.person_in_use(p.sources, p.source_account, $3::text[])`,
+    [userId, personIds ?? null, src.hidden]
   )).map((r) => ({ row: r, person: toPerson(r) }));
   const ids = people.map((p) => p.person.id);
   const histories = /* @__PURE__ */ new Map();
   const relationship = /* @__PURE__ */ new Map();
   if (!ids.length) return { people: [], histories, relationship };
   const [user] = await db2.sql`
-    select school, current_city, (settings ->> 'read_reply_tone')::boolean as tone
+    select school, current_city, (settings ->> 'read_reply_tone')::boolean as tone, timezone
       from orbit.users where id = ${userId}::uuid`;
   const readTone = user?.tone !== false;
   const affRows = await db2.sql`
@@ -30616,11 +30692,39 @@ async function loadHistories(db2, userId, now, personIds) {
   const msgs = await db2.sql`
     select m.from_person_id, m.to_person_ids, m.direction, m.sent_at, m.provider, m.thread_id,
            m.is_automated or m.list_unsubscribe as automated, m.from_addr, t.participant_count,
-           m.extraction -> 'rapport' as rapport
+           m.extraction -> 'rapport' as rapport, m.has_words
       from orbit.messages m join orbit.threads t on t.id = m.thread_id
-     where m.user_id = ${userId}::uuid
+     where m.user_id = ${userId}::uuid and m.provider <> all(${src.excluded.providers}::text[])
        and ((m.direction = 'in' and m.from_person_id = any(${ids}::uuid[]))
          or (m.direction = 'out' and m.to_person_ids && ${ids}::uuid[]))`;
+  if (src.inUse.has("imessage")) {
+    const days = await db2.sql`
+      select person_id, day, in_count, out_count, group_size, words from orbit.text_days
+       where user_id = ${userId}::uuid and person_id = any(${ids}::uuid[]) and (in_count > 0 or out_count > 0)`;
+    for (const d of days) {
+      const at = `${day(d.day)}T12:00:00.000Z`;
+      for (const [direction, n] of [
+        ["in", d.in_count],
+        ["out", d.out_count]
+      ])
+        if (n > 0)
+          msgs.push({
+            text: true,
+            from_person_id: direction === "in" ? d.person_id : null,
+            to_person_ids: direction === "out" ? [d.person_id] : [],
+            direction,
+            sent_at: at,
+            provider: "imessage",
+            thread_id: `text:${d.person_id}`,
+            automated: false,
+            from_addr: null,
+            // a thread's participant count leaves the student out; the row counts everyone in the chat
+            participant_count: Math.max(1, Number(d.group_size) - 1),
+            rapport: null,
+            has_words: d.words
+          });
+    }
+  }
   const msgsBy = /* @__PURE__ */ new Map();
   const push = (map, k, v) => {
     const arr = map.get(k) ?? [];
@@ -30646,7 +30750,9 @@ async function loadHistories(db2, userId, now, personIds) {
   const intros = await db2.sql`
     select a_person_id, b_person_id, evidence ->> 'introducerId' as introducer from orbit.ties
      where user_id = ${userId}::uuid and kind = 'introduced_by'
-       and (a_person_id = any(${ids}::uuid[]) or b_person_id = any(${ids}::uuid[]))`;
+       and (a_person_id = any(${ids}::uuid[]) or b_person_id = any(${ids}::uuid[]))
+       and not exists (select 1 from orbit.people q where q.id in (a_person_id, b_person_id)
+                        and not orbit.person_in_use(q.sources, q.source_account, ${src.hidden}::text[]))`;
   const introsBy = /* @__PURE__ */ new Map();
   for (const t of intros)
     for (const p of [t.a_person_id, t.b_person_id])
@@ -30670,14 +30776,34 @@ async function loadHistories(db2, userId, now, personIds) {
     select x.person, x.other, s.score, coalesce(o.first_name, o.display_name) as name
       from (select a_person_id as person, b_person_id as other from orbit.ties
              where user_id = ${userId}::uuid and kind = any(${routable}::text[]) and a_person_id = any(${ids}::uuid[])
+               and kind <> all(${src.excluded.tieKinds}::text[])
             union
             select b_person_id, a_person_id from orbit.ties
-             where user_id = ${userId}::uuid and kind = any(${routable}::text[]) and b_person_id = any(${ids}::uuid[])) x
+             where user_id = ${userId}::uuid and kind = any(${routable}::text[]) and b_person_id = any(${ids}::uuid[])
+               and kind <> all(${src.excluded.tieKinds}::text[])) x
       join orbit.people o on o.id = x.other and o.merged_into is null and o.deleted_at is null
+       and orbit.person_in_use(o.sources, o.source_account, ${src.hidden}::text[])
       left join orbit.tie_scores s on s.user_id = ${userId}::uuid and s.person_id = x.other`;
   const mutualBy = /* @__PURE__ */ new Map();
   for (const m of mutualRows)
-    if (m.score != null) push(mutualBy, m.person, { score: Number(m.score), name: m.name ?? "" });
+    if (structural && m.score != null)
+      push(mutualBy, m.person, { score: Number(m.score), name: m.name ?? "" });
+  const platforms = ["instagram", "x"].filter((s) => src.inUse.has(s));
+  const followsBy = /* @__PURE__ */ new Map();
+  if (platforms.length)
+    for (const f of await db2.sql`
+      select distinct l.person_id, l.platform from orbit.social_links l
+        join orbit.integration_accounts i
+          on i.user_id = l.user_id and i.provider = l.platform and i.social_account_id is not null
+       where l.user_id = ${userId}::uuid and l.platform = any(${platforms}::text[]) and l.person_id = any(${ids}::uuid[])
+         and exists (select 1 from orbit.social_follows f
+                      where f.platform = l.platform and f.owner_user_id = l.user_id
+                        and f.follower_id = i.social_account_id and f.followed_id = l.account_id)
+         and exists (select 1 from orbit.social_follows f
+                      where f.platform = l.platform and f.owner_user_id = l.user_id
+                        and f.follower_id = l.account_id and f.followed_id = i.social_account_id)`)
+      followsBy.set(f.person_id, { ...followsBy.get(f.person_id), [f.platform]: true });
+  const timeZone = src.inUse.size && user?.timezone ? user.timezone : void 0;
   const labels = new Map(
     (await db2.sql`
         select person_id, closeness, updated_at from orbit.tie_labels
@@ -30689,8 +30815,11 @@ async function loadHistories(db2, userId, now, personIds) {
     const intro2 = introsBy.get(person.id) ?? [];
     const mutual = mutualBy.get(person.id) ?? [];
     const warmth = warmthBy.get(person.id) ?? [];
+    const toned = (msgsBy.get(person.id) ?? []).filter(
+      (m) => m.provider === "gmail" || m.provider === "linkedin"
+    );
     const rapport = readTone ? gatherRapport(
-      (msgsBy.get(person.id) ?? []).map((m) => ({
+      toned.map((m) => ({
         at: iso(m.sent_at),
         inbound: m.direction === "in",
         automated: !!m.automated,
@@ -30718,7 +30847,9 @@ async function loadHistories(db2, userId, now, personIds) {
       mutualScores: mutual.map((m) => m.score),
       mutualNames: mutual.map((m) => m.name),
       label: labels.get(person.id),
-      ...rapport.length ? { rapport } : {}
+      ...rapport.length ? { rapport } : {},
+      ...followsBy.has(person.id) ? { follows: followsBy.get(person.id) } : {},
+      ...timeZone ? { timeZone } : {}
     });
   }
   return { people: people.map((p) => p.person), histories, relationship };
@@ -30727,10 +30858,12 @@ function toTieMessages(rows) {
   const out = rows.map((m) => ({
     at: iso(m.sent_at),
     direction: m.direction,
-    channel: m.provider === "linkedin" ? "linkedin" : "email",
+    channel: channelOf(m),
     threadParticipants: Math.max(2, Number(m.participant_count ?? 1) + 1),
     threadId: m.thread_id,
-    automated: !!m.automated || m.direction === "in" && !!m.from_addr && isAtsSender(m.from_addr)
+    automated: !!m.automated || m.direction === "in" && !!m.from_addr && isAtsSender(m.from_addr),
+    // a chat message with nothing written counts as light engagement (plan 43 §3.8)
+    ...m.has_words === false ? { words: false } : {}
   })).sort((a, b) => a.at.localeCompare(b.at));
   const lastOut = /* @__PURE__ */ new Map();
   const prevDir = /* @__PURE__ */ new Map();
@@ -30747,10 +30880,18 @@ function toTieMessages(rows) {
 }
 async function scorePeople2(db2, userId, opts) {
   const { now } = opts;
+  const src = opts.sources ?? NO_SOURCES;
   const [u2] = await db2.sql`
     select settings from orbit.users where id = ${userId}::uuid`;
   let calibration = readCalibration(u2?.settings ?? {});
-  const { people, histories, relationship } = await loadHistories(db2, userId, now, opts.personIds);
+  const { people, histories, relationship } = await loadHistories(
+    db2,
+    userId,
+    now,
+    opts.personIds,
+    src,
+    opts.structural ?? true
+  );
   if (opts.fit) {
     const labelled = [...histories.entries()].filter(([, h]) => h.label);
     if (labelled.length >= CALIBRATION_MIN_LABELS) {
@@ -30774,7 +30915,7 @@ async function scorePeople2(db2, userId, opts) {
     const tie = scoreTie(h, now, TIE_WEIGHTS, calibration);
     const score = FLOOR_TYPES.has(relationship.get(p.id) ?? "") ? Math.max(80, tie.score) : tie.score;
     const share = shareScore(h, now, TIE_WEIGHTS, calibration);
-    const exists2 = !tie.facts.never || h.linkedinConnected || h.intros > 0;
+    const exists2 = !tie.facts.never || h.linkedinConnected || h.intros > 0 || !!h.follows?.instagram || !!h.follows?.x;
     const lastAt = [
       ...h.messages.filter((m) => !m.automated && m.threadParticipants <= 9).map((m) => m.at),
       ...h.meetings.map((m) => m.at)
@@ -30789,9 +30930,30 @@ async function scorePeople2(db2, userId, opts) {
       explanation: tie.explanation,
       model: tie.modelVersion,
       strength: exists2 ? score / 100 : 0,
-      last: lastAt ?? null
+      last: lastAt ?? null,
+      hiddenLast: null
     };
   });
+  if (src.hidden.length && rows.length) {
+    const ids = rows.map((r) => r.id);
+    const hiddenLast = new Map(
+      (await db2.sql`
+          select x.person_id, max(x.at) as at from (
+            select m.from_person_id as person_id, m.sent_at as at from orbit.messages m
+             where m.user_id = ${userId}::uuid and m.provider = any(${src.hidden}::text[])
+               and m.from_person_id = any(${ids}::uuid[])
+            union all
+            select unnest(m.to_person_ids), m.sent_at from orbit.messages m
+             where m.user_id = ${userId}::uuid and m.provider = any(${src.hidden}::text[])
+               and m.to_person_ids && ${ids}::uuid[]
+            union all
+            select d.person_id, (d.day + 1)::timestamptz from orbit.text_days d
+             where d.user_id = ${userId}::uuid and 'imessage' = any(${src.hidden}::text[])
+               and d.person_id = any(${ids}::uuid[])) x
+           group by x.person_id`).map((r) => [r.person_id, iso(r.at)])
+    );
+    for (const r of rows) r.hiddenLast = hiddenLast.get(r.id) ?? null;
+  }
   for (const part2 of chunks(rows, 500)) {
     const json2 = JSON.stringify(part2);
     await db2.sql`
@@ -30811,7 +30973,11 @@ async function scorePeople2(db2, userId, opts) {
                               excluded.contributions, excluded.explanation, excluded.model_version)`;
     await db2.sql`
       update orbit.people p set strength = (r ->> 'strength')::real,
-             last_interaction_at = coalesce((r ->> 'last')::timestamptz, p.last_interaction_at),
+             last_interaction_at = case
+               when r ->> 'last' is not null then (r ->> 'last')::timestamptz
+               when r ->> 'hiddenLast' is not null
+                    and p.last_interaction_at <= (r ->> 'hiddenLast')::timestamptz + interval '1 day' then null
+               else p.last_interaction_at end,
              scored_at = now()
         from jsonb_array_elements(${json2}::jsonb) r
        where p.id = (r ->> 'id')::uuid and p.user_id = ${userId}::uuid`;
@@ -30859,7 +31025,14 @@ async function changedPeople(db2, userId) {
        where n.user_id = ${userId}::uuid and n.updated_at > since.t
       union all
       select i.person_id, i.created_at from orbit.person_identities i, since
-       where i.user_id = ${userId}::uuid and i.created_at > since.t)
+       where i.user_id = ${userId}::uuid and i.created_at > since.t
+      -- plan 43: texts a signed-in student's browser sent, and accounts attached to people
+      union all
+      select d.person_id, d.updated_at from orbit.text_days d, since
+       where d.user_id = ${userId}::uuid and d.updated_at > since.t
+      union all
+      select l.person_id, l.updated_at from orbit.social_links l, since
+       where l.user_id = ${userId}::uuid and l.updated_at > since.t)
     select l.id from live l
      where l.scored_at is null or l.updated_at > l.scored_at
         or exists (select 1 from touched x where x.id = l.id and x.at > l.scored_at)
@@ -30869,7 +31042,8 @@ async function changedPeople(db2, userId) {
 
 // supabase/functions/orbit-worker/handlers/score.ts
 var SCORE_PAGE = 100;
-function scoreHandlers(_deps) {
+function scoreHandlers(deps) {
+  const offered2 = deps.offered ?? [];
   return {
     "score.person": async (job, ctx) => {
       if (!job.userId) throw new JobSkipped("no_user");
@@ -30881,7 +31055,8 @@ function scoreHandlers(_deps) {
         await ctx.queue.enqueue({ kind: "score.person", userId: job.userId, payload: { personIds: rest } });
       const now = ctx.now();
       await refreshTies(ctx.db, job.userId, now, { personIds: now_ });
-      await scorePeople2(ctx.db, job.userId, { now, personIds: now_ });
+      const sources = await sourcesFor(ctx.db, job.userId, offered2);
+      await scorePeople2(ctx.db, job.userId, { now, personIds: now_, sources });
     },
     /**
      * The nightly rebuild: the calibration is refit first from the labelled people, then the tie inference starts
@@ -30898,7 +31073,8 @@ function scoreHandlers(_deps) {
         const [u2] = await ctx.db.sql`
           select settings from orbit.users where id = ${job.userId}::uuid`;
         const before = readCalibration(u2?.settings ?? {});
-        const r = await scorePeople2(ctx.db, job.userId, { now, personIds: labelled, fit: true });
+        const sources = await sourcesFor(ctx.db, job.userId, offered2);
+        const r = await scorePeople2(ctx.db, job.userId, { now, personIds: labelled, fit: true, sources });
         refit = r.calibration?.a !== before?.a || r.calibration?.c !== before?.c;
       }
       const full = job.payload.full === true || refit || await fullRescoreDue(ctx.db, job.userId);
@@ -30947,7 +31123,12 @@ function scoreHandlers(_deps) {
       const raw = Array.isArray(job.payload.personIds) ? job.payload.personIds : [];
       const ids = [...new Set(raw.filter(isUuid))];
       const now = ctx.now();
-      if (ids.length) await scorePeople2(ctx.db, job.userId, { now, personIds: ids });
+      if (ids.length)
+        await scorePeople2(ctx.db, job.userId, {
+          now,
+          personIds: ids,
+          sources: await sourcesFor(ctx.db, job.userId, offered2)
+        });
       const page2 = Number(job.payload.page);
       const pages = Number(job.payload.pages);
       if (Number.isFinite(page2) && Number.isFinite(pages) && page2 === pages - 1 && await hasActiveFriend(ctx.db, job.userId))
@@ -33446,6 +33627,63 @@ function socialHandlers(deps) {
   };
 }
 
+// supabase/functions/orbit-worker/handlers/sources.ts
+var SWITCH_PASSES = 2;
+function sourceHandlers(deps = {}) {
+  const offered2 = deps.offered ?? [];
+  return {
+    "sources.switch": async (job, ctx) => {
+      const userId = job.userId;
+      if (!userId || !isUuid(userId)) throw new JobSkipped("no_user");
+      await ctx.queue.setVt(job.queue, job.msgId, LONG_VT_SEC);
+      const now = ctx.now();
+      const pass = Math.max(1, Math.min(SWITCH_PASSES, Number(job.payload.pass ?? 1) || 1));
+      const page2 = Math.max(0, Number(job.payload.page ?? 0) || 0);
+      if (typeof job.payload.runKey === "string") {
+        const [mark] = await ctx.db.sql`
+          select switch_run from orbit.user_marks where user_id = ${userId}::uuid`;
+        if (mark?.switch_run && mark.switch_run !== job.payload.runKey) return;
+      }
+      const src = await sourcesFor(ctx.db, userId, offered2);
+      const ids = (await ctx.db.sql`
+          select p.id from orbit.people p
+           where p.user_id = ${userId}::uuid and not p.is_self and p.deleted_at is null and p.merged_into is null
+             and orbit.person_in_use(p.sources, p.source_account, ${src.hidden}::text[])
+           order by p.id`).map((r) => r.id);
+      const pages = chunks(ids, SCORE_PAGE);
+      if (page2 === 0) {
+        const labelled = (await ctx.db.sql`
+            select l.person_id from orbit.tie_labels l where l.user_id = ${userId}::uuid
+               and l.person_id = any(${ids}::uuid[])`).map((r) => r.person_id);
+        if (labelled.length)
+          await scorePeople2(ctx.db, userId, {
+            now,
+            personIds: labelled,
+            fit: true,
+            sources: src,
+            structural: pass > 1
+          });
+      }
+      const part2 = pages[page2];
+      if (part2?.length)
+        await scorePeople2(ctx.db, userId, { now, personIds: part2, sources: src, structural: pass > 1 });
+      const next = page2 + 1 < pages.length ? { pass, page: page2 + 1 } : pass < SWITCH_PASSES ? { pass: pass + 1, page: 0 } : null;
+      if (next) {
+        const runKey = typeof job.payload.runKey === "string" ? job.payload.runKey : job.dedupeKey ?? `sources.switch:${userId}:${job.msgId}`;
+        await ctx.queue.enqueue({
+          kind: "sources.switch",
+          userId,
+          payload: { ...job.payload, ...next, runKey },
+          dedupeKey: `${runKey}:${next.pass}:${next.page}`
+        });
+        return;
+      }
+      if (await hasActiveFriend(ctx.db, userId)) await refreshFriendShares(ctx.db, userId, now, src);
+      await ctx.db.sql`select orbit.bump_graph_version(${userId}::uuid)`;
+    }
+  };
+}
+
 // supabase/functions/_shared/social/x/adapter.ts
 var X_USER_FIELDS = [
   "username",
@@ -33945,28 +34183,6 @@ async function xAdapterFor(db2, userId, deps, opts = {}) {
   return { adapter, spend, tokens: tokens2, meId: row.socialAccountId };
 }
 
-// supabase/functions/_shared/sources/states.ts
-async function loadSourceStates(db2, userId) {
-  const rows = await db2.sql`
-    select source, state from orbit.source_states where user_id = ${userId}::uuid`;
-  const out = {};
-  for (const r of rows)
-    if (OPTIONAL_SOURCES.includes(r.source))
-      out[r.source] = r.state;
-  return out;
-}
-async function sourcesFor(db2, userId, offered) {
-  const states = offered.length ? await loadSourceStates(db2, userId) : {};
-  const inUse = sourcesInUse(offered, states);
-  return { offered: [...offered], states, inUse, excluded: excludedBy(inUse) };
-}
-var NO_SOURCES = {
-  offered: [],
-  states: {},
-  inUse: /* @__PURE__ */ new Set(),
-  excluded: excludedBy(/* @__PURE__ */ new Set())
-};
-
 // supabase/functions/_shared/social/x/dms.ts
 var X_DM_FIRST_DAYS = 30;
 var X_DM_FIRST_MAX = 100;
@@ -34117,6 +34333,7 @@ var PLACEHOLDER_KINDS = [];
 function defaultHandlers(opts = {}) {
   const agents = "env" in opts ? opts : opts.agents;
   const deps = "env" in opts ? { fetch: opts.fetch, sleep: opts.sleep, random: opts.random, embed: opts.embed } : { ...opts, embed: opts.embed ?? opts.agents?.embed };
+  deps.offered ??= agents?.env.extraSources ?? [];
   const handlers2 = {
     noop: async () => {
     },
@@ -34128,7 +34345,8 @@ function defaultHandlers(opts = {}) {
     ...contactsHandlers(deps),
     ...linkedinHandlers(deps),
     ...scoreHandlers(deps),
-    ...friendHandlers(),
+    ...friendHandlers(deps),
+    ...sourceHandlers(deps),
     ...searchHandlers(deps),
     ...costHandlers(deps.cost),
     ...unipileHandlers(deps),
@@ -34152,7 +34370,8 @@ var HEAVY_KINDS = /* @__PURE__ */ new Set([
   "score.user",
   "score.ties",
   "score.page",
-  "score.person"
+  "score.person",
+  "sources.switch"
 ]);
 var HEAVY_PER_TICK = 1;
 var ONCE_PER_TICK = /* @__PURE__ */ new Set(["sync.linkedin"]);
@@ -34163,6 +34382,7 @@ var RESERVE_MS = {
   "score.user": 2e4,
   "score.page": 2e4,
   "score.ties": 2e4,
+  "sources.switch": 2e4,
   search_census: 58e3,
   search_reading: 58e3,
   company_facts_sync: 3e4,
@@ -34430,7 +34650,8 @@ var salt = env("ORBIT_LOG_SALT") ?? ((env("SUPABASE_SERVICE_ROLE_KEY") ?? "").sl
 var log = makeLogger(salt);
 var runtime = typeof EdgeRuntime !== "undefined" ? EdgeRuntime : void 0;
 var db = dbUrl ? connectDb(dbUrl, 2) : void 0;
-var agentEnv = await agentEnvWithSecrets(env, db);
+var offered = offeredSources(env("ORBIT_EXTRA_SOURCES"));
+var agentEnv = { ...await agentEnvWithSecrets(env, db), extraSources: offered };
 var cronSecret = await resolveSecret(env, db, "ORBIT_CRON_SECRET", "orbit_cron_secret");
 var [claudeKey, unipileKey, unipileBase, ownerId, parkRaw] = await Promise.all([
   providerSecret(env, db, "ORBIT_ANTHROPIC_API_KEY"),
@@ -34464,8 +34685,9 @@ var handlerDeps = {
   claude: makeClaude({ apiKey: claudeKey, db, batch: batchFlagOn(agentEnv.claudeBatch) }),
   cost: { mailer: makeMailer(agentEnv, fetch), ownerId, thresholds: costThresholds },
   park: { days: parkDays(parkRaw) },
-  // plan 43 §5: X's app and limits; the DM writer is wired once _shared/social/chats.ts lands
-  x: { cfg: xConfigFromEnv(env) }
+  // plan 43 §5: X's app and limits; DMs go through the personal-lane writer (handlers/x.ts)
+  x: { cfg: xConfigFromEnv(env) },
+  offered
 };
 var handlers = defaultHandlers({ ...handlerDeps, agents: { env: agentEnv } });
 Deno.serve(

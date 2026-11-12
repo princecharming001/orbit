@@ -27,6 +27,9 @@ importers:
       jose:
         specifier: 6.2.12
         version: 6.2.12
+      libphonenumber-js:
+        specifier: 1.13.14
+        version: 1.13.14
       postgres:
         specifier: 3.4.9
         version: 3.4.9
