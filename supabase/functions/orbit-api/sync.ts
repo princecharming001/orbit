@@ -843,19 +843,32 @@ const DraftPatchS = z.object({
   status: z.enum(['approved', 'discarded', 'cancelled']).optional(),
   subject: z.string().max(200).nullable().optional(),
   body: z.string().trim().min(1).max(20_000).optional(),
+  // plan 43 §6: a draft moved to Messages ("Open in Messages"), or back to where it was. A Messages draft is a
+  // handoff the student completes: the server keeps it and never sends it (sending/send.ts)
+  channel: z.enum(['gmail', 'linkedin', 'instagram', 'x', 'imessage']).optional(),
 });
 
-/** Drafts move only out of `draft` (to approved, discarded or cancelled), and are edited only while still drafts. */
+/**
+ * Drafts move only out of `draft` (to approved, discarded or cancelled), and are edited only while still drafts. A
+ * draft's channel may change while it is a draft.
+ */
 async function pushDraft(db: Db, userId: string, id: string, row: Record<string, unknown>) {
-  const p = DraftPatchS.safeParse({ status: row.status, subject: row.subject, body: row.body });
+  const p = DraftPatchS.safeParse({
+    status: row.status,
+    subject: row.subject,
+    body: row.body,
+    channel: row.channel,
+  });
   if (!p.success) throw new ChangeError('invalid', p.error.issues[0]?.message ?? 'invalid draft change');
-  const { status, subject, body } = p.data;
+  const { status, subject, body, channel } = p.data;
   const hasSubject = 'subject' in row;
-  if (!status && !hasSubject && body === undefined) throw new ChangeError('invalid', 'nothing to change');
+  if (!status && !hasSubject && body === undefined && !channel)
+    throw new ChangeError('invalid', 'nothing to change');
   const [r] = await db.sql<{ row: Row }>`
     update orbit.drafts t set
       subject = case when ${hasSubject}::boolean then ${subject ?? null}::text else t.subject end,
       body = coalesce(${body ?? null}::text, t.body),
+      channel = coalesce(${channel ?? null}::text, t.channel),
       status = coalesce(${status ?? null}::text, t.status),
       cancel_reason = case when ${status ?? null}::text = 'cancelled' then 'user' else t.cancel_reason end
      where t.id = ${id}::uuid and t.user_id = ${userId}::uuid and t.status = 'draft'
@@ -866,7 +879,7 @@ async function pushDraft(db: Db, userId: string, id: string, row: Record<string,
     if (!cur) throw new ChangeError('not_found', `drafts ${id} was not found`);
     throw new ChangeError('conflict', `the draft is already ${cur.status}`);
   }
-  const changed = ['status', 'subject', 'body'].filter((k) => k in row);
+  const changed = ['status', 'subject', 'body', 'channel'].filter((k) => k in row);
   await audit(db, userId, 'sync.update', 'drafts', id, changed);
   // an edit to Orbit's words is the student's voice (plan 29 §B2.4): one draft_edits row per draft
   if (body !== undefined)

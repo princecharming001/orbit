@@ -27,6 +27,8 @@ export const KIND_QUEUE: Record<string, QueueName> = {
   'sync.linkedin': 'orbit_sync',
   // plan 43: Instagram's first days and refreshes, the words of a chat that entered the pipeline
   'sync.instagram': 'orbit_sync',
+  // plan 43 §5: the student's own X following list, read to the end once on connect
+  'sync.x': 'orbit_sync',
   'social.words': 'orbit_sync',
   'cadence.user': 'orbit_cadence',
   'funnel.reply': 'orbit_classify',

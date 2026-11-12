@@ -206,6 +206,7 @@ function useSettingFocus(section: string) {
     let tries = 0;
     let lit: Element | undefined;
     let clear: ReturnType<typeof setTimeout> | undefined;
+    const settle: ReturnType<typeof setTimeout>[] = [];
     // the section draws after its data loads: look until it is there, for a few seconds
     const look = setInterval(() => {
       const el = document.querySelector(spot.target!);
@@ -222,10 +223,19 @@ function useSettingFocus(section: string) {
       )
         el.focus({ preventScroll: true });
       clear = setTimeout(() => el.removeAttribute('data-setting-flash'), 2600);
+      // rows above can still be loading and push the spot off screen after the scroll: bring it back if they do
+      for (const ms of [400, 900, 1500])
+        settle.push(
+          setTimeout(() => {
+            const r = el.getBoundingClientRect();
+            if (r.bottom <= 0 || r.top >= window.innerHeight) el.scrollIntoView({ block: 'center' });
+          }, ms),
+        );
     }, 100);
     return () => {
       clearInterval(look);
       if (clear) clearTimeout(clear);
+      for (const t of settle) clearTimeout(t);
       lit?.removeAttribute('data-setting-flash');
     };
   }, [hash, section]);

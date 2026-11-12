@@ -42,6 +42,7 @@ function handlersFor(fake: FakeInstagram): Record<string, JobHandler> {
       fetch: fake.fetch,
       unipile: { apiKey: 'unipile-placeholder', baseUrl: BASE },
       random: () => 0.5,
+      offered: ['instagram'],
     }),
     'score.person': noop,
     friend_shares_refresh: noop,
@@ -123,7 +124,9 @@ async function student(
 }
 
 async function lookup(fake: FakeInstagram, userId: string, targetPerson: string) {
-  const { lookupId } = await startLookup(t.db, sqlQueue(t.db), userId, 'instagram', targetPerson);
+  const { lookupId } = await startLookup(t.db, sqlQueue(t.db), userId, 'instagram', targetPerson, [
+    'instagram',
+  ]);
   const before = fake.calls.length;
   await drain(t, handlersFor(fake), now, { maxTicks: 30 });
   const [l] = await t.db.sql<{
@@ -355,7 +358,9 @@ describe('when the lookup may stop', () => {
       insert into orbit.social_call_log (platform, account, kind, caller, at)
       select 'instagram', ${s.unipileAccount}, 'list', 'background', ${new Date(clock - 10 * 60_000)}::timestamptz
         from generate_series(1, 8)`;
-    const { lookupId } = await startLookup(t.db, sqlQueue(t.db), s.userId, 'instagram', s.targetPerson);
+    const { lookupId } = await startLookup(t.db, sqlQueue(t.db), s.userId, 'instagram', s.targetPerson, [
+      'instagram',
+    ]);
     const h = handlersFor(w.fake);
     await drain(t, h, now, { maxTicks: 3 });
     const [mid] = await t.db.sql<{

@@ -17,7 +17,7 @@ import type { TextDaysResponse } from '@orbit/core/server/api';
 import { parseName } from '@orbit/core/text/normalize';
 import { badRequest, HttpError, json } from '../../_shared/http.ts';
 import { sqlQueue } from '../../_shared/queue.ts';
-import { sourceIsOn, sourcesFor } from '../../_shared/sources/states.ts';
+import { isOffered, sourceIsOn, sourcesFor } from '../../_shared/sources/states.ts';
 import type { Ctx, Route } from '../api.ts';
 import { addPhoneIdentities } from '../sync.ts';
 import { body, UUID } from './body.ts';
@@ -111,7 +111,8 @@ export function parseTextDays(b: Record<string, unknown>, now: Date): { days: Da
 async function upload(ctx: Ctx): Promise<Response> {
   const userId = ctx.userId!;
   const now = ctx.now();
-  if (!ctx.offered.includes('imessage')) throw new HttpError(404, 'not_found', 'texts are not offered');
+  if (!(await isOffered(ctx.db, 'imessage', ctx.offered)))
+    throw new HttpError(404, 'not_found', 'texts are not offered');
   if (!(await sourceIsOn(ctx.db, userId, 'imessage', ctx.offered)))
     throw new HttpError(409, 'source_off', 'turn Texts on first');
   const { days, people } = parseTextDays(await body(ctx), now);

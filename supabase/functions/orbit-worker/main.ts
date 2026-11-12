@@ -26,7 +26,8 @@ const db = dbUrl ? connectDb(dbUrl, 2) : undefined;
 // the agent features' keys (Claude, Exa, ...): a function secret, else the copy in orbit_private.secrets
 // plan 43 §3.1: the optional sources the owner offers, read once; unset is none and nothing changes
 const offered = offeredSources(env('ORBIT_EXTRA_SOURCES'));
-const agentEnv = { ...(await agentEnvWithSecrets(env, db)), extraSources: offered };
+const xCfg = xConfigFromEnv(env);
+const agentEnv = { ...(await agentEnvWithSecrets(env, db)), extraSources: offered, x: xCfg };
 const cronSecret = await resolveSecret(env, db, 'ORBIT_CRON_SECRET', 'orbit_cron_secret');
 
 // Claude for the reply jobs (classify.message and its rapport reading, rapport.backfill; Haiku, low effort): the
@@ -75,7 +76,7 @@ const handlerDeps: HandlerDeps = {
   cost: { mailer: makeMailer(agentEnv, fetch), ownerId, thresholds: costThresholds },
   park: { days: parkDays(parkRaw) },
   // plan 43 §5: X's app and limits; DMs go through the personal-lane writer (handlers/x.ts)
-  x: { cfg: xConfigFromEnv(env) },
+  x: { cfg: xCfg },
   offered,
 };
 const handlers = defaultHandlers({ ...handlerDeps, agents: { env: agentEnv } });

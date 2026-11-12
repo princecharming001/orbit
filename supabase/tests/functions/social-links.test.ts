@@ -40,6 +40,8 @@ function call(method: string, path: string, token: string, body?: unknown) {
       googleRedirectUri: `${BASE}/auth/google/callback`,
       sessionSecret: SECRET,
       appUrl: APP,
+      // plan 43: Instagram and X are offered (the shipped default offers nothing)
+      extraSources: ['instagram', 'x'],
     },
     db: t.db,
     fetch: fakeNet().fetch,
@@ -175,6 +177,7 @@ describe('matching an account to the student’s people', () => {
           fetch: fake.fetch,
           unipile: { apiKey: 'k', baseUrl: fake.base },
           random: () => 0.5,
+          offered: ['instagram'],
         }),
         'score.person': noop,
         friend_shares_refresh: noop,

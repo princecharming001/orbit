@@ -39,7 +39,7 @@ import { loadSelf } from '../_shared/ingest/util.ts';
 import { type Queue, sqlQueue } from '../_shared/queue.ts';
 import type { SocialMessage } from '../_shared/social/adapter.ts';
 import { afterInbound, storeSocialChat } from '../_shared/social/chats.ts';
-import { socialSourceOn } from '../_shared/social/lookup.ts';
+import { isOffered, sourceIsOn } from '../_shared/sources/states.ts';
 
 export interface WebhookDeps {
   db: Db | undefined;
@@ -48,8 +48,9 @@ export interface WebhookDeps {
   queue?: Queue;
   log?: Logger;
   /**
-   * ORBIT_EXTRA_SOURCES (plan 43 §3.1), read once at cold start: the optional sources the owner offers. A writer for
-   * an optional source asks `sourceIsOn(db, userId, source, offered)` before it stores anything.
+   * ORBIT_EXTRA_SOURCES (plan 43 §3.1), read once at cold start: the owner's env list. A writer for an optional source
+   * asks `sourceIsOn(db, userId, source, offered)` before it stores anything; the owner's launch switches are joined
+   * to this list there (`offeredNow`), so a source launched or stopped from Settings takes effect within a minute.
    */
   offered?: OptionalSource[];
 }
@@ -76,7 +77,12 @@ export function makeWebhookHandler(deps: WebhookDeps): (req: Request) => Promise
         if (!deps.unipileSecret || !deps.db) return unconfigured();
         if (!(await timingSafeEqual(req.headers.get('x-orbit-webhook'), deps.unipileSecret)))
           throw new HttpError(401, 'unauthorized', 'bad signature');
-        const out = await unipileEvent(deps.db, (db) => deps.queue ?? sqlQueue(db), await body(req));
+        const out = await unipileEvent(
+          deps.db,
+          (db) => deps.queue ?? sqlQueue(db),
+          await body(req),
+          deps.offered ?? [],
+        );
         userId = out.userId;
         res = json(200, { ok: true, result: out.result });
       } else if (path === '/unipile/account') {
@@ -84,7 +90,7 @@ export function makeWebhookHandler(deps: WebhookDeps): (req: Request) => Promise
         if (!(await timingSafeEqual(url.searchParams.get('token'), deps.unipileSecret)))
           throw new HttpError(403, 'forbidden', 'bad token');
         const provider = url.searchParams.get('provider') === 'instagram' ? 'instagram' : 'linkedin';
-        const out = await unipileAccount(deps.db, queue(), await body(req), provider);
+        const out = await unipileAccount(deps.db, queue(), await body(req), provider, deps.offered ?? []);
         userId = out.userId;
         res = json(200, { ok: true, result: out.result });
       } else throw new HttpError(404, 'not_found', 'no such route');
@@ -355,6 +361,8 @@ export async function unipileEvent(
   db: Db,
   queueFor: (db: Db) => Queue,
   body: Record<string, unknown>,
+  /** the owner's env list (ORBIT_EXTRA_SOURCES); the launch switches are joined to it */
+  offered: readonly OptionalSource[] = [],
 ): Promise<{ result: string; userId: string | null }> {
   // account status webhooks wrap their fields in AccountStatus
   const status = body.AccountStatus as Record<string, unknown> | undefined;
@@ -389,8 +397,9 @@ export async function unipileEvent(
     if (!messageId || !chatId) return { result: 'ignored', userId: null };
     const owner = await unipileOwner(db, body.account_id);
     if (owner?.provider === 'instagram') {
-      // nothing is stored while the student has Instagram off; the sync reads what arrived once it is back on
-      if (!(await socialSourceOn(db, owner.userId, 'instagram')))
+      // nothing is stored while Instagram is not offered or the student has it off; the sync reads what arrived once
+      // it is back on
+      if (!(await sourceIsOn(db, owner.userId, 'instagram', offered)))
         return { result: 'source_off', userId: owner.userId };
       const result = await db.begin(async (tx) => {
         if (!(await firstSeen(tx, `instagram:${messageId}`))) return 'duplicate';
@@ -478,6 +487,7 @@ export async function unipileAccount(
   queue: Queue,
   body: Record<string, unknown>,
   provider: 'linkedin' | 'instagram' = 'linkedin',
+  offered: readonly OptionalSource[] = [],
 ): Promise<{ result: string; userId: string | null }> {
   const status = String(body.status ?? '').toUpperCase();
   const accountId = str(body.account_id);
@@ -486,7 +496,11 @@ export async function unipileAccount(
     return { result: 'ignored', userId };
   const [user] = await db.sql`select 1 from orbit.users where id = ${userId}::uuid and deleted_at is null`;
   if (!user) return { result: 'unknown_user', userId: null };
-  if (provider === 'instagram') return instagramAccount(db, queue, userId, accountId, status);
+  if (provider === 'instagram') {
+    // Instagram not offered: nothing is stored (connecting is not offered either, so this is a stray notify)
+    if (!(await isOffered(db, 'instagram', offered))) return { result: 'not_offered', userId };
+    return instagramAccount(db, queue, userId, accountId, status);
+  }
   const taken = await db.sql`
     select 1 from orbit.integration_accounts
      where provider = 'linkedin' and external_account_id = ${accountId} and user_id <> ${userId}::uuid`;
