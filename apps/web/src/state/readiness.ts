@@ -13,7 +13,9 @@ import {
   type NotifyStatus,
   notifyStatus,
   readinessFromSync,
+  socialReadiness,
   textsReadiness,
+  withSocialSteps,
   withTextsStep,
 } from '../engine/notify';
 import { subscribeSyncStatus, syncStatusNow } from '../engine/serverSync';
@@ -56,25 +58,31 @@ export async function refreshReadiness(): Promise<ReadinessView | undefined> {
     set(undefined);
     return undefined;
   }
-  const [s, texts] = await Promise.all([
+  const [s, texts, social] = await Promise.all([
     notifyStatus().catch(() => undefined),
     textsReadiness(accountUser()?.id).catch(() => undefined),
+    socialReadiness(accountUser()?.id).catch(() => undefined),
   ]);
   lastTexts = texts;
+  lastSocial = social;
   if (s) {
     lastServer = Date.now();
-    set({ readiness: withTextsStep(s.readiness, texts), notify: s });
+    set({ readiness: optional(s.readiness), notify: s });
   } else {
     const fromSync = readinessFromSync(syncStatusNow());
     // a server answer from a moment ago stays: a missed poll is not news
-    if (fromSync && Date.now() - lastServer > 3 * WHILE_SYNCING_MS)
-      set({ readiness: withTextsStep(fromSync, texts) });
+    if (fromSync && Date.now() - lastServer > 3 * WHILE_SYNCING_MS) set({ readiness: optional(fromSync) });
   }
   return view;
 }
 
 /** the Texts step as last read (plan 43 §6), added to readiness however it came */
 let lastTexts: ReadinessInput['texts'];
+/** Instagram's and X's steps as last read (plan 43 §3.10) */
+let lastSocial: Pick<ReadinessInput, 'instagram' | 'x'> | undefined;
+
+/** The optional sources' steps, after the rest: they never hold up "ready". */
+const optional = (r: Readiness) => withSocialSteps(withTextsStep(r, lastTexts), lastSocial);
 
 function schedule(): void {
   if (timer) clearTimeout(timer);
@@ -97,7 +105,7 @@ export function watchReadiness(): () => void {
     // without a server answer, the sync status is the next best thing
     if (!view?.notify) {
       const r = readinessFromSync(s);
-      if (r) set({ readiness: withTextsStep(r, lastTexts) });
+      if (r) set({ readiness: optional(r) });
     }
   });
   const onVisible = () => {

@@ -106,6 +106,32 @@ describe('readiness: is Orbit ready yet', () => {
     expect(readiness({ pending: 0, texts: { state: 'on' } }).state).toBe('nothing');
   });
 
+  it('Instagram and X steps show while on and never hold up "ready" (plan 43 §3.10)', () => {
+    const done = { status: 'active', phase: 'complete' };
+    const base = readiness({ google: done, pending: 0 });
+    const reading = readiness({
+      google: done,
+      pending: 0,
+      instagram: { status: 'active', reading: 'Reading who you follow' },
+      x: { status: 'needs_reauth' },
+    });
+    expect(reading.state).toBe(base.state);
+    expect(reading.progress).toBe(base.progress);
+    expect(reading.steps.slice(-2)).toMatchObject([
+      { key: 'instagram', state: 'working', detail: 'Reading who you follow', optional: true },
+      { key: 'x', state: 'problem', detail: 'Sign in with X again', optional: true },
+    ]);
+    const settled = readiness({
+      google: done,
+      pending: 0,
+      instagram: { status: 'active' },
+      x: { status: 'active' },
+    });
+    expect(settled.steps.slice(-2).map((s) => s.state)).toEqual(['done', 'done']);
+    expect(settled.state).toBe('ready');
+    expect(JSON.stringify(reading)).not.toMatch(/[—–!]/);
+  });
+
   it('never an em dash or an exclamation mark in what it says', () => {
     const all = [
       readiness({ pending: 0 }),
