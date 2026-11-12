@@ -37,10 +37,7 @@
       {
         "band": "faint",
         "display_name": "Ben Ortiz",
-        "explanation": [
-          "Close with people you're close to (Cara)",
-          "Connected on LinkedIn, never talked"
-        ],
+        "explanation": ["Close with people you're close to (Cara)", "Connected on LinkedIn, never talked"],
         "features": {
           "engagement": 0,
           "instagram_follow": 0,
@@ -101,9 +98,7 @@
       {
         "band": "faint",
         "display_name": "Dev Shah",
-        "explanation": [
-          "Close with people you're close to (Ana, Cara)"
-        ],
+        "explanation": ["Close with people you're close to (Ana, Cara)"],
         "features": {
           "engagement": 0,
           "instagram_follow": 0,
@@ -147,10 +142,7 @@
             "person:Cara Diaz": "Cara Diaz",
             "user": "You"
           },
-          "nodes": [
-            "user",
-            "person:Cara Diaz"
-          ],
+          "nodes": ["user", "person:Cara Diaz"],
           "otherWays": 3,
           "p": 0.47502081252106,
           "reasonText": "Write to Cara directly (Faint · 12). 3 other ways in."
@@ -188,12 +180,7 @@
             "person:Ana Lopez": "Ana Lopez",
             "user": "You"
           },
-          "nodes": [
-            "user",
-            "person:Ana Lopez",
-            "person:Dev Shah",
-            "person:Cara Diaz"
-          ],
+          "nodes": ["user", "person:Ana Lopez", "person:Dev Shah", "person:Cara Diaz"],
           "otherWays": 3,
           "p": 0.09725287584081402,
           "reasonText": "Ana (Strong · 70) is on email with Dev, who emails with Cara. 3 other ways in."
@@ -222,11 +209,7 @@
             "person:Ben Ortiz": "Ben Ortiz",
             "user": "You"
           },
-          "nodes": [
-            "user",
-            "person:Ben Ortiz",
-            "person:Cara Diaz"
-          ],
+          "nodes": ["user", "person:Ben Ortiz", "person:Cara Diaz"],
           "otherWays": 3,
           "p": 0.056261186334196946,
           "reasonText": "Through Ben, a faint tie (12): Ben is connected to Cara on LinkedIn. 3 other ways in."
@@ -255,23 +238,14 @@
             "person:Dev Shah": "Dev Shah",
             "user": "You"
           },
-          "nodes": [
-            "user",
-            "person:Dev Shah",
-            "person:Cara Diaz"
-          ],
+          "nodes": ["user", "person:Dev Shah", "person:Cara Diaz"],
           "otherWays": 3,
           "p": 0.0815877955251518,
           "reasonText": "Dev (Faint · 10) emails with Cara. 3 other ways in."
         }
       ],
-      "sources": [
-        "graph"
-      ],
-      "unconfigured": [
-        "unipile",
-        "village"
-      ]
+      "sources": ["graph"],
+      "unconfigured": ["unipile", "village"]
     },
     "company": {
       "paths": [
@@ -290,10 +264,7 @@
             "person:Ben Ortiz": "Ben Ortiz",
             "user": "You"
           },
-          "nodes": [
-            "user",
-            "person:Ben Ortiz"
-          ],
+          "nodes": ["user", "person:Ben Ortiz"],
           "otherWays": 1,
           "p": 0.47502081252106,
           "reasonText": "Write to Ben directly (Faint · 12). 1 other way in."
@@ -313,10 +284,7 @@
             "person:Cara Diaz": "Cara Diaz",
             "user": "You"
           },
-          "nodes": [
-            "user",
-            "person:Cara Diaz"
-          ],
+          "nodes": ["user", "person:Cara Diaz"],
           "otherWays": 3,
           "p": 0.47502081252106,
           "reasonText": "Write to Cara directly (Faint · 12). 3 other ways in."
@@ -354,12 +322,7 @@
             "person:Ana Lopez": "Ana Lopez",
             "user": "You"
           },
-          "nodes": [
-            "user",
-            "person:Ana Lopez",
-            "person:Dev Shah",
-            "person:Cara Diaz"
-          ],
+          "nodes": ["user", "person:Ana Lopez", "person:Dev Shah", "person:Cara Diaz"],
           "otherWays": 3,
           "p": 0.09725287584081402,
           "reasonText": "Ana (Strong · 70) is on email with Dev, who emails with Cara. 3 other ways in."
@@ -388,23 +351,14 @@
             "person:Ben Ortiz": "Ben Ortiz",
             "user": "You"
           },
-          "nodes": [
-            "user",
-            "person:Cara Diaz",
-            "person:Ben Ortiz"
-          ],
+          "nodes": ["user", "person:Cara Diaz", "person:Ben Ortiz"],
           "otherWays": 1,
           "p": 0.056261186334196946,
           "reasonText": "Through Cara, a faint tie (12): Cara is connected to Ben on LinkedIn. 1 other way in."
         }
       ],
-      "sources": [
-        "graph",
-        "linkedin_mutual"
-      ],
-      "unconfigured": [
-        "village"
-      ]
+      "sources": ["graph", "linkedin_mutual"],
+      "unconfigured": ["village"]
     },
     "pull": {
       "changes": {
@@ -447,9 +401,7 @@
             "rolesFromHeadlineAt": null,
             "school": null,
             "sourceAccount": null,
-            "sources": [
-              "gmail"
-            ],
+            "sources": ["gmail"],
             "strength": 0.1,
             "summary": null,
             "tags": [],
@@ -494,9 +446,7 @@
             "rolesFromHeadlineAt": null,
             "school": null,
             "sourceAccount": null,
-            "sources": [
-              "gmail"
-            ],
+            "sources": ["gmail"],
             "strength": 0.7,
             "summary": null,
             "tags": [],
@@ -541,9 +491,7 @@
             "rolesFromHeadlineAt": null,
             "school": null,
             "sourceAccount": null,
-            "sources": [
-              "linkedin"
-            ],
+            "sources": ["linkedin"],
             "strength": 0.12,
             "summary": null,
             "tags": [],
@@ -588,9 +536,7 @@
             "rolesFromHeadlineAt": null,
             "school": null,
             "sourceAccount": null,
-            "sources": [
-              "linkedin"
-            ],
+            "sources": ["linkedin"],
             "strength": 0.12,
             "summary": null,
             "tags": [],
@@ -635,9 +581,7 @@
             "rolesFromHeadlineAt": null,
             "school": null,
             "sourceAccount": null,
-            "sources": [
-              "self"
-            ],
+            "sources": ["self"],
             "strength": 0,
             "summary": null,
             "tags": [],
@@ -706,9 +650,7 @@
             "lastMessageAt": "2026-10-21T12:00:00+00:00",
             "messageCount": 4,
             "participantCount": 1,
-            "participantPersonIds": [
-              "person:Ana Lopez"
-            ],
+            "participantPersonIds": ["person:Ana Lopez"],
             "provider": "gmail",
             "socialAccountId": null,
             "subject": "Catching up"
@@ -726,9 +668,7 @@
             "lastMessageAt": "2026-08-03T12:00:00+00:00",
             "messageCount": 1,
             "participantCount": 1,
-            "participantPersonIds": [
-              "person:Dev Shah"
-            ],
+            "participantPersonIds": ["person:Dev Shah"],
             "provider": "gmail",
             "socialAccountId": null,
             "subject": "Catching up"
@@ -861,9 +801,7 @@
             "threadId": "<id>",
             "toAddrs": [],
             "toEmails": [],
-            "toPersonIds": [
-              "person:Ana Lopez"
-            ]
+            "toPersonIds": ["person:Ana Lopez"]
           },
           {
             "answer": null,
@@ -895,9 +833,7 @@
             "threadId": "<id>",
             "toAddrs": [],
             "toEmails": [],
-            "toPersonIds": [
-              "person:Ana Lopez"
-            ]
+            "toPersonIds": ["person:Ana Lopez"]
           }
         ],
         "ties": [
@@ -1056,9 +992,7 @@
       {
         "band": "faint",
         "display_name": "Cara Diaz",
-        "explanation": [
-          "You haven't talked yet"
-        ],
+        "explanation": ["You haven't talked yet"],
         "features": {
           "engagement": 0,
           "instagram_follow": 0,
@@ -1087,9 +1021,7 @@
       {
         "band": "faint",
         "display_name": "Eve Ford",
-        "explanation": [
-          "You haven't talked yet"
-        ],
+        "explanation": ["You haven't talked yet"],
         "features": {
           "engagement": 0,
           "instagram_follow": 0,
@@ -1133,22 +1065,14 @@
             "person:Cara Diaz": "Cara Diaz",
             "user": "You"
           },
-          "nodes": [
-            "user",
-            "person:Cara Diaz"
-          ],
+          "nodes": ["user", "person:Cara Diaz"],
           "otherWays": 0,
           "p": 0.47502081252106,
           "reasonText": "Write to Cara directly (Faint · 8)."
         }
       ],
-      "sources": [
-        "graph"
-      ],
-      "unconfigured": [
-        "unipile",
-        "village"
-      ]
+      "sources": ["graph"],
+      "unconfigured": ["unipile", "village"]
     },
     "company": {
       "paths": [
@@ -1167,22 +1091,14 @@
             "person:Cara Diaz": "Cara Diaz",
             "user": "You"
           },
-          "nodes": [
-            "user",
-            "person:Cara Diaz"
-          ],
+          "nodes": ["user", "person:Cara Diaz"],
           "otherWays": 0,
           "p": 0.47502081252106,
           "reasonText": "Write to Cara directly (Faint · 8)."
         }
       ],
-      "sources": [
-        "graph",
-        "linkedin_mutual"
-      ],
-      "unconfigured": [
-        "village"
-      ]
+      "sources": ["graph", "linkedin_mutual"],
+      "unconfigured": ["village"]
     },
     "pull": {
       "changes": {
@@ -1225,9 +1141,7 @@
             "rolesFromHeadlineAt": null,
             "school": null,
             "sourceAccount": null,
-            "sources": [
-              "manual"
-            ],
+            "sources": ["manual"],
             "strength": 0,
             "summary": null,
             "tags": [],
@@ -1272,9 +1186,7 @@
             "rolesFromHeadlineAt": null,
             "school": null,
             "sourceAccount": null,
-            "sources": [
-              "manual"
-            ],
+            "sources": ["manual"],
             "strength": 0,
             "summary": null,
             "tags": [],
@@ -1319,9 +1231,7 @@
             "rolesFromHeadlineAt": null,
             "school": null,
             "sourceAccount": null,
-            "sources": [
-              "self"
-            ],
+            "sources": ["self"],
             "strength": 0,
             "summary": null,
             "tags": [],
@@ -1361,9 +1271,7 @@
             "chatId": null,
             "extraction": null,
             "occurredAt": "2026-10-02T12:00:00+00:00",
-            "personIds": [
-              "person:Eve Ford"
-            ],
+            "personIds": ["person:Eve Ford"],
             "rawText": "Met Eve at a talk",
             "source": "manual",
             "title": null

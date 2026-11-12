@@ -6,7 +6,6 @@
  */
 
 import type Anthropic from '@anthropic-ai/sdk';
-import type { OptionalSource } from '@orbit/core/sources';
 import { batchFlagOn, type Claude, makeClaude } from './claude.ts';
 import type { Db } from './db.ts';
 import { type GoogleConfig, googleTokenSource, type TokenSource } from './google.ts';
@@ -68,7 +67,8 @@ export interface AgentEnv {
    * ORBIT_EXTRA_SOURCES (plan 43 §3.1): the optional sources the owner offers, read once by each function's entry and
    * passed in here. Unset or empty: none, and Orbit behaves exactly as before plan 43.
    */
-  extraSources?: OptionalSource[];
+  // spelled out rather than imported: the web app compiles this file and cannot resolve @orbit/core from here
+  extraSources?: ('instagram' | 'x' | 'imessage')[];
 }
 
 /** gte-small sentence embedding (384 dims, mean-pooled, normalized), or null when the model is not available. */

@@ -12,41 +12,53 @@
  * `orbit.person_in_use(p.sources, p.source_account, hidden)` in SQL or `hiddenPeople` in code. People with
  * `listed = false` take part in closeness and paths but are left out of the people pull, friend sharing and search.
  *
- * The read sites, each filtered (plan 43 §3.2 item 2; the removal test in supabase/tests/functions/sources-removal
- * fails when one is missed):
+ * The read sites, each filtered (plan 43 §3.2 item 2). The removal test (supabase/tests/functions/sources-removal)
+ * compares closeness, paths, the pull, the friend projection and a draft's context with a student who never had the
+ * off sources' rows, so a site missed among those fails it.
  *
- *   scoring      _shared/ingest/score.ts: loadHistories (people scored, messages, text days, follows, intros, the
- *                neighbours' scores), scorePeople (who exists, last contact), changedPeople (text days and links)
- *   ties         _shared/ingest/ties.ts: refreshTies (chat threads never make mail ties)
- *   paths        _shared/paths/find.ts: graphContext (owes a reply), loadWhole, loadNeighbourhood, nearby,
- *                tiesTouching, extendNeighbourhood, withFullEvidence (ties of kinds not in use and ties to hidden
- *                people), the people loaded (PERSON_COLUMNS), resolvePersonRef, findPaths (people at a company);
- *                _shared/paths/externalCandidates.ts: resolvePerson (through resolvePersonRef)
- *   bridges      _shared/paths/hopJob.ts: runHopEvidenceJob (the mutuals weighed)
- *   sourcing     _shared/sourcing/run.ts: runSourcing (known people, warm intros through the graph)
- *   Discover     orbit-api/routes/friendsDiscover.ts: reach and the people offered
- *   friends      _shared/friends/shares.ts: refreshFriendShares (hidden and unlisted people), matchShares;
- *                orbit-api/routes/friends.ts: the overlap counts; the database guard (friend_shares_guard) refuses
- *                unlisted people
- *   inbox        _shared/inbox/inbox.ts: listInbox
- *   history      orbit-api/routes/history.ts
- *   replies      _shared/replies/replies.ts: listReplies; _shared/replies/funnel.ts: runReplyFunnel
- *   voice        _shared/voice/voice.ts: relearnCard, voiceStatus; _shared/compose/context.ts: exemplars
- *   compose      _shared/compose/compose.ts: historyWith, threadContext; _shared/compose/context.ts: loadPerson
- *   cadence      _shared/cadence/cadence.ts: loadCadence
- *   autopilot    _shared/autopilot/plan.ts: runAutopilotPlan (people picked through the graph)
- *   notify       orbit-notify/notify.ts: readinessInput
- *   readiness    orbit-api/sync.ts: countsFor (the counts in /sync/status)
- *   search       orbit-api/routes/search.ts (hidden and unlisted people)
- *   pull         orbit-api/sync.ts: pull (messages, threads, ties, identities, people, every table keyed by a person,
- *                unlisted people left out of the people table)
+ *   scoring     _shared/ingest/score.ts: loadHistories (the people scored, messages, text days, follows, intros, the
+ *               neighbours and their scores), scorePeople (who has a tie, last contact), changedPeople (text days
+ *               and attached accounts); orbit-worker/handlers/score.ts passes the student's sources
+ *   paths       _shared/paths/find.ts: graphContext (the owes-a-reply query), personColumns (the people loaded by
+ *               loadWhole, loadNeighbourhood and extendNeighbourhood), addTies (every tie loaded: loadWhole,
+ *               tiesTouching, extendNeighbourhood; kinds out of use and ties to hidden people), nearby (the
+ *               neighbourhood walk), loadFriendLayer (matchShares), findPaths (both targets)
+ *               _shared/paths/externalCandidates.ts: resolvePerson goes through resolvePersonRef, a writer; a tie it
+ *               makes to a hidden person is dropped by addTies
+ *   bridges     _shared/paths/hopJob.ts: runHopEvidenceJob reads LinkedIn members by id only, and the mutuals it is
+ *               given come from findPaths' filtered graph
+ *   sourcing    _shared/sourcing/run.ts: runSourcing (the graph, the known people batch)
+ *   Discover    orbit-api/routes/friendsDiscover.ts: candidates (the student's contacts), toInvite (listed only);
+ *               reach is read live, so the switch job's rescore is all it needs
+ *   friends     _shared/friends/shares.ts: refreshFriendShares (hidden and unlisted people), matchShares;
+ *               orbit-worker/handlers/friends.ts; orbit.friend_shares_guard and orbit.people_unshare refuse and drop
+ *               unlisted people (migration 20261201)
+ *   inbox       _shared/inbox/inbox.ts: peopleByEmail, readLinkedIn
+ *   history     orbit-api/routes/history.ts
+ *   replies     _shared/replies/replies.ts: listReplies; orbit-worker/handlers/funnel.ts (no funnel for a reply on
+ *               a source out of use)
+ *   voice       _shared/voice/voice.ts: relearnCard (orbit-worker/handlers/voice.ts); _shared/compose/context.ts:
+ *               exemplars
+ *   compose     _shared/compose/compose.ts: prepareCompose (loadPerson, historyWith, exemplars);
+ *               _shared/compose/context.ts: loadPerson
+ *   cadence     _shared/cadence/cadence.ts: loadCadence (runCadence, dueItems, batchJobs compose.cadence)
+ *   autopilot   _shared/autopilot/plan.ts: runAutopilotPlan (candidateRows, the friend layer), firstTouchSendGate
+ *   notify      orbit-notify/notify.ts: readinessInput (LinkedIn and Google only: optional sources never hold up
+ *               "ready")
+ *   readiness   orbit-api/sync.ts: countsFor (the counts /sync/status reports)
+ *   search      people are searched in the browser over what it pulled; orbit-api/routes/search.ts acts on person
+ *               ids the browser names
+ *   pull        orbit-api/sync.ts: pull, with each table's `sources` filter in orbit-api/tables.ts (messages,
+ *               threads, ties, identities, people, every table keyed by a person; unlisted people out of people)
+ *
+ * Writers (ingest, merges, the social writers of other work) are not read sites; they ask `sourceIsOn` before they
+ * store anything from an optional source.
  */
 import {
   excludedBy,
   OPTIONAL_SOURCES,
   type OptionalSource,
   parseExtraSources,
-  SOURCES,
   type SourceState,
   type SourceStates,
   sourcesInUse,
@@ -138,14 +150,3 @@ export async function sourceIsOn(
     select state from orbit.source_states where user_id = ${userId}::uuid and source = ${source}`;
   return r?.state === 'on';
 }
-
-/** The message provider, tie kinds and identity kind of one source, for the writers that delete them. */
-export const sourceRows = (source: OptionalSource) => {
-  const info = SOURCES[source];
-  return {
-    provider: info.messageProvider ?? null,
-    tieKinds: [...info.tieKinds] as string[],
-    identityKind: info.identityKind ?? null,
-    platform: info.messageProvider ?? null,
-  };
-};

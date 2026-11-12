@@ -225,7 +225,9 @@ export async function loadHistories(
   const intros = await db.sql<{ a_person_id: string; b_person_id: string; introducer: string | null }>`
     select a_person_id, b_person_id, evidence ->> 'introducerId' as introducer from orbit.ties
      where user_id = ${userId}::uuid and kind = 'introduced_by'
-       and (a_person_id = any(${ids}::uuid[]) or b_person_id = any(${ids}::uuid[]))`;
+       and (a_person_id = any(${ids}::uuid[]) or b_person_id = any(${ids}::uuid[]))
+       and not exists (select 1 from orbit.people q where q.id in (a_person_id, b_person_id)
+                        and not orbit.person_in_use(q.sources, q.source_account, ${src.hidden}::text[]))`;
   const introsBy = new Map<string, TieHistory['introRole'][]>();
   for (const t of intros)
     for (const p of [t.a_person_id, t.b_person_id])
