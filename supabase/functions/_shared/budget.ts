@@ -10,6 +10,8 @@
  *   cannot spend it
  * The combined day cap counts the chat: orbit-claude writes a signed-in student's chat spend under
  * `user:<uuid>:<YYYY-MM-DD>` in public.orbit_proxy_spend (plan 34 A3).
+ * X (plan 43 §5) is left out of the month and total caps: it has its own, ORBIT_X_STUDENT_MONTHLY_USD per student and
+ * ORBIT_X_MONTHLY_USD for all of Orbit (`_shared/social/x/spend.ts`), so a student's X checks never stop their other work.
  * Over a cap the task gets `budget_exceeded` with the cap and when it resets, and makes no call. Credit providers
  * reserve before the call and settle after it (`reserveUsage`), so two lookups running at once cannot both pass a cap
  * with one credit left.
@@ -87,6 +89,8 @@ export const CAPS: Cap[] = [
   },
 ];
 export const MONTHLY_TOTAL_USD = 25;
+/** The provider with limits of its own, outside the month and total caps (plan 43 §5). */
+const OWN_LIMIT_PROVIDER = 'x';
 /**
  * Everything one user may cost Orbit, server tasks and chat together: a stop against a runaway account. At the
  * month cap of $25 a normal student takes years to reach it (orbit-claude's ORBIT_USER_CAP_USD meters the chat).
@@ -137,10 +141,13 @@ export async function checkBudget(
       from orbit.usage_ledger
      where user_id = ${userId}::uuid and created_at >= ${month}::timestamptz
      group by provider, operation`;
-  const monthTotal = rows.reduce((s, r) => s + Number(r.month_usd), 0);
+  const monthTotal = rows
+    .filter((r) => r.provider !== OWN_LIMIT_PROVIDER)
+    .reduce((s, r) => s + Number(r.month_usd), 0);
   const adding = spend.costUsd ?? 0;
   const [life] = await db.sql<{ usd: string }>`
-    select (coalesce((select sum(cost_usd) from orbit.usage_ledger where user_id = ${userId}::uuid), 0)
+    select (coalesce((select sum(cost_usd) from orbit.usage_ledger
+                       where user_id = ${userId}::uuid and provider <> ${OWN_LIMIT_PROVIDER}), 0)
           + coalesce((select usd from public.orbit_proxy_spend where subject = ${`user:${userId}`}), 0))::text as usd`;
   const lifetime = Number(life?.usd ?? 0);
   if (lifetime + adding > USER_TOTAL_USD || (lifetime >= USER_TOTAL_USD && adding === 0))

@@ -291,6 +291,7 @@ var CAPS = [
   }
 ];
 var MONTHLY_TOTAL_USD = 25;
+var OWN_LIMIT_PROVIDER = "x";
 var USER_TOTAL_USD = 100;
 var NEVER = "9999-12-31T00:00:00.000Z";
 function windowStart(window, now) {
@@ -311,10 +312,11 @@ async function checkBudget(db2, userId, spend, now = /* @__PURE__ */ new Date())
       from orbit.usage_ledger
      where user_id = ${userId}::uuid and created_at >= ${month}::timestamptz
      group by provider, operation`;
-  const monthTotal = rows.reduce((s, r) => s + Number(r.month_usd), 0);
+  const monthTotal = rows.filter((r) => r.provider !== OWN_LIMIT_PROVIDER).reduce((s, r) => s + Number(r.month_usd), 0);
   const adding = spend.costUsd ?? 0;
   const [life] = await db2.sql`
-    select (coalesce((select sum(cost_usd) from orbit.usage_ledger where user_id = ${userId}::uuid), 0)
+    select (coalesce((select sum(cost_usd) from orbit.usage_ledger
+                       where user_id = ${userId}::uuid and provider <> ${OWN_LIMIT_PROVIDER}), 0)
           + coalesce((select usd from public.orbit_proxy_spend where subject = ${`user:${userId}`}), 0))::text as usd`;
   const lifetime = Number(life?.usd ?? 0);
   if (lifetime + adding > USER_TOTAL_USD || lifetime >= USER_TOTAL_USD && adding === 0)
@@ -2427,6 +2429,107 @@ function agentEnvFrom(get2) {
     parallelKey: get2("PARALLEL_API_KEY")
   };
 }
+
+// packages/core/src/sources.ts
+var OPTIONAL_SOURCES = ["instagram", "x", "imessage"];
+var SOURCES = {
+  instagram: {
+    id: "instagram",
+    name: "Instagram",
+    provider: "instagram",
+    messageProvider: "instagram",
+    touchKinds: ["instagram_in", "instagram_out"],
+    tieKinds: ["instagram_mutual", "instagram_follow"],
+    identityKind: "instagram_id",
+    personSource: "instagram",
+    signedInOnly: true,
+    send: "tap",
+    mutuals: true
+  },
+  x: {
+    id: "x",
+    name: "X",
+    provider: "x",
+    messageProvider: "x",
+    touchKinds: ["x_in", "x_out"],
+    tieKinds: ["x_mutual", "x_follow"],
+    identityKind: "x_id",
+    personSource: "x",
+    signedInOnly: true,
+    send: "tap",
+    mutuals: true
+  },
+  imessage: {
+    id: "imessage",
+    name: "Texts",
+    provider: "imessage",
+    touchKinds: ["text_in", "text_out"],
+    tieKinds: [],
+    personSource: "imessage",
+    signedInOnly: false,
+    send: "handoff",
+    mutuals: false
+  }
+};
+var isSource = (s) => OPTIONAL_SOURCES.includes(s);
+function parseExtraSources(raw) {
+  if (!raw) return [];
+  const out = [];
+  for (const part2 of raw.split(/[\s,]+/)) {
+    const name = part2.trim().toLowerCase();
+    const id = name === "texts" ? "imessage" : name;
+    if (isSource(id) && !out.includes(id)) out.push(id);
+  }
+  return out;
+}
+var TOUCH_SOURCE = /* @__PURE__ */ new Map();
+var TIE_SOURCE = /* @__PURE__ */ new Map();
+var PROVIDER_SOURCE = /* @__PURE__ */ new Map();
+var IDENTITY_SOURCE = /* @__PURE__ */ new Map();
+for (const info of Object.values(SOURCES)) {
+  for (const k of info.touchKinds) TOUCH_SOURCE.set(k, info.id);
+  for (const k of info.tieKinds) TIE_SOURCE.set(k, info.id);
+  if (info.messageProvider) PROVIDER_SOURCE.set(info.messageProvider, info.id);
+  if (info.identityKind) IDENTITY_SOURCE.set(info.identityKind, info.id);
+}
+
+// supabase/functions/_shared/social/x/config.ts
+var X_API = "https://api.x.com";
+var X_AUTHORIZE_URL = "https://x.com/i/oauth2/authorize";
+var X_TOKEN_URL = "https://api.x.com/2/oauth2/token";
+var X_REVOKE_URL = "https://api.x.com/2/oauth2/revoke";
+var X_SCOPES = ["tweet.read", "users.read", "follows.read", "dm.read", "dm.write", "offline.access"];
+var X_READ_USD = 0.01;
+var X_SEND_USD = 0.015;
+var X_CONSENT_VERSION = "x-consent-2026-11";
+var X_NOT_SET_UP = "X is not set up";
+var DEFAULT_STUDENT_MONTHLY_USD = 15;
+var DEFAULT_ORBIT_MONTHLY_USD = 0;
+var DEFAULT_LIST_LIMIT = 600;
+var nonNegative = (raw, fallback) => {
+  if (raw === void 0 || raw.trim() === "") return fallback;
+  const v = Number(raw);
+  return Number.isFinite(v) && v >= 0 ? v : fallback;
+};
+function xConfigFromEnv(env2) {
+  return {
+    clientId: env2("ORBIT_X_CLIENT_ID") || void 0,
+    clientSecret: env2("ORBIT_X_CLIENT_SECRET") || void 0,
+    redirectUri: env2("ORBIT_X_REDIRECT_URI") || void 0,
+    studentMonthlyUsd: nonNegative(env2("ORBIT_X_STUDENT_MONTHLY_USD"), DEFAULT_STUDENT_MONTHLY_USD),
+    orbitMonthlyUsd: nonNegative(env2("ORBIT_X_MONTHLY_USD"), DEFAULT_ORBIT_MONTHLY_USD),
+    listLimit: Math.floor(nonNegative(env2("ORBIT_X_LIST_LIMIT"), DEFAULT_LIST_LIMIT)),
+    offered: parseExtraSources(env2("ORBIT_EXTRA_SOURCES")).includes("x")
+  };
+}
+function xMissing(cfg) {
+  const m = [];
+  if (!cfg?.offered) m.push("ORBIT_EXTRA_SOURCES");
+  if (!cfg?.clientId) m.push("ORBIT_X_CLIENT_ID");
+  if (!cfg?.clientSecret) m.push("ORBIT_X_CLIENT_SECRET");
+  return m;
+}
+var roundUsd = (n) => Math.round(n * 1e5) / 1e5;
 
 // supabase/functions/_shared/ratelimit.ts
 function sqlTake(db2) {
@@ -6120,8 +6223,8 @@ async function settleCard(db2, userId, dedupeKey, status3, now) {
 }
 
 // supabase/functions/_shared/replies/breaker.ts
-function pausedGoalsOf(settings2) {
-  const v = settings2?.autopilot_paused_goals;
+function pausedGoalsOf(settings3) {
+  const v = settings3?.autopilot_paused_goals;
   if (!v || typeof v !== "object" || Array.isArray(v)) return {};
   const out = {};
   for (const [goalId, p] of Object.entries(v)) {
@@ -6151,9 +6254,9 @@ var OUTREACH_KINDS = /* @__PURE__ */ new Set([
 function breakerHolds(kind) {
   return !kind || OUTREACH_KINDS.has(kind);
 }
-function goalPaused(settings2, goalId, now) {
+function goalPaused(settings3, goalId, now) {
   if (!goalId) return false;
-  const p = pausedGoalsOf(settings2)[goalId];
+  const p = pausedGoalsOf(settings3)[goalId];
   if (!p) return false;
   return p.until === null || new Date(p.until).getTime() > now.getTime();
 }
@@ -8905,18 +9008,18 @@ async function pushDraftEdit(db2, userId, id, e) {
     returning id, draft_id, kind, distance, created_at`;
   return r;
 }
-function notesOf(settings2) {
-  const v = settings2?.voice_notes;
+function notesOf(settings3) {
+  const v = settings3?.voice_notes;
   if (!Array.isArray(v)) return [];
   return v.filter(
     (n) => !!n && typeof n === "object" && typeof n.id === "string" && typeof n.text === "string" && Array.isArray(n.evidence)
   );
 }
-function storedCard(settings2, firstName) {
-  const c = StyleCardS.safeParse(settings2?.style_card);
+function storedCard(settings3, firstName) {
+  const c = StyleCardS.safeParse(settings3?.style_card);
   if (c.success && ((c.data.builtFromCount ?? 0) >= STYLE_MIN_SAMPLES || c.data.custom))
     return c.data;
-  const preset = settings2?.tone_preset;
+  const preset = settings3?.tone_preset;
   return defaultStyleCard(preset === "direct" || preset === "formal" ? preset : "warm", firstName);
 }
 var DistillS = z3.object({
@@ -8945,10 +9048,10 @@ var SCORE_DRAFTS = 20;
 async function voiceStatus(db2, userId, now) {
   const [u2] = await db2.sql`
     select settings, first_name from orbit.users where id = ${userId}::uuid`;
-  const settings2 = u2?.settings ?? {};
-  const stored = StyleCardS.safeParse(settings2.style_card);
-  const card = storedCard(settings2, u2?.first_name ?? "");
-  const notes2 = notesOf(settings2);
+  const settings3 = u2?.settings ?? {};
+  const stored = StyleCardS.safeParse(settings3.style_card);
+  const card = storedCard(settings3, u2?.first_name ?? "");
+  const notes2 = notesOf(settings3);
   const since2 = new Date(now.getTime() - 30 * 864e5);
   const drafts = await db2.sql`
     select id, subject, coalesce(body_original, body) as body from orbit.drafts
@@ -8963,7 +9066,7 @@ async function voiceStatus(db2, userId, now) {
   const scores = drafts.map(
     (d) => judged.has(d.id) ? judged.get(d.id) : voiceScore(voiceCheck(d, { card, notes: notes2 }))
   );
-  const relearned = settings2.voice_relearned_at;
+  const relearned = settings3.voice_relearned_at;
   return {
     card: stored.success ? stored.data : null,
     cardProse: cardProse(card),
@@ -10244,8 +10347,8 @@ function item(r, status3, reason2) {
     ...r.ask?.replyToMessageId ? { messageId: r.ask.replyToMessageId } : {}
   };
 }
-function modeOf(settings2, level) {
-  const m = settings2.autopilot_mode;
+function modeOf(settings3, level) {
+  const m = settings3.autopilot_mode;
   if (m === "off" || m === "assist" || m === "autopilot") return m;
   return level >= 2 ? "autopilot" : level === 1 ? "assist" : "off";
 }
@@ -10281,7 +10384,7 @@ async function autopilotStatus(db2, userId, now) {
   const tz = validZone(u2.timezone) ?? "America/New_York";
   const dayStart = zonedTime(new Intl.DateTimeFormat("en-CA", { timeZone: tz }).format(now), 0, 0, tz);
   const weekStart = new Date(dayStart.getTime() - 6 * 864e5);
-  const settings2 = u2.settings ?? {};
+  const settings3 = u2.settings ?? {};
   const queued2 = await itemRows(db2, userId, "queued", now, dayStart);
   const held = await itemRows(db2, userId, "held", now, dayStart);
   const sentToday = await itemRows(db2, userId, "sent", now, dayStart);
@@ -10318,7 +10421,7 @@ async function autopilotStatus(db2, userId, now) {
                     and a.action = 'draft.approve')
      group by d.kind`;
   const count = (kinds) => approvals.filter((a) => kinds.includes(a.kind)).reduce((s, a) => s + a.n, 0);
-  const autoKinds = Array.isArray(settings2.auto_kinds) ? settings2.auto_kinds : [];
+  const autoKinds = Array.isArray(settings3.auto_kinds) ? settings3.auto_kinds : [];
   const first = await firstTouchRungOf(db2, userId);
   const rungs = ["bump", "thank_you", "schedule", "first_touch"].map((kind) => {
     if (kind === "first_touch")
@@ -10336,8 +10439,8 @@ async function autopilotStatus(db2, userId, now) {
            count(*) filter (where details->>'kind' in ('first_touch', 'warm_first_touch', 'outreach'))::int as week_first
       from orbit.audit_log
      where user_id = ${userId}::uuid and action = 'draft.auto_sent' and created_at >= ${weekStart}::timestamptz`;
-  const pausedUntil = typeof settings2.autopilot_paused_until === "string" && new Date(settings2.autopilot_paused_until).getTime() > now.getTime() ? settings2.autopilot_paused_until : null;
-  const goalPauses = pausedGoalsOf(settings2);
+  const pausedUntil = typeof settings3.autopilot_paused_until === "string" && new Date(settings3.autopilot_paused_until).getTime() > now.getTime() ? settings3.autopilot_paused_until : null;
+  const goalPauses = pausedGoalsOf(settings3);
   const goalIds = Object.keys(goalPauses);
   const titles = goalIds.length ? await db2.sql`
         select id, title from orbit.goals where user_id = ${userId}::uuid and id = any(${goalIds}::uuid[])` : [];
@@ -10353,7 +10456,7 @@ async function autopilotStatus(db2, userId, now) {
   const reviews = queued2.map((q) => q.send_at).filter((x) => !!x);
   const plan2 = await planCards(db2, userId, now);
   return {
-    mode: modeOf(settings2, Number(u2.autonomy_level) || 0),
+    mode: modeOf(settings3, Number(u2.autonomy_level) || 0),
     pausedUntil,
     pausedGoals,
     queued: queued2.map((r) => item(r, queuedStatus(r, first))),
@@ -10844,9 +10947,9 @@ function sentCount(chat) {
   return (chat.firstOutreachAt ? 1 : 0) + chat.bumpCount;
 }
 function cadenceActions(inp) {
-  const { now, settings: settings2 } = inp;
-  const tz = settings2.timezone;
-  if (settings2.quietUntil && now.getTime() < new Date(settings2.quietUntil).getTime()) return [];
+  const { now, settings: settings3 } = inp;
+  const tz = settings3.timezone;
+  if (settings3.quietUntil && now.getTime() < new Date(settings3.quietUntil).getTime()) return [];
   const out = [];
   const due2 = (personId) => {
     const ptz = (personId ? inp.people.get(personId)?.timeZone : void 0) ?? tz;
@@ -10866,7 +10969,7 @@ function cadenceActions(inp) {
     if (!blocked(chat.personId) && room(chat.personId) && sentCount(chat) < MAX_UNANSWERED) {
       const v1 = bumpDue(chat, person2, {
         now,
-        settings: { ...settings2, quietDays: [] },
+        settings: { ...settings3, quietDays: [] },
         timezone: tz
       });
       if (v1) {
@@ -10880,7 +10983,7 @@ function cadenceActions(inp) {
         });
       } else if (goal && SECOND_BUMP_GOALS.has(goal.kind) && chat.stage === "outreach_sent" && chat.bumpCount === 1 && (pc?.score ?? 0) < COLD_SCORE && chat.lastOutboundAt && !(chat.lastInboundAt && chat.lastInboundAt >= chat.lastOutboundAt) && maxBumpsFor(
         sectorOf({ title: person2.currentTitle, org: person2.currentOrganizationRaw }),
-        settings2.maxBumps
+        settings3.maxBumps
       ) < 2) {
         const bdays = businessDaysBetween(new Date(chat.lastOutboundAt), now, tz);
         if (bdays >= SECOND_BUMP_AFTER_BUSINESS_DAYS)
@@ -10909,7 +11012,7 @@ function cadenceActions(inp) {
         reason: "You met in the last three days and have not thanked them yet",
         dueAt: due2(chat.personId)
       });
-    const timer = stageTimer(chat, person2, settings2, now);
+    const timer = stageTimer(chat, person2, settings3, now);
     if (timer)
       out.push({
         kind: "stage_timer",
@@ -10973,7 +11076,7 @@ function cadenceActions(inp) {
   }
   return out;
 }
-function stageTimer(chat, person2, settings2, now) {
+function stageTimer(chat, person2, settings3, now) {
   if (!ACTIVE_STAGES.includes(chat.stage)) return void 0;
   const entered = new Date(chat.stageEnteredAt).getTime();
   if (chat.stage === "followed_up" && now.getTime() - entered >= 14 * DAY4)
@@ -10987,14 +11090,14 @@ function stageTimer(chat, person2, settings2, now) {
   if (from.getTime() > now.getTime()) return void 0;
   const maxBumps = maxBumpsFor(
     sectorOf({ title: person2.currentTitle, org: person2.currentOrganizationRaw }),
-    settings2.maxBumps
+    settings3.maxBumps
   );
   return decideTransition("outreach_sent", {
     type: "timer_no_response",
     bumps: chat.bumpCount,
     maxBumps,
     daysSilent: (now.getTime() - from.getTime()) / DAY4,
-    businessDaysSilent: businessDaysBetween(from, now, settings2.timezone)
+    businessDaysSilent: businessDaysBetween(from, now, settings3.timezone)
   });
 }
 
@@ -11063,57 +11166,6 @@ function dossierFromRow(r) {
     updatedAt: r.updated_at,
     expiresAt: r.expires_at
   });
-}
-
-// packages/core/src/sources.ts
-var SOURCES = {
-  instagram: {
-    id: "instagram",
-    name: "Instagram",
-    provider: "instagram",
-    messageProvider: "instagram",
-    touchKinds: ["instagram_in", "instagram_out"],
-    tieKinds: ["instagram_mutual", "instagram_follow"],
-    identityKind: "instagram_id",
-    personSource: "instagram",
-    signedInOnly: true,
-    send: "tap",
-    mutuals: true
-  },
-  x: {
-    id: "x",
-    name: "X",
-    provider: "x",
-    messageProvider: "x",
-    touchKinds: ["x_in", "x_out"],
-    tieKinds: ["x_mutual", "x_follow"],
-    identityKind: "x_id",
-    personSource: "x",
-    signedInOnly: true,
-    send: "tap",
-    mutuals: true
-  },
-  imessage: {
-    id: "imessage",
-    name: "Texts",
-    provider: "imessage",
-    touchKinds: ["text_in", "text_out"],
-    tieKinds: [],
-    personSource: "imessage",
-    signedInOnly: false,
-    send: "handoff",
-    mutuals: false
-  }
-};
-var TOUCH_SOURCE = /* @__PURE__ */ new Map();
-var TIE_SOURCE = /* @__PURE__ */ new Map();
-var PROVIDER_SOURCE = /* @__PURE__ */ new Map();
-var IDENTITY_SOURCE = /* @__PURE__ */ new Map();
-for (const info of Object.values(SOURCES)) {
-  for (const k of info.touchKinds) TOUCH_SOURCE.set(k, info.id);
-  for (const k of info.tieKinds) TIE_SOURCE.set(k, info.id);
-  if (info.messageProvider) PROVIDER_SOURCE.set(info.messageProvider, info.id);
-  if (info.identityKind) IDENTITY_SOURCE.set(info.identityKind, info.id);
 }
 
 // packages/core/src/scoring/rapport.ts
@@ -16449,14 +16501,14 @@ async function effectiveLevel(db2, goalId, userLevel) {
   }
   return Number(userLevel) || 0;
 }
-function aheadOf(settings2, key, now) {
-  const v = settings2?.[key];
+function aheadOf(settings3, key, now) {
+  const v = settings3?.[key];
   if (typeof v !== "string") return void 0;
   const t = new Date(v);
   return Number.isNaN(t.getTime()) || t.getTime() <= now.getTime() ? void 0 : t;
 }
-function ownCap(settings2, key, tableCap) {
-  const v = Number(settings2?.[key]);
+function ownCap(settings3, key, tableCap) {
+  const v = Number(settings3?.[key]);
   return Number.isFinite(v) && v >= 1 ? Math.min(Math.floor(v), tableCap) : tableCap;
 }
 var hashOf = (d) => messageHash({ channel: d.channel, subject: d.subject, body: d.body });
@@ -17039,7 +17091,7 @@ async function loadCadence(db2, userId, now) {
   const [u2] = await db2.sql`
     select timezone, autonomy_level, settings from orbit.users where id = ${userId}::uuid`;
   const tz = validZone(u2?.timezone) ?? "America/New_York";
-  const settings2 = u2?.settings ?? {};
+  const settings3 = u2?.settings ?? {};
   const chatRows = await db2.sql`
     select * from orbit.chats where user_id = ${userId}::uuid and archived_at is null`;
   const chats = chatRows.map((r) => chatFromRow(isoRow(r)));
@@ -17122,8 +17174,8 @@ async function loadCadence(db2, userId, now) {
   const awaiting = await db2.sql`
     select distinct person_id from orbit.suggestions
      where user_id = ${userId}::uuid and kind = 'needs_you' and status in ('pending', 'snoozed') and person_id is not null`;
-  const maxBumps = num(settings2.max_bumps, 2);
-  const quiet = typeof settings2.quiet_until === "string" ? settings2.quiet_until : void 0;
+  const maxBumps = num(settings3.max_bumps, 2);
+  const quiet = typeof settings3.quiet_until === "string" ? settings3.quiet_until : void 0;
   return {
     input: {
       chats,
@@ -17138,13 +17190,13 @@ async function loadCadence(db2, userId, now) {
     timezone: tz,
     chatsById: new Map(chats.map((c) => [c.id, c])),
     goalsById: new Map(goals.map((g) => [g.id, g])),
-    settings: settings2,
+    settings: settings3,
     awaitingStudent: new Set(awaiting.map((r) => r.person_id)),
     autonomyLevel: num(u2?.autonomy_level, 0),
-    autoKinds: Array.isArray(settings2.auto_kinds) ? settings2.auto_kinds.filter(
+    autoKinds: Array.isArray(settings3.auto_kinds) ? settings3.auto_kinds.filter(
       (k) => typeof k === "string" && AUTO_KINDS.includes(k)
     ) : [],
-    pausedUntil: typeof settings2.autopilot_paused_until === "string" ? settings2.autopilot_paused_until : void 0
+    pausedUntil: typeof settings3.autopilot_paused_until === "string" ? settings3.autopilot_paused_until : void 0
   };
 }
 var toDue = (a) => ({
@@ -23428,6 +23480,658 @@ var voiceRoutes = {
   "/voice/relearn": { method: "POST", auth: true, run: relearn }
 };
 
+// supabase/functions/_shared/social/adapter.ts
+var SocialSignInNeeded = class extends Error {
+  constructor(platform) {
+    super(`${platform} needs you to sign in again`);
+    this.platform = platform;
+  }
+};
+var SocialBudgetSpent = class extends Error {
+  constructor(kind, retryAt) {
+    super(`budget spent for ${kind}`);
+    this.kind = kind;
+    this.retryAt = retryAt;
+  }
+};
+
+// supabase/functions/_shared/social/x/adapter.ts
+var X_USER_FIELDS = [
+  "username",
+  "name",
+  "description",
+  "entities",
+  "location",
+  "verified",
+  "protected",
+  "public_metrics",
+  "profile_image_url",
+  "url",
+  "connection_status",
+  "receives_your_dm"
+].join(",");
+var X_DM_FIELDS = "id,text,event_type,created_at,dm_conversation_id,sender_id,participant_ids";
+var X_LIST_PAGE = 1e3;
+var X_DM_PAGE = 100;
+var XApiError = class extends Error {
+  constructor(status3, type, detail) {
+    super(`x ${status3} ${type}`);
+    this.status = status3;
+    this.type = type;
+    this.detail = detail;
+  }
+  /** the short name at the end of X's problem type URL ("dm-recipient-not-accepting") */
+  get problem() {
+    return this.type.split("/").pop() ?? this.type;
+  }
+};
+var XAccountGone = class extends Error {
+  constructor(ref, why) {
+    super(`x account ${why}`);
+    this.ref = ref;
+    this.why = why;
+  }
+};
+var XAccountProtected = class extends Error {
+  constructor(accountId) {
+    super("x account protected");
+    this.accountId = accountId;
+  }
+};
+var XRateLimited = class extends Error {
+  constructor(resetAt) {
+    super("x rate limited");
+    this.resetAt = resetAt;
+  }
+};
+function mapXUser(u2) {
+  const links = /* @__PURE__ */ new Set();
+  for (const e of [...u2.entities?.url?.urls ?? [], ...u2.entities?.description?.urls ?? []]) {
+    const l = e.expanded_url ?? e.display_url ?? e.url;
+    if (l) links.add(l);
+  }
+  if (!u2.entities?.url?.urls?.length && u2.url) links.add(u2.url);
+  const a = { platform: "x", id: u2.id, username: u2.username };
+  if (u2.name) a.name = u2.name;
+  if (u2.description) a.bio = u2.description;
+  if (links.size) a.links = [...links];
+  if (typeof u2.public_metrics?.followers_count === "number") a.followers = u2.public_metrics.followers_count;
+  if (typeof u2.public_metrics?.following_count === "number") a.following = u2.public_metrics.following_count;
+  if (typeof u2.verified === "boolean") a.verified = u2.verified;
+  if (typeof u2.protected === "boolean") a.isPrivate = u2.protected;
+  if (u2.profile_image_url) a.defaultPicture = /default_profile_images/.test(u2.profile_image_url);
+  return a;
+}
+function xRelation(u2) {
+  const s = new Set(u2.connection_status ?? []);
+  return { following: s.has("following"), followedBy: s.has("followed_by") };
+}
+function oneToOneIds(conversationId) {
+  const m = conversationId.match(/^(\d+)-(\d+)$/);
+  return m ? [m[1], m[2]] : void 0;
+}
+function groupDmEvents(events, meId) {
+  const byChat = /* @__PURE__ */ new Map();
+  const messages = [];
+  for (const e of events) {
+    const chatId = e.dm_conversation_id;
+    if (!chatId) continue;
+    let c = byChat.get(chatId);
+    if (!c) {
+      c = { people: new Set(oneToOneIds(chatId) ?? []) };
+      byChat.set(chatId, c);
+    }
+    if (e.sender_id) c.people.add(e.sender_id);
+    for (const p of e.participant_ids ?? []) c.people.add(p);
+    if (e.created_at && (!c.lastAt || e.created_at > c.lastAt)) c.lastAt = e.created_at;
+    if (e.event_type !== "MessageCreate") continue;
+    const text3 = e.text ?? "";
+    messages.push({
+      messageId: e.id,
+      chatId,
+      at: e.created_at ?? "",
+      fromStudent: !!meId && e.sender_id === meId,
+      senderAccountId: e.sender_id ?? "",
+      text: text3,
+      hasWords: text3.trim().length > 0
+    });
+  }
+  const chats = [...byChat].map(([chatId, c]) => {
+    if (meId) c.people.add(meId);
+    const others = [...c.people].filter((p) => p !== meId).map((accountId) => ({ accountId }));
+    return { chatId, participants: c.people.size, others, ...c.lastAt ? { lastAt: c.lastAt } : {} };
+  });
+  return { chats, messages };
+}
+function createXAdapter(o) {
+  const base = (o.base ?? X_API).replace(/\/+$/, "");
+  const doFetch = o.fetch ?? fetch;
+  async function call(method, path, query2, body2) {
+    const q = new URLSearchParams();
+    for (const [k, v] of Object.entries(query2 ?? {})) if (v !== void 0 && v !== "") q.set(k, String(v));
+    const url = `${base}${path}${q.size ? `?${q}` : ""}`;
+    const send = (token) => doFetch(url, {
+      method,
+      headers: {
+        authorization: `Bearer ${token}`,
+        accept: "application/json",
+        ...body2 !== void 0 ? { "content-type": "application/json" } : {}
+      },
+      body: body2 !== void 0 ? JSON.stringify(body2) : void 0,
+      signal: AbortSignal.timeout(2e4)
+    });
+    let res = await send(await o.tokens.accessToken());
+    if (res.status === 401) {
+      await res.body?.cancel();
+      res = await send(await o.tokens.refreshed());
+      if (res.status === 401) {
+        await res.body?.cancel();
+        throw new SocialSignInNeeded("x");
+      }
+    }
+    let parsed = {};
+    try {
+      parsed = await res.json();
+    } catch {
+      parsed = {};
+    }
+    if (res.status === 429) {
+      const reset = Number(res.headers.get("x-rate-limit-reset"));
+      throw new XRateLimited(Number.isFinite(reset) && reset > 0 ? new Date(reset * 1e3) : void 0);
+    }
+    if (!res.ok) {
+      const errs = parsed.errors;
+      const type = String(parsed.type ?? errs?.[0]?.type ?? `http_${res.status}`);
+      throw new XApiError(res.status, type, String(parsed.detail ?? errs?.[0]?.detail ?? ""));
+    }
+    return { status: res.status, body: parsed };
+  }
+  async function priced(kind, units, run) {
+    const r = await o.budget.reserve(kind, units);
+    if (!r) throw new SocialBudgetSpent(kind, await o.budget.retryAt?.(kind) ?? void 0);
+    let used = 0;
+    try {
+      const out = await run();
+      used = Math.min(units, out.used);
+      return out.value;
+    } finally {
+      await r.settle(used);
+    }
+  }
+  function gone(ref, b) {
+    const err = b.errors?.[0];
+    const text3 = `${err?.title ?? ""} ${err?.detail ?? ""}`.toLowerCase();
+    return new XAccountGone(ref, text3.includes("suspend") ? "suspended" : "not_found");
+  }
+  function profileRead(u2) {
+    const out = { account: mapXUser(u2), relation: xRelation(u2) };
+    if (typeof u2.receives_your_dm === "boolean") out.receivesYourDm = u2.receives_your_dm;
+    if (u2.location) out.location = u2.location;
+    return out;
+  }
+  const userPath = (ref) => {
+    const r = ref.trim().replace(/^@/, "");
+    return /^\d+$/.test(r) ? `/2/users/${r}` : `/2/users/by/username/${encodeURIComponent(r)}`;
+  };
+  async function dmPage(path, maxResults, cursor) {
+    const n = Math.max(1, Math.min(X_DM_PAGE, Math.floor(maxResults)));
+    return priced("messages", n, async () => {
+      const { body: body2 } = await call("GET", path, {
+        max_results: n,
+        pagination_token: cursor,
+        event_types: "MessageCreate,ParticipantsJoin,ParticipantsLeave",
+        "dm_event.fields": X_DM_FIELDS
+      });
+      const events = body2.data ?? [];
+      const meta2 = body2.meta ?? {};
+      const grouped = groupDmEvents(events, o.meId);
+      return {
+        value: { events, ...grouped, ...meta2.next_token ? { cursor: meta2.next_token } : {} },
+        used: meta2.result_count ?? events.length
+      };
+    });
+  }
+  return {
+    platform: "x",
+    pageSize: () => X_LIST_PAGE,
+    me: () => priced("profile", 1, async () => {
+      const { body: body2 } = await call("GET", "/2/users/me", { "user.fields": X_USER_FIELDS });
+      const u2 = body2.data;
+      if (!u2?.id) throw gone("me", body2);
+      return { value: profileRead(u2), used: 1 };
+    }),
+    profile: (ref) => priced("profile", 1, async () => {
+      const { body: body2 } = await call("GET", userPath(ref), { "user.fields": X_USER_FIELDS });
+      const data = body2.data;
+      if (!data?.id) throw gone(ref, body2);
+      return { value: profileRead(data), used: 1 };
+    }),
+    listPage: (accountId, list8, cursor, maxResults = X_LIST_PAGE) => {
+      const n = Math.max(1, Math.min(X_LIST_PAGE, Math.floor(maxResults)));
+      return priced("list", n, async () => {
+        const { body: body2 } = await call("GET", `/2/users/${encodeURIComponent(accountId)}/${list8}`, {
+          max_results: n,
+          pagination_token: cursor,
+          "user.fields": X_USER_FIELDS
+        });
+        const users = body2.data;
+        if (!users && body2.errors?.length) {
+          const err = body2.errors[0];
+          const text3 = `${err.title ?? ""} ${err.detail ?? ""} ${err.type ?? ""}`.toLowerCase();
+          if (text3.includes("suspend")) throw new XAccountGone(accountId, "suspended");
+          if (text3.includes("not-found") || text3.includes("not found"))
+            throw new XAccountGone(accountId, "not_found");
+          throw new XAccountProtected(accountId);
+        }
+        const meta2 = body2.meta ?? {};
+        const page2 = {
+          ids: (users ?? []).map((u2) => u2.id),
+          accounts: (users ?? []).map(mapXUser),
+          relations: Object.fromEntries((users ?? []).map((u2) => [u2.id, xRelation(u2)]))
+        };
+        if (meta2.next_token) page2.cursor = meta2.next_token;
+        return { value: page2, used: meta2.result_count ?? page2.ids.length };
+      });
+    },
+    dmEvents: (opts = {}) => dmPage("/2/dm_events", opts.maxResults ?? X_DM_PAGE, opts.cursor),
+    async chats(cursor) {
+      const page2 = await dmPage("/2/dm_events", X_DM_PAGE, cursor);
+      return { items: page2.chats, ...page2.cursor ? { cursor: page2.cursor } : {} };
+    },
+    async messages(chatId, cursor) {
+      const pair = oneToOneIds(chatId);
+      const other = pair && o.meId ? pair.find((p) => p !== o.meId) : void 0;
+      const path = other ? `/2/dm_conversations/with/${other}/dm_events` : `/2/dm_conversations/${encodeURIComponent(chatId)}/dm_events`;
+      const page2 = await dmPage(path, X_DM_PAGE, cursor);
+      return {
+        items: page2.messages.filter((m) => m.chatId === chatId),
+        ...page2.cursor ? { cursor: page2.cursor } : {}
+      };
+    },
+    send: (to, text3) => priced("send", 1, async () => {
+      const path = to.accountId ? `/2/dm_conversations/with/${encodeURIComponent(to.accountId)}/messages` : to.chatId ? `/2/dm_conversations/${encodeURIComponent(to.chatId)}/messages` : void 0;
+      if (!path) throw new Error("send needs a chat or an account");
+      const { body: body2 } = await call("POST", path, void 0, { text: text3 });
+      const d = body2.data;
+      return {
+        value: { messageId: d?.dm_event_id ?? "", chatId: d?.dm_conversation_id ?? to.chatId ?? "" },
+        used: 1
+      };
+    })
+  };
+}
+
+// supabase/functions/_shared/social/x/oauth.ts
+var xAccessName = (userId) => `x_access:${userId}`;
+var xRefreshName = (userId) => `x_refresh:${userId}`;
+var XTokenError = class extends Error {
+  constructor(status3, code) {
+    super(`x token ${status3} ${code}`);
+    this.status = status3;
+    this.code = code;
+  }
+};
+function xAuthUrl(cfg, p) {
+  const q = new URLSearchParams({
+    response_type: "code",
+    client_id: cfg.clientId,
+    redirect_uri: cfg.redirectUri,
+    scope: X_SCOPES.join(" "),
+    state: p.state,
+    code_challenge: p.challenge,
+    code_challenge_method: "S256"
+  });
+  return `${X_AUTHORIZE_URL}?${q}`;
+}
+var basic = (cfg) => `Basic ${btoa(`${cfg.clientId}:${cfg.clientSecret}`)}`;
+async function tokenCall2(cfg, form) {
+  const res = await (cfg.fetch ?? fetch)(X_TOKEN_URL, {
+    method: "POST",
+    headers: {
+      "content-type": "application/x-www-form-urlencoded",
+      accept: "application/json",
+      authorization: basic(cfg)
+    },
+    body: new URLSearchParams({ ...form, client_id: cfg.clientId }),
+    signal: AbortSignal.timeout(15e3)
+  });
+  let body2 = {};
+  try {
+    body2 = await res.json();
+  } catch {
+    body2 = {};
+  }
+  if (!res.ok) throw new XTokenError(res.status, String(body2.error ?? "token_error"));
+  if (typeof body2.access_token !== "string") throw new XTokenError(502, "no_access_token");
+  return body2;
+}
+function xExchangeCode(cfg, code, verifier) {
+  return tokenCall2(cfg, {
+    grant_type: "authorization_code",
+    code,
+    code_verifier: verifier,
+    redirect_uri: cfg.redirectUri
+  });
+}
+async function xRevoke(cfg, token, hint) {
+  try {
+    const res = await (cfg.fetch ?? fetch)(X_REVOKE_URL, {
+      method: "POST",
+      headers: { "content-type": "application/x-www-form-urlencoded", authorization: basic(cfg) },
+      body: new URLSearchParams({ token, token_type_hint: hint, client_id: cfg.clientId }),
+      signal: AbortSignal.timeout(15e3)
+    });
+    await res.body?.cancel();
+    return res.ok;
+  } catch {
+    return false;
+  }
+}
+async function loadXState(db2, userId) {
+  const [a] = await db2.sql`
+    select status, social_account_id, token_secret_id, sync_state->'x' as x
+      from orbit.integration_accounts where user_id = ${userId}::uuid and provider = 'x'`;
+  if (!a) return void 0;
+  return {
+    status: a.status,
+    socialAccountId: a.social_account_id,
+    refreshSecretId: a.token_secret_id,
+    state: a.x ?? {}
+  };
+}
+async function storeXTokens(vault, userId, t, now) {
+  const accessSecretId = await vault.put(xAccessName(userId), t.access_token);
+  const refreshSecretId = t.refresh_token ? await vault.put(xRefreshName(userId), t.refresh_token) : void 0;
+  const accessExpiresAt = new Date(now.getTime() + Math.max(60, t.expires_in ?? 7200) * 1e3).toISOString();
+  return { accessSecretId, refreshSecretId, accessExpiresAt };
+}
+
+// packages/core/src/entity/social.ts
+var COMMON_SURNAMES = new Set(
+  "smith johnson williams brown jones garcia miller davis rodriguez martinez hernandez lopez gonzalez wilson anderson thomas taylor moore jackson martin lee perez thompson white harris sanchez clark ramirez lewis robinson walker young allen king wright scott torres nguyen hill flores green adams nelson baker hall rivera campbell mitchell carter roberts gomez phillips evans turner diaz parker cruz edwards collins reyes stewart morris morales murphy cook rogers gutierrez ortiz morgan cooper peterson bailey reed kelly howard ramos kim cox ward richardson watson brooks chavez wood james bennett gray mendoza ruiz hughes price alvarez castillo sanders patel myers long ross foster jimenez chen wang li zhang liu singh kumar shah khan park choi wu huang lin yang zhao zhou xu sun ma zhu hu guo he gao luo tran le pham kaur gupta sharma ali ahmed hassan cohen ng wong chan cheung lam ho tan lim".split(/\s+/)
+);
+
+// supabase/functions/_shared/social/x/spend.ts
+function xPrice(kind, units) {
+  if (kind === "send") return roundUsd(units * X_SEND_USD);
+  return roundUsd(units * X_READ_USD);
+}
+var monthStart = (now) => new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1));
+async function xSpendThisMonth(db2, userId, now = /* @__PURE__ */ new Date()) {
+  const [r] = await db2.sql`
+    select coalesce(sum(cost_usd) filter (where user_id = ${userId}::uuid), 0)::text as student,
+           coalesce(sum(cost_usd), 0)::text as orbit
+      from orbit.usage_ledger
+     where provider = 'x' and created_at >= ${monthStart(now)}::timestamptz`;
+  return { studentUsd: roundUsd(Number(r?.student ?? 0)), orbitUsd: roundUsd(Number(r?.orbit ?? 0)) };
+}
+async function xOrbitLimitReached(db2, cfg, now = /* @__PURE__ */ new Date()) {
+  if (cfg.orbitMonthlyUsd <= 0) return true;
+  const [r] = await db2.sql`
+    select coalesce(sum(cost_usd), 0)::text as orbit from orbit.usage_ledger
+     where provider = 'x' and created_at >= ${monthStart(now)}::timestamptz`;
+  return Number(r?.orbit ?? 0) + X_READ_USD > cfg.orbitMonthlyUsd + 1e-9;
+}
+var SPEND_LOCK = "orbit:x:spend";
+function xSpend(db2, o) {
+  const now = o.now ?? (() => /* @__PURE__ */ new Date());
+  const caller = o.caller ?? "x";
+  let charged = 0;
+  const count = (kind, made, refused, cost) => db2.sql`select orbit.social_calls_add('x', ${o.userId}, ${kind}, ${caller}, ${made}::int, 0, ${refused}::int,
+                                         ${cost}::numeric)`;
+  async function reserve(kind, units) {
+    const n = Math.max(0, Math.floor(units));
+    const cost = xPrice(kind, n);
+    if (kind === "search") {
+      await count(kind, 0, 1, 0);
+      return void 0;
+    }
+    if (o.ceilingUsd !== void 0 && charged + cost > o.ceilingUsd + 1e-9) {
+      await count(kind, 0, 1, 0);
+      return void 0;
+    }
+    const at = now();
+    const id = await db2.begin(async (tx) => {
+      await tx.sql`select pg_advisory_xact_lock(hashtext(${SPEND_LOCK}))`;
+      const [row] = await tx.sql`
+        insert into orbit.usage_ledger (user_id, provider, operation, units, cost_usd, created_at)
+        values (${o.userId}::uuid, 'x', ${kind}, ${n}::numeric, ${cost}::numeric, ${at}::timestamptz)
+        returning id::text as id`;
+      const [s] = await tx.sql`
+        select coalesce(sum(cost_usd) filter (where user_id = ${o.userId}::uuid), 0)::text as student,
+               coalesce(sum(cost_usd), 0)::text as orbit
+          from orbit.usage_ledger
+         where provider = 'x' and created_at >= ${monthStart(at)}::timestamptz`;
+      const over = Number(s.student) > o.limits.studentMonthlyUsd + 1e-9 || Number(s.orbit) > o.limits.orbitMonthlyUsd + 1e-9 || // a limit of 0 is off, even for a call priced at nothing
+      o.limits.orbitMonthlyUsd <= 0 || o.limits.studentMonthlyUsd <= 0;
+      if (over) {
+        await tx.sql`delete from orbit.usage_ledger where id = ${row.id}::bigint`;
+        return void 0;
+      }
+      return row.id;
+    });
+    if (!id) {
+      await count(kind, 0, 1, 0);
+      return void 0;
+    }
+    charged = roundUsd(charged + cost);
+    let settled = false;
+    return {
+      async settle(unitsUsed) {
+        if (settled) return;
+        settled = true;
+        const used = Math.max(0, Math.min(n, Math.floor(unitsUsed)));
+        const actual = xPrice(kind, used);
+        charged = roundUsd(charged - cost + actual);
+        await db2.sql`
+          update orbit.usage_ledger set units = ${used}::numeric, cost_usd = ${actual}::numeric
+           where id = ${id}::bigint`;
+        await count(kind, 1, 0, actual);
+      }
+    };
+  }
+  return {
+    reserve,
+    async spend(kind, opts = {}) {
+      const units = opts.units ?? 1;
+      const r = await reserve(kind, units);
+      if (!r) return false;
+      await r.settle(units);
+      return true;
+    },
+    retryAt: async () => void 0,
+    chargedUsd: () => charged
+  };
+}
+
+// supabase/functions/orbit-api/routes/x.ts
+var STATE_TTL_MS3 = 10 * 6e4;
+function notSetUp(missing) {
+  return json(
+    503,
+    { error: { code: "unconfigured", message: X_NOT_SET_UP, missing } },
+    { "x-orbit-connector": "unconfigured" }
+  );
+}
+function setup(ctx) {
+  const cfg = ctx.env.x;
+  const missing = xMissing(cfg);
+  if (missing.length || !cfg) return notSetUp(missing);
+  return {
+    cfg,
+    oauth: {
+      clientId: cfg.clientId,
+      clientSecret: cfg.clientSecret,
+      redirectUri: cfg.redirectUri ?? `${functionsBase(ctx)}/orbit-api/x/callback`,
+      fetch: ctx.fetch
+    }
+  };
+}
+var settings2 = (ctx, outcome) => redirect(`${ctx.env.appUrl}/settings?x=${outcome}`);
+async function xConnectStart(ctx) {
+  const s = setup(ctx);
+  if (s instanceof Response) return s;
+  const body2 = await readJson(ctx.req, { optional: true });
+  if (body2.consent !== true) throw badRequest("consent is required before signing in with X");
+  const userId = ctx.userId;
+  const now = ctx.now();
+  const consent = { version: X_CONSENT_VERSION, at: now.toISOString() };
+  const state = randomToken(32);
+  const { verifier, challenge } = await pkcePair();
+  await ctx.db.sql`
+    insert into orbit.oauth_states (state, code_verifier, redirect_to, user_id, scopes, created_at, expires_at)
+    values (${state}, ${verifier}, ${`${ctx.env.appUrl}/settings`}, ${userId}::uuid, ${X_SCOPES}::text[],
+            ${now}::timestamptz, ${new Date(now.getTime() + STATE_TTL_MS3)}::timestamptz)`;
+  await ctx.db.sql`
+    insert into orbit.audit_log (user_id, actor, action, target_table, details)
+    values (${userId}::uuid, 'user', 'x.consent', 'integration_accounts', ${consent}::jsonb)`;
+  await ctx.db.sql`
+    insert into orbit.integration_accounts (user_id, provider, status, sync_state)
+    values (${userId}::uuid, 'x', 'connecting', ${{ x: { consent } }}::jsonb)
+    on conflict (user_id, provider) do update set
+      status = case when orbit.integration_accounts.status = 'active' then 'active' else 'connecting' end,
+      sync_state = jsonb_set(coalesce(orbit.integration_accounts.sync_state, '{}'::jsonb), '{x}',
+                             coalesce(orbit.integration_accounts.sync_state->'x', '{}'::jsonb)
+                               || ${{ consent }}::jsonb)`;
+  return json(200, { url: xAuthUrl(s.oauth, { state, challenge }) });
+}
+async function xCallback(ctx) {
+  const s = setup(ctx);
+  if (s instanceof Response) return settings2(ctx, "failed");
+  const q = ctx.url.searchParams;
+  const state = q.get("state");
+  if (!state) return settings2(ctx, "failed");
+  const [st] = await ctx.db.sql`
+    delete from orbit.oauth_states where state = ${state}
+    returning code_verifier, user_id, scopes, expires_at`;
+  if (!st?.user_id || !st.scopes.includes("dm.read") || new Date(st.expires_at).getTime() < ctx.now().getTime())
+    return settings2(ctx, "failed");
+  const userId = st.user_id;
+  const fail = async (why) => {
+    await ctx.db.sql`
+      update orbit.integration_accounts set status = case when status = 'active' then status else 'error' end,
+             last_error = ${why}
+       where user_id = ${userId}::uuid and provider = 'x'`;
+    return settings2(ctx, "failed");
+  };
+  if (q.get("error")) return fail("x_denied");
+  const code = q.get("code");
+  if (!code) return fail("no_code");
+  const vault = sqlVault(ctx.db);
+  let tokens3;
+  try {
+    tokens3 = await xExchangeCode(s.oauth, code, st.code_verifier);
+  } catch {
+    return fail("token_exchange");
+  }
+  let me2;
+  try {
+    const adapter = createXAdapter({
+      tokens: { accessToken: async () => tokens3.access_token, refreshed: async () => tokens3.access_token },
+      budget: xSpend(ctx.db, { userId, limits: s.cfg, caller: "connect", now: ctx.now }),
+      fetch: ctx.fetch
+    });
+    const read2 = await adapter.me();
+    me2 = { id: read2.account.id, username: read2.account.username };
+  } catch (e) {
+    if (tokens3.refresh_token) await xRevoke(s.oauth, tokens3.refresh_token, "refresh_token");
+    return fail(e instanceof SocialBudgetSpent ? "x_limit" : "x_me");
+  }
+  const stored = await storeXTokens(vault, userId, tokens3, ctx.now());
+  const scopes = (tokens3.scope ?? X_SCOPES.join(" ")).split(/\s+/).filter(Boolean);
+  const before = await loadXState(ctx.db, userId);
+  await ctx.db.begin(async (tx) => {
+    if (before?.socialAccountId && before.socialAccountId !== me2.id) {
+      await tx.sql`delete from orbit.social_follows where platform = 'x' and owner_user_id = ${userId}::uuid`;
+      await tx.sql`delete from orbit.social_list_reads where platform = 'x' and owner_user_id = ${userId}::uuid`;
+      await tx.sql`
+        insert into orbit.audit_log (user_id, actor, action, target_table, details)
+        values (${userId}::uuid, 'user', 'x.account_changed', 'integration_accounts',
+                ${{ from: before.socialAccountId, to: me2.id }}::jsonb)`;
+    }
+    const x = {
+      username: me2.username,
+      accessSecretId: stored.accessSecretId,
+      accessExpiresAt: stored.accessExpiresAt,
+      ...before?.socialAccountId && before.socialAccountId !== me2.id ? { dmCursor: null, dmReadAt: null } : {}
+    };
+    await tx.sql`
+      insert into orbit.integration_accounts (user_id, provider, status, scopes, social_account_id, token_secret_id,
+                                              sync_state, last_error)
+      values (${userId}::uuid, 'x', 'active', ${scopes}::text[], ${me2.id}, ${stored.refreshSecretId ?? null}::uuid,
+              ${{ x }}::jsonb, null)
+      on conflict (user_id, provider) do update set
+        status = case when coalesce(excluded.token_secret_id, orbit.integration_accounts.token_secret_id) is null
+                      then 'needs_reauth' else 'active' end,
+        scopes = excluded.scopes,
+        social_account_id = excluded.social_account_id,
+        token_secret_id = coalesce(excluded.token_secret_id, orbit.integration_accounts.token_secret_id),
+        sync_state = jsonb_set(coalesce(orbit.integration_accounts.sync_state, '{}'::jsonb), '{x}',
+                               jsonb_strip_nulls(coalesce(orbit.integration_accounts.sync_state->'x', '{}'::jsonb)
+                                                 || ${x}::jsonb)),
+        last_error = null`;
+    await tx.sql`
+      insert into orbit.source_states (user_id, source, state) values (${userId}::uuid, 'x', 'on')
+      on conflict (user_id, source) do update set state = 'on', off_since = null`;
+    await tx.sql`
+      insert into orbit.audit_log (user_id, actor, action, target_table, details)
+      values (${userId}::uuid, 'user', 'x.connected', 'integration_accounts', ${{ scopes: scopes.length }}::jsonb)`;
+  });
+  return settings2(ctx, "connected");
+}
+async function xStatus(ctx) {
+  const s = setup(ctx);
+  if (s instanceof Response) return s;
+  const userId = ctx.userId;
+  const row = await loadXState(ctx.db, userId);
+  const spent = await xSpendThisMonth(ctx.db, userId, ctx.now());
+  const status3 = !row || row.status === "revoked" ? "not_connected" : row.status === "active" || row.status === "connecting" || row.status === "needs_reauth" ? row.status : "error";
+  const out = {
+    status: status3,
+    ...status3 !== "not_connected" && row?.state.username ? { username: row.state.username } : {},
+    spentThisMonthUsd: spent.studentUsd,
+    limitUsd: s.cfg.studentMonthlyUsd,
+    orbitLimitReached: await xOrbitLimitReached(ctx.db, s.cfg, ctx.now())
+  };
+  return json(200, out);
+}
+async function xDisconnect(ctx) {
+  const s = setup(ctx);
+  if (s instanceof Response) return s;
+  await readJson(ctx.req, { optional: true });
+  const userId = ctx.userId;
+  const row = await loadXState(ctx.db, userId);
+  if (!row) return json(200, { ok: true });
+  const vault = sqlVault(ctx.db);
+  let revoked = false;
+  if (row.refreshSecretId) {
+    const refresh2 = await vault.get(row.refreshSecretId);
+    if (refresh2) revoked = await xRevoke(s.oauth, refresh2, "refresh_token");
+  }
+  if (!revoked && row.state.accessSecretId) {
+    const access = await vault.get(row.state.accessSecretId);
+    if (access) revoked = await xRevoke(s.oauth, access, "access_token");
+  }
+  if (row.refreshSecretId) await vault.delete(row.refreshSecretId);
+  if (row.state.accessSecretId) await vault.delete(row.state.accessSecretId);
+  await ctx.db.sql`
+    update orbit.integration_accounts
+       set status = 'revoked', token_secret_id = null, last_error = null,
+           sync_state = jsonb_set(coalesce(sync_state, '{}'::jsonb), '{x}',
+                                  coalesce(sync_state->'x', '{}'::jsonb) - 'accessSecretId' - 'accessExpiresAt')
+     where user_id = ${userId}::uuid and provider = 'x'`;
+  await ctx.db.sql`
+    insert into orbit.audit_log (user_id, actor, action, target_table, details)
+    values (${userId}::uuid, 'user', 'x.disconnect', 'integration_accounts', ${{ revokedAtX: revoked }}::jsonb)`;
+  return json(200, { ok: true, revokedAtX: revoked });
+}
+var xRoutes = {
+  "/x/connect/start": { method: "POST", auth: true, run: xConnectStart },
+  "/x/callback": { method: "GET", auth: false, run: xCallback },
+  "/x/status": { method: "GET|POST", auth: true, run: xStatus },
+  "/x/disconnect": { method: "POST", auth: true, run: xDisconnect }
+};
+
 // supabase/functions/orbit-api/sync.ts
 import { z as z8 } from "npm:zod@3.25.76/v4";
 async function syncStatus(ctx) {
@@ -23471,13 +24175,13 @@ async function statusFor(db2, userId) {
       } : null
     };
   });
-  const setup = users[0]?.onboarded === false || integrations.some(
+  const setup2 = users[0]?.onboarded === false || integrations.some(
     (i) => i.importing === true || i.provider === "google" && i.status === "active" && (i.backfill?.phase === "recent" || i.backfill?.phase === "deep")
   );
   let mark = marks[0];
   let counts = mark?.fresh ? mark.counts ?? {} : void 0;
   const [pending] = await Promise.all([
-    setup ? db2.query(
+    setup2 ? db2.query(
       `select (${QUEUES.map((q) => `(select count(*) from pgmq.q_${q} where message->>'userId' = $1)`).join(" + ")})::int as n`,
       [userId]
     ) : Promise.resolve([{ n: 0 }]),
@@ -23503,7 +24207,7 @@ async function statusFor(db2, userId) {
       linkedin: mark?.linkedin_at ?? null,
       autopilot: mark?.autopilot_at ?? null
     },
-    setup
+    setup: setup2
   };
   return out;
 }
@@ -24061,7 +24765,8 @@ var ROUTES = {
   ...friendRoutes,
   ...friendDiscoverRoutes,
   ...voiceRoutes,
-  ...adminRoutes
+  ...adminRoutes,
+  ...xRoutes
 };
 function missingSecrets(deps, google) {
   const m = [];
@@ -24255,7 +24960,8 @@ Deno.serve(
       unipileWebhookSecret,
       functionsUrl: supabaseUrl ? `${supabaseUrl}/functions/v1` : void 0,
       connectorsSigningKey: env("SUPABASE_SERVICE_ROLE_KEY"),
-      ownerId
+      ownerId,
+      x: xConfigFromEnv(env)
     },
     db,
     agent: { env: agentEnv },

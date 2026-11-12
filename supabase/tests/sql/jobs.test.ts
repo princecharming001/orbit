@@ -307,6 +307,12 @@ describe('orbit.delete_user (§10.4 test 4)', () => {
       insert into orbit.claude_batch_requests (user_id, task, model, request, params, handler) values ('${u}', 'compose', 'm', '{}', '{}', 'compose.cadence');
       insert into orbit.facet_scans (user_id, kind, value, complete) values ('${u}', 'company', 'Stripe', true);
       insert into orbit.dead_letters (queue, message) values ('orbit_sync', '{"kind":"x","userId":"${u}"}');
+      insert into orbit.source_states (user_id, source, state) values ('${u}', 'instagram', 'on');
+      insert into orbit.social_links (user_id, platform, account_id, person_id, via) values ('${u}', 'instagram', 'ig-friend-${u}', '${p2}', 'proof');
+      insert into orbit.social_match_asks (user_id, platform, account_id, person_id, score) values ('${u}', 'instagram', 'ig-ask-${u}', '${p2}', 0.7);
+      insert into orbit.social_not_same (user_id, platform, account_id, person_id) values ('${u}', 'instagram', 'ig-no-${u}', '${p2}');
+      insert into orbit.social_lookups (user_id, platform, target_person_id, target_account_id) values ('${u}', 'instagram', '${p2}', 'ig-target');
+      insert into orbit.text_days (user_id, person_id, day, in_count, out_count) values ('${u}', '${p2}', current_date, 2, 1);
     `);
     await db.sql`select orbit.enqueue('orbit_sync', ${{ kind: 'noop', userId: u, payload: {} }}::jsonb)`;
     await db.sql`select orbit.enqueue('orbit_sync', ${{ kind: 'noop', userId: other, payload: {} }}::jsonb)`;
@@ -336,6 +342,43 @@ describe('orbit.delete_user (§10.4 test 4)', () => {
     expect(jobs.map((j) => j.uid)).toContain(other);
     expect(await db.sql`select 1 from orbit.job_runs where user_id = ${other}::uuid`).toHaveLength(1);
     expect(await db.sql`select 1 from orbit.users where id = ${other}::uuid`).toHaveLength(1);
+  });
+
+  it("plan 43: takes the student's own Instagram account out of the shared graph and keeps it out", async () => {
+    const db = t.db;
+    const u = await makeUser(db);
+    const other = await makeUser(db);
+    await db.sql`insert into orbit.integration_accounts (user_id, provider, external_account_id, social_account_id, status)
+      values (${u}::uuid, 'instagram', 'unipile-ig-1', 'ig-me', 'active')`;
+    await db.sql`insert into orbit.social_accounts (platform, account_id, username, kind)
+      values ('instagram', 'ig-me', 'me.myself', 'person'), ('instagram', 'ig-friend', 'friend', 'person')`;
+    await db.sql`insert into orbit.social_follows (platform, follower_id, followed_id, owner_user_id)
+      values ('instagram', 'ig-me', 'ig-friend', ${u}::uuid),
+             ('instagram', 'ig-friend', 'ig-me', null),
+             ('instagram', 'ig-friend', 'ig-x', ${other}::uuid)`;
+    await db.sql`insert into orbit.social_list_reads (platform, account_id, list, read_by, ended)
+      values ('instagram', 'ig-me', 'followers', ${other}::uuid, true),
+             ('instagram', 'ig-friend', 'following', ${u}::uuid, true)`;
+
+    await db.sql`select orbit.delete_user(${u}::uuid)`;
+
+    expect(await db.sql`select 1 from orbit.social_accounts where account_id = 'ig-me'`).toHaveLength(0);
+    expect(
+      await db.sql`select 1 from orbit.social_follows where follower_id = 'ig-me' or followed_id = 'ig-me'`,
+    ).toHaveLength(0);
+    expect(await db.sql`select 1 from orbit.social_list_reads where account_id = 'ig-me'`).toHaveLength(0);
+    // someone else's account and lists stay; the deleted student is no longer named as a reader
+    expect(await db.sql`select 1 from orbit.social_accounts where account_id = 'ig-friend'`).toHaveLength(1);
+    expect(
+      await db.sql`select 1 from orbit.social_follows where owner_user_id = ${other}::uuid`,
+    ).toHaveLength(1);
+    const [read] = await db.sql<{ read_by: string | null }>`
+      select read_by from orbit.social_list_reads where account_id = 'ig-friend'`;
+    expect(read!.read_by).toBeNull();
+    // and is suppressed, so a later read by another student does not store it again
+    expect(await db.sql`select reason from orbit.social_suppressed where account_id = 'ig-me'`).toEqual([
+      { reason: 'deleted_user' },
+    ]);
   });
 });
 

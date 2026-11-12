@@ -96,6 +96,13 @@ describe('migration 20261025_orbit_hop_strength', () => {
       'intro_requests.hop_features',
       'people.linkedin_connections_count',
       'people.linkedin_follower_count',
+      // plan 43: an Instagram or X account id on the shared graph and the per-student match tables
+      'social_accounts.account_id',
+      'social_links.account_id',
+      'social_list_reads.account_id',
+      'social_match_asks.account_id',
+      'social_not_same.account_id',
+      'social_suppressed.account_id',
       'usage_ledger.account_id',
     ]);
   });

@@ -2555,6 +2555,7 @@ var CAPS = [
   }
 ];
 var MONTHLY_TOTAL_USD = 25;
+var OWN_LIMIT_PROVIDER = "x";
 var USER_TOTAL_USD = 100;
 var NEVER = "9999-12-31T00:00:00.000Z";
 function windowStart(window, now) {
@@ -2575,10 +2576,11 @@ async function checkBudget(db2, userId, spend, now = /* @__PURE__ */ new Date())
       from orbit.usage_ledger
      where user_id = ${userId}::uuid and created_at >= ${month}::timestamptz
      group by provider, operation`;
-  const monthTotal = rows.reduce((s, r) => s + Number(r.month_usd), 0);
+  const monthTotal = rows.filter((r) => r.provider !== OWN_LIMIT_PROVIDER).reduce((s, r) => s + Number(r.month_usd), 0);
   const adding = spend.costUsd ?? 0;
   const [life] = await db2.sql`
-    select (coalesce((select sum(cost_usd) from orbit.usage_ledger where user_id = ${userId}::uuid), 0)
+    select (coalesce((select sum(cost_usd) from orbit.usage_ledger
+                       where user_id = ${userId}::uuid and provider <> ${OWN_LIMIT_PROVIDER}), 0)
           + coalesce((select usd from public.orbit_proxy_spend where subject = ${`user:${userId}`}), 0))::text as usd`;
   const lifetime = Number(life?.usd ?? 0);
   if (lifetime + adding > USER_TOTAL_USD || lifetime >= USER_TOTAL_USD && adding === 0)

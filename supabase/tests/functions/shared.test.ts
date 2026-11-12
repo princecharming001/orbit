@@ -451,6 +451,18 @@ describe('queue', () => {
 });
 
 describe('budget (§13.5)', () => {
+  it('plan 43: leaves X out of the month and total caps, since X has limits of its own', async () => {
+    const u = await makeUser(t.db);
+    const now = new Date();
+    await recordUsage(t.db, { userId: u, provider: 'x', operation: 'list_read', units: 3000, costUsd: 30 });
+    expect(await checkBudget(t.db, u, { provider: 'exa', costUsd: 0.01 }, now)).toEqual({ ok: true });
+    await recordUsage(t.db, { userId: u, provider: 'exa', operation: 'search', units: 1, costUsd: 24.99 });
+    expect(await checkBudget(t.db, u, { provider: 'village', costUsd: 0.02 }, now)).toMatchObject({
+      ok: false,
+      cap: 'monthly_total_usd',
+    });
+  });
+
   it('stops Claude at $1.50 a day and resets at midnight UTC', async () => {
     const u = await makeUser(t.db);
     const now = new Date();
