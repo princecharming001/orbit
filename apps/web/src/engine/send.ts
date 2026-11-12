@@ -186,16 +186,18 @@ export async function checkSendAllowed(
   // the cap table, or the student's own lower limit
   const cap = salesGoalIds
     ? SEND_CAPS.gmailSalesFirstTouchesPerDay
-    : channel === 'linkedin'
-      ? Math.min(settings?.dailySendCapLinkedin ?? SEND_CAPS.linkedinPerDay, SEND_CAPS.linkedinPerDay)
-      : Math.min(settings?.dailySendCapGmail ?? SEND_CAPS.gmailPerDay, SEND_CAPS.gmailPerDay);
+    : isSocial(channel)
+      ? SOCIAL_SENDS_PER_DAY
+      : channel === 'linkedin'
+        ? Math.min(settings?.dailySendCapLinkedin ?? SEND_CAPS.linkedinPerDay, SEND_CAPS.linkedinPerDay)
+        : Math.min(settings?.dailySendCapGmail ?? SEND_CAPS.gmailPerDay, SEND_CAPS.gmailPerDay);
   if (sentToday >= cap)
     return {
       allowed: false,
       code: 'daily_cap',
       reason: salesGoalIds
         ? `Daily limit reached: ${cap} first sales emails today. It resets at midnight.`
-        : `Daily limit reached: ${cap} ${channel === 'linkedin' ? 'LinkedIn messages' : channel === 'imessage' ? 'texts' : 'emails'} today. It resets at midnight.`,
+        : `Daily limit reached: ${cap} ${channel === 'linkedin' ? 'LinkedIn messages' : channel === 'imessage' ? 'texts' : channel === 'instagram' ? 'Instagram messages' : channel === 'x' ? 'X messages' : 'emails'} today. It resets at midnight.`,
     };
   const chat = await chatFor(personId, kind, opts.chatId);
   if (
@@ -281,6 +283,8 @@ interface Envelope {
   threaded: boolean;
   /** the server threads it with its own copy of the thread: no subject is known or needed here */
   serverHeld?: boolean;
+  /** plan 43: an Instagram or X message's chat with them, where a hand-off opens */
+  socialUrl?: string;
 }
 
 /**
@@ -517,7 +521,38 @@ export function withNote(ask: string, note: string | undefined): string {
   return note?.trim() ? `${ask.trimEnd()}${NOTE_RULE}${note.trim()}` : ask;
 }
 
-export type HandoffVia = 'mailto' | 'linkedin_compose' | 'linkedin_connect' | 'copy' | 'sms';
+export type HandoffVia =
+  | 'mailto'
+  | 'linkedin_compose'
+  | 'linkedin_connect'
+  | 'copy'
+  | 'sms'
+  | 'instagram_dm'
+  | 'x_dm';
+
+/** Plan 43 §4: Instagram and X messages Orbit sends with the student's tap, at most this many a day each. */
+export const SOCIAL_SENDS_PER_DAY = 10;
+
+const isSocial = (c: OutboundMessage['channel']): c is 'instagram' | 'x' => c === 'instagram' || c === 'x';
+
+/** The person's account on the channel's platform, where a message to them goes. */
+async function socialLinkFor(personId: string, platform: 'instagram' | 'x') {
+  return db.socialLinks
+    .where('personId')
+    .equals(personId)
+    .filter((l) => l.platform === platform)
+    .first();
+}
+
+/**
+ * Orbit sends this Instagram or X message itself, on the student's tap: the source is connected and in use, and the
+ * account is an Orbit account's (the server sends) or the sample student's made-up one. Otherwise it is handed off to
+ * the platform's own chat with the draft copied.
+ */
+export async function socialSendsFromOrbit(userId: string, platform: 'instagram' | 'x'): Promise<boolean> {
+  const { socialInUse } = await import('./social');
+  return (await socialInUse(userId)).has(platform);
+}
 
 export type ApproveResult =
   | { ok: true; status: 'queued'; sendAt: string }
@@ -691,6 +726,13 @@ function handoffFor(
     if (!url) return { error: `There is no phone number for ${person.firstName}.` };
     return { url, via: 'sms' };
   }
+  if (isSocial(msg.channel)) {
+    if (!env.socialUrl)
+      return {
+        error: `Orbit has no ${msg.channel === 'x' ? 'X' : 'Instagram'} account for ${person.firstName}, so there is nowhere to send this.`,
+      };
+    return { url: env.socialUrl, via: msg.channel === 'x' ? 'x_dm' : 'instagram_dm' };
+  }
   const slug = person.linkedinSlug;
   const profile = slug ? linkedinProfileUrl(slug) : person.linkedinUrl;
   if (!profile)
@@ -772,7 +814,11 @@ export async function approveAndSend(
     const problems = checkIntroNote(note, user);
     if (problems.length) return { ok: false, error: `The note to forward: ${problems[0]}` };
   }
-  const env = await envelopeFor(msg, subject);
+  const env: Envelope = await envelopeFor(msg, subject);
+  if (isSocial(msg.channel)) {
+    const link = await socialLinkFor(msg.personId, msg.channel);
+    if (link) env.socialUrl = (await import('./social')).chatUrl(link);
+  }
   if (msg.channel === 'gmail' && !env.subject && !env.serverHeld)
     return {
       ok: false,
@@ -782,7 +828,17 @@ export async function approveAndSend(
     };
   // an account's email goes out from the server, in the recipient's window or after the undo window (plan 29 §B2.1)
   // and its LinkedIn message from the server too, through the LinkedIn it connected, sent now on this tap
-  if (!opts.via) {
+  // plan 43 §4, §5: an account's Instagram or X message goes from the server on this tap, like LinkedIn's
+  if (!opts.via && isSocial(msg.channel) && isServerUser(user.id) && !opts.scheduleAt) {
+    const { serverIdOf } = await import('./serverSync');
+    const serverId = serverIdOf(msg.id);
+    if (serverId && (await socialSendsFromOrbit(user.id, msg.channel))) {
+      const viaServer = await approveOnServer(user, msg, serverId, bodyFinal, undefined, 0, undefined, true);
+      if (viaServer) return viaServer;
+    }
+  }
+  // a text is never sent by the server (it answers 409 handoff_only): Messages opens, and the student says it went
+  if (!opts.via && !isSocial(msg.channel) && msg.channel !== 'imessage') {
     const linkedin = msg.channel === 'linkedin' && isServerUser(user.id) && !opts.scheduleAt;
     const serverId = linkedin ? await serverLinkedInSendId(msg.id) : await serverEmailId(user, msg);
     if (serverId) {
@@ -821,7 +877,14 @@ export async function approveAndSend(
       ? (await googleSendActive(user.id)) ||
         demoSendsFromOrbit(user.id) ||
         (!!opts.scheduleAt && usesMockConnectors(user.id))
-      : msg.channel === 'linkedin' && !isServerUser(user.id) && (await linkedInSendActive(user, person)));
+      : msg.channel === 'linkedin'
+        ? !isServerUser(user.id) && (await linkedInSendActive(user, person))
+        : // the demo's made-up Instagram and X send on the tap, after the undo window; nothing leaves the browser
+          isSocial(msg.channel) &&
+          !opts.scheduleAt &&
+          usesMockConnectors(user.id) &&
+          !!env.socialUrl &&
+          (await socialSendsFromOrbit(user.id, msg.channel)));
   // the note goes in the same text by email and in anything handed off; a LinkedIn message Orbit sends itself goes
   // alone, and the note waits as a second message for the student's tap (every LinkedIn send is a tap)
   const noteApart = !!note && msg.channel === 'linkedin' && !!direct;
@@ -1015,6 +1078,34 @@ export async function openInMessages(
   if (was !== 'imessage') await db.outbound.update(messageId, { channel: 'imessage' });
   const r = await approveAndSend(user, messageId, bodyFinal, undefined, now);
   if (!r.ok && was !== 'imessage') {
+    const now2 = await db.outbound.get(messageId);
+    if (now2 && ['draft', 'failed', 'cancelled'].includes(now2.status))
+      await db.outbound.update(messageId, { channel: was });
+  }
+  return r;
+}
+
+/**
+ * Plan 43 §4, §5: the draft goes on Instagram or X instead. Approved like any other, on this tap and never by itself:
+ * sent from Orbit while the source is connected and in use, else the platform's chat opens with the draft copied and it
+ * waits as `handed_off` until the student says it went. A draft that cannot go this way keeps the channel it had.
+ */
+export async function sendOnSocial(
+  user: User,
+  messageId: string,
+  platform: 'instagram' | 'x',
+  bodyFinal: string,
+  now = new Date(),
+): Promise<ApproveResult> {
+  const msg = await db.outbound.get(messageId);
+  if (!msg || msg.userId !== user.id) return { ok: false, error: 'Message not found' };
+  const link = await socialLinkFor(msg.personId, platform);
+  if (!link)
+    return { ok: false, error: `Orbit has no ${platform === 'x' ? 'X' : 'Instagram'} account for them.` };
+  const was = msg.channel;
+  if (was !== platform) await db.outbound.update(messageId, { channel: platform });
+  const r = await approveAndSend(user, messageId, bodyFinal, undefined, now);
+  if (!r.ok && was !== platform) {
     const now2 = await db.outbound.get(messageId);
     if (now2 && ['draft', 'failed', 'cancelled'].includes(now2.status))
       await db.outbound.update(messageId, { channel: was });
@@ -1365,6 +1456,12 @@ async function deliver(
   const person = await db.people.get(msg.personId);
   if (!person || person.hiddenAt) return fail('This person is hidden.');
   if (msg.channel === 'linkedin') return deliverLinkedIn(user, msg, person, now, fail);
+  if (isSocial(msg.channel)) {
+    // only the demo's made-up accounts send from this browser; an account's go from the server on the tap
+    if (!usesMockConnectors(user.id)) return fail('Send this from the Instagram or X app.');
+    await finalizeSent(user, msg, { providerMessageId: `demo-${msg.channel}-${msg.id}` }, now);
+    return { ok: true };
+  }
   if (!msg.toEmail) return fail(`There is no email address for ${person.firstName}.`);
   const env = await envelopeFor(msg, msg.subject);
   if (!env.subject) return fail('This email has no subject.');
@@ -1582,13 +1679,32 @@ async function finalizeSent(
       personId: msg.personId,
       // a text the student sent from Messages is a text day like any other (it counts while Texts are on)
       kind:
-        msg.channel === 'linkedin' ? 'linkedin_out' : msg.channel === 'imessage' ? 'text_out' : 'email_out',
+        msg.channel === 'linkedin'
+          ? 'linkedin_out'
+          : msg.channel === 'imessage'
+            ? 'text_out'
+            : msg.channel === 'instagram'
+              ? 'instagram_out'
+              : msg.channel === 'x'
+                ? 'x_out'
+                : 'email_out',
       occurredAt: now.toISOString(),
       refTable: 'outbound',
       refId: msg.id,
-      summary: `${msg.channel === 'linkedin' ? 'LinkedIn message' : msg.channel === 'imessage' ? 'Text' : 'Email'}: ${msg.subject ?? MESSAGE_KIND_LABELS[msg.kind]}`,
-      weight: msg.channel === 'linkedin' ? 0.5 : msg.channel === 'imessage' ? 0.45 : 0.6,
-      ...(msg.channel === 'imessage' ? { group: 2 } : {}),
+      summary: `${
+        msg.channel === 'linkedin'
+          ? 'LinkedIn message'
+          : msg.channel === 'imessage'
+            ? 'Text'
+            : msg.channel === 'instagram'
+              ? 'Instagram message'
+              : msg.channel === 'x'
+                ? 'X message'
+                : 'Email'
+      }: ${msg.subject ?? MESSAGE_KIND_LABELS[msg.kind]}`,
+      weight:
+        msg.channel === 'linkedin' ? 0.5 : msg.channel === 'imessage' || isSocial(msg.channel) ? 0.45 : 0.6,
+      ...(msg.channel === 'imessage' || isSocial(msg.channel) ? { group: 2 } : {}),
     }),
   );
   if (provider.providerMessageId && provider.providerThreadId) {
