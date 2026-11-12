@@ -13,6 +13,8 @@ const FROM: Partial<Record<PersonSource, string>> = {
   manual: 'added by you',
   note: 'a note',
   imessage: 'your texts',
+  instagram: 'Instagram',
+  x: 'X',
   tracker_import: 'your tracker',
   recommendation: 'Discover',
   enrichment: 'a lookup',

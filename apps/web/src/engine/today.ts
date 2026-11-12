@@ -31,6 +31,7 @@ export const SUGGESTION_KIND_LABELS: Record<
   breaker: { label: 'Paused', tone: 'warn' },
   batch_ready: { label: "Tomorrow's batch", tone: 'accent' },
   friend_ask_ready: { label: 'Ask a friend', tone: 'accent' },
+  confirm_social_match: { label: 'Same person?', tone: 'neutral' },
 };
 
 /**

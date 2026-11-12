@@ -382,11 +382,14 @@ export async function detachLink(userId: string, linkId: string): Promise<{ ok: 
  */
 export async function attachAccount(
   userId: string,
-  a: { platform: Platform; accountId: string; personId: string },
+  a: { platform: Platform; accountId: string; personId: string; keep?: string },
 ): Promise<{ ok: true; linkId: string } | PickPerson | Fail> {
   if (usesMockConnectors(userId)) return mock.attach(userId, a);
   const r = await callApi('/social/links', a);
-  if (r.ok) return { ok: true, linkId: r.value.linkId };
+  if (r.ok) {
+    await refreshAsks(userId);
+    return { ok: true, linkId: r.value.linkId };
+  }
   return pickFrom(r) ?? fail(r.message);
 }
 

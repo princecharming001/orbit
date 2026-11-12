@@ -1814,6 +1814,50 @@ async function retireMovedOnConfirmations(userId: string, now: Date): Promise<vo
   }
 }
 
+/**
+ * Plan 43 §3.4: "Is @jchen_22 on Instagram the Jason Chen you know from Stripe?", one card per open question, only
+ * for a source in use. A question answered elsewhere (the person page, another device) closes its card.
+ */
+export async function addSocialMatchCards(userId: string, now: Date): Promise<void> {
+  const { socialInUse } = await import('./social');
+  const inUse = await socialInUse(userId);
+  const asks = await db.socialAsks.where('userId').equals(userId).toArray();
+  const open = asks.filter((a) => a.status === 'open' && inUse.has(a.platform));
+  const cards = await db.suggestions
+    .where('userId')
+    .equals(userId)
+    .filter((s) => s.kind === 'confirm_social_match' && (s.status === 'pending' || s.status === 'snoozed'))
+    .toArray();
+  const live = new Set(open.map((a) => a.id));
+  await retireSuggestions(
+    cards.filter((s) => !live.has(s.payload.askId as string)),
+    'social_ask_closed',
+    now,
+  );
+  for (const a of open) {
+    const person = await db.people.get(a.personId);
+    if (!person || person.hiddenAt) continue;
+    await upsertSuggestions(
+      userId,
+      [
+        {
+          kind: 'confirm_social_match',
+          personId: person.id,
+          dedupeKey: `social:${a.id}`,
+          reasonText: `Is @${a.username ?? 'this account'} on ${a.platform === 'x' ? 'X' : 'Instagram'} the ${person.displayName} you know${person.currentOrganizationRaw ? ` from ${person.currentOrganizationRaw}` : ''}?`,
+          signals: { score: a.score },
+          payload: { askId: a.id },
+          urgency: 0.4,
+          goalRelevance: 0.3,
+          confidence: a.score,
+          priorityScore: 0.3,
+        },
+      ],
+      now,
+    );
+  }
+}
+
 async function addConfirmationCards(userId: string, now: Date): Promise<void> {
   await retireMovedOnConfirmations(userId, now);
   const proposed = await db.stageEvents
@@ -1849,6 +1893,7 @@ async function addConfirmationCards(userId: string, now: Date): Promise<void> {
     const c = await introductionQuestionCandidate(t);
     if (c) await upsertSuggestions(userId, [c], now);
   }
+  await addSocialMatchCards(userId, now);
   const merges = await db.merges
     .where('userId')
     .equals(userId)
@@ -1961,6 +2006,7 @@ const BRIEF_LABELS: Record<SuggestionKind, (n: number) => string> = {
   breaker: (n) => `${n} pause${n > 1 ? 's' : ''} to read`,
   batch_ready: (n) => `${n} batch${n > 1 ? 'es' : ''} to review tonight`,
   friend_ask_ready: (n) => `${n} ask${n > 1 ? 's' : ''} for a friend's intro`,
+  confirm_social_match: (n) => `${n} account${n > 1 ? 's' : ''} to confirm`,
 };
 
 /** The one-line summary at the top of Today. It always names a real next step, never "all good" on an empty network. */

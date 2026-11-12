@@ -187,7 +187,9 @@ export type SuggestionKind =
   /** tomorrow's batch is ready for the evening review (plan 29 §B1): raised once a day at 18:00 when it is not empty */
   | 'batch_ready'
   /** the plan step drafted an ask to a friend for one of their contacts (plan 29 §A2.5): sent only on a tap */
-  | 'friend_ask_ready';
+  | 'friend_ask_ready'
+  /** "Is @jchen_22 on Instagram the Jason Chen you know from Stripe?" (plan 43 §3.4): payload `{ askId }` */
+  | 'confirm_social_match';
 export type SuggestionStatus =
   | 'pending'
   | 'approved'
@@ -1000,7 +1002,8 @@ export interface OutboundMessage {
    * student to paste into Gmail in the browser, or opened in Messages with the draft written (`sms`, plan 43). Either
    * way it waits for the student's "I sent it".
    */
-  handoffVia?: 'mailto' | 'linkedin_compose' | 'linkedin_connect' | 'copy' | 'sms';
+  /** `instagram_dm` / `x_dm`: the platform's own chat opened with the draft copied (plan 43 §4, §5) */
+  handoffVia?: 'mailto' | 'linkedin_compose' | 'linkedin_connect' | 'copy' | 'sms' | 'instagram_dm' | 'x_dm';
   approvedAt?: string;
   queuedAt?: string;
   /** end of the undo window for a queued provider send; for an autopilot send, the time it is planned for */

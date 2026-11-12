@@ -48,6 +48,7 @@ import { runApproval } from './approve';
 import { PersonCompanyLogo } from './CompanyLogo';
 import { DraftEditor } from './DraftEditor';
 import { MergePair, PersonNameLink } from './MergePair';
+import { SocialAskCard } from './SocialPeople';
 import { gapLabel, KIND_LABEL } from './SuggestionCard';
 import { WeekPaceCard } from './WeekPaceCard';
 
@@ -660,6 +661,9 @@ function Decision({
     otherId ? known[otherId] : undefined,
   );
   const other = otherRow ?? undefined;
+  // plan 43 §3.4: the "same person" question a card asks
+  const askId = s.kind === 'confirm_social_match' ? (s.payload.askId as string | undefined) : undefined;
+  const socialAsk = useLiveQuery(async () => (askId ? db.socialAsks.get(askId) : undefined), [askId]);
   const introducerId =
     s.kind === 'confirm_intro' ? (s.payload.introducerId as string | undefined) : undefined;
   const introducer = useLiveQuery(
@@ -883,6 +887,23 @@ function Decision({
       {s.kind === 'confirm_merge' && person && other && (
         <div className="mt-3">
           <MergePair a={person} b={other} onNavigate={() => onLeave()} />
+        </div>
+      )}
+      {s.kind === 'confirm_social_match' && socialAsk && !decided && !settled && (
+        <div className="mt-3" data-testid="morning-social-ask">
+          <SocialAskCard
+            user={user}
+            ask={socialAsk}
+            bare
+            hideQuestion
+            onAnswered={(a) =>
+              void decide(
+                () => db.suggestions.update(s.id, { status: 'done' }),
+                a === 'yes' ? `Attached the account to ${first}.` : 'Got it. Orbit will not ask again.',
+                { undoable: false },
+              )
+            }
+          />
         </div>
       )}
       {s.kind === 'warm_up_engage' && warmAction && (

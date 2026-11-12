@@ -36,6 +36,7 @@ import { ResearchDebrief } from '../components/people/ResearchDebrief';
 import { STAGE_COLOR, StrengthDots } from '../components/people/shared';
 import { TieScoreCard } from '../components/people/TieScoreCard';
 import { ConfirmEarlyDone, chatTimeLabel, ScheduleChatDialog } from '../components/ScheduleChat';
+import { PersonSocialCard, SocialHandles } from '../components/SocialPeople';
 import { SuggestionCard } from '../components/SuggestionCard';
 import { db } from '../db/schema';
 import { isMessageSuggestion, refreshPersonSummary } from '../engine/brief';
@@ -545,6 +546,8 @@ export function PersonPage() {
                   <Linkedin size={13} /> LinkedIn
                 </a>
               )}
+              {/* plan 43 §3.4: their Instagram and X handles, for the sources in use */}
+              <SocialHandles user={user} person={person} />
               <span
                 className="inline-flex items-center gap-1.5 whitespace-nowrap"
                 title="How well you know them, from how often and how recently you have emailed, met and written notes. It grows as you talk."
@@ -1197,6 +1200,7 @@ export function PersonPage() {
         <div className="rail-flat">
           <TieScoreCard person={person} userId={user.id} />
           <TextsCard personId={person.id} userId={person.userId} />
+          <PersonSocialCard user={user} person={person} />
           {isServerUser(user.id) && <DossierCard person={person} userId={user.id} />}
           <Card>
             <div className="font-medium mb-2">Summary</div>

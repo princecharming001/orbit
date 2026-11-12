@@ -299,10 +299,7 @@ export interface ApiRoutes {
   '/x/connect/start': [{ consent: true }, { url: string }];
   '/x/status': [Record<string, never>, XStatusResponse];
   '/x/disconnect': [Record<string, never>, { ok: boolean }];
-  '/social/links': [
-    { platform: 'instagram' | 'x'; accountId: string; personId: string },
-    { linkId: string },
-  ];
+  '/social/links': [{ platform: 'instagram' | 'x'; accountId: string; personId: string }, { linkId: string }];
   '/social/asks': [Record<string, never>, { asks: SocialAskResponse[] }];
   '/social/lookups': [
     { platform: 'instagram' | 'x'; personId: string; confirm?: boolean },
@@ -432,7 +429,14 @@ export type SocialStep = 'done' | 'reading' | 'waiting';
 
 /** GET /instagram/status */
 export interface InstagramStatusResponse {
-  status: 'not_connected' | 'connecting' | 'active' | 'needs_reauth' | 'parked' | 'different_account' | 'error';
+  status:
+    | 'not_connected'
+    | 'connecting'
+    | 'active'
+    | 'needs_reauth'
+    | 'parked'
+    | 'different_account'
+    | 'error';
   username?: string;
   steps: { profile: SocialStep; chats: SocialStep; following: SocialStep; followers: SocialStep };
 }
