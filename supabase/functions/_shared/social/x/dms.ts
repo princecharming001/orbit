@@ -24,8 +24,8 @@ import { loadXState, saveXState } from './oauth.ts';
 /**
  * Writes one DM into the student's personal lane.
  *
- * TODO(plan 43 §3.9): the generic writer is being built at supabase/functions/_shared/social/chats.ts. Wire it in
- * here (orbit-worker's `x.writer`) once it lands; until then `x.dms` is skipped without reading anything.
+ * In the worker this is the personal-lane writer of supabase/functions/_shared/social/chats.ts
+ * (`personalLaneXWriter` in orbit-worker/handlers/x.ts); tests pass their own.
  */
 export type XDmWriter = (
   db: Db,
