@@ -11,6 +11,11 @@ export const TOUCHPOINT_WEIGHTS: Record<TouchpointKind, number> = {
   // a day of texting each way: people who text are close, but a day of texts is lighter than an email thread
   text_in: 0.6,
   text_out: 0.45,
+  // a day of DMs on Instagram or X counts like a day of texts (plan 43 §3.8)
+  instagram_in: 0.6,
+  instagram_out: 0.45,
+  x_in: 0.6,
+  x_out: 0.45,
   linkedin_connected: 0.2,
   linkedin_engaged: 0.15,
   // comments and reactions on posts show attention, not a relationship: light, and capped together below
@@ -39,12 +44,26 @@ const TWO_WAY: ReadonlySet<TouchpointKind> = new Set([
   'email_in',
   'linkedin_in',
   'text_in',
+  'instagram_in',
+  'x_in',
   'manual_log',
   'intro_observed',
 ]);
 /** Messages from them: only an exchange once the student has written too (a cold email or a newsletter is not). */
-const FROM_THEM: ReadonlySet<TouchpointKind> = new Set(['email_in', 'linkedin_in', 'text_in']);
-const FROM_STUDENT: ReadonlySet<TouchpointKind> = new Set(['email_out', 'linkedin_out', 'text_out']);
+const FROM_THEM: ReadonlySet<TouchpointKind> = new Set([
+  'email_in',
+  'linkedin_in',
+  'text_in',
+  'instagram_in',
+  'x_in',
+]);
+const FROM_STUDENT: ReadonlySet<TouchpointKind> = new Set([
+  'email_out',
+  'linkedin_out',
+  'text_out',
+  'instagram_out',
+  'x_out',
+]);
 /** Comments and reactions on LinkedIn posts: attention, not a conversation. */
 export const ENGAGEMENT: ReadonlySet<TouchpointKind> = new Set([
   'linkedin_comment_in',
@@ -64,6 +83,10 @@ const CONVERSATION: ReadonlySet<TouchpointKind> = new Set([
   'linkedin_out',
   'text_in',
   'text_out',
+  'instagram_in',
+  'instagram_out',
+  'x_in',
+  'x_out',
 ]);
 
 /** Decayed raw evidence that outbound-only touches (cold emails, bumps, likes) can add before any reply. */

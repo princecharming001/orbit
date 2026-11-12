@@ -1,4 +1,4 @@
-import type { MessageKind, PersonFact } from '../types';
+import type { Channel, MessageKind, PersonFact } from '../types';
 import { brokenNeverRules } from './neverDo';
 import { schoolShort } from './phrasing';
 import type { DraftOutput } from './templates';
@@ -54,7 +54,7 @@ export interface ValidateOptions {
   recipientFullName?: string;
   recentOpenings?: string[];
   hadConversation?: boolean;
-  channel?: 'gmail' | 'linkedin' | 'clipboard';
+  channel?: Channel;
   /**
    * Everything the draft may mention (see `contextText`). When given, any name, company, post, event, mutual
    * connection or number in the body that is not in it is flagged, whether or not the draft cites claims.

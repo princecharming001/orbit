@@ -27,6 +27,10 @@ export const TIE_KINDS: readonly TieKind[] = [
   'linkedin_mention',
   'common_contacts',
   'student_says_close',
+  'instagram_mutual',
+  'instagram_follow',
+  'x_mutual',
+  'x_follow',
 ];
 
 /**
@@ -36,6 +40,13 @@ export const TIE_KINDS: readonly TieKind[] = [
 export const HOP_WEIGHTS = {
   /** a LinkedIn connection with nothing more known (plan 16 §4.2) */
   mutual: 0.3,
+  /**
+   * Two people who follow each other on Instagram or X (plan 43 §3.7): starts at a LinkedIn mutual's weight and shrinks
+   * as the less selective of the two follows more accounts (`socialFollowWeight`).
+   */
+  socialMutual: { base: 0.3, selective: 300, floor: 0.08 },
+  /** one follows the other and not back: support only, toward the hop whose second person follows the first */
+  socialFollow: 0.1,
   recommendation: 0.85,
   /** divided by (people tagged − 1) beyond two */
   mention: 0.6,
@@ -104,6 +115,8 @@ export const ROUTABLE_TIE_KINDS: ReadonlySet<TieKind> = new Set([
   'linkedin_mutual',
   'linkedin_recommendation',
   'student_says_close',
+  'instagram_mutual',
+  'x_mutual',
 ]);
 
 /**
@@ -115,6 +128,8 @@ export const SUPPORT_ONLY_TIE_KINDS: ReadonlySet<TieKind> = new Set([
   'linkedin_engagement',
   'linkedin_mention',
   'common_contacts',
+  'instagram_follow',
+  'x_follow',
 ]);
 
 /** Confidence of kinds whose confidence does not depend on the evidence (§4.1). */
@@ -136,7 +151,34 @@ export const TIE_CONFIDENCE: Record<TieKind, number> = {
   linkedin_mention: 0.9,
   common_contacts: 0.6,
   student_says_close: 0.9,
+  // a follow list is what the platform returned; how sure Orbit is the accounts are these people is in the match
+  instagram_mutual: 0.9,
+  instagram_follow: 0.9,
+  x_mutual: 0.9,
+  x_follow: 0.9,
 };
+
+/** The kinds that stand for "these two are connected on a platform": each lifts a first hop like a LinkedIn mutual. */
+export const MUTUAL_TIE_KINDS: ReadonlySet<TieKind> = new Set([
+  'linkedin_mutual',
+  'instagram_mutual',
+  'x_mutual',
+]);
+
+/**
+ * Weight of following each other on Instagram or X (plan 43 §3.7). A follow back from someone who follows few accounts
+ * says more than one from someone who follows thousands: the weight is the base while the busier follower follows at
+ * most `selective` accounts, then shrinks with the square root of the excess, never below `floor`. Unknown counts take
+ * the base.
+ */
+export function socialFollowWeight(followingA?: number, followingB?: number): number {
+  const { base, selective, floor } = HOP_WEIGHTS.socialMutual;
+  const known = [followingA, followingB].filter((n): n is number => typeof n === 'number' && n >= 0);
+  if (!known.length) return base;
+  const busiest = Math.max(...known);
+  if (busiest <= selective) return base;
+  return Math.max(floor, base * Math.sqrt(selective / busiest));
+}
 
 /**
  * Confidence of an affiliation tie from its evidence (plan 16 §4.1, sharpened by plan 21 §3.6): how long the two
@@ -654,6 +696,12 @@ export function engagementScore(items: EngagementItem[], ctx: EngagementContext 
 export function pKnowDirected(pair: Pick<TiePair, 'weight' | 'ties'>, _fromId: string, toId: string): number {
   let p = Math.max(0, Math.min(1, pair.weight));
   for (const t of pair.ties) {
+    // a one-way follow (plan 43 §3.7) helps only the hop toward the one who follows: they pay attention to the first
+    if (t.kind === 'instagram_follow' || t.kind === 'x_follow') {
+      const ev = t.evidence as { followerId?: string };
+      if (ev.followerId === toId) p = 1 - (1 - p) * (1 - Math.min(1, t.weight * t.confidence));
+      continue;
+    }
     if (t.kind !== 'linkedin_engagement') continue;
     const ev = t.evidence as { reciprocal?: boolean; wBy?: Record<string, number> };
     if (ev.reciprocal) continue;

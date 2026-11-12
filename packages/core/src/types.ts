@@ -20,6 +20,10 @@ export type IntegrationProvider =
   | 'tracker_import'
   /** the Mac's Messages database, imported and read in the browser */
   | 'imessage'
+  /** the student's Instagram account, connected through Unipile (plan 43) */
+  | 'instagram'
+  /** the student's X account, signed in with X (plan 43) */
+  | 'x'
   | 'demo';
 export type PersonSource =
   | 'gmail'
@@ -39,6 +43,10 @@ export type PersonSource =
    * only the student's own edit
    */
   | 'linkedin_profile'
+  /** an Instagram account that became a person: a chat partner or a bridge (plan 43 §3.3) */
+  | 'instagram'
+  /** an X account that became a person (plan 43 §3.3) */
+  | 'x'
   | 'demo';
 export type RelationshipType =
   | 'unknown'
@@ -75,7 +83,15 @@ export type EdgeType =
   /** people with a real tie to both (plan 21; support only) */
   | 'common_contacts'
   /** the student said these two are close (plan 21) */
-  | 'student_says_close';
+  | 'student_says_close'
+  /** they follow each other on Instagram (plan 43 §3.7): can carry a route */
+  | 'instagram_mutual'
+  /** one follows the other on Instagram, not back: support only, with a direction */
+  | 'instagram_follow'
+  /** they follow each other on X */
+  | 'x_mutual'
+  /** one follows the other on X, not back */
+  | 'x_follow';
 export type TouchpointKind =
   | 'email_in'
   | 'email_out'
@@ -86,6 +102,12 @@ export type TouchpointKind =
   /** an iMessage or SMS from them / to them, one per day each way (imported from the Mac's Messages) */
   | 'text_in'
   | 'text_out'
+  /** an Instagram DM day from them / to them (plan 43 §3.8: one per local day each way) */
+  | 'instagram_in'
+  | 'instagram_out'
+  /** an X DM day from them / to them */
+  | 'x_in'
+  | 'x_out'
   | 'linkedin_connected'
   | 'linkedin_engaged'
   /** they commented on one of the student's LinkedIn posts (one per comment) */
@@ -175,7 +197,11 @@ export type SuggestionStatus =
   | 'sent'
   | 'expired'
   | 'done';
-export type Channel = 'gmail' | 'linkedin' | 'clipboard';
+/**
+ * How a draft goes out. `instagram` and `x` send from Orbit with the student's tap (plan 43); `imessage` is handed to
+ * Messages with the draft written, and is sent only when the student says so.
+ */
+export type Channel = 'gmail' | 'linkedin' | 'clipboard' | 'instagram' | 'x' | 'imessage';
 /**
  * `queued`: approved for a provider send, waiting out the undo window until `sendAt`.
  * `handed_off`: opened in the student's mail app or LinkedIn; not `sent` until the student confirms they sent it.
@@ -648,6 +674,15 @@ export interface Touchpoint {
   weight: number;
   /** on a comment on the student's post: how warm it reads (plan 27) */
   rapport?: RapportReading;
+  /**
+   * A chat day (texts, Instagram, X; plan 43 §3.8): false when nothing was written that day, only reactions or shared
+   * posts, which counts as light engagement rather than a conversation. Unset means words were written.
+   */
+  words?: boolean;
+  /** A chat day: everyone in the chat, the student included (2 for one to one), which weighs a group down */
+  group?: number;
+  /** The social account the touch came from (plan 43 §3.4), so a wrong match can be undone */
+  accountId?: string;
 }
 
 export interface StrengthBreakdown {
@@ -676,7 +711,7 @@ export interface TieScoreSummary {
 }
 
 /** Where a stored conversation happened: Gmail (the default, when unset) or a LinkedIn 1:1 chat (plan 22). */
-export type ConversationChannel = 'gmail' | 'linkedin';
+export type ConversationChannel = 'gmail' | 'linkedin' | 'instagram' | 'x';
 
 export interface EmailThread {
   id: ID;

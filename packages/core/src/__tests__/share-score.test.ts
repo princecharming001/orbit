@@ -16,9 +16,10 @@ const NOW = new Date('2026-10-14T12:00:00Z');
 const a4 = () => ANCHORS.find((a) => a.id === 'A4')!.history(NOW);
 
 describe('shareScore (plan 29 §A2.2): what a friend may see of a tie', () => {
-  it('masks every Google-derived feature and keeps LinkedIn, shared context, warmth, engagement', () => {
+  it('masks every Google-derived feature and keeps LinkedIn, Instagram follows, shared context, warmth, engagement', () => {
     const kept = TIE_FEATURES.filter((f) => !SHARE_MASKED_FEATURES.includes(f));
-    expect(kept.sort()).toEqual(['engagement', 'linkedin', 'shared', 'warmth'].sort());
+    // plan 43: following each other on Instagram is kept; on X it is masked, since X's rules limit passing it on
+    expect(kept.sort()).toEqual(['engagement', 'instagram_follow', 'linkedin', 'shared', 'warmth'].sort());
     const { features } = computeTieFeatures(a4(), NOW);
     const masked = shareFeatures(features);
     for (const f of SHARE_MASKED_FEATURES) expect(masked[f], f).toBe(0);

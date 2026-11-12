@@ -1,3 +1,4 @@
+import { isChatChannel } from '../sources';
 import { isAtsSender } from '../text/email';
 import { normalizeCompany } from '../text/normalize';
 import type {
@@ -27,7 +28,8 @@ const YEAR_DAYS = 365;
 export interface TieMessage {
   at: string;
   direction: 'in' | 'out';
-  channel: 'email' | 'linkedin' | 'text';
+  /** `text`, `instagram` and `x` are chat channels, counted by their own rules (plan 43 §3.8, `chatDays`) */
+  channel: 'email' | 'linkedin' | 'text' | 'instagram' | 'x';
   /** everyone on the thread, the student included (a 1:1 thread has 2) */
   threadParticipants: number;
   threadId: string;
@@ -35,13 +37,18 @@ export interface TieMessage {
   automated: boolean;
   /** on an inbound message that answers the student: hours since the student's message it answers */
   isReplyLatencyHours?: number;
+  /** a chat message: false when nothing was written (a reaction, a shared post). Unset means words */
+  words?: boolean;
 }
 
 /** A comment or reaction on a LinkedIn post between them and the student (plan 17 B). */
 export interface TieEngagement {
   at: string;
-  /** comment_in / reaction_in: on the student's post; comment_out: the student's comment on theirs */
-  kind: 'comment_in' | 'comment_out' | 'reaction_in';
+  /**
+   * comment_in / reaction_in: on the student's post; comment_out: the student's comment on theirs; chat_light: a chat
+   * day with no words, only reactions or shared posts (plan 43 §3.8)
+   */
+  kind: 'comment_in' | 'comment_out' | 'reaction_in' | 'chat_light';
 }
 
 /**
@@ -96,6 +103,10 @@ export interface TieHistory {
   engagement?: TieEngagement[];
   /** how warm their replies read (f16, plan 27) */
   rapport?: TieRapport[];
+  /** they and the student follow each other there (plan 43 §3.8): a tie that exists, like a LinkedIn connection */
+  follows?: { instagram?: boolean; x?: boolean };
+  /** the student's time zone (IANA), for counting chat days as the student lives them; UTC when unset */
+  timeZone?: string;
 }
 
 export const TIE_FEATURES = [
@@ -115,6 +126,8 @@ export const TIE_FEATURES = [
   'never',
   'engagement',
   'rapport',
+  'instagram_follow',
+  'x_follow',
 ] as const;
 export type TieFeature = (typeof TIE_FEATURES)[number];
 export type TieFeatures = Record<TieFeature, number>;
@@ -152,6 +165,10 @@ export const TIE_WEIGHTS: TieWeights = {
   never: -0.1,
   engagement: 0.5,
   rapport: 0.6,
+  // plan 43: following each other is set by hand (no anchor carries it), a little under a LinkedIn connection, and
+  // X's a little under Instagram's, where students follow the people they actually know
+  instagram_follow: 0.6,
+  x_follow: 0.4,
 };
 
 /** The plan's starting weights (§3.3): the prior the fit shrinks toward. */
@@ -175,6 +192,8 @@ export const TIE_START_WEIGHTS: TieWeights = {
   engagement: 0.5,
   // plan 27: warm replies lift a tie a little, cold ones lower it; RAPPORT_MAX_POINTS caps either way
   rapport: 0.6,
+  instagram_follow: 0.6,
+  x_follow: 0.4,
 };
 
 /**
@@ -201,6 +220,9 @@ export const TIE_BASELINE: TieFeatures = {
   engagement: 0,
   // no replies is neutral: silence never lowers a tie
   rapport: 0,
+  // nobody followed anyone when the baseline was taken: a follow only ever adds
+  instagram_follow: 0,
+  x_follow: 0,
 };
 
 /** Reply rapport (f16) moves a score at most this many points either way (plan 27). */
@@ -279,6 +301,10 @@ export interface TieFacts {
   /** the cues seen most often across their replies, most frequent first */
   rapportCues: RapportCue[];
   askedToStop: boolean;
+  /** chat days with no words, only reactions or shared posts */
+  chatLight: number;
+  /** they and the student follow each other there */
+  follows: { instagram: boolean; x: boolean };
 }
 
 export interface TieScore {
@@ -324,7 +350,87 @@ const ENGAGEMENT_WEIGHT: Record<TieEngagement['kind'], number> = {
   comment_in: 1,
   comment_out: 1,
   reaction_in: 0.3,
+  chat_light: 0.3,
 };
+
+/**
+ * How much one chat message counts by the size of the chat (plan 43 §3.8), everyone in it the student included: a one
+ * to one chat fully, three or four people half, five to eight a quarter, more than eight not at all.
+ */
+export function chatGroupWeight(participants: number): number {
+  if (participants <= 2) return 1;
+  if (participants <= 4) return 0.5;
+  if (participants <= 8) return 0.25;
+  return 0;
+}
+
+/** The calendar day of an instant in a time zone, "2026-11-12"; UTC when the zone is unknown or invalid. */
+export function localDay(iso: string, timeZone?: string): string {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return iso.slice(0, 10);
+  if (timeZone) {
+    try {
+      // en-CA formats as YYYY-MM-DD
+      return new Intl.DateTimeFormat('en-CA', {
+        timeZone,
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit',
+      }).format(d);
+    } catch {
+      // an unknown zone falls back to UTC
+    }
+  }
+  return d.toISOString().slice(0, 10);
+}
+
+/**
+ * The chat rules of plan 43 §3.8, applied before the features: chat messages (texts, Instagram, X) become one message
+ * per channel, local day and direction, dated by the first and weighed by the smallest chat that day; a day with no
+ * words becomes light engagement instead; a message from them counts only if the student has ever written to them on
+ * any channel, met them or been introduced (no answer, no tie); and a chat message never carries a reply time, which
+ * was fitted on email. Email and LinkedIn messages pass through untouched, so a history without chat scores exactly
+ * as before.
+ */
+export function chatDays(h: Pick<TieHistory, 'messages' | 'meetings' | 'intros' | 'timeZone'>): {
+  messages: (TieMessage & { weight: number })[];
+  light: TieEngagement[];
+} {
+  const out: (TieMessage & { weight: number })[] = [];
+  const light: TieEngagement[] = [];
+  const answered =
+    h.intros > 0 || h.meetings.length > 0 || h.messages.some((m) => m.direction === 'out' && !m.automated);
+  const days = new Map<string, TieMessage & { weight: number }>();
+  for (const m of h.messages) {
+    if (!isChatChannel(m.channel)) {
+      out.push({ ...m, weight: 1 });
+      continue;
+    }
+    if (m.automated) continue;
+    const weight = chatGroupWeight(m.threadParticipants);
+    if (weight <= 0) continue;
+    if (m.direction === 'in' && !answered) continue;
+    if (m.words === false) {
+      light.push({ at: m.at, kind: 'chat_light' });
+      continue;
+    }
+    const key = `${m.channel}|${m.direction}|${localDay(m.at, h.timeZone)}`;
+    const cur = days.get(key);
+    if (!cur) {
+      days.set(key, { ...m, isReplyLatencyHours: undefined, weight });
+      continue;
+    }
+    // the day keeps its first moment and its most personal chat
+    if (m.at < cur.at) cur.at = m.at;
+    if (weight > cur.weight) {
+      cur.weight = weight;
+      cur.threadId = m.threadId;
+      cur.threadParticipants = m.threadParticipants;
+    }
+  }
+  out.push(...days.values());
+  return { messages: out, light };
+}
 /** Decayed engagement at which f15 is full (about eight recent comments, or two dozen reactions). */
 export const ENGAGEMENT_SATURATION = 8;
 
@@ -342,11 +448,12 @@ export function computeTieFeatures(
     if (x === undefined || x > t + DAY) return undefined;
     return Math.min(x, t);
   };
-  // automated mail, mailing lists and big threads say nothing about the relationship
-  const messages = h.messages
+  // chat channels are counted by days (plan 43 §3.8); automated mail, mailing lists and big threads say nothing
+  const chat = chatDays(h);
+  const messages = chat.messages
     .filter((m) => !m.automated && m.threadParticipants <= 8)
     .map((m) => ({ ...m, t: when(m.at) }))
-    .filter((m): m is TieMessage & { t: number } => m.t !== undefined);
+    .filter((m): m is TieMessage & { weight: number; t: number } => m.t !== undefined);
   const meetings = h.meetings
     .filter((m) => m.attendees <= 8)
     .map((m) => ({ ...m, t: when(m.at) }))
@@ -391,10 +498,10 @@ export function computeTieFeatures(
   let inCount = 0;
   for (const m of messages) {
     if (m.direction === 'out') {
-      outD += decay(m.t);
+      outD += m.weight * decay(m.t);
       outCount++;
     } else {
-      inD += decay(m.t);
+      inD += m.weight * decay(m.t);
       inCount++;
     }
   }
@@ -445,12 +552,14 @@ export function computeTieFeatures(
   let commentsIn = 0;
   let commentsOut = 0;
   let reactionsIn = 0;
-  for (const e of h.engagement ?? []) {
+  let chatLight = 0;
+  for (const e of [...(h.engagement ?? []), ...chat.light]) {
     const x = when(e.at);
     if (x === undefined) continue;
     engaged += ENGAGEMENT_WEIGHT[e.kind] * decay(x);
     if (e.kind === 'comment_in') commentsIn++;
     else if (e.kind === 'comment_out') commentsOut++;
+    else if (e.kind === 'chat_light') chatLight++;
     else reactionsIn++;
   }
   const engagement = Math.min(1, Math.log(1 + engaged) / Math.log(1 + ENGAGEMENT_SATURATION));
@@ -493,6 +602,8 @@ export function computeTieFeatures(
     never: never ? 1 : 0,
     engagement,
     rapport,
+    instagram_follow: h.follows?.instagram ? 1 : 0,
+    x_follow: h.follows?.x ? 1 : 0,
   };
   const facts: TieFacts = {
     name: h.name,
@@ -518,6 +629,8 @@ export function computeTieFeatures(
     rapportReadings,
     rapportCues,
     askedToStop,
+    chatLight,
+    follows: { instagram: !!h.follows?.instagram, x: !!h.follows?.x },
   };
   return { features, facts };
 }
@@ -618,6 +731,8 @@ export const SHARE_MASKED_FEATURES: readonly TieFeature[] = [
   'structural',
   'never',
   'rapport',
+  // plan 43: X's rules limit passing its data on, so following each other there is left out of what a friend sees
+  'x_follow',
 ];
 
 /** The features with every Google-derived one at zero. */
@@ -748,7 +863,11 @@ export function explainTie(
       negativeOnly: true,
     });
   else if (facts.linkedin) topics.push({ value: c.linkedin, positive: 'Connected on LinkedIn' });
-  else if (facts.never) topics.push({ value: c.never, negative: "You haven't talked yet" });
+  else if (facts.never && !facts.follows.instagram && !facts.follows.x)
+    topics.push({ value: c.never, negative: "You haven't talked yet" });
+  if (facts.follows.instagram)
+    topics.push({ value: c.instagram_follow, positive: 'You follow each other on Instagram' });
+  if (facts.follows.x) topics.push({ value: c.x_follow, positive: 'You follow each other on X' });
   if (facts.medianLatencyHours !== undefined) {
     const h = facts.medianLatencyHours;
     topics.push({
@@ -905,6 +1024,10 @@ export interface TieHistoryInput {
   label?: TieHistory['label'];
   /** reply readings (plan 27): their messages and comments, gathered by the caller */
   rapport?: TieRapport[];
+  /** they and the student follow each other on Instagram or X (plan 43), only for sources in use */
+  follows?: TieHistory['follows'];
+  /** the student's time zone, for chat days */
+  timeZone?: string;
 }
 
 const yearOf = (iso?: string) => (iso ? Number(iso.slice(0, 4)) || undefined : undefined);
@@ -998,13 +1121,21 @@ export function buildTieHistory(input: TieHistoryInput): TieHistory {
       case 'linkedin_in':
       case 'linkedin_out':
       case 'text_in':
-      case 'text_out': {
+      case 'text_out':
+      case 'instagram_in':
+      case 'instagram_out':
+      case 'x_in':
+      case 'x_out': {
         const direction = tp.kind.endsWith('_in') ? 'in' : 'out';
-        const channel = tp.kind.startsWith('email')
+        const channel: TieMessage['channel'] = tp.kind.startsWith('email')
           ? 'email'
           : tp.kind.startsWith('text')
             ? 'text'
-            : 'linkedin';
+            : tp.kind.startsWith('instagram')
+              ? 'instagram'
+              : tp.kind.startsWith('x_')
+                ? 'x'
+                : 'linkedin';
         const m = tp.refTable === 'messages' ? input.messages?.get(tp.refId) : undefined;
         const th = m ? input.threads?.get(m.threadId) : undefined;
         const automated =
@@ -1017,7 +1148,8 @@ export function buildTieHistory(input: TieHistoryInput): TieHistory {
           channel,
           automated,
           threadId: m?.threadId,
-          threadParticipants: th ? Math.max(2, th.participantPersonIds.length + 1) : undefined,
+          threadParticipants: th ? Math.max(2, th.participantPersonIds.length + 1) : tp.group,
+          words: tp.words,
         });
         break;
       }
@@ -1082,7 +1214,8 @@ export function buildTieHistory(input: TieHistoryInput): TieHistory {
     const id = prev && at - prev.at <= EPISODE_GAP_DAYS * DAY ? prev.id : `episode:${m.channel}:${episode++}`;
     lastByChannel.set(m.channel, { at, id });
     m.threadId = id;
-    m.threadParticipants = 2;
+    // a chat day keeps the size of the chat it came from (plan 43 §3.8); anything else is a one to one exchange
+    m.threadParticipants = m.threadParticipants ?? 2;
   }
   // latency: an inbound message right after the student's own message in the same thread answers it
   const byThread = new Map<string, typeof raw>();
@@ -1109,6 +1242,7 @@ export function buildTieHistory(input: TieHistoryInput): TieHistory {
     threadId: m.threadId!,
     threadParticipants: m.threadParticipants ?? 2,
     ...(m.isReplyLatencyHours !== undefined ? { isReplyLatencyHours: m.isReplyLatencyHours } : {}),
+    ...(m.words === false ? { words: false } : {}),
   }));
   return {
     name: person.firstName || undefined,
@@ -1125,6 +1259,8 @@ export function buildTieHistory(input: TieHistoryInput): TieHistory {
     label: input.label,
     ...(engagement.length ? { engagement } : {}),
     ...(input.rapport?.length ? { rapport: input.rapport } : {}),
+    ...(input.follows?.instagram || input.follows?.x ? { follows: input.follows } : {}),
+    ...(input.timeZone ? { timeZone: input.timeZone } : {}),
   };
 }
 
@@ -1187,7 +1323,13 @@ export function tieStrength(
   const legacy = computeStrength(input.touchpoints, now);
   const history = buildTieHistory(input);
   const tie = scoreTie(history, now, TIE_WEIGHTS, calibration);
-  const exists = !tie.facts.never || history.linkedinConnected || history.intros > 0;
+  // following each other makes a tie exist, the way a LinkedIn connection does (plan 43 §3.3)
+  const exists =
+    !tie.facts.never ||
+    history.linkedinConnected ||
+    history.intros > 0 ||
+    !!history.follows?.instagram ||
+    !!history.follows?.x;
   const mutuals = (history.mutualNames ?? [])
     .map((name, i) => ({ name, score: history.mutualScores[i] ?? 0 }))
     .filter((m) => m.name && m.score > 0)

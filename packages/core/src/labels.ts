@@ -86,6 +86,9 @@ export const CHANNEL_LABELS: Record<Channel, string> = {
   gmail: 'Email',
   linkedin: 'LinkedIn',
   clipboard: 'Copied text',
+  instagram: 'Instagram',
+  x: 'X',
+  imessage: 'Text',
 };
 
 export const RELATIONSHIP_LABELS: Record<RelationshipType, string> = {
@@ -150,6 +153,10 @@ export const TOUCHPOINT_LABELS: Record<TouchpointKind, string> = {
   linkedin_out: 'LinkedIn message from you',
   text_in: 'Text from them',
   text_out: 'Text from you',
+  instagram_in: 'Instagram message from them',
+  instagram_out: 'Instagram message from you',
+  x_in: 'X message from them',
+  x_out: 'X message from you',
   linkedin_connected: 'Connected on LinkedIn',
   linkedin_engaged: 'Engaged with their LinkedIn activity',
   linkedin_comment_in: 'Commented on your LinkedIn post',

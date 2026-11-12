@@ -81,6 +81,9 @@ const PRECEDENCE: Record<PersonSource, number> = {
   gmail: 40,
   calendar: 30,
   recommendation: 20,
+  // an Instagram or X account made into a person (plan 43 §3.3): a display name the owner chose, the weakest word
+  instagram: 15,
+  x: 15,
   demo: 10,
 };
 

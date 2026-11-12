@@ -6,9 +6,11 @@ import {
   decayedTieWeight,
   HOP_WEIGHTS,
   isRoutable,
+  MUTUAL_TIE_KINDS,
   pairFading,
   pKnowDirected,
   SUPPORT_ONLY_TIE_KINDS,
+  TIE_CONFIDENCE,
   type Tie,
   type TieKind,
   type TiePair,
@@ -138,8 +140,9 @@ export interface RoutePerson {
 export interface ExternalCandidate {
   /** the first hop, resolved to a local person (a friend's node id for `friend_path`) */
   introducerId: string;
-  kind: 'linkedin_mutual' | 'village_path' | 'friend_path';
-  /** Village warmth or a friend's closeness, 0–1 */
+  /** `instagram_mutual` / `x_mutual`: the introducer and the target follow each other there (plan 43 §3.7) */
+  kind: 'linkedin_mutual' | 'village_path' | 'friend_path' | 'instagram_mutual' | 'x_mutual';
+  /** Village warmth, a friend's closeness, or a follow's weight (`socialFollowWeight`), 0–1 */
   warmth?: number;
   seenAt?: string;
 }
@@ -258,9 +261,22 @@ function withExternal(
     if (c.introducerId === targetId) continue;
     const key = pk(c.introducerId, targetId);
     const [a, b] = key.split('|') as [string, string];
-    const w = c.kind === 'linkedin_mutual' ? HOP_WEIGHTS.mutual : Math.max(0, Math.min(1, c.warmth ?? 0));
+    const social = c.kind === 'instagram_mutual' || c.kind === 'x_mutual';
+    const w =
+      c.kind === 'linkedin_mutual'
+        ? HOP_WEIGHTS.mutual
+        : social
+          ? Math.max(0, Math.min(1, c.warmth ?? HOP_WEIGHTS.socialMutual.base))
+          : Math.max(0, Math.min(1, c.warmth ?? 0));
     // a friend's word on how well they know someone is theirs: taken as given, like the student's own
-    const conf = c.kind === 'linkedin_mutual' ? 0.95 : c.kind === 'friend_path' ? 1 : 0.7;
+    const conf =
+      c.kind === 'linkedin_mutual'
+        ? 0.95
+        : c.kind === 'friend_path'
+          ? 1
+          : social
+            ? TIE_CONFIDENCE[c.kind]
+            : 0.7;
     const tie: Tie = {
       id: `${key}|${c.kind}`,
       userId: '',
@@ -270,7 +286,16 @@ function withExternal(
       weight: w,
       confidence: conf,
       evidence: {
-        source: c.kind === 'linkedin_mutual' ? 'unipile' : c.kind === 'friend_path' ? 'friend' : 'village',
+        source:
+          c.kind === 'linkedin_mutual'
+            ? 'unipile'
+            : c.kind === 'friend_path'
+              ? 'friend'
+              : social
+                ? c.kind === 'instagram_mutual'
+                  ? 'instagram'
+                  : 'x'
+                : 'village',
       },
       lastSeenAt: c.seenAt,
     };
@@ -395,6 +420,17 @@ export function hopEvidence(fromId: string, tie: Tie | undefined, toName: string
     }
     case 'linkedin_engagement':
       return engagementPhrase(fromId, ev, toName);
+    case 'instagram_mutual':
+      return `follows ${toName} on Instagram and they follow back`;
+    case 'x_mutual':
+      return `follows ${toName} on X and they follow back`;
+    case 'instagram_follow':
+    case 'x_follow': {
+      const where = tie.kind === 'instagram_follow' ? 'Instagram' : 'X';
+      return ev.followerId === fromId
+        ? `follows ${toName} on ${where}`
+        : `is followed by ${toName} on ${where}`;
+    }
     default:
       return `knows ${toName}`;
   }
@@ -458,9 +494,9 @@ function mutualIntroducers(
   const out = new Set<string>();
   if (!targetId) return out;
   for (const c of candidates)
-    if (c.kind === 'linkedin_mutual' && c.introducerId !== targetId) out.add(c.introducerId);
+    if (MUTUAL_TIE_KINDS.has(c.kind as TieKind) && c.introducerId !== targetId) out.add(c.introducerId);
   for (const pair of pairs.values()) {
-    if (!pair.kinds.includes('linkedin_mutual')) continue;
+    if (!pair.kinds.some((k) => MUTUAL_TIE_KINDS.has(k))) continue;
     if (pair.aId === targetId) out.add(pair.bId);
     else if (pair.bId === targetId) out.add(pair.aId);
   }
