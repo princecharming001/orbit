@@ -9,6 +9,7 @@ import type { LiveConnectResult } from '../engine/linkedinLive';
 import { SessionProvider } from '../state/session';
 import { Onboarding } from './Onboarding';
 import {
+  OPTIONAL_STEPS,
   QUESTION_STEPS,
   resolveStep,
   STEP,
@@ -43,6 +44,17 @@ describe('setup steps', () => {
     expect(visibleSteps(false)).not.toContain(STEP.gmail);
     // signed in: no Gmail step (sign-in connected it) and no Rate step (a popup days later asks)
     expect(visibleSteps(false, true)).toEqual([1, 2, 3, ...QUESTION_STEPS, 4, 4.5, 6]);
+  });
+
+  it('puts an optional Texts step after LinkedIn, only when texts are shown (plan 43)', () => {
+    expect(visibleSteps(false, false, true)).toEqual([1, 2, 3, ...QUESTION_STEPS, 4, STEP.texts, 4.5, 6]);
+    expect(visibleSteps(false, true, true)).toEqual([1, 2, 3, ...QUESTION_STEPS, 4, STEP.texts, 4.5, 6]);
+    expect(OPTIONAL_STEPS.has(STEP.texts)).toBe(true);
+    expect(stepAddress(STEP.texts)).toBe('texts');
+    expect(stepFromAddress('texts')).toBe(STEP.texts);
+    // hidden (not a Mac, or not offered): its address moves on to the next step shown
+    expect(resolveStep(STEP.texts, false)).toBe(STEP.phone);
+    expect(resolveStep(STEP.texts, false, false, true)).toBe(STEP.texts);
   });
 
   it('puts the five written questions between Goals and LinkedIn, at word addresses', () => {

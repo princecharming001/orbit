@@ -21,17 +21,20 @@ import type {
   InviteSuggestion,
   MemoryItem,
   MemoryKind,
+  OptionalSource,
   ProposedGoal,
   ReplyClass,
   ReplyItem,
   ServerDraft,
   SourcedCandidate,
+  SourceState,
+  SourceStates,
   VoiceNote,
   WarmHop,
   WarmPath,
 } from '@orbit/core';
 import { readiness } from '@orbit/core';
-import type { AccountUser } from '../integrations/orbitApi';
+import type { AccountUser, TextDaysRequest } from '../integrations/orbitApi';
 
 export const FAKE_API_BASE = 'https://orbit-api.test/functions/v1/orbit-api';
 /** The draft of Daniel's question that waits on the student: a uuid like every id the server mints, as the browser's rules expect. */
@@ -162,6 +165,10 @@ export interface FakeState {
     relearnedAt: string | null;
     relearnRequests: number;
   };
+  /** plan 43: what GET /sources answers, and what PUT /sources/:source sets */
+  sources: { offered: OptionalSource[]; states: SourceStates };
+  /** every POST /texts/days body, as it came */
+  textDays: TextDaysRequest[];
 }
 
 /** One of a friend's shared people in the fake, plus the student's own row for the same human when they have one. */
@@ -343,6 +350,8 @@ export function createFakeOrbitApi(
     goalModes: new Map(),
     tapped: new Set(),
     voice: { cardProse: [], notes: [], soundsLikeYou: null, relearnedAt: null, relearnRequests: 0 },
+    sources: { offered: [], states: {} },
+    textDays: [],
   };
   const code = 'good-code';
 
@@ -462,6 +471,34 @@ export function createFakeOrbitApi(
       ask.status = 'forwarded';
       ask.forwardedDraftId = id;
       return json(200, { ask, draft: d });
+    }
+    // plan 43: the optional sources, and the days of texts a signed-in student's browser sends
+    const source = route.match(/^\/sources\/([^/]+)$/);
+    if (source) {
+      if (req.method !== 'PUT') return error(405, 'method_not_allowed', 'use PUT');
+      const name = decodeURIComponent(source[1]!) as OptionalSource;
+      if (!state.sources.offered.includes(name)) return error(404, 'not_found', 'that source is not offered');
+      const next = body.state as SourceState;
+      if (!['not_connected', 'on', 'off', 'removed'].includes(next))
+        return error(400, 'bad_request', 'state is on, off or removed');
+      state.sources.states[name] = next;
+      if (name === 'imessage' && next === 'removed') state.textDays = [];
+      return json(200, { source: name, state: next });
+    }
+    if (route === '/sources') {
+      if (req.method !== 'GET') return error(405, 'method_not_allowed', 'use GET');
+      return json(200, { offered: state.sources.offered, states: state.sources.states });
+    }
+    if (route === '/texts/days') {
+      if (!state.sources.offered.includes('imessage'))
+        return error(404, 'not_found', 'texts are not offered');
+      const days = Array.isArray(body.days) ? (body.days as TextDaysRequest['days']) : undefined;
+      if (!days) return error(400, 'bad_request', 'days is a list');
+      state.textDays.push(body as unknown as TextDaysRequest);
+      const people = Object.fromEntries(
+        ((body.people as TextDaysRequest['people']) ?? []).map((p) => [p.ref, uuid()]),
+      );
+      return json(200, { written: days.length, people });
     }
     switch (route) {
       // finding friends (plan 37 follow-up)
@@ -1311,7 +1348,7 @@ export function createFakeOrbitApi(
     if (!url.href.startsWith(base)) throw new TypeError('fake orbit-api: unexpected host');
     const route = url.pathname.replace(new URL(base).pathname, '');
     let body: Record<string, unknown> = {};
-    if (req.method === 'POST') {
+    if (req.method === 'POST' || req.method === 'PUT') {
       const text = await req.text();
       body = text ? (JSON.parse(text) as Record<string, unknown>) : {};
     }

@@ -255,9 +255,29 @@ export interface TextThread {
   outCount: number;
   firstAt: string;
   lastAt: string;
-  /** the latest messages, oldest first */
+  /** the latest messages, oldest first (one-to-one chats only; a group's words are never kept) */
   recent: { at: string; fromMe: boolean; text: string }[];
+  /** group chats of up to eight they and the student both wrote in (plan 43 §6) */
+  groups?: number;
+  /** days with texts either way, one-to-one and in groups */
+  days?: number;
   importedAt: string;
+}
+
+/**
+ * One day of texts with one person as the server keeps it (orbit.text_days, plan 43 §6): counts and the day only,
+ * never the words. Pulled in account mode, so a second device can say how much and how lately they text. The id is
+ * `${personId}:${day}`.
+ */
+export interface TextDayRow {
+  id: string;
+  userId: string;
+  personId: string;
+  day: string;
+  inCount: number;
+  outCount: number;
+  groupSize: number;
+  words: boolean;
 }
 
 /**
@@ -385,6 +405,7 @@ export class OrbitDB extends Dexie {
   introRequests!: EntityTable<IntroRequestRow, 'id'>;
   outbox!: EntityTable<OutboxRow, 'key'>;
   textThreads!: EntityTable<TextThread, 'id'>;
+  textDays!: EntityTable<TextDayRow, 'id'>;
   memories!: EntityTable<LocalMemory, 'id'>;
   researchRuns!: EntityTable<ResearchRun, 'id'>;
   pairNotes!: EntityTable<PairNote, 'id'>;
@@ -566,6 +587,11 @@ export class OrbitDB extends Dexie {
     // its progress and cancel the rest; the messages themselves stay in outbound
     this.version(17).stores({
       batches: 'id, userId, createdAt',
+    });
+    // plan 43: the server's days of texts per person (account mode), for a device that did not read the Messages
+    // file; people gain contactHandles (not indexed)
+    this.version(18).stores({
+      textDays: 'id, userId, personId',
     });
   }
 }

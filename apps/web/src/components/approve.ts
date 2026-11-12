@@ -48,7 +48,7 @@ export async function copyText(text: string): Promise<boolean> {
  * fresh click.
  */
 export function openHandoff(url: string): boolean {
-  if (url.startsWith('mailto:')) {
+  if (url.startsWith('mailto:') || url.startsWith('sms:')) {
     const a = document.createElement('a');
     a.href = url;
     a.rel = 'noopener';
@@ -67,6 +67,7 @@ export function openHandoff(url: string): boolean {
 export function handoffToast(via: HandoffVia, copied: boolean, _threaded: boolean): string {
   // the card underneath says what to do next, so the toast only says what just happened
   if (via === 'mailto') return 'Opened in your mail app.';
+  if (via === 'sms') return 'Opened in Messages with your text written.';
   if (via === 'linkedin_connect')
     return copied
       ? 'Note copied. Click Connect on their profile, add a note and paste it.'

@@ -30,9 +30,11 @@ import {
   checkSendAllowed,
   confirmHandoff,
   handoffLink,
+  openInMessages,
   revertHandoff,
   reviewDraft,
   sendDueQueued,
+  smsLink,
   UNDO_WINDOW_MS,
   undoQueued,
 } from './send';
@@ -663,6 +665,35 @@ describe('a time-limited decline (L35, L36)', () => {
 });
 
 describe('hand-offs (SND-07, SND-12, SND-14, UI-09)', () => {
+  it('"Open in Messages" writes the draft into Messages, and it is sent only once the student says so (plan 43)', async () => {
+    expect(smsLink('+1 (555) 123-4567', 'Hi Ana, coffee?', true)).toBe(
+      'sms:+15551234567&body=Hi%20Ana%2C%20coffee%3F',
+    );
+    expect(smsLink('+15551234567', 'Hi', false)).toBe('sms:+15551234567?body=Hi');
+    expect(smsLink(undefined, 'Hi')).toBeUndefined();
+    const { d } = await pendingDraft(user, 'thank_you');
+    // no number: nothing changes
+    const none = await openInMessages(user, d.id, d.bodyDraft);
+    expect(none.ok).toBe(false);
+    expect((await db.outbound.get(d.id))!).toMatchObject({ status: 'draft', channel: d.channel });
+    await db.people.update(d.personId, { phones: ['+15551234567'] });
+    const r = await openInMessages(user, d.id, d.bodyDraft);
+    expect(r.ok && r.status).toBe('handed_off');
+    expect(r.ok && r.status === 'handed_off' && r.via).toBe('sms');
+    expect(r.ok && r.status === 'handed_off' && r.handoffUrl).toMatch(/^sms:\+15551234567[&?]body=/);
+    // never claimed as sent before the student says so
+    const o = (await db.outbound.get(d.id))!;
+    expect(o).toMatchObject({ status: 'handed_off', channel: 'imessage', handoffVia: 'sms' });
+    expect(o.sentAt).toBeUndefined();
+    expect((await handoffLink(user, d.id))!.via).toBe('sms');
+    expect((await confirmHandoff(user, d.id)).ok).toBe(true);
+    expect((await db.outbound.get(d.id))!.status).toBe('sent');
+    const touch = (await db.touchpoints.where('personId').equals(d.personId).toArray()).find(
+      (t) => t.refTable === 'outbound' && t.refId === d.id,
+    );
+    expect(touch).toMatchObject({ kind: 'text_out', group: 2 });
+  });
+
   it('a rule re-run keeps a handed-off draft on its card, so "I sent it" stays (e2e flake)', async () => {
     const { s, d } = await pendingDraft(user, 'thank_you');
     const r = await approveAndSend(user, d.id, `${d.bodyDraft}\n\nPS kept`);

@@ -23,6 +23,7 @@ import {
   Linkedin,
   Link as LinkIcon,
   Mail,
+  MessageCircle,
   Minus,
   Plus,
   Upload,
@@ -60,6 +61,7 @@ import {
 } from '../components/onboarding/OnboardingLayout';
 import { PhoneField, type PhoneValue } from '../components/PhoneField';
 import { ReadyChecklist } from '../components/sync/ReadyChecklist';
+import { importSummary, TextsSetup, useTextsOffered } from '../components/TextsRow';
 import { useWeeklyLimits, WeeklyTargetSlider } from '../components/WeeklyTargetSlider';
 import { suggestCompanies } from '../data/companies';
 import { suggestSchools } from '../data/schools';
@@ -134,18 +136,24 @@ export function Onboarding() {
       [STEP.style]: !!(w.networkingHard || w.neverDo),
       [STEP.job]: !!w.currentJob,
       [STEP.linkedin]: ints.some((i) => isLinkedIn(i.provider)),
+      [STEP.texts]: ints.some((i) => i.provider === 'imessage' && i.status === 'active'),
       [STEP.gmail]: ints.some((i) => i.provider === 'google'),
       [STEP.phone]: !!(await db.kv.get(phoneGivenKey(user.id)))?.value,
     } as Record<number, boolean>;
   }, [user?.id]);
   const google = !!googleClientId();
-  const STEPS = visibleSteps(google, signedIn);
+  // plan 43 §6: a Texts step after LinkedIn, on a Mac when this Orbit offers texts
+  const textsOffered = useTextsOffered(user?.id);
+  const texts = !!textsOffered;
+  const STEPS = visibleSteps(google, signedIn, texts);
   useEffect(() => {
     // each step opens at its title, not scrolled down to where the last step's button was
     void step;
     window.scrollTo(0, 0);
   }, [step]);
   if (!user) return null;
+  // whether the Texts step is shown is still being read: wait, rather than send the student past it
+  if (textsOffered === undefined) return null;
   const idx = STEPS.indexOf(step);
   const done = !!user.onboardingCompletedAt;
   // An unknown step (an old link, a typo) goes back to where the user actually is; after setup, to the chat.
@@ -154,9 +162,9 @@ export function Onboarding() {
     // a hidden step (Gmail without Google) or a step of the older setup moves forward to the next one shown, but
     // never past the furthest step reached: setup is not skipped by typing an address. A step change made here
     // carries `fromStep`, and the stored step is written before it, so only addresses from outside are checked.
-    const furthest = resolveStep(user.onboardingStep, google, signedIn);
+    const furthest = resolveStep(user.onboardingStep, google, signedIn, texts);
     const internal = (location.state as { fromStep?: number } | null)?.fromStep !== undefined;
-    let target = resolveStep(step, google, signedIn);
+    let target = resolveStep(step, google, signedIn, texts);
     if (!internal && target > furthest) target = furthest;
     if (target !== step) return <Navigate to={`/onboarding/${stepAddress(target)}`} replace />;
   }
@@ -203,6 +211,7 @@ export function Onboarding() {
     );
   else if (step === STEP.linkedin)
     body = <StepLinkedIn signedIn={signedIn} onNext={() => go(after(STEP.linkedin))} />;
+  else if (step === STEP.texts) body = <StepTexts user={user} onNext={() => go(after(STEP.texts))} />;
   else if (step === STEP.phone)
     body = (
       <StepPhone
@@ -1479,6 +1488,68 @@ function StepLinkedIn({ onNext, signedIn }: { onNext: () => void; signedIn?: boo
           </>
         ) : null}
         {!done && (
+          <ObQuiet onClick={onNext} data-testid="ob-skip">
+            I'll do this later
+          </ObQuiet>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Plan 43 §6: the student's texts, on a Mac. Optional and skippable, the same setup as in Settings: the Messages folder
+ * (or chat.db and chat.db-wal), then the contacts file.
+ */
+function StepTexts({ user, onNext }: { user: User; onNext: () => void }) {
+  const [result, setResult] = useState<string>();
+  const earlier = useLiveQuery(
+    () =>
+      db.integrations
+        .where('userId')
+        .equals(user.id)
+        .filter((i) => i.provider === 'imessage' && i.status === 'active')
+        .first(),
+    [user.id],
+  );
+  const done =
+    result ??
+    (earlier
+      ? `${importSummary({
+          people: Number((earlier.syncState as { people?: number }).people ?? 0),
+          conversations: Number((earlier.syncState as { conversations?: number }).conversations ?? 0),
+        })}.`
+      : undefined);
+  return (
+    <div>
+      <ObHeader
+        icon={
+          <StepMark>
+            <MessageCircle size={22} aria-hidden />
+          </StepMark>
+        }
+        title="Add your texts"
+        subtitle="Who you text is who you are close to. Orbit reads your Messages on this Mac to rank the people who can introduce you."
+      />
+      {done ? (
+        <div
+          className="flex items-center gap-3 border-y border-line px-1 py-3.5 text-[14px]"
+          data-testid="ob-texts-done"
+        >
+          <Check size={16} className="text-good" aria-hidden />
+          <span className="text-ink">{done}</span>
+        </div>
+      ) : (
+        <TextsSetup
+          user={user}
+          importLabel="Read my texts"
+          onDone={(r) => setResult(`${importSummary(r)}.`)}
+        />
+      )}
+      <div className="mt-8 space-y-3">
+        {done ? (
+          <ObPrimary onClick={onNext}>Continue</ObPrimary>
+        ) : (
           <ObQuiet onClick={onNext} data-testid="ob-skip">
             I'll do this later
           </ObQuiet>

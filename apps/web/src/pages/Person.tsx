@@ -5,6 +5,7 @@ import {
   composeKinds,
   conflictingFacts,
   FACT_TYPE_LABELS,
+  keepTouch,
   linkedinActivityUrl,
   MESSAGE_KIND_LABELS,
   NOTE_SOURCE_LABELS,
@@ -57,6 +58,7 @@ import { moveChatGuarded } from '../engine/pipeline';
 import { personSummary, toYou } from '../engine/prep';
 import { SUMMARY_RULES_AT } from '../engine/repair';
 import { lastTouch } from '../engine/search';
+import { useSources } from '../engine/sources';
 import { SUGGESTION_KIND_LABELS } from '../engine/today';
 import { isServerUser } from '../integrations/orbitApi';
 import { useSession } from '../state/session';
@@ -144,7 +146,9 @@ export function PersonPage() {
   const person = useLiveQuery(async () => (id ? ((await db.people.get(id)) ?? null) : null), [id]);
   const chats = useLiveQuery(() => (id ? db.chats.where('personId').equals(id).toArray() : []), [id]) ?? [];
   const tpsQ = useLiveQuery(() => (id ? db.touchpoints.where('personId').equals(id).toArray() : []), [id]);
-  const tps = tpsQ ?? [];
+  // a source that is off is hidden from the page too, its touches kept (plan 43 §3.2)
+  const inUse = useSources(user?.id)?.inUse;
+  const tps = useMemo(() => (tpsQ ?? []).filter((t) => keepTouch(t.kind, inUse ?? new Set())), [tpsQ, inUse]);
   const factsQ = useLiveQuery(
     () =>
       id
@@ -1192,7 +1196,7 @@ export function PersonPage() {
         </div>
         <div className="rail-flat">
           <TieScoreCard person={person} userId={user.id} />
-          <TextsCard personId={person.id} />
+          <TextsCard personId={person.id} userId={person.userId} />
           {isServerUser(user.id) && <DossierCard person={person} userId={user.id} />}
           <Card>
             <div className="font-medium mb-2">Summary</div>
@@ -1405,16 +1409,48 @@ export function closenessWord(v: number): string {
   return TIE_BAND_LABELS[tieBand(Math.round(v * 100))];
 }
 
-/** Texts with them, from the Mac's Messages: how much, how lately, and the last few messages (kept in this browser). */
-function TextsCard({ personId }: { personId: string }) {
+/**
+ * Texts with them, from the Mac's Messages: how much, how lately, and the last few messages (kept in the browser that
+ * read them). On another device of a signed-in student, the server's counts and dates only (plan 43 §6). Hidden while
+ * Texts are off.
+ */
+function TextsCard({ personId, userId }: { personId: string; userId: string }) {
+  const sources = useSources(userId);
   const t = useLiveQuery(() => db.textThreads.get(personId), [personId]);
-  if (!t) return null;
+  const days = useLiveQuery(() => db.textDays.where('personId').equals(personId).toArray(), [personId]);
+  if (!sources?.inUse.has('imessage')) return null;
+  if (!t) {
+    if (!days?.length) return null;
+    const total = days.reduce((n, d) => n + d.inCount + d.outCount, 0);
+    const sorted = days.map((d) => d.day).sort();
+    const fmt = (day: string) =>
+      new Date(`${day}T12:00:00`).toLocaleDateString('en-US', {
+        month: 'short',
+        day: 'numeric',
+        year: 'numeric',
+      });
+    return (
+      <Card data-testid="person-texts">
+        <div className="flex items-baseline justify-between gap-2">
+          <div className="font-medium">Texts</div>
+          <div className="text-[12.5px] text-ink-3" data-testid="person-texts-counts">
+            {total} on {days.length} {days.length === 1 ? 'day' : 'days'}
+          </div>
+        </div>
+        <p className="mt-2 text-[12.5px] text-ink-3">
+          Since {fmt(sorted[0]!)}, last {fmt(sorted.at(-1)!)}. Read on another device, so only counts and
+          dates are here.
+        </p>
+      </Card>
+    );
+  }
   return (
     <Card data-testid="person-texts">
       <div className="flex items-baseline justify-between gap-2">
         <div className="font-medium">Texts</div>
-        <div className="text-[12.5px] text-ink-3">
+        <div className="text-[12.5px] text-ink-3" data-testid="person-texts-counts">
           {t.inCount + t.outCount} · last {relDate(t.lastAt)}
+          {t.groups ? ` · ${t.groups} ${t.groups === 1 ? 'group' : 'groups'}` : ''}
         </div>
       </div>
       <ul className="mt-3 space-y-1.5">

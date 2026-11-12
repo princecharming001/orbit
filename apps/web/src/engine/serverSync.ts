@@ -66,6 +66,8 @@ export const PULL_TARGETS: { table: string; dexie: string }[] = [
   { table: 'dossiers', dexie: 'dossiers' },
   { table: 'recommendations', dexie: 'recommendations' },
   { table: 'intro_requests', dexie: 'introRequests' },
+  // plan 43 §6: days of texts per person, counts only, so a device that did not read the Messages file can show them
+  { table: 'text_days', dexie: 'textDays' },
 ];
 const DEXIE_OF = new Map(PULL_TARGETS.map((t) => [t.table, t.dexie]));
 
@@ -225,6 +227,13 @@ function withDefaults(table: string, row: Record<string, unknown>, userId: strin
       ...stripNulls(r),
     };
   if (table === 'tie_labels' || table === 'tie_scores') return { updatedAt: new Date().toISOString(), ...r };
+  // a day of texts is keyed by its person and day on the server: one id here, which the server's deletions use too
+  if (table === 'text_days')
+    return stripNulls({
+      ...r,
+      id: typeof r.id === 'string' ? r.id : `${String(r.personId)}:${String(r.day).slice(0, 10)}`,
+      day: String(r.day).slice(0, 10),
+    });
   // the map keys a company's wedge by nameNormalized: a server row names it nameNorm
   if (table === 'organizations')
     return stripNulls({ ...r, nameNormalized: r.nameNormalized ?? r.nameNorm ?? companyNorm(r.name) });

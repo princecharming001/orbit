@@ -9,7 +9,7 @@
  *
  * Local mode (no account) has no server to tell anyone: the phone number is kept in this browser only.
  */
-import type { Readiness, User } from '@orbit/core';
+import type { Readiness, ReadinessInput, User } from '@orbit/core';
 import { readiness } from '@orbit/core';
 import { db } from '../db/schema';
 import {
@@ -58,6 +58,25 @@ export function readinessFromSync(s: SyncStatus | undefined): Readiness | undefi
     pending: s.jobs.pending,
     counts: s.counts,
   });
+}
+
+/**
+ * Plan 43 §6: the Texts step, which this browser knows best (it read the Messages file). Added to an answer that has
+ * none; it never changes the state or the progress, so it never holds up "ready".
+ */
+export function withTextsStep(r: Readiness, texts: ReadinessInput['texts'] | undefined): Readiness {
+  if (!texts || r.steps.some((s) => s.key === 'texts')) return r;
+  const step = readiness({ pending: 0, texts }).steps.find((s) => s.key === 'texts');
+  return step ? { ...r, steps: [...r.steps, step] } : r;
+}
+
+/** Where the student's texts stand, for the Texts step: only while they are switched on. */
+export async function textsReadiness(userId: string | undefined): Promise<ReadinessInput['texts']> {
+  if (!userId) return undefined;
+  const { textsStatus } = await import('./imessage');
+  const s = await textsStatus({ id: userId });
+  if (s.state !== 'on') return undefined;
+  return { state: 'on', people: s.people, importedAt: s.imported ? (s.lastSyncedAt ?? null) : null };
 }
 
 /** Where the import stands and how the student will hear, from the server; undefined when it cannot say. */

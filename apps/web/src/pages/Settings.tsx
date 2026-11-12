@@ -53,6 +53,7 @@ import {
 } from '../components/settings/kit';
 import { OutreachCoach } from '../components/settings/OutreachCoach';
 import { PhoneSetting } from '../components/settings/PhoneSetting';
+import { TextsRow, textsPrivacyLine, useTextsOffered } from '../components/TextsRow';
 import { useWeeklyLimits, WeeklyTargetSlider } from '../components/WeeklyTargetSlider';
 import { suggestCompanies } from '../data/companies';
 import {
@@ -1173,6 +1174,8 @@ function Integrations() {
           </IntegrationRow>
         )}
         <LinkedInLiveCard user={user} />
+        {/* plan 43 §6: texts from the Mac's Messages, on a Mac when this Orbit offers them */}
+        <TextsRow user={user} />
         {/* the file upload only for a build without live LinkedIn; with it, LinkedIn connects through its sign-in */}
         {!liveLinkedInAvailable(user) && (
           <IntegrationRow
@@ -1712,6 +1715,7 @@ function Privacy() {
   const nav = useNavigate();
   const toast = useToast();
   const sources = useSources(user?.id ?? '');
+  const texts = useTextsOffered(user?.id);
   const working = useWorking();
   if (!user) return null;
   const exportAll = () => working.run('export', 'Gathering your data…', downloadAll);
@@ -1739,6 +1743,10 @@ function Privacy() {
     ['Claude', 'only for the features you turn on', 'claude.ai'],
     ['LinkedIn', 'through Unipile, if you connect it live', 'linkedin.com'],
     ['Company logos', "a company's name, to find its logo on LinkedIn", 'linkedin.com'],
+    // plan 43 §9: texts are the most private thing Orbit touches; the words never leave the browser
+    ...(texts
+      ? ([['Texts', textsPrivacyLine(isServerUser(user.id))]] as [string, string][])
+      : ([] as [string, string][])),
     // plan 29 §A6: what a friend on Orbit sees, and what never crosses
     [
       'Friends on Orbit',

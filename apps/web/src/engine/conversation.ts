@@ -22,6 +22,7 @@ import type {
 import { heuristicSignal, newId } from '@orbit/core';
 import { db } from '../db/schema';
 import { readReply } from './rapport';
+import { inUseNow } from './sources';
 
 export const LINKEDIN_THREAD_PREFIX = 'linkedin:';
 
@@ -256,7 +257,10 @@ export async function conversationWith(userId: string, personId: string): Promis
       ...(o.status === 'sent' ? {} : { pending: true }),
     });
   }
-  const texts = await db.textThreads.where('personId').equals(personId).toArray();
+  // texts count only while Texts are on (plan 43 §3.2)
+  const texts = (await inUseNow(userId)).has('imessage')
+    ? await db.textThreads.where('personId').equals(personId).toArray()
+    : [];
   for (const tt of texts)
     for (const [i, r] of tt.recent.entries())
       items.push({ id: `text:${tt.id}:${i}`, channel: 'text', out: r.fromMe, at: r.at, text: r.text });

@@ -31,6 +31,7 @@ import {
   emailSendsFromOrbit,
   handoffLink,
   isConnectionNote,
+  openInMessages,
   pendingNoteFor,
   restorePerson,
   revertHandoff,
@@ -41,11 +42,12 @@ import {
   withNote,
   withoutNote,
 } from '../engine/send';
+import { useSources } from '../engine/sources';
 import { usesMockConnectors } from '../integrations/connectorsMock';
 import { googleClientId } from '../integrations/google';
 import { useSession } from '../state/session';
 import { Avatar, Button, cx, Input, relDate, Textarea, useToast } from '../ui';
-import { copyText, openHandoff, runApproval } from './approve';
+import { copyText, handoffToast, openHandoff, runApproval } from './approve';
 import { DraftFiles } from './DraftFiles';
 import { ForwardNote } from './ForwardNote';
 import { HistoryPeek, ThreadContext } from './ThreadContext';
@@ -201,7 +203,9 @@ export function DraftEditor({
         ? false
         : draft.channel === 'gmail'
           ? emailSendsFromOrbit(user, draft)
-          : linkedInSendActive(user, person ?? undefined, draft.id),
+          : draft.channel === 'linkedin'
+            ? linkedInSendActive(user, person ?? undefined, draft.id)
+            : false,
     [user?.id, draft.id, draft.channel, person?.linkedinMemberId, person?.linkedinSlug],
   );
   // email that would open the mail app, in a copy of Orbit that can sign in to Google (never the made-up demo student)
@@ -248,6 +252,11 @@ export function DraftEditor({
   const [confirmingRedraft, setConfirmingRedraft] = useState(false);
   const [showAllLines, setShowAllLines] = useState(false);
   const [copying, setCopying] = useState(false);
+  const [texting, setTexting] = useState(false);
+  // texting is a way to send once the owner offers Texts and Orbit has their number (plan 43 §6)
+  const sources = useSources(user?.id);
+  const canText =
+    !!person?.phones?.length && !!sources?.offered.includes('imessage') && draft.channel !== 'imessage';
   // edits are kept as they are typed, so leaving the page (to check LinkedIn) and coming back loses nothing; the
   // latest text is also written when the editor closes, so a change made just before leaving is never dropped
   const latest = useRef({ body, subject, draft });
@@ -405,9 +414,11 @@ export function DraftEditor({
       : connectionNote
         ? 'Copy note & open LinkedIn'
         : 'Copy & open LinkedIn'
-    : direct
-      ? `Send to ${first}`
-      : `Open email to ${first}`;
+    : draft.channel === 'imessage'
+      ? `Open in Messages to ${first}`
+      : direct
+        ? `Send to ${first}`
+        : `Open email to ${first}`;
   const canRegenerate = needs.every(
     (n) => (inputs[n] ?? '').trim().length >= (n === 'mutual' ? 2 : n === 'role' ? 4 : 8),
   );
@@ -464,7 +475,7 @@ export function DraftEditor({
       ttl: 8000,
     });
   };
-  const copyButton = !isLinkedIn && !direct && !approveLabel && (
+  const copyButton = !isLinkedIn && draft.channel !== 'imessage' && !direct && !approveLabel && (
     <Button
       size="sm"
       onClick={copyAll}
@@ -481,8 +492,35 @@ export function DraftEditor({
       Copy text
     </Button>
   );
-  // one way to send: Orbit sends it (a LinkedIn hand-off button beside Send only made the choice harder)
-  const handoffButton = null;
+  // plan 43 §6: someone with a phone number can be texted instead. Messages opens with the draft written, and the
+  // message waits for "I sent it" like any hand-off
+  const handoffButton = canText && !approveLabel && (
+    <Button
+      size="sm"
+      disabled={busy || texting || !body.trim() || missingLine}
+      title={
+        missingLine
+          ? (notAllowed ?? issues.find((i) => i.blocking)?.text ?? 'Add the missing line first')
+          : `Open Messages with this written to ${first}`
+      }
+      onClick={async () => {
+        if (!user) return;
+        setError(undefined);
+        setTexting(true);
+        try {
+          const r = await openInMessages(user, draft.id, body);
+          if (!r.ok) setError(r.error);
+          else if (r.status === 'handed_off' && openHandoff(r.handoffUrl))
+            toast.push({ text: handoffToast('sms', false, false), tone: 'good', ttl: 8000 });
+        } finally {
+          setTexting(false);
+        }
+      }}
+      data-testid="draft-messages"
+    >
+      Open in Messages
+    </Button>
+  );
   const primaryButton = (
     <Button
       variant="primary"
@@ -1083,6 +1121,7 @@ export function DraftEditor({
 /** Where a message waiting for "I sent it" went: "opened in LinkedIn", "opened in your mail app", "copied for Gmail". */
 export function handoffWhere(o: Pick<OutboundMessage, 'channel' | 'handoffVia'>): string {
   if (o.handoffVia === 'copy') return 'copied to paste into Gmail';
+  if (o.channel === 'imessage' || o.handoffVia === 'sms') return 'opened in Messages';
   return o.channel === 'linkedin' ? 'opened in LinkedIn' : 'opened in your mail app';
 }
 
@@ -1162,9 +1201,11 @@ export function OutboxStatus({
           : `Copied. Paste it into a new email to ${person?.primaryEmail ?? name}, then press I sent it.`
         : draft.channel === 'gmail'
           ? 'Opened in your mail app. Send it there, then press I sent it.'
-          : link?.via === 'linkedin_connect'
-            ? `On ${name}'s profile, ${coarse ? 'tap' : 'click'} Connect, then Add a note, and paste it. Then press I sent it.`
-            : `Paste it into LinkedIn and send it, then press I sent it.`;
+          : draft.channel === 'imessage'
+            ? `Opened in Messages. Send it to ${name} there, then press I sent it. Orbit looks for the answer the next time you update texts.`
+            : link?.via === 'linkedin_connect'
+              ? `On ${name}'s profile, ${coarse ? 'tap' : 'click'} Connect, then Add a note, and paste it. Then press I sent it.`
+              : `Paste it into LinkedIn and send it, then press I sent it.`;
     actions = (
       <>
         {sendable && (
@@ -1238,7 +1279,13 @@ export function OutboxStatus({
                 });
             }}
           >
-            {compact ? 'Open again' : link.via === 'mailto' ? 'Open mail app again' : 'Open LinkedIn again'}
+            {compact
+              ? 'Open again'
+              : link.via === 'mailto'
+                ? 'Open mail app again'
+                : link.via === 'sms'
+                  ? 'Open Messages again'
+                  : 'Open LinkedIn again'}
           </Button>
         )}
         {!(compact && link && draft.channel === 'linkedin') && (

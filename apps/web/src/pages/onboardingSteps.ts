@@ -20,6 +20,8 @@ export const STEP = {
   style: 3.8,
   job: 3.9,
   linkedin: 4,
+  /** plan 43 §6: texts from the Mac's Messages, on a Mac when this Orbit offers them; optional */
+  texts: 4.2,
   /** plan 40: a phone number for the "Orbit is ready" text; 4.5 never meant anything in an older setup */
   phone: 4.5,
   gmail: 5,
@@ -37,6 +39,7 @@ export const STEP_TITLES: Record<number, string> = {
   [STEP.style]: 'How Orbit helps',
   [STEP.job]: 'A job',
   [STEP.linkedin]: 'LinkedIn',
+  [STEP.texts]: 'Texts',
   [STEP.phone]: 'Phone',
   [STEP.gmail]: 'Gmail',
   [STEP.ready]: 'Ready',
@@ -52,6 +55,7 @@ const WORD_ADDRESS: Record<number, string> = {
   [STEP.people]: 'people',
   [STEP.style]: 'style',
   [STEP.job]: 'job',
+  [STEP.texts]: 'texts',
   [STEP.phone]: 'phone',
 };
 const STEP_OF_WORD = new Map(Object.entries(WORD_ADDRESS).map(([n, w]) => [w, Number(n)]));
@@ -60,6 +64,7 @@ const STEP_OF_WORD = new Map(Object.entries(WORD_ADDRESS).map(([n, w]) => [w, Nu
 export const OPTIONAL_STEPS: ReadonlySet<number> = new Set([
   ...QUESTION_STEPS,
   STEP.linkedin,
+  STEP.texts,
   STEP.phone,
   STEP.gmail,
 ]);
@@ -67,10 +72,18 @@ export const OPTIONAL_STEPS: ReadonlySet<number> = new Set([
 /**
  * The steps shown, in order. Gmail is a step only on a copy of Orbit where Google sign-in is set up: a step that could
  * only say "not available" is not shown. Signed in to an Orbit account (`account`), Google is already connected by the
- * sign-in, so there is no Gmail step.
+ * sign-in, so there is no Gmail step. Texts follow LinkedIn only on a Mac when this Orbit offers them (`texts`).
  */
-export function visibleSteps(google: boolean, account = false): number[] {
-  const start = [STEP.welcome, STEP.you, STEP.goals, ...QUESTION_STEPS, STEP.linkedin, STEP.phone];
+export function visibleSteps(google: boolean, account = false, texts = false): number[] {
+  const start = [
+    STEP.welcome,
+    STEP.you,
+    STEP.goals,
+    ...QUESTION_STEPS,
+    STEP.linkedin,
+    ...(texts ? [STEP.texts] : []),
+    STEP.phone,
+  ];
   if (account) return [...start, STEP.ready];
   return google ? [...start, STEP.gmail, STEP.ready] : [...start, STEP.ready];
 }
@@ -79,8 +92,8 @@ export function visibleSteps(google: boolean, account = false): number[] {
  * The step a stored number opens: the first shown step at or after it, so a hidden step (Gmail without Google) or a
  * number left by the older setup moves forward, never back. Anything past the last step is the last step.
  */
-export function resolveStep(stored: number, google: boolean, account = false): number {
-  const steps = visibleSteps(google, account);
+export function resolveStep(stored: number, google: boolean, account = false, texts = false): number {
+  const steps = visibleSteps(google, account, texts);
   const n = Number.isFinite(stored) ? stored : STEP.welcome;
   return steps.find((s) => s >= n) ?? steps[steps.length - 1]!;
 }
@@ -99,8 +112,8 @@ export function stepFromAddress(part: string | undefined): number {
 }
 
 /** The address of a stored step, after it is resolved to a shown one. */
-export function stepPath(stored: number, google: boolean, account = false): string {
-  return `/onboarding/${stepAddress(resolveStep(stored, google, account))}`;
+export function stepPath(stored: number, google: boolean, account = false, texts = false): string {
+  return `/onboarding/${stepAddress(resolveStep(stored, google, account, texts))}`;
 }
 
 export type StepStatus = 'done' | 'skipped' | 'current' | 'todo';

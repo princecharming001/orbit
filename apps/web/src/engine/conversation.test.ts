@@ -8,6 +8,7 @@ import { createLocalUser } from './account';
 import { conversationWith, latestReply, quotedMessageFor } from './conversation';
 import { lastInboundOf } from './drafts';
 import { syncLinkedInReplies } from './linkedinInbox';
+import { setExtraSourcesForTests, setSourceState } from './sources';
 
 const NOW = new Date('2026-10-20T15:00:00.000Z');
 const SENT = '2026-10-15T14:00:00.000Z';
@@ -230,13 +231,21 @@ describe('one inbox (plan 25)', () => {
       recent: [{ at: '2026-10-20T08:00:00.000Z', fromMe: false, text: 'Running 5 late' }],
       importedAt: NOW.toISOString(),
     } as never);
-    const conv = await conversationWith(user.id, 'p_maya');
-    expect(conv.map((m) => [m.channel, m.out, m.text])).toEqual([
-      ['linkedin', true, mine.text],
-      ['linkedin', false, hers.text],
-      ['gmail', false, 'Thursday at 3 works.'],
-      ['text', false, 'Running 5 late'],
-    ]);
+    // texts show only while they are offered and on (plan 43 §3.2)
+    setExtraSourcesForTests('imessage');
+    try {
+      expect((await conversationWith(user.id, 'p_maya')).some((m) => m.channel === 'text')).toBe(false);
+      await setSourceState('imessage', 'on', user.id);
+      const conv = await conversationWith(user.id, 'p_maya');
+      expect(conv.map((m) => [m.channel, m.out, m.text])).toEqual([
+        ['linkedin', true, mine.text],
+        ['linkedin', false, hers.text],
+        ['gmail', false, 'Thursday at 3 works.'],
+        ['text', false, 'Running 5 late'],
+      ]);
+    } finally {
+      setExtraSourcesForTests(undefined);
+    }
     // the newest reply, across email and LinkedIn
     expect((await latestReply({ personId: 'p_maya', threadId: 'th_mail' }))?.id).toBe('m_mail');
   });
