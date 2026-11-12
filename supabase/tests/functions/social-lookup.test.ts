@@ -218,14 +218,20 @@ describe('the Instagram lookup on a known graph', () => {
     expect(n!.body).not.toMatch(/[!—]/);
   });
 
-  it('carries a warm path through the bridge', async () => {
-    const services = makeServices(agentConfig(fakeNet(), {}), { db: t.db, now });
+  it('carries a warm path through the bridge, only while Instagram is offered and on', async () => {
+    const off = makeServices(agentConfig(fakeNet(), {}), { db: t.db, now });
+    const hidden = await findPaths(off, s.userId, { target: { personId: s.targetPerson } });
+    const viaBridge = (paths: typeof hidden.paths, id: string) =>
+      paths.some((p) => p.nodes.includes(id) || p.nodes.includes(s.known[w.id('E')]!));
+    const services = makeServices(agentConfig(fakeNet(), { extraSources: ['instagram'] }), { db: t.db, now });
     const got = await findPaths(services, s.userId, { target: { personId: s.targetPerson } });
     const a = (
       await t.db.sql<{ id: string }>`
       select id from orbit.people where user_id = ${s.userId}::uuid and source_account = ${`instagram:${w.id('A')}`}`
     )[0]!.id;
-    expect(got.paths.some((p) => p.nodes.includes(a) || p.nodes.includes(s.known[w.id('E')]!))).toBe(true);
+    expect(viaBridge(got.paths, a)).toBe(true);
+    // with Instagram not offered (the shipped default) the same rows carry no path
+    expect(viaBridge(hidden.paths, a)).toBe(false);
   });
 
   it('a second student asking about the same target makes no call', async () => {

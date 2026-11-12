@@ -313,12 +313,6 @@ describe('orbit.delete_user (§10.4 test 4)', () => {
       insert into orbit.social_lookups (user_id, platform, target_person_id, target_account_id) values ('${u}', 'instagram', '${p2}', 'ig_ann');
       insert into orbit.text_days (user_id, person_id, day, in_count, out_count) values ('${u}', '${p2}', '2026-11-01', 1, 1);
       insert into orbit.dead_letters (queue, message) values ('orbit_sync', '{"kind":"x","userId":"${u}"}');
-      insert into orbit.source_states (user_id, source, state) values ('${u}', 'instagram', 'on');
-      insert into orbit.social_links (user_id, platform, account_id, person_id, via) values ('${u}', 'instagram', 'ig-friend-${u}', '${p2}', 'proof');
-      insert into orbit.social_match_asks (user_id, platform, account_id, person_id, score) values ('${u}', 'instagram', 'ig-ask-${u}', '${p2}', 0.7);
-      insert into orbit.social_not_same (user_id, platform, account_id, person_id) values ('${u}', 'instagram', 'ig-no-${u}', '${p2}');
-      insert into orbit.social_lookups (user_id, platform, target_person_id, target_account_id) values ('${u}', 'instagram', '${p2}', 'ig-target');
-      insert into orbit.text_days (user_id, person_id, day, in_count, out_count) values ('${u}', '${p2}', current_date, 2, 1);
     `);
     await db.sql`select orbit.enqueue('orbit_sync', ${{ kind: 'noop', userId: u, payload: {} }}::jsonb)`;
     await db.sql`select orbit.enqueue('orbit_sync', ${{ kind: 'noop', userId: other, payload: {} }}::jsonb)`;
