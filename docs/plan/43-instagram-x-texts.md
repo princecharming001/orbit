@@ -4,8 +4,14 @@ Orbit finds warm paths from LinkedIn and Gmail today. This plan adds Instagram, 
 Orbit can learn who a student knows, how well, and who those people know. Each can be switched on or off on its own,
 and every combination has to work.
 
-Nothing here is built. This is the second version: the first was checked against the code by an independent review,
-which found thirteen places where it would have failed. Each is fixed below, and section 14 lists what changed.
+This is the final version of the plan. It was checked against the code twice by an independent review: the first pass
+found thirteen places where it would have failed and seventeen gaps, the second found what the fixes still missed.
+Section 14 lists what changed.
+
+**How it is built.** Everything is built and tested against fakes that follow the documented shapes of Unipile's
+Instagram API and X's API, behind the owner's switch, which starts empty. Nothing changes for any student until a
+source is listed. The short tests in section 13 need real accounts and money, so they are yours to run (or to approve
+me running) before a source is switched on; their answers tune numbers, not the design.
 
 ## 1. What each place can give
 
@@ -92,10 +98,18 @@ browser caches its graph. So the rule is enforced in three ways together.
 
 1. **Every row from an optional source says so.** Messages by provider, ties by kind, touches by kind, identities by
    kind, and each also carries the id of the social account it came from (3.4 needs that too).
-2. **Every place that reads those rows goes through one helper** that leaves out sources that are off. On the server
-   that is: scoring (messages, intros, neighbours), the three ways paths load ties, the job that weighs bridges, what
-   friends are shown, the context given to drafts, cadence, the autopilot plan, notices, and what is sent to the
-   browser. In the browser: the graph, the conversation view, closeness, the person page. The list is a checklist in
+2. **Every place that reads those rows goes through one helper** that leaves out sources that are off. People rows
+   count too: a person known only from an off source is left out wherever people are read. On the server:
+   - scoring: messages, intros, neighbours, and which people are scored
+   - paths: the three ways ties are loaded, the people loaded, the "owes a reply" query
+   - the job that weighs bridges, sourcing, Discover reach
+   - what friends are shown
+   - messages: the inbox, history, replies, the reply funnel, the voice examples drafts learn from, the context
+     given to drafts, compose
+   - cadence, the autopilot plan, notices, readiness counts
+   - what is sent to the browser
+
+   In the browser: the graph, the conversation view, closeness, the person page, search. The list is a checklist in
    the build, and the removal test below fails if one is missed.
 3. **A switch runs one job** that does all of: a full rescore of the student's people (two passes with a refit,
    because a person's score depends on their neighbours' scores), the friend projection, Discover's reach numbers, and
@@ -135,12 +149,23 @@ to be a bridge needs a person row. That happens at two moments, and only for acc
 - when the student and the account message each other both ways, or
 - when a lookup finds the account is a bridge to a target (3.6).
 
-Everything else stays an account. A person made this way is marked as coming from that source, appears under People
-only once the student has a real exchange with them, and can be attached to a LinkedIn person later.
+Everything else stays an account. A person made this way is marked as coming from that source and can be attached to
+a LinkedIn person later.
+
+**Listed or not.** People gain a `listed` flag. A person made from an account starts unlisted: they take part in
+paths and closeness, but do not appear in People, search, friend sharing or the list the browser shows. They become
+listed after a **real exchange**: messages both ways on any channel, a meeting, or the student adding them to a chat
+or a note. `listed` is a new column, not the existing "hidden" mark, because hidden people are left out of paths.
+
+**The student's circle,** used by matching and by the lookup: the accounts the student and the account follow each
+other on, plus every account attached to a person whose tie with the student exists (messages both ways, a meeting, a
+LinkedIn connection, or following each other on any platform).
 
 **Their closeness.** A bridge whose only link to the student is following each other still has to count as a first
-step. Following each other makes the tie exist, the way "connected on LinkedIn" does today, and path finding lifts
-such a bridge to the same minimum a LinkedIn mutual gets. The path is marked a weaker route until there is more.
+step. Three code changes make that work: following each other sets the tie as existing (today only messages,
+meetings, a LinkedIn connection or an introduction do); the list of "mutual" kinds that path finding lifts to the
+LinkedIn mutual minimum grows from one kind to three; and a person with no stored score yet is scored at that minimum
+rather than skipped. The path is marked a weaker route until there is more.
 
 ### 3.4 The same person in two places
 
@@ -170,7 +195,7 @@ Signals about this one person. An automatic match needs at least one:
 |---|---|
 | Same personal link | Both point at the same personal site. Link hubs count only when the full address matches |
 | Same picture | The same image, by a fingerprint of the file. Default avatars and logos are excluded. This is not face recognition |
-| Employer and role together | The bio names the employer and something of the title |
+| Employer and role together, at a small employer | The bio names the employer and something of the title, and the employer has under 1,000 people. At a large employer, two people share both too easily, so it only supports |
 | School and year together | "Stanford 25" against Stanford, class of 2025 |
 | An exact contact | An email or phone on the account |
 
@@ -190,12 +215,15 @@ Supporting signals. They raise or lower a score and never attach on their own:
 Two rules on top: if two people could fit one account, Orbit asks and never picks; and an account sorted as a public
 figure, brand or unknown is never matched by score.
 
+**The score.** A logistic score over the signals above, built the way Orbit's person matcher is: starting weights
+by hand, fitted on the labelled set in 8.2, frozen in the code with a test that fails if they drift.
+
 **Three outcomes.**
 
 | Result | What happens |
 |---|---|
-| Hard proof, or a very high score with a signal about this one person | Attached |
-| Middle, and the student knows the person | A card: "Is @jchen_22 on Instagram the Jason Chen you know from Stripe?" with the evidence both ways. No is remembered |
+| Hard proof, or a score of at least 0.95 with a signal about this one person | Attached |
+| 0.6 to 0.95, and the student knows the person | A card: "Is @jchen_22 on Instagram the Jason Chen you know from Stripe?" with the evidence both ways. No is remembered |
 | Middle, and the student does not know the person | Nothing. Orbit never asks a student to confirm a stranger |
 | Low | Left apart |
 
@@ -206,18 +234,30 @@ automatic matching has been measured on real accounts (8.2). Orbit looks for tha
 is going after, from a small daily budget.
 
 **Attach and detach.** Attaching an account is a link. It does not merge two people, because merging in Orbit deletes
-one of them and cannot be undone. Every message, touch and tie that came from an account keeps that account's id. So
-a wrong match is undone from the person's page with "Not their account":
+one of them, moves chats, drafts, facts and notes without a record, and cannot be undone. Every message, touch, tie,
+identity and research fact that came from an account keeps that account's id, including the people listed on a
+message and on a thread.
+
+When the account already has a person of its own (made when it became a bridge or a chat partner), attaching it to
+someone else moves that person's stamped rows over and deletes the now empty person. If that person has gained
+anything unstamped (a note, a chat in the pipeline, a draft), Orbit does not fold it: the student is shown both and
+picks, and the card says this one cannot be undone. A person who owns an attached account is never merged the old
+way; the account is attached instead.
+
+A wrong match is undone from the person's page with "Not their account":
 
 | Thing | On detach |
 |---|---|
-| Messages and touches from that account | Move to a person of the account's own |
+| Messages, touches and thread membership from that account | Move to a new unlisted person for the account |
 | Follow ties | Deleted and rebuilt from the graph for the right person |
+| Facts read from the account's bio or links | Deleted |
+| An email or phone the account added | Removed from the person. If it caused another match, that match is offered for review |
+| A draft queued to that account | Paused, with a note |
 | A chat that moved to "replied" on a message from that account | Orbit proposes moving it back. The student decides |
+| The student's own closeness rating of the person | Kept. It is about the person |
+| Open cards about the account | Closed |
+| Scores | Both people rescored, and the friend projection rebuilt |
 | The match | Remembered as "not the same", never proposed again |
-
-When the account already had its own person and the student then says it is someone else in People, the two people
-are merged as Orbit merges any two today. Detach still works afterwards, because the rows are stamped.
 
 **New storage.** Attached accounts, proposed matches, and remembered "No" answers each need a table, since the ones
 Orbit has are person to person. They are added to what the browser pulls so the handle and the cards reach it.
@@ -232,8 +272,9 @@ Orbit has are person to person. They are added to what the browser pulls so the 
 | `social_suppressed` | Accounts that must not be stored or used | Checked before every store and every reuse |
 
 **What "complete" means.** A missing row means "does not follow" only if the list is complete. Complete means the
-read reached the end and the rows are within a set tolerance of the count on the profile. A list read partly is
-marked partial and can find bridges but can never prove there are none.
+read reached the end and holds at least 90 percent of the count on the profile (Instagram often returns slightly
+fewer than it shows). A list read partly is marked partial and can find bridges but can never prove there are none.
+No list over 2,000 accounts is read in one lookup; for those, Orbit checks from the candidates' side (3.6 step 5).
 
 **Sharing safely.** A list can look different to different readers, so each read records who read it. Before a shared
 list answers another student's question, Orbit checks the account is still public, and drops the list if it is not.
@@ -267,13 +308,15 @@ one rule, and it makes the lookup cheap.
    yesterday, or a friend the student followed this morning, counts at once. If both of the target's lists are
    complete and fresh, this is the whole lookup and costs nothing.
 3. **The count (Instagram).** One profile read returns how many accounts the student follows that also follow the
-   target. A bridge is one of those by definition. If the count is zero there are no bridges: stop, after one call.
-   The same read says whether the account is private. Kept 14 days.
-4. **The target's shorter list, to the end.** Now the candidates are the accounts in the student's circle on that
-   list. If there are none, stop.
-5. **Confirm the other direction for those few candidates,** from whichever side is cheaper: the target's other list
-   (stopping when every candidate is settled or the count is reached), or each candidate's own list, which Orbit may
-   already hold and which will answer future targets too.
+   target, and whether the target is private. It is read fresh on every lookup, never kept. It can end the lookup
+   only when every account in the student's circle on this platform is one the student follows: then a count of zero
+   means no bridges. A circle account the student does not follow (a texting friend's account, a second account)
+   could still be a bridge, so it goes on to step 5 whatever the count says.
+4. **The target's shorter list, to the end,** if it has 2,000 accounts or fewer. The candidates are the accounts in
+   the student's circle on that list. If there are none and step 3 allowed stopping, stop.
+5. **Confirm the other direction for the candidates,** from whichever side is cheaper: the target's other list
+   (stopping when every candidate is settled), or each candidate's own list, which Orbit may already hold and which
+   will answer future targets too. For a target with lists over 2,000, this is the only side read.
 6. **Write the ties** and rerun the query.
 
 A lookup that needs many calls runs as a job that remembers where it stopped, and the student gets a notice when it
@@ -320,7 +363,7 @@ they were poured in unchanged: a fast "lol" would look like the fastest reply Or
 | One touch per day each way | Counted in the student's own time zone. New work on the server, which counts every message today |
 | Words count | A day counts when something was written. A day of only reactions or forwarded posts is light engagement |
 | No answer, no tie | Messages from someone the student never answered count for nothing and do not make a tie exist. This is a new, explicit rule. Today's cap only covers the opposite case |
-| Groups weigh less | A chat with more than one other person counts for a fraction: half up to four people, a quarter up to eight, nothing above. This needs a weight on a message, which the model lacks today |
+| Groups weigh less | Counting everyone in the chat, the student included: 2 counts fully, 3 or 4 count half, 5 to 8 a quarter, more than 8 not at all. This needs a weight on a message, which the model lacks today. For Instagram and X it replaces the rule LinkedIn chats use, which skips anything over 3 |
 | Reply speed is not read from chat | The reply-speed signal stays an email and LinkedIn signal. For chat it is left out, not counted as fast |
 | Following each other | A new signal, one per platform, beside "connected on LinkedIn". Per platform so each can be fitted, and left out of what a friend sees, on its own |
 | Existing scores do not move | A student with no optional source gets exactly the scores they have now. A test holds this |
@@ -343,9 +386,18 @@ should do none of that.
 | Counts as "owes a reply" | Yes | No |
 | Shown in the Messages tab | Yes | A count and dates only |
 
-When a person enters the pipeline, Orbit reads that one chat's recent history so the conversation is there. Warmth of
-a reply is judged by word rules as the message arrives, and only the result is kept. A daily cap limits how many
-messages can be sent to a model.
+**In the pipeline** means the person has an open chat in Orbit (any stage before it is closed or archived), or the
+student wrote to them from Orbit. When a person enters the pipeline, Orbit reads that one chat's recent history and
+fills in the words of messages it had stored without them. When a person leaves the pipeline, words already kept stay;
+new messages are stored without words again. The rule covers the student's own messages too.
+
+Warmth of a reply is judged by word rules as the message arrives, and only the reading is kept. A daily cap limits how
+many messages can be sent to a model.
+
+**A separate writer.** The LinkedIn chat writer cannot be reused: it drops any message without text, makes a person of
+everyone in the chat, marks every chat as networking, and never updates a stored message. Instagram and X get their
+own: messages carry the account id and a "has words" flag, words may be empty, only the partner in a one-to-one chat
+is offered to matching, and a later read fills in words on messages already stored.
 
 ### 3.10 Plumbing that is LinkedIn-only today
 
@@ -455,7 +507,7 @@ had this; they do not.
 | Days | Counted in the student's time zone. Today they are counted in UTC, which splits an evening in two |
 | Group chats | Read for groups up to eight, at the fraction in 3.8 |
 | Handles from contacts | A card that lists an Instagram or X handle is hard proof for a person the student knows |
-| Signed-in students | Decision 1 below |
+| Signed-in students | Decision 1 below. A new server table holds, per student, person and local day, the number of texts each way and the group weight. The browser sends it after each import. A text-only friend is sent with their name and phone numbers, which become phone identities on the server, the same exact key the browser uses. The words are never sent |
 | Sending | "Open in Messages" opens the conversation with the draft written. Orbit waits for the student to confirm it went, then looks for the answer on the next update |
 | A second device | The words stay in the browser that read them. Another device shows counts and dates |
 
@@ -503,7 +555,7 @@ Each source goes through this list before it counts as finished:
 | A labelled set of account and person pairs, built like the set Orbit has for people | The rules decide right | No wrong automatic match. At least 150 pairs, more than 60 that are the same person and more than 60 that are not |
 | Traps in the set | The known ways to be wrong | A namesake at the same school, a namesake at another school, a celebrity namesake, a second private account, a handle with no name, a name in another script, a nickname handle, a photographer's business page, a parody, the same picture on a default avatar |
 | The kind sorter | Brands and public figures never become bridges | None sorted as a person |
-| Real accounts, labelled by hand, kept out of the repository | It holds on real data | Before automatic matching by score is switched on: at least 98 of 100 automatic matches right, on 200 or more pairs from at least three students, not only your own account |
+| Real accounts, labelled by hand, kept out of the repository | It holds on real data | Before automatic matching by score is switched on: no wrong automatic match on 200 or more pairs from at least three students, not only your own account. One wrong match means the threshold goes up and the measure is repeated |
 | Detach | A wrong match can be undone | After detach, closeness and paths equal a student who never had the match |
 | In production | It stays right | The share of "No" on confirm cards, and the share of detaches |
 
@@ -645,3 +697,8 @@ honest expectation is that this number is low for strangers.
 | X at 5 dollars a month | Connecting alone costs that | Worked costs, on request only (5) |
 | Instagram usable within the hour | Ten calls an hour | Honest timings and a job with a notice (4) |
 | An answer is kept 14 days | It would hide newer data | The graph is asked every time (3.6) |
+| A zero count ends the lookup | It loses a texting friend whose account the student does not follow | A zero count ends it only when the whole circle is followed (3.6) |
+| Bridges are hidden until a real exchange | Hidden people are left out of paths | A separate `listed` flag (3.3) |
+| Detach works after a merge | Merging moves rows with no record | People who own an account are never merged the old way (3.4) |
+| The LinkedIn chat writer serves DMs | It drops messages without text and never updates them | A separate writer (3.9) |
+| Ten read sites | The inbox, history, replies, voice, sourcing and people reads were missing | The full list (3.2) |
