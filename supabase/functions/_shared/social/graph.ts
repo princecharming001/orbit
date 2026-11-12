@@ -272,6 +272,9 @@ export async function readListPage(
         delete from orbit.social_follows
          where platform = ${platform} and follower_id = ${o.accountId} and seen_at < ${start}::timestamptz
            and coalesce(owner_user_id, ${NO_OWNER}::uuid) = coalesce(${o.owner}::uuid, ${NO_OWNER}::uuid)`;
+    // the student's own followers, read to the end: who follows them back may have changed on every attached account,
+    // so the links are sent to the browser again (the pull reads `followsYou` from these rows)
+    if (o.owner && o.list === 'followers') await touchLinks(db, o.owner, platform);
   }
   return { ended, complete, ids, accounts };
 }
@@ -340,4 +343,11 @@ export async function dropSharedLists(db: Db, platform: SocialPlatform, accountI
   await db.sql`
     delete from orbit.social_follows
      where platform = ${platform} and owner_user_id is null and (followed_id = ${accountId} or follower_id = ${accountId})`;
+}
+
+/** Sends a student's attached accounts on a platform to the browser again: what the pull reads beside them changed. */
+export async function touchLinks(db: Db, userId: string, platform: SocialPlatform): Promise<void> {
+  await db.sql`
+    update orbit.social_links set refreshed_at = clock_timestamp()
+     where user_id = ${userId}::uuid and platform = ${platform}`;
 }

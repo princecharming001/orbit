@@ -1419,6 +1419,10 @@ export namespace SourceRow {
     via: 'proof' | 'score' | 'student';
     proof: 'own_links' | 'links_back' | 'contact' | 'address_book' | null;
     score: number | null;
+    /** read by the pull from the shared profile, the student's own lists and the last X profile read */
+    username?: string | null;
+    follows_you?: boolean | null;
+    accepts_dms?: boolean | null;
     created_at: Ts;
     updated_at: Ts;
   }
@@ -1483,6 +1487,10 @@ export function socialLinkFromRow(r: SourceRow.SocialLinks): SocialLinkView {
     via: r.via,
     proof: u(r.proof),
     score: r.score == null ? undefined : Number(r.score),
+    username: r.username ?? undefined,
+    // unknown is said as null, so a browser drops what it knew before rather than keep it
+    followsYou: r.follows_you === undefined ? undefined : r.follows_you,
+    acceptsDms: r.platform !== 'x' || r.accepts_dms === undefined ? undefined : r.accepts_dms,
     createdAt: tsOf(r.created_at)!,
     updatedAt: tsOf(r.updated_at)!,
   });

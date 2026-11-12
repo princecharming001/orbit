@@ -292,7 +292,8 @@ export async function pull(
         const pos = o.cursor[t.table] as CursorPos | undefined;
         const del = t.deletedWhen ? `(${t.deletedWhen})` : 'false';
         // columns the browser never gets are dropped here, so they never cross the wire
-        const row = ['to_jsonb(t)', ...(t.omit ?? []).map((c) => `'${c}'`)].join(' - ');
+        const stored = ['to_jsonb(t)', ...(t.omit ?? []).map((c) => `'${c}'`)].join(' - ');
+        const row = t.extra ? `(${stored}) || ${t.extra}` : stored;
         const key = t.keySql ?? `t.${t.key}::text`;
         // The cursor time goes over as text and is cast in SQL: a timestamptz parameter is turned into a JS Date
         // by postgres.js first, which keeps milliseconds only, so a page of rows sharing one microsecond (a score

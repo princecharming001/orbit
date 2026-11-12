@@ -24,6 +24,41 @@ const personInUse = (col: string) =>
   `not exists (select 1 from orbit.people q where q.id = ${col}
                 and not orbit.person_in_use(q.sources, q.source_account, $hidden::text[]))`;
 
+/**
+ * What the browser needs on an attached account beyond the link itself (plan 43 §4, §5):
+ * - `username`, the handle, from the shared profile;
+ * - `follows_you`: true when the student's own follower rows show the account following them; false when the
+ *   student's own followers list was read to the end (at least 90 percent of its count) and it is not there, or on X,
+ *   where the student's followers come from their own following list's relations, when that list was read to the end
+ *   and the student follows the account; null when Orbit does not know;
+ * - `accepts_dms` (X): the last profile read's `receives_your_dm` for this student, kept 30 days; null otherwise.
+ * A change to any of these stamps the link (`refreshed_at`, `accepts_dms_at`), so the pull sends it again (graph.ts,
+ * x/lists.ts).
+ */
+const SOCIAL_LINK_EXTRA = `jsonb_build_object(
+  'username', (select a.username from orbit.social_accounts a where a.platform = t.platform and a.account_id = t.account_id),
+  'follows_you', (
+    select case
+      when i.social_account_id is null then null
+      when exists (select 1 from orbit.social_follows f
+                    where f.platform = t.platform and f.owner_user_id = t.user_id and f.follower_id = t.account_id
+                      and f.followed_id = i.social_account_id and f.expires_at > now()) then true
+      when exists (select 1 from orbit.social_list_reads r
+                    where r.platform = t.platform and r.owner_user_id = t.user_id and r.account_id = i.social_account_id
+                      and r.list = 'followers' and r.ended and r.expires_at > now()
+                      and (r.total is null or r.total <= 0 or r.rows_read >= 0.9 * r.total)) then false
+      when t.platform = 'x'
+       and exists (select 1 from orbit.social_list_reads r
+                    where r.platform = 'x' and r.owner_user_id = t.user_id and r.account_id = i.social_account_id
+                      and r.list = 'following' and r.ended and r.expires_at > now())
+       and exists (select 1 from orbit.social_follows g
+                    where g.platform = 'x' and g.owner_user_id = t.user_id and g.follower_id = i.social_account_id
+                      and g.followed_id = t.account_id and g.expires_at > now()) then false
+      else null end
+      from orbit.integration_accounts i where i.user_id = t.user_id and i.provider = t.platform),
+  'accepts_dms', case when t.platform = 'x' and t.accepts_dms_at > now() - interval '30 days' then t.accepts_dms end
+)`;
+
 export interface PullTable {
   /** orbit table name */
   table: string;
@@ -43,6 +78,8 @@ export interface PullTable {
   filter?: string;
   /** columns never sent to the browser */
   omit?: string[];
+  /** SQL (over alias t) giving a jsonb object of fields read from other tables, merged into the stored row */
+  extra?: string;
   map?: (row: Record<string, unknown>) => Record<string, unknown>;
 }
 
@@ -220,6 +257,8 @@ export const PULL_TABLES: PullTable[] = [
     key: 'id',
     cursor: 'updated_at',
     sources: `t.platform <> all($hidden::text[]) and ${personInUse('t.person_id')}`,
+    omit: ['accepts_dms_at', 'refreshed_at'],
+    extra: SOCIAL_LINK_EXTRA,
     fromRow: (r) => ({ ...socialLinkFromRow(r as unknown as SourceRow.SocialLinks) }),
   },
   {

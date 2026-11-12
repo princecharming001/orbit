@@ -49,7 +49,7 @@ export async function sendXMessage(
   if (body.length > X_DM_MAX_CHARS) return no('too_long');
   const client = await xAdapterFor(db, userId, deps, { caller: 'send' });
   if (!client) return no('not_connected');
-  const read = await readXProfile(db, client.adapter, personAccountId);
+  const read = await readXProfile(db, client.adapter, personAccountId, userId);
   if (!read.ok) return no(read.reason === 'protected' ? 'not_accepting' : read.reason);
   if (read.profile.receivesYourDm === false) return no('not_accepting');
   const before = client.spend.chargedUsd();

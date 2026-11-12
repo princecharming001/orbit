@@ -21,10 +21,13 @@ import {
   type SocialCandidate,
   type SocialMatch,
   type SocialPlatform,
+  type SocialProof,
+  type SocialSignal,
   socialBlock,
 } from '@orbit/core/entity/social';
 import type { Db } from '../db.ts';
 import { PERSON_COLUMNS, toPerson } from '../ingest/util.ts';
+import { askLines } from './evidence.ts';
 import { identityKind, sourceAccount } from './keys.ts';
 import { attachAccount } from './links.ts';
 import { matchXAccount, matchXTarget } from './x/match.ts';
@@ -235,6 +238,7 @@ export async function matchAccount(
   const rejected = await rejectedFor(db, userId, account.platform, account.id);
   const x = account.platform === 'x';
   let match: SocialMatch;
+  let pool: SocialCandidate[] | undefined;
   if (o.target) {
     match = rejected.has(o.target.person.id)
       ? { kind: 'none', reason: 'no_candidate' }
@@ -243,12 +247,14 @@ export async function matchAccount(
         : matchTargetAccount(account, o.target);
   } else if (x) {
     // public proof is exact, so the whole pool is checked, not only the people a name block finds
-    const pool = o.candidates ?? (await socialCandidates(db, userId, account.platform));
+    pool = o.candidates ?? (await socialCandidates(db, userId, account.platform));
     match = matchXAccount(account, pool, { rejected });
   } else {
-    const pool = o.candidates ?? (await socialCandidates(db, userId, account.platform));
+    pool = o.candidates ?? (await socialCandidates(db, userId, account.platform));
     match = matchSocialAccount(account, socialBlock(account, pool), { rejected });
   }
+  const candidate = (id: string) =>
+    o.target?.person.id === id ? o.target : pool?.find((c) => c.person.id === id);
   if (match.kind === 'attach') {
     const r = await attachAccount(db, userId, {
       platform: account.platform,
@@ -266,29 +272,50 @@ export async function matchAccount(
     // on X, where the student's say-so is not proof)
     const known = await knownPeople(db, userId, [match.personId]);
     if (x || !known.has(match.personId)) return { kind: 'none', match, conflict: true };
-    await askAbout(db, userId, account, match.personId, match.via === 'score' ? match.score : 0.94, {
-      proof: match.via === 'proof' ? match.proof : undefined,
-    });
+    await askAbout(
+      db,
+      userId,
+      account,
+      match.personId,
+      match.via === 'score' ? match.score : 0.94,
+      match.via === 'score' ? match.signals : { proof: match.proof },
+      candidate(match.personId),
+    );
     return { kind: 'asked', personId: match.personId, match };
   }
   if (match.kind === 'ask' && !x) {
-    await askAbout(db, userId, account, match.personId, match.score, match.signals);
+    await askAbout(
+      db,
+      userId,
+      account,
+      match.personId,
+      match.score,
+      match.signals,
+      candidate(match.personId),
+    );
     return { kind: 'asked', personId: match.personId, match };
   }
   return { kind: 'none', match };
 }
 
-/** An open question "is this account that person", unless the student already answered it. */
+/**
+ * An open question "is this account that person", unless the student already answered it. The raw signals are kept,
+ * with the evidence beside them in plain lines (`for`, `against`) for the card the student reads.
+ */
 export async function askAbout(
   db: Db,
   userId: string,
-  account: Pick<SocialAccount, 'platform' | 'id'>,
+  account: SocialAccount,
   personId: string,
   score: number,
-  signals: Record<string, unknown>,
+  signals: Partial<Record<SocialSignal, number>> & { proof?: SocialProof },
+  candidate?: SocialCandidate,
 ): Promise<void> {
+  const raw = Object.fromEntries(Object.entries(signals).filter(([, v]) => v !== undefined));
+  const lines = askLines(account, candidate, signals);
+  const stored = { ...raw, for: lines.for, against: lines.against };
   await db.sql`
     insert into orbit.social_match_asks (user_id, platform, account_id, person_id, score, signals)
-    values (${userId}::uuid, ${account.platform}, ${account.id}, ${personId}::uuid, ${score}::real, ${signals}::jsonb)
+    values (${userId}::uuid, ${account.platform}, ${account.id}, ${personId}::uuid, ${score}::real, ${stored}::jsonb)
     on conflict (user_id, platform, account_id, person_id) do nothing`;
 }

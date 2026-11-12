@@ -1335,6 +1335,12 @@ export interface SocialLinkView {
   via: 'proof' | 'score' | 'student';
   proof?: 'own_links' | 'links_back' | 'contact' | 'address_book';
   score?: number;
+  /** the handle, without the @, when Orbit holds the account's profile */
+  username?: string;
+  /** they follow the student (a message lands in their inbox, not their requests); null when Orbit does not know */
+  followsYou?: boolean | null;
+  /** X only: they accept messages from the student, from the last profile read; null when Orbit does not know */
+  acceptsDms?: boolean | null;
   createdAt: string;
   updatedAt: string;
 }
