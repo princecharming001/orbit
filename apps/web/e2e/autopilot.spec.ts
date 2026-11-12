@@ -206,7 +206,10 @@ test.describe('autopilot (plan 29 B7, fake orbit-api)', () => {
   }) => {
     const api = await signedInOnAutopilot(page);
     await page.goto('drafts');
-    await expect.poll(() => api.state.autopilot.pausedGoals[0]?.goalId).toBe('goal_internships');
+    // the pause goes up after the first sync brings the replies in: as long as the greeting may take on a busy runner
+    await expect
+      .poll(() => api.state.autopilot.pausedGoals[0]?.goalId, { timeout: 20_000 })
+      .toBe('goal_internships');
     // the student asked for no Paused section: replies like these are mostly marketers, not people to answer
     await expect(page.getByTestId('autopilot-paused')).toHaveCount(0);
     await expect(page.getByTestId('autopilot-breaker-card')).toHaveCount(0);
