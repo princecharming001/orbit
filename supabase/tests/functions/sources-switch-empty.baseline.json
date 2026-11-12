@@ -1,0 +1,1383 @@
+{
+  "withBase": {
+    "scores": [
+      {
+        "band": "strong",
+        "display_name": "Ana Lopez",
+        "explanation": [
+          "4 messages between you (2 from them)",
+          "Usually replies within 24 hours",
+          "Close with people you're close to (Dev)"
+        ],
+        "features": {
+          "engagement": 0,
+          "instagram_follow": 0,
+          "intros": 0,
+          "latency": 0.37252643692469667,
+          "linkedin": 0,
+          "log_days_first": 3.713572066704308,
+          "log_days_last": 2.4849066497880004,
+          "log_in": 1.0674453195864122,
+          "log_meetings": 0,
+          "log_out": 1.0661997439685402,
+          "log_threads": 0.6931471805599453,
+          "never": 0,
+          "rapport": 0,
+          "reciprocity": 1,
+          "shared": 0,
+          "structural": 0.07,
+          "warmth": 0,
+          "x_follow": 0
+        },
+        "last_interaction_at": "2026-10-21T12:00:00.000Z",
+        "score": 70,
+        "share_score": 70,
+        "strength": 0.7
+      },
+      {
+        "band": "faint",
+        "display_name": "Ben Ortiz",
+        "explanation": [
+          "Close with people you're close to (Cara)",
+          "Connected on LinkedIn, never talked"
+        ],
+        "features": {
+          "engagement": 0,
+          "instagram_follow": 0,
+          "intros": 0,
+          "latency": 0,
+          "linkedin": 1,
+          "log_days_first": 5.993961427306569,
+          "log_days_last": 5.993961427306569,
+          "log_in": 0,
+          "log_meetings": 0,
+          "log_out": 0,
+          "log_threads": 0,
+          "never": 1,
+          "rapport": 0,
+          "reciprocity": 0,
+          "shared": 0,
+          "structural": 0.11,
+          "warmth": 0,
+          "x_follow": 0
+        },
+        "last_interaction_at": null,
+        "score": 12,
+        "share_score": 18,
+        "strength": 0.12
+      },
+      {
+        "band": "faint",
+        "display_name": "Cara Diaz",
+        "explanation": [
+          "Close with people you're close to (Ben, Dev)",
+          "Connected on LinkedIn, never talked"
+        ],
+        "features": {
+          "engagement": 0,
+          "instagram_follow": 0,
+          "intros": 0,
+          "latency": 0,
+          "linkedin": 1,
+          "log_days_first": 5.993961427306569,
+          "log_days_last": 5.993961427306569,
+          "log_in": 0,
+          "log_meetings": 0,
+          "log_out": 0,
+          "log_threads": 0,
+          "never": 1,
+          "rapport": 0,
+          "reciprocity": 0,
+          "shared": 0,
+          "structural": 0.09,
+          "warmth": 0,
+          "x_follow": 0
+        },
+        "last_interaction_at": null,
+        "score": 12,
+        "share_score": 18,
+        "strength": 0.12
+      },
+      {
+        "band": "faint",
+        "display_name": "Dev Shah",
+        "explanation": [
+          "Close with people you're close to (Ana, Cara)"
+        ],
+        "features": {
+          "engagement": 0,
+          "instagram_follow": 0,
+          "intros": 0,
+          "latency": 0,
+          "linkedin": 0,
+          "log_days_first": 4.51085950651685,
+          "log_days_last": 4.51085950651685,
+          "log_in": 0.6113376500679467,
+          "log_meetings": 0,
+          "log_out": 0,
+          "log_threads": 0,
+          "never": 0,
+          "rapport": 0,
+          "reciprocity": 0,
+          "shared": 0,
+          "structural": 0.405,
+          "warmth": 0,
+          "x_follow": 0
+        },
+        "last_interaction_at": "2026-08-03T12:00:00.000Z",
+        "score": 10,
+        "share_score": 9,
+        "strength": 0.1
+      }
+    ],
+    "paths": {
+      "paths": [
+        {
+          "band": "high",
+          "firstHopId": "person:Cara Diaz",
+          "hops": [
+            {
+              "fromId": "user",
+              "kind": "strength",
+              "p": 0.47502081252106,
+              "toId": "person:Cara Diaz"
+            }
+          ],
+          "names": {
+            "person:Cara Diaz": "Cara Diaz",
+            "user": "You"
+          },
+          "nodes": [
+            "user",
+            "person:Cara Diaz"
+          ],
+          "otherWays": 3,
+          "p": 0.47502081252106,
+          "reasonText": "Write to Cara directly (Faint · 12). 3 other ways in."
+        },
+        {
+          "band": "low",
+          "firstHopId": "person:Ana Lopez",
+          "hops": [
+            {
+              "fromId": "user",
+              "kind": "strength",
+              "p": 0.7502601055951177,
+              "toId": "person:Ana Lopez"
+            },
+            {
+              "band": "connected",
+              "fromId": "person:Ana Lopez",
+              "kind": "email_cc",
+              "p": 0.31398451212680234,
+              "phrase": "is on email with Dev",
+              "toId": "person:Dev Shah"
+            },
+            {
+              "band": "connected",
+              "fromId": "person:Dev Shah",
+              "kind": "email_exchange",
+              "p": 0.4415407201783157,
+              "phrase": "emails with Cara",
+              "toId": "person:Cara Diaz"
+            }
+          ],
+          "names": {
+            "person:Ana Lopez": "Ana Lopez",
+            "person:Cara Diaz": "Cara Diaz",
+            "person:Dev Shah": "Dev Shah",
+            "user": "You"
+          },
+          "nodes": [
+            "user",
+            "person:Ana Lopez",
+            "person:Dev Shah",
+            "person:Cara Diaz"
+          ],
+          "otherWays": 3,
+          "p": 0.09725287584081402,
+          "reasonText": "Ana (Strong · 70) is on email with Dev, who emails with Cara. 3 other ways in."
+        },
+        {
+          "band": "low",
+          "firstHopId": "person:Dev Shah",
+          "hops": [
+            {
+              "fromId": "user",
+              "kind": "strength",
+              "p": 0.16798161486607552,
+              "toId": "person:Dev Shah"
+            },
+            {
+              "band": "connected",
+              "fromId": "person:Dev Shah",
+              "kind": "email_exchange",
+              "p": 0.4415407201783157,
+              "phrase": "emails with Cara",
+              "toId": "person:Cara Diaz"
+            }
+          ],
+          "names": {
+            "person:Cara Diaz": "Cara Diaz",
+            "person:Dev Shah": "Dev Shah",
+            "user": "You"
+          },
+          "nodes": [
+            "user",
+            "person:Dev Shah",
+            "person:Cara Diaz"
+          ],
+          "otherWays": 3,
+          "p": 0.0815877955251518,
+          "reasonText": "Dev (Faint · 10) emails with Cara. 3 other ways in."
+        },
+        {
+          "band": "low",
+          "firstHopId": "person:Ben Ortiz",
+          "hops": [
+            {
+              "fromId": "user",
+              "kind": "strength",
+              "p": 0.1794615194073268,
+              "toId": "person:Ben Ortiz"
+            },
+            {
+              "band": "connected",
+              "fromId": "person:Ben Ortiz",
+              "kind": "linkedin_mutual",
+              "p": 0.2849999999999999,
+              "phrase": "is connected to Cara on LinkedIn",
+              "toId": "person:Cara Diaz"
+            }
+          ],
+          "names": {
+            "person:Cara Diaz": "Cara Diaz",
+            "person:Ben Ortiz": "Ben Ortiz",
+            "user": "You"
+          },
+          "nodes": [
+            "user",
+            "person:Ben Ortiz",
+            "person:Cara Diaz"
+          ],
+          "otherWays": 3,
+          "p": 0.056261186334196946,
+          "reasonText": "Through Ben, a faint tie (12): Ben is connected to Cara on LinkedIn. 3 other ways in."
+        }
+      ],
+      "sources": [
+        "graph"
+      ],
+      "unconfigured": [
+        "unipile",
+        "village"
+      ]
+    },
+    "company": {
+      "paths": [
+        {
+          "band": "high",
+          "firstHopId": "person:Cara Diaz",
+          "hops": [
+            {
+              "fromId": "user",
+              "kind": "strength",
+              "p": 0.47502081252106,
+              "toId": "person:Cara Diaz"
+            }
+          ],
+          "names": {
+            "person:Cara Diaz": "Cara Diaz",
+            "user": "You"
+          },
+          "nodes": [
+            "user",
+            "person:Cara Diaz"
+          ],
+          "otherWays": 3,
+          "p": 0.47502081252106,
+          "reasonText": "Write to Cara directly (Faint · 12). 3 other ways in."
+        },
+        {
+          "band": "high",
+          "firstHopId": "person:Ben Ortiz",
+          "hops": [
+            {
+              "fromId": "user",
+              "kind": "strength",
+              "p": 0.47502081252106,
+              "toId": "person:Ben Ortiz"
+            }
+          ],
+          "names": {
+            "person:Ben Ortiz": "Ben Ortiz",
+            "user": "You"
+          },
+          "nodes": [
+            "user",
+            "person:Ben Ortiz"
+          ],
+          "otherWays": 1,
+          "p": 0.47502081252106,
+          "reasonText": "Write to Ben directly (Faint · 12). 1 other way in."
+        },
+        {
+          "band": "low",
+          "firstHopId": "person:Ana Lopez",
+          "hops": [
+            {
+              "fromId": "user",
+              "kind": "strength",
+              "p": 0.7502601055951177,
+              "toId": "person:Ana Lopez"
+            },
+            {
+              "band": "connected",
+              "fromId": "person:Ana Lopez",
+              "kind": "email_cc",
+              "p": 0.31398451212680234,
+              "phrase": "is on email with Dev",
+              "toId": "person:Dev Shah"
+            },
+            {
+              "band": "connected",
+              "fromId": "person:Dev Shah",
+              "kind": "email_exchange",
+              "p": 0.4415407201783157,
+              "phrase": "emails with Cara",
+              "toId": "person:Cara Diaz"
+            }
+          ],
+          "names": {
+            "person:Ana Lopez": "Ana Lopez",
+            "person:Cara Diaz": "Cara Diaz",
+            "person:Dev Shah": "Dev Shah",
+            "user": "You"
+          },
+          "nodes": [
+            "user",
+            "person:Ana Lopez",
+            "person:Dev Shah",
+            "person:Cara Diaz"
+          ],
+          "otherWays": 3,
+          "p": 0.09725287584081402,
+          "reasonText": "Ana (Strong · 70) is on email with Dev, who emails with Cara. 3 other ways in."
+        },
+        {
+          "band": "low",
+          "firstHopId": "person:Cara Diaz",
+          "hops": [
+            {
+              "fromId": "user",
+              "kind": "strength",
+              "p": 0.1794615194073268,
+              "toId": "person:Cara Diaz"
+            },
+            {
+              "band": "connected",
+              "fromId": "person:Cara Diaz",
+              "kind": "linkedin_mutual",
+              "p": 0.2849999999999999,
+              "phrase": "is connected to Ben on LinkedIn",
+              "toId": "person:Ben Ortiz"
+            }
+          ],
+          "names": {
+            "person:Cara Diaz": "Cara Diaz",
+            "person:Ben Ortiz": "Ben Ortiz",
+            "user": "You"
+          },
+          "nodes": [
+            "user",
+            "person:Cara Diaz",
+            "person:Ben Ortiz"
+          ],
+          "otherWays": 1,
+          "p": 0.056261186334196946,
+          "reasonText": "Through Cara, a faint tie (12): Cara is connected to Ben on LinkedIn. 1 other way in."
+        }
+      ],
+      "sources": [
+        "graph",
+        "linkedin_mutual"
+      ],
+      "unconfigured": [
+        "village"
+      ]
+    },
+    "pull": {
+      "changes": {
+        "people": [
+          {
+            "currentOrganizationId": null,
+            "currentOrganizationRaw": "Plaid",
+            "currentTitle": "Founder",
+            "deletedAt": null,
+            "displayName": "Dev Shah",
+            "doNotContact": false,
+            "emailCheckedAt": null,
+            "emailConfidence": null,
+            "firstName": "Dev",
+            "firstSeenAt": null,
+            "headline": null,
+            "hiddenAt": null,
+            "isAlumni": false,
+            "isSelf": false,
+            "lastInteractionAt": "2026-08-03T12:00:00+00:00",
+            "lastName": "Shah",
+            "linkedinConnectedOn": null,
+            "linkedinConnectionsCount": null,
+            "linkedinFollowerCount": null,
+            "linkedinMemberId": null,
+            "linkedinSlug": null,
+            "linkedinUrl": null,
+            "listed": true,
+            "location": null,
+            "mergedInto": null,
+            "nameNorm": "dev shah",
+            "nameNormalized": "dev shah",
+            "notes": null,
+            "orgId": null,
+            "orgRaw": "Plaid",
+            "photoUrl": null,
+            "primaryEmail": "dev@example.org",
+            "private": false,
+            "relationshipType": null,
+            "rolesFromHeadlineAt": null,
+            "school": null,
+            "sourceAccount": null,
+            "sources": [
+              "gmail"
+            ],
+            "strength": 0.1,
+            "summary": null,
+            "tags": [],
+            "timezone": null,
+            "title": "Founder"
+          },
+          {
+            "currentOrganizationId": null,
+            "currentOrganizationRaw": "Ramp",
+            "currentTitle": "Analyst",
+            "deletedAt": null,
+            "displayName": "Ana Lopez",
+            "doNotContact": false,
+            "emailCheckedAt": null,
+            "emailConfidence": null,
+            "firstName": "Ana",
+            "firstSeenAt": null,
+            "headline": null,
+            "hiddenAt": null,
+            "isAlumni": false,
+            "isSelf": false,
+            "lastInteractionAt": "2026-10-21T12:00:00+00:00",
+            "lastName": "Lopez",
+            "linkedinConnectedOn": null,
+            "linkedinConnectionsCount": null,
+            "linkedinFollowerCount": null,
+            "linkedinMemberId": null,
+            "linkedinSlug": null,
+            "linkedinUrl": null,
+            "listed": true,
+            "location": null,
+            "mergedInto": null,
+            "nameNorm": "ana lopez",
+            "nameNormalized": "ana lopez",
+            "notes": null,
+            "orgId": null,
+            "orgRaw": "Ramp",
+            "photoUrl": null,
+            "primaryEmail": "ana@example.org",
+            "private": false,
+            "relationshipType": null,
+            "rolesFromHeadlineAt": null,
+            "school": null,
+            "sourceAccount": null,
+            "sources": [
+              "gmail"
+            ],
+            "strength": 0.7,
+            "summary": null,
+            "tags": [],
+            "timezone": null,
+            "title": "Analyst"
+          },
+          {
+            "currentOrganizationId": null,
+            "currentOrganizationRaw": "Stripe",
+            "currentTitle": "Engineer",
+            "deletedAt": null,
+            "displayName": "Ben Ortiz",
+            "doNotContact": false,
+            "emailCheckedAt": null,
+            "emailConfidence": null,
+            "firstName": "Ben",
+            "firstSeenAt": null,
+            "headline": null,
+            "hiddenAt": null,
+            "isAlumni": false,
+            "isSelf": false,
+            "lastInteractionAt": null,
+            "lastName": "Ortiz",
+            "linkedinConnectedOn": null,
+            "linkedinConnectionsCount": null,
+            "linkedinFollowerCount": null,
+            "linkedinMemberId": "m-ben",
+            "linkedinSlug": "ben-slug",
+            "linkedinUrl": "https://www.linkedin.com/in/ben-slug",
+            "listed": true,
+            "location": null,
+            "mergedInto": null,
+            "nameNorm": "ben ortiz",
+            "nameNormalized": "ben ortiz",
+            "notes": null,
+            "orgId": null,
+            "orgRaw": "Stripe",
+            "photoUrl": null,
+            "primaryEmail": null,
+            "private": false,
+            "relationshipType": null,
+            "rolesFromHeadlineAt": null,
+            "school": null,
+            "sourceAccount": null,
+            "sources": [
+              "linkedin"
+            ],
+            "strength": 0.12,
+            "summary": null,
+            "tags": [],
+            "timezone": null,
+            "title": "Engineer"
+          },
+          {
+            "currentOrganizationId": null,
+            "currentOrganizationRaw": "Stripe",
+            "currentTitle": "Product Designer",
+            "deletedAt": null,
+            "displayName": "Cara Diaz",
+            "doNotContact": false,
+            "emailCheckedAt": null,
+            "emailConfidence": null,
+            "firstName": "Cara",
+            "firstSeenAt": null,
+            "headline": null,
+            "hiddenAt": null,
+            "isAlumni": false,
+            "isSelf": false,
+            "lastInteractionAt": null,
+            "lastName": "Diaz",
+            "linkedinConnectedOn": null,
+            "linkedinConnectionsCount": null,
+            "linkedinFollowerCount": null,
+            "linkedinMemberId": "m-cara",
+            "linkedinSlug": "cara-slug",
+            "linkedinUrl": "https://www.linkedin.com/in/cara-slug",
+            "listed": true,
+            "location": null,
+            "mergedInto": null,
+            "nameNorm": "cara diaz",
+            "nameNormalized": "cara diaz",
+            "notes": null,
+            "orgId": null,
+            "orgRaw": "Stripe",
+            "photoUrl": null,
+            "primaryEmail": null,
+            "private": false,
+            "relationshipType": null,
+            "rolesFromHeadlineAt": null,
+            "school": null,
+            "sourceAccount": null,
+            "sources": [
+              "linkedin"
+            ],
+            "strength": 0.12,
+            "summary": null,
+            "tags": [],
+            "timezone": null,
+            "title": "Product Designer"
+          },
+          {
+            "currentOrganizationId": null,
+            "currentOrganizationRaw": null,
+            "currentTitle": null,
+            "deletedAt": null,
+            "displayName": "Sam Rivera",
+            "doNotContact": false,
+            "emailCheckedAt": null,
+            "emailConfidence": null,
+            "firstName": "Sam",
+            "firstSeenAt": null,
+            "headline": null,
+            "hiddenAt": null,
+            "isAlumni": false,
+            "isSelf": true,
+            "lastInteractionAt": null,
+            "lastName": "Rivera",
+            "linkedinConnectedOn": null,
+            "linkedinConnectionsCount": null,
+            "linkedinFollowerCount": null,
+            "linkedinMemberId": null,
+            "linkedinSlug": null,
+            "linkedinUrl": null,
+            "listed": true,
+            "location": null,
+            "mergedInto": null,
+            "nameNorm": "sam rivera",
+            "nameNormalized": "sam rivera",
+            "notes": null,
+            "orgId": null,
+            "orgRaw": null,
+            "photoUrl": null,
+            "primaryEmail": "sam@example.com",
+            "private": false,
+            "relationshipType": null,
+            "rolesFromHeadlineAt": null,
+            "school": null,
+            "sourceAccount": null,
+            "sources": [
+              "self"
+            ],
+            "strength": 0,
+            "summary": null,
+            "tags": [],
+            "timezone": null,
+            "title": null
+          }
+        ],
+        "person_identities": [
+          {
+            "confidence": 1,
+            "kind": "email",
+            "personId": "person:Ana Lopez",
+            "socialAccountId": null,
+            "source": "gmail",
+            "valueNorm": "ana@example.org",
+            "valueRaw": "ana@example.org"
+          },
+          {
+            "confidence": 1,
+            "kind": "email",
+            "personId": "person:Dev Shah",
+            "socialAccountId": null,
+            "source": "gmail",
+            "valueNorm": "dev@example.org",
+            "valueRaw": "dev@example.org"
+          },
+          {
+            "confidence": 1,
+            "kind": "email",
+            "personId": "person:Sam Rivera",
+            "socialAccountId": null,
+            "source": "self",
+            "valueNorm": "sam@example.com",
+            "valueRaw": "sam@example.com"
+          },
+          {
+            "confidence": 1,
+            "kind": "linkedin_member",
+            "personId": "person:Ben Ortiz",
+            "socialAccountId": null,
+            "source": "linkedin_relation",
+            "valueNorm": "m-ben",
+            "valueRaw": "m-ben"
+          },
+          {
+            "confidence": 1,
+            "kind": "linkedin_member",
+            "personId": "person:Cara Diaz",
+            "socialAccountId": null,
+            "source": "linkedin_relation",
+            "valueNorm": "m-cara",
+            "valueRaw": "m-cara"
+          }
+        ],
+        "threads": [
+          {
+            "category": null,
+            "chatId": null,
+            "externalId": "gmail-ana-1",
+            "externalThreadId": "gmail-ana-1",
+            "firstAt": "2026-09-22T12:00:00+00:00",
+            "firstMessageAt": "2026-09-22T12:00:00+00:00",
+            "isNetworking": true,
+            "lastAt": "2026-10-21T12:00:00+00:00",
+            "lastDirection": "in",
+            "lastMessageAt": "2026-10-21T12:00:00+00:00",
+            "messageCount": 4,
+            "participantCount": 1,
+            "participantPersonIds": [
+              "person:Ana Lopez"
+            ],
+            "provider": "gmail",
+            "socialAccountId": null,
+            "subject": "Catching up"
+          },
+          {
+            "category": null,
+            "chatId": null,
+            "externalId": "gmail-dev-2",
+            "externalThreadId": "gmail-dev-2",
+            "firstAt": "2026-08-03T12:00:00+00:00",
+            "firstMessageAt": "2026-08-03T12:00:00+00:00",
+            "isNetworking": true,
+            "lastAt": "2026-08-03T12:00:00+00:00",
+            "lastDirection": "in",
+            "lastMessageAt": "2026-08-03T12:00:00+00:00",
+            "messageCount": 1,
+            "participantCount": 1,
+            "participantPersonIds": [
+              "person:Dev Shah"
+            ],
+            "provider": "gmail",
+            "socialAccountId": null,
+            "subject": "Catching up"
+          }
+        ],
+        "messages": [
+          {
+            "answer": null,
+            "answeredAt": null,
+            "bodyText": "Good to hear from you, talk soon.",
+            "ccAddrs": [],
+            "ccEmails": [],
+            "ccPersonIds": [],
+            "direction": "inbound",
+            "externalId": "gmail-ana-1-1",
+            "externalMessageId": "gmail-ana-1-1",
+            "extraction": null,
+            "fromAddr": "ana@example.org",
+            "fromEmail": "ana@example.org",
+            "fromPersonId": "person:Ana Lopez",
+            "hasWords": null,
+            "headers": {},
+            "inReplyTo": null,
+            "isAutomated": false,
+            "listUnsubscribe": false,
+            "provider": "gmail",
+            "replyClass": null,
+            "replyConfidence": null,
+            "rfcMessageId": null,
+            "sentAt": "2026-09-23T12:00:00+00:00",
+            "snippet": "Good to hear from you",
+            "socialAccountId": null,
+            "subject": "Catching up",
+            "threadId": "<id>",
+            "toAddrs": [],
+            "toEmails": [],
+            "toPersonIds": []
+          },
+          {
+            "answer": null,
+            "answeredAt": null,
+            "bodyText": "Good to hear from you, talk soon.",
+            "ccAddrs": [],
+            "ccEmails": [],
+            "ccPersonIds": [],
+            "direction": "inbound",
+            "externalId": "gmail-ana-1-3",
+            "externalMessageId": "gmail-ana-1-3",
+            "extraction": null,
+            "fromAddr": "ana@example.org",
+            "fromEmail": "ana@example.org",
+            "fromPersonId": "person:Ana Lopez",
+            "hasWords": null,
+            "headers": {},
+            "inReplyTo": null,
+            "isAutomated": false,
+            "listUnsubscribe": false,
+            "provider": "gmail",
+            "replyClass": null,
+            "replyConfidence": null,
+            "rfcMessageId": null,
+            "sentAt": "2026-10-21T12:00:00+00:00",
+            "snippet": "Good to hear from you",
+            "socialAccountId": null,
+            "subject": "Catching up",
+            "threadId": "<id>",
+            "toAddrs": [],
+            "toEmails": [],
+            "toPersonIds": []
+          },
+          {
+            "answer": null,
+            "answeredAt": null,
+            "bodyText": "Good to hear from you, talk soon.",
+            "ccAddrs": [],
+            "ccEmails": [],
+            "ccPersonIds": [],
+            "direction": "inbound",
+            "externalId": "gmail-dev-2-0",
+            "externalMessageId": "gmail-dev-2-0",
+            "extraction": null,
+            "fromAddr": "dev@example.org",
+            "fromEmail": "dev@example.org",
+            "fromPersonId": "person:Dev Shah",
+            "hasWords": null,
+            "headers": {},
+            "inReplyTo": null,
+            "isAutomated": false,
+            "listUnsubscribe": false,
+            "provider": "gmail",
+            "replyClass": null,
+            "replyConfidence": null,
+            "rfcMessageId": null,
+            "sentAt": "2026-08-03T12:00:00+00:00",
+            "snippet": "Good to hear from you",
+            "socialAccountId": null,
+            "subject": "Catching up",
+            "threadId": "<id>",
+            "toAddrs": [],
+            "toEmails": [],
+            "toPersonIds": []
+          },
+          {
+            "answer": null,
+            "answeredAt": null,
+            "bodyText": "Good to hear from you, talk soon.",
+            "ccAddrs": [],
+            "ccEmails": [],
+            "ccPersonIds": [],
+            "direction": "outbound",
+            "externalId": "gmail-ana-1-0",
+            "externalMessageId": "gmail-ana-1-0",
+            "extraction": null,
+            "fromAddr": "sam@example.com",
+            "fromEmail": "sam@example.com",
+            "fromPersonId": null,
+            "hasWords": null,
+            "headers": {},
+            "inReplyTo": null,
+            "isAutomated": false,
+            "listUnsubscribe": false,
+            "provider": "gmail",
+            "replyClass": null,
+            "replyConfidence": null,
+            "rfcMessageId": null,
+            "sentAt": "2026-09-22T12:00:00+00:00",
+            "snippet": "Good to hear from you",
+            "socialAccountId": null,
+            "subject": "Catching up",
+            "threadId": "<id>",
+            "toAddrs": [],
+            "toEmails": [],
+            "toPersonIds": [
+              "person:Ana Lopez"
+            ]
+          },
+          {
+            "answer": null,
+            "answeredAt": null,
+            "bodyText": "Good to hear from you, talk soon.",
+            "ccAddrs": [],
+            "ccEmails": [],
+            "ccPersonIds": [],
+            "direction": "outbound",
+            "externalId": "gmail-ana-1-2",
+            "externalMessageId": "gmail-ana-1-2",
+            "extraction": null,
+            "fromAddr": "sam@example.com",
+            "fromEmail": "sam@example.com",
+            "fromPersonId": null,
+            "hasWords": null,
+            "headers": {},
+            "inReplyTo": null,
+            "isAutomated": false,
+            "listUnsubscribe": false,
+            "provider": "gmail",
+            "replyClass": null,
+            "replyConfidence": null,
+            "rfcMessageId": null,
+            "sentAt": "2026-10-20T12:00:00+00:00",
+            "snippet": "Good to hear from you",
+            "socialAccountId": null,
+            "subject": "Catching up",
+            "threadId": "<id>",
+            "toAddrs": [],
+            "toEmails": [],
+            "toPersonIds": [
+              "person:Ana Lopez"
+            ]
+          }
+        ],
+        "ties": [
+          {
+            "aPersonId": "person:Ana Lopez",
+            "bPersonId": "person:Dev Shah",
+            "confidence": 0.8,
+            "evidence": {
+              "threads": 1
+            },
+            "firstSeenAt": "2026-04-15T12:00:00+00:00",
+            "kind": "email_cc",
+            "lastSeenAt": "2026-10-12T12:00:00+00:00",
+            "personAId": "person:Ana Lopez",
+            "personBId": "person:Dev Shah",
+            "rawWeight": 0.4,
+            "type": "email_cc",
+            "weight": 0.32000000000000006
+          },
+          {
+            "aPersonId": "person:Ben Ortiz",
+            "bPersonId": "person:Cara Diaz",
+            "confidence": 0.95,
+            "evidence": {
+              "source": "unipile"
+            },
+            "firstSeenAt": "2026-04-15T12:00:00+00:00",
+            "kind": "linkedin_mutual",
+            "lastSeenAt": "2026-10-12T12:00:00+00:00",
+            "personAId": "person:Ben Ortiz",
+            "personBId": "person:Cara Diaz",
+            "rawWeight": 0.3,
+            "type": "linkedin_mutual",
+            "weight": 0.285
+          },
+          {
+            "aPersonId": "person:Cara Diaz",
+            "bPersonId": "person:Dev Shah",
+            "confidence": 0.9,
+            "evidence": {
+              "messages": 2,
+              "threads": 1
+            },
+            "firstSeenAt": "2026-04-15T12:00:00+00:00",
+            "kind": "email_exchange",
+            "lastSeenAt": "2026-10-12T12:00:00+00:00",
+            "personAId": "person:Cara Diaz",
+            "personBId": "person:Dev Shah",
+            "rawWeight": 0.5,
+            "type": "email_exchange",
+            "weight": 0.45
+          }
+        ],
+        "tie_scores": [
+          {
+            "band": "faint",
+            "modelVersion": "tie-v2",
+            "personId": "person:Ben Ortiz",
+            "score": 12,
+            "shareScore": 18
+          },
+          {
+            "band": "faint",
+            "modelVersion": "tie-v2",
+            "personId": "person:Cara Diaz",
+            "score": 12,
+            "shareScore": 18
+          },
+          {
+            "band": "faint",
+            "modelVersion": "tie-v2",
+            "personId": "person:Dev Shah",
+            "score": 10,
+            "shareScore": 9
+          },
+          {
+            "band": "strong",
+            "modelVersion": "tie-v2",
+            "personId": "person:Ana Lopez",
+            "score": 70,
+            "shareScore": 70
+          }
+        ],
+        "tie_labels": [
+          {
+            "closeness": 4,
+            "personId": "person:Ana Lopez"
+          }
+        ]
+      },
+      "deleted": {}
+    },
+    "friends": [
+      {
+        "closeness": 3,
+        "company": "Ramp",
+        "company_domain": null,
+        "display_name": "Ana Lopez",
+        "is_alumni": false,
+        "linkedin_member_id": null,
+        "linkedin_slug": null,
+        "person_id": "person:Ana Lopez",
+        "school": null,
+        "title": "Analyst"
+      },
+      {
+        "closeness": 1,
+        "company": "Stripe",
+        "company_domain": null,
+        "display_name": "Ben Ortiz",
+        "is_alumni": false,
+        "linkedin_member_id": "m-ben",
+        "linkedin_slug": "ben-slug",
+        "person_id": "person:Ben Ortiz",
+        "school": null,
+        "title": "Engineer"
+      },
+      {
+        "closeness": 1,
+        "company": "Stripe",
+        "company_domain": null,
+        "display_name": "Cara Diaz",
+        "is_alumni": false,
+        "linkedin_member_id": "m-cara",
+        "linkedin_slug": "cara-slug",
+        "person_id": "person:Cara Diaz",
+        "school": null,
+        "title": "Product Designer"
+      },
+      {
+        "closeness": 1,
+        "company": "Plaid",
+        "company_domain": null,
+        "display_name": "Dev Shah",
+        "is_alumni": false,
+        "linkedin_member_id": null,
+        "linkedin_slug": null,
+        "person_id": "person:Dev Shah",
+        "school": null,
+        "title": "Founder"
+      }
+    ],
+    "draft": {
+      "ana": {
+        "system": "You write one message that Sam will send as themselves. It must sound like them, not like a template or a salesperson.\nHard rules:\n- 20–75 words; one ask: call; subject 2–6 words.\n- Use at least one opener from <research> and keep it true; cite its source id in hooks.\n- Never claim familiarity, shared history or a mutual connection that isn't in the inputs.\n- No flattery adjectives (amazing, incredible, inspiring), no \"I hope this finds you well\", no \"quick question\", no em-dashes, no exclamation marks unless the voice card uses them.\n- Plain words, short sentences (reading grade ≤ 7).\n- Match <voice> for greeting, sign-off, contractions and sentence length, unless a numbered rule below fixes the greeting. Borrow rhythm from <examples>, never their content.\n- The numbered rules below are this niche's norms for this step; follow them over any general habit.\n- <user_context> may carry the user's own words: a \"Never\" line is their rule and always wins; \"Their story\" is how they introduce themselves, so draw on it rather than a generic line.\n13. This is a recruiting chat with an engineer, PM or designer. After about a week, two or three sentences. Open by pointing back to the first note in a few words (\"Following up on my note from last week about ...\"), then who the student is and the real link in one clause written for someone who may not remember the first note (\"I am a junior at UT studying finance\"), never as if they should. Add one new, true line of context, stated and never asked: something of the student’s from the inputs the first note did not use (a role, a project, a result), or a fact about them from the facts. The only question in the message is the same ask, in one line. Plain words, short sentences. Never \"just bumping this\", \"circling back\", \"bringing this to the top of your inbox\" or \"in case it got buried\", and no guilt.",
+        "user": "<task>\nkind: bump; channel: gmail; ask: call\n</task>\n<user_context>\nSam Rivera; Student at Stanford; based in New York, NY\n</user_context>\n<goal>\na recruiting chat with an engineer, PM or designer\n</goal>\n<recipient>\nname: Ana Lopez\ntitle: Analyst\norganization: Ramp\nrelationship score: 70/100\nlast contact: 2026-10-21\n</recipient>\n<research></research>\n<thread>\nsubject: Catching up\n2026-10-20 12:00 user: Good to hear from you, talk soon.\n2026-10-21 12:00 them: Good to hear from you, talk soon.\n</thread>\n<via></via>\n<voice>\ngreetings: Hi {first}, | Hey {first},\nsign-offs: Best, Sam | Thanks so much, Sam\naverage sentence: 14 words; average message: 90 words\ncontractions: yes; exclamation marks: sometimes; emoji: no\nnotes: Warm preset.\n</voice>\n<examples></examples>"
+      },
+      "target": {
+        "system": "You write one message that Sam will send as themselves. It must sound like them, not like a template or a salesperson.\nHard rules:\n- 50–110 words; one ask: call; subject 2–6 words.\n- Use at least one opener from <research> and keep it true; cite its source id in hooks.\n- Never claim familiarity, shared history or a mutual connection that isn't in the inputs.\n- No flattery adjectives (amazing, incredible, inspiring), no \"I hope this finds you well\", no \"quick question\", no em-dashes, no exclamation marks unless the voice card uses them.\n- Plain words, short sentences (reading grade ≤ 7).\n- Match <voice> for greeting, sign-off, contractions and sentence length, unless a numbered rule below fixes the greeting. Borrow rhythm from <examples>, never their content.\n- The numbered rules below are this niche's norms for this step; follow them over any general habit.\n- <user_context> may carry the user's own words: a \"Never\" line is their rule and always wins; \"Their story\" is how they introduce themselves, so draw on it rather than a generic line.\n13. This is a recruiting chat with an engineer, PM or designer. Three to five sentences. The real link or one specific thing about their team or product. One line of proof about the student (something they built, with a result, or a link) rather than adjectives. Ask for 15 minutes on what the team owns and how they got there. Never a referral to a stranger in a first message.\n14. An engineer or PM is asked what the team owns, how they ended up there and what their first months were like; a manager what they look for in interns and new grads. One link to something the student built beats any adjective. Never a referral or \"openings\" in a first message to someone the student has not talked to.\n15. A call here is 15 minutes unless they named a length; a reply that sets one up says the length and phone or video.",
+        "user": "<task>\nkind: first_touch; channel: gmail; ask: call\n</task>\n<user_context>\nSam Rivera; Student at Stanford; based in New York, NY\n</user_context>\n<goal>\na recruiting chat with an engineer, PM or designer\n</goal>\n<recipient>\nname: Cara Diaz\ntitle: Product Designer\norganization: Stripe\nrelationship score: 12/100\n</recipient>\n<research></research>\n<thread></thread>\n<via></via>\n<voice>\ngreetings: Hi {first}, | Hey {first},\nsign-offs: Best, Sam | Thanks so much, Sam\naverage sentence: 14 words; average message: 90 words\ncontractions: yes; exclamation marks: sometimes; emoji: no\nnotes: Warm preset.\n</voice>\n<examples></examples>"
+      }
+    }
+  },
+  "neither": {
+    "scores": [
+      {
+        "band": "faint",
+        "display_name": "Cara Diaz",
+        "explanation": [
+          "You haven't talked yet"
+        ],
+        "features": {
+          "engagement": 0,
+          "instagram_follow": 0,
+          "intros": 0,
+          "latency": 0,
+          "linkedin": 0,
+          "log_days_first": 0,
+          "log_days_last": 0,
+          "log_in": 0,
+          "log_meetings": 0,
+          "log_out": 0,
+          "log_threads": 0,
+          "never": 1,
+          "rapport": 0,
+          "reciprocity": 0,
+          "shared": 0,
+          "structural": 0,
+          "warmth": 0,
+          "x_follow": 0
+        },
+        "last_interaction_at": null,
+        "score": 8,
+        "share_score": 9,
+        "strength": 0
+      },
+      {
+        "band": "faint",
+        "display_name": "Eve Ford",
+        "explanation": [
+          "You haven't talked yet"
+        ],
+        "features": {
+          "engagement": 0,
+          "instagram_follow": 0,
+          "intros": 0,
+          "latency": 0,
+          "linkedin": 0,
+          "log_days_first": 0,
+          "log_days_last": 0,
+          "log_in": 0,
+          "log_meetings": 0,
+          "log_out": 0,
+          "log_threads": 0,
+          "never": 1,
+          "rapport": 0,
+          "reciprocity": 0,
+          "shared": 0,
+          "structural": 0,
+          "warmth": 0,
+          "x_follow": 0
+        },
+        "last_interaction_at": null,
+        "score": 8,
+        "share_score": 9,
+        "strength": 0
+      }
+    ],
+    "paths": {
+      "paths": [
+        {
+          "band": "high",
+          "firstHopId": "person:Cara Diaz",
+          "hops": [
+            {
+              "fromId": "user",
+              "kind": "strength",
+              "p": 0.47502081252106,
+              "toId": "person:Cara Diaz"
+            }
+          ],
+          "names": {
+            "person:Cara Diaz": "Cara Diaz",
+            "user": "You"
+          },
+          "nodes": [
+            "user",
+            "person:Cara Diaz"
+          ],
+          "otherWays": 0,
+          "p": 0.47502081252106,
+          "reasonText": "Write to Cara directly (Faint · 8)."
+        }
+      ],
+      "sources": [
+        "graph"
+      ],
+      "unconfigured": [
+        "unipile",
+        "village"
+      ]
+    },
+    "company": {
+      "paths": [
+        {
+          "band": "high",
+          "firstHopId": "person:Cara Diaz",
+          "hops": [
+            {
+              "fromId": "user",
+              "kind": "strength",
+              "p": 0.47502081252106,
+              "toId": "person:Cara Diaz"
+            }
+          ],
+          "names": {
+            "person:Cara Diaz": "Cara Diaz",
+            "user": "You"
+          },
+          "nodes": [
+            "user",
+            "person:Cara Diaz"
+          ],
+          "otherWays": 0,
+          "p": 0.47502081252106,
+          "reasonText": "Write to Cara directly (Faint · 8)."
+        }
+      ],
+      "sources": [
+        "graph",
+        "linkedin_mutual"
+      ],
+      "unconfigured": [
+        "village"
+      ]
+    },
+    "pull": {
+      "changes": {
+        "people": [
+          {
+            "currentOrganizationId": null,
+            "currentOrganizationRaw": "Stanford",
+            "currentTitle": "Student",
+            "deletedAt": null,
+            "displayName": "Eve Ford",
+            "doNotContact": false,
+            "emailCheckedAt": null,
+            "emailConfidence": null,
+            "firstName": "Eve",
+            "firstSeenAt": null,
+            "headline": null,
+            "hiddenAt": null,
+            "isAlumni": false,
+            "isSelf": false,
+            "lastInteractionAt": null,
+            "lastName": "Ford",
+            "linkedinConnectedOn": null,
+            "linkedinConnectionsCount": null,
+            "linkedinFollowerCount": null,
+            "linkedinMemberId": null,
+            "linkedinSlug": null,
+            "linkedinUrl": null,
+            "listed": true,
+            "location": null,
+            "mergedInto": null,
+            "nameNorm": "eve ford",
+            "nameNormalized": "eve ford",
+            "notes": null,
+            "orgId": null,
+            "orgRaw": "Stanford",
+            "photoUrl": null,
+            "primaryEmail": null,
+            "private": false,
+            "relationshipType": null,
+            "rolesFromHeadlineAt": null,
+            "school": null,
+            "sourceAccount": null,
+            "sources": [
+              "manual"
+            ],
+            "strength": 0,
+            "summary": null,
+            "tags": [],
+            "timezone": null,
+            "title": "Student"
+          },
+          {
+            "currentOrganizationId": null,
+            "currentOrganizationRaw": "Stripe",
+            "currentTitle": "Product Designer",
+            "deletedAt": null,
+            "displayName": "Cara Diaz",
+            "doNotContact": false,
+            "emailCheckedAt": null,
+            "emailConfidence": null,
+            "firstName": "Cara",
+            "firstSeenAt": null,
+            "headline": null,
+            "hiddenAt": null,
+            "isAlumni": false,
+            "isSelf": false,
+            "lastInteractionAt": null,
+            "lastName": "Diaz",
+            "linkedinConnectedOn": null,
+            "linkedinConnectionsCount": null,
+            "linkedinFollowerCount": null,
+            "linkedinMemberId": null,
+            "linkedinSlug": null,
+            "linkedinUrl": null,
+            "listed": true,
+            "location": null,
+            "mergedInto": null,
+            "nameNorm": "cara diaz",
+            "nameNormalized": "cara diaz",
+            "notes": null,
+            "orgId": null,
+            "orgRaw": "Stripe",
+            "photoUrl": null,
+            "primaryEmail": null,
+            "private": false,
+            "relationshipType": null,
+            "rolesFromHeadlineAt": null,
+            "school": null,
+            "sourceAccount": null,
+            "sources": [
+              "manual"
+            ],
+            "strength": 0,
+            "summary": null,
+            "tags": [],
+            "timezone": null,
+            "title": "Product Designer"
+          },
+          {
+            "currentOrganizationId": null,
+            "currentOrganizationRaw": null,
+            "currentTitle": null,
+            "deletedAt": null,
+            "displayName": "Sam Rivera",
+            "doNotContact": false,
+            "emailCheckedAt": null,
+            "emailConfidence": null,
+            "firstName": "Sam",
+            "firstSeenAt": null,
+            "headline": null,
+            "hiddenAt": null,
+            "isAlumni": false,
+            "isSelf": true,
+            "lastInteractionAt": null,
+            "lastName": "Rivera",
+            "linkedinConnectedOn": null,
+            "linkedinConnectionsCount": null,
+            "linkedinFollowerCount": null,
+            "linkedinMemberId": null,
+            "linkedinSlug": null,
+            "linkedinUrl": null,
+            "listed": true,
+            "location": null,
+            "mergedInto": null,
+            "nameNorm": "sam rivera",
+            "nameNormalized": "sam rivera",
+            "notes": null,
+            "orgId": null,
+            "orgRaw": null,
+            "photoUrl": null,
+            "primaryEmail": "sam@example.com",
+            "private": false,
+            "relationshipType": null,
+            "rolesFromHeadlineAt": null,
+            "school": null,
+            "sourceAccount": null,
+            "sources": [
+              "self"
+            ],
+            "strength": 0,
+            "summary": null,
+            "tags": [],
+            "timezone": null,
+            "title": null
+          }
+        ],
+        "person_identities": [
+          {
+            "confidence": 1,
+            "kind": "email",
+            "personId": "person:Sam Rivera",
+            "socialAccountId": null,
+            "source": "self",
+            "valueNorm": "sam@example.com",
+            "valueRaw": "sam@example.com"
+          }
+        ],
+        "tie_scores": [
+          {
+            "band": "faint",
+            "modelVersion": "tie-v2",
+            "personId": "person:Cara Diaz",
+            "score": 8,
+            "shareScore": 9
+          },
+          {
+            "band": "faint",
+            "modelVersion": "tie-v2",
+            "personId": "person:Eve Ford",
+            "score": 8,
+            "shareScore": 9
+          }
+        ],
+        "notes": [
+          {
+            "chatId": null,
+            "extraction": null,
+            "occurredAt": "2026-10-02T12:00:00+00:00",
+            "personIds": [
+              "person:Eve Ford"
+            ],
+            "rawText": "Met Eve at a talk",
+            "source": "manual",
+            "title": null
+          }
+        ]
+      },
+      "deleted": {}
+    },
+    "friends": [],
+    "draft": {
+      "target": {
+        "system": "You write one message that Sam will send as themselves. It must sound like them, not like a template or a salesperson.\nHard rules:\n- 50–110 words; one ask: call; subject 2–6 words.\n- Use at least one opener from <research> and keep it true; cite its source id in hooks.\n- Never claim familiarity, shared history or a mutual connection that isn't in the inputs.\n- No flattery adjectives (amazing, incredible, inspiring), no \"I hope this finds you well\", no \"quick question\", no em-dashes, no exclamation marks unless the voice card uses them.\n- Plain words, short sentences (reading grade ≤ 7).\n- Match <voice> for greeting, sign-off, contractions and sentence length, unless a numbered rule below fixes the greeting. Borrow rhythm from <examples>, never their content.\n- The numbered rules below are this niche's norms for this step; follow them over any general habit.\n- <user_context> may carry the user's own words: a \"Never\" line is their rule and always wins; \"Their story\" is how they introduce themselves, so draw on it rather than a generic line.\n13. This is a recruiting chat with an engineer, PM or designer. Three to five sentences. The real link or one specific thing about their team or product. One line of proof about the student (something they built, with a result, or a link) rather than adjectives. Ask for 15 minutes on what the team owns and how they got there. Never a referral to a stranger in a first message.\n14. An engineer or PM is asked what the team owns, how they ended up there and what their first months were like; a manager what they look for in interns and new grads. One link to something the student built beats any adjective. Never a referral or \"openings\" in a first message to someone the student has not talked to.\n15. A call here is 15 minutes unless they named a length; a reply that sets one up says the length and phone or video.",
+        "user": "<task>\nkind: first_touch; channel: gmail; ask: call\n</task>\n<user_context>\nSam Rivera; Student at Stanford; based in New York, NY\n</user_context>\n<goal>\na recruiting chat with an engineer, PM or designer\n</goal>\n<recipient>\nname: Cara Diaz\ntitle: Product Designer\norganization: Stripe\nrelationship score: 8/100\n</recipient>\n<research></research>\n<thread></thread>\n<via></via>\n<voice>\ngreetings: Hi {first}, | Hey {first},\nsign-offs: Best, Sam | Thanks so much, Sam\naverage sentence: 14 words; average message: 90 words\ncontractions: yes; exclamation marks: sometimes; emoji: no\nnotes: Warm preset.\n</voice>\n<examples></examples>"
+      }
+    }
+  }
+}
