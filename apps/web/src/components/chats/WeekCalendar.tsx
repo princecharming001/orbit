@@ -279,11 +279,6 @@ export function WeekCalendar({ userId }: { userId: string }) {
               ))}
             {week && !week.total && <li className="py-4 text-[13px] text-ink-3">No calls this week.</li>}
           </ul>
-          {week && !week.total && (
-            <p className="hidden @3xl:block mt-2 text-[12.5px] text-ink-3" data-testid="chats-week-empty">
-              No calls this week. Calls Orbit books from replies land here.
-            </p>
-          )}
         </>
       )}
     </section>
@@ -461,12 +456,7 @@ function CallList({
   );
   return (
     <div data-testid="chats-list">
-      {section(
-        'Coming up',
-        list.upcoming,
-        'No calls coming up. Calls Orbit books from replies land here.',
-        'chats-list-upcoming',
-      )}
+      {section('Coming up', list.upcoming, 'No calls coming up.', 'chats-list-upcoming')}
       {section('Earlier', list.past, 'No calls in the last 30 days.', 'chats-list-past')}
     </div>
   );
