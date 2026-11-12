@@ -237,6 +237,24 @@ function excludedBy(inUse) {
 
 // supabase/functions/_shared/sources/states.ts
 var offeredSources = (raw) => parseExtraSources(raw);
+var OFFERED_TTL_MS = 6e4;
+var launchCache = /* @__PURE__ */ new WeakMap();
+function launchedSources(db2, clock = Date.now) {
+  const hit = launchCache.get(db2);
+  if (hit && clock() - hit.at < OFFERED_TTL_MS) return hit.launched;
+  const launched = Promise.resolve().then(() => db2.sql`select public.orbit_sources_offered() as offered`).then((rows) => OPTIONAL_SOURCES.filter((s) => (rows[0]?.offered ?? []).includes(s))).catch(() => []);
+  launchCache.set(db2, { at: clock(), launched });
+  return launched;
+}
+async function offeredNow(db2, envList = [], clock) {
+  const launched = await launchedSources(db2, clock);
+  const out = [...envList];
+  for (const s of launched) if (!out.includes(s)) out.push(s);
+  return out;
+}
+async function isOffered(db2, source, envList = []) {
+  return (await offeredNow(db2, envList)).includes(source);
+}
 var hiddenOf = (inUse) => OPTIONAL_SOURCES.filter((s) => !inUse.has(s));
 var NO_SOURCES = {
   offered: [],
@@ -245,6 +263,12 @@ var NO_SOURCES = {
   excluded: excludedBy(/* @__PURE__ */ new Set()),
   hidden: hiddenOf(/* @__PURE__ */ new Set())
 };
+async function sourceIsOn(db2, userId, source, envList = []) {
+  if (!await isOffered(db2, source, envList)) return false;
+  const [r] = await db2.sql`
+    select state from orbit.source_states where user_id = ${userId}::uuid and source = ${source}`;
+  return r?.state === "on";
+}
 
 // packages/core/src/text/normalize.ts
 var HONORIFICS = /* @__PURE__ */ new Set(["dr", "mr", "mrs", "ms", "mx", "prof", "professor", "sir"]);
@@ -4166,6 +4190,8 @@ var KIND_QUEUE = {
   "sync.linkedin": "orbit_sync",
   // plan 43: Instagram's first days and refreshes, the words of a chat that entered the pipeline
   "sync.instagram": "orbit_sync",
+  // plan 43 §5: the student's own X following list, read to the end once on connect
+  "sync.x": "orbit_sync",
   "social.words": "orbit_sync",
   "cadence.user": "orbit_cadence",
   "funnel.reply": "orbit_classify",
@@ -5401,13 +5427,6 @@ async function afterInbound(db2, queue, userId, platform, stored, now) {
   return out;
 }
 
-// supabase/functions/_shared/social/lookup.ts
-async function socialSourceOn(db2, userId, platform) {
-  const [r] = await db2.sql`
-    select state from orbit.source_states where user_id = ${userId}::uuid and source = ${platform}`;
-  return r?.state === "on";
-}
-
 // supabase/functions/orbit-webhooks/webhooks.ts
 function makeWebhookHandler(deps) {
   const log = deps.log ?? silentLogger;
@@ -5431,7 +5450,12 @@ function makeWebhookHandler(deps) {
         if (!deps.unipileSecret || !deps.db) return unconfigured();
         if (!await timingSafeEqual(req.headers.get("x-orbit-webhook"), deps.unipileSecret))
           throw new HttpError(401, "unauthorized", "bad signature");
-        const out = await unipileEvent(deps.db, (db2) => deps.queue ?? sqlQueue(db2), await body(req));
+        const out = await unipileEvent(
+          deps.db,
+          (db2) => deps.queue ?? sqlQueue(db2),
+          await body(req),
+          deps.offered ?? []
+        );
         userId = out.userId;
         res = json(200, { ok: true, result: out.result });
       } else if (path === "/unipile/account") {
@@ -5439,7 +5463,7 @@ function makeWebhookHandler(deps) {
         if (!await timingSafeEqual(url.searchParams.get("token"), deps.unipileSecret))
           throw new HttpError(403, "forbidden", "bad token");
         const provider = url.searchParams.get("provider") === "instagram" ? "instagram" : "linkedin";
-        const out = await unipileAccount(deps.db, queue(), await body(req), provider);
+        const out = await unipileAccount(deps.db, queue(), await body(req), provider, deps.offered ?? []);
         userId = out.userId;
         res = json(200, { ok: true, result: out.result });
       } else throw new HttpError(404, "not_found", "no such route");
@@ -5645,7 +5669,7 @@ async function storeInstagramMessage(db2, queue, owner, body2, chatId, messageId
   return r.replied.length ? "replied" : "stored";
 }
 var str = (v) => typeof v === "string" && v ? v : void 0;
-async function unipileEvent(db2, queueFor2, body2) {
+async function unipileEvent(db2, queueFor2, body2, offered = []) {
   const status = body2.AccountStatus;
   if (status && typeof status === "object") {
     const owner = await unipileOwner(db2, status.account_id);
@@ -5674,7 +5698,7 @@ async function unipileEvent(db2, queueFor2, body2) {
     if (!messageId || !chatId) return { result: "ignored", userId: null };
     const owner = await unipileOwner(db2, body2.account_id);
     if (owner?.provider === "instagram") {
-      if (!await socialSourceOn(db2, owner.userId, "instagram"))
+      if (!await sourceIsOn(db2, owner.userId, "instagram", offered))
         return { result: "source_off", userId: owner.userId };
       const result2 = await db2.begin(async (tx) => {
         if (!await firstSeen(tx, `instagram:${messageId}`)) return "duplicate";
@@ -5745,7 +5769,7 @@ function unparkState(li) {
     unparkedAt: (/* @__PURE__ */ new Date()).toISOString()
   };
 }
-async function unipileAccount(db2, queue, body2, provider = "linkedin") {
+async function unipileAccount(db2, queue, body2, provider = "linkedin", offered = []) {
   const status = String(body2.status ?? "").toUpperCase();
   const accountId = str(body2.account_id);
   const userId = isUuid(body2.name) ? body2.name : null;
@@ -5753,7 +5777,10 @@ async function unipileAccount(db2, queue, body2, provider = "linkedin") {
     return { result: "ignored", userId };
   const [user] = await db2.sql`select 1 from orbit.users where id = ${userId}::uuid and deleted_at is null`;
   if (!user) return { result: "unknown_user", userId: null };
-  if (provider === "instagram") return instagramAccount(db2, queue, userId, accountId, status);
+  if (provider === "instagram") {
+    if (!await isOffered(db2, "instagram", offered)) return { result: "not_offered", userId };
+    return instagramAccount(db2, queue, userId, accountId, status);
+  }
   const taken = await db2.sql`
     select 1 from orbit.integration_accounts
      where provider = 'linkedin' and external_account_id = ${accountId} and user_id <> ${userId}::uuid`;
