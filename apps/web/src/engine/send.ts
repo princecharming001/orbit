@@ -195,7 +195,7 @@ export async function checkSendAllowed(
       code: 'daily_cap',
       reason: salesGoalIds
         ? `Daily limit reached: ${cap} first sales emails today. It resets at midnight.`
-        : `Daily limit reached: ${cap} ${channel === 'linkedin' ? 'LinkedIn messages' : 'emails'} today. It resets at midnight.`,
+        : `Daily limit reached: ${cap} ${channel === 'linkedin' ? 'LinkedIn messages' : channel === 'imessage' ? 'texts' : 'emails'} today. It resets at midnight.`,
     };
   const chat = await chatFor(personId, kind, opts.chatId);
   if (
@@ -517,7 +517,7 @@ export function withNote(ask: string, note: string | undefined): string {
   return note?.trim() ? `${ask.trimEnd()}${NOTE_RULE}${note.trim()}` : ask;
 }
 
-export type HandoffVia = 'mailto' | 'linkedin_compose' | 'linkedin_connect' | 'copy';
+export type HandoffVia = 'mailto' | 'linkedin_compose' | 'linkedin_connect' | 'copy' | 'sms';
 
 export type ApproveResult =
   | { ok: true; status: 'queued'; sendAt: string }
@@ -649,6 +649,28 @@ async function transition(
   });
 }
 
+/** A Mac, iPhone or iPad: Messages reads the draft after `&body=` there, other phones after `?body=`. */
+export function applePlatform(): boolean {
+  if (typeof navigator === 'undefined') return true;
+  const nav = navigator as Navigator & { userAgentData?: { platform?: string } };
+  const p = `${nav.userAgentData?.platform ?? ''} ${nav.platform ?? ''} ${nav.userAgent ?? ''}`;
+  return /mac|iphone|ipad|ipod/i.test(p);
+}
+
+/**
+ * Messages opened on a conversation with the draft written (plan 43 §6): `sms:+15551234567&body=...` on Apple
+ * platforms, `?body=` elsewhere. Undefined without a number.
+ */
+export function smsLink(
+  phone: string | undefined,
+  body: string,
+  apple = applePlatform(),
+): string | undefined {
+  const number = phone?.replace(/[^\d+]/g, '');
+  if (!number || number.replace(/\D/g, '').length < 7) return undefined;
+  return `sms:${number}${apple ? '&' : '?'}body=${encodeURIComponent(body)}`;
+}
+
 /** Where a hand-off opens: the mail app, LinkedIn compose for a connection, the profile (Connect, Add a note) otherwise. */
 function handoffFor(
   msg: OutboundMessage,
@@ -663,6 +685,11 @@ function handoffFor(
       url: `mailto:${encodeURIComponent(msg.toEmail)}?${msg.bccEmails?.length ? `bcc=${encodeURIComponent(msg.bccEmails.join(','))}&` : ''}subject=${encodeURIComponent(env.subject ?? '')}&body=${encodeURIComponent(body)}`,
       via: 'mailto',
     };
+  }
+  if (msg.channel === 'imessage') {
+    const url = smsLink(person.phones?.[0], body);
+    if (!url) return { error: `There is no phone number for ${person.firstName}.` };
+    return { url, via: 'sms' };
   }
   const slug = person.linkedinSlug;
   const profile = slug ? linkedinProfileUrl(slug) : person.linkedinUrl;
@@ -966,6 +993,33 @@ export async function revertHandoff(user: User, messageId: string): Promise<bool
   });
   if (m) await audit(user.id, 'message.handoff_reverted', { objectTable: 'outbound', objectId: messageId });
   return !!m;
+}
+
+/**
+ * "Open in Messages" (plan 43 §6): the draft goes by text instead. It is approved like any other, opened in Messages
+ * with the draft written, and waits as `handed_off` until the student says it went; Orbit never claims it was sent
+ * before that. A draft that cannot go this way keeps the channel it had.
+ */
+export async function openInMessages(
+  user: User,
+  messageId: string,
+  bodyFinal: string,
+  now = new Date(),
+): Promise<ApproveResult> {
+  const msg = await db.outbound.get(messageId);
+  if (!msg || msg.userId !== user.id) return { ok: false, error: 'Message not found' };
+  const person = await db.people.get(msg.personId);
+  if (!person?.phones?.length)
+    return { ok: false, error: `There is no phone number for ${person?.firstName ?? 'them'}.` };
+  const was = msg.channel;
+  if (was !== 'imessage') await db.outbound.update(messageId, { channel: 'imessage' });
+  const r = await approveAndSend(user, messageId, bodyFinal, undefined, now);
+  if (!r.ok && was !== 'imessage') {
+    const now2 = await db.outbound.get(messageId);
+    if (now2 && ['draft', 'failed', 'cancelled'].includes(now2.status))
+      await db.outbound.update(messageId, { channel: was });
+  }
+  return r;
 }
 
 /** Orbit can send this message itself: Gmail with the send permission, or live LinkedIn knowing who they are. */
@@ -1526,12 +1580,15 @@ async function finalizeSent(
     addTouchpoint({
       userId: user.id,
       personId: msg.personId,
-      kind: msg.channel === 'linkedin' ? 'linkedin_out' : 'email_out',
+      // a text the student sent from Messages is a text day like any other (it counts while Texts are on)
+      kind:
+        msg.channel === 'linkedin' ? 'linkedin_out' : msg.channel === 'imessage' ? 'text_out' : 'email_out',
       occurredAt: now.toISOString(),
       refTable: 'outbound',
       refId: msg.id,
-      summary: `${msg.channel === 'linkedin' ? 'LinkedIn message' : 'Email'}: ${msg.subject ?? MESSAGE_KIND_LABELS[msg.kind]}`,
-      weight: msg.channel === 'linkedin' ? 0.5 : 0.6,
+      summary: `${msg.channel === 'linkedin' ? 'LinkedIn message' : msg.channel === 'imessage' ? 'Text' : 'Email'}: ${msg.subject ?? MESSAGE_KIND_LABELS[msg.kind]}`,
+      weight: msg.channel === 'linkedin' ? 0.5 : msg.channel === 'imessage' ? 0.45 : 0.6,
+      ...(msg.channel === 'imessage' ? { group: 2 } : {}),
     }),
   );
   if (provider.providerMessageId && provider.providerThreadId) {

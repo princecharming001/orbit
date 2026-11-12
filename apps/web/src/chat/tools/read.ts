@@ -70,6 +70,7 @@ import {
   isConnectionNote,
   reviewDraft,
 } from '../../engine/send';
+import { inUseNow } from '../../engine/sources';
 import {
   draftLists,
   notYetWritten,
@@ -732,7 +733,9 @@ export const getPerson = defineTool({
       ? undefined
       : personSummary({ user: ctx.user, person, facts, touchpoints: tps, now: ctx.now });
     // texts from the Mac's Messages: how much and how lately, never what was said
-    const texts = await db.textThreads.get(person.id);
+    const texts = (await inUseNow(person.userId)).has('imessage')
+      ? await db.textThreads.get(person.id)
+      : undefined;
     const header = {
       ...personRef(person),
       headline: person.headline,

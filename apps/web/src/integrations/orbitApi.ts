@@ -75,6 +75,7 @@ import type {
   MemoryListResponse,
   MemorySearchRequest,
   MemorySearchResponse,
+  OptionalSource,
   PairCorrectionRequest,
   PairCorrectionResponse,
   PathsFindRequest,
@@ -112,6 +113,8 @@ import type {
   SourceEmailResponse,
   SourceSearchRequest,
   SourceSearchResponse,
+  SourceState,
+  SourceStates,
   VoiceNoteRequest,
   VoiceNoteResponse,
   VoiceRelearnResponse,
@@ -236,8 +239,46 @@ export interface PushResult {
   error?: { code: string; message: string };
 }
 
+/** GET /sources (plan 43 §3.1): the optional sources the owner offers, and where the student stands with each. */
+export interface SourcesResponse {
+  offered: OptionalSource[];
+  states: SourceStates;
+}
+
+/**
+ * One day of texts with one person for POST /texts/days (plan 43 §6, decision 1): how many each way, the smallest
+ * chat that day (the student included) and whether anything was written. Never the words. `personId` is the
+ * server's id when the person exists there; `ref` names a text-only friend in `people` (or a person this browser
+ * made, by its local id).
+ */
+export interface TextDayUpload {
+  personId?: string;
+  ref?: string;
+  day: string;
+  in: number;
+  out: number;
+  group: number;
+  words: boolean;
+}
+/** A text-only friend the server does not know yet: their name and numbers, which become phone identities there. */
+export interface TextPersonUpload {
+  ref: string;
+  name: string;
+  phones: string[];
+}
+export interface TextDaysRequest {
+  days: TextDayUpload[];
+  people: TextPersonUpload[];
+}
+
 /** Every route the client calls: [request body, response body]. */
 export interface ApiRoutes {
+  // plan 43: optional sources (GET, and PUT per source) and the texts a signed-in student's browser sends up
+  '/sources': [Record<string, never>, SourcesResponse];
+  '/sources/instagram': [{ state: SourceState }, { source: OptionalSource; state: SourceState }];
+  '/sources/x': [{ state: SourceState }, { source: OptionalSource; state: SourceState }];
+  '/sources/imessage': [{ state: SourceState }, { source: OptionalSource; state: SourceState }];
+  '/texts/days': [TextDaysRequest, { written: number; people?: Record<string, string> }];
   '/auth/logout': [{ refreshToken?: string }, { ok: boolean }];
   '/auth/me': [Record<string, never>, { user: AccountUser }];
   '/sync/status': [Record<string, never>, SyncStatus];
@@ -435,6 +476,15 @@ export function setOrbitApiFetchForTests(f: typeof fetch | undefined): void {
 
 const doFetch: typeof fetch = (input, init) => (fetchImpl ?? globalThis.fetch)(input, init);
 
+type HttpMethod = 'GET' | 'POST' | 'PUT';
+
+/** Most routes are POSTs; reading the sources is a GET and setting one a PUT (plan 43). */
+export function methodOf(route: string): HttpMethod {
+  if (route === '/auth/me' || route === '/sources') return 'GET';
+  if (route.startsWith('/sources/')) return 'PUT';
+  return 'POST';
+}
+
 const REQUEST_TIMEOUT_MS = 25_000;
 /** routes that read the web and look up emails take longer than a normal call (seen live: a 47-second search) */
 const SLOW_ROUTES: Record<string, number> = { '/source/search': 75_000 };
@@ -444,7 +494,7 @@ export const REFRESH_BEFORE_MS = 5 * 60_000;
 async function rawCall(
   route: string,
   body: unknown,
-  opts: { token?: string; method?: 'GET' | 'POST'; signal?: AbortSignal } = {},
+  opts: { token?: string; method?: HttpMethod; signal?: AbortSignal } = {},
 ): Promise<Response | ApiFailure> {
   const waitMs = SLOW_ROUTES[route] ?? REQUEST_TIMEOUT_MS;
   // plan 40: /notify/* lives in its own function (orbit-notify), next to orbit-api, with the same session
@@ -454,7 +504,8 @@ async function rawCall(
   const headers: Record<string, string> = { accept: 'application/json' };
   if (opts.token) headers.authorization = `Bearer ${opts.token}`;
   const method = opts.method ?? 'POST';
-  if (method === 'POST') headers['content-type'] = 'application/json';
+  const sends = method !== 'GET';
+  if (sends) headers['content-type'] = 'application/json';
   const timeout =
     typeof AbortSignal !== 'undefined' && 'timeout' in AbortSignal ? AbortSignal.timeout(waitMs) : undefined;
   const signal =
@@ -465,7 +516,7 @@ async function rawCall(
     return await doFetch(`${base}${route}`, {
       method,
       headers,
-      body: method === 'POST' ? JSON.stringify(body ?? {}) : undefined,
+      body: sends ? JSON.stringify(body ?? {}) : undefined,
       signal,
     });
   } catch (e) {
@@ -719,7 +770,7 @@ export async function callApi<R extends ClientRoute>(
       return failure('signed_out', 'Your Orbit session ended. Sign in with Google again.');
     if (!ok) return failure('network', "Orbit's server could not be reached. Try again in a moment.");
   }
-  const method = route === '/auth/me' ? 'GET' : 'POST';
+  const method = methodOf(route);
   let res = await rawCall(route, body, { token: tokens.accessToken, method, signal: opts.signal });
   if (!(res instanceof Response)) return res;
   if (res.status === 401) {

@@ -1,9 +1,10 @@
 import type { User } from '@orbit/core';
 import initSqlJs from 'sql.js';
-import { beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { db, wipeDatabase } from '../db/schema';
 import { createLocalUser } from '../engine/account';
 import { importTexts } from '../engine/imessage';
+import { setExtraSourcesForTests } from '../engine/sources';
 import { appleDate, setSqlJsForTests, textFromAttributedBody } from './imessageDb';
 import { normalizePhone, parseVCards } from './vcard';
 
@@ -54,7 +55,12 @@ TEL:555 000 1111
 END:VCARD`;
 
 describe('reading texts from Messages', () => {
-  beforeAll(() => setSqlJsForTests(initSqlJs()));
+  beforeAll(() => {
+    setSqlJsForTests(initSqlJs());
+    // the owner offers Texts (plan 43 §3.1); without it texts count for nothing
+    setExtraSourcesForTests('imessage');
+  });
+  afterAll(() => setExtraSourcesForTests(undefined));
   let user: User;
   beforeEach(async () => {
     await wipeDatabase();

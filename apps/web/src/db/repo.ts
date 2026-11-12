@@ -11,8 +11,10 @@ import type {
 import {
   fitCalibration,
   gatherRapport,
+  keepTouch,
   knowEachOther,
   newId,
+  type OptionalSource,
   pairsFromEdges,
   type RapportSource,
   replyRapport,
@@ -22,6 +24,7 @@ import {
   tieStrength,
   warmthValue,
 } from '@orbit/core';
+import { inUseNow } from '../engine/sources';
 import { isServerUser } from '../integrations/orbitApi';
 import { db } from './schema';
 
@@ -84,10 +87,24 @@ export async function addTouchpoint(tp: Omit<Touchpoint, 'id'>): Promise<boolean
   return true;
 }
 
-/** What the tie score needs to know about the student: their school and city, and where they have worked. */
+/**
+ * What the tie score needs to know about the student: their school and city, where they have worked, and their time
+ * zone (chat days are counted as the student lives them, plan 43 §3.8).
+ */
 interface TieContext {
   user?: { school?: string; currentCity?: string };
   userEmployers: { name: string; startDate?: string; endDate?: string }[];
+  timeZone?: string;
+}
+
+/** The student's time zone: their own setting, else this browser's. */
+export function studentTimeZone(user?: { timezone?: string }): string | undefined {
+  if (user?.timezone) return user.timezone;
+  try {
+    return Intl.DateTimeFormat().resolvedOptions().timeZone || undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 async function loadTieContext(userId: string): Promise<TieContext> {
@@ -97,13 +114,19 @@ async function loadTieContext(userId: string): Promise<TieContext> {
   ]);
   const current = resumes.find((r) => r.isCurrent) ?? resumes[0];
   const facets = current ? await db.resumeFacets.where('resumeId').equals(current.id).toArray() : [];
+  const timeZone = studentTimeZone(user);
   return {
     user: user ? { school: user.school, currentCity: user.currentCity } : undefined,
     userEmployers: facets
       .filter((f) => f.kind === 'experience' && !f.excluded && f.organizationName)
       .map((f) => ({ name: f.organizationName!, startDate: f.startDate, endDate: f.endDate })),
+    ...(timeZone ? { timeZone } : {}),
   };
 }
+
+/** The touches that count: an optional source's only while it is in use (plan 43 §3.2). */
+const counted = (tps: Touchpoint[], inUse: ReadonlySet<OptionalSource>) =>
+  tps.filter((t) => keepTouch(t.kind, inUse));
 
 /** Warmth of the student's notes about each person (f13), from the notes' extractions. */
 function noteWarmthByPerson(notes: MeetingNote[]): Map<string, number[]> {
@@ -127,19 +150,24 @@ function noteWarmthByPerson(notes: MeetingNote[]): Map<string, number[]> {
 async function rapportByPerson(
   userId: string,
   touchpoints: Touchpoint[],
+  inUse: ReadonlySet<OptionalSource>,
   only?: string,
 ): Promise<Map<string, TieRapport[]>> {
   const out = new Map<string, TieRapport[]>();
   const settings = await db.settings.get(userId);
   if (settings?.readReplyTone === false) return out;
+  // texts count only while Texts are on (plan 43 §3.2)
+  const textsOn = inUse.has('imessage');
   const [user, messages, texts] = await Promise.all([
     db.users.get(userId),
     (only ? db.messages.where('fromPersonId').equals(only) : db.messages.where('userId').equals(userId))
       .filter((m) => !!m.fromPersonId && m.direction === 'inbound' && !!m.extraction?.rapport)
       .toArray(),
-    only
-      ? db.textThreads.where('personId').equals(only).toArray()
-      : db.textThreads.where('userId').equals(userId).toArray(),
+    !textsOn
+      ? []
+      : only
+        ? db.textThreads.where('personId').equals(only).toArray()
+        : db.textThreads.where('userId').equals(userId).toArray(),
   ]);
   // only the threads behind these replies, for their size
   const threads = await db.threads.bulkGet([...new Set(messages.map((m) => m.threadId))]);
@@ -222,7 +250,8 @@ export async function recomputePersonStrength(
   if (!person) return undefined;
   // account mode: orbit-api scores from the whole mailbox; this browser only holds a slice of it
   if (isServerUser(person.userId)) return person;
-  const [tps, affiliations, ctx, notes, label, calibration] = await Promise.all([
+  const inUse = await inUseNow(person.userId);
+  const [all, affiliations, ctx, notes, label, calibration] = await Promise.all([
     db.touchpoints.where('personId').equals(personId).toArray(),
     db.affiliations.where('personId').equals(personId).toArray(),
     loadTieContext(person.userId),
@@ -234,7 +263,8 @@ export async function recomputePersonStrength(
     db.tieLabels.get(personId),
     db.kv.get(calibrationKey(person.userId)),
   ]);
-  const rapport = (await rapportByPerson(person.userId, tps, personId)).get(personId);
+  const tps = counted(all, inUse);
+  const rapport = (await rapportByPerson(person.userId, tps, inUse, personId)).get(personId);
   const mutuals = person.strengthBreakdown?.tieScore?.mutuals ?? [];
   const r = tieStrength(
     {
@@ -263,7 +293,8 @@ export async function recomputePersonStrength(
  */
 export async function recomputeAllStrengths(userId: string, now = new Date()): Promise<void> {
   if (isServerUser(userId)) return;
-  const [people, tps, affs, edges, notes, ctx] = await Promise.all([
+  const inUse = await inUseNow(userId);
+  const [people, all, affs, edges, notes, ctx] = await Promise.all([
     db.people.where('userId').equals(userId).toArray(),
     db.touchpoints.where('userId').equals(userId).toArray(),
     db.affiliations.where('userId').equals(userId).toArray(),
@@ -271,6 +302,7 @@ export async function recomputeAllStrengths(userId: string, now = new Date()): P
     db.notes.where('userId').equals(userId).toArray(),
     loadTieContext(userId),
   ]);
+  const tps = counted(all, inUse);
   const byPerson = new Map<string, Touchpoint[]>();
   for (const t of tps) {
     const arr = byPerson.get(t.personId) ?? [];
@@ -297,7 +329,7 @@ export async function recomputeAllStrengths(userId: string, now = new Date()): P
     }
   }
   const warmth = noteWarmthByPerson(notes);
-  const [rapport, labels] = await Promise.all([rapportByPerson(userId, tps), labelsFor(userId)]);
+  const [rapport, labels] = await Promise.all([rapportByPerson(userId, tps, inUse), labelsFor(userId)]);
   const score = (p: Person, calibration?: TieCalibration) => {
     const mutuals = [...(neighbours.get(p.id) ?? [])]
       .map((id) => byId.get(id))

@@ -7,11 +7,17 @@
  * When readiness turns `ready` in front of the student (it was not ready earlier in this visit), listeners hear it
  * once, so the app can say "Orbit is ready" at that moment and not on every load after.
  */
-import type { Readiness } from '@orbit/core';
+import type { Readiness, ReadinessInput } from '@orbit/core';
 import { useEffect, useState } from 'react';
-import { type NotifyStatus, notifyStatus, readinessFromSync } from '../engine/notify';
+import {
+  type NotifyStatus,
+  notifyStatus,
+  readinessFromSync,
+  textsReadiness,
+  withTextsStep,
+} from '../engine/notify';
 import { subscribeSyncStatus, syncStatusNow } from '../engine/serverSync';
-import { isAccountMode, isSignedIn } from '../integrations/orbitApi';
+import { accountUser, isAccountMode, isSignedIn } from '../integrations/orbitApi';
 
 export interface ReadinessView {
   readiness: Readiness;
@@ -50,17 +56,25 @@ export async function refreshReadiness(): Promise<ReadinessView | undefined> {
     set(undefined);
     return undefined;
   }
-  const s = await notifyStatus().catch(() => undefined);
+  const [s, texts] = await Promise.all([
+    notifyStatus().catch(() => undefined),
+    textsReadiness(accountUser()?.id).catch(() => undefined),
+  ]);
+  lastTexts = texts;
   if (s) {
     lastServer = Date.now();
-    set({ readiness: s.readiness, notify: s });
+    set({ readiness: withTextsStep(s.readiness, texts), notify: s });
   } else {
     const fromSync = readinessFromSync(syncStatusNow());
     // a server answer from a moment ago stays: a missed poll is not news
-    if (fromSync && Date.now() - lastServer > 3 * WHILE_SYNCING_MS) set({ readiness: fromSync });
+    if (fromSync && Date.now() - lastServer > 3 * WHILE_SYNCING_MS)
+      set({ readiness: withTextsStep(fromSync, texts) });
   }
   return view;
 }
+
+/** the Texts step as last read (plan 43 §6), added to readiness however it came */
+let lastTexts: ReadinessInput['texts'];
 
 function schedule(): void {
   if (timer) clearTimeout(timer);
@@ -83,7 +97,7 @@ export function watchReadiness(): () => void {
     // without a server answer, the sync status is the next best thing
     if (!view?.notify) {
       const r = readinessFromSync(s);
-      if (r) set({ readiness: r });
+      if (r) set({ readiness: withTextsStep(r, lastTexts) });
     }
   });
   const onVisible = () => {

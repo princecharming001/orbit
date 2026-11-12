@@ -546,6 +546,7 @@ export async function mergePeople(userId: string, survivorId: string, mergedId: 
       db.tieLabels,
       db.tieScores,
       db.textThreads,
+      db.textDays,
       db.memories,
       db.researchRuns,
       db.facetAssertions,
@@ -619,10 +620,19 @@ export async function mergePeople(userId: string, survivorId: string, mergedId: 
               firstAt: st.firstAt < mt.firstAt ? st.firstAt : mt.firstAt,
               lastAt: st.lastAt > mt.lastAt ? st.lastAt : mt.lastAt,
               recent: [...st.recent, ...mt.recent].sort((a, b) => a.at.localeCompare(b.at)).slice(-8),
+              groups: (st.groups ?? 0) + (mt.groups ?? 0),
             }
           : { ...mt, id: survivorId, personId: survivorId };
         await db.textThreads.put(joined);
         await db.textThreads.delete(mergedId);
+      }
+      // the server's days of texts (another device's import) follow the person
+      {
+        const days = await db.textDays.where('personId').equals(mergedId).toArray();
+        await db.textDays.bulkDelete(days.map((d) => d.id));
+        await db.textDays.bulkPut(
+          days.map((d) => ({ ...d, id: `${survivorId}:${d.day}`, personId: survivorId })),
+        );
       }
       // ties: pointed at the survivor; a tie between the two is gone, and a tie both had is kept once (the stronger)
       const edgeKey = (e: Pick<Edge, 'personAId' | 'personBId' | 'type'>) =>
