@@ -412,8 +412,13 @@ export async function snapshot(t: TestDb, s: Seeded, o: SnapshotOptions = {}): P
   );
 
   const target = s.people.cara!;
-  const paths = normalize(await findPaths(svc, u, { target: { personId: target } }), names);
-  const company = normalize(await findPaths(svc, u, { target: { company: 'Stripe' } }), names);
+  // routes of equal score come in the order of their ids: sorted, so the order does not depend on the ids drawn
+  const routes = (r: unknown) => {
+    const o = r as { paths?: unknown[] };
+    return { ...o, paths: sortRows(o.paths ?? []) };
+  };
+  const paths = routes(normalize(await findPaths(svc, u, { target: { personId: target } }), names));
+  const company = routes(normalize(await findPaths(svc, u, { target: { company: 'Stripe' } }), names));
 
   await refreshFriendShares(db, u, NOW);
   const shares = await db.sql<Record<string, unknown>>`

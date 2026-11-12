@@ -183,9 +183,9 @@
             }
           ],
           "names": {
-            "person:Ana Lopez": "Ana Lopez",
             "person:Cara Diaz": "Cara Diaz",
             "person:Dev Shah": "Dev Shah",
+            "person:Ana Lopez": "Ana Lopez",
             "user": "You"
           },
           "nodes": [
@@ -197,39 +197,6 @@
           "otherWays": 3,
           "p": 0.09725287584081402,
           "reasonText": "Ana (Strong · 70) is on email with Dev, who emails with Cara. 3 other ways in."
-        },
-        {
-          "band": "low",
-          "firstHopId": "person:Dev Shah",
-          "hops": [
-            {
-              "fromId": "user",
-              "kind": "strength",
-              "p": 0.16798161486607552,
-              "toId": "person:Dev Shah"
-            },
-            {
-              "band": "connected",
-              "fromId": "person:Dev Shah",
-              "kind": "email_exchange",
-              "p": 0.4415407201783157,
-              "phrase": "emails with Cara",
-              "toId": "person:Cara Diaz"
-            }
-          ],
-          "names": {
-            "person:Cara Diaz": "Cara Diaz",
-            "person:Dev Shah": "Dev Shah",
-            "user": "You"
-          },
-          "nodes": [
-            "user",
-            "person:Dev Shah",
-            "person:Cara Diaz"
-          ],
-          "otherWays": 3,
-          "p": 0.0815877955251518,
-          "reasonText": "Dev (Faint · 10) emails with Cara. 3 other ways in."
         },
         {
           "band": "low",
@@ -263,6 +230,39 @@
           "otherWays": 3,
           "p": 0.056261186334196946,
           "reasonText": "Through Ben, a faint tie (12): Ben is connected to Cara on LinkedIn. 3 other ways in."
+        },
+        {
+          "band": "low",
+          "firstHopId": "person:Dev Shah",
+          "hops": [
+            {
+              "fromId": "user",
+              "kind": "strength",
+              "p": 0.16798161486607552,
+              "toId": "person:Dev Shah"
+            },
+            {
+              "band": "connected",
+              "fromId": "person:Dev Shah",
+              "kind": "email_exchange",
+              "p": 0.4415407201783157,
+              "phrase": "emails with Cara",
+              "toId": "person:Cara Diaz"
+            }
+          ],
+          "names": {
+            "person:Cara Diaz": "Cara Diaz",
+            "person:Dev Shah": "Dev Shah",
+            "user": "You"
+          },
+          "nodes": [
+            "user",
+            "person:Dev Shah",
+            "person:Cara Diaz"
+          ],
+          "otherWays": 3,
+          "p": 0.0815877955251518,
+          "reasonText": "Dev (Faint · 10) emails with Cara. 3 other ways in."
         }
       ],
       "sources": [
@@ -275,29 +275,6 @@
     },
     "company": {
       "paths": [
-        {
-          "band": "high",
-          "firstHopId": "person:Cara Diaz",
-          "hops": [
-            {
-              "fromId": "user",
-              "kind": "strength",
-              "p": 0.47502081252106,
-              "toId": "person:Cara Diaz"
-            }
-          ],
-          "names": {
-            "person:Cara Diaz": "Cara Diaz",
-            "user": "You"
-          },
-          "nodes": [
-            "user",
-            "person:Cara Diaz"
-          ],
-          "otherWays": 3,
-          "p": 0.47502081252106,
-          "reasonText": "Write to Cara directly (Faint · 12). 3 other ways in."
-        },
         {
           "band": "high",
           "firstHopId": "person:Ben Ortiz",
@@ -320,6 +297,29 @@
           "otherWays": 1,
           "p": 0.47502081252106,
           "reasonText": "Write to Ben directly (Faint · 12). 1 other way in."
+        },
+        {
+          "band": "high",
+          "firstHopId": "person:Cara Diaz",
+          "hops": [
+            {
+              "fromId": "user",
+              "kind": "strength",
+              "p": 0.47502081252106,
+              "toId": "person:Cara Diaz"
+            }
+          ],
+          "names": {
+            "person:Cara Diaz": "Cara Diaz",
+            "user": "You"
+          },
+          "nodes": [
+            "user",
+            "person:Cara Diaz"
+          ],
+          "otherWays": 3,
+          "p": 0.47502081252106,
+          "reasonText": "Write to Cara directly (Faint · 12). 3 other ways in."
         },
         {
           "band": "low",
@@ -349,9 +349,9 @@
             }
           ],
           "names": {
-            "person:Ana Lopez": "Ana Lopez",
             "person:Cara Diaz": "Cara Diaz",
             "person:Dev Shah": "Dev Shah",
+            "person:Ana Lopez": "Ana Lopez",
             "user": "You"
           },
           "nodes": [
