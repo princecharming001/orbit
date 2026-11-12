@@ -1519,9 +1519,9 @@ export function textDayFromRow(r: SourceRow.TextDays): TextDayView {
   return {
     personId: r.person_id,
     day: dayOf(r.day),
-    in: Number(r.in_count),
-    out: Number(r.out_count),
-    group: Number(r.group_size),
+    inCount: Number(r.in_count),
+    outCount: Number(r.out_count),
+    groupSize: Number(r.group_size),
     words: !!r.words,
     updatedAt: tsOf(r.updated_at)!,
   };

@@ -22,6 +22,17 @@
  * 15 minutes, never sent on Orbit's own, at most INSTAGRAM_PER_DAY a day. It goes out from the student's own account
  * through Unipile, paid from the account's rolling budget as the student's own request, and is written as an outbound
  * message in the personal lane at once (the touch), keyed so the webhook's copy of it is not stored twice.
+ *
+ * X (plan 43 §5 "Sending") follows the same rule: the student's tap, confirmed within 15 minutes, never on Orbit's
+ * own, at most X_PER_DAY a day. `sendXMessage` first checks that the person accepts DMs from the student
+ * (`receives_your_dm`) and charges both reads to the student's X budget; the sent DM is written in the personal lane
+ * at once (the touch).
+ *
+ * Messages (`imessage`): a draft moved to Messages is the student's handoff. The server keeps it but never sends it:
+ * approving one is refused, and a send job that finds one holds it as a draft.
+ *
+ * Instagram and X go out only while the source is offered and on for the student (`sourceIsOn`); otherwise the draft
+ * waits with the source's note, as the Off state pauses it.
  */
 import { FIRST_TOUCH_KINDS } from '@orbit/core/drafts/compose';
 import { placeholderIn } from '@orbit/core/drafts/validate';
@@ -47,6 +58,9 @@ import { fillChatWords, storeSocialChat } from '../social/chats.ts';
 import { adapterFor, connectedAccount } from '../social/factory.ts';
 import { InstagramCallFailed } from '../social/instagram.ts';
 import { attachedAccount } from '../social/lookup.ts';
+import { sendXMessage, X_SEND_REASONS } from '../social/x/send.ts';
+import { sourceIsOn } from '../sources/states.ts';
+import { draftNote } from '../sources/switch.ts';
 import { checkBuiltAddress } from '../sourcing/ondemand.ts';
 import { recordDraftEdit, voiceGate } from '../voice/voice.ts';
 import { validZone, zonedTime } from '../zones.ts';
@@ -64,10 +78,15 @@ import {
 export const LINKEDIN_CONFIRM_MS = 15 * 60_000;
 /** Instagram messages a day, every one a tap (plan 43 §4). */
 export const INSTAGRAM_PER_DAY = 10;
+/** X messages a day, every one a tap (plan 43 §5). */
+export const X_PER_DAY = 10;
 /** The channels where every message needs the student's own tap, and nothing goes on Orbit's own. */
-const TAP_CHANNELS: ReadonlySet<string> = new Set(['linkedin', 'instagram']);
+const TAP_CHANNELS: ReadonlySet<string> = new Set(['linkedin', 'instagram', 'x']);
 const isTap = (channel: string) => TAP_CHANNELS.has(channel);
-const channelName = (channel: string) => (channel === 'instagram' ? 'Instagram' : 'LinkedIn');
+const channelName = (channel: string) =>
+  channel === 'instagram' ? 'Instagram' : channel === 'x' ? 'X' : 'LinkedIn';
+/** What the student is told when they try to have the server send a draft that goes by Messages. */
+export const IMESSAGE_HANDOFF_TEXT = 'Texts go from Messages on your Mac. Open it in Messages to send it.';
 /** A send held by the pause is looked at again this often, until the pause ends. */
 export const PAUSE_RECHECK_SEC = 15 * 60;
 /** A draft still 'sending' this long after its claim was left by a worker that died mid-send. */
@@ -180,6 +199,8 @@ export async function approveDraft(
   const [p] = await db.sql<{ do_not_contact: boolean; timezone: string | null }>`
     select do_not_contact, timezone from orbit.people where id = ${d.person_id}::uuid`;
   if (p?.do_not_contact) throw new HttpError(409, 'do_not_contact', 'they asked not to be contacted');
+  // a draft moved to Messages is the student's to send from Messages: the server never sends it
+  if ((d.channel as string) === 'imessage') throw new HttpError(409, 'handoff_only', IMESSAGE_HANDOFF_TEXT);
   if (isTap(d.channel) && req.confirm !== true)
     throw new HttpError(
       409,
@@ -353,6 +374,26 @@ export async function sendDraft(s: Services, draftId: string): Promise<SendResul
     return { status: 'held' as const, reason };
   };
 
+  // a draft that goes by Messages is never sent by the server (plan 43 §6): it waits for the student's handoff
+  if ((d.channel as string) === 'imessage') {
+    await settle('draft', { error: 'imessage_handoff' });
+    await audit(db, userId, 'system', 'draft.hold', d.id, { reason: 'imessage_handoff' });
+    return { status: 'held', reason: 'imessage_handoff' };
+  }
+  // Instagram and X go out only while the source is offered and on: otherwise the draft waits, as Off pauses it
+  const channel = d.channel as string;
+  if (channel === 'instagram' || channel === 'x') {
+    const source = channel;
+    const env = [
+      ...(s.env.extraSources ?? []),
+      ...(source === 'x' && s.env.x?.offered ? ['x' as const] : []),
+    ];
+    if (!(await sourceIsOn(db, userId, source, env))) {
+      await settle('draft', { error: draftNote(source, 'off') });
+      await audit(db, userId, 'system', 'draft.hold', d.id, { reason: 'source_off', source });
+      return { status: 'held', reason: 'source_off' };
+    }
+  }
   // [ASK USER: …], or any other blank left for the user (one with its brackets deleted too), never goes out
   if (
     askUserMarkers(`${d.subject ?? ''}\n${d.body}`).length ||
@@ -641,6 +682,18 @@ export async function sendDraft(s: Services, draftId: string): Promise<SendResul
       return { status: 'held', reason: ig.error };
     }
     out = ig;
+  } else if (d.channel === ('x' as string)) {
+    const x = await xSend(s, userId, d, now);
+    // a refusal the student can act on (not accepting, the spending limit, slow down): back to a draft with it
+    if (!x.ok && !x.retry && x.error !== 'x_not_connected' && x.error !== 'x_unconfigured') {
+      await settle('draft', { error: x.error });
+      await audit(db, userId, 'system', 'draft.hold', d.id, {
+        reason: x.error,
+        text: X_SEND_REASONS[x.error.replace(/^x_/, '') as keyof typeof X_SEND_REASONS] ?? undefined,
+      });
+      return { status: 'held', reason: x.error };
+    }
+    out = x;
   } else {
     const [acct] = await db.sql<{ external_account_id: string | null }>`
       select external_account_id from orbit.integration_accounts
@@ -737,7 +790,9 @@ async function afterSend(db: Db, userId: string, d: DraftRow, now: Date) {
       ? 'email'
       : d.channel === ('instagram' as string)
         ? 'instagram'
-        : 'linkedin') as CoffeeChat['outreachChannel'],
+        : d.channel === ('x' as string)
+          ? 'x'
+          : 'linkedin') as CoffeeChat['outreachChannel'],
   };
   if (!data.firstOutreachAt && d.kind !== 'forwardable_blurb' && d.kind !== 'intro_request')
     data.firstOutreachAt = at;
@@ -810,6 +865,14 @@ async function capReached(
          and sent_at >= ${dayStart}::timestamptz`;
     const cap = ownCap(u.settings, 'daily_send_cap_instagram', INSTAGRAM_PER_DAY);
     return (r?.n ?? 0) + inFlight >= cap ? 'instagram_daily_cap' : null;
+  }
+  if (d.channel === ('x' as string)) {
+    const [r] = await db.sql<{ n: number }>`
+      select count(*)::int as n from orbit.drafts
+       where user_id = ${userId}::uuid and channel = 'x' and status = 'sent'
+         and sent_at >= ${dayStart}::timestamptz`;
+    const cap = ownCap(u.settings, 'daily_send_cap_x', X_PER_DAY);
+    return (r?.n ?? 0) + inFlight >= cap ? 'x_daily_cap' : null;
   }
   if (await salesFirstTouch(db, d)) {
     const [r] = await db.sql<{ n: number }>`
@@ -998,6 +1061,54 @@ async function instagramSend(
     }
     throw e;
   }
+}
+
+/**
+ * One X DM (plan 43 §5 "Sending"), after the student's fresh tap (checked above): to the person's attached X account,
+ * through `sendXMessage`, which checks they accept DMs from the student and charges the student's X budget. The sent
+ * DM is written in the personal lane at once (the touch), with its words, since the student wrote it from Orbit.
+ */
+async function xSend(
+  s: Services,
+  userId: string,
+  d: DraftRow,
+  now: Date,
+): Promise<SendOutcome & { chatId?: string }> {
+  const db = s.db;
+  const cfg = s.env.x;
+  if (!cfg?.clientId || !cfg.clientSecret) return { ok: false, retry: false, error: 'x_unconfigured' };
+  const [acct] = await db.sql<{ social_account_id: string | null; status: string }>`
+    select social_account_id, status from orbit.integration_accounts
+     where user_id = ${userId}::uuid and provider = 'x'`;
+  if (acct?.status !== 'active' || !acct.social_account_id)
+    return { ok: false, retry: false, error: 'x_not_connected' };
+  const accountId = await attachedAccount(db, userId, 'x', d.person_id);
+  if (!accountId) return { ok: false, retry: false, error: 'x_no_account' };
+  const r = await sendXMessage(db, userId, accountId, d.body, { cfg, fetch: s.fetch, now: s.now });
+  if (!r.ok) return { ok: false, retry: false, error: `x_${r.code}` };
+  await storeSocialChat(
+    db,
+    userId,
+    'x',
+    { chatId: r.chatId, participants: 2, others: [{ accountId }] },
+    [
+      {
+        messageId: r.messageId,
+        chatId: r.chatId,
+        at: now.toISOString(),
+        fromStudent: true,
+        senderAccountId: acct.social_account_id,
+        text: d.body,
+        hasWords: true,
+      },
+    ],
+    { now },
+  );
+  await db.sql`
+    update orbit.messages set body_text = ${d.body}, snippet = ${d.body.slice(0, 200)}
+     where user_id = ${userId}::uuid and provider = 'x' and external_id = ${r.messageId}`;
+  await fillChatWords(db, userId, d.person_id, s.queue).catch(() => 0);
+  return { ok: true, providerMessageId: r.messageId, chatId: r.chatId };
 }
 
 /**

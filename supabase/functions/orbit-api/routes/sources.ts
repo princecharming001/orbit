@@ -1,6 +1,7 @@
 /**
  * The student's optional sources (plan 43 §3.1):
- *   GET /sources                      → {offered, states}: the sources the owner offers (ORBIT_EXTRA_SOURCES) and,
+ *   GET /sources                      → {offered, states}: the sources the owner offers (ORBIT_EXTRA_SOURCES with the
+ *                                       launch switches, `offeredNow`; a source not offered is not listed) and,
  *                                       for each, the student's state, when it went off and whether friends may
  *                                       find paths through who they follow
  *   PUT /sources/:source {state: 'on'|'off'|'removed', shareFollows?}
@@ -15,18 +16,20 @@ import { OPTIONAL_SOURCES, type OptionalSource } from '@orbit/core/sources';
 import { badRequest, HttpError, json } from '../../_shared/http.ts';
 import { sqlQueue } from '../../_shared/queue.ts';
 import { iso } from '../../_shared/rows.ts';
+import { isOffered, offeredNow } from '../../_shared/sources/states.ts';
 import { type SwitchState, switchSource } from '../../_shared/sources/switch.ts';
 import type { Ctx, Route } from '../api.ts';
 import { body } from './body.ts';
 
 async function list(ctx: Ctx): Promise<Response> {
-  const rows = ctx.offered.length
+  const offered = await offeredNow(ctx.db, ctx.offered);
+  const rows = offered.length
     ? await ctx.db.sql<{ source: string; state: string; off_since: Date | null; share_follows: boolean }>`
         select source, state, off_since, share_follows from orbit.source_states
-         where user_id = ${ctx.userId!}::uuid and source = any(${ctx.offered}::text[])`
+         where user_id = ${ctx.userId!}::uuid and source = any(${offered}::text[])`
     : [];
   const states: SourcesResponse['states'] = {};
-  for (const s of ctx.offered) {
+  for (const s of offered) {
     const r = rows.find((x) => x.source === s);
     states[s] = {
       state: (r?.state ?? 'not_connected') as SourceStateView['state'],
@@ -34,7 +37,7 @@ async function list(ctx: Ctx): Promise<Response> {
       shareFollows: !!r?.share_follows,
     };
   }
-  const out: SourcesResponse = { offered: [...ctx.offered], states };
+  const out: SourcesResponse = { offered, states };
   return json(200, out);
 }
 
@@ -42,7 +45,10 @@ const STATES: readonly SwitchState[] = ['on', 'off', 'removed'];
 
 async function put(ctx: Ctx, raw: string): Promise<Response> {
   const source = raw.toLowerCase() as OptionalSource;
-  if (!(OPTIONAL_SOURCES as readonly string[]).includes(source) || !ctx.offered.includes(source))
+  if (
+    !(OPTIONAL_SOURCES as readonly string[]).includes(source) ||
+    !(await isOffered(ctx.db, source, ctx.offered))
+  )
     throw new HttpError(404, 'not_found', 'no such source');
   const b = await body(ctx);
   if (typeof b.state !== 'string' || !STATES.includes(b.state as SwitchState))

@@ -51,6 +51,8 @@ function apiFor(fake: FakeInstagram) {
       unipileKey: UNIPILE_ENV.apiKey,
       unipileBase: fake.base,
       unipileWebhookSecret: HOOK,
+      // plan 43: Instagram is offered (the shipped default offers nothing)
+      extraSources: ['instagram'],
     },
     db: t.db,
     fetch: fake.fetch,
@@ -72,7 +74,7 @@ function apiFor(fake: FakeInstagram) {
 }
 
 function webhook(path: string, body: unknown) {
-  const h = makeWebhookHandler({ db: t.db, pubsubToken: 'p', unipileSecret: HOOK });
+  const h = makeWebhookHandler({ db: t.db, pubsubToken: 'p', unipileSecret: HOOK, offered: ['instagram'] });
   return h(
     new Request(`${WEBHOOKS}${path}`, {
       method: 'POST',
@@ -88,6 +90,7 @@ function workers(fake: FakeInstagram, extra: Record<string, JobHandler> = {}) {
       fetch: fake.fetch,
       unipile: { apiKey: UNIPILE_ENV.apiKey, baseUrl: fake.base },
       random: () => 0.5,
+      offered: ['instagram'],
     }),
     'score.person': noop,
     friend_shares_refresh: noop,
@@ -607,7 +610,11 @@ describe('sending', () => {
       values (${s.userId}::uuid, 'agent', 'draft.auto_approve', 'drafts', ${d!.id},
               ${{ hash: messageHash({ channel: 'instagram' as never, subject: null, body: d!.body }) }}::jsonb)`;
     const services = makeServices(
-      agentConfig({ fetch: fake.fetch, calls: [] } as never, { unipileKey: 'k', unipileBase: fake.base }),
+      agentConfig({ fetch: fake.fetch, calls: [] } as never, {
+        unipileKey: 'k',
+        unipileBase: fake.base,
+        extraSources: ['instagram'],
+      }),
       {
         db: t.db,
         now,

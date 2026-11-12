@@ -123,6 +123,8 @@ export interface XSyncState {
   dmCursor?: string;
   /** when the DMs were last read */
   dmReadAt?: string;
+  /** the student's own following list, read on connect (orbit-worker sync.x): its size, or why it was not read */
+  following?: { readAt: string; size?: number; reason?: string };
 }
 
 export async function loadXState(

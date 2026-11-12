@@ -15,7 +15,17 @@
  *   GET    /social/asks                         → {asks}: open "is this the same person" questions
  *   POST   /social/asks/:id {answer: yes | no}  → {status}
  *   POST   /social/lookups {platform, personId} → {lookupId, status}: who could introduce the student to them
+ *   POST   /social/lookups {platform: 'x', personId}
+ *                                               → {status: 'quote', quoteUsd, list, size, reason?}: on X the price
+ *                                                comes first (plan 43 §5), nothing read but the target's profile
+ *   POST   /social/lookups {platform: 'x', personId, confirm: true, quoteUsd?}
+ *                                               → {lookupId, status, quoteUsd}: the check runs under that price and is
+ *                                                never charged more; 409 quote_first without a quote in the last 15
+ *                                                minutes, or with the quote's reason when nothing can be read
  *   GET    /social/lookups/:id                  → {status, result}
+ *
+ * A platform the owner does not offer (`offeredNow`: ORBIT_EXTRA_SOURCES with the launch switches) is not there:
+ * its routes answer 404 (disconnect excepted, so a student can always let go of an account).
  */
 import type { SocialPlatform } from '@orbit/core/entity/social';
 import { HttpError, json, unconfigured } from '../../_shared/http.ts';
@@ -27,11 +37,24 @@ import { patchSocialState, type SocialSyncState } from '../../_shared/social/fir
 import { answerAsk, attachAccount, detachLink } from '../../_shared/social/links.ts';
 import { startLookup } from '../../_shared/social/lookup.ts';
 import { removeSocialRows } from '../../_shared/social/remove.ts';
+import { xSetupMissing } from '../../_shared/social/x/client.ts';
+import { X_NOT_SET_UP } from '../../_shared/social/x/config.ts';
+import { confirmXLookup, quoteXLookup } from '../../_shared/social/x/lookup.ts';
+import { isOffered, offeredNow, sourceIsOn } from '../../_shared/sources/states.ts';
 import type { Ctx, Route } from '../api.ts';
 import { body, uuid } from './body.ts';
 import { functionsBase } from './integrations.ts';
 
 const isPlatform = (v: unknown): v is SocialPlatform => v === 'instagram' || v === 'x';
+
+/** The env list the owner's switch starts from: ORBIT_EXTRA_SOURCES, and X's own reading of it. */
+const envList = (ctx: Ctx) =>
+  ctx.env.x?.offered && !ctx.offered.includes('x') ? [...ctx.offered, 'x' as const] : ctx.offered;
+
+/** A platform not offered right now is not there (plan 43 §3.1). */
+async function mustBeOffered(ctx: Ctx, platform: SocialPlatform): Promise<void> {
+  if (!(await isOffered(ctx.db, platform, envList(ctx)))) throw new HttpError(404, 'not_found', 'not found');
+}
 
 type IgRow = {
   status: string;
@@ -51,6 +74,7 @@ async function instagramRow(ctx: Ctx): Promise<IgRow | undefined> {
 const held = (r: IgRow | undefined) => r?.status === 'error' && r.last_error === 'different_account';
 
 async function connectStart(ctx: Ctx): Promise<Response> {
+  await mustBeOffered(ctx, 'instagram');
   const b = await body(ctx, true);
   const replace = b.replace === true;
   const userId = ctx.userId!;
@@ -114,6 +138,7 @@ type Step = 'done' | 'reading' | 'waiting';
 const ORDER = ['profile', 'chats', 'following', 'followers', 'refresh'] as const;
 
 async function status(ctx: Ctx): Promise<Response> {
+  await mustBeOffered(ctx, 'instagram');
   const row = await instagramRow(ctx);
   const state = row?.sync_state?.instagram ?? {};
   const s = !row
@@ -177,6 +202,7 @@ async function peopleOf(ctx: Ctx, ids: string[]) {
 async function attach(ctx: Ctx): Promise<Response> {
   const b = await body(ctx);
   if (!isPlatform(b.platform)) throw new HttpError(400, 'bad_request', 'platform is instagram or x');
+  await mustBeOffered(ctx, b.platform);
   if (typeof b.accountId !== 'string' || !/^[\w.:-]{1,64}$/.test(b.accountId))
     throw new HttpError(400, 'bad_request', 'accountId is the platform id of the account');
   const personId = uuid(b, 'personId');
@@ -215,6 +241,7 @@ async function detach(ctx: Ctx, id: string): Promise<Response> {
 }
 
 async function asks(ctx: Ctx): Promise<Response> {
+  const offered = await offeredNow(ctx.db, envList(ctx));
   const rows = await ctx.db.sql<{
     id: string;
     platform: string;
@@ -231,7 +258,7 @@ async function asks(ctx: Ctx): Promise<Response> {
       from orbit.social_match_asks k
       join orbit.people p on p.id = k.person_id and p.deleted_at is null
       left join orbit.social_accounts a on a.platform = k.platform and a.account_id = k.account_id
-     where k.user_id = ${ctx.userId!}::uuid and k.status = 'open'
+     where k.user_id = ${ctx.userId!}::uuid and k.status = 'open' and k.platform = any(${offered}::text[])
      order by k.score desc, k.created_at limit 50`;
   return json(200, {
     asks: rows.map((r) => ({
@@ -269,10 +296,38 @@ async function answer(ctx: Ctx, id: string): Promise<Response> {
 
 async function lookupStart(ctx: Ctx): Promise<Response> {
   const b = await body(ctx);
-  if (b.platform !== 'instagram') throw new HttpError(400, 'bad_request', 'platform is instagram');
+  if (!isPlatform(b.platform)) throw new HttpError(400, 'bad_request', 'platform is instagram or x');
+  await mustBeOffered(ctx, b.platform);
   const personId = uuid(b, 'personId');
-  const r = await startLookup(ctx.db, sqlQueue(ctx.db), ctx.userId!, b.platform, personId);
+  if (b.platform === 'x') return xLookup(ctx, personId, b);
+  const r = await startLookup(ctx.db, sqlQueue(ctx.db), ctx.userId!, b.platform, personId, envList(ctx));
   return json(200, r);
+}
+
+/** X: the price first; then, on the student's yes, the check under it (plan 43 §5). */
+async function xLookup(ctx: Ctx, personId: string, b: Record<string, unknown>): Promise<Response> {
+  const userId = ctx.userId!;
+  const cfg = ctx.env.x;
+  const missing = await xSetupMissing(ctx.db, cfg);
+  if (missing.length || !cfg)
+    return json(
+      503,
+      { error: { code: 'unconfigured', message: X_NOT_SET_UP, missing } },
+      { 'x-orbit-connector': 'unconfigured' },
+    );
+  if (!(await sourceIsOn(ctx.db, userId, 'x', envList(ctx))))
+    throw new HttpError(409, 'source_off', 'X is not on');
+  const [p] = await ctx.db.sql`
+    select 1 from orbit.people where id = ${personId}::uuid and user_id = ${userId}::uuid and deleted_at is null`;
+  if (!p) throw new HttpError(404, 'not_found', 'no such person');
+  if (b.confirm === true) {
+    const r = await confirmXLookup(ctx.db, sqlQueue(ctx.db), userId, personId, {
+      now: ctx.now(),
+      ...(typeof b.quoteUsd === 'number' ? { quoteUsd: b.quoteUsd } : {}),
+    });
+    return json(200, r);
+  }
+  return json(200, await quoteXLookup(ctx.db, userId, personId, { cfg, fetch: ctx.fetch, now: ctx.now }));
 }
 
 async function lookupGet(ctx: Ctx, id: string): Promise<Response> {

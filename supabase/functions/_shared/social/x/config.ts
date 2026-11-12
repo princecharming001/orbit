@@ -49,7 +49,10 @@ export interface XConfig {
   orbitMonthlyUsd: number;
   /** the largest list read whole for one check */
   listLimit: number;
-  /** the owner listed `x` in ORBIT_EXTRA_SOURCES */
+  /**
+   * the owner listed `x` in ORBIT_EXTRA_SOURCES; the launch switch (orbit_private.source_launch) can offer X too, so
+   * every use asks `xOfferedNow` (client.ts), which joins the two
+   */
   offered: boolean;
 }
 
@@ -71,10 +74,13 @@ export function xConfigFromEnv(env: (name: string) => string | undefined): XConf
   };
 }
 
-/** The settings X needs that are missing, by their environment names. */
-export function xMissing(cfg: XConfig | undefined): string[] {
+/**
+ * The settings X needs that are missing, by their environment names. `offered` is whether X is offered right now
+ * (`xOfferedNow`); without it, the env list alone.
+ */
+export function xMissing(cfg: XConfig | undefined, offered = !!cfg?.offered): string[] {
   const m: string[] = [];
-  if (!cfg?.offered) m.push('ORBIT_EXTRA_SOURCES');
+  if (!offered) m.push('ORBIT_EXTRA_SOURCES');
   if (!cfg?.clientId) m.push('ORBIT_X_CLIENT_ID');
   if (!cfg?.clientSecret) m.push('ORBIT_X_CLIENT_SECRET');
   return m;

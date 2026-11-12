@@ -3,9 +3,10 @@
  * reads X on the server (the quote, the check, DM polling, sending) builds its adapter here.
  */
 import type { Db } from '../../db.ts';
+import { isOffered } from '../../sources/states.ts';
 import { sqlVault, type Vault } from '../../vault.ts';
 import { createXAdapter, type XAdapter } from './adapter.ts';
-import type { XConfig } from './config.ts';
+import { type XConfig, xMissing } from './config.ts';
 import { loadXState, type XOAuthConfig, type XTokens, xTokens } from './oauth.ts';
 import { type XSpend, xSpend } from './spend.ts';
 
@@ -25,6 +26,16 @@ export interface XClient {
   tokens: XTokens;
   /** the student's own X account id */
   meId: string | null;
+}
+
+/** X is offered right now: listed in ORBIT_EXTRA_SOURCES, or launched by the owner (plan 43 §3.1). */
+export function xOfferedNow(db: Db, cfg: Pick<XConfig, 'offered'> | undefined): Promise<boolean> {
+  return isOffered(db, 'x', cfg?.offered ? ['x'] : []);
+}
+
+/** What X needs that is missing right now, the owner's switch included. */
+export async function xSetupMissing(db: Db, cfg: XConfig | undefined): Promise<string[]> {
+  return xMissing(cfg, await xOfferedNow(db, cfg));
 }
 
 export function xOAuth(deps: XDeps, redirectUri = ''): XOAuthConfig | undefined {

@@ -11,7 +11,8 @@
  * - `socialCandidates`: the student's people as core `SocialCandidate`s, with what a profile could echo (emails,
  *   phones, LinkedIn, pages research found) and `knownToStudent`.
  * - `matchAccount`: core `socialBlock` + `matchSocialAccount` (or `matchTargetAccount` for a target), then attach,
- *   ask (only about people the student knows) or nothing.
+ *   ask (only about people the student knows) or nothing. An X account goes through `matchXAccount` /
+ *   `matchXTarget` instead (x/match.ts): public proof only, and the student is never asked about it.
  */
 import {
   matchSocialAccount,
@@ -26,6 +27,7 @@ import type { Db } from '../db.ts';
 import { PERSON_COLUMNS, toPerson } from '../ingest/util.ts';
 import { identityKind, sourceAccount } from './keys.ts';
 import { attachAccount } from './links.ts';
+import { matchXAccount, matchXTarget } from './x/match.ts';
 
 export { identityKind, sourceAccount };
 
@@ -231,11 +233,18 @@ export async function matchAccount(
   const linked = await personForAccount(db, userId, account.platform, account.id);
   if (linked?.via === 'link') return { kind: 'none', match: { kind: 'none', reason: 'no_candidate' } };
   const rejected = await rejectedFor(db, userId, account.platform, account.id);
+  const x = account.platform === 'x';
   let match: SocialMatch;
   if (o.target) {
     match = rejected.has(o.target.person.id)
       ? { kind: 'none', reason: 'no_candidate' }
-      : matchTargetAccount(account, o.target);
+      : x
+        ? matchXTarget(account, o.target)
+        : matchTargetAccount(account, o.target);
+  } else if (x) {
+    // public proof is exact, so the whole pool is checked, not only the people a name block finds
+    const pool = o.candidates ?? (await socialCandidates(db, userId, account.platform));
+    match = matchXAccount(account, pool, { rejected });
   } else {
     const pool = o.candidates ?? (await socialCandidates(db, userId, account.platform));
     match = matchSocialAccount(account, socialBlock(account, pool), { rejected });
@@ -253,15 +262,16 @@ export async function matchAccount(
     });
     if (r.status === 'attached' || r.status === 'exists')
       return { kind: 'attached', personId: match.personId, match };
-    // the account's own person has things of its own: the student is asked instead, if they know the person
+    // the account's own person has things of its own: the student is asked instead, if they know the person (never
+    // on X, where the student's say-so is not proof)
     const known = await knownPeople(db, userId, [match.personId]);
-    if (!known.has(match.personId)) return { kind: 'none', match, conflict: true };
+    if (x || !known.has(match.personId)) return { kind: 'none', match, conflict: true };
     await askAbout(db, userId, account, match.personId, match.via === 'score' ? match.score : 0.94, {
       proof: match.via === 'proof' ? match.proof : undefined,
     });
     return { kind: 'asked', personId: match.personId, match };
   }
-  if (match.kind === 'ask') {
+  if (match.kind === 'ask' && !x) {
     await askAbout(db, userId, account, match.personId, match.score, match.signals);
     return { kind: 'asked', personId: match.personId, match };
   }
