@@ -10,7 +10,15 @@
  * is what the cards and drafts answer; `conversationWith` is every message with them, Gmail, LinkedIn and the recent
  * iMessage texts, for the Messages tab and the chat.
  */
-import type { CoffeeChat, ConversationChannel, EmailMessage, EmailThread, Person, Suggestion, User } from '@orbit/core';
+import type {
+  CoffeeChat,
+  ConversationChannel,
+  EmailMessage,
+  EmailThread,
+  Person,
+  Suggestion,
+  User,
+} from '@orbit/core';
 import { heuristicSignal, newId } from '@orbit/core';
 import { db } from '../db/schema';
 import { readReply } from './rapport';

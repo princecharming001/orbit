@@ -11065,6 +11065,57 @@ function dossierFromRow(r) {
   });
 }
 
+// packages/core/src/sources.ts
+var SOURCES = {
+  instagram: {
+    id: "instagram",
+    name: "Instagram",
+    provider: "instagram",
+    messageProvider: "instagram",
+    touchKinds: ["instagram_in", "instagram_out"],
+    tieKinds: ["instagram_mutual", "instagram_follow"],
+    identityKind: "instagram_id",
+    personSource: "instagram",
+    signedInOnly: true,
+    send: "tap",
+    mutuals: true
+  },
+  x: {
+    id: "x",
+    name: "X",
+    provider: "x",
+    messageProvider: "x",
+    touchKinds: ["x_in", "x_out"],
+    tieKinds: ["x_mutual", "x_follow"],
+    identityKind: "x_id",
+    personSource: "x",
+    signedInOnly: true,
+    send: "tap",
+    mutuals: true
+  },
+  imessage: {
+    id: "imessage",
+    name: "Texts",
+    provider: "imessage",
+    touchKinds: ["text_in", "text_out"],
+    tieKinds: [],
+    personSource: "imessage",
+    signedInOnly: false,
+    send: "handoff",
+    mutuals: false
+  }
+};
+var TOUCH_SOURCE = /* @__PURE__ */ new Map();
+var TIE_SOURCE = /* @__PURE__ */ new Map();
+var PROVIDER_SOURCE = /* @__PURE__ */ new Map();
+var IDENTITY_SOURCE = /* @__PURE__ */ new Map();
+for (const info of Object.values(SOURCES)) {
+  for (const k of info.touchKinds) TOUCH_SOURCE.set(k, info.id);
+  for (const k of info.tieKinds) TIE_SOURCE.set(k, info.id);
+  if (info.messageProvider) PROVIDER_SOURCE.set(info.messageProvider, info.id);
+  if (info.identityKind) IDENTITY_SOURCE.set(info.identityKind, info.id);
+}
+
 // packages/core/src/scoring/rapport.ts
 var RAPPORT_CUES = [
   "asks_about_you",
@@ -11576,11 +11627,22 @@ var TIE_KINDS = [
   "linkedin_engagement",
   "linkedin_mention",
   "common_contacts",
-  "student_says_close"
+  "student_says_close",
+  "instagram_mutual",
+  "instagram_follow",
+  "x_mutual",
+  "x_follow"
 ];
 var HOP_WEIGHTS = {
   /** a LinkedIn connection with nothing more known (plan 16 §4.2) */
   mutual: 0.3,
+  /**
+   * Two people who follow each other on Instagram or X (plan 43 §3.7): starts at a LinkedIn mutual's weight and shrinks
+   * as the less selective of the two follows more accounts (`socialFollowWeight`).
+   */
+  socialMutual: { base: 0.3, selective: 300, floor: 0.08 },
+  /** one follows the other and not back: support only, toward the hop whose second person follows the first */
+  socialFollow: 0.1,
   recommendation: 0.85,
   /** divided by (people tagged − 1) beyond two */
   mention: 0.6,
@@ -11635,12 +11697,16 @@ var ROUTABLE_TIE_KINDS = /* @__PURE__ */ new Set([
   "introduced_by",
   "linkedin_mutual",
   "linkedin_recommendation",
-  "student_says_close"
+  "student_says_close",
+  "instagram_mutual",
+  "x_mutual"
 ]);
 var SUPPORT_ONLY_TIE_KINDS = /* @__PURE__ */ new Set([
   "linkedin_engagement",
   "linkedin_mention",
-  "common_contacts"
+  "common_contacts",
+  "instagram_follow",
+  "x_follow"
 ]);
 var TIE_CONFIDENCE = {
   email_exchange: 0.95,
@@ -11659,8 +11725,18 @@ var TIE_CONFIDENCE = {
   linkedin_engagement: 0.9,
   linkedin_mention: 0.9,
   common_contacts: 0.6,
-  student_says_close: 0.9
+  student_says_close: 0.9,
+  // a follow list is what the platform returned; how sure Orbit is the accounts are these people is in the match
+  instagram_mutual: 0.9,
+  instagram_follow: 0.9,
+  x_mutual: 0.9,
+  x_follow: 0.9
 };
+var MUTUAL_TIE_KINDS = /* @__PURE__ */ new Set([
+  "linkedin_mutual",
+  "instagram_mutual",
+  "x_mutual"
+]);
 var DAY5 = 864e5;
 var YEAR = 365.25 * DAY5;
 var pairKey = (a, b) => a < b ? [a, b] : [b, a];
@@ -11740,6 +11816,11 @@ function engagementScore(items, ctx = {}) {
 function pKnowDirected(pair, _fromId, toId) {
   let p = Math.max(0, Math.min(1, pair.weight));
   for (const t of pair.ties) {
+    if (t.kind === "instagram_follow" || t.kind === "x_follow") {
+      const ev2 = t.evidence;
+      if (ev2.followerId === toId) p = 1 - (1 - p) * (1 - Math.min(1, t.weight * t.confidence));
+      continue;
+    }
     if (t.kind !== "linkedin_engagement") continue;
     const ev = t.evidence;
     if (ev.reciprocal) continue;
@@ -12012,8 +12093,9 @@ function withExternal(pairs, targetId, candidates2) {
     if (c.introducerId === targetId) continue;
     const key = pk(c.introducerId, targetId);
     const [a, b] = key.split("|");
-    const w = c.kind === "linkedin_mutual" ? HOP_WEIGHTS.mutual : Math.max(0, Math.min(1, c.warmth ?? 0));
-    const conf = c.kind === "linkedin_mutual" ? 0.95 : c.kind === "friend_path" ? 1 : 0.7;
+    const social = c.kind === "instagram_mutual" || c.kind === "x_mutual";
+    const w = c.kind === "linkedin_mutual" ? HOP_WEIGHTS.mutual : social ? Math.max(0, Math.min(1, c.warmth ?? HOP_WEIGHTS.socialMutual.base)) : Math.max(0, Math.min(1, c.warmth ?? 0));
+    const conf = c.kind === "linkedin_mutual" ? 0.95 : c.kind === "friend_path" ? 1 : social ? TIE_CONFIDENCE[c.kind] : 0.7;
     const tie = {
       id: `${key}|${c.kind}`,
       userId: "",
@@ -12023,7 +12105,7 @@ function withExternal(pairs, targetId, candidates2) {
       weight: w,
       confidence: conf,
       evidence: {
-        source: c.kind === "linkedin_mutual" ? "unipile" : c.kind === "friend_path" ? "friend" : "village"
+        source: c.kind === "linkedin_mutual" ? "unipile" : c.kind === "friend_path" ? "friend" : social ? c.kind === "instagram_mutual" ? "instagram" : "x" : "village"
       },
       lastSeenAt: c.seenAt
     };
@@ -12120,6 +12202,15 @@ function hopEvidence(fromId, tie, toName) {
     }
     case "linkedin_engagement":
       return engagementPhrase(fromId, ev, toName);
+    case "instagram_mutual":
+      return `follows ${toName} on Instagram and they follow back`;
+    case "x_mutual":
+      return `follows ${toName} on X and they follow back`;
+    case "instagram_follow":
+    case "x_follow": {
+      const where = tie.kind === "instagram_follow" ? "Instagram" : "X";
+      return ev.followerId === fromId ? `follows ${toName} on ${where}` : `is followed by ${toName} on ${where}`;
+    }
     default:
       return `knows ${toName}`;
   }
@@ -12156,9 +12247,9 @@ function mutualIntroducers(pairs, targetId, candidates2) {
   const out = /* @__PURE__ */ new Set();
   if (!targetId) return out;
   for (const c of candidates2)
-    if (c.kind === "linkedin_mutual" && c.introducerId !== targetId) out.add(c.introducerId);
+    if (MUTUAL_TIE_KINDS.has(c.kind) && c.introducerId !== targetId) out.add(c.introducerId);
   for (const pair of pairs.values()) {
-    if (!pair.kinds.includes("linkedin_mutual")) continue;
+    if (!pair.kinds.some((k) => MUTUAL_TIE_KINDS.has(k))) continue;
     if (pair.aId === targetId) out.add(pair.bId);
     else if (pair.bId === targetId) out.add(pair.aId);
   }

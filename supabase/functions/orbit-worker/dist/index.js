@@ -12764,6 +12764,59 @@ ${p.slots.slice(0, 3).map((x) => `- ${x.label}`).join("\n")}`;
   };
 }
 
+// packages/core/src/sources.ts
+var SOURCES = {
+  instagram: {
+    id: "instagram",
+    name: "Instagram",
+    provider: "instagram",
+    messageProvider: "instagram",
+    touchKinds: ["instagram_in", "instagram_out"],
+    tieKinds: ["instagram_mutual", "instagram_follow"],
+    identityKind: "instagram_id",
+    personSource: "instagram",
+    signedInOnly: true,
+    send: "tap",
+    mutuals: true
+  },
+  x: {
+    id: "x",
+    name: "X",
+    provider: "x",
+    messageProvider: "x",
+    touchKinds: ["x_in", "x_out"],
+    tieKinds: ["x_mutual", "x_follow"],
+    identityKind: "x_id",
+    personSource: "x",
+    signedInOnly: true,
+    send: "tap",
+    mutuals: true
+  },
+  imessage: {
+    id: "imessage",
+    name: "Texts",
+    provider: "imessage",
+    touchKinds: ["text_in", "text_out"],
+    tieKinds: [],
+    personSource: "imessage",
+    signedInOnly: false,
+    send: "handoff",
+    mutuals: false
+  }
+};
+var TOUCH_SOURCE = /* @__PURE__ */ new Map();
+var TIE_SOURCE = /* @__PURE__ */ new Map();
+var PROVIDER_SOURCE = /* @__PURE__ */ new Map();
+var IDENTITY_SOURCE = /* @__PURE__ */ new Map();
+for (const info of Object.values(SOURCES)) {
+  for (const k of info.touchKinds) TOUCH_SOURCE.set(k, info.id);
+  for (const k of info.tieKinds) TIE_SOURCE.set(k, info.id);
+  if (info.messageProvider) PROVIDER_SOURCE.set(info.messageProvider, info.id);
+  if (info.identityKind) IDENTITY_SOURCE.set(info.identityKind, info.id);
+}
+var CHAT_CHANNELS = ["instagram", "x", "text"];
+var isChatChannel = (c) => CHAT_CHANNELS.includes(c);
+
 // packages/core/src/scoring/rapport.ts
 var RAPPORT_VERSION = 1;
 var RAPPORT_CUES = [
@@ -12981,7 +13034,9 @@ var TIE_FEATURES = [
   "warmth",
   "never",
   "engagement",
-  "rapport"
+  "rapport",
+  "instagram_follow",
+  "x_follow"
 ];
 var TIE_WEIGHTS = {
   bias: -2.33,
@@ -13000,7 +13055,11 @@ var TIE_WEIGHTS = {
   warmth: 0.5,
   never: -0.1,
   engagement: 0.5,
-  rapport: 0.6
+  rapport: 0.6,
+  // plan 43: following each other is set by hand (no anchor carries it), a little under a LinkedIn connection, and
+  // X's a little under Instagram's, where students follow the people they actually know
+  instagram_follow: 0.6,
+  x_follow: 0.4
 };
 var TIE_BASELINE = {
   log_days_last: 5.27,
@@ -13020,7 +13079,10 @@ var TIE_BASELINE = {
   // the demo network had no post engagement when the baseline was taken
   engagement: 0,
   // no replies is neutral: silence never lowers a tie
-  rapport: 0
+  rapport: 0,
+  // nobody followed anyone when the baseline was taken: a follow only ever adds
+  instagram_follow: 0,
+  x_follow: 0
 };
 var RAPPORT_MAX_POINTS = 8;
 var RAPPORT_PRIOR = 3;
@@ -13061,8 +13123,65 @@ function meetingWeight(attendees) {
 var ENGAGEMENT_WEIGHT = {
   comment_in: 1,
   comment_out: 1,
-  reaction_in: 0.3
+  reaction_in: 0.3,
+  chat_light: 0.3
 };
+function chatGroupWeight(participants) {
+  if (participants <= 2) return 1;
+  if (participants <= 4) return 0.5;
+  if (participants <= 8) return 0.25;
+  return 0;
+}
+function localDay(iso4, timeZone) {
+  const d = new Date(iso4);
+  if (Number.isNaN(d.getTime())) return iso4.slice(0, 10);
+  if (timeZone) {
+    try {
+      return new Intl.DateTimeFormat("en-CA", {
+        timeZone,
+        year: "numeric",
+        month: "2-digit",
+        day: "2-digit"
+      }).format(d);
+    } catch {
+    }
+  }
+  return d.toISOString().slice(0, 10);
+}
+function chatDays(h) {
+  const out = [];
+  const light = [];
+  const answered = h.intros > 0 || h.meetings.length > 0 || h.messages.some((m) => m.direction === "out" && !m.automated);
+  const days = /* @__PURE__ */ new Map();
+  for (const m of h.messages) {
+    if (!isChatChannel(m.channel)) {
+      out.push({ ...m, weight: 1 });
+      continue;
+    }
+    if (m.automated) continue;
+    const weight = chatGroupWeight(m.threadParticipants);
+    if (weight <= 0) continue;
+    if (m.direction === "in" && !answered) continue;
+    if (m.words === false) {
+      light.push({ at: m.at, kind: "chat_light" });
+      continue;
+    }
+    const key2 = `${m.channel}|${m.direction}|${localDay(m.at, h.timeZone)}`;
+    const cur = days.get(key2);
+    if (!cur) {
+      days.set(key2, { ...m, isReplyLatencyHours: void 0, weight });
+      continue;
+    }
+    if (m.at < cur.at) cur.at = m.at;
+    if (weight > cur.weight) {
+      cur.weight = weight;
+      cur.threadId = m.threadId;
+      cur.threadParticipants = m.threadParticipants;
+    }
+  }
+  out.push(...days.values());
+  return { messages: out, light };
+}
 var ENGAGEMENT_SATURATION = 8;
 function computeTieFeatures(h, now = /* @__PURE__ */ new Date()) {
   const t = now.getTime();
@@ -13071,7 +13190,8 @@ function computeTieFeatures(h, now = /* @__PURE__ */ new Date()) {
     if (x === void 0 || x > t + DAY5) return void 0;
     return Math.min(x, t);
   };
-  const messages = h.messages.filter((m) => !m.automated && m.threadParticipants <= 8).map((m) => ({ ...m, t: when3(m.at) })).filter((m) => m.t !== void 0);
+  const chat = chatDays(h);
+  const messages = chat.messages.filter((m) => !m.automated && m.threadParticipants <= 8).map((m) => ({ ...m, t: when3(m.at) })).filter((m) => m.t !== void 0);
   const meetings = h.meetings.filter((m) => m.attendees <= 8).map((m) => ({ ...m, t: when3(m.at) })).filter((m) => m.t !== void 0);
   const connectedAt = h.linkedinConnected && h.connectedAt ? when3(h.connectedAt) : void 0;
   const directions = /* @__PURE__ */ new Map();
@@ -13108,10 +13228,10 @@ function computeTieFeatures(h, now = /* @__PURE__ */ new Date()) {
   let inCount = 0;
   for (const m of messages) {
     if (m.direction === "out") {
-      outD += decay(m.t);
+      outD += m.weight * decay(m.t);
       outCount++;
     } else {
-      inD += decay(m.t);
+      inD += m.weight * decay(m.t);
       inCount++;
     }
   }
@@ -13146,12 +13266,14 @@ function computeTieFeatures(h, now = /* @__PURE__ */ new Date()) {
   let commentsIn = 0;
   let commentsOut = 0;
   let reactionsIn = 0;
-  for (const e of h.engagement ?? []) {
+  let chatLight = 0;
+  for (const e of [...h.engagement ?? [], ...chat.light]) {
     const x = when3(e.at);
     if (x === void 0) continue;
     engaged += ENGAGEMENT_WEIGHT[e.kind] * decay(x);
     if (e.kind === "comment_in") commentsIn++;
     else if (e.kind === "comment_out") commentsOut++;
+    else if (e.kind === "chat_light") chatLight++;
     else reactionsIn++;
   }
   const engagement = Math.min(1, Math.log(1 + engaged) / Math.log(1 + ENGAGEMENT_SATURATION));
@@ -13190,7 +13312,9 @@ function computeTieFeatures(h, now = /* @__PURE__ */ new Date()) {
     warmth,
     never: never ? 1 : 0,
     engagement,
-    rapport
+    rapport,
+    instagram_follow: h.follows?.instagram ? 1 : 0,
+    x_follow: h.follows?.x ? 1 : 0
   };
   const facts = {
     name: h.name,
@@ -13215,7 +13339,9 @@ function computeTieFeatures(h, now = /* @__PURE__ */ new Date()) {
     rapport,
     rapportReadings,
     rapportCues,
-    askedToStop
+    askedToStop,
+    chatLight,
+    follows: { instagram: !!h.follows?.instagram, x: !!h.follows?.x }
   };
   return { features, facts };
 }
@@ -13283,7 +13409,9 @@ var SHARE_MASKED_FEATURES = [
   "intros",
   "structural",
   "never",
-  "rapport"
+  "rapport",
+  // plan 43: X's rules limit passing its data on, so following each other there is left out of what a friend sees
+  "x_follow"
 ];
 function shareFeatures(features) {
   const out = { ...features };
@@ -13360,7 +13488,11 @@ function explainTie(features, facts, weights = TIE_WEIGHTS) {
       negativeOnly: true
     });
   else if (facts.linkedin) topics.push({ value: c.linkedin, positive: "Connected on LinkedIn" });
-  else if (facts.never) topics.push({ value: c.never, negative: "You haven't talked yet" });
+  else if (facts.never && !facts.follows.instagram && !facts.follows.x)
+    topics.push({ value: c.never, negative: "You haven't talked yet" });
+  if (facts.follows.instagram)
+    topics.push({ value: c.instagram_follow, positive: "You follow each other on Instagram" });
+  if (facts.follows.x) topics.push({ value: c.x_follow, positive: "You follow each other on X" });
   if (facts.medianLatencyHours !== void 0) {
     const h = facts.medianLatencyHours;
     topics.push({
@@ -14237,11 +14369,22 @@ var TIE_KINDS = [
   "linkedin_engagement",
   "linkedin_mention",
   "common_contacts",
-  "student_says_close"
+  "student_says_close",
+  "instagram_mutual",
+  "instagram_follow",
+  "x_mutual",
+  "x_follow"
 ];
 var HOP_WEIGHTS = {
   /** a LinkedIn connection with nothing more known (plan 16 §4.2) */
   mutual: 0.3,
+  /**
+   * Two people who follow each other on Instagram or X (plan 43 §3.7): starts at a LinkedIn mutual's weight and shrinks
+   * as the less selective of the two follows more accounts (`socialFollowWeight`).
+   */
+  socialMutual: { base: 0.3, selective: 300, floor: 0.08 },
+  /** one follows the other and not back: support only, toward the hop whose second person follows the first */
+  socialFollow: 0.1,
   recommendation: 0.85,
   /** divided by (people tagged − 1) beyond two */
   mention: 0.6,
@@ -14296,12 +14439,16 @@ var ROUTABLE_TIE_KINDS = /* @__PURE__ */ new Set([
   "introduced_by",
   "linkedin_mutual",
   "linkedin_recommendation",
-  "student_says_close"
+  "student_says_close",
+  "instagram_mutual",
+  "x_mutual"
 ]);
 var SUPPORT_ONLY_TIE_KINDS = /* @__PURE__ */ new Set([
   "linkedin_engagement",
   "linkedin_mention",
-  "common_contacts"
+  "common_contacts",
+  "instagram_follow",
+  "x_follow"
 ]);
 var TIE_CONFIDENCE = {
   email_exchange: 0.95,
@@ -14320,8 +14467,18 @@ var TIE_CONFIDENCE = {
   linkedin_engagement: 0.9,
   linkedin_mention: 0.9,
   common_contacts: 0.6,
-  student_says_close: 0.9
+  student_says_close: 0.9,
+  // a follow list is what the platform returned; how sure Orbit is the accounts are these people is in the match
+  instagram_mutual: 0.9,
+  instagram_follow: 0.9,
+  x_mutual: 0.9,
+  x_follow: 0.9
 };
+var MUTUAL_TIE_KINDS = /* @__PURE__ */ new Set([
+  "linkedin_mutual",
+  "instagram_mutual",
+  "x_mutual"
+]);
 function affiliationConfidence(kind, ev, now = /* @__PURE__ */ new Date(), bigOrg) {
   const bucket2 = typeof ev.sizeBucket === "string" ? ev.sizeBucket : void 0;
   const size = sizeClass(bucket2);
@@ -14680,6 +14837,11 @@ function engagementScore(items, ctx = {}) {
 function pKnowDirected(pair, _fromId, toId) {
   let p = Math.max(0, Math.min(1, pair.weight));
   for (const t of pair.ties) {
+    if (t.kind === "instagram_follow" || t.kind === "x_follow") {
+      const ev2 = t.evidence;
+      if (ev2.followerId === toId) p = 1 - (1 - p) * (1 - Math.min(1, t.weight * t.confidence));
+      continue;
+    }
     if (t.kind !== "linkedin_engagement") continue;
     const ev = t.evidence;
     if (ev.reciprocal) continue;
@@ -14952,8 +15114,9 @@ function withExternal(pairs, targetId, candidates) {
     if (c.introducerId === targetId) continue;
     const key2 = pk(c.introducerId, targetId);
     const [a, b] = key2.split("|");
-    const w = c.kind === "linkedin_mutual" ? HOP_WEIGHTS.mutual : Math.max(0, Math.min(1, c.warmth ?? 0));
-    const conf = c.kind === "linkedin_mutual" ? 0.95 : c.kind === "friend_path" ? 1 : 0.7;
+    const social = c.kind === "instagram_mutual" || c.kind === "x_mutual";
+    const w = c.kind === "linkedin_mutual" ? HOP_WEIGHTS.mutual : social ? Math.max(0, Math.min(1, c.warmth ?? HOP_WEIGHTS.socialMutual.base)) : Math.max(0, Math.min(1, c.warmth ?? 0));
+    const conf = c.kind === "linkedin_mutual" ? 0.95 : c.kind === "friend_path" ? 1 : social ? TIE_CONFIDENCE[c.kind] : 0.7;
     const tie = {
       id: `${key2}|${c.kind}`,
       userId: "",
@@ -14963,7 +15126,7 @@ function withExternal(pairs, targetId, candidates) {
       weight: w,
       confidence: conf,
       evidence: {
-        source: c.kind === "linkedin_mutual" ? "unipile" : c.kind === "friend_path" ? "friend" : "village"
+        source: c.kind === "linkedin_mutual" ? "unipile" : c.kind === "friend_path" ? "friend" : social ? c.kind === "instagram_mutual" ? "instagram" : "x" : "village"
       },
       lastSeenAt: c.seenAt
     };
@@ -15060,6 +15223,15 @@ function hopEvidence(fromId, tie, toName) {
     }
     case "linkedin_engagement":
       return engagementPhrase(fromId, ev, toName);
+    case "instagram_mutual":
+      return `follows ${toName} on Instagram and they follow back`;
+    case "x_mutual":
+      return `follows ${toName} on X and they follow back`;
+    case "instagram_follow":
+    case "x_follow": {
+      const where = tie.kind === "instagram_follow" ? "Instagram" : "X";
+      return ev.followerId === fromId ? `follows ${toName} on ${where}` : `is followed by ${toName} on ${where}`;
+    }
     default:
       return `knows ${toName}`;
   }
@@ -15096,9 +15268,9 @@ function mutualIntroducers(pairs, targetId, candidates) {
   const out = /* @__PURE__ */ new Set();
   if (!targetId) return out;
   for (const c of candidates)
-    if (c.kind === "linkedin_mutual" && c.introducerId !== targetId) out.add(c.introducerId);
+    if (MUTUAL_TIE_KINDS.has(c.kind) && c.introducerId !== targetId) out.add(c.introducerId);
   for (const pair of pairs.values()) {
-    if (!pair.kinds.includes("linkedin_mutual")) continue;
+    if (!pair.kinds.some((k) => MUTUAL_TIE_KINDS.has(k))) continue;
     if (pair.aId === targetId) out.add(pair.bId);
     else if (pair.bId === targetId) out.add(pair.aId);
   }
@@ -26329,7 +26501,7 @@ function contactsApi(client, userId) {
 
 // supabase/functions/orbit-worker/handlers/contacts.ts
 var PAGES_MAX2 = 50;
-var SOURCES = ["otherContacts", "connections"];
+var SOURCES2 = ["otherContacts", "connections"];
 var expired = (e) => e instanceof GoogleApiError && (e.status === 410 || e.status === 400 && /EXPIRED_SYNC_TOKEN|FAILED_PRECONDITION|failedPrecondition/i.test(e.reason));
 async function nameFromContacts(db2, userId, contacts) {
   const names = /* @__PURE__ */ new Map();
@@ -26382,7 +26554,7 @@ function contactsHandlers(deps) {
       const patch = {};
       let renamed = 0;
       try {
-        for (const source of SOURCES) {
+        for (const source of SOURCES2) {
           const key2 = `${source}SyncToken`;
           let syncToken = typeof state[key2] === "string" ? state[key2] : void 0;
           let pageToken;
