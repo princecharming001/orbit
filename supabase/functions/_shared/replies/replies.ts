@@ -31,6 +31,7 @@ import { HttpError } from '../http.ts';
 import { firstNameOf, iso, num } from '../rows.ts';
 import { type AgentConfig, makeServices, type Services } from '../services.ts';
 import { moveChat } from '../slots/slots.ts';
+import { NO_SOURCES, type SourcesInUse } from '../sources/states.ts';
 import { validZone, zonedTime } from '../zones.ts';
 import { DECLINES_PER_DAY, declinesToday, pushbackOnAutoFirst, tripBreaker } from './breaker.ts';
 import { mailIfAway, raiseCard, settleCard } from './cards.ts';
@@ -45,7 +46,12 @@ export const needsYouKey = (messageId: string) => `needs_you:${messageId}`;
  * message came (a cold pitch or a connection note is inbox mail, never a reply), one row per conversation (its latest
  * classified message, with how many came in the window), with the person, their face and any draft answering it.
  */
-export async function listReplies(db: Db, userId: string, now: Date): Promise<ReplyItem[]> {
+export async function listReplies(
+  db: Db,
+  userId: string,
+  now: Date,
+  src: SourcesInUse = NO_SOURCES,
+): Promise<ReplyItem[]> {
   const rows = await db.sql<{
     id: string;
     thread_external_id: string;
@@ -93,6 +99,8 @@ export async function listReplies(db: Db, userId: string, now: Date): Promise<Re
       left join orbit.people p on p.id = m.from_person_id
       left join orbit.organizations o on o.id = p.org_id
      where m.user_id = ${userId}::uuid and m.direction = 'in' and m.reply_class is not null
+       and m.provider <> all(${src.excluded.providers}::text[])
+       and (p.id is null or orbit.person_in_use(p.sources, p.source_account, ${src.hidden}::text[]))
        and m.sent_at >= ${new Date(now.getTime() - REPLY_WINDOW_DAYS * 86_400_000)}::timestamptz
        and exists (
          select 1 from orbit.messages o

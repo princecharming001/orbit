@@ -12,6 +12,7 @@ import type { FriendCloseness, FriendShare, FriendShareMode } from '@orbit/core/
 import { normalizeCompany, normalizeEmail } from '@orbit/core/text/normalize';
 import { sha256Hex } from '../crypto.ts';
 import type { Db } from '../db.ts';
+import { NO_SOURCES, type SourcesInUse } from '../sources/states.ts';
 
 /** The join key for an address: a hash of the normalized email, never the address. */
 export function emailHash(email: string): Promise<string> {
@@ -71,9 +72,15 @@ export function underMode<T extends { company: string | null; company_domain: st
  * Rebuild one owner's projection in a single transaction (plan 29 §A4): every person they have who may be shared, with
  * the closeness word from share_score (the label's midpoint stands in until the scorer has run). Private, hidden and
  * do-not-contact people, merged or deleted rows and anyone with nothing to join on are left out; the database's own
- * guard refuses them too.
+ * guard refuses them too. Plan 43: so are people not listed (made from an account, no real exchange yet), and people
+ * known only from an optional source the owner has out of use.
  */
-export async function refreshFriendShares(db: Db, ownerId: string, now: Date): Promise<number> {
+export async function refreshFriendShares(
+  db: Db,
+  ownerId: string,
+  now: Date,
+  src: SourcesInUse = NO_SOURCES,
+): Promise<number> {
   const rows = await db.sql<{
     id: string;
     display_name: string;
@@ -98,7 +105,8 @@ export async function refreshFriendShares(db: Db, ownerId: string, now: Date): P
       left join orbit.tie_scores ts on ts.user_id = p.user_id and ts.person_id = p.id
       left join orbit.tie_labels tl on tl.user_id = p.user_id and tl.person_id = p.id
      where p.user_id = ${ownerId}::uuid and not p.is_self and p.deleted_at is null and p.merged_into is null
-       and p.hidden_at is null and not p.do_not_contact and not p.private`;
+       and p.hidden_at is null and not p.do_not_contact and not p.private and p.listed
+       and orbit.person_in_use(p.sources, p.source_account, ${src.hidden}::text[])`;
   const identities = await db.sql<{ person_id: string; kind: string; value_norm: string }>`
     select person_id, kind, value_norm from orbit.person_identities
      where user_id = ${ownerId}::uuid and kind in ('email', 'linkedin_member', 'linkedin_slug')`;
@@ -235,6 +243,7 @@ export async function matchShares(
     ShareRow,
     'person_id' | 'display_name' | 'company' | 'linkedin_member_id' | 'linkedin_slug' | 'email_hash'
   >[],
+  hidden: readonly string[] = NO_SOURCES.hidden,
 ): Promise<Map<string, string>> {
   const out = new Map<string, string>();
   if (!shares.length) return out;
@@ -249,10 +258,13 @@ export async function matchShares(
   }>`
     select p.id, p.display_name, p.org_raw, o.name as org_name, p.linkedin_member_id, p.linkedin_slug, p.primary_email
       from orbit.people p left join orbit.organizations o on o.id = p.org_id
-     where p.user_id = ${viewerId}::uuid and not p.is_self and p.deleted_at is null and p.merged_into is null`;
+     where p.user_id = ${viewerId}::uuid and not p.is_self and p.deleted_at is null and p.merged_into is null
+       and orbit.person_in_use(p.sources, p.source_account, ${[...hidden]}::text[])`;
   const identities = await db.sql<{ person_id: string; kind: string; value_norm: string }>`
-    select person_id, kind, value_norm from orbit.person_identities
-     where user_id = ${viewerId}::uuid and kind in ('email', 'linkedin_member', 'linkedin_slug')`;
+    select i.person_id, i.kind, i.value_norm from orbit.person_identities i
+     where i.user_id = ${viewerId}::uuid and i.kind in ('email', 'linkedin_member', 'linkedin_slug')
+       and not exists (select 1 from orbit.people q where q.id = i.person_id
+                        and not orbit.person_in_use(q.sources, q.source_account, ${[...hidden]}::text[]))`;
   const byMember = new Map<string, string>();
   const bySlug = new Map<string, string>();
   const emails = new Map<string, string>();

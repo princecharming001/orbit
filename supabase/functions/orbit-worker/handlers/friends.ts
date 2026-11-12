@@ -5,15 +5,18 @@
  *                             expire on the same run
  */
 import { refreshFriendShares } from '../../_shared/friends/shares.ts';
+import { sourcesFor } from '../../_shared/sources/states.ts';
 import type { JobHandler } from '../worker.ts';
-import { JobSkipped } from './deps.ts';
+import { type HandlerDeps, JobSkipped } from './deps.ts';
 
-export function friendHandlers(): Record<string, JobHandler> {
+export function friendHandlers(deps: Pick<HandlerDeps, 'offered'> = {}): Record<string, JobHandler> {
   return {
     friend_shares_refresh: async (job, ctx) => {
       if (!job.userId) throw new JobSkipped('no_user');
       await ctx.db.sql`select orbit.expire_friend_asks()`;
-      await refreshFriendShares(ctx.db, job.userId, ctx.now());
+      // plan 43 §3.2: people known only from an optional source out of use are not shared
+      const src = await sourcesFor(ctx.db, job.userId, deps.offered ?? []);
+      await refreshFriendShares(ctx.db, job.userId, ctx.now(), src);
     },
   };
 }

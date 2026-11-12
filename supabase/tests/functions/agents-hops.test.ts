@@ -91,6 +91,8 @@ describe('migration 20261025_orbit_hop_strength', () => {
       select table_name, column_name from information_schema.columns
        where table_schema = 'orbit' and column_name in ('hop_features', 'linkedin_follower_count',
                                                        'linkedin_connections_count', 'account_id')
+         -- plan 43's social tables name platform accounts account_id too; they are not this migration's
+         and table_name not like 'social%'
        order by 1, 2`;
     expect(cols.map((c) => `${c.table_name}.${c.column_name}`)).toEqual([
       'intro_requests.hop_features',

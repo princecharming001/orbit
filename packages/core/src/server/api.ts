@@ -1295,3 +1295,108 @@ export interface SearchLabelRequest {
   ask: string;
   verdict: 'yes' | 'no';
 }
+
+// ---- plan 43: optional sources ---------------------------------------------------------------------------------
+
+/** One optional source's state for the student (GET /sources, and the pulled `source_states` rows). */
+export interface SourceStateView {
+  source: 'instagram' | 'x' | 'imessage';
+  state: 'not_connected' | 'on' | 'off' | 'removed';
+  /** when it last went off (ISO) */
+  offSince?: string;
+  /** the student lets Orbit friends find paths through who they follow (never for X) */
+  shareFollows: boolean;
+  updatedAt: string;
+}
+
+/** GET /sources */
+export interface SourcesResponse {
+  offered: ('instagram' | 'x' | 'imessage')[];
+  states: Partial<
+    Record<
+      'instagram' | 'x' | 'imessage',
+      { state: SourceStateView['state']; offSince?: string; shareFollows: boolean }
+    >
+  >;
+}
+
+/** PUT /sources/:source */
+export interface SourcePutRequest {
+  state: 'on' | 'off' | 'removed';
+  shareFollows?: boolean;
+}
+
+/** An Instagram or X account attached to one of the student's people (pulled `social_links`). */
+export interface SocialLinkView {
+  id: string;
+  platform: 'instagram' | 'x';
+  accountId: string;
+  personId: string;
+  via: 'proof' | 'score' | 'student';
+  proof?: 'own_links' | 'links_back' | 'contact' | 'address_book';
+  score?: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** "Is this the same person" (pulled `social_match_asks`). */
+export interface SocialMatchAskView {
+  id: string;
+  platform: 'instagram' | 'x';
+  accountId: string;
+  personId: string;
+  score: number;
+  signals: Record<string, unknown>;
+  status: 'open' | 'yes' | 'no' | 'stale';
+  decidedAt?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** One "who could introduce me" lookup, as the browser sees it: its status and its result (pulled `social_lookups`). */
+export interface SocialLookupView {
+  id: string;
+  platform: 'instagram' | 'x';
+  targetPersonId: string;
+  status: 'queued' | 'running' | 'waiting' | 'done' | 'failed';
+  result?: Record<string, unknown>;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** Texts with one person on one local day, never the words (pulled `text_days`, plan 43 §6). */
+export interface TextDayView {
+  personId: string;
+  /** YYYY-MM-DD, the student's local day */
+  day: string;
+  in: number;
+  out: number;
+  /** everyone in the smallest chat that day, the student included */
+  group: number;
+  words: boolean;
+  updatedAt: string;
+}
+
+/** POST /texts/days: what a signed-in student's browser sends after reading their Messages file. */
+export interface TextDaysRequest {
+  days: {
+    personId?: string;
+    ref?: string;
+    day: string;
+    in: number;
+    out: number;
+    group: number;
+    words: boolean;
+  }[];
+  people?: { ref: string; name: string; phones: string[] }[];
+}
+
+export interface TextDaysResponse {
+  ok: true;
+  /** rows written */
+  days: number;
+  /** each `ref` sent, as the server's person id */
+  people: Record<string, string>;
+  /** people made for texts alone */
+  created: number;
+}

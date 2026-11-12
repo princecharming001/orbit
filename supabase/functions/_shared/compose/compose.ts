@@ -35,6 +35,7 @@ import { HttpError } from '../http.ts';
 import { firstNameOf, iso, lastNameOf } from '../rows.ts';
 import type { Services } from '../services.ts';
 import { slotsFor } from '../slots/slots.ts';
+import { NO_SOURCES, offeredOf, sourcesFor } from '../sources/states.ts';
 import { validZone } from '../zones.ts';
 import {
   buildUserContext,
@@ -295,8 +296,10 @@ export async function prepareCompose(
 ): Promise<PreparedCompose> {
   const db = s.db;
   const now = s.now();
+  // plan 43 §3.2: what a draft is written from leaves out the optional sources out of use
+  const src = await sourcesFor(db, req.userId, offeredOf(s.env));
   const user = await loadUserRow(db, req.userId);
-  const person = await loadPerson(db, req.userId, req.personId);
+  const person = await loadPerson(db, req.userId, req.personId, src.hidden);
   if (person.is_self) throw new HttpError(400, 'bad_request', 'that is you');
   if (person.do_not_contact)
     throw new HttpError(
@@ -333,7 +336,7 @@ export async function prepareCompose(
     goalBrief: typeof goalCriteria.playbook === 'string' ? goalCriteria.playbook : undefined,
   });
 
-  const history = await historyWith(db, req.userId, person.id);
+  const history = await historyWith(db, req.userId, person.id, src.excluded.providers);
   const sendsToThem = req.kind !== 'forwardable_blurb';
   if (sendsToThem && req.kind !== 'reply' && unansweredBefore(history) >= 3)
     throw new HttpError(409, 'unanswered_limit', 'three messages already went unanswered');
@@ -356,10 +359,12 @@ export async function prepareCompose(
       'add a postal address in Settings before the first sales email (CAN-SPAM)',
     );
 
-  const target = req.targetPersonId ? await loadPerson(db, req.userId, req.targetPersonId) : undefined;
+  const target = req.targetPersonId
+    ? await loadPerson(db, req.userId, req.targetPersonId, src.hidden)
+    : undefined;
   const introducer =
     req.via && req.via.introducerId !== person.id
-      ? await loadPerson(db, req.userId, req.via.introducerId).catch(() => undefined)
+      ? await loadPerson(db, req.userId, req.via.introducerId, src.hidden).catch(() => undefined)
       : req.via
         ? person
         : undefined;
@@ -444,8 +449,13 @@ export async function prepareCompose(
         person.id,
         [req.kind, goalKind, person.title ?? '', thread.lastInbound ?? '', topic ?? ''].join(' '),
         req.kind === 'reply'
-          ? { replies: true, limit: REPLY_EXAMPLES, maxChars: REPLY_EXAMPLE_CHARS }
-          : { replies: false },
+          ? {
+              replies: true,
+              limit: REPLY_EXAMPLES,
+              maxChars: REPLY_EXAMPLE_CHARS,
+              excludedProviders: src.excluded.providers,
+            }
+          : { replies: false, excludedProviders: src.excluded.providers },
       );
   // a slot is offered as its start: the call runs as long as they asked, not the calendar hold's 30 minutes
   const slotText = [
@@ -757,10 +767,12 @@ export async function historyWith(
   db: Db,
   userId: string,
   personId: string,
+  /** message providers of the optional sources out of use (plan 43 §3.2) */
+  excludedProviders: readonly string[] = NO_SOURCES.excluded.providers,
 ): Promise<{ direction: 'in' | 'out'; at: string }[]> {
   const rows = await db.sql<{ direction: 'in' | 'out'; at: Date; external_id: string | null }>`
     select direction, sent_at as at, external_id from orbit.messages
-     where user_id = ${userId}::uuid
+     where user_id = ${userId}::uuid and provider <> all(${[...excludedProviders]}::text[])
        and (from_person_id = ${personId}::uuid or ${personId}::uuid = any(to_person_ids))
        and not is_automated
     union all

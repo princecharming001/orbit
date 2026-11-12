@@ -63,6 +63,12 @@ export interface AgentEnv {
   /** SERPER_API_KEY, PARALLEL_API_KEY: cheaper web searches for sourcing than Claude's web search (plan 34 B5) */
   serperKey?: string;
   parallelKey?: string;
+  /**
+   * ORBIT_EXTRA_SOURCES (plan 43 §3.1): the optional sources the owner offers, read once by each function's entry and
+   * passed in here. Unset or empty: none, and Orbit behaves exactly as before plan 43.
+   */
+  // spelled out rather than imported: the web app compiles this file and cannot resolve @orbit/core from here
+  extraSources?: ('instagram' | 'x' | 'imessage')[];
 }
 
 /** gte-small sentence embedding (384 dims, mean-pooled, normalized), or null when the model is not available. */

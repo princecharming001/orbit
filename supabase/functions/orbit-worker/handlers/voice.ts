@@ -16,6 +16,7 @@
  *   Message Batches when it can (plan 35 C2); on relearn the last thirty, at once.
  */
 import { type AgentConfig, makeServices } from '../../_shared/services.ts';
+import { offeredOf, sourcesFor } from '../../_shared/sources/states.ts';
 import { distillVoice, EMBED_SENT_LIMIT, embedSent, relearnCard } from '../../_shared/voice/voice.ts';
 import type { JobHandler } from '../worker.ts';
 import { JobSkipped } from './deps.ts';
@@ -32,7 +33,9 @@ export function voiceHandlers(config: AgentConfig): Record<string, JobHandler> {
     },
     'voice.card': async (job, ctx) => {
       if (!job.userId) throw new JobSkipped('no_user');
-      await relearnCard(ctx.db, job.userId, ctx.now());
+      // plan 43 §3.2: never learned from a source the student switched off
+      const src = await sourcesFor(ctx.db, job.userId, offeredOf(config.env));
+      await relearnCard(ctx.db, job.userId, ctx.now(), src.excluded.providers);
     },
     'voice.distill': async (job, ctx) => {
       if (!job.userId) throw new JobSkipped('no_user');

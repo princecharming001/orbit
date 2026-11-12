@@ -22,6 +22,13 @@ import type {
   TieScoreSummary,
   User,
 } from '../types';
+import type {
+  SocialLinkView,
+  SocialLookupView,
+  SocialMatchAskView,
+  SourceStateView,
+  TextDayView,
+} from './api';
 
 /**
  * Rows of the `orbit` schema (plan 16 §11.3), snake_case as Postgres returns them, and the mappings to and from the
@@ -146,6 +153,10 @@ export namespace Row {
     hidden_at: Ts | null;
     /** plan 29 §A1: hidden from friends; absent on rows from before the column */
     private?: boolean | null;
+    /** plan 43 §3.3: false for a person made from an account with no real exchange yet; absent before the column */
+    listed?: boolean | null;
+    /** plan 43 §3.3: `${platform}:${account id}` of the account the person was made from */
+    source_account?: string | null;
     merged_into: Uuid | null;
     created_at: Ts;
     updated_at: Ts;
@@ -155,7 +166,14 @@ export namespace Row {
     id: Uuid;
     user_id: Uuid;
     person_id: Uuid;
-    kind: 'email' | 'linkedin_member' | 'linkedin_slug' | 'phone' | 'unipile_attendee';
+    kind:
+      | 'email'
+      | 'linkedin_member'
+      | 'linkedin_slug'
+      | 'phone'
+      | 'unipile_attendee'
+      | 'instagram_id'
+      | 'x_id';
     value_norm: string;
     value_raw: string | null;
     source: string;
@@ -1376,5 +1394,135 @@ export function recommendationToRow(
     batch_id: extra.batchId,
     created_at: extra.at,
     updated_at: extra.at,
+  };
+}
+
+// ---------------------------------------------------------------------------------------------------------------
+// plan 43: optional sources, attached accounts, match questions, lookups and text days, as the browser pulls them
+
+export namespace SourceRow {
+  export interface SourceStates {
+    user_id: Uuid;
+    source: 'instagram' | 'x' | 'imessage';
+    state: 'not_connected' | 'on' | 'off' | 'removed';
+    off_since: Ts | null;
+    share_follows: boolean;
+    created_at: Ts;
+    updated_at: Ts;
+  }
+  export interface SocialLinks {
+    id: Uuid;
+    user_id: Uuid;
+    platform: 'instagram' | 'x';
+    account_id: string;
+    person_id: Uuid;
+    via: 'proof' | 'score' | 'student';
+    proof: 'own_links' | 'links_back' | 'contact' | 'address_book' | null;
+    score: number | null;
+    created_at: Ts;
+    updated_at: Ts;
+  }
+  export interface SocialMatchAsks {
+    id: Uuid;
+    user_id: Uuid;
+    platform: 'instagram' | 'x';
+    account_id: string;
+    person_id: Uuid;
+    score: number;
+    signals: Record<string, unknown>;
+    status: 'open' | 'yes' | 'no' | 'stale';
+    decided_at: Ts | null;
+    created_at: Ts;
+    updated_at: Ts;
+  }
+  /** what the browser is given of a lookup: never the planner's state or its cost */
+  export interface SocialLookups {
+    id: Uuid;
+    user_id: Uuid;
+    platform: 'instagram' | 'x';
+    target_person_id: Uuid;
+    status: 'queued' | 'running' | 'waiting' | 'done' | 'failed';
+    result: Record<string, unknown> | null;
+    created_at: Ts;
+    updated_at: Ts;
+  }
+  export interface TextDays {
+    user_id: Uuid;
+    person_id: Uuid;
+    day: string;
+    in_count: number;
+    out_count: number;
+    group_size: number;
+    words: boolean;
+    created_at: Ts;
+    updated_at: Ts;
+  }
+}
+
+const tsOf = (v: unknown): string | undefined =>
+  v == null ? undefined : v instanceof Date ? v.toISOString() : String(v);
+const dayOf = (v: unknown): string =>
+  v instanceof Date ? v.toISOString().slice(0, 10) : String(v ?? '').slice(0, 10);
+
+export function sourceStateFromRow(r: SourceRow.SourceStates): SourceStateView {
+  return compact({
+    source: r.source,
+    state: r.state,
+    offSince: tsOf(r.off_since),
+    shareFollows: !!r.share_follows,
+    updatedAt: tsOf(r.updated_at)!,
+  });
+}
+
+export function socialLinkFromRow(r: SourceRow.SocialLinks): SocialLinkView {
+  return compact({
+    id: r.id,
+    platform: r.platform,
+    accountId: r.account_id,
+    personId: r.person_id,
+    via: r.via,
+    proof: u(r.proof),
+    score: r.score == null ? undefined : Number(r.score),
+    createdAt: tsOf(r.created_at)!,
+    updatedAt: tsOf(r.updated_at)!,
+  });
+}
+
+export function socialMatchAskFromRow(r: SourceRow.SocialMatchAsks): SocialMatchAskView {
+  return compact({
+    id: r.id,
+    platform: r.platform,
+    accountId: r.account_id,
+    personId: r.person_id,
+    score: Number(r.score),
+    signals: r.signals ?? {},
+    status: r.status,
+    decidedAt: tsOf(r.decided_at),
+    createdAt: tsOf(r.created_at)!,
+    updatedAt: tsOf(r.updated_at)!,
+  });
+}
+
+export function socialLookupFromRow(r: SourceRow.SocialLookups): SocialLookupView {
+  return compact({
+    id: r.id,
+    platform: r.platform,
+    targetPersonId: r.target_person_id,
+    status: r.status,
+    result: r.result ?? undefined,
+    createdAt: tsOf(r.created_at)!,
+    updatedAt: tsOf(r.updated_at)!,
+  });
+}
+
+export function textDayFromRow(r: SourceRow.TextDays): TextDayView {
+  return {
+    personId: r.person_id,
+    day: dayOf(r.day),
+    in: Number(r.in_count),
+    out: Number(r.out_count),
+    group: Number(r.group_size),
+    words: !!r.words,
+    updatedAt: tsOf(r.updated_at)!,
   };
 }

@@ -9,6 +9,7 @@ import { makeLogger } from '../_shared/http.ts';
 import { providerSecret, resolveSecret } from '../_shared/secrets.ts';
 import { agentEnvWithSecrets, makeMailer } from '../_shared/services.ts';
 import { xConfigFromEnv } from '../_shared/social/x/config.ts';
+import { offeredSources } from '../_shared/sources/states.ts';
 import { sqlVault } from '../_shared/vault.ts';
 import { DEFAULT_COST_THRESHOLDS } from './handlers/cost.ts';
 import type { HandlerDeps } from './handlers/deps.ts';
@@ -23,7 +24,9 @@ const log = makeLogger(salt);
 const runtime = typeof EdgeRuntime !== 'undefined' ? EdgeRuntime : undefined;
 const db = dbUrl ? connectDb(dbUrl, 2) : undefined;
 // the agent features' keys (Claude, Exa, ...): a function secret, else the copy in orbit_private.secrets
-const agentEnv = await agentEnvWithSecrets(env, db);
+// plan 43 §3.1: the optional sources the owner offers, read once; unset is none and nothing changes
+const offered = offeredSources(env('ORBIT_EXTRA_SOURCES'));
+const agentEnv = { ...(await agentEnvWithSecrets(env, db)), extraSources: offered };
 const cronSecret = await resolveSecret(env, db, 'ORBIT_CRON_SECRET', 'orbit_cron_secret');
 
 // Claude for the reply jobs (classify.message and its rapport reading, rapport.backfill; Haiku, low effort): the
@@ -71,8 +74,9 @@ const handlerDeps: HandlerDeps = {
   claude: makeClaude({ apiKey: claudeKey, db, batch: batchFlagOn(agentEnv.claudeBatch) }),
   cost: { mailer: makeMailer(agentEnv, fetch), ownerId, thresholds: costThresholds },
   park: { days: parkDays(parkRaw) },
-  // plan 43 §5: X's app and limits; the DM writer is wired once _shared/social/chats.ts lands
+  // plan 43 §5: X's app and limits; DMs go through the personal-lane writer (handlers/x.ts)
   x: { cfg: xConfigFromEnv(env) },
+  offered,
 };
 const handlers = defaultHandlers({ ...handlerDeps, agents: { env: agentEnv } });
 

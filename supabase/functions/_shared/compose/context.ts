@@ -14,6 +14,7 @@ import type { Db } from '../db.ts';
 import { HttpError } from '../http.ts';
 import { firstNameOf, iso, vec } from '../rows.ts';
 import type { Services } from '../services.ts';
+import { NO_SOURCES } from '../sources/states.ts';
 import { notesOf } from '../voice/voice.ts';
 
 /** ≈ 1,200 tokens at four characters a token. */
@@ -75,7 +76,16 @@ export type PersonRow = {
   emails: string[];
 };
 
-export async function loadPerson(db: Db, userId: string, personId: unknown): Promise<PersonRow> {
+/**
+ * One of the student's people, for a draft. `hidden` names the optional sources out of use (plan 43 §3.2): someone
+ * known only from them is not found.
+ */
+export async function loadPerson(
+  db: Db,
+  userId: string,
+  personId: unknown,
+  hidden: readonly string[] = NO_SOURCES.hidden,
+): Promise<PersonRow> {
   if (typeof personId !== 'string' || !/^[0-9a-f-]{36}$/i.test(personId))
     throw new HttpError(400, 'bad_request', 'personId is required');
   const [p] = await db.sql<PersonRow>`
@@ -88,7 +98,8 @@ export async function loadPerson(db: Db, userId: string, personId: unknown): Pro
       from orbit.people p
       left join orbit.organizations o on o.id = p.org_id
       left join orbit.tie_scores ts on ts.user_id = p.user_id and ts.person_id = p.id
-     where p.id = ${personId}::uuid and p.user_id = ${userId}::uuid and p.deleted_at is null`;
+     where p.id = ${personId}::uuid and p.user_id = ${userId}::uuid and p.deleted_at is null
+       and orbit.person_in_use(p.sources, p.source_account, ${[...hidden]}::text[])`;
   if (!p) throw new HttpError(404, 'not_found', 'no such person');
   const emails = [...new Set([p.primary_email, ...(p.emails ?? [])].filter((e): e is string => !!e))];
   return { ...p, emails };
@@ -250,8 +261,15 @@ export async function exemplars(
   userId: string,
   personId: string,
   situation: string,
-  opts: { replies?: boolean; limit?: number; maxChars?: number } = {},
+  opts: {
+    replies?: boolean;
+    limit?: number;
+    maxChars?: number;
+    /** message providers of the optional sources out of use (plan 43 §3.2): never an example */
+    excludedProviders?: readonly string[];
+  } = {},
 ): Promise<string[]> {
+  const excluded = [...(opts.excludedProviders ?? NO_SOURCES.excluded.providers)];
   let q: number[] | null = null;
   try {
     q = await s.embed(situation);
@@ -263,6 +281,7 @@ export async function exemplars(
   const pick = (onlyReplies: boolean) => s.db.sql<{ id: string; body_text: string; to_person_ids: string[] }>`
     select m.id, m.body_text, m.to_person_ids from orbit.messages m
      where m.user_id = ${userId}::uuid and m.direction = 'out' and m.embedding is not null
+       and m.provider <> all(${excluded}::text[])
        and m.body_text is not null and not (${personId}::uuid = any(m.to_person_ids))
        and coalesce(array_length(regexp_split_to_array(btrim(m.body_text), '\\s+'), 1), 0) >= 25
        and (${onlyReplies}::boolean = false or m.in_reply_to is not null)

@@ -28,6 +28,7 @@ import { linkedinHandlers } from './handlers/linkedin.ts';
 import { scoreHandlers } from './handlers/score.ts';
 import { searchHandlers } from './handlers/search.ts';
 import { socialHandlers } from './handlers/social.ts';
+import { sourceHandlers } from './handlers/sources.ts';
 import { unipileHandlers } from './handlers/unipile.ts';
 import { xHandlers } from './handlers/x.ts';
 
@@ -72,6 +73,8 @@ export function defaultHandlers(
     'env' in opts
       ? { fetch: opts.fetch, sleep: opts.sleep, random: opts.random, embed: opts.embed }
       : { ...opts, embed: opts.embed ?? opts.agents?.embed };
+  // plan 43 §3.1: the owner's list reaches every handler, whichever way it was passed in
+  deps.offered ??= agents?.env.extraSources ?? [];
   const handlers: Record<string, JobHandler> = {
     noop: async () => {},
     'health.snapshot': async (_job, ctx) => {
@@ -82,7 +85,8 @@ export function defaultHandlers(
     ...contactsHandlers(deps),
     ...linkedinHandlers(deps),
     ...scoreHandlers(deps),
-    ...friendHandlers(),
+    ...friendHandlers(deps),
+    ...sourceHandlers(deps),
     ...searchHandlers(deps),
     ...costHandlers(deps.cost),
     ...unipileHandlers(deps),
@@ -118,6 +122,7 @@ export const HEAVY_KINDS: ReadonlySet<string> = new Set([
   'score.ties',
   'score.page',
   'score.person',
+  'sources.switch',
 ]);
 /**
  * One a tick (plan 34 A7): with three, score.page runs shared one isolate's 2 s CPU allowance and 38 of them died
@@ -135,6 +140,7 @@ export const RESERVE_MS: Readonly<Record<string, number>> = {
   'score.user': 20_000,
   'score.page': 20_000,
   'score.ties': 20_000,
+  'sources.switch': 20_000,
   search_census: 58_000,
   search_reading: 58_000,
   company_facts_sync: 30_000,

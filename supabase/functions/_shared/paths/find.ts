@@ -45,6 +45,7 @@ import { sqlBudget, sqlCache } from '../research/bind.ts';
 import { iso, num } from '../rows.ts';
 import { requestReads } from '../search/reading.ts';
 import type { Services } from '../services.ts';
+import { hiddenPeople, NO_SOURCES, offeredOf, type SourcesInUse, sourcesFor } from '../sources/states.ts';
 import {
   type ExternalResult,
   type ExternalTarget,
@@ -105,14 +106,19 @@ type GraphTieRow = {
   last_seen_at: Date;
 };
 
-/** Only the tie score's reciprocity feature is read here (pAsk); the rest of `features` never leaves the database. */
-const PERSON_COLUMNS = `p.id, p.is_self, p.display_name, p.first_name, p.title, p.org_raw, o.name as org_name, p.is_alumni,
-       p.linkedin_url, p.linkedin_member_id, p.hidden_at, p.do_not_contact, p.last_interaction_at,
-       ts.score::int as score, ts.features->'reciprocity' as reciprocity
+/**
+ * Only the tie score's reciprocity feature is read here (pAsk); the rest of `features` never leaves the database.
+ * People known only from an optional source out of use are left out (plan 43 §3.2); `hidden` is the parameter that
+ * holds those sources.
+ */
+const personColumns = (hidden: string) => `p.id, p.is_self, p.display_name, p.first_name, p.title, p.org_raw,
+       o.name as org_name, p.is_alumni, p.linkedin_url, p.linkedin_member_id, p.hidden_at, p.do_not_contact,
+       p.last_interaction_at, ts.score::int as score, ts.features->'reciprocity' as reciprocity
   from orbit.people p
   left join orbit.organizations o on o.id = p.org_id
   left join orbit.tie_scores ts on ts.user_id = p.user_id and ts.person_id = p.id
- where p.user_id = $1::uuid and p.deleted_at is null and p.merged_into is null`;
+ where p.user_id = $1::uuid and p.deleted_at is null and p.merged_into is null
+   and orbit.person_in_use(p.sources, p.source_account, ${hidden}::text[])`;
 
 /**
  * The evidence keys ranking reads (plan 35 B7): one-way engagement (pKnowDirected), the counts and dates that say a
@@ -148,10 +154,22 @@ interface GraphContext {
   targetOrgs: Set<string>;
   owes: Set<string>;
   blocked: Set<string>;
+  /** which optional sources count (plan 43 §3.2) */
+  src: SourcesInUse;
+  /** people known only from sources out of use: a tie that touches one is left out */
+  hidden: Set<string>;
 }
 
-/** What every graph load reads besides people and ties: intro requests, goal target companies, owed replies, blocks. */
-async function graphContext(db: Db, userId: string, now: Date): Promise<GraphContext> {
+/**
+ * What every graph load reads besides people and ties: intro requests, goal target companies, owed replies, blocks,
+ * and the people and tie kinds the optional sources out of use leave out (plan 43 §3.2).
+ */
+async function graphContext(
+  db: Db,
+  userId: string,
+  now: Date,
+  src: SourcesInUse = NO_SOURCES,
+): Promise<GraphContext> {
   const intros = await db.sql<GraphContext['intros'][number]>`
     select introducer_person_id, status, asked_at, outcome_at from orbit.intro_requests
      where user_id = ${userId}::uuid and introducer_person_id is not null`;
@@ -164,6 +182,7 @@ async function graphContext(db: Db, userId: string, now: Date): Promise<GraphCon
     select distinct m.from_person_id as person_id from orbit.threads t
       join orbit.messages m on m.thread_id = t.id and m.sent_at = t.last_at
      where t.user_id = ${userId}::uuid and t.last_direction = 'in' and t.is_networking
+       and t.provider <> all(${src.excluded.providers}::text[])
        and m.from_person_id is not null and t.last_at > ${new Date(now.getTime() - 30 * DAY)}::timestamptz`;
   const blockedRows = await db.sql<{ a_person_id: string; b_person_id: string }>`
     select a_person_id, b_person_id from orbit.blocked_pairs where user_id = ${userId}::uuid`;
@@ -172,6 +191,8 @@ async function graphContext(db: Db, userId: string, now: Date): Promise<GraphCon
     targetOrgs,
     owes: new Set(owes.map((o) => o.person_id)),
     blocked: new Set(blockedRows.map((b) => pairKeyOf(b.a_person_id, b.b_person_id))),
+    src,
+    hidden: await hiddenPeople(db, userId, src),
   };
 }
 
@@ -236,8 +257,11 @@ interface LoadedGraph extends UserGraph {
 }
 
 function addTies(g: LoadedGraph, rows: GraphTieRow[]): void {
+  const off = new Set<string>(g.ctx.src.excluded.tieKinds);
   for (const t of rows) {
     if (!TIE_KIND_SET.has(t.kind) || t.a_person_id === g.selfId || t.b_person_id === g.selfId) continue;
+    // plan 43 §3.2: a tie of a source out of use, or to someone only that source knows, is not there
+    if (off.has(t.kind) || g.ctx.hidden.has(t.a_person_id) || g.ctx.hidden.has(t.b_person_id)) continue;
     const tie = tieOf(t, g.userId);
     g.ties.set(tie.id, tie);
   }
@@ -252,14 +276,20 @@ export async function loadGraph(
   db: Db,
   userId: string,
   now: Date,
-  opts: { slim?: boolean } = {},
+  opts: { slim?: boolean; sources?: SourcesInUse } = {},
 ): Promise<UserGraph> {
-  return loadWhole(db, userId, now, opts.slim ?? false);
+  return loadWhole(db, userId, now, opts.slim ?? false, opts.sources);
 }
 
-async function loadWhole(db: Db, userId: string, now: Date, slim: boolean): Promise<LoadedGraph> {
-  const rows = await db.query<GraphPersonRow>(`select ${PERSON_COLUMNS}`, [userId]);
-  const ctx = await graphContext(db, userId, now);
+async function loadWhole(
+  db: Db,
+  userId: string,
+  now: Date,
+  slim: boolean,
+  src: SourcesInUse = NO_SOURCES,
+): Promise<LoadedGraph> {
+  const rows = await db.query<GraphPersonRow>(`select ${personColumns('$2')}`, [userId, src.hidden]);
+  const ctx = await graphContext(db, userId, now, src);
   const g = graphOf(userId, now, ctx, rows);
   addTies(
     g,
@@ -303,6 +333,7 @@ async function nearby(
   db: Db,
   userId: string,
   seeds: { id: string; depth: number }[],
+  ctx: Pick<GraphContext, 'src' | 'hidden'>,
 ): Promise<Map<string, number>> {
   if (!seeds.length) return new Map();
   const rows = await db.query<{ id: string; depth: number }>(
@@ -314,14 +345,24 @@ async function nearby(
        select x.other, n.depth + 1
          from near n
          cross join lateral (
-           select t.b_person_id as other from orbit.ties t where t.user_id = $1::uuid and t.a_person_id = n.id
+           select t.b_person_id as other from orbit.ties t
+            where t.user_id = $1::uuid and t.a_person_id = n.id and t.kind <> all($5::text[])
            union all
-           select t.a_person_id from orbit.ties t where t.user_id = $1::uuid and t.b_person_id = n.id
+           select t.a_person_id from orbit.ties t
+            where t.user_id = $1::uuid and t.b_person_id = n.id and t.kind <> all($5::text[])
          ) x
         where n.depth < $4 and n.id not in (select id from me) and x.other not in (select id from me)
+          and x.other <> all($6::uuid[])
      )
      select id, min(depth)::int as depth from near group by id`,
-    [userId, seeds.map((s) => s.id), seeds.map((s) => s.depth), NEIGHBOURHOOD_HOPS],
+    [
+      userId,
+      seeds.map((s) => s.id),
+      seeds.map((s) => s.depth),
+      NEIGHBOURHOOD_HOPS,
+      ctx.src.excluded.tieKinds,
+      [...ctx.hidden],
+    ],
   );
   return new Map(rows.map((r) => [r.id, r.depth]));
 }
@@ -337,14 +378,15 @@ export async function loadNeighbourhood(
   userId: string,
   targetId: string,
   now: Date,
+  src: SourcesInUse = NO_SOURCES,
 ): Promise<LoadedGraph> {
-  const depth = await nearby(db, userId, [{ id: targetId, depth: 0 }]);
+  const ctx = await graphContext(db, userId, now, src);
+  const depth = await nearby(db, userId, [{ id: targetId, depth: 0 }], ctx);
   const ids = [...depth.keys()];
   const rows = await db.query<GraphPersonRow>(
-    `select ${PERSON_COLUMNS} and (p.is_self or p.id = any($2::uuid[]))`,
-    [userId, ids],
+    `select ${personColumns('$3')} and (p.is_self or p.id = any($2::uuid[]))`,
+    [userId, ids, src.hidden],
   );
-  const ctx = await graphContext(db, userId, now);
   const g = graphOf(userId, now, ctx, rows);
   g.depth = depth;
   addTies(g, await tiesTouching(db, userId, ids, ids));
@@ -409,14 +451,14 @@ async function extendNeighbourhood(
           if (via <= NEIGHBOURHOOD_HOPS && via < at(x)) nearer.set(x, via);
         }
     const seeds = [...nearer].map(([id, dd]) => ({ id, depth: dd }));
-    const reach = await nearby(db, g.userId, seeds);
+    const reach = await nearby(db, g.userId, seeds, g.ctx);
     const fresh = [...reach.keys()].filter((id) => !depth.has(id));
     for (const [id, dd] of reach) if (dd < d(id)) depth.set(id, dd);
     if (fresh.length) {
-      const rows = await db.query<GraphPersonRow>(`select ${PERSON_COLUMNS} and p.id = any($2::uuid[])`, [
-        g.userId,
-        fresh,
-      ]);
+      const rows = await db.query<GraphPersonRow>(
+        `select ${personColumns('$3')} and p.id = any($2::uuid[])`,
+        [g.userId, fresh, g.ctx.src.hidden],
+      );
       for (const r of rows) if (!r.is_self) g.people.set(r.id, graphPerson(r, g.ctx, g.now));
       // a tie between a fresh person and one already here may be of any kind now that both are inside
       addTies(g, await tiesTouching(db, g.userId, fresh, [...depth.keys()]));
@@ -475,7 +517,11 @@ export interface FriendLayer {
  * when there is one. Read through `sharingFriends` (the one cross-tenant path, guarded by the friendship and the
  * owner's mode); never the friend's own tables.
  */
-export async function loadFriendLayer(db: Db, userId: string): Promise<FriendLayer> {
+export async function loadFriendLayer(
+  db: Db,
+  userId: string,
+  hidden: readonly string[] = NO_SOURCES.hidden,
+): Promise<FriendLayer> {
   const friends = await sharingFriends(db, userId);
   if (!friends.length) return { friends, shares: [] };
   const all: { friend: SharingFriend; share: ShareRow }[] = [];
@@ -485,6 +531,7 @@ export async function loadFriendLayer(db: Db, userId: string): Promise<FriendLay
     db,
     userId,
     all.map((x) => x.share),
+    hidden,
   );
   return {
     friends,
@@ -727,6 +774,8 @@ export async function findPaths(
 ): Promise<PathsFindResponse> {
   const db = s.db;
   const now = s.now();
+  // plan 43 §3.2: which optional sources count for this student
+  const src = await sourcesFor(db, userId, offeredOf(s.env));
   let goalKind: GoalKind | undefined;
   if (req.goalId) {
     const [g] = await db.sql<{ kind: GoalKind }>`
@@ -770,9 +819,9 @@ export async function findPaths(
     }
     await upsertTies(db, ext.ties);
     // PageRank over the whole network picks among many people there, so the whole graph, without its evidence
-    const g = await loadWhole(db, userId, now, true);
+    const g = await loadWhole(db, userId, now, true, src);
     // plan 29 §A4: friends' people at the company join the targets, as the student's own person when they have them
-    const layer = await loadFriendLayer(db, userId);
+    const layer = await loadFriendLayer(db, userId, src.hidden);
     const friendShares = sharesAt(layer, company, domain);
     applyFriendLayer(g, friendShares);
     const atCompany = await db.sql<{ id: string }>`
@@ -855,7 +904,7 @@ export async function findPaths(
   } else throw new HttpError(400, 'bad_request', 'target needs personId, linkedinUrl or company');
 
   // plan 35 B7: only the target's neighbourhood, loaded once and patched after new ties
-  const g = await loadNeighbourhood(db, userId, targetId, now);
+  const g = await loadNeighbourhood(db, userId, targetId, now, src);
   const target = g.people.get(targetId);
   if (!target) throw new HttpError(404, 'not_found', 'no such person');
   if (looksLikeMinor({ title: target.title })) return { paths: [], sources: [], unconfigured: [] };
@@ -875,7 +924,7 @@ export async function findPaths(
     await extendNeighbourhood(db, g, ext.ties, learned);
   }
   // plan 29 §A4: a friend who shares this person is one more way in, ranked with the rest
-  const layer = await loadFriendLayer(db, userId);
+  const layer = await loadFriendLayer(db, userId, src.hidden);
   applyFriendLayer(g, sharesFor(layer, targetId));
   const rank = () =>
     rankWarmPaths({

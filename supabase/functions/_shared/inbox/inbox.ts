@@ -14,6 +14,7 @@ import type { GmailApi, GmailMessage } from '../gmail.ts';
 import { headerMap } from '../gmail.ts';
 import { NeedsReauth } from '../google.ts';
 import { iso, num } from '../rows.ts';
+import { NO_SOURCES } from '../sources/states.ts';
 
 export const INBOX_DEFAULT_DAYS = 7;
 export const INBOX_MAX_DAYS = 30;
@@ -29,6 +30,8 @@ export interface InboxDeps {
   /** the student's Gmail, when Google is connected with gmail.readonly */
   gmail?: GmailApi;
   now: Date;
+  /** the optional sources out of use (plan 43 §3.2): people only they know are not named in the inbox */
+  hidden?: readonly string[];
 }
 
 export function inboxOptions(
@@ -94,7 +97,12 @@ interface Known {
 }
 
 /** People the student knows by these addresses (person_identities kind email). */
-async function peopleByEmail(db: Db, userId: string, emails: string[]): Promise<Map<string, Known>> {
+async function peopleByEmail(
+  db: Db,
+  userId: string,
+  emails: string[],
+  hidden: readonly string[] = NO_SOURCES.hidden,
+): Promise<Map<string, Known>> {
   const out = new Map<string, Known>();
   if (!emails.length) return out;
   const rows = await db.sql<{
@@ -107,7 +115,7 @@ async function peopleByEmail(db: Db, userId: string, emails: string[]): Promise<
     select pi.value_norm, p.id, p.display_name, p.photo_url, p.linkedin_url
       from orbit.person_identities pi join orbit.people p on p.id = pi.person_id
      where pi.user_id = ${userId}::uuid and pi.kind = 'email' and pi.value_norm = any(${emails}::text[])
-       and not p.is_self`;
+       and not p.is_self and orbit.person_in_use(p.sources, p.source_account, ${[...hidden]}::text[])`;
   for (const r of rows)
     if (!out.has(r.value_norm))
       out.set(r.value_norm, {
@@ -171,9 +179,12 @@ async function readEmail(
     }
   }
   const threads = [...byThread.entries()];
-  const known = await peopleByEmail(deps.db, userId, [
-    ...new Set(threads.map(([, t]) => t.row.from.email).filter(Boolean)),
-  ]);
+  const known = await peopleByEmail(
+    deps.db,
+    userId,
+    [...new Set(threads.map(([, t]) => t.row.from.email).filter(Boolean))],
+    deps.hidden,
+  );
   const account = own ? `?authuser=${encodeURIComponent(own)}` : '';
   const items = threads.map(([threadId, t]): InboxItem => {
     const p = known.get(t.row.from.email);
@@ -220,6 +231,7 @@ async function readLinkedIn(
   if (acct?.status !== 'active') return { items: [], status: 'not_connected', syncedAt: null };
   const since = new Date(deps.now.getTime() - o.days * DAY);
   const like = o.query ? `%${o.query.replace(/[%_\\]/g, (c) => `\\${c}`)}%` : null;
+  const hidden = [...(deps.hidden ?? NO_SOURCES.hidden)];
   const rows = await deps.db.sql<{
     thread_id: string;
     sent_at: Date;
@@ -242,6 +254,7 @@ async function readLinkedIn(
         from orbit.messages m
         left join orbit.people p on p.id = m.from_person_id
        where m.user_id = ${userId}::uuid and m.provider = 'linkedin' and m.direction = 'in'
+         and (p.id is null or orbit.person_in_use(p.sources, p.source_account, ${hidden}::text[]))
          and m.sent_at >= ${since}::timestamptz
          and (${like}::text is null or m.body_text ilike ${like} or m.snippet ilike ${like}
               or p.display_name ilike ${like})

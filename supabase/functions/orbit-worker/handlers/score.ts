@@ -20,6 +20,7 @@ import { hasActiveFriend, shareRefreshKey } from '../../_shared/friends/shares.t
 import { changedPeople, fullRescoreDue, readCalibration, scorePeople } from '../../_shared/ingest/score.ts';
 import { refreshTies, TIE_GROUPS } from '../../_shared/ingest/ties.ts';
 import { chunks } from '../../_shared/ingest/util.ts';
+import { sourcesFor } from '../../_shared/sources/states.ts';
 import type { JobHandler } from '../worker.ts';
 import { type HandlerDeps, JobSkipped, LONG_VT_SEC } from './deps.ts';
 
@@ -29,7 +30,9 @@ import { type HandlerDeps, JobSkipped, LONG_VT_SEC } from './deps.ts';
  */
 export const SCORE_PAGE = 100;
 
-export function scoreHandlers(_deps: HandlerDeps): Record<string, JobHandler> {
+export function scoreHandlers(deps: HandlerDeps): Record<string, JobHandler> {
+  // plan 43 §3.2: which optional sources count for the student, asked once a job
+  const offered = deps.offered ?? [];
   return {
     'score.person': async (job, ctx) => {
       if (!job.userId) throw new JobSkipped('no_user');
@@ -42,7 +45,8 @@ export function scoreHandlers(_deps: HandlerDeps): Record<string, JobHandler> {
         await ctx.queue.enqueue({ kind: 'score.person', userId: job.userId, payload: { personIds: rest } });
       const now = ctx.now();
       await refreshTies(ctx.db, job.userId, now, { personIds: now_ });
-      await scorePeople(ctx.db, job.userId, { now, personIds: now_ });
+      const sources = await sourcesFor(ctx.db, job.userId, offered);
+      await scorePeople(ctx.db, job.userId, { now, personIds: now_, sources });
     },
     /**
      * The nightly rebuild: the calibration is refit first from the labelled people, then the tie inference starts
@@ -61,7 +65,8 @@ export function scoreHandlers(_deps: HandlerDeps): Record<string, JobHandler> {
         const [u] = await ctx.db.sql<{ settings: Record<string, unknown> | null }>`
           select settings from orbit.users where id = ${job.userId}::uuid`;
         const before = readCalibration(u?.settings ?? {});
-        const r = await scorePeople(ctx.db, job.userId, { now, personIds: labelled, fit: true });
+        const sources = await sourcesFor(ctx.db, job.userId, offered);
+        const r = await scorePeople(ctx.db, job.userId, { now, personIds: labelled, fit: true, sources });
         refit = r.calibration?.a !== before?.a || r.calibration?.c !== before?.c;
       }
       const full = job.payload.full === true || refit || (await fullRescoreDue(ctx.db, job.userId));
@@ -115,7 +120,12 @@ export function scoreHandlers(_deps: HandlerDeps): Record<string, JobHandler> {
       const ids = [...new Set(raw.filter(isUuid))];
       const now = ctx.now();
       // the ties were inferred once for the night (score.ties): a page only scores
-      if (ids.length) await scorePeople(ctx.db, job.userId, { now, personIds: ids });
+      if (ids.length)
+        await scorePeople(ctx.db, job.userId, {
+          now,
+          personIds: ids,
+          sources: await sourcesFor(ctx.db, job.userId, offered),
+        });
       // the last page: a user with a friend has their friend projection rebuilt, so a fresh backfill reaches friends
       // the same day
       const page = Number(job.payload.page);

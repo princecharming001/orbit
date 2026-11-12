@@ -5,6 +5,7 @@
 import { connectDb } from '../_shared/db.ts';
 import { makeLogger } from '../_shared/http.ts';
 import { resolveSecret } from '../_shared/secrets.ts';
+import { offeredSources } from '../_shared/sources/states.ts';
 import { makeWebhookHandler } from './webhooks.ts';
 
 const env = (name: string) => Deno.env.get(name) || undefined;
@@ -24,6 +25,8 @@ Deno.serve(
     db,
     pubsubToken,
     unipileSecret,
+    // plan 43 §3.1: the optional sources the owner offers, read once; unset is none and nothing changes
+    offered: offeredSources(env('ORBIT_EXTRA_SOURCES')),
     log: makeLogger(salt),
   }),
 );

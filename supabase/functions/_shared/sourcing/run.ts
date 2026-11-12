@@ -27,6 +27,7 @@ import { norm, normOrg } from '../research/guards';
 import { claudeWeb, exaWeb, GATHER_MODEL, sqlSharedCache, type WebSource } from '../research/web';
 import { firstNameOf } from '../rows.ts';
 import type { Services } from '../services.ts';
+import { offeredOf, sourcesFor } from '../sources/states.ts';
 import { switchGate } from '../switches.ts';
 import {
   dnsMx,
@@ -192,7 +193,9 @@ export async function runSourcing(
   // one load of the student's graph, however many lookups ask for it at once (they now run side by side, and the
   // old `graph ??= await loadGraph(...)` started a load for each caller that arrived before the first finished)
   let graph: Promise<UserGraph> | undefined;
-  const g = () => (graph ??= loadGraph(db, userId, now));
+  // plan 43 §3.2: the graph leaves out the optional sources out of use, and the people only they know
+  const src = await sourcesFor(db, userId, offeredOf(s.env));
+  const g = () => (graph ??= loadGraph(db, userId, now, { sources: src }));
   const known = new Map<string, { personId: string; score?: number } | null>();
   const knownOf = async (c: Candidate) => {
     if (known.has(c.key)) return known.get(c.key)!;
@@ -252,6 +255,7 @@ export async function runSourcing(
                         where i.person_id = p.id and i.kind in ('linkedin_slug', 'linkedin_member')), '{}') as linkedin_ids
         from orbit.people p
        where p.user_id = ${userId}::uuid and p.deleted_at is null and not p.is_self
+         and orbit.person_in_use(p.sources, p.source_account, ${src.hidden}::text[])
          and (lower(p.linkedin_slug) = any(${slugs}::text[]) or p.linkedin_member_id = any(${members}::text[])
            or lower(p.primary_email) = any(${emails}::text[]) or lower(p.display_name) = any(${names}::text[])
            or exists (select 1 from orbit.person_identities i where i.person_id = p.id

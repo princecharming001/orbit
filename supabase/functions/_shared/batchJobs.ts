@@ -28,6 +28,7 @@ import { HttpError } from './http.ts';
 import { autoReplyFromBatch } from './replies/replies.ts';
 import { readCompaniesFromBatch, readPeopleFromBatch } from './search/reading.ts';
 import type { Services } from './services.ts';
+import { offeredOf, sourcesFor } from './sources/states.ts';
 import { distillFromBatch } from './voice/voice.ts';
 import { validZone } from './zones.ts';
 
@@ -55,7 +56,7 @@ export const BATCH_CONTINUATIONS: Record<string, Continuation> = {
     if (!userId) return 'no_user';
     try {
       const draft = (await composeFromBatch(s, p.req, p.frozen, await composeAnswer(answer))).draft;
-      const st = await loadCadence(s.db, userId, s.now());
+      const st = await loadCadence(s.db, userId, s.now(), await sourcesFor(s.db, userId, offeredOf(s.env)));
       return cadenceLadder(
         s,
         userId,

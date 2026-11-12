@@ -5,6 +5,7 @@
  * /auth/refresh needs an Orbit access token. Missing secrets → 503 with `x-orbit-connector: unconfigured`.
  * Kept free of Deno APIs: main.ts wires the environment.
  */
+import type { OptionalSource } from '@orbit/core/sources';
 import type { JWTVerifyGetKey } from 'jose';
 import { sha256Hex } from '../_shared/crypto.ts';
 import type { Db } from '../_shared/db.ts';
@@ -49,6 +50,8 @@ import { searchRoutes } from './routes/search.ts';
 import { settingsRoutes } from './routes/settings.ts';
 import { socialPatternRoute, socialRoutes } from './routes/social.ts';
 import { sourceRoutes } from './routes/source.ts';
+import { sourcesPatternRoute, sourcesRoutes } from './routes/sources.ts';
+import { textsRoutes } from './routes/texts.ts';
 import { voiceRoutes } from './routes/voice.ts';
 import { xRoutes } from './routes/x.ts';
 import { syncPull, syncPush, syncStatus } from './sync.ts';
@@ -76,6 +79,8 @@ export interface ApiEnv {
   ownerId?: string;
   /** plan 43 §5: X's app, limits and the owner's switch (ORBIT_X_*, ORBIT_EXTRA_SOURCES) */
   x?: XConfig;
+  /** ORBIT_EXTRA_SOURCES (plan 43 §3.1), read once at cold start: the optional sources the owner offers */
+  extraSources?: OptionalSource[];
 }
 
 export interface ApiLimits {
@@ -133,12 +138,14 @@ export interface Ctx {
   sessionId?: string;
   /** the agent services (Claude, providers, Google tokens, embeddings, queue), built on first use */
   services: () => Services;
+  /** the optional sources the owner offers (ORBIT_EXTRA_SOURCES, plan 43 §3.1); empty by default */
+  offered: OptionalSource[];
 }
 
 type Handler = (ctx: Ctx) => Promise<Response>;
 
 export interface Route {
-  method: 'GET' | 'POST' | 'GET|POST' | 'DELETE';
+  method: 'GET' | 'POST' | 'GET|POST' | 'DELETE' | 'PUT';
   auth: boolean;
   google?: boolean;
   run: Handler;
@@ -178,6 +185,9 @@ const ROUTES: Record<string, Route> = {
   ...adminRoutes,
   ...xRoutes,
   ...socialRoutes,
+  // plan 43: the optional sources' switches (PUT /sources/:source is matched by pattern) and texts' day counts
+  ...sourcesRoutes,
+  ...textsRoutes,
 };
 
 /** The secrets a route needs that are not set. */
@@ -222,9 +232,12 @@ export function makeApiHandler(deps: ApiDeps): (req: Request) => Promise<Respons
       googleRedirectUri: deps.env.googleRedirectUri,
       unipileKey: deps.env.unipileKey,
       unipileBase: deps.env.unipileBase,
+      ...(deps.env.extraSources ? { extraSources: deps.env.extraSources } : {}),
       ...defined(deps.agent?.env),
     },
   };
+  // plan 43 §3.1: the owner's list, read once; empty unless ORBIT_EXTRA_SOURCES names something
+  const offered = [...(agent.env.extraSources ?? [])];
   let secretsTriedAt = 0;
   async function providerSecrets() {
     if ((deps.env.unipileKey && deps.env.unipileBase) || !deps.refreshProviderSecrets) return;
@@ -285,13 +298,14 @@ export function makeApiHandler(deps: ApiDeps): (req: Request) => Promise<Respons
     async function route(): Promise<Response> {
       if (req.method === 'OPTIONS') {
         if (!allowedOrigin) return new Response(null, { status: 403, headers: h });
-        return preflight(req, h, 'GET, POST, DELETE, OPTIONS');
+        return preflight(req, h, 'GET, POST, PUT, DELETE, OPTIONS');
       }
       // browsers send Origin on fetches; other callers (curl, server code) send none and rely on their token
       if (origin && !allowedOrigin) throw new HttpError(403, 'forbidden', 'origin not allowed');
       // the fixed table first; the few routes with an id in the path (plan 29: /friends/shares/:id,
       // /friends/asks/:id/respond) are matched by pattern
-      const r = ROUTES[path] ?? friendPatternRoute(path) ?? socialPatternRoute(path);
+      const r =
+        ROUTES[path] ?? friendPatternRoute(path) ?? socialPatternRoute(path) ?? sourcesPatternRoute(path);
       if (!r) throw notFound();
       if (!r.method.split('|').includes(req.method)) throw new HttpError(405, 'method_not_allowed', r.method);
       await providerSecrets();
@@ -315,6 +329,7 @@ export function makeApiHandler(deps: ApiDeps): (req: Request) => Promise<Respons
         requestId: rid,
         pullLagMs: deps.pullLagMs ?? 2000,
         services: () => (services ??= makeServices(agent, { db, now })),
+        offered,
       };
       if (r.auth) {
         // the token's signature is checked here, without the database; a bad one still counts against the IP

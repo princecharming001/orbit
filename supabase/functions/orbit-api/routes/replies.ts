@@ -8,11 +8,13 @@
 import { toServerDraft } from '../../_shared/compose/drafts.ts';
 import { badRequest, json } from '../../_shared/http.ts';
 import { answerReply, draftReply, listReplies } from '../../_shared/replies/replies.ts';
+import { sourcesFor } from '../../_shared/sources/states.ts';
 import type { Ctx, Route } from '../api.ts';
 import { body, optUuid, uuid } from './body.ts';
 
 async function list(ctx: Ctx): Promise<Response> {
-  return json(200, { replies: await listReplies(ctx.db, ctx.userId!, ctx.now()) });
+  const src = await sourcesFor(ctx.db, ctx.userId!, ctx.offered);
+  return json(200, { replies: await listReplies(ctx.db, ctx.userId!, ctx.now(), src) });
 }
 
 async function draft(ctx: Ctx): Promise<Response> {

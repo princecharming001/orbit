@@ -13,6 +13,7 @@
  * location); the server derives name_norm and sources and adds the email and LinkedIn identities, so imports later
  * resolve to the same person. After that only the hand-edited fields change from the app.
  */
+import { phoneRegionFor, toE164 } from '@orbit/core/entity/phone';
 import { normalizeEmailForMatch } from '@orbit/core/entity/resolve';
 import { linkedInSlug, normalizeEmail, parseName } from '@orbit/core/text/normalize';
 import { z } from 'zod/v4';
@@ -20,6 +21,7 @@ import { base64url, fromBase64url, isUuid } from '../_shared/crypto.ts';
 import type { Db, Row } from '../_shared/db.ts';
 import { badRequest, json, readJson } from '../_shared/http.ts';
 import { QUEUES } from '../_shared/queue.ts';
+import { NO_SOURCES, type SourcesInUse, sourcesFor } from '../_shared/sources/states.ts';
 import { pushDraftEdit, recordDraftEdit } from '../_shared/voice/voice.ts';
 import type { Ctx } from './api.ts';
 import { PULL_BY_NAME, PULL_TABLES, type PullTable, shapeRow } from './tables.ts';
@@ -27,7 +29,7 @@ import { PULL_BY_NAME, PULL_TABLES, type PullTable, shapeRow } from './tables.ts
 // ---- status -------------------------------------------------------------------------------------------------------
 
 export async function syncStatus(ctx: Ctx): Promise<Response> {
-  return json(200, await statusFor(ctx.db, ctx.userId!));
+  return json(200, await statusFor(ctx.db, ctx.userId!, await sourcesFor(ctx.db, ctx.userId!, ctx.offered)));
 }
 
 /** A mark as the browser compares it: ISO time with microseconds, so two moves in one millisecond still differ. */
@@ -40,6 +42,12 @@ export interface StatusMarks {
   linkedin: string | null;
   /** what /autopilot/status answers last changed */
   autopilot: string | null;
+  /**
+   * Plan 43 §3.2: the graph version, moved by the switch job when an optional source goes on, off or is removed. When
+   * it differs from the one the browser last saw, the browser drops its cached graph (people, ties, scores, messages)
+   * and pulls again from the start, so rows a source out of use left behind in its cache go. 0 until the first switch.
+   */
+  graph: number;
 }
 
 /**
@@ -48,18 +56,19 @@ export interface StatusMarks {
  * while setup runs (onboarding unfinished, Google's import or LinkedIn's first pass still going), the only time a
  * screen shows it.
  */
-export async function statusFor(db: Db, userId: string) {
+export async function statusFor(db: Db, userId: string, src: SourcesInUse = NO_SOURCES) {
   const [marks, accounts, users] = await Promise.all([
     db.sql<{
       changed_at: string;
       linkedin_at: string;
       autopilot_at: string;
+      graph_version: number;
       counts: Record<string, number> | null;
       fresh: boolean;
     }>`
     select to_char(changed_at at time zone 'utc', ${MARK_ISO}) as changed_at,
            to_char(linkedin_at at time zone 'utc', ${MARK_ISO}) as linkedin_at,
-           to_char(autopilot_at at time zone 'utc', ${MARK_ISO}) as autopilot_at,
+           to_char(autopilot_at at time zone 'utc', ${MARK_ISO}) as autopilot_at, graph_version,
            counts, (counts is not null and counts_at >= changed_at) as fresh
       from orbit.user_marks where user_id = ${userId}::uuid`,
     db.sql<{
@@ -125,7 +134,7 @@ export async function statusFor(db: Db, userId: string) {
       : Promise.resolve([{ n: 0 }]),
     (async () => {
       if (counts) return;
-      counts = await countsFor(db, userId);
+      counts = await countsFor(db, userId, src);
       // kept as of the mark just read: a change after it moves changed_at past counts_at and counts again
       const [m] = await db.sql<{ changed_at: string; linkedin_at: string; autopilot_at: string }>`
         insert into orbit.user_marks as m (user_id, counts, counts_at)
@@ -134,7 +143,7 @@ export async function statusFor(db: Db, userId: string) {
         returning to_char(m.changed_at at time zone 'utc', ${MARK_ISO}) as changed_at,
                   to_char(m.linkedin_at at time zone 'utc', ${MARK_ISO}) as linkedin_at,
                   to_char(m.autopilot_at at time zone 'utc', ${MARK_ISO}) as autopilot_at`;
-      if (m) mark = { ...m, counts, fresh: true };
+      if (m) mark = { ...m, graph_version: mark?.graph_version ?? 0, counts, fresh: true };
     })(),
   ]);
   const out: {
@@ -151,23 +160,31 @@ export async function statusFor(db: Db, userId: string) {
       changed: mark?.changed_at ?? null,
       linkedin: mark?.linkedin_at ?? null,
       autopilot: mark?.autopilot_at ?? null,
+      graph: Number(mark?.graph_version ?? 0),
     },
     setup,
   };
   return out;
 }
 
-/** The counts the setup screen and older browsers read; run only after something changed. */
-async function countsFor(db: Db, userId: string): Promise<Record<string, number>> {
+/**
+ * The counts the setup screen and older browsers read; run only after something changed. Plan 43 §3.2: rows of the
+ * optional sources out of use, and people only they know or not listed yet, are not counted.
+ */
+async function countsFor(db: Db, userId: string, src: SourcesInUse): Promise<Record<string, number>> {
   const [counts] = await db.sql<Record<string, number>>`
     select
-      (select count(*) from orbit.people where user_id = ${userId}::uuid and not is_self
-         and deleted_at is null and merged_into is null)::int as people,
+      (select count(*) from orbit.people p where p.user_id = ${userId}::uuid and not p.is_self
+         and p.deleted_at is null and p.merged_into is null and p.listed
+         and orbit.person_in_use(p.sources, p.source_account, ${src.hidden}::text[]))::int as people,
       (select count(*) from orbit.organizations where user_id = ${userId}::uuid)::int as organizations,
-      (select count(*) from orbit.threads where user_id = ${userId}::uuid)::int as threads,
-      (select count(*) from orbit.messages where user_id = ${userId}::uuid)::int as messages,
+      (select count(*) from orbit.threads where user_id = ${userId}::uuid
+         and provider <> all(${src.excluded.providers}::text[]))::int as threads,
+      (select count(*) from orbit.messages where user_id = ${userId}::uuid
+         and provider <> all(${src.excluded.providers}::text[]))::int as messages,
       (select count(*) from orbit.calendar_events where user_id = ${userId}::uuid)::int as events,
-      (select count(*) from orbit.ties where user_id = ${userId}::uuid)::int as ties,
+      (select count(*) from orbit.ties where user_id = ${userId}::uuid
+         and kind <> all(${src.excluded.tieKinds}::text[]))::int as ties,
       (select count(*) from orbit.goals where user_id = ${userId}::uuid and deleted_at is null and status = 'active')::int as goals,
       (select count(*) from orbit.chats where user_id = ${userId}::uuid and archived_at is null)::int as chats,
       (select count(*) from orbit.drafts where user_id = ${userId}::uuid and status = 'draft')::int as drafts`;
@@ -231,15 +248,37 @@ export async function syncPull(ctx: Ctx): Promise<Response> {
     tables = PULL_TABLES.filter((t) => (body.tables as string[]).includes(t.table));
   }
   const upTo = new Date(ctx.now().getTime() - ctx.pullLagMs);
-  const out = await pull(ctx.db, ctx.userId!, { cursor, tables, limit, upTo });
+  const sources = await sourcesFor(ctx.db, ctx.userId!, ctx.offered);
+  const out = await pull(ctx.db, ctx.userId!, { cursor, tables, limit, upTo, sources });
   return json(200, out);
+}
+
+/** Binds a table's off-rule filter (plan 43 §3.2): each named parameter it uses becomes the next positional one. */
+function sourceFilter(t: PullTable, src: SourcesInUse, params: unknown[]): string {
+  if (!t.sources) return '';
+  const values: Record<string, unknown> = {
+    hidden: src.hidden,
+    providers: src.excluded.providers,
+    tieKinds: src.excluded.tieKinds,
+    identityKinds: src.excluded.identityKinds,
+  };
+  const at = new Map<string, number>();
+  const sql = t.sources.replace(/\$(hidden|providers|tieKinds|identityKinds)\b/g, (_, name: string) => {
+    if (!at.has(name)) {
+      params.push(values[name]);
+      at.set(name, params.length);
+    }
+    return `$${at.get(name)}`;
+  });
+  return `and ${sql}`;
 }
 
 export async function pull(
   db: Db,
   userId: string,
-  o: { cursor: Cursor; tables: PullTable[]; limit: number; upTo: Date },
+  o: { cursor: Cursor; tables: PullTable[]; limit: number; upTo: Date; sources?: SourcesInUse },
 ) {
+  const src = o.sources ?? NO_SOURCES;
   const changes: Record<string, Row[]> = {};
   const deleted: Record<string, string[]> = {};
   const next: Cursor = { ...o.cursor };
@@ -254,22 +293,26 @@ export async function pull(
         const del = t.deletedWhen ? `(${t.deletedWhen})` : 'false';
         // columns the browser never gets are dropped here, so they never cross the wire
         const row = ['to_jsonb(t)', ...(t.omit ?? []).map((c) => `'${c}'`)].join(' - ');
+        const key = t.keySql ?? `t.${t.key}::text`;
+        // The cursor time goes over as text and is cast in SQL: a timestamptz parameter is turned into a JS Date
+        // by postgres.js first, which keeps milliseconds only, so a page of rows sharing one microsecond (a score
+        // run writes thousands in one statement) came back again and again and the pull never got past it. A
+        // table never pulled starts from a real date ('-infinity' is not one; every pull failed on it once).
+        const params: unknown[] = [userId, pos?.t ?? PULL_FROM, pos?.k ?? '', o.upTo, o.limit];
+        const off = sourceFilter(t, src, params);
         return db.query<{ row: Row; _ts: string; _k: string; _del: boolean }>(
           `select ${row} as row,
                   to_char(t.${t.cursor} at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') as _ts,
-                  t.${t.key}::text as _k, ${del} as _del
+                  ${key} as _k, ${del} as _del
              from orbit.${t.table} t
             where t.user_id = $1::uuid
-              and (t.${t.cursor}, t.${t.key}::text) > (($2::text)::timestamptz, $3::text)
+              and (t.${t.cursor}, ${key}) > (($2::text)::timestamptz, $3::text)
               and t.${t.cursor} <= $4::timestamptz
               ${t.filter ? `and ${t.filter}` : ''}
-            order by t.${t.cursor}, t.${t.key}::text
+              ${off}
+            order by t.${t.cursor}, ${key}
             limit $5`,
-          // The cursor time goes over as text and is cast in SQL: a timestamptz parameter is turned into a JS Date
-          // by postgres.js first, which keeps milliseconds only, so a page of rows sharing one microsecond (a score
-          // run writes thousands in one statement) came back again and again and the pull never got past it. A
-          // table never pulled starts from a real date ('-infinity' is not one; every pull failed on it once).
-          [userId, pos?.t ?? PULL_FROM, pos?.k ?? '', o.upTo, o.limit],
+          params,
         );
       }),
     ),
@@ -597,13 +640,17 @@ export async function applyChange(db: Db, userId: string, raw: unknown) {
     const c = parsed.data;
     const spec = PUSH[c.table];
     if (!spec) throw new ChangeError('not_allowed', `${c.table} cannot be changed from the app`);
+    // plan 43 §6: a person may carry phone numbers (a friend known from texts); they become phone identities
+    const phones = spec.table === 'people' && c.op === 'upsert' ? phonesOf(c.row ?? {}) : undefined;
     const row = await db.begin(async (tx) => {
       if (c.op === 'delete') return remove(tx, userId, spec, c.id);
       if (spec.table === 'drafts') return pushDraft(tx, userId, c.id, c.row ?? {});
       if (spec.table === 'draft_edits') return pushEdit(tx, userId, c.id, c.row ?? {});
       if (spec.write === 'none')
         throw new ChangeError('not_allowed', `${c.table} can only be deleted from the app`);
-      return write(tx, userId, spec, c.id, c.row ?? {});
+      const out = await write(tx, userId, spec, c.id, c.row ?? {});
+      if (phones?.length) await addPhoneIdentities(tx, userId, c.id, phones, 'manual');
+      return out;
     });
     return { ...ref, ok: true as const, ...(row ? { row } : {}) };
   } catch (e) {
@@ -616,6 +663,47 @@ export async function applyChange(db: Db, userId: string, raw: unknown) {
       error: { code: 'failed', message: 'this change could not be applied' },
     };
   }
+}
+
+const PhonesS = z.array(z.string().trim().min(3).max(40)).max(20);
+
+/** The `phones` a pushed person carries, checked; undefined when there are none. */
+function phonesOf(row: Record<string, unknown>): string[] | undefined {
+  if (!('phones' in row) || row.phones == null) return undefined;
+  const r = PhonesS.safeParse(row.phones);
+  if (!r.success) throw new ChangeError('invalid', `phones: ${r.error.issues[0]?.message ?? 'invalid'}`);
+  return r.data;
+}
+
+/**
+ * Phone numbers as identities of one person (kind `phone`, E.164 read in the country of the student's time zone, the
+ * same key the browser uses). A number another of the student's people already has stays theirs. Returns the numbers
+ * written.
+ */
+export async function addPhoneIdentities(
+  db: Db,
+  userId: string,
+  personId: string,
+  raw: readonly string[],
+  source: string,
+): Promise<string[]> {
+  const [u] = await db.sql<{ timezone: string | null; current_city: string | null }>`
+    select timezone, current_city from orbit.users where id = ${userId}::uuid`;
+  const region = phoneRegionFor({
+    timezone: u?.timezone ?? undefined,
+    currentCity: u?.current_city ?? undefined,
+  });
+  const out: string[] = [];
+  for (const p of raw) {
+    const e164 = toE164(p, region);
+    if (!e164 || out.includes(e164)) continue;
+    await db.sql`
+      insert into orbit.person_identities (user_id, person_id, kind, value_norm, value_raw, source)
+      values (${userId}::uuid, ${personId}::uuid, 'phone', ${e164}, ${p}, ${source})
+      on conflict (user_id, kind, value_norm) do nothing`;
+    out.push(e164);
+  }
+  return out;
 }
 
 const shape = (table: string, row: Row | undefined) => {

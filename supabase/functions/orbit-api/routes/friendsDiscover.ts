@@ -24,6 +24,7 @@ import { randomToken } from '../../_shared/crypto.ts';
 import type { Db } from '../../_shared/db.ts';
 import { badRequest, HttpError, json } from '../../_shared/http.ts';
 import { iso } from '../../_shared/rows.ts';
+import { NO_SOURCES, sourcesFor } from '../../_shared/sources/states.ts';
 import type { Ctx, Route } from '../api.ts';
 import { body, uuid } from './body.ts';
 import { nameOf, requestFriendship, userLite } from './friends.ts';
@@ -71,8 +72,10 @@ type Candidate = {
 async function candidates(
   db: Db,
   me: string,
-  opts: { tied: boolean; q?: string; email?: string; limit: number },
+  opts: { tied: boolean; q?: string; email?: string; limit: number; hidden?: string[] },
 ): Promise<Candidate[]> {
+  // plan 43 §3.2: people known only from an optional source out of use are not the student's contacts here
+  const hidden = opts.hidden ?? NO_SOURCES.hidden;
   const pattern = opts.q ? `%${opts.q.toLowerCase().replace(/[%_\\]/g, (c) => `\\${c}`)}%` : null;
   return db.sql<Candidate>`
     with me as (
@@ -91,6 +94,7 @@ async function candidates(
                as linkedin_url
         from orbit.person_identities pi
         join orbit.people p on p.id = pi.person_id and p.deleted_at is null and p.merged_into is null
+         and orbit.person_in_use(p.sources, p.source_account, ${hidden}::text[])
         left join orbit.tie_scores ts on ts.person_id = p.id and ts.user_id = p.user_id
        where pi.user_id = ${me}::uuid and pi.kind = 'email'
        group by 1),
@@ -220,6 +224,7 @@ async function toInvite(
   school: string | null,
   now: Date,
   skip = 0,
+  hidden: string[] = NO_SOURCES.hidden,
 ): Promise<{ rows: InviteSuggestion[]; more: boolean }> {
   const [li] = await db.sql<{ n: number }>`
     select count(*)::int as n from orbit.integration_accounts
@@ -234,6 +239,7 @@ async function toInvite(
                   where user_id = ${me}::uuid group by 1) ts on ts.person_id = p.id
      where p.user_id = ${me}::uuid and p.deleted_at is null and p.merged_into is null and p.hidden_at is null
        and not p.do_not_contact and not coalesce(p.is_self, false) and not coalesce(p.private, false)
+       and p.listed and orbit.person_in_use(p.sources, p.source_account, ${hidden}::text[])
        and p.linkedin_member_id is not null
        and (p.primary_email is not null or ${canMessage}::boolean)
        and p.display_name ~ '^[^[:space:]]+[[:space:]]+[^[:space:]]' and p.display_name !~ '@'
@@ -289,14 +295,15 @@ async function suggest(ctx: Ctx): Promise<Response> {
   const b = ctx.req.method === 'POST' ? await body(ctx, true) : {};
   const skipOrbit = shown(b, 'onOrbitShown');
   const skipInvite = shown(b, 'toInviteShown');
-  const found = await candidates(ctx.db, me, { tied: true, limit: skipOrbit + SUGGEST_ON_ORBIT + 1 });
+  const { hidden } = await sourcesFor(ctx.db, me, ctx.offered);
+  const found = await candidates(ctx.db, me, { tied: true, limit: skipOrbit + SUGGEST_ON_ORBIT + 1, hidden });
   // someone who already asked the student is under Requests, not suggested again beside it
   const ranked = found
     .filter((c) => !(c.rel_status === 'pending' && c.requested_by !== me))
     .map((c) => ({ c, s: tieScore(c, now) }))
     .sort((a, b) => b.s - a.s || b.c.connections - a.c.connections || a.c.id.localeCompare(b.c.id));
   const onOrbit = ranked.slice(skipOrbit, skipOrbit + SUGGEST_ON_ORBIT).map(({ c }) => view(c, me));
-  const invite = await toInvite(ctx.db, me, u.school, now, skipInvite);
+  const invite = await toInvite(ctx.db, me, u.school, now, skipInvite, hidden);
   const out: FriendsSuggestResponse = {
     onOrbit,
     toInvite: invite.rows,
@@ -315,8 +322,18 @@ async function search(ctx: Ctx): Promise<Response> {
   if (q.length > 120) throw badRequest('that is too long to search for');
   const email = /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(q) ? normalizeEmail(q) : undefined;
   const found = email
-    ? await candidates(ctx.db, me, { tied: false, email, limit: 1 })
-    : await candidates(ctx.db, me, { tied: true, q, limit: SEARCH_RESULTS });
+    ? await candidates(ctx.db, me, {
+        tied: false,
+        email,
+        limit: 1,
+        hidden: (await sourcesFor(ctx.db, me, ctx.offered)).hidden,
+      })
+    : await candidates(ctx.db, me, {
+        tied: true,
+        q,
+        limit: SEARCH_RESULTS,
+        hidden: (await sourcesFor(ctx.db, me, ctx.offered)).hidden,
+      });
   const results = found
     .map((c) => ({ c, s: tieScore(c, now) }))
     .sort((a, b) => b.s - a.s || nameOf(a.c).localeCompare(nameOf(b.c)))

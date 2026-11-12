@@ -9,6 +9,7 @@
  */
 
 import { HttpError, json } from '../../_shared/http.ts';
+import { sourcesFor } from '../../_shared/sources/states.ts';
 import type { Ctx, Route } from '../api.ts';
 import { PULL_BY_NAME, shapeRow } from '../tables.ts';
 import { body, uuid } from './body.ts';
@@ -22,14 +23,17 @@ type Row = Record<string, unknown>;
 async function history(ctx: Ctx): Promise<Response> {
   const personId = uuid(await body(ctx), 'personId');
   const userId = ctx.userId!;
+  // plan 43 §3.2: someone known only from an optional source out of use is not there, and neither are its chats
+  const src = await sourcesFor(ctx.db, userId, ctx.offered);
   const [p] = await ctx.db.sql`
-    select 1 from orbit.people where id = ${personId}::uuid and user_id = ${userId}::uuid and deleted_at is null`;
+    select 1 from orbit.people p where p.id = ${personId}::uuid and p.user_id = ${userId}::uuid and p.deleted_at is null
+       and orbit.person_in_use(p.sources, p.source_account, ${src.hidden}::text[])`;
   if (!p) throw new HttpError(404, 'not_found', 'no such person');
   const threads = await ctx.db.query<{ row: Row }>(
     `select to_jsonb(t) as row from orbit.threads t
-      where t.user_id = $1::uuid and $2::uuid = any(t.participant_person_ids)
+      where t.user_id = $1::uuid and $2::uuid = any(t.participant_person_ids) and t.provider <> all($4::text[])
       order by coalesce(t.last_at, t.created_at) desc limit $3`,
-    [userId, personId, HISTORY_THREADS],
+    [userId, personId, HISTORY_THREADS, src.excluded.providers],
   );
   const ids = threads.map((t) => String(t.row.id));
   const [messages, events] = await Promise.all([
