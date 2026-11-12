@@ -268,6 +268,24 @@ function readiness(i) {
       detail: t.importedAt ? `${fmt(t.people ?? 0)} ${(t.people ?? 0) === 1 ? "person" : "people"}` : "Update from your Mac when you like",
       optional: true
     });
+  const ig = i.instagram;
+  if (ig)
+    steps.push({
+      key: "instagram",
+      label: "Instagram",
+      state: BROKEN.has(ig.status) ? "problem" : ig.status === "active" && !ig.reading ? "done" : ig.status === "active" || ig.status === "connecting" ? "working" : "waiting",
+      detail: BROKEN.has(ig.status) ? "Sign in to Instagram again" : ig.status === "active" ? ig.reading ?? "Up to date" : "Not connected yet",
+      optional: true
+    });
+  const xs = i.x;
+  if (xs)
+    steps.push({
+      key: "x",
+      label: "X",
+      state: BROKEN.has(xs.status) ? "problem" : xs.status === "active" ? "done" : "waiting",
+      detail: BROKEN.has(xs.status) ? "Sign in with X again" : xs.status === "active" ? "Connected" : "Not connected yet",
+      optional: true
+    });
   return { state, steps, progress: state === "ready" ? 1 : progress, headline };
 }
 
