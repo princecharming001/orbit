@@ -11,7 +11,9 @@
  *                        are left
  */
 
+import type { Db } from '../../_shared/db.ts';
 import { loadAccount } from '../../_shared/ingest/util.ts';
+import { sqlTargetTake } from '../../_shared/linkedinTargets.ts';
 import {
   keepProfileLogos,
   logosPublicBase,
@@ -32,6 +34,8 @@ import { type HandlerDeps, JobSkipped, LONG_VT_SEC } from './deps.ts';
 
 export function searchHandlers(deps: HandlerDeps): Record<string, JobHandler> {
   const doFetch = deps.fetch ?? fetch;
+  // the swarm limit, asked before each background profile read (linkedinTargets.ts)
+  const targetTake = (db: Db) => (deps.linkedinTarget ? sqlTargetTake(db, deps.linkedinTarget) : undefined);
   return {
     company_facts_sync: async (_job, ctx) => {
       const clock = deps.clock ?? Date.now;
@@ -102,6 +106,7 @@ export function searchHandlers(deps: HandlerDeps): Record<string, JobHandler> {
           sleep: deps.sleep ?? ((ms) => new Promise<void>((res) => setTimeout(res, ms))),
           random: deps.random ?? Math.random,
           clock: deps.clock ?? Date.now,
+          targetTake: targetTake(ctx.db),
         },
         now,
       );
@@ -185,6 +190,7 @@ export function searchHandlers(deps: HandlerDeps): Record<string, JobHandler> {
           sleep: deps.sleep ?? ((ms) => new Promise<void>((r) => setTimeout(r, ms))),
           random: deps.random ?? Math.random,
           clock: deps.clock ?? Date.now,
+          targetTake: targetTake(ctx.db),
           // the logos a profile read shows, kept as Orbit's own copies for everyone (no extra read)
           keepLogos:
             deps.storage?.url && deps.storage.serviceKey

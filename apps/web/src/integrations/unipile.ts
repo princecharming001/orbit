@@ -244,11 +244,20 @@ interface MutualResponse {
   count?: number;
   /** the list matched what LinkedIn says the two share; without that it is not shown as mutual connections */
   verified?: boolean;
-  /** false with reason "limit" when today's LinkedIn reads are spent */
+  /**
+   * false with reason "limit" when today's LinkedIn reads are spent, or "busy" when other students' accounts looked
+   * this person up lately (LinkedIn bans a crowd of accounts opening one profile): `retryAt` says when to ask again
+   */
   ok?: boolean;
   reason?: string;
   message?: string;
+  retryAt?: string | null;
 }
+
+/** The status a mutuals lookup fails with when Orbit will check a little later (the server's `busy`). */
+export const LINKEDIN_BUSY_STATUS = 425;
+/** What the student is told then. */
+export const MUTUALS_LATER = 'Orbit will check who you both know a little later.';
 
 /** Who the student knows who is connected to a target LinkedIn member. */
 export async function mutualConnections(
@@ -265,6 +274,9 @@ export async function mutualConnections(
       r.value.message ?? 'Orbit has read as much from LinkedIn as it allows today.',
       SEARCH_LIMIT_STATUS,
     );
+  // other students' accounts looked this person up lately: not checked yet, which is never "no one"
+  if (r.value.ok === false && r.value.reason === 'busy')
+    return connectorFailure('error', MUTUALS_LATER, LINKEDIN_BUSY_STATUS);
   // an answer LinkedIn did not filter is the student's own connections, never shown as someone else's
   if (r.value.verified !== true)
     return {

@@ -11,6 +11,7 @@
  */
 import { looksLikeSchool } from '@orbit/core/resume/schools';
 import type { Db } from '../db.ts';
+import type { TargetTake } from '../linkedinTargets.ts';
 import {
   type CompanyCache,
   type CompanyPick,
@@ -49,6 +50,8 @@ export interface SweepDeps {
   sleep: (ms: number) => Promise<void>;
   random: () => number;
   clock: () => number;
+  /** the swarm limit (linkedinTargets.ts): a person other accounts looked up lately is not read for a logo now */
+  targetTake?: TargetTake;
 }
 
 export interface SweepResult {
@@ -628,6 +631,7 @@ export async function runUserLogos(
       }
       const p = byKey.get(c.key);
       if (!p) continue;
+      if (deps.targetTake && !(await deps.targetTake(acct.id, p.member, 'logos')).allowed) continue;
       if (!(await spendShare(db, 'profile', acct.id, now, PROFILE_SHARE))) {
         result.stopped = 'limit';
         break;

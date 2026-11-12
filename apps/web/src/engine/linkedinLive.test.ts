@@ -554,6 +554,33 @@ describe('mutual connections', () => {
     expect(readsBackAt(new Date('2026-10-26T20:00:00Z'))).not.toMatch(/[–—]/);
   });
 
+  it('other accounts looked them up lately: says Orbit checks later, keeps nothing, asks again next time', async () => {
+    await connectLinkedInLive(user);
+    const daniel = (await people()).find((p) => p.firstName === 'Daniel')!;
+    routes['/mutuals'] = {
+      body: {
+        ok: false,
+        reason: 'busy',
+        retryAt: '2026-11-13T10:00:00.000Z',
+        message: 'Orbit will check who you both know a little later.',
+      },
+    };
+    const r = await mutualsFor(user, daniel);
+    expect(r).toEqual({
+      ok: false,
+      reason: 'busy',
+      message: 'Orbit will check who you both know a little later.',
+      mutuals: [],
+    });
+    // nothing kept as "no mutuals": the next look asks LinkedIn and keeps its answer
+    expect((await db.kv.toArray()).filter((k) => k.key.startsWith('mutuals3:'))).toEqual([]);
+    routes['/mutuals'] = { body: { verified: true, mutuals: [{ name: 'Sana Ahmed', member_id: 'm_sana' }] } };
+    const again = await mutualsFor(user, daniel);
+    expect(again).toMatchObject({ ok: true, source: 'linkedin' });
+    expect(again.mutuals.map((m) => m.name)).toEqual(['Sana Ahmed']);
+    expect(calls.filter((c) => c.path === '/mutuals')).toHaveLength(2);
+  });
+
   it('needs a live connection and the member id from it, then names who Orbit knows', async () => {
     const outsider = {
       id: 'px',

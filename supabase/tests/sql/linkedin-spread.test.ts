@@ -20,7 +20,8 @@ beforeEach(async () => {
 });
 
 const spread = async (key: string, window: number, wobble: number) =>
-  (await t.db.sql<{ d: number }>`select orbit.spread_delay(${key}, ${window}::int, ${wobble}::int) as d`)[0]!.d;
+  (await t.db.sql<{ d: number }>`select orbit.spread_delay(${key}, ${window}::int, ${wobble}::int) as d`)[0]!
+    .d;
 
 /** each queued message with how many seconds it waits before a worker may take it */
 const waits = async (queue: string) =>
@@ -49,8 +50,7 @@ describe('orbit.spread_delay', () => {
 
   it('gives two accounts different offsets', async () => {
     const offsets = new Set<number>();
-    for (const u of ['a', 'b', 'c', 'd', 'e', 'f'])
-      offsets.add(await spread(`li-poll:${u}`, 3000, 0));
+    for (const u of ['a', 'b', 'c', 'd', 'e', 'f']) offsets.add(await spread(`li-poll:${u}`, 3000, 0));
     expect(offsets.size).toBeGreaterThan(1);
     expect(await spread('li-reading:a', 43200, 0)).not.toBe(await spread('li-poll:a', 43200, 0));
   });
@@ -145,7 +145,8 @@ const age = (minutes: number) =>
 
 describe('public.orbit_linkedin_target_take', () => {
   it('lets one account look the same person up again and again', async () => {
-    for (let i = 0; i < 5; i++) expect(await takeTarget('ACoTarget', 'acc-1')).toEqual({ allowed: true, retryAt: null });
+    for (let i = 0; i < 5; i++)
+      expect(await takeTarget('ACoTarget', 'acc-1')).toEqual({ allowed: true, retryAt: null });
     // the identifier as callers write it: trimmed and lower case are the same person
     expect((await takeTarget('  acotarget ', 'acc-1')).allowed).toBe(true);
   });

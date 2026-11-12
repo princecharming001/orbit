@@ -32,7 +32,9 @@ export type ProviderErrorKind =
   | 'timeout'
   | 'network'
   | 'invalid'
-  | 'budget_exceeded';
+  | 'budget_exceeded'
+  /** the swarm limit (linkedinTargets.ts): other accounts looked this person up lately; not now, try at `retryAt` */
+  | 'busy';
 
 export interface ProviderError {
   ok: false;
@@ -42,6 +44,8 @@ export interface ProviderError {
   message: string;
   /** 'off' when the provider's switch is off (plan 34 A5) */
   reason?: 'off';
+  /** with kind 'busy': when the look may be tried again (ISO), when known */
+  retryAt?: string;
 }
 
 export type ProviderResult<T> = { ok: true; value: T } | ProviderError;

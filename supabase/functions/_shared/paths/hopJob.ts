@@ -250,6 +250,7 @@ export async function runHopEvidenceJob(
       budget: sqlHopBudget(s.db, s.now),
       clock: () => s.now().getTime(),
       pace: () => s.sleep(lo + Math.floor(s.random() * (hi - lo))),
+      targetTake: s.targetTake,
     },
     {
       userId,

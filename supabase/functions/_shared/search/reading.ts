@@ -35,6 +35,7 @@ import type { ProfileExperienceWire, ProfileReadingWire } from '@orbit/core/serv
 import { z } from 'zod/v4';
 import type { Claude, ClaudeResult } from '../claude.ts';
 import type { Db } from '../db.ts';
+import type { TargetTake } from '../linkedinTargets.ts';
 import type { ProfileOrg } from '../providers/linkedinCompanies.ts';
 
 /** orbit-connectors DEFAULT_LEDGER: profile reads and company pages per account per day. */
@@ -68,6 +69,11 @@ export interface ReadingDeps {
    * the shared company list: no extra read (orbit-worker wires keepProfileLogos)
    */
   keepLogos?: (orgs: ProfileOrg[]) => Promise<unknown>;
+  /**
+   * The swarm limit (linkedinTargets.ts): asked before each profile read. A refused person is skipped this step,
+   * with nothing marked, so a later step reads them.
+   */
+  targetTake?: TargetTake;
 }
 
 /** The companies and schools on a raw profile, with LinkedIn's ids and logos, for `keepLogos`. */
@@ -96,6 +102,8 @@ export interface ReadingStep {
   stopped?: 'ledger' | 'time' | 'refused' | 'throttled';
   /** the people this step read or found fresh (the ask-time answer) */
   readIds: string[];
+  /** profiles left for later because other accounts looked them up lately (the swarm limit) */
+  later?: number;
 }
 
 // ---- ledgers ----------------------------------------------------------------------------------------------------------
@@ -950,6 +958,11 @@ async function readProfiles(
     if (await copySharedProfile(db, userId, p.id, p.member, mode, now)) {
       step.profiles++;
       step.readIds.push(p.id);
+      continue;
+    }
+    // other students' accounts looked them up lately: not now, and nothing marked (the swarm limit)
+    if (deps.targetTake && !(await deps.targetTake(accountId, p.member, 'reading')).allowed) {
+      step.later = (step.later ?? 0) + 1;
       continue;
     }
     if (!(await spendRead(db, 'profile', accountId, now, mode))) {

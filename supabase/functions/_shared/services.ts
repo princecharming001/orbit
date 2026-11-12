@@ -9,6 +9,7 @@ import type Anthropic from '@anthropic-ai/sdk';
 import { batchFlagOn, type Claude, makeClaude } from './claude.ts';
 import type { Db } from './db.ts';
 import { type GoogleConfig, googleTokenSource, type TokenSource } from './google.ts';
+import { sqlTargetTake, type TargetTake } from './linkedinTargets.ts';
 import { type Apollo, createApollo } from './providers/apollo';
 import { createEnrow, type Enrow } from './providers/enrow';
 import { createExa, type Exa } from './providers/exa';
@@ -73,6 +74,12 @@ export interface AgentEnv {
    * X's app and limits (plan 43 §5, social/x/config.ts `XConfig`, spelled out for the same reason): sending a draft
    * on X needs them. Undefined: X drafts are not sent.
    */
+  /**
+   * The swarm limit on LinkedIn reads aimed at one person (linkedinTargets.ts): ORBIT_LINKEDIN_TARGET_ACCOUNTS_PER_DAY
+   * and ORBIT_LINKEDIN_TARGET_GAP_SECONDS, read by each function's entry. Undefined (a config built by hand): nothing
+   * is asked.
+   */
+  linkedinTarget?: { accountsPerDay: number; gapSeconds: number };
   x?: {
     clientId?: string;
     clientSecret?: string;
@@ -176,6 +183,8 @@ export interface Services {
   anthropic?: Anthropic;
   /** web sources handed in (tests); otherwise built from the keys */
   web?: WebSource[];
+  /** the swarm limit, when env.linkedinTarget is set: the Unipile client asks it, and so do direct profile reads */
+  targetTake?: TargetTake;
 }
 
 interface SupabaseAi {
@@ -229,6 +238,7 @@ export function makeServices(cfg: AgentConfig, base: { db: Db; now?: () => Date;
     tokens = tokenSources.get(cfg) ?? googleTokenSource(google, { db: base.db, vault: sqlVault(base.db) });
     tokenSources.set(cfg, tokens);
   }
+  const targetTake = env.linkedinTarget ? sqlTargetTake(base.db, env.linkedinTarget, { now }) : undefined;
   return {
     db: base.db,
     queue: base.queue ?? sqlQueue(base.db),
@@ -252,6 +262,7 @@ export function makeServices(cfg: AgentConfig, base: { db: Db; now?: () => Date;
       apiKey: env.unipileKey,
       baseUrl: env.unipileBase,
       gate: gate('unipile_reads'),
+      targetTake,
     }),
     apollo: createApollo({ ...p, apiKey: env.apolloKey, gate: gate('apollo') }),
     hunter: createHunter({ ...p, apiKey: env.hunterKey, gate: gate('hunter') }),
@@ -268,6 +279,7 @@ export function makeServices(cfg: AgentConfig, base: { db: Db; now?: () => Date;
     tokens,
     anthropic: cfg.anthropic,
     web: cfg.web,
+    targetTake,
   };
 }
 
