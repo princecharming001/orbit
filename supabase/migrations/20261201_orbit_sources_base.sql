@@ -85,6 +85,9 @@ grant execute on function orbit.friend_shares_guard(), orbit.people_unshare() to
 -- ---- 3. the graph mark ------------------------------------------------------------------------------------------
 
 alter table orbit.user_marks add column if not exists graph_version integer not null default 0;
+-- the latest switch's job run: a switch made while an earlier one's job is still running supersedes it, so the two
+-- passes are always the last switch's own (a third pass would read the second's scores)
+alter table orbit.user_marks add column if not exists switch_run text;
 comment on column orbit.user_marks.graph_version is
   'Plan 43 §3.2: moved by the switch job when an optional source goes on, off or is removed; the browser drops its cached graph and pulls again when it moves.';
 

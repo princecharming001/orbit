@@ -10,6 +10,7 @@ import type { Db } from '../../functions/_shared/db.ts';
 import { refreshFriendShares } from '../../functions/_shared/friends/shares.ts';
 import { findPaths } from '../../functions/_shared/paths/find.ts';
 import { makeServices, type Services } from '../../functions/_shared/services.ts';
+import { sourcesFor } from '../../functions/_shared/sources/states.ts';
 import { pull } from '../../functions/orbit-api/sync.ts';
 import { PULL_BY_NAME, type PullTable } from '../../functions/orbit-api/tables.ts';
 import { fakeEmbed, fakeNet } from './agents.ts';
@@ -127,7 +128,8 @@ export async function seedStudent(t: TestDb, o: SeedOptions): Promise<Seeded> {
     o: { participants?: number; account?: string; networking?: boolean } = {},
   ) => {
     const pid = people[key]!;
-    const ext = `${provider}-${key}-${++threadNo}`;
+    // mail threads are numbered in seeding order; a chat is named by its source and person, whatever was seeded before
+    const ext = provider === 'gmail' ? `${provider}-${key}-${++threadNo}` : `${provider}-${key}`;
     const sorted = [...msgs].sort((a, b) => b.days - a.days);
     const last = sorted.at(-1)!;
     const [th] = await db.sql<{ id: string }>`
@@ -368,8 +370,8 @@ export interface Snapshot {
 export interface SnapshotOptions {
   /** tables to pull (default: the ones before plan 43) */
   tables?: string[];
-  /** the services the entry points run with */
-  services?: Services;
+  /** the optional sources the owner offers (ORBIT_EXTRA_SOURCES); none by default */
+  offered?: Optional[];
 }
 
 /** What every entry point gives for the student, named and without ids. */
@@ -381,7 +383,9 @@ export async function snapshot(t: TestDb, s: Seeded, o: SnapshotOptions = {}): P
     select id, display_name from orbit.people where user_id = ${u}::uuid`;
   for (const p of all) names.set(p.id, `person:${p.display_name}`);
   names.set(u, 'student');
-  const svc = o.services ?? quietServices(db);
+  const offered = o.offered ?? [];
+  const svc = quietServices(db, offered.length ? { extraSources: offered } : {});
+  const src = await sourcesFor(db, u, offered);
 
   const tables = (o.tables ?? BASE_PULL_TABLES)
     .map((n) => PULL_BY_NAME.get(n))
@@ -391,6 +395,7 @@ export async function snapshot(t: TestDb, s: Seeded, o: SnapshotOptions = {}): P
     tables,
     limit: 2000,
     upTo: new Date('2100-01-01T00:00:00Z'),
+    sources: src,
   });
   const pullOut: Record<string, unknown> = {};
   for (const [table, rows] of Object.entries(pulled.changes))
@@ -420,7 +425,7 @@ export async function snapshot(t: TestDb, s: Seeded, o: SnapshotOptions = {}): P
   const paths = routes(normalize(await findPaths(svc, u, { target: { personId: target } }), names));
   const company = routes(normalize(await findPaths(svc, u, { target: { company: 'Stripe' } }), names));
 
-  await refreshFriendShares(db, u, NOW);
+  await refreshFriendShares(db, u, NOW, src);
   const shares = await db.sql<Record<string, unknown>>`
     select * from orbit.friend_shares where owner_user_id = ${u}::uuid order by display_name`;
   const friends = normalize(shares, names);

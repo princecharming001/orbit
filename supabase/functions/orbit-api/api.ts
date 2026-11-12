@@ -48,6 +48,8 @@ import { scoreRoutes } from './routes/scores.ts';
 import { searchRoutes } from './routes/search.ts';
 import { settingsRoutes } from './routes/settings.ts';
 import { sourceRoutes } from './routes/source.ts';
+import { sourcesPatternRoute, sourcesRoutes } from './routes/sources.ts';
+import { textsRoutes } from './routes/texts.ts';
 import { voiceRoutes } from './routes/voice.ts';
 import { syncPull, syncPush, syncStatus } from './sync.ts';
 
@@ -138,7 +140,7 @@ export interface Ctx {
 type Handler = (ctx: Ctx) => Promise<Response>;
 
 export interface Route {
-  method: 'GET' | 'POST' | 'GET|POST';
+  method: 'GET' | 'POST' | 'GET|POST' | 'PUT';
   auth: boolean;
   google?: boolean;
   run: Handler;
@@ -176,6 +178,9 @@ const ROUTES: Record<string, Route> = {
   ...friendDiscoverRoutes,
   ...voiceRoutes,
   ...adminRoutes,
+  // plan 43: the optional sources' switches (PUT /sources/:source is matched by pattern) and texts' day counts
+  ...sourcesRoutes,
+  ...textsRoutes,
 };
 
 /** The secrets a route needs that are not set. */
@@ -286,13 +291,13 @@ export function makeApiHandler(deps: ApiDeps): (req: Request) => Promise<Respons
     async function route(): Promise<Response> {
       if (req.method === 'OPTIONS') {
         if (!allowedOrigin) return new Response(null, { status: 403, headers: h });
-        return preflight(req, h);
+        return preflight(req, h, 'GET, POST, PUT, OPTIONS');
       }
       // browsers send Origin on fetches; other callers (curl, server code) send none and rely on their token
       if (origin && !allowedOrigin) throw new HttpError(403, 'forbidden', 'origin not allowed');
       // the fixed table first; the few routes with an id in the path (plan 29: /friends/shares/:id,
       // /friends/asks/:id/respond) are matched by pattern
-      const r = ROUTES[path] ?? friendPatternRoute(path);
+      const r = ROUTES[path] ?? friendPatternRoute(path) ?? sourcesPatternRoute(path);
       if (!r) throw notFound();
       if (!r.method.split('|').includes(req.method)) throw new HttpError(405, 'method_not_allowed', r.method);
       await providerSecrets();

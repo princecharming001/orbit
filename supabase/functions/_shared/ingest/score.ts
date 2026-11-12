@@ -97,6 +97,8 @@ export async function loadHistories(
   now: Date,
   personIds?: string[],
   src: SourcesInUse = NO_SOURCES,
+  /** false: the neighbours' previous scores are not read (the switch job's first pass, plan 43 §3.2) */
+  structural = true,
 ): Promise<{
   people: Person[];
   histories: Map<string, TieHistory>;
@@ -268,7 +270,8 @@ export async function loadHistories(
       left join orbit.tie_scores s on s.user_id = ${userId}::uuid and s.person_id = x.other`;
   const mutualBy = new Map<string, { score: number; name: string }[]>();
   for (const m of mutualRows)
-    if (m.score != null) push(mutualBy, m.person, { score: Number(m.score), name: m.name ?? '' });
+    if (structural && m.score != null)
+      push(mutualBy, m.person, { score: Number(m.score), name: m.name ?? '' });
 
   // following each other on Instagram or X (plan 43 §3.8), for the platforms in use: the person's attached account and
   // the student's own account follow each other in the student's own lists
@@ -382,14 +385,28 @@ export function toTieMessages(rows: MsgRow[]): TieMessage[] {
 export async function scorePeople(
   db: Db,
   userId: string,
-  opts: { now: Date; personIds?: string[]; fit?: boolean; sources?: SourcesInUse },
+  opts: {
+    now: Date;
+    personIds?: string[];
+    fit?: boolean;
+    sources?: SourcesInUse;
+    /** false: score without the neighbours' previous scores (the switch job's first pass) */
+    structural?: boolean;
+  },
 ): Promise<ScoreRunResult> {
   const { now } = opts;
   const src = opts.sources ?? NO_SOURCES;
   const [u] = await db.sql<{ settings: Record<string, unknown> | null }>`
     select settings from orbit.users where id = ${userId}::uuid`;
   let calibration = readCalibration(u?.settings ?? {});
-  const { people, histories, relationship } = await loadHistories(db, userId, now, opts.personIds, src);
+  const { people, histories, relationship } = await loadHistories(
+    db,
+    userId,
+    now,
+    opts.personIds,
+    src,
+    opts.structural ?? true,
+  );
 
   if (opts.fit) {
     const labelled = [...histories.entries()].filter(([, h]) => h.label);
@@ -439,8 +456,8 @@ export async function scorePeople(
     };
   });
   // plan 43 §3.2: a last contact that came from a source now out of use goes with it (the person's newest contact in
-  // use, or none). Only when the owner offers a source, so nothing changes before plan 43 is switched on.
-  if (src.offered.length && rows.length) {
+  // use, or none), also when the owner stops offering it. Before plan 43 no row has such a provider: nothing moves.
+  if (src.hidden.length && rows.length) {
     const ids = rows.map((r) => r.id);
     const hiddenLast = new Map(
       (

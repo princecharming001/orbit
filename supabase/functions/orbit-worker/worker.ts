@@ -27,6 +27,7 @@ import { gmailHandlers } from './handlers/gmail.ts';
 import { linkedinHandlers } from './handlers/linkedin.ts';
 import { scoreHandlers } from './handlers/score.ts';
 import { searchHandlers } from './handlers/search.ts';
+import { sourceHandlers } from './handlers/sources.ts';
 import { unipileHandlers } from './handlers/unipile.ts';
 
 export class NotImplemented extends Error {
@@ -83,6 +84,7 @@ export function defaultHandlers(
     ...linkedinHandlers(deps),
     ...scoreHandlers(deps),
     ...friendHandlers(deps),
+    ...sourceHandlers(deps),
     ...searchHandlers(deps),
     ...costHandlers(deps.cost),
     ...unipileHandlers(deps),
@@ -116,6 +118,7 @@ export const HEAVY_KINDS: ReadonlySet<string> = new Set([
   'score.ties',
   'score.page',
   'score.person',
+  'sources.switch',
 ]);
 /**
  * One a tick (plan 34 A7): with three, score.page runs shared one isolate's 2 s CPU allowance and 38 of them died
@@ -133,6 +136,7 @@ export const RESERVE_MS: Readonly<Record<string, number>> = {
   'score.user': 20_000,
   'score.page': 20_000,
   'score.ties': 20_000,
+  'sources.switch': 20_000,
   search_census: 58_000,
   search_reading: 58_000,
   company_facts_sync: 30_000,
