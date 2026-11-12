@@ -7,10 +7,17 @@
  *   GET    /instagram/status                    → {status, username?, steps: {profile, chats, following, followers}}
  *                                                status: not_connected | connecting | active | needs_reauth | parked |
  *                                                different_account | error; each step done | reading | waiting
+ *   POST   /instagram/connect/keep              → {ok}: the other answer to a different account: the old one stays,
+ *                                                the Unipile account just linked for the new one is released, and the
+ *                                                held state is cleared (409 nothing_held when no account is waiting)
  *   POST   /instagram/disconnect                → {ok}: the account is released at Unipile; what was read is kept
  *   POST   /social/links {platform, accountId, personId}   → {linkId}: the student says the account is this person;
  *                                                409 {error, people} when the account's own person has things of its
  *                                                own and the student must pick
+ *   POST   /social/links {platform, accountId, personId, keep}
+ *                                             → {linkId, kept, merged, undoable: false, message}: the pick. The account
+ *                                                goes on `keep` and the other person is merged into it, which cannot
+ *                                                be undone (social/keep.ts)
  *   DELETE /social/links/:id                    → {ok, accountPersonId}: "Not their account"
  *   GET    /social/asks                         → {asks}: open "is this the same person" questions
  *   POST   /social/asks/:id {answer: yes | no}  → {status}
@@ -34,6 +41,7 @@ import { createUnipileSync } from '../../_shared/providers/unipileSync.ts';
 import { sqlQueue } from '../../_shared/queue.ts';
 import { resolveSecret } from '../../_shared/secrets.ts';
 import { patchSocialState, type SocialSyncState } from '../../_shared/social/firstDays.ts';
+import { attachKeeping, KEEP_CANNOT_BE_UNDONE } from '../../_shared/social/keep.ts';
 import { answerAsk, attachAccount, detachLink } from '../../_shared/social/links.ts';
 import { startLookup } from '../../_shared/social/lookup.ts';
 import { removeSocialRows } from '../../_shared/social/remove.ts';
@@ -168,6 +176,68 @@ async function status(ctx: Ctx): Promise<Response> {
   });
 }
 
+/**
+ * The other answer to "a different account": keep the old one (plan 43 §4). The Unipile account Orbit just linked for
+ * the new sign-in is released (only that one, and only when Unipile names it as this student's Instagram: the Unipile
+ * workspace is shared with another product); the row goes back to the account linked before, whose rows were never
+ * touched; the held state is cleared. Without an account to go back to, the student is asked to sign in again.
+ */
+async function keepOld(ctx: Ctx): Promise<Response> {
+  await mustBeOffered(ctx, 'instagram');
+  await body(ctx, true);
+  const userId = ctx.userId!;
+  const row = await instagramRow(ctx);
+  if (!held(row)) throw new HttpError(409, 'nothing_held', 'No different Instagram account is waiting.');
+  const state = row?.sync_state?.instagram ?? {};
+  const fresh = row?.external_account_id ?? null;
+  const previous =
+    state.previousAccountId && state.previousAccountId !== fresh ? state.previousAccountId : null;
+  let released = false;
+  if (fresh && ctx.env.unipileKey && ctx.env.unipileBase) {
+    const opts = { fetch: ctx.fetch, apiKey: ctx.env.unipileKey, baseUrl: ctx.env.unipileBase };
+    const one = await getUnipileAccount(opts, fresh);
+    // Unipile not answering: nothing changes, so the account is never left linked with no row naming it
+    if (!one.ok)
+      throw new HttpError(502, 'upstream', 'Instagram is unavailable right now. Try again in a minute.');
+    if (
+      one.value &&
+      one.value.id === fresh &&
+      (one.value.type ?? '').toUpperCase() === 'INSTAGRAM' &&
+      (one.value.name ?? '').toLowerCase() === userId.toLowerCase()
+    ) {
+      const del = await deleteUnipileAccount(opts, fresh);
+      if (!del.ok)
+        throw new HttpError(502, 'upstream', 'Instagram is unavailable right now. Try again in a minute.');
+      released = true;
+    } else if (!one.value) released = true;
+  }
+  const back = previous && row?.social_account_id;
+  await ctx.db.sql`
+    update orbit.integration_accounts
+       set external_account_id = ${back ? previous : null},
+           status = ${back ? 'active' : 'needs_reauth'},
+           last_error = ${back ? null : 'sign_in'}
+     where user_id = ${userId}::uuid and provider = 'instagram'`;
+  await patchSocialState(ctx.db, userId, 'instagram', {
+    pending: null,
+    replace: false,
+    previousAccountId: null,
+    stage: state.syncedAt ? 'refresh' : 'profile',
+  });
+  await ctx.db.sql`
+    insert into orbit.audit_log (user_id, actor, action, target_table, details)
+    values (${userId}::uuid, 'user', 'instagram.kept_old', 'integration_accounts',
+            ${{ released, releasedAccountId: fresh, back: !!back }}::jsonb)`;
+  if (back)
+    await sqlQueue(ctx.db).enqueue({
+      kind: 'sync.instagram',
+      userId,
+      payload: {},
+      dedupeKey: `sync.instagram:${userId}:${previous}:kept:${ctx.now().toISOString()}`,
+    });
+  return json(200, { ok: true });
+}
+
 async function disconnect(ctx: Ctx): Promise<Response> {
   await body(ctx, true);
   const userId = ctx.userId!;
@@ -209,6 +279,7 @@ async function attach(ctx: Ctx): Promise<Response> {
   // X accounts are tied to a real person only from public proof (plan 43 §5)
   if (b.platform === 'x')
     throw new HttpError(403, 'public_proof_only', 'An X account is attached only from public proof');
+  if (b.keep !== undefined) return attachKept(ctx, b.platform, b.accountId, personId, uuid(b, 'keep'));
   const r = await attachAccount(ctx.db, ctx.userId!, {
     platform: b.platform,
     accountId: b.accountId,
@@ -232,6 +303,43 @@ async function attach(ctx: Ctx): Promise<Response> {
       people: await peopleOf(ctx, [r.accountPersonId, r.personId]),
     });
   return json(200, { linkId: r.linkId });
+}
+
+/**
+ * The student's pick after `pick_person` (plan 43 §3.4): the account goes on the person kept, and the other person is
+ * merged into them. That cannot be undone, and the answer says so.
+ */
+async function attachKept(
+  ctx: Ctx,
+  platform: SocialPlatform,
+  accountId: string,
+  personId: string,
+  keep: string,
+): Promise<Response> {
+  const r = await attachKeeping(
+    ctx.db,
+    ctx.userId!,
+    { platform, accountId, personId, via: 'student', now: ctx.now() },
+    keep,
+  );
+  if (r.status === 'no_person') throw new HttpError(404, 'not_found', 'no such person');
+  if (r.status === 'bad_keep')
+    throw new HttpError(400, 'bad_request', 'keep is one of the two people Orbit asked about');
+  if (r.status === 'ambiguous')
+    throw new HttpError(409, 'ambiguous', 'Say which person the account is being attached to.');
+  if (r.status === 'linked_elsewhere')
+    throw new HttpError(
+      409,
+      'linked_elsewhere',
+      'That account is attached to someone else. Detach it first.',
+    );
+  return json(200, {
+    linkId: r.linkId,
+    kept: r.kept,
+    merged: r.merged,
+    undoable: false,
+    message: KEEP_CANNOT_BE_UNDONE,
+  });
 }
 
 async function detach(ctx: Ctx, id: string): Promise<Response> {
@@ -340,6 +448,7 @@ async function lookupGet(ctx: Ctx, id: string): Promise<Response> {
 export const socialRoutes: Record<string, Route> = {
   '/instagram/connect/start': { method: 'POST', auth: true, run: connectStart },
   '/instagram/status': { method: 'GET|POST', auth: true, run: status },
+  '/instagram/connect/keep': { method: 'POST', auth: true, run: keepOld },
   '/instagram/disconnect': { method: 'POST', auth: true, run: disconnect },
   '/social/links': { method: 'POST', auth: true, run: attach },
   '/social/asks': { method: 'GET|POST', auth: true, run: asks },

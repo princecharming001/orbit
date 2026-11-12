@@ -444,12 +444,26 @@ const dedupeArray = (col: string) =>
  * keeps its own fields and takes the loser's where it has none; the loser keeps `merged_into`. Never across a
  * do_not_merge pair.
  */
-export async function mergePeople(db: Db, userId: string, survivor: string, loser: string): Promise<boolean> {
+export async function mergePeople(
+  db: Db,
+  userId: string,
+  survivor: string,
+  loser: string,
+  /**
+   * `pickedByStudent`: the student picked which of the two stays after attaching an Instagram or X account (plan 43
+   * §3.4, social/keep.ts). Their word is the merge, so the attached-account refusal and do_not_merge do not apply, and
+   * what the account layer holds of the loser (its links, questions, lookups and text days) moves too.
+   */
+  o: { pickedByStudent?: boolean } = {},
+): Promise<boolean> {
   if (survivor === loser) return false;
+  const picked = !!o.pickedByStudent;
   // plan 43 §3.4: a person who owns an Instagram or X account is never merged; the account is attached instead
-  await refuseSocialMerge(db, userId, [survivor, loser]);
+  if (!picked) await refuseSocialMerge(db, userId, [survivor, loser]);
   const [a, b] = survivor < loser ? [survivor, loser] : [loser, survivor];
-  const blocked = await db.sql`
+  const blocked = picked
+    ? []
+    : await db.sql`
     select 1 from orbit.do_not_merge where user_id = ${userId}::uuid
        and ((person_a = ${a}::uuid and person_b = ${b}::uuid) or (person_a = ${b}::uuid and person_b = ${a}::uuid))`;
   if (blocked.length) return false;
@@ -554,11 +568,74 @@ export async function mergePeople(db: Db, userId: string, survivor: string, lose
           and (person_a = $2::uuid or person_b = $2::uuid)`,
       p.slice(0, 2),
     );
+    if (picked) await moveSocialRows(tx, p);
     await tx.query(
       `insert into orbit.audit_log (user_id, actor, action, target_table, target_id, details)
-       values ($1::uuid, 'system', 'people.merge', 'people', $3::text, jsonb_build_object('merged', $2::text))`,
-      p,
+       values ($1::uuid, $4::text, 'people.merge', 'people', $3::text,
+               jsonb_build_object('merged', $2::text) || case when $4::text = 'user' then '{"undoable": false}'::jsonb else '{}'::jsonb end)`,
+      [...p, picked ? 'user' : 'system'],
     );
     return true;
   });
+}
+
+/**
+ * What the account layer (plan 43) holds of a merged person, moved to the survivor: attached accounts, the "same
+ * person" questions (one already asked of the survivor wins), lookups, "not the same" answers and text days (counts
+ * added up). A survivor made from an account is known from more than it now, and is listed when either was.
+ */
+async function moveSocialRows(tx: Db, p: string[]): Promise<void> {
+  await tx.query(
+    `update orbit.people s set
+       listed = s.listed or l.listed,
+       source_account = case when s.source_account is not null and l.source_account is null then null
+                             else s.source_account end
+      from orbit.people l
+     where s.id = $3::uuid and l.id = $2::uuid and s.user_id = $1::uuid and l.user_id = $1::uuid`,
+    p,
+  );
+  await tx.query(
+    `update orbit.social_links set person_id = $3::uuid where user_id = $1::uuid and person_id = $2::uuid`,
+    p,
+  );
+  await tx.query(
+    `update orbit.social_match_asks k set person_id = $3::uuid
+      where k.user_id = $1::uuid and k.person_id = $2::uuid
+        and not exists (select 1 from orbit.social_match_asks x where x.user_id = $1::uuid and x.platform = k.platform
+                          and x.account_id = k.account_id and x.person_id = $3::uuid)`,
+    p,
+  );
+  await tx.query(
+    `delete from orbit.social_match_asks where user_id = $1::uuid and person_id = $2::uuid`,
+    p.slice(0, 2),
+  );
+  await tx.query(
+    `update orbit.social_lookups set target_person_id = $3::uuid where user_id = $1::uuid and target_person_id = $2::uuid`,
+    p,
+  );
+  await tx.query(
+    `insert into orbit.social_not_same (user_id, platform, account_id, person_id)
+     select user_id, platform, account_id, $3::uuid from orbit.social_not_same where user_id = $1::uuid and person_id = $2::uuid
+     on conflict do nothing`,
+    p,
+  );
+  await tx.query(
+    `delete from orbit.social_not_same where user_id = $1::uuid and person_id = $2::uuid`,
+    p.slice(0, 2),
+  );
+  await tx.query(
+    `insert into orbit.text_days (user_id, person_id, day, in_count, out_count, group_size, words)
+     select user_id, $3::uuid, day, in_count, out_count, group_size, words from orbit.text_days
+      where user_id = $1::uuid and person_id = $2::uuid
+     on conflict (user_id, person_id, day) do update set
+       in_count = orbit.text_days.in_count + excluded.in_count,
+       out_count = orbit.text_days.out_count + excluded.out_count,
+       group_size = least(orbit.text_days.group_size, excluded.group_size),
+       words = orbit.text_days.words or excluded.words`,
+    p,
+  );
+  await tx.query(
+    `delete from orbit.text_days where user_id = $1::uuid and person_id = $2::uuid`,
+    p.slice(0, 2),
+  );
 }

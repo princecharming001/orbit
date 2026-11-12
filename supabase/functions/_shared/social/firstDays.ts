@@ -40,6 +40,8 @@ export interface SocialSyncState {
   replace?: boolean;
   /** a different account signed in without `replace`: held until the student says */
   pending?: { socialAccountId: string; username: string } | null;
+  /** the Unipile account linked before this sign-in, to go back to when the student keeps the old account */
+  previousAccountId?: string | null;
   syncedAt?: string;
   targetsAt?: string;
 }
@@ -123,6 +125,7 @@ export async function runSocialSync(
           stage: 'chats',
           replace: false,
           pending: null,
+          previousAccountId: null,
           chatsCursor: null,
           chatQueue: [],
           chatsRead: 0,

@@ -550,6 +550,23 @@ async function instagramAccount(
     select 1 from orbit.integration_accounts
      where provider = 'instagram' and external_account_id = ${accountId} and user_id <> ${userId}::uuid`;
   if (taken.length) return { result: 'account_in_use', userId };
+  // the Unipile account linked before, kept until the first read says whether this is the same Instagram account:
+  // a different one is held, and if the student keeps the old one (POST /instagram/connect/keep) Orbit goes back
+  // to it and releases this one. While an account is held, the one before it stays the one to go back to.
+  const [before] = await db.sql<{
+    external_account_id: string | null;
+    status: string;
+    last_error: string | null;
+    previous: string | null;
+  }>`
+    select external_account_id, status, last_error, sync_state -> 'instagram' ->> 'previousAccountId' as previous
+      from orbit.integration_accounts where user_id = ${userId}::uuid and provider = 'instagram'`;
+  const heldBefore = before?.status === 'error' && before.last_error === 'different_account';
+  const previous = heldBefore
+    ? (before?.previous ?? null)
+    : before?.external_account_id && before.external_account_id !== accountId
+      ? before.external_account_id
+      : null;
   await db.sql`
     insert into orbit.integration_accounts (user_id, provider, external_account_id, status, last_error)
     values (${userId}::uuid, 'instagram', ${accountId}, 'active', null)
@@ -559,7 +576,7 @@ async function instagramAccount(
     update orbit.integration_accounts
        set sync_state = coalesce(sync_state, '{}'::jsonb)
              || jsonb_build_object('instagram', coalesce(sync_state -> 'instagram', '{}'::jsonb)
-                  || ${{ stage: 'profile', pending: null }}::jsonb)
+                  || ${{ stage: 'profile', pending: null, previousAccountId: previous }}::jsonb)
      where user_id = ${userId}::uuid and provider = 'instagram'`;
   await db.sql`
     insert into orbit.source_states (user_id, source, state, off_since)

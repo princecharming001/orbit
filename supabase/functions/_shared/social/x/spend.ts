@@ -196,7 +196,7 @@ export async function quoteXCheck(db: Db, userId: string, targetRef: string, dep
   const limit = deps.cfg.listLimit;
   const client = await xAdapterFor(db, userId, deps, { caller: 'quote' });
   if (!client) return { quoteUsd: 0, list: null, size: 0, reason: 'not_connected' };
-  const read = await readXProfile(db, client.adapter, targetRef);
+  const read = await readXProfile(db, client.adapter, targetRef, userId);
   if (!read.ok) return { quoteUsd: 0, list: null, size: 0, reason: read.reason };
   const t = read.profile.account;
   // protected accounts are never read (readXProfile has dropped what Orbit held of them)

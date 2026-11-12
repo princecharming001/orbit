@@ -20,6 +20,7 @@
 import type { SocialAccount, SocialPlatform, SocialProof } from '@orbit/core/entity/social';
 import type { Db } from '../db.ts';
 import { sqlQueue } from '../queue.ts';
+import { CONTACT_DETACHED_LINES } from './evidence.ts';
 import { loadAccounts } from './graph.ts';
 import { factSource, identityKind, platformName, sourceAccount } from './keys.ts';
 import { deleteAccountTies, rebuildAccountTies } from './ties.ts';
@@ -41,6 +42,30 @@ export interface AttachInput {
   now: Date;
   /** the account as read, when the caller has it (its email, phone and bio) */
   account?: SocialAccount;
+  /**
+   * The account's own person, when it has things of its own: 'ask' (the default) answers `conflict` for the student
+   * to pick; 'leave' is the student's pick of `personId` (social/keep.ts): what the account brought moves, and the own
+   * person is left for the caller to merge in, never deleted here.
+   */
+  ownPerson?: 'ask' | 'leave';
+}
+
+/** The account's own person: made from it, or holding its id identity (not counting one already linked to it). */
+export async function accountPeople(
+  db: Db,
+  userId: string,
+  platform: SocialPlatform,
+  accountId: string,
+  except?: string,
+): Promise<string[]> {
+  const rows = await db.sql<{ id: string }>`
+    select p.id from orbit.people p
+     where p.user_id = ${userId}::uuid and p.deleted_at is null and p.merged_into is null
+       and p.id <> coalesce(${except ?? null}::uuid, '00000000-0000-0000-0000-000000000000'::uuid)
+       and (p.source_account = ${sourceAccount(platform, accountId)}
+         or exists (select 1 from orbit.person_identities i where i.person_id = p.id
+                      and i.kind = ${identityKind(platform)} and i.value_norm = ${accountId}))`;
+  return rows.map((r) => r.id);
 }
 
 /** Thrown by the old merge path for a person who owns an attached account. */
@@ -180,15 +205,12 @@ export async function attachAccount(db: Db, userId: string, a: AttachInput): Pro
   if (link) return { status: 'linked_elsewhere', personId: link.person_id };
 
   // the account's own person (made from it, or holding its id identity)
-  const own = await db.sql<{ id: string }>`
-    select p.id from orbit.people p
-     where p.user_id = ${userId}::uuid and p.deleted_at is null and p.merged_into is null and p.id <> ${a.personId}::uuid
-       and (p.source_account = ${sourceAccount(a.platform, a.accountId)}
-         or exists (select 1 from orbit.person_identities i where i.person_id = p.id
-                      and i.kind = ${identityKind(a.platform)} and i.value_norm = ${a.accountId}))`;
-  for (const o of own)
-    if (await hasUnstamped(db, userId, o.id, a.accountId))
-      return { status: 'conflict', accountPersonId: o.id, personId: a.personId };
+  const own = (await accountPeople(db, userId, a.platform, a.accountId, a.personId)).map((id) => ({ id }));
+  const leave = a.ownPerson === 'leave';
+  if (!leave)
+    for (const o of own)
+      if (await hasUnstamped(db, userId, o.id, a.accountId))
+        return { status: 'conflict', accountPersonId: o.id, personId: a.personId };
 
   return db.begin(async (tx) => {
     let folded: string | undefined;
@@ -203,6 +225,8 @@ export async function attachAccount(db: Db, userId: string, a: AttachInput): Pro
            and not exists (select 1 from orbit.social_match_asks x where x.user_id = ${userId}::uuid
                              and x.platform = orbit.social_match_asks.platform
                              and x.account_id = orbit.social_match_asks.account_id and x.person_id = ${a.personId}::uuid)`;
+      // the student's pick: the own person is merged into this one by the caller, with all it has
+      if (leave) continue;
       await tx.sql`delete from orbit.people where id = ${o.id}::uuid and user_id = ${userId}::uuid`;
       folded = o.id;
     }
@@ -345,7 +369,8 @@ export async function detachLink(
         await tx.sql`delete from orbit.social_links where id = ${p.id}::uuid`;
         await tx.sql`
           insert into orbit.social_match_asks (user_id, platform, account_id, person_id, score, signals, status)
-          values (${userId}::uuid, ${p.platform}, ${p.account_id}, ${old}::uuid, 0.6, ${{ review: 'contact_detached' }}::jsonb, 'open')
+          values (${userId}::uuid, ${p.platform}, ${p.account_id}, ${old}::uuid, 0.6,
+                  ${{ review: 'contact_detached', ...CONTACT_DETACHED_LINES }}::jsonb, 'open')
           on conflict (user_id, platform, account_id, person_id) do update set status = 'open', signals = excluded.signals`;
         reviews++;
       }

@@ -15,6 +15,7 @@
 import { accountKind, type SocialAccount } from '@orbit/core/entity/social';
 import type { Db } from '../../db.ts';
 import { SocialBudgetSpent, type SocialList } from '../adapter.ts';
+import { touchLinks } from '../graph.ts';
 import {
   XAccountGone,
   XAccountProtected,
@@ -116,10 +117,18 @@ export type XProfileResult =
  * A profile read that keeps Orbit current with X: a suspended or missing account is dropped, and so is what Orbit held
  * of an account now protected (which still comes back as read, so the caller can tell).
  */
-export async function readXProfile(db: Db, adapter: XAdapter, ref: string): Promise<XProfileResult> {
+export async function readXProfile(
+  db: Db,
+  adapter: XAdapter,
+  ref: string,
+  /** the student whose token read it: X's `receives_your_dm` is its answer for them, kept on their link */
+  viewer?: string,
+): Promise<XProfileResult> {
   try {
     const profile = await adapter.profile(ref);
     if (profile.account.isPrivate) await dropXAccount(db, profile.account.id, 'protected');
+    if (viewer && typeof profile.receivesYourDm === 'boolean')
+      await keepAcceptsDms(db, viewer, profile.account.id, profile.receivesYourDm);
     return { ok: true, profile };
   } catch (e) {
     if (e instanceof XAccountGone) {
@@ -130,6 +139,24 @@ export async function readXProfile(db: Db, adapter: XAdapter, ref: string): Prom
     if (e instanceof XRateLimited) return { ok: false, reason: 'rate_limited' };
     throw e;
   }
+}
+
+/**
+ * Keeps whether an attached X account accepts messages from the student (plan 43 §5), on the student's own link: the
+ * answer is X's for that student only. Written when it changed or is a day old, so the browser is sent it again.
+ */
+export async function keepAcceptsDms(
+  db: Db,
+  userId: string,
+  accountId: string,
+  accepts: boolean,
+  now = new Date(),
+) {
+  await db.sql`
+    update orbit.social_links set accepts_dms = ${accepts}, accepts_dms_at = ${now}::timestamptz
+     where user_id = ${userId}::uuid and platform = 'x' and account_id = ${accountId}
+       and (accepts_dms is distinct from ${accepts} or accepts_dms_at is null
+         or accepts_dms_at < ${now}::timestamptz - interval '1 day')`;
 }
 
 export interface XListRead {
@@ -188,7 +215,7 @@ export async function readXListToEnd(
     };
   let size = o.size;
   if (size === undefined) {
-    const p = await readXProfile(db, adapter, o.accountId);
+    const p = await readXProfile(db, adapter, o.accountId, o.readBy);
     if (!p.ok) return { ok: false, reason: p.reason === 'limit' ? 'budget' : p.reason };
     if (p.profile.account.isPrivate) return { ok: false, reason: 'protected' };
     size = (o.list === 'following' ? p.profile.account.following : p.profile.account.followers) ?? 0;
@@ -296,6 +323,8 @@ export async function storeXListRead(
       values ('x', ${r.accountId}, ${r.list}, ${o.ownerUserId}::uuid, ${o.readBy}::uuid, ${ids.length}::int,
               ${o.total}::int, true, ${o.now}::timestamptz, ${until}::timestamptz)`;
   });
+  // the student's own list read to the end says who follows them back: the browser gets their links again
+  if (own) await touchLinks(db, o.ownerUserId!, 'x');
   if (own)
     for (const a of r.accounts) {
       if (suppressed.has(a.id)) continue;
