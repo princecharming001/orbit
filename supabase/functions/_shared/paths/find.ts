@@ -957,6 +957,7 @@ export async function findPaths(
     sources: sourcesOf(ext, layer),
     unconfigured: ext.unconfigured,
     ...(hopEvidence ? { hopEvidence } : {}),
+    ...(ext.mutualsPending ? { mutualsPending: ext.mutualsPending } : {}),
   };
 }
 

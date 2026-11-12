@@ -61,6 +61,11 @@ export function MutualConnections({ user, person }: { user: User; person: Person
           if (live) setFailed(true);
           return;
         }
+        // not checked yet: said as such, and asked again the next time the page opens
+        if (!r.ok && r.reason === 'busy') {
+          if (live) setResult(r);
+          return;
+        }
         cache.set(key, r);
         if (live) setResult(r);
       })

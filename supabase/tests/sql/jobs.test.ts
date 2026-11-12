@@ -119,7 +119,7 @@ describe('orbit.enqueue_incremental_syncs and enqueue_nightly', () => {
     expect(again!.n).toBe(0);
   });
 
-  it('polls connected LinkedIn accounts of recently seen students not synced in the last hour', async () => {
+  it('polls connected LinkedIn accounts of recently seen students not synced since the hour began', async () => {
     await t.pg.exec('delete from pgmq.q_orbit_sync;');
     const stale = await makeUser(t.db);
     const fresh = await makeUser(t.db);
@@ -131,7 +131,7 @@ describe('orbit.enqueue_incremental_syncs and enqueue_nightly', () => {
     await t.db
       .sql`insert into orbit.integration_accounts (user_id, provider, external_account_id, last_synced_at)
       values (${stale}::uuid, 'linkedin', 'acc-stale', now() - interval '2 hours'),
-             (${fresh}::uuid, 'linkedin', 'acc-fresh', now() - interval '30 minutes'),
+             (${fresh}::uuid, 'linkedin', 'acc-fresh', now()),
              (${idle}::uuid, 'linkedin', 'acc-idle', null),
              (${unlinked}::uuid, 'linkedin', null, null)`;
     await t.db.sql`select orbit.enqueue_incremental_syncs()`;

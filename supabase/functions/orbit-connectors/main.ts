@@ -8,6 +8,7 @@ import {
   postgrestLinks,
   postgrestSharedReads,
   postgrestTake,
+  postgrestTargetTake,
   postgrestUsage,
 } from './connectors.ts';
 import { postgrestCallSink, storagePhotoWriter } from './people.ts';
@@ -109,6 +110,15 @@ Deno.serve(
     // plan 41: people's photos kept in storage, and the daily count of reads made, saved and refused
     photos: url && serviceKey ? storagePhotoWriter(url, serviceKey) : undefined,
     calls: url && serviceKey ? postgrestCallSink(url, serviceKey) : undefined,
+    // the swarm limit: at most this many accounts look one person up a day, this many seconds apart
+    // (public.orbit_linkedin_target_take)
+    targetTake:
+      url && serviceKey
+        ? postgrestTargetTake(url, serviceKey, {
+            accountsPerDay: num('ORBIT_LINKEDIN_TARGET_ACCOUNTS_PER_DAY', 3),
+            gapSeconds: num('ORBIT_LINKEDIN_TARGET_GAP_SECONDS', 1200),
+          })
+        : undefined,
     // plan 34 E1: Exa from /web and Village from /paths land in orbit.usage_ledger like the server's own calls
     usage: url && serviceKey ? postgrestUsage(url, serviceKey) : undefined,
     postings: {

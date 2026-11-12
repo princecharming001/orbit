@@ -101,6 +101,11 @@ export interface ExternalResult {
   skipped: string[];
   /** which sources answered from the 30-day cache */
   fromCache: { mutuals: boolean; village: boolean };
+  /**
+   * LinkedIn's mutuals were not checked yet: other students' accounts looked this person up lately (the swarm limit,
+   * linkedinTargets.ts). Nothing was written or cached for them; the next lookup after `retryAt` asks again.
+   */
+  mutualsPending?: { retryAt?: string };
 }
 
 /** Gather mutuals and Village introducers for a target, and the ties to upsert. */
@@ -265,6 +270,12 @@ async function mutualsFor(
     return hit.items;
   }
   const r = await deps.unipile.mutuals(input.unipileAccountId, t.memberId);
+  // not now (the swarm limit): not checked yet, so no ties and nothing kept as "none"
+  if (!r.ok && r.kind === 'busy') {
+    out.skipped.push('mutuals: not checked yet');
+    out.mutualsPending = r.retryAt ? { retryAt: r.retryAt } : {};
+    return [];
+  }
   if (!r.ok) {
     out.skipped.push(`mutuals: ${r.message}`);
     return [];

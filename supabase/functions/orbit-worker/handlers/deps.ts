@@ -8,6 +8,7 @@ import type { Claude } from '../../_shared/claude.ts';
 import type { Db } from '../../_shared/db.ts';
 import type { TokenSource } from '../../_shared/google.ts';
 import { type GoogleClient, googleClient, type QuotaPacer } from '../../_shared/googleApi.ts';
+import type { TargetLimits } from '../../_shared/linkedinTargets.ts';
 import type { Embed } from '../../_shared/services.ts';
 import type { CostDigestDeps } from './cost.ts';
 import type { XWorkerDeps } from './x.ts';
@@ -38,6 +39,12 @@ export interface HandlerDeps {
   x?: XWorkerDeps;
   /** ORBIT_EXTRA_SOURCES (plan 43 §3.1), read once at cold start: the optional sources the owner offers */
   offered?: OptionalSource[];
+  /**
+   * The swarm limit's settings (ORBIT_LINKEDIN_TARGET_ACCOUNTS_PER_DAY, ORBIT_LINKEDIN_TARGET_GAP_SECONDS): the
+   * background profile reads (search_reading, logos.user) ask public.orbit_linkedin_target_take before each one.
+   * Undefined (tests): nothing is asked.
+   */
+  linkedinTarget?: TargetLimits;
 }
 
 export class JobSkipped extends Error {

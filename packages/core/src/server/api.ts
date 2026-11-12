@@ -243,6 +243,12 @@ export interface PathsFindResponse {
    * Absent when there is nothing to read (no LinkedIn, no mutuals with member ids).
    */
   hopEvidence?: 'queued' | 'checked';
+  /**
+   * LinkedIn's mutual connections were not checked yet (other students' accounts looked this person up lately, and
+   * LinkedIn bans a crowd of accounts opening one profile): the routes leave them out for now, and a find after
+   * `retryAt` asks again. Absent when they were checked, kept, or not asked.
+   */
+  mutualsPending?: { retryAt?: string };
 }
 /** POST /intros/ask: drafts the intro request and the forwardable blurb (never sends) */
 export interface IntroAskRequest {

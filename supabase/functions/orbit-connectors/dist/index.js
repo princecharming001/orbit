@@ -610,6 +610,18 @@ async function timingSafeEqual(a, b) {
   return diff === 0;
 }
 
+// supabase/functions/_shared/linkedinTargets.ts
+var DEFAULT_TARGET_LIMITS = { accountsPerDay: 3, gapSeconds: 1200 };
+var SWARM_KIND = "swarm";
+var normTarget = (id) => id.trim().toLowerCase();
+function targetVerdict(v) {
+  const o = v && typeof v === "object" ? v : {};
+  return {
+    allowed: o.allowed === true,
+    ...typeof o.retryAt === "string" && o.retryAt ? { retryAt: o.retryAt } : {}
+  };
+}
+
 // supabase/functions/_shared/origins.ts
 var PUBLISHED = /* @__PURE__ */ new Set([
   "https://tryorbit.today",
@@ -1549,6 +1561,40 @@ function postgrestSharedReads(url2, serviceKey2, doFetch = fetch) {
     }
   };
 }
+function postgrestTargetTake(url2, serviceKey2, limits = {}, doFetch = fetch) {
+  const { accountsPerDay, gapSeconds } = { ...DEFAULT_TARGET_LIMITS, ...limits };
+  return async (accountId, target) => {
+    const r = await doFetch(`${url2}/rest/v1/rpc/orbit_linkedin_target_take`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        apikey: serviceKey2,
+        Authorization: `Bearer ${serviceKey2}`
+      },
+      body: JSON.stringify({
+        p_target: target,
+        p_account: accountId,
+        p_max_accounts: accountsPerDay,
+        p_gap_seconds: gapSeconds
+      })
+    });
+    if (!r.ok) throw new StoreDown();
+    return targetVerdict(await r.json());
+  };
+}
+var MUTUALS_LATER = "Orbit will check who you both know a little later.";
+var PROFILE_LATER = "Orbit will read this profile a little later.";
+async function takeTarget(deps, accountId, target, caller) {
+  if (!deps.targetTake) return { allowed: true };
+  let v;
+  try {
+    v = await deps.targetTake(accountId, normTarget(target), caller);
+  } catch {
+    throw new StoreDown();
+  }
+  if (!v.allowed) await countCalls(deps, { accountId, kind: SWARM_KIND, caller, refused: 1 });
+  return v;
+}
 async function sharedGet(deps, key) {
   if (!deps.shared) return void 0;
   return deps.shared.get(key).catch(() => void 0);
@@ -2077,6 +2123,25 @@ function makeHandler(deps) {
       const key = await engagementShareKey(parsed);
       const hit = key ? await sharedGet(deps, key) : void 0;
       if (hit) return json(200, { ...hit, cursor: null, shared: true }, h);
+      if (parsed.want !== "thread" && parsed.memberId) {
+        let v;
+        try {
+          v = await takeTarget(deps, accountId, parsed.memberId, "engagement");
+        } catch {
+          return json(503, { error: "unavailable right now" }, h);
+        }
+        if (!v.allowed)
+          return json(
+            200,
+            {
+              ok: false,
+              reason: "busy",
+              retryAt: v.retryAt ?? null,
+              message: "Orbit will read this person's activity a little later."
+            },
+            h
+          );
+      }
     }
     const ledgerSpend = path === "/search" ? () => spend("search", body.purpose === "facets" ? "facets" : "discover") : path === "/posts/activity" ? () => spend("posts", "activity", POSTS_UPSTREAM_PER_CALL) : path === "/engagement" ? () => spend("posts", "engagement") : void 0;
     if (ledgerSpend) {
@@ -2406,11 +2471,23 @@ async function unipileMutuals(deps, body, doFetch, spend, ctx) {
     }
   }
   let shared;
+  let looked = false;
+  const later = async () => {
+    if (looked) return void 0;
+    const v = await takeTarget(deps, accountId, target, "mutuals");
+    if (v.allowed) {
+      looked = true;
+      return void 0;
+    }
+    return { ok: false, reason: "busy", retryAt: v.retryAt ?? null, message: MUTUALS_LATER };
+  };
   const mine = deps.shared && !fresh ? await getViewer(deps.shared, accountId, target) : void 0;
   if (mine?.mutualCount !== void 0) {
     shared = mine.mutualCount;
     await ctx.saved("profile", "mutuals");
   } else {
+    const busy2 = await later();
+    if (busy2) return busy2;
     if (!await spend("profile", "mutuals")) return LEDGER_LIMIT;
     const q = new URLSearchParams({ account_id: accountId, notify: "false" });
     const res = await doFetch(`${deps.unipileBase}/api/v1/users/${encodeURIComponent(target)}?${q}`, {
@@ -2439,6 +2516,8 @@ async function unipileMutuals(deps, body, doFetch, spend, ctx) {
     if (mkey) await sharedPut(deps, mkey, none, VIEWER_DAYS);
     return none;
   }
+  const busy = await later();
+  if (busy) return busy;
   const mutuals = [];
   let cursor;
   let total;
@@ -3247,6 +3326,33 @@ async function enrichmentRoute(deps, path, body, ctx) {
         if (body.keepOnly === true) return json(200, { ok: true, photo: { kept: false } }, h);
       }
     }
+    if ((kind === "profile" || kind === "photo") && identifier) {
+      let v;
+      try {
+        v = await takeTarget(deps, accountId, identifier, caller);
+      } catch {
+        return json(503, { error: "unavailable right now" }, h);
+      }
+      if (!v.allowed) {
+        if (kind === "profile") {
+          const want = profileWant(body);
+          const rec = deps.shared ? await getPerson(deps.shared, identifier) : void 0;
+          const key = rec && covers(rec, want.sections, want.recommendations) ? void 0 : await profileShareKey(body);
+          const pub = rec && !key ? rec.profile : key ? await sharedGet(deps, key) : void 0;
+          if (pub) return json(200, { ok: true, profile: pub, shared: true }, h);
+        }
+        return json(
+          200,
+          {
+            ok: false,
+            reason: "busy",
+            retryAt: v.retryAt ?? null,
+            message: kind === "profile" ? PROFILE_LATER : "Orbit will look for this photo a little later."
+          },
+          h
+        );
+      }
+    }
     let within;
     try {
       within = kind === "company" ? await ctx.spend("company", "logos") : await ctx.spend("profile", caller);
@@ -3770,6 +3876,12 @@ Deno.serve(
     // plan 41: people's photos kept in storage, and the daily count of reads made, saved and refused
     photos: url && serviceKey ? storagePhotoWriter(url, serviceKey) : void 0,
     calls: url && serviceKey ? postgrestCallSink(url, serviceKey) : void 0,
+    // the swarm limit: at most this many accounts look one person up a day, this many seconds apart
+    // (public.orbit_linkedin_target_take)
+    targetTake: url && serviceKey ? postgrestTargetTake(url, serviceKey, {
+      accountsPerDay: num("ORBIT_LINKEDIN_TARGET_ACCOUNTS_PER_DAY", 3),
+      gapSeconds: num("ORBIT_LINKEDIN_TARGET_GAP_SECONDS", 1200)
+    }) : void 0,
     // plan 34 E1: Exa from /web and Village from /paths land in orbit.usage_ledger like the server's own calls
     usage: url && serviceKey ? postgrestUsage(url, serviceKey) : void 0,
     postings: {

@@ -3,10 +3,12 @@ import { setConnectorModeForTests } from './connectorOutcome';
 import { linkedInProfile } from './enrichmentProxy';
 import {
   disconnectLinkedInAccount,
+  LINKEDIN_BUSY_STATUS,
   linkedInConnections,
   linkedInConnectStatus,
   linkedInEngagement,
   linkedInLedger,
+  MUTUALS_LATER,
   mutualConnections,
   SEARCH_LIMIT_STATUS,
   setUnipileUrlForTests,
@@ -238,6 +240,28 @@ describe('Unipile (live LinkedIn) adapter', () => {
       message: 'Orbit has read as much from LinkedIn as it allows today. It carries on tomorrow.',
       status: SEARCH_LIMIT_STATUS,
     });
+  });
+
+  it('says Orbit checks mutual connections later when other accounts looked the person up lately', async () => {
+    setUnipileUrlForTests(BASE);
+    const { fn } = stub({
+      '/mutuals': {
+        body: {
+          ok: false,
+          reason: 'busy',
+          retryAt: '2026-11-13T10:00:00.000Z',
+          message: 'Orbit will check who you both know a little later.',
+        },
+      },
+    });
+    expect(await mutualConnections('acc_1', 'm_target', { fetch: fn })).toEqual({
+      ok: false,
+      reason: 'error',
+      message: MUTUALS_LATER,
+      status: LINKEDIN_BUSY_STATUS,
+    });
+    expect(MUTUALS_LATER).toBe('Orbit will check who you both know a little later.');
+    expect(LINKEDIN_BUSY_STATUS).not.toBe(SEARCH_LIMIT_STATUS);
   });
 
   it('reads one page of engagement with the token, keeping only well-formed items', async () => {

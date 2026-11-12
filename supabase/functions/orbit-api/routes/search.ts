@@ -231,6 +231,7 @@ async function read(ctx: Ctx): Promise<Response> {
       sleep: svc.sleep,
       random: svc.random,
       clock: Date.now,
+      targetTake: svc.targetTake,
     },
     ctx.userId!,
     acct.externalAccountId,

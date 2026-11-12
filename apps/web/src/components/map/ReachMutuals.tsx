@@ -245,6 +245,8 @@ export function ReachMutuals({
     if (result.reason === 'unconfigured') return note(result.message, 'reach-mutuals-unconfigured');
     // today's reads are used up: when they come back, and no Try again that cannot work
     if (result.reason === 'limit') return note(result.message, 'reach-mutuals-limit');
+    // not checked yet (other students' accounts looked them up lately): "later", never "no one"
+    if (result.reason === 'busy') return note(result.message, 'reach-mutuals-later');
     return note(
       `${result.message} `,
       'reach-mutuals-error',

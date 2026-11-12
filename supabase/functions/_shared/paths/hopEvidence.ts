@@ -13,6 +13,8 @@
  * recommendation's body), and every upstream read is taken from the day's allowance of the LinkedIn account before it
  * is made (hopJob.ts: this job's own `HOP_READS_PER_DAY` and the account's shared ledgers): when it runs out the
  * gathering stops where it is and works with what it has. A private profile (403/422) is remembered as "could not check" for the 30 days.
+ * A read the swarm limit refuses (other students' accounts looked that person up lately) is skipped, never kept: the
+ * run is not complete, so the next job for the target reads it.
  */
 import {
   type EngagementItem,
@@ -21,6 +23,7 @@ import {
   type Tie,
   type TieKind,
 } from '@orbit/core/graph/ties';
+import type { TargetTake } from '../linkedinTargets';
 import { cacheKey, type ProviderResult } from '../providers/request';
 import {
   type ActivityComment,
@@ -64,6 +67,11 @@ export interface HopEvidenceDeps {
   clock: Clock;
   /** the jittered wait between two upstream reads (calls are spaced, never a burst; tests pass an instant one) */
   pace?: () => Promise<void>;
+  /**
+   * The swarm limit (linkedinTargets.ts), asked before the day's allowance is spent on a read of one person, so a
+   * refused read costs nothing. The Unipile client asks it too; the same account asking twice is always let through.
+   */
+  targetTake?: TargetTake;
 }
 
 export interface HopRef {
@@ -167,12 +175,23 @@ export async function gatherHopEvidence(
       return hit;
     }
     if (!network || out.stoppedBy) return undefined;
+    // a thread is one post's comments, not a read of a person
+    if (op !== 'thread' && deps.targetTake && !(await deps.targetTake(acct, id, 'hop')).allowed) {
+      out.errors.push(`${op}: not now`);
+      return undefined;
+    }
     if (!(await deps.budget.take(acct, input.userId, op === 'profile' ? 'profile' : 'posts'))) {
       out.stoppedBy = 'budget';
       return undefined;
     }
     if (out.reads > 0) await deps.pace?.();
     const r = await fetcher();
+    // other students' accounts looked this person up lately (the swarm limit): no read was made, nothing is kept, and
+    // the gathering is not complete, so a later job reads it
+    if (!r.ok && r.kind === 'busy') {
+      out.errors.push(`${op}: not now`);
+      return undefined;
+    }
     out.reads++;
     if (!r.ok && r.kind === 'unconfigured') {
       out.errors.push(`${op}: ${r.message}`);

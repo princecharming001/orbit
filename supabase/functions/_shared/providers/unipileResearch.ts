@@ -25,7 +25,9 @@
  * Checked live 2026-10-27: `linkedin_sections` goes as one parameter per section (a comma-joined list is refused); `GET /users/me`
  * exposes Sales Navigator access somewhere under a `sales_navigator`-named field (read tolerantly).
  */
+import { normTarget, type TargetTake } from '../linkedinTargets';
 import {
+  type ProviderError,
   type ProviderOptions,
   type ProviderResult,
   query,
@@ -337,32 +339,69 @@ export const DOSSIER_SECTIONS = ['*_preview', 'experience', 'education', 'about'
 /** Plan 21's profile read: who recommended whom (assumed section names, read tolerantly). */
 export const HOP_PROFILE_SECTIONS = ['recommendations_received', 'recommendations_given'];
 
-export function createUnipileResearch(opts: ProviderOptions): UnipileResearch {
+export interface UnipileResearchOptions extends ProviderOptions {
+  /**
+   * The swarm limit (linkedinTargets.ts), asked before every read aimed at one person (their profile, posts,
+   * reactions, comments, connections). A refusal comes back as kind 'busy' with no call made. Without it nothing is
+   * asked.
+   */
+  targetTake?: TargetTake;
+}
+
+export function createUnipileResearch(opts: UnipileResearchOptions): UnipileResearch {
   const configured = !!opts.apiKey && !!opts.baseUrl;
   const base = trimBase(opts.baseUrl ?? '');
   const headers = () => ({ 'X-API-KEY': opts.apiKey ?? '' });
   const notConfigured = () => unconfigured('unipile', 'API key or base URL');
+  /** undefined when this account may look this person up now; the refusal otherwise */
+  const busy = async (
+    accountId: string,
+    target: string,
+    caller: string,
+  ): Promise<ProviderError | undefined> => {
+    if (!opts.targetTake) return undefined;
+    const v = await opts.targetTake(accountId, normTarget(target), caller);
+    if (v.allowed) return undefined;
+    return {
+      ok: false,
+      kind: 'busy',
+      provider: 'unipile',
+      message: 'unipile: other accounts looked this person up lately; Orbit tries again later',
+      ...(v.retryAt ? { retryAt: v.retryAt } : {}),
+    };
+  };
+  const readProfile = (
+    accountId: string,
+    identifier: string,
+    o: { sections?: string[]; linkedinApi?: 'sales_navigator' | 'recruiter' },
+  ) => {
+    const q = query({
+      account_id: accountId,
+      // one parameter per section: Unipile refuses several joined with commas
+      linkedin_sections: o.sections ?? DOSSIER_SECTIONS,
+      linkedin_api: o.linkedinApi,
+      notify: 'false',
+    });
+    return requestJson(opts, {
+      provider: 'unipile',
+      url: `${base}/api/v1/users/${encodeURIComponent(identifier)}${q}`,
+      headers: headers(),
+      schema: unipileProfileSchema,
+    });
+  };
 
   const api: UnipileResearch = {
     configured,
     async profile(accountId, identifier, o = {}) {
       if (!configured) return notConfigured();
-      const q = query({
-        account_id: accountId,
-        // one parameter per section: Unipile refuses several joined with commas
-        linkedin_sections: o.sections ?? DOSSIER_SECTIONS,
-        linkedin_api: o.linkedinApi,
-        notify: 'false',
-      });
-      return requestJson(opts, {
-        provider: 'unipile',
-        url: `${base}/api/v1/users/${encodeURIComponent(identifier)}${q}`,
-        headers: headers(),
-        schema: unipileProfileSchema,
-      });
+      const refused = await busy(accountId, identifier, 'profile');
+      if (refused) return refused;
+      return readProfile(accountId, identifier, o);
     },
     async posts(accountId, identifier, o = {}) {
       if (!configured) return notConfigured();
+      const refused = await busy(accountId, identifier, 'posts');
+      if (refused) return refused;
       const r = await requestJson(opts, {
         provider: 'unipile',
         url: `${base}/api/v1/users/${encodeURIComponent(identifier)}/posts${query({ account_id: accountId, limit: o.limit ?? 10 })}`,
@@ -373,6 +412,8 @@ export function createUnipileResearch(opts: ProviderOptions): UnipileResearch {
     },
     async postsOf(accountId, memberId, o = {}) {
       if (!configured) return notConfigured();
+      const refused = await busy(accountId, memberId, 'activity');
+      if (refused) return refused;
       const r = await requestJson(opts, {
         provider: 'unipile',
         url: `${base}/api/v1/users/${encodeURIComponent(memberId)}/posts${query({ account_id: accountId, limit: o.limit ?? 100 })}`,
@@ -385,6 +426,8 @@ export function createUnipileResearch(opts: ProviderOptions): UnipileResearch {
     },
     async reactionsOf(accountId, memberId, o = {}) {
       if (!configured) return notConfigured();
+      const refused = await busy(accountId, memberId, 'activity');
+      if (refused) return refused;
       const r = await requestJson(opts, {
         provider: 'unipile',
         url: `${base}/api/v1/users/${encodeURIComponent(memberId)}/reactions${query({ account_id: accountId, limit: o.limit ?? 100 })}`,
@@ -405,6 +448,8 @@ export function createUnipileResearch(opts: ProviderOptions): UnipileResearch {
     },
     async commentsOf(accountId, memberId, o = {}) {
       if (!configured) return notConfigured();
+      const refused = await busy(accountId, memberId, 'activity');
+      if (refused) return refused;
       const r = await requestJson(opts, {
         provider: 'unipile',
         url: `${base}/api/v1/users/${encodeURIComponent(memberId)}/comments${query({ account_id: accountId, limit: o.limit ?? 100 })}`,
@@ -485,8 +530,11 @@ export function createUnipileResearch(opts: ProviderOptions): UnipileResearch {
     },
     async mutuals(accountId, memberId, o = {}) {
       if (!configured) return notConfigured();
+      // one look at this person (their profile, then their connections): asked once, before either read
+      const refused = await busy(accountId, memberId, 'mutuals');
+      if (refused) return refused;
       // LinkedIn states on the target's profile how many connections the two share; the search must agree with it
-      const prof = await api.profile(accountId, memberId, { sections: [] });
+      const prof = await readProfile(accountId, memberId, { sections: [] });
       if (!prof.ok) return prof;
       const shared = prof.value.shared_connections_count;
       if (typeof shared !== 'number')

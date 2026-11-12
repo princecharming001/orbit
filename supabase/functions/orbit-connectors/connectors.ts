@@ -46,6 +46,15 @@ import {
   postgrestLinkCreated,
 } from '../_shared/accountToken.ts';
 import { timingSafeEqual } from '../_shared/crypto.ts';
+import {
+  DEFAULT_TARGET_LIMITS,
+  normTarget,
+  SWARM_KIND,
+  type TargetLimits,
+  type TargetTake,
+  type TargetVerdict,
+  targetVerdict,
+} from '../_shared/linkedinTargets.ts';
 import { clientIp, defaultOrigins } from '../_shared/origins.ts';
 import { type PostingDeps, readPosting } from '../_shared/postings.ts';
 import { EXA_SEARCH_USD } from '../_shared/providers/exa.ts';
@@ -166,6 +175,12 @@ export interface ConnectorDeps {
   photos?: PhotoWriter;
   /** plan 41: the daily count of LinkedIn reads made, saved and refused, per account, ledger and caller */
   calls?: CallSink;
+  /**
+   * The swarm limit (_shared/linkedinTargets.ts): asked before a read aimed at one person (/mutuals, /profile and
+   * /photo when they really read from LinkedIn). Refused: no read, nothing stored, `busy` with when to try again.
+   * Without it nothing is asked.
+   */
+  targetTake?: TargetTake;
   /**
    * Plan 34 E1: one orbit.usage_ledger row per paid call these routes make (Exa from /web, Village from /paths),
    * with no user and the visitor hash as the account, so the daily cost view misses nothing. Without it nothing is
@@ -360,6 +375,62 @@ export function postgrestSharedReads(
       });
     },
   };
+}
+
+/**
+ * The swarm limit over PostgREST: public.orbit_linkedin_target_take, a service-role-only function. A store that
+ * cannot be asked throws, and the route answers 503 (a read is never made uncounted).
+ */
+export function postgrestTargetTake(
+  url: string,
+  serviceKey: string,
+  limits: Partial<TargetLimits> = {},
+  doFetch: typeof fetch = fetch,
+): TargetTake {
+  const { accountsPerDay, gapSeconds } = { ...DEFAULT_TARGET_LIMITS, ...limits };
+  return async (accountId, target) => {
+    const r = await doFetch(`${url}/rest/v1/rpc/orbit_linkedin_target_take`, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        apikey: serviceKey,
+        Authorization: `Bearer ${serviceKey}`,
+      },
+      body: JSON.stringify({
+        p_target: target,
+        p_account: accountId,
+        p_max_accounts: accountsPerDay,
+        p_gap_seconds: gapSeconds,
+      }),
+    });
+    if (!r.ok) throw new StoreDown();
+    return targetVerdict(await r.json());
+  };
+}
+
+/** What a student is told when other students' accounts looked this person up lately. */
+export const MUTUALS_LATER = 'Orbit will check who you both know a little later.';
+export const PROFILE_LATER = 'Orbit will read this profile a little later.';
+
+/**
+ * May this account look this person up now (the swarm limit)? A refusal is counted for the day as kind 'swarm'.
+ * Without a take, always. Throws StoreDown when the store cannot be asked.
+ */
+async function takeTarget(
+  deps: ConnectorDeps,
+  accountId: string,
+  target: string,
+  caller: string,
+): Promise<TargetVerdict> {
+  if (!deps.targetTake) return { allowed: true };
+  let v: TargetVerdict;
+  try {
+    v = await deps.targetTake(accountId, normTarget(target), caller);
+  } catch {
+    throw new StoreDown();
+  }
+  if (!v.allowed) await countCalls(deps, { accountId, kind: SWARM_KIND, caller, refused: 1 });
+  return v;
 }
 
 /** A shared read, or nothing when the store is missing or down (a miss: the account reads it as before). */
@@ -1086,6 +1157,26 @@ export function makeHandler(deps: ConnectorDeps): (req: Request) => Promise<Resp
       const key = await engagementShareKey(parsed);
       const hit = key ? await sharedGet(deps, key) : undefined;
       if (hit) return json(200, { ...hit, cursor: null, shared: true }, h);
+      // the swarm limit: someone's posts, reactions or comments are a look at them (a thread is one post's)
+      if (parsed.want !== 'thread' && parsed.memberId) {
+        let v: TargetVerdict;
+        try {
+          v = await takeTarget(deps, accountId, parsed.memberId, 'engagement');
+        } catch {
+          return json(503, { error: 'unavailable right now' }, h);
+        }
+        if (!v.allowed)
+          return json(
+            200,
+            {
+              ok: false,
+              reason: 'busy',
+              retryAt: v.retryAt ?? null,
+              message: "Orbit will read this person's activity a little later.",
+            },
+            h,
+          );
+      }
     }
     // the reads that come out of a ledger: one unit per LinkedIn read (/posts/activity may make up to
     // POSTS_UPSTREAM_PER_CALL in one call, so it spends that many; /mutuals spends its own, per upstream read)
@@ -1541,11 +1632,25 @@ async function unipileMutuals(
   // how many connections the two share: from this account's last read of them when it is still kept, else from their
   // plain profile (a route read, the highest profile ceiling), and that read is kept for every other route
   let shared: number | undefined;
+  // the swarm limit, asked once before the first read of this person (their profile or their connections): when
+  // other students' accounts looked them up lately, nothing is read and nothing is kept, not even "none"
+  let looked = false;
+  const later = async () => {
+    if (looked) return undefined;
+    const v = await takeTarget(deps, accountId, target, 'mutuals');
+    if (v.allowed) {
+      looked = true;
+      return undefined;
+    }
+    return { ok: false, reason: 'busy', retryAt: v.retryAt ?? null, message: MUTUALS_LATER } as const;
+  };
   const mine = deps.shared && !fresh ? await getViewer(deps.shared, accountId, target) : undefined;
   if (mine?.mutualCount !== undefined) {
     shared = mine.mutualCount;
     await ctx.saved('profile', 'mutuals');
   } else {
+    const busy = await later();
+    if (busy) return busy;
     if (!(await spend('profile', 'mutuals'))) return LEDGER_LIMIT;
     const q = new URLSearchParams({ account_id: accountId, notify: 'false' });
     const res = await doFetch(`${deps.unipileBase}/api/v1/users/${encodeURIComponent(target)}?${q}`, {
@@ -1574,6 +1679,8 @@ async function unipileMutuals(
     if (mkey) await sharedPut(deps, mkey, none, VIEWER_DAYS);
     return none;
   }
+  const busy = await later();
+  if (busy) return busy;
   const mutuals: Record<string, unknown>[] = [];
   let cursor: string | undefined;
   let total: number | undefined;
@@ -2717,6 +2824,36 @@ async function enrichmentRoute(
         }
         // the link would not copy and nothing else is known: the browser keeps the link it has
         if (body.keepOnly === true) return json(200, { ok: true, photo: { kept: false } }, h);
+      }
+    }
+    // the swarm limit: a profile or photo read is a look at one person. Refused: the public record Orbit keeps of them
+    // when it has what was asked for, else "later", with nothing read and nothing stored
+    if ((kind === 'profile' || kind === 'photo') && identifier) {
+      let v: TargetVerdict;
+      try {
+        v = await takeTarget(deps, accountId, identifier, caller);
+      } catch {
+        return json(503, { error: 'unavailable right now' }, h);
+      }
+      if (!v.allowed) {
+        if (kind === 'profile') {
+          const want = profileWant(body);
+          const rec = deps.shared ? await getPerson(deps.shared, identifier) : undefined;
+          const key =
+            rec && covers(rec, want.sections, want.recommendations) ? undefined : await profileShareKey(body);
+          const pub = rec && !key ? rec.profile : key ? await sharedGet(deps, key) : undefined;
+          if (pub) return json(200, { ok: true, profile: pub, shared: true }, h);
+        }
+        return json(
+          200,
+          {
+            ok: false,
+            reason: 'busy',
+            retryAt: v.retryAt ?? null,
+            message: kind === 'profile' ? PROFILE_LATER : 'Orbit will look for this photo a little later.',
+          },
+          h,
+        );
       }
     }
     let within: boolean;

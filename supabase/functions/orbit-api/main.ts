@@ -4,6 +4,7 @@
  */
 import { connectDb } from '../_shared/db.ts';
 import { makeLogger } from '../_shared/http.ts';
+import { targetLimitsFrom } from '../_shared/linkedinTargets.ts';
 import { providerSecret, resolveSecret } from '../_shared/secrets.ts';
 import { agentEnvWithSecrets } from '../_shared/services.ts';
 import { xConfigFromEnv } from '../_shared/social/x/config.ts';
@@ -18,8 +19,10 @@ const num = (name: string, fallback: number) => {
 const supabaseUrl = env('SUPABASE_URL');
 const dbUrl = env('SUPABASE_DB_URL');
 const db = dbUrl ? connectDb(dbUrl) : undefined;
-// the agent features' keys (Claude, Exa, ...): a function secret, else the copy in orbit_private.secrets
-const agentEnv = await agentEnvWithSecrets(env, db);
+// the agent features' keys (Claude, Exa, ...): a function secret, else the copy in orbit_private.secrets.
+// The swarm limit on LinkedIn reads aimed at one person: ORBIT_LINKEDIN_TARGET_ACCOUNTS_PER_DAY (3) accounts a day,
+// ORBIT_LINKEDIN_TARGET_GAP_SECONDS (1200) between two of them.
+const agentEnv = { ...(await agentEnvWithSecrets(env, db)), linkedinTarget: targetLimitsFrom(env) };
 // plan 43 §3.1: the optional sources the owner offers, read once; unset is none and nothing changes
 const extraSources = offeredSources(env('ORBIT_EXTRA_SOURCES'));
 // read together, so a cold start waits on one round trip to the database, not five in a row.

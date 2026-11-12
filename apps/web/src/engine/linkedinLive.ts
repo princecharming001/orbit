@@ -25,12 +25,14 @@ import {
 import { callApi, isServerUser } from '../integrations/orbitApi';
 import {
   disconnectLinkedInAccount,
+  LINKEDIN_BUSY_STATUS,
   type LinkedInAccountHealth,
   type LiveConnection,
   linkedInAccountHealth,
   linkedInConnections,
   linkedInConnectStatus,
   linkedInMe,
+  MUTUALS_LATER,
   type Mutual,
   mutualConnections,
   SEARCH_LIMIT_STATUS,
@@ -804,7 +806,8 @@ export type MutualsResult =
   | { ok: true; source: 'linkedin' | 'demo'; mutuals: MutualView[] }
   | {
       ok: false;
-      reason: 'not_connected' | 'no_member_id' | 'unconfigured' | 'limit' | 'error';
+      /** `busy`: not checked yet (other students' accounts looked this person up lately); never kept, asked again later */
+      reason: 'not_connected' | 'no_member_id' | 'unconfigured' | 'limit' | 'busy' | 'error';
       message: string;
       mutuals: [];
     };
@@ -923,6 +926,9 @@ export async function mutualsFor(
   const r = await askMutualsOnce(live.accountId, person.linkedinMemberId, live.token);
   if (!r.ok && r.status === SEARCH_LIMIT_STATUS)
     return { ok: false, reason: 'limit', message: readsBackAt(opts.now ?? new Date()), mutuals: [] };
+  // not checked yet: nothing is kept, so the next look asks again (a busy answer is never "no mutuals")
+  if (!r.ok && r.status === LINKEDIN_BUSY_STATUS)
+    return { ok: false, reason: 'busy', message: MUTUALS_LATER, mutuals: [] };
   if (!r.ok)
     return {
       ok: false,
