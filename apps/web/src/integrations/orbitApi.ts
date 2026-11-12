@@ -589,12 +589,25 @@ export function setOrbitApiFetchForTests(f: typeof fetch | undefined): void {
 
 const doFetch: typeof fetch = (input, init) => (fetchImpl ?? globalThis.fetch)(input, init);
 
-type HttpMethod = 'GET' | 'POST' | 'PUT';
+type HttpMethod = 'GET' | 'POST' | 'PUT' | 'DELETE';
 
-/** Most routes are POSTs; reading the sources is a GET and setting one a PUT (plan 43). */
+/**
+ * Most routes are POSTs. Plan 43's are REST: reading the sources, a status, the asks, a lookup and the owner's list
+ * are GETs, setting a source (the student's or the owner's) a PUT, and "Not their account" a DELETE.
+ */
 export function methodOf(route: string): HttpMethod {
-  if (route === '/auth/me' || route === '/sources') return 'GET';
-  if (route.startsWith('/sources/')) return 'PUT';
+  if (
+    route === '/auth/me' ||
+    route === '/sources' ||
+    route === '/instagram/status' ||
+    route === '/x/status' ||
+    route === '/social/asks' ||
+    route === '/admin/sources' ||
+    /^\/social\/lookups\/[^/]+$/.test(route)
+  )
+    return 'GET';
+  if (route.startsWith('/sources/') || route.startsWith('/admin/sources/')) return 'PUT';
+  if (/^\/social\/links\/[^/]+$/.test(route)) return 'DELETE';
   return 'POST';
 }
 

@@ -4,6 +4,7 @@ import { db } from '../db/schema';
 import { MOCK_TARGET_ID, setSocialMockTimingForTests } from '../integrations/socialMock';
 import { loadDemo } from './demo';
 import { buildReachGraph, reachPerson, socialBridgesIn } from './graph';
+import { sendDueQueued, sendOnSocial } from './send';
 import {
   answerAsk,
   connectInstagram,
@@ -94,6 +95,33 @@ describe('the demo on Instagram and X', () => {
     expect(l.result?.bridges).toHaveLength(1);
     const routes = await reachPerson(user.id, MOCK_TARGET_ID, 5);
     expect(routes.some((p) => p.hops.some((h) => /on X/.test(h.text)))).toBe(true);
+  });
+
+  it('sends on Instagram only on the tap, after the undo window, and writes an Instagram day', async () => {
+    const link = (await db.socialLinks.toArray()).find(
+      (l) => l.platform === 'instagram' && l.via !== 'score',
+    )!;
+    const id = 'out_ig_test';
+    await db.outbound.put({
+      id,
+      userId: user.id,
+      personId: link.personId,
+      channel: 'gmail',
+      kind: 'nurture',
+      bodyDraft: 'Hey, it has been a while. Coffee next week?',
+      status: 'draft',
+      generatedBy: 'template',
+      createdAt: new Date().toISOString(),
+    });
+    // nothing goes by itself
+    await sendDueQueued(user, new Date(Date.now() + 60_000));
+    expect((await db.outbound.get(id))!.status).toBe('draft');
+    const tap = await sendOnSocial(user, id, 'instagram', 'Hey, it has been a while. Coffee next week?');
+    expect(tap).toMatchObject({ ok: true, status: 'queued' });
+    expect((await db.outbound.get(id))!.channel).toBe('instagram');
+    await sendDueQueued(user, new Date(Date.now() + 60_000));
+    expect((await db.outbound.get(id))!.status).toBe('sent');
+    expect(await db.touchpoints.filter((t) => t.refId === id && t.kind === 'instagram_out').count()).toBe(1);
   });
 
   it('answers the question, and "Not their account" takes a wrong one off', async () => {
