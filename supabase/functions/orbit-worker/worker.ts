@@ -27,6 +27,7 @@ import { gmailHandlers } from './handlers/gmail.ts';
 import { linkedinHandlers } from './handlers/linkedin.ts';
 import { scoreHandlers } from './handlers/score.ts';
 import { searchHandlers } from './handlers/search.ts';
+import { socialHandlers } from './handlers/social.ts';
 import { unipileHandlers } from './handlers/unipile.ts';
 import { xHandlers } from './handlers/x.ts';
 
@@ -85,6 +86,7 @@ export function defaultHandlers(
     ...searchHandlers(deps),
     ...costHandlers(deps.cost),
     ...unipileHandlers(deps),
+    ...socialHandlers(deps),
     ...classifyHandlers(deps, agents),
     ...agentHandlers(agents),
     ...xHandlers(deps),

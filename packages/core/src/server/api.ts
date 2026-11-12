@@ -308,6 +308,8 @@ export interface ServerDraft {
   needsInput: string[];
   /** files sent with it (a resume) */
   attachments?: { id: string; name: string; mimeType: string; size: number }[];
+  /** plan 43 §4: what the draft box says before it goes, e.g. an Instagram message that lands in their requests */
+  note?: string;
   createdAt: string;
   updatedAt: string;
 }

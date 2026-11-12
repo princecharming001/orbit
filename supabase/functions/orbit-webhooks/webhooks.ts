@@ -8,9 +8,14 @@
  *                                                        + classify.message (the user's own: stored outbound only),
  *                                                        new_relation → the person and identities + score.person,
  *                                                        account status → the account row
- *   POST /unipile/account?token=ORBIT_UNIPILE_WEBHOOK_SECRET
+ *   POST /unipile/account?token=ORBIT_UNIPILE_WEBHOOK_SECRET[&provider=instagram]
  *                                                        hosted-auth notify: CREATION_SUCCESS | RECONNECTED → the
- *                                                        user's linkedin account (user id = payload.name) + backfill
+ *                                                        user's linkedin (or instagram) account (user id =
+ *                                                        payload.name) + backfill (or the first days)
+ *
+ * Instagram (plan 43): a message on an Instagram account goes to the personal lane (_shared/social/chats.ts), never
+ * to the LinkedIn chat writer, and only while the student has Instagram on; account status events update whichever
+ * account they name.
  */
 import { isUuid, timingSafeEqual } from '../_shared/crypto.ts';
 import type { Db } from '../_shared/db.ts';
@@ -31,6 +36,9 @@ import {
 } from '../_shared/ingest/linkedin.ts';
 import { loadSelf } from '../_shared/ingest/util.ts';
 import { type Queue, sqlQueue } from '../_shared/queue.ts';
+import type { SocialMessage } from '../_shared/social/adapter.ts';
+import { afterInbound, storeSocialChat } from '../_shared/social/chats.ts';
+import { socialSourceOn } from '../_shared/social/lookup.ts';
 
 export interface WebhookDeps {
   db: Db | undefined;
@@ -69,7 +77,8 @@ export function makeWebhookHandler(deps: WebhookDeps): (req: Request) => Promise
         if (!deps.unipileSecret || !deps.db) return unconfigured();
         if (!(await timingSafeEqual(url.searchParams.get('token'), deps.unipileSecret)))
           throw new HttpError(403, 'forbidden', 'bad token');
-        const out = await unipileAccount(deps.db, queue(), await body(req));
+        const provider = url.searchParams.get('provider') === 'instagram' ? 'instagram' : 'linkedin';
+        const out = await unipileAccount(deps.db, queue(), await body(req), provider);
         userId = out.userId;
         res = json(200, { ok: true, result: out.result });
       } else throw new HttpError(404, 'not_found', 'no such route');
@@ -241,12 +250,97 @@ async function firstSeen(db: Db, eventId: string): Promise<boolean> {
 }
 
 async function linkedinUser(db: Db, accountId: unknown): Promise<string | null> {
+  const a = await unipileOwner(db, accountId);
+  return a?.provider === 'linkedin' ? a.userId : null;
+}
+
+/** Whose Unipile account an event names, and which of their accounts it is (LinkedIn or Instagram). */
+async function unipileOwner(
+  db: Db,
+  accountId: unknown,
+): Promise<{ userId: string; provider: 'linkedin' | 'instagram'; socialAccountId: string | null } | null> {
   if (typeof accountId !== 'string' || !accountId) return null;
-  const [row] = await db.sql<{ user_id: string }>`
-    select a.user_id from orbit.integration_accounts a join orbit.users u on u.id = a.user_id
-     where a.provider = 'linkedin' and a.external_account_id = ${accountId} and u.deleted_at is null
+  const [row] = await db.sql<{
+    user_id: string;
+    provider: 'linkedin' | 'instagram';
+    social_account_id: string | null;
+  }>`
+    select a.user_id, a.provider, a.social_account_id from orbit.integration_accounts a
+      join orbit.users u on u.id = a.user_id
+     where a.provider in ('linkedin', 'instagram') and a.external_account_id = ${accountId} and u.deleted_at is null
+     order by (a.provider = 'linkedin') desc
      limit 1`;
-  return row?.user_id ?? null;
+  return row ? { userId: row.user_id, provider: row.provider, socialAccountId: row.social_account_id } : null;
+}
+
+/**
+ * An Instagram message_received (plan 43 §3.9, §4 "Replies"): into the personal lane, keyed by Instagram's own id.
+ * The student's own messages come through this hook too (the sender is the account's own user); one Orbit already
+ * recorded when it sent it is not stored twice. A chat partner is offered to matching; a message on a chat the
+ * student is waiting on moves it to "replied".
+ */
+async function storeInstagramMessage(
+  db: Db,
+  queue: Queue,
+  owner: { userId: string; socialAccountId: string | null },
+  body: Record<string, unknown>,
+  chatId: string,
+  messageId: string,
+): Promise<string> {
+  const userId = owner.userId;
+  const me =
+    str((body.account_info as { user_id?: unknown } | undefined)?.user_id) ?? owner.socialAccountId ?? '';
+  const sender = (body.sender ?? {}) as Record<string, unknown>;
+  const senderId = str(sender.attendee_provider_id) ?? '';
+  const fromStudent = !!senderId && senderId === me;
+  const external = str(body.provider_message_id) ?? messageId;
+  if (fromStudent) {
+    const sent = await db.sql`
+      select 1 from orbit.messages where user_id = ${userId}::uuid and provider = 'instagram'
+         and external_id in (${messageId}, ${external})`;
+    if (sent.length) return 'own_message';
+  }
+  const raw = Array.isArray(body.attendees) ? (body.attendees as Record<string, unknown>[]) : [];
+  const others: { accountId: string; name?: string }[] = [];
+  const everyone = new Set<string>(me ? [me] : []);
+  for (const a of [sender, ...raw]) {
+    const id = str(a.attendee_provider_id);
+    if (!id) continue;
+    everyone.add(id);
+    if (id === me || others.some((o) => o.accountId === id)) continue;
+    others.push({ accountId: id, name: str(a.attendee_name) });
+  }
+  const text = (str(body.message) ?? '').trim();
+  const at = str(body.timestamp);
+  const m: SocialMessage = {
+    messageId: external,
+    chatId,
+    at: at && !Number.isNaN(Date.parse(at)) ? new Date(at).toISOString() : new Date().toISOString(),
+    fromStudent,
+    senderAccountId: senderId,
+    text,
+    hasWords: !!text,
+  };
+  const now = new Date();
+  const stored = await storeSocialChat(
+    db,
+    userId,
+    'instagram',
+    { chatId, participants: Math.max(everyone.size, others.length + 1), others },
+    [m],
+    { now },
+  );
+  if (stored.skipped) return 'group_chat';
+  if (stored.partner && !stored.partner.personId)
+    await queue.enqueue({
+      kind: 'social.match',
+      userId,
+      payload: { platform: 'instagram', accountIds: [stored.partner.accountId] },
+      dedupeKey: `social.match:${userId}:instagram:${stored.partner.accountId}`,
+    });
+  if (fromStudent) return 'own_message';
+  const r = await afterInbound(db, queue, userId, 'instagram', stored, now);
+  return r.replied.length ? 'replied' : 'stored';
 }
 
 const str = (v: unknown) => (typeof v === 'string' && v ? v : undefined);
@@ -259,14 +353,26 @@ export async function unipileEvent(
   // account status webhooks wrap their fields in AccountStatus
   const status = body.AccountStatus as Record<string, unknown> | undefined;
   if (status && typeof status === 'object') {
-    const userId = await linkedinUser(db, status.account_id);
+    const owner = await unipileOwner(db, status.account_id);
+    const userId = owner?.userId ?? null;
     const next = accountStatus(String(status.message ?? ''));
-    if (!userId || !next) return { result: 'ignored', userId };
-    // a parked link (plan 35 E5) has no account at Unipile: only its student's reconnect brings it back
-    await db.sql`
+    if (!owner || !next) return { result: 'ignored', userId };
+    // a parked link (plan 35 E5) has no account at Unipile: only its student's reconnect brings it back; an
+    // Instagram account held as a different account waits for the student, whatever Unipile says about it
+    const changed = await db.sql`
       update orbit.integration_accounts
          set status = ${next}, last_error = ${next === 'active' ? null : String(status.message).slice(0, 40)}
-       where user_id = ${userId}::uuid and provider = 'linkedin' and status <> 'parked'`;
+       where user_id = ${owner.userId}::uuid and provider = ${owner.provider} and status <> 'parked'
+         and not (status = 'error' and coalesce(last_error, '') = 'different_account')
+      returning id`;
+    // Instagram asked the student to confirm it is them: told once, everything else carries on (plan 43 §4)
+    if (owner.provider === 'instagram' && next === 'needs_reauth' && changed.length)
+      await db.sql`
+        insert into orbit.notifications (user_id, kind, title, body, link)
+        select ${owner.userId}::uuid, 'instagram_sign_in', 'Sign in to Instagram again',
+               'Instagram asked to confirm it is you. Orbit carries on with everything else meanwhile.', '/settings'
+         where not exists (select 1 from orbit.notifications where user_id = ${owner.userId}::uuid
+                             and kind = 'instagram_sign_in' and read_at is null)`;
     return { result: `status:${next}`, userId };
   }
 
@@ -275,7 +381,18 @@ export async function unipileEvent(
     const messageId = str(body.message_id);
     const chatId = str(body.chat_id);
     if (!messageId || !chatId) return { result: 'ignored', userId: null };
-    const userId = await linkedinUser(db, body.account_id);
+    const owner = await unipileOwner(db, body.account_id);
+    if (owner?.provider === 'instagram') {
+      // nothing is stored while the student has Instagram off; the sync reads what arrived once it is back on
+      if (!(await socialSourceOn(db, owner.userId, 'instagram')))
+        return { result: 'source_off', userId: owner.userId };
+      const result = await db.begin(async (tx) => {
+        if (!(await firstSeen(tx, `instagram:${messageId}`))) return 'duplicate';
+        return storeInstagramMessage(tx, queueFor(tx), owner, body, chatId, messageId);
+      });
+      return { result, userId: owner.userId };
+    }
+    const userId = owner?.provider === 'linkedin' ? owner.userId : null;
     if (!userId) return { result: 'unknown_account', userId: null };
     // the event id is recorded in the same transaction as the message, so a failed write is retried, not lost
     const result = await db.begin(async (tx) => {
@@ -354,6 +471,7 @@ export async function unipileAccount(
   db: Db,
   queue: Queue,
   body: Record<string, unknown>,
+  provider: 'linkedin' | 'instagram' = 'linkedin',
 ): Promise<{ result: string; userId: string | null }> {
   const status = String(body.status ?? '').toUpperCase();
   const accountId = str(body.account_id);
@@ -362,6 +480,7 @@ export async function unipileAccount(
     return { result: 'ignored', userId };
   const [user] = await db.sql`select 1 from orbit.users where id = ${userId}::uuid and deleted_at is null`;
   if (!user) return { result: 'unknown_user', userId: null };
+  if (provider === 'instagram') return instagramAccount(db, queue, userId, accountId, status);
   const taken = await db.sql`
     select 1 from orbit.integration_accounts
      where provider = 'linkedin' and external_account_id = ${accountId} and user_id <> ${userId}::uuid`;
@@ -389,6 +508,51 @@ export async function unipileAccount(
     userId,
     payload: { mode: 'backfill', accountId },
     dedupeKey: `linkedin-backfill:${userId}:${accountId}`,
+  });
+  return { result: 'connected', userId };
+}
+
+/**
+ * An Instagram account connected (or reconnected) through Unipile's hosted sign-in (plan 43 §4 "Connect"). One account
+ * per student: the row is the student's `instagram` integration, and connecting switches Instagram on for them. The
+ * first days begin with a read of the profile, which also checks it is the same Instagram account as before: a
+ * different one is held until the student says to replace the old one (orbit-api POST /instagram/connect/start
+ * {replace: true}). Messages are keyed by Instagram's own ids, so a reconnect stores nothing twice.
+ */
+async function instagramAccount(
+  db: Db,
+  queue: Queue,
+  userId: string,
+  accountId: string,
+  status: string,
+): Promise<{ result: string; userId: string | null }> {
+  const taken = await db.sql`
+    select 1 from orbit.integration_accounts
+     where provider = 'instagram' and external_account_id = ${accountId} and user_id <> ${userId}::uuid`;
+  if (taken.length) return { result: 'account_in_use', userId };
+  await db.sql`
+    insert into orbit.integration_accounts (user_id, provider, external_account_id, status, last_error)
+    values (${userId}::uuid, 'instagram', ${accountId}, 'active', null)
+    on conflict (user_id, provider) do update set
+      external_account_id = excluded.external_account_id, status = 'active', last_error = null`;
+  await db.sql`
+    update orbit.integration_accounts
+       set sync_state = coalesce(sync_state, '{}'::jsonb)
+             || jsonb_build_object('instagram', coalesce(sync_state -> 'instagram', '{}'::jsonb)
+                  || ${{ stage: 'profile', pending: null }}::jsonb)
+     where user_id = ${userId}::uuid and provider = 'instagram'`;
+  await db.sql`
+    insert into orbit.source_states (user_id, source, state, off_since)
+    values (${userId}::uuid, 'instagram', 'on', null)
+    on conflict (user_id, source) do update set state = 'on', off_since = null`;
+  await db.sql`
+    insert into orbit.audit_log (user_id, actor, action, target_table, details)
+    values (${userId}::uuid, 'system', 'instagram.connected', 'integration_accounts', ${{ status }}::jsonb)`;
+  await queue.enqueue({
+    kind: 'sync.instagram',
+    userId,
+    payload: {},
+    dedupeKey: `sync.instagram:${userId}:${accountId}:connect`,
   });
   return { result: 'connected', userId };
 }

@@ -103,6 +103,8 @@ export interface UnipileSync {
     successRedirectUrl: string;
     failureRedirectUrl?: string;
     expiresOn: string;
+    /** which network the student signs in to (plan 43 §3.10): LinkedIn unless said */
+    provider?: 'LINKEDIN' | 'INSTAGRAM';
   }): Promise<ProviderResult<{ url: string }>>;
   /** LinkedIn's people search from the account, any degree: the people a typed name or role finds, best first */
   searchPeople(accountId: string, keywords: string, limit?: number): Promise<ProviderResult<UnipileFound[]>>;
@@ -193,7 +195,7 @@ export function createUnipileSync(opts: ProviderOptions): UnipileSync {
         headers: headers(),
         body: {
           type: 'create',
-          providers: ['LINKEDIN'],
+          providers: [b.provider ?? 'LINKEDIN'],
           api_url: base,
           expiresOn: b.expiresOn,
           name: b.name,
