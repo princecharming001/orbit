@@ -63,12 +63,15 @@ export function serverPathView(p: ServerPath) {
     names,
     reason: p.reasonText,
     otherWays: p.otherWays,
-    // the shape the routes card reads: one hop per person after "You", the reason on the first
-    hops: p.nodes.slice(1).map((id, i) => ({
-      to: name(id),
-      toId: id,
-      ...(i === 0 && p.reasonText ? { how: p.reasonText } : {}),
-    })),
+    ...(p.weak ? { weak: true } : {}),
+    // the shape the routes card reads: one hop per person after "You", the reason on the first, and each later hop's
+    // evidence in core's words (plan 43 §3.7: "follows Priya on Instagram and they follow back")
+    hops: p.nodes.slice(1).map((id, i) => {
+      const h = p.hops[i];
+      const how =
+        i === 0 ? p.reasonText || undefined : h?.phrase ? `${name(h.fromId)} ${h.phrase}` : undefined;
+      return { to: name(id), toId: id, ...(h ? { kind: h.kind } : {}), ...(how ? { how } : {}) };
+    }),
   };
 }
 

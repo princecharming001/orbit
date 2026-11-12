@@ -297,6 +297,21 @@ export interface RouteView {
   /** the people on the route in order, with the LinkedIn profile to open when Orbit has it */
   hops: { id?: string; name: string; linkedinUrl?: string }[];
   text: string[];
+  /** plan 43 §3.7: the platforms a hop rests on (Instagram, X), named on the row */
+  platforms: ('instagram' | 'x')[];
+  /** the route rests on a follow and nothing else: a weaker route */
+  weak?: boolean;
+}
+
+/** Which platform a hop rests on, from its kind or, for older answers, its words. */
+function hopPlatform(h: Record<string, unknown>): 'instagram' | 'x' | undefined {
+  const kind = str(h.kind) ?? '';
+  if (kind.startsWith('instagram_')) return 'instagram';
+  if (kind === 'x_mutual' || kind === 'x_follow') return 'x';
+  const how = str(h.how) ?? str(h.text) ?? '';
+  if (/\bon Instagram\b/.test(how)) return 'instagram';
+  if (/\bon X\b/.test(how)) return 'x';
+  return undefined;
 }
 export interface WarmIntro {
   introducer: string;
@@ -375,6 +390,8 @@ export function readRoutes(d: unknown): {
         names: views.map((h) => h.name),
         hops: views,
         text: hops.map((h) => str(h.how) ?? str(h.text)).filter(present),
+        platforms: [...new Set(hops.map(hopPlatform).filter(present))],
+        ...(r.weak === true ? { weak: true } : {}),
       };
     })
     .filter(present);

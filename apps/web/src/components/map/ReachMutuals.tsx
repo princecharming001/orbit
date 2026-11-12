@@ -19,6 +19,7 @@ import { subscribePairNotes } from '../../engine/pairNotes';
 import { isServerUser } from '../../integrations/orbitApi';
 import { useShowReasoning } from '../../state/showReasoning';
 import { Avatar, Button, cx, LinkedInMark } from '../../ui';
+import { SocialBridgeList } from '../SocialPeople';
 import { PairNoteMenu } from './PairNoteMenu';
 import { useClosenessKey } from './useCloseness';
 
@@ -183,6 +184,26 @@ export function ReachMutuals({
       {result?.ok && rows.length > 0 ? ` · ${rows.length}` : ''}
     </div>
   );
+  // plan 43 §3.7: who follows them on Instagram or X, with core's words and the platform named, under the LinkedIn rows
+  const social = (
+    <div className="mt-1.5">
+      <SocialBridgeList user={user} target={target}>
+        {(_b, p) => (
+          <Button
+            size="sm"
+            variant="secondary"
+            className={cx('mt-1', TAP)}
+            onClick={() => onAsk(p.id, Math.max(userTieWeight(p), 0.12))}
+            loading={isAsking?.(p.id)}
+            aria-label={`Ask ${p.firstName} for an intro`}
+            data-testid="reach-social-ask"
+          >
+            Ask for intro
+          </Button>
+        )}
+      </SocialBridgeList>
+    </div>
+  );
   const note = (text: string, testId: string, extra?: ReactNode) => (
     <div data-testid="reach-mutuals">
       {heading}
@@ -190,6 +211,7 @@ export function ReachMutuals({
         {text}
         {extra}
       </p>
+      {social}
     </div>
   );
 
@@ -239,7 +261,7 @@ export function ReachMutuals({
   if (!rows.length && !blocked.length)
     return note(
       result.source === 'demo'
-        ? `No one in the sample network knows ${first}.`
+        ? `No one in the sample LinkedIn network knows ${first}.`
         : `None of your LinkedIn connections is connected to ${first}.`,
       'reach-mutuals-none',
     );
@@ -358,6 +380,7 @@ export function ReachMutuals({
           )}
         </div>
       )}
+      {social}
       {reasons && (
         <p className="mt-1.5 text-[12px] text-ink-3">
           {result.source === 'demo' ? 'Sample connections from the demo.' : 'From your LinkedIn.'} Best way in
