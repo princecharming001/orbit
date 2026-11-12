@@ -7,7 +7,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { loadGraph } from '../../functions/_shared/paths/find.ts';
 import { sqlQueue } from '../../functions/_shared/queue.ts';
 import { memoryTake } from '../../functions/_shared/ratelimit.ts';
-import { sendDraft } from '../../functions/_shared/sending/send.ts';
+import { INSTAGRAM_PER_DAY, sendDraft } from '../../functions/_shared/sending/send.ts';
 import { makeServices } from '../../functions/_shared/services.ts';
 import { sqlSocialBudget } from '../../functions/_shared/social/budget.ts';
 import { fillChatWords } from '../../functions/_shared/social/chats.ts';
@@ -624,6 +624,41 @@ describe('sending', () => {
     const r = await sendDraft(services, d!.id);
     expect(r).toEqual({ status: 'held', reason: 'instagram_never_auto' });
     expect(fake.sent).toHaveLength(0);
+  });
+
+  it('sends at most 10 a day, each on its tap; the eleventh waits as a draft', async () => {
+    clock = Date.now();
+    const fake = new FakeInstagram('ig-me', () => clock);
+    fake.add({ id: 'ig-kim', username: 'kim.lee', name: 'Kim Lee' });
+    const call = apiFor(fake);
+    const s = await connected('ig-me');
+    const [p] = await t.db.sql<{ id: string }>`
+      insert into orbit.people (user_id, display_name, first_name, last_name, name_norm)
+      values (${s.userId}::uuid, 'Kim Lee', 'Kim', 'Lee', 'kim lee') returning id`;
+    await attachAccount(t.db, s.userId, {
+      platform: 'instagram',
+      accountId: 'ig-kim',
+      personId: p!.id,
+      via: 'student',
+      now: now(),
+    });
+    const draft = async (body: string) => {
+      const [d] = await t.db.sql<{ id: string }>`
+        insert into orbit.drafts (user_id, person_id, channel, kind, body, status)
+        values (${s.userId}::uuid, ${p!.id}::uuid, 'instagram', 'bump', ${body}, 'draft') returning id`;
+      return d!.id;
+    };
+    for (let i = 0; i < INSTAGRAM_PER_DAY; i++) {
+      const id = await draft(`Hi Kim, a quick question number ${i + 1} about the design club.`);
+      const r = await call('POST', '/drafts/approve', s.token, { draftId: id, confirm: true });
+      expect(r.body.draft.status).toBe('sent');
+    }
+    expect(fake.sent).toHaveLength(INSTAGRAM_PER_DAY);
+    const eleventh = await draft('Hi Kim, one more question about the design club.');
+    const r = await call('POST', '/drafts/approve', s.token, { draftId: eleventh, confirm: true });
+    expect(r.body.draft.status).toBe('draft');
+    expect(r.body.draft.error).toBe('instagram_daily_cap');
+    expect(fake.sent).toHaveLength(INSTAGRAM_PER_DAY);
   });
 });
 

@@ -102,7 +102,9 @@ const launchCache = new WeakMap<object, LaunchEntry>();
 export function launchedSources(db: Db, clock: () => number = Date.now): Promise<OptionalSource[]> {
   const hit = launchCache.get(db);
   if (hit && clock() - hit.at < OFFERED_TTL_MS) return hit.launched;
-  const launched = db.sql<{ offered: string[] | null }>`select public.orbit_sources_offered() as offered`
+  // a handle that throws at once counts as a failed read too
+  const launched = Promise.resolve()
+    .then(() => db.sql<{ offered: string[] | null }>`select public.orbit_sources_offered() as offered`)
     .then((rows) => OPTIONAL_SOURCES.filter((s) => (rows[0]?.offered ?? []).includes(s)))
     .catch(() => [] as OptionalSource[]);
   launchCache.set(db, { at: clock(), launched });
