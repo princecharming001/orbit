@@ -68,6 +68,10 @@ export const PULL_TARGETS: { table: string; dexie: string }[] = [
   { table: 'intro_requests', dexie: 'introRequests' },
   // plan 43 §6: days of texts per person, counts only, so a device that did not read the Messages file can show them
   { table: 'text_days', dexie: 'textDays' },
+  // plan 43 §3.4, §3.6: Instagram and X accounts attached to people, the "same person" questions and the lookups
+  { table: 'social_links', dexie: 'socialLinks' },
+  { table: 'social_match_asks', dexie: 'socialAsks' },
+  { table: 'social_lookups', dexie: 'socialLookups' },
 ];
 const DEXIE_OF = new Map(PULL_TARGETS.map((t) => [t.table, t.dexie]));
 
@@ -389,6 +393,18 @@ export async function writeFromServer(
       const had = await t.bulkGet(ready.map((r) => String(r.id)));
       ready = ready.map((r, i) => (had[i]?.attachments ? { ...r, attachments: had[i].attachments } : r));
     }
+    // plan 43: an account's handle and name come from GET /social/asks or the status, not the pulled row: kept
+    if ((table === 'social_links' || table === 'social_match_asks') && ready.length) {
+      const had = await t.bulkGet(ready.map((r) => String(r.id)));
+      ready = ready.map((r, i) => {
+        const old = had[i] as Record<string, unknown> | undefined;
+        if (!old) return r;
+        const kept: Record<string, unknown> = {};
+        for (const k of ['username', 'name', 'personName', 'followsYou', 'acceptsDms'])
+          if (r[k] === undefined && old[k] !== undefined) kept[k] = old[k];
+        return { ...r, ...kept };
+      });
+    }
     if (ready.length) await t.bulkPut(ready);
     if (gone.length) await t.bulkDelete(gone);
     if (table === 'tie_scores')
@@ -486,6 +502,9 @@ export function pullNow(userId: string, opts: { signal?: AbortSignal } = {}): Pr
       }
       await db.kv.put({ key: CURSOR_KEY, value: r.value.cursor });
       more = !!hasMore;
+      // a new "same person" question: its handle and names come with GET /social/asks
+      if (!more && tables.has('social_match_asks'))
+        await import('./social').then((m) => m.refreshAsks(userId)).catch(() => undefined);
     }
     return { ok: true, changed, pages, tables: [...tables], more };
   }).finally(() => {

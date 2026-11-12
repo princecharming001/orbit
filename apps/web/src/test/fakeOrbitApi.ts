@@ -166,7 +166,73 @@ export interface FakeState {
     relearnRequests: number;
   };
   /** plan 43: what GET /sources answers, and what PUT /sources/:source sets */
-  sources: { offered: OptionalSource[]; states: SourceStates };
+  sources: {
+    offered: OptionalSource[];
+    states: SourceStates;
+    shareFollows: Partial<Record<OptionalSource, boolean>>;
+  };
+  /** plan 43: the signed-in account is the owner's (isOwner beside the user on /auth/session and /auth/me) */
+  isOwner: boolean;
+  /** plan 43: the owner's Launch list (GET /admin/sources); `offered` follows `sources.offered` */
+  admin: {
+    source: OptionalSource;
+    env: boolean;
+    missing: string[];
+    students: { on: number; connected: number };
+  }[];
+  /** plan 43 §4: the student's Instagram as /instagram/status says it */
+  instagram: {
+    status:
+      | 'not_connected'
+      | 'connecting'
+      | 'active'
+      | 'needs_reauth'
+      | 'parked'
+      | 'different_account'
+      | 'error';
+    username?: string;
+    steps: { profile: string; chats: string; following: string; followers: string };
+    /** POST /instagram/connect/start answers this hosted sign-in link */
+    url: string;
+    /** the handle of the different account waiting for the student's word */
+    pending?: string;
+  };
+  /** plan 43 §5: X as /x/status says it, and every consent given */
+  x: {
+    status: 'not_connected' | 'connecting' | 'active' | 'needs_reauth' | 'error';
+    username?: string;
+    spentThisMonthUsd: number;
+    limitUsd: number;
+    orbitLimitReached: boolean;
+    consents: number;
+    /** the last price quoted, and when (a yes must follow within 15 minutes) */
+    quote?: { personId: string; usd: number; at: number };
+  };
+  /** plan 43 §3.4: attached accounts, as pulled social_links rows with their handle */
+  socialLinks: {
+    id: string;
+    platform: 'instagram' | 'x';
+    accountId: string;
+    personId: string;
+    username?: string;
+  }[];
+  /** plan 43 §3.4: open questions, as GET /social/asks answers them */
+  socialAsks: {
+    id: string;
+    platform: 'instagram' | 'x';
+    accountId: string;
+    username: string | null;
+    name: string | null;
+    personId: string;
+    personName: string;
+    score: number;
+    signals: Record<string, unknown>;
+  }[];
+  /** a yes (or an attach) answers 409 pick_person with these two people */
+  pickPerson?: { id: string; name: string }[];
+  /** plan 43 §3.6: lookups, and what a new one finishes with */
+  lookups: Map<string, { platform: 'instagram' | 'x'; personId: string; status: string; result: unknown }>;
+  lookupResult: unknown;
   /** every POST /texts/days body, as it came */
   textDays: TextDaysRequest[];
 }
@@ -350,7 +416,31 @@ export function createFakeOrbitApi(
     goalModes: new Map(),
     tapped: new Set(),
     voice: { cardProse: [], notes: [], soundsLikeYou: null, relearnedAt: null, relearnRequests: 0 },
-    sources: { offered: [], states: {} },
+    sources: { offered: [], states: {}, shareFollows: {} },
+    isOwner: false,
+    admin: [
+      { source: 'instagram', env: false, missing: [], students: { on: 0, connected: 0 } },
+      {
+        source: 'x',
+        env: false,
+        missing: [
+          'The X app client ID (ORBIT_X_CLIENT_ID)',
+          'A monthly X spending limit above 0 dollars (ORBIT_X_MONTHLY_USD)',
+        ],
+        students: { on: 0, connected: 0 },
+      },
+      { source: 'imessage', env: false, missing: [], students: { on: 3, connected: 5 } },
+    ],
+    instagram: {
+      status: 'not_connected',
+      steps: { profile: 'waiting', chats: 'waiting', following: 'waiting', followers: 'waiting' },
+      url: 'https://account.unipile.test/hosted/instagram',
+    },
+    x: { status: 'not_connected', spentThisMonthUsd: 0, limitUsd: 15, orbitLimitReached: false, consents: 0 },
+    socialLinks: [],
+    socialAsks: [],
+    lookups: new Map(),
+    lookupResult: { bridges: [], oneWay: [], partial: false, reason: 'none' },
     textDays: [],
   };
   const code = 'good-code';
@@ -408,7 +498,7 @@ export function createFakeOrbitApi(
     if (route === '/auth/session') {
       if (body.code !== code)
         return error(401, 'unauthorized', 'that sign-in link has expired; sign in again');
-      return json(200, { ...issue(), user: state.user });
+      return json(200, { ...issue(), user: state.user, isOwner: state.isOwner });
     }
     if (route === '/auth/refresh') {
       if (!state.refresh || body.refreshToken !== state.refresh)
@@ -481,13 +571,204 @@ export function createFakeOrbitApi(
       const next = body.state as SourceState;
       if (!['not_connected', 'on', 'off', 'removed'].includes(next))
         return error(400, 'bad_request', 'state is on, off or removed');
+      if (body.shareFollows !== undefined && name !== 'instagram')
+        return error(400, 'bad_request', 'who you follow there cannot be shared with friends');
       state.sources.states[name] = next;
-      if (name === 'imessage' && next === 'removed') state.textDays = [];
-      return json(200, { source: name, state: next });
+      if (typeof body.shareFollows === 'boolean') state.sources.shareFollows[name] = body.shareFollows;
+      if (next === 'removed') {
+        delete state.sources.shareFollows[name];
+        if (name === 'imessage') state.textDays = [];
+        else state.socialLinks = state.socialLinks.filter((l) => l.platform !== name);
+      }
+      return json(200, { ok: true, state: next });
     }
     if (route === '/sources') {
       if (req.method !== 'GET') return error(405, 'method_not_allowed', 'use GET');
-      return json(200, { offered: state.sources.offered, states: state.sources.states });
+      // the server's shape: each offered source as {state, offSince?, shareFollows}
+      const states = Object.fromEntries(
+        state.sources.offered.map((s) => [
+          s,
+          {
+            state: state.sources.states[s] ?? 'not_connected',
+            shareFollows: !!state.sources.shareFollows[s],
+          },
+        ]),
+      );
+      return json(200, { offered: state.sources.offered, states });
+    }
+    // plan 43: the owner's Launch section; anyone else is refused
+    const adminSource = route.match(/^\/admin\/sources\/([^/]+)$/);
+    if (route === '/admin/sources' || adminSource) {
+      if (!state.isOwner) return error(403, 'forbidden', 'Only the owner of this Orbit can do this.');
+      if (route === '/admin/sources')
+        return json(200, {
+          sources: state.admin.map((a) => ({
+            ...a,
+            offered: a.env || state.sources.offered.includes(a.source),
+            ready: a.missing.length === 0,
+          })),
+        });
+      if (req.method !== 'PUT') return error(405, 'method_not_allowed', 'use PUT');
+      const name = decodeURIComponent(adminSource![1]!) as OptionalSource;
+      const row = state.admin.find((a) => a.source === name);
+      if (!row) return error(404, 'not_found', 'no such source');
+      if (body.offered === false && row.env)
+        return error(
+          409,
+          'env_listed',
+          'It is listed in ORBIT_EXTRA_SOURCES, so it stays on until that setting is changed.',
+        );
+      if (body.offered === true && row.missing.length)
+        return json(409, {
+          error: { code: 'not_ready', message: `Set these first: ${row.missing.join('; ')}.` },
+          missing: row.missing,
+        });
+      state.sources.offered = body.offered
+        ? [...new Set([...state.sources.offered, name])]
+        : state.sources.offered.filter((s) => s !== name);
+      return json(200, { ok: true });
+    }
+    // plan 43 §4: Instagram (404 while it is not offered, except disconnect)
+    if (route.startsWith('/instagram/')) {
+      const ig = state.instagram;
+      if (route === '/instagram/disconnect') {
+        ig.status = 'not_connected';
+        ig.username = undefined;
+        return json(200, { ok: true });
+      }
+      if (!state.sources.offered.includes('instagram')) return error(404, 'not_found', 'not found');
+      if (route === '/instagram/status')
+        return json(200, {
+          status: ig.status,
+          ...(ig.status === 'different_account'
+            ? { username: ig.pending }
+            : ig.username
+              ? { username: ig.username }
+              : {}),
+          steps: ig.steps,
+        });
+      if (route === '/instagram/connect/start') {
+        if (body.replace === true && ig.status === 'different_account') {
+          ig.status = 'active';
+          ig.username = ig.pending;
+          ig.pending = undefined;
+          ig.steps = { profile: 'reading', chats: 'waiting', following: 'waiting', followers: 'waiting' };
+          state.socialLinks = state.socialLinks.filter((l) => l.platform !== 'instagram');
+          return json(200, { replaced: true });
+        }
+        if (ig.status === 'not_connected') ig.status = 'connecting';
+        return json(200, { url: ig.url });
+      }
+    }
+    // plan 43 §5: X (503 while it is not offered)
+    if (route.startsWith('/x/')) {
+      const x = state.x;
+      if (!state.sources.offered.includes('x'))
+        return json(
+          503,
+          { error: { code: 'unconfigured', message: 'X is not set up', missing: [] } },
+          {
+            'x-orbit-connector': 'unconfigured',
+          },
+        );
+      if (route === '/x/connect/start') {
+        if (body.consent !== true)
+          return error(400, 'bad_request', 'consent is required before signing in with X');
+        x.consents++;
+        if (x.status !== 'active') x.status = 'connecting';
+        return json(200, { url: 'https://x.test/i/oauth2/authorize?state=fake' });
+      }
+      if (route === '/x/status')
+        return json(200, {
+          status: x.status,
+          ...(x.username && x.status !== 'not_connected' ? { username: x.username } : {}),
+          spentThisMonthUsd: x.spentThisMonthUsd,
+          limitUsd: x.limitUsd,
+          orbitLimitReached: x.orbitLimitReached,
+        });
+      if (route === '/x/disconnect') {
+        x.status = 'not_connected';
+        return json(200, { ok: true, revokedAtX: true });
+      }
+    }
+    // plan 43 §3.4, §3.6: accounts under people, the questions and the lookups
+    const linkId = route.match(/^\/social\/links\/([^/]+)$/);
+    if (linkId) {
+      if (req.method !== 'DELETE') return error(405, 'method_not_allowed', 'use DELETE');
+      const i = state.socialLinks.findIndex((l) => l.id === linkId[1]);
+      if (i < 0) return error(404, 'not_found', 'no such link');
+      state.socialLinks.splice(i, 1);
+      return json(200, { ok: true, accountPersonId: uuid() });
+    }
+    const pick = () =>
+      json(409, {
+        error: {
+          code: 'pick_person',
+          message: 'Both have things of their own. Pick which one stays. This cannot be undone.',
+        },
+        people: state.pickPerson,
+      });
+    if (route === '/social/links') {
+      if (body.platform === 'x')
+        return error(403, 'public_proof_only', 'An X account is attached only from public proof');
+      if (state.pickPerson && typeof body.keep !== 'string') return pick();
+      const id = uuid();
+      state.socialLinks.push({
+        id,
+        platform: body.platform as 'instagram',
+        accountId: String(body.accountId),
+        personId: String(body.keep ?? body.personId),
+      });
+      state.socialAsks = state.socialAsks.filter((a) => a.accountId !== body.accountId);
+      state.pickPerson = undefined;
+      return json(200, { linkId: id });
+    }
+    if (route === '/social/asks') return json(200, { asks: state.socialAsks });
+    const askId = route.match(/^\/social\/asks\/([^/]+)$/);
+    if (askId) {
+      const a = state.socialAsks.find((x) => x.id === askId[1]);
+      if (!a) return error(404, 'not_found', 'no such question');
+      if (body.answer !== 'yes' && body.answer !== 'no')
+        return error(400, 'bad_request', 'answer is yes or no');
+      if (body.answer === 'yes' && state.pickPerson) return pick();
+      state.socialAsks = state.socialAsks.filter((x) => x !== a);
+      if (body.answer === 'yes')
+        state.socialLinks.push({
+          id: uuid(),
+          platform: a.platform,
+          accountId: a.accountId,
+          personId: a.personId,
+          username: a.username ?? undefined,
+        });
+      return json(200, { status: body.answer });
+    }
+    const lookupId = route.match(/^\/social\/lookups\/([^/]+)$/);
+    if (lookupId) {
+      const l = state.lookups.get(lookupId[1]!);
+      if (!l) return error(404, 'not_found', 'no such lookup');
+      return json(200, { status: l.status, result: l.result });
+    }
+    if (route === '/social/lookups') {
+      const platform = body.platform as 'instagram' | 'x';
+      const personId = String(body.personId);
+      if (!state.sources.offered.includes(platform) || state.sources.states[platform] !== 'on')
+        return error(409, 'source_off', `${platform === 'x' ? 'X' : 'Instagram'} is not on`);
+      if (!state.socialLinks.some((l) => l.platform === platform && l.personId === personId))
+        return error(409, 'no_account', 'Orbit does not know their account for sure, so it cannot look');
+      if (platform === 'x' && body.confirm !== true) {
+        state.x.quote = { personId, usd: 4, at: clock };
+        return json(200, { status: 'quote', quoteUsd: 4, list: 'following', size: 400 });
+      }
+      if (platform === 'x') {
+        const q = state.x.quote;
+        if (!q || q.personId !== personId || clock - q.at > 15 * 60_000)
+          return error(409, 'quote_first', 'Ask for the price again first.');
+        state.x.spentThisMonthUsd += q.usd;
+        state.x.quote = undefined;
+      }
+      const id = uuid();
+      state.lookups.set(id, { platform, personId, status: 'done', result: state.lookupResult });
+      return json(200, { lookupId: id, status: 'queued', ...(platform === 'x' ? { quoteUsd: 4 } : {}) });
     }
     if (route === '/texts/days') {
       if (!state.sources.offered.includes('imessage'))
@@ -828,7 +1109,7 @@ export function createFakeOrbitApi(
         state.refresh = undefined;
         return json(200, { ok: true });
       case '/auth/me':
-        return json(200, { user: state.user });
+        return json(200, { user: state.user, isOwner: state.isOwner });
       case '/sync/status':
         return json(200, {
           counts: state.status.counts,
