@@ -296,6 +296,8 @@ export interface ApiRoutes {
   '/sources/imessage': [{ state: SourceState }, { source: OptionalSource; state: SourceState }];
   // plan 43: Instagram (Unipile) and X, the accounts under people, the match questions and the lookups
   '/instagram/connect/start': [{ replace?: boolean }, { url?: string; replaced?: boolean }];
+  /** keep the old account when a different one signed in (plan 43 §3.1) */
+  '/instagram/connect/keep': [Record<string, never>, { ok: true }];
   '/instagram/status': [Record<string, never>, InstagramStatusResponse];
   '/instagram/disconnect': [Record<string, never>, { ok: boolean }];
   '/x/connect/start': [{ consent: true }, { url: string }];

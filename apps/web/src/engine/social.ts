@@ -141,6 +141,22 @@ export function setSocialPollForTests(p: { everyMs: number; tries: number } | un
 }
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
+/**
+ * The other answer to "a different account": keep the old one (plan 43 §3.1). The server releases only the account
+ * that just signed in, goes back to the old one and clears the question.
+ */
+export async function keepOldInstagram(userId: string): Promise<{ ok: true } | Fail> {
+  if (usesMockConnectors(userId)) {
+    await refreshInstagram(userId);
+    return { ok: true };
+  }
+  const r = await callApi('/instagram/connect/keep', {});
+  if (!r.ok) return fail(r.message || 'Orbit could not keep the old account. Try again.');
+  await loadSources(userId);
+  await refreshInstagram(userId);
+  return { ok: true };
+}
+
 export type ConnectResult =
   | { ok: true; status: InstagramView['status']; replaced?: boolean }
   | { ok: false; message: string };

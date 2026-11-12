@@ -18,6 +18,7 @@ import {
   connectX,
   INSTAGRAM_RISK,
   instagramProgress,
+  keepOldInstagram,
   type Platform,
   refreshInstagram,
   refreshX,
@@ -324,7 +325,7 @@ export function InstagramRow({ user }: { user: User }) {
       >
         {st === 'different_account' && (
           <div className="text-[13px] text-ink-2" data-testid="settings-instagram-different">
-            <p>This is a different Instagram account. Replace the old one?</p>
+            <p>This is a different Instagram account. Replace the old one, or keep it?</p>
             <p className="mt-1 text-[12.5px] text-ink-3">
               Orbit removes what came from the old account, then reads the new one.
             </p>
@@ -343,6 +344,21 @@ export function InstagramRow({ user }: { user: User }) {
                 data-testid="settings-instagram-replace"
               >
                 Replace the old one
+              </Button>
+              <Button
+                size="sm"
+                variant="ghost"
+                disabled={!!busy}
+                onClick={() =>
+                  run(
+                    'Keeping',
+                    () => keepOldInstagram(user.id),
+                    'Kept the old account. The new one was let go.',
+                  )
+                }
+                data-testid="settings-instagram-keep"
+              >
+                Keep the old one
               </Button>
             </div>
           </div>

@@ -190,11 +190,25 @@ describe('the Instagram row', () => {
     api.state.instagram.pending = 'sam.second';
     await mount(<InstagramRow user={user} />);
     expect(text('settings-instagram-different')).toMatch(
-      /This is a different Instagram account. Replace the old one\?/,
+      /This is a different Instagram account. Replace the old one, or keep it\?/,
     );
     await click('settings-instagram-replace');
     expect(bodies('/instagram/connect/start')).toEqual([{ replace: true }]);
     expect(text('settings-instagram-status')).toMatch(/^On · @sam.second/);
+  });
+
+  it('can keep the old account when a different one signed in', async () => {
+    await offer('instagram');
+    api.state.sources.states.instagram = 'on';
+    await loadSources(user.id);
+    api.state.instagram.status = 'different_account';
+    api.state.instagram.username = 'sam.lee';
+    api.state.instagram.pending = 'sam.second';
+    await mount(<InstagramRow user={user} />);
+    await click('settings-instagram-keep');
+    expect(bodies('/instagram/connect/keep')).toEqual([{}]);
+    expect(bodies('/instagram/connect/start')).toEqual([]);
+    expect(text('settings-instagram-status')).toMatch(/^On · @sam.lee/);
   });
 
   it('asks to sign in again when Instagram wants it', async () => {

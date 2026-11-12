@@ -647,6 +647,13 @@ export function createFakeOrbitApi(
               : {}),
           steps: ig.steps,
         });
+      if (route === '/instagram/connect/keep') {
+        if (ig.status !== 'different_account')
+          return json(409, { error: { code: 'nothing_held', message: 'No different account is waiting' } });
+        ig.status = 'active';
+        ig.pending = undefined;
+        return json(200, { ok: true });
+      }
       if (route === '/instagram/connect/start') {
         if (body.replace === true && ig.status === 'different_account') {
           ig.status = 'active';
