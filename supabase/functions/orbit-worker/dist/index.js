@@ -2025,6 +2025,9 @@ var KIND_QUEUE = {
   "sync.calendar": "orbit_sync",
   "sync.contacts": "orbit_sync",
   "sync.linkedin": "orbit_sync",
+  // plan 43: Instagram's first days and refreshes, the words of a chat that entered the pipeline
+  "sync.instagram": "orbit_sync",
+  "social.words": "orbit_sync",
   "cadence.user": "orbit_cadence",
   "funnel.reply": "orbit_classify",
   "outcomes.roll": "orbit_cadence",
@@ -2051,6 +2054,9 @@ var KIND_QUEUE = {
   "unipile.reconcile": "orbit_enrich",
   "linkedin.park": "orbit_enrich",
   "claude.batch.poll": "orbit_enrich",
+  // plan 43: accounts offered to matching, and who could introduce the student to a target
+  "social.match": "orbit_enrich",
+  "social.lookup": "orbit_enrich",
   noop: "orbit_enrich"
 };
 function queueFor(kind) {
@@ -3552,7 +3558,7 @@ function classifyAccounts(accounts, known) {
 async function knownIds(db2) {
   const rows = await db2.sql`
     select external_account_id from orbit.integration_accounts
-     where provider = 'linkedin' and external_account_id is not null`;
+     where provider in ('linkedin', 'instagram') and external_account_id is not null`;
   const users = await db2.sql`select id::text as id from orbit.users`;
   const [links] = await db2.sql`
     select to_regclass('public.orbit_unipile_links') is not null as ok`;
@@ -3595,6 +3601,18 @@ async function parkCandidates(db2, now, days, limit2 = PARK_PER_RUN) {
      order by coalesce(u.last_seen_at, u.created_at)
      limit ${limit2}`;
 }
+async function instagramParkCandidates(db2, now, days, limit2 = PARK_PER_RUN) {
+  const cutoff = new Date(now.getTime() - days * 864e5);
+  return db2.sql`
+    select a.user_id::text as user_id, a.external_account_id
+      from orbit.integration_accounts a
+      join orbit.users u on u.id = a.user_id and u.deleted_at is null
+      join orbit.source_states s on s.user_id = a.user_id and s.source = 'instagram'
+     where a.provider = 'instagram' and a.external_account_id is not null and a.status <> 'parked'
+       and s.state = 'off' and s.off_since is not null and s.off_since <= ${cutoff}::timestamptz
+     order by s.off_since
+     limit ${limit2}`;
+}
 function unipileHandlers(deps) {
   const opts = {
     fetch: deps.fetch ?? fetch,
@@ -3622,7 +3640,12 @@ function unipileHandlers(deps) {
       if (!configured2) throw new JobSkipped("unconfigured");
       const now = ctx.now();
       const candidates = await parkCandidates(ctx.db, now, days, deps.park?.perRun ?? PARK_PER_RUN);
-      const out = { days, parked: [], skipped: [] };
+      const out = {
+        days,
+        parked: [],
+        instagramParked: [],
+        skipped: []
+      };
       for (const c of candidates) {
         const id = c.external_account_id;
         const one = await getUnipileAccount(opts, id);
@@ -3659,6 +3682,43 @@ function unipileHandlers(deps) {
           values (${c.user_id}::uuid, 'system', 'linkedin.parked', 'integration_accounts',
                   ${{ accountId: id, since, days, gone: !one.value }}::jsonb)`;
         out.parked.push(c.user_id);
+      }
+      const instagram = await instagramParkCandidates(ctx.db, now, days, deps.park?.perRun ?? PARK_PER_RUN);
+      for (const c of instagram) {
+        const id = c.external_account_id;
+        const one = await getUnipileAccount(opts, id);
+        if (!one.ok) {
+          out.skipped.push({ userId: c.user_id, reason: `instagram get ${one.status ?? one.kind}` });
+          continue;
+        }
+        if (one.value) {
+          const name = one.value.name ?? "";
+          const ours = name.toLowerCase() === c.user_id.toLowerCase() || ORBIT_REF.test(name);
+          if ((one.value.type ?? "").toUpperCase() !== "INSTAGRAM" || !ours) {
+            out.skipped.push({ userId: c.user_id, reason: "instagram_not_orbit_named" });
+            continue;
+          }
+          const del = await deleteUnipileAccount(opts, id);
+          if (!del.ok) {
+            out.skipped.push({ userId: c.user_id, reason: `instagram delete ${del.status ?? del.kind}` });
+            continue;
+          }
+        }
+        const parked = { at: now.toISOString(), accountId: id };
+        const rows = await ctx.db.sql`
+          update orbit.integration_accounts
+             set status = 'parked', external_account_id = null, last_error = null,
+                 sync_state = coalesce(sync_state, '{}'::jsonb)
+                   || jsonb_build_object('instagram',
+                        coalesce(sync_state -> 'instagram', '{}'::jsonb) || ${{ parked, stage: "profile" }}::jsonb)
+           where user_id = ${c.user_id}::uuid and provider = 'instagram' and external_account_id = ${id}
+           returning id`;
+        if (!rows.length) continue;
+        await ctx.db.sql`
+          insert into orbit.audit_log (user_id, actor, action, target_table, details)
+          values (${c.user_id}::uuid, 'system', 'instagram.parked', 'integration_accounts',
+                  ${{ accountId: id, days, gone: !one.value }}::jsonb)`;
+        out.instagramParked.push(c.user_id);
       }
       await ctx.db.sql`
         insert into orbit.audit_log (user_id, actor, action, target_table, target_id, details)
@@ -10646,13 +10706,13 @@ function transliterateChar(cp) {
     const out = `${HANGUL_INITIALS[l]}${HANGUL_VOWELS[v]}${HANGUL_FINALS[t]}`;
     return out.charAt(0).toUpperCase() + out.slice(1);
   }
-  const num3 = cp >>> 8;
-  let b = blocks.get(num3);
+  const num4 = cp >>> 8;
+  let b = blocks.get(num4);
   if (!b) {
-    const raw = TRANSLIT_BLOCKS[num3];
+    const raw = TRANSLIT_BLOCKS[num4];
     if (raw === void 0) return "";
     b = raw.split("	");
-    blocks.set(num3, b);
+    blocks.set(num4, b);
   }
   return b[cp & 255] ?? "";
 }
@@ -12758,7 +12818,7 @@ function templateMessage(p) {
   const kind = COMPOSE_KINDS.includes(req.kind) ? req.kind : TEMPLATE_KIND[req.kind] ?? "first_touch";
   const opener = p.research.openers[0];
   const s = user.settings;
-  const str4 = (v) => typeof v === "string" && v.trim() ? v.trim() : void 0;
+  const str5 = (v) => typeof v === "string" && v.trim() ? v.trim() : void 0;
   const about = user.current_title && user.current_org ? `${user.current_title} at ${user.current_org}` : user.school ? `a student at ${user.school}` : void 0;
   const input = {
     kind,
@@ -12770,12 +12830,12 @@ function templateMessage(p) {
       firstName: me,
       school: user.school ?? void 0,
       about,
-      company: BUSINESS_GOALS.has(p.goalKind) ? str4(s.company) : void 0,
-      pitch: BUSINESS_GOALS.has(p.goalKind) ? str4(s.pitch) : p.goalKind === "collaboration" ? str4(s.research_topic) : void 0,
-      traction: p.goalKind === "fundraising" ? str4(s.traction) : void 0,
+      company: BUSINESS_GOALS.has(p.goalKind) ? str5(s.company) : void 0,
+      pitch: BUSINESS_GOALS.has(p.goalKind) ? str5(s.pitch) : p.goalKind === "collaboration" ? str5(s.research_topic) : void 0,
+      traction: p.goalKind === "fundraising" ? str5(s.traction) : void 0,
       // the proof of work a startup or a lab note leads with, in the student's own words
       ...PROOF_NICHES.has(p.niche) ? {
-        proof: str4(s.about?.proudOf),
+        proof: str5(s.about?.proudOf),
         link: p.links?.find((l) => /github\.com/i.test(l)) ?? p.links?.find((l) => !/linkedin\.com/i.test(l))
       } : {}
     },
@@ -13778,8 +13838,8 @@ function boundedSearch(g, source, maxHops, target, removedEdges, removedNodes, t
   while (heap.size) {
     const [d, { node, hops }] = heap.pop();
     if (d > dist.get(node)[hops]) continue;
-    const settled = minSettledHops.get(node);
-    if (settled !== void 0 && settled <= hops) continue;
+    const settled2 = minSettledHops.get(node);
+    if (settled2 !== void 0 && settled2 <= hops) continue;
     minSettledHops.set(node, hops);
     if (!best.has(node)) best.set(node, { cost: d, hops });
     if (node === target) break;
@@ -14547,6 +14607,14 @@ var MUTUAL_TIE_KINDS = /* @__PURE__ */ new Set([
   "instagram_mutual",
   "x_mutual"
 ]);
+function socialFollowWeight(followingA, followingB) {
+  const { base, selective, floor } = HOP_WEIGHTS.socialMutual;
+  const known = [followingA, followingB].filter((n) => typeof n === "number" && n >= 0);
+  if (!known.length) return base;
+  const busiest = Math.max(...known);
+  if (busiest <= selective) return base;
+  return Math.max(floor, base * Math.sqrt(selective / busiest));
+}
 function affiliationConfidence(kind, ev, now = /* @__PURE__ */ new Date(), bigOrg) {
   const bucket2 = typeof ev.sizeBucket === "string" ? ev.sizeBucket : void 0;
   const size = sizeClass(bucket2);
@@ -19250,6 +19318,1817 @@ function stageTimer(chat, person, settings, now) {
   });
 }
 
+// supabase/functions/_shared/social/adapter.ts
+var SocialSignInNeeded = class extends Error {
+  constructor(platform) {
+    super(`${platform} needs you to sign in again`);
+    this.platform = platform;
+  }
+};
+var SocialBudgetSpent = class extends Error {
+  constructor(kind, retryAt) {
+    super(`budget spent for ${kind}`);
+    this.kind = kind;
+    this.retryAt = retryAt;
+  }
+};
+
+// packages/core/src/entity/social.ts
+var PUBLIC_FIGURE_FOLLOWERS = 5e4;
+var BRAND_WORDS = /\b(official|shop|store|studio|studios|agency|co\b|inc\b|llc|ltd|brand|boutique|restaurant|cafe|bakery|club|team|news|magazine|media|records|fitness|salon|clinic|church|foundation|university|college|school|memes?|daily|fan ?page|fanpage|updates)\b/i;
+function accountKind(a) {
+  if (a.verified || (a.followers ?? 0) >= PUBLIC_FIGURE_FOLLOWERS) return "public_figure";
+  const name = (a.name ?? "").trim();
+  if (a.business && (!name || BRAND_WORDS.test(name) || BRAND_WORDS.test(a.category ?? ""))) return "brand";
+  if (name && BRAND_WORDS.test(name)) return "brand";
+  const words6 = name.replace(/[^\p{L}\s'.-]/gu, " ").split(/\s+/).filter((w) => w.length > 1);
+  if (words6.length >= 2) return "person";
+  if (a.business) return "brand";
+  return "unknown";
+}
+var HUBS = [
+  "linktr.ee",
+  "linktree.com",
+  "beacons.ai",
+  "bio.link",
+  "lnk.bio",
+  "carrd.co",
+  "campsite.bio",
+  "hoo.be"
+];
+function normalizeLink(raw) {
+  const s = raw.trim().toLowerCase();
+  if (!s) return void 0;
+  const m = s.match(/^(?:https?:\/\/)?(?:www\.)?([^\s?#]+?)\/?(?:[?#].*)?$/);
+  return m?.[1];
+}
+function handleFromLink(raw, platform) {
+  const l = normalizeLink(raw);
+  if (!l) return void 0;
+  const hosts = platform === "instagram" ? ["instagram.com", "instagr.am"] : ["x.com", "twitter.com", "mobile.twitter.com"];
+  for (const h of hosts) {
+    if (!l.startsWith(`${h}/`)) continue;
+    const seg = l.slice(h.length + 1).split("/")[0];
+    if (!seg || ["p", "reel", "stories", "explore", "i", "home", "intent", "share", "search"].includes(seg))
+      return void 0;
+    return seg.replace(/^@/, "");
+  }
+  return void 0;
+}
+var normalizeHandle = (h) => h.trim().replace(/^@/, "").toLowerCase();
+function handlesIn(text3, platform) {
+  const out = /* @__PURE__ */ new Set();
+  for (const m of text3.matchAll(
+    /\b(?:https?:\/\/)?(?:www\.)?(?:instagram\.com|instagr\.am|x\.com|twitter\.com)\/[\w.@-]+/gi
+  )) {
+    const h = handleFromLink(m[0], platform);
+    if (h) out.add(normalizeHandle(h));
+  }
+  const label = platform === "instagram" ? /\b(?:ig|insta|instagram)\s*[:-]?\s*@([\w.]{2,30})/gi : /\b(?:x|twitter)\s*[:-]?\s*@(\w{2,15})/gi;
+  for (const m of text3.matchAll(label)) out.add(normalizeHandle(m[1]));
+  return [...out];
+}
+var tokensOf2 = (s) => s.toLowerCase().normalize("NFKD").replace(/\p{M}/gu, "").split(/[^a-z0-9]+/).filter(Boolean);
+var GENERIC_ORG_WORDS = /* @__PURE__ */ new Set([
+  "the",
+  "of",
+  "at",
+  "and",
+  "university",
+  "college",
+  "inc",
+  "llc",
+  "ltd",
+  "co",
+  "corp",
+  "corporation",
+  "company",
+  "group",
+  "hq"
+]);
+function bioMentions(bio, org) {
+  if (!bio || !org) return false;
+  const norm2 = normalizeCompany(org);
+  const words6 = tokensOf2(norm2).filter((w) => w.length >= 2 && !GENERIC_ORG_WORDS.has(w));
+  if (!words6.length || words6.length === 1 && words6[0].length < 3) return false;
+  const bioTokens = tokensOf2(bio);
+  const joined = ` ${bioTokens.join(" ")} `;
+  if (joined.includes(` ${words6.join(" ")} `)) return true;
+  const squashed = words6.join("");
+  return bioTokens.some((t) => t === squashed || t === `${squashed}hq`);
+}
+function bioYear(bio) {
+  if (!bio) return void 0;
+  const m = bio.match(/(?:'|’|\bclass of\s*|\b)(20\d{2}|\d{2})\b/i);
+  if (!m) return void 0;
+  const n = Number(m[1]);
+  if (m[1].length === 2) return n >= 10 && n <= 40 ? 2e3 + n : void 0;
+  return n >= 2e3 && n <= 2040 ? n : void 0;
+}
+function handleSpellsName(handle, first, last) {
+  const h = normalizeHandle(handle);
+  if (/\d/.test(h)) return 0;
+  const f = tokensOf2(first).join("");
+  const l = tokensOf2(last).join("");
+  if (!f || !l) return 0;
+  const bare3 = h.replace(/[._-]/g, "");
+  if (bare3 === `${f}${l}` || bare3 === `${l}${f}`) return 1;
+  if (bare3 === `${f[0]}${l}` || bare3 === `${f}${l[0]}`) return 0.7;
+  if (bare3.includes(f) && bare3.includes(l)) return 0.8;
+  if (bare3 === f || bare3 === l) return 0.3;
+  return 0;
+}
+var COMMON_SURNAMES = new Set(
+  "smith johnson williams brown jones garcia miller davis rodriguez martinez hernandez lopez gonzalez wilson anderson thomas taylor moore jackson martin lee perez thompson white harris sanchez clark ramirez lewis robinson walker young allen king wright scott torres nguyen hill flores green adams nelson baker hall rivera campbell mitchell carter roberts gomez phillips evans turner diaz parker cruz edwards collins reyes stewart morris morales murphy cook rogers gutierrez ortiz morgan cooper peterson bailey reed kelly howard ramos kim cox ward richardson watson brooks chavez wood james bennett gray mendoza ruiz hughes price alvarez castillo sanders patel myers long ross foster jimenez chen wang li zhang liu singh kumar shah khan park choi wu huang lin yang zhao zhou xu sun ma zhu hu guo he gao luo tran le pham kaur gupta sharma ali ahmed hassan cohen ng wong chan cheung lam ho tan lim".split(/\s+/)
+);
+var isRareName = (last) => {
+  const l = tokensOf2(last).join("");
+  return l.length >= 3 && !COMMON_SURNAMES.has(l);
+};
+var PERSON_SPECIFIC = /* @__PURE__ */ new Set([
+  "employer_role_small",
+  "school_year",
+  "same_link",
+  "same_picture"
+]);
+var SOCIAL_WEIGHTS = {
+  bias: -3.5,
+  name: 4,
+  handle: 0.8,
+  employer: 1,
+  employer_role_small: 3,
+  school: 0.8,
+  school_year: 2.5,
+  same_link: 4,
+  same_picture: 3.5,
+  place: 0.4,
+  rare_name: 0.8,
+  neighbours: 0.6,
+  public_figure: -5,
+  other_handle: -1.5
+};
+var AUTO_SOCIAL = 0.95;
+var ASK_SOCIAL = 0.6;
+var MIN_NAME = 0.5;
+var sigmoid4 = (x) => 1 / (1 + Math.exp(-x));
+function socialProof(a, c) {
+  const handle = normalizeHandle(a.username);
+  for (const l of c.links ?? []) {
+    const h = handleFromLink(l, a.platform);
+    if (h && normalizeHandle(h) === handle) return "own_links";
+  }
+  const slug = c.person.linkedinSlug ?? linkedInSlug(c.person.linkedinUrl);
+  if (slug) {
+    for (const l of [
+      ...a.links ?? [],
+      ...a.bio ? a.bio.match(/\S*linkedin\.com\/in\/[\w%-]+/gi) ?? [] : []
+    ]) {
+      if (linkedInSlug(l.startsWith("http") ? l : `https://${l}`) === slug) return "links_back";
+    }
+  }
+  if (a.email) {
+    const e = normalizeEmail(a.email);
+    if ([c.person.primaryEmail, ...c.person.emails ?? []].some((x) => x && normalizeEmail(x) === e))
+      return "contact";
+  }
+  if (a.phone && c.person.phones?.length) {
+    const digits = (p) => p.replace(/\D/g, "").slice(-10);
+    if (c.person.phones.some((p) => digits(p) === digits(a.phone) && digits(p).length >= 10))
+      return "contact";
+  }
+  if ((c.contactHandles ?? []).some((h) => normalizeHandle(h) === handle)) return "address_book";
+  return void 0;
+}
+function socialSignals(a, c) {
+  const p = c.person;
+  const s = {};
+  const name = compareNames(a.name ?? "", p.displayName || `${p.firstName} ${p.lastName}`);
+  s.name = name.score;
+  const handle = handleSpellsName(a.username, p.firstName, p.lastName);
+  if (handle) s.handle = handle;
+  const employer = bioMentions(a.bio, p.currentOrganizationRaw);
+  if (employer) {
+    const titleWords = tokensOf2(p.currentTitle ?? "").filter((w) => w.length >= 3);
+    const bio = tokensOf2(a.bio ?? "");
+    const role = titleWords.some((w) => bio.includes(w));
+    const small = typeof c.employerSize === "number" && c.employerSize < 1e3;
+    if (role && small) s.employer_role_small = 1;
+    else s.employer = 1;
+  }
+  if (bioMentions(a.bio, p.school)) {
+    const y = bioYear(a.bio);
+    if (y && c.schoolYear && y === c.schoolYear) s.school_year = 1;
+    else s.school = 1;
+  }
+  const theirs = new Set(
+    (c.links ?? []).map(normalizeLink).filter((l) => !!l && !HUBS.some((h) => l.startsWith(h)))
+  );
+  if ((a.links ?? []).some((l) => {
+    const n = normalizeLink(l);
+    return !!n && theirs.has(n);
+  }))
+    s.same_link = 1;
+  if (a.pictureHash && !a.defaultPicture && c.pictureHash && a.pictureHash === c.pictureHash)
+    s.same_picture = 1;
+  const city = (p.location ?? "").split(",")[0]?.trim();
+  if (city && city.length >= 3 && a.bio && tokensOf2(a.bio).join(" ").includes(tokensOf2(city).join(" ")))
+    s.place = 1;
+  if (isRareName(p.lastName) && name.score >= 0.95) s.rare_name = 1;
+  if ((c.sharedNeighbours ?? 0) > 0) s.neighbours = Math.min(2, c.sharedNeighbours);
+  if (accountKind(a) === "public_figure") s.public_figure = 1;
+  const handleNorm = normalizeHandle(a.username);
+  if ((c.otherHandles ?? []).some((h) => normalizeHandle(h) !== handleNorm)) s.other_handle = 1;
+  return s;
+}
+function socialScore(signals) {
+  let z9 = SOCIAL_WEIGHTS.bias;
+  for (const [k, v] of Object.entries(signals)) z9 += SOCIAL_WEIGHTS[k] * v;
+  return sigmoid4(z9);
+}
+function matchSocialAccount(a, candidates, opts = {}) {
+  const pool2 = candidates.filter((c) => !opts.rejected?.has(c.person.id));
+  const proven = pool2.map((c) => ({ c, proof: socialProof(a, c) })).filter((x) => !!x.proof);
+  if (proven.length === 1)
+    return { kind: "attach", personId: proven[0].c.person.id, via: "proof", proof: proven[0].proof };
+  if (proven.length > 1) return { kind: "none", reason: "ambiguous" };
+  if (accountKind(a) !== "person") return { kind: "none", reason: "not_a_person" };
+  const scored = pool2.map((c) => {
+    const signals = socialSignals(a, c);
+    return { c, signals, score: (signals.name ?? 0) < MIN_NAME ? 0 : socialScore(signals) };
+  }).filter((x) => x.score >= ASK_SOCIAL).sort((x, y) => y.score - x.score);
+  if (!scored.length) return { kind: "none", reason: pool2.length ? "low" : "no_candidate" };
+  if (scored.length > 1) {
+    const best2 = scored[0];
+    if (!best2.c.knownToStudent) return { kind: "none", reason: "ambiguous" };
+    return {
+      kind: "ask",
+      personId: best2.c.person.id,
+      score: Math.min(best2.score, AUTO_SOCIAL - 0.01),
+      signals: best2.signals
+    };
+  }
+  const best = scored[0];
+  const specific = Object.keys(best.signals).some((k) => PERSON_SPECIFIC.has(k));
+  if (best.score >= AUTO_SOCIAL && specific)
+    return {
+      kind: "attach",
+      personId: best.c.person.id,
+      via: "score",
+      score: best.score,
+      signals: best.signals
+    };
+  if (!best.c.knownToStudent) return { kind: "none", reason: "stranger" };
+  return {
+    kind: "ask",
+    personId: best.c.person.id,
+    score: Math.min(best.score, AUTO_SOCIAL - 0.01),
+    signals: best.signals
+  };
+}
+function matchTargetAccount(a, target) {
+  const proof = socialProof(a, target);
+  if (proof) return { kind: "attach", personId: target.person.id, via: "proof", proof };
+  return { kind: "none", reason: "stranger" };
+}
+function socialBlock(a, people) {
+  const name = (a.name ?? "").trim();
+  const handle = normalizeHandle(a.username);
+  return people.filter((c) => {
+    const p = c.person;
+    if (name && compareNames(name, p.displayName || `${p.firstName} ${p.lastName}`).score >= MIN_NAME)
+      return true;
+    if (handleSpellsName(handle, p.firstName, p.lastName) >= 0.7) return true;
+    if (!name) {
+      return !!socialProof(a, c);
+    }
+    return isFirstNameVariant(name.split(/\s+/)[0] ?? "", p.firstName) && !!p.lastName && handle.includes(tokensOf2(p.lastName).join(""));
+  });
+}
+
+// packages/core/src/graph/socialLookup.ts
+var MAX_LIST_READ = 2e3;
+var COMPLETE_SHARE = 0.9;
+function listComplete(l) {
+  if (!l?.ended) return false;
+  if (typeof l.total !== "number" || l.total <= 0) return true;
+  return l.ids.size >= COMPLETE_SHARE * l.total;
+}
+function bridgeStatuses(s) {
+  const t = s.target;
+  const tFollowingDone = listComplete(t.following);
+  const tFollowersDone = listComplete(t.followers);
+  return s.circle.filter((c) => c.accountId !== s.targetAccountId).map((c) => {
+    const own = s.candidates.get(c.accountId);
+    let targetFollows = "unknown";
+    if (t.following?.ids.has(c.accountId) || own?.followers?.ids.has(s.targetAccountId))
+      targetFollows = "yes";
+    else if (tFollowingDone || listComplete(own?.followers)) targetFollows = "no";
+    let followsTarget = "unknown";
+    if (t.followers?.ids.has(c.accountId) || own?.following?.ids.has(s.targetAccountId))
+      followsTarget = "yes";
+    else if (tFollowersDone || listComplete(own?.following)) followsTarget = "no";
+    return { accountId: c.accountId, personId: c.personId, targetFollows, followsTarget };
+  });
+}
+var isBridge = (b) => b.targetFollows === "yes" && b.followsTarget === "yes";
+var isOneWay = (b) => b.targetFollows === "yes" !== (b.followsTarget === "yes") && (b.targetFollows === "no" || b.followsTarget === "no");
+var settled = (b) => b.targetFollows === "no" || b.followsTarget === "no" || b.targetFollows === "yes" && b.followsTarget === "yes";
+var listSize = (l, which) => which === "followers" ? l.followerCount ?? l.followers?.total : l.followingCount ?? l.following?.total;
+function done(s, reason2) {
+  const all = bridgeStatuses(s);
+  const bridges = all.filter(isBridge);
+  return {
+    do: "done",
+    bridges,
+    oneWay: all.filter(isOneWay),
+    partial: all.some((b) => !settled(b)),
+    ...reason2 ? { reason: reason2 } : !bridges.length && all.every(settled) ? { reason: "none" } : {}
+  };
+}
+function nextLookupStep(s) {
+  const circle = s.circle.filter((c) => c.accountId !== s.targetAccountId);
+  if (!circle.length) return done(s, "no_circle");
+  let open = bridgeStatuses(s).filter((b) => !settled(b));
+  if (!open.length) return done(s);
+  if (s.platform === "instagram" && !s.profileRead) return { do: "profile", accountId: s.targetAccountId };
+  if (s.target.isPrivate) return done(s, "private");
+  if (s.platform === "instagram" && s.count === 0 && circle.every((c) => c.studentFollows))
+    return done(s, "none");
+  const tried = (accountId, list2) => !!s.tried?.has(`${accountId}.${list2}`);
+  const sizes = ["following", "followers"].map((list2) => ({ list: list2, size: listSize(s.target, list2) })).filter((x) => !listComplete(s.target[x.list]) && !tried(s.targetAccountId, x.list)).sort((a, b) => (a.size ?? Number.POSITIVE_INFINITY) - (b.size ?? Number.POSITIVE_INFINITY));
+  const readTarget = sizes.filter((x) => (x.size ?? Number.POSITIVE_INFINITY) <= MAX_LIST_READ);
+  const needs = (list2) => open.some((b) => (list2 === "following" ? b.targetFollows : b.followsTarget) === "unknown");
+  const first = readTarget.find((x) => needs(x.list));
+  if (first) return { do: "list", accountId: s.targetAccountId, list: first.list };
+  open = bridgeStatuses(s).filter((b) => !settled(b));
+  const sides = open.flatMap((b) => {
+    const own = s.candidates.get(b.accountId) ?? {};
+    const out = [];
+    if (b.followsTarget === "unknown" && !listComplete(own.following) && !tried(b.accountId, "following"))
+      out.push({
+        accountId: b.accountId,
+        list: "following",
+        size: listSize(own, "following") ?? MAX_LIST_READ
+      });
+    if (b.targetFollows === "unknown" && !listComplete(own.followers) && !tried(b.accountId, "followers"))
+      out.push({
+        accountId: b.accountId,
+        list: "followers",
+        size: listSize(own, "followers") ?? MAX_LIST_READ
+      });
+    return out;
+  }).filter((x) => x.size <= MAX_LIST_READ).sort((a, b) => a.size - b.size);
+  if (sides[0]) return { do: "list", accountId: sides[0].accountId, list: sides[0].list };
+  return done(s);
+}
+
+// supabase/functions/_shared/social/graph.ts
+var DAY13 = 864e5;
+var GRAPH_KEEP_MS = 30 * DAY13;
+var LIST_FRESH_MS = 7 * DAY13;
+var NO_OWNER = "00000000-0000-0000-0000-000000000000";
+async function suppressedOf(db2, platform, ids) {
+  if (!ids.length) return /* @__PURE__ */ new Set();
+  const rows = await db2.sql`
+    select account_id from orbit.social_suppressed where platform = ${platform} and account_id = any(${ids}::text[])`;
+  return new Set(rows.map((r) => r.account_id));
+}
+function accountOfRow(platform, r) {
+  return {
+    platform,
+    id: r.account_id,
+    username: r.username,
+    name: r.name ?? void 0,
+    bio: r.bio ?? void 0,
+    links: r.links ?? [],
+    email: r.email ?? void 0,
+    phone: r.phone ?? void 0,
+    followers: r.followers ?? void 0,
+    following: r.following ?? void 0,
+    verified: !!r.verified,
+    isPrivate: !!r.is_private,
+    business: !!r.business,
+    category: r.category ?? void 0,
+    pictureHash: r.picture_hash ?? void 0,
+    defaultPicture: !!r.default_picture
+  };
+}
+async function loadAccounts(db2, platform, ids) {
+  if (!ids.length) return /* @__PURE__ */ new Map();
+  const rows = await db2.sql`
+    select account_id, username, name, bio, links, email, phone, followers, following, verified, is_private, business,
+           category, picture_hash, default_picture, kind, read_at
+      from orbit.social_accounts where platform = ${platform} and account_id = any(${ids}::text[])`;
+  return new Map(rows.map((r) => [r.account_id, r]));
+}
+async function upsertAccounts(db2, accounts, o) {
+  if (!accounts.length) return [];
+  const platform = accounts[0].platform;
+  const blocked = await suppressedOf(
+    db2,
+    platform,
+    accounts.map((a) => a.id)
+  );
+  const out = [];
+  const expires = new Date(o.now.getTime() + GRAPH_KEEP_MS);
+  for (const a of accounts) {
+    if (blocked.has(a.id) || a.platform !== platform) continue;
+    const kind = accountKind(a);
+    if (o.full)
+      await db2.sql`
+        insert into orbit.social_accounts (platform, account_id, username, name, bio, links, email, phone, followers,
+                                           following, verified, is_private, business, category, picture_hash,
+                                           default_picture, kind, read_at, expires_at)
+        values (${platform}, ${a.id}, ${a.username}, ${a.name ?? null}, ${a.bio ?? null}, ${a.links ?? []}::text[],
+                ${a.email ?? null}, ${a.phone ?? null}, ${a.followers ?? null}::int, ${a.following ?? null}::int,
+                ${!!a.verified}, ${!!a.isPrivate}, ${!!a.business}, ${a.category ?? null}, ${a.pictureHash ?? null},
+                ${!!a.defaultPicture}, ${kind}, ${o.now}::timestamptz, ${expires}::timestamptz)
+        on conflict (platform, account_id) do update set
+          username = excluded.username, name = excluded.name, bio = excluded.bio, links = excluded.links,
+          email = excluded.email, phone = excluded.phone, followers = excluded.followers,
+          following = excluded.following, verified = excluded.verified, is_private = excluded.is_private,
+          business = excluded.business, category = excluded.category,
+          picture_hash = coalesce(excluded.picture_hash, orbit.social_accounts.picture_hash),
+          default_picture = excluded.default_picture, kind = excluded.kind, read_at = excluded.read_at,
+          expires_at = excluded.expires_at`;
+    else
+      await db2.sql`
+        insert into orbit.social_accounts (platform, account_id, username, name, verified, is_private, default_picture,
+                                           kind, read_at, expires_at)
+        values (${platform}, ${a.id}, ${a.username}, ${a.name ?? null}, ${!!a.verified}, ${!!a.isPrivate},
+                ${!!a.defaultPicture}, ${kind}, ${o.now}::timestamptz, ${expires}::timestamptz)
+        on conflict (platform, account_id) do update set
+          username = excluded.username, name = coalesce(excluded.name, orbit.social_accounts.name),
+          verified = excluded.verified, is_private = excluded.is_private,
+          kind = case when orbit.social_accounts.kind = 'unknown' or excluded.verified then excluded.kind
+                      else orbit.social_accounts.kind end,
+          expires_at = greatest(orbit.social_accounts.expires_at, excluded.expires_at)`;
+    out.push(a.id);
+  }
+  return out;
+}
+async function getListRead(db2, platform, accountId, list2, owner) {
+  const [r] = await db2.sql`
+    select rows_read, total, ended, cursor, read_at, read_by from orbit.social_list_reads
+     where platform = ${platform} and account_id = ${accountId} and list = ${list2}
+       and coalesce(owner_user_id, ${NO_OWNER}::uuid) = coalesce(${owner}::uuid, ${NO_OWNER}::uuid)
+       and expires_at > now()`;
+  return r;
+}
+var followRows = (accountId, list2, ids) => ids.map(
+  (id) => list2 === "followers" ? { follower: id, followed: accountId } : { follower: accountId, followed: id }
+);
+async function storeFollows(db2, platform, rows, o) {
+  if (!rows.length) return 0;
+  const blocked = await suppressedOf(db2, platform, [
+    ...new Set(rows.flatMap((r) => [r.follower, r.followed]))
+  ]);
+  const keep = rows.filter((r) => !blocked.has(r.follower) && !blocked.has(r.followed));
+  if (!keep.length) return 0;
+  const expires = new Date(o.now.getTime() + GRAPH_KEEP_MS);
+  await db2.sql`
+    insert into orbit.social_follows (platform, follower_id, followed_id, owner_user_id, seen_at, expires_at)
+    select ${platform}, f, t, ${o.owner}::uuid, ${o.now}::timestamptz, ${expires}::timestamptz
+      from unnest(${keep.map((r) => r.follower)}::text[], ${keep.map((r) => r.followed)}::text[]) as x(f, t)
+    on conflict (platform, follower_id, followed_id, coalesce(owner_user_id, '00000000-0000-0000-0000-000000000000'::uuid))
+    do update set seen_at = excluded.seen_at, expires_at = excluded.expires_at`;
+  return keep.length;
+}
+async function readListPage(db2, adapter, o) {
+  const platform = adapter.platform;
+  let row = await getListRead(db2, platform, o.accountId, o.list, o.owner);
+  if (!row || row.ended) {
+    const expires = new Date(o.now.getTime() + GRAPH_KEEP_MS);
+    await db2.sql`
+      insert into orbit.social_list_reads (platform, account_id, list, owner_user_id, read_by, rows_read, total, ended,
+                                           cursor, read_at, expires_at)
+      values (${platform}, ${o.accountId}, ${o.list}, ${o.owner}::uuid, ${o.readBy}::uuid, 0, ${o.total ?? null}::int,
+              false, null, ${o.now}::timestamptz, ${expires}::timestamptz)
+      on conflict (platform, account_id, list, coalesce(owner_user_id, '00000000-0000-0000-0000-000000000000'::uuid))
+      do update set read_by = excluded.read_by, rows_read = 0, total = coalesce(excluded.total, orbit.social_list_reads.total),
+                    ended = false, cursor = null, read_at = excluded.read_at, expires_at = excluded.expires_at`;
+    row = {
+      rows_read: 0,
+      total: o.total ?? row?.total ?? null,
+      ended: false,
+      cursor: null,
+      read_at: o.now,
+      read_by: o.readBy
+    };
+  }
+  const page2 = await adapter.listPage(o.accountId, o.list, row.cursor ?? void 0);
+  const blocked = await suppressedOf(db2, platform, page2.ids);
+  const ids = page2.ids.filter((id) => !blocked.has(id));
+  const accounts = (page2.accounts ?? []).filter((a) => !blocked.has(a.id));
+  await storeFollows(db2, platform, followRows(o.accountId, o.list, ids), { owner: o.owner, now: o.now });
+  if (o.keepAccounts) await upsertAccounts(db2, accounts, { full: false, now: o.now });
+  const ended = !page2.cursor;
+  const total = page2.total ?? o.total ?? row.total ?? null;
+  const rowsRead = row.rows_read + page2.ids.length;
+  await db2.sql`
+    update orbit.social_list_reads
+       set rows_read = ${rowsRead}::int, cursor = ${page2.cursor ?? null}, ended = ${ended},
+           total = ${total}::int, read_by = ${o.readBy}::uuid
+     where platform = ${platform} and account_id = ${o.accountId} and list = ${o.list}
+       and coalesce(owner_user_id, ${NO_OWNER}::uuid) = coalesce(${o.owner}::uuid, ${NO_OWNER}::uuid)`;
+  const complete = ended && listComplete({ ids: { size: rowsRead }, ended, total: total ?? void 0 });
+  if (complete) {
+    const start = new Date(row.read_at);
+    if (o.list === "followers")
+      await db2.sql`
+        delete from orbit.social_follows
+         where platform = ${platform} and followed_id = ${o.accountId} and seen_at < ${start}::timestamptz
+           and coalesce(owner_user_id, ${NO_OWNER}::uuid) = coalesce(${o.owner}::uuid, ${NO_OWNER}::uuid)`;
+    else
+      await db2.sql`
+        delete from orbit.social_follows
+         where platform = ${platform} and follower_id = ${o.accountId} and seen_at < ${start}::timestamptz
+           and coalesce(owner_user_id, ${NO_OWNER}::uuid) = coalesce(${o.owner}::uuid, ${NO_OWNER}::uuid)`;
+  }
+  return { ended, complete, ids, accounts };
+}
+var CountedSet = class extends Set {
+  constructor(items, n) {
+    super(items);
+    this.n = n;
+  }
+  get size() {
+    return Math.max(this.n, super.size);
+  }
+};
+async function loadListRead(db2, platform, accountId, list2, o) {
+  const owner = o.owner ?? null;
+  const row = await getListRead(db2, platform, accountId, list2, owner);
+  if (!row) return void 0;
+  const fresh = o.now.getTime() - new Date(row.read_at).getTime() <= (o.freshMs ?? LIST_FRESH_MS);
+  const usable3 = row.ended && fresh;
+  if (row.ended && !fresh)
+    return { ids: /* @__PURE__ */ new Set(), ended: false, ...row.total != null ? { total: row.total } : {} };
+  const since = usable3 ? /* @__PURE__ */ new Date(0) : new Date(row.read_at);
+  const only = o.only ?? null;
+  const rows = list2 === "followers" ? await db2.sql`
+          select distinct follower_id as id from orbit.social_follows
+           where platform = ${platform} and followed_id = ${accountId} and seen_at >= ${since}::timestamptz
+             and expires_at > now() and (owner_user_id is null or owner_user_id = ${o.userId}::uuid)
+             and (${only}::text[] is null or follower_id = any(${only}::text[]))` : await db2.sql`
+          select distinct followed_id as id from orbit.social_follows
+           where platform = ${platform} and follower_id = ${accountId} and seen_at >= ${since}::timestamptz
+             and expires_at > now() and (owner_user_id is null or owner_user_id = ${o.userId}::uuid)
+             and (${only}::text[] is null or followed_id = any(${only}::text[]))`;
+  const ids = rows.map((r) => r.id);
+  return {
+    ids: only ? new CountedSet(ids, usable3 ? row.rows_read : 0) : new Set(ids),
+    ended: usable3,
+    ...row.total != null ? { total: row.total } : {}
+  };
+}
+async function dropSharedLists(db2, platform, accountId) {
+  await db2.sql`
+    delete from orbit.social_list_reads
+     where platform = ${platform} and account_id = ${accountId} and owner_user_id is null`;
+  await db2.sql`
+    delete from orbit.social_follows
+     where platform = ${platform} and owner_user_id is null and (followed_id = ${accountId} or follower_id = ${accountId})`;
+}
+
+// supabase/functions/_shared/social/keys.ts
+var identityKind = (p) => `${p}_id`;
+var sourceAccount = (p, id) => `${p}:${id}`;
+var factSource = (p, id) => `social:${p}:${id}`;
+var platformName = (p) => p === "instagram" ? "Instagram" : "X";
+
+// supabase/functions/_shared/social/ties.ts
+var mutualKind = (p) => `${p}_mutual`;
+var followKind = (p) => `${p}_follow`;
+async function rewriteFollowTies(db2, userId, platform, pairs, o) {
+  const out = /* @__PURE__ */ new Map();
+  for (const p of pairs) {
+    if (p.aPerson === p.bPerson) continue;
+    const [aId, bId] = p.aPerson < p.bPerson ? [p.aPerson, p.bPerson] : [p.bPerson, p.aPerson];
+    const accounts = { [p.aPerson]: p.aAccount, [p.bPerson]: p.bAccount };
+    const mutual = p.aFollowsB === "yes" && p.bFollowsA === "yes";
+    const oneWay = !mutual && (p.aFollowsB === "yes" && p.bFollowsA === "no" || p.bFollowsA === "yes" && p.aFollowsB === "no");
+    const keep = mutual ? mutualKind(platform) : oneWay ? followKind(platform) : null;
+    for (const kind of [mutualKind(platform), followKind(platform)])
+      if (kind !== keep)
+        await db2.sql`
+          delete from orbit.ties
+           where user_id = ${userId}::uuid and a_person_id = ${aId}::uuid and b_person_id = ${bId}::uuid
+             and kind = ${kind}`;
+    if (!keep) {
+      out.set(`${p.aPerson}|${p.bPerson}`, "none");
+      continue;
+    }
+    const weight = mutual ? socialFollowWeight(p.aFollowing, p.bFollowing) : (
+      // a one-way follow: support only (core HOP_WEIGHTS.socialFollow)
+      0.1
+    );
+    const evidence = {
+      platform,
+      accounts,
+      ...oneWay ? { followerId: p.aFollowsB === "yes" ? p.aPerson : p.bPerson } : {},
+      ...o.lookupId ? { lookupId: o.lookupId } : {}
+    };
+    await db2.sql`
+      insert into orbit.ties (user_id, a_person_id, b_person_id, kind, weight, confidence, evidence, first_seen_at,
+                              last_seen_at)
+      values (${userId}::uuid, ${aId}::uuid, ${bId}::uuid, ${keep}, ${weight}::real, ${TIE_CONFIDENCE[keep]}::real,
+              ${evidence}::jsonb, ${o.now}::timestamptz, ${o.now}::timestamptz)
+      on conflict (user_id, a_person_id, b_person_id, kind) do update set
+        weight = excluded.weight, confidence = excluded.confidence, evidence = excluded.evidence,
+        last_seen_at = excluded.last_seen_at`;
+    out.set(`${p.aPerson}|${p.bPerson}`, mutual ? "mutual" : "follow");
+  }
+  return out;
+}
+async function deleteAccountTies(db2, userId, platform, personId, accountId) {
+  const rows = await db2.sql`
+    delete from orbit.ties
+     where user_id = ${userId}::uuid and kind in (${mutualKind(platform)}, ${followKind(platform)})
+       and (a_person_id = ${personId}::uuid or b_person_id = ${personId}::uuid)
+       and evidence -> 'accounts' ->> ${personId}::text = ${accountId}
+    returning id`;
+  return rows.length;
+}
+async function rebuildAccountTies(db2, userId, platform, accountId, personId, now) {
+  const others = await db2.sql`
+    with accts as (
+      select l.account_id, l.person_id from orbit.social_links l
+       where l.user_id = ${userId}::uuid and l.platform = ${platform}
+      union
+      select split_part(p.source_account, ':', 2), p.id from orbit.people p
+       where p.user_id = ${userId}::uuid and p.deleted_at is null and p.source_account like ${`${platform}:%`}
+    )
+    select a.account_id, a.person_id,
+           exists (select 1 from orbit.social_follows f where f.platform = ${platform} and f.follower_id = ${accountId}
+                     and f.followed_id = a.account_id and f.expires_at > now()
+                     and (f.owner_user_id is null or f.owner_user_id = ${userId}::uuid)) as out,
+           exists (select 1 from orbit.social_follows f where f.platform = ${platform} and f.follower_id = a.account_id
+                     and f.followed_id = ${accountId} and f.expires_at > now()
+                     and (f.owner_user_id is null or f.owner_user_id = ${userId}::uuid)) as back
+      from accts a
+     where a.account_id <> ${accountId} and a.person_id <> ${personId}::uuid`;
+  const counts = await db2.sql`
+    select account_id, following from orbit.social_accounts
+     where platform = ${platform} and account_id = any(${[accountId, ...others.map((o) => o.account_id)]}::text[])`;
+  const following = new Map(counts.map((c) => [c.account_id, c.following ?? void 0]));
+  await rewriteFollowTies(
+    db2,
+    userId,
+    platform,
+    others.filter((o) => o.out && o.back).map((o) => ({
+      aPerson: personId,
+      aAccount: accountId,
+      bPerson: o.person_id,
+      bAccount: o.account_id,
+      aFollowsB: "yes",
+      bFollowsA: "yes",
+      aFollowing: following.get(accountId),
+      bFollowing: following.get(o.account_id)
+    })),
+    { now }
+  );
+}
+
+// supabase/functions/_shared/social/links.ts
+var SocialMergeRefused = class extends Error {
+  constructor(personId) {
+    super(
+      "This person has an Instagram or X account attached, so they are not merged. Attach the account to the other person instead."
+    );
+    this.personId = personId;
+    this.name = "SocialMergeRefused";
+  }
+};
+async function refuseSocialMerge(db2, userId, personIds) {
+  const [r] = await db2.sql`
+    select l.person_id::text as id from orbit.social_links l
+     where l.user_id = ${userId}::uuid and l.person_id = any(${personIds}::uuid[])
+    union all
+    select p.id::text from orbit.people p
+     where p.user_id = ${userId}::uuid and p.id = any(${personIds}::uuid[]) and p.source_account is not null
+    limit 1`;
+  if (r) throw new SocialMergeRefused(r.id);
+}
+async function hasUnstamped(db2, userId, personId, accountId) {
+  const [r] = await db2.sql`
+    select exists (select 1 from orbit.notes where user_id = ${userId}::uuid and ${personId}::uuid = any(person_ids))
+        or exists (select 1 from orbit.chats where user_id = ${userId}::uuid and person_id = ${personId}::uuid)
+        or exists (select 1 from orbit.drafts where user_id = ${userId}::uuid and person_id = ${personId}::uuid)
+        or exists (select 1 from orbit.tie_labels where user_id = ${userId}::uuid and person_id = ${personId}::uuid)
+        or exists (select 1 from orbit.messages m where m.user_id = ${userId}::uuid
+                     and (m.from_person_id = ${personId}::uuid or ${personId}::uuid = any(m.to_person_ids))
+                     and coalesce(m.social_account_id, '') <> ${accountId}) as any`;
+  return !!r?.any;
+}
+async function moveStamped(db2, userId, platform, accountId, from, to, o) {
+  await db2.sql`
+    update orbit.messages set from_person_id = ${to}::uuid
+     where user_id = ${userId}::uuid and social_account_id = ${accountId} and from_person_id = ${from}::uuid`;
+  await db2.sql`
+    update orbit.messages
+       set to_person_ids = array(select distinct x from unnest(array_replace(to_person_ids, ${from}::uuid, ${to}::uuid)) x)
+     where user_id = ${userId}::uuid and social_account_id = ${accountId} and ${from}::uuid = any(to_person_ids)`;
+  await db2.sql`
+    update orbit.threads t
+       set participant_person_ids = array(select distinct x from unnest(array_replace(t.participant_person_ids, ${from}::uuid, ${to}::uuid)) x)
+     where t.user_id = ${userId}::uuid and ${from}::uuid = any(t.participant_person_ids)
+       and (t.social_account_id = ${accountId}
+         or exists (select 1 from orbit.messages m where m.thread_id = t.id and m.social_account_id = ${accountId}))
+       and not exists (select 1 from orbit.messages m where m.thread_id = t.id
+                         and (m.from_person_id = ${from}::uuid or ${from}::uuid = any(m.to_person_ids)))`;
+  await db2.sql`
+    update orbit.person_identities set person_id = ${to}::uuid
+     where user_id = ${userId}::uuid and person_id = ${from}::uuid and social_account_id = ${accountId}
+       and kind = ${identityKind(platform)}`;
+  let dropped = [];
+  if (o.contacts === "move")
+    await db2.sql`
+      update orbit.person_identities set person_id = ${to}::uuid
+       where user_id = ${userId}::uuid and person_id = ${from}::uuid and social_account_id = ${accountId}`;
+  else
+    dropped = (await db2.sql`
+        delete from orbit.person_identities
+         where user_id = ${userId}::uuid and person_id = ${from}::uuid and social_account_id = ${accountId}
+        returning kind, value_norm`).map((r) => ({ kind: r.kind, value: r.value_norm }));
+  if (o.facts === "move")
+    await db2.sql`
+      update orbit.facts set person_id = ${to}::uuid
+       where user_id = ${userId}::uuid and person_id = ${from}::uuid and source_table = ${factSource(platform, accountId)}`;
+  else
+    await db2.sql`
+      delete from orbit.facts
+       where user_id = ${userId}::uuid and person_id = ${from}::uuid and source_table = ${factSource(platform, accountId)}`;
+  await db2.sql`
+    update orbit.social_lookups set target_person_id = ${to}::uuid
+     where user_id = ${userId}::uuid and target_person_id = ${from}::uuid and target_account_id = ${accountId}`;
+  await deleteAccountTies(db2, userId, platform, from, accountId);
+  return { droppedContacts: dropped };
+}
+async function audit(db2, userId, action, targetId, details) {
+  await db2.sql`
+    insert into orbit.audit_log (user_id, actor, action, target_table, target_id, details)
+    values (${userId}::uuid, 'system', ${action}, 'social_links', ${targetId}, ${details}::jsonb)`;
+}
+async function rescore(db2, userId, personIds, key2) {
+  const q = sqlQueue(db2);
+  await q.enqueue({
+    kind: "score.person",
+    userId,
+    payload: { personIds },
+    dedupeKey: `score.person:${userId}:social:${key2}`
+  });
+  await q.enqueue({
+    kind: "friend_shares_refresh",
+    userId,
+    payload: {},
+    dedupeKey: `friend_shares_refresh:${userId}:social:${key2}`
+  });
+}
+async function attachAccount(db2, userId, a) {
+  const [person] = await db2.sql`
+    select id from orbit.people
+     where id = ${a.personId}::uuid and user_id = ${userId}::uuid and deleted_at is null and merged_into is null
+       and not is_self`;
+  if (!person) return { status: "no_person" };
+  const [link] = await db2.sql`
+    select id, person_id from orbit.social_links
+     where user_id = ${userId}::uuid and platform = ${a.platform} and account_id = ${a.accountId}`;
+  if (link?.person_id === a.personId) return { status: "exists", linkId: link.id };
+  if (link) return { status: "linked_elsewhere", personId: link.person_id };
+  const own = await db2.sql`
+    select p.id from orbit.people p
+     where p.user_id = ${userId}::uuid and p.deleted_at is null and p.merged_into is null and p.id <> ${a.personId}::uuid
+       and (p.source_account = ${sourceAccount(a.platform, a.accountId)}
+         or exists (select 1 from orbit.person_identities i where i.person_id = p.id
+                      and i.kind = ${identityKind(a.platform)} and i.value_norm = ${a.accountId}))`;
+  for (const o of own)
+    if (await hasUnstamped(db2, userId, o.id, a.accountId))
+      return { status: "conflict", accountPersonId: o.id, personId: a.personId };
+  return db2.begin(async (tx) => {
+    let folded;
+    for (const o of own) {
+      await moveStamped(tx, userId, a.platform, a.accountId, o.id, a.personId, {
+        facts: "move",
+        contacts: "move"
+      });
+      await tx.sql`
+        update orbit.social_match_asks set person_id = ${a.personId}::uuid
+         where user_id = ${userId}::uuid and person_id = ${o.id}::uuid
+           and not exists (select 1 from orbit.social_match_asks x where x.user_id = ${userId}::uuid
+                             and x.platform = orbit.social_match_asks.platform
+                             and x.account_id = orbit.social_match_asks.account_id and x.person_id = ${a.personId}::uuid)`;
+      await tx.sql`delete from orbit.people where id = ${o.id}::uuid and user_id = ${userId}::uuid`;
+      folded = o.id;
+    }
+    const [row] = await tx.sql`
+      insert into orbit.social_links (user_id, platform, account_id, person_id, via, proof, score)
+      values (${userId}::uuid, ${a.platform}, ${a.accountId}, ${a.personId}::uuid, ${a.via}, ${a.proof ?? null},
+              ${a.score ?? null}::real)
+      returning id`;
+    const accounts = a.account ? void 0 : await loadAccounts(tx, a.platform, [a.accountId]);
+    const acct = a.account;
+    const stored = accounts?.get(a.accountId);
+    const username = acct?.username ?? stored?.username ?? a.accountId;
+    await tx.sql`
+      insert into orbit.person_identities (user_id, person_id, kind, value_norm, value_raw, source, social_account_id)
+      values (${userId}::uuid, ${a.personId}::uuid, ${identityKind(a.platform)}, ${a.accountId}, ${username},
+              ${a.platform}, ${a.accountId})
+      on conflict (user_id, kind, value_norm) do update set person_id = excluded.person_id,
+        social_account_id = excluded.social_account_id`;
+    const email = (acct?.email ?? stored?.email ?? "").trim().toLowerCase();
+    const phone = (acct?.phone ?? stored?.phone ?? "").replace(/[^\d+]/g, "");
+    if (email.includes("@"))
+      await tx.sql`
+        insert into orbit.person_identities (user_id, person_id, kind, value_norm, value_raw, source, social_account_id)
+        values (${userId}::uuid, ${a.personId}::uuid, 'email', ${email}, ${email}, ${a.platform}, ${a.accountId})
+        on conflict (user_id, kind, value_norm) do nothing`;
+    if (phone.replace(/\D/g, "").length >= 10)
+      await tx.sql`
+        insert into orbit.person_identities (user_id, person_id, kind, value_norm, value_raw, source, social_account_id)
+        values (${userId}::uuid, ${a.personId}::uuid, 'phone', ${phone}, ${phone}, ${a.platform}, ${a.accountId})
+        on conflict (user_id, kind, value_norm) do nothing`;
+    await tx.sql`
+      update orbit.messages set from_person_id = ${a.personId}::uuid
+       where user_id = ${userId}::uuid and social_account_id = ${a.accountId} and direction = 'in'
+         and from_person_id is null`;
+    await tx.sql`
+      update orbit.messages set to_person_ids = array[${a.personId}::uuid]
+       where user_id = ${userId}::uuid and social_account_id = ${a.accountId} and direction = 'out'
+         and cardinality(to_person_ids) = 0`;
+    await tx.sql`
+      update orbit.threads
+         set participant_person_ids = array(select distinct x from unnest(participant_person_ids || array[${a.personId}::uuid]) x)
+       where user_id = ${userId}::uuid and social_account_id = ${a.accountId}
+         and not (${a.personId}::uuid = any(participant_person_ids))`;
+    const bio = acct?.bio ?? stored?.bio;
+    if (bio?.trim())
+      await tx.sql`
+        insert into orbit.facts (user_id, person_id, type, text, source_table, occurred_at, confidence)
+        select ${userId}::uuid, ${a.personId}::uuid, 'social_bio', ${`${platformName(a.platform)} bio: ${bio.trim().slice(0, 400)}`},
+               ${factSource(a.platform, a.accountId)}, ${a.now}::timestamptz, 0.7
+         where not exists (select 1 from orbit.facts where user_id = ${userId}::uuid and person_id = ${a.personId}::uuid
+                             and source_table = ${factSource(a.platform, a.accountId)} and deleted_at is null)`;
+    await tx.sql`
+      update orbit.social_match_asks
+         set status = case when person_id = ${a.personId}::uuid then 'yes' else 'stale' end, decided_at = ${a.now}::timestamptz
+       where user_id = ${userId}::uuid and platform = ${a.platform} and account_id = ${a.accountId} and status = 'open'`;
+    if (a.via === "student")
+      await tx.sql`
+        delete from orbit.social_not_same
+         where user_id = ${userId}::uuid and platform = ${a.platform} and account_id = ${a.accountId}
+           and person_id = ${a.personId}::uuid`;
+    await rebuildAccountTies(tx, userId, a.platform, a.accountId, a.personId, a.now);
+    await audit(tx, userId, "social.attach", row.id, {
+      platform: a.platform,
+      accountId: a.accountId,
+      personId: a.personId,
+      via: a.via,
+      ...a.proof ? { proof: a.proof } : {},
+      ...folded ? { folded } : {}
+    });
+    await rescore(tx, userId, [a.personId], `attach:${row.id}`);
+    return { status: "attached", linkId: row.id, ...folded ? { folded } : {} };
+  });
+}
+
+// supabase/functions/_shared/social/people.ts
+async function ownAccountId(db2, userId, platform) {
+  const [r] = await db2.sql`
+    select social_account_id from orbit.integration_accounts where user_id = ${userId}::uuid and provider = ${platform}`;
+  return r?.social_account_id ?? null;
+}
+async function personForAccount(db2, userId, platform, accountId) {
+  const [l] = await db2.sql`
+    select l.person_id from orbit.social_links l join orbit.people p on p.id = l.person_id
+     where l.user_id = ${userId}::uuid and l.platform = ${platform} and l.account_id = ${accountId}
+       and p.deleted_at is null`;
+  if (l) return { personId: l.person_id, via: "link" };
+  const [o] = await db2.sql`
+    select id from orbit.people
+     where user_id = ${userId}::uuid and source_account = ${sourceAccount(platform, accountId)}
+       and deleted_at is null and merged_into is null
+     order by created_at limit 1`;
+  if (o) return { personId: o.id, via: "own" };
+  const [i] = await db2.sql`
+    select pi.person_id from orbit.person_identities pi join orbit.people p on p.id = pi.person_id
+     where pi.user_id = ${userId}::uuid and pi.kind = ${identityKind(platform)} and pi.value_norm = ${accountId}
+       and p.deleted_at is null and p.merged_into is null`;
+  if (i) return { personId: i.person_id, via: "identity" };
+  return void 0;
+}
+async function ensureAccountPerson(db2, userId, a, now) {
+  const found = await personForAccount(db2, userId, a.platform, a.id);
+  if (found) return { personId: found.personId, created: false };
+  const name = (a.name ?? "").trim() || a.username || a.id;
+  const parts = name.split(/\s+/);
+  const [row] = await db2.sql`
+    insert into orbit.people (user_id, display_name, first_name, last_name, name_norm, sources, first_seen_at, listed,
+                              source_account)
+    values (${userId}::uuid, ${name}, ${parts[0] ?? null}, ${parts.slice(1).join(" ") || null}, ${name.toLowerCase()},
+            ${[a.platform]}::text[], ${now}::timestamptz, false, ${sourceAccount(a.platform, a.id)})
+    returning id`;
+  await db2.sql`
+    insert into orbit.person_identities (user_id, person_id, kind, value_norm, value_raw, source, social_account_id)
+    values (${userId}::uuid, ${row.id}::uuid, ${identityKind(a.platform)}, ${a.id}, ${a.username}, ${a.platform}, ${a.id})
+    on conflict (user_id, kind, value_norm) do nothing`;
+  return { personId: row.id, created: true };
+}
+var KNOWN = `(
+  p.linkedin_connected_on is not null
+  or (exists (select 1 from orbit.messages m where m.user_id = $1::uuid and m.direction = 'in' and m.from_person_id = p.id)
+      and exists (select 1 from orbit.messages m where m.user_id = $1::uuid and m.direction = 'out'
+                    and p.id = any(m.to_person_ids)))
+  or exists (select 1 from orbit.calendar_events e where e.user_id = $1::uuid and p.id = any(e.attendee_person_ids))
+  or exists (
+    select 1 from (
+      select l.platform, l.account_id from orbit.social_links l where l.user_id = $1::uuid and l.person_id = p.id
+      union all
+      select split_part(p.source_account, ':', 1), split_part(p.source_account, ':', 2) where p.source_account is not null
+    ) acc
+    join orbit.integration_accounts i on i.user_id = $1::uuid and i.provider = acc.platform and i.social_account_id is not null
+    where exists (select 1 from orbit.social_follows f where f.platform = acc.platform and f.owner_user_id = $1::uuid
+                    and f.follower_id = i.social_account_id and f.followed_id = acc.account_id)
+      and exists (select 1 from orbit.social_follows f where f.platform = acc.platform and f.owner_user_id = $1::uuid
+                    and f.follower_id = acc.account_id and f.followed_id = i.social_account_id)))`;
+async function knownPeople(db2, userId, ids) {
+  const rows = await db2.query(
+    `select p.id from orbit.people p
+      where p.user_id = $1::uuid and p.deleted_at is null and p.merged_into is null and not p.is_self
+        and ($2::uuid[] is null or p.id = any($2::uuid[])) and ${KNOWN}`,
+    [userId, ids ?? null]
+  );
+  return new Set(rows.map((r) => r.id));
+}
+async function listAfterExchange(db2, userId, ids) {
+  const rows = await db2.query(
+    `update orbit.people p set listed = true
+      where p.user_id = $1::uuid and not p.listed and p.deleted_at is null
+        and ($2::uuid[] is null or p.id = any($2::uuid[]))
+        and ((exists (select 1 from orbit.messages m where m.user_id = $1::uuid and m.direction = 'in' and m.from_person_id = p.id)
+              and exists (select 1 from orbit.messages m where m.user_id = $1::uuid and m.direction = 'out'
+                            and p.id = any(m.to_person_ids)))
+          or exists (select 1 from orbit.calendar_events e where e.user_id = $1::uuid and p.id = any(e.attendee_person_ids))
+          or exists (select 1 from orbit.chats c where c.user_id = $1::uuid and c.person_id = p.id)
+          or exists (select 1 from orbit.notes n where n.user_id = $1::uuid and p.id = any(n.person_ids)))
+      returning p.id`,
+    [userId, ids ?? null]
+  );
+  return rows.map((r) => r.id);
+}
+function researchLinks(sources) {
+  if (!Array.isArray(sources)) return [];
+  const out = [];
+  for (const s of sources) {
+    const url = s?.url;
+    if (typeof url === "string" && /^https?:\/\//i.test(url)) out.push(url);
+  }
+  return out;
+}
+async function socialCandidates(db2, userId, platform, o = {}) {
+  const rows = await db2.query(
+    `select ${PERSON_COLUMNS}, d.sources as research
+       from orbit.people p
+       left join orbit.dossiers d on d.user_id = p.user_id and d.person_id = p.id and d.status in ('ready', 'partial')
+      where p.user_id = $1::uuid and p.deleted_at is null and p.merged_into is null and not p.is_self
+        and coalesce(p.source_account, '') not like $2 and ($3::uuid[] is null or p.id = any($3::uuid[]))
+      limit 50000`,
+    [userId, `${platform}:%`, o.ids ?? null]
+  );
+  if (!rows.length) return [];
+  const ids = rows.map((r) => r.id);
+  const idRows = await db2.sql`
+    select person_id, kind, value_norm, value_raw from orbit.person_identities
+     where user_id = ${userId}::uuid and person_id = any(${ids}::uuid[])`;
+  const byPerson = /* @__PURE__ */ new Map();
+  for (const r of idRows) byPerson.set(r.person_id, [...byPerson.get(r.person_id) ?? [], r]);
+  const handles = await db2.sql`
+    select l.person_id, a.username from orbit.social_links l
+      left join orbit.social_accounts a on a.platform = l.platform and a.account_id = l.account_id
+     where l.user_id = ${userId}::uuid and l.platform = ${platform}`;
+  const known = await knownPeople(db2, userId);
+  return rows.map((r) => {
+    const own = byPerson.get(r.id) ?? [];
+    const person = toPerson(r, own);
+    const phones = own.filter((i) => i.kind === "phone").map((i) => i.value_raw ?? i.value_norm);
+    return {
+      person: { ...person, phones: [.../* @__PURE__ */ new Set([...person.phones ?? [], ...phones])] },
+      links: researchLinks(r.research),
+      knownToStudent: known.has(person.id),
+      otherHandles: handles.filter((h) => h.person_id === person.id && h.username).map((h) => h.username)
+    };
+  });
+}
+async function rejectedFor(db2, userId, platform, accountId) {
+  const rows = await db2.sql`
+    select person_id from orbit.social_not_same
+     where user_id = ${userId}::uuid and platform = ${platform} and account_id = ${accountId}
+    union
+    select person_id from orbit.social_match_asks
+     where user_id = ${userId}::uuid and platform = ${platform} and account_id = ${accountId} and status = 'no'`;
+  return new Set(rows.map((r) => r.person_id));
+}
+async function matchAccount(db2, userId, account2, o) {
+  const linked = await personForAccount(db2, userId, account2.platform, account2.id);
+  if (linked?.via === "link") return { kind: "none", match: { kind: "none", reason: "no_candidate" } };
+  const rejected2 = await rejectedFor(db2, userId, account2.platform, account2.id);
+  let match;
+  if (o.target) {
+    match = rejected2.has(o.target.person.id) ? { kind: "none", reason: "no_candidate" } : matchTargetAccount(account2, o.target);
+  } else {
+    const pool2 = o.candidates ?? await socialCandidates(db2, userId, account2.platform);
+    match = matchSocialAccount(account2, socialBlock(account2, pool2), { rejected: rejected2 });
+  }
+  if (match.kind === "attach") {
+    const r = await attachAccount(db2, userId, {
+      platform: account2.platform,
+      accountId: account2.id,
+      personId: match.personId,
+      via: match.via,
+      proof: match.via === "proof" ? match.proof : void 0,
+      score: match.via === "score" ? match.score : void 0,
+      now: o.now,
+      account: account2
+    });
+    if (r.status === "attached" || r.status === "exists")
+      return { kind: "attached", personId: match.personId, match };
+    const known = await knownPeople(db2, userId, [match.personId]);
+    if (!known.has(match.personId)) return { kind: "none", match, conflict: true };
+    await askAbout(db2, userId, account2, match.personId, match.via === "score" ? match.score : 0.94, {
+      proof: match.via === "proof" ? match.proof : void 0
+    });
+    return { kind: "asked", personId: match.personId, match };
+  }
+  if (match.kind === "ask") {
+    await askAbout(db2, userId, account2, match.personId, match.score, match.signals);
+    return { kind: "asked", personId: match.personId, match };
+  }
+  return { kind: "none", match };
+}
+async function askAbout(db2, userId, account2, personId, score, signals) {
+  await db2.sql`
+    insert into orbit.social_match_asks (user_id, platform, account_id, person_id, score, signals)
+    values (${userId}::uuid, ${account2.platform}, ${account2.id}, ${personId}::uuid, ${score}::real, ${signals}::jsonb)
+    on conflict (user_id, platform, account_id, person_id) do nothing`;
+}
+
+// supabase/functions/_shared/social/chats.ts
+var GROUP_MAX3 = 8;
+var SOCIAL_CLASSIFY_PER_DAY = 20;
+var WAITING_STAGES2 = ["outreach_sent", "no_response"];
+async function inPipeline(db2, userId, personId) {
+  const [r] = await db2.sql`
+    select exists (select 1 from orbit.chats c where c.user_id = ${userId}::uuid and c.person_id = ${personId}::uuid
+                     and c.archived_at is null and c.stage not in ('archived', 'declined'))
+        or exists (select 1 from orbit.drafts d where d.user_id = ${userId}::uuid and d.person_id = ${personId}::uuid
+                     and d.status = 'sent') as yes`;
+  return !!r?.yes;
+}
+async function storeSocialChat(db2, userId, platform, chat, messages, o) {
+  const participants = Math.max(chat.participants, chat.others.length + 1, 2);
+  const oneToOne = participants === 2 && chat.others.length === 1;
+  if (participants > GROUP_MAX3)
+    return {
+      skipped: "large_group",
+      oneToOne: false,
+      personIds: [],
+      pipeline: false,
+      inserted: 0,
+      inbound: []
+    };
+  const personOf = /* @__PURE__ */ new Map();
+  for (const other of chat.others) {
+    const p = await personForAccount(db2, userId, platform, other.accountId);
+    if (p) personOf.set(other.accountId, p.personId);
+  }
+  const partner = oneToOne ? chat.others[0] : void 0;
+  const [existing] = await db2.sql`
+    select t.id,
+           count(m.id) filter (where m.direction = 'in')::int as ins,
+           count(m.id) filter (where m.direction = 'out')::int as outs
+      from orbit.threads t left join orbit.messages m on m.thread_id = t.id
+     where t.user_id = ${userId}::uuid and t.provider = ${platform} and t.external_id = ${chat.chatId}
+     group by t.id`;
+  if (partner && !personOf.has(partner.accountId)) {
+    const both = ((existing?.ins ?? 0) > 0 || messages.some((m) => !m.fromStudent)) && ((existing?.outs ?? 0) > 0 || messages.some((m) => m.fromStudent));
+    if (both) {
+      const stored = (await loadAccounts(db2, platform, [partner.accountId])).get(partner.accountId);
+      const kind = stored?.kind ?? accountKind({
+        platform,
+        id: partner.accountId,
+        username: partner.username ?? "",
+        name: partner.name
+      });
+      if (kind === "person") {
+        const made = await ensureAccountPerson(
+          db2,
+          userId,
+          {
+            platform,
+            id: partner.accountId,
+            username: stored?.username ?? partner.username ?? partner.accountId,
+            name: stored?.name ?? partner.name
+          },
+          o.now
+        );
+        personOf.set(partner.accountId, made.personId);
+      }
+    }
+  }
+  const partnerPerson = partner ? personOf.get(partner.accountId) : void 0;
+  const pipeline = !!partnerPerson && await inPipeline(db2, userId, partnerPerson);
+  const others = [...new Set(personOf.values())];
+  const [thread] = await db2.sql`
+    insert into orbit.threads (user_id, provider, external_id, social_account_id, participant_count, category,
+                               is_networking, participant_person_ids)
+    values (${userId}::uuid, ${platform}, ${chat.chatId}, ${partner?.accountId ?? null}, ${participants - 1}::int,
+            ${pipeline ? "networking" : "personal"}, ${pipeline}, ${others}::uuid[])
+    on conflict (user_id, provider, external_id) do update set
+      social_account_id = coalesce(orbit.threads.social_account_id, excluded.social_account_id),
+      participant_count = greatest(orbit.threads.participant_count, excluded.participant_count),
+      is_networking = excluded.is_networking or (orbit.threads.is_networking and ${pipeline}),
+      category = excluded.category
+    returning id`;
+  const threadId = thread.id;
+  const out = {
+    threadId,
+    oneToOne,
+    ...partner ? { partner: { ...partner, personId: partnerPerson } } : {},
+    personIds: others,
+    pipeline,
+    inserted: 0,
+    inbound: []
+  };
+  for (const m of messages) {
+    const text3 = (m.text ?? "").trim();
+    const from = m.fromStudent ? null : personOf.get(m.senderAccountId) ?? (oneToOne ? partnerPerson : null);
+    const to = m.fromStudent ? others : [];
+    const stamp = m.fromStudent ? partner?.accountId ?? null : m.senderAccountId || partner?.accountId || null;
+    const words6 = pipeline && text3 ? text3 : null;
+    const [row] = await db2.sql`
+      insert into orbit.messages (user_id, thread_id, provider, external_id, direction, from_person_id, to_person_ids,
+                                  sent_at, snippet, body_text, social_account_id, has_words)
+      values (${userId}::uuid, ${threadId}::uuid, ${platform}, ${m.messageId}, ${m.fromStudent ? "out" : "in"},
+              ${from ?? null}::uuid, ${to}::uuid[], ${m.at}::timestamptz, ${words6 ? words6.slice(0, 200) : null},
+              ${words6}, ${stamp}, ${m.hasWords && !!text3})
+      on conflict (user_id, provider, external_id) do update set
+        thread_id = excluded.thread_id,
+        body_text = coalesce(orbit.messages.body_text, excluded.body_text),
+        snippet = coalesce(orbit.messages.snippet, excluded.snippet),
+        from_person_id = coalesce(orbit.messages.from_person_id, excluded.from_person_id),
+        to_person_ids = case when cardinality(orbit.messages.to_person_ids) = 0 then excluded.to_person_ids
+                             else orbit.messages.to_person_ids end,
+        social_account_id = coalesce(orbit.messages.social_account_id, excluded.social_account_id),
+        has_words = coalesce(orbit.messages.has_words, excluded.has_words)
+      returning id, (xmax = 0) as fresh`;
+    if (!row?.fresh) continue;
+    out.inserted++;
+    if (!m.fromStudent)
+      out.inbound.push({ id: row.id, externalId: m.messageId, sentAt: m.at, personId: from ?? null });
+  }
+  await db2.sql`
+    update orbit.threads t set
+      message_count = s.n, first_at = s.first_at, last_at = s.last_at, last_direction = s.dir,
+      participant_person_ids = array(select distinct x from unnest(t.participant_person_ids || ${others}::uuid[]) x
+                                      where x is not null)
+    from (select count(*)::int as n, min(sent_at) as first_at, max(sent_at) as last_at,
+                 (array_agg(direction order by sent_at desc))[1] as dir
+            from orbit.messages where thread_id = ${threadId}::uuid) s
+    where t.id = ${threadId}::uuid`;
+  if (others.length) await listAfterExchange(db2, userId, others);
+  return out;
+}
+async function afterInbound(db2, queue, userId, platform, stored, now) {
+  const out = { replied: [], classified: [] };
+  if (stored.pipeline)
+    for (const m of stored.inbound) {
+      if (!m.personId) continue;
+      const [chat] = await db2.sql`
+        select id from orbit.chats
+         where user_id = ${userId}::uuid and person_id = ${m.personId}::uuid and archived_at is null
+           and stage = any(${[...WAITING_STAGES2]}::text[])
+         order by updated_at desc limit 1`;
+      if (!chat) continue;
+      await moveChat(db2, userId, chat.id, "replied", `${platform}_reply:${m.id}`, now);
+      out.replied.push(chat.id);
+      const [n] = await db2.sql`
+        select count(*)::int as n from orbit.audit_log
+         where user_id = ${userId}::uuid and action = 'social.classify'
+           and created_at > ${new Date(now.getTime() - 864e5)}::timestamptz`;
+      if ((n?.n ?? 0) >= SOCIAL_CLASSIFY_PER_DAY) continue;
+      await db2.sql`
+        insert into orbit.audit_log (user_id, actor, action, target_table, target_id, details)
+        values (${userId}::uuid, 'system', 'social.classify', 'messages', ${m.id}, ${{ platform }}::jsonb)`;
+      await queue.enqueue({
+        kind: "classify.message",
+        userId,
+        payload: { provider: platform, messageRowId: m.id },
+        dedupeKey: `classify:${platform}:${userId}:${m.externalId}`
+      });
+      out.classified.push(m.id);
+    }
+  const people = [...new Set(stored.inbound.map((m) => m.personId).filter((x) => !!x))];
+  if (people.length)
+    await queue.enqueue({
+      kind: "score.person",
+      userId,
+      payload: { personIds: people },
+      dedupeKey: `score.person:${userId}:${platform}:${stored.inbound[0].externalId}`
+    });
+  return out;
+}
+async function fillChatWords(db2, userId, personId, queue = sqlQueue(db2)) {
+  const threads = await db2.sql`
+    update orbit.threads set is_networking = true, category = 'networking'
+     where user_id = ${userId}::uuid and provider in ('instagram', 'x') and participant_count <= 1
+       and ${personId}::uuid = any(participant_person_ids)
+    returning id, provider`;
+  await listAfterExchange(db2, userId, [personId]);
+  for (const platform of new Set(threads.map((t) => t.provider)))
+    await queue.enqueue({
+      kind: "social.words",
+      userId,
+      payload: { platform, personId },
+      dedupeKey: `social.words:${userId}:${platform}:${personId}:${(/* @__PURE__ */ new Date()).toISOString().slice(0, 15)}`
+    });
+  return threads.length;
+}
+
+// supabase/functions/_shared/social/budget.ts
+var INSTAGRAM_WINDOWS = { hour: 10, day: 100 };
+var BACKGROUND_SHARE = 0.6;
+var TARGET_SEARCH_PER_DAY = 10;
+function callerLimits(caller, windows = INSTAGRAM_WINDOWS) {
+  if (caller === "student") return { hour: windows.hour, day: windows.day };
+  const bg = {
+    hour: Math.floor(windows.hour * BACKGROUND_SHARE),
+    day: Math.floor(windows.day * BACKGROUND_SHARE)
+  };
+  return caller === "targets" ? { ...bg, callerDay: TARGET_SEARCH_PER_DAY } : bg;
+}
+function sqlSocialBudget(db2, o) {
+  const limits = callerLimits(o.caller, o.windows);
+  const budget2 = {
+    async spend(kind, opts = {}) {
+      const units = Math.max(1, Math.floor(opts.units ?? 1));
+      const [r] = await db2.sql`
+        select allowed, retry_at from orbit.social_take(
+          ${o.platform}, ${o.account}, ${kind}, ${opts.caller ?? o.caller}, ${limits.hour}::int, ${limits.day}::int,
+          ${units}::int, ${o.now().toISOString()}::timestamptz, ${limits.callerDay ?? null}::int)`;
+      if (r?.allowed) return true;
+      budget2.lastRetryAt = r?.retry_at ? new Date(r.retry_at) : void 0;
+      return false;
+    },
+    async retryAt() {
+      return budget2.lastRetryAt;
+    }
+  };
+  return budget2;
+}
+function unevenMs(baseMs, random = Math.random) {
+  return Math.round(baseMs * (0.5 + random()));
+}
+
+// supabase/functions/_shared/social/instagram.ts
+var INSTAGRAM_PAGE = { followers: 25, following: 100 };
+var INSTAGRAM_CHATS_PAGE = 50;
+var INSTAGRAM_MESSAGES_PAGE = 50;
+var InstagramCallFailed = class extends Error {
+  constructor(status, path) {
+    super(`instagram ${path}: ${status}`);
+    this.status = status;
+    this.path = path;
+  }
+};
+var str2 = (v) => typeof v === "string" && v.trim() ? v.trim() : void 0;
+var num3 = (v) => typeof v === "number" && Number.isFinite(v) ? v : typeof v === "string" && /^\d+$/.test(v) ? Number(v) : void 0;
+var bool = (v) => v === true || v === 1 || v === "true";
+function unipileIso(v) {
+  if (v === null || v === void 0 || v === "") return void 0;
+  const d = typeof v === "number" ? new Date(v) : /^\d+$/.test(String(v)) ? new Date(Number(v)) : new Date(String(v));
+  return Number.isNaN(d.getTime()) ? void 0 : d.toISOString();
+}
+function readRelation(v) {
+  if (v == null) return void 0;
+  const words6 = typeof v === "string" ? v.toLowerCase().split(/[\s,|]+/) : Array.isArray(v) ? v.map((x) => String(x).toLowerCase()) : void 0;
+  if (words6)
+    return {
+      following: words6.includes("following") || words6.includes("mutual"),
+      followedBy: words6.includes("followed_by") || words6.includes("mutual")
+    };
+  if (typeof v === "object") {
+    const o = v;
+    return { following: bool(o.following), followedBy: bool(o.followed_by ?? o.followedBy) };
+  }
+  return void 0;
+}
+function accountFromProfile(p) {
+  const id = str2(p.provider_id) ?? str2(p.id);
+  if (!id) return void 0;
+  const business = p.business ?? {};
+  const links = [
+    ...Array.isArray(p.external_links) ? p.external_links : [],
+    ...str2(p.external_url) ? [p.external_url] : []
+  ].map((l) => typeof l === "string" ? l : str2(l?.url)).filter((l) => !!l);
+  const first = str2(p.first_name);
+  const last = str2(p.last_name);
+  const picture = str2(p.profile_picture_url);
+  return {
+    platform: "instagram",
+    id,
+    username: str2(p.public_identifier) ?? str2(p.username) ?? id,
+    name: str2(p.full_name) ?? str2(p.name) ?? ([first, last].filter(Boolean).join(" ") || void 0),
+    bio: str2(p.biography) ?? str2(p.bio),
+    links,
+    email: str2(business.email) ?? str2(p.email),
+    phone: str2(business.phone_number) ?? str2(p.phone_number),
+    followers: num3(p.followers_count),
+    following: num3(p.following_count),
+    verified: bool(p.is_verified),
+    isPrivate: bool(p.is_private),
+    business: !!str2(p.category) || !!str2(business.email) || !!str2(business.phone_number) || bool(p.is_business),
+    category: str2(p.category),
+    defaultPicture: !picture || /default|anonymous/i.test(picture)
+  };
+}
+function accountFromItem(i) {
+  const id = str2(i.id) ?? str2(i.provider_id);
+  if (!id) return void 0;
+  return {
+    platform: "instagram",
+    id,
+    username: str2(i.username) ?? str2(i.public_identifier) ?? id,
+    name: str2(i.name) ?? str2(i.full_name),
+    verified: bool(i.is_verified),
+    isPrivate: bool(i.is_private),
+    defaultPicture: !str2(i.profile_picture_url)
+  };
+}
+function createInstagramAdapter(o) {
+  const base = (o.baseUrl ?? "").replace(/\/+$/, "");
+  if (!o.apiKey || !base) throw new InstagramCallFailed(503, "unconfigured");
+  const q = (params) => {
+    const s = new URLSearchParams();
+    for (const [k, v] of Object.entries(params)) if (v !== void 0 && v !== "") s.set(k, String(v));
+    const t = s.toString();
+    return t ? `?${t}` : "";
+  };
+  async function call(kind, path, init = {}) {
+    if (!await o.budget.spend(kind)) throw new SocialBudgetSpent(kind, await o.budget.retryAt?.(kind));
+    let res;
+    try {
+      res = await o.fetch(`${base}${path}`, {
+        ...init,
+        headers: { "X-API-KEY": o.apiKey, accept: "application/json", ...init.headers ?? {} },
+        signal: AbortSignal.timeout(o.timeoutMs ?? 15e3)
+      });
+    } catch {
+      throw new InstagramCallFailed("network", path.split("?")[0]);
+    }
+    const body = await res.json().catch(() => ({}));
+    if (res.status === 401) throw new SocialSignInNeeded("instagram");
+    if (res.status === 403 && /credential|checkpoint|reconnect|login/i.test(JSON.stringify(body)))
+      throw new SocialSignInNeeded("instagram");
+    if (!res.ok) throw new InstagramCallFailed(res.status, path.split("?")[0]);
+    return body;
+  }
+  const profileRead = (p) => {
+    const account2 = accountFromProfile(p);
+    if (!account2) throw new InstagramCallFailed(502, "profile");
+    const relation = readRelation(p.relationship_status);
+    const mutual = num3(p.mutual_followers_count);
+    return {
+      account: account2,
+      ...mutual !== void 0 ? { mutualCount: mutual } : {},
+      ...relation ? { relation } : {}
+    };
+  };
+  return {
+    platform: "instagram",
+    pageSize: (list2) => INSTAGRAM_PAGE[list2],
+    async me() {
+      return profileRead(await call("profile", `/api/v1/users/me${q({ account_id: o.accountId })}`));
+    },
+    async profile(ref) {
+      return profileRead(
+        await call(
+          "profile",
+          `/api/v1/users/${encodeURIComponent(ref.replace(/^@/, ""))}${q({ account_id: o.accountId })}`
+        )
+      );
+    },
+    async listPage(accountId, list2, cursor) {
+      const r = await call(
+        "list",
+        `/api/v1/users/${list2}${q({ account_id: o.accountId, user_id: accountId, cursor, limit: INSTAGRAM_PAGE[list2] })}`
+      );
+      const items = Array.isArray(r.items) ? r.items : [];
+      const accounts = items.map(accountFromItem).filter((a) => !!a);
+      return {
+        ids: accounts.map((a) => a.id),
+        accounts,
+        ...str2(r.cursor) ? { cursor: str2(r.cursor) } : {},
+        ...num3(r.total_count ?? r.total) !== void 0 ? { total: num3(r.total_count ?? r.total) } : {}
+      };
+    },
+    async chats(cursor) {
+      const r = await call(
+        "chats",
+        `/api/v1/chats${q({ account_id: o.accountId, cursor, limit: INSTAGRAM_CHATS_PAGE })}`
+      );
+      const out = [];
+      for (const c of Array.isArray(r.items) ? r.items : []) {
+        const chatId = str2(c.id);
+        if (!chatId) continue;
+        const oneToOne = c.type === 0 || c.type === "0" || c.type == null && !!str2(c.attendee_provider_id);
+        let others = [];
+        let participants = 2;
+        if (oneToOne && str2(c.attendee_provider_id)) {
+          others = [{ accountId: str2(c.attendee_provider_id), name: str2(c.name) }];
+        } else {
+          const a = await call("chats", `/api/v1/chats/${encodeURIComponent(chatId)}/attendees`);
+          const items = Array.isArray(a.items) ? a.items : [];
+          participants = Math.max(items.length, 2);
+          others = items.filter((x) => !bool(x.is_self) && str2(x.provider_id)).map((x) => ({ accountId: str2(x.provider_id), name: str2(x.name) }));
+          if (!items.some((x) => bool(x.is_self))) participants = others.length + 1;
+        }
+        out.push({ chatId, participants, others, lastAt: unipileIso(c.timestamp) });
+      }
+      return { items: out, ...str2(r.cursor) ? { cursor: str2(r.cursor) } : {} };
+    },
+    async messages(chatId, cursor) {
+      const r = await call(
+        "messages",
+        `/api/v1/chats/${encodeURIComponent(chatId)}/messages${q({ cursor, limit: INSTAGRAM_MESSAGES_PAGE })}`
+      );
+      const out = [];
+      for (const m of Array.isArray(r.items) ? r.items : []) {
+        const id = str2(m.provider_id) ?? str2(m.id);
+        const at = unipileIso(m.timestamp);
+        if (!id || !at || bool(m.is_event) || bool(m.deleted) || bool(m.hidden)) continue;
+        const text3 = str2(m.text) ?? "";
+        out.push({
+          messageId: id,
+          chatId,
+          at,
+          fromStudent: bool(m.is_sender),
+          senderAccountId: str2(m.sender_id) ?? "",
+          text: text3,
+          hasWords: !!text3
+        });
+      }
+      return { items: out, ...str2(r.cursor) ? { cursor: str2(r.cursor) } : {} };
+    },
+    async send(to, text3) {
+      const form = new FormData();
+      form.set("account_id", o.accountId);
+      form.set("text", text3);
+      if (to.chatId) {
+        const r2 = await call("send", `/api/v1/chats/${encodeURIComponent(to.chatId)}/messages`, {
+          method: "POST",
+          body: form
+        });
+        const id2 = str2(r2.message_id) ?? str2(r2.id);
+        if (!id2) throw new InstagramCallFailed(502, "send");
+        return { messageId: id2, chatId: str2(r2.chat_id) ?? to.chatId };
+      }
+      if (!to.accountId) throw new InstagramCallFailed(400, "send");
+      form.set("attendees_ids", to.accountId);
+      const r = await call("send", "/api/v1/chats", { method: "POST", body: form });
+      const id = str2(r.message_id) ?? str2(r.id);
+      const chatId = str2(r.chat_id);
+      if (!id || !chatId) throw new InstagramCallFailed(502, "send");
+      return { messageId: id, chatId };
+    }
+  };
+}
+
+// supabase/functions/_shared/social/factory.ts
+async function connectedAccount(db2, userId, platform) {
+  const [a] = await db2.sql`
+    select external_account_id, social_account_id, status, sync_state from orbit.integration_accounts
+     where user_id = ${userId}::uuid and provider = ${platform}`;
+  if (!a?.external_account_id) return void 0;
+  return {
+    externalId: a.external_account_id,
+    socialAccountId: a.social_account_id,
+    status: a.status,
+    syncState: a.sync_state?.[platform] ?? {}
+  };
+}
+var ADAPTERS = {
+  instagram: (env2, account2, budget2) => env2.unipile?.apiKey && env2.unipile.baseUrl ? createInstagramAdapter({
+    fetch: env2.fetch,
+    apiKey: env2.unipile.apiKey,
+    baseUrl: env2.unipile.baseUrl,
+    accountId: account2.externalId,
+    budget: budget2
+  }) : void 0
+};
+function adapterFor(db2, env2, platform, account2, caller) {
+  const build = ADAPTERS[platform];
+  if (!build) return void 0;
+  return build(
+    env2,
+    account2,
+    sqlSocialBudget(db2, { platform, account: account2.externalId, caller, now: env2.now })
+  );
+}
+
+// supabase/functions/_shared/social/lookup.ts
+var CALLS_PER_RUN = 3;
+async function socialSourceOn(db2, userId, platform) {
+  const [r] = await db2.sql`
+    select state from orbit.source_states where user_id = ${userId}::uuid and source = ${platform}`;
+  return r?.state === "on";
+}
+async function attachedAccount(db2, userId, platform, personId) {
+  const [l] = await db2.sql`
+    select account_id from orbit.social_links
+     where user_id = ${userId}::uuid and platform = ${platform} and person_id = ${personId}::uuid
+     order by created_at desc limit 1`;
+  return l?.account_id;
+}
+async function loadCircle(db2, userId, platform) {
+  const me = await ownAccountId(db2, userId, platform);
+  const linked = await db2.sql`
+    select l.account_id, l.person_id from orbit.social_links l join orbit.people p on p.id = l.person_id
+     where l.user_id = ${userId}::uuid and l.platform = ${platform} and p.deleted_at is null and p.merged_into is null
+    union
+    select split_part(p.source_account, ':', 2), p.id from orbit.people p
+     where p.user_id = ${userId}::uuid and p.deleted_at is null and p.merged_into is null
+       and p.source_account like ${`${platform}:%`}`;
+  const known = await knownPeople(
+    db2,
+    userId,
+    linked.map((l) => l.person_id)
+  );
+  const following = new Set(
+    me ? (await db2.sql`
+            select followed_id as id from orbit.social_follows
+             where platform = ${platform} and owner_user_id = ${userId}::uuid and follower_id = ${me}
+               and expires_at > now()`).map((r) => r.id) : []
+  );
+  const mutual = me ? await db2.sql`
+        select f.follower_id as id from orbit.social_follows f
+          join orbit.social_accounts a on a.platform = f.platform and a.account_id = f.follower_id and a.kind = 'person'
+         where f.platform = ${platform} and f.owner_user_id = ${userId}::uuid and f.followed_id = ${me}
+           and f.expires_at > now()
+           and exists (select 1 from orbit.social_follows g where g.platform = f.platform
+                         and g.owner_user_id = ${userId}::uuid and g.follower_id = ${me} and g.followed_id = f.follower_id
+                         and g.expires_at > now())` : [];
+  const byAccount = /* @__PURE__ */ new Map();
+  for (const l of linked)
+    if (known.has(l.person_id) && l.account_id !== me)
+      byAccount.set(l.account_id, {
+        accountId: l.account_id,
+        personId: l.person_id,
+        studentFollows: following.has(l.account_id)
+      });
+  for (const m of mutual) {
+    if (byAccount.has(m.id) || m.id === me) continue;
+    const p = linked.find((l) => l.account_id === m.id);
+    byAccount.set(m.id, { accountId: m.id, personId: p?.person_id ?? "", studentFollows: true });
+  }
+  const blocked = await suppressedOf(db2, platform, [...byAccount.keys()]);
+  return { circle: [...byAccount.values()].filter((c) => !blocked.has(c.accountId)), me };
+}
+async function candidateLists(db2, userId, platform, accounts, target, now) {
+  const out = /* @__PURE__ */ new Map();
+  if (!accounts.length) return out;
+  const reads = await db2.sql`
+    select account_id, list, rows_read, total, ended, read_at from orbit.social_list_reads
+     where platform = ${platform} and account_id = any(${accounts}::text[]) and owner_user_id is null
+       and expires_at > now()`;
+  const rows = await db2.sql`
+    select follower_id, followed_id, max(seen_at) as seen_at from orbit.social_follows
+     where platform = ${platform} and expires_at > now()
+       and (owner_user_id is null or owner_user_id = ${userId}::uuid)
+       and ((follower_id = any(${accounts}::text[]) and followed_id = ${target})
+         or (followed_id = any(${accounts}::text[]) and follower_id = ${target}))
+     group by follower_id, followed_id`;
+  const counts = await loadAccounts(db2, platform, accounts);
+  for (const a of accounts) {
+    const lists = {
+      followerCount: counts.get(a)?.followers ?? void 0,
+      followingCount: counts.get(a)?.following ?? void 0,
+      isPrivate: counts.get(a)?.is_private ?? void 0
+    };
+    for (const r of reads.filter((x) => x.account_id === a)) {
+      const usable3 = r.ended && now.getTime() - new Date(r.read_at).getTime() <= LIST_FRESH_MS;
+      const since = usable3 ? 0 : r.ended ? Number.POSITIVE_INFINITY : new Date(r.read_at).getTime();
+      const has2 = r.list === "followers" ? rows.some(
+        (x) => x.followed_id === a && x.follower_id === target && new Date(x.seen_at).getTime() >= since
+      ) : rows.some(
+        (x) => x.follower_id === a && x.followed_id === target && new Date(x.seen_at).getTime() >= since
+      );
+      const read = {
+        ids: new CountedSet(has2 ? [target] : [], usable3 ? r.rows_read : 0),
+        ended: usable3,
+        ...r.total != null ? { total: r.total } : {}
+      };
+      lists[r.list] = read;
+    }
+    const recent = (x) => now.getTime() - new Date(x.seen_at).getTime() <= LIST_FRESH_MS;
+    if (!lists.followers && rows.some((x) => x.followed_id === a && x.follower_id === target && recent(x)))
+      lists.followers = { ids: /* @__PURE__ */ new Set([target]), ended: false };
+    if (!lists.following && rows.some((x) => x.follower_id === a && x.followed_id === target && recent(x)))
+      lists.following = { ids: /* @__PURE__ */ new Set([target]), ended: false };
+    out.set(a, lists);
+  }
+  return out;
+}
+async function buildState(db2, userId, platform, target, saved, now) {
+  const { circle } = await loadCircle(db2, userId, platform);
+  const stored = (await loadAccounts(db2, platform, [target])).get(target);
+  if (stored?.is_private) await dropSharedLists(db2, platform, target);
+  const lists = {
+    followerCount: stored?.followers ?? void 0,
+    followingCount: stored?.following ?? void 0,
+    isPrivate: stored?.is_private ?? void 0
+  };
+  if (!stored?.is_private) {
+    lists.followers = await loadListRead(db2, platform, target, "followers", { userId, now });
+    lists.following = await loadListRead(db2, platform, target, "following", { userId, now });
+  }
+  return {
+    platform,
+    targetAccountId: target,
+    circle,
+    target: lists,
+    candidates: await candidateLists(
+      db2,
+      userId,
+      platform,
+      circle.map((c) => c.accountId),
+      target,
+      now
+    ),
+    ...saved.count !== void 0 ? { count: saved.count } : {},
+    profileRead: !!saved.profileRead,
+    tried: new Set(saved.tried ?? [])
+  };
+}
+async function runLookup(db2, adapter, lookupId, o) {
+  const [l] = await db2.sql`
+    select user_id, platform, target_person_id, target_account_id, status, state from orbit.social_lookups
+     where id = ${lookupId}::uuid`;
+  if (!l) return { status: "failed" };
+  if (l.status === "done" || l.status === "failed") return { status: l.status };
+  const userId = l.user_id;
+  const platform = l.platform;
+  const target = l.target_account_id;
+  const saved = { ...l.state ?? {} };
+  const save2 = async (status, result) => {
+    const state = status === "done" || status === "failed" ? { ...saved, count: void 0 } : saved;
+    await db2.sql`
+      update orbit.social_lookups set status = ${status}, state = ${JSON.parse(JSON.stringify(state))}::jsonb,
+             result = coalesce(${result ?? null}::jsonb, result)
+       where id = ${lookupId}::uuid`;
+  };
+  const fail = async (reason2) => {
+    await save2("failed", { bridges: [], oneWay: [], partial: true, reason: reason2 });
+    return { status: "failed" };
+  };
+  if (!await socialSourceOn(db2, userId, platform)) return fail("source_off");
+  if ((await suppressedOf(db2, platform, [target])).size) return fail("suppressed");
+  await save2("running");
+  const allowance = o.callsPerRun ?? CALLS_PER_RUN;
+  let calls = 0;
+  try {
+    for (; ; ) {
+      const s = await buildState(db2, userId, platform, target, saved, o.now);
+      const step = nextLookupStep(s);
+      if (step.do === "done") {
+        const result = await finish(db2, adapter, userId, l.target_person_id, target, platform, s, step, {
+          lookupId,
+          now: o.now
+        });
+        await save2("done", result);
+        await notify(db2, userId, l.target_person_id, platform, result, lookupId);
+        return { status: "done" };
+      }
+      if (calls >= allowance) {
+        await save2("waiting");
+        return { status: "waiting", more: true };
+      }
+      calls++;
+      saved.calls = (saved.calls ?? 0) + 1;
+      if (step.do === "profile") {
+        const read = await adapter.profile(step.accountId);
+        await upsertAccounts(db2, [read.account], { full: true, now: o.now });
+        saved.profileRead = true;
+        if (read.mutualCount !== void 0) saved.count = read.mutualCount;
+        if (read.account.isPrivate) await dropSharedLists(db2, platform, step.accountId);
+        continue;
+      }
+      const key2 = `${step.accountId}.${step.list}`;
+      const total = step.accountId === target ? step.list === "followers" ? s.target.followerCount : s.target.followingCount : step.list === "followers" ? s.candidates.get(step.accountId)?.followerCount : s.candidates.get(step.accountId)?.followingCount;
+      try {
+        const page2 = await readListPage(db2, adapter, {
+          accountId: step.accountId,
+          list: step.list,
+          owner: null,
+          readBy: userId,
+          now: o.now,
+          total
+        });
+        if (page2.ended) saved.tried = [.../* @__PURE__ */ new Set([...saved.tried ?? [], key2])];
+      } catch (e) {
+        if (e instanceof SocialBudgetSpent || e instanceof SocialSignInNeeded) throw e;
+        saved.tried = [.../* @__PURE__ */ new Set([...saved.tried ?? [], key2])];
+      }
+    }
+  } catch (e) {
+    if (e instanceof SocialBudgetSpent) {
+      await save2("waiting");
+      return { status: "waiting", retryAt: e.retryAt ?? new Date(o.now.getTime() + 36e5) };
+    }
+    if (e instanceof SocialSignInNeeded) return fail("sign_in");
+    throw e;
+  }
+}
+async function finish(db2, adapter, userId, targetPerson, target, platform, s, step, o) {
+  const statuses = /* @__PURE__ */ new Map();
+  for (const b of [...step.bridges, ...step.oneWay]) statuses.set(b.accountId, b);
+  const all = s.circle.filter((c) => c.accountId !== target);
+  const accounts = await loadAccounts(db2, platform, [target, ...all.map((c) => c.accountId)]);
+  const pairs = [];
+  const result = {
+    bridges: [],
+    oneWay: [],
+    partial: step.partial,
+    ...step.reason ? { reason: step.reason } : {}
+  };
+  if (result.reason === "none") result.partial = false;
+  for (const c of all) {
+    const st = statuses.get(c.accountId);
+    const bridge = !!st && isBridge(st);
+    const oneWay = !!st && isOneWay(st);
+    let personId = c.personId;
+    if (!personId && (bridge || oneWay)) {
+      let acct = accounts.get(c.accountId);
+      let account2 = acct ? { platform, id: c.accountId, username: acct.username, name: acct.name ?? void 0 } : { platform, id: c.accountId, username: c.accountId };
+      if (!acct?.name)
+        try {
+          const read = await adapter.profile(c.accountId);
+          await upsertAccounts(db2, [read.account], { full: true, now: o.now });
+          account2 = read.account;
+          acct = (await loadAccounts(db2, platform, [c.accountId])).get(c.accountId);
+        } catch (e) {
+          if (!(e instanceof SocialBudgetSpent)) throw e;
+        }
+      personId = (await ensureAccountPerson(db2, userId, account2, o.now)).personId;
+    }
+    if (!personId) personId = (await personForAccount(db2, userId, platform, c.accountId))?.personId ?? "";
+    if (!personId || personId === targetPerson) continue;
+    pairs.push({
+      aPerson: personId,
+      aAccount: c.accountId,
+      bPerson: targetPerson,
+      bAccount: target,
+      aFollowsB: st?.followsTarget ?? "unknown",
+      bFollowsA: st?.targetFollows ?? "unknown",
+      aFollowing: accounts.get(c.accountId)?.following ?? void 0,
+      bFollowing: accounts.get(target)?.following ?? void 0
+    });
+    if (bridge)
+      result.bridges.push({
+        personId,
+        accountId: c.accountId,
+        name: accounts.get(c.accountId)?.name ?? accounts.get(c.accountId)?.username ?? c.accountId
+      });
+    else if (oneWay)
+      result.oneWay.push({
+        personId,
+        accountId: c.accountId,
+        followerId: st.followsTarget === "yes" ? personId : targetPerson
+      });
+  }
+  await rewriteFollowTies(db2, userId, platform, pairs, { now: o.now, lookupId: o.lookupId });
+  if (result.bridges.length || result.oneWay.length)
+    await db2.sql`
+      insert into orbit.audit_log (user_id, actor, action, target_table, target_id, details)
+      values (${userId}::uuid, 'system', 'social.lookup', 'social_lookups', ${o.lookupId},
+              ${{ platform, bridges: result.bridges.length, oneWay: result.oneWay.length }}::jsonb)`;
+  return result;
+}
+async function notify(db2, userId, personId, platform, r, lookupId) {
+  const [p] = await db2.sql`
+    select display_name, first_name from orbit.people where id = ${personId}::uuid`;
+  const first = p?.first_name || p?.display_name?.split(/\s+/)[0] || "them";
+  const where = platformName(platform);
+  const names = r.bridges.map((b) => b.name.split(/\s+/)[0]);
+  const body = r.bridges.length ? `${names.slice(0, 3).join(", ")}${names.length > 3 ? ` and ${names.length - 3} more` : ""} ${names.length === 1 ? "follows" : "follow"} each other with ${first} on ${where}.` : r.reason === "private" ? `${first}'s account is private, so Orbit cannot see who they follow.` : r.partial ? `Orbit could read only part of ${first}'s lists, so this is not the whole answer yet.` : `No one you know follows each other with ${first} on ${where}.`;
+  const updated = await db2.sql`
+    update orbit.social_lookups set notified = true where id = ${lookupId}::uuid and not notified returning id`;
+  if (!updated.length) return;
+  await db2.sql`
+    insert into orbit.notifications (user_id, kind, title, body, link)
+    values (${userId}::uuid, 'social_lookup', ${`Finished checking ${where} for ${first}`}, ${body},
+            ${`/people/${personId}`})`;
+}
+
 // supabase/functions/_shared/research/web.ts
 var WEB_CACHE_MS = 7 * 864e5;
 var CLAUDE_SEARCH_USD = 0.01;
@@ -20696,6 +22575,9 @@ async function linkedinSend(s, p) {
 
 // supabase/functions/_shared/sending/send.ts
 var LINKEDIN_CONFIRM_MS = 15 * 6e4;
+var INSTAGRAM_PER_DAY = 10;
+var TAP_CHANNELS = /* @__PURE__ */ new Set(["linkedin", "instagram"]);
+var isTap = (channel) => TAP_CHANNELS.has(channel);
 var PAUSE_RECHECK_SEC = 15 * 60;
 var STUCK_SENDING_MS = 10 * 6e4;
 var UNCONFIRMED_WAIT_MS = 2 * 60 * 6e4;
@@ -20715,7 +22597,7 @@ function ownCap(settings, key2, tableCap) {
   return Number.isFinite(v) && v >= 1 ? Math.min(Math.floor(v), tableCap) : tableCap;
 }
 var hashOf = (d) => messageHash({ channel: d.channel, subject: d.subject, body: d.body });
-async function audit(db2, userId, actor, action, draftId, details) {
+async function audit2(db2, userId, actor, action, draftId, details) {
   await db2.sql`
     insert into orbit.audit_log (user_id, actor, action, target_table, target_id, details)
     values (${userId}::uuid, ${actor}, ${action}, 'drafts', ${draftId}, ${details}::jsonb)`;
@@ -20769,7 +22651,7 @@ async function sendDraft(s, draftId) {
       },
       { delaySec: Math.max(1, Math.ceil((at.getTime() - now.getTime()) / 1e3)) }
     );
-    await audit(db2, userId, "system", "draft.hold", d.id, { reason: reason2, until: iso2(at) });
+    await audit2(db2, userId, "system", "draft.hold", d.id, { reason: reason2, until: iso2(at) });
     return { status: "held", reason: reason2 };
   };
   if (askUserMarkers(`${d.subject ?? ""}
@@ -20805,7 +22687,7 @@ ${d.body}`)) {
     live = await gmailThreadHasNewerInbound(s, userId, d.thread_external_id, new Date(createdAt));
   if (replied.cancel || live) {
     await settle2("cancelled", { cancel_reason: "replied" });
-    await audit(db2, userId, "system", "draft.cancel", d.id, { reason: "replied" });
+    await audit2(db2, userId, "system", "draft.cancel", d.id, { reason: "replied" });
     return { status: "cancelled", reason: "replied" };
   }
   const approvals = await db2.sql`
@@ -20830,7 +22712,7 @@ ${d.body}`)) {
     );
   if (agentApproved && !userApproved && breakerHolds(d.kind) && goalPaused(u2.settings, d.goal_id, now)) {
     await settle2("draft", { error: "goal_paused" });
-    await audit(db2, userId, "system", "draft.hold", d.id, { reason: "goal_paused", goalId: d.goal_id });
+    await audit2(db2, userId, "system", "draft.hold", d.id, { reason: "goal_paused", goalId: d.goal_id });
     return { status: "held", reason: "goal_paused" };
   }
   const firstTouchStanding = d.auto_rung === "first_touch" && agentApproved && !userApproved;
@@ -20839,28 +22721,30 @@ ${d.body}`)) {
     if (!gate.go && "later" in gate) return later(gate.later, gate.until);
     if (!gate.go && (gate.rule === "do_not_contact" || gate.rule === "minor")) {
       await settle2("cancelled", { cancel_reason: gate.rule });
-      await audit(db2, userId, "system", "draft.blocked", d.id, { rule: gate.rule });
+      await audit2(db2, userId, "system", "draft.blocked", d.id, { rule: gate.rule });
       return { status: "cancelled", reason: gate.rule };
     }
     if (!gate.go) {
       await settle2("draft", { error: gate.hold });
-      await audit(db2, userId, "system", "draft.hold", d.id, { reason: gate.hold });
+      await audit2(db2, userId, "system", "draft.hold", d.id, { reason: gate.hold });
       return { status: "held", reason: gate.hold };
     }
   }
-  if (d.channel === "linkedin" && agentApproved && !userApproved) {
-    await settle2("draft", { error: "linkedin_never_auto" });
-    await audit(db2, userId, "system", "draft.hold", d.id, { reason: "linkedin_never_auto" });
-    return { status: "held", reason: "linkedin_never_auto" };
+  if (isTap(d.channel) && agentApproved && !userApproved) {
+    const reason2 = `${d.channel}_never_auto`;
+    await settle2("draft", { error: reason2 });
+    await audit2(db2, userId, "system", "draft.hold", d.id, { reason: reason2 });
+    return { status: "held", reason: reason2 };
   }
-  if (d.channel === "linkedin") {
+  if (isTap(d.channel)) {
     const fresh = approvals.some(
       (a) => a.action === "draft.confirm" && a.actor === "user" && a.details?.hash === hash && now.getTime() - new Date(a.created_at).getTime() <= LINKEDIN_CONFIRM_MS
     );
     if (!fresh) {
-      await settle2("draft", { error: "linkedin_needs_fresh_approval" });
-      await audit(db2, userId, "system", "draft.hold", d.id, { reason: "linkedin_needs_fresh_approval" });
-      return { status: "held", reason: "linkedin_needs_fresh_approval" };
+      const reason2 = `${d.channel}_needs_fresh_approval`;
+      await settle2("draft", { error: reason2 });
+      await audit2(db2, userId, "system", "draft.hold", d.id, { reason: reason2 });
+      return { status: "held", reason: reason2 };
     }
   }
   if (!userApproved && !agentApproved) {
@@ -20890,7 +22774,7 @@ ${d.body}`)) {
   const forbidden = violations.find((v) => v.kind === "forbidden");
   if (forbidden) {
     await settle2("cancelled", { cancel_reason: forbidden.rule });
-    await audit(db2, userId, "system", "draft.blocked", d.id, { rule: forbidden.rule });
+    await audit2(db2, userId, "system", "draft.blocked", d.id, { rule: forbidden.rule });
     return { status: "cancelled", reason: forbidden.rule };
   }
   if (violations.length) {
@@ -20905,7 +22789,7 @@ ${d.body}`)) {
     const gate = await voiceGate(s, u2, d, { firstMessage: FIRST_TOUCH_KINDS.has(d.kind) });
     if (!gate.ok) {
       await settle2("draft", { error: "voice" });
-      await audit(db2, userId, "system", "draft.hold", d.id, {
+      await audit2(db2, userId, "system", "draft.hold", d.id, {
         reason: "voice",
         text: VOICE_HOLD_REASON,
         problems: gate.problems,
@@ -20919,8 +22803,8 @@ ${d.body}`)) {
     const next = new Date(
       nextSendWindow(new Date(now.getTime() + 864e5), u2.timezone, d.channel, s.random).notBefore
     );
-    await settle2(d.channel === "linkedin" ? "draft" : "approved", { error: cap, send_at: next });
-    await audit(db2, userId, "system", "draft.hold", d.id, { reason: cap, until: iso2(next) });
+    await settle2(isTap(d.channel) ? "draft" : "approved", { error: cap, send_at: next });
+    await audit2(db2, userId, "system", "draft.hold", d.id, { reason: cap, until: iso2(next) });
     return { status: "held", reason: cap };
   }
   let out;
@@ -20937,7 +22821,7 @@ ${d.body}`)) {
     });
     if (address2 === "invalid") {
       await settle2("draft", { error: "email_invalid" });
-      await audit(db2, userId, "system", "draft.hold", d.id, { reason: "email_invalid" });
+      await audit2(db2, userId, "system", "draft.hold", d.id, { reason: "email_invalid" });
       return { status: "held", reason: "email_invalid" };
     }
     const copy = unconfirmed ? await gmailSentCopy(s, userId, {
@@ -20951,7 +22835,7 @@ ${d.body}`)) {
       const first = approvals.filter((a) => a.action === "draft.send_unconfirmed").reduce((t, a) => Math.min(t, new Date(a.created_at).getTime()), now.getTime());
       if (now.getTime() - first >= UNCONFIRMED_WAIT_MS) {
         await settle2("failed", { error: "gmail_unconfirmed" });
-        await audit(db2, userId, "system", "draft.failed", d.id, { error: "gmail_unconfirmed" });
+        await audit2(db2, userId, "system", "draft.failed", d.id, { error: "gmail_unconfirmed" });
         return { status: "failed", error: "gmail_unconfirmed" };
       }
       await settle2("approved", { error: "send_unconfirmed" });
@@ -20963,7 +22847,7 @@ ${d.body}`)) {
     const files = await draftFiles(db2, userId, d.attachments);
     if (!files) {
       await settle2("failed", { error: "attachment_missing" });
-      await audit(db2, userId, "system", "draft.failed", d.id, { error: "attachment_missing" });
+      await audit2(db2, userId, "system", "draft.failed", d.id, { error: "attachment_missing" });
       return { status: "failed", error: "attachment_missing" };
     }
     const mime = buildMime({
@@ -20987,6 +22871,14 @@ ${d.body}`)) {
       d.thread_external_id,
       files.length ? mime : void 0
     );
+  } else if (d.channel === "instagram") {
+    const ig = await instagramSend(s, userId, d, now);
+    if (!ig.ok && !ig.retry && ig.error === "instagram_busy") {
+      await settle2("draft", { error: ig.error });
+      await audit2(db2, userId, "system", "draft.hold", d.id, { reason: ig.error });
+      return { status: "held", reason: ig.error };
+    }
+    out = ig;
   } else {
     const [acct] = await db2.sql`
       select external_account_id from orbit.integration_accounts
@@ -21013,21 +22905,19 @@ ${d.body}`)) {
   }
   if (!out.ok) {
     if (out.ambiguous)
-      await audit(db2, userId, "system", "draft.send_unconfirmed", d.id, { error: out.error, at: iso2(now) });
-    if (out.retry && out.ambiguous && d.channel === "linkedin") {
-      await settle2("failed", { error: "linkedin_unconfirmed" });
-      await audit(db2, userId, "system", "draft.failed", d.id, {
-        error: "linkedin_unconfirmed",
-        cause: out.error
-      });
-      return { status: "failed", error: "linkedin_unconfirmed" };
+      await audit2(db2, userId, "system", "draft.send_unconfirmed", d.id, { error: out.error, at: iso2(now) });
+    if (out.retry && out.ambiguous && isTap(d.channel)) {
+      const error = `${d.channel}_unconfirmed`;
+      await settle2("failed", { error });
+      await audit2(db2, userId, "system", "draft.failed", d.id, { error, cause: out.error });
+      return { status: "failed", error };
     }
     if (out.retry) {
       await settle2("approved", { error: out.error });
       throw new SendRetry(out.error);
     }
     await settle2("failed", { error: out.error });
-    await audit(db2, userId, "system", "draft.failed", d.id, { error: out.error });
+    await audit2(db2, userId, "system", "draft.failed", d.id, { error: out.error });
     if (d.channel === "gmail")
       await tripBreaker(db2, userId, {
         goalId: d.goal_id,
@@ -21044,7 +22934,7 @@ ${d.body}`)) {
                             thread_external_id = ${threadId ?? null}, error = null
      where id = ${d.id}::uuid`;
   const auto = agentApproved && !userApproved;
-  await audit(db2, userId, auto ? "agent" : "user", auto ? "draft.auto_sent" : "draft.sent", d.id, {
+  await audit2(db2, userId, auto ? "agent" : "user", auto ? "draft.auto_sent" : "draft.sent", d.id, {
     channel: d.channel,
     kind: d.kind,
     ...auto ? { rung: d.auto_rung ?? d.kind, level: Number(d.autonomy_level) } : {}
@@ -21068,7 +22958,7 @@ async function afterSend(db2, userId, d, now) {
   const data = {
     ...c.data,
     lastOutboundAt: at,
-    outreachChannel: d.channel === "gmail" ? "email" : "linkedin"
+    outreachChannel: d.channel === "gmail" ? "email" : d.channel === "instagram" ? "instagram" : "linkedin"
   };
   if (!data.firstOutreachAt && d.kind !== "forwardable_blurb" && d.kind !== "intro_request")
     data.firstOutreachAt = at;
@@ -21091,7 +22981,7 @@ async function capReached(db2, userId, d, now, u2, auto) {
   const inFlight = f?.n ?? 0;
   const inFlightFirst = f?.first ?? 0;
   if (auto) {
-    if (d.channel === "linkedin") return "linkedin_never_auto";
+    if (isTap(d.channel)) return `${d.channel}_never_auto`;
     const [a] = await db2.sql`
       select count(*) filter (where created_at >= ${dayStart2}::timestamptz)::int as day,
              count(*) filter (where created_at >= ${dayStart2}::timestamptz
@@ -21114,6 +23004,14 @@ async function capReached(db2, userId, d, now, u2, auto) {
          and sent_at >= ${dayStart2}::timestamptz`;
     const cap2 = ownCap(u2.settings, "daily_send_cap_linkedin", SEND_CAPS.linkedinPerDay);
     return (r2?.n ?? 0) + inFlight >= cap2 ? "linkedin_daily_cap" : null;
+  }
+  if (d.channel === "instagram") {
+    const [r2] = await db2.sql`
+      select count(*)::int as n from orbit.drafts
+       where user_id = ${userId}::uuid and channel = 'instagram' and status = 'sent'
+         and sent_at >= ${dayStart2}::timestamptz`;
+    const cap2 = ownCap(u2.settings, "daily_send_cap_instagram", INSTAGRAM_PER_DAY);
+    return (r2?.n ?? 0) + inFlight >= cap2 ? "instagram_daily_cap" : null;
   }
   if (await salesFirstTouch(db2, d)) {
     const [r2] = await db2.sql`
@@ -21144,14 +23042,14 @@ async function recoverStuckSends(s, userId) {
     const [row] = await db2.sql`
       update orbit.drafts
          set status = ${email ? "approved" : "failed"},
-             error = ${email ? "send_interrupted" : "linkedin_unconfirmed"},
+             error = ${email ? "send_interrupted" : `${d.channel}_unconfirmed`},
              send_at = case when ${email} then ${now}::timestamptz else send_at end
        where id = ${d.id}::uuid and status = 'sending'
          and updated_at < ${new Date(now.getTime() - STUCK_SENDING_MS)}::timestamptz
       returning id`;
     if (!row) continue;
     n++;
-    await audit(db2, userId, "system", "draft.send_unconfirmed", d.id, {
+    await audit2(db2, userId, "system", "draft.send_unconfirmed", d.id, {
       error: "send_interrupted",
       at: iso2(now)
     });
@@ -21162,7 +23060,7 @@ async function recoverStuckSends(s, userId) {
         payload: { draftId: d.id },
         dedupeKey: `send:${d.id}:recover:${iso2(now)}`
       });
-    else await audit(db2, userId, "system", "draft.failed", d.id, { error: "linkedin_unconfirmed" });
+    else await audit2(db2, userId, "system", "draft.failed", d.id, { error: `${d.channel}_unconfirmed` });
   }
   return n;
 }
@@ -21194,9 +23092,66 @@ async function linkedinAttendee(db2, userId, personId, memberId) {
      order by (kind = 'unipile_attendee') desc limit 1`;
   return i?.value_raw ?? i?.value_norm ?? memberId;
 }
+async function instagramSend(s, userId, d, now) {
+  const db2 = s.db;
+  const account2 = await connectedAccount(db2, userId, "instagram");
+  if (account2?.status !== "active") return { ok: false, retry: false, error: "instagram_not_connected" };
+  const adapter = adapterFor(
+    db2,
+    { fetch: s.fetch, unipile: { apiKey: s.env.unipileKey, baseUrl: s.env.unipileBase }, now: () => now },
+    "instagram",
+    account2,
+    "student"
+  );
+  if (!adapter) return { ok: false, retry: false, error: "unipile_unconfigured" };
+  const [t] = await db2.sql`
+    select external_id, social_account_id from orbit.threads
+     where user_id = ${userId}::uuid and provider = 'instagram' and participant_count <= 1
+       and ${d.person_id}::uuid = any(participant_person_ids)
+     order by last_at desc nulls last limit 1`;
+  const chatId = d.thread_external_id ?? t?.external_id;
+  const accountId = t?.social_account_id ?? await attachedAccount(db2, userId, "instagram", d.person_id);
+  if (!chatId && !accountId) return { ok: false, retry: false, error: "instagram_no_account" };
+  try {
+    const r = await adapter.send({ chatId: chatId ?? void 0, accountId: accountId ?? void 0 }, d.body);
+    await storeSocialChat(
+      db2,
+      userId,
+      "instagram",
+      { chatId: r.chatId, participants: 2, others: accountId ? [{ accountId }] : [] },
+      [
+        {
+          messageId: r.messageId,
+          chatId: r.chatId,
+          at: now.toISOString(),
+          fromStudent: true,
+          senderAccountId: account2.socialAccountId ?? "",
+          text: d.body,
+          hasWords: true
+        }
+      ],
+      { now }
+    );
+    await db2.sql`
+      update orbit.messages set body_text = ${d.body}, snippet = ${d.body.slice(0, 200)}
+       where user_id = ${userId}::uuid and provider = 'instagram' and external_id = ${r.messageId}`;
+    await fillChatWords(db2, userId, d.person_id, s.queue).catch(() => 0);
+    return { ok: true, providerMessageId: r.messageId, chatId: r.chatId };
+  } catch (e) {
+    if (e instanceof SocialBudgetSpent) return { ok: false, retry: false, error: "instagram_busy" };
+    if (e instanceof SocialSignInNeeded) return { ok: false, retry: false, error: "instagram_sign_in" };
+    if (e instanceof InstagramCallFailed) {
+      if (e.status === "network") return { ok: false, retry: true, error: "network", ambiguous: true };
+      if (e.status === 429 || e.status >= 500)
+        return { ok: false, retry: true, error: `unipile_${e.status}`, ambiguous: e.status >= 500 };
+      return { ok: false, retry: false, error: `unipile_${e.status}` };
+    }
+    throw e;
+  }
+}
 
 // supabase/functions/_shared/cadence/cadence.ts
-var DAY13 = 864e5;
+var DAY14 = 864e5;
 function goalFrom(r) {
   const due = r.due_at instanceof Date ? r.due_at.toISOString().slice(0, 10) : r.due_at;
   return goalFromRow({ ...isoRow(r), due_at: due });
@@ -21215,7 +23170,7 @@ async function loadCadence(db2, userId, now) {
   const draftRows = await db2.sql`
     select id, person_id, chat_id, kind, status, send_at, created_at from orbit.drafts
      where user_id = ${userId}::uuid
-       and (status in ('draft', 'approved', 'scheduled', 'sending') or created_at > ${new Date(now.getTime() - 30 * DAY13)}::timestamptz)`;
+       and (status in ('draft', 'approved', 'scheduled', 'sending') or created_at > ${new Date(now.getTime() - 30 * DAY14)}::timestamptz)`;
   const drafts = draftRows.map((d) => ({
     id: d.id,
     personId: d.person_id,
@@ -21228,7 +23183,7 @@ async function loadCadence(db2, userId, now) {
   const msgRows = await db2.sql`
     select direction, sent_at, provider, from_person_id, to_person_ids from orbit.messages
      where user_id = ${userId}::uuid and not is_automated
-       and sent_at > ${new Date(now.getTime() - 365 * DAY13)}::timestamptz`;
+       and sent_at > ${new Date(now.getTime() - 365 * DAY14)}::timestamptz`;
   const messages = [];
   for (const m of msgRows) {
     const channel = m.provider === "linkedin" ? "linkedin" : "email";
@@ -21258,7 +23213,7 @@ async function loadCadence(db2, userId, now) {
            p.last_interaction_at, ts.score::int as score,
            d.content->'recently' as recently, d.updated_at as dossier_at,
            (select f.text from orbit.facts f where f.person_id = p.id and f.deleted_at is null
-               and f.created_at > ${new Date(now.getTime() - 30 * DAY13)}::timestamptz
+               and f.created_at > ${new Date(now.getTime() - 30 * DAY14)}::timestamptz
              order by f.created_at desc limit 1) as fact
       from orbit.people p
       left join orbit.tie_scores ts on ts.user_id = p.user_id and ts.person_id = p.id
@@ -21267,7 +23222,7 @@ async function loadCadence(db2, userId, now) {
        and (ts.score >= 60 or p.id = any(${wanted}::uuid[]))`;
   const people = /* @__PURE__ */ new Map();
   for (const p of peopleRows) {
-    const fresh = p.dossier_at && now.getTime() - new Date(p.dossier_at).getTime() < 60 * DAY13;
+    const fresh = p.dossier_at && now.getTime() - new Date(p.dossier_at).getTime() < 60 * DAY14;
     const recent = fresh && Array.isArray(p.recently) ? p.recently[0]?.text : void 0;
     people.set(p.id, {
       person: {
@@ -21423,7 +23378,7 @@ async function runCadence(s, userId) {
         continue;
       }
       const chat = a.chatId ? st.chatsById.get(a.chatId) : void 0;
-      if (a.kind === "bump" && pending(a.chatId, a.personId, ["bump"], 2 * DAY13)) {
+      if (a.kind === "bump" && pending(a.chatId, a.personId, ["bump"], 2 * DAY14)) {
         out.skipped++;
         continue;
       }
@@ -21431,11 +23386,11 @@ async function runCadence(s, userId) {
         out.skipped++;
         continue;
       }
-      if (a.kind === "thank_you" && pending(a.chatId, a.personId, ["thank_you"], 7 * DAY13)) {
+      if (a.kind === "thank_you" && pending(a.chatId, a.personId, ["thank_you"], 7 * DAY14)) {
         out.skipped++;
         continue;
       }
-      if (a.kind === "nurture" && pending(void 0, a.personId, ["nurture", "reengage"], 7 * DAY13)) {
+      if (a.kind === "nurture" && pending(void 0, a.personId, ["nurture", "reengage"], 7 * DAY14)) {
         out.skipped++;
         continue;
       }
@@ -22891,7 +24846,7 @@ ${dossierUser({
     model = null;
     run.partial = true;
   }
-  dossier = finish(dossier, history, thin && !linkedin.profile);
+  dossier = finish2(dossier, history, thin && !linkedin.profile);
   if (model === null)
     run.notes.push("assembled without web research or the model; check it before relying on it");
   const storedSources = sources.map(({ text: _t, ...s }) => s);
@@ -23313,7 +25268,7 @@ function dropUncited(d, allowed) {
   };
 }
 var words4 = (s) => s.trim().split(/\s+/).filter(Boolean).length;
-function finish(d, history, noOutsideSources) {
+function finish2(d, history, noOutsideSources) {
   const clean3 = (xs) => xs.filter((x) => !sensitiveCategory(x.text));
   return {
     ...d,
@@ -23594,11 +25549,11 @@ async function runReplyFunnel(s, userId, messageId, opts = {}) {
   if (!slotStart) return maybeAutoReply(db2, userId, messageId, { services: s });
   const start = new Date(slotStart);
   if (start.getTime() <= now.getTime()) return maybeAutoReply(db2, userId, messageId, { services: s });
-  const [done] = await db2.sql`
+  const [done2] = await db2.sql`
     select external_id from orbit.calendar_events
      where user_id = ${userId}::uuid and start_at = ${start}::timestamptz
        and ${m.from_person_id}::uuid = any(attendee_person_ids) and coalesce(status, 'confirmed') <> 'cancelled'`;
-  let eventId = done?.external_id;
+  let eventId = done2?.external_id;
   if (!eventId && !await slotStillFree(s, userId, start, userTz))
     return maybeAutoReply(db2, userId, messageId, { services: s });
   if (!eventId) {
@@ -24395,8 +26350,8 @@ async function sourcePeople(deps, input) {
   }
   const relaxMs = lap();
   if (deps.inPipeline) {
-    const inPipeline = deps.inPipeline;
-    const drop = await mapLimit2(merged, LOOKUP_CONCURRENCY, (c) => inPipeline(c));
+    const inPipeline2 = deps.inPipeline;
+    const drop = await mapLimit2(merged, LOOKUP_CONCURRENCY, (c) => inPipeline2(c));
     merged = merged.filter((_, i) => !drop[i]);
   }
   const dedupeMs = lap();
@@ -24573,8 +26528,8 @@ async function webCall(ctx, relax) {
   }
   if (ask.broad) ctx.notes.add("web: no place named, searched by subject alone");
   const askKey = JSON.stringify(ask);
-  const done = ctx.webDone.get(askKey);
-  if (done) return done;
+  const done2 = ctx.webDone.get(askKey);
+  if (done2) return done2;
   try {
     const r = await sourceFromWeb({
       ask,
@@ -25078,7 +27033,7 @@ async function rank(ctx, cands, batchId) {
 
 // supabase/functions/_shared/sourcing/run.ts
 var strs = (v) => Array.isArray(v) ? v.filter((x) => typeof x === "string" && !!x.trim()).map((x) => x.trim()) : [];
-var str2 = (v) => typeof v === "string" && v.trim() ? v.trim() : void 0;
+var str3 = (v) => typeof v === "string" && v.trim() ? v.trim() : void 0;
 function sourcingGoal(req, goal) {
   const f = req.filters ?? {};
   const t = goal?.targets ?? {};
@@ -25087,12 +27042,12 @@ function sourcingGoal(req, goal) {
   const orgs = f.organizations?.length ? f.organizations : strs(t.organizations);
   const keywords = f.keywords?.length ? f.keywords : strs(c.keywords);
   const location = f.locations?.[0] ?? strs(t.geographies)[0];
-  const query2 = str2(req.query);
+  const query2 = str3(req.query);
   const criteria = [
     ...query2 ? [query2] : [],
     ...strs(c.criteria),
     ...roles,
-    ...str2(c.sector) ? [str2(c.sector)] : [],
+    ...str3(c.sector) ? [str3(c.sector)] : [],
     ...strs(c.skills)
   ].slice(0, 8);
   return {
@@ -25105,13 +27060,13 @@ function sourcingGoal(req, goal) {
     roles,
     skills: strs(c.skills),
     keywords: keywords.length ? keywords : query2 ? [query2] : [],
-    sector: str2(c.sector),
-    stage: str2(c.stage),
+    sector: str3(c.sector),
+    stage: str3(c.stage),
     location,
     seniorities: f.seniority?.length ? f.seniority : strs(c.seniority),
     employeeRanges: strs(c.employee_ranges ?? c.employeeRanges),
     pastCompanies: strs(c.past_companies ?? c.pastCompanies),
-    topic: query2 ?? str2(c.topic),
+    topic: query2 ?? str3(c.topic),
     school: f.schools?.[0] ?? strs(t.schools)[0]
   };
 }
@@ -25706,7 +27661,11 @@ async function resolvePeople(db2, userId, input, opts) {
   return result;
 }
 async function absorb(ctx, survivor, loser) {
-  if (!await mergePeople(ctx.db, ctx.userId, survivor, loser)) return;
+  const merged = await mergePeople(ctx.db, ctx.userId, survivor, loser).catch((e) => {
+    if (e instanceof SocialMergeRefused) return false;
+    throw e;
+  });
+  if (!merged) return;
   ctx.result.merged.set(loser, survivor);
   const gone = ctx.people.find((p) => p.id === loser);
   const kept = ctx.people.find((p) => p.id === survivor);
@@ -25813,6 +27772,7 @@ async function suggestMerge(db2, userId, a, b, score, features) {
 var dedupeArray = (col) => `array(select distinct x from unnest(array_replace(${col}, $2::uuid, $3::uuid)) x)`;
 async function mergePeople(db2, userId, survivor, loser) {
   if (survivor === loser) return false;
+  await refuseSocialMerge(db2, userId, [survivor, loser]);
   const [a, b] = survivor < loser ? [survivor, loser] : [loser, survivor];
   const blocked = await db2.sql`
     select 1 from orbit.do_not_merge where user_id = ${userId}::uuid
@@ -26038,7 +27998,7 @@ async function ingestEvents(d, events) {
 }
 
 // supabase/functions/orbit-worker/handlers/calendar.ts
-var DAY14 = 864e5;
+var DAY15 = 864e5;
 var PAGES_MAX = 20;
 function calendarHandlers(deps) {
   const google = googleFor(deps);
@@ -26066,8 +28026,8 @@ function calendarHandlers(deps) {
           try {
             page2 = await api.events(
               syncToken ? { syncToken, pageToken } : {
-                timeMin: new Date(now.getTime() - 730 * DAY14).toISOString(),
-                timeMax: new Date(now.getTime() + 90 * DAY14).toISOString(),
+                timeMin: new Date(now.getTime() - 730 * DAY15).toISOString(),
+                timeMax: new Date(now.getTime() + 90 * DAY15).toISOString(),
                 pageToken
               }
             );
@@ -26588,15 +28548,15 @@ async function nameFromContacts(db2, userId, contacts) {
     [userId, [...names.keys()]]
   );
   let renamed = 0;
-  const done = /* @__PURE__ */ new Set();
+  const done2 = /* @__PURE__ */ new Set();
   for (const r of rows) {
     const id = r.id;
-    if (done.has(id)) continue;
+    if (done2.has(id)) continue;
     const person = toPerson(r, [{ kind: "email", value_norm: r.addr }]);
     if (!isPlaceholderName(person)) continue;
     const n = parseName(names.get(r.addr));
     if (!n.full) continue;
-    done.add(id);
+    done2.add(id);
     await db2.sql`
       update orbit.people set display_name = ${n.full}, first_name = ${n.first || null}, last_name = ${n.last || null},
              name_norm = ${n.normalized}
@@ -27455,9 +29415,9 @@ async function pool(items, n, fn) {
   if (failed) throw failed.e;
   return out;
 }
-var GROUP_MAX3 = 8;
+var GROUP_MAX4 = 8;
 var CLASSIFY_WINDOW_DAYS = 180;
-var DAY15 = 864e5;
+var DAY16 = 864e5;
 var addrs = (raw) => parseAddressList(raw).map(parseAddress).filter((a) => a.email.includes("@"));
 function parseMail(m, self) {
   const labels = m.labelIds ?? [];
@@ -27549,7 +29509,7 @@ async function ingestGmail(d, refs) {
   for (const [tid, ms2] of byThread) {
     const human = ms2.some((m) => !m.automated);
     const addrsOn = others(ms2);
-    const candidate = existingThreads.get(tid)?.is_networking || human && (ms2.some((m) => m.outbound) || addrsOn.size <= GROUP_MAX3 && [...addrsOn].some((a) => knownAddrs.has(a)));
+    const candidate = existingThreads.get(tid)?.is_networking || human && (ms2.some((m) => m.outbound) || addrsOn.size <= GROUP_MAX4 && [...addrsOn].some((a) => knownAddrs.has(a)));
     if (!candidate) continue;
     candidates.add(tid);
   }
@@ -27651,7 +29611,7 @@ async function ingestGmail(d, refs) {
         inserted++;
         stats.stored++;
         if (m.outbound && !m.automated && exemplarText(body)) sent.push({ id: row.id, body });
-        if (networking && !m.outbound && !m.automated && d.now.getTime() - new Date(m.sentAt).getTime() < CLASSIFY_WINDOW_DAYS * DAY15)
+        if (networking && !m.outbound && !m.automated && d.now.getTime() - new Date(m.sentAt).getTime() < CLASSIFY_WINDOW_DAYS * DAY16)
           classify.push({ id: row.id, externalId: m.id });
       } else if (body !== null)
         await db2.sql`
@@ -27771,7 +29731,7 @@ var DEEP_CAP = 5e4;
 var CHAIN_DELAY_SEC = 5;
 var RECOVERY_DAYS = 30;
 var HISTORY_PAGES_MAX = 20;
-var DAY16 = 864e5;
+var DAY17 = 864e5;
 var GMAIL_SCOPE = /gmail\.readonly$/;
 async function account(job, ctx) {
   const userId = job.userId;
@@ -27786,7 +29746,7 @@ function phaseQuery(bf, now) {
   if (bf.phase === "recent") return `newer_than:${bf.days ?? 90}d -in:chats`;
   const sec = (ms2) => Math.floor(ms2 / 1e3);
   const t = now.getTime();
-  return `after:${sec(t - 730 * DAY16)} before:${sec(t - 90 * DAY16)} -in:chats`;
+  return `after:${sec(t - 730 * DAY17)} before:${sec(t - 90 * DAY17)} -in:chats`;
 }
 var reauth = async (fn) => {
   try {
@@ -27874,12 +29834,12 @@ function gmailHandlers(deps) {
       { db: ctx.db, queue: ctx.queue, api, userId, now, jobKey: `gmail:${job.msgId}`, history: true, embed },
       refs
     );
-    const done = bf.done + refs.length;
+    const done2 = bf.done + refs.length;
     const estimate = page2.resultSizeEstimate ?? null;
     const total = bf.total ?? (estimate === null ? null : bf.phase === "deep" ? Math.min(estimate, DEEP_CAP) : estimate);
     let next;
-    const more = !!page2.nextPageToken && !(bf.phase === "deep" && done >= DEEP_CAP);
-    if (more) next = { ...bf, pageToken: page2.nextPageToken, done, total };
+    const more = !!page2.nextPageToken && !(bf.phase === "deep" && done2 >= DEEP_CAP);
+    if (more) next = { ...bf, pageToken: page2.nextPageToken, done: done2, total };
     else if (bf.phase === "recent" && !bf.recovery)
       next = { phase: "deep", pageToken: null, done: 0, total: null };
     else if (bf.recovery && bf.then) next = bf.then;
@@ -27887,8 +29847,8 @@ function gmailHandlers(deps) {
       next = {
         phase: "complete",
         pageToken: null,
-        done,
-        total: total === null ? done : Math.max(total, done),
+        done: done2,
+        total: total === null ? done2 : Math.max(total, done2),
         ...bf.phase === "deep" && page2.nextPageToken ? { capped: true } : {}
       };
     await patchSyncState(
@@ -28131,7 +30091,7 @@ function createUnipileSync(opts) {
         headers: headers3(),
         body: {
           type: "create",
-          providers: ["LINKEDIN"],
+          providers: [b.provider ?? "LINKEDIN"],
           api_url: base,
           expiresOn: b.expiresOn,
           name: b.name,
@@ -28344,8 +30304,8 @@ var JOB_BUDGET_MS = 6e4;
 var RELATION_PAGES_PER_JOB = 2;
 var CHATS_PER_JOB = 4;
 var FRESH_FOR_MS = 7 * 864e5;
-var DAY17 = 864e5;
-var str3 = (v) => typeof v === "string" && v ? v : void 0;
+var DAY18 = 864e5;
+var str4 = (v) => typeof v === "string" && v ? v : void 0;
 function linkedinHandlers(deps) {
   const sleep = deps.sleep ?? ((ms2) => new Promise((r) => setTimeout(r, ms2)));
   const unipile = createUnipileSync({
@@ -28368,7 +30328,7 @@ function linkedinHandlers(deps) {
       const now = ctx.now();
       const touched = /* @__PURE__ */ new Set();
       if (job.payload.mode === "relation") {
-        const memberId = str3(job.payload.providerId);
+        const memberId = str4(job.payload.providerId);
         if (!memberId) return;
         const r = await ingestRelations(
           ctx.db,
@@ -28376,10 +30336,10 @@ function linkedinHandlers(deps) {
           [
             {
               memberId,
-              publicIdentifier: str3(job.payload.publicIdentifier),
-              profileUrl: str3(job.payload.profileUrl),
-              fullName: str3(job.payload.name),
-              headline: str3(job.payload.headline),
+              publicIdentifier: str4(job.payload.publicIdentifier),
+              profileUrl: str4(job.payload.profileUrl),
+              fullName: str4(job.payload.name),
+              headline: str4(job.payload.headline),
               connectedAt: now.toISOString()
             }
           ],
@@ -28486,7 +30446,7 @@ function linkedinHandlers(deps) {
           });
           continue;
         }
-        const after = state.short && state.chatsAfter ? state.chatsAfter : new Date(now.getTime() - 730 * DAY17).toISOString();
+        const after = state.short && state.chatsAfter ? state.chatsAfter : new Date(now.getTime() - 730 * DAY18).toISOString();
         const page2 = await call(() => unipile.chats(accountId, { after, cursor: state.chatsCursor }));
         if (!page2.ok) throw new Error(`unipile chats ${page2.status ?? page2.kind}`);
         const chats = page2.value.items;
@@ -28541,7 +30501,7 @@ function linkedinHandlers(deps) {
           );
           if (stored.inserted) for (const p of stored.personIds) touched.add(p);
           for (const m of stored.inbound)
-            if (now.getTime() - new Date(m.sentAt).getTime() < CLASSIFY_WINDOW_DAYS * DAY17)
+            if (now.getTime() - new Date(m.sentAt).getTime() < CLASSIFY_WINDOW_DAYS * DAY18)
               await ctx.queue.enqueue({
                 kind: "classify.message",
                 userId,
@@ -30554,7 +32514,7 @@ async function runLogoSweep(db2, deps, now) {
   const live = [...accounts];
   const queue = [...todo];
   let turn = 0;
-  let settled = 0;
+  let settled2 = 0;
   while (queue.length) {
     if (deps.clock() >= deadline) {
       result.stopped = "time";
@@ -30581,10 +32541,10 @@ async function runLogoSweep(db2, deps, now) {
     if (r.stopped) live.splice(live.indexOf(accountId), 1);
     if (r.answer || r.looked && !r.stopped) {
       queue.shift();
-      settled++;
+      settled2++;
     }
   }
-  result.remaining = todo.length - settled;
+  result.remaining = todo.length - settled2;
   return result;
 }
 var USER_SHARE = 0.7;
@@ -31078,20 +33038,413 @@ function isoWeek(d) {
   return `${year}-${String(week).padStart(2, "0")}`;
 }
 
-// supabase/functions/_shared/social/adapter.ts
-var SocialSignInNeeded = class extends Error {
-  constructor(platform) {
-    super(`${platform} needs you to sign in again`);
-    this.platform = platform;
+// supabase/functions/_shared/social/remove.ts
+async function removeSocialRows(db2, userId, platform, o = {}) {
+  return db2.begin(async (tx) => {
+    const msgs = await tx.sql`
+      delete from orbit.messages where user_id = ${userId}::uuid and provider = ${platform} returning id`;
+    await tx.sql`delete from orbit.threads where user_id = ${userId}::uuid and provider = ${platform}`;
+    const ties = await tx.sql`
+      delete from orbit.ties where user_id = ${userId}::uuid
+         and kind in (${mutualKind(platform)}, ${followKind(platform)}) returning id`;
+    await tx.sql`
+      delete from orbit.person_identities
+       where user_id = ${userId}::uuid and (kind = ${identityKind(platform)} or source = ${platform})`;
+    await tx.sql`
+      delete from orbit.facts where user_id = ${userId}::uuid and source_table like ${`social:${platform}:%`}`;
+    await tx.sql`delete from orbit.social_links where user_id = ${userId}::uuid and platform = ${platform}`;
+    await tx.sql`delete from orbit.social_match_asks where user_id = ${userId}::uuid and platform = ${platform}`;
+    await tx.sql`delete from orbit.social_lookups where user_id = ${userId}::uuid and platform = ${platform}`;
+    await tx.sql`delete from orbit.social_follows where owner_user_id = ${userId}::uuid and platform = ${platform}`;
+    await tx.sql`delete from orbit.social_list_reads where owner_user_id = ${userId}::uuid and platform = ${platform}`;
+    if (o.ownAccountId) {
+      await tx.sql`
+        delete from orbit.social_follows where platform = ${platform}
+           and (follower_id = ${o.ownAccountId} or followed_id = ${o.ownAccountId})`;
+      await tx.sql`
+        delete from orbit.social_list_reads where platform = ${platform} and account_id = ${o.ownAccountId}`;
+    }
+    const people = await tx.sql`
+      delete from orbit.people p
+       where p.user_id = ${userId}::uuid and p.source_account like ${`${platform}:%`}
+         and not exists (select 1 from orbit.chats c where c.user_id = p.user_id and c.person_id = p.id)
+         and not exists (select 1 from orbit.notes n where n.user_id = p.user_id and p.id = any(n.person_ids))
+      returning p.id`;
+    await tx.sql`
+      update orbit.people set source_account = null, listed = true
+       where user_id = ${userId}::uuid and source_account like ${`${platform}:%`}`;
+    await tx.sql`
+      update orbit.drafts set status = 'draft', error = 'source_removed'
+       where user_id = ${userId}::uuid and channel = ${platform} and status in ('approved', 'scheduled', 'failed')`;
+    await tx.sql`
+      insert into orbit.audit_log (user_id, actor, action, target_table, details)
+      values (${userId}::uuid, 'system', 'social.removed', 'social_links',
+              ${{ platform, messages: msgs.length, people: people.length, ties: ties.length }}::jsonb)`;
+    return { messages: msgs.length, people: people.length, ties: ties.length };
+  });
+}
+
+// supabase/functions/_shared/social/firstDays.ts
+var SYNC_CALLS_PER_RUN = 3;
+var FIRST_CHATS = 60;
+var DAY19 = 864e5;
+async function patchSocialState(db2, userId, platform, patch) {
+  await db2.sql`
+    update orbit.integration_accounts
+       set sync_state = coalesce(sync_state, '{}'::jsonb)
+             || jsonb_build_object(${platform}::text,
+                  coalesce(sync_state -> ${platform}::text, '{}'::jsonb) || ${JSON.parse(JSON.stringify(patch))}::jsonb)
+     where user_id = ${userId}::uuid and provider = ${platform}`;
+}
+async function runSocialSync(db2, queue, adapters, userId, o) {
+  const a = adapters.background;
+  const platform = a.platform;
+  const [row] = await db2.sql`
+    select social_account_id, status, sync_state from orbit.integration_accounts
+     where user_id = ${userId}::uuid and provider = ${platform}`;
+  if (!row) return { next: "stop", reason: "not_connected" };
+  let state = { ...row.sync_state?.[platform] ?? {} };
+  const save2 = async (patch) => {
+    state = { ...state, ...patch };
+    await patchSocialState(db2, userId, platform, patch);
+  };
+  const allowance = o.callsPerRun ?? SYNC_CALLS_PER_RUN;
+  let calls = 0;
+  let me = row.social_account_id;
+  try {
+    while (calls < allowance) {
+      const stage = state.stage ?? "profile";
+      if (stage === "profile") {
+        calls++;
+        const read = await a.me();
+        const id = read.account.id;
+        if (me && me !== id) {
+          if (!state.replace) {
+            await save2({ pending: { socialAccountId: id, username: read.account.username } });
+            await db2.sql`
+              update orbit.integration_accounts set status = 'error', last_error = 'different_account'
+               where user_id = ${userId}::uuid and provider = ${platform}`;
+            return { next: "stop", reason: "different_account" };
+          }
+          await removeSocialRows(db2, userId, platform, { ownAccountId: me });
+        }
+        await upsertAccounts(db2, [read.account], { full: true, now: o.now });
+        await db2.sql`
+          update orbit.integration_accounts
+             set social_account_id = ${id}, status = 'active', last_error = null
+           where user_id = ${userId}::uuid and provider = ${platform}`;
+        me = id;
+        await save2({
+          stage: "chats",
+          replace: false,
+          pending: null,
+          chatsCursor: null,
+          chatQueue: [],
+          chatsRead: 0
+        });
+        continue;
+      }
+      if (!me) {
+        await save2({ stage: "profile" });
+        continue;
+      }
+      if (stage === "chats") {
+        const queued = state.chatQueue ?? [];
+        if (!queued.length) {
+          if (state.chatsListed || (state.chatsRead ?? 0) >= FIRST_CHATS) {
+            await save2({ stage: "following", chatQueue: [] });
+            continue;
+          }
+          calls++;
+          const page3 = await a.chats(state.chatsCursor ?? void 0);
+          await save2({
+            chatQueue: page3.items.filter((c) => c.participants <= GROUP_MAX3),
+            chatsCursor: page3.cursor ?? null,
+            chatsListed: !page3.cursor
+          });
+          continue;
+        }
+        const chat = queued[0];
+        calls++;
+        const msgs = await a.messages(chat.chatId);
+        const stored = await storeSocialChat(db2, userId, platform, chat, msgs.items, { now: o.now });
+        if (stored.partner) await offerToMatching(queue, userId, platform, [stored.partner.accountId]);
+        if (stored.personIds.length)
+          await queue.enqueue({
+            kind: "score.person",
+            userId,
+            payload: { personIds: stored.personIds },
+            dedupeKey: `score.person:${userId}:${platform}:chat:${chat.chatId}`
+          });
+        await save2({ chatQueue: queued.slice(1), chatsRead: (state.chatsRead ?? 0) + 1 });
+        continue;
+      }
+      if (stage === "following" || stage === "followers") {
+        calls++;
+        const page3 = await readListPage(db2, a, {
+          accountId: me,
+          list: stage,
+          owner: userId,
+          readBy: userId,
+          now: o.now,
+          keepAccounts: true
+        });
+        if (!page3.ended) continue;
+        if (stage === "following") {
+          await save2({ stage: "followers" });
+          continue;
+        }
+        await offerFollowBacks(db2, queue, userId, platform, me);
+        await save2({ stage: "refresh", syncedAt: o.now.toISOString(), refreshList: "following" });
+        return { next: "later" };
+      }
+      const list2 = state.refreshList ?? "following";
+      calls++;
+      const page2 = await readListPage(db2, a, {
+        accountId: me,
+        list: list2,
+        owner: userId,
+        readBy: userId,
+        now: o.now,
+        keepAccounts: true
+      });
+      if (page2.ended) {
+        await save2({ refreshList: list2 === "following" ? "followers" : "following" });
+        await offerFollowBacks(db2, queue, userId, platform, me);
+      }
+      await listAfterExchange(db2, userId);
+      if (adapters.targets && (!state.targetsAt || o.now.getTime() - Date.parse(state.targetsAt) >= DAY19)) {
+        await save2({ targetsAt: o.now.toISOString() });
+        await matchTargets(db2, adapters.targets, userId, { now: o.now });
+      }
+      return { next: "later" };
+    }
+    return { next: "soon" };
+  } catch (e) {
+    if (e instanceof SocialBudgetSpent)
+      return { next: "retry", retryAt: e.retryAt ?? new Date(o.now.getTime() + 36e5) };
+    if (e instanceof SocialSignInNeeded) {
+      await db2.sql`
+        update orbit.integration_accounts set status = 'needs_reauth', last_error = 'sign_in'
+         where user_id = ${userId}::uuid and provider = ${platform} and status <> 'needs_reauth'`;
+      return { next: "stop", reason: "sign_in" };
+    }
+    throw e;
   }
-};
-var SocialBudgetSpent = class extends Error {
-  constructor(kind, retryAt) {
-    super(`budget spent for ${kind}`);
-    this.kind = kind;
-    this.retryAt = retryAt;
+}
+async function offerToMatching(queue, userId, platform, accountIds) {
+  if (!accountIds.length) return;
+  await queue.enqueue({
+    kind: "social.match",
+    userId,
+    payload: { platform, accountIds },
+    dedupeKey: `social.match:${userId}:${platform}:${[...accountIds].sort().join(",").slice(0, 400)}`
+  });
+}
+async function offerFollowBacks(db2, queue, userId, platform, me) {
+  const rows = await db2.sql`
+    select f.follower_id as id from orbit.social_follows f
+      join orbit.social_accounts a on a.platform = f.platform and a.account_id = f.follower_id and a.kind = 'person'
+     where f.platform = ${platform} and f.owner_user_id = ${userId}::uuid and f.followed_id = ${me}
+       and exists (select 1 from orbit.social_follows g where g.platform = f.platform and g.owner_user_id = ${userId}::uuid
+                     and g.follower_id = ${me} and g.followed_id = f.follower_id)
+       and not exists (select 1 from orbit.social_links l where l.user_id = ${userId}::uuid and l.platform = f.platform
+                         and l.account_id = f.follower_id)`;
+  for (let i = 0; i < rows.length; i += 50)
+    await offerToMatching(
+      queue,
+      userId,
+      platform,
+      rows.slice(i, i + 50).map((r) => r.id)
+    );
+}
+async function targetsOf(db2, userId, platform) {
+  return db2.sql`
+    select distinct c.person_id as id from orbit.chats c
+     where c.user_id = ${userId}::uuid and c.archived_at is null
+       and c.stage in ('identified', 'warming', 'outreach_sent', 'no_response')
+       and not exists (select 1 from orbit.social_links l where l.user_id = ${userId}::uuid and l.platform = ${platform}
+                         and l.person_id = c.person_id)
+     limit 20`;
+}
+async function matchTargets(db2, adapter, userId, o) {
+  const platform = adapter.platform;
+  const people = await targetsOf(db2, userId, platform);
+  if (!people.length) return 0;
+  const candidates = await socialCandidates(db2, userId, platform, { ids: people.map((p) => p.id) });
+  let attached = 0;
+  try {
+    for (const c of candidates) {
+      const handles = /* @__PURE__ */ new Set();
+      for (const l of c.links ?? []) {
+        const h = handleFromLink(l, platform);
+        if (h) handles.add(normalizeHandle(h));
+        for (const x of handlesIn(l, platform)) handles.add(x);
+      }
+      const found = [];
+      for (const h of handles) found.push((await adapter.profile(h)).account);
+      if (!found.length && adapter.search) found.push(...await adapter.search(c.person.displayName));
+      for (const account2 of found) {
+        await upsertAccounts(db2, [account2], { full: true, now: o.now });
+        const r = await matchAccount(db2, userId, account2, { now: o.now, target: c });
+        if (r.kind === "attached") {
+          attached++;
+          break;
+        }
+      }
+    }
+  } catch (e) {
+    if (!(e instanceof SocialBudgetSpent)) throw e;
   }
-};
+  return attached;
+}
+
+// supabase/functions/orbit-worker/handlers/social.ts
+var MIN = 6e4;
+var SYNC_SOON_MS = 8 * MIN;
+var SYNC_LATER_MS = 6 * 60 * MIN;
+var LOOKUP_SOON_MS = 2 * MIN;
+var isPlatform = (v) => v === "instagram" || v === "x";
+function socialHandlers(deps) {
+  const random = deps.random ?? Math.random;
+  const env2 = (ctx) => ({ fetch: deps.fetch ?? fetch, unipile: deps.unipile, now: ctx.now });
+  async function ready(job, ctx, platform) {
+    const userId = job.userId;
+    if (!userId) throw new JobSkipped("no_user");
+    if (!await socialSourceOn(ctx.db, userId, platform)) throw new JobSkipped("source_off");
+    const account2 = await connectedAccount(ctx.db, userId, platform);
+    if (!account2) throw new JobSkipped("not_connected");
+    return { userId, account: account2 };
+  }
+  const later = async (ctx, job, ms2, tag) => {
+    const at = new Date(ctx.now().getTime() + ms2);
+    await ctx.queue.enqueue(
+      {
+        kind: job.kind,
+        userId: job.userId,
+        payload: job.payload,
+        dedupeKey: `${job.kind}:${job.userId}:${tag}:${job.msgId}:${at.toISOString()}`
+      },
+      { delaySec: Math.max(1, Math.ceil(ms2 / 1e3)) }
+    );
+  };
+  return {
+    "sync.instagram": async (job, ctx) => {
+      const { userId, account: account2 } = await ready(job, ctx, "instagram");
+      if (account2.status !== "active" && account2.status !== "connecting")
+        throw new JobSkipped(account2.status);
+      const background = adapterFor(ctx.db, env2(ctx), "instagram", account2, "background");
+      if (!background) throw new JobSkipped("unconfigured");
+      const targets = adapterFor(ctx.db, env2(ctx), "instagram", account2, "targets");
+      const out = await runSocialSync(ctx.db, ctx.queue, { background, targets }, userId, { now: ctx.now() });
+      if (out.next === "soon") await later(ctx, job, unevenMs(SYNC_SOON_MS, random), "soon");
+      else if (out.next === "later") await later(ctx, job, unevenMs(SYNC_LATER_MS, random), "later");
+      else if (out.next === "retry")
+        await later(
+          ctx,
+          job,
+          Math.max(MIN, out.retryAt.getTime() - ctx.now().getTime()) + unevenMs(5 * MIN, random),
+          "retry"
+        );
+      else if (out.reason === "sign_in")
+        await ctx.db.sql`
+          insert into orbit.notifications (user_id, kind, title, body, link)
+          select ${userId}::uuid, 'instagram_sign_in', 'Sign in to Instagram again',
+                 'Instagram asked to confirm it is you. Orbit carries on with everything else meanwhile.', '/settings'
+           where not exists (select 1 from orbit.notifications where user_id = ${userId}::uuid
+                               and kind = 'instagram_sign_in' and read_at is null)`;
+    },
+    "social.match": async (job, ctx) => {
+      const platform = job.payload.platform;
+      if (!isPlatform(platform)) throw new JobSkipped("bad_platform");
+      const { userId, account: account2 } = await ready(job, ctx, platform);
+      const ids = (Array.isArray(job.payload.accountIds) ? job.payload.accountIds : []).filter(
+        (x) => typeof x === "string" && !!x
+      );
+      if (!ids.length) return;
+      const adapter = adapterFor(ctx.db, env2(ctx), platform, account2, "background");
+      const pool2 = await socialCandidates(ctx.db, userId, platform);
+      const stored = await loadAccounts(ctx.db, platform, ids);
+      const left = [];
+      for (const [i, id] of ids.entries()) {
+        let row = stored.get(id);
+        let acct = row ? accountOfRow(platform, row) : void 0;
+        const worth = !acct || socialBlock(acct, pool2).length > 0;
+        if (worth && adapter && !row?.bio) {
+          try {
+            const read = await adapter.profile(id);
+            await upsertAccounts(ctx.db, [read.account], { full: true, now: ctx.now() });
+            acct = read.account;
+            row = (await loadAccounts(ctx.db, platform, [id])).get(id);
+          } catch (e) {
+            if (!(e instanceof SocialBudgetSpent)) throw e;
+            left.push(...ids.slice(i));
+            break;
+          }
+        }
+        if (!acct || !row) continue;
+        await matchAccount(ctx.db, userId, acct, { now: ctx.now(), candidates: pool2 });
+      }
+      if (left.length)
+        await ctx.queue.enqueue(
+          {
+            kind: "social.match",
+            userId,
+            payload: { platform, accountIds: left },
+            dedupeKey: `social.match:${userId}:${platform}:left:${ctx.now().toISOString()}`
+          },
+          { delaySec: Math.ceil(unevenMs(60 * MIN, random) / 1e3) }
+        );
+    },
+    "social.words": async (job, ctx) => {
+      const platform = job.payload.platform;
+      const personId = job.payload.personId;
+      if (!isPlatform(platform) || typeof personId !== "string") throw new JobSkipped("bad_payload");
+      const { userId, account: account2 } = await ready(job, ctx, platform);
+      const adapter = adapterFor(ctx.db, env2(ctx), platform, account2, "student");
+      if (!adapter) throw new JobSkipped("unconfigured");
+      const threads = await ctx.db.sql`
+        select external_id, social_account_id, participant_count from orbit.threads
+         where user_id = ${userId}::uuid and provider = ${platform} and participant_count <= 1
+           and ${personId}::uuid = any(participant_person_ids) and social_account_id is not null`;
+      try {
+        for (const t of threads) {
+          const page2 = await adapter.messages(t.external_id);
+          await storeSocialChat(
+            ctx.db,
+            userId,
+            platform,
+            { chatId: t.external_id, participants: 2, others: [{ accountId: t.social_account_id }] },
+            page2.items,
+            { now: ctx.now() }
+          );
+        }
+      } catch (e) {
+        if (!(e instanceof SocialBudgetSpent)) throw e;
+        await later(ctx, job, Math.max(MIN, (e.retryAt?.getTime() ?? 0) - ctx.now().getTime()), "retry");
+      }
+    },
+    "social.lookup": async (job, ctx) => {
+      const lookupId = job.payload.lookupId;
+      if (typeof lookupId !== "string") throw new JobSkipped("bad_payload");
+      const [l] = await ctx.db.sql`
+        select user_id, platform from orbit.social_lookups where id = ${lookupId}::uuid`;
+      if (!l) return;
+      const account2 = await connectedAccount(ctx.db, l.user_id, l.platform);
+      const adapter = account2 ? adapterFor(ctx.db, env2(ctx), l.platform, account2, "student") : void 0;
+      if (!adapter) {
+        await ctx.db.sql`
+          update orbit.social_lookups set status = 'failed', result = ${{ bridges: [], oneWay: [], partial: true, reason: "sign_in" }}::jsonb
+           where id = ${lookupId}::uuid and status not in ('done', 'failed')`;
+        return;
+      }
+      const out = await runLookup(ctx.db, adapter, lookupId, { now: ctx.now() });
+      if (out.status !== "waiting") return;
+      const ms2 = out.retryAt ? Math.max(MIN, out.retryAt.getTime() - ctx.now().getTime()) + unevenMs(2 * MIN, random) : unevenMs(LOOKUP_SOON_MS, random);
+      await later(ctx, job, ms2, "resume");
+    }
+  };
+}
 
 // supabase/functions/_shared/social/x/adapter.ts
 var X_USER_FIELDS = [
@@ -31469,11 +33822,6 @@ function xTokens(db2, vault, cfg, userId, now = () => /* @__PURE__ */ new Date()
   };
 }
 
-// packages/core/src/entity/social.ts
-var COMMON_SURNAMES = new Set(
-  "smith johnson williams brown jones garcia miller davis rodriguez martinez hernandez lopez gonzalez wilson anderson thomas taylor moore jackson martin lee perez thompson white harris sanchez clark ramirez lewis robinson walker young allen king wright scott torres nguyen hill flores green adams nelson baker hall rivera campbell mitchell carter roberts gomez phillips evans turner diaz parker cruz edwards collins reyes stewart morris morales murphy cook rogers gutierrez ortiz morgan cooper peterson bailey reed kelly howard ramos kim cox ward richardson watson brooks chavez wood james bennett gray mendoza ruiz hughes price alvarez castillo sanders patel myers long ross foster jimenez chen wang li zhang liu singh kumar shah khan park choi wu huang lin yang zhao zhou xu sun ma zhu hu guo he gao luo tran le pham kaur gupta sharma ali ahmed hassan cohen ng wong chan cheung lam ho tan lim".split(/\s+/)
-);
-
 // supabase/functions/_shared/social/x/lists.ts
 async function expireX(db2, now = /* @__PURE__ */ new Date()) {
   const f = await db2.sql`
@@ -31534,11 +33882,11 @@ function xSpend(db2, o) {
       return void 0;
     }
     charged = roundUsd(charged + cost);
-    let settled = false;
+    let settled2 = false;
     return {
       async settle(unitsUsed) {
-        if (settled) return;
-        settled = true;
+        if (settled2) return;
+        settled2 = true;
         const used = Math.max(0, Math.min(n, Math.floor(unitsUsed)));
         const actual = xPrice(kind, used);
         charged = roundUsd(charged - cost + actual);
@@ -31727,6 +34075,10 @@ async function enqueueDueXDms(db2, cfg, now = /* @__PURE__ */ new Date()) {
 }
 
 // supabase/functions/orbit-worker/handlers/x.ts
+var personalLaneXWriter = (now) => async (db2, userId, { chat, message }) => {
+  const stored = await storeSocialChat(db2, userId, "x", chat, [message], { now: now() });
+  await afterInbound(db2, sqlQueue(db2), userId, "x", stored, now());
+};
 function xHandlers(deps) {
   const x = deps.x;
   return {
@@ -31736,13 +34088,13 @@ function xHandlers(deps) {
         await enqueueDueXDms(ctx.db, x.cfg, ctx.now());
         return;
       }
-      if (!x.writer) throw new JobSkipped("no_writer");
+      const writer = x.writer ?? personalLaneXWriter(ctx.now);
       if (!job.payload.force && !await xDmsDue(ctx.db, job.userId, x.cfg, ctx.now()))
         throw new JobSkipped("not_due");
       const client = await xAdapterFor(ctx.db, job.userId, { ...x, now: ctx.now }, { caller: "dms" });
       if (!client) throw new JobSkipped("not_connected");
       try {
-        await pollXDms(ctx.db, job.userId, { adapter: client.adapter, writer: x.writer, now: ctx.now });
+        await pollXDms(ctx.db, job.userId, { adapter: client.adapter, writer, now: ctx.now });
       } catch (e) {
         if (e instanceof SocialSignInNeeded) throw new JobSkipped("needs_reauth");
         throw e;
@@ -31780,6 +34132,7 @@ function defaultHandlers(opts = {}) {
     ...searchHandlers(deps),
     ...costHandlers(deps.cost),
     ...unipileHandlers(deps),
+    ...socialHandlers(deps),
     ...classifyHandlers(deps, agents),
     ...agentHandlers(agents),
     ...xHandlers(deps)
@@ -31918,7 +34271,7 @@ async function runTick(deps) {
       values (${q}, ${msgId}::bigint, ${JSON.stringify(message ?? null)}::jsonb, ${error})`;
     s.deadLettered++;
   }
-  async function finish2(runId, status, started, error) {
+  async function finish3(runId, status, started, error) {
     await db2.sql`update orbit.job_runs set status = ${status}, error = ${error ?? null},
       duration_ms = ${Math.round(clock() - started)}::int, finished_at = ${now()}::timestamptz
       where id = ${runId}::bigint`;
@@ -31975,7 +34328,7 @@ async function runTick(deps) {
     try {
       await handler(job, { db: db2, queue, now });
       await queue.delete(q, msgId);
-      await finish2(runId, "ok", started);
+      await finish3(runId, "ok", started);
       s.ok++;
       await log2.log({
         fn: "orbit-worker",
@@ -31987,7 +34340,7 @@ async function runTick(deps) {
     } catch (e) {
       if (e instanceof NotImplemented || e instanceof JobSkipped) {
         await queue.delete(q, msgId);
-        await finish2(runId, "skipped", started, e instanceof JobSkipped ? e.reason : "not_implemented");
+        await finish3(runId, "skipped", started, e instanceof JobSkipped ? e.reason : "not_implemented");
         s.skipped++;
         await log2.log({
           fn: "orbit-worker",
@@ -32000,7 +34353,7 @@ async function runTick(deps) {
       }
       const paid = isPaidError(e);
       const err = short(e);
-      await finish2(runId, "error", started, paid ? `${PAID_ERROR_PREFIX}${err}`.slice(0, 500) : err);
+      await finish3(runId, "error", started, paid ? `${PAID_ERROR_PREFIX}${err}`.slice(0, 500) : err);
       s.failed++;
       const paidFailures = paid ? Number(
         (await db2.sql`

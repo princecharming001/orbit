@@ -4064,6 +4064,311 @@ var DistillS = z3.object({
 });
 var JudgeS = z3.object({ score: z3.number().int().min(0).max(3), reason: z3.string().max(400) });
 
+// supabase/functions/_shared/queue.ts
+var KIND_QUEUE = {
+  "send.draft": "orbit_send",
+  "classify.message": "orbit_classify",
+  "rapport.backfill": "orbit_classify",
+  "sync.gmail.backfill": "orbit_sync",
+  "sync.gmail.incremental": "orbit_sync",
+  "sync.calendar": "orbit_sync",
+  "sync.contacts": "orbit_sync",
+  "sync.linkedin": "orbit_sync",
+  // plan 43: Instagram's first days and refreshes, the words of a chat that entered the pipeline
+  "sync.instagram": "orbit_sync",
+  "social.words": "orbit_sync",
+  "cadence.user": "orbit_cadence",
+  "funnel.reply": "orbit_classify",
+  "outcomes.roll": "orbit_cadence",
+  "voice.card": "orbit_cadence",
+  "voice.distill": "orbit_cadence",
+  "health.snapshot": "orbit_cadence",
+  "score.user": "orbit_score",
+  "score.page": "orbit_score",
+  "score.ties": "orbit_score",
+  "score.person": "orbit_score",
+  friend_shares_refresh: "orbit_score",
+  "enrich.dossier": "orbit_enrich",
+  "source.search": "orbit_enrich",
+  hop_evidence: "orbit_enrich",
+  "voice.embed_sent": "orbit_enrich",
+  company_facts_sync: "orbit_enrich",
+  search_census: "orbit_enrich",
+  search_reading: "orbit_enrich",
+  // plan 35 B4: the weekly shared logo pass (userId null)
+  "logos.sweep": "orbit_enrich",
+  // plan 37 follow-up: every company in one student's network, from their own LinkedIn account
+  "logos.user": "orbit_enrich",
+  "cost.digest": "orbit_enrich",
+  "unipile.reconcile": "orbit_enrich",
+  "linkedin.park": "orbit_enrich",
+  "claude.batch.poll": "orbit_enrich",
+  // plan 43: accounts offered to matching, and who could introduce the student to a target
+  "social.match": "orbit_enrich",
+  "social.lookup": "orbit_enrich",
+  noop: "orbit_enrich"
+};
+function queueFor(kind) {
+  const q = KIND_QUEUE[kind];
+  if (!q) throw new Error(`no queue for job kind ${kind}`);
+  return q;
+}
+function sqlQueue(db2) {
+  return {
+    async enqueue(msg, opts = {}) {
+      const queue = opts.queue ?? queueFor(msg.kind);
+      const [row] = await db2.sql`
+        select orbit.enqueue(${queue}, ${msg}::jsonb, ${Math.max(0, Math.floor(opts.delaySec ?? 0))}::int) as id`;
+      return row?.id == null ? null : Number(row.id);
+    },
+    async read(queue, vtSec, qty) {
+      const rows = await db2.sql`
+        select msg_id, read_ct, enqueued_at, message from pgmq.read(${queue}, ${vtSec}::int, ${qty}::int)`;
+      return rows.map((r) => ({
+        msgId: Number(r.msg_id),
+        readCt: Number(r.read_ct),
+        enqueuedAt: new Date(r.enqueued_at),
+        message: r.message
+      }));
+    },
+    async delete(queue, msgId) {
+      await db2.sql`select pgmq.delete(${queue}, ${msgId}::bigint)`;
+    },
+    async archive(queue, msgId) {
+      await db2.sql`select pgmq.archive(${queue}, ${msgId}::bigint)`;
+    },
+    async setVt(queue, msgId, vtSec) {
+      await db2.sql`select msg_id from pgmq.set_vt(${queue}, ${msgId}::bigint, ${Math.floor(vtSec)}::int)`;
+    }
+  };
+}
+
+// packages/core/src/entity/social.ts
+var PUBLIC_FIGURE_FOLLOWERS = 5e4;
+var BRAND_WORDS = /\b(official|shop|store|studio|studios|agency|co\b|inc\b|llc|ltd|brand|boutique|restaurant|cafe|bakery|club|team|news|magazine|media|records|fitness|salon|clinic|church|foundation|university|college|school|memes?|daily|fan ?page|fanpage|updates)\b/i;
+function accountKind(a) {
+  if (a.verified || (a.followers ?? 0) >= PUBLIC_FIGURE_FOLLOWERS) return "public_figure";
+  const name = (a.name ?? "").trim();
+  if (a.business && (!name || BRAND_WORDS.test(name) || BRAND_WORDS.test(a.category ?? ""))) return "brand";
+  if (name && BRAND_WORDS.test(name)) return "brand";
+  const words = name.replace(/[^\p{L}\s'.-]/gu, " ").split(/\s+/).filter((w) => w.length > 1);
+  if (words.length >= 2) return "person";
+  if (a.business) return "brand";
+  return "unknown";
+}
+var COMMON_SURNAMES = new Set(
+  "smith johnson williams brown jones garcia miller davis rodriguez martinez hernandez lopez gonzalez wilson anderson thomas taylor moore jackson martin lee perez thompson white harris sanchez clark ramirez lewis robinson walker young allen king wright scott torres nguyen hill flores green adams nelson baker hall rivera campbell mitchell carter roberts gomez phillips evans turner diaz parker cruz edwards collins reyes stewart morris morales murphy cook rogers gutierrez ortiz morgan cooper peterson bailey reed kelly howard ramos kim cox ward richardson watson brooks chavez wood james bennett gray mendoza ruiz hughes price alvarez castillo sanders patel myers long ross foster jimenez chen wang li zhang liu singh kumar shah khan park choi wu huang lin yang zhao zhou xu sun ma zhu hu guo he gao luo tran le pham kaur gupta sharma ali ahmed hassan cohen ng wong chan cheung lam ho tan lim".split(/\s+/)
+);
+
+// supabase/functions/_shared/social/graph.ts
+var DAY = 864e5;
+var GRAPH_KEEP_MS = 30 * DAY;
+var LIST_FRESH_MS = 7 * DAY;
+async function loadAccounts(db2, platform, ids) {
+  if (!ids.length) return /* @__PURE__ */ new Map();
+  const rows = await db2.sql`
+    select account_id, username, name, bio, links, email, phone, followers, following, verified, is_private, business,
+           category, picture_hash, default_picture, kind, read_at
+      from orbit.social_accounts where platform = ${platform} and account_id = any(${ids}::text[])`;
+  return new Map(rows.map((r) => [r.account_id, r]));
+}
+
+// supabase/functions/_shared/social/keys.ts
+var identityKind = (p) => `${p}_id`;
+var sourceAccount = (p, id) => `${p}:${id}`;
+
+// packages/core/src/graph/orgSize.ts
+var KNOWN_SIZES = {};
+var add = (bucket, names) => {
+  for (const n of names) KNOWN_SIZES[normalizeCompany(n)] = bucket;
+};
+add("10001+", [
+  "Google",
+  "Alphabet",
+  "Meta",
+  "Facebook",
+  "Amazon",
+  "Amazon Web Services",
+  "AWS",
+  "Microsoft",
+  "Apple",
+  "Netflix",
+  "Oracle",
+  "Salesforce",
+  "Adobe",
+  "IBM",
+  "Intel",
+  "NVIDIA",
+  "Cisco",
+  "Uber",
+  "Tesla",
+  "SpaceX",
+  "Qualcomm",
+  "Intuit",
+  "PayPal",
+  "ServiceNow",
+  "Workday",
+  "VMware",
+  "Dell",
+  "HP",
+  "Accenture",
+  "Deloitte",
+  "PwC",
+  "PricewaterhouseCoopers",
+  "EY",
+  "Ernst & Young",
+  "KPMG",
+  "McKinsey & Company",
+  "McKinsey",
+  "Boston Consulting Group",
+  "BCG",
+  "Bain & Company",
+  "Bain",
+  "Booz Allen Hamilton",
+  "Capgemini",
+  "Goldman Sachs",
+  "JPMorgan Chase",
+  "JP Morgan",
+  "J.P. Morgan",
+  "Morgan Stanley",
+  "Bank of America",
+  "Citi",
+  "Citigroup",
+  "Wells Fargo",
+  "Barclays",
+  "UBS",
+  "Deutsche Bank",
+  "HSBC",
+  "BlackRock",
+  "Fidelity Investments",
+  "Vanguard",
+  "Capital One",
+  "American Express",
+  "Visa",
+  "Mastercard",
+  "Charles Schwab",
+  "State Street",
+  "Procter & Gamble",
+  "PepsiCo",
+  "Coca-Cola",
+  "Johnson & Johnson",
+  "Pfizer",
+  "Walmart",
+  "Target",
+  "Nike",
+  "Disney",
+  "The Walt Disney Company",
+  "Comcast",
+  "Verizon",
+  "AT&T",
+  "Boeing",
+  "Lockheed Martin",
+  "General Electric",
+  "GE",
+  "General Motors",
+  "Ford",
+  "ByteDance",
+  "TikTok",
+  "Samsung",
+  "Bloomberg",
+  "LinkedIn",
+  "Shopify",
+  "Booking.com"
+]);
+add("5001-10000", [
+  "Stripe",
+  "Airbnb",
+  "Snap",
+  "Snapchat",
+  "Spotify",
+  "Block",
+  "Square",
+  "DoorDash",
+  "Lyft",
+  "Datadog",
+  "Atlassian",
+  "Palantir",
+  "Coinbase",
+  "Robinhood",
+  "Pinterest",
+  "Dropbox",
+  "Instacart",
+  "Lazard",
+  "Evercore",
+  "Jane Street",
+  "Citadel",
+  "Two Sigma",
+  "Oliver Wyman",
+  "LEK Consulting",
+  "Kearney"
+]);
+add("1001-5000", [
+  "Figma",
+  "Anthropic",
+  "OpenAI",
+  "Ramp",
+  "Brex",
+  "Databricks",
+  "Snowflake",
+  "Plaid",
+  "Notion",
+  "Duolingo",
+  "Reddit",
+  "Discord",
+  "Scale AI",
+  "Asana",
+  "Airtable",
+  "Hudson River Trading",
+  "DE Shaw",
+  "D. E. Shaw",
+  "Point72",
+  "Centerview Partners",
+  "PJT Partners",
+  "Moelis",
+  "Moelis & Company",
+  "Perella Weinberg",
+  "Guggenheim Partners",
+  "Blackstone",
+  "KKR",
+  "Apollo",
+  "Carlyle"
+]);
+add("501-1000", ["Vercel", "Retool", "Rippling", "Mercury", "Jump Trading", "Optiver", "Five Rings"]);
+add("201-500", ["Linear", "Sequoia Capital", "Andreessen Horowitz", "a16z", "Benchmark", "Accel"]);
+
+// packages/core/src/scoring/strength.ts
+var ENGAGEMENT = /* @__PURE__ */ new Set([
+  "linkedin_comment_in",
+  "linkedin_comment_out",
+  "linkedin_reaction_in"
+]);
+var AMBIENT = /* @__PURE__ */ new Set(["email_cc", "linkedin_connected", ...ENGAGEMENT]);
+
+// packages/core/src/graph/ties.ts
+var DAY2 = 864e5;
+var YEAR = 365.25 * DAY2;
+
+// supabase/functions/_shared/social/links.ts
+var SocialMergeRefused = class extends Error {
+  constructor(personId) {
+    super(
+      "This person has an Instagram or X account attached, so they are not merged. Attach the account to the other person instead."
+    );
+    this.personId = personId;
+    this.name = "SocialMergeRefused";
+  }
+};
+async function refuseSocialMerge(db2, userId, personIds) {
+  const [r] = await db2.sql`
+    select l.person_id::text as id from orbit.social_links l
+     where l.user_id = ${userId}::uuid and l.person_id = any(${personIds}::uuid[])
+    union all
+    select p.id::text from orbit.people p
+     where p.user_id = ${userId}::uuid and p.id = any(${personIds}::uuid[]) and p.source_account is not null
+    limit 1`;
+  if (r) throw new SocialMergeRefused(r.id);
+}
+
 // packages/core/src/server/mappers.ts
 var u = (v) => v === null ? void 0 : v;
 function compact(o) {
@@ -4382,7 +4687,11 @@ async function resolvePeople(db2, userId, input, opts) {
   return result;
 }
 async function absorb(ctx, survivor, loser) {
-  if (!await mergePeople(ctx.db, ctx.userId, survivor, loser)) return;
+  const merged = await mergePeople(ctx.db, ctx.userId, survivor, loser).catch((e) => {
+    if (e instanceof SocialMergeRefused) return false;
+    throw e;
+  });
+  if (!merged) return;
   ctx.result.merged.set(loser, survivor);
   const gone = ctx.people.find((p) => p.id === loser);
   const kept = ctx.people.find((p) => p.id === survivor);
@@ -4489,6 +4798,7 @@ async function suggestMerge(db2, userId, a, b, score, features) {
 var dedupeArray = (col) => `array(select distinct x from unnest(array_replace(${col}, $2::uuid, $3::uuid)) x)`;
 async function mergePeople(db2, userId, survivor, loser) {
   if (survivor === loser) return false;
+  await refuseSocialMerge(db2, userId, [survivor, loser]);
   const [a, b] = survivor < loser ? [survivor, loser] : [loser, survivor];
   const blocked = await db2.sql`
     select 1 from orbit.do_not_merge where user_id = ${userId}::uuid
@@ -4603,177 +4913,6 @@ async function mergePeople(db2, userId, survivor, loser) {
     return true;
   });
 }
-
-// packages/core/src/graph/orgSize.ts
-var KNOWN_SIZES = {};
-var add = (bucket, names) => {
-  for (const n of names) KNOWN_SIZES[normalizeCompany(n)] = bucket;
-};
-add("10001+", [
-  "Google",
-  "Alphabet",
-  "Meta",
-  "Facebook",
-  "Amazon",
-  "Amazon Web Services",
-  "AWS",
-  "Microsoft",
-  "Apple",
-  "Netflix",
-  "Oracle",
-  "Salesforce",
-  "Adobe",
-  "IBM",
-  "Intel",
-  "NVIDIA",
-  "Cisco",
-  "Uber",
-  "Tesla",
-  "SpaceX",
-  "Qualcomm",
-  "Intuit",
-  "PayPal",
-  "ServiceNow",
-  "Workday",
-  "VMware",
-  "Dell",
-  "HP",
-  "Accenture",
-  "Deloitte",
-  "PwC",
-  "PricewaterhouseCoopers",
-  "EY",
-  "Ernst & Young",
-  "KPMG",
-  "McKinsey & Company",
-  "McKinsey",
-  "Boston Consulting Group",
-  "BCG",
-  "Bain & Company",
-  "Bain",
-  "Booz Allen Hamilton",
-  "Capgemini",
-  "Goldman Sachs",
-  "JPMorgan Chase",
-  "JP Morgan",
-  "J.P. Morgan",
-  "Morgan Stanley",
-  "Bank of America",
-  "Citi",
-  "Citigroup",
-  "Wells Fargo",
-  "Barclays",
-  "UBS",
-  "Deutsche Bank",
-  "HSBC",
-  "BlackRock",
-  "Fidelity Investments",
-  "Vanguard",
-  "Capital One",
-  "American Express",
-  "Visa",
-  "Mastercard",
-  "Charles Schwab",
-  "State Street",
-  "Procter & Gamble",
-  "PepsiCo",
-  "Coca-Cola",
-  "Johnson & Johnson",
-  "Pfizer",
-  "Walmart",
-  "Target",
-  "Nike",
-  "Disney",
-  "The Walt Disney Company",
-  "Comcast",
-  "Verizon",
-  "AT&T",
-  "Boeing",
-  "Lockheed Martin",
-  "General Electric",
-  "GE",
-  "General Motors",
-  "Ford",
-  "ByteDance",
-  "TikTok",
-  "Samsung",
-  "Bloomberg",
-  "LinkedIn",
-  "Shopify",
-  "Booking.com"
-]);
-add("5001-10000", [
-  "Stripe",
-  "Airbnb",
-  "Snap",
-  "Snapchat",
-  "Spotify",
-  "Block",
-  "Square",
-  "DoorDash",
-  "Lyft",
-  "Datadog",
-  "Atlassian",
-  "Palantir",
-  "Coinbase",
-  "Robinhood",
-  "Pinterest",
-  "Dropbox",
-  "Instacart",
-  "Lazard",
-  "Evercore",
-  "Jane Street",
-  "Citadel",
-  "Two Sigma",
-  "Oliver Wyman",
-  "LEK Consulting",
-  "Kearney"
-]);
-add("1001-5000", [
-  "Figma",
-  "Anthropic",
-  "OpenAI",
-  "Ramp",
-  "Brex",
-  "Databricks",
-  "Snowflake",
-  "Plaid",
-  "Notion",
-  "Duolingo",
-  "Reddit",
-  "Discord",
-  "Scale AI",
-  "Asana",
-  "Airtable",
-  "Hudson River Trading",
-  "DE Shaw",
-  "D. E. Shaw",
-  "Point72",
-  "Centerview Partners",
-  "PJT Partners",
-  "Moelis",
-  "Moelis & Company",
-  "Perella Weinberg",
-  "Guggenheim Partners",
-  "Blackstone",
-  "KKR",
-  "Apollo",
-  "Carlyle"
-]);
-add("501-1000", ["Vercel", "Retool", "Rippling", "Mercury", "Jump Trading", "Optiver", "Five Rings"]);
-add("201-500", ["Linear", "Sequoia Capital", "Andreessen Horowitz", "a16z", "Benchmark", "Accel"]);
-
-// packages/core/src/scoring/strength.ts
-var ENGAGEMENT = /* @__PURE__ */ new Set([
-  "linkedin_comment_in",
-  "linkedin_comment_out",
-  "linkedin_reaction_in"
-]);
-var AMBIENT = /* @__PURE__ */ new Set(["email_cc", "linkedin_connected", ...ENGAGEMENT]);
-
-// packages/core/src/graph/ties.ts
-var DAY = 864e5;
-var YEAR = 365.25 * DAY;
 
 // supabase/functions/_shared/ingest/ties.ts
 var INTERACTION_KINDS = [
@@ -4928,77 +5067,253 @@ async function storeChat(db2, userId, self, chat, messages, now, ownIds) {
   return out;
 }
 
-// supabase/functions/_shared/queue.ts
-var KIND_QUEUE = {
-  "send.draft": "orbit_send",
-  "classify.message": "orbit_classify",
-  "rapport.backfill": "orbit_classify",
-  "sync.gmail.backfill": "orbit_sync",
-  "sync.gmail.incremental": "orbit_sync",
-  "sync.calendar": "orbit_sync",
-  "sync.contacts": "orbit_sync",
-  "sync.linkedin": "orbit_sync",
-  "cadence.user": "orbit_cadence",
-  "funnel.reply": "orbit_classify",
-  "outcomes.roll": "orbit_cadence",
-  "voice.card": "orbit_cadence",
-  "voice.distill": "orbit_cadence",
-  "health.snapshot": "orbit_cadence",
-  "score.user": "orbit_score",
-  "score.page": "orbit_score",
-  "score.ties": "orbit_score",
-  "score.person": "orbit_score",
-  friend_shares_refresh: "orbit_score",
-  "enrich.dossier": "orbit_enrich",
-  "source.search": "orbit_enrich",
-  hop_evidence: "orbit_enrich",
-  "voice.embed_sent": "orbit_enrich",
-  company_facts_sync: "orbit_enrich",
-  search_census: "orbit_enrich",
-  search_reading: "orbit_enrich",
-  // plan 35 B4: the weekly shared logo pass (userId null)
-  "logos.sweep": "orbit_enrich",
-  // plan 37 follow-up: every company in one student's network, from their own LinkedIn account
-  "logos.user": "orbit_enrich",
-  "cost.digest": "orbit_enrich",
-  "unipile.reconcile": "orbit_enrich",
-  "linkedin.park": "orbit_enrich",
-  "claude.batch.poll": "orbit_enrich",
-  noop: "orbit_enrich"
-};
-function queueFor(kind) {
-  const q = KIND_QUEUE[kind];
-  if (!q) throw new Error(`no queue for job kind ${kind}`);
-  return q;
+// packages/core/src/suggestions/calendar.ts
+var MONTH_NAME = "(jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|june?|july?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\\b\\.?";
+var NAMED_DATE = new RegExp(`\\b${MONTH_NAME} (\\d{1,2})(?:st|nd|rd|th)?\\b`);
+var NAMED_DATE_REV = new RegExp(`\\b(\\d{1,2})(?:st|nd|rd|th)? (?:of )?${MONTH_NAME}`);
+var MONTH_EDGE = new RegExp(
+  `\\b(?:(end|start|beginning) of (?:(the|this|next) month\\b|${MONTH_NAME})|next month\\b)`
+);
+
+// supabase/functions/_shared/slots/slots.ts
+var STATE_TTL_MS = 10 * 6e4;
+async function moveChat(db2, userId, chatId, to, reason, now, actor = "system") {
+  const [c] = await db2.sql`
+    select stage from orbit.chats where id = ${chatId}::uuid and user_id = ${userId}::uuid`;
+  if (!c || c.stage === to) return;
+  await db2.sql`
+    update orbit.chats set stage = ${to}, stage_entered_at = ${now}::timestamptz
+     where id = ${chatId}::uuid and user_id = ${userId}::uuid`;
+  await db2.sql`
+    insert into orbit.stage_events (user_id, chat_id, from_stage, to_stage, status, actor, reason, decided_at)
+    values (${userId}::uuid, ${chatId}::uuid, ${c.stage}, ${to}, 'applied', ${actor}, ${reason}, ${now}::timestamptz)`;
 }
-function sqlQueue(db2) {
-  return {
-    async enqueue(msg, opts = {}) {
-      const queue = opts.queue ?? queueFor(msg.kind);
-      const [row] = await db2.sql`
-        select orbit.enqueue(${queue}, ${msg}::jsonb, ${Math.max(0, Math.floor(opts.delaySec ?? 0))}::int) as id`;
-      return row?.id == null ? null : Number(row.id);
-    },
-    async read(queue, vtSec, qty) {
-      const rows = await db2.sql`
-        select msg_id, read_ct, enqueued_at, message from pgmq.read(${queue}, ${vtSec}::int, ${qty}::int)`;
-      return rows.map((r) => ({
-        msgId: Number(r.msg_id),
-        readCt: Number(r.read_ct),
-        enqueuedAt: new Date(r.enqueued_at),
-        message: r.message
-      }));
-    },
-    async delete(queue, msgId) {
-      await db2.sql`select pgmq.delete(${queue}, ${msgId}::bigint)`;
-    },
-    async archive(queue, msgId) {
-      await db2.sql`select pgmq.archive(${queue}, ${msgId}::bigint)`;
-    },
-    async setVt(queue, msgId, vtSec) {
-      await db2.sql`select msg_id from pgmq.set_vt(${queue}, ${msgId}::bigint, ${Math.floor(vtSec)}::int)`;
+
+// supabase/functions/_shared/social/people.ts
+async function personForAccount(db2, userId, platform, accountId) {
+  const [l] = await db2.sql`
+    select l.person_id from orbit.social_links l join orbit.people p on p.id = l.person_id
+     where l.user_id = ${userId}::uuid and l.platform = ${platform} and l.account_id = ${accountId}
+       and p.deleted_at is null`;
+  if (l) return { personId: l.person_id, via: "link" };
+  const [o] = await db2.sql`
+    select id from orbit.people
+     where user_id = ${userId}::uuid and source_account = ${sourceAccount(platform, accountId)}
+       and deleted_at is null and merged_into is null
+     order by created_at limit 1`;
+  if (o) return { personId: o.id, via: "own" };
+  const [i] = await db2.sql`
+    select pi.person_id from orbit.person_identities pi join orbit.people p on p.id = pi.person_id
+     where pi.user_id = ${userId}::uuid and pi.kind = ${identityKind(platform)} and pi.value_norm = ${accountId}
+       and p.deleted_at is null and p.merged_into is null`;
+  if (i) return { personId: i.person_id, via: "identity" };
+  return void 0;
+}
+async function ensureAccountPerson(db2, userId, a, now) {
+  const found = await personForAccount(db2, userId, a.platform, a.id);
+  if (found) return { personId: found.personId, created: false };
+  const name = (a.name ?? "").trim() || a.username || a.id;
+  const parts = name.split(/\s+/);
+  const [row] = await db2.sql`
+    insert into orbit.people (user_id, display_name, first_name, last_name, name_norm, sources, first_seen_at, listed,
+                              source_account)
+    values (${userId}::uuid, ${name}, ${parts[0] ?? null}, ${parts.slice(1).join(" ") || null}, ${name.toLowerCase()},
+            ${[a.platform]}::text[], ${now}::timestamptz, false, ${sourceAccount(a.platform, a.id)})
+    returning id`;
+  await db2.sql`
+    insert into orbit.person_identities (user_id, person_id, kind, value_norm, value_raw, source, social_account_id)
+    values (${userId}::uuid, ${row.id}::uuid, ${identityKind(a.platform)}, ${a.id}, ${a.username}, ${a.platform}, ${a.id})
+    on conflict (user_id, kind, value_norm) do nothing`;
+  return { personId: row.id, created: true };
+}
+async function listAfterExchange(db2, userId, ids) {
+  const rows = await db2.query(
+    `update orbit.people p set listed = true
+      where p.user_id = $1::uuid and not p.listed and p.deleted_at is null
+        and ($2::uuid[] is null or p.id = any($2::uuid[]))
+        and ((exists (select 1 from orbit.messages m where m.user_id = $1::uuid and m.direction = 'in' and m.from_person_id = p.id)
+              and exists (select 1 from orbit.messages m where m.user_id = $1::uuid and m.direction = 'out'
+                            and p.id = any(m.to_person_ids)))
+          or exists (select 1 from orbit.calendar_events e where e.user_id = $1::uuid and p.id = any(e.attendee_person_ids))
+          or exists (select 1 from orbit.chats c where c.user_id = $1::uuid and c.person_id = p.id)
+          or exists (select 1 from orbit.notes n where n.user_id = $1::uuid and p.id = any(n.person_ids)))
+      returning p.id`,
+    [userId, ids ?? null]
+  );
+  return rows.map((r) => r.id);
+}
+
+// supabase/functions/_shared/social/chats.ts
+var GROUP_MAX = 8;
+var SOCIAL_CLASSIFY_PER_DAY = 20;
+var WAITING_STAGES = ["outreach_sent", "no_response"];
+async function inPipeline(db2, userId, personId) {
+  const [r] = await db2.sql`
+    select exists (select 1 from orbit.chats c where c.user_id = ${userId}::uuid and c.person_id = ${personId}::uuid
+                     and c.archived_at is null and c.stage not in ('archived', 'declined'))
+        or exists (select 1 from orbit.drafts d where d.user_id = ${userId}::uuid and d.person_id = ${personId}::uuid
+                     and d.status = 'sent') as yes`;
+  return !!r?.yes;
+}
+async function storeSocialChat(db2, userId, platform, chat, messages, o) {
+  const participants = Math.max(chat.participants, chat.others.length + 1, 2);
+  const oneToOne = participants === 2 && chat.others.length === 1;
+  if (participants > GROUP_MAX)
+    return {
+      skipped: "large_group",
+      oneToOne: false,
+      personIds: [],
+      pipeline: false,
+      inserted: 0,
+      inbound: []
+    };
+  const personOf = /* @__PURE__ */ new Map();
+  for (const other of chat.others) {
+    const p = await personForAccount(db2, userId, platform, other.accountId);
+    if (p) personOf.set(other.accountId, p.personId);
+  }
+  const partner = oneToOne ? chat.others[0] : void 0;
+  const [existing] = await db2.sql`
+    select t.id,
+           count(m.id) filter (where m.direction = 'in')::int as ins,
+           count(m.id) filter (where m.direction = 'out')::int as outs
+      from orbit.threads t left join orbit.messages m on m.thread_id = t.id
+     where t.user_id = ${userId}::uuid and t.provider = ${platform} and t.external_id = ${chat.chatId}
+     group by t.id`;
+  if (partner && !personOf.has(partner.accountId)) {
+    const both = ((existing?.ins ?? 0) > 0 || messages.some((m) => !m.fromStudent)) && ((existing?.outs ?? 0) > 0 || messages.some((m) => m.fromStudent));
+    if (both) {
+      const stored = (await loadAccounts(db2, platform, [partner.accountId])).get(partner.accountId);
+      const kind = stored?.kind ?? accountKind({
+        platform,
+        id: partner.accountId,
+        username: partner.username ?? "",
+        name: partner.name
+      });
+      if (kind === "person") {
+        const made = await ensureAccountPerson(
+          db2,
+          userId,
+          {
+            platform,
+            id: partner.accountId,
+            username: stored?.username ?? partner.username ?? partner.accountId,
+            name: stored?.name ?? partner.name
+          },
+          o.now
+        );
+        personOf.set(partner.accountId, made.personId);
+      }
     }
+  }
+  const partnerPerson = partner ? personOf.get(partner.accountId) : void 0;
+  const pipeline = !!partnerPerson && await inPipeline(db2, userId, partnerPerson);
+  const others = [...new Set(personOf.values())];
+  const [thread] = await db2.sql`
+    insert into orbit.threads (user_id, provider, external_id, social_account_id, participant_count, category,
+                               is_networking, participant_person_ids)
+    values (${userId}::uuid, ${platform}, ${chat.chatId}, ${partner?.accountId ?? null}, ${participants - 1}::int,
+            ${pipeline ? "networking" : "personal"}, ${pipeline}, ${others}::uuid[])
+    on conflict (user_id, provider, external_id) do update set
+      social_account_id = coalesce(orbit.threads.social_account_id, excluded.social_account_id),
+      participant_count = greatest(orbit.threads.participant_count, excluded.participant_count),
+      is_networking = excluded.is_networking or (orbit.threads.is_networking and ${pipeline}),
+      category = excluded.category
+    returning id`;
+  const threadId = thread.id;
+  const out = {
+    threadId,
+    oneToOne,
+    ...partner ? { partner: { ...partner, personId: partnerPerson } } : {},
+    personIds: others,
+    pipeline,
+    inserted: 0,
+    inbound: []
   };
+  for (const m of messages) {
+    const text2 = (m.text ?? "").trim();
+    const from = m.fromStudent ? null : personOf.get(m.senderAccountId) ?? (oneToOne ? partnerPerson : null);
+    const to = m.fromStudent ? others : [];
+    const stamp = m.fromStudent ? partner?.accountId ?? null : m.senderAccountId || partner?.accountId || null;
+    const words = pipeline && text2 ? text2 : null;
+    const [row] = await db2.sql`
+      insert into orbit.messages (user_id, thread_id, provider, external_id, direction, from_person_id, to_person_ids,
+                                  sent_at, snippet, body_text, social_account_id, has_words)
+      values (${userId}::uuid, ${threadId}::uuid, ${platform}, ${m.messageId}, ${m.fromStudent ? "out" : "in"},
+              ${from ?? null}::uuid, ${to}::uuid[], ${m.at}::timestamptz, ${words ? words.slice(0, 200) : null},
+              ${words}, ${stamp}, ${m.hasWords && !!text2})
+      on conflict (user_id, provider, external_id) do update set
+        thread_id = excluded.thread_id,
+        body_text = coalesce(orbit.messages.body_text, excluded.body_text),
+        snippet = coalesce(orbit.messages.snippet, excluded.snippet),
+        from_person_id = coalesce(orbit.messages.from_person_id, excluded.from_person_id),
+        to_person_ids = case when cardinality(orbit.messages.to_person_ids) = 0 then excluded.to_person_ids
+                             else orbit.messages.to_person_ids end,
+        social_account_id = coalesce(orbit.messages.social_account_id, excluded.social_account_id),
+        has_words = coalesce(orbit.messages.has_words, excluded.has_words)
+      returning id, (xmax = 0) as fresh`;
+    if (!row?.fresh) continue;
+    out.inserted++;
+    if (!m.fromStudent)
+      out.inbound.push({ id: row.id, externalId: m.messageId, sentAt: m.at, personId: from ?? null });
+  }
+  await db2.sql`
+    update orbit.threads t set
+      message_count = s.n, first_at = s.first_at, last_at = s.last_at, last_direction = s.dir,
+      participant_person_ids = array(select distinct x from unnest(t.participant_person_ids || ${others}::uuid[]) x
+                                      where x is not null)
+    from (select count(*)::int as n, min(sent_at) as first_at, max(sent_at) as last_at,
+                 (array_agg(direction order by sent_at desc))[1] as dir
+            from orbit.messages where thread_id = ${threadId}::uuid) s
+    where t.id = ${threadId}::uuid`;
+  if (others.length) await listAfterExchange(db2, userId, others);
+  return out;
+}
+async function afterInbound(db2, queue, userId, platform, stored, now) {
+  const out = { replied: [], classified: [] };
+  if (stored.pipeline)
+    for (const m of stored.inbound) {
+      if (!m.personId) continue;
+      const [chat] = await db2.sql`
+        select id from orbit.chats
+         where user_id = ${userId}::uuid and person_id = ${m.personId}::uuid and archived_at is null
+           and stage = any(${[...WAITING_STAGES]}::text[])
+         order by updated_at desc limit 1`;
+      if (!chat) continue;
+      await moveChat(db2, userId, chat.id, "replied", `${platform}_reply:${m.id}`, now);
+      out.replied.push(chat.id);
+      const [n] = await db2.sql`
+        select count(*)::int as n from orbit.audit_log
+         where user_id = ${userId}::uuid and action = 'social.classify'
+           and created_at > ${new Date(now.getTime() - 864e5)}::timestamptz`;
+      if ((n?.n ?? 0) >= SOCIAL_CLASSIFY_PER_DAY) continue;
+      await db2.sql`
+        insert into orbit.audit_log (user_id, actor, action, target_table, target_id, details)
+        values (${userId}::uuid, 'system', 'social.classify', 'messages', ${m.id}, ${{ platform }}::jsonb)`;
+      await queue.enqueue({
+        kind: "classify.message",
+        userId,
+        payload: { provider: platform, messageRowId: m.id },
+        dedupeKey: `classify:${platform}:${userId}:${m.externalId}`
+      });
+      out.classified.push(m.id);
+    }
+  const people = [...new Set(stored.inbound.map((m) => m.personId).filter((x) => !!x))];
+  if (people.length)
+    await queue.enqueue({
+      kind: "score.person",
+      userId,
+      payload: { personIds: people },
+      dedupeKey: `score.person:${userId}:${platform}:${stored.inbound[0].externalId}`
+    });
+  return out;
+}
+
+// supabase/functions/_shared/social/lookup.ts
+async function socialSourceOn(db2, userId, platform) {
+  const [r] = await db2.sql`
+    select state from orbit.source_states where user_id = ${userId}::uuid and source = ${platform}`;
+  return r?.state === "on";
 }
 
 // supabase/functions/orbit-webhooks/webhooks.ts
@@ -5031,7 +5346,8 @@ function makeWebhookHandler(deps) {
         if (!deps.unipileSecret || !deps.db) return unconfigured();
         if (!await timingSafeEqual(url.searchParams.get("token"), deps.unipileSecret))
           throw new HttpError(403, "forbidden", "bad token");
-        const out = await unipileAccount(deps.db, queue(), await body(req));
+        const provider = url.searchParams.get("provider") === "instagram" ? "instagram" : "linkedin";
+        const out = await unipileAccount(deps.db, queue(), await body(req), provider);
         userId = out.userId;
         res = json(200, { ok: true, result: out.result });
       } else throw new HttpError(404, "not_found", "no such route");
@@ -5168,24 +5484,95 @@ async function firstSeen(db2, eventId) {
   return rows.length > 0;
 }
 async function linkedinUser(db2, accountId) {
+  const a = await unipileOwner(db2, accountId);
+  return a?.provider === "linkedin" ? a.userId : null;
+}
+async function unipileOwner(db2, accountId) {
   if (typeof accountId !== "string" || !accountId) return null;
   const [row] = await db2.sql`
-    select a.user_id from orbit.integration_accounts a join orbit.users u on u.id = a.user_id
-     where a.provider = 'linkedin' and a.external_account_id = ${accountId} and u.deleted_at is null
+    select a.user_id, a.provider, a.social_account_id from orbit.integration_accounts a
+      join orbit.users u on u.id = a.user_id
+     where a.provider in ('linkedin', 'instagram') and a.external_account_id = ${accountId} and u.deleted_at is null
+     order by (a.provider = 'linkedin') desc
      limit 1`;
-  return row?.user_id ?? null;
+  return row ? { userId: row.user_id, provider: row.provider, socialAccountId: row.social_account_id } : null;
+}
+async function storeInstagramMessage(db2, queue, owner, body2, chatId, messageId) {
+  const userId = owner.userId;
+  const me = str(body2.account_info?.user_id) ?? owner.socialAccountId ?? "";
+  const sender = body2.sender ?? {};
+  const senderId = str(sender.attendee_provider_id) ?? "";
+  const fromStudent = !!senderId && senderId === me;
+  const external = str(body2.provider_message_id) ?? messageId;
+  if (fromStudent) {
+    const sent = await db2.sql`
+      select 1 from orbit.messages where user_id = ${userId}::uuid and provider = 'instagram'
+         and external_id in (${messageId}, ${external})`;
+    if (sent.length) return "own_message";
+  }
+  const raw = Array.isArray(body2.attendees) ? body2.attendees : [];
+  const others = [];
+  const everyone = new Set(me ? [me] : []);
+  for (const a of [sender, ...raw]) {
+    const id = str(a.attendee_provider_id);
+    if (!id) continue;
+    everyone.add(id);
+    if (id === me || others.some((o) => o.accountId === id)) continue;
+    others.push({ accountId: id, name: str(a.attendee_name) });
+  }
+  const text2 = (str(body2.message) ?? "").trim();
+  const at = str(body2.timestamp);
+  const m = {
+    messageId: external,
+    chatId,
+    at: at && !Number.isNaN(Date.parse(at)) ? new Date(at).toISOString() : (/* @__PURE__ */ new Date()).toISOString(),
+    fromStudent,
+    senderAccountId: senderId,
+    text: text2,
+    hasWords: !!text2
+  };
+  const now = /* @__PURE__ */ new Date();
+  const stored = await storeSocialChat(
+    db2,
+    userId,
+    "instagram",
+    { chatId, participants: Math.max(everyone.size, others.length + 1), others },
+    [m],
+    { now }
+  );
+  if (stored.skipped) return "group_chat";
+  if (stored.partner && !stored.partner.personId)
+    await queue.enqueue({
+      kind: "social.match",
+      userId,
+      payload: { platform: "instagram", accountIds: [stored.partner.accountId] },
+      dedupeKey: `social.match:${userId}:instagram:${stored.partner.accountId}`
+    });
+  if (fromStudent) return "own_message";
+  const r = await afterInbound(db2, queue, userId, "instagram", stored, now);
+  return r.replied.length ? "replied" : "stored";
 }
 var str = (v) => typeof v === "string" && v ? v : void 0;
 async function unipileEvent(db2, queueFor2, body2) {
   const status = body2.AccountStatus;
   if (status && typeof status === "object") {
-    const userId = await linkedinUser(db2, status.account_id);
+    const owner = await unipileOwner(db2, status.account_id);
+    const userId = owner?.userId ?? null;
     const next = accountStatus(String(status.message ?? ""));
-    if (!userId || !next) return { result: "ignored", userId };
-    await db2.sql`
+    if (!owner || !next) return { result: "ignored", userId };
+    const changed = await db2.sql`
       update orbit.integration_accounts
          set status = ${next}, last_error = ${next === "active" ? null : String(status.message).slice(0, 40)}
-       where user_id = ${userId}::uuid and provider = 'linkedin' and status <> 'parked'`;
+       where user_id = ${owner.userId}::uuid and provider = ${owner.provider} and status <> 'parked'
+         and not (status = 'error' and coalesce(last_error, '') = 'different_account')
+      returning id`;
+    if (owner.provider === "instagram" && next === "needs_reauth" && changed.length)
+      await db2.sql`
+        insert into orbit.notifications (user_id, kind, title, body, link)
+        select ${owner.userId}::uuid, 'instagram_sign_in', 'Sign in to Instagram again',
+               'Instagram asked to confirm it is you. Orbit carries on with everything else meanwhile.', '/settings'
+         where not exists (select 1 from orbit.notifications where user_id = ${owner.userId}::uuid
+                             and kind = 'instagram_sign_in' and read_at is null)`;
     return { result: `status:${next}`, userId };
   }
   const event = str(body2.event);
@@ -5193,7 +5580,17 @@ async function unipileEvent(db2, queueFor2, body2) {
     const messageId = str(body2.message_id);
     const chatId = str(body2.chat_id);
     if (!messageId || !chatId) return { result: "ignored", userId: null };
-    const userId = await linkedinUser(db2, body2.account_id);
+    const owner = await unipileOwner(db2, body2.account_id);
+    if (owner?.provider === "instagram") {
+      if (!await socialSourceOn(db2, owner.userId, "instagram"))
+        return { result: "source_off", userId: owner.userId };
+      const result2 = await db2.begin(async (tx) => {
+        if (!await firstSeen(tx, `instagram:${messageId}`)) return "duplicate";
+        return storeInstagramMessage(tx, queueFor2(tx), owner, body2, chatId, messageId);
+      });
+      return { result: result2, userId: owner.userId };
+    }
+    const userId = owner?.provider === "linkedin" ? owner.userId : null;
     if (!userId) return { result: "unknown_account", userId: null };
     const result = await db2.begin(async (tx) => {
       if (!await firstSeen(tx, messageId)) return "duplicate";
@@ -5256,7 +5653,7 @@ function unparkState(li) {
     unparkedAt: (/* @__PURE__ */ new Date()).toISOString()
   };
 }
-async function unipileAccount(db2, queue, body2) {
+async function unipileAccount(db2, queue, body2, provider = "linkedin") {
   const status = String(body2.status ?? "").toUpperCase();
   const accountId = str(body2.account_id);
   const userId = isUuid(body2.name) ? body2.name : null;
@@ -5264,6 +5661,7 @@ async function unipileAccount(db2, queue, body2) {
     return { result: "ignored", userId };
   const [user] = await db2.sql`select 1 from orbit.users where id = ${userId}::uuid and deleted_at is null`;
   if (!user) return { result: "unknown_user", userId: null };
+  if (provider === "instagram") return instagramAccount(db2, queue, userId, accountId, status);
   const taken = await db2.sql`
     select 1 from orbit.integration_accounts
      where provider = 'linkedin' and external_account_id = ${accountId} and user_id <> ${userId}::uuid`;
@@ -5291,6 +5689,37 @@ async function unipileAccount(db2, queue, body2) {
     userId,
     payload: { mode: "backfill", accountId },
     dedupeKey: `linkedin-backfill:${userId}:${accountId}`
+  });
+  return { result: "connected", userId };
+}
+async function instagramAccount(db2, queue, userId, accountId, status) {
+  const taken = await db2.sql`
+    select 1 from orbit.integration_accounts
+     where provider = 'instagram' and external_account_id = ${accountId} and user_id <> ${userId}::uuid`;
+  if (taken.length) return { result: "account_in_use", userId };
+  await db2.sql`
+    insert into orbit.integration_accounts (user_id, provider, external_account_id, status, last_error)
+    values (${userId}::uuid, 'instagram', ${accountId}, 'active', null)
+    on conflict (user_id, provider) do update set
+      external_account_id = excluded.external_account_id, status = 'active', last_error = null`;
+  await db2.sql`
+    update orbit.integration_accounts
+       set sync_state = coalesce(sync_state, '{}'::jsonb)
+             || jsonb_build_object('instagram', coalesce(sync_state -> 'instagram', '{}'::jsonb)
+                  || ${{ stage: "profile", pending: null }}::jsonb)
+     where user_id = ${userId}::uuid and provider = 'instagram'`;
+  await db2.sql`
+    insert into orbit.source_states (user_id, source, state, off_since)
+    values (${userId}::uuid, 'instagram', 'on', null)
+    on conflict (user_id, source) do update set state = 'on', off_since = null`;
+  await db2.sql`
+    insert into orbit.audit_log (user_id, actor, action, target_table, details)
+    values (${userId}::uuid, 'system', 'instagram.connected', 'integration_accounts', ${{ status }}::jsonb)`;
+  await queue.enqueue({
+    kind: "sync.instagram",
+    userId,
+    payload: {},
+    dedupeKey: `sync.instagram:${userId}:${accountId}:connect`
   });
   return { result: "connected", userId };
 }

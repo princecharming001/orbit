@@ -432,7 +432,8 @@ describe('targets', () => {
     const priya = await person(t.db, userId, 'Priya Raman');
     const dev = await person(t.db, userId, 'Dev Shah');
     for (const p of [priya, dev])
-      await t.db.sql`insert into orbit.chats (user_id, person_id, stage) values (${userId}::uuid, ${p}::uuid, 'identified')`;
+      await t.db
+        .sql`insert into orbit.chats (user_id, person_id, stage) values (${userId}::uuid, ${p}::uuid, 'identified')`;
     // research confirmed Priya's own page, which names her handle; Dev has none
     await t.db.sql`
       insert into orbit.dossiers (user_id, person_id, status, sources)
@@ -447,7 +448,12 @@ describe('targets', () => {
       apiKey: 'k',
       baseUrl: fake.base,
       accountId: `acc-${userId.slice(0, 8)}`,
-      budget: sqlSocialBudget(t.db, { platform: 'instagram', account: `acc-${userId.slice(0, 8)}`, caller: 'targets', now }),
+      budget: sqlSocialBudget(t.db, {
+        platform: 'instagram',
+        account: `acc-${userId.slice(0, 8)}`,
+        caller: 'targets',
+        now,
+      }),
     });
     expect(await matchTargets(t.db, adapter, userId, { now: now() })).toBe(1);
     const links = await t.db.sql<{ person_id: string; via: string; proof: string }>`

@@ -259,6 +259,15 @@ function readiness(i) {
   const state = !steps.length ? "nothing" : problem ? "problem" : all ? "ready" : peopleIn && recentIn ? "usable" : "syncing";
   const working = steps.find((s) => s.state === "working");
   const headline = state === "nothing" ? "Nothing connected yet" : state === "ready" ? "Orbit is ready" : state === "problem" ? steps.find((s) => s.state === "problem")?.detail ?? "Something needs you" : state === "usable" ? "Ready to use, still finishing" : working?.key.startsWith("linkedin") ? "Reading your LinkedIn" : working?.key.startsWith("email") ? "Reading your email" : "Getting your network ready";
+  const t = i.texts;
+  if (t?.state === "on")
+    steps.push({
+      key: "texts",
+      label: "Texts",
+      state: t.importedAt ? "done" : "waiting",
+      detail: t.importedAt ? `${fmt(t.people ?? 0)} ${(t.people ?? 0) === 1 ? "person" : "people"}` : "Update from your Mac when you like",
+      optional: true
+    });
   return { state, steps, progress: state === "ready" ? 1 : progress, headline };
 }
 
