@@ -26,6 +26,7 @@ import { clientIp } from '../_shared/origins.ts';
 import { ipBuckets, memoryTake, sqlTake, type Take, userBuckets } from '../_shared/ratelimit.ts';
 import { type AgentConfig, makeServices, type Services } from '../_shared/services.ts';
 import { checkSession, type SessionConfig, sessionSecretUsable, verifyBearer } from '../_shared/session.ts';
+import type { XConfig } from '../_shared/social/x/config.ts';
 import { accountDelete, accountExport } from './account.ts';
 import { googleCallback, googleStart, logout, me, refresh, session } from './auth.ts';
 import { adminRoutes } from './routes/admin.ts';
@@ -48,6 +49,7 @@ import { searchRoutes } from './routes/search.ts';
 import { settingsRoutes } from './routes/settings.ts';
 import { sourceRoutes } from './routes/source.ts';
 import { voiceRoutes } from './routes/voice.ts';
+import { xRoutes } from './routes/x.ts';
 import { syncPull, syncPush, syncStatus } from './sync.ts';
 
 export const DEFAULT_APP_URL = 'https://tryorbit.today';
@@ -71,6 +73,8 @@ export interface ApiEnv {
   connectorsSigningKey?: string;
   /** ORBIT_OWNER_ID: the one account that may read /admin/costs (plan 34 E3) */
   ownerId?: string;
+  /** plan 43 §5: X's app, limits and the owner's switch (ORBIT_X_*, ORBIT_EXTRA_SOURCES) */
+  x?: XConfig;
 }
 
 export interface ApiLimits {
@@ -171,6 +175,7 @@ const ROUTES: Record<string, Route> = {
   ...friendDiscoverRoutes,
   ...voiceRoutes,
   ...adminRoutes,
+  ...xRoutes,
 };
 
 /** The secrets a route needs that are not set. */

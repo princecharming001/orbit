@@ -9,6 +9,7 @@ import type { TokenSource } from '../../_shared/google.ts';
 import { type GoogleClient, googleClient, type QuotaPacer } from '../../_shared/googleApi.ts';
 import type { Embed } from '../../_shared/services.ts';
 import type { CostDigestDeps } from './cost.ts';
+import type { XWorkerDeps } from './x.ts';
 
 export interface HandlerDeps {
   fetch?: typeof fetch;
@@ -32,6 +33,8 @@ export interface HandlerDeps {
   cost?: CostDigestDeps;
   /** parking idle LinkedIn links (plan 35 E5): ORBIT_LINKEDIN_PARK_DAYS as days (0 is off), and links a night */
   park?: { days?: number; perRun?: number };
+  /** X's settings and the DM writer (plan 43 §5); X jobs are skipped without them */
+  x?: XWorkerDeps;
 }
 
 export class JobSkipped extends Error {

@@ -6,6 +6,7 @@ import { connectDb } from '../_shared/db.ts';
 import { makeLogger } from '../_shared/http.ts';
 import { providerSecret, resolveSecret } from '../_shared/secrets.ts';
 import { agentEnvWithSecrets } from '../_shared/services.ts';
+import { xConfigFromEnv } from '../_shared/social/x/config.ts';
 import { makeApiHandler } from './api.ts';
 
 const env = (name: string) => Deno.env.get(name) || undefined;
@@ -50,6 +51,7 @@ Deno.serve(
       functionsUrl: supabaseUrl ? `${supabaseUrl}/functions/v1` : undefined,
       connectorsSigningKey: env('SUPABASE_SERVICE_ROLE_KEY'),
       ownerId,
+      x: xConfigFromEnv(env),
     },
     db,
     agent: { env: agentEnv },
