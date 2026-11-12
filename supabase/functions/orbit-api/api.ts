@@ -5,6 +5,7 @@
  * /auth/refresh needs an Orbit access token. Missing secrets → 503 with `x-orbit-connector: unconfigured`.
  * Kept free of Deno APIs: main.ts wires the environment.
  */
+import type { OptionalSource } from '@orbit/core/sources';
 import type { JWTVerifyGetKey } from 'jose';
 import { sha256Hex } from '../_shared/crypto.ts';
 import type { Db } from '../_shared/db.ts';
@@ -71,6 +72,8 @@ export interface ApiEnv {
   connectorsSigningKey?: string;
   /** ORBIT_OWNER_ID: the one account that may read /admin/costs (plan 34 E3) */
   ownerId?: string;
+  /** ORBIT_EXTRA_SOURCES (plan 43 §3.1), read once at cold start: the optional sources the owner offers */
+  extraSources?: OptionalSource[];
 }
 
 export interface ApiLimits {
@@ -128,6 +131,8 @@ export interface Ctx {
   sessionId?: string;
   /** the agent services (Claude, providers, Google tokens, embeddings, queue), built on first use */
   services: () => Services;
+  /** the optional sources the owner offers (ORBIT_EXTRA_SOURCES, plan 43 §3.1); empty by default */
+  offered: OptionalSource[];
 }
 
 type Handler = (ctx: Ctx) => Promise<Response>;
@@ -215,9 +220,12 @@ export function makeApiHandler(deps: ApiDeps): (req: Request) => Promise<Respons
       googleRedirectUri: deps.env.googleRedirectUri,
       unipileKey: deps.env.unipileKey,
       unipileBase: deps.env.unipileBase,
+      ...(deps.env.extraSources ? { extraSources: deps.env.extraSources } : {}),
       ...defined(deps.agent?.env),
     },
   };
+  // plan 43 §3.1: the owner's list, read once; empty unless ORBIT_EXTRA_SOURCES names something
+  const offered = [...(agent.env.extraSources ?? [])];
   let secretsTriedAt = 0;
   async function providerSecrets() {
     if ((deps.env.unipileKey && deps.env.unipileBase) || !deps.refreshProviderSecrets) return;
@@ -308,6 +316,7 @@ export function makeApiHandler(deps: ApiDeps): (req: Request) => Promise<Respons
         requestId: rid,
         pullLagMs: deps.pullLagMs ?? 2000,
         services: () => (services ??= makeServices(agent, { db, now })),
+        offered,
       };
       if (r.auth) {
         // the token's signature is checked here, without the database; a bad one still counts against the IP

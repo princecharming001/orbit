@@ -70,6 +70,8 @@ export function defaultHandlers(
     'env' in opts
       ? { fetch: opts.fetch, sleep: opts.sleep, random: opts.random, embed: opts.embed }
       : { ...opts, embed: opts.embed ?? opts.agents?.embed };
+  // plan 43 §3.1: the owner's list reaches every handler, whichever way it was passed in
+  deps.offered ??= agents?.env.extraSources ?? [];
   const handlers: Record<string, JobHandler> = {
     noop: async () => {},
     'health.snapshot': async (_job, ctx) => {
@@ -80,7 +82,7 @@ export function defaultHandlers(
     ...contactsHandlers(deps),
     ...linkedinHandlers(deps),
     ...scoreHandlers(deps),
-    ...friendHandlers(),
+    ...friendHandlers(deps),
     ...searchHandlers(deps),
     ...costHandlers(deps.cost),
     ...unipileHandlers(deps),

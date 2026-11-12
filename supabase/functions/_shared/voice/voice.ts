@@ -43,6 +43,7 @@ import { embeddable } from '../memory/memory.ts';
 import type { Queue } from '../queue.ts';
 import { vec } from '../rows.ts';
 import type { Embed, Services } from '../services.ts';
+import { NO_SOURCES } from '../sources/states.ts';
 
 /** Sent mail shorter than this is not an example of how the student writes (the exemplars' own floor). */
 export const EXEMPLAR_MIN_WORDS = 25;
@@ -168,7 +169,13 @@ export async function embedSent(
  * `voice.card`: the card learned again from the sent mail the server holds, laid over the stored one the way the
  * browser does it (what the student set by hand wins). With too few messages the stored card stays.
  */
-export async function relearnCard(db: Db, userId: string, now: Date): Promise<StyleCard | null> {
+export async function relearnCard(
+  db: Db,
+  userId: string,
+  now: Date,
+  /** message providers of the optional sources out of use (plan 43 §3.2): never learned from */
+  excludedProviders: readonly string[] = NO_SOURCES.excluded.providers,
+): Promise<StyleCard | null> {
   const [u] = await db.sql<{
     settings: Record<string, unknown>;
     first_name: string | null;
@@ -179,6 +186,7 @@ export async function relearnCard(db: Db, userId: string, now: Date): Promise<St
   const sent = await db.sql<{ body_text: string }>`
     select body_text from orbit.messages
      where user_id = ${userId}::uuid and direction = 'out' and body_text is not null and not is_automated
+       and provider <> all(${[...excludedProviders]}::text[])
      order by sent_at desc limit ${CARD_SAMPLES}::int`;
   const first = u.first_name ?? u.full_name?.split(/\s+/)[0] ?? '';
   const preset = u.settings?.tone_preset;

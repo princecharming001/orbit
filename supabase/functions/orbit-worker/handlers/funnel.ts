@@ -7,10 +7,12 @@
  * marked `silent`; the weekly review reads the outcomes by kind.
  */
 import { QUIET_DAYS } from '@orbit/core/pipeline/cadence';
+import { sourceOfProvider } from '@orbit/core/sources';
 import { isUuid } from '../../_shared/crypto.ts';
 import type { Db } from '../../_shared/db.ts';
 import { runReplyFunnel } from '../../_shared/replies/funnel.ts';
 import { type AgentConfig, makeServices } from '../../_shared/services.ts';
+import { offeredOf, sourcesFor } from '../../_shared/sources/states.ts';
 import type { JobHandler } from '../worker.ts';
 import { JobSkipped } from './deps.ts';
 
@@ -19,6 +21,12 @@ export function funnelReplyHandler(config: AgentConfig): JobHandler {
     if (!job.userId) throw new JobSkipped('no_user');
     const id = job.payload.messageId;
     if (!isUuid(id)) throw new JobSkipped('no_message');
+    // plan 43 §3.2: a reply that came on an optional source out of use moves nothing and drafts nothing
+    const [m] = await ctx.db.sql<{ provider: string }>`
+      select provider from orbit.messages where id = ${id}::uuid and user_id = ${job.userId}::uuid`;
+    const source = sourceOfProvider(m?.provider);
+    if (source && !(await sourcesFor(ctx.db, job.userId, offeredOf(config.env))).inUse.has(source))
+      throw new JobSkipped('source_off');
     await runReplyFunnel(
       makeServices(config, { db: ctx.db, now: ctx.now, queue: ctx.queue }),
       job.userId,

@@ -3,6 +3,7 @@
  * handler throws to end a job as `skipped` rather than failed: a provider that is not configured, an account that
  * is not connected or needs reconnecting. Such jobs are not retried.
  */
+import type { OptionalSource } from '@orbit/core/sources';
 import type { Claude } from '../../_shared/claude.ts';
 import type { Db } from '../../_shared/db.ts';
 import type { TokenSource } from '../../_shared/google.ts';
@@ -32,6 +33,8 @@ export interface HandlerDeps {
   cost?: CostDigestDeps;
   /** parking idle LinkedIn links (plan 35 E5): ORBIT_LINKEDIN_PARK_DAYS as days (0 is off), and links a night */
   park?: { days?: number; perRun?: number };
+  /** ORBIT_EXTRA_SOURCES (plan 43 §3.1), read once at cold start: the optional sources the owner offers */
+  offered?: OptionalSource[];
 }
 
 export class JobSkipped extends Error {

@@ -39,6 +39,7 @@ import { iso, isoRow, num } from '../rows.ts';
 import { recoverStuckSends } from '../sending/send.ts';
 import type { Services } from '../services.ts';
 import { moveChat } from '../slots/slots.ts';
+import { NO_SOURCES, offeredOf, type SourcesInUse, sourcesFor } from '../sources/states.ts';
 import { validZone } from '../zones.ts';
 
 const DAY = 86_400_000;
@@ -65,8 +66,16 @@ export interface CadenceState {
   awaitingStudent: Set<string>;
 }
 
-/** Everything `cadenceActions` reads, from the user's rows. */
-export async function loadCadence(db: Db, userId: string, now: Date): Promise<CadenceState> {
+/**
+ * Everything `cadenceActions` reads, from the user's rows. Messages of optional sources out of use, and people only
+ * they know, are left out (plan 43 §3.2).
+ */
+export async function loadCadence(
+  db: Db,
+  userId: string,
+  now: Date,
+  src: SourcesInUse = NO_SOURCES,
+): Promise<CadenceState> {
   const [u] = await db.sql<{ timezone: string; autonomy_level: number; settings: Record<string, unknown> }>`
     select timezone, autonomy_level, settings from orbit.users where id = ${userId}::uuid`;
   const tz = validZone(u?.timezone) ?? 'America/New_York';
@@ -106,7 +115,7 @@ export async function loadCadence(db: Db, userId: string, now: Date): Promise<Ca
     to_person_ids: string[];
   }>`
     select direction, sent_at, provider, from_person_id, to_person_ids from orbit.messages
-     where user_id = ${userId}::uuid and not is_automated
+     where user_id = ${userId}::uuid and not is_automated and provider <> all(${src.excluded.providers}::text[])
        and sent_at > ${new Date(now.getTime() - 365 * DAY)}::timestamptz`;
   const messages: CadenceMessage[] = [];
   for (const m of msgRows) {
@@ -159,6 +168,7 @@ export async function loadCadence(db: Db, userId: string, now: Date): Promise<Ca
       left join orbit.tie_scores ts on ts.user_id = p.user_id and ts.person_id = p.id
       left join orbit.dossiers d on d.user_id = p.user_id and d.person_id = p.id and d.status in ('ready', 'partial')
      where p.user_id = ${userId}::uuid and not p.is_self and p.deleted_at is null and p.merged_into is null
+       and orbit.person_in_use(p.sources, p.source_account, ${src.hidden}::text[])
        and (ts.score >= 60 or p.id = any(${wanted}::uuid[]))`;
   const people = new Map<string, CadencePerson>();
   for (const p of peopleRows) {
@@ -236,8 +246,13 @@ const toDue = (a: CadenceAction): DueItem => ({
 });
 
 /** POST /cadence/due: what the scan would do now. */
-export async function dueItems(db: Db, userId: string, now: Date): Promise<DueItem[]> {
-  const st = await loadCadence(db, userId, now);
+export async function dueItems(
+  db: Db,
+  userId: string,
+  now: Date,
+  src: SourcesInUse = NO_SOURCES,
+): Promise<DueItem[]> {
+  const st = await loadCadence(db, userId, now, src);
   return cadenceActions(st.input).map(toDue);
 }
 
@@ -346,7 +361,7 @@ export async function runCadence(s: Services, userId: string): Promise<CadenceSu
   const now = s.now();
   // a send a dead worker left half done is settled first, so nothing below waits behind it
   const recovered = await recoverStuckSends(s, userId);
-  const st = await loadCadence(db, userId, now);
+  const st = await loadCadence(db, userId, now, await sourcesFor(db, userId, offeredOf(s.env)));
   const out: CadenceSummary = {
     quiet: false,
     actions: 0,

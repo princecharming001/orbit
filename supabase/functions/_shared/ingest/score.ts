@@ -38,6 +38,7 @@ import { affiliationFromRow, type Row } from '@orbit/core/server/mappers';
 import { isAtsSender } from '@orbit/core/text/email';
 import type { Affiliation, Person } from '@orbit/core/types';
 import type { Db } from '../db.ts';
+import { NO_SOURCES, type SourcesInUse } from '../sources/states.ts';
 import { chunks, day, iso, PERSON_COLUMNS, toPerson } from './util.ts';
 
 const HOUR = 3_600_000;
@@ -49,6 +50,8 @@ export interface ScoreRunResult {
 }
 
 type MsgRow = {
+  /** a chat day from orbit.text_days (plan 43 §6): channel text, one message per day each way */
+  text?: boolean;
   from_person_id: string | null;
   to_person_ids: string[];
   direction: 'in' | 'out';
@@ -60,7 +63,21 @@ type MsgRow = {
   participant_count: number;
   /** extraction.rapport: how warm their reply reads (plan 27) */
   rapport: unknown;
+  /** Instagram and X: false when nothing was written (a reaction, a shared post); null on mail */
+  has_words?: boolean | null;
 };
+
+/** The channel of a stored message (plan 43 §3.8): Instagram, X and texts are chat; mail and LinkedIn keep theirs. */
+const channelOf = (m: Pick<MsgRow, 'provider' | 'text'>): TieMessage['channel'] =>
+  m.text
+    ? 'text'
+    : m.provider === 'linkedin'
+      ? 'linkedin'
+      : m.provider === 'instagram'
+        ? 'instagram'
+        : m.provider === 'x'
+          ? 'x'
+          : 'email';
 
 export function readCalibration(settings: Record<string, unknown>): TieCalibration | undefined {
   const c = settings.tie_calibration as { a?: unknown; c?: unknown } | undefined;
@@ -69,12 +86,17 @@ export function readCalibration(settings: Record<string, unknown>): TieCalibrati
   return { a: c.a, c: c.c };
 }
 
-/** Builds every target's TieHistory in a handful of queries. */
+/**
+ * Builds every target's TieHistory in a handful of queries. `src` says which optional sources count (plan 43 §3.2):
+ * people known only from a source out of use are not scored, and its messages, text days, follows and ties are left
+ * out; with no optional source in use every history is what it was before plan 43.
+ */
 export async function loadHistories(
   db: Db,
   userId: string,
   now: Date,
   personIds?: string[],
+  src: SourcesInUse = NO_SOURCES,
 ): Promise<{
   people: Person[];
   histories: Map<string, TieHistory>;
@@ -84,8 +106,9 @@ export async function loadHistories(
     await db.query<Record<string, unknown>>(
       `select ${PERSON_COLUMNS} from orbit.people p
         where p.user_id = $1::uuid and not p.is_self and p.deleted_at is null and p.merged_into is null
-          and ($2::uuid[] is null or p.id = any($2::uuid[]))`,
-      [userId, personIds ?? null],
+          and ($2::uuid[] is null or p.id = any($2::uuid[]))
+          and orbit.person_in_use(p.sources, p.source_account, $3::text[])`,
+      [userId, personIds ?? null, src.hidden],
     )
   ).map((r) => ({ row: r, person: toPerson(r) }));
   const ids = people.map((p) => p.person.id);
@@ -93,8 +116,13 @@ export async function loadHistories(
   const relationship = new Map<string, string | null>();
   if (!ids.length) return { people: [], histories, relationship };
 
-  const [user] = await db.sql<{ school: string | null; current_city: string | null; tone: boolean | null }>`
-    select school, current_city, (settings ->> 'read_reply_tone')::boolean as tone
+  const [user] = await db.sql<{
+    school: string | null;
+    current_city: string | null;
+    tone: boolean | null;
+    timezone: string | null;
+  }>`
+    select school, current_city, (settings ->> 'read_reply_tone')::boolean as tone, timezone
       from orbit.users where id = ${userId}::uuid`;
   // the student can turn the tone of replies off (plan 27): then f16 stays 0
   const readTone = user?.tone !== false;
@@ -122,11 +150,48 @@ export async function loadHistories(
   const msgs = await db.sql<MsgRow>`
     select m.from_person_id, m.to_person_ids, m.direction, m.sent_at, m.provider, m.thread_id,
            m.is_automated or m.list_unsubscribe as automated, m.from_addr, t.participant_count,
-           m.extraction -> 'rapport' as rapport
+           m.extraction -> 'rapport' as rapport, m.has_words
       from orbit.messages m join orbit.threads t on t.id = m.thread_id
-     where m.user_id = ${userId}::uuid
+     where m.user_id = ${userId}::uuid and m.provider <> all(${src.excluded.providers}::text[])
        and ((m.direction = 'in' and m.from_person_id = any(${ids}::uuid[]))
          or (m.direction = 'out' and m.to_person_ids && ${ids}::uuid[]))`;
+  // texts, for a signed-in student whose browser sent them (plan 43 §6): one message a day each way, never the words
+  if (src.inUse.has('imessage')) {
+    const days = await db.sql<{
+      person_id: string;
+      day: unknown;
+      in_count: number;
+      out_count: number;
+      group_size: number;
+      words: boolean;
+    }>`
+      select person_id, day, in_count, out_count, group_size, words from orbit.text_days
+       where user_id = ${userId}::uuid and person_id = any(${ids}::uuid[]) and (in_count > 0 or out_count > 0)`;
+    for (const d of days) {
+      // the student's local day as the browser counted it; noon UTC keeps it on that calendar day
+      const at = `${day(d.day)}T12:00:00.000Z`;
+      for (const [direction, n] of [
+        ['in', d.in_count],
+        ['out', d.out_count],
+      ] as const)
+        if (n > 0)
+          msgs.push({
+            text: true,
+            from_person_id: direction === 'in' ? d.person_id : null,
+            to_person_ids: direction === 'out' ? [d.person_id] : [],
+            direction,
+            sent_at: at,
+            provider: 'imessage',
+            thread_id: `text:${d.person_id}`,
+            automated: false,
+            from_addr: null,
+            // a thread's participant count leaves the student out; the row counts everyone in the chat
+            participant_count: Math.max(1, Number(d.group_size) - 1),
+            rapport: null,
+            has_words: d.words,
+          });
+    }
+  }
   const msgsBy = new Map<string, MsgRow[]>();
   const push = <T>(map: Map<string, T[]>, k: string, v: T) => {
     const arr = map.get(k) ?? [];
@@ -193,14 +258,37 @@ export async function loadHistories(
     select x.person, x.other, s.score, coalesce(o.first_name, o.display_name) as name
       from (select a_person_id as person, b_person_id as other from orbit.ties
              where user_id = ${userId}::uuid and kind = any(${routable}::text[]) and a_person_id = any(${ids}::uuid[])
+               and kind <> all(${src.excluded.tieKinds}::text[])
             union
             select b_person_id, a_person_id from orbit.ties
-             where user_id = ${userId}::uuid and kind = any(${routable}::text[]) and b_person_id = any(${ids}::uuid[])) x
+             where user_id = ${userId}::uuid and kind = any(${routable}::text[]) and b_person_id = any(${ids}::uuid[])
+               and kind <> all(${src.excluded.tieKinds}::text[])) x
       join orbit.people o on o.id = x.other and o.merged_into is null and o.deleted_at is null
+       and orbit.person_in_use(o.sources, o.source_account, ${src.hidden}::text[])
       left join orbit.tie_scores s on s.user_id = ${userId}::uuid and s.person_id = x.other`;
   const mutualBy = new Map<string, { score: number; name: string }[]>();
   for (const m of mutualRows)
     if (m.score != null) push(mutualBy, m.person, { score: Number(m.score), name: m.name ?? '' });
+
+  // following each other on Instagram or X (plan 43 §3.8), for the platforms in use: the person's attached account and
+  // the student's own account follow each other in the student's own lists
+  const platforms = (['instagram', 'x'] as const).filter((s) => src.inUse.has(s));
+  const followsBy = new Map<string, { instagram?: boolean; x?: boolean }>();
+  if (platforms.length)
+    for (const f of await db.sql<{ person_id: string; platform: 'instagram' | 'x' }>`
+      select distinct l.person_id, l.platform from orbit.social_links l
+        join orbit.integration_accounts i
+          on i.user_id = l.user_id and i.provider = l.platform and i.social_account_id is not null
+       where l.user_id = ${userId}::uuid and l.platform = any(${platforms}::text[]) and l.person_id = any(${ids}::uuid[])
+         and exists (select 1 from orbit.social_follows f
+                      where f.platform = l.platform and f.owner_user_id = l.user_id
+                        and f.follower_id = i.social_account_id and f.followed_id = l.account_id)
+         and exists (select 1 from orbit.social_follows f
+                      where f.platform = l.platform and f.owner_user_id = l.user_id
+                        and f.follower_id = l.account_id and f.followed_id = i.social_account_id)`)
+      followsBy.set(f.person_id, { ...followsBy.get(f.person_id), [f.platform]: true });
+  // chat days are counted in the student's own time zone, once a chat source is in use
+  const timeZone = src.inUse.size && user?.timezone ? user.timezone : undefined;
 
   const labels = new Map(
     (
@@ -217,9 +305,13 @@ export async function loadHistories(
     const mutual = mutualBy.get(person.id) ?? [];
     // f13 is the student's notes only; their replies' tone is f16, read the same way as in the browser
     const warmth = warmthBy.get(person.id) ?? [];
+    // replies' tone is read from mail and LinkedIn only: chat is personal and never classified (plan 43 §3.9)
+    const toned = (msgsBy.get(person.id) ?? []).filter(
+      (m) => m.provider === 'gmail' || m.provider === 'linkedin',
+    );
     const rapport = readTone
       ? gatherRapport(
-          (msgsBy.get(person.id) ?? []).map((m) => ({
+          toned.map((m) => ({
             at: iso(m.sent_at)!,
             inbound: m.direction === 'in',
             automated: !!m.automated,
@@ -249,6 +341,8 @@ export async function loadHistories(
       mutualNames: mutual.map((m) => m.name),
       label: labels.get(person.id),
       ...(rapport.length ? { rapport } : {}),
+      ...(followsBy.has(person.id) ? { follows: followsBy.get(person.id) } : {}),
+      ...(timeZone ? { timeZone } : {}),
     });
   }
   return { people: people.map((p) => p.person), histories, relationship };
@@ -260,10 +354,12 @@ export function toTieMessages(rows: MsgRow[]): TieMessage[] {
     .map((m) => ({
       at: iso(m.sent_at)!,
       direction: m.direction,
-      channel: m.provider === 'linkedin' ? ('linkedin' as const) : ('email' as const),
+      channel: channelOf(m),
       threadParticipants: Math.max(2, Number(m.participant_count ?? 1) + 1),
       threadId: m.thread_id,
       automated: !!m.automated || (m.direction === 'in' && !!m.from_addr && isAtsSender(m.from_addr)),
+      // a chat message with nothing written counts as light engagement (plan 43 §3.8)
+      ...(m.has_words === false ? { words: false } : {}),
     }))
     .sort((a, b) => a.at.localeCompare(b.at));
   const lastOut = new Map<string, number>();
@@ -286,13 +382,14 @@ export function toTieMessages(rows: MsgRow[]): TieMessage[] {
 export async function scorePeople(
   db: Db,
   userId: string,
-  opts: { now: Date; personIds?: string[]; fit?: boolean },
+  opts: { now: Date; personIds?: string[]; fit?: boolean; sources?: SourcesInUse },
 ): Promise<ScoreRunResult> {
   const { now } = opts;
+  const src = opts.sources ?? NO_SOURCES;
   const [u] = await db.sql<{ settings: Record<string, unknown> | null }>`
     select settings from orbit.users where id = ${userId}::uuid`;
   let calibration = readCalibration(u?.settings ?? {});
-  const { people, histories, relationship } = await loadHistories(db, userId, now, opts.personIds);
+  const { people, histories, relationship } = await loadHistories(db, userId, now, opts.personIds, src);
 
   if (opts.fit) {
     const labelled = [...histories.entries()].filter(([, h]) => h.label);
@@ -318,7 +415,9 @@ export async function scorePeople(
     const tie = scoreTie(h, now, TIE_WEIGHTS, calibration);
     const score = FLOOR_TYPES.has(relationship.get(p.id) ?? '') ? Math.max(80, tie.score) : tie.score;
     const share = shareScore(h, now, TIE_WEIGHTS, calibration);
-    const exists = !tie.facts.never || h.linkedinConnected || h.intros > 0;
+    // following each other makes a tie exist, as a LinkedIn connection does (plan 43 §3.3)
+    const exists =
+      !tie.facts.never || h.linkedinConnected || h.intros > 0 || !!h.follows?.instagram || !!h.follows?.x;
     const lastAt = [
       ...h.messages.filter((m) => !m.automated && m.threadParticipants <= 9).map((m) => m.at),
       ...h.meetings.map((m) => m.at),
@@ -336,8 +435,33 @@ export async function scorePeople(
       model: tie.modelVersion,
       strength: exists ? score / 100 : 0,
       last: lastAt ?? null,
+      hiddenLast: null as string | null,
     };
   });
+  // plan 43 §3.2: a last contact that came from a source now out of use goes with it (the person's newest contact in
+  // use, or none). Only when the owner offers a source, so nothing changes before plan 43 is switched on.
+  if (src.offered.length && rows.length) {
+    const ids = rows.map((r) => r.id);
+    const hiddenLast = new Map(
+      (
+        await db.sql<{ person_id: string; at: unknown }>`
+          select x.person_id, max(x.at) as at from (
+            select m.from_person_id as person_id, m.sent_at as at from orbit.messages m
+             where m.user_id = ${userId}::uuid and m.provider = any(${src.hidden}::text[])
+               and m.from_person_id = any(${ids}::uuid[])
+            union all
+            select unnest(m.to_person_ids), m.sent_at from orbit.messages m
+             where m.user_id = ${userId}::uuid and m.provider = any(${src.hidden}::text[])
+               and m.to_person_ids && ${ids}::uuid[]
+            union all
+            select d.person_id, (d.day + 1)::timestamptz from orbit.text_days d
+             where d.user_id = ${userId}::uuid and 'imessage' = any(${src.hidden}::text[])
+               and d.person_id = any(${ids}::uuid[])) x
+           group by x.person_id`
+      ).map((r) => [r.person_id, iso(r.at)!]),
+    );
+    for (const r of rows) r.hiddenLast = hiddenLast.get(r.id) ?? null;
+  }
   for (const part of chunks(rows, 500)) {
     const json = JSON.stringify(part);
     await db.sql`
@@ -359,7 +483,11 @@ export async function scorePeople(
     // so a person whose strength did not move is not sent to the browser again
     await db.sql`
       update orbit.people p set strength = (r ->> 'strength')::real,
-             last_interaction_at = coalesce((r ->> 'last')::timestamptz, p.last_interaction_at),
+             last_interaction_at = case
+               when r ->> 'last' is not null then (r ->> 'last')::timestamptz
+               when r ->> 'hiddenLast' is not null
+                    and p.last_interaction_at <= (r ->> 'hiddenLast')::timestamptz + interval '1 day' then null
+               else p.last_interaction_at end,
              scored_at = now()
         from jsonb_array_elements(${json}::jsonb) r
        where p.id = (r ->> 'id')::uuid and p.user_id = ${userId}::uuid`;
@@ -422,7 +550,14 @@ export async function changedPeople(db: Db, userId: string): Promise<string[]> {
        where n.user_id = ${userId}::uuid and n.updated_at > since.t
       union all
       select i.person_id, i.created_at from orbit.person_identities i, since
-       where i.user_id = ${userId}::uuid and i.created_at > since.t)
+       where i.user_id = ${userId}::uuid and i.created_at > since.t
+      -- plan 43: texts a signed-in student's browser sent, and accounts attached to people
+      union all
+      select d.person_id, d.updated_at from orbit.text_days d, since
+       where d.user_id = ${userId}::uuid and d.updated_at > since.t
+      union all
+      select l.person_id, l.updated_at from orbit.social_links l, since
+       where l.user_id = ${userId}::uuid and l.updated_at > since.t)
     select l.id from live l
      where l.scored_at is null or l.updated_at > l.scored_at
         or exists (select 1 from touched x where x.id = l.id and x.at > l.scored_at)

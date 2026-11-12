@@ -6,6 +6,7 @@ import { connectDb } from '../_shared/db.ts';
 import { makeLogger } from '../_shared/http.ts';
 import { providerSecret, resolveSecret } from '../_shared/secrets.ts';
 import { agentEnvWithSecrets } from '../_shared/services.ts';
+import { offeredSources } from '../_shared/sources/states.ts';
 import { makeApiHandler } from './api.ts';
 
 const env = (name: string) => Deno.env.get(name) || undefined;
@@ -18,6 +19,8 @@ const dbUrl = env('SUPABASE_DB_URL');
 const db = dbUrl ? connectDb(dbUrl) : undefined;
 // the agent features' keys (Claude, Exa, ...): a function secret, else the copy in orbit_private.secrets
 const agentEnv = await agentEnvWithSecrets(env, db);
+// plan 43 §3.1: the optional sources the owner offers, read once; unset is none and nothing changes
+const extraSources = offeredSources(env('ORBIT_EXTRA_SOURCES'));
 // read together, so a cold start waits on one round trip to the database, not five in a row.
 // Unipile (account-mode LinkedIn), and where Google sends sign-in back: a function secret, else the value stored in
 // orbit_private.secrets. The redirect stays this function's own address until ORBIT_GOOGLE_REDIRECT_URI is stored
@@ -50,9 +53,10 @@ Deno.serve(
       functionsUrl: supabaseUrl ? `${supabaseUrl}/functions/v1` : undefined,
       connectorsSigningKey: env('SUPABASE_SERVICE_ROLE_KEY'),
       ownerId,
+      extraSources,
     },
     db,
-    agent: { env: agentEnv },
+    agent: { env: { ...agentEnv, extraSources } },
     refreshProviderSecrets: async () => {
       const [unipileKey, unipileBase] = await Promise.all([
         providerSecret(env, db, 'UNIPILE_API_KEY'),

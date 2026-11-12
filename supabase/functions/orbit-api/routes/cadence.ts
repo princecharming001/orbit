@@ -4,10 +4,12 @@
  */
 import { dueItems } from '../../_shared/cadence/cadence.ts';
 import { json } from '../../_shared/http.ts';
+import { sourcesFor } from '../../_shared/sources/states.ts';
 import type { Ctx, Route } from '../api.ts';
 
 async function due(ctx: Ctx): Promise<Response> {
-  return json(200, { items: await dueItems(ctx.db, ctx.userId!, ctx.now()) });
+  const src = await sourcesFor(ctx.db, ctx.userId!, ctx.offered);
+  return json(200, { items: await dueItems(ctx.db, ctx.userId!, ctx.now(), src) });
 }
 
 export const cadenceRoutes: Record<string, Route> = {

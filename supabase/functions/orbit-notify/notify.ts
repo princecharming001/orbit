@@ -18,6 +18,7 @@ import type { Db } from '../_shared/db.ts';
 import { corsHeaders, errorResponse, HttpError, json, preflight, readJson } from '../_shared/http.ts';
 import type { QueueName } from '../_shared/queue.ts';
 import { checkSession, type SessionConfig, verifyBearer } from '../_shared/session.ts';
+import { NO_SOURCES } from '../_shared/sources/states.ts';
 
 export interface NotifyDeps {
   db?: Db;
@@ -64,12 +65,16 @@ export async function readinessInput(db: Db, userId: string): Promise<ReadinessI
     db.sql<{ provider: string; status: string; sync_state: Record<string, Record<string, unknown>> | null }>`
       select provider, status, sync_state from orbit.integration_accounts
        where user_id = ${userId}::uuid and provider in ('google', 'linkedin')`,
+    // plan 43 §3.10: optional sources never hold up "ready", so readiness counts what LinkedIn and Google brought
     db.sql<{ people: number; messages: number; ties: number }>`
       select
-        (select count(*) from orbit.people where user_id = ${userId}::uuid and not is_self
-           and deleted_at is null and merged_into is null)::int as people,
-        (select count(*) from orbit.messages where user_id = ${userId}::uuid)::int as messages,
-        (select count(*) from orbit.ties where user_id = ${userId}::uuid)::int as ties`,
+        (select count(*) from orbit.people p where p.user_id = ${userId}::uuid and not p.is_self
+           and p.deleted_at is null and p.merged_into is null
+           and orbit.person_in_use(p.sources, p.source_account, ${NO_SOURCES.hidden}::text[]))::int as people,
+        (select count(*) from orbit.messages where user_id = ${userId}::uuid
+           and provider <> all(${NO_SOURCES.excluded.providers}::text[]))::int as messages,
+        (select count(*) from orbit.ties where user_id = ${userId}::uuid
+           and kind <> all(${NO_SOURCES.excluded.tieKinds}::text[]))::int as ties`,
     // the import's own work (reading, classifying, scoring, matching), due now or within a couple of minutes: a send
     // scheduled for tomorrow morning or a cadence check-in next week is not the import, and would keep it waiting
     db.query<{ n: number }>(

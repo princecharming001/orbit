@@ -12,6 +12,7 @@
  *                                                        hosted-auth notify: CREATION_SUCCESS | RECONNECTED → the
  *                                                        user's linkedin account (user id = payload.name) + backfill
  */
+import type { OptionalSource } from '@orbit/core/sources';
 import { isUuid, timingSafeEqual } from '../_shared/crypto.ts';
 import type { Db } from '../_shared/db.ts';
 import {
@@ -38,6 +39,11 @@ export interface WebhookDeps {
   unipileSecret: string | undefined;
   queue?: Queue;
   log?: Logger;
+  /**
+   * ORBIT_EXTRA_SOURCES (plan 43 §3.1), read once at cold start: the optional sources the owner offers. A writer for
+   * an optional source asks `sourceIsOn(db, userId, source, offered)` before it stores anything.
+   */
+  offered?: OptionalSource[];
 }
 
 export function makeWebhookHandler(deps: WebhookDeps): (req: Request) => Promise<Response> {

@@ -47,6 +47,7 @@ import { loadFriendLayer } from '../paths/find.ts';
 import { goalPaused } from '../replies/breaker.ts';
 import { raiseCard } from '../replies/cards.ts';
 import type { Services } from '../services.ts';
+import { NO_SOURCES, offeredOf, sourcesFor } from '../sources/states.ts';
 import { notesOf, storedCard } from '../voice/voice.ts';
 import { localParts, validZone, zonedTime } from '../zones.ts';
 import { firstTouchRungOf } from './autopilot.ts';
@@ -254,8 +255,10 @@ async function planGoals(
   let remaining = pace.remaining;
   const daysLeft = sendDaysLeft(planDay);
 
-  const people = await candidateRows(db, userId);
-  const layer = await loadFriendLayer(db, userId).catch(() => ({ friends: [], shares: [] }));
+  // plan 43 §3.2: people known only from an optional source out of use are not picked
+  const src = await sourcesFor(db, userId, offeredOf(s.env));
+  const people = await candidateRows(db, userId, undefined, src.hidden);
+  const layer = await loadFriendLayer(db, userId, src.hidden).catch(() => ({ friends: [], shares: [] }));
   // friend asks already made or drafted: the same contact is never asked twice
   const asked = new Set(
     (
@@ -388,6 +391,7 @@ async function candidateRows(
   db: Db,
   userId: string,
   one?: { personId: string; draftId: string },
+  hidden: readonly string[] = NO_SOURCES.hidden,
 ): Promise<PersonCandidateRow[]> {
   return db.sql<PersonCandidateRow>`
     select p.id, p.display_name, p.first_name, p.title, p.headline, coalesce(o.name, p.org_raw) as org, p.is_alumni,
@@ -415,6 +419,7 @@ async function candidateRows(
       left join orbit.organizations o on o.id = p.org_id
       left join orbit.tie_scores ts on ts.user_id = p.user_id and ts.person_id = p.id
      where p.user_id = ${userId}::uuid and not p.is_self and p.deleted_at is null and p.merged_into is null
+       and orbit.person_in_use(p.sources, p.source_account, ${[...hidden]}::text[])
        and (${one?.personId ?? null}::uuid is null or p.id = ${one?.personId ?? null}::uuid)
        and (${one?.personId ?? null}::uuid is not null or coalesce(o.name, p.org_raw) is not null)`;
 }
@@ -448,7 +453,12 @@ export async function firstTouchSendGate(
         select id, kind, title, targets, autonomy_level, priority from orbit.goals
          where id = ${d.goal_id}::uuid and user_id = ${userId}::uuid and deleted_at is null and status = 'active'`
     : [];
-  const [p] = await candidateRows(db, userId, { personId: d.person_id, draftId: d.id });
+  const [p] = await candidateRows(
+    db,
+    userId,
+    { personId: d.person_id, draftId: d.id },
+    (await sourcesFor(db, userId, offeredOf(s.env))).hidden,
+  );
   if (!p) return { go: false, hold: 'first_touch:hidden', rule: 'hidden' };
   const rule = firstTouchBlock(
     {
