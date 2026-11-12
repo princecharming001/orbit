@@ -8,6 +8,7 @@ import { googleTokenSource } from '../_shared/google.ts';
 import { makeLogger } from '../_shared/http.ts';
 import { providerSecret, resolveSecret } from '../_shared/secrets.ts';
 import { agentEnvWithSecrets, makeMailer } from '../_shared/services.ts';
+import { xConfigFromEnv } from '../_shared/social/x/config.ts';
 import { sqlVault } from '../_shared/vault.ts';
 import { DEFAULT_COST_THRESHOLDS } from './handlers/cost.ts';
 import type { HandlerDeps } from './handlers/deps.ts';
@@ -70,6 +71,8 @@ const handlerDeps: HandlerDeps = {
   claude: makeClaude({ apiKey: claudeKey, db, batch: batchFlagOn(agentEnv.claudeBatch) }),
   cost: { mailer: makeMailer(agentEnv, fetch), ownerId, thresholds: costThresholds },
   park: { days: parkDays(parkRaw) },
+  // plan 43 §5: X's app and limits; the DM writer is wired once _shared/social/chats.ts lands
+  x: { cfg: xConfigFromEnv(env) },
 };
 const handlers = defaultHandlers({ ...handlerDeps, agents: { env: agentEnv } });
 

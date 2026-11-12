@@ -123,6 +123,8 @@ describe('orbit core migration', () => {
       // plan 29 §B2.4b: the nightly voice distillation, scheduled by 20261102_orbit_voice.sql
       'orbit-voice',
       'orbit-worker-tick',
+      // plan 43 §5: X's DM reads and its 30-day expiry, hourly, scheduled by 20261203_orbit_x.sql
+      'orbit-x',
     ]);
   });
 

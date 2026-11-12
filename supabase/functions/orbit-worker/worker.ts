@@ -28,6 +28,7 @@ import { linkedinHandlers } from './handlers/linkedin.ts';
 import { scoreHandlers } from './handlers/score.ts';
 import { searchHandlers } from './handlers/search.ts';
 import { unipileHandlers } from './handlers/unipile.ts';
+import { xHandlers } from './handlers/x.ts';
 
 export class NotImplemented extends Error {
   constructor(kind: string) {
@@ -86,6 +87,7 @@ export function defaultHandlers(
     ...unipileHandlers(deps),
     ...classifyHandlers(deps, agents),
     ...agentHandlers(agents),
+    ...xHandlers(deps),
   };
   for (const kind of PLACEHOLDER_KINDS)
     handlers[kind] = async () => {
