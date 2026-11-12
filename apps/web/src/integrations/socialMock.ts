@@ -67,17 +67,18 @@ async function closest(userId: string): Promise<Person[]> {
 
 export async function instagramStatus(userId: string, now = Date.now()): Promise<InstagramStatusResponse> {
   const s = (await load(userId)).instagram;
-  if (!s || s.status !== 'active')
+  if (s?.status === 'active') {
+    const at = Math.floor((now - Date.parse(s.connectedAt)) / stepMs);
+    const step = (i: number): SocialStep => (at > i ? 'done' : at === i ? 'reading' : 'waiting');
     return {
-      status: 'not_connected',
-      steps: { profile: 'waiting', chats: 'waiting', following: 'waiting', followers: 'waiting' },
+      status: 'active',
+      username: s.username,
+      steps: { profile: step(0), chats: step(1), following: step(2), followers: step(3) },
     };
-  const at = Math.floor((now - Date.parse(s.connectedAt)) / stepMs);
-  const step = (i: number): SocialStep => (at > i ? 'done' : at === i ? 'reading' : 'waiting');
+  }
   return {
-    status: 'active',
-    username: s.username,
-    steps: { profile: step(0), chats: step(1), following: step(2), followers: step(3) },
+    status: 'not_connected',
+    steps: { profile: 'waiting', chats: 'waiting', following: 'waiting', followers: 'waiting' },
   };
 }
 
