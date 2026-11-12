@@ -52,7 +52,7 @@ export const showSetup = defineTool({
   name: 'show_setup',
   kind: 'read',
   description:
-    "Call this when the student needs to connect or add something (Gmail and Google Calendar, LinkedIn, a Claude key, a resume, and when this Orbit offers them Instagram, X or texts) instead of describing Settings: it shows a small widget in the chat where they do it, with the current status. Pick google for Gmail and Calendar, linkedin to connect LinkedIn live (it keeps their connections in sync) or upload the connections export, claude_key for their own Claude API key, resume for their resume file, instagram or x to connect that account (Orbit reads who they follow and their messages to find warm paths), texts for the Mac's Messages. Instagram, X and texts are optional: offer them only when the snapshot lists them as offered. Nothing changes until the student acts in the widget.",
+    'Call this when the student needs to connect or add something instead of describing Settings: it shows a widget in the chat where they do it, with the current status. google: Gmail and Calendar. linkedin: connect live or upload the export. claude_key: their Claude API key. resume: their resume file. instagram, x, texts: only when the snapshot lists them as offered. Nothing changes until the student acts in the widget.',
   input: z.object({
     what: z.enum(SETUP_WHAT as [SetupWhat, ...SetupWhat[]]).describe('Which widget to show.'),
   }),

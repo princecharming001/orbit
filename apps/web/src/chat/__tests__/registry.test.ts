@@ -214,6 +214,9 @@ describe('every tool parses and executes its example input against the demo', ()
       sync_linkedin: {},
       disconnect_linkedin: {},
       get_mutual_connections: { personId: ids.person.id },
+      // plan 43: nothing offered on the sample student's examples' account is fine: the status says so, the check refuses
+      social_status: {},
+      check_social_paths: { personId: ids.person.id, platform: 'instagram' },
       export_data: {},
       delete_all_data: {},
       load_demo: {},

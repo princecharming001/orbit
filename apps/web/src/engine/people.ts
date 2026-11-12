@@ -551,6 +551,10 @@ export async function mergePeople(userId: string, survivorId: string, mergedId: 
       db.researchRuns,
       db.facetAssertions,
       db.profileReads,
+      db.socialLinks,
+      db.socialAsks,
+      db.socialLookups,
+      db.socialTies,
     ],
     async () => {
       // touches: one per source item and person, so a touch both records have is kept once
@@ -577,6 +581,12 @@ export async function mergePeople(userId: string, survivorId: string, mergedId: 
       }
       // what the student told the chat about them stays with them
       await db.memories.where('personId').equals(mergedId).modify({ personId: survivorId });
+      // plan 43: Instagram and X accounts, questions, checks and the demo's follow ties follow the person
+      await db.socialLinks.where('personId').equals(mergedId).modify({ personId: survivorId });
+      await db.socialAsks.where('personId').equals(mergedId).modify({ personId: survivorId });
+      await db.socialLookups.where('targetPersonId').equals(mergedId).modify({ targetPersonId: survivorId });
+      await db.socialTies.where('aId').equals(mergedId).modify({ aId: survivorId });
+      await db.socialTies.where('bId').equals(mergedId).modify({ bId: survivorId });
       await db.messages.where('fromPersonId').equals(mergedId).modify({ fromPersonId: survivorId });
       // affiliations: the same employer or school on both is kept once
       const affKey = (a: { kind: string; organizationId?: string; nameRaw: string; title?: string }) =>
