@@ -134,7 +134,7 @@ export function classifyAccounts(
 async function knownIds(db: Db) {
   const rows = await db.sql<{ external_account_id: string }>`
     select external_account_id from orbit.integration_accounts
-     where provider = 'linkedin' and external_account_id is not null`;
+     where provider in ('linkedin', 'instagram') and external_account_id is not null`;
   const users = await db.sql<{ id: string }>`select id::text as id from orbit.users`;
   const [links] = await db.sql<{ ok: boolean }>`
     select to_regclass('public.orbit_unipile_links') is not null as ok`;
@@ -192,6 +192,23 @@ export async function parkCandidates(db: Db, now: Date, days: number, limit = PA
      limit ${limit}`;
 }
 
+/**
+ * Instagram accounts to release tonight (plan 43 §3.1): the student switched Instagram Off at least `days` ago and
+ * left it Off. The student signs in again to switch it back on.
+ */
+export async function instagramParkCandidates(db: Db, now: Date, days: number, limit = PARK_PER_RUN) {
+  const cutoff = new Date(now.getTime() - days * 86_400_000);
+  return db.sql<{ user_id: string; external_account_id: string }>`
+    select a.user_id::text as user_id, a.external_account_id
+      from orbit.integration_accounts a
+      join orbit.users u on u.id = a.user_id and u.deleted_at is null
+      join orbit.source_states s on s.user_id = a.user_id and s.source = 'instagram'
+     where a.provider = 'instagram' and a.external_account_id is not null and a.status <> 'parked'
+       and s.state = 'off' and s.off_since is not null and s.off_since <= ${cutoff}::timestamptz
+     order by s.off_since
+     limit ${limit}`;
+}
+
 export function unipileHandlers(deps: HandlerDeps): Record<string, JobHandler> {
   const opts: ProviderOptions = {
     fetch: deps.fetch ?? fetch,
@@ -221,7 +238,12 @@ export function unipileHandlers(deps: HandlerDeps): Record<string, JobHandler> {
       if (!configured) throw new JobSkipped('unconfigured');
       const now = ctx.now();
       const candidates = await parkCandidates(ctx.db, now, days, deps.park?.perRun ?? PARK_PER_RUN);
-      const out = { days, parked: [] as string[], skipped: [] as { userId: string; reason: string }[] };
+      const out = {
+        days,
+        parked: [] as string[],
+        instagramParked: [] as string[],
+        skipped: [] as { userId: string; reason: string }[],
+      };
       for (const c of candidates) {
         const id = c.external_account_id;
         // the id came from Orbit's own row; still, only a LinkedIn account Orbit named is ever unlinked
@@ -262,6 +284,44 @@ export function unipileHandlers(deps: HandlerDeps): Record<string, JobHandler> {
           values (${c.user_id}::uuid, 'system', 'linkedin.parked', 'integration_accounts',
                   ${{ accountId: id, since, days, gone: !one.value }}::jsonb)`;
         out.parked.push(c.user_id);
+      }
+      // plan 43 §3.1: the second trigger, an Instagram account the student left Off for the same number of days
+      const instagram = await instagramParkCandidates(ctx.db, now, days, deps.park?.perRun ?? PARK_PER_RUN);
+      for (const c of instagram) {
+        const id = c.external_account_id;
+        const one = await getUnipileAccount(opts, id);
+        if (!one.ok) {
+          out.skipped.push({ userId: c.user_id, reason: `instagram get ${one.status ?? one.kind}` });
+          continue;
+        }
+        if (one.value) {
+          const name = one.value.name ?? '';
+          const ours = name.toLowerCase() === c.user_id.toLowerCase() || ORBIT_REF.test(name);
+          if ((one.value.type ?? '').toUpperCase() !== 'INSTAGRAM' || !ours) {
+            out.skipped.push({ userId: c.user_id, reason: 'instagram_not_orbit_named' });
+            continue;
+          }
+          const del = await deleteUnipileAccount(opts, id);
+          if (!del.ok) {
+            out.skipped.push({ userId: c.user_id, reason: `instagram delete ${del.status ?? del.kind}` });
+            continue;
+          }
+        }
+        const parked = { at: now.toISOString(), accountId: id };
+        const rows = await ctx.db.sql`
+          update orbit.integration_accounts
+             set status = 'parked', external_account_id = null, last_error = null,
+                 sync_state = coalesce(sync_state, '{}'::jsonb)
+                   || jsonb_build_object('instagram',
+                        coalesce(sync_state -> 'instagram', '{}'::jsonb) || ${{ parked, stage: 'profile' }}::jsonb)
+           where user_id = ${c.user_id}::uuid and provider = 'instagram' and external_account_id = ${id}
+           returning id`;
+        if (!rows.length) continue;
+        await ctx.db.sql`
+          insert into orbit.audit_log (user_id, actor, action, target_table, details)
+          values (${c.user_id}::uuid, 'system', 'instagram.parked', 'integration_accounts',
+                  ${{ accountId: id, days, gone: !one.value }}::jsonb)`;
+        out.instagramParked.push(c.user_id);
       }
       await ctx.db.sql`
         insert into orbit.audit_log (user_id, actor, action, target_table, target_id, details)

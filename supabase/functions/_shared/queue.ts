@@ -25,6 +25,9 @@ export const KIND_QUEUE: Record<string, QueueName> = {
   'sync.calendar': 'orbit_sync',
   'sync.contacts': 'orbit_sync',
   'sync.linkedin': 'orbit_sync',
+  // plan 43: Instagram's first days and refreshes, the words of a chat that entered the pipeline
+  'sync.instagram': 'orbit_sync',
+  'social.words': 'orbit_sync',
   'cadence.user': 'orbit_cadence',
   'funnel.reply': 'orbit_classify',
   'outcomes.roll': 'orbit_cadence',
@@ -51,6 +54,9 @@ export const KIND_QUEUE: Record<string, QueueName> = {
   'unipile.reconcile': 'orbit_enrich',
   'linkedin.park': 'orbit_enrich',
   'claude.batch.poll': 'orbit_enrich',
+  // plan 43: accounts offered to matching, and who could introduce the student to a target
+  'social.match': 'orbit_enrich',
+  'social.lookup': 'orbit_enrich',
   noop: 'orbit_enrich',
 };
 

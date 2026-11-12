@@ -17,6 +17,11 @@
  * day and 60 a week, or the student's own lower limit) pushes it to the next window. Afterwards: sent_at, provider_message_id, the chat moves,
  * and the audit log records it (`draft.sent`, or `draft.auto_sent` for one Orbit approved itself). A 429 or 5xx
  * hands it back as approved for the queue to retry.
+ *
+ * Instagram (plan 43 §4 "Sending") follows LinkedIn's rule: every message needs the student's tap, confirmed within
+ * 15 minutes, never sent on Orbit's own, at most INSTAGRAM_PER_DAY a day. It goes out from the student's own account
+ * through Unipile, paid from the account's rolling budget as the student's own request, and is written as an outbound
+ * message in the personal lane at once (the touch), keyed so the webhook's copy of it is not stored twice.
  */
 import { FIRST_TOUCH_KINDS } from '@orbit/core/drafts/compose';
 import { placeholderIn } from '@orbit/core/drafts/validate';
@@ -37,6 +42,11 @@ import { breakerHolds, goalPaused, tripBreaker } from '../replies/breaker.ts';
 import { iso } from '../rows.ts';
 import type { Services } from '../services.ts';
 import { moveChat } from '../slots/slots.ts';
+import { SocialBudgetSpent, SocialSignInNeeded } from '../social/adapter.ts';
+import { fillChatWords, storeSocialChat } from '../social/chats.ts';
+import { adapterFor, connectedAccount } from '../social/factory.ts';
+import { InstagramCallFailed } from '../social/instagram.ts';
+import { attachedAccount } from '../social/lookup.ts';
 import { checkBuiltAddress } from '../sourcing/ondemand.ts';
 import { recordDraftEdit, voiceGate } from '../voice/voice.ts';
 import { validZone, zonedTime } from '../zones.ts';
@@ -52,6 +62,12 @@ import {
 
 /** A LinkedIn send needs the user's tap on that message within this window. */
 export const LINKEDIN_CONFIRM_MS = 15 * 60_000;
+/** Instagram messages a day, every one a tap (plan 43 §4). */
+export const INSTAGRAM_PER_DAY = 10;
+/** The channels where every message needs the student's own tap, and nothing goes on Orbit's own. */
+const TAP_CHANNELS: ReadonlySet<string> = new Set(['linkedin', 'instagram']);
+const isTap = (channel: string) => TAP_CHANNELS.has(channel);
+const channelName = (channel: string) => (channel === 'instagram' ? 'Instagram' : 'LinkedIn');
 /** A send held by the pause is looked at again this often, until the pause ends. */
 export const PAUSE_RECHECK_SEC = 15 * 60;
 /** A draft still 'sending' this long after its claim was left by a worker that died mid-send. */
@@ -164,8 +180,12 @@ export async function approveDraft(
   const [p] = await db.sql<{ do_not_contact: boolean; timezone: string | null }>`
     select do_not_contact, timezone from orbit.people where id = ${d.person_id}::uuid`;
   if (p?.do_not_contact) throw new HttpError(409, 'do_not_contact', 'they asked not to be contacted');
-  if (d.channel === 'linkedin' && req.confirm !== true)
-    throw new HttpError(409, 'needs_confirmation', 'every LinkedIn message needs your tap to send');
+  if (isTap(d.channel) && req.confirm !== true)
+    throw new HttpError(
+      409,
+      'needs_confirmation',
+      `every ${channelName(d.channel)} message needs your tap to send`,
+    );
   if ((await salesFirstTouch(db, d)) && !(await postalAddress(db, userId)))
     throw new HttpError(
       409,
@@ -177,7 +197,7 @@ export async function approveDraft(
   const u = await loadUser(db, userId);
   const level = await effectiveLevel(db, d.goal_id, u?.autonomy_level ?? 0);
   let sendAt: Date;
-  if (d.channel === 'linkedin') sendAt = now;
+  if (isTap(d.channel)) sendAt = now;
   else if (req.sendAt) {
     const t = new Date(req.sendAt);
     if (Number.isNaN(t.getTime())) throw new HttpError(400, 'bad_request', 'sendAt must be an ISO time');
@@ -206,7 +226,7 @@ export async function approveDraft(
     channel: row.channel,
     level,
   });
-  if (row.channel === 'linkedin') await audit(db, userId, 'user', 'draft.confirm', row.id, { hash });
+  if (isTap(row.channel)) await audit(db, userId, 'user', 'draft.confirm', row.id, { hash });
 
   if (sendAt.getTime() <= now.getTime()) {
     try {
@@ -444,12 +464,13 @@ export async function sendDraft(s: Services, draftId: string): Promise<SendResul
     }
   }
   // LinkedIn is never sent on Orbit's own (plan 29 §B6): only a fresh tap below sends it
-  if (d.channel === 'linkedin' && agentApproved && !userApproved) {
-    await settle('draft', { error: 'linkedin_never_auto' });
-    await audit(db, userId, 'system', 'draft.hold', d.id, { reason: 'linkedin_never_auto' });
-    return { status: 'held', reason: 'linkedin_never_auto' };
+  if (isTap(d.channel) && agentApproved && !userApproved) {
+    const reason = `${d.channel}_never_auto`;
+    await settle('draft', { error: reason });
+    await audit(db, userId, 'system', 'draft.hold', d.id, { reason });
+    return { status: 'held', reason };
   }
-  if (d.channel === 'linkedin') {
+  if (isTap(d.channel)) {
     const fresh = approvals.some(
       (a) =>
         a.action === 'draft.confirm' &&
@@ -458,9 +479,10 @@ export async function sendDraft(s: Services, draftId: string): Promise<SendResul
         now.getTime() - new Date(a.created_at).getTime() <= LINKEDIN_CONFIRM_MS,
     );
     if (!fresh) {
-      await settle('draft', { error: 'linkedin_needs_fresh_approval' });
-      await audit(db, userId, 'system', 'draft.hold', d.id, { reason: 'linkedin_needs_fresh_approval' });
-      return { status: 'held', reason: 'linkedin_needs_fresh_approval' };
+      const reason = `${d.channel}_needs_fresh_approval`;
+      await settle('draft', { error: reason });
+      await audit(db, userId, 'system', 'draft.hold', d.id, { reason });
+      return { status: 'held', reason };
     }
   }
   if (!userApproved && !agentApproved) {
@@ -527,7 +549,7 @@ export async function sendDraft(s: Services, draftId: string): Promise<SendResul
     const next = new Date(
       nextSendWindow(new Date(now.getTime() + 86_400_000), u.timezone, d.channel, s.random).notBefore,
     );
-    await settle(d.channel === 'linkedin' ? 'draft' : 'approved', { error: cap, send_at: next });
+    await settle(isTap(d.channel) ? 'draft' : 'approved', { error: cap, send_at: next });
     await audit(db, userId, 'system', 'draft.hold', d.id, { reason: cap, until: iso(next) });
     return { status: 'held', reason: cap };
   }
@@ -611,6 +633,14 @@ export async function sendDraft(s: Services, draftId: string): Promise<SendResul
           d.thread_external_id,
           files.length ? mime : undefined,
         );
+  } else if (d.channel === ('instagram' as string)) {
+    const ig = await instagramSend(s, userId, d, now);
+    if (!ig.ok && !ig.retry && ig.error === 'instagram_busy') {
+      await settle('draft', { error: ig.error });
+      await audit(db, userId, 'system', 'draft.hold', d.id, { reason: ig.error });
+      return { status: 'held', reason: ig.error };
+    }
+    out = ig;
   } else {
     const [acct] = await db.sql<{ external_account_id: string | null }>`
       select external_account_id from orbit.integration_accounts
@@ -643,13 +673,11 @@ export async function sendDraft(s: Services, draftId: string): Promise<SendResul
     if (out.ambiguous)
       await audit(db, userId, 'system', 'draft.send_unconfirmed', d.id, { error: out.error, at: iso(now) });
     // LinkedIn cannot be asked what went: never resent on Orbit's own, the student checks the chat and taps again
-    if (out.retry && out.ambiguous && d.channel === 'linkedin') {
-      await settle('failed', { error: 'linkedin_unconfirmed' });
-      await audit(db, userId, 'system', 'draft.failed', d.id, {
-        error: 'linkedin_unconfirmed',
-        cause: out.error,
-      });
-      return { status: 'failed', error: 'linkedin_unconfirmed' };
+    if (out.retry && out.ambiguous && isTap(d.channel)) {
+      const error = `${d.channel}_unconfirmed`;
+      await settle('failed', { error });
+      await audit(db, userId, 'system', 'draft.failed', d.id, { error, cause: out.error });
+      return { status: 'failed', error };
     }
     if (out.retry) {
       await settle('approved', { error: out.error });
@@ -705,7 +733,11 @@ async function afterSend(db: Db, userId: string, d: DraftRow, now: Date) {
   const data: Partial<CoffeeChat> = {
     ...c.data,
     lastOutboundAt: at,
-    outreachChannel: (d.channel === 'gmail' ? 'email' : 'linkedin') as CoffeeChat['outreachChannel'],
+    outreachChannel: (d.channel === 'gmail'
+      ? 'email'
+      : d.channel === ('instagram' as string)
+        ? 'instagram'
+        : 'linkedin') as CoffeeChat['outreachChannel'],
   };
   if (!data.firstOutreachAt && d.kind !== 'forwardable_blurb' && d.kind !== 'intro_request')
     data.firstOutreachAt = at;
@@ -747,7 +779,7 @@ async function capReached(
   const inFlight = f?.n ?? 0;
   const inFlightFirst = f?.first ?? 0;
   if (auto) {
-    if (d.channel === 'linkedin') return 'linkedin_never_auto';
+    if (isTap(d.channel)) return `${d.channel}_never_auto`;
     const [a] = await db.sql<{ day: number; week_first: number; day_first: number }>`
       select count(*) filter (where created_at >= ${dayStart}::timestamptz)::int as day,
              count(*) filter (where created_at >= ${dayStart}::timestamptz
@@ -770,6 +802,14 @@ async function capReached(
          and sent_at >= ${dayStart}::timestamptz`;
     const cap = ownCap(u.settings, 'daily_send_cap_linkedin', SEND_CAPS.linkedinPerDay);
     return (r?.n ?? 0) + inFlight >= cap ? 'linkedin_daily_cap' : null;
+  }
+  if (d.channel === ('instagram' as string)) {
+    const [r] = await db.sql<{ n: number }>`
+      select count(*)::int as n from orbit.drafts
+       where user_id = ${userId}::uuid and channel = 'instagram' and status = 'sent'
+         and sent_at >= ${dayStart}::timestamptz`;
+    const cap = ownCap(u.settings, 'daily_send_cap_instagram', INSTAGRAM_PER_DAY);
+    return (r?.n ?? 0) + inFlight >= cap ? 'instagram_daily_cap' : null;
   }
   if (await salesFirstTouch(db, d)) {
     const [r] = await db.sql<{ n: number }>`
@@ -809,7 +849,7 @@ export async function recoverStuckSends(s: Services, userId: string): Promise<nu
     const [row] = await db.sql<{ id: string }>`
       update orbit.drafts
          set status = ${email ? 'approved' : 'failed'},
-             error = ${email ? 'send_interrupted' : 'linkedin_unconfirmed'},
+             error = ${email ? 'send_interrupted' : `${d.channel}_unconfirmed`},
              send_at = case when ${email} then ${now}::timestamptz else send_at end
        where id = ${d.id}::uuid and status = 'sending'
          and updated_at < ${new Date(now.getTime() - STUCK_SENDING_MS)}::timestamptz
@@ -827,7 +867,7 @@ export async function recoverStuckSends(s: Services, userId: string): Promise<nu
         payload: { draftId: d.id },
         dedupeKey: `send:${d.id}:recover:${iso(now)}`,
       });
-    else await audit(db, userId, 'system', 'draft.failed', d.id, { error: 'linkedin_unconfirmed' });
+    else await audit(db, userId, 'system', 'draft.failed', d.id, { error: `${d.channel}_unconfirmed` });
   }
   return n;
 }
@@ -888,4 +928,96 @@ async function linkedinAttendee(
      where user_id = ${userId}::uuid and person_id = ${personId}::uuid and kind in ('unipile_attendee', 'linkedin_member')
      order by (kind = 'unipile_attendee') desc limit 1`;
   return i?.value_raw ?? i?.value_norm ?? memberId;
+}
+
+/**
+ * One Instagram message from the student's own account, after their tap (plan 43 §4 "Sending"): into the one-to-one
+ * chat they have with the person, or a new chat with the account attached to them. Paid from the account's rolling
+ * budget as the student's own request; a full window holds it as a draft for the student to send again. The sent
+ * message is written in the personal lane at once (the touch), with its words, since the student wrote to them from
+ * Orbit, and the person's chat is filled in.
+ */
+async function instagramSend(
+  s: Services,
+  userId: string,
+  d: DraftRow,
+  now: Date,
+): Promise<SendOutcome & { chatId?: string }> {
+  const db = s.db;
+  const account = await connectedAccount(db, userId, 'instagram');
+  if (account?.status !== 'active') return { ok: false, retry: false, error: 'instagram_not_connected' };
+  const adapter = adapterFor(
+    db,
+    { fetch: s.fetch, unipile: { apiKey: s.env.unipileKey, baseUrl: s.env.unipileBase }, now: () => now },
+    'instagram',
+    account,
+    'student',
+  );
+  if (!adapter) return { ok: false, retry: false, error: 'unipile_unconfigured' };
+  const [t] = await db.sql<{ external_id: string; social_account_id: string | null }>`
+    select external_id, social_account_id from orbit.threads
+     where user_id = ${userId}::uuid and provider = 'instagram' and participant_count <= 1
+       and ${d.person_id}::uuid = any(participant_person_ids)
+     order by last_at desc nulls last limit 1`;
+  const chatId = d.thread_external_id ?? t?.external_id;
+  const accountId = t?.social_account_id ?? (await attachedAccount(db, userId, 'instagram', d.person_id));
+  if (!chatId && !accountId) return { ok: false, retry: false, error: 'instagram_no_account' };
+  try {
+    const r = await adapter.send({ chatId: chatId ?? undefined, accountId: accountId ?? undefined }, d.body);
+    await storeSocialChat(
+      db,
+      userId,
+      'instagram',
+      { chatId: r.chatId, participants: 2, others: accountId ? [{ accountId }] : [] },
+      [
+        {
+          messageId: r.messageId,
+          chatId: r.chatId,
+          at: now.toISOString(),
+          fromStudent: true,
+          senderAccountId: account.socialAccountId ?? '',
+          text: d.body,
+          hasWords: true,
+        },
+      ],
+      { now },
+    );
+    await db.sql`
+      update orbit.messages set body_text = ${d.body}, snippet = ${d.body.slice(0, 200)}
+       where user_id = ${userId}::uuid and provider = 'instagram' and external_id = ${r.messageId}`;
+    await fillChatWords(db, userId, d.person_id, s.queue).catch(() => 0);
+    return { ok: true, providerMessageId: r.messageId, chatId: r.chatId };
+  } catch (e) {
+    if (e instanceof SocialBudgetSpent) return { ok: false, retry: false, error: 'instagram_busy' };
+    if (e instanceof SocialSignInNeeded) return { ok: false, retry: false, error: 'instagram_sign_in' };
+    if (e instanceof InstagramCallFailed) {
+      if (e.status === 'network') return { ok: false, retry: true, error: 'network', ambiguous: true };
+      if (e.status === 429 || e.status >= 500)
+        return { ok: false, retry: true, error: `unipile_${e.status}`, ambiguous: e.status >= 500 };
+      return { ok: false, retry: false, error: `unipile_${e.status}` };
+    }
+    throw e;
+  }
+}
+
+/**
+ * The note the draft box shows before an Instagram message (plan 43 §4): a message to someone who does not follow
+ * the student lands in their requests. Read from the student's own followers list once it was read to the end.
+ */
+export async function instagramRequestNote(db: Db, userId: string, personId: string): Promise<string | null> {
+  const [r] = await db.sql<{ followed: boolean; complete: boolean; account: string | null }>`
+    select exists (select 1 from orbit.social_follows f
+                    where f.platform = 'instagram' and f.owner_user_id = ${userId}::uuid
+                      and f.followed_id = i.social_account_id and f.follower_id = l.account_id) as followed,
+           exists (select 1 from orbit.social_list_reads r
+                    where r.platform = 'instagram' and r.owner_user_id = ${userId}::uuid
+                      and r.account_id = i.social_account_id and r.list = 'followers'
+                      and r.ended and (r.total is null or r.rows_read >= 0.9 * r.total)) as complete,
+           l.account_id as account
+      from orbit.integration_accounts i
+      join orbit.social_links l on l.user_id = i.user_id and l.platform = 'instagram' and l.person_id = ${personId}::uuid
+     where i.user_id = ${userId}::uuid and i.provider = 'instagram' and i.social_account_id is not null
+     limit 1`;
+  if (!r?.account || r.followed || !r.complete) return null;
+  return 'They do not follow you on Instagram, so this lands in their message requests.';
 }

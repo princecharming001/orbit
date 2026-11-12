@@ -32,6 +32,7 @@ import {
 } from '@orbit/core/text/normalize';
 import type { Person, PersonSource } from '@orbit/core/types';
 import type { Db } from '../db.ts';
+import { refuseSocialMerge, SocialMergeRefused } from '../social/links.ts';
 import { PERSON_COLUMNS, toPerson } from './util.ts';
 
 export type IngestSource = 'gmail' | 'calendar' | 'contacts' | 'linkedin';
@@ -309,7 +310,12 @@ export async function resolvePeople(
 
 /** The same-mailbox proof (core `mergeWith`): the LinkedIn-only namesake becomes the address's owner. */
 async function absorb(ctx: Ctx, survivor: string, loser: string) {
-  if (!(await mergePeople(ctx.db, ctx.userId, survivor, loser))) return;
+  const merged = await mergePeople(ctx.db, ctx.userId, survivor, loser).catch((e) => {
+    // someone who owns a social account stays a person of their own (plan 43 §3.4)
+    if (e instanceof SocialMergeRefused) return false;
+    throw e;
+  });
+  if (!merged) return;
   ctx.result.merged.set(loser, survivor);
   const gone = ctx.people.find((p) => p.id === loser);
   const kept = ctx.people.find((p) => p.id === survivor);
@@ -440,6 +446,8 @@ const dedupeArray = (col: string) =>
  */
 export async function mergePeople(db: Db, userId: string, survivor: string, loser: string): Promise<boolean> {
   if (survivor === loser) return false;
+  // plan 43 §3.4: a person who owns an Instagram or X account is never merged; the account is attached instead
+  await refuseSocialMerge(db, userId, [survivor, loser]);
   const [a, b] = survivor < loser ? [survivor, loser] : [loser, survivor];
   const blocked = await db.sql`
     select 1 from orbit.do_not_merge where user_id = ${userId}::uuid

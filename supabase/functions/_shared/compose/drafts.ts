@@ -49,6 +49,8 @@ export type DraftRow = Record<string, unknown> & {
 /** What drafts.ask holds: the ask, plus what the send path needs to know about how the draft came to be. */
 export interface DraftMeta {
   kind: string;
+  /** plan 43 §4: shown in the draft box before it goes (an Instagram message that lands in their requests) */
+  note?: string;
   text: string;
   /** the inbound message a reply answers */
   replyToMessageId?: string;
@@ -93,6 +95,8 @@ export function toServerDraft(r: DraftRow): ServerDraft {
     ...(Array.isArray(r.attachments) && r.attachments.length
       ? { attachments: r.attachments as NonNullable<ServerDraft['attachments']> }
       : {}),
+    // plan 43 §4: what the draft box says first (an Instagram message to someone who does not follow the student)
+    ...(typeof r.ask?.note === 'string' ? { note: r.ask.note } : {}),
     createdAt: iso(r.created_at)!,
     updatedAt: iso(r.updated_at)!,
   };
