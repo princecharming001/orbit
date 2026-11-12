@@ -13,47 +13,25 @@ import { type ReactNode, useCallback, useEffect, useState } from 'react';
 import { AppMark, IntegrationRow, RowGroup, RowStatus } from '../../components/IntegrationRow';
 import { SettingsHeader } from '../../components/settings/kit';
 import { loadSources } from '../../engine/sources';
-import { type AdminSourcesResponse, accountUser, callApi } from '../../integrations/orbitApi';
+import {
+  type AdminSourcesResponse,
+  accountUser,
+  callApi,
+  isSignedIn,
+  refreshOwner,
+  subscribeSession,
+} from '../../integrations/orbitApi';
 import { Button, Modal, SkeletonRows, Switch, useToast } from '../../ui';
 
 type Row = AdminSourcesResponse['sources'][number];
 
 const NAMES: Record<OptionalSource, string> = { instagram: 'Instagram', x: 'X', imessage: 'Texts' };
 
-/** What each missing piece is called, in the owner's words. */
-const MISSING_WORDS: Record<string, string> = {
-  unipile_key: 'your Unipile key',
-  UNIPILE_API_KEY: 'your Unipile key',
-  unipile_base: 'your Unipile address',
-  UNIPILE_BASE_URL: 'your Unipile address',
-  unipile_webhook: 'the Unipile webhook secret',
-  ORBIT_UNIPILE_WEBHOOK_SECRET: 'the Unipile webhook secret',
-  x_app: 'your X app keys',
-  x_client: 'your X app keys',
-  ORBIT_X_CLIENT_ID: 'your X app keys',
-  ORBIT_X_CLIENT_SECRET: 'your X app keys',
-  x_limit: 'a monthly limit',
-  x_monthly_limit: 'a monthly limit',
-  ORBIT_X_MONTHLY_LIMIT_USD: 'a monthly limit',
-  ORBIT_X_STUDENT_MONTHLY_USD: 'a monthly limit',
-  x_credits: 'prepaid X credits',
-  legal_review: "a lawyer's read of X's policy",
-};
-
-/** "Needs your X app keys and a monthly limit", or "Ready". */
+/** "Ready", or what the server says is missing, in its own plain words. */
 export function readinessWords(r: Pick<Row, 'ready' | 'missing'>): string {
   if (r.ready && !r.missing.length) return 'Ready';
-  const words: string[] = [];
-  for (const m of r.missing) {
-    const w =
-      MISSING_WORDS[m] ??
-      m
-        .replace(/^ORBIT_/, '')
-        .replace(/_/g, ' ')
-        .toLowerCase();
-    if (!words.includes(w)) words.push(w);
-  }
-  if (!words.length) return 'Not ready yet';
+  if (!r.missing.length) return 'Not ready yet';
+  const words = r.missing.map((m) => m.charAt(0).toLowerCase() + m.slice(1).replace(/\.$/, ''));
   const list = words.length === 1 ? words[0]! : `${words.slice(0, -1).join(', ')} and ${words.at(-1)}`;
   return `Needs ${list}`;
 }
@@ -67,6 +45,24 @@ export function studentsWords(s: Row['students']): string {
 /** The Launch section is in the menu for the owner's account only. */
 export function isOwnerAccount(): boolean {
   return accountUser()?.isOwner === true;
+}
+
+let askedOwner = false;
+
+/** Whether this is the owner's account, asked of the server once a visit and followed as the session changes. */
+export function useIsOwner(): boolean {
+  const [owner, setOwner] = useState(isOwnerAccount);
+  useEffect(() => {
+    const off = subscribeSession(() => setOwner(isOwnerAccount()));
+    if (isSignedIn() && !askedOwner) {
+      askedOwner = true;
+      void refreshOwner().then(setOwner, () => {
+        askedOwner = false;
+      });
+    }
+    return off;
+  }, []);
+  return owner;
 }
 
 const MARKS: Record<OptionalSource, ReactNode> = {
@@ -87,7 +83,7 @@ export function LaunchSection() {
     if (r.ok) {
       setRows(r.value.sources);
       setError(undefined);
-    } else if (r.status === 404) setRows(null);
+    } else if (r.status === 404 || r.status === 403) setRows(null);
     else setError(r.message);
   }, []);
   useEffect(() => {
@@ -99,7 +95,16 @@ export function LaunchSection() {
     try {
       const r = await callApi(`/admin/sources/${source}`, { offered });
       if (!r.ok) {
-        setError(r.message);
+        const row = rows?.find((x) => x.source === source);
+        const missing = (r.body?.missing as string[] | undefined) ?? row?.missing ?? [];
+        setError(
+          r.code === 'not_ready'
+            ? `${NAMES[source]} cannot be offered yet. ${readinessWords({ ready: false, missing })}.`
+            : r.code === 'env_listed'
+              ? `${NAMES[source]} is set on the server (ORBIT_EXTRA_SOURCES), so it stays on until that setting changes.`
+              : r.message,
+        );
+        await load();
         return;
       }
       toast.push({
@@ -146,7 +151,12 @@ export function LaunchSection() {
                 {readinessWords(r)}
               </RowStatus>
             }
-            line={<span data-testid={`launch-${r.source}-students`}>{studentsWords(r.students)}</span>}
+            line={
+              <span data-testid={`launch-${r.source}-students`}>
+                {studentsWords(r.students)}
+                {r.env ? ' · Set on the server' : ''}
+              </span>
+            }
             actions={
               <label className="flex items-center gap-2 text-[12.5px] text-ink-2">
                 Offered to students
@@ -155,7 +165,7 @@ export function LaunchSection() {
                   label={`Offer ${NAMES[r.source]} to students`}
                   busy={busy === r.source}
                   // a source that is not ready cannot be offered; one already offered can always be taken away
-                  disabled={!r.offered && !r.ready}
+                  disabled={(!r.offered && !r.ready) || r.env}
                   title={!r.offered && !r.ready ? readinessWords(r) : r.offered ? 'Take it away' : 'Offer it'}
                   onChange={(next) => (next ? void set(r.source, true) : setTaking(r.source))}
                   data-testid={`launch-${r.source}-switch`}

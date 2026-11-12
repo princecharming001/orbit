@@ -270,7 +270,10 @@ export function SocialCheckButton({
     setBusy(true);
     setError(undefined);
     try {
-      const r = await startCheck(user.id, platform, person.id, { confirm });
+      const r = await startCheck(user.id, platform, person.id, {
+        confirm,
+        ...(confirm && quote ? { quoteUsd: quote.quoteUsd } : {}),
+      });
       if (!r.ok) setError(r.message);
       else if ('quote' in r) setQuote(r.quote);
       else setQuote(undefined);

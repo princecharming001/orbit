@@ -132,7 +132,7 @@ import { ChipsField } from '../ui/ChipsField';
 import { Suggest } from '../ui/Suggest';
 import { AutopilotSection } from './settings/Autopilot';
 import { CostsSection } from './settings/Costs';
-import { isOwnerAccount, LaunchSection } from './settings/Launch';
+import { LaunchSection, useIsOwner } from './settings/Launch';
 import { VoiceSection } from './settings/Voice';
 
 /** The section with the LinkedIn import, the resume and the Claude key (its route keeps the older name). */
@@ -177,9 +177,9 @@ const SECTION_ICONS: Record<string, LucideIcon> = {
 /** Plan 43: the owner's switch for the optional sources, in the menu for the owner's account only. */
 const LAUNCH_SECTION = ['launch', 'Launch'] as const;
 
-function sections(): readonly (readonly [string, string])[] {
+function sections(owner = false): readonly (readonly [string, string])[] {
   if (!isAccountMode()) return [...BASE_SECTIONS, MEMORY_SECTION];
-  return [...BASE_SECTIONS, ...ACCOUNT_SECTIONS, ...(isOwnerAccount() ? [LAUNCH_SECTION] : [])];
+  return [...BASE_SECTIONS, ...ACCOUNT_SECTIONS, ...(owner ? [LAUNCH_SECTION] : [])];
 }
 
 const SECTION_ALIASES: Record<string, string> = {
@@ -246,7 +246,8 @@ export function SettingsPage() {
   const nav = useNavigate();
   const { search } = useLocation();
   useSettingFocus(section);
-  const SECTIONS = sections();
+  const owner = useIsOwner();
+  const SECTIONS = sections(owner);
   // back from Instagram's or X's sign-in (/settings?x=connected): the rows that say how it went are under Integrations
   if (section !== 'integrations' && /[?&](x|instagram)=/.test(search))
     return <Navigate to={`/settings/integrations${search}`} replace />;

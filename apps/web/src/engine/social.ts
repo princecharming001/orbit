@@ -510,6 +510,13 @@ export type CheckStart =
   | { ok: true; quote: XQuote }
   | { ok: false; message: string; code?: 'source_off' | 'no_account' };
 
+/** X's check: the price agreed to goes with the yes, and a yes with no fresh price asks for the price again. */
+export interface CheckOptions {
+  confirm?: boolean;
+  /** the price the student said yes to (X only) */
+  quoteUsd?: number;
+}
+
 /**
  * "Check Instagram for Priya" / "Check X for Priya" (plan 43 §3.6, §5). X shows its price first: without `confirm` the
  * answer is a quote and nothing is read; with it, the check starts. The lookup is kept in this browser and followed
@@ -519,15 +526,18 @@ export async function startCheck(
   userId: string,
   platform: Platform,
   personId: string,
-  opts: { confirm?: boolean } = {},
+  opts: CheckOptions = {},
 ): Promise<CheckStart> {
   if (usesMockConnectors(userId)) return mock.startLookup(userId, platform, personId, opts);
   const r = await callApi('/social/lookups', {
     platform,
     personId,
     ...(opts.confirm ? { confirm: true } : {}),
+    ...(opts.confirm && opts.quoteUsd !== undefined ? { quoteUsd: opts.quoteUsd } : {}),
   });
   if (!r.ok) {
+    // the price is more than 15 minutes old (or was never asked): ask for it again rather than read anything
+    if (r.code === 'quote_first' && opts.confirm) return startCheck(userId, platform, personId);
     if (r.code === 'source_off')
       return { ok: false, code: 'source_off', message: `${PLATFORM_NAME[platform]} is off.` };
     if (r.code === 'no_account') return { ok: false, code: 'no_account', message: r.message };

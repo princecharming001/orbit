@@ -141,7 +141,8 @@ export interface AccountUser {
   createdAt: string;
   /**
    * Plan 43: this account is the owner's (ORBIT_OWNER_ID), who switches the optional sources on for every student from
-   * Settings, Launch. Missing from a server from before it, which reads as not the owner.
+   * Settings, Launch. The server says so beside the user (`isOwner` on /auth/session and /auth/me), and the browser
+   * keeps it here. Missing reads as not the owner.
    */
   isOwner?: boolean;
 }
@@ -151,6 +152,8 @@ export interface SessionResponse {
   refreshToken: string;
   expiresAt: string;
   user: AccountUser;
+  /** plan 43: the owner's account (ORBIT_OWNER_ID) */
+  isOwner?: boolean;
 }
 
 /** One integration as /sync/status reports it. */
@@ -302,7 +305,7 @@ export interface ApiRoutes {
   '/social/links': [{ platform: 'instagram' | 'x'; accountId: string; personId: string }, { linkId: string }];
   '/social/asks': [Record<string, never>, { asks: SocialAskResponse[] }];
   '/social/lookups': [
-    { platform: 'instagram' | 'x'; personId: string; confirm?: boolean },
+    { platform: 'instagram' | 'x'; personId: string; confirm?: boolean; quoteUsd?: number },
     SocialLookupStartResponse,
   ];
   // the owner's Launch section (plan 43, the owner's switch at run time); anyone else gets 404
@@ -316,7 +319,7 @@ export interface ApiRoutes {
   ];
   '/texts/days': [TextDaysRequest, { written: number; people?: Record<string, string> }];
   '/auth/logout': [{ refreshToken?: string }, { ok: boolean }];
-  '/auth/me': [Record<string, never>, { user: AccountUser }];
+  '/auth/me': [Record<string, never>, { user: AccountUser; isOwner?: boolean }];
   '/sync/status': [Record<string, never>, SyncStatus];
   '/sync/pull': [SyncPullRequest, SyncPullResponse];
   '/sync/push': [{ changes: PushChange[] }, { results: PushResult[] }];
@@ -478,7 +481,7 @@ export type SocialLookupStatus = 'queued' | 'running' | 'waiting' | 'done' | 'fa
  * how many people it reads, from which list, and what it would cost.
  */
 export type SocialLookupStartResponse =
-  | { lookupId: string; status: SocialLookupStatus }
+  | { lookupId: string; status: SocialLookupStatus; quoteUsd?: number }
   | { status: 'quote'; quoteUsd: number; list: string; size: number; reason?: string };
 
 /** GET /admin/sources: each optional source, whether students are offered it, whether it is ready to be. */
@@ -486,8 +489,10 @@ export interface AdminSourcesResponse {
   sources: {
     source: OptionalSource;
     offered: boolean;
+    /** the server's own list (ORBIT_EXTRA_SOURCES) offers it: on, and not switched off from the app */
+    env: boolean;
     ready: boolean;
-    /** what is missing before it can be offered, by name (`unipile_key`, `x_app`, `x_limit`, ...) */
+    /** what is missing before it can be offered, in plain words */
     missing: string[];
     students: { on: number; connected: number };
   }[];
@@ -964,8 +969,30 @@ export async function completeSignIn(hash: string): Promise<SignInOutcome> {
     const e = r.reason === 'unconfigured' ? 'unconfigured' : r.status === 401 ? 'expired' : 'sign_in_failed';
     return { ok: false, error: e, message: signInErrorText(e) };
   }
-  await adopt(r.value, r.value.user);
-  return { ok: true, user: r.value.user };
+  const user = { ...r.value.user, isOwner: r.value.isOwner === true };
+  await adopt(r.value, user);
+  return { ok: true, user };
+}
+
+/**
+ * Ask the server again whether this is the owner's account (GET /auth/me), and keep the answer with the session, so
+ * the Launch section appears (or goes) without signing in again.
+ */
+export async function refreshOwner(): Promise<boolean> {
+  if (!isSignedIn()) return false;
+  const r = await callApi('/auth/me', {});
+  if (!r.ok || !account) return account?.isOwner === true;
+  const isOwner = r.value.isOwner === true;
+  if (account.isOwner !== isOwner) {
+    account = { ...account, isOwner };
+    if (tokens.refreshToken)
+      await writeLocalRow(SESSION_ROW, {
+        refreshToken: tokens.refreshToken,
+        user: account,
+      } satisfies StoredSession);
+    emit();
+  }
+  return isOwner;
 }
 
 /** Sign out: the server revokes this session, then this browser forgets it. Local data stays. */
