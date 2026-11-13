@@ -148,7 +148,11 @@ export async function refreshCallApp(user: Pick<User, 'id'>, app: CallApp): Prom
           : 'active',
     externalAccountId: r.value.email,
     lastSyncedAt: r.value.lastSyncedAt,
-    syncState: { ...prev, configured: true, needsConsent: r.value.status === 'needs_consent' },
+    syncState: {
+      ...prev,
+      configured: r.value.configured !== false,
+      needsConsent: r.value.status === 'needs_consent',
+    },
   });
 }
 

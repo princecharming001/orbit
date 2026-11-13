@@ -96,6 +96,20 @@ describe('Settings: Zoom and Google Meet rows', () => {
     ).toEqual([]);
   });
 
+  it('Meet before the owner turns transcripts on: "Not set up yet", no switch, nothing asked', async () => {
+    await wipeDatabase();
+    const { api, user } = await signInToFakeApi();
+    api.state.callApps.meet.configured = false;
+    await mount(user);
+    await settle();
+    expect(q('[data-testid="settings-meet-not-set-up"]')!.textContent).toBe('Not set up yet');
+    expect(q('[data-testid="settings-meet-connect"]')).toBeNull();
+    expect(q('[data-testid="settings-zoom-connect"]')).toBeTruthy();
+    expect(
+      api.calls.map((c) => c.route).filter((r) => r.startsWith('/meet/') && r !== '/meet/status'),
+    ).toEqual([]);
+  });
+
   it('without an Orbit account: both say they need one', async () => {
     setConnectorsMockForTests(false);
     const user = await localUser();

@@ -20948,7 +20948,29 @@ async function meetRow(ctx) {
      where user_id = ${ctx.userId}::uuid and provider = 'google_meet'`;
   return m;
 }
+var meetOn;
+async function meetOffered(ctx) {
+  const t = Date.now();
+  if (!meetOn || t - meetOn.at > 6e4)
+    meetOn = {
+      at: t,
+      on: (await providerSecret(() => void 0, ctx.db, "ORBIT_MEET_TRANSCRIPTS"))?.trim().toLowerCase() === "on"
+    };
+  return meetOn.on;
+}
+var meetNotSetUp = () => json(
+  503,
+  {
+    error: {
+      code: "unconfigured",
+      message: "Google Meet is not set up",
+      missing: ["ORBIT_MEET_TRANSCRIPTS"]
+    }
+  },
+  { "x-orbit-connector": "unconfigured" }
+);
 async function meetState(ctx) {
+  if (!await meetOffered(ctx)) return { configured: false, status: "not_connected" };
   const [m, g] = await Promise.all([meetRow(ctx), googleRow(ctx)]);
   if (!m || m.status === "revoked") return { status: "not_connected" };
   const base = {
@@ -20964,6 +20986,7 @@ async function meetStatus(ctx) {
 }
 async function meetConnectStart(ctx) {
   await readJson(ctx.req, { optional: true });
+  if (!await meetOffered(ctx)) return meetNotSetUp();
   if (!ctx.google)
     return json(
       503,
@@ -20998,6 +21021,7 @@ async function meetDisconnect(ctx) {
 async function meetNotes(ctx) {
   const events = callEvents(await readJson(ctx.req));
   const st = await meetState(ctx);
+  if (st.configured === false) return meetNotSetUp();
   if (st.status === "not_connected") throw conflict("not_connected", "Google Meet is not on");
   if (st.status === "needs_reauth") throw conflict("needs_reauth", "reconnect Google");
   if (st.status === "needs_consent") throw conflict("needs_consent", "allow Google Meet transcripts");

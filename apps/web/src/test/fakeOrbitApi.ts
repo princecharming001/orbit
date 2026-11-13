@@ -263,6 +263,8 @@ export interface FakeState {
       meetings: { topic: string; startAt: string; minutes: number; timezone?: string }[];
     };
     meet: {
+      /** the owner turned Meet transcripts on (ORBIT_MEET_TRANSCRIPTS) */
+      configured: boolean;
       status: 'not_connected' | 'needs_consent' | 'active' | 'needs_reauth';
       /** Google has given the Meet permission (else connect answers a consent url) */
       granted: boolean;
@@ -478,7 +480,7 @@ export function createFakeOrbitApi(
     textDays: [],
     callApps: {
       zoom: { configured: true, status: 'not_connected', notes: {}, meetings: [] },
-      meet: { status: 'not_connected', granted: false, notes: {} },
+      meet: { configured: true, status: 'not_connected', granted: false, notes: {} },
     },
   };
   const code = 'good-code';
@@ -771,9 +773,14 @@ export function createFakeOrbitApi(
     if (route.startsWith('/meet/')) {
       const m = state.callApps.meet;
       const status = () => (m.status === 'active' && !m.granted ? 'needs_consent' : m.status);
+      if (!m.configured && route.startsWith('/meet/') && route !== '/meet/status')
+        return error(503, 'unconfigured', 'Google Meet is not set up', {
+          'x-orbit-connector': 'unconfigured',
+        });
       if (route === '/meet/status')
         return json(200, {
-          status: status(),
+          configured: m.configured,
+          status: m.configured ? status() : 'not_connected',
           ...(m.status !== 'not_connected' ? { email: state.user.email } : {}),
         });
       if (route === '/meet/connect/start') {

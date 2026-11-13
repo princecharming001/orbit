@@ -14,6 +14,7 @@ import {
   type ZoomEnv,
 } from '../../functions/_shared/zoom.ts';
 import { makeApiHandler } from '../../functions/orbit-api/api.ts';
+import { resetMeetOfferedForTests } from '../../functions/orbit-api/routes/calls.ts';
 import { makeWebhookHandler } from '../../functions/orbit-webhooks/webhooks.ts';
 import {
   ALL_KEYS,
@@ -33,11 +34,16 @@ import { freshDb, type TestDb } from '../helpers/pglite.ts';
 let t: TestDb;
 beforeAll(async () => {
   t = await freshDb();
+  // Meet transcripts are offered (the owner's switch); one test below turns it off first
+  await t.db.sql`insert into orbit_private.secrets (name, value) values ('ORBIT_MEET_TRANSCRIPTS', 'on')`;
 });
 afterAll(async () => {
   await t.pg.close();
 });
-beforeEach(() => resetZoomKeysForTests());
+beforeEach(() => {
+  resetZoomKeysForTests();
+  resetMeetOfferedForTests();
+});
 
 const ZOOM: ZoomEnv = { clientId: 'zoom-client-placeholder', clientSecret: 'zoom-secret-placeholder' };
 
@@ -599,6 +605,25 @@ const meetEvent = (over: Record<string, unknown> = {}) =>
   event({ conferenceUrl: 'https://meet.google.com/abc-defg-hij', ...over });
 
 describe('Google Meet', () => {
+  it('says not set up, and asks Google nothing, until the owner turns Meet transcripts on', async () => {
+    await t.db.sql`delete from orbit_private.secrets where name = 'ORBIT_MEET_TRANSCRIPTS'`;
+    const net = fakeNet(meet());
+    const { token } = await signedInUser(t);
+    const call = handlerFor(net, ZOOM);
+    expect((await call('/meet/status', token)).body).toEqual({ configured: false, status: 'not_connected' });
+    const on = await call<{ error: { code: string } }>('/meet/connect/start', token);
+    expect(on.status).toBe(503);
+    expect(on.body.error.code).toBe('unconfigured');
+    expect((await call('/meet/notes', token, { events: [meetEvent()] })).status).toBe(503);
+    const [row] = await t.db.sql<{ n: number }>`
+      select count(*)::int as n from orbit.integration_accounts where provider = 'google_meet'`;
+    expect(row!.n).toBe(0);
+    expect(net.calls.filter((c) => c.url.includes('meet.googleapis.com'))).toEqual([]);
+    await t.db.sql`insert into orbit_private.secrets (name, value) values ('ORBIT_MEET_TRANSCRIPTS', 'on')`;
+    resetMeetOfferedForTests();
+    expect((await call<{ configured: boolean }>('/meet/status', token)).body.configured).not.toBe(false);
+  });
+
   it('is off until turned on; turning it on asks Google for the Meet permission only when missing', async () => {
     const net = fakeNet(meet());
     const { userId, token } = await signedInUser(t);

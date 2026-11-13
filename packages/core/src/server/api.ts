@@ -488,6 +488,8 @@ export interface ZoomMeetingResponse {
 }
 /** GET /meet/status. `needs_consent`: Meet is on but Google has not given the transcript permission yet. */
 export interface MeetStatusResponse {
+  /** false until the owner turns Meet transcripts on (ORBIT_MEET_TRANSCRIPTS); the row then says not set up yet */
+  configured?: boolean;
   status: 'not_connected' | 'needs_consent' | 'active' | 'needs_reauth';
   email?: string;
   lastSyncedAt?: string;

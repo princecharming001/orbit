@@ -36,6 +36,7 @@ import {
   meetConsentUrl,
   meetNotesFor,
 } from '../../_shared/meet.ts';
+import { providerSecret } from '../../_shared/secrets.ts';
 import { sqlVault } from '../../_shared/vault.ts';
 import {
   loadZoomRow,
@@ -328,7 +329,43 @@ async function meetRow(ctx: Ctx) {
   return m;
 }
 
+/**
+ * Meet transcripts are offered once the owner has added the Meet permission to Orbit's Google consent screen and
+ * turned on the Meet REST API, then stored ORBIT_MEET_TRANSCRIPTS = 'on' in orbit_private.secrets. Before that a student
+ * who turned Meet on would meet Google's warning screen, so the row says it is not set up and nothing asks Google.
+ * Read again at most once a minute.
+ */
+let meetOn: { at: number; on: boolean } | undefined;
+export function resetMeetOfferedForTests(): void {
+  meetOn = undefined;
+}
+async function meetOffered(ctx: Ctx): Promise<boolean> {
+  const t = Date.now();
+  if (!meetOn || t - meetOn.at > 60_000)
+    meetOn = {
+      at: t,
+      on:
+        (await providerSecret(() => undefined, ctx.db, 'ORBIT_MEET_TRANSCRIPTS'))?.trim().toLowerCase() ===
+        'on',
+    };
+  return meetOn.on;
+}
+
+const meetNotSetUp = () =>
+  json(
+    503,
+    {
+      error: {
+        code: 'unconfigured',
+        message: 'Google Meet is not set up',
+        missing: ['ORBIT_MEET_TRANSCRIPTS'],
+      },
+    },
+    { 'x-orbit-connector': 'unconfigured' },
+  );
+
 async function meetState(ctx: Ctx): Promise<MeetStatusResponse> {
+  if (!(await meetOffered(ctx))) return { configured: false, status: 'not_connected' };
   const [m, g] = await Promise.all([meetRow(ctx), googleRow(ctx)]);
   if (!m || m.status === 'revoked') return { status: 'not_connected' };
   const base = {
@@ -346,6 +383,7 @@ export async function meetStatus(ctx: Ctx): Promise<Response> {
 
 export async function meetConnectStart(ctx: Ctx): Promise<Response> {
   await readJson(ctx.req, { optional: true });
+  if (!(await meetOffered(ctx))) return meetNotSetUp();
   if (!ctx.google)
     return json(
       503,
@@ -382,6 +420,7 @@ export async function meetDisconnect(ctx: Ctx): Promise<Response> {
 export async function meetNotes(ctx: Ctx): Promise<Response> {
   const events = callEvents(await readJson(ctx.req));
   const st = await meetState(ctx);
+  if (st.configured === false) return meetNotSetUp();
   if (st.status === 'not_connected') throw conflict('not_connected', 'Google Meet is not on');
   if (st.status === 'needs_reauth') throw conflict('needs_reauth', 'reconnect Google');
   if (st.status === 'needs_consent') throw conflict('needs_consent', 'allow Google Meet transcripts');
