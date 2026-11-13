@@ -1107,9 +1107,7 @@ export function MapPage() {
           className="hidden @4xl:flex"
         />
         <aside
-          // keyed on what the panel shows, so its cards cascade in again when the target changes
-          key={`${reachParam === '1' ? '' : (reachParam ?? '')}|${target?.id ?? ''}|${company?.label ?? ''}|${webFocus?.label ?? ''}|${webMode}`}
-          className="stagger min-w-0 min-h-[168px] border-t @4xl:border-t-0 @4xl:border-l border-line bg-canvas @4xl:overflow-y-auto scroll-thin p-4 space-y-3"
+          className="min-w-0 min-h-[168px] border-t @4xl:border-t-0 @4xl:border-l border-line bg-canvas @4xl:overflow-y-auto scroll-thin p-4 space-y-3"
           data-testid="map-panel"
         >
           {user && (
@@ -1142,607 +1140,616 @@ export function MapPage() {
               autoFocus={reachMode}
             />
           )}
-          {!reachMode && !webMode && (
-            <>
-              {targetRows && user && (
+          {/* keyed on what the panel shows, so its cards cascade in again when the target changes; the search above
+              stays the same element, so what the student types while a result lands is never lost */}
+          <div
+            key={`${reachParam === '1' ? '' : (reachParam ?? '')}|${target?.id ?? ''}|${company?.label ?? ''}|${webFocus?.label ?? ''}|${webMode}`}
+            className="stagger space-y-3"
+            data-testid="map-panel-body"
+          >
+            {!reachMode && !webMode && (
+              <>
+                {targetRows && user && (
+                  <Card padded>
+                    <div className="font-medium text-[13px] mb-2">Target companies</div>
+                    <ul className="space-y-0.5 stagger">
+                      {targetRows.map((g) => (
+                        <li key={g.key} className="group relative">
+                          <button
+                            className={cx(
+                              'w-full flex items-center gap-2 text-left text-[13px] rounded-md pl-2 pr-9 py-1.5 hover:bg-canvas-2',
+                              TAP,
+                            )}
+                            onClick={() => void openCompany(g.orgId ?? g.label, g.label)}
+                            data-testid="map-company-row"
+                          >
+                            <CompanyLogo name={g.label} orgId={g.orgId} size={16} decorative />
+                            <span className="font-medium truncate">{g.label}</span>
+                            <span className="ml-auto text-ink-3 tabular shrink-0">
+                              {g.people.length ? plural(g.people.length, 'person', 'people') : 'No one yet'}
+                            </span>
+                          </button>
+                          {g.tc && (
+                            <button
+                              type="button"
+                              className={cx(
+                                'absolute right-1 top-1/2 -translate-y-1/2 h-6 w-6 inline-flex items-center justify-center rounded text-ink-3 hover:text-ink hover:bg-black/[0.06] transition-opacity',
+                                touch ? '' : 'opacity-0 group-hover:opacity-100 focus-visible:opacity-100',
+                              )}
+                              onClick={() => void dropTarget(g.tc!)}
+                              aria-label={`Take ${g.label} off your targets`}
+                              title={`Take ${g.label} off your targets`}
+                              data-testid="map-target-remove"
+                            >
+                              <X size={13} aria-hidden />
+                            </button>
+                          )}
+                          {/* a target Orbit cannot put a logo to yet: the student says which company it is */}
+                          {g.tc && <UnsettledCompany user={user} name={g.label} orgId={g.orgId} />}
+                        </li>
+                      ))}
+                    </ul>
+                    <div className="mt-2">
+                      <AddTargetCompany
+                        userId={user.id}
+                        taken={tcs.map((t) => t.nameRaw)}
+                        testId="map-add-target"
+                      />
+                    </div>
+                  </Card>
+                )}
+                {(filter === 'alumni' || filter === 'chats' || filter === 'recent') && user && (
+                  <LensList
+                    title={
+                      filter === 'alumni'
+                        ? `From ${user.school ?? 'your school'}`
+                        : filter === 'chats'
+                          ? 'In your pipeline'
+                          : 'In touch in the last 90 days'
+                    }
+                    people={lensPeople}
+                    note={
+                      filter === 'alumni'
+                        ? (p) => (schoolOf.get(p.id) === 'alum' ? 'Alum' : undefined)
+                        : filter === 'chats'
+                          ? (p) => {
+                              const st = stages.get(p.id);
+                              return st ? STAGE_LABELS[st] : undefined;
+                            }
+                          : (p) => (p.lastInteractionAt ? shortDay(p.lastInteractionAt) : undefined)
+                    }
+                    empty={
+                      filter === 'alumni'
+                        ? user.school
+                          ? `No one in your network lists ${user.school} yet. Orbit finds them from LinkedIn headlines, schools and alumni email addresses.`
+                          : 'Add your school in Settings, and Orbit lights everyone from it.'
+                        : filter === 'chats'
+                          ? 'No one is in your pipeline yet. Save someone to contact from People or Discover.'
+                          : 'No messages with anyone in the last 90 days. Connect Gmail or LinkedIn to bring them in.'
+                    }
+                    onPick={(p) => setParams({ reach: p.id })}
+                  />
+                )}
+              </>
+            )}
+            {webMode && (
+              <>
                 <Card padded>
-                  <div className="font-medium text-[13px] mb-2">Target companies</div>
-                  <ul className="space-y-0.5 stagger">
-                    {targetRows.map((g) => (
-                      <li key={g.key} className="group relative">
+                  <div className="font-medium text-[13px] mb-2">Your introductions</div>
+                  {stories.length === 0 && <p className="text-[12px] text-ink-3">No introductions yet.</p>}
+                  <ul className="space-y-1">
+                    {stories.map((s) => (
+                      <li key={s.text}>
                         <button
                           className={cx(
-                            'w-full flex items-center gap-2 text-left text-[13px] rounded-md pl-2 pr-9 py-1.5 hover:bg-canvas-2',
+                            'w-full flex items-start gap-2 text-left text-[13px] rounded-md px-2 py-1.5 hover:bg-canvas-2',
                             TAP,
+                            // the chain lit from the map, when this entry already says it in words
+                            !storyHover && chainSentence === s.text && 'bg-accent-soft/40',
                           )}
-                          onClick={() => void openCompany(g.orgId ?? g.label, g.label)}
-                          data-testid="map-company-row"
+                          data-lit={!storyHover && chainSentence === s.text ? 'true' : undefined}
+                          onMouseEnter={() => setStoryHover(s.focusId)}
+                          onMouseLeave={() => setStoryHover(undefined)}
+                          onFocus={() => setStoryHover(s.focusId)}
+                          onBlur={() => setStoryHover(undefined)}
+                          onClick={() => nav(`/people/${s.focusId}`)}
+                          data-testid="map-intro-story"
                         >
-                          <CompanyLogo name={g.label} orgId={g.orgId} size={16} decorative />
-                          <span className="font-medium truncate">{g.label}</span>
-                          <span className="ml-auto text-ink-3 tabular shrink-0">
-                            {g.people.length ? plural(g.people.length, 'person', 'people') : 'No one yet'}
-                          </span>
+                          <span
+                            className="mt-1.5 w-2 h-2 rounded-full shrink-0"
+                            style={{ background: LINEAGE[web.roots.indexOf(s.rootId) % LINEAGE.length] }}
+                          />
+                          <span>{s.text}</span>
                         </button>
-                        {g.tc && (
-                          <button
-                            type="button"
-                            className={cx(
-                              'absolute right-1 top-1/2 -translate-y-1/2 h-6 w-6 inline-flex items-center justify-center rounded text-ink-3 hover:text-ink hover:bg-black/[0.06] transition-opacity',
-                              touch ? '' : 'opacity-0 group-hover:opacity-100 focus-visible:opacity-100',
-                            )}
-                            onClick={() => void dropTarget(g.tc!)}
-                            aria-label={`Take ${g.label} off your targets`}
-                            title={`Take ${g.label} off your targets`}
-                            data-testid="map-target-remove"
-                          >
-                            <X size={13} aria-hidden />
-                          </button>
-                        )}
-                        {/* a target Orbit cannot put a logo to yet: the student says which company it is */}
-                        {g.tc && <UnsettledCompany user={user} name={g.label} orgId={g.orgId} />}
                       </li>
                     ))}
                   </ul>
-                  <div className="mt-2">
-                    <AddTargetCompany
-                      userId={user.id}
-                      taken={tcs.map((t) => t.nameRaw)}
-                      testId="map-add-target"
-                    />
-                  </div>
                 </Card>
-              )}
-              {(filter === 'alumni' || filter === 'chats' || filter === 'recent') && user && (
-                <LensList
-                  title={
-                    filter === 'alumni'
-                      ? `From ${user.school ?? 'your school'}`
-                      : filter === 'chats'
-                        ? 'In your pipeline'
-                        : 'In touch in the last 90 days'
-                  }
-                  people={lensPeople}
-                  note={
-                    filter === 'alumni'
-                      ? (p) => (schoolOf.get(p.id) === 'alum' ? 'Alum' : undefined)
-                      : filter === 'chats'
-                        ? (p) => {
-                            const st = stages.get(p.id);
-                            return st ? STAGE_LABELS[st] : undefined;
-                          }
-                        : (p) => (p.lastInteractionAt ? shortDay(p.lastInteractionAt) : undefined)
-                  }
-                  empty={
-                    filter === 'alumni'
-                      ? user.school
-                        ? `No one in your network lists ${user.school} yet. Orbit finds them from LinkedIn headlines, schools and alumni email addresses.`
-                        : 'Add your school in Settings, and Orbit lights everyone from it.'
-                      : filter === 'chats'
-                        ? 'No one is in your pipeline yet. Save someone to contact from People or Discover.'
-                        : 'No messages with anyone in the last 90 days. Connect Gmail or LinkedIn to bring them in.'
-                  }
-                  onPick={(p) => setParams({ reach: p.id })}
-                />
-              )}
-            </>
-          )}
-          {webMode && (
-            <>
-              <Card padded>
-                <div className="font-medium text-[13px] mb-2">Your introductions</div>
-                {stories.length === 0 && <p className="text-[12px] text-ink-3">No introductions yet.</p>}
-                <ul className="space-y-1">
-                  {stories.map((s) => (
-                    <li key={s.text}>
+                {/* a chain lit from the map, said in words (a chain hovered in the list already says it); below the list,
+                  so nothing under the pointer moves when it appears */}
+                {litSentence && !storyHover && (
+                  <Card padded className="border-accent/40 bg-accent-soft/30">
+                    <p className="text-[13px]" data-testid="map-chain-sentence">
+                      {litSentence}
+                    </p>
+                  </Card>
+                )}
+              </>
+            )}
+            {choices && (
+              <div>
+                <div className="text-[13px] text-ink-2 mb-2">Several matches. Which one did you mean?</div>
+                <ul className="space-y-1.5">
+                  {choices.map((c) => (
+                    <li key={`${c.kind}:${c.id}`}>
                       <button
-                        className={cx(
-                          'w-full flex items-start gap-2 text-left text-[13px] rounded-md px-2 py-1.5 hover:bg-canvas-2',
-                          TAP,
-                          // the chain lit from the map, when this entry already says it in words
-                          !storyHover && chainSentence === s.text && 'bg-accent-soft/40',
-                        )}
-                        data-lit={!storyHover && chainSentence === s.text ? 'true' : undefined}
-                        onMouseEnter={() => setStoryHover(s.focusId)}
-                        onMouseLeave={() => setStoryHover(undefined)}
-                        onFocus={() => setStoryHover(s.focusId)}
-                        onBlur={() => setStoryHover(undefined)}
-                        onClick={() => nav(`/people/${s.focusId}`)}
-                        data-testid="map-intro-story"
+                        className="w-full text-left border border-line rounded-[10px] px-3 py-2 hover:bg-canvas-2"
+                        onClick={() => choose(c)}
+                        data-testid="reach-choice"
                       >
-                        <span
-                          className="mt-1.5 w-2 h-2 rounded-full shrink-0"
-                          style={{ background: LINEAGE[web.roots.indexOf(s.rootId) % LINEAGE.length] }}
-                        />
-                        <span>{s.text}</span>
+                        <span className="font-medium text-[13px]">{c.label}</span>
+                        <span className="ml-2 text-[11px] text-ink-3">
+                          {c.kind === 'company' ? 'Company' : 'Person'}
+                        </span>
+                        {c.sub && <div className="text-[12px] text-ink-3 truncate">{c.sub}</div>}
                       </button>
                     </li>
                   ))}
                 </ul>
-              </Card>
-              {/* a chain lit from the map, said in words (a chain hovered in the list already says it); below the list,
-                  so nothing under the pointer moves when it appears */}
-              {litSentence && !storyHover && (
-                <Card padded className="border-accent/40 bg-accent-soft/30">
-                  <p className="text-[13px]" data-testid="map-chain-sentence">
-                    {litSentence}
-                  </p>
-                </Card>
-              )}
-            </>
-          )}
-          {choices && (
-            <div>
-              <div className="text-[13px] text-ink-2 mb-2">Several matches. Which one did you mean?</div>
-              <ul className="space-y-1.5">
-                {choices.map((c) => (
-                  <li key={`${c.kind}:${c.id}`}>
-                    <button
-                      className="w-full text-left border border-line rounded-[10px] px-3 py-2 hover:bg-canvas-2"
-                      onClick={() => choose(c)}
-                      data-testid="reach-choice"
-                    >
-                      <span className="font-medium text-[13px]">{c.label}</span>
-                      <span className="ml-2 text-[11px] text-ink-3">
-                        {c.kind === 'company' ? 'Company' : 'Person'}
-                      </span>
-                      {c.sub && <div className="text-[12px] text-ink-3 truncate">{c.sub}</div>}
-                    </button>
-                  </li>
-                ))}
-              </ul>
-            </div>
-          )}
-          {target && (
-            <>
-              <div className="flex items-center gap-3">
-                <Avatar name={target.displayName} src={target.photoUrl} id={target.id} size={40} />
-                <div className="min-w-0">
-                  <Link
-                    to={`/people/${target.id}`}
-                    className={cx('font-medium hover:underline inline-flex items-center', TAP)}
-                  >
-                    {target.displayName}
-                  </Link>
-                  <LogoText person={target} className="text-[12px] text-ink-3">
-                    {target.currentTitle ?? target.currentOrganizationRaw}
-                  </LogoText>
-                </div>
               </div>
-              {paths === undefined && (
-                <p className="text-[13px] text-ink-3" data-testid="reach-loading" aria-busy="true">
-                  Finding routes through your network…
-                </p>
-              )}
-              {pendingPaths && (
-                <button
-                  type="button"
-                  className="inline-flex"
-                  onClick={() => {
-                    setPaths(pendingPaths);
-                    setPendingPaths(undefined);
-                    setPathIdx(0);
-                  }}
-                  data-testid="reach-order-changed"
-                >
-                  <Chip className="h-6" tone="warn">
-                    Order changed · refresh
-                  </Chip>
-                </button>
-              )}
-              {paths?.length === 0 && (
-                <p className="text-[13px] text-ink-3">No route found through your network yet.</p>
-              )}
-              {paths?.map((p, i) => {
-                const first = byId.get(p.hops[0]!.toId);
-                // the same introducer in Village's warm intros: said on the route, never listed twice
-                const village = p.hops.length > 1 ? villageFor(p.hops[0]!.toId) : undefined;
-                const selected = i === pathIdx;
-                return (
-                  <div
-                    key={i}
-                    className={cx(
-                      'border rounded-[12px] transition-colors',
-                      selected ? 'border-accent bg-accent-soft/40' : 'border-line hover:bg-canvas-2',
-                    )}
-                    data-testid="reach-path"
-                  >
-                    <button
-                      type="button"
-                      onClick={() => setPathIdx(i)}
-                      aria-pressed={selected}
-                      className="w-full text-left p-3 pb-2 rounded-[12px] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
+            )}
+            {target && (
+              <>
+                <div className="flex items-center gap-3">
+                  <Avatar name={target.displayName} src={target.photoUrl} id={target.id} size={40} />
+                  <div className="min-w-0">
+                    <Link
+                      to={`/people/${target.id}`}
+                      className={cx('font-medium hover:underline inline-flex items-center', TAP)}
                     >
-                      <div className="flex items-center justify-between gap-2">
-                        <span className="text-[12px] font-medium">
-                          Route {i + 1} · {p.hops.length} hop{p.hops.length > 1 ? 's' : ''}
-                        </span>
-                        <span className="flex items-center gap-1">
-                          {village && (
-                            <Chip className="h-5" data-testid="reach-village">
-                              Village · {village.warmthWord}
-                            </Chip>
-                          )}
-                          {/* the route's strength out of 100: the chance the intro happens, every hop counted */}
-                          <RouteBadge
-                            path={p}
-                            className="h-5"
-                            testId={p.weak && !isColdDirect(p) ? 'reach-path-weak' : 'reach-path-score'}
-                          />
-                        </span>
-                      </div>
-                      <ol className="mt-2 space-y-1.5 text-[13px]">
-                        {p.hops.map((h, k) => {
-                          const to = byId.get(h.toId);
-                          const from = byId.get(h.fromId);
-                          // plan 21: past the student's own tie, how well the two know each other, and whether
-                          // Orbit is still reading LinkedIn for it
-                          const reading = [from?.linkedinMemberId, to?.linkedinMemberId].some((m) => {
-                            const st = checkState(m);
-                            return st === 'queued' || st === 'reading';
-                          });
-                          return (
-                            <li key={k} className="flex items-start gap-2" data-testid="reach-hop">
-                              <span className="text-ink-3 tabular w-4">{k + 1}.</span>
-                              <span>
-                                <span className="font-medium" title={h.text}>
-                                  {to?.displayName ?? '…'}
-                                </span>
-                                {/* the student's own tie to the first person, with its score */}
-                                {k === 0 && to && (
-                                  <span className="text-ink-3" data-testid="reach-hop-tie">
-                                    {' · '}your {tieWords(to)}
-                                  </span>
-                                )}
-                                {/* past it, how well the two know each other, out of 100 */}
-                                {k > 0 && h.band && (
-                                  <span className="text-ink-3" data-testid="reach-hop-band">
-                                    {' · '}
-                                    {HOP_WORDS[h.band]} · {Math.round(h.weight * 100)}
-                                    {h.fading ? ', quiet lately' : ''}
-                                  </span>
-                                )}
-                                {k > 0 && reading && (
-                                  <span className="text-ink-3" data-testid="reach-hop-checking">
-                                    {' · '}Checking…
-                                  </span>
-                                )}
-                                {reasons && (
-                                  <>
-                                    <br />
-                                    <span className="text-ink-3">{h.text}</span>
-                                  </>
-                                )}
-                              </span>
-                            </li>
-                          );
-                        })}
-                      </ol>
-                      {p.weak && reasons && (
-                        <p className="mt-1.5 text-[12px] text-ink-3">
-                          You know {first?.firstName ?? 'them'} only slightly, but LinkedIn says{' '}
-                          {first?.firstName ?? 'they'} knows {target.firstName}: a weaker route, and a real
-                          one.
-                        </p>
-                      )}
-                    </button>
-                    {/* each route carries its own next step */}
-                    {user && selected && p.hops.length > 1 && (
-                      <div className="px-3 pb-1.5 space-y-1">
-                        {p.hops.slice(1).map((h) => (
-                          <PairNoteMenu
-                            key={`${h.fromId}>${h.toId}`}
-                            userId={user.id}
-                            aId={h.fromId}
-                            bId={h.toId}
-                            aName={byId.get(h.fromId)?.firstName ?? 'They'}
-                            bName={byId.get(h.toId)?.firstName ?? 'them'}
-                            className="block"
-                            named={p.hops.length > 2}
-                          />
-                        ))}
-                      </div>
-                    )}
-                    <div className="px-3 pb-3">
-                      {p.hops.length > 1 ? (
-                        <Button
-                          size="sm"
-                          variant={selected ? 'primary' : 'secondary'}
-                          className={TAP}
-                          onClick={() => askIntro(p)}
-                          loading={isAsking(p.hops[0]!.toId, target.id)}
-                          data-testid="reach-path-action"
-                        >
-                          Ask {first?.firstName ?? 'them'} for an intro
-                        </Button>
-                      ) : (
-                        <Button
-                          size="sm"
-                          variant={selected ? 'primary' : 'secondary'}
-                          className={TAP}
-                          onClick={() => nav(`/people/${target.id}?draft=outreach`)}
-                          data-testid="reach-path-action"
-                        >
-                          Write to {target.firstName} directly
-                        </Button>
-                      )}
-                    </div>
+                      {target.displayName}
+                    </Link>
+                    <LogoText person={target} className="text-[12px] text-ink-3">
+                      {target.currentTitle ?? target.currentOrganizationRaw}
+                    </LogoText>
                   </div>
-                );
-              })}
-              {/* warm intros from Village through someone no route above goes through: one more route each */}
-              {extraIntros.length > 0 && (
-                <div className="space-y-2" data-testid="map-warm-intros">
-                  {extraIntros.map((w, j) => {
-                    // laid out like the routes above: numbered after them, one step per person, the source tagged
-                    const steps = w.hops.slice(1);
-                    return (
-                      <div
-                        key={`${w.introducer.name}:${w.hops.join('>')}`}
-                        className="border border-line rounded-[12px] p-3 hover:bg-canvas-2 transition-colors"
-                        data-testid="map-warm-intro"
+                </div>
+                {paths === undefined && (
+                  <p className="text-[13px] text-ink-3" data-testid="reach-loading" aria-busy="true">
+                    Finding routes through your network…
+                  </p>
+                )}
+                {pendingPaths && (
+                  <button
+                    type="button"
+                    className="inline-flex"
+                    onClick={() => {
+                      setPaths(pendingPaths);
+                      setPendingPaths(undefined);
+                      setPathIdx(0);
+                    }}
+                    data-testid="reach-order-changed"
+                  >
+                    <Chip className="h-6" tone="warn">
+                      Order changed · refresh
+                    </Chip>
+                  </button>
+                )}
+                {paths?.length === 0 && (
+                  <p className="text-[13px] text-ink-3">No route found through your network yet.</p>
+                )}
+                {paths?.map((p, i) => {
+                  const first = byId.get(p.hops[0]!.toId);
+                  // the same introducer in Village's warm intros: said on the route, never listed twice
+                  const village = p.hops.length > 1 ? villageFor(p.hops[0]!.toId) : undefined;
+                  const selected = i === pathIdx;
+                  return (
+                    <div
+                      key={i}
+                      className={cx(
+                        'border rounded-[12px] transition-colors',
+                        selected ? 'border-accent bg-accent-soft/40' : 'border-line hover:bg-canvas-2',
+                      )}
+                      data-testid="reach-path"
+                    >
+                      <button
+                        type="button"
+                        onClick={() => setPathIdx(i)}
+                        aria-pressed={selected}
+                        className="w-full text-left p-3 pb-2 rounded-[12px] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
                       >
                         <div className="flex items-center justify-between gap-2">
                           <span className="text-[12px] font-medium">
-                            Route {(paths?.length ?? 0) + j + 1} · {steps.length} hop
-                            {steps.length > 1 ? 's' : ''}
+                            Route {i + 1} · {p.hops.length} hop{p.hops.length > 1 ? 's' : ''}
                           </span>
                           <span className="flex items-center gap-1">
-                            <Chip
+                            {village && (
+                              <Chip className="h-5" data-testid="reach-village">
+                                Village · {village.warmthWord}
+                              </Chip>
+                            )}
+                            {/* the route's strength out of 100: the chance the intro happens, every hop counted */}
+                            <RouteBadge
+                              path={p}
                               className="h-5"
-                              title="Found by Village, a warm-intro service that knows connections your own email and LinkedIn do not show"
-                            >
-                              Village
-                            </Chip>
-                            <Chip
-                              className="h-5"
-                              tone={
-                                w.warmthWord === 'warm'
-                                  ? 'good'
-                                  : w.warmthWord === 'good'
-                                    ? 'accent'
-                                    : 'neutral'
-                              }
-                            >
-                              {w.warmthWord}
-                            </Chip>
+                              testId={p.weak && !isColdDirect(p) ? 'reach-path-weak' : 'reach-path-score'}
+                            />
                           </span>
                         </div>
                         <ol className="mt-2 space-y-1.5 text-[13px]">
-                          {steps.map((name, k) => (
-                            <li key={`${name}-${k}`} className="flex items-start gap-2">
-                              <span className="text-ink-3 tabular w-4">{k + 1}.</span>
-                              <span>
-                                <span
-                                  className="font-medium"
-                                  title={k === steps.length - 1 ? w.note : undefined}
-                                >
-                                  {name}
+                          {p.hops.map((h, k) => {
+                            const to = byId.get(h.toId);
+                            const from = byId.get(h.fromId);
+                            // plan 21: past the student's own tie, how well the two know each other, and whether
+                            // Orbit is still reading LinkedIn for it
+                            const reading = [from?.linkedinMemberId, to?.linkedinMemberId].some((m) => {
+                              const st = checkState(m);
+                              return st === 'queued' || st === 'reading';
+                            });
+                            return (
+                              <li key={k} className="flex items-start gap-2" data-testid="reach-hop">
+                                <span className="text-ink-3 tabular w-4">{k + 1}.</span>
+                                <span>
+                                  <span className="font-medium" title={h.text}>
+                                    {to?.displayName ?? '…'}
+                                  </span>
+                                  {/* the student's own tie to the first person, with its score */}
+                                  {k === 0 && to && (
+                                    <span className="text-ink-3" data-testid="reach-hop-tie">
+                                      {' · '}your {tieWords(to)}
+                                    </span>
+                                  )}
+                                  {/* past it, how well the two know each other, out of 100 */}
+                                  {k > 0 && h.band && (
+                                    <span className="text-ink-3" data-testid="reach-hop-band">
+                                      {' · '}
+                                      {HOP_WORDS[h.band]} · {Math.round(h.weight * 100)}
+                                      {h.fading ? ', quiet lately' : ''}
+                                    </span>
+                                  )}
+                                  {k > 0 && reading && (
+                                    <span className="text-ink-3" data-testid="reach-hop-checking">
+                                      {' · '}Checking…
+                                    </span>
+                                  )}
+                                  {reasons && (
+                                    <>
+                                      <br />
+                                      <span className="text-ink-3">{h.text}</span>
+                                    </>
+                                  )}
                                 </span>
-                                {reasons && k === steps.length - 1 && w.note ? (
-                                  <>
-                                    <br />
-                                    <span className="text-ink-3">{w.note}</span>
-                                  </>
-                                ) : null}
-                              </span>
-                            </li>
-                          ))}
+                              </li>
+                            );
+                          })}
                         </ol>
-                        {w.introducer.personId && w.targetPersonId ? (
-                          <Button
-                            size="sm"
-                            variant="secondary"
-                            className={cx('mt-2', TAP)}
-                            onClick={() => askIntroVia(w.introducer.personId!, w.targetPersonId!, w.warmth)}
-                            loading={isAsking(w.introducer.personId, w.targetPersonId)}
-                            data-testid="map-warm-intro-ask"
-                          >
-                            Ask {w.introducer.name.split(' ')[0]} for an intro
-                          </Button>
-                        ) : (
-                          <p
-                            className="mt-2 text-[12px] text-ink-3 flex items-center gap-1.5"
-                            data-testid="map-warm-intro-outside"
-                          >
-                            {w.introducer.linkedinUrl && /linkedin\.com/i.test(w.introducer.linkedinUrl) && (
-                              <LinkedInMark url={w.introducer.linkedinUrl} name={w.introducer.name} />
-                            )}
-                            {w.introducer.name.split(' ')[0]} is not in your Orbit yet; reach them on
-                            LinkedIn.
+                        {p.weak && reasons && (
+                          <p className="mt-1.5 text-[12px] text-ink-3">
+                            You know {first?.firstName ?? 'them'} only slightly, but LinkedIn says{' '}
+                            {first?.firstName ?? 'they'} knows {target.firstName}: a weaker route, and a real
+                            one.
                           </p>
                         )}
+                      </button>
+                      {/* each route carries its own next step */}
+                      {user && selected && p.hops.length > 1 && (
+                        <div className="px-3 pb-1.5 space-y-1">
+                          {p.hops.slice(1).map((h) => (
+                            <PairNoteMenu
+                              key={`${h.fromId}>${h.toId}`}
+                              userId={user.id}
+                              aId={h.fromId}
+                              bId={h.toId}
+                              aName={byId.get(h.fromId)?.firstName ?? 'They'}
+                              bName={byId.get(h.toId)?.firstName ?? 'them'}
+                              className="block"
+                              named={p.hops.length > 2}
+                            />
+                          ))}
+                        </div>
+                      )}
+                      <div className="px-3 pb-3">
+                        {p.hops.length > 1 ? (
+                          <Button
+                            size="sm"
+                            variant={selected ? 'primary' : 'secondary'}
+                            className={TAP}
+                            onClick={() => askIntro(p)}
+                            loading={isAsking(p.hops[0]!.toId, target.id)}
+                            data-testid="reach-path-action"
+                          >
+                            Ask {first?.firstName ?? 'them'} for an intro
+                          </Button>
+                        ) : (
+                          <Button
+                            size="sm"
+                            variant={selected ? 'primary' : 'secondary'}
+                            className={TAP}
+                            onClick={() => nav(`/people/${target.id}?draft=outreach`)}
+                            data-testid="reach-path-action"
+                          >
+                            Write to {target.firstName} directly
+                          </Button>
+                        )}
                       </div>
-                    );
-                  })}
-                </div>
-              )}
-              {coldDirect && reasons && (
-                <p className="text-[12.5px] text-ink-3" data-testid="reach-cold-note">
-                  Route {paths!.indexOf(coldDirect) + 1} is writing to {target.firstName} yourself.{' '}
-                  {coldDirect.hops[0]!.text}, a faint tie, so the routes through people you know come first.
-                </p>
-              )}
-              {/* the target's LinkedIn mutuals, whether or not a route clears the bar, and for someone the student
+                    </div>
+                  );
+                })}
+                {/* warm intros from Village through someone no route above goes through: one more route each */}
+                {extraIntros.length > 0 && (
+                  <div className="space-y-2" data-testid="map-warm-intros">
+                    {extraIntros.map((w, j) => {
+                      // laid out like the routes above: numbered after them, one step per person, the source tagged
+                      const steps = w.hops.slice(1);
+                      return (
+                        <div
+                          key={`${w.introducer.name}:${w.hops.join('>')}`}
+                          className="border border-line rounded-[12px] p-3 hover:bg-canvas-2 transition-colors"
+                          data-testid="map-warm-intro"
+                        >
+                          <div className="flex items-center justify-between gap-2">
+                            <span className="text-[12px] font-medium">
+                              Route {(paths?.length ?? 0) + j + 1} · {steps.length} hop
+                              {steps.length > 1 ? 's' : ''}
+                            </span>
+                            <span className="flex items-center gap-1">
+                              <Chip
+                                className="h-5"
+                                title="Found by Village, a warm-intro service that knows connections your own email and LinkedIn do not show"
+                              >
+                                Village
+                              </Chip>
+                              <Chip
+                                className="h-5"
+                                tone={
+                                  w.warmthWord === 'warm'
+                                    ? 'good'
+                                    : w.warmthWord === 'good'
+                                      ? 'accent'
+                                      : 'neutral'
+                                }
+                              >
+                                {w.warmthWord}
+                              </Chip>
+                            </span>
+                          </div>
+                          <ol className="mt-2 space-y-1.5 text-[13px]">
+                            {steps.map((name, k) => (
+                              <li key={`${name}-${k}`} className="flex items-start gap-2">
+                                <span className="text-ink-3 tabular w-4">{k + 1}.</span>
+                                <span>
+                                  <span
+                                    className="font-medium"
+                                    title={k === steps.length - 1 ? w.note : undefined}
+                                  >
+                                    {name}
+                                  </span>
+                                  {reasons && k === steps.length - 1 && w.note ? (
+                                    <>
+                                      <br />
+                                      <span className="text-ink-3">{w.note}</span>
+                                    </>
+                                  ) : null}
+                                </span>
+                              </li>
+                            ))}
+                          </ol>
+                          {w.introducer.personId && w.targetPersonId ? (
+                            <Button
+                              size="sm"
+                              variant="secondary"
+                              className={cx('mt-2', TAP)}
+                              onClick={() => askIntroVia(w.introducer.personId!, w.targetPersonId!, w.warmth)}
+                              loading={isAsking(w.introducer.personId, w.targetPersonId)}
+                              data-testid="map-warm-intro-ask"
+                            >
+                              Ask {w.introducer.name.split(' ')[0]} for an intro
+                            </Button>
+                          ) : (
+                            <p
+                              className="mt-2 text-[12px] text-ink-3 flex items-center gap-1.5"
+                              data-testid="map-warm-intro-outside"
+                            >
+                              {w.introducer.linkedinUrl &&
+                                /linkedin\.com/i.test(w.introducer.linkedinUrl) && (
+                                  <LinkedInMark url={w.introducer.linkedinUrl} name={w.introducer.name} />
+                                )}
+                              {w.introducer.name.split(' ')[0]} is not in your Orbit yet; reach them on
+                              LinkedIn.
+                            </p>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+                {coldDirect && reasons && (
+                  <p className="text-[12.5px] text-ink-3" data-testid="reach-cold-note">
+                    Route {paths!.indexOf(coldDirect) + 1} is writing to {target.firstName} yourself.{' '}
+                    {coldDirect.hops[0]!.text}, a faint tie, so the routes through people you know come first.
+                  </p>
+                )}
+                {/* the target's LinkedIn mutuals, whether or not a route clears the bar, and for someone the student
                   knows too: they asked for a way in */}
-              {user && (
-                <ReachMutuals
-                  user={user}
-                  target={target}
-                  onAsk={(personId, score) => void askIntroVia(personId, target.id, score)}
-                  isAsking={(personId) => isAsking(personId, target.id)}
-                />
-              )}
-              {/* plan 29 §A5: friends on Orbit who know them, each a route the friend forwards */}
-              <ThroughFriends user={user} target={{ person: target }} />
-            </>
-          )}
-          {job?.state === 'reading' && (
-            <p className="text-[13px] text-ink-3" data-testid="job-plan-reading" aria-busy="true">
-              Reading the posting and finding who can get you in…
-            </p>
-          )}
-          {job?.state === 'error' && (
-            <p className="text-[13px] text-ink-2" data-testid="job-plan-error">
-              {job.message}
-            </p>
-          )}
-          {job?.state === 'plan' && jobPlan && <TargetPlanCard plan={jobPlan} />}
-          {companyFocus && !company && !job && (
-            <>
-              <div className="font-medium">{companyFocus.label}</div>
-              <p className="text-[13px] text-ink-3" data-testid="company-loading" aria-busy="true">
-                Looking up who you know at {companyFocus.label}…
-              </p>
-            </>
-          )}
-          {company && (
-            <>
-              <div className="flex items-center gap-2">
-                <CompanyLogo
-                  name={company.org?.name ?? company.label}
-                  orgId={company.org?.id}
-                  size={20}
-                  decorative
-                />
-                <span className="font-medium truncate">{company.org?.name ?? company.label}</span>
                 {user && (
-                  <TargetToggle
-                    userId={user.id}
-                    name={company.org?.name ?? company.label}
-                    orgId={company.org?.id}
-                    tcs={tcs}
-                    onDrop={(t) => void dropTarget(t)}
+                  <ReachMutuals
+                    user={user}
+                    target={target}
+                    onAsk={(personId, score) => void askIntroVia(personId, target.id, score)}
+                    isAsking={(personId) => isAsking(personId, target.id)}
                   />
                 )}
-              </div>
-              {user && (
-                <WarmIntrosPanel
-                  user={user}
-                  company={company.org?.name ?? company.label}
-                  onAsk={askIntroVia}
-                  isAsking={isAsking}
-                />
-              )}
-              {/* plan 29 §A5: the people friends on Orbit know there */}
-              <ThroughFriends
-                user={user}
-                target={{ company: company.org?.name ?? company.label, domain: company.org?.domains?.[0] }}
-              />
-              {company.direct.length === 0 && (
-                <p className="text-[13px] text-ink-3" data-testid="company-none">
-                  No one you know works there yet.
+                {/* plan 29 §A5: friends on Orbit who know them, each a route the friend forwards */}
+                <ThroughFriends user={user} target={{ person: target }} />
+              </>
+            )}
+            {job?.state === 'reading' && (
+              <p className="text-[13px] text-ink-3" data-testid="job-plan-reading" aria-busy="true">
+                Reading the posting and finding who can get you in…
+              </p>
+            )}
+            {job?.state === 'error' && (
+              <p className="text-[13px] text-ink-2" data-testid="job-plan-error">
+                {job.message}
+              </p>
+            )}
+            {job?.state === 'plan' && jobPlan && <TargetPlanCard plan={jobPlan} />}
+            {companyFocus && !company && !job && (
+              <>
+                <div className="font-medium">{companyFocus.label}</div>
+                <p className="text-[13px] text-ink-3" data-testid="company-loading" aria-busy="true">
+                  Looking up who you know at {companyFocus.label}…
                 </p>
-              )}
-              {(
-                [
-                  ['People you know there', company.direct],
-                  ['Saved to contact', company.saved],
-                  ['Used to work there', company.former],
-                ] as const
-              )
-                // a list with no one in it is left out, not shown as an empty heading
-                .filter(([, list]) => list.length > 0)
-                .map(([title, list]) => (
-                  <div key={title} data-testid="company-list" data-count={list.length}>
-                    <div className="flex items-baseline gap-1.5 text-[12.5px] mb-1.5">
-                      <span className="font-medium text-ink-2">{title}</span>
-                      <span className="text-ink-3 tabular">{list.length}</span>
+              </>
+            )}
+            {company && (
+              <>
+                <div className="flex items-center gap-2">
+                  <CompanyLogo
+                    name={company.org?.name ?? company.label}
+                    orgId={company.org?.id}
+                    size={20}
+                    decorative
+                  />
+                  <span className="font-medium truncate">{company.org?.name ?? company.label}</span>
+                  {user && (
+                    <TargetToggle
+                      userId={user.id}
+                      name={company.org?.name ?? company.label}
+                      orgId={company.org?.id}
+                      tcs={tcs}
+                      onDrop={(t) => void dropTarget(t)}
+                    />
+                  )}
+                </div>
+                {user && (
+                  <WarmIntrosPanel
+                    user={user}
+                    company={company.org?.name ?? company.label}
+                    onAsk={askIntroVia}
+                    isAsking={isAsking}
+                  />
+                )}
+                {/* plan 29 §A5: the people friends on Orbit know there */}
+                <ThroughFriends
+                  user={user}
+                  target={{ company: company.org?.name ?? company.label, domain: company.org?.domains?.[0] }}
+                />
+                {company.direct.length === 0 && (
+                  <p className="text-[13px] text-ink-3" data-testid="company-none">
+                    No one you know works there yet.
+                  </p>
+                )}
+                {(
+                  [
+                    ['People you know there', company.direct],
+                    ['Saved to contact', company.saved],
+                    ['Used to work there', company.former],
+                  ] as const
+                )
+                  // a list with no one in it is left out, not shown as an empty heading
+                  .filter(([, list]) => list.length > 0)
+                  .map(([title, list]) => (
+                    <div key={title} data-testid="company-list" data-count={list.length}>
+                      <div className="flex items-baseline gap-1.5 text-[12.5px] mb-1.5">
+                        <span className="font-medium text-ink-2">{title}</span>
+                        <span className="text-ink-3 tabular">{list.length}</span>
+                      </div>
+                      <ul className="space-y-1.5">
+                        {(showAll === title ? list : list.slice(0, 6)).map((d) => (
+                          <li key={d.person.id} className="flex items-center gap-2 text-[13px]">
+                            <Avatar
+                              name={d.person.displayName}
+                              src={d.person.photoUrl}
+                              id={d.person.id}
+                              size={22}
+                            />
+                            <button
+                              className={cx('hover:underline truncate text-left', TAP)}
+                              onClick={() => setParams({ reach: d.person.id })}
+                            >
+                              {d.person.displayName}
+                            </button>
+                            {d.person.isAlumni && <Chip>Alum</Chip>}
+                            <span className="ml-auto">
+                              <StrengthDots v={d.strength} />
+                            </span>
+                          </li>
+                        ))}
+                      </ul>
+                      {list.length > 6 && showAll !== title && (
+                        <button
+                          className={cx(
+                            'mt-1.5 text-[12px] text-ink underline decoration-[#cfcdc9] underline-offset-4 hover:decoration-ink',
+                            TAP,
+                          )}
+                          onClick={() => setShowAll(title)}
+                          data-testid="company-show-all"
+                        >
+                          Show all {list.length}
+                        </button>
+                      )}
                     </div>
-                    <ul className="space-y-1.5">
-                      {(showAll === title ? list : list.slice(0, 6)).map((d) => (
-                        <li key={d.person.id} className="flex items-center gap-2 text-[13px]">
-                          <Avatar
-                            name={d.person.displayName}
-                            src={d.person.photoUrl}
-                            id={d.person.id}
-                            size={22}
-                          />
+                  ))}
+                {company.twoHop.length > 0 && (
+                  <div>
+                    <div className="text-[12.5px] font-medium text-ink-2 mb-1">
+                      Routes through people you know
+                    </div>
+                    {reasons && (
+                      <p className="text-[12px] text-ink-3 mb-1.5" data-testid="company-routes-why">
+                        {WARMER_ROUTES_WHY}
+                      </p>
+                    )}
+                    <ul className="space-y-1 text-[13px]" data-testid="company-routes">
+                      {company.twoHop.map((t) => (
+                        <li key={t.target.id}>
                           <button
-                            className={cx('hover:underline truncate text-left', TAP)}
-                            onClick={() => setParams({ reach: d.person.id })}
+                            className={cx('hover:underline font-medium', TAP)}
+                            onClick={() => setParams({ reach: t.target.id })}
                           >
-                            {d.person.displayName}
-                          </button>
-                          {d.person.isAlumni && <Chip>Alum</Chip>}
-                          <span className="ml-auto">
-                            <StrengthDots v={d.strength} />
+                            {t.target.displayName}
+                          </button>{' '}
+                          {/* the route Reach finds for this person in Orbit's own records (Reach adds LinkedIn mutuals) */}
+                          <span className="text-ink-3">
+                            {plural(t.path.hops.length, 'hop')}, via{' '}
+                            {t.path.hops
+                              .slice(0, -1)
+                              .map((h) => byId.get(h.toId)?.firstName ?? 'someone')
+                              .join(' then ')}
                           </span>
                         </li>
                       ))}
                     </ul>
-                    {list.length > 6 && showAll !== title && (
-                      <button
-                        className={cx(
-                          'mt-1.5 text-[12px] text-ink underline decoration-[#cfcdc9] underline-offset-4 hover:decoration-ink',
-                          TAP,
-                        )}
-                        onClick={() => setShowAll(title)}
-                        data-testid="company-show-all"
-                      >
-                        Show all {list.length}
-                      </button>
-                    )}
                   </div>
-                ))}
-              {company.twoHop.length > 0 && (
-                <div>
-                  <div className="text-[12.5px] font-medium text-ink-2 mb-1">
-                    Routes through people you know
-                  </div>
-                  {reasons && (
-                    <p className="text-[12px] text-ink-3 mb-1.5" data-testid="company-routes-why">
-                      {WARMER_ROUTES_WHY}
-                    </p>
+                )}
+                <div className="flex flex-wrap items-center gap-x-4 gap-y-2 pt-1">
+                  {user && (
+                    <Button
+                      variant="primary"
+                      size="sm"
+                      className={TAP}
+                      onClick={() => void openJob(company.org?.name ?? company.label)}
+                      data-testid="company-plan"
+                    >
+                      Plan my way in
+                    </Button>
                   )}
-                  <ul className="space-y-1 text-[13px]" data-testid="company-routes">
-                    {company.twoHop.map((t) => (
-                      <li key={t.target.id}>
-                        <button
-                          className={cx('hover:underline font-medium', TAP)}
-                          onClick={() => setParams({ reach: t.target.id })}
-                        >
-                          {t.target.displayName}
-                        </button>{' '}
-                        {/* the route Reach finds for this person in Orbit's own records (Reach adds LinkedIn mutuals) */}
-                        <span className="text-ink-3">
-                          {plural(t.path.hops.length, 'hop')}, via{' '}
-                          {t.path.hops
-                            .slice(0, -1)
-                            .map((h) => byId.get(h.toId)?.firstName ?? 'someone')
-                            .join(' then ')}
-                        </span>
-                      </li>
-                    ))}
-                  </ul>
+                  {company.org && (
+                    <Link
+                      to={`/companies/${company.org.id}`}
+                      className={cx(
+                        'text-[13px] text-ink-2 hover:text-ink underline decoration-[#cfcdc9] underline-offset-4 hover:decoration-ink',
+                        TAP,
+                      )}
+                    >
+                      Open company page
+                    </Link>
+                  )}
                 </div>
-              )}
-              <div className="flex flex-wrap items-center gap-x-4 gap-y-2 pt-1">
-                {user && (
-                  <Button
-                    variant="primary"
-                    size="sm"
-                    className={TAP}
-                    onClick={() => void openJob(company.org?.name ?? company.label)}
-                    data-testid="company-plan"
-                  >
-                    Plan my way in
-                  </Button>
-                )}
-                {company.org && (
-                  <Link
-                    to={`/companies/${company.org.id}`}
-                    className={cx(
-                      'text-[13px] text-ink-2 hover:text-ink underline decoration-[#cfcdc9] underline-offset-4 hover:decoration-ink',
-                      TAP,
-                    )}
-                  >
-                    Open company page
-                  </Link>
-                )}
-              </div>
-            </>
-          )}
+              </>
+            )}
+          </div>
         </aside>
       </div>
     </div>
