@@ -80,6 +80,11 @@ export interface AgentEnv {
    * is asked.
    */
   linkedinTarget?: { accountsPerDay: number; gapSeconds: number };
+  /**
+   * Zoom's app keys (zoom.ts `ZoomEnv`, spelled out for the same reason), for a Zoom meeting on a booked call; a key
+   * missing here is read from orbit_private.secrets when it is needed
+   */
+  zoom?: { clientId?: string; clientSecret?: string; redirectUri?: string };
   x?: {
     clientId?: string;
     clientSecret?: string;
