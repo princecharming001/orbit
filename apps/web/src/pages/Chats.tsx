@@ -10,6 +10,7 @@ import { Link } from 'react-router-dom';
 import { WeekCalendar } from '../components/chats/WeekCalendar';
 import { PersonRow } from '../components/PersonRow';
 import { db } from '../db/schema';
+import { callsBetween } from '../engine/callsWeek';
 import {
   afterText,
   CHATS_AHEAD_MS,
@@ -77,6 +78,12 @@ export function ChatsPage() {
   const { user } = useSession();
   const on = useFlag('chatsView');
   const view = useChatsView();
+  // the calendar above counts any call with someone the student knows; the empty line never contradicts it
+  const recentCalls = useLiveQuery(async () => {
+    if (!user) return 0;
+    const t = Date.now();
+    return (await callsBetween(user.id, new Date(t - 30 * 86_400_000), new Date(t + 60 * 86_400_000))).length;
+  }, [user?.id]);
   const tz = user?.timezone || Intl.DateTimeFormat().resolvedOptions().timeZone;
   // chats that just ended: ask the notetaker now, not only on its schedule
   const justIds = useMemo(() => view?.justHappened.map((r) => r.key).join(',') ?? '', [view]);
@@ -91,7 +98,7 @@ export function ChatsPage() {
         <SkeletonRows rows={6} divided />
       </div>
     );
-  const empty = !view.days.length && !view.justHappened.length && !view.noTime.length;
+  const empty = !view.days.length && !view.justHappened.length && !view.noTime.length && !recentCalls;
   return (
     <div className="max-w-[1040px]" data-testid="chats-page">
       <PageHeader title="Chats" />

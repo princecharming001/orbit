@@ -197,13 +197,13 @@ export function WeekCalendar({ userId }: { userId: string }) {
               return (
                 <div
                   key={d.date.toISOString()}
-                  className={cx('min-h-[150px] p-1.5', past && 'bg-canvas-2/40')}
+                  className={cx('min-h-[168px] px-2 pt-2.5 pb-3', past && 'bg-canvas-2/40')}
                 >
-                  <div className="mb-1.5 flex items-baseline justify-between px-1">
+                  <div className="mb-2.5 flex items-baseline justify-between px-1">
                     <span
                       className={cx(
                         'text-[11.5px] uppercase tracking-wide',
-                        isToday ? 'text-accent font-semibold' : 'text-ink-3',
+                        isToday ? 'text-ink font-semibold' : 'text-ink-3',
                       )}
                     >
                       {d.date.toLocaleDateString('en-US', { weekday: 'short' })}
@@ -211,38 +211,52 @@ export function WeekCalendar({ userId }: { userId: string }) {
                     <span
                       className={cx(
                         'text-[12.5px] tabular',
-                        isToday
-                          ? 'h-6 w-6 inline-flex items-center justify-center rounded-full bg-accent text-white font-medium'
-                          : 'text-ink-2',
+                        isToday ? 'text-ink font-semibold' : 'text-ink-2',
                       )}
+                      aria-current={isToday ? 'date' : undefined}
                     >
                       {d.date.getDate()}
                     </span>
                   </div>
-                  <ul className="space-y-1">
+                  {isToday && <div className="-mt-1.5 mb-2.5 mx-1 h-px bg-ink" aria-hidden />}
+                  <ul className="space-y-2">
                     {d.calls.map((c) => {
                       const p = c.personId ? people.get(c.personId) : undefined;
+                      const done = new Date(c.endAt || c.startAt).getTime() < Date.now();
                       return (
                         <li key={c.id} data-testid="chats-week-call">
                           <Link
-                            to={p ? `/people/${p.id}?prep=1` : '/chats'}
+                            to={callHref(p)}
                             className={cx(
-                              'block rounded-[8px] border-l-[3px] px-2 py-1.5 hover:brightness-[0.98] transition',
-                              past ? 'border-line bg-canvas text-ink-3' : 'border-accent bg-accent-soft',
+                              'relative block rounded-[6px] border border-line-2 bg-canvas py-2.5 pl-3.5 pr-2.5 transition-colors hover:border-line hover:bg-canvas-2/60',
+                              done && 'text-ink-3',
                             )}
                           >
-                            <span className="block text-[11.5px] tabular text-ink-2">
+                            {/* a straight mark down the left, inside the card: dark ahead, faint once it is over */}
+                            <span
+                              className={cx(
+                                'absolute left-[5px] top-2.5 bottom-2.5 w-[2px]',
+                                done ? 'bg-line' : 'bg-ink',
+                              )}
+                              aria-hidden
+                            />
+                            <span
+                              className={cx(
+                                'block text-[11.5px] tabular',
+                                done ? 'text-ink-3' : 'text-ink-2',
+                              )}
+                            >
                               {clockTime(new Date(c.startAt))}
                             </span>
-                            <span className="mt-0.5 flex items-center gap-1.5 min-w-0">
-                              {p && <Avatar name={p.displayName} src={p.photoUrl} id={p.id} size={18} />}
-                              <span className="text-[12.5px] font-medium truncate">
-                                {p?.firstName ?? c.title.replace(/^Coffee chat with /i, '')}
+                            <span className="mt-1.5 flex items-center gap-2 min-w-0">
+                              {p && <Avatar name={p.displayName} src={p.photoUrl} id={p.id} size={20} />}
+                              <span className={cx('text-[13px] font-medium truncate', !done && 'text-ink')}>
+                                {callName(c, p)}
                               </span>
                             </span>
                             {p?.currentOrganizationRaw && (
-                              <span className="mt-0.5 flex items-center gap-1 text-[11.5px] text-ink-3 min-w-0">
-                                <PersonCompanyLogo person={p} size={11} />
+                              <span className="mt-1 flex items-center gap-1.5 text-[11.5px] text-ink-3 min-w-0">
+                                <PersonCompanyLogo person={p} size={12} />
                                 <span className="truncate">{p.currentOrganizationRaw}</span>
                               </span>
                             )}
@@ -331,7 +345,7 @@ function MonthGrid({
                   className={cx(
                     'text-[12px] tabular',
                     isToday
-                      ? 'h-6 w-6 inline-flex items-center justify-center rounded-full bg-accent text-white font-medium'
+                      ? 'text-ink font-semibold underline decoration-ink underline-offset-4'
                       : own
                         ? 'text-ink-2'
                         : 'text-ink-3',
@@ -350,7 +364,7 @@ function MonthGrid({
                         className="flex items-center gap-1.5 rounded-[4px] px-1 py-0.5 text-[12px] hover:bg-canvas-2 min-w-0"
                         title={`${clockTime(new Date(c.startAt))} ${callName(c, p, true)}`}
                       >
-                        <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-accent" aria-hidden />
+                        <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-ink-3" aria-hidden />
                         <span className="tabular text-ink-3 shrink-0">{clockTime(new Date(c.startAt))}</span>
                         <span className="truncate font-medium">{callName(c, p)}</span>
                       </Link>
