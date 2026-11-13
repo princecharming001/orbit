@@ -35,7 +35,10 @@ beforeEach(async () => {
     delete from orbit.users;`);
 });
 
-const NOW = new Date('2026-11-12T10:23:00Z');
+// today, at a fixed time: the daily ledger's counters expire at the end of NOW's day by the database's own clock, so a
+// fixed date stops counting once that day has passed in real time
+const TODAY = new Date().toISOString().slice(0, 10);
+const NOW = new Date(`${TODAY}T10:23:00Z`);
 const BASE = 'https://api1.unipile.test';
 const logo = (n: string) => `https://media.licdn.com/dms/image/v2/${n}/company-logo_200_200?e=1900000000&t=x`;
 
@@ -198,7 +201,7 @@ describe('logos.user', () => {
     const r = await runUserLogos(t.db, a, deps(fakeUnipile()), NOW);
     expect(r.stopped).toBe('limit');
     const [used] = await t.db.sql<{ count: number }>`
-      select count from public.orbit_proxy_counters where bucket = ${'connectors:li:company:2026-11-12:acc-v'}`;
+      select count from public.orbit_proxy_counters where bucket = ${`connectors:li:company:${TODAY}:acc-v`}`;
     expect(used!.count).toBe(Math.round(150 * USER_SHARE));
     expect(r.remaining).toBe(130 - Math.round(150 * USER_SHARE));
   });
@@ -234,7 +237,7 @@ describe('logos.user', () => {
       },
     );
     expect(queued).toEqual([
-      expect.objectContaining({ kind: 'logos.user', dedupeKey: `logos.user:${a}:2026-11-12:1` }),
+      expect.objectContaining({ kind: 'logos.user', dedupeKey: `logos.user:${a}:${TODAY}:1` }),
     ]);
     const [n] = await t.db.sql<{ n: number }>`select orbit.enqueue_logos_users() as n`;
     expect(n!.n).toBe(1);
