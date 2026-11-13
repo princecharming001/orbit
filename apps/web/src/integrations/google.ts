@@ -6,8 +6,13 @@ import { envGoogleClientId, readPrefs } from './prefs';
 
 export const GMAIL_READ_SCOPE = 'https://www.googleapis.com/auth/gmail.readonly';
 export const GMAIL_SEND_SCOPE = 'https://www.googleapis.com/auth/gmail.send';
-/** Orbit reads calendar events with this; connecting Google asks for it. */
-export const CALENDAR_READ_SCOPE = 'https://www.googleapis.com/auth/calendar.events.readonly';
+/**
+ * Orbit reads calendar events with this; connecting Google asks for it. The same calendar permission the server's
+ * sign-in asks for, so Orbit's consent screen lists one calendar read permission, not two.
+ */
+export const CALENDAR_READ_SCOPE = 'https://www.googleapis.com/auth/calendar.readonly';
+/** What older browser connections were given for reading events; still counts as calendar access. */
+const LEGACY_CALENDAR_READ_SCOPE = 'https://www.googleapis.com/auth/calendar.events.readonly';
 /**
  * Adding a coffee chat to the calendar and inviting the other person needs write access to events. It is asked for
  * only the first time the student sends an invite (incremental consent), not when Google is first connected.
@@ -50,11 +55,7 @@ export function googleScopeWarning(scopes: string[] | undefined): string | undef
   if (!has(GMAIL_READ_SCOPE)) missing.push('read your email, so Orbit cannot sync your conversations');
   if (!has(GMAIL_SEND_SCOPE))
     missing.push('send email, so approved emails will open in your mail app instead');
-  if (
-    !has(CALENDAR_READ_SCOPE) &&
-    !has(CALENDAR_EVENTS_SCOPE) &&
-    !has('https://www.googleapis.com/auth/calendar.readonly')
-  )
+  if (!has(CALENDAR_READ_SCOPE) && !has(CALENDAR_EVENTS_SCOPE) && !has(LEGACY_CALENDAR_READ_SCOPE))
     missing.push('read your calendar, so Orbit cannot see your coffee chats');
   if (!missing.length) return undefined;
   return `Google did not give Orbit permission to ${missing.join(', or to ')}. Reconnect and allow every permission to fix this.`;

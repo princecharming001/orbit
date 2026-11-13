@@ -1167,6 +1167,15 @@ describe('Google permissions (IS-10)', () => {
     const noSend = googleScopeWarning([GMAIL_READ_SCOPE, CALENDAR_READ_SCOPE, 'openid']);
     expect(noSend).toMatch(/send email, so approved emails will open in your mail app/);
     expect(noSend).not.toMatch(/[\u2013\u2014!]/);
+    // a connection made when the browser asked for calendar.events.readonly still counts as calendar access
+    expect(
+      googleScopeWarning([
+        GMAIL_READ_SCOPE,
+        GMAIL_SEND_SCOPE,
+        'https://www.googleapis.com/auth/calendar.events.readonly',
+      ]),
+    ).toBeUndefined();
+    expect(googleScopeWarning([GMAIL_READ_SCOPE, GMAIL_SEND_SCOPE])).toMatch(/read your calendar/);
   });
 
   it('without the send permission an approved email hands off to the mail app instead of failing at send time', async () => {
@@ -1236,7 +1245,8 @@ describe('Google permissions (IS-10)', () => {
       },
     });
     const first = await connectGoogleOAuth();
-    expect(requested).toContain('calendar.events.readonly');
+    expect(requested).toContain('calendar.readonly');
+    expect(requested).not.toContain('calendar.events.readonly');
     expect(first.scopes).toEqual(GOOGLE_SCOPES);
     await connectGoogleOAuth();
     expect(prompts).toEqual(['consent', '']);
