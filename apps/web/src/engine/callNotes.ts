@@ -322,7 +322,12 @@ export async function pullCallNotes(
     const asked: CalendarEvent[] = [];
     for (const ev of pool)
       if (callAppForEvent(ev, [app]) && !(await eventHasNote(user.id, ev))) asked.push(ev);
-    if (!asked.length) continue;
+    if (!asked.length) {
+      // looked, and nothing to ask: the row still says when it last checked
+      const row = await callAppRow(user.id, app);
+      if (row) await db.integrations.update(row.id, { lastSyncedAt: now.toISOString() });
+      continue;
+    }
     startActivity(`notes:${app}`, `Checking ${CALL_APP_META[app].name} for notes`);
     try {
       for (let i = 0; i < asked.length; i += BATCH) {
