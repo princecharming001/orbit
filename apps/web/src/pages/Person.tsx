@@ -58,6 +58,7 @@ import {
   restoreFact,
 } from '../engine/facts';
 import { moveChat } from '../engine/move';
+import { checkNotesForPerson } from '../engine/notesCheck';
 import { setRelationshipType, unhidePerson } from '../engine/people';
 import { loadPersonHistory } from '../engine/personHistory';
 import { moveChatGuarded } from '../engine/pipeline';
@@ -326,6 +327,8 @@ export function PersonPage() {
       void enrichOnView(user, person.id);
       // an Orbit account: their whole history with the student, past the 180 days of networking mail kept here
       void loadPersonHistory(user, person.id);
+      // a chat with them that just ended: the notetaker (or Zoom, or Meet) is asked for its notes now
+      void checkNotesForPerson(user, person.id).catch(() => undefined);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [person?.id, user?.id]);

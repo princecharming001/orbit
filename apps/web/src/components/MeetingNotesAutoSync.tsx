@@ -1,5 +1,6 @@
 import { useEffect, useRef } from 'react';
 import { fillWhyThemGaps, retireTwoProfileMerges } from '../engine/brief';
+import { CALL_APPS, refreshCallApp } from '../engine/callNotes';
 import { cleanUpGuesses } from '../engine/cleanup';
 import { expireBriefs } from '../engine/deepResearch';
 import { runEnrichment } from '../engine/enrichment';
@@ -12,7 +13,7 @@ import { useSession } from '../state/session';
 
 /**
  * Imports new meetings from the student's notetaker (Fathom, Granola, Fireflies or Wispr Flow) when the app opens and
- * the last import is more than half a day old. Mounted once in the app shell, next to the outbox scheduler. Quiet: a
+ * the last import is more than half a day old, and reads where Zoom and Google Meet stand. Mounted once in the app shell, next to the outbox scheduler. Quiet: a
  * failure is recorded on the app's row, where Settings shows it.
  */
 export function MeetingNotesAutoSync() {
@@ -47,6 +48,9 @@ export function MeetingNotesAutoSync() {
       .then(() => {
         void autoSyncFathom(u).catch(() => undefined);
         void autoSyncMeetingApps(u).catch(() => undefined);
+        // Zoom and Google Meet as the server has them (connected on another device, or signed out by the app), so the
+        // notes check knows which chats to watch; a no-op without an Orbit account
+        for (const app of CALL_APPS) void refreshCallApp(u, app).catch(() => undefined);
         // a LinkedIn connected whose first sync never finished syncs now; then today's share of the enrichment
         // waterfall for people the student knows (engine/enrichment; a quiet no-op with nothing to look up with)
         void liveLinkedInAccount(u.id)

@@ -23,7 +23,7 @@ import {
   refreshCallApp,
 } from './callNotes';
 import { afterText, upcomingChats } from './chatsView';
-import { checkNotes } from './notesCheck';
+import { checkNotes, checkNotesForPerson } from './notesCheck';
 import { setMeetingLink } from './settings';
 
 const page = vi.hoisted(() => ({ meetings: [] as unknown[], calls: 0 }));
@@ -169,6 +169,13 @@ describe('the demo: Zoom and Meet bring a call’s transcript', () => {
     const [n] = await db.notes.toArray();
     expect(n!.source).toBe('google_meet');
     expect(n!.rawText).not.toContain('Summary:');
+  });
+
+  it('the person’s page opening asks for their chat that just ended, before the schedule would', async () => {
+    await seed(user, ZOOM_URL);
+    await connectCallApp(user, 'zoom', at(-120));
+    expect(await checkNotesForPerson(user, 'p_dana', at(3))).toEqual({ asked: ['ev_dana'], imported: 1 });
+    expect(await checkNotesForPerson(user, 'p_dana', at(4))).toEqual({ asked: [], imported: 0 });
   });
 
   it('connecting looks back over the last two weeks once', async () => {

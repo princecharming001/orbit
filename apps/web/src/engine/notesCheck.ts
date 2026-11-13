@@ -193,6 +193,21 @@ async function askCalls(
   return pullCallNotes(user, { now, events });
 }
 
+/**
+ * The person's page opened: their coffee chats that just ended (and have no notes) are asked about now, the way the
+ * Chats page does it. Never throws.
+ */
+export async function checkNotesForPerson(
+  user: User,
+  personId: string,
+  now = new Date(),
+): Promise<NotesCheckResult> {
+  const ids = (await recentChatEvents(user.id, now))
+    .filter(({ event, hasNote }) => !hasNote && event.attendeePersonIds.includes(personId))
+    .map(({ event }) => event.id);
+  return ids.length ? checkNotes(user, { now, eventIds: ids }) : { asked: [], imported: 0 };
+}
+
 /** When the next check is due, so the page's timer can sleep until then (undefined: nothing to watch). */
 export async function nextNotesCheckAt(userId: string, now = new Date()): Promise<number | undefined> {
   const done = await readDone(userId);
