@@ -7,7 +7,7 @@
 import type { Goal, GoalKind, MemoryKind, ReplyClass, SourcedCandidate } from '@orbit/core';
 import { GOAL_KINDS, newId, REPLY_CLASSES } from '@orbit/core';
 import { db } from '../../db/schema';
-import { calendarInvitesAvailable, sendCalendarInvite } from '../../engine/calendarInvite';
+import { calendarInvitesAvailable, callLinkName, sendCalendarInvite } from '../../engine/calendarInvite';
 import { CLOSENESS_LABELS, type Closeness, explainScore, rateCloseness } from '../../engine/closeness';
 import { resolveCompanyRef } from '../../engine/companyRef';
 import { allowanceLine, readAllowance, researchMode } from '../../engine/deepResearch';
@@ -1122,7 +1122,7 @@ export const bookCallTool = defineTool({
   name: 'book_call',
   kind: 'risky',
   description:
-    "Call this when the student has agreed a time with someone and wants it on their Google Calendar with an invite sent to the other person (with a Meet link). Give personId (from search_people) and the start time; with an Orbit account, a reply's draftId works too. Orbit creates the calendar event and Google emails the invite. The first time, Google asks the student for calendar access. Needs the student's approval.",
+    "Call this when the student has agreed a time with someone and wants it on their Google Calendar with an invite sent to the other person (with the call link the student picked: Google Meet, Zoom or none). Give personId (from search_people) and the start time; with an Orbit account, a reply's draftId works too. Orbit creates the calendar event and Google emails the invite. The first time, Google asks the student for calendar access. Needs the student's approval.",
   input: z.object({
     personId: z.string().optional().describe('Who the call is with (from search_people).'),
     draftId: z.string().optional().describe('With an Orbit account: the reply draft the time belongs to.'),
@@ -1211,7 +1211,7 @@ export const bookCallTool = defineTool({
       'text',
       { eventId: r.event.id, meetUrl: r.meetUrl },
       { booked: true, eventId: r.event.id, meetUrl: r.meetUrl, demo: r.demo },
-      `Booked ${input.label ?? 'the call'} with ${person.firstName}: it is on your calendar and Google sent the invite${r.meetUrl ? ' with a Meet link' : ''}.`,
+      `Booked ${input.label ?? 'the call'} with ${person.firstName}: it is on your calendar and Google sent the invite${r.meetUrl ? ` with a ${callLinkName(r.meetUrl)}` : ''}.${r.linkNote ? ` ${r.linkNote}` : ''}`,
       `/people/${person.id}`,
     );
   },

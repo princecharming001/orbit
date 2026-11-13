@@ -36,7 +36,15 @@ export const REPAIR_VERSION = '2026-10-23';
  */
 export const SUMMARY_RULES_AT = '2026-10-22T00:00:00.000Z';
 
-const NOTETAKERS = new Set(['granola_api', 'granola_email', 'fathom', 'fireflies', 'wispr_notetaker']);
+const NOTETAKERS = new Set([
+  'granola_api',
+  'granola_email',
+  'fathom',
+  'fireflies',
+  'wispr_notetaker',
+  'zoom',
+  'google_meet',
+]);
 const ALUM_TEXT = /\b(alum|alumni|alumna|alumnus|fellow|went to)\b/i;
 
 export interface RepairStats {

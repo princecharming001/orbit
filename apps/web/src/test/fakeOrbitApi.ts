@@ -36,6 +36,19 @@ import type {
 import { readiness } from '@orbit/core';
 import type { AccountUser, TextDaysRequest } from '../integrations/orbitApi';
 
+/** /zoom/notes and /meet/notes: the notes kept for the events asked about, the rest none. */
+function callNotes(
+  app: 'zoom' | 'google_meet',
+  body: Record<string, unknown>,
+  kept: Record<string, { meetingId: string; title: string; transcript?: string; summary?: string }>,
+) {
+  const events = (Array.isArray(body.events) ? body.events : []) as { id: string; startAt: string }[];
+  const notes = events
+    .filter((e) => kept[e.id])
+    .map((e) => ({ app, eventId: e.id, startAt: e.startAt, ...kept[e.id]! }));
+  return { notes, none: events.filter((e) => !kept[e.id]).map((e) => e.id) };
+}
+
 export const FAKE_API_BASE = 'https://orbit-api.test/functions/v1/orbit-api';
 /** The draft of Daniel's question that waits on the student: a uuid like every id the server mints, as the browser's rules expect. */
 export const DANIEL_QUESTION_DRAFT = '0d2a7c4e-5b1f-4a9e-8c3d-0a11e10c0a7e';
@@ -100,6 +113,8 @@ export interface FakeState {
     postalAddress: string | null;
     schedulingLink: string | null;
     timezone: string;
+    /** the call link on booked invites (users.settings.meeting_link); unset is Google Meet */
+    meetingLink?: 'zoom' | 'none';
     /** the student's own words (plan 24), as users.settings.about keeps them */
     about?: Record<string, unknown> | null;
   };
@@ -235,6 +250,25 @@ export interface FakeState {
   lookupResult: unknown;
   /** every POST /texts/days body, as it came */
   textDays: TextDaysRequest[];
+  /**
+   * Zoom and Google Meet. `zoom.configured` false: the owner has not stored Zoom's keys (status says so, the rest is
+   * 503). `notes`: what /zoom/notes and /meet/notes find, by the browser's event id; the rest are none.
+   */
+  callApps: {
+    zoom: {
+      configured: boolean;
+      status: 'not_connected' | 'active' | 'needs_reauth' | 'error';
+      email?: string;
+      notes: Record<string, { meetingId: string; title: string; transcript?: string; summary?: string }>;
+      meetings: { topic: string; startAt: string; minutes: number; timezone?: string }[];
+    };
+    meet: {
+      status: 'not_connected' | 'needs_consent' | 'active' | 'needs_reauth';
+      /** Google has given the Meet permission (else connect answers a consent url) */
+      granted: boolean;
+      notes: Record<string, { meetingId: string; title: string; transcript?: string }>;
+    };
+  };
 }
 
 /** One of a friend's shared people in the fake, plus the student's own row for the same human when they have one. */
@@ -442,6 +476,10 @@ export function createFakeOrbitApi(
     lookups: new Map(),
     lookupResult: { bridges: [], oneWay: [], partial: false, reason: 'none' },
     textDays: [],
+    callApps: {
+      zoom: { configured: true, status: 'not_connected', notes: {}, meetings: [] },
+      meet: { status: 'not_connected', granted: false, notes: {} },
+    },
   };
   const code = 'good-code';
 
@@ -696,6 +734,65 @@ export function createFakeOrbitApi(
       if (route === '/x/disconnect') {
         x.status = 'not_connected';
         return json(200, { ok: true, revokedAtX: true });
+      }
+    }
+    // Zoom and Google Meet: notes from the call, and Zoom meetings for booked calls
+    if (route.startsWith('/zoom/')) {
+      const z = state.callApps.zoom;
+      if (route === '/zoom/status')
+        return json(200, {
+          configured: z.configured,
+          status: z.configured ? z.status : 'not_connected',
+          ...(z.configured && z.email && z.status !== 'not_connected' ? { email: z.email } : {}),
+        });
+      if (!z.configured)
+        return json(
+          503,
+          { error: { code: 'unconfigured', message: 'Zoom is not set up', missing: ['ZOOM_CLIENT_ID'] } },
+          { 'x-orbit-connector': 'unconfigured' },
+        );
+      if (route === '/zoom/connect/start')
+        return json(200, { url: 'https://zoom.test/oauth/authorize?state=fake' });
+      if (route === '/zoom/disconnect') {
+        z.status = 'not_connected';
+        return json(200, { ok: true, revokedAtZoom: true });
+      }
+      if (z.status === 'needs_reauth') return error(409, 'needs_reauth', 'sign in with Zoom again');
+      if (z.status !== 'active') return error(409, 'not_connected', 'Zoom is not connected');
+      if (route === '/zoom/notes') return json(200, callNotes('zoom', body, z.notes));
+      if (route === '/zoom/meetings') {
+        z.meetings.push(body as (typeof z.meetings)[number]);
+        return json(200, {
+          joinUrl: `https://zoom.us/j/8${String(z.meetings.length).padStart(10, '0')}`,
+          meetingId: '1',
+        });
+      }
+    }
+    if (route.startsWith('/meet/')) {
+      const m = state.callApps.meet;
+      const status = () => (m.status === 'active' && !m.granted ? 'needs_consent' : m.status);
+      if (route === '/meet/status')
+        return json(200, {
+          status: status(),
+          ...(m.status !== 'not_connected' ? { email: state.user.email } : {}),
+        });
+      if (route === '/meet/connect/start') {
+        m.status = 'active';
+        return json(
+          200,
+          m.granted
+            ? { connected: true }
+            : { connected: false, url: 'https://accounts.google.test/o/oauth2/v2/auth' },
+        );
+      }
+      if (route === '/meet/disconnect') {
+        m.status = 'not_connected';
+        return json(200, { ok: true });
+      }
+      if (route === '/meet/notes') {
+        const st = status();
+        if (st !== 'active') return error(409, st, 'Google Meet is not ready');
+        return json(200, callNotes('google_meet', body, m.notes));
       }
     }
     // plan 43 §3.4, §3.6: accounts under people, the questions and the lookups
@@ -1617,6 +1714,12 @@ export function createFakeOrbitApi(
         if ('postalAddress' in body) state.profile.postalAddress = text(body.postalAddress);
         if ('schedulingLink' in body) state.profile.schedulingLink = text(link);
         if (typeof body.timezone === 'string') state.profile.timezone = body.timezone;
+        if (body.meetingLink !== undefined) {
+          if (!['meet', 'zoom', 'none'].includes(String(body.meetingLink)))
+            return error(400, 'bad_request', 'meetingLink is meet, zoom or none');
+          state.profile.meetingLink =
+            body.meetingLink === 'meet' ? undefined : (body.meetingLink as 'zoom' | 'none');
+        }
         if ('about' in body)
           state.profile.about =
             body.about && typeof body.about === 'object' ? (body.about as Record<string, unknown>) : null;

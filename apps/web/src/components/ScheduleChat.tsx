@@ -2,7 +2,12 @@ import type { CoffeeChat } from '@orbit/core';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { useState } from 'react';
 import { db } from '../db/schema';
-import { calendarInvitesAvailable, canInviteFor, sendCalendarInvite } from '../engine/calendarInvite';
+import {
+  calendarInvitesAvailable,
+  callLinkName,
+  canInviteFor,
+  sendCalendarInvite,
+} from '../engine/calendarInvite';
 import { scheduleChatAt } from '../engine/move';
 import { useSession } from '../state/session';
 import { Button, Input, Label, Modal, Select, useToast } from '../ui';
@@ -61,7 +66,7 @@ export function ScheduleChatDialog({
         toast.push(
           r.ok
             ? {
-                text: `On your calendar, and Google sent ${firstName} the invite${r.meetUrl ? ' with a Meet link' : ''}.`,
+                text: `On your calendar, and Google sent ${firstName} the invite${r.meetUrl ? ` with a ${callLinkName(r.meetUrl)}` : ''}.${r.linkNote ? ` ${r.linkNote}` : ''}`,
                 tone: 'good',
               }
             : { text: `Saved the time, but the invite did not go out: ${r.message}`, tone: 'bad', ttl: 9000 },

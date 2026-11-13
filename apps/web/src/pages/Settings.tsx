@@ -37,6 +37,7 @@ import { useEffect, useRef, useState } from 'react';
 import { Navigate, NavLink, useLocation, useNavigate, useParams } from 'react-router-dom';
 import { settingById } from '../chat/settingsMap';
 import { AccountSection, MemorySection, OutreachSection } from '../components/account/AccountSettings';
+import { MeetingLinkRow, MeetRow, ZoomRow } from '../components/CallAppRows';
 import { keepLinkedInPick, linkedInCompanySuggestions } from '../components/CompanyChooser';
 import { CompanyLogo } from '../components/CompanyLogo';
 import { LinkedInLiveCard } from '../components/ConnectorCards';
@@ -1242,11 +1243,14 @@ function Integrations() {
         <MeetingAppRow user={user} app="granola" />
         <MeetingAppRow user={user} app="fireflies" />
         <MeetingAppRow user={user} app="wispr" />
+        <ZoomRow user={user} />
+        <MeetRow user={user} />
       </RowGroup>
       <RowGroup title="Scheduling">
         <CalcomRow user={user} />
         <CalendlyRow user={user} />
         <BookingLinkRow user={user} />
+        <MeetingLinkRow user={user} />
       </RowGroup>
       <RowGroup title="About you">
         <ResumeRow user={user} resume={resume} />

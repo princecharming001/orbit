@@ -672,16 +672,22 @@ export interface GcalInsert {
   attendees: { email: string; displayName?: string }[];
   /** a fresh id per attempt, so Google makes one Meet link, never two */
   requestId: string;
+  /** add a Google Meet link (the default); false for a Zoom link in `location`, or no link */
+  meet?: boolean;
+  /** where the call happens: a Zoom join link */
+  location?: string;
 }
 
 /**
- * Create an event on the student's primary calendar with a Google Meet link, and have Google email the invite to
- * the guests (sendUpdates=all). A POST is never retried on a server error, so an invite cannot go out twice.
+ * Create an event on the student's primary calendar with a Google Meet link (or the Zoom link in `location`, or no
+ * link), and have Google email the invite to the guests (sendUpdates=all). A POST is never retried on a server error,
+ * so an invite cannot go out twice.
  */
 export async function gcalInsertEvent(e: GcalInsert): Promise<GcalEventRaw> {
+  const meet = e.meet !== false;
   const url = new URL('https://www.googleapis.com/calendar/v3/calendars/primary/events');
   url.searchParams.set('sendUpdates', 'all');
-  url.searchParams.set('conferenceDataVersion', '1');
+  if (meet) url.searchParams.set('conferenceDataVersion', '1');
   return gfetch<GcalEventRaw>(url.toString(), {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -691,9 +697,14 @@ export async function gcalInsertEvent(e: GcalInsert): Promise<GcalEventRaw> {
       start: { dateTime: e.startAt, timeZone: e.timeZone },
       end: { dateTime: e.endAt, timeZone: e.timeZone },
       attendees: e.attendees,
-      conferenceData: {
-        createRequest: { requestId: e.requestId, conferenceSolutionKey: { type: 'hangoutsMeet' } },
-      },
+      ...(meet
+        ? {
+            conferenceData: {
+              createRequest: { requestId: e.requestId, conferenceSolutionKey: { type: 'hangoutsMeet' } },
+            },
+          }
+        : {}),
+      ...(e.location ? { location: e.location } : {}),
       reminders: { useDefault: true },
     }),
   });
