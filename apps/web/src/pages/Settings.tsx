@@ -249,8 +249,9 @@ export function SettingsPage() {
   useSettingFocus(section);
   const owner = useIsOwner();
   const SECTIONS = sections(owner);
-  // back from Instagram's or X's sign-in (/settings?x=connected): the rows that say how it went are under Integrations
-  if (section !== 'integrations' && /[?&](x|instagram)=/.test(search))
+  // back from Instagram's, X's or Zoom's sign-in (/settings?x=connected): the rows that say how it went are under
+  // Integrations
+  if (section !== 'integrations' && /[?&](x|instagram|zoom)=/.test(search))
     return <Navigate to={`/settings/integrations${search}`} replace />;
   // the owner's cost view (plan 34 E3) is not listed: it opens at /settings/costs in account mode
   const hidden = section === 'costs' && isAccountMode();
