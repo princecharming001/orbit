@@ -47,6 +47,7 @@ export * from './linkedin/csv';
 export * from './linkedin/headline';
 export * from './memory/extract';
 export * from './memory/vocab';
+export * from './notes/callNotes';
 export * from './notes/conflicts';
 export * from './notes/extract';
 export * from './ownWords';
