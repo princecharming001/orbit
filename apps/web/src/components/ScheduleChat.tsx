@@ -54,6 +54,11 @@ export function ScheduleChatDialog({
   }, [chat?.scheduledEventId]);
   // a new time can go out as a Google Calendar invite, ticked by default; an existing time is just moved
   const [invite, setInvite] = useState(!current);
+  // the call link the student picked for invites (Settings, Scheduling)
+  const linkChoice = useLiveQuery(
+    async () => (user ? ((await db.settings.get(user.id))?.meetingLink ?? 'meet') : 'meet'),
+    [user?.id],
+  );
   if (!chat || !user) return null;
   const canInvite = !!email && !onCalendar && calendarInvitesAvailable(user);
   const at = new Date(when);
@@ -117,7 +122,12 @@ export function ScheduleChatDialog({
               onChange={(e) => setInvite(e.target.checked)}
             />
             <span>
-              Add it to my Google Calendar and send {firstName} the invite, with a Meet link
+              Add it to my Google Calendar and send {firstName} the invite
+              {linkChoice === 'zoom'
+                ? ', with a Zoom link'
+                : linkChoice === 'none'
+                  ? ''
+                  : ', with a Meet link'}
               <span className="block text-[12px] text-ink-3">To {email}</span>
             </span>
           </label>
