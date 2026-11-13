@@ -1753,6 +1753,8 @@ test.describe("Never losing the student's work, and honest hand-offs", () => {
   }) => {
     await prep(page);
     await page.goto('');
+    // the page index.html carries for Google's verification is replaced as the app starts: read the app's own page
+    await expect(page.locator('.orbit-about')).toHaveCount(0);
     // what the page says about Orbit; the logo wall's company names (Google among them) promise nothing
     const promises = await page.evaluate(() => {
       const copy = document.body.cloneNode(true) as HTMLElement;
