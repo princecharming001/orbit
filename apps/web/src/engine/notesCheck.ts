@@ -5,11 +5,23 @@
  * opens. Each ask is one call: the sync reads from the meeting's start only. What a check found is filed by the same
  * pipeline as any import (facts, promises, the chat completed, the thank-you), and the Chats row updates from it.
  *
+ * Zoom and Google Meet (engine/callNotes.ts) are asked too, for chats held on their links: on their own when no
+ * notetaker is on, and after the notetaker when one is (only for chats it brought nothing for, and only once the chat
+ * ended CALL_AFTER_NOTETAKER_MIN ago), so the same call is never filed twice.
+ *
  * Like the reply check, it is a timer in the open page and nothing more. The demo's notes come from its mock apps.
  */
 import type { CalendarEvent, User } from '@orbit/core';
 import { db, type IntegrationAccount } from '../db/schema';
 import { isServerUser } from '../integrations/orbitApi';
+import {
+  CALL_AFTER_NOTETAKER_MIN,
+  type CallPullResult,
+  callAppForEvent,
+  connectedCallApps,
+  eventHasNote,
+  pullCallNotes,
+} from './callNotes';
 import { fathomAccount, syncFathom } from './fathom';
 import { isMeetingAppOn } from './meetingAppSwitch';
 import { MEETING_APP_META, type MeetingApp, syncMeetingApp } from './meetingApps';
@@ -119,12 +131,15 @@ export function checkNotes(
 async function checkOnce(user: User, opts: { now?: Date; eventIds?: string[] }): Promise<NotesCheckResult> {
   const now = opts.now ?? new Date();
   const out: NotesCheckResult = { asked: [], imported: 0 };
-  if (isServerUser(user.id)) return out;
-  const taker = await connectedNotetaker(user.id);
-  if (!taker) return out;
+  // a notetaker's key or sign-in lives in this browser; an account's is asked from the browser that holds it
+  const taker = isServerUser(user.id) ? undefined : await connectedNotetaker(user.id);
+  const calls = await connectedCallApps(user.id);
+  if (!taker && !calls.length) return out;
   const done = await readDone(user.id);
   const due: { ev: CalendarEvent; offset?: number }[] = [];
   for (const { event, hasNote } of await recentChatEvents(user.id, now)) {
+    // with no notetaker on, only chats held on a call app that is on are watched
+    if (!taker && !callAppForEvent(event, calls)) continue;
     const rec = done[event.id] ?? { offsets: [] };
     if (opts.eventIds?.includes(event.id)) {
       if (hasNote) continue;
@@ -136,12 +151,15 @@ async function checkOnce(user: User, opts: { now?: Date; eventIds?: string[] }):
     if (offset !== undefined) due.push({ ev: event, offset });
   }
   if (!due.length) return out;
-  const since = new Date(Math.min(...due.map((d) => Date.parse(d.ev.startAt))) - 15 * MIN).toISOString();
-  const r =
-    taker.app === 'fathom'
-      ? await syncFathom(user, { now, since })
-      : await syncMeetingApp(user, taker.app, { now, since });
-  if (r.ok) out.imported = r.imported;
+  if (taker) {
+    const since = new Date(Math.min(...due.map((d) => Date.parse(d.ev.startAt))) - 15 * MIN).toISOString();
+    const r =
+      taker.app === 'fathom'
+        ? await syncFathom(user, { now, since })
+        : await syncMeetingApp(user, taker.app, { now, since });
+    if (r.ok) out.imported = r.imported;
+  }
+  if (calls.length) out.imported += (await askCalls(user, due, !!taker, now)).imported;
   for (const d of due) {
     const rec = done[d.ev.id] ?? { offsets: [] };
     // a check that runs late marks every offset it passed, so the schedule never fires twice for one moment
@@ -154,6 +172,40 @@ async function checkOnce(user: User, opts: { now?: Date; eventIds?: string[] }):
     if (!rec.lastAt || now.getTime() - Date.parse(rec.lastAt) > 2 * CHECK_WINDOW_MS) delete done[id];
   await db.kv.put({ key: doneKey(user.id), value: done });
   return out;
+}
+
+/**
+ * The call's own transcript (Zoom, Google Meet) for the chats still without notes once the notetaker was asked. With
+ * a notetaker on, a chat is asked about only once it ended CALL_AFTER_NOTETAKER_MIN ago, so the notetaker goes first.
+ */
+async function askCalls(
+  user: User,
+  due: { ev: CalendarEvent }[],
+  notetakerOn: boolean,
+  now: Date,
+): Promise<CallPullResult> {
+  const events: CalendarEvent[] = [];
+  for (const { ev } of due) {
+    if (notetakerOn && now.getTime() - Date.parse(ev.endAt) < CALL_AFTER_NOTETAKER_MIN * MIN) continue;
+    if (!(await eventHasNote(user.id, ev))) events.push(ev);
+  }
+  if (!events.length) return { imported: 0, none: [], needs: [] };
+  return pullCallNotes(user, { now, events });
+}
+
+/**
+ * The person's page opened: their coffee chats that just ended (and have no notes) are asked about now, the way the
+ * Chats page does it. Never throws.
+ */
+export async function checkNotesForPerson(
+  user: User,
+  personId: string,
+  now = new Date(),
+): Promise<NotesCheckResult> {
+  const ids = (await recentChatEvents(user.id, now))
+    .filter(({ event, hasNote }) => !hasNote && event.attendeePersonIds.includes(personId))
+    .map(({ event }) => event.id);
+  return ids.length ? checkNotes(user, { now, eventIds: ids }) : { asked: [], imported: 0 };
 }
 
 /** When the next check is due, so the page's timer can sleep until then (undefined: nothing to watch). */

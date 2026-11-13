@@ -1,4 +1,11 @@
-import type { ProfileSettingsRequest, RecruitingGoals, TargetCompany, User, UserSettings } from '@orbit/core';
+import type {
+  MeetingLinkChoice,
+  ProfileSettingsRequest,
+  RecruitingGoals,
+  TargetCompany,
+  User,
+  UserSettings,
+} from '@orbit/core';
 import { cleanAnswer, cleanCurrentJob, OWN_WORDS_KEYS, ownWordsOf, SEND_CAPS } from '@orbit/core';
 import { recomputeAllStrengths } from '../db/repo';
 import { db } from '../db/schema';
@@ -238,6 +245,13 @@ export async function setSchedulingLink(userId: string, link: string | undefined
   const before = (await db.settings.get(userId))?.schedulingLink;
   await db.settings.update(userId, { schedulingLink: clean });
   if (clean !== before) await pushProfileSettings(userId, { schedulingLink: clean ?? null });
+}
+
+/** The call link Orbit puts on invites it books: Google Meet (the default), a Zoom meeting, or none. */
+export async function setMeetingLink(userId: string, choice: MeetingLinkChoice): Promise<void> {
+  const before = (await db.settings.get(userId))?.meetingLink ?? 'meet';
+  await db.settings.update(userId, { meetingLink: choice });
+  if (choice !== before) await pushProfileSettings(userId, { meetingLink: choice });
 }
 
 export async function setBriefTime(userId: string, briefTimeLocal: string): Promise<void> {

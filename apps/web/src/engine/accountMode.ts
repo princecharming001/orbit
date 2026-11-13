@@ -95,6 +95,9 @@ export async function adoptAccountUser(a: AccountUser, now = new Date()): Promis
     fromServer.postalAddress = a.settings.postal_address;
   if (typeof a.settings?.scheduling_link === 'string' && !local?.schedulingLink)
     fromServer.schedulingLink = a.settings.scheduling_link;
+  // the call link on invites Orbit books: Google Meet unless the server keeps another choice
+  if ((a.settings?.meeting_link === 'zoom' || a.settings?.meeting_link === 'none') && !local?.meetingLink)
+    fromServer.meetingLink = a.settings.meeting_link;
   if (local && Object.keys(fromServer).length)
     await db.settings.update(user.id, fromServer as Partial<UserSettings>);
   // the one rulebook (plan 29 §B2.1): what the student handed to Orbit, their mode, a pause and their own daily

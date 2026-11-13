@@ -28,12 +28,14 @@ import { ipBuckets, memoryTake, sqlTake, type Take, userBuckets } from '../_shar
 import { type AgentConfig, makeServices, type Services } from '../_shared/services.ts';
 import { checkSession, type SessionConfig, sessionSecretUsable, verifyBearer } from '../_shared/session.ts';
 import type { XConfig } from '../_shared/social/x/config.ts';
+import type { ZoomEnv } from '../_shared/zoom.ts';
 import { accountDelete, accountExport } from './account.ts';
 import { googleCallback, googleStart, logout, me, refresh, session } from './auth.ts';
 import { adminPatternRoute, adminRoutes } from './routes/admin.ts';
 import { autopilotRoutes } from './routes/autopilot.ts';
 import { cadenceRoutes } from './routes/cadence.ts';
 import { calendarRoutes } from './routes/calendar.ts';
+import { callRoutes } from './routes/calls.ts';
 import { draftRoutes } from './routes/drafts.ts';
 import { friendPatternRoute, friendRoutes } from './routes/friends.ts';
 import { friendDiscoverRoutes } from './routes/friendsDiscover.ts';
@@ -79,6 +81,11 @@ export interface ApiEnv {
   ownerId?: string;
   /** plan 43 §5: X's app, limits and the owner's switch (ORBIT_X_*, ORBIT_EXTRA_SOURCES) */
   x?: XConfig;
+  /**
+   * Zoom's app (ZOOM_CLIENT_ID, ZOOM_CLIENT_SECRET, ZOOM_REDIRECT_URI as function secrets); a key missing here is read
+   * from orbit_private.secrets when a Zoom route runs (_shared/zoom.ts zoomKeys)
+   */
+  zoom?: ZoomEnv;
   /** ORBIT_EXTRA_SOURCES (plan 43 §3.1), read once at cold start: the optional sources the owner offers */
   extraSources?: OptionalSource[];
 }
@@ -184,6 +191,8 @@ const ROUTES: Record<string, Route> = {
   ...voiceRoutes,
   ...adminRoutes,
   ...xRoutes,
+  // Zoom and Google Meet: notes from the call, and Zoom meetings for booked calls
+  ...callRoutes,
   ...socialRoutes,
   // plan 43: the optional sources' switches (PUT /sources/:source is matched by pattern) and texts' day counts
   ...sourcesRoutes,
@@ -234,6 +243,7 @@ export function makeApiHandler(deps: ApiDeps): (req: Request) => Promise<Respons
       unipileBase: deps.env.unipileBase,
       ...(deps.env.extraSources ? { extraSources: deps.env.extraSources } : {}),
       ...(deps.env.x ? { x: deps.env.x } : {}),
+      ...(deps.env.zoom ? { zoom: deps.env.zoom } : {}),
       ...defined(deps.agent?.env),
     },
   };

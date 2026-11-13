@@ -24,6 +24,10 @@ export type IntegrationProvider =
   | 'instagram'
   /** the student's X account, signed in with X (plan 43) */
   | 'x'
+  /** the student's Zoom account: transcripts and summaries of their calls, and meeting links for invites */
+  | 'zoom'
+  /** Google Meet transcripts, read with the student's Google sign-in (an extra permission) */
+  | 'google_meet'
   | 'demo';
 export type PersonSource =
   | 'gmail'
@@ -134,6 +138,8 @@ export type ChatStage =
   | 'archived';
 export type ChatSource = 'recommendation' | 'manual' | 'detected' | 'tracker_import' | 'reach';
 export type Actor = 'system' | 'user';
+/** The call link on an invite Orbit books. */
+export type MeetingLinkChoice = 'meet' | 'zoom' | 'none';
 export type NoteSource =
   | 'granola_api'
   | 'granola_email'
@@ -143,6 +149,10 @@ export type NoteSource =
   | 'wispr_notetaker'
   | 'wispr_capture'
   | 'wispr_export'
+  /** a Zoom call's transcript (and AI Companion summary), read with the student's Zoom sign-in */
+  | 'zoom'
+  /** a Google Meet call's transcript, read with the student's Google sign-in */
+  | 'google_meet'
   | 'manual'
   | 'email_ingest'
   | 'upload'
@@ -299,6 +309,11 @@ export interface UserSettings {
   maxBumps: number;
   tonePreset: 'warm' | 'direct' | 'formal';
   schedulingLink?: string;
+  /**
+   * The call link Orbit puts on an invite it books: a Google Meet link, a Zoom meeting (Zoom must be connected), or
+   * none. Google Meet when unset; synced as users.settings.meeting_link.
+   */
+  meetingLink?: MeetingLinkChoice;
   warmUpEnabled: boolean;
   warmUpDays: number; // days of warm-up before cold LinkedIn outreach
   anthropicApiKey?: string;

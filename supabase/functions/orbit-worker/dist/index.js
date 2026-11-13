@@ -2337,17 +2337,17 @@ var AGENT_SECRET_NAMES = [
   "PARALLEL_API_KEY"
 ];
 async function agentEnvWithSecrets(get, db2) {
-  const stored = /* @__PURE__ */ new Map();
+  const stored2 = /* @__PURE__ */ new Map();
   const missing2 = AGENT_SECRET_NAMES.filter((n) => !get(n));
   if (db2 && missing2.length) {
     try {
       const rows = await db2.sql`
         select n, public.orbit_secret(n) as v from unnest(${missing2}::text[]) as n`;
-      for (const r of rows) if (r.v) stored.set(r.n, r.v);
+      for (const r of rows) if (r.v) stored2.set(r.n, r.v);
     } catch {
     }
   }
-  return agentEnvFrom((name) => get(name) || stored.get(name));
+  return agentEnvFrom((name) => get(name) || stored2.get(name));
 }
 function agentEnvFrom(get) {
   const supabaseUrl = get("SUPABASE_URL");
@@ -8449,6 +8449,209 @@ function zoneAbbrev(d, tz) {
   return tz;
 }
 
+// packages/core/src/notes/callNotes.ts
+var CALL_MATCH_WINDOW_MS = 30 * 6e4;
+
+// supabase/functions/_shared/zoom.ts
+var ZOOM_TOKEN_URL = "https://zoom.us/oauth/token";
+var ZOOM_API = "https://api.zoom.us/v2";
+var zoomAccessName = (userId) => `zoom_access:${userId}`;
+var zoomRefreshName = (userId) => `zoom_refresh:${userId}`;
+var ZoomSignInNeeded = class extends Error {
+  constructor() {
+    super("zoom_sign_in_needed");
+  }
+};
+var ZoomTokenError = class extends Error {
+  constructor(status, code) {
+    super(`zoom token ${status} ${code}`);
+    this.status = status;
+    this.code = code;
+  }
+};
+var stored;
+var STORED_TTL_MS = 6e4;
+async function zoomKeys(env2, db2, now = Date.now()) {
+  if (env2?.clientId && env2.clientSecret) return { clientId: env2.clientId, clientSecret: env2.clientSecret };
+  if (!stored || now - stored.at > STORED_TTL_MS) {
+    const none = () => void 0;
+    const [id, secret] = await Promise.all([
+      providerSecret(none, db2, "ZOOM_CLIENT_ID"),
+      providerSecret(none, db2, "ZOOM_CLIENT_SECRET")
+    ]);
+    stored = { at: now, id, secret };
+  }
+  const clientId = env2?.clientId || stored.id;
+  const clientSecret = env2?.clientSecret || stored.secret;
+  return clientId && clientSecret ? { clientId, clientSecret } : void 0;
+}
+var basic = (cfg) => `Basic ${btoa(`${cfg.clientId}:${cfg.clientSecret}`)}`;
+async function tokenCall2(cfg, form) {
+  const res = await (cfg.fetch ?? fetch)(ZOOM_TOKEN_URL, {
+    method: "POST",
+    headers: {
+      "content-type": "application/x-www-form-urlencoded",
+      accept: "application/json",
+      authorization: basic(cfg)
+    },
+    body: new URLSearchParams(form).toString(),
+    signal: AbortSignal.timeout(15e3)
+  });
+  let body = {};
+  try {
+    body = await res.json();
+  } catch {
+    body = {};
+  }
+  if (!res.ok) throw new ZoomTokenError(res.status, String(body.error ?? "token_error"));
+  if (typeof body.access_token !== "string") throw new ZoomTokenError(502, "no_access_token");
+  return body;
+}
+function zoomRefreshToken(cfg, refreshToken) {
+  return tokenCall2(cfg, { grant_type: "refresh_token", refresh_token: refreshToken });
+}
+async function loadZoomRow(db2, userId) {
+  const [a] = await db2.sql`
+    select status, external_account_id, token_secret_id, last_synced_at, sync_state->'zoom' as zoom
+      from orbit.integration_accounts where user_id = ${userId}::uuid and provider = 'zoom'`;
+  if (!a) return void 0;
+  return {
+    status: a.status,
+    zoomUserId: a.external_account_id,
+    refreshSecretId: a.token_secret_id,
+    lastSyncedAt: a.last_synced_at ? new Date(a.last_synced_at).toISOString() : null,
+    state: a.zoom ?? {}
+  };
+}
+async function saveZoomState(db2, userId, patch) {
+  await db2.sql`
+    update orbit.integration_accounts
+       set sync_state = jsonb_set(coalesce(sync_state, '{}'::jsonb), '{zoom}',
+                                  coalesce(sync_state->'zoom', '{}'::jsonb) || ${patch}::jsonb)
+     where user_id = ${userId}::uuid and provider = 'zoom'`;
+}
+async function storeZoomTokens(vault, userId, t, now) {
+  const accessSecretId = await vault.put(zoomAccessName(userId), t.access_token);
+  const refreshSecretId = t.refresh_token ? await vault.put(zoomRefreshName(userId), t.refresh_token) : void 0;
+  const accessExpiresAt = new Date(now.getTime() + Math.max(60, t.expires_in ?? 3600) * 1e3).toISOString();
+  return { accessSecretId, refreshSecretId, accessExpiresAt };
+}
+function zoomTokens(db2, vault, cfg, userId, now = () => /* @__PURE__ */ new Date()) {
+  let cached;
+  const needsReauth = async (why) => {
+    await db2.sql`
+      update orbit.integration_accounts set status = 'needs_reauth', last_error = ${why}
+       where user_id = ${userId}::uuid and provider = 'zoom'`;
+    return new ZoomSignInNeeded();
+  };
+  async function refresh() {
+    const row = await loadZoomRow(db2, userId);
+    if (!row?.refreshSecretId || row.status === "revoked") throw new ZoomSignInNeeded();
+    const refreshToken = await vault.get(row.refreshSecretId);
+    if (!refreshToken) throw await needsReauth("no_refresh_token");
+    let t;
+    try {
+      t = await zoomRefreshToken(cfg, refreshToken);
+    } catch (e) {
+      if (e instanceof ZoomTokenError && e.status >= 400 && e.status < 500)
+        throw await needsReauth(`refresh_${e.code}`.slice(0, 80));
+      throw e;
+    }
+    const s = await storeZoomTokens(vault, userId, t, now());
+    if (s.refreshSecretId && s.refreshSecretId !== row.refreshSecretId)
+      await db2.sql`update orbit.integration_accounts set token_secret_id = ${s.refreshSecretId}::uuid
+                    where user_id = ${userId}::uuid and provider = 'zoom'`;
+    await saveZoomState(db2, userId, { accessSecretId: s.accessSecretId, accessExpiresAt: s.accessExpiresAt });
+    cached = t.access_token;
+    return t.access_token;
+  }
+  return {
+    async accessToken() {
+      if (cached) return cached;
+      const row = await loadZoomRow(db2, userId);
+      if (!row || row.status === "revoked" || row.status === "needs_reauth") throw new ZoomSignInNeeded();
+      const s = row.state;
+      const fresh = s.accessExpiresAt && Date.parse(s.accessExpiresAt) - 6e4 > now().getTime();
+      if (s.accessSecretId && fresh) {
+        const token = await vault.get(s.accessSecretId);
+        if (token) return cached = token;
+      }
+      return refresh();
+    },
+    refreshed: () => {
+      cached = void 0;
+      return refresh();
+    }
+  };
+}
+var ZoomApiError = class extends Error {
+  constructor(status, path) {
+    super(`zoom ${status} ${path}`);
+    this.status = status;
+    this.path = path;
+  }
+};
+async function zoomCall(tokens2, url, init = {}) {
+  const doFetch = init.fetch ?? fetch;
+  let token = await tokens2.accessToken();
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const res = await doFetch(url, {
+      method: init.method ?? "GET",
+      headers: {
+        authorization: `Bearer ${token}`,
+        accept: init.raw ? "text/vtt, text/plain, */*" : "application/json",
+        ...init.body !== void 0 ? { "content-type": "application/json" } : {}
+      },
+      body: init.body !== void 0 ? JSON.stringify(init.body) : void 0,
+      signal: AbortSignal.timeout(2e4)
+    });
+    if (res.status === 401 && attempt === 0) {
+      await res.body?.cancel();
+      token = await tokens2.refreshed();
+      continue;
+    }
+    if (init.raw) {
+      if (res.ok) return { status: res.status, text: await res.text() };
+      await res.body?.cancel();
+      return { status: res.status, text: "" };
+    }
+    let json2 = {};
+    try {
+      json2 = await res.json();
+    } catch {
+      json2 = {};
+    }
+    return { status: res.status, json: json2 };
+  }
+  throw new ZoomSignInNeeded();
+}
+async function zoomCreateMeeting(tokens2, m, f) {
+  const r = await zoomCall(tokens2, `${ZOOM_API}/users/me/meetings`, {
+    method: "POST",
+    fetch: f,
+    body: {
+      topic: m.topic.slice(0, 200),
+      // a scheduled meeting
+      type: 2,
+      start_time: new Date(m.startAt).toISOString().replace(/\.\d{3}Z$/, "Z"),
+      duration: Math.max(5, Math.min(600, Math.round(m.minutes))),
+      ...m.timezone ? { timezone: m.timezone } : {},
+      settings: { join_before_host: true }
+    }
+  });
+  const joinUrl = r.json?.join_url;
+  if (r.status !== 201 && r.status !== 200) throw new ZoomApiError(r.status, "/users/me/meetings");
+  if (typeof joinUrl !== "string" || !/^https:\/\//.test(joinUrl)) throw new ZoomApiError(502, "no_join_url");
+  return { joinUrl, meetingId: String(r.json?.id ?? "") };
+}
+async function zoomFor(db2, vault, env2, redirectUri, userId, opts = {}) {
+  const keys = await zoomKeys(env2, db2);
+  if (!keys) return void 0;
+  const cfg = { ...keys, redirectUri: env2?.redirectUri ?? redirectUri, fetch: opts.fetch };
+  return { cfg, tokens: zoomTokens(db2, vault, cfg, userId, opts.now) };
+}
+var ZOOM_WEBHOOK_MAX_AGE_MS = 5 * 6e4;
+
 // supabase/functions/_shared/slots/slots.ts
 var SLOT_MINUTES = 30;
 var DAY_START = { hour: 9, minute: 0 };
@@ -8652,20 +8855,35 @@ async function bookSlot(s, userId, req, appUrl, opts = {}) {
   const [p] = await s.db.sql`
     select display_name, first_name, primary_email from orbit.people where id = ${d.person_id}::uuid`;
   const [u2] = await s.db.sql`
-    select first_name, full_name, timezone from orbit.users where id = ${userId}::uuid`;
+    select first_name, full_name, timezone, settings->>'meeting_link' as meeting_link
+      from orbit.users where id = ${userId}::uuid`;
   if (!p?.primary_email) throw new HttpError(409, "no_email", "this person has no email address to invite");
   const tz = validZone(u2?.timezone) ?? "America/New_York";
   const mine = u2?.first_name ?? u2?.full_name?.split(/\s+/)[0] ?? "Me";
   const theirs = p.first_name ?? p.display_name.split(/\s+/)[0];
   const title = `${mine} / ${theirs}`;
+  const link = await meetingLinkFor(s, userId, u2?.meeting_link, { title, start, tz });
   let r;
   try {
-    r = await googleCall(s, userId, `${EVENTS_URL}?sendUpdates=all`, {
-      summary: title,
-      start: { dateTime: start.toISOString(), timeZone: tz },
-      end: { dateTime: end.toISOString(), timeZone: tz },
-      attendees: [{ email: p.primary_email }]
-    });
+    r = await googleCall(
+      s,
+      userId,
+      `${EVENTS_URL}?sendUpdates=all${link.kind === "meet" ? "&conferenceDataVersion=1" : ""}`,
+      {
+        summary: title,
+        start: { dateTime: start.toISOString(), timeZone: tz },
+        end: { dateTime: end.toISOString(), timeZone: tz },
+        attendees: [{ email: p.primary_email }],
+        ...link.kind === "meet" ? {
+          conferenceData: {
+            createRequest: {
+              requestId: `orbit-${d.id}-${start.getTime()}`,
+              conferenceSolutionKey: { type: "hangoutsMeet" }
+            }
+          }
+        } : link.kind === "zoom" ? { location: link.url, description: `Join on Zoom: ${link.url}` } : {}
+      }
+    );
   } catch (e) {
     if (e instanceof NeedsReauth) throw new HttpError(409, "needs_reauth", "reconnect Google to book");
     throw e;
@@ -8674,18 +8892,44 @@ async function bookSlot(s, userId, req, appUrl, opts = {}) {
   if (r.status !== 200 || typeof r.json.id !== "string")
     throw new HttpError(502, "upstream", `calendar ${r.status}`);
   const eventId = r.json.id;
+  const meetingUrl = link.kind === "zoom" ? link.url : link.kind === "meet" ? hangoutUrl(r.json) : void 0;
   await s.db.sql`
     insert into orbit.calendar_events (user_id, external_id, title, start_at, end_at, status, attendees,
-                                       attendee_person_ids, attendee_count, is_one_on_one, chat_id)
+                                       attendee_person_ids, attendee_count, is_one_on_one, chat_id, conference_url)
     values (${userId}::uuid, ${eventId}, ${title}, ${start}::timestamptz, ${end}::timestamptz, 'confirmed',
             ${JSON.stringify([{ email: p.primary_email }])}::jsonb, ${[d.person_id]}::uuid[], 2, true,
-            ${d.chat_id}::uuid)
+            ${d.chat_id}::uuid, ${meetingUrl ?? null})
     on conflict (user_id, external_id) do nothing`;
   await s.db.sql`
     insert into orbit.audit_log (user_id, actor, action, target_table, target_id, details)
     values (${userId}::uuid, ${opts.actor ?? "user"}, 'calendar.book', 'drafts', ${d.id}, ${{ start: iso2(start) }}::jsonb)`;
   if (d.chat_id) await moveChat(s.db, userId, d.chat_id, "scheduled", "call booked", s.now());
-  return { eventId };
+  return meetingUrl ? { eventId, meetingUrl } : { eventId };
+}
+function hangoutUrl(ev) {
+  if (typeof ev.hangoutLink === "string") return ev.hangoutLink;
+  const points = ev.conferenceData?.entryPoints ?? [];
+  const uri = points.find((x) => typeof x.uri === "string" && x.uri.startsWith("https://"))?.uri;
+  return typeof uri === "string" ? uri : void 0;
+}
+async function meetingLinkFor(s, userId, choice, m) {
+  if (choice === "none") return { kind: "none" };
+  if (choice !== "zoom") return { kind: "meet" };
+  try {
+    const [row] = await s.db.sql`
+      select status from orbit.integration_accounts where user_id = ${userId}::uuid and provider = 'zoom'`;
+    if (row?.status !== "active") return { kind: "meet" };
+    const z9 = await zoomFor(s.db, sqlVault(s.db), s.env.zoom, "", userId, { fetch: s.fetch, now: s.now });
+    if (!z9) return { kind: "meet" };
+    const made = await zoomCreateMeeting(
+      z9.tokens,
+      { topic: m.title, startAt: m.start.toISOString(), minutes: SLOT_MINUTES, timezone: m.tz },
+      s.fetch
+    );
+    return { kind: "zoom", url: made.joinUrl };
+  } catch {
+    return { kind: "meet" };
+  }
 }
 async function moveChat(db2, userId, chatId, to, reason2, now, actor = "system") {
   const [c] = await db2.sql`
@@ -11970,8 +12214,8 @@ async function relearnCard(db2, userId, now, excludedProviders = NO_SOURCES.excl
     preset === "direct" || preset === "formal" ? preset : "warm"
   );
   if (learned.builtFromCount === 0) return null;
-  const stored = StyleCardS.safeParse(u2.settings?.style_card);
-  const card = mergeStyleCard(learned, stored.success ? stored.data : void 0);
+  const stored2 = StyleCardS.safeParse(u2.settings?.style_card);
+  const card = mergeStyleCard(learned, stored2.success ? stored2.data : void 0);
   await db2.sql`
     update orbit.users set settings = settings || jsonb_build_object('style_card', ${card}::jsonb,
                                                                      'voice_relearned_at', ${now.toISOString()}::text)
@@ -17854,7 +18098,7 @@ async function runHopEvidenceJob(s, userId, payload) {
     }
   );
   const now = s.now();
-  const stored = await storeHopEvidence(s.db, userId, r, now);
+  const stored2 = await storeHopEvidence(s.db, userId, r, now);
   if (r.target.followers !== void 0 || r.target.connections !== void 0)
     await s.db.sql`
       update orbit.people set
@@ -17873,7 +18117,7 @@ async function runHopEvidenceJob(s, userId, payload) {
     reads: r.reads,
     cached: r.cached,
     ties: r.ties.length,
-    deleted: stored.deleted,
+    deleted: stored2.deleted,
     complete: r.complete,
     ...r.stoppedBy ? { stoppedBy: r.stoppedBy } : {},
     errors: r.errors
@@ -20396,16 +20640,16 @@ async function attachAccount(db2, userId, a) {
       returning id`;
     const accounts = a.account ? void 0 : await loadAccounts(tx, a.platform, [a.accountId]);
     const acct = a.account;
-    const stored = accounts?.get(a.accountId);
-    const username = acct?.username ?? stored?.username ?? a.accountId;
+    const stored2 = accounts?.get(a.accountId);
+    const username = acct?.username ?? stored2?.username ?? a.accountId;
     await tx.sql`
       insert into orbit.person_identities (user_id, person_id, kind, value_norm, value_raw, source, social_account_id)
       values (${userId}::uuid, ${a.personId}::uuid, ${identityKind(a.platform)}, ${a.accountId}, ${username},
               ${a.platform}, ${a.accountId})
       on conflict (user_id, kind, value_norm) do update set person_id = excluded.person_id,
         social_account_id = excluded.social_account_id`;
-    const email = (acct?.email ?? stored?.email ?? "").trim().toLowerCase();
-    const phone = (acct?.phone ?? stored?.phone ?? "").replace(/[^\d+]/g, "");
+    const email = (acct?.email ?? stored2?.email ?? "").trim().toLowerCase();
+    const phone = (acct?.phone ?? stored2?.phone ?? "").replace(/[^\d+]/g, "");
     if (email.includes("@"))
       await tx.sql`
         insert into orbit.person_identities (user_id, person_id, kind, value_norm, value_raw, source, social_account_id)
@@ -20429,7 +20673,7 @@ async function attachAccount(db2, userId, a) {
          set participant_person_ids = array(select distinct x from unnest(participant_person_ids || array[${a.personId}::uuid]) x)
        where user_id = ${userId}::uuid and social_account_id = ${a.accountId}
          and not (${a.personId}::uuid = any(participant_person_ids))`;
-    const bio = acct?.bio ?? stored?.bio;
+    const bio = acct?.bio ?? stored2?.bio;
     if (bio?.trim())
       await tx.sql`
         insert into orbit.facts (user_id, person_id, type, text, source_table, occurred_at, confidence)
@@ -20679,10 +20923,10 @@ async function matchAccount(db2, userId, account2, o) {
 async function askAbout(db2, userId, account2, personId, score, signals, candidate) {
   const raw = Object.fromEntries(Object.entries(signals).filter(([, v]) => v !== void 0));
   const lines = askLines(account2, candidate, signals);
-  const stored = { ...raw, for: lines.for, against: lines.against };
+  const stored2 = { ...raw, for: lines.for, against: lines.against };
   await db2.sql`
     insert into orbit.social_match_asks (user_id, platform, account_id, person_id, score, signals)
-    values (${userId}::uuid, ${account2.platform}, ${account2.id}, ${personId}::uuid, ${score}::real, ${stored}::jsonb)
+    values (${userId}::uuid, ${account2.platform}, ${account2.id}, ${personId}::uuid, ${score}::real, ${stored2}::jsonb)
     on conflict (user_id, platform, account_id, person_id) do nothing`;
 }
 
@@ -20726,8 +20970,8 @@ async function storeSocialChat(db2, userId, platform, chat, messages, o) {
   if (partner && !personOf.has(partner.accountId)) {
     const both = ((existing?.ins ?? 0) > 0 || messages.some((m) => !m.fromStudent)) && ((existing?.outs ?? 0) > 0 || messages.some((m) => m.fromStudent));
     if (both) {
-      const stored = (await loadAccounts(db2, platform, [partner.accountId])).get(partner.accountId);
-      const kind = stored?.kind ?? accountKind({
+      const stored2 = (await loadAccounts(db2, platform, [partner.accountId])).get(partner.accountId);
+      const kind = stored2?.kind ?? accountKind({
         platform,
         id: partner.accountId,
         username: partner.username ?? "",
@@ -20740,8 +20984,8 @@ async function storeSocialChat(db2, userId, platform, chat, messages, o) {
           {
             platform,
             id: partner.accountId,
-            username: stored?.username ?? partner.username ?? partner.accountId,
-            name: stored?.name ?? partner.name
+            username: stored2?.username ?? partner.username ?? partner.accountId,
+            name: stored2?.name ?? partner.name
           },
           o.now
         );
@@ -20812,10 +21056,10 @@ async function storeSocialChat(db2, userId, platform, chat, messages, o) {
   if (others.length) await listAfterExchange(db2, userId, others);
   return out;
 }
-async function afterInbound(db2, queue, userId, platform, stored, now) {
+async function afterInbound(db2, queue, userId, platform, stored2, now) {
   const out = { replied: [], classified: [] };
-  if (stored.pipeline)
-    for (const m of stored.inbound) {
+  if (stored2.pipeline)
+    for (const m of stored2.inbound) {
       if (!m.personId) continue;
       const [chat] = await db2.sql`
         select id from orbit.chats
@@ -20841,13 +21085,13 @@ async function afterInbound(db2, queue, userId, platform, stored, now) {
       });
       out.classified.push(m.id);
     }
-  const people = [...new Set(stored.inbound.map((m) => m.personId).filter((x) => !!x))];
+  const people = [...new Set(stored2.inbound.map((m) => m.personId).filter((x) => !!x))];
   if (people.length)
     await queue.enqueue({
       kind: "score.person",
       userId,
       payload: { personIds: people },
-      dedupeKey: `score.person:${userId}:${platform}:${stored.inbound[0].externalId}`
+      dedupeKey: `score.person:${userId}:${platform}:${stored2.inbound[0].externalId}`
     });
   return out;
 }
@@ -21393,14 +21637,14 @@ var XTokenError = class extends Error {
     this.code = code;
   }
 };
-var basic = (cfg) => `Basic ${btoa(`${cfg.clientId}:${cfg.clientSecret}`)}`;
-async function tokenCall2(cfg, form) {
+var basic2 = (cfg) => `Basic ${btoa(`${cfg.clientId}:${cfg.clientSecret}`)}`;
+async function tokenCall3(cfg, form) {
   const res = await (cfg.fetch ?? fetch)(X_TOKEN_URL, {
     method: "POST",
     headers: {
       "content-type": "application/x-www-form-urlencoded",
       accept: "application/json",
-      authorization: basic(cfg)
+      authorization: basic2(cfg)
     },
     body: new URLSearchParams({ ...form, client_id: cfg.clientId }),
     signal: AbortSignal.timeout(15e3)
@@ -21416,7 +21660,7 @@ async function tokenCall2(cfg, form) {
   return body;
 }
 function xRefreshToken(cfg, refreshToken) {
-  return tokenCall2(cfg, { grant_type: "refresh_token", refresh_token: refreshToken });
+  return tokenCall3(cfg, { grant_type: "refresh_token", refresh_token: refreshToken });
 }
 async function loadXState(db2, userId) {
   const [a] = await db2.sql`
@@ -21980,14 +22224,14 @@ async function candidateLists(db2, userId, platform, accounts, target, now) {
 }
 async function buildState(db2, userId, platform, target, saved, now) {
   const { circle } = await loadCircle(db2, userId, platform);
-  const stored = (await loadAccounts(db2, platform, [target])).get(target);
-  if (stored?.is_private) await dropSharedLists(db2, platform, target);
+  const stored2 = (await loadAccounts(db2, platform, [target])).get(target);
+  if (stored2?.is_private) await dropSharedLists(db2, platform, target);
   const lists = {
-    followerCount: stored?.followers ?? void 0,
-    followingCount: stored?.following ?? void 0,
-    isPrivate: stored?.is_private ?? void 0
+    followerCount: stored2?.followers ?? void 0,
+    followingCount: stored2?.following ?? void 0,
+    isPrivate: stored2?.is_private ?? void 0
   };
-  if (!stored?.is_private) {
+  if (!stored2?.is_private) {
     lists.followers = await loadListRead(db2, platform, target, "followers", { userId, now });
     lists.following = await loadListRead(db2, platform, target, "following", { userId, now });
   }
@@ -30689,12 +30933,12 @@ async function ingestGmail(d, refs) {
   const ids = [...new Set(refs.map((r) => r.id))];
   if (!ids.length) return stats;
   const self = await loadSelf(db2, userId);
-  const stored = new Set(
+  const stored2 = new Set(
     (await db2.sql`
         select external_id from orbit.messages
          where user_id = ${userId}::uuid and provider = 'gmail' and external_id = any(${ids}::text[])`).map((r) => r.external_id)
   );
-  const todo = ids.filter((id) => !stored.has(id));
+  const todo = ids.filter((id) => !stored2.has(id));
   if (!todo.length) return stats;
   const metas = await pool(
     todo,
@@ -31174,12 +31418,12 @@ function gmailHandlers(deps) {
       if (!pageToken) break;
     }
     const ids = [...new Set(refs.map((r) => r.id))];
-    const stored = new Set(
+    const stored2 = new Set(
       (await ctx.db.sql`
           select external_id from orbit.messages
            where user_id = ${userId}::uuid and provider = 'gmail' and external_id = any(${ids}::text[])`).map((r) => r.external_id)
     );
-    const fresh = ids.filter((id) => !stored.has(id));
+    const fresh = ids.filter((id) => !stored2.has(id));
     const batch = fresh.slice(0, PAGE_SIZE);
     await ingestGmail(
       { db: ctx.db, queue: ctx.queue, api, userId, now, jobKey: `gmail:${job.msgId}`, embed },
@@ -31714,7 +31958,7 @@ function linkedinHandlers(deps) {
             return !at || at > floor;
           }) : msgs.value;
           if (!kept.length) continue;
-          const stored = await storeChat(
+          const stored2 = await storeChat(
             ctx.db,
             userId,
             self,
@@ -31730,8 +31974,8 @@ function linkedinHandlers(deps) {
             now,
             ownIds
           );
-          if (stored.inserted) for (const p of stored.personIds) touched.add(p);
-          for (const m of stored.inbound)
+          if (stored2.inserted) for (const p of stored2.personIds) touched.add(p);
+          for (const m of stored2.inbound)
             if (now.getTime() - new Date(m.sentAt).getTime() < CLASSIFY_WINDOW_DAYS * DAY19)
               await ctx.queue.enqueue({
                 kind: "classify.message",
@@ -34510,13 +34754,13 @@ async function runSocialSync(db2, queue, adapters, userId, o) {
         const chat = queued[0];
         calls++;
         const msgs = await a.messages(chat.chatId);
-        const stored = await storeSocialChat(db2, userId, platform, chat, msgs.items, { now: o.now });
-        if (stored.partner) await offerToMatching(queue, userId, platform, [stored.partner.accountId]);
-        if (stored.personIds.length)
+        const stored2 = await storeSocialChat(db2, userId, platform, chat, msgs.items, { now: o.now });
+        if (stored2.partner) await offerToMatching(queue, userId, platform, [stored2.partner.accountId]);
+        if (stored2.personIds.length)
           await queue.enqueue({
             kind: "score.person",
             userId,
-            payload: { personIds: stored.personIds },
+            payload: { personIds: stored2.personIds },
             dedupeKey: `score.person:${userId}:${platform}:chat:${chat.chatId}`
           });
         await save2({ chatQueue: queued.slice(1), chatsRead: (state.chatsRead ?? 0) + 1 });
@@ -34866,10 +35110,10 @@ function socialHandlers(deps) {
       if (!ids.length) return;
       const adapter = await socialAdapterFor(ctx.db, env2(ctx), platform, account2, "background");
       const pool2 = await socialCandidates(ctx.db, userId, platform);
-      const stored = await loadAccounts(ctx.db, platform, ids);
+      const stored2 = await loadAccounts(ctx.db, platform, ids);
       const left = [];
       for (const [i, id] of ids.entries()) {
-        let row = stored.get(id);
+        let row = stored2.get(id);
         let acct = row ? accountOfRow(platform, row) : void 0;
         const worth = !acct || socialBlock(acct, pool2).length > 0;
         if (worth && adapter && !row?.bio) {
@@ -35134,8 +35378,8 @@ async function enqueueDueXDms(db2, cfg, now = /* @__PURE__ */ new Date()) {
 
 // supabase/functions/orbit-worker/handlers/x.ts
 var personalLaneXWriter = (now) => async (db2, userId, { chat, message }) => {
-  const stored = await storeSocialChat(db2, userId, "x", chat, [message], { now: now() });
-  await afterInbound(db2, sqlQueue(db2), userId, "x", stored, now());
+  const stored2 = await storeSocialChat(db2, userId, "x", chat, [message], { now: now() });
+  await afterInbound(db2, sqlQueue(db2), userId, "x", stored2, now());
 };
 function xHandlers(deps) {
   const x = deps.x;

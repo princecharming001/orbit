@@ -15,7 +15,9 @@ import { authUrl, CALENDAR_EVENTS_SCOPE, NeedsReauth, pkcePair } from '../google
 import { HttpError } from '../http.ts';
 import { iso } from '../rows.ts';
 import type { Services } from '../services.ts';
+import { sqlVault } from '../vault.ts';
 import { addDaysKey, localParts, validZone, weekdayOfKey, zoneAbbrev, zonedTime } from '../zones.ts';
+import { zoomCreateMeeting, zoomFor } from '../zoom.ts';
 
 export const SLOT_MINUTES = 30;
 export const DAY_START = { hour: 9, minute: 0 };
@@ -293,21 +295,46 @@ export async function bookSlot(
     primary_email: string | null;
   }>`
     select display_name, first_name, primary_email from orbit.people where id = ${d.person_id}::uuid`;
-  const [u] = await s.db.sql<{ first_name: string | null; full_name: string | null; timezone: string }>`
-    select first_name, full_name, timezone from orbit.users where id = ${userId}::uuid`;
+  const [u] = await s.db.sql<{
+    first_name: string | null;
+    full_name: string | null;
+    timezone: string;
+    meeting_link: string | null;
+  }>`
+    select first_name, full_name, timezone, settings->>'meeting_link' as meeting_link
+      from orbit.users where id = ${userId}::uuid`;
   if (!p?.primary_email) throw new HttpError(409, 'no_email', 'this person has no email address to invite');
   const tz = validZone(u?.timezone) ?? 'America/New_York';
   const mine = u?.first_name ?? u?.full_name?.split(/\s+/)[0] ?? 'Me';
   const theirs = p.first_name ?? p.display_name.split(/\s+/)[0];
   const title = `${mine} / ${theirs}`;
+  // the call link the student picked (Settings, Scheduling): Google Meet by default, a Zoom meeting, or none
+  const link = await meetingLinkFor(s, userId, u?.meeting_link, { title, start, tz });
   let r: { status: number; json: Record<string, unknown> };
   try {
-    r = await googleCall(s, userId, `${EVENTS_URL}?sendUpdates=all`, {
-      summary: title,
-      start: { dateTime: start.toISOString(), timeZone: tz },
-      end: { dateTime: end.toISOString(), timeZone: tz },
-      attendees: [{ email: p.primary_email }],
-    });
+    r = await googleCall(
+      s,
+      userId,
+      `${EVENTS_URL}?sendUpdates=all${link.kind === 'meet' ? '&conferenceDataVersion=1' : ''}`,
+      {
+        summary: title,
+        start: { dateTime: start.toISOString(), timeZone: tz },
+        end: { dateTime: end.toISOString(), timeZone: tz },
+        attendees: [{ email: p.primary_email }],
+        ...(link.kind === 'meet'
+          ? {
+              conferenceData: {
+                createRequest: {
+                  requestId: `orbit-${d.id}-${start.getTime()}`,
+                  conferenceSolutionKey: { type: 'hangoutsMeet' },
+                },
+              },
+            }
+          : link.kind === 'zoom'
+            ? { location: link.url, description: `Join on Zoom: ${link.url}` }
+            : {}),
+      },
+    );
   } catch (e) {
     if (e instanceof NeedsReauth) throw new HttpError(409, 'needs_reauth', 'reconnect Google to book');
     throw e;
@@ -316,18 +343,57 @@ export async function bookSlot(
   if (r.status !== 200 || typeof r.json.id !== 'string')
     throw new HttpError(502, 'upstream', `calendar ${r.status}`);
   const eventId = r.json.id;
+  const meetingUrl = link.kind === 'zoom' ? link.url : link.kind === 'meet' ? hangoutUrl(r.json) : undefined;
   await s.db.sql`
     insert into orbit.calendar_events (user_id, external_id, title, start_at, end_at, status, attendees,
-                                       attendee_person_ids, attendee_count, is_one_on_one, chat_id)
+                                       attendee_person_ids, attendee_count, is_one_on_one, chat_id, conference_url)
     values (${userId}::uuid, ${eventId}, ${title}, ${start}::timestamptz, ${end}::timestamptz, 'confirmed',
             ${JSON.stringify([{ email: p.primary_email }])}::jsonb, ${[d.person_id]}::uuid[], 2, true,
-            ${d.chat_id}::uuid)
+            ${d.chat_id}::uuid, ${meetingUrl ?? null})
     on conflict (user_id, external_id) do nothing`;
   await s.db.sql`
     insert into orbit.audit_log (user_id, actor, action, target_table, target_id, details)
     values (${userId}::uuid, ${opts.actor ?? 'user'}, 'calendar.book', 'drafts', ${d.id}, ${{ start: iso(start) }}::jsonb)`;
   if (d.chat_id) await moveChat(s.db, userId, d.chat_id, 'scheduled', 'call booked', s.now());
-  return { eventId };
+  return meetingUrl ? { eventId, meetingUrl } : { eventId };
+}
+
+/** The Meet link Google made for an event (hangoutLink, else the first https entry point). */
+function hangoutUrl(ev: Record<string, unknown>): string | undefined {
+  if (typeof ev.hangoutLink === 'string') return ev.hangoutLink;
+  const points = (ev.conferenceData as { entryPoints?: { uri?: unknown }[] } | undefined)?.entryPoints ?? [];
+  const uri = points.find((x) => typeof x.uri === 'string' && x.uri.startsWith('https://'))?.uri;
+  return typeof uri === 'string' ? uri : undefined;
+}
+
+/**
+ * The call link for a booked chat: Google Meet unless the student picked Zoom or none. Zoom makes a meeting with the
+ * student's Zoom sign-in; when Zoom is not set up, not connected or says no, the invite gets a Meet link instead, so
+ * it never goes out without a way to meet.
+ */
+async function meetingLinkFor(
+  s: Services,
+  userId: string,
+  choice: string | null | undefined,
+  m: { title: string; start: Date; tz: string },
+): Promise<{ kind: 'meet' } | { kind: 'zoom'; url: string } | { kind: 'none' }> {
+  if (choice === 'none') return { kind: 'none' };
+  if (choice !== 'zoom') return { kind: 'meet' };
+  try {
+    const [row] = await s.db.sql<{ status: string }>`
+      select status from orbit.integration_accounts where user_id = ${userId}::uuid and provider = 'zoom'`;
+    if (row?.status !== 'active') return { kind: 'meet' };
+    const z = await zoomFor(s.db, sqlVault(s.db), s.env.zoom, '', userId, { fetch: s.fetch, now: s.now });
+    if (!z) return { kind: 'meet' };
+    const made = await zoomCreateMeeting(
+      z.tokens,
+      { topic: m.title, startAt: m.start.toISOString(), minutes: SLOT_MINUTES, timezone: m.tz },
+      s.fetch,
+    );
+    return { kind: 'zoom', url: made.joinUrl };
+  } catch {
+    return { kind: 'meet' };
+  }
 }
 
 /** Moves a chat to `to` with an applied stage event (no-op when it is already there). */

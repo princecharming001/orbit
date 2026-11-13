@@ -40,7 +40,12 @@ import { PersonSocialCard, SocialHandles } from '../components/SocialPeople';
 import { SuggestionCard } from '../components/SuggestionCard';
 import { db } from '../db/schema';
 import { isMessageSuggestion, refreshPersonSummary } from '../engine/brief';
-import { calendarInvitesAvailable, canInviteFor, sendCalendarInvite } from '../engine/calendarInvite';
+import {
+  calendarInvitesAvailable,
+  callLinkName,
+  canInviteFor,
+  sendCalendarInvite,
+} from '../engine/calendarInvite';
 import { conversationWith } from '../engine/conversation';
 import { composeDraft, discardDraft as discardDraftRow, lastInboundOf, restoreDraft } from '../engine/drafts';
 import { enrichOnView } from '../engine/enrichment';
@@ -53,6 +58,7 @@ import {
   restoreFact,
 } from '../engine/facts';
 import { moveChat } from '../engine/move';
+import { checkNotesForPerson } from '../engine/notesCheck';
 import { setRelationshipType, unhidePerson } from '../engine/people';
 import { loadPersonHistory } from '../engine/personHistory';
 import { moveChatGuarded } from '../engine/pipeline';
@@ -321,6 +327,8 @@ export function PersonPage() {
       void enrichOnView(user, person.id);
       // an Orbit account: their whole history with the student, past the 180 days of networking mail kept here
       void loadPersonHistory(user, person.id);
+      // a chat with them that just ended: the notetaker (or Zoom, or Meet) is asked for its notes now
+      void checkNotesForPerson(user, person.id).catch(() => undefined);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [person?.id, user?.id]);
@@ -586,7 +594,7 @@ export function PersonPage() {
                               rel="noreferrer"
                               className="underline underline-offset-2"
                             >
-                              Meet link
+                              {callLinkName(nextEvent.conferenceUrl).replace(/^l/, 'L')}
                             </a>
                           </>
                         )}
@@ -605,7 +613,7 @@ export function PersonPage() {
                               toast.push(
                                 r.ok
                                   ? {
-                                      text: `On your calendar, and Google sent ${person.firstName} the invite.`,
+                                      text: `On your calendar, and Google sent ${person.firstName} the invite.${r.linkNote ? ` ${r.linkNote}` : ''}`,
                                       tone: 'good',
                                     }
                                   : { text: r.message, tone: 'bad', ttl: 9000 },
@@ -614,7 +622,7 @@ export function PersonPage() {
                               setInviting(false);
                             }
                           }}
-                          title={`Add it to your Google Calendar and email ${person.firstName} the invite, with a Meet link`}
+                          title={`Add it to your Google Calendar and email ${person.firstName} the invite, with your call link`}
                           data-testid="person-send-invite"
                         >
                           {inviting ? 'Sending…' : 'Send invite'}

@@ -155,6 +155,17 @@ async function resolveSecret(env2, db2, envName, vaultName) {
     return void 0;
   }
 }
+async function providerSecret(env2, db2, name) {
+  const fromEnv = env2(name);
+  if (fromEnv) return fromEnv;
+  if (!db2) return void 0;
+  try {
+    const rows = await db2.sql`select public.orbit_secret(${name}) as v`;
+    return rows[0]?.v || void 0;
+  } catch {
+    return void 0;
+  }
+}
 
 // packages/core/src/sources.ts
 var OPTIONAL_SOURCES = ["instagram", "x", "imessage"];
@@ -5251,6 +5262,70 @@ var MONTH_EDGE = new RegExp(
   `\\b(?:(end|start|beginning) of (?:(the|this|next) month\\b|${MONTH_NAME})|next month\\b)`
 );
 
+// packages/core/src/notes/callNotes.ts
+var CALL_MATCH_WINDOW_MS = 30 * 6e4;
+
+// supabase/functions/_shared/zoom.ts
+async function saveZoomState(db2, userId, patch) {
+  await db2.sql`
+    update orbit.integration_accounts
+       set sync_state = jsonb_set(coalesce(sync_state, '{}'::jsonb), '{zoom}',
+                                  coalesce(sync_state->'zoom', '{}'::jsonb) || ${patch}::jsonb)
+     where user_id = ${userId}::uuid and provider = 'zoom'`;
+}
+async function hmacSha256Hex(secret, message) {
+  const enc2 = new TextEncoder();
+  const key2 = await crypto.subtle.importKey(
+    "raw",
+    enc2.encode(secret),
+    { name: "HMAC", hash: "SHA-256" },
+    false,
+    ["sign"]
+  );
+  const sig = new Uint8Array(await crypto.subtle.sign("HMAC", key2, enc2.encode(message)));
+  return Array.from(sig, (x) => x.toString(16).padStart(2, "0")).join("");
+}
+var ZOOM_WEBHOOK_MAX_AGE_MS = 5 * 6e4;
+var READY_KEEP = 20;
+async function zoomWebhook(db2, secret, raw, headers, now) {
+  const ts = Number(headers.timestamp);
+  if (!headers.signature || !Number.isFinite(ts)) return { status: 401 };
+  const at = ts > 1e12 ? ts : ts * 1e3;
+  if (Math.abs(now.getTime() - at) > ZOOM_WEBHOOK_MAX_AGE_MS) return { status: 401 };
+  const expected = `v0=${await hmacSha256Hex(secret, `v0:${headers.timestamp}:${raw}`)}`;
+  if (!await timingSafeEqual(headers.signature, expected)) return { status: 401 };
+  let body2 = {};
+  try {
+    body2 = JSON.parse(raw);
+  } catch {
+    return { status: 200, body: { ok: true } };
+  }
+  if (body2.event === "endpoint.url_validation") {
+    const plainToken = body2.payload?.plainToken;
+    if (typeof plainToken !== "string" || !plainToken || plainToken.length > 200) return { status: 400 };
+    return { status: 200, body: { plainToken, encryptedToken: await hmacSha256Hex(secret, plainToken) } };
+  }
+  if (body2.event !== "recording.transcript_completed") return { status: 200, body: { ok: true } };
+  const obj = body2.payload?.object ?? {};
+  if (typeof obj.host_id !== "string" || obj.id === void 0) return { status: 200, body: { ok: true } };
+  const rows = await db2.sql`
+    select user_id, sync_state->'zoom'->'ready' as ready from orbit.integration_accounts
+     where provider = 'zoom' and external_account_id = ${obj.host_id} and status = 'active'
+     limit 5`;
+  const entry = {
+    meetingId: String(obj.id),
+    ...typeof obj.uuid === "string" ? { uuid: obj.uuid } : {},
+    at: now.toISOString()
+  };
+  for (const row of rows) {
+    const ready = [...(row.ready ?? []).filter((r) => r.meetingId !== entry.meetingId), entry].slice(
+      -READY_KEEP
+    );
+    await saveZoomState(db2, row.user_id, { ready });
+  }
+  return { status: 200, body: { ok: true }, userId: rows[0]?.user_id };
+}
+
 // supabase/functions/_shared/slots/slots.ts
 var STATE_TTL_MS = 10 * 6e4;
 async function moveChat(db2, userId, chatId, to, reason, now, actor = "system") {
@@ -5524,6 +5599,24 @@ function makeWebhookHandler(deps) {
         const out = await unipileAccount(deps.db, queue(), await body(req), provider, deps.offered ?? []);
         userId = out.userId;
         res = json(200, { ok: true, result: out.result });
+      } else if (path === "/zoom") {
+        const secret = deps.db ? await deps.zoomSecret?.() : void 0;
+        if (!secret || !deps.db) return unconfigured();
+        const raw = await req.text();
+        if (raw.length > 2e5) throw new HttpError(413, "too_large", "body too large");
+        const out = await zoomWebhook(
+          deps.db,
+          secret,
+          raw,
+          {
+            signature: req.headers.get("x-zm-signature"),
+            timestamp: req.headers.get("x-zm-request-timestamp")
+          },
+          (deps.now ?? (() => /* @__PURE__ */ new Date()))()
+        );
+        if (out.status === 401) throw new HttpError(401, "unauthorized", "bad signature");
+        userId = out.userId ?? null;
+        res = json(out.status, out.body ?? {});
       } else throw new HttpError(404, "not_found", "no such route");
     } catch (e) {
       res = e instanceof HttpError ? json(e.status, { error: { code: e.code, message: e.message } }) : json(503, { error: { code: "unavailable", message: "try again" } });
@@ -5917,6 +6010,12 @@ var unipileSecret = await resolveSecret(
   "ORBIT_UNIPILE_WEBHOOK_SECRET",
   "orbit_unipile_webhook_secret"
 );
+var zoomSecret;
+var readZoomSecret = async () => {
+  if (!zoomSecret || !zoomSecret.v && Date.now() - zoomSecret.at > 6e4)
+    zoomSecret = { at: Date.now(), v: await providerSecret(env, db, "ZOOM_WEBHOOK_SECRET_TOKEN") };
+  return zoomSecret.v;
+};
 var salt = env("ORBIT_LOG_SALT") ?? ((env("SUPABASE_SERVICE_ROLE_KEY") ?? "").slice(-16) || "orbit");
 Deno.serve(
   makeWebhookHandler({
@@ -5925,6 +6024,7 @@ Deno.serve(
     unipileSecret,
     // plan 43 §3.1: the optional sources the owner offers, read once; unset is none and nothing changes
     offered: offeredSources(env("ORBIT_EXTRA_SOURCES")),
+    zoomSecret: readZoomSecret,
     log: makeLogger(salt)
   })
 );

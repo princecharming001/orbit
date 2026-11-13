@@ -15,7 +15,8 @@
  *          student's own daily limits as daily_send_cap_gmail and daily_send_cap_linkedin; and the style card the
  *          browser learned (plan 29 §B2.4a) as users.settings.style_card, its shape checked, null removing it;
  *          and the week's first-message target (weeklyOutreachTarget) as users.settings.weekly_target, which the
- *          autopilot plan step paces against (plan 29 §B4)
+ *          autopilot plan step paces against (plan 29 §B4); and meetingLink (meet, zoom or none) as
+ *          users.settings.meeting_link, the call link on invites Orbit books (Google Meet when unset)
  *   The pause also sets autopilot_paused_until, so the send job holds what Orbit chose a time for.
  */
 
@@ -246,6 +247,10 @@ async function profile(ctx: Ctx): Promise<Response> {
   const capGmail = ownCap('dailySendCapGmail', SEND_CAPS.gmailPerDay);
   const capLinkedin = ownCap('dailySendCapLinkedin', SEND_CAPS.linkedinPerDay);
   const weekly = ownCap('weeklyOutreachTarget', WEEKLY_TARGET_MAX);
+  // the call link on invites Orbit books: Google Meet unless the student picked Zoom or none
+  if (b.meetingLink !== undefined && !['meet', 'zoom', 'none'].includes(String(b.meetingLink)))
+    throw badRequest('meetingLink is meet, zoom or none');
+  const meetingLink = b.meetingLink as 'meet' | 'zoom' | 'none' | undefined;
   const userId = ctx.userId!;
   // the keys given are replaced (or removed when null); the rest of settings is kept
   const given: Record<string, string | string[] | number | OwnWords | boolean | object | null> = {};
@@ -263,6 +268,8 @@ async function profile(ctx: Ctx): Promise<Response> {
   if (capGmail !== undefined) given.daily_send_cap_gmail = capGmail;
   if (capLinkedin !== undefined) given.daily_send_cap_linkedin = capLinkedin;
   if (weekly !== undefined) given.weekly_target = weekly;
+  // Google Meet is the default, so only another choice is stored
+  if (meetingLink !== undefined) given.meeting_link = meetingLink === 'meet' ? null : meetingLink;
   if (card !== undefined) given.style_card = card;
   const level = mode === undefined ? null : AUTOPILOT_MODE_LEVEL[mode];
   const keep = Object.fromEntries(Object.entries(given).filter(([, v]) => v !== null));

@@ -455,6 +455,65 @@ export interface BookRequest {
 export interface BookResponse {
   eventId?: string;
   needsConsent?: { url: string };
+  /** the call link on the invite (Google Meet or Zoom, by users.settings.meeting_link), when it has one */
+  meetingUrl?: string;
+}
+
+// ---- Zoom and Google Meet: notes from the call, and call links ----------------------------------------------------
+
+/** GET /zoom/status. `configured` is false until the owner stores Orbit's Zoom app keys; nothing calls Zoom then. */
+export interface ZoomStatusResponse {
+  configured: boolean;
+  status: 'not_connected' | 'active' | 'needs_reauth' | 'error';
+  /** the Zoom account's email */
+  email?: string;
+  /** when a transcript was last fetched */
+  lastSyncedAt?: string;
+}
+/** POST /zoom/connect/start → open `url` (Zoom's consent screen); Zoom comes back to /zoom/callback */
+export interface ZoomConnectStartResponse {
+  url: string;
+}
+/** POST /zoom/meetings: a Zoom meeting for a booked chat */
+export interface ZoomMeetingRequest {
+  topic: string;
+  startAt: string;
+  minutes: number;
+  /** IANA zone */
+  timezone?: string;
+}
+export interface ZoomMeetingResponse {
+  joinUrl: string;
+  meetingId: string;
+}
+/** GET /meet/status. `needs_consent`: Meet is on but Google has not given the transcript permission yet. */
+export interface MeetStatusResponse {
+  status: 'not_connected' | 'needs_consent' | 'active' | 'needs_reauth';
+  email?: string;
+  lastSyncedAt?: string;
+}
+/** POST /meet/connect/start: Meet on; `url` when Google must be asked for the transcript permission first */
+export interface MeetConnectStartResponse {
+  connected: boolean;
+  url?: string;
+}
+/** One coffee chat to look for: the browser's event id, its times, its join link and the other people on it. */
+export interface CallEventRequest {
+  id: string;
+  startAt: string;
+  endAt: string;
+  title?: string;
+  conferenceUrl?: string;
+  attendees?: { name?: string; email?: string }[];
+}
+/** POST /zoom/notes and /meet/notes: at most 10 events a call */
+export interface CallNotesRequest {
+  events: CallEventRequest[];
+}
+export interface CallNotesResponse {
+  notes: import('../notes/callNotes').CallNote[];
+  /** events looked at with nothing recorded (yet) */
+  none: string[];
 }
 
 // ---- memory, autonomy, cadence (P5) --------------------------------------------------------------------------------
@@ -525,6 +584,8 @@ export interface PauseRequest {
 export interface ProfileSettingsRequest {
   postalAddress?: string | null;
   schedulingLink?: string | null;
+  /** the call link on invites Orbit books (users.settings.meeting_link); Google Meet when unset */
+  meetingLink?: 'meet' | 'zoom' | 'none';
   timezone?: string;
   /** setup was finished then (users.onboarding.completed_at), so signing in on another device skips it */
   onboardingCompletedAt?: string;

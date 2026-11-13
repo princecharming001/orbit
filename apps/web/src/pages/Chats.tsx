@@ -10,6 +10,7 @@ import { Link } from 'react-router-dom';
 import { WeekCalendar } from '../components/chats/WeekCalendar';
 import { PersonRow } from '../components/PersonRow';
 import { db } from '../db/schema';
+import { connectedCallApps } from '../engine/callNotes';
 import { callsBetween } from '../engine/callsWeek';
 import {
   afterText,
@@ -37,7 +38,7 @@ export function useChatsView() {
   return useLiveQuery(async () => {
     if (!userId) return undefined;
     const t = Date.now();
-    const [events, chats, people, notes, facts, suggestions, messages, taker] = await Promise.all([
+    const [events, chats, people, notes, facts, suggestions, messages, taker, callApps] = await Promise.all([
       db.events
         .where('userId')
         .equals(userId)
@@ -65,9 +66,10 @@ export function useChatsView() {
         .filter((m) => m.direction === 'inbound')
         .toArray(),
       connectedNotetaker(userId),
+      connectedCallApps(userId),
     ]);
     return upcomingChats(
-      { events, chats, people, notes, facts, suggestions, messages, notetaker: taker?.name },
+      { events, chats, people, notes, facts, suggestions, messages, notetaker: taker?.name, callApps },
       new Date(Math.max(t, now.getTime())),
       tz,
     );

@@ -28,6 +28,8 @@ import type {
   AutopilotStatus,
   BookRequest,
   BookResponse,
+  CallNotesRequest,
+  CallNotesResponse,
   CompanyFactsResponse,
   DraftApproveRequest,
   DraftComposeRequest,
@@ -68,6 +70,8 @@ import type {
   IntroAskResponse,
   LinkedinConnectStartResponse,
   LinkedinStatusResponse,
+  MeetConnectStartResponse,
+  MeetStatusResponse,
   MemoryAddRequest,
   MemoryAddResponse,
   MemoryExtractRequest,
@@ -118,6 +122,10 @@ import type {
   VoiceNoteResponse,
   VoiceRelearnResponse,
   VoiceResponse,
+  ZoomConnectStartResponse,
+  ZoomMeetingRequest,
+  ZoomMeetingResponse,
+  ZoomStatusResponse,
 } from '@orbit/core';
 import { readLocalRow, writeLocalRow } from './prefs';
 
@@ -303,6 +311,16 @@ export interface ApiRoutes {
   '/x/connect/start': [{ consent: true }, { url: string }];
   '/x/status': [Record<string, never>, XStatusResponse];
   '/x/disconnect': [Record<string, never>, { ok: boolean }];
+  // Zoom and Google Meet: notes from the call itself, and Zoom meetings for the calls Orbit books
+  '/zoom/connect/start': [Record<string, never>, ZoomConnectStartResponse];
+  '/zoom/status': [Record<string, never>, ZoomStatusResponse];
+  '/zoom/disconnect': [Record<string, never>, { ok: boolean; revokedAtZoom?: boolean }];
+  '/zoom/notes': [CallNotesRequest, CallNotesResponse];
+  '/zoom/meetings': [ZoomMeetingRequest, ZoomMeetingResponse];
+  '/meet/connect/start': [Record<string, never>, MeetConnectStartResponse];
+  '/meet/status': [Record<string, never>, MeetStatusResponse];
+  '/meet/disconnect': [Record<string, never>, { ok: boolean }];
+  '/meet/notes': [CallNotesRequest, CallNotesResponse];
   '/social/links': [{ platform: 'instagram' | 'x'; accountId: string; personId: string }, { linkId: string }];
   '/social/asks': [Record<string, never>, { asks: SocialAskResponse[] }];
   '/social/lookups': [
@@ -602,6 +620,8 @@ export function methodOf(route: string): HttpMethod {
     route === '/sources' ||
     route === '/instagram/status' ||
     route === '/x/status' ||
+    route === '/zoom/status' ||
+    route === '/meet/status' ||
     route === '/social/asks' ||
     route === '/admin/sources' ||
     /^\/social\/lookups\/[^/]+$/.test(route)

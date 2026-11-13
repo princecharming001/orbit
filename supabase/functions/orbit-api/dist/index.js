@@ -345,12 +345,12 @@ function windowEnd(window, now) {
   return window === "day" ? new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + 1)) : new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 1));
 }
 async function checkBudget(db2, userId, spend, now = /* @__PURE__ */ new Date()) {
-  const day2 = windowStart("day", now);
+  const day3 = windowStart("day", now);
   const month = windowStart("month", now);
   const rows = await db2.sql`
     select provider, operation,
-           coalesce(sum(units) filter (where created_at >= ${day2}::timestamptz), 0)::text as day_units,
-           coalesce(sum(cost_usd) filter (where created_at >= ${day2}::timestamptz), 0)::text as day_usd,
+           coalesce(sum(units) filter (where created_at >= ${day3}::timestamptz), 0)::text as day_units,
+           coalesce(sum(cost_usd) filter (where created_at >= ${day3}::timestamptz), 0)::text as day_usd,
            coalesce(sum(units), 0)::text as month_units,
            coalesce(sum(cost_usd), 0)::text as month_usd
       from orbit.usage_ledger
@@ -389,8 +389,8 @@ async function checkBudget(db2, userId, spend, now = /* @__PURE__ */ new Date())
     if (cap.scope === "global") {
       globalRows ??= await db2.sql`
         select provider, operation,
-               coalesce(sum(units) filter (where created_at >= ${day2}::timestamptz), 0)::text as day_units,
-               coalesce(sum(cost_usd) filter (where created_at >= ${day2}::timestamptz), 0)::text as day_usd,
+               coalesce(sum(units) filter (where created_at >= ${day3}::timestamptz), 0)::text as day_units,
+               coalesce(sum(cost_usd) filter (where created_at >= ${day3}::timestamptz), 0)::text as day_usd,
                coalesce(sum(units), 0)::text as month_units,
                coalesce(sum(cost_usd), 0)::text as month_usd
           from orbit.usage_ledger
@@ -425,8 +425,8 @@ async function isOwner(db2, userId) {
   }
 }
 async function chatSpend(db2, userId, window, now) {
-  const iso3 = now.toISOString();
-  const subject = window === "day" ? `user:${userId}:${iso3.slice(0, 10)}` : `user:${userId}:m:${iso3.slice(0, 7)}`;
+  const iso4 = now.toISOString();
+  const subject = window === "day" ? `user:${userId}:${iso4.slice(0, 10)}` : `user:${userId}:m:${iso4.slice(0, 7)}`;
   try {
     const [r] = await db2.sql`
       select usd::text as usd from public.orbit_proxy_spend where subject = ${subject}`;
@@ -2476,17 +2476,17 @@ var AGENT_SECRET_NAMES = [
   "PARALLEL_API_KEY"
 ];
 async function agentEnvWithSecrets(get2, db2) {
-  const stored = /* @__PURE__ */ new Map();
+  const stored2 = /* @__PURE__ */ new Map();
   const missing = AGENT_SECRET_NAMES.filter((n) => !get2(n));
   if (db2 && missing.length) {
     try {
       const rows = await db2.sql`
         select n, public.orbit_secret(n) as v from unnest(${missing}::text[]) as n`;
-      for (const r of rows) if (r.v) stored.set(r.n, r.v);
+      for (const r of rows) if (r.v) stored2.set(r.n, r.v);
     } catch {
     }
   }
-  return agentEnvFrom((name) => get2(name) || stored.get(name));
+  return agentEnvFrom((name) => get2(name) || stored2.get(name));
 }
 function agentEnvFrom(get2) {
   const supabaseUrl2 = get2("SUPABASE_URL");
@@ -2724,14 +2724,14 @@ function memoryTake(clock = Date.now) {
   };
 }
 function windows(now) {
-  const iso3 = now.toISOString();
-  const day2 = iso3.slice(0, 10);
-  const minute = iso3.slice(0, 16);
-  const endOfDay = /* @__PURE__ */ new Date(`${day2}T00:00:00Z`);
+  const iso4 = now.toISOString();
+  const day3 = iso4.slice(0, 10);
+  const minute = iso4.slice(0, 16);
+  const endOfDay = /* @__PURE__ */ new Date(`${day3}T00:00:00Z`);
   endOfDay.setUTCDate(endOfDay.getUTCDate() + 1);
   const endOfMinute = /* @__PURE__ */ new Date(`${minute}:00Z`);
   endOfMinute.setUTCMinutes(endOfMinute.getUTCMinutes() + 1);
-  return { day: day2, minute, endOfDay: endOfDay.toISOString(), endOfMinute: endOfMinute.toISOString() };
+  return { day: day3, minute, endOfDay: endOfDay.toISOString(), endOfMinute: endOfMinute.toISOString() };
 }
 function ipBuckets(prefix, visitor, now, perMinute) {
   const w = windows(now);
@@ -5130,10 +5130,10 @@ function nthWeekday(year, month, weekday, n) {
   const last = lastDate.getUTCDay();
   return lastDate.getUTCDate() - (last - weekday + 7) % 7;
 }
-function observed(year, month, day2) {
-  const dow = new Date(Date.UTC(year, month - 1, day2)).getUTCDay();
+function observed(year, month, day3) {
+  const dow = new Date(Date.UTC(year, month - 1, day3)).getUTCDay();
   const shift = dow === 6 ? -1 : dow === 0 ? 1 : 0;
-  return keyOfDay(dayOfKey(keyOf(year, month, day2)) + shift);
+  return keyOfDay(dayOfKey(keyOf(year, month, day3)) + shift);
 }
 var holidayCache = /* @__PURE__ */ new Map();
 function usHolidays(year) {
@@ -6721,8 +6721,8 @@ async function settleCard(db2, userId, dedupeKey, status4, now) {
 }
 
 // supabase/functions/_shared/replies/breaker.ts
-function pausedGoalsOf(settings3) {
-  const v = settings3?.autopilot_paused_goals;
+function pausedGoalsOf(settings4) {
+  const v = settings4?.autopilot_paused_goals;
   if (!v || typeof v !== "object" || Array.isArray(v)) return {};
   const out = {};
   for (const [goalId, p] of Object.entries(v)) {
@@ -6752,9 +6752,9 @@ var OUTREACH_KINDS = /* @__PURE__ */ new Set([
 function breakerHolds(kind) {
   return !kind || OUTREACH_KINDS.has(kind);
 }
-function goalPaused(settings3, goalId, now) {
+function goalPaused(settings4, goalId, now) {
   if (!goalId) return false;
-  const p = pausedGoalsOf(settings3)[goalId];
+  const p = pausedGoalsOf(settings4)[goalId];
   if (!p) return false;
   return p.until === null || new Date(p.until).getTime() > now.getTime();
 }
@@ -7428,13 +7428,13 @@ function localParts(d, tz) {
   const get2 = (t) => parts.find((p) => p.type === t)?.value ?? "";
   const year = Number(get2("year"));
   const month = Number(get2("month"));
-  const day2 = Number(get2("day"));
+  const day3 = Number(get2("day"));
   const weekday = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"].indexOf(get2("weekday"));
   return {
     key: `${get2("year")}-${get2("month")}-${get2("day")}`,
     year,
     month,
-    day: day2,
+    day: day3,
     hour: Number(get2("hour")) % 24,
     minute: Number(get2("minute")),
     weekday
@@ -7469,6 +7469,480 @@ function zoneAbbrev(d, tz) {
   return tz;
 }
 
+// packages/core/src/notes/callNotes.ts
+var MAX_TRANSCRIPT_CHARS = 24e3;
+var CALL_MATCH_WINDOW_MS = 30 * 6e4;
+var hostOf = (url) => {
+  if (!url) return void 0;
+  try {
+    return new URL(url.trim()).hostname.toLowerCase();
+  } catch {
+    return void 0;
+  }
+};
+var isZoomHost = (h) => h === "zoom.us" || h.endsWith(".zoom.us") || h === "zoomgov.com" || h.endsWith(".zoomgov.com");
+function callAppOfUrl(url) {
+  const h = hostOf(url);
+  if (!h) return void 0;
+  if (isZoomHost(h)) return "zoom";
+  if (h === "meet.google.com") return "google_meet";
+  return void 0;
+}
+function zoomMeetingIdFromUrl(url) {
+  if (callAppOfUrl(url) !== "zoom") return void 0;
+  const path = new URL(url.trim()).pathname;
+  const m = path.match(/\/(?:j|w|s|wc\/join|wc)\/(\d{9,12})(?:\/|$)/);
+  return m?.[1];
+}
+function meetCodeFromUrl(url) {
+  if (callAppOfUrl(url) !== "google_meet") return void 0;
+  const m = new URL(url.trim()).pathname.match(/^\/([a-z]{3}-[a-z]{4}-[a-z]{3})(?:\/|$)/i);
+  return m?.[1]?.toLowerCase();
+}
+var toSeconds = (t) => {
+  const m = t.trim().match(/^(?:(\d+):)?(\d{1,2}):(\d{2})(?:[.,](\d{1,3}))?$/);
+  if (!m) return void 0;
+  return Number(m[1] ?? 0) * 3600 + Number(m[2]) * 60 + Number(m[3]) + Number(`0.${m[4] ?? "0"}`);
+};
+var stripTags = (s) => s.replace(/<\/?[^>]+>/g, "").replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&nbsp;/g, " ").trim();
+function parseVtt(vtt) {
+  if (!vtt) return [];
+  const blocks = vtt.replace(/^﻿/, "").replace(/\r\n?/g, "\n").split(/\n{2,}/);
+  const out = [];
+  for (const block4 of blocks) {
+    const lines = block4.split("\n").filter((l) => l.trim() !== "");
+    const at = lines.findIndex((l) => l.includes("-->"));
+    if (at < 0) continue;
+    const start = toSeconds(lines[at].split("-->")[0]);
+    const raw = lines.slice(at + 1).join(" ").trim();
+    if (!raw) continue;
+    let speaker;
+    let text3 = raw;
+    const voice = raw.match(/^<v(?:\.[^\s>]+)*\s+([^>]+)>([\s\S]*)$/);
+    if (voice) {
+      speaker = voice[1].trim();
+      text3 = voice[2];
+    } else {
+      const named = raw.match(/^([^:<>]{1,60}?):\s+([\s\S]+)$/);
+      if (named && /\p{L}/u.test(named[1]) && !/^\d/.test(named[1])) {
+        speaker = named[1].trim();
+        text3 = named[2];
+      }
+    }
+    text3 = stripTags(text3);
+    if (text3) out.push({ speaker, text: text3, start });
+  }
+  return out;
+}
+function transcriptText(lines, maxChars = MAX_TRANSCRIPT_CHARS) {
+  const turns2 = [];
+  for (const l of lines) {
+    const last = turns2.at(-1);
+    if (last && last.speaker === l.speaker) last.text = `${last.text} ${l.text}`;
+    else turns2.push({ speaker: l.speaker, text: l.text });
+  }
+  let out = "";
+  for (const t of turns2) {
+    const line = t.speaker ? `${t.speaker}: ${t.text.trim()}` : t.text.trim();
+    if (out.length + line.length + 1 > maxChars) {
+      out += `${out ? "\n" : ""}(The rest of the transcript is longer than Orbit keeps.)`;
+      break;
+    }
+    out += `${out ? "\n" : ""}${line}`;
+  }
+  return out;
+}
+var vttToText = (vtt, maxChars) => transcriptText(parseVtt(vtt), maxChars);
+function meetEntriesToText(entries, names, maxChars = MAX_TRANSCRIPT_CHARS) {
+  const sorted = [...entries].filter((e) => e.text?.trim()).sort((a, b) => (a.startTime ?? "").localeCompare(b.startTime ?? ""));
+  return transcriptText(
+    sorted.map((e) => ({
+      speaker: e.participant && names[e.participant] || "Someone",
+      text: e.text.trim()
+    })),
+    maxChars
+  );
+}
+function meetParticipantName(p) {
+  for (const k of ["signedinUser", "anonymousUser", "phoneUser"]) {
+    const v = p[k]?.displayName;
+    if (typeof v === "string" && v.trim()) return v.trim();
+  }
+  return void 0;
+}
+function zoomSummaryText(j) {
+  if (!j) return void 0;
+  const s = (v) => typeof v === "string" && v.trim() ? v.trim() : void 0;
+  const parts = [];
+  const content = s(j.summary_content);
+  if (content) parts.push(content);
+  else {
+    const overview = s(j.summary_overview);
+    if (overview) parts.push(overview);
+    for (const d of Array.isArray(j.summary_details) ? j.summary_details : []) {
+      const o = d;
+      const text3 = s(o.summary);
+      if (text3) parts.push(s(o.label) ? `${s(o.label)}: ${text3}` : text3);
+    }
+  }
+  const steps = (Array.isArray(j.next_steps) ? j.next_steps : []).map(s).filter(Boolean);
+  if (steps.length) parts.push(["Next steps:", ...steps.map((x) => `- ${x}`)].join("\n"));
+  return parts.length ? parts.join("\n\n") : void 0;
+}
+var lowerWords = (s) => (s ?? "").toLowerCase().split(/[^\p{L}\p{N}]+/u).filter((w) => w.length > 1);
+function matchCallToEvent(meetings, ev, app) {
+  const joinId = app === "zoom" ? zoomMeetingIdFromUrl(ev.conferenceUrl) : meetCodeFromUrl(ev.conferenceUrl);
+  const start = Date.parse(ev.startAt);
+  const end2 = Date.parse(ev.endAt);
+  const dist = (m) => Math.abs(Date.parse(m.startAt ?? "") - start);
+  const inWindow = (m) => {
+    const t = Date.parse(m.startAt ?? "");
+    return Number.isFinite(t) && t >= start - CALL_MATCH_WINDOW_MS && t <= Math.max(end2, start) + CALL_MATCH_WINDOW_MS;
+  };
+  const near = meetings.filter(inWindow);
+  if (joinId) {
+    const same = near.filter((m) => m.joinId?.replace(/\s/g, "").toLowerCase() === joinId);
+    if (same.length) return same.sort((a, b) => dist(a) - dist(b))[0];
+    return void 0;
+  }
+  if (!near.length) return void 0;
+  const names = new Set(
+    (ev.attendees ?? []).flatMap((a) => [...lowerWords(a.name), ...lowerWords(a.email?.split("@")[0])])
+  );
+  const titled = near.filter((m) => lowerWords(m.topic).some((w) => names.has(w)));
+  const pool2 = titled.length ? titled : near;
+  return pool2.sort((a, b) => dist(a) - dist(b))[0];
+}
+
+// supabase/functions/_shared/zoom.ts
+var ZOOM_AUTHORIZE_URL = "https://zoom.us/oauth/authorize";
+var ZOOM_TOKEN_URL = "https://zoom.us/oauth/token";
+var ZOOM_REVOKE_URL = "https://zoom.us/oauth/revoke";
+var ZOOM_API = "https://api.zoom.us/v2";
+var ZOOM_SCOPES = [
+  "user:read:user",
+  "cloud_recording:read:list_user_recordings",
+  "cloud_recording:read:list_recording_files",
+  "cloud_recording:read:meeting_transcript",
+  "meeting:read:summary",
+  "meeting:write:meeting"
+];
+var ZOOM_NOT_SET_UP = "Zoom is not set up";
+var zoomAccessName = (userId) => `zoom_access:${userId}`;
+var zoomRefreshName = (userId) => `zoom_refresh:${userId}`;
+var ZoomSignInNeeded = class extends Error {
+  constructor() {
+    super("zoom_sign_in_needed");
+  }
+};
+var ZoomTokenError = class extends Error {
+  constructor(status4, code) {
+    super(`zoom token ${status4} ${code}`);
+    this.status = status4;
+    this.code = code;
+  }
+};
+var stored;
+var STORED_TTL_MS = 6e4;
+async function zoomKeys(env2, db2, now = Date.now()) {
+  if (env2?.clientId && env2.clientSecret) return { clientId: env2.clientId, clientSecret: env2.clientSecret };
+  if (!stored || now - stored.at > STORED_TTL_MS) {
+    const none = () => void 0;
+    const [id, secret] = await Promise.all([
+      providerSecret(none, db2, "ZOOM_CLIENT_ID"),
+      providerSecret(none, db2, "ZOOM_CLIENT_SECRET")
+    ]);
+    stored = { at: now, id, secret };
+  }
+  const clientId = env2?.clientId || stored.id;
+  const clientSecret = env2?.clientSecret || stored.secret;
+  return clientId && clientSecret ? { clientId, clientSecret } : void 0;
+}
+function zoomAuthUrl(cfg, p) {
+  const q = new URLSearchParams({
+    response_type: "code",
+    client_id: cfg.clientId,
+    redirect_uri: cfg.redirectUri,
+    state: p.state,
+    code_challenge: p.challenge,
+    code_challenge_method: "S256"
+  });
+  return `${ZOOM_AUTHORIZE_URL}?${q}`;
+}
+var basic = (cfg) => `Basic ${btoa(`${cfg.clientId}:${cfg.clientSecret}`)}`;
+async function tokenCall2(cfg, form) {
+  const res = await (cfg.fetch ?? fetch)(ZOOM_TOKEN_URL, {
+    method: "POST",
+    headers: {
+      "content-type": "application/x-www-form-urlencoded",
+      accept: "application/json",
+      authorization: basic(cfg)
+    },
+    body: new URLSearchParams(form).toString(),
+    signal: AbortSignal.timeout(15e3)
+  });
+  let body2 = {};
+  try {
+    body2 = await res.json();
+  } catch {
+    body2 = {};
+  }
+  if (!res.ok) throw new ZoomTokenError(res.status, String(body2.error ?? "token_error"));
+  if (typeof body2.access_token !== "string") throw new ZoomTokenError(502, "no_access_token");
+  return body2;
+}
+function zoomExchangeCode(cfg, code, verifier) {
+  return tokenCall2(cfg, {
+    grant_type: "authorization_code",
+    code,
+    redirect_uri: cfg.redirectUri,
+    code_verifier: verifier
+  });
+}
+function zoomRefreshToken(cfg, refreshToken) {
+  return tokenCall2(cfg, { grant_type: "refresh_token", refresh_token: refreshToken });
+}
+async function zoomRevoke(cfg, token) {
+  try {
+    const res = await (cfg.fetch ?? fetch)(ZOOM_REVOKE_URL, {
+      method: "POST",
+      headers: { "content-type": "application/x-www-form-urlencoded", authorization: basic(cfg) },
+      body: new URLSearchParams({ token }).toString(),
+      signal: AbortSignal.timeout(15e3)
+    });
+    await res.body?.cancel();
+    return res.ok;
+  } catch {
+    return false;
+  }
+}
+async function loadZoomRow(db2, userId) {
+  const [a] = await db2.sql`
+    select status, external_account_id, token_secret_id, last_synced_at, sync_state->'zoom' as zoom
+      from orbit.integration_accounts where user_id = ${userId}::uuid and provider = 'zoom'`;
+  if (!a) return void 0;
+  return {
+    status: a.status,
+    zoomUserId: a.external_account_id,
+    refreshSecretId: a.token_secret_id,
+    lastSyncedAt: a.last_synced_at ? new Date(a.last_synced_at).toISOString() : null,
+    state: a.zoom ?? {}
+  };
+}
+async function saveZoomState(db2, userId, patch) {
+  await db2.sql`
+    update orbit.integration_accounts
+       set sync_state = jsonb_set(coalesce(sync_state, '{}'::jsonb), '{zoom}',
+                                  coalesce(sync_state->'zoom', '{}'::jsonb) || ${patch}::jsonb)
+     where user_id = ${userId}::uuid and provider = 'zoom'`;
+}
+async function storeZoomTokens(vault, userId, t, now) {
+  const accessSecretId = await vault.put(zoomAccessName(userId), t.access_token);
+  const refreshSecretId = t.refresh_token ? await vault.put(zoomRefreshName(userId), t.refresh_token) : void 0;
+  const accessExpiresAt = new Date(now.getTime() + Math.max(60, t.expires_in ?? 3600) * 1e3).toISOString();
+  return { accessSecretId, refreshSecretId, accessExpiresAt };
+}
+function zoomTokens(db2, vault, cfg, userId, now = () => /* @__PURE__ */ new Date()) {
+  let cached;
+  const needsReauth = async (why) => {
+    await db2.sql`
+      update orbit.integration_accounts set status = 'needs_reauth', last_error = ${why}
+       where user_id = ${userId}::uuid and provider = 'zoom'`;
+    return new ZoomSignInNeeded();
+  };
+  async function refresh2() {
+    const row = await loadZoomRow(db2, userId);
+    if (!row?.refreshSecretId || row.status === "revoked") throw new ZoomSignInNeeded();
+    const refreshToken = await vault.get(row.refreshSecretId);
+    if (!refreshToken) throw await needsReauth("no_refresh_token");
+    let t;
+    try {
+      t = await zoomRefreshToken(cfg, refreshToken);
+    } catch (e) {
+      if (e instanceof ZoomTokenError && e.status >= 400 && e.status < 500)
+        throw await needsReauth(`refresh_${e.code}`.slice(0, 80));
+      throw e;
+    }
+    const s = await storeZoomTokens(vault, userId, t, now());
+    if (s.refreshSecretId && s.refreshSecretId !== row.refreshSecretId)
+      await db2.sql`update orbit.integration_accounts set token_secret_id = ${s.refreshSecretId}::uuid
+                    where user_id = ${userId}::uuid and provider = 'zoom'`;
+    await saveZoomState(db2, userId, { accessSecretId: s.accessSecretId, accessExpiresAt: s.accessExpiresAt });
+    cached = t.access_token;
+    return t.access_token;
+  }
+  return {
+    async accessToken() {
+      if (cached) return cached;
+      const row = await loadZoomRow(db2, userId);
+      if (!row || row.status === "revoked" || row.status === "needs_reauth") throw new ZoomSignInNeeded();
+      const s = row.state;
+      const fresh = s.accessExpiresAt && Date.parse(s.accessExpiresAt) - 6e4 > now().getTime();
+      if (s.accessSecretId && fresh) {
+        const token = await vault.get(s.accessSecretId);
+        if (token) return cached = token;
+      }
+      return refresh2();
+    },
+    refreshed: () => {
+      cached = void 0;
+      return refresh2();
+    }
+  };
+}
+var ZoomApiError = class extends Error {
+  constructor(status4, path) {
+    super(`zoom ${status4} ${path}`);
+    this.status = status4;
+    this.path = path;
+  }
+};
+var zoomFileHost = (url) => {
+  try {
+    const u2 = new URL(url);
+    return u2.protocol === "https:" && (u2.hostname === "zoom.us" || u2.hostname.endsWith(".zoom.us"));
+  } catch {
+    return false;
+  }
+};
+async function zoomCall(tokens3, url, init = {}) {
+  const doFetch = init.fetch ?? fetch;
+  let token = await tokens3.accessToken();
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const res = await doFetch(url, {
+      method: init.method ?? "GET",
+      headers: {
+        authorization: `Bearer ${token}`,
+        accept: init.raw ? "text/vtt, text/plain, */*" : "application/json",
+        ...init.body !== void 0 ? { "content-type": "application/json" } : {}
+      },
+      body: init.body !== void 0 ? JSON.stringify(init.body) : void 0,
+      signal: AbortSignal.timeout(2e4)
+    });
+    if (res.status === 401 && attempt === 0) {
+      await res.body?.cancel();
+      token = await tokens3.refreshed();
+      continue;
+    }
+    if (init.raw) {
+      if (res.ok) return { status: res.status, text: await res.text() };
+      await res.body?.cancel();
+      return { status: res.status, text: "" };
+    }
+    let json2 = {};
+    try {
+      json2 = await res.json();
+    } catch {
+      json2 = {};
+    }
+    return { status: res.status, json: json2 };
+  }
+  throw new ZoomSignInNeeded();
+}
+var zoomUuidPath = (uuid2) => uuid2.startsWith("/") || uuid2.includes("//") ? encodeURIComponent(encodeURIComponent(uuid2)) : encodeURIComponent(uuid2);
+async function zoomMe(tokens3, f2) {
+  const r = await zoomCall(tokens3, `${ZOOM_API}/users/me`, { fetch: f2 });
+  if (r.status !== 200 || typeof r.json?.id !== "string") throw new ZoomApiError(r.status, "/users/me");
+  return { id: r.json.id, email: typeof r.json.email === "string" ? r.json.email : void 0 };
+}
+var day = (t) => new Date(t).toISOString().slice(0, 10);
+async function zoomRecordings(tokens3, from, to, f2) {
+  const out = [];
+  let next = "";
+  for (let page2 = 0; page2 < 3; page2++) {
+    const q = new URLSearchParams({ from: day(from), to: day(to), page_size: "100" });
+    if (next) q.set("next_page_token", next);
+    const r = await zoomCall(tokens3, `${ZOOM_API}/users/me/recordings?${q}`, { fetch: f2 });
+    if (r.status !== 200) throw new ZoomApiError(r.status, "/users/me/recordings");
+    out.push(...r.json?.meetings ?? []);
+    next = typeof r.json?.next_page_token === "string" ? r.json.next_page_token : "";
+    if (!next) break;
+  }
+  return out;
+}
+async function zoomNotesFor(tokens3, events, f2) {
+  if (!events.length) return { notes: [], none: [] };
+  const starts = events.map((e) => Date.parse(e.startAt));
+  const ends = events.map((e) => Date.parse(e.endAt));
+  const listed = await zoomRecordings(
+    tokens3,
+    Math.min(...starts) - 864e5,
+    Math.max(...ends) + 864e5,
+    f2
+  );
+  const meetings = listed.map((m) => ({
+    ...m,
+    joinId: m.id === void 0 ? void 0 : String(m.id),
+    startAt: m.start_time
+  }));
+  const notes2 = [];
+  const none = [];
+  for (const ev of events) {
+    const m = matchCallToEvent(meetings, ev, "zoom");
+    if (!m?.uuid) {
+      none.push(ev.id);
+      continue;
+    }
+    const file = (m.recording_files ?? []).find(
+      (x) => (x.file_type === "TRANSCRIPT" || x.recording_type === "audio_transcript") && (x.status ?? "completed") === "completed" && !!x.download_url && zoomFileHost(x.download_url)
+    );
+    let transcript;
+    if (file?.download_url) {
+      const r = await zoomCall(tokens3, file.download_url, { raw: true, fetch: f2 });
+      if (r.status === 200) transcript = vttToText(r.text) || void 0;
+    }
+    let summary;
+    const s = await zoomCall(tokens3, `${ZOOM_API}/meetings/${zoomUuidPath(m.uuid)}/meeting_summary`, {
+      fetch: f2
+    }).catch((e) => {
+      if (e instanceof ZoomSignInNeeded) throw e;
+      return { status: 0, json: void 0 };
+    });
+    if (s.status === 200) summary = zoomSummaryText(s.json);
+    if (!transcript && !summary) {
+      none.push(ev.id);
+      continue;
+    }
+    notes2.push({
+      app: "zoom",
+      eventId: ev.id,
+      meetingId: m.uuid,
+      title: m.topic?.trim() || ev.title || "Zoom call",
+      startAt: m.start_time ?? ev.startAt,
+      url: m.share_url,
+      summary,
+      transcript
+    });
+  }
+  return { notes: notes2, none };
+}
+async function zoomCreateMeeting(tokens3, m, f2) {
+  const r = await zoomCall(tokens3, `${ZOOM_API}/users/me/meetings`, {
+    method: "POST",
+    fetch: f2,
+    body: {
+      topic: m.topic.slice(0, 200),
+      // a scheduled meeting
+      type: 2,
+      start_time: new Date(m.startAt).toISOString().replace(/\.\d{3}Z$/, "Z"),
+      duration: Math.max(5, Math.min(600, Math.round(m.minutes))),
+      ...m.timezone ? { timezone: m.timezone } : {},
+      settings: { join_before_host: true }
+    }
+  });
+  const joinUrl = r.json?.join_url;
+  if (r.status !== 201 && r.status !== 200) throw new ZoomApiError(r.status, "/users/me/meetings");
+  if (typeof joinUrl !== "string" || !/^https:\/\//.test(joinUrl)) throw new ZoomApiError(502, "no_join_url");
+  return { joinUrl, meetingId: String(r.json?.id ?? "") };
+}
+async function zoomFor(db2, vault, env2, redirectUri2, userId, opts = {}) {
+  const keys = await zoomKeys(env2, db2);
+  if (!keys) return void 0;
+  const cfg = { ...keys, redirectUri: env2?.redirectUri ?? redirectUri2, fetch: opts.fetch };
+  return { cfg, tokens: zoomTokens(db2, vault, cfg, userId, opts.now) };
+}
+var ZOOM_WEBHOOK_MAX_AGE_MS = 5 * 6e4;
+
 // supabase/functions/_shared/slots/slots.ts
 var SLOT_MINUTES = 30;
 var DAY_START = { hour: 9, minute: 0 };
@@ -7479,7 +7953,7 @@ var HORIZON_BUSINESS_DAYS = 10;
 var FREEBUSY_URL = "https://www.googleapis.com/calendar/v3/freeBusy";
 var EVENTS_URL = "https://www.googleapis.com/calendar/v3/calendars/primary/events";
 function slotLabel(start, end2, tz) {
-  const day2 = new Intl.DateTimeFormat("en-US", {
+  const day3 = new Intl.DateTimeFormat("en-US", {
     timeZone: tz,
     weekday: "short",
     month: "short",
@@ -7491,7 +7965,7 @@ function slotLabel(start, end2, tz) {
     minute: "2-digit",
     hourCycle: "h23"
   }).format(d);
-  return `${day2}, ${hm(start)} to ${hm(end2)} ${zoneAbbrev(start, tz)}`;
+  return `${day3}, ${hm(start)} to ${hm(end2)} ${zoneAbbrev(start, tz)}`;
 }
 function pickSlots(busy, opts) {
   const count2 = opts.count ?? 3;
@@ -7550,14 +8024,14 @@ function freeWindows(busy, opts) {
     const usable2 = spans.filter(([a, b]) => b - a >= SLOT_MINUTES * 6e4);
     const first = usable2[0];
     if (!first) continue;
-    const day2 = new Intl.DateTimeFormat("en-US", {
+    const day3 = new Intl.DateTimeFormat("en-US", {
       timeZone: opts.labelTz,
       weekday: "short",
       month: "short",
       day: "numeric"
     }).format(new Date(first[0]));
     out.push(
-      `${day2}: ${usable2.map(([a, b]) => `${hm(a)} to ${hm(b)}`).join(", ")} ${zoneAbbrev(new Date(first[0]), opts.labelTz)}`
+      `${day3}: ${usable2.map(([a, b]) => `${hm(a)} to ${hm(b)}`).join(", ")} ${zoneAbbrev(new Date(first[0]), opts.labelTz)}`
     );
   }
   return out;
@@ -7672,20 +8146,35 @@ async function bookSlot(s, userId, req, appUrl, opts = {}) {
   const [p] = await s.db.sql`
     select display_name, first_name, primary_email from orbit.people where id = ${d.person_id}::uuid`;
   const [u2] = await s.db.sql`
-    select first_name, full_name, timezone from orbit.users where id = ${userId}::uuid`;
+    select first_name, full_name, timezone, settings->>'meeting_link' as meeting_link
+      from orbit.users where id = ${userId}::uuid`;
   if (!p?.primary_email) throw new HttpError(409, "no_email", "this person has no email address to invite");
   const tz = validZone(u2?.timezone) ?? "America/New_York";
   const mine = u2?.first_name ?? u2?.full_name?.split(/\s+/)[0] ?? "Me";
   const theirs = p.first_name ?? p.display_name.split(/\s+/)[0];
   const title = `${mine} / ${theirs}`;
+  const link2 = await meetingLinkFor(s, userId, u2?.meeting_link, { title, start, tz });
   let r;
   try {
-    r = await googleCall(s, userId, `${EVENTS_URL}?sendUpdates=all`, {
-      summary: title,
-      start: { dateTime: start.toISOString(), timeZone: tz },
-      end: { dateTime: end2.toISOString(), timeZone: tz },
-      attendees: [{ email: p.primary_email }]
-    });
+    r = await googleCall(
+      s,
+      userId,
+      `${EVENTS_URL}?sendUpdates=all${link2.kind === "meet" ? "&conferenceDataVersion=1" : ""}`,
+      {
+        summary: title,
+        start: { dateTime: start.toISOString(), timeZone: tz },
+        end: { dateTime: end2.toISOString(), timeZone: tz },
+        attendees: [{ email: p.primary_email }],
+        ...link2.kind === "meet" ? {
+          conferenceData: {
+            createRequest: {
+              requestId: `orbit-${d.id}-${start.getTime()}`,
+              conferenceSolutionKey: { type: "hangoutsMeet" }
+            }
+          }
+        } : link2.kind === "zoom" ? { location: link2.url, description: `Join on Zoom: ${link2.url}` } : {}
+      }
+    );
   } catch (e) {
     if (e instanceof NeedsReauth) throw new HttpError(409, "needs_reauth", "reconnect Google to book");
     throw e;
@@ -7694,18 +8183,44 @@ async function bookSlot(s, userId, req, appUrl, opts = {}) {
   if (r.status !== 200 || typeof r.json.id !== "string")
     throw new HttpError(502, "upstream", `calendar ${r.status}`);
   const eventId = r.json.id;
+  const meetingUrl = link2.kind === "zoom" ? link2.url : link2.kind === "meet" ? hangoutUrl(r.json) : void 0;
   await s.db.sql`
     insert into orbit.calendar_events (user_id, external_id, title, start_at, end_at, status, attendees,
-                                       attendee_person_ids, attendee_count, is_one_on_one, chat_id)
+                                       attendee_person_ids, attendee_count, is_one_on_one, chat_id, conference_url)
     values (${userId}::uuid, ${eventId}, ${title}, ${start}::timestamptz, ${end2}::timestamptz, 'confirmed',
             ${JSON.stringify([{ email: p.primary_email }])}::jsonb, ${[d.person_id]}::uuid[], 2, true,
-            ${d.chat_id}::uuid)
+            ${d.chat_id}::uuid, ${meetingUrl ?? null})
     on conflict (user_id, external_id) do nothing`;
   await s.db.sql`
     insert into orbit.audit_log (user_id, actor, action, target_table, target_id, details)
     values (${userId}::uuid, ${opts.actor ?? "user"}, 'calendar.book', 'drafts', ${d.id}, ${{ start: iso(start) }}::jsonb)`;
   if (d.chat_id) await moveChat(s.db, userId, d.chat_id, "scheduled", "call booked", s.now());
-  return { eventId };
+  return meetingUrl ? { eventId, meetingUrl } : { eventId };
+}
+function hangoutUrl(ev) {
+  if (typeof ev.hangoutLink === "string") return ev.hangoutLink;
+  const points = ev.conferenceData?.entryPoints ?? [];
+  const uri = points.find((x) => typeof x.uri === "string" && x.uri.startsWith("https://"))?.uri;
+  return typeof uri === "string" ? uri : void 0;
+}
+async function meetingLinkFor(s, userId, choice, m) {
+  if (choice === "none") return { kind: "none" };
+  if (choice !== "zoom") return { kind: "meet" };
+  try {
+    const [row] = await s.db.sql`
+      select status from orbit.integration_accounts where user_id = ${userId}::uuid and provider = 'zoom'`;
+    if (row?.status !== "active") return { kind: "meet" };
+    const z9 = await zoomFor(s.db, sqlVault(s.db), s.env.zoom, "", userId, { fetch: s.fetch, now: s.now });
+    if (!z9) return { kind: "meet" };
+    const made = await zoomCreateMeeting(
+      z9.tokens,
+      { topic: m.title, startAt: m.start.toISOString(), minutes: SLOT_MINUTES, timezone: m.tz },
+      s.fetch
+    );
+    return { kind: "zoom", url: made.joinUrl };
+  } catch {
+    return { kind: "meet" };
+  }
 }
 async function moveChat(db2, userId, chatId, to, reason2, now, actor = "system") {
   const [c] = await db2.sql`
@@ -9506,18 +10021,18 @@ async function pushDraftEdit(db2, userId, id, e) {
     returning id, draft_id, kind, distance, created_at`;
   return r;
 }
-function notesOf(settings3) {
-  const v = settings3?.voice_notes;
+function notesOf(settings4) {
+  const v = settings4?.voice_notes;
   if (!Array.isArray(v)) return [];
   return v.filter(
     (n) => !!n && typeof n === "object" && typeof n.id === "string" && typeof n.text === "string" && Array.isArray(n.evidence)
   );
 }
-function storedCard(settings3, firstName) {
-  const c = StyleCardS.safeParse(settings3?.style_card);
+function storedCard(settings4, firstName) {
+  const c = StyleCardS.safeParse(settings4?.style_card);
   if (c.success && ((c.data.builtFromCount ?? 0) >= STYLE_MIN_SAMPLES || c.data.custom))
     return c.data;
-  const preset = settings3?.tone_preset;
+  const preset = settings4?.tone_preset;
   return defaultStyleCard(preset === "direct" || preset === "formal" ? preset : "warm", firstName);
 }
 var DistillS = z3.object({
@@ -9546,10 +10061,10 @@ var SCORE_DRAFTS = 20;
 async function voiceStatus(db2, userId, now) {
   const [u2] = await db2.sql`
     select settings, first_name from orbit.users where id = ${userId}::uuid`;
-  const settings3 = u2?.settings ?? {};
-  const stored = StyleCardS.safeParse(settings3.style_card);
-  const card = storedCard(settings3, u2?.first_name ?? "");
-  const notes2 = notesOf(settings3);
+  const settings4 = u2?.settings ?? {};
+  const stored2 = StyleCardS.safeParse(settings4.style_card);
+  const card = storedCard(settings4, u2?.first_name ?? "");
+  const notes2 = notesOf(settings4);
   const since2 = new Date(now.getTime() - 30 * 864e5);
   const drafts = await db2.sql`
     select id, subject, coalesce(body_original, body) as body from orbit.drafts
@@ -9564,9 +10079,9 @@ async function voiceStatus(db2, userId, now) {
   const scores = drafts.map(
     (d) => judged.has(d.id) ? judged.get(d.id) : voiceScore(voiceCheck(d, { card, notes: notes2 }))
   );
-  const relearned = settings3.voice_relearned_at;
+  const relearned = settings4.voice_relearned_at;
   return {
-    card: stored.success ? stored.data : null,
+    card: stored2.success ? stored2.data : null,
     cardProse: cardProse(card),
     notes: activeVoiceNotes(notes2),
     soundsLikeYou: meanVoiceScore(scores),
@@ -10856,8 +11371,8 @@ function item(r, status4, reason2) {
     ...r.ask?.replyToMessageId ? { messageId: r.ask.replyToMessageId } : {}
   };
 }
-function modeOf(settings3, level) {
-  const m = settings3.autopilot_mode;
+function modeOf(settings4, level) {
+  const m = settings4.autopilot_mode;
   if (m === "off" || m === "assist" || m === "autopilot") return m;
   return level >= 2 ? "autopilot" : level === 1 ? "assist" : "off";
 }
@@ -10893,7 +11408,7 @@ async function autopilotStatus(db2, userId, now) {
   const tz = validZone(u2.timezone) ?? "America/New_York";
   const dayStart = zonedTime(new Intl.DateTimeFormat("en-CA", { timeZone: tz }).format(now), 0, 0, tz);
   const weekStart = new Date(dayStart.getTime() - 6 * 864e5);
-  const settings3 = u2.settings ?? {};
+  const settings4 = u2.settings ?? {};
   const queued2 = await itemRows(db2, userId, "queued", now, dayStart);
   const held2 = await itemRows(db2, userId, "held", now, dayStart);
   const sentToday = await itemRows(db2, userId, "sent", now, dayStart);
@@ -10930,7 +11445,7 @@ async function autopilotStatus(db2, userId, now) {
                     and a.action = 'draft.approve')
      group by d.kind`;
   const count2 = (kinds) => approvals.filter((a) => kinds.includes(a.kind)).reduce((s, a) => s + a.n, 0);
-  const autoKinds = Array.isArray(settings3.auto_kinds) ? settings3.auto_kinds : [];
+  const autoKinds = Array.isArray(settings4.auto_kinds) ? settings4.auto_kinds : [];
   const first = await firstTouchRungOf(db2, userId);
   const rungs = ["bump", "thank_you", "schedule", "first_touch"].map((kind) => {
     if (kind === "first_touch")
@@ -10948,8 +11463,8 @@ async function autopilotStatus(db2, userId, now) {
            count(*) filter (where details->>'kind' in ('first_touch', 'warm_first_touch', 'outreach'))::int as week_first
       from orbit.audit_log
      where user_id = ${userId}::uuid and action = 'draft.auto_sent' and created_at >= ${weekStart}::timestamptz`;
-  const pausedUntil = typeof settings3.autopilot_paused_until === "string" && new Date(settings3.autopilot_paused_until).getTime() > now.getTime() ? settings3.autopilot_paused_until : null;
-  const goalPauses = pausedGoalsOf(settings3);
+  const pausedUntil = typeof settings4.autopilot_paused_until === "string" && new Date(settings4.autopilot_paused_until).getTime() > now.getTime() ? settings4.autopilot_paused_until : null;
+  const goalPauses = pausedGoalsOf(settings4);
   const goalIds = Object.keys(goalPauses);
   const titles = goalIds.length ? await db2.sql`
         select id, title from orbit.goals where user_id = ${userId}::uuid and id = any(${goalIds}::uuid[])` : [];
@@ -10965,7 +11480,7 @@ async function autopilotStatus(db2, userId, now) {
   const reviews = queued2.map((q) => q.send_at).filter((x) => !!x);
   const plan2 = await planCards(db2, userId, now);
   return {
-    mode: modeOf(settings3, Number(u2.autonomy_level) || 0),
+    mode: modeOf(settings4, Number(u2.autonomy_level) || 0),
     pausedUntil,
     pausedGoals,
     queued: queued2.map((r) => item(r, queuedStatus(r, first))),
@@ -11416,9 +11931,9 @@ function sentCount(chat) {
   return (chat.firstOutreachAt ? 1 : 0) + chat.bumpCount;
 }
 function cadenceActions(inp) {
-  const { now, settings: settings3 } = inp;
-  const tz = settings3.timezone;
-  if (settings3.quietUntil && now.getTime() < new Date(settings3.quietUntil).getTime()) return [];
+  const { now, settings: settings4 } = inp;
+  const tz = settings4.timezone;
+  if (settings4.quietUntil && now.getTime() < new Date(settings4.quietUntil).getTime()) return [];
   const out = [];
   const due2 = (personId) => {
     const ptz = (personId ? inp.people.get(personId)?.timeZone : void 0) ?? tz;
@@ -11438,7 +11953,7 @@ function cadenceActions(inp) {
     if (!blocked(chat.personId) && room(chat.personId) && sentCount(chat) < MAX_UNANSWERED) {
       const v1 = bumpDue(chat, person2, {
         now,
-        settings: { ...settings3, quietDays: [] },
+        settings: { ...settings4, quietDays: [] },
         timezone: tz
       });
       if (v1) {
@@ -11452,7 +11967,7 @@ function cadenceActions(inp) {
         });
       } else if (goal && SECOND_BUMP_GOALS.has(goal.kind) && chat.stage === "outreach_sent" && chat.bumpCount === 1 && (pc?.score ?? 0) < COLD_SCORE && chat.lastOutboundAt && !(chat.lastInboundAt && chat.lastInboundAt >= chat.lastOutboundAt) && maxBumpsFor(
         sectorOf({ title: person2.currentTitle, org: person2.currentOrganizationRaw }),
-        settings3.maxBumps
+        settings4.maxBumps
       ) < 2) {
         const bdays = businessDaysBetween(new Date(chat.lastOutboundAt), now, tz);
         if (bdays >= SECOND_BUMP_AFTER_BUSINESS_DAYS)
@@ -11481,7 +11996,7 @@ function cadenceActions(inp) {
         reason: "You met in the last three days and have not thanked them yet",
         dueAt: due2(chat.personId)
       });
-    const timer = stageTimer(chat, person2, settings3, now);
+    const timer = stageTimer(chat, person2, settings4, now);
     if (timer)
       out.push({
         kind: "stage_timer",
@@ -11545,7 +12060,7 @@ function cadenceActions(inp) {
   }
   return out;
 }
-function stageTimer(chat, person2, settings3, now) {
+function stageTimer(chat, person2, settings4, now) {
   if (!ACTIVE_STAGES.includes(chat.stage)) return void 0;
   const entered = new Date(chat.stageEnteredAt).getTime();
   if (chat.stage === "followed_up" && now.getTime() - entered >= 14 * DAY4)
@@ -11559,14 +12074,14 @@ function stageTimer(chat, person2, settings3, now) {
   if (from.getTime() > now.getTime()) return void 0;
   const maxBumps = maxBumpsFor(
     sectorOf({ title: person2.currentTitle, org: person2.currentOrganizationRaw }),
-    settings3.maxBumps
+    settings4.maxBumps
   );
   return decideTransition("outreach_sent", {
     type: "timer_no_response",
     bumps: chat.bumpCount,
     maxBumps,
     daysSilent: (now.getTime() - from.getTime()) / DAY4,
-    businessDaysSilent: businessDaysBetween(from, now, settings3.timezone)
+    businessDaysSilent: businessDaysBetween(from, now, settings4.timezone)
   });
 }
 
@@ -12376,9 +12891,9 @@ function engagementScore(items, ctx = {}) {
     const recency2 = months <= 12 ? W.recent : months <= 24 ? W.lastYear : W.old;
     if (Number.isFinite(t)) {
       dated++;
-      const iso3 = new Date(t).toISOString();
-      newestAt = maxIso(newestAt, iso3);
-      firstAt = minIso(firstAt, iso3);
+      const iso4 = new Date(t).toISOString();
+      newestAt = maxIso(newestAt, iso4);
+      firstAt = minIso(firstAt, iso4);
     }
     const c = counts[it.actorId] ??= zeroCounts();
     if (it.kind === "reaction") {
@@ -12746,9 +13261,9 @@ function pairIsOld(pair, now) {
   return !Number.isNaN(newest) && newest < cutoff;
 }
 var MONTHS2 = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
-function monthYear(iso3) {
-  if (typeof iso3 !== "string") return void 0;
-  const d = new Date(iso3);
+function monthYear(iso4) {
+  if (typeof iso4 !== "string") return void 0;
+  const d = new Date(iso4);
   return Number.isNaN(d.getTime()) ? void 0 : `${MONTHS2[d.getUTCMonth()]} ${d.getUTCFullYear()}`;
 }
 function hopEvidence(fromId, tie, toName) {
@@ -13256,16 +13771,16 @@ function sqlBudget(db2, now) {
       const v = await checkBudget(db2, userId, spendOf(p, estimate), now());
       if (!v.ok) return { ok: false, reason: "budget_exceeded", resetsAt: v.resetsAt };
       if (p === "unipile_search") {
-        const day2 = new Date(Date.UTC(now().getUTCFullYear(), now().getUTCMonth(), now().getUTCDate()));
+        const day3 = new Date(Date.UTC(now().getUTCFullYear(), now().getUTCMonth(), now().getUTCDate()));
         const [r] = await db2.sql`
           select count(*)::int as n from orbit.usage_ledger
            where user_id = ${userId}::uuid and provider = 'unipile' and operation = 'search'
-             and created_at >= ${day2}::timestamptz`;
+             and created_at >= ${day3}::timestamptz`;
         if ((r?.n ?? 0) >= UNIPILE_SEARCHES_PER_DAY)
           return {
             ok: false,
             reason: "budget_exceeded",
-            resetsAt: new Date(day2.getTime() + 864e5).toISOString()
+            resetsAt: new Date(day3.getTime() + 864e5).toISOString()
           };
       }
       return { ok: true };
@@ -13639,11 +14154,11 @@ function profileOrgs(raw) {
   ].filter((o) => o.logoUrl);
 }
 function bucket(kind, accountId, now, share) {
-  const day2 = now.toISOString().slice(0, 10);
-  const end2 = /* @__PURE__ */ new Date(`${day2}T00:00:00Z`);
+  const day3 = now.toISOString().slice(0, 10);
+  const end2 = /* @__PURE__ */ new Date(`${day3}T00:00:00Z`);
   end2.setUTCDate(end2.getUTCDate() + 1);
   return {
-    key: `connectors:li:${kind}:${day2}:${accountId}`,
+    key: `connectors:li:${kind}:${day3}:${accountId}`,
     limit: Math.round(LEDGER_TOTAL[kind] * share),
     expires: end2.toISOString()
   };
@@ -13673,8 +14188,8 @@ function dateOf(v) {
   const s = v.trim();
   const us = /^(\d{1,2})\/(\d{1,2})\/(\d{4})$/.exec(s);
   if (us) return `${us[3]}-${us[1].padStart(2, "0")}`;
-  const iso3 = /^(\d{4})-(\d{2})/.exec(s);
-  if (iso3) return `${iso3[1]}-${iso3[2]}`;
+  const iso4 = /^(\d{4})-(\d{2})/.exec(s);
+  if (iso4) return `${iso4[1]}-${iso4[2]}`;
   const y = /^(\d{4})$/.exec(s);
   return y ? `${y[1]}-01` : void 0;
 }
@@ -14774,22 +15289,22 @@ async function extendNeighbourhood(db2, g, added, learned) {
     if (p) p.memberId = l.memberId;
   }
   if (!added.length) return;
-  const stored = await db2.query(
+  const stored2 = await db2.query(
     `select ${TIE_COLUMNS(true)} from orbit.ties t
        join unnest($2::uuid[], $3::uuid[], $4::text[]) as k(a, b, kind)
          on t.a_person_id = k.a and t.b_person_id = k.b and t.kind = k.kind
       where t.user_id = $1::uuid`,
     [g.userId, added.map((t) => t.a_person_id), added.map((t) => t.b_person_id), added.map((t) => t.kind)]
   );
-  addTies(g, stored);
-  for (const t of stored) g.full.delete(pairKeyOf(t.a_person_id, t.b_person_id));
+  addTies(g, stored2);
+  for (const t of stored2) g.full.delete(pairKeyOf(t.a_person_id, t.b_person_id));
   const depth = g.depth;
   if (depth) {
     const d = (id) => depth.get(id) ?? Number.POSITIVE_INFINITY;
     const nearer = /* @__PURE__ */ new Map();
     const at = (id) => Math.min(d(id), nearer.get(id) ?? Number.POSITIVE_INFINITY);
     for (let pass = 0; pass < NEIGHBOURHOOD_HOPS; pass++)
-      for (const t of stored)
+      for (const t of stored2)
         for (const [x, y] of [
           [t.a_person_id, t.b_person_id],
           [t.b_person_id, t.a_person_id]
@@ -15723,16 +16238,16 @@ async function attachAccount(db2, userId, a) {
       returning id`;
     const accounts = a.account ? void 0 : await loadAccounts(tx, a.platform, [a.accountId]);
     const acct = a.account;
-    const stored = accounts?.get(a.accountId);
-    const username = acct?.username ?? stored?.username ?? a.accountId;
+    const stored2 = accounts?.get(a.accountId);
+    const username = acct?.username ?? stored2?.username ?? a.accountId;
     await tx.sql`
       insert into orbit.person_identities (user_id, person_id, kind, value_norm, value_raw, source, social_account_id)
       values (${userId}::uuid, ${a.personId}::uuid, ${identityKind(a.platform)}, ${a.accountId}, ${username},
               ${a.platform}, ${a.accountId})
       on conflict (user_id, kind, value_norm) do update set person_id = excluded.person_id,
         social_account_id = excluded.social_account_id`;
-    const email2 = (acct?.email ?? stored?.email ?? "").trim().toLowerCase();
-    const phone = (acct?.phone ?? stored?.phone ?? "").replace(/[^\d+]/g, "");
+    const email2 = (acct?.email ?? stored2?.email ?? "").trim().toLowerCase();
+    const phone = (acct?.phone ?? stored2?.phone ?? "").replace(/[^\d+]/g, "");
     if (email2.includes("@"))
       await tx.sql`
         insert into orbit.person_identities (user_id, person_id, kind, value_norm, value_raw, source, social_account_id)
@@ -15756,7 +16271,7 @@ async function attachAccount(db2, userId, a) {
          set participant_person_ids = array(select distinct x from unnest(participant_person_ids || array[${a.personId}::uuid]) x)
        where user_id = ${userId}::uuid and social_account_id = ${a.accountId}
          and not (${a.personId}::uuid = any(participant_person_ids))`;
-    const bio = acct?.bio ?? stored?.bio;
+    const bio = acct?.bio ?? stored2?.bio;
     if (bio?.trim())
       await tx.sql`
         insert into orbit.facts (user_id, person_id, type, text, source_table, occurred_at, confidence)
@@ -15795,8 +16310,8 @@ async function detachLink(db2, userId, linkId, now) {
   const old = link2.person_id;
   return db2.begin(async (tx) => {
     await tx.sql`delete from orbit.social_links where id = ${linkId}::uuid`;
-    const stored = (await loadAccounts(tx, platform, [acct])).get(acct);
-    const name = stored?.name?.trim() || stored?.username || acct;
+    const stored2 = (await loadAccounts(tx, platform, [acct])).get(acct);
+    const name = stored2?.name?.trim() || stored2?.username || acct;
     const parts = name.split(/\s+/);
     const [np] = await tx.sql`
       insert into orbit.people (user_id, display_name, first_name, last_name, name_norm, sources, first_seen_at, listed,
@@ -15815,7 +16330,7 @@ async function detachLink(db2, userId, linkId, now) {
     });
     await tx.sql`
       insert into orbit.person_identities (user_id, person_id, kind, value_norm, value_raw, source, social_account_id)
-      values (${userId}::uuid, ${fresh}::uuid, ${identityKind(platform)}, ${acct}, ${stored?.username ?? acct}, ${platform}, ${acct})
+      values (${userId}::uuid, ${fresh}::uuid, ${identityKind(platform)}, ${acct}, ${stored2?.username ?? acct}, ${platform}, ${acct})
       on conflict (user_id, kind, value_norm) do update set person_id = excluded.person_id`;
     await rebuildAccountTies(tx, userId, platform, acct, fresh, now);
     let reviews = 0;
@@ -15999,8 +16514,8 @@ async function storeSocialChat(db2, userId, platform, chat, messages, o) {
   if (partner && !personOf.has(partner.accountId)) {
     const both = ((existing?.ins ?? 0) > 0 || messages.some((m) => !m.fromStudent)) && ((existing?.outs ?? 0) > 0 || messages.some((m) => m.fromStudent));
     if (both) {
-      const stored = (await loadAccounts(db2, platform, [partner.accountId])).get(partner.accountId);
-      const kind = stored?.kind ?? accountKind({
+      const stored2 = (await loadAccounts(db2, platform, [partner.accountId])).get(partner.accountId);
+      const kind = stored2?.kind ?? accountKind({
         platform,
         id: partner.accountId,
         username: partner.username ?? "",
@@ -16013,8 +16528,8 @@ async function storeSocialChat(db2, userId, platform, chat, messages, o) {
           {
             platform,
             id: partner.accountId,
-            username: stored?.username ?? partner.username ?? partner.accountId,
-            name: stored?.name ?? partner.name
+            username: stored2?.username ?? partner.username ?? partner.accountId,
+            name: stored2?.name ?? partner.name
           },
           o.now
         );
@@ -16636,14 +17151,14 @@ function xAuthUrl(cfg, p) {
   });
   return `${X_AUTHORIZE_URL}?${q}`;
 }
-var basic = (cfg) => `Basic ${btoa(`${cfg.clientId}:${cfg.clientSecret}`)}`;
-async function tokenCall2(cfg, form) {
+var basic2 = (cfg) => `Basic ${btoa(`${cfg.clientId}:${cfg.clientSecret}`)}`;
+async function tokenCall3(cfg, form) {
   const res = await (cfg.fetch ?? fetch)(X_TOKEN_URL, {
     method: "POST",
     headers: {
       "content-type": "application/x-www-form-urlencoded",
       accept: "application/json",
-      authorization: basic(cfg)
+      authorization: basic2(cfg)
     },
     body: new URLSearchParams({ ...form, client_id: cfg.clientId }),
     signal: AbortSignal.timeout(15e3)
@@ -16659,7 +17174,7 @@ async function tokenCall2(cfg, form) {
   return body2;
 }
 function xExchangeCode(cfg, code, verifier) {
-  return tokenCall2(cfg, {
+  return tokenCall3(cfg, {
     grant_type: "authorization_code",
     code,
     code_verifier: verifier,
@@ -16667,13 +17182,13 @@ function xExchangeCode(cfg, code, verifier) {
   });
 }
 function xRefreshToken(cfg, refreshToken) {
-  return tokenCall2(cfg, { grant_type: "refresh_token", refresh_token: refreshToken });
+  return tokenCall3(cfg, { grant_type: "refresh_token", refresh_token: refreshToken });
 }
 async function xRevoke(cfg, token, hint) {
   try {
     const res = await (cfg.fetch ?? fetch)(X_REVOKE_URL, {
       method: "POST",
-      headers: { "content-type": "application/x-www-form-urlencoded", authorization: basic(cfg) },
+      headers: { "content-type": "application/x-www-form-urlencoded", authorization: basic2(cfg) },
       body: new URLSearchParams({ token, token_type_hint: hint, client_id: cfg.clientId }),
       signal: AbortSignal.timeout(15e3)
     });
@@ -18809,14 +19324,14 @@ async function effectiveLevel(db2, goalId, userLevel) {
   }
   return Number(userLevel) || 0;
 }
-function aheadOf(settings3, key, now) {
-  const v = settings3?.[key];
+function aheadOf(settings4, key, now) {
+  const v = settings4?.[key];
   if (typeof v !== "string") return void 0;
   const t = new Date(v);
   return Number.isNaN(t.getTime()) || t.getTime() <= now.getTime() ? void 0 : t;
 }
-function ownCap(settings3, key, tableCap) {
-  const v = Number(settings3?.[key]);
+function ownCap(settings4, key, tableCap) {
+  const v = Number(settings4?.[key]);
   return Number.isFinite(v) && v >= 1 ? Math.min(Math.floor(v), tableCap) : tableCap;
 }
 var hashOf = (d) => messageHash({ channel: d.channel, subject: d.subject, body: d.body });
@@ -19568,7 +20083,7 @@ async function loadCadence(db2, userId, now, src = NO_SOURCES) {
   const [u2] = await db2.sql`
     select timezone, autonomy_level, settings from orbit.users where id = ${userId}::uuid`;
   const tz = validZone(u2?.timezone) ?? "America/New_York";
-  const settings3 = u2?.settings ?? {};
+  const settings4 = u2?.settings ?? {};
   const chatRows = await db2.sql`
     select * from orbit.chats where user_id = ${userId}::uuid and archived_at is null`;
   const chats = chatRows.map((r) => chatFromRow(isoRow(r)));
@@ -19652,8 +20167,8 @@ async function loadCadence(db2, userId, now, src = NO_SOURCES) {
   const awaiting = await db2.sql`
     select distinct person_id from orbit.suggestions
      where user_id = ${userId}::uuid and kind = 'needs_you' and status in ('pending', 'snoozed') and person_id is not null`;
-  const maxBumps = num(settings3.max_bumps, 2);
-  const quiet = typeof settings3.quiet_until === "string" ? settings3.quiet_until : void 0;
+  const maxBumps = num(settings4.max_bumps, 2);
+  const quiet = typeof settings4.quiet_until === "string" ? settings4.quiet_until : void 0;
   return {
     input: {
       chats,
@@ -19668,13 +20183,13 @@ async function loadCadence(db2, userId, now, src = NO_SOURCES) {
     timezone: tz,
     chatsById: new Map(chats.map((c) => [c.id, c])),
     goalsById: new Map(goals.map((g) => [g.id, g])),
-    settings: settings3,
+    settings: settings4,
     awaitingStudent: new Set(awaiting.map((r) => r.person_id)),
     autonomyLevel: num(u2?.autonomy_level, 0),
-    autoKinds: Array.isArray(settings3.auto_kinds) ? settings3.auto_kinds.filter(
+    autoKinds: Array.isArray(settings4.auto_kinds) ? settings4.auto_kinds.filter(
       (k) => typeof k === "string" && AUTO_KINDS.includes(k)
     ) : [],
-    pausedUntil: typeof settings3.autopilot_paused_until === "string" ? settings3.autopilot_paused_until : void 0
+    pausedUntil: typeof settings4.autopilot_paused_until === "string" ? settings4.autopilot_paused_until : void 0
   };
 }
 var toDue = (a) => ({
@@ -19725,6 +20240,793 @@ async function book(ctx) {
 var calendarRoutes = {
   "/calendar/slots": { method: "POST", auth: true, run: slots },
   "/calendar/book": { method: "POST", auth: true, run: book }
+};
+
+// supabase/functions/_shared/meet.ts
+var MEET_API = "https://meet.googleapis.com/v2";
+var MEET_SCOPE = "https://www.googleapis.com/auth/meetings.space.readonly";
+var STATE_TTL_MS3 = 10 * 6e4;
+var MAX_ENTRY_PAGES = 10;
+var MeetNeedsConsent = class extends Error {
+  constructor() {
+    super("meet_needs_consent");
+  }
+};
+var hasMeetScope = (scopes) => !!scopes?.includes(MEET_SCOPE);
+async function meetConsentUrl(db2, google, userId, appUrl, now) {
+  const [u2] = await db2.sql`select email from orbit.users where id = ${userId}::uuid`;
+  const state = randomToken(32);
+  const { verifier, challenge } = await pkcePair();
+  const scopes = ["openid", "email", MEET_SCOPE];
+  await db2.sql`
+    insert into orbit.oauth_states (state, code_verifier, redirect_to, user_id, scopes, created_at, expires_at)
+    values (${state}, ${verifier}, ${appUrl}, ${userId}::uuid, ${scopes}::text[], ${now}::timestamptz,
+            ${new Date(now.getTime() + STATE_TTL_MS3)}::timestamptz)`;
+  return authUrl(google, { state, challenge, scopes, loginHint: u2?.email });
+}
+async function meetGet(tokens3, userId, url, f2) {
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const token = await tokens3.accessToken(userId);
+    const res = await f2(url, {
+      headers: { authorization: `Bearer ${token}`, accept: "application/json" },
+      signal: AbortSignal.timeout(2e4)
+    });
+    if (res.status === 401 && attempt === 0) {
+      tokens3.invalidate(userId);
+      await res.body?.cancel();
+      continue;
+    }
+    if (res.status === 403) {
+      await res.body?.cancel();
+      throw new MeetNeedsConsent();
+    }
+    if (res.status === 404) {
+      await res.body?.cancel();
+      return {};
+    }
+    if (!res.ok) {
+      await res.body?.cancel();
+      throw new Error(`meet ${res.status}`);
+    }
+    return await res.json().catch(() => ({})) ?? {};
+  }
+  throw new Error("meet 401");
+}
+var iso3 = (t) => new Date(t).toISOString();
+async function meetNotesFor(tokens3, userId, events, f2 = fetch) {
+  const notes2 = [];
+  const none = [];
+  for (const ev of events) {
+    const code = meetCodeFromUrl(ev.conferenceUrl);
+    const start = Date.parse(ev.startAt);
+    const end2 = Date.parse(ev.endAt);
+    const window = [
+      `start_time>="${iso3(start - 2 * 36e5)}"`,
+      `start_time<="${iso3(Math.max(end2, start) + 2 * 36e5)}"`
+    ];
+    const filter = [...code ? [`space.meeting_code="${code}"`] : [], ...window].join(" AND ");
+    const listed = await meetGet(
+      tokens3,
+      userId,
+      `${MEET_API}/conferenceRecords?${new URLSearchParams({ filter, pageSize: "25" })}`,
+      f2
+    );
+    const records = (listed.conferenceRecords ?? []).map((r) => ({
+      ...r,
+      joinId: code,
+      startAt: r.startTime
+    }));
+    const rec = matchCallToEvent(records, ev, "google_meet");
+    if (!rec?.name) {
+      none.push(ev.id);
+      continue;
+    }
+    const t = await meetGet(tokens3, userId, `${MEET_API}/${rec.name}/transcripts`, f2);
+    const transcript = (t.transcripts ?? []).find(
+      (x) => x.name && x.state !== "STARTED"
+    );
+    if (!transcript?.name) {
+      none.push(ev.id);
+      continue;
+    }
+    const entries = [];
+    let pageToken = "";
+    for (let page2 = 0; page2 < MAX_ENTRY_PAGES; page2++) {
+      const q = new URLSearchParams({ pageSize: "100" });
+      if (pageToken) q.set("pageToken", pageToken);
+      const r = await meetGet(tokens3, userId, `${MEET_API}/${transcript.name}/entries?${q}`, f2);
+      entries.push(...r.transcriptEntries ?? []);
+      pageToken = typeof r.nextPageToken === "string" ? r.nextPageToken : "";
+      if (!pageToken) break;
+    }
+    const names = {};
+    let pToken = "";
+    for (let page2 = 0; page2 < 3; page2++) {
+      const q = new URLSearchParams({ pageSize: "100" });
+      if (pToken) q.set("pageToken", pToken);
+      const r = await meetGet(tokens3, userId, `${MEET_API}/${rec.name}/participants?${q}`, f2);
+      for (const p of r.participants ?? []) {
+        const name = meetParticipantName(p);
+        if (typeof p.name === "string" && name) names[p.name] = name;
+      }
+      pToken = typeof r.nextPageToken === "string" ? r.nextPageToken : "";
+      if (!pToken) break;
+    }
+    const text3 = meetEntriesToText(entries, names);
+    if (!text3) {
+      none.push(ev.id);
+      continue;
+    }
+    notes2.push({
+      app: "google_meet",
+      eventId: ev.id,
+      meetingId: rec.name,
+      title: ev.title || "Google Meet call",
+      startAt: rec.startTime ?? ev.startAt,
+      url: transcript.docsDestination?.exportUri,
+      transcript: text3
+    });
+  }
+  return { notes: notes2, none };
+}
+
+// supabase/functions/_shared/accountToken.ts
+async function accountToken(accountId, signingKey) {
+  const key = await crypto.subtle.importKey(
+    "raw",
+    new TextEncoder().encode(signingKey),
+    { name: "HMAC", hash: "SHA-256" },
+    false,
+    ["sign"]
+  );
+  const sig = new Uint8Array(
+    await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(`unipile-account:${accountId}`))
+  );
+  return btoa(String.fromCharCode(...sig)).replace(/=+$/, "").replace(/\+/g, "-").replace(/\//g, "_");
+}
+function accountTokenV2(accountId, signingKey) {
+  return accountToken(`v2:${accountId}`, signingKey);
+}
+
+// supabase/functions/_shared/providers/unipileSync.ts
+var when = z.union([z.string(), z.number()]).nullish();
+var unipileMeSchema = z.looseObject({
+  provider_id: z.string().nullish(),
+  public_identifier: z.string().nullish(),
+  first_name: z.string().nullish(),
+  last_name: z.string().nullish()
+});
+var unipileRelationSchema = z.looseObject({
+  member_id: z.string().nullish(),
+  member_urn: z.string().nullish(),
+  public_identifier: z.string().nullish(),
+  public_profile_url: z.string().nullish(),
+  first_name: z.string().nullish(),
+  last_name: z.string().nullish(),
+  headline: z.string().nullish(),
+  profile_picture_url: z.string().nullish(),
+  created_at: when
+});
+var unipileChatSchema = z.looseObject({
+  id: z.string(),
+  type: z.union([z.number(), z.string()]).nullish(),
+  name: z.string().nullish(),
+  attendee_provider_id: z.string().nullish(),
+  timestamp: when,
+  content_type: z.string().nullish()
+});
+var unipileAttendeeSchema = z.looseObject({
+  id: z.string().nullish(),
+  provider_id: z.string().nullish(),
+  name: z.string().nullish(),
+  is_self: z.union([z.number(), z.boolean()]).nullish(),
+  profile_url: z.string().nullish(),
+  picture_url: z.string().nullish(),
+  specifics: z.looseObject({ occupation: z.string().nullish(), location: z.string().nullish() }).nullish()
+});
+var unipileMessageSchema = z.looseObject({
+  id: z.string(),
+  chat_id: z.string().nullish(),
+  sender_id: z.string().nullish(),
+  sender_attendee_id: z.string().nullish(),
+  text: z.string().nullish(),
+  timestamp: when,
+  is_sender: z.union([z.number(), z.boolean()]).nullish(),
+  is_event: z.union([z.number(), z.boolean()]).nullish(),
+  hidden: z.union([z.number(), z.boolean()]).nullish(),
+  deleted: z.union([z.number(), z.boolean()]).nullish()
+});
+var page = (item2) => z.looseObject({ items: z.array(item2).default([]), cursor: z.string().nullish() });
+var unipileSearchItemSchema2 = z.looseObject({
+  id: z.string().nullish(),
+  name: z.string().nullish(),
+  headline: z.string().nullish(),
+  location: z.string().nullish(),
+  public_profile_url: z.string().nullish(),
+  profile_url: z.string().nullish(),
+  profile_picture_url: z.string().nullish(),
+  network_distance: z.union([z.string(), z.number()]).nullish()
+});
+var RELATIONS_LIMIT = 50;
+var CHATS_LIMIT = 250;
+var MESSAGES_LIMIT = 100;
+function createUnipileSync(opts) {
+  const configured2 = !!opts.apiKey && !!opts.baseUrl;
+  const base = trimBase(opts.baseUrl ?? "");
+  const headers2 = () => ({ "X-API-KEY": opts.apiKey ?? "" });
+  const no2 = () => unconfigured2("unipile", "API key or base URL");
+  const get2 = (path, schema) => requestJson(opts, { provider: "unipile", url: `${base}${path}`, headers: headers2(), schema });
+  return {
+    configured: configured2,
+    async me(accountId) {
+      if (!configured2) return no2();
+      return get2(`/api/v1/users/me${query({ account_id: accountId })}`, unipileMeSchema);
+    },
+    async relations(accountId, cursor) {
+      if (!configured2) return no2();
+      return get2(
+        `/api/v1/users/relations${query({ account_id: accountId, limit: RELATIONS_LIMIT, cursor: cursor ?? void 0 })}`,
+        page(unipileRelationSchema)
+      );
+    },
+    async chats(accountId, o) {
+      if (!configured2) return no2();
+      return get2(
+        `/api/v1/chats${query({ account_id: accountId, limit: CHATS_LIMIT, after: o.after, cursor: o.cursor ?? void 0 })}`,
+        page(unipileChatSchema)
+      );
+    },
+    async attendees(chatId) {
+      if (!configured2) return no2();
+      const r = await get2(
+        `/api/v1/chats/${encodeURIComponent(chatId)}/attendees`,
+        page(unipileAttendeeSchema)
+      );
+      return r.ok ? { ok: true, value: r.value.items } : r;
+    },
+    async messages(chatId) {
+      if (!configured2) return no2();
+      const r = await get2(
+        `/api/v1/chats/${encodeURIComponent(chatId)}/messages${query({ limit: MESSAGES_LIMIT })}`,
+        page(unipileMessageSchema)
+      );
+      return r.ok ? { ok: true, value: r.value.items } : r;
+    },
+    async hostedLink(b) {
+      if (!configured2) return no2();
+      return requestJson(opts, {
+        provider: "unipile",
+        url: `${base}/api/v1/hosted/accounts/link`,
+        method: "POST",
+        headers: headers2(),
+        body: {
+          type: "create",
+          providers: [b.provider ?? "LINKEDIN"],
+          api_url: base,
+          expiresOn: b.expiresOn,
+          name: b.name,
+          notify_url: b.notifyUrl,
+          success_redirect_url: b.successRedirectUrl,
+          ...b.failureRedirectUrl ? { failure_redirect_url: b.failureRedirectUrl } : {}
+        },
+        schema: z.looseObject({ url: z.string() })
+      });
+    },
+    async searchPeople(accountId, keywords, limit = 8) {
+      if (!configured2) return no2();
+      const r = await requestJson(opts, {
+        provider: "unipile",
+        url: `${base}/api/v1/linkedin/search${query({ account_id: accountId, limit })}`,
+        method: "POST",
+        headers: headers2(),
+        body: { api: "classic", category: "people", keywords, network_distance: [1, 2, 3] },
+        schema: page(unipileSearchItemSchema2)
+      });
+      if (!r.ok) return r;
+      const degree = (d) => {
+        const m = /(\d)/.exec(String(d ?? ""));
+        return m ? Number(m[1]) : void 0;
+      };
+      return {
+        ok: true,
+        value: r.value.items.filter((p) => !!p.id && !!p.name?.trim()).map((p) => ({
+          memberId: p.id,
+          name: p.name.trim(),
+          headline: p.headline?.trim() || void 0,
+          location: p.location?.trim() || void 0,
+          profileUrl: p.public_profile_url || p.profile_url || void 0,
+          pictureUrl: p.profile_picture_url || void 0,
+          distance: degree(p.network_distance)
+        }))
+      };
+    }
+  };
+}
+
+// supabase/functions/orbit-api/routes/integrations.ts
+var queued = (q) => json(200, q);
+async function googleAccount(ctx) {
+  const [a] = await ctx.db.sql`
+    select status, scopes, sync_state from orbit.integration_accounts
+     where user_id = ${ctx.userId}::uuid and provider = 'google'`;
+  return a;
+}
+async function googleSync(ctx) {
+  const body2 = await readJson(ctx.req, { optional: true });
+  const mode2 = body2.mode ?? "incremental";
+  if (mode2 !== "backfill" && mode2 !== "incremental") throw badRequest("mode must be backfill or incremental");
+  const userId = ctx.userId;
+  const acct = await googleAccount(ctx);
+  if (!acct?.scopes.some((s) => s.endsWith("gmail.readonly")))
+    return queued({ queued: false, reason: "not_connected" });
+  if (acct.status !== "active") return queued({ queued: false, reason: acct.status });
+  const q = sqlQueue(ctx.db);
+  if (mode2 === "backfill") {
+    const phase = acct.sync_state?.gmail?.backfill;
+    if (phase?.phase && phase.phase !== "complete")
+      return queued({ queued: false, reason: "already_running" });
+    const id2 = await q.enqueue({
+      kind: "sync.gmail.backfill",
+      userId,
+      payload: phase?.phase === "complete" ? { phase: "recent", restart: true } : { phase: "recent" },
+      dedupeKey: `gmail-backfill:${userId}:manual:${slot(ctx.now())}`
+    });
+    return queued(id2 === null ? { queued: false, reason: "already_running" } : { queued: true });
+  }
+  const id = await q.enqueue({
+    kind: "sync.gmail.incremental",
+    userId,
+    payload: { reason: "manual" },
+    dedupeKey: `gmail-manual:${userId}:${slot(ctx.now())}`
+  });
+  if (acct.scopes.some((s) => /calendar\.(readonly|events)$/.test(s)))
+    await q.enqueue({
+      kind: "sync.calendar",
+      userId,
+      payload: { reason: "manual" },
+      dedupeKey: `calendar-manual:${userId}:${slot(ctx.now())}`
+    });
+  return queued(id === null ? { queued: false, reason: "already_running" } : { queued: true });
+}
+function unipileFor(ctx) {
+  return createUnipileSync({ fetch: ctx.fetch, apiKey: ctx.env.unipileKey, baseUrl: ctx.env.unipileBase });
+}
+var missingUnipile = (ctx) => [
+  ...ctx.env.unipileKey ? [] : ["UNIPILE_API_KEY"],
+  ...ctx.env.unipileBase ? [] : ["UNIPILE_BASE_URL"]
+];
+function functionsBase(ctx) {
+  if (ctx.env.functionsUrl) return ctx.env.functionsUrl.replace(/\/+$/, "");
+  const fromRedirect = ctx.env.googleRedirectUri?.match(/^(https?:\/\/[^/]+\/functions\/v1)\//)?.[1];
+  if (fromRedirect) return fromRedirect;
+  const href = `${ctx.url.origin}${ctx.url.pathname}`;
+  const i = href.indexOf("/orbit-api");
+  return i > 0 ? href.slice(0, i) : ctx.url.origin;
+}
+async function linkedinConnectStart(ctx) {
+  await readJson(ctx.req, { optional: true });
+  const missing = missingUnipile(ctx);
+  const secret = await resolveSecret(
+    (name) => name === "ORBIT_UNIPILE_WEBHOOK_SECRET" ? ctx.env.unipileWebhookSecret : void 0,
+    ctx.db,
+    "ORBIT_UNIPILE_WEBHOOK_SECRET",
+    "orbit_unipile_webhook_secret"
+  );
+  if (!secret) missing.push("ORBIT_UNIPILE_WEBHOOK_SECRET");
+  if (missing.length) return unconfigured({}, missing);
+  const userId = ctx.userId;
+  const r = await unipileFor(ctx).hostedLink({
+    name: userId,
+    notifyUrl: `${functionsBase(ctx)}/orbit-webhooks/unipile/account?token=${encodeURIComponent(secret)}`,
+    successRedirectUrl: `${ctx.env.appUrl}/settings?linkedin=connected`,
+    failureRedirectUrl: `${ctx.env.appUrl}/settings?linkedin=failed`,
+    expiresOn: new Date(ctx.now().getTime() + 36e5).toISOString()
+  });
+  if (!r.ok) throw new HttpError(502, "upstream", "LinkedIn connection is unavailable right now");
+  await ctx.db.sql`
+    insert into orbit.integration_accounts (user_id, provider, status)
+    values (${userId}::uuid, 'linkedin', 'connecting')
+    on conflict (user_id, provider) do update set
+      status = case when orbit.integration_accounts.status in ('active', 'parked')
+                    then orbit.integration_accounts.status else 'connecting' end`;
+  await ctx.db.sql`
+    insert into orbit.audit_log (user_id, actor, action, target_table)
+    values (${userId}::uuid, 'user', 'linkedin.connect_start', 'integration_accounts')`;
+  const out = { url: r.value.url };
+  return json(200, out);
+}
+async function linkedinStatus(ctx) {
+  const userId = ctx.userId;
+  const [a] = await ctx.db.sql`
+    select status, external_account_id, last_synced_at from orbit.integration_accounts
+     where user_id = ${userId}::uuid and provider = 'linkedin'`;
+  const [n] = await ctx.db.sql`
+    select count(distinct pi.person_id)::int as n from orbit.person_identities pi
+      join orbit.people p on p.id = pi.person_id
+     where pi.user_id = ${userId}::uuid and pi.kind = 'linkedin_member' and pi.source = 'linkedin_relation'
+       and p.merged_into is null and p.deleted_at is null`;
+  const status4 = !a ? "not_connected" : a.status === "active" || a.status === "connecting" || a.status === "needs_reauth" || a.status === "parked" ? a.status : a.status === "revoked" ? "not_connected" : "error";
+  const out = {
+    status: status4,
+    accountId: a?.external_account_id ?? null,
+    lastSyncedAt: a?.last_synced_at ? new Date(a.last_synced_at).toISOString() : null,
+    relations: n?.n ?? 0
+  };
+  return json(200, out);
+}
+async function linkedinSync(ctx) {
+  await readJson(ctx.req, { optional: true });
+  const missing = missingUnipile(ctx);
+  if (missing.length) return unconfigured({}, missing);
+  const userId = ctx.userId;
+  const [a] = await ctx.db.sql`
+    select status, external_account_id from orbit.integration_accounts
+     where user_id = ${userId}::uuid and provider = 'linkedin'`;
+  if (!a?.external_account_id) return queued({ queued: false, reason: "not_connected" });
+  if (a.status !== "active") return queued({ queued: false, reason: a.status });
+  const id = await sqlQueue(ctx.db).enqueue({
+    kind: "sync.linkedin",
+    userId,
+    payload: { mode: "sync" },
+    dedupeKey: `linkedin-manual:${userId}:${slot(ctx.now())}`
+  });
+  return queued(id === null ? { queued: false, reason: "already_running" } : { queued: true });
+}
+var INTEGRATION_ROUTES = {
+  "/google/sync": { method: "POST", auth: true, run: googleSync },
+  "/linkedin/connect/start": { method: "POST", auth: true, run: linkedinConnectStart },
+  "/linkedin/status": { method: "GET|POST", auth: true, run: linkedinStatus },
+  "/linkedin/sync": { method: "POST", auth: true, run: linkedinSync },
+  "/linkedin/search": { method: "POST", auth: true, run: linkedinSearch },
+  "/linkedin/reader": { method: "POST", auth: true, run: linkedinReader }
+};
+async function linkedinReader(ctx) {
+  const [a] = await ctx.db.sql`
+    select status, external_account_id from orbit.integration_accounts
+     where user_id = ${ctx.userId}::uuid and provider = 'linkedin'`;
+  if (!a?.external_account_id || a.status !== "active")
+    return json(200, { ok: false, reason: "not_connected" });
+  if (!ctx.env.connectorsSigningKey) return json(200, { ok: false, reason: "unconfigured" });
+  return json(200, {
+    ok: true,
+    accountId: a.external_account_id,
+    // the second version: a first-version token for an account linked here no longer opens it (accountTokenOk)
+    token: await accountTokenV2(a.external_account_id, ctx.env.connectorsSigningKey)
+  });
+}
+var LINKEDIN_SEARCHES_PER_DAY = 80;
+async function linkedinSearch(ctx) {
+  const body2 = await readJson(ctx.req, { optional: true });
+  const q = typeof body2.q === "string" ? body2.q.replace(/\s+/g, " ").trim().slice(0, 120) : "";
+  if (q.length < 2) throw badRequest("q must be at least 2 characters");
+  const userId = ctx.userId;
+  const [a] = await ctx.db.sql`
+    select status, external_account_id from orbit.integration_accounts
+     where user_id = ${userId}::uuid and provider = 'linkedin'`;
+  if (!a?.external_account_id || a.status !== "active")
+    return json(200, { ok: false, reason: "not_connected" });
+  const unipile = unipileFor(ctx);
+  if (!unipile.configured) return json(200, { ok: false, reason: "unconfigured" });
+  const [n] = await ctx.db.sql`
+    select count(*)::int as n from orbit.audit_log
+     where user_id = ${userId}::uuid and action = 'linkedin.search'
+       and created_at > ${new Date(ctx.now().getTime() - 864e5)}::timestamptz`;
+  if ((n?.n ?? 0) >= LINKEDIN_SEARCHES_PER_DAY) return json(200, { ok: false, reason: "limit" });
+  await ctx.db.sql`
+    insert into orbit.audit_log (user_id, actor, action, target_table) values (${userId}::uuid, 'user', 'linkedin.search', 'people')`;
+  const r = await unipile.searchPeople(a.external_account_id, q);
+  if (!r.ok) return json(200, { ok: false, reason: "error" });
+  return json(200, { ok: true, people: r.value });
+}
+
+// supabase/functions/orbit-api/routes/calls.ts
+var STATE_TTL_MS4 = 10 * 6e4;
+var MAX_CALL_EVENTS = 10;
+var zoomNotSetUp = () => json(
+  503,
+  {
+    error: {
+      code: "unconfigured",
+      message: ZOOM_NOT_SET_UP,
+      missing: ["ZOOM_CLIENT_ID", "ZOOM_CLIENT_SECRET"]
+    }
+  },
+  { "x-orbit-connector": "unconfigured" }
+);
+var conflict = (code, message) => new HttpError(409, code, message);
+var zoomRedirect = (ctx) => ctx.env.zoom?.redirectUri ?? `${functionsBase(ctx)}/orbit-api/zoom/callback`;
+async function zoomConfig(ctx) {
+  const keys = await zoomKeys(ctx.env.zoom, ctx.db);
+  return keys ? { ...keys, redirectUri: zoomRedirect(ctx), fetch: ctx.fetch } : void 0;
+}
+function callEvents(b) {
+  const raw = b.events;
+  if (!Array.isArray(raw) || !raw.length) throw badRequest("events is required");
+  if (raw.length > MAX_CALL_EVENTS) throw badRequest(`at most ${MAX_CALL_EVENTS} events`);
+  const s = (v, max) => typeof v === "string" && v.trim() && v.length <= max ? v.trim() : void 0;
+  return raw.map((e, i) => {
+    const o = e ?? {};
+    const id = s(o.id, 200);
+    const startAt = s(o.startAt, 40);
+    const endAt = s(o.endAt, 40);
+    if (!id || !startAt || !endAt || Number.isNaN(Date.parse(startAt)) || Number.isNaN(Date.parse(endAt)))
+      throw badRequest(`events[${i}] needs an id, startAt and endAt`);
+    const url = s(o.conferenceUrl, 500);
+    const attendees = (Array.isArray(o.attendees) ? o.attendees : []).slice(0, 10).map((a) => {
+      const x = a ?? {};
+      return { name: s(x.name, 200), email: s(x.email, 320) };
+    });
+    return {
+      id,
+      startAt,
+      endAt,
+      title: s(o.title, 300),
+      conferenceUrl: url && /^https:\/\//i.test(url) ? url : void 0,
+      attendees
+    };
+  });
+}
+async function zoomConnectStart(ctx) {
+  const cfg = await zoomConfig(ctx);
+  if (!cfg) return zoomNotSetUp();
+  await readJson(ctx.req, { optional: true });
+  const now = ctx.now();
+  const state = randomToken(32);
+  const { verifier, challenge } = await pkcePair();
+  await ctx.db.sql`
+    insert into orbit.oauth_states (state, code_verifier, redirect_to, user_id, scopes, created_at, expires_at)
+    values (${state}, ${verifier}, ${`${ctx.env.appUrl}/settings`}, ${ctx.userId}::uuid, ${[...ZOOM_SCOPES]}::text[],
+            ${now}::timestamptz, ${new Date(now.getTime() + STATE_TTL_MS4)}::timestamptz)`;
+  return json(200, { url: zoomAuthUrl(cfg, { state, challenge }) });
+}
+var settings = (ctx, outcome) => redirect(`${ctx.env.appUrl}/settings?zoom=${outcome}`);
+async function zoomCallback(ctx) {
+  const cfg = await zoomConfig(ctx);
+  if (!cfg) return settings(ctx, "failed");
+  const q = ctx.url.searchParams;
+  const state = q.get("state");
+  if (!state) return settings(ctx, "failed");
+  const [st] = await ctx.db.sql`
+    delete from orbit.oauth_states where state = ${state}
+    returning code_verifier, user_id, scopes, expires_at`;
+  if (!st?.user_id || !st.scopes.includes("meeting:write:meeting") || new Date(st.expires_at).getTime() < ctx.now().getTime())
+    return settings(ctx, "failed");
+  const userId = st.user_id;
+  const code = q.get("code");
+  if (q.get("error") || !code) return settings(ctx, "failed");
+  let tokens3;
+  try {
+    tokens3 = await zoomExchangeCode(cfg, code, st.code_verifier);
+  } catch {
+    return settings(ctx, "failed");
+  }
+  let me2;
+  try {
+    me2 = await zoomMe(
+      { accessToken: async () => tokens3.access_token, refreshed: async () => tokens3.access_token },
+      ctx.fetch
+    );
+  } catch {
+    if (tokens3.refresh_token) await zoomRevoke(cfg, tokens3.refresh_token);
+    return settings(ctx, "failed");
+  }
+  const vault = sqlVault(ctx.db);
+  const stored2 = await storeZoomTokens(vault, userId, tokens3, ctx.now());
+  const scopes = (tokens3.scope ?? "").split(/[\s,]+/).filter(Boolean);
+  const zoom = {
+    email: me2.email,
+    accessSecretId: stored2.accessSecretId,
+    accessExpiresAt: stored2.accessExpiresAt
+  };
+  await ctx.db.sql`
+    insert into orbit.integration_accounts (user_id, provider, status, email, scopes, external_account_id,
+                                            token_secret_id, sync_state, last_error)
+    values (${userId}::uuid, 'zoom', 'active', ${me2.email ?? null}, ${scopes}::text[], ${me2.id},
+            ${stored2.refreshSecretId ?? null}::uuid, ${{ zoom }}::jsonb, null)
+    on conflict (user_id, provider) do update set
+      status = case when coalesce(excluded.token_secret_id, orbit.integration_accounts.token_secret_id) is null
+                    then 'needs_reauth' else 'active' end,
+      email = excluded.email,
+      scopes = excluded.scopes,
+      external_account_id = excluded.external_account_id,
+      token_secret_id = coalesce(excluded.token_secret_id, orbit.integration_accounts.token_secret_id),
+      sync_state = jsonb_set(coalesce(orbit.integration_accounts.sync_state, '{}'::jsonb), '{zoom}',
+                             jsonb_strip_nulls(coalesce(orbit.integration_accounts.sync_state->'zoom', '{}'::jsonb)
+                                               || ${zoom}::jsonb)),
+      last_error = null`;
+  await ctx.db.sql`
+    insert into orbit.audit_log (user_id, actor, action, target_table, details)
+    values (${userId}::uuid, 'user', 'zoom.connected', 'integration_accounts', ${{ scopes: scopes.length }}::jsonb)`;
+  return settings(ctx, "connected");
+}
+async function zoomStatus(ctx) {
+  const keys = await zoomKeys(ctx.env.zoom, ctx.db);
+  if (!keys) return json(200, { configured: false, status: "not_connected" });
+  const row = await loadZoomRow(ctx.db, ctx.userId);
+  const status4 = !row || row.status === "revoked" || row.status === "connecting" ? "not_connected" : row.status === "active" || row.status === "needs_reauth" ? row.status : "error";
+  const out = {
+    configured: true,
+    status: status4,
+    ...status4 !== "not_connected" && row?.state.email ? { email: row.state.email } : {},
+    ...status4 !== "not_connected" && row?.lastSyncedAt ? { lastSyncedAt: row.lastSyncedAt } : {}
+  };
+  return json(200, out);
+}
+async function zoomDisconnect(ctx) {
+  const cfg = await zoomConfig(ctx);
+  if (!cfg) return zoomNotSetUp();
+  await readJson(ctx.req, { optional: true });
+  const userId = ctx.userId;
+  const row = await loadZoomRow(ctx.db, userId);
+  if (!row) return json(200, { ok: true });
+  const vault = sqlVault(ctx.db);
+  let revoked = false;
+  if (row.refreshSecretId) {
+    const refresh2 = await vault.get(row.refreshSecretId);
+    if (refresh2) revoked = await zoomRevoke(cfg, refresh2);
+  }
+  if (!revoked && row.state.accessSecretId) {
+    const access = await vault.get(row.state.accessSecretId);
+    if (access) revoked = await zoomRevoke(cfg, access);
+  }
+  if (row.refreshSecretId) await vault.delete(row.refreshSecretId);
+  if (row.state.accessSecretId) await vault.delete(row.state.accessSecretId);
+  await ctx.db.sql`
+    update orbit.integration_accounts
+       set status = 'revoked', token_secret_id = null, last_error = null,
+           sync_state = jsonb_set(coalesce(sync_state, '{}'::jsonb), '{zoom}',
+                                  coalesce(sync_state->'zoom', '{}'::jsonb) - 'accessSecretId' - 'accessExpiresAt')
+     where user_id = ${userId}::uuid and provider = 'zoom'`;
+  await ctx.db.sql`
+    insert into orbit.audit_log (user_id, actor, action, target_table, details)
+    values (${userId}::uuid, 'user', 'zoom.disconnect', 'integration_accounts', ${{ revokedAtZoom: revoked }}::jsonb)`;
+  return json(200, { ok: true, revokedAtZoom: revoked });
+}
+async function zoomReady(ctx) {
+  const z9 = await zoomFor(ctx.db, sqlVault(ctx.db), ctx.env.zoom, zoomRedirect(ctx), ctx.userId, {
+    fetch: ctx.fetch,
+    now: ctx.now
+  });
+  if (!z9) return zoomNotSetUp();
+  const row = await loadZoomRow(ctx.db, ctx.userId);
+  if (!row || row.status === "revoked" || row.status === "connecting")
+    throw conflict("not_connected", "Zoom is not connected");
+  if (row.status === "needs_reauth") throw conflict("needs_reauth", "sign in with Zoom again");
+  return z9;
+}
+var zoomFailure = (e) => {
+  if (e instanceof ZoomSignInNeeded) throw conflict("needs_reauth", "sign in with Zoom again");
+  if (e instanceof ZoomApiError) throw new HttpError(502, "upstream", `Zoom answered ${e.status}`);
+  throw e;
+};
+async function zoomNotes(ctx) {
+  const z9 = await zoomReady(ctx);
+  if (z9 instanceof Response) return z9;
+  const events = callEvents(await readJson(ctx.req));
+  let out;
+  try {
+    out = await zoomNotesFor(z9.tokens, events, ctx.fetch);
+  } catch (e) {
+    return zoomFailure(e);
+  }
+  await ctx.db.sql`
+    update orbit.integration_accounts set last_synced_at = ${ctx.now()}::timestamptz, last_error = null
+     where user_id = ${ctx.userId}::uuid and provider = 'zoom'`;
+  return json(200, out);
+}
+async function zoomMeetings(ctx) {
+  const z9 = await zoomReady(ctx);
+  if (z9 instanceof Response) return z9;
+  const b = await readJson(ctx.req);
+  const topic = typeof b.topic === "string" && b.topic.trim() ? b.topic.trim().slice(0, 200) : "Coffee chat";
+  const startAt = typeof b.startAt === "string" ? b.startAt : "";
+  if (Number.isNaN(Date.parse(startAt))) throw badRequest("startAt must be an ISO time");
+  const minutes = Number(b.minutes ?? 30);
+  if (!Number.isFinite(minutes) || minutes <= 0 || minutes > 600)
+    throw badRequest("minutes must be 1 to 600");
+  const timezone = typeof b.timezone === "string" && b.timezone.length <= 64 ? b.timezone : void 0;
+  try {
+    const r = await zoomCreateMeeting(
+      z9.tokens,
+      { topic, startAt, minutes, timezone },
+      ctx.fetch
+    );
+    return json(200, r);
+  } catch (e) {
+    return zoomFailure(e);
+  }
+}
+async function googleRow(ctx) {
+  const [g] = await ctx.db.sql`
+    select scopes, status, email from orbit.integration_accounts
+     where user_id = ${ctx.userId}::uuid and provider = 'google'`;
+  return g;
+}
+async function meetRow(ctx) {
+  const [m] = await ctx.db.sql`
+    select status, last_synced_at from orbit.integration_accounts
+     where user_id = ${ctx.userId}::uuid and provider = 'google_meet'`;
+  return m;
+}
+async function meetState(ctx) {
+  const [m, g] = await Promise.all([meetRow(ctx), googleRow(ctx)]);
+  if (!m || m.status === "revoked") return { status: "not_connected" };
+  const base = {
+    ...g?.email ? { email: g.email } : {},
+    ...m.last_synced_at ? { lastSyncedAt: new Date(m.last_synced_at).toISOString() } : {}
+  };
+  if (!g || g.status === "needs_reauth" || g.status === "revoked") return { status: "needs_reauth", ...base };
+  if (!hasMeetScope(g.scopes)) return { status: "needs_consent", ...base };
+  return { status: "active", ...base };
+}
+async function meetStatus(ctx) {
+  return json(200, await meetState(ctx));
+}
+async function meetConnectStart(ctx) {
+  await readJson(ctx.req, { optional: true });
+  if (!ctx.google)
+    return json(
+      503,
+      {
+        error: { code: "unconfigured", message: "Google is not set up", missing: ["ORBIT_GOOGLE_CLIENT_ID"] }
+      },
+      { "x-orbit-connector": "unconfigured" }
+    );
+  const userId = ctx.userId;
+  await ctx.db.sql`
+    insert into orbit.integration_accounts (user_id, provider, status, scopes)
+    values (${userId}::uuid, 'google_meet', 'active', ${[MEET_SCOPE]}::text[])
+    on conflict (user_id, provider) do update set status = 'active', last_error = null`;
+  await ctx.db.sql`
+    insert into orbit.audit_log (user_id, actor, action, target_table, details)
+    values (${userId}::uuid, 'user', 'meet.on', 'integration_accounts', ${{}}::jsonb)`;
+  const g = await googleRow(ctx);
+  if (hasMeetScope(g?.scopes)) return json(200, { connected: true });
+  const url = await meetConsentUrl(ctx.db, ctx.google, userId, ctx.env.appUrl, ctx.now());
+  return json(200, { connected: false, url });
+}
+async function meetDisconnect(ctx) {
+  await readJson(ctx.req, { optional: true });
+  await ctx.db.sql`
+    update orbit.integration_accounts set status = 'revoked', last_error = null
+     where user_id = ${ctx.userId}::uuid and provider = 'google_meet'`;
+  await ctx.db.sql`
+    insert into orbit.audit_log (user_id, actor, action, target_table, details)
+    values (${ctx.userId}::uuid, 'user', 'meet.off', 'integration_accounts', ${{}}::jsonb)`;
+  return json(200, { ok: true });
+}
+async function meetNotes(ctx) {
+  const events = callEvents(await readJson(ctx.req));
+  const st = await meetState(ctx);
+  if (st.status === "not_connected") throw conflict("not_connected", "Google Meet is not on");
+  if (st.status === "needs_reauth") throw conflict("needs_reauth", "reconnect Google");
+  if (st.status === "needs_consent") throw conflict("needs_consent", "allow Google Meet transcripts");
+  const tokens3 = ctx.services().tokens;
+  if (!tokens3) throw new HttpError(503, "unconfigured", "Google is not set up");
+  let out;
+  try {
+    out = await meetNotesFor(tokens3, ctx.userId, events, ctx.fetch);
+  } catch (e) {
+    if (e instanceof NeedsReauth) throw conflict("needs_reauth", "reconnect Google");
+    if (e instanceof MeetNeedsConsent) throw conflict("needs_consent", "allow Google Meet transcripts");
+    throw new HttpError(502, "upstream", "Google Meet did not answer");
+  }
+  await ctx.db.sql`
+    update orbit.integration_accounts set last_synced_at = ${ctx.now()}::timestamptz, last_error = null
+     where user_id = ${ctx.userId}::uuid and provider = 'google_meet'`;
+  return json(200, out);
+}
+var callRoutes = {
+  "/zoom/connect/start": { method: "POST", auth: true, run: zoomConnectStart },
+  "/zoom/callback": { method: "GET", auth: false, run: zoomCallback },
+  "/zoom/status": { method: "GET|POST", auth: true, run: zoomStatus },
+  "/zoom/disconnect": { method: "POST", auth: true, run: zoomDisconnect },
+  "/zoom/notes": { method: "POST", auth: true, run: zoomNotes },
+  "/zoom/meetings": { method: "POST", auth: true, run: zoomMeetings },
+  "/meet/connect/start": { method: "POST", auth: true, run: meetConnectStart },
+  "/meet/status": { method: "GET|POST", auth: true, run: meetStatus },
+  "/meet/disconnect": { method: "POST", auth: true, run: meetDisconnect },
+  "/meet/notes": { method: "POST", auth: true, run: meetNotes }
 };
 
 // supabase/functions/orbit-api/routes/drafts.ts
@@ -20272,7 +21574,7 @@ async function ownRows(db2, me2) {
            linkedin_slug, email_hash, school, is_alumni, closeness::int as closeness, updated_at
       from orbit.friend_shares where owner_user_id = ${me2}::uuid order by display_name`;
 }
-async function settings(ctx) {
+async function settings2(ctx) {
   const b = await body(ctx);
   const db2 = ctx.db;
   const me2 = ctx.userId;
@@ -20527,7 +21829,7 @@ var friendRoutes = {
   "/friends/accept": { method: "POST", auth: true, run: accept },
   "/friends/decline": { method: "POST", auth: true, run: decline },
   "/friends/end": { method: "POST", auth: true, run: end },
-  "/friends/settings": { method: "POST", auth: true, run: settings },
+  "/friends/settings": { method: "POST", auth: true, run: settings2 },
   "/friends/preview": { method: "GET|POST", auth: true, run: preview },
   "/friends/shares": { method: "POST", auth: true, run: sharesFlat },
   "/friends/asks": {
@@ -21702,355 +23004,6 @@ async function list4(ctx) {
 var inboxRoutes = {
   "/inbox/list": { method: "POST", auth: true, run: list4 }
 };
-
-// supabase/functions/_shared/accountToken.ts
-async function accountToken(accountId, signingKey) {
-  const key = await crypto.subtle.importKey(
-    "raw",
-    new TextEncoder().encode(signingKey),
-    { name: "HMAC", hash: "SHA-256" },
-    false,
-    ["sign"]
-  );
-  const sig = new Uint8Array(
-    await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(`unipile-account:${accountId}`))
-  );
-  return btoa(String.fromCharCode(...sig)).replace(/=+$/, "").replace(/\+/g, "-").replace(/\//g, "_");
-}
-function accountTokenV2(accountId, signingKey) {
-  return accountToken(`v2:${accountId}`, signingKey);
-}
-
-// supabase/functions/_shared/providers/unipileSync.ts
-var when = z.union([z.string(), z.number()]).nullish();
-var unipileMeSchema = z.looseObject({
-  provider_id: z.string().nullish(),
-  public_identifier: z.string().nullish(),
-  first_name: z.string().nullish(),
-  last_name: z.string().nullish()
-});
-var unipileRelationSchema = z.looseObject({
-  member_id: z.string().nullish(),
-  member_urn: z.string().nullish(),
-  public_identifier: z.string().nullish(),
-  public_profile_url: z.string().nullish(),
-  first_name: z.string().nullish(),
-  last_name: z.string().nullish(),
-  headline: z.string().nullish(),
-  profile_picture_url: z.string().nullish(),
-  created_at: when
-});
-var unipileChatSchema = z.looseObject({
-  id: z.string(),
-  type: z.union([z.number(), z.string()]).nullish(),
-  name: z.string().nullish(),
-  attendee_provider_id: z.string().nullish(),
-  timestamp: when,
-  content_type: z.string().nullish()
-});
-var unipileAttendeeSchema = z.looseObject({
-  id: z.string().nullish(),
-  provider_id: z.string().nullish(),
-  name: z.string().nullish(),
-  is_self: z.union([z.number(), z.boolean()]).nullish(),
-  profile_url: z.string().nullish(),
-  picture_url: z.string().nullish(),
-  specifics: z.looseObject({ occupation: z.string().nullish(), location: z.string().nullish() }).nullish()
-});
-var unipileMessageSchema = z.looseObject({
-  id: z.string(),
-  chat_id: z.string().nullish(),
-  sender_id: z.string().nullish(),
-  sender_attendee_id: z.string().nullish(),
-  text: z.string().nullish(),
-  timestamp: when,
-  is_sender: z.union([z.number(), z.boolean()]).nullish(),
-  is_event: z.union([z.number(), z.boolean()]).nullish(),
-  hidden: z.union([z.number(), z.boolean()]).nullish(),
-  deleted: z.union([z.number(), z.boolean()]).nullish()
-});
-var page = (item2) => z.looseObject({ items: z.array(item2).default([]), cursor: z.string().nullish() });
-var unipileSearchItemSchema2 = z.looseObject({
-  id: z.string().nullish(),
-  name: z.string().nullish(),
-  headline: z.string().nullish(),
-  location: z.string().nullish(),
-  public_profile_url: z.string().nullish(),
-  profile_url: z.string().nullish(),
-  profile_picture_url: z.string().nullish(),
-  network_distance: z.union([z.string(), z.number()]).nullish()
-});
-var RELATIONS_LIMIT = 50;
-var CHATS_LIMIT = 250;
-var MESSAGES_LIMIT = 100;
-function createUnipileSync(opts) {
-  const configured2 = !!opts.apiKey && !!opts.baseUrl;
-  const base = trimBase(opts.baseUrl ?? "");
-  const headers2 = () => ({ "X-API-KEY": opts.apiKey ?? "" });
-  const no2 = () => unconfigured2("unipile", "API key or base URL");
-  const get2 = (path, schema) => requestJson(opts, { provider: "unipile", url: `${base}${path}`, headers: headers2(), schema });
-  return {
-    configured: configured2,
-    async me(accountId) {
-      if (!configured2) return no2();
-      return get2(`/api/v1/users/me${query({ account_id: accountId })}`, unipileMeSchema);
-    },
-    async relations(accountId, cursor) {
-      if (!configured2) return no2();
-      return get2(
-        `/api/v1/users/relations${query({ account_id: accountId, limit: RELATIONS_LIMIT, cursor: cursor ?? void 0 })}`,
-        page(unipileRelationSchema)
-      );
-    },
-    async chats(accountId, o) {
-      if (!configured2) return no2();
-      return get2(
-        `/api/v1/chats${query({ account_id: accountId, limit: CHATS_LIMIT, after: o.after, cursor: o.cursor ?? void 0 })}`,
-        page(unipileChatSchema)
-      );
-    },
-    async attendees(chatId) {
-      if (!configured2) return no2();
-      const r = await get2(
-        `/api/v1/chats/${encodeURIComponent(chatId)}/attendees`,
-        page(unipileAttendeeSchema)
-      );
-      return r.ok ? { ok: true, value: r.value.items } : r;
-    },
-    async messages(chatId) {
-      if (!configured2) return no2();
-      const r = await get2(
-        `/api/v1/chats/${encodeURIComponent(chatId)}/messages${query({ limit: MESSAGES_LIMIT })}`,
-        page(unipileMessageSchema)
-      );
-      return r.ok ? { ok: true, value: r.value.items } : r;
-    },
-    async hostedLink(b) {
-      if (!configured2) return no2();
-      return requestJson(opts, {
-        provider: "unipile",
-        url: `${base}/api/v1/hosted/accounts/link`,
-        method: "POST",
-        headers: headers2(),
-        body: {
-          type: "create",
-          providers: [b.provider ?? "LINKEDIN"],
-          api_url: base,
-          expiresOn: b.expiresOn,
-          name: b.name,
-          notify_url: b.notifyUrl,
-          success_redirect_url: b.successRedirectUrl,
-          ...b.failureRedirectUrl ? { failure_redirect_url: b.failureRedirectUrl } : {}
-        },
-        schema: z.looseObject({ url: z.string() })
-      });
-    },
-    async searchPeople(accountId, keywords, limit = 8) {
-      if (!configured2) return no2();
-      const r = await requestJson(opts, {
-        provider: "unipile",
-        url: `${base}/api/v1/linkedin/search${query({ account_id: accountId, limit })}`,
-        method: "POST",
-        headers: headers2(),
-        body: { api: "classic", category: "people", keywords, network_distance: [1, 2, 3] },
-        schema: page(unipileSearchItemSchema2)
-      });
-      if (!r.ok) return r;
-      const degree = (d) => {
-        const m = /(\d)/.exec(String(d ?? ""));
-        return m ? Number(m[1]) : void 0;
-      };
-      return {
-        ok: true,
-        value: r.value.items.filter((p) => !!p.id && !!p.name?.trim()).map((p) => ({
-          memberId: p.id,
-          name: p.name.trim(),
-          headline: p.headline?.trim() || void 0,
-          location: p.location?.trim() || void 0,
-          profileUrl: p.public_profile_url || p.profile_url || void 0,
-          pictureUrl: p.profile_picture_url || void 0,
-          distance: degree(p.network_distance)
-        }))
-      };
-    }
-  };
-}
-
-// supabase/functions/orbit-api/routes/integrations.ts
-var queued = (q) => json(200, q);
-async function googleAccount(ctx) {
-  const [a] = await ctx.db.sql`
-    select status, scopes, sync_state from orbit.integration_accounts
-     where user_id = ${ctx.userId}::uuid and provider = 'google'`;
-  return a;
-}
-async function googleSync(ctx) {
-  const body2 = await readJson(ctx.req, { optional: true });
-  const mode2 = body2.mode ?? "incremental";
-  if (mode2 !== "backfill" && mode2 !== "incremental") throw badRequest("mode must be backfill or incremental");
-  const userId = ctx.userId;
-  const acct = await googleAccount(ctx);
-  if (!acct?.scopes.some((s) => s.endsWith("gmail.readonly")))
-    return queued({ queued: false, reason: "not_connected" });
-  if (acct.status !== "active") return queued({ queued: false, reason: acct.status });
-  const q = sqlQueue(ctx.db);
-  if (mode2 === "backfill") {
-    const phase = acct.sync_state?.gmail?.backfill;
-    if (phase?.phase && phase.phase !== "complete")
-      return queued({ queued: false, reason: "already_running" });
-    const id2 = await q.enqueue({
-      kind: "sync.gmail.backfill",
-      userId,
-      payload: phase?.phase === "complete" ? { phase: "recent", restart: true } : { phase: "recent" },
-      dedupeKey: `gmail-backfill:${userId}:manual:${slot(ctx.now())}`
-    });
-    return queued(id2 === null ? { queued: false, reason: "already_running" } : { queued: true });
-  }
-  const id = await q.enqueue({
-    kind: "sync.gmail.incremental",
-    userId,
-    payload: { reason: "manual" },
-    dedupeKey: `gmail-manual:${userId}:${slot(ctx.now())}`
-  });
-  if (acct.scopes.some((s) => /calendar\.(readonly|events)$/.test(s)))
-    await q.enqueue({
-      kind: "sync.calendar",
-      userId,
-      payload: { reason: "manual" },
-      dedupeKey: `calendar-manual:${userId}:${slot(ctx.now())}`
-    });
-  return queued(id === null ? { queued: false, reason: "already_running" } : { queued: true });
-}
-function unipileFor(ctx) {
-  return createUnipileSync({ fetch: ctx.fetch, apiKey: ctx.env.unipileKey, baseUrl: ctx.env.unipileBase });
-}
-var missingUnipile = (ctx) => [
-  ...ctx.env.unipileKey ? [] : ["UNIPILE_API_KEY"],
-  ...ctx.env.unipileBase ? [] : ["UNIPILE_BASE_URL"]
-];
-function functionsBase(ctx) {
-  if (ctx.env.functionsUrl) return ctx.env.functionsUrl.replace(/\/+$/, "");
-  const fromRedirect = ctx.env.googleRedirectUri?.match(/^(https?:\/\/[^/]+\/functions\/v1)\//)?.[1];
-  if (fromRedirect) return fromRedirect;
-  const href = `${ctx.url.origin}${ctx.url.pathname}`;
-  const i = href.indexOf("/orbit-api");
-  return i > 0 ? href.slice(0, i) : ctx.url.origin;
-}
-async function linkedinConnectStart(ctx) {
-  await readJson(ctx.req, { optional: true });
-  const missing = missingUnipile(ctx);
-  const secret = await resolveSecret(
-    (name) => name === "ORBIT_UNIPILE_WEBHOOK_SECRET" ? ctx.env.unipileWebhookSecret : void 0,
-    ctx.db,
-    "ORBIT_UNIPILE_WEBHOOK_SECRET",
-    "orbit_unipile_webhook_secret"
-  );
-  if (!secret) missing.push("ORBIT_UNIPILE_WEBHOOK_SECRET");
-  if (missing.length) return unconfigured({}, missing);
-  const userId = ctx.userId;
-  const r = await unipileFor(ctx).hostedLink({
-    name: userId,
-    notifyUrl: `${functionsBase(ctx)}/orbit-webhooks/unipile/account?token=${encodeURIComponent(secret)}`,
-    successRedirectUrl: `${ctx.env.appUrl}/settings?linkedin=connected`,
-    failureRedirectUrl: `${ctx.env.appUrl}/settings?linkedin=failed`,
-    expiresOn: new Date(ctx.now().getTime() + 36e5).toISOString()
-  });
-  if (!r.ok) throw new HttpError(502, "upstream", "LinkedIn connection is unavailable right now");
-  await ctx.db.sql`
-    insert into orbit.integration_accounts (user_id, provider, status)
-    values (${userId}::uuid, 'linkedin', 'connecting')
-    on conflict (user_id, provider) do update set
-      status = case when orbit.integration_accounts.status in ('active', 'parked')
-                    then orbit.integration_accounts.status else 'connecting' end`;
-  await ctx.db.sql`
-    insert into orbit.audit_log (user_id, actor, action, target_table)
-    values (${userId}::uuid, 'user', 'linkedin.connect_start', 'integration_accounts')`;
-  const out = { url: r.value.url };
-  return json(200, out);
-}
-async function linkedinStatus(ctx) {
-  const userId = ctx.userId;
-  const [a] = await ctx.db.sql`
-    select status, external_account_id, last_synced_at from orbit.integration_accounts
-     where user_id = ${userId}::uuid and provider = 'linkedin'`;
-  const [n] = await ctx.db.sql`
-    select count(distinct pi.person_id)::int as n from orbit.person_identities pi
-      join orbit.people p on p.id = pi.person_id
-     where pi.user_id = ${userId}::uuid and pi.kind = 'linkedin_member' and pi.source = 'linkedin_relation'
-       and p.merged_into is null and p.deleted_at is null`;
-  const status4 = !a ? "not_connected" : a.status === "active" || a.status === "connecting" || a.status === "needs_reauth" || a.status === "parked" ? a.status : a.status === "revoked" ? "not_connected" : "error";
-  const out = {
-    status: status4,
-    accountId: a?.external_account_id ?? null,
-    lastSyncedAt: a?.last_synced_at ? new Date(a.last_synced_at).toISOString() : null,
-    relations: n?.n ?? 0
-  };
-  return json(200, out);
-}
-async function linkedinSync(ctx) {
-  await readJson(ctx.req, { optional: true });
-  const missing = missingUnipile(ctx);
-  if (missing.length) return unconfigured({}, missing);
-  const userId = ctx.userId;
-  const [a] = await ctx.db.sql`
-    select status, external_account_id from orbit.integration_accounts
-     where user_id = ${userId}::uuid and provider = 'linkedin'`;
-  if (!a?.external_account_id) return queued({ queued: false, reason: "not_connected" });
-  if (a.status !== "active") return queued({ queued: false, reason: a.status });
-  const id = await sqlQueue(ctx.db).enqueue({
-    kind: "sync.linkedin",
-    userId,
-    payload: { mode: "sync" },
-    dedupeKey: `linkedin-manual:${userId}:${slot(ctx.now())}`
-  });
-  return queued(id === null ? { queued: false, reason: "already_running" } : { queued: true });
-}
-var INTEGRATION_ROUTES = {
-  "/google/sync": { method: "POST", auth: true, run: googleSync },
-  "/linkedin/connect/start": { method: "POST", auth: true, run: linkedinConnectStart },
-  "/linkedin/status": { method: "GET|POST", auth: true, run: linkedinStatus },
-  "/linkedin/sync": { method: "POST", auth: true, run: linkedinSync },
-  "/linkedin/search": { method: "POST", auth: true, run: linkedinSearch },
-  "/linkedin/reader": { method: "POST", auth: true, run: linkedinReader }
-};
-async function linkedinReader(ctx) {
-  const [a] = await ctx.db.sql`
-    select status, external_account_id from orbit.integration_accounts
-     where user_id = ${ctx.userId}::uuid and provider = 'linkedin'`;
-  if (!a?.external_account_id || a.status !== "active")
-    return json(200, { ok: false, reason: "not_connected" });
-  if (!ctx.env.connectorsSigningKey) return json(200, { ok: false, reason: "unconfigured" });
-  return json(200, {
-    ok: true,
-    accountId: a.external_account_id,
-    // the second version: a first-version token for an account linked here no longer opens it (accountTokenOk)
-    token: await accountTokenV2(a.external_account_id, ctx.env.connectorsSigningKey)
-  });
-}
-var LINKEDIN_SEARCHES_PER_DAY = 80;
-async function linkedinSearch(ctx) {
-  const body2 = await readJson(ctx.req, { optional: true });
-  const q = typeof body2.q === "string" ? body2.q.replace(/\s+/g, " ").trim().slice(0, 120) : "";
-  if (q.length < 2) throw badRequest("q must be at least 2 characters");
-  const userId = ctx.userId;
-  const [a] = await ctx.db.sql`
-    select status, external_account_id from orbit.integration_accounts
-     where user_id = ${userId}::uuid and provider = 'linkedin'`;
-  if (!a?.external_account_id || a.status !== "active")
-    return json(200, { ok: false, reason: "not_connected" });
-  const unipile = unipileFor(ctx);
-  if (!unipile.configured) return json(200, { ok: false, reason: "unconfigured" });
-  const [n] = await ctx.db.sql`
-    select count(*)::int as n from orbit.audit_log
-     where user_id = ${userId}::uuid and action = 'linkedin.search'
-       and created_at > ${new Date(ctx.now().getTime() - 864e5)}::timestamptz`;
-  if ((n?.n ?? 0) >= LINKEDIN_SEARCHES_PER_DAY) return json(200, { ok: false, reason: "limit" });
-  await ctx.db.sql`
-    insert into orbit.audit_log (user_id, actor, action, target_table) values (${userId}::uuid, 'user', 'linkedin.search', 'people')`;
-  const r = await unipile.searchPeople(a.external_account_id, q);
-  if (!r.ok) return json(200, { ok: false, reason: "error" });
-  return json(200, { ok: true, people: r.value });
-}
 
 // supabase/functions/orbit-api/routes/memory.ts
 async function search2(ctx) {
@@ -23580,11 +24533,11 @@ function censusPeople(items) {
   return out;
 }
 function ledgerBucket(accountId, now, share) {
-  const day2 = now.toISOString().slice(0, 10);
-  const end2 = /* @__PURE__ */ new Date(`${day2}T00:00:00Z`);
+  const day3 = now.toISOString().slice(0, 10);
+  const end2 = /* @__PURE__ */ new Date(`${day3}T00:00:00Z`);
   end2.setUTCDate(end2.getUTCDate() + 1);
   return {
-    key: `connectors:li:search:${day2}:${accountId}`,
+    key: `connectors:li:search:${day3}:${accountId}`,
     limit: Math.round(SEARCH_LEDGER_TOTAL * share),
     expires: end2.toISOString()
   };
@@ -24112,6 +25065,9 @@ async function profile(ctx) {
   const capGmail = ownCap2("dailySendCapGmail", SEND_CAPS.gmailPerDay);
   const capLinkedin = ownCap2("dailySendCapLinkedin", SEND_CAPS.linkedinPerDay);
   const weekly = ownCap2("weeklyOutreachTarget", WEEKLY_TARGET_MAX);
+  if (b.meetingLink !== void 0 && !["meet", "zoom", "none"].includes(String(b.meetingLink)))
+    throw badRequest("meetingLink is meet, zoom or none");
+  const meetingLink = b.meetingLink;
   const userId = ctx.userId;
   const given = {};
   if (postal !== void 0) given.postal_address = postal;
@@ -24126,6 +25082,7 @@ async function profile(ctx) {
   if (capGmail !== void 0) given.daily_send_cap_gmail = capGmail;
   if (capLinkedin !== void 0) given.daily_send_cap_linkedin = capLinkedin;
   if (weekly !== void 0) given.weekly_target = weekly;
+  if (meetingLink !== void 0) given.meeting_link = meetingLink === "meet" ? null : meetingLink;
   if (card !== void 0) given.style_card = card;
   const level = mode2 === void 0 ? null : AUTOPILOT_MODE_LEVEL[mode2];
   const keep = Object.fromEntries(Object.entries(given).filter(([, v]) => v !== null));
@@ -27231,7 +28188,7 @@ async function statusFor(db2, userId, src = NO_SOURCES) {
     db2.sql`
     select coalesce(onboarding->>'completed_at', '') <> '' as onboarded from orbit.users where id = ${userId}::uuid`
   ]);
-  const iso3 = (d) => d ? new Date(d).toISOString() : null;
+  const iso4 = (d) => d ? new Date(d).toISOString() : null;
   const integrations = accounts.map((a) => {
     const bf = a.sync_state?.gmail?.backfill;
     const li = a.sync_state?.linkedin;
@@ -27243,9 +28200,9 @@ async function statusFor(db2, userId, src = NO_SOURCES) {
       email: a.email,
       scopes: a.scopes,
       linked: a.linked,
-      lastSyncedAt: iso3(a.last_synced_at),
+      lastSyncedAt: iso4(a.last_synced_at),
       lastError: a.last_error,
-      watchExpiresAt: iso3(a.watch_expires_at),
+      watchExpiresAt: iso4(a.watch_expires_at),
       backfill: bf ? {
         phase: bf.phase ?? null,
         done: Number(bf.done ?? 0),
@@ -27383,8 +28340,8 @@ async function pull(db2, userId, o) {
       o.tables.map((t) => {
         const pos = o.cursor[t.table];
         const del = t.deletedWhen ? `(${t.deletedWhen})` : "false";
-        const stored = ["to_jsonb(t)", ...(t.omit ?? []).map((c) => `'${c}'`)].join(" - ");
-        const row = t.extra ? `(${stored}) || ${t.extra}` : stored;
+        const stored2 = ["to_jsonb(t)", ...(t.omit ?? []).map((c) => `'${c}'`)].join(" - ");
+        const row = t.extra ? `(${stored2}) || ${t.extra}` : stored2;
         const key = t.keySql ?? `t.${t.key}::text`;
         const params = [userId, pos?.t ?? PULL_FROM, pos?.k ?? "", o.upTo, o.limit];
         const off = sourceFilter(t, src, params);
@@ -28053,7 +29010,7 @@ var voiceRoutes = {
 };
 
 // supabase/functions/orbit-api/routes/x.ts
-var STATE_TTL_MS3 = 10 * 6e4;
+var STATE_TTL_MS5 = 10 * 6e4;
 function notSetUp(missing) {
   return json(
     503,
@@ -28075,7 +29032,7 @@ async function setup(ctx) {
     }
   };
 }
-var settings2 = (ctx, outcome) => redirect(`${ctx.env.appUrl}/settings?x=${outcome}`);
+var settings3 = (ctx, outcome) => redirect(`${ctx.env.appUrl}/settings?x=${outcome}`);
 async function xConnectStart(ctx) {
   const s = await setup(ctx);
   if (s instanceof Response) return s;
@@ -28089,7 +29046,7 @@ async function xConnectStart(ctx) {
   await ctx.db.sql`
     insert into orbit.oauth_states (state, code_verifier, redirect_to, user_id, scopes, created_at, expires_at)
     values (${state}, ${verifier}, ${`${ctx.env.appUrl}/settings`}, ${userId}::uuid, ${X_SCOPES}::text[],
-            ${now}::timestamptz, ${new Date(now.getTime() + STATE_TTL_MS3)}::timestamptz)`;
+            ${now}::timestamptz, ${new Date(now.getTime() + STATE_TTL_MS5)}::timestamptz)`;
   await ctx.db.sql`
     insert into orbit.audit_log (user_id, actor, action, target_table, details)
     values (${userId}::uuid, 'user', 'x.consent', 'integration_accounts', ${consent}::jsonb)`;
@@ -28105,22 +29062,22 @@ async function xConnectStart(ctx) {
 }
 async function xCallback(ctx) {
   const s = await setup(ctx);
-  if (s instanceof Response) return settings2(ctx, "failed");
+  if (s instanceof Response) return settings3(ctx, "failed");
   const q = ctx.url.searchParams;
   const state = q.get("state");
-  if (!state) return settings2(ctx, "failed");
+  if (!state) return settings3(ctx, "failed");
   const [st] = await ctx.db.sql`
     delete from orbit.oauth_states where state = ${state}
     returning code_verifier, user_id, scopes, expires_at`;
   if (!st?.user_id || !st.scopes.includes("dm.read") || new Date(st.expires_at).getTime() < ctx.now().getTime())
-    return settings2(ctx, "failed");
+    return settings3(ctx, "failed");
   const userId = st.user_id;
   const fail = async (why) => {
     await ctx.db.sql`
       update orbit.integration_accounts set status = case when status = 'active' then status else 'error' end,
              last_error = ${why}
        where user_id = ${userId}::uuid and provider = 'x'`;
-    return settings2(ctx, "failed");
+    return settings3(ctx, "failed");
   };
   if (q.get("error")) return fail("x_denied");
   const code = q.get("code");
@@ -28145,7 +29102,7 @@ async function xCallback(ctx) {
     if (tokens3.refresh_token) await xRevoke(s.oauth, tokens3.refresh_token, "refresh_token");
     return fail(e instanceof SocialBudgetSpent ? "x_limit" : "x_me");
   }
-  const stored = await storeXTokens(vault, userId, tokens3, ctx.now());
+  const stored2 = await storeXTokens(vault, userId, tokens3, ctx.now());
   const scopes = (tokens3.scope ?? X_SCOPES.join(" ")).split(/\s+/).filter(Boolean);
   const before = await loadXState(ctx.db, userId);
   await ctx.db.begin(async (tx) => {
@@ -28159,14 +29116,14 @@ async function xCallback(ctx) {
     }
     const x = {
       username: me2.username,
-      accessSecretId: stored.accessSecretId,
-      accessExpiresAt: stored.accessExpiresAt,
+      accessSecretId: stored2.accessSecretId,
+      accessExpiresAt: stored2.accessExpiresAt,
       ...before?.socialAccountId && before.socialAccountId !== me2.id ? { dmCursor: null, dmReadAt: null } : {}
     };
     await tx.sql`
       insert into orbit.integration_accounts (user_id, provider, status, scopes, social_account_id, token_secret_id,
                                               sync_state, last_error)
-      values (${userId}::uuid, 'x', 'active', ${scopes}::text[], ${me2.id}, ${stored.refreshSecretId ?? null}::uuid,
+      values (${userId}::uuid, 'x', 'active', ${scopes}::text[], ${me2.id}, ${stored2.refreshSecretId ?? null}::uuid,
               ${{ x }}::jsonb, null)
       on conflict (user_id, provider) do update set
         status = case when coalesce(excluded.token_secret_id, orbit.integration_accounts.token_secret_id) is null
@@ -28191,7 +29148,7 @@ async function xCallback(ctx) {
     payload: {},
     dedupeKey: `sync.x:${userId}:${me2.id}:${ctx.now().toISOString()}`
   });
-  return settings2(ctx, "connected");
+  return settings3(ctx, "connected");
 }
 async function xStatus(ctx) {
   const s = await setup(ctx);
@@ -28284,6 +29241,8 @@ var ROUTES = {
   ...voiceRoutes,
   ...adminRoutes,
   ...xRoutes,
+  // Zoom and Google Meet: notes from the call, and Zoom meetings for booked calls
+  ...callRoutes,
   ...socialRoutes,
   // plan 43: the optional sources' switches (PUT /sources/:source is matched by pattern) and texts' day counts
   ...sourcesRoutes,
@@ -28328,6 +29287,7 @@ function makeApiHandler(deps) {
       unipileBase: deps.env.unipileBase,
       ...deps.env.extraSources ? { extraSources: deps.env.extraSources } : {},
       ...deps.env.x ? { x: deps.env.x } : {},
+      ...deps.env.zoom ? { zoom: deps.env.zoom } : {},
       ...defined(deps.agent?.env)
     }
   };
@@ -28488,6 +29448,12 @@ Deno.serve(
       connectorsSigningKey: env("SUPABASE_SERVICE_ROLE_KEY"),
       ownerId,
       x: xConfigFromEnv(env),
+      // Zoom's app keys; when unset here they are read from orbit_private.secrets on use
+      zoom: {
+        clientId: env("ZOOM_CLIENT_ID"),
+        clientSecret: env("ZOOM_CLIENT_SECRET"),
+        redirectUri: env("ZOOM_REDIRECT_URI")
+      },
       extraSources
     },
     db,

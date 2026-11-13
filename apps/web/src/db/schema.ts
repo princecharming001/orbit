@@ -56,6 +56,9 @@ export interface IntegrationAccount {
     | 'wispr_export'
     | 'tracker_import'
     | 'imessage'
+    /** Zoom and Google Meet (engine/callNotes.ts): a copy of the server's status, or the demo's */
+    | 'zoom'
+    | 'google_meet'
     | 'demo';
   externalAccountId?: string;
   /** live LinkedIn: the token Orbit's server gave this browser for the account; account calls carry it */

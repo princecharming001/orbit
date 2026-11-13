@@ -13,6 +13,10 @@
  *                                                        user's linkedin (or instagram) account (user id =
  *                                                        payload.name) + backfill (or the first days)
  *
+ *   POST /zoom             x-zm-signature (ZOOM_WEBHOOK_SECRET_TOKEN)
+ *                                                        endpoint.url_validation → the challenge answered;
+ *                                                        recording.transcript_completed → noted on the host's zoom row
+ *
  * Instagram (plan 43): a message on an Instagram account goes to the personal lane (_shared/social/chats.ts), never
  * to the LinkedIn chat writer, and only while the student has Instagram on; account status events update whichever
  * account they name.
@@ -40,6 +44,7 @@ import { type Queue, sqlQueue } from '../_shared/queue.ts';
 import type { SocialMessage } from '../_shared/social/adapter.ts';
 import { afterInbound, storeSocialChat } from '../_shared/social/chats.ts';
 import { isOffered, sourceIsOn } from '../_shared/sources/states.ts';
+import { zoomWebhook } from '../_shared/zoom.ts';
 
 export interface WebhookDeps {
   db: Db | undefined;
@@ -53,6 +58,9 @@ export interface WebhookDeps {
    * to this list there (`offeredNow`), so a source launched or stopped from Settings takes effect within a minute.
    */
   offered?: OptionalSource[];
+  /** ZOOM_WEBHOOK_SECRET_TOKEN, read when a Zoom webhook arrives (a function secret, else orbit_private.secrets) */
+  zoomSecret?: () => Promise<string | undefined>;
+  now?: () => Date;
 }
 
 export function makeWebhookHandler(deps: WebhookDeps): (req: Request) => Promise<Response> {
@@ -93,6 +101,24 @@ export function makeWebhookHandler(deps: WebhookDeps): (req: Request) => Promise
         const out = await unipileAccount(deps.db, queue(), await body(req), provider, deps.offered ?? []);
         userId = out.userId;
         res = json(200, { ok: true, result: out.result });
+      } else if (path === '/zoom') {
+        const secret = deps.db ? await deps.zoomSecret?.() : undefined;
+        if (!secret || !deps.db) return unconfigured();
+        const raw = await req.text();
+        if (raw.length > 200_000) throw new HttpError(413, 'too_large', 'body too large');
+        const out = await zoomWebhook(
+          deps.db,
+          secret,
+          raw,
+          {
+            signature: req.headers.get('x-zm-signature'),
+            timestamp: req.headers.get('x-zm-request-timestamp'),
+          },
+          (deps.now ?? (() => new Date()))(),
+        );
+        if (out.status === 401) throw new HttpError(401, 'unauthorized', 'bad signature');
+        userId = out.userId ?? null;
+        res = json(out.status, out.body ?? {});
       } else throw new HttpError(404, 'not_found', 'no such route');
     } catch (e) {
       // a provider retries on 5xx: worth it when the database hiccups, never for a bad secret or route

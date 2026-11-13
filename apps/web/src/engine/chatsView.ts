@@ -9,6 +9,7 @@
 import type {
   ActionItem,
   CalendarEvent,
+  CallApp,
   CoffeeChat,
   EmailMessage,
   MeetingNote,
@@ -16,6 +17,7 @@ import type {
   PersonFact,
   Suggestion,
 } from '@orbit/core';
+import { callAppOfUrl } from '@orbit/core';
 
 const HOUR = 3_600_000;
 const DAY = 24 * HOUR;
@@ -77,7 +79,14 @@ export interface ChatsInput {
   actionItems?: ActionItem[];
   /** the notetaker connected now (Fathom, Granola, ...), by name; none when nothing records meetings */
   notetaker?: string;
+  /**
+   * the call apps that are on (Zoom, Google Meet): with no notetaker, a chat held on one of their links waits for
+   * that app's transcript
+   */
+  callApps?: CallApp[];
 }
+
+const CALL_APP_NAMES: Record<CallApp, string> = { zoom: 'Zoom', google_meet: 'Google Meet' };
 
 export function dayKey(d: Date | string, tz: string): string {
   return new Date(d).toLocaleDateString('en-CA', { timeZone: tz });
@@ -154,10 +163,11 @@ export function upcomingChats(input: ChatsInput, now: Date, tz: string): ChatsVi
       );
       return { kind: 'notes_in', facts, thankYou, noteId: note.id };
     }
-    if (!input.notetaker) return { kind: 'no_notetaker' };
-    return t - end < NOTES_GRACE_MS
-      ? { kind: 'waiting', app: input.notetaker }
-      : { kind: 'no_recording', app: input.notetaker };
+    const onCall = callAppOfUrl(ev.conferenceUrl);
+    const app =
+      input.notetaker ?? (onCall && input.callApps?.includes(onCall) ? CALL_APP_NAMES[onCall] : undefined);
+    if (!app) return { kind: 'no_notetaker' };
+    return t - end < NOTES_GRACE_MS ? { kind: 'waiting', app } : { kind: 'no_recording', app };
   };
 
   const rows: ChatRow[] = [];

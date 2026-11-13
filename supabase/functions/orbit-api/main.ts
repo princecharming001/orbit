@@ -58,6 +58,12 @@ Deno.serve(
       connectorsSigningKey: env('SUPABASE_SERVICE_ROLE_KEY'),
       ownerId,
       x: xConfigFromEnv(env),
+      // Zoom's app keys; when unset here they are read from orbit_private.secrets on use
+      zoom: {
+        clientId: env('ZOOM_CLIENT_ID'),
+        clientSecret: env('ZOOM_CLIENT_SECRET'),
+        redirectUri: env('ZOOM_REDIRECT_URI'),
+      },
       extraSources,
     },
     db,

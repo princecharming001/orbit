@@ -50,6 +50,9 @@ const RECORDED: ReadonlySet<NoteSource> = new Set([
   'fathom',
   'fireflies',
   'wispr_notetaker',
+  // a call's own transcript (Zoom, Google Meet)
+  'zoom',
+  'google_meet',
 ]);
 
 /** Past-tense talk: "met", "talked", "she offered to", "walked me through", "had a call". */

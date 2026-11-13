@@ -138,6 +138,8 @@ export const NOTE_SOURCE_LABELS: Record<NoteSource, string> = {
   wispr_notetaker: 'Wispr Flow',
   wispr_capture: 'Dictated',
   wispr_export: 'Wispr Flow',
+  zoom: 'Zoom',
+  google_meet: 'Google Meet',
   manual: 'Typed',
   email_ingest: 'Email',
   upload: 'Upload',

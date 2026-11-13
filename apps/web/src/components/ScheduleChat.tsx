@@ -2,7 +2,12 @@ import type { CoffeeChat } from '@orbit/core';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { useState } from 'react';
 import { db } from '../db/schema';
-import { calendarInvitesAvailable, canInviteFor, sendCalendarInvite } from '../engine/calendarInvite';
+import {
+  calendarInvitesAvailable,
+  callLinkName,
+  canInviteFor,
+  sendCalendarInvite,
+} from '../engine/calendarInvite';
 import { scheduleChatAt } from '../engine/move';
 import { useSession } from '../state/session';
 import { Button, Input, Label, Modal, Select, useToast } from '../ui';
@@ -49,6 +54,11 @@ export function ScheduleChatDialog({
   }, [chat?.scheduledEventId]);
   // a new time can go out as a Google Calendar invite, ticked by default; an existing time is just moved
   const [invite, setInvite] = useState(!current);
+  // the call link the student picked for invites (Settings, Scheduling)
+  const linkChoice = useLiveQuery(
+    async () => (user ? ((await db.settings.get(user.id))?.meetingLink ?? 'meet') : 'meet'),
+    [user?.id],
+  );
   if (!chat || !user) return null;
   const canInvite = !!email && !onCalendar && calendarInvitesAvailable(user);
   const at = new Date(when);
@@ -61,7 +71,7 @@ export function ScheduleChatDialog({
         toast.push(
           r.ok
             ? {
-                text: `On your calendar, and Google sent ${firstName} the invite${r.meetUrl ? ' with a Meet link' : ''}.`,
+                text: `On your calendar, and Google sent ${firstName} the invite${r.meetUrl ? ` with a ${callLinkName(r.meetUrl)}` : ''}.${r.linkNote ? ` ${r.linkNote}` : ''}`,
                 tone: 'good',
               }
             : { text: `Saved the time, but the invite did not go out: ${r.message}`, tone: 'bad', ttl: 9000 },
@@ -112,7 +122,12 @@ export function ScheduleChatDialog({
               onChange={(e) => setInvite(e.target.checked)}
             />
             <span>
-              Add it to my Google Calendar and send {firstName} the invite, with a Meet link
+              Add it to my Google Calendar and send {firstName} the invite
+              {linkChoice === 'zoom'
+                ? ', with a Zoom link'
+                : linkChoice === 'none'
+                  ? ''
+                  : ', with a Meet link'}
               <span className="block text-[12px] text-ink-3">To {email}</span>
             </span>
           </label>
