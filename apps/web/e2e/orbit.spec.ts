@@ -3414,9 +3414,13 @@ test.describe('One inbox (plan 22)', () => {
       .fill('Hi Rhea, the marketplace is live: search held up fine.');
     await conv.getByTestId('conversation-send').click();
     await expect(conv.getByTestId('conversation-error')).toHaveCount(0);
-    await expect(conv.getByTestId('conversation-input')).toHaveValue('', {
+    const input = conv.getByTestId('conversation-input');
+    await expect(input).toHaveValue('', {
       timeout: 15_000,
     });
+    // a draft Orbit was still writing when the student wrote their own does not land in the box afterwards
+    await expect(input).toHaveAttribute('placeholder', 'Write to Rhea', { timeout: 30_000 });
+    await expect(input).toHaveValue('');
   });
 
   test('the reply Orbit drafted is written in Messages, and the pipeline opens there', async ({ page }) => {

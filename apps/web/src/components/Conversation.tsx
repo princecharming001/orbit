@@ -133,11 +133,15 @@ export function Conversation({ person }: { person: Person }) {
       : undefined;
   const channel = picked ?? draftChannel ?? preferred;
   const [body, setBody] = useState('');
+  // the student wrote here (typed, or sent what they typed): a draft that arrives after that is not put in the box,
+  // where it would answer a message they already sent; Use it beside Orbit's draft puts it there
+  const wroteOwn = useRef(false);
   // the draft fills the box once, when it arrives and the student has not typed anything of their own
   const [filledFrom, setFilledFrom] = useState<string>();
   useEffect(() => {
     if (!usable || filledFrom === usable.id) return;
     setFilledFrom(usable.id);
+    if (wroteOwn.current) return;
     setBody((b) => (b.trim() ? b : (usable.bodyFinal ?? usable.bodyDraft)));
   }, [usable?.id, usable?.bodyFinal, usable?.bodyDraft, filledFrom]);
   const [busy, setBusy] = useState(false);
@@ -316,11 +320,19 @@ export function Conversation({ person }: { person: Person }) {
                 const text = usable ? (usable.bodyFinal ?? usable.bodyDraft) : undefined;
                 if (text && body === text) setBody('');
               }}
+              onUse={
+                usable && body !== (usable.bodyFinal ?? usable.bodyDraft)
+                  ? () => setBody(usable.bodyFinal ?? usable.bodyDraft)
+                  : undefined
+              }
             />
           )}
           <Textarea
             value={body}
-            onChange={(e) => setBody(e.target.value)}
+            onChange={(e) => {
+              if (e.target.value.trim()) wroteOwn.current = true;
+              setBody(e.target.value);
+            }}
             rows={usable && body ? Math.min(10, Math.max(3, body.split('\n').length + 1)) : 3}
             placeholder={drafting ? 'Orbit is writing a draft…' : `Write to ${person.firstName}`}
             aria-label={`Message to ${person.firstName}`}
@@ -380,7 +392,18 @@ export function Conversation({ person }: { person: Person }) {
 }
 
 /** What the draft in the box is for, with Dismiss: the waiting card, folded into the composer. */
-function SuggestedLine({ s, userId, onGone }: { s: Suggestion; userId: string; onGone: () => void }) {
+function SuggestedLine({
+  s,
+  userId,
+  onGone,
+  onUse,
+}: {
+  s: Suggestion;
+  userId: string;
+  onGone: () => void;
+  /** puts the draft in the box; given only while the box holds something else */
+  onUse?: () => void;
+}) {
   const toast = useToast();
   const label = SUGGESTION_KIND_LABELS[s.kind]?.label ?? 'Suggested';
   const dismiss = async () => {
@@ -405,6 +428,11 @@ function SuggestedLine({ s, userId, onGone }: { s: Suggestion; userId: string; o
         </span>
       </span>
       <span className="inline-flex items-center gap-2.5">
+        {onUse && (
+          <button type="button" className={link} onClick={onUse} data-testid="conversation-use-draft">
+            Use it
+          </button>
+        )}
         <button type="button" className={link} onClick={dismiss} data-testid="conversation-dismiss">
           Dismiss
         </button>
