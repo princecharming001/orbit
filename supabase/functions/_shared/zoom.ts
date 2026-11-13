@@ -62,7 +62,7 @@ export interface ZoomConfig {
 export interface ZoomEnv {
   clientId?: string;
   clientSecret?: string;
-  /** where Zoom sends the student back; <functions>/orbit-api/zoom/callback when not set */
+  /** where Zoom sends the student back; <functions>/orbit-api/auth/zoom/callback when not set */
   redirectUri?: string;
 }
 

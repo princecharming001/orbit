@@ -77,8 +77,9 @@ const zoomNotSetUp = () =>
 
 const conflict = (code: string, message: string) => new HttpError(409, code, message);
 
+// the address registered on Orbit's Zoom app, shaped like Google's (/auth/google/callback); /zoom/callback answers too
 const zoomRedirect = (ctx: Ctx) =>
-  ctx.env.zoom?.redirectUri ?? `${functionsBase(ctx)}/orbit-api/zoom/callback`;
+  ctx.env.zoom?.redirectUri ?? `${functionsBase(ctx)}/orbit-api/auth/zoom/callback`;
 
 async function zoomConfig(ctx: Ctx): Promise<ZoomConfig | undefined> {
   const keys = await zoomKeys(ctx.env.zoom, ctx.db);
@@ -443,6 +444,7 @@ export async function meetNotes(ctx: Ctx): Promise<Response> {
 export const callRoutes: Record<string, Route> = {
   '/zoom/connect/start': { method: 'POST', auth: true, run: zoomConnectStart },
   '/zoom/callback': { method: 'GET', auth: false, run: zoomCallback },
+  '/auth/zoom/callback': { method: 'GET', auth: false, run: zoomCallback },
   '/zoom/status': { method: 'GET|POST', auth: true, run: zoomStatus },
   '/zoom/disconnect': { method: 'POST', auth: true, run: zoomDisconnect },
   '/zoom/notes': { method: 'POST', auth: true, run: zoomNotes },

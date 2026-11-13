@@ -165,7 +165,7 @@ async function connectZoom(net: ReturnType<typeof fakeNet>, token: string) {
   const handler = rawHandler(net, ZOOM);
   const start = await handlerFor(net, ZOOM)<{ url: string }>('/zoom/connect/start', token);
   const url = new URL(start.body.url);
-  const back = await handler(get(`/zoom/callback?state=${url.searchParams.get('state')}&code=code-1`));
+  const back = await handler(get(`/auth/zoom/callback?state=${url.searchParams.get('state')}&code=code-1`));
   return { start: url, back, handler };
 }
 
@@ -243,7 +243,7 @@ describe('signing in with Zoom', () => {
     expect(`${start.origin}${start.pathname}`).toBe('https://zoom.us/oauth/authorize');
     expect(start.searchParams.get('client_id')).toBe(ZOOM.clientId);
     expect(start.searchParams.get('code_challenge_method')).toBe('S256');
-    expect(start.searchParams.get('redirect_uri')).toBe(`${BASE}/zoom/callback`);
+    expect(start.searchParams.get('redirect_uri')).toBe(`${BASE}/auth/zoom/callback`);
     expect(back.status).toBe(302);
     expect(back.headers.get('location')).toBe(`${APP}/settings?zoom=connected`);
     const exchange = net.calls.find((c) => c.url === 'https://zoom.us/oauth/token')!;

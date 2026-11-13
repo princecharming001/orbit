@@ -20734,7 +20734,7 @@ var zoomNotSetUp = () => json(
   { "x-orbit-connector": "unconfigured" }
 );
 var conflict = (code, message) => new HttpError(409, code, message);
-var zoomRedirect = (ctx) => ctx.env.zoom?.redirectUri ?? `${functionsBase(ctx)}/orbit-api/zoom/callback`;
+var zoomRedirect = (ctx) => ctx.env.zoom?.redirectUri ?? `${functionsBase(ctx)}/orbit-api/auth/zoom/callback`;
 async function zoomConfig(ctx) {
   const keys = await zoomKeys(ctx.env.zoom, ctx.db);
   return keys ? { ...keys, redirectUri: zoomRedirect(ctx), fetch: ctx.fetch } : void 0;
@@ -21043,6 +21043,7 @@ async function meetNotes(ctx) {
 var callRoutes = {
   "/zoom/connect/start": { method: "POST", auth: true, run: zoomConnectStart },
   "/zoom/callback": { method: "GET", auth: false, run: zoomCallback },
+  "/auth/zoom/callback": { method: "GET", auth: false, run: zoomCallback },
   "/zoom/status": { method: "GET|POST", auth: true, run: zoomStatus },
   "/zoom/disconnect": { method: "POST", auth: true, run: zoomDisconnect },
   "/zoom/notes": { method: "POST", auth: true, run: zoomNotes },
