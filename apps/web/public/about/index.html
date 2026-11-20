@@ -1,0 +1,116 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Orbit: a networking assistant for college students</title>
+    <meta
+      name="description"
+      content="Orbit finds the people worth a coffee chat, drafts every message in your voice for you to review, and keeps track of each conversation. Nothing is sent without you."
+    />
+    <link rel="canonical" href="https://tryorbit.today/about/" />
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+    <style>
+      :root {
+        --ink: #0a0a0a;
+        --ink-2: #3f3f3c;
+        --ink-3: #74746f;
+        --line: #e7e5e1;
+        --page: #fbfaf8;
+        --accent: #1f3d33;
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        background: var(--page);
+        color: var(--ink);
+        font: 15.5px/1.65 Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+        -webkit-font-smoothing: antialiased;
+      }
+      main { max-width: 720px; margin: 0 auto; padding: 48px 20px 96px; }
+      a { color: var(--accent); text-underline-offset: 3px; }
+      .brand { display: inline-flex; align-items: center; gap: 8px; color: var(--ink); text-decoration: none; font-weight: 600; font-size: 17px; }
+      h1 { font-size: 36px; line-height: 1.15; letter-spacing: -0.02em; font-weight: 500; margin: 40px 0 12px; }
+      h2 { font-size: 19px; letter-spacing: -0.01em; font-weight: 600; margin: 40px 0 8px; }
+      p, li { color: var(--ink-2); }
+      ul, ol { padding-left: 20px; }
+      li { margin: 6px 0; }
+      .lead { font-size: 17px; color: var(--ink-2); }
+      .muted { color: var(--ink-3); font-size: 14px; }
+      .box { border: 1px solid var(--line); border-radius: 14px; background: #fff; padding: 16px 18px; margin: 20px 0; }
+      .cta { display: inline-block; margin-top: 8px; padding: 10px 18px; border-radius: 999px; background: var(--ink); color: #fff; text-decoration: none; font-weight: 500; }
+      footer { margin-top: 56px; padding-top: 20px; border-top: 1px solid var(--line); font-size: 14px; color: var(--ink-3); }
+    </style>
+  </head>
+  <body>
+    <!--
+      Orbit's public home page for Google's app verification: plain HTML, no script, no sign-in, nothing that redirects.
+      Keep it true to the landing page, the privacy policy and the permissions Orbit's Google sign-in asks for.
+    -->
+    <main>
+      <a class="brand" href="/">
+        <svg width="22" height="22" viewBox="0 0 32 32" aria-hidden="true"><ellipse cx="16" cy="16" rx="13" ry="7" fill="none" stroke="currentColor" stroke-width="2" transform="rotate(-20 16 16)"/><circle cx="16" cy="16" r="3.5" fill="currentColor"/></svg>
+        Orbit
+      </a>
+
+      <h1>Orbit, a networking assistant for college students</h1>
+      <p class="lead">
+        Orbit finds the people worth a coffee chat, drafts every message in your voice, and keeps track of each
+        conversation, from the first note to the thank-you after you talk. Nothing is ever sent without you.
+      </p>
+      <p><a class="cta" href="/">Open Orbit</a></p>
+      <p class="muted">
+        Anyone can look around first: the demo on the home page runs on made-up data and needs no account.
+      </p>
+
+      <h2>What Orbit does</h2>
+      <ul>
+        <li><strong>Finds people worth meeting</strong>: alumni and people at the companies you are aiming for, and the warmest way to reach each of them through people you already know.</li>
+        <li><strong>Drafts your messages</strong>: first notes, follow-ups and thank-yous in your own voice. You read and edit every one, and nothing goes out until you approve it.</li>
+        <li><strong>Keeps track of every conversation</strong>: who you wrote to, who replied, which chats are booked, and what to do next.</li>
+        <li><strong>Prepares you for each chat</strong>: what you have in common, what you talked about before, and the questions worth asking.</li>
+      </ul>
+
+      <h2>How Orbit uses your Google account</h2>
+      <p>
+        Signing in with Google is optional. Each permission is used only for what it says, and only to give you the
+        features above:
+      </p>
+      <ul>
+        <li><strong>Gmail (read)</strong>: your messages with the people you network with, to keep track of who you talked to, notice replies, and write follow-ups that fit the conversation.</li>
+        <li><strong>Gmail (send)</strong>: to send a message you wrote or approved in Orbit, from your own address, only when you press send.</li>
+        <li><strong>Google Calendar (read)</strong>: your events, to know when a coffee chat is booked, prepare you for it, and follow up after.</li>
+        <li><strong>Google Calendar (events)</strong>: to put a chat you schedule from Orbit on your calendar, with a meeting link. Asked only the first time you book one.</li>
+        <li><strong>Google Contacts and other contacts</strong>: names and email addresses, so messages go to the right person.</li>
+        <li><strong>Google Meet (meeting transcripts)</strong>: only if you turn on Meet notes, the transcript of a coffee chat you held on Google Meet, so the notes and the follow-up land on the right person.</li>
+        <li><strong>Your name, email address and profile picture</strong>: to create your account.</li>
+      </ul>
+      <div class="box">
+        <p style="margin:0">
+          Orbit's use and transfer to any other app of information received from Google APIs will adhere to the
+          <a href="https://developers.google.com/terms/api-services-user-data-policy">Google API Services User Data Policy</a>,
+          including the Limited Use requirements. Your Google data is never sold, never used for advertising, and never
+          used to train AI models.
+        </p>
+      </div>
+      <p>
+        You can disconnect Google at any time in Orbit's Settings, and delete your account and everything Orbit keeps
+        from the same page. The <a href="/privacy/">privacy policy</a> says what Orbit keeps, for how long, and who
+        helps run it.
+      </p>
+
+      <h2>Who makes Orbit</h2>
+      <p>
+        Orbit is built by a small team of students for students. Questions, or a request to delete your data:
+        <a href="mailto:anish.polakala@gmail.com">anish.polakala@gmail.com</a>.
+      </p>
+
+      <footer>
+        <a href="/">Open Orbit</a> &middot;
+        <a href="/privacy/">Privacy policy</a> &middot;
+        <a href="/terms/">Terms of service</a> &middot;
+        <a href="mailto:anish.polakala@gmail.com">Contact</a>
+      </footer>
+    </main>
+  </body>
+</html>

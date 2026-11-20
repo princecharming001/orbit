@@ -455,7 +455,16 @@ export function Landing() {
                 </a>
               </li>
               <li>
-                {/* static pages (public/privacy, public/terms), so Google and anyone else can read them */}
+                {/* static pages (public/about, public/privacy, public/terms), so Google and anyone else can read them */}
+                <a
+                  className="hover:text-ink transition-colors"
+                  href={`${import.meta.env.BASE_URL}about/`}
+                  data-testid="landing-about"
+                >
+                  About Orbit
+                </a>
+              </li>
+              <li>
                 <a
                   className="hover:text-ink transition-colors"
                   href={`${import.meta.env.BASE_URL}privacy/`}
