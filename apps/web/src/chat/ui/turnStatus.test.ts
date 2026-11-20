@@ -50,5 +50,10 @@ describe('a working turn reads as one status line until the answer starts', () =
     ).toBe('3 people at Stripe.');
     expect(currentStep([text('hi')])).toBe('');
     expect(WORKING_WORDS.length).toBeGreaterThan(8);
+    // short enough to leave room for the step, and plain: no dashes or exclamation marks
+    for (const w of WORKING_WORDS) {
+      expect(w.length).toBeLessThanOrEqual(28);
+      expect(w).not.toMatch(/[–—!]/);
+    }
   });
 });

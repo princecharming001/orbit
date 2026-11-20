@@ -469,22 +469,27 @@ function IconButton({
 const blockKey = (b: Block, i: number) =>
   b.type === 'tool' ? b.toolUseId : b.type === 'web' ? b.id : `b${i}`;
 
-/** Words in the student's view a status line rotates through while a turn works. */
+/**
+ * Words in the student's view a status line rotates through while a turn works: little scenes from space, in keeping
+ * with the orbit. Short, so the step under way still fits beside them.
+ */
 export const WORKING_WORDS = [
-  'Cooking',
-  'Gargling',
-  'Simmering',
-  'Rummaging',
-  'Untangling',
-  'Percolating',
-  'Noodling',
-  'Brewing',
-  'Sifting',
-  'Mulling',
-  'Tinkering',
-  'Whisking',
-  'Marinating',
-  'Puttering',
+  'Forming a black hole',
+  'Orbiting',
+  'Charting the stars',
+  'Gathering stardust',
+  'Bending spacetime',
+  'Igniting thrusters',
+  'Aligning the planets',
+  'Reaching escape velocity',
+  'Mapping constellations',
+  'Catching a comet',
+  'Drifting through a nebula',
+  'Slingshotting past the moon',
+  'Warming up the warp drive',
+  'Counting moons',
+  'Collapsing a star',
+  'Waiting for a signal',
 ];
 
 /** Short lead-ins ("One sec, pulling up Daniel.") are not the answer; this many characters after the last step is. */
