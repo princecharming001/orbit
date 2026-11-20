@@ -17,10 +17,12 @@ concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
+# Every job runs on Ubuntu 24.04, not ubuntu-latest: once ubuntu-latest moved to 26.04, Playwright 1.56 could not
+# install Chromium there and every end-to-end job failed before a test ran. Move up together with Playwright.
 jobs:
   # lint, types, unit tests and the committed Edge Function bundles: one machine, alongside the browser tests
   checks:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
@@ -41,7 +43,7 @@ jobs:
 
   # the browser tests, split four ways and run at once: each machine takes a quarter of them, test by test
   e2e:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
       matrix:
@@ -80,7 +82,7 @@ jobs:
   # Frame times depend on the machine, so on shared CI runners they are measured and reported but never block the
   # deploy. Run `pnpm e2e` locally for the enforced limits.
   perf:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     continue-on-error: true
     steps:
       - uses: actions/checkout@v4
@@ -107,7 +109,7 @@ jobs:
   # the site, built once every check has passed
   build:
     needs: [checks, e2e]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
@@ -151,7 +153,7 @@ jobs:
   deploy:
     if: github.event_name != 'pull_request'
     needs: build
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     # one publish at a time; the checks before it run in parallel
     concurrency:
       group: pages
