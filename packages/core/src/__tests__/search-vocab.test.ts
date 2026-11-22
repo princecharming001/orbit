@@ -251,6 +251,8 @@ describe('a field word is the job only when the title is the field', () => {
       ['I curate and deploy Adaptive Design Teams for growing startups', 'design'],
       ['Conversational AI SMS that turns dead leads into booked jobs', 'data_ml'],
       ['Turning thoughts into words people remember', 'people_recruiting'],
+      ['💰 Get marketing help, handpicked for you', 'marketing'],
+      ['I help Marketing Agencies Book More Meetings', 'marketing'],
     ] as const) {
       const r = read(t);
       expect(r.families, t).not.toContain(f);

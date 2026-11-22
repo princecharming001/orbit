@@ -410,7 +410,9 @@ export function readTitle(title: string | undefined, org?: string): TitleRead {
   // a sentence about what they do for others ("I help marketing agencies book more meetings") uses job words without
   // being a job title: what it points to is a maybe
   const sentence =
-    SENTENCE_START.test(raw) || (!/[,|/•·]/.test(raw) && raw.split(/\s+/).filter(Boolean).length > 9);
+    // (an emoji or a dash in front does not make it a title)
+    SENTENCE_START.test(raw.replace(/^[^\p{L}\p{N}]+/u, '')) ||
+    (!/[,|/•·]/.test(raw) && raw.split(/\s+/).filter(Boolean).length > 9);
   const inPassing: TitleFamily[] = [];
   if (sentence)
     for (const f of [...families])
