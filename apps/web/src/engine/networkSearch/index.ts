@@ -133,11 +133,14 @@ export function rowView(r: Row, people: Map<string, Person>, world: SearchWorld)
     ? unknown.map((c) => (c.missing ? `${c.missing} not on file` : `${c.label}: not on file`)).join('; ')
     : undefined;
   const rel = world.ctx.rel(r.id);
+  // the job the search matched on, when it is not the one in their title field ("Angel Investor", further down a
+  // headline that opens "Global Marketing"): the row then says why it is listed
+  const hit = musts.find((c) => c.role && !c.role.lead && c.role.title)?.role;
   return {
     personId: r.id,
     name: r.name,
-    title: p?.currentTitle,
-    company: p?.currentOrganizationRaw,
+    title: hit?.title ?? p?.currentTitle,
+    company: hit ? hit.org : p?.currentOrganizationRaw,
     band: r.band,
     evidence: best?.evidence?.slice(0, 160),
     missing,
@@ -314,7 +317,13 @@ function withOwnSchools(spec: QuerySpec, ctx: SearchWorld['ctx']): QuerySpec {
 export async function runNetworkSearch(
   user: Pick<User, 'id' | 'school'>,
   input: QuerySpec,
-  opts: { caller?: 'llm' | 'router' | 'ui'; signal?: AbortSignal; shown?: number } = {},
+  opts: {
+    caller?: 'llm' | 'router' | 'ui';
+    signal?: AbortSignal;
+    shown?: number;
+    /** how many people the judge reads before the answer is shown (the table reads everyone it lists) */
+    judgeFirst?: number;
+  } = {},
 ): Promise<SearchOutcome | SearchFailure> {
   const linted = lintSpec(input, { router: opts.caller === 'router' });
   if (linted.error === 'empty')
@@ -391,7 +400,7 @@ export async function runNetworkSearch(
     }
   }
   if (!world.ctx.noJudge) {
-    await judgeMore(set, world, JUDGE_FIRST, opts.signal);
+    await judgeMore(set, world, opts.judgeFirst ?? JUDGE_FIRST, opts.signal);
     rerun(set, world, lexical, onlyIds);
   }
   keep(set);

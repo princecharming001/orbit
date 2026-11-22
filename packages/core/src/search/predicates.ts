@@ -3,6 +3,7 @@
  * likely, unknown or no, with the text it rests on. "Unknown" is never "no": a person whose headline names no school
  * is not "not at Berkeley", only unchecked, and the card says so.
  */
+import { normalizeTitle } from '../recommend/title';
 import type { RelationshipType } from '../types';
 import {
   type CompanyFact,
@@ -62,6 +63,13 @@ export interface Check {
   missing?: string;
   /** the company facts behind a yes, for the card ("Knowlify, YC S25") */
   fact?: Pick<CompanyFact, 'name' | 'ycBatch' | 'oneLiner' | 'teamSize'>;
+  /**
+   * a likely that rests on words with two readings ("VC Scout", "Bonfire VC", an investor when angels were asked
+   * for): a reader's no settles it, even when it quotes those same words
+   */
+  unsettled?: boolean;
+  /** the job the check rests on, as the person wrote it, when it is not the job in their title field */
+  role?: { title?: string; org?: string; lead: boolean };
 }
 
 /** What Orbit knows about the student's tie to one person, joined at query time. */
@@ -99,6 +107,12 @@ interface CompiledPosition {
   keys?: Set<string>;
   families?: Set<TitleFamily>;
   titleWords: string[];
+  /** the titles asked for that are not the kind of work's own name */
+  wordings: string[];
+  /** the titles asked for name the whole kind of work ("investors"), or none were asked: anyone in it fits */
+  broad: boolean;
+  /** when not broad: the starts of the words that set the job apart ("angel", "data") */
+  distinct: string[];
   seniorities?: Set<SearchSeniority>;
   batches?: Set<string>;
   industry?: string[];
@@ -155,6 +169,72 @@ const DEGREE_RE: Record<string, RegExp> = {
   high_school: /\b(high school|secondary school)\b/i,
 };
 
+/** The titles that name a whole kind of work: asking for one asks for everyone in it. */
+const GENERIC_TITLES: Partial<Record<TitleFamily, RegExp>> = {
+  investing: /^(investor|vc|venture capitalist|venture capital)$/,
+  founder: /^(founder|co founder|cofounder)$/,
+  engineering: /^(engineer|software engineer|developer|software developer|programmer)$/,
+  design: /^(designer)$/,
+  people_recruiting: /^(recruiter|recruiting|recruitment)$/,
+  product: /^(product manager|product management|product)$/,
+  sales: /^(sales|salesperson|sales rep|sales representative)$/,
+  marketing: /^(marketer|marketing)$/,
+  consulting: /^(consultant|consulting)$/,
+  research: /^(researcher|research)$/,
+  student: /^(student)$/,
+  creator: /^(creator|content creator)$/,
+  operations: /^(operations|ops)$/,
+  growth: /^(growth)$/,
+};
+/** The words those titles are made of: never what sets one job apart from the rest of its kind. */
+const GENERIC_WORDS = new Set(
+  'investor vc venture capitalist capital founder cofounder engineer software developer programmer designer recruiter recruiting product sales marketer marketing consultant researcher student creator operations'.split(
+    ' ',
+  ),
+);
+
+/** Words that say how senior a job is and not what the job is. */
+const LEVEL_ONLY = new Set([
+  'partner',
+  'principal',
+  'associate',
+  'analyst',
+  'director',
+  'manager',
+  'vp',
+  'vice',
+  'president',
+  'head',
+  'lead',
+  'intern',
+  'fellow',
+  'officer',
+  'executive',
+  'senior',
+  'junior',
+  'staff',
+  'member',
+  'managing',
+  'general',
+  'chief',
+  'assistant',
+  'specialist',
+  'coordinator',
+  'of',
+  'the',
+  'and',
+]);
+/** A title that is only a rung ("partner", "senior associate", "managing director"). */
+export function isLevelOnly(words: string): boolean {
+  // made of rung words and still a job of its own
+  if (
+    /^(chief of staff|general partner|limited partner|venture partner|managing partner)s?$/.test(words.trim())
+  )
+    return false;
+  const ws = words.split(' ').filter(Boolean);
+  return ws.length > 0 && ws.every((w) => LEVEL_ONLY.has(w) || LEVEL_ONLY.has(w.replace(/s$/, '')));
+}
+
 export function compileSpec(spec: QuerySpec, ctx: SearchContext): CompiledSpec {
   const unresolved: string[] = [];
   const positions = (spec.positions ?? []).map((p, index): CompiledPosition => {
@@ -164,12 +244,37 @@ export function compileSpec(spec: QuerySpec, ctx: SearchContext): CompiledSpec {
     const families = new Set<TitleFamily>(p.role?.families ?? []);
     const titleWords: string[] = [];
     const seniorities = new Set<SearchSeniority>(p.role?.seniority ?? []);
+    const levelWords: string[] = [];
     for (const t of p.role?.titles ?? []) {
       const q = readQueryTitle(t);
       for (const f of q.families) families.add(f);
       if (q.seniority && !p.role?.seniorityAtLeast) seniorities.add(q.seniority);
-      if (q.words) titleWords.push(q.words);
+      // "partner", "associate", "principal": a rung, held in every line of work. Beside a kind of work it narrows
+      // nothing by itself (a "Front Desk Associate" is no VC), so it is not a title to match on
+      if (q.words && isLevelOnly(q.words)) levelWords.push(q.words);
+      else if (q.words) titleWords.push(q.words);
     }
+    // with no kind of work asked for, the rung is all there is to go on ("partners at Sequoia")
+    if (!families.size) titleWords.push(...levelWords);
+    // "investors", "engineers", "founders" name the whole kind of work: anyone in it fits. "angel investors",
+    // "chiefs of staff", "data scientists" name one job within it: the kind of work alone is not that job
+    const isGeneric = (w: string) =>
+      [...families].some((f) => GENERIC_TITLES[f]?.test(w) || GENERIC_TITLES[f]?.test(w.replace(/s$/, '')));
+    const broad = !titleWords.length || titleWords.some(isGeneric);
+    // the other wordings asked for beside the kind of work ("venture partner", "sourcer"). The kind of work's own
+    // word ("investor") is not one: whether a title that has it is an investor's is what reading the title decides
+    const wordings = titleWords.filter((w) => !isGeneric(w));
+    // the words that set the job apart ("angel", "data"): someone in the kind of work whose title has one may be it
+    const distinct = broad
+      ? []
+      : [
+          ...new Set(
+            titleWords
+              .flatMap((w) => w.split(' '))
+              .filter((w) => w.length >= 3 && !LEVEL_ONLY.has(w) && !GENERIC_WORDS.has(w.replace(/s$/, '')))
+              .map((w) => w.slice(0, 5)),
+          ),
+        ];
     const batches = p.company?.yc?.batches?.length
       ? new Set(p.company.yc.batches.map((b) => canonicalBatch(b) ?? b.toUpperCase()))
       : undefined;
@@ -180,7 +285,7 @@ export function compileSpec(spec: QuerySpec, ctx: SearchContext): CompiledSpec {
       ...(p.company?.kinds ?? []).flatMap((k) => KIND_HINTS[k] ?? []),
     ].map((w) => w.toLowerCase());
     const roleHints = [
-      ...(p.role?.titles ?? []),
+      ...(p.role?.titles ?? []).filter((t) => !families.size || !isLevelOnly(readQueryTitle(t).words)),
       ...(p.role?.founder || families.has('founder') ? ['founder', 'co-founder', 'cofounder', 'ceo'] : []),
       ...[...families].flatMap((f) => FAMILY_HINTS[f] ?? []),
     ].map((w) => w.toLowerCase());
@@ -192,6 +297,9 @@ export function compileSpec(spec: QuerySpec, ctx: SearchContext): CompiledSpec {
       keys,
       families: families.size ? families : undefined,
       titleWords,
+      wordings,
+      broad,
+      distinct,
       seniorities: seniorities.size ? seniorities : undefined,
       batches,
       industry: p.company?.industries?.length ? industryTerms(p.company.industries) : undefined,
@@ -238,7 +346,7 @@ export function compileSpec(spec: QuerySpec, ctx: SearchContext): CompiledSpec {
 }
 
 const FAMILY_HINTS: Partial<Record<TitleFamily, string[]>> = {
-  investing: ['investor', 'vc', 'venture', 'angel', 'partner', 'capital'],
+  investing: ['investor', 'investing', 'vc', 'venture capital', 'angel investor', 'general partner'],
   engineering: ['engineer', 'swe', 'developer', 'software'],
   product: ['product', 'pm'],
   design: ['design'],
@@ -259,10 +367,12 @@ const KIND_HINTS: Partial<Record<string, string[]>> = {
 };
 
 function positionLabel(p: PositionSpec): string {
+  // the titles that say a job name it ("angel investor"); a rung alone ("partner") needs the kind of work beside it
+  const titles = p.role?.titles ?? [];
+  const named = titles.filter((t) => !isLevelOnly(readQueryTitle(t).words));
   const role = [
     p.role?.founder ? 'founder' : '',
-    ...(p.role?.titles ?? []),
-    ...(p.role?.families ?? []).map((f) => f.replace(/_/g, ' ')),
+    ...(named.length ? named : [...titles, ...(p.role?.families ?? []).map((f) => f.replace(/_/g, ' '))]),
   ]
     .filter(Boolean)
     .join(' or ');
@@ -304,6 +414,8 @@ interface RoleResult {
   answer: Answer;
   roleAnswer?: Answer;
   companyAnswer?: Answer;
+  unsettled?: boolean;
+  role?: { title?: string; org?: string; lead: boolean };
   evidence: string;
   source: EvidenceSource;
   estimated?: boolean;
@@ -320,17 +432,40 @@ function checkRole(
   kindHint: ReturnType<typeof kindOfOrg>,
   startup = false,
   listed = false,
+  flags: { unsettled?: boolean } = {},
 ): Answer {
   if (!spec) return 'yes';
   const parts: Answer[] = [];
   const hasTitle = !!role.title;
   if (c.families) {
-    if (role.families.some((f) => c.families!.has(f))) parts.push('yes');
-    else if (role.maybe.some((f) => c.families!.has(f))) {
+    const inKind = role.families.some((f) => c.families!.has(f));
+    const maybeKind = role.maybe.some((f) => c.families!.has(f));
+    const says = (c.broad ? c.wordings : c.titleWords).some(
+      (w) => role.title && titleHasWords(role.title, w),
+    );
+    if (!c.broad) {
+      // one job within a kind of work: their title says it, or it may (in the kind of work, with a word that sets
+      // the job apart), or it is another job
+      const near =
+        inKind &&
+        c.distinct.some((d) =>
+          normalizeTitle(role.title ?? '')
+            .split(' ')
+            .some((t) => t.startsWith(d)),
+        );
+      if (says) parts.push('yes');
+      else if (near) {
+        flags.unsettled = true;
+        parts.push('likely');
+      } else parts.push(hasTitle || role.founder ? 'no' : 'unknown');
+    } else if (inKind) parts.push('yes');
+    else if (maybeKind) {
       // "PM" at a hedge fund is a portfolio manager; elsewhere a product manager
       const fin = kindHint === 'hedge_fund' || kindHint === 'pe' || kindHint === 'bank';
-      parts.push(c.families.has('finance') && fin ? 'yes' : 'likely');
-    } else if (c.titleWords.some((w) => role.title && titleHasWords(role.title, w))) parts.push('yes');
+      const sure = c.families.has('finance') && fin;
+      if (!sure) flags.unsettled = true;
+      parts.push(sure ? 'yes' : 'likely');
+    } else if (says) parts.push('yes');
     else parts.push(hasTitle || role.founder ? 'no' : 'unknown');
   } else if (c.titleWords.length) {
     parts.push(
@@ -507,7 +642,8 @@ export function checkPosition(doc: PersonDoc, c: CompiledPosition, ctx: SearchCo
     // a CEO or CTO of a YC company (or a small startup Orbit has facts for) is most often one of its founders
     const startup = role.saysYc || !!fact?.ycBatch || (fact?.teamSize !== undefined && fact.teamSize <= 50);
     const founderListed = p.role?.founder ? listedFounder(doc.name, fact) : undefined;
-    const r = checkRole(role, p.role, c, kind, startup, !!founderListed);
+    const flags: { unsettled?: boolean } = {};
+    const r = checkRole(role, p.role, c, kind, startup, !!founderListed, flags);
     const co = checkCompany(role, p.company, c, ctx, text, doc);
     if (founderListed)
       co.evidence = `${co.evidence} (YC lists ${doc.name.split(' ')[0]} as ${founderListed.title?.trim() || 'a founder'})`;
@@ -520,7 +656,16 @@ export function checkPosition(doc: PersonDoc, c: CompiledPosition, ctx: SearchCo
       ANSWER_RANK[answer] * 10 +
       EVIDENCE_RANK[role.source] +
       (r === 'yes' || co.answer === 'yes' ? 1 : 0) * 0.5;
-    if (!best || rank > best.rank) best = { ...co, answer, rank, roleAnswer: r, companyAnswer: co.answer };
+    if (!best || rank > best.rank)
+      best = {
+        ...co,
+        answer,
+        rank,
+        roleAnswer: r,
+        companyAnswer: co.answer,
+        unsettled: flags.unsettled && r === 'likely',
+        role: p.role ? { title: role.title, org: role.org, lead: role.source !== 'headline' } : undefined,
+      };
   }
   let answer: Answer = best?.answer ?? 'unknown';
   if (answer === 'no') {
@@ -593,6 +738,8 @@ export function checkPosition(doc: PersonDoc, c: CompiledPosition, ctx: SearchCo
     partial: partial || undefined,
     missing,
     estimated: best?.estimated,
+    unsettled: (best?.unsettled && answer === 'likely') || undefined,
+    role: best?.role && (answer === 'yes' || answer === 'likely') ? best.role : undefined,
     fact: best?.fact
       ? {
           name: best.fact.name,

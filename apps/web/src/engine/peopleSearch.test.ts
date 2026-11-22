@@ -45,6 +45,7 @@ import {
   pathOfSourced,
   purposeOf,
   type ResultRow,
+  restatesJob,
   resultsCsv,
   ruleForm,
   runPeopleSearch,
@@ -284,10 +285,8 @@ describe('reading a sentence with the model', () => {
     expect(r.form.filters.places).toEqual(['London']);
     expect(r.form.filters.keywords).toEqual(['seed', 'venture capital']);
     expect(r.form.filters.keywordsNeed).toBe('nice');
-    expect(r.form.criteria.map((c) => [c.text, c.need])).toEqual([
-      ['Works at a venture capital firm', 'must'],
-      ['Invests at seed stage', 'nice'],
-    ]);
+    // "Works at a venture capital firm" only says the job again, which the titles already hold: it is left out
+    expect(r.form.criteria.map((c) => [c.text, c.need])).toEqual([['Invests at seed stage', 'nice']]);
     // the sentence goes to the model wrapped as data
     const build = llm.judge.mock.calls[0]![1] as (w: (s: string, t: string) => string) => string;
     expect(build((s, t) => `<${s}>${t}</${s}>`)).toBe('<sentence>seed investors in London</sentence>');
@@ -384,6 +383,35 @@ describe('reading a sentence with the model', () => {
     expect((await interpretAsk('people who know batteries')).form.filters.keywords).toEqual(['batteries']);
   });
 
+  it('a kind within the kind of work stays that kind: angels are not every investor', () => {
+    const base = { seniority: [], currentCompanies: [], everCompanies: [], schools: [], places: [] };
+    const angels = tidyReading(
+      {
+        ...base,
+        titles: ['angel investor', 'investor'],
+        keywords: ['angel investing', 'early-stage startups'],
+      },
+      'angel investors',
+      true,
+    );
+    expect(angels.titles).toEqual(['angel investor']);
+    // the title in another form is not a topic
+    expect(angels.keywords).toEqual(['early-stage startups']);
+    const scouts = tidyReading(
+      { ...base, titles: ['venture scout', 'scout', 'investor'], keywords: [] },
+      'VC scouts',
+      true,
+    );
+    expect(scouts.titles).toEqual(['venture scout', 'scout']);
+    // nothing narrower said: every wording of the job is kept
+    const all = tidyReading(
+      { ...base, titles: ['investor', 'partner', 'angel investor'], keywords: [] },
+      'investors',
+      true,
+    );
+    expect(all.titles).toEqual(['investor', 'partner', 'angel investor']);
+  });
+
   it('the reading is told what a filter costs, and that a job they left is not a title', () => {
     expect(INTERPRET_SYSTEM).toContain('Filters are hard');
     expect(INTERPRET_SYSTEM).toContain('Never the same company in both');
@@ -403,6 +431,32 @@ describe('reading a sentence with the model', () => {
     const r = await interpretAsk('investors in London');
     expect(r.by).toBe('rules');
     expect(r.form.filters.families).toEqual(['investing']);
+  });
+});
+
+describe('a criterion that only says the job again is left out', () => {
+  it('the same job in other words is dropped; anything it adds is kept', () => {
+    for (const [text, titles, families] of [
+      ['Invests in startups or funds', ['investor'], ['investing']],
+      ['Invests in startups', ['investor'], ['investing']],
+      ['Works as an investor at a venture capital firm', ['investor', 'partner'], ['investing']],
+      ['Invests in startups as a venture capitalist', ['venture capitalist', 'vc'], ['investing']],
+      ['Works as a product manager', ['product manager'], ['product']],
+      ['Is a founder', ['founder'], ['founder']],
+      ['Founded a company', ['founder'], ['founder']],
+      ['Works as a recruiter', ['recruiter'], ['people_recruiting']],
+    ] as const)
+      expect([text, restatesJob(text, [...titles], [...families])]).toEqual([text, true]);
+    for (const [text, titles, families] of [
+      ['Invests at seed stage', ['investor'], ['investing']],
+      ['Invests in AI startups', ['investor'], ['investing']],
+      ['Invests personal capital in early-stage startups', ['angel investor'], ['investing']],
+      ['Founded a company that went through Y Combinator', ['founder'], ['founder']],
+      ['Works on climate', ['investor'], ['investing']],
+      ['Was early at Airbnb', ['angel investor'], ['investing']],
+      ['Works at a venture capital firm', [], []],
+    ] as const)
+      expect([text, restatesJob(text, [...titles], [...families])]).toEqual([text, false]);
   });
 });
 
@@ -708,6 +762,96 @@ describe('one run: the network and beyond, as one list', () => {
       'You have used today’s LinkedIn searches, so people one connection away are not listed. It resets tomorrow.',
     ]);
     for (const n of r.notes) expect(n).not.toMatch(/[—!]/);
+  });
+
+  it('a search for a job never lists someone with no sign of that job, whatever else about them fits', async () => {
+    const people2 = new Map([
+      ['a', { id: 'a', currentTitle: 'Investor', currentOrganizationRaw: 'Anfa' }],
+      ['b', { id: 'b', currentTitle: 'Full Stack Developer', location: 'San Francisco' }],
+      ['c', { id: 'c', currentTitle: 'HR Generalist' }],
+      ['d', { id: 'd', currentTitle: 'Investor', currentOrganizationRaw: 'Pareto' }],
+    ]);
+    net.worldOfSet.mockReturnValue({ ...world, people: people2 });
+    net.runNetworkSearch.mockResolvedValue({
+      ok: true,
+      set: {
+        id: 'rs1',
+        notes: [],
+        judgeUnavailable: false,
+        result: {
+          rows: [
+            // an investor, the city not on file: listed, the place unknown
+            row('a', 'Ada In', 'unchecked', [check('position:0', 'yes'), check('place:0', 'unknown')]),
+            // in the city, no sign of investing: never listed
+            {
+              ...row('b', 'Bo Dev', 'unchecked', [check('position:0', 'unknown'), check('place:0', 'yes')]),
+              signal: 'hint',
+            },
+            // a word in their headline looked like a clue ("Business Partner"): still no sign of the job
+            { ...row('c', 'Cy Hr', 'unchecked', [check('position:0', 'unknown')]), signal: 'hint' },
+            row('d', 'Di In', 'strong', [check('position:0', 'yes'), check('place:0', 'yes')]),
+          ],
+        },
+      },
+      rows: [],
+      remaining: 0,
+    });
+    const r = await runPeopleSearch(
+      { id: 'u1', school: '' },
+      { ...asked, criteria: [], filters: { ...asked.filters, reach: 'mine' } },
+    );
+    expect(r.rows.map((x) => x.name)).toEqual(['Di In', 'Ada In']);
+  });
+
+  it('a likely is never a full match: the confirmed lead, whoever the student knows better', async () => {
+    const people2 = new Map([
+      [
+        'a',
+        {
+          id: 'a',
+          currentTitle: 'Startup Banking',
+          currentOrganizationRaw: 'Rho',
+          headline: 'Startup Banking @ Rho | VC Scout',
+        },
+      ],
+      ['b', { id: 'b', currentTitle: 'Investor', currentOrganizationRaw: 'Anfa' }],
+    ]);
+    net.worldOfSet.mockReturnValue({
+      people: people2,
+      ctx: { rel: (id: string) => ({ band: id === 'a' ? 'close' : 'light', touches: {}, tags: [] }) },
+    });
+    net.runNetworkSearch.mockResolvedValue({
+      ok: true,
+      set: {
+        id: 'rs1',
+        notes: [],
+        judgeUnavailable: false,
+        result: {
+          rows: [
+            row('a', 'Al Scout', 'likely', [
+              { ...check('position:0', 'likely'), role: { title: 'VC Scout', lead: false } },
+            ]),
+            row('b', 'Bea In', 'strong', [
+              { ...check('position:0', 'yes'), role: { title: 'Investor', org: 'Anfa', lead: true } },
+            ]),
+          ],
+        },
+      },
+      rows: [],
+      remaining: 0,
+    });
+    const r = await runPeopleSearch(
+      { id: 'u1', school: '' },
+      { ...asked, criteria: [], filters: { ...asked.filters, reach: 'mine' } },
+    );
+    expect(r.rows.map((x) => [x.name, x.match])).toEqual([
+      ['Bea In', 100],
+      ['Al Scout', 80],
+    ]);
+    // the row says why it is here: the job that matched is its title, the headline stays underneath
+    expect(r.rows[1]).toMatchObject({ title: 'VC Scout', company: undefined, lead: false });
+    expect(r.rows[1]!.headline).toBe('Startup Banking @ Rho | VC Scout');
+    expect(r.rows[0]).toMatchObject({ title: 'Investor', company: 'Anfa', lead: true });
   });
 
   it("joins both, the student's own first on a tie, and a known person found outside is listed once", async () => {

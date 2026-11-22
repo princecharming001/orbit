@@ -17,6 +17,8 @@ export interface HeadlineRole {
   future?: boolean;
   /** read from "Building X" or "Building" alone: likely a founder, said less plainly */
   weak?: boolean;
+  /** the line names a field and no job ("Venture Capital"): what it says of their work is a maybe */
+  field?: boolean;
   /** the headline part this came from, verbatim */
   text: string;
   read: TitleRead;
@@ -179,7 +181,9 @@ function readPart(partRaw: string, out: HeadlineRead, isSchool?: SchoolLookup): 
   if (
     !AT.test(part) &&
     (part.match(/,/g)?.length ?? 0) >= 2 &&
-    !/\b(?:founder|ceo|cto|owner|president)\b/i.test(part)
+    // "Founder, CEO, Chairman" is one job said three ways; "Doctor, Ex founder, Angel Investor" is three things
+    (!/\b(?:founder|ceo|cto|owner|president)\b/i.test(part) ||
+      /\b(?:ex|former|formerly|previous|previously|prev)[\s.-]+(?:co-?\s?)?founder\b/i.test(part))
   ) {
     for (const item of part.split(/\s*,\s*/)) if (item) readPart(past ? `ex ${item}` : item, out, isSchool);
     return;
@@ -206,7 +210,9 @@ function readPart(partRaw: string, out: HeadlineRead, isSchool?: SchoolLookup): 
       /^(.*?\b(?:founder|co-?founder|ceo|cto|coo|owner|president|partner)\b[^,]*?)\s+of\s+(.+)$/i.exec(
         part,
       ) ?? /^((?:co-?)?founder\b[^,]*?|ceo|cto|coo|owner|president)\s*,\s*(.+)$/i.exec(part);
-    const building = /^(?:building|started|founded|founding)\b\s*(.*)$/i.exec(part);
+    // "Founding Engineer", "Founding Quantum Engineer": an early hire's title, not "founding <a company>"
+    const earlyHire = /^founding\b/i.test(part) && JOB_WORD.test(part.replace(/^founding\s+/i, ''));
+    const building = earlyHire ? null : /^(?:building|started|founded|founding)\b\s*(.*)$/i.exec(part);
     if (of) {
       title = of[1]!.trim();
       orgs = [cleanOrg(of[2]!)];
@@ -265,6 +271,17 @@ function readPart(partRaw: string, out: HeadlineRead, isSchool?: SchoolLookup): 
     return;
   }
   if (!orgs.length && (!namesRole || title!.split(' ').length > 8)) {
+    // a line that is no job title can still say they invest: "…, Ex founder, Angel Investor", "Venture Capital"
+    const aside = investingAside(part);
+    if (aside && !past && !future && status !== 'aspiring')
+      out.roles.push({
+        title: aside.title,
+        current: true,
+        text: partRaw,
+        read: aside.read,
+        weak: false,
+        ...(aside.field ? { field: true } : {}),
+      });
     if (part.length <= 80) out.topics.push(part);
     return;
   }
@@ -288,6 +305,37 @@ function readPart(partRaw: string, out: HeadlineRead, isSchool?: SchoolLookup): 
       read: roleRead,
       weak,
     });
+}
+
+/** "Venture Capital", "VC", "Private Equity", "Investing" as a line of its own: a field, which may be their job. */
+const INVESTING_FIELD =
+  /^(?:venture capital|vc|private equity|pe\/vc|vc\/pe|angel|angel investing|investing|investments)$/i;
+
+/**
+ * The investing a line states when the line itself is no job title: one of its items is an investor's title
+ * ("Angel Investor" after a comma), or the line is the field alone, which a reader has to settle.
+ */
+function investingAside(part: string): { title: string; read: TitleRead; field?: boolean } | undefined {
+  const whole = part.trim();
+  if (INVESTING_FIELD.test(whole)) {
+    const r = readTitle(whole);
+    return {
+      title: whole,
+      field: true,
+      read: {
+        ...r,
+        families: r.families.filter((f) => f !== 'investing'),
+        maybe: r.maybe.includes('investing') ? r.maybe : [...r.maybe, 'investing'],
+      },
+    };
+  }
+  for (const item of whole.split(/\s*(?:,|\/|\+|·|•|▫️|;)\s*|\s+(?:&|and)\s+/)) {
+    const t = item.trim();
+    if (!t || t.split(' ').length > 5) continue;
+    const r = readTitle(t);
+    if (r.families.includes('investing')) return { title: t, read: r };
+  }
+  return undefined;
 }
 
 function splitOrgs(s: string): string[] {

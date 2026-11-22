@@ -129,7 +129,9 @@ export function evaluateDoc(
       if (j.answer === 'unknown') continue;
       // a no that only quotes the words Orbit already weighed for this check ("CTO at Opalite Health (YC W26)",
       // which made "founder" likely) adds nothing but the model's guess, so it cannot overturn the likely
-      if (j.answer === 'no' && c.answer === 'likely' && quotesOnly(c.evidence, j.quote)) continue;
+      // (words with two readings are the exception: "VC Scout" was likely an investor until someone read it)
+      if (j.answer === 'no' && c.answer === 'likely' && !c.unsettled && quotesOnly(c.evidence, j.quote))
+        continue;
       checks[i] = {
         ...c,
         answer: j.answer,

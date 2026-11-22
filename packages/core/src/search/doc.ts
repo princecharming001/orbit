@@ -173,9 +173,15 @@ export function buildPersonDoc(
   const add = (
     r: Omit<DocRole, 'families' | 'maybe' | 'seniority' | 'founder' | 'earlyEmployee' | 'club' | 'orgKey'> & {
       orgKey?: string;
+      /** the words name a field, not a job: the kinds of work they point to are maybes */
+      field?: boolean;
     },
   ) => {
-    const read = readTitle(r.title, r.org);
+    const { field, ...role } = r;
+    const said = readTitle(r.title, r.org);
+    const read = field
+      ? { ...said, families: [], maybe: [...new Set([...said.maybe, ...said.families])] }
+      : said;
     const key = r.orgKey ?? orgKey(r.org);
     const same = roles.find(
       (x) => x.orgKey && x.orgKey === key && x.current === r.current && !!x.future === !!r.future,
@@ -198,8 +204,11 @@ export function buildPersonDoc(
       if (!r.weak) same.weak = false;
       return;
     }
-    if (!key && !read.families.length && !read.founder) return;
-    roles.push({ ...r, orgKey: key, ...pickRead(read) });
+    // a title with no company is kept when it says what they do, or may ("VC Scout" may be an investor)
+    // "Aspiring Lawyer", "Future PM": a job they want, not one they hold or held
+    if (said.status === 'aspiring') return;
+    if (!key && !read.families.length && !read.founder && !read.maybe.length) return;
+    roles.push({ ...role, orgKey: key, ...pickRead(read) });
   };
 
   const fs = person.fieldSources ?? {};
@@ -280,6 +289,7 @@ export function buildPersonDoc(
       future: r.future,
       source: 'headline',
       weak: r.weak,
+      field: r.field,
       ycBatch: badge?.batch,
       saysYc: !!badge,
       evidence: r.text,
