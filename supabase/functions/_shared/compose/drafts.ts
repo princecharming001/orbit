@@ -82,6 +82,7 @@ export function toServerDraft(r: DraftRow): ServerDraft {
     sendAt: iso(r.send_at),
     sentAt: iso(r.sent_at),
     error: r.error ?? null,
+    ...(r.status === 'cancelled' && r.cancel_reason ? { cancelReason: r.cancel_reason } : {}),
     validator: r.validator ?? null,
     generatedBy: r.generated_by === 'llm' ? 'llm' : 'template',
     hooks: Array.isArray(r.hooks) ? r.hooks : [],

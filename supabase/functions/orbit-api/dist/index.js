@@ -15919,6 +15919,7 @@ function toServerDraft(r) {
     sendAt: iso(r.send_at),
     sentAt: iso(r.sent_at),
     error: r.error ?? null,
+    ...r.status === "cancelled" && r.cancel_reason ? { cancelReason: r.cancel_reason } : {},
     validator: r.validator ?? null,
     generatedBy: r.generated_by === "llm" ? "llm" : "template",
     hooks: Array.isArray(r.hooks) ? r.hooks : [],
@@ -19294,6 +19295,8 @@ async function linkedinSend(s, p) {
   if (chat.out.ok) return { ...chat.out, chatId: chat.chatId, memberId: member };
   if (p.connected || chat.out.retry || chat.out.error === "unipile_no_id") return chat.out;
   if (p.text.length > LINKEDIN_NOTE_MAX2) return { ok: false, retry: false, error: "linkedin_note_too_long" };
+  const stop = await p.beforeInvite?.();
+  if (stop) return { ok: false, retry: false, error: stop };
   const res = await call(`${base}/api/v1/users/invite`, {
     method: "POST",
     headers: { "content-type": "application/json" },
@@ -19365,6 +19368,7 @@ async function salesFirstTouch(db2, d) {
 }
 async function approveDraft(s, userId, req) {
   const db2 = s.db;
+  if (req.write) await keepWrittenDraft(db2, userId, req);
   let d = await loadDraft(db2, userId, req.draftId);
   if (d.status === "sending" || d.status === "sent") return toServerDraft(d);
   const undone = d.status === "cancelled" && d.cancel_reason === "user";
@@ -19456,6 +19460,43 @@ ${d.body}`;
     );
   }
   return toServerDraft(await draftById(db2, row.id));
+}
+var WRITTEN_BY_STUDENT = "user";
+async function keepWrittenDraft(db2, userId, req) {
+  const w = req.write;
+  const id = req.draftId;
+  if (!w || typeof id !== "string" || !/^[0-9a-f-]{36}$/i.test(id)) return;
+  const [had] = await db2.sql`select user_id, status, generated_by, cancel_reason from orbit.drafts where id = ${id}::uuid`;
+  if (had) {
+    if (had.user_id === userId && had.generated_by === WRITTEN_BY_STUDENT && had.status === "cancelled" && had.cancel_reason !== "user" && req.confirm === true)
+      await db2.sql`
+        update orbit.drafts set status = 'draft', cancel_reason = null, error = null
+         where id = ${id}::uuid and user_id = ${userId}::uuid and status = 'cancelled'`;
+    return;
+  }
+  if (w.channel !== "linkedin") throw new HttpError(400, "bad_request", "write.channel is linkedin");
+  if (req.confirm !== true)
+    throw new HttpError(409, "needs_confirmation", "every LinkedIn message needs your tap to send");
+  const body2 = req.body;
+  if (typeof body2 !== "string" || !body2.trim() || body2.length > 2e4)
+    throw new HttpError(400, "bad_request", "body must be the message, at most 20,000 characters");
+  const [p] = await db2.sql`
+    select coalesce(merged_into, id) as id from orbit.people
+     where id = ${w.personId}::uuid and user_id = ${userId}::uuid and deleted_at is null`;
+  if (!p) throw new HttpError(404, "person_not_found", "Orbit does not have this person on your account yet");
+  const [row] = await db2.sql`
+    insert into orbit.drafts (id, user_id, person_id, channel, kind, subject, body, status, autonomy_level,
+                              generated_by)
+    values (${id}::uuid, ${userId}::uuid, ${p.id}::uuid, 'linkedin', ${w.kind}, null, ${body2.trim()}, 'draft',
+            0::smallint, ${WRITTEN_BY_STUDENT})
+    on conflict (id) do nothing
+    returning id`;
+  if (row)
+    await audit2(db2, userId, "user", "draft.write", id, {
+      kind: w.kind,
+      channel: "linkedin",
+      hash: messageHash({ channel: "linkedin", subject: null, body: body2.trim() })
+    });
 }
 async function applyEdit(db2, d, req) {
   const body2 = req.body === void 0 ? d.body : req.body;
@@ -19800,8 +19841,11 @@ ${d.body}`)) {
       attendeeId: attendee,
       slug: person2.linkedin_slug,
       connected: !!person2.linkedin_connected_on,
-      text: d.body
+      text: d.body,
+      // connection requests have their own day and week (the cap table), counted as they go
+      beforeInvite: () => inviteCapReached(db2, userId, now)
     });
+    if (li.ok && li.invited) await audit2(db2, userId, "user", "linkedin.invite", d.id, { at: iso(now) });
     if (li.ok && li.memberId && !person2.linkedin_member_id)
       await db2.sql`
         update orbit.people set linkedin_member_id = ${li.memberId}
@@ -19941,6 +19985,17 @@ async function capReached(db2, userId, d, now, u2, auto) {
                 and exists (select 1 from orbit.goals g where g.id = dr.goal_id and g.kind = 'sales'))`;
   const cap = ownCap(u2.settings, "daily_send_cap_gmail", SEND_CAPS.gmailPerDay);
   return (r?.n ?? 0) + inFlight >= cap ? "gmail_daily_cap" : null;
+}
+async function inviteCapReached(db2, userId, now) {
+  const [r] = await db2.sql`
+    select count(*) filter (where created_at >= ${new Date(now.getTime() - 864e5)}::timestamptz)::int as day,
+           count(*)::int as week
+      from orbit.audit_log
+     where user_id = ${userId}::uuid and action = 'linkedin.invite'
+       and created_at >= ${new Date(now.getTime() - 7 * 864e5)}::timestamptz`;
+  if ((r?.day ?? 0) >= SEND_CAPS.linkedinInvitesPerDay) return "linkedin_invite_daily_cap";
+  if ((r?.week ?? 0) >= SEND_CAPS.linkedinInvitesPerWeek) return "linkedin_invite_weekly_cap";
+  return null;
 }
 async function threadSubject(db2, userId, threadExternalId) {
   if (!threadExternalId) return null;
@@ -21136,9 +21191,21 @@ async function composeSocial(ctx, channel, kind, personId, b) {
     returning *`;
   return json(200, { draft: toServerDraft(row ?? r.draft) });
 }
+function writtenDraft(b) {
+  if (b.write === void 0 || b.write === null) return void 0;
+  const w = b.write;
+  if (typeof w !== "object" || Array.isArray(w)) throw badRequest("write is {personId, kind, channel}");
+  if (w.channel !== "linkedin") throw badRequest("write.channel is linkedin");
+  if (typeof w.personId !== "string" || !UUID.test(w.personId))
+    throw badRequest("write.personId is required");
+  const kind = w.kind;
+  if (!KINDS.includes(kind)) throw badRequest("write.kind is not a message kind");
+  return { personId: w.personId, kind, channel: "linkedin" };
+}
 async function approve(ctx) {
   const b = await body(ctx);
   const draftId = uuid(b, "draftId");
+  const write2 = writtenDraft(b);
   const files = parseIncomingFiles(b.attachments);
   if (files) {
     await loadDraft(ctx.db, ctx.userId, draftId);
@@ -21151,7 +21218,8 @@ async function approve(ctx) {
     ...typeof b.undoSec === "number" ? { undoSec: b.undoSec } : {},
     // the words as the student left them (plan 29 §B2.4)
     ...b.body !== void 0 ? { body: b.body } : {},
-    ...b.subject !== void 0 ? { subject: b.subject } : {}
+    ...b.subject !== void 0 ? { subject: b.subject } : {},
+    ...write2 ? { write: write2 } : {}
   });
   return json(200, { draft: draft2 });
 }

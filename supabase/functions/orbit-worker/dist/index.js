@@ -23899,6 +23899,8 @@ async function linkedinSend(s, p) {
   if (chat.out.ok) return { ...chat.out, chatId: chat.chatId, memberId: member };
   if (p.connected || chat.out.retry || chat.out.error === "unipile_no_id") return chat.out;
   if (p.text.length > LINKEDIN_NOTE_MAX2) return { ok: false, retry: false, error: "linkedin_note_too_long" };
+  const stop = await p.beforeInvite?.();
+  if (stop) return { ok: false, retry: false, error: stop };
   const res = await call(`${base}/api/v1/users/invite`, {
     method: "POST",
     headers: { "content-type": "application/json" },
@@ -24266,8 +24268,11 @@ ${d.body}`)) {
       attendeeId: attendee,
       slug: person.linkedin_slug,
       connected: !!person.linkedin_connected_on,
-      text: d.body
+      text: d.body,
+      // connection requests have their own day and week (the cap table), counted as they go
+      beforeInvite: () => inviteCapReached(db2, userId, now)
     });
+    if (li.ok && li.invited) await audit2(db2, userId, "user", "linkedin.invite", d.id, { at: iso2(now) });
     if (li.ok && li.memberId && !person.linkedin_member_id)
       await db2.sql`
         update orbit.people set linkedin_member_id = ${li.memberId}
@@ -24442,6 +24447,17 @@ async function recoverStuckSends(s, userId) {
     else await audit2(db2, userId, "system", "draft.failed", d.id, { error: `${d.channel}_unconfirmed` });
   }
   return n;
+}
+async function inviteCapReached(db2, userId, now) {
+  const [r] = await db2.sql`
+    select count(*) filter (where created_at >= ${new Date(now.getTime() - 864e5)}::timestamptz)::int as day,
+           count(*)::int as week
+      from orbit.audit_log
+     where user_id = ${userId}::uuid and action = 'linkedin.invite'
+       and created_at >= ${new Date(now.getTime() - 7 * 864e5)}::timestamptz`;
+  if ((r?.day ?? 0) >= SEND_CAPS.linkedinInvitesPerDay) return "linkedin_invite_daily_cap";
+  if ((r?.week ?? 0) >= SEND_CAPS.linkedinInvitesPerWeek) return "linkedin_invite_weekly_cap";
+  return null;
 }
 async function threadSubject(db2, userId, threadExternalId) {
   if (!threadExternalId) return null;

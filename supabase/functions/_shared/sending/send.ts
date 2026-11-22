@@ -179,6 +179,8 @@ export async function approveDraft(
   req: Partial<DraftApproveRequest>,
 ): Promise<ServerDraft> {
   const db = s.db;
+  // a LinkedIn message the student wrote in the app: kept as their draft first, so this tap sends it like any other
+  if (req.write) await keepWrittenDraft(db, userId, req);
   let d = await loadDraft(db, userId, req.draftId);
   if (d.status === 'sending' || d.status === 'sent') return toServerDraft(d);
   // a draft the student stopped themselves (an undo) can be approved again; one Orbit cancelled cannot
@@ -277,6 +279,66 @@ export async function approveDraft(
     );
   }
   return toServerDraft((await draftById(db, row.id))!);
+}
+
+/** `generated_by` on a draft the student wrote themselves in the app: their words, never Orbit's. */
+export const WRITTEN_BY_STUDENT = 'user';
+
+/**
+ * A LinkedIn message the student wrote in the app (on a person's page, in Drafts) that the server does not hold: kept
+ * as their draft under the id the app gave it, so the tap that carries it sends it through the same checks, limits
+ * and LinkedIn account as a draft Orbit composed. Nothing is kept without that tap (`confirm`), only LinkedIn is
+ * written this way, and only for one of the student's own people. A draft the server already holds is left as it is,
+ * except the student's own words a rule stopped last time: this tap is a new try, checked afresh as it goes.
+ */
+async function keepWrittenDraft(db: Db, userId: string, req: Partial<DraftApproveRequest>): Promise<void> {
+  const w = req.write;
+  const id = req.draftId;
+  if (!w || typeof id !== 'string' || !/^[0-9a-f-]{36}$/i.test(id)) return;
+  const [had] = await db.sql<{
+    user_id: string;
+    status: string;
+    generated_by: string;
+    cancel_reason: string | null;
+  }>`select user_id, status, generated_by, cancel_reason from orbit.drafts where id = ${id}::uuid`;
+  if (had) {
+    if (
+      had.user_id === userId &&
+      had.generated_by === WRITTEN_BY_STUDENT &&
+      had.status === 'cancelled' &&
+      had.cancel_reason !== 'user' &&
+      req.confirm === true
+    )
+      await db.sql`
+        update orbit.drafts set status = 'draft', cancel_reason = null, error = null
+         where id = ${id}::uuid and user_id = ${userId}::uuid and status = 'cancelled'`;
+    // anyone else's id is not found below, as for any draft that is not the student's
+    return;
+  }
+  if (w.channel !== 'linkedin') throw new HttpError(400, 'bad_request', 'write.channel is linkedin');
+  if (req.confirm !== true)
+    throw new HttpError(409, 'needs_confirmation', 'every LinkedIn message needs your tap to send');
+  const body = req.body;
+  if (typeof body !== 'string' || !body.trim() || body.length > 20_000)
+    throw new HttpError(400, 'bad_request', 'body must be the message, at most 20,000 characters');
+  // someone merged into another person since is that person now
+  const [p] = await db.sql<{ id: string }>`
+    select coalesce(merged_into, id) as id from orbit.people
+     where id = ${w.personId}::uuid and user_id = ${userId}::uuid and deleted_at is null`;
+  if (!p) throw new HttpError(404, 'person_not_found', 'Orbit does not have this person on your account yet');
+  const [row] = await db.sql<{ id: string }>`
+    insert into orbit.drafts (id, user_id, person_id, channel, kind, subject, body, status, autonomy_level,
+                              generated_by)
+    values (${id}::uuid, ${userId}::uuid, ${p.id}::uuid, 'linkedin', ${w.kind}, null, ${body.trim()}, 'draft',
+            0::smallint, ${WRITTEN_BY_STUDENT})
+    on conflict (id) do nothing
+    returning id`;
+  if (row)
+    await audit(db, userId, 'user', 'draft.write', id, {
+      kind: w.kind,
+      channel: 'linkedin',
+      hash: messageHash({ channel: 'linkedin', subject: null, body: body.trim() }),
+    });
 }
 
 /** An approval that carries the student's words: the body (and subject) as they left them, checked first. */
@@ -713,7 +775,10 @@ export async function sendDraft(s: Services, draftId: string): Promise<SendResul
       slug: person.linkedin_slug,
       connected: !!person.linkedin_connected_on,
       text: d.body,
+      // connection requests have their own day and week (the cap table), counted as they go
+      beforeInvite: () => inviteCapReached(db, userId, now),
     });
+    if (li.ok && li.invited) await audit(db, userId, 'user', 'linkedin.invite', d.id, { at: iso(now) });
     // the member LinkedIn resolved is kept, so the next message needs no lookup
     if (li.ok && li.memberId && !person.linkedin_member_id)
       await db.sql`
@@ -935,7 +1000,10 @@ export async function recoverStuckSends(s: Services, userId: string): Promise<nu
   return n;
 }
 
-/** LinkedIn invites: 15 a day and 60 a week, counted from the audit log (invites go out only on a tap). */
+/**
+ * LinkedIn invites: 15 a day and 60 a week, counted from the audit log (invites go out only on a tap). Asked by
+ * `sendDraft` just before a message goes as a connection request, which writes the `linkedin.invite` row it counts.
+ */
 export async function inviteCapReached(db: Db, userId: string, now: Date): Promise<string | null> {
   const [r] = await db.sql<{ day: number; week: number }>`
     select count(*) filter (where created_at >= ${new Date(now.getTime() - 86_400_000)}::timestamptz)::int as day,

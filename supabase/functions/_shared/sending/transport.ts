@@ -219,6 +219,8 @@ export async function linkedinSend(
     /** known to be a 1st-degree connection: a chat, never a request */
     connected?: boolean;
     text: string;
+    /** asked just before a connection request goes: the limit that stops it (its code), or null to send it */
+    beforeInvite?: () => Promise<string | null>;
   },
 ): Promise<SendOutcome & { chatId?: string; invited?: boolean; memberId?: string }> {
   const base = (s.env.unipileBase ?? '').replace(/\/+$/, '');
@@ -287,6 +289,8 @@ export async function linkedinSend(
   if (p.connected || chat.out.retry || chat.out.error === 'unipile_no_id') return chat.out;
 
   if (p.text.length > LINKEDIN_NOTE_MAX) return { ok: false, retry: false, error: 'linkedin_note_too_long' };
+  const stop = await p.beforeInvite?.();
+  if (stop) return { ok: false, retry: false, error: stop };
   const res = await call(`${base}/api/v1/users/invite`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },

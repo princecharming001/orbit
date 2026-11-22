@@ -173,13 +173,17 @@ export async function runApproval(
       minute: '2-digit',
       timeZone: user.timezone || undefined,
     });
+    // a LinkedIn message the server could not hand over at once (LinkedIn was busy): it tries again within a minute
+    const busy = draft.channel === 'linkedin';
     toast.push({
-      text: soon
-        ? `Sending to ${name} in ${Math.round(UNDO_WINDOW_MS / 1000)} seconds.`
-        : `Approved. Gmail sends it to ${name} ${at}, in their morning.`,
-      ttl: soon ? UNDO_WINDOW_MS - 2000 : 10_000,
+      text: busy
+        ? `LinkedIn is busy. Orbit sends it to ${name} in about a minute.`
+        : soon
+          ? `Sending to ${name} in ${Math.round(UNDO_WINDOW_MS / 1000)} seconds.`
+          : `Approved. Gmail sends it to ${name} ${at}, in their morning.`,
+      ttl: busy ? 10_000 : soon ? UNDO_WINDOW_MS - 2000 : 10_000,
       action: {
-        label: soon ? 'Undo' : 'Stop it',
+        label: soon && !busy ? 'Undo' : 'Stop it',
         onClick: () => {
           undoQueued(user, draft.id).then((undone) =>
             toast.push({ text: undone ? 'Not sent. The draft is back.' : 'Too late, it already went out.' }),

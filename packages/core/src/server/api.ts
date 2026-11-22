@@ -326,6 +326,8 @@ export interface ServerDraft {
   sentAt: string | null;
   /** why the last send did not go (`linkedin_note_too_long`, `unipile_422`, ...), when it did not */
   error?: string | null;
+  /** the rule that stopped it for good (`do_not_contact`, `unanswered_limit`, `replied`, ...), when one did */
+  cancelReason?: string | null;
   validator: { ok: boolean; issues: string[]; words: number; grade: number } | null;
   generatedBy: 'llm' | 'template';
   hooks: { text: string; sourceId: string }[];
@@ -365,6 +367,18 @@ export interface DraftApproveRequest {
   undoSec?: number;
   /** the files to send with it, base64 (at most 3, 4 MB each, 5 MB in all); replaces any it had */
   attachments?: { name: string; mimeType: string; data: string; kind?: 'resume' | 'file' }[];
+  /**
+   * A LinkedIn message the student wrote in the app (on a person's page, in Drafts), which the server may not hold:
+   * with `confirm` and `body`, the server keeps it as their draft under `draftId` and sends it on this tap, like one
+   * it composed. Ignored when the server already holds the draft. Never without the tap.
+   */
+  write?: DraftWrite;
+}
+/** Who a student-written LinkedIn message is for and what kind it is (POST /drafts/approve `write`). */
+export interface DraftWrite {
+  personId: string;
+  kind: MessageKind;
+  channel: 'linkedin';
 }
 /** POST /drafts/cancel, POST /drafts/discard */
 export interface DraftIdRequest {

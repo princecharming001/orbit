@@ -2011,7 +2011,7 @@ const PLAN29: Scenario[] = [
     api: autopilotDay,
     goal: 'ask whether autopilot can send your LinkedIn messages as well',
     maxTurns: 3,
-    reference: `${AUTOPILOT_MODES} LinkedIn is never sent on its own at any level, invites included; on an Orbit account LinkedIn drafts are copied and opened on LinkedIn for the student to send themselves, and connecting LinkedIn live only keeps their connections in sync, it does not send. Said plainly, without apology, with the email side as what autopilot does cover.`,
+    reference: `${AUTOPILOT_MODES} LinkedIn is never sent on its own at any level, invites included: every LinkedIn message goes only when the student approves that message themselves (Orbit then sends it from their own LinkedIn account when LinkedIn is connected, or they paste it into LinkedIn), and autopilot never schedules or sends one. Said plainly, without apology, with the email side as what autopilot does cover.`,
     noWeb: true,
     minGoal: 'yes',
   },
