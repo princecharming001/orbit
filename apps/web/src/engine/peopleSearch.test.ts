@@ -696,6 +696,20 @@ describe('one run: the network and beyond, as one list', () => {
     expect(by('Cy Bare').headline).toBeUndefined();
   });
 
+  it('a source today’s allowance ran out for is said, so a short list is not read as nobody else fitting', async () => {
+    network([]);
+    src.searchPeople.mockResolvedValue({
+      ok: true,
+      value: { batchId: 'b', relaxed: [], unconfigured: [], results: [], limits: ['web', 'linkedin'] },
+    });
+    const r = await runPeopleSearch({ id: 'u1', school: '' }, asked);
+    expect(r.notes).toEqual([
+      'You have used today’s searches outside your network, so this list is your own people and what was already found. It resets tomorrow.',
+      'You have used today’s LinkedIn searches, so people one connection away are not listed. It resets tomorrow.',
+    ]);
+    for (const n of r.notes) expect(n).not.toMatch(/[—!]/);
+  });
+
   it("joins both, the student's own first on a tie, and a known person found outside is listed once", async () => {
     network([
       row('p1', 'Ana Own', 'strong', [check('position:0', 'yes'), check('criterion:0', 'yes')]),

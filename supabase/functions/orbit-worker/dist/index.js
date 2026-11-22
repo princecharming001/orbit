@@ -29726,8 +29726,15 @@ async function runSourcing(s, userId, req) {
     unconfigured: result.unconfigured,
     relaxed: result.relaxed,
     ...result.assumedPlace ? { assumedPlace: result.assumedPlace } : {},
-    ...result.notes.length ? { notes: result.notes } : {}
+    ...result.notes.length ? { notes: result.notes } : {},
+    ...limitsOf(result.errors).length ? { limits: limitsOf(result.errors) } : {}
   };
+}
+function limitsOf(errors) {
+  const out = [];
+  if (errors.some((e) => /^(exa|web): budget_exceeded/.test(e))) out.push("web");
+  if (errors.some((e) => /^unipile: daily search cap reached/.test(e))) out.push("linkedin");
+  return out;
 }
 function webSourcesFor(s) {
   if (s.web) return s.web;

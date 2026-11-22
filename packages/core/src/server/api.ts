@@ -238,6 +238,11 @@ export interface SourceSearchResponse {
   assumedPlace?: string;
   /** what the web pass did (plan 31): hits, pages and profile pages read */
   notes?: string[];
+  /**
+   * A source that was not asked because the student has used today's allowance of it: `web` (the profile index),
+   * `linkedin` (searches through their own LinkedIn). The results are what the other sources found.
+   */
+  limits?: ('web' | 'linkedin')[];
 }
 /** POST /source/add */
 /** POST /source/email: one person's address looked up on demand (plan 35 C3), by recommendation or by person */

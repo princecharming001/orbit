@@ -17,6 +17,7 @@ import {
   peopleQueries,
   readExaPerson,
 } from '../../functions/_shared/sourcing/people.ts';
+import { limitsOf } from '../../functions/_shared/sourcing/run.ts';
 import { askedChecks, PEOPLE_RESULTS } from '../../functions/_shared/sourcing/search.ts';
 import { connectionsByOrg, orgBase, realOrg, warmthOf } from '../../functions/_shared/sourcing/warmth.ts';
 import { needsOf } from '../../functions/orbit-api/routes/source.ts';
@@ -316,6 +317,16 @@ describe('the filters of a search', () => {
     expect(askedChecks({ ...base, filters, checks }).map((c) => c.filter ?? 'criterion')).toEqual([
       'criterion',
     ]);
+  });
+
+  it('a source that today’s allowance ran out for is named, and nothing else is', () => {
+    expect(limitsOf([])).toEqual([]);
+    expect(limitsOf(['exa: budget_exceeded'])).toEqual(['web']);
+    expect(limitsOf(['unipile: daily search cap reached', 'web: budget_exceeded'])).toEqual([
+      'web',
+      'linkedin',
+    ]);
+    expect(limitsOf(['apollo: apollo 403', 'unipile: unipile 500'])).toEqual([]);
   });
 
   it('the request says which filters only rank, and nothing else', () => {

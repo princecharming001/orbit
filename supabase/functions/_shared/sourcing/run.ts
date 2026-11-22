@@ -483,7 +483,16 @@ export async function runSourcing(
     relaxed: result.relaxed,
     ...(result.assumedPlace ? { assumedPlace: result.assumedPlace } : {}),
     ...(result.notes.length ? { notes: result.notes } : {}),
+    ...(limitsOf(result.errors).length ? { limits: limitsOf(result.errors) } : {}),
   };
+}
+
+/** Which sources a search could not ask because today's allowance of them is used up. */
+export function limitsOf(errors: string[]): ('web' | 'linkedin')[] {
+  const out: ('web' | 'linkedin')[] = [];
+  if (errors.some((e) => /^(exa|web): budget_exceeded/.test(e))) out.push('web');
+  if (errors.some((e) => /^unipile: daily search cap reached/.test(e))) out.push('linkedin');
+  return out;
 }
 
 /** POST /source/add: one person, one chat at `identified` with the goal, one queued dossier per recommendation. */

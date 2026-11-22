@@ -876,6 +876,15 @@ export async function runPeopleSearch(
         );
       if (out.value.unconfigured?.length)
         notes.push(`Not searched yet: ${providerNames(out.value.unconfigured)}.`);
+      // a source that was not asked today is said, so a shorter list is not read as "nobody else fits"
+      if (out.value.limits?.includes('web'))
+        notes.push(
+          'You have used today’s searches outside your network, so this list is your own people and what was already found. It resets tomorrow.',
+        );
+      if (out.value.limits?.includes('linkedin'))
+        notes.push(
+          'You have used today’s LinkedIn searches, so people one connection away are not listed. It resets tomorrow.',
+        );
     } else outsideMessage = out.message;
   }
   rows.sort(compareRows);
