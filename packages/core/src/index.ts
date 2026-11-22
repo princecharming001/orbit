@@ -43,6 +43,7 @@ export * from './graph/ties';
 export * from './graph/titles';
 export * from './knowledge/index';
 export * from './labels';
+export * from './util/strictSchema';
 export * from './linkedin/csv';
 export * from './linkedin/headline';
 export * from './memory/extract';

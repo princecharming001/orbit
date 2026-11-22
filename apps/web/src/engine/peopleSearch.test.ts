@@ -36,6 +36,7 @@ import {
   type FilterForm,
   formIsEmpty,
   formOf,
+  INTERPRET_SYSTEM,
   interpretAsk,
   matchOfChecks,
   matchOfSourced,
@@ -50,6 +51,7 @@ import {
   type SearchForm,
   specOf,
   tidyForm,
+  tidyReading,
 } from './peopleSearch';
 
 const form = (filters: Partial<FilterForm> = {}, criteria: [string, 'must' | 'nice'][] = []): SearchForm => ({
@@ -291,6 +293,106 @@ describe('reading a sentence with the model', () => {
     expect(build((s, t) => `<${s}>${t}</${s}>`)).toBe('<sentence>seed investors in London</sentence>');
   });
 
+  const reading = (over: Record<string, unknown>) => ({
+    titles: [],
+    seniority: [],
+    currentCompanies: [],
+    everCompanies: [],
+    schools: [],
+    places: [],
+    keywords: [],
+    keywordsNeed: 'nice',
+    criteria: [],
+    mineOnly: false,
+    ...over,
+  });
+
+  it('a filter leaves people out, so the reading keeps only the filters the sentence asked for', async () => {
+    llm.reachable = true;
+    // a job they left is not the job they hold: no title is made of it
+    llm.judge.mockResolvedValueOnce(
+      reading({
+        titles: ['consultant'],
+        everCompanies: ['McKinsey'],
+        keywords: ['startups', 'McKinsey'],
+        criteria: [{ text: 'Works at a startup now', need: 'must' }],
+      }),
+    );
+    const mck = (await interpretAsk('ex-McKinsey people now at startups')).form.filters;
+    expect(mck.titles).toEqual([]);
+    expect(mck.companies).toEqual(['McKinsey']);
+    // a keyword is a topic, never a company another field already holds
+    expect(mck.keywords).toEqual(['startups']);
+
+    // a company is where they work now or where they worked, not both
+    llm.judge.mockResolvedValueOnce(
+      reading({
+        titles: ['software engineer'],
+        currentCompanies: ['Stripe'],
+        everCompanies: ['stripe', 'Plaid'],
+        keywords: ['Stripe', 'software engineer', 'payments'],
+      }),
+    );
+    const stripe = (await interpretAsk('software engineers at Stripe')).form.filters;
+    expect(stripe.currentCompanies).toEqual(['Stripe']);
+    expect(stripe.companies).toEqual(['Plaid']);
+    expect(stripe.keywords).toEqual(['payments']);
+
+    // a level is kept only when the sentence says one: "partner" and "head of" are titles
+    llm.judge.mockResolvedValueOnce(
+      reading({
+        titles: ['partner'],
+        seniority: ['senior', 'director_head', 'vp', 'c_level'],
+        currentCompanies: ['Sequoia'],
+      }),
+    );
+    expect((await interpretAsk('partners at Sequoia')).form.filters.seniority).toEqual([]);
+    llm.judge.mockResolvedValueOnce(reading({ titles: ['head of growth'], seniority: ['c_level'] }));
+    const growth = (await interpretAsk('heads of growth at consumer startups')).form.filters;
+    expect(growth.titles).toEqual(['head of growth']);
+    expect(growth.seniority).toEqual([]);
+    llm.judge.mockResolvedValueOnce(
+      reading({ titles: ['vp of engineering'], seniority: ['vp'], places: ['NYC'] }),
+    );
+    expect((await interpretAsk('VPs of engineering in NYC')).form.filters.seniority).toEqual(['vp']);
+    // a level said about a job they left is not a level of the job they hold
+    llm.judge.mockResolvedValueOnce(
+      reading({ titles: ['founder'], seniority: ['senior'], everCompanies: ['Google'] }),
+    );
+    const ex = (await interpretAsk('senior engineers who used to be at Google and are now founders')).form
+      .filters;
+    expect(ex.seniority).toEqual([]);
+    expect(ex.titles).toEqual(['founder']);
+
+    // a title the sentence does not name is not made up; one it names by another form of the word is kept
+    llm.judge.mockResolvedValueOnce(
+      reading({ titles: ['investor'], schools: ['Berkeley'], keywords: ['venture capital'] }),
+    );
+    expect((await interpretAsk('Berkeley alumni working in venture capital')).form.filters.titles).toEqual(
+      [],
+    );
+    llm.judge.mockResolvedValueOnce(
+      reading({ titles: ['phd student', 'chief of staff'], schools: ['Stanford'] }),
+    );
+    expect((await interpretAsk('Stanford PhDs who are chiefs of staff')).form.filters.titles).toEqual([
+      'phd student',
+      'chief of staff',
+    ]);
+
+    // the sentence itself is never a keyword
+    llm.judge.mockResolvedValueOnce(reading({ keywords: ['people who know batteries', 'batteries'] }));
+    expect((await interpretAsk('people who know batteries')).form.filters.keywords).toEqual(['batteries']);
+  });
+
+  it('the reading is told what a filter costs, and that a job they left is not a title', () => {
+    expect(INTERPRET_SYSTEM).toContain('Filters are hard');
+    expect(INTERPRET_SYSTEM).toContain('Never the same company in both');
+    expect(INTERPRET_SYSTEM).not.toMatch(/[—!]/);
+    expect(tidyReading(reading({ titles: ['Investor'] }) as never, 'investors', true).titles).toEqual([
+      'investor',
+    ]);
+  });
+
   it('a model that fails, answers nothing, or returns an empty reading falls back to the rules', async () => {
     llm.reachable = true;
     llm.judge.mockRejectedValueOnce(new Error('down'));
@@ -309,7 +411,14 @@ describe('the match', () => {
   it("one of the student's own: a must-have counts double, nothing asked is a full match", () => {
     expect(matchOfChecks([])).toBe(100);
     expect(matchOfChecks([k('must', 'yes'), k('must', 'yes')])).toBe(100);
-    expect(matchOfChecks([k('must', 'yes'), k('nice', 'no')])).toBe(67);
+    // a nice-to-have they do not meet tips the match, it does not sink it
+    expect(matchOfChecks([k('must', 'yes'), k('nice', 'no')])).toBe(86);
+    expect(matchOfChecks([k('must', 'yes'), k('nice', 'yes')])).toBe(100);
+    // a confirmed must-have outweighs a nice-to-have met by someone whose must-have is only likely
+    expect(matchOfChecks([k('must', 'yes'), k('must', 'yes'), k('nice', 'no')])).toBeGreaterThan(
+      matchOfChecks([k('must', 'yes'), k('must', 'likely'), k('nice', 'yes')]),
+    );
+    expect(matchOfChecks([k('must', 'no'), k('nice', 'yes')])).toBe(20);
     expect(matchOfChecks([k('must', 'likely')])).toBe(80);
     expect(matchOfChecks([k('must', 'unknown')])).toBe(40);
   });

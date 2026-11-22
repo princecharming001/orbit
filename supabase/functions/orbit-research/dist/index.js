@@ -2754,6 +2754,89 @@ import Anthropic2 from "npm:@anthropic-ai/sdk@0.133.0";
 import Anthropic from "npm:@anthropic-ai/sdk@0.133.0";
 import { zodOutputFormat } from "npm:@anthropic-ai/sdk@0.133.0/helpers/zod";
 
+// packages/core/src/util/strictSchema.ts
+function jsonAt(text, at) {
+  const first = text[at];
+  if (first === void 0) return void 0;
+  if (first !== "[" && first !== "{" && first !== '"') {
+    const m = text.slice(at).match(/^(-?\d+(?:\.\d+)?(?:e[+-]?\d+)?|true|false|null)/i);
+    return m?.[0];
+  }
+  let depth = 0;
+  let inString = false;
+  for (let i = at; i < text.length; i++) {
+    const ch = text[i];
+    if (inString) {
+      if (ch === "\\") i++;
+      else if (ch === '"') {
+        inString = false;
+        if (depth === 0) return text.slice(at, i + 1);
+      }
+      continue;
+    }
+    if (ch === '"') inString = true;
+    else if (ch === "[" || ch === "{") depth++;
+    else if (ch === "]" || ch === "}") {
+      depth--;
+      if (depth === 0) return text.slice(at, i + 1);
+    }
+  }
+  return void 0;
+}
+var KEPT = ["enum", "const"];
+function liftKeywords(description) {
+  const lifted = {};
+  const open = description.lastIndexOf("{");
+  const noteAt = (() => {
+    for (let i = description.length - 1; i >= 0; i--) {
+      if (description[i] !== "{") continue;
+      if ((i === 0 || description.slice(0, i).endsWith("\n\n")) && /^\{[A-Za-z$_][\w$]*: /.test(description.slice(i)))
+        return i;
+    }
+    return -1;
+  })();
+  if (open < 0 || noteAt < 0 || !description.trimEnd().endsWith("}")) return { description, lifted };
+  let note = description.slice(noteAt + 1, description.trimEnd().length - 1);
+  for (const key of KEPT) {
+    const m = new RegExp(`(^|, )${key}: `).exec(note);
+    if (!m) continue;
+    const start = m.index + m[0].length;
+    const raw = jsonAt(note, start);
+    if (raw === void 0) continue;
+    try {
+      lifted[key] = JSON.parse(raw);
+    } catch {
+      continue;
+    }
+    note = `${note.slice(0, m.index)}${m[1] && m.index === 0 ? "" : ""}${note.slice(start + raw.length)}`;
+    note = note.replace(/^, /, "");
+  }
+  const before = description.slice(0, noteAt).replace(/\n\n$/, "");
+  const rest = note.trim() ? `{${note}}` : "";
+  const text = [before, rest].filter(Boolean).join("\n\n");
+  return { ...text ? { description: text } : {}, lifted };
+}
+function strictSchema(schema) {
+  if (Array.isArray(schema)) return schema.map((x) => strictSchema(x));
+  if (!schema || typeof schema !== "object") return schema;
+  const node = schema;
+  const out = {};
+  for (const [k, v] of Object.entries(node)) {
+    if ((k === "properties" || k === "$defs") && v && typeof v === "object" && !Array.isArray(v))
+      out[k] = Object.fromEntries(Object.entries(v).map(([name, s]) => [name, strictSchema(s)]));
+    else out[k] = strictSchema(v);
+  }
+  if (typeof node.description === "string" && node.enum === void 0 && node.const === void 0) {
+    const { description, lifted } = liftKeywords(node.description);
+    if (Object.keys(lifted).length) {
+      if (description === void 0) delete out.description;
+      else out.description = description;
+      Object.assign(out, lifted);
+    }
+  }
+  return out;
+}
+
 // supabase/functions/_shared/budget.ts
 var CLAUDE_MONTHLY_USD = 10;
 var CAPS = [
@@ -3249,7 +3332,8 @@ function makeClaude(deps) {
   };
 }
 function formatOf(schema, setting) {
-  const zf = zodOutputFormat(schema);
+  const loose = zodOutputFormat(schema);
+  const zf = { ...loose, schema: strictSchema(loose.schema) };
   return setting.flatNullable ? { ...zf, schema: flattenNullable(zf.schema) } : zf;
 }
 function flattenNullable(schema) {

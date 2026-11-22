@@ -17,6 +17,7 @@
 import Anthropic from '@anthropic-ai/sdk';
 import { zodOutputFormat } from '@anthropic-ai/sdk/helpers/zod';
 import type { z } from 'zod/v4';
+import { strictSchema } from '../../../packages/core/src/util/strictSchema.ts';
 import { checkBudget, recordUsage } from './budget.ts';
 import type { Db } from './db.ts';
 import { BATCH_DISCOUNT, costUsd, type Usage } from './prices.ts';
@@ -552,7 +553,9 @@ export function makeClaude(deps: ClaudeDeps) {
 
 /** The structured-output format for a schema, with `string | null` flattened for the tasks that need it. */
 function formatOf<S extends z.ZodType>(schema: S, setting: TaskSetting) {
-  const zf = zodOutputFormat(schema);
+  const loose = zodOutputFormat(schema);
+  // the SDK writes `enum` out as a note in the description; put it back, so the answer is held to its own words
+  const zf = { ...loose, schema: strictSchema(loose.schema) as typeof loose.schema };
   return setting.flatNullable ? { ...zf, schema: flattenNullable(zf.schema) as typeof zf.schema } : zf;
 }
 

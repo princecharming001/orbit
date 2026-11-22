@@ -22,6 +22,7 @@ import type {
   TriageResult,
   VoiceEdit,
 } from '@orbit/core';
+// The SDK's zodOutputFormat helper is built on zod/v4 and cannot read zod v3 schemas.
 import {
   fmtWindow,
   LINKEDIN_NOTE_MAX,
@@ -34,13 +35,13 @@ import {
   type RapportReading,
   rapportFromLlm,
   stepOf,
+  strictSchema,
   tzAbbr,
   VOICE_DISTILL_SYSTEM,
   VOICE_JUDGE_SYSTEM,
   voiceDistillUser,
   voiceJudgeUser,
 } from '@orbit/core';
-// The SDK's zodOutputFormat helper is built on zod/v4 and cannot read zod v3 schemas.
 import { draftPlaybookFor } from '../engine/draftKnowledge';
 import { z } from '../zod';
 import { currentAccessToken } from './orbitApi';
@@ -479,7 +480,9 @@ async function runParse<T extends z.ZodTypeAny>(
   const { tag, wrap } = makeWrap(newNonce());
   // runtime helper reads zod/v4 schemas; its .d.ts names the root 'zod' export (v3 in zod 3.25)
   const { zodOutputFormat } = await import('@anthropic-ai/sdk/helpers/zod');
-  const base = zodOutputFormat(schema as never);
+  const loose = zodOutputFormat(schema as never);
+  // the SDK writes `enum` out as a note in the description; put it back, so the answer is held to its own words
+  const base = { ...loose, schema: strictSchema(loose.schema) as typeof loose.schema };
   // The SDK parses inside messages.parse and throws without the response, so its usage would be lost. Catch the
   // parse error here instead: the tokens of a truncated or malformed answer still count against the daily cap.
   let parseError: unknown;
