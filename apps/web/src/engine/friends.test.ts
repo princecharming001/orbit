@@ -15,10 +15,12 @@ import {
   friendRoutes,
   friendsAvailable,
   inviteFriend,
+  inviteLink,
   listAsks,
   listFriends,
   markPrivate,
   previewShares,
+  requestFriend,
   respondToAsk,
   setShareMode,
   throughFriendsLine,
@@ -154,6 +156,65 @@ describe('friends against the fake orbit-api', () => {
     expect(ana.knowsAt.find((k) => k.company === 'Stripe')?.count).toBe(2);
     const rows = await db.friends.where('ownerId').equals(user.id).toArray();
     expect(rows.map((f) => f.userId)).toEqual([ANA_USER_ID]);
+  });
+
+  it("each friend carries where their network stands, and Dexie keeps it for the side column's line", async () => {
+    const stands = async () => {
+      const r = await listFriends(user);
+      return r.ok ? r.value.friends[0]!.network : undefined;
+    };
+    expect(await stands()).toBe('ready');
+    expect((await db.friends.get('fr_ana'))?.network).toBe('ready');
+    const ana = api.state.friends[0]!;
+    // an import of hers is still running: more people are on their way
+    ana.syncing = true;
+    expect(await stands()).toBe('syncing');
+    ana.syncing = false;
+    // she shares, and nobody is visible yet
+    const people = ana.people;
+    ana.people = [];
+    expect(await stands()).toBe('empty');
+    ana.people = people;
+    // sharing turned off is all that is said, whatever else is going on
+    ana.theirMode = 'none';
+    ana.syncing = true;
+    expect(await stands()).toBe('not_sharing');
+    expect((await db.friends.get('fr_ana'))?.network).toBe('not_sharing');
+  });
+
+  it('a request sent waits under pending with their name and photo until they answer', async () => {
+    const marcus = api.state.friendFinder.onOrbit.find((x) => x.userId === 'u_marcus')!;
+    marcus.avatarUrl = 'https://example.com/marcus.jpg';
+    expect((await requestFriend(user, 'u_marcus')).ok).toBe(true);
+    expect((await inviteFriend(user, 'noah.patel@cornell.edu')).ok).toBe(true);
+    const r = await listFriends(user);
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.value.pending.map((p) => [p.direction, p.name, p.email])).toEqual([
+      ['out', null, 'noah.patel@cornell.edu'],
+      ['out', 'Marcus Wei', null],
+    ]);
+    const sent = r.value.pending.find((p) => p.name === 'Marcus Wei')!;
+    expect(sent.avatarUrl).toBe('https://example.com/marcus.jpg');
+    expect(sent.linkedinUrl).toBe('https://www.linkedin.com/in/marcus-wei');
+    // never their address
+    expect(JSON.stringify(r.value.pending)).not.toContain('marcus@cornell.edu');
+  });
+
+  it('the standing link stays the same until it is reset, and a reset makes a new one', async () => {
+    const a = await inviteLink(user);
+    const b = await inviteLink(user);
+    expect(a.ok && b.ok && a.value.link === b.value.link).toBe(true);
+    const fresh = await inviteLink(user, true);
+    expect(fresh.ok && a.ok && fresh.value.link !== a.value.link).toBe(true);
+    const after = await inviteLink(user);
+    expect(after.ok && fresh.ok && after.value.link === fresh.value.link).toBe(true);
+    expect(api.calls.filter((c) => c.route === '/friends/link').map((c) => c.body)).toEqual([
+      {},
+      {},
+      { reset: true },
+      {},
+    ]);
   });
 
   it('invite, accept and end go through the server; what you share is kept in the settings row too', async () => {

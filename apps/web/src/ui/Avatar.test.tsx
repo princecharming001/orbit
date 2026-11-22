@@ -62,6 +62,26 @@ describe('Avatar', () => {
   });
 });
 
+describe('Avatar as a square', () => {
+  it('rounds the corners of the photo and of the initials alike, and stays a circle unless asked', () => {
+    act(() =>
+      root.render(<Avatar name="Morgan Lee" src="https://example.com/me.jpg" size={56} shape="square" />),
+    );
+    expect(host.querySelector('[data-shape="square"]')).not.toBeNull();
+    expect(img()!.style.borderRadius).toBe('12px');
+    expect(img()!.className).not.toContain('rounded-full');
+    // no photo: the initials on their colour, the same corners
+    act(() => root.render(<Avatar name="Morgan Lee" size={56} shape="square" />));
+    const letters = host.querySelector('span span') as HTMLElement;
+    expect(letters.textContent).toBe('ML');
+    expect(letters.style.borderRadius).toBe('12px');
+    expect(letters.style.background).not.toBe('');
+    act(() => root.render(<Avatar name="Morgan Lee" size={56} />));
+    expect(host.querySelector('[data-shape="square"]')).toBeNull();
+    expect((host.querySelector('span span') as HTMLElement).className).toContain('rounded-full');
+  });
+});
+
 describe('Avatar reads the person’s own photo', () => {
   it('a card with an old link or none shows the photo the record has now, and follows it when it changes', async () => {
     const { db } = await import('../db/schema');

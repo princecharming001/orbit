@@ -704,6 +704,13 @@ export interface FriendShare {
   closeness: FriendCloseness;
 }
 
+/**
+ * What the server knows of a friend's network, for the one line under their name: `not_sharing` when their side shares
+ * nothing with the viewer, `syncing` while an import of theirs is still running (LinkedIn's first pass, Gmail's
+ * backfill), `empty` when they share but nobody is visible yet, `ready` when there are people to search.
+ */
+export type FriendNetworkState = 'ready' | 'syncing' | 'empty' | 'not_sharing';
+
 /** A friend as the Friends tab lists them, with the counts the row shows. */
 export interface Friend {
   friendshipId: string;
@@ -726,6 +733,8 @@ export interface Friend {
   personId?: string;
   /** their LinkedIn, which their name opens when there is no record */
   linkedinUrl?: string;
+  /** where their network stands, for the status line; absent from a server that does not say */
+  network?: FriendNetworkState;
 }
 
 /** An invite or request waiting on someone: sent by the viewer (out) or sent to them (in). */
@@ -735,6 +744,12 @@ export interface FriendInvite {
   /** the other side: an email when they are not on Orbit yet, a name when they are */
   email: string | null;
   name: string | null;
+  /** their photo, when they are on Orbit and have one */
+  avatarUrl?: string | null;
+  /** the student's own record of them, which their name opens */
+  personId?: string;
+  /** their LinkedIn, which their name opens when there is no record */
+  linkedinUrl?: string;
   status: 'pending' | 'accepted' | 'declined' | 'expired' | 'revoked';
   createdAt: string;
 }

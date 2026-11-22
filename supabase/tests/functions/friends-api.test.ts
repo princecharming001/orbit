@@ -28,6 +28,7 @@ type Friend = {
   myMode: string;
   personId?: string;
   linkedinUrl?: string;
+  network?: string;
 };
 type Share = Record<string, unknown> & { personId: string; displayName: string; closeness: number };
 type Found = {
@@ -204,6 +205,130 @@ describe('friends over orbit-api', () => {
       personId: id,
       linkedinUrl: 'https://www.linkedin.com/in/ana-rivera',
     });
+  });
+
+  it('each friend says where their network stands: empty, ready, syncing, or not sharing', async () => {
+    const { call, maya, ana, friendshipId } = await twoFriends();
+    const anaFor = async (token: string) =>
+      (await call<{ friends: Friend[] }>('/friends', token, {})).body.friends[0]!;
+    // Ana shares everyone, no import is running, and her projection is not built yet: nobody to search
+    expect((await anaFor(maya.token)).network).toBe('empty');
+    await refreshFriendShares(t.db, ana.userId, new Date());
+    const ready = await anaFor(maya.token);
+    expect(ready.shares).toBe(2);
+    expect(ready.network).toBe('ready');
+    // her Gmail backfill is still walking: more people are on their way
+    const gmail = (phase: string) =>
+      t.db.sql`update orbit.integration_accounts
+                  set sync_state = ${{ gmail: { backfill: { phase } } }}::jsonb
+                where user_id = ${ana.userId}::uuid and provider = 'google'`;
+    for (const phase of ['recent', 'deep']) {
+      await gmail(phase);
+      expect((await anaFor(maya.token)).network).toBe('syncing');
+    }
+    await gmail('complete');
+    expect((await anaFor(maya.token)).network).toBe('ready');
+    // LinkedIn's first pass, mid-way; a finished pass, or an account that is no longer linked, is not syncing
+    const linkedin = (state: Record<string, unknown>, status = 'active') =>
+      t.db.sql`
+        insert into orbit.integration_accounts (user_id, provider, external_account_id, status, sync_state)
+        values (${ana.userId}::uuid, 'linkedin', 'li-ana', ${status}, ${{ linkedin: state }}::jsonb)
+        on conflict (user_id, provider) do update set status = excluded.status, sync_state = excluded.sync_state`;
+    await linkedin({ stage: 'chats' });
+    expect((await anaFor(maya.token)).network).toBe('syncing');
+    await linkedin({ stage: 'chats' }, 'revoked');
+    expect((await anaFor(maya.token)).network).toBe('ready');
+    await linkedin({ stage: 'relations' });
+    expect((await anaFor(maya.token)).network).toBe('syncing');
+    // Ana's own import says nothing about Maya's network, as Ana sees it (Maya's projection is not built: empty)
+    expect((await anaFor(ana.token)).network).toBe('empty');
+    await linkedin({ stage: 'done', syncedAt: '2026-11-01T00:00:00.000Z' });
+    expect((await anaFor(maya.token)).network).toBe('ready');
+    // a later refresh walks known people again: a finished first pass stays ready
+    await linkedin({ stage: 'relations', syncedAt: '2026-11-01T00:00:00.000Z' });
+    expect((await anaFor(maya.token)).network).toBe('ready');
+    // she turns sharing off: that is all Maya is told, even while an import runs
+    await gmail('deep');
+    await call('/friends/settings', ana.token, { friendshipId, mode: 'none' });
+    const off = await anaFor(maya.token);
+    expect(off.shares).toBe(0);
+    expect(off.network).toBe('not_sharing');
+    // the accept answers with the same line
+    const bea = await signedInUser(t, { firstName: 'Bea' });
+    const inv = await call<{ code: string }>('/friends/invite', maya.token, { email: bea.email });
+    const acc = await call<{ friend: Friend }>('/friends/accept', bea.token, {
+      code: inv.body.code,
+      mode: 'all',
+    });
+    expect(acc.body.friend.network).toBe('empty');
+  });
+
+  it('a request sent waits under pending with their name and photo; an emailed invite with the address alone', async () => {
+    const call = api(t, fakeNet(), { env: {} });
+    const a = await signedInUser(t, { firstName: 'Ade' });
+    const b = await signedInUser(t, { firstName: 'Bea' });
+    type Pending = {
+      id: string;
+      direction: string;
+      name: string | null;
+      email: string | null;
+      avatarUrl?: string | null;
+      personId?: string;
+      linkedinUrl?: string;
+      status: string;
+    };
+    const photo = 'https://lh3.googleusercontent.com/a/bea-photo';
+    await t.db.sql`update orbit.users set avatar_url = ${photo} where id = ${b.userId}::uuid`;
+    const req = await call<{ friendshipId: string }>('/friends/request', a.token, { userId: b.userId });
+    expect(req.status).toBe(200);
+    const stranger = await call<{ status: string }>('/friends/invite', a.token, {
+      email: 'not.on.orbit@example.org',
+    });
+    expect(stranger.status).toBe(200);
+    const sent = await call<{ pending: Pending[]; friends: Friend[] }>('/friends', a.token, {});
+    expect(sent.body.friends).toEqual([]);
+    expect(sent.body.pending).toHaveLength(2);
+    const [toBea, toStranger] = sent.body.pending;
+    expect(toBea).toMatchObject({
+      id: req.body.friendshipId,
+      direction: 'out',
+      name: 'Bea Rivera',
+      email: null,
+      avatarUrl: photo,
+      status: 'pending',
+    });
+    // no record of her and no LinkedIn known: the name leads nowhere yet
+    expect(toBea!.personId).toBeUndefined();
+    expect(toBea!.linkedinUrl).toBeUndefined();
+    expect(toStranger).toMatchObject({
+      direction: 'out',
+      name: null,
+      email: 'not.on.orbit@example.org',
+      status: 'pending',
+    });
+    expect(toStranger!.avatarUrl).toBeUndefined();
+    // once Bea is in Ade's people, her name opens that record
+    const id = await addPerson(t, a.userId, {
+      name: 'Bea Rivera',
+      email: b.email,
+      linkedinUrl: 'https://www.linkedin.com/in/bea-rivera',
+    });
+    const linked = await call<{ pending: Pending[] }>('/friends', a.token, {});
+    expect(linked.body.pending[0]).toMatchObject({
+      personId: id,
+      linkedinUrl: 'https://www.linkedin.com/in/bea-rivera',
+    });
+    // Bea's side: the request waiting on her, with Ade's name (he has no photo) and never his address
+    const got = await call<{ pending: Pending[] }>('/friends', b.token, {});
+    expect(got.body.pending).toEqual([
+      expect.objectContaining({ direction: 'in', name: 'Ade Rivera', email: null, avatarUrl: null }),
+    ]);
+    expect(JSON.stringify(got.body)).not.toContain(a.email);
+    // accepted: nothing is left pending between the two
+    await call('/friends/accept', b.token, { friendshipId: req.body.friendshipId, mode: 'all' });
+    const after = await call<{ pending: Pending[]; friends: Friend[] }>('/friends', a.token, {});
+    expect(after.body.pending.map((p) => p.email)).toEqual(['not.on.orbit@example.org']);
+    expect(after.body.friends.map((f) => f.name)).toEqual(['Bea Rivera']);
   });
 
   it('a stranger cannot read a projection (403), and nothing Google-derived crosses in what a friend reads', async () => {

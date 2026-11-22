@@ -21183,6 +21183,34 @@ function forwardBody(i) {
   ].join("\n\n");
 }
 
+// supabase/functions/_shared/friends/network.ts
+function importRunning(accounts) {
+  return accounts.some((a) => {
+    if (a.provider === "linkedin") {
+      if (a.status !== "active" && a.status !== "connecting") return false;
+      const li = a.sync_state?.linkedin;
+      return !!li && !li.syncedAt && typeof li.stage === "string" && li.stage !== "done";
+    }
+    if (a.provider === "google") {
+      if (a.status !== "active") return false;
+      const phase = a.sync_state?.gmail?.backfill?.phase;
+      return phase === "recent" || phase === "deep";
+    }
+    return false;
+  });
+}
+async function stillImporting(db2, userId) {
+  const accounts = await db2.sql`
+    select provider, status, sync_state from orbit.integration_accounts
+     where user_id = ${userId}::uuid and provider in ('google', 'linkedin')`;
+  return importRunning(accounts);
+}
+function networkState(mode2, visible, importing) {
+  if (mode2 === "none") return "not_sharing";
+  if (importing) return "syncing";
+  return visible > 0 ? "ready" : "empty";
+}
+
 // supabase/functions/orbit-api/routes/friends.ts
 var INVITES_PER_DAY = 20;
 var ASKS_PER_DAY_PER_FRIEND = 10;
@@ -21285,6 +21313,7 @@ async function friendView(db2, me2, f2, targets) {
     domains: theirs?.company_domains ?? []
   };
   const visible = friend.mode === "none" ? [] : await visibleShares(db2, friend);
+  const importing = friend.mode === "none" ? false : await stillImporting(db2, otherId);
   const lower = targets.map((t) => t.toLowerCase());
   const at = visible.filter((s) => s.company && lower.includes(s.company.toLowerCase()));
   const knowsAt = targets.map((company) => ({
@@ -21304,7 +21333,8 @@ async function friendView(db2, me2, f2, targets) {
     myMode: mine?.mode ?? "none",
     myCompanyDomains: mine?.company_domains ?? [],
     since: iso(f2.accepted_at ?? f2.created_at),
-    ...await friendLinks(db2, me2, otherId)
+    ...await friendLinks(db2, me2, otherId),
+    network: networkState(friend.mode, visible.length, importing)
   };
 }
 async function list2(ctx) {
@@ -21319,23 +21349,16 @@ async function list2(ctx) {
   const pending = [];
   for (const f2 of rows) {
     if (f2.status === "active") friends.push(await friendView(db2, me2, f2, targets));
-    else if (f2.requested_by !== me2) {
-      const other = await userLite(db2, f2.a === me2 ? f2.b : f2.a);
+    else {
+      const otherId = f2.a === me2 ? f2.b : f2.a;
+      const other = await userLite(db2, otherId);
       pending.push({
         id: f2.id,
-        direction: "in",
+        direction: f2.requested_by !== me2 ? "in" : "out",
         email: null,
         name: nameOf(other),
-        status: "pending",
-        createdAt: iso(f2.created_at)
-      });
-    } else {
-      const other = await userLite(db2, f2.a === me2 ? f2.b : f2.a);
-      pending.push({
-        id: f2.id,
-        direction: "out",
-        email: null,
-        name: nameOf(other),
+        avatarUrl: other.avatar_url,
+        ...await friendLinks(db2, me2, otherId),
         status: "pending",
         createdAt: iso(f2.created_at)
       });

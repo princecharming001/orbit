@@ -7,7 +7,9 @@
  *                                                → the friendship goes active; the acceptor's side shares in `mode`
  *   POST /friends/decline {code | friendshipId}
  *   POST /friends/end {friendshipId}             → visibility ends both ways in the same statement
- *   GET|POST /friends                            → the friends with their counts, and what is pending either way
+ *   GET|POST /friends                            → the friends with their counts and where each one's network stands
+ *                                                  (ready, syncing, empty, not sharing), and what is pending either
+ *                                                  way, each request with the other side's name and photo
  *   POST /friends/settings {friendshipId?, mode, companyDomains?}
  *                                                → what the student shares back, with one friend or with all
  *   GET|POST /friends/preview { friendshipId? }  → the student's own projection, row for row as a friend (or one friend) sees it
@@ -41,6 +43,7 @@ import { toServerDraft } from '../../_shared/compose/drafts.ts';
 import { randomToken } from '../../_shared/crypto.ts';
 import type { Db } from '../../_shared/db.ts';
 import { forwardBody, forwardSubject } from '../../_shared/friends/forward.ts';
+import { networkState, stillImporting } from '../../_shared/friends/network.ts';
 import {
   matchShares,
   publicShare,
@@ -206,6 +209,8 @@ async function friendView(db: Db, me: string, f: FriendshipRow, targets: string[
     domains: theirs?.company_domains ?? [],
   };
   const visible = friend.mode === 'none' ? [] : await visibleShares(db, friend);
+  // an import is only asked about when the answer could show: a friend who shares nothing reads "not sharing"
+  const importing = friend.mode === 'none' ? false : await stillImporting(db, otherId);
   const lower = targets.map((t) => t.toLowerCase());
   const at = visible.filter((s) => s.company && lower.includes(s.company.toLowerCase()));
   const knowsAt = targets
@@ -228,6 +233,7 @@ async function friendView(db: Db, me: string, f: FriendshipRow, targets: string[
     myCompanyDomains: mine?.company_domains ?? [],
     since: iso(f.accepted_at ?? f.created_at)!,
     ...(await friendLinks(db, me, otherId)),
+    network: networkState(friend.mode, visible.length, importing),
   };
 }
 
@@ -243,24 +249,18 @@ async function list(ctx: Ctx): Promise<Response> {
   const pending: FriendInvite[] = [];
   for (const f of rows) {
     if (f.status === 'active') friends.push(await friendView(db, me, f, targets));
-    else if (f.requested_by !== me) {
-      // a request waiting on the student: Accept or Decline
-      const other = await userLite(db, f.a === me ? f.b : f.a);
+    else {
+      // a request waiting on the student (Accept or Decline), or one they sent that waits on the other side: the
+      // name and photo the suggestions already show for someone on Orbit, and where the name leads
+      const otherId = f.a === me ? f.b : f.a;
+      const other = await userLite(db, otherId);
       pending.push({
         id: f.id,
-        direction: 'in',
+        direction: f.requested_by !== me ? 'in' : 'out',
         email: null,
         name: nameOf(other),
-        status: 'pending',
-        createdAt: iso(f.created_at)!,
-      });
-    } else {
-      const other = await userLite(db, f.a === me ? f.b : f.a);
-      pending.push({
-        id: f.id,
-        direction: 'out',
-        email: null,
-        name: nameOf(other),
+        avatarUrl: other.avatar_url,
+        ...(await friendLinks(db, me, otherId)),
         status: 'pending',
         createdAt: iso(f.created_at)!,
       });
