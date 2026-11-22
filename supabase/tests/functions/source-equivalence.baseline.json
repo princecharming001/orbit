@@ -10,6 +10,7 @@
         "emailStatus": "not looked up",
         "tier": 1,
         "why": "You've talked with Ben before",
+        "headline": "Product Designer at Ramp",
         "source": "unipile",
         "rank": 1.2107,
         "fit": 0.77,
@@ -32,6 +33,7 @@
         "bridge": {
           "name": "Wendy Warm"
         },
+        "headline": "Design Lead at Stripe",
         "source": "unipile",
         "rank": 0.9405,
         "fit": 0.9,
@@ -56,6 +58,7 @@
         "bridge": {
           "name": "Lia Lee"
         },
+        "headline": "Design Lead at Plaid",
         "source": "unipile",
         "rank": 0.9086,
         "fit": 0.88,
@@ -79,6 +82,7 @@
         "bridge": {
           "name": "Ben Park"
         },
+        "headline": "Product Designer at Ramp",
         "source": "unipile",
         "rank": 0.9014,
         "fit": 0.87,
@@ -103,6 +107,7 @@
         "bridge": {
           "name": "Wendy Warm"
         },
+        "headline": "Design Lead at Stripe",
         "source": "unipile",
         "rank": 0.8037,
         "fit": 0.71,
@@ -127,6 +132,7 @@
         "bridge": {
           "name": "Lia Lee"
         },
+        "headline": "Design Lead at Plaid",
         "source": "unipile",
         "rank": 0.7502,
         "fit": 0.66,
@@ -150,6 +156,7 @@
         "bridge": {
           "name": "Ben Park"
         },
+        "headline": "Product Designer at Ramp",
         "source": "unipile",
         "rank": 0.7214,
         "fit": 0.62,
@@ -173,6 +180,7 @@
         "bridge": {
           "name": "Ben Park"
         },
+        "headline": "Product Designer at Ramp",
         "source": "unipile",
         "rank": 0.7142,
         "fit": 0.61,
@@ -197,6 +205,7 @@
         "bridge": {
           "name": "Wendy Warm"
         },
+        "headline": "Design Lead at Stripe",
         "source": "unipile",
         "rank": 0.6237,
         "fit": 0.46,
@@ -221,6 +230,7 @@
         "bridge": {
           "name": "Lia Lee"
         },
+        "headline": "Design Lead at Plaid",
         "source": "unipile",
         "rank": 0.6206,
         "fit": 0.48,
@@ -245,6 +255,7 @@
         "bridge": {
           "name": "Wendy Warm"
         },
+        "headline": "Design Lead at Stripe",
         "source": "unipile",
         "rank": 0.6165,
         "fit": 0.45,
@@ -269,6 +280,7 @@
         "bridge": {
           "name": "Wendy Warm"
         },
+        "headline": "Design Lead at Stripe",
         "source": "unipile",
         "rank": 0.6093,
         "fit": 0.44,
@@ -293,6 +305,7 @@
         "bridge": {
           "name": "Wendy Warm"
         },
+        "headline": "Design Lead at Stripe",
         "source": "unipile",
         "rank": 0.5661,
         "fit": 0.38,
@@ -317,6 +330,7 @@
         "bridge": {
           "name": "Wendy Warm"
         },
+        "headline": "Design Lead at Stripe",
         "source": "unipile",
         "rank": 0.5589,
         "fit": 0.37,
@@ -336,6 +350,7 @@
         "linkedinUrl": "https://www.linkedin.com/in/li-person-19",
         "emailStatus": "not looked up",
         "tier": 5,
+        "headline": "Product Designer at Notion",
         "source": "unipile",
         "rank": 0.5405,
         "fit": 0.99,
@@ -357,6 +372,7 @@
         "bridge": {
           "name": "Lia Lee"
         },
+        "headline": "Design Lead at Plaid",
         "source": "unipile",
         "rank": 0.5342,
         "fit": 0.36,
@@ -376,6 +392,7 @@
         "linkedinUrl": "https://www.linkedin.com/in/li-person-7",
         "emailStatus": "not looked up",
         "tier": 5,
+        "headline": "Product Designer at Notion",
         "source": "unipile",
         "rank": 0.5315,
         "fit": 0.97,
@@ -392,6 +409,7 @@
         "linkedinUrl": "https://www.linkedin.com/in/li-person-27",
         "emailStatus": "not looked up",
         "tier": 5,
+        "headline": "Product Designer at Notion",
         "source": "unipile",
         "rank": 0.518,
         "fit": 0.94,
@@ -408,6 +426,7 @@
         "linkedinUrl": "https://www.linkedin.com/in/li-person-3",
         "emailStatus": "not looked up",
         "tier": 5,
+        "headline": "Product Designer at Notion",
         "source": "unipile",
         "rank": 0.5,
         "fit": 0.9,
@@ -429,6 +448,7 @@
         "bridge": {
           "name": "Wendy Warm"
         },
+        "headline": "Design Lead at Stripe",
         "source": "unipile",
         "rank": 0.4869,
         "fit": 0.27,
@@ -448,6 +468,7 @@
         "linkedinUrl": "https://www.linkedin.com/in/li-person-15",
         "emailStatus": "not looked up",
         "tier": 5,
+        "headline": "Product Designer at Notion",
         "source": "unipile",
         "rank": 0.392,
         "fit": 0.66,
@@ -468,6 +489,7 @@
         "bridge": {
           "name": "Ben Park"
         },
+        "headline": "Product Designer at Ramp",
         "source": "unipile",
         "rank": 0.3542,
         "fit": 0.11,
@@ -488,6 +510,7 @@
         "bridge": {
           "name": "Ben Park"
         },
+        "headline": "Product Designer at Ramp",
         "source": "unipile",
         "rank": 0.3542,
         "fit": 0.11,
@@ -511,6 +534,7 @@
         "bridge": {
           "name": "Ben Park"
         },
+        "headline": "Product Designer at Ramp",
         "source": "unipile",
         "rank": 0.3542,
         "fit": 0.11,
@@ -535,6 +559,7 @@
         "bridge": {
           "name": "Lia Lee"
         },
+        "headline": "Design Lead at Plaid",
         "source": "unipile",
         "rank": 0.3542,
         "fit": 0.11,
@@ -554,6 +579,7 @@
     {
       "person_id": "known",
       "candidate": {
+        "met": ["current", "school"],
         "org": "Ramp",
         "name": "Ben Park",
         "title": "Product Designer",
@@ -587,6 +613,7 @@
     {
       "person_id": null,
       "candidate": {
+        "met": ["current", "school"],
         "org": "Stripe",
         "name": "Eli Okafor",
         "email": "eli.okafor@stripe.com",
@@ -597,6 +624,7 @@
           "tier": 2,
           "bridge": {
             "name": "Wendy Warm",
+            "score": 85,
             "personId": "bridge"
           }
         },
@@ -629,6 +657,7 @@
     {
       "person_id": null,
       "candidate": {
+        "met": ["current", "school"],
         "org": "Plaid",
         "name": "Gus Diaz",
         "email": "gus.diaz@plaid.com",
@@ -639,6 +668,7 @@
           "tier": 2,
           "bridge": {
             "name": "Lia Lee",
+            "score": 65,
             "personId": "bridge"
           }
         },
@@ -668,6 +698,7 @@
     {
       "person_id": null,
       "candidate": {
+        "met": ["current", "school"],
         "org": "Ramp",
         "name": "Jia Novak",
         "title": "Product Designer",
@@ -677,6 +708,7 @@
           "tier": 2,
           "bridge": {
             "name": "Ben Park",
+            "score": 72,
             "personId": "bridge"
           }
         },
@@ -705,6 +737,7 @@
     {
       "person_id": null,
       "candidate": {
+        "met": ["current", "school"],
         "org": "Stripe",
         "name": "Ivo Shah 28",
         "email": "ivo.shah@stripe.com",
@@ -715,6 +748,7 @@
           "tier": 2,
           "bridge": {
             "name": "Wendy Warm",
+            "score": 85,
             "personId": "bridge"
           }
         },
@@ -747,6 +781,7 @@
     {
       "person_id": null,
       "candidate": {
+        "met": ["current", "school"],
         "org": "Plaid",
         "name": "Gus Ito 26",
         "email": "gus.ito@plaid.com",
@@ -757,6 +792,7 @@
           "tier": 2,
           "bridge": {
             "name": "Lia Lee",
+            "score": 65,
             "personId": "bridge"
           }
         },
@@ -789,6 +825,7 @@
     {
       "person_id": null,
       "candidate": {
+        "met": ["current", "school"],
         "org": "Ramp",
         "name": "Ben Shah 21",
         "title": "Product Designer",
@@ -798,6 +835,7 @@
           "tier": 2,
           "bridge": {
             "name": "Ben Park",
+            "score": 72,
             "personId": "bridge"
           }
         },
@@ -829,6 +867,7 @@
     {
       "person_id": null,
       "candidate": {
+        "met": ["current", "school"],
         "org": "Ramp",
         "name": "Jia Park 29",
         "title": "Product Designer",
@@ -838,6 +877,7 @@
           "tier": 2,
           "bridge": {
             "name": "Ben Park",
+            "score": 72,
             "personId": "bridge"
           }
         },
@@ -869,6 +909,7 @@
     {
       "person_id": null,
       "candidate": {
+        "met": ["current", "school"],
         "org": "Stripe",
         "name": "Ana Shah",
         "email": "ana.shah@stripe.com",
@@ -879,6 +920,7 @@
           "tier": 2,
           "bridge": {
             "name": "Wendy Warm",
+            "score": 85,
             "personId": "bridge"
           }
         },
@@ -911,6 +953,7 @@
     {
       "person_id": null,
       "candidate": {
+        "met": ["current", "school"],
         "org": "Plaid",
         "name": "Ana Chen 10",
         "email": "ana.chen@plaid.com",
@@ -921,6 +964,7 @@
           "tier": 2,
           "bridge": {
             "name": "Lia Lee",
+            "score": 65,
             "personId": "bridge"
           }
         },
@@ -953,6 +997,7 @@
     {
       "person_id": null,
       "candidate": {
+        "met": ["current", "school"],
         "org": "Stripe",
         "name": "Ana Diaz 20",
         "email": "ana.diaz@stripe.com",
@@ -963,6 +1008,7 @@
           "tier": 2,
           "bridge": {
             "name": "Wendy Warm",
+            "score": 85,
             "personId": "bridge"
           }
         },
@@ -995,6 +1041,7 @@
     {
       "person_id": null,
       "candidate": {
+        "met": ["current", "school"],
         "org": "Stripe",
         "name": "Cara Ito 12",
         "email": "cara.ito@stripe.com",
@@ -1005,6 +1052,7 @@
           "tier": 2,
           "bridge": {
             "name": "Wendy Warm",
+            "score": 85,
             "personId": "bridge"
           }
         },
@@ -1037,6 +1085,7 @@
     {
       "person_id": null,
       "candidate": {
+        "met": ["current", "school"],
         "org": "Stripe",
         "name": "Gus Novak 16",
         "email": "gus.novak@stripe.com",
@@ -1047,6 +1096,7 @@
           "tier": 2,
           "bridge": {
             "name": "Wendy Warm",
+            "score": 85,
             "personId": "bridge"
           }
         },
@@ -1079,6 +1129,7 @@
     {
       "person_id": null,
       "candidate": {
+        "met": ["current", "school"],
         "org": "Stripe",
         "name": "Ivo Park",
         "email": "ivo.park@stripe.com",
@@ -1089,6 +1140,7 @@
           "tier": 2,
           "bridge": {
             "name": "Wendy Warm",
+            "score": 85,
             "personId": "bridge"
           }
         },
@@ -1121,6 +1173,7 @@
     {
       "person_id": null,
       "candidate": {
+        "met": ["current", "school"],
         "org": "Notion",
         "name": "Jia Ito 19",
         "title": "Product Designer",
@@ -1153,6 +1206,7 @@
     {
       "person_id": null,
       "candidate": {
+        "met": ["current", "school"],
         "org": "Plaid",
         "name": "Eli Shah 14",
         "email": "eli.shah@plaid.com",
@@ -1163,6 +1217,7 @@
           "tier": 2,
           "bridge": {
             "name": "Lia Lee",
+            "score": 65,
             "personId": "bridge"
           }
         },
@@ -1195,6 +1250,7 @@
     {
       "person_id": null,
       "candidate": {
+        "met": ["current", "school"],
         "org": "Notion",
         "name": "Hana Shah",
         "title": "Product Designer",
@@ -1227,6 +1283,7 @@
     {
       "person_id": null,
       "candidate": {
+        "met": ["current", "school"],
         "org": "Notion",
         "name": "Hana Diaz 27",
         "title": "Product Designer",
@@ -1259,6 +1316,7 @@
     {
       "person_id": null,
       "candidate": {
+        "met": ["current", "school"],
         "org": "Notion",
         "name": "Dev Chen",
         "title": "Product Designer",
@@ -1291,6 +1349,7 @@
     {
       "person_id": null,
       "candidate": {
+        "met": ["current", "school"],
         "org": "Stripe",
         "name": "Eli Chen 24",
         "email": "eli.chen@stripe.com",
@@ -1301,6 +1360,7 @@
           "tier": 2,
           "bridge": {
             "name": "Wendy Warm",
+            "score": 85,
             "personId": "bridge"
           }
         },
@@ -1333,6 +1393,7 @@
     {
       "person_id": null,
       "candidate": {
+        "met": ["current", "school"],
         "org": "Notion",
         "name": "Fay Park 15",
         "title": "Product Designer",
@@ -1365,6 +1426,7 @@
     {
       "person_id": null,
       "candidate": {
+        "met": ["current", "school"],
         "org": "Ramp",
         "name": "Dev Diaz 13",
         "title": "Product Designer",
@@ -1374,6 +1436,7 @@
           "tier": 2,
           "bridge": {
             "name": "Ben Park",
+            "score": 72,
             "personId": "bridge"
           }
         },
@@ -1405,6 +1468,7 @@
     {
       "person_id": null,
       "candidate": {
+        "met": ["current", "school"],
         "org": "Ramp",
         "name": "Hana Chen 17",
         "title": "Product Designer",
@@ -1414,6 +1478,7 @@
           "tier": 2,
           "bridge": {
             "name": "Ben Park",
+            "score": 72,
             "personId": "bridge"
           }
         },
@@ -1445,6 +1510,7 @@
     {
       "person_id": null,
       "candidate": {
+        "met": ["current", "school"],
         "org": "Plaid",
         "name": "Ivo Okafor 18",
         "email": "ivo.okafor@plaid.com",
@@ -1455,6 +1521,7 @@
           "tier": 2,
           "bridge": {
             "name": "Lia Lee",
+            "score": 65,
             "personId": "bridge"
           }
         },
@@ -1487,6 +1554,7 @@
     {
       "person_id": null,
       "candidate": {
+        "met": ["current", "school"],
         "org": "Ramp",
         "name": "Fay Ito",
         "title": "Product Designer",
@@ -1496,6 +1564,7 @@
           "tier": 2,
           "bridge": {
             "name": "Ben Park",
+            "score": 72,
             "personId": "bridge"
           }
         },

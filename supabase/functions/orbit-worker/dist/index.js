@@ -1849,7 +1849,7 @@ function activityPost(x) {
   const keys = postKeys(x.id, x.social_id);
   const id = keys[0];
   if (!id) return void 0;
-  const mentions = [...new Set((x.mentions ?? []).map(memberOf).filter((m) => !!m))];
+  const mentions2 = [...new Set((x.mentions ?? []).map(memberOf).filter((m) => !!m))];
   return {
     id,
     keys,
@@ -1857,7 +1857,7 @@ function activityPost(x) {
     reactions: x.reaction_counter ?? void 0,
     comments: x.comment_counter ?? void 0,
     repostOf: x.is_repost ? memberOf(x.repost_content?.author) : void 0,
-    mentions
+    mentions: mentions2
   };
 }
 function yearOf(v) {
@@ -1872,10 +1872,10 @@ function yearOf(v) {
   }
   return void 0;
 }
-function recommendationsFrom(list2) {
-  if (!Array.isArray(list2)) return [];
+function recommendationsFrom(list3) {
+  if (!Array.isArray(list3)) return [];
   const out = [];
-  for (const r of list2) {
+  for (const r of list3) {
     if (!r || typeof r !== "object") continue;
     const o = r;
     const actorId = memberOf(o.actor) ?? memberOf(o.author) ?? memberOf(o.recommender);
@@ -1913,8 +1913,8 @@ function cleanLinkedInUrl(url) {
   return `https://www.linkedin.com/in/${decodeURIComponent(m[2]).toLowerCase()}`;
 }
 function linkedInSlugOf(url) {
-  const clean3 = cleanLinkedInUrl(url);
-  return clean3 ? clean3.slice(clean3.lastIndexOf("/") + 1) : void 0;
+  const clean4 = cleanLinkedInUrl(url);
+  return clean4 ? clean4.slice(clean4.lastIndexOf("/") + 1) : void 0;
 }
 function pictureOf(i) {
   const o = i;
@@ -3102,12 +3102,12 @@ function nameFromParts(firstRaw, lastRaw) {
   const l = (lastRaw ?? "").trim();
   if (!l) return parseName(f);
   if (!f) return parseName(l);
-  const clean3 = (x) => {
+  const clean4 = (x) => {
     const parts = cleanRaw(x).split(",").map((p) => p.trim()).filter((p) => p && !isTagPart(p));
     return cleanTokens(parts[0] ?? "");
   };
-  const ft = clean3(f);
-  const lt = clean3(l);
+  const ft = clean4(f);
+  const lt = clean4(l);
   if (!lt.length) return partsFromTokens(ft);
   if (!ft.length) return partsFromTokens(lt);
   const fixedFirst = fixCase(ft);
@@ -3783,9 +3783,9 @@ function unipileHandlers(deps) {
   return {
     "unipile.reconcile": async (_job, ctx) => {
       if (!configured2) throw new JobSkipped("unconfigured");
-      const list2 = await listUnipileAccounts(opts);
-      if (!list2.ok) throw new Error(`unipile accounts ${list2.status ?? list2.kind}`);
-      const report = classifyAccounts(list2.value, await knownIds(ctx.db));
+      const list3 = await listUnipileAccounts(opts);
+      if (!list3.ok) throw new Error(`unipile accounts ${list3.status ?? list3.kind}`);
+      const report = classifyAccounts(list3.value, await knownIds(ctx.db));
       const day2 = ctx.now().toISOString().slice(0, 10);
       await ctx.db.sql`
         insert into orbit.audit_log (user_id, actor, action, target_table, target_id, details)
@@ -6258,10 +6258,10 @@ function unsupportedDetails(body, context) {
     if (hit && !p.anchor.test(context)) out.push(`${p.what} ("${hit[0]}")`);
   }
   for (const f of body.match(/\$?\d[\d,]*(\.\d+)?%?/g) ?? []) {
-    const plain2 = f.replace(/[$,%]/g, "");
-    const interesting = /[%$.]/.test(f) || Number(plain2) >= 100;
-    if (!interesting || /^(19|20)\d\d$/.test(plain2)) continue;
-    if (!ctx.includes(plain2) && !ctx.includes(f.toLowerCase())) out.push(f);
+    const plain3 = f.replace(/[$,%]/g, "");
+    const interesting = /[%$.]/.test(f) || Number(plain3) >= 100;
+    if (!interesting || /^(19|20)\d\d$/.test(plain3)) continue;
+    if (!ctx.includes(plain3) && !ctx.includes(f.toLowerCase())) out.push(f);
   }
   return [...new Set(out)];
 }
@@ -8191,10 +8191,10 @@ var PLAIN_SWAPS = [
 ];
 function plainPhrases(text3) {
   let out = text3;
-  for (const [re, plain2] of PLAIN_SWAPS)
+  for (const [re, plain3] of PLAIN_SWAPS)
     out = out.replace(
       re,
-      (m) => m[0] === m[0].toUpperCase() ? plain2[0].toUpperCase() + plain2.slice(1) : plain2
+      (m) => m[0] === m[0].toUpperCase() ? plain3[0].toUpperCase() + plain3.slice(1) : plain3
     );
   return out;
 }
@@ -12527,8 +12527,8 @@ function resumeLinks(text3) {
 function facetLines(parsed2) {
   if (!parsed2) return [];
   const out = [];
-  const list2 = (v) => Array.isArray(v) ? v : [];
-  for (const f of list2(parsed2.facets)) {
+  const list3 = (v) => Array.isArray(v) ? v : [];
+  for (const f of list3(parsed2.facets)) {
     const o = f;
     if (o.excluded === true) continue;
     const t = [o.title ?? o.role, o.org ?? o.organization ?? o.organizationName, o.text].filter(
@@ -12536,17 +12536,17 @@ function facetLines(parsed2) {
     );
     if (t.length) out.push(t.join(", "));
   }
-  for (const e of list2(parsed2.experiences ?? parsed2.experience)) {
+  for (const e of list3(parsed2.experiences ?? parsed2.experience)) {
     const o = e;
     const t = [o.title, o.org ?? o.company].filter((x) => typeof x === "string");
     if (t.length) out.push(t.join(" at "));
   }
-  for (const e of list2(parsed2.education)) {
+  for (const e of list3(parsed2.education)) {
     const o = e;
     const t = [o.degree, o.school].filter((x) => typeof x === "string");
     if (t.length) out.push(t.join(", "));
   }
-  const skills = list2(parsed2.skills).filter((x) => typeof x === "string");
+  const skills = list3(parsed2.skills).filter((x) => typeof x === "string");
   if (skills.length) out.push(`Skills: ${skills.slice(0, 12).join(", ")}`);
   return out.slice(0, 12);
 }
@@ -12736,9 +12736,9 @@ function composeSystem(p) {
   return lines.join("\n");
 }
 function block(tag, text3) {
-  const clean3 = (text3 ?? "").replace(/<\/?[a-z_]+[^>]*>/gi, " ").trim();
-  return `<${tag}>${clean3 ? `
-${clean3}
+  const clean4 = (text3 ?? "").replace(/<\/?[a-z_]+[^>]*>/gi, " ").trim();
+  return `<${tag}>${clean4 ? `
+${clean4}
 ` : ""}</${tag}>`;
 }
 var REPLY_THREAD_MESSAGES = 4;
@@ -13283,7 +13283,7 @@ function templateMessage(p) {
   const kind = COMPOSE_KINDS.includes(req.kind) ? req.kind : TEMPLATE_KIND[req.kind] ?? "first_touch";
   const opener = p.research.openers[0];
   const s = user.settings;
-  const str5 = (v) => typeof v === "string" && v.trim() ? v.trim() : void 0;
+  const str6 = (v) => typeof v === "string" && v.trim() ? v.trim() : void 0;
   const about = user.current_title && user.current_org ? `${user.current_title} at ${user.current_org}` : user.school ? `a student at ${user.school}` : void 0;
   const input = {
     kind,
@@ -13295,12 +13295,12 @@ function templateMessage(p) {
       firstName: me,
       school: user.school ?? void 0,
       about,
-      company: BUSINESS_GOALS.has(p.goalKind) ? str5(s.company) : void 0,
-      pitch: BUSINESS_GOALS.has(p.goalKind) ? str5(s.pitch) : p.goalKind === "collaboration" ? str5(s.research_topic) : void 0,
-      traction: p.goalKind === "fundraising" ? str5(s.traction) : void 0,
+      company: BUSINESS_GOALS.has(p.goalKind) ? str6(s.company) : void 0,
+      pitch: BUSINESS_GOALS.has(p.goalKind) ? str6(s.pitch) : p.goalKind === "collaboration" ? str6(s.research_topic) : void 0,
+      traction: p.goalKind === "fundraising" ? str6(s.traction) : void 0,
       // the proof of work a startup or a lab note leads with, in the student's own words
       ...PROOF_NICHES.has(p.niche) ? {
-        proof: str5(s.about?.proudOf),
+        proof: str6(s.about?.proudOf),
         link: p.links?.find((l) => /github\.com/i.test(l)) ?? p.links?.find((l) => !/linkedin\.com/i.test(l))
       } : {}
     },
@@ -14346,8 +14346,8 @@ function hopsToTarget(g, target, maxHops) {
   const back = /* @__PURE__ */ new Map();
   for (const [u2, nbrs] of g.adj)
     for (const v of nbrs.keys()) {
-      const list2 = back.get(v);
-      if (list2) list2.push(u2);
+      const list3 = back.get(v);
+      if (list3) list3.push(u2);
       else back.set(v, [u2]);
     }
   const out = /* @__PURE__ */ new Map([[target, 0]]);
@@ -14938,12 +14938,12 @@ function groupPairs(members, strengthOf) {
     seenPeople.add(m.personId);
     connectors.add(m);
   }
-  const list2 = [...connectors];
-  for (let i = 0; i < list2.length; i++)
-    for (let j = i + 1; j < list2.length; j++) out.push([list2[i], list2[j]]);
+  const list3 = [...connectors];
+  for (let i = 0; i < list3.length; i++)
+    for (let j = i + 1; j < list3.length; j++) out.push([list3[i], list3[j]]);
   for (const m of members) {
     if (connectors.has(m)) continue;
-    for (const c of list2) out.push([c, m]);
+    for (const c of list3) out.push([c, m]);
   }
   return out;
 }
@@ -17016,14 +17016,14 @@ var REREAD_DAYS = 180;
 var COMPANY_REREAD_DAYS = 90;
 var READ_BATCH = 8;
 function profileOrgs(raw) {
-  const list2 = (v) => (Array.isArray(v) ? v : []).filter((x) => !!x && typeof x === "object");
+  const list3 = (v) => (Array.isArray(v) ? v : []).filter((x) => !!x && typeof x === "object");
   return [
-    ...list2(raw.work_experience).map((x) => ({
+    ...list3(raw.work_experience).map((x) => ({
       company: txt(x.company, 160),
       companyId: x.company_id == null ? void 0 : txt(String(x.company_id), 60),
       logoUrl: txt(x.company_picture_url, 1e3)
     })),
-    ...list2(raw.education).map((x) => ({
+    ...list3(raw.education).map((x) => ({
       school: txt(x.school, 160),
       schoolId: x.school_id == null ? void 0 : txt(String(x.school_id), 60),
       logoUrl: txt(x.school_picture_url, 1e3)
@@ -18159,7 +18159,7 @@ async function gatherHopEvidence(deps, input) {
       ...c.at ? { at: c.at } : {}
     });
   }
-  const mentions = [];
+  const mentions2 = [];
   for (const p of posts) {
     if (isMutual(p.repostOf)) {
       const other = personOf.get(p.repostOf);
@@ -18175,7 +18175,7 @@ async function gatherHopEvidence(deps, input) {
     if (p.repostOf) continue;
     for (const mm of p.mentions) {
       if (!isMutual(mm)) continue;
-      mentions.push({
+      mentions2.push({
         authorId: T.personId,
         mentionedId: personOf.get(mm),
         postId: p.id,
@@ -18218,7 +18218,7 @@ async function gatherHopEvidence(deps, input) {
     followers,
     reactionVolume,
     recommendations,
-    mentions,
+    mentions: mentions2,
     now
   };
   out.ties = pairEvidenceTies(out.evidence);
@@ -20391,10 +20391,10 @@ function nextLookupStep(s) {
   if (s.target.isPrivate) return done(s, "private");
   if (s.platform === "instagram" && s.count === 0 && circle.every((c) => c.studentFollows))
     return done(s, "none");
-  const tried = (accountId, list2) => !!s.tried?.has(`${accountId}.${list2}`);
-  const sizes = ["following", "followers"].map((list2) => ({ list: list2, size: listSize(s.target, list2) })).filter((x) => !listComplete(s.target[x.list]) && !tried(s.targetAccountId, x.list)).sort((a, b) => (a.size ?? Number.POSITIVE_INFINITY) - (b.size ?? Number.POSITIVE_INFINITY));
+  const tried = (accountId, list3) => !!s.tried?.has(`${accountId}.${list3}`);
+  const sizes = ["following", "followers"].map((list3) => ({ list: list3, size: listSize(s.target, list3) })).filter((x) => !listComplete(s.target[x.list]) && !tried(s.targetAccountId, x.list)).sort((a, b) => (a.size ?? Number.POSITIVE_INFINITY) - (b.size ?? Number.POSITIVE_INFINITY));
   const readTarget = sizes.filter((x) => (x.size ?? Number.POSITIVE_INFINITY) <= MAX_LIST_READ);
-  const needs = (list2) => open.some((b) => (list2 === "following" ? b.targetFollows : b.followsTarget) === "unknown");
+  const needs = (list3) => open.some((b) => (list3 === "following" ? b.targetFollows : b.followsTarget) === "unknown");
   const first = readTarget.find((x) => needs(x.list));
   if (first) return { do: "list", accountId: s.targetAccountId, list: first.list };
   open = bridgeStatuses(s).filter((b) => !settled(b));
@@ -20504,16 +20504,16 @@ async function upsertAccounts(db2, accounts, o) {
   }
   return out;
 }
-async function getListRead(db2, platform, accountId, list2, owner) {
+async function getListRead(db2, platform, accountId, list3, owner) {
   const [r] = await db2.sql`
     select rows_read, total, ended, cursor, read_at, read_by from orbit.social_list_reads
-     where platform = ${platform} and account_id = ${accountId} and list = ${list2}
+     where platform = ${platform} and account_id = ${accountId} and list = ${list3}
        and coalesce(owner_user_id, ${NO_OWNER}::uuid) = coalesce(${owner}::uuid, ${NO_OWNER}::uuid)
        and expires_at > now()`;
   return r;
 }
-var followRows = (accountId, list2, ids) => ids.map(
-  (id) => list2 === "followers" ? { follower: id, followed: accountId } : { follower: accountId, followed: id }
+var followRows = (accountId, list3, ids) => ids.map(
+  (id) => list3 === "followers" ? { follower: id, followed: accountId } : { follower: accountId, followed: id }
 );
 async function storeFollows(db2, platform, rows, o) {
   if (!rows.length) return 0;
@@ -20594,9 +20594,9 @@ var CountedSet = class extends Set {
     return Math.max(this.n, super.size);
   }
 };
-async function loadListRead(db2, platform, accountId, list2, o) {
+async function loadListRead(db2, platform, accountId, list3, o) {
   const owner = o.owner ?? null;
-  const row = await getListRead(db2, platform, accountId, list2, owner);
+  const row = await getListRead(db2, platform, accountId, list3, owner);
   if (!row) return void 0;
   const fresh = o.now.getTime() - new Date(row.read_at).getTime() <= (o.freshMs ?? LIST_FRESH_MS);
   const usable3 = row.ended && fresh;
@@ -20604,7 +20604,7 @@ async function loadListRead(db2, platform, accountId, list2, o) {
     return { ids: /* @__PURE__ */ new Set(), ended: false, ...row.total != null ? { total: row.total } : {} };
   const since = usable3 ? /* @__PURE__ */ new Date(0) : new Date(row.read_at);
   const only = o.only ?? null;
-  const rows = list2 === "followers" ? await db2.sql`
+  const rows = list3 === "followers" ? await db2.sql`
           select distinct follower_id as id from orbit.social_follows
            where platform = ${platform} and followed_id = ${accountId} and seen_at >= ${since}::timestamptz
              and expires_at > now() and (owner_user_id is null or owner_user_id = ${o.userId}::uuid)
@@ -21573,7 +21573,7 @@ function createInstagramAdapter(o) {
   };
   return {
     platform: "instagram",
-    pageSize: (list2) => INSTAGRAM_PAGE[list2],
+    pageSize: (list3) => INSTAGRAM_PAGE[list3],
     async me() {
       return profileRead(await call("profile", `/api/v1/users/me${q({ account_id: o.accountId })}`));
     },
@@ -21585,10 +21585,10 @@ function createInstagramAdapter(o) {
         )
       );
     },
-    async listPage(accountId, list2, cursor) {
+    async listPage(accountId, list3, cursor) {
       const r = await call(
         "list",
-        `/api/v1/users/${list2}${q({ account_id: o.accountId, user_id: accountId, cursor, limit: INSTAGRAM_PAGE[list2] })}`
+        `/api/v1/users/${list3}${q({ account_id: o.accountId, user_id: accountId, cursor, limit: INSTAGRAM_PAGE[list3] })}`
       );
       const items = Array.isArray(r.items) ? r.items : [];
       const accounts = items.map(accountFromItem).filter((a) => !!a);
@@ -21882,10 +21882,10 @@ function createXAdapter(o) {
       if (!data?.id) throw gone(ref, body);
       return { value: profileRead(data), used: 1 };
     }),
-    listPage: (accountId, list2, cursor, maxResults = X_LIST_PAGE) => {
+    listPage: (accountId, list3, cursor, maxResults = X_LIST_PAGE) => {
       const n = Math.max(1, Math.min(X_LIST_PAGE, Math.floor(maxResults)));
       return priced("list", n, async () => {
-        const { body } = await call("GET", `/2/users/${encodeURIComponent(accountId)}/${list2}`, {
+        const { body } = await call("GET", `/2/users/${encodeURIComponent(accountId)}/${list3}`, {
           max_results: n,
           pagination_token: cursor,
           "user.fields": X_USER_FIELDS
@@ -22056,15 +22056,15 @@ async function isXSuppressed(db2, accountId) {
     select count(*)::int as n from orbit.social_suppressed where platform = 'x' and account_id = ${accountId}`;
   return (r?.n ?? 0) > 0;
 }
-async function heldXList(db2, accountId, list2, userId, now = /* @__PURE__ */ new Date()) {
+async function heldXList(db2, accountId, list3, userId, now = /* @__PURE__ */ new Date()) {
   const [read] = await db2.sql`
     select owner_user_id from orbit.social_list_reads
-     where platform = 'x' and account_id = ${accountId} and list = ${list2} and ended
+     where platform = 'x' and account_id = ${accountId} and list = ${list3} and ended
        and expires_at > ${now}::timestamptz
        and (owner_user_id is null or owner_user_id = ${userId}::uuid)
      order by owner_user_id nulls last limit 1`;
   if (!read) return void 0;
-  const rows = list2 === "followers" ? await db2.sql`
+  const rows = list3 === "followers" ? await db2.sql`
           select follower_id as id from orbit.social_follows
            where platform = 'x' and followed_id = ${accountId} and expires_at > ${now}::timestamptz
              and owner_user_id is not distinct from ${read.owner_user_id}::uuid` : await db2.sql`
@@ -23329,6 +23329,34 @@ function orgsOf(c) {
   const fromOrg = orgNames(c.org);
   return fromOrg.length ? fromOrg : headlineOrgs(c.headline);
 }
+function pastOrgsOf(c) {
+  const now = new Set(orgsOf(c).map((o) => normOrg(o)));
+  const out = [];
+  for (const j of c.history ?? []) {
+    if (j.current || !j.org) continue;
+    for (const o of orgNames(j.org))
+      if (!now.has(normOrg(o)) && !out.some((x) => normOrg(x) === normOrg(o))) out.push(o);
+  }
+  return out;
+}
+function orgBase(raw) {
+  const parts = normOrg(raw).split(" ").filter(Boolean);
+  while (parts.length > 1 && ORG_QUALIFIERS.has(parts[parts.length - 1])) parts.pop();
+  return parts.join(" ");
+}
+function connectionsByOrg(connections) {
+  const by = /* @__PURE__ */ new Map();
+  for (const w of connections)
+    for (const o of orgNames(w.org)) {
+      const k = orgBase(o);
+      if (k.length < 2) continue;
+      const list3 = by.get(k);
+      if (list3) list3.push(w);
+      else by.set(k, [w]);
+    }
+  for (const list3 of by.values()) list3.sort((a, b) => b.score - a.score);
+  return by;
+}
 function schoolNames(school) {
   const s = norm(school);
   if (!s) return [];
@@ -23371,8 +23399,8 @@ var BROAD = /* @__PURE__ */ new Set([
 function isBroad(interest) {
   return BROAD.has(norm(interest));
 }
-var candidateText = (c) => norm([c.title, c.org, c.headline, c.location, ...c.evidence ?? []].filter(Boolean).join(" "));
-var workText = (c) => norm([c.title, c.org, c.headline, ...c.evidence ?? []].filter(Boolean).join(" "));
+var candidateText = (c) => norm([c.title, c.org, c.headline, c.location, c.about, ...c.evidence ?? []].filter(Boolean).join(" "));
+var workText = (c) => norm([c.title, c.org, c.headline, c.about, ...c.evidence ?? []].filter(Boolean).join(" "));
 var EDU_CONTEXT = /\b(alum|alumni|alumna|alumnus|graduate|grad|class of|b\.?s\.?|b\.?a\.?|m\.?s\.?|mba|ph\.?d\.?|student|studied|studying|haas|eecs|professor|faculty|lecturer|postdoc|school of|college of|department)\b|['’]\d{2}\b/;
 var escapeRe4 = (x) => x.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 var hasPhrase2 = (text3, phrase) => !!phrase && new RegExp(`(^|[^a-z0-9])${escapeRe4(phrase)}([^a-z0-9]|$)`).test(text3);
@@ -23407,7 +23435,7 @@ function warmthOf(c, input) {
     for (const mine of orgNames(w.org).filter((o) => !bigOrg(o))) {
       const hit = theirOrgs.find((o) => sameOrg(mine, o));
       if (hit) {
-        where = hit;
+        where = normOrg(mine) === normOrg(hit) ? hit : mine;
         return true;
       }
     }
@@ -23420,18 +23448,34 @@ function warmthOf(c, input) {
     return {
       tier: 2,
       why: `${bridgeFirst} is close to you and also at ${where}, so ask for an intro`,
-      bridge: { personId: bridge.personId, name: bridge.name }
+      bridge: { personId: bridge.personId, name: bridge.name, score: bridge.score }
     };
   }
+  if (input.connections) {
+    for (const o of theirOrgs) {
+      const there = (input.connections.get(orgBase(o)) ?? []).find(
+        (w) => w.personId !== known?.personId && orgNames(w.org).some((mine) => sameOrg(mine, o))
+      );
+      if (!there) continue;
+      const first = there.name.split(/\s+/)[0] ?? there.name;
+      const theirs = orgNames(there.org).find((mine) => sameOrg(mine, o)) ?? o;
+      return {
+        tier: 2,
+        weak: true,
+        why: `${first}, a connection of yours, works at ${normOrg(theirs) === normOrg(o) ? o : theirs}`,
+        bridge: { personId: there.personId, name: there.name, score: there.score }
+      };
+    }
+  }
   const work = workText(c);
-  const school = schoolIn(work, student.school);
+  const school = schoolIn(work, student.school) ?? (c.schools?.length ? schoolIn(norm(`studied at ${c.schools.join(" ; ")}`), student.school) : void 0);
   if (school)
     return {
       tier: 3,
       why: `Also ${/\b(student|phd|candidate|professor|faculty|lecturer|postdoc)\b/.test(work) ? "at" : "from"} ${schoolLabel(school, student.school)}`
     };
   const pastOrg = student.orgs.find(
-    (o) => !schoolNames(student.school).includes(norm(o)) && (orgsOf(c).some((x) => sameOrg(o, x)) || normOrg(o).length >= 5 && hasPhrase2(work, normOrg(o)))
+    (o) => !schoolNames(student.school).includes(norm(o)) && (orgsOf(c).some((x) => sameOrg(o, x)) || pastOrgsOf(c).some((x) => sameOrg(o, x)) || normOrg(o).length >= 5 && hasPhrase2(work, normOrg(o)))
   );
   if (pastOrg) return { tier: 3, why: `Also worked at ${pastOrg}` };
   const home = norm(student.homeCity).split(",")[0].trim();
@@ -23914,15 +23958,15 @@ function decodeBase64(b64) {
   return out;
 }
 async function draftFiles(db2, userId, attachments) {
-  const list2 = Array.isArray(attachments) ? attachments : [];
-  if (!list2.length) return [];
-  const ids = list2.map((a) => a.id).filter((x) => typeof x === "string");
+  const list3 = Array.isArray(attachments) ? attachments : [];
+  if (!list3.length) return [];
+  const ids = list3.map((a) => a.id).filter((x) => typeof x === "string");
   const rows = await db2.sql`
     select id, name, mime_type, encode(bytes, 'base64') as b64 from orbit.user_files
      where user_id = ${userId}::uuid and id = any(${ids}::uuid[])`;
   const byId = new Map(rows.map((r) => [r.id, r]));
   const out = [];
-  for (const a of list2) {
+  for (const a of list3) {
     const r = byId.get(a.id);
     if (!r) return void 0;
     out.push({ name: r.name, mimeType: r.mime_type, bytes: decodeBase64(r.b64) });
@@ -24101,15 +24145,15 @@ async function gmailSentCopy(s, userId, p) {
     const token = await s.tokens.accessToken(userId);
     const headers3 = { authorization: `Bearer ${token}` };
     const q = `in:sent to:${p.to} after:${Math.floor(p.since.getTime() / 1e3) - 60}`;
-    const list2 = await s.fetch(`${GMAIL_MESSAGES_URL}?maxResults=20&q=${encodeURIComponent(q)}`, {
+    const list3 = await s.fetch(`${GMAIL_MESSAGES_URL}?maxResults=20&q=${encodeURIComponent(q)}`, {
       headers: headers3,
       signal: AbortSignal.timeout(SEND_TIMEOUT_MS)
     });
-    if (!list2.ok) {
-      await list2.body?.cancel();
+    if (!list3.ok) {
+      await list3.body?.cancel();
       return void 0;
     }
-    const j = await list2.json();
+    const j = await list3.json();
     for (const m of j.messages ?? []) {
       const res = await s.fetch(
         `${GMAIL_MESSAGES_URL}/${encodeURIComponent(m.id)}?format=metadata&metadataHeaders=X-Orbit-Draft-Id&metadataHeaders=Subject`,
@@ -26098,9 +26142,9 @@ async function investigate(deps, input, opts) {
   if (slug) handles.add(slug);
   const objective = `Pages about ${card.fullName}${input.title ? `, ${input.title}` : ""}${card.employers[0] ? ` at ${card.employers[0].name}` : ""}${card.schools[0] ? `, ${card.schools[0].name}` : ""}: what they did, won, led, made or said.`;
   const engines = deps.engines.filter((e) => e.configured);
-  const plain2 = engines.find((e) => e.name === "parallel") ?? engines[0];
+  const plain3 = engines.find((e) => e.name === "parallel") ?? engines[0];
   const operator = engines.find((e) => e.name === "serper") ?? engines[0];
-  if (!plain2 || !operator) {
+  if (!plain3 || !operator) {
     out.notes.push("no search engine is configured for the investigator loop");
     return out;
   }
@@ -26159,8 +26203,8 @@ async function investigate(deps, input, opts) {
     const ops = queries.filter((q) => hasOperator(q) && operator.name === "serper");
     const rest = queries.filter((q) => !ops.includes(q));
     const calls = [];
-    for (let i = 0; i < rest.length; i += plain2.queriesPerCall)
-      calls.push(searchCall(plain2, rest.slice(i, i + plain2.queriesPerCall)));
+    for (let i = 0; i < rest.length; i += plain3.queriesPerCall)
+      calls.push(searchCall(plain3, rest.slice(i, i + plain3.queriesPerCall)));
     for (const q of ops) calls.push(searchCall(operator, [q]));
     return (await Promise.all(calls)).flat();
   };
@@ -26339,7 +26383,7 @@ ${userFirstName2}, who wants to ${goalSentence2}.
 </student>`;
 }
 function dossierUser(input) {
-  const block3 = (list2) => list2.map(
+  const block3 = (list3) => list3.map(
     (s) => [
       `<source id="${s.id}">`,
       `url: ${s.url}`,
@@ -27006,13 +27050,13 @@ function dropUncited(d, allowed2) {
 }
 var words4 = (s) => s.trim().split(/\s+/).filter(Boolean).length;
 function finish2(d, history, noOutsideSources) {
-  const clean3 = (xs) => xs.filter((x) => !sensitiveCategory(x.text));
+  const clean4 = (xs) => xs.filter((x) => !sensitiveCategory(x.text));
   return {
     ...d,
     who: stripSensitiveSentences(d.who),
-    recently: clean3(d.recently).slice(0, 3),
-    in_common: clean3(d.in_common),
-    openers: clean3(d.openers).filter((o) => words4(o.text) <= 25).slice(0, 3),
+    recently: clean4(d.recently).slice(0, 3),
+    in_common: clean4(d.in_common),
+    openers: clean4(d.openers).filter((o) => words4(o.text) <= 25).slice(0, 3),
     // company context only, each line cited; nothing about the person's own life (guards.ts)
     careful: carefulItems(d.careful).filter((c) => carefulAllowed(c.text) && c.source_ids.length > 0),
     career: (d.career ?? []).slice(0, 12),
@@ -27021,8 +27065,8 @@ function finish2(d, history, noOutsideSources) {
     profiles: (d.profiles ?? []).filter((p) => /^https?:\/\//i.test(p.url) && !isBlockedSource(p.url)).slice(0, 6),
     highlights: (d.highlights ?? []).filter((h) => !sensitiveCategory(`${h.title} ${h.summary ?? ""}`)).filter((h) => !h.url || !/^https?:\/\//i.test(h.url) || !isBlockedSource(h.url)).map((h) => ({ ...h, url: h.url && /^https?:\/\//i.test(h.url) ? h.url : null })).slice(0, 8),
     topics: (d.topics ?? []).filter((t) => !sensitiveCategory(t)).slice(0, 6),
-    company: clean3(d.company ?? []).slice(0, 5),
-    deep_cuts: clean3(d.deep_cuts ?? []).slice(0, 6),
+    company: clean4(d.company ?? []).slice(0, 5),
+    deep_cuts: clean4(d.deep_cuts ?? []).slice(0, 6),
     history: {
       first_contact: d.history.first_contact ?? history.firstContact ?? null,
       last_contact: d.history.last_contact ?? history.lastContact ?? null,
@@ -27584,6 +27628,300 @@ function matchKnown(idx, c, o) {
   });
 }
 
+// supabase/functions/_shared/sourcing/people.ts
+var clean2 = (xs, max) => {
+  const out = [];
+  for (const x of xs ?? []) {
+    const t = x.replace(/\s+/g, " ").trim();
+    if (t && !out.some((o) => o.toLowerCase() === t.toLowerCase())) out.push(t);
+    if (out.length >= max) break;
+  }
+  return out;
+};
+function tidyFilters(f) {
+  return {
+    titles: clean2(f?.titles, 12),
+    seniority: clean2(f?.seniority, 6),
+    currentOrgs: clean2(f?.currentOrgs, 8),
+    everOrgs: clean2(f?.everOrgs, 8),
+    schools: clean2(f?.schools, 4),
+    places: clean2(f?.places, 4),
+    keywords: clean2(f?.keywords, 8),
+    roleNeed: f?.roleNeed === "nice" ? "nice" : "must",
+    placesNeed: f?.placesNeed === "nice" ? "nice" : "must",
+    everOrgsNeed: f?.everOrgsNeed === "nice" ? "nice" : "must",
+    keywordsNeed: f?.keywordsNeed === "must" ? "must" : "nice"
+  };
+}
+var SENIORITY_WORDS = {
+  intern: "intern",
+  entry: "junior",
+  senior: "senior",
+  manager: "manager",
+  director: "director",
+  vp: "vice president",
+  c_suite: "executive",
+  owner: "owner",
+  founder: "founder",
+  partner: "partner"
+};
+Object.setPrototypeOf(SENIORITY_WORDS, null);
+var list2 = (xs, word = "or") => xs.length <= 1 ? xs[0] ?? "" : `${xs.slice(0, -1).join(", ")} ${word} ${xs[xs.length - 1]}`;
+function filterChecks(filters) {
+  const f = tidyFilters(filters);
+  const out = [];
+  const level = (f.seniority ?? []).map((s) => SENIORITY_WORDS[s] ?? s.replace(/_/g, " "));
+  if (f.titles?.length || level.length) {
+    const what = f.titles?.length ? `Their current job is ${list2(f.titles.slice(0, 8))}, or another wording of the same kind of work` : "Their current job";
+    out.push({
+      key: "role",
+      text: level.length ? f.titles?.length ? `${what}, at ${list2(level)} level` : `Their current job is at ${list2(level)} level` : what,
+      need: f.roleNeed ?? "must"
+    });
+  }
+  if (f.currentOrgs?.length)
+    out.push({
+      key: "current",
+      text: `Works now at ${list2(f.currentOrgs)} (a part or a later name of it counts)`,
+      need: "must"
+    });
+  if (f.everOrgs?.length)
+    out.push({
+      key: "ever",
+      text: `Works or has worked at ${list2(f.everOrgs)} (a part or a later name of it counts)`,
+      need: f.everOrgsNeed ?? "must"
+    });
+  if (f.schools?.length)
+    out.push({
+      key: "school",
+      text: `Studied at ${list2(f.schools)} (any of its schools or its usual short names count)`,
+      need: "must"
+    });
+  if (f.places?.length)
+    out.push({
+      key: "place",
+      text: `Is based in or around ${list2(f.places)} (a city inside a named region or country counts)`,
+      need: f.placesNeed ?? "must"
+    });
+  if (f.keywords?.length && f.keywordsNeed === "must")
+    out.push({
+      key: "keywords",
+      text: `Their work has to do with ${list2(f.keywords.slice(0, 6))}`,
+      need: "must"
+    });
+  return out;
+}
+var roleWords = (f, relax) => {
+  const titles = (f.titles ?? []).slice(0, 4);
+  if (titles.length) return list2(titles);
+  const level = relax.seniority ? [] : (f.seniority ?? []).map((s) => SENIORITY_WORDS[s] ?? s);
+  return level.length ? `${list2(level)} people` : "";
+};
+function describePeople(filters, relax = {}) {
+  const f = tidyFilters(filters);
+  const parts = [];
+  const role = roleWords(f, relax);
+  const rest = (f.currentOrgs?.length ?? 0) + (f.everOrgs?.length ?? 0) + (f.schools?.length ?? 0) + (f.keywords?.length ?? 0);
+  parts.push(role || (rest || !relax.place && f.places?.length ? "people" : ""));
+  if (f.currentOrgs?.length) parts.push(`at ${list2(f.currentOrgs.slice(0, 4))}`);
+  if (f.everOrgs?.length) parts.push(`who worked at ${list2(f.everOrgs.slice(0, 4))}`);
+  if (f.schools?.length) parts.push(`who studied at ${list2(f.schools.slice(0, 3))}`);
+  if (!relax.place && f.places?.length) parts.push(`based in ${list2(f.places.slice(0, 3))}`);
+  if (f.keywords?.length) parts.push(`working on ${list2(f.keywords.slice(0, 4), "and")}`);
+  return parts.join(" ").replace(/\s+/g, " ").trim();
+}
+function covers(a, b) {
+  const have = new Set(norm(a).split(/[^a-z0-9+#]+/));
+  const need = norm(b).split(/[^a-z0-9+#]+/).filter((w) => w.length >= 3 && !QUERY_STOP.has(w));
+  return need.every((w) => have.has(w) || have.has(`${w}s`) || have.has(w.replace(/s$/, "")));
+}
+var QUERY_STOP = new Set(
+  "the and for with who that are from into any has have based people working worked studied find looking".split(
+    " "
+  )
+);
+var NAME_FILLER = new Set(
+  "university college school institute business company capital partners ventures group area city greater region state united states kingdom san new los north south east west".split(
+    " "
+  )
+);
+var PLACE_SAID = [
+  [/\bnew york\b/, /\b(nyc|new york|manhattan|brooklyn)\b/],
+  [/\bsan francisco\b|\bbay area\b/, /\b(sf|san francisco|bay area|silicon valley)\b/],
+  [/\blos angeles\b/, /\b(la|los angeles)\b/],
+  [/\bunited kingdom\b/, /\b(uk|britain|united kingdom)\b/],
+  [/\bunited states\b/, /\b(us|usa|america|united states)\b/]
+];
+function mentions(said, name) {
+  const s = norm(said);
+  const n = norm(name);
+  if (!n) return true;
+  if (s.includes(n)) return true;
+  for (const [is, how] of PLACE_SAID) if (is.test(n) && how.test(s)) return true;
+  const have = new Set(s.split(/[^a-z0-9+#]+/));
+  return n.split(/[^a-z0-9+#]+/).filter((w) => w.length >= 4 && !NAME_FILLER.has(w)).some((w) => have.has(w));
+}
+var telling = (q) => norm(q).split(/[^a-z0-9+#]+/).filter((w) => w.length >= 3 && !QUERY_STOP.has(w) && w !== "or").length;
+function peopleQueries(ask, filters, relax = {}) {
+  const f = tidyFilters(filters);
+  const out = [];
+  const add2 = (q) => {
+    const t = (q ?? "").replace(/\s+/g, " ").trim().slice(0, 300);
+    if (t && !out.some((o) => norm(o) === norm(t))) out.push(t);
+  };
+  const described = describePeople(f, relax);
+  const orgs = f.currentOrgs?.length ? f.currentOrgs : f.everOrgs ?? [];
+  if (orgs.length >= 2) {
+    const rest = f.currentOrgs?.length ? { ...f, currentOrgs: [] } : { ...f, everOrgs: [] };
+    for (const o of orgs.slice(0, 3))
+      add2(
+        describePeople(
+          f.currentOrgs?.length ? { ...rest, currentOrgs: [o] } : { ...rest, everOrgs: [o] },
+          relax
+        )
+      );
+    return out.slice(0, 3);
+  }
+  const said = (ask ?? "").replace(/\s+/g, " ").trim();
+  const more = !!said && (!described || !covers(described, said));
+  if (!(more && telling(described) <= 1)) add2(described);
+  if (more) {
+    const place = !relax.place && f.places?.length && !mentions(said, f.places[0]) ? ` in ${f.places[0]}` : "";
+    const school = f.schools?.length && !mentions(said, f.schools[0]) ? ` who studied at ${f.schools[0]}` : "";
+    add2(`${said}${school}${place}`);
+  }
+  return out.slice(0, 3);
+}
+function linkedInKeywords(ask, filters) {
+  const f = tidyFilters(filters);
+  const quote2 = (x) => /\s/.test(x) ? `"${x}"` : x;
+  const titles = (f.titles ?? []).slice(0, 4).map(quote2);
+  const topic = (f.keywords ?? []).slice(0, 2).map(quote2);
+  if (titles.length) return [titles.length > 1 ? `(${titles.join(" OR ")})` : titles[0], ...topic].join(" ");
+  if (topic.length) return topic.join(" ");
+  if (f.currentOrgs?.length || f.everOrgs?.length || f.schools?.length) return void 0;
+  const said = (ask ?? "").replace(/\s+/g, " ").trim();
+  return said ? said.slice(0, 120) : void 0;
+}
+var str3 = (v) => {
+  if (typeof v !== "string") return void 0;
+  const t = v.replace(/\s+/g, " ").trim();
+  return t || void 0;
+};
+var obj = (v) => v && typeof v === "object" && !Array.isArray(v) ? v : void 0;
+var yearOf4 = (v) => {
+  const y = typeof v === "string" ? Number(v.slice(0, 4)) : typeof v === "number" ? v : Number.NaN;
+  return Number.isInteger(y) && y >= 1950 && y <= 2100 ? y : void 0;
+};
+function cleanTitle(title, org) {
+  if (!title) return void 0;
+  if (!org) return title;
+  const o = org.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const t = title.replace(new RegExp(`\\s*(?:[-–—|,@]|\\bat\\b)\\s*${o}\\s*$`, "i"), "").replace(new RegExp(`^${o}\\s*[-–—|:]\\s*`, "i"), "").trim();
+  return t || title;
+}
+function plain2(md) {
+  return md.replace(/!\[[^\]]*\]\([^)]*\)/g, " ").replace(/\[([^\]]*)\]\([^)]*\)/g, "$1").replace(/^#{1,6}\s*/gm, "").replace(/[*_`>]+/g, "").replace(/\s*\.\.\.\s*/g, " ").replace(/\s+/g, " ").trim();
+}
+var NOT_A_HEADLINE = /^(?:about|experience|education|skills|activity|\.\.\.|…)$|^\w{3} \d{4} - |\(current\)\s*$|^department:|united states|\((?:us|uk|gb|ca|in|de|fr|au)\)\s*$/i;
+function headlineFrom(text3, name, location) {
+  if (!text3) return void 0;
+  const lines = text3.split(/\n+/).map((l) => l.trim()).filter(Boolean);
+  const at = lines.findIndex(
+    (l) => /^#\s+\S/.test(l) && (!name || norm(l.replace(/^#\s+/, "")) === norm(name))
+  );
+  if (at < 0) return void 0;
+  const next = lines[at + 1];
+  if (!next || next.startsWith("#") || NOT_A_HEADLINE.test(next)) return void 0;
+  if (location && norm(next).startsWith(norm(location).slice(0, 12))) return void 0;
+  const h = plain2(next);
+  return h.length >= 3 && h.length <= 300 ? h : void 0;
+}
+function aboutFrom(text3) {
+  if (!text3) return void 0;
+  const m = text3.match(/##\s*About\s*\n+([\s\S]*?)(?=\n#{1,6}\s|\n\.\.\.\s*\n|$)/i);
+  const body = plain2(m?.[1] ?? "");
+  return body.length >= 20 ? body.slice(0, 400) : void 0;
+}
+function readExaPerson(r) {
+  const entities = r.entities;
+  const person = (Array.isArray(entities) ? entities : []).map(obj).find((e) => e?.type === "person" && obj(e.properties));
+  const p = obj(person?.properties);
+  if (!p) return void 0;
+  const jobs = [];
+  for (const raw of Array.isArray(p.workHistory) ? p.workHistory : []) {
+    const w = obj(raw);
+    if (!w) continue;
+    const dates = obj(w.dates);
+    const org = str3(obj(w.company)?.name);
+    const title = cleanTitle(str3(w.title), org);
+    if (!title && !org) continue;
+    const from = yearOf4(dates?.from);
+    const to = yearOf4(dates?.to);
+    const current = !!dates && (dates.to === null || dates.to === void 0) && from !== void 0;
+    if (jobs.some((j) => norm(j.title) === norm(title) && norm(j.org) === norm(org) && j.from === from))
+      continue;
+    jobs.push({
+      ...title ? { title } : {},
+      ...org ? { org } : {},
+      current,
+      ...from ? { from } : {},
+      ...to ? { to } : {},
+      ...str3(w.location) ? { location: str3(w.location) } : {}
+    });
+  }
+  if (jobs.length && !jobs.some((j) => j.current) && jobs.every((j) => !j.from && !j.to))
+    jobs[0].current = true;
+  const order = new Map(jobs.map((j, i) => [j, i]));
+  jobs.sort((a, b) => Number(b.current) - Number(a.current) || order.get(a) - order.get(b));
+  const schools = [];
+  for (const raw of Array.isArray(p.educationHistory) ? p.educationHistory : []) {
+    const e = obj(raw);
+    const school = str3(obj(e?.institution)?.name);
+    if (!school || schools.some((s) => norm(s.school) === norm(school))) continue;
+    schools.push({ school, ...str3(e?.degree) ? { degree: str3(e?.degree) } : {} });
+  }
+  const text3 = (r.highlights ?? []).join("\n\n");
+  const name = str3(p.name) ?? str3(r.title);
+  const location = str3(p.location);
+  const now = jobs.find((j) => j.current);
+  const headline = headlineFrom(text3, name, location) ?? (now?.title && now.org ? `${now.title} at ${now.org}` : now?.title ?? now?.org);
+  return {
+    ...name ? { name } : {},
+    ...str3(p.firstName) ? { firstName: str3(p.firstName) } : {},
+    ...str3(p.lastName) ? { lastName: str3(p.lastName) } : {},
+    ...headline ? { headline } : {},
+    ...location ? { location } : {},
+    jobs: jobs.slice(0, 12),
+    schools: schools.slice(0, 6),
+    ...aboutFrom(text3) ? { about: aboutFrom(text3) } : {}
+  };
+}
+function leadJob(jobs, filters) {
+  const now = jobs.filter((j) => j.current);
+  if (now.length <= 1) return now[0];
+  const has2 = (hay, needle) => {
+    const h = norm(hay);
+    const n = norm(needle);
+    return !!h && !!n && (h === n || h.startsWith(`${n} `) || h.includes(` ${n}`) || n.startsWith(`${h} `));
+  };
+  const orgs = filters?.currentOrgs ?? [];
+  const atAsked = orgs.length ? now.find((j) => orgs.some((o) => has2(j.org, o))) : void 0;
+  if (atAsked) return atAsked;
+  const titles = filters?.titles ?? [];
+  const first = now[0];
+  if (titles.length && !titles.some((t) => has2(first.title, t))) {
+    const asked = now.find((j) => titles.some((t) => has2(j.title, t)));
+    if (asked) return asked;
+  }
+  return first;
+}
+function jobLine(j) {
+  const what = j.title && j.org ? `${j.title} at ${j.org}` : j.title ?? j.org ?? "";
+  const when3 = j.current ? j.from ? ` (${j.from} to now)` : " (now)" : j.from || j.to ? ` (${j.from ?? "?"} to ${j.to ?? "?"})` : "";
+  return `${what}${when3}`;
+}
+
 // supabase/functions/_shared/sourcing/prompts.ts
 var FIT_BATCH = 20;
 function fitSystem(userFirstName2, checks = 0) {
@@ -27591,7 +27929,9 @@ function fitSystem(userFirstName2, checks = 0) {
     `Score how well each candidate matches what ${userFirstName2} is looking for. 0 = not a match, 1 = an excellent match.`,
     "Judge only from the fields given. Do not reward fame. Give at most two short reasons.",
     ...checks ? [
-      `Also answer each of the ${checks} numbered checks for every candidate, in order, in "checks": "yes" when the fields say so, "no" when they say otherwise, "unknown" when they do not say. Never guess: a name, a company or a title alone that does not settle a check is "unknown". A company or a fund is not a person: when the candidate is not a person, answer "no" to every check.`
+      `Also answer each of the ${checks} numbered checks for every candidate, in order, in "checks": "yes" when the fields say so, "no" when they say otherwise, "unknown" when they do not say. Never guess: a name, a company or a title alone that does not settle a check is "unknown". A company or a fund is not a person: when the candidate is not a person, answer "no" to every check.`,
+      '"jobs" lists where they work and worked, newest first, and "(… to now)" marks a job they hold today; "schools" lists where they studied. When a candidate has "jobs", a check about where they work or worked is settled by that list: "no" when no job in it fits. When a candidate has "schools", a check about where they studied is settled by that list. A candidate with neither list leaves such a check "unknown".',
+      'Read names the way people use them: "UC Berkeley", "Cal" and "Berkeley Haas" are the University of California, Berkeley; "Google DeepMind" is part of Google; San Francisco, Oakland and Palo Alto are in the Bay Area; "VC" is venture capital.'
     ] : []
   ].join("\n");
 }
@@ -28036,6 +28376,10 @@ function cleanEmail(e) {
 var titleCase2 = (s) => s.replace(/\b\w/g, (c) => c.toUpperCase());
 
 // supabase/functions/_shared/sourcing/search.ts
+function askedChecks(goal) {
+  const fromFilters = goal.peopleOnly ? filterChecks(goal.filters).map((f) => ({ text: f.text, need: f.need, filter: f.key })) : [];
+  return [...fromFilters, ...goal.checks ?? []];
+}
 var DAY_MS = 864e5;
 var SOURCING_CACHE_TTL = {
   exa: 7 * DAY_MS,
@@ -28103,6 +28447,8 @@ async function sourcePeople(deps, input) {
     merged = await gather([(r) => webCall(ctx, r)], relax);
   }
   const relaxMs = lap();
+  if (g.filters && (relax.location || relax.place)) g.filters = { ...g.filters, placesNeed: "nice" };
+  if (g.filters && relax.seniority) g.filters = { ...g.filters, seniority: [] };
   if (g.peopleOnly) merged = merged.filter((c) => c.entity === "person");
   if (deps.inPipeline) {
     const inPipeline2 = deps.inPipeline;
@@ -28140,8 +28486,48 @@ async function gather(calls, relax) {
   const lists = await Promise.all(calls.map((c) => c(relax)));
   return mergeCandidates(lists.flat());
 }
+function planPeople(ctx) {
+  const g = ctx.input.goal;
+  const f = tidyFilters(g.filters);
+  const calls = [];
+  const queriesFor = (r) => peopleQueries(g.topic ?? g.title, f, { place: r.location || r.place, seniority: r.seniority });
+  const n = Math.max(1, queriesFor({ location: false, seniority: false, place: false }).length);
+  for (let i = 0; i < n; i++)
+    calls.push((r) => {
+      const q = queriesFor(r)[i];
+      return q ? exaCall(ctx, { query: q, category: "people" }, r, "person", {
+        numResults: PEOPLE_RESULTS,
+        asIs: true
+      }) : Promise.resolve([]);
+    });
+  calls.push(
+    (r) => linkedInCall(
+      ctx,
+      r,
+      {
+        keywords: linkedInKeywords(g.topic ?? g.title, f),
+        companies: f.currentOrgs,
+        pastCompanies: f.everOrgs,
+        school: f.schools?.[0],
+        // one connection away: the people a search can find who come with someone to ask
+        distance: [2]
+      },
+      { pages: 1, places: r.location ? [] : f.places ?? [] }
+    )
+  );
+  if (ctx.deps.apollo.configured)
+    calls.push(
+      (r) => apolloCall(ctx, r, {
+        person_titles: f.titles?.length ? f.titles : void 0,
+        q_keywords: [...f.currentOrgs ?? [], ...f.keywords ?? []].join(" ") || void 0
+      })
+    );
+  return calls;
+}
+var PEOPLE_RESULTS = 25;
 function plan(ctx) {
   const g = ctx.input.goal;
+  if (g.peopleOnly) return planPeople(ctx);
   const roles = g.roles ?? [];
   const words6 = (...xs) => xs.filter((x) => x?.trim()).join(" ");
   const exaPeople = (q, extra = {}) => (r) => exaCall(ctx, { query: q, category: "people", ...extra }, r, "person");
@@ -28306,7 +28692,7 @@ async function webCall(ctx, relax) {
     return [];
   }
 }
-async function exaCall(ctx, base, relax, entity) {
+async function exaCall(ctx, base, relax, entity, opts = {}) {
   const { deps, input } = ctx;
   if (!deps.exa.configured) {
     if (!deps.web?.length) ctx.unconfigured.add("exa");
@@ -28315,9 +28701,9 @@ async function exaCall(ctx, base, relax, entity) {
   const loc = locationOf(ctx, relax);
   const req = {
     ...base,
-    query: loc && entity === "person" ? `${base.query} ${loc}` : base.query,
+    query: loc && entity === "person" && !opts.asIs ? `${base.query} ${loc}` : base.query,
     type: "auto",
-    numResults: 10,
+    numResults: opts.numResults ?? 10,
     contents: { highlights: { query: input.goal.title, maxCharacters: 600 } }
   };
   const est = estimateExaSearchUsd(req);
@@ -28345,6 +28731,34 @@ async function exaCall(ctx, base, relax, entity) {
   return r.value.results.map((x) => fromExa(ctx, x, entity)).filter((c) => !!c);
 }
 function fromExa(ctx, r, entity) {
+  const prof = entity === "person" ? readExaPerson(r) : void 0;
+  if (prof?.name) {
+    const now = leadJob(prof.jobs, ctx.input.goal.filters);
+    const image = r.image;
+    const name2 = prof.name;
+    const split = splitName(name2);
+    return {
+      key: `c${++ctx.seq}`,
+      entity: "person",
+      name: name2,
+      firstName: prof.firstName ?? split.firstName,
+      lastName: prof.lastName ?? split.lastName,
+      title: now?.title,
+      org: now?.org,
+      headline: prof.headline,
+      location: prof.location ?? now?.location,
+      linkedinUrl: cleanLinkedInUrl(r.url),
+      url: r.url,
+      ...typeof image === "string" && /^https:\/\//.test(image) ? { photoUrl: image } : {},
+      ...prof.jobs.length ? { history: prof.jobs } : {},
+      ...prof.schools.length ? { schools: prof.schools.map((x) => x.school) } : {},
+      ...prof.about ? { about: prof.about } : {},
+      sources: ["exa"],
+      externalIds: { exa: r.id ?? r.url }
+    };
+  }
+  const kinds = (r.entities ?? []).map((e) => e?.type);
+  if (entity === "person" && kinds.length && !kinds.includes("person")) return null;
   const title = (r.title ?? "").replace(/\s*[|·]\s*linkedin.*$/i, "").trim();
   const parts = title.split(/\s+[-–—|·]\s+/).map((p) => p.trim());
   const name = (entity === "person" ? parts[0] ?? r.author ?? "" : parts[0] ?? "").trim();
@@ -28424,7 +28838,7 @@ async function paramId(ctx, type, keywords) {
   ctx.idCache.set(k, id);
   return id;
 }
-async function linkedInCall(ctx, relax, q) {
+async function linkedInCall(ctx, relax, q, opts = {}) {
   const { deps, input } = ctx;
   if (!deps.unipile.configured || !input.unipileAccountId) {
     ctx.unconfigured.add("unipile");
@@ -28438,7 +28852,7 @@ async function linkedInCall(ctx, relax, q) {
       return [];
     }
   }
-  const loc = locationOf(ctx, relax);
+  const loc = opts.places ? opts.places[0] : locationOf(ctx, relax);
   const ids = async (type, names) => (await Promise.all((names ?? []).slice(0, 3).map((n) => paramId(ctx, type, n)))).filter(
     (x) => !!x
   );
@@ -28487,9 +28901,14 @@ async function linkedInCall(ctx, relax, q) {
       location: locationIds.length ? locationIds : void 0
     };
   }
+  const met = [];
+  if (body.company) met.push("current");
+  if (body.past_company) met.push("ever");
+  if (body.school) met.push("school");
+  if (body.location) met.push("place");
   const out = [];
   let cursor;
-  for (let page2 = 0; page2 < LINKEDIN_PAGES && out.length < LINKEDIN_MAX_RESULTS; page2++) {
+  for (let page2 = 0; page2 < (opts.pages ?? LINKEDIN_PAGES) && out.length < LINKEDIN_MAX_RESULTS; page2++) {
     const r = await deps.unipile.searchPeople(accountId, body, { cursor });
     if (!note(ctx, r) || !r.ok) break;
     for (const item of r.value.items) {
@@ -28511,6 +28930,7 @@ async function linkedInCall(ctx, relax, q) {
         memberId: p.memberId,
         networkDistance: p.networkDistance,
         photoUrl: p.pictureUrl,
+        ...met.length ? { met: [...met] } : {},
         sources: ["unipile"],
         externalIds: p.memberId ? { unipile: p.memberId } : {}
       });
@@ -28621,6 +29041,10 @@ function mergeInto(into, c) {
     "photoUrl"
   ])
     if (!into[k] && c[k]) into[k] = c[k];
+  if (!into.history?.length && c.history?.length) into.history = c.history;
+  if (!into.schools?.length && c.schools?.length) into.schools = c.schools;
+  if (!into.about && c.about) into.about = c.about;
+  if (c.met?.length) into.met = [.../* @__PURE__ */ new Set([...into.met ?? [], ...c.met])];
   if (c.networkDistance !== void 0)
     into.networkDistance = Math.min(into.networkDistance ?? c.networkDistance, c.networkDistance);
   for (const s of c.sources) if (!into.sources.includes(s)) into.sources.push(s);
@@ -28680,7 +29104,17 @@ var STOP3 = /* @__PURE__ */ new Set([
 ]);
 function candidateText2(c) {
   return norm(
-    [c.name, c.title, c.org, c.headline, c.location, ...c.evidence ?? []].filter(Boolean).join(" ")
+    [
+      c.name,
+      c.title,
+      c.org,
+      c.headline,
+      c.location,
+      ...c.evidence ?? [],
+      ...(c.history ?? []).map(jobLine),
+      ...c.schools ?? [],
+      c.about
+    ].filter(Boolean).join(" ")
   );
 }
 function keywordFit(goal, c) {
@@ -28725,10 +29159,12 @@ function wordsMostlyIn(text3, phrase) {
   return hits2 >= Math.ceil(ws.length / 2);
 }
 function ruleChecks(goal, c) {
-  if (!goal.checks?.length) return {};
+  const asked = askedChecks(goal);
+  if (!asked.length) return {};
   const text3 = candidateText2(c);
   return {
-    checks: goal.checks.map((k) => {
+    checks: asked.map((k) => {
+      if (k.filter) return "unknown";
       const ws = norm(k.text).split(/[^a-z0-9+#]+/).filter((w) => w.length >= 3 && !STOP3.has(w) && !CHECK_FILLER.has(w));
       return ws.length > 0 && ws.every((w) => text3.includes(w)) ? "yes" : "unknown";
     })
@@ -28749,9 +29185,13 @@ function llmFitScorer(claude) {
           location: c.location,
           headline: c.headline,
           evidence: c.evidence?.slice(0, 3),
+          ...c.history?.length ? { jobs: c.history.slice(0, 6).map(jobLine) } : {},
+          ...c.schools?.length ? { schools: c.schools.slice(0, 4) } : {},
+          ...c.about ? { about: c.about.slice(0, 300) } : {},
+          ...c.networkDistance ? { linkedin_degree: c.networkDistance } : {},
           source: c.sources.join("+")
         }));
-        const asked = goal.checks ?? [];
+        const asked = askedChecks(goal);
         const r = await claude.parse("sourcing_fit", fitSchema, {
           system: fitSystem(user.firstName, asked.length),
           user: fitUser(
@@ -28796,10 +29236,14 @@ async function rank(ctx, cands, batchId) {
     deps.prefetch?.(cands).catch(() => void 0)
   ]);
   const fitOf = (c) => fits.get(c.key) ?? keywordFit(input.goal, c);
-  const asked = input.goal.checks ?? [];
+  const asked = askedChecks(input.goal);
   const kept = asked.length ? cands.filter((c) => {
     const answers = fitOf(c).checks ?? [];
-    c.checks = asked.map((k, i) => ({ text: k.text, need: k.need, answer: answers[i] ?? "unknown" }));
+    c.checks = asked.map((k, i) => {
+      const read = answers[i] ?? "unknown";
+      const answer = read === "unknown" && k.filter && c.met?.includes(k.filter) ? "yes" : read;
+      return { text: k.text, need: k.need, answer, ...k.filter ? { filter: k.filter } : {} };
+    });
     return !c.checks.some((k) => k.need === "must" && k.answer === "no");
   }) : cands;
   const byFit = [...kept].sort((a, b) => checkScore(b) - checkScore(a) || fitOf(b).fit - fitOf(a).fit);
@@ -28836,7 +29280,7 @@ async function rank(ctx, cands, batchId) {
       candidate,
       source: c.sources.join("+"),
       external_id: c.memberId ?? c.externalIds.apollo ?? c.externalIds.semantic_scholar ?? c.linkedinUrl ?? c.url ?? null,
-      rank: round43(warmth ? warmRank(base, f.fit, warmth.tier) : base),
+      rank: round43(warmth ? warmRank(base, f.fit, warmth.weak ? 3 : warmth.tier) : base),
       fit: round43(f.fit),
       reach: round43(reach),
       responsiveness: round43(responsiveness),
@@ -28850,7 +29294,7 @@ async function rank(ctx, cands, batchId) {
 
 // supabase/functions/_shared/sourcing/run.ts
 var strs = (v) => Array.isArray(v) ? v.filter((x) => typeof x === "string" && !!x.trim()).map((x) => x.trim()) : [];
-var str3 = (v) => typeof v === "string" && v.trim() ? v.trim() : void 0;
+var str4 = (v) => typeof v === "string" && v.trim() ? v.trim() : void 0;
 function sourcingGoal(req, goal) {
   const f = req.filters ?? {};
   const t = goal?.targets ?? {};
@@ -28859,12 +29303,12 @@ function sourcingGoal(req, goal) {
   const orgs = f.organizations?.length ? f.organizations : strs(t.organizations);
   const keywords = f.keywords?.length ? f.keywords : strs(c.keywords);
   const location = f.locations?.[0] ?? strs(t.geographies)[0];
-  const query2 = str3(req.query);
+  const query2 = str4(req.query);
   const criteria = [
     ...query2 ? [query2] : [],
     ...strs(c.criteria),
     ...roles,
-    ...str3(c.sector) ? [str3(c.sector)] : [],
+    ...str4(c.sector) ? [str4(c.sector)] : [],
     ...strs(c.skills)
   ].slice(0, 8);
   return {
@@ -28877,16 +29321,32 @@ function sourcingGoal(req, goal) {
     roles,
     skills: strs(c.skills),
     keywords: keywords.length ? keywords : query2 ? [query2] : [],
-    sector: str3(c.sector),
-    stage: str3(c.stage),
+    sector: str4(c.sector),
+    stage: str4(c.stage),
     location,
     seniorities: f.seniority?.length ? f.seniority : strs(c.seniority),
     employeeRanges: strs(c.employee_ranges ?? c.employeeRanges),
     pastCompanies: strs(c.past_companies ?? c.pastCompanies),
-    topic: query2 ?? str3(c.topic),
+    topic: query2 ?? str4(c.topic),
     school: f.schools?.[0] ?? strs(t.schools)[0],
     ...req.criteria?.length ? { checks: req.criteria.slice(0, 6).map((k) => ({ text: k.text, need: k.need ?? "must" })) } : {},
-    ...req.peopleOnly ? { peopleOnly: true } : {}
+    ...req.peopleOnly ? { peopleOnly: true } : {},
+    // a people search keeps its filters as they were set: they build its queries and are checked on each person
+    ...req.peopleOnly ? {
+      filters: tidyFilters({
+        titles: f.titles,
+        seniority: f.seniority,
+        currentOrgs: f.currentOrganizations ?? (f.everOrganizations ? [] : f.organizations),
+        everOrgs: f.everOrganizations,
+        schools: f.schools,
+        places: f.locations,
+        keywords: f.keywords,
+        roleNeed: f.needs?.role,
+        placesNeed: f.needs?.locations,
+        everOrgsNeed: f.needs?.everOrganizations,
+        keywordsNeed: f.needs?.keywords
+      })
+    } : {}
   };
 }
 var toSourced = (id, r) => {
@@ -28906,6 +29366,14 @@ var toSourced = (id, r) => {
     ...c.warmth ? { tier: c.warmth.tier } : {},
     ...c.warmth?.why ? { why: c.warmth.why } : {},
     ...c.warmth?.bridge ? { bridge: c.warmth.bridge } : {},
+    ...c.warmth?.weak ? { bridgeWeak: true } : {},
+    ...c.headline ? { headline: c.headline.slice(0, 300) } : {},
+    ...c.schools?.length ? { schools: c.schools.slice(0, 4) } : {},
+    ...c.history?.length ? {
+      pastOrgs: [
+        ...new Set(c.history.filter((j) => !j.current && j.org && j.org !== c.org).map((j) => j.org))
+      ].slice(0, 5)
+    } : {},
     source: c.sources[0] ?? "exa",
     rank: r.rank,
     fit: r.fit,
@@ -29108,6 +29576,7 @@ async function runSourcing(s, userId, req) {
         student: ctx.student,
         known: known2,
         warm: ctx.warm,
+        connections: ctx.connections,
         domains: [workDomain(c.email), ...orgDomainsOf(c, ctx.orgDomains)].filter((d) => !!d),
         year
       }),
@@ -29189,7 +29658,7 @@ function webSourcesFor(s) {
   return out;
 }
 async function warmContext(db2, userId, u2, homeCity, graph) {
-  const [[resume], emails, gr] = await Promise.all([
+  const [[resume], emails, gr, heads] = await Promise.all([
     db2.sql`
       select parsed from orbit.uploads
        where user_id = ${userId}::uuid and kind = 'resume' and is_current order by created_at desc limit 1`,
@@ -29197,7 +29666,13 @@ async function warmContext(db2, userId, u2, homeCity, graph) {
       select id, display_name, org_raw, primary_email as email from orbit.people
        where user_id = ${userId}::uuid and primary_email is not null and deleted_at is null and not is_self
        limit 5000`,
-    graph()
+    graph(),
+    // where each connection works when only their headline says ("Investor at Nexus"), for a way in through them
+    db2.sql`
+      select id, headline from orbit.people
+       where user_id = ${userId}::uuid and org_raw is null and headline is not null and deleted_at is null
+         and not is_self and merged_into is null
+       limit 20000`
   ]);
   const student = studentFromResume(resume?.parsed, {
     school: u2?.school,
@@ -29225,7 +29700,21 @@ async function warmContext(db2, userId, u2, homeCity, graph) {
     org: p.org,
     email: emailOf.get(p.id)
   }));
-  return { student, warm, known, orgDomains };
+  const headOrg = /* @__PURE__ */ new Map();
+  for (const h of heads) {
+    const [o] = headlineOrgs(h.headline);
+    if (o) headOrg.set(h.id, o);
+  }
+  const connections = connectionsByOrg(
+    [...gr.people.values()].filter((p) => !p.hidden && !p.doNotContact && p.id !== gr.selfId).map((p) => ({
+      personId: p.id,
+      name: p.displayName,
+      score: p.score,
+      org: p.org ?? headOrg.get(p.id),
+      email: emailOf.get(p.id)
+    })).filter((p) => !!p.org)
+  );
+  return { student, warm, known, orgDomains, connections };
 }
 
 // supabase/functions/orbit-worker/handlers/source.ts
@@ -30943,7 +31432,7 @@ function readIntroduction(msg, people, userEmails, ctx = {}) {
       (c) => !COMMON_WORD_NAMES.has(c.name.toLowerCase()) && !wordRe(escapeRe7(c.name), "").test(fold4(msg.bodyText ?? "")) && wordRe(escapeRe7(c.name.toLowerCase()), "").test(fold4(msg.bodyText ?? ""))
     ).map((c) => c.person.id)
   );
-  const mentions = (text3, c, anyCase) => {
+  const mentions2 = (text3, c, anyCase) => {
     const re = wordRe(escapeRe7(c.name), anyCase || lowerOnly.has(c.person.id) ? "gi" : "g");
     const found = [];
     for (let m = re.exec(text3); m; m = re.exec(text3)) found.push(m.index);
@@ -31058,7 +31547,7 @@ function readIntroduction(msg, people, userEmails, ctx = {}) {
     const addressed = [];
     for (const c of candidates) {
       clauses2.forEach((cl, i) => {
-        const at = mentions(cl, c, caseless || kinds[i] !== "plain" || vocative[i]);
+        const at = mentions2(cl, c, caseless || kinds[i] !== "plain" || vocative[i]);
         if (!at.length) return;
         if (loose[i] || vocative[i] && loose.some(Boolean)) c.looseThanked = true;
         if (kinds[i] === "offer") return;
@@ -31106,7 +31595,7 @@ function readIntroduction(msg, people, userEmails, ctx = {}) {
     if (kinds.includes("bare") && !namesStudent(sentence2)) bareThanks = true;
     if (clauses2.some((cl, i) => vocative[i] && kinds[i] === "plain" && namesStudent(cl)))
       studentAddressed = true;
-    const namedHere = candidates.filter((c) => !c.thanked && mentions(sentence2, c, caseless).length);
+    const namedHere = candidates.filter((c) => !c.thanked && mentions2(sentence2, c, caseless).length);
     const named = namedHere.length ? namedHere : namedBefore;
     if (namedHere.length || !/^\s*(?:he|she|they)\b/i.test(sentence2)) namedBefore = namedHere;
     if (named.length === 1 && !addressed.includes(named[0]) && clauses2.some(
@@ -31118,8 +31607,8 @@ function readIntroduction(msg, people, userEmails, ctx = {}) {
       mark(named[0], STRONG);
       if (SCHEDULER_ROLE2.test(lowerSentence)) named[0].scheduler = true;
     }
-    const strongHere = candidates.filter((c) => c.strong && mentions(sentence2, c, caseless).length);
-    const namedNow = candidates.filter((c) => !c.thanked && mentions(sentence2, c, caseless).length);
+    const strongHere = candidates.filter((c) => c.strong && mentions2(sentence2, c, caseless).length);
+    const namedNow = candidates.filter((c) => !c.thanked && mentions2(sentence2, c, caseless).length);
     for (const c of namedNow) {
       if (c.strong) continue;
       const listed = clauses2.some(
@@ -31142,7 +31631,7 @@ function readIntroduction(msg, people, userEmails, ctx = {}) {
           genericCue = true;
         }
     }
-    if (kinds.includes("thanks") && !candidates.some((c) => mentions(sentence2, c, true).length) && !namesStudent(sentence2))
+    if (kinds.includes("thanks") && !candidates.some((c) => mentions2(sentence2, c, true).length) && !namesStudent(sentence2))
       unnamedThanks = true;
   }
   adminSentence = false;
@@ -31160,7 +31649,7 @@ function readIntroduction(msg, people, userEmails, ctx = {}) {
         }
   if (!isReplySubject) {
     for (const c of candidates)
-      for (const idx of mentions(subjectLower, c, true))
+      for (const idx of mentions2(subjectLower, c, true))
         if (anchoredAt(subjectLower.slice(0, idx), subjectLower.slice(idx + c.name.length))) {
           mark(c, STRONG);
           mentioned.add(c.person.id);
@@ -31168,7 +31657,7 @@ function readIntroduction(msg, people, userEmails, ctx = {}) {
   }
   if (!isReplySubject) {
     for (const c of candidates)
-      if (pairNames.has(c.name.toLowerCase()) || subjectIntro && mentions(subject, c, true).length) {
+      if (pairNames.has(c.name.toLowerCase()) || subjectIntro && mentions2(subject, c, true).length) {
         mark(c, STRONG);
         mentioned.add(c.person.id);
       }
@@ -31185,7 +31674,7 @@ function readIntroduction(msg, people, userEmails, ctx = {}) {
     for (const c of candidates) {
       if (c.thanked || c.looseThanked || c.scheduler || !mentioned.has(c.person.id)) continue;
       const counter = notPresenting(escapeRe7(c.name.toLowerCase()));
-      const where = sentencesOf2(body).filter((x) => mentions(x, c, caseless).length);
+      const where = sentencesOf2(body).filter((x) => mentions2(x, c, caseless).length);
       const role = roleDescribed(escapeRe7(c.name));
       if (where.length && !where.some((x) => counter.test(x.toLowerCase())) && where.some((x) => role.test(caseless ? x.replace(/^./, (ch) => ch.toUpperCase()) : x)))
         mark(c, GENERIC);
@@ -31213,11 +31702,11 @@ function readIntroduction(msg, people, userEmails, ctx = {}) {
     const presentingWords = POSSIBLE_PRESENTING.test(lowerBody) || POSSIBLE_PRESENTING.test(subjectLower);
     for (const c of candidates) {
       if (c.scheduler || c.admin || c.thanked || c.looseThanked) continue;
-      const inSubject = !isReplySubject && mentions(subject, c, true).length > 0;
+      const inSubject = !isReplySubject && mentions2(subject, c, true).length > 0;
       if (!mentioned.has(c.person.id) && !inSubject) continue;
-      const at = bodySentences.flatMap((x, i) => mentions(x, c, caseless).length ? [i] : []);
+      const at = bodySentences.flatMap((x, i) => mentions2(x, c, caseless).length ? [i] : []);
       const where = at.map((i) => bodySentences[i]);
-      const after = at.map((i) => bodySentences[i + 1] ?? "").filter((x) => x && !candidates.some((o) => o !== c && mentions(x, o, caseless).length));
+      const after = at.map((i) => bodySentences[i + 1] ?? "").filter((x) => x && !candidates.some((o) => o !== c && mentions2(x, o, caseless).length));
       const next = after.filter((x) => /^\s*(?:he|she|they)\b/i.test(x));
       const cues = [];
       let score = 0;
@@ -32209,7 +32698,7 @@ var RELATION_PAGES_PER_JOB = 2;
 var CHATS_PER_JOB = 4;
 var FRESH_FOR_MS = 7 * 864e5;
 var DAY19 = 864e5;
-var str4 = (v) => typeof v === "string" && v ? v : void 0;
+var str5 = (v) => typeof v === "string" && v ? v : void 0;
 function linkedinHandlers(deps) {
   const sleep = deps.sleep ?? ((ms2) => new Promise((r) => setTimeout(r, ms2)));
   const unipile = createUnipileSync({
@@ -32232,7 +32721,7 @@ function linkedinHandlers(deps) {
       const now = ctx.now();
       const touched = /* @__PURE__ */ new Set();
       if (job.payload.mode === "relation") {
-        const memberId = str4(job.payload.providerId);
+        const memberId = str5(job.payload.providerId);
         if (!memberId) return;
         const r = await ingestRelations(
           ctx.db,
@@ -32240,10 +32729,10 @@ function linkedinHandlers(deps) {
           [
             {
               memberId,
-              publicIdentifier: str4(job.payload.publicIdentifier),
-              profileUrl: str4(job.payload.profileUrl),
-              fullName: str4(job.payload.name),
-              headline: str4(job.payload.headline),
+              publicIdentifier: str5(job.payload.publicIdentifier),
+              profileUrl: str5(job.payload.profileUrl),
+              fullName: str5(job.payload.name),
+              headline: str5(job.payload.headline),
               connectedAt: now.toISOString()
             }
           ],
@@ -34132,10 +34621,10 @@ function parseYcFounders(html) {
   } catch {
     return void 0;
   }
-  const list2 = data?.props?.company?.founders;
-  if (!Array.isArray(list2)) return void 0;
+  const list3 = data?.props?.company?.founders;
+  if (!Array.isArray(list3)) return void 0;
   const out = [];
-  for (const f of list2) {
+  for (const f of list3) {
     const name = clip2(f?.full_name, 120);
     if (!name) continue;
     const title = clip2(f?.title, 80);
@@ -34168,19 +34657,19 @@ function factRow(c) {
   };
 }
 async function syncCompanyFacts(db2, doFetch, now) {
-  let list2;
+  let list3;
   try {
     const res = await doFetch(YC_OSS_URL, {
       headers: { accept: "application/json", "user-agent": "Orbit/1.0" }
     });
     if (!res.ok) return { fetched: 0, written: 0, skipped: "fetch_failed" };
     const body = await res.json();
-    list2 = Array.isArray(body) ? body : [];
+    list3 = Array.isArray(body) ? body : [];
   } catch {
     return { fetched: 0, written: 0, skipped: "fetch_failed" };
   }
-  if (list2.length < MIN_COMPANIES) return { fetched: list2.length, written: 0, skipped: "too_small" };
-  const rows = list2.map(factRow).filter((r) => !!r);
+  if (list3.length < MIN_COMPANIES) return { fetched: list3.length, written: 0, skipped: "too_small" };
+  const rows = list3.map(factRow).filter((r) => !!r);
   const asOf = now.toISOString().slice(0, 10);
   let written = 0;
   for (let i = 0; i < rows.length; i += BATCH_ROWS) {
@@ -34233,7 +34722,7 @@ async function syncCompanyFacts(db2, doFetch, now) {
        where c.source = 'yc' and c.source_id = r.source_id and c.yc_slug is distinct from r.yc_slug`;
     written += part2.length;
   }
-  return { fetched: list2.length, written };
+  return { fetched: list3.length, written };
 }
 var FOUNDERS_REREAD_DAYS = 30;
 var FOUNDER_FETCH_MS = 6e3;
@@ -34373,15 +34862,15 @@ var KNOWN_SCHOOLS = new Set(
   ].map((s) => s.toLowerCase())
 );
 var COMPANY_WORDS = /\b(inc|llc|l\.l\.c|ltd|limited|corp|corporation|co|company|gmbh|plc|technologies|technology|labs?|capital|partners|group|holdings|ventures|bank|health|healthcare|systems|solutions|consulting|studios?|media|software|analytics|therapeutics|pharmaceuticals|logistics|motors|energy|securities|advisors|associates|agency|foundation|fund|ai)\b\.?/i;
-var clean2 = (s) => s.replace(/[’‘]/g, "'").replace(/\s+/g, " ").replace(/^[\s,.;:–—-]+|[\s,.;:–—-]+$/g, "").trim();
+var clean3 = (s) => s.replace(/[’‘]/g, "'").replace(/\s+/g, " ").replace(/^[\s,.;:–—-]+|[\s,.;:–—-]+$/g, "").trim();
 function looksLikeCompany(name) {
-  const n = clean2(name ?? "");
+  const n = clean3(name ?? "");
   if (!n) return false;
   if (SCHOOL_WORDS.test(n)) return false;
   return COMPANY_WORDS.test(n);
 }
 function looksLikeSchool(name) {
-  const n = clean2(name ?? "");
+  const n = clean3(name ?? "");
   if (!n || n.length > 120) return false;
   if (SCHOOL_WORDS.test(n)) return true;
   if (looksLikeCompany(n)) return false;
@@ -34643,9 +35132,9 @@ async function userLogoCandidates(db2, userId) {
   return [...byKey.values()].sort((a, b) => b.n - a.n);
 }
 function positionFor(experience, orgName) {
-  const clean3 = searchName(orgName);
+  const clean4 = searchName(orgName);
   return experience.find(
-    (e) => !!e.companyId && !!e.current && (sameCompanyName(e.company, orgName) || sameCompanyName(e.company, clean3) || namesCompany(e.company, orgName) || namesCompany(e.company, clean3) || namesCompany(orgName, e.company ?? ""))
+    (e) => !!e.companyId && !!e.current && (sameCompanyName(e.company, orgName) || sameCompanyName(e.company, clean4) || namesCompany(e.company, orgName) || namesCompany(e.company, clean4) || namesCompany(orgName, e.company ?? ""))
   );
 }
 async function settle(cache3, accountId, pick) {
@@ -35215,18 +35704,18 @@ async function runSocialSync(db2, queue, adapters, userId, o) {
         await save2({ stage: "refresh", syncedAt: o.now.toISOString(), refreshList: "following" });
         return { next: "later" };
       }
-      const list2 = state.refreshList ?? "following";
+      const list3 = state.refreshList ?? "following";
       calls++;
       const page2 = await readListPage(db2, a, {
         accountId: me,
-        list: list2,
+        list: list3,
         owner: userId,
         readBy: userId,
         now: o.now,
         keepAccounts: true
       });
       if (page2.ended) {
-        await save2({ refreshList: list2 === "following" ? "followers" : "following" });
+        await save2({ refreshList: list3 === "following" ? "followers" : "following" });
         await offerFollowBacks(db2, queue, userId, platform, me);
       }
       await listAfterExchange(db2, userId);
@@ -35358,8 +35847,8 @@ async function runXLookup(db2, lookupId, deps) {
   const limit2 = deps.cfg.listLimit;
   const circle = (await xCircle(db2, userId, client.meId)).filter((id) => id !== target);
   if (!circle.length) return end("done", none("no_circle", false), 0);
-  const list2 = l.state?.list ?? "following";
-  const other = list2 === "following" ? "followers" : "following";
+  const list3 = l.state?.list ?? "following";
+  const other = list3 === "following" ? "followers" : "following";
   const read = (accountId, which, size) => readXListToEnd(db2, client.adapter, {
     accountId,
     list: which,
@@ -35382,7 +35871,7 @@ async function runXLookup(db2, lookupId, deps) {
     const reason2 = r.reason === "budget" ? "over_quote" : r.reason === "protected" ? "private" : r.reason === "suppressed" ? "suppressed" : r.reason;
     return end("done", none(reason2), cost());
   };
-  const first = await read(target, list2, l.state?.size);
+  const first = await read(target, list3, l.state?.size);
   if (!first.ok) return stopped(first);
   const onFirst = new Set(first.ids);
   const candidates = circle.filter((id) => onFirst.has(id));
@@ -35395,9 +35884,9 @@ async function runXLookup(db2, lookupId, deps) {
     const sizes = await loadAccounts(db2, "x", candidates);
     let viaCandidates = 0;
     for (const c of candidates) {
-      if (await heldXList(db2, c, list2, userId, now())) continue;
+      if (await heldXList(db2, c, list3, userId, now())) continue;
       const k = sizes.get(c);
-      const n = list2 === "following" ? k?.following : k?.followers;
+      const n = list3 === "following" ? k?.following : k?.followers;
       viaCandidates = roundUsd(viaCandidates + xPrice("list", xListUnits(typeof n === "number" ? n : limit2)));
     }
     if (viaTarget <= viaCandidates) {
@@ -35408,8 +35897,8 @@ async function runXLookup(db2, lookupId, deps) {
     } else
       for (const c of candidates) {
         const k = sizes.get(c);
-        const n = list2 === "following" ? k?.following : k?.followers;
-        const r = await read(c, list2, typeof n === "number" ? n : void 0);
+        const n = list3 === "following" ? k?.following : k?.followers;
+        const r = await read(c, list3, typeof n === "number" ? n : void 0);
         if (!r.ok) {
           if (r.reason === "budget" || r.reason === "rate_limited") return stopped(r);
           confirmed.set(c, "unknown");
@@ -35426,8 +35915,8 @@ async function runXLookup(db2, lookupId, deps) {
     const on = onFirst.has(c);
     const back = on ? confirmed.get(c) ?? "unknown" : "unknown";
     if (on && back === "unknown") result.partial = true;
-    const targetFollows = list2 === "following" ? on ? "yes" : "no" : back;
-    const followsTarget = list2 === "followers" ? on ? "yes" : "no" : back;
+    const targetFollows = list3 === "following" ? on ? "yes" : "no" : back;
+    const followsTarget = list3 === "followers" ? on ? "yes" : "no" : back;
     const bridge = targetFollows === "yes" && followsTarget === "yes";
     const oneWay = !bridge && (targetFollows === "yes" || followsTarget === "yes");
     let personId = (await personForAccount(db2, userId, "x", c))?.personId;

@@ -179,6 +179,46 @@ describe('Find people: the results table', () => {
     expect($('find-split')!.textContent).toBe('1 you already know, 1 new.');
   });
 
+  it('a row says who they are under their name, and the path names who to go through and why', async () => {
+    await searchFor([
+      {
+        ...fresh,
+        headline: 'Seed investor. First cheques into developer tools.',
+        path: {
+          kind: 'intro',
+          label: 'Sam Warm',
+          personId: 'p9',
+          level: 1,
+          note: 'Sam, a connection of yours, works at Seed Fund',
+        },
+      },
+      {
+        ...other,
+        path: { kind: 'shared', label: 'Also from UC Berkeley', level: 1, note: 'Also from UC Berkeley' },
+      },
+    ]);
+    const rows = [...document.querySelectorAll('[data-testid="find-result"]')];
+    const first = rows[0] as HTMLElement;
+    const second = rows[1] as HTMLElement;
+    const inside = (el: HTMLElement, id: string) =>
+      el.querySelector(`[data-testid="${id}"]`) as HTMLElement | null;
+    expect(inside(first, 'find-headline')!.textContent).toBe(
+      'Seed investor. First cheques into developer tools.',
+    );
+    // no headline, no second line
+    expect(inside(second, 'find-headline')).toBeNull();
+    const via = inside(first, 'result-path')!;
+    expect(via.getAttribute('data-kind')).toBe('intro');
+    expect(via.textContent).toContain('Sam Warm');
+    expect(via.querySelector('a')!.getAttribute('href')).toBe('/people/p9');
+    expect(via.querySelector('a')!.getAttribute('title')).toContain(
+      'Sam, a connection of yours, works at Seed Fund',
+    );
+    const shared = inside(second, 'result-path')!;
+    expect(shared.getAttribute('data-kind')).toBe('shared');
+    expect(shared.textContent).toContain('Also from UC Berkeley');
+  });
+
   it('someone with no way in says so instead of an empty cell', async () => {
     await searchFor([other]);
     expect($$('find-result')[0]!.textContent).toContain('No path yet');

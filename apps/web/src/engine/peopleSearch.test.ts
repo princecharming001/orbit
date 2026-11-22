@@ -28,6 +28,8 @@ vi.mock('./goals', async (orig) => ({
 }));
 
 import {
+  barsOfScore,
+  compareRows,
   countFilters,
   EMPTY_FILTERS,
   extraWords,
@@ -39,7 +41,9 @@ import {
   matchOfSourced,
   newCriterion,
   outsideFilters,
+  pathOfSourced,
   purposeOf,
+  type ResultRow,
   resultsCsv,
   ruleForm,
   runPeopleSearch,
@@ -335,11 +339,123 @@ describe('what goes to the outside search', () => {
     expect(outsideFilters(f)).toEqual({
       titles: ['partner', 'investor', 'principal', 'venture capital'],
       organizations: ['Accel', 'Google'],
+      // where they work now and where they ever worked are different questions
+      currentOrganizations: ['Accel'],
+      everOrganizations: ['Google'],
       locations: ['London'],
       schools: ['LSE'],
       keywords: ['seed'],
       seniority: ['vp', 'c_suite'],
+      needs: { role: 'must', locations: 'must', everOrganizations: 'must', keywords: 'must' },
     });
+    // what the student marked as nice to have only ranks on the server too
+    const nice = outsideFilters({
+      ...f,
+      filters: {
+        ...f.filters,
+        roleNeed: 'nice',
+        placesNeed: 'nice',
+        companiesNeed: 'nice',
+        keywordsNeed: 'nice',
+      },
+    });
+    expect(nice.needs).toEqual({
+      role: 'nice',
+      locations: 'nice',
+      everOrganizations: 'nice',
+      keywords: 'nice',
+    });
+  });
+
+  it('the way in to someone found outside: a person to ask first, then LinkedIn, then what is shared', () => {
+    const c = (over: Partial<SourcedCandidate>) =>
+      ({
+        id: 'x',
+        name: 'Nia Out',
+        fit: 0.9,
+        reach: 0,
+        responsiveness: 0.5,
+        rank: 0.5,
+        reasons: [],
+        source: 'exa',
+        ...over,
+      }) as SourcedCandidate;
+    expect(pathOfSourced(c({ knownPersonId: 'p1', tier: 1 }))).toEqual({
+      kind: 'direct',
+      label: 'You know them',
+      level: 3,
+    });
+    // a close contact at their company: the bars say how close the student is to that contact
+    expect(
+      pathOfSourced(
+        c({
+          bridge: { personId: 'p9', name: 'Sam Warm', score: 84 },
+          why: 'Sam is close to you and also at Rho',
+        }),
+      ),
+    ).toEqual({
+      kind: 'intro',
+      label: 'Sam Warm',
+      personId: 'p9',
+      level: 4,
+      note: 'Sam is close to you and also at Rho',
+    });
+    expect(pathOfSourced(c({ bridge: { personId: 'p9', name: 'Sam Warm', score: 45 } }))).toMatchObject({
+      level: 2,
+    });
+    // a connection never talked to is still a person to ask: one bar
+    expect(
+      pathOfSourced(
+        c({
+          bridge: { personId: 'p8', name: 'Wren Abara', score: 9 },
+          bridgeWeak: true,
+          why: 'Wren, a connection of yours, works at Nexus',
+          degree: 2,
+        }),
+      ),
+    ).toEqual({
+      kind: 'intro',
+      label: 'Wren Abara',
+      personId: 'p8',
+      level: 1,
+      note: 'Wren, a connection of yours, works at Nexus',
+    });
+    expect(pathOfSourced(c({ degree: 2 }))).toMatchObject({ kind: 'second', label: '2nd degree', level: 1 });
+    expect(pathOfSourced(c({ tier: 3, why: 'Also from UC Berkeley' }))).toEqual({
+      kind: 'shared',
+      label: 'Also from UC Berkeley',
+      level: 1,
+      note: 'Also from UC Berkeley',
+    });
+    // an open door or a cold match is no way in
+    expect(pathOfSourced(c({ tier: 4, why: 'Their page invites students to reach out' }))).toBeUndefined();
+    expect(pathOfSourced(c({ degree: 3 }))).toBeUndefined();
+    expect(barsOfScore(undefined)).toBe(1);
+    expect([19, 40, 60, 80].map(barsOfScore)).toEqual([1, 2, 3, 4]);
+  });
+
+  it('the list: the match in steps of ten, then the student’s own, then the warmer way in, then the finer match', () => {
+    const r = (name: string, match: number, level?: number, own = false) =>
+      ({
+        key: name,
+        name,
+        match,
+        checks: [],
+        ...(own ? { personId: name } : {}),
+        ...(level === undefined ? {} : { path: { kind: 'intro', label: 'x', level } }),
+      }) as ResultRow;
+    const sorted = [
+      r('cold 97', 97),
+      r('warm 95', 95, 3),
+      r('weak 96', 96, 1),
+      r('own 93', 93, 1, true),
+      r('warm 72', 72, 4),
+      r('cold 84', 84),
+    ]
+      .sort(compareRows)
+      .map((x) => x.name);
+    // 93 to 97 match the same: the student's own, then the warmest way in, lead
+    expect(sorted).toEqual(['own 93', 'warm 95', 'weak 96', 'cold 97', 'cold 84', 'warm 72']);
   });
 
   it('investors mean fundraising, co-founders mean a co-founder search, anything else is advice with no goal', async () => {
@@ -407,6 +523,62 @@ describe('one run: the network and beyond, as one list', () => {
       remaining: 0,
     });
   }
+
+  it('someone found outside: the headline as a second line, a filter counted in the match and never a column', async () => {
+    network([]);
+    src.searchPeople.mockResolvedValue({
+      ok: true,
+      value: {
+        batchId: 'b',
+        relaxed: [],
+        unconfigured: [],
+        results: [
+          sourced({
+            id: 'r1',
+            headline: 'Seed investor. First cheques into developer tools.',
+            fit: 1,
+            checks: [
+              { text: 'Their current job is investor', need: 'must', answer: 'yes', filter: 'role' },
+              { text: 'Is based in or around London', need: 'must', answer: 'unknown', filter: 'place' },
+              { text: 'Works at a venture capital firm', need: 'must', answer: 'yes' },
+            ],
+            bridge: { personId: 'p9', name: 'Sam Warm', score: 70 },
+            why: 'Sam is close to you and also at Balderton, so ask for an intro',
+          }),
+          // a headline that only repeats the title and company is not said twice
+          sourced({ id: 'r2', name: 'Bo Same', headline: 'Principal at Balderton', fit: 0.5 }),
+          // nothing but a headline: it stands where the title would
+          sourced({
+            id: 'r3',
+            name: 'Cy Bare',
+            title: undefined,
+            org: undefined,
+            headline: 'Building things',
+            fit: 0.5,
+          }),
+        ],
+      },
+    });
+    const r = await runPeopleSearch({ id: 'u1', school: '' }, asked);
+    const by = (name: string) => r.rows.find((x) => x.name === name)!;
+    expect(by('Nia Out')).toMatchObject({
+      title: 'Principal',
+      company: 'Balderton',
+      headline: 'Seed investor. First cheques into developer tools.',
+      path: {
+        kind: 'intro',
+        label: 'Sam Warm',
+        level: 3,
+        note: 'Sam is close to you and also at Balderton, so ask for an intro',
+      },
+    });
+    // one column: the student's own criterion; the place nobody could confirm lowers the match
+    expect(by('Nia Out').checks).toEqual([{ id: asked.criteria[0]!.id, answer: 'yes' }]);
+    expect(by('Nia Out').match).toBe(85);
+    expect(by('Bo Same').headline).toBeUndefined();
+    expect(by('Cy Bare')).toMatchObject({ title: 'Building things' });
+    expect(by('Cy Bare').headline).toBeUndefined();
+  });
 
   it("joins both, the student's own first on a tie, and a known person found outside is listed once", async () => {
     network([

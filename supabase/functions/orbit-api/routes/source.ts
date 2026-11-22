@@ -19,6 +19,20 @@ const list = (v: unknown, key: string): string[] | undefined => {
   return v as string[];
 };
 
+/** Which filters of a people search only rank: each is must or nice, anything else is a bad request. */
+export function needsOf(v: unknown): NonNullable<SourceSearchRequest['filters']>['needs'] {
+  if (v === undefined || v === null) return undefined;
+  if (typeof v !== 'object' || Array.isArray(v)) throw badRequest('filters.needs must be an object');
+  const o = v as Record<string, unknown>;
+  const out: Record<string, 'must' | 'nice'> = {};
+  for (const k of ['role', 'locations', 'everOrganizations', 'keywords'] as const) {
+    if (o[k] === undefined) continue;
+    if (o[k] !== 'must' && o[k] !== 'nice') throw badRequest(`filters.needs.${k} is must or nice`);
+    out[k] = o[k];
+  }
+  return Object.keys(out).length ? out : undefined;
+}
+
 /** The checks a search asks of each person: up to 6 short sentences, each a must-have unless said otherwise. */
 export function criteriaOf(v: unknown): SourceSearchRequest['criteria'] {
   if (v === undefined || v === null) return undefined;
@@ -55,6 +69,9 @@ async function search(ctx: Ctx): Promise<Response> {
       schools: list(f.schools, 'schools'),
       seniority: list(f.seniority, 'seniority'),
       keywords: list(f.keywords, 'keywords'),
+      currentOrganizations: list(f.currentOrganizations, 'currentOrganizations'),
+      everOrganizations: list(f.everOrganizations, 'everOrganizations'),
+      needs: needsOf(f.needs),
     },
     limit: typeof b.limit === 'number' ? b.limit : undefined,
     withEmails: b.withEmails === true ? true : undefined,

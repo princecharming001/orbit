@@ -468,6 +468,7 @@ test.describe('account mode (mocked orbit-api)', () => {
           name: 'Rhea Kapoor',
           title: 'Partner',
           org: 'Seedling Fund',
+          headline: 'Seed investor in climate software',
           email: 'rhea@seedling.fund',
           url: 'https://seedling.fund/team',
           linkedinUrl: 'https://www.linkedin.com/in/rhea-kapoor',
@@ -554,11 +555,20 @@ test.describe('account mode (mocked orbit-api)', () => {
       const sam = rows.filter({ hasText: 'Sam Lee' });
       await expect(sam.getByTestId('find-name')).toHaveAttribute('href', new RegExp(`people/${P2}$`));
       await expect(sam.getByTestId('find-add')).toHaveCount(0);
-      // best match first: every row is at or under the one above it
-      const matches = (await page.getByTestId('find-match').allTextContents()).map((t) =>
-        Number.parseInt(t, 10),
+      // best match first, in steps of ten (within a step the warmer way in leads): no row is a step above the one
+      // before it
+      const steps = (await page.getByTestId('find-match').allTextContents()).map((t) =>
+        Math.min(9, Math.floor(Number.parseInt(t, 10) / 10)),
       );
-      expect(matches).toEqual([...matches].sort((a, b) => b - a));
+      expect(steps).toEqual([...steps].sort((a, b) => b - a));
+      // who they say they are, under their name
+      await expect(rhea.getByTestId('find-headline')).toHaveText('Seed investor in climate software');
+      if (process.env.FIND_SHOT) {
+        await page.addStyleTag({
+          content: '[data-testid="toasts"],[data-testid="linkedin-progress"]{display:none!important}',
+        });
+        await page.screenshot({ path: process.env.FIND_SHOT });
+      }
       await expect(page.getByTestId('find-quiet')).toContainText('Not searched yet: Apollo');
       // what the server was asked: people only, the investing titles, for fundraising
       const asked = api.state.sourceSearches.at(-1)!;

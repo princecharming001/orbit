@@ -28,6 +28,18 @@ import type { GoalKind } from '../research/dossier';
 import { norm, normOrg, orgFromTitle } from '../research/guards';
 import type { SharedCache, WebSource } from '../research/web';
 import type { EmailConfidence } from './email';
+import {
+  type FilterCheck,
+  filterChecks,
+  type Job,
+  jobLine,
+  leadJob,
+  linkedInKeywords,
+  type PeopleFilters,
+  peopleQueries,
+  readExaPerson,
+  tidyFilters,
+} from './people';
 import { FIT_BATCH, type FitCandidate, fitSchema, fitSystem, fitUser } from './prompts';
 import { type Warmth, warmRank } from './warmth';
 import { sourceFromWeb, type WebAsk, webAsk } from './web';
@@ -67,6 +79,27 @@ export interface SourcingGoal {
   checks?: { text: string; need: 'must' | 'nice' }[];
   /** people only: an organization a provider returned is left out */
   peopleOnly?: boolean;
+  /**
+   * A people search's own filters (Find people): they build the queries, and each is a statement every person found
+   * is checked against, so a filter the student set is one the results keep to
+   */
+  filters?: PeopleFilters;
+}
+
+/** One statement a person is read against: a filter of the search, or a criterion the student wrote. */
+export interface AskedCheck {
+  text: string;
+  need: 'must' | 'nice';
+  /** set when the statement stands for a filter (not shown as a column) */
+  filter?: FilterCheck['key'];
+}
+
+/** Everything a search asks of each person, the filters first, then the student's criteria. */
+export function askedChecks(goal: SourcingGoal): AskedCheck[] {
+  const fromFilters: AskedCheck[] = goal.peopleOnly
+    ? filterChecks(goal.filters).map((f) => ({ text: f.text, need: f.need, filter: f.key }))
+    : [];
+  return [...fromFilters, ...(goal.checks ?? [])];
 }
 
 export interface SourcingInput {
@@ -109,8 +142,16 @@ export interface Candidate {
   networkDistance?: number;
   /** their LinkedIn photo, when the search that found them listed one */
   photoUrl?: string;
-  /** the search's checks, answered for them (rank) */
-  checks?: { text: string; need: 'must' | 'nice'; answer: CheckAnswer }[];
+  /** the search's checks, answered for them (rank); `filter` marks one that stands for a filter of the search */
+  checks?: { text: string; need: 'must' | 'nice'; answer: CheckAnswer; filter?: FilterCheck['key'] }[];
+  /** where they work and worked, newest first, when the provider gave a profile */
+  history?: Job[];
+  /** where they studied */
+  schools?: string[];
+  /** a few lines of what they wrote about themselves */
+  about?: string;
+  /** the filters the provider itself applied when it found them (LinkedIn's own company, school and place fields) */
+  met?: FilterCheck['key'][];
   sources: SourceName[];
   externalIds: Partial<Record<SourceName, string>>;
 }
@@ -321,6 +362,9 @@ export async function sourcePeople(deps: SourcingDeps, input: SourcingInput): Pr
   }
 
   const relaxMs = lap();
+  // a place or a level left out of the queries is not held against the people then found
+  if (g.filters && (relax.location || relax.place)) g.filters = { ...g.filters, placesNeed: 'nice' };
+  if (g.filters && relax.seniority) g.filters = { ...g.filters, seniority: [] };
   // a people search lists people: a fund or a company a provider returned is not one
   if (g.peopleOnly) merged = merged.filter((c) => c.entity === 'person');
 
@@ -370,8 +414,60 @@ async function gather(calls: Call[], relax: Relax): Promise<Candidate[]> {
 
 // ---- routing (§6.1) -----------------------------------------------------------------------------------------
 
+/**
+ * A people search (Find people): the filters decide where to look, whatever the goal's kind. The profile index is
+ * asked with the filters as a sentence (and the student's own, when it says more), the student's LinkedIn for people
+ * one connection away, who come with a way in, and Apollo when it is set up.
+ */
+function planPeople(ctx: Ctx): Call[] {
+  const g = ctx.input.goal;
+  const f = tidyFilters(g.filters);
+  const calls: Call[] = [];
+  const queriesFor = (r: Relax) =>
+    peopleQueries(g.topic ?? g.title, f, { place: r.location || r.place, seniority: r.seniority });
+  // every pass asks the same number of queries, so the calls line up with the first pass's
+  const n = Math.max(1, queriesFor({ location: false, seniority: false, place: false }).length);
+  for (let i = 0; i < n; i++)
+    calls.push((r) => {
+      const q = queriesFor(r)[i];
+      return q
+        ? exaCall(ctx, { query: q, category: 'people' }, r, 'person', {
+            numResults: PEOPLE_RESULTS,
+            asIs: true,
+          })
+        : Promise.resolve([]);
+    });
+  calls.push((r) =>
+    linkedInCall(
+      ctx,
+      r,
+      {
+        keywords: linkedInKeywords(g.topic ?? g.title, f),
+        companies: f.currentOrgs,
+        pastCompanies: f.everOrgs,
+        school: f.schools?.[0],
+        // one connection away: the people a search can find who come with someone to ask
+        distance: [2],
+      },
+      { pages: 1, places: r.location ? [] : (f.places ?? []) },
+    ),
+  );
+  if (ctx.deps.apollo.configured)
+    calls.push((r) =>
+      apolloCall(ctx, r, {
+        person_titles: f.titles?.length ? f.titles : undefined,
+        q_keywords: [...(f.currentOrgs ?? []), ...(f.keywords ?? [])].join(' ') || undefined,
+      }),
+    );
+  return calls;
+}
+
+/** results asked of the profile index per query in a people search (25 is the size its lowest price covers) */
+export const PEOPLE_RESULTS = 25;
+
 function plan(ctx: Ctx): Call[] {
   const g = ctx.input.goal;
+  if (g.peopleOnly) return planPeople(ctx);
   const roles = g.roles ?? [];
   const words = (...xs: (string | undefined)[]) => xs.filter((x) => x?.trim()).join(' ');
   const exaPeople =
@@ -569,6 +665,8 @@ async function exaCall(
   base: Omit<ExaSearchRequest, 'numResults' | 'type' | 'contents'>,
   relax: Relax,
   entity: Candidate['entity'],
+  /** `asIs`: the query already names its place (a people search builds it from the filters) */
+  opts: { numResults?: number; asIs?: boolean } = {},
 ): Promise<Candidate[]> {
   const { deps, input } = ctx;
   if (!deps.exa.configured) {
@@ -579,9 +677,9 @@ async function exaCall(
   const loc = locationOf(ctx, relax);
   const req: ExaSearchRequest = {
     ...base,
-    query: loc && entity === 'person' ? `${base.query} ${loc}` : base.query,
+    query: loc && entity === 'person' && !opts.asIs ? `${base.query} ${loc}` : base.query,
     type: 'auto',
-    numResults: 10,
+    numResults: opts.numResults ?? 10,
     contents: { highlights: { query: input.goal.title, maxCharacters: 600 } },
   };
   const est = estimateExaSearchUsd(req);
@@ -610,6 +708,36 @@ async function exaCall(
 }
 
 function fromExa(ctx: Ctx, r: ExaResult, entity: Candidate['entity']): Candidate | null {
+  // a people result carries the person's profile: their job, where they worked and studied, where they live
+  const prof = entity === 'person' ? readExaPerson(r) : undefined;
+  if (prof?.name) {
+    const now = leadJob(prof.jobs, ctx.input.goal.filters);
+    const image = (r as { image?: unknown }).image;
+    const name = prof.name;
+    const split = splitName(name);
+    return {
+      key: `c${++ctx.seq}`,
+      entity: 'person',
+      name,
+      firstName: prof.firstName ?? split.firstName,
+      lastName: prof.lastName ?? split.lastName,
+      title: now?.title,
+      org: now?.org,
+      headline: prof.headline,
+      location: prof.location ?? now?.location,
+      linkedinUrl: cleanLinkedInUrl(r.url),
+      url: r.url,
+      ...(typeof image === 'string' && /^https:\/\//.test(image) ? { photoUrl: image } : {}),
+      ...(prof.jobs.length ? { history: prof.jobs } : {}),
+      ...(prof.schools.length ? { schools: prof.schools.map((x) => x.school) } : {}),
+      ...(prof.about ? { about: prof.about } : {}),
+      sources: ['exa'],
+      externalIds: { exa: r.id ?? r.url },
+    };
+  }
+  // a people query can still return a company's own page: the index says what each result is, and that is not a person
+  const kinds = ((r as { entities?: { type?: unknown }[] }).entities ?? []).map((e) => e?.type);
+  if (entity === 'person' && kinds.length && !kinds.includes('person')) return null;
   const title = (r.title ?? '').replace(/\s*[|·]\s*linkedin.*$/i, '').trim();
   const parts = title.split(/\s+[-–—|·]\s+/).map((p) => p.trim());
   const name = (entity === 'person' ? (parts[0] ?? r.author ?? '') : (parts[0] ?? '')).trim();
@@ -700,6 +828,8 @@ async function linkedInCall(
     school?: string;
     distance: (1 | 2 | 3)[];
   },
+  /** `pages`: how many pages of ten to read (a people search reads one); `places`: the places to keep to */
+  opts: { pages?: number; places?: string[] } = {},
 ): Promise<Candidate[]> {
   const { deps, input } = ctx;
   if (!deps.unipile.configured || !input.unipileAccountId) {
@@ -714,7 +844,7 @@ async function linkedInCall(
       return [];
     }
   }
-  const loc = locationOf(ctx, relax);
+  const loc = opts.places ? opts.places[0] : locationOf(ctx, relax);
   const ids = async (type: SearchParameterType, names: string[] | undefined) =>
     (await Promise.all((names ?? []).slice(0, 3).map((n) => paramId(ctx, type, n)))).filter(
       (x): x is string => !!x,
@@ -766,9 +896,15 @@ async function linkedInCall(
       location: locationIds.length ? locationIds : undefined,
     };
   }
+  // what LinkedIn's own fields held this search to: a person it lists meets those filters, whatever their headline says
+  const met: FilterCheck['key'][] = [];
+  if (body.company) met.push('current');
+  if (body.past_company) met.push('ever');
+  if (body.school) met.push('school');
+  if (body.location) met.push('place');
   const out: Candidate[] = [];
   let cursor: string | undefined;
-  for (let page = 0; page < LINKEDIN_PAGES && out.length < LINKEDIN_MAX_RESULTS; page++) {
+  for (let page = 0; page < (opts.pages ?? LINKEDIN_PAGES) && out.length < LINKEDIN_MAX_RESULTS; page++) {
     const r = await deps.unipile.searchPeople(accountId, body, { cursor });
     if (!note(ctx, r) || !r.ok) break;
     for (const item of r.value.items) {
@@ -790,6 +926,7 @@ async function linkedInCall(
         memberId: p.memberId,
         networkDistance: p.networkDistance,
         photoUrl: p.pictureUrl,
+        ...(met.length ? { met: [...met] } : {}),
         sources: ['unipile'],
         externalIds: p.memberId ? { unipile: p.memberId } : {},
       });
@@ -905,6 +1042,10 @@ function mergeInto(into: Candidate, c: Candidate): void {
     'photoUrl',
   ] as const)
     if (!into[k] && c[k]) into[k] = c[k];
+  if (!into.history?.length && c.history?.length) into.history = c.history;
+  if (!into.schools?.length && c.schools?.length) into.schools = c.schools;
+  if (!into.about && c.about) into.about = c.about;
+  if (c.met?.length) into.met = [...new Set([...(into.met ?? []), ...c.met])];
   if (c.networkDistance !== undefined)
     into.networkDistance = Math.min(into.networkDistance ?? c.networkDistance, c.networkDistance);
   for (const s of c.sources) if (!into.sources.includes(s)) into.sources.push(s);
@@ -973,7 +1114,19 @@ const STOP = new Set([
 
 function candidateText(c: Candidate): string {
   return norm(
-    [c.name, c.title, c.org, c.headline, c.location, ...(c.evidence ?? [])].filter(Boolean).join(' '),
+    [
+      c.name,
+      c.title,
+      c.org,
+      c.headline,
+      c.location,
+      ...(c.evidence ?? []),
+      ...(c.history ?? []).map(jobLine),
+      ...(c.schools ?? []),
+      c.about,
+    ]
+      .filter(Boolean)
+      .join(' '),
   );
 }
 
@@ -1032,10 +1185,13 @@ function wordsMostlyIn(text: string, phrase: string): boolean {
  * "unknown". Never "no": words that are missing prove nothing, so nobody is left out by this rule.
  */
 export function ruleChecks(goal: SourcingGoal, c: Candidate): { checks?: CheckAnswer[] } {
-  if (!goal.checks?.length) return {};
+  const asked = askedChecks(goal);
+  if (!asked.length) return {};
   const text = candidateText(c);
   return {
-    checks: goal.checks.map((k) => {
+    checks: asked.map((k) => {
+      // a filter's statement is a sentence about a list ("Works now at Stripe or Plaid"): the rule cannot read it
+      if (k.filter) return 'unknown';
       const ws = norm(k.text)
         .split(/[^a-z0-9+#]+/)
         .filter((w) => w.length >= 3 && !STOP.has(w) && !CHECK_FILLER.has(w));
@@ -1061,9 +1217,13 @@ export function llmFitScorer(claude: ClaudeDep): FitScorer {
           location: c.location,
           headline: c.headline,
           evidence: c.evidence?.slice(0, 3),
+          ...(c.history?.length ? { jobs: c.history.slice(0, 6).map(jobLine) } : {}),
+          ...(c.schools?.length ? { schools: c.schools.slice(0, 4) } : {}),
+          ...(c.about ? { about: c.about.slice(0, 300) } : {}),
+          ...(c.networkDistance ? { linkedin_degree: c.networkDistance } : {}),
           source: c.sources.join('+'),
         }));
-        const asked = goal.checks ?? [];
+        const asked = askedChecks(goal);
         const r = await claude.parse('sourcing_fit', fitSchema, {
           system: fitSystem(user.firstName, asked.length),
           user: fitUser(
@@ -1125,12 +1285,17 @@ async function rank(ctx: Ctx, cands: Candidate[], batchId: string): Promise<Reco
     deps.prefetch?.(cands).catch(() => undefined),
   ]);
   const fitOf = (c: Candidate) => fits.get(c.key) ?? keywordFit(input.goal, c);
-  const asked = input.goal.checks ?? [];
+  const asked = askedChecks(input.goal);
   // must-haves decide who fits: someone a must-have check says "no" about is left out; the answers go on the row
   const kept = asked.length
     ? cands.filter((c) => {
         const answers = fitOf(c).checks ?? [];
-        c.checks = asked.map((k, i) => ({ text: k.text, need: k.need, answer: answers[i] ?? 'unknown' }));
+        c.checks = asked.map((k, i) => {
+          const read = answers[i] ?? 'unknown';
+          // a filter LinkedIn's own search applied is met, where the little a search result shows cannot say
+          const answer = read === 'unknown' && k.filter && c.met?.includes(k.filter) ? 'yes' : read;
+          return { text: k.text, need: k.need, answer, ...(k.filter ? { filter: k.filter } : {}) };
+        });
         return !c.checks.some((k) => k.need === 'must' && k.answer === 'no');
       })
     : cands;
@@ -1178,7 +1343,7 @@ async function rank(ctx: Ctx, cands: Candidate[], batchId: string): Promise<Reco
         c.linkedinUrl ??
         c.url ??
         null,
-      rank: round4(warmth ? warmRank(base, f.fit, warmth.tier) : base),
+      rank: round4(warmth ? warmRank(base, f.fit, warmth.weak ? 3 : warmth.tier) : base),
       fit: round4(f.fit),
       reach: round4(reach),
       responsiveness: round4(responsiveness),

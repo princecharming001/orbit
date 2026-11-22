@@ -48,6 +48,7 @@ import {
   findEmailFor,
   keepEmail,
 } from './ondemand';
+import { tidyFilters } from './people';
 import {
   type Candidate,
   LOOKUP_CONCURRENCY,
@@ -58,6 +59,8 @@ import {
   sourcePeople,
 } from './search';
 import {
+  connectionsByOrg,
+  headlineOrgs,
   orgsOf,
   type StudentContext,
   schoolIn,
@@ -123,6 +126,24 @@ export function sourcingGoal(
       ? { checks: req.criteria.slice(0, 6).map((k) => ({ text: k.text, need: k.need ?? 'must' })) }
       : {}),
     ...(req.peopleOnly ? { peopleOnly: true } : {}),
+    // a people search keeps its filters as they were set: they build its queries and are checked on each person
+    ...(req.peopleOnly
+      ? {
+          filters: tidyFilters({
+            titles: f.titles,
+            seniority: f.seniority,
+            currentOrgs: f.currentOrganizations ?? (f.everOrganizations ? [] : f.organizations),
+            everOrgs: f.everOrganizations,
+            schools: f.schools,
+            places: f.locations,
+            keywords: f.keywords,
+            roleNeed: f.needs?.role,
+            placesNeed: f.needs?.locations,
+            everOrgsNeed: f.needs?.everOrganizations,
+            keywordsNeed: f.needs?.keywords,
+          }),
+        }
+      : {}),
   };
 }
 
@@ -145,6 +166,16 @@ const toSourced = (id: string, r: RecommendationRow): SourcedCandidate => {
     ...(c.warmth ? { tier: c.warmth.tier } : {}),
     ...(c.warmth?.why ? { why: c.warmth.why } : {}),
     ...(c.warmth?.bridge ? { bridge: c.warmth.bridge } : {}),
+    ...(c.warmth?.weak ? { bridgeWeak: true } : {}),
+    ...(c.headline ? { headline: c.headline.slice(0, 300) } : {}),
+    ...(c.schools?.length ? { schools: c.schools.slice(0, 4) } : {}),
+    ...(c.history?.length
+      ? {
+          pastOrgs: [
+            ...new Set(c.history.filter((j) => !j.current && j.org && j.org !== c.org).map((j) => j.org!)),
+          ].slice(0, 5),
+        }
+      : {}),
     source: (c.sources[0] ?? 'exa') as SourceName,
     rank: r.rank,
     fit: r.fit,
@@ -388,6 +419,7 @@ export async function runSourcing(
           student: ctx.student,
           known,
           warm: ctx.warm,
+          connections: ctx.connections,
           domains: [workDomain(c.email), ...orgDomainsOf(c, ctx.orgDomains)].filter((d): d is string => !!d),
           year,
         }),
@@ -624,6 +656,8 @@ interface WarmCtx {
   known: KnownAddress[];
   /** normalized org name → the work domain most of the student's contacts there use */
   orgDomains: Map<string, string>;
+  /** everyone the student is connected to who has a company, by that company (warmth.ts) */
+  connections: Map<string, WarmContact[]>;
 }
 
 async function warmContext(
@@ -634,7 +668,7 @@ async function warmContext(
   graph: () => Promise<UserGraph>,
 ): Promise<WarmCtx> {
   // the résumé, the contacts' addresses and the graph are independent reads: all three at once
-  const [[resume], emails, gr] = await Promise.all([
+  const [[resume], emails, gr, heads] = await Promise.all([
     db.sql<{ parsed: Record<string, unknown> | null }>`
       select parsed from orbit.uploads
        where user_id = ${userId}::uuid and kind = 'resume' and is_current order by created_at desc limit 1`,
@@ -643,6 +677,12 @@ async function warmContext(
        where user_id = ${userId}::uuid and primary_email is not null and deleted_at is null and not is_self
        limit 5000`,
     graph(),
+    // where each connection works when only their headline says ("Investor at Nexus"), for a way in through them
+    db.sql<{ id: string; headline: string }>`
+      select id, headline from orbit.people
+       where user_id = ${userId}::uuid and org_raw is null and headline is not null and deleted_at is null
+         and not is_self and merged_into is null
+       limit 20000`,
   ]);
   const student = studentFromResume(resume?.parsed, {
     school: u?.school,
@@ -674,5 +714,22 @@ async function warmContext(
       org: p.org,
       email: emailOf.get(p.id),
     }));
-  return { student, warm, known, orgDomains };
+  const headOrg = new Map<string, string>();
+  for (const h of heads) {
+    const [o] = headlineOrgs(h.headline);
+    if (o) headOrg.set(h.id, o);
+  }
+  const connections = connectionsByOrg(
+    [...gr.people.values()]
+      .filter((p) => !p.hidden && !p.doNotContact && p.id !== gr.selfId)
+      .map((p) => ({
+        personId: p.id,
+        name: p.displayName,
+        score: p.score,
+        org: p.org ?? headOrg.get(p.id),
+        email: emailOf.get(p.id),
+      }))
+      .filter((p) => !!p.org),
+  );
+  return { student, warm, known, orgDomains, connections };
 }

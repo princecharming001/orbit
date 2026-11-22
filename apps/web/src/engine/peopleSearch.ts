@@ -428,9 +428,11 @@ export async function interpretAsk(ask: string): Promise<{ form: SearchForm; by:
 
 export interface PathView {
   /** direct: the student knows them; intro: someone the student knows can introduce them; second: LinkedIn says a
-   * connection of a connection; friend: a friend on Orbit knows them */
-  kind: 'direct' | 'intro' | 'friend' | 'second';
+   * connection of a connection; friend: a friend on Orbit knows them; shared: the same school or a past company */
+  kind: 'direct' | 'intro' | 'friend' | 'second' | 'shared';
   label: string;
+  /** the reason in a sentence, for the hover ("Sam, a connection of yours, works at Nexus") */
+  note?: string;
   /** the person to go through (an intro), for their photo and page */
   personId?: string;
   /** 0 to 4 bars */
@@ -455,6 +457,8 @@ export interface ResultRow {
   linkedinUrl?: string;
   title?: string;
   company?: string;
+  /** the line under their name on LinkedIn */
+  headline?: string;
   location?: string;
   path?: PathView;
   /** 0 to 100 */
@@ -513,8 +517,37 @@ export function matchOfSourced(c: Pick<SourcedCandidate, 'fit' | 'checks'>): num
   return Math.round(100 * (0.75 * (got / of) + 0.25 * fit));
 }
 
+/** A tie score (0 to 100) as the bars of a path: one bar for a connection the student has not talked to. */
+export function barsOfScore(score: number | undefined): number {
+  const s = score ?? 0;
+  return s >= 80 ? 4 : s >= 60 ? 3 : s >= 40 ? 2 : 1;
+}
+
+/** The way in to someone found outside: a person to go through first, then LinkedIn's degree, then what is shared. */
+export function pathOfSourced(c: SourcedCandidate): PathView | undefined {
+  if (c.knownPersonId) return { kind: 'direct', label: 'You know them', level: c.tier === 1 ? 3 : 1 };
+  if (c.bridge)
+    return {
+      kind: 'intro',
+      label: c.bridge.name,
+      personId: c.bridge.personId,
+      level: c.bridgeWeak ? 1 : Math.max(2, barsOfScore(c.bridge.score)),
+      ...(c.why ? { note: c.why } : {}),
+    };
+  if (c.degree === 2)
+    return {
+      kind: 'second',
+      label: '2nd degree',
+      level: 1,
+      note: 'A connection of one of your LinkedIn connections',
+    };
+  if (c.tier === 3 && c.why) return { kind: 'shared', label: c.why, level: 1, note: c.why };
+  return undefined;
+}
+
 function networkRows(set: SearchSet, form: SearchForm): ResultRow[] {
   const world = worldOfSet(set.id);
+  const docs = new Map((world?.docs ?? []).map((d) => [d.id, d]));
   const listed = set.result.rows.filter(
     (r) => r.band === 'strong' || r.band === 'likely' || (r.band === 'unchecked' && r.signal === 'hint'),
   );
@@ -526,14 +559,20 @@ function networkRows(set: SearchSet, form: SearchForm): ResultRow[] {
     const best =
       r.checks.find((c) => c.need === 'must' && c.answer === 'yes' && c.evidence) ??
       r.checks.find((c) => (c.answer === 'yes' || c.answer === 'likely') && c.evidence);
+    // the job Orbit read for them (their title field, their profile, or "Investor at Nexus" in a headline)
+    const job = docs.get(r.id)?.roles.find((x) => x.current && !x.future && (x.title || x.org));
+    const title = p?.currentTitle ?? job?.title;
+    const company = p?.currentOrganizationRaw ?? job?.org;
     return {
       key: `p:${r.id}`,
       personId: r.id,
       name: r.name,
       photoUrl: p?.photoUrl,
       linkedinUrl: p?.linkedinUrl,
-      title: p?.currentTitle ?? (p?.currentOrganizationRaw ? undefined : p?.headline),
-      company: p?.currentOrganizationRaw,
+      title: title ?? (company ? undefined : p?.headline),
+      company,
+      // the headline as a second line, when it says more than the title beside it
+      ...(p?.headline && p.headline !== title && (title || company) ? { headline: p.headline } : {}),
       location: p?.location,
       path:
         level === 0 && friend
@@ -555,26 +594,26 @@ function outsideRows(found: SourcedCandidate[], form: SearchForm, have: Set<stri
   const out: ResultRow[] = [];
   for (const c of found) {
     if (c.knownPersonId && have.has(c.knownPersonId)) continue;
-    const path: PathView | undefined = c.knownPersonId
-      ? { kind: 'direct', label: 'You know them', level: c.tier === 1 ? 3 : 1 }
-      : c.bridge
-        ? { kind: 'intro', label: c.bridge.name, personId: c.bridge.personId, level: 2 }
-        : c.degree === 2
-          ? { kind: 'second', label: '2nd degree', level: 1 }
-          : undefined;
+    const path = pathOfSourced(c);
+    // the columns are the student's own criteria; a filter's answer counts in the match and is not a column
+    const asked = (c.checks ?? []).filter((x) => !x.filter);
+    const said = [c.title, c.org].filter(Boolean).join(' at ');
     out.push({
       key: `r:${c.id}`,
       ...(c.knownPersonId ? { personId: c.knownPersonId } : { recommendationId: c.id }),
       name: c.name,
       photoUrl: c.photoUrl,
       linkedinUrl: c.linkedinUrl,
-      title: c.title,
+      title: c.title ?? (c.org ? undefined : c.headline),
       company: c.org,
+      ...(c.headline && (c.title || c.org) && c.headline.toLowerCase() !== said.toLowerCase()
+        ? { headline: c.headline }
+        : {}),
       location: c.location,
       path,
       match: matchOfSourced(c),
       checks: form.criteria.map((k, i) => {
-        const a = c.checks?.find((x) => x.text === k.text) ?? c.checks?.[i];
+        const a = asked.find((x) => x.text === k.text) ?? asked[i];
         return { id: k.id, answer: a?.answer ?? 'unknown' };
       }),
       evidence: c.evidence?.[0] ?? c.why ?? c.reasons[0],
@@ -640,11 +679,38 @@ export function outsideFilters(form: SearchForm) {
   return {
     titles,
     organizations: clean([...x.currentCompanies, ...x.companies], 10),
+    // where they work now and where they ever worked are different questions: each goes as its own filter
+    currentOrganizations: clean(x.currentCompanies, 8),
+    everOrganizations: clean(x.companies, 8),
     locations: x.places.slice(0, 3),
     schools: x.schools.slice(0, 3),
     keywords: x.keywords.slice(0, 8),
     seniority: [...new Set(seniority)],
+    needs: {
+      role: x.roleNeed,
+      locations: x.placesNeed,
+      everOrganizations: x.companiesNeed,
+      keywords: x.keywordsNeed,
+    },
   };
+}
+
+/**
+ * The order of the list. How well someone matches comes first, in steps of ten (two people a point or two apart
+ * match the same), then the student's own people, then the warmer way in, then the finer match. Orbit is for the
+ * people there is a way to: among equal matches, the one with someone to ask leads.
+ */
+export function compareRows(a: ResultRow, b: ResultRow): number {
+  // 90 and up is one step (a 100 and a 93 both match), then each ten below it
+  const band = (r: ResultRow) => Math.min(9, Math.floor(r.match / 10));
+  const own = (r: ResultRow) => (r.personId ? 1 : 0);
+  return (
+    band(b) - band(a) ||
+    own(b) - own(a) ||
+    (b.path?.level ?? -1) - (a.path?.level ?? -1) ||
+    b.match - a.match ||
+    a.name.localeCompare(b.name)
+  );
 }
 
 /**
@@ -724,14 +790,7 @@ export async function runPeopleSearch(
         notes.push(`Not searched yet: ${providerNames(out.value.unconfigured)}.`);
     } else outsideMessage = out.message;
   }
-  const own = (r: ResultRow) => (r.personId ? 1 : 0);
-  rows.sort(
-    (a, b) =>
-      b.match - a.match ||
-      own(b) - own(a) ||
-      (b.path?.level ?? -1) - (a.path?.level ?? -1) ||
-      a.name.localeCompare(b.name),
-  );
+  rows.sort(compareRows);
   return {
     form,
     rows,

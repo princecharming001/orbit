@@ -154,8 +154,16 @@ export interface SourcedCandidate {
   tier?: 1 | 2 | 3 | 4 | 5;
   /** the one reason for the tier, in plain words */
   why?: string;
-  /** the warm contact to ask for an intro (tier 2) */
-  bridge?: { personId: string; name: string };
+  /** the contact to ask for an intro (tier 2), with how close the student is to them (0 to 100) */
+  bridge?: { personId: string; name: string; score?: number };
+  /** the bridge is someone the student is connected to but not close with */
+  bridgeWeak?: boolean;
+  /** the line under their name on LinkedIn */
+  headline?: string;
+  /** where they studied, when the profile said */
+  schools?: string[];
+  /** where they used to work, when the profile said */
+  pastOrgs?: string[];
   /** the page they were found on */
   url?: string;
   /** what a first message can be written from: what they work on, the lab, the page */
@@ -180,6 +188,8 @@ export interface SourcedCheck {
   text: string;
   need: 'must' | 'nice';
   answer: 'yes' | 'no' | 'unknown';
+  /** set when the check stands for one of the search's filters, not a criterion the student wrote */
+  filter?: 'role' | 'current' | 'ever' | 'school' | 'place' | 'keywords';
 }
 /** POST /source/search */
 export interface SourceSearchRequest {
@@ -195,6 +205,16 @@ export interface SourceSearchRequest {
     schools?: string[];
     seniority?: string[];
     keywords?: string[];
+    /** a people search: where they work now, and where they work or worked (`organizations` is both, unsplit) */
+    currentOrganizations?: string[];
+    everOrganizations?: string[];
+    /** a people search: which filters only rank (nice) instead of leaving people out (must, the default) */
+    needs?: {
+      role?: 'must' | 'nice';
+      locations?: 'must' | 'nice';
+      everOrganizations?: 'must' | 'nice';
+      keywords?: 'must' | 'nice';
+    };
   };
   limit?: number;
   /** look up emails for the best three (plan 35 C3); also when the query asks "with emails" */

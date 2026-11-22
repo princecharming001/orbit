@@ -80,6 +80,9 @@ function ChipBox({
   const [draft, setDraft] = useState('');
   // the arrows moved the highlight: Enter then picks that row; before that, Enter adds what is typed
   const moved = useRef(false);
+  // the common choices show when the box is first focused; once something is added the list stays shut until the
+  // student types again, so it never sits over the filters below
+  const fresh = useRef(true);
   const has = (v: string) => values.some((x) => x.toLowerCase() === v.toLowerCase());
   // what the list last offered: one of these is a whole entry, commas and all ("University of California, Berkeley")
   const offered = useRef(new Set<string>());
@@ -92,9 +95,11 @@ function ChipBox({
     if (next.length !== values.length) onChange(next);
     setDraft('');
     moved.current = false;
+    fresh.current = false;
   };
   const find = async (query: string): Promise<Suggestion[]> => {
     const typed = tidy(query);
+    if (!typed && !fresh.current) return [];
     const got = suggest ? (await suggest(typed)).filter((s) => !has(s.value)) : [];
     offered.current = new Set(got.map((s) => s.value));
     if (!typed || has(typed)) return got;
@@ -129,6 +134,9 @@ function ChipBox({
             // closes the suggestions, not the dialog
             e.stopPropagation();
           else if (e.key === 'Backspace' && !draft && values.length) onChange(values.slice(0, -1));
+        }}
+        onFocus={() => {
+          fresh.current = true;
         }}
         onBlur={() => draft.trim() && add(draft)}
         placeholder={placeholder}

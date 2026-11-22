@@ -4,7 +4,7 @@
  */
 import { z } from '../providers/zod';
 
-export const PROMPT_VERSION = 'sourcing-fit-v1.1';
+export const PROMPT_VERSION = 'sourcing-fit-v1.2';
 export const FIT_BATCH = 20;
 
 export function fitSystem(userFirstName: string, checks = 0): string {
@@ -14,6 +14,8 @@ export function fitSystem(userFirstName: string, checks = 0): string {
     ...(checks
       ? [
           `Also answer each of the ${checks} numbered checks for every candidate, in order, in "checks": "yes" when the fields say so, "no" when they say otherwise, "unknown" when they do not say. Never guess: a name, a company or a title alone that does not settle a check is "unknown". A company or a fund is not a person: when the candidate is not a person, answer "no" to every check.`,
+          '"jobs" lists where they work and worked, newest first, and "(… to now)" marks a job they hold today; "schools" lists where they studied. When a candidate has "jobs", a check about where they work or worked is settled by that list: "no" when no job in it fits. When a candidate has "schools", a check about where they studied is settled by that list. A candidate with neither list leaves such a check "unknown".',
+          'Read names the way people use them: "UC Berkeley", "Cal" and "Berkeley Haas" are the University of California, Berkeley; "Google DeepMind" is part of Google; San Francisco, Oakland and Palo Alto are in the Bay Area; "VC" is venture capital.',
         ]
       : []),
   ].join('\n');
@@ -28,6 +30,14 @@ export interface FitCandidate {
   headline?: string;
   /** what the page said about them (plan 31) */
   evidence?: string[];
+  /** where they work and worked, newest first: "Partner at Seedcamp (2017 to now)" */
+  jobs?: string[];
+  /** where they studied */
+  schools?: string[];
+  /** a few lines they wrote about themselves */
+  about?: string;
+  /** LinkedIn's distance from the student, when LinkedIn found them */
+  linkedin_degree?: number;
   source: string;
 }
 

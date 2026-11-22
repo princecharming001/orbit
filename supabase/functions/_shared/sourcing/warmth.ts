@@ -19,8 +19,13 @@ export interface Warmth {
   tier: WarmthTier;
   /** one short reason the student can read, in plain words */
   why?: string;
-  /** the warm contact to ask for an intro (tier 2) */
-  bridge?: { personId: string; name: string };
+  /** the contact to ask for an intro (tier 2), with how close the student is to them (0 to 100) */
+  bridge?: { personId: string; name: string; score?: number };
+  /**
+   * tier 2 through someone the student is connected to but not close with: a way in, a weaker one, so it lifts the
+   * rank less than an intro from someone warm
+   */
+  weak?: boolean;
 }
 
 /** What Orbit knows about the student, from their profile and résumé. */
@@ -233,6 +238,43 @@ export function orgsOf(c: Candidate): string[] {
   return fromOrg.length ? fromOrg : headlineOrgs(c.headline);
 }
 
+/** Where a candidate used to work, from the profile a provider gave (not where they work now). */
+export function pastOrgsOf(c: Candidate): string[] {
+  const now = new Set(orgsOf(c).map((o) => normOrg(o)));
+  const out: string[] = [];
+  for (const j of c.history ?? []) {
+    if (j.current || !j.org) continue;
+    for (const o of orgNames(j.org))
+      if (!now.has(normOrg(o)) && !out.some((x) => normOrg(x) === normOrg(o))) out.push(o);
+  }
+  return out;
+}
+
+/** An org's name without the trailing words that only qualify it: "Stripe Labs" and "Stripe" share "stripe". */
+export function orgBase(raw: string | undefined): string {
+  const parts = normOrg(raw).split(' ').filter(Boolean);
+  while (parts.length > 1 && ORG_QUALIFIERS.has(parts[parts.length - 1]!)) parts.pop();
+  return parts.join(' ');
+}
+
+/**
+ * Everyone the student is connected to who has a company, by that company: the people a search can go through, however
+ * close. Best tie first within a company.
+ */
+export function connectionsByOrg(connections: WarmContact[]): Map<string, WarmContact[]> {
+  const by = new Map<string, WarmContact[]>();
+  for (const w of connections)
+    for (const o of orgNames(w.org)) {
+      const k = orgBase(o);
+      if (k.length < 2) continue;
+      const list = by.get(k);
+      if (list) list.push(w);
+      else by.set(k, [w]);
+    }
+  for (const list of by.values()) list.sort((a, b) => b.score - a.score);
+  return by;
+}
+
 /** "University of California, Berkeley" also reads as "UC Berkeley" and "Berkeley". */
 export function schoolNames(school: string | undefined): string[] {
   const s = norm(school);
@@ -285,10 +327,10 @@ export function isBroad(interest: string): boolean {
 }
 
 const candidateText = (c: Candidate) =>
-  norm([c.title, c.org, c.headline, c.location, ...(c.evidence ?? [])].filter(Boolean).join(' '));
+  norm([c.title, c.org, c.headline, c.location, c.about, ...(c.evidence ?? [])].filter(Boolean).join(' '));
 /** Everything but where they live: a school or company named in a city ("Berkeley, CA") proves nothing. */
 const workText = (c: Candidate) =>
-  norm([c.title, c.org, c.headline, ...(c.evidence ?? [])].filter(Boolean).join(' '));
+  norm([c.title, c.org, c.headline, c.about, ...(c.evidence ?? [])].filter(Boolean).join(' '));
 
 /** Words that say a school is where someone studied, not a city or a company that shares its name. */
 const EDU_CONTEXT =
@@ -332,6 +374,8 @@ export interface WarmthInput {
   warm: WarmContact[];
   /** the candidate's company domains (their email, their page, the ask's domains), for contacts by email domain */
   domains?: string[];
+  /** everyone the student is connected to, by company (connectionsByOrg): a way in through someone not yet close */
+  connections?: Map<string, WarmContact[]>;
   /** today's year (tests) */
   year: number;
 }
@@ -362,7 +406,8 @@ export function warmthOf(c: Candidate, input: WarmthInput): Warmth {
       for (const mine of orgNames(w.org).filter((o) => !bigOrg(o))) {
         const hit = theirOrgs.find((o) => sameOrg(mine, o));
         if (hit) {
-          where = hit;
+          // the contact's own company as they write it ("Google", for someone found at "GV (Google Ventures)")
+          where = normOrg(mine) === normOrg(hit) ? hit : mine;
           return true;
         }
       }
@@ -375,13 +420,33 @@ export function warmthOf(c: Candidate, input: WarmthInput): Warmth {
     return {
       tier: 2,
       why: `${bridgeFirst} is close to you and also at ${where}, so ask for an intro`,
-      bridge: { personId: bridge.personId, name: bridge.name },
+      bridge: { personId: bridge.personId, name: bridge.name, score: bridge.score },
     };
+  }
+  // 2b. someone the student is connected to works there, close or not: still a person to ask
+  if (input.connections) {
+    for (const o of theirOrgs) {
+      const there = (input.connections.get(orgBase(o)) ?? []).find(
+        (w) => w.personId !== known?.personId && orgNames(w.org).some((mine) => sameOrg(mine, o)),
+      );
+      if (!there) continue;
+      const first = there.name.split(/\s+/)[0] ?? there.name;
+      const theirs = orgNames(there.org).find((mine) => sameOrg(mine, o)) ?? o;
+      return {
+        tier: 2,
+        weak: true,
+        why: `${first}, a connection of yours, works at ${normOrg(theirs) === normOrg(o) ? o : theirs}`,
+        bridge: { personId: there.personId, name: there.name, score: there.score },
+      };
+    }
   }
 
   // 3. shared identity: the student's school, a company on their résumé, their hometown
   const work = workText(c);
-  const school = schoolIn(work, student.school);
+  // a profile's own list of schools is where they studied, with no other word needed to say so
+  const school =
+    schoolIn(work, student.school) ??
+    (c.schools?.length ? schoolIn(norm(`studied at ${c.schools.join(' ; ')}`), student.school) : undefined);
   if (school)
     return {
       tier: 3,
@@ -390,7 +455,9 @@ export function warmthOf(c: Candidate, input: WarmthInput): Warmth {
   const pastOrg = student.orgs.find(
     (o) =>
       !schoolNames(student.school).includes(norm(o)) &&
-      (orgsOf(c).some((x) => sameOrg(o, x)) || (normOrg(o).length >= 5 && hasPhrase(work, normOrg(o)))),
+      (orgsOf(c).some((x) => sameOrg(o, x)) ||
+        pastOrgsOf(c).some((x) => sameOrg(o, x)) ||
+        (normOrg(o).length >= 5 && hasPhrase(work, normOrg(o)))),
   );
   if (pastOrg) return { tier: 3, why: `Also worked at ${pastOrg}` };
   const home = norm(student.homeCity).split(',')[0]!.trim();

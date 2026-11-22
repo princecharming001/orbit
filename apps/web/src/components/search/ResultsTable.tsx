@@ -16,7 +16,11 @@ function PathCell({ row }: { row: ResultRow }) {
       ? `${strength} with you`
       : p.kind === 'second'
         ? 'A connection of one of your LinkedIn connections'
-        : `${p.label} can introduce you. ${strength} with you`;
+        : p.kind === 'shared'
+          ? (p.note ?? p.label)
+          : p.kind === 'intro'
+            ? `${p.note ?? `${p.label} can introduce you`}. ${strength} between you and ${p.label.split(' ')[0]}`
+            : `${p.label} can introduce you. ${strength} with you`;
   return (
     <span className="flex items-center gap-2 min-w-0" data-testid="result-path" data-kind={p.kind}>
       {p.kind === 'intro' && p.personId ? (
@@ -139,24 +143,36 @@ export function ResultsTable({
                       </span>
                     )}
                     <Avatar name={r.name} src={r.photoUrl} id={personId} size={24} />
-                    {personId ? (
-                      <Link
-                        to={`/people/${personId}`}
-                        className="truncate font-medium hover:underline max-w-[220px]"
-                        title={r.evidence ?? r.name}
-                        data-testid="find-name"
-                      >
-                        {r.name}
-                      </Link>
-                    ) : (
-                      <span
-                        className="truncate font-medium max-w-[220px]"
-                        title={r.evidence ?? r.name}
-                        data-testid="find-name"
-                      >
-                        {r.name}
-                      </span>
-                    )}
+                    <span className="flex min-w-0 flex-col py-0.5 leading-tight">
+                      {personId ? (
+                        <Link
+                          to={`/people/${personId}`}
+                          className="truncate font-medium hover:underline max-w-[260px]"
+                          title={r.evidence ?? r.name}
+                          data-testid="find-name"
+                        >
+                          {r.name}
+                        </Link>
+                      ) : (
+                        <span
+                          className="truncate font-medium max-w-[260px]"
+                          title={r.evidence ?? r.name}
+                          data-testid="find-name"
+                        >
+                          {r.name}
+                        </span>
+                      )}
+                      {r.headline && (
+                        // the line under their name on LinkedIn: who they say they are
+                        <span
+                          className="mt-0.5 truncate text-[12px] font-normal text-ink-3 max-w-[260px]"
+                          title={r.headline}
+                          data-testid="find-headline"
+                        >
+                          {r.headline}
+                        </span>
+                      )}
+                    </span>
                   </span>
                 </Td>
                 <Td>
