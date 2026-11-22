@@ -489,14 +489,17 @@ export function normalizeCompany(raw: string | undefined | null): string {
   while (tokens.length > 1 && LEGAL_SUFFIXES.has(tokens[tokens.length - 1]!)) tokens.pop();
   if (tokens[0] === 'the' && tokens.length > 1) tokens.shift();
   const legal = tokens.join(' ');
-  if (ORG_ALIASES[legal]) return ORG_ALIASES[legal]!;
+  // own keys only: a company called Constructor must not find Object.prototype.constructor (a function)
+  const alias = (k: string) => (Object.hasOwn(ORG_ALIASES, k) ? ORG_ALIASES[k] : undefined);
+  const whole = alias(legal);
+  if (whole) return whole;
   while (
     tokens.length > 1 &&
     (GENERIC_ORG_TAIL.has(tokens[tokens.length - 1]!) || LEGAL_SUFFIXES.has(tokens[tokens.length - 1]!))
   )
     tokens.pop();
   const core = tokens.join(' ');
-  return ORG_ALIASES[core] ?? (core.replace(/[\s&]/g, '') ? core : legal);
+  return alias(core) ?? (core.replace(/[\s&]/g, '') ? core : legal);
 }
 
 export function initials(name: string): string {
@@ -515,3 +518,7 @@ export function hueFromId(id: string): number {
   for (let i = 0; i < id.length; i++) h = (h * 31 + id.charCodeAt(i)) >>> 0;
   return h % 360;
 }
+
+// own keys only: a word like "constructor" or "toString" in someone's data must not find a built-in
+for (const table of [LATIN_LETTERS, NICKNAMES, AMBIGUOUS_NICKNAMES, ORG_ALIASES])
+  Object.setPrototypeOf(table, null);

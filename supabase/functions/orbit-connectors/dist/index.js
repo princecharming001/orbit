@@ -537,6 +537,7 @@ function postgrestPostingCache(url2, serviceKey2, doFetch = fetch) {
     }
   };
 }
+for (const table of [ENTITIES]) Object.setPrototypeOf(table, null);
 
 // supabase/functions/_shared/accountToken.ts
 async function accountToken(accountId, signingKey) {

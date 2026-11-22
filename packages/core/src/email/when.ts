@@ -1082,3 +1082,6 @@ export function extractFirstDate(fragment: string, reference: Date, timeZone?: s
   }
   return undefined;
 }
+
+// own keys only: a word like "constructor" or "toString" in someone's data must not find a built-in
+for (const table of [ZONE_ABBR, ZONE_NAME, CITY_ZONE]) Object.setPrototypeOf(table, null);

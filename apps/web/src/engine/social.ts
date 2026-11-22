@@ -683,3 +683,6 @@ export function chatUrl(l: Pick<SocialLinkRow, 'platform' | 'username' | 'accoun
     return l.username ? `https://ig.me/m/${encodeURIComponent(l.username)}` : profileUrl(l);
   return `https://x.com/messages/compose?recipient_id=${encodeURIComponent(l.accountId)}`;
 }
+
+// own keys only: a word like "constructor" or "toString" in someone's data must not find a built-in
+for (const table of [SIGNAL_WORDS]) Object.setPrototypeOf(table, null);

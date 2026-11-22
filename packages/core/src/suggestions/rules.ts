@@ -1230,3 +1230,6 @@ export function joinReasons(texts: string[], firstName = 'they'): string {
   };
   return texts.map(subject).join(', and ');
 }
+
+// own keys only: a word like "constructor" or "toString" in someone's data must not find a built-in
+for (const table of [TOUCH_WORDS]) Object.setPrototypeOf(table, null);

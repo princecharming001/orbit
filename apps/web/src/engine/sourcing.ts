@@ -153,3 +153,6 @@ export function emailNote(c: SourcedCandidate): string | undefined {
   if (c.emailConfidence === 'guess') return `${c.email} (a guess, not confirmed)`;
   return `${c.email} (on their page)`;
 }
+
+// own keys only: a word like "constructor" or "toString" in someone's data must not find a built-in
+for (const table of [PROVIDER_LABELS]) Object.setPrototypeOf(table, null);

@@ -364,3 +364,6 @@ export function whyFromReasons(
   const thin = opts.filler === false ? undefined : thinLine(real, c);
   return thin ? [...kept, thin] : kept;
 }
+
+// own keys only: a word like "constructor" or "toString" in someone's data must not find a built-in
+for (const table of [CODE]) Object.setPrototypeOf(table, null);

@@ -491,3 +491,6 @@ function blockKeys(n: FoldedName): string[] {
   if (n.given && sur) keys.add(`w:${[n.given, sur].sort().join(' ')}`);
   return [...keys];
 }
+
+// own keys only: a word like "constructor" or "toString" in someone's data must not find a built-in
+for (const table of [EAST_ASIAN_SURNAMES]) Object.setPrototypeOf(table, null);

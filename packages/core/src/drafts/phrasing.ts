@@ -771,3 +771,6 @@ export function typedClause(text: string | undefined, max = 25, opts: { emoji?: 
   }
   return cap1(t.replace(/[\s,;:]+$/, ''));
 }
+
+// own keys only: a word like "constructor" or "toString" in someone's data must not find a built-in
+for (const table of [SCHOOL_SHORT, FUNCTION_LABEL, IRREGULAR]) Object.setPrototypeOf(table, null);

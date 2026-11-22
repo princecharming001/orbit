@@ -296,3 +296,6 @@ export function withDeadline(work: Promise<void>, ms: number): Promise<void> {
   });
   return Promise.race([work.catch(() => undefined), stop]).finally(() => clearTimeout(timer));
 }
+
+// own keys only: a word like "constructor" or "toString" in someone's data must not find a built-in
+for (const table of [PATTERNS]) Object.setPrototypeOf(table, null);

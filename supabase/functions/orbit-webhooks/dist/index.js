@@ -659,12 +659,16 @@ function normalizeCompany(raw) {
   while (tokens.length > 1 && LEGAL_SUFFIXES.has(tokens[tokens.length - 1])) tokens.pop();
   if (tokens[0] === "the" && tokens.length > 1) tokens.shift();
   const legal = tokens.join(" ");
-  if (ORG_ALIASES[legal]) return ORG_ALIASES[legal];
+  const alias = (k) => Object.hasOwn(ORG_ALIASES, k) ? ORG_ALIASES[k] : void 0;
+  const whole = alias(legal);
+  if (whole) return whole;
   while (tokens.length > 1 && (GENERIC_ORG_TAIL.has(tokens[tokens.length - 1]) || LEGAL_SUFFIXES.has(tokens[tokens.length - 1])))
     tokens.pop();
   const core = tokens.join(" ");
-  return ORG_ALIASES[core] ?? (core.replace(/[\s&]/g, "") ? core : legal);
+  return alias(core) ?? (core.replace(/[\s&]/g, "") ? core : legal);
 }
+for (const table of [LATIN_LETTERS, NICKNAMES, AMBIGUOUS_NICKNAMES, ORG_ALIASES])
+  Object.setPrototypeOf(table, null);
 
 // packages/core/src/linkedin/headline.ts
 var PARTS = /\s+[|·•]\s+|\s+[–—-]\s+/;
@@ -761,6 +765,37 @@ function parseHeadline(headline) {
 }
 
 // packages/core/src/email/when.ts
+var ZONE_ABBR = {
+  ET: "America/New_York",
+  EST: "America/New_York",
+  EDT: "America/New_York",
+  CT: "America/Chicago",
+  CST: "America/Chicago",
+  CDT: "America/Chicago",
+  MT: "America/Denver",
+  MST: "America/Denver",
+  MDT: "America/Denver",
+  PT: "America/Los_Angeles",
+  PST: "America/Los_Angeles",
+  PDT: "America/Los_Angeles",
+  AKST: "America/Anchorage",
+  AKDT: "America/Anchorage",
+  HST: "Pacific/Honolulu",
+  GMT: "UTC",
+  UTC: "UTC",
+  BST: "Europe/London",
+  CET: "Europe/Paris",
+  CEST: "Europe/Paris",
+  IST: "Asia/Kolkata",
+  SGT: "Asia/Singapore",
+  JST: "Asia/Tokyo"
+};
+var ZONE_NAME = {
+  eastern: "America/New_York",
+  central: "America/Chicago",
+  mountain: "America/Denver",
+  pacific: "America/Los_Angeles"
+};
 var CITY_ZONE = {
   "new york": "America/New_York",
   nyc: "America/New_York",
@@ -842,6 +877,7 @@ var NEGATION_LEAD = "^\\s*(?:(?:so|well|honestly|actually|hey|hmm|and|or|ok|okay
 var NEGATIVE_QUESTION = new RegExp(`${NEGATION_LEAD}\\s+(?:we|you|i|it|that|this|there|they)\\b`, "i");
 var NEGATIVE_QUESTION_BARE = new RegExp(`${NEGATION_LEAD}\\s*$`, "i");
 var HAS_CLAUSE_BREAK = new RegExp(CLAUSE_BREAK.source, "i");
+for (const table of [ZONE_ABBR, ZONE_NAME, CITY_ZONE]) Object.setPrototypeOf(table, null);
 
 // packages/core/src/email/triage.ts
 var LATER_WHEN = "(?:(?:in|after|around|by|come|until|closer to|sometime in|once|early|mid|late)\\s+)?(?:the\\s+)?(?:new year|holidays|break|next (?:month|quarter|semester|term|year|fall|spring|summer|winter|cycle)|q[1-4]|january|february|march|april|may|june|july|august|september|october|november|december|spring|summer|fall|autumn|winter|(?:a\\s+)?(?:few|couple(?: of)?|several) (?:weeks|months)|later|then)\\b";
@@ -893,6 +929,8 @@ var POSTPONE_LATER = new RegExp(
   `\\bpostpon\\w*\\b[^.?!]{0,30}?\\b(?:until|till|to|into)\\s+${LATER_WHEN}`,
   "i"
 );
+var SEASON_MONTH = { spring: 3, summer: 6, fall: 9, autumn: 9, winter: 12 };
+for (const table of [SEASON_MONTH]) Object.setPrototypeOf(table, null);
 
 // packages/core/src/pipeline/introductions.ts
 var DESC = "(?:(?:my|our|his|her|their)\\s+)?(?:(?:old|former|good|dear|great|close|wonderful)\\s+)?(?:(?:friend|colleague|teammate|coworker|co-worker|advisor|adviser|mentor|manager|boss|partner|classmate|roommate|cofounder|co-founder|student)\\s+)?(?:(?:professor|prof\\.?|dr\\.?|mr\\.?|ms\\.?|mrs\\.?)\\s+)?";
@@ -1246,6 +1284,91 @@ function parseAddress(raw) {
   }
   return { email: normalizeEmail(s.replace(/^mailto:/i, "")) };
 }
+var ENTITIES = {
+  nbsp: " ",
+  amp: "&",
+  lt: "<",
+  gt: ">",
+  quot: '"',
+  apos: "'",
+  rsquo: "’",
+  lsquo: "‘",
+  rdquo: "”",
+  ldquo: "“",
+  ndash: "–",
+  mdash: "—",
+  hellip: "...",
+  bull: "•",
+  middot: "·",
+  copy: "©"
+};
+var MORE_ENTITIES = {
+  szlig: "ß",
+  aelig: "æ",
+  AElig: "Æ",
+  oelig: "œ",
+  OElig: "Œ",
+  oslash: "ø",
+  Oslash: "Ø",
+  eth: "ð",
+  ETH: "Ð",
+  thorn: "þ",
+  THORN: "Þ",
+  euro: "€",
+  pound: "£",
+  yen: "¥",
+  cent: "¢",
+  sect: "§",
+  para: "¶",
+  deg: "°",
+  plusmn: "±",
+  times: "×",
+  divide: "÷",
+  frac12: "½",
+  frac14: "¼",
+  frac34: "¾",
+  laquo: "«",
+  raquo: "»",
+  lsaquo: "‹",
+  rsaquo: "›",
+  sbquo: "‚",
+  bdquo: "„",
+  iexcl: "¡",
+  iquest: "¿",
+  trade: "™",
+  reg: "®",
+  dagger: "†",
+  Dagger: "‡",
+  prime: "′",
+  Prime: "″",
+  rarr: "→",
+  larr: "←",
+  ensp: " ",
+  emsp: " ",
+  thinsp: " ",
+  zwnj: "",
+  zwj: "",
+  shy: "",
+  lrm: "",
+  rlm: "",
+  ordf: "ª",
+  ordm: "º",
+  micro: "µ",
+  sup1: "¹",
+  sup2: "²",
+  sup3: "³"
+};
+var MARKS = {
+  acute: "́",
+  grave: "̀",
+  circ: "̂",
+  uml: "̈",
+  tilde: "̃",
+  ring: "̊",
+  cedil: "̧",
+  caron: "̌"
+};
+for (const table of [ENTITIES, MORE_ENTITIES, MARKS]) Object.setPrototypeOf(table, null);
 
 // supabase/functions/_shared/google.ts
 import { createRemoteJWKSet, jwtVerify } from "npm:jose@6.2.12";
@@ -3698,6 +3821,7 @@ function blockKeys(n) {
   if (n.given && sur) keys.add(`w:${[n.given, sur].sort().join(" ")}`);
   return [...keys];
 }
+for (const table of [EAST_ASIAN_SURNAMES]) Object.setPrototypeOf(table, null);
 
 // packages/core/src/entity/resolve.ts
 var RESOLVE_WEIGHTS = {
@@ -4271,6 +4395,7 @@ function sqlQueue(db2) {
     }
   };
 }
+for (const table of [KIND_QUEUE]) Object.setPrototypeOf(table, null);
 
 // packages/core/src/entity/social.ts
 var PUBLIC_FIGURE_FOLLOWERS = 5e4;
@@ -4464,6 +4589,7 @@ add("1001-5000", [
 ]);
 add("501-1000", ["Vercel", "Retool", "Rippling", "Mercury", "Jump Trading", "Optiver", "Five Rings"]);
 add("201-500", ["Linear", "Sequoia Capital", "Andreessen Horowitz", "a16z", "Benchmark", "Accel"]);
+for (const table of [KNOWN_SIZES]) Object.setPrototypeOf(table, null);
 
 // packages/core/src/scoring/strength.ts
 var ENGAGEMENT = /* @__PURE__ */ new Set([

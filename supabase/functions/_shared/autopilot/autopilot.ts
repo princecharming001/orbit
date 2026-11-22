@@ -551,3 +551,6 @@ export async function setAutopilotMode(
             ${{ level, mode: req.mode }}::jsonb)`;
   return { mode: req.mode, goalId: req.goalId ?? null };
 }
+
+// own keys only: a word like "constructor" or "toString" in someone's data must not find a built-in
+for (const table of [HOLD_REASONS]) Object.setPrototypeOf(table, null);

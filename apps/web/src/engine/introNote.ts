@@ -181,3 +181,6 @@ export async function saveIntroNote(userId: string, text: string, now = new Date
   const t = text.trim().replace(/\s+/g, ' ');
   await db.settings.update(userId, { introNote: t ? { text: t, editedAt: now.toISOString() } : undefined });
 }
+
+// own keys only: a word like "constructor" or "toString" in someone's data must not find a built-in
+for (const table of [NEVER]) Object.setPrototypeOf(table, null);

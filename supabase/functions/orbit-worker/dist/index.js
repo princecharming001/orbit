@@ -1379,6 +1379,7 @@ function createIcypeas(given) {
     }
   };
 }
+for (const table of [CERTAINTY_RANK]) Object.setPrototypeOf(table, null);
 
 // supabase/functions/_shared/providers/reoon.ts
 var REOON_BASE = "https://emailverifier.reoon.com";
@@ -2177,6 +2178,7 @@ function sqlQueue(db2) {
     }
   };
 }
+for (const table of [KIND_QUEUE]) Object.setPrototypeOf(table, null);
 
 // supabase/functions/_shared/switches.ts
 var SWITCH_TTL_MS = 5 * 6e4;
@@ -3299,12 +3301,16 @@ function normalizeCompany(raw) {
   while (tokens2.length > 1 && LEGAL_SUFFIXES.has(tokens2[tokens2.length - 1])) tokens2.pop();
   if (tokens2[0] === "the" && tokens2.length > 1) tokens2.shift();
   const legal = tokens2.join(" ");
-  if (ORG_ALIASES[legal]) return ORG_ALIASES[legal];
+  const alias = (k) => Object.hasOwn(ORG_ALIASES, k) ? ORG_ALIASES[k] : void 0;
+  const whole = alias(legal);
+  if (whole) return whole;
   while (tokens2.length > 1 && (GENERIC_ORG_TAIL.has(tokens2[tokens2.length - 1]) || LEGAL_SUFFIXES.has(tokens2[tokens2.length - 1])))
     tokens2.pop();
   const core = tokens2.join(" ");
-  return ORG_ALIASES[core] ?? (core.replace(/[\s&]/g, "") ? core : legal);
+  return alias(core) ?? (core.replace(/[\s&]/g, "") ? core : legal);
 }
+for (const table of [LATIN_LETTERS, NICKNAMES, AMBIGUOUS_NICKNAMES, ORG_ALIASES])
+  Object.setPrototypeOf(table, null);
 
 // supabase/functions/_shared/ingest/util.ts
 function iso(v) {
@@ -4130,6 +4136,31 @@ function schoolShort(school) {
   if (suffix && suffix[1].length >= 3) return suffix[1];
   return t;
 }
+var FUNCTION_LABEL = {
+  swe: "software engineering",
+  pm: "product management",
+  ib: "investment banking",
+  consulting: "consulting",
+  data: "data science",
+  design: "product design",
+  finance: "finance",
+  marketing: "marketing",
+  research: "research",
+  vc: "venture capital",
+  ops: "operations",
+  quant: "quant"
+};
+var IRREGULAR = {
+  is: "are",
+  was: "were",
+  has: "have",
+  does: "do",
+  "isn't": "aren't",
+  "wasn't": "weren't",
+  "hasn't": "haven't",
+  "doesn't": "don't"
+};
+for (const table of [SCHOOL_SHORT, FUNCTION_LABEL, IRREGULAR]) Object.setPrototypeOf(table, null);
 
 // packages/core/src/email/when.ts
 var ZONE_ABBR = {
@@ -4942,6 +4973,7 @@ function extractFirstDate(fragment, reference, timeZone) {
   }
   return void 0;
 }
+for (const table of [ZONE_ABBR, ZONE_NAME, CITY_ZONE]) Object.setPrototypeOf(table, null);
 
 // packages/core/src/text/email.ts
 var BULK_LOCAL = /^(no[-_.]?reply|do[-_.]?not[-_.]?reply|donotreply|invitations?|notify|notifications?|newsletters?|mailer|mailer[-_.]daemon|postmaster|bounces?|alerts?|updates?|news|digest|marketing|billing|invoices?|receipts?|dse(_\w+)?|automated|system|calendar|no[-_.]?reply[-_.+].*|.*[-_.+]no[-_.]?reply|.*[-_.]notifications?|.*[-_.]alerts?)$/i;
@@ -5470,6 +5502,7 @@ function parseTitleCompany(lines, name) {
 function wordCount(s) {
   return s.trim() ? s.trim().split(/\s+/).length : 0;
 }
+for (const table of [ENTITIES, MORE_ENTITIES, MARKS]) Object.setPrototypeOf(table, null);
 
 // packages/core/src/style/card.ts
 function defaultStyleCard(preset, firstName) {
@@ -5826,8 +5859,31 @@ var BANNED_SUBJECT_PATTERNS = [
   /\bjob\b/i,
   /\bopportunit/i
 ];
+var ROLE_VERBS = {
+  work: ["works", "working"],
+  cover: ["covers", "covering"],
+  trade: ["trades", "trading"],
+  focus: ["focuses", "focusing"],
+  invest: ["invests", "investing"],
+  advise: ["advises", "advising"],
+  build: ["builds", "building"],
+  support: ["supports", "supporting"],
+  lead: ["leads", "leading"],
+  run: ["runs", "running"],
+  manage: ["manages", "managing"],
+  own: ["owns", "owning"],
+  started: ["started"],
+  built: ["built"],
+  founded: ["founded"],
+  led: ["led"]
+};
 var WHY_THEM = "Why them";
 var WHY_THEM_GAP = new RegExp(`\\[${WHY_THEM}:[^\\]]*\\]`);
+var SCHOOL_DEMONYM = {
+  Cornell: "Cornellian",
+  Princeton: "Princetonian",
+  Harvard: "Harvard alum"
+};
 function wordsIn(body) {
   const lines = body.split("\n").map((l) => l.trim()).filter(Boolean);
   if (lines.length) {
@@ -6097,6 +6153,7 @@ ${i.user.firstName}`;
     variant: null
   };
 }
+for (const table of [ROLE_VERBS, SCHOOL_DEMONYM]) Object.setPrototypeOf(table, null);
 
 // packages/core/src/drafts/validate.ts
 var NEED_DETAIL = {
@@ -6361,6 +6418,7 @@ ${d.bodyShort ?? ""}`.replace(/\[[^\]]*\]/g, " "),
     });
   return issues;
 }
+for (const table of [NEED_DETAIL]) Object.setPrototypeOf(table, null);
 
 // packages/core/src/email/nextAction.ts
 var REPLY_NEXT_ACTION = {
@@ -6999,6 +7057,7 @@ function heuristicSignal(text3, direction, reference, opts = {}) {
     return { signal: "question", confidence: 0.6, extraction };
   return { signal: "reply_neutral", confidence: 0.55, extraction };
 }
+for (const table of [SEASON_MONTH]) Object.setPrototypeOf(table, null);
 
 // packages/core/src/safety/rules.ts
 function messageHash(m) {
@@ -11430,6 +11489,7 @@ function blockKeys(n) {
   if (n.given && sur) keys.add(`w:${[n.given, sur].sort().join(" ")}`);
   return [...keys];
 }
+for (const table of [EAST_ASIAN_SURNAMES]) Object.setPrototypeOf(table, null);
 
 // packages/core/src/entity/resolve.ts
 var RESOLVE_WEIGHTS = {
@@ -13538,6 +13598,7 @@ var RAPPORT_LLM_GUIDE = `rapport: how the sender feels about the student, separa
 - familiarity: stranger, professional, friendly, or friend, from how they write to the student.
 - effort 0..2: 0 a one-liner, 1 a normal reply, 2 a long, thoughtful reply.
 - cues: any of ${RAPPORT_CUES.join(", ")} that apply.`;
+for (const table of [FUNCTION_CLASSES]) Object.setPrototypeOf(table, null);
 
 // packages/core/src/scoring/strength.ts
 var ENGAGEMENT = /* @__PURE__ */ new Set([
@@ -14527,6 +14588,7 @@ function sizeFactor(sizeBucket, name, networkCount = 0) {
   if (networkCount >= 12) return 0.6;
   return 0.5;
 }
+for (const table of [KNOWN_SIZES]) Object.setPrototypeOf(table, null);
 
 // packages/core/src/graph/titles.ts
 var C_LEVEL = /\b(ceo|cfo|coo|cto|cmo|cpo|cio|ciso|chief|president|partner|managing director|founder|co-founder|cofounder)\b/i;
@@ -16027,6 +16089,94 @@ function roleFromHeadline(headline) {
   return { title: title || void 0, org: org || void 0 };
 }
 
+// packages/core/src/recommend/title.ts
+var FUNCTION_TITLE = {
+  swe: /\b(software|engineer|developer|swe|sde|backend|frontend|full[- ]?stack|ml engineer|infrastructure|platform)\b/i,
+  pm: /\b(product manager|product lead|\bpm\b|head of product|product owner|associate product)\b/i,
+  ib: /\b(investment bank(ing|er)?|m&a|mergers|capital markets|leveraged finance|ecm|dcm|restructuring)\b/i,
+  consulting: /\b(consult(ant|ing)?|strategy|bain|mckinsey|bcg|boston consulting|deloitte|accenture|oliver wyman|kearney|engagement manager)\b/i,
+  data: /\b(data (scientist|analyst|engineer)|analytics|machine learning|ml|ai research|quant)\b/i,
+  design: /\b(designer|design lead|ux|product design|ui)\b/i,
+  finance: /\b(finance|fp&a|treasury|controller|accounting|private equity|hedge fund|asset management|wealth|credit|lending|underwriting)\b/i,
+  marketing: /\b(marketing|growth|brand|content|communications|demand gen)\b/i,
+  research: /\b(research|scientist|lab|phd|postdoc)\b/i,
+  vc: /\b(venture|vc|investor|principal|partner)\b/i,
+  ops: /\b(operations|ops|chief of staff|bizops|strategy & operations)\b/i
+};
+var FUNCTION_SEARCH_TITLE = {
+  swe: "Software Engineer",
+  pm: "Product Manager",
+  ib: "Investment Banking Analyst",
+  consulting: "Consultant",
+  data: "Data Scientist",
+  design: "Product Designer",
+  finance: "Financial Analyst",
+  marketing: "Marketing Manager",
+  research: "Research Scientist",
+  vc: "Venture Capital Investor",
+  ops: "Operations Associate"
+};
+var WORD_FORM = {
+  engineering: "engineer",
+  engineers: "engineer",
+  consulting: "consultant",
+  consultants: "consultant",
+  banking: "banker",
+  bank: "banker",
+  bankers: "banker",
+  management: "manager",
+  managers: "manager",
+  managing: "managing",
+  science: "scientist",
+  sciences: "scientist",
+  analytics: "analyst",
+  analysis: "analyst",
+  analysts: "analyst",
+  designer: "design",
+  designers: "design",
+  designing: "design",
+  marketer: "marketing",
+  researcher: "research",
+  researchers: "research",
+  strategist: "strategy",
+  strategic: "strategy",
+  financial: "finance",
+  trader: "trading",
+  traders: "trading",
+  products: "product",
+  developers: "developer",
+  development: "development",
+  investments: "investment",
+  investing: "investment",
+  operation: "operations",
+  internship: "intern",
+  interns: "intern",
+  programs: "program",
+  programme: "program",
+  technologies: "technology",
+  technical: "technology",
+  sales: "sales"
+};
+var NEAR = {
+  ml: ["ai", "data"],
+  ai: ["ml"],
+  ux: ["design", "ui"],
+  ui: ["design", "ux"],
+  design: ["ux", "ui"],
+  developer: ["engineer"],
+  engineer: ["developer"],
+  frontend: ["fullstack"],
+  backend: ["fullstack", "infrastructure", "platform"],
+  fullstack: ["frontend", "backend"],
+  investment: ["banker", "investor"],
+  investor: ["investment", "venture"],
+  venture: ["investor"],
+  strategy: ["consultant", "operations"],
+  operations: ["strategy"]
+};
+for (const table of [FUNCTION_TITLE, FUNCTION_SEARCH_TITLE, WORD_FORM, NEAR])
+  Object.setPrototypeOf(table, null);
+
 // packages/core/src/recommend/wantToMeet.ts
 var ROLES = [
   [/\b(co-?)?founders?\b/, "Founder"],
@@ -16057,6 +16207,9 @@ var STOP = new Set(
 );
 
 // packages/core/src/recommend/score.ts
+var FUNCTION_HINT = {
+  ib: /\b(analyst|associate|banker)\b/i
+};
 function responsePrior(p, user) {
   let z9 = -0.4;
   if (p.isAlumni) z9 += 0.8;
@@ -16070,6 +16223,7 @@ function responsePrior(p, user) {
   if (p.linkedinConnectedOn) z9 += 0.2;
   return 1 / (1 + Math.exp(-z9));
 }
+for (const table of [FUNCTION_HINT]) Object.setPrototypeOf(table, null);
 
 // supabase/functions/_shared/friends/shares.ts
 function emailHash(email) {
@@ -16505,6 +16659,55 @@ function isAmbiguousKey(key2, common) {
   const words6 = key2.split(" ");
   return words6.length === 2 && words6.every((w) => common.has(w));
 }
+var PARENTS = {
+  instagram: "meta",
+  whatsapp: "meta",
+  oculus: "meta",
+  "reality labs": "meta",
+  youtube: "google",
+  deepmind: "google",
+  "google deepmind": "google",
+  waymo: "google",
+  verily: "google",
+  fitbit: "google",
+  alphabet: "google",
+  slack: "salesforce",
+  tableau: "salesforce",
+  mulesoft: "salesforce",
+  linkedin: "microsoft",
+  github: "microsoft",
+  "microsoft research": "microsoft",
+  "cash app": "block",
+  square: "block",
+  tidal: "block",
+  "amazon web services": "amazon",
+  twitch: "amazon",
+  "whole foods market": "amazon",
+  zappos: "amazon",
+  ring: "amazon",
+  "beats by dre": "apple",
+  tiktok: "bytedance",
+  "merrill lynch": "bank of america",
+  merrill: "bank of america",
+  "bofa securities": "bank of america",
+  "citadel securities": "citadel",
+  "nvidia research": "nvidia",
+  "ibm research": "ibm",
+  "red hat": "ibm",
+  aws: "amazon",
+  gs: "goldman sachs",
+  "marcus by goldman sachs": "goldman sachs",
+  "mckinsey digital": "mckinsey",
+  quantumblack: "mckinsey",
+  "deloitte consulting": "deloitte",
+  "deloitte digital": "deloitte",
+  "pwc strategy&": "pwc",
+  "strategy&": "pwc",
+  "ey parthenon": "ey",
+  kearney: "kearney",
+  "a16z crypto": "andreessen horowitz",
+  a16z: "andreessen horowitz"
+};
 var KIND_OF = {};
 var KIND_LISTS = [
   [
@@ -16561,6 +16764,83 @@ function ycBatchOf(raw) {
   if (!raw || raw === "Unspecified") return void 0;
   return canonicalBatch(raw);
 }
+var INDUSTRY_WORDS = {
+  fintech: [
+    "fintech",
+    "payments",
+    "banking",
+    "lending",
+    "insurance",
+    "insurtech",
+    "neobank",
+    "credit",
+    "finance"
+  ],
+  ai: [
+    "ai",
+    "artificial intelligence",
+    "machine learning",
+    "ml",
+    "llm",
+    "generative ai",
+    "agents",
+    "ai agents",
+    "nlp",
+    "computer vision"
+  ],
+  climate: [
+    "climate",
+    "climate tech",
+    "clean energy",
+    "renewable",
+    "solar",
+    "carbon",
+    "energy",
+    "sustainability",
+    "battery",
+    "ev"
+  ],
+  health: [
+    "health",
+    "healthcare",
+    "health tech",
+    "digital health",
+    "medical",
+    "medtech",
+    "telehealth",
+    "clinic"
+  ],
+  bio: ["biotech", "bio", "biology", "drug discovery", "therapeutics", "genomics", "life sciences"],
+  crypto: ["crypto", "web3", "blockchain", "defi", "ethereum", "bitcoin", "solana"],
+  devtools: [
+    "developer tools",
+    "devtools",
+    "infrastructure",
+    "api",
+    "open source",
+    "devops",
+    "observability"
+  ],
+  edtech: ["edtech", "education", "learning", "tutoring"],
+  consumer: ["consumer", "social", "marketplace", "e commerce", "ecommerce", "retail", "d2c"],
+  enterprise: ["b2b", "saas", "enterprise", "productivity", "sales", "hr tech", "legal tech"],
+  hardware: [
+    "hardware",
+    "robotics",
+    "hard tech",
+    "manufacturing",
+    "semiconductors",
+    "drones",
+    "aerospace",
+    "space"
+  ],
+  security: ["security", "cybersecurity", "infosec", "identity", "fraud"],
+  defense: ["defense", "defence", "national security", "govtech", "dual use"],
+  gaming: ["gaming", "games", "esports"],
+  realestate: ["real estate", "proptech", "construction"],
+  media: ["media", "creator economy", "content", "entertainment", "music"]
+};
+for (const table of [PARENTS, KIND_OF, INDUSTRY_WORDS]) Object.setPrototypeOf(table, null);
 
 // packages/core/src/search/reading.ts
 var READING_SIGNALS = [
@@ -18906,6 +19186,7 @@ async function firstTouchRungOf(db2, userId) {
                         and a.action = 'draft.approve' and a.actor = 'user')`;
   return firstTouchRung(rows.map((r) => ({ kind: r.kind, edited: r.edited })));
 }
+for (const table of [HOLD_REASONS]) Object.setPrototypeOf(table, null);
 
 // supabase/functions/_shared/autopilot/plan.ts
 var DAY10 = 864e5;
@@ -19378,6 +19659,7 @@ var FUNCTION_LABELS = {
   ops: "Operations"
 };
 var FUNCTION_CODES = Object.keys(FUNCTION_LABELS);
+for (const table of [FUNCTION_LABELS]) Object.setPrototypeOf(table, null);
 
 // packages/core/src/pipeline/transitions.ts
 var ACTIVE_STAGES = [
@@ -19524,6 +19806,24 @@ function thankYouDue(chat, now) {
   if (chat.lastOutboundAt && new Date(chat.lastOutboundAt).getTime() > completed) return false;
   return true;
 }
+var TOUCH_WORDS = {
+  meeting: "met",
+  note: "met",
+  email_in: "emailed",
+  email_out: "emailed",
+  linkedin_in: "messaged on LinkedIn",
+  linkedin_out: "messaged on LinkedIn",
+  text_in: "texted",
+  text_out: "texted",
+  linkedin_connected: "connected on LinkedIn",
+  linkedin_engaged: "engaged on LinkedIn",
+  linkedin_comment_in: "were in touch on LinkedIn",
+  linkedin_comment_out: "commented on their LinkedIn posts",
+  linkedin_reaction_in: "engaged on LinkedIn",
+  manual_log: "were in touch",
+  email_cc: "were on the same email thread",
+  intro_observed: "were in touch"
+};
 var HARD_URGENT = ["schedule_confirm", "thank_you", "prep_brief", "confirm_stage"];
 var QUIET_DAY_KINDS = [
   ...HARD_URGENT,
@@ -19531,6 +19831,7 @@ var QUIET_DAY_KINDS = [
   "action_item_reminder",
   "warm_up_engage"
 ];
+for (const table of [TOUCH_WORDS]) Object.setPrototypeOf(table, null);
 
 // packages/core/src/pipeline/cadence.ts
 var DAY12 = 864e5;
@@ -23345,6 +23646,7 @@ function withDeadline(work, ms2) {
   });
   return Promise.race([work.catch(() => void 0), stop]).finally(() => clearTimeout(timer));
 }
+for (const table of [PATTERNS2]) Object.setPrototypeOf(table, null);
 
 // supabase/functions/_shared/sourcing/lookup.ts
 var LOOKUP_TTL_MS = 30 * 24 * 3600 * 1e3;
@@ -24978,6 +25280,7 @@ async function pollClaudeBatches(s, opts = {}) {
   return out;
 }
 var reasonOf = (o) => o.ok ? void 0 : `${o.reason}${o.detail ? `: ${o.detail}` : ""}`;
+for (const table of [BATCH_CONTINUATIONS]) Object.setPrototypeOf(table, null);
 
 // supabase/functions/orbit-worker/handlers/cadence.ts
 function cadenceUser(config) {
@@ -25673,6 +25976,7 @@ async function fetchPage(url, opts = {}) {
     clearTimeout(timer);
   }
 }
+for (const table of [ENTITIES2]) Object.setPrototypeOf(table, null);
 
 // supabase/functions/_shared/research/investigate.ts
 var EXTRACT_VERSION = "extract-v1";
@@ -33839,6 +34143,7 @@ function parseYcFounders(html) {
   }
   return out.slice(0, 12);
 }
+for (const table of [ENTITIES3]) Object.setPrototypeOf(table, null);
 
 // supabase/functions/_shared/search/companyFacts.ts
 var MIN_COMPANIES = 3e3;

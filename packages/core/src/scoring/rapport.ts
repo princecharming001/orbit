@@ -269,3 +269,6 @@ export const RAPPORT_LLM_GUIDE = `rapport: how the sender feels about the studen
 - familiarity: stranger, professional, friendly, or friend, from how they write to the student.
 - effort 0..2: 0 a one-liner, 1 a normal reply, 2 a long, thoughtful reply.
 - cues: any of ${RAPPORT_CUES.join(', ')} that apply.`;
+
+// own keys only: a word like "constructor" or "toString" in someone's data must not find a built-in
+for (const table of [FUNCTION_CLASSES]) Object.setPrototypeOf(table, null);

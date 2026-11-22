@@ -427,3 +427,6 @@ export async function fixResumeFacet(
   });
   return db.resumeFacets.get(facetId);
 }
+
+// own keys only: a word like "constructor" or "toString" in someone's data must not find a built-in
+for (const table of [XML_ENTITIES]) Object.setPrototypeOf(table, null);

@@ -4155,3 +4155,6 @@ export function composeFallback(i: ComposeTemplateInput): Omit<ComposedMessage, 
     variant: null,
   };
 }
+
+// own keys only: a word like "constructor" or "toString" in someone's data must not find a built-in
+for (const table of [ROLE_VERBS, SCHOOL_DEMONYM]) Object.setPrototypeOf(table, null);

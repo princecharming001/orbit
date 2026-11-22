@@ -1503,6 +1503,7 @@ function createIcypeas(given) {
     }
   };
 }
+for (const table of [CERTAINTY_RANK]) Object.setPrototypeOf(table, null);
 
 // supabase/functions/_shared/providers/reoon.ts
 var REOON_BASE = "https://emailverifier.reoon.com";
@@ -2315,6 +2316,7 @@ function sqlQueue(db2) {
     }
   };
 }
+for (const table of [KIND_QUEUE]) Object.setPrototypeOf(table, null);
 
 // supabase/functions/_shared/switches.ts
 var SWITCH_TTL_MS = 5 * 6e4;
@@ -3165,6 +3167,105 @@ function parseName(raw) {
   } else tokens3 = cleanTokens(parts[0] ?? "");
   return partsFromTokens(tokens3);
 }
+var NICKNAMES = {
+  bill: "william",
+  billy: "william",
+  will: "william",
+  willy: "william",
+  bob: "robert",
+  bobby: "robert",
+  rob: "robert",
+  robbie: "robert",
+  bert: "robert",
+  mike: "michael",
+  mikey: "michael",
+  mick: "michael",
+  jim: "james",
+  jimmy: "james",
+  dave: "david",
+  davey: "david",
+  dan: "daniel",
+  danny: "daniel",
+  matt: "matthew",
+  matty: "matthew",
+  topher: "christopher",
+  tom: "thomas",
+  tommy: "thomas",
+  joe: "joseph",
+  joey: "joseph",
+  jon: "jonathan",
+  johnny: "john",
+  nick: "nicholas",
+  nicky: "nicholas",
+  tony: "anthony",
+  ben: "benjamin",
+  benny: "benjamin",
+  andy: "andrew",
+  drew: "andrew",
+  ed: "edward",
+  eddie: "edward",
+  steve: "steven",
+  ken: "kenneth",
+  kenny: "kenneth",
+  josh: "joshua",
+  zach: "zachary",
+  zack: "zachary",
+  jeff: "jeffrey",
+  charlie: "charles",
+  chuck: "charles",
+  greg: "gregory",
+  jake: "jacob",
+  rick: "richard",
+  ricky: "richard",
+  rich: "richard",
+  tim: "timothy",
+  timmy: "timothy",
+  ron: "ronald",
+  don: "donald",
+  larry: "lawrence",
+  liz: "elizabeth",
+  lizzie: "elizabeth",
+  beth: "elizabeth",
+  betty: "elizabeth",
+  kate: "katherine",
+  katie: "katherine",
+  kathy: "katherine",
+  jen: "jennifer",
+  jenny: "jennifer",
+  jess: "jessica",
+  jessie: "jessica",
+  maggie: "margaret",
+  meg: "margaret",
+  peggy: "margaret",
+  sue: "susan",
+  susie: "susan",
+  abby: "abigail",
+  becky: "rebecca",
+  becca: "rebecca",
+  vicky: "victoria",
+  tori: "victoria",
+  mandy: "amanda",
+  patty: "patricia"
+};
+var AMBIGUOUS_NICKNAMES = {
+  alex: ["alexander", "alexandra", "alexis"],
+  sam: ["samuel", "samantha"],
+  chris: ["christopher", "christine", "christina"],
+  pat: ["patrick", "patricia"],
+  jamie: ["james"],
+  nat: ["natalie", "nathan", "nathaniel"],
+  nate: ["nathan", "nathaniel"],
+  ted: ["edward", "theodore"],
+  sasha: ["alexander", "alexandra"],
+  liam: ["william"],
+  john: ["jonathan"],
+  gail: ["abigail"],
+  eliza: ["elizabeth"],
+  max: ["maxwell", "maximilian"],
+  kat: ["katherine", "kathryn"],
+  lexi: ["alexandra", "alexis"],
+  frankie: ["frank", "francis", "francesca"]
+};
 function normalizeLinkedInUrl(raw) {
   if (!raw) return void 0;
   let s = raw.trim();
@@ -3237,12 +3338,16 @@ function normalizeCompany(raw) {
   while (tokens3.length > 1 && LEGAL_SUFFIXES.has(tokens3[tokens3.length - 1])) tokens3.pop();
   if (tokens3[0] === "the" && tokens3.length > 1) tokens3.shift();
   const legal = tokens3.join(" ");
-  if (ORG_ALIASES[legal]) return ORG_ALIASES[legal];
+  const alias = (k) => Object.hasOwn(ORG_ALIASES, k) ? ORG_ALIASES[k] : void 0;
+  const whole = alias(legal);
+  if (whole) return whole;
   while (tokens3.length > 1 && (GENERIC_ORG_TAIL.has(tokens3[tokens3.length - 1]) || LEGAL_SUFFIXES.has(tokens3[tokens3.length - 1])))
     tokens3.pop();
   const core = tokens3.join(" ");
-  return ORG_ALIASES[core] ?? (core.replace(/[\s&]/g, "") ? core : legal);
+  return alias(core) ?? (core.replace(/[\s&]/g, "") ? core : legal);
 }
+for (const table of [LATIN_LETTERS, NICKNAMES, AMBIGUOUS_NICKNAMES, ORG_ALIASES])
+  Object.setPrototypeOf(table, null);
 
 // supabase/functions/_shared/sources/switch.ts
 var draftNote = (source, state) => `source_${state}:${source}`;
@@ -3904,6 +4009,31 @@ function schoolShort(school) {
   if (suffix && suffix[1].length >= 3) return suffix[1];
   return t;
 }
+var FUNCTION_LABEL = {
+  swe: "software engineering",
+  pm: "product management",
+  ib: "investment banking",
+  consulting: "consulting",
+  data: "data science",
+  design: "product design",
+  finance: "finance",
+  marketing: "marketing",
+  research: "research",
+  vc: "venture capital",
+  ops: "operations",
+  quant: "quant"
+};
+var IRREGULAR = {
+  is: "are",
+  was: "were",
+  has: "have",
+  does: "do",
+  "isn't": "aren't",
+  "wasn't": "weren't",
+  "hasn't": "haven't",
+  "doesn't": "don't"
+};
+for (const table of [SCHOOL_SHORT, FUNCTION_LABEL, IRREGULAR]) Object.setPrototypeOf(table, null);
 
 // packages/core/src/email/when.ts
 var ZONE_ABBR = {
@@ -4690,6 +4820,7 @@ function extractTimes(text3, reference, opts = {}) {
   }
   return out.sort((a, b) => a.startIso.localeCompare(b.startIso));
 }
+for (const table of [ZONE_ABBR, ZONE_NAME, CITY_ZONE]) Object.setPrototypeOf(table, null);
 
 // packages/core/src/text/email.ts
 var BULK_LOCAL = /^(no[-_.]?reply|do[-_.]?not[-_.]?reply|donotreply|invitations?|notify|notifications?|newsletters?|mailer|mailer[-_.]daemon|postmaster|bounces?|alerts?|updates?|news|digest|marketing|billing|invoices?|receipts?|dse(_\w+)?|automated|system|calendar|no[-_.]?reply[-_.+].*|.*[-_.+]no[-_.]?reply|.*[-_.]notifications?|.*[-_.]alerts?)$/i;
@@ -4876,6 +5007,90 @@ function parseAddress(raw) {
   }
   return { email: normalizeEmail(s.replace(/^mailto:/i, "")) };
 }
+var ENTITIES = {
+  nbsp: " ",
+  amp: "&",
+  lt: "<",
+  gt: ">",
+  quot: '"',
+  apos: "'",
+  rsquo: "’",
+  lsquo: "‘",
+  rdquo: "”",
+  ldquo: "“",
+  ndash: "–",
+  mdash: "—",
+  hellip: "...",
+  bull: "•",
+  middot: "·",
+  copy: "©"
+};
+var MORE_ENTITIES = {
+  szlig: "ß",
+  aelig: "æ",
+  AElig: "Æ",
+  oelig: "œ",
+  OElig: "Œ",
+  oslash: "ø",
+  Oslash: "Ø",
+  eth: "ð",
+  ETH: "Ð",
+  thorn: "þ",
+  THORN: "Þ",
+  euro: "€",
+  pound: "£",
+  yen: "¥",
+  cent: "¢",
+  sect: "§",
+  para: "¶",
+  deg: "°",
+  plusmn: "±",
+  times: "×",
+  divide: "÷",
+  frac12: "½",
+  frac14: "¼",
+  frac34: "¾",
+  laquo: "«",
+  raquo: "»",
+  lsaquo: "‹",
+  rsaquo: "›",
+  sbquo: "‚",
+  bdquo: "„",
+  iexcl: "¡",
+  iquest: "¿",
+  trade: "™",
+  reg: "®",
+  dagger: "†",
+  Dagger: "‡",
+  prime: "′",
+  Prime: "″",
+  rarr: "→",
+  larr: "←",
+  ensp: " ",
+  emsp: " ",
+  thinsp: " ",
+  zwnj: "",
+  zwj: "",
+  shy: "",
+  lrm: "",
+  rlm: "",
+  ordf: "ª",
+  ordm: "º",
+  micro: "µ",
+  sup1: "¹",
+  sup2: "²",
+  sup3: "³"
+};
+var MARKS = {
+  acute: "́",
+  grave: "̀",
+  circ: "̂",
+  uml: "̈",
+  tilde: "̃",
+  ring: "̊",
+  cedil: "̧",
+  caron: "̌"
+};
 var QUOTE_MARKERS = [
   { re: /^On\s[^\n]{5,200}(?:\n[^\n]{0,200}){0,2}?\s*wrote:\s*$/m, needsDateOrAddress: true },
   { re: /^-{2,}\s*Original Message\s*-{2,}/im },
@@ -5047,6 +5262,7 @@ function parseTitleCompany(lines, name) {
 function wordCount(s) {
   return s.trim() ? s.trim().split(/\s+/).length : 0;
 }
+for (const table of [ENTITIES, MORE_ENTITIES, MARKS]) Object.setPrototypeOf(table, null);
 
 // packages/core/src/style/card.ts
 function defaultStyleCard(preset, firstName) {
@@ -5383,8 +5599,31 @@ var BANNED_SUBJECT_PATTERNS = [
   /\bjob\b/i,
   /\bopportunit/i
 ];
+var ROLE_VERBS = {
+  work: ["works", "working"],
+  cover: ["covers", "covering"],
+  trade: ["trades", "trading"],
+  focus: ["focuses", "focusing"],
+  invest: ["invests", "investing"],
+  advise: ["advises", "advising"],
+  build: ["builds", "building"],
+  support: ["supports", "supporting"],
+  lead: ["leads", "leading"],
+  run: ["runs", "running"],
+  manage: ["manages", "managing"],
+  own: ["owns", "owning"],
+  started: ["started"],
+  built: ["built"],
+  founded: ["founded"],
+  led: ["led"]
+};
 var WHY_THEM = "Why them";
 var WHY_THEM_GAP = new RegExp(`\\[${WHY_THEM}:[^\\]]*\\]`);
+var SCHOOL_DEMONYM = {
+  Cornell: "Cornellian",
+  Princeton: "Princetonian",
+  Harvard: "Harvard alum"
+};
 function wordsIn(body2) {
   const lines = body2.split("\n").map((l) => l.trim()).filter(Boolean);
   if (lines.length) {
@@ -5654,6 +5893,7 @@ ${i.user.firstName}`;
     variant: null
   };
 }
+for (const table of [ROLE_VERBS, SCHOOL_DEMONYM]) Object.setPrototypeOf(table, null);
 
 // packages/core/src/drafts/validate.ts
 var NEED_DETAIL = {
@@ -5918,6 +6158,7 @@ ${d.bodyShort ?? ""}`.replace(/\[[^\]]*\]/g, " "),
     });
   return issues;
 }
+for (const table of [NEED_DETAIL]) Object.setPrototypeOf(table, null);
 
 // packages/core/src/email/nextAction.ts
 var REPLY_NEXT_ACTION = {
@@ -6119,6 +6360,8 @@ var POSTPONE_LATER = new RegExp(
   `\\bpostpon\\w*\\b[^.?!]{0,30}?\\b(?:until|till|to|into)\\s+${LATER_WHEN}`,
   "i"
 );
+var SEASON_MONTH = { spring: 3, summer: 6, fall: 9, autumn: 9, winter: 12 };
+for (const table of [SEASON_MONTH]) Object.setPrototypeOf(table, null);
 
 // packages/core/src/safety/rules.ts
 function messageHash(m) {
@@ -9596,6 +9839,93 @@ var CJK_INDEX_ALPHABET = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqr
 // packages/core/src/entity/translit.ts
 var digit = new Map([...CJK_INDEX_ALPHABET].map((c, i) => [c, i]));
 
+// packages/core/src/entity/names.ts
+var EAST_ASIAN_SURNAMES = {
+  // Korean (Revised Romanization → common spellings)
+  gim: ["kim"],
+  i: ["lee", "yi", "rhee", "li", "rhie"],
+  bag: ["park", "pak", "bak", "bahk"],
+  bak: ["park", "pak"],
+  choe: ["choi", "choy", "chey"],
+  jeong: ["jung", "chung", "jeung", "cheong"],
+  jo: ["cho", "joe"],
+  gang: ["kang"],
+  yun: ["yoon", "youn"],
+  jang: ["chang"],
+  im: ["lim", "yim", "rim"],
+  sin: ["shin", "sheen"],
+  o: ["oh"],
+  seo: ["suh", "seoh", "so"],
+  gwon: ["kwon"],
+  an: ["ahn"],
+  yu: ["yoo", "you", "ryu", "yoo"],
+  jeon: ["jun", "chun", "chon"],
+  go: ["ko", "koh"],
+  mun: ["moon"],
+  son: ["sohn"],
+  baeg: ["baek", "paik", "baik", "back"],
+  heo: ["huh", "hur", "her"],
+  sim: ["shim"],
+  no: ["noh", "roh"],
+  gu: ["koo", "ku"],
+  gwag: ["kwak"],
+  seong: ["sung"],
+  ju: ["joo", "chu"],
+  u: ["woo", "wu"],
+  ryu: ["ryu", "yoo", "yu"],
+  jin: ["chin"],
+  gil: ["kil"],
+  eom: ["um", "uhm"],
+  hyeon: ["hyun"],
+  byeon: ["byun"],
+  gong: ["kong"],
+  // Chinese (pinyin → Cantonese, Wade-Giles and other common spellings)
+  chen: ["chan", "tan", "chin"],
+  zhang: ["chang", "cheung", "cheong", "teo"],
+  huang: ["wong", "hwang", "ng", "ooi"],
+  wang: ["wong", "ong"],
+  li: ["lee", "lei", "lai", "ly"],
+  zhou: ["chow", "chou", "chau", "chew"],
+  liu: ["lau", "lew", "lowe", "liew"],
+  wu: ["ng", "woo", "goh", "ong"],
+  he: ["ho", "hoh", "hor"],
+  lin: ["lam", "lim", "ling"],
+  xu: ["hsu", "tsui", "hui", "koh"],
+  zheng: ["cheng", "chang", "tay", "teh"],
+  guo: ["kwok", "kuo", "kok", "quek"],
+  xie: ["tse", "hsieh", "chia", "seah"],
+  cai: ["tsai", "choi", "chua", "tsoi"],
+  yang: ["yeung", "yong", "yeo"],
+  liang: ["leung", "liong", "neo"],
+  luo: ["law", "lo", "loh"],
+  zhu: ["chu", "chew", "choo", "gee"],
+  hu: ["woo", "hoo", "oh"],
+  gao: ["ko", "kao", "koh"],
+  ye: ["yip", "yeh", "yap"],
+  deng: ["tang", "teng"],
+  zeng: ["tsang", "tseng", "chan"],
+  peng: ["pang", "phang"],
+  cao: ["tsao", "cho", "tso"],
+  jiang: ["chiang", "kong", "keung"],
+  su: ["so", "soh"],
+  lu: ["lo", "lui", "loo", "lou"],
+  xiao: ["siu", "hsiao", "seow"],
+  qiu: ["yau", "chiu", "khoo"],
+  feng: ["fung", "foong"],
+  tang: ["tong", "teng"],
+  du: ["to", "tu", "doo"],
+  shen: ["shum", "sham", "sim"],
+  zhao: ["chiu", "chao", "chew"],
+  sun: ["suen", "soon"],
+  han: ["hon"],
+  ma: ["mah"],
+  song: ["sung"],
+  wei: ["ngai"],
+  ou: ["au", "ow"],
+  ouyang: ["auyeung", "auyang", "owyang"]
+};
+for (const table of [EAST_ASIAN_SURNAMES]) Object.setPrototypeOf(table, null);
+
 // packages/core/src/entity/resolve.ts
 function normalizeEmailForMatch(raw) {
   return normalizeEmail(raw);
@@ -11655,6 +11985,7 @@ async function setAutopilotMode(db2, userId, req) {
             ${{ level, mode: req.mode }}::jsonb)`;
   return { mode: req.mode, goalId: req.goalId ?? null };
 }
+for (const table of [HOLD_REASONS]) Object.setPrototypeOf(table, null);
 
 // supabase/functions/orbit-api/routes/autopilot.ts
 async function mode(ctx) {
@@ -11718,6 +12049,7 @@ var FUNCTION_LABELS = {
   ops: "Operations"
 };
 var FUNCTION_CODES = Object.keys(FUNCTION_LABELS);
+for (const table of [FUNCTION_LABELS]) Object.setPrototypeOf(table, null);
 
 // packages/core/src/pipeline/transitions.ts
 var ACTIVE_STAGES = [
@@ -11864,6 +12196,24 @@ function thankYouDue(chat, now) {
   if (chat.lastOutboundAt && new Date(chat.lastOutboundAt).getTime() > completed) return false;
   return true;
 }
+var TOUCH_WORDS = {
+  meeting: "met",
+  note: "met",
+  email_in: "emailed",
+  email_out: "emailed",
+  linkedin_in: "messaged on LinkedIn",
+  linkedin_out: "messaged on LinkedIn",
+  text_in: "texted",
+  text_out: "texted",
+  linkedin_connected: "connected on LinkedIn",
+  linkedin_engaged: "engaged on LinkedIn",
+  linkedin_comment_in: "were in touch on LinkedIn",
+  linkedin_comment_out: "commented on their LinkedIn posts",
+  linkedin_reaction_in: "engaged on LinkedIn",
+  manual_log: "were in touch",
+  email_cc: "were on the same email thread",
+  intro_observed: "were in touch"
+};
 var HARD_URGENT = ["schedule_confirm", "thank_you", "prep_brief", "confirm_stage"];
 var QUIET_DAY_KINDS = [
   ...HARD_URGENT,
@@ -11871,6 +12221,7 @@ var QUIET_DAY_KINDS = [
   "action_item_reminder",
   "warm_up_engage"
 ];
+for (const table of [TOUCH_WORDS]) Object.setPrototypeOf(table, null);
 
 // packages/core/src/pipeline/cadence.ts
 var DAY4 = 864e5;
@@ -12281,6 +12632,7 @@ var RAPPORT_LLM_GUIDE = `rapport: how the sender feels about the student, separa
 - familiarity: stranger, professional, friendly, or friend, from how they write to the student.
 - effort 0..2: 0 a one-liner, 1 a normal reply, 2 a long, thoughtful reply.
 - cues: any of ${RAPPORT_CUES.join(", ")} that apply.`;
+for (const table of [FUNCTION_CLASSES]) Object.setPrototypeOf(table, null);
 
 // packages/core/src/scoring/strength.ts
 var ENGAGEMENT = /* @__PURE__ */ new Set([
@@ -12706,6 +13058,7 @@ add("1001-5000", [
 ]);
 add("501-1000", ["Vercel", "Retool", "Rippling", "Mercury", "Jump Trading", "Optiver", "Five Rings"]);
 add("201-500", ["Linear", "Sequoia Capital", "Andreessen Horowitz", "a16z", "Benchmark", "Accel"]);
+for (const table of [KNOWN_SIZES]) Object.setPrototypeOf(table, null);
 
 // packages/core/src/graph/titles.ts
 var C_LEVEL = /\b(ceo|cfo|coo|cto|cmo|cpo|cio|ciso|chief|president|partner|managing director|founder|co-founder|cofounder)\b/i;
@@ -13588,6 +13941,94 @@ function rankCompanyTargets(input) {
   return chosen;
 }
 
+// packages/core/src/recommend/title.ts
+var FUNCTION_TITLE = {
+  swe: /\b(software|engineer|developer|swe|sde|backend|frontend|full[- ]?stack|ml engineer|infrastructure|platform)\b/i,
+  pm: /\b(product manager|product lead|\bpm\b|head of product|product owner|associate product)\b/i,
+  ib: /\b(investment bank(ing|er)?|m&a|mergers|capital markets|leveraged finance|ecm|dcm|restructuring)\b/i,
+  consulting: /\b(consult(ant|ing)?|strategy|bain|mckinsey|bcg|boston consulting|deloitte|accenture|oliver wyman|kearney|engagement manager)\b/i,
+  data: /\b(data (scientist|analyst|engineer)|analytics|machine learning|ml|ai research|quant)\b/i,
+  design: /\b(designer|design lead|ux|product design|ui)\b/i,
+  finance: /\b(finance|fp&a|treasury|controller|accounting|private equity|hedge fund|asset management|wealth|credit|lending|underwriting)\b/i,
+  marketing: /\b(marketing|growth|brand|content|communications|demand gen)\b/i,
+  research: /\b(research|scientist|lab|phd|postdoc)\b/i,
+  vc: /\b(venture|vc|investor|principal|partner)\b/i,
+  ops: /\b(operations|ops|chief of staff|bizops|strategy & operations)\b/i
+};
+var FUNCTION_SEARCH_TITLE = {
+  swe: "Software Engineer",
+  pm: "Product Manager",
+  ib: "Investment Banking Analyst",
+  consulting: "Consultant",
+  data: "Data Scientist",
+  design: "Product Designer",
+  finance: "Financial Analyst",
+  marketing: "Marketing Manager",
+  research: "Research Scientist",
+  vc: "Venture Capital Investor",
+  ops: "Operations Associate"
+};
+var WORD_FORM = {
+  engineering: "engineer",
+  engineers: "engineer",
+  consulting: "consultant",
+  consultants: "consultant",
+  banking: "banker",
+  bank: "banker",
+  bankers: "banker",
+  management: "manager",
+  managers: "manager",
+  managing: "managing",
+  science: "scientist",
+  sciences: "scientist",
+  analytics: "analyst",
+  analysis: "analyst",
+  analysts: "analyst",
+  designer: "design",
+  designers: "design",
+  designing: "design",
+  marketer: "marketing",
+  researcher: "research",
+  researchers: "research",
+  strategist: "strategy",
+  strategic: "strategy",
+  financial: "finance",
+  trader: "trading",
+  traders: "trading",
+  products: "product",
+  developers: "developer",
+  development: "development",
+  investments: "investment",
+  investing: "investment",
+  operation: "operations",
+  internship: "intern",
+  interns: "intern",
+  programs: "program",
+  programme: "program",
+  technologies: "technology",
+  technical: "technology",
+  sales: "sales"
+};
+var NEAR = {
+  ml: ["ai", "data"],
+  ai: ["ml"],
+  ux: ["design", "ui"],
+  ui: ["design", "ux"],
+  design: ["ux", "ui"],
+  developer: ["engineer"],
+  engineer: ["developer"],
+  frontend: ["fullstack"],
+  backend: ["fullstack", "infrastructure", "platform"],
+  fullstack: ["frontend", "backend"],
+  investment: ["banker", "investor"],
+  investor: ["investment", "venture"],
+  venture: ["investor"],
+  strategy: ["consultant", "operations"],
+  operations: ["strategy"]
+};
+for (const table of [FUNCTION_TITLE, FUNCTION_SEARCH_TITLE, WORD_FORM, NEAR])
+  Object.setPrototypeOf(table, null);
+
 // packages/core/src/recommend/wantToMeet.ts
 var ROLES = [
   [/\b(co-?)?founders?\b/, "Founder"],
@@ -13618,6 +14059,9 @@ var STOP = new Set(
 );
 
 // packages/core/src/recommend/score.ts
+var FUNCTION_HINT = {
+  ib: /\b(analyst|associate|banker)\b/i
+};
 function responsePrior(p, user) {
   let z9 = -0.4;
   if (p.isAlumni) z9 += 0.8;
@@ -13631,6 +14075,7 @@ function responsePrior(p, user) {
   if (p.linkedinConnectedOn) z9 += 0.2;
   return 1 / (1 + Math.exp(-z9));
 }
+for (const table of [FUNCTION_HINT]) Object.setPrototypeOf(table, null);
 
 // supabase/functions/_shared/friends/shares.ts
 function emailHash(email2) {
@@ -13921,6 +14366,55 @@ function orgKey(raw) {
   const key = parts.join(" ");
   return NO_COMPANY.has(key) ? "" : key;
 }
+var PARENTS = {
+  instagram: "meta",
+  whatsapp: "meta",
+  oculus: "meta",
+  "reality labs": "meta",
+  youtube: "google",
+  deepmind: "google",
+  "google deepmind": "google",
+  waymo: "google",
+  verily: "google",
+  fitbit: "google",
+  alphabet: "google",
+  slack: "salesforce",
+  tableau: "salesforce",
+  mulesoft: "salesforce",
+  linkedin: "microsoft",
+  github: "microsoft",
+  "microsoft research": "microsoft",
+  "cash app": "block",
+  square: "block",
+  tidal: "block",
+  "amazon web services": "amazon",
+  twitch: "amazon",
+  "whole foods market": "amazon",
+  zappos: "amazon",
+  ring: "amazon",
+  "beats by dre": "apple",
+  tiktok: "bytedance",
+  "merrill lynch": "bank of america",
+  merrill: "bank of america",
+  "bofa securities": "bank of america",
+  "citadel securities": "citadel",
+  "nvidia research": "nvidia",
+  "ibm research": "ibm",
+  "red hat": "ibm",
+  aws: "amazon",
+  gs: "goldman sachs",
+  "marcus by goldman sachs": "goldman sachs",
+  "mckinsey digital": "mckinsey",
+  quantumblack: "mckinsey",
+  "deloitte consulting": "deloitte",
+  "deloitte digital": "deloitte",
+  "pwc strategy&": "pwc",
+  "strategy&": "pwc",
+  "ey parthenon": "ey",
+  kearney: "kearney",
+  "a16z crypto": "andreessen horowitz",
+  a16z: "andreessen horowitz"
+};
 var KIND_OF = {};
 var KIND_LISTS = [
   [
@@ -13973,6 +14467,83 @@ var KIND_LISTS = [
   ]
 ];
 for (const [kind, names] of KIND_LISTS) for (const n of names) KIND_OF[orgKey(n)] ??= kind;
+var INDUSTRY_WORDS = {
+  fintech: [
+    "fintech",
+    "payments",
+    "banking",
+    "lending",
+    "insurance",
+    "insurtech",
+    "neobank",
+    "credit",
+    "finance"
+  ],
+  ai: [
+    "ai",
+    "artificial intelligence",
+    "machine learning",
+    "ml",
+    "llm",
+    "generative ai",
+    "agents",
+    "ai agents",
+    "nlp",
+    "computer vision"
+  ],
+  climate: [
+    "climate",
+    "climate tech",
+    "clean energy",
+    "renewable",
+    "solar",
+    "carbon",
+    "energy",
+    "sustainability",
+    "battery",
+    "ev"
+  ],
+  health: [
+    "health",
+    "healthcare",
+    "health tech",
+    "digital health",
+    "medical",
+    "medtech",
+    "telehealth",
+    "clinic"
+  ],
+  bio: ["biotech", "bio", "biology", "drug discovery", "therapeutics", "genomics", "life sciences"],
+  crypto: ["crypto", "web3", "blockchain", "defi", "ethereum", "bitcoin", "solana"],
+  devtools: [
+    "developer tools",
+    "devtools",
+    "infrastructure",
+    "api",
+    "open source",
+    "devops",
+    "observability"
+  ],
+  edtech: ["edtech", "education", "learning", "tutoring"],
+  consumer: ["consumer", "social", "marketplace", "e commerce", "ecommerce", "retail", "d2c"],
+  enterprise: ["b2b", "saas", "enterprise", "productivity", "sales", "hr tech", "legal tech"],
+  hardware: [
+    "hardware",
+    "robotics",
+    "hard tech",
+    "manufacturing",
+    "semiconductors",
+    "drones",
+    "aerospace",
+    "space"
+  ],
+  security: ["security", "cybersecurity", "infosec", "identity", "fraud"],
+  defense: ["defense", "defence", "national security", "govtech", "dual use"],
+  gaming: ["gaming", "games", "esports"],
+  realestate: ["real estate", "proptech", "construction"],
+  media: ["media", "creator economy", "content", "entertainment", "music"]
+};
+for (const table of [PARENTS, KIND_OF, INDUSTRY_WORDS]) Object.setPrototypeOf(table, null);
 
 // packages/core/src/search/reading.ts
 var READING_SIGNALS = [
@@ -18548,6 +19119,7 @@ function withDeadline(work, ms) {
   });
   return Promise.race([work.catch(() => void 0), stop]).finally(() => clearTimeout(timer));
 }
+for (const table of [PATTERNS]) Object.setPrototypeOf(table, null);
 
 // supabase/functions/_shared/sourcing/lookup.ts
 var LOOKUP_TTL_MS = 30 * 24 * 3600 * 1e3;
@@ -23593,7 +24165,7 @@ var COMMON_WORD_ORGS = new Set(
 var PAGE_TEXT_CHARS = 9e3;
 var MAX_BYTES = 15e5;
 var UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0 Safari/537.36";
-var ENTITIES = {
+var ENTITIES2 = {
   amp: "&",
   lt: "<",
   gt: ">",
@@ -23609,7 +24181,7 @@ var ENTITIES = {
   hellip: "…"
 };
 function decodeEntities2(s) {
-  return s.replace(/&#(\d+);/g, (_, n) => String.fromCodePoint(Number(n))).replace(/&#x([0-9a-f]+);/gi, (_, n) => String.fromCodePoint(Number.parseInt(n, 16))).replace(/&([a-z]+);/gi, (m, n) => ENTITIES[n.toLowerCase()] ?? m);
+  return s.replace(/&#(\d+);/g, (_, n) => String.fromCodePoint(Number(n))).replace(/&#x([0-9a-f]+);/gi, (_, n) => String.fromCodePoint(Number.parseInt(n, 16))).replace(/&([a-z]+);/gi, (m, n) => ENTITIES2[n.toLowerCase()] ?? m);
 }
 function meta(html, key) {
   const re = new RegExp(
@@ -23719,6 +24291,7 @@ async function fetchPage(url, opts = {}) {
     clearTimeout(timer);
   }
 }
+for (const table of [ENTITIES2]) Object.setPrototypeOf(table, null);
 
 // supabase/functions/_shared/research/investigate.ts
 var extractSchema = z.object({
@@ -24634,6 +25207,10 @@ shred sieve biosciences orca spline uplink singularity andi dorian tenet chute b
 bonfire dynamo stacker arcane impractical sherpa elevate pantheon gauss rubric operand overheard
 `;
 var COMMON_WORDS = new Set(WORDS.split(/\s+/).filter(Boolean));
+
+// packages/core/src/search/ycoss.ts
+var ENTITIES3 = { quot: '"', amp: "&", apos: "'", lt: "<", gt: ">", nbsp: " " };
+for (const table of [ENTITIES3]) Object.setPrototypeOf(table, null);
 
 // supabase/functions/_shared/search/companyFacts.ts
 async function loadCompanyFacts(db2, since2) {

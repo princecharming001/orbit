@@ -604,3 +604,6 @@ export function industryTerms(words: readonly string[]): string[] {
   }
   return [...out];
 }
+
+// own keys only: a word like "constructor" or "toString" in someone's data must not find a built-in
+for (const table of [PARENTS, KIND_OF, INDUSTRY_WORDS]) Object.setPrototypeOf(table, null);

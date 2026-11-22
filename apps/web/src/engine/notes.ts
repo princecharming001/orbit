@@ -1161,3 +1161,6 @@ export function parseDueHint(hint: string | undefined, from: Date, timeZone = 'U
   else addDays(7);
   return zonedInstant(y, m, day, hour, timeZone);
 }
+
+// own keys only: a word like "constructor" or "toString" in someone's data must not find a built-in
+for (const table of [MONTH_INDEX, NUMBER_WORDS]) Object.setPrototypeOf(table, null);

@@ -233,3 +233,6 @@ function lintPosition(p: PositionSpec, i: number, notes: string[]): PositionSpec
   if (!out.role && !out.company) notes.push(`position ${i + 1} had nothing to check`);
   return out;
 }
+
+// own keys only: a word like "constructor" or "toString" in someone's data must not find a built-in
+for (const table of [FAMILY_SYNONYMS, SENIORITY_SYNONYMS]) Object.setPrototypeOf(table, null);

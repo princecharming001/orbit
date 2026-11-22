@@ -168,3 +168,6 @@ export async function pollClaudeBatches(
 }
 
 const reasonOf = (o: BatchOutcome) => (o.ok ? undefined : `${o.reason}${o.detail ? `: ${o.detail}` : ''}`);
+
+// own keys only: a word like "constructor" or "toString" in someone's data must not find a built-in
+for (const table of [BATCH_CONTINUATIONS]) Object.setPrototypeOf(table, null);

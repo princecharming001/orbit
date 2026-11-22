@@ -282,3 +282,6 @@ export async function judge(
   await Promise.all(Array.from({ length: Math.min(JUDGE_PARALLEL, batches.length) }, worker));
   return { answers, judged: items.length - failed, failed };
 }
+
+// own keys only: a word like "constructor" or "toString" in someone's data must not find a built-in
+for (const table of [SIGNAL_WORDS]) Object.setPrototypeOf(table, null);

@@ -485,3 +485,7 @@ export function searchTitleFor(role: string): string {
     .replace(/\bbanking\b(?=\s*$)/i, 'Banking Analyst')
     .replace(/^(\w)/, (c) => c.toUpperCase());
 }
+
+// own keys only: a word like "constructor" or "toString" in someone's data must not find a built-in
+for (const table of [FUNCTION_TITLE, FUNCTION_SEARCH_TITLE, WORD_FORM, NEAR])
+  Object.setPrototypeOf(table, null);

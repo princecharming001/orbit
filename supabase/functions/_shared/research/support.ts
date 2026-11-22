@@ -188,3 +188,6 @@ export async function supportCheck(
   const r = applyVerdicts(d, located, verdicts, opts.fallbackWho);
   return { ...r, checked: true, costUsd: res.costUsd };
 }
+
+// own keys only: a word like "constructor" or "toString" in someone's data must not find a built-in
+for (const table of [KIND]) Object.setPrototypeOf(table, null);

@@ -121,3 +121,6 @@ export function parseConnectionsCsv(text: string): { rows: LinkedInConnectionRow
   }
   return { rows, skipped };
 }
+
+// own keys only: a word like "constructor" or "toString" in someone's data must not find a built-in
+for (const table of [MONTHS]) Object.setPrototypeOf(table, null);

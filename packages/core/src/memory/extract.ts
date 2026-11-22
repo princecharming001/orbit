@@ -1027,3 +1027,6 @@ export function mayHoldFacts(text: string): boolean {
     return /\b(I|I'm|I've|I'd|my|me|we|we're|our)\b/i.test(c);
   });
 }
+
+// own keys only: a word like "constructor" or "toString" in someone's data must not find a built-in
+for (const table of [SEEK_WORDS]) Object.setPrototypeOf(table, null);

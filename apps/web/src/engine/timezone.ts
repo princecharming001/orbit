@@ -414,3 +414,6 @@ export function zoneFromLocation(location: string | undefined): string | undefin
 /** How many places the table knows. */
 export const KNOWN_PLACES =
   Object.keys(CITIES).length + Object.keys(STATES).length + Object.keys(COUNTRIES).length;
+
+// own keys only: a word like "constructor" or "toString" in someone's data must not find a built-in
+for (const table of [CITIES, STATES, COUNTRIES]) Object.setPrototypeOf(table, null);

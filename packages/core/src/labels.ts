@@ -168,3 +168,6 @@ export const TOUCHPOINT_LABELS: Record<TouchpointKind, string> = {
   manual_log: 'Logged by you',
   intro_observed: 'Introduction',
 };
+
+// own keys only: a word like "constructor" or "toString" in someone's data must not find a built-in
+for (const table of [FUNCTION_LABELS]) Object.setPrototypeOf(table, null);

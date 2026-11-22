@@ -418,6 +418,172 @@ function costUsd(model, u) {
 // packages/core/src/entity/resolve.ts
 import { getDomain, getDomainWithoutSuffix } from "npm:tldts@7.4.18";
 
+// packages/core/src/text/normalize.ts
+var LATIN_LETTERS = {
+  ø: "o",
+  Ø: "O",
+  ł: "l",
+  Ł: "L",
+  ß: "ss",
+  "ẞ": "SS",
+  æ: "ae",
+  Æ: "Ae",
+  œ: "oe",
+  Œ: "Oe",
+  đ: "d",
+  Đ: "D",
+  ð: "d",
+  Ð: "D",
+  þ: "th",
+  Þ: "Th",
+  ı: "i",
+  ħ: "h",
+  Ħ: "H",
+  ŧ: "t",
+  Ŧ: "T",
+  ŀ: "l",
+  Ŀ: "L",
+  ĸ: "q",
+  ŋ: "ng",
+  Ŋ: "Ng",
+  ſ: "s"
+};
+var NICKNAMES = {
+  bill: "william",
+  billy: "william",
+  will: "william",
+  willy: "william",
+  bob: "robert",
+  bobby: "robert",
+  rob: "robert",
+  robbie: "robert",
+  bert: "robert",
+  mike: "michael",
+  mikey: "michael",
+  mick: "michael",
+  jim: "james",
+  jimmy: "james",
+  dave: "david",
+  davey: "david",
+  dan: "daniel",
+  danny: "daniel",
+  matt: "matthew",
+  matty: "matthew",
+  topher: "christopher",
+  tom: "thomas",
+  tommy: "thomas",
+  joe: "joseph",
+  joey: "joseph",
+  jon: "jonathan",
+  johnny: "john",
+  nick: "nicholas",
+  nicky: "nicholas",
+  tony: "anthony",
+  ben: "benjamin",
+  benny: "benjamin",
+  andy: "andrew",
+  drew: "andrew",
+  ed: "edward",
+  eddie: "edward",
+  steve: "steven",
+  ken: "kenneth",
+  kenny: "kenneth",
+  josh: "joshua",
+  zach: "zachary",
+  zack: "zachary",
+  jeff: "jeffrey",
+  charlie: "charles",
+  chuck: "charles",
+  greg: "gregory",
+  jake: "jacob",
+  rick: "richard",
+  ricky: "richard",
+  rich: "richard",
+  tim: "timothy",
+  timmy: "timothy",
+  ron: "ronald",
+  don: "donald",
+  larry: "lawrence",
+  liz: "elizabeth",
+  lizzie: "elizabeth",
+  beth: "elizabeth",
+  betty: "elizabeth",
+  kate: "katherine",
+  katie: "katherine",
+  kathy: "katherine",
+  jen: "jennifer",
+  jenny: "jennifer",
+  jess: "jessica",
+  jessie: "jessica",
+  maggie: "margaret",
+  meg: "margaret",
+  peggy: "margaret",
+  sue: "susan",
+  susie: "susan",
+  abby: "abigail",
+  becky: "rebecca",
+  becca: "rebecca",
+  vicky: "victoria",
+  tori: "victoria",
+  mandy: "amanda",
+  patty: "patricia"
+};
+var AMBIGUOUS_NICKNAMES = {
+  alex: ["alexander", "alexandra", "alexis"],
+  sam: ["samuel", "samantha"],
+  chris: ["christopher", "christine", "christina"],
+  pat: ["patrick", "patricia"],
+  jamie: ["james"],
+  nat: ["natalie", "nathan", "nathaniel"],
+  nate: ["nathan", "nathaniel"],
+  ted: ["edward", "theodore"],
+  sasha: ["alexander", "alexandra"],
+  liam: ["william"],
+  john: ["jonathan"],
+  gail: ["abigail"],
+  eliza: ["elizabeth"],
+  max: ["maxwell", "maximilian"],
+  kat: ["katherine", "kathryn"],
+  lexi: ["alexandra", "alexis"],
+  frankie: ["frank", "francis", "francesca"]
+};
+var ORG_ALIASES = {
+  bcg: "boston consulting group",
+  "boston consulting group": "boston consulting group",
+  jpmorgan: "jpmorgan chase",
+  "jp morgan": "jpmorgan chase",
+  "j p morgan": "jpmorgan chase",
+  "jpmorgan chase": "jpmorgan chase",
+  "jp morgan chase": "jpmorgan chase",
+  "j p morgan chase": "jpmorgan chase",
+  jpmc: "jpmorgan chase",
+  chase: "jpmorgan chase",
+  pwc: "pwc",
+  pricewaterhousecoopers: "pwc",
+  "price waterhouse coopers": "pwc",
+  "pricewaterhouse coopers": "pwc",
+  ey: "ey",
+  "ernst & young": "ey",
+  "ernst and young": "ey",
+  aws: "amazon web services",
+  "amazon web services": "amazon web services",
+  gs: "goldman sachs",
+  goldman: "goldman sachs",
+  "goldman sachs": "goldman sachs",
+  facebook: "meta",
+  "meta platforms": "meta",
+  meta: "meta",
+  bofa: "bank of america",
+  "bank of america merrill lynch": "bank of america",
+  "bank of america": "bank of america",
+  citi: "citi",
+  citigroup: "citi",
+  citibank: "citi",
+  "morgan stanley": "morgan stanley"
+};
+for (const table of [LATIN_LETTERS, NICKNAMES, AMBIGUOUS_NICKNAMES, ORG_ALIASES])
+  Object.setPrototypeOf(table, null);
+
 // packages/core/src/entity/nicknames.data.ts
 var NICKNAME_DATA = [
   "aaron:erin ron ronnie",
@@ -1677,6 +1843,93 @@ var CJK_INDEX_ALPHABET = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqr
 
 // packages/core/src/entity/translit.ts
 var digit = new Map([...CJK_INDEX_ALPHABET].map((c, i) => [c, i]));
+
+// packages/core/src/entity/names.ts
+var EAST_ASIAN_SURNAMES = {
+  // Korean (Revised Romanization → common spellings)
+  gim: ["kim"],
+  i: ["lee", "yi", "rhee", "li", "rhie"],
+  bag: ["park", "pak", "bak", "bahk"],
+  bak: ["park", "pak"],
+  choe: ["choi", "choy", "chey"],
+  jeong: ["jung", "chung", "jeung", "cheong"],
+  jo: ["cho", "joe"],
+  gang: ["kang"],
+  yun: ["yoon", "youn"],
+  jang: ["chang"],
+  im: ["lim", "yim", "rim"],
+  sin: ["shin", "sheen"],
+  o: ["oh"],
+  seo: ["suh", "seoh", "so"],
+  gwon: ["kwon"],
+  an: ["ahn"],
+  yu: ["yoo", "you", "ryu", "yoo"],
+  jeon: ["jun", "chun", "chon"],
+  go: ["ko", "koh"],
+  mun: ["moon"],
+  son: ["sohn"],
+  baeg: ["baek", "paik", "baik", "back"],
+  heo: ["huh", "hur", "her"],
+  sim: ["shim"],
+  no: ["noh", "roh"],
+  gu: ["koo", "ku"],
+  gwag: ["kwak"],
+  seong: ["sung"],
+  ju: ["joo", "chu"],
+  u: ["woo", "wu"],
+  ryu: ["ryu", "yoo", "yu"],
+  jin: ["chin"],
+  gil: ["kil"],
+  eom: ["um", "uhm"],
+  hyeon: ["hyun"],
+  byeon: ["byun"],
+  gong: ["kong"],
+  // Chinese (pinyin → Cantonese, Wade-Giles and other common spellings)
+  chen: ["chan", "tan", "chin"],
+  zhang: ["chang", "cheung", "cheong", "teo"],
+  huang: ["wong", "hwang", "ng", "ooi"],
+  wang: ["wong", "ong"],
+  li: ["lee", "lei", "lai", "ly"],
+  zhou: ["chow", "chou", "chau", "chew"],
+  liu: ["lau", "lew", "lowe", "liew"],
+  wu: ["ng", "woo", "goh", "ong"],
+  he: ["ho", "hoh", "hor"],
+  lin: ["lam", "lim", "ling"],
+  xu: ["hsu", "tsui", "hui", "koh"],
+  zheng: ["cheng", "chang", "tay", "teh"],
+  guo: ["kwok", "kuo", "kok", "quek"],
+  xie: ["tse", "hsieh", "chia", "seah"],
+  cai: ["tsai", "choi", "chua", "tsoi"],
+  yang: ["yeung", "yong", "yeo"],
+  liang: ["leung", "liong", "neo"],
+  luo: ["law", "lo", "loh"],
+  zhu: ["chu", "chew", "choo", "gee"],
+  hu: ["woo", "hoo", "oh"],
+  gao: ["ko", "kao", "koh"],
+  ye: ["yip", "yeh", "yap"],
+  deng: ["tang", "teng"],
+  zeng: ["tsang", "tseng", "chan"],
+  peng: ["pang", "phang"],
+  cao: ["tsao", "cho", "tso"],
+  jiang: ["chiang", "kong", "keung"],
+  su: ["so", "soh"],
+  lu: ["lo", "lui", "loo", "lou"],
+  xiao: ["siu", "hsiao", "seow"],
+  qiu: ["yau", "chiu", "khoo"],
+  feng: ["fung", "foong"],
+  tang: ["tong", "teng"],
+  du: ["to", "tu", "doo"],
+  shen: ["shum", "sham", "sim"],
+  zhao: ["chiu", "chao", "chew"],
+  sun: ["suen", "soon"],
+  han: ["hon"],
+  ma: ["mah"],
+  song: ["sung"],
+  wei: ["ngai"],
+  ou: ["au", "ow"],
+  ouyang: ["auyeung", "auyang", "owyang"]
+};
+for (const table of [EAST_ASIAN_SURNAMES]) Object.setPrototypeOf(table, null);
 
 // packages/core/src/entity/resolve.ts
 var PERSONAL_EMAIL_DOMAINS = /* @__PURE__ */ new Set([
@@ -3161,7 +3414,7 @@ var COMMON_WORD_SCHOOLS = /* @__PURE__ */ new Set([
   "michigan",
   "mit"
 ]);
-var NICKNAMES = [
+var NICKNAMES2 = [
   ["alexander", "alex", "xander"],
   ["alexandra", "alex", "alexa", "sasha"],
   ["andrew", "andy", "drew"],
@@ -3264,7 +3517,7 @@ function mentionsSchool(raw, aliases) {
 function givenNames(first) {
   const f = norm(first);
   const out = /* @__PURE__ */ new Set([f]);
-  for (const row of NICKNAMES) if (row.includes(f)) for (const x of row) out.add(x);
+  for (const row of NICKNAMES2) if (row.includes(f)) for (const x of row) out.add(x);
   return [...out];
 }
 function cityOf(location) {
@@ -3614,6 +3867,7 @@ async function fetchPage(url2, opts = {}) {
     clearTimeout(timer);
   }
 }
+for (const table of [ENTITIES]) Object.setPrototypeOf(table, null);
 
 // supabase/functions/_shared/research/investigate.ts
 var EXTRACT_VERSION = "extract-v1";
@@ -4391,6 +4645,7 @@ async function supportCheck(claude, d, sources, opts) {
   const r = applyVerdicts(d, located, verdicts, opts.fallbackWho);
   return { ...r, checked: true, costUsd: res.costUsd };
 }
+for (const table of [KIND]) Object.setPrototypeOf(table, null);
 
 // supabase/functions/_shared/research/brief.ts
 var QUICK_CAP_USD = 0.3;

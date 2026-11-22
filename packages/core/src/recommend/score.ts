@@ -307,3 +307,6 @@ export function recommendPeople(inp: RecommendInput): Recommendation[] {
   }
   return chosen;
 }
+
+// own keys only: a word like "constructor" or "toString" in someone's data must not find a built-in
+for (const table of [FUNCTION_HINT]) Object.setPrototypeOf(table, null);

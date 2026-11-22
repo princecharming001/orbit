@@ -740,3 +740,6 @@ export function parseTitleCompany(lines: string[], name?: string): { title?: str
 export function wordCount(s: string): number {
   return s.trim() ? s.trim().split(/\s+/).length : 0;
 }
+
+// own keys only: a word like "constructor" or "toString" in someone's data must not find a built-in
+for (const table of [ENTITIES, MORE_ENTITIES, MARKS]) Object.setPrototypeOf(table, null);

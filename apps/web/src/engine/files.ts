@@ -142,3 +142,6 @@ export function sizeLabel(bytes: number): string {
     ? `${Math.max(1, Math.round(bytes / 1024))} KB`
     : `${(bytes / 1024 / 1024).toFixed(1)} MB`;
 }
+
+// own keys only: a word like "constructor" or "toString" in someone's data must not find a built-in
+for (const table of [MIME_BY_EXT]) Object.setPrototypeOf(table, null);

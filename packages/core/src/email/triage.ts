@@ -848,3 +848,6 @@ export function heuristicSignal(
     return { signal: 'question', confidence: 0.6, extraction };
   return { signal: 'reply_neutral', confidence: 0.55, extraction };
 }
+
+// own keys only: a word like "constructor" or "toString" in someone's data must not find a built-in
+for (const table of [SEASON_MONTH]) Object.setPrototypeOf(table, null);

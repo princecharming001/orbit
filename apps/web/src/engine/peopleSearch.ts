@@ -776,3 +776,6 @@ export function resultsCsv(result: Pick<PeopleSearchResult, 'rows' | 'form'>): s
   );
   return [head.map(csvCell).join(','), ...lines].join('\n');
 }
+
+// own keys only: a word like "constructor" or "toString" in someone's data must not find a built-in
+for (const table of [BAND_LEVEL]) Object.setPrototypeOf(table, null);

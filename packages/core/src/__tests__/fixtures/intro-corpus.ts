@@ -30157,3 +30157,6 @@ export const INTRO_HOLDOUT: IntroCase[] = [
   ...ROUND_FOURTEEN,
   ...ROUND_FIFTEEN,
 ];
+
+// own keys only: a word like "constructor" or "toString" in someone's data must not find a built-in
+for (const table of [ROSTER]) Object.setPrototypeOf(table, null);

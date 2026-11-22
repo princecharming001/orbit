@@ -738,3 +738,6 @@ export async function autopilotBriefLine(userId: string, now = new Date()): Prom
     : await localAutopilotStatus({ id: userId }, now);
   return status ? autopilotLine(status) : undefined;
 }
+
+// own keys only: a word like "constructor" or "toString" in someone's data must not find a built-in
+for (const table of [PUSHBACK_WHAT]) Object.setPrototypeOf(table, null);

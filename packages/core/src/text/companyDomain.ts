@@ -790,3 +790,6 @@ export function companyInitials(name: string | undefined, max = 2): string {
     .map((w) => w[0]!.toUpperCase())
     .join('');
 }
+
+// own keys only: a word like "constructor" or "toString" in someone's data must not find a built-in
+for (const table of [KNOWN]) Object.setPrototypeOf(table, null);

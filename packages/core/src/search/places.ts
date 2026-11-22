@@ -238,3 +238,6 @@ export function regionCountries(name: string): string[] | undefined {
 function titleCase(s: string): string {
   return s.replace(/\b[a-z]/g, (c) => c.toUpperCase());
 }
+
+// own keys only: a word like "constructor" or "toString" in someone's data must not find a built-in
+for (const table of [COUNTRY_ALIASES, REGION_GROUPS]) Object.setPrototypeOf(table, null);

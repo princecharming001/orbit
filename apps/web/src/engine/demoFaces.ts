@@ -84,3 +84,6 @@ export function withDemoFaces<T extends { firstName?: string; photoUrl?: string 
   }
   return people;
 }
+
+// own keys only: a word like "constructor" or "toString" in someone's data must not find a built-in
+for (const table of [FACES]) Object.setPrototypeOf(table, null);

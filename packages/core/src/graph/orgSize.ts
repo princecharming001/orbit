@@ -188,3 +188,6 @@ export function sizeFactor(
   if (networkCount >= 12) return 0.6;
   return 0.5;
 }
+
+// own keys only: a word like "constructor" or "toString" in someone's data must not find a built-in
+for (const table of [KNOWN_SIZES]) Object.setPrototypeOf(table, null);

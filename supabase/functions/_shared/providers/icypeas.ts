@@ -144,3 +144,6 @@ export function createIcypeas(given: ProviderOptions): Icypeas {
     },
   };
 }
+
+// own keys only: a word like "constructor" or "toString" in someone's data must not find a built-in
+for (const table of [CERTAINTY_RANK]) Object.setPrototypeOf(table, null);

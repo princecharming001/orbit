@@ -612,3 +612,6 @@ export function resetLogoCache() {
     // nothing to do
   }
 }
+
+// own keys only: a word like "constructor" or "toString" in someone's data must not find a built-in
+for (const table of [BUNDLED]) Object.setPrototypeOf(table, null);

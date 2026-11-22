@@ -261,3 +261,6 @@ export function learnedNote(l: Learned): string | undefined {
     parts.push(`Filled in your profile's ${l.profile.map((f) => FIELD_WORDS[f] ?? f).join(' and ')}.`);
   return parts.length ? parts.join(' ') : undefined;
 }
+
+// own keys only: a word like "constructor" or "toString" in someone's data must not find a built-in
+for (const table of [FIELD_WORDS]) Object.setPrototypeOf(table, null);
