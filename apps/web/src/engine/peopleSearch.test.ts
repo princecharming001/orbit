@@ -446,7 +446,8 @@ describe('what goes to the outside search', () => {
       keywords: ['seed'],
     });
     expect(outsideFilters(f)).toEqual({
-      titles: ['partner', 'investor', 'principal', 'venture capital'],
+      // a title the search names is the one asked: the group's other words are not added to it
+      titles: ['partner'],
       organizations: ['Accel', 'Google'],
       // where they work now and where they ever worked are different questions
       currentOrganizations: ['Accel'],
@@ -457,6 +458,12 @@ describe('what goes to the outside search', () => {
       seniority: ['vp', 'c_suite'],
       needs: { role: 'must', locations: 'must', everOrganizations: 'must', keywords: 'must' },
     });
+    // only a kind of work, no title: its usual titles stand in
+    expect(outsideFilters(form({ families: ['investing'] })).titles).toEqual([
+      'investor',
+      'partner',
+      'principal',
+    ]);
     // what the student marked as nice to have only ranks on the server too
     const nice = outsideFilters({
       ...f,
@@ -760,7 +767,7 @@ describe('one run: the network and beyond, as one list', () => {
         query: 'seed investors in London',
         peopleOnly: true,
         criteria: [{ text: 'Works at a venture capital firm', need: 'must' }],
-        filters: expect.objectContaining({ titles: ['investor', 'partner', 'principal', 'venture capital'] }),
+        filters: expect.objectContaining({ titles: ['investor', 'partner', 'principal'] }),
       }),
     );
     // and the network search gets the same form as a spec, as the UI

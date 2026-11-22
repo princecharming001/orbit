@@ -730,7 +730,7 @@ export async function purposeOf(
 
 /** The words a title group stands for on the outside search, which matches titles by their words. */
 const FAMILY_TITLES: Partial<Record<TitleFamily, string[]>> = {
-  investing: ['investor', 'partner', 'principal', 'venture capital'],
+  investing: ['investor', 'partner', 'principal'],
   founder: ['founder', 'co-founder'],
   engineering: ['software engineer', 'engineer'],
   product: ['product manager'],
@@ -757,10 +757,12 @@ const SENIORITY_APOLLO: Partial<Record<SearchSeniority, string>> = {
   c_level: 'c_suite',
 };
 
-/** The form as the server's filters: titles with each group's words, both kinds of company, then the rest. */
+/** The form as the server's filters: the titles (or a group's words when none), both kinds of company, then the rest. */
 export function outsideFilters(form: SearchForm) {
   const x = form.filters;
-  const titles = clean([...x.titles, ...x.families.flatMap((k) => FAMILY_TITLES[k] ?? [])], 12);
+  // the titles the search names are the ones asked; a kind of work stands in only when no title is named (the
+  // server holds each person to these, so a wider list would let in people the student did not ask for)
+  const titles = clean(x.titles.length ? x.titles : x.families.flatMap((k) => FAMILY_TITLES[k] ?? []), 12);
   const seniority = x.seniority.map((s) => SENIORITY_APOLLO[s]).filter((s): s is string => !!s);
   return {
     titles,

@@ -11,7 +11,10 @@ import { INTERPRET_SYSTEM, interpretSchema } from '../engine/peopleSearch';
 
 type Node = Record<string, unknown>;
 const walk = (s: unknown, visit: (n: Node) => void): void => {
-  if (Array.isArray(s)) return s.forEach((x) => walk(x, visit));
+  if (Array.isArray(s)) {
+    for (const x of s) walk(x, visit);
+    return;
+  }
   if (!s || typeof s !== 'object') return;
   visit(s as Node);
   for (const v of Object.values(s as Node)) walk(v, visit);
