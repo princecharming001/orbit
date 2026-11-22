@@ -476,6 +476,21 @@ const ORG_ALIASES: Record<string, string> = {
   'morgan stanley': 'morgan stanley',
 };
 
+const PLACEHOLDER_COMPANY =
+  /\bstealth\b|^(?:a |an |my |the )?(?:new |early[- ]stage |ai |tech )*(?:startup|start-up|company|venture|project|business)s?$|^(?:various|multiple|several|many)\b|^(?:self[- ]?employed|freelanc\w*|independent(?: consultant| contractor)?|confidential|undisclosed|private|n\/?a|none|tbd|tba|unemployed|open to work|career break|sabbatical|student|retired)$/i;
+
+/**
+ * What people write where a company's name would go when they are not naming one: "Stealth AI Startup", "Various
+ * Companies", "Self-employed". Two people who both wrote it do not work at the same place, so it never joins them.
+ */
+export function isPlaceholderCompany(raw: string | undefined | null): boolean {
+  const t = (raw ?? '')
+    .replace(/\([^)]*\)/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  return !!t && PLACEHOLDER_COMPANY.test(t);
+}
+
 export function normalizeCompany(raw: string | undefined | null): string {
   if (!raw) return '';
   let s = stripDiacritics(raw)

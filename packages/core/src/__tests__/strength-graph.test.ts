@@ -11,7 +11,9 @@ import {
 import { countOutsideWedges, countOverlaps, largestGap, orbitLayout, ringRotation } from '../graph/layout';
 import { addEdge, bestPathsFrom, hopsToTarget, kShortestPaths, makeGraph, toReachPath } from '../graph/paths';
 import { computeStrength, interactionCount, isReciprocal, strengthTier } from '../scoring/strength';
+import { orgKey } from '../search/companies';
 import { endOfNextBusinessDay } from '../suggestions/rules';
+import { isPlaceholderCompany } from '../text/normalize';
 import type { Affiliation, Edge, Organization, Person, Touchpoint } from '../types';
 
 const tp = (kind: Touchpoint['kind'], daysAgo: number, weight: number): Touchpoint => ({
@@ -497,6 +499,55 @@ describe('inferEdges (GRL-09, GRL-10, GRL-16)', () => {
     expect(open.evidence.datesUnknown).toBe(true);
     expect(open.evidence.fromYear).toBeUndefined();
   });
+  it('people who both wrote "stealth" or "self-employed" where a company goes are not colleagues', () => {
+    for (const org of [
+      'Stealth AI Startup',
+      'Stealth Startup',
+      'Stealth',
+      'stealth (YC W26)',
+      'Self-employed',
+      'Freelance',
+      'Various Companies',
+      'Startup',
+    ]) {
+      const edges = infer([person('a', org), person('b', org), person('c', org)], []);
+      expect([
+        org,
+        edges.filter((e) => e.type === 'same_current_company' || e.type === 'co_tenure').length,
+      ]).toEqual([org, 0]);
+    }
+    // an org row whose name is a placeholder joins nobody either
+    const people = [person('a', 'Stealth AI Startup'), person('b', 'Stealth AI Startup')];
+    for (const p of people) p.currentOrganizationId = 'o9';
+    const orgs = [
+      {
+        id: 'o9',
+        name: 'Stealth AI Startup',
+        nameNormalized: 'stealth ai startup',
+        domains: [],
+      } as unknown as Organization,
+    ];
+    expect(infer(people, [], orgs).filter((e) => e.type === 'same_current_company')).toEqual([]);
+    // real companies with such a word in their name still do
+    for (const org of ['Startup Grind', 'Independent Sector', 'Student Loan Hero', 'Venture Forward'])
+      expect([
+        org,
+        infer([person('a', org), person('b', org)], []).filter((e) => e.type === 'same_current_company')
+          .length,
+      ]).toEqual([org, 1]);
+    for (const [name, placeholder] of [
+      ['Stealth AI Startup', true],
+      ['a startup', true],
+      ['N/A', true],
+      ['Stripe', false],
+      ['Constructor', false],
+      ['', false],
+    ] as const)
+      expect([name, isPlaceholderCompany(name)]).toEqual([name, placeholder]);
+    expect(orgKey('Stealth AI Startup')).toBe('');
+    expect(orgKey('Stealth Startup (YC W26)')).toBe('');
+  });
+
   it('groups "Stripe", "Stripe, Inc." and an org-linked Stripe together', () => {
     const people = [person('a', 'Stripe'), person('b', 'Stripe, Inc.'), person('c', 'STRIPE')];
     people[0]!.currentOrganizationId = 'o1';

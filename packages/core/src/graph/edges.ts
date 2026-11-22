@@ -1,4 +1,4 @@
-import { normalizeCompany } from '../text/normalize';
+import { isPlaceholderCompany, normalizeCompany } from '../text/normalize';
 import type { Affiliation, CalendarEvent, Edge, EmailThread, Organization, Person } from '../types';
 import { knownSizeBucket, sizeFactor } from './orgSize';
 import { functionOf, seniorityFit } from './titles';
@@ -138,6 +138,8 @@ export function inferEdges(input: EdgeInput): Edge[] {
       const org = a.organizationId ? input.organizations.get(a.organizationId) : undefined;
       const norm = org?.nameNormalized || normalizeCompany(a.nameRaw);
       if (!norm) continue;
+      // "Stealth AI Startup", "Self-employed": everyone who wrote it would be joined as colleagues, and they are not
+      if (a.kind === 'employment' && isPlaceholderCompany(org?.name ?? a.nameRaw)) continue;
       const key = `${a.kind}:${norm}`;
       const arr = groups.get(key) ?? [];
       arr.push({ personId: pid, aff: a });

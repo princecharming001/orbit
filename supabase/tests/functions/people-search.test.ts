@@ -18,7 +18,7 @@ import {
   readExaPerson,
 } from '../../functions/_shared/sourcing/people.ts';
 import { askedChecks, PEOPLE_RESULTS } from '../../functions/_shared/sourcing/search.ts';
-import { connectionsByOrg, orgBase, warmthOf } from '../../functions/_shared/sourcing/warmth.ts';
+import { connectionsByOrg, orgBase, realOrg, warmthOf } from '../../functions/_shared/sourcing/warmth.ts';
 import { needsOf } from '../../functions/orbit-api/routes/source.ts';
 import {
   ALL_KEYS,
@@ -366,6 +366,42 @@ describe('the way in to someone found', () => {
     expect(warmthOf(cand({ org: 'Nowhere Inc' }), { student, warm: [], connections, year: 2026 }).tier).toBe(
       5,
     );
+  });
+
+  it('a placeholder where a company would be is not a company: two people in "stealth" do not work together', () => {
+    const connections = connectionsByOrg([
+      { personId: 'p1', name: 'Kai Brandt', score: 67, org: 'Stealth AI Startup' },
+      { personId: 'p2', name: 'Lena Ortiz', score: 80, org: 'Self-employed' },
+      { personId: 'p3', name: 'Omar Said', score: 90, org: 'Various Companies' },
+    ]);
+    expect(connections.size).toBe(0);
+    const warm = [{ personId: 'p1', name: 'Kai Brandt', score: 67, org: 'Stealth AI Startup' }];
+    for (const org of [
+      'Stealth AI Startup',
+      'Stealth Startup',
+      'stealth',
+      'Self-employed',
+      'Various Companies',
+      'Startup',
+    ])
+      expect([
+        org,
+        warmthOf(cand({ title: 'Founder', org }), { student, warm, connections, year: 2026 }).tier,
+      ]).toEqual([org, 5]);
+    for (const [name, real] of [
+      ['Stealth AI Startup', false],
+      ['Stealth', false],
+      ['a startup', false],
+      ['Freelance', false],
+      ['N/A', false],
+      ['Stripe', true],
+      ['Startup Grind', true],
+      ['Venture Forward', true],
+      ['The Trade Desk', true],
+      ['Student Loan Hero', true],
+      ['Independent Sector', true],
+    ] as const)
+      expect([name, realOrg(name)]).toEqual([name, real]);
   });
 
   it('a close contact there comes first, and the sentence names the company as they write it', () => {

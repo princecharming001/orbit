@@ -153,7 +153,8 @@ const NO_COMPANY = new Set(
 /** The key two spellings of one company share: "Stripe, Inc." and "stripe" give "stripe"; "Notion Labs" gives "notion". */
 export function orgKey(raw: string | undefined | null): string {
   let k = normalizeCompany(raw);
-  if (!k || NO_COMPANY.has(k)) return '';
+  // "Stealth AI Startup", "stealth (YC W26)": a placeholder in any wording, never a company two people share
+  if (!k || NO_COMPANY.has(k) || /\bstealth\b/.test(k)) return '';
   k = k.replace(/\.(com|ai|io|co|app|dev|xyz|so|gg|org|net)$/, '');
   const parts = k.split(' ');
   while (parts.length > 1 && MORE_SUFFIXES.has(parts[parts.length - 1]!)) parts.pop();

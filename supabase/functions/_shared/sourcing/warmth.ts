@@ -188,6 +188,19 @@ const NOT_AN_ORG =
   /^(?:yc|y combinator)?\s*[wsfx]?\s*'?\d{2,4}$|^(?:yc|ycombinator)\b|backed$|^(?:jsv|ef)\b|^(?:stealth|stealth mode|self[- ]employed|freelance|home)$/i;
 
 /**
+ * What people write where a company's name would go when they are not naming one: "Stealth AI Startup", "Various
+ * Companies", "Self-employed". Two people who both wrote it do not work together, so it is never a company to match.
+ */
+const PLACEHOLDER_ORG =
+  /\bstealth\b|^(?:a |an |my |the )?(?:new |early[- ]stage |ai |tech )*(?:startup|start-up|company|venture|project|business)s?$|^(?:various|multiple|several|many)\b|^(?:self[- ]?employed|freelanc\w*|independent(?: consultant| contractor)?|confidential|undisclosed|private|n\/?a|none|tbd|tba|unemployed|open to work|career break|sabbatical|student|retired)$/i;
+
+/** A name that stands for a real company (not a placeholder such as "Stealth Startup"). */
+export function realOrg(name: string | undefined): boolean {
+  const t = (name ?? '').replace(/\s+/g, ' ').trim();
+  return t.length >= 2 && !PLACEHOLDER_ORG.test(t);
+}
+
+/**
  * The companies a messy LinkedIn org or headline names: "Stripe | TransferED Consultant | Berkeley Haas" → Stripe,
  * TransferED Consultant, Berkeley Haas; "Twitch (Amazon)" → Twitch, Amazon; "Intuit, ex-PayPal" → Intuit (an ex- is
  * where they were, not where they are); "SpaceX, Adobe" → both.
@@ -200,7 +213,13 @@ export function orgNames(raw: string | undefined): string[] {
       .replace(/[^\p{L}\p{N}&.' -]+/gu, ' ')
       .replace(/\s+/g, ' ')
       .trim();
-    if (t.length < 2 || t.length > 40 || NOT_AN_ORG.test(t) || /^(ex|former|prev|previously)\b/i.test(t))
+    if (
+      t.length < 2 ||
+      t.length > 40 ||
+      NOT_AN_ORG.test(t) ||
+      PLACEHOLDER_ORG.test(t) ||
+      /^(ex|former|prev|previously)\b/i.test(t)
+    )
       return;
     if (
       normOrg(t)

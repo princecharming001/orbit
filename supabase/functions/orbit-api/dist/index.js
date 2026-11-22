@@ -14443,7 +14443,7 @@ var NO_COMPANY = new Set(
 );
 function orgKey(raw) {
   let k = normalizeCompany(raw);
-  if (!k || NO_COMPANY.has(k)) return "";
+  if (!k || NO_COMPANY.has(k) || /\bstealth\b/.test(k)) return "";
   k = k.replace(/\.(com|ai|io|co|app|dev|xyz|so|gg|org|net)$/, "");
   const parts = k.split(" ");
   while (parts.length > 1 && MORE_SUFFIXES.has(parts[parts.length - 1])) parts.pop();
@@ -18855,12 +18855,13 @@ var ORG_QUALIFIERS = /* @__PURE__ */ new Set([
   "pay"
 ]);
 var NOT_AN_ORG = /^(?:yc|y combinator)?\s*[wsfx]?\s*'?\d{2,4}$|^(?:yc|ycombinator)\b|backed$|^(?:jsv|ef)\b|^(?:stealth|stealth mode|self[- ]employed|freelance|home)$/i;
+var PLACEHOLDER_ORG = /\bstealth\b|^(?:a |an |my |the )?(?:new |early[- ]stage |ai |tech )*(?:startup|start-up|company|venture|project|business)s?$|^(?:various|multiple|several|many)\b|^(?:self[- ]?employed|freelanc\w*|independent(?: consultant| contractor)?|confidential|undisclosed|private|n\/?a|none|tbd|tba|unemployed|open to work|career break|sabbatical|student|retired)$/i;
 function orgNames(raw) {
   if (!raw) return [];
   const out = [];
   const add4 = (x) => {
     const t = x.replace(/[^\p{L}\p{N}&.' -]+/gu, " ").replace(/\s+/g, " ").trim();
-    if (t.length < 2 || t.length > 40 || NOT_AN_ORG.test(t) || /^(ex|former|prev|previously)\b/i.test(t))
+    if (t.length < 2 || t.length > 40 || NOT_AN_ORG.test(t) || PLACEHOLDER_ORG.test(t) || /^(ex|former|prev|previously)\b/i.test(t))
       return;
     if (normOrg(t).split(" ").every((w) => ORG_QUALIFIERS.has(w)))
       return;
