@@ -11,6 +11,7 @@ import {
   useCallback,
   useContext,
   useEffect,
+  useId,
   useMemo,
   useRef,
   useState,
@@ -684,42 +685,83 @@ export function useDialog(open: boolean, onClose: () => void) {
   return ref;
 }
 
+/**
+ * A panel on the right edge, over the page: the thing a click was about, opened in place instead of on another page.
+ * Flat: one hairline on its edge, a dimmed page behind it. Full width on a phone. Escape, the close button and a
+ * click on the dimmed page close it; focus goes to its title and returns to what opened it.
+ */
 export function Drawer({
   open,
   onClose,
   title,
   children,
   width = 520,
+  footer,
+  testId,
 }: {
   open: boolean;
   onClose: () => void;
   title?: ReactNode;
   children: ReactNode;
   width?: number;
+  /** a quiet line pinned to the foot of the panel (a link to the full page) */
+  footer?: ReactNode;
+  /** names the panel for tests: `x`, and its parts `x-title`, `x-close`, `x-backdrop` */
+  testId?: string;
 }) {
   const ref = useDialog(open, onClose);
+  const titleId = useId();
   if (!open) return null;
-  return (
-    <div className="fixed inset-0 z-40">
-      <div className="absolute inset-0 bg-black/20" onClick={onClose} />
+  // drawn at the top of the page, like Modal: a page that animates in would pin a fixed layer to itself
+  return createPortal(
+    <div className="fixed inset-0 z-50">
+      <div
+        className="absolute inset-0 bg-black/20"
+        onClick={onClose}
+        aria-hidden
+        data-testid={testId && `${testId}-backdrop`}
+      />
       <aside
         ref={ref}
         tabIndex={-1}
-        className="absolute right-0 top-0 h-full bg-canvas border-l border-line shadow-xl overflow-y-auto scroll-thin fade-up focus:outline-none"
+        className="absolute right-0 top-0 h-full flex flex-col bg-canvas border-l border-line panel-in focus:outline-none"
         style={{ width: `min(${width}px, 100vw)` }}
         role="dialog"
         aria-modal="true"
-        aria-label={typeof title === 'string' ? title : undefined}
+        aria-labelledby={title ? titleId : undefined}
+        data-testid={testId}
       >
-        <div className="sticky top-0 bg-canvas/95 backdrop-blur border-b border-line px-5 h-14 flex items-center justify-between">
-          <div className="font-medium truncate">{title}</div>
-          <button onClick={onClose} className="p-1.5 rounded-md hover:bg-canvas-2" aria-label="Close">
+        <div className="shrink-0 border-b border-line pl-5 pr-3 h-14 flex items-center justify-between gap-3">
+          {/* focus lands on the title, so a screen reader says what opened; Tab then walks the panel */}
+          <h2
+            id={titleId}
+            tabIndex={-1}
+            data-autofocus
+            className="min-w-0 truncate text-[15px] font-medium focus:outline-none"
+            data-testid={testId && `${testId}-title`}
+          >
+            {title}
+          </h2>
+          <button
+            type="button"
+            onClick={onClose}
+            className="shrink-0 p-2 rounded-md text-ink-3 hover:bg-canvas-2 hover:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
+            aria-label="Close"
+            data-testid={testId && `${testId}-close`}
+          >
             <X size={16} />
           </button>
         </div>
-        <div className="p-5">{children}</div>
+        {/* its own container, so what is inside lays itself out for the panel's width, not the window's */}
+        <div className="@container flex-1 min-h-0 overflow-y-auto scroll-thin p-5">{children}</div>
+        {footer && (
+          <div className="shrink-0 border-t border-line px-5 h-12 flex items-center text-[12.5px]">
+            {footer}
+          </div>
+        )}
       </aside>
-    </div>
+    </div>,
+    document.body,
   );
 }
 
@@ -784,16 +826,20 @@ const ToastCtx = createContext<{
   push: (t: Omit<ToastItem, 'id' | 'at'>) => number;
   dismiss: (id: number) => void;
 }>({ push: () => 0, dismiss: () => {} });
+/** When the newest toast was raised (0: none yet). */
+const ToastSeenCtx = createContext<() => number>(() => 0);
 /** One toast at a time: a new one replaces the last instead of stacking over the page. */
 const MAX_TOASTS = 1;
 export function ToastProvider({ children }: { children: ReactNode }) {
   const [items, setItems] = useState<ToastItem[]>([]);
   const counter = useRef(0);
+  const last = useRef(0);
   const { pathname } = useLocation();
   const dismiss = useCallback((id: number) => setItems((xs) => xs.filter((x) => x.id !== id)), []);
   const push = useCallback(
     (t: Omit<ToastItem, 'id' | 'at'>) => {
       const id = ++counter.current;
+      last.current = Date.now();
       setItems((xs) => [...xs, { ...t, id, at: Date.now() }].slice(-MAX_TOASTS));
       // short, so it does not sit over the page: only a toast with a button (Undo, Open) may stay longer
       // a working toast stays until its work ends (with a minute's limit, so one can never be stuck on screen)
@@ -812,9 +858,10 @@ export function ToastProvider({ children }: { children: ReactNode }) {
     setItems((xs) => xs.filter((x) => x.sticky || Date.now() - x.at < 1500));
   }, [pathname]);
   const value = useMemo(() => ({ push, dismiss }), [push, dismiss]);
+  const lastAt = useCallback(() => last.current, []);
   return (
     <ToastCtx.Provider value={value}>
-      {children}
+      <ToastSeenCtx.Provider value={lastAt}>{children}</ToastSeenCtx.Provider>
       <div
         // on a phone the toast sits under the top bar, clear of the cards' buttons and the bottom tabs; on a laptop it
         // sits in the bottom right corner, off the main column where the cards and their buttons are
@@ -881,6 +928,13 @@ export function ToastProvider({ children }: { children: ReactNode }) {
 }
 export function useToast() {
   return useContext(ToastCtx);
+}
+/**
+ * Reads when the newest toast went up. A panel that closes itself once its work is done uses it to tell whether the
+ * page already said what happened, so it does not say it a second time.
+ */
+export function useLastToastAt() {
+  return useContext(ToastSeenCtx);
 }
 
 /**

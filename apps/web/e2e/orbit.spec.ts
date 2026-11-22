@@ -1315,7 +1315,7 @@ test.describe('First-run guidance and plain next steps', () => {
     await expect(page.getByTestId('ob-name')).toHaveValue('');
   });
 
-  test('the People board explains its stages and finds who went quiet; the next-step chip opens that card in Drafts', async ({
+  test('the People board explains its stages and finds who went quiet; the next-step chip opens that step in place, with Drafts one click away', async ({
     page,
   }) => {
     await loadDemo(page);
@@ -1341,6 +1341,11 @@ test.describe('First-run guidance and plain next steps', () => {
     await page.getByRole('tab', { name: 'Board' }).click();
     const next = page.getByTestId('chat-next').first();
     await next.click();
+    // the chip opens its step right here, over the board (next-step.spec.ts walks the panel itself)
+    await expect(page).toHaveURL(/\/people\?.*next=/);
+    await expect(page.getByTestId('next-panel')).toBeVisible();
+    // Drafts, where the chip used to go, is one click away in the panel's foot
+    await page.getByTestId('next-panel-open-drafts').click();
     await expect(page).toHaveURL(/\/inbox\?card=/);
     await expect(page.locator('[data-highlight="true"]')).toBeVisible();
   });

@@ -44,8 +44,17 @@ export function SuggestionCard({
   highlight,
   onPersonPage,
   defaultOpen,
+  bare,
+  onCloseDraft,
 }: {
   s: Suggestion;
+  /**
+   * The card is all its panel holds, so there is nothing to fold the draft back into: the draft's Close closes the
+   * panel instead (edits are kept, as always), and the fold arrow is left out.
+   */
+  onCloseDraft?: () => void;
+  /** inside a panel that already frames it: no border and no padding of its own */
+  bare?: boolean;
   /** open the draft at once (Drafts' reading pane, where the card is the thing being looked at) */
   defaultOpen?: boolean;
   /** on the person's own page: their face, name and role are already the page, so the card leaves them out */
@@ -305,7 +314,8 @@ export function SuggestionCard({
   return (
     <div
       className={cx(
-        'bg-canvas border border-line rounded-[var(--radius-card)] p-4 fade-up min-w-0 max-w-full break-words',
+        'fade-up min-w-0 max-w-full break-words',
+        !bare && 'bg-canvas border border-line rounded-[var(--radius-card)] p-4',
         highlight && 'ring-2 ring-accent/50 border-accent/50',
       )}
       data-testid={`suggestion-${s.kind}`}
@@ -723,7 +733,7 @@ export function SuggestionCard({
             </div>
           )}
         </div>
-        {draft && !inFlight && open && (
+        {draft && !inFlight && open && !onCloseDraft && (
           <button
             onClick={() => setOpen(false)}
             className="p-2 -m-1 rounded-md text-ink-3 hover:bg-canvas-2 shrink-0"
@@ -741,7 +751,7 @@ export function SuggestionCard({
             draft={draft}
             onApprove={approve}
             busy={busy}
-            onCancel={() => setOpen(false)}
+            onCancel={() => (onCloseDraft ? onCloseDraft() : setOpen(false))}
             focusOnOpen
           />
         </div>
