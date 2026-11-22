@@ -9,7 +9,7 @@ import { db } from '../../db/schema';
 import { Avatar, cx, relDate, Select, Skeleton } from '../../ui';
 import { LogoText } from '../CompanyLogo';
 import { chatTimeLabel } from '../ScheduleChat';
-import { KIND_LABEL } from '../SuggestionCard';
+import { NextStepPill } from './NextStep';
 import { daysLabel, STAGE_COLOR, wentQuiet } from './shared';
 
 export type ChatRow = { chat: CoffeeChat; person: Person };
@@ -95,7 +95,8 @@ function useCardDrag(move: (chat: CoffeeChat, to: ChatStage) => void) {
     };
   }, [drag?.live]);
   const start = (e: ReactPointerEvent<HTMLElement>, row: ChatRow) => {
-    // a finger scrolls; buttons, the Move to menu and links inside the card keep their own clicks
+    // a finger scrolls; buttons (the next step's pill among them), the Move to menu and links inside the card keep
+    // their own clicks
     if (e.pointerType === 'touch' || e.button !== 0) return;
     if ((e.target as HTMLElement).closest('select, button, [data-testid="chat-next"]')) return;
     const r = e.currentTarget.getBoundingClientRect();
@@ -474,18 +475,12 @@ function Board({ children, count }: { children: React.ReactNode; count: number }
   );
 }
 
-/** The next step for a chat. It looks like a chip and is a link: it opens that card in Drafts. */
+/**
+ * The next step for a chat, on a board card and in the list's Next column. It looks like a chip and is a button: it
+ * opens that step in place (NextStepPanel, on the People page), no longer in Drafts. Same name and props as before.
+ */
 export function NextLink({ s }: { s: Suggestion }) {
-  return (
-    <Link
-      to={`/inbox?card=${s.id}`}
-      className="relative z-10 inline-flex items-center gap-1 rounded-full bg-accent-soft text-accent px-2 h-6 text-[12px] font-medium whitespace-nowrap hover:bg-accent hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
-      title="Open this in Drafts"
-      data-testid="chat-next"
-    >
-      {KIND_LABEL[s.kind].label}
-    </Link>
-  );
+  return <NextStepPill s={s} />;
 }
 
 /** "Sending in 8s…" or "Sending…" while an approved message of this chat waits in the outbox; a clock keeps it true. */

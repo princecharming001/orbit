@@ -15,6 +15,7 @@ import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { AddPersonButton } from '../components/AddPerson';
 import { LinkedInImportButton } from '../components/LinkedInImport';
 import { CompaniesView } from '../components/people/CompaniesView';
+import { NextStepPanel } from '../components/people/NextStep';
 import { PeopleList, SelectionBar } from '../components/people/PeopleList';
 import { BoardSkeleton, type ChatRow, PipelineBoard } from '../components/people/PipelineBoard';
 import { QUIET_DAYS, STAGE_COLOR, useNarrow, wentQuiet } from '../components/people/shared';
@@ -515,6 +516,8 @@ export function People() {
         </p>
       )}
       {dialogs}
+      {/* a next step's pill (on a board card or a list row) opens here, over the page, not in Drafts */}
+      <NextStepPanel />
     </div>
   );
 }

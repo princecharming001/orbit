@@ -35,6 +35,39 @@ export const SUGGESTION_KIND_LABELS: Record<
 };
 
 /**
+ * A next step said as a title, with the person in it: "Find a time with Maya". `{name}` marks where the name goes,
+ * so a page can make it a link. A kind without its own phrase reads "Label: Maya".
+ */
+const NEXT_STEP_PHRASES: Partial<Record<Suggestion['kind'], string>> = {
+  new_outreach: 'First message to {name}',
+  warm_up_engage: 'LinkedIn warm-up for {name}',
+  follow_up_bump: 'Follow up with {name}',
+  schedule_propose: 'Find a time with {name}',
+  schedule_confirm: 'Confirm a time with {name}',
+  prep_brief: 'Prep for {name}',
+  thank_you: 'Thank {name}',
+  action_item_reminder: 'Keep your promise to {name}',
+  nurture_checkin: 'Check in with {name}',
+  reconnect: 'Reconnect with {name}',
+  congratulate: 'Congratulate {name}',
+  ask_referral: 'Ask {name} for a referral',
+  intro_request: 'Ask {name} for an intro',
+  report_back: 'Close the loop with {name}',
+  confirm_stage: 'Did this change for {name}?',
+  needs_you: 'Answer {name}',
+};
+
+/** The title's template for a kind, with `{name}` where the person goes. */
+export function nextStepPhrase(kind: Suggestion['kind']): string {
+  return NEXT_STEP_PHRASES[kind] ?? `${SUGGESTION_KIND_LABELS[kind].label.replace(/[?.]$/, '')}: {name}`;
+}
+
+/** The title in words: "Find a time with Maya"; only the label when there is nobody to name. */
+export function nextStepTitle(kind: Suggestion['kind'], firstName?: string): string {
+  return firstName ? nextStepPhrase(kind).replace('{name}', firstName) : SUGGESTION_KIND_LABELS[kind].label;
+}
+
+/**
  * A pending card whose moment has passed (a time to confirm or a chat to prep that already started) is hidden at once,
  * even before the engine retires it.
  */
