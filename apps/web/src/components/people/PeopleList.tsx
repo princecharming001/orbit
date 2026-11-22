@@ -188,10 +188,12 @@ export function PeopleList({
         })}
       </ul>
       <TableBox className="hidden @4xl:block">
-        <Table data-testid="people-table">
+        {/* fixed layout: each column takes its share of the width and cuts what is longer with an ellipsis, so the
+            sheet is never wider than the page, whatever the font or the longest title */}
+        <Table data-testid="people-table" className="table-fixed [&_td]:overflow-hidden">
           <thead>
             <tr>
-              <Th>
+              <Th className="w-[25%]">
                 <span className="flex items-center gap-3">
                   {selection && (
                     <Check
@@ -205,17 +207,17 @@ export function PeopleList({
                   Name
                 </span>
               </Th>
-              <Th>Title · Company</Th>
+              <Th className="w-[27%]">Title · Company</Th>
               {/* on a laptop the table keeps to the width it has: how you know them shows from a wide screen up */}
-              <Th wrap className="hidden @6xl:table-cell max-w-[110px]">
+              <Th wrap className="hidden @6xl:table-cell w-[12%]">
                 How you know them
               </Th>
-              <Th>Closeness</Th>
-              <Th>Stage</Th>
-              <Th wrap className="max-w-[90px]">
+              <Th className="w-[10%]">Closeness</Th>
+              <Th className="w-[14%]">Stage</Th>
+              <Th wrap className="w-[10%]">
                 Last touch
               </Th>
-              <Th>Next</Th>
+              <Th className="w-[14%]">Next</Th>
             </tr>
           </thead>
           <tbody>
@@ -251,7 +253,7 @@ export function PeopleList({
                         className="inline-flex min-w-0 items-center gap-2 font-medium hover:underline"
                       >
                         <Avatar name={p.displayName} src={p.photoUrl} id={p.id} size={24} />
-                        <span className="truncate max-w-[115px]" data-testid="person-name">
+                        <span className="min-w-0 truncate" data-testid="person-name">
                           {p.displayName}
                         </span>
                         {p.isAlumni && (
@@ -268,30 +270,30 @@ export function PeopleList({
                   <Td>
                     {p.currentTitle || p.currentOrganizationRaw ? (
                       <span
-                        className="flex min-w-0 max-w-[215px] items-center gap-1.5"
+                        className="flex min-w-0 items-center gap-1.5"
                         title={[p.currentTitle, p.currentOrganizationRaw].filter(Boolean).join(' · ')}
                       >
-                        {p.currentTitle && <span className="truncate text-ink-3">{p.currentTitle}</span>}
+                        {p.currentTitle && <span className="min-w-0 truncate text-ink-3">{p.currentTitle}</span>}
                         {p.currentTitle && p.currentOrganizationRaw && (
                           <span className="text-ink-3" aria-hidden>
                             ·
                           </span>
                         )}
                         {p.currentOrganizationRaw && (
-                          <LogoText person={p} size={14} className="shrink-0 max-w-[140px]">
+                          <LogoText person={p} size={14} className="min-w-0 max-w-[60%] shrink-0">
                             {p.currentOrganizationRaw}
                           </LogoText>
                         )}
                       </span>
                     ) : p.headline ? (
                       // no title read yet: their LinkedIn headline says what they do
-                      <Clip title={p.headline} max={215} className="text-ink-3">
+                      <Clip title={p.headline} max={9999} className="text-ink-3">
                         <span data-testid="people-row-headline">{p.headline}</span>
                       </Clip>
                     ) : null}
                   </Td>
                   <Td className="hidden @6xl:table-cell text-ink-2">
-                    <Clip title={how ?? undefined} max={120}>
+                    <Clip title={how ?? undefined} max={9999}>
                       {how ?? ''}
                     </Clip>
                   </Td>
@@ -303,7 +305,7 @@ export function PeopleList({
                       <Select
                         value={c.stage}
                         onChange={(e) => move(c, e.target.value as ChatStage)}
-                        className="h-7 w-[124px] text-[12px]"
+                        className="h-7 w-full max-w-[150px] text-[12px]"
                         aria-label={`Stage for ${p.displayName}`}
                         data-testid="list-stage"
                       >
@@ -323,10 +325,10 @@ export function PeopleList({
                       </Link>
                     )}
                   </Td>
-                  <Td wrap className="text-ink-2 leading-snug py-1.5 max-w-[110px]">
+                  <Td wrap className="text-ink-2 leading-snug py-1.5">
                     <LastTouch person={p} chat={c} />
                   </Td>
-                  <Td>{next ? <NextLink s={next} /> : null}</Td>
+                  <Td className="[&>*]:max-w-full [&>*]:truncate">{next ? <NextLink s={next} /> : null}</Td>
                 </Tr>
               );
             })}
