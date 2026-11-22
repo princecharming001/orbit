@@ -140,6 +140,9 @@ export function evaluateDoc(
         partial: undefined,
         missing: undefined,
         signal: undefined,
+        // someone has read it now
+        unsettled: undefined,
+        mention: undefined,
       };
     }
   for (const [i, cr] of (spec.criteria ?? []).entries()) {

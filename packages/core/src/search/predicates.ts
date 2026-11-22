@@ -70,6 +70,8 @@ export interface Check {
    * for): a reader's no settles it, even when it quotes those same words
    */
   unsettled?: boolean;
+  /** unsettled, and the words are in a longer line that more likely mentions the job than states it */
+  mention?: boolean;
   /** the job the check rests on, as the person wrote it, when it is not the job in their title field */
   role?: { title?: string; org?: string; lead: boolean };
 }
@@ -401,6 +403,7 @@ interface RoleResult {
   roleAnswer?: Answer;
   companyAnswer?: Answer;
   unsettled?: boolean;
+  mention?: boolean;
   role?: { title?: string; org?: string; lead: boolean };
   evidence: string;
   source: EvidenceSource;
@@ -653,6 +656,12 @@ export function checkPosition(doc: PersonDoc, c: CompiledPosition, ctx: SearchCo
         roleAnswer: r,
         companyAnswer: co.answer,
         unsettled: flags.unsettled && r === 'likely',
+        mention:
+          flags.unsettled &&
+          r === 'likely' &&
+          normalizeTitle(role.title ?? '')
+            .split(' ')
+            .filter(Boolean).length > 4,
         role: p.role ? { title: role.title, org: role.org, lead: role.source !== 'headline' } : undefined,
       };
   }
@@ -734,6 +743,7 @@ export function checkPosition(doc: PersonDoc, c: CompiledPosition, ctx: SearchCo
     missing,
     estimated: best?.estimated,
     unsettled: (best?.unsettled && answer === 'likely') || undefined,
+    mention: (best?.mention && answer === 'likely') || undefined,
     role: best?.role && (answer === 'yes' || answer === 'likely') ? best.role : undefined,
     fact: best?.fact
       ? {

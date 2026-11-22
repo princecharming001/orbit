@@ -204,6 +204,10 @@ const FIELD_WORDS: [TitleFamily, RegExp][] = [
   ['creator', /\b(newsletter)\b/],
   ['policy_government', /\b(policy|government|public sector|federal)\b/],
 ];
+/** How a line opens when it is a sentence about their work and not a title. */
+const SENTENCE_START =
+  /^(?:i|we|my|our|helping|help|making|turning|empowering|solving|bridging|playing|bringing|text|get|keep|most|it'?s|its|your|you|on a mission|driven by|passionate|obsessed)\b/i;
+
 /** Words a short title carries beside its field ("Head of Product", "Senior Design Lead", "Product & Growth"). */
 const TITLE_FILLER =
   /^(?:head|lead|leader|leadership|director|manager|vice|president|vp|chief|officer|senior|junior|staff|principal|associate|intern|team|member|global|of|the|and|at|in|for|&|\+|\/|-)$/;
@@ -396,7 +400,24 @@ export function readTitle(title: string | undefined, org?: string): TitleRead {
   const raw = held.length && held.length < parts.length ? held.join(', ') : whole;
   const t = ` ${normalizeTitle(foldAccents(raw))} `;
   const families = new Set<TitleFamily>();
-  if (t.trim()) for (const [f, re] of FAMILY_PATTERNS) if (re.test(t) || re.test(raw)) families.add(f);
+  // what follows "to" or "for" is who they do it for, not what they do: a "design partner to marketing leaders"
+  // is in design, and someone "recruiting for engineering roles" recruits
+  const cut = (x: string) => x.replace(/(?<!\bgo)\s(?:to|for)\s.*$/i, ' ');
+  const does = cut(t);
+  const doesRaw = cut(raw);
+  if (does.trim())
+    for (const [f, re] of FAMILY_PATTERNS) if (re.test(does) || re.test(doesRaw)) families.add(f);
+  // a sentence about what they do for others ("I help marketing agencies book more meetings") uses job words without
+  // being a job title: what it points to is a maybe
+  const sentence =
+    SENTENCE_START.test(raw) || (!/[,|/•·]/.test(raw) && raw.split(/\s+/).filter(Boolean).length > 9);
+  const inPassing: TitleFamily[] = [];
+  if (sentence)
+    for (const f of [...families])
+      if (f !== 'founder' && f !== 'student') {
+        families.delete(f);
+        inPassing.push(f);
+      }
   // a job said as a job, before field words are read ("Platform" at a fund is the fund's platform team, not software)
   const saidJob = families.size > 0;
   // a field named and no job in it: the job when the title is the field ("Product", "Head of Talent"), a maybe when
@@ -405,7 +426,7 @@ export function readTitle(title: string | undefined, org?: string): TitleRead {
   if (t.trim()) {
     const short = isFieldTitle(t.trim());
     for (const [f, re] of FIELD_WORDS)
-      if (!families.has(f) && re.test(t)) {
+      if (!families.has(f) && re.test(does)) {
         if (short) families.add(f);
         else fieldOnly.push(f);
       }
@@ -417,7 +438,7 @@ export function readTitle(title: string | undefined, org?: string): TitleRead {
   const maybe: TitleFamily[] = [];
   for (const [re, fams] of AMBIGUOUS)
     if (re.test(raw)) for (const f of fams) if (!families.has(f)) maybe.push(f);
-  for (const f of fieldOnly) if (!families.has(f) && !maybe.includes(f)) maybe.push(f);
+  for (const f of [...fieldOnly, ...inPassing]) if (!families.has(f) && !maybe.includes(f)) maybe.push(f);
   const orgText = ` ${normalizeTitle(org ?? '')} `;
   // investing is read on its own: a title that only mentions investors is not an investor's, and one that names the
   // industry without the job is a maybe a reader settles

@@ -549,7 +549,8 @@ export async function interpretAsk(ask: string): Promise<{ form: SearchForm; by:
         companies: read.everCompanies,
         schools: r.schools,
         places: r.places,
-        keywords: read.keywords,
+        // "venture capital" beside the job "investor" is the job again, not a topic to rank by
+        keywords: read.keywords.filter((k) => !restatesJob(k, read.titles, rules.filters.families)),
         keywordsNeed: r.keywordsNeed,
         reach: r.mineOnly || rules.filters.reach === 'mine' ? 'mine' : 'everyone',
       },
@@ -703,6 +704,9 @@ export function pathOfSourced(c: SourcedCandidate): PathView | undefined {
  * of investing because they live in the right city.
  */
 function listable(r: Row): boolean {
+  // a job word in a longer line that nobody has read yet ("Playing long-term games with long-term people" for
+  // recruiters): more likely a mention than the job, so not shown until a reader says so
+  if (r.checks.some((c) => c.need === 'must' && c.mention)) return false;
   if (r.band === 'strong' || r.band === 'likely') return true;
   if (r.band !== 'unchecked') return false;
   const jobs = r.checks.filter(

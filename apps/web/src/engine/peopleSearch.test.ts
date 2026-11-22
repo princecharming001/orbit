@@ -283,7 +283,8 @@ describe('reading a sentence with the model', () => {
     expect(r.form.filters.titles).toEqual(['investor', 'partner', 'principal']);
     expect(r.form.filters.families).toEqual(['investing']);
     expect(r.form.filters.places).toEqual(['London']);
-    expect(r.form.filters.keywords).toEqual(['seed', 'venture capital']);
+    // "venture capital" beside the job "investor" says the job again: not a topic to rank by
+    expect(r.form.filters.keywords).toEqual(['seed']);
     expect(r.form.filters.keywordsNeed).toBe('nice');
     // "Works at a venture capital firm" only says the job again, which the titles already hold: it is left out
     expect(r.form.criteria.map((c) => [c.text, c.need])).toEqual([['Invests at seed stage', 'nice']]);

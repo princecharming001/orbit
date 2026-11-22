@@ -111,6 +111,9 @@ const NETWORK: Record<string, string> = {
   Phy: 'Physician, Angel Investor',
   Aid: 'Text a safe and free AI doctor at any hour of the day',
   Nur: 'Registered Nurse at Kaiser',
+  Agy: 'I help Marketing Agencies Book More Meetings from Leads they have already paid for',
+  Mkt: 'Head of Marketing at Metaview',
+  Ltp: 'Playing long-term games with long-term people.',
 };
 
 const docs = Object.entries(NETWORK).map(([name, headline], i) => {
@@ -351,6 +354,28 @@ describe('a whole kind of work', () => {
     expect(r.sure).toEqual(['Cal', 'Doc', 'Phy']);
     expect(r.likely).toEqual(['Aid']);
     expect([...r.sure, ...r.likely]).not.toContain('Nur');
+  });
+  it('marketing people: the job, not a sentence that sells to marketers', () => {
+    const r = run({
+      ask: 'marketing people',
+      positions: [{ role: { families: ['marketing'] }, when: 'current' }],
+    });
+    // product marketing is marketing; a design partner to marketing leaders is not
+    expect(r.sure).toEqual(['Mkt', 'Pmm']);
+    // the sentence is a mention nobody has read: flagged, so the table leaves it out until a reader says yes
+    expect(r.likely).toContain('Agy');
+    const agy = runSpec(
+      { ask: 'marketing people', positions: [{ role: { families: ['marketing'] }, when: 'current' }] },
+      docs,
+      ctx,
+    ).rows.find((x) => x.name === 'Agy');
+    expect(agy?.checks[0]?.mention).toBe(true);
+    const rec = runSpec(
+      { ask: 'recruiters', positions: [{ role: { families: ['people_recruiting'] }, when: 'current' }] },
+      docs,
+      ctx,
+    ).rows.find((x) => x.name === 'Ltp');
+    expect(rec?.checks[0]?.mention).toBe(true);
   });
   it('a job they want is not a job they hold', () => {
     const r = run({
