@@ -701,7 +701,8 @@ test.describe('account mode (mocked orbit-api)', () => {
       await expect(page.getByTestId('find-filters')).toHaveText('5');
       expect(api.state.sourceSearches.at(-1)).toMatchObject({
         filters: {
-          titles: expect.arrayContaining(['partner', 'principal', 'investor']),
+          // the titles the search names go as they are: the group's other titles are not added to them
+          titles: ['partner', 'principal'],
           locations: ['London', 'Berlin'],
           organizations: ['Google'],
           keywords: ['seed'],
