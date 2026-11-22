@@ -191,7 +191,7 @@ export function PeopleList({
         <Table data-testid="people-table">
           <thead>
             <tr>
-              <Th className="min-w-[200px]">
+              <Th>
                 <span className="flex items-center gap-3">
                   {selection && (
                     <Check
@@ -205,13 +205,16 @@ export function PeopleList({
                   Name
                 </span>
               </Th>
-              <Th>Profiles</Th>
-              <Th>Title</Th>
-              <Th>Company</Th>
-              <Th>How you know them</Th>
+              <Th>Title · Company</Th>
+              {/* on a laptop the table keeps to the width it has: how you know them shows from a wide screen up */}
+              <Th wrap className="hidden @6xl:table-cell max-w-[110px]">
+                How you know them
+              </Th>
               <Th>Closeness</Th>
               <Th>Stage</Th>
-              <Th>Last touch</Th>
+              <Th wrap className="max-w-[90px]">
+                Last touch
+              </Th>
               <Th>Next</Th>
             </tr>
           </thead>
@@ -234,7 +237,7 @@ export function PeopleList({
                   data-selected={selection?.selected.has(p.id) || undefined}
                 >
                   <Td>
-                    <span className="flex items-center gap-3 min-w-0">
+                    <span className="flex items-center gap-2 min-w-0">
                       {selection && (
                         <Check
                           on={selection.selected.has(p.id)}
@@ -245,10 +248,10 @@ export function PeopleList({
                       )}
                       <Link
                         to={`/people/${p.id}`}
-                        className="inline-flex min-w-0 items-center gap-2.5 font-medium hover:underline"
+                        className="inline-flex min-w-0 items-center gap-2 font-medium hover:underline"
                       >
                         <Avatar name={p.displayName} src={p.photoUrl} id={p.id} size={24} />
-                        <span className="truncate max-w-[220px]" data-testid="person-name">
+                        <span className="truncate max-w-[115px]" data-testid="person-name">
                           {p.displayName}
                         </span>
                         {p.isAlumni && (
@@ -257,36 +260,38 @@ export function PeopleList({
                           </Chip>
                         )}
                       </Link>
+                      {p.linkedinUrl ? (
+                        <LinkedInMark url={p.linkedinUrl} name={p.displayName} testId="people-row-linkedin" />
+                      ) : null}
                     </span>
                   </Td>
                   <Td>
-                    {p.linkedinUrl ? (
-                      <LinkedInMark url={p.linkedinUrl} name={p.displayName} testId="people-row-linkedin" />
-                    ) : null}
-                  </Td>
-                  <Td className="text-ink-3">
-                    {p.currentTitle ? (
-                      <Clip title={p.currentTitle} max={280}>
-                        {p.currentTitle}
-                      </Clip>
-                    ) : !p.currentOrganizationRaw && p.headline ? (
+                    {p.currentTitle || p.currentOrganizationRaw ? (
+                      <span
+                        className="flex min-w-0 max-w-[215px] items-center gap-1.5"
+                        title={[p.currentTitle, p.currentOrganizationRaw].filter(Boolean).join(' · ')}
+                      >
+                        {p.currentTitle && <span className="truncate text-ink-3">{p.currentTitle}</span>}
+                        {p.currentTitle && p.currentOrganizationRaw && (
+                          <span className="text-ink-3" aria-hidden>
+                            ·
+                          </span>
+                        )}
+                        {p.currentOrganizationRaw && (
+                          <LogoText person={p} size={14} className="shrink-0 max-w-[140px]">
+                            {p.currentOrganizationRaw}
+                          </LogoText>
+                        )}
+                      </span>
+                    ) : p.headline ? (
                       // no title read yet: their LinkedIn headline says what they do
-                      <Clip title={p.headline} max={280}>
+                      <Clip title={p.headline} max={215} className="text-ink-3">
                         <span data-testid="people-row-headline">{p.headline}</span>
                       </Clip>
                     ) : null}
                   </Td>
-                  <Td>
-                    {p.currentOrganizationRaw ? (
-                      <LogoText person={p} size={16}>
-                        <Clip title={p.currentOrganizationRaw} max={180}>
-                          {p.currentOrganizationRaw}
-                        </Clip>
-                      </LogoText>
-                    ) : null}
-                  </Td>
-                  <Td className="text-ink-2">
-                    <Clip title={how ?? undefined} max={200}>
+                  <Td className="hidden @6xl:table-cell text-ink-2">
+                    <Clip title={how ?? undefined} max={120}>
                       {how ?? ''}
                     </Clip>
                   </Td>
@@ -298,7 +303,7 @@ export function PeopleList({
                       <Select
                         value={c.stage}
                         onChange={(e) => move(c, e.target.value as ChatStage)}
-                        className="h-7 w-[148px] text-[12px]"
+                        className="h-7 w-[124px] text-[12px]"
                         aria-label={`Stage for ${p.displayName}`}
                         data-testid="list-stage"
                       >
@@ -318,7 +323,7 @@ export function PeopleList({
                       </Link>
                     )}
                   </Td>
-                  <Td className="text-ink-2">
+                  <Td wrap className="text-ink-2 leading-snug py-1.5 max-w-[110px]">
                     <LastTouch person={p} chat={c} />
                   </Td>
                   <Td>{next ? <NextLink s={next} /> : null}</Td>
