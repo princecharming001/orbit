@@ -368,17 +368,23 @@ export interface DraftApproveRequest {
   /** the files to send with it, base64 (at most 3, 4 MB each, 5 MB in all); replaces any it had */
   attachments?: { name: string; mimeType: string; data: string; kind?: 'resume' | 'file' }[];
   /**
-   * A LinkedIn message the student wrote in the app (on a person's page, in Drafts), which the server may not hold:
-   * with `confirm` and `body`, the server keeps it as their draft under `draftId` and sends it on this tap, like one
-   * it composed. Ignored when the server already holds the draft. Never without the tap.
+   * A message the student wrote in the app (on a person's page, in Drafts), which the server may not hold: with
+   * `body` (and `confirm` for LinkedIn), the server keeps it as their draft under `draftId` and approves it on this
+   * tap, like one it composed: an email after the undo window, a LinkedIn message at once. Ignored when the server
+   * already holds the draft.
    */
   write?: DraftWrite;
 }
-/** Who a student-written LinkedIn message is for and what kind it is (POST /drafts/approve `write`). */
+/** Who a message the student wrote in the app is for and what kind it is (POST /drafts/approve `write`). */
 export interface DraftWrite {
   personId: string;
   kind: MessageKind;
-  channel: 'linkedin';
+  channel: 'linkedin' | 'gmail';
+  /** an email: the address the student is writing to (filled in on the person when Orbit had none) */
+  to?: string;
+  /** an email reply: the Gmail thread it answers, and the message it replies to */
+  threadId?: string;
+  inReplyTo?: string;
 }
 /** POST /drafts/cancel, POST /drafts/discard */
 export interface DraftIdRequest {

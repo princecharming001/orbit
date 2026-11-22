@@ -269,7 +269,7 @@ export function ReachMutuals({
   return (
     <div data-testid="reach-mutuals">
       {heading}
-      <ul className="space-y-1">
+      <ul className="divide-y divide-line/70">
         {(all ? rows : rows.slice(0, SHOWN)).map(({ m, person, score, standing }) => {
           const name = person?.displayName ?? m.name;
           const mFirst = person?.firstName || name.split(' ')[0] || name;
@@ -277,7 +277,7 @@ export function ReachMutuals({
           return (
             <li
               key={`${m.name}:${m.memberId ?? m.personId ?? ''}`}
-              className="group flex items-center gap-3 py-1 text-[13px] min-w-0"
+              className="flex items-center gap-3 py-2.5 text-[13px] min-w-0"
               data-testid="reach-mutual"
             >
               <Avatar name={name} src={m.pictureUrl ?? person?.photoUrl} id={person?.id ?? name} size={32} />
@@ -293,7 +293,7 @@ export function ReachMutuals({
                   {url && /linkedin\.com/i.test(url) && <LinkedInMark url={url} name={name} />}
                 </div>
                 <div
-                  className="text-[12px] leading-[1.35] text-ink-3 line-clamp-2"
+                  className="mt-0.5 text-[12px] leading-[1.35] text-ink-3 line-clamp-2"
                   // the scores behind the words, on hover
                   title={
                     person
@@ -310,17 +310,6 @@ export function ReachMutuals({
                   <div className="text-[12px] text-ink-3" data-testid="reach-mutual-evidence">
                     {mFirst} {standing.phrase}
                   </div>
-                )}
-                {person && (
-                  <PairNoteMenu
-                    userId={user.id}
-                    aId={person.id}
-                    bId={target.id}
-                    aName={mFirst}
-                    bName={first}
-                    // on hover or focus with a mouse, always on touch: one correction per row without the clutter
-                    className="block transition-opacity pointer-fine:opacity-0 pointer-fine:group-hover:opacity-100 pointer-fine:group-focus-within:opacity-100"
-                  />
                 )}
               </div>
               {person && (
@@ -344,7 +333,7 @@ export function ReachMutuals({
       {rows.length > SHOWN && (
         <button
           type="button"
-          className={cx('mt-1.5 text-[12px] font-medium text-ink-2 hover:text-ink hover:underline', TAP)}
+          className={cx('mt-2.5 text-[12px] font-medium text-ink-2 hover:text-ink hover:underline', TAP)}
           onClick={() => setAll((v) => !v)}
           data-testid="reach-mutuals-more"
         >

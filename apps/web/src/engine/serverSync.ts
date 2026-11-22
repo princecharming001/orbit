@@ -39,7 +39,7 @@ import {
   type SyncStatus,
 } from '../integrations/orbitApi';
 import { endActivity } from './activity';
-import { linkedinSendError } from './linkedinSendWords';
+import { emailSendError, linkedinSendError } from './linkedinSendWords';
 import { linkedInImageExpired } from './photos';
 import { backfillServerTouchpoints, touchpointsFromServer } from './serverTouchpoints';
 
@@ -482,6 +482,21 @@ function ownDraftAfterServer(
     const { error: _e, sendAt: _s, ...rest } = mine;
     return { ...rest, status: 'sent', sentAt: server.sentAt ?? new Date().toISOString() };
   }
+  const email = mine.channel === 'gmail';
+  // an email waits on the server for its undo window or its planned time: the row here says so, with the time it
+  // goes and the words it goes with, so Undo and "sending at" read as they do for an email the server wrote
+  if (email && server.status === 'approved' && mine.status !== 'sent') {
+    const { error: _e, ...rest } = mine;
+    const words = typeof server.bodyDraft === 'string' ? server.bodyDraft : mine.bodyFinal;
+    return {
+      ...rest,
+      status: 'approved',
+      sendAt: server.sendAt ?? mine.sendAt,
+      approvedAt: mine.approvedAt ?? new Date().toISOString(),
+      ...(typeof words === 'string' ? { bodyFinal: words } : {}),
+      ...(typeof server.subject === 'string' ? { subject: server.subject } : {}),
+    };
+  }
   // approved: the server was to try again in a minute. sending: its answer to the tap never arrived here.
   const waiting = mine.status === 'approved' || mine.status === 'sending';
   if (waiting && ['failed', 'cancelled', 'discarded', 'draft'].includes(String(server.status))) {
@@ -489,7 +504,7 @@ function ownDraftAfterServer(
     const code = (server.error ?? server.cancelReason) as string | undefined;
     // the student stopped it themselves: a draft again, with nothing to explain
     if (server.status === 'cancelled' && (!code || code === 'user')) return { ...rest, status: 'draft' };
-    return { ...rest, status: 'failed', error: linkedinSendError(code) };
+    return { ...rest, status: 'failed', error: email ? emailSendError(code) : linkedinSendError(code) };
   }
   return mine;
 }

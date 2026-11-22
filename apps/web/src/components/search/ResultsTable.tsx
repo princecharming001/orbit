@@ -1,7 +1,7 @@
-import { Check, Mail, Users } from 'lucide-react';
+import { Check, Users } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import type { CriterionForm, ResultRow } from '../../engine/peopleSearch';
-import { Avatar, Button, cx, LinkedInMark, PickCircle, Spinner } from '../../ui';
+import { Avatar, Button, cx, GmailLogo, LinkedInMark, PickCircle, Spinner } from '../../ui';
 import { Bars, Clip, Table, TableBox, Td, Th, Thumb, Tr } from '../../ui/table';
 import { CompanyLogo } from '../CompanyLogo';
 
@@ -169,7 +169,7 @@ export function ResultsTable({
                     {r.email ? (
                       <a
                         href={`mailto:${r.email}`}
-                        className="inline-flex h-[22px] w-[22px] items-center justify-center rounded text-ink-2 hover:bg-canvas-2 hover:text-ink"
+                        className="inline-flex h-[22px] w-[22px] items-center justify-center rounded hover:bg-canvas-2"
                         title={
                           r.emailConfidence === 'guess'
                             ? `${r.email} (a guess, not confirmed)`
@@ -180,31 +180,39 @@ export function ResultsTable({
                         aria-label={`Email ${r.name} at ${r.email}`}
                         data-testid="find-email"
                       >
-                        <Mail size={14} />
+                        <GmailLogo />
                       </a>
-                    ) : r.recommendationId && r.emailStatus === 'not looked up' ? (
+                    ) : r.recommendationId || r.personId ? (
+                      // no address yet: the logo greyed out, and a click looks theirs up
                       <button
                         type="button"
                         disabled={finding === r.key}
                         onClick={() => onFindEmail(r)}
-                        className="inline-flex h-[22px] w-[22px] items-center justify-center rounded text-ink-3 hover:bg-canvas-2 hover:text-ink disabled:opacity-60"
-                        title="Find their email"
-                        aria-label={`Find the email of ${r.name}`}
-                        data-testid="find-email-lookup"
+                        className="inline-flex h-[22px] w-[22px] items-center justify-center rounded hover:bg-canvas-2 disabled:cursor-wait [&:hover_svg]:opacity-70"
+                        title={
+                          r.emailStatus === 'not found'
+                            ? 'No email found yet. Click to look again'
+                            : 'Find their email'
+                        }
+                        aria-label={
+                          r.emailStatus === 'not found'
+                            ? `No email found for ${r.name} yet. Look again`
+                            : `Find the email of ${r.name}`
+                        }
+                        data-testid={r.emailStatus === 'not found' ? 'find-email-none' : 'find-email-lookup'}
                       >
-                        {finding === r.key ? <Spinner /> : <Mail size={14} />}
+                        {finding === r.key ? <Spinner /> : <GmailLogo muted />}
                       </button>
-                    ) : r.emailStatus === 'not found' ? (
+                    ) : (
                       <span
-                        className="inline-flex h-[22px] w-[22px] items-center justify-center text-line"
-                        title="No email found"
+                        className="inline-flex h-[22px] w-[22px] items-center justify-center"
+                        title="No email yet"
                         role="img"
-                        aria-label="No email found"
-                        data-testid="find-email-none"
+                        aria-label="No email yet"
                       >
-                        <Mail size={14} />
+                        <GmailLogo muted />
                       </span>
-                    ) : null}
+                    )}
                   </span>
                 </Td>
                 <Td>

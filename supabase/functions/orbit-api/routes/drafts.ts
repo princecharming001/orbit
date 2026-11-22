@@ -19,7 +19,13 @@ import { composeDraft } from '../../_shared/compose/compose.ts';
 import { type DraftRow, loadDraft, toServerDraft } from '../../_shared/compose/drafts.ts';
 import { badRequest, HttpError, json } from '../../_shared/http.ts';
 import { parseIncomingFiles, setDraftFiles } from '../../_shared/sending/files.ts';
-import { approveDraft, cancelDraft, discardDraft, instagramRequestNote } from '../../_shared/sending/send.ts';
+import {
+  approveDraft,
+  cancelDraft,
+  discardDraft,
+  instagramRequestNote,
+  keepWrittenDraft,
+} from '../../_shared/sending/send.ts';
 import { isOffered, sourceIsOn } from '../../_shared/sources/states.ts';
 import { lookupPersonEmail } from '../../_shared/sourcing/ondemand.ts';
 import type { Ctx, Route } from '../api.ts';
@@ -115,19 +121,39 @@ async function composeSocial(
 }
 
 /**
- * `write` on an approval: who a LinkedIn message the student wrote in the app is for, and its kind. Only LinkedIn is
- * written this way (it goes on the tap that carries it); anything else is a 400.
+ * `write` on an approval: who a message the student wrote in the app is for, and its kind. LinkedIn and email are
+ * written this way (each on the tap that approves it); anything else is a 400.
  */
-function writtenDraft(b: Record<string, unknown>): DraftWrite | undefined {
+export function writtenDraft(b: Record<string, unknown>): DraftWrite | undefined {
   if (b.write === undefined || b.write === null) return undefined;
   const w = b.write as Record<string, unknown>;
   if (typeof w !== 'object' || Array.isArray(w)) throw badRequest('write is {personId, kind, channel}');
-  if (w.channel !== 'linkedin') throw badRequest('write.channel is linkedin');
+  if (w.channel !== 'linkedin' && w.channel !== 'gmail')
+    throw badRequest('write.channel is linkedin or gmail');
   if (typeof w.personId !== 'string' || !UUID.test(w.personId))
     throw badRequest('write.personId is required');
   const kind = w.kind as DraftWrite['kind'];
   if (!KINDS.includes(kind)) throw badRequest('write.kind is not a message kind');
-  return { personId: w.personId, kind, channel: 'linkedin' };
+  if (w.channel === 'linkedin') return { personId: w.personId, kind, channel: 'linkedin' };
+  const text = (v: unknown, max: number, name: string) => {
+    if (v === undefined || v === null || v === '') return undefined;
+    if (typeof v !== 'string' || v.length > max)
+      throw badRequest(`write.${name} must be text of at most ${max}`);
+    return v.trim() || undefined;
+  };
+  const to = text(w.to, 254, 'to');
+  if (to && !/^[^\s@<>",]+@[^\s@<>",]+\.[^\s@<>",]+$/.test(to))
+    throw badRequest('write.to is not an email address');
+  const threadId = text(w.threadId, 200, 'threadId');
+  const inReplyTo = text(w.inReplyTo, 998, 'inReplyTo');
+  return {
+    personId: w.personId,
+    kind,
+    channel: 'gmail',
+    ...(to ? { to } : {}),
+    ...(threadId ? { threadId } : {}),
+    ...(inReplyTo ? { inReplyTo } : {}),
+  };
 }
 
 async function approve(ctx: Ctx): Promise<Response> {
@@ -138,6 +164,17 @@ async function approve(ctx: Ctx): Promise<Response> {
   // draft that is due now sends it
   const files = parseIncomingFiles(b.attachments);
   if (files) {
+    // an email the student wrote in the app is kept first, so its files have a draft to go on
+    if (write)
+      await keepWrittenDraft(ctx.db, ctx.userId!, {
+        draftId,
+        write,
+        confirm: b.confirm === true,
+        ...(typeof b.body === 'string' ? { body: b.body } : {}),
+        ...(typeof b.subject === 'string' || b.subject === null
+          ? { subject: b.subject as string | null }
+          : {}),
+      });
     await loadDraft(ctx.db, ctx.userId!, draftId);
     await setDraftFiles(ctx.db, ctx.userId!, draftId, files);
   }

@@ -377,6 +377,27 @@ export function LinkedInMark({ url, name, testId }: { url: string; name: string;
   );
 }
 
+/**
+ * The Gmail logo, at the size of LinkedInMark. `muted` greys it out: Orbit has no address for them yet.
+ */
+export function GmailLogo({ muted, size = 16 }: { muted?: boolean; size?: number }) {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      width={size}
+      height={size}
+      aria-hidden
+      className={cx('shrink-0', muted && 'grayscale opacity-40')}
+    >
+      <path fill="#4285F4" d="M3.6 19.5h2.7v-6.6L2.4 10v8.1c0 .77.63 1.4 1.2 1.4z" />
+      <path fill="#34A853" d="M17.7 19.5h2.7c.57 0 1.2-.63 1.2-1.4V10l-3.9 2.9z" />
+      <path fill="#FBBC04" d="M17.7 7.1v5.8l3.9-2.9V8.4c0-1.6-1.8-2.5-3.1-1.6z" />
+      <path fill="#EA4335" d="M6.3 12.9V7.1L12 11.4l5.7-4.3v5.8L12 17.2z" />
+      <path fill="#C5221F" d="M2.4 8.4V10l3.9 2.9V7.1l-.8-.6C4.2 5.9 2.4 6.8 2.4 8.4z" />
+    </svg>
+  );
+}
+
 export function PageHeader({
   title,
   subtitle,

@@ -1,7 +1,7 @@
 import type { Need } from '@orbit/core/search';
 import { SENIORITIES, TITLE_FAMILIES } from '@orbit/core/search';
 import { Briefcase, Building2, GraduationCap, Search, SlidersHorizontal, X } from 'lucide-react';
-import { type ReactNode, useEffect, useId, useState } from 'react';
+import { type InputHTMLAttributes, type ReactNode, useEffect, useId, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import {
   countFilters,
@@ -11,6 +11,8 @@ import {
   SENIORITY_LABELS,
 } from '../../engine/peopleSearch';
 import { Button, cx, useDialog } from '../../ui';
+import { Suggest, type Suggestion } from '../../ui/Suggest';
+import { type FilterField, suggestFilter } from './filterSuggest';
 import { NeedToggle } from './NeedToggle';
 
 type Section = 'role' | 'companies' | 'education' | 'advanced';
@@ -42,46 +44,95 @@ const SECTIONS: { id: Section; label: string; icon: ReactNode; words: string }[]
   },
 ];
 
-/** A boxed field that takes several entries: Enter or a comma adds one, the entries sit under it as chips. */
+/** The boxed input the chip fields type into: one component for the field's life, so the cursor is never lost. */
+function BoxInput(props: InputHTMLAttributes<HTMLInputElement>) {
+  return (
+    <input
+      {...props}
+      className="h-11 w-full rounded-[8px] border border-line bg-canvas-2/50 px-3.5 text-[14px] outline-none focus:border-ink focus:bg-canvas placeholder:text-[#a59f97]"
+    />
+  );
+}
+
+const tidy = (s: string) => s.replace(/\s+/g, ' ').trim();
+
+/**
+ * A boxed field that takes several entries: suggestions open under it as the student types (and before, the common
+ * choices), a click or the arrows and Enter pick one, Enter or a comma adds exactly what is typed, and the entries
+ * sit under it as chips.
+ */
 function ChipBox({
   values,
   onChange,
   placeholder,
   label,
   testId,
+  suggest,
 }: {
   values: string[];
   onChange: (next: string[]) => void;
   placeholder: string;
   label: string;
   testId: string;
+  /** matches for what is typed; an empty query asks for the common choices */
+  suggest?: (query: string) => Suggestion[] | Promise<Suggestion[]>;
 }) {
   const [draft, setDraft] = useState('');
-  const add = (raw: string) => {
+  // the arrows moved the highlight: Enter then picks that row; before that, Enter adds what is typed
+  const moved = useRef(false);
+  const has = (v: string) => values.some((x) => x.toLowerCase() === v.toLowerCase());
+  // what the list last offered: one of these is a whole entry, commas and all ("University of California, Berkeley")
+  const offered = useRef(new Set<string>());
+  const add = (raw: string, whole = false) => {
     const next = [...values];
-    for (const part of raw.split(',')) {
-      const t = part.replace(/\s+/g, ' ').trim();
+    for (const part of whole ? [raw] : raw.split(',')) {
+      const t = tidy(part);
       if (t && !next.some((x) => x.toLowerCase() === t.toLowerCase())) next.push(t);
     }
     if (next.length !== values.length) onChange(next);
     setDraft('');
+    moved.current = false;
+  };
+  const find = async (query: string): Promise<Suggestion[]> => {
+    const typed = tidy(query);
+    const got = suggest ? (await suggest(typed)).filter((s) => !has(s.value)) : [];
+    offered.current = new Set(got.map((s) => s.value));
+    if (!typed || has(typed)) return got;
+    // what is typed leads the list, so Enter and the first row are the same thing
+    const same = got.find((s) => s.value.toLowerCase() === typed.toLowerCase());
+    return same
+      ? [same, ...got.filter((s) => s !== same)]
+      : [{ value: typed, label: `Add "${typed}"` }, ...got];
   };
   return (
     <div data-testid={testId}>
-      <input
+      <Suggest
         value={draft}
-        onChange={(e) => (e.target.value.includes(',') ? add(e.target.value) : setDraft(e.target.value))}
+        onChange={(v) => {
+          moved.current = false;
+          if (v.includes(',') && !offered.current.has(v)) add(v);
+          else setDraft(v);
+        }}
+        suggest={find}
+        onPick={(s) => add(s.value, true)}
+        minChars={0}
+        input={BoxInput}
         onKeyDown={(e) => {
-          if (e.key === 'Enter') {
-            // Enter adds what is typed; it never saves the dialog by accident
+          const open = e.currentTarget.getAttribute('aria-expanded') === 'true';
+          if (e.key === 'ArrowDown' || e.key === 'ArrowUp') moved.current = true;
+          else if (e.key === 'Enter') {
+            // Enter never saves the dialog by accident
+            if (moved.current && open) return;
             e.preventDefault();
             if (draft.trim()) add(draft);
-          } else if (e.key === 'Backspace' && !draft && values.length) onChange(values.slice(0, -1));
+          } else if (e.key === 'Escape' && open)
+            // closes the suggestions, not the dialog
+            e.stopPropagation();
+          else if (e.key === 'Backspace' && !draft && values.length) onChange(values.slice(0, -1));
         }}
         onBlur={() => draft.trim() && add(draft)}
         placeholder={placeholder}
         aria-label={label}
-        className="h-11 w-full rounded-[8px] border border-line bg-canvas-2/50 px-3.5 text-[14px] outline-none focus:border-ink focus:bg-canvas placeholder:text-[#a59f97]"
         data-testid={`${testId}-input`}
       />
       {values.length > 0 && (
@@ -209,12 +260,15 @@ export function FiltersDialog({
   onSave,
   /** people outside the student's network can be searched at all (an Orbit account) */
   canSearchOutside,
+  userId,
 }: {
   open: boolean;
   filters: FilterForm;
   onClose: () => void;
   onSave: (next: FilterForm) => void;
   canSearchOutside: boolean;
+  /** whose people the fields suggest from */
+  userId: string;
 }) {
   const [f, setF] = useState<FilterForm>(filters);
   const [section, setSection] = useState<Section>('role');
@@ -231,6 +285,7 @@ export function FiltersDialog({
   }, [open, filters]);
   if (!open) return null;
   const set = (patch: Partial<FilterForm>) => setF((cur) => ({ ...cur, ...patch }));
+  const hints = (field: FilterField) => (query: string) => suggestFilter(userId, field, query);
   const q = find.trim().toLowerCase();
   const shown = SECTIONS.filter((s) => !q || `${s.label} ${s.words}`.toLowerCase().includes(q));
   const active = shown.find((s) => s.id === section) ?? shown[0];
@@ -363,6 +418,7 @@ export function FiltersDialog({
                       placeholder="Add a title or keyword"
                       label="Job title"
                       testId="filter-titles-box"
+                      suggest={hints('titles')}
                     />
                   ) : (
                     <>
@@ -407,6 +463,7 @@ export function FiltersDialog({
                     placeholder="Add a city or country"
                     label="Location"
                     testId="filter-places-box"
+                    suggest={hints('places')}
                   />
                 </Field>
               </>
@@ -425,6 +482,7 @@ export function FiltersDialog({
                     placeholder="Add a company"
                     label="Current company"
                     testId="filter-current-box"
+                    suggest={hints('companies')}
                   />
                 </Field>
                 <Field
@@ -441,6 +499,7 @@ export function FiltersDialog({
                     placeholder="Add a company"
                     label="Current and previous companies"
                     testId="filter-companies-box"
+                    suggest={hints('companies')}
                   />
                 </Field>
               </>
@@ -458,6 +517,7 @@ export function FiltersDialog({
                   placeholder="Add a school or university"
                   label="School"
                   testId="filter-schools-box"
+                  suggest={hints('schools')}
                 />
               </Field>
             )}
@@ -477,6 +537,7 @@ export function FiltersDialog({
                     placeholder="Add a keyword"
                     label="Keywords"
                     testId="filter-keywords-box"
+                    suggest={hints('keywords')}
                   />
                 </Field>
                 <Field title="Who to search" testId="filter-reach">

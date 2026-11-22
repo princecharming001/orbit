@@ -104,11 +104,16 @@ export function FindPeople({ userId }: { userId: string }) {
   };
 
   const lookUp = async (row: ResultRow) => {
-    if (!row.recommendationId) return;
+    const who = row.recommendationId
+      ? { recommendationId: row.recommendationId }
+      : row.personId
+        ? { personId: row.personId }
+        : undefined;
+    if (!who) return;
     setFinding(row.key);
     setError(undefined);
     try {
-      const r = await findEmail({ id: userId }, row.recommendationId);
+      const r = await findEmail({ id: userId }, who);
       if (!r.ok) setError(r.message);
       else if (r.value.email)
         patch(row.key, {
@@ -337,6 +342,7 @@ export function FindPeople({ userId }: { userId: string }) {
             onClose={() => setDialog(undefined)}
             onSave={saveFilters}
             canSearchOutside={isServerUser(userId)}
+            userId={userId}
           />
           <CriteriaDialog
             open={dialog === 'criteria'}

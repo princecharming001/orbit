@@ -179,7 +179,7 @@ export async function approveDraft(
   req: Partial<DraftApproveRequest>,
 ): Promise<ServerDraft> {
   const db = s.db;
-  // a LinkedIn message the student wrote in the app: kept as their draft first, so this tap sends it like any other
+  // a message the student wrote in the app: kept as their draft first, so this tap sends it like any other
   if (req.write) await keepWrittenDraft(db, userId, req);
   let d = await loadDraft(db, userId, req.draftId);
   if (d.status === 'sending' || d.status === 'sent') return toServerDraft(d);
@@ -285,16 +285,23 @@ export async function approveDraft(
 export const WRITTEN_BY_STUDENT = 'user';
 
 /**
- * A LinkedIn message the student wrote in the app (on a person's page, in Drafts) that the server does not hold: kept
- * as their draft under the id the app gave it, so the tap that carries it sends it through the same checks, limits
- * and LinkedIn account as a draft Orbit composed. Nothing is kept without that tap (`confirm`), only LinkedIn is
- * written this way, and only for one of the student's own people. A draft the server already holds is left as it is,
- * except the student's own words a rule stopped last time: this tap is a new try, checked afresh as it goes.
+ * A message the student wrote in the app (on a person's page, in Drafts) that the server does not hold: kept as their
+ * draft under the id the app gave it, so the tap that carries it sends it through the same checks, limits and accounts
+ * as a draft Orbit composed. Only LinkedIn (on its tap, `confirm`) and email are written this way, and only for one of
+ * the student's own people. An email goes to the person's address: one the student typed fills it in when Orbit had
+ * none, and one that differs is refused, never sent somewhere the student did not see. A draft the server already
+ * holds is left as it is, except the student's own words a rule stopped last time: this tap is a new try, checked
+ * afresh as it goes.
  */
-async function keepWrittenDraft(db: Db, userId: string, req: Partial<DraftApproveRequest>): Promise<void> {
+export async function keepWrittenDraft(
+  db: Db,
+  userId: string,
+  req: Partial<DraftApproveRequest>,
+): Promise<void> {
   const w = req.write;
   const id = req.draftId;
   if (!w || typeof id !== 'string' || !/^[0-9a-f-]{36}$/i.test(id)) return;
+  const email = w.channel === 'gmail';
   const [had] = await db.sql<{
     user_id: string;
     status: string;
@@ -307,7 +314,7 @@ async function keepWrittenDraft(db: Db, userId: string, req: Partial<DraftApprov
       had.generated_by === WRITTEN_BY_STUDENT &&
       had.status === 'cancelled' &&
       had.cancel_reason !== 'user' &&
-      req.confirm === true
+      (req.confirm === true || email)
     )
       await db.sql`
         update orbit.drafts set status = 'draft', cancel_reason = null, error = null
@@ -315,29 +322,55 @@ async function keepWrittenDraft(db: Db, userId: string, req: Partial<DraftApprov
     // anyone else's id is not found below, as for any draft that is not the student's
     return;
   }
-  if (w.channel !== 'linkedin') throw new HttpError(400, 'bad_request', 'write.channel is linkedin');
-  if (req.confirm !== true)
+  if (w.channel !== 'linkedin' && !email)
+    throw new HttpError(400, 'bad_request', 'write.channel is linkedin or gmail');
+  if (!email && req.confirm !== true)
     throw new HttpError(409, 'needs_confirmation', 'every LinkedIn message needs your tap to send');
   const body = req.body;
   if (typeof body !== 'string' || !body.trim() || body.length > 20_000)
     throw new HttpError(400, 'bad_request', 'body must be the message, at most 20,000 characters');
   // someone merged into another person since is that person now
-  const [p] = await db.sql<{ id: string }>`
-    select coalesce(merged_into, id) as id from orbit.people
+  const [p] = await db.sql<{ id: string; primary_email: string | null }>`
+    select coalesce(merged_into, id) as id,
+           (select primary_email from orbit.people q where q.id = coalesce(p.merged_into, p.id)) as primary_email
+      from orbit.people p
      where id = ${w.personId}::uuid and user_id = ${userId}::uuid and deleted_at is null`;
   if (!p) throw new HttpError(404, 'person_not_found', 'Orbit does not have this person on your account yet');
+  let subject: string | null = null;
+  if (email) {
+    const to = w.to?.trim().toLowerCase();
+    const theirs = p.primary_email?.trim().toLowerCase();
+    if (to && theirs && to !== theirs)
+      throw new HttpError(
+        409,
+        'recipient_differs',
+        `Orbit has ${p.primary_email} for them, not ${w.to}. Change their email on their page, then send.`,
+      );
+    if (!to && !theirs) throw new HttpError(409, 'no_email', 'Orbit has no email address for them yet');
+    // the address the student wrote to becomes theirs when Orbit had none
+    if (to && !theirs)
+      await db.sql`
+        update orbit.people set primary_email = ${w.to!.trim()}
+         where id = ${p.id}::uuid and user_id = ${userId}::uuid and primary_email is null`;
+    const s = typeof req.subject === 'string' ? req.subject.trim() : '';
+    if (s.length > 200) throw new HttpError(400, 'bad_request', 'subject must be at most 200 characters');
+    // a new email needs a subject; a reply takes its thread's
+    if (!s && !w.threadId) throw new HttpError(409, 'needs_subject', 'Add a subject line.');
+    subject = s || null;
+  }
   const [row] = await db.sql<{ id: string }>`
-    insert into orbit.drafts (id, user_id, person_id, channel, kind, subject, body, status, autonomy_level,
-                              generated_by)
-    values (${id}::uuid, ${userId}::uuid, ${p.id}::uuid, 'linkedin', ${w.kind}, null, ${body.trim()}, 'draft',
+    insert into orbit.drafts (id, user_id, person_id, channel, kind, subject, body, thread_external_id, in_reply_to,
+                              status, autonomy_level, generated_by)
+    values (${id}::uuid, ${userId}::uuid, ${p.id}::uuid, ${w.channel}, ${w.kind}, ${subject}, ${body.trim()},
+            ${email ? (w.threadId ?? null) : null}, ${email ? (w.inReplyTo ?? null) : null}, 'draft',
             0::smallint, ${WRITTEN_BY_STUDENT})
     on conflict (id) do nothing
     returning id`;
   if (row)
     await audit(db, userId, 'user', 'draft.write', id, {
       kind: w.kind,
-      channel: 'linkedin',
-      hash: messageHash({ channel: 'linkedin', subject: null, body: body.trim() }),
+      channel: w.channel,
+      hash: messageHash({ channel: w.channel, subject, body: body.trim() }),
     });
 }
 

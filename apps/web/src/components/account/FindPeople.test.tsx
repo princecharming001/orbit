@@ -17,6 +17,8 @@ import {
 
 const search = vi.hoisted(() => ({ interpretAsk: vi.fn(), runPeopleSearch: vi.fn() }));
 const sourcing = vi.hoisted(() => ({ findEmail: vi.fn(), addSourced: vi.fn() }));
+const hints = vi.hoisted(() => ({ suggestFilter: vi.fn() }));
+vi.mock('../search/filterSuggest', () => hints);
 vi.mock('../../engine/peopleSearch', async (orig) => ({
   ...(await orig<typeof import('../../engine/peopleSearch')>()),
   ...search,
@@ -89,6 +91,7 @@ beforeEach(() => {
   document.body.append(host);
   root = createRoot(host);
   search.interpretAsk.mockResolvedValue({ form: FORM, by: 'model' });
+  hints.suggestFilter.mockResolvedValue([]);
 });
 afterEach(() => {
   act(() => root.unmount());
@@ -290,6 +293,87 @@ describe('Find people: criteria and filters change the search', () => {
 });
 
 describe('Find people: adding and emails', () => {
+  it('Filters: a field suggests as you type; a click picks one, Enter adds what is typed, Escape closes only the list', async () => {
+    hints.suggestFilter.mockImplementation(async (_user: string, field: string, q: string) =>
+      field === 'schools' && q.toLowerCase().startsWith('uc b')
+        ? [{ value: 'University of California, Berkeley', sub: 'Berkeley, CA' }]
+        : field === 'schools' && !q
+          ? [{ value: 'Stanford University', sub: '4 people you know' }]
+          : [],
+    );
+    await searchFor([own]);
+    await click($('find-filters'));
+    const dialog = $('filters-dialog')!;
+    await click($('filters-section-education', dialog));
+    const school = $('filter-schools-box-input', dialog) as HTMLInputElement;
+    const options = () => $$('suggest-option').map((o) => o.textContent);
+    const key = (k: string) =>
+      act(async () => {
+        school.dispatchEvent(new KeyboardEvent('keydown', { key: k, bubbles: true }));
+      });
+    const settle = () => act(async () => {});
+    // before a letter is typed: the common choices, to pick from
+    await act(async () => school.focus());
+    await settle();
+    expect(options()).toEqual(['Stanford University4 people you know']);
+    await type(school, 'uc berkeley');
+    await settle();
+    expect(hints.suggestFilter).toHaveBeenLastCalledWith('u1', 'schools', 'uc berkeley');
+    // what is typed leads, then the matches
+    expect(options()).toEqual(['Add "uc berkeley"', 'University of California, BerkeleyBerkeley, CA']);
+    // Escape closes the list and leaves the dialog open
+    await key('Escape');
+    expect($('suggest-menu')).toBeNull();
+    expect($('filters-dialog')).not.toBeNull();
+    // a click on a suggestion adds it as a chip and empties the box
+    await type(school, 'uc b');
+    await settle();
+    await click($$('suggest-option')[1]!);
+    const chips = () => $$('filter-schools-box-chip', dialog).map((c) => c.textContent);
+    expect(chips()).toEqual(['University of California, Berkeley']);
+    expect(school.value).toBe('');
+    // what is already chosen is not offered again
+    await type(school, 'uc b');
+    await settle();
+    expect(options()).toEqual(['Add "uc b"']);
+    // Enter adds exactly what is typed
+    await key('Enter');
+    expect(chips()).toEqual(['University of California, Berkeley', 'uc b']);
+    // the arrows move to a suggestion and Enter picks it
+    hints.suggestFilter.mockResolvedValue([{ value: 'Harvard University' }]);
+    await type(school, 'harv');
+    await settle();
+    await key('ArrowDown');
+    await key('Enter');
+    expect(chips()).toEqual(['University of California, Berkeley', 'uc b', 'Harvard University']);
+    search.runPeopleSearch.mockClear();
+    await click($('filters-save', dialog));
+    expect((search.runPeopleSearch.mock.calls[0]![1] as SearchForm).filters.schools).toEqual([
+      'University of California, Berkeley',
+      'uc b',
+      'Harvard University',
+    ]);
+  });
+
+  it('every text filter asks for suggestions for its own field', async () => {
+    await searchFor([own]);
+    await click($('find-filters'));
+    const dialog = $('filters-dialog')!;
+    const asked = async (section: string, input: string) => {
+      if (section !== 'role') await click($(`filters-section-${section}`, dialog));
+      hints.suggestFilter.mockClear();
+      await type($(input, dialog) as HTMLInputElement, 'a');
+      await act(async () => {});
+      return hints.suggestFilter.mock.calls.at(-1)?.[1];
+    };
+    expect(await asked('role', 'filter-titles-box-input')).toBe('titles');
+    expect(await asked('role', 'filter-places-box-input')).toBe('places');
+    expect(await asked('companies', 'filter-current-box-input')).toBe('companies');
+    expect(await asked('companies', 'filter-companies-box-input')).toBe('companies');
+    expect(await asked('education', 'filter-schools-box-input')).toBe('schools');
+    expect(await asked('advanced', 'filter-keywords-box-input')).toBe('keywords');
+  });
+
   it('Add puts one person in, and the row then opens their page', async () => {
     sourcing.addSourced.mockResolvedValue({
       ok: true,
@@ -338,10 +422,26 @@ describe('Find people: adding and emails', () => {
     await searchFor([fresh]);
     expect(sourcing.findEmail).not.toHaveBeenCalled();
     await click($('find-email-lookup'));
-    expect(sourcing.findEmail).toHaveBeenCalledWith({ id: 'u1' }, 'r1');
+    expect(sourcing.findEmail).toHaveBeenCalledWith({ id: 'u1' }, { recommendationId: 'r1' });
     expect($('find-email-lookup')).toBeNull();
     expect($('find-email')!.getAttribute('href')).toBe('mailto:maya@seedfund.vc');
     expect($('find-email')!.getAttribute('title')).toBe('maya@seedfund.vc');
+  });
+
+  it('someone already in Orbit with no address has the greyed logo too, and a click looks theirs up', async () => {
+    sourcing.findEmail.mockResolvedValue({
+      ok: true,
+      value: { email: 'ana@accel.com', emailConfidence: 'pattern', emailStatus: 'found' },
+    });
+    await searchFor([own]);
+    const lookup = $('find-email-lookup')!;
+    expect(lookup.getAttribute('title')).toBe('Find their email');
+    expect(lookup.querySelector('svg')!.getAttribute('class')).toContain('grayscale');
+    await click(lookup);
+    expect(sourcing.findEmail).toHaveBeenCalledWith({ id: 'u1' }, { personId: 'p1' });
+    // found: the logo in colour, a link to write to them
+    expect($('find-email')!.getAttribute('href')).toBe('mailto:ana@accel.com');
+    expect($('find-email')!.querySelector('svg')!.getAttribute('class')).not.toContain('grayscale');
   });
 
   it('a miss says no email was found; someone with an address shows no lookup', async () => {
@@ -353,6 +453,12 @@ describe('Find people: adding and emails', () => {
     expect($$('find-email-lookup')).toHaveLength(1);
     expect($('find-email')!.getAttribute('title')).toBe('leo@fund.vc (a guess, not confirmed)');
     await click($('find-email-lookup'));
-    expect($('find-email-none')!.getAttribute('aria-label')).toBe('No email found');
+    // still the greyed logo, and a click looks again
+    expect($('find-email-none')!.getAttribute('aria-label')).toBe(
+      'No email found for Maya Chen yet. Look again',
+    );
+    expect($('find-email-none')!.querySelector('svg')!.getAttribute('class')).toContain('grayscale');
+    await click($('find-email-none'));
+    expect(sourcing.findEmail).toHaveBeenCalledTimes(2);
   });
 });

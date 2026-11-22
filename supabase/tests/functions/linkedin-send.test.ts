@@ -217,13 +217,13 @@ describe('LinkedIn sent from Orbit', () => {
     expect(s.unipile()).toHaveLength(0);
   });
 
-  it('only LinkedIn, only for one of the student own people, and never over another account draft', async () => {
+  it('only for one of the student own people, never another channel, and never over another account draft', async () => {
     const s = await setup(() => jsonRes(201, { message_id: 'never' }), { memberId: 'ACoAALou', chat: true });
     const other = await setup(() => jsonRes(201, { message_id: 'never' }), { memberId: 'ACoAAOther' });
     const write = { personId: s.personId, kind: 'reply', channel: 'linkedin' };
     const tries: [Record<string, unknown>, number][] = [
-      // an email is not written this way
-      [{ draftId: crypto.randomUUID(), write: { ...write, channel: 'gmail' } }, 400],
+      // only LinkedIn and email are written this way (an email has its own tests)
+      [{ draftId: crypto.randomUUID(), write: { ...write, channel: 'sms' } }, 400],
       [{ draftId: crypto.randomUUID(), write: { ...write, kind: 'not_a_kind' } }, 400],
       // someone in another account
       [{ draftId: crypto.randomUUID(), write: { ...write, personId: other.personId } }, 404],

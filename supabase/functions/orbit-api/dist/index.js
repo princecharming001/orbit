@@ -19466,36 +19466,61 @@ async function keepWrittenDraft(db2, userId, req) {
   const w = req.write;
   const id = req.draftId;
   if (!w || typeof id !== "string" || !/^[0-9a-f-]{36}$/i.test(id)) return;
+  const email2 = w.channel === "gmail";
   const [had] = await db2.sql`select user_id, status, generated_by, cancel_reason from orbit.drafts where id = ${id}::uuid`;
   if (had) {
-    if (had.user_id === userId && had.generated_by === WRITTEN_BY_STUDENT && had.status === "cancelled" && had.cancel_reason !== "user" && req.confirm === true)
+    if (had.user_id === userId && had.generated_by === WRITTEN_BY_STUDENT && had.status === "cancelled" && had.cancel_reason !== "user" && (req.confirm === true || email2))
       await db2.sql`
         update orbit.drafts set status = 'draft', cancel_reason = null, error = null
          where id = ${id}::uuid and user_id = ${userId}::uuid and status = 'cancelled'`;
     return;
   }
-  if (w.channel !== "linkedin") throw new HttpError(400, "bad_request", "write.channel is linkedin");
-  if (req.confirm !== true)
+  if (w.channel !== "linkedin" && !email2)
+    throw new HttpError(400, "bad_request", "write.channel is linkedin or gmail");
+  if (!email2 && req.confirm !== true)
     throw new HttpError(409, "needs_confirmation", "every LinkedIn message needs your tap to send");
   const body2 = req.body;
   if (typeof body2 !== "string" || !body2.trim() || body2.length > 2e4)
     throw new HttpError(400, "bad_request", "body must be the message, at most 20,000 characters");
   const [p] = await db2.sql`
-    select coalesce(merged_into, id) as id from orbit.people
+    select coalesce(merged_into, id) as id,
+           (select primary_email from orbit.people q where q.id = coalesce(p.merged_into, p.id)) as primary_email
+      from orbit.people p
      where id = ${w.personId}::uuid and user_id = ${userId}::uuid and deleted_at is null`;
   if (!p) throw new HttpError(404, "person_not_found", "Orbit does not have this person on your account yet");
+  let subject = null;
+  if (email2) {
+    const to = w.to?.trim().toLowerCase();
+    const theirs = p.primary_email?.trim().toLowerCase();
+    if (to && theirs && to !== theirs)
+      throw new HttpError(
+        409,
+        "recipient_differs",
+        `Orbit has ${p.primary_email} for them, not ${w.to}. Change their email on their page, then send.`
+      );
+    if (!to && !theirs) throw new HttpError(409, "no_email", "Orbit has no email address for them yet");
+    if (to && !theirs)
+      await db2.sql`
+        update orbit.people set primary_email = ${w.to.trim()}
+         where id = ${p.id}::uuid and user_id = ${userId}::uuid and primary_email is null`;
+    const s = typeof req.subject === "string" ? req.subject.trim() : "";
+    if (s.length > 200) throw new HttpError(400, "bad_request", "subject must be at most 200 characters");
+    if (!s && !w.threadId) throw new HttpError(409, "needs_subject", "Add a subject line.");
+    subject = s || null;
+  }
   const [row] = await db2.sql`
-    insert into orbit.drafts (id, user_id, person_id, channel, kind, subject, body, status, autonomy_level,
-                              generated_by)
-    values (${id}::uuid, ${userId}::uuid, ${p.id}::uuid, 'linkedin', ${w.kind}, null, ${body2.trim()}, 'draft',
+    insert into orbit.drafts (id, user_id, person_id, channel, kind, subject, body, thread_external_id, in_reply_to,
+                              status, autonomy_level, generated_by)
+    values (${id}::uuid, ${userId}::uuid, ${p.id}::uuid, ${w.channel}, ${w.kind}, ${subject}, ${body2.trim()},
+            ${email2 ? w.threadId ?? null : null}, ${email2 ? w.inReplyTo ?? null : null}, 'draft',
             0::smallint, ${WRITTEN_BY_STUDENT})
     on conflict (id) do nothing
     returning id`;
   if (row)
     await audit2(db2, userId, "user", "draft.write", id, {
       kind: w.kind,
-      channel: "linkedin",
-      hash: messageHash({ channel: "linkedin", subject: null, body: body2.trim() })
+      channel: w.channel,
+      hash: messageHash({ channel: w.channel, subject, body: body2.trim() })
     });
 }
 async function applyEdit(db2, d, req) {
@@ -21195,12 +21220,32 @@ function writtenDraft(b) {
   if (b.write === void 0 || b.write === null) return void 0;
   const w = b.write;
   if (typeof w !== "object" || Array.isArray(w)) throw badRequest("write is {personId, kind, channel}");
-  if (w.channel !== "linkedin") throw badRequest("write.channel is linkedin");
+  if (w.channel !== "linkedin" && w.channel !== "gmail")
+    throw badRequest("write.channel is linkedin or gmail");
   if (typeof w.personId !== "string" || !UUID.test(w.personId))
     throw badRequest("write.personId is required");
   const kind = w.kind;
   if (!KINDS.includes(kind)) throw badRequest("write.kind is not a message kind");
-  return { personId: w.personId, kind, channel: "linkedin" };
+  if (w.channel === "linkedin") return { personId: w.personId, kind, channel: "linkedin" };
+  const text3 = (v, max, name) => {
+    if (v === void 0 || v === null || v === "") return void 0;
+    if (typeof v !== "string" || v.length > max)
+      throw badRequest(`write.${name} must be text of at most ${max}`);
+    return v.trim() || void 0;
+  };
+  const to = text3(w.to, 254, "to");
+  if (to && !/^[^\s@<>",]+@[^\s@<>",]+\.[^\s@<>",]+$/.test(to))
+    throw badRequest("write.to is not an email address");
+  const threadId = text3(w.threadId, 200, "threadId");
+  const inReplyTo = text3(w.inReplyTo, 998, "inReplyTo");
+  return {
+    personId: w.personId,
+    kind,
+    channel: "gmail",
+    ...to ? { to } : {},
+    ...threadId ? { threadId } : {},
+    ...inReplyTo ? { inReplyTo } : {}
+  };
 }
 async function approve(ctx) {
   const b = await body(ctx);
@@ -21208,6 +21253,14 @@ async function approve(ctx) {
   const write2 = writtenDraft(b);
   const files = parseIncomingFiles(b.attachments);
   if (files) {
+    if (write2)
+      await keepWrittenDraft(ctx.db, ctx.userId, {
+        draftId,
+        write: write2,
+        confirm: b.confirm === true,
+        ...typeof b.body === "string" ? { body: b.body } : {},
+        ...typeof b.subject === "string" || b.subject === null ? { subject: b.subject } : {}
+      });
     await loadDraft(ctx.db, ctx.userId, draftId);
     await setDraftFiles(ctx.db, ctx.userId, draftId, files);
   }

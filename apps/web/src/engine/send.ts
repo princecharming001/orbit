@@ -1,5 +1,6 @@
 import type {
   CoffeeChat,
+  DraftWrite,
   EmailMessage,
   EmailThread,
   OutboundMessage,
@@ -297,14 +298,15 @@ interface Envelope {
 /**
  * A reply the server holds for an account: it goes from the server into the thread it answers, under that thread's
  * subject, even when this browser has not synced the thread (so no subject is asked for here, and approving it never
- * waits on one).
+ * waits on one). A reply the student wrote in this browser is not one of these: the server learns of it with the
+ * tap that sends it, so it carries its own subject or the thread it answers.
  */
 async function serverHeldReply(msg: OutboundMessage): Promise<boolean> {
   return (
     msg.kind === 'reply' &&
     msg.channel === 'gmail' &&
     isServerUser(msg.userId) &&
-    !!(await import('./serverSync')).serverIdOf(msg.id)
+    (await import('./serverSync')).serverIdOf(msg.id) === msg.id
   );
 }
 
@@ -638,6 +640,11 @@ async function approveOnServer(
   sendAt?: Date,
   /** a LinkedIn message: the student's tap is the confirmation the server asks for, and it goes at once */
   confirm = false,
+  /**
+   * an email the student wrote in this browser, which the server may not hold: who it is for, so the server keeps it
+   * under this draft's id and sends it like one it composed, instead of a "not found" that opened the mail app
+   */
+  write?: DraftWrite,
 ): Promise<ApproveResult | undefined> {
   const sync = await import('./serverSync');
   // a draft made in this browser goes up first
@@ -656,8 +663,13 @@ async function approveOnServer(
     ...(subject !== undefined ? { subject } : {}),
     ...(sendAt ? { sendAt: sendAt.toISOString() } : { undoSec: Math.round(undoMs / 1000) }),
     ...(confirm ? { confirm: true } : {}),
+    ...(write ? { write } : {}),
   });
-  if (!r.ok) return r.code === 'not_found' ? undefined : { ok: false, error: r.message };
+  if (!r.ok) {
+    // a draft the server never had, with nothing to say who it is for: this browser sends it as before
+    if (r.code === 'not_found' && !write) return undefined;
+    return { ok: false, error: emailWriteError(r.code, r.message) };
+  }
   await sync.keepServerDraft(r.value.draft, user.id);
   await audit(user.id, 'message.approved', {
     objectTable: 'outbound',
@@ -671,6 +683,17 @@ async function approveOnServer(
 }
 
 export { linkedinSendError };
+
+/** Why the server would not keep or send an email the student wrote, in words; its own message otherwise. */
+export function emailWriteError(code: string | undefined, message: string): string {
+  if (code === 'person_not_found')
+    return 'Orbit has not saved this person to your account yet. Try again in a moment.';
+  if (code === 'no_email')
+    return 'Orbit has no email address for them yet. Add one on their page, then send.';
+  if (code === 'needs_subject') return 'Add a subject line.';
+  if (code === 'not_found') return 'Orbit could not send this itself just now. Try again in a moment.';
+  return message;
+}
 
 /**
  * An account's LinkedIn message, sent by the server from the student's own LinkedIn on this tap (`confirm`), at once.
@@ -971,6 +994,26 @@ export async function approveAndSend(
   if (!opts.via && msg.channel === 'gmail') {
     const serverId = await serverEmailId(user, msg);
     if (serverId) {
+      const sync = await import('./serverSync');
+      // an email the student wrote in this browser: the server keeps it under the same uuid with this tap, and its
+      // copy comes back onto this same row (it used to answer "not found", and the mail app opened instead)
+      if (serverId !== msg.id) {
+        await sync.rememberAlias(serverId, msg.id);
+        // someone added here (by hand, from a search) goes up first, so the server knows who it is for
+        await sync.pushOutbox().catch(() => undefined);
+      }
+      const personId = sync.serverIdOf(msg.personId);
+      const to = msg.toEmail ?? person.primaryEmail;
+      const write: DraftWrite | undefined = personId
+        ? {
+            personId,
+            kind: msg.kind,
+            channel: 'gmail',
+            ...(to ? { to } : {}),
+            ...(env.threaded && env.externalThreadId ? { threadId: env.externalThreadId } : {}),
+            ...(env.threaded && env.inReplyTo ? { inReplyTo: env.inReplyTo } : {}),
+          }
+        : undefined;
       const viaServer = await approveOnServer(
         user,
         msg,
@@ -979,6 +1022,8 @@ export async function approveAndSend(
         env.threaded ? undefined : env.subject,
         opts.undoWindowMs ?? UNDO_WINDOW_MS,
         opts.scheduleAt,
+        false,
+        write,
       );
       if (viaServer) return viaServer;
     }

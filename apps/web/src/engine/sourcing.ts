@@ -11,7 +11,7 @@ import type {
 } from '@orbit/core';
 import { db } from '../db/schema';
 import { callApi, isAccountMode, isServerUser, NO_SERVER, SIGN_IN_FIRST } from '../integrations/orbitApi';
-import { pullNow } from './serverSync';
+import { pullNow, serverIdOf } from './serverSync';
 
 /** The providers by the names a student would know. */
 export const PROVIDER_LABELS: Record<string, string> = {
@@ -114,11 +114,19 @@ export async function addSourced(user: Pick<User, 'id'>, recommendationIds: stri
  */
 export async function findEmail(
   user: Pick<User, 'id'>,
-  recommendationId: string,
+  who: string | { recommendationId: string } | { personId: string },
 ): Promise<{ ok: true; value: SourceEmailResponse } | { ok: false; message: string }> {
   if (!isServerUser(user.id)) return notHere();
-  const r = await callApi('/source/email', { recommendationId });
+  const body =
+    typeof who === 'string'
+      ? { recommendationId: who }
+      : 'personId' in who
+        ? { personId: serverIdOf(who.personId) ?? who.personId }
+        : who;
+  const r = await callApi('/source/email', body);
   if (!r.ok) return { ok: false, message: r.message };
+  // someone the student already has: the address is on their row on the server now, so bring it down
+  if ('personId' in body && r.value.email) await pullNow(user.id).catch(() => undefined);
   return { ok: true, value: r.value };
 }
 

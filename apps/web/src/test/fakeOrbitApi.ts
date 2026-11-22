@@ -1625,24 +1625,30 @@ export function createFakeOrbitApi(
         return json(200, { draft: d });
       }
       case '/drafts/approve': {
-        // a LinkedIn message the student wrote in the app: kept under the draft's id with the tap that sends it
-        const w = body.write as { personId?: string; kind?: string; channel?: string } | undefined;
+        // a message the student wrote in the app (LinkedIn or email): kept under the draft's id with the tap that
+        // sends it, as the server's keepWrittenDraft does
+        const w = body.write as
+          | { personId?: string; kind?: string; channel?: string; to?: string; threadId?: string }
+          | undefined;
         if (w && !state.ignoreWrite && !state.drafts.has(String(body.draftId))) {
-          if (w.channel !== 'linkedin') return error(400, 'bad_request', 'write.channel is linkedin');
-          if (body.confirm !== true)
+          if (w.channel !== 'linkedin' && w.channel !== 'gmail')
+            return error(400, 'bad_request', 'write.channel is linkedin or gmail');
+          if (w.channel === 'linkedin' && body.confirm !== true)
             return error(409, 'needs_confirmation', 'every LinkedIn message needs your tap to send');
           if (typeof body.body !== 'string' || !body.body.trim())
             return error(400, 'bad_request', 'body must be the message');
           if (!/^[0-9a-f-]{36}$/i.test(String(w.personId)))
             return error(404, 'person_not_found', 'Orbit does not have this person on your account yet');
-          const made = draftRow(
-            String(body.draftId),
-            String(w.personId),
-            'linkedin',
-            body.body.trim(),
-            clock,
-          );
+          if (w.channel === 'gmail') {
+            if (!w.to) return error(409, 'no_email', 'Orbit has no email address for them yet');
+            if (!w.threadId && !(typeof body.subject === 'string' && body.subject.trim()))
+              return error(409, 'needs_subject', 'Add a subject line.');
+          }
+          const made = draftRow(String(body.draftId), String(w.personId), w.channel, body.body.trim(), clock);
           made.kind = w.kind as ServerDraft['kind'];
+          if (w.channel === 'gmail')
+            made.subject =
+              typeof body.subject === 'string' && body.subject.trim() ? body.subject.trim() : null;
           state.drafts.set(made.id, made);
         }
         const d = state.drafts.get(String(body.draftId));

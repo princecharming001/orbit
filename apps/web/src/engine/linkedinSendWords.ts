@@ -99,3 +99,27 @@ export function linkedinSendError(code: string | null | undefined, length?: numb
     return 'LinkedIn would not take this message. They may have a pending request from you, or limit who can message them.';
   return 'LinkedIn did not take it just now. Try again in a moment.';
 }
+
+/** The reasons that stop a message whatever it is sent with: the same sentences for an email as for LinkedIn. */
+const SHARED_STOPS = new Set([
+  'do_not_contact',
+  'minor',
+  'unanswered_limit',
+  'sensitive_category',
+  'replied',
+  'needs_input',
+]);
+
+/** Why an email the student wrote did not go from Orbit, in words. */
+export function emailSendError(code: string | null | undefined): string {
+  if (code && SHARED_STOPS.has(code)) return linkedinSendError(code);
+  if (code === 'no_email' || code === 'no_recipient')
+    return 'Orbit has no email address for them yet. Add one on their page, then send.';
+  if (code === 'bounced' || code === 'hard_bounce')
+    return 'That address did not take the email. Check it on their page, then send again.';
+  if (code === 'daily_cap' || code === 'email_daily_cap')
+    return 'You have sent as many emails as Orbit allows in a day. It resets at midnight.';
+  if (code === 'google_reconnect' || code === 'no_send_scope' || code === 'invalid_grant')
+    return 'Gmail needs to be connected again before Orbit can send. Reconnect it in Settings, then send again.';
+  return 'Gmail did not take it just now. Try again in a moment.';
+}
