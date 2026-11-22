@@ -38,8 +38,8 @@ async function openDrafts(page: Page) {
   await expect(page.getByRole('heading', { name: 'Drafts', level: 1 })).toBeVisible();
 }
 
-/** A message just opened in the mail app or LinkedIn: it stays at the top of To send, with "I sent it". */
-const handedOff = (page: Page) => page.getByTestId('drafts-handed-off');
+/** A message just opened in the mail app or LinkedIn: a row at the top of To send, open, with "I sent it". */
+const handedOff = (page: Page) => page.getByTestId('drafts-messages');
 
 /** Every state the landing header's buttons go through after a reload, as recorded by a MutationObserver. */
 async function landingHeaderStates(page: Page): Promise<string[]> {
@@ -1721,20 +1721,44 @@ test.describe("Never losing the student's work, and honest hand-offs", () => {
       .getByRole('link', { name: /^drafts/i })
       .first()
       .click();
-    const started = page.getByTestId('started-draft');
+    // a draft the student started is one of the drafts to send: a compact row in the To send list, listed once,
+    // with no section of its own and no buttons until it is opened
+    const started = page.getByTestId('drafts-to-send').getByTestId('started-draft');
+    await expect(started).toHaveCount(1);
     await expect(started).toContainText('Daniel Kim');
     await expect(started).toContainText('Glad to');
+    await expect(page.getByText(/started by you/i)).toHaveCount(0);
+    await expect(page.getByTestId('outbox-item').filter({ hasText: 'Daniel Kim' })).toHaveCount(0);
+    await expect(started.getByRole('button', { name: /continue writing|discard draft/i })).toHaveCount(0);
+    await expect(started.getByLabel('Message body')).toHaveCount(0);
+    // the To send count has it, once
+    const toSendTab = page.getByRole('tab', { name: /^to send/i });
+    const cards = await page.getByTestId('drafts-to-send').locator('[data-testid^="suggestion-"]').count();
+    await expect(toSendTab).toContainText(String(cards + 1));
     // the draft took the place of the "write to" step
     await expect(page.getByTestId('drafts-to-write')).toHaveCount(0);
-    await expect(page.getByTestId('drafts-started')).toContainText('Daniel Kim');
-    await page
-      .getByTestId('drafts-started')
-      .getByRole('button', { name: /continue writing/i })
-      .click();
-    // it opens right there, with Send: nothing leaves Drafts
-    await expect(page.getByTestId('started-draft-editor')).toBeVisible();
+    // one click on the row opens it right there, with Send: nothing leaves Drafts
+    const toggle = started.getByTestId('started-draft-toggle');
+    await expect(toggle).toHaveAttribute('aria-expanded', 'false');
+    await started.click();
+    await expect(started.getByTestId('started-draft-editor')).toBeVisible();
+    await expect(toggle).toHaveAttribute('aria-expanded', 'true');
     await expect(box).toHaveValue(/Glad to/);
+    await expect(started.getByTestId('started-draft-discard')).toBeVisible();
     await expect(page).toHaveURL(/\/inbox|\/drafts/);
+    // a click on its header closes it again, and what was typed is kept for next time
+    await box.fill(`${await box.inputValue()} See you soon.`);
+    await toggle.click();
+    await expect(started.getByTestId('started-draft-editor')).toHaveCount(0);
+    await expect(toggle).toHaveAttribute('aria-expanded', 'false');
+    await expect(started.getByTestId('started-draft-preview')).toContainText('See you soon.');
+    await toggle.press('Enter');
+    await expect(started.getByTestId('started-draft-editor')).toBeVisible();
+    await expect(box).toHaveValue(/Glad to\. See you soon\./);
+    // Escape closes it too
+    await box.press('Escape');
+    await expect(started.getByTestId('started-draft-editor')).toHaveCount(0);
+    await expect(toggle).toBeFocused();
     // on their page, Write to opens the same draft, without asking about the warm-up again
     await page.getByTestId('started-draft').getByRole('link', { name: 'Daniel Kim' }).click();
     await page.getByTestId('person-write').click();
@@ -1892,7 +1916,7 @@ test.describe('Usability round 5: one draft, kept edits, saved settings, chats t
     await expect(page.getByTestId('approvals-badge').first()).toHaveText(String(badge));
     await expect(page.getByTestId('person-started-draft')).toHaveCount(0);
     await openDrafts(page);
-    await expect(page.getByTestId('drafts-started')).toHaveCount(0);
+    await expect(page.getByTestId('started-draft')).toHaveCount(0);
   });
 
   test('a blank left in a message by hand, even with its brackets deleted, keeps the send buttons off', async ({

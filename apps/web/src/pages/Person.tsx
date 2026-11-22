@@ -867,34 +867,45 @@ export function PersonPage() {
         return (
           <div className="mb-5 space-y-3" data-testid="person-waiting">
             <div className="text-[12px] uppercase tracking-wide text-ink-3">Waiting on you</div>
+            {/* as on Drafts: one compact row, and a click anywhere on it opens the draft in the composer below
+                (its Close brings the row back, with what was typed); Discard is a quiet link on hover or focus */}
             {started.map((d) => (
               <div
                 key={d.id}
-                className="rounded-[var(--radius-card)] border border-line p-3"
+                className="group relative rounded-[var(--radius-card)] border border-line transition-colors hover:bg-canvas-2/60"
                 data-testid="person-started-draft"
               >
-                <div className="text-[13px] text-ink-2">
-                  {MESSAGE_KIND_LABELS[d.kind]} you started {relDate(d.createdAt)}, not sent yet.
-                </div>
-                <p className="text-[13px] text-ink-3 mt-1 line-clamp-2 whitespace-pre-line">
-                  {d.bodyFinal ?? d.bodyDraft}
-                </p>
-                <div className="mt-2 flex flex-wrap gap-2">
-                  <Button
-                    size="sm"
-                    variant="primary"
-                    onClick={() => {
-                      setDraftId(d.id);
-                      setComposing(d.kind);
-                    }}
-                    data-testid="person-continue-draft"
+                <button
+                  type="button"
+                  className="absolute inset-0 w-full cursor-pointer rounded-[var(--radius-card)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ink/25"
+                  aria-expanded={false}
+                  aria-label={`Open the ${MESSAGE_KIND_LABELS[d.kind].toLowerCase()} you started to ${person.firstName}`}
+                  onClick={() => {
+                    setDraftId(d.id);
+                    setComposing(d.kind);
+                  }}
+                  data-testid="person-continue-draft"
+                />
+                <div className="flex items-center gap-2 px-3 pt-2 text-[13px] text-ink-2">
+                  <span className="min-w-0 flex-1 truncate">
+                    {MESSAGE_KIND_LABELS[d.kind]} you started {relDate(d.createdAt)}, not sent yet.
+                  </span>
+                  <button
+                    type="button"
+                    className="relative shrink-0 rounded px-1 text-[12px] text-ink-3 underline-offset-2 opacity-0 transition-opacity hover:text-ink hover:underline focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ink/25 group-hover:opacity-100 pointer-coarse:opacity-100"
+                    onClick={() => discardDraft(d.id)}
+                    data-testid="person-discard-draft"
                   >
-                    Continue writing
-                  </Button>
-                  <Button size="sm" variant="ghost" onClick={() => discardDraft(d.id)}>
                     Discard draft
-                  </Button>
+                  </button>
+                  <ChevronDown size={15} aria-hidden className="shrink-0 text-ink-3" />
                 </div>
+                {/* the clamp sits on the text, not the padded line, so no half line shows under it */}
+                <p className="px-3 pb-2.5 mt-0.5 text-[13px] text-ink-3">
+                  <span className="line-clamp-2">
+                    {(d.bodyFinal ?? d.bodyDraft).replace(/\s+/g, ' ').trim()}
+                  </span>
+                </p>
               </div>
             ))}
             {cards.map((w) => (
