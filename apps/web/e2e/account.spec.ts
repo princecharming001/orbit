@@ -15,6 +15,8 @@ import { prep, QUESTION_ADDRESSES, skipQuestions } from './helpers';
 const P1 = '0b8f6a0e-1111-4c2e-8d1a-000000000001';
 const P2 = '0b8f6a0e-1111-4c2e-8d1a-000000000002';
 const P3 = '0b8f6a0e-1111-4c2e-8d1a-000000000003';
+const P4 = '0b8f6a0e-1111-4c2e-8d1a-000000000004';
+const P5 = '0b8f6a0e-1111-4c2e-8d1a-000000000005';
 
 async function withFakeApi(page: Page): Promise<FakeOrbitApi> {
   await prep(page);
@@ -420,8 +422,46 @@ test.describe('account mode (mocked orbit-api)', () => {
       expect(api.routes()).toContain('/people/history');
     });
 
-    test('Discover, Find people: search, see who you know, add one', async ({ page }) => {
+    test('Discover, Find people: one table of who fits, with the path, the match and Add', async ({
+      page,
+    }) => {
       const api = await signedIn(page);
+      const u = api.state.user.id;
+      const at = '2026-10-05T12:00:00.000Z';
+      // two investors the student already has, beside the three from the seeded network
+      api.state.pages.push({
+        changes: {
+          people: [
+            {
+              id: P4,
+              userId: u,
+              displayName: 'Nadia Okoro',
+              currentTitle: 'Partner',
+              currentOrganizationRaw: 'Gradient Ventures',
+              headline: 'Partner at Gradient Ventures, a seed fund',
+              linkedinUrl: 'https://www.linkedin.com/in/nadia-okoro',
+              sources: ['linkedin'],
+              tieScore: 62,
+              tieBand: 'strong',
+              createdAt: at,
+              updatedAt: at,
+            },
+            {
+              id: P5,
+              userId: u,
+              displayName: 'Theo Marsh',
+              currentTitle: 'Investor',
+              currentOrganizationRaw: 'Cove Fund',
+              headline: 'Investor at Cove Fund',
+              sources: ['linkedin'],
+              tieScore: 18,
+              tieBand: 'light',
+              createdAt: at,
+              updatedAt: at,
+            },
+          ],
+        },
+      });
       api.state.sourced = [
         {
           id: 'rec_a',
@@ -430,16 +470,16 @@ test.describe('account mode (mocked orbit-api)', () => {
           org: 'Seedling Fund',
           email: 'rhea@seedling.fund',
           url: 'https://seedling.fund/team',
-          evidence: [
-            'Works on seed rounds in climate software',
-            'Listed on Team | Seedling (https://seedling.fund/team)',
-          ],
+          linkedinUrl: 'https://www.linkedin.com/in/rhea-kapoor',
+          evidence: ['Works on seed rounds in climate software'],
           source: 'web',
           rank: 0.8,
           fit: 0.9,
           reach: 0.4,
           responsiveness: 0.5,
           reasons: ['Leads seed rounds in climate software'],
+          bridge: { personId: P1, name: 'Priya Shah' },
+          tier: 2,
         },
         {
           id: 'rec_b',
@@ -453,32 +493,227 @@ test.describe('account mode (mocked orbit-api)', () => {
           responsiveness: 0.5,
           reasons: ['Knows the climate team'],
           knownPersonId: P2,
+          tier: 1,
+        },
+        {
+          id: 'rec_c',
+          name: 'Jonas Weber',
+          title: 'Principal',
+          org: 'Cherry Ventures',
+          source: 'unipile',
+          rank: 0.5,
+          fit: 0.7,
+          reach: 0.05,
+          responsiveness: 0.5,
+          reasons: ['Seed investor'],
+          degree: 2,
+          emailStatus: 'not looked up',
         },
       ];
       await page.goto('discover?tab=find');
-      await page.getByTestId('find-purpose-fundraising').click();
-      await page.getByTestId('find-query').fill('seed investors in climate software');
+      // one box and Search: no row of purposes to pick from
+      await expect(page.locator('[data-testid^="find-purpose-"]')).toHaveCount(0);
+      await page.getByTestId('find-query').fill('investors');
       await page.getByTestId('find-search').click();
-      await expect(page.getByTestId('find-result')).toHaveCount(2);
-      // what the web found: the email as the page gave it, and what they work on
-      await expect(page.getByTestId('find-result').first().getByTestId('find-email')).toHaveText(
-        'rhea@seedling.fund',
+      const rows = page.getByTestId('find-result');
+      await expect(rows).toHaveCount(5);
+      await expect(page.getByTestId('find-count')).toHaveText('5 matches');
+      await expect(page.getByTestId('find-split')).toHaveText('2 you already know, 3 new.');
+      // the header is the reference's: who, profile, path, title, company, match
+      await expect(page.locator('[data-testid="find-results"] thead th')).toHaveText([
+        'Name',
+        'Profiles',
+        'Paths',
+        'Title',
+        'Company',
+        'Match',
+        'Add',
+      ]);
+      // the student's own investors: a link to their page, the strength of the tie, no Add
+      const nadia = rows.filter({ hasText: 'Nadia Okoro' });
+      await expect(nadia).toHaveAttribute('data-own', 'true');
+      await expect(nadia.getByTestId('find-name')).toHaveAttribute('href', new RegExp(`people/${P4}$`));
+      await expect(nadia.getByTestId('result-path')).toHaveAttribute('data-kind', 'direct');
+      await expect(nadia.getByTestId('result-path-bars')).toHaveAttribute('data-level', '3');
+      await expect(nadia.getByTestId('find-add')).toHaveCount(0);
+      await expect(nadia).toContainText('Gradient Ventures');
+      await expect(nadia.getByTestId('find-linkedin')).toHaveAttribute(
+        'href',
+        'https://www.linkedin.com/in/nadia-okoro',
       );
-      await expect(page.getByTestId('find-result').first().getByTestId('find-context')).toContainText(
-        'Works on seed rounds',
+      // someone new with a way in: through the person the student is warm with
+      const rhea = rows.filter({ hasText: 'Rhea Kapoor' });
+      await expect(rhea.getByTestId('result-path')).toHaveAttribute('data-kind', 'intro');
+      await expect(rhea.getByTestId('result-path')).toContainText('Priya Shah');
+      await expect(rhea.getByTestId('find-email')).toHaveAttribute('href', 'mailto:rhea@seedling.fund');
+      await expect(rhea.getByTestId('find-match')).toHaveText('90%');
+      // a second-degree stranger, and someone found outside whom the student already has
+      await expect(rows.filter({ hasText: 'Jonas Weber' }).getByTestId('result-path')).toContainText(
+        '2nd degree',
       );
-      await expect(page.getByTestId('find-result').nth(1)).toContainText('You know them');
+      const sam = rows.filter({ hasText: 'Sam Lee' });
+      await expect(sam.getByTestId('find-name')).toHaveAttribute('href', new RegExp(`people/${P2}$`));
+      await expect(sam.getByTestId('find-add')).toHaveCount(0);
+      // best match first: every row is at or under the one above it
+      const matches = (await page.getByTestId('find-match').allTextContents()).map((t) =>
+        Number.parseInt(t, 10),
+      );
+      expect(matches).toEqual([...matches].sort((a, b) => b - a));
       await expect(page.getByTestId('find-quiet')).toContainText('Not searched yet: Apollo');
-      await page.getByTestId('find-add').first().click();
-      await expect(
-        page
-          .getByTestId('find-result')
-          .first()
-          .getByRole('link', { name: /added, open/i }),
-      ).toBeVisible();
+      // what the server was asked: people only, the investing titles, for fundraising
+      const asked = api.state.sourceSearches.at(-1)!;
+      expect(asked).toMatchObject({ purpose: 'fundraising', query: 'investors', peopleOnly: true });
+      expect((asked.filters as { titles: string[] }).titles).toContain('investor');
+      if (process.env.SHOT_DIR) await page.screenshot({ path: `${process.env.SHOT_DIR}/find-table.png` });
+      // Add one: the row then opens their page
+      await rhea.getByTestId('find-add').click();
+      await expect(rhea.getByRole('link', { name: /added, open/i })).toBeVisible();
       expect(api.calls.find((c) => c.route === '/source/add')?.body).toEqual({
         recommendationIds: ['rec_a'],
       });
+      // an address is looked up only when asked
+      await rows.filter({ hasText: 'Jonas Weber' }).getByTestId('find-email-lookup').click();
+      await expect(rows.filter({ hasText: 'Jonas Weber' }).getByTestId('find-email-none')).toBeVisible();
+    });
+
+    test('Discover, Find people: criteria and filters are read, shown, changed, and the search runs again', async ({
+      page,
+    }) => {
+      const api = await signedIn(page);
+      api.state.sourced = [
+        {
+          id: 'rec_a',
+          name: 'Rhea Kapoor',
+          title: 'Partner',
+          org: 'Seedling Fund',
+          source: 'web',
+          rank: 0.8,
+          fit: 0.9,
+          reach: 0.4,
+          responsiveness: 0.5,
+          reasons: [],
+          checks: [{ text: '', need: 'must', answer: 'yes' }],
+        },
+        {
+          id: 'rec_b',
+          name: 'Omar Haddad',
+          title: 'Scout',
+          org: 'Seedcamp',
+          source: 'unipile',
+          rank: 0.5,
+          fit: 0.8,
+          reach: 0,
+          responsiveness: 0.5,
+          reasons: [],
+          checks: [{ text: '', need: 'must', answer: 'no' }],
+        },
+        {
+          id: 'rec_c',
+          name: 'Lena Fox',
+          title: 'Associate',
+          org: 'Atomico',
+          source: 'unipile',
+          rank: 0.5,
+          fit: 0.5,
+          reach: 0,
+          responsiveness: 0.5,
+          reasons: [],
+        },
+      ];
+      await page.goto('discover?tab=find');
+      await page.getByTestId('find-query').fill('investors in London');
+      await page.getByTestId('find-search').click();
+      await expect(page.getByTestId('find-result')).toHaveCount(3);
+      // the sentence was read into filters: the kind of work and the place
+      await expect(page.getByTestId('find-filters')).toHaveText('2');
+      await expect(page.getByTestId('find-criteria')).toHaveText('0');
+      expect(api.state.sourceSearches.at(-1)).toMatchObject({ filters: { locations: ['London'] } });
+
+      // Criteria: write one as a must-have and Update
+      await page.getByTestId('find-criteria').click();
+      const criteria = page.getByTestId('criteria-dialog');
+      await expect(criteria).toContainText('Must haves decide who fits; nice to haves rank people higher.');
+      await criteria.getByTestId('criterion-text').fill('Works at a venture capital firm');
+      if (process.env.SHOT_DIR) await page.screenshot({ path: `${process.env.SHOT_DIR}/find-criteria.png` });
+      await criteria.getByTestId('criteria-save').click();
+      await expect(criteria).toHaveCount(0);
+      // the must-have "no" is gone, the yes leads, and the criterion is a column with an answer on every row
+      await expect(page.getByTestId('find-criteria')).toHaveText('1');
+      await expect(page.getByTestId('find-criterion-head')).toHaveText('Works at a venture capital firm');
+      await expect(page.getByTestId('find-name')).toHaveText(['Rhea Kapoor', 'Lena Fox']);
+      await expect(page.getByTestId('find-thumb').first()).toHaveAttribute('data-answer', 'yes');
+      await expect(page.getByTestId('find-thumb').nth(1)).toHaveAttribute('data-answer', 'unknown');
+      expect(api.state.sourceSearches.at(-1)).toMatchObject({
+        criteria: [{ text: 'Works at a venture capital firm', need: 'must' }],
+      });
+      if (process.env.SHOT_DIR)
+        await page.screenshot({ path: `${process.env.SHOT_DIR}/find-criterion-column.png` });
+
+      // nice to have: nobody is left out for it
+      await page.getByTestId('find-criteria').click();
+      await page.getByTestId('criterion-need-nice').click();
+      await page.getByTestId('criteria-save').click();
+      await expect(page.getByTestId('find-result')).toHaveCount(3);
+      await expect(page.getByTestId('find-criterion-head')).toContainText('(nice to have)');
+
+      // Filters: the place is there as read; add a title, a seniority and a company, change the place, save
+      await page.getByTestId('find-filters').click();
+      const filters = page.getByTestId('filters-dialog');
+      await expect(filters.getByTestId('filter-places-box-chip')).toHaveText(['London']);
+      await filters.getByTestId('filters-role-tab-groups').click();
+      await expect(filters.getByTestId('filter-families-investing')).toHaveAttribute('aria-pressed', 'true');
+      await filters.getByTestId('filters-role-tab-titles').click();
+      await filters.getByTestId('filter-titles-box-input').fill('partner, principal');
+      await filters.getByTestId('filter-titles-box-input').press('Enter');
+      await expect(filters.getByTestId('filter-titles-box-chip')).toHaveText(['partner', 'principal']);
+      await filters.getByTestId('filter-seniority-options-director_head').click();
+      await filters.getByTestId('filter-places-box-input').fill('Berlin');
+      await filters.getByTestId('filter-places-box-input').press('Enter');
+      await filters.getByTestId('filter-places-need-nice').click();
+      await expect(filters.getByTestId('filter-places-need-nice')).toHaveAttribute('aria-pressed', 'true');
+      if (process.env.SHOT_DIR)
+        await page.screenshot({ path: `${process.env.SHOT_DIR}/find-filters-role.png` });
+      await filters.getByTestId('filters-section-companies').click();
+      await filters.getByTestId('filter-companies-box-input').fill('Google');
+      await filters.getByTestId('filter-companies-box-input').press('Enter');
+      if (process.env.SHOT_DIR)
+        await page.screenshot({ path: `${process.env.SHOT_DIR}/find-filters-companies.png` });
+      await filters.getByTestId('filters-section-advanced').click();
+      await filters.getByTestId('filter-keywords-box-input').fill('seed');
+      await filters.getByTestId('filter-keywords-box-input').press('Enter');
+      if (process.env.SHOT_DIR)
+        await page.screenshot({ path: `${process.env.SHOT_DIR}/find-filters-advanced.png` });
+      const before = api.state.sourceSearches.length;
+      await filters.getByTestId('filters-save').click();
+      await expect(filters).toHaveCount(0);
+      await expect.poll(() => api.state.sourceSearches.length).toBe(before + 1);
+      // role (titles and group), seniority, place, companies, keywords
+      await expect(page.getByTestId('find-filters')).toHaveText('5');
+      expect(api.state.sourceSearches.at(-1)).toMatchObject({
+        filters: {
+          titles: expect.arrayContaining(['partner', 'principal', 'investor']),
+          locations: ['London', 'Berlin'],
+          organizations: ['Google'],
+          keywords: ['seed'],
+          seniority: ['director'],
+        },
+      });
+
+      // Only people I know: the server is not asked at all
+      await page.getByTestId('find-filters').click();
+      await page.getByTestId('filters-section-advanced').click();
+      await page.getByTestId('filter-reach-mine').click();
+      const asked = api.state.sourceSearches.length;
+      await page.getByTestId('filters-save').click();
+      await expect(page.getByTestId('find-busy')).toHaveCount(0);
+      await expect(page.getByTestId('find-filters')).toHaveText('6');
+      expect(api.state.sourceSearches.length).toBe(asked);
+      // closing without saving changes nothing
+      await page.getByTestId('find-filters').click();
+      await page.getByTestId('filters-section-advanced').click();
+      await page.getByTestId('filter-reach-everyone').click();
+      await page.getByTestId('filters-close').click();
+      await expect(page.getByTestId('find-filters')).toHaveText('6');
     });
 
     test('Settings: the postal address and the booking link reach the server', async ({ page }) => {

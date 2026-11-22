@@ -60,6 +60,13 @@ export interface SourcingGoal {
   topic?: string;
   /** the school named in the ask (plan 31: the web provider reads its faculty pages) */
   school?: string;
+  /**
+   * Checks each person is read against (a search's criteria): a must-have answered "no" leaves them out, the answers
+   * go on the row
+   */
+  checks?: { text: string; need: 'must' | 'nice' }[];
+  /** people only: an organization a provider returned is left out */
+  peopleOnly?: boolean;
 }
 
 export interface SourcingInput {
@@ -100,13 +107,21 @@ export interface Candidate {
   /** what a first message can be written from (plan 31): what they work on, the lab, the page it came from */
   evidence?: string[];
   networkDistance?: number;
+  /** their LinkedIn photo, when the search that found them listed one */
+  photoUrl?: string;
+  /** the search's checks, answered for them (rank) */
+  checks?: { text: string; need: 'must' | 'nice'; answer: CheckAnswer }[];
   sources: SourceName[];
   externalIds: Partial<Record<SourceName, string>>;
 }
 
+export type CheckAnswer = 'yes' | 'no' | 'unknown';
+
 export interface FitScore {
   fit: number;
   reasons: string[];
+  /** one answer per check of the goal, in order (absent when the goal asks none) */
+  checks?: CheckAnswer[];
 }
 
 export type FitScorer = (
@@ -306,6 +321,8 @@ export async function sourcePeople(deps: SourcingDeps, input: SourcingInput): Pr
   }
 
   const relaxMs = lap();
+  // a people search lists people: a fund or a company a provider returned is not one
+  if (g.peopleOnly) merged = merged.filter((c) => c.entity === 'person');
 
   // dedupe against the pipeline for this goal: each check is a lookup, so a few run at once (order is kept)
   if (deps.inPipeline) {
@@ -772,6 +789,7 @@ async function linkedInCall(
         linkedinUrl: p.linkedinUrl,
         memberId: p.memberId,
         networkDistance: p.networkDistance,
+        photoUrl: p.pictureUrl,
         sources: ['unipile'],
         externalIds: p.memberId ? { unipile: p.memberId } : {},
       });
@@ -884,6 +902,7 @@ function mergeInto(into: Candidate, c: Candidate): void {
     'memberId',
     'email',
     'url',
+    'photoUrl',
   ] as const)
     if (!into[k] && c[k]) into[k] = c[k];
   if (c.networkDistance !== undefined)
@@ -965,19 +984,63 @@ export function keywordFit(goal: SourcingGoal, c: Candidate): FitScore {
     : [...(goal.roles ?? []), ...(goal.orgs ?? []), goal.sector, ...(goal.skills ?? []), goal.topic].filter(
         (x): x is string => !!x,
       );
-  if (criteria.length === 0) return { fit: 0.5, reasons: [] };
+  if (criteria.length === 0) return { fit: 0.5, reasons: [], ...ruleChecks(goal, c) };
   const text = candidateText(c);
-  const matched = criteria.filter((cr) => {
-    const ws = norm(cr)
-      .split(/[^a-z0-9+#]+/)
-      .filter((w) => w.length >= 3 && !STOP.has(w));
-    if (ws.length === 0) return false;
-    const hits = ws.filter((w) => text.includes(w)).length;
-    return hits >= Math.ceil(ws.length / 2);
-  });
+  const matched = criteria.filter((cr) => wordsMostlyIn(text, cr));
   return {
     fit: matched.length / criteria.length,
     reasons: matched.slice(0, 2).map((m) => `Matches "${m}"`),
+    ...ruleChecks(goal, c),
+  };
+}
+
+/** Words a check is phrased with that say nothing about the person ("Works at a venture capital firm"). */
+const CHECK_FILLER = new Set([
+  'works',
+  'work',
+  'working',
+  'worked',
+  'based',
+  'lives',
+  'living',
+  'currently',
+  'someone',
+  'person',
+  'people',
+  'they',
+  'them',
+  'their',
+  'does',
+  'been',
+  'being',
+  'was',
+  'were',
+  'is',
+]);
+
+function wordsMostlyIn(text: string, phrase: string): boolean {
+  const ws = norm(phrase)
+    .split(/[^a-z0-9+#]+/)
+    .filter((w) => w.length >= 3 && !STOP.has(w));
+  if (ws.length === 0) return false;
+  const hits = ws.filter((w) => text.includes(w)).length;
+  return hits >= Math.ceil(ws.length / 2);
+}
+
+/**
+ * The checks without a model: "yes" when every telling word of the check is in what Orbit read about them, else
+ * "unknown". Never "no": words that are missing prove nothing, so nobody is left out by this rule.
+ */
+export function ruleChecks(goal: SourcingGoal, c: Candidate): { checks?: CheckAnswer[] } {
+  if (!goal.checks?.length) return {};
+  const text = candidateText(c);
+  return {
+    checks: goal.checks.map((k) => {
+      const ws = norm(k.text)
+        .split(/[^a-z0-9+#]+/)
+        .filter((w) => w.length >= 3 && !STOP.has(w) && !CHECK_FILLER.has(w));
+      return ws.length > 0 && ws.every((w) => text.includes(w)) ? 'yes' : 'unknown';
+    }),
   };
 }
 
@@ -1000,15 +1063,25 @@ export function llmFitScorer(claude: ClaudeDep): FitScorer {
           evidence: c.evidence?.slice(0, 3),
           source: c.sources.join('+'),
         }));
+        const asked = goal.checks ?? [];
         const r = await claude.parse('sourcing_fit', fitSchema, {
-          system: fitSystem(user.firstName),
-          user: fitUser({ title: goal.title, criteria: goal.criteria }, payload),
+          system: fitSystem(user.firstName, asked.length),
+          user: fitUser(
+            { title: goal.title, criteria: goal.criteria, checks: asked.map((k) => k.text) },
+            payload,
+          ),
         });
         if (r.ok)
           for (const s of r.value.scores) {
-            if (!batch.some((c) => c.key === s.id)) continue;
+            const cand = batch.find((c) => c.key === s.id);
+            if (!cand) continue;
             const fit = Number.isFinite(s.fit) ? Math.max(0, Math.min(1, s.fit)) : 0;
-            out.set(s.id, { fit, reasons: s.reasons.slice(0, 2) });
+            // an answer for every check, in order: a short or missing list falls back to the rule, check by check
+            const rule = ruleChecks(goal, cand).checks;
+            const checks = asked.length
+              ? asked.map((_, i) => s.checks?.[i] ?? rule?.[i] ?? 'unknown')
+              : undefined;
+            out.set(s.id, { fit, reasons: s.reasons.slice(0, 2), ...(checks ? { checks } : {}) });
           }
         for (const c of batch) if (!out.has(c.key)) out.set(c.key, keywordFit(goal, c));
       }),
@@ -1020,6 +1093,23 @@ export function llmFitScorer(claude: ClaudeDep): FitScorer {
 // ---- rank (§6.2) --------------------------------------------------------------------------------------------
 
 const round4 = (x: number) => Math.round(x * 10_000) / 10_000;
+
+/**
+ * How much of what the search asked is confirmed for a candidate, 0 to 1: a must-have counts double a nice-to-have,
+ * "yes" is all of it and "unknown" a part. 1 when the search asked nothing.
+ */
+export function checkScore(c: Pick<Candidate, 'checks'>): number {
+  const ks = c.checks ?? [];
+  if (!ks.length) return 1;
+  let got = 0;
+  let of = 0;
+  for (const k of ks) {
+    const w = k.need === 'must' ? 2 : 1;
+    of += w;
+    got += w * (k.answer === 'yes' ? 1 : k.answer === 'unknown' ? 0.4 : 0);
+  }
+  return got / of;
+}
 
 async function rank(ctx: Ctx, cands: Candidate[], batchId: string): Promise<RecommendationRow[]> {
   const { deps, input } = ctx;
@@ -1035,7 +1125,16 @@ async function rank(ctx: Ctx, cands: Candidate[], batchId: string): Promise<Reco
     deps.prefetch?.(cands).catch(() => undefined),
   ]);
   const fitOf = (c: Candidate) => fits.get(c.key) ?? keywordFit(input.goal, c);
-  const byFit = [...cands].sort((a, b) => fitOf(b).fit - fitOf(a).fit);
+  const asked = input.goal.checks ?? [];
+  // must-haves decide who fits: someone a must-have check says "no" about is left out; the answers go on the row
+  const kept = asked.length
+    ? cands.filter((c) => {
+        const answers = fitOf(c).checks ?? [];
+        c.checks = asked.map((k, i) => ({ text: k.text, need: k.need, answer: answers[i] ?? 'unknown' }));
+        return !c.checks.some((k) => k.need === 'must' && k.answer === 'no');
+      })
+    : cands;
+  const byFit = [...kept].sort((a, b) => checkScore(b) - checkScore(a) || fitOf(b).fit - fitOf(a).fit);
   const reachTop = new Set(byFit.slice(0, REACH_TOP).map((c) => c.key));
   if (deps.fillEmails) await deps.fillEmails(byFit.slice(0, 60)).catch(() => undefined);
 
@@ -1062,7 +1161,9 @@ async function rank(ctx: Ctx, cands: Candidate[], batchId: string): Promise<Reco
     else if (known)
       reasons.unshift(known.score !== undefined ? `You know them (${known.score})` : 'You know them');
     else if (c.networkDistance === 2) reasons.push('2nd-degree on LinkedIn');
-    const base = WEIGHTS.fit * f.fit + WEIGHTS.reach * reach + WEIGHTS.responsiveness * responsiveness;
+    // with checks asked, the confirmed share of them scales the fit: a full match outranks a guess
+    const fitted = asked.length ? f.fit * (0.5 + 0.5 * checkScore(c)) : f.fit;
+    const base = WEIGHTS.fit * fitted + WEIGHTS.reach * reach + WEIGHTS.responsiveness * responsiveness;
     const { key: _key, ...candidate } = c;
     rows.push({
       user_id: input.userId,

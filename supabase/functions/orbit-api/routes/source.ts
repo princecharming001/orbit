@@ -19,6 +19,24 @@ const list = (v: unknown, key: string): string[] | undefined => {
   return v as string[];
 };
 
+/** The checks a search asks of each person: up to 6 short sentences, each a must-have unless said otherwise. */
+export function criteriaOf(v: unknown): SourceSearchRequest['criteria'] {
+  if (v === undefined || v === null) return undefined;
+  if (!Array.isArray(v) || v.length > 6) throw badRequest('criteria must be a list of at most 6');
+  const out: NonNullable<SourceSearchRequest['criteria']> = [];
+  for (const x of v) {
+    const o = (x ?? {}) as Record<string, unknown>;
+    if (typeof o.text !== 'string' || o.text.length > 200)
+      throw badRequest('each criterion needs a short text');
+    const text = o.text.replace(/\s+/g, ' ').trim();
+    if (!text) continue;
+    if (o.need !== undefined && o.need !== 'must' && o.need !== 'nice')
+      throw badRequest('criterion need is must or nice');
+    out.push({ text, need: o.need === 'nice' ? 'nice' : 'must' });
+  }
+  return out.length ? out : undefined;
+}
+
 async function search(ctx: Ctx): Promise<Response> {
   const b = await body(ctx);
   const f = (b.filters ?? {}) as Record<string, unknown>;
@@ -40,6 +58,8 @@ async function search(ctx: Ctx): Promise<Response> {
     },
     limit: typeof b.limit === 'number' ? b.limit : undefined,
     withEmails: b.withEmails === true ? true : undefined,
+    criteria: criteriaOf(b.criteria),
+    peopleOnly: b.peopleOnly === true ? true : undefined,
   };
   return json(200, await runSourcing(ctx.services(), ctx.userId!, req));
 }

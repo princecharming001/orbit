@@ -721,6 +721,18 @@ export interface LinkedInPerson {
   location?: string;
   linkedinUrl?: string;
   networkDistance?: number;
+  /** their photo as the search listed it (a LinkedIn link, good for a few weeks) */
+  pictureUrl?: string;
+}
+
+/** The photo a search row carries, under whichever name Unipile gave it; only a LinkedIn media link is kept. */
+function pictureOf(i: UnipileSearchItem): string | undefined {
+  const o = i as Record<string, unknown>;
+  for (const k of ['profile_picture_url', 'profile_picture_url_large', 'picture_url']) {
+    const v = o[k];
+    if (typeof v === 'string' && /^https:\/\/[a-z0-9.-]*licdn\.com\//i.test(v)) return v;
+  }
+  return undefined;
 }
 
 export function linkedInPerson(i: UnipileSearchItem): LinkedInPerson {
@@ -736,6 +748,7 @@ export function linkedInPerson(i: UnipileSearchItem): LinkedInPerson {
     location: i.location ?? undefined,
     linkedinUrl: url,
     networkDistance: networkDistance(i.network_distance),
+    pictureUrl: pictureOf(i),
   };
 }
 

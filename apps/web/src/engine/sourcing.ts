@@ -46,11 +46,23 @@ export interface SearchFilters {
   organizations?: string[];
   keywords?: string[];
   titles?: string[];
+  locations?: string[];
+  seniority?: string[];
 }
 
 export async function searchPeople(
   user: Pick<User, 'id'>,
-  q: { purpose: GoalKind; query?: string; goalId?: string; limit?: number; filters?: SearchFilters },
+  q: {
+    purpose: GoalKind;
+    query?: string;
+    goalId?: string;
+    limit?: number;
+    filters?: SearchFilters;
+    /** checks each person found is read against; a must-have "no" leaves them out */
+    criteria?: { text: string; need?: 'must' | 'nice' }[];
+    /** people only: no funds or companies in the answer */
+    peopleOnly?: boolean;
+  },
 ): Promise<SearchOutcome> {
   if (!isServerUser(user.id)) return notHere();
   const clean = (xs?: string[]) => {
@@ -62,6 +74,8 @@ export async function searchPeople(
     organizations: clean(q.filters?.organizations),
     keywords: clean(q.filters?.keywords),
     titles: clean(q.filters?.titles),
+    locations: clean(q.filters?.locations),
+    seniority: clean(q.filters?.seniority),
   };
   // the hometown lives in the browser; the server reads it for the shared-background tier
   const homeCity = (await db.users.get(user.id).catch(() => undefined))?.homeCity?.trim() || undefined;
@@ -72,6 +86,8 @@ export async function searchPeople(
     goalId: q.goalId,
     limit: q.limit ?? 20,
     ...(Object.values(filters).some(Boolean) ? { filters } : {}),
+    ...(q.criteria?.length ? { criteria: q.criteria.slice(0, 6) } : {}),
+    ...(q.peopleOnly ? { peopleOnly: true } : {}),
   });
   if (!r.ok) return { ok: false, message: r.message };
   return { ok: true, value: r.value };

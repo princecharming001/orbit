@@ -119,6 +119,10 @@ export function sourcingGoal(
     pastCompanies: strs(c.past_companies ?? c.pastCompanies),
     topic: query ?? str(c.topic),
     school: f.schools?.[0] ?? strs(t.schools)[0],
+    ...(req.criteria?.length
+      ? { checks: req.criteria.slice(0, 6).map((k) => ({ text: k.text, need: k.need ?? 'must' })) }
+      : {}),
+    ...(req.peopleOnly ? { peopleOnly: true } : {}),
   };
 }
 
@@ -148,6 +152,9 @@ const toSourced = (id: string, r: RecommendationRow): SourcedCandidate => {
     responsiveness: r.responsiveness,
     reasons: r.reasons,
     ...(r.person_id ? { knownPersonId: r.person_id } : {}),
+    ...(c.photoUrl ? { photoUrl: c.photoUrl } : {}),
+    ...(c.networkDistance ? { degree: c.networkDistance } : {}),
+    ...(c.checks?.length ? { checks: c.checks } : {}),
   };
 };
 

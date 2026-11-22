@@ -100,6 +100,8 @@ export interface FakeState {
   /** dossiers asked for that become ready on the next /research/get */
   researchQueue: Map<string, Dossier>;
   sourced: SourcedCandidate[];
+  /** every POST /source/search body, in order, for tests that check what a search asked */
+  sourceSearches: Record<string, unknown>[];
   paths: Map<string, (WarmPath & { id: string; names: Record<string, string> })[]>;
   replies: ReplyItem[];
   /** what /inbox/list answers */
@@ -357,6 +359,7 @@ export function createFakeOrbitApi(
     dossiers: new Map(),
     researchQueue: new Map(),
     sourced: [],
+    sourceSearches: [],
     paths: new Map(),
     replies: [],
     inbox: { items: [], email: 'ok', linkedin: 'ok' },
@@ -1466,13 +1469,29 @@ export function createFakeOrbitApi(
         return json(200, { status: ready ? ready.status : 'queued', dossier: ready ?? null });
       }
       // sourcing
-      case '/source/search':
-        return json(200, {
-          batchId: uuid(),
-          results: state.sourced,
-          unconfigured: ['apollo'],
-          relaxed: [],
-        });
+      case '/source/search': {
+        state.sourceSearches.push(body);
+        // the checks a search asks: a row answers with its own when the test gave it some, else nothing is known
+        const asked = (body.criteria as { text: string; need?: 'must' | 'nice' }[] | undefined) ?? [];
+        const results = state.sourced
+          .map(
+            ({ checks, ...c }): SourcedCandidate => ({
+              ...c,
+              ...(asked.length
+                ? {
+                    checks: asked.map((k, i) => ({
+                      text: k.text,
+                      need: k.need ?? 'must',
+                      answer: checks?.[i]?.answer ?? ('unknown' as const),
+                    })),
+                  }
+                : {}),
+            }),
+          )
+          // a must-have answered "no" leaves the person out, as on the server
+          .filter((c) => !c.checks?.some((k) => k.need === 'must' && k.answer === 'no'));
+        return json(200, { batchId: uuid(), results, unconfigured: ['apollo'], relaxed: [] });
+      }
       case '/source/email': {
         // plan 35 C3: the on-demand lookup; the fake knows only the address a sourced result already carried
         const c = state.sourced.find((x) => x.id === body.recommendationId);

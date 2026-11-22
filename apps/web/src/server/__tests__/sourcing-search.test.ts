@@ -17,8 +17,10 @@ import {
 } from '../../../../../supabase/functions/_shared/research/web';
 import {
   type Candidate,
+  checkScore,
   keywordFit,
   mergeCandidates,
+  ruleChecks,
   type SourcingDeps,
   type SourcingGoal,
   sourcePeople,
@@ -541,5 +543,157 @@ describe('plan 34: cheaper sourcing', () => {
       { budgetUsd: 1, timeoutMs: 1000, select: () => [] },
     );
     expect(g.provider).toBe('claude');
+  });
+});
+
+describe("a search's checks: must-haves decide who fits, the answers go on each row", () => {
+  const net = () =>
+    fakeFetch((c: Call) => {
+      if (c.url.endsWith('api.exa.ai/search'))
+        return json((c.body as { category?: string }).category === 'company' ? exaFunds : exaInvestors);
+      if (c.url.includes('mixed_people/api_search')) return json(apolloInvestors);
+      return undefined;
+    });
+  const asked: SourcingGoal = {
+    ...fundraising,
+    checks: [
+      { text: 'Works at a venture capital firm', need: 'must' },
+      { text: 'Invests in climate', need: 'nice' },
+    ],
+  };
+  const base = (claude: SourcingDeps['claude']): SourcingDeps => ({
+    ...providers(net().fetch),
+    claude,
+    reachOf: () => null,
+    responsiveness: () => 0.5,
+    budget: memoryBudget().budget,
+    clock: manualClock().clock,
+    newId: () => 'batch-1',
+  });
+  /** The model's answer: a fit and the checks, by name. */
+  const answer =
+    (by: Record<string, { fit: number; checks?: string[] }>) => (_t: unknown, p: ClaudePrompt) => {
+      const lines = p.user.split('<candidates>')[1]!.split('</candidates>')[0]!.split('\n');
+      return {
+        scores: lines.map((l) => {
+          const c = JSON.parse(l) as { id: string; name: string };
+          const a = by[c.name] ?? { fit: 0.1 };
+          return { id: c.id, fit: a.fit, reasons: [], ...(a.checks ? { checks: a.checks } : {}) };
+        }),
+      };
+    };
+
+  it('asks the model the numbered checks, drops a must-have "no", and ranks a confirmed match first', async () => {
+    const llm = fakeClaude(
+      answer({
+        'Maya Patel': { fit: 0.6, checks: ['yes', 'yes'] },
+        // a better fit by the number, but nothing confirms the must-have
+        'Leo Grant': { fit: 0.9, checks: ['unknown', 'no'] },
+        'Sam Ok***r': { fit: 0.8, checks: ['no', 'yes'] },
+        'Greenfield Ventures': { fit: 0.9, checks: ['no', 'no'] },
+      }),
+    );
+    const out = await sourcePeople(base(llm.claude), {
+      userId: 'u1',
+      goal: asked,
+      user: { firstName: 'Ari' },
+    });
+    // the prompt carries the checks, numbered, and says how to answer them
+    expect(llm.calls[0]!.prompt.user).toContain(
+      '<checks>1. Works at a venture capital firm\n2. Invests in climate</checks>',
+    );
+    expect(llm.calls[0]!.prompt.system).toMatch(/answer each of the 2 numbered checks/i);
+    // Sam and the fund said "no" to the must-have: left out. Maya's is confirmed, so she leads Leo's better number
+    expect(out.results.map((r) => r.candidate.name)).toEqual(['Maya Patel', 'Leo Grant']);
+    expect(out.results[0]!.candidate.checks).toEqual([
+      { text: 'Works at a venture capital firm', need: 'must', answer: 'yes' },
+      { text: 'Invests in climate', need: 'nice', answer: 'yes' },
+    ]);
+    expect(out.results[1]!.candidate.checks!.map((k) => k.answer)).toEqual(['unknown', 'no']);
+  });
+
+  it('a nice-to-have "no" never leaves anyone out', async () => {
+    const llm = fakeClaude(answer({ 'Maya Patel': { fit: 0.6, checks: ['yes', 'no'] } }));
+    const out = await sourcePeople(base(llm.claude), {
+      userId: 'u1',
+      goal: asked,
+      user: { firstName: 'Ari' },
+    });
+    expect(out.results.map((r) => r.candidate.name)).toContain('Maya Patel');
+  });
+
+  it('a model answer that is short or missing falls back to the rule, check by check, never to "no"', async () => {
+    const llm = fakeClaude(
+      answer({ 'Maya Patel': { fit: 0.6, checks: ['yes'] }, 'Leo Grant': { fit: 0.5 } }),
+    );
+    const out = await sourcePeople(base(llm.claude), {
+      userId: 'u1',
+      goal: asked,
+      user: { firstName: 'Ari' },
+    });
+    for (const r of out.results) {
+      expect(r.candidate.checks).toHaveLength(2);
+      for (const k of r.candidate.checks!) expect(['yes', 'unknown']).toContain(k.answer);
+    }
+    expect(out.results.find((r) => r.candidate.name === 'Maya Patel')!.candidate.checks![0]!.answer).toBe(
+      'yes',
+    );
+  });
+
+  it('without a model the rule answers: yes only when every telling word is there, otherwise unknown', () => {
+    const c: Candidate = {
+      key: 'k',
+      entity: 'person',
+      name: 'Ana Ruiz',
+      title: 'Partner',
+      org: 'Gradient Ventures',
+      headline: 'Seed investor at a venture capital firm',
+      sources: ['exa'],
+      externalIds: {},
+    };
+    const g: SourcingGoal = {
+      ...fundraising,
+      checks: [
+        { text: 'Works at a venture capital firm', need: 'must' },
+        { text: 'Based in London', need: 'must' },
+      ],
+    };
+    expect(ruleChecks(g, c).checks).toEqual(['yes', 'unknown']);
+    expect(keywordFit(g, c).checks).toEqual(['yes', 'unknown']);
+    expect(ruleChecks(fundraising, c)).toEqual({});
+  });
+
+  it('no checks asked: the prompt, the order and the rows are as before', async () => {
+    const llm = fakeClaude(answer({ 'Maya Patel': { fit: 0.9 }, 'Leo Grant': { fit: 0.7 } }));
+    const out = await sourcePeople(base(llm.claude), {
+      userId: 'u1',
+      goal: fundraising,
+      user: { firstName: 'Ari' },
+    });
+    expect(llm.calls[0]!.prompt.user).not.toContain('<checks>');
+    expect(llm.calls[0]!.prompt.system).not.toMatch(/numbered checks/);
+    expect(out.results[0]!.candidate.name).toBe('Maya Patel');
+    expect(out.results.every((r) => r.candidate.checks === undefined)).toBe(true);
+  });
+
+  it('people only: a fund a provider returned is not listed', async () => {
+    const llm = fakeClaude(answer({ 'Greenfield Ventures': { fit: 0.99 }, 'Maya Patel': { fit: 0.5 } }));
+    const out = await sourcePeople(base(llm.claude), {
+      userId: 'u1',
+      goal: { ...fundraising, peopleOnly: true },
+      user: { firstName: 'Ari' },
+    });
+    expect(out.results.length).toBeGreaterThan(0);
+    expect(out.results.every((r) => r.candidate.entity === 'person')).toBe(true);
+    expect(out.results.map((r) => r.candidate.name)).not.toContain('Greenfield Ventures');
+  });
+
+  it('the confirmed share: a must-have counts double, unknown is a part, nothing asked is whole', () => {
+    const k = (need: 'must' | 'nice', answer: 'yes' | 'no' | 'unknown') => ({ text: 'x', need, answer });
+    expect(checkScore({})).toBe(1);
+    expect(checkScore({ checks: [k('must', 'yes'), k('nice', 'yes')] })).toBe(1);
+    expect(checkScore({ checks: [k('must', 'yes'), k('nice', 'no')] })).toBeCloseTo(2 / 3);
+    expect(checkScore({ checks: [k('must', 'unknown')] })).toBeCloseTo(0.4);
+    expect(checkScore({ checks: [k('must', 'no')] })).toBe(0);
   });
 });

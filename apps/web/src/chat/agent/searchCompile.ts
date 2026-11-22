@@ -105,11 +105,18 @@ export function fieldIn(t: string): string | undefined {
   return known(first) ? first : undefined;
 }
 
-export function compileSearch(text: string): QuerySpec | undefined {
+/**
+ * `any`: the sentence is already known to be a search for people (the Find people box), so it need not say "in my
+ * network" and a company or a role alone is enough; undefined only when nothing in it could be read.
+ */
+export function compileSearch(text: string, opts: { any?: boolean } = {}): QuerySpec | undefined {
   const t = text.trim().replace(/\s+/g, ' ');
-  if (!NETWORK.test(t)) return undefined;
+  if (!opts.any && !NETWORK.test(t)) return undefined;
   // other screens' words: the map, prep questions, friends' reach, routes into one company
-  if (/\b(map|question|through (?:a |my )?friends?|routes? into|intro(?:duction)?s? to)\b/i.test(t))
+  if (
+    !opts.any &&
+    /\b(map|question|through (?:a |my )?friends?|routes? into|intro(?:duction)?s? to)\b/i.test(t)
+  )
     return undefined;
   const lower = t.toLowerCase();
   // a bare batch ("W25 founders") is YC too; the case-sensitive capital keeps "s23" in prose out
@@ -195,6 +202,6 @@ export function compileSearch(text: string): QuerySpec | undefined {
     !!spec.relationship?.alumOfMySchool ||
     !!spec.relationship?.quietForDays ||
     spec.relationship?.everTalked === false;
-  if (!kind) return undefined;
+  if (!kind && !(opts.any && (companies.length > 0 || places.length > 0))) return undefined;
   return spec;
 }

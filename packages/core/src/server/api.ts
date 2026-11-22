@@ -168,6 +168,18 @@ export interface SourcedCandidate {
   reasons: string[];
   /** already in the student's network */
   knownPersonId?: string;
+  /** their LinkedIn photo, when the search that found them gave one (the link expires in a few weeks) */
+  photoUrl?: string;
+  /** LinkedIn's distance from the student: 1 connected, 2 a connection of a connection, 3 further */
+  degree?: number;
+  /** each check the search asked for, answered from what Orbit read about them, in the request's order */
+  checks?: SourcedCheck[];
+}
+/** One criterion of a search asked of one person: yes, no, or unknown (what Orbit read does not say). */
+export interface SourcedCheck {
+  text: string;
+  need: 'must' | 'nice';
+  answer: 'yes' | 'no' | 'unknown';
 }
 /** POST /source/search */
 export interface SourceSearchRequest {
@@ -187,6 +199,13 @@ export interface SourceSearchRequest {
   limit?: number;
   /** look up emails for the best three (plan 35 C3); also when the query asks "with emails" */
   withEmails?: boolean;
+  /**
+   * Checks each person found is read against (at most 6). A must-have answered "no" leaves the person out; a
+   * nice-to-have ranks them higher. Each result carries the answers (`checks`).
+   */
+  criteria?: { text: string; need?: 'must' | 'nice' }[];
+  /** people only: companies and funds a provider returned are left out */
+  peopleOnly?: boolean;
 }
 export interface SourceSearchResponse {
   batchId: string;

@@ -197,6 +197,15 @@ const AMBIGUOUS: [RegExp, TitleFamily[]][] = [
 const CLUB =
   /\b(hackers|club|society|association|chapter|council|fraternity|sorority|hackathon|conference|league|committee|ambassador|initiative|student|students|campus|undergraduate|alliance|collective|guild|union|nonprofit|non profit|501c3|magazine|journal)\b/;
 
+/** A firm whose people invest, by the words in its name. */
+const INVESTING_ORG = /\b(ventures?|venture partners|venture capital|vc|capital|seed fund|angels)\b/;
+/** Places that share those words and do not: a bank, a lender, an insurer, a law or consulting firm, a record label. */
+const NOT_INVESTING_ORG =
+  /\b(capital one|bank|banking|credit|insurance|mutual|llp|law|consult\w*|advis\w*|records|factory|city|human capital management)\b/;
+/** The jobs at such a firm that are investing jobs (an engineer or a recruiter at a fund is not an investor). */
+const INVESTING_ROLE =
+  /\b(partner|principal|associate|analyst|vice president|managing director|investment|investments|portfolio|platform|eir|entrepreneur in residence|venture fellow)\b/;
+
 export interface TitleRead {
   families: TitleFamily[];
   seniority: SearchSeniority | undefined;
@@ -233,6 +242,15 @@ export function readTitle(title: string | undefined, org?: string): TitleRead {
   for (const [re, fams] of AMBIGUOUS)
     if (re.test(raw)) for (const f of fams) if (!families.has(f)) maybe.push(f);
   const orgText = ` ${normalizeTitle(org ?? '')} `;
+  // "Partner" at Gradient Ventures, "Associate" at Sequoia Capital: the firm says the job is investing when the
+  // title alone does not
+  if (
+    !families.has('investing') &&
+    INVESTING_ROLE.test(t) &&
+    INVESTING_ORG.test(orgText) &&
+    !NOT_INVESTING_ORG.test(orgText)
+  )
+    families.add('investing');
   // the group can be in the org field ("Berkeley Fintech Club") or in the title itself ("Founder, Fintech Club")
   const club = CLUB.test(orgText) || (families.has('founder') && CLUB.test(t));
   const founder = families.has('founder') && !club && status !== 'aspiring';

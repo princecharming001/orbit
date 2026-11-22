@@ -2002,6 +2002,14 @@ function linkedInSlugOf(url) {
   const clean3 = cleanLinkedInUrl(url);
   return clean3 ? clean3.slice(clean3.lastIndexOf("/") + 1) : void 0;
 }
+function pictureOf(i) {
+  const o = i;
+  for (const k of ["profile_picture_url", "profile_picture_url_large", "picture_url"]) {
+    const v = o[k];
+    if (typeof v === "string" && /^https:\/\/[a-z0-9.-]*licdn\.com\//i.test(v)) return v;
+  }
+  return void 0;
+}
 function linkedInPerson(i) {
   const name = (i.name ?? `${i.first_name ?? ""} ${i.last_name ?? ""}`).trim();
   const url = cleanLinkedInUrl(i.public_profile_url) ?? cleanLinkedInUrl(i.profile_url) ?? (i.public_identifier ? `https://www.linkedin.com/in/${i.public_identifier.toLowerCase()}` : void 0);
@@ -2011,7 +2019,8 @@ function linkedInPerson(i) {
     headline: i.headline ?? void 0,
     location: i.location ?? void 0,
     linkedinUrl: url,
-    networkDistance: networkDistance(i.network_distance)
+    networkDistance: networkDistance(i.network_distance),
+    pictureUrl: pictureOf(i)
   };
 }
 function hasSalesNavigator(me2) {
@@ -26088,20 +26097,32 @@ function matchKnown(idx, c, o) {
 
 // supabase/functions/_shared/sourcing/prompts.ts
 var FIT_BATCH = 20;
-function fitSystem(userFirstName2) {
+function fitSystem(userFirstName2, checks = 0) {
   return [
     `Score how well each candidate matches what ${userFirstName2} is looking for. 0 = not a match, 1 = an excellent match.`,
-    "Judge only from the fields given. Do not reward fame. Give at most two short reasons."
+    "Judge only from the fields given. Do not reward fame. Give at most two short reasons.",
+    ...checks ? [
+      `Also answer each of the ${checks} numbered checks for every candidate, in order, in "checks": "yes" when the fields say so, "no" when they say otherwise, "unknown" when they do not say. Never guess: a name, a company or a title alone that does not settle a check is "unknown". A company or a fund is not a person: when the candidate is not a person, answer "no" to every check.`
+    ] : []
   ].join("\n");
 }
 function fitUser(lookingFor, candidates2) {
   return [
     `<looking_for>${JSON.stringify({ goal: lookingFor.title, criteria: lookingFor.criteria })}</looking_for>`,
+    ...lookingFor.checks?.length ? [`<checks>${lookingFor.checks.map((c, i) => `${i + 1}. ${c}`).join("\n")}</checks>`] : [],
     `<candidates>${candidates2.map((c) => JSON.stringify(c)).join("\n")}</candidates>`
   ].join("\n");
 }
 var fitSchema = z.object({
-  scores: z.array(z.object({ id: z.string(), fit: z.number(), reasons: z.array(z.string()) }))
+  scores: z.array(
+    z.object({
+      id: z.string(),
+      fit: z.number(),
+      reasons: z.array(z.string()),
+      /** one answer per numbered check, in order; absent when the search asked none */
+      checks: z.array(z.enum(["yes", "no", "unknown"])).optional()
+    })
+  )
 });
 
 // supabase/functions/_shared/sourcing/web.ts
@@ -26593,6 +26614,7 @@ async function sourcePeople(deps, input) {
     merged = await gather([(r) => webCall(ctx, r)], relax);
   }
   const relaxMs = lap();
+  if (g.peopleOnly) merged = merged.filter((c) => c.entity === "person");
   if (deps.inPipeline) {
     const inPipeline2 = deps.inPipeline;
     const drop = await mapLimit(merged, LOOKUP_CONCURRENCY, (c) => inPipeline2(c));
@@ -26999,6 +27021,7 @@ async function linkedInCall(ctx, relax, q) {
         linkedinUrl: p.linkedinUrl,
         memberId: p.memberId,
         networkDistance: p.networkDistance,
+        photoUrl: p.pictureUrl,
         sources: ["unipile"],
         externalIds: p.memberId ? { unipile: p.memberId } : {}
       });
@@ -27105,7 +27128,8 @@ function mergeInto(into, c) {
     "linkedinUrl",
     "memberId",
     "email",
-    "url"
+    "url",
+    "photoUrl"
   ])
     if (!into[k] && c[k]) into[k] = c[k];
   if (c.networkDistance !== void 0)
@@ -27174,17 +27198,51 @@ function keywordFit(goal, c) {
   const criteria = goal.criteria.length ? goal.criteria : [...goal.roles ?? [], ...goal.orgs ?? [], goal.sector, ...goal.skills ?? [], goal.topic].filter(
     (x) => !!x
   );
-  if (criteria.length === 0) return { fit: 0.5, reasons: [] };
+  if (criteria.length === 0) return { fit: 0.5, reasons: [], ...ruleChecks(goal, c) };
   const text3 = candidateText2(c);
-  const matched = criteria.filter((cr) => {
-    const ws = norm(cr).split(/[^a-z0-9+#]+/).filter((w) => w.length >= 3 && !STOP3.has(w));
-    if (ws.length === 0) return false;
-    const hits = ws.filter((w) => text3.includes(w)).length;
-    return hits >= Math.ceil(ws.length / 2);
-  });
+  const matched = criteria.filter((cr) => wordsMostlyIn(text3, cr));
   return {
     fit: matched.length / criteria.length,
-    reasons: matched.slice(0, 2).map((m) => `Matches "${m}"`)
+    reasons: matched.slice(0, 2).map((m) => `Matches "${m}"`),
+    ...ruleChecks(goal, c)
+  };
+}
+var CHECK_FILLER = /* @__PURE__ */ new Set([
+  "works",
+  "work",
+  "working",
+  "worked",
+  "based",
+  "lives",
+  "living",
+  "currently",
+  "someone",
+  "person",
+  "people",
+  "they",
+  "them",
+  "their",
+  "does",
+  "been",
+  "being",
+  "was",
+  "were",
+  "is"
+]);
+function wordsMostlyIn(text3, phrase) {
+  const ws = norm(phrase).split(/[^a-z0-9+#]+/).filter((w) => w.length >= 3 && !STOP3.has(w));
+  if (ws.length === 0) return false;
+  const hits = ws.filter((w) => text3.includes(w)).length;
+  return hits >= Math.ceil(ws.length / 2);
+}
+function ruleChecks(goal, c) {
+  if (!goal.checks?.length) return {};
+  const text3 = candidateText2(c);
+  return {
+    checks: goal.checks.map((k) => {
+      const ws = norm(k.text).split(/[^a-z0-9+#]+/).filter((w) => w.length >= 3 && !STOP3.has(w) && !CHECK_FILLER.has(w));
+      return ws.length > 0 && ws.every((w) => text3.includes(w)) ? "yes" : "unknown";
+    })
   };
 }
 function llmFitScorer(claude) {
@@ -27204,15 +27262,22 @@ function llmFitScorer(claude) {
           evidence: c.evidence?.slice(0, 3),
           source: c.sources.join("+")
         }));
+        const asked = goal.checks ?? [];
         const r = await claude.parse("sourcing_fit", fitSchema, {
-          system: fitSystem(user.firstName),
-          user: fitUser({ title: goal.title, criteria: goal.criteria }, payload)
+          system: fitSystem(user.firstName, asked.length),
+          user: fitUser(
+            { title: goal.title, criteria: goal.criteria, checks: asked.map((k) => k.text) },
+            payload
+          )
         });
         if (r.ok)
           for (const s of r.value.scores) {
-            if (!batch.some((c) => c.key === s.id)) continue;
+            const cand = batch.find((c) => c.key === s.id);
+            if (!cand) continue;
             const fit = Number.isFinite(s.fit) ? Math.max(0, Math.min(1, s.fit)) : 0;
-            out.set(s.id, { fit, reasons: s.reasons.slice(0, 2) });
+            const rule = ruleChecks(goal, cand).checks;
+            const checks = asked.length ? asked.map((_, i) => s.checks?.[i] ?? rule?.[i] ?? "unknown") : void 0;
+            out.set(s.id, { fit, reasons: s.reasons.slice(0, 2), ...checks ? { checks } : {} });
           }
         for (const c of batch) if (!out.has(c.key)) out.set(c.key, keywordFit(goal, c));
       })
@@ -27221,6 +27286,18 @@ function llmFitScorer(claude) {
   };
 }
 var round4 = (x) => Math.round(x * 1e4) / 1e4;
+function checkScore(c) {
+  const ks = c.checks ?? [];
+  if (!ks.length) return 1;
+  let got = 0;
+  let of = 0;
+  for (const k of ks) {
+    const w = k.need === "must" ? 2 : 1;
+    of += w;
+    got += w * (k.answer === "yes" ? 1 : k.answer === "unknown" ? 0.4 : 0);
+  }
+  return got / of;
+}
 async function rank(ctx, cands, batchId) {
   const { deps, input } = ctx;
   if (cands.length === 0) return [];
@@ -27230,7 +27307,13 @@ async function rank(ctx, cands, batchId) {
     deps.prefetch?.(cands).catch(() => void 0)
   ]);
   const fitOf = (c) => fits.get(c.key) ?? keywordFit(input.goal, c);
-  const byFit = [...cands].sort((a, b) => fitOf(b).fit - fitOf(a).fit);
+  const asked = input.goal.checks ?? [];
+  const kept = asked.length ? cands.filter((c) => {
+    const answers = fitOf(c).checks ?? [];
+    c.checks = asked.map((k, i) => ({ text: k.text, need: k.need, answer: answers[i] ?? "unknown" }));
+    return !c.checks.some((k) => k.need === "must" && k.answer === "no");
+  }) : cands;
+  const byFit = [...kept].sort((a, b) => checkScore(b) - checkScore(a) || fitOf(b).fit - fitOf(a).fit);
   const reachTop = new Set(byFit.slice(0, REACH_TOP).map((c) => c.key));
   if (deps.fillEmails) await deps.fillEmails(byFit.slice(0, 60)).catch(() => void 0);
   const looked = await mapLimit(byFit, LOOKUP_CONCURRENCY, async (c) => {
@@ -27254,7 +27337,8 @@ async function rank(ctx, cands, batchId) {
     else if (known)
       reasons.unshift(known.score !== void 0 ? `You know them (${known.score})` : "You know them");
     else if (c.networkDistance === 2) reasons.push("2nd-degree on LinkedIn");
-    const base = WEIGHTS.fit * f2.fit + WEIGHTS.reach * reach + WEIGHTS.responsiveness * responsiveness;
+    const fitted = asked.length ? f2.fit * (0.5 + 0.5 * checkScore(c)) : f2.fit;
+    const base = WEIGHTS.fit * fitted + WEIGHTS.reach * reach + WEIGHTS.responsiveness * responsiveness;
     const { key: _key, ...candidate } = c;
     rows.push({
       user_id: input.userId,
@@ -27311,7 +27395,9 @@ function sourcingGoal(req, goal) {
     employeeRanges: strs(c.employee_ranges ?? c.employeeRanges),
     pastCompanies: strs(c.past_companies ?? c.pastCompanies),
     topic: query2 ?? str3(c.topic),
-    school: f2.schools?.[0] ?? strs(t.schools)[0]
+    school: f2.schools?.[0] ?? strs(t.schools)[0],
+    ...req.criteria?.length ? { checks: req.criteria.slice(0, 6).map((k) => ({ text: k.text, need: k.need ?? "must" })) } : {},
+    ...req.peopleOnly ? { peopleOnly: true } : {}
   };
 }
 var toSourced = (id, r) => {
@@ -27337,7 +27423,10 @@ var toSourced = (id, r) => {
     reach: r.reach,
     responsiveness: r.responsiveness,
     reasons: r.reasons,
-    ...r.person_id ? { knownPersonId: r.person_id } : {}
+    ...r.person_id ? { knownPersonId: r.person_id } : {},
+    ...c.photoUrl ? { photoUrl: c.photoUrl } : {},
+    ...c.networkDistance ? { degree: c.networkDistance } : {},
+    ...c.checks?.length ? { checks: c.checks } : {}
   };
 };
 async function runSourcing(s, userId, req) {
@@ -27751,6 +27840,22 @@ var list7 = (v, key) => {
     throw badRequest(`filters.${key} must be a list of short strings`);
   return v;
 };
+function criteriaOf(v) {
+  if (v === void 0 || v === null) return void 0;
+  if (!Array.isArray(v) || v.length > 6) throw badRequest("criteria must be a list of at most 6");
+  const out = [];
+  for (const x of v) {
+    const o = x ?? {};
+    if (typeof o.text !== "string" || o.text.length > 200)
+      throw badRequest("each criterion needs a short text");
+    const text3 = o.text.replace(/\s+/g, " ").trim();
+    if (!text3) continue;
+    if (o.need !== void 0 && o.need !== "must" && o.need !== "nice")
+      throw badRequest("criterion need is must or nice");
+    out.push({ text: text3, need: o.need === "nice" ? "nice" : "must" });
+  }
+  return out.length ? out : void 0;
+}
 async function search3(ctx) {
   const b = await body(ctx);
   const f2 = b.filters ?? {};
@@ -27771,7 +27876,9 @@ async function search3(ctx) {
       keywords: list7(f2.keywords, "keywords")
     },
     limit: typeof b.limit === "number" ? b.limit : void 0,
-    withEmails: b.withEmails === true ? true : void 0
+    withEmails: b.withEmails === true ? true : void 0,
+    criteria: criteriaOf(b.criteria),
+    peopleOnly: b.peopleOnly === true ? true : void 0
   };
   return json(200, await runSourcing(ctx.services(), ctx.userId, req));
 }

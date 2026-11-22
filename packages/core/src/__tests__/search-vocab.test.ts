@@ -189,3 +189,35 @@ describe('places', () => {
     expect(p.matches(p.read('Oakland, California, United States'), p.target('California')!)).toBe('yes');
   });
 });
+
+describe('a job at an investing firm is an investing job, when the title alone does not say so', () => {
+  const fam = (t: string, o?: string) => readTitle(t, o).families;
+  it('partner, principal, associate and analyst at a fund are investing', () => {
+    for (const [t, o] of [
+      ['Partner', 'Gradient Ventures'],
+      ['Principal', 'Balderton Capital'],
+      ['Associate', 'Sequoia Capital'],
+      ['Analyst', 'Lightspeed Venture Partners'],
+      ['Vice President', 'General Catalyst Ventures'],
+      ['Platform', 'Cherry Ventures'],
+    ] as const)
+      expect(fam(t, o), `${t} at ${o}`).toContain('investing');
+  });
+  it('the same titles elsewhere are not, and neither is another job at a fund', () => {
+    for (const [t, o] of [
+      ['Partner', 'McKinsey'],
+      ['Associate', 'Capital One'],
+      ['Analyst', 'Bank of America'],
+      ['Associate', 'Latham & Watkins LLP'],
+      ['Partner', undefined],
+      ['Software Engineer', 'Sequoia Capital'],
+      ['Recruiter', 'Accel Ventures'],
+      ['Principal', 'Lincoln High School'],
+    ] as const)
+      expect(fam(t, o), `${t} at ${o}`).not.toContain('investing');
+  });
+  it('a title that already says it stays as it was read', () => {
+    expect(fam('General Partner', 'Cove Fund')).toEqual(['investing']);
+    expect(fam('Investor', 'Cove Fund')).toEqual(['investing']);
+  });
+});

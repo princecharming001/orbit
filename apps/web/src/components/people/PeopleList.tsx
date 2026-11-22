@@ -3,7 +3,8 @@ import { ACTIVE_STAGES, CLOSED_STAGES, RELATIONSHIP_LABELS, STAGE_LABELS } from 
 import { Send } from 'lucide-react';
 import { Link, useNavigate } from 'react-router-dom';
 import { lastTouch } from '../../engine/search';
-import { Avatar, Button, Chip, PickCircle, relDate, Select } from '../../ui';
+import { Avatar, Button, Chip, LinkedInMark, PickCircle, relDate, Select } from '../../ui';
+import { Clip, Table, TableBox, Td, Th, Tr } from '../../ui/table';
 import { LogoText } from '../CompanyLogo';
 import { NextLink } from './PipelineBoard';
 import { StrengthDots, wentQuiet } from './shared';
@@ -186,45 +187,44 @@ export function PeopleList({
           );
         })}
       </ul>
-      <div className="hidden @4xl:block border border-line rounded-[var(--radius-card)] overflow-x-auto">
-        <table className="w-full text-[13.5px]" data-testid="people-table">
-          <thead className="bg-canvas-2 text-ink-3 text-[12px] uppercase tracking-wide">
+      <TableBox className="hidden @4xl:block">
+        <Table data-testid="people-table">
+          <thead>
             <tr>
-              {selection && (
-                <th className="w-8 pl-3 pr-1 py-1.5">
-                  <Check
-                    on={allOn}
-                    mixed={someOn}
-                    onToggle={() => selection.onChange(allOn ? new Set() : new Set(selection.all))}
-                    label={allOn ? 'Select nobody' : `Select all ${selection.all.length}`}
-                    testId="people-select-all"
-                  />
-                </th>
-              )}
-              {[
-                'Name',
-                'Title · Company',
-                'How you know them',
-                'Closeness',
-                'Stage',
-                'Last touch',
-                'Next',
-              ].map((h) => (
-                <th key={h} className="text-left font-medium px-2 py-1.5 leading-tight">
-                  {h}
-                </th>
-              ))}
+              <Th className="min-w-[200px]">
+                <span className="flex items-center gap-3">
+                  {selection && (
+                    <Check
+                      on={allOn}
+                      mixed={someOn}
+                      onToggle={() => selection.onChange(allOn ? new Set() : new Set(selection.all))}
+                      label={allOn ? 'Select nobody' : `Select all ${selection.all.length}`}
+                      testId="people-select-all"
+                    />
+                  )}
+                  Name
+                </span>
+              </Th>
+              <Th>Profiles</Th>
+              <Th>Title</Th>
+              <Th>Company</Th>
+              <Th>How you know them</Th>
+              <Th>Closeness</Th>
+              <Th>Stage</Th>
+              <Th>Last touch</Th>
+              <Th>Next</Th>
             </tr>
           </thead>
-          <tbody className="divide-y divide-line">
+          <tbody>
             {people.map((p) => {
               const c = chatFor(p.id);
               const next = c ? nextFor(c.id, p.id) : undefined;
+              const how = role(p);
               return (
                 // the whole row opens the person, like it looks; the name stays the link for keyboard and screen readers
-                <tr
+                <Tr
                   key={p.id}
-                  className="hover:bg-canvas-2/60 cursor-pointer"
+                  className="cursor-pointer"
                   data-testid="people-row"
                   onClick={(e) => {
                     if ((e.target as HTMLElement).closest('a,button,select,input')) return;
@@ -233,58 +233,67 @@ export function PeopleList({
                   }}
                   data-selected={selection?.selected.has(p.id) || undefined}
                 >
-                  {selection && (
-                    <td className="w-8 pl-3 pr-1">
-                      <Check
-                        on={selection.selected.has(p.id)}
-                        onToggle={() => toggle(p.id)}
-                        label={`Select ${p.displayName}`}
-                        testId="people-row-select"
-                      />
-                    </td>
-                  )}
-                  <td className="px-2 h-12">
-                    <Link
-                      to={`/people/${p.id}`}
-                      className="inline-flex items-center gap-2 font-medium hover:underline whitespace-nowrap"
-                    >
-                      <Avatar name={p.displayName} src={p.photoUrl} id={p.id} size={26} />
-                      <span data-testid="person-name">{p.displayName}</span>
-                      {p.isAlumni && (
-                        <Chip tone="accent" className="h-5">
-                          Alum
-                        </Chip>
+                  <Td>
+                    <span className="flex items-center gap-3 min-w-0">
+                      {selection && (
+                        <Check
+                          on={selection.selected.has(p.id)}
+                          onToggle={() => toggle(p.id)}
+                          label={`Select ${p.displayName}`}
+                          testId="people-row-select"
+                        />
                       )}
-                    </Link>
-                  </td>
-                  <td className="px-2 text-ink-2 min-w-[150px]">
-                    {p.currentTitle || p.currentOrganizationRaw ? (
-                      <LogoText person={p} wrap>
-                        <span className="block leading-snug">
-                          {p.currentTitle ?? p.currentOrganizationRaw}
-                        </span>
-                        {p.currentTitle && p.currentOrganizationRaw && (
-                          <span className="block text-[12px] text-ink-3 leading-snug">
-                            {p.currentOrganizationRaw}
-                          </span>
-                        )}
-                      </LogoText>
-                    ) : p.headline ? (
-                      // no title read yet: their LinkedIn headline says what they do
-                      <span
-                        className="block max-w-[340px] text-[12.5px] leading-snug text-ink-3 line-clamp-2"
-                        title={p.headline}
-                        data-testid="people-row-headline"
+                      <Link
+                        to={`/people/${p.id}`}
+                        className="inline-flex min-w-0 items-center gap-2.5 font-medium hover:underline"
                       >
-                        {p.headline}
-                      </span>
+                        <Avatar name={p.displayName} src={p.photoUrl} id={p.id} size={24} />
+                        <span className="truncate max-w-[220px]" data-testid="person-name">
+                          {p.displayName}
+                        </span>
+                        {p.isAlumni && (
+                          <Chip tone="accent" className="h-5">
+                            Alum
+                          </Chip>
+                        )}
+                      </Link>
+                    </span>
+                  </Td>
+                  <Td>
+                    {p.linkedinUrl ? (
+                      <LinkedInMark url={p.linkedinUrl} name={p.displayName} testId="people-row-linkedin" />
                     ) : null}
-                  </td>
-                  <td className="px-2 text-ink-2">{role(p) ?? ''}</td>
-                  <td className="px-2">
+                  </Td>
+                  <Td className="text-ink-3">
+                    {p.currentTitle ? (
+                      <Clip title={p.currentTitle} max={280}>
+                        {p.currentTitle}
+                      </Clip>
+                    ) : !p.currentOrganizationRaw && p.headline ? (
+                      // no title read yet: their LinkedIn headline says what they do
+                      <Clip title={p.headline} max={280}>
+                        <span data-testid="people-row-headline">{p.headline}</span>
+                      </Clip>
+                    ) : null}
+                  </Td>
+                  <Td>
+                    {p.currentOrganizationRaw ? (
+                      <LogoText person={p} size={16}>
+                        <Clip title={p.currentOrganizationRaw} max={180}>
+                          {p.currentOrganizationRaw}
+                        </Clip>
+                      </LogoText>
+                    ) : null}
+                  </Td>
+                  <Td className="text-ink-2">
+                    <Clip title={how ?? undefined} max={200}>
+                      {how ?? ''}
+                    </Clip>
+                  </Td>
+                  <Td>
                     <StrengthDots v={p.strength} />
-                  </td>
-                  <td className="px-2">
+                  </Td>
+                  <Td>
                     {c ? (
                       <Select
                         value={c.stage}
@@ -302,23 +311,23 @@ export function PeopleList({
                     ) : p.hiddenAt ? null : (
                       <Link
                         to={`/people/${p.id}?draft=outreach`}
-                        className="text-[12.5px] text-accent font-medium whitespace-nowrap hover:underline"
+                        className="text-[12.5px] text-accent font-medium hover:underline"
                         data-testid="list-start-chat"
                       >
                         Start a chat
                       </Link>
                     )}
-                  </td>
-                  <td className="px-2 text-ink-2 min-w-[96px] leading-snug">
+                  </Td>
+                  <Td className="text-ink-2">
                     <LastTouch person={p} chat={c} />
-                  </td>
-                  <td className="px-2">{next ? <NextLink s={next} /> : null}</td>
-                </tr>
+                  </Td>
+                  <Td>{next ? <NextLink s={next} /> : null}</Td>
+                </Tr>
               );
             })}
           </tbody>
-        </table>
-      </div>
+        </Table>
+      </TableBox>
     </>
   );
 }
