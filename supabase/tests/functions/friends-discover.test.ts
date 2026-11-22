@@ -304,4 +304,47 @@ describe('finding friends over orbit-api', () => {
     const late = await w.call('/friends/accept', w.cara.token, { code: a.body.code, mode: 'all' });
     expect(late.status).toBe(404);
   });
+
+  it('reset link: the old link is dead for good, the new one stands and works, and an emailed invite is untouched', async () => {
+    const w = await world();
+    const old = await w.call<{ code: string; link: string }>('/friends/link', w.maya.token, {});
+    // an invite by email to someone not on Orbit, which a reset of the link must leave alone
+    const mailed = await w.call<{ code: string }>('/friends/invite', w.maya.token, {
+      email: 'someone.new@example.org',
+    });
+    expect(mailed.status).toBe(200);
+    const fresh = await w.call<{ code: string; link: string; expiresAt: string }>(
+      '/friends/link',
+      w.maya.token,
+      { reset: true },
+    );
+    expect(fresh.status).toBe(200);
+    expect(fresh.body.code).not.toBe(old.body.code);
+    expect(fresh.body.code).toMatch(/^[A-Za-z0-9]{22}$/);
+    expect(fresh.body.link.endsWith(`/friends/join/${fresh.body.code}`)).toBe(true);
+    expect(Date.parse(fresh.body.expiresAt)).toBeGreaterThan(Date.now() + 80 * 86_400_000);
+    // the old link no longer accepts or declines, for anyone
+    for (const who of [w.ben, w.cara]) {
+      const acc = await w.call('/friends/accept', who.token, { code: old.body.code, mode: 'all' });
+      expect(acc.status).toBe(404);
+    }
+    expect((await w.call('/friends/decline', w.frank.token, { code: old.body.code })).status).toBe(404);
+    const [gone] = await t.db.sql<{ status: string }>`
+      select status from orbit.friend_invites where code = ${old.body.code}`;
+    expect(gone!.status).toBe('revoked');
+    // the new one is the standing link from here on, and it works
+    const again = await w.call<{ code: string }>('/friends/link', w.maya.token, {});
+    expect(again.body.code).toBe(fresh.body.code);
+    const acc = await w.call('/friends/accept', w.ben.token, { code: fresh.body.code, mode: 'all' });
+    expect(acc.status).toBe(200);
+    // the emailed invite still waits on its one address
+    const [kept] = await t.db.sql<{ status: string }>`
+      select status from orbit.friend_invites where code = ${mailed.body.code}`;
+    expect(kept!.status).toBe('pending');
+    // someone else's reset never touches this link
+    await w.call('/friends/link', w.ana.token, { reset: true });
+    expect((await w.call<{ code: string }>('/friends/link', w.maya.token, {})).body.code).toBe(
+      fresh.body.code,
+    );
+  });
 });

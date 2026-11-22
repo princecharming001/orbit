@@ -18,6 +18,25 @@ export function friendLine(f: Friend): string {
   return parts.join(' · ');
 }
 
+/**
+ * The one grey line under a friend's name in the side column: where their network stands, in the server's own terms
+ * and nothing past them. A row kept from before the server said so falls back to what it shares.
+ */
+export function friendStatus(f: Friend): string {
+  switch (f.network) {
+    case 'ready':
+      return 'Ready to search';
+    case 'syncing':
+      return 'Still syncing';
+    case 'empty':
+      return 'Nothing to search yet';
+    case 'not_sharing':
+      return 'Not sharing their network';
+    default:
+      return friendLine(f);
+  }
+}
+
 export function FriendRow({
   friend,
   onAsk,

@@ -39,6 +39,7 @@ export function Button({
   size?: 'sm' | 'md' | 'lg';
   /** the click is being worked on: a spinner in the button, which stays full strength but takes no second click */
   loading?: boolean;
+  ref?: React.Ref<HTMLButtonElement>;
 }) {
   const base =
     'inline-flex items-center justify-center gap-1.5 rounded-[6px] font-medium tracking-[0.005em] transition-[background-color,border-color,color,transform] duration-150 active:scale-[0.97] disabled:active:scale-100 disabled:opacity-40 disabled:cursor-not-allowed focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ink/25 focus-visible:ring-offset-1 whitespace-nowrap';
@@ -203,13 +204,19 @@ export function Avatar({
   id,
   size = 32,
   ring,
+  shape = 'round',
 }: {
   name: string;
   src?: string;
   id?: string;
   size?: number;
   ring?: string;
+  /** a circle, or a square with rounded corners (the people in the Friends side column) */
+  shape?: 'round' | 'square';
 }) {
+  // a square's corners grow with it: 12px at 56, never less than 6
+  const corner = shape === 'square' ? { borderRadius: Math.max(6, Math.round(size * 0.215)) } : undefined;
+  const round = shape === 'square' ? '' : 'rounded-full';
   const hue = useMemo(() => {
     let h = 0;
     const s = id ?? name;
@@ -230,13 +237,18 @@ export function Avatar({
   const shown = usable && tries < 2 ? usable : undefined;
   useEffect(() => (id ? photoWanted(id) : undefined), [id]);
   return (
-    <span className="relative inline-flex shrink-0" style={{ width: size, height: size }}>
+    <span
+      className="relative inline-flex shrink-0"
+      style={{ width: size, height: size }}
+      data-shape={shape === 'square' ? 'square' : undefined}
+    >
       {shown ? (
         <img
           key={tries}
           src={shown}
           alt=""
-          className="rounded-full object-cover w-full h-full"
+          className={cx(round, 'object-cover w-full h-full')}
+          style={corner}
           referrerPolicy="no-referrer"
           onError={() => {
             setFailed({ src: shown, tries: tries + 1 });
@@ -245,13 +257,21 @@ export function Avatar({
         />
       ) : (
         <span
-          className="rounded-full w-full h-full inline-flex items-center justify-center font-semibold text-white"
-          style={{ background: `hsl(${hue} 32% 52%)`, fontSize: Math.max(10, size * 0.36) }}
+          className={cx(
+            round,
+            'w-full h-full inline-flex items-center justify-center font-semibold text-white',
+          )}
+          style={{ background: `hsl(${hue} 32% 52%)`, fontSize: Math.max(10, size * 0.36), ...corner }}
         >
           {initials(name)}
         </span>
       )}
-      {ring && <span className="absolute inset-[-2px] rounded-full border-2" style={{ borderColor: ring }} />}
+      {ring && (
+        <span
+          className={cx('absolute inset-[-2px] border-2', round)}
+          style={{ borderColor: ring, ...(corner ? { borderRadius: corner.borderRadius + 2 } : {}) }}
+        />
+      )}
     </span>
   );
 }

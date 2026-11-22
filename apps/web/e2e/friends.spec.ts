@@ -1,5 +1,5 @@
 import { expect, type Page, test } from '@playwright/test';
-import { type FakeOrbitApi, withFriend } from '../src/test/fakeOrbitApi';
+import { type FakeOrbitApi, fakeFriend, withFriend } from '../src/test/fakeOrbitApi';
 import { withFakeApi } from './fakeApi';
 
 /**
@@ -41,7 +41,12 @@ test.describe('friends (plan 29 A7, fake orbit-api)', () => {
     await page.goto('friends');
     await page.getByTestId('friends-invite-email').fill('noah.patel@cornell.edu');
     await page.getByTestId('friends-invite-send').click();
-    await expect(page.getByTestId('friends-pending')).toContainText('noah.patel@cornell.edu');
+    // the invite waits under Requested, with the one line that is true of someone not on Orbit yet
+    const requested = page.getByTestId('friends-requested');
+    await expect(requested.getByTestId('friends-requested-count')).toHaveText('1');
+    const row = requested.getByTestId('friends-requested-row');
+    await expect(row.getByTestId('friends-requested-row-name')).toHaveText('noah.patel@cornell.edu');
+    await expect(row.getByTestId('friends-requested-row-line')).toHaveText('Invited, not on Orbit yet');
     // the other side: the request arrives and is accepted, sharing everyone back
     expect(api.state.friendInvites.filter((i) => i.status === 'pending')).toHaveLength(1);
     await expect(page.getByTestId('friend-row').first()).toContainText('shares 120 people');
@@ -150,16 +155,27 @@ test.describe('finding friends (plan 37 follow-up, fake orbit-api)', () => {
       'href',
       /\/people\/p_inv_sam$/,
     );
+    // nothing sent yet: the side column has no Requested section
+    await expect(page.getByTestId('friends-requested')).toHaveCount(0);
     await tiles.first().getByTestId('friend-suggestion-add').click();
     await expect(tiles.first().getByTestId('friend-suggestion-add')).toHaveText('Requested');
     expect(api.state.friendFinder.requests).toEqual(['u_jordan']);
+    // and the request shows in the side column, waiting on Jordan
+    const sent = page.getByTestId('friends-requested').getByTestId('friends-requested-row');
+    await expect(sent).toHaveCount(1);
+    await expect(sent.getByTestId('friends-requested-row-name')).toHaveText('Jordan Ellis');
+    await expect(sent.getByTestId('friends-requested-row-line')).toHaveText('Request sent');
+    await expect(page.getByTestId('friends-requested-count')).toHaveText('1');
     // found by search, her tile offers Accept, and accepting makes her a friend
     await page.getByTestId('friends-search-input').fill('priya');
     const priya = page.getByTestId('friends-search-results').getByTestId('friend-suggestion');
     await expect(priya.getByTestId('friend-suggestion-add')).toHaveText('Accept');
     await priya.getByTestId('friend-suggestion-add').click();
     await expect(priya.getByTestId('friend-suggestion-add')).toHaveText('Friends');
-    await expect(page.getByTestId('friends-list')).toContainText('Priya Shah');
+    await expect(page.getByTestId('friends-yours')).toContainText('Priya Shah');
+    await expect(page.getByTestId('friends-yours-count')).toHaveText('2');
+    // her request is answered: it is no longer waiting in the side column
+    await expect(page.getByTestId('friends-requests')).toHaveCount(0);
   });
 
   test('people to invite: Invite turns to Invited and the invite goes to the address Orbit has', async ({
@@ -199,15 +215,163 @@ test.describe('finding friends (plan 37 follow-up, fake orbit-api)', () => {
     await expect(page.getByTestId('friends-search-none')).toContainText('Try their email');
   });
 
-  test('the invite link: shown, copied, and a reset makes a new one', async ({ page, context }) => {
+  test('the invite link: shown in one field, copied whole, and reset only after it asks', async ({
+    page,
+    context,
+  }) => {
     await context.grantPermissions(['clipboard-read', 'clipboard-write']);
+    const api = await signedInWithAna(page);
+    // a browser dialog would be a failure: the question is asked in the page
+    let dialogs = 0;
+    page.on('dialog', (d) => {
+      dialogs++;
+      void d.dismiss();
+    });
+    await page.goto('friends');
+    const section = page.getByTestId('friends-invite-link');
+    await expect(section.getByRole('heading', { name: 'Invite link' })).toBeVisible();
+    await expect(section).toContainText('Share it in a group chat to add friends.');
+    const text = page.getByTestId('friends-link-text');
+    await expect(text).toHaveText('tryorbit.today/friends/join/standinglink0000000001');
+    // one line that never runs out of its field, with Copy inside the field on the right
+    const copy = page.getByTestId('friends-invite-copy');
+    const [textBox, copyBox, sectionBox] = await Promise.all([
+      text.boundingBox(),
+      copy.boundingBox(),
+      section.boundingBox(),
+    ]);
+    expect(textBox!.height).toBeLessThan(28);
+    expect(textBox!.x + textBox!.width).toBeLessThanOrEqual(copyBox!.x);
+    expect(copyBox!.x + copyBox!.width).toBeLessThanOrEqual(sectionBox!.x + sectionBox!.width);
+    await copy.click();
+    await expect(copy).toHaveText('Copied');
+    expect(await page.evaluate(() => navigator.clipboard.readText())).toBe(
+      'https://tryorbit.today/friends/join/standinglink0000000001',
+    );
+    // Reset link asks first; Cancel leaves the link as it was and the server unasked
+    const resets = () => api.calls.filter((c) => c.route === '/friends/link' && c.body.reset === true).length;
+    await page.getByTestId('friends-invite-reset').click();
+    await expect(page.getByTestId('friends-invite-reset-ask')).toContainText(
+      'Reset? The old link stops working.',
+    );
+    await page.getByTestId('friends-invite-reset-cancel').click();
+    await expect(page.getByTestId('friends-invite-reset-ask')).toHaveCount(0);
+    await expect(text).toContainText('standinglink0000000001');
+    expect(resets()).toBe(0);
+    // Reset, then Reset: a new link in the field, and the old one is gone
+    await page.getByTestId('friends-invite-reset').click();
+    await page.getByTestId('friends-invite-reset-confirm').click();
+    await expect(text).not.toContainText('standinglink0000000001');
+    await expect(text).toContainText('tryorbit.today/friends/join/');
+    await expect(page.getByTestId('friends-invite-reset-ask')).toHaveCount(0);
+    await expect(page.getByTestId('toasts')).toContainText('The old one no longer works.');
+    expect(resets()).toBe(1);
+    expect(dialogs).toBe(0);
+  });
+
+  test('the side column: the link, who you asked, and your friends with where each one stands', async ({
+    page,
+  }) => {
+    const api = await signedInWithAna(page);
+    // seven friends in all: Ana (ready), one still syncing, one sharing nothing, one with nobody visible yet
+    const filler = { ...api.state.friends[0]!.people[0]!, personId: 'x_p_1' };
+    api.state.friends.push(
+      fakeFriend({
+        friendshipId: 'fr_ben',
+        userId: 'u_ben',
+        name: 'Ben Ito',
+        people: [filler],
+        syncing: true,
+      }),
+      fakeFriend({ friendshipId: 'fr_cara', userId: 'u_cara', name: 'Cara Diaz', theirMode: 'none' }),
+      fakeFriend({ friendshipId: 'fr_dev', userId: 'u_dev', name: 'Dev Rao' }),
+      fakeFriend({ friendshipId: 'fr_eli', userId: 'u_eli', name: 'Eli Marsh', people: [filler] }),
+      fakeFriend({ friendshipId: 'fr_fay', userId: 'u_fay', name: 'Fay Quinn', people: [filler] }),
+      fakeFriend({
+        friendshipId: 'fr_gus',
+        userId: 'u_gus',
+        name: 'Gus Hale',
+        people: [filler],
+        linkedinUrl: 'https://www.linkedin.com/in/gus-hale',
+      }),
+    );
+    api.state.friendInvites.push({
+      id: 'inv_noah',
+      direction: 'out',
+      email: 'noah.patel@cornell.edu',
+      name: null,
+      status: 'pending',
+      createdAt: '2026-10-06T08:00:00.000Z',
+    });
+    api.state.friendFinder.requests.push('u_marcus');
+    await page.goto('friends');
+    const column = page.getByTestId('friends-column');
+    // top to bottom: the link, what was asked, the friends
+    await expect(column.locator('h2')).toHaveText([/^Invite link$/, /^Requested\s*2$/, /^Your friends\s*7$/]);
+    const requested = column.getByTestId('friends-requested-row');
+    await expect(requested).toHaveCount(2);
+    await expect(requested.nth(1)).toContainText('Marcus Wei');
+    await expect(requested.nth(1)).toContainText('Request sent');
+    await expect(requested.nth(1).getByTestId('friends-requested-row-name')).toHaveAttribute(
+      'href',
+      'https://www.linkedin.com/in/marcus-wei',
+    );
+    // five friends first, each a square photo with the name and one line under it
+    const rows = column.getByTestId('friends-yours-row');
+    await expect(rows).toHaveCount(5);
+    await expect(rows.getByTestId('friends-yours-row-name')).toHaveText([
+      'Ana Okafor',
+      'Ben Ito',
+      'Cara Diaz',
+      'Dev Rao',
+      'Eli Marsh',
+    ]);
+    await expect(rows.getByTestId('friends-yours-row-line')).toHaveText([
+      'Ready to search',
+      'Still syncing',
+      'Not sharing their network',
+      'Nothing to search yet',
+      'Ready to search',
+    ]);
+    const photo = await rows.first().locator('[data-shape="square"]').boundingBox();
+    expect(Math.round(photo!.width)).toBe(56);
+    expect(Math.round(photo!.height)).toBe(56);
+    // See more shows everyone; with nothing more to show, the button to see more is gone
+    await column.getByTestId('friends-yours-more').click();
+    await expect(rows).toHaveCount(7);
+    await expect(column.getByTestId('friends-yours-more')).toHaveCount(0);
+    await expect(rows.last().getByTestId('friends-yours-row-name')).toHaveAttribute(
+      'href',
+      'https://www.linkedin.com/in/gus-hale',
+    );
+    await column.getByTestId('friends-yours-fewer').click();
+    await expect(rows).toHaveCount(5);
+    // a photo jumps to that friend's full row, where the intro and what you share live
+    await rows.nth(1).getByTestId('friends-yours-row-photo').click();
+    await expect(page.locator('[data-testid="friend-row"][data-friend-id="u_ben"]')).toBeInViewport();
+    // nothing in the column runs wider than the column, and the page never scrolls sideways
+    const wide = await page.evaluate(() => {
+      const col = document.querySelector('[data-testid="friends-column"]')!;
+      const right = col.getBoundingClientRect().right;
+      const over = [...col.querySelectorAll('*')].filter((e) => e.getBoundingClientRect().right > right + 1);
+      return {
+        over: over.length,
+        sideways: document.documentElement.scrollWidth - document.documentElement.clientWidth,
+      };
+    });
+    expect(wide.over).toBe(0);
+    expect(wide.sideways).toBeLessThanOrEqual(0);
+    // house rules: no long dashes and no exclamation marks anywhere in the column
+    expect(await column.innerText()).not.toMatch(/[—–!]/);
+  });
+
+  test('with five friends or fewer there is no See more', async ({ page }) => {
     await signedInWithAna(page);
     await page.goto('friends');
-    const text = page.getByTestId('friends-link-text');
-    await expect(text).toContainText('tryorbit.today/friends/join/standinglink0000000001');
-    await page.getByTestId('friends-link-copy').click();
-    await page.getByTestId('friends-link-reset').click();
-    await expect(text).not.toContainText('standinglink0000000001');
+    await expect(page.getByTestId('friends-yours-row')).toHaveCount(1);
+    await expect(page.getByTestId('friends-yours-count')).toHaveText('1');
+    await expect(page.getByTestId('friends-yours-more')).toHaveCount(0);
+    await expect(page.getByTestId('friends-requested')).toHaveCount(0);
   });
 
   test('there is always a way to see more people to invite, until there is nobody left', async ({ page }) => {

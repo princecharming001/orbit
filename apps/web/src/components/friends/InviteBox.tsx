@@ -1,9 +1,9 @@
 /**
- * Invite a friend (plan 29 §A1): an email box and a link to copy. Someone already on Orbit sees a request to accept;
- * someone not on it gets a sign-in link that lands them in setup with the request waiting. Pending requests sit under
- * it with Accept, Decline and the one line that says what accepting shares.
+ * Invite a friend by email (plan 29 §A1), under the invite link in the side column. Someone already on Orbit sees a
+ * request to accept; someone not on it gets a sign-in link that lands them in setup with the request waiting. Either
+ * way they then show under Requested. When no mail goes out from this copy of Orbit, the link to send by hand shows
+ * under the box.
  */
-import type { FriendInvite } from '@orbit/core';
 import { useState } from 'react';
 import { Button, Input, useToast } from '../../ui';
 import { EmailTypoHint } from '../EmailTypoHint';
@@ -11,19 +11,13 @@ import { EmailTypoHint } from '../EmailTypoHint';
 const TAP = 'pointer-coarse:min-h-11';
 
 export function InviteBox({
-  pending,
   onInvite,
-  onAccept,
-  onDecline,
   busy,
 }: {
-  pending: FriendInvite[];
   /** returns the link to copy, or nothing when it failed (the caller said why) */
   onInvite: (
     email?: string,
   ) => Promise<{ link: string; status: 'sent' | 'requested' | 'link' | 'linkedin' } | undefined>;
-  onAccept: (inv: FriendInvite) => void;
-  onDecline: (inv: FriendInvite) => void;
   busy?: boolean;
 }) {
   const toast = useToast();
@@ -32,7 +26,8 @@ export function InviteBox({
   const send = async () => {
     const r = await onInvite(email.trim() || undefined);
     if (!r) return;
-    setLink(r.link);
+    // only a link nobody was sent is worth showing: the student has to pass it on themselves
+    setLink(r.status === 'link' ? r.link : undefined);
     if (r.status === 'requested')
       toast.push({ text: `They are on Orbit already: the request is waiting on them.`, tone: 'good' });
     else if (r.status === 'sent') toast.push({ text: `Invite sent to ${email.trim()}.`, tone: 'good' });
@@ -45,7 +40,7 @@ export function InviteBox({
     setEmail('');
   };
   return (
-    <div className="space-y-3">
+    <div className="space-y-2">
       <form
         className="flex items-center gap-2"
         onSubmit={(e) => {
@@ -57,15 +52,15 @@ export function InviteBox({
           type="email"
           value={email}
           onChange={(e) => setEmail(e.target.value)}
-          placeholder="Their email"
-          className="min-w-0 flex-1 h-10"
+          placeholder="Or invite by email"
+          className="min-w-0 flex-1 h-11 rounded-[10px] px-3.5 text-[13.5px]"
           aria-label="Your friend's email"
           data-testid="friends-invite-email"
         />
         <Button
           type="submit"
           variant={email.trim() ? 'primary' : 'secondary'}
-          className={`h-10 ${TAP} disabled:opacity-100 disabled:text-ink-3`}
+          className={`h-11 rounded-[10px] !shadow-none ${TAP} disabled:opacity-100 disabled:text-ink-3`}
           loading={busy}
           disabled={!email.trim()}
           data-testid="friends-invite-send"
@@ -78,46 +73,6 @@ export function InviteBox({
         <p className="text-[12.5px] text-ink-3 break-all" data-testid="friends-invite-link-text">
           {link}
         </p>
-      )}
-      {pending.length > 0 && (
-        <ul className="divide-y divide-line-2" data-testid="friends-pending">
-          {pending.map((inv) => (
-            <li key={inv.id} className="py-2.5 flex flex-wrap items-center gap-x-3 gap-y-1.5 text-[13.5px]">
-              <span className="font-medium">{inv.name ?? inv.email}</span>
-              {inv.direction === 'in' ? (
-                <>
-                  <span className="text-ink-3 text-[12.5px]">
-                    wants to pool networks. Accepting shares your people the same way. Change it any time.
-                  </span>
-                  <span className="ml-auto flex items-center gap-2">
-                    <Button
-                      size="sm"
-                      variant="primary"
-                      className={TAP}
-                      onClick={() => onAccept(inv)}
-                      data-testid="friends-accept"
-                    >
-                      Accept
-                    </Button>
-                    <Button
-                      size="sm"
-                      variant="ghost"
-                      className={TAP}
-                      onClick={() => onDecline(inv)}
-                      data-testid="friends-decline"
-                    >
-                      Decline
-                    </Button>
-                  </span>
-                </>
-              ) : (
-                <span className="text-ink-3 text-[12.5px]">
-                  {inv.name ? 'request sent, waiting on them' : 'invited, waiting on them'}
-                </span>
-              )}
-            </li>
-          ))}
-        </ul>
       )}
     </div>
   );

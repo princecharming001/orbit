@@ -1,9 +1,10 @@
 /**
  * Friends (plan 29 Part A, §A1; laid out again in the plan 37 follow-up): two Orbit users pool their networks as signal,
  * never content. The main column finds friends: a search for someone on Orbit, people on Orbit the student may know
- * (Add), and people in their People worth inviting (Invite). The side column holds the invite link for a group chat,
- * requests waiting, and the friends. Below the grids: each friend's row (ask for an intro, what you share, end), the
- * asks, and what you share. An account feature: in local mode the page is one paragraph and the Google sign-in.
+ * (Add), and people in their People worth inviting (Invite). The side column holds the invite link for a group chat
+ * (Copy, and Reset link behind a question), requests waiting on the student, the ones they sent, and their friends
+ * with where each one's network stands. Below the grids: each friend's row (ask for an intro, what you share, end),
+ * the asks, and what you share. An account feature: in local mode the page is one paragraph and the Google sign-in.
  */
 import type {
   Friend,
@@ -29,7 +30,12 @@ import {
 } from '../components/friends/Discover';
 import { FriendRow } from '../components/friends/FriendRow';
 import { InviteBox } from '../components/friends/InviteBox';
-import { FriendsListSection, InviteLinkSection, RequestsSection } from '../components/friends/Rail';
+import {
+  FriendsListSection,
+  InviteLinkSection,
+  RequestedSection,
+  RequestsSection,
+} from '../components/friends/Rail';
 import { db } from '../db/schema';
 import {
   acceptFriend,
@@ -160,7 +166,6 @@ export function FriendsPage() {
   const [query, setQuery] = useState('');
   const [results, setResults] = useState<FriendSuggestion[]>();
   const [link, setLink] = useState<string>();
-  const [resetting, setResetting] = useState(false);
   const searchSeq = useRef(0);
   const tile = (id: string, state: TileState) => setTiles((t) => ({ ...t, [id]: state }));
   const mode: FriendShareMode = preview?.mode ?? settings?.friendShareMode ?? 'all';
@@ -243,6 +248,8 @@ export function FriendsPage() {
       text: `Request sent to ${s.name.split(' ')[0]}. You pool networks once they accept.`,
       tone: 'good',
     });
+    // they show under Requested from here on
+    await refresh();
   };
   const acceptSuggested = async (s: FriendSuggestion) => {
     if (!s.friendshipId) return;
@@ -285,10 +292,9 @@ export function FriendsPage() {
     }
     await refresh();
   };
+  /** The side column has already asked ("Reset? The old link stops working."): this ends the old link. */
   const resetLink = async () => {
-    setResetting(true);
     const r = await inviteLink(user, true);
-    setResetting(false);
     if (!r.ok) return void toast.push({ text: r.message, tone: 'bad' });
     setLink(r.value.link);
     toast.push({ text: 'New link made. The old one no longer works.', tone: 'good' });
@@ -557,16 +563,13 @@ export function FriendsPage() {
           )}
         </div>
         {/* on a phone the link, the requests and the friends come first, above the grids */}
-        <aside className="min-w-0 order-first @4xl:order-none @4xl:sticky @4xl:top-6">
-          <InviteLinkSection link={link} onReset={() => void resetLink()} resetting={resetting}>
+        <aside
+          className="min-w-0 space-y-10 order-first @4xl:order-none @4xl:sticky @4xl:top-6 @4xl:max-h-[calc(100dvh-3rem)] @4xl:overflow-y-auto @4xl:[scrollbar-width:none] @4xl:-m-1 @4xl:p-1"
+          data-testid="friends-column"
+        >
+          <InviteLinkSection link={link} onReset={resetLink}>
             <div data-testid="friends-section-invite">
-              <InviteBox
-                pending={pending.filter((p) => p.direction === 'out')}
-                onInvite={invite}
-                onAccept={(i) => void accept(i)}
-                onDecline={(i) => void decline(i)}
-                busy={!!working.busy}
-              />
+              <InviteBox onInvite={invite} busy={!!working.busy} />
             </div>
           </InviteLinkSection>
           <RequestsSection
@@ -575,6 +578,7 @@ export function FriendsPage() {
             onDecline={(i) => void decline(i)}
             busy={!!working.busy}
           />
+          <RequestedSection pending={pending} />
           <FriendsListSection friends={friends} loading={!loaded} onOpen={openFriend} />
         </aside>
       </div>

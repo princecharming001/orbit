@@ -280,11 +280,13 @@ export interface FakeFriendShare extends FriendShare {
 }
 
 /** A friend in the fake: the row the tab shows, with the people behind the counts and what the friend shares. */
-export interface FakeFriend extends Omit<Friend, 'shares' | 'atTargets' | 'knowsAt'> {
+export interface FakeFriend extends Omit<Friend, 'shares' | 'atTargets' | 'knowsAt' | 'network'> {
   people: FakeFriendShare[];
   /** what the friend shares with the student */
   theirMode: FriendShareMode;
   theirCompanyDomains: string[];
+  /** an import of theirs is still running (LinkedIn's first pass, Gmail's backfill): their line says so */
+  syncing?: boolean;
 }
 
 export interface FakeOrbitApi {
@@ -943,11 +945,31 @@ export function createFakeOrbitApi(
         });
       }
       // friends (plan 29 Part A)
-      case '/friends':
+      case '/friends': {
+        // a request sent from a suggestion or the search waits on them, with the name and photo the card showed
+        const ff = state.friendFinder;
+        const friendNames = new Set(state.friends.map((f) => f.name));
+        const requested = ff.requests
+          .map((id) => [...ff.onOrbit, ...ff.others].find((x) => x.userId === id))
+          .filter((x): x is NonNullable<typeof x> => !!x && !friendNames.has(x.name))
+          .map(
+            (x): FriendInvite => ({
+              id: `fs_${x.userId}`,
+              direction: 'out',
+              email: null,
+              name: x.name,
+              avatarUrl: x.avatarUrl,
+              ...(x.personId ? { personId: x.personId } : {}),
+              ...(x.linkedinUrl ? { linkedinUrl: x.linkedinUrl } : {}),
+              status: 'pending',
+              createdAt: iso(clock),
+            }),
+          );
         return json(200, {
           friends: state.friends.map((f) => friendView(f, state.targets)),
-          pending: state.friendInvites.filter((i) => i.status === 'pending'),
+          pending: [...state.friendInvites.filter((i) => i.status === 'pending'), ...requested],
         });
+      }
       case '/friends/invite': {
         const today = state.friendInvites.filter(
           (i) => i.direction === 'out' && clock - Date.parse(i.createdAt) < 24 * 3600_000,
@@ -1935,8 +1957,11 @@ function friendView(f: FakeFriend, targets: string[]): Friend {
       count: vis.filter((p) => p.company?.toLowerCase() === company.toLowerCase()).length,
     }))
     .filter((k) => k.count > 0);
-  const { people: _p, theirMode: _t, theirCompanyDomains: _d, ...row } = f;
-  return { ...row, shares: vis.length, atTargets: at.length, knowsAt };
+  const { people: _p, theirMode: _t, theirCompanyDomains: _d, syncing, ...row } = f;
+  // the server's networkState: not sharing first, a running import next, then whether anyone is visible
+  const network =
+    f.theirMode === 'none' ? 'not_sharing' : syncing ? 'syncing' : vis.length ? 'ready' : 'empty';
+  return { ...row, shares: vis.length, atTargets: at.length, knowsAt, network };
 }
 
 /** The friend layer of /paths/find (plan 29 A4): p from the closeness word, 1: 0.35, 2: 0.6, 3: 0.85. */
