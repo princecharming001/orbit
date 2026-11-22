@@ -43,6 +43,11 @@ let readerCache:
   | { userId: string; at: number; value?: { accountId: string; token: string }; why?: NoLinkedIn }
   | undefined;
 const READER_TTL_MS = 30 * 60_000;
+/**
+ * "Not connected" is kept only this long: a student who has just linked LinkedIn again (or whose link the server was
+ * a moment from marking active) is asked about on the next look, not half an hour later.
+ */
+export const READER_NOT_CONNECTED_TTL_MS = 60_000;
 
 /**
  * An Orbit account's LinkedIn, as its browser reads it: the server hands over the student's own account id and the
@@ -53,7 +58,10 @@ export async function accountLinkedInReader(
   userId: string,
 ): Promise<{ accountId: string; token: string } | NoLinkedIn> {
   const now = Date.now();
-  if (readerCache?.userId === userId && now - readerCache.at < READER_TTL_MS)
+  if (
+    readerCache?.userId === userId &&
+    now - readerCache.at < (readerCache.value ? READER_TTL_MS : READER_NOT_CONNECTED_TTL_MS)
+  )
     return readerCache.value ?? readerCache.why ?? 'unavailable';
   const r = await callApi('/linkedin/reader', {}).catch(() => undefined);
   if (r?.ok && r.value.ok) {

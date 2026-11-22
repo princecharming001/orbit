@@ -42,7 +42,7 @@ import {
 } from '../integrations/unipile';
 import { endActivity, progressActivity, startActivity } from './activity';
 import { generateBrief, recommendationsRefresh } from './brief';
-import { liveAccountFor } from './enrichment/sources';
+import { accountLinkedInReader, forgetAccountLinkedInReader, liveAccountFor } from './enrichment/sources';
 import { importLiveConnections } from './linkedin';
 // (a cycle: linkedinActivity reads the account row from here; neither uses the other while loading)
 import { syncLinkedInActivity } from './linkedinActivity';
@@ -475,6 +475,8 @@ async function connectViaServer(
     const st = await callApi('/linkedin/status', {}, { signal: opts.signal });
     if (st.ok && st.value.status === 'active') {
       closeQuietly(win);
+      // a "not connected" answer kept from before the sign-in no longer stands: mutuals and photos read at once
+      forgetAccountLinkedInReader();
       await saveAccount(user.id, {
         externalAccountId: st.value.accountId ?? 'orbit-api',
         status: 'active',
@@ -897,13 +899,26 @@ export async function mutualsFor(
   // an Orbit account's LinkedIn is linked on the server, which hands this browser its account and token: the row kept
   // here for it carries no token, and asking with that row was refused (403) for every account
   const live = await liveAccountFor(user, { anyToken: true });
-  if (!live || live === 'mock')
+  if (!live || live === 'mock') {
+    // an Orbit account whose server could not be asked just now is not "not connected": say so, with a retry
+    if (
+      isServerUser(user.id) &&
+      unipileConfigured() &&
+      (await accountLinkedInReader(user.id)) === 'unavailable'
+    )
+      return {
+        ok: false,
+        reason: 'error',
+        message: 'Orbit could not reach your LinkedIn just now.',
+        mutuals: [],
+      };
     return {
       ok: false,
       reason: 'not_connected',
       message: 'Connect LinkedIn live to see mutual connections.',
       mutuals: [],
     };
+  }
   if (!person.linkedinMemberId)
     return {
       ok: false,

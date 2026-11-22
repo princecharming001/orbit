@@ -70,6 +70,14 @@ describe('People who know, when Orbit checks later', () => {
     expect(host.textContent).not.toMatch(/None of your LinkedIn connections/);
   });
 
+  it('says LinkedIn is not connected, with the way to connect it, instead of showing nothing', async () => {
+    answer = { ok: false, reason: 'not_connected', message: 'Connect LinkedIn live.', mutuals: [] };
+    await show();
+    const note = host.querySelector('[data-testid="reach-mutuals-connect"]');
+    expect(note?.textContent).toContain('Connect LinkedIn to see which of your connections know Omar.');
+    expect(note?.querySelector('a')?.getAttribute('href')).toBe('/settings/integrations');
+  });
+
   it('still says no one when LinkedIn did answer with no one', async () => {
     answer = { ok: true, source: 'linkedin', mutuals: [] };
     await show();

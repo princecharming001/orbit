@@ -29109,6 +29109,18 @@ async function insertIdentities(ctx, personId, i) {
       values (${ctx.userId}::uuid, ${personId}::uuid, ${kind}, ${norm2}, ${raw}, ${src}, ${at}::timestamptz)
       on conflict (user_id, kind, value_norm) do nothing`;
 }
+var REPLACEABLE_PHOTO = "^https?://([a-z0-9-]+\\.)*(licdn\\.com|gravatar\\.com)/";
+function linkedInPhotoExpiry(url) {
+  if (!url) return 0;
+  try {
+    const u2 = new URL(url);
+    if (u2.hostname !== "licdn.com" && !u2.hostname.endsWith(".licdn.com")) return 0;
+    const e = Number(u2.searchParams.get("e"));
+    return Number.isFinite(e) && e > 0 ? Math.floor(e) : 0;
+  } catch {
+    return 0;
+  }
+}
 async function attach(ctx, personId, i) {
   await insertIdentities(ctx, personId, i);
   const p = ctx.people.find((x) => x.id === personId);
@@ -29131,7 +29143,15 @@ async function attach(ctx, personId, i) {
       org_id = coalesce(org_id, ${orgId}::uuid),
       org_raw = coalesce(org_raw, ${orgId ? i.companyRaw.trim() : null}),
       location = coalesce(location, ${i.location ?? null}),
-      photo_url = coalesce(photo_url, ${i.photoUrl ?? null}),
+      photo_url = case
+        when ${i.photoUrl ?? null}::text is null then photo_url
+        when photo_url is null then ${i.photoUrl ?? null}::text
+        -- LinkedIn's picture links expire after a few weeks: a newer one replaces an older one (or a Gravatar), so
+        -- every pass over the connections keeps the photos working; a photo from anywhere else is kept
+        when ${linkedInPhotoExpiry(i.photoUrl)}::bigint > 0 and photo_url ~* ${REPLACEABLE_PHOTO}
+             and coalesce(substring(photo_url from '[?&]e=([0-9]+)')::bigint, 0) < ${linkedInPhotoExpiry(i.photoUrl)}::bigint
+          then ${i.photoUrl ?? null}::text
+        else photo_url end,
       sources = case when ${i.source} = any(sources) then sources else sources || ${[i.source]}::text[] end,
       first_seen_at = least(first_seen_at, ${i.seenAt ?? null}::timestamptz),
       linkedin_connected_on = coalesce(linkedin_connected_on, ${i.connectedAt ?? null}::timestamptz)

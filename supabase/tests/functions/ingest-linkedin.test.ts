@@ -621,3 +621,50 @@ describe('entity resolution across providers (§1.8)', () => {
     expect(r.created.size).toBe(1);
   });
 });
+
+describe("LinkedIn photos: the links expire, so a sync's newer one replaces the old", () => {
+  const li = (id: string, e: number) =>
+    `https://media.licdn.com/dms/image/v2/${id}/profile-displayphoto-shrink_100_100/0/1?e=${e}&v=beta&t=x`;
+  const photoOf = async (u: string) => {
+    const [p] = await t.db.sql<{ photo_url: string | null }>`
+      select photo_url from orbit.people where user_id = ${u}::uuid and linkedin_member_id = 'ACoJay'`;
+    return p?.photo_url;
+  };
+  const relation = (photoUrl: string | undefined) => ({
+    key: 'li',
+    linkedinMemberId: 'ACoJay',
+    firstName: 'Jay',
+    lastName: 'Yang',
+    photoUrl,
+    source: 'linkedin' as const,
+    identitySource: 'linkedin_relation' as const,
+  });
+
+  it('a later LinkedIn link wins; an older one, none, or a non-LinkedIn one changes nothing', async () => {
+    const u = await connectedUser(t.db);
+    const now = new Date(NOW);
+    const OLD = 1_795_000_000;
+    await resolvePeople(t.db, u, [relation(li('A', OLD))], { now });
+    expect(await photoOf(u)).toBe(li('A', OLD));
+    // the next pass over the connections: the same person, a link that lasts longer
+    await resolvePeople(t.db, u, [relation(li('B', OLD + 1_814_400))], { now });
+    expect(await photoOf(u)).toBe(li('B', OLD + 1_814_400));
+    // a link that expires sooner (an older page), no picture at all, or a picture from elsewhere: kept as it is
+    await resolvePeople(t.db, u, [relation(li('C', OLD))], { now });
+    await resolvePeople(t.db, u, [relation(undefined)], { now });
+    await resolvePeople(t.db, u, [relation('https://example.com/jay.jpg')], { now });
+    expect(await photoOf(u)).toBe(li('B', OLD + 1_814_400));
+  });
+
+  it("never replaces a photo that is not LinkedIn's or a Gravatar", async () => {
+    const u = await connectedUser(t.db);
+    const now = new Date(NOW);
+    await resolvePeople(t.db, u, [relation('https://example.com/own.jpg')], { now });
+    await resolvePeople(t.db, u, [relation(li('B', 1_800_000_000))], { now });
+    expect(await photoOf(u)).toBe('https://example.com/own.jpg');
+    await t.db.sql`update orbit.people set photo_url = 'https://www.gravatar.com/avatar/abc?d=404'
+                    where user_id = ${u}::uuid and linkedin_member_id = 'ACoJay'`;
+    await resolvePeople(t.db, u, [relation(li('B', 1_800_000_000))], { now });
+    expect(await photoOf(u)).toBe(li('B', 1_800_000_000));
+  });
+});

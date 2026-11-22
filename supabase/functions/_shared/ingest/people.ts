@@ -345,6 +345,25 @@ async function insertIdentities(ctx: Ctx, personId: string, i: Incoming) {
       on conflict (user_id, kind, value_norm) do nothing`;
 }
 
+/** A stored photo a newer LinkedIn link may replace: LinkedIn's own (they expire) or a Gravatar. */
+const REPLACEABLE_PHOTO = '^https?://([a-z0-9-]+\\.)*(licdn\\.com|gravatar\\.com)/';
+
+/**
+ * When a LinkedIn picture link stops working (its `e=`, seconds since 1970); 0 for a link that carries none or is not
+ * LinkedIn's, which never replaces a photo Orbit already has.
+ */
+export function linkedInPhotoExpiry(url: string | undefined | null): number {
+  if (!url) return 0;
+  try {
+    const u = new URL(url);
+    if (u.hostname !== 'licdn.com' && !u.hostname.endsWith('.licdn.com')) return 0;
+    const e = Number(u.searchParams.get('e'));
+    return Number.isFinite(e) && e > 0 ? Math.floor(e) : 0;
+  } catch {
+    return 0;
+  }
+}
+
 /** Adds the item's identities to a known person and fills what the person lacks (a real name for a stand-in). */
 async function attach(ctx: Ctx, personId: string, i: Incoming) {
   await insertIdentities(ctx, personId, i);
@@ -368,7 +387,15 @@ async function attach(ctx: Ctx, personId: string, i: Incoming) {
       org_id = coalesce(org_id, ${orgId}::uuid),
       org_raw = coalesce(org_raw, ${orgId ? i.companyRaw!.trim() : null}),
       location = coalesce(location, ${i.location ?? null}),
-      photo_url = coalesce(photo_url, ${i.photoUrl ?? null}),
+      photo_url = case
+        when ${i.photoUrl ?? null}::text is null then photo_url
+        when photo_url is null then ${i.photoUrl ?? null}::text
+        -- LinkedIn's picture links expire after a few weeks: a newer one replaces an older one (or a Gravatar), so
+        -- every pass over the connections keeps the photos working; a photo from anywhere else is kept
+        when ${linkedInPhotoExpiry(i.photoUrl)}::bigint > 0 and photo_url ~* ${REPLACEABLE_PHOTO}
+             and coalesce(substring(photo_url from '[?&]e=([0-9]+)')::bigint, 0) < ${linkedInPhotoExpiry(i.photoUrl)}::bigint
+          then ${i.photoUrl ?? null}::text
+        else photo_url end,
       sources = case when ${i.source} = any(sources) then sources else sources || ${[i.source]}::text[] end,
       first_seen_at = least(first_seen_at, ${i.seenAt ?? null}::timestamptz),
       linkedin_connected_on = coalesce(linkedin_connected_on, ${i.connectedAt ?? null}::timestamptz)

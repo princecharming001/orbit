@@ -16,7 +16,6 @@ import { buildReachGraph, type MutualStanding, mutualStandings, userTieWeight } 
 import { subscribeHopEvidence } from '../../engine/hopEvidence';
 import type { MutualsResult, MutualView } from '../../engine/linkedinLive';
 import { subscribePairNotes } from '../../engine/pairNotes';
-import { isServerUser } from '../../integrations/orbitApi';
 import { useShowReasoning } from '../../state/showReasoning';
 import { Avatar, Button, cx, LinkedInMark } from '../../ui';
 import { SocialBridgeList } from '../SocialPeople';
@@ -225,8 +224,8 @@ export function ReachMutuals({
       </div>
     );
   if (!result.ok) {
-    // with an Orbit account LinkedIn is linked on the server, which this browser's lookup cannot see: say nothing
-    if (result.reason === 'not_connected' && isServerUser(user.id)) return null;
+    // said for an Orbit account too (its server says whether LinkedIn is linked): a link that dropped is told plainly,
+    // never an empty panel that reads as "no one knows them"
     if (result.reason === 'not_connected')
       return note(
         `Connect LinkedIn to see which of your connections know ${first}. `,

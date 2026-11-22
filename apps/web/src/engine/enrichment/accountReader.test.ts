@@ -9,7 +9,7 @@ import { db, wipeDatabase } from '../../db/schema';
 import { setUnipileUrlForTests } from '../../integrations/unipile';
 import { leaveFakeApi, signInToFakeApi } from '../../test/account';
 import { mutualsFor } from '../linkedinLive';
-import { forgetAccountLinkedInReader, liveAccountFor } from './sources';
+import { forgetAccountLinkedInReader, liveAccountFor, READER_NOT_CONNECTED_TTL_MS } from './sources';
 
 const PROXY = 'https://proxy.test';
 
@@ -33,6 +33,27 @@ describe("an Orbit account's LinkedIn reader", () => {
     api.state.linkedin.status = 'active';
     forgetAccountLinkedInReader();
     expect(await liveAccountFor(user)).toEqual({ accountId: 'acc_1', token: 'tok_acc_1' });
+  });
+
+  it('keeps "not connected" for a minute only: LinkedIn linked again is read on the next look', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    try {
+      const { api, user } = await signInToFakeApi();
+      expect(await liveAccountFor(user)).toBeUndefined();
+      // linked on the server a moment later (the sign-in window, or another tab): nothing here was told
+      api.state.linkedin.status = 'active';
+      expect(await liveAccountFor(user)).toBeUndefined();
+      vi.setSystemTime(Date.now() + READER_NOT_CONNECTED_TTL_MS + 1);
+      expect(await liveAccountFor(user)).toEqual({ accountId: 'acc_1', token: 'tok_acc_1' });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('says "not connected" for mutuals while LinkedIn is not linked', async () => {
+    const { user } = await signInToFakeApi();
+    const target = { id: 'p1', userId: user.id, firstName: 'Jay', linkedinMemberId: 'm_target' } as Person;
+    expect(await mutualsFor(user, target)).toMatchObject({ ok: false, reason: 'not_connected' });
   });
 
   it('asks LinkedIn for mutuals with that token, never with the token-less row kept in the browser', async () => {
