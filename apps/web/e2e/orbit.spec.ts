@@ -855,7 +855,13 @@ test.describe('Manual onboarding', () => {
     // with no chats yet, People opens on the list, so the people just imported are right there
     await page.goto('people');
     await expect(page.getByTestId('people-view-list')).toHaveAttribute('aria-selected', 'true');
-    await expect(page.getByRole('link', { name: /priya patel/i })).toBeVisible();
+    // the name that opens their page (the LinkedIn mark beside it names them too)
+    await expect(
+      page
+        .getByTestId('person-name')
+        .filter({ hasText: /priya patel/i })
+        .first(),
+    ).toBeVisible();
     await page.goto('discover');
     await expect(page.getByTestId('rec-card').first()).toBeVisible();
     // every written answer is in Settings, under Goals, to edit later
