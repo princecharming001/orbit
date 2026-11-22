@@ -18,6 +18,11 @@ export interface RoleSpec {
   seniority?: SearchSeniority[];
   seniorityAtLeast?: SearchSeniority;
   founder?: boolean;
+  /**
+   * set by lint: one of the titles asked for was the kind of work's own name ("investor", "recruiter") and was
+   * folded into `families`. The ask is for everyone in that work, whatever other wordings stand beside it.
+   */
+  broad?: boolean;
 }
 
 export interface CompanySpec {

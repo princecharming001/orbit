@@ -499,6 +499,68 @@ export function readQueryTitle(text: string): {
   return { families: r.families, seniority: bare ? undefined : r.seniority, words };
 }
 
+/** The titles that name a whole kind of work: asking for one asks for everyone in it. */
+export const GENERIC_TITLES: Partial<Record<TitleFamily, RegExp>> = {
+  investing: /^(investor|vc|venture capitalist|venture capital)$/,
+  founder: /^(founder|co founder|cofounder)$/,
+  engineering: /^(engineer|software engineer|developer|software developer|programmer)$/,
+  design: /^(designer)$/,
+  people_recruiting: /^(recruiter|recruiting|recruitment)$/,
+  product: /^(product manager|product management|product)$/,
+  sales: /^(sales|salesperson|sales rep|sales representative)$/,
+  marketing: /^(marketer|marketing)$/,
+  consulting: /^(consultant|consulting)$/,
+  research: /^(researcher|research)$/,
+  student: /^(student)$/,
+  creator: /^(creator|content creator)$/,
+  operations: /^(operations|ops)$/,
+  growth: /^(growth)$/,
+};
+
+/** Whether a title asked for (normalized words) is the name of one of these kinds of work. */
+export function isGenericTitle(words: string, families: Iterable<TitleFamily>): boolean {
+  const w = words.trim();
+  const one = w.replace(/s$/, '');
+  for (const f of families) if (GENERIC_TITLES[f]?.test(w) || GENERIC_TITLES[f]?.test(one)) return true;
+  return false;
+}
+
+/**
+ * Other names for the same job, for a job asked for by name ("lawyers" are attorneys and counsel too). Only names
+ * that are the same job: a paralegal is not a lawyer, a nurse is not a doctor.
+ */
+const SAME_JOB: string[][] = [
+  ['lawyer', 'attorney', 'counsel', 'solicitor', 'barrister', 'general counsel'],
+  ['doctor', 'physician', 'surgeon', 'medical doctor'],
+  ['recruiter', 'talent acquisition', 'sourcer', 'headhunter'],
+  ['software engineer', 'software developer', 'programmer'],
+  ['data scientist', 'data science'],
+  ['professor', 'lecturer'],
+];
+/** A title asked for, with the other names of the same job. */
+export function sameJobTitles(words: string): string[] {
+  const w = words.trim();
+  const one = w.replace(/s$/, '');
+  const group = SAME_JOB.find((g) => g.includes(w) || g.includes(one));
+  return group ? [...new Set([w, ...group])] : [w];
+}
+
+/**
+ * How a title says a job asked for by name. 'yes': it is the title, or one item of it ("Doctor", "Founder, Tax
+ * Lawyer"). 'likely': the words are there in a longer line, which may only mention the job ("Text a safe and free AI
+ * doctor", "I show up before the lawyer has to"): a reader settles it.
+ */
+export function titleSays(title: string | undefined, queryWords: string): 'yes' | 'likely' | undefined {
+  if (!title) return undefined;
+  let found: 'yes' | 'likely' | undefined;
+  for (const item of title.split(/\s*[,;|•·/]\s*|\s+[-–—]\s+/)) {
+    if (!item.trim() || !titleHasWords(item, queryWords)) continue;
+    if (normalizeTitle(item).split(' ').filter(Boolean).length <= 6) return 'yes';
+    found = 'likely';
+  }
+  return found;
+}
+
 /** A word that may stand between two words of a title without making it another job. */
 const BETWEEN_OK =
   /^(?:of|the|and|&|development|senior|staff|principal|lead|technical|associate|group|ii|iii|2|3)$/;

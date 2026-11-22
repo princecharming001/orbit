@@ -18,8 +18,21 @@ const ROLE_WORDS: [RegExp, { families?: TitleFamily[]; founder?: boolean; titles
   [/\b(bankers?|analysts? at banks?)\b/i, { families: ['banking'] }],
   [/\b(consultants?)\b/i, { families: ['consulting'] }],
   [/\b(lawyers?|attorneys?)\b/i, { families: ['legal'] }],
-  [/\b(marketers?)\b/i, { families: ['marketing'] }],
-  [/\b(salespeople|sales people|account executives?)\b/i, { families: ['sales'] }],
+  [/\b(marketers?|marketing (?:people|folks|leaders?)|people in marketing)\b/i, { families: ['marketing'] }],
+  [
+    /\b(salespeople|sales (?:people|folks|leaders?|reps?)|people in sales|account executives?)\b/i,
+    { families: ['sales'] },
+  ],
+  [/\b(design (?:people|folks|leaders?)|people in design)\b/i, { families: ['design'] }],
+  [/\b(growth (?:people|folks|leaders?)|people in growth)\b/i, { families: ['growth'] }],
+  [
+    /\b(operations (?:people|folks|leaders?)|ops (?:people|folks)|people in operations)\b/i,
+    { families: ['operations'] },
+  ],
+  [
+    /\b(recruiting (?:people|folks|leaders?)|people in recruiting|talent (?:people|folks|leaders?))\b/i,
+    { families: ['people_recruiting'] },
+  ],
 ];
 
 const NETWORK =

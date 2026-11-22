@@ -5,6 +5,7 @@
  */
 import type { PositionSpec, QuerySpec } from './spec';
 import {
+  isGenericTitle,
   readQueryTitle,
   SENIORITIES,
   type SearchSeniority,
@@ -211,7 +212,11 @@ function lintPosition(p: PositionSpec, i: number, notes: string[]): PositionSpec
     out.role.titles = (out.role.titles ?? []).filter((t) => {
       const q = readQueryTitle(t);
       const covered = q.families.length > 0 && q.families.every((f) => fams.has(f)) && !q.seniority;
-      return !covered || /\s/.test(t.trim());
+      // "recruiter" names the whole kind of work: folded into it, and the ask is for everyone in it. "lawyer" is one
+      // job in legal work (a paralegal is not one): kept as the title asked for
+      const kept = !covered || /\s/.test(t.trim()) || !isGenericTitle(q.words, fams);
+      if (!kept) out.role!.broad = true;
+      return kept;
     });
     out.role.families = fams.size ? [...fams] : undefined;
     out.role.seniority = sens.size ? [...sens] : undefined;

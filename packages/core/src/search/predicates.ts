@@ -34,11 +34,13 @@ import type {
 } from './spec';
 import { WARMTH_RANK } from './spec';
 import {
+  isGenericTitle,
   readQueryTitle,
   SENIORITY_RANK,
   type SearchSeniority,
+  sameJobTitles,
   type TitleFamily,
-  titleHasWords,
+  titleSays,
 } from './titles';
 
 export type Answer = 'yes' | 'likely' | 'unknown' | 'no';
@@ -169,23 +171,6 @@ const DEGREE_RE: Record<string, RegExp> = {
   high_school: /\b(high school|secondary school)\b/i,
 };
 
-/** The titles that name a whole kind of work: asking for one asks for everyone in it. */
-const GENERIC_TITLES: Partial<Record<TitleFamily, RegExp>> = {
-  investing: /^(investor|vc|venture capitalist|venture capital)$/,
-  founder: /^(founder|co founder|cofounder)$/,
-  engineering: /^(engineer|software engineer|developer|software developer|programmer)$/,
-  design: /^(designer)$/,
-  people_recruiting: /^(recruiter|recruiting|recruitment)$/,
-  product: /^(product manager|product management|product)$/,
-  sales: /^(sales|salesperson|sales rep|sales representative)$/,
-  marketing: /^(marketer|marketing)$/,
-  consulting: /^(consultant|consulting)$/,
-  research: /^(researcher|research)$/,
-  student: /^(student)$/,
-  creator: /^(creator|content creator)$/,
-  operations: /^(operations|ops)$/,
-  growth: /^(growth)$/,
-};
 /** The words those titles are made of: never what sets one job apart from the rest of its kind. */
 const GENERIC_WORDS = new Set(
   'investor vc venture capitalist capital founder cofounder engineer software developer programmer designer recruiter recruiting product sales marketer marketing consultant researcher student creator operations'.split(
@@ -258,12 +243,13 @@ export function compileSpec(spec: QuerySpec, ctx: SearchContext): CompiledSpec {
     if (!families.size) titleWords.push(...levelWords);
     // "investors", "engineers", "founders" name the whole kind of work: anyone in it fits. "angel investors",
     // "chiefs of staff", "data scientists" name one job within it: the kind of work alone is not that job
-    const isGeneric = (w: string) =>
-      [...families].some((f) => GENERIC_TITLES[f]?.test(w) || GENERIC_TITLES[f]?.test(w.replace(/s$/, '')));
-    const broad = !titleWords.length || titleWords.some(isGeneric);
+    const isGeneric = (w: string) => isGenericTitle(w, families);
+    const broad = !titleWords.length || !!p.role?.broad || titleWords.some(isGeneric);
     // the other wordings asked for beside the kind of work ("venture partner", "sourcer"). The kind of work's own
     // word ("investor") is not one: whether a title that has it is an investor's is what reading the title decides
-    const wordings = titleWords.filter((w) => !isGeneric(w));
+    const wordings = [...new Set(titleWords.filter((w) => !isGeneric(w)).flatMap(sameJobTitles))];
+    // a job asked for by name is asked for by its other names too ("lawyers" are attorneys and counsel)
+    const named = [...new Set(titleWords.flatMap(sameJobTitles))];
     // the words that set the job apart ("angel", "data"): someone in the kind of work whose title has one may be it
     const distinct = broad
       ? []
@@ -296,7 +282,7 @@ export function compileSpec(spec: QuerySpec, ctx: SearchContext): CompiledSpec {
       index,
       keys,
       families: families.size ? families : undefined,
-      titleWords,
+      titleWords: named,
       wordings,
       broad,
       distinct,
@@ -440,9 +426,9 @@ function checkRole(
   if (c.families) {
     const inKind = role.families.some((f) => c.families!.has(f));
     const maybeKind = role.maybe.some((f) => c.families!.has(f));
-    const says = (c.broad ? c.wordings : c.titleWords).some(
-      (w) => role.title && titleHasWords(role.title, w),
-    );
+    const said = (c.broad ? c.wordings : c.titleWords).map((w) => titleSays(role.title, w));
+    const says = said.includes('yes');
+    const mentions = !says && said.includes('likely');
     if (!c.broad) {
       // one job within a kind of work: their title says it, or it may (in the kind of work, with a word that sets
       // the job apart), or it is another job
@@ -454,7 +440,7 @@ function checkRole(
             .some((t) => t.startsWith(d)),
         );
       if (says) parts.push('yes');
-      else if (near) {
+      else if (near || mentions) {
         flags.unsettled = true;
         parts.push('likely');
       } else parts.push(hasTitle || role.founder ? 'no' : 'unknown');
@@ -466,15 +452,18 @@ function checkRole(
       if (!sure) flags.unsettled = true;
       parts.push(sure ? 'yes' : 'likely');
     } else if (says) parts.push('yes');
-    else parts.push(hasTitle || role.founder ? 'no' : 'unknown');
+    else if (mentions) {
+      flags.unsettled = true;
+      parts.push('likely');
+    } else parts.push(hasTitle || role.founder ? 'no' : 'unknown');
   } else if (c.titleWords.length) {
-    parts.push(
-      c.titleWords.some((w) => role.title && titleHasWords(role.title, w))
-        ? 'yes'
-        : hasTitle
-          ? 'no'
-          : 'unknown',
-    );
+    const said = c.titleWords.map((w) => titleSays(role.title, w));
+    if (said.includes('yes')) parts.push('yes');
+    else if (said.includes('likely')) {
+      // the words are in a longer line that may only mention the job
+      flags.unsettled = true;
+      parts.push('likely');
+    } else parts.push(hasTitle ? 'no' : 'unknown');
   }
   if (c.seniorities || spec.seniorityAtLeast) {
     if (!role.seniority) parts.push(hasTitle ? 'no' : 'unknown');
@@ -676,7 +665,13 @@ export function checkPosition(doc: PersonDoc, c: CompiledPosition, ctx: SearchCo
         : when === 'past'
           ? doc.known.pastJobs || doc.roles.some((r) => !r.current)
           : doc.known.current;
-    if (!knowsWhen) answer = 'unknown';
+    // (a job is another matter: someone whose title is on file and is another job is not this one, whether or not
+    // their company is known. "Venture Capital" is no angel investor because Orbit lacks her employer)
+    const titled =
+      !!p.role &&
+      !p.company &&
+      doc.roles.some((r) => (when === 'past' ? !r.current : r.current) && !r.future && r.title);
+    if (!knowsWhen && !titled) answer = 'unknown';
     // a company LinkedIn says they are not at
     const neg = doc.facets.find(
       (f) =>

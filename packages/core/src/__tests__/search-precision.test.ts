@@ -10,6 +10,7 @@
 import { describe, expect, it } from 'vitest';
 import { buildFactsIndex } from '../search/companies';
 import { buildPersonDoc, type DocPerson } from '../search/doc';
+import { lintSpec } from '../search/lint';
 import { buildPlaceIndex } from '../search/places';
 import { PLACES_DATA } from '../search/places.data';
 import type { SearchContext } from '../search/predicates';
@@ -100,6 +101,16 @@ const NETWORK: Record<string, string> = {
   Dsc: 'Data Scientist @ Netflix',
   Dan: 'Data Analyst @ Shopify',
   Prf: 'Clinical Professor of Dermatology at Stanford University School of Medicine',
+  Att: 'Founding Attorney at Light Legal PLLC',
+  Gcl: 'General Counsel @ Ramp',
+  Blw: 'Business Lawyer in Ontario | Startup Legal Counsel',
+  Par: 'Junior Paralegal @ Riley Safer LLP',
+  Las: 'Legal Assistant @ Jones Law Group',
+  Shw: 'I show up before the lawyer has to and stay after they leave',
+  Doc: 'Doctor',
+  Phy: 'Physician, Angel Investor',
+  Aid: 'Text a safe and free AI doctor at any hour of the day',
+  Nur: 'Registered Nurse at Kaiser',
 };
 
 const docs = Object.entries(NETWORK).map(([name, headline], i) => {
@@ -124,7 +135,7 @@ function run(spec: QuerySpec) {
       .map((x) => x.name)
       .sort();
   // an unchecked row is listed only when the job itself matched (what the table does)
-  return { sure: names('strong'), likely: names('likely') };
+  return { sure: names('strong'), likely: names('likely'), open: names('unchecked') };
 }
 const INVESTORS = [
   'Ama',
@@ -137,6 +148,7 @@ const INVESTORS = [
   'Ines',
   'Mel',
   'Nag',
+  'Phy',
   'Pia',
   'Uma',
   'Vera',
@@ -224,9 +236,12 @@ describe('one job within a kind of work', () => {
       ask: 'angel investors',
       positions: [{ role: { titles: ['angel investor'], families: ['investing'] }, when: 'current' }],
     });
-    expect(r.sure).toEqual(['Bo', 'Cal', 'Nag', 'Uma']);
+    expect(r.sure).toEqual(['Bo', 'Cal', 'Nag', 'Phy', 'Uma']);
     for (const n of ['Ines', 'Bao', 'Gita', 'Pia', 'Dax'])
       expect([...r.sure, ...r.likely], n).not.toContain(n);
+    // an investor whose company Orbit does not have is still no angel: her title is on file and says another job,
+    // so she is not left open for a reader to wave through
+    for (const n of ['Vera', 'Dev', 'Mia']) expect(r.open, n).not.toContain(n);
   });
   it('chiefs of staff are not every executive', () => {
     const r = run({
@@ -263,6 +278,32 @@ describe('a whole kind of work', () => {
     for (const n of ['Cam', 'Ppl']) expect(r.sure, n).not.toContain(n);
     expect(r.likely).not.toContain('Cam');
   });
+  it('the word that names the whole work, asked for beside other wordings, still means everyone in it', () => {
+    // as the search arrives: lint folds "recruiter" into the kind of work and keeps the longer wordings
+    const linted = lintSpec({
+      ask: 'recruiters',
+      positions: [
+        {
+          role: {
+            titles: ['recruiter', 'talent acquisition', 'talent partner', 'sourcer', 'headhunter'],
+            families: ['people_recruiting'],
+          },
+          when: 'current',
+        },
+      ],
+    }).spec;
+    expect(linted.positions?.[0]?.role?.broad).toBe(true);
+    expect(run(linted).sure).toEqual(['Hrg', 'Rec', 'Sam', 'Tal']);
+    // nothing folded in: "angel investor" beside "angel" stays one job within the work
+    const angels = lintSpec({
+      ask: 'angel investors',
+      positions: [
+        { role: { titles: ['angel investor', 'angel'], families: ['investing'] }, when: 'current' },
+      ],
+    }).spec;
+    expect(angels.positions?.[0]?.role?.broad).toBeUndefined();
+    expect(run(angels).sure).toEqual(['Bo', 'Cal', 'Nag', 'Phy', 'Uma']);
+  });
   it('product managers: not product marketing, product design, or a sentence about a product', () => {
     const r = run({
       ask: 'product managers',
@@ -289,6 +330,27 @@ describe('a whole kind of work', () => {
     expect([...r.sure, ...r.likely]).not.toContain('Fqe');
     // "Ex founder" in the middle of a list is a job they left
     expect(r.sure).not.toContain('Cal');
+  });
+  it('lawyers: attorneys and counsel too, not a paralegal or a legal assistant, and not a line that mentions one', () => {
+    const r = run(
+      lintSpec({
+        ask: 'lawyers',
+        positions: [{ role: { titles: ['lawyer'], families: ['legal'] }, when: 'current' }],
+      }).spec,
+    );
+    expect(r.sure).toEqual(['Att', 'Blw', 'Gcl', 'Kev']);
+    for (const n of ['Par', 'Las', 'Law']) expect([...r.sure, ...r.likely], n).not.toContain(n);
+    // the word in a sentence: a likely for a reader, never confirmed
+    expect(r.likely).toEqual(['Shw']);
+  });
+  it('doctors: physicians too, not a nurse, and not an AI doctor in a tagline', () => {
+    const r = run(
+      lintSpec({ ask: 'doctors', positions: [{ role: { titles: ['doctor'] }, when: 'current' }] }).spec,
+    );
+    // a medical doctor who lists other things after it is one too
+    expect(r.sure).toEqual(['Cal', 'Doc', 'Phy']);
+    expect(r.likely).toEqual(['Aid']);
+    expect([...r.sure, ...r.likely]).not.toContain('Nur');
   });
   it('a job they want is not a job they hold', () => {
     const r = run({
