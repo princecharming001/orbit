@@ -273,7 +273,9 @@ export function PeopleList({
                         className="flex min-w-0 items-center gap-1.5"
                         title={[p.currentTitle, p.currentOrganizationRaw].filter(Boolean).join(' · ')}
                       >
-                        {p.currentTitle && <span className="min-w-0 truncate text-ink-3">{p.currentTitle}</span>}
+                        {p.currentTitle && (
+                          <span className="min-w-0 truncate text-ink-3">{p.currentTitle}</span>
+                        )}
                         {p.currentTitle && p.currentOrganizationRaw && (
                           <span className="text-ink-3" aria-hidden>
                             ·
