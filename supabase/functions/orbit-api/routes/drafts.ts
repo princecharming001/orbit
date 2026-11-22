@@ -3,14 +3,17 @@
  *   POST /drafts/compose {personId, kind, goalId?, channel, replyToMessageId?}  → {draft}; channel gmail, linkedin,
  *                                                       instagram or x (plan 43: a tap to send; Instagram's `note`
  *                                                       when it will land in their requests)
- *   POST /drafts/approve {draftId, sendAt?, confirm?, body?, subject?, attachments?}
+ *   POST /drafts/approve {draftId, sendAt?, confirm?, body?, subject?, attachments?, write?}
  *                                                    → {draft}; no sendAt = the next send window; LinkedIn needs
  *                                                       confirm: true and goes at once; due now = sent now; a body or
- *                                                       subject approves the student's words and keeps the edit
+ *                                                       subject approves the student's words and keeps the edit;
+ *                                                       `write` {personId, kind, channel: 'linkedin'} with confirm
+ *                                                       and body: a LinkedIn message the student wrote in the app
+ *                                                       is kept under draftId and sent on this tap
  *   POST /drafts/cancel {draftId}                      → {draft} (an approved send that has not gone out)
  *   POST /drafts/discard {draftId}                     → {draft}
  */
-import type { DraftComposeRequest } from '@orbit/core/server/api';
+import type { DraftComposeRequest, DraftWrite } from '@orbit/core/server/api';
 import type { MessageKind } from '@orbit/core/types';
 import { composeDraft } from '../../_shared/compose/compose.ts';
 import { type DraftRow, loadDraft, toServerDraft } from '../../_shared/compose/drafts.ts';
@@ -20,7 +23,7 @@ import { approveDraft, cancelDraft, discardDraft, instagramRequestNote } from '.
 import { isOffered, sourceIsOn } from '../../_shared/sources/states.ts';
 import { lookupPersonEmail } from '../../_shared/sourcing/ondemand.ts';
 import type { Ctx, Route } from '../api.ts';
-import { body, optUuid, uuid } from './body.ts';
+import { body, optUuid, UUID, uuid } from './body.ts';
 
 const KINDS: readonly MessageKind[] = [
   'outreach',
@@ -111,9 +114,26 @@ async function composeSocial(
   return json(200, { draft: toServerDraft(row ?? r.draft) });
 }
 
+/**
+ * `write` on an approval: who a LinkedIn message the student wrote in the app is for, and its kind. Only LinkedIn is
+ * written this way (it goes on the tap that carries it); anything else is a 400.
+ */
+function writtenDraft(b: Record<string, unknown>): DraftWrite | undefined {
+  if (b.write === undefined || b.write === null) return undefined;
+  const w = b.write as Record<string, unknown>;
+  if (typeof w !== 'object' || Array.isArray(w)) throw badRequest('write is {personId, kind, channel}');
+  if (w.channel !== 'linkedin') throw badRequest('write.channel is linkedin');
+  if (typeof w.personId !== 'string' || !UUID.test(w.personId))
+    throw badRequest('write.personId is required');
+  const kind = w.kind as DraftWrite['kind'];
+  if (!KINDS.includes(kind)) throw badRequest('write.kind is not a message kind');
+  return { personId: w.personId, kind, channel: 'linkedin' };
+}
+
 async function approve(ctx: Ctx): Promise<Response> {
   const b = await body(ctx);
   const draftId = uuid(b, 'draftId');
+  const write = writtenDraft(b);
   // files the student attached (a resume): kept and listed on the draft before it is approved, since approving a
   // draft that is due now sends it
   const files = parseIncomingFiles(b.attachments);
@@ -129,6 +149,7 @@ async function approve(ctx: Ctx): Promise<Response> {
     // the words as the student left them (plan 29 §B2.4)
     ...(b.body !== undefined ? { body: b.body as string } : {}),
     ...(b.subject !== undefined ? { subject: b.subject as string | null } : {}),
+    ...(write ? { write } : {}),
   });
   return json(200, { draft });
 }

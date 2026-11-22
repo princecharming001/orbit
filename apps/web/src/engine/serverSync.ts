@@ -39,6 +39,7 @@ import {
   type SyncStatus,
 } from '../integrations/orbitApi';
 import { endActivity } from './activity';
+import { linkedinSendError } from './linkedinSendWords';
 import { linkedInImageExpired } from './photos';
 import { backfillServerTouchpoints, touchpointsFromServer } from './serverTouchpoints';
 
@@ -128,6 +129,14 @@ async function rememberAliases(pairs: [string, string][]): Promise<void> {
       changed = true;
     }
   if (changed) await Dexie.ignoreTransaction(() => db.kv.put({ key: ALIAS_KEY, value: map }));
+}
+
+/**
+ * A row made in this browser that the server is about to hold under its uuid (a message the student wrote, sent from
+ * the server on their tap): remembered before the call, so the copy that comes back on a pull lands on the same row.
+ */
+export async function rememberAlias(serverId: string, localId: string): Promise<void> {
+  await rememberAliases([[serverId, localId]]);
 }
 
 const REF_FIELDS = ['personId', 'chatId', 'goalId', 'threadId'] as const;
@@ -391,7 +400,13 @@ export async function writeFromServer(
     // a draft's files live in this browser (their ids are this browser's): the server's newer row keeps them
     if (table === 'drafts' && ready.length) {
       const had = await t.bulkGet(ready.map((r) => String(r.id)));
-      ready = ready.map((r, i) => (had[i]?.attachments ? { ...r, attachments: had[i].attachments } : r));
+      ready = ready.map((r, i) => {
+        const old = had[i];
+        if (!old) return r;
+        // a message the student wrote here: this browser's row is the one they see, the server holds a copy to send
+        if (serverIdOf(String(r.id)) !== r.id) return ownDraftAfterServer(old, r);
+        return old.attachments ? { ...r, attachments: old.attachments } : r;
+      });
     }
     // plan 43: an account's handle and name come from GET /social/asks or the status, not the pulled row: kept
     if ((table === 'social_links' || table === 'social_match_asks') && ready.length) {
@@ -453,7 +468,32 @@ function withPullLock<T>(fn: () => Promise<T>): Promise<T> {
   return fn();
 }
 
-/** Pull every page of changes since the stored cursor. One pull at a time, in this tab and across tabs. */
+/**
+ * A message the student wrote in this browser, after the server's copy of it changed. The row here keeps everything
+ * it knows (the card it answers, the chat, the words as drafted); from the server it learns only how the send ended:
+ * that it went (an answer this browser never heard, or a retry a minute later), or that a send still waiting there did
+ * not go, with the reason in words.
+ */
+function ownDraftAfterServer(
+  mine: Record<string, unknown>,
+  server: Record<string, unknown>,
+): Record<string, unknown> {
+  if (server.status === 'sent' && mine.status !== 'sent') {
+    const { error: _e, sendAt: _s, ...rest } = mine;
+    return { ...rest, status: 'sent', sentAt: server.sentAt ?? new Date().toISOString() };
+  }
+  // approved: the server was to try again in a minute. sending: its answer to the tap never arrived here.
+  const waiting = mine.status === 'approved' || mine.status === 'sending';
+  if (waiting && ['failed', 'cancelled', 'discarded', 'draft'].includes(String(server.status))) {
+    const { sendAt: _s, error: _e, ...rest } = mine;
+    const code = (server.error ?? server.cancelReason) as string | undefined;
+    // the student stopped it themselves: a draft again, with nothing to explain
+    if (server.status === 'cancelled' && (!code || code === 'user')) return { ...rest, status: 'draft' };
+    return { ...rest, status: 'failed', error: linkedinSendError(code) };
+  }
+  return mine;
+}
+
 /**
  * A draft a route just changed (an answer filled in, an approval, a reply drafted), written into this browser at once:
  * the chat's draft tools and the Drafts page read Dexie, and the next pull may be minutes away. Never fails the action.
@@ -463,6 +503,7 @@ export async function keepServerDraft(draft: unknown, userId: string): Promise<v
   await writeFromServer('drafts', [draft as Record<string, unknown>], userId).catch(() => 0);
 }
 
+/** Pull every page of changes since the stored cursor. One pull at a time, in this tab and across tabs. */
 export function pullNow(userId: string, opts: { signal?: AbortSignal } = {}): Promise<PullOutcome> {
   pulling ??= withPullLock(async () => {
     // local edits go up first, so the rows that come down already carry them
@@ -991,6 +1032,37 @@ export function linkedinStatus(s: SyncStatus | undefined = lastStatus) {
   return s?.integrations.find((i) => i.provider === 'linkedin');
 }
 
+/** A kept "LinkedIn is not active" is asked about again at most this often by the screens; a tap always asks. */
+export const LINKEDIN_RECHECK_MS = 20_000;
+let linkedinAskedAt = 0;
+let linkedinAsking: Promise<SyncStatus | undefined> | undefined;
+
+/**
+ * The status of the LinkedIn link on the server, for deciding whether Orbit can send a message itself. The status
+ * this browser keeps is minutes old, so one that says LinkedIn is not active (or no status at all) is asked about
+ * once more before it is believed: a link made a minute ago counts. `now` (the tap on Send) always asks; a screen
+ * only looking asks at most every 20 seconds. `asked` is false when the server could not be reached.
+ */
+export async function freshLinkedinStatus(
+  opts: { now?: boolean } = {},
+): Promise<{ status?: string; asked: boolean }> {
+  const kept = linkedinStatus(lastStatus)?.status;
+  if (kept === 'active') return { status: kept, asked: true };
+  if (!opts.now && Date.now() - linkedinAskedAt < LINKEDIN_RECHECK_MS)
+    return { status: kept, asked: !!lastStatus };
+  linkedinAsking ??= (async () => {
+    linkedinAskedAt = Date.now();
+    const r = await callApi('/sync/status', {}).catch(() => undefined);
+    if (!r?.ok) return undefined;
+    setStatus(r.value);
+    return r.value;
+  })().finally(() => {
+    linkedinAsking = undefined;
+  });
+  const fresh = await linkedinAsking;
+  return fresh ? { status: linkedinStatus(fresh)?.status, asked: true } : { status: kept, asked: false };
+}
+
 /** Google's import has finished (both the recent and the older email are in). */
 export function backfillDone(s: SyncStatus | undefined): boolean {
   const phase = googleStatus(s)?.backfill?.phase;
@@ -1143,5 +1215,7 @@ export function resetServerSyncForTests(): void {
   queueTimer = undefined;
   persisting = Promise.resolve();
   lastDerived = 0;
+  linkedinAskedAt = 0;
+  linkedinAsking = undefined;
   statusListeners.clear();
 }

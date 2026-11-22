@@ -46,6 +46,7 @@ import { liveAccountFor } from './enrichment/sources';
 import { importLiveConnections } from './linkedin';
 // (a cycle: linkedinActivity reads the account row from here; neither uses the other while loading)
 import { syncLinkedInActivity } from './linkedinActivity';
+import { blockForStatus, LINKEDIN_BLOCKS, type LinkedInBlock, type LinkedInFix } from './linkedinSendWords';
 
 export type LiveConnectResult =
   | { ok: true; rows: number; added: number }
@@ -943,34 +944,71 @@ export async function mutualsFor(
   return { ok: true, source: 'linkedin', mutuals: r.value.map(resolve) };
 }
 
+/** Whether Orbit sends a LinkedIn message itself, and when it cannot, why, in words, with the fix. */
+export type LinkedInSendWay =
+  | {
+      inApp: true;
+      /** an account's message goes from the server under this id (the draft's own uuid) */
+      serverId?: string;
+    }
+  | { inApp: false; reason?: LinkedInBlock; text?: string; fix?: LinkedInFix };
+
+const blocked = (reason: LinkedInBlock): LinkedInSendWay => ({
+  inApp: false,
+  reason,
+  ...LINKEDIN_BLOCKS[reason],
+});
+
 /**
- * Approved LinkedIn messages go out from Orbit itself: LinkedIn is connected live in this browser (or this is the
- * sample student), and Orbit knows who on LinkedIn the person is. Otherwise the student sends them on LinkedIn.
+ * The one rule for how a LinkedIn message leaves Orbit, read by the editor's button and by the send itself.
+ *
+ * An Orbit account: the server sends it, from the LinkedIn the student linked there, on their tap of Send. That needs
+ * the link to be active (a kept "not active" is asked about once more first: a link made a minute ago counts) and a
+ * draft and a person the server can be told about. A message the student wrote in this browser counts: the server
+ * learns of it with the tap. When it cannot go, the answer says why and where to fix it; LinkedIn is opened for a
+ * paste only when the student picks that way.
+ *
+ * Without an account: LinkedIn connected live in this browser (or the sample student), and Orbit knows who on
+ * LinkedIn the person is. Otherwise the student sends it on LinkedIn.
  */
-export async function linkedInSendActive(
-  user: User,
-  person?: Pick<Person, 'linkedinMemberId' | 'linkedinSlug'>,
-  /** an account's draft: Orbit sends it from the server, so the server must hold it */
+export async function linkedInSendWay(
+  user: Pick<User, 'id'>,
+  person?: Pick<Person, 'linkedinMemberId' | 'linkedinSlug'> & { id?: string },
   draftId?: string,
-): Promise<boolean> {
-  if (isServerUser(user.id)) return !!draftId && !!(await serverLinkedInSendId(draftId));
-  if (person && !person.linkedinMemberId && !person.linkedinSlug) return false;
+  /** `now`: the tap on Send, which always asks the server afresh when the kept status says not active */
+  opts: { now?: boolean } = {},
+): Promise<LinkedInSendWay> {
+  if (isServerUser(user.id)) {
+    const sync = await import('./serverSync');
+    const { status, asked } = await sync.freshLinkedinStatus(opts);
+    if (!asked) return blocked('unavailable');
+    const block = blockForStatus(status);
+    if (block) return blocked(block);
+    const serverId = sync.serverIdOf(draftId);
+    if (!serverId) return blocked('not_saved');
+    // a draft made in this browser is told to the server with the tap, so who it is for has to be someone the
+    // server can hold (their id, or the uuid inside one made in this browser)
+    const madeHere = serverId !== draftId;
+    if (madeHere && person?.id !== undefined && !sync.serverIdOf(person.id)) return blocked('not_saved');
+    return { inApp: true, serverId };
+  }
+  if (person && !person.linkedinMemberId && !person.linkedinSlug) return { inApp: false };
   const row = await liveLinkedInAccount(user.id);
-  if (!isConnected(row)) return false;
-  return usesMockConnectors(user.id) || (unipileConfigured() && !!row.accessToken);
+  if (!isConnected(row)) return { inApp: false };
+  return { inApp: usesMockConnectors(user.id) || (unipileConfigured() && !!row.accessToken) };
 }
 
 /**
- * An account's LinkedIn message goes out from the server, through the LinkedIn the student connected (each one on a
- * tap of Send). The id the draft has there, or undefined when the server does not hold it or LinkedIn is not
- * connected there.
+ * Approved LinkedIn messages go out from Orbit itself (`linkedInSendWay`): an account's from the server, which needs
+ * the draft's id; otherwise from LinkedIn connected live in this browser.
  */
-export async function serverLinkedInSendId(draftId: string): Promise<string | undefined> {
-  const sync = await import('./serverSync');
-  const id = sync.serverIdOf(draftId);
-  if (!id) return undefined;
-  const status = sync.syncStatusNow() ?? (await sync.refreshSyncStatus().catch(() => undefined));
-  return sync.linkedinStatus(status)?.status === 'active' ? id : undefined;
+export async function linkedInSendActive(
+  user: Pick<User, 'id'>,
+  person?: Pick<Person, 'linkedinMemberId' | 'linkedinSlug'> & { id?: string },
+  /** an account's draft: Orbit sends it from the server */
+  draftId?: string,
+): Promise<boolean> {
+  return (await linkedInSendWay(user, person, draftId)).inApp;
 }
 
 export type LinkedInSendResult =

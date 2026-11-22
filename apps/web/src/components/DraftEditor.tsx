@@ -14,13 +14,15 @@ import {
 } from '@orbit/core';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { type ReactNode, useEffect, useId, useLayoutEffect, useRef, useState } from 'react';
+import { Link } from 'react-router-dom';
 import { db } from '../db/schema';
 import { defaultFollowUp, followUpFor, saveFollowUp } from '../engine/afterAccept';
 import { regenerateDraft } from '../engine/brief';
 import { researchOpeners } from '../engine/deepResearch';
 import { restoreDraftText, saveDraftEdits as saveEdits } from '../engine/drafts';
 import { enableGmailSend } from '../engine/integrations';
-import { linkedInSendActive } from '../engine/linkedinLive';
+import { linkedInSendWay } from '../engine/linkedinLive';
+import { LINKEDIN_BLOCKS, linkedinSendError, NOT_CONNECTED_CODE } from '../engine/linkedinSendWords';
 import {
   approveAndSend,
   canSendFromOrbit,
@@ -43,12 +45,15 @@ import {
   withNote,
   withoutNote,
 } from '../engine/send';
+import { linkedinStatus } from '../engine/serverSync';
 import { PLATFORM_NAME, socialSendsHere, usePersonLinks } from '../engine/social';
 import { useSources } from '../engine/sources';
 import { usesMockConnectors } from '../integrations/connectorsMock';
 import { googleClientId } from '../integrations/google';
+import { isServerUser } from '../integrations/orbitApi';
+import { useSyncStatus } from '../state/account';
 import { useSession } from '../state/session';
-import { Avatar, Button, cx, Input, relDate, Textarea, useToast } from '../ui';
+import { Avatar, Button, ButtonLink, cx, Input, relDate, Textarea, useToast } from '../ui';
 import { copyText, handoffToast, openHandoff, runApproval } from './approve';
 import { DraftFiles } from './DraftFiles';
 import { ForwardNote } from './ForwardNote';
@@ -197,19 +202,33 @@ export function DraftEditor({
   });
   const person = useLiveQuery(() => db.people.get(draft.personId), [draft.personId]);
   const [enabling, setEnabling] = useState(false);
-  // whether approving sends from Orbit (Google connected with send permission, or LinkedIn connected live) or opens
-  // the mail app or LinkedIn for the student to send it there
-  const direct = useLiveQuery(
+  // how a LinkedIn message leaves Orbit (engine/linkedinLive linkedInSendWay): sent from Orbit, or, when it cannot
+  // be, why and where to fix it. Looked at again whenever the server's word on the LinkedIn link changes.
+  const linkStatus = linkedinStatus(useSyncStatus())?.status;
+  const way = useLiveQuery(
     async () =>
-      !user
-        ? false
-        : draft.channel === 'gmail'
-          ? emailSendsFromOrbit(user, draft)
-          : draft.channel === 'linkedin'
-            ? linkedInSendActive(user, person ?? undefined, draft.id)
-            : false,
-    [user?.id, draft.id, draft.channel, person?.linkedinMemberId, person?.linkedinSlug],
+      user && draft.channel === 'linkedin' ? linkedInSendWay(user, person ?? undefined, draft.id) : undefined,
+    [
+      user?.id,
+      draft.id,
+      draft.channel,
+      person?.id,
+      person?.linkedinMemberId,
+      person?.linkedinSlug,
+      linkStatus,
+    ],
   );
+  // whether approving an email sends it from Orbit (Google connected with send permission) or opens the mail app
+  const mailDirect = useLiveQuery(
+    async () => (user && draft.channel === 'gmail' ? emailSendsFromOrbit(user, draft) : false),
+    [user?.id, draft.id, draft.channel],
+  );
+  const direct = draft.channel === 'linkedin' ? way?.inApp : mailDirect;
+  // An Orbit account's LinkedIn message is sent from Orbit on the tap of Send. When it cannot be, the reason and the
+  // fix are on screen and pasting it into LinkedIn is the second choice, never something Send does on its own.
+  const accountLinkedIn = draft.channel === 'linkedin' && !!user && isServerUser(user.id);
+  const linkedInBlock = accountLinkedIn && way && !way.inApp && way.text ? way : undefined;
+  const [pasting, setPasting] = useState(false);
   // email that would open the mail app, in a copy of Orbit that can sign in to Google (never the made-up demo student)
   const canEnableSend =
     draft.channel === 'gmail' &&
@@ -367,7 +386,7 @@ export function DraftEditor({
   // Copy text is how a resume goes out with a Gmail-sent message (pasted into Gmail, where the student attaches it),
   // so only the mail-app hand-off waits for "I will attach it"
   const copyBlocked = missingLine || (mentionsFile && !direct && !attached);
-  const shownError = error ?? (draft.status === 'failed' || draft.error ? draft.error : undefined);
+  const shownError = error ?? keptSendError(draft, !!way?.inApp);
   if (['queued', 'sending', 'handed_off', 'sent'].includes(draft.status))
     return (
       <OutboxStatus draft={draft} onClose={onCancel && (() => onCancel({ kept: false }))} compact={compact} />
@@ -422,7 +441,7 @@ export function DraftEditor({
     });
   };
   const defaultLabel = isLinkedIn
-    ? direct
+    ? direct || (accountLinkedIn && !linkedInBlock)
       ? connectionNote
         ? `Send request to ${first}`
         : `Send to ${first}`
@@ -607,7 +626,57 @@ export function DraftEditor({
     socialWays.some((l) => l.platform === 'instagram' && l.followsYou === false) ||
     (draft.channel === 'instagram' &&
       socialLinks.some((l) => l.platform === 'instagram' && l.followsYou === false));
-  const primaryButton = (
+  // the reason an in-app send is off is said once, with its fix: an error that only repeats it is left out
+  const blockSaid = !!linkedInBlock && shownError === linkedInBlock.text;
+  const linkedInFix = linkedInBlock?.fix;
+  // the chat's "Approve & send" card answers a question the chat asked: its own button stays the only way through
+  const chatConfirm = !!compact && !!approveLabel;
+  // pasting it into LinkedIn: offered beside the fix when Orbit cannot send it, and after a send from Orbit failed
+  const pasteButton = accountLinkedIn && !chatConfirm && (!!linkedInBlock || !!shownError) && (
+    <Button
+      size="sm"
+      disabled={busy || pasting || !body.trim() || missingLine}
+      title={
+        missingLine
+          ? (notAllowed ?? issues.find((i) => i.blocking)?.text ?? 'Add the missing line first')
+          : `Copy this and open LinkedIn to send it to ${first} yourself`
+      }
+      onClick={async () => {
+        if (!user) return;
+        setError(undefined);
+        setPasting(true);
+        try {
+          const e = await runApproval(user, draft, body, undefined, toast, first, 'handoff');
+          if (e) setError(e);
+        } finally {
+          setPasting(false);
+        }
+      }}
+      data-testid="draft-linkedin-paste"
+    >
+      {connectionNote ? 'Copy note & open LinkedIn' : 'Copy & open LinkedIn'}
+    </Button>
+  );
+  const linkedInNotice = linkedInBlock && (
+    <>
+      {linkedInBlock.text}
+      {linkedInFix && chatConfirm && (
+        <>
+          {' '}
+          <Link to={linkedInFix.to} className="text-accent font-medium hover:underline">
+            {linkedInFix.label}
+          </Link>
+        </>
+      )}
+    </>
+  );
+  // where the fix is in Settings, it is the main action here: Send would only say the same thing again
+  const fixIsMain = !!linkedInFix && !chatConfirm;
+  const primaryButton = fixIsMain ? (
+    <ButtonLink variant="primary" size="sm" to={linkedInFix.to} data-testid="draft-linkedin-fix">
+      {linkedInFix.label}
+    </ButtonLink>
+  ) : (
     <Button
       variant="primary"
       size="sm"
@@ -635,7 +704,9 @@ export function DraftEditor({
   if (compact) {
     // one status line: the most urgent of what the full editor lists one under another
     const lines: { key: string; tone: 'bad' | 'warn' | 'muted'; node: ReactNode; testId?: string }[] = [];
-    if (shownError) lines.push({ key: 'error', tone: 'bad', node: `Not sent: ${shownError}` });
+    if (linkedInNotice)
+      lines.push({ key: 'linkedin', tone: 'bad', node: linkedInNotice, testId: 'draft-linkedin-blocked' });
+    if (shownError && !blockSaid) lines.push({ key: 'error', tone: 'bad', node: `Not sent: ${shownError}` });
     if (notAllowed && notAllowed !== shownError)
       lines.push({ key: 'rules', tone: 'bad', node: `Can't send this yet: ${notAllowed}` });
     for (const i of issues) {
@@ -907,6 +978,7 @@ export function DraftEditor({
             {copyButton}
             {handoffButton}
             {socialButtons}
+            {pasteButton}
             {primaryButton}
           </span>
         </div>
@@ -1077,6 +1149,7 @@ export function DraftEditor({
         {/* Send first, as in Gmail, with the paperclip beside it */}
         <span className="flex items-center gap-2">
           {primaryButton}
+          {pasteButton}
           {handoffButton}
           {socialButtons}
           {copyButton}
@@ -1143,6 +1216,11 @@ export function DraftEditor({
           </Button>
         )}
       </div>
+      {linkedInNotice && (
+        <p className="mt-1.5 text-[12.5px] text-ink-2" data-testid="draft-linkedin-blocked">
+          {linkedInNotice}
+        </p>
+      )}
       {canEnableSend && (
         // without send permission the button opens the mail app; one click lets Orbit send it itself
         <p
@@ -1188,11 +1266,11 @@ export function DraftEditor({
             Add the missing line above, or replace the text in brackets, to send this.
           </p>
         )}
-      {(shownError ||
+      {((shownError && !blockSaid) ||
         notAllowed ||
         issues.some((i) => i.blocking || (blocked && i.code === 'placeholder'))) && (
         <ul className="mt-2 space-y-1 text-[12.5px]" data-testid="draft-issues">
-          {shownError && <li className="text-bad">Not sent: {shownError}</li>}
+          {shownError && !blockSaid && <li className="text-bad">Not sent: {shownError}</li>}
           {notAllowed && notAllowed !== shownError && (
             <li className="text-bad">Can't send this yet: {notAllowed}</li>
           )}
@@ -1214,6 +1292,18 @@ export function DraftEditor({
       )}
     </div>
   );
+}
+
+/**
+ * Why the last send of this draft did not go, as kept on it. A LinkedIn send the server stopped is kept as the
+ * server's code (`unipile_422`): it is said in words, and one that only said LinkedIn was not connected is left out
+ * once LinkedIn is (the reason on screen then comes from the link itself, with its fix).
+ */
+function keptSendError(draft: OutboundMessage, linkedInSends: boolean): string | undefined {
+  const kept = draft.status === 'failed' || draft.error ? draft.error : undefined;
+  if (!kept || draft.channel !== 'linkedin' || !/^[a-z][a-z0-9_]*$/.test(kept)) return kept;
+  if (kept === NOT_CONNECTED_CODE) return linkedInSends ? undefined : LINKEDIN_BLOCKS.not_connected.text;
+  return linkedinSendError(kept);
 }
 
 /** Where a message waiting for "I sent it" went: "opened in LinkedIn", "opened in your mail app", "copied for Gmail". */
@@ -1244,10 +1334,12 @@ export function OutboxStatus({
     async () => (user && draft.status === 'handed_off' ? handoffLink(user, draft.id) : undefined),
     [user?.id, draft.id, draft.status, draft.bodyFinal],
   );
-  // Orbit can still send it itself (Gmail with send permission, live LinkedIn), so opening it elsewhere is not final
+  // Orbit can still send it itself (Gmail with send permission, LinkedIn connected), so opening it elsewhere is not
+  // final; looked at again when the server's word on the LinkedIn link changes (a reconnect in Settings)
+  const linkStatus = linkedinStatus(useSyncStatus())?.status;
   const sendable = useLiveQuery(
     async () => (user && draft.status === 'handed_off' ? canSendFromOrbit(user, draft) : false),
-    [user?.id, draft.id, draft.status],
+    [user?.id, draft.id, draft.status, linkStatus],
   );
   const [now, setNow] = useState(() => Date.now());
   const [working, setWorking] = useState(false);

@@ -26,20 +26,10 @@ export function cx(...parts: (string | false | null | undefined)[]): string {
 }
 
 type Variant = 'primary' | 'dark' | 'secondary' | 'ghost' | 'danger' | 'subtle';
-export function Button({
-  variant = 'secondary',
-  size = 'md',
-  className,
-  loading,
-  children,
-  disabled,
-  ...rest
-}: ButtonHTMLAttributes<HTMLButtonElement> & {
-  variant?: Variant;
-  size?: 'sm' | 'md' | 'lg';
-  /** the click is being worked on: a spinner in the button, which stays full strength but takes no second click */
-  loading?: boolean;
-}) {
+type ButtonSize = 'sm' | 'md' | 'lg';
+
+/** How a button looks: shared by `Button` and by a link that is the main action (`ButtonLink`). */
+function buttonLook(variant: Variant, size: ButtonSize): string {
   const base =
     'inline-flex items-center justify-center gap-1.5 rounded-[6px] font-medium tracking-[0.005em] transition-[background-color,border-color,color,transform] duration-150 active:scale-[0.97] disabled:active:scale-100 disabled:opacity-40 disabled:cursor-not-allowed focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ink/25 focus-visible:ring-offset-1 whitespace-nowrap';
   const sizes = { sm: 'h-8 px-3 text-[13px]', md: 'h-9 px-4 text-[14px]', lg: 'h-11 px-5 text-[15px]' }[size];
@@ -53,15 +43,49 @@ export function Button({
     subtle: 'bg-canvas-2 text-ink hover:bg-line-2',
     danger: 'bg-bad-soft text-bad hover:bg-[#fbdcd8]',
   };
+  return cx(base, sizes, variants[variant]);
+}
+
+/** A link to another page of Orbit that reads as a button: the main action when it is somewhere else (Settings). */
+export function ButtonLink({
+  to,
+  variant = 'secondary',
+  size = 'md',
+  className,
+  children,
+  ...rest
+}: {
+  to: string;
+  variant?: Variant;
+  size?: ButtonSize;
+  className?: string;
+  children: ReactNode;
+  'data-testid'?: string;
+}) {
+  return (
+    <Link to={to} className={cx(buttonLook(variant, size), className)} {...rest}>
+      {children}
+    </Link>
+  );
+}
+
+export function Button({
+  variant = 'secondary',
+  size = 'md',
+  className,
+  loading,
+  children,
+  disabled,
+  ...rest
+}: ButtonHTMLAttributes<HTMLButtonElement> & {
+  variant?: Variant;
+  size?: ButtonSize;
+  /** the click is being worked on: a spinner in the button, which stays full strength but takes no second click */
+  loading?: boolean;
+}) {
   return (
     <button
-      className={cx(
-        base,
-        sizes,
-        variants[variant],
-        loading && 'disabled:opacity-100 cursor-progress',
-        className,
-      )}
+      className={cx(buttonLook(variant, size), loading && 'disabled:opacity-100 cursor-progress', className)}
       disabled={disabled || loading}
       aria-busy={loading || undefined}
       {...rest}

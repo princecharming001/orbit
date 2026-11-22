@@ -9,11 +9,15 @@ import type { Person, Suggestion } from '@orbit/core';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { Send, Sparkles } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { Link } from 'react-router-dom';
 import { db } from '../db/schema';
 import { draftTypedMessage, ensureDrafts, isMessageSuggestion } from '../engine/brief';
 import { type ConversationItem, conversationWith } from '../engine/conversation';
+import { linkedInSendWay } from '../engine/linkedinLive';
+import type { LinkedInFix } from '../engine/linkedinSendWords';
 import { dismissSuggestion, restoreSuggestion } from '../engine/send';
 import { SUGGESTION_KIND_LABELS } from '../engine/today';
+import { isServerUser } from '../integrations/orbitApi';
 import { useSession } from '../state/session';
 import { Button, cx, Skeleton, Textarea, useToast } from '../ui';
 import { runApproval } from './approve';
@@ -146,6 +150,9 @@ export function Conversation({ person }: { person: Person }) {
   }, [usable?.id, usable?.bodyFinal, usable?.bodyDraft, filledFrom]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
+  // An account's LinkedIn message Orbit could not send itself: the draft it is kept in (the next try sends that one,
+  // not a copy), where the fix is, and pasting it into LinkedIn as the other way. Nothing opens until that is pressed.
+  const [unsent, setUnsent] = useState<{ draftId: string; fix?: LinkedInFix }>();
   const end = useRef<HTMLDivElement>(null);
   // the newest message in view when the conversation opens or grows
   useEffect(() => {
@@ -181,15 +188,43 @@ export function Conversation({ person }: { person: Person }) {
     setBusy(true);
     setError(undefined);
     try {
+      // the words that did not go a moment ago are still in their draft: this try sends that one
+      const kept = unsent ? await db.outbound.get(unsent.draftId) : undefined;
+      const again =
+        kept && kept.channel === channel && ['draft', 'failed'].includes(kept.status) ? kept : undefined;
       // Orbit's draft, edited or not, goes out as itself (the card it answers is then done); anything else as typed
       const draft =
         usable && usable.channel === channel
           ? usable
-          : await draftTypedMessage(user, person.id, channel, text);
+          : (again ?? (await draftTypedMessage(user, person.id, channel, text)));
       if (!draft) return setError('Orbit could not find this person.');
       const err = await runApproval(user, draft, text, draft.subject, toast, person.firstName);
-      if (err) setError(err);
-      else setBody('');
+      if (!err) {
+        setUnsent(undefined);
+        setBody('');
+        return;
+      }
+      setError(err);
+      if (draft.channel === 'linkedin' && isServerUser(user.id)) {
+        const way = await linkedInSendWay(user, person, draft.id);
+        setUnsent({ draftId: draft.id, fix: way.inApp ? undefined : way.fix });
+      }
+    } finally {
+      setBusy(false);
+    }
+  };
+  /** The other way, picked by the student: the words copied and LinkedIn opened, waiting for "I sent it". */
+  const paste = async () => {
+    const text = body.trim();
+    const draft = unsent ? await db.outbound.get(unsent.draftId) : undefined;
+    if (!text || !draft) return;
+    setBusy(true);
+    try {
+      const err = await runApproval(user, draft, text, undefined, toast, person.firstName, 'handoff');
+      if (err) return setError(err);
+      setError(undefined);
+      setUnsent(undefined);
+      setBody('');
     } finally {
       setBusy(false);
     }
@@ -379,6 +414,32 @@ export function Conversation({ person }: { person: Person }) {
             <p className="mt-1.5 text-[12.5px] text-bad" role="alert" data-testid="conversation-error">
               {error}
             </p>
+          )}
+          {error && unsent && channel === 'linkedin' && (
+            <div
+              className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1.5 text-[12.5px]"
+              data-testid="conversation-unsent"
+            >
+              {unsent.fix && (
+                <Link
+                  to={unsent.fix.to}
+                  className="font-medium text-accent hover:underline"
+                  data-testid="conversation-linkedin-fix"
+                >
+                  {unsent.fix.label}
+                </Link>
+              )}
+              <Button
+                type="button"
+                size="sm"
+                disabled={busy || !body.trim()}
+                onClick={() => void paste()}
+                title={`Copy this and open LinkedIn to send it to ${person.firstName} yourself`}
+                data-testid="conversation-linkedin-paste"
+              >
+                Copy & open LinkedIn
+              </Button>
+            </div>
           )}
         </form>
       ) : (

@@ -41,7 +41,14 @@ import { AUTOPILOT_GAP_MIN, nextSlotAfter } from './autopilotTime';
 import { evaluateImmediateSuggestions, findReferrerFor } from './brief';
 import { bytesToBase64, draftFileBytes } from './files';
 import { checkIntroNote } from './introNote';
-import { linkedInSendActive, sendLinkedInLive, serverLinkedInSendId } from './linkedinLive';
+import { linkedInSendActive, linkedInSendWay, sendLinkedInLive } from './linkedinLive';
+import {
+  blockForStatus,
+  LINKEDIN_BLOCKS,
+  type LinkedInBlock,
+  linkedinSendError,
+  NOT_CONNECTED_CODE,
+} from './linkedinSendWords';
 import { scheduleChatAt, upcomingMeeting } from './move';
 import { evaluateTrigger, recordAlreadyDone } from './stages';
 import { personZone } from './trust';
@@ -560,8 +567,18 @@ export type ApproveResult =
   | { ok: true; status: 'scheduled'; sendAt: string }
   | { ok: true; status: 'sent' }
   | { ok: true; status: 'handed_off'; handoffUrl: string; via: HandoffVia; threaded: boolean }
-  /** `code`: a limit that only means not now (the day's limit, the wait after an unanswered message) */
-  | { ok: false; error: string; issues?: DraftIssue[]; code?: SendAllowed['code']; retryAt?: string };
+  /**
+   * `code`: a limit that only means not now (the day's limit, the wait after an unanswered message). `linkedin`: an
+   * account's LinkedIn message Orbit could not send itself, and why (never a silent hand-off to LinkedIn).
+   */
+  | {
+      ok: false;
+      error: string;
+      issues?: DraftIssue[];
+      code?: SendAllowed['code'];
+      retryAt?: string;
+      linkedin?: LinkedInBlock;
+    };
 
 /**
  * True when approved email goes out through the Gmail API: Google is connected and the student granted the send
@@ -653,21 +670,121 @@ async function approveOnServer(
   return { ok: true, status: 'scheduled', sendAt: r.value.draft.sendAt ?? new Date().toISOString() };
 }
 
-/** Why the server's LinkedIn send did not go, for the student. */
-export function linkedinSendError(code: string | null | undefined, length?: number): string {
-  if (code === 'linkedin_note_too_long')
-    return `You are not connected yet, so this goes as a connection request, and LinkedIn caps its note at ${LINKEDIN_NOTE_MAX} characters${length ? ` (this one is ${length})` : ''}. Trim it and send again.`;
-  if (code === 'linkedin_not_connected')
-    return 'LinkedIn is not connected. Connect it in Settings, Integrations.';
-  if (code === 'no_linkedin_member')
-    return 'Orbit could not find them on LinkedIn. Open their profile from here and send it there.';
-  if (code === 'linkedin_unconfirmed')
-    return 'LinkedIn did not confirm the send. Check your chat with them on LinkedIn before sending again.';
-  if (code === 'linkedin_needs_fresh_approval' || code === 'linkedin_never_auto')
-    return 'LinkedIn messages go only on your tap. Press Send again.';
-  if (code?.startsWith('unipile_4'))
-    return 'LinkedIn would not take this message. They may have a pending request from you, or limit who can message them.';
-  return 'LinkedIn did not take it just now. Try again in a moment.';
+export { linkedinSendError };
+
+/**
+ * An account's LinkedIn message, sent by the server from the student's own LinkedIn on this tap (`confirm`), at once.
+ * A message the student wrote in this browser goes the same way as one the server composed: the approval carries who
+ * it is for (`write`), the server keeps it under the draft's own uuid, and this browser's row stays the one the
+ * student sees, recorded as sent like any send from Orbit. Whatever stops it comes back in words with the draft kept;
+ * nothing here ever opens LinkedIn.
+ */
+async function sendLinkedInOnServer(
+  user: User,
+  msg: OutboundMessage,
+  serverId: string,
+  body: string,
+  note: string | undefined,
+  now: Date,
+): Promise<ApproveResult> {
+  const sync = await import('./serverSync');
+  // made in this browser: the server learns of it now, and its copy comes back onto this same row
+  const mine = serverId !== msg.id;
+  const approval = {
+    bodyFinal: body,
+    bodyFinalHash: await sha256Hex(body),
+    approvedAt: now.toISOString(),
+  };
+  /** this browser's own row, back to what it was (nothing reached LinkedIn) or marked with why it did not go */
+  const settle = (changes: Partial<OutboundMessage> & { status: OutboundStatus }) =>
+    mine ? transition(msg.id, ['sending'], changes) : Promise.resolve(undefined);
+  const back = () =>
+    settle({ status: msg.status, sendAt: undefined, queuedAt: undefined, approvedAt: msg.approvedAt });
+  if (mine) {
+    // claimed first, so a second tap while this one is on its way finds nothing to send
+    const claimed = await transition(msg.id, ['draft', 'failed', 'cancelled'], {
+      ...approval,
+      status: 'sending',
+      queuedAt: now.toISOString(),
+      sendAt: now.toISOString(),
+      error: undefined,
+    });
+    if (!claimed) return { ok: false, error: alreadyText((await db.outbound.get(msg.id))?.status) };
+    await sync.rememberAlias(serverId, msg.id);
+    // someone added here (by hand, from a search) goes up first, so the server knows who the message is for
+    await sync.pushOutbox().catch(() => undefined);
+  } else await sync.flushQueue().catch(() => undefined);
+  const personId = sync.serverIdOf(msg.personId);
+  const r = await callApi('/drafts/approve', {
+    draftId: serverId,
+    body,
+    confirm: true,
+    ...(personId ? { write: { personId, kind: msg.kind, channel: 'linkedin' as const } } : {}),
+  });
+  if (!r.ok) {
+    await back();
+    // `not_found`: a server that does not keep the student's own drafts yet, or a draft it no longer has
+    const block: LinkedInBlock | undefined =
+      r.code === 'not_found' ? 'unavailable' : r.code === 'person_not_found' ? 'not_saved' : undefined;
+    const error =
+      r.code === 'do_not_contact'
+        ? linkedinSendError('do_not_contact')
+        : block
+          ? LINKEDIN_BLOCKS[block].text
+          : r.message;
+    return { ok: false, error, ...(block ? { linkedin: block } : {}) };
+  }
+  const d = r.value.draft;
+  if (!mine) await sync.keepServerDraft(d, user.id);
+  await audit(user.id, 'message.approved', {
+    objectTable: 'outbound',
+    objectId: msg.id,
+    metadata: { channel: msg.channel, kind: msg.kind, sendAt: d.sendAt, server: true },
+  });
+  if (d.status === 'sent') {
+    if (mine) {
+      try {
+        await finalizeSent(user, { ...msg, ...approval }, { via: 'orbit_server' }, now);
+      } catch (e) {
+        // it went out: recorded as sent whatever the bookkeeping after it managed
+        await db.outbound
+          .update(msg.id, { status: 'sent', sentAt: now.toISOString(), sendAt: undefined })
+          .catch(() => undefined);
+        await notify(
+          user.id,
+          'system',
+          'Sent',
+          chatBehind(e)
+            ? 'Orbit sent it on LinkedIn but could not update the chat. Check its stage.'
+            : 'Orbit sent it on LinkedIn and updated the chat, but could not save all of it to their history. Check their page.',
+        ).catch(() => undefined);
+      }
+    }
+    // an intro ask goes alone, and the note to forward waits as a second message for its own tap
+    if (note) await queueNoteMessage(user, msg, note, now);
+    return { ok: true, status: 'sent' };
+  }
+  // LinkedIn was busy and the server tries once more in a minute, inside the window this tap covers
+  if (d.status === 'approved' || d.status === 'scheduled' || d.status === 'sending') {
+    const sendAt = d.sendAt ?? new Date(now.getTime() + 60_000).toISOString();
+    await settle({ status: 'approved', sendAt });
+    return { ok: true, status: 'scheduled', sendAt };
+  }
+  // it did not go: the reason in words, on the draft too, which stays to be sent again
+  const code = d.error ?? d.cancelReason;
+  if (code === NOT_CONNECTED_CODE) {
+    // the link dropped since this browser last looked: the kept status is brought up to date, and the answer names
+    // what the server now says (paused, signed out), with the fix. LinkedIn was never asked, so the student's own
+    // draft is a plain draft again, with nothing on it to go stale once LinkedIn is linked.
+    await back();
+    const fresh = await sync.refreshSyncStatus().catch(() => undefined);
+    const block = blockForStatus(sync.linkedinStatus(fresh)?.status) ?? 'not_connected';
+    return { ok: false, error: LINKEDIN_BLOCKS[block].text, linkedin: block };
+  }
+  const error = linkedinSendError(code, body.length);
+  if (mine) await settle({ status: 'failed', sendAt: undefined, error });
+  else await db.outbound.update(msg.id, { error });
+  return { ok: false, error };
 }
 
 /** Atomically move a message from one of `from` to `changes.status`; undefined when it was not in `from`. */
@@ -837,20 +954,31 @@ export async function approveAndSend(
       if (viaServer) return viaServer;
     }
   }
+  // An account's LinkedIn message: Orbit sends it itself, from the server, on this tap, or says why it cannot. It is
+  // never switched to LinkedIn without the student picking that (`via: 'handoff'`), and never sent at a planned time:
+  // every LinkedIn send is the student's own tap on Send for that message.
+  if (msg.channel === 'linkedin' && isServerUser(user.id) && !opts.via && !opts.scheduleAt) {
+    const way = await linkedInSendWay(user, person, msg.id, { now: true });
+    if (!way.inApp || !way.serverId)
+      return {
+        ok: false,
+        error: (!way.inApp && way.text) || LINKEDIN_BLOCKS.unavailable.text,
+        linkedin: (!way.inApp && way.reason) || 'unavailable',
+      };
+    return sendLinkedInOnServer(user, msg, way.serverId, bodyFinal, note, now);
+  }
   // a text is never sent by the server (it answers 409 handoff_only): Messages opens, and the student says it went
-  if (!opts.via && !isSocial(msg.channel) && msg.channel !== 'imessage') {
-    const linkedin = msg.channel === 'linkedin' && isServerUser(user.id) && !opts.scheduleAt;
-    const serverId = linkedin ? await serverLinkedInSendId(msg.id) : await serverEmailId(user, msg);
+  if (!opts.via && msg.channel === 'gmail') {
+    const serverId = await serverEmailId(user, msg);
     if (serverId) {
       const viaServer = await approveOnServer(
         user,
         msg,
         serverId,
         note ? withNote(bodyFinal, note) : bodyFinal,
-        env.threaded || linkedin ? undefined : env.subject,
+        env.threaded ? undefined : env.subject,
         opts.undoWindowMs ?? UNDO_WINDOW_MS,
         opts.scheduleAt,
-        linkedin,
       );
       if (viaServer) return viaServer;
     }
@@ -906,7 +1034,9 @@ export async function approveAndSend(
       error:
         msg.channel === 'gmail'
           ? 'Autopilot sends email through Gmail. Connect Google with permission to send first.'
-          : 'Autopilot sends LinkedIn messages through live LinkedIn. Connect it first.',
+          : isServerUser(user.id)
+            ? 'LinkedIn messages go only on your tap, so Orbit does not plan a time for them.'
+            : 'Autopilot sends LinkedIn messages through live LinkedIn. Connect it first.',
     };
   if (direct && opts.scheduleAt) {
     if (msg.channel === 'gmail' && !msg.toEmail)
@@ -1113,11 +1243,17 @@ export async function sendOnSocial(
   return r;
 }
 
-/** Orbit can send this message itself: Gmail with the send permission, or live LinkedIn knowing who they are. */
-export async function canSendFromOrbit(user: User, msg: Pick<OutboundMessage, 'channel' | 'personId'>) {
+/**
+ * Orbit can send this message itself: Gmail with the send permission, or LinkedIn (an account's from the server, else
+ * live in this browser knowing who they are).
+ */
+export async function canSendFromOrbit(
+  user: User,
+  msg: Pick<OutboundMessage, 'channel' | 'personId'> & { id?: string },
+) {
   if (msg.channel === 'gmail') return googleSendActive(user.id);
   if (msg.channel !== 'linkedin') return false;
-  return linkedInSendActive(user, await db.people.get(msg.personId));
+  return linkedInSendActive(user, await db.people.get(msg.personId), msg.id);
 }
 
 /**
@@ -1133,14 +1269,23 @@ export async function sendHandedOffFromOrbit(
   const m = await db.outbound.get(messageId);
   if (!m || m.userId !== user.id || m.status !== 'handed_off')
     return { ok: false, error: 'This message is not waiting to be sent.' };
-  if (!(await canSendFromOrbit(user, m)))
+  if (!(await canSendFromOrbit(user, m))) {
+    // an account's LinkedIn: the reason as the server gives it (not connected, paused, signed out), with the fix
+    const way =
+      m.channel === 'linkedin' && isServerUser(user.id)
+        ? await linkedInSendWay(user, await db.people.get(m.personId), m.id, { now: true })
+        : undefined;
     return {
       ok: false,
       error:
         m.channel === 'gmail'
           ? 'Connect Google with permission to send first.'
-          : 'Connect LinkedIn live to send it from Orbit.',
+          : way && !way.inApp && way.text
+            ? way.text
+            : 'Connect LinkedIn live to send it from Orbit.',
+      ...(way && !way.inApp && way.reason ? { linkedin: way.reason } : {}),
     };
+  }
   const text = m.bodyFinal ?? m.bodyDraft;
   await revertHandoff(user, messageId);
   return approveAndSend(user, messageId, text, m.subject, now);
@@ -1602,7 +1747,8 @@ function chatBehind(e: unknown): boolean {
 async function finalizeSent(
   user: User,
   msg: OutboundMessage,
-  provider: { providerMessageId?: string; providerThreadId?: string },
+  /** `via`: how it went when no provider id came back to this browser (an account's LinkedIn, sent by the server) */
+  provider: { providerMessageId?: string; providerThreadId?: string; via?: string },
   now: Date,
 ): Promise<{ scheduledAt?: string }> {
   let failure: unknown;
@@ -1669,7 +1815,7 @@ async function finalizeSent(
         channel: msg.channel,
         kind: msg.kind,
         hash: msg.bodyFinalHash,
-        via: provider.providerMessageId ? 'gmail_api' : 'handoff_confirmed',
+        via: provider.via ?? (provider.providerMessageId ? 'gmail_api' : 'handoff_confirmed'),
       },
     }),
   );

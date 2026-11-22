@@ -15,6 +15,7 @@ import {
   restoreDraft,
   setDraftText,
 } from '../../engine/drafts';
+import { linkedInSendWay } from '../../engine/linkedinLive';
 import {
   approveAndSend,
   checkSendAllowed,
@@ -31,6 +32,7 @@ import {
   undoQueued,
 } from '../../engine/send';
 import { draftLists, startedDrafts } from '../../engine/today';
+import { isServerUser } from '../../integrations/orbitApi';
 import { z } from '../../zod';
 import type { ToolContext } from '../types';
 import {
@@ -521,13 +523,22 @@ async function sendIntent(
   body: string,
   subject: string | undefined,
   copy: boolean,
+  /** the student asked to paste it into LinkedIn themselves */
+  paste = false,
 ) {
   const person = await requirePerson(ctx, draft.personId);
-  const [env, direct, fromServer] = await Promise.all([
+  const [env, direct, fromServer, linkedin] = await Promise.all([
     draftEnvelope(draft),
     googleSendActive(ctx.user.id),
     copy ? undefined : serverEmailId(ctx.user, draft),
+    draft.channel === 'linkedin' && !paste ? linkedInSendWay(ctx.user, person, draft.id) : undefined,
   ]);
+  const account = isServerUser(ctx.user.id);
+  // an account's LinkedIn message Orbit cannot send itself right now: the reason, with nothing opened behind it
+  const linkedinBlocked =
+    account && linkedin && !linkedin.inApp
+      ? (linkedin.text ?? 'Orbit cannot send this LinkedIn message itself right now.')
+      : undefined;
   const how =
     draft.channel === 'gmail'
       ? copy
@@ -537,7 +548,11 @@ async function sendIntent(
           : direct
             ? 'sent by Gmail after a 10 second undo window'
             : `opened in your mail app addressed to ${draft.toEmail ?? person.firstName}, then marked as waiting for your I sent it`
-      : 'copied and opened on LinkedIn, then marked as waiting for your I sent it';
+      : linkedin?.inApp
+        ? account
+          ? 'sent by Orbit from your own LinkedIn account as soon as you approve'
+          : 'sent from your LinkedIn after a 10 second undo window'
+        : 'copied and opened on LinkedIn, then marked as waiting for your I sent it';
   const subj =
     draft.channel === 'gmail'
       ? env.threaded
@@ -545,14 +560,14 @@ async function sendIntent(
         : ` with the subject "${(subject ?? draft.subject ?? '').trim() || 'none yet'}"`
       : '';
   const text = `Send the ${MESSAGE_KIND_LABELS[draft.kind].toLowerCase()} to ${person.displayName}: ${how}${subj}. It starts: "${firstLine(body) ?? ''}"`;
-  return { person, env, direct: direct || !!fromServer, text };
+  return { person, env, direct: direct || !!fromServer, text, linkedinBlocked };
 }
 
 export const sendDraft = defineTool({
   name: 'send_draft',
   kind: 'risky',
   description:
-    'Call this only when the student says to send, approve or hand off a specific draft ("send the follow-up to Priya", "ok send it"), to retry a failed send, or asks for the text to paste into Gmail themselves (via copy). It never sends on its own: it returns a confirmation the student approves in the card, and the approved text is bound by the engine. Email goes through Gmail (10 second undo) or opens in the mail app; LinkedIn messages are copied and opened on LinkedIn for the student to send (only a device-only setup with LinkedIn connected live sends them itself; an Orbit account never does, so never offer connecting LinkedIn as a way to send); hand-offs wait for the student\'s "I sent it". A blocked send gives the engine\'s reason.',
+    'Call this only when the student says to send, approve or hand off a specific draft ("send the follow-up to Priya", "ok send it"), to retry a failed send, or asks for the text to paste into Gmail themselves (via copy). It never sends on its own: it returns a confirmation the student approves in the card, and the approved text is bound by the engine. Email goes through Gmail (10 second undo) or opens in the mail app; LinkedIn, when connected, goes from the student\'s own account on approval (never on its own); not connected, the send is blocked with the reason (via handoff if they ask to paste it); hand-offs wait for the student\'s "I sent it". A blocked send gives the engine\'s reason.',
   input: z.object({
     draftId: z.string().describe('The draft id.'),
     body: z
@@ -563,9 +578,11 @@ export const sendDraft = defineTool({
       ),
     subject: z.string().optional().describe('The subject for a new email, when the student set one.'),
     via: z
-      .enum(['copy'])
+      .enum(['copy', 'handoff'])
       .optional()
-      .describe('copy: do not open anything, just hand the text to the student to paste into Gmail.'),
+      .describe(
+        'copy: do not open anything, just hand the text to the student to paste into Gmail. handoff: copy it and open LinkedIn, only when they ask to paste it.',
+      ),
   }),
   capabilities: ['draft_approve_send', 'card_approve_send', 'draft_copy_text', 'draft_retry_failed'],
   progress: 'Preparing to send',
@@ -573,7 +590,14 @@ export const sendDraft = defineTool({
     const draft = await requireDraft(ctx, input.draftId);
     const body = ctx.edited?.body ?? input.body ?? draft.bodyFinal ?? draft.bodyDraft;
     const subject = ctx.edited?.subject ?? input.subject ?? draft.subject;
-    const { text } = await sendIntent(ctx, draft, body, subject, input.via === 'copy');
+    const { text, linkedinBlocked } = await sendIntent(
+      ctx,
+      draft,
+      body,
+      subject,
+      input.via === 'copy',
+      input.via === 'handoff',
+    );
     let blockedReason: string | undefined;
     if (!['draft', 'failed', 'cancelled'].includes(draft.status))
       blockedReason =
@@ -599,6 +623,7 @@ export const sendDraft = defineTool({
         if (!allowed.allowed) blockedReason = allowed.reason;
         else if (WHY_THEM_GAP.test(body))
           blockedReason = `The "Why them" line is still missing. Add it and redraft first.`;
+        else if (linkedinBlocked) blockedReason = linkedinBlocked;
       }
     }
     return { text, blockedReason };
@@ -630,6 +655,7 @@ export const sendDraft = defineTool({
           dismiss: () => undefined,
         },
         person.firstName,
+        input.via === 'handoff' ? 'handoff' : undefined,
       );
     }
     if (error) throw new Error(error);
@@ -658,19 +684,22 @@ export const sendDraft = defineTool({
     // approved on the server (plan 29 §B2.1): soon after the undo window, or in their morning
     const soon = !!fresh.sendAt && Date.parse(fresh.sendAt) - ctx.now.getTime() <= 60_000;
     const summary =
-      fresh.status === 'queued' || (fresh.status === 'approved' && soon)
-        ? `Sending to ${person.firstName} in 10 seconds through Gmail. Say undo to stop it; after that it is sent.`
-        : fresh.status === 'approved'
-          ? `Approved. Gmail sends it to ${person.firstName} ${fmtWhen(fresh.sendAt, ctx) ?? 'soon'}, in their morning. Say stop and Orbit holds it until then.`
-          : fresh.status === 'sent'
-            ? `Sent to ${person.firstName}.`
-            : fresh.status === 'handed_off'
-              ? fresh.handoffVia === 'copy'
-                ? `The text is ready to paste into Gmail${fresh.subject ? ` with the subject "${fresh.subject}"` : ''}. Once it is sent, say so and Orbit logs it.`
-                : fresh.channel === 'gmail'
-                  ? `Opened in the mail app addressed to ${person.firstName}. Once it is sent, say so and Orbit logs it.${extraNotes ? ` ${extraNotes}` : ''}`
-                  : `${notes.join(' ') || 'Copied and opened on LinkedIn.'} Once it is sent, say so and Orbit logs it.`
-              : `The message is ${fresh.status}.`;
+      fresh.status === 'approved' && fresh.channel === 'linkedin'
+        ? // LinkedIn was busy when the server tried: it tries once more within the minute
+          `LinkedIn is busy. Orbit sends it to ${person.firstName} in about a minute. Say stop to hold it.`
+        : fresh.status === 'queued' || (fresh.status === 'approved' && soon)
+          ? `Sending to ${person.firstName} in 10 seconds through Gmail. Say undo to stop it; after that it is sent.`
+          : fresh.status === 'approved'
+            ? `Approved. Gmail sends it to ${person.firstName} ${fmtWhen(fresh.sendAt, ctx) ?? 'soon'}, in their morning. Say stop and Orbit holds it until then.`
+            : fresh.status === 'sent'
+              ? `Sent to ${person.firstName}.`
+              : fresh.status === 'handed_off'
+                ? fresh.handoffVia === 'copy'
+                  ? `The text is ready to paste into Gmail${fresh.subject ? ` with the subject "${fresh.subject}"` : ''}. Once it is sent, say so and Orbit logs it.`
+                  : fresh.channel === 'gmail'
+                    ? `Opened in the mail app addressed to ${person.firstName}. Once it is sent, say so and Orbit logs it.${extraNotes ? ` ${extraNotes}` : ''}`
+                    : `${notes.join(' ') || 'Copied and opened on LinkedIn.'} Once it is sent, say so and Orbit logs it.`
+                : `The message is ${fresh.status}.`;
     return ok('draft', out, out, summary, `/inbox?draft=${fresh.id}`);
   },
   toModel,
