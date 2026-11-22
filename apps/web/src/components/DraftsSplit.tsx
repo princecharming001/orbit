@@ -1,20 +1,27 @@
-import type { Person, Suggestion } from '@orbit/core';
+import type { OutboundMessage, Person, Suggestion } from '@orbit/core';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { type CSSProperties, useEffect, useRef } from 'react';
 import { db } from '../db/schema';
 import { Avatar, Chip, cx } from '../ui';
 import { PersonCompanyLogo } from './CompanyLogo';
+import { MessageOption, MessagePane } from './DraftMessage';
 import { ResizeHandle, useResizableWidth } from './ResizeHandle';
 import { gapLabel, KIND_LABEL, SuggestionCard } from './SuggestionCard';
 
 export interface DraftGroup {
   label: string;
   items: Suggestion[];
+  /**
+   * messages that belong to no card, listed first: one opened in the mail app or LinkedIn waiting for "I sent it",
+   * and drafts the student started on a person's page
+   */
+  messages?: OutboundMessage[];
 }
 
 /**
  * Drafts on a wide screen: every card as one skimmable row on the left, and the one picked open on the right, its
- * draft ready to edit and send. Arrow keys (or j and k) move down the list; when a card is sent, snoozed or
+ * draft ready to edit and send (a draft the student started, or a message waiting for "I sent it", is a row like the
+ * cards, listed first under To send). Arrow keys (or j and k) move down the list; when a card is sent, snoozed or
  * dismissed the next one opens.
  */
 export function DraftsSplit({
@@ -28,8 +35,12 @@ export function DraftsSplit({
   onSelect: (id: string) => void;
   byId: Map<string, Person>;
 }) {
-  const all = groups.flatMap((g) => g.items);
-  const selected = all.find((s) => s.id === selectedId) ?? all[0];
+  // every row in order, a message or a card, by id
+  const all: { id: string; o?: OutboundMessage; s?: Suggestion }[] = groups.flatMap((g) => [
+    ...(g.messages ?? []).map((o) => ({ id: o.id, o })),
+    ...g.items.map((s) => ({ id: s.id, s })),
+  ]);
+  const selected = all.find((x) => x.id === selectedId) ?? all[0];
   const listRef = useRef<HTMLDivElement>(null);
   const splitRef = useRef<HTMLDivElement>(null);
   // the list is 360px unless the student drags it: never under 260px, and the open draft keeps 480px
@@ -46,7 +57,7 @@ export function DraftsSplit({
       if (e.metaKey || e.ctrlKey || e.altKey) return;
       const step = e.key === 'ArrowDown' || e.key === 'j' ? 1 : e.key === 'ArrowUp' || e.key === 'k' ? -1 : 0;
       if (!step || !selected) return;
-      const i = all.findIndex((s) => s.id === selected.id);
+      const i = all.findIndex((x) => x.id === selected.id);
       const next = all[Math.max(0, Math.min(all.length - 1, i + step))];
       if (!next || next.id === selected.id) return;
       e.preventDefault();
@@ -68,14 +79,23 @@ export function DraftsSplit({
     >
       <div ref={listRef} className="min-w-0 space-y-4" role="listbox" aria-label="Drafts">
         {groups
-          .filter((g) => g.items.length)
+          .filter((g) => g.items.length + (g.messages?.length ?? 0))
           .map((g) => (
             <section key={g.label}>
               <div className="text-[11.5px] uppercase tracking-wide text-ink-3 mb-1.5 px-1 flex items-center gap-2">
                 {g.label}
-                <span className="tabular">{g.items.length}</span>
+                <span className="tabular">{g.items.length + (g.messages?.length ?? 0)}</span>
               </div>
               <ul className="rounded-[var(--radius-card)] border border-line bg-canvas divide-y divide-line-2 overflow-hidden">
+                {g.messages?.map((o) => (
+                  <MessageOption
+                    key={o.id}
+                    o={o}
+                    person={byId.get(o.personId)}
+                    active={o.id === selected?.id}
+                    onSelect={() => onSelect(o.id)}
+                  />
+                ))}
                 {g.items.map((s) => (
                   <DraftRow
                     key={s.id}
@@ -103,7 +123,10 @@ export function DraftsSplit({
         className="min-w-0 sticky top-4"
         data-testid="drafts-reading"
       >
-        {selected && <SuggestionCard key={selected.id} s={selected} defaultOpen />}
+        {selected?.s && <SuggestionCard key={selected.id} s={selected.s} defaultOpen />}
+        {selected?.o && (
+          <MessagePane key={selected.id} o={selected.o} person={byId.get(selected.o.personId)} />
+        )}
       </div>
     </div>
   );

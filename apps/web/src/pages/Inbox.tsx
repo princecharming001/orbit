@@ -8,6 +8,7 @@ import { runApproval } from '../components/approve';
 import { TomorrowBatch } from '../components/autopilot/TomorrowBatch';
 import { useAutopilotStatus } from '../components/autopilot/useAutopilotStatus';
 import { DraftEditor, OutboxStatus } from '../components/DraftEditor';
+import { MessageRow, useOpenRows } from '../components/DraftMessage';
 import { DraftsSplit } from '../components/DraftsSplit';
 import { Queue } from '../components/Queue';
 import { RepliesChecked } from '../components/RepliesChecked';
@@ -16,7 +17,7 @@ import { KIND_LABEL, SuggestionCard } from '../components/SuggestionCard';
 import { openWeekReview } from '../components/WeekReview';
 import { db } from '../db/schema';
 import { ensureDrafts, generateBrief, isMessageSuggestion, revalidatePending } from '../engine/brief';
-import { discardDraft, restoreDraft, unsnoozeSuggestion } from '../engine/drafts';
+import { unsnoozeSuggestion } from '../engine/drafts';
 import { moveChat } from '../engine/move';
 import { wentQuiet } from '../engine/pipeline';
 import { isScheduled } from '../engine/queue';
@@ -242,6 +243,10 @@ export function InboxPage() {
   // a message opened in the mail app or LinkedIn stays with the other drafts, still sendable, until "I sent it"
   const handedOff = outbox.filter((o) => o.status === 'handed_off' && !byId.get(o.personId)?.hiddenAt);
   const notSent = outbox.filter((o) => o.status !== 'handed_off');
+  // the messages under To send that belong to no card: what waits for "I sent it" first, then what the student started.
+  // Each is in exactly one of the two (a draft is not handed off), and neither has a card listed with it.
+  const messages = [...handedOff, ...started];
+  const { isOpen: isRowOpen, setOpen: setRowOpen } = useOpenRows(messages);
   // chats waiting on the other person for a week or more; a card here already covers its own chat
   const covered = new Set([...cards, ...more].map((x) => x.chatId).filter(Boolean));
   const quiet = chats
@@ -285,8 +290,7 @@ export function InboxPage() {
       toast.push({ text: 'Updated from your latest email, calendar and notes.' });
     });
   };
-  const nothingToSend =
-    !pending.length && !started.length && !handedOff.length && !toWrite.length && !otherCards.length;
+  const nothingToSend = !pending.length && !messages.length && !toWrite.length && !otherCards.length;
   // still reading: the page shows its shape (tabs and cards), never "No drafts right now"
   if (suggestionsQ === undefined || outboundQ === undefined || peopleQ === undefined || chatsQ === undefined)
     return (
@@ -374,7 +378,7 @@ export function InboxPage() {
               {
                 value: 'pending' as const,
                 label: 'To send',
-                count: forToday.length + started.length + handedOff.length,
+                count: forToday.length + messages.length,
               },
               { value: 'scheduled' as const, label: 'Scheduled', count: scheduled.length },
               { value: 'outbox' as const, label: 'Not sent', count: notSent.length },
@@ -383,28 +387,13 @@ export function InboxPage() {
             ].filter((t) => t.value === 'pending' || t.value === shown || t.count !== 0)}
           />
           {shown === 'pending' && <TomorrowBatch view={autopilot} />}
-          {shown === 'pending' && handedOff.length > 0 && (
-            <div className="space-y-2 mb-5" data-testid="drafts-handed-off">
-              {handedOff.map((o) => (
-                <OutboxItem key={o.id} o={o} person={byId.get(o.personId)} />
-              ))}
-            </div>
-          )}
-          {shown === 'pending' && started.length > 0 && (
-            <div className="space-y-2 mb-5" data-testid="drafts-started">
-              <div className="text-[12px] uppercase tracking-wide text-ink-3">Started by you</div>
-              {started.map((o) => (
-                <StartedItem key={o.id} o={o} person={byId.get(o.personId)} />
-              ))}
-            </div>
-          )}
           {shown === 'pending' && toWrite.length > 0 && <ToWrite people={toWrite} />}
           {shown === 'pending' &&
             split &&
-            (pending.length > 0 || otherCards.length + otherMore.length > 0) && (
+            (pending.length > 0 || messages.length > 0 || otherCards.length + otherMore.length > 0) && (
               <DraftsSplit
                 groups={[
-                  { label: 'To send', items: forToday },
+                  { label: 'To send', items: forToday, messages },
                   { label: 'Can wait', items: later },
                   { label: 'Also worth doing', items: [...otherCards, ...otherMore] },
                 ]}
@@ -413,9 +402,29 @@ export function InboxPage() {
                 byId={byId}
               />
             )}
-          {shown === 'pending' && !split && pending.length > 0 && (
+          {shown === 'pending' && !split && (pending.length > 0 || messages.length > 0) && (
             <div className="stagger space-y-3" data-testid="drafts-to-send">
-              {forToday.length === 0 && <p className="text-[13px] text-ink-3">Nothing to send today.</p>}
+              {/* what the student started and what waits for "I sent it" are drafts to send like the cards: compact
+                  rows at the top of the same list, each opening in place */}
+              {messages.length > 0 && (
+                <ul
+                  className="rounded-[var(--radius-card)] border border-line bg-canvas divide-y divide-line-2 overflow-hidden"
+                  data-testid="drafts-messages"
+                >
+                  {messages.map((o) => (
+                    <MessageRow
+                      key={o.id}
+                      o={o}
+                      person={byId.get(o.personId)}
+                      open={isRowOpen(o)}
+                      onOpenChange={(open) => setRowOpen(o, open)}
+                    />
+                  ))}
+                </ul>
+              )}
+              {forToday.length === 0 && messages.length === 0 && (
+                <p className="text-[13px] text-ink-3">Nothing to send today.</p>
+              )}
               {forToday.map((s) => (
                 <SuggestionCard key={s.id} s={s} compact highlight={s.id === focused?.id} />
               ))}
@@ -720,80 +729,6 @@ function ToWrite({ people }: { people: Person[] }) {
           </li>
         ))}
       </ul>
-    </div>
-  );
-}
-
-/**
- * A draft the student started on a person's page: Continue writing opens it right here, with Send, and Discard drops
- * it. Nothing leaves the Drafts page.
- */
-function StartedItem({ o, person }: { o: OutboundMessage; person?: Person }) {
-  const { user } = useSession();
-  const toast = useToast();
-  const [open, setOpen] = useState(false);
-  const [busy, setBusy] = useState(false);
-  const discard = async () => {
-    await discardDraft(o.id);
-    toast.push({
-      text: 'Draft discarded.',
-      action: { label: 'Undo', onClick: () => restoreDraft(o.id) },
-      ttl: 7000,
-    });
-  };
-  return (
-    <div className="border border-line rounded-[var(--radius-card)] p-3" data-testid="started-draft">
-      <div className="flex items-center gap-2 text-[13.5px] flex-wrap">
-        {person && <Avatar name={person.displayName} src={person.photoUrl} id={person.id} size={26} />}
-        <Link to={person ? `/people/${person.id}` : '#'} className="font-medium">
-          {person?.displayName ?? 'Unknown'}
-        </Link>
-        <Chip>{draftKindLabel(o.kind, person && lastTouch(person))}</Chip>
-        <span className="text-ink-3 text-[12px] ml-auto">started {relDate(o.createdAt)}</span>
-      </div>
-      {open && user ? (
-        <div className="mt-2" data-testid="started-draft-editor">
-          <DraftEditor
-            draft={o}
-            thread
-            focusOnOpen
-            busy={busy}
-            onApprove={async (body, subject) => {
-              setBusy(true);
-              try {
-                return await runApproval(user, o, body, subject, toast, person?.firstName);
-              } finally {
-                setBusy(false);
-              }
-            }}
-            onCancel={() => setOpen(false)}
-            extraActions={
-              <Button size="sm" variant="ghost" onClick={() => void discard()}>
-                Discard draft
-              </Button>
-            }
-          />
-        </div>
-      ) : (
-        <>
-          <p className="text-[13px] text-ink-2 mt-1.5 line-clamp-2 whitespace-pre-line">
-            {o.bodyFinal ?? o.bodyDraft}
-          </p>
-          <div className="mt-2 flex flex-wrap gap-2">
-            <Button
-              size="sm"
-              variant="primary"
-              onClick={() => setOpen(true)}
-              data-testid="started-draft-continue"
-            >
-              Continue writing
-            </Button>
-            <Button size="sm" variant="ghost" onClick={() => void discard()}>
-              Discard draft
-            </Button>
-          </div>
-        </>
-      )}
     </div>
   );
 }
