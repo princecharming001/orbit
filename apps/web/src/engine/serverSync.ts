@@ -115,8 +115,14 @@ export function serverIdOf(id: string | undefined | null): string | undefined {
 
 let aliasCache: Record<string, string> | undefined;
 
+/**
+ * Server id → the id of the row this browser made. Read from storage every time and merged with what this tab
+ * learned: another tab adds to it too, and a tab that kept its own copy wrote rows it made itself a second time
+ * (and saved its older copy back over the other tab's).
+ */
 async function aliases(): Promise<Record<string, string>> {
-  aliasCache ??= ((await db.kv.get(ALIAS_KEY))?.value as Record<string, string> | undefined) ?? {};
+  const stored = await Dexie.ignoreTransaction(() => db.kv.get(ALIAS_KEY)).catch(() => undefined);
+  aliasCache = { ...((stored?.value as Record<string, string> | undefined) ?? {}), ...(aliasCache ?? {}) };
   return aliasCache;
 }
 
@@ -129,6 +135,55 @@ async function rememberAliases(pairs: [string, string][]): Promise<void> {
       changed = true;
     }
   if (changed) await Dexie.ignoreTransaction(() => db.kv.put({ key: ALIAS_KEY, value: map }));
+}
+
+/** Which table a reference points into. */
+const REF_TABLE: Record<string, string> = {
+  personId: 'people',
+  chatId: 'chats',
+  goalId: 'userGoals',
+  threadId: 'threads',
+};
+
+const madeHereCache = new Map<string, { at: number; map: Map<string, string> }>();
+
+/**
+ * The rows of a table this browser made itself, by the uuid inside their id: `c_<uuid>` goes up to the server as
+ * `<uuid>` (serverIdOf), so the server's `<uuid>` coming down IS that row, whether or not the alias map still says
+ * so. (The map is forgotten on sign-out; the rows are not. Without this, signing back in brought every person,
+ * card, note and draft made in this browser down a second time: two cards for one person on the pipeline.)
+ */
+async function madeHere(dexie: string): Promise<Map<string, string>> {
+  const hit = madeHereCache.get(dexie);
+  if (hit && Date.now() - hit.at < 10_000) return hit.map;
+  const map = new Map<string, string>();
+  const keys = await Dexie.ignoreTransaction(() => dexieTable(dexie).toCollection().primaryKeys()).catch(
+    () => [] as unknown[],
+  );
+  for (const k of keys) {
+    const m = PREFIXED.exec(String(k));
+    if (m) map.set(m[1]!.toLowerCase(), String(k));
+  }
+  madeHereCache.set(dexie, { at: Date.now(), map });
+  return map;
+}
+
+/** The alias map, with every id in these rows that is a row this browser made (learned ones are saved). */
+async function aliasesFor(dexie: string, rows: Record<string, unknown>[]): Promise<Record<string, string>> {
+  const map = await aliases();
+  const learned: [string, string][] = [];
+  const learn = async (id: unknown, table: string) => {
+    if (typeof id !== 'string' || map[id] || !UUID.test(id)) return;
+    const local = (await madeHere(table)).get(id.toLowerCase());
+    if (local) learned.push([id, local]);
+  };
+  for (const r of rows) {
+    await learn(r.id, dexie);
+    for (const f of REF_FIELDS) await learn(r[f], REF_TABLE[f]!);
+    if (Array.isArray(r.personIds)) for (const p of r.personIds) await learn(p, 'people');
+  }
+  if (learned.length) await rememberAliases(learned);
+  return learned.length ? aliases() : map;
 }
 
 /**
@@ -360,7 +415,7 @@ export async function writeFromServer(
 ): Promise<number> {
   const dexie = DEXIE_OF.get(table);
   if (!dexie || (!rows.length && !deleted.length)) return 0;
-  const map = await aliases();
+  const map = await aliasesFor(dexie, rows as Record<string, unknown>[]);
   const t = dexieTable(dexie);
   let ready = (rows as Record<string, unknown>[]).map((r) => withDefaults(table, localize(r, map), userId));
   // a closeness rating is queued under its person's id, everything else under its own
@@ -569,11 +624,80 @@ export function pullNow(userId: string, opts: { signal?: AbortSignal } = {}): Pr
   return pulling;
 }
 
-/** Forget the cursor and aliases (sign-out, a different account): the next pull starts from the beginning. */
+/**
+ * Forget the cursor (sign-out, a different account): the next pull starts from the beginning. The aliases are kept:
+ * the rows this browser made are still here under their own ids, and the pull that starts over must land on them.
+ */
 export async function resetSyncState(): Promise<void> {
-  aliasCache = undefined;
-  await db.kv.bulkDelete([CURSOR_KEY, CURSOR_OWNER_KEY, ALIAS_KEY]);
+  madeHereCache.clear();
+  await db.kv.bulkDelete([CURSOR_KEY, CURSOR_OWNER_KEY]);
   await db.outbox.clear();
+}
+
+/**
+ * Heal rows that are in this browser twice: once as the row it made (`c_<uuid>`) and once as the server's copy of
+ * that same row (`<uuid>`), from a pull made after the alias map was forgotten. The row made here stays (everything
+ * else in this browser points at it), takes what the server's copy says unless an edit is still waiting to go up,
+ * and the copy goes. References to the copy are moved to the row. Nothing is sent to the server and nothing there
+ * changes. Returns how many doubles were healed.
+ */
+export async function repairDoubledRows(): Promise<number> {
+  const pairs: [string, string][] = [];
+  const waiting = new Set((await db.outbox.toCollection().primaryKeys()).map(String));
+  for (const { table, dexie } of PULL_TARGETS) {
+    const t = dexieTable(dexie);
+    const keys = (await t.toCollection().primaryKeys()).map(String);
+    const bare = new Map(keys.filter((k) => UUID.test(k)).map((k) => [k.toLowerCase(), k]));
+    const found: [string, string][] = [];
+    for (const k of keys) {
+      const m = PREFIXED.exec(k);
+      const server = m ? bare.get(m[1]!.toLowerCase()) : undefined;
+      if (server) found.push([server, k]);
+    }
+    if (!found.length) continue;
+    await db.transaction('rw', t, async (tx) => {
+      serverTx.add(tx);
+      for (const [server, local] of found) {
+        const [theirs, mine] = await Promise.all([t.get(server), t.get(local)]);
+        if (!theirs) continue;
+        const merged =
+          mine && waiting.has(`${table}:${local}`)
+            ? mine
+            : dexie === 'outbound' && mine
+              ? ownDraftAfterServer(mine, { ...theirs, id: local })
+              : { ...(mine ?? {}), ...theirs, id: local };
+        await t.put(merged);
+        await t.delete(server);
+      }
+    });
+    pairs.push(...found);
+  }
+  if (!pairs.length) return 0;
+  await rememberAliases(pairs);
+  madeHereCache.clear();
+  // whatever pointed at a copy points at the row
+  const map = Object.fromEntries(pairs);
+  const points = (r: Record<string, unknown>) =>
+    REF_FIELDS.some((f) => typeof r[f] === 'string' && map[r[f] as string]) ||
+    (Array.isArray(r.personIds) && r.personIds.some((p) => typeof p === 'string' && map[p]));
+  const names = new Set([...PULL_TARGETS.map((x) => x.dexie), ...OUTBOX_SOURCES.map((x) => x.dexie)]);
+  for (const dexie of names) {
+    const t = dexieTable(dexie);
+    await db
+      .transaction('rw', t, async (tx) => {
+        serverTx.add(tx);
+        await t.filter(points).modify((r) => {
+          for (const f of REF_FIELDS) {
+            const v = r[f];
+            if (typeof v === 'string' && map[v]) r[f] = map[v];
+          }
+          if (Array.isArray(r.personIds))
+            r.personIds = r.personIds.map((p: unknown) => (typeof p === 'string' && map[p]) || p);
+        });
+      })
+      .catch((e) => console.warn('[orbit sync] repair refs', dexie, e));
+  }
+  return pairs.length;
 }
 
 // ---- push ---------------------------------------------------------------------------------------------------------
@@ -1130,6 +1254,7 @@ export function startServerSync(o: SyncLoopOptions): () => void {
   syncUserId = o.user.id;
   void repairStoredCompanies().catch(() => undefined);
   void repairStoredMessages().catch(() => undefined);
+  void repairDoubledRows().catch((e) => console.warn('[orbit sync] repair doubles', e));
   void repairStoredNames()
     .catch(() => undefined)
     .then(() => backfillServerTouchpoints(o.user.id))

@@ -26,8 +26,10 @@ import { loadSchoolIndex } from '../data/schoolMatch';
 import { db } from '../db/schema';
 import { schoolLink } from '../engine/alumni';
 import { createBatch } from '../engine/batch';
+import { oneCardEach } from '../engine/pipelineAdd';
 import { filterPeople, type PeopleSort } from '../engine/search';
 import { useSession } from '../state/session';
+import { useViewState } from '../state/viewState';
 import { Button, cx, EmptyState, Input, PageHeader, Select, Skeleton, SkeletonRows } from '../ui';
 
 const STAGE_ORDER = [...ACTIVE_STAGES, ...CLOSED_STAGES];
@@ -62,10 +64,12 @@ export function People() {
   const latestParams = useRef(params);
   if (seenParams.current !== params) seenParams.current = latestParams.current = params;
   const filter = peopleFilterOf(params);
-  const [q, setQ] = useState('');
-  const [showClosed, setShowClosed] = useState(false);
-  const [sort, setSort] = useState<PeopleSort | 'stage'>('strength');
-  const [limit, setLimit] = useState(PAGE);
+  // what the student typed and chose here is kept while they are away (state/viewState): opening someone and coming
+  // back shows the same search, the same order and the same length of list
+  const [q, setQ] = useViewState(`people:q:${userId ?? ''}`, '');
+  const [showClosed, setShowClosed] = useViewState(`people:closed:${userId ?? ''}`, false);
+  const [sort, setSort] = useViewState<PeopleSort | 'stage'>(`people:sort:${userId ?? ''}`, 'strength');
+  const [limit, setLimit] = useViewState(`people:limit:${userId ?? ''}`, PAGE);
   const peopleQ = useLiveQuery(
     () => (userId ? db.people.where('userId').equals(userId).toArray() : []),
     [userId],
@@ -149,7 +153,7 @@ export function People() {
     (p.currentOrganizationRaw ?? '').toLowerCase().includes(s) ||
     (p.currentTitle ?? '').toLowerCase().includes(s);
   // the board and the companies: one row per chat, the newest activity first
-  const rows: ChatRow[] = chats
+  const rows: ChatRow[] = oneCardEach(chats)
     .map((c) => ({ chat: c, person: byId.get(c.personId) }))
     .filter(
       (r): r is ChatRow =>

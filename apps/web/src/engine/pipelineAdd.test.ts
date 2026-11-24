@@ -1,7 +1,7 @@
 import { newId, type Person } from '@orbit/core';
 import { describe, expect, it } from 'vitest';
 import { db } from '../db/schema';
-import { addToPipeline } from './pipelineAdd';
+import { addToPipeline, oneCardEach } from './pipelineAdd';
 
 const user = { id: 'u_pipe' };
 async function person(over: Partial<Person> = {}): Promise<Person> {
@@ -58,5 +58,49 @@ describe('addToPipeline (Add a person)', () => {
     expect(r).toMatchObject({ added: true, chat: { stage: 'identified', outreachChannel: 'linkedin' } });
     const other = await person({ userId: 'u_other' });
     expect(await addToPipeline(user, other.id)).toBeUndefined();
+  });
+});
+
+describe('oneCardEach (the board never shows a person twice)', () => {
+  const U = '0b8f6a0e-1111-4c2e-8d1a-0000000000';
+  const chat = (id: string, personId: string, stage: string, updatedAt: string) =>
+    ({ id, personId, stage, updatedAt }) as never as {
+      id: string;
+      personId: string;
+      stage: 'identified';
+      updatedAt: string;
+    };
+
+  it('the same card stored twice, and the same person stored twice, are one card: the one touched last', () => {
+    const cards = oneCardEach([
+      // the card made here and the server's copy of it
+      chat(`c_${U}01`, `p_${U}a1`, 'identified', '2026-11-22T09:00:00Z'),
+      chat(`${U}01`, `${U}a1`, 'contacted', '2026-11-23T09:00:00Z'),
+      // someone else, once
+      chat(`c_${U}02`, `p_${U}a2`, 'identified', '2026-11-22T09:00:00Z'),
+    ]);
+    expect(cards.map((c) => [c.id, c.stage])).toEqual([
+      [`${U}01`, 'contacted'],
+      [`c_${U}02`, 'identified'],
+    ]);
+  });
+
+  it('two open cards for one person made in a race are one; their archived history all stays', () => {
+    const cards = oneCardEach([
+      chat('c1', 'p1', 'identified', '2026-11-22T09:00:00Z'),
+      chat('c2', 'p1', 'identified', '2026-11-22T09:00:01Z'),
+      chat('c0', 'p1', 'archived', '2026-10-01T09:00:00Z'),
+      chat('c00', 'p1', 'archived', '2026-09-01T09:00:00Z'),
+    ]);
+    expect(cards.map((c) => c.id)).toEqual(['c2', 'c0', 'c00']);
+  });
+
+  it('a board with no doubles is unchanged, in the same order', () => {
+    const all = [
+      chat('c1', 'p1', 'identified', 'a'),
+      chat('c2', 'p2', 'replied', 'b'),
+      chat('c3', 'p3', 'archived', 'c'),
+    ];
+    expect(oneCardEach(all)).toEqual(all);
   });
 });
