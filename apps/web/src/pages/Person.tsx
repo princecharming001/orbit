@@ -161,7 +161,8 @@ export function PersonPage() {
       return;
     }
     let live = true;
-    void pullUntilHere(user.id, [id]).finally(() => live && setLooked(id));
+    // two quick looks: long enough for a row just written, short enough that a dead link says so soon
+    void pullUntilHere(user.id, [id], [0, 2200]).finally(() => live && setLooked(id));
     return () => {
       live = false;
     };

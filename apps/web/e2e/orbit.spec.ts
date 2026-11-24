@@ -1984,6 +1984,8 @@ test.describe('Usability round 5: one draft, kept edits, saved settings, chats t
     await expect(page.getByRole('main')).not.toContainText(/Google/);
     await page.goto('settings/integrations');
     await expect(page.getByTestId('ai-feature-emailTriage')).toHaveCount(0);
+    // the resume lives with the profile
+    await page.goto('settings/profile');
     await expect(page.getByTestId('resume-file-name')).toBeVisible();
   });
 
@@ -2345,7 +2347,7 @@ test.describe('Usability round 6', () => {
   test('Settings reads a one-line resume entry cleanly, with every line it says', async ({ page }) => {
     // the resume is no longer a setup step: it is added in Settings (or when the chat asks for it)
     await newStudent(page);
-    await page.goto('settings/integrations');
+    await page.goto('settings/profile');
     await page.locator('input[type="file"][accept=".pdf,.txt,.md,.docx"]').setInputFiles({
       name: 'resume.txt',
       mimeType: 'text/plain',
@@ -3241,7 +3243,7 @@ test.describe('Chat memory (plan 17 §G)', () => {
     page,
   }) => {
     await newStudent(page);
-    await page.goto('settings/integrations');
+    await page.goto('settings/profile');
     await page.locator('input[type="file"][accept=".pdf,.txt,.md,.docx"]').setInputFiles({
       name: 'resume.txt',
       mimeType: 'text/plain',

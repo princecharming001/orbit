@@ -87,7 +87,8 @@ test.describe('Chat home', () => {
       .getByRole('link')
       .evaluateAll((els) => els.map((e) => e.getAttribute('aria-label')));
     // plan 23 §4.4: Chats sits under Drafts
-    expect(order).toEqual(['People', 'Friends', 'Drafts', 'Chats', 'Map', 'Discover']);
+    // plan 44: Roles sits after Discover (on for the demo student)
+    expect(order).toEqual(['People', 'Friends', 'Drafts', 'Chats', 'Map', 'Discover', 'Roles']);
     // the greeting, one line, with the first name
     const greeting = page.getByTestId('greeting');
     await expect(greeting).toHaveText(/^Hey Alex, what’s on your mind today\?$/);
