@@ -31,6 +31,7 @@ import {
 } from '@orbit/core/safety/rules';
 import type { ProfileSettingsResponse } from '@orbit/core/server/api';
 import { badRequest, HttpError, json } from '../../_shared/http.ts';
+import { bringMarketersBack, setAsideMarketers } from '../../_shared/ingest/marketers.ts';
 import { sqlQueue } from '../../_shared/queue.ts';
 import { parseStyleCard } from '../../_shared/voice/voice.ts';
 import { validZone } from '../../_shared/zones.ts';
@@ -202,6 +203,9 @@ async function profile(ctx: Ctx): Promise<Response> {
   if (b.readReplyTone !== undefined && typeof b.readReplyTone !== 'boolean')
     throw badRequest('readReplyTone must be true or false');
   const tone = b.readReplyTone as boolean | undefined;
+  if (b.hideMarketers !== undefined && typeof b.hideMarketers !== 'boolean')
+    throw badRequest('hideMarketers must be true or false');
+  const hideMarketers = b.hideMarketers as boolean | undefined;
   // the one rulebook (plan 29 §B2.1): the ladder's kinds, the mode, the pause and the student's own limits
   let autoKinds: string[] | undefined;
   if (b.autoKinds !== undefined) {
@@ -259,6 +263,8 @@ async function profile(ctx: Ctx): Promise<Response> {
   if (about !== undefined) given.about = about;
   // on is the default, so only "off" is stored
   if (tone !== undefined) given.read_reply_tone = tone ? null : false;
+  // on is the default here too
+  if (hideMarketers !== undefined) given.hide_marketers = hideMarketers ? null : false;
   if (autoKinds !== undefined) given.auto_kinds = autoKinds;
   // off is the default, so only "on" is stored
   if (autoReplies !== undefined) given.auto_replies = autoReplies ? true : null;
@@ -318,6 +324,9 @@ async function profile(ctx: Ctx): Promise<Response> {
     await ctx.db.sql`
       insert into orbit.audit_log (user_id, actor, action, target_table, target_id, details)
       values (${userId}::uuid, 'user', 'settings.profile', 'users', ${userId}, ${{ fields: changed }}::jsonb)`;
+  // marketers set aside (ingest/marketers.ts): off brings everyone Orbit hid back at once; on looks now, not tonight
+  if (hideMarketers === false) await bringMarketersBack(ctx.db, userId);
+  else if (hideMarketers === true) await setAsideMarketers(ctx.db, userId, ctx.now()).catch(() => undefined);
   // the tone reading on or off changes every score: rescore now rather than tonight
   if (tone !== undefined)
     await sqlQueue(ctx.db).enqueue({

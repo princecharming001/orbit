@@ -304,6 +304,15 @@ export async function forgetLearnedStyle(userId: string): Promise<boolean> {
  * Read the tone of replies for closeness (plan 27), on unless turned off. Local mode rescores here; account mode
  * tells the server, which rescores.
  */
+/**
+ * Set aside people who only ever pitched the student and were never answered (on unless turned off). The server
+ * hides them, and brings them back when this is turned off; without an Orbit account there is nobody to set aside.
+ */
+export async function setHideMarketers(userId: string, on: boolean): Promise<void> {
+  await db.settings.update(userId, { hideMarketers: on });
+  if (isServerUser(userId)) await pushProfileSettings(userId, { hideMarketers: on });
+}
+
 export async function setReadReplyTone(userId: string, on: boolean): Promise<void> {
   await db.settings.update(userId, { readReplyTone: on });
   if (isServerUser(userId)) await pushProfileSettings(userId, { readReplyTone: on });

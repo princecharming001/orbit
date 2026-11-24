@@ -26143,6 +26143,140 @@ var searchRoutes = {
   "/search/read": { method: "POST", auth: true, run: read }
 };
 
+// packages/core/src/text/marketer.ts
+var SELLING = [
+  [
+    /\bwe (help|work with|partner with|support|assist) (companies|founders|teams|business(es)?|startups|brands|agencies|clients|b2b|saas|e-?commerce|coaches|creators)\b/i,
+    "Says who their company sells to"
+  ],
+  [
+    /\b(our|my) (platform|agency|firm|company|services?|solution|software|tool|product|team of (developers|engineers|designers|experts))\b[^.!?\n]{0,60}\b(helps?|specializ|speciali[sz]es?|builds?|offers?|provides?|delivers?|automates?)\b/i,
+    "Describes what their company offers"
+  ],
+  [
+    /\bfree (trial|demo|audit|consult(ation)?|strategy (call|session)|sample|quote|assessment|growth plan)\b/i,
+    "Offers something free to start"
+  ],
+  [
+    /\b(book|schedule|grab|claim) (a|your) (free )?(demo|strategy call|discovery call|consultation)\b/i,
+    "Asks to book a demo"
+  ],
+  [
+    /\b\d{1,3}\s?% off\b|\bspecial offer\b|\blimited[- ]time\b|\bdiscount code\b|\bpromo code\b/i,
+    "Offers a discount"
+  ],
+  [
+    /\bare you the right person\b|\bwho (is|would be) the (right|best) person\b|\bpoint me (to|toward) the right person\b/i,
+    "Asks who handles buying"
+  ],
+  [
+    /\bunsubscribe\b|\bopt[- ]out\b|\bif you(?:'|’)?d (rather|prefer) not (to )?(hear|receive)\b/i,
+    "Has an unsubscribe line"
+  ],
+  [
+    /\b(generate|book|get|deliver|bring) (you |your team )?(\d+\+? )?(more )?(qualified |warm |sales )?(leads|meetings|appointments|clients|customers|demos)\b/i,
+    "Promises leads or clients"
+  ],
+  [
+    /\b(lead gen(eration)?|outsourc(e|ing)|white[- ]label|offshore (team|developers)|dev shop|seo services|link building|guest post|backlinks?|virtual assistants?|cold email (agency|service)|appointment setting)\b/i,
+    "Sells an outsourced service"
+  ],
+  [
+    /\b(i|we) (noticed|saw|came across|checked out|was looking at) (your|that your) (website|company|profile|post|linkedin|business|store)\b[^.!?\n]{0,120}\b(help|improve|increase|boost|grow|scale|optimi[sz]e|save you)\b/i,
+    "Opens with their product after seeing the profile"
+  ],
+  [/\b(pricing|packages?) (start|starts|begin) (at|from)\b|\bstarting at \$\d/i, "Quotes a price"]
+];
+var PUSHING = [
+  // a follow-up into silence: people do it, sellers do it more
+  /\b(bumping this|circling back|just following up|following up on my (last|previous|earlier) (email|message|note))\b/i,
+  /\b(quick|brief|short) (call|chat|intro call|zoom)\b/i,
+  /\b(10|15|20|30)[- ]?min(ute)?s?\b/i,
+  /\b(calendly\.com|cal\.com\/|savvycal\.com|hubspot\.com\/meetings|chili ?piper|tidycal\.com)\b/i,
+  /\bhop on a (quick )?(call|zoom)\b/i,
+  /\b(open|interested) (to|in) (learning|hearing|exploring|seeing) more\b/i,
+  /\bwould love to (show|share|walk you through|give you)\b/i,
+  /\bworth a (quick )?(chat|conversation|call)\b/i
+];
+var DECISIVE = ["Offers a discount", "Has an unsubscribe line", "Promises leads or clients"];
+var READ = 4e3;
+function marketerVerdict(messages) {
+  const said = messages.filter((m) => m.text?.trim() || m.unsubscribe);
+  if (!said.length) return { marketer: false, reasons: [] };
+  const reasons = [];
+  if (said.some((m) => m.unsubscribe)) reasons.push("Sent by a mailing tool");
+  let pushing = false;
+  for (const m of said) {
+    const text3 = (m.text ?? "").slice(0, READ);
+    for (const [re, why] of SELLING) if (re.test(text3) && !reasons.includes(why)) reasons.push(why);
+    if (PUSHING.some((re) => re.test(text3))) pushing = true;
+  }
+  const selling = reasons.filter((r) => r !== "Sent by a mailing tool").length;
+  const marketer = reasons.includes("Sent by a mailing tool") || // nobody writes these to someone they know
+  DECISIVE.some((r) => reasons.includes(r)) || selling >= 2 || selling === 1 && pushing || // said it once, then kept writing into silence
+  selling === 1 && said.length >= 2;
+  if (marketer && pushing && selling === 1) reasons.push("Pushes for a call");
+  return { marketer, reasons: marketer ? reasons.slice(0, 3) : [] };
+}
+
+// supabase/functions/_shared/ingest/marketers.ts
+var SWEEP_PEOPLE = 3e3;
+var SWEEP_MESSAGES = 5;
+async function marketersOn(db2, userId) {
+  const [u2] = await db2.sql`
+    select settings from orbit.users where id = ${userId}::uuid`;
+  return u2?.settings?.hide_marketers !== false;
+}
+async function bringMarketersBack(db2, userId) {
+  const rows = await db2.sql`
+    update orbit.people set hidden_at = null, hidden_reason = null
+     where user_id = ${userId}::uuid and hidden_reason = 'marketer' and hidden_at is not null
+    returning id`;
+  return rows.length;
+}
+async function setAsideMarketers(db2, userId, now) {
+  if (!await marketersOn(db2, userId)) return { looked: 0, setAside: 0 };
+  await db2.sql`
+    update orbit.people set hidden_reason = 'kept'
+     where user_id = ${userId}::uuid and hidden_reason = 'marketer' and hidden_at is null`;
+  const rows = await db2.sql`
+    select p.id,
+           (array_agg(left(coalesce(m.subject || E'\n', '') || coalesce(m.body_text, m.snippet, ''), 4000)
+                      order by m.sent_at desc))[1:${SWEEP_MESSAGES}] as texts,
+           bool_or(m.list_unsubscribe) as unsub
+      from orbit.people p
+      join orbit.messages m on m.user_id = p.user_id and m.from_person_id = p.id and m.direction = 'in'
+     where p.user_id = ${userId}::uuid and not p.is_self and p.deleted_at is null and p.merged_into is null
+       and p.hidden_at is null and p.hidden_reason is distinct from 'kept'
+       and cardinality(p.tags) = 0 and coalesce(p.notes, '') = ''
+       -- the student never wrote to them
+       and not exists (select 1 from orbit.messages o
+                        where o.user_id = p.user_id and o.direction = 'out'
+                          and (p.id = any(o.to_person_ids) or p.id = any(o.cc_person_ids)))
+       -- never met them, never put them on the pipeline, never noted or rated them
+       and not exists (select 1 from orbit.calendar_events e
+                        where e.user_id = p.user_id and p.id = any(e.attendee_person_ids))
+       and not exists (select 1 from orbit.chats c where c.user_id = p.user_id and c.person_id = p.id)
+       and not exists (select 1 from orbit.notes n where n.user_id = p.user_id and p.id = any(n.person_ids))
+       and not exists (select 1 from orbit.tie_labels l where l.user_id = p.user_id and l.person_id = p.id)
+     group by p.id
+     limit ${SWEEP_PEOPLE}`;
+  const ids = [];
+  for (const r of rows) {
+    const texts = (r.texts ?? []).filter((t) => !!t);
+    const v = marketerVerdict([
+      ...texts.map((text3) => ({ text: text3 })),
+      ...r.unsub ? [{ text: "", unsubscribe: true }] : []
+    ]);
+    if (v.marketer) ids.push(r.id);
+  }
+  if (ids.length)
+    await db2.sql`
+      update orbit.people set hidden_at = ${now}::timestamptz, hidden_reason = 'marketer'
+       where user_id = ${userId}::uuid and id = any(${ids}::uuid[]) and hidden_at is null`;
+  return { looked: rows.length, setAside: ids.length };
+}
+
 // supabase/functions/orbit-api/routes/settings.ts
 var WEEKLY_TARGET_MAX = 350;
 async function autonomy(ctx) {
@@ -26277,6 +26411,9 @@ async function profile(ctx) {
   if (b.readReplyTone !== void 0 && typeof b.readReplyTone !== "boolean")
     throw badRequest("readReplyTone must be true or false");
   const tone = b.readReplyTone;
+  if (b.hideMarketers !== void 0 && typeof b.hideMarketers !== "boolean")
+    throw badRequest("hideMarketers must be true or false");
+  const hideMarketers = b.hideMarketers;
   let autoKinds;
   if (b.autoKinds !== void 0) {
     if (!Array.isArray(b.autoKinds) || !b.autoKinds.every((k) => typeof k === "string" && AUTO_KINDS.includes(k)))
@@ -26325,6 +26462,7 @@ async function profile(ctx) {
   if (link2 !== void 0) given.scheduling_link = link2;
   if (about !== void 0) given.about = about;
   if (tone !== void 0) given.read_reply_tone = tone ? null : false;
+  if (hideMarketers !== void 0) given.hide_marketers = hideMarketers ? null : false;
   if (autoKinds !== void 0) given.auto_kinds = autoKinds;
   if (autoReplies !== void 0) given.auto_replies = autoReplies ? true : null;
   if (funnels !== void 0) given.reply_funnels = funnels.length ? funnels : null;
@@ -26370,6 +26508,8 @@ async function profile(ctx) {
     await ctx.db.sql`
       insert into orbit.audit_log (user_id, actor, action, target_table, target_id, details)
       values (${userId}::uuid, 'user', 'settings.profile', 'users', ${userId}, ${{ fields: changed }}::jsonb)`;
+  if (hideMarketers === false) await bringMarketersBack(ctx.db, userId);
+  else if (hideMarketers === true) await setAsideMarketers(ctx.db, userId, ctx.now()).catch(() => void 0);
   if (tone !== void 0)
     await sqlQueue(ctx.db).enqueue({
       kind: "score.user",

@@ -676,6 +676,11 @@ export interface ProfileSettingsRequest {
   /** read the tone of replies for closeness (plan 27): false turns it off (users.settings.read_reply_tone) */
   readReplyTone?: boolean;
   /**
+   * set aside people who only ever pitched the student and were never answered: false turns it off and brings them
+   * back (users.settings.hide_marketers); on unless turned off
+   */
+  hideMarketers?: boolean;
+  /**
    * the ladder's kinds the student handed to Orbit (plan 23 §4.9, plan 29 §B2.1): the whole list replaces
    * users.settings.auto_kinds, and the server cadence auto-approves drafts of those kinds
    */

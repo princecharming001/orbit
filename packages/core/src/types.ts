@@ -352,6 +352,8 @@ export interface UserSettings {
   weekReviewSeenOn?: string;
   /** read the tone of replies for closeness (plan 27); on unless turned off */
   readReplyTone?: boolean;
+  /** set aside people who only ever pitched the student (they go to People, Hidden); on unless turned off */
+  hideMarketers?: boolean;
   /**
    * What the student shares with friends by default (plan 29 §A1): everyone they know, only people at some companies,
    * or nothing yet; the server's copy is users.settings.friend_share_mode. A friend can have their own setting.
@@ -646,6 +648,8 @@ export interface Person {
   /** which source last wrote each profile field, for source precedence (manual > enrichment > CSV > ... ) */
   fieldSources?: Partial<Record<PersonField, PersonSource>>;
   hiddenAt?: string;
+  /** why Orbit hid them ('marketer': they only ever pitched the student), or that the student brought them back */
+  hiddenReason?: 'marketer' | 'kept';
   /** they asked not to be contacted (an `unsubscribe` reply, plan 16 §8.1): nothing is drafted or sent to them */
   doNotContact?: boolean;
   /** hidden from friends (plan 29 §A1): never in the projection a friend may read, whatever the student shares */

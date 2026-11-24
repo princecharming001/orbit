@@ -17,6 +17,7 @@
 
 import { isUuid } from '../../_shared/crypto.ts';
 import { hasActiveFriend, shareRefreshKey } from '../../_shared/friends/shares.ts';
+import { setAsideMarketers } from '../../_shared/ingest/marketers.ts';
 import { settleSamePeople } from '../../_shared/ingest/people.ts';
 import { changedPeople, fullRescoreDue, readCalibration, scorePeople } from '../../_shared/ingest/score.ts';
 import { refreshTies, TIE_GROUPS } from '../../_shared/ingest/ties.ts';
@@ -62,6 +63,10 @@ export function scoreHandlers(deps: HandlerDeps): Record<string, JobHandler> {
       // A failure here is not a reason to skip the scores.
       await settleSamePeople(ctx.db, job.userId).catch((e) =>
         console.warn('[orbit score.user] settle people', e instanceof Error ? e.message : e),
+      );
+      // and who is not part of the network at all: people who only ever pitched the student are set aside
+      await setAsideMarketers(ctx.db, job.userId, now).catch((e) =>
+        console.warn('[orbit score.user] marketers', e instanceof Error ? e.message : e),
       );
       const labelled = (
         await ctx.db.sql<{ person_id: string }>`

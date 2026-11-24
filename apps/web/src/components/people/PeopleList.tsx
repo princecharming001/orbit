@@ -2,6 +2,7 @@ import type { ChatStage, CoffeeChat, Person, Suggestion } from '@orbit/core';
 import { ACTIVE_STAGES, CLOSED_STAGES, RELATIONSHIP_LABELS, STAGE_LABELS } from '@orbit/core';
 import { Send } from 'lucide-react';
 import { Link, useNavigate } from 'react-router-dom';
+import { unhidePerson } from '../../engine/people';
 import { lastTouch } from '../../engine/search';
 import { Avatar, Button, Chip, LinkedInMark, PickCircle, relDate, Select } from '../../ui';
 import { Clip, Table, TableBox, Td, Th, Tr } from '../../ui/table';
@@ -256,6 +257,15 @@ export function PeopleList({
                         <span className="min-w-0 truncate" data-testid="person-name">
                           {p.displayName}
                         </span>
+                        {/* why Orbit set them aside, said on the row: they only ever pitched the student */}
+                        {p.hiddenAt && p.hiddenReason === 'marketer' && (
+                          <Chip
+                            className="h-5"
+                            title="They only ever wrote to sell you something, and you never answered"
+                          >
+                            Marketer
+                          </Chip>
+                        )}
                         {p.isAlumni && (
                           <Chip tone="accent" className="h-5">
                             Alum
@@ -317,7 +327,17 @@ export function PeopleList({
                           </option>
                         ))}
                       </Select>
-                    ) : p.hiddenAt ? null : (
+                    ) : p.hiddenAt ? (
+                      // someone hidden comes back in one tap; Orbit never sets them aside again
+                      <button
+                        type="button"
+                        onClick={() => void unhidePerson(p.id)}
+                        className="text-[12.5px] font-medium text-ink-2 underline decoration-line underline-offset-4 hover:text-ink"
+                        data-testid="list-bring-back"
+                      >
+                        Bring back
+                      </button>
+                    ) : (
                       <Link
                         to={`/people/${p.id}?draft=outreach`}
                         className="text-[12.5px] text-accent font-medium hover:underline"

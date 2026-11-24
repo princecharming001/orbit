@@ -87,6 +87,7 @@ import {
   restoreTargetCompany,
   saveGoals,
   setBriefTime,
+  setHideMarketers,
   setReadReplyTone,
   setSchedulingLink,
   setTargetDeadline,
@@ -1719,6 +1720,20 @@ function Limits() {
                 onChange={(on) => void setReadReplyTone(user.id, on).then(() => setSavedAt(Date.now()))}
                 label="Read the tone of replies"
                 data-testid="settings-reply-tone"
+              />
+            }
+          />
+        </SettingsCard>
+        <SettingsCard title="Marketers" data-testid="settings-marketers">
+          <SettingsRow
+            label="Set aside people who only pitch you"
+            description="Someone who only ever wrote to sell you something, and whom you never answered, is kept out of your people, searches and suggestions. They are listed under People, Hidden, where you can bring anyone back."
+            control={
+              <Switch
+                checked={settings.hideMarketers !== false}
+                onChange={(on) => void setHideMarketers(user.id, on).then(() => setSavedAt(Date.now()))}
+                label="Set aside people who only pitch you"
+                data-testid="settings-hide-marketers"
               />
             }
           />
