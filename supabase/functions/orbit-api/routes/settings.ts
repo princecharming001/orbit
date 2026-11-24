@@ -206,6 +206,10 @@ async function profile(ctx: Ctx): Promise<Response> {
   if (b.hideMarketers !== undefined && typeof b.hideMarketers !== 'boolean')
     throw badRequest('hideMarketers must be true or false');
   const hideMarketers = b.hideMarketers as boolean | undefined;
+  // "Run warm-ups for me": off stops every warm-up Orbit is running for the student within minutes
+  if (b.warmUpAuto !== undefined && typeof b.warmUpAuto !== 'boolean')
+    throw badRequest('warmUpAuto must be true or false');
+  const warmUpAuto = b.warmUpAuto as boolean | undefined;
   // the one rulebook (plan 29 §B2.1): the ladder's kinds, the mode, the pause and the student's own limits
   let autoKinds: string[] | undefined;
   if (b.autoKinds !== undefined) {
@@ -265,6 +269,8 @@ async function profile(ctx: Ctx): Promise<Response> {
   if (tone !== undefined) given.read_reply_tone = tone ? null : false;
   // on is the default here too
   if (hideMarketers !== undefined) given.hide_marketers = hideMarketers ? null : false;
+  // and here: only "off" is stored
+  if (warmUpAuto !== undefined) given.warmup_auto = warmUpAuto ? null : false;
   if (autoKinds !== undefined) given.auto_kinds = autoKinds;
   // off is the default, so only "on" is stored
   if (autoReplies !== undefined) given.auto_replies = autoReplies ? true : null;
@@ -324,6 +330,13 @@ async function profile(ctx: Ctx): Promise<Response> {
     await ctx.db.sql`
       insert into orbit.audit_log (user_id, actor, action, target_table, target_id, details)
       values (${userId}::uuid, 'user', 'settings.profile', 'users', ${userId}, ${{ fields: changed }}::jsonb)`;
+  // warm-ups Orbit is running stop now, not at the next tick: the steps left are the student's again
+  if (warmUpAuto === false) {
+    const running = await ctx.db.sql<{ id: string }>`
+      select id from orbit.warmups where user_id = ${userId}::uuid and status = 'running'`;
+    for (const w of running)
+      await ctx.db.sql`select orbit.warmup_stop(${w.id}::uuid, 'setting_off', ${ctx.now()}::timestamptz)`;
+  }
   // marketers set aside (ingest/marketers.ts): off brings everyone Orbit hid back at once; on looks now, not tonight
   if (hideMarketers === false) await bringMarketersBack(ctx.db, userId);
   else if (hideMarketers === true) await setAsideMarketers(ctx.db, userId, ctx.now()).catch(() => undefined);

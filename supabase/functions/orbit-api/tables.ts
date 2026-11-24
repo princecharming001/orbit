@@ -18,6 +18,7 @@ import {
   sourceStateFromRow,
   textDayFromRow,
 } from '@orbit/core/server/mappers';
+import { WARMUP_PRIVATE_COLUMNS, WARMUP_STEPS_SQL, warmupRunFrom } from '../_shared/warmup/shape.ts';
 
 /** The off rule's people test over a person id column (plan 43 §3.2). */
 const personInUse = (col: string) =>
@@ -283,6 +284,17 @@ export const PULL_TABLES: PullTable[] = [
     cursor: 'updated_at',
     sources: `'imessage' <> all($hidden::text[]) and ${personInUse('t.person_id')}`,
     fromRow: (r) => ({ ...textDayFromRow(r as unknown as SourceRow.TextDays) }),
+  },
+  // the automated LinkedIn warm-ups under way and over, each with its steps (a preview the student has not started
+  // is the sheet's own business and is not sent); a step that ran raises the run's rev, so the run comes down again
+  {
+    table: 'warmups',
+    key: 'id',
+    cursor: 'updated_at',
+    filter: "t.status <> 'preview'",
+    omit: WARMUP_PRIVATE_COLUMNS,
+    extra: WARMUP_STEPS_SQL,
+    map: (r) => ({ ...warmupRunFrom(r) }),
   },
 ];
 

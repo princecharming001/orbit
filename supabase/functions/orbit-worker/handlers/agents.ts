@@ -9,6 +9,7 @@ import { hopEvidenceHandler } from './hops.ts';
 import { sendDraftHandler } from './send.ts';
 import { sourceSearch } from './source.ts';
 import { voiceHandlers } from './voice.ts';
+import { warmupStepHandler } from './warmup.ts';
 
 export function agentHandlers(config: AgentConfig = { env: {} }): Record<string, JobHandler> {
   return {
@@ -19,6 +20,8 @@ export function agentHandlers(config: AgentConfig = { env: {} }): Record<string,
     'funnel.reply': funnelReplyHandler(config),
     'outcomes.roll': outcomesRollHandler(),
     hop_evidence: hopEvidenceHandler(config),
+    // the automated LinkedIn warm-up: one step whose time has come
+    'warmup.step': warmupStepHandler(config),
     // plan 29 §B2.4: the student's voice
     ...voiceHandlers(config),
     // plan 35 C2: submits the queued Claude requests as one batch and carries on from the answers that came back
