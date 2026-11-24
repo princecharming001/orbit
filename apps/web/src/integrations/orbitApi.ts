@@ -125,6 +125,8 @@ import type {
   SlotsResponse,
   SourceAddRequest,
   SourceAddResponse,
+  SourceConnectRequest,
+  SourceConnectResponse,
   SourceEmailRequest,
   SourceEmailResponse,
   SourceSearchRequest,
@@ -408,6 +410,7 @@ export interface ApiRoutes {
   '/research/choose': [ResearchChooseRequest, ResearchPersonResponse];
   '/source/search': [SourceSearchRequest, SourceSearchResponse];
   '/source/add': [SourceAddRequest, SourceAddResponse];
+  '/source/connect': [SourceConnectRequest, SourceConnectResponse];
   '/source/email': [SourceEmailRequest, SourceEmailResponse];
   '/paths/find': [PathsFindRequest, PathsFindResponse];
   '/intros/ask': [IntroAskRequest, IntroAskResponse];
@@ -675,7 +678,11 @@ export function methodOf(route: string): HttpMethod {
 
 const REQUEST_TIMEOUT_MS = 25_000;
 /** routes that read the web and look up emails take longer than a normal call (seen live: a 47-second search) */
-const SLOW_ROUTES: Record<string, number> = { '/source/search': 75_000 };
+const SLOW_ROUTES: Record<string, number> = {
+  '/source/search': 75_000,
+  // saves the person (an address lookup of up to 12 seconds), then asks LinkedIn, which may be slow to answer
+  '/source/connect': 70_000,
+};
 /** refresh this long before the access token expires */
 export const REFRESH_BEFORE_MS = 5 * 60_000;
 

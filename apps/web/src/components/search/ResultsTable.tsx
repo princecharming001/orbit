@@ -44,9 +44,22 @@ function PathCell({ row }: { row: ResultRow }) {
   );
 }
 
+/** What the button on someone new does: a LinkedIn connection request, or only saving them to People. */
+export type RowAction = 'connect' | 'save';
+
+/**
+ * The button says what it does. Connect, when a request can go: Orbit sends it from the student's own LinkedIn
+ * (`canConnect`), the row has a LinkedIn profile, and they are not a connection already. Otherwise Save.
+ */
+export function rowAction(row: ResultRow, canConnect: boolean | undefined): RowAction {
+  return canConnect && row.linkedinUrl && !row.connected ? 'connect' : 'save';
+}
+
 /**
  * Search results as one sheet: who, their profile, the warm path, title, company, how well they match, and a column
- * for each criterion. Someone the student already has links to their page; someone new has Add.
+ * for each criterion. Someone the student already has links to their page; someone new has one button, Connect (a
+ * LinkedIn connection request, and they are saved to People) or Save (saved to People, nothing sent), and after it
+ * the row says which happened and opens their page.
  */
 export function ResultsTable({
   rows,
@@ -58,6 +71,10 @@ export function ResultsTable({
   added,
   adding,
   onAdd,
+  canConnect,
+  requested,
+  notes,
+  waiting,
   finding,
   onFindEmail,
 }: {
@@ -72,7 +89,16 @@ export function ResultsTable({
   /** row key → the person they became */
   added: Record<string, string>;
   adding?: string;
-  onAdd: (row: ResultRow) => void;
+  /** the button on someone new was pressed: `action` is what it said it would do */
+  onAdd: (row: ResultRow, action: RowAction) => void;
+  /** Orbit can send a connection request from the student's own LinkedIn: the button on someone new is Connect */
+  canConnect?: boolean;
+  /** row keys a connection request went out for (or was already waiting): the row reads "Request sent" */
+  requested?: Record<string, boolean>;
+  /** row key → why a request did not go, in words; the row was saved instead */
+  notes?: Record<string, string>;
+  /** people the student already has with a connection request still waiting */
+  waiting?: ReadonlySet<string>;
   finding?: string;
   onFindEmail: (row: ResultRow) => void;
 }) {
@@ -118,7 +144,7 @@ export function ResultsTable({
               </Th>
             ))}
             <Th className="w-px">
-              <span className="sr-only">Add</span>
+              <span className="sr-only">Connect or save</span>
             </Th>
           </tr>
         </thead>
@@ -126,6 +152,10 @@ export function ResultsTable({
           {rows.map((r) => {
             const personId = added[r.key] ?? r.personId;
             const isNew = !!r.recommendationId && !added[r.key];
+            const action = rowAction(r, canConnect);
+            // a request is out to them: sent from this row, or still waiting with someone the student already has
+            const sent = !!requested?.[r.key];
+            const isWaiting = !isNew && !added[r.key] && !!personId && !!waiting?.has(personId);
             return (
               <Tr key={r.key} data-testid="find-result" data-own={r.personId ? 'true' : 'false'}>
                 <Td>
@@ -279,12 +309,12 @@ export function ResultsTable({
                     </span>
                   </Td>
                 ))}
-                {/* a row with Add (or the link it becomes) keeps it in reach however many columns the search has: the
-                    cell rides the right edge. A row with neither has nothing to keep, and covers nothing. */}
+                {/* a row with its button (or the link it becomes) keeps it in reach however many columns the search
+                    has: the cell rides the right edge. A row with neither has nothing to keep, and covers nothing. */}
                 <Td
                   className={cx(
                     'w-px',
-                    isNew || added[r.key]
+                    isNew || added[r.key] || isWaiting
                       ? 'sticky right-0 bg-canvas group-hover/row:bg-canvas-2'
                       : 'text-right',
                   )}
@@ -292,20 +322,37 @@ export function ResultsTable({
                   {isNew ? (
                     <Button
                       size="sm"
-                      onClick={() => onAdd(r)}
+                      onClick={() => onAdd(r, action)}
                       disabled={adding === r.key}
+                      title={
+                        action === 'connect'
+                          ? 'Send a LinkedIn connection request from your account and save them to People'
+                          : 'Save them to People. Nothing is sent'
+                      }
                       data-testid="find-add"
+                      data-action={action}
                     >
-                      {adding === r.key ? <Spinner /> : null} Add
+                      {adding === r.key ? <Spinner /> : null} {action === 'connect' ? 'Connect' : 'Save'}
                     </Button>
                   ) : added[r.key] ? (
                     <Link
                       to={`/people/${added[r.key]}`}
-                      className="text-[13px] font-medium underline decoration-[#cfcdc9] underline-offset-4 hover:decoration-ink"
+                      className="whitespace-nowrap text-[13px] font-medium underline decoration-[#cfcdc9] underline-offset-4 hover:decoration-ink"
+                      // why a request did not go stays on the row after its toast has gone
+                      title={notes?.[r.key]}
                       data-testid="find-open"
+                      data-state={sent ? 'requested' : 'saved'}
                     >
-                      Added, open
+                      {sent ? 'Request sent, open' : 'Saved, open'}
                     </Link>
+                  ) : isWaiting ? (
+                    <span
+                      className="whitespace-nowrap text-[13px] text-ink-3"
+                      title="Your LinkedIn connection request is waiting with them"
+                      data-testid="find-requested"
+                    >
+                      Request sent
+                    </span>
                   ) : null}
                 </Td>
               </Tr>

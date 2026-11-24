@@ -2356,7 +2356,7 @@ export function routeMore(
   )
     return {
       kind: 'text',
-      text: 'Pick who to add on Discover, under Find people: each result has an Add button.',
+      text: 'Pick who to save on Discover, under Find people: each result has a Connect or Save button.',
       href: '/discover?tab=find',
     };
   if (/^(?:any replies i need to answer|show the replies picking a time|who replied to me)$/.test(lower))

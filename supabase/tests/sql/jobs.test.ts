@@ -320,6 +320,7 @@ describe('orbit.delete_user (§10.4 test 4)', () => {
       insert into orbit.role_matches (user_id, job_id, search_id, evidence_hash) values ('${u}', '00000000-0000-4000-8000-0000000000a2', '00000000-0000-4000-8000-0000000000a1', 'e');
       insert into orbit.role_watches (user_id, company_key, company_name) values ('${u}', 'acme', 'Acme');
       insert into orbit.role_source_reads (user_id, source, query_key) values ('${u}', 'linkedin', 'q');
+      insert into orbit.linkedin_connects (user_id, target, person_id, status) values ('${u}', 'in:ann', '${p2}', 'sent');
     `);
     await db.sql`select orbit.enqueue('orbit_sync', ${{ kind: 'noop', userId: u, payload: {} }}::jsonb)`;
     await db.sql`select orbit.enqueue('orbit_sync', ${{ kind: 'noop', userId: other, payload: {} }}::jsonb)`;

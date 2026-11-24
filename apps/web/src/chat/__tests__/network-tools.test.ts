@@ -164,9 +164,7 @@ describe('local mode', () => {
         makeCtx(user, { caller: 'llm', toolUseId: nextToolUseId() }),
       );
       expect(asked.kind).toBe('needs_confirmation');
-      expect(asked.summary).toMatch(
-        /^Add .+ to your People, saved to contact\. Nothing happens until you approve it\.$/,
-      );
+      expect(asked.summary).toMatch(/^Save .+ to your People\. Nothing happens until you approve it\.$/);
       expect((await db.people.toArray()).filter((p) => p.id !== 'p_priya')).toHaveLength(0);
       expect(await db.chats.count()).toBe(0);
       // the student presses Approve
@@ -175,7 +173,7 @@ describe('local mode', () => {
         { recommendationIds: [results[0]!.recommendationId] },
         makeCtx(user, { caller: 'ui', confirmation: asked.confirmationId, toolUseId: nextToolUseId() }),
       );
-      expect(added.summary).toMatch(/to People \(saved to contact\), ready to write to on LinkedIn/);
+      expect(added.summary).toMatch(/^Saved .+ to People, ready to write to on LinkedIn/);
       const person = (await db.people.toArray()).find((p) => p.id !== 'p_priya')!;
       expect(person.linkedinMemberId).toMatch(/^demo-search-/);
       const chat = await db.chats.where('personId').equals(person.id).first();
@@ -191,7 +189,7 @@ describe('local mode', () => {
         makeCtx(user, { caller: 'router', toolUseId: nextToolUseId() }),
       );
       expect(routed.kind).toBe('routes_many');
-      expect(routed.summary).toMatch(/^Added .* to People \(saved to contact\)\. Routes to 2 people\./);
+      expect(routed.summary).toMatch(/^Saved .* to People\. Routes to 2 people\./);
       const many = (routed.data as { ui: { people: { target: { id: string } }[] } }).ui.people;
       expect(many).toHaveLength(2);
       const picked = await execute(
@@ -206,7 +204,7 @@ describe('local mode', () => {
         { recommendationIds: [results[3]!.recommendationId], next: 'drafts' },
         makeCtx(user, { caller: 'router', toolUseId: nextToolUseId() }),
       );
-      expect(drafted.summary).toMatch(/^Added .* to People \(saved to contact\)\./);
+      expect(drafted.summary).toMatch(/^Saved .* to People\./);
     } finally {
       setConnectorsMockForTests(undefined);
     }
@@ -400,7 +398,7 @@ describe('account mode, against a fake orbit-api', () => {
     // the model never adds on its own: the Approve card names Maya, and nothing joins People until it is pressed
     const asked = await execute('add_sourced', { recommendationIds: ['rec_a'] }, { ...ctx(), caller: 'llm' });
     expect(asked.kind).toBe('needs_confirmation');
-    expect(asked.summary).toMatch(/^Add Maya Chen, Partner at Seed Fund to your People, saved to contact\./);
+    expect(asked.summary).toMatch(/^Save Maya Chen, Partner at Seed Fund to your People\./);
     expect((await db.people.toArray()).some((p) => p.displayName === 'Maya Chen')).toBe(false);
     const added = await execute(
       'add_sourced',
@@ -408,7 +406,7 @@ describe('account mode, against a fake orbit-api', () => {
       { ...ctx(), caller: 'router' },
     );
     expect(added.summary).toMatch(
-      /Added Maya Chen to People \(saved to contact\)\. Deep research starts only when you press it/,
+      /^Saved Maya Chen to People\. Nothing was sent to them\. Deep research starts only when you press it/,
     );
     expect(added.summary).not.toMatch(/has started/);
     expect((await db.people.toArray()).some((p) => p.displayName === 'Maya Chen')).toBe(true);

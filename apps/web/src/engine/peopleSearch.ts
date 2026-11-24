@@ -596,7 +596,7 @@ export interface ResultRow {
   key: string;
   /** someone the student already has */
   personId?: string;
-  /** someone found outside: the server's row, for Add and the email lookup */
+  /** someone found outside: the server's row, for Connect or Save and the email lookup */
   recommendationId?: string;
   name: string;
   photoUrl?: string;
@@ -621,6 +621,8 @@ export interface ResultRow {
   emailStatus?: SourcedCandidate['emailStatus'];
   /** where the row came from, for the page that found them */
   url?: string;
+  /** someone found outside who is already a 1st-degree LinkedIn connection: there is nothing to request */
+  connected?: boolean;
 }
 
 export interface PeopleSearchResult {
@@ -849,6 +851,7 @@ function outsideRows(found: SourcedCandidate[], form: SearchForm, have: Set<stri
       emailConfidence: c.emailConfidence,
       emailStatus: c.emailStatus,
       url: c.url,
+      ...(c.degree === 1 ? { connected: true } : {}),
     });
   }
   return out;

@@ -1,5 +1,5 @@
 import { Download, Search, SlidersHorizontal, Sparkles } from 'lucide-react';
-import { type FormEvent, useRef, useState } from 'react';
+import { type FormEvent, useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { createBatch } from '../../engine/batch';
 import {
@@ -14,14 +14,20 @@ import {
   runPeopleSearch,
   type SearchForm,
 } from '../../engine/peopleSearch';
-import { addSourced, findEmail } from '../../engine/sourcing';
+import {
+  addSourced,
+  canConnectOnLinkedIn,
+  connectSourced,
+  findEmail,
+  requestsWaiting,
+} from '../../engine/sourcing';
 import { isServerUser } from '../../integrations/orbitApi';
 import { useSession } from '../../state/session';
 import { readView, useViewState, writeView } from '../../state/viewState';
-import { Button, cx, EmptyState, Spinner } from '../../ui';
+import { Button, cx, EmptyState, Spinner, useToast } from '../../ui';
 import { CriteriaDialog } from '../search/CriteriaDialog';
 import { FiltersDialog } from '../search/FiltersDialog';
-import { ResultsTable } from '../search/ResultsTable';
+import { ResultsTable, type RowAction } from '../search/ResultsTable';
 
 /**
  * One search in Find people: what was asked, what Orbit read it as, where the work stands and what came back. It is
@@ -36,8 +42,12 @@ interface FindSession {
   error?: string;
   result?: PeopleSearchResult;
   picked: Set<string>;
-  /** row key -> the person it was added as */
+  /** row key -> the person it was saved as (by Save, or by Connect, which saves first) */
   added: Record<string, string>;
+  /** row keys a LinkedIn connection request went out for, or was already waiting for */
+  requested?: Record<string, boolean>;
+  /** row key -> why a request did not go, as the server said it; the person was saved instead */
+  notes?: Record<string, string>;
   /** counts the searches started: a slower one that finishes after a newer one began is dropped */
   run: number;
 }
@@ -71,6 +81,11 @@ export function carryFindPeople(fromKey: string, userId: string, fallback?: Find
  * Discover's "Find people" tab: one sentence says who, Orbit reads it into filters and criteria the student can open
  * and change, searches the student's own network and (with an Orbit account) people outside it, and lists everyone
  * in one table: the warm path to each, how well they match, and an answer for every criterion.
+ *
+ * The button on someone new says what it does. Connect, when the student's own LinkedIn is connected and active on
+ * their Orbit account and the row has a LinkedIn profile: one click sends a connection request (no note) and saves
+ * them to People, and the row reads "Request sent, open". Otherwise Save: they are saved to People and nothing is
+ * sent, and the row reads "Saved, open". Picking several and "Save N" or "Write to N" only ever saves.
  */
 export function FindPeople({
   userId,
@@ -98,6 +113,9 @@ export function FindPeople({
       NO_SESSION,
     );
   const { query, form, phase, error, result, picked, added } = session;
+  const requested = session.requested ?? {};
+  const notes = session.notes ?? {};
+  const toast = useToast();
   const setQuery = (q: string) => change({ query: q });
   const setError = (e: string | undefined) => change({ error: e });
   const setPicked = (next: Set<string> | ((p: Set<string>) => Set<string>)) =>
@@ -147,7 +165,10 @@ export function FindPeople({
         : {},
     );
 
-  /** Adds people found outside to the student's Orbit; returns row key → the person they became. */
+  /**
+   * Saves people found outside to the student's People (nothing is sent); returns row key → the person they became.
+   * `keepPicked`: a step on the way to something else (Write to the picked), so the picks stay and no toast is shown.
+   */
   const add = async (rows: ResultRow[], keepPicked = false): Promise<Record<string, string> | undefined> => {
     const todo = rows.filter((r) => r.recommendationId);
     const ids = todo.map((r) => r.recommendationId!);
@@ -169,7 +190,76 @@ export function FindPeople({
       if (!keepPicked) for (const row of todo) nextPicked.delete(row.key);
       return { added: { ...s.added, ...made }, picked: nextPicked };
     });
+    // said only for a save the student asked for by itself; on the way to Send to many the next page says more
+    if (!keepPicked) {
+      const n = r.people.length;
+      const names = r.people.map((p) => p.displayName).filter(Boolean);
+      toast.push({
+        text:
+          names.length === n && n === 1
+            ? `Saved ${names[0]} to People.`
+            : names.length === n && n === 2
+              ? `Saved ${names[0]} and ${names[1]} to People.`
+              : `Saved ${n} ${n === 1 ? 'person' : 'people'} to People.`,
+        tone: 'good',
+      });
+    }
     return made;
+  };
+
+  /**
+   * Connect on one row: the server saves them and sends one LinkedIn connection request from the student's own
+   * LinkedIn. Whatever LinkedIn says, the row ends up saved and says what happened; a refusal is said in a toast and
+   * kept on the row.
+   */
+  const connect = async (row: ResultRow) => {
+    if (!row.recommendationId) return;
+    setError(undefined);
+    const r = await connectSourced({ id: userId }, row.recommendationId);
+    if (!r.ok) {
+      // the call itself failed: the row keeps its button, and the server sends at most one request on a retry
+      setError(r.message);
+      return;
+    }
+    change((s) => {
+      const nextPicked = new Set(s.picked);
+      nextPicked.delete(row.key);
+      const nextNotes = { ...(s.notes ?? {}) };
+      if (!r.sent && r.reason) nextNotes[row.key] = r.reason;
+      return {
+        added: { ...s.added, [row.key]: r.person.id },
+        requested: { ...(s.requested ?? {}), ...(r.requested ? { [row.key]: true } : {}) },
+        notes: nextNotes,
+        picked: nextPicked,
+      };
+    });
+    if (r.sent)
+      toast.push({
+        text: `Connection request sent to ${r.person.displayName}. Saved to People.`,
+        tone: 'good',
+      });
+    else
+      toast.push({
+        text: r.reason ?? 'No connection request was sent. Saved to People instead.',
+        // a request already out, or someone already connected, is not a failure
+        tone: r.code === 'already_requested' || r.code === 'already_connected' ? 'neutral' : 'bad',
+        ttl: 9000,
+      });
+  };
+
+  /** A press of the button on a row: one at a time per row, however fast the clicks come. */
+  const acting = useRef(new Set<string>());
+  const act = async (row: ResultRow, action: RowAction) => {
+    if (acting.current.has(row.key)) return;
+    acting.current.add(row.key);
+    setAdding(row.key);
+    try {
+      if (action === 'connect') await connect(row);
+      else await add([row]);
+    } finally {
+      acting.current.delete(row.key);
+      setAdding((k) => (k === row.key ? undefined : k));
+    }
   };
 
   const lookUp = async (row: ResultRow) => {
@@ -222,6 +312,40 @@ export function FindPeople({
   };
 
   const rows = result?.rows ?? [];
+  // Connect is offered only when Orbit can send a request from the student's own LinkedIn; until that is known,
+  // and whenever it cannot, the button is Save
+  const [canConnect, setCanConnect] = useState(false);
+  const hasNew = rows.some((r) => r.recommendationId);
+  useEffect(() => {
+    if (!hasNew) return;
+    let live = true;
+    void canConnectOnLinkedIn({ id: userId })
+      .catch(() => false)
+      .then((ok) => {
+        if (live) setCanConnect(ok);
+      });
+    return () => {
+      live = false;
+    };
+  }, [userId, hasNew]);
+  // people the student already has whose connection request is still waiting: their row says so
+  const ownIds = rows
+    .map((r) => r.personId)
+    .filter((x): x is string => !!x)
+    .join(',');
+  const [waiting, setWaiting] = useState<ReadonlySet<string>>(new Set());
+  useEffect(() => {
+    if (!ownIds) return;
+    let live = true;
+    void requestsWaiting(ownIds.split(','))
+      .catch(() => new Set<string>())
+      .then((w) => {
+        if (live) setWaiting(w);
+      });
+    return () => {
+      live = false;
+    };
+  }, [ownIds]);
   const pickedAll = rows.filter((r) => picked.has(r.key));
   // the picked people not in the student's Orbit yet
   const pickedRows = pickedAll.filter((r) => r.recommendationId && !added[r.key]);
@@ -245,7 +369,7 @@ export function FindPeople({
   };
   const nav = useNavigate();
   const [writing, setWriting] = useState(false);
-  /** Send to many with everyone picked: people found outside are added to the student's Orbit first. */
+  /** Send to many with everyone picked: people found outside are saved to the student's People first. */
   const writeToPicked = async () => {
     if (!user || !pickedAll.length) return;
     setWriting(true);
@@ -361,6 +485,7 @@ export function FindPeople({
               size="sm"
               variant="primary"
               disabled={addingMany || writing}
+              title="Save everyone picked to People. Nothing is sent"
               onClick={async () => {
                 setAddingMany(true);
                 try {
@@ -371,7 +496,7 @@ export function FindPeople({
               }}
               data-testid="find-add-picked"
             >
-              {addingMany ? <Spinner className="border-white/30 border-t-white" /> : null} Add{' '}
+              {addingMany ? <Spinner className="border-white/30 border-t-white" /> : null} Save{' '}
               {pickedRows.length}
             </Button>
           )}
@@ -432,14 +557,11 @@ export function FindPeople({
             }}
             added={added}
             adding={adding}
-            onAdd={async (row) => {
-              setAdding(row.key);
-              try {
-                await add([row]);
-              } finally {
-                setAdding(undefined);
-              }
-            }}
+            onAdd={(row, action) => void act(row, action)}
+            canConnect={canConnect}
+            requested={requested}
+            notes={notes}
+            waiting={waiting}
             finding={finding}
             onFindEmail={(row) => void lookUp(row)}
           />

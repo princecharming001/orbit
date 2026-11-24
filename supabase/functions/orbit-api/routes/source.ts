@@ -2,12 +2,16 @@
  * Sourcing (§6):
  *   POST /source/search {goalId?, purpose, query?, homeCity?, filters?, limit?}  → {batchId, results, unconfigured, relaxed}
  *   POST /source/add {recommendationIds}                              → {people: [{id, displayName, chatId}]}
+ *   POST /source/connect {recommendationId} | {personId}              → {person: {id, displayName, chatId}, sent, code?, reason?}
+ *        saves them as /source/add does, then one LinkedIn connection request with no note from the student's own
+ *        LinkedIn, once per person; whatever stops the request, they are saved and `reason` says why (connect.ts)
  *   POST /source/email {recommendationId} | {personId}                → {email?, emailConfidence?, emailStatus}
  *        one person's address looked up on demand (plan 35 C3): a search no longer pays for everyone's. Answers
  *        within EMAIL_LOOKUP_DEADLINE_MS, under the browser's own wait: 'could not check' when the providers are slow
  */
 import type { SourceSearchRequest } from '@orbit/core/server/api';
 import { badRequest, json } from '../../_shared/http.ts';
+import { connectSourced } from '../../_shared/sourcing/connect.ts';
 import {
   lookupPersonEmail,
   lookupRecommendationEmail,
@@ -91,6 +95,14 @@ async function add(ctx: Ctx): Promise<Response> {
   return json(200, await addSourced(ctx.services(), ctx.userId!, b.recommendationIds));
 }
 
+async function connect(ctx: Ctx): Promise<Response> {
+  const b = await body(ctx);
+  const recommendationId = optUuid(b, 'recommendationId');
+  const personId = optUuid(b, 'personId');
+  if (!recommendationId === !personId) throw badRequest('send one of recommendationId or personId');
+  return json(200, await connectSourced(ctx.services(), ctx.userId!, { recommendationId, personId }));
+}
+
 async function email(ctx: Ctx): Promise<Response> {
   const b = await body(ctx);
   const recommendationId = optUuid(b, 'recommendationId');
@@ -110,5 +122,6 @@ async function email(ctx: Ctx): Promise<Response> {
 export const sourceRoutes: Record<string, Route> = {
   '/source/search': { method: 'POST', auth: true, run: search },
   '/source/add': { method: 'POST', auth: true, run: add },
+  '/source/connect': { method: 'POST', auth: true, run: connect },
   '/source/email': { method: 'POST', auth: true, run: email },
 };

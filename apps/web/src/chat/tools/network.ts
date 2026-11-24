@@ -643,7 +643,7 @@ export function addSourcedIntent(recommendationIds: string[], next?: 'routes' | 
       : next === 'drafts'
         ? ' Then Orbit drafts a message to each for you to review. Nothing is sent.'
         : '';
-  return `Add ${who} to your People, saved to contact.${then}`;
+  return `Save ${who} to your People.${then}`;
 }
 
 const joinNames = (xs: string[]) =>
@@ -1031,7 +1031,7 @@ export const addSourcedTool = defineTool({
   kind: 'risky',
   runsOnStudentWords: true,
   description:
-    'Call this only when the student\'s own latest message asks to add people from find_people ("add Dana", "add the first two", "add them"; pass their recommendationIds): each becomes a person in their People with a chat at "to contact" for the goal. Never call it on your own after a search, a second-degree or mutuals look, research, routes or a draft: end with one short question instead ("Want me to add them?") and wait. The student approves the add before it happens. With next: "routes" it goes straight on to warm routes to each of them in one card; with next: "drafts" it drafts a message to each. Someone added this way is saved to contact, not someone the student knows.',
+    'Call this only when the student\'s own latest message asks to add people from find_people ("add Dana", "add the first two", "add them"; pass their recommendationIds): each is saved to their People for the goal, and nothing is sent to them (no message, no LinkedIn connection request). Never call it on your own after a search, a second-degree or mutuals look, research, routes or a draft: end with one short question instead ("Want me to add them?") and wait. The student approves the add before it happens. With next: "routes" it goes straight on to warm routes to each of them in one card; with next: "drafts" it drafts a message to each. Someone added this way is saved to People, not someone the student knows: say "Saved to People", never that they were contacted or connected with.',
   input: z.object({
     recommendationIds: z
       .array(z.string().min(1))
@@ -1057,10 +1057,10 @@ export const addSourcedTool = defineTool({
       if (!r.ok) throw new Error(r.message);
       if (input.next) return andThen(ctx, input.next, r.people);
       return list(
-        'Added',
+        'Saved to People',
         r.people.map((p) => ({ text: p.displayName, href: `/people/${p.id}` })),
         { added: r.people.map((p) => ({ personId: p.id, name: p.displayName, chatId: p.chatId })) },
-        `Added ${r.people.map((p) => p.displayName).join(', ')} to People (saved to contact), ready to write to on LinkedIn.`,
+        `Saved ${r.people.map((p) => p.displayName).join(', ')} to People, ready to write to on LinkedIn.`,
         r.people.length === 1 ? `/people/${r.people[0]!.id}` : '/people',
       );
     }
@@ -1069,10 +1069,10 @@ export const addSourcedTool = defineTool({
     if (!r.ok) throw new Error(r.message);
     if (input.next) return andThen(ctx, input.next, r.people);
     return list(
-      'Added',
+      'Saved to People',
       r.people.map((p) => ({ text: p.displayName, href: `/people/${p.id}` })),
       { added: r.people.map((p) => ({ personId: p.id, name: p.displayName, chatId: p.chatId })) },
-      `Added ${r.people.map((p) => p.displayName).join(', ')} to People (saved to contact). Deep research starts only when you press it on their page.`,
+      `Saved ${r.people.map((p) => p.displayName).join(', ')} to People. Nothing was sent to them. Deep research starts only when you press it on their page.`,
       r.people.length === 1 ? `/people/${r.people[0]!.id}` : '/people',
     );
   },
@@ -1089,7 +1089,7 @@ async function andThen(
   people: { id: string; displayName: string }[],
 ): Promise<ResultEnvelope> {
   const ids = people.map((p) => p.id);
-  const added = `Added ${people.map((p) => p.displayName).join(', ')} to People (saved to contact).`;
+  const added = `Saved ${people.map((p) => p.displayName).join(', ')} to People.`;
   const env =
     next === 'routes' ? await routesToMany(ctx, ids) : await createDrafts.execute({ personIds: ids }, ctx);
   return { ...env, summary: `${added} ${env.summary}` };

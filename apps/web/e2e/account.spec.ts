@@ -422,7 +422,7 @@ test.describe('account mode (mocked orbit-api)', () => {
       expect(api.routes()).toContain('/people/history');
     });
 
-    test('Discover, Find people: one table of who fits, with the path, the match and Add', async ({
+    test('Discover, Find people: one table of who fits, with the path, the match and Save', async ({
       page,
     }) => {
       const api = await signedIn(page);
@@ -528,9 +528,9 @@ test.describe('account mode (mocked orbit-api)', () => {
         'Title',
         'Company',
         'Match',
-        'Add',
+        'Connect or save',
       ]);
-      // the student's own investors: a link to their page, the strength of the tie, no Add
+      // the student's own investors: a link to their page, the strength of the tie, no button
       const nadia = rows.filter({ hasText: 'Nadia Okoro' });
       await expect(nadia).toHaveAttribute('data-own', 'true');
       await expect(nadia.getByTestId('find-name')).toHaveAttribute('href', new RegExp(`people/${P4}$`));
@@ -611,15 +611,121 @@ test.describe('account mode (mocked orbit-api)', () => {
       await expect(page.getByTestId('find-count')).toHaveText('5 matches');
       expect(api.state.sourceSearches.length).toBe(searches);
       await page.getByTestId('find-pick-clear').click();
-      // Add one: the row then opens their page
+      // LinkedIn is not connected on this account, so the button says Save and saving is all it does: the row then
+      // opens their page, and nothing says "added" or "to contact"
+      await expect(rhea.getByTestId('find-add')).toHaveText('Save');
       await rhea.getByTestId('find-add').click();
-      await expect(rhea.getByRole('link', { name: /added, open/i })).toBeVisible();
+      await expect(rhea.getByRole('link', { name: 'Saved, open' })).toBeVisible();
+      await expect(page.getByTestId('toasts')).toContainText('Saved Rhea Kapoor to People.');
       expect(api.calls.find((c) => c.route === '/source/add')?.body).toEqual({
         recommendationIds: ['rec_a'],
       });
+      expect(api.calls.some((c) => c.route === '/source/connect')).toBe(false);
       // an address is looked up only when asked
       await rows.filter({ hasText: 'Jonas Weber' }).getByTestId('find-email-lookup').click();
       await expect(rows.filter({ hasText: 'Jonas Weber' }).getByTestId('find-email-none')).toBeVisible();
+    });
+
+    test('Discover, Find people: Connect sends one LinkedIn request and the row says so; Save only saves', async ({
+      page,
+    }) => {
+      const api = await signedIn(page);
+      // the student's own LinkedIn is connected and active on their Orbit account
+      api.state.linkedin.status = 'active';
+      const base = {
+        rank: 0.8,
+        fit: 0.9,
+        reach: 0.4,
+        responsiveness: 0.5,
+        reasons: [],
+        source: 'unipile' as const,
+      };
+      api.state.sourced = [
+        {
+          ...base,
+          id: 'rec_a',
+          name: 'Rhea Kapoor',
+          title: 'Partner',
+          org: 'Seedling Fund',
+          linkedinUrl: 'https://www.linkedin.com/in/rhea-kapoor',
+          degree: 2,
+        },
+        {
+          ...base,
+          id: 'rec_b',
+          name: 'Lena Fischer',
+          title: 'Principal',
+          org: 'Cherry Ventures',
+          linkedinUrl: 'https://www.linkedin.com/in/lena-fischer',
+          degree: 3,
+        },
+        // found on a web page: no LinkedIn profile, so there is nothing to send a request to
+        {
+          ...base,
+          id: 'rec_c',
+          name: 'Jonas Weber',
+          title: 'Investor',
+          org: 'Point Nine',
+          source: 'web' as const,
+        },
+        // already a 1st-degree connection on LinkedIn: nothing to request
+        {
+          ...base,
+          id: 'rec_d',
+          name: 'Cy Near',
+          title: 'Investor',
+          org: 'Atomico',
+          linkedinUrl: 'https://www.linkedin.com/in/cy-near',
+          degree: 1,
+        },
+      ];
+      await page.goto('discover?tab=find');
+      await page.getByTestId('find-query').fill('investors');
+      await page.getByTestId('find-search').click();
+      const rows = page.getByTestId('find-result');
+      const rhea = rows.filter({ hasText: 'Rhea Kapoor' });
+      const lena = rows.filter({ hasText: 'Lena Fischer' });
+      const jonas = rows.filter({ hasText: 'Jonas Weber' });
+      const cy = rows.filter({ hasText: 'Cy Near' });
+      // the button says what it does
+      await expect(rhea.getByTestId('find-add')).toHaveText('Connect');
+      await expect(lena.getByTestId('find-add')).toHaveText('Connect');
+      await expect(jonas.getByTestId('find-add')).toHaveText('Save');
+      await expect(cy.getByTestId('find-add')).toHaveText('Save');
+      // one click (even a double one) sends one request, saves them, and the row says so
+      await rhea.getByTestId('find-add').dblclick();
+      await expect(rhea.getByRole('link', { name: 'Request sent, open' })).toBeVisible();
+      await expect(page.getByTestId('toasts')).toContainText(
+        'Connection request sent to Rhea Kapoor. Saved to People.',
+      );
+      expect(api.calls.filter((c) => c.route === '/source/connect').map((c) => c.body)).toEqual([
+        { recommendationId: 'rec_a' },
+      ]);
+      expect(api.state.linkedin.connects).toEqual(['rec_a']);
+      // nothing else went: no draft was written or sent
+      expect(api.calls.some((c) => c.route.startsWith('/drafts/'))).toBe(false);
+      // LinkedIn refuses the next one: said in its own words, and they are saved instead
+      api.state.linkedin.connectError = 'weekly_limit';
+      await lena.getByTestId('find-add').click();
+      const refusal = "LinkedIn's weekly limit on connection requests is reached. Saved to People instead.";
+      await expect(page.getByTestId('toasts')).toContainText(refusal);
+      await expect(lena.getByRole('link', { name: 'Saved, open' })).toBeVisible();
+      await expect(lena.getByTestId('find-open')).toHaveAttribute('title', refusal);
+      expect(api.state.linkedin.connects).toEqual(['rec_a']);
+      if (process.env.SHOT_DIR) await page.screenshot({ path: `${process.env.SHOT_DIR}/find-connect.png` });
+      // Save sends nothing
+      api.state.linkedin.connectError = undefined;
+      await jonas.getByTestId('find-add').click();
+      await expect(jonas.getByRole('link', { name: 'Saved, open' })).toBeVisible();
+      await expect(page.getByTestId('toasts')).toContainText('Saved Jonas Weber to People.');
+      expect(api.calls.filter((c) => c.route === '/source/connect')).toHaveLength(2);
+      expect(api.calls.find((c) => c.route === '/source/add')?.body).toEqual({
+        recommendationIds: ['rec_c'],
+      });
+      // the row opens their page, and the pipeline has the request under a sent first step, never "To contact"
+      await rhea.getByRole('link', { name: 'Request sent, open' }).click();
+      await expect(page).toHaveURL(/people\/[0-9a-f-]{36}$/);
+      await expect(page.getByTestId('person-header')).toContainText('Rhea Kapoor');
     });
 
     test('Discover, Find people: criteria and filters are read, shown, changed, and the search runs again', async ({

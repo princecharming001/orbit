@@ -245,7 +245,6 @@ export interface SourceSearchResponse {
    */
   limits?: ('web' | 'linkedin')[];
 }
-/** POST /source/add */
 /** POST /source/email: one person's address looked up on demand (plan 35 C3), by recommendation or by person */
 export interface SourceEmailRequest {
   recommendationId?: string;
@@ -260,12 +259,79 @@ export interface SourceEmailResponse {
    */
   emailStatus: 'found' | 'not found' | 'could not check';
 }
+/** POST /source/add */
 export interface SourceAddRequest {
   recommendationIds: string[];
 }
 export interface SourceAddResponse {
   people: { id: string; displayName: string; chatId: string }[];
 }
+/**
+ * POST /source/connect: Connect on someone a people search found. Saves them to People (as /source/add does), then
+ * sends one LinkedIn connection request, with no note, from the student's own LinkedIn. The click is the student's
+ * approval of that one request: no message and no follow-up goes with it. Send one of the two ids.
+ */
+export interface SourceConnectRequest {
+  recommendationId?: string;
+  /** someone already in the student's People */
+  personId?: string;
+}
+/** Why a connection request did not go on this call; the person is saved either way. */
+export type SourceConnectCode =
+  /** a request from the student to them is already out: nothing is sent twice */
+  | 'already_requested'
+  | 'already_connected'
+  /** Orbit has no LinkedIn profile for them */
+  | 'no_profile'
+  /** LinkedIn could not find the profile */
+  | 'profile_not_found'
+  /** the student's LinkedIn is not connected, is paused or needs a new sign-in */
+  | 'linkedin_not_active'
+  /** Orbit's own limits on connection requests (SEND_CAPS), a day and a week */
+  | 'daily_limit'
+  | 'weekly_limit'
+  /** LinkedIn itself said the account has sent too many */
+  | 'linkedin_limit'
+  | 'do_not_contact'
+  | 'minor'
+  /** other accounts looked this person up lately (the swarm limit), or LinkedIn is slow: try again later */
+  | 'busy'
+  /** the call broke off after it left: the request may have gone, so it is not sent again */
+  | 'unconfirmed'
+  /** LinkedIn would not take the request */
+  | 'refused'
+  /** Orbit cannot send requests right now (not set up) */
+  | 'unavailable';
+export interface SourceConnectResponse {
+  person: { id: string; displayName: string; chatId: string };
+  /** a connection request went out on this call */
+  sent: boolean;
+  /** set when `sent` is false */
+  code?: SourceConnectCode;
+  /** why it did not go, in words the row or a toast shows as they are */
+  reason?: string;
+}
+/**
+ * The words for each reason a connection request did not go. Every one says what happened to the person too: they are
+ * in People whatever LinkedIn said.
+ */
+export const SOURCE_CONNECT_REASONS: Record<SourceConnectCode, string> = {
+  already_requested: 'You already sent them a connection request. Saved to People.',
+  already_connected: 'You are already connected on LinkedIn. Saved to People.',
+  no_profile: 'Orbit has no LinkedIn profile for them. Saved to People instead.',
+  profile_not_found: 'LinkedIn could not find their profile. Saved to People instead.',
+  linkedin_not_active: 'LinkedIn is not connected. Saved to People instead.',
+  daily_limit: "Today's limit on connection requests is reached. Saved to People instead.",
+  weekly_limit: "LinkedIn's weekly limit on connection requests is reached. Saved to People instead.",
+  linkedin_limit: 'LinkedIn says you have reached its limit on connection requests. Saved to People instead.',
+  do_not_contact: 'They asked not to be contacted, so no request was sent. Saved to People.',
+  minor: 'Their profile reads as someone under 18, so no request was sent. Saved to People.',
+  busy: 'LinkedIn is busy just now, so no request was sent. Saved to People instead.',
+  unconfirmed:
+    'LinkedIn did not confirm the request. Saved to People. Check their profile on LinkedIn before trying again.',
+  refused: 'LinkedIn would not take the request. Saved to People instead.',
+  unavailable: 'Orbit cannot send connection requests right now. Saved to People instead.',
+};
 
 // ---- warm paths (P4) -----------------------------------------------------------------------------------------------
 
@@ -1229,6 +1295,7 @@ export const API_ROUTES = [
   '/research/choose',
   '/source/search',
   '/source/add',
+  '/source/connect',
   '/paths/find',
   '/intros/ask',
   '/drafts/compose',

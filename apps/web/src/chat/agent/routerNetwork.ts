@@ -236,7 +236,7 @@ export function routeNetwork(text: string, lower: string, h: NetworkHelpers): Ro
   )
     return {
       kind: 'text',
-      text: 'Pick who to add on Discover, under Find people: each result has an Add button.',
+      text: 'Pick who to save on Discover, under Find people: each result has a Connect or Save button.',
       href: '/discover?tab=find',
     };
 

@@ -56,7 +56,7 @@ function Role({ text }: { text?: string }) {
 
 /**
  * People the chat found, as the table Discover's Find people draws: the same component over the same search, so the
- * paths, the match, a column for each criterion, Add, the email lookup and picking a range all work here too, and
+ * paths, the match, a column for each criterion, Connect or Save, the email lookup and picking a range all work here too, and
  * the filters and criteria can be changed in place. "Discover" opens it there as it stands.
  */
 export function FoundTableCard({

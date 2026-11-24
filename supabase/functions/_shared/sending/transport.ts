@@ -2,6 +2,9 @@
  * The two ways a message leaves Orbit (§8.3): Gmail users.messages.send (scope gmail.send) and Unipile's LinkedIn
  * chats (an existing chat, or a new chat with a 1st-degree connection). Both report a typed result; a 429 or 5xx is
  * `retry` so the caller can hand the draft back to the queue instead of failing it.
+ *
+ * And the one thing that is not a message: a LinkedIn connection request on its own (`linkedinInvite`), for Connect in
+ * a people search.
  */
 import { NeedsReauth } from '../google.ts';
 import type { Services } from '../services.ts';
@@ -304,4 +307,133 @@ export async function linkedinSend(
     invited: true,
     memberId: member,
   };
+}
+
+/**
+ * Why a connection request on its own did not go (`linkedinInvite`):
+ *   linkedin_busy               other accounts looked this person up lately (the swarm limit): no call was made
+ *   no_linkedin_member          LinkedIn has no such profile, or Orbit has nothing to find them by
+ *   linkedin_already_connected  they are a 1st-degree connection
+ *   linkedin_already_invited    a request from the student is already waiting
+ *   linkedin_invite_limit       LinkedIn says the account has sent too many requests
+ * or a cap's own code from `beforeInvite`, or `unipile_<status>` for anything else LinkedIn refused.
+ */
+export type InviteOutcome =
+  | { ok: true; invitationId: string | null; memberId: string }
+  | { ok: false; retry: boolean; error: string; ambiguous?: boolean; memberId?: string };
+
+const FIRST_DEGREE = /^(first_degree|distance_1|1)$/i;
+
+/** What LinkedIn's refusal of a request means, read from Unipile's error body ({type, title, detail}). */
+export function inviteRefusal(status: number, body: unknown): string {
+  const o = (body && typeof body === 'object' ? body : {}) as Record<string, unknown>;
+  const said = [o.type, o.title, o.detail, o.message]
+    .filter((x): x is string => typeof x === 'string')
+    .join(' ')
+    .toLowerCase();
+  if (/already[_ ]invited|already (sent|pending)|invitation (is )?(already|pending)/.test(said))
+    return 'linkedin_already_invited';
+  if (/already[_ ]connected|is_relationship|already a (connection|relation)/.test(said))
+    return 'linkedin_already_connected';
+  if (status === 429 || /cannot_resend|limit[_ ](exceeded|reached)|too[_ ]many|quota/.test(said))
+    return 'linkedin_invite_limit';
+  if (status === 404 || /not_found|not found|invalid_recipient/.test(said)) return 'no_linkedin_member';
+  return `unipile_${status}`;
+}
+
+/**
+ * One connection request from the student's own LinkedIn (POST /api/v1/users/invite), with a note only when one is
+ * given. Never a message and never a chat: this is what Connect in a people search sends.
+ *
+ * The member is the id Orbit keeps, else looked up from the profile address (GET /api/v1/users/{slug}); that look is a
+ * read aimed at one person, so it first asks the swarm limit (`s.targetTake`), and what it says about the two of them
+ * is believed: a connection, or a request already waiting, gets no second request. `beforeInvite` is asked just before
+ * the request goes, as for a draft sent as a request.
+ */
+export async function linkedinInvite(
+  s: Services,
+  p: {
+    accountId: string;
+    memberId?: string | null;
+    slug?: string | null;
+    note?: string;
+    /** the limit that stops it (its code), or null to send it */
+    beforeInvite?: () => Promise<string | null>;
+  },
+): Promise<InviteOutcome> {
+  const base = (s.env.unipileBase ?? '').replace(/\/+$/, '');
+  if (!s.env.unipileKey || !base) return { ok: false, retry: false, error: 'unipile_unconfigured' };
+  const headers = { 'X-API-KEY': s.env.unipileKey, accept: 'application/json' };
+  const note = p.note?.trim() ?? '';
+  if (note.length > LINKEDIN_NOTE_MAX) return { ok: false, retry: false, error: 'linkedin_note_too_long' };
+
+  let member = p.memberId ?? undefined;
+  if (!member && p.slug) {
+    if (s.targetTake && !(await s.targetTake(p.accountId, p.slug, 'connect')).allowed)
+      return { ok: false, retry: true, error: 'linkedin_busy' };
+    let res: Response;
+    try {
+      res = await s.fetch(
+        `${base}/api/v1/users/${encodeURIComponent(p.slug)}?account_id=${encodeURIComponent(p.accountId)}&notify=false`,
+        { method: 'GET', headers, signal: AbortSignal.timeout(SEND_TIMEOUT_MS) },
+      );
+    } catch {
+      // nothing was sent yet: a plain "try again", never an unconfirmed request
+      return { ok: false, retry: true, error: 'network' };
+    }
+    if (res.status === 429 || res.status >= 500) {
+      await res.body?.cancel();
+      return { ok: false, retry: true, error: `unipile_${res.status}` };
+    }
+    if (res.ok) {
+      const j = (await res.json().catch(() => ({}))) as {
+        provider_id?: string;
+        network_distance?: string | number | null;
+        is_relationship?: boolean | null;
+        invitation?: { type?: string | null; status?: string | null } | null;
+      };
+      member = j.provider_id || undefined;
+      if (member && (j.is_relationship === true || FIRST_DEGREE.test(String(j.network_distance ?? ''))))
+        return { ok: false, retry: false, error: 'linkedin_already_connected', memberId: member };
+      if (
+        member &&
+        String(j.invitation?.type ?? '').toUpperCase() === 'SENT' &&
+        String(j.invitation?.status ?? '').toUpperCase() === 'PENDING'
+      )
+        return { ok: false, retry: false, error: 'linkedin_already_invited', memberId: member };
+    } else await res.body?.cancel();
+  }
+  if (!member) return { ok: false, retry: false, error: 'no_linkedin_member' };
+
+  const stop = await p.beforeInvite?.();
+  if (stop) return { ok: false, retry: false, error: stop, memberId: member };
+  let res: Response;
+  try {
+    res = await s.fetch(`${base}/api/v1/users/invite`, {
+      method: 'POST',
+      headers: { ...headers, 'content-type': 'application/json' },
+      body: JSON.stringify({
+        account_id: p.accountId,
+        provider_id: member,
+        ...(note ? { message: note } : {}),
+      }),
+      signal: AbortSignal.timeout(SEND_TIMEOUT_MS),
+    });
+  } catch {
+    // the request left and the connection broke: LinkedIn may have it
+    return { ok: false, retry: true, error: 'network', ambiguous: true, memberId: member };
+  }
+  if (res.status >= 500) {
+    await res.body?.cancel();
+    return { ok: false, retry: true, error: `unipile_${res.status}`, ambiguous: true, memberId: member };
+  }
+  if (!res.ok)
+    return {
+      ok: false,
+      retry: false,
+      error: inviteRefusal(res.status, await res.json().catch(() => ({}))),
+      memberId: member,
+    };
+  const b = (await res.json().catch(() => ({}))) as { invitation_id?: string };
+  return { ok: true, invitationId: b.invitation_id ?? null, memberId: member };
 }
